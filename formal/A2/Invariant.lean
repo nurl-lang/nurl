@@ -339,6 +339,15 @@ def BlocksOK (B : Nat → Option Blk) : Prop :=
   ∀ k bl, B k = some bl → bl.ty.ok = true ∧ bl.ty.holdsView = false ∧ WFv bl.ty bl.pay ∧
     SharesIn B bl.ty bl.pay ∧ bl.pay.ids = []
 
+/-- A3.1: every block owns its payload tree, as a slot owns its tree: the
+    tree's addresses appear once in it, in no owned tree and in no other
+    block's payload, and are live and below `nid`.  The block's key was taken
+    from `nid` too (a key is never an address), so a new one is fresh. -/
+def BlkOwn (m : Mem) : Prop :=
+  ∀ k bl, m.blk k = some bl → k < m.nid ∧ bl.pay.ids.Nodup ∧
+    ∀ i ∈ bl.pay.ids, m.alloc i = true ∧ i < m.nid ∧ (∀ x T, OwnedAt m x T → i ∉ T.ids) ∧
+      ∀ k' bl', k' ≠ k → m.blk k' = some bl' → i ∉ bl'.pay.ids
+
 /-- One owner per allocation, every owned address is live, and no owned tree
     views itself. -/
 structure HeapOK (m : Mem) : Prop where
@@ -346,11 +355,50 @@ structure HeapOK (m : Mem) : Prop where
   disj  : ∀ x y t u, x ≠ y → OwnedAt m x t → OwnedAt m y u → ∀ i ∈ t.ids, i ∉ u.ids
   alloc : ∀ x t, OwnedAt m x t → ∀ i ∈ t.ids, m.alloc i = true ∧ i < m.nid
   self  : ∀ x t, OwnedAt m x t → SelfFree t
-  -- A3.1's first cut: a payload owns no address (it holds no allocation),
-  -- and a block's key is no address either (taken from `nid`, never live)
+  /-- A3.1: the blocks own their payloads (`BlkOwn`). -/
+  blk   : BlkOwn m
+  -- A3.1's first cut: a payload owns no address (`arc_new` takes a plain
+  -- value), until the sweep frees a block no share reaches (A3.1, second cut)
   bpay  : ∀ k bl, m.blk k = some bl → bl.pay.ids = []
-  /-- A3.1: a block's key was taken from `nid`, so a new one is fresh. -/
-  bkey  : ∀ k bl, m.blk k = some bl → k < m.nid
+
+/-- A3.1: a block's key was taken from `nid`, so a new one is fresh. -/
+theorem HeapOK.bkey {m : Mem} (hh : HeapOK m) : ∀ k bl, m.blk k = some bl → k < m.nid :=
+  fun k bl hk => (hh.blk k bl hk).1
+
+/-- A3.1: an address a block's payload owns. -/
+def PayAddr (m : Mem) (i : Nat) : Prop := ∃ k bl, m.blk k = some bl ∧ i ∈ bl.pay.ids
+
+/-- No owned tree holds a payload's address. -/
+theorem HeapOK.notPay {m : Mem} (hh : HeapOK m) {x : Var} {T : Val} (hT : OwnedAt m x T) {i : Nat}
+    (hi : i ∈ T.ids) : ¬ PayAddr m i := fun ⟨k, bl, hk, hik⟩ =>
+  ((hh.blk k bl hk).2.2 i hik).2.2.1 x T hT hi
+
+/-- A payload's address is live and below `nid`. -/
+theorem HeapOK.payAlloc {m : Mem} (hh : HeapOK m) {i : Nat} (hi : PayAddr m i) :
+    m.alloc i = true ∧ i < m.nid := by
+  obtain ⟨k, bl, hk, hik⟩ := hi
+  exact ⟨((hh.blk k bl hk).2.2 i hik).1, ((hh.blk k bl hk).2.2 i hik).2.1⟩
+
+/-- Blocks whose payloads own no address own them trivially. -/
+theorem BlkOwn.of_none {m : Mem} (h : ∀ k bl, m.blk k = some bl → bl.pay.ids = [] ∧ k < m.nid) :
+    BlkOwn m := fun k bl hk => by
+  obtain ⟨h1, h2⟩ := h k bl hk
+  rw [h1]; exact ⟨h2, List.nodup_nil, fun _ h => nomatch h⟩
+
+/-- **The blocks' frame**: blocks as they were, `nid` later, their payloads'
+    addresses as live as they were, and every owned tree holding no payload's
+    address keep `BlkOwn`. -/
+theorem BlkOwn.frame {m m' : Mem} (h : BlkOwn m) (hb : m'.blk = m.blk) (hn : m.nid ≤ m'.nid)
+    (ha : ∀ i, PayAddr m i → m'.alloc i = m.alloc i)
+    (hown : ∀ x T, OwnedAt m' x T → ∀ i ∈ T.ids, ¬ PayAddr m i) : BlkOwn m' := by
+  intro k bl hk
+  rw [hb] at hk
+  obtain ⟨hkey, hnd, hall⟩ := h k bl hk
+  refine ⟨Nat.lt_of_lt_of_le hkey hn, hnd, fun i hi => ?_⟩
+  obtain ⟨ha1, hlt, _, hoth⟩ := hall i hi
+  refine ⟨by rw [ha i ⟨k, bl, hk, hi⟩]; exact ha1, Nat.lt_of_lt_of_le hlt hn,
+    fun x T hT hiT => hown x T hT i hiT ⟨k, bl, hk, hi⟩, fun k' bl' hk' hk'' => ?_⟩
+  rw [hb] at hk''; exact hoth k' bl' hk' hk''
 
 /-- A binding's slot agrees with its entry. -/
 def SlotOK (m : Mem) (E : Entry) (sl : Slot) : Prop :=

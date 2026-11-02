@@ -20,8 +20,9 @@ theorem heapOK_grow {m m' : Mem} (hh : HeapOK m) (hst : m'.st = m.st)
     obtain ⟨h1, h2⟩ := hh.alloc x t h' i hi
     exact ⟨ha i h1, Nat.lt_of_lt_of_le h2 hn⟩
   self x t h := hh.self x t (by unfold OwnedAt at *; rw [← hst]; exact h)
+  blk := BlkOwn.of_none fun k bl hk => by
+    rw [hb] at hk; exact ⟨hh.bpay k bl hk, Nat.lt_of_lt_of_le (hh.bkey k bl hk) hn⟩
   bpay k bl hk := hh.bpay k bl (by rw [← hb]; exact hk)
-  bkey k bl hk := Nat.lt_of_lt_of_le (hh.bkey k bl (by rw [← hb]; exact hk)) hn
 
 theorem CatchOK.of_st {m m' : Mem} (hst : m'.st = m.st) (hnv : m.nv ≤ m'.nv) (hb : BlkLe m.blk m'.blk) :
     ∀ {s : Stmt}, CatchOK m s → CatchOK m' s
@@ -86,7 +87,8 @@ def BlocksAt (B : Nat → Option Blk) (n : Nat) : Prop :=
 theorem inv_grow {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s) {n : Nat}
     {B : Nat → Option Blk} (hn : m.nid ≤ n) (hb : BlkLe m.blk B) (hB : BlocksAt B n) :
     Inv { m with nid := n, blk := B } Γ F s :=
-  { toMInv := hi.toMInv.grow rfl (HeapOK.mono hi.heap rfl (fun _ h => h) hn (fun k bl hk => (hB k bl hk).2))
+  { toMInv := hi.toMInv.grow rfl (HeapOK.mono hi.heap rfl (fun _ h => h) hn
+        (BlkOwn.of_none fun k bl hk => (hB k bl hk).2) (fun k bl hk => (hB k bl hk).2.1))
       (Nat.le_refl _) hb (fun k bl hk => (hB k bl hk).1)
     nvS := hi.nvS, nvF := hi.nvF
     anch := hi.anch, spineNd := hi.spineNd, spineDom := hi.spineDom

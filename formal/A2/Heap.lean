@@ -123,14 +123,18 @@ theorem HeapOK.without {m : Mem} (hh : HeapOK m) {x : Var} {T : Val} (hx : Owned
     obtain ⟨ha, hlt⟩ := hh.alloc o U hU' i hi
     exact ⟨by rw [halloc i hni]; exact ha, Nat.lt_of_lt_of_le hlt hnid⟩
   self o U hU := hh.self o U (hown o U hU).2
+  blk := hh.blk.frame hb hnid (fun i hi => by
+      obtain ⟨k, bl, hk, hik⟩ := hi
+      exact halloc i fun hiT => ((hh.blk k bl hk).2.2 i hik).2.2.1 x T hx hiT)
+    (fun o U hU i hi => hh.notPay (hown o U hU).2 hi)
   bpay k bl hk := hh.bpay k bl (by rw [← hb]; exact hk)
-  bkey k bl hk := Nat.lt_of_lt_of_le (hh.bkey k bl (by rw [← hb]; exact hk)) hnid
 
 /-- A3.1: the same owned trees, with more addresses live, a later `nid`, and
-    blocks whose payloads own no address and whose keys are below it. -/
+    blocks that own their payloads and whose payloads own no address (the
+    first cut). -/
 theorem HeapOK.mono {m m' : Mem} (hh : HeapOK m) (hst : m'.st = m.st)
     (ha : ∀ i, m.alloc i = true → m'.alloc i = true) (hn : m.nid ≤ m'.nid)
-    (hbp : ∀ k bl, m'.blk k = some bl → bl.pay.ids = [] ∧ k < m'.nid) : HeapOK m' where
+    (hbo : BlkOwn m') (hbp : ∀ k bl, m'.blk k = some bl → bl.pay.ids = []) : HeapOK m' where
   nodup x t h := hh.nodup x t (by unfold OwnedAt at *; rw [← hst]; exact h)
   disj x y t u hne h1 h2 := hh.disj x y t u hne (by unfold OwnedAt at *; rw [← hst]; exact h1)
     (by unfold OwnedAt at *; rw [← hst]; exact h2)
@@ -139,8 +143,8 @@ theorem HeapOK.mono {m m' : Mem} (hh : HeapOK m) (hst : m'.st = m.st)
     obtain ⟨h1, h2⟩ := hh.alloc x t h' i hi
     exact ⟨ha i h1, Nat.lt_of_lt_of_le h2 hn⟩
   self x t h := hh.self x t (by unfold OwnedAt at *; rw [← hst]; exact h)
-  bpay k bl hk := (hbp k bl hk).1
-  bkey k bl hk := (hbp k bl hk).2
+  blk := hbo
+  bpay := hbp
 
 /-- Putting a tree into a slot that held none. -/
 theorem HeapOK.put {m : Mem} (hh : HeapOK m) {x : Var} {T : Val} (m' : Mem)
@@ -149,6 +153,7 @@ theorem HeapOK.put {m : Mem} (hh : HeapOK m) {x : Var} {T : Val} (m' : Mem)
     (hT : T.ids.Nodup) (hTs : SelfFree T) (hTa : ∀ i ∈ T.ids, m'.alloc i = true ∧ i < m'.nid)
     (hTd : ∀ o U, OwnedAt m o U → ∀ i ∈ T.ids, i ∉ U.ids)
     (halloc : ∀ o U, OwnedAt m o U → ∀ i ∈ U.ids, m'.alloc i = m.alloc i) (hnid : m.nid ≤ m'.nid)
+    (hTp : ∀ i ∈ T.ids, ¬ PayAddr m i) (hpa : ∀ i, PayAddr m i → m'.alloc i = m.alloc i)
     (hb : m'.blk = m.blk := by rfl) :
     HeapOK m' where
   nodup o U hU := by
@@ -170,8 +175,11 @@ theorem HeapOK.put {m : Mem} (hh : HeapOK m) {x : Var} {T : Val} (m' : Mem)
     rcases hown o U hU with ⟨_, rfl⟩ | ⟨_, h⟩
     · exact hTs
     · exact hh.self o U h
+  blk := hh.blk.frame hb hnid hpa (fun o U hU i hi => by
+    rcases hown o U hU with ⟨_, rfl⟩ | ⟨_, h⟩
+    · exact hTp i hi
+    · exact hh.notPay h hi)
   bpay k bl hk := hh.bpay k bl (by rw [← hb]; exact hk)
-  bkey k bl hk := Nat.lt_of_lt_of_le (hh.bkey k bl (by rw [← hb]; exact hk)) hnid
 
 /-! ### Trees that do not view themselves -/
 

@@ -472,7 +472,7 @@ theorem HP_sub_push {w v : Val} {t : Ty} {c d d' : Nat} {es : List Val}
 theorem HeapOK.editPush {m : Mem} (hh : HeapOK m) {o : Var} {T T' : Val} {t : Ty} {c d : Nat}
     {es : List Val} (hT : m.st o = some ⟨true, some T⟩) {v : Val} (hnd : v.ids.Nodup)
     (hal : ∀ i ∈ v.ids, m.alloc i = true ∧ i < m.nid)
-    (hdis : ∀ o' U, OwnedAt m o' U → ∀ i ∈ v.ids, i ∉ U.ids)
+    (hdis : ∀ o' U, OwnedAt m o' U → ∀ i ∈ v.ids, i ∉ U.ids) (hnp : ∀ i ∈ v.ids, ¬ PayAddr m i)
     (hvv : ∀ d0 o0 l0, ¬ Sub (.view d0 o0 l0) v)
     (hvT : ∀ d0 o0 l0, Sub (.view d0 o0 l0) T → ∃ o' U, OwnedAt m o' U ∧ d0 ∈ U.ids)
     {d' : Nat} {A' : Nat → Bool} {N' : Nat}
@@ -522,8 +522,21 @@ theorem HeapOK.editPush {m : Mem} (hh : HeapOK m) {o : Var} {T T' : Val} {t : Ty
     rcases ownedAt_set.mp hU with ⟨h1, h2⟩ | h
     · cases h2; exact Or.inl ⟨h1, rfl⟩
     · exact Or.inr h
+  have hblk : BlkOwn ({ m with alloc := A', nid := N' }.set o ⟨true, some T'⟩) :=
+    hh.blk.frame rfl hNle
+      (fun i hi => hA i (fun h => hh.notPay hT (by rw [h]; exact hdT) hi)
+        (fun h => by have := (hh.payAlloc hi).2; omega))
+      (fun o1 U hU i hi hp => by
+        rcases hown o1 U hU with ⟨_, rfl⟩ | ⟨_, h⟩
+        · rcases hmem i hi with ⟨hiT, _⟩ | h | h
+          · exact hh.notPay hT hiT hp
+          · rcases hd'c with h' | h' <;> rw [h'] at h
+            · exact hh.notPay hT (by rw [h]; exact hdT) hp
+            · have := (hh.payAlloc hp).2; omega
+          · exact hnp i h hp
+        · exact hh.notPay h hi hp)
   refine ⟨fun o1 U hU => ?_, fun o1 o2 U1 U2 hne h1 h2 => ?_, fun o1 U hU i hi => ?_, fun o1 U hU => ?_,
-    fun k bl hk => hh.bpay k bl hk, fun k bl hk => Nat.lt_of_lt_of_le (hh.bkey k bl hk) hNle⟩
+    hblk, fun k bl hk => hh.bpay k bl hk⟩
   · -- nodup: the hole's addresses give way to the new node's
     rcases hown o1 U hU with ⟨_, hUT⟩ | ⟨_, h⟩
     · rw [hUT]
@@ -752,8 +765,15 @@ theorem HeapOK.editTrunc {m : Mem} (hh : HeapOK m) {o : Var} {T T' : Val} {t : T
     rcases ownedAt_set.mp hU with ⟨h1, h2⟩ | h
     · cases h2; exact Or.inl ⟨h1, rfl⟩
     · exact Or.inr h
+  have hblk : BlkOwn ({ m with alloc := a' }.set o ⟨true, some T'⟩) :=
+    hh.blk.frame rfl (Nat.le_refl _)
+      (fun i hi => hf.other (fun h => hh.notPay hT (hdrop i h) hi))
+      (fun x U hU i hi hp => by
+        rcases hown x U hU with ⟨_, rfl⟩ | ⟨_, h⟩
+        · exact hh.notPay hT (hsub i hi) hp
+        · exact hh.notPay h hi hp)
   refine ⟨fun x U hU => ?_, fun x y U V hne hx hy => ?_, fun x U hU i hi => ?_, fun x U hU => ?_,
-    fun k bl hk => hh.bpay k bl hk, hh.bkey⟩
+    hblk, fun k bl hk => hh.bpay k bl hk⟩
   · rcases hown x U hU with ⟨_, rfl⟩ | ⟨_, h⟩
     · exact hnT'
     · exact hh.nodup x U h
@@ -1541,7 +1561,7 @@ theorem MInv.editB_push {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
         cases hv1
         exact ha.owned
       exact MInv.edit_drop hi hanch hEo hoF hcan hds hT0 hT' hst
-        (HeapOK.editPush hi.heap hT0 hp.nd hp.al hp.dis hvv hvT (Or.inl ⟨rfl, rfl, rfl⟩) hr) (by simp)
+        (HeapOK.editPush hi.heap hT0 hp.nd hp.al hp.dis hp.np hvv hvT (Or.inl ⟨rfl, rfl, rfl⟩) hr) (by simp)
         hhv hr hw' rfl hsh'
   exact MInv.editB_rest hi.wf hi.names hanch hx hmx hl hty hthru hdm (by rw [hargE]; exact hown)
     (by rw [hst x hxo]; exact hxs) hhref
@@ -1621,7 +1641,7 @@ theorem MInv.editB_pushRealloc {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv 
         cases hv1
         exact ha.owned
       exact MInv.edit_drop hi hanch hEo hoF hcan hds hT0 hT' hst
-        (HeapOK.editPush hi.heap hT0 hp.nd hp.al hp.dis hvv hvT (Or.inr ⟨rfl, rfl, rfl⟩) hr) (by simp)
+        (HeapOK.editPush hi.heap hT0 hp.nd hp.al hp.dis hp.np hvv hvT (Or.inr ⟨rfl, rfl, rfl⟩) hr) (by simp)
         hhv hr hw' rfl hsh'
   exact MInv.editB_rest hi.wf hi.names hanch hx hmx hl hty hthru hdm (by rw [hargE]; exact hown)
     (by rw [hst x hxo]; exact hxs) hhref
@@ -1702,7 +1722,7 @@ theorem HS_mem_mid {A X X' B : List Nat} (h : (A ++ X ++ B).Nodup) {i : Nat}
 theorem HeapOK.editSet {m : Mem} (hh : HeapOK m) {o : Var} {T T' : Val} {t : Ty} {c d n : Nat}
     {es : List Val} (hT : m.st o = some ⟨true, some T⟩) {v : Val} (hnd : v.ids.Nodup)
     (hal : ∀ i ∈ v.ids, m.alloc i = true ∧ i < m.nid)
-    (hdis : ∀ o' U, OwnedAt m o' U → ∀ i ∈ v.ids, i ∉ U.ids)
+    (hdis : ∀ o' U, OwnedAt m o' U → ∀ i ∈ v.ids, i ∉ U.ids) (hnp : ∀ i ∈ v.ids, ¬ PayAddr m i)
     (hvv : ∀ d0 o0 l0, ¬ Sub (.view d0 o0 l0) v)
     (hvT : ∀ d0 o0 l0, Sub (.view d0 o0 l0) T → ∃ o' U, OwnedAt m o' U ∧ d0 ∈ U.ids)
     (hn : n < es.length) {a' : Nat → Bool} (hf : Frees m.alloc es[n] a')
@@ -1738,8 +1758,17 @@ theorem HeapOK.editSet {m : Mem} (hh : HeapOK m) {o : Var} {T T' : Val} {t : Ty}
     rcases ownedAt_set.mp hU with ⟨h1, h2⟩ | h
     · cases h2; exact Or.inl ⟨h1, rfl⟩
     · exact Or.inr h
+  have hblk : BlkOwn ({ m with alloc := a' }.set o ⟨true, some T'⟩) :=
+    hh.blk.frame rfl (Nat.le_refl _)
+      (fun i hi => hA i (fun h => hh.notPay hT (hfT i h) hi))
+      (fun o1 U hU i hi hp => by
+        rcases hown o1 U hU with ⟨_, rfl⟩ | ⟨_, h⟩
+        · rcases hmem i hi with h | ⟨h, _⟩
+          · exact hnp i h hp
+          · exact hh.notPay hT h hp
+        · exact hh.notPay h hi hp)
   refine ⟨fun o1 U hU => ?_, fun o1 o2 U1 U2 hne h1 h2 => ?_, fun o1 U hU i hi => ?_, fun o1 U hU => ?_,
-    fun k bl hk => hh.bpay k bl hk, hh.bkey⟩
+    hblk, fun k bl hk => hh.bpay k bl hk⟩
   · -- nodup: the old element's addresses give way to `v`'s
     rcases hown o1 U hU with ⟨_, hUT⟩ | ⟨_, h⟩
     · rw [hUT, hT's]
@@ -1794,16 +1823,17 @@ theorem HeapOK.editSet {m : Mem} (hh : HeapOK m) {o : Var} {T T' : Val} {t : Ty}
 /-- Freeing a value no owner holds (an element set out of range) keeps the
     heap's invariant: no owned address is freed. -/
 theorem HeapOK.freeV {m : Mem} (hh : HeapOK m) {v : Val}
-    (hdis : ∀ o U, OwnedAt m o U → ∀ i ∈ v.ids, i ∉ U.ids) {a' : Nat → Bool}
-    (hf : Frees m.alloc v a') : HeapOK { m with alloc := a' } where
+    (hdis : ∀ o U, OwnedAt m o U → ∀ i ∈ v.ids, i ∉ U.ids) (hnp : ∀ i ∈ v.ids, ¬ PayAddr m i)
+    {a' : Nat → Bool} (hf : Frees m.alloc v a') : HeapOK { m with alloc := a' } where
   nodup o U hU := hh.nodup o U hU
   disj o1 o2 U1 U2 hne h1 h2 := hh.disj o1 o2 U1 U2 hne h1 h2
   alloc o U hU i hi := by
     obtain ⟨ha, hlt⟩ := hh.alloc o U hU i hi
     exact ⟨by show a' i = true; rw [hf.other (fun h => hdis o U hU i h hi)]; exact ha, hlt⟩
   self o U hU := hh.self o U hU
+  blk := hh.blk.frame rfl (Nat.le_refl _) (fun i hi => hf.other (fun h => hnp i h hi))
+    (fun o U hU i hi => hh.notPay hU hi)
   bpay k bl hk := hh.bpay k bl hk
-  bkey k bl hk := hh.bkey k bl hk
 
 /-- A slot set to what it holds. -/
 theorem Mem.set_same {m : Mem} {x : Var} {s : Slot} (h : m.st x = some s) : m.set x s = m := by
@@ -1892,7 +1922,7 @@ theorem MInv.editB_set {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
     cases hv1
     exact ha.owned
   exact MInv.editB_drops hi hanch hx hmx hl hty hhv (fun _ _ => rfl) hthru hno
-    (HeapOK.editSet hi.heap hT0 hp.nd hp.al hp.dis hvv hvT hn hf hr)
+    (HeapOK.editSet hi.heap hT0 hp.nd hp.al hp.dis hp.np hvv hvT hn hf hr)
     (fun e he => (List.mem_or_eq_of_mem_set he).elim Or.inl fun h => Or.inr (h ▸ hp.wf))
     (fun e he => (List.mem_or_eq_of_mem_set he).elim Or.inl fun h => Or.inr (h ▸ hp.sh)) hr
 
@@ -1909,7 +1939,7 @@ theorem MInv.editB_setOOB {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ
   have heq : ({ m1 with alloc := a' } : Mem).set o ⟨true, some T⟩ = { m1 with alloc := a' } :=
     Mem.set_same (m := { m1 with alloc := a' }) hno.2.2.1
   have hh : HeapOK (({ m1 with alloc := a' } : Mem).set o ⟨true, some T⟩) := by
-    rw [heq]; exact HeapOK.freeV hi.heap hp.dis hf
+    rw [heq]; exact HeapOK.freeV hi.heap hp.dis hp.np hf
   rw [← heq]
   exact MInv.editB_drops hi hanch hx hmx hl hty hhv (fun _ _ => rfl) hthru hno hh
     (fun e he => Or.inl he) (fun e he => Or.inl he) (Repl.self hno.sub)
