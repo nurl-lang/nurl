@@ -16005,7 +16005,9 @@ unsafe @ gen_call i lex i syms i cg → s {
             } {}
             ? != 0 ( nurl_str_len arg_lend_srcs ) {
                 : s __lix ( nurl_str_int arg_idx )
-                : b __lmut | | | | ( bck_is_container_mutator ( bck_generic_base call_name ) ) ( nurl_sym_has_word g_fn_mutates call_name __lix ) ( nurl_sym_has_word g_fn_reallocs call_name __lix ) ( nurl_sym_has_word g_fn_sink call_name __lix ) ( __user_callee syms call_name fname )
+                // (…or a closure value's node, whose summary closes at module
+                // end as a function's does: agora #421.)
+                : b __lmut | | | | | ( bck_is_container_mutator ( bck_generic_base call_name ) ) ( nurl_sym_has_word g_fn_mutates call_name __lix ) ( nurl_sym_has_word g_fn_reallocs call_name __lix ) ( nurl_sym_has_word g_fn_sink call_name __lix ) ( __user_callee syms call_name fname ) != 0 ( nurl_str_len __clo_node )
                 ? ! __lmut { = arg_lend_srcs `` } {}
             } {}
             = arg_lit_own ? == bck_arg_tt TT_AT ( nurl_sym_get syms `__agg_arg_own__` ) ``
@@ -17248,6 +17250,14 @@ unsafe @ gen_call i lex i syms i cg → s {
                 ? ( bck_is_heap_lty ( nurl_llty ( nurl_sym_get syms __lb ) ) ) {
                     ( bck_stash_pending_kind __ln ( nurl_lex_line lex ) __rc arg_idx `` ? __arg_join `pendjoin` `pendlend` )
                     ( __clo_effect_note __ln __rc arg_idx )
+                    // (…and what the callee drops or changes of a value lent
+                    // out of a parameter, this function does to that
+                    // parameter: its drop and mutation summaries, agora #443.)
+                    ( __drop_note __ln __rc arg_idx )
+                    ? & & == 0 g_bck_closure_depth == 0 g_rpg_on ( __rprov_param syms __lb ) {
+                        : i __lk ( nurl_sym_word_index syms `__fn_param_names__` __lb )
+                        ? >= __lk 0 { ( __mut_edge_note __lk __rc arg_idx ) } {}
+                    } {}
                 } {}
             }
         } {}
