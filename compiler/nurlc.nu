@@ -29372,8 +29372,8 @@ unsafe @ bck_swap_char s str i from i to → s {
 @ __vk_of s cal → s { ^ ( __vk_of_d cal 0 ) }
 
 @ __vk_of_d s cal i d → s {
-    : ~ s vk ( nurl_str_cat ( nurl_sym_get g_fn_vkeeps cal ) `` )
-    ? != 0 ( nurl_str_len vk ) { ^ vk } {}
+    ? != 0 ( nurl_sym_len g_fn_vkeeps cal ) { ^ ( nurl_str_cat ( nurl_sym_get g_fn_vkeeps cal ) `` ) } {}
+    : ~ s vk ``
     : s ms ( __indirect_members cal )
     // (A node a member of itself, through copies: not known.)
     ? != 0 ( nurl_str_len ms ) { ^ ? > d 8 ( nurl_str_cat `` `` ) ( __vk_union_of ms + d 1 ) } {}
@@ -58808,7 +58808,9 @@ unsafe @ __clo_node_of i syms s name i argc → s {
 // Closure value `tt`/`val` (type `ty`) handed to `callee` as argument `p`:
 // one of the closures that parameter's node may be (`cpm#callee#p`).
 unsafe @ __clo_arg_note i syms s callee i p i tt s val s ty → v {
-    ? | == 0 g_borrowck ! ( __is_closure_ty ty ) { ^ v } {}
+    // (Asked of every argument: a closure's type is a `{ … }` pair.)
+    ? | | == 0 g_borrowck == 0 ( nurl_str_len ty ) != ( nurl_str_get ty 0 ) 123 { ^ v } {}
+    ? ! ( __is_closure_ty ty ) { ^ v } {}
     ? == 0 g_clo_nodes { = g_clo_nodes ( nurl_sym_new ) } {}
     : ~ s m `*`
     ? & == tt TT_BACKSLASH != 0 ( nurl_str_len g_last_closure_fn ) { = m ( nurl_str_cat g_last_closure_fn `` ) } {
@@ -58851,7 +58853,13 @@ unsafe @ __clo_node_new i syms s name → s {
 // The members of indirect callee `cal`: the closures a node may be, or the
 // impls a `dyn` method's virtual callee may run; `` for any other callee.
 @ __indirect_members s cal → s {
-    ? != 0 ( nurl_sym_len g_pending_impl ( nurl_str_cat `dynvt##` cal ) ) { ^ ( __dyn_impl_fns cal ) } {}
+    // (Asked of every callee whose answer is empty: only a name with a `__`
+    // can be one — `m__dyn__T`, `name__cloN`.)
+    : i us ( nurl_str_find cal `__` )
+    ? < us 0 { ^ ( nurl_str_cat `` `` ) } {}
+    ? >= ( nurl_str_find cal `__dyn__` ) 0 {
+        ? != 0 ( nurl_sym_len g_pending_impl ( nurl_str_cat `dynvt##` cal ) ) { ^ ( __dyn_impl_fns cal ) } {}
+    } {}
     ? == 0 g_clo_nodes { ^ ( nurl_str_cat `` `` ) } {}
     ^ ( nurl_str_cat ( nurl_sym_get g_clo_nodes cal ) `` )
 }
