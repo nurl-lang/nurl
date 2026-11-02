@@ -35916,16 +35916,25 @@ unsafe @ bck_loop_mask s pre s post → s {
 }
 
 // Every dependency now, one `source:holder,holder` word per source that
-// has any (`vdd_` of the sources the walk saw stored, `bsrcs`): what a
-// loop's head and its exits join back (agora #389).
+// has any (`vdd_` of the sources the walk saw stored, `bsrcs`), each holder
+// suffixed with how it holds it — `d` directly, `i` only through an
+// element, `h` only through a handle copy: what a loop's head and its
+// exits join back (agora #389).
 @ __vd_snapshot → s {
     : ~ s rest ( nurl_sym_get g_bck ( bck_bkey `bsrcs` `` ) )
     : ~ s out ``
     ~ != 0 ( nurl_str_len rest ) {
         : s c ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s hs ( nurl_sym_get g_bck ( bck_bkey `vdd_` c ) )
-        ? != 0 ( nurl_str_len hs ) {
-            : s w ( nurl_str_cat3 c `:` ( bck_swap_char hs 32 44 ) )
+        : ~ s hs ( nurl_sym_get g_bck ( bck_bkey `vdd_` c ) )
+        : ~ s hk ``
+        ~ != 0 ( nurl_str_len hs ) {
+            : s h ( str_first_word hs ) = hs ( str_skip_word hs )
+            : s kind ? ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vdi_` h ) ) c ) `i` ? ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vdh_` h ) ) c ) `h` `d`
+            : s hw ( nurl_str_cat h kind )
+            = hk ? == 0 ( nurl_str_len hk ) ( nurl_str_cat hw `` ) ( nurl_str_cat3 hk `,` hw )
+        }
+        ? != 0 ( nurl_str_len hk ) {
+            : s w ( nurl_str_cat3 c `:` hk )
             = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat w `` ) ( nurl_str_cat3 out ` ` w )
         } {}
     }
@@ -35934,7 +35943,9 @@ unsafe @ bck_loop_mask s pre s post → s {
 
 // …put back: each dependency of `snap` the tables lost since (a holder
 // given a new value on a path other than the one the snapshot was taken
-// on) is held again — directly, the reading that ends on everything.
+// on) is held again, the way the snapshot held it; one held both ways —
+// the snapshot's and the table's differ — is held directly, the reading
+// that ends on everything.
 @ __vd_join s snap → v {
     : ~ s rest ( nurl_str_cat snap `` )
     ~ != 0 ( nurl_str_len rest ) {
@@ -35945,19 +35956,31 @@ unsafe @ bck_loop_mask s pre s post → s {
         : s ck ( bck_bkey `vdd_` c )
         : i cr ( bck_path_root ( nurl_str_to_int c ) )
         ~ != 0 ( nurl_str_len hs ) {
-            : s h ( str_first_word hs ) = hs ( str_skip_word hs )
+            : s hw ( str_first_word hs ) = hs ( str_skip_word hs )
+            : s h ( nurl_str_slice hw 0 - ( nurl_str_len hw ) 1 )
+            : i kind ( nurl_str_get hw - ( nurl_str_len hw ) 1 )
+            : i hr ( bck_path_root ( nurl_str_to_int h ) )
             : s cur ( nurl_sym_get g_bck ck )
-            ? ! ( str_contains_word cur h ) {
-                : i hr ( bck_path_root ( nurl_str_to_int h ) )
-                ( bck_put_vd ck cr ? == 0 ( nurl_str_len cur ) ( nurl_str_cat h `` ) ( nurl_str_cat3 cur ` ` h ) )
-                : s dk ( bck_bkey `vds_` h )
-                : s dv ( nurl_sym_get g_bck dk )
+            : s dk ( bck_bkey `vds_` h )
+            : s dv ( nurl_sym_get g_bck dk )
+            : s ik ( bck_bkey `vdi_` h )
+            : s iv ( nurl_sym_get g_bck ik )
+            : s hk ( bck_bkey `vdh_` h )
+            : s hv ( nurl_sym_get g_bck hk )
+            : b had & ( str_contains_word cur h ) ( str_contains_word dv c )
+            // (How the table holds it now: `i`, `h`, or `d`.)
+            : i now ? ( str_contains_word iv c ) 105 ? ( str_contains_word hv c ) 104 100
+            ? ! had {
+                ? ! ( str_contains_word cur h ) { ( bck_put_vd ck cr ? == 0 ( nurl_str_len cur ) ( nurl_str_cat h `` ) ( nurl_str_cat3 cur ` ` h ) ) } {}
                 ? ! ( str_contains_word dv c ) { ( bck_put_vd dk hr ? == 0 ( nurl_str_len dv ) ( nurl_str_cat c `` ) ( nurl_str_cat3 dv ` ` c ) ) } {}
-                : s ik ( bck_bkey `vdi_` h )
-                ( bck_put_vd ik hr ( __word_drop ( nurl_sym_get g_bck ik ) c ) )
-                : s hk ( bck_bkey `vdh_` h )
-                ( bck_put_vd hk hr ( __word_drop ( nurl_sym_get g_bck hk ) c ) )
-            } {}
+                ( bck_put_vd ik hr ? == kind 105 ( __word_union ( __word_drop iv c ) c ) ( __word_drop iv c ) )
+                ( bck_put_vd hk hr ? == kind 104 ( __word_union ( __word_drop hv c ) c ) ( __word_drop hv c ) )
+            } {
+                ? != kind now {
+                    ( bck_put_vd ik hr ( __word_drop iv c ) )
+                    ( bck_put_vd hk hr ( __word_drop hv c ) )
+                } {}
+            }
         }
     }
 }
@@ -36100,19 +36123,38 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
 // the paths disagree it is a plain borrow of both sources.
 @ __cj_combine s k s v1 s v2 s s1 s s2 → s {
     ? ( seq v1 v2 ) { ^ ( nurl_str_cat v1 `` ) } {}
-    // (How a dependency is held — only through an element, `vdi_`, or only
-    // through a handle copy, `vdh_` — holds past the join only where both
-    // paths say so: held directly on either, it ends as a direct one does.
-    // The dependencies themselves, `vds_` / `vdd_`, are either path's.)
-    ? & == 118 ( nurl_str_get k 0 ) | == 105 ( nurl_str_get k 2 ) == 104 ( nurl_str_get k 2 ) {
-        ? ( seq s1 `!` ) { ^ ( nurl_str_cat v2 `` ) } {}
-        ? ( seq s2 `!` ) { ^ ( nurl_str_cat v1 `` ) } {}
-        ^ ( __word_drop_all v1 ( __word_drop_all v1 v2 ) )
-    } {}
     ? != 102 ( nurl_str_get k 0 ) { ^ ( __word_union v1 v2 ) } {}
     ? ( seq s1 `!` ) { ^ ( nurl_str_cat v2 `` ) } {}
     ? ( seq s2 `!` ) { ^ ( nurl_str_cat v1 `` ) } {}
     ^ ( nurl_str_cat `` `` )
+}
+
+// A dependency fact past a join (agora #389). A dead path — one that left
+// by `break`, `continue` or `^` — is no path into what follows: a `break` or
+// `continue` took its dependencies along (__vd_snapshot), a `^` was checked
+// where it left. Of two live paths: the dependencies (`vds_`, `vdd_`) are
+// either's; a source is held only through an element (`vdi_`) or only
+// through a handle copy (`vdh_`) where every path that depends on it says
+// so — held directly on one, it ends as a direct one does.
+@ __vd_combine s k s v1 s v2 s s1 s s2 s j1 s j2 s s0 → s {
+    ? ( seq s1 `!` ) { ^ ( nurl_str_cat v2 `` ) } {}
+    ? ( seq s2 `!` ) { ^ ( nurl_str_cat v1 `` ) } {}
+    : i c2 ( nurl_str_get k 2 )
+    ? ! | == c2 105 == c2 104 { ^ ( __word_union v1 v2 ) } {}
+    : s dk ( nurl_str_cat `vds_` ( nurl_str_slice k 4 - ( nurl_str_len k ) 4 ) )
+    : s d1 ( __cj_arm_val j1 s0 dk )
+    : s d2 ( __cj_arm_val j2 s0 dk )
+    : s both ( __word_drop_all v1 ( __word_drop_all v1 v2 ) )
+    ^ ( __word_union ( __word_union both ( __word_drop_all v1 d2 ) ) ( __word_drop_all v2 d1 ) )
+}
+
+// What fact `k` holds at the end of the arm whose log is `jx`: its value
+// there if the arm changed it, else its value before the join (`s0`, the
+// facts either arm changed, or the table's).
+@ __cj_arm_val s jx s s0 s k → s {
+    ? ( __cj_has jx k ) { ^ ( __cj_get jx k ) } {}
+    ? ( __cj_has s0 k ) { ^ ( __cj_get s0 k ) } {}
+    ^ ( nurl_sym_get g_bck k )
 }
 
 // The joined facts of two paths: `j1` / `j2` their logs of changed facts'
@@ -36125,7 +36167,8 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
         : s k ( str_first_word rest ) = rest ( str_skip_word rest )
         : s v1 ? ( __cj_has j1 k ) ( __cj_get j1 k ) ( __cj_get s0 k )
         : s v2 ? ( __cj_has j2 k ) ( __cj_get j2 k ) ( __cj_get s0 k )
-        = out ( nurl_str_cat4 out `\n` k ( nurl_str_cat `\t` ( __cj_combine k v1 v2 s1 s2 ) ) )
+        : s jv ? & == 118 ( nurl_str_get k 0 ) == 100 ( nurl_str_get k 1 ) ( __vd_combine k v1 v2 s1 s2 j1 j2 s0 ) ( __cj_combine k v1 v2 s1 s2 )
+        = out ( nurl_str_cat4 out `\n` k ( nurl_str_cat `\t` jv ) )
         // (A binding borrowed on one path and its own on the other is
         // marked `bm_`: a diagnostic says it may not own its value, and from
         // what it borrows on the path that does — bck_diag_borrow_replaced.)
