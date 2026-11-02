@@ -38456,7 +38456,13 @@ unsafe @ gen_assign i lex i syms i cg → s {
         : b __ud_may_self | | __ud_self_lend ( nurl_sym_has_word syms `__last_call_lend_idents__` name )
         ( nurl_sym_has_word syms `__last_phi_idents__` name )
         : ~ s __ud_ro_new ``
-        ? & & & != 0 ( nurl_str_len __ud_ptr ) == bck_rhs_tt TT_LPAREN ( __is_handle_ty vt ) | == 0 ( nurl_str_len __ud_borrow ) __ud_self_lend
+        // (…an option or a result of such a value too, where the call may
+        // hand back this binding's own value: `= o ( id o )`, o a
+        // `?String`, dropped its old value and then held it — agora #342.
+        // Only there: any other option keeps the call's answer in its slot,
+        // `@slot` (mem_udrop_bind_flag), which what copies it reads.)
+        : b __ud_hty | ( __is_handle_ty vt ) & & __ud_may_self != 0 ( nurl_str_starts vt `{ i1, ` ) ( __type_needs_drop vt syms )
+        ? & & & != 0 ( nurl_str_len __ud_ptr ) == bck_rhs_tt TT_LPAREN __ud_hty | == 0 ( nurl_str_len __ud_borrow ) __ud_self_lend
         { = __ud_ro ( mem_call_retown syms cg )
             ? & != 0 ( nurl_str_len __ud_ro ) ! __ud_may_self { = __ud_ro_new __ud_ro = __ud_ro `` } {}
             ? != 0 ( nurl_str_len __ud_ro ) {
@@ -38540,7 +38546,18 @@ unsafe @ gen_assign i lex i syms i cg → s {
                 ( nurl_print `  ` ) ( nurl_print __ud_nf ) ( nurl_print ` = select i1 ` ) ( nurl_print __ud_ro )
                 ( nurl_print `, i1 1, i1 ` ) ( nurl_print __ud_of ) ( nurl_print `\n` )
                 ( mem_udrop_flag_set syms cg __ud_ptr __ud_nf )
-                ( nurl_sym_set_deep syms ( nurl_str_cat __ud_ptr `__sborrow` ) `` ) }
+                // (An option or a result keeps its provenance in a slot, as
+                // __mem_bind_call_bit does: borrowed exactly where it owns
+                // nothing now. What copies it — a push, a literal's field —
+                // reads that; cleared, a lend handed back stayed a lend and
+                // was stored as is, then freed twice — agora #342.)
+                ? ( __is_handle_ty vt ) { ( nurl_sym_set_deep syms ( nurl_str_cat __ud_ptr `__sborrow` ) `` ) } {
+                    : s __ud_nb ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __ud_nb ) ( nurl_print ` = xor i1 ` ) ( nurl_print __ud_nf ) ( nurl_print `, 1\n` )
+                    : s __ud_ls ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __ud_ls ) ( nurl_print ` = alloca i1\n  store i1 ` ) ( nurl_print __ud_nb ) ( nurl_print `, ptr ` ) ( nurl_print __ud_ls ) ( nurl_print `\n` )
+                    ( __sb syms __ud_ptr ( nurl_str_cat `@` __ud_ls ) )
+                } }
             { ? & & != 0 ( nurl_str_len __ud_ptr ) ! ( seq bck_rhs_val name ) ! __ud_same
                 { ( mem_udrop_bind_flag syms cg __ud_ptr vt bck_rhs_tt bck_rhs_val __ud_borrow ) } {} }
         }
