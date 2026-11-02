@@ -209,8 +209,9 @@ key is below `nid`) hold through every step, the edit steps and
   or lent, gives a new owned share of the same block (`out_arcClone`).
 - `RhsT.arcGet a` / `EvalR.arcGet`: the payload of `a`'s block, lent
   (`lendOf`, the identity on a plain value, `WFv.plain_lend`). Its entry
-  is `projE a E t`, a field's: a borrow rooted where `a` is, holding `a`'s
-  `held`, so it ends with `a` like any borrow. A plain payload has no
+  was `projE a E t`, a field's; the second cut makes it `getE a E t`, a
+  borrow through a share of `a` (below). Either way it ends with `a` like
+  any borrow. A plain payload has no
   handle, so it is valid through any dependency and no borrow lands in a
   block (`out_arcGet`). The value is read from the block (`m.blk k`),
   which `SharesOK` says the share carries, so the packages in memory stay
@@ -345,6 +346,62 @@ has no such tie. Ways on:
 - Or `derive` from a borrowed root adds a share mark. `editB` already
   refuses borrowed roots, but a summary's `lends` then carries `share` to
   callers, so `editB` through a borrow returned by a function is refused.
+
+**Taken: the first way, with a share mark from `arc_get` (proven).**
+`check.sh` is green with:
+- `NodeAt` / `DataAt` also find a node in a live block's payload.
+  `RootNode.owned` gives `InMem` (in an owned tree or a live payload), and
+  `ViewAt.owned` gives an owned buffer or a payload address (`PayAddr`).
+  A node is still unique across trees and payloads (`BlkOwn`: `pay_unique`,
+  `owned_pay_head`). The keep lemmas (`rootKeep_frame`, `rootKeep_ext`,
+  `rootKeep_move`, `rootNode_st`, `RootKeep.vkeep`) take `BlkLe` on the
+  blocks.
+- `arc_get a`'s entry is `getE`. Its path is `derive a E .share`: an owned
+  or rooted share gives `⟨a, .share⟩`, and a borrowed share passes its own
+  path on, as `share`. Drop and replace kill it.
+- `Landed`: an `HrefAt` / `ViewAt` lands where its root's node puts it
+  (`RootNode`, `Lands`), or, through a `.share` dependency, anywhere in a
+  live payload (`InPay`), whatever the root does. It stays while the
+  blocks only grow (`Landed.keep`, `vkeep_share`, `hkeep_share`).
+  `viewAt_not_self` asks a kind other than `share`.
+- `ThruOK` asks that no dependency on the path has kind `.share`
+  (`ThruOK.noShare`). `MInv.thru_owner` takes that and lands the borrow's
+  node in an owned tree (`Landed.root`). This is the lemma "no `.share` in
+  `memDeps P` ⇒ the node is found by `NodeOf`", so `editB` never meets a
+  payload node.
+- Still the first cut's: `HeapOK.bpay` holds, so no payload holds a node
+  and the share alternative is uninhabited. Two places dismiss it with
+  `bpay` (`Landed.root_of_heap`, `viewAt_not_self_heap`): a borrowed
+  parameter's reroot (`reroot_vkeep`, `reroot_valOK_gen`) and a
+  destructor's revive (`ViewsOK.dropSelf`). A3 passes `PayFree` (from
+  `ThreadOK.blocksAt`) where `Touch` and the downward frame lemma may find
+  a payload node. `arcNew` / `arcGet` still ask `Ty.plain`.
+
+**What stops lifting `bpay` (step d).** Those two places need real proofs:
+- *Reroot.* A dependency `⟨p, .share⟩` on a borrowed parameter `p` comes
+  from `arc_get p` inside a callee, or from `allKinds`' `⟨r, .share⟩` in
+  `S.A`. It is rerooted onto `p`'s path and held. When `p`'s value is a
+  share, `ValOK.arc` names no dependency, so that list may hold no memory
+  dependency. The mark then vanishes, and the payload handle is left with
+  no landing dependency. Two ways out:
+  1. `ValOK.arc` asks that the share itself lands through a dependency, so
+     the reroot has one to compose with (`comp _ .share = .share`).
+     `RootNode` must then reach a share that a borrowed slot holds.
+  2. `arc_get` takes only an owned share (a borrowed share is cloned
+     first), and `allKinds` drops `share`. Then `derive_lift` must be
+     checked for a `getE` inside a callee.
+- *Revive.* `Entry.revive` drops the destructor binding's own
+  dependencies. A stored payload view valid only through `⟨x, .share⟩`
+  then loses its mark, and `SelfFree` does not cover a share. The fix is
+  the same as (1), or `revive` keeps share dependencies.
+
+After that, step (d) is: `Ty.plain` lifted to `holdsView = false ∧
+hasFn = false`, `arcNew` moving a tree into a new block (`BlkOwn` for it),
+`arcGet` lending the `href` through the share landing, and `bpay` removed.
+Step (e) is `Covers` counting payloads and `Steps` running the sweep
+(`CatchOK`'s `BlkLe` must weaken to blocks that are reached). Step (f) is
+A3 with payload addresses: they are read only, so `Touch`, `Avoids` and
+the partition need a shared, read-only part.
 
 A3.0 settled that A3 imports A2 and runs A2's step on each thread's view,
 so a shared block has to live somewhere A2's step can read. For `Arc` the
