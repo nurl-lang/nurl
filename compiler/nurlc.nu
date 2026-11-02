@@ -48139,6 +48139,20 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
         }
     } {}
     ( __sx_publish __sx_me ? == 0 ( nurl_str_len __cap_sx ) `-` __cap_sx )
+    // Making the closure reads what it captures by name, where it is made
+    // (A2's Rhs.pack: CapsOK needs each capture live): a binding whose
+    // borrow ended (a holder of a view of a block's local after the block),
+    // or one moved away, is refused here as a direct read is — the body's
+    // own reads are rows of its own walk, never this one's. A capture the
+    // body only gives a new value needs no value of its own (agora #358).
+    ? != g_borrowck 0 {
+        : ~ s __crd ( nurl_str_cat captured_vars `` )
+        ~ != 0 ( nurl_str_len __crd ) {
+            : s __cw ( str_first_word __crd ) = __crd ( str_skip_word __crd )
+            ? | ( str_contains_word g_clo_assigned __cw ) ( str_contains_word g_clo_fld_roots __cw ) {} { ( bck_note_read __cw ) }
+        }
+    } {}
+
     = g_nc_flag_caps __ncf_saved
     = g_nc_own_caps __nco_saved
     = g_clo_assigned __cla_saved
