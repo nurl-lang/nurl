@@ -233,6 +233,20 @@ def Landed (m : Mem) (dep : Dep) (n : Val) : Prop :=
   (∃ n0, RootNode m dep.root n0 ∧ Lands dep.kind n n0) ∨
     (dep.kind = .share ∧ RootMem m dep.root ∧ InPay m n)
 
+/-- A3.1: where a share reached through `dep` lies: where the node its root
+    reaches puts it, or, through a share, anywhere, as long as the root
+    reaches memory. A share carries its block, which lives while the share
+    does (the sweep reaches it from the share), so where the share itself
+    lies does not matter: only the dependency does, which a borrowed
+    parameter's end passes on (`reroot`). -/
+def ArcLanded (m : Mem) (dep : Dep) (n : Val) : Prop :=
+  (∃ n0, RootNode m dep.root n0 ∧ Lands dep.kind n n0) ∨ (dep.kind = .share ∧ RootMem m dep.root)
+
+theorem Landed.arc {m : Mem} {dep : Dep} {n : Val} (h : Landed m dep n) : ArcLanded m dep n := by
+  rcases h with h | ⟨hk, hro, _⟩
+  · exact Or.inl h
+  · exact Or.inr ⟨hk, hro⟩
+
 /-- The view `(d, o, l)` of element type `t` is valid through `dep` (a
     dependency on a whole handle is no view's: a `push` moves the buffer
     and keeps the handle). -/
@@ -285,7 +299,7 @@ inductive ValOK (m : Mem) : Ty → Val → List Dep → List Dep → Prop
       type (in the first cut, one that holds no view), and the share lands
       through a dependency, as a `Vec` handle does. -/
   | arc {t : Ty} {k : Nat} {p : Val} {P H : List Dep} :
-      m.blk k = some ⟨t, p⟩ → WFv t p → t.holdsView = false → (∃ dep ∈ P, Landed m dep (.arc k p)) →
+      m.blk k = some ⟨t, p⟩ → WFv t p → t.holdsView = false → (∃ dep ∈ P, ArcLanded m dep (.arc k p)) →
       ValOK m (.arc t) (.arc k p) P H
 
 section ValOK

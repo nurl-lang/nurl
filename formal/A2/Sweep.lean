@@ -103,4 +103,214 @@ theorem HeapOK.sweep {m : Mem} (hh : HeapOK m) : HeapOK m.sweep where
     · exact hoth k' bl' he hk' hik'
   bpay k bl hk := hh.bpay k bl (Mem.sweep_blk.mp hk).1
 
+/-! ### A3.1: the sweep keeps every borrow valid
+
+A slot's value, and the payload of a reached block, refer only to reached
+blocks (`Kept`). A node a borrow lands in holds the address of the handle
+that reaches it, so if it lies in a payload, the handle's value refers to
+that block, and the sweep keeps it. A share carries its block, which its
+holder refers to. So everything the invariant says of a slot holds over
+the swept store (`MInv.sweep`), and so does `Covers` (`Covers.sweep`). -/
+
+/-- Every block `v` refers to is reached: the sweep keeps it. -/
+def Kept (m : Mem) (v : Val) : Prop := ∀ k, Refers m.blk v k → Reached m.vals m.blk k
+
+/-- An address that, if a payload owns it, lies in a reached block. -/
+def KeptAddr (m : Mem) (i : Nat) : Prop :=
+  ∀ k bl, m.blk k = some bl → i ∈ bl.pay.ids → Reached m.vals m.blk k
+
+theorem Kept.sub {m : Mem} {v w : Val} (h : Kept m v) (hs : Sub w v) : Kept m w := by
+  intro k hr
+  apply h k
+  rcases hr with ⟨p, hp⟩ | ⟨bl, hk, ⟨c, hc, hci⟩ | ⟨d, o, l, hd, hdi⟩⟩
+  · exact Or.inl ⟨p, hp.trans hs⟩
+  · exact Or.inr ⟨bl, hk, Or.inl ⟨c, hc.trans hs, hci⟩⟩
+  · exact Or.inr ⟨bl, hk, Or.inr ⟨d, o, l, hd.trans hs, hdi⟩⟩
+
+theorem Kept.slot {m : Mem} {x : Var} {o : Bool} {v : Val} (hx : m.st x = some ⟨o, some v⟩) : Kept m v :=
+  fun _ h => Reached.of_slot hx h
+
+theorem Kept.pay {m : Mem} {k : Nat} {bl : Blk} (hr : Reached m.vals m.blk k) (hk : m.blk k = some bl) :
+    Kept m bl.pay := fun _ h => .pay hr hk h
+
+theorem Kept.href {m : Mem} {v : Val} (h : Kept m v) {c : Nat} (hs : Sub (.href c) v) : KeptAddr m c :=
+  fun k bl hk hc => h k (Or.inr ⟨bl, hk, Or.inl ⟨c, hs, hc⟩⟩)
+
+theorem Kept.view {m : Mem} {v : Val} (h : Kept m v) {d o l : Nat} (hs : Sub (.view d o l) v) :
+    KeptAddr m d :=
+  fun k bl hk hd => h k (Or.inr ⟨bl, hk, Or.inr ⟨d, o, l, hs, hd⟩⟩)
+
+theorem Kept.arc {m : Mem} {v : Val} (h : Kept m v) {k : Nat} {p : Val} (hs : Sub (.arc k p) v) :
+    Reached m.vals m.blk k :=
+  h k (Or.inl ⟨p, hs⟩)
+
+/-- A node holding a kept address lies in a kept place. -/
+theorem KeptAddr.node {m : Mem} {i : Nat} (h : KeptAddr m i) {n : Val} (hi : i ∈ n.ids) :
+    ∀ k bl, m.blk k = some bl → Sub n bl.pay → Reached m.vals m.blk k :=
+  fun k bl hk hs => h k bl hk (hs.ids i hi)
+
+theorem ArcIn.sub {τ : Ty} {T : Val} {u : Ty} {k : Nat} {p : Val} (h : ArcIn τ T u k p) :
+    Sub (.arc k p) T := by
+  induction h with
+  | here => exact Sub.refl _
+  | child he _ ih => exact Sub.child he ih
+  | fst _ ih => exact Sub.fst ih
+  | snd _ ih => exact Sub.snd ih
+  | inl _ ih => exact Sub.inl ih
+  | inr _ ih => exact Sub.inr ih
+  | pkg _ ih => exact Sub.pkg ih
+
+theorem NodeAt.sweep {m : Mem} {c : Nat} {n : Val} (h : NodeAt m c n) (hc : KeptAddr m c) :
+    NodeAt m.sweep c n := by
+  rcases h with ⟨x, T, hT, hs, hn⟩ | ⟨k, bl, hk, hs, ty, d, es, rfl⟩
+  · exact Or.inl ⟨x, T, hT, hs, hn⟩
+  · exact Or.inr ⟨k, bl, Mem.sweep_blk.mpr ⟨hk, hc k bl hk (hs.ids c (by simp))⟩, hs, ty, d, es, rfl⟩
+
+theorem DataAt.sweep {m : Mem} {d : Nat} {n : Val} (h : DataAt m d n) (hd : KeptAddr m d) :
+    DataAt m.sweep d n := by
+  rcases h with ⟨x, T, hT, hs, hn⟩ | ⟨k, bl, hk, hs, ty, c, es, rfl⟩
+  · exact Or.inl ⟨x, T, hT, hs, hn⟩
+  · exact Or.inr ⟨k, bl, Mem.sweep_blk.mpr ⟨hk, hd k bl hk (hs.ids d (by simp))⟩, hs, ty, c, es, rfl⟩
+
+/-- What a root reaches, it reaches in the swept store: a handle it holds
+    refers to the block it reaches into. -/
+theorem RootNode.sweep {m : Mem} {r : Var} {n : Val} (h : RootNode m r n) : RootNode m.sweep r n := by
+  rcases h with ⟨T, hT, ht⟩ | ⟨v, c, hv, ht, hn⟩ | ⟨v, d, o, l, hv, ht, hn⟩ | h
+  · exact Or.inl ⟨T, hT, ht⟩
+  · exact Or.inr (Or.inl ⟨v, c, hv, ht, hn.sweep ((Kept.slot hv).href ht.sub)⟩)
+  · exact Or.inr (Or.inr (Or.inl ⟨v, d, o, l, hv, ht, hn.sweep ((Kept.slot hv).view ht.sub)⟩))
+  · exact Or.inr (Or.inr (Or.inr h))
+
+theorem RootMem.sweep {m : Mem} {r : Var} (h : RootMem m r) : RootMem m.sweep r := by
+  rcases h with h | ⟨n0, hn⟩
+  · exact Or.inl h
+  · exact Or.inr ⟨n0, hn.sweep⟩
+
+theorem Landed.sweep {m : Mem} {dep : Dep} {n : Val} (h : Landed m dep n)
+    (hk : ∀ k bl, m.blk k = some bl → Sub n bl.pay → Reached m.vals m.blk k) : Landed m.sweep dep n := by
+  rcases h with ⟨n0, hr, hl⟩ | ⟨hs, hro, k, bl, hkb, hsub⟩
+  · exact Or.inl ⟨n0, hr.sweep, hl⟩
+  · exact Or.inr ⟨hs, hro.sweep, k, bl, Mem.sweep_blk.mpr ⟨hkb, hk k bl hkb hsub⟩, hsub⟩
+
+theorem ArcLanded.sweep {m : Mem} {dep : Dep} {n : Val} (h : ArcLanded m dep n) : ArcLanded m.sweep dep n := by
+  rcases h with ⟨n0, hr, hl⟩ | ⟨hs, hro⟩
+  · exact Or.inl ⟨n0, hr.sweep, hl⟩
+  · exact Or.inr ⟨hs, hro.sweep⟩
+
+/-- A landed node lies in an owned tree or in a payload; in a kept place if
+    it holds a kept address. -/
+theorem Landed.kept {m : Mem} {dep : Dep} {t : Ty} {c d : Nat} {es : List Val}
+    (h : Landed m dep (.node t c d es)) {i : Nat} (hi : i ∈ (Val.node t c d es).ids) (hk : KeptAddr m i) :
+    Kept m (.node t c d es) := by
+  rcases h.inMem with ⟨o, T, hT, hs⟩ | ⟨k, bl, hkb, hs⟩
+  · exact (Kept.slot hT).sub hs
+  · exact (Kept.pay (hk.node hi k bl hkb hs) hkb).sub hs
+
+theorem ViewAt.sweep {m : Mem} {dep : Dep} {d o l : Nat} {s : Ty} (h : ViewAt m dep d o l s)
+    (hd : KeptAddr m d) : ViewAt m.sweep dep d o l s := by
+  obtain ⟨c, es, hk, hla, hl, hw⟩ := h
+  exact ⟨c, es, hk, hla.sweep (hd.node (by simp)), hl, hw⟩
+
+theorem ViewsOK.sweep {m : Mem} {τ : Ty} {T : Val} {H : List Dep} (h : ViewsOK m τ T H) (hT : Kept m T) :
+    ViewsOK m.sweep τ T H := by
+  intro s v hin
+  obtain ⟨d, o, l, rfl, dep, hd, ha⟩ := h s v hin
+  exact ⟨d, o, l, rfl, dep, hd, ha.sweep (hT.view hin.sub)⟩
+
+theorem SharesOK.sweep {m : Mem} {τ : Ty} {T : Val} (h : SharesOK m τ T) (hT : Kept m T) :
+    SharesOK m.sweep τ T := fun u k p ha =>
+  Mem.sweep_blk.mpr ⟨h u k p ha, hT.arc ha.sub⟩
+
+theorem HrefAt.sweep {m : Mem} {dep : Dep} {c : Nat} {t : Ty} {H : List Dep} (h : HrefAt m dep c t H)
+    (hc : KeptAddr m c) : HrefAt m.sweep dep c t H := by
+  obtain ⟨d, es, hla, hw, hv, hn, hsh⟩ := h
+  have hkn := hla.kept (i := c) (by simp) hc
+  exact ⟨d, es, hla.sweep (hc.node (by simp)), hw, hv.sweep hkn, hn, hsh.sweep hkn⟩
+
+theorem ValOK.sweep {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m τ v P H) (hv : Kept m v) :
+    ValOK m.sweep τ v P H := by
+  induction h with
+  | int => exact .int
+  | href h =>
+    obtain ⟨dep, hd, ha⟩ := h
+    exact .href ⟨dep, hd, ha.sweep (hv.href (Sub.refl _))⟩
+  | view h =>
+    obtain ⟨dep, hd, ha⟩ := h
+    exact .view ⟨dep, hd, ha.sweep (hv.view (Sub.refl _))⟩
+  | pair _ _ ihx ihy => exact .pair (ihx (hv.sub (Sub.fst (Sub.refl _)))) (ihy (hv.sub (Sub.snd (Sub.refl _))))
+  | inl _ ih => exact .inl (ih (hv.sub (Sub.inl (Sub.refl _))))
+  | inr _ ih => exact .inr (ih (hv.sub (Sub.inr (Sub.refl _))))
+  | pkg _ ih => exact .pkg (ih (hv.sub (Sub.pkg (Sub.refl _))))
+  | arc hk hw hvf hl =>
+    obtain ⟨dep, hd, hla⟩ := hl
+    exact .arc (Mem.sweep_blk.mpr ⟨hk, hv.arc (Sub.refl _)⟩) hw hvf ⟨dep, hd, hla.sweep⟩
+
+theorem SlotOK.sweep {m : Mem} {E : Entry} {sl : Slot} (h : SlotOK m E sl)
+    (hk : ∀ v, sl.val = some v → Kept m v) : SlotOK m.sweep E sl := by
+  obtain ⟨h1, h2, h3⟩ := h
+  refine ⟨h1, fun ho => ?_, fun ho hl => ?_⟩
+  · obtain ⟨a, b, c⟩ := h2 ho
+    exact ⟨a, b, fun hl => by obtain ⟨T, hT, hv⟩ := c hl; exact ⟨T, hT, hv.sweep (hk T hT)⟩⟩
+  · obtain ⟨v, hv, hok⟩ := h3 ho hl
+    exact ⟨v, hv, hok.sweep (hk v hv)⟩
+
+theorem ArmOK.sweep {m : Mem} {E : Entry} {sl : Slot} (h : ArmOK m E sl)
+    (hk : ∀ v, sl.val = some v → Kept m v) : ArmOK m.sweep E sl := by
+  intro hd hos T hT
+  obtain ⟨h1, h2⟩ := h hd hos T hT
+  exact ⟨h1, h2.sweep (hk T hT)⟩
+
+theorem Kept.of_slot {m : Mem} {x : Var} {sl : Slot} (hsl : m.st x = some sl) :
+    ∀ v, sl.val = some v → Kept m v := by
+  intro v hv
+  obtain ⟨o, val⟩ := sl
+  simp only at hv; subst hv
+  exact Kept.slot hsl
+
+/-- **The sweep keeps the memory invariant**: every slot's value refers to
+    reached blocks only, which the sweep keeps. -/
+theorem MInv.sweep {m : Mem} {Γ : Ctx} (hi : MInv m Γ) : MInv m.sweep Γ where
+  dom := hi.dom
+  slot v E hv := by
+    obtain ⟨sl, hsl, hok, hs⟩ := hi.slot v E hv
+    exact ⟨sl, hsl, hok, hs.sweep (Kept.of_slot hsl)⟩
+  heap := hi.heap.sweep
+  nvSt := hi.nvSt
+  noInout := hi.noInout
+  wf := hi.wf
+  rootbLive := hi.rootbLive
+  rootbLt := hi.rootbLt
+  names := hi.names
+  held := hi.held
+  pkgs := hi.pkgs
+  armed v E sl hE hsl := (hi.armed v E sl hE hsl).sweep (Kept.of_slot hsl)
+  shares v E sl T hE hsl hown hT := (hi.shares v E sl T hE hsl hown hT).sweep (Kept.of_slot (m := m) hsl T hT)
+  blocks k bl hk := by
+    obtain ⟨hk0, hr⟩ := Mem.sweep_blk.mp hk
+    obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k bl hk0
+    exact ⟨h1, h2, h3, h4.sweep (Kept.pay hr hk0)⟩
+
+/-- **The sweep keeps `Covers`**: it frees exactly the unreached payloads,
+    and keeps the reached ones. -/
+theorem Covers.sweep {m : Mem} (hc : Covers m) : Covers m.sweep := by
+  intro i hi
+  obtain ⟨ha, hnu⟩ := Mem.sweep_alloc.mp hi
+  rcases hc i ha with ⟨x, T, hT, hiT⟩ | ⟨k, bl, hk, hik⟩
+  · exact Or.inl ⟨x, T, hT, hiT⟩
+  · exact Or.inr ⟨k, bl, Mem.sweep_blk.mpr ⟨hk, Classical.byContradiction fun hr => hnu ⟨k, bl, hk, hr, hik⟩⟩,
+      hik⟩
+
+/-- When no slot holds a value, nothing is reached: the sweep removes every
+    block. -/
+theorem Mem.sweep_empty {m : Mem} (h : ∀ x o v, m.st x ≠ some ⟨o, some v⟩) (k : Nat) :
+    m.sweep.blk k = none := by
+  have hnr : ∀ k, ¬ Reached m.vals m.blk k := by
+    intro k hr
+    induction hr with
+    | root hv _ => obtain ⟨x, o, hx⟩ := hv; exact h x o _ hx
+    | pay _ _ _ ih => exact ih
+  cases hk : m.sweep.blk k with
+  | none => rfl
+  | some bl => exact absurd (Mem.sweep_blk.mp hk).2 (hnr k)
+
 end A2

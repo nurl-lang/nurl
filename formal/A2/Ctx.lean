@@ -74,6 +74,18 @@ theorem Landed.bound {m : Mem} {dep : Dep} {n : Val} (h : Landed m dep n) :
   · rcases hk with ⟨hk, _⟩ | ⟨hk, _⟩ | ⟨hk, _⟩ <;> rw [hk] <;> rfl
   · rw [hk]; rfl
 
+theorem ArcLanded.notName {m : Mem} {dep : Dep} {n : Val} (h : ArcLanded m dep n) :
+    dep.kind.isName = false := by
+  rcases h with ⟨_, _, hk⟩ | ⟨hk, _⟩
+  · rcases hk with ⟨hk, _⟩ | ⟨hk, _⟩ | ⟨hk, _⟩ <;> rw [hk] <;> rfl
+  · rw [hk]; rfl
+
+theorem ArcLanded.bound {m : Mem} {dep : Dep} {n : Val} (h : ArcLanded m dep n) :
+    dep.kind.bound = .none := by
+  rcases h with ⟨_, _, hk⟩ | ⟨hk, _⟩
+  · rcases hk with ⟨hk, _⟩ | ⟨hk, _⟩ | ⟨hk, _⟩ <;> rw [hk] <;> rfl
+  · rw [hk]; rfl
+
 theorem ViewsOK.mono {m : Mem} {τ : Ty} {T : Val} {H H' : List Dep} (hs : H ⊆ H')
     (h : ViewsOK m τ T H) : ViewsOK m τ T H' := by
   intro s v hv

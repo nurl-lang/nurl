@@ -125,6 +125,14 @@ theorem Landed.comp {m : Mem} {dep : Dep} {N N' : Val} {k : Kind} (h : Landed m 
     show A2.comp dep.kind k = .share
     rw [hs]; exact comp_share_lands hk
 
+theorem ArcLanded.comp {m : Mem} {dep : Dep} {N N' : Val} {k : Kind} (h : ArcLanded m dep N)
+    (hk : Lands k N' N) : ArcLanded m ⟨dep.root, comp dep.kind k⟩ N' := by
+  rcases h with ⟨n0, hr, hl⟩ | ⟨hs, hro⟩
+  · exact Or.inl ⟨n0, hr, lands_comp' hl hk⟩
+  · refine Or.inr ⟨?_, hro⟩
+    show A2.comp dep.kind k = .share
+    rw [hs]; exact comp_share_lands hk
+
 /-- A borrow taken from `y` in way `k` reaches memory through `derive y E k`. -/
 theorem derive_lands {m : Mem} {y : Var} {E : Entry} {N N' : Val} {k : Kind}
     (hroot : E.mode.isRoot = true → RootNode m y N)

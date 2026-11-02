@@ -1356,14 +1356,18 @@ theorem viewAt_not_in {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       | rootb => rfl
       | bor => rw [hme] at hroot; simp [Mode.isRoot] at hroot
   · rcases rootb_anchor hi hanch dep.root Er n0 hEr hrb
-      (Or.inr (Or.inl ⟨w1, c1, hc, ht1, hnode⟩)) with ⟨o', T', hoF, hoT, hsT⟩ | ⟨k, bl, hk, hsP⟩
+      (Or.inr (Or.inl ⟨w1, c1, hc, ht1, hnode⟩))
+      (by obtain ⟨_, _, _, h⟩ := hnode.eq; rw [h]; intro _ _ h'; cases h') with
+      ⟨o', T', hoF, hoT, hsT⟩ | ⟨k, bl, hk, hsP⟩
     · have := (owned_unique hi.heap hoT hT (hN.trans hsT) hsub (i := d) (by simp [Val.head])
         (by simp [Val.head])).1
       subst this; exact hxF hoF
     · exact owned_pay_head hi.heap hT hk hsub (hN.trans hsP) (i := d) (by simp [Val.head])
         (by simp [Val.head])
   · rcases rootb_anchor hi hanch dep.root Er n0 hEr hrb
-      (Or.inr (Or.inr (Or.inl ⟨w1, d1, o1, l1, hc, ht1, hdata⟩))) with ⟨o', T', hoF, hoT, hsT⟩ | ⟨k, bl, hk, hsP⟩
+      (Or.inr (Or.inr (Or.inl ⟨w1, d1, o1, l1, hc, ht1, hdata⟩)))
+      (by obtain ⟨_, _, _, h⟩ := hdata.eq; rw [h]; intro _ _ h'; cases h') with
+      ⟨o', T', hoF, hoT, hsT⟩ | ⟨k, bl, hk, hsP⟩
     · have := (owned_unique hi.heap hoT hT (hN.trans hsT) hsub (i := d) (by simp [Val.head])
         (by simp [Val.head])).1
       subst this; exact hxF hoF
@@ -1592,8 +1596,8 @@ theorem mem_reroot {p : Var} {D ds : List Dep} {dep : Dep} (h : dep ∈ reroot p
 /-- What `p`'s slot reaches is reached through `p`'s own dependencies. -/
 theorem rootb_lands {m : Mem} (hh : HeapOK m) {p : Var} {E : Entry} {w : Val}
     (hp : m.st p = some ⟨false, some w⟩) (hok : ValOK m E.ty w E.path E.held) {n0 : Val}
-    (hr : RootNode m p n0) : ∃ d' ∈ E.path ++ E.held, Landed m d' n0 :=
-  bor_lands hh hp hok hr
+    (hr : RootNode m p n0) (hn0 : ∀ k q, n0 ≠ .arc k q) : ∃ d' ∈ E.path ++ E.held, Landed m d' n0 :=
+  bor_lands hh hp hok hr hn0
 
 theorem NamesIn.reroot {T : Val} {H : List Dep} (h : NamesIn T H) {p : Var} (D : List Dep)
     (hnp : ∀ d ∈ H, d.kind.isName = true → d.root ≠ p) : NamesIn T (reroot p D H) :=
@@ -1627,16 +1631,34 @@ theorem lands_notName {k : Kind} {n n0 : Val} (h : Lands k n n0) : k.isName = fa
     reaches memory (`RootMem`: a handle or a share at the top of its value),
     and a share composed with anything is a share. -/
 theorem reroot_landed (hh : HeapOK m) (hp : m.st p = some ⟨false, some w⟩)
-    (hok : ValOK m Ep.ty w Ep.path Ep.held) {k : Kind} {n : Val} (hla : Landed m ⟨p, k⟩ n) :
+    (hok : ValOK m Ep.ty w Ep.path Ep.held) {k : Kind} {n : Val} (hn : ∀ k q, n ≠ .arc k q)
+    (hla : Landed m ⟨p, k⟩ n) :
     ∃ d' ∈ Ep.path ++ Ep.held, d'.kind.isName = false ∧ Landed m ⟨d'.root, comp d'.kind k⟩ n := by
   rcases hla with ⟨n0, hr, hl⟩ | ⟨hk, hro, hin⟩
-  · obtain ⟨d', hd', hla1⟩ := rootb_lands hh hp hok hr
+  · have hn0 : ∀ k q, n0 ≠ .arc k q := fun k q h => hn k q (lands_arc (h ▸ hl))
+    obtain ⟨d', hd', hla1⟩ := rootb_lands hh hp hok hr hn0
     exact ⟨d', hd', hla1.notName, hla1.comp hl⟩
   · simp only at hk; subst hk
     rcases hro with ⟨o, ho⟩ | ⟨n0, hr⟩
     · simp only at ho; rw [hp] at ho; cases ho
-    obtain ⟨d', hd', hla1⟩ := rootb_lands hh hp hok hr
+    obtain ⟨d', hd', hla1⟩ := bor_arcLanded hh hp hok hr
     refine ⟨d', hd', hla1.notName, Or.inr ⟨?_, hla1.rootMem, hin⟩⟩
+    show comp d'.kind .share = .share
+    have := hla1.notName
+    cases hk : d'.kind <;> simp_all [comp, Kind.isName]
+
+/-- ... and so does a share (`ArcLanded`). -/
+theorem reroot_arcLanded (hh : HeapOK m) (hp : m.st p = some ⟨false, some w⟩)
+    (hok : ValOK m Ep.ty w Ep.path Ep.held) {k : Kind} {n : Val} (hla : ArcLanded m ⟨p, k⟩ n) :
+    ∃ d' ∈ Ep.path ++ Ep.held, d'.kind.isName = false ∧ ArcLanded m ⟨d'.root, comp d'.kind k⟩ n := by
+  rcases hla with ⟨n0, hr, hl⟩ | ⟨hk, hro⟩
+  · obtain ⟨d', hd', hla1⟩ := bor_arcLanded hh hp hok hr
+    exact ⟨d', hd', hla1.notName, hla1.comp hl⟩
+  · simp only at hk; subst hk
+    rcases hro with ⟨o, ho⟩ | ⟨n0, hr⟩
+    · simp only at ho; rw [hp] at ho; cases ho
+    obtain ⟨d', hd', hla1⟩ := bor_arcLanded hh hp hok hr
+    refine ⟨d', hd', hla1.notName, Or.inr ⟨?_, hla1.rootMem⟩⟩
     show comp d'.kind .share = .share
     have := hla1.notName
     cases hk : d'.kind <;> simp_all [comp, Kind.isName]
@@ -1652,7 +1674,7 @@ theorem reroot_vkeep (hh : HeapOK m) (hp : m.st p = some ⟨false, some w⟩)
   by_cases hrp : dep.root = p
   · obtain ⟨r, k⟩ := dep
     simp only at hrp hk; subst hrp
-    obtain ⟨d', hd', hnm, hla1⟩ := reroot_landed hh hp hok hla
+    obtain ⟨d', hd', hnm, hla1⟩ := reroot_landed hh hp hok (by intro _ _ h; cases h) hla
     have hdD := hDm d' hd' hnm
     exact ⟨⟨d'.root, comp d'.kind k⟩, mem_reroot_of_eq hd hdD, c, es, comp_ne_self hk,
       hla1.keep (rootKeep_rmbor hp (hlt d' hdD)) (fun _ _ h => h), hlen, hw⟩
@@ -1688,10 +1710,10 @@ theorem reroot_valOK_gen (hh : HeapOK m) (hp : m.st p = some ⟨false, some w⟩
     by_cases hrp : dep.root = p
     · obtain ⟨r, k⟩ := dep
       simp only at hrp; subst hrp
-      obtain ⟨d', hd', hnm, hla1⟩ := reroot_landed hh hp hok hla
+      obtain ⟨d', hd', hnm, hla1⟩ := reroot_arcLanded hh hp hok hla
       have hdD := hDm d' hd' hnm
-      exact .arc h hw hv ⟨_, mem_reroot_of_eq hd hdD, hla1.keep (rootKeep_rmbor hp (hlt d' hdD)) (fun _ _ h => h)⟩
-    · exact .arc h hw hv ⟨dep, mem_reroot_of_ne hd hrp, hla.keep (rootKeep_rmbor hp hrp) (fun _ _ h => h)⟩
+      exact .arc h hw hv ⟨_, mem_reroot_of_eq hd hdD, hla1.keep (rootKeep_rmbor hp (hlt d' hdD))⟩
+    · exact .arc h hw hv ⟨dep, mem_reroot_of_ne hd hrp, hla.keep (rootKeep_rmbor hp hrp)⟩
   | pair _ _ ihx ihy =>
     intro D hDs hDm hlt hnp
     have hx := ihx hDs hDm hlt hnp; have hy := ihy hDs hDm hlt hnp
@@ -1733,7 +1755,7 @@ theorem reroot_valOK_gen (hh : HeapOK m) (hp : m.st p = some ⟨false, some w⟩
     by_cases hrp : dep.root = p
     · obtain ⟨r, k⟩ := dep
       simp only at hrp; subst hrp
-      obtain ⟨d', hd', hnm, hla1⟩ := reroot_landed hh hp hok hla
+      obtain ⟨d', hd', hnm, hla1⟩ := reroot_landed hh hp hok (by intro _ _ h; cases h) hla
       have hdD := hDm d' hd' hnm
       exact .href ⟨⟨d'.root, comp d'.kind k⟩, mem_reroot_of_eq hd hdD, d, es,
         hla1.keep (rootKeep_rmbor hp (hlt d' hdD)) (fun _ _ h => h), hw, hvs', hns',

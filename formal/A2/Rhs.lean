@@ -146,7 +146,7 @@ theorem ValOK.grow {m m' : Mem} (hst : m'.st = m.st) (hb : BlkLe m.blk m'.blk) {
   induction h with
   | arc h hw hv hl =>
     obtain ⟨dep, hd, hla⟩ := hl
-    exact .arc (hb _ _ h) hw hv ⟨dep, hd, hla.keep (RootKeep.of_st hst hb) hb⟩
+    exact .arc (hb _ _ h) hw hv ⟨dep, hd, hla.keep (RootKeep.of_st hst hb)⟩
   | int => exact .int
   | href h =>
     obtain ⟨dep, hd, ha⟩ := h
@@ -760,12 +760,15 @@ theorem lend_valOK' {m : Mem} {H : List Dep} {τ : Ty} {e : Val} (hw : WFv τ e)
     ∀ {P : List Dep},
     (∀ t c d es, Top (.node t c d es) e →
       ∃ dep ∈ P, Landed m dep (.node t c d es)) →
-    (∀ k q, Top (.arc k q) e → ∃ dep ∈ P, Landed m dep (.arc k q)) →
+    (∀ k q, Top (.arc k q) e → ∃ dep ∈ P, ArcLanded m dep (.arc k q)) →
     ViewsOK m τ e H → NamesIn e H → SharesOK m τ e → (∀ s, τ = .slice s → ViewsOK m τ e P) →
     ValOK m τ (lendOf e) P H := by
   revert hpk
   -- what is reached through `P` is reached through `P ++ X`
   have up : ∀ {P X : List Dep} {n : Val}, (∃ dep ∈ P, Landed m dep n) → ∃ dep ∈ P ++ X, Landed m dep n :=
+    fun ⟨dep, hd, rest⟩ => ⟨dep, List.mem_append_left _ hd, rest⟩
+  have upa : ∀ {P X : List Dep} {n : Val}, (∃ dep ∈ P, ArcLanded m dep n) →
+      ∃ dep ∈ P ++ X, ArcLanded m dep n :=
     fun ⟨dep, hd, rest⟩ => ⟨dep, List.mem_append_left _ hd, rest⟩
   induction hw generalizing H with
   | int => intro _ P _ _ _ _ _ _; exact .int
@@ -782,10 +785,10 @@ theorem lend_valOK' {m : Mem} {H : List Dep} {τ : Ty} {e : Val} (hw : WFv τ e)
   | @pair a b v w _ _ ihv ihw =>
     intro hpk P hn ha hvs hnm hsh _
     refine .pair (ihv (hpk.sub (Sub.fst (Sub.refl _))) (fun t c d es hs => up (hn t c d es (Top.fst hs)))
-      (fun k q hs => up (ha k q (Top.fst hs))) (fun s x hin => hvs s x
+      (fun k q hs => upa (ha k q (Top.fst hs))) (fun s x hin => hvs s x
       (ViewIn.fst hin)) ((hnm.sub fun x hx => by simp only [Val.names]; exact List.mem_append_left _ hx)) hsh.fst (fun s _ => ?_))
       (ihw (hpk.sub (Sub.snd (Sub.refl _))) (fun t c d es hs => up (hn t c d es (Top.snd hs)))
-      (fun k q hs => up (ha k q (Top.snd hs)))
+      (fun k q hs => upa (ha k q (Top.snd hs)))
       (fun s x hin => hvs s x (ViewIn.snd hin))
       ((hnm.sub fun x hx => by simp only [Val.names]; exact List.mem_append_right _ hx)) hsh.snd (fun s _ => ?_))
     · exact ViewsOK.mono (List.subset_append_right _ _) (fun s x hin => hvs s x (ViewIn.fst hin))
@@ -793,13 +796,13 @@ theorem lend_valOK' {m : Mem} {H : List Dep} {τ : Ty} {e : Val} (hw : WFv τ e)
   | @inl a b v _ ihv =>
     intro hpk P hn ha hvs hnm hsh _
     exact .inl (ihv (hpk.sub (Sub.inl (Sub.refl _))) (fun t c d es hs => up (hn t c d es (Top.inl hs)))
-      (fun k q hs => up (ha k q (Top.inl hs))) (fun s x hin => hvs s x (ViewIn.inl hin))
+      (fun k q hs => upa (ha k q (Top.inl hs))) (fun s x hin => hvs s x (ViewIn.inl hin))
       ((hnm.sub fun x hx => by simp only [Val.names]; exact hx)) hsh.inl
       (fun s _ => ViewsOK.mono (List.subset_append_right _ _) (fun s x hin => hvs s x (ViewIn.inl hin))))
   | @inr a b v _ ihv =>
     intro hpk P hn ha hvs hnm hsh _
     exact .inr (ihv (hpk.sub (Sub.inr (Sub.refl _))) (fun t c d es hs => up (hn t c d es (Top.inr hs)))
-      (fun k q hs => up (ha k q (Top.inr hs))) (fun s x hin => hvs s x (ViewIn.inr hin))
+      (fun k q hs => upa (ha k q (Top.inr hs))) (fun s x hin => hvs s x (ViewIn.inr hin))
       ((hnm.sub fun x hx => by simp only [Val.names]; exact hx)) hsh.inr
       (fun s _ => ViewsOK.mono (List.subset_append_right _ _) (fun s x hin => hvs s x (ViewIn.inr hin))))
   | @pkg fs te ms v cs _ ihv =>
@@ -819,7 +822,7 @@ theorem lend_valOK' {m : Mem} {H : List Dep} {τ : Ty} {e : Val} (hw : WFv τ e)
         rw [(hdis c hc c' hc' hcc).2]; rfl
       · right; simpa [List.contains_iff_mem] using hin
     exact .pkg (ihv (hpk.sub (Sub.pkg (Sub.refl _))) (fun t c d es hs => up (hn t c d es (Top.pkg hs)))
-      (fun k q hs => up (ha k q (Top.pkg hs))) hvr
+      (fun k q hs => upa (ha k q (Top.pkg hs))) hvr
       (fun c' hc' => mem_envDeps.mpr ⟨hnm c' (by simp only [Val.names]; exact List.mem_append_right _ hc'), hown c' hc'⟩)
       hsh.pkg (fun s _ => ViewsOK.mono (List.subset_append_right _ _) hvr))
 
@@ -828,7 +831,8 @@ theorem lend_valOK {m : Mem} {H : List Dep} {τ : Ty} {e : Val} (hw : WFv τ e) 
     (hv : ViewsOK m τ e H) (hnm : NamesIn e H) (hsh : SharesOK m τ e)
     (hs : ∀ s, τ = .slice s → ViewsOK m τ e P) :
     ValOK m τ (lendOf e) P H :=
-  lend_valOK' hw hpk (fun _ _ _ _ ht => hn _ ht.sub) (fun _ _ ht => hn _ ht.sub) hv hnm hsh hs
+  lend_valOK' hw hpk (fun _ _ _ _ ht => hn _ ht.sub)
+    (fun _ _ ht => let ⟨d, hd, h⟩ := hn _ ht.sub; ⟨d, hd, h.arc⟩) hv hnm hsh hs
 
 theorem lands_rootKind_self (t : Ty) (n : Val) : Lands (rootKind t .self) n n := by
   cases t <;> first | exact Or.inl ⟨rfl, rfl⟩ | exact Or.inr (Or.inl ⟨rfl, rfl⟩)
@@ -928,7 +932,8 @@ theorem out_at {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t : 
       | arc hwp hvf =>
         have hbor' : E.mode.isRoot = false → ∃ dep ∈ E.path, Landed m dep (.node (.arc a) c d es) := fun h => hbor (by
           cases hm : E.mode <;> simp_all [Mode.isRoot])
-        exact .arc (hshv.elem hmem).here hwp hvf (derive_lands (hroot ·) hbor' (Lands.elem hmem) (by rw [hty]; rfl))
+        obtain ⟨d', hd', hla'⟩ := derive_lands (hroot ·) hbor' (Lands.elem hmem) (by rw [hty]; rfl)
+        exact .arc (hshv.elem hmem).here hwp hvf ⟨d', hd', hla'.arc⟩
   names hn := elemE_named (hi.names y E hy hl (Or.inl (by rw [hty]; simp))) t
   held := by
     obtain ⟨c0, d0, es0, hvec0, hw, _, _, _, hns, hshv⟩ := hi.vec_node hy hl hty

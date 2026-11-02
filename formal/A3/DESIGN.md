@@ -407,9 +407,10 @@ with the sweep is the phase-D obligation above. `check.sh` is green with:
   so `⟨y, .self⟩` or `⟨p, .share⟩` on a borrowed share reaches its value.
   `RootNode.owned` and `Landed.inMem'` say what else a root reaches is such
   a share; `Landed.inMem` is for nodes.
-- (B) `ValOK.arc` asks `∃ dep ∈ P, Landed m dep (.arc k p)`: a lent share
-  lands through a dependency, as an `href` does. `valOK_arc` finds it in a
-  borrowed value, `bor_lands` uses it for (A)'s disjunct. `lend_valOK'`
+- (B) `ValOK.arc` asks `∃ dep ∈ P, ArcLanded m dep (.arc k p)` (first
+  `Landed`; `ArcLanded` since e2, below): a lent share lands through a
+  dependency, as an `href` does. `valOK_arc` finds it in a borrowed value,
+  `bor_arcLanded` uses it for (A)'s disjunct. `lend_valOK'`
   takes a landing premise for the shares at the top, `lend_valOK` one for
   every value inside (its callers prove it by `Lands` / `derive_lands`,
   `MInv.share_lands` for a payload). `HKeep` keeps a share's landing too.
@@ -454,6 +455,26 @@ with the sweep is the phase-D obligation above. `check.sh` is green with:
   owns no address, `BlkOwn.of_none`), `no_leak_end` / `no_leak_panic` (a
   block that is left at the end owns no address, until `Steps` sweeps), and
   A3 (`PayFree`, `BlocksAt`, `ThreadOK.no_leak`).
+- (e2) **The sweep keeps the memory invariant** (`A2/Sweep.lean`):
+  `MInv.sweep : MInv m Γ → MInv m.sweep Γ`, `Covers.sweep`, and
+  `Mem.sweep_empty` (no slot holds a value: every block is swept). A
+  slot's value, and a reached block's payload, refer only to reached
+  blocks (`Kept`); a node a borrow lands in holds the address of the
+  handle that reaches it (`KeptAddr`, `Landed.kept`), so a payload it lies
+  in is reached; `RootNode`, `Landed`, `ViewAt`, `HrefAt`, `ValOK`,
+  `SlotOK`, `ArmOK` and `SharesOK` all carry over (`*.sweep`). For this,
+  (B) is `ArcLanded`, not `Landed`: a lent share lands where its root's
+  node puts it, or, through a share dependency, wherever, as long as the
+  root reaches memory. A share has no address, so the slot that holds a
+  copy of it need not refer to the block whose payload the original lies
+  in (an `Arc (Arc i)`'s inner share, lent by `arc_get`); `InPay` would not
+  survive the sweep, and the reroot needs only `RootMem` of the share's
+  dependency (`bor_arcLanded`, `reroot_arcLanded`). The node landings
+  keep `InPay` (`bor_lands`, `reroot_landed` and `rootb_anchor` are for
+  nodes).
+  `Steps` does not run the sweep yet: that needs `CatchOK`'s `BlkLe` to
+  weaken to the reached blocks, and A3's thread-local runs of A2's
+  `Steps` (`SpawnOld`) to keep sweep-free steps.
 
 After that, step (d) is: `Ty.plain` lifted to `holdsView = false ∧
 hasFn = false`, `arcNew` moving a tree into a new block (`BlkOwn` for it),
