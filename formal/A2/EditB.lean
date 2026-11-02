@@ -947,7 +947,15 @@ theorem deep_self_hkeep {m m' : Mem} {o : Var} {T T' : Val} {t : Ty} {c d d' : N
     (hnd : T.ids.Nodup) (hr : Repl (.node t c d es) (.node t c d' es') T T')
     (hw' : WFv (.vec t) (.node t c d' es')) (hhv : t.holdsView = false)
     (hsh' : SharesOK m' (.vec t) (.node t c d' es')) : HKeep m m' ⟨o, .self⟩ := by
-  intro c2 t2 H hH hb ⟨d2, es2, hlan, hw, hv, hnm, hsh⟩
+  refine ⟨fun c2 t2 H hH hb ⟨d2, es2, hlan, hw, hv, hnm, hsh⟩ => ?_, fun k p _ hla => ?_⟩
+  rotate_left
+  · -- a share at the top of the tree stays at its top
+    obtain ⟨n0, hrn, hl⟩ := hla.root (by intro h; cases h)
+    have htop := rootNode_own hT hrn
+    rcases hl with ⟨_, rfl⟩ | ⟨h, _⟩ | ⟨h, _⟩
+    · exact Or.inl ⟨_, Or.inl ⟨T', hT', hr.top_arc htop⟩, Or.inl ⟨rfl, rfl⟩⟩
+    · cases h
+    · cases h
   obtain ⟨n0, hrn, hla⟩ := hlan.root (by intro h; cases h)
   have htop := rootNode_own hT hrn
   have hN : Val.node t2 c2 d2 es2 = n0 := by
@@ -1326,7 +1334,7 @@ theorem NewSlot.edit {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
   -- ... and none is valid through `o` (`SelfFree`, `ViewsOK.keep_except`)
   have hviews : ViewsOK m1 Eo.ty T Eo.held → (∀ dep ∈ Eo.held, dep.kind.isName = false →
       ∃ Er, Γ1 dep.root = some Er ∧ Er.mode.isRoot = true) → ViewsOK m' Eo.ty T' Eo.held :=
-    fun hv h => ViewsOK.keep_except hT hsf hvin (hkeep h) hv (BlkLe.of_eq hblk)
+    fun hv h => ViewsOK.keep_except hT hsf hvin (hkeep h) hv ⟨_, hT'⟩ (BlkLe.of_eq hblk)
   have hlive : (killE .drop false o Eo).live = true → Eo.live = true := fun h => by
     rw [killE_live] at h; simp only [Bool.and_eq_true] at h; exact h.1
   refine ⟨⟨true, some T'⟩, hT', by rw [killE_ty]; exact hok0,

@@ -586,35 +586,48 @@ theorem pres_unpair {P : Prog} {Γ Δ : Ctx} {F : List Var} {y x z : Var} {s : S
 
 /-- A2-drop.2: a destructor's binding made live again for its call. It keeps
     what it views in memory if it is `letd`'s (its type holds views), but
-    not itself (a value holds no view into its own tree); one of a type that
-    holds no views views nothing. -/
+    not itself (a value holds no view into its own tree) except through a
+    share it holds (A3.1: a view of a payload, valid while the binding
+    holds its value, `RootMem`); one of a type that holds no views views
+    nothing. Its destructor is the one about to run: it runs no other, and
+    is no longer `letd`'s. -/
 def Entry.revive (x : Var) (E : Entry) : Entry :=
-  { E with live := true, held := if E.dbind = true then (memDeps E.held).filter (fun d => d.root != x) else [] }
+  { E with
+    live := true
+    dtor := false
+    dbind := false
+    held := if E.dbind = true then (memDeps E.held).filter (fun d => d.root != x || d.kind == .share) else [] }
 
 theorem revive_dep {x : Var} {E : Entry} (hos : E.mode.ownSlot = true) {d : Dep}
-    (hd : d ∈ (E.revive x).vdeps) : E.dbind = true ∧ d ∈ E.held ∧ d.kind.isName = false ∧ d.root ≠ x := by
+    (hd : d ∈ (E.revive x).vdeps) :
+    E.dbind = true ∧ d ∈ E.held ∧ d.kind.isName = false ∧ (d.root ≠ x ∨ d.kind = .share) := by
   simp only [Entry.revive, Entry.vdeps, hos, ↓reduceIte, List.nil_append] at hd
   split at hd
   · rename_i hdb
     simp only [memDeps, List.mem_filter] at hd
-    exact ⟨hdb, hd.1.1, by simpa using hd.1.2, by simpa using hd.2⟩
+    refine ⟨hdb, hd.1.1, by simpa using hd.1.2, ?_⟩
+    have := hd.2
+    simp only [Bool.or_eq_true, bne_iff_ne, ne_eq, beq_iff_eq] at this
+    exact this
   · cases hd
 
 /-- A value holds no view into its own tree: what it views through its own
-    binding, it views through nothing. -/
-theorem ViewsOK.dropSelf {m : Mem} (hh : HeapOK m) {x : Var} {T : Val} (hT : m.st x = some ⟨true, some T⟩)
+    binding, it views through nothing (A3.1: but a share it holds, as
+    `viewAt_not_self` has it). -/
+theorem ViewsOK.dropSelf {m : Mem} {x : Var} {T : Val} (hT : m.st x = some ⟨true, some T⟩)
     (hsf : SelfFree T) {τ : Ty} {H : List Dep} (h : ViewsOK m τ T H) :
-    ViewsOK m τ T (H.filter (fun d => d.root != x)) := by
+    ViewsOK m τ T (H.filter (fun d => d.root != x || d.kind == .share)) := by
   intro s v hin
   obtain ⟨d, o, l, rfl, dep, hd, ha⟩ := h s v hin
   refine ⟨d, o, l, rfl, dep, List.mem_filter.mpr ⟨hd, ?_⟩, ha⟩
-  cases hr : (dep.root != x)
-  · exfalso
-    have hrx : dep.root = x := by simpa using hr
-    obtain ⟨r, k⟩ := dep
-    simp only at hrx; subst hrx
-    exact viewAt_not_self_heap hh hT hsf hin ha
-  · rfl
+  by_cases hrx : dep.root = x
+  · by_cases hks : dep.kind = .share
+    · simp [hks]
+    · exfalso
+      obtain ⟨r, k⟩ := dep
+      simp only at hrx hks; subst hrx
+      exact viewAt_not_self hT hsf hin hks ha
+  · simp [hrx]
 
 /-- The value of a destructor's binding, revived: its views are valid
     (`MInv.armed`), or it has none. -/
@@ -624,7 +637,7 @@ theorem revive_views {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {Ex : Entry
   by_cases hdb : Ex.dbind = true
   · obtain ⟨_, hvs⟩ := hi.armed x Ex _ hx hsl hdb hos v rfl
     simp only [Entry.revive, hdb, ↓reduceIte]
-    exact hvs.memDeps.dropSelf hi.heap hsl (hi.heap.self x v hsl)
+    exact hvs.memDeps.dropSelf hsl (hi.heap.self x v hsl)
   · have hhv : Ex.ty.holdsView = false := by
       cases h : Ex.ty.holdsView with
       | false => rfl
@@ -646,19 +659,13 @@ theorem MInv.revive {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {Ex : Entry}
   obtain ⟨howning, hwf, _⟩ := hown0 hos
   have hwfv : WFv Ex.ty v := hwf v rfl
   have hvs := revive_views hi hx hos hdbv hsl
-  -- what the revived binding depends on: bound roots, none of them `x`
-  have hroots : ∀ d ∈ (Ex.revive x).vdeps, d.root ≠ x ∧
-      ∃ Er, Γ d.root = some Er ∧ Er.mode.isRoot = true := by
+  -- what the revived binding depends on: bound roots (`x` itself, through a share)
+  have hroots : ∀ d ∈ (Ex.revive x).vdeps, ∃ Er, Γ d.root = some Er ∧ Er.mode.isRoot = true := by
     intro d hd
-    obtain ⟨hdb, hdh, hnm, hrx⟩ := revive_dep hos hd
+    obtain ⟨hdb, hdh, hnm, _⟩ := revive_dep hos hd
     have hnint : Ex.ty ≠ .int := fun h => by have := hi.wf.view x Ex hx hdb; rw [h] at this; cases this
-    exact ⟨hrx, hi.wf.dtor x Ex hx hdb hos (Or.inl hnint) d
-      (by unfold Entry.vdeps; exact List.mem_append_right _ hdh) hnm⟩
-  have hroot' : ∀ d ∈ (Ex.revive x).vdeps,
-      ∃ Er, setE Γ x (Ex.revive x) d.root = some Er ∧ Er.mode.isRoot = true := by
-    intro d hd
-    obtain ⟨hrx, Er, hEr, hro⟩ := hroots d hd
-    exact ⟨Er, by simp [setE, upd_ne _ _ hrx, hEr], hro⟩
+    exact hi.wf.dtor x Ex hx hdb hos (Or.inl hnint) d
+      (by unfold Entry.vdeps; exact List.mem_append_right _ hdh) hnm
   have hgen : ∀ r, (∃ Er, Γ r = some Er ∧ Er.mode.isRoot = true) →
       ∃ Er, setE Γ x (Ex.revive x) r = some Er ∧ Er.mode.isRoot = true := by
     intro r ⟨Er, hEr, hro⟩
@@ -666,6 +673,9 @@ theorem MInv.revive {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {Ex : Entry}
     · subst hrx; rw [hx] at hEr; cases hEr
       exact ⟨Ex.revive r, by simp [setE], by simp [Entry.revive, hmo, Mode.isRoot]⟩
     · exact ⟨Er, by simp [setE, upd_ne _ _ hrx, hEr], hro⟩
+  have hroot' : ∀ d ∈ (Ex.revive x).vdeps,
+      ∃ Er, setE Γ x (Ex.revive x) d.root = some Er ∧ Er.mode.isRoot = true :=
+    fun d hd => hgen d.root (hroots d hd)
   refine
     { dom := fun w => ?_
       slot := fun w E hw => ?_
@@ -710,18 +720,18 @@ theorem MInv.revive {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {Ex : Entry}
   · -- dtor
     by_cases hwx : w = x
     · subst hwx; simp only [setE, upd_same, Option.some.injEq] at hw; subst hw
-      exact hroot' dep hdd
+      simp [Entry.revive] at hd
     · simp only [setE, upd_ne _ _ hwx] at hw
       exact hgen dep.root (hi.wf.dtor w E hw hd hos' hni dep hdd hnm)
   · -- arm
     by_cases hwx : w = x
     · subst hwx; simp only [setE, upd_same, Option.some.injEq] at hw; subst hw
-      exact hi.wf.arm _ Ex hx ha
+      simp [Entry.revive] at ha
     · simp only [setE, upd_ne _ _ hwx] at hw; exact hi.wf.arm w E hw ha
   · -- view
     by_cases hwx : w = x
     · subst hwx; simp only [setE, upd_same, Option.some.injEq] at hw; subst hw
-      exact hi.wf.view _ Ex hx hd
+      simp [Entry.revive] at hd
     · simp only [setE, upd_ne _ _ hwx] at hw; exact hi.wf.view w E hw hd
   · by_cases hpx : p = x
     · subst hpx; simp only [setE, upd_same, Option.some.injEq] at hp; subst hp; simp [Entry.revive, hmo] at hm
@@ -753,10 +763,7 @@ theorem MInv.revive {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {Ex : Entry}
     · simp only [setE, upd_ne _ _ hwx] at hw; exact hi.held w E sl T hw hl hsw hT
   · by_cases hwx : w = x
     · subst hwx; simp only [setE, upd_same, Option.some.injEq] at hw; subst hw
-      rw [hsl] at hsw; cases hsw
-      intro hd hos' T hT
-      cases hT
-      exact ⟨(hi.armed _ Ex _ hx hsl hd hos' v rfl).1, hvs⟩
+      intro hd; simp [Entry.revive] at hd
     · simp only [setE, upd_ne _ _ hwx] at hw; exact hi.armed w E sl hw hsw
 
 /-- A destructor's call changes nothing in its caller's context: its one
@@ -923,26 +930,28 @@ theorem MInv.unwind {m m1 : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt} 
     rw [unwindCtx_x hxk, hx]; rfl
   -- the frame's binding, revived: what it views is outside the unwound scopes (`DtorIn`)
   have hslm : m.st x = some ⟨true, some v0⟩ := by rw [← hout x hxk]; exact hsl
-  have hxd : ∀ d ∈ (Ex.revive x).vdeps, d.root ≠ x ∧ d.root ∉ k.spine ∧
+  have hxd : ∀ d ∈ (Ex.revive x).vdeps, d.root ∉ k.spine ∧
       ∃ Er, Γ d.root = some Er ∧ Er.mode.isRoot = true := by
     intro d hd
-    obtain ⟨hdb, hdh, hnm, hrx⟩ := revive_dep hos hd
+    obtain ⟨hdb, hdh, hnm, _⟩ := revive_dep hos hd
     have hnint : Ex.ty ≠ .int := fun h => by have := hi.wf.view x Ex hx hdb; rw [h] at this; cases this
     have hdv : d ∈ Ex.vdeps := by unfold Entry.vdeps; exact List.mem_append_right _ hdh
-    exact ⟨hrx, hi.dtorIn.1 Ex hx hdb hos (Or.inl hnint) d hdv hnm,
+    exact ⟨hi.dtorIn.1 Ex hx hdb hos (Or.inl hnint) d hdv hnm,
       hi.wf.dtor x Ex hx hdb hos (Or.inl hnint) d hdv hnm⟩
   have hvs1 : ViewsOK m1 Ex.ty v0 (Ex.revive x).held := by
     refine (revive_views hi.toMInv hx hos hdbv hslm).keep fun d hd => ?_
     have hdv : d ∈ (Ex.revive x).vdeps := by unfold Entry.vdeps; exact List.mem_append_right _ hd
-    obtain ⟨_, hrs, Er, hEr, hro⟩ := hxd d hdv
+    obtain ⟨hrs, Er, hEr, hro⟩ := hxd d hdv
     exact (rootKeep_frame_sp hi.toMInv hanch hpin hF hEr hrs hro (hout _ hrs) (BlkLe.of_eq hblk)).vkeep
       (BlkLe.of_eq hblk)
   have hroot1 : ∀ d ∈ (Ex.revive x).vdeps,
       ∃ Er, unwindCtx k.spine x Γ d.root = some Er ∧ Er.mode.isRoot = true := by
     intro d hd
-    obtain ⟨hrx, hrs, Er, hEr, hro⟩ := hxd d hd
-    rw [unwindCtx_other hrs hrx, hEr]
-    exact ⟨_, rfl, by rw [unwE_mode]; exact hro⟩
+    obtain ⟨hrs, Er, hEr, hro⟩ := hxd d hd
+    by_cases hrx : d.root = x
+    · rw [hrx, hux]; exact ⟨_, rfl, by simp [Entry.revive, hmo, Mode.isRoot]⟩
+    · rw [unwindCtx_other hrs hrx, hEr]
+      exact ⟨_, rfl, by rw [unwE_mode]; exact hro⟩
   refine
     { dom := fun w => ?_
       slot := fun w E hw => ?_
@@ -1016,7 +1025,7 @@ theorem MInv.unwind {m m1 : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt} 
       -- (`dtorOut`): bound still.
       by_cases hwx : w = x
       · rw [hwx, hux] at hw; cases hw
-        exact hroot1 d hdd
+        simp [Entry.revive] at hd
       · obtain ⟨hwk, E0, h0, hb, _, hmd, hty, hvd⟩ := unwindCtx_same hw hwx
         have hd0 : E0.dbind = true := by rw [← hb]; exact hd
         have hos0 : E0.mode.ownSlot = true := by rw [← hmd]; exact hos'
@@ -1028,11 +1037,11 @@ theorem MInv.unwind {m m1 : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt} 
         rw [unwindCtx_other hrsp.2 hrsp.1, hEr]
         exact ⟨_, rfl, by rw [unwE_mode]; exact hro⟩
     · by_cases hwx : w = x
-      · rw [hwx, hux] at hw; cases hw; exact hi.wf.arm x Ex hx ha
+      · rw [hwx, hux] at hw; cases hw; simp [Entry.revive] at ha
       · obtain ⟨_, E0, h0, hc⟩ := unwindCtx_cases hw hwx
         rcases hc with ⟨_, rfl⟩ | ⟨_, rfl⟩ <;> exact hi.wf.arm w E0 h0 ha
     · by_cases hwx : w = x
-      · rw [hwx, hux] at hw; cases hw; exact hi.wf.view x Ex hx hd
+      · rw [hwx, hux] at hw; cases hw; simp [Entry.revive] at hd
       · obtain ⟨_, E0, h0, hc⟩ := unwindCtx_cases hw hwx
         rcases hc with ⟨_, rfl⟩ | ⟨_, rfl⟩ <;> exact hi.wf.view w E0 h0 hd
   · by_cases hpx : p = x
@@ -1085,10 +1094,7 @@ theorem MInv.unwind {m m1 : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt} 
     · rw [unwindCtx_sp hwk] at hw; cases hw
     by_cases hwx : w = x
     · rw [hwx, hux] at hw; cases hw
-      rw [hwx, hsl] at hsw; cases hsw
-      intro hd hos' T hT
-      cases hT
-      exact ⟨(hi.armed x Ex _ hx hslm hd hos' v0 rfl).1, hvs1⟩
+      intro hd; simp [Entry.revive] at hd
     · obtain ⟨_, E0, h0, hc⟩ := unwindCtx_cases hw hwx
       rw [hout w hwk] at hsw
       have hE0 : ArmOK m1 E0 sl := (hi.armed w E0 sl h0 hsw).keep fun _ hd hos dep hdm => by
@@ -1126,14 +1132,14 @@ theorem MInv.unwind {m m1 : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt} 
     made views `x` in memory (`dtorOut`), so `x`'s destructor may run and
     its scope end. -/
 theorem Inv.unwind_dbind {m : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt} {Ex : Entry}
-    (hi : Inv m Γ F (.scope x k)) (hx : Γ x = some Ex) (hmo : Ex.mode = .own) (hxk : x ∉ k.spine) :
+    (hi : Inv m Γ F (.scope x k)) (hx : Γ x = some Ex) (_hmo : Ex.mode = .own) (hxk : x ∉ k.spine) :
     DbindSafe (unwindCtx k.spine x Γ) x := by
   intro w E hw hd hos hn d hdd hnm hdx
   by_cases hwx : w = x
   · have hux : unwindCtx k.spine x Γ x = some (Ex.revive x) := by
       rw [unwindCtx_x hxk, hx]; rfl
     rw [hwx, hux] at hw; cases hw
-    exact (revive_dep (by rw [hmo]; rfl) hdd).2.2.2 hdx
+    simp [Entry.revive] at hd
   · obtain ⟨hwk, E0, h0, hb, _, hmd, hty, hvd⟩ := unwindCtx_same hw hwx
     exact hi.dtorOut w E0 h0 (by rw [← hb]; exact hd) (by rw [← hmd]; exact hos)
       (by rw [← hty, ← hmd]; exact hn) (by simp [Stmt.spine, hwx, hwk]) d (by rw [← hvd]; exact hdd) hnm
@@ -1772,9 +1778,8 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         rcases skip_inv hs with rfl | hw
         · exact hpx
         · exact hpx.weaker hw
-      have hvx0 : ∀ d ∈ (Ex.revive x).vdeps, d.root ≠ x := fun d hd => (revive_dep hos hd).2.2.2
       have hNoPinΓ' : EndOK (setE Γ x (Ex.revive x)) x := by
-        refine ⟨fun p E hp hm d hd hb => ?_, hNoPinΓ.2.1.setE_noroot hvx0, hNoPinΓ.2.2.setE_noroot hvx0⟩
+        refine ⟨fun p E hp hm d hd hb => ?_, hNoPinΓ.2.1.setE_off rfl, hNoPinΓ.2.2.setE_off rfl⟩
         by_cases hpx' : p = x
         · subst hpx'; simp [setE] at hp; subst hp; simp [Entry.revive, hmo] at hm
         · simp only [setE, upd_ne _ _ hpx'] at hp; exact hNoPinΓ.1 p E hp hm d hd hb

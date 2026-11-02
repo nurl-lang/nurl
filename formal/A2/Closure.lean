@@ -1891,10 +1891,11 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
         have hsub : envDeps cs Ec.held ⊆ (envE c Ec te cs).path :=
           envDeps_mono (List.subset_append_right _ _)
         refine lend_valOK' hwe hpkE (fun t c' d es ht => ⟨⟨c, .view⟩, ?_,
+          Or.inl ⟨_, Or.inl ⟨_, hslot, Top.pkg ht⟩, Or.inr (Or.inl ⟨rfl, rfl⟩)⟩⟩) (fun k q ht => ⟨⟨c, .view⟩, ?_,
           Or.inl ⟨_, Or.inl ⟨_, hslot, Top.pkg ht⟩, Or.inr (Or.inl ⟨rfl, rfl⟩)⟩⟩) hvr hnmE
           (by have := hi.shares c Ec _ _ hc hslot rfl rfl; rw [htc] at this; exact this.pkg)
           (fun s _ => ViewsOK.mono hsub hvr)
-        simp [envE, hd, mem_envDeps, ownWriter, Kind.bound]
+        all_goals simp [envE, hd, mem_envDeps, ownWriter, Kind.bound]
     · obtain ⟨v, hv, hok⟩ := hi.bor_val hc hlc (by rw [hm]; rfl)
       rw [hslot] at hv; cases hv
       rw [htc] at hok
@@ -1920,7 +1921,7 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
     hi.toMInv.of_st rfl ⟨hi.heap.nodup, hi.heap.disj, hi.heap.alloc, hi.heap.self, hi.heap.blk, hi.heap.bpay⟩ (Nat.le_succ _)
   have hval : ValOK mn te (lendOf env) (envE c Ec te cs).path (envE c Ec te cs).held := by
     have hk : ∀ dep : Dep, VKeep m mn dep ∧ HKeep m mn dep := fun dep => by
-      have hr : RootKeep m mn dep.root := fun n hn => rootNode_st rfl hn
+      have hr : RootKeep m mn dep.root := RootKeep.of_st rfl
       exact ⟨hr.vkeep, hr.hkeep⟩
     exact hval0.keep (fun d _ => hk d) (fun d _ => hk d)
   have hnameE : NameOK (setE Γ m.nv (envE c Ec te cs)) (envE c Ec te cs) := by

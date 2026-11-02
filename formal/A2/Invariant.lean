@@ -199,11 +199,20 @@ inductive Top : Val → Val → Prop
       Top n a → Top n (.pkg fs te ms a cs)
 
 /-- A node a root's slot reaches directly: one at the top of its own tree, or
-    one a handle it holds names (a borrowed struct is a bundle of handles). -/
+    one a handle it holds names (a borrowed struct is a bundle of handles),
+    or (A3.1) a share at the top of a borrowed slot's value: through it the
+    slot reaches its block's payload. -/
 def RootNode (m : Mem) (r : Var) (n : Val) : Prop :=
   (∃ T, m.st r = some ⟨true, some T⟩ ∧ Top n T) ∨
   (∃ v c, m.st r = some ⟨false, some v⟩ ∧ Top (.href c) v ∧ NodeAt m c n) ∨
-  (∃ v d o l, m.st r = some ⟨false, some v⟩ ∧ Top (.view d o l) v ∧ DataAt m d n)
+  (∃ v d o l, m.st r = some ⟨false, some v⟩ ∧ Top (.view d o l) v ∧ DataAt m d n) ∨
+  (∃ v k q, m.st r = some ⟨false, some v⟩ ∧ Top (.arc k q) v ∧ n = .arc k q)
+
+/-- A3.1: a root that reaches memory: an owned slot (its tree, if it still
+    has one), or a borrowed one whose value holds a handle or a share at its
+    top. A borrowed integer reaches none. -/
+def RootMem (m : Mem) (r : Var) : Prop :=
+  (∃ o, m.st r = some ⟨true, o⟩) ∨ ∃ n0, RootNode m r n0
 
 /-- Where a value reached through a dependency of a given kind lies: the
     root's node itself, or strictly inside it. -/
@@ -216,9 +225,13 @@ def InPay (m : Mem) (n : Val) : Prop := ∃ k bl, m.blk k = some bl ∧ Sub n bl
 /-- Where a value reached through `dep` lies: where the node its root
     reaches puts it (`Lands`), or (A3.1), through a share, anywhere in a
     live block's payload, which nothing writes: valid while the block
-    lives, whatever its root does. -/
+    lives (the sweep keeps a block a handle reaches), whatever its root
+    holds, as long as the root reaches memory (`RootMem`): a borrowed
+    parameter's share dependency then has one of the parameter's own to
+    pass on to when its scope ends. -/
 def Landed (m : Mem) (dep : Dep) (n : Val) : Prop :=
-  (∃ n0, RootNode m dep.root n0 ∧ Lands dep.kind n n0) ∨ (dep.kind = .share ∧ InPay m n)
+  (∃ n0, RootNode m dep.root n0 ∧ Lands dep.kind n n0) ∨
+    (dep.kind = .share ∧ RootMem m dep.root ∧ InPay m n)
 
 /-- The view `(d, o, l)` of element type `t` is valid through `dep` (a
     dependency on a whole handle is no view's: a `push` moves the buffer
@@ -269,9 +282,11 @@ inductive ValOK (m : Mem) : Ty → Val → List Dep → List Dep → Prop
       {P H : List Dep} :
       ValOK m te x (P ++ envDeps cs H) (envDeps cs H) → ValOK m (.fn ms) (.pkg fs te ms x cs) P H
   /-- A3.1: a share lent: its block holds the payload it carries, of its
-      type (in the first cut, one that holds no view). -/
+      type (in the first cut, one that holds no view), and the share lands
+      through a dependency, as a `Vec` handle does. -/
   | arc {t : Ty} {k : Nat} {p : Val} {P H : List Dep} :
-      m.blk k = some ⟨t, p⟩ → WFv t p → t.holdsView = false → ValOK m (.arc t) (.arc k p) P H
+      m.blk k = some ⟨t, p⟩ → WFv t p → t.holdsView = false → (∃ dep ∈ P, Landed m dep (.arc k p)) →
+      ValOK m (.arc t) (.arc k p) P H
 
 section ValOK
 variable {m : Mem} {v : Val} {P H : List Dep}

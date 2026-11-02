@@ -9,13 +9,30 @@ stays valid. -/
 
 namespace A2
 
-def RootKeep (m m' : Mem) (r : Var) : Prop := ∀ n, RootNode m r n → RootNode m' r n
+/-- `r` reaches in `m'` what it reached in `m`, and an owner stays one
+    (A3.1: a share dependency on an owner lands in a payload while the
+    owner's slot is there, `RootMem`). -/
+def RootKeep (m m' : Mem) (r : Var) : Prop :=
+  (∀ n, RootNode m r n → RootNode m' r n) ∧ (∀ o, m.st r = some ⟨true, o⟩ → ∃ o', m'.st r = some ⟨true, o'⟩)
+
+/-- A slot that stays as it was keeps its owner. -/
+theorem RootKeep.of_slot {m m' : Mem} {r : Var} (hs : m'.st r = m.st r)
+    (hn : ∀ n, RootNode m r n → RootNode m' r n) : RootKeep m m' r :=
+  ⟨hn, fun o ho => ⟨o, by rw [hs]; exact ho⟩⟩
+
+theorem RootKeep.rootMem {m m' : Mem} {r : Var} (h : RootKeep m m' r) (hr : RootMem m r) : RootMem m' r := by
+  rcases hr with ⟨o, ho⟩ | ⟨n0, hn⟩
+  · exact Or.inl (h.2 o ho)
+  · exact Or.inr ⟨n0, h.1 n0 hn⟩
 
 def VKeep (m m' : Mem) (dep : Dep) : Prop :=
   ∀ d o l s, ViewAt m dep d o l s → ViewAt m' dep d o l s
 
+/-- What a dependency of a borrowed value keeps: the `Vec` handles and (A3.1)
+    the shares it lands. -/
 def HKeep (m m' : Mem) (dep : Dep) : Prop :=
-  ∀ c t H, (∀ h ∈ H, VKeep m m' h) → m'.blk = m.blk → HrefAt m dep c t H → HrefAt m' dep c t H
+  (∀ c t H, (∀ h ∈ H, VKeep m m' h) → m'.blk = m.blk → HrefAt m dep c t H → HrefAt m' dep c t H) ∧
+  ∀ k p, m'.blk = m.blk → Landed m dep (.arc k p) → Landed m' dep (.arc k p)
 
 /-- A dependency by name reaches no memory: nothing changes what it keeps. -/
 theorem vkeep_name (m m' : Mem) (r : Var) (b : Eff) (t : Ty) : VKeep m m' ⟨r, .name b t⟩ := by
@@ -23,23 +40,24 @@ theorem vkeep_name (m m' : Mem) (r : Var) (b : Eff) (t : Ty) : VKeep m m' ⟨r, 
   have := hla.notName; simp [Kind.isName] at this
 
 theorem hkeep_name (m m' : Mem) (r : Var) (b : Eff) (t : Ty) : HKeep m m' ⟨r, .name b t⟩ := by
-  intro c t H _ _ ⟨_, _, hla, _⟩
-  have := hla.notName; simp [Kind.isName] at this
+  refine ⟨fun c t H _ _ ⟨_, _, hla, _⟩ => ?_, fun k p _ hla => ?_⟩ <;>
+  · have := hla.notName; simp [Kind.isName] at this
 
 /-- What lands through a dependency whose root reaches the same memory, the
     blocks only growing, still lands there. -/
 theorem Landed.keep {m m' : Mem} {dep : Dep} {n : Val} (hr : RootKeep m m' dep.root)
     (hb : BlkLe m.blk m'.blk) (h : Landed m dep n) : Landed m' dep n := by
-  rcases h with ⟨n0, h0, hl⟩ | ⟨hk, k, bl, hkb, hs⟩
-  · exact Or.inl ⟨n0, hr n0 h0, hl⟩
-  · exact Or.inr ⟨hk, k, bl, hb k bl hkb, hs⟩
+  rcases h with ⟨n0, h0, hl⟩ | ⟨hk, hro, k, bl, hkb, hs⟩
+  · exact Or.inl ⟨n0, hr.1 n0 h0, hl⟩
+  · exact Or.inr ⟨hk, hr.rootMem hro, k, bl, hb k bl hkb, hs⟩
 
-/-- A3.1: what lands in a payload stays while its block does. -/
+/-- A3.1: what lands in a payload stays while its block does and its root
+    still reaches memory. -/
 theorem Landed.pay {m m' : Mem} {dep : Dep} {n : Val} (hb : BlkLe m.blk m'.blk)
-    (hk : dep.kind = .share) (h : Landed m dep n) : Landed m' dep n := by
-  rcases h with ⟨n0, _, hl⟩ | ⟨hk, k, bl, hkb, hs⟩
+    (hk : dep.kind = .share) (hro : RootMem m' dep.root) (h : Landed m dep n) : Landed m' dep n := by
+  rcases h with ⟨n0, _, hl⟩ | ⟨hk, _, k, bl, hkb, hs⟩
   · rcases hl with ⟨h, _⟩ | ⟨h, _⟩ | ⟨h, _⟩ <;> rw [hk] at h <;> cases h
-  · exact Or.inr ⟨hk, k, bl, hb k bl hkb, hs⟩
+  · exact Or.inr ⟨hk, hro, k, bl, hb k bl hkb, hs⟩
 
 theorem RootKeep.vkeep {m m' : Mem} {dep : Dep} (h : RootKeep m m' dep.root)
     (hb : BlkLe m.blk m'.blk := by exact fun _ _ h => h) : VKeep m m' dep := by
@@ -47,10 +65,12 @@ theorem RootKeep.vkeep {m m' : Mem} {dep : Dep} (h : RootKeep m m' dep.root)
   exact ⟨c, es, hks, hla.keep h hb, hl, hw⟩
 
 /-- A3.1: a dependency through a share keeps what it lands while the blocks
-    only grow. -/
-theorem vkeep_share {m m' : Mem} (hb : BlkLe m.blk m'.blk) (r : Var) : VKeep m m' ⟨r, .share⟩ := by
+    only grow and its root still reaches memory (an owner whose slot stays
+    owned). -/
+theorem vkeep_share {m m' : Mem} (hb : BlkLe m.blk m'.blk) {r : Var} (hro : RootMem m' r) :
+    VKeep m m' ⟨r, .share⟩ := by
   intro d o l s ⟨c, es, hks, hla, hl, hw⟩
-  exact ⟨c, es, hks, hla.pay hb rfl, hl, hw⟩
+  exact ⟨c, es, hks, hla.pay hb rfl hro, hl, hw⟩
 
 theorem ViewsOK.keep {m m' : Mem} {τ : Ty} {T : Val} {H : List Dep} (hk : ∀ h ∈ H, VKeep m m' h)
     (hv : ViewsOK m τ T H) : ViewsOK m' τ T H := by
@@ -68,22 +88,20 @@ theorem ArmOK.keep {m m' : Mem} {E : Entry} {sl : Slot}
   exact ⟨h1, (h2.memDeps.keep (hk h1 hd hos)).mono (fun d hd => (List.mem_filter.mp hd).1)⟩
 
 theorem RootKeep.hkeep {m m' : Mem} {dep : Dep} (h : RootKeep m m' dep.root) : HKeep m m' dep := by
-  intro c t H hH hb ⟨d, es, hla, hw, hv, hn, hsh⟩
+  refine ⟨fun c t H hH hb ⟨d, es, hla, hw, hv, hn, hsh⟩ => ?_, fun k p hb hla => hla.keep h (BlkLe.of_eq hb)⟩
   exact ⟨d, es, hla.keep h (BlkLe.of_eq hb), hw, hv.keep hH, hn, hsh.of_blk hb⟩
-
-theorem hkeep_share (m m' : Mem) (r : Var) : HKeep m m' ⟨r, .share⟩ := by
-  intro c t H hH hb ⟨d, es, hla, hw, hv, hn, hsh⟩
-  exact ⟨d, es, hla.pay (BlkLe.of_eq hb) rfl, hw, hv.keep hH, hn, hsh.of_blk hb⟩
 
 theorem ValOK.keep {m m' : Mem} {τ : Ty} {v : Val} {P H : List Dep}
     (hp : ∀ dep ∈ P, VKeep m m' dep ∧ HKeep m m' dep) (hh : ∀ dep ∈ H, VKeep m m' dep ∧ HKeep m m' dep)
     (h : ValOK m τ v P H) (hb : m'.blk = m.blk := by rfl) : ValOK m' τ v P H := by
   induction h with
   | int => exact .int
-  | arc h hw hv => exact .arc (by rw [hb]; exact h) hw hv
+  | arc h hw hv hl =>
+    obtain ⟨dep, hd, hla⟩ := hl
+    exact .arc (by rw [hb]; exact h) hw hv ⟨dep, hd, (hp dep hd).2.2 _ _ hb hla⟩
   | href h =>
     obtain ⟨dep, hd, ha⟩ := h
-    exact .href ⟨dep, hd, (hp dep hd).2 _ _ _ (fun h hh' => (hh h hh').1) hb ha⟩
+    exact .href ⟨dep, hd, (hp dep hd).2.1 _ _ _ (fun h hh' => (hh h hh').1) hb ha⟩
   | view h =>
     obtain ⟨dep, hd, ha⟩ := h
     exact .view ⟨dep, hd, (hp dep hd).1 _ _ _ _ ha⟩
@@ -226,27 +244,50 @@ theorem Top.node {n : Val} {t : Ty} {c d : Nat} {es : List Val} (h : Top n (.nod
   cases h; rfl
 
 /-- Every node a root reaches is inside some owned tree, or (A3.1) in a live
-    block's payload. -/
-theorem RootNode.owned {m : Mem} {r : Var} {n : Val} (h : RootNode m r n) : InMem m n := by
-  rcases h with ⟨T, h, ht⟩ | ⟨_, c, _, _, hn⟩ | ⟨_, d, _, _, _, _, hn⟩
-  · exact Or.inl ⟨r, T, h, ht.sub⟩
-  · exact hn.inMem
-  · exact hn.inMem
+    block's payload; what else it reaches is a share at the top of a
+    borrowed slot. -/
+theorem RootNode.owned {m : Mem} {r : Var} {n : Val} (h : RootNode m r n) :
+    InMem m n ∨ ∃ k q, n = .arc k q := by
+  rcases h with ⟨T, h, ht⟩ | ⟨_, c, _, _, hn⟩ | ⟨_, d, _, _, _, _, hn⟩ | ⟨_, k, q, _, _, rfl⟩
+  · exact Or.inl (Or.inl ⟨r, T, h, ht.sub⟩)
+  · exact Or.inl hn.inMem
+  · exact Or.inl hn.inMem
+  · exact Or.inr ⟨k, q, rfl⟩
 
-/-- What lands through a dependency is in an owned tree or a live payload. -/
-theorem Landed.inMem {m : Mem} {dep : Dep} {n : Val} (h : Landed m dep n) : InMem m n := by
-  rcases h with ⟨n0, hr, hl⟩ | ⟨_, k, bl, hk, hs⟩
-  · exact hr.owned.sub hl.sub
-  · exact Or.inr ⟨k, bl, hk, hs⟩
+/-- Nothing lies below a share: a payload is the block's, not the share's. -/
+theorem lands_arc {kd : Kind} {n : Val} {k : Nat} {q : Val} (h : Lands kd n (.arc k q)) : n = .arc k q := by
+  rcases h with ⟨_, rfl⟩ | ⟨_, rfl⟩ | ⟨_, e, hc, _⟩
+  · rfl
+  · rfl
+  · cases hc
 
-/-- A3.1, first cut: a payload holds no address (`HeapOK.bpay`), so no node:
-    what lands as a node does so through the root's node. -/
-theorem Landed.root_of_heap {m : Mem} (hh : HeapOK m) {dep : Dep} {t : Ty} {c d : Nat}
-    {es : List Val} (h : Landed m dep (.node t c d es)) :
-    ∃ n0, RootNode m dep.root n0 ∧ Lands dep.kind (.node t c d es) n0 := by
-  rcases h with h | ⟨_, k, bl, hk, hs⟩
+/-- What lands through a dependency is in an owned tree or a live payload,
+    or is a share a borrowed root holds. -/
+theorem Landed.inMem' {m : Mem} {dep : Dep} {n : Val} (h : Landed m dep n) :
+    InMem m n ∨ ∃ k q, n = .arc k q := by
+  rcases h with ⟨n0, hr, hl⟩ | ⟨_, _, k, bl, hk, hs⟩
+  · rcases hr.owned with h | ⟨k, q, rfl⟩
+    · exact Or.inl (h.sub hl.sub)
+    · exact Or.inr ⟨k, q, lands_arc hl⟩
+  · exact Or.inl (Or.inr ⟨k, bl, hk, hs⟩)
+
+/-- A node that lands through a dependency is in an owned tree or a live
+    payload. -/
+theorem Landed.inMem {m : Mem} {dep : Dep} {t : Ty} {c d : Nat} {es : List Val}
+    (h : Landed m dep (.node t c d es)) : InMem m (.node t c d es) := by
+  rcases h.inMem' with h | ⟨_, _, h⟩
   · exact h
-  · have := hs.ids c (by simp); rw [hh.bpay k bl hk] at this; cases this
+  · cases h
+
+/-- What lands through a dependency, its root reaches memory. -/
+theorem Landed.rootMem {m : Mem} {dep : Dep} {n : Val} (h : Landed m dep n) : RootMem m dep.root := by
+  rcases h with ⟨n0, hr, _⟩ | ⟨_, hro, _⟩
+  · exact Or.inr ⟨n0, hr⟩
+  · exact hro
+
+/-- An owner whose slot is there reaches memory. -/
+theorem RootMem.own {m : Mem} {r : Var} {o : Option Val} (h : m.st r = some ⟨true, o⟩) : RootMem m r :=
+  Or.inl ⟨o, h⟩
 
 /-- Off a share, what lands does so through the root's node. -/
 theorem Landed.root {m : Mem} {dep : Dep} {n : Val} (h : Landed m dep n) (hk : dep.kind ≠ .share) :
@@ -285,7 +326,7 @@ theorem valOK_href {m : Mem} (hh : HeapOK m) {c : Nat} {n : Val} (hn : NodeAt m 
     ∃ dep ∈ P ++ H, Landed m dep n := by
   induction hok with
   | int => cases ht
-  | arc _ _ _ => cases ht
+  | arc _ _ _ _ => cases ht
   | view _ => cases ht
   | @href t c' P H h =>
     obtain ⟨dep, hd, d, es, hla, _⟩ := h
@@ -314,7 +355,7 @@ theorem valOK_view {m : Mem} (hh : HeapOK m) {d o l : Nat} {n : Val} (hn : DataA
     ∃ dep ∈ P ++ H, dep.kind ≠ .self ∧ Landed m dep n := by
   induction hok with
   | int => cases ht
-  | arc _ _ _ => cases ht
+  | arc _ _ _ _ => cases ht
   | href _ => cases ht
   | @view t d' o' l' P H h =>
     obtain ⟨dep, hd, c, es, hks, hla, _, _⟩ := h
@@ -343,7 +384,9 @@ theorem valOK_via {m : Mem} {y : Var} {T : Val} (hy : m.st y = some ⟨false, so
     ∀ {Q : List Dep}, Top w T → ⟨y, .view⟩ ∈ Q → ValOK m τ w Q H := by
   induction hok with
   | int => intro _ _ _; exact .int
-  | arc h hw hv => intro _ _ _; exact .arc h hw hv
+  | @arc t k p P H h hw hv _ =>
+    intro Q ht hq
+    exact .arc h hw hv ⟨_, hq, Or.inl ⟨_, Or.inr (Or.inr (Or.inr ⟨T, k, p, hy, ht, rfl⟩)), Or.inr (Or.inl ⟨rfl, rfl⟩)⟩⟩
   | @href t c P H h =>
     intro Q ht hq
     obtain ⟨dep, hd, d, es, hla, hw, hv⟩ := h
@@ -353,7 +396,7 @@ theorem valOK_via {m : Mem} {y : Var} {T : Val} (hy : m.st y = some ⟨false, so
     intro Q ht hq
     obtain ⟨dep, hd, c, es, _, hla, hlen, hw⟩ := h
     exact .view ⟨_, hq, c, es, (by intro h; cases h),
-      Or.inl ⟨_, Or.inr (Or.inr ⟨T, d, o, l, hy, ht, hla.inMem.dataAt rfl⟩), Or.inr (Or.inl ⟨rfl, rfl⟩)⟩,
+      Or.inl ⟨_, Or.inr (Or.inr (Or.inl ⟨T, d, o, l, hy, ht, hla.inMem.dataAt rfl⟩)), Or.inr (Or.inl ⟨rfl, rfl⟩)⟩,
       hlen, hw⟩
   | pair _ _ ihx ihy =>
     intro Q ht hq
@@ -369,18 +412,46 @@ theorem valOK_via {m : Mem} {y : Var} {T : Val} (hy : m.st y = some ⟨false, so
     intro Q ht hq
     exact .pkg (ih (Top.trans (Top.pkg (Top.refl _)) ht) (List.mem_append_left _ hq))
 
+/-- A3.1: a share at the top of a borrowed value lands through one of the
+    value's dependencies. -/
+theorem valOK_arc {m : Mem} {k : Nat} {q : Val} {τ : Ty} {w : Val} {P H : List Dep}
+    (hok : ValOK m τ w P H) (ht : Top (.arc k q) w) : ∃ dep ∈ P ++ H, Landed m dep (.arc k q) := by
+  induction hok with
+  | int => cases ht
+  | href _ => cases ht
+  | view _ => cases ht
+  | arc _ _ _ hl =>
+    cases ht
+    obtain ⟨dep, hd, hla⟩ := hl
+    exact ⟨dep, List.mem_append_left _ hd, hla⟩
+  | pair _ _ ihx ihy =>
+    cases ht with
+    | fst ht => obtain ⟨dep, hd, rest⟩ := ihx ht; exact ⟨dep, append_assoc_sub hd, rest⟩
+    | snd ht => obtain ⟨dep, hd, rest⟩ := ihy ht; exact ⟨dep, append_assoc_sub hd, rest⟩
+  | inl _ ih =>
+    cases ht with
+    | inl ht => obtain ⟨dep, hd, rest⟩ := ih ht; exact ⟨dep, append_assoc_sub hd, rest⟩
+  | inr _ ih =>
+    cases ht with
+    | inr ht => obtain ⟨dep, hd, rest⟩ := ih ht; exact ⟨dep, append_assoc_sub hd, rest⟩
+  | pkg _ ih =>
+    cases ht with
+    | pkg ht => obtain ⟨dep, hd, rest⟩ := ih ht; exact ⟨dep, append_envDeps_sub hd, rest⟩
+
 /-- What a borrowed slot reaches, it reaches through the dependencies of the
     value it holds. -/
 theorem bor_lands {m : Mem} (hh : HeapOK m) {p : Var} {τ : Ty} {w : Val} {P H : List Dep}
     (hp : m.st p = some ⟨false, some w⟩) (hok : ValOK m τ w P H) {n0 : Val}
     (hr : RootNode m p n0) : ∃ d' ∈ P ++ H, Landed m d' n0 := by
-  rcases hr with ⟨T, h, _⟩ | ⟨v, c, hc, ht, hn⟩ | ⟨v, d, o, l, hc, ht, hn⟩
+  rcases hr with ⟨T, h, _⟩ | ⟨v, c, hc, ht, hn⟩ | ⟨v, d, o, l, hc, ht, hn⟩ | ⟨v, k, q, hc, ht, rfl⟩
   · rw [hp] at h; cases h
   · rw [hp] at hc; cases hc
     exact valOK_href hh hn hok ht
   · rw [hp] at hc; cases hc
     obtain ⟨dep, hd, _, hla⟩ := valOK_view hh hn hok ht
     exact ⟨dep, hd, hla⟩
+  · rw [hp] at hc; cases hc
+    exact valOK_arc hok ht
 
 /-- What a dependency reaches in memory is reached through one of the
     three kinds that reach memory. -/
@@ -406,7 +477,7 @@ theorem rootb_anchor {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     simp only at hv hso; subst hv; rw [hso, hos]
   rw [hsl'] at hsl
   obtain ⟨dep, hd, hla⟩ := bor_lands hi.heap hsl hok hrn
-  rcases hla with ⟨n0, hr, hl⟩ | ⟨_, k, bl, hk, hs⟩
+  rcases hla with ⟨n0, hr, hl⟩ | ⟨_, _, k, bl, hk, hs⟩
   case inr => exact Or.inr ⟨k, bl, hk, hs⟩
   have hdv : dep.root ∈ roots E.vdeps := by
     simp only [roots, Entry.vdeps, hos, Bool.false_eq_true, ↓reduceIte, List.mem_map]
@@ -417,10 +488,10 @@ theorem rootb_anchor {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     exact hd
   have hnint : E.ty ≠ .int := by
     intro h; rw [h] at hok; obtain ⟨k, rfl⟩ := hok
-    rcases hrn with ⟨_, h1, _⟩ | ⟨_, c, h1, ht, _⟩ | ⟨_, d, o, l, h1, ht, _⟩ <;> rw [hsl] at h1 <;>
-      cases h1 <;> cases ht
+    rcases hrn with ⟨_, h1, _⟩ | ⟨_, c, h1, ht, _⟩ | ⟨_, d, o, l, h1, ht, _⟩ | ⟨_, k, q, h1, ht, _⟩ <;>
+      rw [hsl] at h1 <;> cases h1 <;> cases ht
   obtain ⟨Er, hEr, hroot⟩ := hi.wf p E hp hlive (Or.inl hnint) dep.root hdv
-  rcases hr with ⟨T, hown, ht⟩ | ⟨w, c, hc, ht, hn⟩ | ⟨w, d, o, l, hc, ht, hn⟩
+  rcases hr with ⟨T, hown, ht⟩ | ⟨w, c, hc, ht, hn⟩ | ⟨w, d, o, l, hc, ht, hn⟩ | ⟨w, k, q, hc, ht, hn⟩
   · exact Or.inl ⟨dep.root, T, hF, hown, hl.sub.trans ht.sub⟩
   all_goals
     have hlt := hi.rootbLt p E hp hm dep.root hdv
@@ -436,7 +507,11 @@ theorem rootb_anchor {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       ⟨o', T', hF', ho', hs'⟩ | ⟨k, bl, hk, hs'⟩
     · exact Or.inl ⟨o', T', hF', ho', hl.sub.trans hs'⟩
     · exact Or.inr ⟨k, bl, hk, hl.sub.trans hs'⟩
-  · rcases ih dep.root hlt Er n0 hEr hrb (Or.inr (Or.inr ⟨w, d, o, l, hc, ht, hn⟩)) with
+  · rcases ih dep.root hlt Er n0 hEr hrb (Or.inr (Or.inr (Or.inl ⟨w, d, o, l, hc, ht, hn⟩))) with
+      ⟨o', T', hF', ho', hs'⟩ | ⟨k, bl, hk, hs'⟩
+    · exact Or.inl ⟨o', T', hF', ho', hl.sub.trans hs'⟩
+    · exact Or.inr ⟨k, bl, hk, hl.sub.trans hs'⟩
+  · rcases ih dep.root hlt Er n0 hEr hrb (Or.inr (Or.inr (Or.inr ⟨w, k, q, hc, ht, hn⟩))) with
       ⟨o', T', hF', ho', hs'⟩ | ⟨k, bl, hk, hs'⟩
     · exact Or.inl ⟨o', T', hF', ho', hl.sub.trans hs'⟩
     · exact Or.inr ⟨k, bl, hk, hl.sub.trans hs'⟩
@@ -448,9 +523,11 @@ theorem rootKeep_frame {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     (hF : ∀ o ∈ F, m'.st o = m.st o) {r : Var} {Er : Entry} (hr : Γ r = some Er)
     (hroot : Er.mode.isRoot = true) (hsame : m'.st r = m.st r)
     (hb : BlkLe m.blk m'.blk := by exact fun _ _ h => h) : RootKeep m m' r := by
-  intro n hn
-  rcases hn with ⟨T, hown, ht⟩ | ⟨w, c, hc, ht, hnode⟩ | ⟨w, d, o, l, hc, ht, hdata⟩
+  refine RootKeep.of_slot hsame fun n hn => ?_
+  rcases hn with ⟨T, hown, ht⟩ | ⟨w, c, hc, ht, hnode⟩ | ⟨w, d, o, l, hc, ht, hdata⟩ | ⟨w, k, q, hc, ht, hn⟩
   · exact Or.inl ⟨T, by rw [hsame]; exact hown, ht⟩
+  rotate_left 2
+  · exact Or.inr (Or.inr (Or.inr ⟨w, k, q, by rw [hsame]; exact hc, ht, hn⟩))
   all_goals
     obtain ⟨sl, hsl, _, hso, _, _⟩ := hi.slot r Er hr
     have hrb : Er.mode = .rootb := by
@@ -467,8 +544,8 @@ theorem rootKeep_frame {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     · exact nodeAt_of_owned (by unfold OwnedAt; rw [hF o' hoF]; exact hoT) hsT hneq
     · exact (InMem.grow_pay hb hk hs).nodeAt hneq
   · obtain ⟨ty, c, es, hneq⟩ := hdata.eq
-    refine Or.inr (Or.inr ⟨w, d, o, l, by rw [hsame]; exact hc, ht, ?_⟩)
-    rcases rootb_anchor hi hanch r Er n hr hrb (Or.inr (Or.inr ⟨w, d, o, l, hc, ht, hdata⟩)) with
+    refine Or.inr (Or.inr (Or.inl ⟨w, d, o, l, by rw [hsame]; exact hc, ht, ?_⟩))
+    rcases rootb_anchor hi hanch r Er n hr hrb (Or.inr (Or.inr (Or.inl ⟨w, d, o, l, hc, ht, hdata⟩))) with
       ⟨o', T, hoF, hoT, hsT⟩ | ⟨k, bl, hk, hs⟩
     · exact dataAt_of_owned (by unfold OwnedAt; rw [hF o' hoF]; exact hoT) hsT hneq
     · exact (InMem.grow_pay hb hk hs).dataAt hneq
@@ -492,7 +569,7 @@ theorem rootb_anchor_sp {m : Mem} {Γ : Ctx} {F sp : List Var} (hi : MInv m Γ)
     simp only at hv hso; subst hv; rw [hso, hos]
   rw [hsl'] at hsl
   obtain ⟨dep, hd, hla⟩ := bor_lands hi.heap hsl hok hrn
-  rcases hla with ⟨n0, hr, hl⟩ | ⟨_, k, bl, hk, hs⟩
+  rcases hla with ⟨n0, hr, hl⟩ | ⟨_, _, k, bl, hk, hs⟩
   case inr => exact Or.inr ⟨k, bl, hk, hs⟩
   have hdv : dep.root ∈ roots E.vdeps := by
     simp only [roots, Entry.vdeps, hos, Bool.false_eq_true, ↓reduceIte, List.mem_map]
@@ -503,10 +580,10 @@ theorem rootb_anchor_sp {m : Mem} {Γ : Ctx} {F sp : List Var} (hi : MInv m Γ)
     exact hd
   have hnint : E.ty ≠ .int := by
     intro h; rw [h] at hok; obtain ⟨k, rfl⟩ := hok
-    rcases hrn with ⟨_, h1, _⟩ | ⟨_, c, h1, ht, _⟩ | ⟨_, d, o, l, h1, ht, _⟩ <;> rw [hsl] at h1 <;>
-      cases h1 <;> cases ht
+    rcases hrn with ⟨_, h1, _⟩ | ⟨_, c, h1, ht, _⟩ | ⟨_, d, o, l, h1, ht, _⟩ | ⟨_, k, q, h1, ht, _⟩ <;>
+      rw [hsl] at h1 <;> cases h1 <;> cases ht
   obtain ⟨Er, hEr, hroot⟩ := hi.wf p E hp hlive (Or.inl hnint) dep.root hdv
-  rcases hr with ⟨T, hown, ht⟩ | ⟨w, c, hc, ht, hn⟩ | ⟨w, d, o, l, hc, ht, hn⟩
+  rcases hr with ⟨T, hown, ht⟩ | ⟨w, c, hc, ht, hn⟩ | ⟨w, d, o, l, hc, ht, hn⟩ | ⟨w, k, q, hc, ht, hn⟩
   · exact Or.inl ⟨dep.root, T, hF, hown, hl.sub.trans ht.sub⟩
   all_goals
     have hlt := hi.rootbLt p E hp hm dep.root hdv
@@ -522,7 +599,11 @@ theorem rootb_anchor_sp {m : Mem} {Γ : Ctx} {F sp : List Var} (hi : MInv m Γ)
       ⟨o', T', hF', ho', hs'⟩ | ⟨k, bl, hk, hs'⟩
     · exact Or.inl ⟨o', T', hF', ho', hl.sub.trans hs'⟩
     · exact Or.inr ⟨k, bl, hk, hl.sub.trans hs'⟩
-  · rcases ih dep.root hlt Er n0 hEr hrb (hpin p E hp hm hps dep.root hdv) (Or.inr (Or.inr ⟨w, d, o, l, hc, ht, hn⟩)) with
+  · rcases ih dep.root hlt Er n0 hEr hrb (hpin p E hp hm hps dep.root hdv) (Or.inr (Or.inr (Or.inl ⟨w, d, o, l, hc, ht, hn⟩))) with
+      ⟨o', T', hF', ho', hs'⟩ | ⟨k, bl, hk, hs'⟩
+    · exact Or.inl ⟨o', T', hF', ho', hl.sub.trans hs'⟩
+    · exact Or.inr ⟨k, bl, hk, hl.sub.trans hs'⟩
+  · rcases ih dep.root hlt Er n0 hEr hrb (hpin p E hp hm hps dep.root hdv) (Or.inr (Or.inr (Or.inr ⟨w, k, q, hc, ht, hn⟩))) with
       ⟨o', T', hF', ho', hs'⟩ | ⟨k, bl, hk, hs'⟩
     · exact Or.inl ⟨o', T', hF', ho', hl.sub.trans hs'⟩
     · exact Or.inr ⟨k, bl, hk, hl.sub.trans hs'⟩
@@ -536,9 +617,11 @@ theorem rootKeep_frame_sp {m m' : Mem} {Γ : Ctx} {F sp : List Var} (hi : MInv m
     (hF : ∀ o ∈ F, m'.st o = m.st o) {r : Var} {Er : Entry} (hr : Γ r = some Er) (hrs : r ∉ sp)
     (hroot : Er.mode.isRoot = true) (hsame : m'.st r = m.st r)
     (hb : BlkLe m.blk m'.blk := by exact fun _ _ h => h) : RootKeep m m' r := by
-  intro n hn
-  rcases hn with ⟨T, hown, ht⟩ | ⟨w, c, hc, ht, hnode⟩ | ⟨w, d, o, l, hc, ht, hdata⟩
+  refine RootKeep.of_slot hsame fun n hn => ?_
+  rcases hn with ⟨T, hown, ht⟩ | ⟨w, c, hc, ht, hnode⟩ | ⟨w, d, o, l, hc, ht, hdata⟩ | ⟨w, k, q, hc, ht, hn⟩
   · exact Or.inl ⟨T, by rw [hsame]; exact hown, ht⟩
+  rotate_left 2
+  · exact Or.inr (Or.inr (Or.inr ⟨w, k, q, by rw [hsame]; exact hc, ht, hn⟩))
   all_goals
     obtain ⟨sl, hsl, _, hso, _, _⟩ := hi.slot r Er hr
     have hrb : Er.mode = .rootb := by
@@ -555,8 +638,8 @@ theorem rootKeep_frame_sp {m m' : Mem} {Γ : Ctx} {F sp : List Var} (hi : MInv m
     · exact nodeAt_of_owned (by unfold OwnedAt; rw [hF o' hoF]; exact hoT) hsT hneq
     · exact (InMem.grow_pay hb hk hs).nodeAt hneq
   · obtain ⟨ty, c, es, hneq⟩ := hdata.eq
-    refine Or.inr (Or.inr ⟨w, d, o, l, by rw [hsame]; exact hc, ht, ?_⟩)
-    rcases rootb_anchor_sp hi hanch hpin r Er n hr hrb hrs (Or.inr (Or.inr ⟨w, d, o, l, hc, ht, hdata⟩)) with
+    refine Or.inr (Or.inr (Or.inl ⟨w, d, o, l, by rw [hsame]; exact hc, ht, ?_⟩))
+    rcases rootb_anchor_sp hi hanch hpin r Er n hr hrb hrs (Or.inr (Or.inr (Or.inl ⟨w, d, o, l, hc, ht, hdata⟩))) with
       ⟨o', T, hoF, hoT, hsT⟩ | ⟨k, bl, hk, hs⟩
     · exact dataAt_of_owned (by unfold OwnedAt; rw [hF o' hoF]; exact hoT) hsT hneq
     · exact (InMem.grow_pay hb hk hs).dataAt hneq
@@ -572,7 +655,8 @@ structure Evolve (m m' : Mem) (x : Var) (t : Ty) (c d d' : Nat) (es es' : List V
 
 theorem rootNode_own {m : Mem} {x : Var} {T n : Val} (h : m.st x = some ⟨true, some T⟩)
     (hn : RootNode m x n) : Top n T := by
-  rcases hn with ⟨_, h', ht⟩ | ⟨_, c, h', _⟩ | ⟨_, d, o, l, h', _⟩ <;> rw [h] at h' <;> cases h'
+  rcases hn with ⟨_, h', ht⟩ | ⟨_, c, h', _⟩ | ⟨_, d, o, l, h', _⟩ | ⟨_, k, q, h', _⟩ <;> rw [h] at h' <;>
+    cases h'
   exact ht
 
 theorem rootNode_node {m : Mem} {x : Var} {t : Ty} {c d : Nat} {es : List Val} {n : Val}
@@ -609,7 +693,9 @@ theorem ValOK.memDeps {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK 
     List.filter_append _ _
   induction h with
   | int => exact .int
-  | arc h hw hv => exact .arc h hw hv
+  | arc h hw hv hl =>
+    obtain ⟨dep, hd, hla⟩ := hl
+    exact .arc h hw hv ⟨dep, List.mem_filter.mpr ⟨hd, by simp [hla.notName]⟩, hla⟩
   | @href t c P H h =>
     obtain ⟨dep, hd, d, es, hla, hw', hv, hn, hsh⟩ := h
     have hkm : (!dep.kind.isName) = true := by simp [hla.notName]
@@ -710,7 +796,7 @@ theorem Evolve.grow_vkeep {m m' : Mem} {x : Var} {t : Ty} {c d d' : Nat} {es es'
     (hev : Evolve m m' x t c d d' es es') (hpre : ∀ e ∈ es, e ∈ es') {k : Kind} (hk : k ≠ .view) :
     VKeep m m' ⟨x, k⟩ := by
   intro dd o l s ⟨c', es2, hks, hla, hl, hw⟩
-  rcases hla with ⟨n0, hr, hkk⟩ | ⟨hsk, k0, bl, hk0, hs⟩
+  rcases hla with ⟨n0, hr, hkk⟩ | ⟨hsk, _, k0, bl, hk0, hs⟩
   · have := rootNode_node hev.before hr
     subst this
     rcases hkk with ⟨hv, _⟩ | ⟨hv, _⟩ | ⟨hki, hb⟩
@@ -721,14 +807,26 @@ theorem Evolve.grow_vkeep {m m' : Mem} {x : Var} {t : Ty} {c d d' : Nat} {es es'
       | elem he =>
         exact ⟨c', es2, hks, Or.inl ⟨_, Or.inl ⟨_, hev.after, Top.refl _⟩,
           Or.inr (Or.inr ⟨hki, e, Child.elem (hpre e he), hs⟩)⟩, hl, hw⟩
-  · exact ⟨c', es2, hks, Or.inr ⟨hsk, k0, bl, by rw [hev.blk]; exact hk0, hs⟩, hl, hw⟩
+  · exact ⟨c', es2, hks, Or.inr ⟨hsk, RootMem.own hev.after, k0, bl, by rw [hev.blk]; exact hk0, hs⟩, hl, hw⟩
 
 theorem Evolve.grow_hkeep {m m' : Mem} {x : Var} {t : Ty} {c d d' : Nat} {es es' : List Val}
     (hev : Evolve m m' x t c d d' es es') (hpre : ∀ e ∈ es, e ∈ es') {k : Kind}
     (hk : k = .self → t.holdsView = false) (hkv : k ≠ .view)
     (hsh' : SharesOK m' (.vec t) (.node t c d' es')) : HKeep m m' ⟨x, k⟩ := by
-  intro c2 t2 H hH hb ⟨d2, es2, hla, hw, hv, hn, hsh⟩
-  rcases hla with ⟨n0, hr, hkk⟩ | ⟨hsk, k0, bl, hk0, hs⟩
+  refine ⟨fun c2 t2 H hH hb ⟨d2, es2, hla, hw, hv, hn, hsh⟩ => ?_, fun k2 p2 hb hla => ?_⟩
+  rotate_left
+  · rcases hla with ⟨n0, hr, hkk⟩ | ⟨hsk, _, k0, bl, hk0, hs⟩
+    · have := rootNode_node hev.before hr
+      subst this
+      rcases hkk with ⟨_, heq⟩ | ⟨_, heq⟩ | ⟨hin, hbl⟩
+      · cases heq
+      · cases heq
+      · obtain ⟨e, hc, hs⟩ := hbl
+        cases hc with
+        | elem he =>
+          exact Or.inl ⟨_, Or.inl ⟨_, hev.after, Top.refl _⟩, Or.inr (Or.inr ⟨hin, e, Child.elem (hpre e he), hs⟩)⟩
+    · exact Or.inr ⟨hsk, RootMem.own hev.after, k0, bl, by rw [hb]; exact hk0, hs⟩
+  rcases hla with ⟨n0, hr, hkk⟩ | ⟨hsk, _, k0, bl, hk0, hs⟩
   · have := rootNode_node hev.before hr
     subst this
     rcases hkk with ⟨hs, heq⟩ | ⟨hvw, _⟩ | ⟨hin, hbl⟩
@@ -741,14 +839,24 @@ theorem Evolve.grow_hkeep {m m' : Mem} {x : Var} {t : Ty} {c d d' : Nat} {es es'
       | elem he =>
         exact ⟨d2, es2, Or.inl ⟨_, Or.inl ⟨_, hev.after, Top.refl _⟩,
           Or.inr (Or.inr ⟨hin, e, Child.elem (hpre e he), hs⟩)⟩, hw, hv.keep hH, hn, hsh.of_blk hb⟩
-  · exact ⟨d2, es2, Or.inr ⟨hsk, k0, bl, by rw [hb]; exact hk0, hs⟩, hw, hv.keep hH, hn, hsh.of_blk hb⟩
+  · exact ⟨d2, es2, Or.inr ⟨hsk, RootMem.own hev.after, k0, bl, by rw [hb]; exact hk0, hs⟩, hw, hv.keep hH, hn,
+      hsh.of_blk hb⟩
 
 /-- Shrinking (`vec_pop`): only a borrow of the whole handle survives, and
     only of a container that holds no views. -/
 theorem Evolve.self_hkeep {m m' : Mem} {x : Var} {t : Ty} {c d d' : Nat} {es es' : List Val}
     (hev : Evolve m m' x t c d d' es es') (ht : t.holdsView = false)
     (hsh' : SharesOK m' (.vec t) (.node t c d' es')) : HKeep m m' ⟨x, .self⟩ := by
-  intro c2 t2 H hH _ ⟨d2, es2, hla, hw, hv, _⟩
+  refine ⟨fun c2 t2 H hH _ ⟨d2, es2, hla, hw, hv, _⟩ => ?_, fun k2 p2 _ hla => ?_⟩
+  rotate_left
+  · rcases hla with ⟨n0, hr, hkk⟩ | ⟨hsk, _⟩
+    · have := rootNode_node hev.before hr
+      subst this
+      rcases hkk with ⟨_, heq⟩ | ⟨hin, _⟩ | ⟨hin, _⟩
+      · cases heq
+      · cases hin
+      · cases hin
+    · cases hsk
   rcases hla with ⟨n0, hr, hkk⟩ | ⟨hsk, _⟩
   · have := rootNode_node hev.before hr
     subst this
