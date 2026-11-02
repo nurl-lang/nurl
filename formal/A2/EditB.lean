@@ -947,7 +947,8 @@ theorem deep_self_hkeep {m m' : Mem} {o : Var} {T T' : Val} {t : Ty} {c d d' : N
     (hnd : T.ids.Nodup) (hr : Repl (.node t c d es) (.node t c d' es') T T')
     (hw' : WFv (.vec t) (.node t c d' es')) (hhv : t.holdsView = false)
     (hsh' : SharesOK m' (.vec t) (.node t c d' es')) : HKeep m m' ⟨o, .self⟩ := by
-  intro c2 t2 H hH hb ⟨n0, d2, es2, hrn, hla, hw, hv, hnm, hsh⟩
+  intro c2 t2 H hH hb ⟨d2, es2, hlan, hw, hv, hnm, hsh⟩
+  obtain ⟨n0, hrn, hla⟩ := hlan.root (by intro h; cases h)
   have htop := rootNode_own hT hrn
   have hN : Val.node t2 c2 d2 es2 = n0 := by
     rcases hla with ⟨_, h⟩ | ⟨h, _⟩ | ⟨h, _⟩
@@ -957,20 +958,20 @@ theorem deep_self_hkeep {m m' : Mem} {o : Var} {T T' : Val} {t : Ty} {c d d' : N
   subst hN
   -- the rewritten node itself: now `n'`, where the hole was, holding no view
   have hself : Top (.node t c d' es') T' → HrefAt m' ⟨o, .self⟩ c t H := fun ht' =>
-    ⟨_, d', es', Or.inl ⟨T', hT', ht'⟩, Or.inl ⟨rfl, rfl⟩, hw', no_views hhv _ _ _, no_names hw' hhv _,
-      hsh'⟩
+    ⟨d', es', Or.inl ⟨_, Or.inl ⟨T', hT', ht'⟩, Or.inl ⟨rfl, rfl⟩⟩, hw', no_views hhv _ _ _,
+      no_names hw' hhv _, hsh'⟩
   rcases hr.top htop with hs | ⟨N', ht', rfl | hr'⟩
   · -- inside the hole: the hole itself, its addresses being distinct
     obtain ⟨heq, ht'⟩ := DSH_top_hole (i := c2) (by simp) htop hr hnd hs
     cases heq
     exact hself ht'
   · -- apart from the hole: unchanged, its views valid as before
-    exact ⟨_, d2, es2, Or.inl ⟨T', hT', ht'⟩, Or.inl ⟨rfl, rfl⟩, hw, hv.keep hH, hnm, hsh.of_blk hb⟩
+    exact ⟨d2, es2, Or.inl ⟨_, Or.inl ⟨T', hT', ht'⟩, Or.inl ⟨rfl, rfl⟩⟩, hw, hv.keep hH, hnm, hsh.of_blk hb⟩
   · rcases hr'.node_shape with ⟨heq, rfl⟩ | ⟨es2', rfl⟩
     · cases heq
       exact hself ht'
     · -- holding the hole: same type and cell, the hole's views gone
-      refine ⟨_, d2, es2', Or.inl ⟨T', hT', ht'⟩, Or.inl ⟨rfl, rfl⟩, ?_, ?_, ?_, ?_⟩
+      refine ⟨d2, es2', Or.inl ⟨_, Or.inl ⟨T', hT', ht'⟩, Or.inl ⟨rfl, rfl⟩⟩, ?_, ?_, ?_, ?_⟩
       · exact DSH_repl_wf (fun σ h => by cases h; exact hw') hr' hw
       · intro s v hin
         have hin0 := DSH_viewIn (fun σ h hin' => by
@@ -1095,14 +1096,14 @@ theorem editB_hrefAt {m' : Mem} {o : Var} {T T' n0 : Val} {t : Ty} {c d d' : Nat
   rcases hla with ⟨rfl, hn⟩ | ⟨rfl, hn⟩ | ⟨rfl, hb⟩
   · -- the borrowed node is at the top: so is the new one
     subst hn
-    exact ⟨.node t c d' es', d', es', Or.inl ⟨T', hT', EHA_top_hole htop hr hnd hc⟩,
-      Or.inl ⟨rfl, rfl⟩, hw', hV, hN, hsh'⟩
+    exact ⟨d', es', Or.inl ⟨.node t c d' es', Or.inl ⟨T', hT', EHA_top_hole htop hr hnd hc⟩,
+      Or.inl ⟨rfl, rfl⟩⟩, hw', hV, hN, hsh'⟩
   · subst hn
-    exact ⟨.node t c d' es', d', es', Or.inl ⟨T', hT', EHA_top_hole htop hr hnd hc⟩,
-      Or.inr (Or.inl ⟨rfl, rfl⟩), hw', hV, hN, hsh'⟩
+    exact ⟨d', es', Or.inl ⟨.node t c d' es', Or.inl ⟨T', hT', EHA_top_hole htop hr hnd hc⟩,
+      Or.inr (Or.inl ⟨rfl, rfl⟩)⟩, hw', hV, hN, hsh'⟩
   · -- strictly inside a node at the top: strictly inside its counterpart
     obtain ⟨n0', ht', hb'⟩ := EHA_below_hole htop hb hr hnd hc
-    exact ⟨n0', d', es', Or.inl ⟨T', hT', ht'⟩, Or.inr (Or.inr ⟨rfl, hb'⟩), hw', hV, hN, hsh'⟩
+    exact ⟨d', es', Or.inl ⟨n0', Or.inl ⟨T', hT', ht'⟩, Or.inr (Or.inr ⟨rfl, hb'⟩)⟩, hw', hV, hN, hsh'⟩
 
 /-- `Repl` keeps a tree well-formed, when the replacement is well-formed at
     every type the hole is. -/
@@ -1325,7 +1326,7 @@ theorem NewSlot.edit {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
   -- ... and none is valid through `o` (`SelfFree`, `ViewsOK.keep_except`)
   have hviews : ViewsOK m1 Eo.ty T Eo.held → (∀ dep ∈ Eo.held, dep.kind.isName = false →
       ∃ Er, Γ1 dep.root = some Er ∧ Er.mode.isRoot = true) → ViewsOK m' Eo.ty T' Eo.held :=
-    fun hv h => ViewsOK.keep_except hT hsf hvin (hkeep h) hv
+    fun hv h => ViewsOK.keep_except hT hsf hvin (hkeep h) hv (BlkLe.of_eq hblk)
   have hlive : (killE .drop false o Eo).live = true → Eo.live = true := fun h => by
     rw [killE_live] at h; simp only [Bool.and_eq_true] at h; exact h.1
   refine ⟨⟨true, some T'⟩, hT', by rw [killE_ty]; exact hok0,
@@ -1437,9 +1438,8 @@ theorem MInv.edit_drop {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ
     cases k with
     | self =>
       refine ⟨?_, deep_self_hkeep hT hT' (hi.heap.nodup o T hT) hr hw' hhv hsh'⟩
-      intro _ _ _ _ hva
-      obtain ⟨_, _, _, _, hk', _⟩ := hva
-      rcases hk' with ⟨h, _⟩ | ⟨h, _⟩ <;> cases h
+      intro _ _ _ _ ⟨_, _, hks, _⟩
+      exact absurd rfl hks
     | inner => simp [Eff.kills] at hk
     | view => simp [Eff.kills] at hk
     | share => simp [Eff.kills] at hk
@@ -1511,10 +1511,10 @@ theorem MInv.editB_push {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
       obtain ⟨_, _, Er, hEr, _, hcan, _⟩ := hthru d hd
       exact ⟨Er, hEr, hcan.ownSlot⟩
   obtain ⟨dep, hdm, T0, n0, c0, d0, es0, hxs, hT0, htop, hla, _, hw0, _, huniq, hsh0⟩ :=
-    hi.thru_owner hx hmx hl hty hro
+    hi.thru_owner hx hmx hl hty hro hthru.noShare
   obtain ⟨rfl, rfl, ht', rfl, rfl, rfl⟩ := huniq _ _ _ _ _ _ hno
   subst t'
-  obtain ⟨hoF, _, Eo, hEo, hlo, hcan, hds⟩ := hthru dep hdm
+  obtain ⟨hoF, _, Eo, hEo, hlo, hcan, hds, _⟩ := hthru dep hdm
   have hargE : argE Γ1 dep.root = Eo := by unfold argE; rw [hEo]; rfl
   have hxo : x ≠ dep.root := fun e => by rw [e, hT0] at hxs; cases hxs
   have hst : ∀ w, w ≠ dep.root → (m1.set dep.root ⟨true, some T'⟩).st w = m1.st w :=
@@ -1588,10 +1588,10 @@ theorem MInv.editB_pushRealloc {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv 
       obtain ⟨_, _, Er, hEr, _, hcan, _⟩ := hthru d hd
       exact ⟨Er, hEr, hcan.ownSlot⟩
   obtain ⟨dep, hdm, T0, n0, c0, d0, es0, hxs, hT0, htop, hla, _, hw0, _, huniq, hsh0⟩ :=
-    hi.thru_owner hx hmx hl hty hro
+    hi.thru_owner hx hmx hl hty hro hthru.noShare
   obtain ⟨rfl, rfl, ht', rfl, rfl, rfl⟩ := huniq _ _ _ _ _ _ hno
   subst t'
-  obtain ⟨hoF, _, Eo, hEo, hlo, hcan, hds⟩ := hthru dep hdm
+  obtain ⟨hoF, _, Eo, hEo, hlo, hcan, hds, _⟩ := hthru dep hdm
   have hargE : argE Γ1 dep.root = Eo := by unfold argE; rw [hEo]; rfl
   have hxo : x ≠ dep.root := fun e => by rw [e, hT0] at hxs; cases hxs
   have hst : ∀ w, w ≠ dep.root →
@@ -1667,10 +1667,10 @@ theorem MInv.editB_trunc {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       obtain ⟨_, _, Er, hEr, _, hcan, _⟩ := hthru d hd
       exact ⟨Er, hEr, hcan.ownSlot⟩
   obtain ⟨dep, hdm, T0, n0, c0, d0, es0, hxs, hT0, htop, hla, _, hw0, _, huniq, hsh0⟩ :=
-    hi.thru_owner hx hmx hl hty hro
+    hi.thru_owner hx hmx hl hty hro hthru.noShare
   obtain ⟨rfl, rfl, ht', rfl, rfl, rfl⟩ := huniq _ _ _ _ _ _ hno
   subst t'
-  obtain ⟨hoF, _, Eo, hEo, hlo, hcan, hds⟩ := hthru dep hdm
+  obtain ⟨hoF, _, Eo, hEo, hlo, hcan, hds, _⟩ := hthru dep hdm
   have hargE : argE Γ dep.root = Eo := by unfold argE; rw [hEo]; rfl
   have hxo : x ≠ dep.root := fun e => by rw [e, hT0] at hxs; cases hxs
   have hst : ∀ w, w ≠ dep.root → ({ m with alloc := a' }.set dep.root ⟨true, some T'⟩).st w = m.st w :=
@@ -1873,10 +1873,10 @@ theorem MInv.editB_drops {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1
       obtain ⟨_, _, Er, hEr, _, hcan, _⟩ := hthru d hd
       exact ⟨Er, hEr, hcan.ownSlot⟩
   obtain ⟨dep, hdm, T0, n0, c0, d0, es0, hxs, hT0, htop, hla, _, hw0, _, huniq, hsh0⟩ :=
-    hi.thru_owner hx hmx hl hty hro
+    hi.thru_owner hx hmx hl hty hro hthru.noShare
   obtain ⟨rfl, rfl, ht', rfl, rfl, rfl⟩ := huniq _ _ _ _ _ _ hno
   subst t'
-  obtain ⟨hoF, _, Eo, hEo, hlo, hcan, hds⟩ := hthru dep hdm
+  obtain ⟨hoF, _, Eo, hEo, hlo, hcan, hds, _⟩ := hthru dep hdm
   have hargE : argE Γ1 dep.root = Eo := by unfold argE; rw [hEo]; rfl
   have hxo : x ≠ dep.root := fun e => by rw [e, hT0] at hxs; cases hxs
   have hst : ∀ w, w ≠ dep.root → ({ m1 with alloc := a' }.set dep.root ⟨true, some T'⟩).st w = m1.st w :=
@@ -1914,7 +1914,7 @@ theorem MInv.editB_set {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
       obtain ⟨_, _, Er, hEr, _, hcan, _⟩ := hthru d hd
       exact ⟨Er, hEr, hcan.ownSlot⟩
   obtain ⟨dep, hdm, T0, n0, c0, d0, es0, hxs, hT0, htop, hla, _, hw0, _, huniq, hsh0⟩ :=
-    hi.thru_owner hx hmx hl hty hro
+    hi.thru_owner hx hmx hl hty hro hthru.noShare
   obtain ⟨rfl, rfl, ht', rfl, rfl, rfl⟩ := huniq _ _ _ _ _ _ hno
   subst t'
   obtain ⟨_, _, Eo, hEo, hlo, hcan, _⟩ := hthru dep hdm

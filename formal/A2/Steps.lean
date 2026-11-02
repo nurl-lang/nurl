@@ -18,7 +18,7 @@ theorem rootKeep_ext {m m' : Mem} (h : ∀ o, m.st o ≠ none → m'.st o = m.st
 
 theorem SlotOK.ext {m m' : Mem} (h : ∀ o, m.st o ≠ none → m'.st o = m.st o) {E : Entry} {sl : Slot}
     (hs : SlotOK m E sl) (hb : m'.blk = m.blk := by rfl) : SlotOK m' E sl :=
-  hs.keep (fun dep _ => ⟨(rootKeep_ext h dep.root (BlkLe.of_eq hb)).vkeep,
+  hs.keep (fun dep _ => ⟨(rootKeep_ext h dep.root (BlkLe.of_eq hb)).vkeep (BlkLe.of_eq hb),
     (rootKeep_ext h dep.root (BlkLe.of_eq hb)).hkeep⟩) hb
 
 /-- Binding a fresh variable to what a right-hand side produced. -/
@@ -304,7 +304,7 @@ theorem keep_notx {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     VKeep m m' dep ∧ HKeep m m' dep := by
   obtain ⟨Er, hEr, hroot⟩ := hr
   have hk := rootKeep_frame hi hanch (fun o ho => hst o (fun h => hxF (h ▸ ho))) hEr hroot (hst _ hne) hb
-  exact ⟨hk.vkeep, hk.hkeep⟩
+  exact ⟨hk.vkeep hb, hk.hkeep⟩
 
 theorem vdeps_mode {E : Entry} {md : Mode} (h : md.ownSlot = E.mode.ownSlot) :
     ({ E with mode := md } : Entry).vdeps = E.vdeps := by
@@ -540,14 +540,10 @@ theorem WFv.sub_view {τ : Ty} {T : Val} (hw : WFv τ T) {d o l : Nat} (hs : Sub
     live block's payload. -/
 theorem ViewAt.owned {m : Mem} {dep : Dep} {d o l : Nat} {s : Ty} (h : ViewAt m dep d o l s) :
     (∃ x T, OwnedAt m x T ∧ d ∈ T.ids) ∨ PayAddr m d := by
-  obtain ⟨n0, c, es, hr, hk, _, _⟩ := h
-  have hsub : Sub (.node s c d es) n0 := by
-    rcases hk with ⟨_, h⟩ | ⟨_, h⟩
-    · rw [h]; exact Sub.refl _
-    · exact h.sub
-  rcases hr.owned with ⟨x, T, hT, hs⟩ | ⟨k, bl, hk, hs⟩
-  · exact Or.inl ⟨x, T, hT, (hsub.trans hs).ids d (by simp)⟩
-  · exact Or.inr ⟨k, bl, hk, (hsub.trans hs).ids d (by simp)⟩
+  obtain ⟨c, es, _, hla, _, _⟩ := h
+  rcases hla.inMem with ⟨x, T, hT, hs⟩ | ⟨k, bl, hk, hs⟩
+  · exact Or.inl ⟨x, T, hT, hs.ids d (by simp)⟩
+  · exact Or.inr ⟨k, bl, hk, hs.ids d (by simp)⟩
 
 /-- A tree whose views all point into memory owners or payloads hold, put
     together with one whose addresses neither holds, does not view itself
@@ -1337,11 +1333,11 @@ theorem viewAt_not_in {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     (hr : ∃ Er, Γ dep.root = some Er ∧ Er.mode.isRoot = true) (hne : dep.root ≠ x)
     {d o l : Nat} {s : Ty} (ha : ViewAt m dep d o l s) : ∀ u c es, ¬ Sub (.node u c d es) T := by
   intro u c es hsub
-  obtain ⟨n0, c', es', hrn, hk, _, _⟩ := ha
-  have hN : Sub (.node s c' d es') n0 := by
-    rcases hk with ⟨_, h⟩ | ⟨_, h⟩
-    · rw [h]; exact Sub.refl _
-    · exact h.sub
+  obtain ⟨c', es', _, hla, _, _⟩ := ha
+  rcases hla with ⟨n0, hrn, hk⟩ | ⟨_, k, bl, hk, hsP⟩
+  case inr =>
+    exact owned_pay_head hi.heap hT hk hsub hsP (i := d) (by simp [Val.head]) (by simp [Val.head])
+  have hN : Sub (.node s c' d es') n0 := hk.sub
   obtain ⟨Er, hEr, hroot⟩ := hr
   rcases hrn with ⟨T0, hown, htop⟩ | ⟨w1, c1, hc, ht1, hnode⟩ | ⟨w1, d1, o1, l1, hc, ht1, hdata⟩
   · exact hne (owned_unique hi.heap hown hT (hN.trans htop.sub) hsub (i := d) (by simp [Val.head])
@@ -1465,7 +1461,7 @@ theorem push_grow {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
       rw [hty] at hhv
       exact ⟨hl0, by simp [hh0, hD hhv]⟩)
   · intro k hk
-    have hev : Evolve m1 m' x t' c d d' es (es ++ [v]) := ⟨hT, by simp [m'], hwT'⟩
+    have hev : Evolve m1 m' x t' c d d' es (es ++ [v]) := ⟨hT, by simp [m'], hwT', rfl⟩
     have hpre : ∀ e ∈ es, e ∈ es ++ [v] := fun e he => List.mem_append_left _ he
     have hkv : k ≠ .view := by intro h; subst h; simp [Eff.kills] at hk
     exact ⟨hev.grow_vkeep hpre hkv, hev.grow_hkeep hpre (fun h => by subst h; simpa [Eff.kills] using hk)
@@ -1498,10 +1494,13 @@ theorem push_grow {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
         rcases List.mem_append.mp he with h | h
         · obtain ⟨d0, o0, l0, rfl, dep, hd, ha⟩ := hvsT s _ (ViewIn.child h hin)
           refine ⟨d0, o0, l0, rfl, dep, List.mem_append_left _ hd, ?_⟩
-          have hne : dep.root ≠ x := by
-            intro heq; obtain ⟨r, k⟩ := dep; simp only at heq; subst heq
-            exact viewAt_not_self hT hsfT (ViewIn.child h hin) ha
-          exact (keep_notx hi hanch hxF hst (hrootH dep hd) hne).1 d0 o0 l0 s ha
+          obtain ⟨r, k⟩ := dep
+          by_cases hks : k = .share
+          · subst hks; exact vkeep_share (m := m1) (m' := m') (BlkLe.refl _) r d0 o0 l0 s ha
+          have hne : r ≠ x := by
+            intro heq; subst heq
+            exact viewAt_not_self hT hsfT (ViewIn.child h hin) hks ha
+          exact (keep_notx hi hanch hxF hst (hrootH _ hd) hne).1 d0 o0 l0 s ha
         · simp at h; subst h
           obtain ⟨d0, o0, l0, rfl, dep, hd, ha⟩ := hp.vs s _ hin
           refine ⟨d0, o0, l0, rfl, dep, List.mem_append_right _ hd, ?_⟩
@@ -1587,7 +1586,7 @@ theorem mem_reroot {p : Var} {D ds : List Dep} {dep : Dep} (h : dep ∈ reroot p
 /-- What `p`'s slot reaches is reached through `p`'s own dependencies. -/
 theorem rootb_lands {m : Mem} (hh : HeapOK m) {p : Var} {E : Entry} {w : Val}
     (hp : m.st p = some ⟨false, some w⟩) (hok : ValOK m E.ty w E.path E.held) {n0 : Val}
-    (hr : RootNode m p n0) : ∃ d' ∈ E.path ++ E.held, ∃ n1, RootNode m d'.root n1 ∧ Lands d'.kind n0 n1 :=
+    (hr : RootNode m p n0) : ∃ d' ∈ E.path ++ E.held, Landed m d' n0 :=
   bor_lands hh hp hok hr
 
 theorem NamesIn.reroot {T : Val} {H : List Dep} (h : NamesIn T H) {p : Var} (D : List Dep)
@@ -1623,16 +1622,17 @@ theorem reroot_vkeep (hh : HeapOK m) (hp : m.st p = some ⟨false, some w⟩)
     (hDm : ∀ d ∈ Ep.path ++ Ep.held, d.kind.isName = false → d ∈ D) (hlt : ∀ d' ∈ D, d'.root ≠ p)
     {ds : List Dep} {dep : Dep} (hd : dep ∈ ds) {d o l : Nat} {s : Ty}
     (ha : ViewAt m dep d o l s) : ∃ dep' ∈ reroot p D ds, ViewAt (m.remove p) dep' d o l s := by
-  obtain ⟨n0, c, es, hr, hk, hl, hlen, hw⟩ := viewAt_iff.mp ha
+  obtain ⟨c, es, hk, hla, hlen, hw⟩ := ha
   by_cases hrp : dep.root = p
   · obtain ⟨r, k⟩ := dep
-    simp only at hrp hr hk hl; subst hrp
-    obtain ⟨d', hd', n1, hr1, hl1⟩ := rootb_lands hh hp hok hr
-    have hdD := hDm d' hd' (lands_notName hl1)
-    refine ⟨⟨d'.root, comp d'.kind k⟩, mem_reroot_of_eq hd hdD, viewAt_iff.mpr ⟨n1, c, es,
-      rootKeep_rmbor hp (hlt d' hdD) n1 hr1, comp_ne_self hk, lands_comp' hl1 hl, hlen, hw⟩⟩
-  · exact ⟨dep, mem_reroot_of_ne hd hrp, viewAt_iff.mpr ⟨n0, c, es, rootKeep_rmbor hp hrp n0 hr, hk,
-      hl, hlen, hw⟩⟩
+    simp only at hrp hk; subst hrp
+    obtain ⟨n0, hr, hl⟩ := hla.root_of_heap hh
+    obtain ⟨d', hd', hla1⟩ := rootb_lands hh hp hok hr
+    have hdD := hDm d' hd' hla1.notName
+    exact ⟨⟨d'.root, comp d'.kind k⟩, mem_reroot_of_eq hd hdD, c, es, comp_ne_self hk,
+      (hla1.comp hl).keep (rootKeep_rmbor hp (hlt d' hdD)) (fun _ _ h => h), hlen, hw⟩
+  · exact ⟨dep, mem_reroot_of_ne hd hrp, c, es, hk, hla.keep (rootKeep_rmbor hp hrp) (fun _ _ h => h),
+      hlen, hw⟩
 
 theorem reroot_views (hh : HeapOK m) (hp : m.st p = some ⟨false, some w⟩)
     (hok : ValOK m Ep.ty w Ep.path Ep.held) {D : List Dep} (hDs : D ⊆ Ep.path ++ Ep.held)
@@ -1693,18 +1693,20 @@ theorem reroot_valOK_gen (hh : HeapOK m) (hp : m.st p = some ⟨false, some w⟩
     exact .view ⟨dep', hd', ha'⟩
   | @href t c P H h =>
     intro D hDs hDm hlt hnp
-    obtain ⟨dep, hd, n0, d, es, hr, hl, hw, hvs, hns, hsh⟩ := h
+    obtain ⟨dep, hd, d, es, hla, hw, hvs, hns, hsh⟩ := h
     have hvs' := reroot_views hh hp hok hDs hDm hlt hvs
     have hns' := hns.reroot D hnp
     by_cases hrp : dep.root = p
     · obtain ⟨r, k⟩ := dep
-      simp only at hrp hr hl; subst hrp
-      obtain ⟨d', hd', n1, hr1, hl1⟩ := rootb_lands hh hp hok hr
-      have hdD := hDm d' hd' (lands_notName hl1)
-      exact .href ⟨⟨d'.root, comp d'.kind k⟩, mem_reroot_of_eq hd hdD, n1, d, es,
-        rootKeep_rmbor hp (hlt d' hdD) n1 hr1, lands_comp' hl1 hl, hw, hvs', hns', hsh.of_blk rfl⟩
-    · exact .href ⟨dep, mem_reroot_of_ne hd hrp, n0, d, es, rootKeep_rmbor hp hrp n0 hr, hl, hw, hvs',
-        hns', hsh.of_blk rfl⟩
+      simp only at hrp; subst hrp
+      obtain ⟨n0, hr, hl⟩ := hla.root_of_heap hh
+      obtain ⟨d', hd', hla1⟩ := rootb_lands hh hp hok hr
+      have hdD := hDm d' hd' hla1.notName
+      exact .href ⟨⟨d'.root, comp d'.kind k⟩, mem_reroot_of_eq hd hdD, d, es,
+        (hla1.comp hl).keep (rootKeep_rmbor hp (hlt d' hdD)) (fun _ _ h => h), hw, hvs', hns',
+        hsh.of_blk rfl⟩
+    · exact .href ⟨dep, mem_reroot_of_ne hd hrp, d, es, hla.keep (rootKeep_rmbor hp hrp) (fun _ _ h => h),
+        hw, hvs', hns', hsh.of_blk rfl⟩
 
 theorem reroot_valOK (hh : HeapOK m) (hp : m.st p = some ⟨false, some w⟩)
     (hok : ValOK m Ep.ty w Ep.path Ep.held) (hlt : ∀ d' ∈ Ep.path ++ Ep.held, d'.root ≠ p)

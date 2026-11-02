@@ -602,7 +602,7 @@ theorem revive_dep {x : Var} {E : Entry} (hos : E.mode.ownSlot = true) {d : Dep}
 
 /-- A value holds no view into its own tree: what it views through its own
     binding, it views through nothing. -/
-theorem ViewsOK.dropSelf {m : Mem} {x : Var} {T : Val} (hT : m.st x = some ⟨true, some T⟩)
+theorem ViewsOK.dropSelf {m : Mem} (hh : HeapOK m) {x : Var} {T : Val} (hT : m.st x = some ⟨true, some T⟩)
     (hsf : SelfFree T) {τ : Ty} {H : List Dep} (h : ViewsOK m τ T H) :
     ViewsOK m τ T (H.filter (fun d => d.root != x)) := by
   intro s v hin
@@ -613,7 +613,7 @@ theorem ViewsOK.dropSelf {m : Mem} {x : Var} {T : Val} (hT : m.st x = some ⟨tr
     have hrx : dep.root = x := by simpa using hr
     obtain ⟨r, k⟩ := dep
     simp only at hrx; subst hrx
-    exact viewAt_not_self hT hsf hin ha
+    exact viewAt_not_self_heap hh hT hsf hin ha
   · rfl
 
 /-- The value of a destructor's binding, revived: its views are valid
@@ -624,7 +624,7 @@ theorem revive_views {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {Ex : Entry
   by_cases hdb : Ex.dbind = true
   · obtain ⟨_, hvs⟩ := hi.armed x Ex _ hx hsl hdb hos v rfl
     simp only [Entry.revive, hdb, ↓reduceIte]
-    exact hvs.memDeps.dropSelf hsl (hi.heap.self x v hsl)
+    exact hvs.memDeps.dropSelf hi.heap hsl (hi.heap.self x v hsl)
   · have hhv : Ex.ty.holdsView = false := by
       cases h : Ex.ty.holdsView with
       | false => rfl
@@ -912,7 +912,7 @@ theorem MInv.unwind {m m1 : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt} 
     obtain ⟨Er, hEr, hro⟩ := hi.wf w E hw hl (Or.inl hty) dep.root hr
     have hrs : dep.root ∉ k.spine := fun h => hns ⟨dep.root, hr, h⟩
     have hrk := rootKeep_frame_sp hi.toMInv hanch hpin hF hEr hrs hro (hout _ hrs) (BlkLe.of_eq hblk)
-    exact ⟨hrk.vkeep, hrk.hkeep⟩
+    exact ⟨hrk.vkeep (BlkLe.of_eq hblk), hrk.hkeep⟩
   obtain ⟨sl0, hsl0, hok0, hslot0⟩ := hi.slot x Ex hx
   rw [← hout x hxk, hsl] at hsl0; cases hsl0
   obtain ⟨_, hown0, _⟩ := hslot0
@@ -936,6 +936,7 @@ theorem MInv.unwind {m m1 : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt} 
     have hdv : d ∈ (Ex.revive x).vdeps := by unfold Entry.vdeps; exact List.mem_append_right _ hd
     obtain ⟨_, hrs, Er, hEr, hro⟩ := hxd d hdv
     exact (rootKeep_frame_sp hi.toMInv hanch hpin hF hEr hrs hro (hout _ hrs) (BlkLe.of_eq hblk)).vkeep
+      (BlkLe.of_eq hblk)
   have hroot1 : ∀ d ∈ (Ex.revive x).vdeps,
       ∃ Er, unwindCtx k.spine x Γ d.root = some Er ∧ Er.mode.isRoot = true := by
     intro d hd
@@ -1099,6 +1100,7 @@ theorem MInv.unwind {m m1 : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt} 
         simp only [Stmt.spine, List.mem_cons, not_or] at hrs
         obtain ⟨Er, hEr, hro⟩ := hi.wf.dtor w E0 h0 hd hos (Or.inl hnint) dep hdv hnm
         exact (rootKeep_frame_sp hi.toMInv hanch hpin hF hEr hrs.2 hro (hout _ hrs.2) (BlkLe.of_eq hblk)).vkeep
+          (BlkLe.of_eq hblk)
       rcases hc with ⟨_, rfl⟩ | ⟨_, rfl⟩
       · exact hE0.entry rfl rfl rfl (fun h => h) (fun d hd => (List.mem_filter.mp hd).1)
       · exact hE0
@@ -1501,7 +1503,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       | editPush htk hno hr =>
         obtain ⟨post, hp⟩ := push_take hi.toMInv hanch hy hly htyy hpa htk
         obtain ⟨dep, hdm, _, _, _, _, _, _, _, _, _, _, _, _, huniq, _⟩ :=
-          post.inv.thru_owner hx1 hmx hl1 hty hro
+          post.inv.thru_owner hx1 hmx hl1 hty hro hthru.noShare
         obtain ⟨rfl, -⟩ := huniq _ _ _ _ _ _ hno
         have hoF := (hthru dep hdm).1
         exact fin (MInv.editB_push post.inv (post.rel.anch hanch) hx1 hmx hl1 hty hhv hxF hyx' hthru hp
@@ -1510,7 +1512,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       | editPushRealloc htk hno hr =>
         obtain ⟨post, hp⟩ := push_take hi.toMInv hanch hy hly htyy hpa htk
         obtain ⟨dep, hdm, _, _, _, _, _, _, _, _, _, _, _, _, huniq, _⟩ :=
-          post.inv.thru_owner hx1 hmx hl1 hty hro
+          post.inv.thru_owner hx1 hmx hl1 hty hro hthru.noShare
         obtain ⟨rfl, -⟩ := huniq _ _ _ _ _ _ hno
         have hoF := (hthru dep hdm).1
         exact fin (MInv.editB_pushRealloc post.inv (post.rel.anch hanch) hx1 hmx hl1 hty hhv hxF hyx'
@@ -1521,7 +1523,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       cases hst with
       | editTrunc _ hno hfr hr =>
         obtain ⟨dep, hdm, _, _, _, _, _, _, _, _, _, _, _, _, huniq, _⟩ :=
-          hi.toMInv.thru_owner hx1 hmx hl1 hty hro
+          hi.toMInv.thru_owner hx1 hmx hl1 hty hro hthru.noShare
         obtain ⟨rfl, -⟩ := huniq _ _ _ _ _ _ hno
         have hoF := (hthru dep hdm).1
         exact fin (MInv.editB_trunc hi.toMInv hanch hx1 hmx hl1 hty hhv hxF hthru hno hfr hr) (by simp)
@@ -1532,7 +1534,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       | editSet hn _ htk hno hfr hr =>
         obtain ⟨post, hp⟩ := push_take hi.toMInv hanch hy hly htyy hpa htk
         obtain ⟨dep, hdm, _, _, _, _, _, _, _, _, _, _, _, _, huniq, _⟩ :=
-          post.inv.thru_owner hx1 hmx hl1 hty hro
+          post.inv.thru_owner hx1 hmx hl1 hty hro hthru.noShare
         obtain ⟨rfl, -⟩ := huniq _ _ _ _ _ _ hno
         have hoF := (hthru dep hdm).1
         exact fin (MInv.editB_set post.inv (post.rel.anch hanch) hx1 hmx hl1 hty hhv hthru hp hn hno hfr

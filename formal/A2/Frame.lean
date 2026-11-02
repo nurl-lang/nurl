@@ -5,33 +5,42 @@ an ending way stays valid. -/
 
 namespace A2
 
-/-- A view stored in an owned tree is not valid through that tree's owner:
-    no tree views itself. -/
+/-- A view stored in an owned tree is not valid through that tree's owner
+    (but through a share of it, A3.1): no tree views itself. -/
 theorem viewAt_not_self {m : Mem} {x : Var} {T : Val} (hT : m.st x = some ⟨true, some T⟩)
     (hsf : SelfFree T) {τ s : Ty} {d o l : Nat} (hin : ViewIn τ T s (.view d o l)) {k : Kind}
-    (ha : ViewAt m ⟨x, k⟩ d o l s) : False := by
-  obtain ⟨n0, c, es, hr, hk, _, _⟩ := ha
+    (hks : k ≠ .share) (ha : ViewAt m ⟨x, k⟩ d o l s) : False := by
+  obtain ⟨c, es, _, hla, _, _⟩ := ha
+  obtain ⟨n0, hr, hk⟩ := hla.root hks
   have ht := rootNode_own hT hr
-  have hs : Sub (.node s c d es) n0 := by
-    rcases hk with ⟨_, h⟩ | ⟨_, h⟩
-    · rw [h]; exact Sub.refl _
-    · exact h.sub
-  exact hsf d o l hin.sub s c es (hs.trans ht.sub)
+  exact hsf d o l hin.sub s c es (hk.sub.trans ht.sub)
+
+/-- `viewAt_not_self`, a payload holding no node (A3.1, first cut: `HeapOK.bpay`). -/
+theorem viewAt_not_self_heap {m : Mem} (hh : HeapOK m) {x : Var} {T : Val}
+    (hT : m.st x = some ⟨true, some T⟩) (hsf : SelfFree T) {τ s : Ty} {d o l : Nat}
+    (hin : ViewIn τ T s (.view d o l)) {k : Kind} (ha : ViewAt m ⟨x, k⟩ d o l s) : False := by
+  obtain ⟨c, es, _, hla, _, _⟩ := ha
+  obtain ⟨n0, hr, hk⟩ := hla.root_of_heap hh
+  have ht := rootNode_own hT hr
+  exact hsf d o l hin.sub s c es (hk.sub.trans ht.sub)
 
 /-- The views stored in an owned tree stay valid when only that tree's owner
     changes, if the others they depend on keep their memory. -/
 theorem ViewsOK.keep_except {m m' : Mem} {x : Var} {τ : Ty} {T U : Val}
     (hT : m.st x = some ⟨true, some T⟩) (hsf : SelfFree T) {τ' : Ty} {H : List Dep}
     (hsub : ∀ s v, ViewIn τ' U s v → ViewIn τ T s v)
-    (hk : ∀ dep ∈ H, dep.root ≠ x → VKeep m m' dep) (hv : ViewsOK m τ T H) :
+    (hk : ∀ dep ∈ H, dep.root ≠ x → VKeep m m' dep) (hv : ViewsOK m τ T H)
+    (hb : BlkLe m.blk m'.blk := by exact fun _ _ h => h) :
     ViewsOK m' τ' U H := by
   intro s v hin
   obtain ⟨d, o, l, rfl, dep, hd, ha⟩ := hv s v (hsub s v hin)
-  refine ⟨d, o, l, rfl, dep, hd, hk dep hd ?_ d o l s ha⟩
-  intro heq
+  refine ⟨d, o, l, rfl, dep, hd, ?_⟩
   obtain ⟨r, k⟩ := dep
-  simp only at heq; subst heq
-  exact viewAt_not_self hT hsf (hsub s _ hin) ha
+  by_cases hks : k = .share
+  · subst hks; exact vkeep_share hb r d o l s ha
+  by_cases hrx : r = x
+  · subst hrx; exact (viewAt_not_self hT hsf (hsub s _ hin) hks ha).elim
+  · exact hk ⟨r, k⟩ hd hrx d o l s ha
 
 /-! ### The general frame lemma -/
 
@@ -373,7 +382,7 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     · obtain ⟨Er, hEr, hroot⟩ := hi.wf v E hv' hlE (Or.inl hnint) dep.root (List.mem_map_of_mem hd)
       have hk := rootKeep_frame hi hanch (fun o ho => hst o (fun h => hxF (h ▸ ho))) hEr hroot
         (hst _ hr) (BlkLe.of_eq hblk)
-      exact ⟨hk.vkeep, hk.hkeep⟩
+      exact ⟨hk.vkeep (BlkLe.of_eq hblk), hk.hkeep⟩
   have getE : ∀ v E', upd (kill e hv x Γ) x ox v = some E' → v ≠ x →
       ∃ E, Γ v = some E ∧ E' = killE e hv x E := by
     intro v E' h hvx
@@ -612,7 +621,7 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
         exact (hkeep k (hitsMem_kills (hds v E hE hdt hos) (Or.inl hnint) hdv rfl hnm)).1
       · obtain ⟨Er, hEr, hroot⟩ := hi.wf.dtor v E hE hd hos (Or.inl hnint) dep hdv hnm
         exact (rootKeep_frame hi hanch (fun o ho => hst o (fun h => hxF (h ▸ ho))) hEr hroot (hst _ hr)
-          (BlkLe.of_eq hblk)).vkeep
+          (BlkLe.of_eq hblk)).vkeep (BlkLe.of_eq hblk)
   · -- A3.1: an owned tree's shares name live blocks; no change here touches a block
     intro v E' sl T hv' hsl hown hT
     by_cases hvx : v = x

@@ -205,20 +205,31 @@ def RootNode (m : Mem) (r : Var) (n : Val) : Prop :=
   (∃ v c, m.st r = some ⟨false, some v⟩ ∧ Top (.href c) v ∧ NodeAt m c n) ∨
   (∃ v d o l, m.st r = some ⟨false, some v⟩ ∧ Top (.view d o l) v ∧ DataAt m d n)
 
-/-- The view `(d, o, l)` of element type `t` is valid through `dep`. -/
+/-- Where a value reached through a dependency of a given kind lies: the
+    root's node itself, or strictly inside it. -/
+def Lands (k : Kind) (n n0 : Val) : Prop :=
+  k = .self ∧ n = n0 ∨ k = .view ∧ n = n0 ∨ k = .inner ∧ Below n n0
+
+/-- A3.1: a value inside a live block's payload. -/
+def InPay (m : Mem) (n : Val) : Prop := ∃ k bl, m.blk k = some bl ∧ Sub n bl.pay
+
+/-- Where a value reached through `dep` lies: where the node its root
+    reaches puts it (`Lands`), or (A3.1), through a share, anywhere in a
+    live block's payload, which nothing writes: valid while the block
+    lives, whatever its root does. -/
+def Landed (m : Mem) (dep : Dep) (n : Val) : Prop :=
+  (∃ n0, RootNode m dep.root n0 ∧ Lands dep.kind n n0) ∨ (dep.kind = .share ∧ InPay m n)
+
+/-- The view `(d, o, l)` of element type `t` is valid through `dep` (a
+    dependency on a whole handle is no view's: a `push` moves the buffer
+    and keeps the handle). -/
 def ViewAt (m : Mem) (dep : Dep) (d o l : Nat) (t : Ty) : Prop :=
-  ∃ n0 c es, RootNode m dep.root n0 ∧
-    (dep.kind = .view ∧ Val.node t c d es = n0 ∨ dep.kind = .inner ∧ Below (.node t c d es) n0) ∧
+  ∃ c es, dep.kind ≠ .self ∧ Landed m dep (.node t c d es) ∧
     o + l ≤ es.length ∧ WFv (.vec t) (.node t c d es)
 
 /-- Every view stored in `T` is valid through some dependency in `H`. -/
 def ViewsOK (m : Mem) (τ : Ty) (T : Val) (H : List Dep) : Prop :=
   ∀ s v, ViewIn τ T s v → ∃ d o l, v = .view d o l ∧ ∃ dep ∈ H, ViewAt m dep d o l s
-
-/-- Where a value reached through a dependency of a given kind lies: the
-    root's node itself, or strictly inside it. -/
-def Lands (k : Kind) (n n0 : Val) : Prop :=
-  k = .self ∧ n = n0 ∨ k = .view ∧ n = n0 ∨ k = .inner ∧ Below n n0
 
 /-- What a value captured by name (the closures in it) is held, by name,
     in `H`. -/
@@ -234,7 +245,7 @@ def PkgsOK (T : Val) : Prop :=
 
 /-- The borrowed `Vec` `c` of element type `t` is valid through `dep`. -/
 def HrefAt (m : Mem) (dep : Dep) (c : Nat) (t : Ty) (H : List Dep) : Prop :=
-  ∃ n0 d es, RootNode m dep.root n0 ∧ Lands dep.kind (.node t c d es) n0 ∧
+  ∃ d es, Landed m dep (.node t c d es) ∧
     WFv (.vec t) (.node t c d es) ∧ ViewsOK m (.vec t) (.node t c d es) H ∧
     NamesIn (.node t c d es) H ∧ SharesOK m (.vec t) (.node t c d es)
 

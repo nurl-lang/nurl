@@ -26,7 +26,7 @@ theorem comp_ne_self {a b : Kind} (hb : b ≠ .self) : comp a b ≠ .self := by
 theorem derive_hrefAt {m : Mem} {y : Var} {E : Entry} {N : Val}
     (hroot : E.mode.isRoot = true → RootNode m y N)
     {k : Kind}
-    (hbor : E.mode = .bor → ∃ dep ∈ E.path, ∃ n0, RootNode m dep.root n0 ∧ Lands dep.kind N n0)
+    (hbor : E.mode = .bor → ∃ dep ∈ E.path, Landed m dep N)
     (hrk : rootKind E.ty k = k)
     {t : Ty} {c d : Nat} {es : List Val} (hl : Lands k (.node t c d es) N)
     (hw : WFv (.vec t) (.node t c d es)) {H : List Dep} (hv : ViewsOK m (.vec t) (.node t c d es) H)
@@ -36,17 +36,17 @@ theorem derive_hrefAt {m : Mem} {y : Var} {E : Entry} {N : Val}
   cases h : E.mode.isRoot with
   | true =>
     simp only [↓reduceIte, List.mem_singleton, exists_eq_left]
-    exact ⟨N, d, es, hroot h, by rw [hrk]; exact hl, hw, hv, hn, hsh⟩
+    exact ⟨d, es, Or.inl ⟨N, hroot h, by rw [hrk]; exact hl⟩, hw, hv, hn, hsh⟩
   | false =>
     simp only [Bool.false_eq_true, ↓reduceIte, List.mem_map]
     have hb : E.mode = .bor := by cases hm : E.mode <;> simp_all [Mode.isRoot]
-    obtain ⟨dep, hd, n0, hr, hld⟩ := hbor hb
-    exact ⟨_, ⟨dep, hd, rfl⟩, n0, d, es, hr, lands_comp' hld hl, hw, hv, hn, hsh⟩
+    obtain ⟨dep, hd, hld⟩ := hbor hb
+    exact ⟨_, ⟨dep, hd, rfl⟩, d, es, hld.comp hl, hw, hv, hn, hsh⟩
 
 /-- A view taken from `y` in way `k`. -/
 theorem derive_viewAt {m : Mem} {y : Var} {E : Entry} {N : Val}
     (hroot : E.mode.isRoot = true → RootNode m y N)
-    (hbor : E.mode = .bor → ∃ dep ∈ E.path, ∃ n0, RootNode m dep.root n0 ∧ Lands dep.kind N n0)
+    (hbor : E.mode = .bor → ∃ dep ∈ E.path, Landed m dep N)
     {k : Kind} (hk : k ≠ .self) (hrk : rootKind E.ty k = k)
     {t : Ty} {c d : Nat} {es : List Val} (hl : Lands k (.node t c d es) N)
     {o l : Nat} (hlen : o + l ≤ es.length) (hw : WFv (.vec t) (.node t c d es)) :
@@ -55,13 +55,12 @@ theorem derive_viewAt {m : Mem} {y : Var} {E : Entry} {N : Val}
   cases h : E.mode.isRoot with
   | true =>
     simp only [↓reduceIte, List.mem_singleton, exists_eq_left]
-    exact viewAt_iff.mpr ⟨N, c, es, hroot h, by rw [hrk]; exact hk, by rw [hrk]; exact hl, hlen, hw⟩
+    exact ⟨c, es, by rw [hrk]; exact hk, Or.inl ⟨N, hroot h, by rw [hrk]; exact hl⟩, hlen, hw⟩
   | false =>
     simp only [Bool.false_eq_true, ↓reduceIte, List.mem_map]
     have hb : E.mode = .bor := by cases hm : E.mode <;> simp_all [Mode.isRoot]
-    obtain ⟨dep, hd, n0, hr, hld⟩ := hbor hb
-    exact ⟨_, ⟨dep, hd, rfl⟩, viewAt_iff.mpr ⟨n0, c, es, hr, comp_ne_self hk,
-      lands_comp' hld hl, hlen, hw⟩⟩
+    obtain ⟨dep, hd, hld⟩ := hbor hb
+    exact ⟨_, ⟨dep, hd, rfl⟩, c, es, comp_ne_self hk, hld.comp hl, hlen, hw⟩
 
 theorem Lands.elem {t : Ty} {c d : Nat} {es : List Val} {e : Val} (he : e ∈ es) :
     Lands .inner e (.node t c d es) :=
@@ -106,7 +105,7 @@ theorem MInv.of_st {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) (
     obtain ⟨sl, hsl, hok, hslot⟩ := hi.slot v E hv
     refine ⟨sl, by rw [h]; exact hsl, hok, hslot.keep (fun dep _ => ?_) hb⟩
     have hk : RootKeep m m' dep.root := fun n hn => rootNode_st h hn (BlkLe.of_eq hb)
-    exact ⟨hk.vkeep, hk.hkeep⟩
+    exact ⟨hk.vkeep (BlkLe.of_eq hb), hk.hkeep⟩
   heap := hh
   nvSt v hv := by rw [h] at hv; exact Nat.lt_of_lt_of_le (hi.nvSt v hv) hnv
   noInout := hi.noInout
@@ -117,7 +116,7 @@ theorem MInv.of_st {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) (
   held v E sl T hE hl hsl hT := hi.held v E sl T hE hl (by rw [h] at hsl; exact hsl) hT
   pkgs v sl T hsl hT := hi.pkgs v sl T (by rw [h] at hsl; exact hsl) hT
   armed v E sl hE hsl := (hi.armed v E sl hE (by rw [h] at hsl; exact hsl)).keep fun _ _ _ dep _ =>
-    (show RootKeep m m' dep.root from fun n hn => rootNode_st h hn (BlkLe.of_eq hb)).vkeep
+    (show RootKeep m m' dep.root from fun n hn => rootNode_st h hn (BlkLe.of_eq hb)).vkeep (BlkLe.of_eq hb)
   shares v E sl T hE hsl hown hT := (hi.shares v E sl T hE (by rw [h] at hsl; exact hsl) hown hT).of_blk hb
   blocks k bl hk := by
     rw [hb] at hk
@@ -131,9 +130,9 @@ them: what was valid stays valid over more blocks. -/
 
 theorem HrefAt.grow {m m' : Mem} (hst : m'.st = m.st) (hb : BlkLe m.blk m'.blk) {dep : Dep} {c : Nat}
     {t : Ty} {H : List Dep} (h : HrefAt m dep c t H) : HrefAt m' dep c t H := by
-  obtain ⟨n0, d, es, hr, hl, hw, hv, hn, hsh⟩ := h
-  exact ⟨n0, d, es, rootNode_st hst hr hb, hl, hw,
-    hv.keep (fun dep _ => (show RootKeep m m' dep.root from fun n hn => rootNode_st hst hn hb).vkeep), hn,
+  obtain ⟨d, es, hla, hw, hv, hn, hsh⟩ := h
+  exact ⟨d, es, hla.keep (fun n hn => rootNode_st hst hn hb) hb, hw,
+    hv.keep (fun dep _ => (show RootKeep m m' dep.root from fun n hn => rootNode_st hst hn hb).vkeep hb), hn,
     hsh.grow hb⟩
 
 theorem ValOK.grow {m m' : Mem} (hst : m'.st = m.st) (hb : BlkLe m.blk m'.blk) {τ : Ty} {v : Val}
@@ -146,7 +145,8 @@ theorem ValOK.grow {m m' : Mem} (hst : m'.st = m.st) (hb : BlkLe m.blk m'.blk) {
     exact .href ⟨dep, hd, ha.grow hst hb⟩
   | view h =>
     obtain ⟨dep, hd, ha⟩ := h
-    exact .view ⟨dep, hd, (show RootKeep m m' dep.root from fun n hn => rootNode_st hst hn hb).vkeep _ _ _ _ ha⟩
+    exact .view ⟨dep, hd, (show RootKeep m m' dep.root from fun n hn => rootNode_st hst hn hb).vkeep hb
+      _ _ _ _ ha⟩
   | pair _ _ ihx ihy => exact .pair ihx ihy
   | inl _ ih => exact .inl ih
   | inr _ ih => exact .inr ih
@@ -155,7 +155,7 @@ theorem ValOK.grow {m m' : Mem} (hst : m'.st = m.st) (hb : BlkLe m.blk m'.blk) {
 theorem SlotOK.grow {m m' : Mem} (hst : m'.st = m.st) (hb : BlkLe m.blk m'.blk) {E : Entry} {sl : Slot}
     (hs : SlotOK m E sl) : SlotOK m' E sl := by
   have hvk : ∀ dep, VKeep m m' dep := fun dep =>
-    (show RootKeep m m' dep.root from fun n hn => rootNode_st hst hn hb).vkeep
+    (show RootKeep m m' dep.root from fun n hn => rootNode_st hst hn hb).vkeep hb
   obtain ⟨h1, h2, h3⟩ := hs
   refine ⟨h1, fun ho => ?_, fun ho hl => ?_⟩
   · obtain ⟨a, b, c⟩ := h2 ho
@@ -186,7 +186,7 @@ theorem MInv.grow {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) (h
   held v E sl T hE hl hsl hT := hi.held v E sl T hE hl (by rw [h] at hsl; exact hsl) hT
   pkgs v sl T hsl hT := hi.pkgs v sl T (by rw [h] at hsl; exact hsl) hT
   armed v E sl hE hsl := (hi.armed v E sl hE (by rw [h] at hsl; exact hsl)).keep fun _ _ _ dep _ =>
-    (show RootKeep m m' dep.root from fun n hn => rootNode_st h hn hb).vkeep
+    (show RootKeep m m' dep.root from fun n hn => rootNode_st h hn hb).vkeep hb
   shares v E sl T hE hsl hown hT := (hi.shares v E sl T hE (by rw [h] at hsl; exact hsl) hown hT).grow hb
   blocks := hB
 
@@ -747,7 +747,7 @@ theorem out_borrowWhole {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Ent
 theorem lend_valOK' {m : Mem} {H : List Dep} {τ : Ty} {e : Val} (hw : WFv τ e) (hpk : PkgsOK e) :
     ∀ {P : List Dep},
     (∀ t c d es, Top (.node t c d es) e →
-      ∃ dep ∈ P, ∃ n0, RootNode m dep.root n0 ∧ Lands dep.kind (.node t c d es) n0) →
+      ∃ dep ∈ P, Landed m dep (.node t c d es)) →
     ViewsOK m τ e H → NamesIn e H → SharesOK m τ e → (∀ s, τ = .slice s → ViewsOK m τ e P) →
     ValOK m τ (lendOf e) P H := by
   revert hpk
@@ -761,12 +761,12 @@ theorem lend_valOK' {m : Mem} {H : List Dep} {τ : Ty} {e : Val} (hw : WFv τ e)
     exact .view ⟨dep, hd, ha⟩
   | @node t c d es hes =>
     intro _ P hn hv hnm hsh _
-    obtain ⟨dep, hd, n0, hr, hl⟩ := hn t c d es (Top.refl _)
-    exact .href ⟨dep, hd, n0, d, es, hr, hl, WFv.node hes, hv, hnm, hsh⟩
+    obtain ⟨dep, hd, hla⟩ := hn t c d es (Top.refl _)
+    exact .href ⟨dep, hd, d, es, hla, WFv.node hes, hv, hnm, hsh⟩
   | @pair a b v w _ _ ihv ihw =>
     intro hpk P hn hvs hnm hsh _
     have hn' : ∀ t c d es, Top (.node t c d es) (.pair v w) →
-        ∃ dep ∈ P ++ H, ∃ n0, RootNode m dep.root n0 ∧ Lands dep.kind (.node t c d es) n0 := by
+        ∃ dep ∈ P ++ H, Landed m dep (.node t c d es) := by
       intro t c d es hs
       obtain ⟨dep, hd, rest⟩ := hn t c d es hs
       exact ⟨dep, List.mem_append_left _ hd, rest⟩
@@ -815,7 +815,7 @@ theorem lend_valOK' {m : Mem} {H : List Dep} {τ : Ty} {e : Val} (hw : WFv τ e)
 
 theorem lend_valOK {m : Mem} {H : List Dep} {τ : Ty} {e : Val} (hw : WFv τ e) (hpk : PkgsOK e) {P : List Dep}
     (hn : ∀ t c d es, Sub (.node t c d es) e →
-      ∃ dep ∈ P, ∃ n0, RootNode m dep.root n0 ∧ Lands dep.kind (.node t c d es) n0)
+      ∃ dep ∈ P, Landed m dep (.node t c d es))
     (hv : ViewsOK m τ e H) (hnm : NamesIn e H) (hsh : SharesOK m τ e)
     (hs : ∀ s, τ = .slice s → ViewsOK m τ e P) :
     ValOK m τ (lendOf e) P H :=
@@ -896,24 +896,21 @@ theorem out_at {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t : 
     | prod a b =>
       refine lend_valOK hwe hpke (fun t' c' d' es' hs => ?_) (hvs.elem hmem) (hns.sub (names_elem hmem))
         (hshv.elem hmem) (fun s h => by cases h)
-      have hbor' : E.mode.isRoot = false → ∃ dep ∈ E.path, ∃ n0, RootNode m dep.root n0 ∧
-          Lands dep.kind (.node (.prod a b) c d es) n0 := fun h => hbor (by
+      have hbor' : E.mode.isRoot = false → ∃ dep ∈ E.path, Landed m dep (.node (.prod a b) c d es) := fun h => hbor (by
         cases hm : E.mode <;> simp_all [Mode.isRoot])
       exact derive_lands (hroot ·) hbor' (Or.inr (Or.inr ⟨rfl, _, Child.elem hmem, hs⟩))
         (by rw [hty]; rfl)
     | sum a b =>
       refine lend_valOK hwe hpke (fun t' c' d' es' hs => ?_) (hvs.elem hmem) (hns.sub (names_elem hmem))
         (hshv.elem hmem) (fun s h => by cases h)
-      have hbor' : E.mode.isRoot = false → ∃ dep ∈ E.path, ∃ n0, RootNode m dep.root n0 ∧
-          Lands dep.kind (.node (.sum a b) c d es) n0 := fun h => hbor (by
+      have hbor' : E.mode.isRoot = false → ∃ dep ∈ E.path, Landed m dep (.node (.sum a b) c d es) := fun h => hbor (by
         cases hm : E.mode <;> simp_all [Mode.isRoot])
       exact derive_lands (hroot ·) hbor' (Or.inr (Or.inr ⟨rfl, _, Child.elem hmem, hs⟩))
         (by rw [hty]; rfl)
     | fn ms =>
       refine lend_valOK hwe hpke (fun t' c' d' es' hs => ?_) (hvs.elem hmem) (hns.sub (names_elem hmem))
         (hshv.elem hmem) (fun s h => by cases h)
-      have hbor' : E.mode.isRoot = false → ∃ dep ∈ E.path, ∃ n0, RootNode m dep.root n0 ∧
-          Lands dep.kind (.node (.fn ms) c d es) n0 := fun h => hbor (by
+      have hbor' : E.mode.isRoot = false → ∃ dep ∈ E.path, Landed m dep (.node (.fn ms) c d es) := fun h => hbor (by
         cases hm : E.mode <;> simp_all [Mode.isRoot])
       exact derive_lands (hroot ·) hbor' (Or.inr (Or.inr ⟨rfl, _, Child.elem hmem, hs⟩))
         (by rw [hty]; rfl)
@@ -953,8 +950,7 @@ theorem out_view {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t 
     refine .view (derive_viewAt (hroot ·) ?_ (by decide) (by rw [hty]; rfl)
       (Or.inr (Or.inl ⟨rfl, rfl⟩)) (by simp) hw)
     intro hb
-    obtain ⟨dep, hd, n0, hr, hla⟩ := hbor hb
-    exact ⟨dep, hd, n0, hr, hla⟩
+    exact hbor hb
   names hn := by
     have h := hi.names y E hy hl (Or.inl (by rw [hty]; simp))
     show DepsNamed Γ (derive y E .view ++ E.held); exact (derive_named h rfl).append h.held
@@ -1017,18 +1013,17 @@ theorem out_sat {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t :
           (no_names (WFv.node hes) (by simpa [Ty.holdsView] using hok.1.2) _)
           (SharesOK.of_noArc (by simpa [Ty.hasArc] using hok.2)))
         intro hb
-        obtain ⟨dep, hd, n0, hr, _, hla⟩ := hbor hb
-        exact ⟨dep, hd, n0, hr, hla⟩
+        obtain ⟨dep, hd, _, hla⟩ := hbor hb
+        exact ⟨dep, hd, hla⟩
     | prod a b =>
       refine lend_valOK hwe hpke (fun t' c' d' es' hs => ?_)
         (ViewsOK.none (by simpa [Ty.holdsView] using hok.1.2) _ _)
         (NamesIn.nil _ (hwe.names_nil (by simpa [Ty.holdsView] using hok.1.2)))
         (SharesOK.of_noArc (by simpa [Ty.hasArc] using hok.2)) (fun s h => by cases h)
-      have hbor' : E.mode.isRoot = false → ∃ dep ∈ E.path, ∃ n0, RootNode m dep.root n0 ∧
-          Lands dep.kind (.node (.prod a b) c d es) n0 := fun h => by
+      have hbor' : E.mode.isRoot = false → ∃ dep ∈ E.path, Landed m dep (.node (.prod a b) c d es) := fun h => by
         have hb : E.mode = .bor := by cases hm : E.mode <;> simp_all [Mode.isRoot]
-        obtain ⟨dep, hd, n0, hr, _, hla⟩ := hbor hb
-        exact ⟨dep, hd, n0, hr, hla⟩
+        obtain ⟨dep, hd, _, hla⟩ := hbor hb
+        exact ⟨dep, hd, hla⟩
       exact derive_lands (hroot ·) hbor' (Or.inr (Or.inr ⟨rfl, _, Child.elem hmem, hs⟩))
         (by rw [hty]; rfl)
     | sum a b =>
@@ -1036,11 +1031,10 @@ theorem out_sat {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t :
         (ViewsOK.none (by simpa [Ty.holdsView] using hok.1.2) _ _)
         (NamesIn.nil _ (hwe.names_nil (by simpa [Ty.holdsView] using hok.1.2)))
         (SharesOK.of_noArc (by simpa [Ty.hasArc] using hok.2)) (fun s h => by cases h)
-      have hbor' : E.mode.isRoot = false → ∃ dep ∈ E.path, ∃ n0, RootNode m dep.root n0 ∧
-          Lands dep.kind (.node (.sum a b) c d es) n0 := fun h => by
+      have hbor' : E.mode.isRoot = false → ∃ dep ∈ E.path, Landed m dep (.node (.sum a b) c d es) := fun h => by
         have hb : E.mode = .bor := by cases hm : E.mode <;> simp_all [Mode.isRoot]
-        obtain ⟨dep, hd, n0, hr, _, hla⟩ := hbor hb
-        exact ⟨dep, hd, n0, hr, hla⟩
+        obtain ⟨dep, hd, _, hla⟩ := hbor hb
+        exact ⟨dep, hd, hla⟩
       exact derive_lands (hroot ·) hbor' (Or.inr (Or.inr ⟨rfl, _, Child.elem hmem, hs⟩))
         (by rw [hty]; rfl)
     | fn ms =>
@@ -1048,11 +1042,10 @@ theorem out_sat {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t :
         (ViewsOK.none (by simpa [Ty.holdsView] using hok.1.2) _ _)
         (NamesIn.nil _ (hwe.names_nil (by simpa [Ty.holdsView] using hok.1.2)))
         (SharesOK.of_noArc (by simpa [Ty.hasArc] using hok.2)) (fun s h => by cases h)
-      have hbor' : E.mode.isRoot = false → ∃ dep ∈ E.path, ∃ n0, RootNode m dep.root n0 ∧
-          Lands dep.kind (.node (.fn ms) c d es) n0 := fun h => by
+      have hbor' : E.mode.isRoot = false → ∃ dep ∈ E.path, Landed m dep (.node (.fn ms) c d es) := fun h => by
         have hb : E.mode = .bor := by cases hm : E.mode <;> simp_all [Mode.isRoot]
-        obtain ⟨dep, hd, n0, hr, _, hla⟩ := hbor hb
-        exact ⟨dep, hd, n0, hr, hla⟩
+        obtain ⟨dep, hd, _, hla⟩ := hbor hb
+        exact ⟨dep, hd, hla⟩
       exact derive_lands (hroot ·) hbor' (Or.inr (Or.inr ⟨rfl, _, Child.elem hmem, hs⟩))
         (by rw [hty]; rfl)
     | arc a => simp [Ty.hasArc] at hok
@@ -1086,8 +1079,8 @@ theorem out_comp {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (hy
       obtain ⟨hwx, hvx, hshx⟩ := hown hwT hvsT (hi.shares y E _ T hy hT' rfl rfl)
       have hpd : projDeps y E = [⟨y, .inner⟩] := by simp [projDeps, hos]
       refine lend_valOK hwx ((hi.pkgs y _ T hT' rfl).sub (hc.sub (Sub.refl _)))
-        (fun t' c d es hs => ⟨⟨y, .inner⟩, by simp [hpd], T, Or.inl ⟨T, hT', Top.refl _⟩,
-        Or.inr (Or.inr ⟨rfl, x, hc, hs⟩)⟩) hvx ((hi.held y E _ T hy hl hT' rfl).sub (names_child hc))
+        (fun t' c d es hs => ⟨⟨y, .inner⟩, by simp [hpd], Or.inl ⟨T, Or.inl ⟨T, hT', Top.refl _⟩,
+        Or.inr (Or.inr ⟨rfl, x, hc, hs⟩)⟩⟩) hvx ((hi.held y E _ T hy hl hT' rfl).sub (names_child hc))
         hshx (fun s _ => ?_)
       exact ViewsOK.mono (List.subset_append_right _ _) hvx
     · have hos : E.mode.ownSlot = false := by rw [hm]; rfl
@@ -1612,9 +1605,8 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       have hk' : k = .self ∧ t'.holdsView = false := by
         cases k <;> cases hh : t'.holdsView <;> simp_all [Eff.kills]
       obtain ⟨rfl, hhv⟩ := hk'
-      refine ⟨fun d' o l s ha => absurd (viewAt_iff.mp ha).choose_spec.choose_spec.choose_spec.2.1
-        (by simp), ?_⟩
-      exact Evolve.self_hkeep ⟨hT, by simp [m1], hwS⟩ hhv hshS
+      refine ⟨fun d' o l s ⟨_, _, hks, _⟩ => absurd rfl hks, ?_⟩
+      exact Evolve.self_hkeep ⟨hT, by simp [m1], hwS, rfl⟩ hhv hshS
     · refine ⟨⟨true, some (.node t' c d es)⟩, by simp [m1], by rw [killE_ty, hty]; exact hi.tyok (E := E) hy ▸ (by rw [hty]),
         ⟨by rw [killE_mode, hm]; rfl, fun _ => ⟨by rw [killE_ty, hty]; rfl,
           fun U hU => by cases hU; rw [killE_ty, hty]; exact hwS,
@@ -1699,11 +1691,13 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
           exact wf_append hwfH hwfH
         · obtain ⟨d', o', l', hv', dep, hd, ha⟩ := hvsT s _ (ViewIn.child hemem ViewIn.here)
           cases hv'
-          refine .view ⟨dep, hd, hkeepF dep hd ?_ _ _ _ s ha⟩
-          intro heq
           obtain ⟨r, k⟩ := dep
+          by_cases hks : k = .share
+          · subst hks; exact .view ⟨_, hd, vkeep_share (m := m) (m' := m.set y _) (BlkLe.refl _) r _ _ _ s ha⟩
+          refine .view ⟨_, hd, hkeepF _ hd ?_ _ _ _ s ha⟩
+          intro heq
           simp only at heq; subst heq
-          exact viewAt_not_self hT hsfT (ViewIn.child hemem ViewIn.here) ha
+          exact viewAt_not_self hT hsfT (ViewIn.child hemem ViewIn.here) hks ha
     | vec s =>
       cases hwe with
       | node hes =>

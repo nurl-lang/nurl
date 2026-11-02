@@ -39,11 +39,11 @@ theorem rootNode_owned {m : Mem} (hp : PayFree m) {r : Var} {n : Val} (h : RootN
 /-- A valid view is into a buffer of one of the thread's own trees. -/
 theorem viewAt_owned {m : Mem} (hp : PayFree m) {dep : Dep} {d o l : Nat} {t : Ty}
     (h : ViewAt m dep d o l t) : OwnedId m d := by
-  obtain ⟨n0, c, es, hr, hk, _, _⟩ := h
+  obtain ⟨c, es, _, hla, _, _⟩ := h
   have hd : d ∈ (Val.node t c d es).ids := by simp [Val.ids]
-  rcases hk with ⟨_, he⟩ | ⟨_, hb⟩
-  · rw [he] at hd; exact rootNode_owned hp hr d hd
-  · exact rootNode_owned hp hr d (Sub.ids (Below.sub hb) d hd)
+  rcases hla with ⟨n0, hr, hk⟩ | ⟨_, k, bl, hkb, hs⟩
+  · exact rootNode_owned hp hr d (Sub.ids hk.sub d hd)
+  · exact (hp.no_node hkb hs hd).elim
 
 theorem vecOf_owned {m : Mem} (hp : PayFree m) {x : Var} {t : Ty} {c d : Nat} {es : List Val}
     (h : VecOf m x t c d es) : OwnedId m c ∧ OwnedId m d := by

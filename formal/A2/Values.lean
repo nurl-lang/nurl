@@ -40,29 +40,6 @@ theorem MInv.mode_cases {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Ent
   | rootb => exact Or.inr (Or.inl rfl)
   | bor => exact Or.inr (Or.inr rfl)
 
-theorem hrefAt_iff {m : Mem} {dep : Dep} {c : Nat} {t : Ty} {H : List Dep} :
-    HrefAt m dep c t H ↔ ∃ n0 d es, RootNode m dep.root n0 ∧
-      Lands dep.kind (.node t c d es) n0 ∧
-      WFv (.vec t) (.node t c d es) ∧ ViewsOK m (.vec t) (.node t c d es) H ∧
-      NamesIn (.node t c d es) H ∧ SharesOK m (.vec t) (.node t c d es) := Iff.rfl
-
-theorem viewAt_iff {m : Mem} {dep : Dep} {d o l : Nat} {t : Ty} :
-    ViewAt m dep d o l t ↔ ∃ n0 c es, RootNode m dep.root n0 ∧ dep.kind ≠ .self ∧
-      Lands dep.kind (.node t c d es) n0 ∧ o + l ≤ es.length ∧ WFv (.vec t) (.node t c d es) := by
-  constructor
-  · rintro ⟨n0, c, es, hr, hk, hl, hw⟩
-    refine ⟨n0, c, es, hr, ?_, ?_, hl, hw⟩
-    · rcases hk with ⟨h, _⟩ | ⟨h, _⟩ <;> rw [h] <;> decide
-    · rcases hk with ⟨h1, h2⟩ | ⟨h1, h2⟩
-      · exact Or.inr (Or.inl ⟨h1, h2⟩)
-      · exact Or.inr (Or.inr ⟨h1, h2⟩)
-  · rintro ⟨n0, c, es, hr, hk, hl', hl, hw⟩
-    refine ⟨n0, c, es, hr, ?_, hl, hw⟩
-    rcases hl' with ⟨h1, _⟩ | ⟨h1, h2⟩ | ⟨h1, h2⟩
-    · exact absurd h1 hk
-    · exact Or.inl ⟨h1, h2⟩
-    · exact Or.inr ⟨h1, h2⟩
-
 /-- A3.1: an address of a value lying in an owned tree or a live payload is live. -/
 theorem HeapOK.inMem_alloc {m : Mem} (hh : HeapOK m) {n : Val} (h : InMem m n) :
     ∀ i ∈ n.ids, m.alloc i = true := by
@@ -78,8 +55,7 @@ theorem MInv.vec_node {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry
     ∃ c d es, VecOf m y t c d es ∧ WFv (.vec t) (.node t c d es) ∧
       ViewsOK m (.vec t) (.node t c d es) E.held ∧
       (E.mode.isRoot = true → RootNode m y (.node t c d es)) ∧
-      (E.mode = .bor → ∃ dep ∈ E.path, ∃ n0, RootNode m dep.root n0 ∧
-        Lands dep.kind (.node t c d es) n0) ∧
+      (E.mode = .bor → ∃ dep ∈ E.path, Landed m dep (.node t c d es)) ∧
       NamesIn (.node t c d es) E.held ∧ SharesOK m (.vec t) (.node t c d es) := by
   rcases hi.mode_cases hy with hm | hm | hm
   · have hos : E.mode.ownSlot = true := by rw [hm]; rfl
@@ -98,12 +74,12 @@ theorem MInv.vec_node {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry
     obtain ⟨v, hv, hok⟩ := hi.bor_val hy hl hos
     rw [ht] at hok
     obtain ⟨c, rfl, dep, hd, hh⟩ := valOK_vec.mp hok
-    obtain ⟨n0, d, es, hr, hla, hw, hvs, hns, hsh⟩ := hh
-    have hin := hr.owned.sub hla.sub
+    obtain ⟨d, es, hla, hw, hvs, hns, hsh⟩ := hh
+    have hin := hla.inMem
     have hna : NodeAt m c (.node t c d es) := hin.nodeAt rfl
     refine ⟨c, d, es, ⟨hi.heap.inMem_alloc hin c (by simp), hi.heap.inMem_alloc hin d (by simp),
       Or.inr ⟨hv, hna⟩⟩, hw, hvs,
-      fun _ => Or.inr (Or.inl ⟨_, c, hv, Top.refl _, hna⟩), fun _ => ⟨dep, hd, n0, hr, hla⟩, hns, hsh⟩
+      fun _ => Or.inr (Or.inl ⟨_, c, hv, Top.refl _, hna⟩), fun _ => ⟨dep, hd, hla⟩, hns, hsh⟩
 
 /-- The buffer a live slice binding views. -/
 theorem MInv.slice_node {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t : Ty}
@@ -111,8 +87,7 @@ theorem MInv.slice_node {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Ent
     ∃ d o l c es, m.st y = some ⟨false, some (.view d o l)⟩ ∧ DataAt m d (.node t c d es) ∧
       m.alloc d = true ∧ o + l ≤ es.length ∧ WFv (.vec t) (.node t c d es) ∧
       (E.mode.isRoot = true → RootNode m y (.node t c d es)) ∧
-      (E.mode = .bor → ∃ dep ∈ E.path, ∃ n0, RootNode m dep.root n0 ∧ dep.kind ≠ .self ∧
-        Lands dep.kind (.node t c d es) n0) := by
+      (E.mode = .bor → ∃ dep ∈ E.path, dep.kind ≠ .self ∧ Landed m dep (.node t c d es)) := by
   rcases hi.mode_cases hy with hm | hm | hm
   · have hos : E.mode.ownSlot = true := by rw [hm]; rfl
     obtain ⟨sl, _, _, _, hown, _⟩ := hi.slot y E hy
@@ -123,39 +98,60 @@ theorem MInv.slice_node {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Ent
     obtain ⟨v, hv, hok⟩ := hi.bor_val hy hl hos
     rw [ht] at hok
     obtain ⟨d, o, l, rfl, dep, hd, hh⟩ := valOK_slice.mp hok
-    obtain ⟨n0, c, es, hr, hk, hla, hlen, hw⟩ := viewAt_iff.mp hh
-    have hin := hr.owned.sub hla.sub
+    obtain ⟨c, es, hk, hla, hlen, hw⟩ := hh
+    have hin := hla.inMem
     have hda : DataAt m d (.node t c d es) := hin.dataAt rfl
     exact ⟨d, o, l, c, es, hv, hda, hi.heap.inMem_alloc hin d (by simp), hlen, hw,
-      fun _ => Or.inr (Or.inr ⟨_, d, o, l, hv, Top.refl _, hda⟩), fun _ => ⟨dep, hd, n0, hr, hk, hla⟩⟩
+      fun _ => Or.inr (Or.inr ⟨_, d, o, l, hv, Top.refl _, hda⟩), fun _ => ⟨dep, hd, hk, hla⟩⟩
 
 theorem lands_comp' {n0 n1 N : Val} {kp k : Kind} (hp : Lands kp n0 n1) (hk : Lands k N n0) :
     Lands (comp kp k) N n1 := lands_comp hp hk
 
+theorem InPay.sub {m : Mem} {n n' : Val} (h : InPay m n) (hs : Sub n' n) : InPay m n' := by
+  obtain ⟨k, bl, hk, h⟩ := h
+  exact ⟨k, bl, hk, hs.trans h⟩
+
+/-- What is reached inside a payload stays inside it. -/
+theorem comp_share_lands {k : Kind} {N n0 : Val} (hk : Lands k N n0) : comp .share k = .share := by
+  rcases hk with ⟨rfl, _⟩ | ⟨rfl, _⟩ | ⟨rfl, _⟩ <;> rfl
+
+/-- What lands in what a dependency lands, in way `k`, lands through it with
+    the composed kind. -/
+theorem Landed.comp {m : Mem} {dep : Dep} {N N' : Val} {k : Kind} (h : Landed m dep N)
+    (hk : Lands k N' N) : Landed m ⟨dep.root, comp dep.kind k⟩ N' := by
+  rcases h with ⟨n0, hr, hl⟩ | ⟨hs, hp⟩
+  · exact Or.inl ⟨n0, hr, lands_comp' hl hk⟩
+  · refine Or.inr ⟨?_, hp.sub hk.sub⟩
+    show A2.comp dep.kind k = .share
+    rw [hs]; exact comp_share_lands hk
+
 /-- A borrow taken from `y` in way `k` reaches memory through `derive y E k`. -/
 theorem derive_lands {m : Mem} {y : Var} {E : Entry} {N N' : Val} {k : Kind}
     (hroot : E.mode.isRoot = true → RootNode m y N)
-    (hbor : E.mode.isRoot = false → ∃ dep ∈ E.path, ∃ n0, RootNode m dep.root n0 ∧ Lands dep.kind N n0)
+    (hbor : E.mode.isRoot = false → ∃ dep ∈ E.path, Landed m dep N)
     (hk : Lands k N' N) (hrk : rootKind E.ty k = k) :
-    ∃ dep ∈ derive y E k, ∃ n0, RootNode m dep.root n0 ∧ Lands dep.kind N' n0 := by
+    ∃ dep ∈ derive y E k, Landed m dep N' := by
   unfold derive
   cases h : E.mode.isRoot with
   | true =>
     simp only [↓reduceIte, List.mem_singleton]
-    exact ⟨_, rfl, N, hroot h, by rw [hrk]; exact hk⟩
+    exact ⟨_, rfl, Or.inl ⟨N, hroot h, by rw [hrk]; exact hk⟩⟩
   | false =>
     simp only [Bool.false_eq_true, ↓reduceIte, List.mem_map]
-    obtain ⟨dep, hd, n0, hr, hl⟩ := hbor h
-    exact ⟨_, ⟨dep, hd, rfl⟩, n0, hr, lands_comp' hl hk⟩
+    obtain ⟨dep, hd, hla⟩ := hbor h
+    exact ⟨_, ⟨dep, hd, rfl⟩, hla.comp hk⟩
 
 /-! ### Agora #295: the node a change through a borrow finds -/
 
-/-- A live borrow of a `Vec` whose memory roots own their slots names a node
-    of the tree of one of them, reached as that dependency says; it is the
-    only node a step may find for it (`NodeOf`). -/
+/-- A live borrow of a `Vec` whose memory roots own their slots, none
+    through a share, names a node of the tree of one of them, reached as
+    that dependency says; it is the only node a step may find for it
+    (`NodeOf`). (A3.1: a node in a payload is reached only through a share,
+    `Landed`; so with no `.share` on the path, the node is in an owned tree.) -/
 theorem MInv.thru_owner {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {Ex : Entry} {t : Ty}
     (hx : Γ x = some Ex) (hmx : Ex.mode = .bor) (hl : Ex.live = true) (hty : Ex.ty = .vec t)
-    (hro : ∀ d ∈ memDeps Ex.path, ∃ Er, Γ d.root = some Er ∧ Er.mode.ownSlot = true) :
+    (hro : ∀ d ∈ memDeps Ex.path, ∃ Er, Γ d.root = some Er ∧ Er.mode.ownSlot = true)
+    (hnsh : ∀ d ∈ memDeps Ex.path, d.kind ≠ .share) :
     ∃ dep ∈ memDeps Ex.path, ∃ T n0 c d es,
       m.st x = some ⟨false, some (.href c)⟩ ∧ m.st dep.root = some ⟨true, some T⟩ ∧
       Top n0 T ∧ Lands dep.kind (.node t c d es) n0 ∧ HrefAt m dep c t Ex.held ∧
@@ -167,10 +163,9 @@ theorem MInv.thru_owner {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {Ex : En
   obtain ⟨v, hv, hok⟩ := hi.bor_val hx hl hos
   rw [hty] at hok
   obtain ⟨c, rfl, dep, hdp, hh⟩ := valOK_vec.mp hok
-  obtain ⟨n0, d, es, hr, hla, hw, hvs, hns, hsh⟩ := hh
-  have hdm : dep ∈ memDeps Ex.path := by
-    refine List.mem_filter.mpr ⟨hdp, ?_⟩
-    rcases hla with ⟨h, _⟩ | ⟨h, _⟩ | ⟨h, _⟩ <;> rw [h] <;> rfl
+  obtain ⟨d, es, hlan, hw, hvs, hns, hsh⟩ := hh
+  have hdm : dep ∈ memDeps Ex.path := List.mem_filter.mpr ⟨hdp, by simp [hlan.notName]⟩
+  obtain ⟨n0, hr, hla⟩ := hlan.root (hnsh dep hdm)
   obtain ⟨Er, hEr, hEro⟩ := hro dep hdm
   obtain ⟨sl, hsl, _, hso, _⟩ := hi.slot dep.root Er hEr
   have hsl1 : sl.own = true := by rw [hso, hEro]
@@ -183,7 +178,7 @@ theorem MInv.thru_owner {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {Ex : En
   have ha := hi.heap.alloc dep.root T hT
   have hno : NodeOf m x dep.root T t c d es :=
     ⟨(ha c (hsub.ids c (by simp))).1, (ha d (hsub.ids d (by simp))).1, hT, Or.inr ⟨hv, hsub⟩⟩
-  refine ⟨dep, hdm, T, n0, c, d, es, hv, hT, htop, hla, ⟨n0, d, es, hr, hla, hw, hvs, hns, hsh⟩, hw, hno,
+  refine ⟨dep, hdm, T, n0, c, d, es, hv, hT, htop, hla, ⟨d, es, hlan, hw, hvs, hns, hsh⟩, hw, hno,
     fun o T' t' c' d' es' hno' => ?_, hsh⟩
   obtain ⟨_, _, hT', hcase⟩ := hno'
   rcases hcase with ⟨rfl, _⟩ | ⟨hv', hsub'⟩

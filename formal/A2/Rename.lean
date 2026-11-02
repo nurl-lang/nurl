@@ -3031,10 +3031,11 @@ theorem editB_ren (h : S.OK) (hab : S.AbsOK Γa) (hR : S.R = [])
     intro d hd
     rw [hmem] at hd
     obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp hd
-    obtain ⟨_, hy0, Er, hEr, hlr, hcan, hds⟩ := hthru d0 hd0
+    obtain ⟨_, hy0, Er, hEr, hlr, hcan, hds, hsh⟩ := hthru d0 hd0
     have hrbr : Er.mode ≠ .rootb := by rcases hcan with h' | ⟨b, h', _⟩ <;> rw [h'] <;> simp
     refine ⟨h.Fcout _, fun y hy => ?_, S.liftE d0.root Er, by
-      show S.canon Γa1 (S.ρ d0.root) = _; rw [canon_ρ h, hEr]; rfl, by rw [liftE_live]; exact hlr, ?_, ?_⟩
+      show S.canon Γa1 (S.ρ d0.root) = _; rw [canon_ρ h, hEr]; rfl, by rw [liftE_live]; exact hlr, ?_, ?_,
+      by simpa [Dep.ren] using hsh⟩
     · rw [Edit.stored_rename] at hy
       obtain ⟨y0, hy0', rfl⟩ := Option.map_eq_some_iff.mp hy
       exact fun e => hy0 y0 hy0' (h.inj _ _ e)

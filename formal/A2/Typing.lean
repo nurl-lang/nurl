@@ -973,12 +973,20 @@ theorem thruDeps_bound {op : Edit} {Γ : Ctx} {tx : Ty} {P : List Dep} {d : Dep}
     each root `d.root` it reaches in memory, in the context after its
     argument is handed over: the root is not lent out, is not the value
     stored (`Edit.stored`), is live, allows its effect (`Edit.effAt`; so it
-    owns its slot), and that effect ends no view a destructor will read. -/
+    owns its slot), and that effect ends no view a destructor will read.
+    A3.1: no dependency is through a share (`Kind.share`): what such a
+    borrow reaches may lie in a block's payload, which nothing writes. -/
 def ThruOK (Γ1 : Ctx) (F : List Var) (op : Edit) (tx : Ty) (P : List Dep) : Prop :=
   ∀ d ∈ memDeps P, d.root ∉ F ∧ (∀ y, op.stored = some y → d.root ≠ y) ∧
     ∃ Er, Γ1 d.root = some Er ∧ Er.live = true ∧
       canDo Er.mode (op.effAt d.kind (decide (Er.ty = tx))) ∧
-      DtorSafe Γ1 (op.effAt d.kind (decide (Er.ty = tx))) false d.root
+      DtorSafe Γ1 (op.effAt d.kind (decide (Er.ty = tx))) false d.root ∧
+      d.kind ≠ .share
+
+theorem ThruOK.noShare {Γ1 : Ctx} {F : List Var} {op : Edit} {tx : Ty} {P : List Dep}
+    (h : ThruOK Γ1 F op tx P) : ∀ d ∈ memDeps P, d.kind ≠ .share := fun d hd => by
+  obtain ⟨_, _, _, _, _, _, _, h⟩ := h d hd
+  exact h
 
 /-- What a change of elements is handed: the value `vec_push` stores (as
     `PushArg` takes it; an element `Vec` moves), the integer expression a
