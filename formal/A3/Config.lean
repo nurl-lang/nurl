@@ -75,8 +75,10 @@ theorem CInv.raceFree {P : Prog} {C : Cfg} (h : CInv P C) : ¬ Race P C := by
   obtain ⟨aj, haj⟩ := part_of hlen hj
   obtain ⟨hoki, _⟩ := hok i ti ai hi hai
   obtain ⟨hokj, _⟩ := hok j tj aj hj haj
-  have h1 := touch_owned hti (m1 := ownView C ti ai) rfl (TypedAt.of_threadOK hoki)
-  have h2 := touch_owned htj (m1 := ownView C tj aj) rfl (TypedAt.of_threadOK hokj)
+  have h1 := touch_owned (m := C.view ti) (fun k bl hk => (hoki.blocksAt k bl hk).2.1) hti (m1 := ownView C ti ai) rfl
+    (TypedAt.of_threadOK hoki)
+  have h2 := touch_owned (m := C.view tj) (fun k bl hk => (hokj.blocksAt k bl hk).2.1) htj (m1 := ownView C tj aj) rfl
+    (TypedAt.of_threadOK hokj)
   have hai1 : ai a = true := ThreadOK.owned hoki a (h1.st_eq rfl)
   have haj1 : aj a = true := ThreadOK.owned hokj a (h2.st_eq rfl)
   rw [hdisj i j ai aj hij hai haj a hai1] at haj1

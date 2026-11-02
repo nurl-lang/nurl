@@ -51,13 +51,16 @@ inductive Repl (n n' : Val) : Val → Val → Prop
   | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {cs : List (Var × PMode × Ty)} {a a' : Val} :
       Repl n n' a a' → Repl n n' (.pkg fs te ms a cs) (.pkg fs te ms a' cs)
 
-/-- The node with control block `c`, found in an owned tree. -/
+/-- The node with control block `c`, found in an owned tree, or (A3.1) in a
+    live block's payload, which nothing writes. -/
 def NodeAt (m : Mem) (c : Nat) (n : Val) : Prop :=
-  ∃ x t, m.st x = some ⟨true, some t⟩ ∧ Sub n t ∧ ∃ ty d es, n = .node ty c d es
+  (∃ x t, m.st x = some ⟨true, some t⟩ ∧ Sub n t ∧ ∃ ty d es, n = .node ty c d es) ∨
+  (∃ k bl, m.blk k = some bl ∧ Sub n bl.pay ∧ ∃ ty d es, n = .node ty c d es)
 
 /-- The node whose element buffer is `d`, found in an owned tree. -/
 def DataAt (m : Mem) (d : Nat) (n : Val) : Prop :=
-  ∃ x t, m.st x = some ⟨true, some t⟩ ∧ Sub n t ∧ ∃ ty c es, n = .node ty c d es
+  (∃ x t, m.st x = some ⟨true, some t⟩ ∧ Sub n t ∧ ∃ ty c es, n = .node ty c d es) ∨
+  (∃ k bl, m.blk k = some bl ∧ Sub n bl.pay ∧ ∃ ty c es, n = .node ty c d es)
 
 -- Releasing a tree: each address must be live when it is freed.
 mutual

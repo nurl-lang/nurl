@@ -415,6 +415,15 @@ def projE (y : Var) (E : Entry) : Ty → Entry
   | .int => intE
   | t => ⟨t, .bor, true, projDeps y E ++ E.held, E.held, false, false⟩
 
+/-- A3.1: `arc_get y`'s payload, lent: a borrow through a share
+    (`Kind.share`) of `y`, which a borrowed share passes on (`derive`). It
+    ends with `y` like any borrow, and a change through a borrow refuses
+    it (`ThruOK`): what it reaches lies in a block's payload, which nothing
+    writes. -/
+def getE (y : Var) (E : Entry) : Ty → Entry
+  | .int => intE
+  | t => ⟨t, .bor, true, derive y E .share, E.held, false, false⟩
+
 /-- What an owned value holds: nothing, if its type holds no views (no view
     and no closure lies inside it, so what it was made from says nothing). -/
 def ownHeld (o : Bool) (t : Ty) (H : List Dep) : List Dep := if o && !t.holdsView then [] else H
@@ -436,6 +445,8 @@ def compE (E : Entry) : Ty → Entry
   cases t <;> rfl
 @[simp] theorem compE_dtor (E : Entry) (t : Ty) : (compE E t).dtor = false := by
   cases t <;> rfl
+@[simp] theorem getE_dtor (y : Var) (E : Entry) (t : Ty) : (getE y E t).dtor = false := by
+  cases t <;> rfl
 @[simp] theorem intE_dbind : intE.dbind = false := rfl
 @[simp] theorem elemE_dbind (y : Var) (E : Entry) (t : Ty) : (elemE y E t).dbind = false := by
   cases t <;> rfl
@@ -444,6 +455,8 @@ def compE (E : Entry) : Ty → Entry
 @[simp] theorem projE_dbind (y : Var) (E : Entry) (t : Ty) : (projE y E t).dbind = false := by
   cases t <;> rfl
 @[simp] theorem compE_dbind (E : Entry) (t : Ty) : (compE E t).dbind = false := by
+  cases t <;> rfl
+@[simp] theorem getE_dbind (y : Var) (E : Entry) (t : Ty) : (getE y E t).dbind = false := by
   cases t <;> rfl
 
 /-- The element type of a `Vec`. -/
@@ -562,12 +575,12 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
   | arcClone {a : Var} {E : Entry} {t : Ty} :
       Γ a = some E → E.live = true → E.ty = .arc t →
       RhsT Γ F (.arcClone a) ⟨.arc t, .own, true, [], [], false, false⟩ Γ
-  /-- A3.1: the payload, lent as a field is: a borrow rooted where `a` is
-      (`projE`), so it ends with `a` like any borrow. (A plain payload has no
-      handle, so no borrow lands in a block.) -/
+  /-- A3.1: the payload, lent through a share of `a` (`getE`), so it ends
+      with `a` like any borrow. (A plain payload has no handle, so no
+      borrow lands in a block yet.) -/
   | arcGet {a : Var} {E : Entry} {t : Ty} :
       Γ a = some E → E.live = true → E.ty = .arc t → t.plain = true →
-      RhsT Γ F (.arcGet a) (projE a E t) Γ
+      RhsT Γ F (.arcGet a) (getE a E t) Γ
 
 /-! ### Calls -/
 
@@ -960,12 +973,20 @@ theorem thruDeps_bound {op : Edit} {Γ : Ctx} {tx : Ty} {P : List Dep} {d : Dep}
     each root `d.root` it reaches in memory, in the context after its
     argument is handed over: the root is not lent out, is not the value
     stored (`Edit.stored`), is live, allows its effect (`Edit.effAt`; so it
-    owns its slot), and that effect ends no view a destructor will read. -/
+    owns its slot), and that effect ends no view a destructor will read.
+    A3.1: no dependency is through a share (`Kind.share`): what such a
+    borrow reaches may lie in a block's payload, which nothing writes. -/
 def ThruOK (Γ1 : Ctx) (F : List Var) (op : Edit) (tx : Ty) (P : List Dep) : Prop :=
   ∀ d ∈ memDeps P, d.root ∉ F ∧ (∀ y, op.stored = some y → d.root ≠ y) ∧
     ∃ Er, Γ1 d.root = some Er ∧ Er.live = true ∧
       canDo Er.mode (op.effAt d.kind (decide (Er.ty = tx))) ∧
-      DtorSafe Γ1 (op.effAt d.kind (decide (Er.ty = tx))) false d.root
+      DtorSafe Γ1 (op.effAt d.kind (decide (Er.ty = tx))) false d.root ∧
+      d.kind ≠ .share
+
+theorem ThruOK.noShare {Γ1 : Ctx} {F : List Var} {op : Edit} {tx : Ty} {P : List Dep}
+    (h : ThruOK Γ1 F op tx P) : ∀ d ∈ memDeps P, d.kind ≠ .share := fun d hd => by
+  obtain ⟨_, _, _, _, _, _, _, h⟩ := h d hd
+  exact h
 
 /-- What a change of elements is handed: the value `vec_push` stores (as
     `PushArg` takes it; an element `Vec` moves), the integer expression a

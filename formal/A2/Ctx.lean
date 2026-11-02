@@ -61,6 +61,19 @@ theorem Weaker.isSome {Γ Γ' : Ctx} (h : Weaker Γ Γ') (v : Var) : (Γ v).isSo
 
 /-! ### Validity is monotone in what a value may depend on. -/
 
+/-- A value lands through a dependency on memory, never through a name. -/
+theorem Landed.notName {m : Mem} {dep : Dep} {n : Val} (h : Landed m dep n) :
+    dep.kind.isName = false := by
+  rcases h with ⟨_, _, hk⟩ | ⟨hk, _⟩
+  · rcases hk with ⟨hk, _⟩ | ⟨hk, _⟩ | ⟨hk, _⟩ <;> rw [hk] <;> rfl
+  · rw [hk]; rfl
+
+theorem Landed.bound {m : Mem} {dep : Dep} {n : Val} (h : Landed m dep n) :
+    dep.kind.bound = .none := by
+  rcases h with ⟨_, _, hk⟩ | ⟨hk, _⟩
+  · rcases hk with ⟨hk, _⟩ | ⟨hk, _⟩ | ⟨hk, _⟩ <;> rw [hk] <;> rfl
+  · rw [hk]; rfl
+
 theorem ViewsOK.mono {m : Mem} {τ : Ty} {T : Val} {H H' : List Dep} (hs : H ⊆ H')
     (h : ViewsOK m τ T H) : ViewsOK m τ T H' := by
   intro s v hv
@@ -73,8 +86,8 @@ theorem ViewsOK.memDeps {m : Mem} {τ : Ty} {T : Val} {H : List Dep} (h : ViewsO
   intro s v hv
   obtain ⟨d, o, l, rfl, dep, hd, ha⟩ := h s v hv
   refine ⟨d, o, l, rfl, dep, List.mem_filter.mpr ⟨hd, ?_⟩, ha⟩
-  obtain ⟨_, _, _, _, hk, _⟩ := ha
-  rcases hk with ⟨hk, _⟩ | ⟨hk, _⟩ <;> rw [hk] <;> rfl
+  obtain ⟨_, _, _, hla, _⟩ := ha
+  simp [hla.notName]
 
 /-- A view is valid only through a dependency that ends views, never through
     a name: what a value's views need, it needs of `readers`. -/
@@ -83,16 +96,16 @@ theorem ViewsOK.readers {m : Mem} {τ : Ty} {T : Val} {H : List Dep} (h : ViewsO
   intro s v hv
   obtain ⟨d, o, l, rfl, dep, hd, ha⟩ := h s v hv
   refine ⟨d, o, l, rfl, dep, mem_readers.mpr ⟨hd, ?_⟩, ha⟩
-  obtain ⟨n0, c, es, _, hk, _⟩ := ha
-  rcases hk with ⟨hk, _⟩ | ⟨hk, _⟩ <;> simp [hk, Kind.bound]
+  obtain ⟨_, _, _, hla, _⟩ := ha
+  exact hla.bound
 
 theorem NamesIn.mono {T : Val} {H H' : List Dep} (h : NamesIn T H) (hs : H ⊆ H') : NamesIn T H' :=
   fun c hc => hs (h c hc)
 
 theorem HrefAt.mono {m : Mem} {dep : Dep} {c : Nat} {t : Ty} {H H' : List Dep} (hs : H ⊆ H')
     (h : HrefAt m dep c t H) : HrefAt m dep c t H' := by
-  obtain ⟨n0, d, es, hr, hk, hw, hv, hn, hsh⟩ := h
-  exact ⟨n0, d, es, hr, hk, hw, hv.mono hs, hn.mono hs, hsh⟩
+  obtain ⟨d, es, hla, hw, hv, hn, hsh⟩ := h
+  exact ⟨d, es, hla, hw, hv.mono hs, hn.mono hs, hsh⟩
 
 theorem ValOK.mono' {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m τ v P H) :
     ∀ {P' H' : List Dep}, P ⊆ P' → H ⊆ H' → ValOK m τ v P' H' := by
@@ -127,15 +140,13 @@ theorem ValOK.onlyReaders {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : Va
   | int => intro _ _; exact .int
   | href h =>
     intro P' hp
-    obtain ⟨dep, hd, n0, d, es, hr, hk, hrest⟩ := h
-    refine .href ⟨dep, hp dep hd ?_, n0, d, es, hr, hk, hrest⟩
-    rcases hk with ⟨hk, _⟩ | ⟨hk, _⟩ | ⟨hk, _⟩ <;> simp [hk, Kind.bound]
+    obtain ⟨dep, hd, d, es, hla, hrest⟩ := h
+    exact .href ⟨dep, hp dep hd hla.bound, d, es, hla, hrest⟩
   | view h =>
     intro P' hp
     obtain ⟨dep, hd, ha⟩ := h
-    refine .view ⟨dep, hp dep hd ?_, ha⟩
-    obtain ⟨_, _, _, _, hk, _⟩ := ha
-    rcases hk with ⟨hk, _⟩ | ⟨hk, _⟩ <;> simp [hk, Kind.bound]
+    obtain ⟨c, es, hks, hla, hrest⟩ := ha
+    exact .view ⟨dep, hp dep hd hla.bound, c, es, hks, hla, hrest⟩
   | pair _ _ ihx ihy => intro P' hp; exact .pair (ihx (app hp)) (ihy (app hp))
   | inl _ ih => intro P' hp; exact .inl (ih (app hp))
   | inr _ ih => intro P' hp; exact .inr (ih (app hp))

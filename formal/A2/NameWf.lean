@@ -215,6 +215,13 @@ theorem projE_named {Γ : Ctx} {y : Var} {E : Entry} (hN : NameOK Γ E) (t : Ty)
     | (show DepsNamed Γ ((projDeps y E ++ E.held) ++ E.held)
        exact ((projDeps_named hN).append hN.held).append hN.held)
 
+theorem getE_named {Γ : Ctx} {y : Var} {E : Entry} (hN : NameOK Γ E) (t : Ty) :
+    NameOK Γ (getE y E t) := by
+  cases t <;> first
+    | (show DepsNamed Γ ([] ++ []); exact DepsNamed.nil _)
+    | (show DepsNamed Γ (derive y E .share ++ E.held)
+       exact (derive_named hN rfl).append hN.held)
+
 /-- A right-hand side keeps what contexts hold by name valid, and so is what
     it hands over. -/
 theorem RhsT.names {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT Γ F r E Γ1)
@@ -309,7 +316,7 @@ theorem RhsT.names {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : Rhs
     exact ⟨hn1, fun _ _ => DepsNamed.nil _, ⟨_, hk⟩⟩
   | arcClone _ _ _ => exact ⟨hn, fun _ _ => DepsNamed.nil _, ⟨[], Keeps.refl Γ []⟩⟩
   | arcGet hy hl ht _ =>
-    exact ⟨hn, fun _ _ => projE_named (hn _ _ hy hl (Or.inl (by rw [ht]; simp))) _, ⟨[], Keeps.refl Γ []⟩⟩
+    exact ⟨hn, fun _ _ => getE_named (hn _ _ hy hl (Or.inl (by rw [ht]; simp))) _, ⟨[], Keeps.refl Γ []⟩⟩
 
 /-! ### Calls -/
 

@@ -240,12 +240,12 @@ theorem progress_editB {P : Prog} {m : Mem} {Γ Γ1 : Ctx} {F : List Var} (hi : 
   | push hy hly htyy hpa =>
     obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly
     obtain ⟨post, _⟩ := push_take hi hanch hy hly htyy hpa htk
-    obtain ⟨_, _, _, _, c, d, es, _, _, _, _, _, _, hno, _⟩ := post.inv.thru_owner hx1 hmx hl hty hro
+    obtain ⟨_, _, _, _, c, d, es, _, _, _, _, _, _, hno, _⟩ := post.inv.thru_owner hx1 hmx hl hty hro hthru.noShare
     obtain ⟨T', hr⟩ := Repl.exists hno.sub (.node t c d (es ++ [v]))
     exact ⟨_, Step.editPush htk hno hr⟩
   | trunc hie =>
     obtain ⟨n, hev⟩ := eval_exists hi hie
-    obtain ⟨dep, _, T, _, c, d, es, _, hT, _, _, _, hw, hno, _⟩ := hi.thru_owner hx1 hmx hl hty hro
+    obtain ⟨dep, _, T, _, c, d, es, _, hT, _, _, _, hw, hno, _⟩ := hi.thru_owner hx1 hmx hl hty hro hthru.noShare
     have hsub := hno.sub
     have hndT : (Val.node t c d es).ids.Nodup := hsub.nodup (hi.heap.nodup _ _ hT)
     have hnd : (idsL (es.drop n)).Nodup := by
@@ -265,7 +265,7 @@ theorem progress_editB {P : Prog} {m : Mem} {Γ Γ1 : Ctx} {F : List Var} (hi : 
     obtain ⟨n, hev⟩ := eval_exists hi hie
     obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly
     obtain ⟨post, hp⟩ := push_take hi hanch hy hly htyy hpa htk
-    obtain ⟨_, _, T, _, c, d, es, _, hT, _, _, _, hw, hno, _⟩ := post.inv.thru_owner hx1 hmx hl hty hro
+    obtain ⟨_, _, T, _, c, d, es, _, hT, _, _, _, hw, hno, _⟩ := post.inv.thru_owner hx1 hmx hl hty hro hthru.noShare
     by_cases hn : n < es.length
     · -- the old element is freed
       have hsn : Sub es[n] T := (Sub.child (List.getElem_mem hn) (Sub.refl _)).trans hno.sub

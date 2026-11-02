@@ -25,15 +25,19 @@ theorem HeapOK.relabel {m m' : Mem} (hh : HeapOK m) (ha : m'.alloc = m.alloc) (h
 /-- A root whose slot is unchanged reaches the same memory, as long as every
     owned tree is still owned by someone. -/
 theorem rootKeep_move {m m' : Mem} (hown : ∀ o T, OwnedAt m o T → ∃ o', OwnedAt m' o' T) {r : Var}
-    (hr : m'.st r = m.st r) : RootKeep m m' r := by
+    (hr : m'.st r = m.st r) (hb : BlkLe m.blk m'.blk := by exact fun _ _ h => h) : RootKeep m m' r := by
+  have hin : ∀ n, InMem m n → InMem m' n := fun n h => by
+    rcases h with ⟨o, T, hT, hs⟩ | ⟨k, bl, hk, hs⟩
+    · obtain ⟨o2, h2⟩ := hown o T hT
+      exact Or.inl ⟨o2, T, h2, hs⟩
+    · exact Or.inr ⟨k, bl, hb k bl hk, hs⟩
   intro n hn
-  rcases hn with ⟨T0, hn, ht⟩ | ⟨v, c, hc, ht, o, T, hT, hs, hnode⟩ |
-      ⟨v, d, o', l, hc, ht, o, T, hT, hs, hdata⟩
+  rcases hn with ⟨T0, hn, ht⟩ | ⟨v, c, hc, ht, hnode⟩ | ⟨v, d, o', l, hc, ht, hdata⟩
   · exact Or.inl ⟨T0, by rw [hr]; exact hn, ht⟩
-  · obtain ⟨o2, h2⟩ := hown o T hT
-    exact Or.inr (Or.inl ⟨v, c, by rw [hr]; exact hc, ht, o2, T, h2, hs, hnode⟩)
-  · obtain ⟨o2, h2⟩ := hown o T hT
-    exact Or.inr (Or.inr ⟨v, d, o', l, by rw [hr]; exact hc, ht, o2, T, h2, hs, hdata⟩)
+  · obtain ⟨t, d, es, rfl⟩ := hnode.eq
+    exact Or.inr (Or.inl ⟨v, c, by rw [hr]; exact hc, ht, (hin _ hnode.inMem).nodeAt rfl⟩)
+  · obtain ⟨t, c, es, rfl⟩ := hdata.eq
+    exact Or.inr (Or.inr ⟨v, d, o', l, by rw [hr]; exact hc, ht, (hin _ hdata.inMem).dataAt rfl⟩)
 
 theorem SlotOK.clean {m : Mem} {E : Entry} {sl : Slot} (h : SlotOK m E sl) : SlotOK m E.clean sl := by
   unfold Entry.clean
@@ -254,7 +258,7 @@ theorem heap (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
 theorem rootKeep (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
     (hb : BindParams m fn.params args m.nv 0 m1) {r : Var} (hu : Untouched fn args m.nv x r) :
     RootKeep m (callMem m m1 fn x) r :=
-  rootKeep_move (fun _ _ hT => h.own_dst hi hb hT) (h.st_other hb hu)
+  rootKeep_move (fun _ _ hT => h.own_dst hi hb hT) (h.st_other hb hu) (BlkLe.of_eq hb.blk)
 
 theorem callPe_live (Γ : Ctx) (ps : List (PMode × Ty)) (args : List Var) (v : Var) :
     (callPe Γ ps args v).live = true := by
@@ -364,7 +368,7 @@ theorem keep_R (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
     ∀ dep ∈ allKinds (callR Γ args), VKeep m (callMem m m1 fn x) dep ∧ HKeep m (callMem m m1 fn x) dep := by
   intro dep hd
   have hk := h.rootKeep hi hb (h.R_untouched (RSetup.mem_allKinds hd))
-  exact ⟨hk.vkeep, hk.hkeep⟩
+  exact ⟨hk.vkeep (BlkLe.of_eq hb.blk), hk.hkeep⟩
 
 /-- What the arguments hold is lent out for the call (views), or held by name. -/
 theorem keep_A (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
@@ -457,8 +461,8 @@ theorem slot_inp (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
       have hd : derive (args.getD k 0) Ea .self = [⟨args.getD k 0, rootKind Ea.ty .self⟩] := by
         simp [derive, hm, Mode.isRoot]
       rw [hd]
-      refine lend_valOK' hw (hi.pkgs _ _ T hT rfl) (fun t c d es ht => ⟨_, List.mem_singleton_self _, _,
-        Or.inl ⟨T, hT, ht⟩, lands_rootKind_self _ _⟩) hvs (hi.held _ Ea _ T hEa hl hT rfl)
+      refine lend_valOK' hw (hi.pkgs _ _ T hT rfl) (fun t c d es ht => ⟨_, List.mem_singleton_self _,
+        Or.inl ⟨_, Or.inl ⟨T, hT, ht⟩, lands_rootKind_self _ _⟩⟩) hvs (hi.held _ Ea _ T hEa hl hT rfl)
         (hi.shares _ Ea _ T hEa hT rfl rfl) (fun s hs => ?_)
       rw [hs] at hown'; cases hown'
     · obtain ⟨v, hv, _⟩ := hi.bor_val hEa hl (by rw [hm]; rfl)
@@ -500,7 +504,7 @@ theorem slot_inp (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
       | name b t => exact ⟨vkeep_name _ _ r b t, hkeep_name _ _ r b t⟩
       | _ =>
         have hk' := h.rootKeep hi hb (hu _ (hdep rfl))
-        exact ⟨hk'.vkeep, hk'.hkeep⟩
+        exact ⟨hk'.vkeep (BlkLe.of_eq hb.blk), hk'.hkeep⟩
     have hok1 := hok0.keep (fun dep hd => hkeep dep fun hdn => ?_) (fun dep hd => hkeep dep fun hdn => ?_)
       hb.blk
     · cases hf : Ea.ty.hasFn
@@ -612,7 +616,7 @@ theorem slot_frame (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
         · exact Or.inl fun ht => hcl ⟨fun hf => hrb (hrootb hf), Or.inl (by rw [ht0]; exact ht)⟩
       have hd0 : dep ∈ E0.vdeps := by unfold Entry.vdeps at hd ⊢; rwa [← hm0, ← hp0, ← hh0]
       obtain ⟨Er, hEr, _⟩ := hi.wf y E0 h0 (hsv (hl2 hl).1).1 hn dep.root (List.mem_map_of_mem hd0)
-      refine (fun hk => ⟨hk.vkeep, hk.hkeep⟩) (h.rootKeep hi hb ?_)
+      refine (fun hk => ⟨hk.vkeep (BlkLe.of_eq hb.blk), hk.hkeep⟩) (h.rootKeep hi hb ?_)
       refine h.untouched_lt (h.domlt _ _ hEr) (fun e => by rw [e, h.fresh] at hEr; cases hEr) ?_
       intro k t hk he
       have hsk := ((hsv (hl2 hl).1).2 ((.sink, t), args.getD k 0)
@@ -709,7 +713,7 @@ theorem armed_frame (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem
     have hnm : dep.kind.isName = false := by simpa using hdm'.2
     have hdv : dep ∈ E0.vdeps := by unfold Entry.vdeps; exact List.mem_append_right _ hdm'.1
     obtain ⟨Er, hEr, _⟩ := hi.wf.dtor y E0 h0 hd hos (Or.inl hnint) dep hdv hnm
-    refine (h.rootKeep hi hb ?_).vkeep
+    refine (h.rootKeep hi hb ?_).vkeep (BlkLe.of_eq hb.blk)
     refine h.untouched_lt (h.domlt _ _ hEr) (fun e => by rw [e, h.fresh] at hEr; cases hEr) ?_
     intro k t hk he
     have hds := (h.dsafe.1 k (lt_of_get hk)).1 (by rw [get_of hk])
