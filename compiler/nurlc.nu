@@ -1740,6 +1740,9 @@ unsafe @ agg_field_count i syms s ot → i {
 // (gen_let_or_struct → gen_block_expr, consumed at the block's `{`).
 : ~ i g_blk_scalar_let 0
 : ~ s g_clo_scan_assigned ``
+// …and the outer bindings it reads (not only stores into): agora #358.
+: ~ s g_clo_scan_read ``
+: ~ s g_clo_read ``
 // The outer bindings the closure being built stores a FIELD of (`= . w f
 // …`, `= . . h w f …`): captured by reference like an assigned one, so the
 // store lands on the binding and not on a copy in the env (agora #356). Kept
@@ -15689,21 +15692,6 @@ unsafe @ gen_call i lex i syms i cg → s {
                     } {}
                 } }
         } {}
-        // A closure called with a binding it gives a new value by name (a
-        // capture it assigns, `= o …`, or a field of it): inside, the
-        // parameter and the capture are one value, and the assignment
-        // releases what the parameter still is — as `( put x x )` with
-        // put's `inout` (A2: callc's premise that no argument is a binding
-        // the package changes by name; agora #339).
-        ? & & != 0 g_borrowck __callee_shadowed | ( is_ident_tok bck_arg_tt ) == bck_arg_tt TT_DOT {
-            : s __asg ( nurl_sym_get2 syms fname `__closure_assigns` )
-            ? != 0 ( nurl_str_len __asg ) {
-                : s __an ? == bck_arg_tt TT_DOT ? ( is_ident_tok ( nurl_lex_peek_type lex ) ) ( nurl_lex_peek_val lex ) `` bck_arg_val
-                ? & != 0 ( nurl_str_len __an ) ( str_contains_word __asg __an ) {
-                    ( die lex ( nurl_str_cat4 ( nurl_str_cat3 `'` __an `' is passed to '` ) ( nurl_str_cat4 fname `', a closure that gives '` __an `' a new value by name — inside, the parameter and the capture are one value, and the assignment releases what the parameter still is. Pass a copy that owns its data (string_from, mem_dup), or let the closure take '` ) __an `' as an inout parameter instead of capturing it.` ) )
-                } {}
-            } {}
-        } {}
         // Exclusive-access check. A bare-identifier argument that is
         // mutably borrowed (`inout`) here must not be aliased by
         // another bare-identifier argument of the SAME call (whether
@@ -17227,6 +17215,21 @@ unsafe @ gen_call i lex i syms i cg → s {
         // A closure handed to a function: one of the closures its parameter
         // may be (__clo_nodes_close).
         ? ! __callee_shadowed { ( __clo_arg_note syms call_name arg_idx bck_arg_tt bck_arg_val at ) } {}
+        // A closure called with a binding it gives a new value by name (a
+        // capture it assigns, `= o …`, or a field of it), as the argument —
+        // the binding, or a field of it that needs dropping: inside, the
+        // parameter and the capture are one value, and the assignment
+        // releases what the parameter still is — as `( put x x )` with
+        // put's `inout` (A2: callc's premise that no argument is a binding
+        // the package changes by name; agora #339). A number or a flag is
+        // copied in: nothing is released.
+        ? & & & != 0 g_borrowck __callee_shadowed | ( is_ident_tok bck_arg_tt ) != 0 ( nurl_str_len arg_froot ) | ( __is_handle_ty at ) ( __type_needs_drop at syms ) {
+            : s __asg ( nurl_str_cat3 ( nurl_sym_get2 syms fname `__closure_assigns` ) ` ` ( nurl_sym_get2 syms fname `__closure_fldroots` ) )
+            : s __an ? ( is_ident_tok bck_arg_tt ) ( nurl_str_cat bck_arg_val `` ) ( __path_root_name arg_froot )
+            ? & > ( nurl_str_len __asg ) 1 ( str_contains_word __asg __an ) {
+                ( die lex ( nurl_str_cat4 ( nurl_str_cat3 `'` __an `' is passed to '` ) ( nurl_str_cat4 fname `', a closure that gives '` __an `' a new value by name — inside, the parameter and the capture are one value, and the assignment releases what the parameter still is. Pass a copy that owns its data (string_from, mem_dup), or let the closure take '` ) __an `' as an inout parameter instead of capturing it.` ) )
+            } {}
+        } {}
         // (…and a closure value's: its node answers, agora #359.)
         : b __row_callee | | summary_callee & __clo_io_call is_inout_arg != 0 ( nurl_str_len __clo_node )
         : s __rc ? != 0 ( nurl_str_len __clo_node ) __clo_node call_name
@@ -22093,7 +22096,7 @@ unsafe @ gen_match i lex i syms i cg → s {
     }
     = rest ( nurl_str_cat effs `` )
     ~ != 0 ( nurl_str_len rest ) {
-        : s e ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s e ( __eff_plain ( str_first_word rest ) ) = rest ( str_skip_word rest )
         : i c1 ( nurl_str_find e `:` )
         : s nm ( nurl_str_slice e 0 c1 )
         : s tail ( nurl_str_slice e + c1 1 - - ( nurl_str_len e ) c1 1 )
@@ -27591,7 +27594,10 @@ unsafe @ __clo_effect_note s name s callee i aix → v {
     ? == 0 ( nurl_str_len g_clo_caps_now ) { ^ } {}
     : i dot ( nurl_str_find name `.` )
     : s root ? > dot 0 ( nurl_str_slice name 0 dot ) ( nurl_str_cat name `` )
-    // (A body local read out of a capture: the capture it reaches.)
+    // (A body local read out of a capture: the capture it reaches — not by
+    // being given a new value itself, `@assign`, which releases nothing of
+    // the capture.)
+    ? & & & ! ( str_contains_word g_clo_caps_now root ) != 0 ( nurl_str_len g_clo_deriv ) ( seq callee `@assign` ) < dot 0 { ^ } {}
     ? & ! ( str_contains_word g_clo_caps_now root ) != 0 ( nurl_str_len g_clo_deriv ) {
         : s dc ( __clo_deriv_caps root )
         : ~ s dr ( bck_swap_char dc 44 32 )
@@ -27619,15 +27625,27 @@ unsafe @ __clo_effect_note_lent s name s callee i aix → v {
     = g_closure_effects ? == 0 ( nurl_str_len g_closure_effects ) ( nurl_str_cat e `` ) ( nurl_str_cat3 g_closure_effects ` ` e )
 }
 
-// The captures body local `name` was read out of (g_clo_deriv), `,`-joined.
+// The captures body local `name` was read out of (g_clo_deriv), `,`-joined:
+// every value it was given, as __pderiv_params unions them.
 @ __clo_deriv_caps s name → s {
     : s key ( nurl_str_cat name `=` )
     : ~ s rest ( nurl_str_cat g_clo_deriv `` )
+    : ~ s out ``
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest ) = rest ( str_skip_word rest )
-        ? != 0 ( nurl_str_starts w key ) { ^ ( nurl_str_slice w ( nurl_str_len key ) - ( nurl_str_len w ) ( nurl_str_len key ) ) } {}
+        ? != 0 ( nurl_str_starts w key ) {
+            = out ( __word_union out ( bck_swap_char ( nurl_str_slice w ( nurl_str_len key ) - ( nurl_str_len w ) ( nurl_str_len key ) ) 44 32 ) )
+        } {}
     }
-    ^ ( nurl_str_cat `` `` )
+    ^ ( bck_swap_char out 32 44 )
+}
+
+// A closure effect without its `~` mark (a value lent out of the capture,
+// __clo_effect_note_lent): what the readers other than the walk's replay
+// ask of it is the capture's.
+@ __eff_plain s e → s {
+    ? & > ( nurl_str_len e ) 1 == ( nurl_str_get e 0 ) 126 { ^ ( nurl_str_slice e 1 - ( nurl_str_len e ) 1 ) } {}
+    ^ ( nurl_str_cat e `` )
 }
 
 // In a closure body, handle local `name` (type `vt`) given a value read out
@@ -32906,7 +32924,16 @@ unsafe @ __bck_try_exit_check s st i line → v {
                         = g_bck_cv_leaf ? | == 0 ( nurl_str_len vcc ) ( seq vcc `v` ) 0 1
                         : s vs ? vbuf ( bck_sx_arg_sources st ( bck_field rec 8 ) ) ( __src_drop_handles ( bck_sx_sources st ( bck_field rec 8 ) -1 ) )
                         = g_bck_cv_leaf 0
-                        ? & & != 0 ( nurl_str_len vcc ) | ( seq vs `*` ) != 0 ( nurl_str_len ( __src_plain vs ) ) | ! ( seq vcc `v` ) ( __srcs_any_capture st vs ) {
+                        // (…a plain parameter's: a capture's view, stored whole
+                        // or not — the leaves a capture or its local stands
+                        // for, asked as for a capture target.)
+                        : ~ s vsc ``
+                        ? ( seq vcc `v` ) {
+                            = g_bck_cv_leaf 1
+                            = vsc ? vbuf ( bck_sx_arg_sources st ( bck_field rec 8 ) ) ( __src_drop_handles ( bck_sx_sources st ( bck_field rec 8 ) -1 ) )
+                            = g_bck_cv_leaf 0
+                        } {}
+                        ? & != 0 ( nurl_str_len vcc ) ? ( seq vcc `v` ) | ( __srcs_any_capture st vs ) ( __srcs_any_capture st vsc ) | ( seq vs `*` ) != 0 ( nurl_str_len ( __src_plain vs ) ) {
                             ( bck_clo_cap_view_diag ( bck_path_root ( nurl_str_to_int vc ) ) vs ( bck_field_int rec 3 ) )
                         } {}
                         // (A plain parameter, `v`: its caller's storage, given
@@ -33999,7 +34026,7 @@ unsafe @ bck_sx_is_id s e → b {
     : ~ s out ( nurl_str_cat routes `` )
     : ~ s rest ( nurl_str_cat effs `` )
     ~ != 0 ( nurl_str_len rest ) {
-        : s e ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s e ( __eff_plain ( str_first_word rest ) ) = rest ( str_skip_word rest )
         : s w ( nurl_str_cat3 ( nurl_str_int idx ) `=` e )
         = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat w `` ) ( nurl_str_cat3 out ` ` w )
     }
@@ -38178,7 +38205,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         ( nurl_sym_def syms `__last_closure_env__` `` )
         ( __clo_tmp_set `` )
         ( nurl_sym_def syms `__last_env_of__` `` )
-        ( nurl_sym_def syms `__last_closure_caps__` `` ) ( nurl_sym_def syms `__last_closure_frees__` `` ) ( nurl_sym_def syms `__last_closure_effects__` `` ) ( nurl_sym_def syms `__last_closure_assigns__` `` )
+        ( nurl_sym_def syms `__last_closure_caps__` `` ) ( nurl_sym_def syms `__last_closure_frees__` `` ) ( nurl_sym_def syms `__last_closure_effects__` `` ) ( nurl_sym_def syms `__last_closure_assigns__` `` ) ( nurl_sym_def syms `__last_closure_fldroots__` `` )
         ( nurl_sym_def syms `__last_slice_owned__` `` )
         ( nurl_sym_def syms `__last_phi_idents__` `` )
         ( nurl_sym_def syms `__last_phi_cause__` `` )
@@ -38307,7 +38334,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         { ( nurl_sym_def syms ( nurl_str_cat name `__closure_caps` ) rhs_closure_caps )
             ( nurl_sym_def syms ( nurl_str_cat name `__closure_frees` ) ( nurl_sym_get syms `__last_closure_frees__` ) )
             ( nurl_sym_def syms ( nurl_str_cat name `__closure_effects` ) ( nurl_sym_get syms `__last_closure_effects__` ) )
-            ( nurl_sym_def syms ( nurl_str_cat name `__closure_assigns` ) ( nurl_sym_get syms `__last_closure_assigns__` ) )
+            ( nurl_sym_def syms ( nurl_str_cat name `__closure_assigns` ) ( nurl_sym_get syms `__last_closure_assigns__` ) ) ( nurl_sym_def syms ( nurl_str_cat name `__closure_fldroots` ) ( nurl_sym_get syms `__last_closure_fldroots__` ) )
             ( bck_add_cap_name name ) }
         { ( bck_clear_cap_name syms name ) }
         ( __clo_bind_cs syms name vt bck_rhs_tt bck_rhs_val F )
@@ -38561,7 +38588,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             ( nurl_sym_def syms `__last_closure_env__` `` )
             ( __clo_tmp_set `` )
             ( nurl_sym_def syms `__last_env_of__` `` )
-            ( nurl_sym_def syms `__last_closure_caps__` `` ) ( nurl_sym_def syms `__last_closure_frees__` `` ) ( nurl_sym_def syms `__last_closure_effects__` `` ) ( nurl_sym_def syms `__last_closure_assigns__` `` )
+            ( nurl_sym_def syms `__last_closure_caps__` `` ) ( nurl_sym_def syms `__last_closure_frees__` `` ) ( nurl_sym_def syms `__last_closure_effects__` `` ) ( nurl_sym_def syms `__last_closure_assigns__` `` ) ( nurl_sym_def syms `__last_closure_fldroots__` `` )
             ( nurl_sym_def syms `__last_slice_owned__` `` )
             ( nurl_sym_def syms `__last_phi_idents__` `` )
             ( nurl_sym_def syms `__last_phi_cause__` `` )
@@ -38672,7 +38699,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             { ( nurl_sym_def syms ( nurl_str_cat name `__closure_caps` ) rhs_closure_caps )
                 ( nurl_sym_def syms ( nurl_str_cat name `__closure_frees` ) ( nurl_sym_get syms `__last_closure_frees__` ) )
                 ( nurl_sym_def syms ( nurl_str_cat name `__closure_effects` ) ( nurl_sym_get syms `__last_closure_effects__` ) )
-                ( nurl_sym_def syms ( nurl_str_cat name `__closure_assigns` ) ( nurl_sym_get syms `__last_closure_assigns__` ) )
+                ( nurl_sym_def syms ( nurl_str_cat name `__closure_assigns` ) ( nurl_sym_get syms `__last_closure_assigns__` ) ) ( nurl_sym_def syms ( nurl_str_cat name `__closure_fldroots` ) ( nurl_sym_get syms `__last_closure_fldroots__` ) )
                 ( bck_add_cap_name name ) }
             { ( bck_clear_cap_name syms name ) }
             ( __clo_bind_cs syms name vt bck_rhs_tt bck_rhs_val F )
@@ -38969,7 +38996,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         ( nurl_sym_def syms `__last_phi_definite__` `` )
         ( nurl_sym_def syms `__last_closure_env__` `` )
         ( __clo_tmp_set `` )
-        ( nurl_sym_def syms `__last_closure_caps__` `` ) ( nurl_sym_def syms `__last_closure_frees__` `` ) ( nurl_sym_def syms `__last_closure_effects__` `` ) ( nurl_sym_def syms `__last_closure_assigns__` `` )
+        ( nurl_sym_def syms `__last_closure_caps__` `` ) ( nurl_sym_def syms `__last_closure_frees__` `` ) ( nurl_sym_def syms `__last_closure_effects__` `` ) ( nurl_sym_def syms `__last_closure_assigns__` `` ) ( nurl_sym_def syms `__last_closure_fldroots__` `` )
         ( nurl_sym_def syms `__last_agg_owned_fields__` `` )
         ( nurl_sym_def syms `__last_call_ret_struct_fields__` `` )
         ( nurl_sym_def syms `__last_value_borrow__` `` )
@@ -39038,7 +39065,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         { ( nurl_sym_def syms ( nurl_str_cat name `__closure_caps` ) __asn_caps )
             ( nurl_sym_def syms ( nurl_str_cat name `__closure_frees` ) ( nurl_sym_get syms `__last_closure_frees__` ) )
             ( nurl_sym_def syms ( nurl_str_cat name `__closure_effects` ) ( nurl_sym_get syms `__last_closure_effects__` ) )
-            ( nurl_sym_def syms ( nurl_str_cat name `__closure_assigns` ) ( nurl_sym_get syms `__last_closure_assigns__` ) )
+            ( nurl_sym_def syms ( nurl_str_cat name `__closure_assigns` ) ( nurl_sym_get syms `__last_closure_assigns__` ) ) ( nurl_sym_def syms ( nurl_str_cat name `__closure_fldroots` ) ( nurl_sym_get syms `__last_closure_fldroots__` ) )
             ( bck_add_cap_name name ) }
         { ( bck_clear_cap_name syms name ) }
         // Env ownership, the `:` binding's rule in the `=` spelling. A
@@ -46997,6 +47024,7 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     : s __ncf_saved ( nurl_str_cat g_nc_flag_caps `` )
     : s __nco_saved ( nurl_str_cat g_nc_own_caps `` )
     : s __cla_saved ( nurl_str_cat g_clo_assigned `` )
+    : s __clr_saved ( nurl_str_cat g_clo_read `` )
     : s __clf_saved ( nurl_str_cat g_clo_fld_roots `` )
     = g_clo_detach 0
     : s clo_bind_name ( nurl_str_cat g_clo_bind_name `` )
@@ -47065,6 +47093,7 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     // Only outer locals (those with __ptr in syms) are captured, not globals/functions.
     : s captured_vars ( simple_capture_analysis lex syms param_names )
     = g_clo_assigned ( nurl_str_cat g_clo_scan_assigned `` )
+    = g_clo_read ( nurl_str_cat g_clo_scan_read `` )
     = g_clo_fld_roots ( nurl_str_cat g_clo_scan_fld_roots `` )
     // A closure bound to a name the rest of the function only calls stays
     // in this frame: it reaches its captures' drop flags there (h236).
@@ -48262,6 +48291,15 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
         ? ( str_contains_word captured_vars __cla ) { = __cl_asg ? == 0 ( nurl_str_len __cl_asg ) ( nurl_str_cat __cla `` ) ( nurl_str_cat3 __cl_asg ` ` __cla ) } {}
     }
     ( nurl_sym_def syms `__last_closure_assigns__` __cl_asg )
+    // (…and the ones it stores a field of: a call with one of them as its
+    // argument is refused too, agora #339.)
+    : ~ s __cl_fr ``
+    : ~ s __cl_frr ( nurl_str_cat g_clo_fld_roots `` )
+    ~ != 0 ( nurl_str_len __cl_frr ) {
+        : s __clf ( str_first_word __cl_frr ) = __cl_frr ( str_skip_word __cl_frr )
+        ? ( str_contains_word captured_vars __clf ) { = __cl_fr ? == 0 ( nurl_str_len __cl_fr ) ( nurl_str_cat __clf `` ) ( nurl_str_cat3 __cl_fr ` ` __clf ) } {}
+    }
+    ( nurl_sym_def syms `__last_closure_fldroots__` __cl_fr )
     // A body that may move a capture's buffer or drop its elements must not
     // also hold another capture that reaches it — a view or a borrow of it,
     // a closure that captured it: inside the body the two are unrelated
@@ -48298,13 +48336,14 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
         : ~ s __crd ( nurl_str_cat captured_vars `` )
         ~ != 0 ( nurl_str_len __crd ) {
             : s __cw ( str_first_word __crd ) = __crd ( str_skip_word __crd )
-            ? | ( str_contains_word g_clo_assigned __cw ) ( str_contains_word g_clo_fld_roots __cw ) {} { ( bck_note_read __cw ) }
+            ? & | ( str_contains_word g_clo_assigned __cw ) ( str_contains_word g_clo_fld_roots __cw ) ! ( str_contains_word g_clo_read __cw ) {} { ( bck_note_read __cw ) }
         }
     } {}
 
     = g_nc_flag_caps __ncf_saved
     = g_nc_own_caps __nco_saved
     = g_clo_assigned __cla_saved
+    = g_clo_read __clr_saved
     = g_clo_fld_roots __clf_saved
     result2
 }
@@ -48627,6 +48666,7 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
     // the first name after its dots is the binding the store changes.
     : ~ b fld_root F
     : ~ s fld_roots ( nurl_str_cat `` `` )
+    : ~ s reads ( nurl_str_cat `` `` )
     : ~ i captured_count 0
     // Anchor for the unclosed-brace diagnostic below: the opening '{'.
     : i sca_open_line ( nurl_lex_line lex )
@@ -48915,6 +48955,8 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
                         : ~ b is_clo_param ( str_contains_word closure_params var_name )
                         ? & ! is_clo_param != 0 ( nurl_str_len bl ) { = is_clo_param ( __cs_bound bl var_name ) } {}
                         ? & & ! is_clo_param == prev2 TT_DOT == prev1 TT_IDENT { = is_clo_param ( __clo_scan_struct_obj outer_syms dot_obj ) } {}
+                        // (Read, not the root of a store: agora #358.)
+                        ? & & ! is_clo_param ! fld_root ! ( str_contains_word reads var_name ) { = reads ( nurl_str_cat3 reads ` ` var_name ) } {}
                         // The root of a field-path store target.
                         ? fld_root {
                             = fld_root F
@@ -48967,6 +49009,7 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
     // Lexer is now positioned after closing brace
     = g_clo_scan_assigned assigned
     = g_clo_scan_fld_roots fld_roots
+    = g_clo_scan_read reads
     captured_vars
 }
 
@@ -59371,7 +59414,7 @@ unsafe @ __str_rfind_char s x i c → i {
     : ~ s out ``
     : ~ s r ( nurl_str_cat effs `` )
     ~ != 0 ( nurl_str_len r ) {
-        : s e ( str_first_word r ) = r ( str_skip_word r )
+        : s e ( __eff_plain ( str_first_word r ) ) = r ( str_skip_word r )
         : i c1 ( nurl_str_find e `:` )
         : i c2 ( __str_rfind_char e 58 )
         ? & > c1 0 > c2 c1 {
