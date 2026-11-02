@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+2
+a string that lives in an arm's defer, long enough
+1
+3

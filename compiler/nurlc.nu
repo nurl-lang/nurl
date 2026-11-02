@@ -1754,6 +1754,10 @@ unsafe @ agg_field_count i syms s ot → i {
 // Set by a `:` binding just before registering its value: the binding
 // rule stores the drop flag itself, so registration only creates it.
 : ~ i g_udrop_noinit 0
+// …and how many `;` defer bodies enclose the code being generated: an
+// owner bound there may never be bound at all — its defer never armed —
+// so its drop flag is one the hoister clears at entry (agora #432).
+: ~ i g_defer_body_depth 0
 
 // An argument that is `( dyn Trait v )`: the box is a temporary of the
 // call (mem_arg_temps); gen_dyn_construct saves and restores it around
@@ -22624,7 +22628,9 @@ unsafe @ gen_match i lex i syms i cg → s {
     ( nurl_sym_def syms `__loop_exit__` `` )
     ( nurl_sym_def syms `__loop_check__` `` )
     ( bck_set_block_kind `defer` )
+    = g_defer_body_depth + g_defer_body_depth 1
     ( gen_block_stmts lex syms cg )
+    = g_defer_body_depth - g_defer_body_depth 1
     // What the body bound of its own is the chain's too: its child defers
     // read it after the body, and the main flow, where the body has not
     // run, holds nothing in its slot. Snapshot it, as what came before
@@ -23974,10 +23980,35 @@ unsafe @ mem_path_to_indices s path → s {
     }
 }
 
+// The drop flag __defer_snap_take recorded for owner slot `ptr`, or ``.
+@ __dsnap_live_of s ptr → s {
+    : s key ( nurl_str_cat ptr `=` )
+    : ~ s rest ( nurl_sym_get g_fn_escapes `__dsnap_live__` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? != 0 ( nurl_str_starts w key ) { ^ ( nurl_str_slice w ( nurl_str_len key ) - ( nurl_str_len w ) ( nurl_str_len key ) ) } {}
+    }
+    ^ ( nurl_str_cat `` `` )
+}
+
 @ __defer_snap_take i syms → v {
     ( __dsnap_union syms `__owned_strings__` `__dsnap_str__` 1 )
     ( __dsnap_union syms `__owned_struct_fields__` `__dsnap_sfield__` 6 )
     ( __dsnap_union syms `__user_drops__` `__dsnap_udrop__` 2 )
+    // (…with each owner's drop flag, by name: fn_cleanup reclaims it where
+    // the scope that named the flag — an arm the defer sat in — is gone,
+    // and a defer body's owner that never ran keeps its flag clear, agora
+    // #432.)
+    : ~ s __dl_rest ( nurl_sym_get syms `__user_drops__` )
+    : ~ s __dl_acc ( nurl_sym_get g_fn_escapes `__dsnap_live__` )
+    ~ != 0 ( nurl_str_len __dl_rest ) {
+        : s __dl_p ( str_first_word __dl_rest ) = __dl_rest ( str_skip_word ( str_skip_word __dl_rest ) )
+        : s __dl_f ( nurl_sym_get2 syms __dl_p `__live` )
+        ? & != 0 ( nurl_str_len __dl_f ) ! ( str_contains_word __dl_acc ( nurl_str_cat3 __dl_p `=` __dl_f ) ) {
+            = __dl_acc ? == 0 ( nurl_str_len __dl_acc ) ( nurl_str_cat3 __dl_p `=` __dl_f ) ( nurl_str_cat4 __dl_acc ` ` __dl_p ( nurl_str_cat `=` __dl_f ) )
+        } {}
+    }
+    ( nurl_sym_set g_fn_escapes `__dsnap_live__` __dl_acc )
     ( __dsnap_union syms `__owned_closure_envs__` `__dsnap_cenv__` 1 )
     ( __dsnap_union syms `__owned_slices__` `__dsnap_slice__` 1 )
 }
@@ -24105,6 +24136,11 @@ unsafe @ mem_path_to_indices s path → s {
         {}
         { : s gk ( __dret_guard_open cg ptr )
             ( mem_journal_forget_userdrop cg ptr vt )
+            // (Its drop flag, where the scope that named it is gone.)
+            ? == 0 ( nurl_sym_len2 syms ptr `__live` ) {
+                : s lf ( __dsnap_live_of ptr )
+                ? != 0 ( nurl_str_len lf ) { ( nurl_sym_def syms ( nurl_str_cat ptr `__live` ) lf ) } {}
+            } {}
             ( mem_emit_gated_drop syms cg ptr vt )
             ( __dret_guard_close gk )
         }
@@ -38010,7 +38046,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
                 : s impl_key ( nurl_str_cat `drop##` rvt )
                 : s impl_mangle_key ( nurl_sym_get g_impl_name_syms impl_key )
                 ? != 0 ( nurl_str_len impl_mangle_key )
-                { = g_udrop_noinit 1
+                { = g_udrop_noinit ? > g_defer_body_depth 0 2 1
                     ( mem_note_vget_binding syms name bck_rhs_tt )
                     ( mem_note_bound_lend syms name bck_rhs_tt bck_rhs_val )
                     ( mem_own_add_user_drop syms cg ptr rvt )
@@ -38388,7 +38424,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
                     : s impl_key ( nurl_str_cat `drop##` rpt )
                     : s impl_mangle_key ( nurl_sym_get g_impl_name_syms impl_key )
                     ? != 0 ( nurl_str_len impl_mangle_key )
-                    { = g_udrop_noinit 1
+                    { = g_udrop_noinit ? > g_defer_body_depth 0 2 1
                         ( mem_note_bound_lend syms name bck_rhs_tt bck_rhs_val )
                         ( mem_own_add_user_drop syms cg ptr rpt )
                         ( mem_udrop_bind_flag syms cg ptr rpt ( __blk_bind_tt bck_rhs_tt __blk_lend ) bck_rhs_val rhs_borrow )
@@ -47214,6 +47250,7 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     ( nurl_sym_set g_fn_escapes `__dsnap_str__` `` )
     ( nurl_sym_set g_fn_escapes `__dsnap_sfield__` `` )
     ( nurl_sym_set g_fn_escapes `__dsnap_udrop__` `` )
+    ( nurl_sym_set g_fn_escapes `__dsnap_live__` `` )
     ( nurl_sym_set g_fn_escapes `__dsnap_cenv__` `` )
     ( nurl_sym_set g_fn_escapes `__dsnap_slice__` `` )
     ( nurl_sym_set g_fn_escapes `__dret_skips__` `` )
@@ -54164,6 +54201,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     ( nurl_sym_set g_fn_escapes `__dsnap_str__` `` )
     ( nurl_sym_set g_fn_escapes `__dsnap_sfield__` `` )
     ( nurl_sym_set g_fn_escapes `__dsnap_udrop__` `` )
+    ( nurl_sym_set g_fn_escapes `__dsnap_live__` `` )
     ( nurl_sym_set g_fn_escapes `__dsnap_cenv__` `` )
     ( nurl_sym_set g_fn_escapes `__dsnap_slice__` `` )
     ( nurl_sym_set g_fn_escapes `__dret_flags__` `` )
