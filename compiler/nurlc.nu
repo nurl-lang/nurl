@@ -31719,8 +31719,11 @@ unsafe @ bck_sx_ev s st s e b arg → s {
 unsafe @ __bck_try_exit_check s st i line → v {
     ? ( seq st `!` ) { ^ v } {}
     ? != 0 g_bck_fmv_any { ( __bck_inout_exit_check st line F ) } {}
+    // (…and what the parameters are left viewing is this function's
+    // answer on that path too, bck_note_vkeeps — as at a `^`.)
     ? == 0 g_bck_has_defers {
         ( bck_param_view_check st line )
+        ( bck_note_vkeeps st )
         ( bck_ret_drop_check st line )
         ^ v
     } {}
@@ -31732,6 +31735,7 @@ unsafe @ __bck_try_exit_check s st i line → v {
     : s ad ( bck_apply_defers st )
     ? ! ( seq ad `!` ) {
         ( bck_param_view_check ad line )
+        ( bck_note_vkeeps ad )
         ( bck_ret_drop_check ad line )
     } {}
     ? != 0 ( nurl_str_len g_cj_log ) { ( __cj_restore g_cj_log ) } {}
