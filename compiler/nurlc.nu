@@ -15955,6 +15955,8 @@ unsafe @ gen_call i lex i syms i cg → s {
             ( nurl_sym_def syms `__agg_arg_call__` __aac_saved )
             ( nurl_sym_def syms `__in_call_arg__` `` )
             = at ( nurl_get_last_type )
+            // A view stored into a Slice's element (agora #415).
+            ? == arg_idx 0 { ( __slice_view_write_check lex call_name at ) } {}
             // `( nurl_free # s st )`: a heap object released here (see
             // mem_settle_scratch).
             ? ( seq call_name `nurl_free` )
@@ -24707,6 +24709,25 @@ unsafe @ mem_path_to_indices s path → s {
         = i + i 1
     }
     ^ ( nurl_str_cat `` `` )
+}
+
+// A call that writes elements of the Slice it is handed first —
+// `slice_put`, `slice_copy` — where those elements hold views: refused
+// outside `unsafe`. A Slice views storage another binding owns, and what
+// its elements view is followed nowhere: a view stored there outlived what
+// it points into (A2 types slices of elements that hold no views; agora
+// #415). The Vec that owns the storage stores it where it is followed.
+@ __slice_view_write_check i lex s cn s ty → v {
+    ? ! ( str_contains_word `slice_put slice_put_loc slice_copy` ( bck_generic_base cn ) ) { ^ v } {}
+    ? | ! ( bck_sound ) ( bck_unsafe_ctx ) { ^ v } {}
+    ? == 0 ( nurl_str_starts ty `%Slice__` ) { ^ v } {}
+    : s f0 ( nurl_sym_get g_root_syms ( nurl_str_cat ( nurl_str_slice ty 1 - ( nurl_str_len ty ) 1 ) `__idx_0__type` ) )
+    : i n ( nurl_str_len f0 )
+    ? | == n 0 != ( nurl_str_get f0 - n 1 ) 42 { ^ v } {}
+    : s el ( nurl_str_slice f0 0 - n 1 )
+    ? | ( __ty_holds_view el 0 ) == 2 ( bck_bind_class el ) {
+        ( die lex ( nurl_str_cat3 `'` ( bck_generic_base cn ) `' stores into the elements of a Slice whose elements are views: a Slice views storage another binding owns, and what its elements view is followed nowhere, so a view stored there could outlive what it points into (agora #415). Store it through the Vec that owns the storage — vec_put / vec_set — or store a value that owns its data (string_from, mem_dup).` ) )
+    } {}
 }
 
 // `cond`, and the field `idx` of the `sty` at `ptr` still holds `val` (the

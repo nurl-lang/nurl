@@ -168,8 +168,6 @@ Outside A2:
   #392.
 - A view stored through a borrow: #395 and #414 (`StmtT.editB` takes
   element types that hold no views; `rules/t292.md`).
-- A `Slice` of views: #415 (A2's slices view element types that hold no
-  views, `Ty.ok`).
 - A changed plain parameter handed an element rather than an owner: #391
   (above).
 

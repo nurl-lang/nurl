@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_slice_of_views_write.nu:15:28: error: 'slice_put' stores into the elements of a Slice whose elements are views: a Slice views storage another binding owns, and what its elements view is followed nowhere, so a view stored there could outlive what it points into (agora #415). Store it through the Vec that owns the storage — vec_put / vec_set — or store a value that owns its data (string_from, mem_dup).
+        ( slice_put [s] sl 0 ( string_data loc ) )
+                           ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.
