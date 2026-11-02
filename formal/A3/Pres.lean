@@ -133,6 +133,9 @@ theorem CInv.thread_of {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) (hR : Rest
       · rw [ite_eq_right hij] at hb htj
         obtain ⟨htoj, hboj⟩ := hok j tj b htj hb
         have hn : C.nid ≤ m'.nid := hgrow.nid
-        exact ⟨ThreadOK.nid_le htoj hn, hboj.of_st rfl⟩
+        have hblk : m'.blk = C.blk := hgrow.blk
+        have hv : ownView (C.put i m' s') tj b = { ownView C tj b with nid := m'.nid } := by
+          simp only [ownView, Cfg.put, hblk]
+        rw [hv]; exact ⟨ThreadOK.nid_le htoj hn, hboj.of_st rfl⟩
 
 end A3

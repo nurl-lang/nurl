@@ -186,9 +186,11 @@ theorem newThread_inv {P : Prog} {fn : Fn} (hok : FnOK P fn)
     (hdisj : ∀ (j k : Nat) (v w : Val), j ≠ k → vs[j]? = some v → vs[k]? = some w →
       ∀ i ∈ v.ids, i ∉ w.ids)
     (hself : ∀ v ∈ vs, SelfFree v) (hpk : ∀ v ∈ vs, PkgsOK v)
-    {part : Nat → Bool} (hpart : ∀ i, part i = true ↔ ∃ v ∈ vs, i ∈ v.ids)
-    {N : Nat} (hlt : ∀ v ∈ vs, ∀ i ∈ v.ids, i < N) :
-    Inv { alloc := part, nid := N, nv := fn.nvars, st := spawnSt fn vs } (sigCtx fn) []
+    {part : Nat → Bool} {B : Nat → Option Blk} (hpart : ∀ i, part i = true ↔ ∃ v ∈ vs, i ∈ v.ids)
+    {N : Nat} (hlt : ∀ v ∈ vs, ∀ i ∈ v.ids, i < N)
+    (hsh : ∀ (j : Nat) (v : Val) (pt : PMode × Ty), vs[j]? = some v → fn.params[j]? = some pt →
+      SharesIn B pt.2 v) (hB : BlocksOK B) :
+    Inv { alloc := part, nid := N, nv := fn.nvars, st := spawnSt fn vs, blk := B } (sigCtx fn) []
       (wrapParams fn.params 0 0 (.scope fn.params.length fn.body)) := by
   obtain ⟨hsrc, hnv, hvars, hrok, hrown, hps, -⟩ := hok
   have hown : fn.resOwn = false := by
@@ -224,7 +226,8 @@ theorem newThread_inv {P : Prog} {fn : Fn} (hok : FnOK P fn)
       nodup := fun x t h => hnd t (hmem h rfl)
       disj := fun x y t u hne h1 h2 => hdisj x y t u hne (spawnSt_val h1 rfl).1 (spawnSt_val h2 rfl).1
       alloc := fun x t h i hi => ⟨(hpart i).mpr ⟨t, hmem h rfl, hi⟩, hlt t (hmem h rfl) i hi⟩
-      self := fun x t h => hself t (hmem h rfl) }
+      self := fun x t h => hself t (hmem h rfl)
+      bpay := fun k bl hk => (hB k bl hk).2.2.2.2 }
     nvSt := fun v hv => by
       have h1 : v ≤ fn.params.length := Nat.not_lt.mp fun h => by
         have h2 : (spawnSt fn vs v).isSome = true := hv
@@ -243,6 +246,12 @@ theorem newThread_inv {P : Prog} {fn : Fn} (hok : FnOK P fn)
       · cases hl
     pkgs := fun v sl T hsl hT => hpk T (hmem hsl hT)
     armed := fun v E sl hv _ => ArmOK.of_dbind (sigCtx_flags hv).2
+    shares := fun v E sl T hv hsl _ hT => by
+      rcases sigCtx_spawn hpar hv with ⟨t, hp, ht, rfl⟩ | ⟨rfl, rfl⟩
+      · exact hsh v T _ (spawnSt_val hsl hT).1 hp
+      · have h0 : spawnSt fn vs fn.params.length = some sl := hsl
+        rw [spawnSt_res] at h0; cases h0; cases hT
+    blocks := fun k bl hk => ⟨(hB k bl hk).1, (hB k bl hk).2.1, (hB k bl hk).2.2.1, (hB k bl hk).2.2.2.1⟩
     nvS := fun v hv => by
       show v < fn.nvars
       rw [vars_wrap] at hv
@@ -299,9 +308,11 @@ theorem newThread_ok {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hPc : Pr
     (hdisj : ∀ (j k : Nat) (v w : Val), j ≠ k → vs[j]? = some v → vs[k]? = some w →
       ∀ i ∈ v.ids, i ∉ w.ids)
     (hself : ∀ v ∈ vs, SelfFree v) (hpk : ∀ v ∈ vs, PkgsOK v) (hcd : ∀ v ∈ vs, PkgOK P v)
-    {part : Nat → Bool} (hpart : ∀ i, part i = true ↔ ∃ v ∈ vs, i ∈ v.ids)
-    {N : Nat} (hlt : ∀ v ∈ vs, ∀ i ∈ v.ids, i < N) :
-    ThreadOK P { alloc := part, nid := N, nv := fn.nvars, st := spawnSt fn vs }
+    {part : Nat → Bool} {B : Nat → Option Blk} (hpart : ∀ i, part i = true ↔ ∃ v ∈ vs, i ∈ v.ids)
+    {N : Nat} (hlt : ∀ v ∈ vs, ∀ i ∈ v.ids, i < N)
+    (hsh : ∀ (j : Nat) (v : Val) (pt : PMode × Ty), vs[j]? = some v → fn.params[j]? = some pt →
+      SharesIn B pt.2 v) (hB : BlocksOK B) :
+    ThreadOK P { alloc := part, nid := N, nv := fn.nvars, st := spawnSt fn vs, blk := B }
       (wrapParams fn.params 0 0 (.scope fn.params.length fn.body)) := by
   obtain ⟨fn', hf', hres, hpar⟩ := hS f hsp
   have hfn : fn' = fn := Option.some.inj (hf'.symm.trans hf)
@@ -309,7 +320,7 @@ theorem newThread_ok {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hPc : Pr
   have hok := hP fn (List.mem_of_getElem? hf)
   have hsrc : fn.body.src = true := by obtain ⟨h, -⟩ := hok; exact h
   obtain ⟨Δ, ht⟩ := newThread_typed hok hpar
-  exact ⟨sigCtx fn, [], Δ, ht, newThread_inv hok hpar hres hlen hwf hnd hdisj hself hpk hpart hlt,
+  exact ⟨sigCtx fn, [], Δ, ht, newThread_inv hok hpar hres hlen hwf hnd hdisj hself hpk hpart hlt hsh hB,
     memCodes_iff.mpr fun x o V hx => hcd V (List.mem_of_getElem? (spawnSt_val hx rfl).1),
     wrapParams_codes (s := .scope fn.params.length fn.body) (hPc fn (List.mem_of_getElem? hf)) _ _ _,
     newThread_closed hpar hsrc⟩

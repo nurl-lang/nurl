@@ -190,13 +190,138 @@ A3.0 carries the architecture: views, write-back, global `HeapOK` and the
 race definition. Each later step adds one kind of shared block and its
 rules.
 
+## A3.1's mechanization (Agora #285)
+
+**Status (first cut, on main with #295's edits).** `check.sh` is green with
+the blocks and shares in A2 and A3: `Mem.blk`, `Blk`, `Val.arc`, `Ty.arc`,
+`ArcIn` / `SharesOK`, `MInv.shares`, `MInv.blocks` and `HeapOK.bpay` hold
+through every step, the edit steps and `StmtT.editB` included (an edit's
+element may be an `arc t`: `SharesIn.repl`, `Pushed.sh`), so
+`A2.memory_safe`, `A2.no_leak_end`, `A2.no_leak_panic` and `A3.claim` are
+re-proven over them, with the blocks in A3's `Cfg` (`Cfg.blk`). A share
+frees nothing by itself (`Frees.arc`), and no step changes the blocks yet
+(`Step.blk`). Not yet mechanized: `arcNew`, `arcClone`, `arcGet`, the
+ghost count and the sweep (step 2 below), `Touch`'s atomic `rc` (step 3),
+and the probes (step 4).
+
+A3.0 settled that A3 imports A2 and runs A2's step on each thread's view,
+so a shared block has to live somewhere A2's step can read. For `Arc` the
+block goes into A2 itself. Single-threaded, an `Arc` is a counted
+reference (as `Rc` is in Rust), and nurlc's single-threaded code already
+uses `Arc` widely.
+
+**In A2.**
+- `Mem.blk : Nat → Option Blk`, with `Blk := ⟨ty, pay⟩` (the count is
+  ghost, below). A block's payload
+  tree is owned by the block: `HeapOK`'s one owner per allocation counts
+  blocks next to slots, and `Covers` counts them too.
+- `Val.arc k p`: a share of block `k`. It carries the block's payload `p`
+  as ghost data, so a borrow can reach the payload through the share. The
+  share can sit anywhere in a tree: a field (h288), an element, or another
+  payload (h211's `Arc (Arc i)`). A share owns none of its payload's
+  addresses (`ids (arc k p) = []`), and neither `Sub` nor `Top` / `Below`
+  enters `p`. So ownership stays with the block, and the structural
+  argument that no tree views itself (`SelfFree`) is untouched.
+  `SharesOK` ties the copy to the block: `m.blk k = some ⟨u, p⟩`. A
+  payload is frozen, so the copy never goes stale. `Ty.arc t` is
+  owning, it holds a view exactly when `t` does, and it is never copied.
+- **The first cut's payload holds no allocation** (`Ty.plain`): integers,
+  structs and enums of them, and shares (`Arc (Arc i)`, h211). `arcGet`
+  lends the payload as it is (`lendOf p = p`), with no handle into it, so
+  no borrow ever lands inside a block. `Top`, `Below` and `Lands` stay
+  exactly A2's, and a block owns only its own address. What this cut
+  proves is what is new about `Arc`: counted shares, clone and drop, the
+  sweep, the count across threads.
+- **Why a `Vec` payload is the second cut.** A borrow into a payload has
+  to reach it through a share that can sit anywhere in its root's tree.
+  Two ways to model that were tried, and each runs into the same problem.
+  - *A share-transparent `Top` / `Below`.* A struct may hold a share `a`
+    and a view of the same block taken through another share `b`. Typing
+    allows it, and it is safe, since `b` keeps the block alive. But the
+    struct then views memory its own share reaches, so `SelfFree` fails.
+    A2 needs `SelfFree` (`ViewsOK.dropSelf`, `keep_except`), because
+    `liftE` can put a binding's own root into what it holds.
+  - *A kind of its own (`Kind.share`) that alone looks through shares.*
+    Banning views of a payload is then not local. A callee that returns a
+    view of a borrowed parameter, called with a payload borrow, comes back
+    with a `.share` view after the reroot.
+  The second cut needs one of two fixes. One: a view of a payload is valid
+  while its block exists, and the sweep keeps every block a live view
+  reaches. Two: an invariant that a stored view never depends on its
+  holder's own share.
+- `RhsT.arcNew y`: `y`'s tree moves into a fresh block with `rc = 1`. The
+  share is owned and holds what `y` held, since the payload views what `y`
+  viewed (nothing, in the first cut below).
+- `RhsT.arcClone a`: a read of share `a` that adds a new share, `rc + 1`.
+  It holds what `a` holds.
+- `RhsT.arcGet a`: the payload, lent: `lendOf p`, read from the share
+  itself. Its entry is a borrow rooted where `a` is (`derive a … .share`),
+  holding `a`'s `held`, so it ends with `a` like any borrow.
+- **Dropping a share is part of freeing a tree.** Every `DropSlot` / `Frees`
+  that meets `Val.arc k` does `rc − 1`, and at 0 drops the payload tree in
+  turn. A share is then released correctly wherever it lands (a field, a
+  `Vec` element, a `sink` parameter, an assignment's old value) with no
+  drop glue, so A3.1 does not wait for A2-drop.3 (#253).
+- **Frozen is typing.** No rule writes through an `arc t`: it is no
+  `push` / `assign` / take-out target, and `arcGet` lends a borrow, which
+  `canDo` refuses every write.
+- **Counted is an invariant.** `rc k` is the number of `Val.arc k` leaves in
+  slot trees and payloads. A payload holds only shares made before it, so
+  shares form no cycle, and when every share has been dropped every block
+  has been freed (`no_leak`).
+
+**The first cut** asks the payload's type to hold no views and no
+closure (`t.holdsView = false`, `t.hasFn = false`). A payload is then
+valid as long as it is owned (`WFv`, no `ViewsOK`), and a share holds
+nothing (`held = []`). All six probes are of this shape: Vecs, structs and
+a library handle. A view-holding payload (`Arc` of a struct of views)
+needs every share to keep the payload's sources alive, which is a later
+step.
+
+**In A3.**
+- `Cfg` gets the blocks next to `alloc` and `nid`, shared by every thread.
+  A thread's part is its own trees. The payloads are in no part.
+- Every holder reads them: the frame lemma runs a step on a thread's part
+  plus the blocks.
+- A payload address is only read (frozen), so two threads meeting there
+  is no race.
+- `rc` is a word that `arcClone` and a share's drop change atomically.
+  They are marked atomic in `Touch`, as nurl's runtime's refcount is.
+- Send: `Ty.arc t` crosses when `t` holds no views. That is A3.0's
+  `SpawnOK` question asked of the parameter's type, unchanged.
+
+**Order.**
+1. A2: `Blk`, `Val.arc`, `Ty.arc` through every function on values and
+   types (mechanical, but it touches every module).
+2. A2: the three rules and the drop, with `memory_safe` / `no_leak_end` /
+   `no_leak_panic` re-proven.
+   - The count is ghost: `rc k` is the number of `Val.arc k` leaves in
+     the store (slot trees and live payloads). A share frees nothing by
+     itself (`Frees.arc`), so `Frees` keeps its footprint (`other` / `le`
+     / `freed`, and A3's `lift` / `restrict`) unchanged.
+   - Every step ends with a `Sweep`: a block that no share reaches is
+     removed and its payload tree freed. That repeats, since a payload's
+     own shares may have been the last of theirs; a payload holds only
+     older shares, so this terminates.
+   - The runtime frees at the last drop, inside the same step, and no
+     read follows a drop within one step, so the two agree at every step
+     boundary.
+   - In A3 the sweep is a configuration step over all threads, since the
+     count is over all of them. The refcount word that a clone and a drop
+     change is marked atomic in `Touch`.
+3. A3: the blocks in `Cfg`, the frame lemma with payload reads,
+   `Touch` / `Race` with atomic `rc`, and `A3.claim` again.
+4. Probes h211 h212 h213 h288 h289 h338 to A3.1; CLAIM.md and README.md.
+
 ## Open questions
 
 - **How much of A2 to copy** (decided in A3.0): none. A3 imports A2 and
   runs its step on each thread's view; a frame lemma moves the step
   between the shared address space and the thread's own part, where A2's
-  invariant holds. A3.1–A3.6 add statements for the shared blocks; they
-  will need A2's `Stmt` to take them, or a step of their own beside A2's.
+  invariant holds. A3.1–A3.6 add the shared blocks. For `Arc` they go into
+  A2 (above). `Locked`, `RwLocked`, `Atomic` and channels have no
+  single-threaded meaning beyond A2's, so for them a step beside A2's may
+  fit better; A3.2 decides.
 - **Scoped threads.** A thread that borrows its spawner's data and is
   joined before the frame ends (`par_map_index`) needs the borrow to
   outlive the spawn while the spawner is suspended. That would be A3.7,

@@ -28,6 +28,7 @@ inductive Ty where
   | fn (ms : List Nat) -- a closure or a trait object: code with an environment it owns; method `j`
                         -- has the interface `ms[j]` (a function of the program whose first parameter
                         -- is the receiver); the environment's type is not part of the type
+  | arc (t : Ty)      -- A3.1: a share of a counted block whose payload, a `t`, is frozen
 deriving DecidableEq, Repr
 
 /-- Does a value of this type hold views (so that storing one into a
@@ -39,17 +40,30 @@ def Ty.holdsView : Ty → Bool
   | .prod a b => a.holdsView || b.holdsView
   | .sum a b => a.holdsView || b.holdsView
   | .fn _ => true     -- what the environment holds is not part of the type
+  | .arc t => t.holdsView
+
+/-- A3.1: may a value of this type hold a share (an `Arc`)?  A closure's
+    environment may. -/
+def Ty.hasArc : Ty → Bool
+  | .int => false
+  | .vec t => t.hasArc
+  | .slice t => t.hasArc
+  | .prod a b => a.hasArc || b.hasArc
+  | .sum a b => a.hasArc || b.hasArc
+  | .fn _ => true
+  | .arc _ => true
 
 /-- A2 types: a view's element type holds no views of its own (a view of a
     container of views is left to A2, with the other aggregates that
-    carry views). -/
+    carry views), and, in A3.1's first cut, no shares. -/
 def Ty.ok : Ty → Bool
   | .int => true
   | .vec t => t.ok
-  | .slice t => t.ok && !t.holdsView
+  | .slice t => t.ok && !t.holdsView && !t.hasArc
   | .prod a b => a.ok && b.ok
   | .sum a b => a.ok && b.ok
   | .fn _ => true
+  | .arc t => t.ok && !t.holdsView   -- A3.1's first cut: a payload holds no views (nor a closure)
 
 /-- A type whose values own what they hold: a `Vec` or a struct.  Its
     binding is an owner (or borrows one). -/
@@ -58,6 +72,7 @@ def Ty.owning : Ty → Bool
   | .prod _ _ => true
   | .sum _ _ => true
   | .fn _ => true
+  | .arc _ => true
   | _ => false
 
 /-- What an operation does to a container, ordered by what it ends.
@@ -198,6 +213,9 @@ inductive Val where
                                                -- a package: its methods' code, its environment
                                                -- (of the ghost type `te`) inline, its interfaces,
                                                -- and the bindings it captured by name
+  | arc (k : Nat) (p : Val)                      -- A3.1: a share of block `k`, carrying the block's
+                                               -- payload `p` as ghost data (a borrow reaches it
+                                               -- through the share; the block owns its addresses)
 deriving Repr, Inhabited
 
 /-- A binding's storage: whether it owns its value (it is dropped at the end
@@ -206,11 +224,19 @@ structure Slot where
   own : Bool
   val : Option Val
 
+/-- A3.1: a counted block (`Arc`): its payload, a tree of type `ty` that no
+    one writes.  How many shares it has is the number of `Val.arc` leaves
+    naming it (ghost): when none is left, the step's sweep frees it. -/
+structure Blk where
+  ty  : Ty
+  pay : Val
+
 structure Mem where
   alloc : Nat → Bool
   nid   : Nat                 -- next fresh address
   nv    : Nat                 -- next fresh variable
   st    : Var → Option Slot
+  blk   : Nat → Option Blk    -- A3.1: the counted blocks
 
 def upd {α : Type} (f : Nat → α) (k : Nat) (v : α) : Nat → α :=
   fun i => if i = k then v else f i

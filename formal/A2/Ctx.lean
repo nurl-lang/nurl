@@ -91,8 +91,8 @@ theorem NamesIn.mono {T : Val} {H H' : List Dep} (h : NamesIn T H) (hs : H ⊆ H
 
 theorem HrefAt.mono {m : Mem} {dep : Dep} {c : Nat} {t : Ty} {H H' : List Dep} (hs : H ⊆ H')
     (h : HrefAt m dep c t H) : HrefAt m dep c t H' := by
-  obtain ⟨n0, d, es, hr, hk, hw, hv, hn⟩ := h
-  exact ⟨n0, d, es, hr, hk, hw, hv.mono hs, hn.mono hs⟩
+  obtain ⟨n0, d, es, hr, hk, hw, hv, hn, hsh⟩ := h
+  exact ⟨n0, d, es, hr, hk, hw, hv.mono hs, hn.mono hs, hsh⟩
 
 theorem ValOK.mono' {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m τ v P H) :
     ∀ {P' H' : List Dep}, P ⊆ P' → H ⊆ H' → ValOK m τ v P' H' := by
@@ -109,6 +109,7 @@ theorem ValOK.mono' {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m 
   | inr _ ih => intro P' H' hp hs; exact .inr (ih (app hp hs) hs)
   | pkg _ ih =>
     intro P' H' hp hs; exact .pkg (ih (app hp (envDeps_mono hs)) (envDeps_mono hs))
+  | arc h hw hv => intro _ _ _ _; exact .arc h hw hv
 
 theorem ValOK.mono {m : Mem} {τ : Ty} {v : Val} {P P' H H' : List Dep} (hp : P ⊆ P')
     (hs : H ⊆ H') (h : ValOK m τ v P H) : ValOK m τ v P' H' := h.mono' hp hs
@@ -139,6 +140,7 @@ theorem ValOK.onlyReaders {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : Va
   | inl _ ih => intro P' hp; exact .inl (ih (app hp))
   | inr _ ih => intro P' hp; exact .inr (ih (app hp))
   | pkg _ ih => intro P' hp; exact .pkg (ih (app hp))
+  | arc h hw hv => intro _ _; exact .arc h hw hv
 
 theorem SlotOK.weaker' {m : Mem} {E E' : Entry} {sl : Slot} (ht : E'.ty = E.ty) (hm : E'.mode = E.mode)
     (hl : E'.live = true → E.live = true ∧ (E.mode.ownSlot = false → E.path ⊆ E'.path) ∧ E.held ⊆ E'.held)
@@ -212,6 +214,10 @@ theorem MInv.weaker {m : Mem} {Γ Γ' : Ctx} (hi : MInv m Γ) (hw : Weaker Γ Γ
   armed v E' sl hv hsl := by
     obtain ⟨E, hE, hwe⟩ := hw.get' hv
     exact (hi.armed v E sl hE hsl).weaker hwe
+  shares v E' sl T hv hsl hown hT := by
+    obtain ⟨E, hE, hwe⟩ := hw.get' hv
+    rw [hwe.ty]; exact hi.shares v E sl T hE hsl hown hT
+  blocks := hi.blocks
 
 theorem Inv.weaker {m : Mem} {Γ Γ' : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s)
     (hw : Weaker Γ Γ') : Inv m Γ' F s where

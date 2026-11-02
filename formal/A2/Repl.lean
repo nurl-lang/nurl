@@ -259,6 +259,70 @@ theorem ids_drop_sub {t : Ty} {c d : Nat} {es : List Val} {n i : Nat} (hi : i �
   simp only [ids_node, List.mem_cons]
   exact .inr (.inr (mem_idsL (List.mem_of_mem_drop he) hie))
 
+/-- A3.1: a rewrite keeps every share of a tree naming a block of `B` when
+    the replacement's do, at every type the hole is well-formed at (a share
+    is a leaf: no rewrite reaches into what it carries). -/
+theorem SharesIn.repl {B : Nat → Option Blk} {n n' : Val}
+    (hn : ∀ σ, WFv σ n → SharesIn B σ n → SharesIn B σ n') {T T' : Val} (hr : Repl n n' T T') :
+    ∀ {τ : Ty}, WFv τ T → SharesIn B τ T → SharesIn B τ T' := by
+  induction hr with
+  | here => exact fun h hs => hn _ h hs
+  | @elem t c d pre post e e' _ ih =>
+    intro τ h hs
+    cases h with
+    | node hes =>
+      intro u k p ha
+      cases ha with
+      | child hx ha' =>
+        rcases List.mem_append.mp hx with hx | hx
+        · exact hs u k p (.child (List.mem_append_left _ hx) ha')
+        · rcases List.mem_cons.mp hx with rfl | hx
+          · exact ih (hes e (List.mem_append_right _ (List.mem_cons_self ..)))
+              (fun u k p ha => hs u k p (.child (List.mem_append_right _ (List.mem_cons_self ..)) ha))
+              u k p ha'
+          · exact hs u k p (.child (List.mem_append_right _ (List.mem_cons_of_mem _ hx)) ha')
+  | fst _ ih =>
+    intro τ h hs
+    cases h with
+    | pair ha _ =>
+      intro u k p hA
+      cases hA with
+      | fst h' => exact ih ha (fun u k p h => hs u k p (.fst h)) u k p h'
+      | snd h' => exact hs u k p (.snd h')
+  | snd _ ih =>
+    intro τ h hs
+    cases h with
+    | pair _ hb =>
+      intro u k p hA
+      cases hA with
+      | fst h' => exact hs u k p (.fst h')
+      | snd h' => exact ih hb (fun u k p h => hs u k p (.snd h)) u k p h'
+  | inl _ ih =>
+    intro τ h hs
+    cases h with
+    | inl ha =>
+      intro u k p hA
+      cases hA with | inl h' => exact ih ha (fun u k p h => hs u k p (.inl h)) u k p h'
+  | inr _ ih =>
+    intro τ h hs
+    cases h with
+    | inr ha =>
+      intro u k p hA
+      cases hA with | inr h' => exact ih ha (fun u k p h => hs u k p (.inr h)) u k p h'
+  | pkg _ ih =>
+    intro τ h hs
+    cases h with
+    | pkg ha =>
+      intro u k p hA
+      cases hA with | pkg h' => exact ih ha (fun u k p h => hs u k p (.pkg h)) u k p h'
+
+/-- ... over a memory's blocks, for a node rewritten to one of its own type. -/
+theorem SharesOK.repl {m : Mem} {t : Ty} {c d d' : Nat} {es es' : List Val}
+    (hn : SharesOK m (.vec t) (.node t c d' es')) {T T' : Val}
+    (hr : Repl (.node t c d es) (.node t c d' es') T T') {τ : Ty} (hw : WFv τ T)
+    (hs : SharesOK m τ T) : SharesOK m τ T' :=
+  SharesIn.repl (fun σ h _ => by cases h; exact hn) hr hw hs
+
 /-- The node a `NodeOf` finds lies in its owner's tree. -/
 theorem NodeOf.sub {m : Mem} {x o : Var} {T : Val} {t : Ty} {c d : Nat} {es : List Val}
     (h : NodeOf m x o T t c d es) : Sub (.node t c d es) T := by
