@@ -73,6 +73,18 @@ the LLVM / C11 memory model rather than redefining it.
   - a closure or a destructor that changes elements through a borrow,
     directly or through a callee, and a call into a function that does so
     which passes an argument holding views (`ThruFn`).
+
+  One more form nurlc accepts that A2 does not type: an owner given a new
+  value while something still reads its old one, where nurlc hands the
+  old value over instead of dropping it — to a field's reader when the
+  field is replaced (Agora #265, #354), or kept where a call may give the
+  owner its own value back (`= o ( f … o … )`, #342, #375). A2's `assign`
+  gives an owner only an owned value, and never one that depends on the
+  binding itself (`x ∉ roots E.vdeps`). DynCell's encoding
+  (`A2/DYN_DESIGN.md`) covers a per-call result bound to a fresh binding,
+  and an owner given a lend that cannot come out of its old value
+  (`rules/t375.md`); it does not cover the hand-over. Those programs are
+  outside the claim until an A2 rule (or phase C/D) covers the hand-over.
 - **A3** — the theorem with threads: a well-typed program has no data
   race. Proven under sequential consistency, where a race is two threads'
   next steps touching one address, one of them writing, not both atomic.
@@ -100,6 +112,64 @@ the LLVM / C11 memory model rather than redefining it.
 
 Until B, C and D are done, the theorem is about the rules; the standard
 library, the compiler and the code generator are part of the trusted base.
+
+## The known exceptions: the open holes
+
+Each soundness hole known open (`tools/fuzz/holes/open/t<N>.md`, listed
+in `docs/LIMITATIONS.md` at each release) is a program nurlc accepts that
+faults. Every one is an exception to the statement above. Nearly all are
+one of two kinds:
+
+- **Inside A2.** The calculus expresses the program and refuses it, so
+  the hole is a nurlc bug: nurlc must be brought into line with A2. The
+  proof is unaffected, and phase C would catch the disagreement.
+- **Outside A2.** The calculus does not type the program's form yet, so
+  the claim says nothing about it until the form is added (or nurlc
+  refuses it).
+
+Classified by claude-formal after v0.85.0 and github#1528 (2026-11-02).
+The A2 rule that refuses each shape is named.
+
+Inside A2 (nurlc bugs):
+- A change in place that ends a borrow, missed: #293, #333, #349, #350,
+  #360, #396 and #411 (`Eff.kills`, `StmtT.editB`, `callPostAux`'s
+  `kill`). Also #353 and #359, a closure that changes elements: its code
+  is no `ThruFn` (`Implements`).
+- A view a value comes to hold, not recorded where it goes: #338, #341,
+  #346, #348, #362, #367, #368, #369, #370, #377, #380, #381, #383, #390,
+  #393, #394, #413 and #416. A2 records it in `Ty.holdsView`,
+  `PushArg`, `pair`'s `Dy ++ Dz`, `callRes`'s `rholds` and `heldOfArgs`,
+  `callPostAux`'s `outHeld` and `heldOfArgs`, and a package's interface
+  summary; past a join, `ite` and `while` keep what either path holds
+  (#413, #416).
+- A move or take nurlc does not see: #280, #357 and #372 (`unpair`,
+  `takel`, a `sink` takes an owner only, `lendable`).
+- A borrow ended by a binding's end, replacement or capture, missed:
+  #242, #332, #339, #358, #364, #382, #384, #406, #407 and #408
+  (`exitScope`, `assign`'s `kill .replace`, `CapsOK`, `NamesFree`, `FnOK`
+  at the body's one end, where a `^`, a `\` exit and the defers lead,
+  `catchR`, `DtorSafe`).
+- A struct built from an owner and a view of it: #294 (`pair`: the owned
+  field is no root of the other's dependencies).
+- An `inout` option given a lend: #343 (`assign` gives an `inout` binding
+  only an owned value).
+
+Typed by A2 and safe there; the fault is in the code nurlc generates
+(phase D): #405 (a defer body with a Vec of its own).
+
+Outside A2:
+- The hand-over of an old value to its borrower (above): #366, #373,
+  #378, #387 and #388, plus #410 (a binding that lends the owner's old
+  value handed back through a forwarder) and #412 (a call that may hand
+  back the owner's value or another owner's, github#1517).
+- An `Rc`'s shared state, which is the standard library's (B): #345 and
+  #392.
+- A view stored through a borrow: #395 and #414 (`StmtT.editB` takes
+  element types that hold no views; `rules/t292.md`).
+- A `Slice` of views: #415 (A2's slices view element types that hold no
+  views, `Ty.ok`).
+- A changed plain parameter handed an element rather than an owner: #391
+  (above).
 
 ## Destructors, and a panic while a panic unwinds
 
