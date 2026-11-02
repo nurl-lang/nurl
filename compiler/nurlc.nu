@@ -24497,6 +24497,202 @@ unsafe @ mem_path_to_indices s path → s {
         ? == 0 ( nurl_str_len bw ) ( nurl_str_cat ptr `` ) ( nurl_str_cat3 bw ` ` ptr ) ) } {}
 }
 
+// Can the owner's `=` tell its old value from the new one by a key that
+// is unique to an owned value: a String, a Vec, a struct by its first such
+// field (mem_identity_key), or an option of one by its payload's? (Not an
+// enum: its first payload slot may be a number another value holds too.)
+@ __ud_keyable s vt → b {
+    : s ll ( nurl_llty vt )
+    : s t ? != 0 ( nurl_str_starts ll `{ i1, ` ) ( __wrap_part ll 0 ) ( nurl_str_cat vt `` )
+    ? | == 0 ( nurl_str_len t ) ( __is_handle_enum t ) { ^ F } {}
+    ? | ( seq t `%String` ) != 0 ( nurl_str_starts t `%Vec__` ) { ^ T } {}
+    ? ! ( __is_owned_struct_ty t ) { ^ F } {}
+    : s sname ( nurl_str_slice t 1 - ( nurl_str_len t ) 1 )
+    : i fc ( nurl_str_to_int ( nurl_sym_get2 g_root_syms sname `__field_count` ) )
+    : ~ i i 0
+    ~ < i fc {
+        : s ft ( nurl_sym_get g_root_syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int i ) `__type` ) ) )
+        ? & ( __is_value_handle ft ) ( __handle_keyed ft T ) { ^ ( __ud_keyable ft ) } {}
+        = i + i 1
+    }
+    ^ F
+}
+
+// The type whose buffer a value of type `t` may be: an option's payload's,
+// anything else its own.
+@ __ud_core_ty s t → s {
+    : s ll ( nurl_llty t )
+    ? != 0 ( nurl_str_starts ll `{ i1, ` ) { ^ ( __wrap_part ll 0 ) } {}
+    ^ ( nurl_str_cat ll `` )
+}
+
+// `acc` OR the callee's module-end answer "the result may be argument `k`
+// as is": mem_fn_lend_kind's 1 (`one`, it alone, whole) or 2 (`part`, it
+// among others — `( pick a b k )` — or a part of it): an i1 operand.
+@ __ud_or_one i syms i cg s acc s cn s gn i k → s {
+    ? ( seq acc `1` ) { ^ ( nurl_str_cat `1` `` ) } {}
+    : s r1 ( nurl_cg_reg cg )
+    ( emit_sink_flag_load ( mem_lend_const syms `one` cn gn k ) r1 )
+    : s r2 ( nurl_cg_reg cg )
+    ( emit_sink_flag_load ( mem_lend_const syms `part` cn gn k ) r2 )
+    : s r ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ` = or i1 ` ) ( nurl_print r1 ) ( nurl_print `, ` ) ( nurl_print r2 ) ( nurl_print `\n` )
+    ? == 0 ( nurl_str_len acc ) { ^ r } {}
+    : s o ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print o ) ( nurl_print ` = or i1 ` ) ( nurl_print acc ) ( nurl_print `, ` ) ( nurl_print r ) ( nurl_print `\n` )
+    ^ o
+}
+
+// Can argument word `w` (at a lent position) hold an owner's value of
+// core type `want` as a lend: an argument nurlc cannot name (`-`), or a
+// binding of that type, an option of it included? (A parameter holds the
+// caller's value, never a lend of this frame's owner; a field path is part
+// of another value.)
+@ __ud_arg_may_hold i syms s w s want → b {
+    ? | == 0 ( nurl_str_len w ) ( seq w `-` ) { ^ T } {}
+    ? | ( nurl_sym_has_word syms `__fn_param_names__` w ) >= ( nurl_str_find w `.` ) 0 { ^ F } {}
+    : s wt ( nurl_sym_get syms w )
+    ^ | == 0 ( nurl_str_len wt ) ( seq ( __ud_core_ty wt ) want )
+}
+
+// Whether the call just made may hand back, as is, a value of type `vt` an
+// owner of this frame holds — out of an argument that may hold it as a
+// lend: `` where it cannot, `1` where it may by the callee's final summary
+// (or an argument that is itself a lending call), else the callee's
+// module-end answers for those arguments, ORed — a callee compiled after its
+// caller, a generic instance, a forwarder (agora #410). Where the callee
+// lends nothing the test folds away.
+@ mem_ud_lend_own_cond i syms i cg s vt → s {
+    ? g_call_lend_unnamed { ^ ( nurl_str_cat `1` `` ) } {}
+    : s key ( nurl_sym_get syms `__last_call_lend_key__` )
+    : s cn ( str_first_word key )
+    ? == 0 ( nurl_str_len cn ) { ^ ( nurl_str_cat `1` `` ) } {}
+    : s gn0 ( str_first_word ( str_skip_word key ) )
+    : s gn ? == 0 ( nurl_str_len gn0 ) cn gn0
+    : s want ( __ud_core_ty vt )
+    : b fin & != 0 ( nurl_sym_len2 syms cn `__body_done` ) == 0 ( nurl_sym_len2 g_pending_impl `retfwd##` cn )
+    ? fin {
+        : ~ s rest ( __word_union ( nurl_sym_get syms `__last_call_lend_idents__` ) ( nurl_sym_get syms `__last_phi_idents__` ) )
+        ~ != 0 ( nurl_str_len rest ) {
+            : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+            ? ( __ud_arg_may_hold syms w want ) { ^ ( nurl_str_cat `1` `` ) } {}
+        }
+        ^ ( nurl_str_cat `` `` )
+    } {}
+    : ~ s rest ( nurl_sym_get syms `__last_call_args__` )
+    : ~ s acc ``
+    : ~ i j 0
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? & ! ( __callee_param_scalar syms cn j ) ( __ud_arg_may_hold syms w want ) { = acc ( __ud_or_one syms cg acc cn gn j ) } {}
+        = j + j 1
+    }
+    ^ acc
+}
+
+// …and for `= o w`, w a binding by name: whether w may hold such a value as
+// a lend — a cursor or an alias of another binding (`__alias`), or a
+// binding of a call's lend (`__pljk` / `__pljr`) whose root at a position
+// that call may lend from may hold it, by the same answers.
+@ mem_ud_hold_lend_cond i syms i cg s w s vt → s {
+    : s up ( mem_udrop_ptr_of syms w )
+    ? == 0 ( nurl_str_len up ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? != 0 ( nurl_sym_len2 syms up `__alias` ) { ^ ( nurl_str_cat `1` `` ) } {}
+    : ~ s ks ( nurl_str_cat ( nurl_sym_get2 syms w `__pljk` ) `` )
+    : ~ s rs ( nurl_str_cat ( nurl_sym_get2 syms w `__pljr` ) `` )
+    : s want ( __ud_core_ty vt )
+    : ~ s acc ``
+    ~ != 0 ( nurl_str_len ks ) {
+        : i kn ( nurl_str_find ks `\n` )
+        : i rn ( nurl_str_find rs `\n` )
+        : s k ? < kn 0 ( nurl_str_cat ks `` ) ( nurl_str_slice ks 0 kn )
+        : s r ? < rn 0 ( nurl_str_cat rs `` ) ( nurl_str_slice rs 0 rn )
+        = ks ? < kn 0 `` ( nurl_str_slice ks + kn 1 - - ( nurl_str_len ks ) kn 1 )
+        = rs ? < rn 0 `` ( nurl_str_slice rs + rn 1 - - ( nurl_str_len rs ) rn 1 )
+        : s cn ( str_first_word k )
+        : s gn0 ( str_first_word ( str_skip_word k ) )
+        : s gn ? == 0 ( nurl_str_len gn0 ) cn gn0
+        : b vg ( nurl_str_starts cn `vec_get` )
+        : b fin | vg & & ! ( seq cn `__field__` ) != 0 ( nurl_sym_len2 syms cn `__body_done` ) == 0 ( nurl_sym_len2 g_pending_impl `retfwd##` cn )
+        ? ( seq cn `__field__` ) {} {
+            : ~ s ix ? vg ( nurl_str_cat `0` `` ) ? fin ( mem_fn_lent_params syms cn ) ( __arg_positions r )
+            ~ != 0 ( nurl_str_len ix ) {
+                : i xi ( nurl_str_to_int ( str_first_word ix ) ) = ix ( str_skip_word ix )
+                ? & ! ( __callee_param_scalar syms cn xi ) ( __ud_arg_may_hold syms ( __nth_word r xi ) want ) {
+                    = acc ? fin ( nurl_str_cat `1` `` ) ( __ud_or_one syms cg acc cn gn xi )
+                } {}
+            }
+        }
+        ? ( seq acc `1` ) { ^ acc } {}
+    }
+    ^ acc
+}
+
+// …that key, for value `val` of type `vt` (an option's by its payload's;
+// null for an empty one).
+@ mem_ud_ident_key i cg s vt s val → s {
+    : s ll ( nurl_llty vt )
+    ? == 0 ( nurl_str_starts ll `{ i1, ` ) { ^ ( mem_identity_key cg vt val ) } {}
+    : s pt ( __wrap_part ll 0 )
+    : s p ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print p ) ( nurl_print ` = extractvalue ` ) ( nurl_print ll ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 1\n` )
+    ^ ( mem_identity_key cg pt p )
+}
+
+// The owner `ptr` given `nv`, which may be its own old value (above): an
+// i1, set where it is and the owner owned it. The owner's flag is cleared
+// there first, so neither the old value's drop nor its hand-over to a
+// borrower touches it; mem_udrop_keep_settle gives it back.
+@ mem_udrop_keep_same i syms i cg s ptr s vt s nv s cond → s {
+    : s ll ( nurl_llty vt )
+    : s ov ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print ov ) ( nurl_print ` = load ` ) ( nurl_print ll ) ( nurl_print `, ptr ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+    : s ok ( mem_ud_ident_key cg vt ov )
+    : s nk ( mem_ud_ident_key cg vt nv )
+    ? | == 0 ( nurl_str_len ok ) == 0 ( nurl_str_len nk ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s sm ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print sm ) ( nurl_print ` = icmp eq i8* ` ) ( nurl_print nk ) ( nurl_print `, ` ) ( nurl_print ok ) ( nurl_print `\n` )
+    : s nn ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print nn ) ( nurl_print ` = icmp ne i8* ` ) ( nurl_print ok ) ( nurl_print `, null\n` )
+    : s of ( mem_udrop_flag_get syms cg ptr )
+    : ~ s s2 ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print s2 ) ( nurl_print ` = and i1 ` ) ( nurl_print sm ) ( nurl_print `, ` ) ( nurl_print nn ) ( nurl_print `\n` )
+    ? ! ( seq cond `1` ) {
+        : s s3 ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print s3 ) ( nurl_print ` = and i1 ` ) ( nurl_print s2 ) ( nurl_print `, ` ) ( nurl_print cond ) ( nurl_print `\n` )
+        = s2 s3
+    } {}
+    : s kept ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print kept ) ( nurl_print ` = and i1 ` ) ( nurl_print s2 ) ( nurl_print `, ` ) ( nurl_print of ) ( nurl_print `\n` )
+    : s nk2 ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print nk2 ) ( nurl_print ` = xor i1 ` ) ( nurl_print kept ) ( nurl_print `, 1\n` )
+    : s nf ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print nf ) ( nurl_print ` = and i1 ` ) ( nurl_print of ) ( nurl_print `, ` ) ( nurl_print nk2 ) ( nurl_print `\n` )
+    ( mem_udrop_flag_set syms cg ptr nf )
+    ^ kept
+}
+
+// …and after the `=` has set the flag by the call's answer: the owner owns
+// its value on the runs it kept it, and its provenance slot (`@slot`, what
+// a copy reads) no longer calls it borrowed there.
+@ mem_udrop_keep_settle i syms i cg s ptr s kept → v {
+    : s f ( mem_udrop_flag_get syms cg ptr )
+    : s f2 ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print f2 ) ( nurl_print ` = or i1 ` ) ( nurl_print f ) ( nurl_print `, ` ) ( nurl_print kept ) ( nurl_print `\n` )
+    ( mem_udrop_flag_set syms cg ptr f2 )
+    : s sb ( nurl_sym_get2 syms ptr `__sborrow` )
+    ? == ( nurl_str_get sb 0 ) 64 {
+        : s sl ( nurl_str_slice sb 1 - ( nurl_str_len sb ) 1 )
+        : s b0 ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print b0 ) ( nurl_print ` = load i1, ptr ` ) ( nurl_print sl ) ( nurl_print `\n` )
+        : s nk ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print nk ) ( nurl_print ` = xor i1 ` ) ( nurl_print kept ) ( nurl_print `, 1\n` )
+        : s b1 ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print b1 ) ( nurl_print ` = and i1 ` ) ( nurl_print b0 ) ( nurl_print `, ` ) ( nurl_print nk ) ( nurl_print `\n` )
+        ( nurl_print `  store i1 ` ) ( nurl_print b1 ) ( nurl_print `, ptr ` ) ( nurl_print sl ) ( nurl_print `\n` )
+    } {}
+}
+
 // A binding about to be overwritten while a cursor still holds its value
 // (`= old_r r = r nr`, the rotation of a Euclid loop): the value goes to
 // that cursor instead of being dropped. Whether a borrower still holds it
@@ -39478,6 +39674,27 @@ unsafe @ gen_assign i lex i syms i cg → s {
             } {}
         } {}
         : b __ud_same F
+        // A call that may lend, given back to the owner whose value it may
+        // lend — through another binding that holds that value (`= o ( fwd
+        // e )`, e a join over `( fwd o )`, a lend of a forwarder defined
+        // below, or re-pointed to `( fwd o )` by `=`): where the result IS
+        // the old value, by its key at run time, the owner keeps it. Nothing
+        // is dropped and nothing handed over on those runs. Without this, it
+        // was released while the owner went on to hold it — or handed to
+        // whichever borrower held it first, which could release it under
+        // the owner (agora #410). (A call that may lend this binding itself
+        // is decided above, by the same key.)
+        // (…as is a binding by name that may hold a lend: `= o e`.)
+        // (An i1: `` where it cannot, `1` where it may by what is known now,
+        // or the callees' module-end answers where their summaries are not
+        // final yet — folded away by LLVM where they lend nothing.)
+        : b __ud_kgo & & != 0 ( nurl_str_len __ud_ptr ) ! ( seq ( nurl_sym_get2 syms __ud_ptr `__sborrow` ) `1` ) ( __ud_keyable vt )
+        : s __ud_kcond ? ! __ud_kgo `` ? == bck_rhs_tt TT_LPAREN ? & g_call_may_lend ! __ud_may_self ( mem_ud_lend_own_cond syms cg vt ) `` ? & ( is_ident_tok bck_rhs_tt ) ! ( seq bck_rhs_val name ) ( mem_ud_hold_lend_cond syms cg bck_rhs_val vt ) ``
+        // (Only an owner that may own its value: one bound as a borrow
+        // outright (`__sborrow` `1`, a `: ~` lend out of a `vec_get`) owns
+        // nothing to keep, and its flag, never set, gates no drop — setting
+        // it here made it an owner.)
+        : s __ud_kept ? != 0 ( nurl_str_len __ud_kcond ) ( mem_udrop_keep_same syms cg __ud_ptr vt store_val __ud_kcond ) ``
         // …and a call that lends only out of other owners (`= om ( vec_get
         // [Msg] ms 0 )`, ms a local Vec): what it hands back is no part of
         // the value om holds, which goes by its flag as for any other
@@ -39562,6 +39779,8 @@ unsafe @ gen_assign i lex i syms i cg → s {
             { ? & & != 0 ( nurl_str_len __ud_ptr ) ! ( seq bck_rhs_val name ) ! __ud_same
                 { ( mem_udrop_bind_flag syms cg __ud_ptr vt bck_rhs_tt bck_rhs_val __ud_borrow ) } {} }
         }
+        // (…and owns it again past whatever the call's answer said.)
+        ? != 0 ( nurl_str_len __ud_kept ) { ( mem_udrop_keep_settle syms cg __ud_ptr __ud_kept ) } {}
         // A value block whose tail call may lend what was bound below
         // `name`, which dies first: copied in place, owned (agora #190).
         ? & & != 0 ( nurl_str_len ptr ) | == bck_rhs_tt TT_LBRACE == bck_rhs_tt TT_BACKSLASH == g_blk_tail_eff TT_LPAREN { ( mem_blk_tail_copy_slot syms cg ptr vt __ud_ptr -1 ) } {}
