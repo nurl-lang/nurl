@@ -4127,7 +4127,7 @@ unsafe @ nurl_cg_lbl i h s hint → s {
         : s up ( mem_udrop_ptr_of syms r )
         : b is_param & >= pi 0 | == 0 ( nurl_str_len up ) & != 0 ( nurl_sym_len2 syms up `__pname` ) ! ( __param_owned_slot syms up )
         ? is_param {
-            ? ( nurl_str_starts cn `vec_get` ) { ? == ai 0 { ( __record_param_idx syms `__fn_retpart__` r ) } {} }
+            ? | != 0 ( nurl_str_starts cn `vec_get` ) != 0 ( nurl_str_starts cn `vec_at` ) { ? == ai 0 { ( __record_param_idx syms `__fn_retpart__` r ) } {} }
             { ( __retfwd_note self ( nurl_str_cat4 cn `:` ( nurl_str_int ai ) ( nurl_str_cat `:` ( nurl_str_int pi ) ) ) ) }
         } {}
         = ai + ai 1
@@ -31453,6 +31453,20 @@ unsafe @ bck_check_moved_reads s reads i line s state → v {
     ^ out
 }
 
+// `list` with each plain id marked `^` (reached through an element); a
+// word already marked keeps its mark.
+@ __src_all_ind s list → s {
+    : ~ s out ``
+    : ~ s rest ( nurl_str_cat list `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i c0 ( nurl_str_get w 0 )
+        : s m ? | == c0 94 == c0 126 ( nurl_str_cat w `` ) ( nurl_str_cat `^` w )
+        = out ? == 0 ( nurl_str_len out ) m ( nurl_str_cat3 out ` ` m )
+    }
+    ^ out
+}
+
 // `ids` (plain), each marked `^` when it is in `ind`.
 @ __src_mark s ids s ind → s {
     ? == 0 ( nurl_str_len ind ) { ^ ( nurl_str_cat ids `` ) } {}
@@ -31627,6 +31641,14 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 ? | __hcap __hin { = __lj ( __src_handles_only __lj ) } {}
                 ? __hnc { ( __src_mark_nc __lj ) } {}
                 ? __adop { = __lj ( __src_drop_handles __lj ) } {}
+                // (A part of the argument handed back — an element, a field
+                // read through it — as an owner's handle, not a view: what
+                // it reaches it reaches through that element, as a binding of
+                // it does (`: String e ( vec_at vs 0 )`, bck_sx_name): `^`.
+                // So `( string_data ( vec_at vs 0 ) )` views the element's
+                // own buffer, which a callee growing that element moves,
+                // agora #349.)
+                ? & & ( mem_fn_lends_arg w js ) != 2 ( bck_bind_class ( nurl_llty ( nurl_sym_get g_root_syms w ) ) ) ! ( mem_fn_lends_params g_root_syms w T 0 ) { = __lj ( __src_all_ind __lj ) } {}
                 // (What a callee lends through an Arc parameter is a view
                 // of the payload, §6.5.)
                 ? & & != 0 g_arcp_any == g_sxe_arc -1 ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `arcp##` w ) js ) { = g_sxe_arc ( __sxe_arc_id __lj ) ( __frz_mark w js ) } {}
@@ -34417,6 +34439,11 @@ unsafe @ bck_note_rc_arg s name s ty → v {
                                 // element handle still points where it did).
                                 ? ( nurl_sym_has_word g_fn_reallocs ( bck_field rec 5 ) ( bck_field rec 6 ) ) {
                                     = out ( bck_view_end out sid ( bck_field_int rec 3 ) ( nurl_str_cat4 pw0 ( bck_fn_show ( bck_field rec 5 ) ) `', which may move or free its buffer` `` ) )
+                                    // (A value lent from it may be an element
+                                    // of it — `( vec_at vv 0 )`: the buffer that
+                                    // moves is then that element's, and the
+                                    // views into it end too, agora #349.)
+                                    ? plend { = out ( bck_view_end_ind out sid ( bck_field_int rec 3 ) ( nurl_str_cat4 pw0 ( bck_fn_show ( bck_field rec 5 ) ) `', which may move or free its buffer` `` ) ) } {}
                                 } {}
                             }
                         }
@@ -34435,7 +34462,10 @@ unsafe @ bck_note_rc_arg s name s ty → v {
                 } {
                     // …or move its buffer: the views of it end (agora #169).
                     ? ( nurl_sym_has_word g_fn_reallocs ( bck_field rec 5 ) ( bck_field rec 6 ) ) {
-                        = out ( bck_view_end out sid ( bck_field_int rec 3 ) ( nurl_str_cat4 `'` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` wn ) ) `', which may be another handle on the same Rc value, was passed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) `', which may move or free its buffer` ) ) )
+                        : s rcw ( nurl_str_cat4 `'` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` wn ) ) `', which may be another handle on the same Rc value, was passed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) `', which may move or free its buffer` ) )
+                        // (…and the views into its payload, reached through
+                        // it as an element — `( rc_get r )`, agora #349.)
+                        = out ( bck_view_end_ind ( bck_view_end out sid ( bck_field_int rec 3 ) rcw ) sid ( bck_field_int rec 3 ) rcw )
                     } {}
                 }
             } {}
