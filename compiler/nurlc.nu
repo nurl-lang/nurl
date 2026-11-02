@@ -39457,7 +39457,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
                             ( nurl_print `  call void @__dropifv_` ) ( nurl_print ( __drop_mangle vt ) ) ( nurl_print `(i1 ` ) ( nurl_print __io_c )
                             ( nurl_print `, ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print ` ` ) ( nurl_print __io_lo ) ( nurl_print `)` ) ( emit_dbg_eol )
                         } {}
-                    } { ? ( __nc_held_ty vt ) {
+                    } { ? & ( __nc_held_ty vt ) == 0 g_bck_closure_depth {
                             ( __park_nc_local_lend lex ( nurl_sym_get syms `__last_local_lend__` ) ( nurl_sym_get syms `__last_call_args__` ) vt )
                         } {} }
                 } {}
@@ -48139,7 +48139,6 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
         }
     } {}
     ( __sx_publish __sx_me ? == 0 ( nurl_str_len __cap_sx ) `-` __cap_sx )
-
     = g_nc_flag_caps __ncf_saved
     = g_nc_own_caps __nco_saved
     = g_clo_assigned __cla_saved
@@ -61371,6 +61370,12 @@ unsafe @ __sx_names_capture i syms s sx → b {
             what ( nurl_str_cat3 `, and a '` tshow `' cannot be copied — the value would be released twice. ` )
             `Hand back a value the body makes (a literal, or a call that hands its result over), or let the closure take the value as a parameter and return what it builds from it.` ) )
         } {}
+        // (…and a binding of what a call may lend — an element of the
+        // body's own Vec, `: Conn c ( vec_at [Conn] cs 0 )`, or of a
+        // capture — is judged as that call is, whole: resolve_clo_nc_rets.
+        // Agora #372.)
+        : s nk ( nurl_sym_get2 syms val `__nclk` )
+        ? != 0 ( nurl_str_len nk ) { ( __park_clo_nc_ret lex ( str_first_word nk ) ( str_first_word ( str_skip_word nk ) ) line tshow ) } {}
         ^ v
     } {}
     // …nor a join an arm of which lends what it yields (g_join_lent), or
@@ -61434,6 +61439,11 @@ unsafe @ __sx_names_capture i syms s sx → b {
 // One call a closure hands back whose result cannot be copied, judged at
 // module end on its callee's final summary (resolve_clo_nc_rets).
 @ __park_clo_nc_ret i lex s cn s gn i line s tshow → v {
+    // (Once per call and line: a tail call is parked as the tail and as a
+    // lend the return judges, agora #372.)
+    : s once ( nurl_str_cat4 `clonc!` cn `!` ( nurl_str_cat3 ( nurl_str_int line ) `!` ( nurl_lex_filename lex ) ) )
+    ? != 0 ( nurl_sym_len g_pending_impl once ) { ^ v } {}
+    ( nurl_sym_def g_pending_impl once `1` )
     : i n ( nurl_str_to_int ( nurl_sym_get g_pending_impl `clonc_n` ) )
     ( nurl_sym_def g_pending_impl `clonc_n` ( nurl_str_int + n 1 ) )
     ( nurl_sym_def g_pending_impl ( nurl_str_cat `clonc#` ( nurl_str_int n ) )
@@ -61510,10 +61520,22 @@ unsafe @ __sx_names_capture i syms s sx → b {
 // (`-` for anything else), judged at module end on the callee's final
 // summary (resolve_nc_local_lends; agora #187).
 @ __park_nc_local_lend i lex s triples s args s ty → v {
+    // (A trait object's holdings have their own rule: agora #156.)
+    ? != 0 ( nurl_str_starts ty `%dyn.` ) { ^ v } {}
     // (A closure's result is judged whole, every lend refused:
-    // resolve_clo_nc_rets. A trait object's holdings have their own rule:
-    // agora #156.)
-    ? | != 0 g_bck_closure_depth != 0 ( nurl_str_starts ty `%dyn.` ) { ^ v } {}
+    // resolve_clo_nc_rets — what a binding of a join hands back too, `^ c`
+    // with `: Conn c ? k ( vec_at [Conn] cs 0 ) …`, agora #372.)
+    ? != 0 g_bck_closure_depth {
+        : ~ s cr ( nurl_str_cat triples `` )
+        : s tshow ( llvm_to_nurl ty )
+        ~ != 0 ( nurl_str_len cr ) {
+            : s ccn ( str_first_word cr ) = cr ( str_skip_word cr )
+            : s cgn ( str_first_word cr ) = cr ( str_skip_word cr )
+            = cr ( str_skip_word cr )
+            ( __park_clo_nc_ret lex ccn cgn g_stmt_line tshow )
+        }
+        ^ v
+    } {}
     : ~ s rest ( nurl_str_cat triples `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s cn ( str_first_word rest ) = rest ( str_skip_word rest )
