@@ -33389,6 +33389,33 @@ unsafe @ bck_sx_is_id s e → b {
         } {}
     }
     ( bck_put dk have )
+    // (A parameter left depending on another one's own storage is this
+    // function's answer from the moment it happens. The table is the
+    // function's, not a path's: an `=` of the holder on one path — a
+    // sibling arm, the rest of a loop after a `break`, a later `?` —
+    // clears it for every path, so an answer read only where the walk
+    // ends lost the paths that kept the view (agora #337).)
+    ? != 0 ( nurl_str_len g_bck_fn ) { ( __vk_note_dep wid srcs0 ) } {}
+}
+
+// …one pair of that answer per parameter `wid`'s new direct sources that
+// are other parameters' own storage (not an element's buffer, `vdi_`, nor
+// a handle copy, `vdh_`: bck_note_vkeeps's reading).
+@ __vk_note_dep i wid s srcs0 → v {
+    : s hr ( nurl_str_int ( bck_path_root wid ) )
+    ? | == 0 ( nurl_sym_len g_bck ( bck_bkey `pp_` hr ) ) != 0 ( nurl_sym_len g_bck ( bck_bkey `po_` hr ) ) { ^ } {}
+    : s pl ( nurl_sym_get g_bck `vkparams` )
+    : i h ( str_word_index pl ( nurl_sym_get2 g_bck `rv_` hr ) )
+    ? < h 0 { ^ } {}
+    : ~ s rest ( __word_drop_all ( __word_drop_all ( __src_plain srcs0 ) ( __src_indirect srcs0 ) ) ( __src_handle srcs0 ) )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s x ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s rs ( nurl_str_int ( bck_path_root ( nurl_str_to_int x ) ) )
+        ? & & ! ( seq rs hr ) != 0 ( nurl_sym_len g_bck ( bck_bkey `pp_` rs ) ) == 0 ( nurl_sym_len g_bck ( bck_bkey `po_` rs ) ) {
+            : i k ( str_word_index pl ( nurl_sym_get2 g_bck `rv_` rs ) )
+            ? >= k 0 { ( __vk_acc_add h k ) } {}
+        } {}
+    }
 }
 
 @ bck_dep_clear i wid → v {
