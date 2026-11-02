@@ -14460,8 +14460,17 @@ unsafe @ __sx_publish i me s sx → v {
 @ __clo_call_sx i syms s name s args → s {
     : s rt ( extract_fn_ptr_return_type ( nurl_sym_get syms name ) )
     ? | < ( bck_walk_class rt ) 2 ( mem_clo_ret_copies rt ) { ^ ( nurl_str_cat `-` `` ) } {}
-    ? == 0 ( nurl_str_len args ) { ^ ( nurl_str_cat `-` `` ) } {}
-    ^ ( nurl_str_cat3 `\\(` args `)` )
+    // (…or into what the closure captured: `\ → Tok { ^ @ Tok { Word (
+    // string_data line ) } }` hands back a view of its capture `line`,
+    // agora #369.)
+    : ~ s all ( nurl_str_cat args `` )
+    : ~ s cr ( nurl_str_cat ( nurl_sym_get2 syms name `__closure_caps` ) `` )
+    ~ != 0 ( nurl_str_len cr ) {
+        : s w ( str_first_word cr ) = cr ( str_skip_word cr )
+        = all ? == 0 ( nurl_str_len all ) ( nurl_str_cat w `` ) ( nurl_str_cat3 all `|` w )
+    }
+    ? == 0 ( nurl_str_len all ) { ^ ( nurl_str_cat `-` `` ) } {}
+    ^ ( nurl_str_cat3 `\\(` all `)` )
 }
 
 // Either `a` or `b`: nothing on one side is the other; not modelled on
