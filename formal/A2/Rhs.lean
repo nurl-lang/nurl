@@ -187,7 +187,9 @@ structure RhsOut (m1 : Mem) (Γ1 : Ctx) (E : Entry) (v : Val) (o : Bool) : Prop 
   wf     : E.ty ≠ .int → ∀ r ∈ roots E.vdeps, ∃ Er, Γ1 r = some Er ∧ Er.mode.isRoot = true
   valOwn : E.mode = .own → E.ty.owning = true ∧ WFv E.ty v ∧ ViewsOK m1 E.ty v E.held ∧
              v.ids.Nodup ∧ (∀ i ∈ v.ids, m1.alloc i = true ∧ i < m1.nid) ∧
-             (∀ x U, OwnedAt m1 x U → ∀ i ∈ v.ids, i ∉ U.ids) ∧ SelfFree v
+             (∀ x U, OwnedAt m1 x U → ∀ i ∈ v.ids, i ∉ U.ids) ∧ SelfFree v ∧
+             -- A3.1: ... and no block's payload holds its addresses
+             (∀ i ∈ v.ids, ¬ PayAddr m1 i)
   valBor : E.mode = .bor → ValOK m1 E.ty v E.path E.held
   names  : (E.ty ≠ .int ∨ E.mode = .rootb) → NameOK Γ1 E
   held   : NamesIn v E.held
@@ -1239,7 +1241,8 @@ theorem out_share {m : Mem} {Γ : Ctx} {t : Ty} {k : Nat} {p : Val} (htok : t.ok
   tyok := by simp [Ty.ok, htok, hvf]
   wf _ r hr := by simp [roots, Entry.vdeps, Mode.ownSlot] at hr
   valOwn _ := ⟨rfl, .arc hwp hvf, ViewsOK.none (show (Ty.arc t).holdsView = false from hvf) _ _,
-    List.nodup_nil, fun _ h => (nomatch h), fun _ _ _ _ h => (nomatch h), fun _ _ _ h => by cases h⟩
+    List.nodup_nil, fun _ h => (nomatch h), fun _ _ _ _ h => (nomatch h), fun _ _ _ h => (by cases h),
+    fun _ h => (nomatch h)⟩
   valBor h := nomatch h
   names _ := DepsNamed.nil _
   held := NamesIn.nil _ rfl
@@ -1310,12 +1313,16 @@ theorem rhs_new {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {t : Ty} (h
         obtain ⟨ha, hlt⟩ := hi.heap.alloc o U hU i hi'
         exact ⟨by rw [hold o U hU i hi']; exact ha, by show i < m.nid + 2; omega⟩
       self := fun o U hU => hi.heap.self o U hU
-      bpay := hi.heap.bpay
-      bkey := fun k bl hk => by show k < m.nid + 2; have := hi.heap.bkey k bl hk; omega }
+      blk := hi.heap.blk.frame rfl (by show m.nid ≤ m.nid + 2; omega) (fun i hi' => by
+          have hlt := (hi.heap.payAlloc hi').2
+          show upd (upd m.alloc m.nid true) (m.nid + 1) true i = m.alloc i
+          rw [upd_ne _ _ (by omega), upd_ne _ _ (by omega)])
+        (fun o U hU i hi' => hi.heap.notPay hU hi')
+      bpay := hi.heap.bpay }
   refine ⟨⟨hi.of_st rfl hheap (Nat.le_refl _), rfl, by show m.nid ≤ m.nid + 2; omega, fun _ => rfl, fun _ _ => rfl,
     fun _ _ h _ => h, fun _ => rfl, fun x E1 h => ⟨E1, h, rfl, rfl⟩, DKeep.refl _ _, BlkLe.refl _⟩, ?_⟩
   refine ⟨rfl, Or.inl rfl, rfl, ht, fun _ r hr => by simp [roots, Entry.vdeps, Mode.ownSlot] at hr,
-    fun _ => ⟨rfl, WFv.node (fun e he => by simp at he), fun s v hin => ?_, ?_, ?_, ?_, ?_⟩,
+    fun _ => ⟨rfl, WFv.node (fun e he => by simp at he), fun s v hin => ?_, ?_, ?_, ?_, ?_, ?_⟩,
     (fun h => by cases h), (fun _ _ hd => by cases hd), NamesIn.nil _ rfl,
     PkgsOK.leaf (fun _ h => by cases h with | elem he => cases he) (fun _ _ _ _ _ h => by cases h),
     fun _ => SharesOK.nil_node⟩
@@ -1335,6 +1342,10 @@ theorem rhs_new {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {t : Ty} (h
     rcases hs.cases' with h | ⟨e, hc, _⟩
     · cases h
     · cases hc with | elem he => simp at he
+  · intro i hi' hp
+    have hlt := (hi.heap.payAlloc hp).2
+    simp only [ids_node, idsL_nil, List.mem_cons, List.not_mem_nil, or_false] at hi'
+    rcases hi' with rfl | rfl <;> omega
 
 theorem rhs_move' {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     (hanch : RootbAnch Γ F)
@@ -1394,7 +1405,7 @@ theorem rhs_move' {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       | some E0 => rw [hE] at h; cases h; exact ⟨E0, rfl, killE_mode .., killE_ty ..⟩
   · have hnint' : E.ty ≠ .int := fun h => by rw [h] at hvec; cases hvec
     refine ⟨rfl, Or.inl rfl, rfl, hi.tyok (E := E) hy, fun hn r hr => ?_, fun _ => ⟨hvec, hwT, ?_, ?_, ?_, ?_,
-      hi.heap.self y v hT⟩, (fun h => by cases h),
+      hi.heap.self y v hT, fun i hi' => hi.heap.notPay hT hi'⟩, (fun h => by cases h),
       fun _ => (hi.names y E hy hl (Or.inl hnint')).transport (fun r Er hrE hr hl' hh' ho' => ?_)
         (fun _ hd => List.mem_append_right _ hd),
       hi.held y E _ v hy hl hT rfl, hi.pkgs y _ v hT rfl, fun _ => (hi.shares y E _ v hy hT rfl rfl).of_blk rfl⟩
@@ -1544,8 +1555,11 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
         rcases hown1 o U hU with ⟨_, rfl⟩ | ⟨_, h⟩
         · exact (hi.heap.self y _ hT).shrink (fun x hx => List.mem_append_left _ hx)
         · exact hi.heap.self o U h
-      bpay := hi.heap.bpay
-      bkey := hi.heap.bkey }
+      blk := hi.heap.blk.frame rfl (Nat.le_refl _) (fun _ _ => rfl) (fun o U hU i hi' => by
+        rcases hown1 o U hU with ⟨_, rfl⟩ | ⟨_, h⟩
+        · exact hi.heap.notPay hT (hsubl.subset hi')
+        · exact hi.heap.notPay h hi')
+      bpay := hi.heap.bpay }
   have hsfT := hi.heap.self y _ hT
   have hkeepF : ∀ dep ∈ E.held, dep.root ≠ y → VKeep m m1 dep := by
     intro dep hd hne
@@ -1664,7 +1678,8 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
         have hok := hi.tyok hy; rw [hty] at hok
         show RhsOut _ _ ⟨.vec s, .own, true, [], E.held, false, false⟩ _ true
         refine ⟨rfl, Or.inl rfl, rfl, hok, fun _ r hr => ?_, fun _ => ⟨rfl, WFv.node hes, ?_, ?_,
-          ?_, ?_, hsfT.sub (Sub.child hemem (Sub.refl _))⟩, (fun h => by cases h),
+          ?_, ?_, hsfT.sub (Sub.child hemem (Sub.refl _)),
+          fun i hi' => hi.heap.notPay hT (hsube.subset hi')⟩, (fun h => by cases h),
           fun _ => hNk _ (hHeld _ (List.Subset.refl _)), hNi, hPk, fun _ => (hshT.elem hemem).of_blk rfl⟩
         · exact hwfH r (by simpa [roots, Entry.vdeps, Mode.ownSlot] using hr)
         · exact hvsT.keep_except hT hsfT (fun s' w h => ViewIn.child hemem h) hkeepF
@@ -1680,7 +1695,8 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
         have hok := hi.tyok hy; rw [hty] at hok
         show RhsOut _ _ ⟨.prod a b, .own, true, [], E.held, false, false⟩ _ true
         refine ⟨rfl, Or.inl rfl, rfl, hok, fun _ r hr => ?_, fun _ => ⟨rfl, WFv.pair hwa hwb, ?_, ?_,
-          ?_, ?_, hsfT.sub (Sub.child hemem (Sub.refl _))⟩, (fun h => by cases h),
+          ?_, ?_, hsfT.sub (Sub.child hemem (Sub.refl _)),
+          fun i hi' => hi.heap.notPay hT (hsube.subset hi')⟩, (fun h => by cases h),
           fun _ => hNk _ (hHeld _ (List.Subset.refl _)), hNi, hPk, fun _ => (hshT.elem hemem).of_blk rfl⟩
         · exact hwfH r (by simpa [roots, Entry.vdeps, Mode.ownSlot] using hr)
         · exact hvsT.keep_except hT hsfT (fun s' w h => ViewIn.child hemem h) hkeepF
@@ -1697,7 +1713,8 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
         have hok := hi.tyok hy; rw [hty] at hok
         show RhsOut _ _ ⟨.sum a b, .own, true, [], E.held, false, false⟩ _ true
         refine ⟨rfl, Or.inl rfl, rfl, hok, fun _ r hr => ?_, fun _ => ⟨rfl, hsumwf, ?_, ?_,
-          ?_, ?_, hsfT.sub (Sub.child hemem (Sub.refl _))⟩, (fun h => by cases h),
+          ?_, ?_, hsfT.sub (Sub.child hemem (Sub.refl _)),
+          fun i hi' => hi.heap.notPay hT (hsube.subset hi')⟩, (fun h => by cases h),
           fun _ => hNk _ (hHeld _ (List.Subset.refl _)), hNi, hPk, fun _ => (hshT.elem hemem).of_blk rfl⟩
         · exact hwfH r (by simpa [roots, Entry.vdeps, Mode.ownSlot] using hr)
         · exact hvsT.keep_except hT hsfT (fun s' w h => ViewIn.child hemem h) hkeepF
@@ -1714,7 +1731,8 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
         have hok := hi.tyok hy; rw [hty] at hok
         show RhsOut _ _ ⟨.fn ms, .own, true, [], E.held, false, false⟩ _ true
         refine ⟨rfl, Or.inl rfl, rfl, hok, fun _ r hr => ?_, fun _ => ⟨rfl, hsumwf, ?_, ?_,
-          ?_, ?_, hsfT.sub (Sub.child hemem (Sub.refl _))⟩, (fun h => by cases h),
+          ?_, ?_, hsfT.sub (Sub.child hemem (Sub.refl _)),
+          fun i hi' => hi.heap.notPay hT (hsube.subset hi')⟩, (fun h => by cases h),
           fun _ => hNk _ (hHeld _ (List.Subset.refl _)), hNi, hPk, fun _ => (hshT.elem hemem).of_blk rfl⟩
         · exact hwfH r (by simpa [roots, Entry.vdeps, Mode.ownSlot] using hr)
         · exact hvsT.keep_except hT hsfT (fun s' w h => ViewIn.child hemem h) hkeepF
@@ -1731,7 +1749,8 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
         have hok := hi.tyok hy; rw [hty] at hok
         show RhsOut _ _ ⟨.arc a, .own, true, [], E.held, false, false⟩ _ true
         refine ⟨rfl, Or.inl rfl, rfl, hok, fun _ r hr => ?_, fun _ => ⟨rfl, hsumwf, ?_, ?_,
-          ?_, ?_, hsfT.sub (Sub.child hemem (Sub.refl _))⟩, (fun h => by cases h),
+          ?_, ?_, hsfT.sub (Sub.child hemem (Sub.refl _)),
+          fun i hi' => hi.heap.notPay hT (hsube.subset hi')⟩, (fun h => by cases h),
           fun _ => hNk _ (hHeld _ (List.Subset.refl _)), hNi, hPk, fun _ => (hshT.elem hemem).of_blk rfl⟩
         · exact hwfH r (by simpa [roots, Entry.vdeps, Mode.ownSlot] using hr)
         · exact hvsT.keep_except hT hsfT (fun s' w h => ViewIn.child hemem h) hkeepF

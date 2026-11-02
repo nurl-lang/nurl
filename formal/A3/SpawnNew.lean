@@ -227,8 +227,8 @@ theorem newThread_inv {P : Prog} {fn : Fn} (hok : FnOK P fn)
       disj := fun x y t u hne h1 h2 => hdisj x y t u hne (spawnSt_val h1 rfl).1 (spawnSt_val h2 rfl).1
       alloc := fun x t h i hi => ⟨(hpart i).mpr ⟨t, hmem h rfl, hi⟩, hlt t (hmem h rfl) i hi⟩
       self := fun x t h => hself t (hmem h rfl)
-      bpay := fun k bl hk => (hB k bl hk).2.2.2.2
-      bkey := hBk }
+      blk := BlkOwn.of_none fun k bl hk => ⟨(hB k bl hk).2.2.2.2, hBk k bl hk⟩
+      bpay := fun k bl hk => (hB k bl hk).2.2.2.2 }
     nvSt := fun v hv => by
       have h1 : v ≤ fn.params.length := Nat.not_lt.mp fun h => by
         have h2 : (spawnSt fn vs v).isSome = true := hv

@@ -106,6 +106,8 @@ def comp : Kind → Kind → Kind
   | .view, .view => .view
   | .name b t, _ => .name b t
   | _, .name b t => .name b t
+  | .share, _ => .share   -- A3.1: what is reached inside a payload stays inside it
+  | _, .share => .share
   | _, _ => .inner
 
 /-- The handle of a borrowed slice parameter is a view. -/
@@ -610,7 +612,7 @@ def argDeps (Γ : Ctx) (args : List Var) (jk : Nat × Kind) : List Dep :=
 
 /-- Every dependency of every kind on the given roots. -/
 def allKinds (rs : List Var) : List Dep :=
-  rs.flatMap (fun r => [⟨r, .self⟩, ⟨r, .inner⟩, ⟨r, .view⟩])
+  rs.flatMap (fun r => [⟨r, .self⟩, ⟨r, .inner⟩, ⟨r, .view⟩, ⟨r, .share⟩])
 
 
 /-- The dependencies on memory among `ds`, and those by name. -/

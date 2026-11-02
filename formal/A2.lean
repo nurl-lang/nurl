@@ -7,6 +7,7 @@ import A2.Ctx
 import A2.Stability
 import A2.Repl
 import A2.Heap
+import A2.Sweep
 import A2.Values
 import A2.Frame
 import A2.Rhs

@@ -84,6 +84,63 @@ inductive FreesL : (Nat → Bool) → List Val → (Nat → Bool) → Prop
       Frees a e a1 → FreesL a1 es a2 → FreesL a (e :: es) a2
 end
 
+-- The addresses a tree owns: every node's control block and buffer.
+mutual
+def Val.ids : Val → List Nat
+  | .node _ c d es => c :: d :: idsL es
+  | .pair v w => v.ids ++ w.ids
+  | .inl v => v.ids
+  | .inr v => v.ids
+  | .pkg _ _ _ v _ => v.ids
+  | _ => []
+def idsL : List Val → List Nat
+  | [] => []
+  | e :: es => e.ids ++ idsL es
+end
+
+/-! ### A3.1: blocks are collected by reachability
+
+A block lives while some slot's value, or the payload of a block that lives,
+holds a share of it or a handle into its payload.  A payload holds only
+shares of older blocks (its value was made before the block), so nothing
+cycles, and the blocks nothing reaches are exactly those the runtime's
+count would have freed, one after the other, newest first; the model frees
+them together, at the end of the step (`Mem.sweep`). -/
+
+/-- `v` refers to block `k` of `B`: it holds a share of it, or a handle whose
+    address lies in its payload. -/
+def Refers (B : Nat → Option Blk) (v : Val) (k : Nat) : Prop :=
+  (∃ p, Sub (.arc k p) v) ∨ ∃ bl, B k = some bl ∧
+    ((∃ c, Sub (.href c) v ∧ c ∈ bl.pay.ids) ∨ ∃ d o l, Sub (.view d o l) v ∧ d ∈ bl.pay.ids)
+
+/-- The blocks of `B` reached from the values `R` (the slots' values), through
+    the payloads of reached blocks. -/
+inductive Reached (R : Val → Prop) (B : Nat → Option Blk) : Nat → Prop
+  | root {v : Val} {k : Nat} : R v → Refers B v k → Reached R B k
+  | pay {k k' : Nat} {bl : Blk} : Reached R B k' → B k' = some bl → Refers B bl.pay k → Reached R B k
+
+/-- What a store's slots hold. -/
+def Mem.vals (m : Mem) (v : Val) : Prop := ∃ x o, m.st x = some ⟨o, some v⟩
+
+/-- An address the payload of a block nothing reaches owns: the sweep frees it. -/
+def Unreached (R : Val → Prop) (B : Nat → Option Blk) (i : Nat) : Prop :=
+  ∃ k bl, B k = some bl ∧ ¬ Reached R B k ∧ i ∈ bl.pay.ids
+
+open Classical in
+/-- The sweep's addresses: every one an unreached payload owns is freed. -/
+noncomputable def sweepAlloc (R : Val → Prop) (B : Nat → Option Blk) (a : Nat → Bool) : Nat → Bool :=
+  fun i => a i && !decide (Unreached R B i)
+
+open Classical in
+/-- The sweep's blocks: the reached ones. -/
+noncomputable def sweepBlk (R : Val → Prop) (B : Nat → Option Blk) : Nat → Option Blk :=
+  fun k => if Reached R B k then B k else none
+
+/-- **The sweep** at the end of a step: every block no slot's value reaches is
+    removed and its payload tree freed. -/
+noncomputable def Mem.sweep (m : Mem) : Mem :=
+  { m with alloc := sweepAlloc m.vals m.blk m.alloc, blk := sweepBlk m.vals m.blk }
+
 /-- What leaving a scope releases: an owned value whose flag is set. -/
 inductive DropSlot : (Nat → Bool) → Slot → (Nat → Bool) → Prop
   | owned {a a' : Nat → Bool} {t : Val} : Frees a t a' → DropSlot a ⟨true, some t⟩ a'

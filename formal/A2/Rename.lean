@@ -187,7 +187,7 @@ theorem mem_allKinds {rs : List Var} {d : Dep} (h : d ∈ allKinds rs) : d.root 
   simp only [allKinds, List.mem_flatMap, List.mem_cons, List.not_mem_nil,
     or_false] at h
   obtain ⟨r, hr, hd⟩ := h
-  rcases hd with rfl | rfl | rfl <;> exact hr
+  rcases hd with rfl | rfl | rfl | rfl <;> exact hr
 
 theorem mem_A {d : Dep} : d ∈ S.A ↔ d ∈ allKinds S.R ∨ d ∈ S.N := List.mem_append
 
@@ -673,7 +673,7 @@ theorem canon_wf (h : S.OK) (hab : S.AbsOK Γa) (hw : CtxWF Γa) : CtxWF (S.cano
 theorem allKinds_notName {rs : List Var} {d : Dep} (h : d ∈ allKinds rs) : d.kind.isName = false := by
   simp only [allKinds, List.mem_flatMap, List.mem_cons, List.not_mem_nil, or_false] at h
   obtain ⟨r, _, hd⟩ := h
-  rcases hd with rfl | rfl | rfl <;> rfl
+  rcases hd with rfl | rfl | rfl | rfl <;> rfl
 
 /-- A symbolic name, where the call places it, names a binding the caller's
     view has: the `inout` argument, lifted, owns its slot, holds nothing and
@@ -842,17 +842,17 @@ theorem allKinds_comp {R : List Var} {k : Kind} (hk : k.isName = false) :
   intro d hd
   obtain ⟨d0, hd0, rfl⟩ := List.mem_map.mp hd
   have hr := mem_allKinds hd0
-  have hk0 : d0.kind = .self ∨ d0.kind = .inner ∨ d0.kind = .view := by
+  have hk0 : d0.kind = .self ∨ d0.kind = .inner ∨ d0.kind = .view ∨ d0.kind = .share := by
     simp only [allKinds, List.mem_flatMap, List.mem_cons, List.not_mem_nil,
       or_false] at hd0
     obtain ⟨r, _, h⟩ := hd0
-    rcases h with rfl | rfl | rfl <;> simp
+    rcases h with rfl | rfl | rfl | rfl <;> simp
   simp only [allKinds, List.mem_flatMap, List.mem_cons, List.not_mem_nil,
     or_false]
   refine ⟨d0.root, hr, ?_⟩
   cases k with
   | name b t => cases hk
-  | _ => rcases hk0 with h | h | h <;> rw [h] <;> simp [comp]
+  | _ => rcases hk0 with h | h | h | h <;> rw [h] <;> simp [comp]
 
 theorem A_comp (h : S.OK) {k : Kind} (hk : k.isName = false) :
     S.A.map (fun d => (⟨d.root, comp d.kind k⟩ : Dep)) ⊆ S.A := by
@@ -1628,7 +1628,7 @@ theorem mem_allKinds_iff {L : List Var} {d : Dep} : d ∈ allKinds L ↔ d.root 
     simp only [allKinds, List.mem_flatMap, List.mem_cons, List.not_mem_nil,
       or_false] at h
     obtain ⟨r, _, h⟩ := h
-    rcases h with rfl | rfl | rfl <;> rfl
+    rcases h with rfl | rfl | rfl | rfl <;> rfl
   · intro ⟨hd, hk⟩
     simp only [allKinds, List.mem_flatMap, List.mem_cons, List.not_mem_nil, or_false]
     exact ⟨d.root, hd, by obtain ⟨r, k⟩ := d; cases k <;> simp_all [Kind.isName]⟩

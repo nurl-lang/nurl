@@ -317,7 +317,7 @@ theorem allKinds_named (Γ : Ctx) (rs : List Var) : DepsNamed Γ (allKinds rs) :
   intro d hd b t hk
   simp only [allKinds, List.mem_flatMap, List.mem_cons, List.not_mem_nil, or_false] at hd
   obtain ⟨r, _, hd⟩ := hd
-  rcases hd with rfl | rfl | rfl <;> cases hk
+  rcases hd with rfl | rfl | rfl | rfl <;> cases hk
 
 theorem DepsNamed.flatMap {Γ : Ctx} {α : Type} {l : List α} {f : α → List Dep}
     (h : ∀ a ∈ l, DepsNamed Γ (f a)) : DepsNamed Γ (l.flatMap f) := by
@@ -415,7 +415,7 @@ theorem heldOfArgs_name {Γ : Ctx} {args : List Var} {d : Dep} (hd : d ∈ heldO
   rcases List.mem_append.mp hd with hd | hd
   · simp only [allKinds, List.mem_flatMap, List.mem_cons, List.not_mem_nil, or_false] at hd
     obtain ⟨r, _, hd⟩ := hd
-    rcases hd with rfl | rfl | rfl <;> cases hn
+    rcases hd with rfl | rfl | rfl | rfl <;> cases hn
   · obtain ⟨a, ha, hd⟩ := List.mem_flatMap.mp hd
     split at hd
     · cases hd

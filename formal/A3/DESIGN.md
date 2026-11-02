@@ -234,6 +234,118 @@ Not yet mechanized: the count as a stated invariant, the sweep (needed
 once a payload owns addresses: step 2's second cut, a `Vec` payload), and
 the probes (step 4).
 
+**Status (second cut, started).** The settled design is option 1 below: a
+payload's memory is its block's, `Sub` / `Top` / `Below` do not enter a
+share's payload, and a borrow may land in a payload when its entry depends
+on a root whose value holds a share of the block. What `check.sh` proves:
+- `HeapOK.blk : BlkOwn m`: every block owns its payload tree. Its addresses
+  appear once in it, in no owned tree and in no other block's payload, and
+  are live and below `nid`; the key is below `nid`. Every construction of
+  `HeapOK` proves it (`BlkOwn.frame` for a step that keeps the blocks,
+  `rhs_arcNew` for a new one), so an owned value a right-hand side hands on,
+  and a pushed or stored element, carry that they hold no payload address
+  (`RhsOut.valOwn`, `Pushed.np`, the `hnp` premises of `HeapOK.grow`,
+  `editPush`, `editSet`, `freeV`).
+- The first cut's "a payload owns no address" stays as `HeapOK.bpay` until
+  the sweep exists: `covers_evalR` (an `arc_new` keeps every address
+  covered by a slot) and `no_leak_end` still read it, and `arcNew` still
+  asks `Ty.plain`. `Covers` does not count payloads yet.
+
+What stops the borrows into a payload (the second cut's step 2) as it was
+specified: a view *stored in an owned tree* (`ViewsOK`) that is valid
+through a share-kind dependency breaks `viewAt_not_self` (`Frame.lean`).
+That lemma is what lets `ViewsOK.keep_except` (`rhs_move`, `pop`,
+`takel` / `taker`, `editB`'s `MInv.edit_drop`) and `ViewsOK.dropSelf`
+(`MInv.revive`) ignore the dependencies on the tree's own owner, and it
+holds only because no tree views itself (`SelfFree`). With a share
+dependency it fails in memory: a struct may hold a share `a` and a view of
+the same block taken through another share `b` (the typing allows it, and
+it is safe), and memory cannot tell `a`'s copy of the payload from `b`'s,
+so the view is valid through the struct's own owner as well. Once such a
+view is valid only that way (`liftE`, a weakening or a reroot can leave the
+owner in its own `held`), a move (`rhs_move`) or a split (`unpair`, `pop`)
+leaves a live view whose witness is gone. The typing never makes such a
+view (`pair`, `push` and `assign` ask `x ∉ roots D`, and `CallT` keeps an
+`inout` argument out of the other arguments' dependencies), but the
+invariant does not say so. The ways out:
+- **Option Two's invariant** (above): every view stored in `x`'s tree is
+  valid through a dependency whose root does not reach `x`, through
+  borrowed parameters' dependencies (a reroot of `p` keeps it because `p`'s
+  anchors are frozen while `x` changes). This is the general fix. It is an
+  `MInv` fact kept through every step, the call machinery included.
+- **No stored payload view.** A share dependency never enters `held`, so
+  `ViewsOK` needs no payload case. This means a check at `PushArg.slice`,
+  and no payload borrow passed to a call, since a callee may store a view
+  of its `in` parameter and the reroot then turns it into a share view.
+  Both checks are anti-monotone in dependencies. They survive `liftE` only
+  if `allKinds` has no `share`. But then `derive_lift` fails for an
+  `arc_get` inside a callee, because `S.A`'s dependencies composed with
+  `share` are not in `S.A`. So this needs its own handling in `Rename`.
+- **A scoped `arc_get`**: `letv x (.arcGet a) s` steps to
+  `frozen [a] (rbind x s)`. `x` is a borrowed root anchored on `a`, its
+  exit kills what depends on it instead of rerooting, and a share
+  dependency appears only as `x`'s own path. `NodeAt` / `DataAt` then find
+  payload nodes, and `rootbLt` asks `a < x`. A payload borrow cannot be
+  returned from the function that took it (h288's helper).
+- **A conservative sweep** that keeps a block while any slot holds a share
+  of it or a handle into it. A payload borrow is then valid while its block
+  exists, with no tie. It is sound and simple, but it frees later than the
+  runtime does.
+
+Steps 3–6 (the real `arc_get` handle, `editB`'s exclusion, the count and
+the sweep, A3) wait on this choice.
+
+**Chosen: the conservative sweep (the fourth way), made precise.** The
+model collects blocks by *reachability*. A block lives while some slot's
+value, or the payload of a live block, holds a share of it or a handle
+(`href c`, `view d …`) whose address lies in its payload. A payload view or
+href is then valid by its own existence, because its slot keeps its block.
+The runtime frees at refcount 0, which can be earlier than this sweep: a
+dead borrow's slot may still hold a handle into the block. **Phase D
+obligation (not proven here):** the two agree on every live binding. That
+is, refcount 0 implies that no *live* binding reaches the block. It
+follows from the typing, because `arc_get`'s borrow depends on its share
+binding and dies with it.
+
+Proven so far:
+- `Refers`, `Reached` (a least fixpoint, so no removal order is needed),
+  `Unreached` and `Mem.sweep` (`Semantics.lean`). The sweep removes every
+  block nothing reaches and frees exactly its payload's addresses.
+- `A2/Sweep.lean`:
+  - the sweep keeps the slots, `nid` and every reached block
+    (`Mem.sweep_blk`, `sweep_blkLe`);
+  - it frees only unreached payloads (`Mem.sweep_alloc`);
+  - reachability survives it (`Reached.sweep`);
+  - it keeps `HeapOK` (`HeapOK.sweep`).
+- `Kind.share`: a dependency through a share's payload. It ends as `inner`
+  does, `comp` absorbs it, and `allKinds` covers it. No rule makes one yet.
+
+The sweep is not yet run by `Steps`, and `Covers` and `no_leak` are
+unchanged.
+
+What stops step (b) for now is `StmtT.editB`'s progress. A payload `href`
+valid "by its own existence" is valid whatever its dependencies are. So
+`MInv.thru_owner` (a live borrow whose memory roots all own their slots
+names a node of one of their trees) can no longer be proven, and `editB`
+through a borrow that lies in a payload has no step: `NodeOf` searches
+owned trees only, as it must, since a payload is frozen. Typing excludes
+such a borrow only if the invariant links the payload handle to a mark
+that `editB` refuses. A trial (its patch is outside the tree) marked it by
+a share dependency or a borrowed root (`PayGate`), kept the mark through
+`RootKeep` / `HKeep`, and made payload Vecs hold no Vec (`Ty.flat`), so an
+element read out of a payload lends no handle. The mark does not survive a
+borrowed parameter's exit (`exitRoot`). When the mark is the parameter
+itself, the reroot onto what the parameter borrowed needs memory to tie the
+handle to the parameter's own value, and a dependency-free payload handle
+has no such tie. Ways on:
+- `NodeAt` / `DataAt` also find payload nodes. A borrowed root's payload
+  handle then lands positionally, through `RootNode`, as an owned node
+  does, and the standard reroot lemmas carry it. `RootNode.owned` becomes
+  "in an owned tree or a payload".
+- Or `derive` from a borrowed root adds a share mark. `editB` already
+  refuses borrowed roots, but a summary's `lends` then carries `share` to
+  callers, so `editB` through a borrow returned by a function is refused.
+
 A3.0 settled that A3 imports A2 and runs A2's step on each thread's view,
 so a shared block has to live somewhere A2's step can read. For `Arc` the
 block goes into A2 itself. Single-threaded, an `Arc` is a counted
