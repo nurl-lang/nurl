@@ -326,6 +326,8 @@ structure HeapOK (m : Mem) : Prop where
   -- A3.1's first cut: a payload owns no address (it holds no allocation),
   -- and a block's key is no address either (taken from `nid`, never live)
   bpay  : ∀ k bl, m.blk k = some bl → bl.pay.ids = []
+  /-- A3.1: a block's key was taken from `nid`, so a new one is fresh. -/
+  bkey  : ∀ k bl, m.blk k = some bl → k < m.nid
 
 /-- A binding's slot agrees with its entry. -/
 def SlotOK (m : Mem) (E : Entry) (sl : Slot) : Prop :=

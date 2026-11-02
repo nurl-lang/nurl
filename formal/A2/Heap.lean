@@ -124,6 +124,7 @@ theorem HeapOK.without {m : Mem} (hh : HeapOK m) {x : Var} {T : Val} (hx : Owned
     exact ⟨by rw [halloc i hni]; exact ha, Nat.lt_of_lt_of_le hlt hnid⟩
   self o U hU := hh.self o U (hown o U hU).2
   bpay k bl hk := hh.bpay k bl (by rw [← hb]; exact hk)
+  bkey k bl hk := Nat.lt_of_lt_of_le (hh.bkey k bl (by rw [← hb]; exact hk)) hnid
 
 /-- Putting a tree into a slot that held none. -/
 theorem HeapOK.put {m : Mem} (hh : HeapOK m) {x : Var} {T : Val} (m' : Mem)
@@ -154,6 +155,7 @@ theorem HeapOK.put {m : Mem} (hh : HeapOK m) {x : Var} {T : Val} (m' : Mem)
     · exact hTs
     · exact hh.self o U h
   bpay k bl hk := hh.bpay k bl (by rw [← hb]; exact hk)
+  bkey k bl hk := Nat.lt_of_lt_of_le (hh.bkey k bl (by rw [← hb]; exact hk)) hnid
 
 /-! ### Trees that do not view themselves -/
 

@@ -21,6 +21,7 @@ theorem heapOK_grow {m m' : Mem} (hh : HeapOK m) (hst : m'.st = m.st)
     exact ⟨ha i h1, Nat.lt_of_lt_of_le h2 hn⟩
   self x t h := hh.self x t (by unfold OwnedAt at *; rw [← hst]; exact h)
   bpay k bl hk := hh.bpay k bl (by rw [← hb]; exact hk)
+  bkey k bl hk := Nat.lt_of_lt_of_le (hh.bkey k bl (by rw [← hb]; exact hk)) hn
 
 theorem CatchOK.of_st {m m' : Mem} (hst : m'.st = m.st) (hnv : m.nv ≤ m'.nv) (hb : m'.blk = m.blk) :
     ∀ {s : Stmt}, CatchOK m s → CatchOK m' s

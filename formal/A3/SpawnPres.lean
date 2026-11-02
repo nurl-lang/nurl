@@ -43,7 +43,7 @@ def NewThreadLemma (P : Prog) (spawn : Nat → Bool) : Prop :=
     ∀ {part : Nat → Bool}, (∀ i, part i = true ↔ ∃ v ∈ vs, i ∈ v.ids) →
     ∀ {N : Nat}, (∀ v ∈ vs, ∀ i ∈ v.ids, i < N) → ∀ {B : Nat → Option Blk},
     (∀ (j : Nat) (v : Val) (pt : PMode × Ty), vs[j]? = some v → fn.params[j]? = some pt →
-      SharesIn B pt.2 v) → BlocksOK B →
+      SharesIn B pt.2 v) → BlocksOK B → (∀ k bl, B k = some bl → k < N) →
     ThreadOK P { alloc := part, nid := N, nv := fn.nvars, st := spawnSt fn vs, blk := B }
       (wrapParams fn.params 0 0 (.scope fn.params.length fn.body))
 
@@ -126,7 +126,7 @@ theorem CInv.spawn_of {P : Prog} {spawn : Nat → Bool} (hSO : SpawnerLemma P sp
     (fun v hv => by obtain ⟨a0, h0⟩ := hown v hv; exact memCodes_iff.mp hcds a0 true v h0)
     hpart (fun v hv k hk => (hids v hv k hk).2) hsh
     (fun k bl hk => ⟨(hinv.blocks k bl hk).1, (hinv.blocks k bl hk).2.1, (hinv.blocks k bl hk).2.2.1,
-      (hinv.blocks k bl hk).2.2.2, hinv.heap.bpay k bl hk⟩)
+      (hinv.blocks k bl hk).2.2.2, hinv.heap.bpay k bl hk⟩) (fun k bl hk => hinv.heap.bkey k bl hk)
   -- the spawner keeps `a'`, the new thread gets `aN`
   have ha'a : ∀ k, a' k = true → a k = true := fun k hk => FreesL.le hfr hk
   have haNa : ∀ k, aN k = true → a k = true := fun k hk => minus_le k hk

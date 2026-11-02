@@ -86,7 +86,8 @@ theorem MInv.add {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} (hx : Γ x = no
                 rcases ownedAt_set.mp hT with ⟨_, h⟩ | ⟨_, h⟩
                 · cases h
                 · exact h)
-              bpay := hi.heap.bpay }
+              bpay := hi.heap.bpay
+              bkey := hi.heap.bkey }
     | true =>
       have hown : E.mode = .own := by
         rcases hout.mode with h | h
@@ -262,7 +263,7 @@ theorem HeapOK.release {m : Mem} (hh : HeapOK m) {x : Var} {sl : Slot} (hx : m.s
     refine hfr i fun T hT => ?_
     subst hT
     exact fun h => hh.disj o x U T hox hU hx i hi h
-  refine ⟨fun o U hU => ?_, fun o1 o2 U1 U2 hne h1 h2 => ?_, fun o U hU => ?_, fun o U hU => ?_, hh.bpay⟩
+  refine ⟨fun o U hU => ?_, fun o1 o2 U1 U2 hne h1 h2 => ?_, fun o U hU => ?_, fun o U hU => ?_, hh.bpay, hh.bkey⟩
   · rcases hown o U hU with ⟨_, rfl⟩ | ⟨_, h⟩
     · exact (hput rfl U rfl).1
     · exact hh.nodup o U h
@@ -1093,11 +1094,11 @@ theorem HeapOK.remove {m : Mem} (hh : HeapOK m) {x : Var} {sl : Slot} (hx : m.st
   | moved =>
     exact ⟨fun o U h => hh.nodup o U (hown o U h).2,
       fun o1 o2 U1 U2 hne h1 h2 => hh.disj o1 o2 U1 U2 hne (hown o1 U1 h1).2 (hown o2 U2 h2).2,
-      fun o U h => hh.alloc o U (hown o U h).2, fun o U h => hh.self o U (hown o U h).2, hh.bpay⟩
+      fun o U h => hh.alloc o U (hown o U h).2, fun o U h => hh.self o U (hown o U h).2, hh.bpay, hh.bkey⟩
   | borrowed =>
     exact ⟨fun o U h => hh.nodup o U (hown o U h).2,
       fun o1 o2 U1 U2 hne h1 h2 => hh.disj o1 o2 U1 U2 hne (hown o1 U1 h1).2 (hown o2 U2 h2).2,
-      fun o U h => hh.alloc o U (hown o U h).2, fun o U h => hh.self o U (hown o U h).2, hh.bpay⟩
+      fun o U h => hh.alloc o U (hown o U h).2, fun o U h => hh.self o U (hown o U h).2, hh.bpay, hh.bkey⟩
 
 /-- The end of `x`'s scope: its value, if it owns one, is dropped. -/
 theorem step_scopeExit {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
@@ -1154,7 +1155,8 @@ theorem HeapOK.grow {m : Mem} (hh : HeapOK m) {x : Var} {t : Ty} {c d : Nat} {es
     intro i h; simp only [ids_node, List.mem_cons]; exact h
   have hlt : ∀ i, (i = c ∨ i = d ∨ i ∈ idsL es) → i < m.nid := fun i h => (halT i (hTids i h)).2
   have hd'cases : d' = d ∨ d' = m.nid := by rcases hre with ⟨h, _⟩ | ⟨h, _⟩ <;> simp [h]
-  refine ⟨fun o U hU => ?_, fun o1 o2 U1 U2 hne h1 h2 => ?_, fun o U hU i hi => ?_, fun o U hU => ?_, hh.bpay⟩
+  refine ⟨fun o U hU => ?_, fun o1 o2 U1 U2 hne h1 h2 => ?_, fun o U hU i hi => ?_, fun o U hU => ?_, hh.bpay,
+    fun k bl hk => Nat.lt_of_lt_of_le (hh.bkey k bl hk) hNle⟩
   · rcases hown o U hU with ⟨_, rfl⟩ | ⟨_, h⟩
     · simp only [ids_node, idsL_append, idsL_cons, idsL_nil, List.append_nil, List.nodup_cons,
         List.mem_cons, List.mem_append, not_or, List.nodup_append]

@@ -1051,7 +1051,8 @@ theorem rhs_new {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {t : Ty} (h
         obtain ⟨ha, hlt⟩ := hi.heap.alloc o U hU i hi'
         exact ⟨by rw [hold o U hU i hi']; exact ha, by show i < m.nid + 2; omega⟩
       self := fun o U hU => hi.heap.self o U hU
-      bpay := hi.heap.bpay }
+      bpay := hi.heap.bpay
+      bkey := fun k bl hk => by show k < m.nid + 2; have := hi.heap.bkey k bl hk; omega }
   refine ⟨⟨hi.of_st rfl hheap (Nat.le_refl _), rfl, by show m.nid ≤ m.nid + 2; omega, fun _ => rfl, fun _ _ => rfl,
     fun _ _ h _ => h, fun _ => rfl, fun x E1 h => ⟨E1, h, rfl, rfl⟩, DKeep.refl _ _, rfl⟩, ?_⟩
   refine ⟨rfl, Or.inl rfl, rfl, ht, fun _ r hr => by simp [roots, Entry.vdeps, Mode.ownSlot] at hr,
@@ -1283,7 +1284,8 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
         rcases hown1 o U hU with ⟨_, rfl⟩ | ⟨_, h⟩
         · exact (hi.heap.self y _ hT).shrink (fun x hx => List.mem_append_left _ hx)
         · exact hi.heap.self o U h
-      bpay := hi.heap.bpay }
+      bpay := hi.heap.bpay
+      bkey := hi.heap.bkey }
   have hsfT := hi.heap.self y _ hT
   have hkeepF : ∀ dep ∈ E.held, dep.root ≠ y → VKeep m m1 dep := by
     intro dep hd hne
