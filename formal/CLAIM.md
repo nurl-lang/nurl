@@ -133,7 +133,8 @@ The A2 rule that refuses each shape is named.
 
 Inside A2 (nurlc bugs):
 - A change in place that ends a borrow, missed: #333, #349, #350, #360,
-  #396 and #428 (`Eff.kills`, `StmtT.editB`, `callPostAux`'s `kill`). Also #353 and #359, a closure that changes elements: its code
+  #396, #428, #439 and #440 (`Eff.kills`, `StmtT.editB`, `callPostAux`'s
+  `kill`). Also #353 and #359, a closure that changes elements: its code
   is no `ThruFn` (`Implements`).
 - A view a value comes to hold, not recorded where it goes: #338, #341,
   #346, #348, #362, #367, #368, #369, #370, #377, #380, #381, #383, #390,
@@ -154,12 +155,19 @@ Inside A2 (nurlc bugs):
 - An `inout` option given a lend: #343 (`assign` gives an `inout` binding
   only an owned value).
 
+Typed by A2 and safe there; the fault is in the code nurlc generates
+(phase D): #432 (a defer in an arm not taken that binds a value of its
+own).
+
 Outside A2:
 - The hand-over of an old value to its borrower (above): #366, #373,
   #378, #387 and #388, plus #410 (a binding that lends the owner's old
   value handed back through a forwarder) and #427 (a call that may hand
   back the owner's value where nurlc has no lend fact for it at the
-  `=`: a wrapper, a generic or later-defined callee, a value block).
+  `=`: a wrapper, a generic or later-defined callee, a value block) and
+  #438 (shapes the hand-over gate does not reach: a struct given a part
+  of itself, an `inout` String given another's lend, a scalar enum key,
+  `o` inside a wrapper argument, a struct cursor copy).
 - An `Rc`'s shared state, which is the standard library's (B): #345 and
   #392.
 - A view stored through a borrow: #395 and #414 (`StmtT.editB` takes
