@@ -29323,13 +29323,16 @@ unsafe @ bck_swap_char s str i from i to → s {
 // #337).
 @ __vk_holders_of s vk i k → s {
     : s suf ( nurl_str_cat `>` ( nurl_str_int k ) )
+    // (…or only its elements': `h>^k`, agora #383.)
+    : s sufi ( nurl_str_cat `>^` ( nurl_str_int k ) )
     : ~ s out ``
     : ~ s rest ( nurl_str_slice vk 1 - ( nurl_str_len vk ) 1 )
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest ) = rest ( str_skip_word rest )
-        ? != 0 ( nurl_str_ends w suf ) {
-            : s h ( nurl_str_slice w 0 - ( nurl_str_len w ) ( nurl_str_len suf ) )
-            = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat h `` ) ( nurl_str_cat3 out ` ` h )
+        : i sl ? != 0 ( nurl_str_ends w suf ) ( nurl_str_len suf ) ? != 0 ( nurl_str_ends w sufi ) ( nurl_str_len sufi ) 0
+        ? > sl 0 {
+            : s h ( nurl_str_slice w 0 - ( nurl_str_len w ) sl )
+            ? ! ( str_contains_word out h ) { = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat h `` ) ( nurl_str_cat3 out ` ` h ) } {}
         } {}
     }
     ^ out
@@ -31351,6 +31354,20 @@ unsafe @ bck_check_moved_reads s reads i line s state → v {
 }
 
 // …and the ones reached only that way.
+// `list` with every plain source marked as one reached only through an
+// element (`^`): a handle copy's (`~`) or an already-marked word stays.
+@ __src_as_ind s list → s {
+    : ~ s out ``
+    : ~ s rest ( nurl_str_cat list `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i c0 ( nurl_str_get w 0 )
+        : s m ? & >= c0 48 <= c0 57 ( nurl_str_cat `^` w ) ( nurl_str_cat w `` )
+        = out ? == 0 ( nurl_str_len out ) m ( nurl_str_cat3 out ` ` m )
+    }
+    ^ out
+}
+
 @ __src_indirect s list → s {
     : ~ s out ``
     : ~ s rest ( nurl_str_cat list `` )
@@ -32421,10 +32438,15 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                                 : s vown ( __bck_store_owners st vroot0 )
                                 ? != 0 ( nurl_str_len vown ) { = vholders ( nurl_str_cat3 vholders ` ` vown ) } {}
                             } {}
+                            // (A callee that leaves the holder viewing only the
+                            // argument's elements' storage, `h>^k`: the dependency
+                            // is one through an element — it outlives the
+                            // argument's own buffer moving, agora #383.)
+                            : s vsd ? & vbuf ( bck_callee_vkeeps_ind vcal vk ( __vk_row_h vaix ) ) ( __src_as_ind vs ) ( nurl_str_cat vs `` )
                             ~ != 0 ( nurl_str_len vholders ) {
                                 : s vhs ( str_first_word vholders ) = vholders ( str_skip_word vholders )
                                 : i vroot ( nurl_str_to_int vhs )
-                                ( bck_dep_add vroot vs )
+                                ( bck_dep_add vroot vsd )
                                 ? != 0 g_bck_udrop_any { ( bck_younger_view_check vroot vs p ( bck_field_int rec 3 ) ) } {}
                                 // (Where it was stored: what a diagnostic about
                                 // the dependency points at, bck_caller_view_diag.)
@@ -32993,6 +33015,20 @@ unsafe @ bck_ret_drop_check s st i line → v {
                 ? & >= k 0 >= h 0 { ( __vk_acc_add h k ) } {}
             } {}
         }
+        // (…and what it holds views of only through an element — `vdi_`,
+        // not a handle copy: `h>^k`, which survives the source's own buffer
+        // moving and ends with its elements, agora #383.)
+        : s vdcis ( nurl_sym_get g_bck ( bck_bkey `vds_` cis ) )
+        : ~ s isrcs ( __word_drop_all ( __word_drop_all ( nurl_sym_get g_bck ( bck_bkey `vdi_` cis ) ) ( __word_drop_all ( nurl_sym_get g_bck ( bck_bkey `vdi_` cis ) ) vdcis ) ) ( nurl_sym_get g_bck ( bck_bkey `vdh_` cis ) ) )
+        ~ != 0 ( nurl_str_len isrcs ) {
+            : s x ( str_first_word isrcs ) = isrcs ( str_skip_word isrcs )
+            : s rs ( nurl_str_int ( bck_path_root ( nurl_str_to_int x ) ) )
+            ? & & ! ( seq rs cis ) != 0 ( nurl_sym_len g_bck ( bck_bkey `pp_` rs ) ) == 0 ( nurl_sym_len g_bck ( bck_bkey `po_` rs ) ) {
+                : i k ( str_word_index pl ( nurl_sym_get2 g_bck `rv_` rs ) )
+                : i h ( str_word_index pl cn )
+                ? & >= k 0 >= h 0 { ( __vk_acc_add_ind h k ) } {}
+            } {}
+        }
     }
 }
 
@@ -33006,6 +33042,16 @@ unsafe @ bck_ret_drop_check s st i line → v {
         : s xr ( nurl_str_int ( bck_path_root ( nurl_str_to_int x ) ) )
         ? | == 0 ( nurl_sym_len g_bck ( bck_bkey `pp_` xr ) ) != 0 ( nurl_sym_len g_bck ( bck_bkey `po_` xr ) ) { ^ F } {}
     }
+    ^ T
+}
+
+// …one left viewing only parameter `k`'s elements' storage: `h>^k`
+// (agora #383); whether it was new.
+@ __vk_acc_add_ind i h i k → b {
+    : s acc ( nurl_sym_get g_bck `vkacc` )
+    : s ks ( nurl_str_cat3 ( nurl_str_int h ) `>^` ( nurl_str_int k ) )
+    ? ( str_contains_word acc ks ) { ^ F } {}
+    ( bck_put `vkacc` ? == 0 ( nurl_str_len acc ) ( nurl_str_cat ks `` ) ( nurl_str_cat3 acc ` ` ks ) )
     ^ T
 }
 
@@ -33045,7 +33091,8 @@ unsafe @ bck_ret_drop_check s st i line → v {
             : i h3 ( nurl_str_find t2 `#` )
             : i line ( nurl_str_to_int ( nurl_str_slice t2 0 h3 ) )
             : s srcs ( bck_swap_char ( nurl_str_slice t2 + h3 1 - - ( nurl_str_len t2 ) h3 1 ) 44 32 )
-            ? ( str_contains_word ( nurl_sym_get g_bck `vkacc` ) ( nurl_str_cat3 ( nurl_str_int hh ) `>` k ) ) {
+            : s vkac ( nurl_sym_get g_bck `vkacc` )
+            ? | ( str_contains_word vkac ( nurl_str_cat3 ( nurl_str_int hh ) `>` k ) ) ( str_contains_word vkac ( nurl_str_cat3 ( nurl_str_int hh ) `>^` k ) ) {
                 : b cpar != 0 ( nurl_sym_len g_bck ( bck_bkey `pp_` cr ) )
                 : i ci ( str_word_index pl ( nurl_sym_get2 g_bck `rv_` cr ) )
                 ? ( seq srcs `!` ) { ( bck_diag_vbuf_temp ( nurl_str_to_int cr ) g_bck_fn ( nurl_str_to_int k ) line ) } {
@@ -33088,9 +33135,26 @@ unsafe @ bck_ret_drop_check s st i line → v {
     : s gb ( bck_generic_base cal )
     : ~ s vk ( nurl_sym_get g_fn_vkeeps cal )
     ? & == 0 ( nurl_str_len vk ) ! ( seq gb cal ) { = vk ( nurl_sym_get g_fn_vkeeps gb ) } {}
-    // (…leaving argument `h` viewing it: the pair, agora #337.)
-    ? != 0 ( nurl_str_len vk ) { ^ ( str_contains_word ( nurl_str_slice vk 1 - ( nurl_str_len vk ) 1 ) ( nurl_str_cat3 ( nurl_str_int h ) `>` aix ) ) } {}
+    // (…leaving argument `h` viewing it: the pair, agora #337 — its own
+    // storage, `h>k`, or only its elements', `h>^k`, agora #383.)
+    ? != 0 ( nurl_str_len vk ) {
+        : s ws ( nurl_str_slice vk 1 - ( nurl_str_len vk ) 1 )
+        : s hs ( nurl_str_int h )
+        ^ | ( str_contains_word ws ( nurl_str_cat3 hs `>` aix ) ) ( str_contains_word ws ( nurl_str_cat3 hs `>^` aix ) )
+    } {}
     ^ | != 0 ( nurl_sym_len g_fn_vkpend cal ) != 0 ( nurl_sym_len g_fn_vkpend gb )
+}
+
+// …and only its elements' storage — `h>^k` and no `h>k` in a final answer
+// (a pending one is taken as the own storage's, which ends on more).
+@ bck_callee_vkeeps_ind s cal s aix i h → b {
+    : s gb ( bck_generic_base cal )
+    : ~ s vk ( nurl_sym_get g_fn_vkeeps cal )
+    ? & == 0 ( nurl_str_len vk ) ! ( seq gb cal ) { = vk ( nurl_sym_get g_fn_vkeeps gb ) } {}
+    ? == 0 ( nurl_str_len vk ) { ^ F } {}
+    : s ws ( nurl_str_slice vk 1 - ( nurl_str_len vk ) 1 )
+    : s hs ( nurl_str_int h )
+    ^ & ( str_contains_word ws ( nurl_str_cat3 hs `>^` aix ) ) ! ( str_contains_word ws ( nurl_str_cat3 hs `>` aix ) )
 }
 
 // A view handed back (`^`, its source expression `sx`) must point into
@@ -33596,6 +33660,16 @@ unsafe @ bck_sx_is_id s e → b {
         ? & & ! ( seq rs hr ) != 0 ( nurl_sym_len g_bck ( bck_bkey `pp_` rs ) ) == 0 ( nurl_sym_len g_bck ( bck_bkey `po_` rs ) ) {
             : i k ( str_word_index pl ( nurl_sym_get2 g_bck `rv_` rs ) )
             ? >= k 0 { ( __vk_acc_add h k ) } {}
+        } {}
+    }
+    // (…and those reached only through an element: `h>^k`, agora #383.)
+    : ~ s irest ( __src_indirect srcs0 )
+    ~ != 0 ( nurl_str_len irest ) {
+        : s x ( str_first_word irest ) = irest ( str_skip_word irest )
+        : s rs ( nurl_str_int ( bck_path_root ( nurl_str_to_int x ) ) )
+        ? & & ! ( seq rs hr ) != 0 ( nurl_sym_len g_bck ( bck_bkey `pp_` rs ) ) == 0 ( nurl_sym_len g_bck ( bck_bkey `po_` rs ) ) {
+            : i k ( str_word_index pl ( nurl_sym_get2 g_bck `rv_` rs ) )
+            ? >= k 0 { ( __vk_acc_add_ind h k ) } {}
         } {}
     }
 }
