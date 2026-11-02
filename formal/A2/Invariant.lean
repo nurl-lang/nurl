@@ -69,6 +69,23 @@ def SharesIn (B : Nat → Option Blk) (τ : Ty) (T : Val) : Prop :=
 /-- `SharesIn` over a memory's blocks. -/
 def SharesOK (m : Mem) (τ : Ty) (T : Val) : Prop := SharesIn m.blk τ T
 
+/-- A3.1: the blocks `B'` keep every block of `B`: blocks only grow (`arcNew`
+    adds one; in the first cut none is ever removed, below). -/
+def BlkLe (B B' : Nat → Option Blk) : Prop := ∀ k bl, B k = some bl → B' k = some bl
+
+theorem BlkLe.refl (B : Nat → Option Blk) : BlkLe B B := fun _ _ h => h
+
+theorem BlkLe.trans {B1 B2 B3 : Nat → Option Blk} (h1 : BlkLe B1 B2) (h2 : BlkLe B2 B3) : BlkLe B1 B3 :=
+  fun k bl h => h2 k bl (h1 k bl h)
+
+theorem BlkLe.of_eq {B B' : Nat → Option Blk} (h : B' = B) : BlkLe B B' := fun _ _ hk => by rw [h]; exact hk
+
+theorem SharesIn.grow {B B' : Nat → Option Blk} {τ : Ty} {T : Val} (h : SharesIn B τ T) (hb : BlkLe B B') :
+    SharesIn B' τ T := fun u k p ha => hb k _ (h u k p ha)
+
+theorem SharesOK.grow {m m' : Mem} {τ : Ty} {T : Val} (h : SharesOK m τ T) (hb : BlkLe m.blk m'.blk) :
+    SharesOK m' τ T := SharesIn.grow h hb
+
 theorem SharesOK.of_blk {m m' : Mem} {τ : Ty} {T : Val} (h : SharesOK m τ T) (hb : m'.blk = m.blk) :
     SharesOK m' τ T := fun u k p ha => by rw [hb]; exact h u k p ha
 
@@ -369,8 +386,8 @@ def CatchOK (m : Mem) : Stmt → Prop
   | .frozen _ s => CatchOK m s
   | .catchR x m0 s => (∀ v, v ∉ s.spine → v ≠ x → m.st v = m0.st v) ∧
       x ∉ s.spine ∧ m0.nv ≤ m.nv ∧
-      -- A3.1 (so far): no step changes the counted blocks
-      m.blk = m0.blk ∧ CatchOK m s
+      -- A3.1: the counted blocks only grow (`arcNew`)
+      BlkLe m0.blk m.blk ∧ CatchOK m s
   | _ => True
 
 /-- A borrowed parameter depends only on what was bound before its call: on

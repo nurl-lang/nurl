@@ -112,6 +112,72 @@ theorem MInv.of_st {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) (
     obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k bl hk
     exact ⟨h1, h2, h3, h4.of_blk hb⟩
 
+/-! ### A3.1: more blocks
+
+The counted blocks only grow (`arcNew`), and nothing but a share reads
+them: what was valid stays valid over more blocks. -/
+
+theorem HrefAt.grow {m m' : Mem} (hst : m'.st = m.st) (hb : BlkLe m.blk m'.blk) {dep : Dep} {c : Nat}
+    {t : Ty} {H : List Dep} (h : HrefAt m dep c t H) : HrefAt m' dep c t H := by
+  obtain ⟨n0, d, es, hr, hl, hw, hv, hn, hsh⟩ := h
+  exact ⟨n0, d, es, rootNode_st hst hr, hl, hw,
+    hv.keep (fun dep _ => (show RootKeep m m' dep.root from fun n hn => rootNode_st hst hn).vkeep), hn,
+    hsh.grow hb⟩
+
+theorem ValOK.grow {m m' : Mem} (hst : m'.st = m.st) (hb : BlkLe m.blk m'.blk) {τ : Ty} {v : Val}
+    {P H : List Dep} (h : ValOK m τ v P H) : ValOK m' τ v P H := by
+  induction h with
+  | int => exact .int
+  | arc h hw hv => exact .arc (hb _ _ h) hw hv
+  | href h =>
+    obtain ⟨dep, hd, ha⟩ := h
+    exact .href ⟨dep, hd, ha.grow hst hb⟩
+  | view h =>
+    obtain ⟨dep, hd, ha⟩ := h
+    exact .view ⟨dep, hd, (show RootKeep m m' dep.root from fun n hn => rootNode_st hst hn).vkeep _ _ _ _ ha⟩
+  | pair _ _ ihx ihy => exact .pair ihx ihy
+  | inl _ ih => exact .inl ih
+  | inr _ ih => exact .inr ih
+  | pkg _ ih => exact .pkg ih
+
+theorem SlotOK.grow {m m' : Mem} (hst : m'.st = m.st) (hb : BlkLe m.blk m'.blk) {E : Entry} {sl : Slot}
+    (hs : SlotOK m E sl) : SlotOK m' E sl := by
+  have hvk : ∀ dep, VKeep m m' dep := fun dep =>
+    (show RootKeep m m' dep.root from fun n hn => rootNode_st hst hn).vkeep
+  obtain ⟨h1, h2, h3⟩ := hs
+  refine ⟨h1, fun ho => ?_, fun ho hl => ?_⟩
+  · obtain ⟨a, b, c⟩ := h2 ho
+    exact ⟨a, b, fun hl => by obtain ⟨T, hT, hv⟩ := c hl; exact ⟨T, hT, hv.keep (fun dep _ => hvk dep)⟩⟩
+  · obtain ⟨v, hv, hok⟩ := h3 ho hl
+    exact ⟨v, hv, hok.grow hst hb⟩
+
+/-- What the invariant asks of the blocks. -/
+def BlocksIn (m : Mem) : Prop :=
+  ∀ k bl, m.blk k = some bl → bl.ty.ok = true ∧ bl.ty.holdsView = false ∧ WFv bl.ty bl.pay ∧
+    SharesOK m bl.ty bl.pay
+
+/-- **More blocks**: the invariant holds over a store with the same slots and
+    more blocks, each as the invariant asks. -/
+theorem MInv.grow {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) (hh : HeapOK m')
+    (hnv : m.nv ≤ m'.nv) (hb : BlkLe m.blk m'.blk) (hB : BlocksIn m') : MInv m' Γ where
+  dom v := by rw [h]; exact hi.dom v
+  slot v E hv := by
+    obtain ⟨sl, hsl, hok, hslot⟩ := hi.slot v E hv
+    exact ⟨sl, by rw [h]; exact hsl, hok, hslot.grow h hb⟩
+  heap := hh
+  nvSt v hv := by rw [h] at hv; exact Nat.lt_of_lt_of_le (hi.nvSt v hv) hnv
+  noInout := hi.noInout
+  wf := hi.wf
+  rootbLive := hi.rootbLive
+  rootbLt := hi.rootbLt
+  names := hi.names
+  held v E sl T hE hl hsl hT := hi.held v E sl T hE hl (by rw [h] at hsl; exact hsl) hT
+  pkgs v sl T hsl hT := hi.pkgs v sl T (by rw [h] at hsl; exact hsl) hT
+  armed v E sl hE hsl := (hi.armed v E sl hE (by rw [h] at hsl; exact hsl)).keep fun _ _ _ dep _ =>
+    (show RootKeep m m' dep.root from fun n hn => rootNode_st h hn).vkeep
+  shares v E sl T hE hsl hown hT := (hi.shares v E sl T hE (by rw [h] at hsl; exact hsl) hown hT).grow hb
+  blocks := hB
+
 /-- What a right-hand side hands to the binding that takes it. -/
 structure RhsOut (m1 : Mem) (Γ1 : Ctx) (E : Entry) (v : Val) (o : Bool) : Prop where
   own    : o = E.mode.ownSlot
@@ -142,8 +208,8 @@ structure RhsPost (m m1 : Mem) (Γ Γ1 : Ctx) (F : List Var) : Prop where
   cmode : ∀ x E1, Γ1 x = some E1 → ∃ E0, Γ x = some E0 ∧ E1.mode = E0.mode ∧ E1.ty = E0.ty
   /-- A2-drop.2: a right-hand side gives no `letd` binding a new view. -/
   dkeep : DKeep Γ Γ1 []
-  /-- A3.1 (so far): a right-hand side leaves the blocks as they were. -/
-  blk   : m1.blk = m.blk
+  /-- A3.1: a right-hand side keeps every block (`arcNew` adds one). -/
+  blk   : BlkLe m.blk m1.blk
 
 /-- What a right-hand side hands over does not depend on whether its
     entry runs a destructor (A2-drop.2). -/
@@ -170,7 +236,7 @@ theorem RhsOut.widen {m1 : Mem} {Γ1 : Ctx} {E : Entry} {v : Val} {o : Bool}
 
 theorem RhsPost.same {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) : RhsPost m m Γ Γ F :=
   ⟨hi, rfl, Nat.le_refl _, fun _ => rfl, fun _ _ => rfl, fun _ _ h _ => h, fun _ => rfl,
-    fun _ E1 h => ⟨E1, h, rfl, rfl⟩, DKeep.refl Γ [], rfl⟩
+    fun _ E1 h => ⟨E1, h, rfl, rfl⟩, DKeep.refl Γ [], BlkLe.refl _⟩
 
 /-! ### What values capture by name -/
 
@@ -1054,7 +1120,7 @@ theorem rhs_new {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {t : Ty} (h
       bpay := hi.heap.bpay
       bkey := fun k bl hk => by show k < m.nid + 2; have := hi.heap.bkey k bl hk; omega }
   refine ⟨⟨hi.of_st rfl hheap (Nat.le_refl _), rfl, by show m.nid ≤ m.nid + 2; omega, fun _ => rfl, fun _ _ => rfl,
-    fun _ _ h _ => h, fun _ => rfl, fun x E1 h => ⟨E1, h, rfl, rfl⟩, DKeep.refl _ _, rfl⟩, ?_⟩
+    fun _ _ h _ => h, fun _ => rfl, fun x E1 h => ⟨E1, h, rfl, rfl⟩, DKeep.refl _ _, BlkLe.refl _⟩, ?_⟩
   refine ⟨rfl, Or.inl rfl, rfl, ht, fun _ r hr => by simp [roots, Entry.vdeps, Mode.ownSlot] at hr,
     fun _ => ⟨rfl, WFv.node (fun e he => by simp at he), fun s v hin => ?_, ?_, ?_, ?_, ?_⟩,
     (fun h => by cases h), (fun _ _ hd => by cases hd), NamesIn.nil _ rfl,
@@ -1112,7 +1178,8 @@ theorem rhs_move' {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     · exact Or.inr ⟨hry, killE .replace false y Er, by simp [A2.kill, hEr],
         by rw [killE_mode]; exact hroot⟩
   refine ⟨⟨hinv, rfl, Nat.le_refl _, fun x => ?_, fun x hx => hst x (fun h => hyF (h ▸ hx)), ?_, ?_, ?_,
-    ((DKeep.refl Γ []).kill .replace false y).setE (fun hd hos hn _ => ⟨E, hy, hd, hos, hn, fun _ h _ => h⟩), rfl⟩, ?_⟩
+    ((DKeep.refl Γ []).kill .replace false y).setE (fun hd hos hn _ => ⟨E, hy, hd, hos, hn, fun _ h _ => h⟩),
+    BlkLe.refl _⟩, ?_⟩
   · by_cases hxy : x = y
     · subst hxy; simp [hT]
     · rw [hst x hxy]
@@ -1367,7 +1434,7 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       obtain ⟨Er, hEr, hroot⟩ := wf_held hi hy hl hnint r hr
       exact kill_root hEr hroot
   refine ⟨⟨hinv, rfl, Nat.le_refl _, fun x => ?_, fun x hx => hst x (fun h => hyF (h ▸ hx)), ?_,
-    fun x => kill_dom .., fun x E1 h => kill_cmode h, (DKeep.refl Γ []).kill _ _ _, rfl⟩, ?_⟩
+    fun x => kill_dom .., fun x E1 h => kill_cmode h, (DKeep.refl Γ []).kill _ _ _, BlkLe.refl _⟩, ?_⟩
   · by_cases hxy : x = y
     · subst hxy; simp [hT]
     · rw [hst x hxy]

@@ -13,26 +13,26 @@ open A2
 structure Grows (m m' : Mem) : Prop where
   nid   : m.nid ≤ m'.nid
   fresh : ∀ i, m'.alloc i = true → m.alloc i = true ∨ m.nid ≤ i
-  /-- A3.1 (so far): no step changes the counted blocks. -/
-  blk   : m'.blk = m.blk
+  /-- A3.1: the counted blocks only grow (`arcNew`). -/
+  blk   : BlkLe m.blk m'.blk
 
-theorem Grows.refl (m : Mem) : Grows m m := ⟨Nat.le_refl _, fun _ h => .inl h, rfl⟩
+theorem Grows.refl (m : Mem) : Grows m m := ⟨Nat.le_refl _, fun _ h => .inl h, BlkLe.refl _⟩
 
 theorem Grows.trans {m1 m2 m3 : Mem} (h1 : Grows m1 m2) (h2 : Grows m2 m3) : Grows m1 m3 :=
   ⟨Nat.le_trans h1.nid h2.nid, fun i h => by
     rcases h2.fresh i h with h | h
     · exact h1.fresh i h
-    · exact .inr (Nat.le_trans h1.nid h), h2.blk.trans h1.blk⟩
+    · exact .inr (Nat.le_trans h1.nid h), h1.blk.trans h2.blk⟩
 
 /-- The same address space and `nid`: a slot or `nv` changed. -/
 theorem Grows.of_eq {m m' : Mem} (ha : m'.alloc = m.alloc) (hn : m'.nid = m.nid)
     (hb : m'.blk = m.blk := by rfl) : Grows m m' :=
-  ⟨by rw [hn]; exact Nat.le_refl _, fun _ h => .inl (by rw [← ha]; exact h), hb⟩
+  ⟨by rw [hn]; exact Nat.le_refl _, fun _ h => .inl (by rw [← ha]; exact h), BlkLe.of_eq hb⟩
 
 /-- An address space that only lost addresses, `nid` as it was. -/
 theorem Grows.shrink {m m' : Mem} (h : ∀ {i}, m'.alloc i = true → m.alloc i = true)
     (hn : m'.nid = m.nid) (hb : m'.blk = m.blk := by rfl) : Grows m m' :=
-  ⟨by rw [hn]; exact Nat.le_refl _, fun _ hi => .inl (h hi), hb⟩
+  ⟨by rw [hn]; exact Nat.le_refl _, fun _ hi => .inl (h hi), BlkLe.of_eq hb⟩
 
 theorem DropSlot.le {a a' : Nat → Bool} {sl : Slot} (h : DropSlot a sl a') :
     ∀ {i}, a' i = true → a i = true := by
@@ -49,7 +49,7 @@ theorem EvalR.grows {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (
     Grows m m' := by
   cases h with
   | new =>
-    refine ⟨(by show m.nid ≤ m.nid + 2; omega), fun i hi => ?_, rfl⟩
+    refine ⟨(by show m.nid ≤ m.nid + 2; omega), fun i hi => ?_, BlkLe.refl _⟩
     change upd (upd m.alloc m.nid true) (m.nid + 1) true i = true at hi
     by_cases h1 : i = m.nid + 1
     · exact .inr (by omega)
@@ -95,7 +95,7 @@ theorem Step.grows {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
   | «while» => exact Grows.refl _
   | push ht _ _ _ => exact (TakeVal.grows ht).trans (Grows.of_eq rfl rfl)
   | @pushRealloc m1 _ _ _ _ _ d _ ht _ _ _ =>
-    refine (TakeVal.grows ht).trans ⟨(by show m1.nid ≤ m1.nid + 1; omega), fun i hi => ?_, rfl⟩
+    refine (TakeVal.grows ht).trans ⟨(by show m1.nid ≤ m1.nid + 1; omega), fun i hi => ?_, BlkLe.refl _⟩
     change upd (upd m1.alloc d false) m1.nid true i = true at hi
     by_cases h1 : i = m1.nid
     · exact .inr (by omega)
@@ -106,7 +106,7 @@ theorem Step.grows {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
   | free _ hf => exact Grows.shrink (Frees.le hf) rfl
   | editPush ht _ _ => exact (TakeVal.grows ht).trans (Grows.of_eq rfl rfl)
   | @editPushRealloc m1 _ _ _ _ _ _ _ _ _ d _ ht _ _ =>
-    refine (TakeVal.grows ht).trans ⟨by show m1.nid ≤ m1.nid + 1; omega, fun i hi => ?_, rfl⟩
+    refine (TakeVal.grows ht).trans ⟨by show m1.nid ≤ m1.nid + 1; omega, fun i hi => ?_, BlkLe.refl _⟩
     change upd (upd m1.alloc d false) m1.nid true i = true at hi
     by_cases h1 : i = m1.nid
     · exact .inr (by omega)

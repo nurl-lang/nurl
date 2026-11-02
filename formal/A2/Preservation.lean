@@ -2208,7 +2208,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           spineNd := hi'.spineNd
           spineDom := hi'.spineDom
           catchOK := by
-            refine ⟨fun v hv hvx => ?_, hxs', Nat.le_trans hnv0 hnv, (Step.blk hst').trans hb0, hi'.catchOK⟩
+            refine ⟨fun v hv hvx => ?_, hxs', Nat.le_trans hnv0 hnv, hb0.trans (Step.blk hst'), hi'.catchOK⟩
             by_cases hvs : v ∈ s.spine
             · rw [step_gone hst' hck v hvs hv, hlo v hvx (hs.spine_F v hvs)]
             · by_cases hvF : v ∈ F ++ (List.range m0.nv).filter (· ≠ x)
@@ -2242,7 +2242,12 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           · rw [hin v hvs, hlo v hvx (hs.spine_F v hvs)]
           · rw [hout v hvs]; exact hfr v hvs hvx
       have hM' : MInv (m1.set x ⟨false, some (.int 1)⟩) Δ :=
-        hM.of_st hsteq (hh1.set_bor x _) (by simp [hnv1, hnv0]) (hblk1.trans hi.catchOK.2.2.2.1)
+        hM.grow hsteq (hh1.set_bor x _) (by simp [hnv1, hnv0])
+          (hi.catchOK.2.2.2.1.trans (BlkLe.of_eq hblk1))
+          (fun k bl hk => by
+            have hk' : m.blk k = some bl := by rw [← hblk1]; exact hk
+            obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k bl hk'
+            exact ⟨h1, h2, h3, h4.grow (BlkLe.of_eq (show (m1.set x ⟨false, some (.int 1)⟩).blk = m.blk from hblk1))⟩)
       obtain ⟨E0, h0⟩ := (hKO.2 x Ex hEx).2
       have hxown : ∀ T, ¬ OwnedAt m1 x T := by
         intro T hT

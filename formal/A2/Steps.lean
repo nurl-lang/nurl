@@ -402,7 +402,7 @@ theorem RhsPost.trans {m m1 m2 : Mem} {Γ Γ1 Γ2 : Ctx} {F : List Var} (h1 : Rh
     obtain ⟨E1, h1', hm1, ht1⟩ := h2.cmode x E2 h
     obtain ⟨E0, h0, hm0, ht0⟩ := h1.cmode x E1 h1'
     exact ⟨E0, h0, hm1.trans hm0, ht1.trans ht0⟩
-  blk := h2.blk.trans h1.blk
+  blk := h1.blk.trans h2.blk
   dkeep := h1.dkeep.trans h2.dkeep (fun _ h => h)
 
 theorem RhsPost.root {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} (h : RhsPost m m1 Γ Γ1 F) {r : Var}
@@ -550,7 +550,7 @@ theorem out_pair {m1 m2 : Mem} {Γ1 Γ2 : Ctx} {F : List Var} (hi1 : MInv m1 Γ1
   refine ⟨rfl, Or.inl rfl, rfl, by simp [Ty.ok, hok.1, hok.2], fun _ r hr => ?_, fun _ => ⟨rfl,
     WFv.pair pu1.wf pu2.wf, ?_, ?_, ?_, ?_, ?_⟩, (fun h => by cases h),
     fun _ => own_named ((pu1.nok.pushArg hpa2 hzd).append pu2.nok), ?_, ?_,
-    fun _ => SharesOK.mk_pair (pu1.sh.of_blk post2.blk) pu2.sh⟩
+    fun _ => SharesOK.mk_pair (pu1.sh.grow post2.blk) pu2.sh⟩
   · simp only [Entry.vdeps, Mode.ownSlot, ↓reduceIte, List.nil_append] at hr
     exact wf_append (fun r hr => post2.root (pu1.root r hr)) pu2.root r hr
   · intro s x hin
@@ -1801,19 +1801,19 @@ theorem step_rbindExit {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k bl hk
     exact ⟨h1, h2, h3, h4.of_blk rfl⟩
 
-/-! ### A3.1 (so far): no step changes the counted blocks -/
+/-! ### A3.1: the counted blocks only grow -/
 
 theorem TakeVal.blk {m m1 : Mem} {y : Var} {v : Val} (h : TakeVal m y v m1) : m1.blk = m.blk := by
   cases h <;> rfl
 
 theorem EvalR.blk {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.ok v o m')) :
-    m'.blk = m.blk := by
+    BlkLe m.blk m'.blk := by
   cases h with
-  | pair h1 h2 => exact (TakeVal.blk h2).trans (TakeVal.blk h1)
-  | inl h1 => exact TakeVal.blk h1
-  | inr h1 => exact TakeVal.blk h1
-  | pack h1 => exact TakeVal.blk h1
-  | _ => rfl
+  | pair h1 h2 => exact BlkLe.of_eq ((TakeVal.blk h2).trans (TakeVal.blk h1))
+  | inl h1 => exact BlkLe.of_eq (TakeVal.blk h1)
+  | inr h1 => exact BlkLe.of_eq (TakeVal.blk h1)
+  | pack h1 => exact BlkLe.of_eq (TakeVal.blk h1)
+  | _ => exact BlkLe.refl _
 
 theorem BindParams.blk {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var} {base i : Nat}
     (h : BindParams m ps as base i m') : m'.blk = m.blk := by
@@ -1823,18 +1823,18 @@ theorem BindParams.blk {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var} {b
   | sink _ _ ih => exact ih
   | inout _ ih => exact ih
 
-theorem Step.blk {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) : r.mem.blk = m.blk := by
+theorem Step.blk {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) : BlkLe m.blk r.mem.blk := by
   induction h with
   | seqL _ ih | seqP _ ih | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | frozenP _ ih | catchIn _ ih
     | scopeDIn _ ih => exact ih
   | scopeP _ _ _ ih | rbindP _ _ ih | catchP _ _ ih | scopeDP _ _ ih | scopeDPMoved _ _ ih => exact ih
   | letv _ he | letd _ he | assign _ he _ _ => have := EvalR.blk he; exact this
-  | letcall _ _ hb => have := BindParams.blk hb; exact this
-  | callc _ _ _ _ hb => have := BindParams.blk hb; exact this
-  | push ht _ _ _ => have := TakeVal.blk ht; exact this
-  | pushRealloc ht _ _ _ => have := TakeVal.blk ht; exact this
-  | editPush ht _ _ | editPushRealloc ht _ _ => have := TakeVal.blk ht; exact this
-  | editSet _ _ ht _ _ _ | editSetOOB _ ht _ _ _ => have := TakeVal.blk ht; exact this
-  | _ => rfl
+  | letcall _ _ hb => have := BlkLe.of_eq (BindParams.blk hb); exact this
+  | callc _ _ _ _ hb => have := BlkLe.of_eq (BindParams.blk hb); exact this
+  | push ht _ _ _ => have := BlkLe.of_eq (TakeVal.blk ht); exact this
+  | pushRealloc ht _ _ _ => have := BlkLe.of_eq (TakeVal.blk ht); exact this
+  | editPush ht _ _ | editPushRealloc ht _ _ => have := BlkLe.of_eq (TakeVal.blk ht); exact this
+  | editSet _ _ ht _ _ _ | editSetOOB _ ht _ _ _ => have := BlkLe.of_eq (TakeVal.blk ht); exact this
+  | _ => exact BlkLe.refl _
 
 end A2
