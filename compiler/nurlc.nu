@@ -32187,7 +32187,10 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                             // owner that borrow's bytes are read out of: it holds
                             // the view too, agora #292.)
                             : ~ s vholders ( nurl_str_int vroot0 )
-                            ? == BCK_BORROWED_SHARED ( bck_st_get st vroot0 ) {
+                            // (Not a field assigned, `=.`, nor a container that
+                            // is a view itself — a copy of a struct of views:
+                            // those land in the binding's own bytes.)
+                            ? & & == BCK_BORROWED_SHARED ( bck_st_get st vroot0 ) ! ( seq vcal `=.` ) == 0 ( nurl_sym_len g_bck ( bck_bkey `vw_` ( nurl_str_int vroot0 ) ) ) {
                                 : s vown ( __bck_store_owners st vroot0 )
                                 ? != 0 ( nurl_str_len vown ) { = vholders ( nurl_str_cat3 vholders ` ` vown ) } {}
                             } {}
@@ -33217,8 +33220,12 @@ unsafe @ bck_sx_is_id s e → b {
     : s k ( bck_bkey `vdi_` ws )
     : s have ( nurl_sym_get g_bck k )
     : s direct ( __word_drop_all ( __src_plain srcs ) ind )
-    // (Direct now wins: a dependency held both ways ends on either.)
-    ( bck_put k ( __word_union ( __word_drop_all have direct ) ind ) )
+    // (Direct now wins: a dependency held both ways ends on either. And
+    // one already held directly stays so: a later store reaching the same
+    // source only through an element does not make the first one's view
+    // survive that source's buffer moving — agora #292.)
+    : s prevd ( __word_drop_all ( nurl_sym_get g_bck ( bck_bkey `vds_` ws ) ) have )
+    ( bck_put k ( __word_union ( __word_drop_all have direct ) ( __word_drop_all ind prevd ) ) )
 }
 
 // …and one only a handle copy of (`vdh_`, `~id`).
@@ -33228,8 +33235,10 @@ unsafe @ bck_sx_is_id s e → b {
     : s have ( nurl_sym_get g_bck k )
     ? & == 0 ( nurl_str_len hnd ) == 0 ( nurl_str_len have ) { ^ } {}
     : s other ( __word_drop_all ( __src_plain srcs ) hnd )
-    // (Held any other way too, it ends as that way does.)
-    ( bck_put k ( __word_union ( __word_drop_all have other ) hnd ) )
+    // (Held any other way too, it ends as that way does — before this
+    // store as well as in it: agora #292.)
+    : s prevo ( __word_drop_all ( nurl_sym_get g_bck ( bck_bkey `vds_` ( nurl_str_int wid ) ) ) have )
+    ( bck_put k ( __word_union ( __word_drop_all have other ) ( __word_drop_all hnd prevo ) ) )
 }
 
 // `list` without any word of `drop`.
