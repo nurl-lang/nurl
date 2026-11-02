@@ -158,7 +158,8 @@ Typed by A2 and safe there; the fault is in the code nurlc generates
 Outside A2:
 - The hand-over of an old value to its borrower (above): #366, #373,
   #378, #387 and #388, plus #410 (a binding that lends the owner's old
-  value handed back through a forwarder).
+  value handed back through a forwarder) and #412 (a call that may hand
+  back the owner's value or another owner's, github#1517).
 - An `Rc`'s shared state, which is the standard library's (B): #345 and
   #392.
 - A view stored through a borrow: #395 (`StmtT.editB` takes element types
