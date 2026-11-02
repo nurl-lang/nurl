@@ -15673,6 +15673,21 @@ unsafe @ gen_call i lex i syms i cg → s {
                     } {}
                 } }
         } {}
+        // A closure called with a binding it gives a new value by name (a
+        // capture it assigns, `= o …`, or a field of it): inside, the
+        // parameter and the capture are one value, and the assignment
+        // releases what the parameter still is — as `( put x x )` with
+        // put's `inout` (A2: callc's premise that no argument is a binding
+        // the package changes by name; agora #339).
+        ? & & != 0 g_borrowck __callee_shadowed | ( is_ident_tok bck_arg_tt ) == bck_arg_tt TT_DOT {
+            : s __asg ( nurl_sym_get2 syms fname `__closure_assigns` )
+            ? != 0 ( nurl_str_len __asg ) {
+                : s __an ? == bck_arg_tt TT_DOT ? ( is_ident_tok ( nurl_lex_peek_type lex ) ) ( nurl_lex_peek_val lex ) `` bck_arg_val
+                ? & != 0 ( nurl_str_len __an ) ( str_contains_word __asg __an ) {
+                    ( die lex ( nurl_str_cat4 ( nurl_str_cat3 `'` __an `' is passed to '` ) ( nurl_str_cat4 fname `', a closure that gives '` __an `' a new value by name — inside, the parameter and the capture are one value, and the assignment releases what the parameter still is. Pass a copy that owns its data (string_from, mem_dup), or let the closure take '` ) __an `' as an inout parameter instead of capturing it.` ) )
+                } {}
+            } {}
+        } {}
         // Exclusive-access check. A bare-identifier argument that is
         // mutably borrowed (`inout`) here must not be aliased by
         // another bare-identifier argument of the SAME call (whether
