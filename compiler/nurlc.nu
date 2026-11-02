@@ -22625,6 +22625,14 @@ unsafe @ gen_match i lex i syms i cg → s {
     ( nurl_sym_def syms `__loop_check__` `` )
     ( bck_set_block_kind `defer` )
     ( gen_block_stmts lex syms cg )
+    // What the body bound of its own is the chain's too: its child defers
+    // read it after the body, and the main flow, where the body has not
+    // run, holds nothing in its slot. Snapshot it, as what came before
+    // the `;` is (__defer_snap_take): every return site skips it and
+    // fn_cleanup reclaims it after the chain. Left out, a defer-local
+    // Vec was dropped at every `^` before the body had run (SEGV), and
+    // never after it had (agora #405).
+    ( __defer_snap_take syms )
     ( nurl_sym_def syms `__loop_exit__` old_df_exit )
     ( nurl_sym_def syms `__loop_check__` old_df_check )
     ( nurl_sym_set g_fn_escapes `__in_defer_body__` old_df_body )

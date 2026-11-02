@@ -154,9 +154,6 @@ Inside A2 (nurlc bugs):
 - An `inout` option given a lend: #343 (`assign` gives an `inout` binding
   only an owned value).
 
-Typed by A2 and safe there; the fault is in the code nurlc generates
-(phase D): #405 (a defer body with a Vec of its own).
-
 Outside A2:
 - The hand-over of an old value to its borrower (above): #366, #373,
   #378, #387 and #388, plus #410 (a binding that lends the owner's old
