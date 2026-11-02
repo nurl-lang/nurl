@@ -137,9 +137,11 @@ Inside A2 (nurlc bugs):
   is no `ThruFn` (`Implements`).
 - A view a value comes to hold, not recorded where it goes: #338, #341,
   #346, #348, #362, #367, #368, #369, #370, #377, #380, #381, #383, #390,
-  #393 and #394. A2 records it in `Ty.holdsView`, `PushArg`, `pair`'s
-  `Dy ++ Dz`, `callRes`'s `rholds` and `heldOfArgs`, `callPostAux`'s
-  `outHeld` and `heldOfArgs`, and a package's interface summary.
+  #393, #394, #413 and #416. A2 records it in `Ty.holdsView`,
+  `PushArg`, `pair`'s `Dy ++ Dz`, `callRes`'s `rholds` and `heldOfArgs`,
+  `callPostAux`'s `outHeld` and `heldOfArgs`, and a package's interface
+  summary; past a join, `ite` and `while` keep what either path holds
+  (#413, #416).
 - A move or take nurlc does not see: #280, #357 and #372 (`unpair`,
   `takel`, a `sink` takes an owner only, `lendable`).
 - A borrow ended by a binding's end, replacement or capture, missed:
@@ -162,8 +164,10 @@ Outside A2:
   back the owner's value or another owner's, github#1517).
 - An `Rc`'s shared state, which is the standard library's (B): #345 and
   #392.
-- A view stored through a borrow: #395 (`StmtT.editB` takes element types
-  that hold no views; `rules/t292.md`).
+- A view stored through a borrow: #395 and #414 (`StmtT.editB` takes
+  element types that hold no views; `rules/t292.md`).
+- A `Slice` of views: #415 (A2's slices view element types that hold no
+  views, `Ty.ok`).
 - A changed plain parameter handed an element rather than an owner: #391
   (above).
 
