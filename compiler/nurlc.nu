@@ -39269,6 +39269,8 @@ unsafe @ gen_assign i lex i syms i cg → s {
         : ~ s __ud_ro_new ``
         // (…and, for a handle, whether the result is the old value itself.)
         : ~ s __ud_skey ``
+        // (…and whether a lent result was copied in, which the binding owns.)
+        : ~ s __ud_cpy ``
         // (…an option or a result of such a value too, where the call may
         // hand back this binding's own value: `= o ( id o )`, o a
         // `?String`, dropped its old value and then held it — agora #342.
@@ -39300,6 +39302,25 @@ unsafe @ gen_assign i lex i syms i cg → s {
             : s __q3 ( nurl_str_cat3 `''s old value is still in use or must be released (agora #412). Give '` name `' a value of its own — a copy of the call's result, ( mem_dup … ) — or bind the result to a new name and keep the two owners apart.` )
             ( die_stmt lex ( nurl_str_cat3 __q1 __q2 __q3 ) )
         } {}
+        // (Whether a lend of this binding's value can only be the WHOLE
+        // value: the callee hands back its parameters whole, never a part of
+        // one — an element, a payload read through it. Only then does a
+        // run-time key that differs mean "another owner's value"; a part of
+        // the old value — `( kid o )` handing back `( vec_at v 0 )` of o's
+        // own — has a key of its own too, and dropping the old value freed
+        // it under the binding, agora #437.)
+        : b __ud_whole & & __ud_may_self == bck_rhs_tt TT_LPAREN ( mem_fn_lends_params syms ( nurl_sym_get syms `__last_call_name__` ) T 0 )
+        // A handle given what a call may lend out of a PART of itself or out
+        // of another argument: no per-run answer is right on both kinds of
+        // run (#412's form for handles): refused.
+        // (A run whose result is not the old value is then copied, below, so
+        // the old value can go: a value that cannot be copied is refused.)
+        ? & & & & ( __is_handle_ty vt ) __ud_may_self ! __ud_whole ! ( __clone_supported vt syms ) & __ud_owns == bck_rhs_tt TT_LPAREN {
+            : s __p1 ( nurl_str_cat3 `'` name `' is given back what this call may lend out of a part of '` )
+            : s __p2 ( nurl_str_cat3 name `' itself — an element, a payload — and its type has no copy: nurlc cannot keep that part alive once '` name )
+            : s __p3 ( nurl_str_cat3 `''s old value is released (agora #437). Bind the result to a new name, or take the part out of '` name `' first.` )
+            ( die_stmt lex ( nurl_str_cat3 __p1 __p2 __p3 ) )
+        } {}
         : b __ud_hty | ( __is_handle_ty vt ) & & __ud_only_self != 0 ( nurl_str_starts vt `{ i1, ` ) ( __type_needs_drop vt syms )
         ? & & & != 0 ( nurl_str_len __ud_ptr ) == bck_rhs_tt TT_LPAREN __ud_hty | == 0 ( nurl_str_len __ud_borrow ) __ud_self_lend
         { = __ud_ro ( mem_call_retown syms cg )
@@ -39324,6 +39345,17 @@ unsafe @ gen_assign i lex i syms i cg → s {
                         ( nurl_print `  ` ) ( nurl_print __ud_ns ) ( nurl_print ` = xor i1 ` ) ( nurl_print __ud_skey ) ( nurl_print `, 1\n` )
                         = __ud_keep ( nurl_cg_reg cg )
                         ( nurl_print `  ` ) ( nurl_print __ud_keep ) ( nurl_print ` = or i1 ` ) ( nurl_print __ud_ro ) ( nurl_print `, ` ) ( nurl_print __ud_ns ) ( nurl_print `\n` )
+                        // (A lend that may be a PART of the old value — an
+                        // element, a payload — is copied where it is not the
+                        // old value itself, so the old value can go and the
+                        // binding owns its copy, agora #437.)
+                        ? ! __ud_whole {
+                            : s __ud_nro ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print __ud_nro ) ( nurl_print ` = xor i1 ` ) ( nurl_print __ud_ro ) ( nurl_print `, 1\n` )
+                            = __ud_cpy ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print __ud_cpy ) ( nurl_print ` = and i1 ` ) ( nurl_print __ud_nro ) ( nurl_print `, ` ) ( nurl_print __ud_ns ) ( nurl_print `\n` )
+                            = store_val ( mem_emit_cloneif cg vt store_val __ud_cpy )
+                        } {}
                     } {}
                 } {}
                 : s __ud_g ( nurl_cg_reg cg )
@@ -39407,6 +39439,11 @@ unsafe @ gen_assign i lex i syms i cg → s {
                 ? != 0 ( nurl_str_len __ud_skey ) {
                     = __ud_lf ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print __ud_lf ) ( nurl_print ` = and i1 ` ) ( nurl_print __ud_of ) ( nurl_print `, ` ) ( nurl_print __ud_skey ) ( nurl_print `\n` )
+                    ? != 0 ( nurl_str_len __ud_cpy ) {
+                        : s __ud_lf2 ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print __ud_lf2 ) ( nurl_print ` = or i1 ` ) ( nurl_print __ud_lf ) ( nurl_print `, ` ) ( nurl_print __ud_cpy ) ( nurl_print `\n` )
+                        = __ud_lf __ud_lf2
+                    } {}
                 } {}
                 : s __ud_nf ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print __ud_nf ) ( nurl_print ` = select i1 ` ) ( nurl_print __ud_ro )
