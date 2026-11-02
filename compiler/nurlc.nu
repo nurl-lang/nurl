@@ -32515,6 +32515,13 @@ unsafe @ bck_sx_ev s st s e b arg → s {
     // (At the store that put the view there, when it is known.)
     : s sl ( nurl_sym_get g_bck ( bck_bkey `vdl_` ( nurl_str_cat3 ( nurl_str_int ( bck_path_root d ) ) `:` ( nurl_str_int src ) ) ) )
     : i at ? != 0 ( nurl_str_len sl ) ( nurl_str_to_int sl ) line
+    // (One error per store of a view of `src`: an alias of a parameter and
+    // the parameter it borrows both hold what one store put there — agora
+    // #292 records it on each — and naming the second says nothing new.)
+    : s ltag ( nurl_str_cat4 `cvl:` ( nurl_str_int at ) `:` ( nurl_str_int src ) )
+    : s ws2 ( nurl_sym_get g_bck `warnset` )
+    ? ( str_contains_word ws2 ltag ) { ^ v } {}
+    ( bck_put `warnset` ( nurl_str_cat3 ws2 ` ` ltag ) )
     // (A closure stored there holding a copy of the handle of a value no
     // owner could copy in, `nch_`: agora #161.)
     ? & ( bck_nch ( nurl_str_int src ) ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vdh_` ( nurl_str_int ( bck_path_root d ) ) ) ) ( nurl_str_int src ) ) {
