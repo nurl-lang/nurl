@@ -1,5 +1,6 @@
 import A2.Heap
 import A2.Repl
+import A2.Sweep
 
 /-! A2 — the values bindings hold, and the borrows taken from them. -/
 
@@ -102,7 +103,7 @@ theorem MInv.slice_node {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Ent
     have hin := hla.inMem
     have hda : DataAt m d (.node t c d es) := hin.dataAt rfl
     exact ⟨d, o, l, c, es, hv, hda, hi.heap.inMem_alloc hin d (by simp), hlen, hw,
-      fun _ => Or.inr (Or.inr ⟨_, d, o, l, hv, Top.refl _, hda⟩), fun _ => ⟨dep, hd, hk, hla⟩⟩
+      fun _ => Or.inr (Or.inr (Or.inl ⟨_, d, o, l, hv, Top.refl _, hda⟩)), fun _ => ⟨dep, hd, hk, hla⟩⟩
 
 theorem lands_comp' {n0 n1 N : Val} {kp k : Kind} (hp : Lands kp n0 n1) (hk : Lands k N n0) :
     Lands (comp kp k) N n1 := lands_comp hp hk
@@ -119,9 +120,17 @@ theorem comp_share_lands {k : Kind} {N n0 : Val} (hk : Lands k N n0) : comp .sha
     the composed kind. -/
 theorem Landed.comp {m : Mem} {dep : Dep} {N N' : Val} {k : Kind} (h : Landed m dep N)
     (hk : Lands k N' N) : Landed m ⟨dep.root, comp dep.kind k⟩ N' := by
-  rcases h with ⟨n0, hr, hl⟩ | ⟨hs, hp⟩
+  rcases h with ⟨n0, hr, hl⟩ | ⟨hs, hro, hp⟩
   · exact Or.inl ⟨n0, hr, lands_comp' hl hk⟩
-  · refine Or.inr ⟨?_, hp.sub hk.sub⟩
+  · refine Or.inr ⟨?_, hro, hp.sub hk.sub⟩
+    show A2.comp dep.kind k = .share
+    rw [hs]; exact comp_share_lands hk
+
+theorem ArcLanded.comp {m : Mem} {dep : Dep} {N N' : Val} {k : Kind} (h : ArcLanded m dep N)
+    (hk : Lands k N' N) : ArcLanded m ⟨dep.root, comp dep.kind k⟩ N' := by
+  rcases h with ⟨n0, hr, hl⟩ | ⟨hs, hro⟩
+  · exact Or.inl ⟨n0, hr, lands_comp' hl hk⟩
+  · refine Or.inr ⟨?_, hro⟩
     show A2.comp dep.kind k = .share
     rw [hs]; exact comp_share_lands hk
 
@@ -171,7 +180,7 @@ theorem MInv.thru_owner {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {Ex : En
   have hsl1 : sl.own = true := by rw [hso, hEro]
   -- an owning root reaches its own tree
   obtain ⟨T, hT, htop⟩ : ∃ T, m.st dep.root = some ⟨true, some T⟩ ∧ Top n0 T := by
-    rcases hr with ⟨T, h, ht⟩ | ⟨_, _, h, _⟩ | ⟨_, _, _, _, h, _⟩
+    rcases hr with ⟨T, h, ht⟩ | ⟨_, _, h, _⟩ | ⟨_, _, _, _, h, _⟩ | ⟨_, _, _, h, _⟩
     · exact ⟨T, h, ht⟩
     all_goals rw [hsl] at h; cases h; simp at hsl1
   have hsub : Sub (.node t c d es) T := hla.sub.trans htop.sub

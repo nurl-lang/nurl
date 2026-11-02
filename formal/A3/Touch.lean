@@ -31,17 +31,18 @@ theorem dataAt_owned {m : Mem} (hp : PayFree m) {d : Nat} {n : Val} (h : DataAt 
 
 theorem rootNode_owned {m : Mem} (hp : PayFree m) {r : Var} {n : Val} (h : RootNode m r n) :
     ∀ i ∈ n.ids, OwnedId m i := by
-  rcases h with ⟨T, hT, htop⟩ | ⟨v, c, _, _, hn⟩ | ⟨v, d, o, l, _, _, hn⟩
+  rcases h with ⟨T, hT, htop⟩ | ⟨v, c, _, _, hn⟩ | ⟨v, d, o, l, _, _, hn⟩ | ⟨v, k, q, _, _, rfl⟩
   · exact fun i hi => ⟨r, T, hT, Sub.ids (Top.sub htop) i hi⟩
   · exact nodeAt_owned hp hn
   · exact dataAt_owned hp hn
+  · exact fun i hi => nomatch hi
 
 /-- A valid view is into a buffer of one of the thread's own trees. -/
 theorem viewAt_owned {m : Mem} (hp : PayFree m) {dep : Dep} {d o l : Nat} {t : Ty}
     (h : ViewAt m dep d o l t) : OwnedId m d := by
   obtain ⟨c, es, _, hla, _, _⟩ := h
   have hd : d ∈ (Val.node t c d es).ids := by simp [Val.ids]
-  rcases hla with ⟨n0, hr, hk⟩ | ⟨_, k, bl, hkb, hs⟩
+  rcases hla with ⟨n0, hr, hk⟩ | ⟨_, _, k, bl, hkb, hs⟩
   · exact rootNode_owned hp hr d (Sub.ids hk.sub d hd)
   · exact (hp.no_node hkb hs hd).elim
 

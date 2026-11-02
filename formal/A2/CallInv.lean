@@ -160,9 +160,10 @@ theorem covers (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) (hc : Covers m
   intro i hia
   have hal : (callMem m m1 fn x).alloc = m.alloc := (h.bind hb).1
   rw [hal] at hia
-  obtain ⟨o, T, hT, hiT⟩ := hc i hia
-  obtain ⟨o', hT'⟩ := h.own_dst hi hb hT
-  exact ⟨o', T, hT', hiT⟩
+  rcases hc i hia with ⟨o, T, hT, hiT⟩ | ⟨k, bl, hk, hik⟩
+  · obtain ⟨o', hT'⟩ := h.own_dst hi hb hT
+    exact Or.inl ⟨o', T, hT', hiT⟩
+  · exact Or.inr ⟨k, bl, by show m1.blk k = some bl; rw [hb.blk]; exact hk, hik⟩
 
 theorem catchOK (h : CallH P Γ F x fn args m.nv) (m' : Mem) (k : Stmt) :
     CatchOK m' (callStmt fn args m.nv x k) := by
@@ -633,7 +634,8 @@ theorem recCase {P : Prog} (hP : ProgOK P) : RecCase P := by
       StmtT.catchR hxF hIn hM hanchΔ hKO hDS
     refine ⟨_, StmtT.scope ⟨callX fn, h.canon_x _, by simp [callX, resMode_ne' fn]⟩ h.xF
       (StmtT.seq hk hcatch hkT) hpx, ?_, Nat.le_add_right _ _, hkeep, h.frz hi.toMInv hb⟩
-    refine hI.respine rfl (fun v hv => ?_) ⟨fun v hv hvx => ?_, ?_, Nat.le_add_right _ _, BlkLe.refl _, h.catchOK _ k⟩
+    refine hI.respine rfl (fun v hv => ?_) ⟨fun v hv hvx => ?_, ?_, Nat.le_add_right _ _, fun _ _ hk _ => hk,
+      h.catchOK _ k⟩
       hI.pinIn hI.dtorIn
     · simp only [recStmt, Stmt.vars, List.mem_cons, List.mem_append] at hv
       rcases hv with rfl | (rfl | hv) | hv

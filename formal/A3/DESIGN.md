@@ -395,6 +395,117 @@ has no such tie. Ways on:
   then loses its mark, and `SelfFree` does not cover a share. The fix is
   the same as (1), or `revive` keeps share dependencies.
 
+**Taken: way 1, and `revive` keeps share dependencies (proven).** The
+design: payload memory is its block's, never a slot's tree; a block lives
+while a slot or a live payload holds a share of it or a handle into its
+payload (the sweep); a borrow may land in a live payload through a `.share`
+dependency, which `arc_get` creates, `comp` keeps and `editB` refuses
+(`ThruOK.noShare`). The runtime frees at refcount 0, and the agreement
+with the sweep is the phase-D obligation above. `check.sh` is green with:
+- (A) `RootNode` reaches a share at the top of a borrowed slot's value
+  (`∃ v k q, m.st r = some ⟨false, some v⟩ ∧ Top (.arc k q) v ∧ n = .arc k q`),
+  so `⟨y, .self⟩` or `⟨p, .share⟩` on a borrowed share reaches its value.
+  `RootNode.owned` and `Landed.inMem'` say what else a root reaches is such
+  a share; `Landed.inMem` is for nodes.
+- (B) `ValOK.arc` asks `∃ dep ∈ P, ArcLanded m dep (.arc k p)` (first
+  `Landed`; `ArcLanded` since e2, below): a lent share lands through a
+  dependency, as an `href` does. `valOK_arc` finds it in a borrowed value,
+  `bor_arcLanded` uses it for (A)'s disjunct. `lend_valOK'`
+  takes a landing premise for the shares at the top, `lend_valOK` one for
+  every value inside (its callers prove it by `Lands` / `derive_lands`,
+  `MInv.share_lands` for a payload). `HKeep` keeps a share's landing too.
+- (C) `Landed`'s share alternative asks that the dependency's root reaches
+  memory: `dep.kind = .share ∧ RootMem m dep.root ∧ InPay m n`. `RootMem`
+  is an owner's slot (with a value or not) or a `RootNode`. This excludes a
+  handle-free borrowed root (an `int` parameter `allKinds` gave a
+  `.share`). An owner whose slot was emptied counts: a move (`rhs_move`,
+  `takel` / `taker`, `unpair`) hands the value on with its holder's own
+  share dependencies, and their witness is the block, not the tree.
+  `RootKeep` keeps an owner an owner (`RootKeep.of_slot`, `.of_st`);
+  `vkeep_share` asks `RootMem` after, which its users on a changing owner
+  (`keep_except`, push in `Steps`, pop in `Rhs`) have from the owner's
+  slot. `reroot_landed` reroots a landing through `⟨p, k⟩`: `p` reaches
+  memory, `bor_lands` gives a non-name `d'` in `Ep.path ++ Ep.held`, and
+  `⟨d'.root, comp d'.kind .share⟩ = ⟨d'.root, .share⟩` lands with
+  `d'.root` reaching memory.
+- (D) `Entry.revive` keeps the binding's own `.share` dependencies
+  (`revive_dep`: `d.root ≠ x ∨ d.kind = .share`), and `ViewsOK.dropSelf`
+  keeps them, as `viewAt_not_self` does; with (C) they stay valid while
+  `x` holds its value. The revived binding runs no other destructor and
+  is no longer `letd`'s (`dtor`, `dbind` false), so ending its scope after
+  the call asks nothing of its own dependencies (`EndOK`, `DbindSafe`).
+- `Landed.root_of_heap` and `viewAt_not_self_heap` are gone: the reroot
+  (`reroot_vkeep`, `reroot_valOK_gen`) and the revive no longer read
+  `HeapOK.bpay`. It is still read by `covers_evalR`, `no_leak_end` and A3
+  (`PayFree`).
+- (d1) `arcGet` asks `t.holdsView = false ∧ t.hasFn = false` (`Ty.hasFn`
+  moved to `Syntax.lean`), not `Ty.plain`: it lends `lendOf bl.pay`, whose
+  every handle lands in the payload through the share dependency
+  (`out_arcGet` by `MInv.share_lands`), whatever the payload holds. While
+  `bpay` holds, a payload still owns no address, so no such handle exists
+  yet. `arcNew` still asks `Ty.plain`: moving a tree into a block needs
+  `Covers` to count payloads, and so `no_leak` the sweep (step e), in the
+  same change as `bpay`'s removal.
+- (e1) `Covers` counts payload addresses: every live address is
+  `Covered`, in an owned tree or a live payload (`PayAddr`). Every
+  `covers_*` lemma carries the payload case (no step that keeps the blocks
+  frees a payload address), and `covers_evalR` no longer reads `bpay`:
+  what `arc_new` takes from `y` is the new block's payload. `bpay` is now
+  read only where the first cut needs it: `rhs_arcNew` (a plain payload
+  owns no address, `BlkOwn.of_none`), `no_leak_end` / `no_leak_panic` (a
+  block that is left at the end owns no address, until `Steps` sweeps), and
+  A3 (`PayFree`, `BlocksAt`, `ThreadOK.no_leak`).
+- (e2) **The sweep keeps the memory invariant** (`A2/Sweep.lean`):
+  `MInv.sweep : MInv m Γ → MInv m.sweep Γ`, `Covers.sweep`, and
+  `Mem.sweep_empty` (no slot holds a value: every block is swept). A
+  slot's value, and a reached block's payload, refer only to reached
+  blocks (`Kept`); a node a borrow lands in holds the address of the
+  handle that reaches it (`KeptAddr`, `Landed.kept`), so a payload it lies
+  in is reached; `RootNode`, `Landed`, `ViewAt`, `HrefAt`, `ValOK`,
+  `SlotOK`, `ArmOK` and `SharesOK` all carry over (`*.sweep`). For this,
+  (B) is `ArcLanded`, not `Landed`: a lent share lands where its root's
+  node puts it, or, through a share dependency, wherever, as long as the
+  root reaches memory. A share has no address, so the slot that holds a
+  copy of it need not refer to the block whose payload the original lies
+  in (an `Arc (Arc i)`'s inner share, lent by `arc_get`); `InPay` would not
+  survive the sweep, and the reroot needs only `RootMem` of the share's
+  dependency (`bor_arcLanded`, `reroot_arcLanded`). The node landings
+  keep `InPay` (`bor_lands`, `reroot_landed` and `rootb_anchor` are for
+  nodes).
+- (e3) **`Steps` runs the sweep at the end of every step** (the cleaner of
+  the two: one place, at a step boundary, where every value is in a slot
+  and `MInv.sweep` applies; a sweep inside the rules would meet values in
+  flight). `Steps.step` continues from `m'.sweep`, `Steps.panic` ends at
+  `m'.sweep`. `Step` itself does not sweep, and `Step.blk` (every step
+  keeps every block) stands. `Steps0` is the sweep-free run, which A3's
+  thread-local runs use (`reach_ok0`; A3's sweep will be the
+  configuration's, over every thread's slots).
+  - `CatchOK`'s `BlkLe m0.blk m.blk` weakens to "the blocks the caller's
+    store reaches outside the frame are kept" (`OutVals`,
+    `Reached.catch`, `CatchOK.sweep`); `catchP` sweeps the typing's
+    `MInv (m0.set x _) Δ` before growing it to the store it returns to.
+  - `Inv.sweep`, and `reach_ok` / `reach_panic` sweep after every step.
+  - `no_leak_end` / `no_leak_panic` no longer read `bpay`: when every slot
+    is gone, nothing reaches any block, so the last sweep left none
+    (`Steps.ok_swept`, `Mem.sweep_empty`), and `Covers` leaves nothing
+    allocated.
+  `bpay` is now read only by `rhs_arcNew` (`arc_new` still asks
+  `Ty.plain`) and by A3 (`PayFree`, `BlocksAt`, `ThreadOK.no_leak`).
+
+**What remains of the second cut.**
+- (d2) `arcNew` asks `t.holdsView = false ∧ t.hasFn = false`: `rhs_arcNew`
+  proves `BlkOwn` for the new block (the moved tree's ids leave `y`'s slot
+  and become the block's: `RhsOut.valOwn` already says they are in no
+  other tree and no payload), `covers_evalR` already counts them, and
+  `HeapOK.bpay` goes. This cannot be green on its own: A3 reads `bpay`.
+- (f) A3 in the same change: payload addresses in no thread's part, a
+  shared read-only part of the address partition (`Touch`, `Avoids`, the
+  restrict / lift lemmas), the configuration-level sweep over all threads'
+  slots (A2's `Step` per thread, `Mem.sweep` with every thread's values as
+  roots), `Touch` with payload reads through landing and the sweep's frees
+  as writes to blocks no thread reaches, `PayFree` dropped, `A3.claim`
+  re-proven.
+
 After that, step (d) is: `Ty.plain` lifted to `holdsView = false ∧
 hasFn = false`, `arcNew` moving a tree into a new block (`BlkOwn` for it),
 `arcGet` lending the `href` through the share landing, and `bpay` removed.

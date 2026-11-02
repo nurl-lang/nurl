@@ -16,7 +16,7 @@ theorem ThreadOK.init {P : Prog} {s : Stmt} {Δ : Ctx} {nv : Nat}
 theorem ThreadOK.step {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {m : Mem} {s : Stmt}
     (h : ThreadOK P m s) {m' : Mem} {s' : Stmt} (hst : Step P m s (.ok m' s')) : ThreadOK P m' s' := by
   obtain ⟨Γ, F, Δ, ht, hi, hcd, hsc, hc⟩ := h
-  obtain ⟨Γ', ht', hi', hc', hcd', hsc'⟩ := reach_ok hP hPc ht hcd hsc hi hc (.step hst .refl)
+  obtain ⟨Γ', ht', hi', hc', hcd', hsc'⟩ := reach_ok0 hP hPc ht hcd hsc hi hc (Steps0.step hst Steps0.refl)
   exact ⟨Γ', F, Δ, ht', hi', hcd', hsc', hc'⟩
 
 /-- A2's progress: a thread is finished, or it can step. -/
@@ -32,19 +32,21 @@ theorem ThreadOK.no_leak {P : Prog} {m : Mem} (h : ThreadOK P m .skip) : ∀ i, 
   cases ha : m.alloc i with
   | false => rfl
   | true =>
-    obtain ⟨o, T, hT, _⟩ := hi.cover i ha
-    have hd := hi.dom o
-    unfold OwnedAt at hT
-    rw [hT] at hd
-    exact absurd (hc o hd) (by simp [Stmt.spine])
+    rcases hi.cover i ha with ⟨o, T, hT, _⟩ | ⟨k, bl, hk, hik⟩
+    · have hd := hi.dom o
+      unfold OwnedAt at hT
+      rw [hT] at hd
+      exact absurd (hc o hd) (by simp [Stmt.spine])
+    · rw [hi.heap.bpay k bl hk] at hik; cases hik
 
 /-- Every address live on a thread's part is below `nid`. -/
 theorem ThreadOK.lt_nid {P : Prog} {m : Mem} {s : Stmt} (h : ThreadOK P m s) :
     ∀ i, m.alloc i = true → i < m.nid := by
   obtain ⟨Γ, F, Δ, _, hi, _, _, _⟩ := h
   intro i ha
-  obtain ⟨o, T, hT, hiT⟩ := hi.cover i ha
-  exact (hi.heap.alloc o T hT i hiT).2
+  rcases hi.cover i ha with ⟨o, T, hT, hiT⟩ | hp
+  · exact (hi.heap.alloc o T hT i hiT).2
+  · exact (hi.heap.payAlloc hp).2
 
 /-- Every address of a thread's owned trees is on its part. -/
 theorem ThreadOK.owned {P : Prog} {m : Mem} {s : Stmt} (h : ThreadOK P m s) :

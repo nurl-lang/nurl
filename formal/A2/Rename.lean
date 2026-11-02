@@ -1631,9 +1631,9 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
       fun x => ?_⟩
     exact EntryWeaker.mk' (by simp [liftE]) (by simp [liftE, liftMode]) (by simp) (by simp [liftE])
       (fun h' => by simp [Mode.ownSlot] at h') (by simp)
-  | @arcGet a Ea t ha hl ht hpl =>
+  | @arcGet a Ea t ha hl ht hhv hfn =>
     have hc : S.canon Γa (S.ρ a) = some (S.liftE a Ea) := by rw [canon_ρ h, ha]; rfl
-    exact ⟨_, RhsT.arcGet hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab ha]; exact ht) hpl,
+    exact ⟨_, RhsT.arcGet hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab ha]; exact ht) hhv hfn,
       fun x => getE_lift h hab ha t x⟩
 
 theorem mem_allKinds_iff {L : List Var} {d : Dep} : d ∈ allKinds L ↔ d.root ∈ L ∧ d.kind.isName = false := by

@@ -93,10 +93,16 @@ theorem rootNode_st {m m' : Mem} (h : m'.st = m.st) {r : Var} {n : Val} (hn : Ro
     rcases hn with ⟨x, T, hT, hs, hn⟩ | ⟨k, bl, hk, hs, hn⟩
     · exact Or.inl ⟨x, T, hown x T hT, hs, hn⟩
     · exact Or.inr ⟨k, bl, hb k bl hk, hs, hn⟩
-  rcases hn with ⟨T, h1, ht⟩ | ⟨v, c, h1, ht, hn⟩ | ⟨v, d, o, l, h1, ht, hn⟩
+  rcases hn with ⟨T, h1, ht⟩ | ⟨v, c, h1, ht, hn⟩ | ⟨v, d, o, l, h1, ht, hn⟩ | ⟨v, k, q, h1, ht, hn⟩
   · exact Or.inl ⟨T, by rw [h]; exact h1, ht⟩
   · exact Or.inr (Or.inl ⟨v, c, by rw [h]; exact h1, ht, hnode c _ hn⟩)
-  · exact Or.inr (Or.inr ⟨v, d, o, l, by rw [h]; exact h1, ht, hdata d _ hn⟩)
+  · exact Or.inr (Or.inr (Or.inl ⟨v, d, o, l, by rw [h]; exact h1, ht, hdata d _ hn⟩))
+  · exact Or.inr (Or.inr (Or.inr ⟨v, k, q, by rw [h]; exact h1, ht, hn⟩))
+
+/-- The same slots, more blocks: every root reaches what it did. -/
+theorem RootKeep.of_st {m m' : Mem} (h : m'.st = m.st) (hb : BlkLe m.blk m'.blk := by exact fun _ _ h => h)
+    {r : Var} : RootKeep m m' r :=
+  RootKeep.of_slot (by rw [h]) fun _ hn => rootNode_st h hn hb
 
 theorem MInv.of_st {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) (hh : HeapOK m')
     (hnv : m.nv ≤ m'.nv) (hb : m'.blk = m.blk := by rfl) : MInv m' Γ where
@@ -104,7 +110,7 @@ theorem MInv.of_st {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) (
   slot v E hv := by
     obtain ⟨sl, hsl, hok, hslot⟩ := hi.slot v E hv
     refine ⟨sl, by rw [h]; exact hsl, hok, hslot.keep (fun dep _ => ?_) hb⟩
-    have hk : RootKeep m m' dep.root := fun n hn => rootNode_st h hn (BlkLe.of_eq hb)
+    have hk : RootKeep m m' dep.root := RootKeep.of_st h (BlkLe.of_eq hb)
     exact ⟨hk.vkeep (BlkLe.of_eq hb), hk.hkeep⟩
   heap := hh
   nvSt v hv := by rw [h] at hv; exact Nat.lt_of_lt_of_le (hi.nvSt v hv) hnv
@@ -116,7 +122,7 @@ theorem MInv.of_st {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) (
   held v E sl T hE hl hsl hT := hi.held v E sl T hE hl (by rw [h] at hsl; exact hsl) hT
   pkgs v sl T hsl hT := hi.pkgs v sl T (by rw [h] at hsl; exact hsl) hT
   armed v E sl hE hsl := (hi.armed v E sl hE (by rw [h] at hsl; exact hsl)).keep fun _ _ _ dep _ =>
-    (show RootKeep m m' dep.root from fun n hn => rootNode_st h hn (BlkLe.of_eq hb)).vkeep (BlkLe.of_eq hb)
+    (RootKeep.of_st (r := dep.root) h (BlkLe.of_eq hb)).vkeep (BlkLe.of_eq hb)
   shares v E sl T hE hsl hown hT := (hi.shares v E sl T hE (by rw [h] at hsl; exact hsl) hown hT).of_blk hb
   blocks k bl hk := by
     rw [hb] at hk
@@ -131,21 +137,23 @@ them: what was valid stays valid over more blocks. -/
 theorem HrefAt.grow {m m' : Mem} (hst : m'.st = m.st) (hb : BlkLe m.blk m'.blk) {dep : Dep} {c : Nat}
     {t : Ty} {H : List Dep} (h : HrefAt m dep c t H) : HrefAt m' dep c t H := by
   obtain ⟨d, es, hla, hw, hv, hn, hsh⟩ := h
-  exact ⟨d, es, hla.keep (fun n hn => rootNode_st hst hn hb) hb, hw,
-    hv.keep (fun dep _ => (show RootKeep m m' dep.root from fun n hn => rootNode_st hst hn hb).vkeep hb), hn,
+  exact ⟨d, es, hla.keep (RootKeep.of_st hst hb) hb, hw,
+    hv.keep (fun dep _ => (RootKeep.of_st (r := dep.root) hst hb).vkeep hb), hn,
     hsh.grow hb⟩
 
 theorem ValOK.grow {m m' : Mem} (hst : m'.st = m.st) (hb : BlkLe m.blk m'.blk) {τ : Ty} {v : Val}
     {P H : List Dep} (h : ValOK m τ v P H) : ValOK m' τ v P H := by
   induction h with
+  | arc h hw hv hl =>
+    obtain ⟨dep, hd, hla⟩ := hl
+    exact .arc (hb _ _ h) hw hv ⟨dep, hd, hla.keep (RootKeep.of_st hst hb)⟩
   | int => exact .int
-  | arc h hw hv => exact .arc (hb _ _ h) hw hv
   | href h =>
     obtain ⟨dep, hd, ha⟩ := h
     exact .href ⟨dep, hd, ha.grow hst hb⟩
   | view h =>
     obtain ⟨dep, hd, ha⟩ := h
-    exact .view ⟨dep, hd, (show RootKeep m m' dep.root from fun n hn => rootNode_st hst hn hb).vkeep hb
+    exact .view ⟨dep, hd, (RootKeep.of_st (r := dep.root) hst hb).vkeep hb
       _ _ _ _ ha⟩
   | pair _ _ ihx ihy => exact .pair ihx ihy
   | inl _ ih => exact .inl ih
@@ -155,7 +163,7 @@ theorem ValOK.grow {m m' : Mem} (hst : m'.st = m.st) (hb : BlkLe m.blk m'.blk) {
 theorem SlotOK.grow {m m' : Mem} (hst : m'.st = m.st) (hb : BlkLe m.blk m'.blk) {E : Entry} {sl : Slot}
     (hs : SlotOK m E sl) : SlotOK m' E sl := by
   have hvk : ∀ dep, VKeep m m' dep := fun dep =>
-    (show RootKeep m m' dep.root from fun n hn => rootNode_st hst hn hb).vkeep hb
+    (RootKeep.of_st (r := dep.root) hst hb).vkeep hb
   obtain ⟨h1, h2, h3⟩ := hs
   refine ⟨h1, fun ho => ?_, fun ho hl => ?_⟩
   · obtain ⟨a, b, c⟩ := h2 ho
@@ -186,7 +194,7 @@ theorem MInv.grow {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) (h
   held v E sl T hE hl hsl hT := hi.held v E sl T hE hl (by rw [h] at hsl; exact hsl) hT
   pkgs v sl T hsl hT := hi.pkgs v sl T (by rw [h] at hsl; exact hsl) hT
   armed v E sl hE hsl := (hi.armed v E sl hE (by rw [h] at hsl; exact hsl)).keep fun _ _ _ dep _ =>
-    (show RootKeep m m' dep.root from fun n hn => rootNode_st h hn hb).vkeep hb
+    (RootKeep.of_st (r := dep.root) h hb).vkeep hb
   shares v E sl T hE hsl hown hT := (hi.shares v E sl T hE (by rw [h] at hsl; exact hsl) hown hT).grow hb
   blocks := hB
 
@@ -726,7 +734,11 @@ theorem out_borrowWhole {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Ent
         · rw [slot_val_eq hv hw]
           rw [hty] at hok
           cases hok with
-          | arc h1 h2 h3 => exact .arc h1 h2 h3
+          | arc h1 h2 h3 _ =>
+            have hd : derive y E .self = [⟨y, .self⟩] := by simp [derive, hisroot, hty, rootKind]
+            rw [hd]
+            exact .arc h1 h2 h3 ⟨_, List.mem_singleton_self _,
+              Or.inl ⟨_, Or.inr (Or.inr (Or.inr ⟨_, _, _, hw, Top.refl _, rfl⟩)), Or.inl ⟨rfl, rfl⟩⟩⟩
         · rw [hv] at hw; cases hw
       · rw [ht] at hty; cases hty
   names hn := by
@@ -743,56 +755,58 @@ theorem out_borrowWhole {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Ent
 
 /-- A value stored in memory, lent out: every node at its top (the ones
     lending hands out) is reached through `P`, every view it stores is valid
-    through `H`. -/
+    through `H`. (A3.1: so is every share at its top.) -/
 theorem lend_valOK' {m : Mem} {H : List Dep} {τ : Ty} {e : Val} (hw : WFv τ e) (hpk : PkgsOK e) :
     ∀ {P : List Dep},
     (∀ t c d es, Top (.node t c d es) e →
       ∃ dep ∈ P, Landed m dep (.node t c d es)) →
+    (∀ k q, Top (.arc k q) e → ∃ dep ∈ P, ArcLanded m dep (.arc k q)) →
     ViewsOK m τ e H → NamesIn e H → SharesOK m τ e → (∀ s, τ = .slice s → ViewsOK m τ e P) →
     ValOK m τ (lendOf e) P H := by
   revert hpk
+  -- what is reached through `P` is reached through `P ++ X`
+  have up : ∀ {P X : List Dep} {n : Val}, (∃ dep ∈ P, Landed m dep n) → ∃ dep ∈ P ++ X, Landed m dep n :=
+    fun ⟨dep, hd, rest⟩ => ⟨dep, List.mem_append_left _ hd, rest⟩
+  have upa : ∀ {P X : List Dep} {n : Val}, (∃ dep ∈ P, ArcLanded m dep n) →
+      ∃ dep ∈ P ++ X, ArcLanded m dep n :=
+    fun ⟨dep, hd, rest⟩ => ⟨dep, List.mem_append_left _ hd, rest⟩
   induction hw generalizing H with
-  | int => intro _ P _ _ _ _ _; exact .int
-  | arc hwp hvf _ => intro _ P _ _ _ hsh _; exact .arc hsh.here hwp hvf
+  | int => intro _ P _ _ _ _ _ _; exact .int
+  | arc hwp hvf _ => intro _ P _ ha _ _ hsh _; exact .arc hsh.here hwp hvf (ha _ _ (Top.refl _))
   | @view t d o l =>
-    intro _ P _ _ _ _ hs
+    intro _ P _ _ _ _ _ hs
     obtain ⟨d', o', l', hv, dep, hd, ha⟩ := hs t rfl t _ ViewIn.here
     cases hv
     exact .view ⟨dep, hd, ha⟩
   | @node t c d es hes =>
-    intro _ P hn hv hnm hsh _
+    intro _ P hn _ hv hnm hsh _
     obtain ⟨dep, hd, hla⟩ := hn t c d es (Top.refl _)
     exact .href ⟨dep, hd, d, es, hla, WFv.node hes, hv, hnm, hsh⟩
   | @pair a b v w _ _ ihv ihw =>
-    intro hpk P hn hvs hnm hsh _
-    have hn' : ∀ t c d es, Top (.node t c d es) (.pair v w) →
-        ∃ dep ∈ P ++ H, Landed m dep (.node t c d es) := by
-      intro t c d es hs
-      obtain ⟨dep, hd, rest⟩ := hn t c d es hs
-      exact ⟨dep, List.mem_append_left _ hd, rest⟩
-    refine .pair (ihv (hpk.sub (Sub.fst (Sub.refl _))) (fun t c d es hs => hn' t c d es (Top.fst hs)) (fun s x hin => hvs s x
+    intro hpk P hn ha hvs hnm hsh _
+    refine .pair (ihv (hpk.sub (Sub.fst (Sub.refl _))) (fun t c d es hs => up (hn t c d es (Top.fst hs)))
+      (fun k q hs => upa (ha k q (Top.fst hs))) (fun s x hin => hvs s x
       (ViewIn.fst hin)) ((hnm.sub fun x hx => by simp only [Val.names]; exact List.mem_append_left _ hx)) hsh.fst (fun s _ => ?_))
-      (ihw (hpk.sub (Sub.snd (Sub.refl _))) (fun t c d es hs => hn' t c d es (Top.snd hs))
+      (ihw (hpk.sub (Sub.snd (Sub.refl _))) (fun t c d es hs => up (hn t c d es (Top.snd hs)))
+      (fun k q hs => upa (ha k q (Top.snd hs)))
       (fun s x hin => hvs s x (ViewIn.snd hin))
       ((hnm.sub fun x hx => by simp only [Val.names]; exact List.mem_append_right _ hx)) hsh.snd (fun s _ => ?_))
     · exact ViewsOK.mono (List.subset_append_right _ _) (fun s x hin => hvs s x (ViewIn.fst hin))
     · exact ViewsOK.mono (List.subset_append_right _ _) (fun s x hin => hvs s x (ViewIn.snd hin))
   | @inl a b v _ ihv =>
-    intro hpk P hn hvs hnm hsh _
-    refine .inl (ihv (hpk.sub (Sub.inl (Sub.refl _))) (fun t c d es hs => ?_) (fun s x hin => hvs s x (ViewIn.inl hin))
+    intro hpk P hn ha hvs hnm hsh _
+    exact .inl (ihv (hpk.sub (Sub.inl (Sub.refl _))) (fun t c d es hs => up (hn t c d es (Top.inl hs)))
+      (fun k q hs => upa (ha k q (Top.inl hs))) (fun s x hin => hvs s x (ViewIn.inl hin))
       ((hnm.sub fun x hx => by simp only [Val.names]; exact hx)) hsh.inl
       (fun s _ => ViewsOK.mono (List.subset_append_right _ _) (fun s x hin => hvs s x (ViewIn.inl hin))))
-    obtain ⟨dep, hd, rest⟩ := hn t c d es (Top.inl hs)
-    exact ⟨dep, List.mem_append_left _ hd, rest⟩
   | @inr a b v _ ihv =>
-    intro hpk P hn hvs hnm hsh _
-    refine .inr (ihv (hpk.sub (Sub.inr (Sub.refl _))) (fun t c d es hs => ?_) (fun s x hin => hvs s x (ViewIn.inr hin))
+    intro hpk P hn ha hvs hnm hsh _
+    exact .inr (ihv (hpk.sub (Sub.inr (Sub.refl _))) (fun t c d es hs => up (hn t c d es (Top.inr hs)))
+      (fun k q hs => upa (ha k q (Top.inr hs))) (fun s x hin => hvs s x (ViewIn.inr hin))
       ((hnm.sub fun x hx => by simp only [Val.names]; exact hx)) hsh.inr
       (fun s _ => ViewsOK.mono (List.subset_append_right _ _) (fun s x hin => hvs s x (ViewIn.inr hin))))
-    obtain ⟨dep, hd, rest⟩ := hn t c d es (Top.inr hs)
-    exact ⟨dep, List.mem_append_left _ hd, rest⟩
   | @pkg fs te ms v cs _ ihv =>
-    intro hpk P hn hvs hnm hsh _
+    intro hpk P hn ha hvs hnm hsh _
     -- what the environment holds by name is no change of one of this
     -- package's own captures (one captured again inside is only read)
     have hdis := (hpk fs te ms v cs (Sub.refl _)).2.2
@@ -807,19 +821,18 @@ theorem lend_valOK' {m : Mem} {H : List Dep} {τ : Ty} {e : Val} (hw : WFv τ e)
         obtain ⟨c, ⟨hc, hcn⟩, hcc⟩ := hin
         rw [(hdis c hc c' hc' hcc).2]; rfl
       · right; simpa [List.contains_iff_mem] using hin
-    refine .pkg (ihv (hpk.sub (Sub.pkg (Sub.refl _))) (fun t c d es hs => ?_) hvr
+    exact .pkg (ihv (hpk.sub (Sub.pkg (Sub.refl _))) (fun t c d es hs => up (hn t c d es (Top.pkg hs)))
+      (fun k q hs => upa (ha k q (Top.pkg hs))) hvr
       (fun c' hc' => mem_envDeps.mpr ⟨hnm c' (by simp only [Val.names]; exact List.mem_append_right _ hc'), hown c' hc'⟩)
       hsh.pkg (fun s _ => ViewsOK.mono (List.subset_append_right _ _) hvr))
-    obtain ⟨dep, hd, rest⟩ := hn t c d es (Top.pkg hs)
-    exact ⟨dep, List.mem_append_left _ hd, rest⟩
 
 theorem lend_valOK {m : Mem} {H : List Dep} {τ : Ty} {e : Val} (hw : WFv τ e) (hpk : PkgsOK e) {P : List Dep}
-    (hn : ∀ t c d es, Sub (.node t c d es) e →
-      ∃ dep ∈ P, Landed m dep (.node t c d es))
+    (hn : ∀ n, Sub n e → ∃ dep ∈ P, Landed m dep n)
     (hv : ViewsOK m τ e H) (hnm : NamesIn e H) (hsh : SharesOK m τ e)
     (hs : ∀ s, τ = .slice s → ViewsOK m τ e P) :
     ValOK m τ (lendOf e) P H :=
-  lend_valOK' hw hpk (fun t c d es ht => hn t c d es ht.sub) hv hnm hsh hs
+  lend_valOK' hw hpk (fun _ _ _ _ ht => hn _ ht.sub)
+    (fun _ _ ht => let ⟨d, hd, h⟩ := hn _ ht.sub; ⟨d, hd, h.arc⟩) hv hnm hsh hs
 
 theorem lands_rootKind_self (t : Ty) (n : Val) : Lands (rootKind t .self) n n := by
   cases t <;> first | exact Or.inl ⟨rfl, rfl⟩ | exact Or.inr (Or.inl ⟨rfl, rfl⟩)
@@ -894,27 +907,33 @@ theorem out_at {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t : 
         exact .href (derive_hrefAt (hroot ·) hbor (by rw [hty]; rfl)
           (Lands.elem hmem) (WFv.node hes) (hvs.elem hmem) (hns.sub (names_elem hmem)) (hshv.elem hmem))
     | prod a b =>
-      refine lend_valOK hwe hpke (fun t' c' d' es' hs => ?_) (hvs.elem hmem) (hns.sub (names_elem hmem))
+      refine lend_valOK hwe hpke (fun n' hs => ?_) (hvs.elem hmem) (hns.sub (names_elem hmem))
         (hshv.elem hmem) (fun s h => by cases h)
       have hbor' : E.mode.isRoot = false → ∃ dep ∈ E.path, Landed m dep (.node (.prod a b) c d es) := fun h => hbor (by
         cases hm : E.mode <;> simp_all [Mode.isRoot])
       exact derive_lands (hroot ·) hbor' (Or.inr (Or.inr ⟨rfl, _, Child.elem hmem, hs⟩))
         (by rw [hty]; rfl)
     | sum a b =>
-      refine lend_valOK hwe hpke (fun t' c' d' es' hs => ?_) (hvs.elem hmem) (hns.sub (names_elem hmem))
+      refine lend_valOK hwe hpke (fun n' hs => ?_) (hvs.elem hmem) (hns.sub (names_elem hmem))
         (hshv.elem hmem) (fun s h => by cases h)
       have hbor' : E.mode.isRoot = false → ∃ dep ∈ E.path, Landed m dep (.node (.sum a b) c d es) := fun h => hbor (by
         cases hm : E.mode <;> simp_all [Mode.isRoot])
       exact derive_lands (hroot ·) hbor' (Or.inr (Or.inr ⟨rfl, _, Child.elem hmem, hs⟩))
         (by rw [hty]; rfl)
     | fn ms =>
-      refine lend_valOK hwe hpke (fun t' c' d' es' hs => ?_) (hvs.elem hmem) (hns.sub (names_elem hmem))
+      refine lend_valOK hwe hpke (fun n' hs => ?_) (hvs.elem hmem) (hns.sub (names_elem hmem))
         (hshv.elem hmem) (fun s h => by cases h)
       have hbor' : E.mode.isRoot = false → ∃ dep ∈ E.path, Landed m dep (.node (.fn ms) c d es) := fun h => hbor (by
         cases hm : E.mode <;> simp_all [Mode.isRoot])
       exact derive_lands (hroot ·) hbor' (Or.inr (Or.inr ⟨rfl, _, Child.elem hmem, hs⟩))
         (by rw [hty]; rfl)
-    | arc a => cases hwe with | arc hwp hvf => exact .arc (hshv.elem hmem).here hwp hvf
+    | arc a =>
+      cases hwe with
+      | arc hwp hvf =>
+        have hbor' : E.mode.isRoot = false → ∃ dep ∈ E.path, Landed m dep (.node (.arc a) c d es) := fun h => hbor (by
+          cases hm : E.mode <;> simp_all [Mode.isRoot])
+        obtain ⟨d', hd', hla'⟩ := derive_lands (hroot ·) hbor' (Lands.elem hmem) (by rw [hty]; rfl)
+        exact .arc (hshv.elem hmem).here hwp hvf ⟨d', hd', hla'.arc⟩
   names hn := elemE_named (hi.names y E hy hl (Or.inl (by rw [hty]; simp))) t
   held := by
     obtain ⟨c0, d0, es0, hvec0, hw, _, _, _, hns, hshv⟩ := hi.vec_node hy hl hty
@@ -1016,7 +1035,7 @@ theorem out_sat {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t :
         obtain ⟨dep, hd, _, hla⟩ := hbor hb
         exact ⟨dep, hd, hla⟩
     | prod a b =>
-      refine lend_valOK hwe hpke (fun t' c' d' es' hs => ?_)
+      refine lend_valOK hwe hpke (fun n' hs => ?_)
         (ViewsOK.none (by simpa [Ty.holdsView] using hok.1.2) _ _)
         (NamesIn.nil _ (hwe.names_nil (by simpa [Ty.holdsView] using hok.1.2)))
         (SharesOK.of_noArc (by simpa [Ty.hasArc] using hok.2)) (fun s h => by cases h)
@@ -1027,7 +1046,7 @@ theorem out_sat {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t :
       exact derive_lands (hroot ·) hbor' (Or.inr (Or.inr ⟨rfl, _, Child.elem hmem, hs⟩))
         (by rw [hty]; rfl)
     | sum a b =>
-      refine lend_valOK hwe hpke (fun t' c' d' es' hs => ?_)
+      refine lend_valOK hwe hpke (fun n' hs => ?_)
         (ViewsOK.none (by simpa [Ty.holdsView] using hok.1.2) _ _)
         (NamesIn.nil _ (hwe.names_nil (by simpa [Ty.holdsView] using hok.1.2)))
         (SharesOK.of_noArc (by simpa [Ty.hasArc] using hok.2)) (fun s h => by cases h)
@@ -1038,7 +1057,7 @@ theorem out_sat {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t :
       exact derive_lands (hroot ·) hbor' (Or.inr (Or.inr ⟨rfl, _, Child.elem hmem, hs⟩))
         (by rw [hty]; rfl)
     | fn ms =>
-      refine lend_valOK hwe hpke (fun t' c' d' es' hs => ?_)
+      refine lend_valOK hwe hpke (fun n' hs => ?_)
         (ViewsOK.none (by simpa [Ty.holdsView] using hok.1.2) _ _)
         (NamesIn.nil _ (hwe.names_nil (by simpa [Ty.holdsView] using hok.1.2)))
         (SharesOK.of_noArc (by simpa [Ty.hasArc] using hok.2)) (fun s h => by cases h)
@@ -1079,7 +1098,7 @@ theorem out_comp {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (hy
       obtain ⟨hwx, hvx, hshx⟩ := hown hwT hvsT (hi.shares y E _ T hy hT' rfl rfl)
       have hpd : projDeps y E = [⟨y, .inner⟩] := by simp [projDeps, hos]
       refine lend_valOK hwx ((hi.pkgs y _ T hT' rfl).sub (hc.sub (Sub.refl _)))
-        (fun t' c d es hs => ⟨⟨y, .inner⟩, by simp [hpd], Or.inl ⟨T, Or.inl ⟨T, hT', Top.refl _⟩,
+        (fun n' hs => ⟨⟨y, .inner⟩, by simp [hpd], Or.inl ⟨T, Or.inl ⟨T, hT', Top.refl _⟩,
         Or.inr (Or.inr ⟨rfl, x, hc, hs⟩)⟩⟩) hvx ((hi.held y E _ T hy hl hT' rfl).sub (names_child hc))
         hshx (fun s _ => ?_)
       exact ViewsOK.mono (List.subset_append_right _ _) hvx
@@ -1265,6 +1284,37 @@ theorem MInv.arc_slot {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry
     rw [hty] at hok
     cases hok; exact ⟨_, _, _, hw⟩
 
+/-- A3.1: what lies in the payload of the share `a` holds lands through a
+    share dependency of `a` (`derive a E .share`): `a`'s own if it is a
+    root, which reaches memory (an owner, or a borrowed share, `RootNode`),
+    or, for a borrow, one through what the share lands through. -/
+theorem MInv.share_lands {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry} (ha : Γ a = some E)
+    (hl : E.live = true) {t : Ty} (hty : E.ty = .arc t) {o : Bool} {k : Nat} {p : Val}
+    (hv : m.st a = some ⟨o, some (.arc k p)⟩) (hk : m.blk k = some ⟨t, p⟩) {n : Val} (hs : Sub n p) :
+    ∃ dep ∈ derive a E .share, Landed m dep n := by
+  have hin : InPay m n := ⟨k, _, hk, hs⟩
+  unfold derive
+  cases hr : E.mode.isRoot with
+  | true =>
+    simp only [↓reduceIte, List.mem_singleton, exists_eq_left]
+    refine Or.inr ⟨by rw [hty]; rfl, ?_, hin⟩
+    cases o with
+    | true => exact RootMem.own hv
+    | false => exact Or.inr ⟨_, Or.inr (Or.inr (Or.inr ⟨_, k, p, hv, Top.refl _, rfl⟩))⟩
+  | false =>
+    simp only [Bool.false_eq_true, ↓reduceIte, List.mem_map]
+    have hm : E.mode = .bor := by cases hm : E.mode <;> simp_all [Mode.isRoot]
+    obtain ⟨w, hw, hok⟩ := hi.bor_val ha hl (by rw [hm]; rfl)
+    rw [hv] at hw; cases hw
+    rw [hty] at hok
+    cases hok with
+    | arc _ _ _ hla =>
+      obtain ⟨dep, hd, hl'⟩ := hla
+      refine ⟨_, ⟨dep, hd, rfl⟩, Or.inr ⟨?_, hl'.rootMem, hin⟩⟩
+      show comp dep.kind .share = .share
+      have := hl'.notName
+      cases hk : dep.kind <;> simp_all [comp, Kind.isName]
+
 /-- A share, owned: it holds nothing, and its block holds its payload. -/
 theorem out_share {m : Mem} {Γ : Ctx} {t : Ty} {k : Nat} {p : Val} (htok : t.ok = true)
     (hvf : t.holdsView = false) (hwp : WFv t p) (hk : m.blk k = some ⟨t, p⟩) :
@@ -1293,21 +1343,24 @@ theorem out_arcClone {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry}
   simp only [Ty.ok, Bool.and_eq_true] at hok
   exact out_share hok.1 hvf hwp hk
 
-/-- `arc_get a`: the payload, lent through a share of `a` (`getE`). A plain
-    payload has no handle, so it is valid through any dependency. -/
+/-- `arc_get a`: the payload, lent through a share of `a` (`getE`). Every
+    handle in it lands in the block's payload through that share
+    (`MInv.share_lands`); it holds no view and no closure. -/
 theorem out_arcGet {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry} (ha : Γ a = some E)
-    (hl : E.live = true) {t : Ty} (hty : E.ty = .arc t) (hpl : t.plain = true) {o : Bool} {k : Nat}
-    {p : Val} (hv : m.st a = some ⟨o, some (.arc k p)⟩) : RhsOut m Γ (getE a E t) (lendOf p) false := by
+    (hl : E.live = true) {t : Ty} (hty : E.ty = .arc t) (_hhv : t.holdsView = false) (_hfn : t.hasFn = false)
+    {o : Bool} {k : Nat} {p : Val} (hv : m.st a = some ⟨o, some (.arc k p)⟩) :
+    RhsOut m Γ (getE a E t) (lendOf p) false := by
   obtain ⟨hk, hwp, hvf⟩ := hi.arc_val ha hl hty hv
   have hsh : SharesOK m t p := (hi.blocks k _ hk).2.2.2
   have hok := hi.tyok ha; rw [hty] at hok
   simp only [Ty.ok, Bool.and_eq_true] at hok
   have htok := hok.1
   have hnint : E.ty ≠ .int := by rw [hty]; simp
+  have hpk : PkgsOK p := fun _ _ _ _ _ hs => (hwp.noView_pkg hvf hs).elim
   have key : ValOK m t (lendOf p) (derive a E .share) E.held :=
-    lend_valOK hwp (hwp.plain_pkgs hpl) (fun _ _ _ _ hs => (hwp.plain_node hpl hs).elim)
+    lend_valOK hwp hpk (fun _ hs => hi.share_lands ha hl hty hv hk hs)
       (ViewsOK.none hvf _ _) (NamesIn.nil _ (hwp.names_nil hvf)) hsh
-      (fun s hs => by rw [hs] at hpl; simp [Ty.plain] at hpl)
+      (fun s hs => by rw [hs] at hvf; simp [Ty.holdsView] at hvf)
   have hint : t = .int ∨ getE a E t = ⟨t, .bor, true, derive a E .share, E.held, false, false⟩ := by
     cases t <;> simp [getE]
   rcases hint with rfl | heq
@@ -1319,7 +1372,7 @@ theorem out_arcGet {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry} (
         have h := hi.names a E ha hl (Or.inl hnint)
         show DepsNamed Γ (derive a E .share ++ E.held)
         exact (derive_named h rfl).append h.held,
-      NamesIn.noView hwp hvf _, (hwp.plain_pkgs hpl).lendOf, fun h => nomatch h⟩
+      NamesIn.noView hwp hvf _, hpk.lendOf, fun h => nomatch h⟩
     rw [bor_vdeps _ rfl] at hr
     exact wf_append (wf_derive hi ha hl hnint _) (wf_held hi ha hl hnint) r hr
 
@@ -1447,7 +1500,7 @@ theorem rhs_move' {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
           show E.mode.isRoot = true; revert hos; cases E.mode <;> simp [Mode.isRoot, Mode.ownSlot]⟩
       · exact ⟨killE .replace false y Er, by simp [setE, upd_ne _ _ hry, kill, hEr],
           by rw [killE_mode]; exact hroot⟩
-    · refine hvsT.keep_except hT (hi.heap.self y v hT) (fun s w h => h) (fun dep hd hne => ?_)
+    · refine hvsT.keep_except hT (hi.heap.self y v hT) (fun s w h => h) (fun dep hd hne => ?_) ⟨none, by simp⟩
       obtain ⟨Er, hEr, hroot⟩ := wf_held hi hy hl hnint' dep.root (List.mem_map_of_mem hd)
       exact (rootKeep_frame hi hanch (fun o ho => hst o (fun h => hyF (h ▸ ho))) hEr hroot
         (hst _ hne)).vkeep
@@ -1551,6 +1604,7 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     · exact hnT.2.2.2.2 i hiS i hie rfl
   let m1 := m.set y ⟨true, some (.node t' c d es)⟩
   have hst : ∀ o, o ≠ y → m1.st o = m.st o := fun o ho => by simp [m1, upd_ne _ _ ho]
+  have hm1y : m1.st y = some ⟨true, some (.node t' c d es)⟩ := by simp [m1]
   -- A3.1: the shrunk tree's shares, and the popped element's, are the old tree's
   have hshT : SharesOK m (.vec t') (.node t' c d (es ++ [e])) := by
     have := hi.shares y E _ _ hy hT rfl rfl; rwa [hty] at this
@@ -1614,7 +1668,7 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
             rw [killE_ty, killE_held, hty]
             exact hvsT.keep_except hT hsfT (fun s w h => by
               cases h with
-              | child hm' hin => exact ViewIn.child (List.mem_append_left _ hm') hin) hkeepF⟩⟩,
+              | child hm' hin => exact ViewIn.child (List.mem_append_left _ hm') hin) hkeepF ⟨_, hm1y⟩⟩⟩,
           fun h => by rw [killE_mode, hm] at h; cases h⟩,
         by rw [killE_mode], fun hl' hn r hr => ?_, killE_ty ..,
         (fun _ _ => by
@@ -1646,7 +1700,7 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
           rw [killE_ty, killE_held, hty]
           exact hvsT.keep_except hT hsfT (fun s w h => by
             cases h with
-            | child hm' hin => exact ViewIn.child (List.mem_append_left _ hm') hin) hkeepF),
+            | child hm' hin => exact ViewIn.child (List.mem_append_left _ hm') hin) hkeepF ⟨_, hm1y⟩),
         fun _ T hT' => by
           simp only [Option.some.injEq] at hT'; subst hT'; rw [killE_ty, hty]; exact hshS⟩
       rw [killE_vdeps] at hr
@@ -1692,12 +1746,12 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
         · obtain ⟨d', o', l', hv', dep, hd, ha⟩ := hvsT s _ (ViewIn.child hemem ViewIn.here)
           cases hv'
           obtain ⟨r, k⟩ := dep
-          by_cases hks : k = .share
-          · subst hks; exact .view ⟨_, hd, vkeep_share (m := m) (m' := m.set y _) (BlkLe.refl _) r _ _ _ s ha⟩
-          refine .view ⟨_, hd, hkeepF _ hd ?_ _ _ _ s ha⟩
-          intro heq
-          simp only at heq; subst heq
-          exact viewAt_not_self hT hsfT (ViewIn.child hemem ViewIn.here) hks ha
+          by_cases hry : r = y
+          · subst hry
+            by_cases hks : k = .share
+            · subst hks; exact .view ⟨_, hd, vkeep_share (m := m) (m' := m1) (BlkLe.refl _) (RootMem.own hm1y) _ _ _ s ha⟩
+            · exact (viewAt_not_self hT hsfT (ViewIn.child hemem ViewIn.here) hks ha).elim
+          exact .view ⟨_, hd, hkeepF _ hd hry _ _ _ s ha⟩
     | vec s =>
       cases hwe with
       | node hes =>
@@ -1709,7 +1763,7 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
           fun i hi' => hi.heap.notPay hT (hsube.subset hi')⟩, (fun h => by cases h),
           fun _ => hNk _ (hHeld _ (List.Subset.refl _)), hNi, hPk, fun _ => (hshT.elem hemem).of_blk rfl⟩
         · exact hwfH r (by simpa [roots, Entry.vdeps, Mode.ownSlot] using hr)
-        · exact hvsT.keep_except hT hsfT (fun s' w h => ViewIn.child hemem h) hkeepF
+        · exact hvsT.keep_except hT hsfT (fun s' w h => ViewIn.child hemem h) hkeepF ⟨_, hm1y⟩
         · exact hnT.sublist hsube
         · exact fun i hi' => hi.heap.alloc y _ hT i (hsube.subset hi')
         · intro x U hU i hi' hiU
@@ -1726,7 +1780,7 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
           fun i hi' => hi.heap.notPay hT (hsube.subset hi')⟩, (fun h => by cases h),
           fun _ => hNk _ (hHeld _ (List.Subset.refl _)), hNi, hPk, fun _ => (hshT.elem hemem).of_blk rfl⟩
         · exact hwfH r (by simpa [roots, Entry.vdeps, Mode.ownSlot] using hr)
-        · exact hvsT.keep_except hT hsfT (fun s' w h => ViewIn.child hemem h) hkeepF
+        · exact hvsT.keep_except hT hsfT (fun s' w h => ViewIn.child hemem h) hkeepF ⟨_, hm1y⟩
         · exact hnT.sublist hsube
         · exact fun i hi' => hi.heap.alloc y _ hT i (hsube.subset hi')
         · intro x U hU i hi' hiU
@@ -1744,7 +1798,7 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
           fun i hi' => hi.heap.notPay hT (hsube.subset hi')⟩, (fun h => by cases h),
           fun _ => hNk _ (hHeld _ (List.Subset.refl _)), hNi, hPk, fun _ => (hshT.elem hemem).of_blk rfl⟩
         · exact hwfH r (by simpa [roots, Entry.vdeps, Mode.ownSlot] using hr)
-        · exact hvsT.keep_except hT hsfT (fun s' w h => ViewIn.child hemem h) hkeepF
+        · exact hvsT.keep_except hT hsfT (fun s' w h => ViewIn.child hemem h) hkeepF ⟨_, hm1y⟩
         · exact hnT.sublist hsube
         · exact fun i hi' => hi.heap.alloc y _ hT i (hsube.subset hi')
         · intro x U hU i hi' hiU
@@ -1762,7 +1816,7 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
           fun i hi' => hi.heap.notPay hT (hsube.subset hi')⟩, (fun h => by cases h),
           fun _ => hNk _ (hHeld _ (List.Subset.refl _)), hNi, hPk, fun _ => (hshT.elem hemem).of_blk rfl⟩
         · exact hwfH r (by simpa [roots, Entry.vdeps, Mode.ownSlot] using hr)
-        · exact hvsT.keep_except hT hsfT (fun s' w h => ViewIn.child hemem h) hkeepF
+        · exact hvsT.keep_except hT hsfT (fun s' w h => ViewIn.child hemem h) hkeepF ⟨_, hm1y⟩
         · exact hnT.sublist hsube
         · exact fun i hi' => hi.heap.alloc y _ hT i (hsube.subset hi')
         · intro x U hU i hi' hiU
@@ -1780,7 +1834,7 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
           fun i hi' => hi.heap.notPay hT (hsube.subset hi')⟩, (fun h => by cases h),
           fun _ => hNk _ (hHeld _ (List.Subset.refl _)), hNi, hPk, fun _ => (hshT.elem hemem).of_blk rfl⟩
         · exact hwfH r (by simpa [roots, Entry.vdeps, Mode.ownSlot] using hr)
-        · exact hvsT.keep_except hT hsfT (fun s' w h => ViewIn.child hemem h) hkeepF
+        · exact hvsT.keep_except hT hsfT (fun s' w h => ViewIn.child hemem h) hkeepF ⟨_, hm1y⟩
         · exact List.nodup_nil
         · intro i hi'; nomatch hi'
         · intro x U hU i hi'; nomatch hi'

@@ -199,11 +199,20 @@ inductive Top : Val → Val → Prop
       Top n a → Top n (.pkg fs te ms a cs)
 
 /-- A node a root's slot reaches directly: one at the top of its own tree, or
-    one a handle it holds names (a borrowed struct is a bundle of handles). -/
+    one a handle it holds names (a borrowed struct is a bundle of handles),
+    or (A3.1) a share at the top of a borrowed slot's value: through it the
+    slot reaches its block's payload. -/
 def RootNode (m : Mem) (r : Var) (n : Val) : Prop :=
   (∃ T, m.st r = some ⟨true, some T⟩ ∧ Top n T) ∨
   (∃ v c, m.st r = some ⟨false, some v⟩ ∧ Top (.href c) v ∧ NodeAt m c n) ∨
-  (∃ v d o l, m.st r = some ⟨false, some v⟩ ∧ Top (.view d o l) v ∧ DataAt m d n)
+  (∃ v d o l, m.st r = some ⟨false, some v⟩ ∧ Top (.view d o l) v ∧ DataAt m d n) ∨
+  (∃ v k q, m.st r = some ⟨false, some v⟩ ∧ Top (.arc k q) v ∧ n = .arc k q)
+
+/-- A3.1: a root that reaches memory: an owned slot (its tree, if it still
+    has one), or a borrowed one whose value holds a handle or a share at its
+    top. A borrowed integer reaches none. -/
+def RootMem (m : Mem) (r : Var) : Prop :=
+  (∃ o, m.st r = some ⟨true, o⟩) ∨ ∃ n0, RootNode m r n0
 
 /-- Where a value reached through a dependency of a given kind lies: the
     root's node itself, or strictly inside it. -/
@@ -216,9 +225,27 @@ def InPay (m : Mem) (n : Val) : Prop := ∃ k bl, m.blk k = some bl ∧ Sub n bl
 /-- Where a value reached through `dep` lies: where the node its root
     reaches puts it (`Lands`), or (A3.1), through a share, anywhere in a
     live block's payload, which nothing writes: valid while the block
-    lives, whatever its root does. -/
+    lives (the sweep keeps a block a handle reaches), whatever its root
+    holds, as long as the root reaches memory (`RootMem`): a borrowed
+    parameter's share dependency then has one of the parameter's own to
+    pass on to when its scope ends. -/
 def Landed (m : Mem) (dep : Dep) (n : Val) : Prop :=
-  (∃ n0, RootNode m dep.root n0 ∧ Lands dep.kind n n0) ∨ (dep.kind = .share ∧ InPay m n)
+  (∃ n0, RootNode m dep.root n0 ∧ Lands dep.kind n n0) ∨
+    (dep.kind = .share ∧ RootMem m dep.root ∧ InPay m n)
+
+/-- A3.1: where a share reached through `dep` lies: where the node its root
+    reaches puts it, or, through a share, anywhere, as long as the root
+    reaches memory. A share carries its block, which lives while the share
+    does (the sweep reaches it from the share), so where the share itself
+    lies does not matter: only the dependency does, which a borrowed
+    parameter's end passes on (`reroot`). -/
+def ArcLanded (m : Mem) (dep : Dep) (n : Val) : Prop :=
+  (∃ n0, RootNode m dep.root n0 ∧ Lands dep.kind n n0) ∨ (dep.kind = .share ∧ RootMem m dep.root)
+
+theorem Landed.arc {m : Mem} {dep : Dep} {n : Val} (h : Landed m dep n) : ArcLanded m dep n := by
+  rcases h with h | ⟨hk, hro, _⟩
+  · exact Or.inl h
+  · exact Or.inr ⟨hk, hro⟩
 
 /-- The view `(d, o, l)` of element type `t` is valid through `dep` (a
     dependency on a whole handle is no view's: a `push` moves the buffer
@@ -269,9 +296,11 @@ inductive ValOK (m : Mem) : Ty → Val → List Dep → List Dep → Prop
       {P H : List Dep} :
       ValOK m te x (P ++ envDeps cs H) (envDeps cs H) → ValOK m (.fn ms) (.pkg fs te ms x cs) P H
   /-- A3.1: a share lent: its block holds the payload it carries, of its
-      type (in the first cut, one that holds no view). -/
+      type (in the first cut, one that holds no view), and the share lands
+      through a dependency, as a `Vec` handle does. -/
   | arc {t : Ty} {k : Nat} {p : Val} {P H : List Dep} :
-      m.blk k = some ⟨t, p⟩ → WFv t p → t.holdsView = false → ValOK m (.arc t) (.arc k p) P H
+      m.blk k = some ⟨t, p⟩ → WFv t p → t.holdsView = false → (∃ dep ∈ P, ArcLanded m dep (.arc k p)) →
+      ValOK m (.arc t) (.arc k p) P H
 
 section ValOK
 variable {m : Mem} {v : Val} {P H : List Dep}
@@ -425,11 +454,22 @@ def Stmt.spine : Stmt → List Var
   | .catchR _ _ s => s.spine
   | _ => []
 
-/-- Nothing leaks: every live address is in a tree some binding owns. -/
-def Covers (m : Mem) : Prop := ∀ i, m.alloc i = true → ∃ x t, OwnedAt m x t ∧ i ∈ t.ids
+/-- An address is covered: a tree some binding owns holds it, or (A3.1) a
+    live block's payload owns it. -/
+def Covered (m : Mem) (i : Nat) : Prop := (∃ x t, OwnedAt m x t ∧ i ∈ t.ids) ∨ PayAddr m i
+
+/-- Nothing leaks: every live address is covered. -/
+def Covers (m : Mem) : Prop := ∀ i, m.alloc i = true → Covered m i
+
+/-- A3.1: the values a `recover` frame's store `m0` holds outside the scopes
+    `sp` the frame has opened, and its result `x`. -/
+def OutVals (m0 : Mem) (x : Var) (sp : List Var) (v : Val) : Prop :=
+  ∃ y o, y ∉ sp ∧ y ≠ x ∧ m0.st y = some ⟨o, some v⟩
 
 /-- A `recover` frame returns to its caller's store: every binding outside
-    the frames it has opened (and its result `x`) is as the caller left it. -/
+    the frames it has opened (and its result `x`) is as the caller left it,
+    and (A3.1) so is every block those bindings reach (the sweep keeps
+    them). -/
 def CatchOK (m : Mem) : Stmt → Prop
   | .seq a _ => CatchOK m a
   | .scope _ s => CatchOK m s
@@ -438,8 +478,8 @@ def CatchOK (m : Mem) : Stmt → Prop
   | .frozen _ s => CatchOK m s
   | .catchR x m0 s => (∀ v, v ∉ s.spine → v ≠ x → m.st v = m0.st v) ∧
       x ∉ s.spine ∧ m0.nv ≤ m.nv ∧
-      -- A3.1: the counted blocks only grow (`arcNew`)
-      BlkLe m0.blk m.blk ∧ CatchOK m s
+      (∀ k bl, m0.blk k = some bl → Reached (OutVals m0 x s.spine) m0.blk k → m.blk k = some bl) ∧
+      CatchOK m s
   | _ => True
 
 /-- A borrowed parameter depends only on what was bound before its call: on

@@ -74,6 +74,18 @@ theorem Landed.bound {m : Mem} {dep : Dep} {n : Val} (h : Landed m dep n) :
   · rcases hk with ⟨hk, _⟩ | ⟨hk, _⟩ | ⟨hk, _⟩ <;> rw [hk] <;> rfl
   · rw [hk]; rfl
 
+theorem ArcLanded.notName {m : Mem} {dep : Dep} {n : Val} (h : ArcLanded m dep n) :
+    dep.kind.isName = false := by
+  rcases h with ⟨_, _, hk⟩ | ⟨hk, _⟩
+  · rcases hk with ⟨hk, _⟩ | ⟨hk, _⟩ | ⟨hk, _⟩ <;> rw [hk] <;> rfl
+  · rw [hk]; rfl
+
+theorem ArcLanded.bound {m : Mem} {dep : Dep} {n : Val} (h : ArcLanded m dep n) :
+    dep.kind.bound = .none := by
+  rcases h with ⟨_, _, hk⟩ | ⟨hk, _⟩
+  · rcases hk with ⟨hk, _⟩ | ⟨hk, _⟩ | ⟨hk, _⟩ <;> rw [hk] <;> rfl
+  · rw [hk]; rfl
+
 theorem ViewsOK.mono {m : Mem} {τ : Ty} {T : Val} {H H' : List Dep} (hs : H ⊆ H')
     (h : ViewsOK m τ T H) : ViewsOK m τ T H' := by
   intro s v hv
@@ -122,7 +134,8 @@ theorem ValOK.mono' {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m 
   | inr _ ih => intro P' H' hp hs; exact .inr (ih (app hp hs) hs)
   | pkg _ ih =>
     intro P' H' hp hs; exact .pkg (ih (app hp (envDeps_mono hs)) (envDeps_mono hs))
-  | arc h hw hv => intro _ _ _ _; exact .arc h hw hv
+  | arc h hw hv hl =>
+    intro P' H' hp _; obtain ⟨dep, hd, hla⟩ := hl; exact .arc h hw hv ⟨dep, hp hd, hla⟩
 
 theorem ValOK.mono {m : Mem} {τ : Ty} {v : Val} {P P' H H' : List Dep} (hp : P ⊆ P')
     (hs : H ⊆ H') (h : ValOK m τ v P H) : ValOK m τ v P' H' := h.mono' hp hs
@@ -151,7 +164,8 @@ theorem ValOK.onlyReaders {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : Va
   | inl _ ih => intro P' hp; exact .inl (ih (app hp))
   | inr _ ih => intro P' hp; exact .inr (ih (app hp))
   | pkg _ ih => intro P' hp; exact .pkg (ih (app hp))
-  | arc h hw hv => intro _ _; exact .arc h hw hv
+  | arc h hw hv hl =>
+    intro P' hp; obtain ⟨dep, hd, hla⟩ := hl; exact .arc h hw hv ⟨dep, hp dep hd hla.bound, hla⟩
 
 theorem SlotOK.weaker' {m : Mem} {E E' : Entry} {sl : Slot} (ht : E'.ty = E.ty) (hm : E'.mode = E.mode)
     (hl : E'.live = true → E.live = true ∧ (E.mode.ownSlot = false → E.path ⊆ E'.path) ∧ E.held ⊆ E'.held)

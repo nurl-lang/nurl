@@ -576,10 +576,11 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       Γ a = some E → E.live = true → E.ty = .arc t →
       RhsT Γ F (.arcClone a) ⟨.arc t, .own, true, [], [], false, false⟩ Γ
   /-- A3.1: the payload, lent through a share of `a` (`getE`), so it ends
-      with `a` like any borrow. (A plain payload has no handle, so no
-      borrow lands in a block yet.) -/
+      with `a` like any borrow. A handle into the payload lands through that
+      share (`Landed`), so it is valid while the block lives. The payload
+      holds no view and no closure. -/
   | arcGet {a : Var} {E : Entry} {t : Ty} :
-      Γ a = some E → E.live = true → E.ty = .arc t → t.plain = true →
+      Γ a = some E → E.live = true → E.ty = .arc t → t.holdsView = false → t.hasFn = false →
       RhsT Γ F (.arcGet a) (getE a E t) Γ
 
 /-! ### Calls -/
@@ -1208,16 +1209,6 @@ theorem mem_symNames' {ps : List (PMode × Ty)} {d : Dep} (hd : d ∈ symNames p
 
 theorem elem_holdsView (t : Ty) : t.elem.holdsView = t.holdsView := by
   cases t <;> rfl
-
-/-- May a value of this type hold a closure (and so hold bindings by name)? -/
-def Ty.hasFn : Ty → Bool
-  | .int => false
-  | .vec t => t.hasFn
-  | .slice t => t.hasFn
-  | .prod a b => a.hasFn || b.hasFn
-  | .sum a b => a.hasFn || b.hasFn
-  | .fn _ => true
-  | .arc t => t.hasFn
 
 theorem hasFn_holdsView {t : Ty} (h : t.hasFn = true) : t.holdsView = true := by
   induction t with

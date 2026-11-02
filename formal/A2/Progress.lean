@@ -194,7 +194,7 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
   | arcClone ha hl hty =>
     obtain ⟨o, k, p, hv⟩ := hi.arc_slot ha hl hty
     exact ⟨_, EvalR.arcClone hv⟩
-  | arcGet ha hl hty _ =>
+  | arcGet ha hl hty _ _ =>
     obtain ⟨o, k, p, hv⟩ := hi.arc_slot ha hl hty
     exact ⟨_, EvalR.arcGet hv (hi.arc_val ha hl hty hv).1⟩
 

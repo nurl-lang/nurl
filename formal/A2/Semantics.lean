@@ -608,12 +608,21 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
       Step P m s (.panic m1) → m1.st x = some ⟨true, none⟩ →
       Step P m (.scopeD x f s) (.panic (m1.remove x))
 
-/-- Reachability. -/
+/-- Reachability: A3.1, every step ends with the sweep, which frees the
+    blocks no slot reaches (`Mem.sweep`). -/
 inductive Steps (P : Prog) : Mem → Stmt → Res → Prop
   | refl {m : Mem} {s : Stmt} : Steps P m s (.ok m s)
   | step {m m' : Mem} {s s' : Stmt} {r : Res} :
-      Step P m s (.ok m' s') → Steps P m' s' r → Steps P m s r
-  | panic {m m' : Mem} {s : Stmt} : Step P m s (.panic m') → Steps P m s (.panic m')
+      Step P m s (.ok m' s') → Steps P m'.sweep s' r → Steps P m s r
+  | panic {m m' : Mem} {s : Stmt} : Step P m s (.panic m') → Steps P m s (.panic m'.sweep)
+
+/-- Steps with no sweep: one thread's, in A3, where the sweep is the
+    configuration's (the blocks every thread reaches stay). -/
+inductive Steps0 (P : Prog) : Mem → Stmt → Res → Prop
+  | refl {m : Mem} {s : Stmt} : Steps0 P m s (.ok m s)
+  | step {m m' : Mem} {s s' : Stmt} {r : Res} :
+      Step P m s (.ok m' s') → Steps0 P m' s' r → Steps0 P m s r
+  | panic {m m' : Mem} {s : Stmt} : Step P m s (.panic m') → Steps0 P m s (.panic m')
 
 /-- A configuration that is neither finished nor able to step: the program
     is about to touch memory it may not. -/

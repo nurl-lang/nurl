@@ -291,7 +291,7 @@ theorem newThread_inv {P : Prog} {fn : Fn} (hok : FnOK P fn)
     cover := fun i hi => by
       obtain ⟨v, hv, hiv⟩ := (hpart i).mp hi
       obtain ⟨j, hj⟩ := List.mem_iff_getElem?.mp hv
-      exact ⟨j, v, spawnSt_of hlen hj, hiv⟩
+      exact Or.inl ⟨j, v, spawnSt_of hlen hj, hiv⟩
     pinOut := fun p E hp hm => absurd hm (hrb p E hp)
     pinIn := pinOK_noRootb hrb _
     dtorOut := fun v E hv hd => absurd hd (by rw [(sigCtx_flags hv).2]; simp)
