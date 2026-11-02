@@ -35991,7 +35991,9 @@ unsafe @ bck_loop_mask s pre s post → s {
     : ~ s out ``
     ~ != 0 ( nurl_str_len rest ) {
         : s id ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s line ( nurl_str_cat3 id `:` ( nurl_sym_get g_bck ( bck_bkey `bs_` id ) ) )
+        // (…and, after a tab, the ones it views only through an element,
+        // `vi_`: the head joins how it borrows too, agora #399.)
+        : s line ( nurl_str_cat4 id `:` ( nurl_sym_get g_bck ( bck_bkey `bs_` id ) ) ( nurl_str_cat `\t` ( nurl_sym_get g_bck ( bck_bkey `vi_` id ) ) ) )
         = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat line `` ) ( nurl_str_cat3 out `\n` line )
     }
     ^ out
@@ -36148,6 +36150,18 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     ^ ( __word_union ( __word_union both ( __word_drop_all v1 d2 ) ) ( __word_drop_all v2 d1 ) )
 }
 
+// A borrow's "only through an element" fact (`vi_`) past a join: a source
+// stays in it only where every path that borrows from it (`bs_`, a dead
+// path's too, as the sources are joined) says so — borrowed directly on
+// one, it ends as a direct borrow does (agora #399).
+@ __vi_combine s k s v1 s v2 s j1 s j2 s s0 → s {
+    : s bk ( nurl_str_cat `bs_` ( nurl_str_slice k 3 - ( nurl_str_len k ) 3 ) )
+    : s b1 ( __cj_arm_val j1 s0 bk )
+    : s b2 ( __cj_arm_val j2 s0 bk )
+    : s both ( __word_drop_all v1 ( __word_drop_all v1 v2 ) )
+    ^ ( __word_union ( __word_union both ( __word_drop_all v1 b2 ) ) ( __word_drop_all v2 b1 ) )
+}
+
 // What fact `k` holds at the end of the arm whose log is `jx`: its value
 // there if the arm changed it, else its value before the join (`s0`, the
 // facts either arm changed, or the table's).
@@ -36167,7 +36181,7 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
         : s k ( str_first_word rest ) = rest ( str_skip_word rest )
         : s v1 ? ( __cj_has j1 k ) ( __cj_get j1 k ) ( __cj_get s0 k )
         : s v2 ? ( __cj_has j2 k ) ( __cj_get j2 k ) ( __cj_get s0 k )
-        : s jv ? & == 118 ( nurl_str_get k 0 ) == 100 ( nurl_str_get k 1 ) ( __vd_combine k v1 v2 s1 s2 j1 j2 s0 ) ( __cj_combine k v1 v2 s1 s2 )
+        : s jv ? & == 118 ( nurl_str_get k 0 ) == 100 ( nurl_str_get k 1 ) ( __vd_combine k v1 v2 s1 s2 j1 j2 s0 ) ? & & == 118 ( nurl_str_get k 0 ) == 105 ( nurl_str_get k 1 ) == 95 ( nurl_str_get k 2 ) ( __vi_combine k v1 v2 j1 j2 s0 ) ( __cj_combine k v1 v2 s1 s2 )
         = out ( nurl_str_cat4 out `\n` k ( nurl_str_cat `\t` jv ) )
         // (A binding borrowed on one path and its own on the other is
         // marked `bm_`: a diagnostic says it may not own its value, and from
@@ -36266,11 +36280,20 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
         : i c ( nurl_str_find line `:` )
         ? > c 0 {
             : s id ( nurl_str_slice line 0 c )
-            : s hs ( nurl_str_slice line + c 1 - - ( nurl_str_len line ) c 1 )
+            : s rest2 ( nurl_str_slice line + c 1 - - ( nurl_str_len line ) c 1 )
+            : i tb ( nurl_str_find rest2 `\t` )
+            : s hs ? < tb 0 ( nurl_str_cat rest2 `` ) ( nurl_str_slice rest2 0 tb )
+            : s vs ? < tb 0 `` ( nurl_str_slice rest2 + tb 1 - - ( nurl_str_len rest2 ) tb 1 )
             : s k ( bck_bkey `bs_` id )
             : s cur ( nurl_sym_get g_bck k )
+            // (How: a source borrowed directly on either path is borrowed
+            // directly past the join; one only through an element on the
+            // path that has it alone stays so, agora #399.)
+            : s curvi ( nurl_sym_get g_bck ( bck_bkey `vi_` id ) )
+            : s nvi ( __word_union ( __word_drop_all curvi ( __word_drop_all hs vs ) ) ( __word_drop_all vs cur ) )
             : s u ( __word_union hs cur )
             ? ! ( seq u cur ) { ( bck_put_bf `bs_` id u ) } {}
+            ? ! ( seq nvi curvi ) { ( bck_put_bf `vi_` id nvi ) } {}
         } {}
     }
 }
