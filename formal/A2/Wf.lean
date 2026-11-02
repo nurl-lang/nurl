@@ -658,7 +658,7 @@ theorem roots_allKinds {rs : List Var} {r : Var} (h : r ∈ roots (allKinds rs))
   simp only [roots, allKinds, List.mem_map, List.mem_flatMap, List.mem_cons,
     List.not_mem_nil, or_false] at h
   obtain ⟨d, ⟨r', hr', hd⟩, rfl⟩ := h
-  rcases hd with rfl | rfl | rfl <;> exact hr'
+  rcases hd with rfl | rfl | rfl | rfl <;> exact hr'
 
 theorem mem_args {args : List Var} {a : Var} (h : a ∈ args) : ∃ i < args.length, args.getD i 0 = a := by
   obtain ⟨i, hi, he⟩ := List.getElem_of_mem h
@@ -911,7 +911,7 @@ theorem held_vdeps' {E : Entry} {r : Var} (h : r ∈ roots E.held) : r ∈ roots
 theorem allKinds_root {rs : List Var} {d : Dep} (h : d ∈ allKinds rs) : d.root ∈ rs := by
   simp only [allKinds, List.mem_flatMap, List.mem_cons, List.not_mem_nil, or_false] at h
   obtain ⟨r, hr, hd⟩ := h
-  rcases hd with rfl | rfl | rfl <;> exact hr
+  rcases hd with rfl | rfl | rfl | rfl <;> exact hr
 
 /-- What a call through a package returns depends only on roots the
     context after it has. -/

@@ -1318,6 +1318,7 @@ theorem NewSlot.edit {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
     | self => exact (keep_notx hi hanch hoF hst (h _ hd rfl) hne).1
     | inner => exact (keep_notx hi hanch hoF hst (h _ hd rfl) hne).1
     | view => exact (keep_notx hi hanch hoF hst (h _ hd rfl) hne).1
+    | share => exact (keep_notx hi hanch hoF hst (h _ hd rfl) hne).1
   -- ... and none is valid through `o` (`SelfFree`, `ViewsOK.keep_except`)
   have hviews : ViewsOK m1 Eo.ty T Eo.held → (∀ dep ∈ Eo.held, dep.kind.isName = false →
       ∃ Er, Γ1 dep.root = some Er ∧ Er.mode.isRoot = true) → ViewsOK m' Eo.ty T' Eo.held :=
@@ -1438,6 +1439,7 @@ theorem MInv.edit_drop {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ
       rcases hk' with ⟨h, _⟩ | ⟨h, _⟩ <;> cases h
     | inner => simp [Eff.kills] at hk
     | view => simp [Eff.kills] at hk
+    | share => simp [Eff.kills] at hk
     | name b t => exact ⟨vkeep_name _ _ _ _ _, hkeep_name _ _ _ _ _⟩
   have hnew : Eff.drop ≠ .replace → ∀ Ex', some (killE .drop false o Eo) = some Ex' → Eo.live = true →
       Eo.held = [] → Eo.ty.holdsView = false → Ex'.live = true ∧ Ex'.held = [] := by

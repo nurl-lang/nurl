@@ -119,12 +119,18 @@ instance (a b : Eff) : Decidable (Eff.le a b) := inferInstanceAs (Decidable (_ �
   * `name b t` — the binding itself, by name: a closure that captured it,
               as a binding of type `t`, and reads it (`b = none`) or
               changes it, at most by `b`, each time it runs.  It reaches no
-              memory of its own. -/
+              memory of its own;
+  * `share`  — A3.1: memory inside the payload of a share the binding holds
+              (`arc_get`, and every borrow taken from that).  A payload is
+              frozen, so it ends as `inner` does: when elements are dropped
+              or the binding is replaced.  No change through a borrow of
+              this kind is allowed (`StmtT.editB`). -/
 inductive Kind where
   | self
   | inner
   | view
   | name (b : Eff) (t : Ty)
+  | share
 deriving DecidableEq, Repr
 
 def Kind.isName : Kind → Bool
@@ -152,6 +158,7 @@ def Eff.kills (e : Eff) (hv : Bool) (k : Kind) : Bool :=
   | .none, _ => false
   | .realloc, .view => true
   | .realloc, .inner => false
+  | .realloc, .share => false
   | .realloc, .self => hv
   | .drop, .self => hv
   | .replace, _ => true
