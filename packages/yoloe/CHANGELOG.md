@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.8.4] — 2026-11-02
+
+### Fixed
+
+- The BPE tokenizer's `__enc_put` binds the arena's copy of a key before
+  it keys the encoder table with a view of it. Written inline, the view
+  counted as one of the arena's own buffer, which the next key's push may
+  move, and the compiler now refuses that (agora #337). The table and the
+  tokens are the same.
+
 ## [0.8.3] — 2026-10-29
 
 ### Fixed

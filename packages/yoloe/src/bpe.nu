@@ -133,10 +133,13 @@ $ `stdlib/core/slice.nu`
 // Register a key→id mapping, taking ownership of `key` in the arena. It
 // changes only the arena and the encoder table (`. tk arena`, `. tk enc`),
 // so a symbol read out of `. tk byte_enc` stays valid across it. The table
-// keys the arena's copy: once pushed, `key` is the arena's.
+// keys the arena's copy: once pushed, `key` is the arena's. That copy is
+// bound first, so the table holds a view of its own bytes, which stay where
+// they are when the arena grows, not of the arena's buffer, which moves.
 @ __enc_put ( Vec String ) arena ( HashMap s i ) enc String key i id → v {
     ( vec_push [String] arena key )
-    ( __msi_set enc ( string_data ( vec_at [String] arena - ( vec_len [String] arena ) 1 ) ) id )
+    : String k ( vec_at [String] arena - ( vec_len [String] arena ) 1 )
+    ( __msi_set enc ( string_data k ) id )
 }
 
 // The tokenizer that encodes nothing (sot=-1): a placeholder for a struct

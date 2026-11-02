@@ -134,9 +134,8 @@ a type whose destructor may read a view:
 - nurlc lets it be an `inout` argument, whose callee may give it views
   only of what the caller passed in: a view of the callee's own local is
   refused where it is given, even for a moment (#284). One shape is still
-  open there: a callee that stores into it a view of a String
-  parameter's buffer (`string_data src`) is not tracked at the call
-  (#301).
+  open there: a callee that keeps a view parameter in a holder other
+  than its first argument ties it to the first one (#370).
 
 How the runtime carries this out (`stdlib/runtime_core.c`, `nurl_panic`)
 is stated here so the claim does not hide it:
