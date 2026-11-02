@@ -492,20 +492,13 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
   | @arcGet y Ey a hy hl ht _ =>
     refine ⟨h, fun _ => rfl, same, fun _ hn => ?_⟩
     have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (by rw [ht]; simp)
-    have hpe : projE y Ey a = ⟨a, .bor, true, projDeps y Ey ++ Ey.held, Ey.held, false, false⟩ := by
+    have hpe : getE y Ey a = ⟨a, .bor, true, derive y Ey .share, Ey.held, false, false⟩ := by
       cases a with
-      | int => simp [projE, intE] at hn
+      | int => simp [getE, intE] at hn
       | _ => rfl
     rw [hpe]
-    show ∀ r ∈ roots ((projDeps y Ey ++ Ey.held) ++ Ey.held), _
-    refine app _ _ (app _ _ ?_ (hheld y Ey hy hl hn')) (hheld y Ey hy hl hn')
-    unfold projDeps; split
-    · rename_i hos; intro r hr; simp [roots] at hr; subst hr
-      exact ⟨Ey, hy, by cases hm : Ey.mode <;> simp_all [Mode.ownSlot, Mode.isRoot]⟩
-    · split
-      · rename_i hrb; intro r hr; simp [roots] at hr; subst hr
-        exact ⟨Ey, hy, by simp_all [Mode.isRoot]⟩
-      · rename_i hos _; exact hpath y Ey hy hl hn' (by simpa using hos)
+    show ∀ r ∈ roots (derive y Ey .share ++ Ey.held), _
+    exact app _ _ (hderive y Ey .share hy hl hn') (hheld y Ey hy hl hn')
 
 end A2
 

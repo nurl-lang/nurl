@@ -1300,43 +1300,35 @@ theorem out_arcClone {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry}
   simp only [Ty.ok, Bool.and_eq_true] at hok
   exact out_share hok.1 hvf hwp hk
 
-/-- `arc_get a`: the payload, lent as a field of `a` is (`projE`). A plain
+/-- `arc_get a`: the payload, lent through a share of `a` (`getE`). A plain
     payload has no handle, so it is valid through any dependency. -/
 theorem out_arcGet {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry} (ha : Γ a = some E)
     (hl : E.live = true) {t : Ty} (hty : E.ty = .arc t) (hpl : t.plain = true) {o : Bool} {k : Nat}
-    {p : Val} (hv : m.st a = some ⟨o, some (.arc k p)⟩) : RhsOut m Γ (projE a E t) (lendOf p) false := by
+    {p : Val} (hv : m.st a = some ⟨o, some (.arc k p)⟩) : RhsOut m Γ (getE a E t) (lendOf p) false := by
   obtain ⟨hk, hwp, hvf⟩ := hi.arc_val ha hl hty hv
   have hsh : SharesOK m t p := (hi.blocks k _ hk).2.2.2
   have hok := hi.tyok ha; rw [hty] at hok
   simp only [Ty.ok, Bool.and_eq_true] at hok
   have htok := hok.1
   have hnint : E.ty ≠ .int := by rw [hty]; simp
-  have key : ValOK m t (lendOf p) (projDeps a E ++ E.held) E.held :=
+  have key : ValOK m t (lendOf p) (derive a E .share) E.held :=
     lend_valOK hwp (hwp.plain_pkgs hpl) (fun _ _ _ _ hs => (hwp.plain_node hpl hs).elim)
       (ViewsOK.none hvf _ _) (NamesIn.nil _ (hwp.names_nil hvf)) hsh
       (fun s hs => by rw [hs] at hpl; simp [Ty.plain] at hpl)
-  have hint : t = .int ∨ projE a E t = ⟨t, .bor, true, projDeps a E ++ E.held, E.held, false, false⟩ := by
-    cases t <;> simp [projE]
+  have hint : t = .int ∨ getE a E t = ⟨t, .bor, true, derive a E .share, E.held, false, false⟩ := by
+    cases t <;> simp [getE]
   rcases hint with rfl | heq
   · obtain ⟨n, hn⟩ := valOK_int.mp key
-    simp only [projE]; rw [hn]; exact intE_out n
+    simp only [getE]; rw [hn]; exact intE_out n
   · rw [heq]
     refine ⟨rfl, Or.inr rfl, rfl, htok, fun _ r hr => ?_, fun h => (by cases h), fun _ => key,
       fun _ => by
         have h := hi.names a E ha hl (Or.inl hnint)
-        show DepsNamed Γ ((projDeps a E ++ E.held) ++ E.held)
-        exact ((projDeps_named h).append h.held).append h.held,
+        show DepsNamed Γ (derive a E .share ++ E.held)
+        exact (derive_named h rfl).append h.held,
       NamesIn.noView hwp hvf _, (hwp.plain_pkgs hpl).lendOf, fun h => nomatch h⟩
     rw [bor_vdeps _ rfl] at hr
-    refine wf_append (wf_append ?_ (wf_held hi ha hl hnint)) (wf_held hi ha hl hnint) r hr
-    unfold projDeps
-    split
-    · intro r hr; simp [roots] at hr; subst hr
-      exact ⟨E, ha, by cases hm : E.mode <;> simp_all [Mode.ownSlot, Mode.isRoot]⟩
-    · split
-      · intro r hr; simp [roots] at hr; subst hr
-        exact ⟨E, ha, by simp_all [Mode.isRoot]⟩
-      · rename_i hos _; exact wf_path hi ha hl hnint (by simpa using hos)
+    exact wf_append (wf_derive hi ha hl hnint _) (wf_held hi ha hl hnint) r hr
 
 theorem rhs_new {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {t : Ty} (ht : t.ok = true) :
     let m1 : Mem := { m with alloc := upd (upd m.alloc m.nid true) (m.nid + 1) true, nid := m.nid + 2 }

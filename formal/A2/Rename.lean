@@ -1086,6 +1086,21 @@ theorem projE_lift (h : S.OK) (hab : S.AbsOK Γa) {y : Var} {Ey : Entry} (hy : �
         · exact List.mem_append_right _ h1
     · simp only [projE, liftE, reduceCtorEq, ↓reduceIte]; exact hl
 
+/-- A3.1: a payload lent, where the call places it. -/
+theorem getE_lift (h : S.OK) (hab : S.AbsOK Γa) {y : Var} {Ey : Entry} (hy : Γa y = some Ey)
+    (t : Ty) (x : Var) : EntryWeaker (getE (S.ρ y) (S.liftE y Ey) t) (S.liftE x (getE y Ey t)) := by
+  have hl := held_lift h hab hy
+  cases t with
+  | int =>
+    show EntryWeaker intE (S.liftE x intE)
+    exact intE_lift x
+  | _ =>
+    refine EntryWeaker.mk' (by simp [getE, liftE]) (by simp [getE, liftE, liftMode])
+      (by simp [getE]) (by simp [getE, liftE]) (fun _ => ?_) ?_
+    · simp only [getE, liftE, reduceCtorEq, ↓reduceIte, liftMode, Mode.ownSlot, Bool.false_eq_true]
+      exact derive_lift h hab hy .share rfl
+    · simp only [getE, liftE, reduceCtorEq, ↓reduceIte, Mode.ownSlot, ownHeld_false]; exact hl
+
 /-- A field moved out of a struct taken apart, where the call places it. -/
 theorem ownHeld_lift {X L : List Dep} {t : Ty} (hl : X ⊆ rds S.ρ L ++ S.A) :
     ownHeld true t X ⊆ rds S.ρ (ownHeld true t L) ++ ownHeld true t S.A := by
@@ -1619,7 +1634,7 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
   | @arcGet a Ea t ha hl ht hpl =>
     have hc : S.canon Γa (S.ρ a) = some (S.liftE a Ea) := by rw [canon_ρ h, ha]; rfl
     exact ⟨_, RhsT.arcGet hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab ha]; exact ht) hpl,
-      fun x => projE_lift h hab ha t x⟩
+      fun x => getE_lift h hab ha t x⟩
 
 theorem mem_allKinds_iff {L : List Var} {d : Dep} : d ∈ allKinds L ↔ d.root ∈ L ∧ d.kind.isName = false := by
   constructor
