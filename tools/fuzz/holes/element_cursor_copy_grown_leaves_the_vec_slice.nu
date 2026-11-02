@@ -1,7 +1,7 @@
 // element_cursor_copy_grown_leaves_the_vec_slice: agora #411 — a `: ~` copy of a Vec element grown in place while a slice of the Vec is read (the shape the fix must keep: the element's buffer moves, not the Vec's)
-// Closed: a copy of an element borrow is the element's, not the Vec's handle (__bck_hc_srcs, agora #411).
+// A SAFE program refused: since agora #439 a view of the Vec itself ends when an element's buffer moves, because a view taken through an element a call lends (`( string_data ( vec_at vs 0 ) )`) is recorded as one. The element copy is still the element's, not the Vec's handle (agora #411). Back to runs-clean once such views are marked as element views (#430).
 // main: accepted, ran clean.
-// map: §2.10 | A1 | runs-clean | - | agora #411: a `: ~` copy of a Vec element grown in place while a slice of the Vec is read (the shape the fix must keep: the element's buffer moves, not the Vec's)
+// map: §2.10 | A1 | rejected | - | agora #411, #439: a `: ~` copy of a Vec element grown in place while a slice of the Vec is read (safe; refused until #430)
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`

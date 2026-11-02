@@ -34554,6 +34554,10 @@ unsafe @ bck_note_rc_arg s name s ty → v {
                                 // element handle still points where it did).
                                 ? ( nurl_sym_has_word g_fn_reallocs ( bck_field rec 5 ) ( bck_field rec 6 ) ) {
                                     = out ( bck_view_end out sid ( bck_field_int rec 3 ) ( nurl_str_cat4 pw0 ( bck_fn_show ( bck_field rec 5 ) ) `', which may move or free its buffer` `` ) )
+                                    // (A value lent from it may be an element
+                                    // of it — `( vec_at vv 0 )`: the views
+                                    // into its elements end too, agora #349.)
+                                    ? plend { = out ( bck_view_end_ind out sid ( bck_field_int rec 3 ) ( nurl_str_cat4 pw0 ( bck_fn_show ( bck_field rec 5 ) ) `', which may move or free its buffer` `` ) ) } {}
                                 } {}
                             }
                         }
@@ -34589,7 +34593,10 @@ unsafe @ bck_note_rc_arg s name s ty → v {
     // borrowed element below (agora #315).
     ? & & != 0 g_irealloc_any >= wid 0 | | | == kc 9 == kc 12 == kc 13 == kc 32 {
         ? ( nurl_sym_has_word g_fn_ireallocs ( bck_field rec 5 ) ( bck_field rec 6 ) ) {
-            = out ( bck_view_end_ind out wid ( bck_field_int rec 3 ) ( nurl_str_cat3 `it was passed to '` ( bck_fn_show ( bck_field rec 5 ) ) `', which may move the buffer of one of its elements` ) )
+            : s irw ( nurl_str_cat3 `it was passed to '` ( bck_fn_show ( bck_field rec 5 ) ) `', which may move the buffer of one of its elements` )
+            // (…its own views too, where a view through an element a call
+            // lends is recorded: agora #349.)
+            = out ( bck_view_end ( bck_view_end_ind out wid ( bck_field_int rec 3 ) irw ) wid ( bck_field_int rec 3 ) irw )
         } {}
     } {}
     // Dropping elements or replacing a field THROUGH a borrow reaches what
@@ -34638,7 +34645,11 @@ unsafe @ bck_note_rc_arg s name s ty → v {
             ~ != 0 ( nurl_str_len irest ) {
                 : s o ( str_first_word irest ) = irest ( str_skip_word irest )
                 = out ( bck_view_end_ind out ( nurl_str_to_int o ) ( bck_field_int rec 3 ) rwhy )
-                ? hcopy { = out ( bck_view_end_via out ( nurl_str_to_int o ) wroot wid ( bck_field_int rec 3 ) hwhy ) } {}
+                // (…and the views recorded of the owner itself: a view taken
+                // through an element a call lends — `( string_data ( vec_at
+                // vs 0 ) )` — is recorded as one, so an element's buffer
+                // moving ends it too; agora #439, #349.)
+                ? hcopy { = out ( bck_view_end_via out ( nurl_str_to_int o ) wroot wid ( bck_field_int rec 3 ) hwhy ) } { = out ( bck_view_end out ( nurl_str_to_int o ) ( bck_field_int rec 3 ) rwhy ) }
             }
         } {}
         ? != 0 ( nurl_str_len bwhy ) {
