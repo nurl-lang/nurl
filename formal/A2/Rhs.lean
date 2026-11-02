@@ -1338,21 +1338,24 @@ theorem out_arcClone {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry}
   simp only [Ty.ok, Bool.and_eq_true] at hok
   exact out_share hok.1 hvf hwp hk
 
-/-- `arc_get a`: the payload, lent through a share of `a` (`getE`). A plain
-    payload has no handle, so it is valid through any dependency. -/
+/-- `arc_get a`: the payload, lent through a share of `a` (`getE`). Every
+    handle in it lands in the block's payload through that share
+    (`MInv.share_lands`); it holds no view and no closure. -/
 theorem out_arcGet {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry} (ha : Γ a = some E)
-    (hl : E.live = true) {t : Ty} (hty : E.ty = .arc t) (hpl : t.plain = true) {o : Bool} {k : Nat}
-    {p : Val} (hv : m.st a = some ⟨o, some (.arc k p)⟩) : RhsOut m Γ (getE a E t) (lendOf p) false := by
+    (hl : E.live = true) {t : Ty} (hty : E.ty = .arc t) (_hhv : t.holdsView = false) (_hfn : t.hasFn = false)
+    {o : Bool} {k : Nat} {p : Val} (hv : m.st a = some ⟨o, some (.arc k p)⟩) :
+    RhsOut m Γ (getE a E t) (lendOf p) false := by
   obtain ⟨hk, hwp, hvf⟩ := hi.arc_val ha hl hty hv
   have hsh : SharesOK m t p := (hi.blocks k _ hk).2.2.2
   have hok := hi.tyok ha; rw [hty] at hok
   simp only [Ty.ok, Bool.and_eq_true] at hok
   have htok := hok.1
   have hnint : E.ty ≠ .int := by rw [hty]; simp
+  have hpk : PkgsOK p := fun _ _ _ _ _ hs => (hwp.noView_pkg hvf hs).elim
   have key : ValOK m t (lendOf p) (derive a E .share) E.held :=
-    lend_valOK hwp (hwp.plain_pkgs hpl) (fun _ hs => hi.share_lands ha hl hty hv hk hs)
+    lend_valOK hwp hpk (fun _ hs => hi.share_lands ha hl hty hv hk hs)
       (ViewsOK.none hvf _ _) (NamesIn.nil _ (hwp.names_nil hvf)) hsh
-      (fun s hs => by rw [hs] at hpl; simp [Ty.plain] at hpl)
+      (fun s hs => by rw [hs] at hvf; simp [Ty.holdsView] at hvf)
   have hint : t = .int ∨ getE a E t = ⟨t, .bor, true, derive a E .share, E.held, false, false⟩ := by
     cases t <;> simp [getE]
   rcases hint with rfl | heq
@@ -1364,7 +1367,7 @@ theorem out_arcGet {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry} (
         have h := hi.names a E ha hl (Or.inl hnint)
         show DepsNamed Γ (derive a E .share ++ E.held)
         exact (derive_named h rfl).append h.held,
-      NamesIn.noView hwp hvf _, (hwp.plain_pkgs hpl).lendOf, fun h => nomatch h⟩
+      NamesIn.noView hwp hvf _, hpk.lendOf, fun h => nomatch h⟩
     rw [bor_vdeps _ rfl] at hr
     exact wf_append (wf_derive hi ha hl hnint _) (wf_held hi ha hl hnint) r hr
 

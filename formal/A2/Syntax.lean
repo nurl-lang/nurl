@@ -42,6 +42,16 @@ def Ty.holdsView : Ty → Bool
   | .fn _ => true     -- what the environment holds is not part of the type
   | .arc t => t.holdsView
 
+/-- May a value of this type hold a closure (and so hold bindings by name)? -/
+def Ty.hasFn : Ty → Bool
+  | .int => false
+  | .vec t => t.hasFn
+  | .slice t => t.hasFn
+  | .prod a b => a.hasFn || b.hasFn
+  | .sum a b => a.hasFn || b.hasFn
+  | .fn _ => true
+  | .arc t => t.hasFn
+
 /-- A3.1: may a value of this type hold a share (an `Arc`)?  A closure's
     environment may. -/
 def Ty.hasArc : Ty → Bool

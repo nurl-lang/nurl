@@ -1028,12 +1028,12 @@ theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry
   | arcClone ha hl hty =>
     cases he with
     | arcClone hv => exact ⟨RhsPost.same hi, out_arcClone hi ha hl hty hv⟩
-  | arcGet ha hl hty hpl =>
+  | arcGet ha hl hty hhv hfn =>
     cases he with
     | arcGet hv hbk =>
       obtain ⟨hk, _, _⟩ := hi.arc_val ha hl hty hv
       rw [hk] at hbk; cases hbk
-      exact ⟨RhsPost.same hi, out_arcGet hi ha hl hty hpl hv⟩
+      exact ⟨RhsPost.same hi, out_arcGet hi ha hl hty hhv hfn hv⟩
 
 /-- `= x r`: the right-hand side runs, `x`'s old value is dropped, and `x`
     takes the new one. -/

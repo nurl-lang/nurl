@@ -436,7 +436,15 @@ with the sweep is the phase-D obligation above. `check.sh` is green with:
 - `Landed.root_of_heap` and `viewAt_not_self_heap` are gone: the reroot
   (`reroot_vkeep`, `reroot_valOK_gen`) and the revive no longer read
   `HeapOK.bpay`. It is still read by `covers_evalR`, `no_leak_end` and A3
-  (`PayFree`), and `arcNew` / `arcGet` still ask `Ty.plain`.
+  (`PayFree`).
+- (d1) `arcGet` asks `t.holdsView = false ∧ t.hasFn = false` (`Ty.hasFn`
+  moved to `Syntax.lean`), not `Ty.plain`: it lends `lendOf bl.pay`, whose
+  every handle lands in the payload through the share dependency
+  (`out_arcGet` by `MInv.share_lands`), whatever the payload holds. While
+  `bpay` holds, a payload still owns no address, so no such handle exists
+  yet. `arcNew` still asks `Ty.plain`: moving a tree into a block needs
+  `Covers` to count payloads, and so `no_leak` the sweep (step e), in the
+  same change as `bpay`'s removal.
 
 After that, step (d) is: `Ty.plain` lifted to `holdsView = false ∧
 hasFn = false`, `arcNew` moving a tree into a new block (`BlkOwn` for it),
