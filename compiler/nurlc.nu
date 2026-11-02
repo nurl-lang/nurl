@@ -36975,6 +36975,10 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     = g_bck_watch - g_bck_watch 1
     : s bhead ( __bs_snapshot )
     : s fvhead ( __fv_snapshot )
+    // (…and the dependencies, which the walks below change as the body
+    // does — a holder given a new value there — while a loop that runs
+    // no time leaves them as they were at its head: agora #413.)
+    : s vdhead ? != 0 g_bck_has_deps ( __vd_snapshot ) ``
     // Loop-carried verification. `back` is the converged body-exit
     // state; `verif` is the back-edge seed it implies. The condition is
     // re-evaluated before each body, so check its reads first, then
@@ -36996,9 +37000,11 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
         : s vend ( bck_walk_seq lo hi verif )
         ? != 0 ( nurl_str_len vend ) {} {}
     } {}
-    // (The loop is left from its head: its borrow sources hold after it.)
+    // (The loop is left from its head: its borrow sources hold after it,
+    // and so do the dependencies it was left with there.)
     ( __bs_join bhead )
     ( __fv_join fvhead )
+    ? != 0 g_bck_has_deps { ( __vd_join vdhead ) } {}
     ( bck_put `lbrk` outer_brk )
     ( bck_put `lcnt` outer_cnt )
     ( bck_put `lbrkvd` outer_brkvd )
