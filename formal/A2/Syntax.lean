@@ -222,11 +222,14 @@ def Mem.remove (m : Mem) (x : Var) : Mem :=
   { m with st := upd m.st x none }
 
 /-- A change of a `Vec`'s elements that A2-thru adds (Agora #295): a value
-    moved in at the end, or the elements from the `i`-th on dropped
-    (`vec_clear` is `trunc 0`, `vec_truncate` `trunc i`). -/
+    moved in at the end, the elements from the `i`-th on dropped
+    (`vec_clear` is `trunc 0`, `vec_truncate` `trunc i`), or the `i`-th
+    element replaced by a value moved in, the old one dropped (`vec_set`;
+    out of range, the value is dropped and nothing is stored). -/
 inductive Edit where
   | push (y : Var)
   | trunc (i : Expr)
+  | set (i : Expr) (y : Var)
 
 /-- Statements.  `scope`, `rbind`, `frozen` and `catchR` are run-time forms:
     they appear when a binding is made or a function is called, never in

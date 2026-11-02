@@ -1,5 +1,5 @@
 // field_arg_payload_then_set: the payload of vec_get through a field argument, in a function with nothing pending; the element is replaced; the payload is read.
-// map: §2.12 | A2 | rejected | h83 | vec_get payload via struct field; element replaced; payload read
+// map: StmtT.editB | A2 | rejected | h83 | vec_get payload via struct field; element replaced; payload read
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 

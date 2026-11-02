@@ -131,8 +131,8 @@ What A2 does not model yet, each a planned refinement of the calculus
 rather than a gap in what it proves:
 
 - of the changes of elements through a borrow (`StmtT.editB`, Agora
-  #295): those whose elements hold views, a pop, a remove or an element
-  set through a borrow, and the extra keeps nurlc allows beside such a
+  #295): those whose elements hold views, a pop or a remove through a
+  borrow, and the extra keeps nurlc allows beside such a
   change (two parts of one value, a whole copy beside a field viewer;
   `CLAIM.md`). A plain parameter its callee changes and a whole-handle
   copy read as `inout` and as the owner (`RULES.md`, phase C);

@@ -846,26 +846,37 @@ theorem mem_callR {Γ : Ctx} {args : List Var} {r : Var} :
     by the kind of the borrow's dependency on it: a push through a copy of
     the root's own handle (`.self`), the root of the borrow's own type
     (`sameTy`), is the root's own push (the borrowed `Vec` is the root's
-    whole tree): `.realloc`. Anything else may change the elements of any
-    node of the root's tree: `.drop`. -/
+    whole tree): `.realloc`. Anything else (a truncation, an element set)
+    may change the elements of any node of the root's tree: `.drop`. -/
 def Edit.effAt : Edit → Kind → Bool → Eff
   | .push _, k, sameTy => if k = .self ∧ sameTy = true then .realloc else .drop
   | .trunc _, _, _ => .drop
+  | .set _ _, _, _ => .drop
+
+/-- The binding whose value a change of elements stores: what `push` and
+    `set` are handed. -/
+def Edit.stored : Edit → Option Var
+  | .push y => some y
+  | .trunc _ => none
+  | .set _ y => some y
 
 theorem Edit.effAt_ne_replace (op : Edit) (k : Kind) (s : Bool) : op.effAt k s ≠ .replace := by
   cases op with
   | push => simp only [Edit.effAt]; split <;> simp
   | trunc => simp [Edit.effAt]
+  | set => simp [Edit.effAt]
 
 theorem Edit.effAt_ne_none (op : Edit) (k : Kind) (s : Bool) : op.effAt k s ≠ .none := by
   cases op with
   | push => simp only [Edit.effAt]; split <;> simp
   | trunc => simp [Edit.effAt]
+  | set => simp [Edit.effAt]
 
 theorem Edit.effAt_le_drop (op : Edit) (k : Kind) (s : Bool) : (op.effAt k s).le .drop := by
   cases op with
   | push => simp only [Edit.effAt]; split <;> decide
   | trunc => simp only [Edit.effAt]; decide
+  | set => simp only [Edit.effAt]; decide
 
 /-- What a change does to a root does not depend on what it is handed. -/
 @[simp] theorem Edit.effAt_rename (ρ : Var → Var) (op : Edit) (k : Kind) (s : Bool) :
@@ -882,6 +893,12 @@ theorem Edit.effAt_realloc {op : Edit} {k : Kind} {s : Bool} (h : op.effAt k s =
     · rename_i hk; exact ⟨⟨y, rfl⟩, hk.1, hk.2⟩
     · cases h
   | trunc _ => simp [Edit.effAt] at h
+  | set _ _ => simp [Edit.effAt] at h
+
+/-- A renamed change stores what it stored, renamed. -/
+@[simp] theorem Edit.stored_rename (ρ : Var → Var) (op : Edit) :
+    (op.rename ρ).stored = op.stored.map ρ := by
+  cases op <;> rfl
 
 /-- The per-root effects of a change through a borrow whose path is `P`, of
     type `tx`: each memory root of `P`, with `Edit.effAt` of its kind, as a
@@ -917,22 +934,26 @@ theorem thruDeps_bound {op : Edit} {Γ : Ctx} {tx : Ty} {P : List Dep} {d : Dep}
 /-- What a change through a borrow of type `tx`, whose path is `P`, asks of
     each root `d.root` it reaches in memory, in the context after its
     argument is handed over: the root is not lent out, is not the value
-    pushed, is live, allows its effect (`Edit.effAt`; so it owns its slot),
-    and that effect ends no view a destructor will read. -/
+    stored (`Edit.stored`), is live, allows its effect (`Edit.effAt`; so it
+    owns its slot), and that effect ends no view a destructor will read. -/
 def ThruOK (Γ1 : Ctx) (F : List Var) (op : Edit) (tx : Ty) (P : List Dep) : Prop :=
-  ∀ d ∈ memDeps P, d.root ∉ F ∧ (∀ y, op = .push y → d.root ≠ y) ∧
+  ∀ d ∈ memDeps P, d.root ∉ F ∧ (∀ y, op.stored = some y → d.root ≠ y) ∧
     ∃ Er, Γ1 d.root = some Er ∧ Er.live = true ∧
       canDo Er.mode (op.effAt d.kind (decide (Er.ty = tx))) ∧
       DtorSafe Γ1 (op.effAt d.kind (decide (Er.ty = tx))) false d.root
 
 /-- What a change of elements is handed: the value `vec_push` stores (as
-    `PushArg` takes it; an element `Vec` moves), or the integer expression
-    a truncation evaluates, which only reads. -/
+    `PushArg` takes it; an element `Vec` moves), the integer expression a
+    truncation evaluates, which only reads, or both, for `vec_set`: the
+    index it reads and the value it stores (as `vec_push` does). -/
 inductive EditArg (Γ : Ctx) (F : List Var) : Edit → Ty → List Dep → Ctx → Prop
   | push {y : Var} {Ey : Entry} {t : Ty} {D : List Dep} {Γ1 : Ctx} :
       Γ y = some Ey → Ey.live = true → Ey.ty = t → PushArg Γ F y Ey t D Γ1 →
       EditArg Γ F (.push y) t D Γ1
   | trunc {i : Expr} {t : Ty} : ExprT Γ i → EditArg Γ F (.trunc i) t [] Γ
+  | set {i : Expr} {y : Var} {Ey : Entry} {t : Ty} {D : List Dep} {Γ1 : Ctx} :
+      ExprT Γ i → Γ y = some Ey → Ey.live = true → Ey.ty = t → PushArg Γ F y Ey t D Γ1 →
+      EditArg Γ F (.set i y) t D Γ1
 
 /-- Does a statement change a `Vec`'s elements through a borrow
     (`.edit true`, Agora #295)? The step ignores the flag, so the guard
@@ -1237,6 +1258,7 @@ def Rhs.vars : Rhs → List Var
 def Edit.vars : Edit → List Var
   | .push y => [y]
   | .trunc i => i.vars
+  | .set i y => i.vars ++ [y]
 
 def Stmt.vars : Stmt → List Var
   | .skip => []

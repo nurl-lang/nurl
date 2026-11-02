@@ -257,6 +257,7 @@ def Rhs.rename (ρ : Var → Var) : Rhs → Rhs
 def Edit.rename (ρ : Var → Var) : Edit → Edit
   | .push y => .push (ρ y)
   | .trunc i => .trunc (i.rename ρ)
+  | .set i y => .set (i.rename ρ) (ρ y)
 
 def Stmt.rename (ρ : Var → Var) : Stmt → Stmt
   | .skip => .skip
@@ -448,6 +449,18 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
       Eval m i n → NodeOf m x o T t c d es → FreesL m.alloc (es.drop n) a' →
       Repl (.node t c d es) (.node t c d (es.take n)) T T' →
       Step P m (.edit b x (.trunc i)) (.ok ({ m with alloc := a' }.set o ⟨true, some T'⟩) .skip)
+  /-- `vec_set`: the `n`-th element is replaced by the value taken from `y`,
+      the old one freed ... -/
+  | editSet {m m1 : Mem} {b : Bool} {x y o : Var} {i : Expr} {n : Nat} {v T T' : Val} {t : Ty}
+      {c d : Nat} {es : List Val} {a' : Nat → Bool} (h : n < es.length) :
+      Eval m i n → TakeVal m y v m1 → NodeOf m1 x o T t c d es → Frees m1.alloc es[n] a' →
+      Repl (.node t c d es) (.node t c d (es.set n v)) T T' →
+      Step P m (.edit b x (.set i y)) (.ok ({ m1 with alloc := a' }.set o ⟨true, some T'⟩) .skip)
+  /-- ... and out of range nothing is stored: the value is freed. -/
+  | editSetOOB {m m1 : Mem} {b : Bool} {x y o : Var} {i : Expr} {n : Nat} {v T : Val} {t : Ty}
+      {c d : Nat} {es : List Val} {a' : Nat → Bool} :
+      Eval m i n → TakeVal m y v m1 → NodeOf m1 x o T t c d es → es.length ≤ n →
+      Frees m1.alloc v a' → Step P m (.edit b x (.set i y)) (.ok { m1 with alloc := a' } .skip)
   | free {m : Mem} {x : Var} {t : Val} {a' : Nat → Bool} :
       m.st x = some ⟨true, some t⟩ → Frees m.alloc t a' →
       Step P m (.free x) (.ok ({ m with alloc := a' }.set x ⟨true, none⟩) .skip)

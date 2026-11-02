@@ -180,6 +180,18 @@ inductive Touch (P : Prog) (m : Mem) : Stmt → Nat → Bool → Prop
       Touch P m (.edit b x (.trunc i)) a true
   /-- ... and reads what its length expression reads. -/
   | editI {b : Bool} {x : Var} {i : Expr} {a : Nat} : EReads m i a → Touch P m (.edit b x (.trunc i)) a false
+  /-- An element set frees the element it replaces ... -/
+  | editSetFree {b : Bool} {x o y : Var} {i : Expr} {n : Nat} {T : Val} {t : Ty} {c d : Nat}
+      {es : List Val} {a : Nat} (h : n < es.length) :
+      NodeOf m x o T t c d es → Eval m i n → a ∈ es[n].ids → Touch P m (.edit b x (.set i y)) a true
+  /-- ... or, out of range, the value it is handed ... -/
+  | editSetDrop {b : Bool} {x o y : Var} {i : Expr} {n : Nat} {T : Val} {t : Ty} {c d : Nat}
+      {es : List Val} {v : Val} {a : Nat} :
+      NodeOf m x o T t c d es → Eval m i n → es.length ≤ n → m.st y = some ⟨true, some v⟩ →
+      a ∈ v.ids → Touch P m (.edit b x (.set i y)) a true
+  /-- ... and reads what its index expression reads. -/
+  | editSetI {b : Bool} {x y : Var} {i : Expr} {a : Nat} :
+      EReads m i a → Touch P m (.edit b x (.set i y)) a false
   | scope {x : Var} {s : Stmt} {i : Nat} {w : Bool} : Touch P m s i w → Touch P m (.scope x s) i w
   /-- A scope's end releases what its binding owns ... -/
   | scopeEnd {x : Var} {t : Val} {i : Nat} :

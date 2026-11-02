@@ -117,6 +117,8 @@ theorem Step.grows {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
       · rw [ite_eq_left h2] at hi; cases hi
       · rw [ite_eq_right h2] at hi; exact .inl hi
   | editTrunc _ _ hf _ => exact Grows.shrink (FreesL.le hf) rfl
+  | editSet _ _ ht _ hf _ => exact (TakeVal.grows ht).trans (Grows.shrink (Frees.le hf) rfl)
+  | editSetOOB _ ht _ _ hf => exact (TakeVal.grows ht).trans (Grows.shrink (Frees.le hf) rfl)
   | panic => exact Grows.refl _
   | letrec _ _ _ => exact Grows.of_eq rfl rfl
   | catchIn _ ih => exact ih

@@ -1306,6 +1306,7 @@ theorem EditArg.absOK {Γ Γ1 : Ctx} {F : List Var} {op : Edit} {t : Ty} {D : Li
   cases h with
   | push hy _ _ hpa => exact PushArg.absOK hy hpa hab
   | trunc _ => exact hab
+  | set _ hy _ _ hpa => exact PushArg.absOK hy hpa hab
 
 /-- A closure literal's captures, checked in the callee, hold where the
     call places it. -/
@@ -2926,7 +2927,7 @@ theorem editB_ren (h : S.OK) (hab : S.AbsOK Γa) (hR : S.R = [])
     {P : Prog} {Fa : List Var} {Γa1 : Ctx} {x : Var} {op : Edit} {Ex Ex1 : Entry} {t : Ty}
     {D : List Dep} (hx : Γa x = some Ex) (hmx : Ex.mode = .bor) (hl : Ex.live = true)
     (hty : Ex.ty = .vec t) (hhv : t.holdsView = false)
-    (harg : EditArg Γa Fa op t D Γa1) (hyx : ∀ y, op = .push y → y ≠ x) (hx1 : Γa1 x = some Ex1)
+    (harg : EditArg Γa Fa op t D Γa1) (hyx : ∀ y, op.stored = some y → y ≠ x) (hx1 : Γa1 x = some Ex1)
     (hl1 : Ex1.live = true) (hne : memDeps Ex1.path ≠ []) (hthru : ThruOK Γa1 Fa op Ex.ty Ex1.path) :
     StmtT P (S.canon Γa) S.Fc ((Stmt.edit true x op).rename S.ρ)
       (S.canon (A2.setE (A2.killThru op Ex.ty Ex1.path Γa1) x Ex1)) := by
@@ -2968,13 +2969,15 @@ theorem editB_ren (h : S.OK) (hab : S.AbsOK Γa) (hR : S.R = [])
       exact ⟨D', EditArg.push (by rw [canon_ρ h, hy]; rfl) (by rw [liftE_live]; exact hly)
         (by rw [liftE_ty' h hab hy]; exact htyy) hpa'⟩
     | trunc hie => exact ⟨[], EditArg.trunc (exprT_ren h hab hie)⟩
-  have hyx' : ∀ y, op.rename S.ρ = .push y → y ≠ S.ρ x := by
+    | set hie hy hly htyy hpa =>
+      obtain ⟨D', hpa', _⟩ := pushArg_ren h hab hy hpa
+      exact ⟨D', EditArg.set (exprT_ren h hab hie) (by rw [canon_ρ h, hy]; rfl)
+        (by rw [liftE_live]; exact hly) (by rw [liftE_ty' h hab hy]; exact htyy) hpa'⟩
+  have hyx' : ∀ y, (op.rename S.ρ).stored = some y → y ≠ S.ρ x := by
     intro y hy
-    cases op with
-    | push y0 =>
-      simp only [Edit.rename, Edit.push.injEq] at hy; subst hy
-      exact fun e => hyx y0 rfl (h.inj _ _ e)
-    | trunc _ => simp [Edit.rename] at hy
+    rw [Edit.stored_rename] at hy
+    obtain ⟨y0, hy0, rfl⟩ := Option.map_eq_some_iff.mp hy
+    exact fun e => hyx y0 hy0 (h.inj _ _ e)
   have hthru' : ThruOK (S.canon Γa1) S.Fc (op.rename S.ρ) (S.liftE x Ex1).ty (S.liftE x Ex1).path := by
     intro d hd
     rw [hmem] at hd
@@ -2983,11 +2986,9 @@ theorem editB_ren (h : S.OK) (hab : S.AbsOK Γa) (hR : S.R = [])
     have hrbr : Er.mode ≠ .rootb := by rcases hcan with h' | ⟨b, h', _⟩ <;> rw [h'] <;> simp
     refine ⟨h.Fcout _, fun y hy => ?_, S.liftE d0.root Er, by
       show S.canon Γa1 (S.ρ d0.root) = _; rw [canon_ρ h, hEr]; rfl, by rw [liftE_live]; exact hlr, ?_, ?_⟩
-    · cases op with
-      | push y0 =>
-        simp only [Edit.rename, Edit.push.injEq] at hy; subst hy
-        exact fun e => hy0 y0 rfl (h.inj _ _ e)
-      | trunc _ => simp [Edit.rename] at hy
+    · rw [Edit.stored_rename] at hy
+      obtain ⟨y0, hy0', rfl⟩ := Option.map_eq_some_iff.mp hy
+      exact fun e => hy0 y0 hy0' (h.inj _ _ e)
     · rw [liftE_mode _ hrbr, liftE_ty _ hrbr, hty1, Edit.effAt_rename]
       exact canDo_lift hcan
     · rw [liftE_ty _ hrbr, hty1, Edit.effAt_rename]

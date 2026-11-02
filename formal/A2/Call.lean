@@ -89,6 +89,7 @@ theorem EditArg.domTy {Γ Γ1 : Ctx} {F : List Var} {op : Edit} {t : Ty} {D : Li
   cases h with
   | push hy _ _ hpa => exact PushArg.domTy hy hpa
   | trunc _ => exact DomTy.refl Γ
+  | set _ hy _ _ hpa => exact PushArg.domTy hy hpa
 
 theorem RhsT.domTy {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT Γ F r E Γ1) :
     DomTy Γ Γ1 := by

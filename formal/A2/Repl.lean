@@ -216,7 +216,41 @@ theorem top {T T' m : Val} (hr : Repl n n' T T') (ht : Top m T) :
       · exact Or.inl h'
       · exact Or.inr ⟨m', Top.pkg ht', hm⟩
 
+/-- A node of a tree replaced by itself: the tree is unchanged (an element
+    set out of range, Agora #295). -/
+theorem self {T : Val} (h : Sub n T) : Repl n n T T := by
+  induction h with
+  | refl => exact .here
+  | child he _ ih =>
+    obtain ⟨pre, post, rfl⟩ := List.append_of_mem he
+    exact .elem ih
+  | fst _ ih => exact .fst ih
+  | snd _ ih => exact .snd ih
+  | inl _ ih => exact .inl ih
+  | inr _ ih => exact .inr ih
+  | pkg _ ih => exact .pkg ih
+
 end Repl
+
+/-- The addresses of a node's elements, around its `n`-th one, before and
+    after an element set replaces it by `v` (Agora #295). -/
+theorem idsL_set {es : List Val} {n : Nat} (hn : n < es.length) (v : Val) :
+    idsL es = idsL (es.take n) ++ es[n].ids ++ idsL (es.drop (n + 1)) ∧
+    idsL (es.set n v) = idsL (es.take n) ++ v.ids ++ idsL (es.drop (n + 1)) := by
+  have h1 : es = es.take n ++ es[n] :: es.drop (n + 1) := by
+    rw [← List.drop_eq_getElem_cons hn, List.take_append_drop]
+  have h2 : es.set n v = es.take n ++ v :: es.drop (n + 1) := by
+    rw [List.set_eq_take_append_cons_drop]; simp [hn]
+  refine ⟨?_, ?_⟩
+  · calc idsL es = idsL (es.take n ++ es[n] :: es.drop (n + 1)) := congrArg idsL h1
+      _ = _ := by rw [idsL_append, idsL_cons, List.append_assoc]
+  · rw [h2, idsL_append, idsL_cons, List.append_assoc]
+
+/-- What an element set replaces is in the node's tree. -/
+theorem ids_get_sub {t : Ty} {c d : Nat} {es : List Val} {n i : Nat} (hn : n < es.length)
+    (hi : i ∈ es[n].ids) : i ∈ (Val.node t c d es).ids := by
+  simp only [ids_node, List.mem_cons]
+  exact .inr (.inr (mem_idsL (List.getElem_mem hn) hi))
 
 /-- What a truncation drops is in the node's tree. -/
 theorem ids_drop_sub {t : Ty} {c d : Nat} {es : List Val} {n i : Nat} (hi : i ∈ idsL (es.drop n)) :

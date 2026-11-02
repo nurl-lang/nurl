@@ -148,6 +148,8 @@ theorem Step.borFree {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r
   | editPush ht _ _ => exact (TakeVal.borFree ht hb).1.set _ (SlotFree.own _)
   | editPushRealloc ht _ _ => exact (((TakeVal.borFree ht hb).1).of_st rfl).set _ (SlotFree.own _)
   | editTrunc _ _ _ _ => exact (hb.of_st rfl).set _ (SlotFree.own _)
+  | editSet _ _ ht _ _ _ => exact (((TakeVal.borFree ht hb).1).of_st rfl).set _ (SlotFree.own _)
+  | editSetOOB _ ht _ _ _ => exact ((TakeVal.borFree ht hb).1).of_st rfl
   | panic => exact hb
   | letrec _ _ _ => exact ((hb.set _ (SlotFree.none _)).set _ (SlotFree.none _)).of_st rfl
   | catchIn _ ih => exact ih

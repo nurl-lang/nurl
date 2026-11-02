@@ -106,6 +106,17 @@ theorem Step.keep {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) (
     intro i hi
     exact FreesL.other hfr (fun hm => by
       have := hav i ⟨_, _, hn.2.2.1, hn.sub.ids i (ids_drop_sub hm)⟩; rw [hi] at this; cases this)
+  | editSet hlt _ ht hn hfr _ =>
+    intro i hi
+    have hav1 := (TakeVal.avoids ht hb hav).1
+    exact (Frees.other hfr (fun hm => by
+      have := hav1 i ⟨_, _, hn.2.2.1, hn.sub.ids i (ids_get_sub hlt hm)⟩; rw [hi] at this; cases this)).trans
+      (congrFun (TakeVal.alloc ht) i)
+  | editSetOOB _ ht _ _ hfr =>
+    intro i hi
+    have hav2 := (TakeVal.avoids ht hb hav).2
+    exact (Frees.other hfr (fun hm => by
+      have := hav2 i hm; rw [hi] at this; cases this)).trans (congrFun (TakeVal.alloc ht) i)
   | panic => intro _ _; rfl
   | letrec _ _ _ => intro _ _; rfl
   | catchIn _ ih => exact ih

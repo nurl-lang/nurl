@@ -1,5 +1,5 @@
 // field_arg_option_then_set: an Option bound from vec_get through a field argument; the element is replaced; the payload is read.
-// map: §2.12 | A2 | rejected | h84 | Option from vec_get via struct field; element replaced; payload read
+// map: StmtT.editB | A2 | rejected | h84 | Option from vec_get via struct field; element replaced; payload read
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 

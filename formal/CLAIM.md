@@ -51,19 +51,20 @@ the LLVM / C11 memory model rather than redefining it.
   `Rc` cycles are the standard library's (B); see `README.md` for the
   refinements of the calculus still planned.
   Elements change through their owner, an `inout` binding, or any borrow
-  of them (Agora #295). A push or a truncation through a borrow — an
-  element of a Vec of Vecs, a field viewer, a join of borrows, a call's
-  lent result — is typed as the strongest change on every owner the
-  borrow's path may reach (`StmtT.editB`): every borrow of those owners'
-  elements ends, and on a push only copies of a same-typed owner's whole
-  handle survive. Two of nurlc's forms read as forms the calculus has
-  (`RULES.md`, phase C): a function that changes a Vec or String it takes
-  as a plain parameter reads as an `inout` parameter, and a change through
-  a copy of one owner's whole handle (`( id vs )`, a cursor) as that
-  owner's own change. Outside the claim still:
+  of them (Agora #295). A push, a truncation or an element set through a
+  borrow — an element of a Vec of Vecs, a field viewer, a join of
+  borrows, a call's lent result — is typed as the strongest change on
+  every owner the borrow's path may reach (`StmtT.editB`): every borrow
+  of those owners' elements ends, and on a push only copies of a
+  same-typed owner's whole handle survive. Two of nurlc's forms read as
+  forms the calculus has (`RULES.md`, phase C): a function that changes a
+  Vec or String it takes as a plain parameter reads as an `inout`
+  parameter, and a change through a copy of one owner's whole handle
+  (`( id vs )`, a cursor) as that owner's own change. Outside the claim
+  still:
   - a change through a borrow of a Vec whose elements hold views;
-  - a pop, a remove or an element set through a borrow (the steps are
-    push and truncate);
+  - a pop or a remove through a borrow (the steps are push, truncate and
+    set);
   - what nurlc keeps beside such a change that the calculus ends: two
     parts of one value, copies of the changing borrow, a whole copy beside
     a field viewer (Agora #118, github#1426);

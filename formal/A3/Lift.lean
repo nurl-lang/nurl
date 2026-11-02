@@ -248,6 +248,14 @@ theorem Step.lifts {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
   | editTrunc he hn hfr hr =>
     exact ⟨_, GhostRel.refl _, Step.editTrunc (m := liftMem a2 m) (Eval.lift he a2)
       (NodeOf.lift hn a2) (FreesL.lift hfr hd) hr⟩
+  | editSet hlt he ht hn hfr hr =>
+    exact ⟨_, GhostRel.refl _, Step.editSet (m := liftMem a2 m) (m1 := liftMem a2 _) hlt (Eval.lift he a2)
+      (TakeVal.lift ht a2) (NodeOf.lift hn a2)
+      (Frees.lift hfr fun i h => hd i (by rw [← TakeVal.alloc ht]; exact h)) hr⟩
+  | editSetOOB he ht hn hle hfr =>
+    exact ⟨_, GhostRel.refl _, Step.editSetOOB (m := liftMem a2 m) (m1 := liftMem a2 _) (Eval.lift he a2)
+      (TakeVal.lift ht a2) (NodeOf.lift hn a2) hle
+      (Frees.lift hfr fun i h => hd i (by rw [← TakeVal.alloc ht]; exact h))⟩
   | panic => exact Step.panic
   | letrec hfn hp hx =>
     refine ⟨_, GhostRel.scope _ (GhostRel.seq _ (GhostRel.catchR _ ?_ ?_ ?_ ?_ (GhostRel.refl _))),
