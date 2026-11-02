@@ -31755,6 +31755,15 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                     : s vsnap ( __vd_snapshot )
                     ? != 0 ( nurl_str_len vsnap ) { ( bck_put vacck ( nurl_str_cat3 ( nurl_sym_get g_bck vacck ) ` ` vsnap ) ) } {}
                 } {}
+                // (…and the borrows it leaves with — their sources, and the
+                // ones viewed only through an element — joined at the loop's
+                // exit or head the same way, agora #399.)
+                : s bacck ? == kc 21 `lbrkbs` `lcntbs`
+                : s bsnap ( __bs_snapshot )
+                ? != 0 ( nurl_str_len bsnap ) {
+                    : s bcur ( nurl_sym_get g_bck bacck )
+                    ( bck_put bacck ? == 0 ( nurl_str_len bcur ) ( nurl_str_cat bsnap `` ) ( nurl_str_cat3 bcur `\n` bsnap ) )
+                } {}
                 = st ( nurl_str_cat `!` `` )
                 = p hi
                 = done T
@@ -35845,7 +35854,7 @@ unsafe @ bck_loop_mask s pre s post → s {
 // (A loop's own `break` / `continue` accumulators are the walk's
 // output, reset before every walk: no fact a later walk reads.)
 @ bck_dg_follows s k → b {
-    ^ & != 0 g_bck_watch ! | | | ( seq k `lbrk` ) ( seq k `lcnt` ) ( seq k `lbrkvd` ) ( seq k `lcntvd` )
+    ^ & != 0 g_bck_watch ! | | | | | ( seq k `lbrk` ) ( seq k `lcnt` ) ( seq k `lbrkvd` ) ( seq k `lcntvd` ) ( seq k `lbrkbs` ) ( seq k `lcntbs` )
 }
 
 // A borrow fact written (`bs_` `vi_` `fb_` `fp_`: the facts a `?` / `??`
@@ -36312,6 +36321,9 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     : s outer_brkvd ( nurl_sym_get g_bck `lbrkvd` )
     : s outer_cntvd ( nurl_sym_get g_bck `lcntvd` )
     : ~ s brkvd ``
+    : s outer_brkbs ( nurl_sym_get g_bck `lbrkbs` )
+    : s outer_cntbs ( nurl_sym_get g_bck `lcntbs` )
+    : ~ s brkbs ``
     : ~ s brk ``
     // The converged body-exit state: the walk of the iteration whose
     // head the fixpoint settled on.
@@ -36324,6 +36336,8 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
         ( bck_put `lcnt` `` )
         ( bck_put `lbrkvd` `` )
         ( bck_put `lcntvd` `` )
+        ( bck_put `lbrkbs` `` )
+        ( bck_put `lcntbs` `` )
         : s tok0 ( bck_facts_tok )
         = seen ? == 0 ( nurl_str_len seen ) ( nurl_str_cat tok0 `` ) ( nurl_str_cat3 seen ` ` tok0 )
         : s bsnap ( __bs_snapshot )
@@ -36333,6 +36347,7 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
         : s cnt ( nurl_sym_get g_bck `lcnt` )
         = brk ( nurl_sym_get g_bck `lbrk` )
         = brkvd ( nurl_sym_get g_bck `lbrkvd` )
+        = brkbs ( nurl_sym_get g_bck `lbrkbs` )
         // (The head's dependencies: what the loop was entered with, and
         // what every `continue` left with, beside the body's end — a
         // holder given a new value later in the body still may view on
@@ -36347,6 +36362,8 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
         // (The head's borrow sources: what both paths into it borrow from.)
         : s fvown ( __fv_owned fvsnap post )
         ( __bs_join bsnap )
+        // (…and every `continue`'s, agora #399.)
+        ( __bs_join ( nurl_sym_get g_bck `lcntbs` ) )
         ( __fv_join fvown )
         : s tok1 ( bck_facts_tok )
         // (Bound: a fresh raw string handed straight to a user function is
@@ -36402,6 +36419,10 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     ( bck_put `lcnt` outer_cnt )
     ( bck_put `lbrkvd` outer_brkvd )
     ( bck_put `lcntvd` outer_cntvd )
+    ( bck_put `lbrkbs` outer_brkbs )
+    ( bck_put `lcntbs` outer_cntbs )
+    // (…and a `break`'s borrows, agora #399.)
+    ( __bs_join brkbs )
     // (…and by a `break`, with the dependencies it left with.)
     ? != 0 g_bck_has_deps { ( __vd_join brkvd ) } {}
     // The loop is left at its condition (the head state) or by a `break`.
