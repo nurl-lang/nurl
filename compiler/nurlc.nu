@@ -31559,8 +31559,6 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                     } {}
                     = rp + rp 1
                 }
-                ( bck_param_view_check st ( bck_field_int rec 3 ) )
-                ( bck_note_vkeeps st )
                 // With defers to replay: what the returned expression did
                 // first — its stores and calls, the rows after this one on
                 // its line — so a defer body that releases what the return
@@ -31590,6 +31588,15 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 : s after_defers ( bck_apply_defers st )
                 = g_bck_ret_guard -1
                 ? & >= rto 0 != BCK_OWNED ( bck_st_get after_defers rto ) { ( bck_diag_defer_releases_returned rto ( bck_field_int rec 3 ) ) } {}
+                // (What the caller's storage views, and the function's
+                // answer, are asked of the state the caller gets back:
+                // after the defers ran — one that repoints the holder ends
+                // its view of a local, one that stores a view gives it one,
+                // as at the body's end; agora #336.)
+                ? ! ( seq after_defers `!` ) {
+                    ( bck_param_view_check after_defers ( bck_field_int rec 3 ) )
+                    ( bck_note_vkeeps after_defers )
+                } {}
                 // (…and then what the scopes still hold is dropped: an owner
                 // whose drop reads a view, after what that view points into.)
                 ( bck_ret_drop_check after_defers ( bck_field_int rec 3 ) )
@@ -36011,12 +36018,16 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     // Walk from the seeded state. n == 0 (no records) walks nothing.
     : s final ( bck_walk_seq 0 n seed )
     ? ! ( seq final `!` ) {
-        ? > n 0 { ( bck_param_view_check final ( bck_field_int ( bck_rec - n 1 ) 3 ) ) } {}
-        ( bck_note_vkeeps final )
         // (The body's end hands every `inout` parameter back, as a `^`
         // does: agora #280.)
         ? & > n 0 != 0 g_bck_fmv_any { ( __bck_inout_exit_check final ( bck_field_int ( bck_rec - n 1 ) 3 ) T ) } {}
         : s cleanup ( bck_apply_defers final )
+        // (…what the caller's storage views, after the defers ran, as at a
+        // `^`: agora #336.)
+        ? ! ( seq cleanup `!` ) {
+            ? > n 0 { ( bck_param_view_check cleanup ( bck_field_int ( bck_rec - n 1 ) 3 ) ) } {}
+            ( bck_note_vkeeps cleanup )
+        } {}
     } {}
     // What its parameters were left viewing of each other's storage is
     // this function's answer to its callers now (g_fn_vkeeps).
