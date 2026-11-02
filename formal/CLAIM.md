@@ -169,11 +169,11 @@ Inside A2 (nurlc bugs):
   plain parameters are unchanged (`Implements`).
 - A view a value comes to hold, not recorded where it goes: #338, #341,
   #346, #348, #362, #367, #368, #369, #370, #377, #380, #381, #383, #390,
-  #393, #422, #442 and #448. A2 records it in `Ty.holdsView`,
+  #393, #422, #442, #448 and #452. A2 records it in `Ty.holdsView`,
   `PushArg`, `pair`'s `Dy ++ Dz`, `callRes`'s `rholds` and `heldOfArgs`,
   `callPostAux`'s `outHeld` and `heldOfArgs`, and a package's interface
   summary; past a join, `ite` and `while` keep what either path holds.
-- A move or take nurlc does not see: #280, #357 and #446 (`unpair`,
+- A move or take nurlc does not see: #280, #357, #446 and #451 (`unpair`,
   `takel`, a `sink` takes an owner only, `lendable`).
 - A borrow ended by a binding's end, replacement or capture, missed:
   #242, #364, #382, #384, #406, #407, #408, #444 and #445 (`exitScope`,
@@ -189,10 +189,10 @@ Outside A2:
 - The hand-over of an old value to its borrower (above): #366, #373, #378,
   #387 and #388, plus #427 (a call that may hand back the owner's value
   where nurlc has no lend fact for it at the `=`: a wrapper, a generic
-  or later-defined callee, a value block) and #438 (shapes the hand-over
-  gate does not reach: a struct given a part of itself, an `inout`
-  String given another's lend, a scalar enum key, `o` inside a wrapper
-  argument, a struct cursor copy).
+  or later-defined callee, a value block) and #450 (shapes the hand-over
+  gate does not reach: a struct given a part of itself through a callee
+  whose summary is not final, a scalar enum key, a struct cursor copy)
+  and #456 (an `inout` given a lend by name, or of a Box, map, Rc or Arc).
 - An `Rc`'s shared state, which is the standard library's (B): #345 and
   #392.
 - A view stored through a borrow: #395 and #414 (`StmtT.editB` takes
