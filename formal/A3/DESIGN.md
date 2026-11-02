@@ -445,6 +445,15 @@ with the sweep is the phase-D obligation above. `check.sh` is green with:
   yet. `arcNew` still asks `Ty.plain`: moving a tree into a block needs
   `Covers` to count payloads, and so `no_leak` the sweep (step e), in the
   same change as `bpay`'s removal.
+- (e1) `Covers` counts payload addresses: every live address is
+  `Covered`, in an owned tree or a live payload (`PayAddr`). Every
+  `covers_*` lemma carries the payload case (no step that keeps the blocks
+  frees a payload address), and `covers_evalR` no longer reads `bpay`:
+  what `arc_new` takes from `y` is the new block's payload. `bpay` is now
+  read only where the first cut needs it: `rhs_arcNew` (a plain payload
+  owns no address, `BlkOwn.of_none`), `no_leak_end` / `no_leak_panic` (a
+  block that is left at the end owns no address, until `Steps` sweeps), and
+  A3 (`PayFree`, `BlocksAt`, `ThreadOK.no_leak`).
 
 After that, step (d) is: `Ty.plain` lifted to `holdsView = false ∧
 hasFn = false`, `arcNew` moving a tree into a new block (`BlkOwn` for it),

@@ -93,7 +93,8 @@ theorem inv_grow {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F
     nvS := hi.nvS, nvF := hi.nvF
     anch := hi.anch, spineNd := hi.spineNd, spineDom := hi.spineDom
     catchOK := CatchOK.of_st (m := m) (m' := { m with nid := n, blk := B }) rfl (Nat.le_refl _) hb hi.catchOK
-    cover := fun i h => hi.cover i h, pinOut := hi.pinOut, pinIn := hi.pinIn, dtorOut := hi.dtorOut,
+    cover := fun i h => (hi.cover i h).imp id (fun ⟨k, bl, hk, hik⟩ => ⟨k, bl, hb k bl hk, hik⟩),
+    pinOut := hi.pinOut, pinIn := hi.pinIn, dtorOut := hi.dtorOut,
     dtorIn := hi.dtorIn }
 
 theorem ThreadOK.grow {P : Prog} {m : Mem} {s : Stmt} (h : ThreadOK P m s) {n : Nat}

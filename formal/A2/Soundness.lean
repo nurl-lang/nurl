@@ -61,7 +61,7 @@ theorem reach_ok {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {F : 
 theorem reach_panic {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {F : List Var} {s : Stmt}
     {Δ : Ctx} (ht : StmtT P Γ F s Δ) {m : Mem} (hcd : MemCodes P m) (hsc : s.codesOK P)
     (hi : Inv m Γ F s) (hc : Closed Γ s) {m' : Mem}
-    (hs : Steps P m s (.panic m')) : (∀ v, m'.st v = none) ∧ Covers m' := by
+    (hs : Steps P m s (.panic m')) : (∀ v, m'.st v = none) ∧ Covers m' ∧ HeapOK m' := by
   generalize hr : Res.panic m' = r at hs
   induction hs generalizing Γ with
   | refl => cases hr
@@ -71,8 +71,8 @@ theorem reach_panic {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {F
     exact ih ht' hcd' hsc' hi' (hc.step hk) hr
   | @panic m0 m1 s0 hst =>
     cases hr
-    obtain ⟨hout, hin, _, hcov, _⟩ := panic_unwind hst hi.heap hi.cover hi.spineNd
-    refine ⟨fun v => ?_, hcov⟩
+    obtain ⟨hout, hin, hh1, hcov, _⟩ := panic_unwind hst hi.heap hi.cover hi.spineNd
+    refine ⟨fun v => ?_, hcov, hh1⟩
     by_cases hv : v ∈ s0.spine
     · exact hin v hv
     · rw [hout v hv]
@@ -152,11 +152,12 @@ theorem no_leak_end {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {s : Stmt} {�
   cases ha : m'.alloc i with
   | false => rfl
   | true =>
-    obtain ⟨o, T, hT, _⟩ := hi'.cover i ha
-    have hd := hi'.dom o
-    unfold OwnedAt at hT
-    rw [hT] at hd
-    exact absurd (hc' o hd) (by simp [Stmt.spine])
+    rcases hi'.cover i ha with ⟨o, T, hT, _⟩ | ⟨k, bl, hk, hik⟩
+    · have hd := hi'.dom o
+      unfold OwnedAt at hT
+      rw [hT] at hd
+      exact absurd (hc' o hd) (by simp [Stmt.spine])
+    · rw [hi'.heap.bpay k bl hk] at hik; cases hik
 
 /-- ... and when a panic no `recover` frame catches ends it, the unwinding
     has freed every allocation too. -/
@@ -164,14 +165,15 @@ theorem no_leak_panic {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {s : Stmt} 
     (ht : StmtT P (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P) {nv : Nat}
     (hv : ∀ v ∈ s.vars, v < nv)
     {m' : Mem} (hr : Steps P (emptyMem nv) s (.panic m')) : ∀ i, m'.alloc i = false := by
-  obtain ⟨hnone, hcov⟩ :=
+  obtain ⟨hnone, hcov, hh⟩ :=
     reach_panic hP hPc ht (codes_empty P nv) hsc (inv_empty hs hv) (closed_empty s) hr
   intro i
   cases ha : m'.alloc i with
   | false => rfl
   | true =>
-    obtain ⟨o, T, hT, _⟩ := hcov i ha
-    unfold OwnedAt at hT
-    rw [hnone o] at hT; cases hT
+    rcases hcov i ha with ⟨o, T, hT, _⟩ | ⟨k, bl, hk, hik⟩
+    · unfold OwnedAt at hT
+      rw [hnone o] at hT; cases hT
+    · rw [hh.bpay k bl hk] at hik; cases hik
 
 end A2

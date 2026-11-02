@@ -160,9 +160,10 @@ theorem covers (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) (hc : Covers m
   intro i hia
   have hal : (callMem m m1 fn x).alloc = m.alloc := (h.bind hb).1
   rw [hal] at hia
-  obtain ⟨o, T, hT, hiT⟩ := hc i hia
-  obtain ⟨o', hT'⟩ := h.own_dst hi hb hT
-  exact ⟨o', T, hT', hiT⟩
+  rcases hc i hia with ⟨o, T, hT, hiT⟩ | ⟨k, bl, hk, hik⟩
+  · obtain ⟨o', hT'⟩ := h.own_dst hi hb hT
+    exact Or.inl ⟨o', T, hT', hiT⟩
+  · exact Or.inr ⟨k, bl, by show m1.blk k = some bl; rw [hb.blk]; exact hk, hik⟩
 
 theorem catchOK (h : CallH P Γ F x fn args m.nv) (m' : Mem) (k : Stmt) :
     CatchOK m' (callStmt fn args m.nv x k) := by

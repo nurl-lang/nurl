@@ -440,8 +440,12 @@ def Stmt.spine : Stmt → List Var
   | .catchR _ _ s => s.spine
   | _ => []
 
-/-- Nothing leaks: every live address is in a tree some binding owns. -/
-def Covers (m : Mem) : Prop := ∀ i, m.alloc i = true → ∃ x t, OwnedAt m x t ∧ i ∈ t.ids
+/-- An address is covered: a tree some binding owns holds it, or (A3.1) a
+    live block's payload owns it. -/
+def Covered (m : Mem) (i : Nat) : Prop := (∃ x t, OwnedAt m x t ∧ i ∈ t.ids) ∨ PayAddr m i
+
+/-- Nothing leaks: every live address is covered. -/
+def Covers (m : Mem) : Prop := ∀ i, m.alloc i = true → Covered m i
 
 /-- A `recover` frame returns to its caller's store: every binding outside
     the frames it has opened (and its result `x`) is as the caller left it. -/

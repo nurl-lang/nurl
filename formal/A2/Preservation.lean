@@ -544,7 +544,9 @@ theorem pres_unpair {P : Prog} {Γ Δ : Ctx} {F : List Var} {y x z : Var} {s : S
         · exact ⟨compE E b, by simp [setE]⟩
       · intro i hia
         simp only [Mem.set_alloc] at hia
-        obtain ⟨o, U, hU, hiU⟩ := hi.cover i hia
+        rcases hi.cover i hia with ⟨o, U, hU, hiU⟩ | hp
+        rotate_left
+        · exact Or.inr hp
         by_cases hoy : o = y
         · subst hoy
           unfold OwnedAt at hU; rw [hvy] at hU; cases hU
@@ -554,15 +556,15 @@ theorem pres_unpair {P : Prog} {Γ Δ : Ctx} {F : List Var} {y x z : Var} {s : S
               cases h : v.owns
               · rw [ids_nonNode h] at hiv; cases hiv
               · rfl
-            exact ⟨x, v, by unfold OwnedAt; simp [upd_ne _ _ hxz, hv], hiv⟩
+            exact Or.inl ⟨x, v, by unfold OwnedAt; simp [upd_ne _ _ hxz, hv], hiv⟩
           · have hw : w.owns = true := by
               cases h : w.owns
               · rw [ids_nonNode h] at hiw; cases hiw
               · rfl
-            exact ⟨z, w, by unfold OwnedAt; simp [hw], hiw⟩
+            exact Or.inl ⟨z, w, by unfold OwnedAt; simp [hw], hiw⟩
         · have hox : o ≠ x := fun h => by subst h; unfold OwnedAt at hU; rw [hmx] at hU; cases hU
           have hoz : o ≠ z := fun h => by subst h; unfold OwnedAt at hU; rw [hmz] at hU; cases hU
-          exact ⟨o, U, by unfold OwnedAt at hU ⊢; simp [upd_ne _ _ hox, upd_ne _ _ hoz, upd_ne _ _ hoy, hU],
+          exact Or.inl ⟨o, U, by unfold OwnedAt at hU ⊢; simp [upd_ne _ _ hox, upd_ne _ _ hoz, upd_ne _ _ hoy, hU],
             hiU⟩
     · refine ⟨fun u Eu hu _ => ?_, fun u Eu hu hus => ?_,
         ((hrel.dkeep.setE (fun h => by simp at h)).setE (fun h => by simp at h)).mono
@@ -1254,7 +1256,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         fun v hv => ?_⟩
       · refine Inv.mk hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
           (by simp [Stmt.spine, hsp, setE]) (show CatchOK _ k from catchOK_src hsrc)
-          (covers_take (covers_evalR hi.cover he post.inv.heap.bpay) (fun T h => by
+          (covers_take (covers_evalR hi.cover he) (fun T h => by
             unfold OwnedAt at h; rw [evalR_none he hmx] at h; cases h))
           (pinOut_fresh hi.toMInv (fun p Ep hp hmp => by
             have hpx : p ≠ x := fun h => by
@@ -1341,7 +1343,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         (by rw [hsp]; exact hKOd) hWd hNd hΔd, ?_, by simp [post.nv], ?_, fun v hv => ?_⟩
       · refine Inv.mk hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
           (by simp [Stmt.spine, hsp, setE]) (show CatchOK _ k from catchOK_src hsrc)
-          (covers_take (covers_evalR hi.cover he post.inv.heap.bpay) (fun T h => by
+          (covers_take (covers_evalR hi.cover he) (fun T h => by
             unfold OwnedAt at h; rw [evalR_none he hmx] at h; cases h))
           (pinOut_fresh hi.toMInv (fun p Ep hp hmp => by
             have hpx : p ≠ x := fun h => by
@@ -1395,7 +1397,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       have hanch := hi.leafAnch rfl
       have post := step_assign hi.toMInv hanch hx hxF hmodes hr hty hxd he hsl hd hpin hds
       exact ⟨_, StmtT.skip, Inv.ofLeaf hi post.inv (by rw [post.nv]; simp) (by simp [Stmt.vars])
-        (post.rel.anch hanch) rfl (covers_assign (covers_evalR hi.cover he post.inv.heap.bpay) hsl hd) trivial,
+        (post.rel.anch hanch) rfl (covers_assign (covers_evalR hi.cover he) hsl hd) trivial,
         by rw [post.nv]; simp, post.rel.keep rfl rfl, post.frz⟩
   | ite hsa hsb _ ha hb _ _ =>
     intro m m' s' hcd hi hst

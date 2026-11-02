@@ -2451,11 +2451,12 @@ theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
         spineDom := by simp [Stmt.spine]
         catchOK := catchOK_src (by simp [Stmt.src, hk])
         cover := fun i hia => by
-          obtain ⟨o', T, hT, hiT⟩ := hi.cover i hia
-          have ho : o' ≠ m.nv := fun e => by
-            subst e; unfold OwnedAt at hT
-            have := hi.dom m.nv; rw [hΓe0, hT] at this; cases this
-          exact ⟨o', T, by unfold OwnedAt at hT ⊢; simp [envMem, Mem.set, upd_ne _ _ ho, hT], hiT⟩
+          rcases hi.cover i hia with ⟨o', T, hT, hiT⟩ | hp
+          · have ho : o' ≠ m.nv := fun e => by
+              subst e; unfold OwnedAt at hT
+              have := hi.dom m.nv; rw [hΓe0, hT] at this; cases this
+            exact Or.inl ⟨o', T, by unfold OwnedAt at hT ⊢; simp [envMem, Mem.set, upd_ne _ _ ho, hT], hiT⟩
+          · exact Or.inr hp
         pinOut := pinOut_nil rfl
         pinIn := trivial
         dtorOut := dtorOut_nil rfl
