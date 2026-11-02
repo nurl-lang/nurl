@@ -28547,8 +28547,29 @@ unsafe @ __rpg_rget i r i k → i { ^ ( nurl_peek # s g_rpg_rec + * r 6 k ) }
     // inside what their handles reach leave it as it was: bck_byte_root,
     // #118.)
     : b vb ? | raw taker F ? ? ( seq g_bck_rhs_lend `-` ) | fpath g_bck_rhs_ident g_bck_rhs_whole ! ( __ty_holds_view bt 0 ) F
-    ( bck_record ? taker ? hfield `fborrowh` `fborrow` ? vb `vborrow` `borrow` name ( nurl_str_to_int ( nurl_sym_get g_bck `lastline` ) ) )
+    // (`cborrow`: a String or a Vec borrowed from bindings of its own type
+    // — `( pick x other k )`, `= c ( id b )` — is a copy of one of their
+    // handles whole: a buffer moved through it is theirs, at the same path
+    // — bck_view_end_via; agora #440. Not a field or an element of them,
+    // which has another type.)
+    : b hc & & ! | raw taker ! fpath ( __handle_copy_of_reads syms bt ( nurl_sym_get g_bck `reads` ) )
+    // (`vcborrow`: a `vborrow` — its bytes a binding's own, surviving a change
+    // of the elements, #118 — that is such a copy too.)
+    ( bck_record ? taker ? hfield `fborrowh` `fborrow` ? hc ? vb `vcborrow` `cborrow` ? vb `vborrow` `borrow` name ( nurl_str_to_int ( nurl_sym_get g_bck `lastline` ) ) )
     ( bck_put `reads` saved )
+}
+
+// Is a binding of type `bt` — a String or a Vec — read out of `reads` (the
+// owners its initialiser read, bck_owning_reads) a copy of one of their
+// handles: each of them a binding of that very type?
+@ __handle_copy_of_reads i syms s bt s reads → b {
+    ? | ! | ( seq bt `%String` ) != 0 ( nurl_str_starts bt `%Vec__` ) == 0 ( nurl_str_len reads ) { ^ F } {}
+    : ~ s rest ( nurl_str_cat reads `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? | >= ( nurl_str_find w `.` ) 0 ! ( seq ( nurl_sym_get syms w ) bt ) { ^ F } {}
+    }
+    ^ T
 }
 
 // A closure binding that does not own its env (__clo_bind_class) borrows
@@ -30438,7 +30459,7 @@ unsafe @ bck_kc i idx → i {
     ? == c 115 { ^ ? ( seq k `store` ) 14 0 } {}
     ? == c 120 { ^ ? ( seq k `xfer` ) 16 0 } {}
     ? == c 99 { ^ ? ( seq k `cdep` ) 17 ? ( seq k `cmove` ) 18 ? ( seq k `cnt` ) 22 ? ( seq k `cond` ) 25 ? ( seq k `callx` ) 31 ? ( seq k `clox` ) 34 ? ( seq k `cborrow` ) 7 0 } {}
-    ? == c 118 { ^ ? ( seq k `vpass` ) 19 ? ( seq k `vborrow` ) 7 0 } {}
+    ? == c 118 { ^ ? ( seq k `vpass` ) 19 ? ( seq k `vborrow` ) 7 ? ( seq k `vcborrow` ) 7 0 } {}
     ? == c 114 { ^ ? ( seq k `ret` ) 20 0 } {}
     ^ 0
 }
@@ -30850,7 +30871,7 @@ unsafe @ bck_sx_ids s sx → s {
     : b __pend ? == __k0 112 != 0 ( nurl_str_starts kind `pend` ) ? == __k0 99 | ( seq kind `cdep` ) ( seq kind `cmove` ) ? == __k0 109 ( seq kind `maybealias` ) ? == __k0 115 ( seq kind `store` ) ? == __k0 120 ( seq kind `xfer` ) F
     // (A `ret` row names the bare binding a `^` hands back whole, when it
     // is one — gen_ret's g_bck_ret_whole, agora #280 — and nothing else.)
-    : b __named ? | __pend __bind T ? == __k0 109 | ( seq kind `move` ) ( seq kind `maybemove` ) ? == __k0 98 ( seq kind `borrow` ) ? == __k0 99 ( seq kind `cborrow` ) ? == __k0 116 | ( seq kind `tborrow` ) ( seq kind `take` ) ? == __k0 102 | | ( seq kind `fborrow` ) ( seq kind `fborrowh` ) ( seq kind `fieldset` ) ? == __k0 118 ( seq kind `vborrow` ) ? == __k0 114 & ( seq kind `ret` ) != 0 ( nurl_str_len w ) F
+    : b __named ? | __pend __bind T ? == __k0 109 | ( seq kind `move` ) ( seq kind `maybemove` ) ? == __k0 98 ( seq kind `borrow` ) ? == __k0 99 ( seq kind `cborrow` ) ? == __k0 116 | ( seq kind `tborrow` ) ( seq kind `take` ) ? == __k0 102 | | ( seq kind `fborrow` ) ( seq kind `fborrowh` ) ( seq kind `fieldset` ) ? == __k0 118 | ( seq kind `vborrow` ) ( seq kind `vcborrow` ) ? == __k0 114 & ( seq kind `ret` ) != 0 ( nurl_str_len w ) F
     : s w2 ? ? == __k0 108 ( seq kind `let` ) ? == __k0 102 ( seq kind `fevar` ) F ( nurl_str_int ( bck_xl_declare_id w ) ) ? __named ( nurl_str_int ( bck_intern ( bck_xl_resolve w ) ) ) ( nurl_str_cat w `` )
     : s head ( nurl_str_cat4 kind `\t` w2 `\t` )
     // (Fields 3 and 4, the line and the depth, as they are: one copy.)
@@ -32129,7 +32150,7 @@ unsafe @ __bck_try_exit_check s st i line → v {
                 // (The kind by its prefix: no copy of it per visit.)
                 : b bfvh != 0 ( nurl_str_starts rec `fborrowh\t` )
                 : b bfv | bfvh != 0 ( nurl_str_starts rec `fborrow\t` )
-                = g_bck_br_next ? | bfv != 0 ( nurl_str_starts rec `vborrow\t` ) ? | == 0 ( nurl_str_len bprior ) ( __words_within bprior ( bck_borrow_owners bsrcs ) ) ( bck_byte_root st bsrcs ) -1 -1
+                = g_bck_br_next ? | | bfv != 0 ( nurl_str_starts rec `vborrow\t` ) != 0 ( nurl_str_starts rec `vcborrow\t` ) ? | == 0 ( nurl_str_len bprior ) ( __words_within bprior ( bck_borrow_owners bsrcs ) ) ( bck_byte_root st bsrcs ) -1 -1
                 = st ( bck_borrow_begin st bwid ? == 0 ( nurl_str_len bprior ) bsrcs ( nurl_str_cat3 bprior ` ` bsrcs ) )
                 = g_bck_br_next -1
                 // (A field viewer, `fborrow` — bck_note_borrow — and the one
@@ -32147,7 +32168,7 @@ unsafe @ __bck_try_exit_check s st i line → v {
                 // (Only of an owner's handle, or of such a copy: a copy of an
                 // element borrow, `: ~ H c e` with e a `vec_at`, is the
                 // element's.)
-                ? & | != 0 ( nurl_str_starts rec `cborrow\t` ) != 0 ( nurl_str_starts rec `tborrow\t` ) ( __bck_hc_srcs st bsrcs ) { ( bck_put ( bck_bkey `hc_` bws ) `1` ) = g_bck_hc_any 1 } {}
+                ? & | | != 0 ( nurl_str_starts rec `cborrow\t` ) != 0 ( nurl_str_starts rec `tborrow\t` ) != 0 ( nurl_str_starts rec `vcborrow\t` ) ( __bck_hc_srcs st bsrcs ) { ( bck_put ( bck_bkey `hc_` bws ) `1` ) = g_bck_hc_any 1 } {}
                 = p + p 1
                 = done T
             } {}
@@ -34706,7 +34727,10 @@ unsafe @ bck_note_rc_arg s name s ty → v {
                 // through an element a call lends — `( string_data ( vec_at
                 // vs 0 ) )` — is recorded as one, so an element's buffer
                 // moving ends it too; agora #439, #349.)
-                ? hcopy { = out ( bck_view_end_via out ( nurl_str_to_int o ) wroot wid ( bck_field_int rec 3 ) hwhy ) } { = out ( bck_view_end out ( nurl_str_to_int o ) ( bck_field_int rec 3 ) rwhy ) }
+                // (…of the owner and every path of it: a part a callee lends
+                // — `( name_of hs )` handing back `. h name` — is one of its
+                // fields, which one is not known here; agora #440.)
+                ? hcopy { = out ( bck_view_end_via out ( nurl_str_to_int o ) wroot wid ( bck_field_int rec 3 ) hwhy ) } { = out ( bck_view_end_via out ( nurl_str_to_int o ) wroot wroot ( bck_field_int rec 3 ) rwhy ) }
             }
         } {}
         ? != 0 ( nurl_str_len bwhy ) {
@@ -45432,7 +45456,7 @@ unsafe @ __bck_made_from s name → s {
                     = out ( __words_join out ( __sx_names ( bck_field row 8 ) ) )
                 } {}
             } {}
-            ? | | | | ( seq k `borrow` ) ( seq k `cborrow` ) ( seq k `vborrow` ) ( seq k `fborrow` ) ( seq k `fborrowh` ) {
+            ? | | | | | ( seq k `borrow` ) ( seq k `cborrow` ) ( seq k `vborrow` ) ( seq k `vcborrow` ) ( seq k `fborrow` ) ( seq k `fborrowh` ) {
                 = out ( __words_join out ( __sx_names ( bck_field row 2 ) ) )
             } {}
         } {}
