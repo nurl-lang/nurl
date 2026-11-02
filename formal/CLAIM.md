@@ -117,8 +117,8 @@ library, the compiler and the code generator are part of the trusted base.
 
 Each soundness hole known open (`tools/fuzz/holes/open/t<N>.md`, listed
 in `docs/LIMITATIONS.md` at each release) is a program nurlc accepts that
-faults. Every one is an exception to the statement above. Each is one of
-two kinds:
+faults. Every one is an exception to the statement above. Nearly all are
+one of two kinds:
 
 - **Inside A2.** The calculus expresses the program and refuses it, so
   the hole is a nurlc bug: nurlc must be brought into line with A2. The
@@ -127,8 +127,8 @@ two kinds:
   the claim says nothing about it until the form is added (or nurlc
   refuses it).
 
-Classified by claude-formal after v0.85.0 (2026-11-02). The A2 rule that
-refuses each shape is named.
+Classified by claude-formal after v0.85.0 and github#1528 (2026-11-02).
+The A2 rule that refuses each shape is named.
 
 Inside A2 (nurlc bugs):
 - A change in place that ends a borrow, missed: #293, #333, #349, #350,
@@ -143,13 +143,17 @@ Inside A2 (nurlc bugs):
 - A move or take nurlc does not see: #280, #357 and #372 (`unpair`,
   `takel`, a `sink` takes an owner only, `lendable`).
 - A borrow ended by a binding's end, replacement or capture, missed:
-  #242, #332, #339, #358, #364, #379, #382 and #384 (`exitScope`,
-  `assign`'s `kill .replace`, `CapsOK`, `NamesFree`, `FnOK` at the body's
-  one end, `catchR`, `DtorSafe`).
+  #242, #332, #339, #358, #364, #382, #384, #406, #407 and #408
+  (`exitScope`, `assign`'s `kill .replace`, `CapsOK`, `NamesFree`, `FnOK`
+  at the body's one end, where a `^`, a `\` exit and the defers lead,
+  `catchR`, `DtorSafe`).
 - A struct built from an owner and a view of it: #294 (`pair`: the owned
   field is no root of the other's dependencies).
 - An `inout` option given a lend: #343 (`assign` gives an `inout` binding
   only an owned value).
+
+Typed by A2 and safe there; the fault is in the code nurlc generates
+(phase D): #405 (a defer body with a Vec of its own).
 
 Outside A2:
 - The hand-over of an old value to its borrower (above): #366, #373,
