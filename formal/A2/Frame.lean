@@ -372,7 +372,7 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       exact hkeep k (hnot _ hd rfl)
     · obtain ⟨Er, hEr, hroot⟩ := hi.wf v E hv' hlE (Or.inl hnint) dep.root (List.mem_map_of_mem hd)
       have hk := rootKeep_frame hi hanch (fun o ho => hst o (fun h => hxF (h ▸ ho))) hEr hroot
-        (hst _ hr)
+        (hst _ hr) (BlkLe.of_eq hblk)
       exact ⟨hk.vkeep, hk.hkeep⟩
   have getE : ∀ v E', upd (kill e hv x Γ) x ox v = some E' → v ≠ x →
       ∃ E, Γ v = some E ∧ E' = killE e hv x E := by
@@ -611,7 +611,8 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
         simp only at hr; subst hr
         exact (hkeep k (hitsMem_kills (hds v E hE hdt hos) (Or.inl hnint) hdv rfl hnm)).1
       · obtain ⟨Er, hEr, hroot⟩ := hi.wf.dtor v E hE hd hos (Or.inl hnint) dep hdv hnm
-        exact (rootKeep_frame hi hanch (fun o ho => hst o (fun h => hxF (h ▸ ho))) hEr hroot (hst _ hr)).vkeep
+        exact (rootKeep_frame hi hanch (fun o ho => hst o (fun h => hxF (h ▸ ho))) hEr hroot (hst _ hr)
+          (BlkLe.of_eq hblk)).vkeep
   · -- A3.1: an owned tree's shares name live blocks; no change here touches a block
     intro v E' sl T hv' hsl hown hT
     by_cases hvx : v = x

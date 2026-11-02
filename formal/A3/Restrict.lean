@@ -49,13 +49,14 @@ theorem minus_upd_true {a a2 : Nat → Bool} {k : Nat} (hk : a2 k = false) :
 /-- The vector a binding names is in an owned tree: both of its addresses
     are live on the own part. -/
 theorem VecOf.restrict {m : Mem} {x : Var} {t : Ty} {c d : Nat} {es : List Val}
-    (h : VecOf m x t c d es) {a2 : Nat → Bool} (hav : Avoids m a2) :
+    (h : VecOf m x t c d es) {a2 : Nat → Bool} (hav : Avoids m a2) (hp : PayFree m) :
     VecOf { m with alloc := minus m.alloc a2 } x t c d es := by
   obtain ⟨hc, hd, hx⟩ := h
   have ho : OwnedId m c ∧ OwnedId m d := by
-    rcases hx with hx | ⟨_, y, u, hy, hs, _⟩
+    rcases hx with hx | ⟨_, ⟨y, u, hy, hs, _⟩ | ⟨k, bl, hk, hs, _⟩⟩
     · exact ⟨OwnedId.of_slot hx (by simp), OwnedId.of_slot hx (by simp)⟩
     · exact ⟨OwnedId.of_slot hy (hs.ids c (by simp)), OwnedId.of_slot hy (hs.ids d (by simp))⟩
+    · exact (hp.no_node hk hs (i := c) (by simp)).elim
   exact ⟨minus_true hc (hav c ho.1), minus_true hd (hav d ho.2), hx⟩
 
 /-- The node a binding names is in an owned tree: its addresses are live
@@ -67,13 +68,13 @@ theorem NodeOf.restrict {m : Mem} {x o : Var} {T : Val} {t : Ty} {c d : Nat} {es
    minus_true h.2.1 (hav d (OwnedId.of_slot h.2.2.1 (h.sub.ids d (by simp)))), h.2.2.1, h.2.2.2⟩
 
 theorem Eval.restrict {m : Mem} {e : Expr} {n : Nat} (h : Eval m e n) {a2 : Nat → Bool}
-    (hav : Avoids m a2) : Eval { m with alloc := minus m.alloc a2 } e n := by
+    (hav : Avoids m a2) (hp : PayFree m) : Eval { m with alloc := minus m.alloc a2 } e n := by
   induction h with
   | lit => exact .lit
   | var hx => exact .var hx
   | add _ _ ih1 ih2 => exact .add ih1 ih2
   | lt _ _ ih1 ih2 => exact .lt ih1 ih2
-  | len hv => exact .len (VecOf.restrict hv hav)
+  | len hv => exact .len (VecOf.restrict hv hav hp)
   | slen hx => exact .slen hx
   | isl hx => exact .isl hx
   | isr hx => exact .isr hx
@@ -94,10 +95,10 @@ def RResDown (a2 : Nat → Bool) : RRes → RRes → Prop
 /-- **Evaluating a right-hand side** on the own part: every address it
     checks is owned, and `new` allocates past the part. -/
 theorem EvalR.restrict {m : Mem} {r : Rhs} {res : RRes} (h : EvalR m r res) {a2 : Nat → Bool}
-    (hav : Avoids m a2) (hf : FreshFrom a2 m.nid) :
+    (hav : Avoids m a2) (hp : PayFree m) (hf : FreshFrom a2 m.nid) :
     ∃ res1, EvalR { m with alloc := minus m.alloc a2 } r res1 ∧ RResDown a2 res res1 := by
   cases h with
-  | expr he => exact ⟨_, .expr (Eval.restrict he hav), rfl, rfl, rfl⟩
+  | expr he => exact ⟨_, .expr (Eval.restrict he hav hp), rfl, rfl, rfl⟩
   | @new t =>
     have h1 : EvalR { m with alloc := minus m.alloc a2 } (.new t)
         (.ok (.node t m.nid (m.nid + 1) []) true
@@ -110,15 +111,16 @@ theorem EvalR.restrict {m : Mem} {r : Rhs} {res : RRes} (h : EvalR m r res) {a2 
   | copy hy => exact ⟨_, .copy hy, rfl, rfl, rfl⟩
   | borrowOwn hy => exact ⟨_, .borrowOwn hy, rfl, rfl, rfl⟩
   | borrowBor hy => exact ⟨_, .borrowBor hy, rfl, rfl, rfl⟩
-  | «at» hn hv he => exact ⟨_, .at hn (VecOf.restrict hv hav) (Eval.restrict he hav), rfl, rfl, rfl⟩
-  | atOOB hv he hn => exact ⟨_, .atOOB (VecOf.restrict hv hav) (Eval.restrict he hav) hn, trivial⟩
-  | view hv => exact ⟨_, .view (VecOf.restrict hv hav), rfl, rfl, rfl⟩
+  | «at» hn hv he => exact ⟨_, .at hn (VecOf.restrict hv hav hp) (Eval.restrict he hav hp), rfl, rfl, rfl⟩
+  | atOOB hv he hn => exact ⟨_, .atOOB (VecOf.restrict hv hav hp) (Eval.restrict he hav hp) hn, trivial⟩
+  | view hv => exact ⟨_, .view (VecOf.restrict hv hav hp), rfl, rfl, rfl⟩
   | @sat y i t d o l n c es hn hy he hl hd hda =>
     have ho : OwnedId m d := by
-      obtain ⟨x, u, hx, hs, _⟩ := hda
-      exact OwnedId.of_slot hx (hs.ids d (by simp))
-    exact ⟨_, .sat hn hy (Eval.restrict he hav) hl (minus_true hd (hav d ho)) hda, rfl, rfl, rfl⟩
-  | satOOB hy he hn => exact ⟨_, .satOOB hy (Eval.restrict he hav) hn, trivial⟩
+      rcases hda with ⟨x, u, hx, hs, _⟩ | ⟨k, bl, hk, hs, _⟩
+      · exact OwnedId.of_slot hx (hs.ids d (by simp))
+      · exact (hp.no_node hk hs (i := d) (by simp)).elim
+    exact ⟨_, .sat hn hy (Eval.restrict he hav hp) hl (minus_true hd (hav d ho)) hda, rfl, rfl, rfl⟩
+  | satOOB hy he hn => exact ⟨_, .satOOB hy (Eval.restrict he hav hp) hn, trivial⟩
   | pop hy hc hd =>
     exact ⟨_, .pop hy (minus_true hc (hav _ (OwnedId.of_slot hy (by simp))))
       (minus_true hd (hav _ (OwnedId.of_slot hy (by simp)))), rfl, rfl, rfl⟩
@@ -142,17 +144,17 @@ theorem EvalR.restrict {m : Mem} {r : Rhs} {res : RRes} (h : EvalR m r res) {a2 
   | arcGet hy hk => exact ⟨_, .arcGet hy hk, rfl, rfl, rfl⟩
 
 theorem EvalR.restrict_ok {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.ok v o m1))
-    {a2 : Nat → Bool} (hav : Avoids m a2) (hf : FreshFrom a2 m.nid) :
+    {a2 : Nat → Bool} (hav : Avoids m a2) (hp : PayFree m) (hf : FreshFrom a2 m.nid) :
     EvalR { m with alloc := minus m.alloc a2 } r (.ok v o { m1 with alloc := minus m1.alloc a2 }) := by
-  obtain ⟨res1, h1, hd⟩ := EvalR.restrict h hav hf
+  obtain ⟨res1, h1, hd⟩ := EvalR.restrict h hav hp hf
   cases res1 with
   | ok v1 o1 m2 => obtain ⟨rfl, rfl, rfl⟩ := hd; exact h1
   | panic => exact (hd : False).elim
 
 theorem EvalR.restrict_panic {m : Mem} {r : Rhs} (h : EvalR m r .panic) {a2 : Nat → Bool}
-    (hav : Avoids m a2) (hf : FreshFrom a2 m.nid) :
+    (hav : Avoids m a2) (hp : PayFree m) (hf : FreshFrom a2 m.nid) :
     EvalR { m with alloc := minus m.alloc a2 } r .panic := by
-  obtain ⟨res1, h1, hd⟩ := EvalR.restrict h hav hf
+  obtain ⟨res1, h1, hd⟩ := EvalR.restrict h hav hp hf
   cases res1 with
   | ok _ _ _ => exact (hd : False).elim
   | panic => exact h1
@@ -229,7 +231,7 @@ theorem ResDown.panic_inv {a2 : Nat → Bool} {m : Mem} {r1 : Res} (h : ResDown 
     the store's owned trees avoid and that holds no fresh address, and a
     step is still a step, to the same result without the part. -/
 theorem Step.restrict {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) {a2 : Nat → Bool}
-    (hav : Avoids m a2) (hb : BorFree m) (hf : FreshFrom a2 m.nid) :
+    (hav : Avoids m a2) (hb : BorFree m) (hp : PayFree m) (hf : FreshFrom a2 m.nid) :
     ∃ r1, Step P { m with alloc := minus m.alloc a2 } s r1 ∧ ResDown a2 r r1 := by
   induction h with
   | seqSkip => exact ⟨_, .seqSkip, rfl, .refl _⟩
@@ -241,8 +243,8 @@ theorem Step.restrict {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
     obtain ⟨r1, h1, hd⟩ := ih
     obtain rfl := ResDown.panic_inv hd
     exact ⟨_, .seqP h1, rfl⟩
-  | letv hx he => exact ⟨_, .letv hx (EvalR.restrict_ok he hav hf), rfl, .refl _⟩
-  | letvP he => exact ⟨_, .letvP (EvalR.restrict_panic he hav hf), rfl⟩
+  | letv hx he => exact ⟨_, .letv hx (EvalR.restrict_ok he hav hp hf), rfl, .refl _⟩
+  | letvP he => exact ⟨_, .letvP (EvalR.restrict_panic he hav hp hf), rfl⟩
   | letcall hP hx hbp => exact ⟨_, .letcall hP hx (BindParams.restrict hbp a2), rfl, .refl _⟩
   | scopeSkip hx hd => exact ⟨_, .scopeSkip hx (DropSlot.restrict hx hd hav), rfl, .refl _⟩
   | scopeIn _ ih =>
@@ -272,11 +274,11 @@ theorem Step.restrict {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
     obtain rfl := ResDown.panic_inv hd
     exact ⟨_, .frozenP h1, rfl⟩
   | assign hx he hx1 hd =>
-    exact ⟨_, .assign hx (EvalR.restrict_ok he hav hf) hx1
+    exact ⟨_, .assign hx (EvalR.restrict_ok he hav hp hf) hx1
       (DropSlot.restrict hx1 hd (EvalR.avoids he hb hav hf).1), rfl, .refl _⟩
-  | assignP he => exact ⟨_, .assignP (EvalR.restrict_panic he hav hf), rfl⟩
-  | iteT he hn => exact ⟨_, .iteT (Eval.restrict he hav) hn, rfl, .refl _⟩
-  | iteF he => exact ⟨_, .iteF (Eval.restrict he hav), rfl, .refl _⟩
+  | assignP he => exact ⟨_, .assignP (EvalR.restrict_panic he hav hp hf), rfl⟩
+  | iteT he hn => exact ⟨_, .iteT (Eval.restrict he hav hp) hn, rfl, .refl _⟩
+  | iteF he => exact ⟨_, .iteF (Eval.restrict he hav hp), rfl, .refl _⟩
   | «while» => exact ⟨_, .while, rfl, .refl _⟩
   | push ht hx hc hd =>
     have hav1 := (TakeVal.avoids ht hb hav).1
@@ -305,17 +307,17 @@ theorem Step.restrict {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
     rw [← minus_upd_false m1.alloc a2 d, ← minus_upd_true (hf m1.nid (TakeVal.grows ht).nid)] at h1
     exact ⟨_, h1, rfl, .refl _⟩
   | editTrunc he hn hfr hr =>
-    exact ⟨_, .editTrunc (Eval.restrict he hav) (NodeOf.restrict hn hav)
+    exact ⟨_, .editTrunc (Eval.restrict he hav hp) (NodeOf.restrict hn hav)
       (FreesL.restrict hfr fun i hi => hav i (OwnedId.of_slot hn.2.2.1 (hn.sub.ids i (ids_drop_sub hi))))
       hr, rfl, .refl _⟩
   | editSet hlt he ht hn hfr hr =>
     have hav1 := (TakeVal.avoids ht hb hav).1
-    exact ⟨_, .editSet hlt (Eval.restrict he hav) (TakeVal.restrict ht a2) (NodeOf.restrict hn hav1)
+    exact ⟨_, .editSet hlt (Eval.restrict he hav hp) (TakeVal.restrict ht a2) (NodeOf.restrict hn hav1)
       (Frees.restrict hfr fun i hi => hav1 i (OwnedId.of_slot hn.2.2.1 (hn.sub.ids i (ids_get_sub hlt hi))))
       hr, rfl, .refl _⟩
   | editSetOOB he ht hn hle hfr =>
     have hav' := TakeVal.avoids ht hb hav
-    exact ⟨_, .editSetOOB (Eval.restrict he hav) (TakeVal.restrict ht a2) (NodeOf.restrict hn hav'.1) hle
+    exact ⟨_, .editSetOOB (Eval.restrict he hav hp) (TakeVal.restrict ht a2) (NodeOf.restrict hn hav'.1) hle
       (Frees.restrict hfr hav'.2), rfl, .refl _⟩
   | panic => exact ⟨_, .panic, rfl⟩
   | letrec hP hps hx =>
@@ -333,8 +335,8 @@ theorem Step.restrict {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
     obtain ⟨r1, h1, hd⟩ := ih
     obtain rfl := ResDown.panic_inv hd
     exact ⟨_, .catchP h1 hx, rfl, .refl _⟩
-  | letd hx he => exact ⟨_, .letd hx (EvalR.restrict_ok he hav hf), rfl, .refl _⟩
-  | letdP he => exact ⟨_, .letdP (EvalR.restrict_panic he hav hf), rfl⟩
+  | letd hx he => exact ⟨_, .letd hx (EvalR.restrict_ok he hav hp hf), rfl, .refl _⟩
+  | letdP he => exact ⟨_, .letdP (EvalR.restrict_panic he hav hp hf), rfl⟩
   | scopeDIn _ ih =>
     obtain ⟨r1, h1, hd⟩ := ih
     obtain ⟨s1, rfl, hg⟩ := ResDown.ok_inv hd

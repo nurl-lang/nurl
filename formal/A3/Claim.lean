@@ -14,7 +14,7 @@ open A2
     every interleaving of its threads. -/
 theorem claim : Claim :=
   claim_from
-    (fun _ => fun h => fun hav hb hf => Step.restrict h hav hb hf)
+    (fun _ => fun h => fun hav hb hp hf => Step.restrict h hav hb hp hf)
     (fun _ => fun h => fun hd hf => Step.lift h hd hf)
     (fun _ _ hP hPc hS => fun hok => fun hR hsp hf hx hmv => spawner_ok hP hPc hS hok hR hsp hf hx hmv)
     (fun _ _ hP hS => fun hok => fun hR hsp hf hmv => spawn_args hP hS hok hR hsp hf hmv)

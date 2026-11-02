@@ -911,7 +911,7 @@ theorem MInv.unwind {m m1 : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt} 
     have hr : dep.root ∈ roots E.vdeps := List.mem_map_of_mem hd
     obtain ⟨Er, hEr, hro⟩ := hi.wf w E hw hl (Or.inl hty) dep.root hr
     have hrs : dep.root ∉ k.spine := fun h => hns ⟨dep.root, hr, h⟩
-    have hrk := rootKeep_frame_sp hi.toMInv hanch hpin hF hEr hrs hro (hout _ hrs)
+    have hrk := rootKeep_frame_sp hi.toMInv hanch hpin hF hEr hrs hro (hout _ hrs) (BlkLe.of_eq hblk)
     exact ⟨hrk.vkeep, hrk.hkeep⟩
   obtain ⟨sl0, hsl0, hok0, hslot0⟩ := hi.slot x Ex hx
   rw [← hout x hxk, hsl] at hsl0; cases hsl0
@@ -935,7 +935,7 @@ theorem MInv.unwind {m m1 : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt} 
     refine (revive_views hi.toMInv hx hos hdbv hslm).keep fun d hd => ?_
     have hdv : d ∈ (Ex.revive x).vdeps := by unfold Entry.vdeps; exact List.mem_append_right _ hd
     obtain ⟨_, hrs, Er, hEr, hro⟩ := hxd d hdv
-    exact (rootKeep_frame_sp hi.toMInv hanch hpin hF hEr hrs hro (hout _ hrs)).vkeep
+    exact (rootKeep_frame_sp hi.toMInv hanch hpin hF hEr hrs hro (hout _ hrs) (BlkLe.of_eq hblk)).vkeep
   have hroot1 : ∀ d ∈ (Ex.revive x).vdeps,
       ∃ Er, unwindCtx k.spine x Γ d.root = some Er ∧ Er.mode.isRoot = true := by
     intro d hd
@@ -1098,7 +1098,7 @@ theorem MInv.unwind {m m1 : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt} 
         have hrs := hi.dtorOut w E0 h0 hd hos (Or.inl hnint) (by simp [Stmt.spine, hwx, hwk]) dep hdv hnm
         simp only [Stmt.spine, List.mem_cons, not_or] at hrs
         obtain ⟨Er, hEr, hro⟩ := hi.wf.dtor w E0 h0 hd hos (Or.inl hnint) dep hdv hnm
-        exact (rootKeep_frame_sp hi.toMInv hanch hpin hF hEr hrs.2 hro (hout _ hrs.2)).vkeep
+        exact (rootKeep_frame_sp hi.toMInv hanch hpin hF hEr hrs.2 hro (hout _ hrs.2) (BlkLe.of_eq hblk)).vkeep
       rcases hc with ⟨_, rfl⟩ | ⟨_, rfl⟩
       · exact hE0.entry rfl rfl rfl (fun h => h) (fun d hd => (List.mem_filter.mp hd).1)
       · exact hE0

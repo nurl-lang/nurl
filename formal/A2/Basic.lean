@@ -252,16 +252,40 @@ theorem owned_unique {m : Mem} (hh : HeapOK m) {x y : Var} {t u n1 n2 : Val}
   subst htu
   exact ⟨rfl, sub_unique (hh.nodup x t hx) h1 h2 hi1 hi2⟩
 
+/-- A3.1: two parts of payloads sharing a head address are the same part
+    (a block owns its payload, `BlkOwn`). -/
+theorem pay_unique {m : Mem} (hh : HeapOK m) {k1 k2 : Nat} {b1 b2 : Blk} (hk1 : m.blk k1 = some b1)
+    (hk2 : m.blk k2 = some b2) {n1 n2 : Val} (h1 : Sub n1 b1.pay) (h2 : Sub n2 b2.pay) {i : Nat}
+    (hi1 : i ∈ n1.head) (hi2 : i ∈ n2.head) : n1 = n2 := by
+  have hk : k1 = k2 := by
+    refine Classical.byContradiction fun hne => ?_
+    exact ((hh.blk k1 b1 hk1).2.2 i (h1.ids i (Val.head_ids _ i hi1))).2.2.2 k2 b2 (Ne.symm hne) hk2
+      (h2.ids i (Val.head_ids _ i hi2))
+  subst hk; rw [hk1] at hk2; cases hk2
+  exact sub_unique (hh.blk k1 b1 hk1).2.1 h1 h2 hi1 hi2
+
+/-- A3.1: no owned tree and no payload share a head address. -/
+theorem owned_pay_head {m : Mem} (hh : HeapOK m) {x : Var} {t : Val} (hx : OwnedAt m x t) {k : Nat}
+    {bl : Blk} (hk : m.blk k = some bl) {n1 n2 : Val} (h1 : Sub n1 t) (h2 : Sub n2 bl.pay) {i : Nat}
+    (hi1 : i ∈ n1.head) (hi2 : i ∈ n2.head) : False :=
+  ((hh.blk k bl hk).2.2 i (h2.ids i (Val.head_ids _ i hi2))).2.2.1 x t hx (h1.ids i (Val.head_ids _ i hi1))
+
 theorem nodeAt_unique {m : Mem} (hh : HeapOK m) {c : Nat} {n1 n2 : Val}
     (h1 : NodeAt m c n1) (h2 : NodeAt m c n2) : n1 = n2 := by
-  obtain ⟨x, t, hx, hs1, ty1, d1, es1, rfl⟩ := h1
-  obtain ⟨y, u, hy, hs2, ty2, d2, es2, rfl⟩ := h2
-  exact (owned_unique hh hx hy hs1 hs2 (i := c) (by simp [Val.head]) (by simp [Val.head])).2
+  rcases h1 with ⟨x, t, hx, hs1, ty1, d1, es1, rfl⟩ | ⟨k1, b1, hk1, hs1, ty1, d1, es1, rfl⟩ <;>
+    rcases h2 with ⟨y, u, hy, hs2, ty2, d2, es2, rfl⟩ | ⟨k2, b2, hk2, hs2, ty2, d2, es2, rfl⟩
+  · exact (owned_unique hh hx hy hs1 hs2 (i := c) (by simp [Val.head]) (by simp [Val.head])).2
+  · exact (owned_pay_head hh hx hk2 hs1 hs2 (i := c) (by simp [Val.head]) (by simp [Val.head])).elim
+  · exact (owned_pay_head hh hy hk1 hs2 hs1 (i := c) (by simp [Val.head]) (by simp [Val.head])).elim
+  · exact pay_unique hh hk1 hk2 hs1 hs2 (i := c) (by simp [Val.head]) (by simp [Val.head])
 
 theorem dataAt_unique {m : Mem} (hh : HeapOK m) {d : Nat} {n1 n2 : Val}
     (h1 : DataAt m d n1) (h2 : DataAt m d n2) : n1 = n2 := by
-  obtain ⟨x, t, hx, hs1, ty1, c1, es1, rfl⟩ := h1
-  obtain ⟨y, u, hy, hs2, ty2, c2, es2, rfl⟩ := h2
-  exact (owned_unique hh hx hy hs1 hs2 (i := d) (by simp [Val.head]) (by simp [Val.head])).2
+  rcases h1 with ⟨x, t, hx, hs1, ty1, c1, es1, rfl⟩ | ⟨k1, b1, hk1, hs1, ty1, c1, es1, rfl⟩ <;>
+    rcases h2 with ⟨y, u, hy, hs2, ty2, c2, es2, rfl⟩ | ⟨k2, b2, hk2, hs2, ty2, c2, es2, rfl⟩
+  · exact (owned_unique hh hx hy hs1 hs2 (i := d) (by simp [Val.head]) (by simp [Val.head])).2
+  · exact (owned_pay_head hh hx hk2 hs1 hs2 (i := d) (by simp [Val.head]) (by simp [Val.head])).elim
+  · exact (owned_pay_head hh hy hk1 hs2 hs1 (i := d) (by simp [Val.head]) (by simp [Val.head])).elim
+  · exact pay_unique hh hk1 hk2 hs1 hs2 (i := d) (by simp [Val.head]) (by simp [Val.head])
 
 end A2

@@ -107,11 +107,69 @@ theorem no_views {t : Ty} (ht : t.holdsView = false) (m : Mem) (T : Val) (H : Li
 
 theorem nodeAt_of_owned {m : Mem} {o : Var} {T n : Val} (ho : OwnedAt m o T) (hs : Sub n T)
     {t : Ty} {c d : Nat} {es : List Val} (hn : n = .node t c d es) : NodeAt m c n :=
-  ⟨o, T, ho, hs, t, d, es, hn⟩
+  Or.inl ⟨o, T, ho, hs, t, d, es, hn⟩
 
 theorem dataAt_of_owned {m : Mem} {o : Var} {T n : Val} (ho : OwnedAt m o T) (hs : Sub n T)
     {t : Ty} {c d : Nat} {es : List Val} (hn : n = .node t c d es) : DataAt m d n :=
-  ⟨o, T, ho, hs, t, c, es, hn⟩
+  Or.inl ⟨o, T, ho, hs, t, c, es, hn⟩
+
+/-- A3.1: a value lying in an owned tree, or in a live block's payload. -/
+def InMem (m : Mem) (n : Val) : Prop :=
+  (∃ o T, OwnedAt m o T ∧ Sub n T) ∨ ∃ k bl, m.blk k = some bl ∧ Sub n bl.pay
+
+theorem InMem.sub {m : Mem} {n n' : Val} (h : InMem m n) (hs : Sub n' n) : InMem m n' := by
+  rcases h with ⟨o, T, hT, h⟩ | ⟨k, bl, hk, h⟩
+  · exact Or.inl ⟨o, T, hT, hs.trans h⟩
+  · exact Or.inr ⟨k, bl, hk, hs.trans h⟩
+
+theorem InMem.nodeAt {m : Mem} {n : Val} (h : InMem m n) {t : Ty} {c d : Nat} {es : List Val}
+    (hn : n = .node t c d es) : NodeAt m c n := by
+  rcases h with ⟨o, T, hT, h⟩ | ⟨k, bl, hk, h⟩
+  · exact Or.inl ⟨o, T, hT, h, t, d, es, hn⟩
+  · exact Or.inr ⟨k, bl, hk, h, t, d, es, hn⟩
+
+theorem InMem.dataAt {m : Mem} {n : Val} (h : InMem m n) {t : Ty} {c d : Nat} {es : List Val}
+    (hn : n = .node t c d es) : DataAt m d n := by
+  rcases h with ⟨o, T, hT, h⟩ | ⟨k, bl, hk, h⟩
+  · exact Or.inl ⟨o, T, hT, h, t, c, es, hn⟩
+  · exact Or.inr ⟨k, bl, hk, h, t, c, es, hn⟩
+
+theorem NodeAt.inMem {m : Mem} {c : Nat} {n : Val} (h : NodeAt m c n) : InMem m n := by
+  rcases h with ⟨o, T, hT, h, _⟩ | ⟨k, bl, hk, h, _⟩
+  · exact Or.inl ⟨o, T, hT, h⟩
+  · exact Or.inr ⟨k, bl, hk, h⟩
+
+theorem DataAt.inMem {m : Mem} {d : Nat} {n : Val} (h : DataAt m d n) : InMem m n := by
+  rcases h with ⟨o, T, hT, h, _⟩ | ⟨k, bl, hk, h, _⟩
+  · exact Or.inl ⟨o, T, hT, h⟩
+  · exact Or.inr ⟨k, bl, hk, h⟩
+
+theorem NodeAt.eq {m : Mem} {c : Nat} {n : Val} (h : NodeAt m c n) : ∃ ty d es, n = .node ty c d es := by
+  rcases h with ⟨_, _, _, _, h⟩ | ⟨_, _, _, _, h⟩ <;> exact h
+
+theorem DataAt.eq {m : Mem} {d : Nat} {n : Val} (h : DataAt m d n) : ∃ ty c es, n = .node ty c d es := by
+  rcases h with ⟨_, _, _, _, h⟩ | ⟨_, _, _, _, h⟩ <;> exact h
+
+/-- What lies in a live block's payload stays there while the block lives. -/
+theorem InMem.grow_pay {m m' : Mem} (hb : BlkLe m.blk m'.blk) {n : Val} {k : Nat} {bl : Blk}
+    (hk : m.blk k = some bl) (hs : Sub n bl.pay) : InMem m' n :=
+  Or.inr ⟨k, bl, hb k bl hk, hs⟩
+
+theorem InMem.mono {m m' : Mem} (hown : ∀ o T, OwnedAt m o T → OwnedAt m' o T)
+    (hb : BlkLe m.blk m'.blk) {n : Val} (h : InMem m n) : InMem m' n := by
+  rcases h with ⟨o, T, hT, h⟩ | ⟨k, bl, hk, h⟩
+  · exact Or.inl ⟨o, T, hown o T hT, h⟩
+  · exact Or.inr ⟨k, bl, hb k bl hk, h⟩
+
+theorem NodeAt.mono {m m' : Mem} (hown : ∀ o T, OwnedAt m o T → OwnedAt m' o T)
+    (hb : BlkLe m.blk m'.blk) {c : Nat} {n : Val} (h : NodeAt m c n) : NodeAt m' c n := by
+  obtain ⟨t, d, es, rfl⟩ := h.eq
+  exact (h.inMem.mono hown hb).nodeAt rfl
+
+theorem DataAt.mono {m m' : Mem} (hown : ∀ o T, OwnedAt m o T → OwnedAt m' o T)
+    (hb : BlkLe m.blk m'.blk) {d : Nat} {n : Val} (h : DataAt m d n) : DataAt m' d n := by
+  obtain ⟨t, c, es, rfl⟩ := h.eq
+  exact (h.inMem.mono hown hb).dataAt rfl
 
 theorem Lands.sub {k : Kind} {n n0 : Val} (h : Lands k n n0) : Sub n n0 := by
   rcases h with ⟨_, rfl⟩ | ⟨_, rfl⟩ | ⟨_, hb⟩
@@ -141,13 +199,13 @@ theorem Top.node {n : Val} {t : Ty} {c d : Nat} {es : List Val} (h : Top n (.nod
     n = .node t c d es := by
   cases h; rfl
 
-/-- Every node a root reaches is inside some owned tree. -/
-theorem RootNode.owned {m : Mem} {r : Var} {n : Val} (h : RootNode m r n) :
-    ∃ o T, OwnedAt m o T ∧ Sub n T := by
-  rcases h with ⟨T, h, ht⟩ | ⟨_, c, _, _, o, T, hT, hs, _⟩ | ⟨_, d, _, _, _, _, o, T, hT, hs, _⟩
-  · exact ⟨r, T, h, ht.sub⟩
-  · exact ⟨o, T, hT, hs⟩
-  · exact ⟨o, T, hT, hs⟩
+/-- Every node a root reaches is inside some owned tree, or (A3.1) in a live
+    block's payload. -/
+theorem RootNode.owned {m : Mem} {r : Var} {n : Val} (h : RootNode m r n) : InMem m n := by
+  rcases h with ⟨T, h, ht⟩ | ⟨_, c, _, _, hn⟩ | ⟨_, d, _, _, _, _, hn⟩
+  · exact Or.inl ⟨r, T, h, ht.sub⟩
+  · exact hn.inMem
+  · exact hn.inMem
 
 theorem append_assoc_sub {P H : List Dep} : (P ++ H) ++ H ⊆ P ++ H := by
   intro d hd
@@ -184,8 +242,7 @@ theorem valOK_href {m : Mem} (hh : HeapOK m) {c : Nat} {n : Val} (hn : NodeAt m 
   | @href t c' P H h =>
     obtain ⟨dep, hd, n1, d, es, hr1, hl, _, _⟩ := h
     cases ht
-    obtain ⟨o, T, hoT, hsT⟩ := hr1.owned
-    have := nodeAt_unique hh hn ⟨o, T, hoT, hl.sub.trans hsT, t, d, es, rfl⟩
+    have := nodeAt_unique hh hn ((hr1.owned.sub hl.sub).nodeAt rfl)
     subst this
     exact ⟨dep, List.mem_append_left _ hd, n1, hr1, hl⟩
   | pair _ _ ihx ihy =>
@@ -219,8 +276,7 @@ theorem valOK_view {m : Mem} (hh : HeapOK m) {d o l : Nat} {n : Val} (hn : DataA
       · exact Or.inr (Or.inl ⟨h1, h2⟩)
       · exact Or.inr (Or.inr ⟨h1, h2⟩)
     have hks : dep.kind ≠ .self := by rcases hk with ⟨h1, _⟩ | ⟨h1, _⟩ <;> rw [h1] <;> decide
-    obtain ⟨o2, T, hoT, hsT⟩ := hr1.owned
-    have := dataAt_unique hh hn ⟨o2, T, hoT, hl'.sub.trans hsT, t, c, es, rfl⟩
+    have := dataAt_unique hh hn ((hr1.owned.sub hl'.sub).dataAt rfl)
     subst this
     exact ⟨dep, List.mem_append_left _ hd, n1, hr1, hks, hl'⟩
   | pair _ _ ihx ihy =>
@@ -248,9 +304,8 @@ theorem valOK_via {m : Mem} {y : Var} {T : Val} (hy : m.st y = some ⟨false, so
   | @href t c P H h =>
     intro Q ht hq
     obtain ⟨dep, hd, n1, d, es, hr1, hl, hw, hv⟩ := h
-    obtain ⟨o, T', hoT, hsT⟩ := hr1.owned
     exact .href ⟨_, hq, _, d, es,
-      Or.inr (Or.inl ⟨T, c, hy, ht, o, T', hoT, hl.sub.trans hsT, t, d, es, rfl⟩),
+      Or.inr (Or.inl ⟨T, c, hy, ht, (hr1.owned.sub hl.sub).nodeAt rfl⟩),
       Or.inr (Or.inl ⟨rfl, rfl⟩), hw, hv⟩
   | @view t d o l P H h =>
     intro Q ht hq
@@ -259,9 +314,8 @@ theorem valOK_via {m : Mem} {y : Var} {T : Val} (hy : m.st y = some ⟨false, so
       rcases hk with ⟨_, h⟩ | ⟨_, h⟩
       · rw [h]; exact Sub.refl _
       · exact h.sub
-    obtain ⟨o2, T', hoT, hsT⟩ := hr1.owned
     exact .view ⟨_, hq, _, c, es,
-      Or.inr (Or.inr ⟨T, d, o, l, hy, ht, o2, T', hoT, hsub.trans hsT, t, c, es, rfl⟩),
+      Or.inr (Or.inr ⟨T, d, o, l, hy, ht, (hr1.owned.sub hsub).dataAt rfl⟩),
       Or.inl ⟨rfl, rfl⟩, hlen, hw⟩
   | pair _ _ ihx ihy =>
     intro Q ht hq
@@ -300,7 +354,7 @@ theorem lands_bound {k : Kind} {n n0 : Val} (h : Lands k n n0) : k.bound = .none
 theorem rootb_anchor {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     (hanch : RootbAnch Γ F) :
     ∀ p E n, Γ p = some E → E.mode = .rootb → RootNode m p n →
-      ∃ o T, o ∈ F ∧ OwnedAt m o T ∧ Sub n T := by
+      (∃ o T, o ∈ F ∧ OwnedAt m o T ∧ Sub n T) ∨ ∃ k bl, m.blk k = some bl ∧ Sub n bl.pay := by
   intro p
   induction p using Nat.strongRecOn with
   | _ p ih =>
@@ -327,7 +381,7 @@ theorem rootb_anchor {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       cases h1 <;> cases ht
   obtain ⟨Er, hEr, hroot⟩ := hi.wf p E hp hlive (Or.inl hnint) dep.root hdv
   rcases hr with ⟨T, hown, ht⟩ | ⟨w, c, hc, ht, hn⟩ | ⟨w, d, o, l, hc, ht, hn⟩
-  · exact ⟨dep.root, T, hF, hown, hl.sub.trans ht.sub⟩
+  · exact Or.inl ⟨dep.root, T, hF, hown, hl.sub.trans ht.sub⟩
   all_goals
     have hlt := hi.rootbLt p E hp hm dep.root hdv
     obtain ⟨slr, hslr, _, hsor, _, _⟩ := hi.slot dep.root Er hEr
@@ -338,17 +392,22 @@ theorem rootb_anchor {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       | inout b => exact absurd hme (hi.noInout _ Er b hEr)
       | rootb => rfl
       | bor => rw [hme] at hroot; simp [Mode.isRoot] at hroot
-  · obtain ⟨o', T', hF', ho', hs'⟩ := ih dep.root hlt Er n0 hEr hrb (Or.inr (Or.inl ⟨w, c, hc, ht, hn⟩))
-    exact ⟨o', T', hF', ho', hl.sub.trans hs'⟩
-  · obtain ⟨o', T', hF', ho', hs'⟩ := ih dep.root hlt Er n0 hEr hrb (Or.inr (Or.inr ⟨w, d, o, l, hc, ht, hn⟩))
-    exact ⟨o', T', hF', ho', hl.sub.trans hs'⟩
+  · rcases ih dep.root hlt Er n0 hEr hrb (Or.inr (Or.inl ⟨w, c, hc, ht, hn⟩)) with
+      ⟨o', T', hF', ho', hs'⟩ | ⟨k, bl, hk, hs'⟩
+    · exact Or.inl ⟨o', T', hF', ho', hl.sub.trans hs'⟩
+    · exact Or.inr ⟨k, bl, hk, hl.sub.trans hs'⟩
+  · rcases ih dep.root hlt Er n0 hEr hrb (Or.inr (Or.inr ⟨w, d, o, l, hc, ht, hn⟩)) with
+      ⟨o', T', hF', ho', hs'⟩ | ⟨k, bl, hk, hs'⟩
+    · exact Or.inl ⟨o', T', hF', ho', hl.sub.trans hs'⟩
+    · exact Or.inr ⟨k, bl, hk, hl.sub.trans hs'⟩
 
 /-- A root whose slot is unchanged, at a point where every slot that changes
     is outside the frozen owners, reaches the same memory. -/
 theorem rootKeep_frame {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     (hanch : RootbAnch Γ F)
     (hF : ∀ o ∈ F, m'.st o = m.st o) {r : Var} {Er : Entry} (hr : Γ r = some Er)
-    (hroot : Er.mode.isRoot = true) (hsame : m'.st r = m.st r) : RootKeep m m' r := by
+    (hroot : Er.mode.isRoot = true) (hsame : m'.st r = m.st r)
+    (hb : BlkLe m.blk m'.blk := by exact fun _ _ h => h) : RootKeep m m' r := by
   intro n hn
   rcases hn with ⟨T, hown, ht⟩ | ⟨w, c, hc, ht, hnode⟩ | ⟨w, d, o, l, hc, ht, hdata⟩
   · exact Or.inl ⟨T, by rw [hsame]; exact hown, ht⟩
@@ -361,23 +420,25 @@ theorem rootKeep_frame {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       | inout b => exact absurd hme (hi.noInout _ Er b hr)
       | rootb => rfl
       | bor => rw [hme] at hroot; simp [Mode.isRoot] at hroot
-  · obtain ⟨o', T, hoF, hoT, hsT⟩ :=
-      rootb_anchor hi hanch r Er n hr hrb (Or.inr (Or.inl ⟨w, c, hc, ht, hnode⟩))
-    obtain ⟨_, _, _, _, ty, d, es, hneq⟩ := hnode
+  · obtain ⟨ty, d, es, hneq⟩ := hnode.eq
     refine Or.inr (Or.inl ⟨w, c, by rw [hsame]; exact hc, ht, ?_⟩)
-    exact nodeAt_of_owned (by unfold OwnedAt; rw [hF o' hoF]; exact hoT) hsT hneq
-  · obtain ⟨o', T, hoF, hoT, hsT⟩ :=
-      rootb_anchor hi hanch r Er n hr hrb (Or.inr (Or.inr ⟨w, d, o, l, hc, ht, hdata⟩))
-    obtain ⟨_, _, _, _, ty, c, es, hneq⟩ := hdata
+    rcases rootb_anchor hi hanch r Er n hr hrb (Or.inr (Or.inl ⟨w, c, hc, ht, hnode⟩)) with
+      ⟨o', T, hoF, hoT, hsT⟩ | ⟨k, bl, hk, hs⟩
+    · exact nodeAt_of_owned (by unfold OwnedAt; rw [hF o' hoF]; exact hoT) hsT hneq
+    · exact (InMem.grow_pay hb hk hs).nodeAt hneq
+  · obtain ⟨ty, c, es, hneq⟩ := hdata.eq
     refine Or.inr (Or.inr ⟨w, d, o, l, by rw [hsame]; exact hc, ht, ?_⟩)
-    exact dataAt_of_owned (by unfold OwnedAt; rw [hF o' hoF]; exact hoT) hsT hneq
+    rcases rootb_anchor hi hanch r Er n hr hrb (Or.inr (Or.inr ⟨w, d, o, l, hc, ht, hdata⟩)) with
+      ⟨o', T, hoF, hoT, hsT⟩ | ⟨k, bl, hk, hs⟩
+    · exact dataAt_of_owned (by unfold OwnedAt; rw [hF o' hoF]; exact hoT) hsT hneq
+    · exact (InMem.grow_pay hb hk hs).dataAt hneq
 
 /-- `rootb_anchor` for the borrowed parameters outside the bindings `sp`. -/
 theorem rootb_anchor_sp {m : Mem} {Γ : Ctx} {F sp : List Var} (hi : MInv m Γ)
     (hanch : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ sp → Anchored E F)
     (hpin : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ sp → ∀ r ∈ roots E.vdeps, r ∉ sp) :
     ∀ p E n, Γ p = some E → E.mode = .rootb → p ∉ sp → RootNode m p n →
-      ∃ o T, o ∈ F ∧ OwnedAt m o T ∧ Sub n T := by
+      (∃ o T, o ∈ F ∧ OwnedAt m o T ∧ Sub n T) ∨ ∃ k bl, m.blk k = some bl ∧ Sub n bl.pay := by
   intro p
   induction p using Nat.strongRecOn with
   | _ p ih =>
@@ -404,7 +465,7 @@ theorem rootb_anchor_sp {m : Mem} {Γ : Ctx} {F sp : List Var} (hi : MInv m Γ)
       cases h1 <;> cases ht
   obtain ⟨Er, hEr, hroot⟩ := hi.wf p E hp hlive (Or.inl hnint) dep.root hdv
   rcases hr with ⟨T, hown, ht⟩ | ⟨w, c, hc, ht, hn⟩ | ⟨w, d, o, l, hc, ht, hn⟩
-  · exact ⟨dep.root, T, hF, hown, hl.sub.trans ht.sub⟩
+  · exact Or.inl ⟨dep.root, T, hF, hown, hl.sub.trans ht.sub⟩
   all_goals
     have hlt := hi.rootbLt p E hp hm dep.root hdv
     obtain ⟨slr, hslr, _, hsor, _, _⟩ := hi.slot dep.root Er hEr
@@ -415,10 +476,14 @@ theorem rootb_anchor_sp {m : Mem} {Γ : Ctx} {F sp : List Var} (hi : MInv m Γ)
       | inout b => exact absurd hme (hi.noInout _ Er b hEr)
       | rootb => rfl
       | bor => rw [hme] at hroot; simp [Mode.isRoot] at hroot
-  · obtain ⟨o', T', hF', ho', hs'⟩ := ih dep.root hlt Er n0 hEr hrb (hpin p E hp hm hps dep.root hdv) (Or.inr (Or.inl ⟨w, c, hc, ht, hn⟩))
-    exact ⟨o', T', hF', ho', hl.sub.trans hs'⟩
-  · obtain ⟨o', T', hF', ho', hs'⟩ := ih dep.root hlt Er n0 hEr hrb (hpin p E hp hm hps dep.root hdv) (Or.inr (Or.inr ⟨w, d, o, l, hc, ht, hn⟩))
-    exact ⟨o', T', hF', ho', hl.sub.trans hs'⟩
+  · rcases ih dep.root hlt Er n0 hEr hrb (hpin p E hp hm hps dep.root hdv) (Or.inr (Or.inl ⟨w, c, hc, ht, hn⟩)) with
+      ⟨o', T', hF', ho', hs'⟩ | ⟨k, bl, hk, hs'⟩
+    · exact Or.inl ⟨o', T', hF', ho', hl.sub.trans hs'⟩
+    · exact Or.inr ⟨k, bl, hk, hl.sub.trans hs'⟩
+  · rcases ih dep.root hlt Er n0 hEr hrb (hpin p E hp hm hps dep.root hdv) (Or.inr (Or.inr ⟨w, d, o, l, hc, ht, hn⟩)) with
+      ⟨o', T', hF', ho', hs'⟩ | ⟨k, bl, hk, hs'⟩
+    · exact Or.inl ⟨o', T', hF', ho', hl.sub.trans hs'⟩
+    · exact Or.inr ⟨k, bl, hk, hl.sub.trans hs'⟩
 
 /-- `rootKeep_frame` where only the borrowed parameters outside the bindings
     `sp` are anchored in `F`, and none of them depends on those bindings: what
@@ -427,7 +492,8 @@ theorem rootKeep_frame_sp {m m' : Mem} {Γ : Ctx} {F sp : List Var} (hi : MInv m
     (hanch : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ sp → Anchored E F)
     (hpin : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ sp → ∀ r ∈ roots E.vdeps, r ∉ sp)
     (hF : ∀ o ∈ F, m'.st o = m.st o) {r : Var} {Er : Entry} (hr : Γ r = some Er) (hrs : r ∉ sp)
-    (hroot : Er.mode.isRoot = true) (hsame : m'.st r = m.st r) : RootKeep m m' r := by
+    (hroot : Er.mode.isRoot = true) (hsame : m'.st r = m.st r)
+    (hb : BlkLe m.blk m'.blk := by exact fun _ _ h => h) : RootKeep m m' r := by
   intro n hn
   rcases hn with ⟨T, hown, ht⟩ | ⟨w, c, hc, ht, hnode⟩ | ⟨w, d, o, l, hc, ht, hdata⟩
   · exact Or.inl ⟨T, by rw [hsame]; exact hown, ht⟩
@@ -440,16 +506,18 @@ theorem rootKeep_frame_sp {m m' : Mem} {Γ : Ctx} {F sp : List Var} (hi : MInv m
       | inout b => exact absurd hme (hi.noInout _ Er b hr)
       | rootb => rfl
       | bor => rw [hme] at hroot; simp [Mode.isRoot] at hroot
-  · obtain ⟨o', T, hoF, hoT, hsT⟩ :=
-      rootb_anchor_sp hi hanch hpin r Er n hr hrb hrs (Or.inr (Or.inl ⟨w, c, hc, ht, hnode⟩))
-    obtain ⟨_, _, _, _, ty, d, es, hneq⟩ := hnode
+  · obtain ⟨ty, d, es, hneq⟩ := hnode.eq
     refine Or.inr (Or.inl ⟨w, c, by rw [hsame]; exact hc, ht, ?_⟩)
-    exact nodeAt_of_owned (by unfold OwnedAt; rw [hF o' hoF]; exact hoT) hsT hneq
-  · obtain ⟨o', T, hoF, hoT, hsT⟩ :=
-      rootb_anchor_sp hi hanch hpin r Er n hr hrb hrs (Or.inr (Or.inr ⟨w, d, o, l, hc, ht, hdata⟩))
-    obtain ⟨_, _, _, _, ty, c, es, hneq⟩ := hdata
+    rcases rootb_anchor_sp hi hanch hpin r Er n hr hrb hrs (Or.inr (Or.inl ⟨w, c, hc, ht, hnode⟩)) with
+      ⟨o', T, hoF, hoT, hsT⟩ | ⟨k, bl, hk, hs⟩
+    · exact nodeAt_of_owned (by unfold OwnedAt; rw [hF o' hoF]; exact hoT) hsT hneq
+    · exact (InMem.grow_pay hb hk hs).nodeAt hneq
+  · obtain ⟨ty, c, es, hneq⟩ := hdata.eq
     refine Or.inr (Or.inr ⟨w, d, o, l, by rw [hsame]; exact hc, ht, ?_⟩)
-    exact dataAt_of_owned (by unfold OwnedAt; rw [hF o' hoF]; exact hoT) hsT hneq
+    rcases rootb_anchor_sp hi hanch hpin r Er n hr hrb hrs (Or.inr (Or.inr ⟨w, d, o, l, hc, ht, hdata⟩)) with
+      ⟨o', T, hoF, hoT, hsT⟩ | ⟨k, bl, hk, hs⟩
+    · exact dataAt_of_owned (by unfold OwnedAt; rw [hF o' hoF]; exact hoT) hsT hneq
+    · exact (InMem.grow_pay hb hk hs).dataAt hneq
 
 /-! ### A root that grows or shrinks in place -/
 

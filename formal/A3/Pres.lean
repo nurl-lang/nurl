@@ -16,7 +16,7 @@ open A2
 /-- The downward frame lemma's statement (proved in `A3.Restrict`). -/
 def RestrictLemma (P : Prog) : Prop :=
   ∀ {m : Mem} {s : Stmt} {r : Res}, Step P m s r → ∀ {a2 : Nat → Bool}, Avoids m a2 → BorFree m →
-    FreshFrom a2 m.nid → ∃ r1, Step P { m with alloc := minus m.alloc a2 } s r1 ∧ ResDown a2 r r1
+    PayFree m → FreshFrom a2 m.nid → ∃ r1, Step P { m with alloc := minus m.alloc a2 } s r1 ∧ ResDown a2 r r1
 
 theorem list_set_get {α : Type} {l : List α} {i j : Nat} {x : α} (hi : i < l.length) :
     (l.set i x)[j]? = if i = j then some x else l[j]? := by
@@ -61,7 +61,7 @@ theorem CInv.thread_of {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) (hR : Rest
     cases hk' : minus C.alloc a k with
     | false => rfl
     | true => exact absurd (hlt k (minus_le k hk')) (Nat.not_lt.mpr hk)
-  obtain ⟨r1, hst1, hrd⟩ := hR hst hav hbf hfr
+  obtain ⟨r1, hst1, hrd⟩ := hR hst hav hbf (fun k bl hk => (hto.blocksAt k bl hk).2.1) hfr
   cases r1 with
   | panic _ => exact absurd hrd (by simp [ResDown])
   | ok m1 s1 =>

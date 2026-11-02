@@ -94,21 +94,26 @@ theorem MemCodes.of_st {P : Prog} {m m' : Mem} (h : MemCodes P m) (hst : m'.st =
   memCodes_iff.mpr fun y o V hy => h.slot (by rw [← hst]; exact hy)
 
 /-- A node found in memory: its packages name code of their signature. -/
-theorem MemCodes.nodeAt {P : Prog} {m : Mem} (h : MemCodes P m) {c : Nat} {n : Val} (hn : NodeAt m c n) :
+theorem MemCodes.nodeAt {P : Prog} {m : Mem} (h : MemCodes P m)
+    (hB : ∀ k bl, m.blk k = some bl → PkgOK P bl.pay) {c : Nat} {n : Val} (hn : NodeAt m c n) :
     PkgOK P n := by
-  obtain ⟨x, t, hx, hs, _⟩ := hn
-  exact (h.slot hx).sub hs
+  rcases hn with ⟨x, t, hx, hs, _⟩ | ⟨k, bl, hk, hs, _⟩
+  · exact (h.slot hx).sub hs
+  · exact (hB k bl hk).sub hs
 
-theorem MemCodes.dataAt {P : Prog} {m : Mem} (h : MemCodes P m) {d : Nat} {n : Val} (hn : DataAt m d n) :
+theorem MemCodes.dataAt {P : Prog} {m : Mem} (h : MemCodes P m)
+    (hB : ∀ k bl, m.blk k = some bl → PkgOK P bl.pay) {d : Nat} {n : Val} (hn : DataAt m d n) :
     PkgOK P n := by
-  obtain ⟨x, t, hx, hs, _⟩ := hn
-  exact (h.slot hx).sub hs
+  rcases hn with ⟨x, t, hx, hs, _⟩ | ⟨k, bl, hk, hs, _⟩
+  · exact (h.slot hx).sub hs
+  · exact (hB k bl hk).sub hs
 
-theorem MemCodes.vecOf {P : Prog} {m : Mem} (h : MemCodes P m) {y : Var} {t : Ty} {c d : Nat}
+theorem MemCodes.vecOf {P : Prog} {m : Mem} (h : MemCodes P m)
+    (hB : ∀ k bl, m.blk k = some bl → PkgOK P bl.pay) {y : Var} {t : Ty} {c d : Nat}
     {es : List Val} (hv : VecOf m y t c d es) : PkgOK P (.node t c d es) := by
   obtain ⟨_, _, hv | ⟨_, hn⟩⟩ := hv
   · exact h.slot hv
-  · exact h.nodeAt hn
+  · exact h.nodeAt hB hn
 
 theorem pkgOK_elem {P : Prog} {t : Ty} {c d : Nat} {es : List Val} (h : PkgOK P (.node t c d es))
     {e : Val} (he : e ∈ es) : PkgOK P e := h.child (Child.elem he)
@@ -207,9 +212,9 @@ theorem EvalR.codes {P : Prog} {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (he :
   | copy hv => exact ⟨h.slot hv, h⟩
   | borrowOwn _ => exact ⟨pkgOK_href P _, h⟩
   | borrowBor hv => exact ⟨h.slot hv, h⟩
-  | «at» hn hv _ => exact ⟨pkgOK_lend (pkgOK_elem (h.vecOf hv) (List.getElem_mem hn)), h⟩
+  | «at» hn hv _ => exact ⟨pkgOK_lend (pkgOK_elem (h.vecOf hB hv) (List.getElem_mem hn)), h⟩
   | view _ => exact ⟨pkgOK_view P _ _ _, h⟩
-  | sat hn _ _ _ _ hda => exact ⟨pkgOK_lend (pkgOK_elem (h.dataAt hda) (List.getElem_mem hn)), h⟩
+  | sat hn _ _ _ _ hda => exact ⟨pkgOK_lend (pkgOK_elem (h.dataAt hB hda) (List.getElem_mem hn)), h⟩
   | pop hv _ _ =>
     have hT := h.slot hv
     refine ⟨pkgOK_elem hT (by simp), h.set (fun V e => ?_)⟩

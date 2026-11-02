@@ -474,7 +474,7 @@ theorem HeapOK.editPush {m : Mem} (hh : HeapOK m) {o : Var} {T T' : Val} {t : Ty
     (hal : ∀ i ∈ v.ids, m.alloc i = true ∧ i < m.nid)
     (hdis : ∀ o' U, OwnedAt m o' U → ∀ i ∈ v.ids, i ∉ U.ids) (hnp : ∀ i ∈ v.ids, ¬ PayAddr m i)
     (hvv : ∀ d0 o0 l0, ¬ Sub (.view d0 o0 l0) v)
-    (hvT : ∀ d0 o0 l0, Sub (.view d0 o0 l0) T → ∃ o' U, OwnedAt m o' U ∧ d0 ∈ U.ids)
+    (hvT : ∀ d0 o0 l0, Sub (.view d0 o0 l0) T → (∃ o' U, OwnedAt m o' U ∧ d0 ∈ U.ids) ∨ PayAddr m d0)
     {d' : Nat} {A' : Nat → Bool} {N' : Nat}
     (hre : (d' = d ∧ A' = m.alloc ∧ N' = m.nid) ∨
       (d' = m.nid ∧ A' = upd (upd m.alloc d false) m.nid true ∧ N' = m.nid + 1))
@@ -616,7 +616,6 @@ theorem HeapOK.editPush {m : Mem} (hh : HeapOK m) {o : Var} {T T' : Val} {t : Ty
           · exact h.trans hsT
           · exact absurd h (hvv _ _ _)
         · exact h
-      obtain ⟨o', U', hU', hdU⟩ := hvT d0 o0 l0 hvT0
       have hsf := hh.self o T hT d0 o0 l0 hvT0
       -- so its buffer is no node's of `T`, not a fresh one and none of `v`'s
       rcases HP_node_repl hr hn with h | ⟨es1, h⟩
@@ -624,9 +623,13 @@ theorem HeapOK.editPush {m : Mem} (hh : HeapOK m) {o : Var} {T T' : Val} {t : Ty
         · injection h with _ _ hd0
           rcases hd'c with h' | h'
           · exact hsf t c es (by rw [hd0, h']; exact hsT)
-          · exact hfresh o' U' hU' (by rw [← h', ← hd0]; exact hdU)
+          · rcases hvT d0 o0 l0 hvT0 with ⟨o', U', hU', hdU⟩ | hpa
+            · exact hfresh o' U' hU' (by rw [← h', ← hd0]; exact hdU)
+            · have := (hh.payAlloc hpa).2; omega
         · exact hsf u c0 es0 (h.trans hsT)
-        · exact hdis o' U' hU' d0 (h.ids d0 (by simp)) hdU
+        · rcases hvT d0 o0 l0 hvT0 with ⟨o', U', hU', hdU⟩ | hpa
+          · exact hdis o' U' hU' d0 (h.ids d0 (by simp)) hdU
+          · exact hnp d0 (h.ids d0 (by simp)) hpa
       · exact hsf u c0 es1 h
     · exact hh.self o1 U h
 
@@ -1315,10 +1318,10 @@ theorem NewSlot.edit {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
     obtain ⟨r, k⟩ := dep
     cases k with
     | name b t0 => exact vkeep_name _ _ _ _ _
-    | self => exact (keep_notx hi hanch hoF hst (h _ hd rfl) hne).1
-    | inner => exact (keep_notx hi hanch hoF hst (h _ hd rfl) hne).1
-    | view => exact (keep_notx hi hanch hoF hst (h _ hd rfl) hne).1
-    | share => exact (keep_notx hi hanch hoF hst (h _ hd rfl) hne).1
+    | self => exact (keep_notx hi hanch hoF hst (h _ hd rfl) hne (BlkLe.of_eq hblk)).1
+    | inner => exact (keep_notx hi hanch hoF hst (h _ hd rfl) hne (BlkLe.of_eq hblk)).1
+    | view => exact (keep_notx hi hanch hoF hst (h _ hd rfl) hne (BlkLe.of_eq hblk)).1
+    | share => exact (keep_notx hi hanch hoF hst (h _ hd rfl) hne (BlkLe.of_eq hblk)).1
   -- ... and none is valid through `o` (`SelfFree`, `ViewsOK.keep_except`)
   have hviews : ViewsOK m1 Eo.ty T Eo.held → (∀ dep ∈ Eo.held, dep.kind.isName = false →
       ∃ Er, Γ1 dep.root = some Er ∧ Er.mode.isRoot = true) → ViewsOK m' Eo.ty T' Eo.held :=
@@ -1554,7 +1557,8 @@ theorem MInv.editB_push {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
       have hvv : ∀ d0 o0 l0, ¬ Sub (.view d0 o0 l0) v := fun d0 o0 l0 hs => by
         obtain ⟨s, hin⟩ := hp.wf.sub_view hs
         have := hin.holdsView; rw [hhv] at this; cases this
-      have hvT : ∀ d0 o0 l0, Sub (.view d0 o0 l0) T → ∃ o' U, OwnedAt m1 o' U ∧ d0 ∈ U.ids := by
+      have hvT : ∀ d0 o0 l0, Sub (.view d0 o0 l0) T →
+          (∃ o' U, OwnedAt m1 o' U ∧ d0 ∈ U.ids) ∨ PayAddr m1 d0 := by
         intro d0 o0 l0 hs
         obtain ⟨T1, h1, hwT, hvsT⟩ := hi.own_val hEo hlo hcan.ownSlot
         rw [hT0] at h1; cases h1
@@ -1634,7 +1638,8 @@ theorem MInv.editB_pushRealloc {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv 
       have hvv : ∀ d0 o0 l0, ¬ Sub (.view d0 o0 l0) v := fun d0 o0 l0 hs => by
         obtain ⟨s, hin⟩ := hp.wf.sub_view hs
         have := hin.holdsView; rw [hhv] at this; cases this
-      have hvT : ∀ d0 o0 l0, Sub (.view d0 o0 l0) T → ∃ o' U, OwnedAt m1 o' U ∧ d0 ∈ U.ids := by
+      have hvT : ∀ d0 o0 l0, Sub (.view d0 o0 l0) T →
+          (∃ o' U, OwnedAt m1 o' U ∧ d0 ∈ U.ids) ∨ PayAddr m1 d0 := by
         intro d0 o0 l0 hs
         obtain ⟨T1, h1, hwT, hvsT⟩ := hi.own_val hEo hlo hcan.ownSlot
         rw [hT0] at h1; cases h1
@@ -1726,7 +1731,7 @@ theorem HeapOK.editSet {m : Mem} (hh : HeapOK m) {o : Var} {T T' : Val} {t : Ty}
     (hal : ∀ i ∈ v.ids, m.alloc i = true ∧ i < m.nid)
     (hdis : ∀ o' U, OwnedAt m o' U → ∀ i ∈ v.ids, i ∉ U.ids) (hnp : ∀ i ∈ v.ids, ¬ PayAddr m i)
     (hvv : ∀ d0 o0 l0, ¬ Sub (.view d0 o0 l0) v)
-    (hvT : ∀ d0 o0 l0, Sub (.view d0 o0 l0) T → ∃ o' U, OwnedAt m o' U ∧ d0 ∈ U.ids)
+    (hvT : ∀ d0 o0 l0, Sub (.view d0 o0 l0) T → (∃ o' U, OwnedAt m o' U ∧ d0 ∈ U.ids) ∨ PayAddr m d0)
     (hn : n < es.length) {a' : Nat → Bool} (hf : Frees m.alloc es[n] a')
     (hr : Repl (.node t c d es) (.node t c d (es.set n v)) T T') :
     HeapOK ({ m with alloc := a' }.set o ⟨true, some T'⟩) := by
@@ -1811,14 +1816,15 @@ theorem HeapOK.editSet {m : Mem} (hh : HeapOK m) {o : Var} {T T' : Val} {t : Ty}
           · exact h.trans hsT
           · exact absurd h (hvv _ _ _)
         · exact h
-      obtain ⟨o', U', hU', hdU⟩ := hvT d0 o0 l0 hvT0
       have hsf := hh.self o T hT d0 o0 l0 hvT0
       rcases HP_node_repl hr hnode with h | ⟨es1, h⟩
       · rcases HP_sub_set h with h | h | h
         · injection h with _ _ hd0
           exact hsf t c es (by rw [hd0]; exact hsT)
         · exact hsf u c0 es0 (h.trans hsT)
-        · exact hdis o' U' hU' d0 (h.ids d0 (by simp)) hdU
+        · rcases hvT d0 o0 l0 hvT0 with ⟨o', U', hU', hdU⟩ | hpa
+          · exact hdis o' U' hU' d0 (h.ids d0 (by simp)) hdU
+          · exact hnp d0 (h.ids d0 (by simp)) hpa
       · exact hsf u c0 es1 h
     · exact hh.self o1 U h
 
@@ -1915,7 +1921,8 @@ theorem MInv.editB_set {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
   have hvv : ∀ d0 o0 l0, ¬ Sub (.view d0 o0 l0) v := fun d0 o0 l0 hs => by
     obtain ⟨s, hin⟩ := hp.wf.sub_view hs
     have := hin.holdsView; rw [hhv] at this; cases this
-  have hvT : ∀ d0 o0 l0, Sub (.view d0 o0 l0) T → ∃ o' U, OwnedAt m1 o' U ∧ d0 ∈ U.ids := by
+  have hvT : ∀ d0 o0 l0, Sub (.view d0 o0 l0) T →
+          (∃ o' U, OwnedAt m1 o' U ∧ d0 ∈ U.ids) ∨ PayAddr m1 d0 := by
     intro d0 o0 l0 hs
     obtain ⟨T1, h1, hwT, hvsT⟩ := hi.own_val hEo hlo hcan.ownSlot
     rw [hT0] at h1; cases h1

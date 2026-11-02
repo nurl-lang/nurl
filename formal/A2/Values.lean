@@ -63,6 +63,14 @@ theorem viewAt_iff {m : Mem} {dep : Dep} {d o l : Nat} {t : Ty} :
     · exact Or.inl ⟨h1, h2⟩
     · exact Or.inr ⟨h1, h2⟩
 
+/-- A3.1: an address of a value lying in an owned tree or a live payload is live. -/
+theorem HeapOK.inMem_alloc {m : Mem} (hh : HeapOK m) {n : Val} (h : InMem m n) :
+    ∀ i ∈ n.ids, m.alloc i = true := by
+  intro i hi
+  rcases h with ⟨o, T, hT, hs⟩ | ⟨k, bl, hk, hs⟩
+  · exact (hh.alloc o T hT i (hs.ids i hi)).1
+  · exact (hh.payAlloc ⟨k, bl, hk, hs.ids i hi⟩).1
+
 /-- The `Vec` node a live binding of type `vec t` names, with the
     dependency of its own that reaches it (for a root: the binding itself). -/
 theorem MInv.vec_node {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t : Ty}
@@ -91,12 +99,10 @@ theorem MInv.vec_node {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry
     rw [ht] at hok
     obtain ⟨c, rfl, dep, hd, hh⟩ := valOK_vec.mp hok
     obtain ⟨n0, d, es, hr, hla, hw, hvs, hns, hsh⟩ := hh
-    obtain ⟨o, T, hoT, hsT⟩ := hr.owned
-    have hsub : Sub (.node t c d es) n0 := hla.sub
-    have hna : NodeAt m c (.node t c d es) := ⟨o, T, hoT, hsub.trans hsT, t, d, es, rfl⟩
-    have ha := hi.heap.alloc o T hoT
-    refine ⟨c, d, es, ⟨(ha c ((hsub.trans hsT).ids c (by simp))).1,
-      (ha d ((hsub.trans hsT).ids d (by simp))).1, Or.inr ⟨hv, hna⟩⟩, hw, hvs,
+    have hin := hr.owned.sub hla.sub
+    have hna : NodeAt m c (.node t c d es) := hin.nodeAt rfl
+    refine ⟨c, d, es, ⟨hi.heap.inMem_alloc hin c (by simp), hi.heap.inMem_alloc hin d (by simp),
+      Or.inr ⟨hv, hna⟩⟩, hw, hvs,
       fun _ => Or.inr (Or.inl ⟨_, c, hv, Top.refl _, hna⟩), fun _ => ⟨dep, hd, n0, hr, hla⟩, hns, hsh⟩
 
 /-- The buffer a live slice binding views. -/
@@ -118,11 +124,9 @@ theorem MInv.slice_node {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Ent
     rw [ht] at hok
     obtain ⟨d, o, l, rfl, dep, hd, hh⟩ := valOK_slice.mp hok
     obtain ⟨n0, c, es, hr, hk, hla, hlen, hw⟩ := viewAt_iff.mp hh
-    obtain ⟨o', T, hoT, hsT⟩ := hr.owned
-    have hsub : Sub (.node t c d es) n0 := hla.sub
-    have hda : DataAt m d (.node t c d es) := ⟨o', T, hoT, hsub.trans hsT, t, c, es, rfl⟩
-    have ha := hi.heap.alloc o' T hoT
-    exact ⟨d, o, l, c, es, hv, hda, (ha d ((hsub.trans hsT).ids d (by simp))).1, hlen, hw,
+    have hin := hr.owned.sub hla.sub
+    have hda : DataAt m d (.node t c d es) := hin.dataAt rfl
+    exact ⟨d, o, l, c, es, hv, hda, hi.heap.inMem_alloc hin d (by simp), hlen, hw,
       fun _ => Or.inr (Or.inr ⟨_, d, o, l, hv, Top.refl _, hda⟩), fun _ => ⟨dep, hd, n0, hr, hk, hla⟩⟩
 
 theorem lands_comp' {n0 n1 N : Val} {kp k : Kind} (hp : Lands kp n0 n1) (hk : Lands k N n0) :

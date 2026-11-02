@@ -17,39 +17,44 @@ theorem OwnedId.st_eq {m m' : Mem} {i : Nat} (h : OwnedId m i) (hst : m'.st = m.
   obtain ⟨x, t, hx, hi⟩ := h
   exact ⟨x, t, by unfold OwnedAt at *; rw [hst]; exact hx, hi⟩
 
-theorem nodeAt_owned {m : Mem} {c : Nat} {n : Val} (h : NodeAt m c n) : ∀ i ∈ n.ids, OwnedId m i := by
-  obtain ⟨x, t, hx, hs, _⟩ := h
-  exact fun i hi => ⟨x, t, hx, Sub.ids hs i hi⟩
+theorem nodeAt_owned {m : Mem} (hp : PayFree m) {c : Nat} {n : Val} (h : NodeAt m c n) :
+    ∀ i ∈ n.ids, OwnedId m i := by
+  rcases h with ⟨x, t, hx, hs, _⟩ | ⟨k, bl, hk, hs, _⟩
+  · exact fun i hi => ⟨x, t, hx, Sub.ids hs i hi⟩
+  · exact fun i hi => (hp.no_node hk hs hi).elim
 
-theorem dataAt_owned {m : Mem} {d : Nat} {n : Val} (h : DataAt m d n) : ∀ i ∈ n.ids, OwnedId m i := by
-  obtain ⟨x, t, hx, hs, _⟩ := h
-  exact fun i hi => ⟨x, t, hx, Sub.ids hs i hi⟩
+theorem dataAt_owned {m : Mem} (hp : PayFree m) {d : Nat} {n : Val} (h : DataAt m d n) :
+    ∀ i ∈ n.ids, OwnedId m i := by
+  rcases h with ⟨x, t, hx, hs, _⟩ | ⟨k, bl, hk, hs, _⟩
+  · exact fun i hi => ⟨x, t, hx, Sub.ids hs i hi⟩
+  · exact fun i hi => (hp.no_node hk hs hi).elim
 
-theorem rootNode_owned {m : Mem} {r : Var} {n : Val} (h : RootNode m r n) :
+theorem rootNode_owned {m : Mem} (hp : PayFree m) {r : Var} {n : Val} (h : RootNode m r n) :
     ∀ i ∈ n.ids, OwnedId m i := by
   rcases h with ⟨T, hT, htop⟩ | ⟨v, c, _, _, hn⟩ | ⟨v, d, o, l, _, _, hn⟩
   · exact fun i hi => ⟨r, T, hT, Sub.ids (Top.sub htop) i hi⟩
-  · exact nodeAt_owned hn
-  · exact dataAt_owned hn
+  · exact nodeAt_owned hp hn
+  · exact dataAt_owned hp hn
 
 /-- A valid view is into a buffer of one of the thread's own trees. -/
-theorem viewAt_owned {m : Mem} {dep : Dep} {d o l : Nat} {t : Ty} (h : ViewAt m dep d o l t) :
-    OwnedId m d := by
+theorem viewAt_owned {m : Mem} (hp : PayFree m) {dep : Dep} {d o l : Nat} {t : Ty}
+    (h : ViewAt m dep d o l t) : OwnedId m d := by
   obtain ⟨n0, c, es, hr, hk, _, _⟩ := h
   have hd : d ∈ (Val.node t c d es).ids := by simp [Val.ids]
   rcases hk with ⟨_, he⟩ | ⟨_, hb⟩
-  · rw [he] at hd; exact rootNode_owned hr d hd
-  · exact rootNode_owned hr d (Sub.ids (Below.sub hb) d hd)
+  · rw [he] at hd; exact rootNode_owned hp hr d hd
+  · exact rootNode_owned hp hr d (Sub.ids (Below.sub hb) d hd)
 
-theorem vecOf_owned {m : Mem} {x : Var} {t : Ty} {c d : Nat} {es : List Val} (h : VecOf m x t c d es) :
-    OwnedId m c ∧ OwnedId m d := by
+theorem vecOf_owned {m : Mem} (hp : PayFree m) {x : Var} {t : Ty} {c d : Nat} {es : List Val}
+    (h : VecOf m x t c d es) : OwnedId m c ∧ OwnedId m d := by
   obtain ⟨_, _, h | ⟨_, hn⟩⟩ := h
   · exact ⟨⟨x, _, h, by simp [Val.ids]⟩, ⟨x, _, h, by simp [Val.ids]⟩⟩
-  · exact ⟨nodeAt_owned hn c (by simp [Val.ids]), nodeAt_owned hn d (by simp [Val.ids])⟩
+  · exact ⟨nodeAt_owned hp hn c (by simp [Val.ids]), nodeAt_owned hp hn d (by simp [Val.ids])⟩
 
-theorem eReads_owned {m : Mem} {e : Expr} {i : Nat} (h : EReads m e i) : OwnedId m i := by
+theorem eReads_owned {m : Mem} (hp : PayFree m) {e : Expr} {i : Nat} (h : EReads m e i) :
+    OwnedId m i := by
   induction h with
-  | len hv => exact (vecOf_owned hv).1
+  | len hv => exact (vecOf_owned hp hv).1
   | addL _ ih => exact ih
   | addR _ ih => exact ih
   | ltL _ ih => exact ih
@@ -202,46 +207,46 @@ theorem sat_owned {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t
   rw [ht] at hval
   obtain ⟨d', o', l', he, dep, _, hva⟩ := valOK_slice.mp hval
   cases he
-  exact viewAt_owned hva
+  exact viewAt_owned (fun k bl hk => hi.heap.bpay k bl hk) hva
 
-theorem rTouch_owned {m m1 : Mem} {r : Rhs} {i : Nat} {w : Bool} (h : RTouch m r i w)
+theorem rTouch_owned {m m1 : Mem} (hp : PayFree m) {r : Rhs} {i : Nat} {w : Bool} (h : RTouch m r i w)
     (hst : m1.st = m.st) (hsat : SatLive m1 r) : OwnedId m i := by
   cases h with
-  | expr he => exact eReads_owned he
-  | atC hv => exact (vecOf_owned hv).1
-  | atD hv => exact (vecOf_owned hv).2
-  | atI he => exact eReads_owned he
-  | view hv => exact (vecOf_owned hv).1
+  | expr he => exact eReads_owned hp he
+  | atC hv => exact (vecOf_owned hp hv).1
+  | atD hv => exact (vecOf_owned hp hv).2
+  | atI he => exact eReads_owned hp he
+  | view hv => exact (vecOf_owned hp hv).1
   | sat hv =>
     obtain ⟨Γ, E, t, hi, hy, hl, ht⟩ := hsat _ _ rfl
     exact (sat_owned hi hy hl ht (by rw [hst]; exact hv)).st_eq hst.symm
-  | satI he => exact eReads_owned he
+  | satI he => exact eReads_owned hp he
   | popC hy => exact ⟨_, _, hy, by simp [Val.ids]⟩
   | popD hy => exact ⟨_, _, hy, by simp [Val.ids]⟩
 
 /-- **Every address a thread's next step touches is in one of its own trees.**
     `m` is the store the step runs on; `m1` has its bindings and is where the
     thread's typing holds (its own part of the address space). -/
-theorem touch_owned {P : Prog} {m m1 : Mem} {s : Stmt} {i : Nat} {w : Bool} (h : Touch P m s i w)
-    (hst : m1.st = m.st) (hty : TypedAt P m1 s) : OwnedId m i := by
+theorem touch_owned {P : Prog} {m m1 : Mem} (hp : PayFree m) {s : Stmt} {i : Nat} {w : Bool}
+    (h : Touch P m s i w) (hst : m1.st = m.st) (hty : TypedAt P m1 s) : OwnedId m i := by
   induction h with
   | seq _ ih => exact ih hty.seq
-  | letv hr => exact rTouch_owned hr hst hty.letv_sat
-  | letd hr => exact rTouch_owned hr hst hty.letd_sat
+  | letv hr => exact rTouch_owned hp hr hst hty.letv_sat
+  | letd hr => exact rTouch_owned hp hr hst hty.letd_sat
   | scopeD _ ih => exact ih hty.scopeD
-  | assign hr => exact rTouch_owned hr hst hty.assign_sat
+  | assign hr => exact rTouch_owned hp hr hst hty.assign_sat
   | assignDrop hx hi => exact ⟨_, _, hx, hi⟩
-  | ite he => exact eReads_owned he
+  | ite he => exact eReads_owned hp he
   | pushC hx => exact ⟨_, _, hx, by simp [Val.ids]⟩
   | pushD hx => exact ⟨_, _, hx, by simp [Val.ids]⟩
   | free hx hi => exact ⟨_, _, hx, hi⟩
   | editC hn => exact ⟨_, _, hn.2.2.1, hn.sub.ids _ (by simp [Val.ids])⟩
   | editD hn => exact ⟨_, _, hn.2.2.1, hn.sub.ids _ (by simp [Val.ids])⟩
   | editFree hn _ ha => exact ⟨_, _, hn.2.2.1, hn.sub.ids _ (ids_drop_sub ha)⟩
-  | editI he => exact eReads_owned he
+  | editI he => exact eReads_owned hp he
   | editSetFree hlt hn _ ha => exact ⟨_, _, hn.2.2.1, hn.sub.ids _ (ids_get_sub hlt ha)⟩
   | editSetDrop _ _ _ hy ha => exact ⟨_, _, hy, ha⟩
-  | editSetI he => exact eReads_owned he
+  | editSetI he => exact eReads_owned hp he
   | scope _ ih => exact ih hty.scope
   | scopeEnd hx hi => exact ⟨_, _, hx, hi⟩
   | scopeUnwind hs hx hi => exact ⟨_, _, Step.panic_st hs _ _ hx, hi⟩
