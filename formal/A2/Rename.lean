@@ -1602,6 +1602,24 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
     exact ⟨_, RhsT.taker hc (by rw [liftE_live]; exact hl) (by rw [liftE_mode y hrb, hm]; rfl)
       (by rw [liftE_ty' h hab hy]; exact hty) (h.Fcout y) (NoPin.lift h hab (bnd_own hab hy hm))
       (DtorSafe.canon h (allowed_own hab hy hm _ _) hds), fun x => compE_lift h hab hy b x⟩
+  | @arcNew t y Ey Γa1 D hy hly hty hpl hpa =>
+    have hc1 : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
+    obtain ⟨D1, hp1, _, _⟩ := pushArg_ren h hab hy hpa
+    have hty1 := liftE_ty' h hab hy
+    refine ⟨_, RhsT.arcNew hc1 (by rw [liftE_live]; exact hly) (by rw [hty1]; exact hty) hpl hp1,
+      fun x => ?_⟩
+    exact EntryWeaker.mk' (by simp [liftE]) (by simp [liftE, liftMode]) (by simp) (by simp [liftE])
+      (fun h' => by simp [Mode.ownSlot] at h') (by simp)
+  | @arcClone a Ea t ha hl ht =>
+    have hc : S.canon Γa (S.ρ a) = some (S.liftE a Ea) := by rw [canon_ρ h, ha]; rfl
+    refine ⟨_, RhsT.arcClone hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab ha]; exact ht),
+      fun x => ?_⟩
+    exact EntryWeaker.mk' (by simp [liftE]) (by simp [liftE, liftMode]) (by simp) (by simp [liftE])
+      (fun h' => by simp [Mode.ownSlot] at h') (by simp)
+  | @arcGet a Ea t ha hl ht hpl =>
+    have hc : S.canon Γa (S.ρ a) = some (S.liftE a Ea) := by rw [canon_ρ h, ha]; rfl
+    exact ⟨_, RhsT.arcGet hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab ha]; exact ht) hpl,
+      fun x => projE_lift h hab ha t x⟩
 
 theorem mem_allKinds_iff {L : List Var} {d : Dep} : d ∈ allKinds L ↔ d.root ∈ L ∧ d.kind.isName = false := by
   constructor
@@ -2820,6 +2838,7 @@ theorem RhsT.absOK {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : Rhs
   | inl hy _ hpa _ => exact PushArg.absOK hy hpa hab
   | inr hy _ hpa _ => exact PushArg.absOK hy hpa hab
   | pack hy _ _ hpa => exact PushArg.absOK hy hpa hab
+  | arcNew hy _ _ _ hpa => exact PushArg.absOK hy hpa hab
   | @takel y Ey _ _ hy _ hm _ _ _ =>
     exact (hab.kill _ _ _).setE' hab hy rfl rfl (by rw [hm]; simp) (fun hf => absurd hf (by simp [hm]))
   | @taker y Ey _ _ hy _ hm _ _ _ =>

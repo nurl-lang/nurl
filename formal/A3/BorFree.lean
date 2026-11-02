@@ -95,6 +95,9 @@ theorem EvalR.borFree {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r
   | takel _ => exact ⟨hb.set _ (SlotFree.own _), fun h => ids_nonNode h⟩
   | taker _ => exact ⟨hb.set _ (SlotFree.own _), fun h => ids_nonNode h⟩
   | pack h1 => exact ⟨(TakeVal.borFree h1 hb).1, fun h => by cases h⟩
+  | arcNew h1 _ => exact ⟨((TakeVal.borFree h1 hb).1).of_st rfl, fun h => by cases h⟩
+  | arcClone _ => exact ⟨hb, fun h => by cases h⟩
+  | arcGet _ _ => exact ⟨hb, fun _ => lendOf_ids _⟩
 
 theorem lendSlot_ids {m : Mem} (hb : BorFree m) {a : Var} {sl : Slot} {v : Val} (ha : m.st a = some sl)
     (hl : lendSlot sl = some v) : v.ids = [] := by

@@ -80,6 +80,12 @@ theorem BlkLe.trans {B1 B2 B3 : Nat → Option Blk} (h1 : BlkLe B1 B2) (h2 : Blk
 
 theorem BlkLe.of_eq {B B' : Nat → Option Blk} (h : B' = B) : BlkLe B B' := fun _ _ hk => by rw [h]; exact hk
 
+/-- A new block at a fresh key keeps every other. -/
+theorem BlkLe.fresh {B : Nat → Option Blk} {n : Nat} (h : B n = none) (b : Blk) : BlkLe B (upd B n (some b)) :=
+  fun k bl hk => by
+    have hne : k ≠ n := fun e => by rw [e, h] at hk; cases hk
+    simpa [upd, hne] using hk
+
 theorem SharesIn.grow {B B' : Nat → Option Blk} {τ : Ty} {T : Val} (h : SharesIn B τ T) (hb : BlkLe B B') :
     SharesIn B' τ T := fun u k p ha => hb k _ (h u k p ha)
 

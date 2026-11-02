@@ -221,6 +221,21 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
   | pack {fs : List Nat} {te : Ty} {ms : List Nat} {y : Var} {cs : List (Var × PMode × Ty)} {v : Val}
       {m1 : Mem} :
       TakeVal m y v m1 → EvalR m (.pack fs te ms y cs) (.ok (.pkg fs te ms v cs) true m1)
+  /-- A3.1: a new block holds the value taken from `y`; its key is taken
+      from `nid` (a key, never an address), and the result is its one share.
+      The count is ghost (the number of shares), so nothing stores it. -/
+  | arcNew {t : Ty} {y : Var} {v : Val} {m1 : Mem} :
+      TakeVal m y v m1 → m1.blk m1.nid = none →
+      EvalR m (.arcNew t y)
+        (.ok (.arc m1.nid v) true { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, v⟩) })
+  /-- A3.1: a read of the share `a` (owned or lent) makes a new share of its
+      block. -/
+  | arcClone {a : Var} {o : Bool} {k : Nat} {p : Val} :
+      m.st a = some ⟨o, some (.arc k p)⟩ → EvalR m (.arcClone a) (.ok (.arc k p) true m)
+  /-- A3.1: the payload of the block the share `a` names, lent. -/
+  | arcGet {a : Var} {o : Bool} {k : Nat} {p : Val} {bl : Blk} :
+      m.st a = some ⟨o, some (.arc k p)⟩ → m.blk k = some bl →
+      EvalR m (.arcGet a) (.ok (lendOf bl.pay) false m)
 
 /-! ### Calls
 
@@ -257,6 +272,9 @@ def Rhs.rename (ρ : Var → Var) : Rhs → Rhs
   | .takel y => .takel (ρ y)
   | .taker y => .taker (ρ y)
   | .pack fs te ms y cs => .pack fs te ms (ρ y) (cs.map (fun c => (ρ c.1, c.2)))
+  | .arcNew t y => .arcNew t (ρ y)
+  | .arcClone a => .arcClone (ρ a)
+  | .arcGet a => .arcGet (ρ a)
 
 def Edit.rename (ρ : Var → Var) : Edit → Edit
   | .push y => .push (ρ y)

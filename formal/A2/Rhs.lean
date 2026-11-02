@@ -1101,6 +1101,199 @@ theorem out_snd {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (hy 
     | pair _ hb => exact ⟨hb, fun s x hin => hvs s x (ViewIn.snd hin), hsh.snd⟩
   · rw [hty] at h; obtain ⟨x, z, hxz, _, hz⟩ := valOK_prod.mp h; cases hxz; exact hz
 
+/-! ### A3.1: plain payloads and shares
+
+A first-cut payload is plain (`Ty.plain`): it owns no address and holds no
+view, handle or closure.  A share owns nothing either: its payload is the
+block's. -/
+
+theorem Ty.plain_holdsView {t : Ty} (h : t.plain = true) : t.holdsView = false := by
+  induction t with
+  | int => rfl
+  | prod a b iha ihb =>
+    simp only [Ty.plain, Bool.and_eq_true] at h
+    simp [Ty.holdsView, iha h.1, ihb h.2]
+  | sum a b iha ihb =>
+    simp only [Ty.plain, Bool.and_eq_true] at h
+    simp [Ty.holdsView, iha h.1, ihb h.2]
+  | arc t ih => exact ih h
+  | _ => simp [Ty.plain] at h
+
+/-- Every part of a plain value is a plain value. -/
+theorem WFv.plain_sub {t : Ty} {v : Val} (hw : WFv t v) (hp : t.plain = true) {n : Val} (hs : Sub n v) :
+    ∃ u, WFv u n ∧ u.plain = true := by
+  induction hw generalizing n with
+  | int => cases hs; exact ⟨_, .int, rfl⟩
+  | arc hwp hvf => cases hs; exact ⟨_, .arc hwp hvf, hp⟩
+  | pair hwa hwb iha ihb =>
+    simp only [Ty.plain, Bool.and_eq_true] at hp
+    cases hs with
+    | refl => exact ⟨_, .pair hwa hwb, by simp [Ty.plain, hp.1, hp.2]⟩
+    | fst h => exact iha hp.1 h
+    | snd h => exact ihb hp.2 h
+  | inl hwa iha =>
+    rename_i a b _
+    simp only [Ty.plain, Bool.and_eq_true] at hp
+    cases hs with
+    | refl => exact ⟨.sum a b, .inl hwa, by simp [Ty.plain, hp.1, hp.2]⟩
+    | inl h => exact iha hp.1 h
+  | inr hwb ihb =>
+    rename_i a b _
+    simp only [Ty.plain, Bool.and_eq_true] at hp
+    cases hs with
+    | refl => exact ⟨.sum a b, .inr hwb, by simp [Ty.plain, hp.1, hp.2]⟩
+    | inr h => exact ihb hp.2 h
+  | _ => simp [Ty.plain] at hp
+
+theorem WFv.plain_node {t : Ty} {v : Val} (hw : WFv t v) (hp : t.plain = true) {u : Ty} {c d : Nat}
+    {es : List Val} (hs : Sub (.node u c d es) v) : False := by
+  obtain ⟨u', hw', hp'⟩ := hw.plain_sub hp hs
+  cases hw'; simp [Ty.plain] at hp'
+
+theorem WFv.plain_view {t : Ty} {v : Val} (hw : WFv t v) (hp : t.plain = true) {d o l : Nat}
+    (hs : Sub (.view d o l) v) : False := by
+  obtain ⟨u', hw', hp'⟩ := hw.plain_sub hp hs
+  cases hw'; simp [Ty.plain] at hp'
+
+theorem WFv.plain_pkgs {t : Ty} {v : Val} (hw : WFv t v) (hp : t.plain = true) : PkgsOK v := by
+  intro fs te ms e cs hs
+  obtain ⟨u', hw', hp'⟩ := hw.plain_sub hp hs
+  cases hw'; simp [Ty.plain] at hp'
+
+theorem WFv.plain_self {t : Ty} {v : Val} (hw : WFv t v) (hp : t.plain = true) : SelfFree v :=
+  fun _ _ _ hv => absurd hv (fun h => hw.plain_view hp h)
+
+/-- A plain value owns no address. -/
+theorem WFv.plain_ids {t : Ty} {v : Val} (hw : WFv t v) (hp : t.plain = true) : v.ids = [] := by
+  induction hw with
+  | int => rfl
+  | arc => rfl
+  | pair _ _ iha ihb =>
+    simp only [Ty.plain, Bool.and_eq_true] at hp
+    simp [Val.ids, iha hp.1, ihb hp.2]
+  | inl _ ih =>
+    simp only [Ty.plain, Bool.and_eq_true] at hp
+    simp [Val.ids, ih hp.1]
+  | inr _ ih =>
+    simp only [Ty.plain, Bool.and_eq_true] at hp
+    simp [Val.ids, ih hp.2]
+  | _ => simp [Ty.plain] at hp
+
+/-- A plain value, lent, is itself. -/
+theorem WFv.plain_lend {t : Ty} {v : Val} (hw : WFv t v) (hp : t.plain = true) : lendOf v = v := by
+  induction hw with
+  | int => rfl
+  | arc => rfl
+  | pair _ _ iha ihb =>
+    simp only [Ty.plain, Bool.and_eq_true] at hp
+    simp [lendOf, iha hp.1, ihb hp.2]
+  | inl _ ih =>
+    simp only [Ty.plain, Bool.and_eq_true] at hp
+    simp [lendOf, ih hp.1]
+  | inr _ ih =>
+    simp only [Ty.plain, Bool.and_eq_true] at hp
+    simp [lendOf, ih hp.2]
+  | _ => simp [Ty.plain] at hp
+
+/-- A share's block, through the binding that holds the share (an owner, or
+    a borrow of it). -/
+theorem MInv.arc_val {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry} (ha : Γ a = some E)
+    (hl : E.live = true) {t : Ty} (hty : E.ty = .arc t) {o : Bool} {k : Nat} {p : Val}
+    (hv : m.st a = some ⟨o, some (.arc k p)⟩) : m.blk k = some ⟨t, p⟩ ∧ WFv t p ∧ t.holdsView = false := by
+  cases hos : E.mode.ownSlot with
+  | true =>
+    obtain ⟨T, hT, hwT, _⟩ := hi.own_val ha hl hos
+    rw [hT] at hv; cases hv
+    have hsh := hi.shares a E _ _ ha hT rfl rfl
+    rw [hty] at hwT hsh
+    cases hwT with
+    | arc hwp hvf => exact ⟨hsh.here, hwp, hvf⟩
+  | false =>
+    obtain ⟨w, hw, hok⟩ := hi.bor_val ha hl hos
+    rw [hw] at hv; cases hv
+    rw [hty] at hok
+    cases hok with
+    | arc hk hwp hvf => exact ⟨hk, hwp, hvf⟩
+
+/-- ... and the share itself: a live binding of type `arc t` holds one. -/
+theorem MInv.arc_slot {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry} (ha : Γ a = some E)
+    (hl : E.live = true) {t : Ty} (hty : E.ty = .arc t) :
+    ∃ o k p, m.st a = some ⟨o, some (.arc k p)⟩ := by
+  cases hos : E.mode.ownSlot with
+  | true =>
+    obtain ⟨T, hT, hwT, _⟩ := hi.own_val ha hl hos
+    rw [hty] at hwT
+    cases hwT; exact ⟨_, _, _, hT⟩
+  | false =>
+    obtain ⟨w, hw, hok⟩ := hi.bor_val ha hl hos
+    rw [hty] at hok
+    cases hok; exact ⟨_, _, _, hw⟩
+
+/-- A share, owned: it holds nothing, and its block holds its payload. -/
+theorem out_share {m : Mem} {Γ : Ctx} {t : Ty} {k : Nat} {p : Val} (htok : t.ok = true)
+    (hvf : t.holdsView = false) (hwp : WFv t p) (hk : m.blk k = some ⟨t, p⟩) :
+    RhsOut m Γ ⟨.arc t, .own, true, [], [], false, false⟩ (.arc k p) true where
+  own := rfl
+  mode := Or.inl rfl
+  live := rfl
+  tyok := by simp [Ty.ok, htok, hvf]
+  wf _ r hr := by simp [roots, Entry.vdeps, Mode.ownSlot] at hr
+  valOwn _ := ⟨rfl, .arc hwp hvf, ViewsOK.none (show (Ty.arc t).holdsView = false from hvf) _ _,
+    List.nodup_nil, fun _ h => (nomatch h), fun _ _ _ _ h => (nomatch h), fun _ _ _ h => by cases h⟩
+  valBor h := nomatch h
+  names _ := DepsNamed.nil _
+  held := NamesIn.nil _ rfl
+  pkgs := PkgsOK.leaf (fun _ h => by cases h) (fun _ _ _ _ _ h => by cases h)
+  shares _ u k' p' ha := by cases ha; exact hk
+
+/-- `arc_clone a`: a new share of `a`'s block. -/
+theorem out_arcClone {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry} (ha : Γ a = some E)
+    (hl : E.live = true) {t : Ty} (hty : E.ty = .arc t) {o : Bool} {k : Nat} {p : Val}
+    (hv : m.st a = some ⟨o, some (.arc k p)⟩) :
+    RhsOut m Γ ⟨.arc t, .own, true, [], [], false, false⟩ (.arc k p) true := by
+  obtain ⟨hk, hwp, hvf⟩ := hi.arc_val ha hl hty hv
+  have hok := hi.tyok ha; rw [hty] at hok
+  simp only [Ty.ok, Bool.and_eq_true] at hok
+  exact out_share hok.1 hvf hwp hk
+
+/-- `arc_get a`: the payload, lent as a field of `a` is (`projE`). A plain
+    payload has no handle, so it is valid through any dependency. -/
+theorem out_arcGet {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry} (ha : Γ a = some E)
+    (hl : E.live = true) {t : Ty} (hty : E.ty = .arc t) (hpl : t.plain = true) {o : Bool} {k : Nat}
+    {p : Val} (hv : m.st a = some ⟨o, some (.arc k p)⟩) : RhsOut m Γ (projE a E t) (lendOf p) false := by
+  obtain ⟨hk, hwp, hvf⟩ := hi.arc_val ha hl hty hv
+  have hsh : SharesOK m t p := (hi.blocks k _ hk).2.2.2
+  have hok := hi.tyok ha; rw [hty] at hok
+  simp only [Ty.ok, Bool.and_eq_true] at hok
+  have htok := hok.1
+  have hnint : E.ty ≠ .int := by rw [hty]; simp
+  have key : ValOK m t (lendOf p) (projDeps a E ++ E.held) E.held :=
+    lend_valOK hwp (hwp.plain_pkgs hpl) (fun _ _ _ _ hs => (hwp.plain_node hpl hs).elim)
+      (ViewsOK.none hvf _ _) (NamesIn.nil _ (hwp.names_nil hvf)) hsh
+      (fun s hs => by rw [hs] at hpl; simp [Ty.plain] at hpl)
+  have hint : t = .int ∨ projE a E t = ⟨t, .bor, true, projDeps a E ++ E.held, E.held, false, false⟩ := by
+    cases t <;> simp [projE]
+  rcases hint with rfl | heq
+  · obtain ⟨n, hn⟩ := valOK_int.mp key
+    simp only [projE]; rw [hn]; exact intE_out n
+  · rw [heq]
+    refine ⟨rfl, Or.inr rfl, rfl, htok, fun _ r hr => ?_, fun h => (by cases h), fun _ => key,
+      fun _ => by
+        have h := hi.names a E ha hl (Or.inl hnint)
+        show DepsNamed Γ ((projDeps a E ++ E.held) ++ E.held)
+        exact ((projDeps_named h).append h.held).append h.held,
+      NamesIn.noView hwp hvf _, (hwp.plain_pkgs hpl).lendOf, fun h => nomatch h⟩
+    rw [bor_vdeps _ rfl] at hr
+    refine wf_append (wf_append ?_ (wf_held hi ha hl hnint)) (wf_held hi ha hl hnint) r hr
+    unfold projDeps
+    split
+    · intro r hr; simp [roots] at hr; subst hr
+      exact ⟨E, ha, by cases hm : E.mode <;> simp_all [Mode.ownSlot, Mode.isRoot]⟩
+    · split
+      · intro r hr; simp [roots] at hr; subst hr
+        exact ⟨E, ha, by simp_all [Mode.isRoot]⟩
+      · rename_i hos _; exact wf_path hi ha hl hnint (by simpa using hos)
+
 theorem rhs_new {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {t : Ty} (ht : t.ok = true) :
     let m1 : Mem := { m with alloc := upd (upd m.alloc m.nid true) (m.nid + 1) true, nid := m.nid + 2 }
     RhsPost m m1 Γ Γ F ∧ RhsOut m1 Γ ⟨.vec t, .own, true, [], [], false, false⟩ (.node t m.nid (m.nid + 1) []) true := by

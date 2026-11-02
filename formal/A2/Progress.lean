@@ -180,6 +180,23 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
     obtain ⟨v, hv | hv⟩ := sum_slot hi hy hl ht <;> rw [hm] at hv
     · exact ⟨_, EvalR.takerP hv⟩
     · exact ⟨_, EvalR.taker hv⟩
+  | arcNew hy hly _ _ _ =>
+    obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly
+    -- the key `nid` is fresh: every block's key is below it
+    have hfr : m1.blk m1.nid = none := by
+      have hb := TakeVal.blk htk
+      have hn : m1.nid = m.nid := by cases htk <;> rfl
+      rw [hb, hn]
+      cases h : m.blk m.nid with
+      | none => rfl
+      | some bl => exact absurd (hi.heap.bkey _ bl h) (Nat.lt_irrefl _)
+    exact ⟨_, EvalR.arcNew htk hfr⟩
+  | arcClone ha hl hty =>
+    obtain ⟨o, k, p, hv⟩ := hi.arc_slot ha hl hty
+    exact ⟨_, EvalR.arcClone hv⟩
+  | arcGet ha hl hty _ =>
+    obtain ⟨o, k, p, hv⟩ := hi.arc_slot ha hl hty
+    exact ⟨_, EvalR.arcGet hv (hi.arc_val ha hl hty hv).1⟩
 
 /-- A part of a tree whose addresses are distinct has distinct addresses. -/
 theorem Sub.nodup {a b : Val} (h : Sub a b) (hn : b.ids.Nodup) : a.ids.Nodup := by

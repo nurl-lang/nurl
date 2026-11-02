@@ -1246,7 +1246,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         fun v hv => ?_⟩
       · refine Inv.mk hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
           (by simp [Stmt.spine, hsp, setE]) (show CatchOK _ k from catchOK_src hsrc)
-          (covers_take (covers_evalR hi.cover he) (fun T h => by
+          (covers_take (covers_evalR hi.cover he post.inv.heap.bpay) (fun T h => by
             unfold OwnedAt at h; rw [evalR_none he hmx] at h; cases h))
           (pinOut_fresh hi.toMInv (fun p Ep hp hmp => by
             have hpx : p ≠ x := fun h => by
@@ -1333,7 +1333,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         (by rw [hsp]; exact hKOd) hWd hNd hΔd, ?_, by simp [post.nv], ?_, fun v hv => ?_⟩
       · refine Inv.mk hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
           (by simp [Stmt.spine, hsp, setE]) (show CatchOK _ k from catchOK_src hsrc)
-          (covers_take (covers_evalR hi.cover he) (fun T h => by
+          (covers_take (covers_evalR hi.cover he post.inv.heap.bpay) (fun T h => by
             unfold OwnedAt at h; rw [evalR_none he hmx] at h; cases h))
           (pinOut_fresh hi.toMInv (fun p Ep hp hmp => by
             have hpx : p ≠ x := fun h => by
@@ -1387,7 +1387,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       have hanch := hi.leafAnch rfl
       have post := step_assign hi.toMInv hanch hx hxF hmodes hr hty hxd he hsl hd hpin hds
       exact ⟨_, StmtT.skip, Inv.ofLeaf hi post.inv (by rw [post.nv]; simp) (by simp [Stmt.vars])
-        (post.rel.anch hanch) rfl (covers_assign (covers_evalR hi.cover he) hsl hd) trivial,
+        (post.rel.anch hanch) rfl (covers_assign (covers_evalR hi.cover he post.inv.heap.bpay) hsl hd) trivial,
         by rw [post.nv]; simp, post.rel.keep rfl rfl, post.frz⟩
   | ite hsa hsb _ ha hb _ _ =>
     intro m m' s' hcd hi hst

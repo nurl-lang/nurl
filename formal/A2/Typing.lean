@@ -550,6 +550,22 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       -- (a closure the environment holds that may change a binding by name:
       -- running this package changes it, its name is among what it holds)
       RhsT Γ F (.pack fs te ms y cs) ⟨.fn ms, .own, true, [], D ++ capDeps cs, false, false⟩ Γ1
+  /-- A3.1: `y`'s value, of a plain type (first cut), moves into a fresh
+      block (an owner moves, an integer is copied); the result is an owned
+      share, which holds nothing (the payload views nothing). -/
+  | arcNew {t : Ty} {y : Var} {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
+      Γ y = some Ey → Ey.live = true → Ey.ty = t → t.plain = true → PushArg Γ F y Ey t D Γ1 →
+      RhsT Γ F (.arcNew t y) ⟨.arc t, .own, true, [], [], false, false⟩ Γ1
+  /-- A3.1: a new share of the block `a` shares: owned, holding nothing. -/
+  | arcClone {a : Var} {E : Entry} {t : Ty} :
+      Γ a = some E → E.live = true → E.ty = .arc t →
+      RhsT Γ F (.arcClone a) ⟨.arc t, .own, true, [], [], false, false⟩ Γ
+  /-- A3.1: the payload, lent as a field is: a borrow rooted where `a` is
+      (`projE`), so it ends with `a` like any borrow. (A plain payload has no
+      handle, so no borrow lands in a block.) -/
+  | arcGet {a : Var} {E : Entry} {t : Ty} :
+      Γ a = some E → E.live = true → E.ty = .arc t → t.plain = true →
+      RhsT Γ F (.arcGet a) (projE a E t) Γ
 
 /-! ### Calls -/
 
@@ -582,6 +598,9 @@ theorem RhsT.out {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT 
   | @getr _ _ _ b => cases b <;> exact ⟨Or.inr rfl, rfl⟩
   | @takel _ _ a => cases a <;> first | exact ⟨Or.inl rfl, rfl⟩ | exact ⟨Or.inr rfl, rfl⟩
   | @taker _ _ _ b => cases b <;> first | exact ⟨Or.inl rfl, rfl⟩ | exact ⟨Or.inr rfl, rfl⟩
+  | arcNew => exact ⟨Or.inl rfl, rfl⟩
+  | arcClone => exact ⟨Or.inl rfl, rfl⟩
+  | @arcGet _ _ t => cases t <;> exact ⟨Or.inr rfl, rfl⟩
 
 /-- What the summary pair `(j, k)` means at this call.  An integer argument
     lends nothing. -/
@@ -1260,6 +1279,9 @@ def Rhs.vars : Rhs → List Var
   | .takel y => [y]
   | .taker y => [y]
   | .pack _ _ _ y cs => y :: cs.map (·.1)
+  | .arcNew _ y => [y]
+  | .arcClone a => [a]
+  | .arcGet a => [a]
 
 def Edit.vars : Edit → List Var
   | .push y => [y]

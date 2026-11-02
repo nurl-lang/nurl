@@ -100,6 +100,7 @@ theorem RhsT.domTy {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : Rhs
   | inl hy _ hpa _ => exact PushArg.domTy hy hpa
   | inr hy _ hpa _ => exact PushArg.domTy hy hpa
   | pack hy _ _ hpa => exact PushArg.domTy hy hpa
+  | arcNew hy _ _ _ hpa => exact PushArg.domTy hy hpa
   | @takel y Ey _ _ hy _ _ _ _ => exact ((DomTy.refl Γ).kill .replace false y).setE ⟨Ey, hy, rfl, rfl⟩
   | @taker y Ey _ _ hy _ _ _ _ => exact ((DomTy.refl Γ).kill .replace false y).setE ⟨Ey, hy, rfl, rfl⟩
   | _ => exact DomTy.refl Γ

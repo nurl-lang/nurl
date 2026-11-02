@@ -158,8 +158,46 @@ theorem TakeVal.codes {P : Prog} {m m1 : Mem} {y : Var} {v : Val} (ht : TakeVal 
   | own hv => exact ⟨h.slot hv, h.set (fun _ e => by cases e)⟩
   | bor hv => exact ⟨h.slot hv, h⟩
 
+/-- A value of a type that holds no views holds no package. -/
+theorem WFv.noPkg {t : Ty} {v : Val} (hw : WFv t v) (ht : t.holdsView = false) {fs : List Nat} {te : Ty}
+    {ms : List Nat} {e : Val} {cs : List (Var × PMode × Ty)} (hs : Sub (.pkg fs te ms e cs) v) : False := by
+  induction hw with
+  | int => cases hs
+  | view => simp [Ty.holdsView] at ht
+  | node _ ih =>
+    rcases hs.cases' with h | ⟨e', hc, hs'⟩
+    · cases h
+    · cases hc with | elem he => exact ih _ he ht hs'
+  | pair _ _ iha ihb =>
+    simp only [Ty.holdsView, Bool.or_eq_false_iff] at ht
+    rcases hs.cases' with h | ⟨e', hc, hs'⟩
+    · cases h
+    · cases hc with
+      | fst => exact iha ht.1 hs'
+      | snd => exact ihb ht.2 hs'
+  | inl _ ih =>
+    simp only [Ty.holdsView, Bool.or_eq_false_iff] at ht
+    rcases hs.cases' with h | ⟨e', hc, hs'⟩
+    · cases h
+    · cases hc with | inl => exact ih ht.1 hs'
+  | inr _ ih =>
+    simp only [Ty.holdsView, Bool.or_eq_false_iff] at ht
+    rcases hs.cases' with h | ⟨e', hc, hs'⟩
+    · cases h
+    · cases hc with | inr => exact ih ht.2 hs'
+  | pkg => simp [Ty.holdsView] at ht
+  | arc => cases hs
+
+/-- A3.1: a block's payload holds no package (it holds no views), so every
+    package it holds names code of its signature. -/
+theorem MInv.blkCodes {m : Mem} {Γ : Ctx} (hi : MInv m Γ) (P : Prog) :
+    ∀ k bl, m.blk k = some bl → PkgOK P bl.pay := fun k bl hk _ _ _ _ _ hs => by
+  obtain ⟨_, hv, hw, _⟩ := hi.blocks k bl hk
+  exact (hw.noPkg hv hs).elim
+
 theorem EvalR.codes {P : Prog} {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (he : EvalR m r (.ok v o m1))
-    (h : MemCodes P m) (hr : r.codeOK P) : PkgOK P v ∧ MemCodes P m1 := by
+    (h : MemCodes P m) (hB : ∀ k bl, m.blk k = some bl → PkgOK P bl.pay) (hr : r.codeOK P) :
+    PkgOK P v ∧ MemCodes P m1 := by
   cases he with
   | expr _ => exact ⟨pkgOK_int P _, h⟩
   | new =>
@@ -204,6 +242,11 @@ theorem EvalR.codes {P : Prog} {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (he :
     refine ⟨pkgOK_of_children (fun fs te ms e cs he => ?_) (fun e hc => ?_), hm1⟩
     · cases he; exact hr
     · cases hc with | pkg => exact hv
+  | arcNew h1 _ =>
+    obtain ⟨_, hm1⟩ := h1.codes h
+    exact ⟨pkgOK_leaf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h), hm1.of_st rfl⟩
+  | arcClone _ => exact ⟨pkgOK_leaf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h), h⟩
+  | arcGet _ hk => exact ⟨pkgOK_lend (hB _ _ hk), h⟩
 
 theorem BindParams.codes {P : Prog} {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var} {base i : Nat}
     (hb : BindParams m ps as base i m') (h : MemCodes P m) : MemCodes P m' := by
@@ -266,71 +309,71 @@ theorem callIn_codes {P : Prog} (hPc : ProgCodes P) {f : Nat} {fn : Fn} (hf : P[
 
 /-- Every step keeps every package naming code of its signature. -/
 theorem codes_step {P : Prog} (hPc : ProgCodes P) {m : Mem} {s : Stmt} {r : Res} (hst : Step P m s r) :
-    MemCodes P m → s.codesOK P →
+    MemCodes P m → (∀ k bl, m.blk k = some bl → PkgOK P bl.pay) → s.codesOK P →
       (∀ m' s', r = .ok m' s' → MemCodes P m' ∧ s'.codesOK P) ∧ (∀ m', r = .panic m' → MemCodes P m') := by
   induction hst with
   | seqSkip =>
-    intro hm hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    intro hm _ hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact ⟨hm, hs.2⟩
   | seqL _ ih =>
-    intro hm hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
-    obtain ⟨h1, h2⟩ := (ih hm hs.1).1 _ _ rfl; exact ⟨h1, h2, hs.2⟩
+    intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    obtain ⟨h1, h2⟩ := (ih hm hB hs.1).1 _ _ rfl; exact ⟨h1, h2, hs.2⟩
   | seqP _ ih =>
-    intro hm hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
-    exact (ih hm hs.1).2 _ rfl
+    intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    exact (ih hm hB hs.1).2 _ rfl
   | letv _ he =>
-    intro hm hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
-    obtain ⟨hv, hm1⟩ := he.codes hm hs.1
+    intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    obtain ⟨hv, hm1⟩ := he.codes hm hB hs.1
     exact ⟨hm1.set (fun V e => by cases e; exact hv), hs.2⟩
   | letvP _ =>
-    intro hm _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact hm
   | letcall hf _ hb =>
-    intro hm hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    intro hm _ hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact ⟨(((hb.codes hm).set (fun _ e => by cases e)).set (fun _ e => by cases e)).of_st rfl,
       callIn_codes hPc hf _ _ _, hs⟩
   | scopeSkip _ _ =>
-    intro hm _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact ⟨(hm.of_st rfl).remove _, trivial⟩
   | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | catchIn _ ih =>
-    intro hm hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
-    obtain ⟨h1, h2⟩ := (ih hm hs).1 _ _ rfl; exact ⟨h1, h2⟩
+    intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    obtain ⟨h1, h2⟩ := (ih hm hB hs).1 _ _ rfl; exact ⟨h1, h2⟩
   | scopeP _ _ _ ih =>
-    intro hm hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
-    exact (((ih hm hs).2 _ rfl).of_st rfl).remove _
+    intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    exact (((ih hm hB hs).2 _ rfl).of_st rfl).remove _
   | rbindSkip _ =>
-    intro hm _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact ⟨hm.remove _, trivial⟩
   | rbindP _ _ ih =>
-    intro hm hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
-    exact ((ih hm hs).2 _ rfl).remove _
+    intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    exact ((ih hm hB hs).2 _ rfl).remove _
   | frozenSkip | catchSkip =>
-    intro hm _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact ⟨hm, trivial⟩
   | frozenP _ ih =>
-    intro hm hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
-    exact (ih hm hs).2 _ rfl
+    intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    exact (ih hm hB hs).2 _ rfl
   | catchP _ _ ih =>
-    intro hm hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
-    exact ⟨((ih hm hs).2 _ rfl).set (fun V e => by cases e; exact pkgOK_int P 1), trivial⟩
+    intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    exact ⟨((ih hm hB hs).2 _ rfl).set (fun V e => by cases e; exact pkgOK_int P 1), trivial⟩
   | assign _ he _ _ =>
-    intro hm hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
-    obtain ⟨hv, hm1⟩ := he.codes hm hs
+    intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    obtain ⟨hv, hm1⟩ := he.codes hm hB hs
     exact ⟨(hm1.of_st rfl).set (fun V e => by cases e; exact hv), trivial⟩
   | assignP _ =>
-    intro hm _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact hm
   | iteT _ _ =>
-    intro hm hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    intro hm _ hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact ⟨hm, hs.1⟩
   | iteF _ =>
-    intro hm hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    intro hm _ hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact ⟨hm, hs.2⟩
   | «while» =>
-    intro hm hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    intro hm _ hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact ⟨hm, ⟨hs, hs⟩, trivial⟩
   | push ht hx _ _ | pushRealloc ht hx _ _ =>
-    intro hm _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     obtain ⟨hv, hm1⟩ := ht.codes hm
     have hT := hm1.slot hx
     refine ⟨(hm1.of_st rfl).set (fun V e => ?_), trivial⟩
@@ -342,10 +385,10 @@ theorem codes_step {P : Prog} (hPc : ProgCodes P) {m : Mem} {s : Stmt} {r : Res}
       · exact pkgOK_elem hT he
       · simp at he; subst he; exact hv
   | free _ _ =>
-    intro hm _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact ⟨(hm.of_st rfl).set (fun _ e => by cases e), trivial⟩
   | editPush ht hn hr | editPushRealloc ht hn hr =>
-    intro hm _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     obtain ⟨hv, hm1⟩ := ht.codes hm
     have hT := hm1.slot hn.2.2.1
     have hn0 := hT.sub hr.sub
@@ -359,7 +402,7 @@ theorem codes_step {P : Prog} (hPc : ProgCodes P) {m : Mem} {s : Stmt} {r : Res}
       · exact pkgOK_elem hn0 he
       · simp at he; subst he; exact hv
   | editTrunc _ hn _ hr =>
-    intro hm _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     have hT := hm.slot hn.2.2.1
     have hn0 := hT.sub hr.sub
     refine ⟨(hm.of_st rfl).set (fun V e => ?_), trivial⟩
@@ -369,7 +412,7 @@ theorem codes_step {P : Prog} (hPc : ProgCodes P) {m : Mem} {s : Stmt} {r : Res}
     cases hc with
     | elem he => exact pkgOK_elem hn0 (List.mem_of_mem_take he)
   | editSet _ _ ht hn _ hr =>
-    intro hm _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     obtain ⟨hv, hm1⟩ := ht.codes hm
     have hT := hm1.slot hn.2.2.1
     have hn0 := hT.sub hr.sub
@@ -383,44 +426,44 @@ theorem codes_step {P : Prog} (hPc : ProgCodes P) {m : Mem} {s : Stmt} {r : Res}
       · exact pkgOK_elem hn0 he
       · subst he; exact hv
   | editSetOOB _ ht _ _ _ =>
-    intro hm _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact ⟨(ht.codes hm).2.of_st rfl, trivial⟩
   | panic =>
-    intro hm _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact hm
   | letrec hf _ _ =>
-    intro hm hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    intro hm _ hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact ⟨((hm.set (fun _ e => by cases e)).set (fun _ e => by cases e)).of_st rfl,
       ⟨callIn_codes hPc hf _ _ _, hs⟩⟩
   | unpair hy _ _ _ =>
-    intro hm hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    intro hm _ hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     have hT := hm.slot hy
     exact ⟨((hm.set (fun _ e => by cases e)).set (fun V e => by cases e; exact hT.child Child.fst)).set
       (fun V e => by cases e; exact hT.child Child.snd), hs⟩
   | letd _ he =>
-    intro hm hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
-    obtain ⟨hv, hm1⟩ := he.codes hm hs.1
+    intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    obtain ⟨hv, hm1⟩ := he.codes hm hB hs.1
     exact ⟨hm1.set (fun V e => by cases e; exact hv), hs.2⟩
   | letdP _ =>
-    intro hm _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact hm
   | scopeDIn _ ih =>
-    intro hm hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
-    obtain ⟨h1, h2⟩ := (ih hm hs).1 _ _ rfl; exact ⟨h1, h2⟩
+    intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    obtain ⟨h1, h2⟩ := (ih hm hB hs).1 _ _ rfl; exact ⟨h1, h2⟩
   | scopeDEnd _ =>
-    intro hm _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact ⟨hm.of_st rfl, trivial⟩
   | scopeDMoved _ =>
-    intro hm _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact ⟨hm.remove _, trivial⟩
   | scopeDP _ _ ih =>
-    intro hm hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
-    exact ⟨((ih hm hs).2 _ rfl).of_st rfl, trivial, trivial⟩
+    intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    exact ⟨((ih hm hB hs).2 _ rfl).of_st rfl, trivial, trivial⟩
   | scopeDPMoved _ _ ih =>
-    intro hm hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
-    exact ((ih hm hs).2 _ rfl).remove _
+    intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    exact ((ih hm hB hs).2 _ rfl).remove _
   | callc hslot _ hf _ hb =>
-    intro hm hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    intro hm _ hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     have hT := hm.slot hslot
     have hme : MemCodes P (envMem _ _) :=
       (hm.set (fun V e => by cases e; exact pkgOK_lend (hT.child Child.pkg))).of_st rfl

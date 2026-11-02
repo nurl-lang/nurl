@@ -389,6 +389,43 @@ theorem push_take {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} (hi : MInv m Γ)
         exact ⟨d, o, l, rfl, dep, List.mem_append_left _ hd, ha⟩
       · exact wf_append (wf_derive hi hy hl hnint _) (wf_held hi hy hl hnint)
 
+/-- A3.1, `arc_new`: the value taken from `y`, plain, moves into a fresh
+    block, whose key no share names yet; every slot is as it was. -/
+theorem rhs_arcNew {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {t : Ty} {v : Val} {D : List Dep}
+    (post : RhsPost m m1 Γ Γ1 F) (pu : Pushed m1 Γ1 t v D) (hpl : t.plain = true) (htok : t.ok = true)
+    (hfr : m1.blk m1.nid = none) :
+    RhsPost m { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, v⟩) } Γ Γ1 F ∧
+    RhsOut { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, v⟩) } Γ1
+      ⟨.arc t, .own, true, [], [], false, false⟩ (.arc m1.nid v) true := by
+  let m2 : Mem := { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, v⟩) }
+  have hvf := Ty.plain_holdsView hpl
+  have hids : v.ids = [] := pu.wf.plain_ids hpl
+  have hb : BlkLe m1.blk m2.blk := by
+    intro k bl hk
+    have hne : k ≠ m1.nid := fun h => by rw [h, hfr] at hk; cases hk
+    show upd m1.blk m1.nid _ k = some bl
+    rw [upd_ne _ _ hne]; exact hk
+  have hnew : m2.blk m1.nid = some ⟨t, v⟩ := by simp [m2]
+  have hcases : ∀ k bl, m2.blk k = some bl → (k = m1.nid ∧ bl = ⟨t, v⟩) ∨ (k ≠ m1.nid ∧ m1.blk k = some bl) := by
+    intro k bl hk
+    by_cases hkn : k = m1.nid
+    · subst hkn; rw [hnew] at hk; cases hk; exact Or.inl ⟨rfl, rfl⟩
+    · refine Or.inr ⟨hkn, ?_⟩
+      have : m2.blk k = m1.blk k := by simp [m2, upd_ne _ _ hkn]
+      rw [← this]; exact hk
+  have hheap : HeapOK m2 := HeapOK.mono post.inv.heap rfl (fun _ h => h) (Nat.le_succ _) (fun k bl hk => by
+    rcases hcases k bl hk with ⟨rfl, rfl⟩ | ⟨_, h⟩
+    · exact ⟨hids, Nat.lt_succ_self _⟩
+    · exact ⟨post.inv.heap.bpay k bl h, Nat.lt_succ_of_lt (post.inv.heap.bkey k bl h)⟩)
+  have hB : BlocksIn m2 := fun k bl hk => by
+    rcases hcases k bl hk with ⟨rfl, rfl⟩ | ⟨_, h⟩
+    · exact ⟨htok, hvf, pu.wf, pu.sh.grow hb⟩
+    · obtain ⟨h1, h2, h3, h4⟩ := post.inv.blocks k bl h
+      exact ⟨h1, h2, h3, h4.grow hb⟩
+  refine ⟨⟨post.inv.grow rfl hheap (Nat.le_refl _) hb hB, post.nv, Nat.le_trans post.nid (Nat.le_succ _),
+    post.dom, post.frz, post.rootb, post.cdom, post.cmode, post.dkeep, post.blk.trans hb⟩, ?_⟩
+  exact out_share htok hvf pu.wf hnew
+
 theorem RhsPost.trans {m m1 m2 : Mem} {Γ Γ1 Γ2 : Ctx} {F : List Var} (h1 : RhsPost m m1 Γ Γ1 F)
     (h2 : RhsPost m1 m2 Γ1 Γ2 F) : RhsPost m m2 Γ Γ2 F where
   inv := h2.inv
@@ -936,6 +973,20 @@ theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry
         exact ⟨post, out_part out (by rw [hty]; simp) hwb (Sub.inr (Sub.refl _))
           (fun s x h => by rw [hty]; exact ViewIn.inr h) (by simp) hok.2
           (fun u k p h => by rw [hty]; exact ArcIn.inr h)⟩
+  | arcNew hy hly hty hpl hpa =>
+    cases he with
+    | arcNew htk hfr =>
+      obtain ⟨post, pu⟩ := push_take hi hanch hy hly hty hpa htk
+      exact rhs_arcNew post pu hpl (hty ▸ hi.tyok hy) hfr
+  | arcClone ha hl hty =>
+    cases he with
+    | arcClone hv => exact ⟨RhsPost.same hi, out_arcClone hi ha hl hty hv⟩
+  | arcGet ha hl hty hpl =>
+    cases he with
+    | arcGet hv hbk =>
+      obtain ⟨hk, _, _⟩ := hi.arc_val ha hl hty hv
+      rw [hk] at hbk; cases hbk
+      exact ⟨RhsPost.same hi, out_arcGet hi ha hl hty hpl hv⟩
 
 /-- `= x r`: the right-hand side runs, `x`'s old value is dropped, and `x`
     takes the new one. -/
@@ -1813,6 +1864,12 @@ theorem EvalR.blk {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.o
   | inl h1 => exact BlkLe.of_eq (TakeVal.blk h1)
   | inr h1 => exact BlkLe.of_eq (TakeVal.blk h1)
   | pack h1 => exact BlkLe.of_eq (TakeVal.blk h1)
+  | @arcNew t y v m1 htk hfr =>
+    intro k bl hk
+    have hk1 : m1.blk k = some bl := by rw [TakeVal.blk htk]; exact hk
+    have hne : k ≠ m1.nid := fun h => by rw [h, hfr] at hk1; cases hk1
+    show upd m1.blk m1.nid _ k = some bl
+    rw [upd_ne _ _ hne]; exact hk1
   | _ => exact BlkLe.refl _
 
 theorem BindParams.blk {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var} {base i : Nat}
