@@ -36164,13 +36164,20 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
 }
 
 // A borrow's "only through an element" fact (`vi_`) past a join: a source
-// stays in it only where every path that borrows from it (`bs_`, a dead
-// path's too, as the sources are joined) says so — borrowed directly on
-// one, it ends as a direct borrow does (agora #399).
-@ __vi_combine s k s v1 s v2 s j1 s j2 s s0 → s {
+// stays in it only where every live path that borrows from it (`bs_`)
+// says so — borrowed directly on one, it ends as a direct borrow does. A
+// dead path is no path into what follows: a `break` / `continue` took its
+// borrows along (lbrkbs / lcntbs), a `^` was checked where it left
+// (agora #399).
+@ __vi_combine s k s v1 s v2 s s1 s s2 s j1 s j2 s s0 → s {
     : s bk ( nurl_str_cat `bs_` ( nurl_str_slice k 3 - ( nurl_str_len k ) 3 ) )
     : s b1 ( __cj_arm_val j1 s0 bk )
     : s b2 ( __cj_arm_val j2 s0 bk )
+    // (A source the live path borrows is borrowed as it borrows it; one
+    // only the dead path brought in — the sources are joined with it —
+    // keeps the dead path's kind.)
+    ? ( seq s1 `!` ) { ^ ( __word_union v2 ( __word_drop_all v1 b2 ) ) } {}
+    ? ( seq s2 `!` ) { ^ ( __word_union v1 ( __word_drop_all v2 b1 ) ) } {}
     : s both ( __word_drop_all v1 ( __word_drop_all v1 v2 ) )
     ^ ( __word_union ( __word_union both ( __word_drop_all v1 b2 ) ) ( __word_drop_all v2 b1 ) )
 }
@@ -36194,7 +36201,7 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
         : s k ( str_first_word rest ) = rest ( str_skip_word rest )
         : s v1 ? ( __cj_has j1 k ) ( __cj_get j1 k ) ( __cj_get s0 k )
         : s v2 ? ( __cj_has j2 k ) ( __cj_get j2 k ) ( __cj_get s0 k )
-        : s jv ? & == 118 ( nurl_str_get k 0 ) == 100 ( nurl_str_get k 1 ) ( __vd_combine k v1 v2 s1 s2 j1 j2 s0 ) ? & & == 118 ( nurl_str_get k 0 ) == 105 ( nurl_str_get k 1 ) == 95 ( nurl_str_get k 2 ) ( __vi_combine k v1 v2 j1 j2 s0 ) ( __cj_combine k v1 v2 s1 s2 )
+        : s jv ? & == 118 ( nurl_str_get k 0 ) == 100 ( nurl_str_get k 1 ) ( __vd_combine k v1 v2 s1 s2 j1 j2 s0 ) ? & & == 118 ( nurl_str_get k 0 ) == 105 ( nurl_str_get k 1 ) == 95 ( nurl_str_get k 2 ) ( __vi_combine k v1 v2 s1 s2 j1 j2 s0 ) ( __cj_combine k v1 v2 s1 s2 )
         = out ( nurl_str_cat4 out `\n` k ( nurl_str_cat `\t` jv ) )
         // (A binding borrowed on one path and its own on the other is
         // marked `bm_`: a diagnostic says it may not own its value, and from
