@@ -35509,42 +35509,12 @@ unsafe @ bck_note_rc_arg s name s ty → v {
         : s w ( str_first_word rest ) = rest ( str_skip_word rest )
         : i id ( nurl_str_to_int w )
         : i v ( bck_st_get out id )
-        // (A cursor payload over a binding that still owns what it views —
-        // `?? oh { T p → … }`: a view of one of its fields is a view of
-        // oh's storage, which outlives the arm. It borrows from oh from
-        // here on, as a stored value's views move to their new owner
-        // (bck_borrow_transfer); oh changing ends it — agora #336.)
-        : i csrc ( __cursor_src_of id )
-        ? & >= csrc 0 == BCK_OWNED ( bck_st_get out csrc ) { = out ( __cursor_paths_to out id csrc ) } {
-            ? | == v BCK_OWNED == v BCK_MAYBE_MOVED { = out ( bck_root_end out id line `it went out of scope at the end of its match arm` ) } {}
-        }
+        // (A cursor payload's field view ends with its arm too — handed to
+        // the matched owner, it outlived a change of that owner's payload
+        // made in place through a second match, which the walk does not end
+        // on the owner: agora #409, formal's HOLD on #336's transfer.)
+        ? | == v BCK_OWNED == v BCK_MAYBE_MOVED { = out ( bck_root_end out id line `it went out of scope at the end of its match arm` ) } {}
         ( bck_put ( bck_bkey `oos_` w ) `1` )
-    }
-    ^ out
-}
-
-// The binding the match payload `id` is a cursor over (`cul`'s `id:src`),
-// or -1.
-@ __cursor_src_of i id → i {
-    ? == 0 g_bck_has_cursor { ^ -1 } {}
-    : s key ( nurl_str_cat ( nurl_str_int id ) `:` )
-    : ~ s rest ( nurl_sym_get g_bck ( bck_bkey `cul` `` ) )
-    ~ != 0 ( nurl_str_len rest ) {
-        : s cw ( str_first_word rest ) = rest ( str_skip_word rest )
-        ? != 0 ( nurl_str_starts cw key ) { ^ ( nurl_str_to_int ( nurl_str_slice cw ( nurl_str_len key ) - ( nurl_str_len cw ) ( nurl_str_len key ) ) ) } {}
-    }
-    ^ -1
-}
-
-// What borrows from the payload `id` or a field path of it borrows from
-// `src`, the binding it is a cursor over, from here on.
-@ __cursor_paths_to s st i id i src → s {
-    : ~ s out st
-    : ~ s rest ( nurl_sym_get g_bck ( bck_bkey `bsrcs` `` ) )
-    ~ != 0 ( nurl_str_len rest ) {
-        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
-        : i sid ( nurl_str_to_int w )
-        ? == ( bck_path_root sid ) id { = out ( bck_borrow_transfer out sid src ) } {}
     }
     ^ out
 }
