@@ -239,7 +239,9 @@ structure Slot where
 
 /-- A3.1: a counted block (`Arc`): its payload, a tree of type `ty` that no
     one writes.  How many shares it has is the number of `Val.arc` leaves
-    naming it (ghost): when none is left, the step's sweep frees it. -/
+    naming it (ghost, so nothing stores it).  In the first cut a payload owns
+    no address, so a block no share reaches frees nothing: no step removes a
+    block (`arcNew` adds one, `BlkLe`). -/
 structure Blk where
   ty  : Ty
   pay : Val
