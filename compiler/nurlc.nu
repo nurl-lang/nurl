@@ -32408,15 +32408,31 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                             ( bck_clo_cap_view_diag ( bck_path_root ( nurl_str_to_int vc ) ) vs ( bck_field_int rec 3 ) )
                         } {}
                         ? & == 0 ( nurl_str_len vcc ) ! ( seq vs `*` ) {
-                            : i vroot ( bck_path_root ( nurl_str_to_int vc ) )
-                            ( bck_dep_add vroot vs )
-                            ? != 0 g_bck_udrop_any { ( bck_younger_view_check vroot vs p ( bck_field_int rec 3 ) ) } {}
-                            // (Where it was stored: what a diagnostic about
-                            // the dependency points at, bck_caller_view_diag.)
-                            : ~ s vrest ( __src_plain vs )
-                            ~ != 0 ( nurl_str_len vrest ) {
-                                : s vw ( str_first_word vrest ) = vrest ( str_skip_word vrest )
-                                ( bck_put ( bck_bkey `vdl_` ( nurl_str_cat3 ( nurl_str_int vroot ) `:` vw ) ) ( bck_field rec 3 ) )
+                            : i vroot0 ( bck_path_root ( nurl_str_to_int vc ) )
+                            // (Through a borrow — a copy of the owner's handle, a
+                            // field viewer, an element — the value lands in the
+                            // owner that borrow's bytes are read out of: it holds
+                            // the view too, agora #292.)
+                            : ~ s vholders ( nurl_str_int vroot0 )
+                            // (Not a field assigned, `=.`, nor a container that
+                            // is a view itself — a copy of a struct of views:
+                            // those land in the binding's own bytes.)
+                            ? & & == BCK_BORROWED_SHARED ( bck_st_get st vroot0 ) ! ( seq vcal `=.` ) == 0 ( nurl_sym_len g_bck ( bck_bkey `vw_` ( nurl_str_int vroot0 ) ) ) {
+                                : s vown ( __bck_store_owners st vroot0 )
+                                ? != 0 ( nurl_str_len vown ) { = vholders ( nurl_str_cat3 vholders ` ` vown ) } {}
+                            } {}
+                            ~ != 0 ( nurl_str_len vholders ) {
+                                : s vhs ( str_first_word vholders ) = vholders ( str_skip_word vholders )
+                                : i vroot ( nurl_str_to_int vhs )
+                                ( bck_dep_add vroot vs )
+                                ? != 0 g_bck_udrop_any { ( bck_younger_view_check vroot vs p ( bck_field_int rec 3 ) ) } {}
+                                // (Where it was stored: what a diagnostic about
+                                // the dependency points at, bck_caller_view_diag.)
+                                : ~ s vrest ( __src_plain vs )
+                                ~ != 0 ( nurl_str_len vrest ) {
+                                    : s vw ( str_first_word vrest ) = vrest ( str_skip_word vrest )
+                                    ( bck_put ( bck_bkey `vdl_` ( nurl_str_cat3 ( nurl_str_int vroot ) `:` vw ) ) ( bck_field rec 3 ) )
+                                }
                             }
                         } {}
                     } {}
@@ -32729,6 +32745,13 @@ unsafe @ bck_sx_ev s st s e b arg → s {
     // (At the store that put the view there, when it is known.)
     : s sl ( nurl_sym_get g_bck ( bck_bkey `vdl_` ( nurl_str_cat3 ( nurl_str_int ( bck_path_root d ) ) `:` ( nurl_str_int src ) ) ) )
     : i at ? != 0 ( nurl_str_len sl ) ( nurl_str_to_int sl ) line
+    // (One error per store of a view of `src`: an alias of a parameter and
+    // the parameter it borrows both hold what one store put there — agora
+    // #292 records it on each — and naming the second says nothing new.)
+    : s ltag ( nurl_str_cat4 `cvl:` ( nurl_str_int at ) `:` ( nurl_str_int src ) )
+    : s ws2 ( nurl_sym_get g_bck `warnset` )
+    ? ( str_contains_word ws2 ltag ) { ^ v } {}
+    ( bck_put `warnset` ( nurl_str_cat3 ws2 ` ` ltag ) )
     // (A closure stored there holding a copy of the handle of a value no
     // owner could copy in, `nch_`: agora #161.)
     ? & ( bck_nch ( nurl_str_int src ) ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vdh_` ( nurl_str_int ( bck_path_root d ) ) ) ) ( nurl_str_int src ) ) {
@@ -33465,8 +33488,12 @@ unsafe @ bck_sx_is_id s e → b {
     : s k ( bck_bkey `vdi_` ws )
     : s have ( nurl_sym_get g_bck k )
     : s direct ( __word_drop_all ( __src_plain srcs ) ind )
-    // (Direct now wins: a dependency held both ways ends on either.)
-    ( bck_put k ( __word_union ( __word_drop_all have direct ) ind ) )
+    // (Direct now wins: a dependency held both ways ends on either. And
+    // one already held directly stays so: a later store reaching the same
+    // source only through an element does not make the first one's view
+    // survive that source's buffer moving — agora #292.)
+    : s prevd ( __word_drop_all ( nurl_sym_get g_bck ( bck_bkey `vds_` ws ) ) have )
+    ( bck_put k ( __word_union ( __word_drop_all have direct ) ( __word_drop_all ind prevd ) ) )
 }
 
 // …and one only a handle copy of (`vdh_`, `~id`).
@@ -33476,8 +33503,10 @@ unsafe @ bck_sx_is_id s e → b {
     : s have ( nurl_sym_get g_bck k )
     ? & == 0 ( nurl_str_len hnd ) == 0 ( nurl_str_len have ) { ^ } {}
     : s other ( __word_drop_all ( __src_plain srcs ) hnd )
-    // (Held any other way too, it ends as that way does.)
-    ( bck_put k ( __word_union ( __word_drop_all have other ) hnd ) )
+    // (Held any other way too, it ends as that way does — before this
+    // store as well as in it: agora #292.)
+    : s prevo ( __word_drop_all ( nurl_sym_get g_bck ( bck_bkey `vds_` ( nurl_str_int wid ) ) ) have )
+    ( bck_put k ( __word_union ( __word_drop_all have other ) ( __word_drop_all hnd prevo ) ) )
 }
 
 // `list` without any word of `drop`.
@@ -33493,6 +33522,31 @@ unsafe @ bck_sx_is_id s e → b {
 }
 
 // …on `srcs` too (a container another view was stored into).
+// The owners a store through the borrow `b` lands in: the bindings its
+// sources are, or are fields of — through any borrow among them, to the
+// ones that are not borrows (agora #292). A parameter is one: what the
+// caller passed.
+@ __bck_store_owners s st i b → s {
+    : ~ s out ``
+    : ~ s todo ( __src_plain ( nurl_sym_get g_bck ( bck_bkey `bs_` ( nurl_str_int b ) ) ) )
+    : ~ s seen ( nurl_str_int b )
+    ~ != 0 ( nurl_str_len todo ) {
+        : s w ( str_first_word todo ) = todo ( str_skip_word todo )
+        : i c0 ( nurl_str_get w 0 )
+        ? & >= c0 48 <= c0 57 {
+            : s r ( nurl_str_int ( bck_path_root ( nurl_str_to_int w ) ) )
+            ? ! ( str_contains_word seen r ) {
+                = seen ( nurl_str_cat3 seen ` ` r )
+                ? == BCK_BORROWED_SHARED ( bck_st_get st ( nurl_str_to_int r ) ) {
+                    : s more ( __src_plain ( nurl_sym_get g_bck ( bck_bkey `bs_` r ) ) )
+                    ? != 0 ( nurl_str_len more ) { = todo ? == 0 ( nurl_str_len todo ) ( nurl_str_cat more `` ) ( nurl_str_cat3 todo ` ` more ) } {}
+                } { = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat r `` ) ( nurl_str_cat3 out ` ` r ) }
+            } {}
+        } {}
+    }
+    ^ out
+}
+
 @ bck_dep_add i wid s srcs0 → v {
     ? == 0 ( nurl_str_len srcs0 ) { ^ } {}
     = g_bck_has_deps 1
