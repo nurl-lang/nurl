@@ -15166,6 +15166,10 @@ unsafe @ gen_call i lex i syms i cg → s {
     // (The arguments that can hold a view, `idx=name`: where a callee that
     // leaves one viewing another argument's storage leaves it — agora #337.)
     : ~ s __vk_hold ``
+    // (Whether the callee may leave any argument viewing another at all —
+    // asked once: most callees' answer is final and empty, and then no
+    // argument needs a holder name or a row.)
+    : b __vk_live & != 0 g_borrowck ( __vkeep_live call_name )
     // (Their walk classes: a `bK` row's container must be able to hold a
     // view — class 2 or 3, agora #301.)
     : ~ i __sx_arg0_c 1
@@ -15929,7 +15933,7 @@ unsafe @ gen_call i lex i syms i cg → s {
             // (A holder the caller sees changed: one passed `inout`, or a
             // value with storage of its own a callee can push into — not a
             // view or a struct of views, the callee's own copy.)
-            ? & >= __sx_c0 2 | is_inout_arg ( bck_is_heap_lty at ) {
+            ? & & __vk_live >= __sx_c0 2 | is_inout_arg ( bck_is_heap_lty at ) {
                 : s __hn ? ( is_ident_tok bck_arg_tt ) ( nurl_str_cat bck_arg_val `` ) ? == bck_arg_tt TT_DOT ? is_inout_arg ( nurl_str_slice arg_sx 0 ( nurl_str_find arg_sx `.` ) ) ( nurl_str_cat ( nurl_sym_get syms `__last_member_root__` ) `` ) ``
                 ? > ( nurl_str_len __hn ) 0 { = __vk_hold ( nurl_str_cat4 __vk_hold ? == 0 ( nurl_str_len __vk_hold ) `` ` ` ( nurl_str_int arg_idx ) ( nurl_str_cat `=` __hn ) ) } {}
             } {}
@@ -16005,7 +16009,7 @@ unsafe @ gen_call i lex i syms i cg → s {
             // at the walk (`bK` rows, agora #301). A callee whose answer is
             // not final yet parks this function's walk behind its own.
             // (An owner passed `inout` is one too: agora #337.)
-            ? & & & | == __sx_c0 0 == __sx_c0 3 | ( is_ident_tok bck_arg_tt ) == bck_arg_tt TT_DOT ! __callee_shadowed ! ( bck_unsafe_ctx ) {
+            ? & __vk_live & & & | == __sx_c0 0 == __sx_c0 3 | ( is_ident_tok bck_arg_tt ) == bck_arg_tt TT_DOT ! __callee_shadowed ! ( bck_unsafe_ctx ) {
                 : i __vk ( __vkeep_ask call_name arg_idx )
                 ? > __vk 0 {
                     : s __vk_sx ( __sx_operand_c syms bck_arg_tt bck_arg_val __sx_c0 ( __sx_froot syms bck_arg_tt at ) __sx_n0 )
@@ -17331,7 +17335,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         // callee that may leave the container viewing it (g_fn_vkeeps): a
         // `BK` row with no source to depend on, refused at the walk
         // unless the callee keeps the argument (agora #301).
-        ? & & & & & != 0 g_borrowck != 0 ( nurl_str_len __at_o ) ! is_inout_arg ! __callee_shadowed ! ( bck_unsafe_ctx ) | == ( bck_walk_class at ) 0 == ( bck_walk_class at ) 3 {
+        ? & __vk_live & & & & & != 0 g_borrowck != 0 ( nurl_str_len __at_o ) ! is_inout_arg ! __callee_shadowed ! ( bck_unsafe_ctx ) | == ( bck_walk_class at ) 0 == ( bck_walk_class at ) 3 {
             : i __vkt ( __vkeep_ask call_name arg_idx )
             ? > __vkt 0 {
                 : ~ s __vth ( __vkeep_holders call_name arg_idx )
@@ -17717,7 +17721,7 @@ unsafe @ gen_call i lex i syms i cg → s {
     // past the first argument: that owner is where the callee keeps it.
     ? & != 0 ( nurl_str_len __sx_iown ) != 0 g_borrowck { ? > ( nurl_sym_len g_bck `pvpass` ) __sx_vp0 { ( bck_vpass_own __sx_vp0 call_name __sx_iown ) } {} } {}
     // (Before the rows reach the list: `-b` names no binding.)
-    ? & & != 0 g_borrowck > ( nurl_sym_len g_bck `pvpass` ) __sx_vp0 >= ( nurl_str_find ( nurl_sym_get g_bck `pvpass` ) `-h` ) 0 { ( __vbuf_holders __sx_vp0 call_name __vk_hold ) } {}
+    ? & & __vk_live > ( nurl_sym_len g_bck `pvpass` ) __sx_vp0 >= ( nurl_str_find ( nurl_sym_get g_bck `pvpass` ) `-h` ) 0 { ( __vbuf_holders __sx_vp0 call_name __vk_hold ) } {}
     ? & & != 0 g_borrowck > ( nurl_sym_len g_bck `pvpass` ) __sx_vp0 >= ( nurl_str_find ( nurl_sym_get g_bck `pvpass` ) `-b ` ) 0 { ( __vbuf_own __sx_vp0 call_name ? & != 0 ( nurl_str_len __sx_iown ) >= __sx_iown_c 2 __sx_iown `-` ) } {}
     ? != 0 __sx_me {
         : b __sx_sum ( __summarised_callee syms fname call_name )
@@ -29240,6 +29244,15 @@ unsafe @ bck_swap_char s str i from i to → s {
         } {}
     }
     ^ out
+}
+
+// …any pair at all, or not known yet (__vkeep_ask's 1 or 2 for some k).
+@ __vkeep_live s cal → b {
+    : s gb ( bck_generic_base cal )
+    : ~ s vk ( nurl_sym_get g_fn_vkeeps cal )
+    ? & == 0 ( nurl_str_len vk ) ! ( seq gb cal ) { = vk ( nurl_sym_get g_fn_vkeeps gb ) } {}
+    ? != 0 ( nurl_str_len vk ) { ^ > ( nurl_str_len vk ) 1 } {}
+    ^ | | == 0 ( nurl_sym_len g_fn_compiled cal ) != 0 ( nurl_sym_len g_fn_vkpend cal ) != 0 ( nurl_sym_len g_fn_vkpend gb )
 }
 
 // …of `cal`'s answer, or `*` (any argument) when it is not final.
