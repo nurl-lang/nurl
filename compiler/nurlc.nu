@@ -30251,7 +30251,7 @@ unsafe @ bck_kc i idx → i {
     ? == c 109 { ^ ? ( seq k `move` ) 4 ? ( seq k `maybemove` ) 5 ? ( seq k `maybealias` ) 6 ? ( seq k `match` ) 27 ? ( seq k `match-arm-edge` ) 29 0 } {}
     ? == c 98 { ^ ? ( seq k `borrow` ) 7 ? ( seq k `brk` ) 21 ? ( seq k `block` ) 23 0 } {}
     ? == c 102 { ^ ? ( seq k `fieldset` ) 8 ? ( seq k `fevar` ) 35 ? ( seq k `fborrow` ) 7 ? ( seq k `fborrowh` ) 7 0 } {}
-    ? == c 116 { ^ ? ( seq k `take` ) 37 ? ( seq k `tborrow` ) 7 0 } {}
+    ? == c 116 { ^ ? ( seq k `take` ) 37 ? ( seq k `tborrow` ) 7 ? ( seq k `tryret` ) 39 0 } {}
     ? == c 112 { ^ ? ( seq k `pendcall` ) 9 ? ( seq k `pendretain` ) 10 ? ( seq k `pendtake` ) 11 ? ( seq k `pendkeep` ) 12 ? ( seq k `pendfield` ) 13 ? ( seq k `pendstore` ) 15 ? ( seq k `pendeff` ) 32 ? ( seq k `pendlend` ) 32 ? ( seq k `pendjoin` ) 32 ? ( seq k `pendfx` ) 38 ? ( seq k `pendfc` ) 38 0 } {}
     ? == c 115 { ^ ? ( seq k `store` ) 14 0 } {}
     ? == c 120 { ^ ? ( seq k `xfer` ) 16 0 } {}
@@ -31709,6 +31709,37 @@ unsafe @ bck_sx_ev s st s e b arg → s {
 // across arms and join the results; `~` loops re-enter their body to
 // a fixpoint. It returns the state holding at `hi`. Phase 1: every
 // row's reads are checked for use-after-move before its writes apply.
+// The checks of a way out, at a `\` that hands a failure back (the
+// `tryret` row): every `inout` parameter goes back to the caller, the
+// defers armed on this path run, and then what the caller's storage
+// views and what the scopes still drop are asked of that state — as at a
+// `^`. The success path goes on from the state before the defers: what
+// their replay changed of the fact tables is logged and put back, as a
+// `?`'s arm's is (agora #379).
+unsafe @ __bck_try_exit_check s st i line → v {
+    ? ( seq st `!` ) { ^ v } {}
+    ? != 0 g_bck_fmv_any { ( __bck_inout_exit_check st line F ) } {}
+    ? == 0 g_bck_has_defers {
+        ( bck_param_view_check st line )
+        ( bck_ret_drop_check st line )
+        ^ v
+    } {}
+    : s cj_outer ( nurl_str_cat g_cj_log `` )
+    : i cj_eo g_cj_entry
+    = g_cj_depth + g_cj_depth 1
+    = g_cj_log ``
+    = g_cj_entry ( __cj_addr st )
+    : s ad ( bck_apply_defers st )
+    ? ! ( seq ad `!` ) {
+        ( bck_param_view_check ad line )
+        ( bck_ret_drop_check ad line )
+    } {}
+    ? != 0 ( nurl_str_len g_cj_log ) { ( __cj_restore g_cj_log ) } {}
+    = g_cj_log cj_outer
+    = g_cj_entry cj_eo
+    = g_cj_depth - g_cj_depth 1
+}
+
 @ bck_walk_seq i lo i hi s state → s {
     : ~ s st ( nurl_str_cat state `` )
     : ~ i p lo
@@ -31766,6 +31797,14 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 } {}
                 = st ( nurl_str_cat `!` `` )
                 = p hi
+                = done T
+            } {}
+            // A `\` that hands a failure back leaves here on that path: the
+            // checks of a way out run on it, and the walk goes on along the
+            // success path (agora #379).
+            ? & ! done == kc 39 {
+                ( __bck_try_exit_check st ( bck_field_int rec 3 ) )
+                = p + p 1
                 = done T
             } {}
             ? & ! done == kc 20 {
@@ -48369,6 +48408,14 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
     ( nurl_print `  br i1 ` ) ( nurl_print tag )
     ( nurl_print `, label %` ) ( nurl_print lok )
     ( nurl_print `, label %` ) ( nurl_print lfail ) ( emit_dbg_eol )
+    // (The walk's way out on that path: a `tryret` row, checked as a `^`
+    // is — agora #379. Its own row: the statement's reads stay theirs.)
+    ? != 0 g_borrowck {
+        : s __tr_reads ( nurl_sym_get g_bck `reads` )
+        ( bck_put `reads` `` )
+        ( bck_record `tryret` `` try_line )
+        ( bck_put `reads` __tr_reads )
+    } {}
     // Fail path: propagate the Err/None value, routing through defer chain if active.
     // For res_type: return val (preserves original error payload).
     // For opt_type: return zeroinitializer (None = { false, 0 }).
