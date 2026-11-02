@@ -312,19 +312,6 @@ theorem ValOK.int_any {m' : Mem} {P' H' : List Dep} (h : ValOK m .int v P H) : V
 
 end ValOK
 
-mutual
-def Val.ids : Val → List Nat
-  | .node _ c d es => c :: d :: idsL es
-  | .pair v w => v.ids ++ w.ids
-  | .inl v => v.ids
-  | .inr v => v.ids
-  | .pkg _ _ _ v _ => v.ids
-  | _ => []
-def idsL : List Val → List Nat
-  | [] => []
-  | e :: es => e.ids ++ idsL es
-end
-
 def OwnedAt (m : Mem) (x : Var) (t : Val) : Prop := m.st x = some ⟨true, some t⟩
 
 /-- No view stored in a tree points into that same tree's buffers (a struct
