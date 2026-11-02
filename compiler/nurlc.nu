@@ -33092,7 +33092,11 @@ unsafe @ bck_ret_drop_check s st i line → v {
             : i line ( nurl_str_to_int ( nurl_str_slice t2 0 h3 ) )
             : s srcs ( bck_swap_char ( nurl_str_slice t2 + h3 1 - - ( nurl_str_len t2 ) h3 1 ) 44 32 )
             : s vkac ( nurl_sym_get g_bck `vkacc` )
-            ? | ( str_contains_word vkac ( nurl_str_cat3 ( nurl_str_int hh ) `>` k ) ) ( str_contains_word vkac ( nurl_str_cat3 ( nurl_str_int hh ) `>^` k ) ) {
+            // (The pair the self-call carries: its own storage, or only its
+            // elements' — then the source it hands on is kept as one too,
+            // `__vk_acc_add_ind`, not promoted to a direct pair, agora #383.)
+            : b vkd ( str_contains_word vkac ( nurl_str_cat3 ( nurl_str_int hh ) `>` k ) )
+            ? | vkd ( str_contains_word vkac ( nurl_str_cat3 ( nurl_str_int hh ) `>^` k ) ) {
                 : b cpar != 0 ( nurl_sym_len g_bck ( bck_bkey `pp_` cr ) )
                 : i ci ( str_word_index pl ( nurl_sym_get2 g_bck `rv_` cr ) )
                 ? ( seq srcs `!` ) { ( bck_diag_vbuf_temp ( nurl_str_to_int cr ) g_bck_fn ( nurl_str_to_int k ) line ) } {
@@ -33103,7 +33107,7 @@ unsafe @ bck_ret_drop_check s st i line → v {
                         : b xpar & != 0 ( nurl_sym_len g_bck ( bck_bkey `pp_` xr ) ) == 0 ( nurl_sym_len g_bck ( bck_bkey `po_` xr ) )
                         ? xpar {
                             : i xi ( str_word_index pl ( nurl_sym_get2 g_bck `rv_` xr ) )
-                            ? & & cpar >= xi 0 >= ci 0 { ? ( __vk_acc_add ci xi ) { = changed T } {} } {}
+                            ? & & cpar >= xi 0 >= ci 0 { ? ? vkd ( __vk_acc_add ci xi ) ( __vk_acc_add_ind ci xi ) { = changed T } {} } {}
                         } { ? ! ( bck_id_is_global ( nurl_str_to_int xr ) ) { ( bck_diag_vbuf_self ( nurl_str_to_int cr ) ( nurl_str_to_int xr ) ( nurl_str_to_int k ) line ) } {} }
                     }
                 }
