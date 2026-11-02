@@ -2937,6 +2937,7 @@ unsafe @ note_unsafe_item s pos s what → v {
 // Whether this function's walk has recorded any view dependency
 // (bck_dep_add), and statement `vpass` rows pending (bck_stash_vpass).
 : ~ i g_bck_has_deps 0
+: ~ i g_sxe_pv 0  // 1 while __vk_note_pv asks which view parameters an expression reads (agora #370)
 // …and whether it has bound a `??` arm's payload as a cursor over the
 // option binding it matched (bck_handle_match, `cu_` keys).
 : ~ i g_bck_has_cursor 0
@@ -16106,7 +16107,9 @@ unsafe @ gen_call i lex i syms i cg → s {
             // at the walk (`bK` rows, agora #301). A callee whose answer is
             // not final yet parks this function's walk behind its own.
             // (An owner passed `inout` is one too: agora #337.)
-            ? & __vk_live & & & | == __sx_c0 0 == __sx_c0 3 | ( is_ident_tok bck_arg_tt ) == bck_arg_tt TT_DOT ! __callee_shadowed ! ( bck_unsafe_ctx ) {
+            // (…and a view handed in — `( string_data s )`, a view binding, a
+            // slice — whose callee keeps it in a holder: agora #370.)
+            ? & __vk_live & & & | | == __sx_c0 0 == __sx_c0 3 == __sx_c0 2 | | ( is_ident_tok bck_arg_tt ) == bck_arg_tt TT_DOT == __sx_c0 2 ! __callee_shadowed ! ( bck_unsafe_ctx ) {
                 : i __vk ( __vkeep_ask call_name arg_idx )
                 ? > __vk 0 {
                     : s __vk_sx ( __sx_operand_c syms bck_arg_tt bck_arg_val __sx_c0 ( __sx_froot syms bck_arg_tt at ) __sx_n0 )
@@ -31526,6 +31529,11 @@ unsafe @ bck_sx_skip s e → v {
     ? != 0 ( nurl_sym_len g_bck ( bck_bkey `nh_` ids ) ) { ^ ( nurl_str_cat deps `` ) } {}
     : i v ( bck_st_get st r )
     ? ( bck_dead_state v ) { ^ ( nurl_str_cat `` `` ) } {}
+    // (A view the caller passed, `pv_`, asked by __vk_note_pv only: it
+    // stands for what it points into, so a holder parameter given it names
+    // the pair h>k for the caller to tie — and nothing else sees it as a
+    // source, agora #370.)
+    ? & & != 0 g_sxe_pv == v BCK_OWNED != 0 ( nurl_sym_len g_bck ( bck_bkey `pv_` rs ) ) { ^ ( __word_union rs deps ) } {}
     // An `s` that owns the buffer it points at (view mark `o`): a copy of
     // it is an address into that buffer — its own storage, as an
     // argument's is. (Handed back by name, the buffer goes with it.)
@@ -31982,6 +31990,8 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 : i amk ? == amk0 110 0 amk0
                 : s asx ? != 0 amk ( bck_field rec 8 ) ``
                 : s asrcs ? != 0 ( nurl_str_len asx ) ( bck_sx_sources st asx asid ) ( nurl_str_cat `*` `` )
+                // (A holder parameter given a view parameter: agora #370.)
+                ? != 0 ( nurl_str_len asx ) { ( __vk_note_pv asid asx st ) } {}
                 : s anest ? == amk0 110 ( bck_sx_sources st ( bck_field rec 8 ) asid ) ``
                 ? & == BCK_OWNED ( bck_st_get st asid ) ( bck_has_stored_in asid )
                 { = st ( bck_kill_stored_in st asid ( bck_field_int rec 3 ) T ) } {}
@@ -32191,7 +32201,11 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                         ( nurl_str_cat scal ` (in a literal it was handed)` ) )
                     } {}
                 } {}
-                ? & takes ! s_moves {
+                // (A view the caller passed, `pv_`, is no value this function
+                // can give away: a callee that stores it stores a copy of the
+                // address, and the parameter still points where it did —
+                // agora #370.)
+                ? & & takes ! s_moves == 0 ( nurl_sym_len g_bck ( bck_bkey `pv_` ( nurl_str_int ( bck_path_root svid ) ) ) ) {
                     : s s_pko ? == kc 12 ( bck_field rec 7 ) ``
                     : s s_own ? != 0 ( nurl_str_len s_pko ) ( nurl_str_cat `=` ( nurl_str_int ( bck_intern s_pko ) ) ) ( nurl_str_cat scal `` )
                     // (Stored into the binding's own new value — `= src ( dyn
@@ -32257,7 +32271,10 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 // either (`@.__nurl_sink.N`, emit_sink_flags), and a read
                 // after it read what the keeper released — `( mid h )`,
                 // `mid` binding `( mk h )` and dropping it, then `. h s`.
-                ? & == kc 9 ( seq ( nurl_sym_get g_bck ( bck_bkey `pp_` pvn ) ) `1` ) {
+                // (Not a view the caller passed, `pv_`: kept, it is a copy of
+                // the address, and the parameter still points where it did —
+                // agora #370.)
+                ? & & == kc 9 ( seq ( nurl_sym_get g_bck ( bck_bkey `pp_` pvn ) ) `1` ) == 0 ( nurl_sym_len g_bck ( bck_bkey `pv_` pvn ) ) {
                     // Kept in the callee's result (`: W w ( wrap h )`) it is
                     // moved into that owner, as a local is: released with it.
                     // (A callee that puts it in the container argument —
@@ -32442,6 +32459,10 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                                 : s vhs ( str_first_word vholders ) = vholders ( str_skip_word vholders )
                                 : i vroot ( nurl_str_to_int vhs )
                                 ( bck_dep_add vroot vs )
+                                // (Kept into a holder parameter — or through a
+                                // borrow into the parameter it is of — a view
+                                // parameter: the answer's pair, agora #370.)
+                                ( __vk_note_pv vroot ( bck_field rec 8 ) st )
                                 ? != 0 g_bck_udrop_any { ( bck_younger_view_check vroot vs p ( bck_field_int rec 3 ) ) } {}
                                 // (Where it was stored: what a diagnostic about
                                 // the dependency points at, bck_caller_view_diag.)
@@ -33611,6 +33632,31 @@ unsafe @ bck_sx_is_id s e → b {
         : s x ( str_first_word rest ) = rest ( str_skip_word rest )
         : s rs ( nurl_str_int ( bck_path_root ( nurl_str_to_int x ) ) )
         ? & & ! ( seq rs hr ) != 0 ( nurl_sym_len g_bck ( bck_bkey `pp_` rs ) ) == 0 ( nurl_sym_len g_bck ( bck_bkey `po_` rs ) ) {
+            : i k ( str_word_index pl ( nurl_sym_get2 g_bck `rv_` rs ) )
+            ? >= k 0 { ( __vk_acc_add h k ) } {}
+        } {}
+    }
+}
+
+// A store into holder parameter `hid` of what expression `sx` evaluates
+// to: each view the caller passed (`pv_`) that `sx` reads is one more
+// pair of this function's answer, h>k — the caller ties its argument at h
+// to the one at k. Only the answer learns it: no dependency, so no other
+// check sees a view parameter as a source (agora #370).
+@ __vk_note_pv i hid s sx s st → v {
+    ? | == 0 ( nurl_str_len g_bck_fn ) == 0 ( nurl_str_len sx ) { ^ v } {}
+    : s hr ( nurl_str_int ( bck_path_root hid ) )
+    ? | == 0 ( nurl_sym_len g_bck ( bck_bkey `pp_` hr ) ) != 0 ( nurl_sym_len g_bck ( bck_bkey `po_` hr ) ) { ^ v } {}
+    : s pl ( nurl_sym_get g_bck `vkparams` )
+    : i h ( str_word_index pl ( nurl_sym_get2 g_bck `rv_` hr ) )
+    ? < h 0 { ^ v } {}
+    = g_sxe_pv 1
+    : ~ s rest ( __src_plain ( bck_sx_sources st sx -1 ) )
+    = g_sxe_pv 0
+    ~ != 0 ( nurl_str_len rest ) {
+        : s x ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s rs ( nurl_str_int ( bck_path_root ( nurl_str_to_int x ) ) )
+        ? & ! ( seq rs hr ) != 0 ( nurl_sym_len g_bck ( bck_bkey `pv_` rs ) ) {
             : i k ( str_word_index pl ( nurl_sym_get2 g_bck `rv_` rs ) )
             ? >= k 0 { ( __vk_acc_add h k ) } {}
         } {}
@@ -36523,6 +36569,11 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
         // (…or any other value it drops: a String, a Vec, a `% Drop` value.)
         ? ( str_contains_word g_bck_own_params ( nurl_str_cat `!` pn ) ) {
             ( bck_put ( bck_bkey `po_` ( nurl_str_int ( bck_intern pn ) ) ) `1` )
+        } {}
+        // (…a view the caller passed: it stands for what it points into,
+        // bck_sx_name — agora #370.)
+        ? ( str_contains_word g_bck_own_params ( nurl_str_cat `~` pn ) ) {
+            ( bck_put ( bck_bkey `pv_` ( nurl_str_int ( bck_intern pn ) ) ) `1` )
         } {}
         // (…and an `inout` one whose drop may read the views it holds: a
         // holder older than every local, bck_younger_view_check — agora
@@ -55112,6 +55163,13 @@ unsafe @ __alloca_struct_params i syms i cg → v {
         ? & & & ! __raw ( str_contains_word sinks ( nurl_str_int index ) ) == 0 ( nurl_sym_len2 syms name `__inout` )
         | | ( __type_needs_drop __pty syms ) ( __nc_drop_ty __pty ) ( __is_closure_ty __pty ) {
             ( nurl_sym_def syms `__fn_ownstr_params__` ( nurl_str_cat4 ( nurl_sym_get syms `__fn_ownstr_params__` ) ` ` `!` name ) )
+        } {}
+        // A view the caller passed — not a `sink`, not `inout`, of a type
+        // that holds addresses (an `s`, a slice, a struct of views): the
+        // walk's `pv_` parameter, which stands for what it points into
+        // (`~name`, agora #370).
+        ? & & ! ( str_contains_word sinks ( nurl_str_int index ) ) == 0 ( nurl_sym_len2 syms name `__inout` ) == 2 ( bck_bind_class __pty ) {
+            ( nurl_sym_def syms `__fn_ownstr_params__` ( nurl_str_cat4 ( nurl_sym_get syms `__fn_ownstr_params__` ) ` ` `~` name ) )
         } {}
         // An `inout` parameter whose drop may read the views it holds is
         // the caller's holder: given a view of a local of this function,
