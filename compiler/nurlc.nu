@@ -35853,8 +35853,11 @@ unsafe @ bck_loop_mask s pre s post → s {
 
 // (A loop's own `break` / `continue` accumulators are the walk's
 // output, reset before every walk: no fact a later walk reads.)
+// (Every accumulator's key starts `lbrk` or `lcnt` — the states, and the
+// dependencies and borrows a `break` / `continue` left with: two tests,
+// as cheap as before #389, so bck_put still inlines it.)
 @ bck_dg_follows s k → b {
-    ^ & != 0 g_bck_watch ! | | | | | ( seq k `lbrk` ) ( seq k `lcnt` ) ( seq k `lbrkvd` ) ( seq k `lcntvd` ) ( seq k `lbrkbs` ) ( seq k `lcntbs` )
+    ^ & != 0 g_bck_watch ! | != 0 ( nurl_str_starts k `lbrk` ) != 0 ( nurl_str_starts k `lcnt` )
 }
 
 // A borrow fact written (`bs_` `vi_` `fb_` `fp_`: the facts a `?` / `??`
@@ -36002,7 +36005,8 @@ unsafe @ bck_loop_mask s pre s post → s {
         : s id ( str_first_word rest ) = rest ( str_skip_word rest )
         // (…and, after a tab, the ones it views only through an element,
         // `vi_`: the head joins how it borrows too, agora #399.)
-        : s line ( nurl_str_cat4 id `:` ( nurl_sym_get g_bck ( bck_bkey `bs_` id ) ) ( nurl_str_cat `\t` ( nurl_sym_get g_bck ( bck_bkey `vi_` id ) ) ) )
+        : s vil ( nurl_sym_get g_bck ( bck_bkey `vi_` id ) )
+        : s line ? == 0 ( nurl_str_len vil ) ( nurl_str_cat3 id `:` ( nurl_sym_get g_bck ( bck_bkey `bs_` id ) ) ) ( nurl_str_cat4 id `:` ( nurl_sym_get g_bck ( bck_bkey `bs_` id ) ) ( nurl_str_cat `\t` vil ) )
         = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat line `` ) ( nurl_str_cat3 out `\n` line )
     }
     ^ out
