@@ -32733,7 +32733,14 @@ unsafe @ __bck_try_exit_check s st i line → v {
                 // can hold a view: __clo_cap_marks.)
                 : s mk ( bck_field rec 5 )
                 ? | | ( seq mk `@cap` ) ( seq mk `@cip` ) ( seq mk `@cpv` ) {
-                    ? ! ( seq mk `@cpv` ) { ( bck_put ( bck_bkey `cc_` ( bck_field rec 1 ) ) ? ( seq mk `@cip` ) `p` `c` ) } {}
+                    ? ! ( seq mk `@cpv` ) { ( bck_put ( bck_bkey `cc_` ( bck_field rec 1 ) ) ? ( seq mk `@cip` ) `p` `c` ) } {
+                        // (A plain parameter that holds storage of its own —
+                        // a `( Vec s )` the closure pushes into — is a target
+                        // for a view of a capture, which its caller cannot
+                        // follow; a view of another parameter is the call's
+                        // holder/source pair, agora #332, #403.)
+                        ? ( seq ( bck_field rec 6 ) `3` ) { ( bck_put ( bck_bkey `cc_` ( bck_field rec 1 ) ) `v` ) } {}
+                    }
                     // (A source it cannot see into, whatever its class — a
                     // view, an owner of views, a closure: stored whole into a
                     // capture, an owner of views hands on the views it holds,
@@ -32808,13 +32815,15 @@ unsafe @ __bck_try_exit_check s st i line → v {
                         // (An owner viewed is its own storage.)
                         // (Into a closure's capture or `inout` parameter: refused.)
                         : s vcc ( nurl_sym_get g_bck ( bck_bkey `cc_` ( nurl_str_int ( bck_path_root ( nurl_str_to_int vc ) ) ) ) )
-                        = g_bck_cv_leaf ? == 0 ( nurl_str_len vcc ) 0 1
+                        = g_bck_cv_leaf ? | == 0 ( nurl_str_len vcc ) ( seq vcc `v` ) 0 1
                         : s vs ? vbuf ( bck_sx_arg_sources st ( bck_field rec 8 ) ) ( __src_drop_handles ( bck_sx_sources st ( bck_field rec 8 ) -1 ) )
                         = g_bck_cv_leaf 0
-                        ? & != 0 ( nurl_str_len vcc ) | ( seq vs `*` ) != 0 ( nurl_str_len ( __src_plain vs ) ) {
+                        ? & & != 0 ( nurl_str_len vcc ) | ( seq vs `*` ) != 0 ( nurl_str_len ( __src_plain vs ) ) | ! ( seq vcc `v` ) ( __srcs_any_capture st vs ) {
                             ( bck_clo_cap_view_diag ( bck_path_root ( nurl_str_to_int vc ) ) vs ( bck_field_int rec 3 ) )
                         } {}
-                        ? & == 0 ( nurl_str_len vcc ) ! ( seq vs `*` ) {
+                        // (A plain parameter, `v`: its caller's storage, given
+                        // the dependency as any holder is — the call's pair.)
+                        ? & | == 0 ( nurl_str_len vcc ) ( seq vcc `v` ) ! ( seq vs `*` ) {
                             : i vroot0 ( bck_path_root ( nurl_str_to_int vc ) )
                             // (Through a borrow — a copy of the owner's handle, a
                             // field viewer, an element — the value lands in the
@@ -33126,10 +33135,26 @@ unsafe @ __bck_try_exit_check s st i line → v {
     : b cv != 0 ( nurl_str_len cvk )
     : s what ? ! named `a value that may hold a view` ? ! cv ( nurl_str_cat `a view of ` sq ) ? ( seq cvk `2` ) ( nurl_str_cat `the view ` sq ) ( nurl_str_cat3 `the views ` sq ` holds` )
     : s sn ? ! named `what it points into` ? ! cv ( nurl_str_cat sq `` ) ? ( seq cvk `2` ) ( nurl_str_cat3 `what ` sq ` points into` ) `what they point into`
-    : b prm ( seq ( nurl_sym_get g_bck ( bck_bkey `cc_` ds ) ) `p` )
-    : s m1 ( nurl_str_cat4 ( nurl_str_cat3 `a closure cannot give '` dn `' ` ) what ( nurl_str_cat3 `: '` dn ? prm `' is the closure's own inout parameter` `' is captured by the closure` ) `, and a closure's type does not say what running it stores, so nothing where it runs follows the view: ` )
+    : s ccm ( nurl_sym_get g_bck ( bck_bkey `cc_` ds ) )
+    : b prm | ( seq ccm `p` ) ( seq ccm `v` )
+    : s m1 ( nurl_str_cat4 ( nurl_str_cat3 `a closure cannot give '` dn `' ` ) what ( nurl_str_cat3 `: '` dn ? ( seq ccm `v` ) `' is the closure's own parameter, storage its caller holds` ? prm `' is the closure's own inout parameter` `' is captured by the closure` ) `, and a closure's type does not say what running it stores, so nothing where it runs follows the view: ` )
     : s m2 ( nurl_str_cat4 sn ( nurl_str_cat3 ` can be released while '` dn `' still points into it. Give the view through a function's inout parameter instead, which every call follows (` ) ? prm `make the closure a function with that parameter` ( nurl_str_cat3 `@ keep inout T ` dn ` … → v { … }` ) `), or store a value that owns its data (string_from, slice_to_vec).` )
     ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat m1 m2 ) )
+}
+
+// Does any source of `srcs` root at a capture of the closure being walked:
+// marked one (`cc_` `c`, __clo_cap_marks), or a name its body never bound
+// that is no parameter and no global (a capture is not seeded: Uninit)?
+@ __srcs_any_capture s st s srcs → b {
+    : ~ s rest ( __src_plain srcs )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i ri ( bck_path_root ( nurl_str_to_int w ) )
+        : s r ( nurl_str_int ri )
+        ? ( seq ( nurl_sym_get g_bck ( bck_bkey `cc_` r ) ) `c` ) { ^ T } {}
+        ? & & == 0 ( nurl_sym_len g_bck ( bck_bkey `pp_` r ) ) ! ( bck_id_is_global ri ) == BCK_UNINIT ( bck_st_get st ri ) { ^ T } {}
+    }
+    ^ F
 }
 
 // …so a view stored into it of a binding this function releases — on the
@@ -34119,6 +34144,21 @@ unsafe @ bck_sx_is_id s e → b {
 // borrows its sources (bck_view_bind); an owner that may hold views (`d`,
 // a closure `c`) depends on them instead (bck_dep_set).
 @ bck_bind_row s st i wid s rec s srcs i mk → s {
+    // In a closure body, a view bound from a capture or a parameter of the
+    // closure that the walk cannot see into (`cv_`, __clo_cap_marks) is one
+    // too: stored into a capture later, it is refused as that one is
+    // (agora #332).
+    ? & & | | == mk 118 == mk 119 == mk 111 != 0 ( nurl_str_starts g_bck_fn `__closure_` ) ! ( seq srcs `*` ) {
+        : ~ s rr ( nurl_str_cat ( bck_field rec 7 ) `` )
+        ~ != 0 ( nurl_str_len rr ) {
+            : s w ( str_first_word rr ) = rr ( str_skip_word rr )
+            : s cvk ( nurl_sym_get g_bck ( bck_bkey `cv_` ( nurl_str_int ( bck_path_root ( nurl_str_to_int w ) ) ) ) )
+            ? & != 0 ( nurl_str_len cvk ) != wid ( bck_path_root ( nurl_str_to_int w ) ) {
+                ( bck_put ( bck_bkey `cv_` ( nurl_str_int wid ) ) cvk )
+                = rr ``
+            } {}
+        }
+    } {}
     ? | == mk 100 == mk 99 {
         : s out ( bck_view_bind st wid rec `*` mk )
         ( bck_dep_set wid ? ( seq srcs `*` ) ( bck_dep_reads st ( bck_field rec 2 ) wid ) srcs )
