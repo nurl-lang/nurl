@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_closure_called_with_the_capture_it_replaces.nu:15:11: error: 'o' is passed to 'c', a closure that gives 'o' a new value by name — inside, the parameter and the capture are one value, and the assignment releases what the parameter still is. Pass a copy that owns its data (string_from, mem_dup), or let the closure take 'o' as an inout parameter instead of capturing it.
+    ( c o )
+          ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.
