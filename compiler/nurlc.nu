@@ -34241,9 +34241,11 @@ unsafe @ __pderiv_note i syms s name s vt i rhs_tt s rhs_val s lend → v {
 // to `callee` as argument `aix` — a parameter's elements dropped there are
 // this function's to report.
 @ __drop_note s name s callee i aix → v {
-    // (In a closure body, one of its own parameters: its literal's, not the
-    // enclosing function's parameter of the same name.)
-    ? & != 0 g_bck_closure_depth != 0 ( nurl_str_len g_clo_cur ) { ? ( __clo_drop_note name callee aix ) { ^ } {} } {}
+    // (In a closure body, one of its own parameters: its literal's — and,
+    // as before, the enclosing function's parameter of the same name: a
+    // literal that reaches its call by a route no node follows (agora #418,
+    // #420) still has its drop seen there.)
+    ? & != 0 g_bck_closure_depth != 0 ( nurl_str_len g_clo_cur ) { ? ( __clo_drop_note name callee aix ) {} {} } {}
     ? | == 0 g_srcx_on == 0 ( nurl_str_len g_cur_params ) { ^ } {}
     : i dot ( nurl_str_find name `.` )
     // (Asked of every argument: a name with no field path is its own root,
@@ -34369,7 +34371,7 @@ unsafe @ resolve_irealloc_summaries → v {
     // the enclosing function's parameters are.)
     ? & != 0 g_bck_closure_depth != 0 ( nurl_str_len g_clo_cur ) {
         : i ck ( str_word_index g_clo_params root )
-        ? >= ck 0 { ( __drop_base_add g_clo_cur ( nurl_str_int ck ) ) ^ } {}
+        ? >= ck 0 { ( __drop_base_add g_clo_cur ( nurl_str_int ck ) ) } {}
     } {}
     ? == 0 ( nurl_str_len g_cur_params ) { ^ } {}
     : i k ( str_word_index g_cur_params root )
