@@ -24846,6 +24846,33 @@ unsafe @ mem_path_to_indices s path → s {
     ? != 0 ( nurl_str_len pname ) { ( mem_record_kept_param syms pname ) ( bck_record_inferred_sink syms pname ) } {}
 }
 
+// Are `av` and `bv` (type `vt`, keys `ak` / `bk`, mem_ud_ident_key) the
+// very same value, as an i1? Not where the key is null — an empty option,
+// an error that owns nothing: nothing tells them apart, and then neither
+// holds memory to give away — nor where an option's or a result's sides
+// differ, whatever a key would say (agora #459).
+@ __same_value i cg s vt s av s ak s bv s bk → s {
+    : s eq ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print eq ) ( nurl_print ` = icmp eq i8* ` ) ( nurl_print ak ) ( nurl_print `, ` ) ( nurl_print bk ) ( nurl_print `\n` )
+    : s nn ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print nn ) ( nurl_print ` = icmp ne i8* ` ) ( nurl_print ak ) ( nurl_print `, null\n` )
+    : ~ s r ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ` = and i1 ` ) ( nurl_print eq ) ( nurl_print `, ` ) ( nurl_print nn ) ( nurl_print `\n` )
+    : s ll ( nurl_llty vt )
+    ? != 0 ( nurl_str_starts ll `{ i1, ` ) {
+        : s ta ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print ta ) ( nurl_print ` = extractvalue ` ) ( nurl_print ll ) ( nurl_print ` ` ) ( nurl_print av ) ( nurl_print `, 0\n` )
+        : s tb ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print tb ) ( nurl_print ` = extractvalue ` ) ( nurl_print ll ) ( nurl_print ` ` ) ( nurl_print bv ) ( nurl_print `, 0\n` )
+        : s te ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print te ) ( nurl_print ` = icmp eq i1 ` ) ( nurl_print ta ) ( nurl_print `, ` ) ( nurl_print tb ) ( nurl_print `\n` )
+        : s r2 ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print r2 ) ( nurl_print ` = and i1 ` ) ( nurl_print r ) ( nurl_print `, ` ) ( nurl_print te ) ( nurl_print `\n` )
+        = r r2
+    } {}
+    ^ r
+}
+
 // The value type of a drop registration's type `ty`: an option's or a
 // result's twin (`%__opt.String`) is registered for `{ i1, %String }`, its
 // layout (`optlay##`), which is what an identity key reads.
@@ -24886,8 +24913,7 @@ unsafe @ mem_path_to_indices s path → s {
             : s pv ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print pv ) ( nurl_print ` = load ` ) ( nurl_print ll ) ( nurl_print `, ptr ` ) ( nurl_print ptr ) ( nurl_print `\n` )
             : s pk ( mem_ud_ident_key cg vt pv )
-            : s same ( nurl_cg_reg cg )
-            ( nurl_print `  ` ) ( nurl_print same ) ( nurl_print ` = icmp eq i8* ` ) ( nurl_print wk ) ( nurl_print `, ` ) ( nurl_print pk ) ( nurl_print `\n` )
+            : s same ( __same_value cg vt wv wk pv pk )
             : s wf ( mem_udrop_flag_get syms cg w )
             : s tk ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print tk ) ( nurl_print ` = and i1 ` ) ( nurl_print wf ) ( nurl_print `, ` ) ( nurl_print same ) ( nurl_print `\n` )
@@ -24918,8 +24944,9 @@ unsafe @ mem_path_to_indices s path → s {
     : s pv ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print pv ) ( nurl_print ` = load ` ) ( nurl_print ll ) ( nurl_print `, ptr ` ) ( nurl_print ptr ) ( nurl_print `\n` )
     : s pk ( mem_ud_ident_key cg vt pv )
+    : s same ( __same_value cg vt sv sk pv pk )
     : s ne ( nurl_cg_reg cg )
-    ( nurl_print `  ` ) ( nurl_print ne ) ( nurl_print ` = icmp ne i8* ` ) ( nurl_print sk ) ( nurl_print `, ` ) ( nurl_print pk ) ( nurl_print `\n` )
+    ( nurl_print `  ` ) ( nurl_print ne ) ( nurl_print ` = xor i1 ` ) ( nurl_print same ) ( nurl_print `, 1\n` )
     : s f ( mem_udrop_flag_get syms cg src )
     : s nf ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print nf ) ( nurl_print ` = and i1 ` ) ( nurl_print f ) ( nurl_print `, ` ) ( nurl_print ne ) ( nurl_print `\n` )
@@ -25118,15 +25145,32 @@ unsafe @ mem_path_to_indices s path → s {
     ^ acc
 }
 
-// …that key, for value `val` of type `vt` (an option's by its payload's;
-// null for an empty one).
+// …that key, for value `val` of type `vt`: an option's or a result's by
+// its active side's — the payload's when it holds one, a result's error's
+// when it is one (agora #459: an error that owns memory keyed to null, so
+// two errors were one value); null for a side with nothing to key (an
+// empty option, an error that owns nothing). `` when neither side keys.
 @ mem_ud_ident_key i cg s vt s val → s {
     : s ll ( nurl_llty vt )
     ? == 0 ( nurl_str_starts ll `{ i1, ` ) { ^ ( mem_identity_key cg vt val ) } {}
     : s pt ( __wrap_part ll 0 )
+    : s et ( __wrap_part ll 1 )
     : s p ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print p ) ( nurl_print ` = extractvalue ` ) ( nurl_print ll ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 1\n` )
-    ^ ( mem_identity_key cg pt p )
+    : s pk ( mem_identity_key cg pt p )
+    : ~ s ek ``
+    ? != 0 ( nurl_str_len et ) {
+        : s e ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print e ) ( nurl_print ` = extractvalue ` ) ( nurl_print ll ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 2\n` )
+        = ek ( mem_identity_key cg et e )
+    } {}
+    ? & == 0 ( nurl_str_len pk ) == 0 ( nurl_str_len ek ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s tg ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print tg ) ( nurl_print ` = extractvalue ` ) ( nurl_print ll ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
+    : s r ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ` = select i1 ` ) ( nurl_print tg ) ( nurl_print `, i8* ` ) ( nurl_print ? == 0 ( nurl_str_len pk ) `null` pk )
+    ( nurl_print `, i8* ` ) ( nurl_print ? == 0 ( nurl_str_len ek ) `null` ek ) ( nurl_print `\n` )
+    ^ r
 }
 
 // The owner `ptr` given `nv`, which may be its own old value (above): an

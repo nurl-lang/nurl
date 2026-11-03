@@ -45,4 +45,5 @@
   `: String x ( pick a k ) ^ ? c x a` stopped dropping `a` whenever the x
   arm was taken, also on the runs where `pick` handed back a fresh value,
   and `a` leaked. It is now told by the values themselves: an option or a
-  result by its payload, an `Rc`, a `Box` or a map by its handle.
+  result by the side it holds (two errors that own memory are told apart
+  by them), an `Rc`, a `Box` or a map by its handle.
