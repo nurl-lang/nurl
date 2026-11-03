@@ -1199,8 +1199,8 @@ theorem MInv.unwind0 {m m1 : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt}
       · exact h
       · exact h
   · rw [hblk] at hk'
-    obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k' bl hk'
-    exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.of_blk hblk⟩, h4⟩
+    obtain ⟨h1, h2, h3⟩ := hi.blocks k' bl hk'
+    exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.of_blk hblk⟩⟩
 
 /-- **What a panic leaves at a destructor's frame**, (A3.3) whatever lock
     payloads its unwinding gave back (`BlkBack`): the invariant over the

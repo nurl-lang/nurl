@@ -706,11 +706,10 @@ structure MInv (m : Mem) (Γ : Ctx) : Prop where
   /-- A3.1: a block's payload is a well-formed tree of a type that holds no
       views, and the shares it holds name blocks too (A3.2: while it is in
       the block).  A3.2's second cut: a lock block's may hold `arc` and lock
-      shares, which keep their blocks alive (`Blk.keeps`), but no cell share
-      (a library handle's owners are slots, A3.5). -/
+      shares, which keep their blocks alive (`Blk.keeps`); A3.5's second cut:
+      and cell shares, whose owners are then the payload (A3's `CellInv`). -/
   blocks    : ∀ k bl, m.blk k = some bl → bl.ty.ok = true ∧ bl.ty.holdsView = false ∧
-                (∀ p, bl.pay = some p → WFv bl.ty p ∧ SharesOK m bl.ty p) ∧
-                (bl.kind = .lock → bl.ty.hasCell = false)
+                (∀ p, bl.pay = some p → WFv bl.ty p ∧ SharesOK m bl.ty p)
 
 /-- The invariant of a configuration running `s` in context `Γ`, with `F`
     lent out. -/
@@ -1011,7 +1010,7 @@ def CodeOK (P : Prog) (fs : List Nat) (te : Ty) (ms : List Nat) (cs : List (Var 
 
 /-- Every package in memory names code that implements its interfaces: the
     ones the slots hold, and (A3.5b) the ones the blocks hold, which may be
-    closures (a Sync one in an `Arc`'s payload, a Sync or bare one in a lock's or a
+    closures (a Sync one in an `Arc`'s payload, a Send one in a lock's or a
     channel's), in what a block owns and in what its holders read. -/
 def MemCodes (P : Prog) (m : Mem) : Prop :=
   (∀ x o V fs te ms e cs, m.st x = some ⟨o, some V⟩ → Sub (.pkg fs te ms e cs) V → CodeOK P fs te ms cs) ∧

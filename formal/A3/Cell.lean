@@ -53,37 +53,6 @@ theorem not_sub_cell_lendOf : (v : Val) → ∀ {k : Nat}, Sub (.cell k) (lendOf
   | .lk _, _, h => by cases h
   | .cell _, _, h => by simp only [lendOf] at h; cases h
 
-/-- A tree of a type that may hold no cell share holds none (A3.2's second
-    cut: it may hold `arc` and lock shares, which `Sub` does not enter). -/
-theorem _root_.A2.WFv.noCell {τ : Ty} {v : Val} (hw : WFv τ v) (hna : τ.hasCell = false) {k : Nat} :
-    ¬ Sub (.cell k) v := by
-  induction hw with
-  | int => intro h; cases h
-  | view => intro h; cases h
-  | arc => intro h; cases h
-  | lk => intro h; cases h
-  | cell => simp [Ty.hasCell] at hna
-  | pkg _ hq ih =>
-    -- A3.5b: a Sync or bare closure's environment holds no cell share
-    intro h
-    cases h with | pkg h => exact ih (hq.2.1 hna) h
-  | node _ ih =>
-    intro h
-    cases h with
-    | child he hs => exact ih _ he (by simpa [Ty.hasCell] using hna) hs
-  | pair _ _ iha ihb =>
-    simp only [Ty.hasCell, Bool.or_eq_false_iff] at hna
-    intro h
-    cases h with
-    | fst h => exact iha hna.1 h
-    | snd h => exact ihb hna.2 h
-  | inl _ ih =>
-    simp only [Ty.hasCell, Bool.or_eq_false_iff] at hna
-    intro h; cases h with | inl h => exact ih hna.1 h
-  | inr _ ih =>
-    simp only [Ty.hasCell, Bool.or_eq_false_iff] at hna
-    intro h; cases h with | inr h => exact ih hna.2 h
-
 theorem CellAt.of_slot {m : Mem} {y : Var} {o : Bool} {v : Val} (h : m.st y = some ⟨o, some v⟩) {k : Nat}
     (hs : Sub (.cell k) v) : CellAt m k := ⟨y, o, v, h, hs⟩
 
@@ -238,10 +207,6 @@ cell's shares only whole:
   the block: a check-out and a take empty it, and a receive's head shares
   no cell with the rest of the queue, `RecvCheck` (`CellKeep.moveOut`);
 - everything else moves shares between slots, or drops them. -/
-
-/-- Lock block `k'` holds a share of cell `k` in its payload. -/
-def LockHolds (B : Nat → Option Blk) (k' k : Nat) : Prop :=
-  ∃ t p, B k' = some ⟨t, .lock, some p⟩ ∧ Sub (.cell k) p
 
 /-- The store holds a share of cell `k`: in a slot, or in a lock block's payload. -/
 def Holds (m : Mem) (k : Nat) : Prop := CellAt m k ∨ ∃ k', LockHolds m.blk k' k
@@ -844,8 +809,8 @@ theorem CellInv.onePlace {C : Cfg} (h : CellInv C) {i : Nat} {t : Thread} (hi : 
   · exact .inr ⟨hc, h.one k⟩
 
 /-- The start: one thread, holding nothing (A3.6: a global is no thread's
-    binding), and no lock block's payload holds a cell share (the globals'
-    `make`s left none: `Ty.ok`, `MInv.blocks`). -/
+    binding), and the globals' blocks each cell's shares are in one of
+    (`GlobsOK.cells`: the `make`s ran the crossing check). -/
 theorem CellInv.start {P : Prog} {G : Globs} (hG : GlobsOK P G) (s : Stmt) (nv : Nat) :
     CellInv (Cfg.start G s nv) := by
   have hnone : ∀ (j : Nat) (t : Thread) (k : Nat), (Cfg.start G s nv).ths[j]? = some t → ¬ t.cellAt k := by
@@ -853,13 +818,9 @@ theorem CellInv.start {P : Prog} {G : Globs} (hG : GlobsOK P G) (s : Stmt) (nv :
     cases j with
     | zero => simp [Cfg.start] at hj; subst hj; cases hy
     | succ j => simp [Cfg.start] at hj
-  have hnb : ∀ k' k, ¬ LockHolds (Cfg.start G s nv).blk k' k := by
-    rintro k' k ⟨t, p, hk, hs⟩
-    obtain ⟨_, _, h3, h4⟩ := hG.inv.blocks k' _ hk
-    exact WFv.noCell (h3 p rfl).1 (h4 rfl) hs
-  exact ⟨fun j t k hj hk => absurd hk (hnone j t k hj), fun k' k hk => absurd hk (hnb k' k),
+  exact ⟨fun j t k hj hk => absurd hk (hnone j t k hj), fun k' k hk => (hG.cells k k' k' hk hk).2,
     fun i _ ti _ k hi _ hk _ => absurd hk (hnone i ti k hi), fun j t k _ hj hk => absurd hk (hnone j t k hj),
-    fun k k1 _ hk1 => absurd hk1 (hnb k1 k)⟩
+    fun k k1 k2 hk1 hk2 => (hG.cells k k1 k2 hk1 hk2).1⟩
 
 /-- The sweep only removes blocks. -/
 theorem LockHolds.of_sweep {R : Val → Prop} {B : Nat → Option Blk} {k' k : Nat}

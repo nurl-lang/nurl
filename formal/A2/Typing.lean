@@ -597,9 +597,9 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
   /-- A closure literal.  A3.5b: its type says what its environment may hold
       (`q`), from the environment's type and the captures by name
       (`Cross.Fits`): one that holds no view and captures nothing by name is
-      Send, one that also holds no cell share Sync (an `Arc`'s, and since
-      A3.2's second cut a lock's or a channel's), one that holds no share at
-      all bare. -/
+      Send (a spawn's, and since A3.5's second cut a lock's or a channel's),
+      one that also holds no cell share Sync (an `Arc`'s), one that holds no
+      share at all bare. -/
   | pack {fs : List Nat} {te : Ty} {ms : List Nat} {q : Cross} {y : Var} {cs : List (Var × PMode × Ty)}
       {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
       Γ y = some Ey → Ey.live = true → Ey.ty = te → PushArg Γ F y Ey te D Γ1 → CapsOK Γ1 F D cs →
@@ -630,13 +630,14 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       Γ a = some E → E.live = true → E.ty = .arc t → t.holdsView = false → t.hasFn = false →
       RhsT Γ F (.arcGet a) (getE a E t) Γ
   /-- A3.2: `locked_new`: `y`'s value, of a type that holds no view and no
-      closure (it is Send), and (A3.2's second cut) no cell share — `arc` and
-      lock shares it may hold, which the lock's block keeps alive — moves into
-      a fresh lock block; the result is an owned lock share, which holds
-      nothing. -/
+      closure that holds bindings by name (it is Send) — `arc`, lock and
+      (A3.5's second cut) cell shares it may hold, which the lock's block
+      keeps alive, a cell share past the crossing check (`EvalR.lockNew`) —
+      moves into a fresh lock block; the result is an owned lock share, which
+      holds nothing. -/
   | lockNew {t : Ty} {y : Var} {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
       Γ y = some Ey → Ey.live = true → Ey.ty = t →
-      t.holdsView = false ∧ t.hasFn = false ∧ t.hasCell = false →
+      t.holdsView = false ∧ t.hasFn = false →
       PushArg Γ F y Ey t D Γ1 →
       RhsT Γ F (.lockNew t y) ⟨.lk t, .own, true, [], [], false, false⟩ Γ1
   /-- A3.2: `Locked_share`: a new share of the lock block `a` shares: owned,
@@ -651,6 +652,9 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       through) and ends with the guard. -/
   | rwRead {a : Var} {E : Entry} {t : Ty} :
       Γ a = some E → E.live = true → E.ty = .lk t →
+      -- A3.5's second cut: read guards lend the value to several threads at
+      -- once, so it faces the Sync question, as an `Arc`'s payload does (h357)
+      t.hasCell = false →
       RhsT Γ F (.rwRead a) ⟨.arc (.prod (.lk t) t), .own, true, [], [], false, false⟩ Γ
   /-- A3.4: an `Atomic`'s operation, through a live share of an integer lock
       block (`Atomic` is `lk int`): an integer. -/
@@ -658,10 +662,10 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       Γ a = some E → E.live = true → E.ty = .lk .int → ExprT Γ e1 → ExprT Γ e2 →
       RhsT Γ F (.atomic op a e1 e2) intE Γ
   /-- A3.4: `chan_send a y`, through a live share of a channel of `s`:
-      `y`'s value, an `s` (which holds no view, no closure and, A3.2's second
-      cut, no cell share: `Ty.ok`, as a lock's payload), is handed over as `vec_push` takes it
-      (`PushArg`: an owner moves, an integer is copied); the answer is an
-      integer. -/
+      `y`'s value, an `s` (which holds no view: `Ty.ok`, as a lock's payload;
+      A3.5's second cut: a cell share it may hold, past the crossing check,
+      `EvalR.chanSend`), is handed over as `vec_push` takes it (`PushArg`: an
+      owner moves, an integer is copied); the answer is an integer. -/
   | chanSend {a y : Var} {Ea Ey : Entry} {s : Ty} {Γ1 : Ctx} {D : List Dep} :
       Γ a = some Ea → Ea.live = true → Ea.ty = .lk (.prod (.vec s) .int) →
       Γ y = some Ey → Ey.live = true → Ey.ty = s → PushArg Γ F y Ey s D Γ1 →
