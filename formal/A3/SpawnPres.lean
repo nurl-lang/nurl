@@ -91,56 +91,6 @@ theorem CInv.spawnFail_of {P : Prog} (hSF : SpawnFailLemma P) {C : Cfg} (h : CIn
     CInv P { C with ths := C.ths.set i ⟨t.st, t.nv, K (.seq .panic (.letcall x f args k))⟩ } :=
   h.setStmt hi fun _ hto => hSF hto hK
 
-theorem MoveArgs.slot {st st' : Var → Option Slot} {as : List Var} {vs : List Val}
-    (h : MoveArgs st as vs st') : ∀ y sl, st' y = some sl → st y = some sl ∨ sl = ⟨true, none⟩ := by
-  induction h with
-  | nil => exact fun _ _ h => .inl h
-  | cons _ _ ih =>
-    intro y sl hy
-    rcases ih y sl hy with h | h
-    · simp only [upd] at h
-      split at h
-      · cases h; exact .inr rfl
-      · exact .inl h
-    · exact .inr h
-
-/-- A3.1: a value a spawner's slot held is still there after the arguments
-    move out, or it is one of the moved ones. -/
-theorem MoveArgs.keep {st st' : Var → Option Slot} {as : List Var} {vs : List Val}
-    (h : MoveArgs st as vs st') :
-    ∀ y o v, st y = some ⟨o, some v⟩ → st' y = some ⟨o, some v⟩ ∨ v ∈ vs := by
-  induction h with
-  | nil => exact fun _ _ _ h => .inl h
-  | @cons st st' a as v vs ha _ ih =>
-    intro y o w hy
-    by_cases hya : y = a
-    · subst hya; rw [ha] at hy; cases hy; exact .inr (List.mem_cons_self ..)
-    · have hy' : upd st a (some ⟨true, none⟩) y = some ⟨o, some w⟩ := by
-        show (if y = a then _ else st y) = _
-        rw [ite_eq_right hya]; exact hy
-      rcases ih y o w hy' with h | h
-      · exact .inl h
-      · exact .inr (List.mem_cons_of_mem _ h)
-
-theorem list_append_get {α : Type} {l : List α} {y : α} {j : Nat} :
-    (l ++ [y])[j]? = if j < l.length then l[j]? else if j = l.length then some y else none := by
-  by_cases h : j < l.length
-  · rw [ite_eq_left h, List.getElem?_append_left h]
-  · rw [ite_eq_right h, List.getElem?_append_right (by omega)]
-    by_cases he : j = l.length
-    · subst he; simp
-    · rw [ite_eq_right he]; simp; omega
-
-/-- A list with one element replaced and one appended, by index. -/
-theorem get_set_append {α : Type} {l : List α} {i : Nat} {x y : α} (hi : i < l.length) (j : Nat) :
-    (l.set i x ++ [y])[j]? =
-      if j < l.length then (if i = j then some x else l[j]?) else if j = l.length then some y else none := by
-  rw [list_append_get]
-  simp only [List.length_set]
-  by_cases hj : j < l.length
-  · rw [ite_eq_left hj, ite_eq_left hj, list_set_get hi]
-  · rw [ite_eq_right hj, ite_eq_right hj]
-
 /-- **A spawn keeps the configuration invariant.** -/
 theorem CInv.spawn_of {P : Prog} {spawn : Nat → Bool} (hSO : SpawnerLemma P spawn)
     (hSA : SpawnArgsLemma P spawn) (hNT : NewThreadLemma P spawn)

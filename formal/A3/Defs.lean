@@ -306,12 +306,46 @@ inductive CTouch (P : Prog) (C : Cfg) (i : Nat) (t : Thread) : Nat → Bool → 
   | step {a : Nat} {w : Bool} : Touch P (C.view t) t.s a w → CTouch P C i t a w
   | sweep {a : Nat} : SweepFrees P C i t a → CTouch P C i t a true
 
-/-- A race: two threads whose next steps touch one address, one of them
-    writing it.  (A3.4's `Atomic` steps are atomic and are no race; so is a
-    share's count, which is ghost here.) -/
-def Race (P : Prog) (C : Cfg) : Prop :=
+/-- Two threads whose next steps touch one address, one of them writing it.
+    (A3.4's `Atomic` steps are atomic and are no race; so is a share's
+    count, which is ghost here.) -/
+def AddrRace (P : Prog) (C : Cfg) : Prop :=
   ∃ (i j : Nat) (ti tj : Thread) (a : Nat) (w : Bool), i ≠ j ∧ C.ths[i]? = some ti ∧
     C.ths[j]? = some tj ∧ CTouch P C i ti a true ∧ CTouch P C j tj a w
+
+/-- A3.5: the keys of the lock scopes a statement is inside of (its spine's
+    `scopeL` frames, innermost last). -/
+def _root_.A2.Stmt.lkeys : Stmt → List Nat
+  | .seq a _ => a.lkeys
+  | .scope _ s => s.lkeys
+  | .scopeD _ _ s => s.lkeys
+  | .rbind _ s => s.lkeys
+  | .frozen _ s => s.lkeys
+  | .catchR _ _ s => s.lkeys
+  | .scopeL k _ _ s => k :: s.lkeys
+  | _ => []
+
+/-- A3.5: thread `t`'s next step changes the state of cell `k` (a library
+    handle's, which the library changes in place with no lock): it checks the
+    state out through a share of it (`withCell`), or it runs inside a
+    check-out of it, holding a share of it (the one the check-out is
+    through, which `withLock`'s premises keep in its binding for the whole
+    body).  Such a step writes the state wherever it is: the model checks it
+    out as a lock's payload, so two threads at once would be serialized
+    there, where the runtime's copies write one memory with no lock; so a
+    step on a cell is not an address's touch, but a race of its own. -/
+def CellOp (t : Thread) (k : Nat) : Prop :=
+  (∃ K a x s o, Redex t.s K (.withLock a x s) ∧ t.st a = some ⟨o, some (.cell k)⟩) ∨
+  (k ∈ t.s.lkeys ∧ ∃ y o v, t.st y = some ⟨o, some v⟩ ∧ Sub (.cell k) v)
+
+/-- A3.5: two threads whose next steps change one cell's state. -/
+def CellRace (C : Cfg) : Prop :=
+  ∃ (i j : Nat) (ti tj : Thread) (k : Nat), i ≠ j ∧ C.ths[i]? = some ti ∧ C.ths[j]? = some tj ∧
+    CellOp ti k ∧ CellOp tj k
+
+/-- A race: two threads whose next steps touch one address, one of them
+    writing it (`AddrRace`), or (A3.5) change one cell's state (`CellRace`). -/
+def Race (P : Prog) (C : Cfg) : Prop := AddrRace P C ∨ CellRace C
 
 /-! ### The claims -/
 
