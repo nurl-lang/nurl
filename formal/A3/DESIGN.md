@@ -699,7 +699,9 @@ three rules in A2 and A3. `A2.memory_safe`, `A2.soundness`,
 with `Locked`, and `CLAIM.md`, `README.md` and `check.sh` say A3.2's
 first cut is proven. The probes h267 (`locked_take` / `locked_restore`)
 and h358 (an `Rc` in a `Locked`, the Send question) wait for what this cut
-leaves out.
+leaves out. A3.2's second cut (below, after A3.6's) adds `arc` and lock
+shares in a lock's payload, and `locked_take` / `locked_restore` with
+h267's rule.
 
 **Where a lock lives.** In A2, as an `Arc` does: a lock is a second kind
 of block. This answers the open question below. Single-threaded, a lock is
@@ -852,10 +854,12 @@ time. `StmtT.withLock` asks for both:
 stated.
 - A lock's payload holds no share (`hasArc = false`). It also holds no view
   and no closure, so it is Send. A `Locked` of an `Arc` waits for payloads
-  that keep blocks alive.
+  that keep blocks alive. (A3.2's second cut lifts this for `arc` and lock
+  shares.)
 - `withLock` takes a root that the body does not name, so a lock reached
   through a local borrow (a field or an element) is refused.
-- `locked_take` / `locked_restore` are not separate rules.
+- `locked_take` / `locked_restore` are not separate rules. (They are since
+  A3.2's second cut.)
 - The update's body is a statement in place, not a closure called through
   a package.
 
@@ -863,7 +867,8 @@ stated.
 - deadlock freedom;
 - that a typed program's lock scope ends in a `put`, as a lemma (it would
   need an invariant tying each `scopeL k` frame to block `k`);
-- shares in a lock's payload;
+- shares in a lock's payload (A3.2's second cut: `arc` and lock shares, not
+  cell shares);
 - the probes h267 h358;
 - relocking a lock on the OS thread that holds it: the model's thread
   waits (`Blocked`) or, since A3.3, panics (`Step.waitPanic`), but the
@@ -1330,7 +1335,8 @@ the flag (0 is open).
 **Simplifications in this cut.** Each is a restriction, and sound as stated.
 - An element holds no view, no closure and no share, as a lock's payload
   does not (A3.2). A `Channel` of `Arc`s or of `Channel`s waits for payloads
-  that keep blocks alive.
+  that keep blocks alive. (A3.2's second cut types them: an element may
+  hold `arc` and lock shares, not a cell share.)
 - The queue's buffer never moves. Nothing views it, so `vec_push`'s
   reallocation is not observable.
 - `chan_send`'s `mem_send_check` (the crossing check) is A3.5's. With no
@@ -2355,6 +2361,295 @@ globals reach (`Reached C0.globVals`). With no global, nothing is left
 - *`Cond` and `Semaphore` globals.*
 - *The probes as typed programs* (a probe's encoding, as `A2/DynCell.lean`
   types `pick`).
+- `CLAIM.md` / `README.md`.
+
+## A3.2's second cut (shares in lock payloads, `locked_take` / `locked_restore`)
+
+**Status.** Mechanized. `check.sh` is green, and `A2.memory_safe`,
+`A2.soundness`, `A2.no_leak_end`, `A2.no_leak_panic`, the `DynCell`
+theorems and `A3.claim` are re-proven. The cut has two parts:
+- (A) a lock's payload and a channel's element may hold `arc` and lock
+  shares, and so Sync closures;
+- (B) `locked_take` and `locked_restore` are rules of their own
+  (`Rhs.lockTake`, `Rhs.lockRestore`).
+
+h267 is part (B)'s probe, and it needs (A): its payload holds an `Arc`.
+`CLAIM.md` / `README.md` are not updated here.
+
+### (A) Shares in a lock's payload and a channel's element
+
+The first cuts asked `!t.hasArc` of a `Locked`'s payload (A3.2), of an
+`RwLocked`'s (A3.3), of an `Atomic`'s word and of a channel's element
+(A3.4). The lock block's payload then kept no block alive, which
+`MInv.blocks`' fourth conjunct said. Lifting it has three pieces: the
+types, what the sweep follows, and a recover frame's blocks.
+
+**The types.**
+- `Ty.ok (lk t)` asks `t.ok && !t.holdsView && !t.hasCell`.
+  `RhsT.lockNew` asks `t.holdsView = false ∧ t.hasFn = false ∧
+  t.hasCell = false`. `RhsT.chanSend` reads `Ty.ok` of the channel's type
+  (`chan_tyok`).
+- So a `Locked (Arc T)`, a `Locked (Locked T)`, a `Channel (Arc T)`, a
+  channel of `Atomic`s and a channel of channels are typed.
+- A cell share stays out (`hasCell = false`). A3.5's confinement
+  (`CellInv`) counts the slots of each thread. A cell share parked in a lock
+  would be owned by no slot, and every lock entry would need the crossing
+  check. That is not done (*Not proven*, below).
+- A cell's own payload (`Ty.ok (cell t)`, `RhsT.cellNew`) still holds no
+  share at all: a library handle's state is unchanged by this cut.
+- `MInv.blocks`' fourth conjunct is now `bl.kind = .lock →
+  bl.ty.hasCell = false`. A3.5 reads it to show that no lock payload holds
+  a cell share (`ThreadOK.noCellPay`, `WFv.noCell`, now stated for
+  `hasCell`; `Ty.hasCell_of_hasArc` moved to `Syntax.lean`).
+
+**A lock's payload keeps what it holds alive.**
+- `Blk.keeps bl` is a block's payload, `bl.pay.getD (.int 0)`, whatever
+  its kind. `Reached.pay` follows it where it followed `Blk.rd` (what
+  holders read: an `arc` block's and a view's payload, nothing of a lock
+  block's).
+  - A lock block's payload counts while it is in the block.
+  - A checked-out payload is in its holder's slot, a root of its own. So
+    is a received element, and a taken payload (part B).
+  - So a share counts wherever it is, as A3.1's `Arc` payloads already
+    did. No root is added.
+- `MInv.sweepR` keeps a lock block's `SharesOK` the way it keeps an `arc`
+  block's (`Kept.pay`): the case that read the fourth conjunct is gone.
+- **What other threads reach survives a thread's step.** A lock's payload
+  changes under a step, and `BlkKeep` lets it. So reachability no longer
+  survives `BlkLe` alone (`Reached.mono` now asks for the blocks kept
+  exactly; `Reached.roots` for the roots only).
+  - `Step.leafKeep` (A2): a share or a handle (`Val.leaf`) in a block's
+    payload is, after a step, in that block's payload still, or, for a step
+    that does not panic, in one of the stepping thread's slots. That is a
+    check-out (`withLock`), a received head (`chanRecv`) or a taken payload
+    (`lockTake`).
+  - A panic's unwinding only gives payloads back, so it moves none out.
+    `EvalR.leafKeep` and `Release.leafKeep` are the parts.
+  - `Reached.step` (A3/Pres.lean): what the other threads' slots and the
+    globals reach before a thread's step, the configuration's roots reach
+    after it.
+  - Race freedom's sweep case (`CParts.ctouch`) used `Reached.mono` with
+    `Step.grows`. It now uses `Reached.step`, so the sweep's frees are still
+    of payloads no other thread reaches. The partition is unchanged.
+- **A recover frame's store** (`CatchOK`). The frame's typing of the
+  caller's bindings, `MInv (m0.set x _) Δ`, is grown to the store the
+  panic returns to (`catchP`). Before this cut that went through
+  `m0.sweep`, whose blocks the frame keeps.
+  - With lock payloads followed, `m0`'s sweep keeps what a lock's payload
+    held at the frame's entry. The body may have taken that out of the lock
+    and dropped it, through a lock share it reached as a clone of a global's
+    (A3.6).
+  - So `CatchOK` now asks to keep what `m0`'s bindings reach through
+    payloads that are read: `Reached (OutVals m0 x sp) (rdBlk m0.blk)`.
+    `Blk.rdOnly` leaves a lock block's payload out, and a view's payload,
+    being read, is followed.
+  - That is exactly what the bindings' facts read (`ValOK`, `SharesOK`, and
+    `NodeAt` / `DataAt` through `Blk.rd`).
+  - `MInv.regrow` carries the slots' facts there. It goes to the store with
+    every lock's payload left out, sweeps from the slots, and grows to the
+    store returned to. The store with the payloads left out need not be a
+    heap (a view reads its lock's payload), so the lemma is over the slot
+    facts, not `MInv` of the store in between.
+  - `Reached.catch` and `Reached.of_rdBlk` keep `CatchOK` through the sweep.
+- **Payloads in and out carry their shares' facts.**
+  - A checked-out or taken payload: `acquire_pres`'s `RhsOut.shares`, from
+    the block's `SharesOK`.
+  - A received head: `chanRecv_pres`, `out_ownNoView` (which now takes
+    `SharesOK` in place of `hasArc = false`).
+  - A payload changed in place: `setPay_pres` takes the new payload's
+    `SharesOK` (`chanSend_pres`, `chanRecv_pres`, `chanClose_pres`).
+  - A view's copy of the payload: `rhs_rwRead`.
+  - A give-back on the normal path: `step_release`, from `x`'s typing.
+- **A give-back with no typing at hand** (a panic's unwinding, `scopeLP`)
+  must still leave the block's shares naming blocks of its type.
+  - `Giveable B t` now asks `SharesIn B t v` beside `WFv t v`, over the
+    store's blocks (`Release` passes `m.blk`).
+  - `ArcIn`, `ArcBlk`, `ShareFits` and `SharesIn` moved from
+    `Invariant.lean` to `Semantics.lean` for this, as `WFv` did in A3.3.
+  - `BlkBack` carries it (`Giveable.shares`, `MInv.blocks_back`).
+  - A typed program's `x` holds a `t` whose shares fit (`MInv.shares`), so
+    its end is still a `put`. When they do not fit, the slot is dropped
+    (`Release.drop`), as for a payload of the wrong type.
+
+**Closure classes** (A3.5b). `Ty.hasCell (fn ms q) = q.cells`, so a lock or
+a channel now takes a `sync` closure as well as a `bare` one (`lockNew_fn`,
+`chan_fn`: `q = .sync ∨ q = .bare`). A `sync` closure's environment holds no
+view, nothing by name and no cell share, but may hold `arc` and lock shares.
+- `Cross` and `Cross.Fits` are unchanged, only their documentation. The
+  payload condition "no view, no cell" is the type's (`Ty.ok (lk t)`), and
+  it reads a closure's class through `holdsView` and `hasCell`.
+- `bare` stays. A slice's element still holds no share
+  (`Ty.ok (slice t)`, `RhsT.view`: A3.1's first cut), and a slice of
+  closures needs `bare`. Nothing else needs it now.
+- *Trait objects* (A3.5c). An object of a `: Send Sync` trait is a `sync`
+  package (`TraitBound.cross`), so it now fits in a lock and a channel. An
+  object of a `: Send` trait is a `send` package. Its type says it may hold
+  a library handle, so it still fits in neither, even when its box holds no
+  cell share: the class is the type's, and the type does not say what the
+  box holds. Packing it at `sync` would fit, but its trait's methods take
+  it at `send` (`TraitAt`), so it could not be called. Closing that gap
+  needs a cell share in a lock's payload, with the crossing check at every
+  lock entry, or a subsumption from `sync` to `send` at a call. Neither is
+  done.
+
+**A3: the partition and race freedom.** A share is a word that names a
+block. It owns no address (`Val.ids`), so moving one with a payload is what
+A3.2's check-out already moves.
+- `CParts`, `PayIn` and `payPart` are by `Blk.tree`'s addresses, and are
+  unchanged.
+- The sweep's frees are of payloads no other thread reaches
+  (`Reached.step`, above). `CInv`'s second half, that every block is
+  reached, is the sweep's, from every thread's slots and the globals.
+- `CellInv` is unchanged: a lock's payload holds no cell share
+  (`ThreadOK.noCellPay`).
+
+### (B) `locked_take` / `locked_restore`
+
+**The rules.**
+- `Rhs.lockTake a` (`locked_take a`), typed by `RhsT.lockTake`: `a` is a
+  live lock share `lk t`, and the result is `lockE t`. That is the
+  payload, owned, of its type, holding nothing (an integer is a plain
+  integer binding), as `withLock` checks one out.
+  - `EvalR.lockTake`: the payload is in and no view of it lives. It moves
+    out as the value handed back, and the block holds `none`.
+  - With the payload out, or a view of it living, there is no step:
+    `RBlocked`'s new case. So the thread waits (`Blocked`) or panics
+    (`Step.waitPanic`, through `Waits`).
+- `Rhs.lockRestore a y` (`locked_restore a y`), typed by
+  `RhsT.lockRestore`: `a` a live `lk t`, `y` a live `t` handed over by
+  `PushArg`, as `chan_send` takes its value (an owner moves and its entry
+  dies, an integer is copied). The answer is an integer (`intE`). It is a
+  right-hand side, as `chanSend` is, so every rule and lemma on right-hand
+  sides covers it.
+  - `EvalR.lockRestore`: the block's payload is out. `y`'s value
+    (`TakeVal`) goes in, and the answer is 0.
+  - `EvalR.lockRestoreP`: the payload is in, so the restore panics, the
+    store as it was. `y` keeps its value, and the unwinding drops it.
+  - A restore never waits.
+
+**A2's proof.**
+- The take is `acquire_pres` (moved before `rhs_pres`).
+- The restore is `lockRestore_pres`. That is `setPay_pres`, generalised to
+  a block whose payload is out (`o : Option Val`), with `push_take`'s
+  `Pushed`. No view of an empty block lives (`ViewsAt.noView`).
+- `covers_evalR`: a taken payload is the value in flight
+  (`Val.owns_of_mem_ids`, moved before it), and a restored one the block's.
+- `evalR_exists`: a take steps unless it waits. A restore steps either way
+  (`takeVal_exists`).
+- `EvalR.codes`, `EvalR.blk`, `EvalR.leafKeep`, `RBlocked.of_eq`,
+  `evalR_none`, and the cases in `Rename`, `Wf`, `NameWf`, `SrcKeep`,
+  `TypingFacts` and `Call` are `chanSend`'s for the restore, and
+  `chanRecv`'s or `withLock`'s for the take.
+
+**A3's proof.**
+- No touch, as for a check-out: the payload's tree moves between the block
+  and the thread's part. `EvalR.ownedId` says a taken payload's addresses
+  were a payload's (`PayAddr`). `EvalR.payAt` says a restored one's were
+  the thread's own.
+- `EvalR.cellVal` and `EvalR.cellSt` cover the cells: a taken payload was a
+  lock's, which holds no cell share.
+- `EvalR.restrict`, `EvalR.lift`, `EvalR.borFree`, `EvalR.grows`,
+  `EvalR.gl` and `EvalR.keep` get the new cases.
+
+**h267** (`option_taken_from_locked_stays_in_slot`). A `( Locked ?K )`
+whose `K` holds an `( Arc String )`, taken and restored in a loop. The
+runtime's `locked_take` left the option in the lock's slot (`mem_take`
+misparsed its type), and the restore, which dropped what the slot held,
+dropped the value being handed back. The next take read freed memory.
+- The rule is `EvalR.lockTake`: the take moves the payload out and the
+  block holds `none` (`lockTake_empties`).
+- The restore then finds nothing to drop. `EvalR.lockRestore` moves the
+  value in and frees no address (`lockRestore_frees_nothing`), and it
+  applies only to a block whose payload is out.
+- The payload is an `Option` (`sum int _`) of a struct that holds an
+  `arc (vec int)` (the `Arc String`), which part (A) types. The `Arc` is
+  kept alive by the lock's payload while it is in
+  (`Blk.keeps`), and by the taker's slot while it is out.
+- So the model has no state in which the lock still holds what the taker
+  owns.
+
+**Faithful to the runtime** (`stdlib/std/thread.nu`, docs/MEMORY.md
+§7.6's *A value claimed out of a place leaves a zero behind*).
+- *The take moves.* `locked_take` copies `. p val` into `x`, and
+  `mem_take x` leaves zero bytes in the slot, which own nothing. It sets
+  `taken` and unlocks. So the value moves out to the caller and the lock's
+  slot holds nothing, as `EvalR.lockTake` has it.
+  - The value's heap memory is the same memory before and after. Only its
+    owner changes, from the lock to the caller, as the model's tree keeps
+    its addresses and changes owner.
+- *The restore moves back.* `locked_restore` swaps `x` into the slot
+  (`mem_replace`) and forgets the zero bytes, with no drop glue. It then
+  clears `taken`. That is `EvalR.lockRestore`. "The value was not taken"
+  panics, which is `EvalR.lockRestoreP`.
+- **No faithfulness premise is needed** (unlike `withLock`'s "the lock
+  outlives the body"). `withLock` models an in-place update as a move out
+  and back, so the two agree only while the lock lives. The take really is
+  a move.
+  - If the last share is dropped while the value is out, the runtime frees
+    the `LockedImpl` and its zero bytes, which drops nothing. The model's
+    sweep frees the block, whose tree is `.int 0`, which frees nothing.
+  - The taker owns its value either way, and drops it or moves it on.
+  - A restore needs a live share (`a`), so it never meets a freed lock in
+    the model.
+  - So the share need not outlive the taken value, and the sweep needs no
+    premise for it.
+- *Waiting.* Every operation on a taken `Locked` waits on `cv` until the
+  restore. In the model, `withLock`, `lockTake`, `rw_read` and the atomic
+  and channel steps wait while the payload is out (`Blocked`, `RBlocked`). A second
+  take by the same thread waits forever at run time, and in the model it
+  waits or panics.
+- *A restore while another thread has the payload checked out by
+  `locked_update`.* The runtime's restore waits for the mutex, then panics,
+  since `taken` is false. The model's restore finds the payload out and
+  puts its value in. The updater's end then finds the block full and drops
+  its `x` (`Release.drop`).
+  - That is a behaviour the runtime does not have, and it is memory-safe in
+    the model.
+  - The runtime's behaviour is a model run too: the restorer steps after
+    the updater's end, and panics (`lockRestoreP`).
+  - The model tells a take from a check-out by nothing (the design's
+    `held` is not stored, A3.2), so it over-approximates here.
+- *The crossing check.* `locked_restore`, `locked_new` and `chan_send` run
+  `mem_send_check` on what goes in. A lock's payload and a channel's
+  element hold no cell share (part A), so there is nothing for it to find.
+  The model refuses statically what the check would count.
+- *Phase D* (A3.1's obligation) now covers lock payloads. The runtime
+  counts a share in a `LockedImpl`'s value as it counts any other, and the
+  model's sweep follows it (`Blk.keeps`).
+  - **Cycles.** A share in a lock's payload can lead back to the lock, but
+    only through a closure's or a trait object's environment, whose type
+    the package's type does not show. Without a package the lock's type
+    would be infinite. A `Locked` of a `sync` closure that captured a clone
+    of its own lock's share is one.
+  - The model's sweep collects such a cycle once no root reaches it. The
+    runtime's counts never would, but nurlc rejects the store that would
+    close it (docs/MEMORY.md §7.7: a store into an existing thread-shared
+    handle may not lead back to it).
+  - So phase D's agreement is stated of the programs nurlc accepts. The
+    store rule is not modeled, so the model types more programs, all of
+    them safe.
+
+**Simplifications in this cut.** Each is a restriction, and sound as stated.
+- A lock's payload and a channel's element hold no cell share, and a cell's
+  own payload holds no share.
+- A `send` closure or trait object fits no lock or channel (above).
+- `locked_take` takes only through a lock share (`lk`), not a cell share.
+- `locked_set` (a restore after a take), `locked_get` (a copy),
+  `locked_with` (a closure called through a package), `locked_apply`'s
+  result and `locked_await` are not rules of their own.
+- A slice's element holds no share.
+
+**Not proven here.**
+- *Cell shares in a lock's payload or a channel's element*, with the
+  crossing check at every entry, and so `: Send` trait objects (class
+  `send`) in a lock or a channel.
+- *Shares in a cell's state.*
+- *§7.7's store rule*, which keeps cycles out of thread-shared handles, and
+  so phase D's agreement for programs that would close one (above).
+- The probe h267 as a whole typed program (a probe's encoding, as
+  `A2/DynCell.lean` types `pick`). `lockTake_empties` and
+  `lockRestore_frees_nothing` state its rule on one step each.
+- Deadlock freedom, and that a waiting take is ever let in.
 - `CLAIM.md` / `README.md`.
 
 ## Open questions
