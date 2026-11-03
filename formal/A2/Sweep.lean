@@ -403,7 +403,9 @@ theorem ValOK.sweep {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m τ v P H) 
   | lk h =>
     obtain ⟨o, ho⟩ := h
     exact .lk ⟨o, Mem.sweepR_blk.mpr ⟨ho, hv.lk (Sub.refl _)⟩⟩
-  | cell => exact .cell
+  | cell h =>
+    obtain ⟨o, ho⟩ := h
+    exact .cell ⟨o, Mem.sweepR_blk.mpr ⟨ho, hv.cell (Sub.refl _)⟩⟩
 
 theorem SlotOK.sweep {E : Entry} {sl : Slot} (h : SlotOK m E sl)
     (hk : ∀ v, sl.val = some v → Kept R m v) : SlotOK (m.sweepR R) E sl := by

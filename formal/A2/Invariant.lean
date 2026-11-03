@@ -378,9 +378,11 @@ inductive ValOK (m : Mem) : Ty → Val → List Dep → List Dep → Prop
       sweep keeps the block while a slot holds the share. -/
   | lk {t : Ty} {k : Nat} {P H : List Dep} :
       (∃ o, m.blk k = some ⟨t, .lock, o⟩) → ValOK m (.lk t) (.lk k) P H
-  /-- A3.5: a cell share lent is no share (`lendOf`): a borrow of a library
-      handle holds nothing of its state. -/
-  | cell {t : Ty} {P H : List Dep} : ValOK m (.cell t) (.int 0) P H
+  /-- A3.5: a cell share lent: as a lock share, its block is a lock block of
+      its type (A3.5's third cut: a lent cell share is the share, `lendOf`;
+      the sweep keeps the block while a slot holds it). -/
+  | cell {t : Ty} {k : Nat} {P H : List Dep} :
+      (∃ o, m.blk k = some ⟨t, .lock, o⟩) → ValOK m (.cell t) (.cell k) P H
 
 section ValOK
 variable {m : Mem} {v : Val} {P H : List Dep}
@@ -876,7 +878,8 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       lock outlives the body; and `x` holds a `t` again at its end (it may
       be replaced, not left moved out), so it is what goes back.  A3.5: the
       same rule is a library's in-place change of its state (`withCell`), on
-      a cell share an owner holds (`Entry.lockOf`). -/
+      a cell share a root holds (`Entry.lockOf`): an owner, or (A3.5's third
+      cut) a borrowed parameter, a library's `in` handle. -/
   | withLock {Γ Δ : Ctx} {F : List Var} {a x : Var} {s : Stmt} {Ea : Entry} {t : Ty} :
       s.src = true → Γ x = none → x ∉ F → Γ a = some Ea → Ea.live = true → Ea.lockOf t →
       StmtT P (setE Γ x (lockE t)) F s Δ → EndOK Δ x →

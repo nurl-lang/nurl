@@ -106,7 +106,7 @@ theorem ValOK.keep {m m' : Mem} {τ : Ty} {v : Val} {P H : List Dep}
     obtain ⟨dep, hd, hla⟩ := hl
     exact .arc (by rw [hb]; exact h) hw hv ⟨dep, hd, (hp dep hd).2.2 _ _ hb hla⟩
   | lk h => exact .lk (by rw [hb]; exact h)
-  | cell => exact .cell
+  | cell h => exact .cell (by rw [hb]; exact h)
   | href h =>
     obtain ⟨dep, hd, ha⟩ := h
     exact .href ⟨dep, hd, (hp dep hd).2.1 _ _ _ (fun h hh' => (hh h hh').1) hb ha⟩
@@ -411,7 +411,7 @@ theorem valOK_via {m : Mem} {y : Var} {T : Val} (hy : m.st y = some ⟨false, so
     intro Q ht hq
     exact .arc h hw hv ⟨_, hq, Or.inl ⟨_, Or.inr (Or.inr (Or.inr ⟨T, k, p, hy, ht, rfl⟩)), Or.inr (Or.inl ⟨rfl, rfl⟩)⟩⟩
   | lk h => intro _ _ _; exact .lk h
-  | cell => intro _ _ _; exact .cell
+  | cell h => intro _ _ _; exact .cell h
   | @href t c P H h =>
     intro Q ht hq
     obtain ⟨dep, hd, d, es, hla, hw, hv⟩ := h
@@ -749,7 +749,7 @@ theorem ValOK.memDeps {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK 
     obtain ⟨dep, hd, hla⟩ := hl
     exact .arc h hw hv ⟨dep, List.mem_filter.mpr ⟨hd, by simp [hla.notName]⟩, hla⟩
   | lk h => exact .lk h
-  | cell => exact .cell
+  | cell h => exact .cell h
   | @href t c P H h =>
     obtain ⟨dep, hd, d, es, hla, hw', hv, hn, hsh⟩ := h
     have hkm : (!dep.kind.isName) = true := by simp [hla.notName]

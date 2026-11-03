@@ -636,8 +636,7 @@ theorem setE_self {Γ : Ctx} {x : Var} {E : Entry} (h : Γ x = some E) : A2.setE
     holds a library handle is left out (`t.hasCell = false`), as `rw_get`'s
     read guard leaves it out: the runtime's `locked_get` panics on one (its
     copy is another owner of the state the lock's value holds, which
-    `mem_send_check` counts), and a function that takes the payload lent
-    cannot copy the handle (a lent cell share is no share, `lendOf`). -/
+    `mem_send_check` counts). -/
 theorem _root_.A2.StmtT.lockedGet {P : Prog} {Γ : Ctx} {F : List Var} {a x c z : Var} {f : Nat} {fn : Fn}
     {Ea Ez : Entry} {t : Ty} (hd : DupFn P f t) (hf : P[f]? = some fn)
     (ha : Γ a = some Ea) (hla : Ea.live = true) (hta : Ea.ty = .lk t) (hroot : Ea.mode.isRoot = true)
@@ -735,8 +734,8 @@ theorem apply_call {P : Prog} {Γ : Ctx} {F : List Var} {f : Nat} {t R : Ty} {x 
     the lock is let go.  The result holds no lend of the payload, so the lock
     scope's end leaves it: the context after is the one before, `z` holding
     the result, depending on nothing.  (A3.5: a library's change of its state
-    with a result, through a cell share an owner holds, is the same form:
-    `Entry.lockOf`.) -/
+    with a result, through a cell share an owner or (A3.5's third cut) a
+    borrowed root holds, is the same form: `Entry.lockOf`.) -/
 theorem _root_.A2.StmtT.lockedApply {P : Prog} {Γ : Ctx} {F : List Var} {a x c z : Var} {f : Nat} {fn : Fn}
     {Ea Ez : Entry} {t R : Ty} (hd : ApplyFn P f t R) (hf : P[f]? = some fn)
     (ha : Γ a = some Ea) (hla : Ea.live = true) (hta : Ea.lockOf t) (hroot : Ea.mode.isRoot = true)
@@ -833,7 +832,7 @@ theorem _root_.A2.StmtT.lockedSet {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {a b 
     StmtT P Γ F (Stmt.lockedSet t a b x y) Γ1 := by
   have hay' : a ≠ y := by
     intro h; subst h; rw [ha] at hy; cases hy
-    rcases hta with h | ⟨h, _⟩ <;> rw [hty] at h <;> have := congrArg sizeOf h <;> simp at this
+    rcases hta with h | h <;> rw [hty] at h <;> have := congrArg sizeOf h <;> simp at this
   have hab : a ≠ b := fun h => by rw [h, hb] at ha; cases ha
   have hax : a ≠ x := fun h => by rw [h, hx] at ha; cases ha
   have h1a : Γ1 a = some Ea := hpush.keep hay' ha hay
@@ -1197,6 +1196,57 @@ def SpawnRedex (spawn : Nat → Bool) (s : Stmt) : Prop :=
 since A3.5's second cut runs it at every lock entry and `chan_send` too: a
 spawn asks it of the moved values against the slots the spawner keeps
 (`TStep.spawn`), and panics when it fails (`TStep.spawnFail`). -/
+
+/-! ### A3.5's third cut: a library handle used through a borrow
+
+A lent cell share is the share (`lendOf`), as the runtime's pointer copy is.
+So a library function that takes its handle `in` (`pncounter_inc PNCounter
+c__h …`) changes the state through it — a `withCell` through the borrowed
+root, `Entry.lockOf` — and copies it — `cellClone` of a borrow, as
+`PNCounter_share` copies a handle it was lent.  A borrow never leaves its
+thread: what a spawn moves is owned (`MoveArgs`) and holds no view
+(`SpawnOK`), and what goes into a lock block is owned too (`PushArg`).  So
+a borrowed share is on its owner's thread, and the crossing check counts it
+there (`SendCheck` reads every slot left behind, owned or borrowed; A3's
+`CellInv` counts every slot). -/
+
+/-- A library's `in` handle parameter is a borrowed root (`rootb`), live for
+    the call, whose cell share a `withCell` checks out (`Entry.lockOf`; the
+    runtime's `pncounter_inc` changes the state through the handle it was
+    lent). -/
+theorem paramE_cell_lockOf (ps : List (PMode × Ty)) (t : Ty) :
+    (paramE ps (.inp, .cell t)).lockOf t ∧ (paramE ps (.inp, .cell t)).mode.isRoot = true ∧
+      (paramE ps (.inp, .cell t)).live = true :=
+  ⟨Or.inr rfl, rfl, rfl⟩
+
+/-- **The in-place change through a borrowed handle is typed**
+    (`Stmt.withCell` on an `in` parameter): A3.2's `withLock`, whose
+    faithfulness premises hold of a borrowed root the body does not name. -/
+theorem _root_.A2.StmtT.withCellIn {P : Prog} {Γ Δ : Ctx} {F : List Var} {a x : Var} {s : Stmt}
+    {ps : List (PMode × Ty)} {t : Ty} (ha : Γ a = some (paramE ps (.inp, .cell t)))
+    (hsrc : s.src = true) (hx : Γ x = none) (hxF : x ∉ F)
+    (hs : StmtT P (setE Γ x (lockE t)) F s Δ) (hend : EndOK Δ x) (has : a ∉ s.vars)
+    (hxl : ∃ E, Δ x = some E ∧ E.live = true) :
+    StmtT P Γ F (Stmt.withCell a x s) (exitScope x Δ) :=
+  StmtT.withLock hsrc hx hxF ha (paramE_cell_lockOf ps t).2.2 (paramE_cell_lockOf ps t).1 hs hend
+    (paramE_cell_lockOf ps t).2.1 has hxl
+
+/-- ... and so is a copy of it (`PNCounter_share` of a handle the function was
+    lent): a new owner, on the borrow's thread, which the crossing check then
+    counts with the caller's. -/
+theorem cellClone_in {Γ : Ctx} {F : List Var} {a : Var} {ps : List (PMode × Ty)} {t : Ty}
+    (ha : Γ a = some (paramE ps (.inp, .cell t))) :
+    RhsT Γ F (.cellClone a) ⟨.cell t, .own, true, [], [], false, false⟩ Γ :=
+  .cellClone ha rfl rfl
+
+/-- A borrow left behind is counted as its owner is: a crossing value that
+    holds a share of a cell a borrowed slot left behind holds one of fails the
+    check.  (A live borrow's owner is left behind with it, on the same thread,
+    so the runtime's count of owners fails too.) -/
+theorem sendCheck_borrow_left {vs : List Val} {st : Var → Option Slot} {k : Nat} {v : Val}
+    (hv : v ∈ vs) (hs : Sub (.cell k) v) {y : Var} {w : Val} (hy : st y = some ⟨false, some w⟩)
+    (hw : Sub (.cell k) w) : ¬ SendCheck vs st :=
+  fun h => h k ⟨v, hv, hs⟩ y false w hy hw
 
 /-! ### A3.5b: closures across threads, as A2 types them
 

@@ -14,8 +14,10 @@ cell's shares only whole: a value going into a lock block passed the
 crossing check (`SendCheck`: no slot left behind holds a share of a cell it
 holds), one coming out leaves none of them behind (a check-out and a take
 empty the block; a receive's head shares no cell with the rest of the
-queue, `RecvCheck`), and a lent cell share is no share (`lendOf`), so
-nothing read out of an `Arc`'s or a view's payload brings one.  A new cell's
+queue, `RecvCheck`), and a lent value holds only the cell shares of what it
+was lent from (A3.5's third cut: a lent cell share is the share, `lendOf`),
+which is a slot of the thread's: an `Arc`'s or a view's payload holds none
+(`RdFree`, from `MInv.blocks`).  A new cell's
 key is taken from `nid`, which no share names yet.  A spawn keeps it
 because of the crossing check too: a cell the moved values hold a share of
 keeps no share in the spawner.  So two threads never change one cell's
@@ -29,29 +31,54 @@ open A2
 /-- A slot of the store holds a share of cell `k`. -/
 def CellAt (m : Mem) (k : Nat) : Prop := ∃ y o v, m.st y = some ⟨o, some v⟩ ∧ Sub (.cell k) v
 
-/-- A lent value holds no cell share. -/
-theorem not_sub_cell_lendOf : (v : Val) → ∀ {k : Nat}, Sub (.cell k) (lendOf v) → False
-  | .int _, _, h => by cases h
+/-- A lent value holds the cell shares the value it was lent from holds
+    (A3.5's third cut: a lent cell share is the share). -/
+theorem sub_cell_lendOf : (v : Val) → ∀ {k : Nat}, Sub (.cell k) (lendOf v) → Sub (.cell k) v
+  | .int _, _, h => h
   | .node .., _, h => by simp only [lendOf] at h; cases h
-  | .href _, _, h => by cases h
-  | .view .., _, h => by cases h
+  | .href _, _, h => h
+  | .view .., _, h => h
   | .pair a b, _, h => by
     simp only [lendOf] at h
     cases h with
-    | fst h => exact not_sub_cell_lendOf a h
-    | snd h => exact not_sub_cell_lendOf b h
+    | fst h => exact Sub.fst (sub_cell_lendOf a h)
+    | snd h => exact Sub.snd (sub_cell_lendOf b h)
   | .inl a, _, h => by
     simp only [lendOf] at h
-    cases h with | inl h => exact not_sub_cell_lendOf a h
+    cases h with | inl h => exact Sub.inl (sub_cell_lendOf a h)
   | .inr a, _, h => by
     simp only [lendOf] at h
-    cases h with | inr h => exact not_sub_cell_lendOf a h
+    cases h with | inr h => exact Sub.inr (sub_cell_lendOf a h)
   | .pkg _ _ _ a _, _, h => by
     simp only [lendOf] at h
-    cases h with | pkg h => exact not_sub_cell_lendOf a h
-  | .arc _ _, _, h => by cases h
-  | .lk _, _, h => by cases h
-  | .cell _, _, h => by simp only [lendOf] at h; cases h
+    cases h with | pkg h => exact Sub.pkg (sub_cell_lendOf a h)
+  | .arc _ _, _, h => h
+  | .lk _, _, h => h
+  | .cell _, _, h => h
+
+/-- A3.5's third cut: what a block's holders are lent holds no cell share.
+    An `arc` block's payload and a view's are of a type that holds none
+    (`MInv.blocks`: `RhsT.arcNew` and `RhsT.rwRead` ask the Sync question), and
+    a lock block's payload is read by no one.  So nothing read out of a block
+    in place, lent, brings a library handle: a lent cell share is the share,
+    and none is there. -/
+def RdFree (m : Mem) : Prop := ∀ k bl, m.blk k = some bl → ∀ c, ¬ Sub (.cell c) bl.rd
+
+theorem _root_.A2.MInv.rdFree {m : Mem} {Γ : Ctx} (hi : MInv m Γ) : RdFree m := by
+  intro k bl hk c hs
+  obtain ⟨_, _, hpay, hkind⟩ := hi.blocks k bl hk
+  have hrd : bl.rd = .int 0 ∨ ∃ p, bl.pay = some p ∧ bl.rd = p ∧ bl.kind ≠ .lock := by
+    obtain ⟨ty, kd, pay⟩ := bl
+    cases kd <;> cases pay <;> simp [Blk.rd, Blk.tree]
+  rcases hrd with h | ⟨p, hp, h, hnl⟩
+  · rw [h] at hs; cases hs
+  · rw [h] at hs
+    rcases hkind with hl | hnc
+    · exact hnl hl
+    · exact (hpay p hp).1.noCell_hasCell hnc hs
+
+theorem RdFree.of_blk {m m' : Mem} (hb : m'.blk = m.blk) (h : RdFree m) : RdFree m' := by
+  intro k bl hk; rw [hb] at hk; exact h k bl hk
 
 theorem CellAt.of_slot {m : Mem} {y : Var} {o : Bool} {v : Val} (h : m.st y = some ⟨o, some v⟩) {k : Nat}
     (hs : Sub (.cell k) v) : CellAt m k := ⟨y, o, v, h, hs⟩
@@ -161,7 +188,7 @@ theorem _root_.A2.EvalR.cellSt {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : 
   | _ => exact CellAt.of_st rfl hc
 
 /-- Binding parameters hands each a value an argument held (an `in`
-    parameter is lent its argument: no cell share). -/
+    parameter is lent its argument, a lent cell share being the share). -/
 theorem _root_.A2.BindParams.cellSt {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var} {base i : Nat}
     (h : BindParams m ps as base i m') : ∀ {k : Nat}, CellAt m' k → CellAt m k := by
   induction h with
@@ -173,7 +200,7 @@ theorem _root_.A2.BindParams.cellSt {m m' : Mem} {ps : List (PMode × Ty)} {as :
       obtain ⟨o, u⟩ := sl
       cases o <;> cases u <;> simp only [lendSlot, Option.some.injEq, reduceCtorEq] at hl
       · subst hl; exact .of_slot ha hs
-      · subst hl; exact (not_sub_cell_lendOf _ hs).elim
+      · subst hl; exact .of_slot ha (sub_cell_lendOf _ hs)
     · exact hc
   | sink ha _ ih =>
     intro k hc
@@ -182,19 +209,42 @@ theorem _root_.A2.BindParams.cellSt {m m' : Mem} {ps : List (PMode × Ty)} {as :
     · exact CellAt.set_none hc
   | inout _ ih => exact ih
 
-/-- A package's environment, lent: no cell share. -/
-theorem CellAt.envMem {m : Mem} {env : Val} {k : Nat} (h : CellAt (envMem m env) k) : CellAt m k := by
+/-- A package's environment, lent: the cell shares the package's slot holds
+    (A3.5's third cut: a lent cell share is the share). -/
+theorem CellAt.envMem {m : Mem} {env : Val} {k : Nat} (henv : Sub (.cell k) env → CellAt m k)
+    (h : CellAt (envMem m env) k) : CellAt m k := by
   rcases CellAt.set (m := m) (CellAt.of_st rfl h) with ⟨w, hw, hs⟩ | hc
-  · cases hw; exact (not_sub_cell_lendOf _ hs).elim
+  · cases hw; exact henv (sub_cell_lendOf _ hs)
   · exact hc
+
+/-- A node found in memory (`NodeAt`, `DataAt`): its cell shares are a slot's,
+    since no block's holders are lent one (`RdFree`). -/
+theorem CellAt.of_nodeAt {m : Mem} (hrd : RdFree m) {c : Nat} {n : Val} (h : NodeAt m c n) {k : Nat}
+    (hs : Sub (.cell k) n) : CellAt m k := by
+  rcases h with ⟨x, T, hx, hn, _⟩ | ⟨k', bl, hk', hn, _⟩
+  · exact .of_slot hx (hs.trans hn)
+  · exact absurd (hs.trans hn) (hrd k' bl hk' k)
+
+theorem CellAt.of_dataAt {m : Mem} (hrd : RdFree m) {d : Nat} {n : Val} (h : DataAt m d n) {k : Nat}
+    (hs : Sub (.cell k) n) : CellAt m k := by
+  rcases h with ⟨x, T, hx, hn, _⟩ | ⟨k', bl, hk', hn, _⟩
+  · exact .of_slot hx (hs.trans hn)
+  · exact absurd (hs.trans hn) (hrd k' bl hk' k)
+
+theorem CellAt.of_vecOf {m : Mem} (hrd : RdFree m) {y : Var} {t : Ty} {c d : Nat} {es : List Val}
+    (h : VecOf m y t c d es) {k : Nat} (hs : Sub (.cell k) (.node t c d es)) : CellAt m k := by
+  rcases h.2.2 with hy | ⟨_, hn⟩
+  · exact .of_slot hy hs
+  · exact CellAt.of_nodeAt hrd hn hs
 
 /-! ### A3.5's second cut: where a cell's shares are, and what a step does to them
 
 A cell share is in a slot, or in a lock block's payload while the payload is
 in the block (`LockHolds`): a lock's, a cell's state, a channel's queue.  An
-`arc` block's payload holds none (`RhsT.arcNew` asks the Sync question), and
-what a view's holders read of its payload is lent, which is no share
-(`lendOf`), so neither is a place the shares are.
+`arc` block's payload holds none (`RhsT.arcNew` asks the Sync question), nor
+does a view's (`RhsT.rwRead` asks it too), so neither is a place the shares
+are, and nothing lent out of one brings a share (`RdFree`; A3.5's third cut:
+a lent cell share is the share, so what a borrow holds is its owner's).
 
 `OnePlace m k`: cell `k`'s shares in the store are in one place — the slots,
 with no lock block holding one, or one lock block's payload, with no slot
@@ -378,7 +428,7 @@ theorem noCell_int {n k : Nat} : ¬ Sub (.cell k) (.int n) := fun h => by cases 
 
 /-- **What a right-hand side does**, its value set in a slot. -/
 theorem _root_.A2.EvalR.cellKeep {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.ok v o m1))
-    (x : Var) (o' : Bool) : CellKeep m (m1.set x ⟨o', some v⟩) := by
+    (hrd : RdFree m) (x : Var) (o' : Bool) : CellKeep m (m1.set x ⟨o', some v⟩) := by
   have hst : ∀ k, CellAt m1 k → CellAt m k := fun k hc => h.cellSt hc
   have hn : m.nid ≤ m1.nid := (EvalR.grows h).nid
   cases h with
@@ -388,10 +438,15 @@ theorem _root_.A2.EvalR.cellKeep {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h 
   | copy hy => exact CellKeep.setVal x o' hn hst (fun _ hs => .of_slot hy hs) (fun _ _ h => h)
   | borrowOwn _ => exact CellKeep.setVal x o' hn hst (fun _ hs => by cases hs) (fun _ _ h => h)
   | borrowBor hy => exact CellKeep.setVal x o' hn hst (fun _ hs => .of_slot hy hs) (fun _ _ h => h)
-  | «at» _ _ _ => exact CellKeep.setVal x o' hn hst (fun _ hs => (not_sub_cell_lendOf _ hs).elim) (fun _ _ h => h)
+  | «at» hlt hv _ =>
+    exact CellKeep.setVal x o' hn hst
+      (fun _ hs => CellAt.of_vecOf hrd hv (Sub.child (List.getElem_mem hlt) (sub_cell_lendOf _ hs)))
+      (fun _ _ h => h)
   | view _ => exact CellKeep.setVal x o' hn hst (fun _ hs => by cases hs) (fun _ _ h => h)
-  | sat _ _ _ _ _ _ =>
-    exact CellKeep.setVal x o' hn hst (fun _ hs => (not_sub_cell_lendOf _ hs).elim) (fun _ _ h => h)
+  | sat hlt _ _ _ _ hda =>
+    exact CellKeep.setVal x o' hn hst
+      (fun _ hs => CellAt.of_dataAt hrd hda (Sub.child (List.getElem_mem hlt) (sub_cell_lendOf _ hs)))
+      (fun _ _ h => h)
   | pop hy _ _ =>
     exact CellKeep.setVal x o' hn hst (fun _ hs => .of_slot hy (Sub.child (by simp) hs)) (fun _ _ h => h)
   | pair h1 h2 =>
@@ -400,16 +455,20 @@ theorem _root_.A2.EvalR.cellKeep {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h 
     cases hs with
     | fst hs => exact h1.cell.1 hs
     | snd hs => exact h1.cell.2 (h2.cell.1 hs)
-  | fst _ => exact CellKeep.setVal x o' hn hst (fun _ hs => (not_sub_cell_lendOf _ hs).elim) (fun _ _ h => h)
-  | snd _ => exact CellKeep.setVal x o' hn hst (fun _ hs => (not_sub_cell_lendOf _ hs).elim) (fun _ _ h => h)
+  | fst hy =>
+    exact CellKeep.setVal x o' hn hst (fun _ hs => .of_slot hy (Sub.fst (sub_cell_lendOf _ hs))) (fun _ _ h => h)
+  | snd hy =>
+    exact CellKeep.setVal x o' hn hst (fun _ hs => .of_slot hy (Sub.snd (sub_cell_lendOf _ hs))) (fun _ _ h => h)
   | inl h1 =>
     exact CellKeep.setVal x o' hn hst (fun _ hs => by cases hs with | inl hs => exact h1.cell.1 hs)
       (fun _ _ h => LockHolds.of_blk (TakeVal.blk h1) h)
   | inr h1 =>
     exact CellKeep.setVal x o' hn hst (fun _ hs => by cases hs with | inr hs => exact h1.cell.1 hs)
       (fun _ _ h => LockHolds.of_blk (TakeVal.blk h1) h)
-  | getl _ => exact CellKeep.setVal x o' hn hst (fun _ hs => (not_sub_cell_lendOf _ hs).elim) (fun _ _ h => h)
-  | getr _ => exact CellKeep.setVal x o' hn hst (fun _ hs => (not_sub_cell_lendOf _ hs).elim) (fun _ _ h => h)
+  | getl hy =>
+    exact CellKeep.setVal x o' hn hst (fun _ hs => .of_slot hy (Sub.inl (sub_cell_lendOf _ hs))) (fun _ _ h => h)
+  | getr hy =>
+    exact CellKeep.setVal x o' hn hst (fun _ hs => .of_slot hy (Sub.inr (sub_cell_lendOf _ hs))) (fun _ _ h => h)
   | takel hy => exact CellKeep.setVal x o' hn hst (fun _ hs => .of_slot hy (Sub.inl hs)) (fun _ _ h => h)
   | taker hy => exact CellKeep.setVal x o' hn hst (fun _ hs => .of_slot hy (Sub.inr hs)) (fun _ _ h => h)
   | pack h1 =>
@@ -422,7 +481,8 @@ theorem _root_.A2.EvalR.cellKeep {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h 
     · exact LockHolds.of_blk (TakeVal.blk h1) hk
     · cases hb
   | arcClone _ => exact CellKeep.setVal x o' hn hst (fun _ hs => by cases hs) (fun _ _ h => h)
-  | arcGet _ _ => exact CellKeep.setVal x o' hn hst (fun _ hs => (not_sub_cell_lendOf _ hs).elim) (fun _ _ h => h)
+  | arcGet _ hk =>
+    exact CellKeep.setVal x o' hn hst (fun _ hs => absurd (sub_cell_lendOf _ hs) (hrd _ _ hk _)) (fun _ _ h => h)
   | @lockNew t y w m2 h1 _ hck =>
     -- the payload goes into a new lock block, past the crossing check
     refine CellKeep.moveIn m2.nid w hn (fun k hc => ?_) (fun k' k hk => ?_) (fun k hs => h1.cell.1 hs)
@@ -568,13 +628,13 @@ theorem _root_.A2.Release.cellKeep {m m' : Mem} {k0 : Nat} {t : Ty} {x : Var} (h
 
 /-- **A step keeps each cell's shares in one place**, and makes a share only
     of a new cell. -/
-theorem _root_.A2.Step.cellKeep {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) :
-    CellKeep m r.mem := by
+theorem _root_.A2.Step.cellKeep {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r)
+    (hrd : RdFree m) : CellKeep m r.mem := by
   induction h with
   | seqSkip => exact CellKeep.refl _
   | seqL _ ih => exact ih
   | seqP _ ih => exact ih
-  | letv _ he => exact he.cellKeep _ _
+  | letv _ he => exact he.cellKeep hrd _ _
   | letvP _ => exact CellKeep.refl _
   | letcall _ _ hbp =>
     exact CellKeep.shrink (BindParams.grows hbp).nid
@@ -590,7 +650,7 @@ theorem _root_.A2.Step.cellKeep {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : S
   | frozenSkip => exact CellKeep.refl _
   | frozenIn _ ih => exact ih
   | frozenP _ ih => exact ih
-  | assign _ he _ _ => exact (he.cellKeep _ _).congr rfl rfl rfl
+  | assign _ he _ _ => exact (he.cellKeep hrd _ _).congr rfl rfl rfl
   | assignP _ => exact CellKeep.refl _
   | iteT _ _ => exact CellKeep.refl _
   | iteF _ => exact CellKeep.refl _
@@ -700,9 +760,10 @@ theorem _root_.A2.Step.cellKeep {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : S
     · rcases CellAt.set hc with ⟨w, hw, hs⟩ | hc
       · cases hw; exact .of_slot hy (Sub.fst hs)
       · exact CellAt.set_none hc
-  | callc _ _ _ _ hbp =>
+  | callc hc0 _ _ _ hbp =>
     exact CellKeep.shrink (BindParams.grows hbp).nid
-      (fun _ hc => .inl (CellAt.envMem (hbp.cellSt (CellAt.set_none (CellAt.set_none (CellAt.of_st rfl hc))))))
+      (fun _ hc => .inl (CellAt.envMem (fun hs => .of_slot hc0 (Sub.pkg hs))
+        (hbp.cellSt (CellAt.set_none (CellAt.set_none (CellAt.of_st rfl hc))))))
       (fun _ _ h => LockHolds.of_blk (BindParams.blk hbp) h)
   | callcE hc _ _ _ =>
     -- A2-envhand: the environment's shares move to its binding
@@ -715,7 +776,7 @@ theorem _root_.A2.Step.cellKeep {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : S
     rcases CellAt.set hc with ⟨w, hw, hs⟩ | hc
     · cases hw; cases hs
     · exact hc
-  | letd _ he => exact he.cellKeep _ _
+  | letd _ he => exact he.cellKeep hrd _ _
   | letdP _ => exact CellKeep.refl _
   | scopeDIn _ ih => exact ih
   | scopeDEnd _ => exact CellKeep.slots (Nat.le_refl _) (fun _ hc => .inl (CellAt.of_st rfl hc)) rfl
@@ -848,15 +909,25 @@ theorem LockHolds.of_sweep {R : Val → Prop} {B : Nat → Option Blk} {k' k : N
   · exact ⟨t, p, hk, hs⟩
   · cases hk
 
+/-- A3.5's third cut: a thread's view lends no library handle out of a block
+    (`RdFree`): its facts (`ThreadOK`) say the blocks' types. -/
+theorem CInv.rdFree {P : Prog} {C : Cfg} (h : CInv P C) {i : Nat} {t : Thread} (hi : C.ths[i]? = some t) :
+    RdFree (C.view t) := by
+  obtain ⟨ps, hc, _⟩ := h
+  obtain ⟨a, ha⟩ := part_of hc.len hi
+  obtain ⟨⟨Γ, F, Δ, _, hinv, _⟩, _⟩ := hc.ok i t a hi ha
+  exact RdFree.of_blk rfl hinv.toMInv.rdFree
+
 /-- **A thread's step, and the sweep that ends it, keep the cells' homes**:
     a share the stepping thread or a lock block holds afterwards was in the
     thread's view before (its slots or a lock block), or is a new cell's, at a
     key no thread's share names; and its cell's shares stay in one place
     (`Step.cellKeep`). -/
 theorem CellInv.thread_of {P : Prog} {C : Cfg} (h : CellInv C) {i : Nat} {t : Thread}
-    {m' : Mem} {s' : Stmt} (hi : C.ths[i]? = some t) (hst : Step P (C.view t) t.s (.ok m' s')) :
+    {m' : Mem} {s' : Stmt} (hi : C.ths[i]? = some t) (hrd : RdFree (C.view t))
+    (hst : Step P (C.view t) t.s (.ok m' s')) :
     CellInv (C.put i m' s').sweep := by
-  have hk : CellKeep (C.view t) m' := Step.cellKeep hst
+  have hk : CellKeep (C.view t) m' := Step.cellKeep hst hrd
   have hbl := h.view_below hi
   have hilen : i < C.ths.length := (List.getElem?_eq_some_iff.mp hi).1
   have hnid : C.nid ≤ m'.nid := hk.nid

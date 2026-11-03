@@ -274,10 +274,12 @@ def SharesIn (B : Nat → Option Blk) (τ : Ty) (T : Val) : Prop :=
 /-- A3.5, **the crossing check** (`mem_send_check`, docs/MEMORY.md §6.5): a
     library handle whose copies are one state (a cell) may cross only with
     every other owner of that state.  For every cell a crossing value holds a
-    share of, no slot left behind (`st'`) holds one.  A lent cell share is no
-    share (`lendOf`), so the slots that hold one are its owners: the check is
-    the runtime's count of the places in the values that hold each cell's
-    block against its owners.  (`Sub` does not enter a share: a lock share's
+    share of, no slot left behind (`st'`) holds one.  The slots that hold one
+    are its owners and (A3.5's third cut) its borrows, which are on their
+    owner's thread: the check is the runtime's count of the places in the
+    values that hold each cell's block against its owners, with a borrow left
+    behind counted as its owner is (A3/DESIGN.md, *A library handle used
+    through a borrow*).  (`Sub` does not enter a share: a lock share's
     payload is the lock's, and moves with no crossing.)  A3.5 runs it at a
     spawn (`TStep.spawn`); A3.5's second cut at every value going into a lock
     block too — `locked_new` and a cell's constructor (`EvalR.lockNew`,
@@ -366,17 +368,20 @@ inductive Eval (m : Mem) : Expr → Nat → Prop
   | isr {x : Var} {o : Bool} {v : Val} : m.st x = some ⟨o, some (.inr v)⟩ → Eval m (.isl x) 0
 
 /-- An element read out of a buffer: an element `Vec` is lent, as `href`;
-    a struct is copied with what it holds lent.  A3.5: a cell share lent is
-    no share (`.int 0`): a borrow of a library handle reads nothing of its
-    state and changes none of it, and is never an owner (the runtime's
-    crossing check counts owners). -/
+    a struct is copied with what it holds lent.  A share is lent as itself,
+    a word that names its block: an `arc` share, a lock share and (A3.5's
+    third cut) a cell share.  A borrow of a library handle is the handle, as
+    the runtime's pointer copy is: the library changes the state through it
+    and copies it (`withCell`, `cellClone` through a borrowed root).  It
+    never leaves its thread (a spawn's and a lock's value is owned and holds
+    no view), so the crossing check counts it as its owner's thread's
+    (`SendCheck`). -/
 def lendOf : Val → Val
   | .node _ c _ _ => .href c
   | .pair v w => .pair (lendOf v) (lendOf w)
   | .inl v => .inl (lendOf v)
   | .inr v => .inr (lendOf v)
   | .pkg fs te ms v cs => .pkg fs te ms (lendOf v) cs
-  | .cell _ => .int 0
   | v => v
 
 mutual

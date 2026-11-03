@@ -585,9 +585,9 @@ theorem lockOf_lift_os {v : Var} {E : Entry} (hos : E.mode.ownSlot = true) : (S.
 /-- A3.5: so a share `withLock` may check out stays one. -/
 theorem _root_.A2.Entry.lockOf.lift {v : Var} {E : Entry} {t : Ty} (hty : (S.liftE v E).ty = E.ty)
     (h : E.lockOf t) : (S.liftE v E).lockOf t := by
-  rcases h with h | ⟨h, hos⟩
+  rcases h with h | h
   · exact Or.inl (hty.trans h)
-  · exact Or.inr ⟨hty.trans h, S.lockOf_lift_os hos⟩
+  · exact Or.inr (hty.trans h)
 
 theorem canon_root (h : S.OK) {r : Var} {Er : Entry} (hEr : Γa r = some Er) (hro : Er.mode.isRoot = true) :
     ∃ E', S.canon Γa (S.ρ r) = some E' ∧ E'.mode.isRoot = true :=
@@ -1770,10 +1770,10 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
       fun x => ?_⟩
     exact EntryWeaker.mk' (by simp [liftE]) (by simp [liftE, liftMode]) (by simp) (by simp [liftE])
       (fun h' => by simp [Mode.ownSlot] at h') (by simp)
-  | @cellClone a Ea t ha hl ht hos =>
+  | @cellClone a Ea t ha hl ht =>
     have hc : S.canon Γa (S.ρ a) = some (S.liftE a Ea) := by rw [canon_ρ h, ha]; rfl
-    refine ⟨_, RhsT.cellClone hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab ha]; exact ht)
-      (lockOf_lift_os hos), fun x => ?_⟩
+    refine ⟨_, RhsT.cellClone hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab ha]; exact ht),
+      fun x => ?_⟩
     exact EntryWeaker.mk' (by simp [liftE]) (by simp [liftE, liftMode]) (by simp) (by simp [liftE])
       (fun h' => by simp [Mode.ownSlot] at h') (by simp)
   | glob hsy htok =>

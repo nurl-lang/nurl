@@ -440,10 +440,11 @@ theorem rguard_get_path {t : Ty} (ht : t ≠ .int) (g y : Var) :
   cases t <;> simp_all [projE, getE, derive, projDeps, rootKind, Mode.isRoot, Mode.ownSlot]
 
 /-- A3.2/A3.5: `E` holds a share of a lock block whose payload is a `t`, which
-    `withLock` checks out: a lock share, or a cell share an owner holds (a
-    lent cell share is no share). -/
+    `withLock` checks out: a lock share, or a cell share (A3.5's third cut:
+    an owner's, or a borrowed root's, a library's `in` handle parameter; a
+    lent cell share is the share, `lendOf`).  `withLock` asks a root. -/
 def Entry.lockOf (E : Entry) (t : Ty) : Prop :=
-  E.ty = .lk t ∨ (E.ty = .cell t ∧ E.mode.ownSlot = true)
+  E.ty = .lk t ∨ E.ty = .cell t
 
 /-- A3.2: the binding a lock's payload is checked out to (`withLock`): owned,
     holding nothing (a payload views nothing); an integer is a plain integer
@@ -719,9 +720,11 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       PushArg Γ F y Ey t D Γ1 →
       RhsT Γ F (.cellNew t y) ⟨.cell t, .own, true, [], [], false, false⟩ Γ1
   /-- A3.5: a copy of a library handle (`PNCounter_share`): a new owned cell
-      share, from one an owner holds (a lent cell share is no share). -/
+      share, from one a live binding holds — an owner's, or (A3.5's third
+      cut) a borrow's: a lent cell share is the share (`lendOf`), as the
+      runtime's `PNCounter_share` copies a handle it was lent. -/
   | cellClone {a : Var} {E : Entry} {t : Ty} :
-      Γ a = some E → E.live = true → E.ty = .cell t → E.mode.ownSlot = true →
+      Γ a = some E → E.live = true → E.ty = .cell t →
       RhsT Γ F (.cellClone a) ⟨.cell t, .own, true, [], [], false, false⟩ Γ
   /-- A3.6: a read of a module global set at start: an owned share of its
       block, holding nothing (a clone of the global's handle, which the global

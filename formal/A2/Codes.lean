@@ -67,7 +67,7 @@ theorem pkgOK_lend {P : Prog} : ∀ {v : Val}, PkgOK P v → PkgOK P (lendOf v)
   | .view _ _ _, h => h
   | .arc _ _, h => h
   | .lk _, h => h
-  | .cell _, _ => pkgOK_int P 0
+  | .cell _, h => h
   | .node _ c _ _, _ => pkgOK_href P c
   | .pair v w, h => by
     refine pkgOK_of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)

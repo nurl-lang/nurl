@@ -1611,9 +1611,9 @@ theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry
     | cellNew htk hfr =>
       obtain ⟨post, pu⟩ := push_take hi hanch hy hly hty hpa htk
       exact rhs_cellNew post pu hpl (hty ▸ hi.tyok hy) hfr
-  | cellClone ha hl hty hos =>
+  | cellClone ha hl hty =>
     cases he with
-    | cellClone hv => exact ⟨RhsPost.same hi, out_cellClone hi ha hl hty hos hv⟩
+    | cellClone hv => exact ⟨RhsPost.same hi, out_cellClone hi ha hl hty hv⟩
   | glob _ htok =>
     cases he with
     | glob _ hf => exact ⟨RhsPost.same hi, out_glob hi htok hf⟩
@@ -2384,7 +2384,7 @@ theorem reroot_valOK_gen (hh : HeapOK m) (hp : m.st p = some ⟨false, some w⟩
       exact .arc h hw hv ⟨_, mem_reroot_of_eq hd hdD, hla1.keep (rootKeep_rmbor hp (hlt d' hdD))⟩
     · exact .arc h hw hv ⟨dep, mem_reroot_of_ne hd hrp, hla.keep (rootKeep_rmbor hp hrp)⟩
   | lk h => intro _ _ _ _ _; exact .lk h
-  | cell => intro _ _ _ _ _; exact .cell
+  | cell h => intro _ _ _ _ _; exact .cell h
   | pair _ _ ihx ihy =>
     intro D hDs hDm hlt hnp
     have hx := ihx hDs hDm hlt hnp; have hy := ihy hDs hDm hlt hnp

@@ -161,7 +161,7 @@ theorem ValOK.grow {m m' : Mem} (hst : m'.st = m.st) (hb : BlkLe m.blk m'.blk) {
     obtain ⟨dep, hd, hla⟩ := hl
     exact .arc (ArcBlk.grow hb h) hw hv ⟨dep, hd, hla.keep (RootKeep.of_st hst hb)⟩
   | lk h => obtain ⟨o, ho⟩ := h; exact .lk (hb.lock ho)
-  | cell => exact .cell
+  | cell h => obtain ⟨o, ho⟩ := h; exact .cell (hb.lock ho)
   | int => exact .int
   | href h =>
     obtain ⟨dep, hd, ha⟩ := h
@@ -913,7 +913,7 @@ theorem out_borrowWhole {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Ent
         rcases hv with hv | ⟨_, _, _, _, hv, _⟩
         · rw [slot_val_eq hv hw]; rw [hty] at hok
           cases hok with
-          | cell => exact .cell
+          | cell h1 => exact .cell h1
         · rw [hv] at hw; cases hw
       · rw [ht] at hty; cases hty
   names hn := by
@@ -949,7 +949,7 @@ theorem lend_valOK' {m : Mem} {H : List Dep} {τ : Ty} {e : Val} (hw : WFv τ e)
   | int => intro _ P _ _ _ _ _ _; exact .int
   | arc hwp hvf _ => intro _ P _ ha _ _ hsh _; exact .arc hsh.here hwp hvf (ha _ _ (Top.refl _))
   | lk => intro _ P _ ha _ _ hsh _; exact .lk hsh.lk
-  | cell => intro _ P _ ha _ _ hsh _; exact .cell
+  | cell => intro _ P _ ha _ _ hsh _; exact .cell hsh.cell
   | @view t d o l =>
     intro _ P _ _ _ _ _ hs
     obtain ⟨d', o', l', hv, dep, hd, ha⟩ := hs t rfl t _ ViewIn.here
@@ -1122,7 +1122,7 @@ theorem out_at {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t : 
       | lk => exact .lk (hshv.elem hmem).lk
     | cell a =>
       cases hwe with
-      | cell => exact .cell
+      | cell => exact .cell (hshv.elem hmem).cell
   names hn := elemE_named (hi.names y E hy hl (Or.inl (by rw [hty]; simp))) t
   held := by
     obtain ⟨c0, d0, es0, hvec0, hw, _, _, _, hns, hshv⟩ := hi.vec_node hy hl hty
@@ -1528,31 +1528,47 @@ theorem out_cellShare {m : Mem} {Γ : Ctx} {t : Ty} {k : Nat} (htok : t.ok = tru
   pkgs := PkgsOK.leaf (fun _ h => by cases h) (fun _ _ _ _ _ h => by cases h)
   shares _ u k' p' ha := by cases ha; exact hk
 
-/-- A3.5: a cell share's block, through the owner that holds the share: a
-    lock block of its type.  (A lent cell share is no share, `ValOK.cell`.) -/
+/-- A3.5: a cell share's block, through the binding that holds the share
+    (A3.5's third cut: an owner, or a borrow of one, a lent cell share being
+    the share): a lock block of its type. -/
 theorem MInv.cell_val {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry} (ha : Γ a = some E)
-    (hl : E.live = true) {t : Ty} (hty : E.ty = .cell t) (hos : E.mode.ownSlot = true) {o : Bool} {k : Nat}
+    (hl : E.live = true) {t : Ty} (hty : E.ty = .cell t) {o : Bool} {k : Nat}
     (hv : m.st a = some ⟨o, some (.cell k)⟩) : ∃ ob, m.blk k = some ⟨t, .lock, ob⟩ := by
-  obtain ⟨T, hT, _, _⟩ := hi.own_val ha hl hos
-  rw [hT] at hv; cases hv
-  have hsh := hi.shares a E _ _ ha hT rfl rfl
-  rw [hty] at hsh
-  exact hsh.cell
+  cases hos : E.mode.ownSlot with
+  | true =>
+    obtain ⟨T, hT, _, _⟩ := hi.own_val ha hl hos
+    rw [hT] at hv; cases hv
+    have hsh := hi.shares a E _ _ ha hT rfl rfl
+    rw [hty] at hsh
+    exact hsh.cell
+  | false =>
+    obtain ⟨w, hw, hok⟩ := hi.bor_val ha hl hos
+    rw [hw] at hv; cases hv
+    rw [hty] at hok
+    cases hok with
+    | cell h => exact h
 
-/-- ... and the share itself: a live owner of type `cell t` holds one. -/
+/-- ... and the share itself: a live binding of type `cell t` holds one. -/
 theorem MInv.cell_slot {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry} (ha : Γ a = some E)
-    (hl : E.live = true) {t : Ty} (hty : E.ty = .cell t) (hos : E.mode.ownSlot = true) :
-    ∃ k, m.st a = some ⟨true, some (.cell k)⟩ := by
-  obtain ⟨T, hT, hwT, _⟩ := hi.own_val ha hl hos
-  rw [hty] at hwT
-  cases hwT; exact ⟨_, hT⟩
+    (hl : E.live = true) {t : Ty} (hty : E.ty = .cell t) :
+    ∃ o k, m.st a = some ⟨o, some (.cell k)⟩ := by
+  cases hos : E.mode.ownSlot with
+  | true =>
+    obtain ⟨T, hT, hwT, _⟩ := hi.own_val ha hl hos
+    rw [hty] at hwT
+    cases hwT; exact ⟨_, _, hT⟩
+  | false =>
+    obtain ⟨w, hw, hok⟩ := hi.bor_val ha hl hos
+    rw [hty] at hok
+    cases hok; exact ⟨_, _, hw⟩
 
-/-- A3.5, `PNCounter_share a`: a new share of `a`'s cell. -/
+/-- A3.5, `PNCounter_share a`: a new share of `a`'s cell (A3.5's third cut:
+    `a` an owner or a borrow, as the runtime copies a handle it was lent). -/
 theorem out_cellClone {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry} (ha : Γ a = some E)
-    (hl : E.live = true) {t : Ty} (hty : E.ty = .cell t) (hos : E.mode.ownSlot = true) {o : Bool} {k : Nat}
+    (hl : E.live = true) {t : Ty} (hty : E.ty = .cell t) {o : Bool} {k : Nat}
     (hv : m.st a = some ⟨o, some (.cell k)⟩) :
     RhsOut m Γ ⟨.cell t, .own, true, [], [], false, false⟩ (.cell k) true := by
-  have hk := hi.cell_val ha hl hty hos hv
+  have hk := hi.cell_val ha hl hty hv
   have hok := hi.tyok ha; rw [hty] at hok
   simp only [Ty.ok, Bool.and_eq_true] at hok
   exact out_cellShare hok.1 (by simpa using hok.2) hk
@@ -1579,23 +1595,23 @@ theorem MInv.lockOf_val {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Ent
     (hl : E.live = true) {t : Ty} (hty : E.lockOf t) {k : Nat} (hv : LockAt m a k) :
     ∃ ob, m.blk k = some ⟨t, .lock, ob⟩ := by
   obtain ⟨o, hv | hv⟩ := hv
-  · rcases hty with hty | ⟨hty, hos⟩
+  · rcases hty with hty | hty
     · exact hi.lk_val ha hl hty hv
-    · obtain ⟨k', hk'⟩ := hi.cell_slot ha hl hty hos
+    · obtain ⟨o', k', hk'⟩ := hi.cell_slot ha hl hty
       rw [hk'] at hv; cases hv
-  · rcases hty with hty | ⟨hty, hos⟩
+  · rcases hty with hty | hty
     · obtain ⟨o', k', hk'⟩ := hi.lk_slot ha hl hty
       rw [hk'] at hv; cases hv
-    · exact hi.cell_val ha hl hty hos hv
+    · exact hi.cell_val ha hl hty hv
 
 /-- ... and the share: a live binding `lockOf t` holds one. -/
 theorem MInv.lockOf_slot {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry} (ha : Γ a = some E)
     (hl : E.live = true) {t : Ty} (hty : E.lockOf t) : ∃ k, LockAt m a k := by
-  rcases hty with hty | ⟨hty, hos⟩
+  rcases hty with hty | hty
   · obtain ⟨o, k, hv⟩ := hi.lk_slot ha hl hty
     exact ⟨k, o, Or.inl hv⟩
-  · obtain ⟨k, hv⟩ := hi.cell_slot ha hl hty hos
-    exact ⟨k, true, Or.inr hv⟩
+  · obtain ⟨o, k, hv⟩ := hi.cell_slot ha hl hty
+    exact ⟨k, o, Or.inr hv⟩
 
 /-- `arc_clone a`: a new share of `a`'s block. -/
 theorem out_arcClone {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry} (ha : Γ a = some E)

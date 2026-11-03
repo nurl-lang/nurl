@@ -229,8 +229,8 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
     by_cases hck : SendCheck [v] m1.st
     · exact ⟨_, EvalR.cellNew htk hfr hck⟩
     · exact ⟨_, EvalR.cellNewFail htk hck⟩
-  | cellClone ha hl hty hos =>
-    obtain ⟨k, hv⟩ := hi.cell_slot ha hl hty hos
+  | cellClone ha hl hty =>
+    obtain ⟨o, k, hv⟩ := hi.cell_slot ha hl hty
     exact ⟨_, EvalR.cellClone hv⟩
   | @glob g t _ _ =>
     -- A3.6: the global's share, or a panic if the store holds none of that type

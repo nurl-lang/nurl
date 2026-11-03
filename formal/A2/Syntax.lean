@@ -456,7 +456,8 @@ inductive Rhs where
   | cellNew (t : Ty) (y : Var) -- the handle's constructor: `y`'s value (a `t`) moves into a
                                -- fresh lock block, whose one share is a cell share
   | cellClone (a : Var)        -- `PNCounter_share a` (and any copy the library makes): a new
-                               -- cell share of the block `a` (an owner) shares
+                               -- cell share of the block `a` (an owner, or a borrow: A3.5's
+                               -- third cut) shares
   -- A3.6: a module global set at start (`: ( Locked T ) g ( make )`) holds a
   -- share of a block that synchronises itself; the store holds it (`Mem.gl`),
   -- every thread reaches it, and nothing writes it
@@ -492,8 +493,9 @@ inductive Val where
   | lk (k : Nat)                                 -- A3.2: a share of the lock block `k` (it carries
                                                -- nothing: the payload changes, and no one reads it)
   | cell (k : Nat)                               -- A3.5: a cell share of the lock block `k` (a
-                                               -- library handle's state); lent, it is no share
-                                               -- (`lendOf`): only an owner changes the state
+                                               -- library handle's state); lent, it is itself
+                                               -- (`lendOf`), a borrow the library changes the
+                                               -- state through (A3.5's third cut)
 deriving Repr, Inhabited
 
 /-- A binding's storage: whether it owns its value (it is dropped at the end
@@ -610,7 +612,8 @@ inductive Stmt where
 
 /-- A3.5: a library's in-place change of its state (`pncounter_inc a …`,
     with the change as `body` on the state `x`): a `withLock` on a cell
-    share.  Its check-out is the lock's (A3.2), with the lock's faithfulness
+    share, an owner's or (A3.5's third cut) a borrowed root's, a library's
+    `in` handle.  Its check-out is the lock's (A3.2), with the lock's faithfulness
     premises; what differs is who may hold the share — one thread's
     bindings only (A3's confinement), since there is no mutex.  A second
     check-out while one is out (a library re-entering its own state) waits
