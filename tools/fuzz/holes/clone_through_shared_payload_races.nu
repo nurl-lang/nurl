@@ -1,7 +1,7 @@
 // clone_through_shared_payload_races: several threads cloning the same handle out of a shared Arc's payload (or a Shared handle — a Mutex, a Channel — that a struct every thread reads holds) lost shares. A share that read a count of 1 skipped the locked add and stored 2, on the premise that only the one owner could be sharing; but a clone is asked of a borrow, and every thread borrowed the payload's handle at once. Each read 1 and stored 2, and the releases freed the value while the payload still held it.
 // Closed: a share always takes the locked add (nurl_rc_share, nurl_arc_share); only a release, which only an owner makes, keeps the shortcut.
 // main (before this PR): free(): invalid pointer / SEGV / ASan double-free within a few runs.
-// map: §6.5 | A3 | runs-clean | h211 | threads cloning a handle from a shared Arc payload race on refcount
+// map: RhsT.arcClone | A3 | runs-clean | h211 | threads cloning a handle from a shared Arc payload race on refcount
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/arc.nu`
 $ `stdlib/std/thread.nu`

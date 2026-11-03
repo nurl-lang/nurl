@@ -23,15 +23,10 @@ def union (a b : Nat → Bool) : Nat → Bool := fun i => a i || b i
 /-- An address in a tree one of `m`'s owned slots holds. -/
 def OwnedId (m : Mem) (i : Nat) : Prop := ∃ x t, OwnedAt m x t ∧ i ∈ t.ids
 
-/-- A3.1, first cut: no block's payload holds an address (A2's `HeapOK.bpay`,
-    which every thread's facts give, `ThreadOK.blocksAt`).  The frame layer
-    takes it where a node may be found in a payload (`NodeAt`, `DataAt`):
-    there is then none. -/
-def PayFree (m : Mem) : Prop := ∀ k bl, m.blk k = some bl → bl.pay.ids = []
-
-theorem PayFree.no_node {m : Mem} (hp : PayFree m) {k : Nat} {bl : Blk} (hk : m.blk k = some bl)
-    {n : Val} (hs : Sub n bl.pay) {i : Nat} (hi : i ∈ n.ids) : False := by
-  have := Sub.ids hs i hi; rw [hp k bl hk] at this; cases this
+/-- A3.1: a part holding none of the store's payload addresses: the frame
+    layer takes it out of the address space, and a node a step finds in a
+    payload (`NodeAt`, `DataAt`) keeps its addresses live. -/
+def PayOff (m : Mem) (a2 : Nat → Bool) : Prop := ∀ i, PayAddr m i → a2 i = false
 
 /-- No owned tree of `m` has an address of `a2`. -/
 def Avoids (m : Mem) (a2 : Nat → Bool) : Prop := ∀ i, OwnedId m i → a2 i = false

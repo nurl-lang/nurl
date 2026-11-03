@@ -9,9 +9,9 @@ import A3.SpawnNew
 namespace A3
 open A2
 
-/-- **A3.0**: a program A2 types, whose spawned functions take only
-    view-free `sink` parameters, is memory-safe, race-free and leak-free on
-    every interleaving of its threads. -/
+/-- **A3.0**, and **A3.1** (`Arc`): a program A2 types, whose spawned
+    functions take only view-free `sink` parameters, is memory-safe,
+    race-free and leak-free on every interleaving of its threads. -/
 theorem claim : Claim :=
   claim_from
     (fun _ => fun h => fun hav hb hp hf => Step.restrict h hav hb hp hf)
@@ -19,6 +19,6 @@ theorem claim : Claim :=
     (fun _ _ hP hPc hS => fun hok => fun hR hsp hf hx hmv => spawner_ok hP hPc hS hok hR hsp hf hx hmv)
     (fun _ _ hP hS => fun hok => fun hR hsp hf hmv => spawn_args hP hS hok hR hsp hf hmv)
     (fun _ _ hP hPc hS => fun hsp hf => fun hlen hwf hnd hdisj hself hpk hcd => fun hpart => fun hlt =>
-      fun hsh hB hBk => newThread_ok hP hPc hS hsp hf hlen hwf hnd hdisj hself hpk hcd hpart hlt hsh hB hBk)
+      fun hsh hB hBv => newThread_ok hP hPc hS hsp hf hlen hwf hnd hdisj hself hpk hcd hpart hlt hsh hB hBv)
 
 end A3

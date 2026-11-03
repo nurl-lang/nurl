@@ -4,11 +4,12 @@ import A3.Owned
 a step on the thread's own part of it.
 
 Every check A2's step makes on `alloc` is on an address of a tree an owned
-slot holds: `VecOf` is a binding's own node or a node `NodeAt` finds in an
-owned tree, `DataAt` searches owned trees, `pop` and `push` read the
-binding's own node, and a drop or a `free` releases an owned tree.  A part
-those trees avoid (`Avoids`) holds none of these addresses, so taking it
-out of `alloc` changes no check.  The addresses a step allocates are past
+slot holds, or (A3.1) of a live block's payload: `VecOf` is a binding's own
+node or a node `NodeAt` finds in an owned tree or a payload, `DataAt`
+searches the same, `pop` and `push` read the binding's own node, and a drop
+or a `free` releases an owned tree.  A part those trees avoid (`Avoids`) and
+that holds no payload address (`PayOff`) holds none of these addresses, so
+taking it out of `alloc` changes no check.  The addresses a step allocates are past
 every address of the part (`FreshFrom`), so allocating commutes with taking
 it out.  The result is the full step's without the part: the same bindings,
 `nid` and `nv`, and the same statement but for the one store a step keeps,
@@ -49,15 +50,15 @@ theorem minus_upd_true {a a2 : Nat → Bool} {k : Nat} (hk : a2 k = false) :
 /-- The vector a binding names is in an owned tree: both of its addresses
     are live on the own part. -/
 theorem VecOf.restrict {m : Mem} {x : Var} {t : Ty} {c d : Nat} {es : List Val}
-    (h : VecOf m x t c d es) {a2 : Nat → Bool} (hav : Avoids m a2) (hp : PayFree m) :
+    (h : VecOf m x t c d es) {a2 : Nat → Bool} (hav : Avoids m a2) (hp : PayOff m a2) :
     VecOf { m with alloc := minus m.alloc a2 } x t c d es := by
   obtain ⟨hc, hd, hx⟩ := h
-  have ho : OwnedId m c ∧ OwnedId m d := by
+  have ho : a2 c = false ∧ a2 d = false := by
     rcases hx with hx | ⟨_, ⟨y, u, hy, hs, _⟩ | ⟨k, bl, hk, hs, _⟩⟩
-    · exact ⟨OwnedId.of_slot hx (by simp), OwnedId.of_slot hx (by simp)⟩
-    · exact ⟨OwnedId.of_slot hy (hs.ids c (by simp)), OwnedId.of_slot hy (hs.ids d (by simp))⟩
-    · exact (hp.no_node hk hs (i := c) (by simp)).elim
-  exact ⟨minus_true hc (hav c ho.1), minus_true hd (hav d ho.2), hx⟩
+    · exact ⟨hav c (OwnedId.of_slot hx (by simp)), hav d (OwnedId.of_slot hx (by simp))⟩
+    · exact ⟨hav c (OwnedId.of_slot hy (hs.ids c (by simp))), hav d (OwnedId.of_slot hy (hs.ids d (by simp)))⟩
+    · exact ⟨hp c ⟨k, bl, hk, hs.ids c (by simp)⟩, hp d ⟨k, bl, hk, hs.ids d (by simp)⟩⟩
+  exact ⟨minus_true hc ho.1, minus_true hd ho.2, hx⟩
 
 /-- The node a binding names is in an owned tree: its addresses are live
     on the own part. -/
@@ -68,7 +69,7 @@ theorem NodeOf.restrict {m : Mem} {x o : Var} {T : Val} {t : Ty} {c d : Nat} {es
    minus_true h.2.1 (hav d (OwnedId.of_slot h.2.2.1 (h.sub.ids d (by simp)))), h.2.2.1, h.2.2.2⟩
 
 theorem Eval.restrict {m : Mem} {e : Expr} {n : Nat} (h : Eval m e n) {a2 : Nat → Bool}
-    (hav : Avoids m a2) (hp : PayFree m) : Eval { m with alloc := minus m.alloc a2 } e n := by
+    (hav : Avoids m a2) (hp : PayOff m a2) : Eval { m with alloc := minus m.alloc a2 } e n := by
   induction h with
   | lit => exact .lit
   | var hx => exact .var hx
@@ -95,7 +96,7 @@ def RResDown (a2 : Nat → Bool) : RRes → RRes → Prop
 /-- **Evaluating a right-hand side** on the own part: every address it
     checks is owned, and `new` allocates past the part. -/
 theorem EvalR.restrict {m : Mem} {r : Rhs} {res : RRes} (h : EvalR m r res) {a2 : Nat → Bool}
-    (hav : Avoids m a2) (hp : PayFree m) (hf : FreshFrom a2 m.nid) :
+    (hav : Avoids m a2) (hp : PayOff m a2) (hf : FreshFrom a2 m.nid) :
     ∃ res1, EvalR { m with alloc := minus m.alloc a2 } r res1 ∧ RResDown a2 res res1 := by
   cases h with
   | expr he => exact ⟨_, .expr (Eval.restrict he hav hp), rfl, rfl, rfl⟩
@@ -115,11 +116,11 @@ theorem EvalR.restrict {m : Mem} {r : Rhs} {res : RRes} (h : EvalR m r res) {a2 
   | atOOB hv he hn => exact ⟨_, .atOOB (VecOf.restrict hv hav hp) (Eval.restrict he hav hp) hn, trivial⟩
   | view hv => exact ⟨_, .view (VecOf.restrict hv hav hp), rfl, rfl, rfl⟩
   | @sat y i t d o l n c es hn hy he hl hd hda =>
-    have ho : OwnedId m d := by
+    have ho : a2 d = false := by
       rcases hda with ⟨x, u, hx, hs, _⟩ | ⟨k, bl, hk, hs, _⟩
-      · exact OwnedId.of_slot hx (hs.ids d (by simp))
-      · exact (hp.no_node hk hs (i := d) (by simp)).elim
-    exact ⟨_, .sat hn hy (Eval.restrict he hav hp) hl (minus_true hd (hav d ho)) hda, rfl, rfl, rfl⟩
+      · exact hav d (OwnedId.of_slot hx (hs.ids d (by simp)))
+      · exact hp d ⟨k, bl, hk, hs.ids d (by simp)⟩
+    exact ⟨_, .sat hn hy (Eval.restrict he hav hp) hl (minus_true hd ho) hda, rfl, rfl, rfl⟩
   | satOOB hy he hn => exact ⟨_, .satOOB hy (Eval.restrict he hav hp) hn, trivial⟩
   | pop hy hc hd =>
     exact ⟨_, .pop hy (minus_true hc (hav _ (OwnedId.of_slot hy (by simp))))
@@ -144,7 +145,7 @@ theorem EvalR.restrict {m : Mem} {r : Rhs} {res : RRes} (h : EvalR m r res) {a2 
   | arcGet hy hk => exact ⟨_, .arcGet hy hk, rfl, rfl, rfl⟩
 
 theorem EvalR.restrict_ok {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.ok v o m1))
-    {a2 : Nat → Bool} (hav : Avoids m a2) (hp : PayFree m) (hf : FreshFrom a2 m.nid) :
+    {a2 : Nat → Bool} (hav : Avoids m a2) (hp : PayOff m a2) (hf : FreshFrom a2 m.nid) :
     EvalR { m with alloc := minus m.alloc a2 } r (.ok v o { m1 with alloc := minus m1.alloc a2 }) := by
   obtain ⟨res1, h1, hd⟩ := EvalR.restrict h hav hp hf
   cases res1 with
@@ -152,7 +153,7 @@ theorem EvalR.restrict_ok {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR
   | panic => exact (hd : False).elim
 
 theorem EvalR.restrict_panic {m : Mem} {r : Rhs} (h : EvalR m r .panic) {a2 : Nat → Bool}
-    (hav : Avoids m a2) (hp : PayFree m) (hf : FreshFrom a2 m.nid) :
+    (hav : Avoids m a2) (hp : PayOff m a2) (hf : FreshFrom a2 m.nid) :
     EvalR { m with alloc := minus m.alloc a2 } r .panic := by
   obtain ⟨res1, h1, hd⟩ := EvalR.restrict h hav hp hf
   cases res1 with
@@ -231,7 +232,7 @@ theorem ResDown.panic_inv {a2 : Nat → Bool} {m : Mem} {r1 : Res} (h : ResDown 
     the store's owned trees avoid and that holds no fresh address, and a
     step is still a step, to the same result without the part. -/
 theorem Step.restrict {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) {a2 : Nat → Bool}
-    (hav : Avoids m a2) (hb : BorFree m) (hp : PayFree m) (hf : FreshFrom a2 m.nid) :
+    (hav : Avoids m a2) (hb : BorFree m) (hp : PayOff m a2) (hf : FreshFrom a2 m.nid) :
     ∃ r1, Step P { m with alloc := minus m.alloc a2 } s r1 ∧ ResDown a2 r r1 := by
   induction h with
   | seqSkip => exact ⟨_, .seqSkip, rfl, .refl _⟩

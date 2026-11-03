@@ -1,8 +1,8 @@
 # The claim
 
-> **Status: A1, A2 and A3.0 are proven** (`A1.memory_safe`,
+> **Status: A1, A2, A3.0 and A3.1 are proven** (`A1.memory_safe`,
 > `A2.memory_safe`, `A2.no_leak_end`, `A3.claim`, [`README.md`](README.md));
-> A3.1–A3.6 and B–D are the statement the proof is working towards, not one
+> A3.2–A3.6 and B–D are the statement the proof is working towards, not one
 > it has reached.
 
 ## Statement
@@ -10,9 +10,10 @@
 **Every program the NURL compiler accepts, outside the bodies of `unsafe`
 functions and its `unsafe` assertions, is memory-safe and leak-free** —
 *proven so far (A1, A2) for the ownership rules of the single-threaded
-language as the calculus models them, and (A3.0) for threads that share
-nothing but what they move; the data-race clause for what threads share is
-A3.1–A3.6, and the link from the rules to nurlc and its code is B–D*
+language as the calculus models them, (A3.0) for threads that share
+nothing but what they move, and (A3.1) for threads that also share `Arc`
+payloads; the data-race clause for the rest of what threads share is
+A3.2–A3.6, and the link from the rules to nurlc and its code is B–D*
 (below): no use after free, no double free, no read through a dangling
 view, no out-of-bounds access, no data race, and everything it allocated
 is released — on the panic path as much as the normal one.
@@ -103,9 +104,35 @@ the LLVM / C11 memory model rather than redefining it.
     on which A2's invariant holds: a step on the shared space is a step on
     the part and leaves the other parts as they were, and a spawn cuts the
     spawner's part in two.
-  - **A3.1–A3.6** — what threads share: `Arc`, `Locked` / `Mutex`,
+  - **A3.1** *(proven)* — `Arc`: a frozen payload shared by threads.
+    - **The calculus.** `arc_new` moves a value into a shared block,
+      `arc_clone` makes a new share, and `arc_get` lends the payload as a
+      borrow that depends on its share (`Kind.share`) and ends with it.
+      The payload may allocate (`Arc ( Vec … )`). It holds no view and no
+      closure.
+    - **What a block owns.** A block owns its payload tree (`BlkOwn`),
+      and no step writes a payload while its block lives (`BlkLe`). A
+      change through a borrow never reaches one (`ThruOK.noShare`).
+    - **Freeing.** A block lives while some thread's slot, or a live
+      payload, holds a share of it or a handle into it. A sweep at the end
+      of every step frees the rest, over all threads.
+    - **Threads.** The address space is each thread's part plus a
+      shared, read-only payload part. Two threads meet on a payload only
+      by reading it. The sweep's frees are writes to a block no thread
+      reaches.
+    - **In Lean.** `A2.memory_safe`, `A2.no_leak_end`, `A2.no_leak_panic`
+      and `A3.claim` hold with all of this, on the standard axioms only.
+    - **Not proven here (phase D):** the runtime frees an `Arc` at
+      refcount 0, which may be earlier than the sweep. Phase D must show
+      that refcount 0 means no live binding reaches the block. That
+      follows from typing, since every borrow of a payload depends on a
+      share. An `Arc` of a value that holds views or closures is not
+      typed yet, and neither is an `Arc` of a library handle whose copies
+      are one state (A3.5).
+  - **A3.2–A3.6** — the rest of what threads share: `Locked` / `Mutex`,
     `RwLocked` and `% Frozen` read guards, `Atomic` and channels, library
-    handles whose copies are one state, module globals. Not proven.
+    handles whose copies are one state, module globals. Not proven
+    (`A3/DESIGN.md` gives the design: they use A3.1's blocks).
 - **B** — the `unsafe` base of the standard library is semantically
   well-typed, so safe code built on it inherits the theorem.
 - **C** — every program nurlc accepts is well-typed in the formal rules.
@@ -128,41 +155,44 @@ one of two kinds:
   the claim says nothing about it until the form is added (or nurlc
   refuses it).
 
-Classified by claude-formal after v0.85.0 and github#1528 (2026-11-02).
+Classified by claude-formal after v0.85.0 and github#1549 (2026-11-03).
 The A2 rule that refuses each shape is named.
 
 Inside A2 (nurlc bugs):
 - A change in place that ends a borrow, missed: #333, #349, #350, #360,
-  #396 and #428 (`Eff.kills`, `StmtT.editB`, `callPostAux`'s
-  `kill`). Also #353 and #359, a closure that changes elements: its code
-  is no `ThruFn` (`Implements`).
+  #396, #424, #428, #434 and #447 (`Eff.kills`, `StmtT.editB`,
+  `callPostAux`'s `kill`). A keyword argument is the same call, and a
+  callee's summary carries a drop through an element of its parameter
+  however the element was reached. Also a closure that changes elements,
+  called where nurlc reads it by its interface only: #418, #420, #433,
+  #435, #436 and #449. Its code is no `ThruFn` of an interface whose
+  plain parameters are unchanged (`Implements`).
 - A view a value comes to hold, not recorded where it goes: #338, #341,
   #346, #348, #362, #367, #368, #369, #370, #377, #380, #381, #383, #390,
-  #393 and #394. A2 records it in `Ty.holdsView`,
+  #393, #422, #442 and #448. A2 records it in `Ty.holdsView`,
   `PushArg`, `pair`'s `Dy ++ Dz`, `callRes`'s `rholds` and `heldOfArgs`,
   `callPostAux`'s `outHeld` and `heldOfArgs`, and a package's interface
   summary; past a join, `ite` and `while` keep what either path holds.
-- A move or take nurlc does not see: #280, #357 and #372 (`unpair`,
+- A move or take nurlc does not see: #280, #357 and #446 (`unpair`,
   `takel`, a `sink` takes an owner only, `lendable`).
 - A borrow ended by a binding's end, replacement or capture, missed:
-  #242, #332, #339, #358, #364, #382, #384, #406, #407 and #408
-  (`exitScope`, `assign`'s `kill .replace`, `CapsOK`, `NamesFree`, `FnOK`
-  at the body's one end, where a `^`, a `\` exit and the defers lead,
-  `catchR`, `DtorSafe`).
+  #242, #364, #382, #384, #406, #407, #408, #444 and #445 (`exitScope`,
+  `assign`'s `kill .replace`, `CapsOK`, `NamesFree`, `FnOK` at the body's
+  one end, where a `^`, a `\` exit and the defers lead, `catchR`,
+  `DtorSafe`).
 - A struct built from an owner and a view of it: #294 (`pair`: the owned
   field is no root of the other's dependencies).
 - An `inout` option given a lend: #343 (`assign` gives an `inout` binding
   only an owned value).
 
 Outside A2:
-- The hand-over of an old value to its borrower (above): #366, #373,
-  #378, #387 and #388, plus #410 (a binding that lends the owner's old
-  value handed back through a forwarder) and #427 (a call that may hand
-  back the owner's value where nurlc has no lend fact for it at the
-  `=`: a wrapper, a generic or later-defined callee, a value block) and
-  #438 (shapes the hand-over gate does not reach: a struct given a part
-  of itself, an `inout` String given another's lend, a scalar enum key,
-  `o` inside a wrapper argument, a struct cursor copy).
+- The hand-over of an old value to its borrower (above): #366, #373, #378,
+  #387 and #388, plus #427 (a call that may hand back the owner's value
+  where nurlc has no lend fact for it at the `=`: a wrapper, a generic
+  or later-defined callee, a value block) and #438 (shapes the hand-over
+  gate does not reach: a struct given a part of itself, an `inout`
+  String given another's lend, a scalar enum key, `o` inside a wrapper
+  argument, a struct cursor copy).
 - An `Rc`'s shared state, which is the standard library's (B): #345 and
   #392.
 - A view stored through a borrow: #395 and #414 (`StmtT.editB` takes

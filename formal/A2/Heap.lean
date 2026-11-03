@@ -127,14 +127,12 @@ theorem HeapOK.without {m : Mem} (hh : HeapOK m) {x : Var} {T : Val} (hx : Owned
       obtain ⟨k, bl, hk, hik⟩ := hi
       exact halloc i fun hiT => ((hh.blk k bl hk).2.2 i hik).2.2.1 x T hx hiT)
     (fun o U hU i hi => hh.notPay (hown o U hU).2 hi)
-  bpay k bl hk := hh.bpay k bl (by rw [← hb]; exact hk)
 
 /-- A3.1: the same owned trees, with more addresses live, a later `nid`, and
-    blocks that own their payloads and whose payloads own no address (the
-    first cut). -/
+    blocks that own their payloads. -/
 theorem HeapOK.mono {m m' : Mem} (hh : HeapOK m) (hst : m'.st = m.st)
     (ha : ∀ i, m.alloc i = true → m'.alloc i = true) (hn : m.nid ≤ m'.nid)
-    (hbo : BlkOwn m') (hbp : ∀ k bl, m'.blk k = some bl → bl.pay.ids = []) : HeapOK m' where
+    (hbo : BlkOwn m') : HeapOK m' where
   nodup x t h := hh.nodup x t (by unfold OwnedAt at *; rw [← hst]; exact h)
   disj x y t u hne h1 h2 := hh.disj x y t u hne (by unfold OwnedAt at *; rw [← hst]; exact h1)
     (by unfold OwnedAt at *; rw [← hst]; exact h2)
@@ -144,7 +142,6 @@ theorem HeapOK.mono {m m' : Mem} (hh : HeapOK m) (hst : m'.st = m.st)
     exact ⟨ha i h1, Nat.lt_of_lt_of_le h2 hn⟩
   self x t h := hh.self x t (by unfold OwnedAt at *; rw [← hst]; exact h)
   blk := hbo
-  bpay := hbp
 
 /-- Putting a tree into a slot that held none. -/
 theorem HeapOK.put {m : Mem} (hh : HeapOK m) {x : Var} {T : Val} (m' : Mem)
@@ -179,7 +176,6 @@ theorem HeapOK.put {m : Mem} (hh : HeapOK m) {x : Var} {T : Val} (m' : Mem)
     rcases hown o U hU with ⟨_, rfl⟩ | ⟨_, h⟩
     · exact hTp i hi
     · exact hh.notPay h hi)
-  bpay k bl hk := hh.bpay k bl (by rw [← hb]; exact hk)
 
 /-! ### Trees that do not view themselves -/
 

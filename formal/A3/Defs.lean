@@ -11,8 +11,10 @@ import A2.Soundness
   (`spawn f = true`) is called on a new thread. Its parameters are `sink`
   and of types that hold no views, so what moves to the new thread is a
   tree no binding of the spawner can reach any more (Send, as A3.0 has
-  it). The shared blocks (`Arc`, `Locked`, `RwLocked`, `Atomic`,
-  channels) are added by A3.1–A3.5.
+  it). A3.1's `Arc` is A2's own (`Mem.blk`, `Val.arc`): its blocks are
+  shared by every thread, and the configuration's sweep ends every
+  thread's step. The other shared blocks (`Locked`, `RwLocked`, `Atomic`,
+  channels) are added by A3.2–A3.5.
 -/
 
 namespace A3
@@ -42,6 +44,18 @@ def Cfg.view (C : Cfg) (t : Thread) : Mem :=
     the bindings and the statement to the thread. -/
 def Cfg.put (C : Cfg) (i : Nat) (m : Mem) (s : Stmt) : Cfg :=
   { alloc := m.alloc, nid := m.nid, blk := m.blk, ths := C.ths.set i ⟨m.st, m.nv, s⟩ }
+
+/-- A3.1: the values the threads' slots hold: the roots of the
+    configuration's sweep. -/
+def Cfg.vals (C : Cfg) (v : Val) : Prop :=
+  ∃ (j : Nat) (t : Thread), C.ths[j]? = some t ∧ ∃ x o, t.st x = some ⟨o, some v⟩
+
+/-- A3.1: the configuration's sweep, which ends every thread's step: the
+    blocks no thread's slot reaches are removed and their payloads freed —
+    A2's `Mem.sweep`, from every thread's slots at once (the count of a
+    block's shares is over all threads). -/
+noncomputable def Cfg.sweep (C : Cfg) : Cfg :=
+  { C with alloc := sweepAlloc C.vals C.blk C.alloc, blk := sweepBlk C.vals C.blk }
 
 /-- A program run from the empty store, on one thread (A2's `emptyMem`). -/
 def Cfg.init (s : Stmt) (nv : Nat) : Cfg :=
@@ -77,9 +91,9 @@ theorem arc_spawnOK {t : Ty} (h : (Ty.arc t).ok = true) : (Ty.arc t).holdsView =
   simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true] at h
   exact h.2
 
-/-- ... and so does every share of a first-cut (plain) payload. -/
-theorem arc_spawnOK_plain {t : Ty} (h : t.plain = true) : (Ty.arc t).holdsView = false :=
-  Ty.plain_holdsView h
+/-- ... and so does every share `arc_new` makes: its payload's type holds no
+    views (`RhsT.arcNew`), whatever trees it owns. -/
+theorem arc_spawnOK_viewFree {t : Ty} (h : t.holdsView = false) : (Ty.arc t).holdsView = false := h
 
 /-- Moving the arguments out of the spawner: each owns its value, and its
     slot is left empty (its drop flag clear). -/
@@ -100,10 +114,12 @@ def SpawnRedex (spawn : Nat → Bool) (s : Stmt) : Prop :=
 
 /-- One step of the configuration. -/
 inductive TStep (P : Prog) (spawn : Nat → Bool) : Cfg → Cfg → Prop
-  /-- A thread takes one of A2's steps, unless its next step is a spawn. -/
+  /-- A thread takes one of A2's steps, unless its next step is a spawn;
+      (A3.1) the configuration's sweep ends it, as A2's `Steps` ends every
+      step with the store's. -/
   | thread {C : Cfg} {i : Nat} {t : Thread} {m' : Mem} {s' : Stmt} :
       C.ths[i]? = some t → ¬ SpawnRedex spawn t.s → Step P (C.view t) t.s (.ok m' s') →
-      TStep P spawn C (C.put i m' s')
+      TStep P spawn C (C.put i m' s').sweep
   /-- A spawn: the arguments move to a new thread, which runs the body in
       its parameters' scopes and its result's (variable `n`, the number of
       parameters, as in the body's own numbering — so its end drops the
@@ -129,7 +145,10 @@ own and are no address.  A fresh address is no touch: allocation is the
 allocator's, which is thread-safe (the C runtime, trusted base), and two
 threads that both allocate next never get one address, since `nid` moves
 with each step.  Over-approximating is harmless otherwise: what a thread
-may touch beyond its rule is its own. -/
+may touch beyond its rule is its own.  (A3.1) A read may be of a live
+block's payload, which a node `NodeAt` / `DataAt` finds, a view or an
+`arc_get` points into; no step writes one while its block exists
+(`Step.blk`). -/
 
 /-- What evaluating an expression reads: a `Vec`'s length is in its control
     block. -/
@@ -156,6 +175,11 @@ inductive RTouch (m : Mem) : Rhs → Nat → Bool → Prop
       m.st y = some ⟨true, some (.node t c d es)⟩ → RTouch m (.pop y) c true
   | popD {y : Var} {t : Ty} {c d : Nat} {es : List Val} :
       m.st y = some ⟨true, some (.node t c d es)⟩ → RTouch m (.pop y) d true
+  /-- A3.1: `arc_get` reads the payload of the block its share names (every
+      address of it: an over-approximation). -/
+  | arcGet {a : Var} {o : Bool} {k : Nat} {p : Val} {bl : Blk} {i : Nat} :
+      m.st a = some ⟨o, some (.arc k p)⟩ → m.blk k = some bl → i ∈ bl.pay.ids →
+      RTouch m (.arcGet a) i false
 
 /-- What the next step of `s` touches. -/
 inductive Touch (P : Prog) (m : Mem) : Stmt → Nat → Bool → Prop
@@ -218,12 +242,27 @@ inductive Touch (P : Prog) (m : Mem) : Stmt → Nat → Bool → Prop
   | catchR {x : Var} {m0 : Mem} {s : Stmt} {i : Nat} {w : Bool} :
       Touch P m s i w → Touch P m (.catchR x m0 s) i w
 
+/-- A3.1: what the sweep that ends thread `i`'s next step frees: an address
+    live before the step and after it, which the sweep frees — the payload
+    of a block no thread reaches any more.  (A fresh address is no touch, as
+    above.) -/
+def SweepFrees (P : Prog) (C : Cfg) (i : Nat) (t : Thread) (a : Nat) : Prop :=
+  ∃ m' s', Step P (C.view t) t.s (.ok m' s') ∧ C.alloc a = true ∧ m'.alloc a = true ∧
+    (C.put i m' s').sweep.alloc a = false
+
+/-- What thread `t` (the `i`-th) touches next in the configuration: what its
+    rule touches, and (A3.1) what the sweep that ends its step frees, a
+    write. -/
+inductive CTouch (P : Prog) (C : Cfg) (i : Nat) (t : Thread) : Nat → Bool → Prop
+  | step {a : Nat} {w : Bool} : Touch P (C.view t) t.s a w → CTouch P C i t a w
+  | sweep {a : Nat} : SweepFrees P C i t a → CTouch P C i t a true
+
 /-- A race: two threads whose next steps touch one address, one of them
-    writing it.  (A3.4's `Atomic` steps are atomic and are no race.) -/
+    writing it.  (A3.4's `Atomic` steps are atomic and are no race; so is a
+    share's count, which is ghost here.) -/
 def Race (P : Prog) (C : Cfg) : Prop :=
   ∃ (i j : Nat) (ti tj : Thread) (a : Nat) (w : Bool), i ≠ j ∧ C.ths[i]? = some ti ∧
-    C.ths[j]? = some tj ∧
-    Touch P (C.view ti) ti.s a true ∧ Touch P (C.view tj) tj.s a w
+    C.ths[j]? = some tj ∧ CTouch P C i ti a true ∧ CTouch P C j tj a w
 
 /-! ### The claims -/
 
@@ -244,8 +283,9 @@ def NoLeak (P : Prog) (spawn : Nat → Bool) (s : Stmt) (nv : Nat) : Prop :=
 
 /-- **The A3.0 claim**, for A2 plus `spawn`: a program A2 types, whose
     spawned functions take only view-free `sink` parameters, is memory-safe,
-    race-free and leak-free on every interleaving.  Milestone A3.0 proves it;
-    A3.1–A3.6 extend the language and restate it. -/
+    race-free and leak-free on every interleaving.  Milestone A3.0 proves it,
+    and A3.1 for A2 with `Arc` (shares of view-free payloads, collected by
+    reachability); A3.2–A3.6 extend the language and restate it. -/
 def Claim : Prop :=
   ∀ (P : Prog) (spawn : Nat → Bool) (s : Stmt) (Δ : Ctx) (nv : Nat),
     ProgOK P → ProgCodes P → SpawnOK P spawn →

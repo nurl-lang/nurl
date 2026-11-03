@@ -7,7 +7,8 @@ defines A3.0's configuration (`Thread`, `Cfg`, `Cfg.view`), its steps
 (`TStep`: a thread takes A2's own `Step`; `spawn`), what a step touches
 (`Touch`), a race (`Race`), and the claim (`Claim`: `MemorySafe ∧ RaceFree ∧
 NoLeak` for every program A2 types); `../README.md` lists the modules of
-the proof. A3.1–A3.6 below are design. This note fixes the
+the proof. A3.1's `Arc` is mechanized in the same claim (A3.1's
+mechanization, below); A3.2–A3.6 are design. This note fixes the
 semantics, the theorem statements and the order of work, so the
 mechanization can be cut into tasks (Agora: formal track, F4–F8). The guarantee it targets is the
 "no data race" clause of `CLAIM.md` and `docs/MEMORY.md` §6.2. The rules
@@ -492,27 +493,74 @@ with the sweep is the phase-D obligation above. `check.sh` is green with:
   `bpay` is now read only by `rhs_arcNew` (`arc_new` still asks
   `Ty.plain`) and by A3 (`PayFree`, `BlocksAt`, `ThreadOK.no_leak`).
 
-**What remains of the second cut.**
-- (d2) `arcNew` asks `t.holdsView = false ∧ t.hasFn = false`: `rhs_arcNew`
-  proves `BlkOwn` for the new block (the moved tree's ids leave `y`'s slot
-  and become the block's: `RhsOut.valOwn` already says they are in no
-  other tree and no payload), `covers_evalR` already counts them, and
-  `HeapOK.bpay` goes. This cannot be green on its own: A3 reads `bpay`.
-- (f) A3 in the same change: payload addresses in no thread's part, a
-  shared read-only part of the address partition (`Touch`, `Avoids`, the
-  restrict / lift lemmas), the configuration-level sweep over all threads'
-  slots (A2's `Step` per thread, `Mem.sweep` with every thread's values as
-  roots), `Touch` with payload reads through landing and the sweep's frees
-  as writes to blocks no thread reaches, `PayFree` dropped, `A3.claim`
-  re-proven.
+- (f) **A3 with payload addresses** (`check.sh` green, while `bpay` still
+  held, then without it):
+  - *The address space is cut three ways*: one part per thread, disjoint,
+    and the shared, read-only part of the live blocks' payloads
+    (`payPart`, `PayIn`), apart from every part (`CParts.pay`); one payload
+    owns each payload address (`CParts.uniq`). A thread sees its part and
+    the payloads (`ownView`), and there has A2's facts. `PayFree` is gone:
+    the restrict lemma takes `PayOff` (the other threads' parts hold no
+    payload address), a new block's payload comes from the stepping
+    thread's own part (`CParts.down_pay`), and the other threads' facts
+    survive a view that gains it (`ThreadOK.grow`, `BlocksAt` /
+    `BlockOK`). A spawn splits the spawner's part; the payloads stay
+    shared.
+  - *`Touch` reads payloads*: `arc_get` reads its block's payload
+    (`RTouch.arcGet`), and `NodeAt` / `DataAt` / a live view may find a
+    payload node. Every touch is of an owned address, or a read of a
+    payload the thread's own slots reach through a handle or a share
+    (`touch_seen`, `PaySeen`); every write is to an owned tree. No step
+    writes a payload while its block exists (`Step.blk`).
+  - *The configuration-level sweep is part of `TStep.thread`*, not a rule
+    of its own: a thread's A2 step, then `Cfg.sweep`, A2's sweep with every
+    thread's slot values as roots (`Cfg.vals`; `A2/Sweep.lean` is generic
+    over the roots, `Mem.sweepR`, `ThreadOK.sweepR`). So no reachable
+    configuration keeps a block nothing reaches (`CInv`'s second half),
+    which `no_leak` needs. Thread-local runs keep `Steps0` (`reach_ok0`).
+  - *`Race` counts the sweep's frees as the stepping thread's writes*
+    (`SweepFrees`, `CTouch`): an address live before the step and after
+    it, which the sweep then frees. `race_free` (`CInv.raceFree`): a write
+    is to the writer's own part, or a payload no other thread reaches
+    (`CParts.ctouch`); two threads meeting on a payload address are both
+    reading; and two threads' sweeps never free one block, since some
+    thread reaches it (`Reached.or`).
+  - *`no_leak`*: when every thread has ended no slot holds a value, so no
+    block is reached and the last sweep left none; a finished thread owns
+    no tree (`ThreadOK.no_leak`, `CInv.noLeak`).
+- (d2) **`arc_new` moves an allocating tree into its block**: `RhsT.arcNew`
+  asks `t.holdsView = false ∧ t.hasFn = false` (`Ty.plain` and its lemmas
+  are gone). `y`'s tree leaves its slot and becomes the block's payload;
+  `rhs_arcNew` proves `BlkOwn` for the new block from what `Pushed` says
+  of the moved tree (in no other owned tree, in no payload), and
+  `covers_evalR` counts it. `HeapOK.bpay` is gone with every use. Send: an
+  `arc t` with `t` view-free crosses a spawn as before (`arc_spawnOK`,
+  `arc_spawnOK_viewFree`).
 
-After that, step (d) is: `Ty.plain` lifted to `holdsView = false ∧
-hasFn = false`, `arcNew` moving a tree into a new block (`BlkOwn` for it),
-`arcGet` lending the `href` through the share landing, and `bpay` removed.
-Step (e) is `Covers` counting payloads and `Steps` running the sweep
-(`CatchOK`'s `BlkLe` must weaken to blocks that are reached). Step (f) is
-A3 with payload addresses: they are read only, so `Touch`, `Avoids` and
-the partition need a shared, read-only part.
+**What A3.1 proves now.** `A3.claim` for A2 with `Arc`: shares whose
+payload is any tree of a type that holds no view and no closure (a `Vec`,
+a struct of `Vec`s, a share of one), made by `arc_new`, cloned, lent by
+`arc_get` (a borrow that may land in the payload through the share), and
+dropped; blocks collected by reachability at the end of every step, in A2
+(`Steps`) and in A3 (`TStep.thread`, over every thread's slots). On every
+interleaving: no thread is stuck, no race (a payload is only read, and the
+sweep frees only what no other thread reaches), and nothing is left
+allocated once every thread has ended. `A2.memory_safe`, `A2.soundness`,
+`A2.no_leak_end` and `A2.no_leak_panic` hold for the same language.
+
+**Not proven here.**
+- *Phase D*: the runtime frees a block at refcount 0, the model by
+  reachability at the step's end. They must agree on every live binding:
+  refcount 0 implies that no *live* binding reaches the block (a dead
+  borrow's slot may still hold a handle into it, which the model's sweep
+  counts and the runtime's count does not). This follows from the typing,
+  since `arc_get`'s borrow depends on its share binding and dies with it;
+  it is stated above, as the conservative sweep's obligation, and not
+  mechanized.
+- The count itself stays ghost: no stored `rc`, no theorem that it equals
+  the number of shares (the sweep makes it unnecessary for the claim).
+- A view-holding or closure-holding payload; the probes (step 4 below:
+  h211 h212 h213 h288 h289 h338); `CLAIM.md` / `README.md`.
 
 A3.0 settled that A3 imports A2 and runs A2's step on each thread's view,
 so a shared block has to live somewhere A2's step can read. For `Arc` the
