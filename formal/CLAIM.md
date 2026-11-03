@@ -1,7 +1,7 @@
 # The claim
 
-> **Status: A1, A2, A3.0, A3.1, A3.4, A3.2's second cut and the first
-> cuts of A3.3, A3.5 and A3.6 are proven** (`A1.memory_safe`, `A2.memory_safe`,
+> **Status: A1, A2, A3.0, A3.1, A3.4, the second cuts of A3.2 and A3.5,
+> and the first cuts of A3.3 and A3.6 are proven** (`A1.memory_safe`, `A2.memory_safe`,
 > `A2.no_leak_end`, `A3.claim`, [`README.md`](README.md)); the rest of
 > A3.2, A3.3, A3.5 and A3.6, and B–D, are the statement the proof is
 > working towards, not one it has reached.
@@ -182,10 +182,7 @@ the LLVM / C11 memory model rather than redefining it.
       nurlc refuses such stores (docs/MEMORY.md §7.7) and the model does
       not, so `no_leak` agrees with the runtime for the programs nurlc
       accepts: a phase C obligation, stated.
-    - **Not typed yet:** a library handle in a lock's payload or a
-      channel's element (it would need the crossing check at every
-      entry), and so a `: Send` trait object there; shares in a slice's
-      elements or a cell's state; `locked_set`, `locked_get`,
+    - **Not typed yet:** shares in a slice's elements; `locked_set`, `locked_get`,
       `locked_apply`'s result and `locked_await` as rules of their own; a
       lock reached through a local borrow (a field or an element); and
       `Mutex` beside the data it guards.
@@ -222,10 +219,10 @@ the LLVM / C11 memory model rather than redefining it.
       the runtime mutex's (trusted base). Values in a queue are the
       block's tree, in no thread's part, so they race with nothing, and
       the sweep frees what is left in a queue with its block (`no_leak`).
-    - **Not typed yet:** a channel of values that hold a view or a
-      library handle (A3.2's second cut types `Arc`, lock and `Atomic`
-      shares and `sync` closures there), `chan_len`, `chan_is_closed` and
-      `select`. Deadlock freedom, and that
+    - **Not typed yet:** a channel of values that hold a view (shares,
+      library handles under the crossing check, and `send` closures are
+      typed since A3.2's and A3.5's second cuts), `chan_len`,
+      `chan_is_closed` and `select`. Deadlock freedom, and that
       a waiting `chan_recv` is woken, are not claimed.
   - **A3.3, first cut** *(proven)* — `RwLocked`: a value many threads
     read at once, through frozen read guards, and one changes.
@@ -253,8 +250,10 @@ the LLVM / C11 memory model rather than redefining it.
     - **In Lean.** `A2.memory_safe`, `A2.no_leak_end`, `A2.no_leak_panic`
       and `A3.claim` hold with all of this, on the standard axioms only.
     - **Not typed yet:** `rw_try_read` / `rw_try_write`, `wguard_get`,
-      `rw_get`'s copy and `wguard_apply`'s result; payloads holding a
-      share, a view or a closure, or a library handle (A3.5: h317 h357).
+      `rw_get`'s copy and `wguard_apply`'s result. A read guard refuses a
+      payload that holds a library handle (`RhsT.rwRead`'s `hasCell`,
+      h357): readers read it at once, so it faces Sync. An `RwLocked` of
+      one is still made and written.
       The model lets a guard cross a spawn, which nurlc refuses
       (`% NotSend`): the runtime's unlock must run on the locking thread.
     - **Not proven here (phase D):** a view lives until no slot reaches
@@ -270,8 +269,9 @@ the LLVM / C11 memory model rather than redefining it.
       faithfulness premises). A lent handle is no share (`lendOf`), so the
       slots that hold a cell share are its owners, which is what the
       runtime counts. An `Arc` payload holds no handle (`RhsT.arcNew`'s
-      `hasCell`, h338), and lock, `RwLocked` and channel payloads hold no
-      share at all (h358).
+      `hasCell`, h338). A lock, `RwLocked` or channel holds one under the
+      crossing check (the second cut, below; a lock is Sync whatever it
+      holds, h358).
     - **The crossing check.** A spawn's run-time precondition
       (`SendCheck`) is that no slot left in the spawner reaches a cell the
       moved values reach. When it fails, the spawn panics in the spawner
@@ -293,18 +293,38 @@ the LLVM / C11 memory model rather than redefining it.
       class from the captures. An `Arc` keeps a `sync` closure (h342: a
       handler that changes a by-name capture is `any`, h339: one that
       captures a library handle is not `sync`), a lock, `RwLocked` or
-      channel a `bare` one (h340), and a spawn takes a `send` one. A call
+      channel a `send` one under the crossing check (h340: a kept handle
+      fails it and the send panics), and a spawn takes a `send` one. A call
       through a closure an `Arc` lends is typed (`StmtT.arcCall`): its
       code gets its environment read-only (`Implements`), so threads
       calling it at once only read the payload, A3.1's argument. A
       global `Arc` may keep a handler, so `GlobsOK` asks that every
       closure a block holds names the program's code (`BlkCodes`).
+    - **Second cut: handles in locks and channels.** A lock's payload, a
+      channel's element and a cell's state may hold library handles, and
+      a `send` closure or a `: Send` trait object fits there. The
+      crossing check runs at every entry, as `mem_send_check` does:
+      `locked_new`, a cell's constructor, `locked_restore` and `chan_send`
+      ask `SendCheck` of the value against the thread's other slots and
+      panic when it fails (`lockNewFail`, `cellNewFail`,
+      `lockRestoreFail`, `chanSendFail`); the give-back at a lock scope's
+      end asks it too (`GiveCheck`), and a failed one panics with the lock
+      held (`Step.scopeLFail`), as `locked_with` does. A lock is Sync
+      whatever it holds (`Ty.hasCell (lk _) = false`, h358).
+      Confinement (`CellInv`) now places every cell's owners in one
+      thread's slots or in one block's payload, never split
+      (`Step.cellKeep`); a check-out, a take and a receive move them with
+      the value. The model's receive also checks that the head shares no
+      cell with an element left in the queue (`RecvCheck`): a channel is
+      a lock block in the model, so a lock check-out could fill a queue
+      the runtime's checked sends never do. `GlobsOK` asks the globals'
+      blocks to keep each cell's shares in one block.
     - **Not typed yet:** a handle changed or copied through a borrow (the
       model takes a library's `in` handle as `inout`, and a store of a
       borrowed handle into an owner is not typed); `% Sync` / `% NotSend`
-      assertions; a `send` closure that captures a library handle in a
-      lock or a channel (refused where the runtime would move the handle
-      along; a `sync` one fits since A3.2's second cut);
+      assertions; `locked_take` through a cell share; a failed give-back
+      frees the value where the runtime keeps it in the held lock (no one
+      reaches it either way);
       no subsumption between closure classes; a closure that changes a
       capture it moved in. Phase C must give each closure the class
       nurlc's follow-the-value check proved, and `any` where it cannot
@@ -319,9 +339,9 @@ the LLVM / C11 memory model rather than redefining it.
       boxed and kept fails it, the runtime's vtable walk). h344: an
       unbounded object crosses nothing, a `: Send Sync` one boxes no
       library handle (`dyn_cell_notSync`), and an `Arc` or a global's
-      `Arc` takes only `: Send Sync` objects. Not typed: a `: Send` object
-      in a lock or a channel (they take `bare` packages), an `inout`
-      receiver, supertraits and `[T: Send]` bounds; an impl is checked
+      `Arc` takes only `: Send Sync` objects, and a lock or a channel a
+      `: Send` one under the crossing check (A3.5's second cut). Not
+      typed: an `inout` receiver, supertraits and `[T: Send]` bounds; an impl is checked
       where it is boxed, not where it is declared. Phase C must lower each
       `%Trait` to `fn ms` at its bound's class. A library that re-enters its own state waits
       or panics in the model, where the runtime goes on: that is the
