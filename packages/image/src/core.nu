@@ -26,8 +26,6 @@ $ `stdlib/std/bytes.nu`
 
 @ image_error → s { ^ __img_err }
 
-@ _img_set_err s msg → v { = __img_err msg }
-
 // ── Construction ──────────────────────────────────────────────────────
 
 // A zero-filled image of the given geometry.
@@ -128,14 +126,14 @@ $ `stdlib/std/bytes.nu`
 }
 
 @ ppm_decode ( Vec u ) buf → ?Image {
-    ( _img_set_err `` )
+    = __img_err ``
     : i n ( vec_len [u] buf )
-    ? < n 2 { ( _img_set_err `not a PPM` ) ^ @ ?Image { F } } {}
-    ? == ( _byte buf 0 ) 80 {} { ( _img_set_err `not a PPM` ) ^ @ ?Image { F } }
+    ? < n 2 { = __img_err `not a PPM` ^ @ ?Image { F } } {}
+    ? == ( _byte buf 0 ) 80 {} { = __img_err `not a PPM` ^ @ ?Image { F } }
     : i kind ( _byte buf 1 )
     : ~ i ch 3
     ? == kind 54 { = ch 3 } {
-        ? == kind 53 { = ch 1 } { ( _img_set_err `PPM: only binary P5/P6 supported` ) ^ @ ?Image { F } }
+        ? == kind 53 { = ch 1 } { = __img_err `PPM: only binary P5/P6 supported` ^ @ ?Image { F } }
     }
     : ~ i pos 2
     : i w ( __ppm_int buf n pos )
@@ -143,11 +141,11 @@ $ `stdlib/std/bytes.nu`
     : i mx ( __ppm_int buf n pos )
     // pixel data starts one whitespace byte after maxval
     : i start + pos 1
-    ? || <= w 0 || <= h 0 != mx 255 { ( _img_set_err `PPM: malformed header (needs maxval 255)` ) ^ @ ?Image { F } } {}
-    ? || || > w 1000000 > h 1000000 > * w h 268435456 { ( _img_set_err `PPM: dimensions too large` ) ^ @ ?Image { F } } {}
+    ? || <= w 0 || <= h 0 != mx 255 { = __img_err `PPM: malformed header (needs maxval 255)` ^ @ ?Image { F } } {}
+    ? || || > w 1000000 > h 1000000 > * w h 268435456 { = __img_err `PPM: dimensions too large` ^ @ ?Image { F } } {}
     : i need * * w h ch
     ? > + start need n {} {}  // tolerate exact-or-more
-    ? < - n start need { ( _img_set_err `PPM: truncated pixel data` ) ^ @ ?Image { F } } {}
+    ? < - n start need { = __img_err `PPM: truncated pixel data` ^ @ ?Image { F } } {}
     : ( Vec u ) d ( vec_with_cap [u] need )
     : ~ i k 0
     ~ < k need { ( vec_push [u] d ( _byte buf + start k ) ) = k + k 1 }

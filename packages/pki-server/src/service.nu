@@ -29,18 +29,26 @@ $ `stdlib/std/arc.nu`
 : ~ s g_management_key ``
 : ~ s g_ca_cn `Private PKI CA`
 : ~ i g_ca_alg 0
+// The service's paths and keys, each the global's own copy: the caller's
+// strings may go before the service does. (`unsafe`: a string global that
+// owns its text is handed it only where nothing reads it meanwhile — once,
+// before serving.)
+unsafe @ __pki_config_set s ca_cert s ca_key s crl_file s index_file s initial_dir s device_dir s init_key s mgmt_key s ca_cn → v {
+    = g_ca_cert_path ( nurl_str_cat ca_cert `` )
+    = g_ca_key_path ( nurl_str_cat ca_key `` )
+    = g_crl_file_path ( nurl_str_cat crl_file `` )
+    = g_index_file_path ( nurl_str_cat index_file `` )
+    = g_initial_certs_dir ( nurl_str_cat initial_dir `` )
+    = g_device_certs_dir ( nurl_str_cat device_dir `` )
+    = g_device_init_key ( nurl_str_cat init_key `` )
+    = g_management_key ( nurl_str_cat mgmt_key `` )
+    = g_ca_cn ( nurl_str_cat ca_cn `` )
+}
+
 // The loaded (or newly minted) CA, F when it cannot be had. The app the
 // caller builds with it (pki_build_app) keeps it for the routes.
 @ pki_service_init s ca_cert s ca_key s crl_file s index_file s initial_dir s device_dir s init_key s mgmt_key s ca_cn i alg → ?PkiCa {
-    = g_ca_cert_path ca_cert
-    = g_ca_key_path ca_key
-    = g_crl_file_path crl_file
-    = g_index_file_path index_file
-    = g_initial_certs_dir initial_dir
-    = g_device_certs_dir device_dir
-    = g_device_init_key init_key
-    = g_management_key mgmt_key
-    = g_ca_cn ca_cn
+    ( __pki_config_set ca_cert ca_key crl_file index_file initial_dir device_dir init_key mgmt_key ca_cn )
 
     // Ensure required directory structures exist
     : !v IoErr _d1 ( dir_create_all initial_dir )

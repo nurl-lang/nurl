@@ -497,9 +497,8 @@ Inside A2 (nurlc bugs):
   `callPostAux`'s `kill`). A keyword argument is the same call, and a
   callee's summary carries a drop through an element of its parameter
   however the element was reached.
-- A view a value comes to hold, not recorded where it goes: #341, #348,
-  #362, #367, #368, #369, #370, #377, #380, #381, #383, #390, #393, #422
-  and #442. A2 records it in `Ty.holdsView`,
+- A view a value comes to hold, not recorded where it goes: #348, #362,
+  #367, #368, #377, #381, #383, #390 and #393. A2 records it in `Ty.holdsView`,
   `PushArg`, `pair`'s `Dy ++ Dz`, `callRes`'s `rholds` and `heldOfArgs`,
   `callPostAux`'s `outHeld` and `heldOfArgs`, and a package's interface
   summary; past a join, `ite` and `while` keep what either path holds.
@@ -513,15 +512,10 @@ Inside A2 (nurlc bugs):
 - A struct built from an owner and a view of it: #294 (`pair`: the owned
   field is no root of the other's dependencies).
 - A view stored through a borrow that nurlc does not follow to its owner:
-  #395's call as the container and its option payload cursor, and #454's
-  forms where the callee's root is an owner or an `inout` parameter
+  #395's call as the container and its option payload cursor
   (`StmtT.editBV`: the stored view's dependencies land on every
   view-holding root of the borrow's path, `holdThru`, as nurlc's
-  `__bck_store_owners` does; `rules/t292.md`). That includes #454's
-  plain parameter whose elements' elements the callee changes: it reads
-  as `inout drop` (RULES.md's first reading), its summary holds the view
-  (`outHolds`), and the caller's owner holds it after the call
-  (`callPostAux`'s `outHeld`; A2/EditB.lean's note).
+  `__bck_store_owners` does; `rules/t292.md`).
 - A changed parameter handed an element of the caller's owner: #391
   (`( f 1 ( vec_at vv 0 ) src )`, and a local bound from the element).
   The call reads as handing the element over (`Stmt.withElem`: the
@@ -539,8 +533,8 @@ Outside A2:
 - An `Rc`'s shared state, which is the standard library's (B): #345 and
   #392.
 - A view stored through a borrow inside closure code: #395's store
-  through a borrow of a capture, and #454's `vec_each` form (`StmtT.editBV`
-  types a store through a borrow outside closures).
+  through a borrow of a capture (`StmtT.editBV` types a store through a
+  borrow outside closures).
 - #391's other forms: a changed parameter handed an element of an
   `inout` or borrowed parameter, or a borrow that is not an element (a
   cursor of a whole `Vec`, a field viewer), or a call that also names the

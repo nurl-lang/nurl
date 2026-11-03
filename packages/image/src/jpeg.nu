@@ -667,13 +667,13 @@ $ `core.nu`
                                             ? == m 221 { = . j restart ( __ju16 j dp ) } {
                                                 ? || == m 192 == m 193 {
                                                     ? || sof ! ( __jpg_sof j dp ) {
-                                                        ( _img_set_err `JPEG: unsupported frame (precision, size, components or sampling)` )
+                                                        = __img_err `JPEG: unsupported frame (precision, size, components or sampling)`
                                                         = . j ok F
                                                     } { = sof T = . j prog F }
                                                 } {
                                                     ? == m 194 {
                                                         ? || sof ! ( __jpg_sof j dp ) {
-                                                            ( _img_set_err `JPEG: unsupported frame (precision, size, components or sampling)` )
+                                                            = __img_err `JPEG: unsupported frame (precision, size, components or sampling)`
                                                             = . j ok F
                                                         } {
                                                             = sof T
@@ -683,7 +683,7 @@ $ `core.nu`
                                                     } {
                                                         ? & >= m 195 <= m 207 {
                                                             ? == m 204 {} {
-                                                                ( _img_set_err `JPEG: unsupported coding (arithmetic, 12-bit or lossless)` )
+                                                                = __img_err `JPEG: unsupported coding (arithmetic, 12-bit or lossless)`
                                                                 = . j ok F
                                                             }
                                                         } {
@@ -897,16 +897,16 @@ $ `core.nu`
 // ── Public entry ──────────────────────────────────────────────────────
 
 @ jpeg_decode ( Vec u ) buf → ?Image {
-    ( _img_set_err `` )
+    = __img_err ``
     : i n ( vec_len [u] buf )
-    ? < n 4 { ( _img_set_err `not a JPEG` ) ^ @ ?Image { F } } {}
-    ? & == ( _byte buf 0 ) 255 == ( _byte buf 1 ) 216 {} { ( _img_set_err `not a JPEG` ) ^ @ ?Image { F } }
+    ? < n 4 { = __img_err `not a JPEG` ^ @ ?Image { F } } {}
+    ? & == ( _byte buf 0 ) 255 == ( _byte buf 1 ) 216 {} { = __img_err `not a JPEG` ^ @ ?Image { F } }
     : ~ Jpeg j ( __jpg_new buf )
     : ?Image im ( __jpg_run j )
     ?? im {
         T x → { ^ @ ?Image { T x } }
         F _ → {
-            ? ( nurl_str_eq ( image_error ) `` ) { ( _img_set_err `JPEG: corrupt or unsupported stream` ) } {}
+            ? ( nurl_str_eq ( image_error ) `` ) { = __img_err `JPEG: corrupt or unsupported stream` } {}
             ^ @ ?Image { F }
         }
     }

@@ -1075,17 +1075,16 @@ version = "0.0.0"
     ^ F
 }
 
-// `token` is main's --token value, which lives as long as main: kept in a
-// global it was a view a global outlived.
+// `token` is main's --token value. The handler runs on the server's
+// threads, so it gets a copy of its own: a view of the caller's token may
+// not cross to another thread (nor kept in a global, which it outlived).
 @ run_http McpServer srv s host i port s token → i {
     : !TcpListener NetErr lr ( tcp_listen host port )
     ?? lr {
         T listener → {
             : ( @ HttpResponse HttpRequest ) inner
             ( mcp_http_handler ( mcp_server_http_dispatch srv ) )
-            : ( @ HttpResponse HttpRequest ) authed
-            ( mcp_server_with_bearer_auth
-            \ HttpRequest req → HttpResponse { ^ ( inner req ) } token )
+            : String tok ( string_from token )
             // OPTIONS bypasses auth: a browser preflight carries no
             // Authorization header, so requiring one 401s the preflight
             // and the real request is never sent.
@@ -1093,7 +1092,10 @@ version = "0.0.0"
                 ? != ( nurl_str_eq ( string_data . req method ) `OPTIONS` ) 0 {
                     ^ ( inner req )
                 } {}
-                ? == ( nurl_str_len token ) 0 { ^ ( inner req ) } {}
+                ? == ( string_len tok ) 0 { ^ ( inner req ) } {}
+                : ( @ HttpResponse HttpRequest ) authed
+                ( mcp_server_with_bearer_auth
+                \ HttpRequest q → HttpResponse { ^ ( inner q ) } ( string_data tok ) )
                 : HttpResponse r ( authed req )
                 ? == . r status 401 { ( nm_cors r ) } {}
                 ^ r
