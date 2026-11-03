@@ -366,6 +366,15 @@ theorem EvalR.payAt {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (
     · have hk' : upd m1.blk m1.nid _ k = some bl := hk
       rw [upd_ne _ _ he, TakeVal.blk h1] at hk'
       exact .inl ⟨bl, hk', hi⟩
+  | @atomic _ _ _ _ _ k0 _ _ _ _ hk0 _ _ =>
+    have hk' : upd _ k0 _ k = some bl := hk
+    by_cases he : k = k0
+    · subst he
+      simp [upd] at hk'
+      subst hk'
+      simp [Blk.tree] at hi
+    · rw [upd_ne _ _ he] at hk'
+      exact .inl ⟨bl, hk', hi⟩
   | _ => exact .inl ⟨bl, hk, hi⟩
 
 /-- **A step**: a payload's address afterwards was the same block's, or an

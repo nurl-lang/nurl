@@ -12,5 +12,5 @@ import A3
 #print axioms A2.DynCell.pick_ok
 #print axioms A2.DynCell.main_safe
 #print axioms A2.DynCell.main_no_leak
--- threads: moves, Arc's frozen shared payloads, Locked (A3/Claim.lean)
+-- threads: moves, Arc's frozen shared payloads, Locked, Atomic (A3/Claim.lean)
 #print axioms A3.claim

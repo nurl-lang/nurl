@@ -499,6 +499,7 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
     exact ⟨h, fun _ => rfl, same, fun _ _ r hr => by simp [roots, Entry.vdeps, Mode.ownSlot] at hr⟩
   | lockClone _ _ _ =>
     exact ⟨h, fun _ => rfl, same, fun _ _ r hr => by simp [roots, Entry.vdeps, Mode.ownSlot] at hr⟩
+  | atomic _ _ _ _ _ => exact ⟨h, fun _ => rfl, same, fun _ hn => by simp [intE] at hn⟩
   | @arcGet y Ey a hy hl ht _ _ =>
     refine ⟨h, fun _ => rfl, same, fun _ hn => ?_⟩
     have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (by rw [ht]; simp)

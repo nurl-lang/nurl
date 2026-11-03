@@ -144,6 +144,8 @@ theorem EvalR.restrict {m : Mem} {r : Rhs} {res : RRes} (h : EvalR m r res) {a2 
   | lockNew h1 hfr => exact ⟨_, .lockNew (TakeVal.restrict h1 a2) hfr, rfl, rfl, rfl⟩
   | arcClone hy => exact ⟨_, .arcClone hy, rfl, rfl, rfl⟩
   | lockClone hy => exact ⟨_, .lockClone hy, rfl, rfl, rfl⟩
+  | atomic hy hk h1 h2 =>
+    exact ⟨_, .atomic hy hk (Eval.restrict h1 hav hp) (Eval.restrict h2 hav hp), rfl, rfl, rfl⟩
   | arcGet hy hk => exact ⟨_, .arcGet hy hk, rfl, rfl, rfl⟩
 
 theorem EvalR.restrict_ok {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.ok v o m1))

@@ -902,6 +902,55 @@ theorem CapsOK.named {Γ : Ctx} {F : List Var} {D : List Dep} {cs : List (Var ×
   · exact Or.inl (by rw [hinp]; rfl)
   · exact Or.inr (by rw [hb]; exact ⟨hbr, hcan⟩)
 
+/-- A3.2: a lock block's payload checked out or back in: the block is kept
+    as a lock block of its type. -/
+theorem BlkLe.setLock {B : Nat → Option Blk} {k : Nat} {t : Ty} {o : Option Val} (h : B k = some ⟨t, .lock, o⟩)
+    (o' : Option Val) : BlkLe B (upd B k (some ⟨t, .lock, o'⟩)) := by
+  intro k' bl hk'
+  by_cases he : k' = k
+  · subst he; rw [h] at hk'; cases hk'
+    exact ⟨⟨t, .lock, o'⟩, by simp [upd], rfl, rfl, fun h => nomatch h⟩
+  · exact ⟨bl, by simp [upd, he, hk'], BlkKeep.refl _⟩
+
+/-- A3.4: **an atomic operation**: the word of the integer lock block `k`
+    changes, an integer that owns no address before or after; the answer
+    is a plain integer. -/
+theorem atomic_pres {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {k n n' r : Nat}
+    (hk : m.blk k = some ⟨.int, .lock, some (.int n)⟩) :
+    RhsPost m { m with blk := upd m.blk k (some ⟨.int, .lock, some (.int n')⟩) } Γ Γ F ∧
+    RhsOut { m with blk := upd m.blk k (some ⟨.int, .lock, some (.int n')⟩) } Γ intE (.int r) false := by
+  obtain ⟨htok, hvf, _, hna⟩ := hi.blocks k _ hk
+  have hb : BlkLe m.blk (upd m.blk k (some ⟨.int, .lock, some (.int n')⟩)) := BlkLe.setLock hk _
+  obtain ⟨hkey, _, _⟩ := hi.heap.blk k _ hk
+  have hcases : ∀ k' bl, upd m.blk k (some ⟨.int, .lock, some (.int n')⟩) k' = some bl →
+      (k' = k ∧ bl = ⟨.int, .lock, some (.int n')⟩) ∨ (k' ≠ k ∧ m.blk k' = some bl) := by
+    intro k' bl h
+    by_cases he : k' = k
+    · subst he; simp [upd] at h; exact Or.inl ⟨rfl, h.symm⟩
+    · exact Or.inr ⟨he, by simpa [upd, he] using h⟩
+  have hbo : BlkOwn { m with blk := upd m.blk k (some ⟨.int, .lock, some (.int n')⟩) } := by
+    intro k' bl hk'
+    rcases hcases k' bl hk' with ⟨rfl, rfl⟩ | ⟨hne, h⟩
+    · exact ⟨hkey, by simp [Blk.tree], fun i hi => by simp [Blk.tree] at hi⟩
+    · obtain ⟨hkey', hnd', hall'⟩ := hi.heap.blk k' bl h
+      refine ⟨hkey', hnd', fun i hi' => ?_⟩
+      obtain ⟨ha, hlt, hsl, hoth⟩ := hall' i hi'
+      refine ⟨ha, hlt, hsl, fun k'' bl'' hk'' h'' => ?_⟩
+      rcases hcases k'' bl'' h'' with ⟨rfl, rfl⟩ | ⟨_, h2⟩
+      · simp [Blk.tree]
+      · exact hoth k'' bl'' hk'' h2
+  have hheap : HeapOK { m with blk := upd m.blk k (some ⟨.int, .lock, some (.int n')⟩) } :=
+    HeapOK.mono hi.heap rfl (fun _ h => h) (Nat.le_refl _) hbo
+  have hB : BlocksIn { m with blk := upd m.blk k (some ⟨.int, .lock, some (.int n')⟩) } := fun k' bl hk' => by
+    rcases hcases k' bl hk' with ⟨rfl, rfl⟩ | ⟨_, h⟩
+    · exact ⟨htok, hvf, fun p hp => by cases hp; exact ⟨.int, SharesOK.of_noArc rfl⟩, fun _ => hna rfl⟩
+    · obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k' bl h
+      exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.grow hb⟩, h4⟩
+  have hinv : MInv { m with blk := upd m.blk k (some ⟨.int, .lock, some (.int n')⟩) } Γ :=
+    hi.grow rfl hheap (Nat.le_refl _) hb hB
+  exact ⟨⟨hinv, rfl, Nat.le_refl _, fun _ => rfl, fun _ _ => rfl, fun _ _ h _ => h, fun _ => rfl,
+    fun _ E1 h => ⟨E1, h, rfl, rfl⟩, DKeep.refl _ _, hb⟩, intE_out _⟩
+
 theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} {v : Val} {o : Bool}
     (hi : MInv m Γ) (hanch : RootbAnch Γ F)
     (hr : RhsT Γ F r E Γ1) (he : EvalR m r (.ok v o m1)) :
@@ -1105,6 +1154,9 @@ theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry
   | lockClone ha hl hty =>
     cases he with
     | lockClone hv => exact ⟨RhsPost.same hi, out_lockClone hi ha hl hty hv⟩
+  | atomic _ _ _ _ _ =>
+    cases he with
+    | atomic _ hk _ _ => exact atomic_pres hi hk
   | arcGet ha hl hty hhv hfn =>
     cases he with
     | arcGet hv hbk =>
@@ -2084,6 +2136,7 @@ theorem EvalR.blk {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.o
     have hne : k ≠ m1.nid := fun h => by rw [h, hfr] at hk1; cases hk1
     show upd m1.blk m1.nid _ k = some bl
     rw [upd_ne _ _ hne]; exact hk1
+  | atomic _ hk _ _ => exact BlkLe.setLock hk _
   | _ => exact BlkLe.refl _
 
 theorem BindParams.blk {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var} {base i : Nat}
@@ -2093,16 +2146,6 @@ theorem BindParams.blk {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var} {b
   | inp _ _ _ ih => exact ih
   | sink _ _ ih => exact ih
   | inout _ ih => exact ih
-
-/-- A3.2: a lock block's payload checked out or back in: the block is kept
-    as a lock block of its type. -/
-theorem BlkLe.setLock {B : Nat → Option Blk} {k : Nat} {t : Ty} {o : Option Val} (h : B k = some ⟨t, .lock, o⟩)
-    (o' : Option Val) : BlkLe B (upd B k (some ⟨t, .lock, o'⟩)) := by
-  intro k' bl hk'
-  by_cases he : k' = k
-  · subst he; rw [h] at hk'; cases hk'
-    exact ⟨⟨t, .lock, o'⟩, by simp [upd], rfl, rfl, fun h => nomatch h⟩
-  · exact ⟨bl, by simp [upd, he, hk'], BlkKeep.refl _⟩
 
 theorem Release.blk {m m' : Mem} {k : Nat} {t : Ty} {x : Var} (h : Release m k t x m') : BlkLe m.blk m'.blk := by
   cases h with
