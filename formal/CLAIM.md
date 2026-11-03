@@ -182,10 +182,34 @@ the LLVM / C11 memory model rather than redefining it.
       nurlc refuses such stores (docs/MEMORY.md §7.7) and the model does
       not, so `no_leak` agrees with the runtime for the programs nurlc
       accepts: a phase C obligation, stated.
-    - **Not typed yet:** shares in a slice's elements; `locked_set`, `locked_get`,
-      `locked_apply`'s result and `locked_await` as rules of their own; a
-      lock reached through a local borrow (a field or an element); and
-      `Mutex` beside the data it guards.
+    - **The rest of the operations, as derived forms.** Each is a
+      statement of A2's rules, typed whole by a lemma of its own, so the
+      theorems cover it with no new case:
+      - `locked_get` is a lock scope that copies the value out with
+        `mem_dup` (`StmtT.lockedGet`; a library handle is refused, as the
+        runtime's `locked_get` panics on one).
+      - `locked_set` checks the new value before the lock is touched
+        (`StmtT.lockedSet`, `lockedSet_check`), as `mem_send_check` runs
+        before `mutex_lock`.
+      - `locked_apply`'s and `wguard_apply`'s result holds no lend of the
+        payload (`ApplyFn`, `StmtT.lockedApply`, `StmtT.wguardApply`).
+      - `locked_await` is rounds of check-outs until one hands back a
+        result (`StmtT.lockedAwait`; a waiting round is `Blocked`, and the
+        rounds with nothing changed are the runtime's spurious wake-ups).
+      - `Mutex` is a lock of an integer taken and restored
+        (`StmtT.mutexLock` / `mutexUnlock` / `mutexWith`). It guards no
+        memory (`mutex_owns_nothing`), so memory safety never rests on
+        one: a race on the data beside it is refused by the data's own
+        type (h319).
+      - A lock reached through an element or a field is handed over
+        first (`StmtT.withLockElem`, `StmtT.withLockField`), and one the
+        function does not own is passed in as `locked_update` takes it
+        (`LockFn`).
+    - **Not typed yet:** shares in a slice's elements; that `locked_set`'s
+      give-back check never fails in a reachable configuration (argued
+      from `CellInv.one`); the closure the operations run called through
+      a package (here a statement in place or a function of the
+      program).
     - **Not proven here (phase D):** relocking a lock on the OS thread
       that holds it (a nested update, or another fiber on that thread).
       The model's thread waits or panics, but the runtime's default
@@ -257,8 +281,10 @@ the LLVM / C11 memory model rather than redefining it.
       write scope's binding (`wguard_get_path`, `StmtT.wguardGet`), and
       `rw_get` a read scope whose body copies the value out with
       `mem_dup` (`Stmt.rwGet`, `dup_call`, `copy_outlives`).
-    - **Not typed yet:** `rw_get` as one typed statement (its pieces are),
-      `mem_dup` as a step of its own, and `wguard_apply`'s result. A read guard refuses a
+    - `rw_get` is typed as one statement with every scope's end
+      (`StmtT.rwGet`), and `wguard_apply`'s result as `locked_apply`'s.
+      `mem_dup` is typed by its summary (`DupFn`); that nurlc's intrinsic
+      meets it is phase D's. A read guard refuses a
       payload that holds a library handle (`RhsT.rwRead`'s `hasCell`,
       h357): readers read it at once, so it faces Sync. An `RwLocked` of
       one is still made and written.
