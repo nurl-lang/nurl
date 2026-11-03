@@ -812,6 +812,18 @@ adopts it (`string_adopt`, §1). `unsafe` code and the standard library
 manage raw strings by hand, and there a field a struct literal gave a
 fresh string is the struct's to release.
 
+A copy of a value that holds views holds the same views: they point
+where the original's do, and the copy is good only while that storage
+is. That covers `( mem_dup t )`, an element taken out (`vec_pop`,
+`vec_remove`, the payload of `?? ( vec_pop … )`), a clone (`vec_clone`,
+`vec_filter`, `Deque_clone`, `map_clone`, a clone of a clone), and what a
+function of your own makes of its argument's views: hands back a copy of
+them (`^ ( vec_clone [s] v )`), or copies them into another argument (a
+wrapper of `vec_extend`). The caller's result, or that argument, then
+depends on what the argument it was given holds. Copy the strings
+themselves (a `( Vec String )` copies each element deep) for a copy that
+outlives them.
+
 ### 2.14 A destructor's drop is a use
 
 A value whose type has a `% Drop` of the program's own runs that code when
@@ -2268,7 +2280,7 @@ are dropped, moved and copied by the same rules:
 |---|---|
 | `( mem_take x )` | `x`, read out of a container by hand, owns that value from here on (`vec_pop`, `vec_remove`); `unsafe` only |
 | `( mem_put_back x )` | the next store of `x` through a pointer writes back a value read from that slot; the container keeps owning it; `unsafe` only |
-| `( mem_dup x )` | an owned copy: deep for an owning value, the value itself otherwise |
+| `( mem_dup x )` | an owned copy: deep for an owning value, the value itself otherwise; it holds the views `x` holds (§2.13) |
 | `( mem_forget x )` | gives up `x`'s value without releasing it; `unsafe` only |
 | `( mem_replace [T] place x )` | `x` goes into `place` (a mutable binding, a field of one, or a field through a pointer) and what `place` held comes back, owned; nothing is dropped or copied (stdlib/core/mem.nu, `unsafe`) |
 | `( vec_retain [A] v keep )` | the elements `keep` answers T for stay, in order; the rest are dropped, in place (stdlib/core/vec.nu) |
