@@ -1,10 +1,10 @@
 # The claim
 
-> **Status: A1, A2, A3.0, A3.1, A3.2's and A3.3's first cuts, and A3.4
-> are proven** (`A1.memory_safe`, `A2.memory_safe`, `A2.no_leak_end`,
-> `A3.claim`, [`README.md`](README.md)); the rest of A3.2 and A3.3, A3.5,
-> A3.6 and B–D are the statement the proof is working towards, not one it
-> has reached.
+> **Status: A1, A2, A3.0, A3.1, A3.4, and the first cuts of A3.2, A3.3
+> and A3.5 are proven** (`A1.memory_safe`, `A2.memory_safe`,
+> `A2.no_leak_end`, `A3.claim`, [`README.md`](README.md)); the rest of
+> A3.2, A3.3 and A3.5, A3.6 and B–D are the statement the proof is working
+> towards, not one it has reached.
 
 ## Statement
 
@@ -14,10 +14,11 @@ functions and its `unsafe` assertions, is memory-safe and leak-free** —
 language as the calculus models them, (A3.0) for threads that share
 nothing but what they move, (A3.1) for threads that also share `Arc`
 payloads, (A3.2, first cut) `Locked` values, (A3.3, first cut)
-`RwLocked` values read through frozen guards, and (A3.4) `Atomic` words
-and channels; the data-race clause for the rest of what threads share is
-the rest of A3.2 and A3.3, A3.5 and A3.6, and the link from the rules to
-nurlc and its code is B–D*
+`RwLocked` values read through frozen guards, (A3.4) `Atomic` words
+and channels, and (A3.5, first cut) library handles whose copies are one
+state, which cross a thread only with all their owners; the data-race
+clause for the rest of what threads share is the rest of A3.2, A3.3 and
+A3.5, and A3.6, and the link from the rules to nurlc and its code is B–D*
 (below): no use after free, no double free, no read through a dangling
 view, no out-of-bounds access, no data race, and everything it allocated
 is released — on the panic path as much as the normal one.
@@ -235,9 +236,44 @@ the LLVM / C11 memory model rather than redefining it.
       it, which may be after the guard's drop, where the runtime unlocks.
       As for `Arc`'s refcount, phase D must show that no live binding
       reaches the payload through the guard once it is dropped.
-  - **A3.5, A3.6** — the rest of what threads share: library handles whose
-    copies are one state, module globals. Not proven (`A3/DESIGN.md` gives
-    the design: they use A3.1's blocks).
+  - **A3.5, first cut** *(proven)* — a library handle whose copies are
+    one state (`PNCounter`, a `TcpConn`, a `Cell`): Send, not Sync.
+    - **The calculus.** A handle is a cell share (`Val.cell k`, type
+      `Ty.cell t`) of an ordinary lock block. `Rhs.cellNew` makes one,
+      `Rhs.cellClone` copies an owner's handle, and the library's in-place
+      change is A3.2's check-out (`withCell` is `withLock`, with its
+      faithfulness premises). A lent handle is no share (`lendOf`), so the
+      slots that hold a cell share are its owners, which is what the
+      runtime counts. An `Arc` payload holds no handle (`RhsT.arcNew`'s
+      `hasCell`, h338), and lock, `RwLocked` and channel payloads hold no
+      share at all (h358).
+    - **The crossing check.** A spawn's run-time precondition
+      (`SendCheck`) is that no slot left in the spawner reaches a cell the
+      moved values reach. When it fails, the spawn panics in the spawner
+      and no thread is made (`TStep.spawnFail`), as `mem_send_check` does.
+    - **Threads.** A race now also counts two threads changing one cell's
+      state at once (`Race := AddrRace ∨ CellRace`; `CellOp` is a cell
+      check-out, or being inside one while holding a share). The model
+      serializes check-outs as a lock's, but the runtime's handles have no
+      mutex, so the guarantee is confinement: no two threads hold a share
+      of one cell (`CellInv`, A3/Cell.lean), kept by every step and by a
+      spawn through `SendCheck`.
+    - **In Lean.** `A2.memory_safe`, `A2.no_leak_end`, `A2.no_leak_panic`
+      and `A3.claim` hold with all of this, on the standard axioms only.
+    - **Not typed yet:** a handle changed or copied through a borrow (the
+      model takes a library's `in` handle as `inout`, and a store of a
+      borrowed handle into an owner is not typed); a closure whose code
+      changes a captured handle; `% Sync` / `% NotSend` assertions;
+      closures in shared payloads (A3.5b: h339 h340 h342) and trait
+      objects (A3.5c: h344). A library that re-enters its own state waits
+      or panics in the model, where the runtime goes on: that is the
+      library's code (phase B).
+    - **Not proven here:** that a thread inside a cell's check-out holds a
+      share of it is argued from typing, not a lemma, and phase D must
+      show the runtime's reference count of a handle's block equals the
+      model's owners.
+  - **A3.6** — module globals reached by several threads. Not proven
+    (`A3/DESIGN.md` gives the design).
 - **B** — the `unsafe` base of the standard library is semantically
   well-typed, so safe code built on it inherits the theorem.
 - **C** — every program nurlc accepts is well-typed in the formal rules.
