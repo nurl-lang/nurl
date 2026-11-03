@@ -341,7 +341,8 @@ Outside A2:
   or later-defined callee, a value block) and #450 (shapes the hand-over
   gate does not reach: a struct given a part of itself through a callee
   whose summary is not final, a scalar enum key, a struct cursor copy)
-  and #456 (an `inout` given a lend by name, or of a Box, map, Rc or Arc).
+  and #456 (an `inout` Box, map, Rc or Arc given a lend; a `sink`
+  argument handed back into an `inout`).
 - An `Rc`'s shared state, which is the standard library's (B): #345 and
   #392.
 - A view stored through a borrow inside closure code: #395's store
