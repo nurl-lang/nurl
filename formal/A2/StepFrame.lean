@@ -107,6 +107,7 @@ theorem panic_none {P : Prog} {m m1 : Mem} {s : Stmt} (hst : Step P m s (.panic 
     · rw [upd_ne _ _ h]; exact ih rfl v hv
   | letdP _ => cases hr; exact fun _ h => h
   | waitPanic _ => cases hr; exact fun _ h => h
+  | withElemOOB _ _ _ _ => cases hr; exact fun _ h => h
   | _ => cases hr
 
 /-- A panic unbinds the scopes it leaves. -/
@@ -124,7 +125,7 @@ theorem panic_spine {P : Prog} {m m1 : Mem} {s : Stmt} (hst : Step P m s (.panic
     · rw [upd_ne _ _ h]
       simp only [Stmt.spine, List.mem_cons] at hv
       exact ih rfl v (hv.resolve_left h)
-  | letdP _ => cases hr; intro v hv; simp [Stmt.spine] at hv
+  | letdP _ | withElemOOB _ _ _ _ => cases hr; intro v hv; simp [Stmt.spine] at hv
   | waitPanic hw => cases hr; intro v hv; rw [hw.spine] at hv; cases hv
   | @scopeLP _ _ _ _ y _ _ hrl ih =>
     cases hr; intro v hv
@@ -270,6 +271,12 @@ theorem step_new {P : Prog} {m m' : Mem} {s s' : Stmt} (hst : Step P m s (.ok m'
     by_cases hvx : v = x
     · subst hvx; rw [takeVal_none ht h] at hx; cases hx
     · simp [upd_ne _ _ hvx, takeVal_none ht h] at h'
+  | @withElem v x _ _ _ _ _ _ _ _ hv _ _ _ _ =>
+    cases hr; intro w h h'
+    by_cases hwx : w = x
+    · subst hwx; simp [Stmt.spine]
+    · have hwv : w ≠ v := fun e => by subst e; rw [h] at hv; cases hv
+      simp [upd_ne _ _ hwx, upd_ne _ _ hwv, h] at h'
   | @insert _ x _ _ _ _ _ _ _ _ _ ht hx _ _ =>
     cases hr; intro v h h'
     by_cases hvx : v = x

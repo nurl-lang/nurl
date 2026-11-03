@@ -135,6 +135,21 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
       (fun Ex h => by rw [hx1] at h; cases h) hE
     have hnrb : E.mode ≠ .rootb := by rcases (RhsT.out hr).1 with h | h <;> rw [h] <;> simp
     exact CtxRel.bind hanch hx hxF (hr.ctxRel hanch) hnrb (fun ha => ih hks ha hnx) hpin.1
+  | @withElem Γ Γ1 Δ1 Δ F y x i k Ey E hks hx hxF _ _ _ hpy _ hr hk _ hpin _ ihs ihp =>
+    intro _ hanch hn
+    have hyF : y ∉ F := by cases hr; assumption
+    have hk0 := CtxRel.kill hanch hyF .replace false (hpy.kills .replace false)
+    have hanchk : RootbAnch (A2.kill .replace false y Γ) F := hanch.kill _ _ _
+    obtain ⟨hn1, hE, _⟩ := hr.names (hn.kill .replace false y)
+    have hx1 : Γ1 x = none := by
+      have := (hr.domMode).1 x; simp only [A2.kill, hx, Option.map_none] at this
+      cases h : Γ1 x <;> simp_all
+    have hnx := NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h)
+      (fun Ex h => by rw [hx1] at h; cases h) hE
+    have hnrb : E.mode ≠ .rootb := by rcases (RhsT.out hr).1 with h | h <;> rw [h] <;> simp
+    exact CtxRel.bind hanch hx hxF (hk0.trans (hr.ctxRel hanchk)) hnrb (fun ha => by
+      have h2 := ihs hks ha hnx
+      exact h2.trans (ihp rfl (h2.anch ha) (StmtT.names hP hk hks hnx))) hpin.1
   | @withLock Γ Δ F a x k Ea t hks hx hxF _ _ _ _ hpin _ _ _ ih =>
     intro _ hanch hn
     have hnx := NameWF.setE hn (E := lockE t) (fun Ex h => by rw [hx] at h; cases h)

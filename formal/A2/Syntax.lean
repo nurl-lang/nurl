@@ -510,6 +510,9 @@ inductive Stmt where
                                                           -- `x` at index `i` (at its end if `x` is
                                                           -- shorter): an element handed over goes
                                                           -- back (`withElem`)
+  | withElem (v : Var) (i : Expr) (x : Var) (body : Stmt) -- A2-elem (#391): element `i` of the
+                                                          -- `Vec` `v` is handed over: it moves
+                                                          -- out to `x` for `body`, and back after
 
 
 /-- A3.5: a library's in-place change of its state (`pncounter_inc a …`,

@@ -320,6 +320,18 @@ theorem _root_.A2.Step.cell {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step 
       · exact .inl (ht.cell.2 (.of_slot hx (Sub.child he hse)))
       · rw [List.mem_singleton] at he; subst he; exact .inl (ht.cell.1 hse)
     · exact .inl (ht.cell.2 hc)
+  | withElem hn hv _ _ _ _ =>
+    intro k hc
+    rcases CellAt.set hc with ⟨w, hw, hs⟩ | hc
+    · cases hw; exact .inl (.of_slot hv (Sub.child (List.getElem_mem hn) hs))
+    · rcases CellAt.set hc with ⟨w, hw, hs⟩ | hc
+      · cases hw
+        obtain ⟨e, he, hse⟩ := sub_cell_node hs
+        rcases List.mem_append.mp he with he | he
+        · exact .inl (.of_slot hv (Sub.child (List.mem_of_mem_take he) hse))
+        · exact .inl (.of_slot hv (Sub.child (List.mem_of_mem_drop he) hse))
+      · exact .inl hc
+  | withElemOOB _ _ _ _ => exact fun hc => .inl hc
   | insert _ ht hx _ _ =>
     intro k hc
     rcases CellAt.set hc with ⟨w, hw, hs⟩ | hc

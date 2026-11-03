@@ -198,11 +198,14 @@ theorem SlotOK.killE {m : Mem} {E : Entry} {sl : Slot} (h : SlotOK m E sl) (e : 
   · exact ⟨h.1, fun hos => ⟨(h.2.1 hos).1, (h.2.1 hos).2.1, fun hl => by cases hl⟩, fun _ hl => by cases hl⟩
   · exact h
 
-/-- Ending entries at a root that is not lent out, by an effect below
-    `replace`, changes no memory and keeps the invariant: no borrowed
-    parameter ends (`killE_rootb`). -/
-theorem MInv.kill_more {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : RootbAnch Γ F)
-    {r : Var} (hrF : r ∉ F) {e : Eff} (he : e ≠ .replace) (hv : Bool) : MInv m (A2.kill e hv r Γ) where
+/-- Ending entries at a root that is not lent out changes no memory and
+    keeps the invariant, as long as no borrowed parameter ends: none holds
+    by name, and may change, what the kill ends (`killE_rootb`; `NoPin` for
+    a `replace`). -/
+theorem MInv.kill_pin {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : RootbAnch Γ F)
+    {r : Var} (hrF : r ∉ F) {e : Eff} {hv : Bool}
+    (hmn : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none →
+      e.kills hv d.kind = true → d.root ≠ r) : MInv m (A2.kill e hv r Γ) where
   dom v := by rw [kill_dom]; exact hi.dom v
   slot v E' h := by
     simp only [A2.kill] at h
@@ -220,7 +223,7 @@ theorem MInv.kill_more {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (han
     simp only [A2.kill] at h
     obtain ⟨E, hE, rfl⟩ := Option.map_eq_some_iff.mp h
     rw [killE_mode] at hm
-    rw [killE_rootb hanch hrF e hv (hmn_of_ne_replace hv he r) hE hm]
+    rw [killE_rootb hanch hrF e hv hmn hE hm]
     exact hi.rootbLive p E hE hm
   rootbLt p E' h hm := by
     simp only [A2.kill] at h
@@ -246,6 +249,11 @@ theorem MInv.kill_more {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (han
     obtain ⟨E, hE, rfl⟩ := Option.map_eq_some_iff.mp h
     rw [killE_ty]; exact hi.shares v E sl T hE hsl hown hT
   blocks := hi.blocks
+
+/-- ... which an effect below `replace` never ends. -/
+theorem MInv.kill_more {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : RootbAnch Γ F)
+    {r : Var} (hrF : r ∉ F) {e : Eff} (he : e ≠ .replace) (hv : Bool) : MInv m (A2.kill e hv r Γ) :=
+  hi.kill_pin hanch hrF (hmn_of_ne_replace hv he r)
 
 theorem MInv.killNames_more {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : RootbAnch Γ F) :
     ∀ ds : List Dep, (∀ d ∈ ds, d.root ∉ F ∧ d.kind.bound ≠ .replace) → MInv m (A2.killNames ds Γ)

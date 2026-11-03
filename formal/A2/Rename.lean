@@ -3932,6 +3932,40 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
   | @editBV Γ Γ1 F x op Ex Ex1 t D hx hmx hl hty hhv hfn hxF harg hyx hx1 hl1 hne hthru hV =>
     intro _ hab hw hn hT
     exact editBV_ren h hab (hT (.inl rfl)) hP hw hn hx hmx hl hty hhv hfn hxF harg hyx hx1 hl1 hne hthru hV
+  | @withElem Γ Γ1 Δ1 Δ F y x i k Ey E hks hx hxF hy hmy he hpin hds hr hk hpush hpe hyv ihs ihp =>
+    intro _ hab hw hn hT
+    -- an owner of the callee is bound to no argument: what depends on it ends where it is placed
+    have hal : Allowed S .replace false y := allowed_own hab hy hmy .replace false
+    have habk : S.AbsOK (A2.kill .replace false y Γ) := hab.kill _ _ _
+    obtain ⟨E', hr', hE'⟩ := RhsT.ren h habk hr
+    obtain ⟨hn1, hEn, _⟩ := hr.names (hn.kill .replace false y)
+    have hab1 := RhsT.absOK (S := S) hr habk
+    obtain ⟨hmo, _⟩ := RhsT.out hr
+    obtain ⟨hw1, hdom, _, hEr⟩ := hr.wf (hw.kill .replace false y)
+    have hx1 : Γ1 x = none := by
+      have := hdom x; simp only [A2.kill, hx, Option.map_none] at this; cases h' : Γ1 x <;> simp_all
+    have hwx := hw1.add hx1 hEr (fun hd => absurd hd (by simp [hr.dtor_false.2]))
+      (fun ha => absurd ha (by simp [hr.dtor_false.1])) (fun hd => absurd hd (by simp [hr.dtor_false.2]))
+    have hnx := NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h) (fun Ex h => by rw [hx1] at h; cases h) hEn
+    have habx := hab.add hab1 hx hmo
+    obtain ⟨tk, abk⟩ := ihs hks habx hwx hnx (fun ht => hT ht.withElem)
+    obtain ⟨tp, abp⟩ := ihp rfl abk (hk.wf hP hwx) (hk.names hP hks hnx) (fun ht => by
+      rcases ht with h' | ⟨g, hg, _⟩ <;> simp [Stmt.hasThru, Stmt.calls] at *)
+    have hbx := hab.fresh hx
+    refine ⟨?_, abp.exitScope hbx⟩
+    rw [canon_exitScope h abp (Or.inl hbx)]
+    have hwc := canon_wf h habx hwx
+    have hnc := canon_names h habx hnx
+    rw [canon_setE h] at hwc hnc tk
+    rw [canon_kill h hab hal] at hr'
+    exact StmtT.withElem (by rw [src_rename]; exact hks) (by rw [canon_ρ h, hx]; rfl) (h.Fcout x)
+      (by rw [canon_ρ h, hy]; rfl) (by rw [liftE_mode y (by rw [hmy]; simp), hmy]; rfl) (exprT_ren h hab he)
+      (NoPin.lift h hab (bnd_own hab hy hmy)) (DtorSafe.canon h hal hds) hr'
+      (StmtT.weakenIn ⟨PW.setE (PW.refl _) (hE' x), hwc, hnc⟩ tk) tp (EndOK.lift h abp hbx hpe)
+      (by
+        rw [Stmt.vars_rename]; intro hm
+        obtain ⟨w, hw', he'⟩ := List.mem_map.mp hm
+        exact hyv (h.inj _ _ he' ▸ hw'))
   | @insert Γ Δ F x y i he _ _ ih =>
     intro _ hab hw hn hT
     obtain ⟨tp, abp⟩ := ih rfl hab hw hn hT

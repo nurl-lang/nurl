@@ -1773,6 +1773,77 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         exact fin (MInv.editBV_setOOB post.inv (post.rel.anch hanch) hx1 hmx hl1 hty hhv hfn hthru hV
             memDeps_noName (hp.mem hfn) hno hfr)
           (by simp [post.nv]) (covers_editSetOOB (covers_takeVal hi.cover htk) hfr) post.frz
+  | @withElem Γ Γ1 Δ1 Δ F y x i k Ey E hsrc hx hxF _ _ _ hpin _ hr hs hpush hpx _ _ _ =>
+    -- element `n` moves out to `x`, as a pop of it moved to the end (`elem_pres`)
+    intro m m' s' hcd hi hst
+    cases hst with
+    | @withElem _ _ _ _ t c d n es hn hT hc hd _ hmx =>
+      have hyF : y ∉ F := by cases hr; assumption
+      have hxy : x ≠ y := fun e => by
+        subst e; cases hr with | pop hy => simp [A2.kill, hx] at hy
+      have hanch := hi.leafAnch rfl
+      obtain ⟨post, out, hcov⟩ := elem_pres hi.toMInv hanch hpin hr hn hT hc hd
+      have hx1 : Γ1 x = none := by
+        have := post.cdom x; rw [hx] at this; cases h : Γ1 x <;> simp_all
+      have hxn : x < m.nv := hi.nvS x (by simp [Stmt.vars])
+      have hm := post.inv.add hx1 (by simpa using hxn) out
+        (fun h => by rw [(RhsT.dtor_false hr).1] at h; cases h)
+        (fun h => by rw [(RhsT.dtor_false hr).2] at h; cases h) (fun h => by rw [(RhsT.dtor_false hr).2] at h; cases h)
+      have hnrb : E.mode ≠ .rootb := by rcases out.mode with h | h <;> rw [h] <;> simp
+      have hanch1 := post.rel.anch hanch
+      have hsp : k.spine = [] := src_spine hsrc
+      refine ⟨setE Γ1 x E, StmtT.scope ⟨E, by simp [setE], hnrb⟩ hxF
+        (StmtT.seq rfl hs (StmtT.insert ExprT.lit hyF hpush)) hpx, ?_, by simp, ?_, fun v hv => ?_⟩
+      · refine Inv.mk hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
+          (by simp [Stmt.spine, hsp, setE]) (show CatchOK _ k from catchOK_src hsrc)
+          (covers_take (hcov hi.cover) (fun T h => by
+            unfold OwnedAt at h; simp [upd_ne _ _ hxy, hmx] at h))
+          (pinOut_fresh hi.toMInv (fun p Ep hp hmp => by
+            have hpx : p ≠ x := fun h => by
+              rw [h] at hp; simp [setE] at hp; rw [← hp] at hmp; exact hnrb hmp
+            simp only [setE, upd_ne _ _ hpx] at hp
+            exact ⟨Ep, post.rel.rootb_back hp hmp, hmp, rfl⟩)
+            (fun v hv => by
+              simp only [Stmt.spine, hsp, List.mem_cons, List.not_mem_nil, or_false] at hv
+              rw [hv]; exact hx))
+          (show PinOK _ k from PinOK.of_spine_nil hsp)
+          (dtorOut_fresh post.inv (fun v Ev hv hd hos hn hvs => by
+            have hvx : v ≠ x := fun h => hvs (by simp [Stmt.spine, h])
+            simp only [setE, upd_ne _ _ hvx] at hv
+            exact ⟨Ev, hv, hd, hos, hn, List.Subset.refl _⟩)
+            (fun v hv => by
+              simp only [Stmt.spine, hsp, List.mem_cons, List.not_mem_nil, or_false] at hv
+              rw [hv]; exact hx1))
+          ⟨fun _ _ _ _ _ _ _ _ hdk => (by simp [Stmt.spine, hsp] at hdk),
+            show DtorPinOK _ k from DtorPinOK.of_spine_nil hsp⟩
+        · simp only [Mem.set_nv]
+          simp only [Stmt.vars, List.mem_cons, List.mem_append, Expr.vars, List.not_mem_nil,
+            or_false] at hv
+          rcases hv with rfl | hv | rfl | rfl
+          · exact hxn
+          · exact hi.nvS v (by simp [Stmt.vars, hv])
+          · exact hi.nvS v (by simp [Stmt.vars])
+          · exact hxn
+        · simp only [Mem.set_nv]; exact hi.nvF v hv
+        · intro p Ep hp hmp _
+          by_cases hpx : p = x
+          · subst hpx; simp only [setE, upd_same, Option.some.injEq] at hp; subst hp
+            exact absurd hmp hnrb
+          · simp only [setE, upd_ne _ _ hpx] at hp; exact hanch1 p Ep hp hmp
+      · refine ⟨fun v Ev hv _ => ?_, fun v Ev hv hvs => ?_,
+          (post.rel.dkeep.mono (fun _ _ h => by cases h)).setE
+            (fun _ _ _ hxs => absurd (by simp [Stmt.spine]) hxs)⟩
+        · have hvx : v ≠ x := fun h => by subst h; rw [hx] at hv; cases hv
+          refine ⟨by simp [Stmt.spine, hsp, hvx], ?_⟩
+          have hk := post.rel.keep (s := .skip) (s' := .skip) rfl rfl
+          obtain ⟨_, E', h', hm', ht', hrb'⟩ := hk.1 v Ev hv (by simp [Stmt.spine])
+          exact ⟨E', by simp [setE, upd_ne _ _ hvx, h'], hm', ht', hrb'⟩
+        · have hvx : v ≠ x := fun h => by subst h; simp [Stmt.spine] at hvs
+          simp only [setE, upd_ne _ _ hvx] at hv
+          obtain ⟨E0, h0, _⟩ := post.rel.mode v Ev hv
+          exact ⟨by simp [Stmt.spine], E0, h0⟩
+      · have hvx : v ≠ x := fun e => hxF (e ▸ hv)
+        simp only [Mem.set_st, upd_ne _ _ hvx]; exact post.frz v hv
   | @insert Γ Δ F x y i _ hxF _ ih =>
     -- a push, and its element moved to index `n` (`MInv.perm`)
     intro m m' s' hcd hi hst

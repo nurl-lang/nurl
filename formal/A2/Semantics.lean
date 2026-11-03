@@ -578,6 +578,7 @@ def Stmt.rename (ρ : Var → Var) : Stmt → Stmt
   | .withLock a x s => .withLock (ρ a) (ρ x) (s.rename ρ)
   | .scopeL k t x s => .scopeL k t (ρ x) (s.rename ρ)
   | .insert x i y => .insert (ρ x) (i.rename ρ) (ρ y)
+  | .withElem v i x s => .withElem (ρ v) (i.rename ρ) (ρ x) (s.rename ρ)
 
 /-- The renaming of a call of a function with parameters `ps` on `args`,
     its variables placed from `base`. -/
@@ -816,6 +817,26 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
       Eval m i n → TakeVal m y v m1 → m1.st x = some ⟨true, some (.node t c d es)⟩ →
       m1.alloc c = true → m1.alloc d = true →
       Step P m (.insert x i y) (.ok (m1.set x ⟨true, some (.node t c d (es.take n ++ v :: es.drop n))⟩) .skip)
+  /-- A2-elem (Agora #391): an element handed over.  Element `n` of the `Vec`
+      `v` owns moves out into `x` (an owner moves in, an integer is a plain
+      integer binding, as `vec_pop` takes it), and the body runs in `x`'s
+      scope; after it, `x`'s value goes back in at index `n` (`insert`), and
+      the scope ends.  The runtime passes a pointer to the element in place;
+      `StmtT.withElem`'s premises make the two agree.  A panic in the body
+      drops `x`'s value with the scope, as everything the unwinding leaves
+      is dropped: `v`'s too, before anything reads it. -/
+  | withElem {m : Mem} {v x : Var} {i : Expr} {s : Stmt} {t : Ty} {c d n : Nat} {es : List Val}
+      (h : n < es.length) :
+      m.st v = some ⟨true, some (.node t c d es)⟩ → m.alloc c = true → m.alloc d = true →
+      Eval m i n → m.st x = none →
+      Step P m (.withElem v i x s)
+        (.ok ((m.set v ⟨true, some (.node t c d (es.take n ++ es.drop (n + 1)))⟩).set x
+            ⟨es[n].owns, some es[n]⟩)
+          (.scope x (.seq s (.insert v (.lit n) x))))
+  /-- ... and out of range it panics, as `vec_at` does. -/
+  | withElemOOB {m : Mem} {v x : Var} {i : Expr} {s : Stmt} {t : Ty} {c d n : Nat} {es : List Val} :
+      m.st v = some ⟨true, some (.node t c d es)⟩ → m.alloc c = true → Eval m i n → es.length ≤ n →
+      Step P m (.withElem v i x s) (.panic m)
   | free {m : Mem} {x : Var} {t : Val} {a' : Nat → Bool} :
       m.st x = some ⟨true, some t⟩ → Frees m.alloc t a' →
       Step P m (.free x) (.ok ({ m with alloc := a' }.set x ⟨true, none⟩) .skip)
