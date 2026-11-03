@@ -38,9 +38,10 @@ abbrev Var := Nat
              (A2-envhand, `StmtT.callcE`: handed over) types only at `send`
              or `any`, through an owner; what else it may change is a binding
              captured by name, which `send` already excludes;
-  * `bare` — also no share at all: a slice's element (A3.1's views of a
-             `Vec` hold no share, `Ty.ok (slice t)`).  Since A3.2's second
-             cut a lock or a channel no longer needs it. -/
+  * `bare` — also no share at all.  A3.1's first cut asked it of a
+             slice's element (`Ty.ok (slice t)`); since A3.2's second cut a
+             lock or a channel no longer needs it, and since A3.1's slices of
+             shares a slice does not either: no rule asks for it now. -/
 inductive Cross where
   | any
   | send
@@ -177,11 +178,13 @@ def Ty.sync : Ty → Bool
 
 /-- A2 types: a view's element type holds no views of its own (a view of a
     container of views is left to A2, with the other aggregates that
-    carry views), and, in A3.1's first cut, no shares. -/
+    carry views).  (A3.1's first cut also asked it to hold no shares; A3.1's
+    slices of shares lift that: a slice of `Arc`s, of locks, of library
+    handles is typed, its elements lent as `vec_at` lends them.) -/
 def Ty.ok : Ty → Bool
   | .int => true
   | .vec t => t.ok
-  | .slice t => t.ok && !t.holdsView && !t.hasArc
+  | .slice t => t.ok && !t.holdsView
   | .prod a b => a.ok && b.ok
   | .sum a b => a.ok && b.ok
   | .fn _ _ => true

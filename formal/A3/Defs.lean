@@ -1250,6 +1250,36 @@ theorem sendCheck_borrow_left {B : Nat → Option Blk} {vs : List Val} {st : Var
     (hw : Sub (.cell k) w) : ¬ SendCheck B vs st :=
   fun h => h.1 k ⟨v, hv, hs⟩ y false w hy hw
 
+/-! ### A3.1: shares in a slice's elements
+
+A3.1's first cut asked a slice's element type to hold no share (`Ty.ok (slice
+t)`, `RhsT.view`).  That is lifted, as A3.2's second cut lifted it for a lock's
+payload: a slice of `Arc`s, of locks, of library handles, of `send` and `sync`
+closures is typed, and `sat` lends its elements as `vec_at` lends a `Vec`'s
+(`out_sat`: the viewed node holds the shares its type says, `MInv.dataAt_shares`).
+It lets no two threads reach one block through a slice: a slice is a view,
+which no crossing takes (`slice_not_send`), so it and what it lends stay on
+the thread that took it.  What its elements are lent is what a `Vec`'s are:
+an `Arc` share or a lock share, which are Sync, or (A3.5's third cut) a cell
+share, a borrow counted as its owner's thread's — the node it views is that
+thread's own, or a frozen payload's, which holds no cell share (`RdFree`). -/
+
+/-- A slice of shares is an A2 type ... -/
+theorem slice_share_ok {t : Ty} (h : t.ok = true) (hv : t.holdsView = false) : (Ty.slice t).ok = true := by
+  simp [Ty.ok, h, hv]
+
+/-- ... so a view of a `Vec` of `Arc`s (or of locks, or of library handles) is
+    typed (`slice_from_vec`) ... -/
+theorem view_share {Γ : Ctx} {F : List Var} {y : Var} {E : Entry} {t : Ty} (hy : Γ y = some E)
+    (hl : E.live = true) (hty : E.ty = .vec t) (hv : t.holdsView = false) :
+    RhsT Γ F (.view y) ⟨.slice t, .bor, true, derive y E .view, E.held, false, false⟩ Γ :=
+  RhsT.view hy hl hty hv
+
+/-- ... and no crossing takes it: a slice holds a view, so it is no spawn's
+    argument (`SpawnOK`), no lock's, channel's or `Arc`'s value
+    (`Ty.ok (lk _)`, `RhsT.arcNew`), and no global (`Ty.sync`). -/
+theorem slice_not_send (t : Ty) : (Ty.slice t).holdsView = true := rfl
+
 /-! ### A3.5b: closures across threads, as A2 types them
 
 A closure's captures are not part of its type, so its type says what its
@@ -1629,8 +1659,8 @@ inductive TraitBound where
 deriving DecidableEq, Repr
 
 /-- The class of a trait object whose trait has the bound `b` (A3.5b's
-    `Cross`).  No bound is `bare`: that class (no share at all, a slice's
-    element's) is the model's, not a trait's. -/
+    `Cross`).  No bound is `bare`: that class (no share at all) is the
+    model's, not a trait's. -/
 def TraitBound.cross : TraitBound → Cross
   | .none => .any
   | .send => .send

@@ -223,6 +223,48 @@ theorem SharesOK.pkg' {m : Mem} {fs : List Nat} {te : Ty} {ms : List Nat} {q : C
   · exact SharesOK.of_noArc (hq.2.2 hs)
   · exact h.pkg hs
 
+/-- A3.1's slices of shares: a part of a well-formed tree holds, at its own
+    type, the shares the tree holds (a share is a leaf, typed where it lies). -/
+theorem SharesIn.sub {B : Nat → Option Blk} {n T : Val} (hs : Sub n T) :
+    ∀ {τ : Ty}, WFv τ T → SharesIn B τ T → ∃ σ, WFv σ n ∧ SharesIn B σ n := by
+  induction hs with
+  | refl => exact fun hw hsh => ⟨_, hw, hsh⟩
+  | child he _ ih =>
+    intro τ hw hsh
+    cases hw with
+    | node hes => exact ih (hes _ he) (fun u k p ha => hsh u k p (.child he ha))
+  | fst _ ih =>
+    intro τ hw hsh
+    cases hw with
+    | pair ha _ => exact ih ha (fun u k p h => hsh u k p (.fst h))
+  | snd _ ih =>
+    intro τ hw hsh
+    cases hw with
+    | pair _ hb => exact ih hb (fun u k p h => hsh u k p (.snd h))
+  | inl _ ih =>
+    intro τ hw hsh
+    cases hw with
+    | inl ha => exact ih ha (fun u k p h => hsh u k p (.inl h))
+  | inr _ ih =>
+    intro τ hw hsh
+    cases hw with
+    | inr hb => exact ih hb (fun u k p h => hsh u k p (.inr h))
+  | pkg _ ih =>
+    intro τ hw hsh
+    cases hw with
+    | @pkg _ _ _ q _ _ hwe hq =>
+      cases hqs : q.shares
+      · exact ih hwe (fun _ _ _ ha => by have h := ha.hasArc; rw [hq.2.2 hqs] at h; cases h)
+      · exact ih hwe (fun u k p h => hsh u k p (.pkg h hqs))
+
+/-- ... so a node found in a well-formed tree holds the shares the tree's type
+    says, at its own type `vec t`. -/
+theorem SharesOK.sub_node {m : Mem} {τ : Ty} {T : Val} (hw : WFv τ T) (hsh : SharesOK m τ T)
+    {t : Ty} {c d : Nat} {es : List Val} (hs : Sub (.node t c d es) T) :
+    SharesOK m (.vec t) (.node t c d es) := by
+  obtain ⟨σ, hwσ, hshσ⟩ := SharesIn.sub hs hw hsh
+  cases hwσ; exact hshσ
+
 /-- A3.1 (with #295): a node whose elements are the old node's or hold
     shares that name blocks, where the blocks are as they were. -/
 theorem SharesOK.node_mem {m m' : Mem} {t t1 t2 : Ty} {c d c' d' : Nat} {es es' : List Val}

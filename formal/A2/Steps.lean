@@ -1464,9 +1464,9 @@ theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry
   | «at» hy hl ht hx =>
     cases he with
     | «at» hn hvec _ => exact ⟨RhsPost.same hi, out_at hi hy hl ht hn hvec⟩
-  | view hy hl ht hhv hha =>
+  | view hy hl ht hhv =>
     cases he with
-    | view hvec => exact ⟨RhsPost.same hi, out_view hi hy hl ht hhv hha hvec⟩
+    | view hvec => exact ⟨RhsPost.same hi, out_view hi hy hl ht hhv hvec⟩
   | sat hy hl ht hx =>
     cases he with
     | sat hn hv _ _ _ hda => exact ⟨RhsPost.same hi, out_sat hi hy hl ht hn hv hda⟩
