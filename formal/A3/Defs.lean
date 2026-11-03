@@ -104,6 +104,38 @@ theorem lk_spawnOK {t : Ty} (h : (Ty.lk t).ok = true) : (Ty.lk t).holdsView = fa
   simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true] at h
   exact h.1.2
 
+/-- A3.5, Send: a library handle (a cell share) crosses to a new thread as a
+    lock share does, `SpawnOK`'s question unchanged; what it may not do is
+    leave an owner behind, which the crossing check asks at run time
+    (`SendCheck`). -/
+theorem cell_spawnOK {t : Ty} (h : (Ty.cell t).ok = true) : (Ty.cell t).holdsView = false := by
+  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true] at h
+  exact h.1.2
+
+/-- A3.5, Sync: no shared payload holds a library handle.  A type that holds
+    no share holds no cell share, so a lock's payload (`RhsT.lockNew`,
+    `Ty.ok (lk t)`) and a channel's element (`RhsT.chanSend`) hold none;
+    an `Arc`'s payload holds none by `RhsT.arcNew`'s own premise. -/
+theorem _root_.A2.Ty.hasCell_of_hasArc {t : Ty} (h : t.hasArc = false) : t.hasCell = false := by
+  induction t with
+  | int => rfl
+  | vec t ih => exact ih h
+  | slice t ih => exact ih h
+  | prod a b iha ihb =>
+    simp only [Ty.hasArc, Bool.or_eq_false_iff] at h
+    simp [Ty.hasCell, iha h.1, ihb h.2]
+  | sum a b iha ihb =>
+    simp only [Ty.hasArc, Bool.or_eq_false_iff] at h
+    simp [Ty.hasCell, iha h.1, ihb h.2]
+  | fn _ => cases h
+  | arc _ _ => cases h
+  | lk _ _ => cases h
+  | cell _ _ => cases h
+
+theorem lk_noCell {t : Ty} (h : (Ty.lk t).ok = true) : t.hasCell = false := by
+  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true] at h
+  exact Ty.hasCell_of_hasArc h.2
+
 /-- Moving the arguments out of the spawner: each owns its value, and its
     slot is left empty (its drop flag clear). -/
 inductive MoveArgs : (Var → Option Slot) → List Var → List Val → (Var → Option Slot) → Prop
@@ -121,6 +153,17 @@ def spawnSt (fn : Fn) (vs : List Val) : Var → Option Slot := fun v =>
 def SpawnRedex (spawn : Nat → Bool) (s : Stmt) : Prop :=
   ∃ K x f args k, Redex s K (.letcall x f args k) ∧ spawn f = true
 
+/-- **A3.5, the crossing check** (`mem_send_check`, docs/MEMORY.md §6.5): a
+    library handle whose copies are one state (a cell) may cross only with
+    every other owner of that state.  For every cell a moved value holds a
+    share of, no slot the spawner keeps holds one.  A lent cell share is no
+    share (`lendOf`), so the slots that hold one are its owners: the check
+    is the runtime's count of the places in the moved values that hold each
+    cell's block against its owners.  (A cell share lies in no payload, by
+    typing, so what the values hold is what they reach.) -/
+def SendCheck (vs : List Val) (st' : Var → Option Slot) : Prop :=
+  ∀ k, (∃ v ∈ vs, Sub (.cell k) v) → ∀ y o w, st' y = some ⟨o, some w⟩ → ¬ Sub (.cell k) w
+
 /-- One step of the configuration. -/
 inductive TStep (P : Prog) (spawn : Nat → Bool) : Cfg → Cfg → Prop
   /-- A thread takes one of A2's steps, unless its next step is a spawn;
@@ -136,11 +179,20 @@ inductive TStep (P : Prog) (spawn : Nat → Bool) : Cfg → Cfg → Prop
   | spawn {C : Cfg} {i : Nat} {t : Thread} {K : Stmt → Stmt} {x f : Nat} {args : List Var}
       {k : Stmt} {fn : Fn} {vs : List Val} {st' : Var → Option Slot} :
       C.ths[i]? = some t → Redex t.s K (.letcall x f args k) → spawn f = true → P[f]? = some fn →
-      t.st x = none → MoveArgs t.st args vs st' →
+      t.st x = none → MoveArgs t.st args vs st' → SendCheck vs st' →
       TStep P spawn C
         { C with ths := C.ths.set i ⟨upd st' x (some ⟨false, some (.int 0)⟩), t.nv, K (.scope x k)⟩ ++
                         [⟨spawnSt fn vs, fn.nvars,
                           wrapParams fn.params 0 0 (.scope fn.params.length fn.body)⟩] }
+  /-- A3.5: a spawn whose crossing check fails panics in the spawner, as
+      `mem_send_check` calls `nurl_panic`: no thread is made and nothing
+      moves, and the spawner's next step is A2's panic, which unwinds its
+      scopes (or a `recover` frame catches it). -/
+  | spawnFail {C : Cfg} {i : Nat} {t : Thread} {K : Stmt → Stmt} {x f : Nat} {args : List Var}
+      {k : Stmt} {fn : Fn} {vs : List Val} {st' : Var → Option Slot} :
+      C.ths[i]? = some t → Redex t.s K (.letcall x f args k) → spawn f = true → P[f]? = some fn →
+      t.st x = none → MoveArgs t.st args vs st' → ¬ SendCheck vs st' →
+      TStep P spawn C { C with ths := C.ths.set i ⟨t.st, t.nv, K (.seq .panic (.letcall x f args k))⟩ }
 
 inductive Reach (P : Prog) (spawn : Nat → Bool) : Cfg → Cfg → Prop
   | refl {C : Cfg} : Reach P spawn C C
@@ -286,12 +338,46 @@ inductive CTouch (P : Prog) (C : Cfg) (i : Nat) (t : Thread) : Nat → Bool → 
   | step {a : Nat} {w : Bool} : Touch P (C.view t) t.s a w → CTouch P C i t a w
   | sweep {a : Nat} : SweepFrees P C i t a → CTouch P C i t a true
 
-/-- A race: two threads whose next steps touch one address, one of them
-    writing it.  (A3.4's `Atomic` steps are atomic and are no race; so is a
-    share's count, which is ghost here.) -/
-def Race (P : Prog) (C : Cfg) : Prop :=
+/-- Two threads whose next steps touch one address, one of them writing it.
+    (A3.4's `Atomic` steps are atomic and are no race; so is a share's
+    count, which is ghost here.) -/
+def AddrRace (P : Prog) (C : Cfg) : Prop :=
   ∃ (i j : Nat) (ti tj : Thread) (a : Nat) (w : Bool), i ≠ j ∧ C.ths[i]? = some ti ∧
     C.ths[j]? = some tj ∧ CTouch P C i ti a true ∧ CTouch P C j tj a w
+
+/-- A3.5: the keys of the lock scopes a statement is inside of (its spine's
+    `scopeL` frames, innermost last). -/
+def _root_.A2.Stmt.lkeys : Stmt → List Nat
+  | .seq a _ => a.lkeys
+  | .scope _ s => s.lkeys
+  | .scopeD _ _ s => s.lkeys
+  | .rbind _ s => s.lkeys
+  | .frozen _ s => s.lkeys
+  | .catchR _ _ s => s.lkeys
+  | .scopeL k _ _ s => k :: s.lkeys
+  | _ => []
+
+/-- A3.5: thread `t`'s next step changes the state of cell `k` (a library
+    handle's, which the library changes in place with no lock): it checks the
+    state out through a share of it (`withCell`), or it runs inside a
+    check-out of it, holding a share of it (the one the check-out is
+    through, which `withLock`'s premises keep in its binding for the whole
+    body).  Such a step writes the state wherever it is: the model checks it
+    out as a lock's payload, so two threads at once would be serialized
+    there, where the runtime's copies write one memory with no lock; so a
+    step on a cell is not an address's touch, but a race of its own. -/
+def CellOp (t : Thread) (k : Nat) : Prop :=
+  (∃ K a x s o, Redex t.s K (.withLock a x s) ∧ t.st a = some ⟨o, some (.cell k)⟩) ∨
+  (k ∈ t.s.lkeys ∧ ∃ y o v, t.st y = some ⟨o, some v⟩ ∧ Sub (.cell k) v)
+
+/-- A3.5: two threads whose next steps change one cell's state. -/
+def CellRace (C : Cfg) : Prop :=
+  ∃ (i j : Nat) (ti tj : Thread) (k : Nat), i ≠ j ∧ C.ths[i]? = some ti ∧ C.ths[j]? = some tj ∧
+    CellOp ti k ∧ CellOp tj k
+
+/-- A race: two threads whose next steps touch one address, one of them
+    writing it (`AddrRace`), or (A3.5) change one cell's state (`CellRace`). -/
+def Race (P : Prog) (C : Cfg) : Prop := AddrRace P C ∨ CellRace C
 
 /-! ### The claims -/
 
@@ -314,7 +400,9 @@ def NoLeak (P : Prog) (spawn : Nat → Bool) (s : Stmt) (nv : Nat) : Prop :=
     spawned functions take only view-free `sink` parameters, is memory-safe,
     race-free and leak-free on every interleaving.  Milestone A3.0 proves it,
     and A3.1 for A2 with `Arc` (shares of view-free payloads, collected by
-    reachability); A3.2–A3.6 extend the language and restate it. -/
+    reachability); A3.2–A3.6 extend the language and restate it (A3.5: a
+    spawn runs the crossing check, `SendCheck`, and a race includes two
+    threads changing one library handle's state, `CellRace`). -/
 def Claim : Prop :=
   ∀ (P : Prog) (spawn : Nat → Bool) (s : Stmt) (Δ : Ctx) (nv : Nat),
     ProgOK P → ProgCodes P → SpawnOK P spawn →

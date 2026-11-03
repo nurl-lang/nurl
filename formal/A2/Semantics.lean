@@ -97,6 +97,8 @@ inductive Frees : (Nat → Bool) → Val → (Nat → Bool) → Prop
   | arc {a : Nat → Bool} {k : Nat} {p : Val} : Frees a (.arc k p) a
   /-- A3.2: so does a lock share. -/
   | lk {a : Nat → Bool} {k : Nat} : Frees a (.lk k) a
+  /-- A3.5: and a cell share. -/
+  | cell {a : Nat → Bool} {k : Nat} : Frees a (.cell k) a
   | node {a a' : Nat → Bool} {t : Ty} {c d : Nat} {es : List Val} :
       a c = true → upd a c false d = true →
       FreesL (upd (upd a c false) d false) es a' →
@@ -142,10 +144,14 @@ def Val.share (k : Nat) : Option Val → Val
   | some p => .arc k p
   | none => .lk k
 
+/-- `v` holds a share of block `k`: an `arc` or a lock share (`Val.share`), or
+    (A3.5) a cell share. -/
+def ShareIn (k : Nat) (v : Val) : Prop := (∃ p, Sub (Val.share k p) v) ∨ Sub (.cell k) v
+
 /-- `v` refers to block `k` of `B`: it holds a share of it, or a handle whose
     address lies in its payload. -/
 def Refers (B : Nat → Option Blk) (v : Val) (k : Nat) : Prop :=
-  (∃ p, Sub (Val.share k p) v) ∨ ∃ bl, B k = some bl ∧
+  ShareIn k v ∨ ∃ bl, B k = some bl ∧
     ((∃ c, Sub (.href c) v ∧ c ∈ bl.rd.ids) ∨ ∃ d o l, Sub (.view d o l) v ∧ d ∈ bl.rd.ids)
 
 /-- The blocks of `B` reached from the values `R` (the slots' values), through
@@ -201,6 +207,8 @@ inductive WFv : Ty → Val → Prop
   | arc {t : Ty} {k : Nat} {p : Val} : WFv t p → t.holdsView = false → WFv (.arc t) (.arc k p)
   /-- A3.2: a lock share; its block, in memory, is a lock block of its type. -/
   | lk {t : Ty} {k : Nat} : WFv (.lk t) (.lk k)
+  /-- A3.5: a cell share; its block is a lock block of its type too. -/
+  | cell {t : Ty} {k : Nat} : WFv (.cell t) (.cell k)
 
 /-- A3.2: what `x`'s slot can give back to a lock whose payload is a `t`:
     the tree it owns, or, for an integer payload, the integer it holds (an
@@ -255,13 +263,17 @@ inductive Eval (m : Mem) : Expr → Nat → Prop
   | isr {x : Var} {o : Bool} {v : Val} : m.st x = some ⟨o, some (.inr v)⟩ → Eval m (.isl x) 0
 
 /-- An element read out of a buffer: an element `Vec` is lent, as `href`;
-    a struct is copied with what it holds lent. -/
+    a struct is copied with what it holds lent.  A3.5: a cell share lent is
+    no share (`.int 0`): a borrow of a library handle reads nothing of its
+    state and changes none of it, and is never an owner (the runtime's
+    crossing check counts owners). -/
 def lendOf : Val → Val
   | .node _ c _ _ => .href c
   | .pair v w => .pair (lendOf v) (lendOf w)
   | .inl v => .inl (lendOf v)
   | .inr v => .inr (lendOf v)
   | .pkg fs te ms v cs => .pkg fs te ms (lendOf v) cs
+  | .cell _ => .int 0
   | v => v
 
 mutual
@@ -288,6 +300,7 @@ def Val.owns : Val → Bool
   | .pkg .. => true
   | .arc _ _ => true   -- A3.1: a share is owned; dropping it is what counts
   | .lk _ => true      -- A3.2: so is a lock share
+  | .cell _ => true    -- A3.5: and a cell share
   | _ => false
 
 /-- Handing a value on: an owner gives up its value, anything else is
@@ -387,6 +400,17 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
       of its block. -/
   | lockClone {a : Var} {o : Bool} {k : Nat} :
       m.st a = some ⟨o, some (.lk k)⟩ → EvalR m (.lockClone a) (.ok (.lk k) true m)
+  /-- A3.5: a library handle's constructor: a new lock block holds the value
+      taken from `y`, at a key taken from `nid`; the result is its one cell
+      share. -/
+  | cellNew {t : Ty} {y : Var} {v : Val} {m1 : Mem} :
+      TakeVal m y v m1 → m1.blk m1.nid = none →
+      EvalR m (.cellNew t y)
+        (.ok (.cell m1.nid) true
+          { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, .lock, some v⟩) })
+  /-- A3.5: a copy of the cell share `a` holds: a new share of its block. -/
+  | cellClone {a : Var} {o : Bool} {k : Nat} :
+      m.st a = some ⟨o, some (.cell k)⟩ → EvalR m (.cellClone a) (.ok (.cell k) true m)
   /-- A3.4: an `Atomic`'s operation: one step on the word, the integer
       payload of the lock block `a` shares; the answer is an integer.  (A
       lock block of an integer whose payload a `withLock` has checked out
@@ -502,6 +526,8 @@ def Rhs.rename (ρ : Var → Var) : Rhs → Rhs
   | .chanRecv w a => .chanRecv w (ρ a)
   | .chanClose a => .chanClose (ρ a)
   | .rwRead a => .rwRead (ρ a)
+  | .cellNew t y => .cellNew t (ρ y)
+  | .cellClone a => .cellClone (ρ a)
 
 def Edit.rename (ρ : Var → Var) : Edit → Edit
   | .push y => .push (ρ y)
@@ -648,12 +674,24 @@ def RBlocked (m : Mem) : Rhs → Prop
   | .rwRead a => ∃ o k t, m.st a = some ⟨o, some (.lk k)⟩ ∧ m.blk k = some ⟨t, .lock, none⟩
   | _ => False
 
+/-- A3.2/A3.5: `a` holds a share of the lock block `k`: a lock share, or a
+    cell share (a library handle's state, which a `withCell` checks out as a
+    `withLock` does a lock's). -/
+def LockAt (m : Mem) (a : Var) (k : Nat) : Prop :=
+  ∃ o, m.st a = some ⟨o, some (.lk k)⟩ ∨ m.st a = some ⟨o, some (.cell k)⟩
+
+/-- `LockAt` reads the slots only. -/
+theorem LockAt.of_st {m m' : Mem} (hst : m'.st = m.st) {a : Var} {k : Nat} (h : LockAt m a k) :
+    LockAt m' a k := by
+  obtain ⟨o, h⟩ := h
+  exact ⟨o, by rw [hst]; exact h⟩
+
 /-- A3.3: a statement whose next step waits, itself (`Blocked` looks
     through the scopes around one): a `withLock` of a lock a writer has
     checked out or a reader views, or a binding or an assignment whose
     right-hand side waits. -/
 def Waits (m : Mem) : Stmt → Prop
-  | .withLock a _ _ => ∃ o k t, m.st a = some ⟨o, some (.lk k)⟩ ∧
+  | .withLock a _ _ => ∃ k t, LockAt m a k ∧
       (m.blk k = some ⟨t, .lock, none⟩ ∨ HasView m.blk k)
   | .letv _ r _ => RBlocked m r
   | .assign _ r => RBlocked m r
@@ -816,9 +854,10 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
       to `x` (an owner moves in, an integer is a plain integer binding, as
       `unpair` binds a field), and the body runs in `x`'s lock scope.  A
       block whose payload is checked out has no step: the thread waits
-      (`Blocked`). -/
-  | withLock {m : Mem} {a x : Var} {s : Stmt} {o : Bool} {k : Nat} {t : Ty} {v : Val} :
-      m.st a = some ⟨o, some (.lk k)⟩ → m.blk k = some ⟨t, .lock, some v⟩ → m.st x = none →
+      (`Blocked`).  A3.5: so does a cell's, through a cell share
+      (`withCell`). -/
+  | withLock {m : Mem} {a x : Var} {s : Stmt} {k : Nat} {t : Ty} {v : Val} :
+      LockAt m a k → m.blk k = some ⟨t, .lock, some v⟩ → m.st x = none →
       ¬ HasView m.blk k →
       Step P m (.withLock a x s)
         (.ok ({ m with blk := upd m.blk k (some ⟨t, .lock, none⟩) }.set x ⟨v.owns, some v⟩)
@@ -858,7 +897,7 @@ inductive Steps0 (P : Prog) : Mem → Stmt → Res → Prop
     freedom, which is not claimed.)  A3.4: or a right-hand side waits
     (`RBlocked`). -/
 def Blocked (m : Mem) : Stmt → Prop
-  | .withLock a _ _ => ∃ o k t, m.st a = some ⟨o, some (.lk k)⟩ ∧
+  | .withLock a _ _ => ∃ k t, LockAt m a k ∧
       (m.blk k = some ⟨t, .lock, none⟩ ∨ HasView m.blk k)
   | .letv _ r _ => RBlocked m r
   | .assign _ r => RBlocked m r

@@ -96,6 +96,7 @@ theorem Frees.restrict {a a' : Nat → Bool} {T : Val} (h : Frees a T a') {a2 : 
   | .view => exact .view
   | .arc => exact .arc
   | .lk => exact .lk
+  | .cell => exact .cell
   | @Frees.node _ _ _ c d _ hc hd hl =>
     have hdc : d ≠ c := by
       intro e; subst e; simp [upd] at hd
@@ -175,8 +176,10 @@ theorem EvalR.restrict {m : Mem} {r : Rhs} {res : RRes} (h : EvalR m r res) {a2 
   | pack h1 => exact ⟨_, .pack (TakeVal.restrict h1 a2), rfl, rfl, rfl⟩
   | arcNew h1 hfr => exact ⟨_, .arcNew (TakeVal.restrict h1 a2) hfr, rfl, rfl, rfl⟩
   | lockNew h1 hfr => exact ⟨_, .lockNew (TakeVal.restrict h1 a2) hfr, rfl, rfl, rfl⟩
+  | cellNew h1 hfr => exact ⟨_, .cellNew (TakeVal.restrict h1 a2) hfr, rfl, rfl, rfl⟩
   | arcClone hy => exact ⟨_, .arcClone hy, rfl, rfl, rfl⟩
   | lockClone hy => exact ⟨_, .lockClone hy, rfl, rfl, rfl⟩
+  | cellClone hy => exact ⟨_, .cellClone hy, rfl, rfl, rfl⟩
   | atomic hy hk h1 h2 hnv =>
     exact ⟨_, .atomic hy hk (Eval.restrict h1 hav hp) (Eval.restrict h2 hav hp) hnv, rfl, rfl, rfl⟩
   -- A3.4: the queue's addresses are the channel's payload's; what a send to a

@@ -26,6 +26,7 @@ theorem lendOf_ids : (v : Val) → (lendOf v).ids = []
   | .pkg _ _ _ a _ => by simp only [lendOf, Val.ids, lendOf_ids a]
   | .arc _ _ => rfl
   | .lk _ => rfl
+  | .cell _ => rfl
 
 /-- A slot that is owned, or borrowed with an address-free value. -/
 def SlotFree (sl : Slot) : Prop := sl.own = false → ∀ v, sl.val = some v → v.ids = []
@@ -98,8 +99,10 @@ theorem EvalR.borFree {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r
   | pack h1 => exact ⟨(TakeVal.borFree h1 hb).1, fun h => by cases h⟩
   | arcNew h1 _ => exact ⟨((TakeVal.borFree h1 hb).1).of_st rfl, fun h => by cases h⟩
   | lockNew h1 _ => exact ⟨((TakeVal.borFree h1 hb).1).of_st rfl, fun h => by cases h⟩
+  | cellNew h1 _ => exact ⟨((TakeVal.borFree h1 hb).1).of_st rfl, fun h => by cases h⟩
   | arcClone _ => exact ⟨hb, fun h => by cases h⟩
   | lockClone _ => exact ⟨hb, fun h => by cases h⟩
+  | cellClone _ => exact ⟨hb, fun h => by cases h⟩
   | rwRead _ _ _ => exact ⟨hb.of_st rfl, fun h => by cases h⟩
   | atomic _ _ _ _ => exact ⟨hb.of_st rfl, fun _ => rfl⟩
   | chanSend _ h1 _ _ _ => exact ⟨((TakeVal.borFree h1 hb).1).of_st rfl, fun _ => rfl⟩

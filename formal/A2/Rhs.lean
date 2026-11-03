@@ -150,6 +150,7 @@ theorem ValOK.grow {m m' : Mem} (hst : m'.st = m.st) (hb : BlkLe m.blk m'.blk) {
     obtain ⟨dep, hd, hla⟩ := hl
     exact .arc (ArcBlk.grow hb h) hw hv ⟨dep, hd, hla.keep (RootKeep.of_st hst hb)⟩
   | lk h => obtain ⟨o, ho⟩ := h; exact .lk (hb.lock ho)
+  | cell => exact .cell
   | int => exact .int
   | href h =>
     obtain ⟨dep, hd, ha⟩ := h
@@ -297,6 +298,7 @@ theorem names_lendOf : (v : Val) → ∀ x ∈ (lendOf v).names, x ∈ v.names
     exact h.imp id (names_lendOf a x)
   | .arc _ _ => fun _ h => h
   | .lk _ => fun _ h => h
+  | .cell _ => fun _ h => by simp [lendOf, Val.names] at h
 
 theorem sub_lendOf : (v : Val) → ∀ {w}, Sub w (lendOf v) → ∃ w0, Sub w0 v ∧ lendOf w0 = w
   | .int _, _, h => by
@@ -320,6 +322,10 @@ theorem sub_lendOf : (v : Val) → ∀ {w}, Sub w (lendOf v) → ∃ w0, Sub w0 
     · exact ⟨_, Sub.refl _, h.symm⟩
     · simp only [lendOf] at hc; cases hc
   | .lk _, _, h => by
+    rcases h.cases' with h | ⟨e, hc, _⟩
+    · exact ⟨_, Sub.refl _, h.symm⟩
+    · simp only [lendOf] at hc; cases hc
+  | .cell _, _, h => by
     rcases h.cases' with h | ⟨e, hc, _⟩
     · exact ⟨_, Sub.refl _, h.symm⟩
     · simp only [lendOf] at hc; cases hc
@@ -429,6 +435,7 @@ theorem elemE_named {Γ : Ctx} {y : Var} {E : Entry} (h : NameOK Γ E) (t : Ty) 
   | fn ms => show DepsNamed Γ (derive y E .inner ++ E.held); exact (derive_named h rfl).append h.held
   | arc a => show DepsNamed Γ (derive y E .inner ++ E.held); exact (derive_named h rfl).append h.held
   | lk a => show DepsNamed Γ (derive y E .inner ++ E.held); exact (derive_named h rfl).append h.held
+  | cell a => show DepsNamed Γ (derive y E .inner ++ E.held); exact (derive_named h rfl).append h.held
 
 theorem projDeps_named {Γ : Ctx} {y : Var} {E : Entry} (h : NameOK Γ E) : DepsNamed Γ (projDeps y E) := by
   unfold projDeps
@@ -540,6 +547,7 @@ theorem WFv.noView_pkg {τ : Ty} {v : Val} (hw : WFv τ v) (hhv : τ.holdsView =
   | pkg _ _ => simp [Ty.holdsView] at hhv
   | arc _ _ => cases hs
   | lk => cases hs
+  | cell => cases hs
 
 /-- A3.1: a payload holds no package. -/
 theorem MInv.pay_pkgs {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {k : Nat} {bl : Blk} (hk : m.blk k = some bl)
@@ -762,6 +770,15 @@ theorem out_borrowWhole {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Ent
           | lk h1 => exact .lk h1
         · rw [hv] at hw; cases hw
       · rw [ht] at hty; cases hty
+    | cell a =>
+      rcases hroot with h | ⟨_, t, ht⟩
+      · obtain ⟨w, hw, hok⟩ := hi.bor_val hy hl (by rw [h]; rfl)
+        rcases hv with hv | ⟨_, _, _, _, hv, _⟩
+        · rw [slot_val_eq hv hw]; rw [hty] at hok
+          cases hok with
+          | cell => exact .cell
+        · rw [hv] at hw; cases hw
+      · rw [ht] at hty; cases hty
   names hn := by
     have h := hi.names y E hy hl (hn.imp id fun h => by cases h)
     show DepsNamed Γ (derive y E .self ++ E.held); exact (derive_named h rfl).append h.held
@@ -795,6 +812,7 @@ theorem lend_valOK' {m : Mem} {H : List Dep} {τ : Ty} {e : Val} (hw : WFv τ e)
   | int => intro _ P _ _ _ _ _ _; exact .int
   | arc hwp hvf _ => intro _ P _ ha _ _ hsh _; exact .arc hsh.here hwp hvf (ha _ _ (Top.refl _))
   | lk => intro _ P _ ha _ _ hsh _; exact .lk hsh.lk
+  | cell => intro _ P _ ha _ _ hsh _; exact .cell
   | @view t d o l =>
     intro _ P _ _ _ _ _ hs
     obtain ⟨d', o', l', hv, dep, hd, ha⟩ := hs t rfl t _ ViewIn.here
@@ -866,6 +884,7 @@ theorem ValOK.lend {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m �
   | int => rfl
   | arc => rfl
   | lk => rfl
+  | cell => rfl
   | href => rfl
   | view => rfl
   | pair _ _ ihx ihy => simp [lendOf, ihx, ihy]
@@ -895,6 +914,7 @@ theorem out_at {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t : 
     | fn ms => exact this
     | arc a => exact this
     | lk a => exact this
+    | cell a => exact this
   wf hn' := by
     rw [bor_vdeps _ (elemE_mode ..)]
     have hnint : E.ty ≠ .int := by rw [hty]; simp
@@ -907,6 +927,7 @@ theorem out_at {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t : 
     | fn ms => exact wf_append (wf_derive hi hy hl hnint _) (wf_held (E := E) hi hy hl hnint)
     | arc a => exact wf_append (wf_derive hi hy hl hnint _) (wf_held (E := E) hi hy hl hnint)
     | lk a => exact wf_append (wf_derive hi hy hl hnint _) (wf_held (E := E) hi hy hl hnint)
+    | cell a => exact wf_append (wf_derive hi hy hl hnint _) (wf_held (E := E) hi hy hl hnint)
   valOwn h := by rw [elemE_mode] at h; cases h
   valBor _ := by
     obtain ⟨c0, d0, es0, hvec0, hw, hvs, hroot, hbor, hns, hshv⟩ := hi.vec_node hy hl hty
@@ -962,6 +983,9 @@ theorem out_at {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t : 
     | lk a =>
       cases hwe with
       | lk => exact .lk (hshv.elem hmem).lk
+    | cell a =>
+      cases hwe with
+      | cell => exact .cell
   names hn := elemE_named (hi.names y E hy hl (Or.inl (by rw [hty]; simp))) t
   held := by
     obtain ⟨c0, d0, es0, hvec0, hw, _, _, _, hns, hshv⟩ := hi.vec_node hy hl hty
@@ -1025,6 +1049,7 @@ theorem out_sat {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t :
     | fn ms => exact this.1.1
     | arc a => simp [Ty.hasArc] at this
     | lk => simp [Ty.hasArc] at this
+    | cell => simp [Ty.hasArc] at this
   wf hn' := by
     rw [bor_vdeps _ (elemE_mode ..)]
     have hnint : E.ty ≠ .int := by rw [hty]; simp
@@ -1037,6 +1062,7 @@ theorem out_sat {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t :
     | fn ms => exact wf_append (wf_derive hi hy hl hnint _) (wf_held (E := E) hi hy hl hnint)
     | arc a => exact wf_append (wf_derive hi hy hl hnint _) (wf_held (E := E) hi hy hl hnint)
     | lk a => exact wf_append (wf_derive hi hy hl hnint _) (wf_held (E := E) hi hy hl hnint)
+    | cell a => exact wf_append (wf_derive hi hy hl hnint _) (wf_held (E := E) hi hy hl hnint)
   valOwn h := by rw [elemE_mode] at h; cases h
   valBor _ := by
     obtain ⟨d0, o0, l0, c0, es0, hs0, hda0, _, _, hw, hroot, hbor⟩ := hi.slice_node hy hl hty
@@ -1099,6 +1125,7 @@ theorem out_sat {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t :
         (by rw [hty]; rfl)
     | arc a => simp [Ty.hasArc] at hok
     | lk => simp [Ty.hasArc] at hok
+    | cell => simp [Ty.hasArc] at hok
   names hn := elemE_named (hi.names y E hy hl (Or.inl (by rw [hty]; simp))) t
   held := by
     obtain ⟨d0, o0, l0, c0, es0, hs0, hda0, _, _, hw, _, _⟩ := hi.slice_node hy hl hty
@@ -1344,6 +1371,78 @@ theorem out_lockClone {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry
   have hok := hi.tyok ha; rw [hty] at hok
   simp only [Ty.ok, Bool.and_eq_true] at hok
   exact out_lkShare hok.1.1 (by simpa using hok.1.2) (by simpa using hok.2) hk
+
+/-- A3.5: a cell share, owned: it holds nothing, and names a lock block of
+    its type. -/
+theorem out_cellShare {m : Mem} {Γ : Ctx} {t : Ty} {k : Nat} (htok : t.ok = true)
+    (hvf : t.holdsView = false) (hna : t.hasArc = false) (hk : ∃ o, m.blk k = some ⟨t, .lock, o⟩) :
+    RhsOut m Γ ⟨.cell t, .own, true, [], [], false, false⟩ (.cell k) true where
+  own := rfl
+  mode := Or.inl rfl
+  live := rfl
+  tyok := by simp [Ty.ok, htok, hvf, hna]
+  wf _ r hr := by simp [roots, Entry.vdeps, Mode.ownSlot] at hr
+  valOwn _ := ⟨rfl, .cell, ViewsOK.none (show (Ty.cell t).holdsView = false from hvf) _ _,
+    List.nodup_nil, fun _ h => (nomatch h), fun _ _ _ _ h => (nomatch h), fun _ _ _ h => (by cases h),
+    fun _ h => (nomatch h)⟩
+  valBor h := nomatch h
+  names _ := DepsNamed.nil _
+  held := NamesIn.nil _ rfl
+  pkgs := PkgsOK.leaf (fun _ h => by cases h) (fun _ _ _ _ _ h => by cases h)
+  shares _ u k' p' ha := by cases ha; exact hk
+
+/-- A3.5: a cell share's block, through the owner that holds the share: a
+    lock block of its type.  (A lent cell share is no share, `ValOK.cell`.) -/
+theorem MInv.cell_val {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry} (ha : Γ a = some E)
+    (hl : E.live = true) {t : Ty} (hty : E.ty = .cell t) (hos : E.mode.ownSlot = true) {o : Bool} {k : Nat}
+    (hv : m.st a = some ⟨o, some (.cell k)⟩) : ∃ ob, m.blk k = some ⟨t, .lock, ob⟩ := by
+  obtain ⟨T, hT, _, _⟩ := hi.own_val ha hl hos
+  rw [hT] at hv; cases hv
+  have hsh := hi.shares a E _ _ ha hT rfl rfl
+  rw [hty] at hsh
+  exact hsh.cell
+
+/-- ... and the share itself: a live owner of type `cell t` holds one. -/
+theorem MInv.cell_slot {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry} (ha : Γ a = some E)
+    (hl : E.live = true) {t : Ty} (hty : E.ty = .cell t) (hos : E.mode.ownSlot = true) :
+    ∃ k, m.st a = some ⟨true, some (.cell k)⟩ := by
+  obtain ⟨T, hT, hwT, _⟩ := hi.own_val ha hl hos
+  rw [hty] at hwT
+  cases hwT; exact ⟨_, hT⟩
+
+/-- A3.5, `PNCounter_share a`: a new share of `a`'s cell. -/
+theorem out_cellClone {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry} (ha : Γ a = some E)
+    (hl : E.live = true) {t : Ty} (hty : E.ty = .cell t) (hos : E.mode.ownSlot = true) {o : Bool} {k : Nat}
+    (hv : m.st a = some ⟨o, some (.cell k)⟩) :
+    RhsOut m Γ ⟨.cell t, .own, true, [], [], false, false⟩ (.cell k) true := by
+  have hk := hi.cell_val ha hl hty hos hv
+  have hok := hi.tyok ha; rw [hty] at hok
+  simp only [Ty.ok, Bool.and_eq_true] at hok
+  exact out_cellShare hok.1.1 (by simpa using hok.1.2) (by simpa using hok.2) hk
+
+/-- A3.2/A3.5: the lock block a `withLock` checks out, through the share its
+    binding holds (`Entry.lockOf`): a lock block of the payload's type. -/
+theorem MInv.lockOf_val {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry} (ha : Γ a = some E)
+    (hl : E.live = true) {t : Ty} (hty : E.lockOf t) {k : Nat} (hv : LockAt m a k) :
+    ∃ ob, m.blk k = some ⟨t, .lock, ob⟩ := by
+  obtain ⟨o, hv | hv⟩ := hv
+  · rcases hty with hty | ⟨hty, hos⟩
+    · exact hi.lk_val ha hl hty hv
+    · obtain ⟨k', hk'⟩ := hi.cell_slot ha hl hty hos
+      rw [hk'] at hv; cases hv
+  · rcases hty with hty | ⟨hty, hos⟩
+    · obtain ⟨o', k', hk'⟩ := hi.lk_slot ha hl hty
+      rw [hk'] at hv; cases hv
+    · exact hi.cell_val ha hl hty hos hv
+
+/-- ... and the share: a live binding `lockOf t` holds one. -/
+theorem MInv.lockOf_slot {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry} (ha : Γ a = some E)
+    (hl : E.live = true) {t : Ty} (hty : E.lockOf t) : ∃ k, LockAt m a k := by
+  rcases hty with hty | ⟨hty, hos⟩
+  · obtain ⟨o, k, hv⟩ := hi.lk_slot ha hl hty
+    exact ⟨k, o, Or.inl hv⟩
+  · obtain ⟨k, hv⟩ := hi.cell_slot ha hl hty hos
+    exact ⟨k, true, Or.inr hv⟩
 
 /-- `arc_clone a`: a new share of `a`'s block. -/
 theorem out_arcClone {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry} (ha : Γ a = some E)
@@ -1856,6 +1955,21 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       | lk =>
         have hok := hi.tyok hy; rw [hty] at hok
         show RhsOut _ _ ⟨.lk a, .own, true, [], E.held, false, false⟩ _ true
+        refine ⟨rfl, Or.inl rfl, rfl, hok, fun _ r hr => ?_, fun _ => ⟨rfl, hsumwf, ?_, ?_,
+          ?_, ?_, hsfT.sub (Sub.child hemem (Sub.refl _)),
+          fun i hi' => hi.heap.notPay hT (hsube.subset hi')⟩, (fun h => by cases h),
+          fun _ => hNk _ (hHeld _ (List.Subset.refl _)), hNi, hPk, fun _ => (hshT.elem hemem).of_blk rfl⟩
+        · exact hwfH r (by simpa [roots, Entry.vdeps, Mode.ownSlot] using hr)
+        · exact hvsT.keep_except hT hsfT (fun s' w h => ViewIn.child hemem h) hkeepF ⟨_, hm1y⟩
+        · exact List.nodup_nil
+        · intro i hi'; nomatch hi'
+        · intro x U hU i hi'; nomatch hi'
+    | cell a =>
+      have hsumwf := hwe
+      cases hwe with
+      | cell =>
+        have hok := hi.tyok hy; rw [hty] at hok
+        show RhsOut _ _ ⟨.cell a, .own, true, [], E.held, false, false⟩ _ true
         refine ⟨rfl, Or.inl rfl, rfl, hok, fun _ r hr => ?_, fun _ => ⟨rfl, hsumwf, ?_, ?_,
           ?_, ?_, hsfT.sub (Sub.child hemem (Sub.refl _)),
           fun i hi' => hi.heap.notPay hT (hsube.subset hi')⟩, (fun h => by cases h),

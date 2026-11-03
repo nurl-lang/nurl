@@ -47,55 +47,49 @@ def NewThreadLemma (P : Prog) (spawn : Nat → Bool) : Prop :=
     ThreadOK P { alloc := union part (payPart B), nid := N, nv := fn.nvars, st := spawnSt fn vs, blk := B }
       (wrapParams fn.params 0 0 (.scope fn.params.length fn.body))
 
-theorem MoveArgs.slot {st st' : Var → Option Slot} {as : List Var} {vs : List Val}
-    (h : MoveArgs st as vs st') : ∀ y sl, st' y = some sl → st y = some sl ∨ sl = ⟨true, none⟩ := by
-  induction h with
-  | nil => exact fun _ _ h => .inl h
-  | cons _ _ ih =>
-    intro y sl hy
-    rcases ih y sl hy with h | h
-    · simp only [upd] at h
-      split at h
-      · cases h; exact .inr rfl
-      · exact .inl h
-    · exact .inr h
+/-- A3.5: a spawn whose crossing check fails (proved in `A3.SpawnOld`): the
+    spawner panics where the call was, over the same store. -/
+def SpawnFailLemma (P : Prog) : Prop :=
+  ∀ {m : Mem} {s : Stmt}, ThreadOK P m s → ∀ {K : Stmt → Stmt} {x f : Nat} {args : List Var} {k : Stmt},
+    Redex s K (.letcall x f args k) → ThreadOK P m (K (.seq .panic (.letcall x f args k)))
 
-/-- A3.1: a value a spawner's slot held is still there after the arguments
-    move out, or it is one of the moved ones. -/
-theorem MoveArgs.keep {st st' : Var → Option Slot} {as : List Var} {vs : List Val}
-    (h : MoveArgs st as vs st') :
-    ∀ y o v, st y = some ⟨o, some v⟩ → st' y = some ⟨o, some v⟩ ∨ v ∈ vs := by
-  induction h with
-  | nil => exact fun _ _ _ h => .inl h
-  | @cons st st' a as v vs ha _ ih =>
-    intro y o w hy
-    by_cases hya : y = a
-    · subst hya; rw [ha] at hy; cases hy; exact .inr (List.mem_cons_self ..)
-    · have hy' : upd st a (some ⟨true, none⟩) y = some ⟨o, some w⟩ := by
-        show (if y = a then _ else st y) = _
-        rw [ite_eq_right hya]; exact hy
-      rcases ih y o w hy' with h | h
-      · exact .inl h
-      · exact .inr (List.mem_cons_of_mem _ h)
+/-- **A3.5: a failed crossing keeps the configuration invariant**: one thread's
+    statement changes, and nothing else; its facts hold over the same view. -/
+theorem CInv.setStmt {P : Prog} {C : Cfg} (h : CInv P C) {i : Nat} {t : Thread} (hi : C.ths[i]? = some t)
+    {s' : Stmt} (hs : ∀ a, ThreadOK P (ownView C t a) t.s → ThreadOK P (ownView C t a) s') :
+    CInv P { C with ths := C.ths.set i ⟨t.st, t.nv, s'⟩ } := by
+  obtain ⟨ps, hc, hreach⟩ := h
+  have hilen : i < C.ths.length := (List.getElem?_eq_some_iff.mp hi).1
+  have hvals : ∀ v, ({ C with ths := C.ths.set i ⟨t.st, t.nv, s'⟩ } : Cfg).vals v ↔ C.vals v := by
+    intro v
+    constructor
+    · rintro ⟨j, tj, hj, x, o, hx⟩
+      simp only at hj
+      rw [list_set_get hilen] at hj
+      by_cases hij : i = j
+      · rw [ite_eq_left hij] at hj; cases hj; exact ⟨i, t, hi, x, o, hx⟩
+      · rw [ite_eq_right hij] at hj; exact ⟨j, tj, hj, x, o, hx⟩
+    · rintro ⟨j, tj, hj, x, o, hx⟩
+      by_cases hij : i = j
+      · subst hij; rw [hi] at hj; cases hj
+        exact ⟨i, ⟨t.st, t.nv, s'⟩, by simp only; rw [list_set_get hilen]; simp, x, o, hx⟩
+      · exact ⟨j, tj, by simp only; rw [list_set_get hilen, ite_eq_right hij]; exact hj, x, o, hx⟩
+  refine ⟨ps, ⟨by simp [hc.len], hc.all, hc.disj, hc.pay, hc.uniq, fun j tj b hj hb => ?_⟩, fun k bl hk => ?_⟩
+  · simp only at hj
+    rw [list_set_get hilen] at hj
+    by_cases hij : i = j
+    · rw [ite_eq_left hij] at hj; cases hj; subst hij
+      obtain ⟨hto, hbo⟩ := hc.ok i t b hi hb
+      exact ⟨hs b hto, hbo⟩
+    · rw [ite_eq_right hij] at hj; exact hc.ok j tj b hj hb
+  · exact (hreach k bl hk).mono (fun v hv => (hvals v).mpr hv) (BlkLe.refl _)
 
-theorem list_append_get {α : Type} {l : List α} {y : α} {j : Nat} :
-    (l ++ [y])[j]? = if j < l.length then l[j]? else if j = l.length then some y else none := by
-  by_cases h : j < l.length
-  · rw [ite_eq_left h, List.getElem?_append_left h]
-  · rw [ite_eq_right h, List.getElem?_append_right (by omega)]
-    by_cases he : j = l.length
-    · subst he; simp
-    · rw [ite_eq_right he]; simp; omega
-
-/-- A list with one element replaced and one appended, by index. -/
-theorem get_set_append {α : Type} {l : List α} {i : Nat} {x y : α} (hi : i < l.length) (j : Nat) :
-    (l.set i x ++ [y])[j]? =
-      if j < l.length then (if i = j then some x else l[j]?) else if j = l.length then some y else none := by
-  rw [list_append_get]
-  simp only [List.length_set]
-  by_cases hj : j < l.length
-  · rw [ite_eq_left hj, ite_eq_left hj, list_set_get hi]
-  · rw [ite_eq_right hj, ite_eq_right hj]
+/-- ... and so a spawn whose crossing check fails keeps it. -/
+theorem CInv.spawnFail_of {P : Prog} (hSF : SpawnFailLemma P) {C : Cfg} (h : CInv P C) {i : Nat}
+    {t : Thread} (hi : C.ths[i]? = some t) {K : Stmt → Stmt} {x f : Nat} {args : List Var} {k : Stmt}
+    (hK : Redex t.s K (.letcall x f args k)) :
+    CInv P { C with ths := C.ths.set i ⟨t.st, t.nv, K (.seq .panic (.letcall x f args k))⟩ } :=
+  h.setStmt hi fun _ hto => hSF hto hK
 
 /-- **A spawn keeps the configuration invariant.** -/
 theorem CInv.spawn_of {P : Prog} {spawn : Nat → Bool} (hSO : SpawnerLemma P spawn)
@@ -314,12 +308,15 @@ theorem CInv.spawn_of {P : Prog} {spawn : Nat → Bool} (hSO : SpawnerLemma P sp
           | some w => rw [hv] at hy; cases hy
       · rw [ite_eq_right hje] at hb; cases hb
 
-/-- **A3.0**, given the two frame lemmas and the spawn case's three. -/
+/-- **A3.0**, given the two frame lemmas and the spawn case's three (A3.5:
+    and a failed crossing's). -/
 theorem claim_from (hR : ∀ P, RestrictLemma P) (hL : ∀ P, LiftLemma P)
     (hSO : ∀ P spawn, ProgOK P → ProgCodes P → SpawnOK P spawn → SpawnerLemma P spawn)
     (hSA : ∀ P spawn, ProgOK P → SpawnOK P spawn → SpawnArgsLemma P spawn)
-    (hNT : ∀ P spawn, ProgOK P → ProgCodes P → SpawnOK P spawn → NewThreadLemma P spawn) : Claim :=
-  claim_of hR hL fun P spawn hP hPc hS {_ _ _ _ _ _ _ _ _ _ _} h hi hK hsp hf hx hmv =>
-    CInv.spawn_of (hSO P spawn hP hPc hS) (hSA P spawn hP hS) (hNT P spawn hP hPc hS) h hi hK hsp hf hx hmv
+    (hNT : ∀ P spawn, ProgOK P → ProgCodes P → SpawnOK P spawn → NewThreadLemma P spawn)
+    (hSF : ∀ P, SpawnFailLemma P) : Claim :=
+  claim_of hR hL (fun P spawn hP hPc hS {_ _ _ _ _ _ _ _ _ _ _} h hi hK hsp hf hx hmv =>
+    CInv.spawn_of (hSO P spawn hP hPc hS) (hSA P spawn hP hS) (hNT P spawn hP hPc hS) h hi hK hsp hf hx hmv)
+    (fun P {_ _ _ _ _ _ _ _} h hi hK => CInv.spawnFail_of (hSF P) h hi hK)
 
 end A3

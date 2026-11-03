@@ -217,6 +217,7 @@ theorem WFv.node_holdsView {τ : Ty} {T : Val} (hw : WFv τ T) {u : Ty} {c d : N
   | view => cases hs
   | arc => cases hs
   | lk => cases hs
+  | cell => cases hs
   | node hes ih =>
     rcases hs.cases' with h | ⟨x, hc, hsx⟩
     · cases h; simpa [Ty.holdsView] using hu
@@ -248,6 +249,7 @@ theorem WFv.no_pkg {τ : Ty} {v : Val} (hw : WFv τ v) (hf : τ.hasFn = false) {
   | view => cases hs
   | arc => cases hs
   | lk => cases hs
+  | cell => cases hs
   | node hes ih =>
     rcases hs.cases' with h | ⟨x, hc, hsx⟩
     · cases h

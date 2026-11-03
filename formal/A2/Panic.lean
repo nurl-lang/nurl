@@ -266,8 +266,8 @@ theorem Waits.of_eq {m m' : Mem} (hst : m'.st = m.st) (hb : m'.blk = m.blk) {s :
   | assign _ r => exact RBlocked.of_eq hst hb (r := r) h
   | letd _ _ r _ => exact RBlocked.of_eq hst hb (r := r) h
   | withLock a _ _ =>
-    obtain ⟨o, k, t, h1, h2⟩ := h
-    exact ⟨o, k, t, hst ▸ h1, hb ▸ h2⟩
+    obtain ⟨k, t, h1, h2⟩ := h
+    exact ⟨k, t, h1.of_st hst, hb ▸ h2⟩
   | _ => exact h
 
 /-- A3.3: a statement that waits opens no scope. -/

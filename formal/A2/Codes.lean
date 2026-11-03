@@ -55,6 +55,7 @@ theorem pkgOK_lend {P : Prog} : ∀ {v : Val}, PkgOK P v → PkgOK P (lendOf v)
   | .view _ _ _, h => h
   | .arc _ _, h => h
   | .lk _, h => h
+  | .cell _, _ => pkgOK_int P 0
   | .node _ c _ _, _ => pkgOK_href P c
   | .pair v w, h => by
     refine pkgOK_of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
@@ -194,6 +195,7 @@ theorem WFv.noPkg {t : Ty} {v : Val} (hw : WFv t v) (ht : t.holdsView = false) {
   | pkg => simp [Ty.holdsView] at ht
   | arc => cases hs
   | lk => cases hs
+  | cell => cases hs
 
 /-- A3.1: a block's payload holds no package (it holds no views), so every
     package it holds names code of its signature. -/
@@ -264,6 +266,10 @@ theorem EvalR.codes {P : Prog} {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (he :
     exact ⟨pkgOK_leaf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h), hm1.of_st rfl⟩
   | arcClone _ => exact ⟨pkgOK_leaf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h), h⟩
   | lockClone _ => exact ⟨pkgOK_leaf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h), h⟩
+  | cellNew h1 _ =>
+    obtain ⟨_, hm1⟩ := h1.codes h
+    exact ⟨pkgOK_leaf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h), hm1.of_st rfl⟩
+  | cellClone _ => exact ⟨pkgOK_leaf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h), h⟩
   | rwRead _ _ _ => exact ⟨pkgOK_leaf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h), h.of_st rfl⟩
   | atomic _ _ _ _ => exact ⟨pkgOK_int P _, h.of_st rfl⟩
   | chanSend _ h1 _ _ _ =>

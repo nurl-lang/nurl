@@ -106,6 +106,7 @@ theorem ValOK.keep {m m' : Mem} {τ : Ty} {v : Val} {P H : List Dep}
     obtain ⟨dep, hd, hla⟩ := hl
     exact .arc (by rw [hb]; exact h) hw hv ⟨dep, hd, (hp dep hd).2.2 _ _ hb hla⟩
   | lk h => exact .lk (by rw [hb]; exact h)
+  | cell => exact .cell
   | href h =>
     obtain ⟨dep, hd, ha⟩ := h
     exact .href ⟨dep, hd, (hp dep hd).2.1 _ _ _ (fun h hh' => (hh h hh').1) hb ha⟩
@@ -346,6 +347,7 @@ theorem valOK_href {m : Mem} (hh : HeapOK m) {c : Nat} {n : Val} (hn : NodeAt m 
   | int => cases ht
   | arc _ _ _ _ => cases ht
   | lk => cases ht
+  | cell => cases ht
   | view _ => cases ht
   | @href t c' P H h =>
     obtain ⟨dep, hd, d, es, hla, _⟩ := h
@@ -376,6 +378,7 @@ theorem valOK_view {m : Mem} (hh : HeapOK m) {d o l : Nat} {n : Val} (hn : DataA
   | int => cases ht
   | arc _ _ _ _ => cases ht
   | lk => cases ht
+  | cell => cases ht
   | href _ => cases ht
   | @view t d' o' l' P H h =>
     obtain ⟨dep, hd, c, es, hks, hla, _, _⟩ := h
@@ -408,6 +411,7 @@ theorem valOK_via {m : Mem} {y : Var} {T : Val} (hy : m.st y = some ⟨false, so
     intro Q ht hq
     exact .arc h hw hv ⟨_, hq, Or.inl ⟨_, Or.inr (Or.inr (Or.inr ⟨T, k, p, hy, ht, rfl⟩)), Or.inr (Or.inl ⟨rfl, rfl⟩)⟩⟩
   | lk h => intro _ _ _; exact .lk h
+  | cell => intro _ _ _; exact .cell
   | @href t c P H h =>
     intro Q ht hq
     obtain ⟨dep, hd, d, es, hla, hw, hv⟩ := h
@@ -446,6 +450,7 @@ theorem valOK_arc {m : Mem} {k : Nat} {q : Val} {τ : Ty} {w : Val} {P H : List 
     obtain ⟨dep, hd, hla⟩ := hl
     exact ⟨dep, List.mem_append_left _ hd, hla⟩
   | lk _ => cases ht
+  | cell => cases ht
   | pair _ _ ihx ihy =>
     cases ht with
     | fst ht => obtain ⟨dep, hd, rest⟩ := ihx ht; exact ⟨dep, append_assoc_sub hd, rest⟩
@@ -718,6 +723,7 @@ theorem WFv.names_nil_fn {τ : Ty} {v : Val} (h : WFv τ v) (ht : τ.hasFn = fal
   | view => rfl
   | arc => rfl
   | lk => rfl
+  | cell => rfl
   | node _ ih => exact namesL_nil fun e he => ih e he ht
   | pair _ _ iha ihb =>
     simp only [Ty.hasFn, Bool.or_eq_false_iff] at ht
@@ -739,6 +745,7 @@ theorem ValOK.memDeps {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK 
     obtain ⟨dep, hd, hla⟩ := hl
     exact .arc h hw hv ⟨dep, List.mem_filter.mpr ⟨hd, by simp [hla.notName]⟩, hla⟩
   | lk h => exact .lk h
+  | cell => exact .cell
   | @href t c P H h =>
     obtain ⟨dep, hd, d, es, hla, hw', hv, hn, hsh⟩ := h
     have hkm : (!dep.kind.isName) = true := by simp [hla.notName]
@@ -767,6 +774,7 @@ theorem ValOK.names_nil_fn {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : V
   | int => rfl
   | arc => rfl
   | lk => rfl
+  | cell => rfl
   | href => rfl
   | view => rfl
   | pair _ _ iha ihb =>
@@ -784,6 +792,7 @@ theorem WFv.names_nil {τ : Ty} {v : Val} (h : WFv τ v) (ht : τ.holdsView = fa
   | view => rfl
   | arc => rfl
   | lk => rfl
+  | cell => rfl
   | node _ ih => exact namesL_nil fun e he => ih e he ht
   | pair _ _ iha ihb =>
     simp only [Ty.holdsView, Bool.or_eq_false_iff] at ht

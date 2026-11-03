@@ -237,7 +237,7 @@ theorem ViewsAt.rd_reached {B : Nat → Option Blk} (hv : ViewsAt B) {R : Val �
   | lock => simp [Blk.rd] at h
   | view =>
     obtain ⟨k0, t0, q, rfl, rfl, hk0⟩ := hv.view hk
-    refine ⟨k0, _, hk0, ?_, .pay hr hk (Or.inl ⟨none, Sub.fst (Sub.refl _)⟩)⟩
+    refine ⟨k0, _, hk0, ?_, .pay hr hk (Or.inl (Or.inl ⟨none, Sub.fst (Sub.refl _)⟩))⟩
     simp only [Blk.rd_view, Option.getD_some, Val.ids, List.mem_append] at h
     rcases h with h | h
     · simp at h

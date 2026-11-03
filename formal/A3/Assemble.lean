@@ -1,4 +1,4 @@
-import A3.Pres
+import A3.Cell
 
 /-! A3.0 — the claim, from the configuration invariant.
 
@@ -44,7 +44,8 @@ theorem CInv.memSafe_of {P : Prog} (hP : ProgOK P) (hL : LiftLemma P) {C : Cfg} 
     rw [heq] at hr'
     exact hno r' hr'
 
-/-- **Every reachable configuration keeps the invariant.** -/
+/-- **Every reachable configuration keeps the invariant** (A3.5: and the
+    cells' homes, `CellInv`). -/
 theorem reach_cinv {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hPc : ProgCodes P)
     (hR : RestrictLemma P)
     (hS : ∀ {C : Cfg} {i : Nat} {t : Thread} {K : Stmt → Stmt} {x f : Nat} {args : List Var}
@@ -54,14 +55,17 @@ theorem reach_cinv {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hPc : Prog
       CInv P { C with ths := C.ths.set i ⟨upd st' x (some ⟨false, some (.int 0)⟩), t.nv, K (.scope x k)⟩ ++
                         [⟨spawnSt fn vs, fn.nvars,
                           wrapParams fn.params 0 0 (.scope fn.params.length fn.body)⟩] })
-    {C C' : Cfg} (h : CInv P C) (hr : Reach P spawn C C') : CInv P C' := by
+    (hF : ∀ {C : Cfg} {i : Nat} {t : Thread} {K : Stmt → Stmt} {x f : Nat} {args : List Var} {k : Stmt},
+      CInv P C → C.ths[i]? = some t → Redex t.s K (.letcall x f args k) →
+      CInv P { C with ths := C.ths.set i ⟨t.st, t.nv, K (.seq .panic (.letcall x f args k))⟩ })
+    {C C' : Cfg} (h : CInv P C) (hc : CellInv C) (hr : Reach P spawn C C') : CInv P C' ∧ CellInv C' := by
   induction hr with
-  | refl => exact h
+  | refl => exact ⟨h, hc⟩
   | step hst _ ih =>
-    apply ih
     cases hst with
-    | thread hi _ hs => exact CInv.thread_of hP hPc hR h hi hs
-    | spawn hi hK hsp hf hx hmv => exact hS h hi hK hsp hf hx hmv
+    | thread hi _ hs => exact ih (CInv.thread_of hP hPc hR h hi hs) (hc.thread_of h hi hs)
+    | spawn hi hK hsp hf hx hmv hsc => exact ih (hS h hi hK hsp hf hx hmv) (hc.spawn_of hi hmv hsc)
+    | spawnFail hi hK _ _ _ _ _ => exact ih (hF h hi hK) (hc.setStmt hi _)
 
 /-- **A3.0**, given the frame lemmas and the spawn case. -/
 theorem claim_of
@@ -73,14 +77,17 @@ theorem claim_of
       P[f]? = some fn → t.st x = none → MoveArgs t.st args vs st' →
       CInv P { C with ths := C.ths.set i ⟨upd st' x (some ⟨false, some (.int 0)⟩), t.nv, K (.scope x k)⟩ ++
                         [⟨spawnSt fn vs, fn.nvars,
-                          wrapParams fn.params 0 0 (.scope fn.params.length fn.body)⟩] }) :
+                          wrapParams fn.params 0 0 (.scope fn.params.length fn.body)⟩] })
+    (hF : ∀ (P : Prog), ∀ {C : Cfg} {i : Nat} {t : Thread} {K : Stmt → Stmt} {x f : Nat} {args : List Var}
+      {k : Stmt}, CInv P C → C.ths[i]? = some t → Redex t.s K (.letcall x f args k) →
+      CInv P { C with ths := C.ths.set i ⟨t.st, t.nv, K (.seq .panic (.letcall x f args k))⟩ }) :
     Claim := by
   intro P spawn s Δ nv hP hPc hSp ht hs hsc hv
   have h0 := CInv.init ht hs hsc hv
-  have hreach : ∀ C, Reach P spawn (Cfg.init s nv) C → CInv P C :=
-    fun C hr => reach_cinv hP hPc (hR P) (hS P spawn hP hPc hSp) h0 hr
-  exact ⟨fun C hr => CInv.memSafe_of hP (hL P) (hreach C hr),
-    fun C hr => CInv.raceFree (hreach C hr),
-    fun C hr hend => CInv.noLeak (hreach C hr) hend⟩
+  have hreach : ∀ C, Reach P spawn (Cfg.init s nv) C → CInv P C ∧ CellInv C :=
+    fun C hr => reach_cinv hP hPc (hR P) (hS P spawn hP hPc hSp) (hF P) h0 (CellInv.init s nv) hr
+  exact ⟨fun C hr => CInv.memSafe_of hP (hL P) (hreach C hr).1,
+    fun C hr hrace => hrace.elim (CInv.raceFree (hreach C hr).1) (CellInv.cellRaceFree (hreach C hr).2),
+    fun C hr hend => CInv.noLeak (hreach C hr).1 hend⟩
 
 end A3

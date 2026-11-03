@@ -369,7 +369,7 @@ theorem CParts.ctouch {P : Prog} {C : Cfg}
     would free — and a block is reached from some thread (`CInv`), so not
     two threads' sweeps free it. -/
 theorem CInv.raceFree {P : Prog} {C : Cfg}
-    (h : CInv P C) : ¬ Race P C := by
+    (h : CInv P C) : ¬ AddrRace P C := by
   rintro ⟨i, j, ti, tj, a, w, hij, hi, hj, hti, htj⟩
   obtain ⟨ps, hc, hreach⟩ := h
   obtain ⟨ai, hai⟩ := part_of hc.len hi

@@ -329,7 +329,7 @@ theorem RhsT.names {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : Rhs
   | pack hy hly hte hpa hcaps =>
     obtain ⟨hn1, hD, hk⟩ := hpa.names hy hly hte hn
     exact ⟨hn1, fun _ _ => own_named (hD.append hcaps.named), ⟨_, hk⟩⟩
-  | arcNew hy hly hty _ hpa =>
+  | arcNew hy hly hty _ _ hpa =>
     obtain ⟨hn1, _, hk⟩ := hpa.names hy hly hty hn
     exact ⟨hn1, fun _ _ => DepsNamed.nil _, ⟨_, hk⟩⟩
   | lockNew hy hly hty _ hpa =>
@@ -337,6 +337,10 @@ theorem RhsT.names {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : Rhs
     exact ⟨hn1, fun _ _ => DepsNamed.nil _, ⟨_, hk⟩⟩
   | arcClone _ _ _ => exact ⟨hn, fun _ _ => DepsNamed.nil _, ⟨[], Keeps.refl Γ []⟩⟩
   | lockClone _ _ _ => exact ⟨hn, fun _ _ => DepsNamed.nil _, ⟨[], Keeps.refl Γ []⟩⟩
+  | cellNew hy hly hty _ hpa =>
+    obtain ⟨hn1, _, hk⟩ := hpa.names hy hly hty hn
+    exact ⟨hn1, fun _ _ => DepsNamed.nil _, ⟨_, hk⟩⟩
+  | cellClone _ _ _ _ => exact ⟨hn, fun _ _ => DepsNamed.nil _, ⟨[], Keeps.refl Γ []⟩⟩
   | rwRead _ _ _ => exact ⟨hn, fun _ _ => DepsNamed.nil _, ⟨[], Keeps.refl Γ []⟩⟩
   | atomic _ _ _ _ _ => exact ⟨hn, fun _ _ => DepsNamed.nil _, ⟨[], Keeps.refl Γ []⟩⟩
   | chanSend _ _ _ hy hly htyy hpa =>

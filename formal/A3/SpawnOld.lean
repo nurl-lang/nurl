@@ -765,6 +765,39 @@ theorem spawner_ok {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hPc : Prog
   obtain ⟨Γ', ht'', hi'', hc'', hcd'', hsc''⟩ := reach_ok0 hP hPc ht' hcd hsc' hi' hc' hrun
   exact ⟨Γ', F, Δ, ht'', hi'', hcd'', hsc'', hc''⟩
 
+/-- A source call's body is a source statement. -/
+theorem letcall_src {P : Prog} {Γ : Ctx} {F : List Var} {x f : Nat} {args : List Var} {k : Stmt}
+    {Δ : Ctx} (ht : StmtT P Γ F (.letcall x f args k) Δ) : (Stmt.letcall x f args k).src = true := by
+  generalize hS : Stmt.letcall x f args k = S at ht
+  induction ht with
+  | letcall hsrc _ _ _ _ _ => cases hS; exact hsrc
+  | sub _ _ _ ih0 => exact ih0 hS
+  | _ => cases hS
+
+/-- **A3.5: a spawn whose crossing check fails** panics in the spawner, with
+    nothing moved: its statement, the call with a panic put before it, is
+    typed where the call was (the panic keeps the context as it is), over
+    the same store, so the spawner keeps its facts.  Its next step is A2's
+    panic, which unwinds the spawner's scopes. -/
+theorem spawnFail_ok {P : Prog} {m : Mem} {s : Stmt} (hok : ThreadOK P m s) {K : Stmt → Stmt}
+    {x f : Nat} {args : List Var} {k : Stmt} (hR : Redex s K (.letcall x f args k)) :
+    ThreadOK P m (K (.seq .panic (.letcall x f args k))) := by
+  obtain ⟨Γ, F, Δ, ht, hi, hcd, hsc, hc⟩ := hok
+  have hs : s = K (.letcall x f args k) := hR.eq
+  subst hs
+  have hsp : (Stmt.seq .panic (.letcall x f args k)).spine = (Stmt.letcall x f args k).spine := rfl
+  have hsp' := hR.spine_eq hsp
+  have ht' := hR.plug hsp (fun Γ0 F0 Δ0 h0 hi0 =>
+    StmtT.seq (letcall_src h0)
+      (StmtT.panic hi0.wf hi0.names (fun _ => rfl) (fun _ E h => ⟨E, h, rfl, rfl, fun _ => rfl⟩)
+        (DKeep.refl _ _) (DStay.refl _ _)) h0) Γ F Δ ht hi
+  have hi' : Inv m Γ F (K (.seq .panic (.letcall x f args k))) :=
+    hi.respine hsp' (hR.vars_sub fun v hv => by simpa [Stmt.vars] using hv)
+      (hR.catchOK hsp trivial hi.catchOK) (hR.pinOK hsp trivial hi.pinIn) (hR.dtorPinOK hsp trivial hi.dtorIn)
+  have hsc' : (K (.seq .panic (.letcall x f args k))).codesOK P :=
+    hR.codesOK (show (Stmt.seq .panic (.letcall x f args k)).codesOK P from ⟨trivial, hR.codes_hole hsc⟩) hsc
+  exact ⟨Γ, F, Δ, ht', hi', hcd, hsc', fun v hv => by rw [hsp']; exact hc v hv⟩
+
 /-- **What moves to the new thread**: one value per parameter, each of its
     parameter's type, each the tree its argument owned, no two sharing an
     address. -/

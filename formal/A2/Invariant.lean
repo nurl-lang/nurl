@@ -39,6 +39,8 @@ inductive ArcIn : Ty → Val → Ty → Nat → Option Val → Prop
   /-- A3.2: a lock share of block `k`, of payload type `u` (it carries no
       payload: `none`). -/
   | lk {u : Ty} {k : Nat} : ArcIn (.lk u) (.lk k) u k none
+  /-- A3.5: a cell share of block `k`, a lock block of payload type `u`. -/
+  | cell {u : Ty} {k : Nat} : ArcIn (.cell u) (.cell k) u k none
   | child {t t' : Ty} {c d : Nat} {es : List Val} {e : Val} {u : Ty} {k : Nat} {p : Option Val} :
       e ∈ es → ArcIn t e u k p → ArcIn (.vec t) (.node t' c d es) u k p
   | fst {a b : Ty} {x y : Val} {u : Ty} {k : Nat} {p : Option Val} :
@@ -193,12 +195,16 @@ theorem SharesOK.here {m : Mem} {t : Ty} {k : Nat} {p : Val} (h : SharesOK m (.a
 /-- A3.2: a lock share names a lock block of its type. -/
 theorem SharesOK.lk {m : Mem} {t : Ty} {k : Nat} (h : SharesOK m (.lk t) (.lk k)) :
     ∃ o, m.blk k = some ⟨t, .lock, o⟩ := h t k none .lk
+/-- A3.5: so does a cell share. -/
+theorem SharesOK.cell {m : Mem} {t : Ty} {k : Nat} (h : SharesOK m (.cell t) (.cell k)) :
+    ∃ o, m.blk k = some ⟨t, .lock, o⟩ := h t k none .cell
 
 theorem ArcIn.hasArc {τ : Ty} {T : Val} {u : Ty} {k : Nat} {p : Option Val} (h : ArcIn τ T u k p) :
     τ.hasArc = true := by
   induction h with
   | here => rfl
   | lk => rfl
+  | cell => rfl
   | child _ _ ih => exact ih
   | fst _ ih => simp [Ty.hasArc, ih]
   | snd _ ih => simp [Ty.hasArc, ih]
@@ -397,6 +403,9 @@ inductive ValOK (m : Mem) : Ty → Val → List Dep → List Dep → Prop
       sweep keeps the block while a slot holds the share. -/
   | lk {t : Ty} {k : Nat} {P H : List Dep} :
       (∃ o, m.blk k = some ⟨t, .lock, o⟩) → ValOK m (.lk t) (.lk k) P H
+  /-- A3.5: a cell share lent is no share (`lendOf`): a borrow of a library
+      handle holds nothing of its state. -/
+  | cell {t : Ty} {P H : List Dep} : ValOK m (.cell t) (.int 0) P H
 
 section ValOK
 variable {m : Mem} {v : Val} {P H : List Dep}
@@ -881,9 +890,11 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       `a`, and `a` is an owner or a borrowed parameter, whose share outlives
       the body; no closure changes a lock share by name, `NamesFree`), so the
       lock outlives the body; and `x` holds a `t` again at its end (it may
-      be replaced, not left moved out), so it is what goes back. -/
+      be replaced, not left moved out), so it is what goes back.  A3.5: the
+      same rule is a library's in-place change of its state (`withCell`), on
+      a cell share an owner holds (`Entry.lockOf`). -/
   | withLock {Γ Δ : Ctx} {F : List Var} {a x : Var} {s : Stmt} {Ea : Entry} {t : Ty} :
-      s.src = true → Γ x = none → x ∉ F → Γ a = some Ea → Ea.live = true → Ea.ty = .lk t →
+      s.src = true → Γ x = none → x ∉ F → Γ a = some Ea → Ea.live = true → Ea.lockOf t →
       StmtT P (setE Γ x (lockE t)) F s Δ → EndOK Δ x →
       Ea.mode.isRoot = true → a ∉ s.vars → (∃ E, Δ x = some E ∧ E.live = true) →
       StmtT P Γ F (.withLock a x s) (exitScope x Δ)

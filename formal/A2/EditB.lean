@@ -1366,6 +1366,7 @@ theorem NSE_pkg_hv {τ : Ty} {v : Val} (hw : WFv τ v) {fs : List Nat} {te : Ty}
   | view => cases hs
   | arc => cases hs
   | lk => cases hs
+  | cell => cases hs
   | node hes ih =>
     rcases hs.cases' with h | ⟨x, hc, hsx⟩
     · cases h

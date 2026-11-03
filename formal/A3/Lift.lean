@@ -88,6 +88,7 @@ theorem Frees.lift {a a' : Nat → Bool} {T : Val} (h : Frees a T a') {a2 : Nat 
   | .view => exact Frees.view
   | .arc => exact Frees.arc
   | .lk => exact Frees.lk
+  | .cell => exact Frees.cell
   | @Frees.node _ _ _ c d _ hc hdd hl =>
     have hdc : d ≠ c := fun e => by subst e; simp [upd] at hdd
     have had : a d = true := by rw [upd_ne _ _ hdc] at hdd; exact hdd
@@ -143,8 +144,10 @@ theorem EvalR.lift {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.
   | pack h1 => exact EvalR.pack (TakeVal.lift h1 a2)
   | arcNew h1 hfr => exact EvalR.arcNew (TakeVal.lift h1 a2) hfr
   | lockNew h1 hfr => exact EvalR.lockNew (TakeVal.lift h1 a2) hfr
+  | cellNew h1 hfr => exact EvalR.cellNew (TakeVal.lift h1 a2) hfr
   | arcClone hy => exact EvalR.arcClone hy
   | lockClone hy => exact EvalR.lockClone hy
+  | cellClone hy => exact EvalR.cellClone hy
   | atomic hy hk h1 h2 hnv => exact EvalR.atomic hy hk (Eval.lift h1 a2) (Eval.lift h2 a2) hnv
   | chanSend hy h1 hk hc hd hnv =>
     exact EvalR.chanSend (m := liftMem a2 m) hy (TakeVal.lift h1 a2) hk (union_true a2 hc)
