@@ -615,6 +615,112 @@ theorem ImplOK.of_code {P : Prog} {b : TraitBound} {fs : List Nat} {te te' : Ty}
   obtain rfl := h.1.recv_eq h' hne
   exact ⟨h', h.2⟩
 
+/-! A3.5c: the crossing check walks a trait object's box, as the runtime's
+`mem_send_check` walks it through the vtable (h360): the moved values are
+trees, and `Sub` enters a package's environment (`Sub.pkg`), on the side that
+moves and on the side that stays alike. -/
+
+/-- Moving the arguments out of the spawner gives one answer. -/
+theorem MoveArgs.det {st : Var → Option Slot} {as : List Var} {vs vs' : List Val}
+    {st1 st2 : Var → Option Slot} (h : MoveArgs st as vs st1) (h' : MoveArgs st as vs' st2) :
+    vs = vs' ∧ st1 = st2 := by
+  induction h generalizing vs' st2 with
+  | nil => cases h'; exact ⟨rfl, rfl⟩
+  | cons ha _ ih =>
+    cases h' with
+    | cons ha' hm' =>
+      rw [ha] at ha'; cases ha'
+      obtain ⟨rfl, rfl⟩ := ih hm'
+      exact ⟨rfl, rfl⟩
+
+/-- **A library handle in a trait object's box is counted**: a spawn whose
+    moved values hold a trait object (or a closure) whose box holds a share of
+    a cell that a slot the spawner keeps holds too, in its own box or not,
+    fails the crossing check, whatever it moves: it is no `TStep.spawn`, and
+    `TStep.spawnFail` panics. -/
+theorem sendCheck_box_kept {st st' : Var → Option Slot} {args : List Var} {vs : List Val}
+    (hm : MoveArgs st args vs st') {v : Val} (hv : v ∈ vs) {fs : List Nat} {te : Ty} {ms : List Nat}
+    {e : Val} {cs : List (Var × PMode × Ty)} (hs : Sub (.pkg fs te ms e cs) v) {k : Nat}
+    (hk : Sub (.cell k) e) {y : Var} {o : Bool} {w : Val} (hy : st' y = some ⟨o, some w⟩)
+    (hw : Sub (.cell k) w) {vs' : List Val} {st'' : Var → Option Slot} (hm' : MoveArgs st args vs' st'') :
+    ¬ SendCheck vs' st'' := by
+  obtain ⟨rfl, rfl⟩ := hm.det hm'
+  exact fun h => sendCheck_env h hv hs hk y o w hy hw
+
+/-- A tree of a type that holds no cell share holds none. -/
+theorem _root_.A2.WFv.noCell_hasCell {τ : Ty} {v : Val} (hw : WFv τ v) (hnc : τ.hasCell = false) {k : Nat} :
+    ¬ Sub (.cell k) v := by
+  induction hw with
+  | int => intro h; cases h
+  | view => intro h; cases h
+  | arc => intro h; cases h
+  | lk => intro h; cases h
+  | cell => simp [Ty.hasCell] at hnc
+  | pkg _ hq ih => intro h; cases h with | pkg h => exact ih (hq.2.1 hnc) h
+  | node _ ih =>
+    intro h
+    cases h with
+    | child he hs => exact ih _ he (by simpa [Ty.hasCell] using hnc) hs
+  | pair _ _ iha ihb =>
+    simp only [Ty.hasCell, Bool.or_eq_false_iff] at hnc
+    intro h
+    cases h with
+    | fst h => exact iha hnc.1 h
+    | snd h => exact ihb hnc.2 h
+  | inl _ ih =>
+    simp only [Ty.hasCell, Bool.or_eq_false_iff] at hnc
+    intro h; cases h with | inl h => exact ih hnc.1 h
+  | inr _ ih =>
+    simp only [Ty.hasCell, Bool.or_eq_false_iff] at hnc
+    intro h; cases h with | inr h => exact ih hnc.2 h
+
+/-- A `: Send Sync` trait object's box holds no library handle, at any depth:
+    the crossing check has nothing to count in it (the runtime fills the
+    vtable's check only for an impl of a `: Send` trait whose type reaches
+    one). -/
+theorem sendSync_box_noCell {ms : List Nat} {v : Val} (hw : WFv (.fn ms TraitBound.sendSync.cross) v)
+    {k : Nat} : ¬ Sub (.cell k) v :=
+  hw.noCell_hasCell rfl
+
+/-- A value of a type that holds no view holds only packages that fit `send`,
+    however deep they lie (a field, an element, another package's box): each
+    box holds no view, and nothing is captured by name. -/
+theorem _root_.A2.WFv.noView_fits {τ : Ty} {v : Val} (hw : WFv τ v) (hhv : τ.holdsView = false)
+    {fs : List Nat} {te : Ty} {ms : List Nat} {e : Val} {cs : List (Var × PMode × Ty)}
+    (hs : Sub (.pkg fs te ms e cs) v) : Cross.send.Fits te cs := by
+  induction hw with
+  | int => cases hs
+  | view => cases hs
+  | node _ ih =>
+    cases hs with
+    | child he h => exact ih _ he (by simpa [Ty.holdsView] using hhv) h
+  | pair _ _ iha ihb =>
+    simp only [Ty.holdsView, Bool.or_eq_false_iff] at hhv
+    cases hs with
+    | fst h => exact iha hhv.1 h
+    | snd h => exact ihb hhv.2 h
+  | inl _ ih => simp only [Ty.holdsView, Bool.or_eq_false_iff] at hhv; cases hs with | inl h => exact ih hhv.1 h
+  | inr _ ih => simp only [Ty.holdsView, Bool.or_eq_false_iff] at hhv; cases hs with | inr h => exact ih hhv.2 h
+  | pkg _ hq ih =>
+    obtain ⟨hv, _, hcs⟩ := hq.send hhv
+    cases hs with
+    | refl => exact TraitBound.fits_send.mpr ⟨hv, hcs⟩
+    | pkg h => exact ih hv h
+  | arc _ _ => cases hs
+  | lk => cases hs
+  | cell => cases hs
+
+/-- So what a spawned function takes holds no trait object but one whose box
+    `: Send` admits: none whose box holds a view, none of a trait the spawn's
+    type checks could not see into. -/
+theorem spawn_pkgs_send {P : Prog} {spawn : Nat → Bool} (hS : SpawnOK P spawn) {f : Nat}
+    (hsp : spawn f = true) {fn : Fn} (hf : P[f]? = some fn) {pt : PMode × Ty} (hin : pt ∈ fn.params)
+    {v : Val} (hw : WFv pt.2 v) {fs : List Nat} {te : Ty} {ms : List Nat} {e : Val}
+    {cs : List (Var × PMode × Ty)} (hs : Sub (.pkg fs te ms e cs) v) : Cross.send.Fits te cs := by
+  obtain ⟨fn', hf', -, hpar⟩ := hS f hsp
+  rw [hf] at hf'; cases hf'
+  exact hw.noView_fits (hpar pt hin).2 hs
+
 /-- One step of the configuration. -/
 inductive TStep (P : Prog) (spawn : Nat → Bool) : Cfg → Cfg → Prop
   /-- A thread takes one of A2's steps, unless its next step is a spawn;
