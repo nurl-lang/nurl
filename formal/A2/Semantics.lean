@@ -423,6 +423,19 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
       ¬ HasView m.blk k →
       EvalR m (.chanClose a)
         (.ok (.int 0) false { m with blk := upd m.blk k (some ⟨t, .lock, some (.pair q (.int 1))⟩) })
+  /-- A3.3: `rw_read a` on the lock block `a` shares (an `RwLocked`), with its
+      payload in (no writer has it checked out): a new view of the block, at a
+      key taken from `nid`, whose payload is a share of the block and the
+      block's payload; the answer is the view's one share, the read guard.
+      (A block whose payload is checked out has no step: the reader waits,
+      `RBlocked`.)  A view owns nothing; the sweep removes it once nothing
+      reaches it, which ends the read. -/
+  | rwRead {a : Var} {o : Bool} {k : Nat} {t : Ty} {p : Val} :
+      m.st a = some ⟨o, some (.lk k)⟩ → m.blk k = some ⟨t, .lock, some p⟩ → m.blk m.nid = none →
+      EvalR m (.rwRead a)
+        (.ok (.arc m.nid (.pair (.lk k) p)) true
+          { m with nid := m.nid + 1,
+                   blk := upd m.blk m.nid (some ⟨.prod (.lk t) t, .view, some (.pair (.lk k) p)⟩) })
 
 /-! ### Calls
 
@@ -468,6 +481,7 @@ def Rhs.rename (ρ : Var → Var) : Rhs → Rhs
   | .chanSend a y => .chanSend (ρ a) (ρ y)
   | .chanRecv w a => .chanRecv w (ρ a)
   | .chanClose a => .chanClose (ρ a)
+  | .rwRead a => .rwRead (ρ a)
 
 def Edit.rename (ρ : Var → Var) : Edit → Edit
   | .push y => .push (ρ y)
@@ -793,6 +807,7 @@ def RBlocked (m : Mem) : Rhs → Prop
         HasView m.blk k)
   | .chanClose a => ∃ o k t, m.st a = some ⟨o, some (.lk k)⟩ ∧
       (m.blk k = some ⟨t, .lock, none⟩ ∨ HasView m.blk k)
+  | .rwRead a => ∃ o k t, m.st a = some ⟨o, some (.lk k)⟩ ∧ m.blk k = some ⟨t, .lock, none⟩
   | _ => False
 
 /-- A3.2: the next step takes a lock whose payload is checked out: the

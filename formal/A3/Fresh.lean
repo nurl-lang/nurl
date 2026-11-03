@@ -71,6 +71,7 @@ theorem EvalR.grows {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (
   | chanSendClosed _ h1 _ hf => exact (TakeVal.grows h1).trans (Grows.shrink (Frees.le hf) rfl)
   | chanRecv _ hk _ _ => exact ⟨Nat.le_refl _, fun _ hi => .inl hi, BlkLe.setLock hk _⟩
   | chanClose _ hk => exact ⟨Nat.le_refl _, fun _ hi => .inl hi, BlkLe.setLock hk _⟩
+  | rwRead _ _ hfr => exact ⟨Nat.le_succ _, fun _ hi => .inl hi, BlkLe.fresh hfr _⟩
   | _ => exact Grows.of_eq rfl rfl
 
 theorem BindParams.grows {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var} {base i : Nat}

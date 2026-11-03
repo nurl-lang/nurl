@@ -337,6 +337,7 @@ theorem RhsT.names {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : Rhs
     exact ⟨hn1, fun _ _ => DepsNamed.nil _, ⟨_, hk⟩⟩
   | arcClone _ _ _ => exact ⟨hn, fun _ _ => DepsNamed.nil _, ⟨[], Keeps.refl Γ []⟩⟩
   | lockClone _ _ _ => exact ⟨hn, fun _ _ => DepsNamed.nil _, ⟨[], Keeps.refl Γ []⟩⟩
+  | rwRead _ _ _ => exact ⟨hn, fun _ _ => DepsNamed.nil _, ⟨[], Keeps.refl Γ []⟩⟩
   | atomic _ _ _ _ _ => exact ⟨hn, fun _ _ => DepsNamed.nil _, ⟨[], Keeps.refl Γ []⟩⟩
   | chanSend _ _ _ hy hly htyy hpa =>
     obtain ⟨hn1, _, hk⟩ := hpa.names hy hly htyy hn

@@ -248,6 +248,12 @@ theorem covers_evalR {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (hc : Covers m)
     · refine Or.inl (Or.inr (hgrow ?_))
       unfold PayAddr; rw [htk.blk]; exact hp
   | lockClone _ => exact Or.inl (hc i hi)
+  | rwRead _ _ hfr =>
+    -- A3.3: a view owns nothing; every other block stays
+    rcases hc i hi with h | ⟨k', bl, hk', hik⟩
+    · exact Or.inl (Or.inl h)
+    · have hne : k' ≠ m.nid := fun e => by rw [e, hfr] at hk'; cases hk'
+      exact Or.inl (Or.inr ⟨k', bl, by simp [upd, hne, hk'], hik⟩)
   | @atomic _ _ _ _ _ k n _ _ _ hk _ _ =>
     rcases hc i hi with h | ⟨k', bl, hk', hik⟩
     · exact Or.inl (Or.inl h)

@@ -514,6 +514,67 @@ theorem rhs_lockNew {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {t : Ty} {v : Val
     post.dom, post.frz, post.rootb, post.cdom, post.cmode, post.dkeep, post.blk.trans hb⟩, ?_⟩
   exact out_lkShare htok hvf hpl.2.2 ⟨_, hnew⟩
 
+/-- **A3.3, `rw_read`**: a new view of the lock block `k`, whose payload `p`
+    is in, at the fresh key `nid`: it owns nothing, and reads the block's
+    payload as the block holds it (`ViewsAt`); its payload, a share of the
+    block and `p`, is well formed.  The result is the view's one share, the
+    read guard, owned and holding nothing.  Every slot is as it was. -/
+theorem rhs_rwRead {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {k : Nat} {t : Ty} {p : Val}
+    (hk : m.blk k = some ⟨t, .lock, some p⟩) (hfr : m.blk m.nid = none) :
+    RhsPost m { m with nid := m.nid + 1, blk := upd m.blk m.nid (some ⟨.prod (.lk t) t, .view, some (.pair (.lk k) p)⟩) } Γ Γ F ∧
+    RhsOut { m with nid := m.nid + 1, blk := upd m.blk m.nid (some ⟨.prod (.lk t) t, .view, some (.pair (.lk k) p)⟩) } Γ
+      ⟨.arc (.prod (.lk t) t), .own, true, [], [], false, false⟩ (.arc m.nid (.pair (.lk k) p)) true := by
+  let m2 : Mem := { m with nid := m.nid + 1, blk := upd m.blk m.nid (some ⟨.prod (.lk t) t, .view, some (.pair (.lk k) p)⟩) }
+  have hb : BlkLe m.blk m2.blk := BlkLe.fresh hfr _
+  have hnew : m2.blk m.nid = some ⟨.prod (.lk t) t, .view, some (.pair (.lk k) p)⟩ := by simp [m2]
+  have hkn : k ≠ m.nid := fun e => by rw [e, hfr] at hk; cases hk
+  have hk2 : m2.blk k = some ⟨t, .lock, some p⟩ := by simp [m2, upd_ne _ _ hkn, hk]
+  have hcases : ∀ k' bl, m2.blk k' = some bl →
+      (k' = m.nid ∧ bl = ⟨.prod (.lk t) t, .view, some (.pair (.lk k) p)⟩) ∨ (k' ≠ m.nid ∧ m.blk k' = some bl) := by
+    intro k' bl h
+    by_cases he : k' = m.nid
+    · subst he; rw [hnew] at h; cases h; exact Or.inl ⟨rfl, rfl⟩
+    · exact Or.inr ⟨he, by simpa [m2, upd_ne _ _ he] using h⟩
+  -- the view owns nothing
+  have hbo : BlkOwn m2 := by
+    intro k' bl hk'
+    rcases hcases k' bl hk' with ⟨rfl, rfl⟩ | ⟨_, h⟩
+    · exact ⟨Nat.lt_succ_self _, by simp, fun i hi => by simp at hi⟩
+    · obtain ⟨hkey, hnd, hall⟩ := hi.heap.blk k' bl h
+      refine ⟨Nat.lt_succ_of_lt hkey, hnd, fun i hi' => ?_⟩
+      obtain ⟨ha, hlt, hsl, hoth⟩ := hall i hi'
+      refine ⟨ha, Nat.lt_succ_of_lt hlt, hsl, fun k'' bl'' hk'' h'' => ?_⟩
+      rcases hcases k'' bl'' h'' with ⟨rfl, rfl⟩ | ⟨_, h2⟩
+      · simp
+      · exact hoth k'' bl'' hk'' h2
+  -- the new view reads `k`'s payload; the old ones read what they did
+  have hv : ViewsAt m2.blk := by
+    intro k' bl hk' hvk
+    rcases hcases k' bl hk' with ⟨rfl, rfl⟩ | ⟨_, h⟩
+    · exact ⟨k, t, p, rfl, hk2⟩
+    · obtain ⟨k0, t0, q, rfl, hk0⟩ := hi.heap.views k' _ h hvk
+      have hkn0 : k0 ≠ m.nid := fun e => by rw [e, hfr] at hk0; cases hk0
+      exact ⟨k0, t0, q, rfl, by simp [m2, upd_ne _ _ hkn0, hk0]⟩
+  have hheap : HeapOK m2 := HeapOK.mono hi.heap rfl (fun _ h => h) (Nat.le_succ _) hbo hv
+  obtain ⟨htok, hvf, hpay, hna⟩ := hi.blocks k _ hk
+  obtain ⟨hwp, _⟩ := hpay p rfl
+  have hna' : t.hasArc = false := hna rfl
+  have hok : (Ty.prod (.lk t) t).ok = true := by simp [Ty.ok, htok, hvf, hna']
+  have hvf' : (Ty.prod (.lk t) t).holdsView = false := by simp [Ty.holdsView, hvf]
+  have hwv : WFv (.prod (.lk t) t) (.pair (.lk k) p) := .pair .lk hwp
+  have hsh : SharesOK m2 (.prod (.lk t) t) (.pair (.lk k) p) := fun u k' q ha => by
+    cases ha with
+    | fst ha => cases ha; exact ⟨_, hk2⟩
+    | snd ha => rw [ha.hasArc] at hna'; cases hna'
+  have hB : BlocksIn m2 := fun k' bl hk' => by
+    rcases hcases k' bl hk' with ⟨rfl, rfl⟩ | ⟨_, h⟩
+    · exact ⟨hok, hvf', fun q hq => by cases hq; exact ⟨hwv, hsh⟩, fun h => nomatch h⟩
+    · obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k' bl h
+      exact ⟨h1, h2, fun q hq => ⟨(h3 q hq).1, (h3 q hq).2.grow hb⟩, h4⟩
+  refine ⟨⟨hi.grow rfl hheap (Nat.le_refl _) hb hB, rfl, Nat.le_succ _, fun _ => rfl, fun _ _ => rfl,
+    fun _ _ h _ => h, fun _ => rfl, fun _ E1 h => ⟨E1, h, rfl, rfl⟩, DKeep.refl _ _, hb⟩, ?_⟩
+  exact out_share hok hvf' hwv (Or.inr hnew)
+
 theorem RhsPost.trans {m m1 m2 : Mem} {Γ Γ1 Γ2 : Ctx} {F : List Var} (h1 : RhsPost m m1 Γ Γ1 F)
     (h2 : RhsPost m1 m2 Γ1 Γ2 F) : RhsPost m m2 Γ Γ2 F where
   inv := h2.inv
@@ -1390,6 +1451,12 @@ theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry
   | lockClone ha hl hty =>
     cases he with
     | lockClone hv => exact ⟨RhsPost.same hi, out_lockClone hi ha hl hty hv⟩
+  | rwRead ha hl hty =>
+    cases he with
+    | rwRead hv hk hfr =>
+      obtain ⟨_, hk'⟩ := hi.lk_val ha hl hty hv
+      rw [hk] at hk'; cases hk'
+      exact rhs_rwRead hi hk hfr
   | atomic _ _ _ _ _ =>
     cases he with
     | atomic _ hk _ _ hnv => exact atomic_pres hi hk hnv
@@ -2404,6 +2471,7 @@ theorem EvalR.blk {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.o
   | chanSendClosed _ h1 _ _ => have := BlkLe.of_eq (TakeVal.blk h1); exact this
   | chanRecv _ hk _ _ => exact BlkLe.setLock hk _
   | chanClose _ hk => exact BlkLe.setLock hk _
+  | rwRead _ _ hfr => exact BlkLe.fresh hfr _
   | _ => exact BlkLe.refl _
 
 theorem BindParams.blk {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var} {base i : Nat}

@@ -196,6 +196,7 @@ theorem EvalR.restrict {m : Mem} {r : Rhs} {res : RRes} (h : EvalR m r res) {a2 
     exact ⟨_, .chanRecvNone hy hk (minus_true hc (hp _ (.inl ⟨_, _, hk, by simp [Blk.tree]⟩))) hw, rfl, rfl, rfl⟩
   | chanClose hy hk hnv => exact ⟨_, .chanClose hy hk hnv, rfl, rfl, rfl⟩
   | arcGet hy hk => exact ⟨_, .arcGet hy hk, rfl, rfl, rfl⟩
+  | rwRead hy hk hfr => exact ⟨_, .rwRead hy hk hfr, rfl, rfl, rfl⟩
 
 theorem EvalR.restrict_ok {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.ok v o m1))
     {a2 : Nat → Bool} (hav : Avoids m a2) (hb : BorFree m) (hp : PayOff m a2) (hf : FreshFrom a2 m.nid) :

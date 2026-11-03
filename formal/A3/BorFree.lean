@@ -100,6 +100,7 @@ theorem EvalR.borFree {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r
   | lockNew h1 _ => exact ⟨((TakeVal.borFree h1 hb).1).of_st rfl, fun h => by cases h⟩
   | arcClone _ => exact ⟨hb, fun h => by cases h⟩
   | lockClone _ => exact ⟨hb, fun h => by cases h⟩
+  | rwRead _ _ _ => exact ⟨hb.of_st rfl, fun h => by cases h⟩
   | atomic _ _ _ _ => exact ⟨hb.of_st rfl, fun _ => rfl⟩
   | chanSend _ h1 _ _ _ => exact ⟨((TakeVal.borFree h1 hb).1).of_st rfl, fun _ => rfl⟩
   | chanSendClosed _ h1 _ _ => exact ⟨((TakeVal.borFree h1 hb).1).of_st rfl, fun _ => rfl⟩

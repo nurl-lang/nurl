@@ -158,6 +158,7 @@ theorem EvalR.lift {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.
   | chanRecvNone hy hk hc hw => exact EvalR.chanRecvNone hy hk (union_true a2 hc) hw
   | chanClose hy hk hnv => exact EvalR.chanClose hy hk hnv
   | arcGet hy hk => exact EvalR.arcGet hy hk
+  | rwRead hy hk hfr => exact EvalR.rwRead hy hk hfr
 
 theorem EvalR.liftP {m : Mem} {r : Rhs} (h : EvalR m r .panic) (a2 : Nat → Bool) :
     EvalR (liftMem a2 m) r .panic := by

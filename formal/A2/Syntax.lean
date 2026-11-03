@@ -265,6 +265,12 @@ inductive Rhs where
                                -- moves out, as `some` (`inr`); `none` (`inl 0`) when it is
                                -- empty and closed (or, `chan_try_recv`, just empty)
   | chanClose (a : Var)        -- `chan_close a`: the closed flag is set
+  -- A3.3: an `RwLocked A` is a `Locked A` (`rw_new` is `lockNew`, `RwLocked_share`
+  -- `lockClone`, `rw_update` / `wguard_update` / `rw_set` a `withLock`, which waits
+  -- while a reader lives); a reader's guard is an `arc` share of a view of it
+  | rwRead (a : Var)           -- `rw_read a`: a read guard of the lock `a` shares, a new view
+                               -- of its payload (frozen while the view lives); `rguard_get g`
+                               -- is `arcGet g` (the payload is the second field it lends)
 deriving DecidableEq, Repr
 
 /-! ### Memory (here because a run-time form records a snapshot of it) -/

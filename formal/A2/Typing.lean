@@ -613,6 +613,14 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
   | lockClone {a : Var} {E : Entry} {t : Ty} :
       Γ a = some E → E.live = true → E.ty = .lk t →
       RhsT Γ F (.lockClone a) ⟨.lk t, .own, true, [], [], false, false⟩ Γ
+  /-- A3.3: `rw_read a`: a read guard of the lock (an `RwLocked`) `a` (a
+      live share) shares: an owned `arc` share of a new view of its payload,
+      holding nothing.  What `arcGet` lends through it is frozen (`getE`'s
+      `share` dependency, which `ThruOK` and `canDo` refuse every change
+      through) and ends with the guard. -/
+  | rwRead {a : Var} {E : Entry} {t : Ty} :
+      Γ a = some E → E.live = true → E.ty = .lk t →
+      RhsT Γ F (.rwRead a) ⟨.arc (.prod (.lk t) t), .own, true, [], [], false, false⟩ Γ
   /-- A3.4: an `Atomic`'s operation, through a live share of an integer lock
       block (`Atomic` is `lk int`): an integer. -/
   | atomic {op : AOp} {a : Var} {e1 e2 : Expr} {E : Entry} :
@@ -675,6 +683,7 @@ theorem RhsT.out {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT 
   | @arcGet _ _ t => cases t <;> exact ⟨Or.inr rfl, rfl⟩
   | lockNew => exact ⟨Or.inl rfl, rfl⟩
   | lockClone => exact ⟨Or.inl rfl, rfl⟩
+  | rwRead => exact ⟨Or.inl rfl, rfl⟩
   | atomic => exact ⟨Or.inr rfl, rfl⟩
   | chanSend => exact ⟨Or.inr rfl, rfl⟩
   | chanRecv => exact ⟨Or.inl rfl, rfl⟩
@@ -1539,6 +1548,7 @@ def Rhs.vars : Rhs → List Var
   | .arcGet a => [a]
   | .lockNew _ y => [y]
   | .lockClone a => [a]
+  | .rwRead a => [a]
   | .atomic _ a e1 e2 => a :: e1.vars ++ e2.vars
   | .chanSend a y => [a, y]
   | .chanRecv _ a => [a]

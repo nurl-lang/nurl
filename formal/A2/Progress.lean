@@ -208,6 +208,17 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
   | lockClone ha hl hty =>
     obtain ⟨o, k, hv⟩ := hi.lk_slot ha hl hty
     exact ⟨_, EvalR.lockClone hv⟩
+  | rwRead ha hl hty =>
+    -- A3.3: a new view of the payload, unless a writer has it checked out
+    obtain ⟨o, k, hv⟩ := hi.lk_slot ha hl hty
+    obtain ⟨ob, hk⟩ := hi.lk_val ha hl hty hv
+    have hfr : m.blk m.nid = none := by
+      cases h : m.blk m.nid with
+      | none => rfl
+      | some bl => exact absurd (hi.heap.bkey _ bl h) (Nat.lt_irrefl _)
+    cases ob with
+    | none => exact absurd ⟨o, k, _, hv, hk⟩ hnb
+    | some p => exact ⟨_, EvalR.rwRead hv hk hfr⟩
   | atomic ha hl hty he1 he2 =>
     -- A3.4: the word is there unless a `withLock` has it checked out
     obtain ⟨o, k, hv⟩ := hi.lk_slot ha hl hty
