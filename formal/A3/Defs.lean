@@ -149,22 +149,28 @@ theorem lk_spawnOK {t : Ty} (h : (Ty.lk t).ok = true) : (Ty.lk t).holdsView = fa
     (`SendCheck`). -/
 theorem cell_spawnOK {t : Ty} (h : (Ty.cell t).ok = true) : (Ty.cell t).holdsView = false := by
   simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true] at h
-  exact h.1.2
+  exact h.2
 
 /-- A3.5, Sync: no payload several threads reach at once holds a library
     handle: an `Arc`'s (`RhsT.arcNew`'s own premise) and, A3.5's second cut,
-    an `RwLocked`'s, which its read guards lend at once (`RhsT.rwRead`); a
-    cell's own payload holds no share at all (`Ty.hasCell_of_hasArc`).  A
-    lock's payload and a channel's element may hold one (A3.5's second cut):
-    one thread at a time reaches them, and every value going in faces the
-    crossing check (`EvalR.lockNew`, `lockRestore`, `chanSend`,
-    `Release.put`).  So a lock share is Sync whatever its payload holds ... -/
+    an `RwLocked`'s, which its read guards lend at once (`RhsT.rwRead`).  A
+    lock's payload, a cell's state and a channel's element may hold one
+    (A3.5's second cut): one thread at a time reaches them, and every value
+    going in faces the crossing check (`EvalR.lockNew`, `cellNew`,
+    `lockRestore`, `chanSend`, `Release.put`).  So a lock share is Sync
+    whatever its payload holds ... -/
 theorem lk_sync {t : Ty} : (Ty.lk t).hasCell = false := rfl
 
 /-- ... and a lock's payload faces the Send question only (`Ty.ok`): a
     library handle is a `Locked`'s value (h358, h357: `Locked PNCounter`,
     `RwLocked PNCounter`). -/
 theorem lk_cell_ok {t : Ty} (h : (Ty.cell t).ok = true) : (Ty.lk (.cell t)).ok = true := by
+  show ((Ty.cell t).ok && !(Ty.cell t).holdsView) = true
+  rw [h, cell_spawnOK h]; rfl
+
+/-- ... and so may a cell's state, which is a lock's payload (a handle that
+    keeps another handle in its state, A3.5's second cut). -/
+theorem cell_cell_ok {t : Ty} (h : (Ty.cell t).ok = true) : (Ty.cell (.cell t)).ok = true := by
   show ((Ty.cell t).ok && !(Ty.cell t).holdsView) = true
   rw [h, cell_spawnOK h]; rfl
 

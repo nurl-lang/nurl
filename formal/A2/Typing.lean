@@ -682,11 +682,13 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       Γ a = some E → E.live = true → E.ty = .lk (.prod (.vec s) .int) →
       RhsT Γ F (.chanClose a) intE Γ
   /-- A3.5: a library handle's constructor: `y`'s value, of a type that holds
-      no view, no closure and no share (a lock's payload), moves into a fresh
-      lock block; the result is an owned cell share, which holds nothing. -/
+      no view and no closure that holds bindings by name (a lock's payload:
+      A3.5's second cut, shares it may hold, a cell share past the crossing
+      check, `EvalR.cellNew`), moves into a fresh lock block; the result is an
+      owned cell share, which holds nothing. -/
   | cellNew {t : Ty} {y : Var} {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
       Γ y = some Ey → Ey.live = true → Ey.ty = t →
-      t.holdsView = false ∧ t.hasFn = false ∧ t.hasArc = false →
+      t.holdsView = false ∧ t.hasFn = false →
       PushArg Γ F y Ey t D Γ1 →
       RhsT Γ F (.cellNew t y) ⟨.cell t, .own, true, [], [], false, false⟩ Γ1
   /-- A3.5: a copy of a library handle (`PNCounter_share`): a new owned cell

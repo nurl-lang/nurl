@@ -186,7 +186,8 @@ def Ty.ok : Ty → Bool
   | .lk t => t.ok && !t.holdsView  -- A3.2: nor does a lock's (it is Send); A3.2's second cut: it
                                    -- may hold `arc` and lock shares; A3.5's second cut: and cell
                                    -- shares, each value going in past the crossing check
-  | .cell t => t.ok && !t.holdsView && !t.hasArc  -- A3.5: a cell's payload is a lock's
+  | .cell t => t.ok && !t.holdsView  -- A3.5: a cell's payload is a lock's (A3.5's second cut:
+                                     -- shares in it too, each going in past the crossing check)
 
 /-- A type whose values own what they hold: a `Vec` or a struct.  Its
     binding is an owner (or borrows one). -/
