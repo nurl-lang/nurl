@@ -11653,14 +11653,17 @@ unsafe @ nurl_sym_int2 i h s base s suffix → i {
 unsafe @ __sym_vint s v → i {
     : *u p # *u v
     : ~ i n 0
-    : ~ i k 0
-    : ~ i c # i . p 0
+    // (A negative value is one too: a memo's `-1`, "ask again" —
+    // __ty_memo_forget — read as 0 was an answer no question had given.)
+    : b neg == # i . p 0 45
+    : ~ i k ? neg 1 0
+    : ~ i c # i . p k
     ~ & >= c 48 <= c 57 {
         = n + * n 10 - c 48
         = k + k 1
         = c # i . p k
     }
-    ^ n
+    ^ ? neg - 0 n n
 }
 
 // The value of `name` from byte `off` on (a copy of that tail only): an
@@ -30506,10 +30509,32 @@ unsafe @ __vk_union_of s fns s seen b dyn → s {
 // (`h>%k`, g_fn_vkeeps)? 1, 0, or 2 not known yet — as __vkeep_ask.
 @ __vkheld_ask s cal i k → i {
     ? & == 0 g_clo_closed ( __clo_is_node cal ) { ^ 2 } {}
+    ? != 0 ( nurl_str_len ( __vkheld_fallback cal k ) ) { ^ 1 } {}
     : ~ s vk ( __vk_of cal )
     ? != 0 ( nurl_str_len vk ) { ^ ? == 0 ( nurl_str_len ( __vk_held_holders_of vk k ) ) 0 1 } {}
     ? | == 0 ( nurl_sym_len g_fn_compiled cal ) ( __vk_pend cal ) { ^ 2 } {}
     ^ 0
+}
+
+// The holders a callee whose walk makes no answer of views — trusted or
+// library code (not g_fn_safe; its walk reads views as scalars) that is
+// compiled, __held_fallback's kind — may leave holding a copy of what
+// argument `k` holds: A2's callPostAux gives each `inout` argument whose
+// type holds views what any argument holds (heldOfArgs), as callRes gives
+// its result — so every `inout` parameter but `k` (`h>%k`; the walk asks
+// the holder's type, __vholds_may). Not a closure argument: what a callee
+// keeps of one is escapes' to answer, as for its result
+// (__bck_param_closure). A view of an argument's own storage is no copy:
+// A2 takes the callee's word for it (outHolds), as the author of an
+// `unsafe` body vouches for it (MEMORY.md §3).
+@ __vkheld_fallback s cal i k → s {
+    ? | | != 0 ( nurl_sym_len g_fn_safe cal ) == 0 ( nurl_sym_len g_fn_compiled cal ) >= ( nurl_str_find cal `__dyn__` ) 0 { ^ ( nurl_str_cat `` `` ) } {}
+    : ~ s io ( nurl_sym_get g_fn_inout cal )
+    ? == 0 ( nurl_str_len io ) { = io ( nurl_sym_get g_fn_inout ( bck_generic_base cal ) ) } {}
+    ? == 0 ( nurl_str_len io ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s ks ( nurl_str_int k )
+    ? ( __bck_param_closure cal ks ) { ^ ( nurl_str_cat `` `` ) } {}
+    ^ ( __word_drop io ks )
 }
 
 // …the holders answer `vk` names for it (`h>%k` words).
@@ -30531,6 +30556,9 @@ unsafe @ __vk_union_of s fns s seen b dyn → s {
 @ __vkheld_holders s cal i k → s {
     ? & == 0 g_clo_closed ( __clo_is_node cal ) { ^ ( nurl_str_cat `*` `` ) } {}
     : ~ s vk ( __vk_of cal )
+    // (…one whose walk makes no answer of views: its `inout` parameters.)
+    : s fb ( __vkheld_fallback cal k )
+    ? != 0 ( nurl_str_len fb ) { ^ ( __word_union fb ? == 0 ( nurl_str_len vk ) `` ( __vk_held_holders_of vk k ) ) } {}
     ? != 0 ( nurl_str_len vk ) { ^ ( __vk_held_holders_of vk k ) } {}
     ^ ( nurl_str_cat `*` `` )
 }
@@ -32973,6 +33001,9 @@ unsafe @ bck_sx_ev s st s e b arg → s {
         // are then read through their elements.)
         : b __vh g_sxe_held
         = g_sxe_held F
+        // (…and what its result is: a view's copy holds what the elements
+        // of the storage it points into view, below.)
+        : i __vcls ? & __vh != 0 ( nurl_sym_len g_root_syms w ) ( bck_walk_class ( nurl_llty ( nurl_sym_get g_root_syms w ) ) ) -1
         ? ! | | | | ( seq w `\\` ) ( seq w `\\~` ) ( seq w `\\~!` ) ( seq w `\\~*` ) ( seq w `\\a` ) { = g_sxe_vonly F } {}
         : ~ s out ``
         : ~ i j 0
@@ -33004,7 +33035,15 @@ unsafe @ bck_sx_ev s st s e b arg → s {
             : i __rva ? | | | | __lrp __hcap __hin __adop ( seq w `\\` ) 0 ( __rv_ask w js )
             ? | | | | | __lrp ( seq w `\\` ) __hcap __hin __adop & != __rva 0 != __rva 3 {
                 : i __a0 g_sxe_pos
+                // (A copy of a part of the argument that is no view — an
+                // element, a field: `( vec_at [( Vec s )] vv 0 )` — holds
+                // what that part holds, which the argument holds: not the
+                // storage the part is in, which the copy does not point
+                // into. `vec_clone` of it outlives `vv`.)
+                : b __hpart & & __vh != __vcls 2 & __lrp ( str_contains_word ( nurl_sym_get g_pending_impl ( nurl_str_cat `retpart##` w ) ) js )
+                ? __hpart { = g_sxe_held T } {}
                 : ~ s __lj ( bck_sx_ev st e ? __adop F ! ( str_contains_word ( nurl_sym_get g_pending_impl ( nurl_str_cat `retpass##` w ) ) js ) )
+                ? __hpart { = g_sxe_held F } {}
                 ? == __rva 2 { = __lj ( __src_as_ind __lj ) } {}
                 // (A part of the argument — an element, a field — that owns
                 // its storage and holds no view, `( vec_at [String] v k )`,
@@ -33097,9 +33136,7 @@ unsafe @ bck_sx_ev s st s e b arg → s {
         // (What a copy of a view holds: what the elements of the storage it
         // points into view — `( slice_to_vec ( vec_as_slice t ) )`. A copy
         // of an owner holds what its sources are already.)
-        ? & __vh != 0 ( nurl_sym_len g_root_syms w ) {
-            ? == 2 ( bck_walk_class ( nurl_llty ( nurl_sym_get g_root_syms w ) ) ) { = out ( __src_elem_deps out ) } {}
-        } {}
+        ? == __vcls 2 { = out ( __src_elem_deps out ) } {}
         ^ out
     } {}
     ? ( seq w `-` ) { ^ ( nurl_str_cat `` `` ) } {}
@@ -34116,6 +34153,16 @@ unsafe @ __bck_try_exit_check s st i line → v {
                         : s vsrc ? == vb0 66 ( nurl_str_cat `!` `` ) ( bck_swap_char ( __src_plain ? vheld ( bck_sx_held_sources st ( bck_field rec 8 ) ) ( bck_sx_arg_sources st ( bck_field rec 8 ) ) ) 32 44 )
                         // (A `%K.H` row's entry keeps its `%`: bck_vkeeps_self.)
                         ( bck_add_word `vkself` ( nurl_str_cat4 ? vheld ( nurl_str_cat vaix `` ) ( nurl_str_slice vaix 1 - ( nurl_str_len vaix ) 1 ) `#` ( nurl_str_int ( bck_path_root ( nurl_str_to_int vc ) ) ) ( nurl_str_cat4 `#` ( bck_field rec 3 ) `#` vsrc ) ) )
+                        // (…and a `bK.H` row answers `h>%k` too: its entry for
+                        // what a copy of the argument holds, so a recursion
+                        // that hands an argument's views on under another
+                        // index carries them into this function's answer.)
+                        ? & == vb0 98 ! vheld {
+                            : s vhs0 ( bck_sx_held_sources st ( bck_field rec 8 ) )
+                            ? & ! ( seq vhs0 `*` ) != 0 ( nurl_str_len vhs0 ) {
+                                ( bck_add_word `vkself` ( nurl_str_cat4 ( nurl_str_cat `%` ( nurl_str_slice vaix 1 - ( nurl_str_len vaix ) 1 ) ) `#` ( nurl_str_int ( bck_path_root ( nurl_str_to_int vc ) ) ) ( nurl_str_cat4 `#` ( bck_field rec 3 ) `#` ( bck_swap_char ( __src_plain vhs0 ) 32 44 ) ) ) )
+                            } {}
+                        } {}
                         : s vcr ( nurl_str_int ( bck_path_root ( nurl_str_to_int vc ) ) )
                         ? & & != vb0 66 == 0 ( nurl_sym_len g_bck ( bck_bkey `pp_` vcr ) ) ( __vk_all_params vsrc ) { = vself_kept T } {}
                     } {}
@@ -34127,7 +34174,9 @@ unsafe @ __bck_try_exit_check s st i line → v {
                     // (A `bK.H` row the answer names only as holding a copy
                     // of what K holds, `h>%k`: the holder holds that, not K's
                     // storage — as a `%K.H` row's; agora #377.)
-                    : b vbh & & & == vb0 98 ! vkept0 ! vself ? vvirt ( __vk_others_held vcal vk ( __vk_row_h vaix ) ) ( bck_callee_vheld vcal vk ( __vk_row_h vaix ) )
+                    // (A `dyn` method one of whose impls is the function walked:
+                    // the other impls answer, as for `h>k`.)
+                    : b vbh & & == vb0 98 ! vkept0 | & ! vself ( bck_callee_vheld vcal vk ( __vk_row_h vaix ) ) & vvirt ( __vk_others_held vcal vk ( __vk_row_h vaix ) )
                     : b vkept | vkept0 vbh
                     : b vhs | vheld vbh
                     // (…an answer that assumed an impl not walked yet leaves
@@ -34363,6 +34412,13 @@ unsafe @ __bck_try_exit_check s st i line → v {
                 : s fesx ( bck_field rec 6 )
                 ? != 0 g_bck_hr_any { ( __bck_hr_drop_owner fid ) } {}
                 ? | != 0 ( nurl_str_len fesx ) != 0 g_bck_hr_any { ( __bck_hr_set fid ( bck_sx_hroots fesx ) F ) } {}
+                // (…and it holds what the container's elements view — what a
+                // copy of the container holds: a copy of the element, or a
+                // value made of it, holds that too; agora #377.)
+                ? != 0 ( nurl_str_len fesx ) {
+                    : s fheld ( bck_sx_held_sources st fesx )
+                    ? & ! ( seq fheld `*` ) != 0 ( nurl_str_len fheld ) { ( bck_dep_set fid fheld ) } {}
+                } {}
                 = p + p 1
                 = done T
             } {}
@@ -34967,6 +35023,9 @@ unsafe @ __vk_assumptions_check → v {
 
 // …leave argument `h` holding a copy of argument `aix`'s views (`h>%aix`).
 @ bck_callee_vheld s cal s aix i h → b {
+    // (One whose walk makes no answer of views: A2's heldOfArgs,
+    // __vkheld_fallback.)
+    ? & >= h 0 ( str_contains_word ( __vkheld_fallback cal ( nurl_str_to_int aix ) ) ( nurl_str_int h ) ) { ^ T } {}
     : ~ s vk ( __vk_of cal )
     ? != 0 ( nurl_str_len vk ) { ^ ( str_contains_word ( nurl_str_slice vk 1 - ( nurl_str_len vk ) 1 ) ( nurl_str_cat4 ( nurl_str_int h ) `>` `%` aix ) ) } {}
     ^ ( __vk_pend cal )
@@ -35535,6 +35594,18 @@ unsafe @ bck_sx_is_id s e → b {
     ( bck_put_vd k ( bck_path_root wid ) ( __word_union ( __word_drop_all have other ) ( __word_drop_all hnd prevo ) ) )
 }
 
+// The sources `srcs` (marked or not) but those whose binding is one of
+// `drop`'s.
+@ __src_drop_plain s srcs s drop → s {
+    : ~ s out ``
+    : ~ s rest ( nurl_str_cat srcs `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ! ( str_contains_word drop ( __src_plain w ) ) { = out ( __word_union out w ) } {}
+    }
+    ^ out
+}
+
 // `list` without any word of `drop`.
 @ __word_drop_all s list s drop → s {
     ? == 0 ( nurl_str_len drop ) { ^ ( nurl_str_cat list `` ) } {}
@@ -35735,7 +35806,20 @@ unsafe @ bck_sx_is_id s e → b {
     } {}
     ? | == mk 100 == mk 99 {
         : s out ( bck_view_bind st wid rec `*` mk )
-        ( bck_dep_set wid ? ( seq srcs `*` ) ( bck_dep_reads st ( bck_field rec 2 ) wid ) srcs )
+        : ~ s dsrcs ? ( seq srcs `*` ) ( bck_dep_reads st ( bck_field rec 2 ) wid ) srcs
+        // (One its value's call lent it — an element or a field handle,
+        // `( vec_at vv 0 )` — is tied to the storage it is in by that
+        // borrow: what it depends on besides is what its value holds, what
+        // a copy of it holds (bck_sx_held_sources). A copy of it outlives
+        // `vv`, agora #347's review.)
+        ? & == mk 100 ! ( seq srcs `*` ) {
+            : s bsw ( nurl_sym_get g_bck ( bck_bkey `bs_` ( nurl_str_int wid ) ) )
+            ? != 0 ( nurl_str_len bsw ) {
+                : s hs ( bck_sx_held_sources st ( bck_field rec 8 ) )
+                ? ! ( seq hs `*` ) { = dsrcs ( __word_union hs ( __src_drop_plain dsrcs bsw ) ) } {}
+            } {}
+        } {}
+        ( bck_dep_set wid dsrcs )
         ^ out
     } {}
     ? != 0 g_bck_has_deps { ( bck_dep_clear wid ) } {}
@@ -38846,18 +38930,24 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
 // views (`ph_` k) in the answers this function's walk makes: `%k`
 // (__rv_note), `h>%k` (__vk_note_dep). A view parameter's own storage is
 // `pv_`; this is what is inside it.
-@ __bck_seed_held i pid i k → v {
+@ __bck_seed_held i pid i k b reg → v {
     : s pn ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int pid ) )
     : s hs ( nurl_str_int ( bck_intern ( nurl_str_cat `%` pn ) ) )
     ( bck_put ( bck_bkey `pp_` hs ) `1` )
     ( bck_put ( bck_bkey `ph_` hs ) ( nurl_str_int k ) )
-    : s vk ( bck_bkey `vds_` ( nurl_str_int pid ) )
-    : s cur ( nurl_sym_get g_bck vk )
-    ( bck_put_vd vk pid ? == 0 ( nurl_str_len cur ) ( nurl_str_cat hs `` ) ( nurl_str_cat3 cur ` ` hs ) )
-    // (Not g_bck_has_deps: the seed never changes — no path gives a
-    // parameter what it held on entry — so the joins have nothing of it to
-    // follow. A dependency the walk adds, of the seed or not, turns them
-    // on where it is added, as for any first dependency.)
+    // A parameter the body may give a new value (`inout`, or one it owns,
+    // `reg`) holds what it held on entry only on the paths that do not:
+    // the seed is a dependency as any other, which the joins and a loop's
+    // dependency snapshot follow — after a loop that may run no time it
+    // still holds it (agora #377's review). Any other parameter holds it
+    // throughout, so the joins have nothing of it to follow: not
+    // g_bck_has_deps, which a dependency the walk adds turns on where it is
+    // added, as for any first dependency.
+    ? reg { ( bck_dep_add pid hs ) } {
+        : s vk ( bck_bkey `vds_` ( nurl_str_int pid ) )
+        : s cur ( nurl_sym_get g_bck vk )
+        ( bck_put_vd vk pid ? == 0 ( nurl_str_len cur ) ( nurl_str_cat hs `` ) ( nurl_str_cat3 cur ` ` hs ) )
+    }
     = g_bck_held_any 1
 }
 
@@ -38930,7 +39020,7 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
         // (…what a copy of it holds, the pseudo `%pn`: __bck_seed_held. Not
         // a closure literal's, whose parameters stand for what they hold
         // already, `cv_`.)
-        ? & ! __pclo ( str_contains_word g_bck_own_params ( nurl_str_cat `%` pn ) ) { ( __bck_seed_held ( bck_intern pn ) pix ) } {}
+        ? & ! __pclo ( str_contains_word g_bck_own_params ( nurl_str_cat `%` pn ) ) { ( __bck_seed_held ( bck_intern pn ) pix | ( str_contains_word g_bck_own_params ( nurl_str_cat `&` pn ) ) ( str_contains_word g_bck_own_params ( nurl_str_cat `!` pn ) ) ) } {}
         = pix + pix 1
         = seed ( bck_st_set seed ( bck_intern pn ) BCK_OWNED )
         // (What the caller holds: a view of it may be handed back.)
