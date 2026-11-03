@@ -1,10 +1,10 @@
 # The claim
 
-> **Status: A1, A2, A3.0, A3.1, A3.4, and the first cuts of A3.2, A3.3
-> and A3.5 are proven** (`A1.memory_safe`, `A2.memory_safe`,
+> **Status: A1, A2, A3.0, A3.1, A3.4, and the first cuts of A3.2, A3.3,
+> A3.5 and A3.6 are proven** (`A1.memory_safe`, `A2.memory_safe`,
 > `A2.no_leak_end`, `A3.claim`, [`README.md`](README.md)); the rest of
-> A3.2, A3.3 and A3.5, A3.6 and B–D are the statement the proof is working
-> towards, not one it has reached.
+> A3.2, A3.3, A3.5 and A3.6, and B–D, are the statement the proof is
+> working towards, not one it has reached.
 
 ## Statement
 
@@ -16,9 +16,10 @@ nothing but what they move, (A3.1) for threads that also share `Arc`
 payloads, (A3.2, first cut) `Locked` values, (A3.3, first cut)
 `RwLocked` values read through frozen guards, (A3.4) `Atomic` words
 and channels, and (A3.5, first cut) library handles whose copies are one
-state, which cross a thread only with all their owners; the data-race
-clause for the rest of what threads share is the rest of A3.2, A3.3 and
-A3.5, and A3.6, and the link from the rules to nurlc and its code is B–D*
+state, which cross a thread only with all their owners, and (A3.6, first
+cut) module globals set at start; the data-race clause for the rest of
+what threads share is the rest of A3.2, A3.3, A3.5 and A3.6, and the link
+from the rules to nurlc and its code is B–D*
 (below): no use after free, no double free, no read through a dangling
 view, no out-of-bounds access, no data race, and everything it allocated
 is released — on the panic path as much as the normal one.
@@ -104,8 +105,9 @@ the LLVM / C11 memory model rather than redefining it.
     spawner gives up. Every thread runs A2's own step on the shared
     address space. In Lean: `A3.claim : A3.Claim` — no thread of a
     reachable configuration is stuck, no two threads race, and when every
-    thread has finished nothing is allocated — on the standard axioms
-    only. The proof gives each thread its own part of the address space,
+    thread has finished nothing is allocated but what the module globals
+    reach (A3.6; nothing at all for a program without globals,
+    `NoLeak.empty`) — on the standard axioms only. The proof gives each thread its own part of the address space,
     on which A2's invariant holds: a step on the shared space is a step on
     the part and leaves the other parts as they were, and a spawn cuts the
     spawner's part in two.
@@ -272,8 +274,37 @@ the LLVM / C11 memory model rather than redefining it.
       share of it is argued from typing, not a lemma, and phase D must
       show the runtime's reference count of a handle's block equals the
       model's owners.
-  - **A3.6** — module globals reached by several threads. Not proven
-    (`A3/DESIGN.md` gives the design).
+  - **A3.6, first cut** *(proven)* — module globals reached by several
+    threads.
+    - **The calculus.** A global set at start (`: ( Locked T ) g ( make )`)
+      is a field of the configuration (`Cfg.gl`, `Mem.gl`) that every
+      thread reads and no step writes (`Step.gl`). Its type synchronises
+      itself (`Ty.sync`: a lock, `RwLocked`, `Atomic` or channel share, or
+      an `Arc` of no library handle), so a `( Vec T )` global is refused
+      (h263). A read (`Rhs.glob`) gives an owned clone of the global's
+      share, so `withLock`, a read guard, a channel or an atomic operation
+      on it are A3.2–A3.4's rules unchanged. A scalar global is an
+      `Atomic` set at start: its read and write are `atomic_load` /
+      `atomic_store` (h273, h202: nothing hands it anything to own).
+    - **The start.** `A3.claim` takes the start's globals as a premise
+      (`GlobsOK`: each fits a synchronising type, A2's invariant holds of
+      them, and every block is reached from one). With no global it is
+      the earlier statement. The sweep keeps what the globals reach, and
+      `NoLeak` says only that is left once every thread has finished, as
+      the runtime keeps globals until the process exits.
+    - **In Lean.** `A2.memory_safe`, `A2.no_leak_end`, `A2.no_leak_panic`
+      and `A3.claim` hold with all of this, on the standard axioms only.
+    - **Assumed, not proven:** the runtime reads and writes a scalar
+      global with relaxed atomics, where DRF-SC is cited for `seq_cst`.
+      Every access is atomic, so there is no data race either way; the
+      interleaving model is exact up to the integers a load returns, and
+      no ownership fact reads them.
+    - **Not typed yet:** the `make` phase (that running each `make` leaves
+      a start satisfying `GlobsOK`); a read's type tied to its global's
+      declared type (a read at another type panics in the model, and
+      nurlc types each read by the declaration); `Cond` / `Semaphore`
+      globals. Owning, struct and option globals are `unsafe`-only, the
+      trusted base (h202 h272 h273).
 - **B** — the `unsafe` base of the standard library is semantically
   well-typed, so safe code built on it inherits the theorem.
 - **C** — every program nurlc accepts is well-typed in the formal rules.

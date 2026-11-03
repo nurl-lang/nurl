@@ -15,4 +15,4 @@ bad=$(grep -oE "depends on axioms: \[[^]]*\]" <<<"$out" | grep -vE "^depends on 
 if [ -n "$bad" ] || ! grep -q "depends on axioms" <<<"$out"; then
   echo "error: unexpected axioms: $bad" >&2; exit 1
 fi
-echo "formal: A1, A2, A3.0, A3.1, A3.4 and the first cuts of A3.2, A3.3, A3.5 proofs complete"
+echo "formal: A1, A2, A3.0, A3.1, A3.4 and the first cuts of A3.2, A3.3, A3.5, A3.6 proofs complete"
