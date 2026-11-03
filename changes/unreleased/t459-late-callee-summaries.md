@@ -20,3 +20,12 @@
   `g2 [?String]`, called `r` its own on every run and handed it back as
   such, so its caller released what `o` still held. A call to a generic
   instance compiled already now reads that instance's per-call answer.
+- **A forwarder of a keeper says per call whether it hands its result
+  over** (Agora #459; probes
+  forwarder_of_a_generic_keeper_hands_on_its_answer and three more).
+  `@ gfw [A] ? A o A d → A { : A x ( ug [A] o d ) ^ x }`, with `ug` taking
+  `o` over and handing back `d` otherwise, told its caller "lent" on every
+  run. The caller copied what it was given, and the value `gfw` had handed
+  over leaked. The binding's own per-call answer is now handed on, when it
+  is returned bare, rebound, as a value block's tail or wrapped in an
+  option.

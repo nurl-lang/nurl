@@ -5275,6 +5275,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
     // Noreturn inference input: this body does return somewhere.
     = g_fn_ret_count + g_fn_ret_count 1
     ( nurl_sym_set_deep syms `__agg_lends__` `` )
+    ( nurl_sym_set_deep syms `__agg_lends_call__` `` )
     ( nurl_sym_set_deep syms `__agg_lends_part__` `` )
     ( nurl_sym_set_deep syms `__agg_direct__` `` )
     ( nurl_sym_set_deep syms `__agg_take_own__` `` )
@@ -5543,6 +5544,20 @@ unsafe @ gen_ret i lex i syms i cg → s {
     } {}
     // (The call's own per-call answer, when hbit is it: below.)
     : ~ b ret_call_bit F
+    // (…and a binding's flag that is a call's own answer: below.)
+    : ~ b ret_bind_bit F
+    // A value block whose tail is such a binding (`^ { : A x ( ug [A] o d )
+    // x }`) hands it back as `^ x` does: the block is no scope of its own,
+    // so the binding is still here, and its flag — with what it may be a
+    // cursor over of this frame's own — is the answer (agora #459).
+    ? & == ret_first_tt TT_LBRACE ( is_ident_tok ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) ) ) {
+        : s __btp ( mem_udrop_ptr_of syms ( nurl_sym_get syms `__tail_first_val__` ) )
+        ? & != 0 ( nurl_str_len __btp ) != 0 ( nurl_str_len ( __call_owned_by syms __btp ) ) {
+            = hbit ( __own_with_sources syms cg __btp )
+            = ret_bind_bit T
+            ( mem_hown_mark_dyn syms )
+        } {}
+    } {}
     ? == ret_eff_tt TT_LPAREN {
         : s cro ( mem_call_retown syms cg )
         ? != 0 ( nurl_str_len cro ) { = hbit cro = ret_call_bit T } {}
@@ -5960,6 +5975,9 @@ unsafe @ gen_ret i lex i syms i cg → s {
             : s self ( nurl_sym_get syms `__fn_self_name__` )
             : s kv ( nurl_cg_reg cg )
             ( emit_sink_flag_load ( nurl_str_cat `@.__nurl_retown.` ( nurl_str_int ( retown_flag self self ) ) ) kv )
+            // (Whose flag is a call's own answer for this value, when one
+            // is: __call_owned_by.)
+            : s __cob ( __call_owned_by syms cup )
             : ~ s acc ( mem_udrop_flag_get syms cg cup )
             : ~ s al ( nurl_sym_get2 syms cup `__alias` )
             ~ != 0 ( nurl_str_len al ) {
@@ -5999,6 +6017,16 @@ unsafe @ gen_ret i lex i syms i cg → s {
             ? != 0 ( nurl_str_len __cpair ) { ( mem_hown_dyn_if syms __cpair ) } { ( mem_hown_mark_dyn syms ) }
             = val ( mem_emit_cloneif cg cty val ( mem_hown_static syms cg c ) )
             = hbit acc
+            // (When that flag is a call's own answer — the binding is bound
+            // straight from the call, or a cursor over one that is — it
+            // says exactly where the value is a lend of what the call may
+            // lend from, a parameter as much as a local: the binding hands
+            // back what the call did, as `^ ( g x )` does, and no rule below
+            // turns it into "lent" throughout. Answered "lent" on every run,
+            // a forwarder of a call that hands over on some runs, `: A x (
+            // ug [A] o d ) ^ x`, had its caller copy what it was handed,
+            // which leaked: agora #459.)
+            ? != 0 ( nurl_str_len __cob ) { = ret_bind_bit T } {}
         } {}
         // A local that owns nothing at all (never registered: bound to a
         // literal that carries nothing, then assigned a borrow) likewise.
@@ -6404,7 +6432,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
         // here, a forwarder of a function that hands back a fresh value on
         // some runs and a lend on others leaked the fresh one at every
         // caller that took it over: agora #375.)
-        = hbit ? ret_call_bit ( nurl_str_cat hbit `` ) ( nurl_str_cat `false` `` ) }
+        = hbit ? | ret_call_bit ret_bind_bit ( nurl_str_cat hbit `` ) ( nurl_str_cat `false` `` ) }
     {}
     // A String / Vec read out of a field or through a cast (`^ . impl
     // value` in arc_get) belongs to whatever holds it: lent, not given.
@@ -6422,8 +6450,14 @@ unsafe @ gen_ret i lex i syms i cg → s {
     : b __rb_read & & & ! ret_field_copy | __rb_h __rb_nc
     | == ret_first_tt TT_DOT == ret_first_tt TT_HASH
     ! & == ret_first_tt TT_HASH != 0 ( nurl_sym_len syms `__last_cast_lit__` )
-    ? | != 0 ( nurl_sym_len syms `__agg_lends__` ) __rb_read
-    { ( nurl_sym_set_deep syms `__fn_ret_borrow__` `1` ) = hbit ( nurl_str_cat `false` `` ) }
+    // (…unless every lend of a parameter in it is where a call's own answer
+    // says — `__agg_lends_call__` — and that answer is this one: the
+    // binding's flag handed back (ret_bind_bit), or a wrap's payload's
+    // (`__agg_take_own__`, below). Agora #459.)
+    : b __al_un != 0 ( nurl_sym_len syms `__agg_lends__` )
+    : b __al_keep & & ! __rb_read ! __al_un | ret_bind_bit & == ret_first_tt TT_AT != 0 ( nurl_sym_len syms `__agg_take_own__` )
+    ? | | __al_un != 0 ( nurl_sym_len syms `__agg_lends_call__` ) __rb_read
+    { ( nurl_sym_set_deep syms `__fn_ret_borrow__` `1` ) = hbit ? __al_keep ( nurl_str_cat hbit `` ) ( nurl_str_cat `false` `` ) }
     {}
     ? __rb_read { ( nurl_sym_set_deep syms `__fn_ret_borrow_read__` `1` ) } {}
     // A value read out of a parameter's storage through a raw pointer and
@@ -17300,19 +17334,38 @@ unsafe @ gen_call i lex i syms i cg → s {
         // defined below, a generic instance or a library function compiled
         // later: whether it takes the argument over is a module-end fact
         // (consume_flag, or the store flag below). A call's result that
-        // lends on some runs is copied on the runs it lends and the callee
-        // takes it; a value of its own goes as it is. Passed as is, a
-        // callee that took it released what its owner still drops — the
-        // same callee defined above was handed a copy (agora #459).
-        : b __apc & & & & & & & & summary_callee == arg_eff_tt TT_LPAREN == 0 ( nurl_sym_len g_fn_compiled call_name )
-        ! ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) != 0 ( nurl_str_len arg_lent ) ! ( seq arg_lent `0` ) ! ( seq arg_lent `false` )
+        // lends on some runs — or a `?` / `??` whose arms may lend — is
+        // copied on the runs it lends and the callee takes it; a value of
+        // its own goes as it is. Passed as is, a callee that took it
+        // released what its owner still drops — the same callee defined
+        // above was handed a copy (agora #459).
+        // (How it lends: 1 by the call's answer, 2 by the join's, 3 on
+        // every path — the join's arms lend bindings throughout — and 4 a
+        // field of a call's result, where that call did not hand its
+        // result over, as for a `sink` above.)
+        : i __apm ? == bck_arg_tt TT_DOT ? != 0 ( nurl_str_len arg_ofcall ) 4 0
+        ? == arg_eff_tt TT_LPAREN ? & & != 0 ( nurl_str_len arg_lent ) ! ( seq arg_lent `0` ) ! ( seq arg_lent `false` ) 1 0
+        ? | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST
+        ? & != 0 ( nurl_str_len arg_join_own ) ! ( seq arg_join_own `true` ) 2
+        ? & == 0 ( nurl_str_len arg_join_own ) != 0 ( nurl_str_len arg_join_ids ) 3 0 0
+        : b __apc & & & & & summary_callee != __apm 0 == 0 ( nurl_sym_len g_fn_compiled call_name )
+        ! ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
         != ( nurl_str_get at - ( nurl_str_len at ) 1 ) 42 ( __clone_supported at syms )
         ? __apc {
             : s __apk ( nurl_cg_reg cg )
             ( emit_sink_flag_load ( consume_flag call_name fname arg_idx ) __apk )
             : s __aps ( nurl_cg_reg cg )
             ( emit_sink_flag_load ( nurl_str_cat `@.__nurl_store.` ( nurl_str_int ( store_flag call_name fname arg_idx ) ) ) __aps )
-            : s __apl ( mem_lent_reg cg arg_lent )
+            : ~ s __apl ( nurl_str_cat `1` `` )
+            ? == __apm 1 { = __apl ( mem_lent_reg cg arg_lent ) } {}
+            ? == __apm 2 {
+                = __apl ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print __apl ) ( nurl_print ` = xor i1 ` ) ( nurl_print arg_join_own ) ( nurl_print `, 1\n` )
+            } {}
+            ? & == __apm 4 != 0 ( nurl_str_len arg_tfown ) {
+                = __apl ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print __apl ) ( nurl_print ` = xor i1 ` ) ( nurl_print ? ( seq arg_tfown `true` ) `1` arg_tfown ) ( nurl_print `, 1\n` )
+            } {}
             : s __apo ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print __apo ) ( nurl_print ` = or i1 ` ) ( nurl_print __apk ) ( nurl_print `, ` ) ( nurl_print __aps ) ( nurl_print `\n` )
             : s __apw ( nurl_cg_reg cg )
@@ -24707,6 +24760,10 @@ unsafe @ mem_path_to_indices s path → s {
 @ mem_udrop_alias_lend i syms i cg s ptr → v {
     ? == 0 ( nurl_str_len ptr ) { ^ v } {}
     ( mem_udrop_optparam_kept syms ptr )
+    // (A lend of a parameter its value is exactly where a call's own answer
+    // says it lent — __call_owned_by: `__agg_lends_call__`, which leaves a
+    // per-call answer standing, agora #459.)
+    : b __pcall != 0 ( nurl_str_len ( __call_owned_by syms ptr ) )
     : ~ s rest ( nurl_sym_get2 syms ptr `__alias` )
     ~ != 0 ( nurl_str_len rest ) {
         : s src ( str_first_word rest ) = rest ( str_skip_word rest )
@@ -24716,7 +24773,7 @@ unsafe @ mem_path_to_indices s path → s {
         // handed back — is no lend: its value leaves with the cursor, and
         // the return's ownership is that parameter's flag.)
         ? & != 0 ( nurl_sym_len2 syms src `__pname` ) ! ( __param_owned_slot syms src )
-        { ( nurl_sym_set_deep syms `__agg_lends__` `1` )
+        { ( nurl_sym_set_deep syms ? __pcall `__agg_lends_call__` `__agg_lends__` `1` )
             ( __record_param_idx syms `__fn_retpart__` ( nurl_sym_get2 syms src `__pname` ) ) } {}
         // (Not the whole the cursor's value is part of: __part_src.)
         ? ( __part_src syms ptr src ) {} { ( mem_alias_src_leaves syms cg src ptr ) }
@@ -24769,6 +24826,59 @@ unsafe @ mem_path_to_indices s path → s {
 @ mem_udrop_param_moved i syms s ptr → v {
     : s pname ( nurl_sym_get2 syms ptr `__pname` )
     ? != 0 ( nurl_str_len pname ) { ( mem_record_kept_param syms pname ) ( bck_record_inferred_sink syms pname ) } {}
+}
+
+// Whether `ptr`'s value is this frame's own, as an i1: its flag, or one of
+// a local's (or a parameter's this function owns) that it is a cursor over
+// — that value leaves with it (gen_ret's cursor rule, which reads the same).
+@ __own_with_sources i syms i cg s ptr → s {
+    : ~ s acc ( mem_udrop_flag_get syms cg ptr )
+    : ~ s al ( nurl_sym_get2 syms ptr `__alias` )
+    ~ != 0 ( nurl_str_len al ) {
+        : s w ( str_first_word al ) = al ( str_skip_word al )
+        ? | & == 0 ( nurl_sym_len2 syms w `__pname` ) == 0 ( nurl_sym_len2 syms w `__optparam` ) ( __param_owned_slot syms w ) {
+            : s wf ( mem_udrop_flag_get syms cg w )
+            : s o ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print o ) ( nurl_print ` = or i1 ` ) ( nurl_print acc ) ( nurl_print `, ` ) ( nurl_print wf ) ( nurl_print `\n` )
+            = acc o
+        } {}
+    }
+    ^ acc
+}
+
+// The binding whose flag says, per run, whether `ptr`'s value is this
+// frame's own, when that flag is a call's own answer (agora #459): `ptr`
+// itself bound straight from a call (`@<slot>`, __mem_bind_call_bit), or the
+// one local so bound that `ptr` is a cursor over (`: A y x`: its own flag
+// says whether it was given a value of its own since, cleared at the bind),
+// when it lends nothing that local may not — its other sources are that
+// local's. `` otherwise.
+@ __call_owned_by i syms s ptr → s {
+    ? == 0 ( nurl_str_len ptr ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s sb ( nurl_sym_get2 syms ptr `__sborrow` )
+    ? & != 0 ( nurl_str_len sb ) == ( nurl_str_get sb 0 ) 64 { ^ ( nurl_str_cat ptr `` ) } {}
+    ? | == 0 ( nurl_sym_len2 syms ptr `__live` ) != 0 ( nurl_str_len sb ) { ^ ( nurl_str_cat `` `` ) } {}
+    : ~ s rest ( nurl_sym_get2 syms ptr `__alias` )
+    : ~ s one ``
+    : ~ b two F
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? & == 0 ( nurl_sym_len2 syms w `__pname` ) == 0 ( nurl_sym_len2 syms w `__optparam` ) {
+            ? != 0 ( nurl_str_len one ) { = two T } { = one ( nurl_str_cat w `` ) }
+        } {}
+    }
+    ? | two == 0 ( nurl_str_len one ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s ob ( nurl_sym_get2 syms one `__sborrow` )
+    ? | == 0 ( nurl_str_len ob ) != ( nurl_str_get ob 0 ) 64 { ^ ( nurl_str_cat `` `` ) } {}
+    : s oal ( nurl_sym_get2 syms one `__alias` )
+    : ~ s r2 ( nurl_sym_get2 syms ptr `__alias` )
+    : ~ b other F
+    ~ != 0 ( nurl_str_len r2 ) {
+        : s w2 ( str_first_word r2 ) = r2 ( str_skip_word r2 )
+        ? & ! ( seq w2 one ) ! ( str_contains_word oal w2 ) { = other T } {}
+    }
+    ? other { ^ ( nurl_str_cat `` `` ) } {}
+    ^ one
 }
 
 // `ptr` may be a cursor over `src`'s value. May-alias, never narrowed: an
@@ -56735,6 +56845,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     ( nurl_sym_def syms `__fn_inferred_vcopy__` `` )
     ( nurl_sym_def syms `__fn_pending_keep_impl__` `` )
     ( nurl_sym_def syms `__agg_lends__` `` )
+    ( nurl_sym_def syms `__agg_lends_call__` `` )
     ( nurl_sym_def syms `__agg_lends_part__` `` )
     ( nurl_sym_def syms `__agg_take_own__` `` )
     ( nurl_sym_def syms `__ret_agg__` `` )
