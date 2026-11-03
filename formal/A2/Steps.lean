@@ -2546,6 +2546,7 @@ theorem Step.blk {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) : 
   | callc _ _ _ _ hb => have := BlkLe.of_eq (BindParams.blk hb); exact this
   | push ht _ _ _ => have := BlkLe.of_eq (TakeVal.blk ht); exact this
   | pushRealloc ht _ _ _ => have := BlkLe.of_eq (TakeVal.blk ht); exact this
+  | insert _ ht _ _ _ => have := BlkLe.of_eq (TakeVal.blk ht); exact this
   | editPush ht _ _ | editPushRealloc ht _ _ => have := BlkLe.of_eq (TakeVal.blk ht); exact this
   | editSet _ _ ht _ _ _ | editSetOOB _ ht _ _ _ => have := BlkLe.of_eq (TakeVal.blk ht); exact this
   | _ => exact BlkLe.refl _

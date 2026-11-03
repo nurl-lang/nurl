@@ -1068,6 +1068,7 @@ theorem StmtT.keepF {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     obtain ⟨E1, h1, hm1⟩ := (hpa.domMode hy).get h
     exact ⟨killE .realloc t.holdsView x E1, by simp [A2.setE, upd_ne _ _ hrx, A2.kill, h1],
       by rw [killE_mode, hm1]⟩
+  | insert _ _ _ ih => exact ih
   | @free Γ F x E0 t _ _ _ _ hxF _ =>
     intro r hr E h
     have hrx : r ≠ x := fun e => hxF (e ▸ hr)
@@ -1274,6 +1275,7 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
         have hdd1 : d ∈ Ex1.vdeps := by simpa [Entry.vdeps, hos, ownHeld, ht] using hdd
         obtain ⟨Er, hEr, hro⟩ := hw1.dtor x Ex1 hx1 hd hos (Or.inl hnint) d hdd1 hnm
         exact kill_root hEr hro
+  | insert _ _ _ ih => exact ih
   | @free Γ F x E t hx hl hm hty hxF _ =>
     intro h
     exact h.moveOut hx .replace false

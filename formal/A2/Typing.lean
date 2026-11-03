@@ -1457,6 +1457,7 @@ def Stmt.src : Stmt → Bool
   | .edit _ _ _ => true
   | .withLock _ _ s => s.src
   | .scopeL _ _ _ _ => false
+  | .insert _ _ _ => true
 
 /-! ### Functions -/
 
@@ -1662,6 +1663,7 @@ def Stmt.vars : Stmt → List Var
   | .edit _ x op => x :: op.vars
   | .withLock a x s => x :: a :: s.vars
   | .scopeL _ _ x s => x :: s.vars
+  | .insert x i y => x :: y :: i.vars
 
 theorem Expr.vars_rename (ρ : Var → Var) (e : Expr) : (e.rename ρ).vars = e.vars.map ρ := by
   induction e <;> simp_all [Expr.rename, Expr.vars]

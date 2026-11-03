@@ -114,6 +114,7 @@ theorem Step.grows {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
   | iteF _ => exact Grows.refl _
   | «while» => exact Grows.refl _
   | push ht _ _ _ => exact (TakeVal.grows ht).trans (Grows.of_eq rfl rfl)
+  | insert _ ht _ _ _ => exact (TakeVal.grows ht).trans (Grows.of_eq rfl rfl)
   | @pushRealloc m1 _ _ _ _ _ d _ ht _ _ _ =>
     refine (TakeVal.grows ht).trans ⟨(by show m1.nid ≤ m1.nid + 1; omega), fun i hi => ?_, BlkLe.refl _⟩
     change upd (upd m1.alloc d false) m1.nid true i = true at hi
@@ -207,6 +208,7 @@ theorem Step.gl {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) : r
   | assign _ he _ _ => have h := EvalR.gl he; exact h
   | push ht _ _ _ => have h := TakeVal.gl ht; exact h
   | pushRealloc ht _ _ _ => have h := TakeVal.gl ht; exact h
+  | insert _ ht _ _ _ => have h := TakeVal.gl ht; exact h
   | editPush ht _ _ => have h := TakeVal.gl ht; exact h
   | editPushRealloc ht _ _ => have h := TakeVal.gl ht; exact h
   | editSet _ _ ht _ _ _ => have h := TakeVal.gl ht; exact h

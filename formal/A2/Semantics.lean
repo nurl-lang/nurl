@@ -577,6 +577,7 @@ def Stmt.rename (ρ : Var → Var) : Stmt → Stmt
   | .edit b x op => .edit b (ρ x) (op.rename ρ)
   | .withLock a x s => .withLock (ρ a) (ρ x) (s.rename ρ)
   | .scopeL k t x s => .scopeL k t (ρ x) (s.rename ρ)
+  | .insert x i y => .insert (ρ x) (i.rename ρ) (ρ y)
 
 /-- The renaming of a call of a function with parameters `ps` on `args`,
     its variables placed from `base`. -/
@@ -806,6 +807,15 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
       {c d : Nat} {es : List Val} {a' : Nat → Bool} :
       Eval m i n → TakeVal m y v m1 → NodeOf m1 x o T t c d es → es.length ≤ n →
       Frees m1.alloc v a' → Step P m (.edit b x (.set i y)) (.ok { m1 with alloc := a' } .skip)
+  /-- A2-elem (Agora #391): `y`'s value, taken as `vec_push` takes it, goes
+      into `x`'s elements at index `n` (at the end if there are fewer): the
+      give-back of an element handed over (`withElem`).  The buffer does not
+      move: the runtime wrote the element in place. -/
+  | insert {m m1 : Mem} {x y : Var} {i : Expr} {n : Nat} {v : Val} {t : Ty} {c d : Nat}
+      {es : List Val} :
+      Eval m i n → TakeVal m y v m1 → m1.st x = some ⟨true, some (.node t c d es)⟩ →
+      m1.alloc c = true → m1.alloc d = true →
+      Step P m (.insert x i y) (.ok (m1.set x ⟨true, some (.node t c d (es.take n ++ v :: es.drop n))⟩) .skip)
   | free {m : Mem} {x : Var} {t : Val} {a' : Nat → Bool} :
       m.st x = some ⟨true, some t⟩ → Frees m.alloc t a' →
       Step P m (.free x) (.ok ({ m with alloc := a' }.set x ⟨true, none⟩) .skip)

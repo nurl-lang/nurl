@@ -320,6 +320,15 @@ theorem _root_.A2.Step.cell {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step 
       · exact .inl (ht.cell.2 (.of_slot hx (Sub.child he hse)))
       · rw [List.mem_singleton] at he; subst he; exact .inl (ht.cell.1 hse)
     · exact .inl (ht.cell.2 hc)
+  | insert _ ht hx _ _ =>
+    intro k hc
+    rcases CellAt.set hc with ⟨w, hw, hs⟩ | hc
+    · cases hw
+      obtain ⟨e, he, hse⟩ := sub_cell_node hs
+      rcases List.mem_append.mp ((perm_insert _ _ _).symm.subset he) with he | he
+      · exact .inl (ht.cell.2 (.of_slot hx (Sub.child he hse)))
+      · rw [List.mem_singleton] at he; subst he; exact .inl (ht.cell.1 hse)
+    · exact .inl (ht.cell.2 hc)
   | pushRealloc ht hx _ _ =>
     intro k hc
     rcases CellAt.set hc with ⟨w, hw, hs⟩ | hc

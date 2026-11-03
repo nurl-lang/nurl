@@ -920,6 +920,13 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
   | scopeL {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x : Var} {s : Stmt} :
       (∃ E, Γ x = some E ∧ E.mode ≠ .rootb ∧ E.ty = t) → x ∉ F → StmtT P Γ F s Δ → EndOK Δ x →
       StmtT P Γ F (.scopeL k t x s) (exitScope x Δ)
+  /-- A2-elem (Agora #391): `y`'s value moves into `x` at index `i`: a push
+      whose element then moves to index `i`.  The invariant does not see the
+      order of an owner's elements (`MInv.perm`), so it is typed as the push
+      `vec_push x y` is.  It is the give-back of an element handed over
+      (`withElem`). -/
+  | insert {Γ Δ : Ctx} {F : List Var} {x y : Var} {i : Expr} :
+      ExprT Γ i → x ∉ F → StmtT P Γ F (.push x y) Δ → StmtT P Γ F (.insert x i y) Δ
   | scopeD {Γ Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {s : Stmt} :
       (∃ E, Γ x = some E ∧ E.mode = .own ∧ E.ty.hasFn = false ∧ DtorOK P f E.ty) → x ∉ F →
       StmtT P Γ F s Δ → EndOK Δ x →

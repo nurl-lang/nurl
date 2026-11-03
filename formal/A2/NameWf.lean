@@ -902,6 +902,7 @@ theorem StmtT.names {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : St
       rcases hd' with hd' | hd'
       · exact hN d hd' b t' hk'
       · have := memDeps_noName d hd'; rw [hk'] at this; cases this
+  | insert _ _ _ ih => exact fun _ hn => ih rfl hn
   | @free Γ F x E t hx _ _ _ _ _ =>
     intro _ hn
     exact hn.moved hx

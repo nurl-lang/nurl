@@ -237,6 +237,7 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
     exact fun _ hanch _ => CtxRel.editBV hanch hx hmx harg hyx hx1 hl1 hthru hV
   | @free Γ F x E t hx _ hmo _ hxF hpin =>
     exact fun _ hanch _ => CtxRel.moved hanch hx (by rw [hmo]; simp) hxF hpin.1
+  | insert _ _ _ ih => exact fun _ hanch hn => ih rfl hanch hn
   | sub hw _ ho ih =>
     intro hs hanch _
     have h0 := CtxRel.weaker hw

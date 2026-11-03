@@ -232,6 +232,14 @@ theorem Step.ownedId {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r
       · exact .inl (b1 i (OwnedId.of_slot hx hi))
       · exact .inl (a1 i hi)
     · exact .inl (b1 i hi)
+  | insert _ ht hx _ _ =>
+    obtain ⟨a1, b1⟩ := TakeVal.ownedId ht hb
+    intro i hi
+    rcases OwnedId.set_some hi with ⟨_, hiv⟩ | hi
+    · rcases mem_ids_push ((ids_perm (perm_insert _ _ _)).subset hiv) with hi | hi
+      · exact .inl (b1 i (OwnedId.of_slot hx hi))
+      · exact .inl (a1 i hi)
+    · exact .inl (b1 i hi)
   | pushRealloc ht hx _ _ =>
     obtain ⟨a1, b1⟩ := TakeVal.ownedId ht hb
     intro i hi
@@ -514,7 +522,7 @@ theorem Step.payAt {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
     rw [BindParams.blk hbp] at hk'
     exact .inl ⟨bl, hk', hi⟩
   | push ht _ _ _ | pushRealloc ht _ _ _ | editPush ht _ _ | editPushRealloc ht _ _
-    | editSet _ _ ht _ _ _ | editSetOOB _ ht _ _ _ =>
+    | editSet _ _ ht _ _ _ | editSetOOB _ ht _ _ _ | insert _ ht _ _ _ =>
     intro k i ⟨bl, hk, hi⟩
     rw [← TakeVal.blk ht]
     exact .inl ⟨bl, hk, hi⟩

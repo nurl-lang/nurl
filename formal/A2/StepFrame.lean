@@ -270,6 +270,11 @@ theorem step_new {P : Prog} {m m' : Mem} {s s' : Stmt} (hst : Step P m s (.ok m'
     by_cases hvx : v = x
     · subst hvx; rw [takeVal_none ht h] at hx; cases hx
     · simp [upd_ne _ _ hvx, takeVal_none ht h] at h'
+  | @insert _ x _ _ _ _ _ _ _ _ _ ht hx _ _ =>
+    cases hr; intro v h h'
+    by_cases hvx : v = x
+    · subst hvx; rw [takeVal_none ht h] at hx; cases hx
+    · simp [upd_ne _ _ hvx, takeVal_none ht h] at h'
   | @free x _ _ hx _ =>
     cases hr; intro v h h'
     by_cases hvx : v = x

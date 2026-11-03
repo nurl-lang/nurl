@@ -84,6 +84,24 @@ theorem ids_perm {t : Ty} {c d : Nat} {es es' : List Val} (h : es.Perm es') :
     (Val.node t c d es').ids.Perm (Val.node t c d es).ids := by
   simp only [ids_node]; exact ((idsL_perm h).symm.cons d).cons c
 
+theorem Mem.set_set (m : Mem) (x : Var) (a b : Slot) : (m.set x a).set x b = m.set x b := by
+  unfold Mem.set; congr 1; funext v; simp only [upd]; split <;> simp [*]
+
+/-- What `insert` puts back at index `n` is what a push puts at the end, in
+    another order. -/
+theorem perm_insert (es : List Val) (n : Nat) (v : Val) :
+    (es ++ [v]).Perm (es.take n ++ v :: es.drop n) := by
+  conv => lhs; rw [← List.take_append_drop n es, List.append_assoc]
+  exact (List.perm_append_comm (l₁ := es.drop n) (l₂ := [v])).append_left _
+
+/-- ... and what an element moved out of index `n` leaves, with it moved to
+    the end. -/
+theorem perm_erase {es : List Val} {n : Nat} (h : n < es.length) :
+    es.Perm (es.take n ++ es.drop (n + 1) ++ [es[n]]) := by
+  conv => lhs; rw [← List.take_append_drop n es, List.drop_eq_getElem_cons h]
+  rw [List.append_assoc]
+  exact (List.perm_append_comm (l₁ := [es[n]]) (l₂ := es.drop (n + 1))).append_left _
+
 /-! ### The heap and the cover -/
 
 theorem HeapOK.perm {m : Mem} (hh : HeapOK m) {x : Var} {t : Ty} {c d : Nat} {es es' : List Val}

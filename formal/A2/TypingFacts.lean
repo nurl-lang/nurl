@@ -791,6 +791,7 @@ theorem StmtT.dkeep {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (
     have ht := hdb hd0
     exact ⟨_, hx, hd0, hos0, hn0, fun d hdd hnm => hs0 d (by simpa [Entry.vdeps, ownHeld, ht] using hdd) hnm⟩
   | free hx => exact fun _ _ => DKeep.moveOut hx _ _
+  | insert _ _ _ ih => exact ih
   | sub hw _ hw' ih =>
     intro ho hp
     have h0 := ih (ho.weaker hw) (hp.weaker hw)
@@ -959,6 +960,7 @@ theorem StmtT.dstay {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (
     rw [hx1] at h1; cases h1
     exact ⟨hd1, hos1⟩
   | free hx => exact DStay.moveOut hx _ _
+  | insert _ _ _ ih => exact ih
   | sub hw _ hw' ih =>
     rcases hw' with rfl | hw'
     · exact ih.weaker_left hw

@@ -624,6 +624,22 @@ theorem progress {P : Prog}
     obtain ⟨v, m1, htk, hst, hal⟩ := htake
     exact Or.inr <| Or.inr ⟨_, Step.push htk (by rw [hst]; exact hT) (by rw [hal]; exact hac)
       (by rw [hal]; exact had)⟩
+  | @insert Γ Δ F x y i he _ _ ih =>
+    -- the push it is typed as has a step, so it has one
+    intro m hcd hi
+    have hi0 : Inv m Γ F (.push x y) :=
+      hi.respine rfl (fun v hv => by
+        rcases List.mem_cons.mp hv with h | h
+        · simp [Stmt.vars, h]
+        · simp only [List.mem_singleton] at h; simp [Stmt.vars, h]) trivial trivial trivial
+    obtain ⟨n, hn⟩ := eval_exists hi.toMInv he
+    rcases ih hcd hi0 with h | h | ⟨r, hr⟩
+    · cases h
+    · exact absurd h (by simp [Blocked])
+    · cases hr with
+      | push htk hT hc hd => exact Or.inr <| Or.inr ⟨_, Step.insert hn htk hT hc hd⟩
+      | pushRealloc htk hT hc hd => exact Or.inr <| Or.inr ⟨_, Step.insert hn htk hT hc hd⟩
+      | waitPanic hw => exact absurd hw (by simp [Waits])
   | @free Γ F x E t hx hl hm hty _ _ =>
     intro m hcd hi
     obtain ⟨T, hT, hwf, _⟩ := hi.own_val hx hl (by rw [hm]; rfl)

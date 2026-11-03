@@ -3932,6 +3932,10 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
   | @editBV Γ Γ1 F x op Ex Ex1 t D hx hmx hl hty hhv hfn hxF harg hyx hx1 hl1 hne hthru hV =>
     intro _ hab hw hn hT
     exact editBV_ren h hab (hT (.inl rfl)) hP hw hn hx hmx hl hty hhv hfn hxF harg hyx hx1 hl1 hne hthru hV
+  | @insert Γ Δ F x y i he _ _ ih =>
+    intro _ hab hw hn hT
+    obtain ⟨tp, abp⟩ := ih rfl hab hw hn hT
+    exact ⟨StmtT.insert (exprT_ren h hab he) (h.Fcout x) tp, abp⟩
   | @sub Γ Γ0 Δ0 Δ F k hw0 tk ho ih =>
     intro hs hab hw hn hT
     have hab0 := hab.weaker hw0

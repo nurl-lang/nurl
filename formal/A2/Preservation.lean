@@ -1773,6 +1773,28 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         exact fin (MInv.editBV_setOOB post.inv (post.rel.anch hanch) hx1 hmx hl1 hty hhv hfn hthru hV
             memDeps_noName (hp.mem hfn) hno hfr)
           (by simp [post.nv]) (covers_editSetOOB (covers_takeVal hi.cover htk) hfr) post.frz
+  | @insert Γ Δ F x y i _ hxF _ ih =>
+    -- a push, and its element moved to index `n` (`MInv.perm`)
+    intro m m' s' hcd hi hst
+    cases hst with
+    | @insert m1 _ _ _ n w t c d es _ htk hT hc hd =>
+      have hi0 : Inv m Γ F (.push x y) :=
+        hi.respine rfl (fun v hv => by
+          rcases List.mem_cons.mp hv with h | h
+          · simp [Stmt.vars, h]
+          · simp only [List.mem_singleton] at h; simp [Stmt.vars, h]) trivial trivial trivial
+      obtain ⟨Γ', ht', hi', hnv, hk, hfz⟩ := ih hcd hi0 (Step.push htk hT hc hd)
+      have hT' : (m1.set x ⟨true, some (.node t c d (es ++ [w]))⟩).st x =
+          some ⟨true, some (.node t c d (es ++ [w]))⟩ := by simp
+      have hp := perm_insert es n w
+      have hm := hi'.toMInv.perm (hi'.leafAnch rfl) hxF hT' hp
+      have hc' := hi'.cover.perm hT' hp
+      rw [Mem.set_set] at hm hc'
+      refine ⟨Γ', ht', Inv.ofLeaf hi' hm (by simp) (by simp [Stmt.vars]) (hi'.leafAnch rfl) rfl hc' trivial,
+        by simpa using hnv, hk, fun v hv => ?_⟩
+      have hvx : v ≠ x := fun e => hxF (e ▸ hv)
+      have := hfz v hv
+      simp only [Mem.set_st, upd_ne _ _ hvx] at this ⊢; exact this
   | @free Γ F x E t hx hl hm hty hxF hpin =>
     intro m m' s' hcd hi hst
     cases hst with

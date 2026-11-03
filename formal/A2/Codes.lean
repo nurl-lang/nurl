@@ -490,6 +490,20 @@ theorem codes_step {P : Prog} (hPc : ProgCodes P) {m : Mem} {s : Stmt} {r : Res}
       rcases List.mem_append.mp he with he | he
       · exact pkgOK_elem hT he
       · simp at he; subst he; exact hv
+  | insert _ ht hx _ _ =>
+    intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    obtain ⟨hv, hm1⟩ := ht.codes hm
+    have hT := hm1.slot hx
+    refine ⟨(hm1.of_st rfl).set (fun V e => ?_), trivial⟩
+    cases e
+    refine pkgOK_of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
+    cases hc with
+    | elem he =>
+      rcases List.mem_append.mp he with he | he
+      · exact pkgOK_elem hT (List.mem_of_mem_take he)
+      · rcases List.mem_cons.mp he with he | he
+        · subst he; exact hv
+        · exact pkgOK_elem hT (List.mem_of_mem_drop he)
   | free _ _ =>
     intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact ⟨(hm.of_st rfl).set (fun _ e => by cases e), trivial⟩

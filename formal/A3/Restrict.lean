@@ -312,6 +312,11 @@ theorem Step.restrict {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
     have hav1 := (TakeVal.avoids ht hb hav).1
     exact ⟨_, .push (TakeVal.restrict ht a2) hx (minus_true hc (hav1 _ (OwnedId.of_slot hx (by simp))))
       (minus_true hd (hav1 _ (OwnedId.of_slot hx (by simp)))), rfl, .refl _⟩
+  | insert he ht hx hc hd =>
+    have hav1 := (TakeVal.avoids ht hb hav).1
+    exact ⟨_, .insert (Eval.restrict he hav hp) (TakeVal.restrict ht a2) hx
+      (minus_true hc (hav1 _ (OwnedId.of_slot hx (by simp))))
+      (minus_true hd (hav1 _ (OwnedId.of_slot hx (by simp)))), rfl, .refl _⟩
   | @pushRealloc m1 x y v t c d es ht hx hc hd =>
     have hav1 := (TakeVal.avoids ht hb hav).1
     have h1 : Step P { m with alloc := minus m.alloc a2 } (.push x y)
