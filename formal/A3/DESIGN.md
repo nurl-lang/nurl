@@ -3331,8 +3331,9 @@ An example is the accumulator `\ → i { = n + n 1 ^ n }`, with `n` moved in.
   `sync` (a plain integer) may still be packed `sync` and put in an `Arc`; its
   `inout` method is then called through no copy (`callcE_not_sync`), and its
   owner moves it up to `send` (`RhsT.moveUp`) to call it.
-- The accumulator, typed: `accum_impl`, `accum_codes` and `accum_hand`
-  (`A3/Defs.lean`). Its environment is a struct of the count: A2 has no
+- The accumulator, typed: `accum_impl`, `accum_codes` and `accum_hand`, and
+  whole, its code and a caller (`accP_ok`, `accMain_typed`, `accMain_safe`;
+  `A3/Defs.lean`). Its environment is a struct of the count: A2 has no
   `inout` integer (an integer binding is copied, not owned), so the
   one-capture environment is the count beside a field the code keeps.
 
@@ -3839,6 +3840,18 @@ takes the environment, a struct of the count (`accEnv`, a pair: A2 has no
 call is `StmtT.callcE` (`accum_hand`, through `StmtT.callcE_recv`); a `sync`
 one has no such call (`accum_not_sync`).
 
+The program is typed whole, as `A2/DynCell.lean` types `pick`'s:
+- its code and its interface meet their summaries (`accCode_ok`,
+  `accSig_ok`, so `accP_ok : ProgOK accP`; `accP_codes`). The code's
+  contexts hold only plain bindings (`PlainCtx`: none borrowed, none a
+  destructor's, none depending on anything), so no change ends anything
+  and every `EndOK` holds;
+- its caller `accMain` (`: i n 0  : i p 0  : e { n p }`, the closure moving
+  `e` in at `send`, `: i r ( acc )`) is typed from nothing
+  (`accMain_typed`), so `A2.memory_safe`, `A2.no_leak_end` and
+  `A2.no_leak_panic` hold of it (`accMain_safe`, `accMain_no_leak`,
+  `accMain_no_leak_panic`).
+
 ### Still not typed
 
 - An interface with parameters beside the receiver, or whose result borrows
@@ -3848,8 +3861,8 @@ one has no such call (`accum_not_sync`).
   environment (`Implements` asks `cs = []`).
 - A hand-over through a borrowed parameter (an `in` closure parameter): it is
   no owner.
-- The accumulator's code body and a program around it, as `A2/DynCell.lean`
-  types `pick` (`FnOK accP accCode`, `A2.memory_safe` applied).
+- The probes h365 and h366 as whole programs: their rules are named above,
+  and the accumulator is the one program typed whole.
 
 ## Open questions
 
