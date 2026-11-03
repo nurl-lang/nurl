@@ -294,7 +294,11 @@ Inside A2 (nurlc bugs):
   forms where the callee's root is an owner or an `inout` parameter
   (`StmtT.editBV`: the stored view's dependencies land on every
   view-holding root of the borrow's path, `holdThru`, as nurlc's
-  `__bck_store_owners` does; `rules/t292.md`).
+  `__bck_store_owners` does; `rules/t292.md`). That includes #454's
+  plain parameter whose elements' elements the callee changes: it reads
+  as `inout drop` (RULES.md's first reading), its summary holds the view
+  (`outHolds`), and the caller's owner holds it after the call
+  (`callPostAux`'s `outHeld`; A2/EditB.lean's note).
 
 Outside A2:
 - The hand-over of an old value to its borrower (above): #366, #373, #378,
@@ -306,13 +310,15 @@ Outside A2:
   and #456 (an `inout` given a lend by name, or of a Box, map, Rc or Arc).
 - An `Rc`'s shared state, which is the standard library's (B): #345 and
   #392.
-- A view stored through a borrow inside closure code, or rooted at a
-  plain borrowed parameter: #395's store through a borrow of a capture,
-  and #454's plain-parameter and `vec_each` forms (`StmtT.editBV` types a
-  store through a borrow outside closures, rooted at owners and `inout`
-  parameters).
-- A changed plain parameter handed an element rather than an owner: #391
-  (above).
+- A view stored through a borrow inside closure code: #395's store
+  through a borrow of a capture, and #454's `vec_each` form (`StmtT.editBV`
+  types a store through a borrow outside closures).
+- A changed plain parameter handed an element or a borrow rather than an
+  owner: #391. Inside a call, what a borrowed parameter reaches
+  is frozen, so A2 has no change rooted at one. Typing it needs the call
+  read as handing the element over (moved out into an owner the callee
+  takes `inout`, and back), an element swap the calculus does not have
+  yet (A2/EditB.lean's note).
 
 ## Destructors, and a panic while a panic unwinds
 
