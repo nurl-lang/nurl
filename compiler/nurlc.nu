@@ -1611,6 +1611,9 @@ unsafe @ agg_field_count i syms s ot → i {
 : ~ i g_retclo_n 0  // functions with a `retclo##` summary so far (gen_call skips the lookup while 0)
 : ~ i g_retcap_n 0  // …and with a `retcap##` one (a `sink` parameter the returned closure took over)
 : ~ i g_thv_precise 0  // 1 while __ty_holds_view answers for a library handle by its type arguments
+: ~ i g_thv_memo 0  // __ty_holds_view's per-question memo of named types (2 in progress, 1 holds a view, 0 none); 0 between questions
+: ~ i g_thv_final 0  // …and its answers that are final: a named type's, asked once its layout and every layout it reaches are known (`ty`, `ty!` when g_thv_precise)
+: ~ i g_thv_unknown 0  // 1 while the question being answered met a type whose layout is not known yet (its answer is then not kept in g_thv_final)
 : ~ i g_clolend_n 0  // bindings that recorded a `__clolend` (mem_check_ret_clo_lend skips idents while 0)
 : ~ i g_sealed_views 0  // bindings marked `__sealed_view` so far (agora #159): none, no lookup
 // The last field read (gen_member) was out of a sealed representation, at
@@ -21511,7 +21514,11 @@ unsafe @ gen_match i lex i syms i cg → s {
                     : s __abn1 ? __abc ? != 0 ( nurl_str_len __m_lkey ) ( nurl_str_cat4 __ab `&` ( str_first_word __m_lkey ) ( nurl_str_cat `%` ( bck_swap_char __m_lroots 32 43 ) ) ) ( nurl_str_cat3 __ab `&` ? & pv0_cursor ( seq __ab pv0 ) `*` `` ) __abn0
                     // A view payload is marked (`~`; `!` one that owns nothing):
                     // its buffer moving ends it.
-                    : s __abn ? __abv ( nurl_str_cat ? ( __view_may_own __abt ) `~` `!` __abn1 ) ( nurl_str_cat __abn1 `` )
+                    // (`%`: one that holds views itself — a struct with a view
+                    // field, a Vec of views, an enum with a view variant: it
+                    // holds what its scrutinee holds views of, agora #338.)
+                    : b __abhv & & ! __abv ( bck_sound ) == ( bck_walk_class __abt ) 3
+                    : s __abn ? __abv ( nurl_str_cat ? ( __view_may_own __abt ) `~` `!` __abn1 ) ? __abhv ( nurl_str_cat `%` __abn1 ) ( nurl_str_cat __abn1 `` )
                     = __arm_binds ? == 0 ( nurl_str_len __arm_binds ) ( nurl_str_cat __abn `` ) ( nurl_str_cat3 __arm_binds `,` __abn )
                 } {}
             }
@@ -29637,7 +29644,7 @@ unsafe @ resolve_arc_mut → v {
 unsafe @ __ty_holds_view s ty i depth → b {
     : i n ( nurl_str_len ty )
     : *u ty_p # *u ty
-    ? | == n 0 > depth 16 { ^ F } {}
+    ? == n 0 { ^ F } {}
     ? == ( nurl_str_at ty_p n - n 1 ) 42 { ^ T } {}
     ? ( __is_closure_ty ty ) { ^ T } {}
     ? ( seq ty `%String` ) { ^ F } {}
@@ -29658,28 +29665,82 @@ unsafe @ __ty_holds_view s ty i depth → b {
         ^ F
     } {}
     ? != c0 37 { ^ F } {}
-    // (Asked once per type: bck_bind_class keeps the answer.)
-    : s sname ( nurl_str_slice ty 1 - n 1 )
+    // A named type is asked once per question (g_thv_memo), and one met
+    // again inside its own walk answers no to itself while it is in
+    // progress: whatever else it holds is asked on the way, so the answer
+    // is exact however deep or recursive the type (`Json` in `( Vec Json )`,
+    // a struct holding a Vec of itself) and the walk ends with no depth cap.
+    // (A cap of 16 levels stood here: a view 17 struct levels down was
+    // answered "none".) A question's answer is exact, so it is kept for
+    // every later one (g_thv_final) — unless it met a type whose layout is
+    // not known yet (a generic instance recorded ahead of its
+    // instantiation), which is asked again.
+    : s fkey ? != 0 g_thv_precise ( nurl_str_cat ty `!` ) ty
+    : i fin ? == 0 g_thv_final -1 ( nurl_sym_int g_thv_final fkey )
+    ? >= fin 0 { ^ == fin 1 } {}
+    : b top == g_thv_memo 0
+    ? top { = g_thv_memo ( nurl_sym_new ) = g_thv_unknown 0 } {}
+    : i known ( nurl_sym_int g_thv_memo ty )
     : ~ b r F
+    ? >= known 0 { = r == known 1 } {
+        ( nurl_sym_def g_thv_memo ty `2` )
+        = r ( __thv_named ty ( nurl_str_slice ty 1 - n 1 ) depth )
+        ( nurl_sym_set g_thv_memo ty ? r `1` `0` )
+    }
+    ? top {
+        ( nurl_sym_free g_thv_memo )
+        = g_thv_memo 0
+        ? & == 0 g_thv_unknown != 0 g_thv_final { ( nurl_sym_def g_thv_final fkey ? r `1` `0` ) } {}
+    } {}
+    ^ r
+}
+
+// …of a named type `ty` (`%sname`), its walk not yet asked this question.
+@ __thv_named s ty s sname i depth → b {
     // A library handle (Box, Rc, a map, a trait object): what it holds is
     // not told apart here — it may hold views. (Asked precisely,
     // g_thv_precise — what a callee's result can hold, bck_sx_ev — a
     // generic one holds what its type arguments can, a handle struct what
     // its fields can; a trait object anything.)
     ? | ( __is_libh ty ) != 0 ( nurl_str_starts ty `%dyn.` ) {
-        = r T
         ? & != 0 g_thv_precise == 0 ( nurl_str_starts ty `%dyn.` ) {
             : s hta ( nurl_sym_get2 g_impl_name_syms `libhta##` ty )
-            ? != 0 ( nurl_str_len hta ) { = r ( __src_tys_hold_view hta + depth 1 ) } {
-                ? & == 0 ( nurl_sym_len2 g_root_syms sname `__variants` ) != 0 ( nurl_sym_len2 g_root_syms sname `__field_count` ) { = r ( __fields_hold_view sname depth ) } {}
-            }
+            ? != 0 ( nurl_str_len hta ) { ^ ( __src_tys_hold_view hta + depth 1 ) } {}
+            ? & == 0 ( nurl_sym_len2 g_root_syms sname `__variants` ) != 0 ( nurl_sym_len2 g_root_syms sname `__field_count` ) { ^ ( __fields_hold_view sname depth ) } {}
+            // (Its type arguments not recorded yet: asked again later.)
+            = g_thv_unknown 1
         } {}
-    } {
-        ? == 0 ( nurl_sym_len2 g_root_syms sname `__variants` ) {
-            ? == 0 ( nurl_sym_len2 g_root_syms sname `__field_count` ) { = r T } { = r ( __fields_hold_view sname depth ) }
-        } {}
+        ^ T
+    } {}
+    ? != 0 ( nurl_sym_len2 g_root_syms sname `__variants` ) { ^ ( __variants_hold_view sname depth ) } {}
+    // A type whose layout is not known here is taken to hold one, for now.
+    ? == 0 ( nurl_sym_len2 g_root_syms sname `__field_count` ) {
+        = g_thv_unknown 1
+        ^ T
+    } {}
+    ^ ( __fields_hold_view sname depth )
+}
+
+// May a payload of some variant of enum `sname` hold a view
+// (__ty_holds_view)? An enum is the sum of its variants, so it holds a view
+// when one of them can (A2's OR over the sum): `Tok { Word s … }` does,
+// whatever its other variants own. Every enum used to answer no, so a
+// token viewing a String was an owner of nothing borrowed, kept past that
+// String through a push, a return or a closure's result (agora #338, #442,
+// #369).
+@ __variants_hold_view s sname i depth → b {
+    : ~ s scan ( nurl_str_cat ( nurl_sym_get2 g_root_syms sname `__variants` ) `` )
+    ~ != 0 ( nurl_str_len scan ) {
+        : s vname ( str_first_word scan ) = scan ( str_skip_word scan )
+        : s pcs ( nurl_sym_get2 g_root_syms vname `__paycount` )
+        : i pc ? != 0 ( nurl_str_len pcs ) ( nurl_str_to_int pcs ) 0
+        : ~ i k 0
+        ~ < k pc {
+            ? ( __ty_holds_view ( nurl_sym_get g_root_syms ( nurl_str_cat3 vname `__payload__` ( nurl_str_int k ) ) ) + depth 1 ) { ^ T } {}
+            = k + k 1
+        }
     }
-    ^ r
+    ^ F
 }
 
 // May a field of struct `sname` hold a view (__ty_holds_view)?
@@ -31543,7 +31604,8 @@ unsafe @ bck_xl_base s sp → s {
         : s it ? < cm 0 ( nurl_str_cat binds `` ) ( nurl_str_slice binds 0 cm )
         = binds ? < cm 0 `` ( nurl_str_slice binds + cm 1 - - ( nurl_str_len binds ) cm 1 )
         : i c0 ? > ( nurl_str_len it ) 0 ( nurl_str_get it 0 ) 0
-        : b isview | == c0 126 == c0 33
+        // (The payload's mark, kept: `~` / `!` a view, `%` one holding views.)
+        : b isview | | == c0 126 == c0 33 == c0 37
         : s it0 ? isview ( nurl_str_slice it 1 - ( nurl_str_len it ) 1 ) ( nurl_str_cat it `` )
         : i caret ( nurl_str_find it0 `^` )
         : i amp ( nurl_str_find it0 `&` )
@@ -36818,6 +36880,27 @@ unsafe @ bck_note_rc_arg s name s ty → v {
 // which made the whole match a black box for every outer binding:
 // `?? x { T v → ( string_free s ) F → ( string_free s ) }` followed by
 // `( string_free s )` compiled clean and freed `s` twice.
+// The sources a view payload copied out of a value read through `srcs`
+// (walk ids) points into: an owner that holds views — a token over a line,
+// a struct with a view field, a Vec of views — stands for what it views
+// (its `vds_`), as a view field read out of it does (bck_sx_name): a copied
+// view does not point into the owner's own storage, so it may outlive the
+// owner, never what the owner views (agora #338). Any other source — a
+// borrow, a parameter (its caller's views), an owner that holds none —
+// stands for itself.
+@ __vpay_srcs s st s srcs → s {
+    : ~ s out ``
+    : ~ s rest ( nurl_str_cat srcs `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i r ( bck_path_root ( nurl_str_to_int w ) )
+        : s rs ( nurl_str_int r )
+        : s d ? & == BCK_OWNED ( bck_st_get st r ) == 0 ( nurl_sym_len g_bck ( bck_bkey `pp_` rs ) ) ( nurl_sym_get g_bck ( bck_bkey `vds_` rs ) ) ``
+        = out ( __word_union out ? == 0 ( nurl_str_len d ) w d )
+    }
+    ^ out
+}
+
 @ bck_handle_match i mi i em s st0 → s {
     : ~ b saw_arm F
     : ~ b fallthrough F
@@ -36857,11 +36940,16 @@ unsafe @ bck_note_rc_arg s name s ty → v {
             ~ != 0 ( nurl_str_len binds ) {
                 : i cm ( nurl_str_find binds `,` )
                 : s nm1 ? < cm 0 ( nurl_str_cat binds `` ) ( nurl_str_slice binds 0 cm )
-                // (`~`: a view payload; `!` one that owns nothing.)
+                // (`~`: a view payload; `!` one that owns nothing; `%` one
+                // that holds views itself, gen_match.)
                 : i vc0 ? > ( nurl_str_len nm1 ) 0 ( nurl_str_get nm1 0 ) 0
                 : b isview | == vc0 126 == vc0 33
                 : b isw == vc0 33
-                : s nm0 ? isview ( nurl_str_slice nm1 1 - ( nurl_str_len nm1 ) 1 ) ( nurl_str_cat nm1 `` )
+                : b ishv == vc0 37
+                : s nm0 ? | isview ishv ( nurl_str_slice nm1 1 - ( nurl_str_len nm1 ) 1 ) ( nurl_str_cat nm1 `` )
+                // (What the scrutinee binding holds views of, which such a
+                // payload holds too: agora #338.)
+                : ~ s hv_deps ``
                 : i caret ( nurl_str_find nm0 `^` )
                 : i amp ( nurl_str_find nm0 `&` )
                 : ~ b lent >= caret 0
@@ -36882,6 +36970,7 @@ unsafe @ bck_note_rc_arg s name s ty → v {
                         : s lid ( nurl_str_int ( bck_intern ln ) )
                         = lsrc ? == 0 ( nurl_str_len lsrc ) lid ( nurl_str_cat3 lsrc ` ` lid )
                     }
+                    ? isview { = lsrc ( __vpay_srcs state lsrc ) } {}
                 } {}
                 // `&`: decided now, every summary final. Out of a call
                 // (`&callee%a0+a1…`): a borrow of the arguments the callee
@@ -36909,22 +36998,39 @@ unsafe @ bck_note_rc_arg s name s ty → v {
                             : s msr ( bck_sx_sources state msx -1 )
                             ? ! ( seq msr `*` ) { = lsrc ( __word_union lsrc ( __src_plain msr ) ) } {}
                         } {}
+                        ? isview { = lsrc ( __vpay_srcs state lsrc ) } {}
                     } {
                         // (The match row's reads are walk ids already.)
                         : s sr ( bck_field ( bck_rec mi ) 2 )
                         ? & != 0 ( nurl_str_len sr ) == ( nurl_str_len ( str_first_word sr ) ) ( nurl_str_len sr ) {
                             : i sid ( nurl_str_to_int sr )
                             ? ! isview { = part_of ( nurl_str_cat sr `` ) } {}
+                            // An owner that holds views (a token over a line, a
+                            // struct with a view field): what those views point
+                            // into is not its own storage, and a payload copied
+                            // out of it points there too — a view payload, or one
+                            // that holds views (agora #338).
+                            : s sdeps ? | isview ishv ( nurl_sym_get g_bck ( bck_bkey `vds_` sr ) ) ``
                             ? == BCK_BORROWED_SHARED ( bck_st_get state sid ) { = lsrc ( nurl_str_int sid ) } {
-                                // …an owner's: the payload is a cursor over it —
-                                // its own to hand on or release, but the buffer is
-                                // the option's while the option holds it. Released
-                                // or replaced any other way than by a `=` here
-                                // (which hands the old value to the cursor,
-                                // mem_udrop_hand_over), it ends the payload
-                                // (agora #170).
-                                ? & & ( bck_sound ) ( seq after `*` ) == BCK_OWNED ( bck_st_get state sid ) { = cursor_src sr } {}
+                                // (A view payload of such an owner borrows what
+                                // the owner views, as a view field read out of it
+                                // does (bck_sx_name): the owner's own storage is
+                                // not where it points, so it may outlive the
+                                // owner, never its sources. A borrow, not a
+                                // cursor: it has no value of its own to hand
+                                // over.)
+                                ? & isview != 0 ( nurl_str_len sdeps ) { = lsrc ( nurl_str_cat sdeps `` ) } {
+                                    // …an owner's: the payload is a cursor over it —
+                                    // its own to hand on or release, but the buffer is
+                                    // the option's while the option holds it. Released
+                                    // or replaced any other way than by a `=` here
+                                    // (which hands the old value to the cursor,
+                                    // mem_udrop_hand_over), it ends the payload
+                                    // (agora #170).
+                                    ? & & ( bck_sound ) ( seq after `*` ) == BCK_OWNED ( bck_st_get state sid ) { = cursor_src sr } {}
+                                }
                             }
+                            ? ishv { = hv_deps sdeps } {}
                         } {}
                     }
                     = lent != 0 ( nurl_str_len lsrc )
@@ -36950,6 +37056,9 @@ unsafe @ bck_note_rc_arg s name s ty → v {
                 // earlier run handed it to is not its partner now.
                 ( bck_partner_unlink id )
                 = entry ( bck_st_set entry id BCK_OWNED )
+                // (One that holds views holds its scrutinee's, from this run
+                // on: agora #338.)
+                ? ishv { ( bck_dep_set id hv_deps ) } {}
                 // (…and its fields: an earlier arm's payload of the same name
                 // may have had one taken, agora #280.)
                 ? != 0 g_bck_fmv_any { = entry ( __bck_fmv_revive entry id ) } {}
@@ -54096,6 +54205,10 @@ unsafe @ check_type_known i lex i syms s llvm_ty s ctx i tline i tcol → v {
     ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `ncd##` ty ) `` )
     ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `libhp##` ty ) `` )
     ? != 0 g_bcls_memo { ( nurl_sym_def g_bcls_memo ty `-1` ) } {}
+    ? != 0 g_thv_final {
+        ( nurl_sym_def g_thv_final ty `-1` )
+        ( nurl_sym_def g_thv_final ( nurl_str_cat ty `!` ) `-1` )
+    } {}
 }
 
 unsafe @ ensure_struct_instantiated i syms s sname s ta_list → v {
@@ -75442,6 +75555,7 @@ unsafe @ main → i {
     = g_impl_ret_syms ( nurl_sym_new )
     = g_impl_name_syms ( nurl_sym_new )
     = g_bcls_memo ( nurl_sym_new )
+    = g_thv_final ( nurl_sym_new )
     = g_drop_base ( nurl_sym_new )
     = g_lib_kind_memo ( nurl_sym_new )
     = g_drop_edges ( nurl_sym_new )
