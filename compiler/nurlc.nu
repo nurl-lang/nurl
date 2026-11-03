@@ -8516,32 +8516,47 @@ unsafe @ extract_fn_ptr_return_type s fn_ptr_type → s {
     }
 }
 
-@ mem_drop_arg_temps s temps → v {
+@ mem_drop_arg_temps i syms s temps → v {
     : ~ s rest ( nurl_str_cat temps `` )
     ~ != 0 ( nurl_str_len rest ) {
-        : s reg ( str_first_word rest )
+        : ~ s reg ( str_first_word rest )
         = rest ( str_skip_word rest )
-        // `j|slot`: a temporary's journal registration ends.
-        ? ( nurl_str_starts reg `j|` ) {
-            ( nurl_print `  call void @nurl_journal_forget_slot(ptr ` ) ( nurl_print ( nurl_str_slice reg 2 - ( nurl_str_len reg ) 2 ) ) ( nurl_print `)` ) ( emit_dbg_eol )
-        } {
-            // `c|env`: a closure literal's env (null when the callee kept it).
-            ? ( nurl_str_starts reg `c|` ) {
-                ( nurl_print `  call void @nurl_closure_drop(i8* ` ) ( nurl_print ( nurl_str_slice reg 2 - ( nurl_str_len reg ) 2 ) ) ( nurl_print `)` ) ( emit_dbg_eol )
+        // `f|reg|bit`: reg is `bit` on the runs the call's own answer says
+        // its result is its own (`__call_own0__`, mem_own_lendback) — a
+        // temporary it may hand back whole was not (agora #457).
+        ? ( nurl_str_starts reg `f|` ) {
+            : s fw ( nurl_str_slice reg 2 - ( nurl_str_len reg ) 2 )
+            : i fb ( nurl_str_find fw `|` )
+            ( nurl_print `  ` ) ( nurl_print ( nurl_str_slice fw 0 fb ) ) ( nurl_print ` = and i1 ` )
+            ( nurl_print ( nurl_str_slice fw + fb 1 - - ( nurl_str_len fw ) fb 1 ) ) ( nurl_print `, ` )
+            : s o0 ( nurl_sym_get syms `__call_own0__` )
+            ( nurl_print ? == 0 ( nurl_str_len o0 ) `false` o0 ) ( nurl_print `\n` )
+            = reg ( nurl_str_cat `` `` )
+        } {}
+        ? == 0 ( nurl_str_len reg ) {} {
+            // `j|slot`: a temporary's journal registration ends.
+            ? ( nurl_str_starts reg `j|` ) {
+                ( nurl_print `  call void @nurl_journal_forget_slot(ptr ` ) ( nurl_print ( nurl_str_slice reg 2 - ( nurl_str_len reg ) 2 ) ) ( nurl_print `)` ) ( emit_dbg_eol )
             } {
-                // `h|cond|type|value`: a handle temporary (gen_call).
-                ? ( nurl_str_starts reg `h|` ) {
-                    : ~ s w ( nurl_str_slice reg 2 - ( nurl_str_len reg ) 2 )
-                    : i b1 ( nurl_str_find w `|` )
-                    : s c ( nurl_str_slice w 0 b1 )
-                    = w ( nurl_str_slice w + b1 1 - - ( nurl_str_len w ) b1 1 )
-                    : i b2 ( nurl_str_find w `|` )
-                    : s ty ( nurl_str_slice w 0 b2 )
-                    : s v ( nurl_str_slice w + b2 1 - - ( nurl_str_len w ) b2 1 )
-                    ( nurl_print `  call void @__dropifv_` ) ( nurl_print ( __drop_mangle ty ) ) ( nurl_print `(i1 ` ) ( nurl_print c )
-                    ( nurl_print `, ` ) ( nurl_print ( nurl_llty ty ) ) ( nurl_print ` ` ) ( nurl_print v ) ( nurl_print `)` ) ( emit_dbg_eol )
-                } { ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print reg ) ( nurl_print `)` ) ( emit_dbg_eol ) } } }
+                // `c|env`: a closure literal's env (null when the callee kept it).
+                ? ( nurl_str_starts reg `c|` ) {
+                    ( nurl_print `  call void @nurl_closure_drop(i8* ` ) ( nurl_print ( nurl_str_slice reg 2 - ( nurl_str_len reg ) 2 ) ) ( nurl_print `)` ) ( emit_dbg_eol )
+                } {
+                    // `h|cond|type|value`: a handle temporary (gen_call).
+                    ? ( nurl_str_starts reg `h|` ) {
+                        : ~ s w ( nurl_str_slice reg 2 - ( nurl_str_len reg ) 2 )
+                        : i b1 ( nurl_str_find w `|` )
+                        : s c ( nurl_str_slice w 0 b1 )
+                        = w ( nurl_str_slice w + b1 1 - - ( nurl_str_len w ) b1 1 )
+                        : i b2 ( nurl_str_find w `|` )
+                        : s ty ( nurl_str_slice w 0 b2 )
+                        : s v ( nurl_str_slice w + b2 1 - - ( nurl_str_len w ) b2 1 )
+                        ( nurl_print `  call void @__dropifv_` ) ( nurl_print ( __drop_mangle ty ) ) ( nurl_print `(i1 ` ) ( nurl_print c )
+                        ( nurl_print `, ` ) ( nurl_print ( nurl_llty ty ) ) ( nurl_print ` ` ) ( nurl_print v ) ( nurl_print `)` ) ( emit_dbg_eol )
+                    } { ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print reg ) ( nurl_print `)` ) ( emit_dbg_eol ) } } }
+        }
     }
+    ( nurl_sym_def syms `__call_own0__` `` )
 }
 
 @ __dropifv_request s vt → v {
@@ -14052,7 +14067,7 @@ unsafe @ __kw_trim s raw → s {
     ? ( seq rlt `void` )
     { ( nurl_print `  call void @` ) ( nurl_print ( llvm_source_fn fname ) )
         ( nurl_print `(` ) ( nurl_print argstr ) ( nurl_print `)` ) ( emit_dbg_eol )
-        ( mem_drop_arg_temps owned_temps )
+        ( mem_drop_arg_temps syms owned_temps )
         ( nurl_set_last_type `void` )
         ^ ( nurl_str_cat `undef` `` ) }
     {}
@@ -14065,7 +14080,7 @@ unsafe @ __kw_trim s raw → s {
     ( mem_capture_hown syms cg fname rlt )
     ( mem_raw_lendback syms cg fname raw_lends res rlt )
     = res ( mem_own_lendback syms cg fname res rlt lend_one lend_part lend_idx )
-    ( mem_drop_arg_temps owned_temps )
+    ( mem_drop_arg_temps syms owned_temps )
     ( nurl_set_last_type rlt )
     ^ res
 }
@@ -18220,7 +18235,7 @@ unsafe @ gen_call i lex i syms i cg → s {
             : s __cargs ? == 0 ( nurl_str_len rest_argstr ) ( nurl_str_cat `i8* ` __data ) ( nurl_str_cat4 `i8* ` __data `, ` rest_argstr )
             ? ( seq __ret `void` )
             { ( nurl_print `  call void ` ) ( nurl_print __fnr ) ( nurl_print `(` ) ( nurl_print __cargs ) ( nurl_print `)` ) ( emit_dbg_eol )
-                ( mem_drop_arg_temps owned_arg_temps ) ( mem_drop_closure_temps closure_envs_free )
+                ( mem_drop_arg_temps syms owned_arg_temps ) ( mem_drop_closure_temps closure_envs_free )
                 ( nurl_set_last_type `void` )
                 ^ ( nurl_str_cat `undef` `` ) }
             { : ~ s __res ( nurl_cg_reg cg )
@@ -18241,7 +18256,7 @@ unsafe @ gen_call i lex i syms i cg → s {
                 != 0 ( nurl_sym_len syms `__last_call_ret_struct_fields__` )
                 ( nurl_str_cat3 __res ` ` ( nurl_str_cat3 __ret ` ` ( nurl_sym_get syms `__last_call_ret_struct_fields__` ) ) )
                 ``
-                ( mem_drop_arg_temps owned_arg_temps ) ( mem_drop_closure_temps closure_envs_free )
+                ( mem_drop_arg_temps syms owned_arg_temps ) ( mem_drop_closure_temps closure_envs_free )
                 ( nurl_set_last_type __ret )
                 ^ __res }
         }
@@ -18319,7 +18334,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         ? ( seq impl_ret `void` )
         { ( nurl_print `  call void @` ) ( nurl_print ( llvm_source_fn impl_name ) )
             ( nurl_print `(` ) ( nurl_print argstr ) ( nurl_print `)` ) ( emit_dbg_eol )
-            ( mem_drop_arg_temps owned_arg_temps ) ( mem_drop_closure_temps closure_envs_free )
+            ( mem_drop_arg_temps syms owned_arg_temps ) ( mem_drop_closure_temps closure_envs_free )
             ( nurl_set_last_type `void` )
             ^ ( nurl_str_cat `undef` `` )
         }
@@ -18342,7 +18357,7 @@ unsafe @ gen_call i lex i syms i cg → s {
             != 0 ( nurl_sym_len syms `__last_call_ret_struct_fields__` )
             ( nurl_str_cat3 res ` ` ( nurl_str_cat3 impl_ret ` ` ( nurl_sym_get syms `__last_call_ret_struct_fields__` ) ) )
             ``
-            ( mem_drop_arg_temps owned_arg_temps ) ( mem_drop_closure_temps closure_envs_free )
+            ( mem_drop_arg_temps syms owned_arg_temps ) ( mem_drop_closure_temps closure_envs_free )
             ( nurl_set_last_type impl_ret )
             ^ res
         }
@@ -18418,7 +18433,7 @@ unsafe @ gen_call i lex i syms i cg → s {
             ( nurl_set_last_type fn_ret_type )
             = final_result res
         }
-        ( mem_drop_arg_temps owned_arg_temps ) ( mem_drop_closure_temps closure_envs_free )
+        ( mem_drop_arg_temps syms owned_arg_temps ) ( mem_drop_closure_temps closure_envs_free )
         final_result
     }
     { ? is_function_pointer
@@ -18453,7 +18468,7 @@ unsafe @ gen_call i lex i syms i cg → s {
                 ( nurl_set_last_type fn_return_type )
                 = final_result res
             }
-            ( mem_drop_arg_temps owned_arg_temps ) ( mem_drop_closure_temps closure_envs_free )
+            ( mem_drop_arg_temps syms owned_arg_temps ) ( mem_drop_closure_temps closure_envs_free )
             final_result
         }
         {
@@ -18504,7 +18519,7 @@ unsafe @ gen_call i lex i syms i cg → s {
                 ? has_va_sig { ( nurl_print `(` ) ( nurl_print va_sig ) ( nurl_print `) ` ) } {}
                 ( nurl_print `@` ) ( nurl_print __emit_fn )
                 ( nurl_print `(` ) ( nurl_print argstr ) ( nurl_print __loc_arg ) ( nurl_print `)` ) ( emit_dbg_eol )
-                ( mem_drop_arg_temps owned_arg_temps ) ( mem_drop_closure_temps closure_envs_free )
+                ( mem_drop_arg_temps syms owned_arg_temps ) ( mem_drop_closure_temps closure_envs_free )
                 ( nurl_set_last_type `void` )
                 ( nurl_str_cat `undef` `` )
             }
@@ -18539,7 +18554,7 @@ unsafe @ gen_call i lex i syms i cg → s {
                 != 0 ( nurl_sym_len syms `__last_call_ret_struct_fields__` )
                 ( nurl_str_cat3 res ` ` ( nurl_str_cat3 rlt ` ` ( nurl_sym_get syms `__last_call_ret_struct_fields__` ) ) )
                 ``
-                ( mem_drop_arg_temps owned_arg_temps ) ( mem_drop_closure_temps closure_envs_free )
+                ( mem_drop_arg_temps syms owned_arg_temps ) ( mem_drop_closure_temps closure_envs_free )
                 ( nurl_set_last_type rlt )
                 res
             }
@@ -25584,6 +25599,7 @@ unsafe @ mem_path_to_indices s path → s {
             // copied and the temporary dropped. Either way the caller
             // owns the result (mem_fn_lend_kind, mem_own_lendback).
             : ~ s __tlp ``
+            : ~ s __tlb_one ``
             : ~ b __thb F
             ? & ( __is_hown_ty __crt ) | != 0 ( nurl_sym_len2 syms call_name `__nurlfn` ) != 0 ( nurl_sym_len2 syms fname `__garity` ) {
                 = __thb T
@@ -25592,6 +25608,7 @@ unsafe @ mem_path_to_indices s path → s {
                 : s __tlb ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print __tlb ) ( nurl_print ` = and i1 ` ) ( nurl_print __tc ) ( nurl_print `, ` ) ( nurl_print __tlo ) ( nurl_print `\n` )
                 ( nurl_sym_def syms `__argtmp_one__` __tlb )
+                = __tlb_one __tlb
                 : ~ s __tlany ( nurl_str_cat __tlo `` )
                 ? ( __clone_supported __crt syms ) {
                     : s __tlq ( nurl_cg_reg cg )
@@ -25635,6 +25652,22 @@ unsafe @ mem_path_to_indices s path → s {
                 = __tc __tc2
             } {}
             : s __tw ( mem_temp_drop_words cg __tc at av __top __toe )
+            // A temporary the callee may hand back whole (`one`) is the
+            // result on the runs it lends: it moves into the result. On the
+            // runs whose per-call answer says the result is the callee's
+            // own, it was not handed back and goes after the call —
+            // `( maybe ( string_from … ) 1 )` leaked it (agora #457). The
+            // condition is the call's answer, known only after the call:
+            // `f|reg|bit` defines reg there (mem_drop_arg_temps). (Only
+            // for a result that cannot hold a view, which a fresh one then
+            // cannot point into this temporary through.)
+            ? & & & != 0 ( nurl_str_len __tlb_one ) ( __is_handle_ty at ) & == 0 ( nurl_str_len __top ) == 0 ( nurl_str_len __toe ) ! ( __ty_holds_view __crt 0 ) {
+                : s __tfr ( nurl_cg_reg cg )
+                ( __handle_drop_ensure at )
+                ( __dropifv_request at )
+                : s __tfw ( nurl_str_cat4 ( nurl_str_cat4 `f|` __tfr `|` __tlb_one ) ` ` ( nurl_str_cat4 `h|` __tfr ( nurl_str_cat3 `|` at `|` ) av ) `` )
+                = owned ? == 0 ( nurl_str_len owned ) __tfw ( nurl_str_cat3 owned ` ` __tfw )
+            } {}
             // The part the result was copied from goes now.
             ? != 0 ( nurl_str_len __tlp ) {
                 : s __tpw ( mem_temp_drop_words cg __tlp at av __top __toe )
@@ -25944,6 +25977,9 @@ unsafe @ __src_has_raw_ptr s text → b {
     ( nurl_sym_def syms `__last_call_lendback__` ? | != 0 ( nurl_str_len one ) != 0 ( nurl_str_len part ) `1` `` )
     ? | & == 0 ( nurl_str_len one ) == 0 ( nurl_str_len part ) == 0 ( nurl_sym_len syms `__last_call_own__` ) { ^ res } {}
     : s own0 ( nurl_sym_get syms `__last_call_own__` )
+    // (The call's own answer, for a temporary it may hand back whole:
+    // dropped by mem_drop_arg_temps where it says owned, agora #457.)
+    ( nurl_sym_def syms `__call_own0__` own0 )
     : ~ s any ``
     : ~ s rest ( nurl_str_cat3 one ` ` part )
     ~ != 0 ( nurl_str_len rest ) {
