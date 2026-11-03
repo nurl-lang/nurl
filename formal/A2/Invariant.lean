@@ -359,13 +359,6 @@ def OwnedAt (m : Mem) (x : Var) (t : Val) : Prop := m.st x = some ⟨true, some 
 def SelfFree (T : Val) : Prop :=
   ∀ d o l, Sub (.view d o l) T → ∀ u c es, ¬ Sub (.node u c d es) T
 
-/-- A3.1: every block of the store `B` holds a well-formed tree of a type
-    that holds no views, the shares it holds name blocks of `B` too, and (the
-    first cut) it owns no address. -/
-def BlocksOK (B : Nat → Option Blk) : Prop :=
-  ∀ k bl, B k = some bl → bl.ty.ok = true ∧ bl.ty.holdsView = false ∧ WFv bl.ty bl.pay ∧
-    SharesIn B bl.ty bl.pay ∧ bl.pay.ids = []
-
 /-- A3.1: every block owns its payload tree, as a slot owns its tree: the
     tree's addresses appear once in it, in no owned tree and in no other
     block's payload, and are live and below `nid`.  The block's key was taken

@@ -25,19 +25,27 @@ theorem ThreadOK.progress {P : Prog} (hP : ProgOK P) {m : Mem} {s : Stmt} (h : T
   obtain ⟨Γ, F, Δ, ht, hi, hcd, _, _⟩ := h
   exact progress' hP ht hcd hi
 
-/-- A finished thread owns nothing: its part of the address space is empty. -/
-theorem ThreadOK.no_leak {P : Prog} {m : Mem} (h : ThreadOK P m .skip) : ∀ i, m.alloc i = false := by
+/-- A finished thread has no bindings. -/
+theorem ThreadOK.skip_st {P : Prog} {m : Mem} (h : ThreadOK P m .skip) : ∀ x, m.st x = none := by
   obtain ⟨Γ, F, Δ, _, hi, _, _, hc⟩ := h
-  intro i
-  cases ha : m.alloc i with
-  | false => rfl
-  | true =>
-    rcases hi.cover i ha with ⟨o, T, hT, _⟩ | ⟨k, bl, hk, hik⟩
-    · have hd := hi.dom o
-      unfold OwnedAt at hT
-      rw [hT] at hd
-      exact absurd (hc o hd) (by simp [Stmt.spine])
-    · rw [hi.heap.bpay k bl hk] at hik; cases hik
+  intro o
+  cases ho : m.st o with
+  | none => rfl
+  | some sl =>
+    have hd := hi.dom o
+    rw [ho] at hd
+    exact absurd (hc o hd) (by simp [Stmt.spine])
+
+/-- A finished thread owns nothing: what is live on its view is the shared
+    payloads. -/
+theorem ThreadOK.no_leak {P : Prog} {m : Mem} (h : ThreadOK P m .skip) :
+    ∀ i, m.alloc i = true → PayAddr m i := by
+  have hst := h.skip_st
+  obtain ⟨Γ, F, Δ, _, hi, _, _, _⟩ := h
+  intro i ha
+  rcases hi.cover i ha with ⟨o, T, hT, _⟩ | hp
+  · unfold OwnedAt at hT; rw [hst o] at hT; cases hT
+  · exact hp
 
 /-- Every address live on a thread's part is below `nid`. -/
 theorem ThreadOK.lt_nid {P : Prog} {m : Mem} {s : Stmt} (h : ThreadOK P m s) :
@@ -54,6 +62,25 @@ theorem ThreadOK.owned {P : Prog} {m : Mem} {s : Stmt} (h : ThreadOK P m s) :
   obtain ⟨Γ, F, Δ, _, hi, _, _, _⟩ := h
   rintro i ⟨o, T, hT, hiT⟩
   exact (hi.heap.alloc o T hT i hiT).1
+
+/-- A thread's facts: no owned tree holds a payload address ... -/
+theorem ThreadOK.notPay {P : Prog} {m : Mem} {s : Stmt} (h : ThreadOK P m s) {i : Nat} (hi : OwnedId m i) :
+    ¬ PayAddr m i := by
+  obtain ⟨Γ, F, Δ, _, hinv, _, _, _⟩ := h
+  obtain ⟨x, T, hT, hiT⟩ := hi
+  exact hinv.heap.notPay hT hiT
+
+/-- ... every payload address is live ... -/
+theorem ThreadOK.payAlloc {P : Prog} {m : Mem} {s : Stmt} (h : ThreadOK P m s) {i : Nat} (hi : PayAddr m i) :
+    m.alloc i = true := by
+  obtain ⟨Γ, F, Δ, _, hinv, _, _, _⟩ := h
+  exact (hinv.heap.payAlloc hi).1
+
+/-- ... and one payload owns each payload address. -/
+theorem ThreadOK.pay_unique {P : Prog} {m : Mem} {s : Stmt} (h : ThreadOK P m s) {k k' : Nat} {bl bl' : Blk}
+    (hk : m.blk k = some bl) (hk' : m.blk k' = some bl') {i : Nat} (hi : i ∈ bl.pay.ids)
+    (hi' : i ∈ bl'.pay.ids) : k = k' :=
+  Classical.byContradiction fun hne => (h.blocksAt k bl hk).apart i hi k' bl' (Ne.symm hne) hk' hi'
 
 /-! ### Parts -/
 

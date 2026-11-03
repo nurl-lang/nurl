@@ -129,7 +129,10 @@ own and are no address.  A fresh address is no touch: allocation is the
 allocator's, which is thread-safe (the C runtime, trusted base), and two
 threads that both allocate next never get one address, since `nid` moves
 with each step.  Over-approximating is harmless otherwise: what a thread
-may touch beyond its rule is its own. -/
+may touch beyond its rule is its own.  (A3.1) A read may be of a live
+block's payload, which a node `NodeAt` / `DataAt` finds, a view or an
+`arc_get` points into; no step writes one while its block exists
+(`Step.blk`). -/
 
 /-- What evaluating an expression reads: a `Vec`'s length is in its control
     block. -/
@@ -156,6 +159,11 @@ inductive RTouch (m : Mem) : Rhs → Nat → Bool → Prop
       m.st y = some ⟨true, some (.node t c d es)⟩ → RTouch m (.pop y) c true
   | popD {y : Var} {t : Ty} {c d : Nat} {es : List Val} :
       m.st y = some ⟨true, some (.node t c d es)⟩ → RTouch m (.pop y) d true
+  /-- A3.1: `arc_get` reads the payload of the block its share names (every
+      address of it: an over-approximation). -/
+  | arcGet {a : Var} {o : Bool} {k : Nat} {p : Val} {bl : Blk} {i : Nat} :
+      m.st a = some ⟨o, some (.arc k p)⟩ → m.blk k = some bl → i ∈ bl.pay.ids →
+      RTouch m (.arcGet a) i false
 
 /-- What the next step of `s` touches. -/
 inductive Touch (P : Prog) (m : Mem) : Stmt → Nat → Bool → Prop
