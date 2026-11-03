@@ -28025,7 +28025,14 @@ unsafe @ __clo_effect_note_lent s name s callee i aix → v {
 // match, or a call whose lend is not known here (a generic identity), the
 // bindings it names are where it was read from (agora #449).
 unsafe @ __clo_deriv_note i syms s name s vt i rhs_tt s rhs_val s lend s sx → v {
-    ? | == 0 g_bck_closure_depth == 0 ( nurl_str_len g_clo_caps_now ) { ^ v } {}
+    ? == 0 g_bck_closure_depth { ^ v } {}
+    // (A value that cannot be copied, read out of something: what it was
+    // read out of, for the closure's `^` of it — __clo_nc_derived; agora
+    // #446.)
+    ? & ( __nc_held_ty vt ) | | | | ( is_ident_tok rhs_tt ) == rhs_tt TT_DOT == rhs_tt TT_QUEST == rhs_tt TT_QUESTQUEST == rhs_tt TT_LPAREN {
+        ( nurl_sym_def syms ( nurl_str_cat name `__ncsx` ) ? | ( is_ident_tok rhs_tt ) == rhs_tt TT_DOT ( __path_root_name ? ( is_ident_tok rhs_tt ) rhs_val ( nurl_sym_get syms `__last_member_root__` ) ) ( __sx_bind_names sx ) )
+    } {}
+    ? == 0 ( nurl_str_len g_clo_caps_now ) { ^ v } {}
     ? ! ( bck_is_heap_lty ( nurl_llty vt ) ) { ^ v } {}
     : ~ s srcs ? == rhs_tt TT_LPAREN lend ? == rhs_tt TT_DOT ( nurl_sym_get syms `__last_member_root__` ) ? ( is_ident_tok rhs_tt ) rhs_val ``
     // (A value taken out of a shared cell — `locked_take` — is the body's
@@ -62540,6 +62547,31 @@ unsafe @ __die_at_fn s fname s what s msg → v {
 // Is `name` one of the closure body's captures (its env's value, or the
 // enclosing frame's binding) — not a binding of the same spelling the body
 // declared?
+// The capture or closure parameter binding `name` was read out of (its
+// `__ncsx`, a `??` payload's `__plend` / `__plroot`, through bindings read
+// out of others), `` when none: a closure's body owns it.
+@ __clo_nc_derived i syms s name → s {
+    : ~ s work ( nurl_str_cat `` `` )
+    = work ( __words_join work ( nurl_sym_get2 syms name `__ncsx` ) )
+    = work ( __words_join work ( nurl_sym_get2 syms name `__plend` ) )
+    = work ( __words_join work ( nurl_sym_get2 syms name `__plroot` ) )
+    : ~ s seen ( nurl_str_cat name `` )
+    : ~ i hops 0
+    ~ & != 0 ( nurl_str_len work ) < hops 16 {
+        : s w ( str_first_word work ) = work ( str_skip_word work )
+        : s r ( __path_root_name w )
+        = hops + hops 1
+        ? & != 0 ( nurl_str_len r ) ! ( str_contains_word seen r ) {
+            = seen ( nurl_str_cat3 seen ` ` r )
+            ? | ( __is_clo_capture syms r ) ( __is_clo_param syms r ) { ^ ( nurl_str_cat r `` ) } {}
+            = work ( __words_join work ( nurl_sym_get2 syms r `__ncsx` ) )
+            = work ( __words_join work ( nurl_sym_get2 syms r `__plend` ) )
+            = work ( __words_join work ( nurl_sym_get2 syms r `__plroot` ) )
+        } {}
+    }
+    ^ ( nurl_str_cat `` `` )
+}
+
 @ __is_clo_capture i syms s name → b {
     ? == g_bck_closure_depth 0 { ^ F } {}
     : s p ( nurl_sym_get2 syms name `__ptr` )
@@ -62622,6 +62654,14 @@ unsafe @ __sx_names_capture i syms s sx → b {
         // body's own Vec, `: Conn c ( vec_at [Conn] cs 0 )`, or of a
         // capture — is judged as that call is, whole: resolve_clo_nc_rets.
         // Agora #372.)
+        // (…or read out of one — through a copy, a field, a join, a match,
+        // a lending or identity call, a `??` payload: the body's own owned
+        // value is all it can hand over; agora #446.)
+        : s dv ( __clo_nc_derived syms val )
+        ? != 0 ( nurl_str_len dv ) {
+            ( die_pos lex g_stmt_line g_stmt_col ( nurl_str_cat4 ( nurl_str_cat3 `a closure hands its result to its caller as the caller's own, but '` val `' is read out of '` ) dv ( nurl_str_cat3 `', which the closure keeps (a capture) or its caller does (a parameter), and a '` tshow `' cannot be copied — the value would be released twice. ` )
+            `Hand back a value the body makes (a literal, or a call that hands its result over), or take the value out of the Vec it is in (vec_remove, vec_pop) so the body owns it.` ) )
+        } {}
         : s nk ( nurl_sym_get2 syms val `__nclk` )
         ? != 0 ( nurl_str_len nk ) { ( __park_clo_nc_ret lex ( str_first_word nk ) ( str_first_word ( str_skip_word nk ) ) line tshow ) } {}
         ^ v

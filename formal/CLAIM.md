@@ -418,7 +418,7 @@ Inside A2 (nurlc bugs):
   `PushArg`, `pair`'s `Dy ++ Dz`, `callRes`'s `rholds` and `heldOfArgs`,
   `callPostAux`'s `outHeld` and `heldOfArgs`, and a package's interface
   summary; past a join, `ite` and `while` keep what either path holds.
-- A move or take nurlc does not see: #280, #357, #446 and #458 (`unpair`,
+- A move or take nurlc does not see: #280, #357, #458 and #462 (`unpair`,
   `takel`, a `sink` takes an owner only, `lendable`).
 - A borrow ended by a binding's end, replacement or capture, missed:
   #242, #364, #382, #384, #406, #407, #408 and #445 (`exitScope`,
