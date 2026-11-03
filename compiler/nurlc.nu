@@ -5550,7 +5550,9 @@ unsafe @ gen_ret i lex i syms i cg → s {
         // One that cannot be copied has nothing to stand in for the lend:
         // refused at module end when the callee may lend such an argument
         // (agora #187).
-        ? & ! ret_call_copied != 0 ( nurl_str_len __rll ) { ? ( __nc_held_ty __crt ) {
+        // (…an option of a Vec of values that cannot be copied as much as
+        // an option of one: neither copies, agora #459.)
+        ? & ! ret_call_copied != 0 ( nurl_str_len __rll ) { ? | ( __nc_held_ty __crt ) & ( __type_needs_drop __crt syms ) ! ( __clone_supported __crt syms ) {
                 ( __park_nc_local_lend lex ( nurl_sym_get syms `__last_local_lend__` ) ( nurl_sym_get syms `__last_call_args__` ) __crt )
             } {} } {}
     } {}
@@ -25168,6 +25170,15 @@ unsafe @ mem_path_to_indices s path → s {
     ^ r
 }
 
+// A trait object's identity: the box that holds its value (field 0; field
+// 1 is the vtable). Two trait objects with one box are one value, and no
+// other value holds it (agora #459).
+@ mem_dyn_key i cg s ty s val → s {
+    : s r ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty ty ) ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
+    ^ r
+}
+
 // An i8* that identifies an owned value of type `ty` (register `val`): the
 // buffer of a String / Vec, or of a struct's first String / Vec field; ``
 // when there is none.
@@ -40740,13 +40751,16 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // run (#412's form for handles): refused.
         // (A run whose result is not the old value is then copied, below, so
         // the old value can go: a value that cannot be copied is refused.)
-        ? & & & & ( __is_handle_ty vt ) __ud_may_self ! __ud_whole ! ( __clone_supported vt syms ) & __ud_owns == bck_rhs_tt TT_LPAREN {
+        // (A trait object is told apart by its box, as a handle by its
+        // buffer: mem_dyn_key, agora #459.)
+        : b __ud_dyn != 0 ( nurl_str_starts vt `%dyn.` )
+        ? & & & & | ( __is_handle_ty vt ) __ud_dyn __ud_may_self ! __ud_whole ! ( __clone_supported vt syms ) & __ud_owns == bck_rhs_tt TT_LPAREN {
             : s __p1 ( nurl_str_cat3 `'` name `' is given back what this call may lend out of a part of '` )
             : s __p2 ( nurl_str_cat3 name `' itself — an element, a payload — and its type has no copy: nurlc cannot keep that part alive once '` name )
             : s __p3 ( nurl_str_cat3 `''s old value is released (agora #437). Bind the result to a new name, or take the part out of '` name `' first.` )
             ( die_stmt lex ( nurl_str_cat3 __p1 __p2 __p3 ) )
         } {}
-        : b __ud_hty | ( __is_handle_ty vt ) & & __ud_only_self != 0 ( nurl_str_starts vt `{ i1, ` ) ( __type_needs_drop vt syms )
+        : b __ud_hty | | ( __is_handle_ty vt ) __ud_dyn & & __ud_only_self != 0 ( nurl_str_starts vt `{ i1, ` ) ( __type_needs_drop vt syms )
         ? & & & != 0 ( nurl_str_len __ud_ptr ) == bck_rhs_tt TT_LPAREN __ud_hty | == 0 ( nurl_str_len __ud_borrow ) __ud_self_lend
         { = __ud_ro ( mem_call_retown syms cg )
             ? & != 0 ( nurl_str_len __ud_ro ) ! __ud_may_self { = __ud_ro_new __ud_ro = __ud_ro `` } {}
@@ -40758,11 +40772,11 @@ unsafe @ gen_assign i lex i syms i cg → s {
                 // runs: the old value then goes by its flag, and the binding
                 // owns nothing of what it is given, agora #419.)
                 : ~ s __ud_keep ( nurl_str_cat __ud_ro `` )
-                ? ( __is_handle_ty vt ) {
+                ? | ( __is_handle_ty vt ) __ud_dyn {
                     : s __ud_ov ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print __ud_ov ) ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print `, ptr ` ) ( nurl_print __ud_ptr ) ( nurl_print `\n` )
-                    : s __ud_ok ( mem_identity_key cg vt __ud_ov )
-                    : s __ud_nk ( mem_identity_key cg vt store_val )
+                    : s __ud_ok ? __ud_dyn ( mem_dyn_key cg vt __ud_ov ) ( mem_identity_key cg vt __ud_ov )
+                    : s __ud_nk ? __ud_dyn ( mem_dyn_key cg vt store_val ) ( mem_identity_key cg vt store_val )
                     ? & != 0 ( nurl_str_len __ud_ok ) != 0 ( nurl_str_len __ud_nk ) {
                         = __ud_skey ( nurl_cg_reg cg )
                         ( nurl_print `  ` ) ( nurl_print __ud_skey ) ( nurl_print ` = icmp eq i8* ` ) ( nurl_print __ud_nk ) ( nurl_print `, ` ) ( nurl_print __ud_ok ) ( nurl_print `\n` )
