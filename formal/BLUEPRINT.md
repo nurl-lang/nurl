@@ -3,7 +3,7 @@
 > **Interactive Explorer:** You can also explore this proof interactively (with a step-by-step memory & borrow-checker simulator, clickable theorem dependency graph, and searchable soundness-hole corpus) on **[nurl-lang.org/docs/formal-verification](https://nurl-lang.org/docs/formal-verification)**.
 
 * **Toolchain:** `leanprover/lean4:v4.35.0` (zero external dependencies; standard axioms `propext`, `Classical.choice`, `Quot.sound` only; `0` `sorry`s)
-* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **34 modules**, **36,427 lines of Lean 4**, **1566 theorems**, **1914 total declarations**
+* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **34 modules**, **36,458 lines of Lean 4**, **1566 theorems**, **1914 total declarations**
 * **Phase A1 (Core Calculus):** **22 modules**, **9,571 lines of Lean 4**, **449 theorems**, **613 total declarations**
 * **Soundness Corpus (`corpus/map.tsv`):** every hole probe in [`tools/fuzz/holes/`](../tools/fuzz/holes/), with the rule and the proof phase (A1, A2, A3, B) that covers it. The table is generated from the probes' `// map:` lines by `tools/fuzz/holes/map.sh` (build.sh writes it; it is not committed); `tools/fuzz/holes/map.py --counts` gives the totals
 
@@ -147,7 +147,7 @@ flowchart BT
   Codes["Codes<br/>(527L, 29 thms)"]
   Ctx["Ctx<br/>(294L, 30 thms)"]
   DynCell["DynCell<br/>(479L, 33 thms)"]
-  EditB["EditB<br/>(2051L, 61 thms)"]
+  EditB["EditB<br/>(2082L, 61 thms)"]
   EditBV["EditBV<br/>(1047L, 35 thms)"]
   Frame["Frame<br/>(638L, 40 thms)"]
   Heap["Heap<br/>(206L, 14 thms)"]
@@ -233,7 +233,7 @@ flowchart BT
 | 2. Memory Invariant | [`A2/Stability.lean`](A2/Stability.lean) | 936 | 75 | 5 | Stability of borrows and views under store and context updates. |
 | 2. Memory Invariant | [`A2/Values.lean`](A2/Values.lean) | 203 | 14 | 0 | Well-formedness lemmas for values, structs (pair), enums (inl/inr), and views. |
 | 2. Memory Invariant | [`A2/Wf.lean`](A2/Wf.lean) | 1339 | 39 | 1 | Preservation of context well-formedness (WfCtx) across typing transitions. |
-| 3. Proof Infrastructure | [`A2/EditB.lean`](A2/EditB.lean) | 2051 | 61 | 0 |  |
+| 3. Proof Infrastructure | [`A2/EditB.lean`](A2/EditB.lean) | 2082 | 61 | 0 |  |
 | 3. Proof Infrastructure | [`A2/EditBV.lean`](A2/EditBV.lean) | 1047 | 35 | 0 |  |
 | 3. Proof Infrastructure | [`A2/Repl.lean`](A2/Repl.lean) | 353 | 20 | 0 |  |
 | 3. Proof Infrastructure | [`A2/Sweep.lean`](A2/Sweep.lean) | 503 | 56 | 3 |  |

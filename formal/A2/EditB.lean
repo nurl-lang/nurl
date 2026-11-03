@@ -74,7 +74,38 @@ stores nothing and is typed too.
   container bound to a name first (an element borrow, an option payload
   cursor), or a callee's parameter that allows the change (`inout`, whose
   summary then holds the view, `FnOK`'s `outHolds`). Their closure forms
-  (inside a closure, `vec_each`) stay outside A2. -/
+  (inside a closure, `vec_each`) stay outside A2.
+
+## A view stored into a plain parameter's elements (Agora #391, #454)
+
+* Typed: #454's plain-parameter form. A function that changes the elements
+  of a plain parameter's elements through an element borrow reads as an
+  `inout drop` parameter (RULES.md's first reading: `drop` is
+  `Edit.effAt`'s effect on a root reached `.inner`). `fill`'s
+  `~ e vv { ( vec_push [s] e x ) }` is then `editBV` rooted at `vv`, its
+  summary holds `(vv, x, .view)` (`FnOK`'s `outHolds`), and the caller's
+  `vv`, handed over `inout`, holds the view (`callPostAux`'s `outHeld`),
+  so a read of it after `loc` ends is refused. As for every `ThruFn`
+  callee, the call passes no argument that already holds views (`CallT`).
+* Not typed: a change rooted at a borrowed parameter (`.rootb`). #391 needs
+  it when its caller hands an element (`( vec_at vv 0 )`, or a local bound
+  from it) to `f`'s changed `Vec` parameter. Inside a call, what a borrowed
+  parameter reaches is frozen: its entry depends on its argument's owners
+  (`callPe`), each lent out for the call (`pe_Fc`, `WrapCond`,
+  `Inv.rbindIn`), and every step keeps a lent-out slot as it was (`Frz`,
+  which `recover`'s `CatchOK` relies on; `rootb_anchor` and
+  `rootKeep_frame` follow the same owners). A change through the parameter
+  rewrites one of those owners' trees. Reading the parameter as `inout`
+  does not help either: the call renames an `inout` parameter to its
+  argument (`callRen`) and lifts it as an owner (`RSetup.liftE`), but a
+  borrow's slot is a borrowed one. Typing #391 needs one of: owners a call
+  lends unfrozen but pinned, changed only through the parameter that
+  borrows them (`Frz`, `RootbAnch` and `rootb_anchor` exempting them, every
+  rule that changes a binding asking that it pins none, and the views stored
+  among what the call's lifted bindings may hold, `RSetup.A`); or a reading
+  of the call as handing the element over, moved out of `vv` into an owner
+  the callee takes `inout` and moved back after, which needs an element swap
+  the calculus does not have. -/
 
 namespace A2
 
