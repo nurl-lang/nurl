@@ -258,6 +258,8 @@ inductive Rhs where
   -- closed flag, a `prod (vec A) int` (`chan_new` is `lockNew` of a new
   -- `Vec` and a 0, `Channel_share` is `lockClone`); each operation is one
   -- step on the payload, under the channel's mutex
+  | chanSend (a y : Var)       -- `chan_send a y`: `y`'s value moves to the back of the queue
+                               -- (answer 1); on a closed channel it is dropped (answer 0)
   | chanRecv (w : Bool) (a : Var)
                                -- `chan_recv a` (`w`) / `chan_try_recv a`: the queue's head
                                -- moves out, as `some` (`inr`); `none` (`inl 0`) when it is

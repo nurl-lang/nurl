@@ -48,6 +48,7 @@ theorem RhsT.ctxRel {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry}
   | pack hy _ _ hp _ => exact hp.ctxRel hy hanch
   | arcNew hy _ _ _ hp => exact hp.ctxRel hy hanch
   | lockNew hy _ _ _ hp => exact hp.ctxRel hy hanch
+  | chanSend _ _ _ hy _ _ hp => exact hp.ctxRel hy hanch
   | arcClone _ _ _ => exact CtxRel.refl _
   | lockClone _ _ _ => exact CtxRel.refl _
   | atomic _ _ _ _ _ => exact CtxRel.refl _

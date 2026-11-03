@@ -222,6 +222,35 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
         obtain ⟨n1, h1⟩ := eval_exists hi he1
         obtain ⟨n2, h2⟩ := eval_exists hi he2
         exact ⟨_, EvalR.atomic hv hk h1 h2⟩
+  | chanSend ha hl hty hy hly htyy hpa =>
+    -- A3.4: into the queue, or (closed) dropped, unless the channel's payload
+    -- is checked out
+    obtain ⟨o, k, hv⟩ := hi.lk_slot ha hl hty
+    obtain ⟨ob, hk⟩ := hi.lk_val ha hl hty hv
+    cases ob with
+    | none => exact absurd ⟨o, k, _, hv, hk⟩ hnb
+    | some p =>
+      obtain ⟨_, _, hpay, _⟩ := hi.blocks k _ hk
+      obtain ⟨hw, _⟩ := hpay p rfl
+      obtain ⟨_, _, hall⟩ := hi.heap.blk k _ hk
+      obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly
+      have hb1 : m1.blk = m.blk := by cases htk <;> rfl
+      have ha1 : m1.alloc = m.alloc := by cases htk <;> rfl
+      cases hw with
+      | pair hq hf =>
+        cases hq with
+        | @node _ c d es _ =>
+          cases hf with
+          | @int f =>
+            cases f with
+            | zero =>
+              exact ⟨_, EvalR.chanSend hv htk (by rw [hb1]; exact hk)
+                (by rw [ha1]; exact (hall c (by simp [Blk.tree])).1)
+                (by rw [ha1]; exact (hall d (by simp [Blk.tree])).1)⟩
+            | succ f =>
+              obtain ⟨_, hp⟩ := push_take hi hanch hy hly htyy hpa htk
+              obtain ⟨a', hfr⟩ := frees_exists hp.wf m1.alloc hp.nd (fun i hi' => (hp.al i hi').1)
+              exact ⟨_, EvalR.chanSendClosed hv htk (by rw [hb1]; exact hk) hfr⟩
   | @chanRecv w a E s ha hl hty =>
     -- A3.4: the queue's head, or none, unless the channel's payload is
     -- checked out or (`chan_recv`) its queue is empty and open

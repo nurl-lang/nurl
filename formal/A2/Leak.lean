@@ -254,6 +254,40 @@ theorem covers_evalR {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (hc : Covers m)
     · by_cases he : k' = k
       · subst he; rw [hk] at hk'; cases hk'; simp [Blk.tree] at hik
       · exact Or.inl (Or.inr ⟨k', bl, by simp [upd, he, hk'], hik⟩)
+  | @chanSend _ _ _ k t u c d es w m1 _ htk hk _ _ =>
+    -- A3.4: what `chan_send` moves into the queue is the channel's payload
+    have hi' : m.alloc i = true := by rw [← htk.alloc]; exact hi
+    have hnew : ∀ j ∈ (Val.pair (.node u c d (es ++ [w])) (.int 0)).ids,
+        PayAddr { m1 with blk := upd m1.blk k (some ⟨t, .lock, some (.pair (.node u c d (es ++ [w])) (.int 0))⟩) } j :=
+      fun j hj => ⟨k, ⟨t, .lock, some (.pair (.node u c d (es ++ [w])) (.int 0))⟩, by simp [upd], hj⟩
+    rcases hc i hi' with ⟨o', U, hU, hiU⟩ | ⟨k', bl, hk', hik⟩
+    · rcases htk.owned hU with hU1 | ⟨_, hUw⟩
+      · exact Or.inl (Or.inl ⟨o', U, hU1, hiU⟩)
+      · exact Or.inl (Or.inr (hnew i (by subst hUw; simp [idsL_append, hiU])))
+    · rw [← htk.blk] at hk'
+      by_cases he : k' = k
+      · subst he; rw [hk] at hk'; cases hk'
+        refine Or.inl (Or.inr (hnew i ?_))
+        simp only [Blk.tree, Option.getD_some, ids_pair, ids_node, ids_int, List.append_nil,
+          List.mem_cons] at hik
+        simp only [ids_pair, ids_node, idsL_append, ids_int, List.append_nil, List.mem_cons, List.mem_append]
+        rcases hik with h | h | h
+        · exact .inl h
+        · exact .inr (.inl h)
+        · exact .inr (.inr (.inl h))
+      · exact Or.inl (Or.inr ⟨k', bl, by simp [upd, he, hk'], hik⟩)
+  | @chanSendClosed _ _ _ _ _ _ _ w m1 a' _ htk _ hf =>
+    -- ... or, on a closed channel, drops: no address of it stays live
+    have hle : m.alloc i = true := by rw [← htk.alloc]; exact hf.le hi
+    rcases hc i hle with ⟨o', U, hU, hiU⟩ | hp
+    · rcases htk.owned hU with hU1 | ⟨_, hUw⟩
+      · exact Or.inl (Or.inl ⟨o', U, hU1, hiU⟩)
+      · subst hUw
+        have := hf.freed hiU
+        change a' i = true at hi
+        rw [this] at hi; cases hi
+    · refine Or.inl (Or.inr ?_)
+      unfold PayAddr; rw [htk.blk]; exact hp
   | @chanRecv _ _ _ k t u c d f v es _ hk _ _ =>
     -- A3.4: the queue's head leaves the payload as the value in flight
     rcases hc i hi with h | ⟨k', bl, hk', hik⟩

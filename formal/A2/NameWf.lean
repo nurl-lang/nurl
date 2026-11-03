@@ -320,6 +320,9 @@ theorem RhsT.names {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : Rhs
   | arcClone _ _ _ => exact ⟨hn, fun _ _ => DepsNamed.nil _, ⟨[], Keeps.refl Γ []⟩⟩
   | lockClone _ _ _ => exact ⟨hn, fun _ _ => DepsNamed.nil _, ⟨[], Keeps.refl Γ []⟩⟩
   | atomic _ _ _ _ _ => exact ⟨hn, fun _ _ => DepsNamed.nil _, ⟨[], Keeps.refl Γ []⟩⟩
+  | chanSend _ _ _ hy hly htyy hpa =>
+    obtain ⟨hn1, _, hk⟩ := hpa.names hy hly htyy hn
+    exact ⟨hn1, fun _ _ => DepsNamed.nil _, ⟨_, hk⟩⟩
   | chanRecv _ _ _ => exact ⟨hn, fun _ _ => DepsNamed.nil _, ⟨[], Keeps.refl Γ []⟩⟩
   | chanClose _ _ _ => exact ⟨hn, fun _ _ => DepsNamed.nil _, ⟨[], Keeps.refl Γ []⟩⟩
   | arcGet hy hl ht _ _ =>

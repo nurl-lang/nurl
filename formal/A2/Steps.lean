@@ -1046,6 +1046,66 @@ theorem setPay_pres {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {k : Na
   exact ⟨hi.grow rfl hheap (Nat.le_refl _) hb hB, rfl, Nat.le_refl _, fun _ => rfl, fun _ _ => rfl,
     fun _ _ h _ => h, fun _ => rfl, fun _ E1 h => ⟨E1, h, rfl, rfl⟩, DKeep.refl _ _, hb⟩
 
+/-- A3.4, **`chan_send`** on an open channel: the tree taken from `y`, of
+    the queue's element type, moves to the back of the queue, as `vec_push`
+    stores it (`Pushed`): its addresses leave the owned trees (`y`'s slot is
+    empty) and join the channel's payload, which owns them (`BlkOwn`: they
+    were in no other owned tree and no payload), as `locked_new`'s do
+    (`rhs_lockNew`). -/
+theorem chanSend_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {k : Nat} {s u : Ty} {c d : Nat}
+    {es : List Val} {v : Val} {D : List Dep} (post : RhsPost m m1 Γ Γ1 F) (pu : Pushed m1 Γ1 s v D)
+    (hk : m1.blk k = some ⟨.prod (.vec s) .int, .lock, some (.pair (.node u c d es) (.int 0))⟩) :
+    RhsPost m { m1 with blk := upd m1.blk k (some ⟨.prod (.vec s) .int, .lock,
+      some (.pair (.node u c d (es ++ [v])) (.int 0))⟩) } Γ Γ1 F := by
+  obtain ⟨_, _, hpay, _⟩ := post.inv.blocks k _ hk
+  obtain ⟨hwp, _⟩ := hpay _ rfl
+  obtain ⟨_, hnd, _⟩ := post.inv.heap.blk k _ hk
+  have hnd0 : (c :: d :: idsL es).Nodup := by
+    have : (Val.pair (.node u c d es) (.int 0)).ids.Nodup := hnd
+    simpa using this
+  have hold : ∀ i ∈ c :: d :: idsL es, PayAddr m1 i :=
+    fun i hi' => ⟨k, _, hk, by simpa [Blk.tree] using hi'⟩
+  have hw : WFv (.prod (.vec s) .int) (.pair (.node u c d (es ++ [v])) (.int 0)) := by
+    cases hwp with
+    | pair hq hfl =>
+      cases hq with
+      | node hes =>
+        refine .pair (.node fun e he => ?_) hfl
+        rcases List.mem_append.mp he with he | he
+        · exact hes e he
+        · rw [List.mem_singleton.mp he]; exact pu.wf
+  have hids : (Val.pair (.node u c d (es ++ [v])) (.int 0)).ids = (c :: d :: idsL es) ++ v.ids := by
+    simp [idsL_append]
+  have hnd' : (Val.pair (.node u c d (es ++ [v])) (.int 0)).ids.Nodup := by
+    rw [hids]
+    exact List.nodup_append.mpr ⟨hnd0, pu.nd, fun i hi' j hj he => by
+      subst he; exact pu.np i hj (hold i hi')⟩
+  refine post.trans (setPay_pres post.inv hk hw hnd' fun i hi' => ?_)
+  rw [hids] at hi'
+  rcases List.mem_append.mp hi' with hi' | hi'
+  · exact .inl (by simpa using hi')
+  · exact .inr ⟨(pu.al i hi').1, (pu.al i hi').2, fun x T hT => pu.dis x T hT i hi', pu.np i hi'⟩
+
+/-- A3.4, `chan_send` on a closed channel: the value taken from `y`, which
+    no owner holds and no payload owns (`Pushed`), is freed; no owned or
+    payload address is (as `HeapOK.freeV`, an element set out of range). -/
+theorem chanSendClosed_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {s : Ty} {v : Val} {D : List Dep}
+    {a' : Nat → Bool} (post : RhsPost m m1 Γ Γ1 F) (pu : Pushed m1 Γ1 s v D) (hf : Frees m1.alloc v a') :
+    RhsPost m { m1 with alloc := a' } Γ Γ1 F := by
+  have hh := post.inv.heap
+  have hheap : HeapOK { m1 with alloc := a' } :=
+    { nodup := fun o U hU => hh.nodup o U hU
+      disj := fun o1 o2 U1 U2 hne h1 h2 => hh.disj o1 o2 U1 U2 hne h1 h2
+      alloc := fun o U hU i hi => by
+        obtain ⟨ha, hlt⟩ := hh.alloc o U hU i hi
+        exact ⟨by show a' i = true; rw [hf.other (fun h => pu.dis o U hU i h hi)]; exact ha, hlt⟩
+      self := fun o U hU => hh.self o U hU
+      blk := hh.blk.frame rfl (Nat.le_refl _) (fun i hi => hf.other (fun h => pu.np i h hi))
+        (fun o U hU i hi => hh.notPay hU hi) }
+  exact post.trans ⟨post.inv.of_st rfl hheap (Nat.le_refl _), rfl, Nat.le_refl _, fun _ => rfl,
+    fun _ _ => rfl, fun _ _ h _ => h, fun _ => rfl, fun _ E1 h => ⟨E1, h, rfl, rfl⟩, DKeep.refl _ _,
+    BlkLe.refl _⟩
+
 /-- A3.4, **`chan_recv`**: the queue's head `v` moves out of the channel's
     payload, which keeps the rest; `v` is handed over owned, as `some`,
     holding nothing: its addresses were the payload's, and are in no owned
@@ -1329,6 +1389,17 @@ theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry
   | atomic _ _ _ _ _ =>
     cases he with
     | atomic _ hk _ _ => exact atomic_pres hi hk
+  | chanSend ha hl hty hy hly htyy hpa =>
+    cases he with
+    | @chanSend _ _ _ _ _ _ _ _ _ _ mt hv htk hk _ _ =>
+      obtain ⟨post, pu⟩ := push_take hi hanch hy hly htyy hpa htk
+      obtain ⟨_, hk'⟩ := hi.lk_val ha hl hty hv
+      have hb1 : mt.blk = m.blk := by cases htk <;> rfl
+      rw [← hb1, hk] at hk'; cases hk'
+      exact ⟨chanSend_pres post pu hk, intE_out _⟩
+    | chanSendClosed _ htk _ hf =>
+      obtain ⟨post, pu⟩ := push_take hi hanch hy hly htyy hpa htk
+      exact ⟨chanSendClosed_pres post pu hf, intE_out _⟩
   | chanRecv ha hl hty =>
     cases he with
     | chanRecv hv hk _ _ =>
@@ -2322,6 +2393,8 @@ theorem EvalR.blk {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.o
     show upd m1.blk m1.nid _ k = some bl
     rw [upd_ne _ _ hne]; exact hk1
   | atomic _ hk _ _ => exact BlkLe.setLock hk _
+  | chanSend _ h1 hk _ _ => exact (BlkLe.of_eq (TakeVal.blk h1)).trans (BlkLe.setLock hk _)
+  | chanSendClosed _ h1 _ _ => have := BlkLe.of_eq (TakeVal.blk h1); exact this
   | chanRecv _ hk _ _ => exact BlkLe.setLock hk _
   | chanClose _ hk => exact BlkLe.setLock hk _
   | _ => exact BlkLe.refl _

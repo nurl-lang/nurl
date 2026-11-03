@@ -143,7 +143,10 @@ theorem EvalR.ownedId {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r
     exact ⟨fun _ i hi => by simp [Val.ids] at hi, fun i hi => .inl (b1 i hi)⟩
   | arcClone _ => exact ⟨fun _ i hi => by simp [Val.ids] at hi, fun i hi => .inl hi⟩
   | lockClone _ => exact ⟨fun _ i hi => by simp [Val.ids] at hi, fun i hi => .inl hi⟩
-  -- A3.4: a value received was the channel's payload's
+  -- A3.4: a value sent leaves the owned trees; one received was the channel's payload's
+  | chanSend _ h1 _ _ _ => exact ⟨fun h => (nomatch h), fun i hi => .inl ((TakeVal.ownedId h1 hb).2 i hi)⟩
+  | chanSendClosed _ h1 _ _ =>
+    exact ⟨fun h => (nomatch h), fun i hi => .inl ((TakeVal.ownedId h1 hb).2 i hi)⟩
   | chanRecv _ hk _ _ =>
     exact ⟨fun _ i hi => .inr (.inr ⟨_, _, hk, by simp only [ids_inr] at hi; simp [Blk.tree, hi]⟩),
       fun i hi => .inl hi⟩
@@ -380,7 +383,28 @@ theorem EvalR.payAt {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (
       simp [Blk.tree] at hi
     · rw [upd_ne _ _ he] at hk'
       exact .inl ⟨bl, hk', hi⟩
-  -- A3.4: a channel's payload keeps its addresses, but for a head received
+  -- A3.4: a channel's payload keeps its addresses, and gains a sent value's
+  -- (an owned tree's), or loses a head received
+  | @chanSend _ _ _ k0 _ _ _ _ _ _ m1 _ h1 hk0 _ _ =>
+    have hk' : upd m1.blk k0 _ k = some bl := hk
+    rw [TakeVal.blk h1] at hk0
+    by_cases he : k = k0
+    · subst he
+      simp [upd] at hk'
+      subst hk'
+      simp only [Blk.tree, Option.getD_some, ids_pair, ids_node, idsL_append, idsL_cons, idsL_nil,
+        ids_int, List.append_nil, List.mem_cons, List.mem_append] at hi
+      rcases hi with h | h | h | h
+      · exact .inl ⟨_, hk0, by simp [Blk.tree, h]⟩
+      · exact .inl ⟨_, hk0, by simp [Blk.tree, h]⟩
+      · exact .inl ⟨_, hk0, by simp [Blk.tree, h]⟩
+      · exact .inr ((TakeVal.ownedId h1 hb).1 i h)
+    · rw [upd_ne _ _ he, TakeVal.blk h1] at hk'
+      exact .inl ⟨bl, hk', hi⟩
+  | chanSendClosed _ h1 _ _ =>
+    have hk' : _ = some bl := hk
+    rw [TakeVal.blk h1] at hk'
+    exact .inl ⟨bl, hk', hi⟩
   | @chanRecv _ _ _ k0 _ _ _ _ _ _ _ _ hk0 _ _ =>
     have hk' : upd _ k0 _ k = some bl := hk
     by_cases he : k = k0

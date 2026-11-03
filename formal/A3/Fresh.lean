@@ -66,6 +66,9 @@ theorem EvalR.grows {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (
   | lockNew h1 hfr =>
     exact (TakeVal.grows h1).trans ⟨Nat.le_succ _, fun _ hi => .inl hi, BlkLe.fresh hfr _⟩
   | atomic _ hk _ _ => exact ⟨Nat.le_refl _, fun _ hi => .inl hi, BlkLe.setLock hk _⟩
+  | chanSend _ h1 hk _ _ =>
+    exact (TakeVal.grows h1).trans ⟨Nat.le_refl _, fun _ hi => .inl hi, BlkLe.setLock hk _⟩
+  | chanSendClosed _ h1 _ hf => exact (TakeVal.grows h1).trans (Grows.shrink (Frees.le hf) rfl)
   | chanRecv _ hk _ _ => exact ⟨Nat.le_refl _, fun _ hi => .inl hi, BlkLe.setLock hk _⟩
   | chanClose _ hk => exact ⟨Nat.le_refl _, fun _ hi => .inl hi, BlkLe.setLock hk _⟩
   | _ => exact Grows.of_eq rfl rfl

@@ -26,7 +26,8 @@ theorem BindParams.alloc_eq {m m' : Mem} {ps : List (PMode × Ty)} {as : List Va
   | inout _ ih => exact ih
 
 theorem EvalR.keep {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.ok v o m1))
-    {a2 : Nat → Bool} (hf : FreshFrom a2 m.nid) : ∀ i, a2 i = true → m1.alloc i = m.alloc i := by
+    (hb : BorFree m) {a2 : Nat → Bool} (hav : Avoids m a2) (hf : FreshFrom a2 m.nid) :
+    ∀ i, a2 i = true → m1.alloc i = m.alloc i := by
   intro i hi
   cases h with
   | new =>
@@ -40,6 +41,12 @@ theorem EvalR.keep {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.
   | pack h1 => rw [TakeVal.alloc h1]
   | arcNew h1 _ => exact congrFun (TakeVal.alloc h1) i
   | lockNew h1 _ => exact congrFun (TakeVal.alloc h1) i
+  | chanSend _ h1 _ _ _ => exact congrFun (TakeVal.alloc h1) i
+  | chanSendClosed _ h1 _ hfr =>
+    -- A3.4: what a send to a closed channel drops was the thread's own
+    have hav2 := (TakeVal.avoids h1 hb hav).2
+    exact (Frees.other hfr (fun hm => by have := hav2 i hm; rw [hi] at this; cases this)).trans
+      (congrFun (TakeVal.alloc h1) i)
   | _ => rfl
 
 /-- **A step leaves another part as it was.** -/
@@ -50,7 +57,7 @@ theorem Step.keep {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) (
   | seqSkip => intro _ _; rfl
   | seqL _ ih => exact ih
   | seqP _ ih => exact ih
-  | letv _ he => exact EvalR.keep he hf
+  | letv _ he => exact EvalR.keep he hb hav hf
   | letvP _ => intro _ _; rfl
   | letcall _ _ hbp => intro i _; exact congrFun (BindParams.alloc_eq hbp) i
   | scopeSkip hx hd =>
@@ -71,7 +78,7 @@ theorem Step.keep {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) (
     intro i hi
     have hav1 := (EvalR.avoids he hb hav hf).1
     show _ = m.alloc i
-    rw [← EvalR.keep he hf i hi]
+    rw [← EvalR.keep he hb hav hf i hi]
     exact DropSlot.keep hd (fun T hT j hj => hav1 j (OwnedId.of_slot (hx.trans (congrArg some hT)) hj)) i hi
   | assignP _ => intro _ _; rfl
   | iteT _ _ => intro _ _; rfl
@@ -126,7 +133,7 @@ theorem Step.keep {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) (
   | unpair _ _ _ _ => intro _ _; rfl
   | callc _ _ _ _ hbp => intro i _; exact congrFun (BindParams.alloc_eq hbp) i
   | catchP _ _ ih => exact ih
-  | letd _ he => exact EvalR.keep he hf
+  | letd _ he => exact EvalR.keep he hb hav hf
   | letdP _ => intro _ _; rfl
   | scopeDIn _ ih => exact ih
   | scopeDEnd _ => intro _ _; rfl
