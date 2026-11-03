@@ -190,6 +190,8 @@
 : ~ s g_clo_node_list ``
 : ~ i g_clo_node_n 0
 : ~ s g_clo_pnode_list ``  // `f#p`: the named functions' closure parameters that have a node
+: ~ s g_clo_lpnode_list ``  // `lit#p`: the closure literals' closure parameters that have a node
+: ~ s g_clo_cla_list ``  // `node#p`: the closure calls that passed a closure argument (`cpm#node#p`)
 : ~ i g_clo_closed 0
 // While the parked walks run (resolve_deferred_borrowck), a `dyn` impl whose
 // walk has not answered yet is taken to leave no view (g_vk_assumed names
@@ -17205,7 +17207,9 @@ unsafe @ gen_call i lex i syms i cg → s {
         // conservative summary given it above.)
         // A closure handed to a function: one of the closures its parameter
         // may be (__clo_nodes_close).
-        ? ! __callee_shadowed { ( __clo_arg_note syms call_name arg_idx bck_arg_tt bck_arg_val at ) } {}
+        ? ! __callee_shadowed { ( __clo_arg_note syms call_name arg_idx bck_arg_tt bck_arg_val at F ) } {
+            ? != 0 ( nurl_str_len __clo_node ) { ( __clo_arg_note syms __clo_node arg_idx bck_arg_tt bck_arg_val at T ) } {}
+        }
         // A closure called with a binding it gives a new value by name (a
         // capture it assigns, `= o …`, or a field of it), as the argument —
         // the binding, or a field of it that needs dropping: inside, the
@@ -19124,6 +19128,8 @@ unsafe @ gen_cond i lex i syms i cg → s {
     ( nurl_sym_set g_fn_escapes `__arm_body__` `` )
     : s t_inherited ( mem_exits_inherit t_pend0 )
     : s tt2 ( nurl_get_last_type )
+    // (A closure-valued arm: the closures it may be, the join's to publish.)
+    : s t_cm ? & != 0 g_borrowck ( __is_closure_ty tt2 ) ( __clo_val_members syms t_tt0 t_v0 ) ``
     // A closure-valued `?` is an owned temporary (docs/MEMORY.md §7.4):
     // each arm hands the join an env of its own — a literal or a call's
     // result as is, anything borrowed (a binding, an assignment's value)
@@ -19363,6 +19369,7 @@ unsafe @ gen_cond i lex i syms i cg → s {
     : s e_inherited ( mem_exits_inherit e_pend0 )
     = c_exits ( mem_exits_join c_exits e_inherited )
     : s et2 ( nurl_get_last_type )
+    : s e_cm ? & != 0 g_borrowck ( __is_closure_ty et2 ) ( __clo_val_members syms e_tt0 e_v0 ) ``
     ? ( __is_closure_ty et2 ) { ? c_valu { = ev ( mem_clo_into_owner syms cg et2 ev e_tt0 ) } { ( mem_clo_arm_discard syms cg et2 ev e_tt0 ) } } {}
     : s e_slice_flag ( nurl_str_cat ( nurl_sym_get syms `__last_slice_owned__` ) `` )
     : s e_str_flag ( nurl_str_cat ( nurl_sym_get syms `__last_call_ret_owned__` ) `` )
@@ -19832,6 +19839,9 @@ unsafe @ gen_cond i lex i syms i cg → s {
     // reaches the join) — a fresh value where the arm was copied (a
     // tracked owned string's arm hands the join its own copy).
     ? != 0 __sx_me { ( __sx_publish __sx_me ( __sx_join ? | != 0 tdr t_dup `-` t_sx ? | != 0 edr e_dup `-` e_sx ) ) } {}
+    // The closures a closure-valued join may be: either arm's
+    // (__clo_val_members; agora #420).
+    ( nurl_sym_def syms `__last_clo_members__` ( __words_join t_cm e_cm ) )
     result
 }
 
@@ -23051,6 +23061,8 @@ unsafe @ __blk_leave b val → v {
     : ~ i __tail_tt 0
     : ~ s __tail_tv ``
     : ~ s __tail_callee ``
+    // (…and, closure-valued, the closures it may be: __clo_val_members.)
+    : ~ s __tail_cm ``
     // (…and, for a field read, what it reads from: `. ( make ) f`.)
     : ~ i __tail_root 0
     : ~ b __dead_any F
@@ -23066,6 +23078,7 @@ unsafe @ __blk_leave b val → v {
         = __nstmt + __nstmt 1
         ? __blk_ret_val { = g_ret_implicit ( __is_fall_value_stmt lex __tail_tt ) } {}
         = last ( gen_stmt lex syms cg )
+        = __tail_cm ? & & != 0 g_borrowck == ( nurl_lex_type lex ) TT_RBRACE ( __is_closure_ty ( nurl_get_last_type ) ) ( __clo_val_members syms __tail_tt __tail_tv ) ``
         ? != ( nurl_lex_type lex ) TT_RBRACE { ( mem_clo_drop_discarded syms cg last __tail_tt ) }
         { ? & blk_is_arm & == ( nurl_lex_peek_type lex ) TT_LBRACE == ( nurl_lex_peek2_type lex ) TT_RBRACE
             { ( mem_arm_tail_own syms cg last __tail_tt ) } {} }
@@ -23141,6 +23154,7 @@ unsafe @ __blk_leave b val → v {
         ( nurl_sym_def syms `__tail_first_tt__` ( nurl_str_int __tail_tt ) )
         ( nurl_sym_def syms `__tail_first_val__` __tail_tv )
         ( nurl_sym_def syms `__tail_callee__` __tail_callee )
+        ( nurl_sym_def syms `__last_clo_members__` __tail_cm )
         ? == __tail_tt TT_DOT { ( nurl_sym_def syms `__tail_root_tt__` ( nurl_str_int __tail_root ) ) } {}
         ( __tail_noreturn_close syms __tail_callee ) }
     {}
@@ -25404,6 +25418,12 @@ unsafe @ __src_has_raw_ptr s text → b {
     : s nk ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print nk ) ( nurl_print ` = xor i1 ` ) ( nurl_print kp ) ( nurl_print `, 1\n` )
     ^ nk
+}
+
+// List `l` with word `w`, once.
+@ __word_add s l s w → s {
+    ? ( str_contains_word l w ) { ^ ( nurl_str_cat l `` ) } {}
+    ^ ( __words_join l w )
 }
 
 // Two space-separated lists as one.
@@ -59569,6 +59589,26 @@ unsafe @ __clo_node_of i syms s name i argc → s {
         // parameter, whatever scope asks — in a closure body too, where it
         // is a capture (a parameter of an enclosing closure is not known).
         : ~ i pk -1
+        // A closure parameter of the literal compiling now is what the calls
+        // through a node holding it pass there (`clp#lit#p`, fed from
+        // `cpm#node#p` at module end) — and may still be any closure: a
+        // call nobody here sees (the literal read back out of a field) may
+        // pass anything, read by its interface as before (agora #420).
+        : i lk ? & > g_bck_closure_depth 0 != 0 ( nurl_str_len g_clo_cur ) ( str_word_index g_clo_params name ) -1
+        ? >= lk 0 {
+            : s key ( nurl_str_cat4 `clp#` g_clo_cur `#` ( nurl_str_int lk ) )
+            ? != 0 ( nurl_sym_len g_clo_nodes key ) {
+                = nd ( nurl_str_cat ( nurl_sym_get g_clo_nodes key ) `` )
+                ( nurl_sym_def syms ( nurl_str_cat name `__clonode` ) nd )
+            } {
+                = nd ( __clo_node_new syms name )
+                ( __clo_node_add nd `*` )
+                ( nurl_sym_def g_clo_nodes key nd )
+                = g_clo_lpnode_list ( __word_add g_clo_lpnode_list ( nurl_str_cat3 g_clo_cur `#` ( nurl_str_int lk ) ) )
+            }
+            ( __clo_arity_at_least nd argc )
+            ^ nd
+        } {}
         ? == 0 g_bck_closure_depth { = pk ( nurl_sym_word_index syms `__fn_param_names__` name ) } {
             // (A name no enclosing closure takes, with no node of its own —
             // a `:` gives every closure binding one: the function's own.)
@@ -59598,16 +59638,60 @@ unsafe @ __clo_node_of i syms s name i argc → s {
 
 // Closure value `tt`/`val` (type `ty`) handed to `callee` as argument `p`:
 // one of the closures that parameter's node may be (`cpm#callee#p`).
-unsafe @ __clo_arg_note i syms s callee i p i tt s val s ty → v {
+// `callee` is a closure call's node (`thru`): the closures its literals'
+// parameter `p` may be (`clp#`, __clo_nodes_close).
+unsafe @ __clo_arg_note i syms s callee i p i tt s val s ty b thru → v {
     // (Asked of every argument: a closure's type is a `{ … }` pair.)
     ? | | == 0 g_borrowck == 0 ( nurl_str_len ty ) != ( nurl_str_get ty 0 ) 123 { ^ v } {}
     ? ! ( __is_closure_ty ty ) { ^ v } {}
     ? == 0 g_clo_nodes { = g_clo_nodes ( nurl_sym_new ) } {}
-    : ~ s m `*`
-    ? & == tt TT_BACKSLASH != 0 ( nurl_str_len g_last_closure_fn ) { = m ( nurl_str_cat g_last_closure_fn `` ) } {
-        ? & ( is_ident_tok tt ) ( __is_closure_ty ( nurl_sym_get syms val ) ) { = m ( __clo_node_of syms val 0 ) } {}
+    : s cp ( nurl_str_cat3 callee `#` ( nurl_str_int p ) )
+    ? thru { = g_clo_cla_list ( __word_add g_clo_cla_list cp ) } {}
+    ( __clo_node_add_all ( nurl_str_cat `cpm#` cp ) ( __clo_val_members syms tt val ) )
+}
+
+// The closures a closure value spelled from `tt`/`val` may be, as node
+// members: the literal just built, a binding's node, a `?` join's or a
+// block's arms (`__last_clo_members__`: gen_cond, gen_block_expr), or `*`
+// — a value nobody here follows (a field, an element, a call's result).
+unsafe @ __clo_val_members i syms i tt s val → s {
+    ? & == tt TT_BACKSLASH != 0 ( nurl_str_len g_last_closure_fn ) { ^ ( nurl_str_cat g_last_closure_fn `` ) } {}
+    ? & ( is_ident_tok tt ) ( __is_closure_ty ( nurl_sym_get syms val ) ) { ^ ( __clo_node_of syms val 0 ) } {}
+    ? | == tt TT_QUEST == tt TT_LBRACE {
+        : s m ( nurl_sym_get syms `__last_clo_members__` )
+        ? != 0 ( nurl_str_len m ) { ^ ( nurl_str_cat m `` ) } {}
+    } {}
+    ^ ( nurl_str_cat `*` `` )
+}
+
+// Each of members `ms` (words) is one of the closures node `nd` may be;
+// whether that grew it.
+@ __clo_node_add_all s nd s ms → b {
+    : ~ s r ( nurl_str_cat ms `` )
+    : ~ b grew F
+    ~ != 0 ( nurl_str_len r ) {
+        : s m ( str_first_word r ) = r ( str_skip_word r )
+        ? ! ( str_contains_word ( nurl_sym_get g_clo_nodes nd ) m ) { ( __clo_node_add nd m ) = grew T } {}
     }
-    ( __clo_node_add ( nurl_str_cat4 `cpm#` callee `#` ( nurl_str_int p ) ) m )
+    ^ grew
+}
+
+// The literals node (or literal) `nd` may be, through its member nodes.
+@ __clo_lits_of s nd → s {
+    : ~ s out ``
+    : ~ s seen ( nurl_str_cat nd `` )
+    : ~ s work ( nurl_str_cat nd `` )
+    ~ != 0 ( nurl_str_len work ) {
+        : s m ( str_first_word work ) = work ( str_skip_word work )
+        ? == 0 ( nurl_str_find m `__closure_` ) { = out ( __word_add out m ) } {
+            : ~ s ms ( nurl_str_cat ( nurl_sym_get g_clo_nodes m ) `` )
+            ~ != 0 ( nurl_str_len ms ) {
+                : s x ( str_first_word ms ) = ms ( str_skip_word ms )
+                ? ! ( str_contains_word seen x ) { = seen ( nurl_str_cat3 seen ` ` x ) = work ( __word_add work x ) } {}
+            }
+        }
+    }
+    ^ out
 }
 
 // A new node for closure binding `name`, with no member yet.
@@ -59666,13 +59750,7 @@ unsafe @ __clo_node_bind i syms s name s ty i tt s val b grow → v {
     // (Assigned: the node it already has — a parameter's, or one that may
     // still be whatever it held.)
     : s nd ? grow ( __clo_node_of syms name 0 ) ( __clo_node_new syms name )
-    ? & == tt TT_BACKSLASH != 0 ( nurl_str_len g_last_closure_fn ) { ( __clo_node_add nd g_last_closure_fn ) ^ v } {}
-    ? & ( is_ident_tok tt ) ( __is_closure_ty ( nurl_sym_get syms val ) ) {
-        : s vn ( __clo_node_of syms val 0 )
-        ( __clo_node_add nd vn )
-        ^ v
-    } {}
-    ( __clo_node_add nd `*` )
+    ( __clo_node_add_all nd ( __clo_val_members syms tt val ) )
 }
 
 // Every node's answers, at module end before the summaries are closed:
@@ -59705,6 +59783,26 @@ unsafe @ __clo_nodes_close → v {
         ~ != 0 ( nurl_str_len ms ) {
             : s m ( str_first_word ms ) = ms ( str_skip_word ms )
             ( __clo_node_add nd m )
+        }
+    }
+    // A closure literal's closure parameter is what the calls through a
+    // node it is a member of pass there — through each other's parameters
+    // too, so until nothing grows (agora #420).
+    : ~ b fed != 0 ( nurl_str_len g_clo_lpnode_list )
+    ~ fed {
+        = fed F
+        : ~ s cl ( nurl_str_cat g_clo_cla_list `` )
+        ~ != 0 ( nurl_str_len cl ) {
+            : s cp ( str_first_word cl ) = cl ( str_skip_word cl )
+            : i hs ( nurl_str_find cp `#` )
+            : s ps ( nurl_str_slice cp + hs 1 - - ( nurl_str_len cp ) hs 1 )
+            : s args ( nurl_sym_get g_clo_nodes ( nurl_str_cat `cpm#` cp ) )
+            : ~ s ls ( __clo_lits_of ( nurl_str_slice cp 0 hs ) )
+            ~ != 0 ( nurl_str_len ls ) {
+                : s l ( str_first_word ls ) = ls ( str_skip_word ls )
+                : s pn ( nurl_sym_get g_clo_nodes ( nurl_str_cat4 `clp#` l `#` ps ) )
+                ? != 0 ( nurl_str_len pn ) { ? ( __clo_node_add_all pn args ) { = fed T } {} } {}
+            }
         }
     }
     : ~ b grew T
