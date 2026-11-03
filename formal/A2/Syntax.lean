@@ -244,15 +244,26 @@ structure Slot where
   own : Bool
   val : Option Val
 
-/-- A3.1: a counted block (`Arc`): its payload, a tree of type `ty` that no
-    one writes.  How many shares it has is the number of `Val.arc` leaves
-    naming it (ghost, so nothing stores it).  The payload's addresses are the
-    block's (`BlkOwn`).  No step removes a block (`arcNew` adds one,
-    `BlkLe`); the sweep at a step's end removes those nothing reaches and
-    frees their payloads (`Mem.sweep`). -/
+/-- A3.2: what a shared block is.  An `arc` block (A3.1's `Arc`) holds a
+    frozen payload that every holder of a share reads; a `lock` block
+    (A3.2's `Locked`) holds a payload that no one reads while it is in the
+    block, and that one thread at a time checks out. -/
+inductive BKind where
+  | arc
+  | lock
+deriving DecidableEq, Repr
+
+/-- A shared block: its kind, and its payload, a tree of type `ty`.  How
+    many shares it has is the number of leaves naming it (ghost, so nothing
+    stores it).  The payload's addresses are the block's (`BlkOwn`).  An
+    `arc` block's payload is always there and never changes; a `lock`
+    block's is `none` while a thread has it checked out.  No step removes a
+    block (`arcNew` adds one, `BlkLe`); the sweep at a step's end removes
+    those nothing reaches and frees their payloads (`Mem.sweep`). -/
 structure Blk where
-  ty  : Ty
-  pay : Val
+  ty   : Ty
+  kind : BKind
+  pay  : Option Val
 
 structure Mem where
   alloc : Nat → Bool

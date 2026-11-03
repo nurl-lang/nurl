@@ -165,7 +165,7 @@ theorem dataAt_of_owned {m : Mem} {o : Var} {T n : Val} (ho : OwnedAt m o T) (hs
 
 /-- A3.1: a value lying in an owned tree, or in a live block's payload. -/
 def InMem (m : Mem) (n : Val) : Prop :=
-  (∃ o T, OwnedAt m o T ∧ Sub n T) ∨ ∃ k bl, m.blk k = some bl ∧ Sub n bl.pay
+  (∃ o T, OwnedAt m o T ∧ Sub n T) ∨ ∃ k bl, m.blk k = some bl ∧ Sub n bl.rd
 
 theorem InMem.sub {m : Mem} {n n' : Val} (h : InMem m n) (hs : Sub n' n) : InMem m n' := by
   rcases h with ⟨o, T, hT, h⟩ | ⟨k, bl, hk, h⟩
@@ -202,7 +202,7 @@ theorem DataAt.eq {m : Mem} {d : Nat} {n : Val} (h : DataAt m d n) : ∃ ty c es
 
 /-- What lies in a live block's payload stays there while the block lives. -/
 theorem InMem.grow_pay {m m' : Mem} (hb : BlkLe m.blk m'.blk) {n : Val} {k : Nat} {bl : Blk}
-    (hk : m.blk k = some bl) (hs : Sub n bl.pay) : InMem m' n :=
+    (hk : m.blk k = some bl) (hs : Sub n bl.rd) : InMem m' n :=
   Or.inr ⟨k, bl, hb k bl hk, hs⟩
 
 theorem InMem.mono {m m' : Mem} (hown : ∀ o T, OwnedAt m o T → OwnedAt m' o T)
@@ -497,7 +497,7 @@ theorem lands_bound {k : Kind} {n n0 : Val} (h : Lands k n n0) : k.bound = .none
 theorem rootb_anchor {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     (hanch : RootbAnch Γ F) :
     ∀ p E n, Γ p = some E → E.mode = .rootb → RootNode m p n → (∀ k q, n ≠ .arc k q) →
-      (∃ o T, o ∈ F ∧ OwnedAt m o T ∧ Sub n T) ∨ ∃ k bl, m.blk k = some bl ∧ Sub n bl.pay := by
+      (∃ o T, o ∈ F ∧ OwnedAt m o T ∧ Sub n T) ∨ ∃ k bl, m.blk k = some bl ∧ Sub n bl.rd := by
   intro p
   induction p using Nat.strongRecOn with
   | _ p ih =>
@@ -589,7 +589,7 @@ theorem rootb_anchor_sp {m : Mem} {Γ : Ctx} {F sp : List Var} (hi : MInv m Γ)
     (hanch : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ sp → Anchored E F)
     (hpin : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ sp → ∀ r ∈ roots E.vdeps, r ∉ sp) :
     ∀ p E n, Γ p = some E → E.mode = .rootb → p ∉ sp → RootNode m p n → (∀ k q, n ≠ .arc k q) →
-      (∃ o T, o ∈ F ∧ OwnedAt m o T ∧ Sub n T) ∨ ∃ k bl, m.blk k = some bl ∧ Sub n bl.pay := by
+      (∃ o T, o ∈ F ∧ OwnedAt m o T ∧ Sub n T) ∨ ∃ k bl, m.blk k = some bl ∧ Sub n bl.rd := by
   intro p
   induction p using Nat.strongRecOn with
   | _ p ih =>

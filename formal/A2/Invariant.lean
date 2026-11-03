@@ -64,7 +64,7 @@ inductive ArcIn : Ty → Val → Ty → Nat → Val → Prop
     holds the payload the share carries, of the share's type (the block
     lives while a share of it is owned; a payload never changes). -/
 def SharesIn (B : Nat → Option Blk) (τ : Ty) (T : Val) : Prop :=
-  ∀ u k p, ArcIn τ T u k p → B k = some ⟨u, p⟩
+  ∀ u k p, ArcIn τ T u k p → B k = some ⟨u, .arc, some p⟩
 
 /-- `SharesIn` over a memory's blocks. -/
 def SharesOK (m : Mem) (τ : Ty) (T : Val) : Prop := SharesIn m.blk τ T
@@ -110,7 +110,7 @@ theorem SharesOK.pkg {m : Mem} {fs : List Nat} {te : Ty} {ms : List Nat} {x : Va
     {cs : List (Var × PMode × Ty)} (h : SharesOK m (.fn ms) (.pkg fs te ms x cs)) : SharesOK m te x :=
   fun u k p ha => h u k p (.pkg ha)
 theorem SharesOK.here {m : Mem} {t : Ty} {k : Nat} {p : Val} (h : SharesOK m (.arc t) (.arc k p)) :
-    m.blk k = some ⟨t, p⟩ := h t k p .here
+    m.blk k = some ⟨t, .arc, some p⟩ := h t k p .here
 
 theorem ArcIn.hasArc {τ : Ty} {T : Val} {u : Ty} {k : Nat} {p : Val} (h : ArcIn τ T u k p) :
     τ.hasArc = true := by
@@ -220,7 +220,7 @@ def Lands (k : Kind) (n n0 : Val) : Prop :=
   k = .self ∧ n = n0 ∨ k = .view ∧ n = n0 ∨ k = .inner ∧ Below n n0
 
 /-- A3.1: a value inside a live block's payload. -/
-def InPay (m : Mem) (n : Val) : Prop := ∃ k bl, m.blk k = some bl ∧ Sub n bl.pay
+def InPay (m : Mem) (n : Val) : Prop := ∃ k bl, m.blk k = some bl ∧ Sub n bl.rd
 
 /-- Where a value reached through `dep` lies: where the node its root
     reaches puts it (`Lands`), or (A3.1), through a share, anywhere in a
@@ -299,7 +299,8 @@ inductive ValOK (m : Mem) : Ty → Val → List Dep → List Dep → Prop
       type (one that holds no view), and the share lands through a
       dependency, as a `Vec` handle does. -/
   | arc {t : Ty} {k : Nat} {p : Val} {P H : List Dep} :
-      m.blk k = some ⟨t, p⟩ → WFv t p → t.holdsView = false → (∃ dep ∈ P, ArcLanded m dep (.arc k p)) →
+      m.blk k = some ⟨t, .arc, some p⟩ → WFv t p → t.holdsView = false →
+      (∃ dep ∈ P, ArcLanded m dep (.arc k p)) →
       ValOK m (.arc t) (.arc k p) P H
 
 section ValOK
@@ -364,9 +365,9 @@ def SelfFree (T : Val) : Prop :=
     block's payload, and are live and below `nid`.  The block's key was taken
     from `nid` too (a key is never an address), so a new one is fresh. -/
 def BlkOwn (m : Mem) : Prop :=
-  ∀ k bl, m.blk k = some bl → k < m.nid ∧ bl.pay.ids.Nodup ∧
-    ∀ i ∈ bl.pay.ids, m.alloc i = true ∧ i < m.nid ∧ (∀ x T, OwnedAt m x T → i ∉ T.ids) ∧
-      ∀ k' bl', k' ≠ k → m.blk k' = some bl' → i ∉ bl'.pay.ids
+  ∀ k bl, m.blk k = some bl → k < m.nid ∧ bl.tree.ids.Nodup ∧
+    ∀ i ∈ bl.tree.ids, m.alloc i = true ∧ i < m.nid ∧ (∀ x T, OwnedAt m x T → i ∉ T.ids) ∧
+      ∀ k' bl', k' ≠ k → m.blk k' = some bl' → i ∉ bl'.tree.ids
 
 /-- One owner per allocation, every owned address is live, and no owned tree
     views itself. -/
@@ -383,7 +384,7 @@ theorem HeapOK.bkey {m : Mem} (hh : HeapOK m) : ∀ k bl, m.blk k = some bl → 
   fun k bl hk => (hh.blk k bl hk).1
 
 /-- A3.1: an address a block's payload owns. -/
-def PayAddr (m : Mem) (i : Nat) : Prop := ∃ k bl, m.blk k = some bl ∧ i ∈ bl.pay.ids
+def PayAddr (m : Mem) (i : Nat) : Prop := ∃ k bl, m.blk k = some bl ∧ i ∈ bl.tree.ids
 
 /-- No owned tree holds a payload's address. -/
 theorem HeapOK.notPay {m : Mem} (hh : HeapOK m) {x : Var} {T : Val} (hT : OwnedAt m x T) {i : Nat}
@@ -397,7 +398,7 @@ theorem HeapOK.payAlloc {m : Mem} (hh : HeapOK m) {i : Nat} (hi : PayAddr m i) :
   exact ⟨((hh.blk k bl hk).2.2 i hik).1, ((hh.blk k bl hk).2.2 i hik).2.1⟩
 
 /-- Blocks whose payloads own no address own them trivially. -/
-theorem BlkOwn.of_none {m : Mem} (h : ∀ k bl, m.blk k = some bl → bl.pay.ids = [] ∧ k < m.nid) :
+theorem BlkOwn.of_none {m : Mem} (h : ∀ k bl, m.blk k = some bl → bl.tree.ids = [] ∧ k < m.nid) :
     BlkOwn m := fun k bl hk => by
   obtain ⟨h1, h2⟩ := h k bl hk
   rw [h1]; exact ⟨h2, List.nodup_nil, fun _ h => nomatch h⟩
@@ -598,9 +599,10 @@ structure MInv (m : Mem) (Γ : Ctx) : Prop where
   shares    : ∀ v E sl T, Γ v = some E → m.st v = some sl → sl.own = true → sl.val = some T →
                 SharesOK m E.ty T
   /-- A3.1: a block's payload is a well-formed tree of a type that holds no
-      views, and the shares it holds name blocks too. -/
+      views, and the shares it holds name blocks too (A3.2: while it is in
+      the block). -/
   blocks    : ∀ k bl, m.blk k = some bl → bl.ty.ok = true ∧ bl.ty.holdsView = false ∧
-                WFv bl.ty bl.pay ∧ SharesOK m bl.ty bl.pay
+                ∀ p, bl.pay = some p → WFv bl.ty p ∧ SharesOK m bl.ty p
 
 /-- The invariant of a configuration running `s` in context `Γ`, with `F`
     lent out. -/

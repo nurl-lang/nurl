@@ -111,6 +111,45 @@ theorem Sub.trans {a b c : Val} (h1 : Sub a b) (h2 : Sub b c) : Sub a c := by
   | inr _ ih => exact Sub.inr ih
   | pkg _ ih => exact Sub.pkg ih
 
+/-! ### A3.2: what a block owns, and what its holders read -/
+
+@[simp] theorem Blk.tree_some (t : Ty) (k : BKind) (p : Val) : (Blk.mk t k (some p)).tree = p := rfl
+@[simp] theorem Blk.tree_none (t : Ty) (k : BKind) : (Blk.mk t k none).tree = .int 0 := rfl
+@[simp] theorem Blk.rd_arc (t : Ty) (p : Option Val) : (Blk.mk t .arc p).rd = (Blk.mk t .arc p).tree :=
+  rfl
+@[simp] theorem Blk.rd_lock (t : Ty) (p : Option Val) : (Blk.mk t .lock p).rd = .int 0 := rfl
+
+theorem Sub.int_eq {n : Val} {j : Nat} (h : Sub n (.int j)) : n = .int j := by
+  cases h; rfl
+
+/-- What a block's holders read lies in what it owns. -/
+theorem Blk.rd_ids (bl : Blk) {i : Nat} (h : i ∈ bl.rd.ids) : i ∈ bl.tree.ids := by
+  obtain ⟨t, k, p⟩ := bl
+  cases k with
+  | arc => exact h
+  | lock => simp [Blk.rd] at h
+
+/-- What lies in a block's tree lies in its payload, or is the nothing a
+    checked-out lock owns. -/
+theorem Blk.sub_tree {bl : Blk} {n : Val} (h : Sub n bl.tree) :
+    (∃ p, bl.pay = some p ∧ Sub n p) ∨ n = .int 0 := by
+  obtain ⟨t, k, p⟩ := bl
+  cases p with
+  | none => exact Or.inr h.int_eq
+  | some p => exact Or.inl ⟨p, rfl, h⟩
+
+/-- What a block's holders read lies in an `arc` block's payload, or is
+    nothing. -/
+theorem Blk.sub_rd {bl : Blk} {n : Val} (h : Sub n bl.rd) :
+    (bl.kind = .arc ∧ ∃ p, bl.pay = some p ∧ Sub n p) ∨ n = .int 0 := by
+  obtain ⟨t, k, p⟩ := bl
+  cases k with
+  | lock => exact Or.inr h.int_eq
+  | arc =>
+    rcases Blk.sub_tree h with ⟨q, hq, hs⟩ | h
+    · exact Or.inl ⟨rfl, q, hq, hs⟩
+    · exact Or.inr h
+
 theorem Below.sub {n t : Val} (h : Below n t) : Sub n t := by
   obtain ⟨e, hc, hs⟩ := h
   exact hc.sub hs
@@ -255,20 +294,24 @@ theorem owned_unique {m : Mem} (hh : HeapOK m) {x y : Var} {t u n1 n2 : Val}
 /-- A3.1: two parts of payloads sharing a head address are the same part
     (a block owns its payload, `BlkOwn`). -/
 theorem pay_unique {m : Mem} (hh : HeapOK m) {k1 k2 : Nat} {b1 b2 : Blk} (hk1 : m.blk k1 = some b1)
-    (hk2 : m.blk k2 = some b2) {n1 n2 : Val} (h1 : Sub n1 b1.pay) (h2 : Sub n2 b2.pay) {i : Nat}
+    (hk2 : m.blk k2 = some b2) {n1 n2 : Val} (h1 : Sub n1 b1.rd) (h2 : Sub n2 b2.rd) {i : Nat}
     (hi1 : i ∈ n1.head) (hi2 : i ∈ n2.head) : n1 = n2 := by
   have hk : k1 = k2 := by
     refine Classical.byContradiction fun hne => ?_
-    exact ((hh.blk k1 b1 hk1).2.2 i (h1.ids i (Val.head_ids _ i hi1))).2.2.2 k2 b2 (Ne.symm hne) hk2
-      (h2.ids i (Val.head_ids _ i hi2))
+    exact ((hh.blk k1 b1 hk1).2.2 i (b1.rd_ids (h1.ids i (Val.head_ids _ i hi1)))).2.2.2 k2 b2
+      (Ne.symm hne) hk2 (b2.rd_ids (h2.ids i (Val.head_ids _ i hi2)))
   subst hk; rw [hk1] at hk2; cases hk2
-  exact sub_unique (hh.blk k1 b1 hk1).2.1 h1 h2 hi1 hi2
+  obtain ⟨t, k, p⟩ := b1
+  cases k with
+  | arc => exact sub_unique (hh.blk k1 _ hk1).2.1 h1 h2 hi1 hi2
+  | lock => rw [h1.int_eq] at hi1; simp [Val.head] at hi1
 
 /-- A3.1: no owned tree and no payload share a head address. -/
 theorem owned_pay_head {m : Mem} (hh : HeapOK m) {x : Var} {t : Val} (hx : OwnedAt m x t) {k : Nat}
-    {bl : Blk} (hk : m.blk k = some bl) {n1 n2 : Val} (h1 : Sub n1 t) (h2 : Sub n2 bl.pay) {i : Nat}
+    {bl : Blk} (hk : m.blk k = some bl) {n1 n2 : Val} (h1 : Sub n1 t) (h2 : Sub n2 bl.rd) {i : Nat}
     (hi1 : i ∈ n1.head) (hi2 : i ∈ n2.head) : False :=
-  ((hh.blk k bl hk).2.2 i (h2.ids i (Val.head_ids _ i hi2))).2.2.1 x t hx (h1.ids i (Val.head_ids _ i hi1))
+  ((hh.blk k bl hk).2.2 i (bl.rd_ids (h2.ids i (Val.head_ids _ i hi2)))).2.2.1 x t hx
+    (h1.ids i (Val.head_ids _ i hi1))
 
 theorem nodeAt_unique {m : Mem} (hh : HeapOK m) {c : Nat} {n1 n2 : Val}
     (h1 : NodeAt m c n1) (h2 : NodeAt m c n2) : n1 = n2 := by

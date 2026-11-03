@@ -126,8 +126,8 @@ theorem MInv.of_st {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) (
   shares v E sl T hE hsl hown hT := (hi.shares v E sl T hE (by rw [h] at hsl; exact hsl) hown hT).of_blk hb
   blocks k bl hk := by
     rw [hb] at hk
-    obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k bl hk
-    exact ⟨h1, h2, h3, h4.of_blk hb⟩
+    obtain ⟨h1, h2, h3⟩ := hi.blocks k bl hk
+    exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.of_blk hb⟩⟩
 
 /-! ### A3.1: more blocks
 
@@ -173,8 +173,8 @@ theorem SlotOK.grow {m m' : Mem} (hst : m'.st = m.st) (hb : BlkLe m.blk m'.blk) 
 
 /-- What the invariant asks of the blocks. -/
 def BlocksIn (m : Mem) : Prop :=
-  ∀ k bl, m.blk k = some bl → bl.ty.ok = true ∧ bl.ty.holdsView = false ∧ WFv bl.ty bl.pay ∧
-    SharesOK m bl.ty bl.pay
+  ∀ k bl, m.blk k = some bl → bl.ty.ok = true ∧ bl.ty.holdsView = false ∧
+    ∀ p, bl.pay = some p → WFv bl.ty p ∧ SharesOK m bl.ty p
 
 /-- **More blocks**: the invariant holds over a store with the same slots and
     more blocks, each as the invariant asks. -/
@@ -533,10 +533,12 @@ theorem WFv.noView_pkg {τ : Ty} {v : Val} (hw : WFv τ v) (hhv : τ.holdsView =
 
 /-- A3.1: a payload holds no package. -/
 theorem MInv.pay_pkgs {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {k : Nat} {bl : Blk} (hk : m.blk k = some bl)
-    {n : Val} (hs : Sub n bl.pay) : PkgsOK n := by
-  obtain ⟨_, hhv, hw, _⟩ := hi.blocks k bl hk
+    {n : Val} (hs : Sub n bl.rd) : PkgsOK n := by
+  obtain ⟨_, hhv, hw⟩ := hi.blocks k bl hk
   intro fs te ms e cs hp
-  exact (hw.noView_pkg hhv (hp.trans hs)).elim
+  rcases Blk.sub_rd hs with ⟨_, q, hq, hs'⟩ | rfl
+  · exact ((hw q hq).1.noView_pkg hhv (hp.trans hs')).elim
+  · cases hp
 
 theorem MInv.nodeAt_pkgs {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {c : Nat} {n : Val} (h : NodeAt m c n) :
     PkgsOK n := by
@@ -1165,7 +1167,8 @@ A share owns nothing: its payload is the block's, which owns its addresses
     a borrow of it). -/
 theorem MInv.arc_val {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry} (ha : Γ a = some E)
     (hl : E.live = true) {t : Ty} (hty : E.ty = .arc t) {o : Bool} {k : Nat} {p : Val}
-    (hv : m.st a = some ⟨o, some (.arc k p)⟩) : m.blk k = some ⟨t, p⟩ ∧ WFv t p ∧ t.holdsView = false := by
+    (hv : m.st a = some ⟨o, some (.arc k p)⟩) :
+    m.blk k = some ⟨t, .arc, some p⟩ ∧ WFv t p ∧ t.holdsView = false := by
   cases hos : E.mode.ownSlot with
   | true =>
     obtain ⟨T, hT, hwT, _⟩ := hi.own_val ha hl hos
@@ -1201,7 +1204,8 @@ theorem MInv.arc_slot {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry
     or, for a borrow, one through what the share lands through. -/
 theorem MInv.share_lands {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry} (ha : Γ a = some E)
     (hl : E.live = true) {t : Ty} (hty : E.ty = .arc t) {o : Bool} {k : Nat} {p : Val}
-    (hv : m.st a = some ⟨o, some (.arc k p)⟩) (hk : m.blk k = some ⟨t, p⟩) {n : Val} (hs : Sub n p) :
+    (hv : m.st a = some ⟨o, some (.arc k p)⟩) (hk : m.blk k = some ⟨t, .arc, some p⟩) {n : Val}
+    (hs : Sub n p) :
     ∃ dep ∈ derive a E .share, Landed m dep n := by
   have hin : InPay m n := ⟨k, _, hk, hs⟩
   unfold derive
@@ -1228,7 +1232,7 @@ theorem MInv.share_lands {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : En
 
 /-- A share, owned: it holds nothing, and its block holds its payload. -/
 theorem out_share {m : Mem} {Γ : Ctx} {t : Ty} {k : Nat} {p : Val} (htok : t.ok = true)
-    (hvf : t.holdsView = false) (hwp : WFv t p) (hk : m.blk k = some ⟨t, p⟩) :
+    (hvf : t.holdsView = false) (hwp : WFv t p) (hk : m.blk k = some ⟨t, .arc, some p⟩) :
     RhsOut m Γ ⟨.arc t, .own, true, [], [], false, false⟩ (.arc k p) true where
   own := rfl
   mode := Or.inl rfl
@@ -1262,7 +1266,7 @@ theorem out_arcGet {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry} (
     {o : Bool} {k : Nat} {p : Val} (hv : m.st a = some ⟨o, some (.arc k p)⟩) :
     RhsOut m Γ (getE a E t) (lendOf p) false := by
   obtain ⟨hk, hwp, hvf⟩ := hi.arc_val ha hl hty hv
-  have hsh : SharesOK m t p := (hi.blocks k _ hk).2.2.2
+  have hsh : SharesOK m t p := ((hi.blocks k _ hk).2.2 p rfl).2
   have hok := hi.tyok ha; rw [hty] at hok
   simp only [Ty.ok, Bool.and_eq_true] at hok
   have htok := hok.1

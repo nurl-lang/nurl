@@ -631,7 +631,7 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       rw [killE_ty]; exact (hi.shares v E sl T hE hsl hown hT).of_blk hblk
   · intro k bl hk
     rw [hblk] at hk
-    obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k bl hk
-    exact ⟨h1, h2, h3, h4.of_blk hblk⟩
+    obtain ⟨h1, h2, h3⟩ := hi.blocks k bl hk
+    exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.of_blk hblk⟩⟩
 
 end A2

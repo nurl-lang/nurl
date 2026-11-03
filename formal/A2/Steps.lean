@@ -229,8 +229,8 @@ theorem MInv.add {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} (hx : Γ x = no
       have hsl0 : m.st w = some sl := by simpa [Mem.set_st, upd_ne _ _ hwx] using hsl
       exact (hi.shares w Ew sl T hw hsl0 hown hT).of_blk rfl
   · intro k bl hk
-    obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k bl hk
-    exact ⟨h1, h2, h3, h4.of_blk rfl⟩
+    obtain ⟨h1, h2, h3⟩ := hi.blocks k bl hk
+    exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.of_blk rfl⟩⟩
 
 theorem hanch_of {Γ Γ1 : Ctx} {F : List Var}
     (hanch : RootbAnch Γ F)
@@ -410,18 +410,19 @@ theorem push_take {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} (hi : MInv m Γ)
 theorem rhs_arcNew {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {t : Ty} {v : Val} {D : List Dep}
     (post : RhsPost m m1 Γ Γ1 F) (pu : Pushed m1 Γ1 t v D) (hpl : t.holdsView = false ∧ t.hasFn = false)
     (htok : t.ok = true) (hfr : m1.blk m1.nid = none) :
-    RhsPost m { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, v⟩) } Γ Γ1 F ∧
-    RhsOut { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, v⟩) } Γ1
+    RhsPost m { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, .arc, some v⟩) } Γ Γ1 F ∧
+    RhsOut { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, .arc, some v⟩) } Γ1
       ⟨.arc t, .own, true, [], [], false, false⟩ (.arc m1.nid v) true := by
-  let m2 : Mem := { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, v⟩) }
+  let m2 : Mem := { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, .arc, some v⟩) }
   have hvf := hpl.1
   have hb : BlkLe m1.blk m2.blk := by
     intro k bl hk
     have hne : k ≠ m1.nid := fun h => by rw [h, hfr] at hk; cases hk
     show upd m1.blk m1.nid _ k = some bl
     rw [upd_ne _ _ hne]; exact hk
-  have hnew : m2.blk m1.nid = some ⟨t, v⟩ := by simp [m2]
-  have hcases : ∀ k bl, m2.blk k = some bl → (k = m1.nid ∧ bl = ⟨t, v⟩) ∨ (k ≠ m1.nid ∧ m1.blk k = some bl) := by
+  have hnew : m2.blk m1.nid = some ⟨t, .arc, some v⟩ := by simp [m2]
+  have hcases : ∀ k bl, m2.blk k = some bl →
+      (k = m1.nid ∧ bl = ⟨t, .arc, some v⟩) ∨ (k ≠ m1.nid ∧ m1.blk k = some bl) := by
     intro k bl hk
     by_cases hkn : k = m1.nid
     · subst hkn; rw [hnew] at hk; cases hk; exact Or.inl ⟨rfl, rfl⟩
@@ -447,9 +448,11 @@ theorem rhs_arcNew {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {t : Ty} {v : Val}
   have hheap : HeapOK m2 := HeapOK.mono post.inv.heap rfl (fun _ h => h) (Nat.le_succ _) hbo
   have hB : BlocksIn m2 := fun k bl hk => by
     rcases hcases k bl hk with ⟨rfl, rfl⟩ | ⟨_, h⟩
-    · exact ⟨htok, hvf, pu.wf, pu.sh.grow hb⟩
-    · obtain ⟨h1, h2, h3, h4⟩ := post.inv.blocks k bl h
-      exact ⟨h1, h2, h3, h4.grow hb⟩
+    · refine ⟨htok, hvf, fun p hp => ?_⟩
+      obtain rfl : v = p := Option.some.inj hp
+      exact ⟨pu.wf, pu.sh.grow hb⟩
+    · obtain ⟨h1, h2, h3⟩ := post.inv.blocks k bl h
+      exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.grow hb⟩⟩
   refine ⟨⟨post.inv.grow rfl hheap (Nat.le_refl _) hb hB, post.nv, Nat.le_trans post.nid (Nat.le_succ _),
     post.dom, post.frz, post.rootb, post.cdom, post.cmode, post.dkeep, post.blk.trans hb⟩, ?_⟩
   exact out_share htok hvf pu.wf hnew
@@ -536,13 +539,18 @@ theorem WFv.sub_view {τ : Ty} {T : Val} (hw : WFv τ T) {d o l : Nat} (hs : Sub
       | pkg => obtain ⟨s, h⟩ := ih hs'; exact ⟨s, ViewIn.pkg h⟩
 
 /-- A valid view points into a buffer some owner holds, or (A3.1) into a
-    live block's payload. -/
-theorem ViewAt.owned {m : Mem} {dep : Dep} {d o l : Nat} {s : Ty} (h : ViewAt m dep d o l s) :
-    (∃ x T, OwnedAt m x T ∧ d ∈ T.ids) ∨ PayAddr m d := by
+    live block's payload, one its holders read (A3.2). -/
+theorem ViewAt.owned_rd {m : Mem} {dep : Dep} {d o l : Nat} {s : Ty} (h : ViewAt m dep d o l s) :
+    (∃ x T, OwnedAt m x T ∧ d ∈ T.ids) ∨ ∃ k bl, m.blk k = some bl ∧ d ∈ bl.rd.ids := by
   obtain ⟨c, es, _, hla, _, _⟩ := h
   rcases hla.inMem with ⟨x, T, hT, hs⟩ | ⟨k, bl, hk, hs⟩
   · exact Or.inl ⟨x, T, hT, hs.ids d (by simp)⟩
   · exact Or.inr ⟨k, bl, hk, hs.ids d (by simp)⟩
+
+/-- ... so a payload owns it. -/
+theorem ViewAt.owned {m : Mem} {dep : Dep} {d o l : Nat} {s : Ty} (h : ViewAt m dep d o l s) :
+    (∃ x T, OwnedAt m x T ∧ d ∈ T.ids) ∨ PayAddr m d :=
+  h.owned_rd.imp id fun ⟨k, bl, hk, hd⟩ => ⟨k, bl, hk, bl.rd_ids hd⟩
 
 /-- A tree whose views all point into memory owners or payloads hold, put
     together with one whose addresses neither holds, does not view itself
@@ -1977,8 +1985,8 @@ theorem step_rbindExit {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     have hsl0 : m.st v = some sl := by simpa [Mem.remove_st, upd_ne _ _ hvp] using hsl
     exact (hi.shares v E sl T hE hsl0 hown hT).of_blk rfl
   · intro k bl hk
-    obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k bl hk
-    exact ⟨h1, h2, h3, h4.of_blk rfl⟩
+    obtain ⟨h1, h2, h3⟩ := hi.blocks k bl hk
+    exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.of_blk rfl⟩⟩
 
 /-! ### A3.1: the counted blocks only grow -/
 

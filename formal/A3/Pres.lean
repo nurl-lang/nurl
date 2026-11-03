@@ -252,7 +252,7 @@ theorem CParts.sweep {P : Prog} {C : Cfg} {ps : List (Nat → Bool)} (hc : CPart
   have halloc : ∀ i, C.sweep.alloc i = true ↔ C.alloc i = true ∧ ¬ Unreached C.vals C.blk i :=
     fun _ => sweepAlloc_true
   -- a reached payload's address is in no unreached one
-  have hnu : ∀ i k bl, C.blk k = some bl → Reached C.vals C.blk k → i ∈ bl.pay.ids →
+  have hnu : ∀ i k bl, C.blk k = some bl → Reached C.vals C.blk k → i ∈ bl.tree.ids →
       ¬ Unreached C.vals C.blk i := by
     rintro i k bl hk hr hi ⟨k', bl', hk', hnr, hi'⟩
     exact hnr (hc.uniq k k' bl bl' i hk hk' hi hi' ▸ hr)
@@ -348,7 +348,7 @@ theorem Cfg.valsBut_put {C : Cfg} {i : Nat} {m' : Mem} {s' : Stmt} {v : Val} (h 
 theorem CParts.ctouch {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) (hR : RestrictLemma P) {C : Cfg}
     {ps : List (Nat → Bool)} (hc : CParts P C ps) {q : Nat} {tq : Thread} {aq : Nat → Bool}
     (hq : C.ths[q]? = some tq) (haq : ps[q]? = some aq) {a : Nat} {b : Bool} (h : CTouch P C q tq a b) :
-    aq a = true ∨ ∃ k bl, C.blk k = some bl ∧ a ∈ bl.pay.ids ∧
+    aq a = true ∨ ∃ k bl, C.blk k = some bl ∧ a ∈ bl.tree.ids ∧
       ((b = false ∧ Reached (C.view tq).vals C.blk k) ∨ ¬ Reached (C.valsBut q) C.blk k) := by
   obtain ⟨hto, _⟩ := hc.ok q tq aq hq haq
   cases h with
@@ -357,7 +357,7 @@ theorem CParts.ctouch {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) (hR : Restr
       h1 | ⟨hb, h1 | ⟨k, bl, hk, hak, hr⟩⟩
     · exact .inl (owned_part hto h1)
     · exact .inl (owned_part hto h1)
-    · exact .inr ⟨k, bl, hk, hak, .inl ⟨hb, hr⟩⟩
+    · exact .inr ⟨k, bl, hk, bl.rd_ids hak, .inl ⟨hb, hr⟩⟩
   | sweep hs =>
     obtain ⟨m', s', hst, hCa, hma, hsw⟩ := hs
     -- the sweep frees `a`: an unreached block's payload owns it

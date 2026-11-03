@@ -154,7 +154,7 @@ def Kept (R : Val → Prop) (m : Mem) (v : Val) : Prop := ∀ k, Refers m.blk v 
 
 /-- An address that, if a payload owns it, lies in a block `R` reaches. -/
 def KeptAddr (R : Val → Prop) (m : Mem) (i : Nat) : Prop :=
-  ∀ k bl, m.blk k = some bl → i ∈ bl.pay.ids → Reached R m.blk k
+  ∀ k bl, m.blk k = some bl → i ∈ bl.rd.ids → Reached R m.blk k
 
 theorem Kept.sub {v w : Val} (h : Kept R m v) (hs : Sub w v) : Kept R m w := by
   intro k hr
@@ -169,7 +169,23 @@ theorem Kept.slot (hR : ∀ v, m.vals v → R v) {x : Var} {o : Bool} {v : Val}
   fun _ h => .root (hR _ ⟨x, o, hx⟩) h
 
 theorem Kept.pay {k : Nat} {bl : Blk} (hr : Reached R m.blk k) (hk : m.blk k = some bl) :
-    Kept R m bl.pay := fun _ h => .pay hr hk h
+    Kept R m bl.tree := fun _ h => .pay hr hk h
+
+/-- Nothing (`.int 0`) refers to no block. -/
+theorem Kept.int (n : Nat) : Kept R m (.int n) := by
+  intro k hr
+  rcases hr with ⟨p, hp⟩ | ⟨bl, _, ⟨c, hc, _⟩ | ⟨d, o, l, hd, _⟩⟩
+  · cases hp
+  · cases hc
+  · cases hd
+
+/-- A3.2: what a reached block's holders read is kept. -/
+theorem Kept.rd {k : Nat} {bl : Blk} (hr : Reached R m.blk k) (hk : m.blk k = some bl) :
+    Kept R m bl.rd := by
+  obtain ⟨t, kd, p⟩ := bl
+  cases kd with
+  | arc => exact Kept.pay hr hk
+  | lock => exact Kept.int 0
 
 theorem Kept.href {v : Val} (h : Kept R m v) {c : Nat} (hs : Sub (.href c) v) : KeptAddr R m c :=
   fun k bl hk hc => h k (Or.inr ⟨bl, hk, Or.inl ⟨c, hs, hc⟩⟩)
@@ -184,7 +200,7 @@ theorem Kept.arc {v : Val} (h : Kept R m v) {k : Nat} {p : Val} (hs : Sub (.arc 
 
 /-- A node holding a kept address lies in a kept place. -/
 theorem KeptAddr.node {i : Nat} (h : KeptAddr R m i) {n : Val} (hi : i ∈ n.ids) :
-    ∀ k bl, m.blk k = some bl → Sub n bl.pay → Reached R m.blk k :=
+    ∀ k bl, m.blk k = some bl → Sub n bl.rd → Reached R m.blk k :=
   fun k bl hk hs => h k bl hk (hs.ids i hi)
 
 end
@@ -233,7 +249,7 @@ theorem RootMem.sweep {r : Var} (h : RootMem m r) : RootMem (m.sweepR R) r := by
   · exact Or.inr ⟨n0, hn.sweep hR⟩
 
 theorem Landed.sweep {dep : Dep} {n : Val} (h : Landed m dep n)
-    (hk : ∀ k bl, m.blk k = some bl → Sub n bl.pay → Reached R m.blk k) : Landed (m.sweepR R) dep n := by
+    (hk : ∀ k bl, m.blk k = some bl → Sub n bl.rd → Reached R m.blk k) : Landed (m.sweepR R) dep n := by
   rcases h with ⟨n0, hr, hl⟩ | ⟨hs, hro, k, bl, hkb, hsub⟩
   · exact Or.inl ⟨n0, hr.sweep hR, hl⟩
   · exact Or.inr ⟨hs, hro.sweep hR, k, bl, Mem.sweepR_blk.mpr ⟨hkb, hk k bl hkb hsub⟩, hsub⟩
@@ -250,7 +266,7 @@ theorem Landed.kept {dep : Dep} {t : Ty} {c d : Nat} {es : List Val}
     Kept R m (.node t c d es) := by
   rcases h.inMem with ⟨o, T, hT, hs⟩ | ⟨k, bl, hkb, hs⟩
   · exact (Kept.slot hR hT).sub hs
-  · exact (Kept.pay (hk.node hi k bl hkb hs) hkb).sub hs
+  · exact (Kept.rd (hk.node hi k bl hkb hs) hkb).sub hs
 
 theorem ViewAt.sweep {dep : Dep} {d o l : Nat} {s : Ty} (h : ViewAt m dep d o l s)
     (hd : KeptAddr R m d) : ViewAt (m.sweepR R) dep d o l s := by
@@ -334,8 +350,10 @@ theorem MInv.sweepR {Γ : Ctx} (hi : MInv m Γ) : MInv (m.sweepR R) Γ where
   shares v E sl T hE hsl hown hT := (hi.shares v E sl T hE hsl hown hT).sweep (Kept.of_slot hR hsl T hT)
   blocks k bl hk := by
     obtain ⟨hk0, hr⟩ := Mem.sweepR_blk.mp hk
-    obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k bl hk0
-    exact ⟨h1, h2, h3, h4.sweep (Kept.pay hr hk0)⟩
+    obtain ⟨h1, h2, h3⟩ := hi.blocks k bl hk0
+    refine ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.sweep ?_⟩⟩
+    have := Kept.pay hr hk0
+    rwa [show bl.tree = p by simp [Blk.tree, hp]] at this
 
 end
 

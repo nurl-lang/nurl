@@ -85,8 +85,8 @@ theorem ThreadOK.payAlloc {P : Prog} {m : Mem} {s : Stmt} (h : ThreadOK P m s) {
 
 /-- ... and one payload owns each payload address. -/
 theorem ThreadOK.pay_unique {P : Prog} {m : Mem} {s : Stmt} (h : ThreadOK P m s) {k k' : Nat} {bl bl' : Blk}
-    (hk : m.blk k = some bl) (hk' : m.blk k' = some bl') {i : Nat} (hi : i ∈ bl.pay.ids)
-    (hi' : i ∈ bl'.pay.ids) : k = k' :=
+    (hk : m.blk k = some bl) (hk' : m.blk k' = some bl') {i : Nat} (hi : i ∈ bl.tree.ids)
+    (hi' : i ∈ bl'.tree.ids) : k = k' :=
   Classical.byContradiction fun hne => (h.blocksAt k bl hk).apart i hi k' bl' (Ne.symm hne) hk' hi'
 
 /-! ### Parts -/

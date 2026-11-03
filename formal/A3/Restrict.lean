@@ -57,7 +57,7 @@ theorem VecOf.restrict {m : Mem} {x : Var} {t : Ty} {c d : Nat} {es : List Val}
     rcases hx with hx | ⟨_, ⟨y, u, hy, hs, _⟩ | ⟨k, bl, hk, hs, _⟩⟩
     · exact ⟨hav c (OwnedId.of_slot hx (by simp)), hav d (OwnedId.of_slot hx (by simp))⟩
     · exact ⟨hav c (OwnedId.of_slot hy (hs.ids c (by simp))), hav d (OwnedId.of_slot hy (hs.ids d (by simp)))⟩
-    · exact ⟨hp c ⟨k, bl, hk, hs.ids c (by simp)⟩, hp d ⟨k, bl, hk, hs.ids d (by simp)⟩⟩
+    · exact ⟨hp c ⟨k, bl, hk, bl.rd_ids (hs.ids c (by simp))⟩, hp d ⟨k, bl, hk, bl.rd_ids (hs.ids d (by simp))⟩⟩
   exact ⟨minus_true hc ho.1, minus_true hd ho.2, hx⟩
 
 /-- The node a binding names is in an owned tree: its addresses are live
@@ -119,7 +119,7 @@ theorem EvalR.restrict {m : Mem} {r : Rhs} {res : RRes} (h : EvalR m r res) {a2 
     have ho : a2 d = false := by
       rcases hda with ⟨x, u, hx, hs, _⟩ | ⟨k, bl, hk, hs, _⟩
       · exact hav d (OwnedId.of_slot hx (hs.ids d (by simp)))
-      · exact hp d ⟨k, bl, hk, hs.ids d (by simp)⟩
+      · exact hp d ⟨k, bl, hk, bl.rd_ids (hs.ids d (by simp))⟩
     exact ⟨_, .sat hn hy (Eval.restrict he hav hp) hl (minus_true hd ho) hda, rfl, rfl, rfl⟩
   | satOOB hy he hn => exact ⟨_, .satOOB hy (Eval.restrict he hav hp) hn, trivial⟩
   | pop hy hc hd =>

@@ -178,7 +178,7 @@ inductive RTouch (m : Mem) : Rhs → Nat → Bool → Prop
   /-- A3.1: `arc_get` reads the payload of the block its share names (every
       address of it: an over-approximation). -/
   | arcGet {a : Var} {o : Bool} {k : Nat} {p : Val} {bl : Blk} {i : Nat} :
-      m.st a = some ⟨o, some (.arc k p)⟩ → m.blk k = some bl → i ∈ bl.pay.ids →
+      m.st a = some ⟨o, some (.arc k p)⟩ → m.blk k = some bl → i ∈ bl.rd.ids →
       RTouch m (.arcGet a) i false
 
 /-- What the next step of `s` touches. -/

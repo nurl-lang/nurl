@@ -69,7 +69,7 @@ def ThreadOK (P : Prog) (m : Mem) (s : Stmt) : Prop :=
   ∃ Γ F Δ, StmtT P Γ F s Δ ∧ Inv m Γ F s ∧ MemCodes P m ∧ s.codesOK P ∧ Closed Γ s
 
 /-- A3.1: an address the payload of a block of `B` owns. -/
-def PayIn (B : Nat → Option Blk) (i : Nat) : Prop := ∃ k bl, B k = some bl ∧ i ∈ bl.pay.ids
+def PayIn (B : Nat → Option Blk) (i : Nat) : Prop := ∃ k bl, B k = some bl ∧ i ∈ bl.tree.ids
 
 open Classical in
 /-- A3.1: the shared, read-only part of the address space: every address a
@@ -87,11 +87,11 @@ theorem payPart_false {B : Nat → Option Blk} {i : Nat} : payPart B i = false �
     a well-formed payload at a key below `n`, owning its addresses once,
     below `n` and apart from every other payload's. -/
 structure BlockOK (B : Nat → Option Blk) (n k : Nat) (bl : Blk) : Prop where
-  ok    : bl.ty.ok = true ∧ bl.ty.holdsView = false ∧ WFv bl.ty bl.pay ∧ SharesIn B bl.ty bl.pay
+  ok    : bl.ty.ok = true ∧ bl.ty.holdsView = false ∧ ∀ p, bl.pay = some p → WFv bl.ty p ∧ SharesIn B bl.ty p
   key   : k < n
-  nodup : bl.pay.ids.Nodup
-  lt    : ∀ i ∈ bl.pay.ids, i < n
-  apart : ∀ i ∈ bl.pay.ids, ∀ k' bl', k' ≠ k → B k' = some bl' → i ∉ bl'.pay.ids
+  nodup : bl.tree.ids.Nodup
+  lt    : ∀ i ∈ bl.tree.ids, i < n
+  apart : ∀ i ∈ bl.tree.ids, ∀ k' bl', k' ≠ k → B k' = some bl' → i ∉ bl'.tree.ids
 
 /-- A3.1: every block of `B` is as `BlockOK` says. -/
 def BlocksAt (B : Nat → Option Blk) (n : Nat) : Prop := ∀ k bl, B k = some bl → BlockOK B n k bl

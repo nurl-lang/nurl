@@ -51,16 +51,30 @@ inductive Repl (n n' : Val) : Val → Val → Prop
   | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {cs : List (Var × PMode × Ty)} {a a' : Val} :
       Repl n n' a a' → Repl n n' (.pkg fs te ms a cs) (.pkg fs te ms a' cs)
 
+/-- A3.2: the tree a block owns: its payload, or nothing (`.int 0`, which
+    owns no address and holds no handle or share) while a `lock` block's
+    payload is checked out. -/
+def Blk.tree (bl : Blk) : Val := bl.pay.getD (.int 0)
+
+/-- A3.2: the payload a block's holders read: an `arc` block's.  No one
+    reads a `lock` block's payload while it is in the block, so nothing
+    (`.int 0`) is read of it. -/
+def Blk.rd (bl : Blk) : Val :=
+  match bl.kind with
+  | .arc => bl.tree
+  | .lock => .int 0
+
 /-- The node with control block `c`, found in an owned tree, or (A3.1) in a
-    live block's payload, which nothing writes. -/
+    live block's payload that its holders read (an `arc` block's, A3.2),
+    which nothing writes. -/
 def NodeAt (m : Mem) (c : Nat) (n : Val) : Prop :=
   (∃ x t, m.st x = some ⟨true, some t⟩ ∧ Sub n t ∧ ∃ ty d es, n = .node ty c d es) ∨
-  (∃ k bl, m.blk k = some bl ∧ Sub n bl.pay ∧ ∃ ty d es, n = .node ty c d es)
+  (∃ k bl, m.blk k = some bl ∧ Sub n bl.rd ∧ ∃ ty d es, n = .node ty c d es)
 
 /-- The node whose element buffer is `d`, found in an owned tree. -/
 def DataAt (m : Mem) (d : Nat) (n : Val) : Prop :=
   (∃ x t, m.st x = some ⟨true, some t⟩ ∧ Sub n t ∧ ∃ ty c es, n = .node ty c d es) ∨
-  (∃ k bl, m.blk k = some bl ∧ Sub n bl.pay ∧ ∃ ty c es, n = .node ty c d es)
+  (∃ k bl, m.blk k = some bl ∧ Sub n bl.rd ∧ ∃ ty c es, n = .node ty c d es)
 
 -- Releasing a tree: each address must be live when it is freed.
 mutual
@@ -113,20 +127,21 @@ them together, at the end of the step (`Mem.sweep`). -/
     address lies in its payload. -/
 def Refers (B : Nat → Option Blk) (v : Val) (k : Nat) : Prop :=
   (∃ p, Sub (.arc k p) v) ∨ ∃ bl, B k = some bl ∧
-    ((∃ c, Sub (.href c) v ∧ c ∈ bl.pay.ids) ∨ ∃ d o l, Sub (.view d o l) v ∧ d ∈ bl.pay.ids)
+    ((∃ c, Sub (.href c) v ∧ c ∈ bl.rd.ids) ∨ ∃ d o l, Sub (.view d o l) v ∧ d ∈ bl.rd.ids)
 
 /-- The blocks of `B` reached from the values `R` (the slots' values), through
-    the payloads of reached blocks. -/
+    the payloads of reached blocks (A3.2: of either kind; a `lock` block's
+    payload, while it is in the block, keeps what it holds shares of). -/
 inductive Reached (R : Val → Prop) (B : Nat → Option Blk) : Nat → Prop
   | root {v : Val} {k : Nat} : R v → Refers B v k → Reached R B k
-  | pay {k k' : Nat} {bl : Blk} : Reached R B k' → B k' = some bl → Refers B bl.pay k → Reached R B k
+  | pay {k k' : Nat} {bl : Blk} : Reached R B k' → B k' = some bl → Refers B bl.tree k → Reached R B k
 
 /-- What a store's slots hold. -/
 def Mem.vals (m : Mem) (v : Val) : Prop := ∃ x o, m.st x = some ⟨o, some v⟩
 
 /-- An address the payload of a block nothing reaches owns: the sweep frees it. -/
 def Unreached (R : Val → Prop) (B : Nat → Option Blk) (i : Nat) : Prop :=
-  ∃ k bl, B k = some bl ∧ ¬ Reached R B k ∧ i ∈ bl.pay.ids
+  ∃ k bl, B k = some bl ∧ ¬ Reached R B k ∧ i ∈ bl.tree.ids
 
 open Classical in
 /-- The sweep's addresses: every one an unreached payload owns is freed. -/
@@ -287,7 +302,8 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
   | arcNew {t : Ty} {y : Var} {v : Val} {m1 : Mem} :
       TakeVal m y v m1 → m1.blk m1.nid = none →
       EvalR m (.arcNew t y)
-        (.ok (.arc m1.nid v) true { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, v⟩) })
+        (.ok (.arc m1.nid v) true
+          { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, .arc, some v⟩) })
   /-- A3.1: a read of the share `a` (owned or lent) makes a new share of its
       block. -/
   | arcClone {a : Var} {o : Bool} {k : Nat} {p : Val} :
@@ -295,7 +311,7 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
   /-- A3.1: the payload of the block the share `a` names, lent. -/
   | arcGet {a : Var} {o : Bool} {k : Nat} {p : Val} {bl : Blk} :
       m.st a = some ⟨o, some (.arc k p)⟩ → m.blk k = some bl →
-      EvalR m (.arcGet a) (.ok (lendOf bl.pay) false m)
+      EvalR m (.arcGet a) (.ok (lendOf bl.rd) false m)
 
 /-! ### Calls
 

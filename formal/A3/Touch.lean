@@ -23,7 +23,7 @@ theorem OwnedId.st_eq {m m' : Mem} {i : Nat} (h : OwnedId m i) (hst : m'.st = m.
 /-- A3.1: a payload address the store's slots reach: it lies in the payload
     of a block one of the thread's values refers to, through the blocks. -/
 def PaySeen (m : Mem) (i : Nat) : Prop :=
-  ∃ k bl, m.blk k = some bl ∧ i ∈ bl.pay.ids ∧ Reached m.vals m.blk k
+  ∃ k bl, m.blk k = some bl ∧ i ∈ bl.rd.ids ∧ Reached m.vals m.blk k
 
 /-- What a thread may read: an address of its own trees, or one of a payload
     its values reach. -/
@@ -200,7 +200,7 @@ theorem sat_seen {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t 
   rw [ht] at hval
   obtain ⟨d', o', l', he, dep, _, hva⟩ := valOK_slice.mp hval
   cases he
-  rcases hva.owned with ⟨x, T, hT, hd⟩ | ⟨k, bl, hk, hd⟩
+  rcases hva.owned_rd with ⟨x, T, hT, hd⟩ | ⟨k, bl, hk, hd⟩
   · exact .inl ⟨x, T, hT, hd⟩
   · exact .inr ⟨k, bl, hk, hd, .root ⟨y, false, hv⟩ (Or.inr ⟨bl, hk, Or.inr ⟨d, o, l, Sub.refl _, hd⟩⟩)⟩
 

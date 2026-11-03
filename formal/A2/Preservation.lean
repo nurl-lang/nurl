@@ -1127,8 +1127,8 @@ theorem MInv.unwind {m m1 : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt} 
       · exact h
       · exact h
   · rw [hblk] at hk'
-    obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k' bl hk'
-    exact ⟨h1, h2, h3, h4.of_blk hblk⟩
+    obtain ⟨h1, h2, h3⟩ := hi.blocks k' bl hk'
+    exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.of_blk hblk⟩⟩
 
 /-- What a panic leaves at a destructor's frame `x`: no binding `letd`
     made views `x` in memory (`dtorOut`), so `x`'s destructor may run and
@@ -2274,8 +2274,8 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         hM.sweep.grow hsteq (hh1.set_bor x _) (by simp [hnv1, hnv0]) hbl
           (fun k bl hk => by
             have hk' : m.blk k = some bl := by rw [← hblk1]; exact hk
-            obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k bl hk'
-            exact ⟨h1, h2, h3, h4.grow (BlkLe.of_eq (show (m1.set x ⟨false, some (.int 1)⟩).blk = m.blk from hblk1))⟩)
+            obtain ⟨h1, h2, h3⟩ := hi.blocks k bl hk'
+            exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.grow (BlkLe.of_eq (show (m1.set x ⟨false, some (.int 1)⟩).blk = m.blk from hblk1))⟩⟩)
       obtain ⟨E0, h0⟩ := (hKO.2 x Ex hEx).2
       have hxown : ∀ T, ¬ OwnedAt m1 x T := by
         intro T hT
