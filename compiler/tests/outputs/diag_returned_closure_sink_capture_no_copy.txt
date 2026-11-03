@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_returned_closure_sink_capture_no_copy.nu:20:27: error: argument 1 to 'eat' is 'v', which this closure keeps for its next call (a capture, or read out of one), and 'eat' takes it over ('sink'). The closure is returned, so it may run again, and a '( Vec Res )' cannot be copied: the next call would hand over what this one released. Give the callee a value the body makes, take the value as a parameter of the closure, or hand it over outside the closure.
+    ^ \ → i { ^ ( eat v ) }
+                          ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.
