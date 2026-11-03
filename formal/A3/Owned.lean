@@ -148,8 +148,12 @@ theorem EvalR.ownedId {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r
   | lockNew h1 _ =>
     obtain ⟨_, b1⟩ := TakeVal.ownedId h1 hb
     exact ⟨fun _ i hi => by simp [Val.ids] at hi, fun i hi => .inl (b1 i hi)⟩
+  | cellNew h1 _ =>
+    obtain ⟨_, b1⟩ := TakeVal.ownedId h1 hb
+    exact ⟨fun _ i hi => by simp [Val.ids] at hi, fun i hi => .inl (b1 i hi)⟩
   | arcClone _ => exact ⟨fun _ i hi => by simp [Val.ids] at hi, fun i hi => .inl hi⟩
   | lockClone _ => exact ⟨fun _ i hi => by simp [Val.ids] at hi, fun i hi => .inl hi⟩
+  | cellClone _ => exact ⟨fun _ i hi => by simp [Val.ids] at hi, fun i hi => .inl hi⟩
   -- A3.4: a value sent leaves the owned trees; one received was the channel's payload's
   | chanSend _ h1 _ _ _ => exact ⟨fun h => (nomatch h), fun i hi => .inl ((TakeVal.ownedId h1 hb).2 i hi)⟩
   | chanSendClosed _ h1 _ _ =>
@@ -385,6 +389,15 @@ theorem EvalR.payAt {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (
     · have hk' : upd m1.blk m1.nid _ k = some bl := hk
       rw [upd_ne _ _ he, TakeVal.blk h1] at hk'
       exact .inl ⟨bl, hk', hi⟩
+  | @cellNew t y v1 m1 h1 _ =>
+    by_cases he : k = m1.nid
+    · subst he
+      simp [upd] at hk
+      subst hk
+      exact .inr ((TakeVal.ownedId h1 hb).1 i (by simpa [Blk.tree] using hi))
+    · have hk' : upd m1.blk m1.nid _ k = some bl := hk
+      rw [upd_ne _ _ he, TakeVal.blk h1] at hk'
+      exact .inl ⟨bl, hk', hi⟩
   | @atomic _ _ _ _ _ k0 _ _ _ _ hk0 _ _ =>
     have hk' : upd _ k0 _ k = some bl := hk
     by_cases he : k = k0
@@ -501,7 +514,7 @@ theorem Step.payAt {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
     intro k i ⟨bl, hk, hi⟩
     rw [← TakeVal.blk ht]
     exact .inl ⟨bl, hk, hi⟩
-  | @withLock a x s0 o k0 t v _ hk0 _ =>
+  | @withLock a x s0 k0 t v _ hk0 _ =>
     intro k i ⟨bl, hk, hi⟩
     have hk' : upd _ k0 (some ⟨t, .lock, none⟩) k = some bl := hk
     by_cases he : k = k0

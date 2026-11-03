@@ -13,6 +13,7 @@ theorem Frees.other {a a' : Nat → Bool} {T : Val} (h : Frees a T a') :
   | .view => rfl
   | .arc => rfl
   | .lk => rfl
+  | .cell => rfl
   | .node _ _ hl =>
     simp only [ids_node, List.mem_cons, not_or] at hi
     rw [FreesL.other hl hi.2.2, upd_ne _ _ hi.2.1, upd_ne _ _ hi.1]
@@ -40,6 +41,7 @@ theorem frees_exists {τ : Ty} {T : Val} (hw : WFv τ T) :
   | view => exact fun a _ _ => ⟨a, Frees.view⟩
   | arc => exact fun a _ _ => ⟨a, Frees.arc⟩
   | lk => exact fun a _ _ => ⟨a, Frees.lk⟩
+  | cell => exact fun a _ _ => ⟨a, Frees.cell⟩
   | node hes ih =>
     rename_i t c d es
     intro a hn ha

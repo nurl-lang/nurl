@@ -576,6 +576,19 @@ theorem liftE_ty' (_h : S.OK) (hab : S.AbsOK Γa) {v : Var} {E : Entry} (hE : Γ
   · simp [liftE, hrb, (hab.1 v E hE hrb).1]
   · exact liftE_ty v hrb
 
+/-- A3.5: an owner (or an `inout` parameter) stays one where the call places
+    it. -/
+theorem lockOf_lift_os {v : Var} {E : Entry} (hos : E.mode.ownSlot = true) : (S.liftE v E).mode.ownSlot = true := by
+  have hrb : E.mode ≠ .rootb := fun h => by rw [h] at hos; cases hos
+  rw [liftE_mode v hrb, liftMode_ownSlot]; exact hos
+
+/-- A3.5: so a share `withLock` may check out stays one. -/
+theorem _root_.A2.Entry.lockOf.lift {v : Var} {E : Entry} {t : Ty} (hty : (S.liftE v E).ty = E.ty)
+    (h : E.lockOf t) : (S.liftE v E).lockOf t := by
+  rcases h with h | ⟨h, hos⟩
+  · exact Or.inl (hty.trans h)
+  · exact Or.inr ⟨hty.trans h, S.lockOf_lift_os hos⟩
+
 theorem canon_root (h : S.OK) {r : Var} {Er : Entry} (hEr : Γa r = some Er) (hro : Er.mode.isRoot = true) :
     ∃ E', S.canon Γa (S.ρ r) = some E' ∧ E'.mode.isRoot = true :=
   ⟨S.liftE r Er, by rw [canon_ρ h, hEr]; rfl, by rw [liftE_root h]; exact hro⟩
@@ -1030,6 +1043,12 @@ theorem elemE_lift (h : S.OK) (hab : S.AbsOK Γa) {y : Var} {Ey : Entry} (hy : �
     · simp only [elemE, liftE, reduceCtorEq, ↓reduceIte, liftMode, Mode.ownSlot, Bool.false_eq_true]
       exact derive_lift h hab hy .inner rfl
     · simp only [elemE, liftE, reduceCtorEq, ↓reduceIte, Mode.ownSlot, ownHeld_false]; exact hl
+  | cell ms =>
+    refine EntryWeaker.mk' (by simp [elemE, liftE]) (by simp [elemE, liftE, liftMode])
+      (by simp [elemE]) (by simp [elemE, liftE]) (fun _ => ?_) ?_
+    · simp only [elemE, liftE, reduceCtorEq, ↓reduceIte, liftMode, Mode.ownSlot, Bool.false_eq_true]
+      exact derive_lift h hab hy .inner rfl
+    · simp only [elemE, liftE, reduceCtorEq, ↓reduceIte, Mode.ownSlot, ownHeld_false]; exact hl
 
 theorem popE_lift (h : S.OK) (hab : S.AbsOK Γa) {y : Var} {Ey : Entry} (hy : Γa y = some Ey)
     {t : Ty} (ht : Ey.ty = .vec t) (hrb : Ey.mode ≠ .rootb) (hos : Ey.mode.ownSlot = true) (x : Var) :
@@ -1064,6 +1083,11 @@ theorem popE_lift (h : S.OK) (hab : S.AbsOK Γa) {y : Var} {Ey : Entry} (hy : Γ
     show (S.liftE y Ey).held ⊆ _
     rw [hl, liftE_held (by simp [popE])]; simp [popE, Mode.ownSlot]
   | lk ms =>
+    refine EntryWeaker.mk' (by simp [popE, liftE]) (by simp [popE, liftE, liftMode])
+      (by simp [popE]) (by simp [popE, liftE]) (fun h' => by simp [popE, Mode.ownSlot] at h') ?_
+    show (S.liftE y Ey).held ⊆ _
+    rw [hl, liftE_held (by simp [popE])]; simp [popE, Mode.ownSlot]
+  | cell ms =>
     refine EntryWeaker.mk' (by simp [popE, liftE]) (by simp [popE, liftE, liftMode])
       (by simp [popE]) (by simp [popE, liftE]) (fun h' => by simp [popE, Mode.ownSlot] at h') ?_
     show (S.liftE y Ey).held ⊆ _
@@ -1164,6 +1188,10 @@ theorem compE_lift (h : S.OK) (hab : S.AbsOK Γa) {y : Var} {Ey : Entry} (hy : �
       (by simp [compE]) (by simp [compE, liftE]) (fun h' => by simp [compE, Mode.ownSlot] at h') ?_
     simp only [compE, liftE, reduceCtorEq, ↓reduceIte, Mode.ownSlot]; exact ownHeld_lift hl
   | lk ms =>
+    refine EntryWeaker.mk' (by simp [compE, liftE]) (by simp [compE, liftE, liftMode])
+      (by simp [compE]) (by simp [compE, liftE]) (fun h' => by simp [compE, Mode.ownSlot] at h') ?_
+    simp only [compE, liftE, reduceCtorEq, ↓reduceIte, Mode.ownSlot]; exact ownHeld_lift hl
+  | cell ms =>
     refine EntryWeaker.mk' (by simp [compE, liftE]) (by simp [compE, liftE, liftMode])
       (by simp [compE]) (by simp [compE, liftE]) (fun h' => by simp [compE, Mode.ownSlot] at h') ?_
     simp only [compE, liftE, reduceCtorEq, ↓reduceIte, Mode.ownSlot]; exact ownHeld_lift hl
@@ -1645,11 +1673,11 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
     exact ⟨_, RhsT.taker hc (by rw [liftE_live]; exact hl) (by rw [liftE_mode y hrb, hm]; rfl)
       (by rw [liftE_ty' h hab hy]; exact hty) (h.Fcout y) (NoPin.lift h hab (bnd_own hab hy hm))
       (DtorSafe.canon h (allowed_own hab hy hm _ _) hds), fun x => compE_lift h hab hy b x⟩
-  | @arcNew t y Ey Γa1 D hy hly hty hpl hpa =>
+  | @arcNew t y Ey Γa1 D hy hly hty hpl hpc hpa =>
     have hc1 : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
     obtain ⟨D1, hp1, _, _⟩ := pushArg_ren h hab hy hpa
     have hty1 := liftE_ty' h hab hy
-    refine ⟨_, RhsT.arcNew hc1 (by rw [liftE_live]; exact hly) (by rw [hty1]; exact hty) hpl hp1,
+    refine ⟨_, RhsT.arcNew hc1 (by rw [liftE_live]; exact hly) (by rw [hty1]; exact hty) hpl hpc hp1,
       fun x => ?_⟩
     exact EntryWeaker.mk' (by simp [liftE]) (by simp [liftE, liftMode]) (by simp) (by simp [liftE])
       (fun h' => by simp [Mode.ownSlot] at h') (by simp)
@@ -1691,6 +1719,20 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
     have hc : S.canon Γa (S.ρ a) = some (S.liftE a Ea) := by rw [canon_ρ h, ha]; rfl
     refine ⟨_, RhsT.lockClone hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab ha]; exact ht),
       fun x => ?_⟩
+    exact EntryWeaker.mk' (by simp [liftE]) (by simp [liftE, liftMode]) (by simp) (by simp [liftE])
+      (fun h' => by simp [Mode.ownSlot] at h') (by simp)
+  | @cellNew t y Ey Γa1 D hy hly hty hpl hpa =>
+    have hc1 : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
+    obtain ⟨D1, hp1, _, _⟩ := pushArg_ren h hab hy hpa
+    have hty1 := liftE_ty' h hab hy
+    refine ⟨_, RhsT.cellNew hc1 (by rw [liftE_live]; exact hly) (by rw [hty1]; exact hty) hpl hp1,
+      fun x => ?_⟩
+    exact EntryWeaker.mk' (by simp [liftE]) (by simp [liftE, liftMode]) (by simp) (by simp [liftE])
+      (fun h' => by simp [Mode.ownSlot] at h') (by simp)
+  | @cellClone a Ea t ha hl ht hos =>
+    have hc : S.canon Γa (S.ρ a) = some (S.liftE a Ea) := by rw [canon_ρ h, ha]; rfl
+    refine ⟨_, RhsT.cellClone hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab ha]; exact ht)
+      (lockOf_lift_os hos), fun x => ?_⟩
     exact EntryWeaker.mk' (by simp [liftE]) (by simp [liftE, liftMode]) (by simp) (by simp [liftE])
       (fun h' => by simp [Mode.ownSlot] at h') (by simp)
   | @rwRead a Ea t ha hl ht =>
@@ -2921,8 +2963,9 @@ theorem RhsT.absOK {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : Rhs
   | inl hy _ hpa _ => exact PushArg.absOK hy hpa hab
   | inr hy _ hpa _ => exact PushArg.absOK hy hpa hab
   | pack hy _ _ hpa => exact PushArg.absOK hy hpa hab
-  | arcNew hy _ _ _ hpa => exact PushArg.absOK hy hpa hab
+  | arcNew hy _ _ _ _ hpa => exact PushArg.absOK hy hpa hab
   | lockNew hy _ _ _ hpa => exact PushArg.absOK hy hpa hab
+  | cellNew hy _ _ _ hpa => exact PushArg.absOK hy hpa hab
   | chanSend _ _ _ hy _ _ hpa => exact PushArg.absOK hy hpa hab
   | @takel y Ey _ _ hy _ hm _ _ _ =>
     exact (hab.kill _ _ _).setE' hab hy rfl rfl (by rw [hm]; simp) (fun hf => absurd hf (by simp [hm]))
@@ -3480,7 +3523,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     have hnc := canon_names h habx hnx
     rw [canon_setE h] at hwc hnc tk
     exact StmtT.withLock (by rw [src_rename]; exact hks) (by rw [canon_ρ h, hx]; rfl) (h.Fcout x) hca
-      (by rw [liftE_live]; exact hla) (by rw [liftE_ty' h hab ha]; exact hta)
+      (by rw [liftE_live]; exact hla) (Entry.lockOf.lift (liftE_ty' h hab ha) hta)
       (StmtT.weakenIn ⟨PW.setE (PW.refl _) (lockE_lift x t), hwc, hnc⟩ tk)
       (EndOK.lift h abk hbx hpe)
       (by

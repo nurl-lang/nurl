@@ -14,6 +14,7 @@ theorem Frees.le {a a' : Nat → Bool} {T : Val} (h : Frees a T a') :
   | .view => exact hi
   | .arc => exact hi
   | .lk => exact hi
+  | .cell => exact hi
   | @Frees.node _ _ _ c d _ _ _ hl =>
     have := FreesL.le hl hi
     by_cases hd : i = d
@@ -248,6 +249,21 @@ theorem covers_evalR {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (hc : Covers m)
     · refine Or.inl (Or.inr (hgrow ?_))
       unfold PayAddr; rw [htk.blk]; exact hp
   | lockClone _ => exact Or.inl (hc i hi)
+  | @cellNew t y w m1 htk hfr =>
+    -- A3.5: as `locked_new`'s
+    have hi' : m.alloc i = true := by rw [← htk.alloc]; exact hi
+    have hgrow : ∀ {j}, PayAddr m1 j →
+        PayAddr { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, .lock, some w⟩) } j := by
+      intro j ⟨k, bl, hk, hj⟩
+      have hne : k ≠ m1.nid := fun e => by rw [e, hfr] at hk; cases hk
+      exact ⟨k, bl, by simpa [upd, hne] using hk, hj⟩
+    rcases hc i hi' with ⟨o', U, hU, hiU⟩ | hp
+    · rcases htk.owned hU with hU1 | ⟨_, hUw⟩
+      · exact Or.inl (Or.inl ⟨o', U, hU1, hiU⟩)
+      · exact Or.inl (Or.inr ⟨m1.nid, ⟨t, .lock, some w⟩, by simp [upd], by rw [← hUw]; exact hiU⟩)
+    · refine Or.inl (Or.inr (hgrow ?_))
+      unfold PayAddr; rw [htk.blk]; exact hp
+  | cellClone _ => exact Or.inl (hc i hi)
   | rwRead _ _ hfr =>
     -- A3.3: a view owns nothing; every other block stays
     rcases hc i hi with h | ⟨k', bl, hk', hik⟩

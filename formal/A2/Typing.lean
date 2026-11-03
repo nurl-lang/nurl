@@ -393,6 +393,7 @@ def elemE (y : Var) (E : Entry) : Ty → Entry
   | .fn ms => ⟨.fn ms, .bor, true, derive y E .inner, E.held, false, false⟩
   | .arc t => ⟨.arc t, .bor, true, derive y E .inner, E.held, false, false⟩
   | .lk t => ⟨.lk t, .bor, true, derive y E .inner, E.held, false, false⟩
+  | .cell t => ⟨.cell t, .bor, true, derive y E .inner, E.held, false, false⟩
 
 /-- An element moved out of `y` by `vec_pop`: an element `Vec` or struct is
     owned. -/
@@ -403,6 +404,7 @@ def popE (y : Var) (E : Entry) : Ty → Entry
   | .fn ms => ⟨.fn ms, .own, true, [], E.held, false, false⟩
   | .arc t => ⟨.arc t, .own, true, [], E.held, false, false⟩
   | .lk t => ⟨.lk t, .own, true, [], E.held, false, false⟩
+  | .cell t => ⟨.cell t, .own, true, [], E.held, false, false⟩
   | t => elemE y E t
 
 /-- What a field of the struct `y` (entry `E`) lends: what is inside an
@@ -436,6 +438,12 @@ theorem rguard_get_path {t : Ty} (ht : t ≠ .int) (g y : Var) :
     (projE y (getE g ⟨.arc (.prod (.lk t) t), .own, true, [], [], false, false⟩ (.prod (.lk t) t)) t).path =
       [⟨g, .share⟩] := by
   cases t <;> simp_all [projE, getE, derive, projDeps, rootKind, Mode.isRoot, Mode.ownSlot]
+
+/-- A3.2/A3.5: `E` holds a share of a lock block whose payload is a `t`, which
+    `withLock` checks out: a lock share, or a cell share an owner holds (a
+    lent cell share is no share). -/
+def Entry.lockOf (E : Entry) (t : Ty) : Prop :=
+  E.ty = .lk t ∨ (E.ty = .cell t ∧ E.mode.ownSlot = true)
 
 /-- A3.2: the binding a lock's payload is checked out to (`withLock`): owned,
     holding nothing (a payload views nothing); an integer is a plain integer
@@ -598,6 +606,9 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       holds nothing (the payload views nothing). -/
   | arcNew {t : Ty} {y : Var} {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
       Γ y = some Ey → Ey.live = true → Ey.ty = t → t.holdsView = false ∧ t.hasFn = false →
+      -- A3.5: an `Arc`'s payload is reached from every thread that holds a
+      -- share, so it holds no library handle (a cell share is not Sync)
+      t.hasCell = false →
       PushArg Γ F y Ey t D Γ1 →
       RhsT Γ F (.arcNew t y) ⟨.arc t, .own, true, [], [], false, false⟩ Γ1
   /-- A3.1: a new share of the block `a` shares: owned, holding nothing. -/
@@ -657,6 +668,19 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
   | chanClose {a : Var} {E : Entry} {s : Ty} :
       Γ a = some E → E.live = true → E.ty = .lk (.prod (.vec s) .int) →
       RhsT Γ F (.chanClose a) intE Γ
+  /-- A3.5: a library handle's constructor: `y`'s value, of a type that holds
+      no view, no closure and no share (a lock's payload), moves into a fresh
+      lock block; the result is an owned cell share, which holds nothing. -/
+  | cellNew {t : Ty} {y : Var} {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
+      Γ y = some Ey → Ey.live = true → Ey.ty = t →
+      t.holdsView = false ∧ t.hasFn = false ∧ t.hasArc = false →
+      PushArg Γ F y Ey t D Γ1 →
+      RhsT Γ F (.cellNew t y) ⟨.cell t, .own, true, [], [], false, false⟩ Γ1
+  /-- A3.5: a copy of a library handle (`PNCounter_share`): a new owned cell
+      share, from one an owner holds (a lent cell share is no share). -/
+  | cellClone {a : Var} {E : Entry} {t : Ty} :
+      Γ a = some E → E.live = true → E.ty = .cell t → E.mode.ownSlot = true →
+      RhsT Γ F (.cellClone a) ⟨.cell t, .own, true, [], [], false, false⟩ Γ
 
 /-! ### Calls -/
 
@@ -699,6 +723,8 @@ theorem RhsT.out {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT 
   | chanSend => exact ⟨Or.inr rfl, rfl⟩
   | chanRecv => exact ⟨Or.inl rfl, rfl⟩
   | chanClose => exact ⟨Or.inr rfl, rfl⟩
+  | cellNew => exact ⟨Or.inl rfl, rfl⟩
+  | cellClone => exact ⟨Or.inl rfl, rfl⟩
 
 /-- What the summary pair `(j, k)` means at this call.  An integer argument
     lends nothing. -/
@@ -1486,6 +1512,7 @@ theorem hasFn_holdsView {t : Ty} (h : t.hasFn = true) : t.holdsView = true := by
   | fn _ => rfl
   | arc t ih => exact ih h
   | lk t ih => exact ih h
+  | cell t ih => exact ih h
 
 /-- A parameter's entry: a borrowed one depends on nothing the callee can
     see; every parameter whose type may hold a closure holds the symbolic
@@ -1564,6 +1591,8 @@ def Rhs.vars : Rhs → List Var
   | .chanSend a y => [a, y]
   | .chanRecv _ a => [a]
   | .chanClose a => [a]
+  | .cellNew _ y => [y]
+  | .cellClone a => [a]
 
 def Edit.vars : Edit → List Var
   | .push y => [y]

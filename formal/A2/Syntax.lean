@@ -30,6 +30,9 @@ inductive Ty where
                         -- is the receiver); the environment's type is not part of the type
   | arc (t : Ty)      -- A3.1: a share of a counted block whose payload, a `t`, is frozen
   | lk (t : Ty)       -- A3.2: a share of a lock block (`Locked`) whose payload is a `t`
+  | cell (t : Ty)     -- A3.5: a share of a library handle's state (a `PNCounter`, a `TcpConn`, a
+                      -- `Cell`): a lock block whose payload, a `t`, the library changes in place
+                      -- through any share; Send, not Sync
 deriving DecidableEq, Repr
 
 /-- Does a value of this type hold views (so that storing one into a
@@ -43,6 +46,7 @@ def Ty.holdsView : Ty → Bool
   | .fn _ => true     -- what the environment holds is not part of the type
   | .arc t => t.holdsView
   | .lk t => t.holdsView
+  | .cell t => t.holdsView
 
 /-- May a value of this type hold a closure (and so hold bindings by name)? -/
 def Ty.hasFn : Ty → Bool
@@ -54,6 +58,7 @@ def Ty.hasFn : Ty → Bool
   | .fn _ => true
   | .arc t => t.hasFn
   | .lk t => t.hasFn
+  | .cell t => t.hasFn
 
 /-- A3.1: may a value of this type hold a share (an `Arc`)?  A closure's
     environment may. -/
@@ -66,6 +71,21 @@ def Ty.hasArc : Ty → Bool
   | .fn _ => true
   | .arc _ => true
   | .lk _ => true
+  | .cell _ => true
+
+/-- A3.5: may a value of this type hold a cell share (a library handle whose
+    copies are one state)?  A closure's environment may.  This is the Sync
+    question: such a handle is not Sync, so no `Arc` payload holds one. -/
+def Ty.hasCell : Ty → Bool
+  | .int => false
+  | .vec t => t.hasCell
+  | .slice t => t.hasCell
+  | .prod a b => a.hasCell || b.hasCell
+  | .sum a b => a.hasCell || b.hasCell
+  | .fn _ => true
+  | .arc t => t.hasCell
+  | .lk t => t.hasCell
+  | .cell _ => true
 
 /-- A2 types: a view's element type holds no views of its own (a view of a
     container of views is left to A2, with the other aggregates that
@@ -79,6 +99,7 @@ def Ty.ok : Ty → Bool
   | .fn _ => true
   | .arc t => t.ok && !t.holdsView   -- A3.1: a payload holds no views
   | .lk t => t.ok && !t.holdsView && !t.hasArc  -- A3.2: nor does a lock's (it is Send); nor a share
+  | .cell t => t.ok && !t.holdsView && !t.hasArc  -- A3.5: a cell's payload is a lock's
 
 /-- A type whose values own what they hold: a `Vec` or a struct.  Its
     binding is an owner (or borrows one). -/
@@ -89,6 +110,7 @@ def Ty.owning : Ty → Bool
   | .fn _ => true
   | .arc _ => true
   | .lk _ => true
+  | .cell _ => true
   | _ => false
 
 /-- What an operation does to a container, ordered by what it ends.
@@ -271,6 +293,13 @@ inductive Rhs where
   | rwRead (a : Var)           -- `rw_read a`: a read guard of the lock `a` shares, a new view
                                -- of its payload (frozen while the view lives); `rguard_get g`
                                -- is `arcGet g` (the payload is the second field it lends)
+  -- A3.5: a library handle whose copies are one state (a `PNCounter`, a
+  -- `TcpConn`, a `Cell`) is a cell: a lock block whose shares are not Sync;
+  -- the library's in-place change is a `withLock` on a cell share (`withCell`)
+  | cellNew (t : Ty) (y : Var) -- the handle's constructor: `y`'s value (a `t`) moves into a
+                               -- fresh lock block, whose one share is a cell share
+  | cellClone (a : Var)        -- `PNCounter_share a` (and any copy the library makes): a new
+                               -- cell share of the block `a` (an owner) shares
 deriving DecidableEq, Repr
 
 /-! ### Memory (here because a run-time form records a snapshot of it) -/
@@ -292,6 +321,9 @@ inductive Val where
                                                -- through the share; the block owns its addresses)
   | lk (k : Nat)                                 -- A3.2: a share of the lock block `k` (it carries
                                                -- nothing: the payload changes, and no one reads it)
+  | cell (k : Nat)                               -- A3.5: a cell share of the lock block `k` (a
+                                               -- library handle's state); lent, it is no share
+                                               -- (`lendOf`): only an owner changes the state
 deriving Repr, Inhabited
 
 /-- A binding's storage: whether it owns its value (it is dropped at the end
@@ -390,6 +422,15 @@ inductive Stmt where
                                                           -- the end (a panic drops it, and the
                                                           -- lock stays checked out)
 
+
+/-- A3.5: a library's in-place change of its state (`pncounter_inc a …`,
+    with the change as `body` on the state `x`): a `withLock` on a cell
+    share.  Its check-out is the lock's (A3.2), with the lock's faithfulness
+    premises; what differs is who may hold the share — one thread's
+    bindings only (A3's confinement), since there is no mutex.  A second
+    check-out while one is out (a library re-entering its own state) waits
+    or panics (`Blocked`, `Step.waitPanic`), as `RefCell`'s borrow error. -/
+def Stmt.withCell (a x : Var) (s : Stmt) : Stmt := .withLock a x s
 
 /-- A3.3: a read scope of an `RwLocked` (`: ( RGuard A ) g ( rw_read a )`,
     then `rguard_get g`), as the calculus spells it: the guard `g`, what

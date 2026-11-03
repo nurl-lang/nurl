@@ -33,8 +33,8 @@ theorem Blocked.of_eq {m m' : Mem} (hst : m'.st = m.st) (hb : m'.blk = m.blk) {s
   | assign _ r => exact RBlocked.of_eq hst hb (r := r) h
   | letd _ _ r _ _ => exact RBlocked.of_eq hst hb (r := r) h
   | withLock a _ _ _ =>
-    obtain ⟨o, k, t, h1, h2⟩ := h
-    exact ⟨o, k, t, hst ▸ h1, hb ▸ h2⟩
+    obtain ⟨k, t, h1, h2⟩ := h
+    exact ⟨k, t, h1.of_st hst, hb ▸ h2⟩
   | seq _ _ ih _ => exact ih h
   | scope _ _ ih => exact ih h
   | rbind _ _ ih => exact ih h

@@ -1390,9 +1390,9 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
   | @withLock Γ Δ F a x k Ea t hsrc hx hxF ha hla hta hs hpx _ _ _ _ =>
     intro m m' s' hcd hi hst
     cases hst with
-    | @withLock _ _ _ o kk t' v ha' hk hmx hnv =>
-      -- the share names a lock block of the payload's type
-      obtain ⟨ob, hk0⟩ := hi.lk_val ha hla hta ha'
+    | @withLock _ _ _ kk t' v ha' hk hmx hnv =>
+      -- the share names a lock block of the payload's type (A3.5: a cell's too)
+      obtain ⟨ob, hk0⟩ := hi.lockOf_val ha hla hta ha'
       rw [hk] at hk0; cases hk0
       have hanch := hi.leafAnch rfl
       obtain ⟨post, out⟩ := acquire_pres (F := F) hi.toMInv hk hnv
@@ -2575,8 +2575,9 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         refine hb0 k bl hk0 (hr.of_roots fun w ⟨y, o, hy⟩ k' hrf => ?_)
         by_cases hyx : y = x
         · subst hyx; simp at hy; obtain ⟨_, rfl⟩ := hy
-          rcases hrf with ⟨p, hp⟩ | ⟨_, _, ⟨c, hc, _⟩ | ⟨d, o', l, hd, _⟩⟩
+          rcases hrf with (⟨p, hp⟩ | hp) | ⟨_, _, ⟨c, hc, _⟩ | ⟨d, o', l, hd, _⟩⟩
           · cases p <;> cases hp
+          · cases hp
           · cases hc
           · cases hd
         · simp only [Mem.set_st, upd_ne _ _ hyx] at hy

@@ -141,7 +141,7 @@ theorem HeapOK.sweepR {R : Val → Prop} {m : Mem} (hh : HeapOK m) : HeapOK (m.s
   views k' bl hk hv := by
     obtain ⟨hk0, hreach⟩ := Mem.sweepR_blk.mp hk
     obtain ⟨k, t, p, rfl, hkb⟩ := hh.views k' _ hk0 hv
-    exact ⟨k, t, p, rfl, Mem.sweepR_blk.mpr ⟨hkb, .pay hreach hk0 (Or.inl ⟨none, Sub.fst (Sub.refl _)⟩)⟩⟩
+    exact ⟨k, t, p, rfl, Mem.sweepR_blk.mpr ⟨hkb, .pay hreach hk0 (Or.inl (Or.inl ⟨none, Sub.fst (Sub.refl _)⟩))⟩⟩
 
 theorem HeapOK.sweep {m : Mem} (hh : HeapOK m) : HeapOK m.sweep := hh.sweepR
 
@@ -174,8 +174,9 @@ def KeptAddr (R : Val → Prop) (m : Mem) (i : Nat) : Prop :=
 theorem Kept.sub {v w : Val} (h : Kept R m v) (hs : Sub w v) : Kept R m w := by
   intro k hr
   apply h k
-  rcases hr with ⟨p, hp⟩ | ⟨bl, hk, ⟨c, hc, hci⟩ | ⟨d, o, l, hd, hdi⟩⟩
-  · exact Or.inl ⟨p, hp.trans hs⟩
+  rcases hr with (⟨p, hp⟩ | hp) | ⟨bl, hk, ⟨c, hc, hci⟩ | ⟨d, o, l, hd, hdi⟩⟩
+  · exact Or.inl (Or.inl ⟨p, hp.trans hs⟩)
+  · exact Or.inl (Or.inr (hp.trans hs))
   · exact Or.inr ⟨bl, hk, Or.inl ⟨c, hc.trans hs, hci⟩⟩
   · exact Or.inr ⟨bl, hk, Or.inr ⟨d, o, l, hd.trans hs, hdi⟩⟩
 
@@ -189,8 +190,9 @@ theorem Kept.pay {k : Nat} {bl : Blk} (hr : Reached R m.blk k) (hk : m.blk k = s
 /-- Nothing (`.int 0`) refers to no block. -/
 theorem Kept.int (n : Nat) : Kept R m (.int n) := by
   intro k hr
-  rcases hr with ⟨p, hp⟩ | ⟨bl, _, ⟨c, hc, _⟩ | ⟨d, o, l, hd, _⟩⟩
+  rcases hr with (⟨p, hp⟩ | hp) | ⟨bl, _, ⟨c, hc, _⟩ | ⟨d, o, l, hd, _⟩⟩
   · cases p <;> cases hp
+  · cases hp
   · cases hc
   · cases hd
 
@@ -207,14 +209,18 @@ theorem Kept.view {v : Val} (h : Kept R m v) {d o l : Nat} (hs : Sub (.view d o 
 
 theorem Kept.share {v : Val} (h : Kept R m v) {k : Nat} {p : Option Val} (hs : Sub (Val.share k p) v) :
     Reached R m.blk k :=
-  h k (Or.inl ⟨p, hs⟩)
+  h k (Or.inl (Or.inl ⟨p, hs⟩))
+
+/-- A3.5: a cell share's block is reached. -/
+theorem Kept.cell {v : Val} (h : Kept R m v) {k : Nat} (hs : Sub (.cell k) v) : Reached R m.blk k :=
+  h k (Or.inl (Or.inr hs))
 
 theorem Kept.arc {v : Val} (h : Kept R m v) {k : Nat} {p : Val} (hs : Sub (.arc k p) v) :
     Reached R m.blk k :=
-  h k (Or.inl ⟨some p, hs⟩)
+  h k (Or.inl (Or.inl ⟨some p, hs⟩))
 
 theorem Kept.lk {v : Val} (h : Kept R m v) {k : Nat} (hs : Sub (.lk k) v) : Reached R m.blk k :=
-  h k (Or.inl ⟨none, hs⟩)
+  h k (Or.inl (Or.inl ⟨none, hs⟩))
 
 /-- A node holding a kept address lies in a kept place. -/
 theorem KeptAddr.node {i : Nat} (h : KeptAddr R m i) {n : Val} (hi : i ∈ n.ids) :
@@ -223,17 +229,25 @@ theorem KeptAddr.node {i : Nat} (h : KeptAddr R m i) {n : Val} (hi : i ∈ n.ids
 
 end
 
+/-- The share an `ArcIn` names lies in the tree (A3.5: a lock share or a cell
+    share, for a lock block). -/
 theorem ArcIn.sub {τ : Ty} {T : Val} {u : Ty} {k : Nat} {p : Option Val} (h : ArcIn τ T u k p) :
-    Sub (Val.share k p) T := by
+    ShareIn k T := by
   induction h with
-  | here => exact Sub.refl _
-  | lk => exact Sub.refl _
-  | child he _ ih => exact Sub.child he ih
-  | fst _ ih => exact Sub.fst ih
-  | snd _ ih => exact Sub.snd ih
-  | inl _ ih => exact Sub.inl ih
-  | inr _ ih => exact Sub.inr ih
-  | pkg _ ih => exact Sub.pkg ih
+  | @here _ _ p => exact Or.inl ⟨some p, Sub.refl _⟩
+  | lk => exact Or.inl ⟨none, Sub.refl _⟩
+  | cell => exact Or.inr (Sub.refl _)
+  | child he _ ih => exact ih.imp (fun ⟨p, h⟩ => ⟨p, Sub.child he h⟩) (Sub.child he)
+  | fst _ ih => exact ih.imp (fun ⟨p, h⟩ => ⟨p, Sub.fst h⟩) Sub.fst
+  | snd _ ih => exact ih.imp (fun ⟨p, h⟩ => ⟨p, Sub.snd h⟩) Sub.snd
+  | inl _ ih => exact ih.imp (fun ⟨p, h⟩ => ⟨p, Sub.inl h⟩) Sub.inl
+  | inr _ ih => exact ih.imp (fun ⟨p, h⟩ => ⟨p, Sub.inr h⟩) Sub.inr
+  | pkg _ ih => exact ih.imp (fun ⟨p, h⟩ => ⟨p, Sub.pkg h⟩) Sub.pkg
+
+/-- A share a tree holds refers to its block. -/
+theorem Kept.shareIn {R : Val → Prop} {m : Mem} {v : Val} (h : Kept R m v) {k : Nat} (hs : ShareIn k v) :
+    Reached R m.blk k :=
+  h k (Or.inl hs)
 
 section
 variable {R : Val → Prop} {m : Mem} (hR : ∀ v, m.vals v → R v)
@@ -302,10 +316,10 @@ omit hR in
 theorem SharesOK.sweep {τ : Ty} {T : Val} (h : SharesOK m τ T) (hT : Kept R m T) :
     SharesOK (m.sweepR R) τ T := fun u k p ha => by
   cases p with
-  | some p => exact ArcBlk.sweepR (h u k _ ha) (hT.share ha.sub)
+  | some p => exact ArcBlk.sweepR (h u k _ ha) (hT.shareIn ha.sub)
   | none =>
     obtain ⟨o, ho⟩ := h u k none ha
-    exact ⟨o, Mem.sweepR_blk.mpr ⟨ho, hT.share ha.sub⟩⟩
+    exact ⟨o, Mem.sweepR_blk.mpr ⟨ho, hT.shareIn ha.sub⟩⟩
 
 theorem HrefAt.sweep {dep : Dep} {c : Nat} {t : Ty} {H : List Dep} (h : HrefAt m dep c t H)
     (hc : KeptAddr R m c) : HrefAt (m.sweepR R) dep c t H := by
@@ -333,6 +347,7 @@ theorem ValOK.sweep {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m τ v P H) 
   | lk h =>
     obtain ⟨o, ho⟩ := h
     exact .lk ⟨o, Mem.sweepR_blk.mpr ⟨ho, hv.lk (Sub.refl _)⟩⟩
+  | cell => exact .cell
 
 theorem SlotOK.sweep {E : Entry} {sl : Slot} (h : SlotOK m E sl)
     (hk : ∀ v, sl.val = some v → Kept R m v) : SlotOK (m.sweepR R) E sl := by

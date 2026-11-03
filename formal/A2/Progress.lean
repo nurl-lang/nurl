@@ -180,7 +180,7 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
     obtain ⟨v, hv | hv⟩ := sum_slot hi hy hl ht <;> rw [hm] at hv
     · exact ⟨_, EvalR.takerP hv⟩
     · exact ⟨_, EvalR.taker hv⟩
-  | arcNew hy hly _ _ _ =>
+  | arcNew hy hly _ _ _ _ =>
     obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly
     -- the key `nid` is fresh: every block's key is below it
     have hfr : m1.blk m1.nid = none := by
@@ -208,6 +208,20 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
   | lockClone ha hl hty =>
     obtain ⟨o, k, hv⟩ := hi.lk_slot ha hl hty
     exact ⟨_, EvalR.lockClone hv⟩
+  | cellNew hy hly _ _ _ =>
+    obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly
+    -- the key `nid` is fresh: every block's key is below it
+    have hfr : m1.blk m1.nid = none := by
+      have hb := TakeVal.blk htk
+      have hn : m1.nid = m.nid := by cases htk <;> rfl
+      rw [hb, hn]
+      cases h : m.blk m.nid with
+      | none => rfl
+      | some bl => exact absurd (hi.heap.bkey _ bl h) (Nat.lt_irrefl _)
+    exact ⟨_, EvalR.cellNew htk hfr⟩
+  | cellClone ha hl hty hos =>
+    obtain ⟨k, hv⟩ := hi.cell_slot ha hl hty hos
+    exact ⟨_, EvalR.cellClone hv⟩
   | rwRead ha hl hty =>
     -- A3.3: a new view of the payload, unless a writer has it checked out
     obtain ⟨o, k, hv⟩ := hi.lk_slot ha hl hty
@@ -461,13 +475,13 @@ theorem progress {P : Prog}
     intro m hcd hi
     have hmx : m.st x = none := by
       have := hi.dom x; rw [hx] at this; cases h : m.st x <;> simp_all
-    obtain ⟨o, kk, hv⟩ := hi.lk_slot ha hla hta
-    obtain ⟨ob, hk⟩ := hi.lk_val ha hla hta hv
+    obtain ⟨kk, hv⟩ := hi.lockOf_slot ha hla hta
+    obtain ⟨ob, hk⟩ := hi.lockOf_val ha hla hta hv
     -- A3.3: a writer also waits while a view of the block lives
     by_cases hnv : HasView m.blk kk
-    · exact Or.inr (Or.inl ⟨o, kk, t, hv, Or.inr hnv⟩)
+    · exact Or.inr (Or.inl ⟨kk, t, hv, Or.inr hnv⟩)
     cases ob with
-    | none => exact Or.inr (Or.inl ⟨o, kk, t, hv, Or.inl hk⟩)
+    | none => exact Or.inr (Or.inl ⟨kk, t, hv, Or.inl hk⟩)
     | some w => exact Or.inr <| Or.inr ⟨_, Step.withLock hv hk hmx hnv⟩
   | @scopeL Γ Δ1 F kk t x k hxE _ _ _ ih =>
     intro m hcd hi
