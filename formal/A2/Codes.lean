@@ -199,7 +199,7 @@ theorem WFv.noPkg {t : Ty} {v : Val} (hw : WFv t v) (ht : t.holdsView = false) {
     package it holds names code of its signature. -/
 theorem MInv.blkCodes {m : Mem} {Γ : Ctx} (hi : MInv m Γ) (P : Prog) :
     ∀ k bl, m.blk k = some bl → PkgOK P bl.rd := fun k bl hk _ _ _ _ _ hs => by
-  obtain ⟨_, hv, hw⟩ := hi.blocks k bl hk
+  obtain ⟨_, hv, hw, _⟩ := hi.blocks k bl hk
   rcases Blk.sub_rd hs with ⟨_, q, hq, hs'⟩ | h
   · exact ((hw q hq).1.noPkg hv hs').elim
   · cases h

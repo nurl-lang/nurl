@@ -78,7 +78,7 @@ def Ty.ok : Ty → Bool
   | .sum a b => a.ok && b.ok
   | .fn _ => true
   | .arc t => t.ok && !t.holdsView   -- A3.1: a payload holds no views
-  | .lk t => t.ok && !t.holdsView    -- A3.2: nor does a lock's (it is Send)
+  | .lk t => t.ok && !t.holdsView && !t.hasArc  -- A3.2: nor does a lock's (it is Send); nor a share
 
 /-- A type whose values own what they hold: a `Vec` or a struct.  Its
     binding is an owner (or borrows one). -/

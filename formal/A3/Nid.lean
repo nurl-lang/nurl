@@ -46,7 +46,10 @@ theorem CatchOK.of_st {m m' : Mem} (hst : m'.st = m.st) (hnv : m.nv ≤ m'.nv) (
   | .catchR x m0 k, h => by
     obtain ⟨h1, h2, h3, h4, h5⟩ := h
     exact ⟨fun v hv hx => by rw [hst]; exact h1 v hv hx, h2, Nat.le_trans h3 hnv,
-      fun k' bl hk hr => hb k' bl (h4 k' bl hk hr), CatchOK.of_st hst hnv hb (s := k) h5⟩
+      fun k' bl hk hr => by
+        obtain ⟨bl', h1', h2'⟩ := h4 k' bl hk hr
+        obtain ⟨bl'', h3', h4'⟩ := hb k' bl' h1'
+        exact ⟨bl'', h3', h2'.trans h4'⟩, CatchOK.of_st hst hnv hb (s := k) h5⟩
   | .skip, _ => trivial
   | .letv .., _ => trivial
   | .letcall .., _ => trivial
@@ -87,7 +90,8 @@ theorem payPart_false {B : Nat → Option Blk} {i : Nat} : payPart B i = false �
     a well-formed payload at a key below `n`, owning its addresses once,
     below `n` and apart from every other payload's. -/
 structure BlockOK (B : Nat → Option Blk) (n k : Nat) (bl : Blk) : Prop where
-  ok    : bl.ty.ok = true ∧ bl.ty.holdsView = false ∧ ∀ p, bl.pay = some p → WFv bl.ty p ∧ SharesIn B bl.ty p
+  ok    : bl.ty.ok = true ∧ bl.ty.holdsView = false ∧
+    (∀ p, bl.pay = some p → WFv bl.ty p ∧ SharesIn B bl.ty p) ∧ (bl.kind = .lock → bl.ty.hasArc = false)
   key   : k < n
   nodup : bl.tree.ids.Nodup
   lt    : ∀ i ∈ bl.tree.ids, i < n
@@ -102,16 +106,16 @@ def BlocksAt (B : Nat → Option Blk) (n : Nat) : Prop := ∀ k bl, B k = some b
 theorem inv_grow {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s) {A : Nat → Bool}
     {n : Nat} {B : Nat → Option Blk} (ha : ∀ i, m.alloc i = true → A i = true)
     (hA : ∀ i, A i = true → m.alloc i = true ∨ PayIn B i) (hpA : ∀ i, PayIn B i → A i = true)
-    (hn : m.nid ≤ n) (hb : BlkLe m.blk B) (hB : BlocksAt B n) (hP : ∀ i, PayIn B i → ∀ x T, OwnedAt m x T → i ∉ T.ids) :
+    (hn : m.nid ≤ n) (hb : BlkGrow m.blk B) (hB : BlocksAt B n) (hP : ∀ i, PayIn B i → ∀ x T, OwnedAt m x T → i ∉ T.ids) :
     Inv { m with alloc := A, nid := n, blk := B } Γ F s :=
   { toMInv := hi.toMInv.grow rfl (HeapOK.mono hi.heap rfl ha hn
         (fun k bl hk => ⟨(hB k bl hk).key, (hB k bl hk).nodup, fun i hi' =>
           ⟨hpA i ⟨k, bl, hk, hi'⟩, (hB k bl hk).lt i hi',
            fun x T hT => hP i ⟨k, bl, hk, hi'⟩ x T hT, (hB k bl hk).apart i hi'⟩⟩))
-      (Nat.le_refl _) hb (fun k bl hk => (hB k bl hk).ok)
+      (Nat.le_refl _) hb.le (fun k bl hk => (hB k bl hk).ok)
     nvS := hi.nvS, nvF := hi.nvF
     anch := hi.anch, spineNd := hi.spineNd, spineDom := hi.spineDom
-    catchOK := CatchOK.of_st (m := m) (m' := { m with alloc := A, nid := n, blk := B }) rfl (Nat.le_refl _) hb
+    catchOK := CatchOK.of_st (m := m) (m' := { m with alloc := A, nid := n, blk := B }) rfl (Nat.le_refl _) hb.le
       hi.catchOK
     cover := fun i h => by
       rcases hA i h with h | h
@@ -123,7 +127,7 @@ theorem inv_grow {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F
 theorem ThreadOK.grow {P : Prog} {m : Mem} {s : Stmt} (h : ThreadOK P m s) {A : Nat → Bool} {n : Nat}
     {B : Nat → Option Blk} (ha : ∀ i, m.alloc i = true → A i = true)
     (hA : ∀ i, A i = true → m.alloc i = true ∨ PayIn B i) (hpA : ∀ i, PayIn B i → A i = true)
-    (hn : m.nid ≤ n) (hb : BlkLe m.blk B) (hB : BlocksAt B n) (hP : ∀ i, PayIn B i → ∀ x T, OwnedAt m x T → i ∉ T.ids) :
+    (hn : m.nid ≤ n) (hb : BlkGrow m.blk B) (hB : BlocksAt B n) (hP : ∀ i, PayIn B i → ∀ x T, OwnedAt m x T → i ∉ T.ids) :
     ThreadOK P { m with alloc := A, nid := n, blk := B } s := by
   obtain ⟨Γ, F, Δ, ht, hi, hcd, hsc, hc⟩ := h
   exact ⟨Γ, F, Δ, ht, inv_grow hi ha hA hpA hn hb hB hP, hcd.of_st rfl, hsc, hc⟩

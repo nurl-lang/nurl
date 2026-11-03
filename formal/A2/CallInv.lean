@@ -634,7 +634,7 @@ theorem recCase {P : Prog} (hP : ProgOK P) : RecCase P := by
       StmtT.catchR hxF hIn hM hanchΔ hKO hDS
     refine ⟨_, StmtT.scope ⟨callX fn, h.canon_x _, by simp [callX, resMode_ne' fn]⟩ h.xF
       (StmtT.seq hk hcatch hkT) hpx, ?_, Nat.le_add_right _ _, hkeep, h.frz hi.toMInv hb⟩
-    refine hI.respine rfl (fun v hv => ?_) ⟨fun v hv hvx => ?_, ?_, Nat.le_add_right _ _, fun _ _ hk _ => hk,
+    refine hI.respine rfl (fun v hv => ?_) ⟨fun v hv hvx => ?_, ?_, Nat.le_add_right _ _, fun _ bl hk _ => ⟨bl, hk, BlkKeep.refl bl⟩,
       h.catchOK _ k⟩
       hI.pinIn hI.dtorIn
     · simp only [recStmt, Stmt.vars, List.mem_cons, List.mem_append] at hv

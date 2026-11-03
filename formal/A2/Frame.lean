@@ -24,7 +24,7 @@ theorem ViewsOK.keep_except {m m' : Mem} {x : Var} {τ : Ty} {T U : Val}
     (hsub : ∀ s v, ViewIn τ' U s v → ViewIn τ T s v)
     (hk : ∀ dep ∈ H, dep.root ≠ x → VKeep m m' dep) (hv : ViewsOK m τ T H)
     (hx' : ∃ o, m'.st x = some ⟨true, o⟩)
-    (hb : BlkLe m.blk m'.blk := by exact fun _ _ h => h) :
+    (hb : BlkLe m.blk m'.blk := by exact BlkLe.of_le fun _ _ h => h) :
     ViewsOK m' τ' U H := by
   intro s v hin
   obtain ⟨d, o, l, rfl, dep, hd, ha⟩ := hv s v (hsub s v hin)
@@ -631,7 +631,7 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       rw [killE_ty]; exact (hi.shares v E sl T hE hsl hown hT).of_blk hblk
   · intro k bl hk
     rw [hblk] at hk
-    obtain ⟨h1, h2, h3⟩ := hi.blocks k bl hk
-    exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.of_blk hblk⟩⟩
+    obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k bl hk
+    exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.of_blk hblk⟩, h4⟩
 
 end A2

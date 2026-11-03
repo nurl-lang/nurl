@@ -126,7 +126,7 @@ theorem CParts.thread_of {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) (hR : Re
   have hilen : i < C.ths.length := (List.getElem?_eq_some_iff.mp hi).1
   have hilen' : i < ps.length := by rw [hc.len]; exact hilen
   have hgrow := Step.grows hst
-  have hblk : BlkLe C.blk m'.blk := hgrow.blk
+  have hblk : BlkGrow C.blk m'.blk := hgrow.blk
   -- the other threads' part, and the thread's new part
   let a2 := minus C.alloc (union a (payPart C.blk))
   let m1 : Mem := { m' with alloc := minus m'.alloc a2 }
@@ -372,7 +372,7 @@ theorem CParts.ctouch {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) (hR : Restr
       have hkk : k0 = k := hto1.pay_unique (hblk k0 bl0 hk0) hk hak0 hak
       subst hkk
       exact .inr ⟨k0, bl0, hk0, hak0, .inr fun hr =>
-        hnr (hr.mono (fun v hv => Cfg.valsBut_put hv) hblk)⟩
+        hnr (hr.mono (fun v hv => Cfg.valsBut_put hv) hblk.le)⟩
 
 /-- **No race**: two threads never touch one address, one of them writing.
     A write is to the writer's own part, or (the sweep's frees) to a payload

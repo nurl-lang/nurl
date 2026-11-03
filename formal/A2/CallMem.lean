@@ -24,12 +24,12 @@ theorem HeapOK.relabel {m m' : Mem} (hh : HeapOK m) (ha : m'.alloc = m.alloc) (h
 /-- A root whose slot is unchanged reaches the same memory, as long as every
     owned tree is still owned by someone. -/
 theorem rootKeep_move {m m' : Mem} (hown : ∀ o T, OwnedAt m o T → ∃ o', OwnedAt m' o' T) {r : Var}
-    (hr : m'.st r = m.st r) (hb : BlkLe m.blk m'.blk := by exact fun _ _ h => h) : RootKeep m m' r := by
+    (hr : m'.st r = m.st r) (hb : BlkLe m.blk m'.blk := by exact BlkLe.of_le fun _ _ h => h) : RootKeep m m' r := by
   have hin : ∀ n, InMem m n → InMem m' n := fun n h => by
     rcases h with ⟨o, T, hT, hs⟩ | ⟨k, bl, hk, hs⟩
     · obtain ⟨o2, h2⟩ := hown o T hT
       exact Or.inl ⟨o2, T, h2, hs⟩
-    · exact Or.inr ⟨k, bl, hb k bl hk, hs⟩
+    · exact Or.inr (InPay.grow hb ⟨k, bl, hk, hs⟩)
   refine RootKeep.of_slot hr fun n hn => ?_
   rcases hn with ⟨T0, hn, ht⟩ | ⟨v, c, hc, ht, hnode⟩ | ⟨v, d, o', l, hc, ht, hdata⟩ | ⟨v, k, q, hc, ht, hn⟩
   · exact Or.inl ⟨T0, by rw [hr]; exact hn, ht⟩
@@ -1038,8 +1038,8 @@ theorem minv (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
         rw [clean_ty, ht0]; exact (hi.shares y E0 sl T h0 hst hown hT).of_blk hb.blk
   blocks k bl hk := by
     rw [show (callMem m m1 fn x).blk = m.blk from hb.blk] at hk
-    obtain ⟨h1, h2, h3⟩ := hi.blocks k bl hk
-    exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.of_blk hb.blk⟩⟩
+    obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k bl hk
+    exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.of_blk hb.blk⟩, h4⟩
   rootbLive p E hp hrb := by
     rcases h.ctx_cases p with ⟨rfl, hc⟩ | ⟨rfl, hc⟩ | ⟨k, t, hk, rfl, hc⟩ | ⟨k, t, hk, rfl, hc⟩ |
         ⟨k, b', t, hk, rfl, hc⟩ | ⟨hy', hyx, hc⟩ | ⟨hc, v, hv, rfl⟩ <;> rw [hc] at hp <;> (try cases hp)

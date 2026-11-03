@@ -82,28 +82,95 @@ def SharesIn (B : Nat → Option Blk) (τ : Ty) (T : Val) : Prop :=
 /-- `SharesIn` over a memory's blocks. -/
 def SharesOK (m : Mem) (τ : Ty) (T : Val) : Prop := SharesIn m.blk τ T
 
-/-- A3.1: the blocks `B'` keep every block of `B`: a step's blocks only grow
-    (`arcNew` adds one); only the sweep at its end removes one. -/
-def BlkLe (B B' : Nat → Option Blk) : Prop := ∀ k bl, B k = some bl → B' k = some bl
+/-- A3.2: what a later store keeps of a block, as its holders see it: an
+    `arc` block as it was, a `lock` block as a lock block of the same type
+    (its payload, which no one reads, may have been checked out or back in). -/
+def BlkKeep (bl bl' : Blk) : Prop := bl'.ty = bl.ty ∧ bl'.kind = bl.kind ∧ (bl.kind = .arc → bl' = bl)
 
-theorem BlkLe.refl (B : Nat → Option Blk) : BlkLe B B := fun _ _ h => h
+theorem BlkKeep.refl (bl : Blk) : BlkKeep bl bl := ⟨rfl, rfl, fun _ => rfl⟩
+
+theorem BlkKeep.trans {b1 b2 b3 : Blk} (h1 : BlkKeep b1 b2) (h2 : BlkKeep b2 b3) : BlkKeep b1 b3 :=
+  ⟨h2.1.trans h1.1, h2.2.1.trans h1.2.1, fun h => (h2.2.2 (h1.2.1.trans h)).trans (h1.2.2 h)⟩
+
+/-- What a kept block's holders read is what they read before. -/
+theorem BlkKeep.rd {bl bl' : Blk} (h : BlkKeep bl bl') : bl'.rd = bl.rd := by
+  obtain ⟨_, hk, ha⟩ := h
+  cases hkd : bl.kind with
+  | arc => rw [ha hkd]
+  | lock =>
+    rw [hkd] at hk
+    obtain ⟨t, k, p⟩ := bl; obtain ⟨t', k', p'⟩ := bl'
+    simp only at hk hkd; subst hk; subst hkd; rfl
+
+/-- A3.1: the blocks `B'` keep every block of `B`: a step's blocks only grow
+    (`arcNew` adds one); only the sweep at its end removes one.  (A3.2: a
+    lock block is kept as a lock block of its type, `BlkKeep`: acquiring
+    and releasing it change its payload.) -/
+def BlkLe (B B' : Nat → Option Blk) : Prop := ∀ k bl, B k = some bl → ∃ bl', B' k = some bl' ∧ BlkKeep bl bl'
+
+/-- Blocks kept exactly are kept. -/
+theorem BlkLe.of_le {B B' : Nat → Option Blk} (h : ∀ k bl, B k = some bl → B' k = some bl) : BlkLe B B' :=
+  fun k bl hk => ⟨bl, h k bl hk, BlkKeep.refl bl⟩
+
+theorem BlkLe.refl (B : Nat → Option Blk) : BlkLe B B := BlkLe.of_le fun _ _ h => h
 
 theorem BlkLe.trans {B1 B2 B3 : Nat → Option Blk} (h1 : BlkLe B1 B2) (h2 : BlkLe B2 B3) : BlkLe B1 B3 :=
-  fun k bl h => h2 k bl (h1 k bl h)
+  fun k bl h => by
+    obtain ⟨b2, h2', hk2⟩ := h1 k bl h
+    obtain ⟨b3, h3', hk3⟩ := h2 k b2 h2'
+    exact ⟨b3, h3', hk2.trans hk3⟩
 
-theorem BlkLe.of_eq {B B' : Nat → Option Blk} (h : B' = B) : BlkLe B B' := fun _ _ hk => by rw [h]; exact hk
+theorem BlkLe.of_eq {B B' : Nat → Option Blk} (h : B' = B) : BlkLe B B' :=
+  BlkLe.of_le fun _ _ hk => by rw [h]; exact hk
 
 /-- A new block at a fresh key keeps every other. -/
 theorem BlkLe.fresh {B : Nat → Option Blk} {n : Nat} (h : B n = none) (b : Blk) : BlkLe B (upd B n (some b)) :=
-  fun k bl hk => by
+  BlkLe.of_le fun k bl hk => by
     have hne : k ≠ n := fun e => by rw [e, h] at hk; cases hk
     simpa [upd, hne] using hk
+
+/-- An `arc` block is kept as it was ... -/
+theorem BlkLe.arc {B B' : Nat → Option Blk} (hb : BlkLe B B') {k : Nat} {t : Ty} {p : Option Val}
+    (h : B k = some ⟨t, .arc, p⟩) : B' k = some ⟨t, .arc, p⟩ := by
+  obtain ⟨bl', h', hk⟩ := hb k _ h
+  rw [h', hk.2.2 rfl]
+
+/-- ... a lock block as a lock block of its type ... -/
+theorem BlkLe.lock {B B' : Nat → Option Blk} (hb : BlkLe B B') {k : Nat} {t : Ty} {o : Option Val}
+    (h : B k = some ⟨t, .lock, o⟩) : ∃ o', B' k = some ⟨t, .lock, o'⟩ := by
+  obtain ⟨⟨t', k', o'⟩, h', hty, hkd, _⟩ := hb k _ h
+  simp only at hty hkd; subst hty; subst hkd
+  exact ⟨o', h'⟩
+
+/-- ... and what holders read of a block is kept. -/
+theorem BlkLe.rd {B B' : Nat → Option Blk} (hb : BlkLe B B') {k : Nat} {bl : Blk} (h : B k = some bl) :
+    ∃ bl', B' k = some bl' ∧ bl'.rd = bl.rd := by
+  obtain ⟨bl', h', hk⟩ := hb k bl h
+  exact ⟨bl', h', hk.rd⟩
+
+/-- A3.2: the blocks `B'` keep every block of `B` exactly: blocks were only
+    added (no acquire or release in between). -/
+def BlkGrow (B B' : Nat → Option Blk) : Prop := ∀ k bl, B k = some bl → B' k = some bl
+
+theorem BlkGrow.le {B B' : Nat → Option Blk} (h : BlkGrow B B') : BlkLe B B' := BlkLe.of_le h
+
+theorem BlkGrow.refl (B : Nat → Option Blk) : BlkGrow B B := fun _ _ h => h
+
+theorem BlkGrow.trans {B1 B2 B3 : Nat → Option Blk} (h1 : BlkGrow B1 B2) (h2 : BlkGrow B2 B3) :
+    BlkGrow B1 B3 := fun k bl h => h2 k bl (h1 k bl h)
+
+theorem BlkGrow.of_eq {B B' : Nat → Option Blk} (h : B' = B) : BlkGrow B B' := fun _ _ hk => by rw [h]; exact hk
+
+theorem BlkGrow.fresh {B : Nat → Option Blk} {n : Nat} (h : B n = none) (b : Blk) :
+    BlkGrow B (upd B n (some b)) := fun k bl hk => by
+  have hne : k ≠ n := fun e => by rw [e, h] at hk; cases hk
+  simpa [upd, hne] using hk
 
 theorem ShareFits.grow {B B' : Nat → Option Blk} (hb : BlkLe B B') {k : Nat} {u : Ty} {p : Option Val}
     (h : ShareFits (B k) u p) : ShareFits (B' k) u p := by
   cases p with
-  | some p => exact hb k _ h
-  | none => obtain ⟨o, h⟩ := h; exact ⟨o, hb k _ h⟩
+  | some p => exact hb.arc h
+  | none => obtain ⟨o, h⟩ := h; exact hb.lock h
 
 theorem SharesIn.grow {B B' : Nat → Option Blk} {τ : Ty} {T : Val} (h : SharesIn B τ T) (hb : BlkLe B B') :
     SharesIn B' τ T := fun u k p ha => (h u k p ha).grow hb
@@ -244,6 +311,13 @@ def Lands (k : Kind) (n n0 : Val) : Prop :=
 
 /-- A3.1: a value inside a live block's payload. -/
 def InPay (m : Mem) (n : Val) : Prop := ∃ k bl, m.blk k = some bl ∧ Sub n bl.rd
+
+/-- What lies in a payload holders read stays there while the blocks are
+    kept (A3.2: a lock block's payload is read by no one). -/
+theorem InPay.grow {m m' : Mem} (hb : BlkLe m.blk m'.blk) {n : Val} (h : InPay m n) : InPay m' n := by
+  obtain ⟨k, bl, hk, hs⟩ := h
+  obtain ⟨bl', hk', hrd⟩ := hb.rd hk
+  exact ⟨k, bl', hk', hrd ▸ hs⟩
 
 /-- Where a value reached through `dep` lies: where the node its root
     reaches puts it (`Lands`), or (A3.1), through a share, anywhere in a
@@ -497,7 +571,8 @@ def CatchOK (m : Mem) : Stmt → Prop
   | .frozen _ s => CatchOK m s
   | .catchR x m0 s => (∀ v, v ∉ s.spine → v ≠ x → m.st v = m0.st v) ∧
       x ∉ s.spine ∧ m0.nv ≤ m.nv ∧
-      (∀ k bl, m0.blk k = some bl → Reached (OutVals m0 x s.spine) m0.blk k → m.blk k = some bl) ∧
+      (∀ k bl, m0.blk k = some bl → Reached (OutVals m0 x s.spine) m0.blk k →
+        ∃ bl', m.blk k = some bl' ∧ BlkKeep bl bl') ∧
       CatchOK m s
   | _ => True
 
@@ -628,9 +703,10 @@ structure MInv (m : Mem) (Γ : Ctx) : Prop where
                 SharesOK m E.ty T
   /-- A3.1: a block's payload is a well-formed tree of a type that holds no
       views, and the shares it holds name blocks too (A3.2: while it is in
-      the block). -/
+      the block; a lock block's holds no share, this cut). -/
   blocks    : ∀ k bl, m.blk k = some bl → bl.ty.ok = true ∧ bl.ty.holdsView = false ∧
-                ∀ p, bl.pay = some p → WFv bl.ty p ∧ SharesOK m bl.ty p
+                (∀ p, bl.pay = some p → WFv bl.ty p ∧ SharesOK m bl.ty p) ∧
+                (bl.kind = .lock → bl.ty.hasArc = false)
 
 /-- The invariant of a configuration running `s` in context `Γ`, with `F`
     lent out. -/

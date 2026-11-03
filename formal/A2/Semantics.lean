@@ -138,11 +138,12 @@ def Refers (B : Nat → Option Blk) (v : Val) (k : Nat) : Prop :=
     ((∃ c, Sub (.href c) v ∧ c ∈ bl.rd.ids) ∨ ∃ d o l, Sub (.view d o l) v ∧ d ∈ bl.rd.ids)
 
 /-- The blocks of `B` reached from the values `R` (the slots' values), through
-    the payloads of reached blocks (A3.2: of either kind; a `lock` block's
-    payload, while it is in the block, keeps what it holds shares of). -/
+    the payloads of reached blocks that their holders read (A3.2: an `arc`
+    block's; a lock block's payload holds no share, this cut, so it reaches
+    nothing). -/
 inductive Reached (R : Val → Prop) (B : Nat → Option Blk) : Nat → Prop
   | root {v : Val} {k : Nat} : R v → Refers B v k → Reached R B k
-  | pay {k k' : Nat} {bl : Blk} : Reached R B k' → B k' = some bl → Refers B bl.tree k → Reached R B k
+  | pay {k k' : Nat} {bl : Blk} : Reached R B k' → B k' = some bl → Refers B bl.rd k → Reached R B k
 
 /-- What a store's slots hold. -/
 def Mem.vals (m : Mem) (v : Val) : Prop := ∃ x o, m.st x = some ⟨o, some v⟩

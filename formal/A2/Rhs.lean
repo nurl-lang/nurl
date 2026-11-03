@@ -82,17 +82,19 @@ theorem ViewsOK.none {m : Mem} {t : Ty} (ht : t.holdsView = false) (T : Val) (H 
   rw [ht] at this; cases this
 
 theorem rootNode_st {m m' : Mem} (h : m'.st = m.st) {r : Var} {n : Val} (hn : RootNode m r n)
-    (hb : BlkLe m.blk m'.blk := by exact fun _ _ h => h) : RootNode m' r n := by
+    (hb : BlkLe m.blk m'.blk := by exact BlkLe.of_le fun _ _ h => h) : RootNode m' r n := by
   have hown : ∀ o T, OwnedAt m o T → OwnedAt m' o T := fun o T hT => by
     unfold OwnedAt at *; rw [h]; exact hT
   have hnode : ∀ c n, NodeAt m c n → NodeAt m' c n := fun c n hn => by
     rcases hn with ⟨x, T, hT, hs, hn⟩ | ⟨k, bl, hk, hs, hn⟩
     · exact Or.inl ⟨x, T, hown x T hT, hs, hn⟩
-    · exact Or.inr ⟨k, bl, hb k bl hk, hs, hn⟩
+    · obtain ⟨bl', hk', hrd⟩ := hb.rd hk
+      exact Or.inr ⟨k, bl', hk', hrd ▸ hs, hn⟩
   have hdata : ∀ d n, DataAt m d n → DataAt m' d n := fun d n hn => by
     rcases hn with ⟨x, T, hT, hs, hn⟩ | ⟨k, bl, hk, hs, hn⟩
     · exact Or.inl ⟨x, T, hown x T hT, hs, hn⟩
-    · exact Or.inr ⟨k, bl, hb k bl hk, hs, hn⟩
+    · obtain ⟨bl', hk', hrd⟩ := hb.rd hk
+      exact Or.inr ⟨k, bl', hk', hrd ▸ hs, hn⟩
   rcases hn with ⟨T, h1, ht⟩ | ⟨v, c, h1, ht, hn⟩ | ⟨v, d, o, l, h1, ht, hn⟩ | ⟨v, k, q, h1, ht, hn⟩
   · exact Or.inl ⟨T, by rw [h]; exact h1, ht⟩
   · exact Or.inr (Or.inl ⟨v, c, by rw [h]; exact h1, ht, hnode c _ hn⟩)
@@ -100,7 +102,7 @@ theorem rootNode_st {m m' : Mem} (h : m'.st = m.st) {r : Var} {n : Val} (hn : Ro
   · exact Or.inr (Or.inr (Or.inr ⟨v, k, q, by rw [h]; exact h1, ht, hn⟩))
 
 /-- The same slots, more blocks: every root reaches what it did. -/
-theorem RootKeep.of_st {m m' : Mem} (h : m'.st = m.st) (hb : BlkLe m.blk m'.blk := by exact fun _ _ h => h)
+theorem RootKeep.of_st {m m' : Mem} (h : m'.st = m.st) (hb : BlkLe m.blk m'.blk := by exact BlkLe.of_le fun _ _ h => h)
     {r : Var} : RootKeep m m' r :=
   RootKeep.of_slot (by rw [h]) fun _ hn => rootNode_st h hn hb
 
@@ -126,8 +128,8 @@ theorem MInv.of_st {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) (
   shares v E sl T hE hsl hown hT := (hi.shares v E sl T hE (by rw [h] at hsl; exact hsl) hown hT).of_blk hb
   blocks k bl hk := by
     rw [hb] at hk
-    obtain ⟨h1, h2, h3⟩ := hi.blocks k bl hk
-    exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.of_blk hb⟩⟩
+    obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k bl hk
+    exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.of_blk hb⟩, h4⟩
 
 /-! ### A3.1: more blocks
 
@@ -146,8 +148,8 @@ theorem ValOK.grow {m m' : Mem} (hst : m'.st = m.st) (hb : BlkLe m.blk m'.blk) {
   induction h with
   | arc h hw hv hl =>
     obtain ⟨dep, hd, hla⟩ := hl
-    exact .arc (hb _ _ h) hw hv ⟨dep, hd, hla.keep (RootKeep.of_st hst hb)⟩
-  | lk h => obtain ⟨o, ho⟩ := h; exact .lk ⟨o, hb _ _ ho⟩
+    exact .arc (hb.arc h) hw hv ⟨dep, hd, hla.keep (RootKeep.of_st hst hb)⟩
+  | lk h => obtain ⟨o, ho⟩ := h; exact .lk (hb.lock ho)
   | int => exact .int
   | href h =>
     obtain ⟨dep, hd, ha⟩ := h
@@ -175,7 +177,7 @@ theorem SlotOK.grow {m m' : Mem} (hst : m'.st = m.st) (hb : BlkLe m.blk m'.blk) 
 /-- What the invariant asks of the blocks. -/
 def BlocksIn (m : Mem) : Prop :=
   ∀ k bl, m.blk k = some bl → bl.ty.ok = true ∧ bl.ty.holdsView = false ∧
-    ∀ p, bl.pay = some p → WFv bl.ty p ∧ SharesOK m bl.ty p
+    (∀ p, bl.pay = some p → WFv bl.ty p ∧ SharesOK m bl.ty p) ∧ (bl.kind = .lock → bl.ty.hasArc = false)
 
 /-- **More blocks**: the invariant holds over a store with the same slots and
     more blocks, each as the invariant asks. -/
@@ -542,7 +544,7 @@ theorem WFv.noView_pkg {τ : Ty} {v : Val} (hw : WFv τ v) (hhv : τ.holdsView =
 /-- A3.1: a payload holds no package. -/
 theorem MInv.pay_pkgs {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {k : Nat} {bl : Blk} (hk : m.blk k = some bl)
     {n : Val} (hs : Sub n bl.rd) : PkgsOK n := by
-  obtain ⟨_, hhv, hw⟩ := hi.blocks k bl hk
+  obtain ⟨_, hhv, hw, _⟩ := hi.blocks k bl hk
   intro fs te ms e cs hp
   rcases Blk.sub_rd hs with ⟨_, q, hq, hs'⟩ | rfl
   · exact ((hw q hq).1.noView_pkg hhv (hp.trans hs')).elim
@@ -1278,12 +1280,12 @@ theorem out_share {m : Mem} {Γ : Ctx} {t : Ty} {k : Nat} {p : Val} (htok : t.ok
 /-- A3.2: a lock share, owned: it holds nothing, and its block is a lock
     block of its type. -/
 theorem out_lkShare {m : Mem} {Γ : Ctx} {t : Ty} {k : Nat} (htok : t.ok = true)
-    (hvf : t.holdsView = false) (hk : ∃ o, m.blk k = some ⟨t, .lock, o⟩) :
+    (hvf : t.holdsView = false) (hna : t.hasArc = false) (hk : ∃ o, m.blk k = some ⟨t, .lock, o⟩) :
     RhsOut m Γ ⟨.lk t, .own, true, [], [], false, false⟩ (.lk k) true where
   own := rfl
   mode := Or.inl rfl
   live := rfl
-  tyok := by simp [Ty.ok, htok, hvf]
+  tyok := by simp [Ty.ok, htok, hvf, hna]
   wf _ r hr := by simp [roots, Entry.vdeps, Mode.ownSlot] at hr
   valOwn _ := ⟨rfl, .lk, ViewsOK.none (show (Ty.lk t).holdsView = false from hvf) _ _,
     List.nodup_nil, fun _ h => (nomatch h), fun _ _ _ _ h => (nomatch h), fun _ _ _ h => (by cases h),
@@ -1335,7 +1337,7 @@ theorem out_lockClone {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry
   have hk := hi.lk_val ha hl hty hv
   have hok := hi.tyok ha; rw [hty] at hok
   simp only [Ty.ok, Bool.and_eq_true] at hok
-  exact out_lkShare hok.1 (by simpa using hok.2) hk
+  exact out_lkShare hok.1.1 (by simpa using hok.1.2) (by simpa using hok.2) hk
 
 /-- `arc_clone a`: a new share of `a`'s block. -/
 theorem out_arcClone {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry} (ha : Γ a = some E)
@@ -1355,7 +1357,7 @@ theorem out_arcGet {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry} (
     {o : Bool} {k : Nat} {p : Val} (hv : m.st a = some ⟨o, some (.arc k p)⟩) :
     RhsOut m Γ (getE a E t) (lendOf p) false := by
   obtain ⟨hk, hwp, hvf⟩ := hi.arc_val ha hl hty hv
-  have hsh : SharesOK m t p := ((hi.blocks k _ hk).2.2 p rfl).2
+  have hsh : SharesOK m t p := ((hi.blocks k _ hk).2.2.1 p rfl).2
   have hok := hi.tyok ha; rw [hty] at hok
   simp only [Ty.ok, Bool.and_eq_true] at hok
   have htok := hok.1

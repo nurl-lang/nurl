@@ -587,10 +587,11 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       Γ a = some E → E.live = true → E.ty = .arc t → t.holdsView = false → t.hasFn = false →
       RhsT Γ F (.arcGet a) (getE a E t) Γ
   /-- A3.2: `locked_new`: `y`'s value, of a type that holds no view and no
-      closure (it is Send), moves into a fresh lock block; the result is an
-      owned lock share, which holds nothing. -/
+      closure (it is Send), and (this cut) no share, moves into a fresh lock
+      block; the result is an owned lock share, which holds nothing. -/
   | lockNew {t : Ty} {y : Var} {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
-      Γ y = some Ey → Ey.live = true → Ey.ty = t → t.holdsView = false ∧ t.hasFn = false →
+      Γ y = some Ey → Ey.live = true → Ey.ty = t →
+      t.holdsView = false ∧ t.hasFn = false ∧ t.hasArc = false →
       PushArg Γ F y Ey t D Γ1 →
       RhsT Γ F (.lockNew t y) ⟨.lk t, .own, true, [], [], false, false⟩ Γ1
   /-- A3.2: `Locked_share`: a new share of the lock block `a` shares: owned,

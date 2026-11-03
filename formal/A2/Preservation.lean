@@ -1127,8 +1127,8 @@ theorem MInv.unwind {m m1 : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt} 
       · exact h
       · exact h
   · rw [hblk] at hk'
-    obtain ⟨h1, h2, h3⟩ := hi.blocks k' bl hk'
-    exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.of_blk hblk⟩⟩
+    obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k' bl hk'
+    exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.of_blk hblk⟩, h4⟩
 
 /-- What a panic leaves at a destructor's frame `x`: no binding `letd`
     made views `x` in memory (`dtorOut`), so `x`'s destructor may run and
@@ -2217,9 +2217,10 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           spineNd := hi'.spineNd
           spineDom := hi'.spineDom
           catchOK := by
-            refine ⟨fun v hv hvx => ?_, hxs', Nat.le_trans hnv0 hnv, fun k bl hk hr => Step.blk hst' k bl
+            refine ⟨fun v hv hvx => ?_, hxs', Nat.le_trans hnv0 hnv, fun k bl hk hr =>
               (hb0 k bl hk (hr.of_roots fun w ⟨y, o, hy, hyx, h0⟩ _ _ => ⟨y, o, (fun hys => by
-                rw [hlo y hyx (hs.spine_F y hys)] at h0; cases h0), hyx, h0⟩)), hi'.catchOK⟩
+                rw [hlo y hyx (hs.spine_F y hys)] at h0; cases h0), hyx, h0⟩)).elim fun bl' ⟨h1', h2'⟩ =>
+                (Step.blk hst' k bl' h1').elim fun bl'' ⟨h3', h4'⟩ => ⟨bl'', h3', h2'.trans h4'⟩, hi'.catchOK⟩
             by_cases hvs : v ∈ s.spine
             · rw [step_gone hst' hck v hvs hv, hlo v hvx (hs.spine_F v hvs)]
             · by_cases hvF : v ∈ F ++ (List.range m0.nv).filter (· ≠ x)
@@ -2256,7 +2257,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       have hbl : BlkLe (m0.set x ⟨false, some (.int 1)⟩).sweep.blk (m1.set x ⟨false, some (.int 1)⟩).blk := by
         intro k bl hk
         obtain ⟨hk0, hr⟩ := Mem.sweep_blk.mp hk
-        show m1.blk k = some bl
+        show ∃ bl', m1.blk k = some bl' ∧ BlkKeep bl bl'
         rw [hblk1]
         refine hb0 k bl hk0 (hr.of_roots fun w ⟨y, o, hy⟩ k' hrf => ?_)
         by_cases hyx : y = x
@@ -2274,8 +2275,8 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         hM.sweep.grow hsteq (hh1.set_bor x _) (by simp [hnv1, hnv0]) hbl
           (fun k bl hk => by
             have hk' : m.blk k = some bl := by rw [← hblk1]; exact hk
-            obtain ⟨h1, h2, h3⟩ := hi.blocks k bl hk'
-            exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.grow (BlkLe.of_eq (show (m1.set x ⟨false, some (.int 1)⟩).blk = m.blk from hblk1))⟩⟩)
+            obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k bl hk'
+            exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.grow (BlkLe.of_eq (show (m1.set x ⟨false, some (.int 1)⟩).blk = m.blk from hblk1))⟩, h4⟩)
       obtain ⟨E0, h0⟩ := (hKO.2 x Ex hEx).2
       have hxown : ∀ T, ¬ OwnedAt m1 x T := by
         intro T hT

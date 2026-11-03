@@ -49,7 +49,7 @@ theorem Landed.keep {m m' : Mem} {dep : Dep} {n : Val} (hr : RootKeep m m' dep.r
     (hb : BlkLe m.blk m'.blk) (h : Landed m dep n) : Landed m' dep n := by
   rcases h with ⟨n0, h0, hl⟩ | ⟨hk, hro, k, bl, hkb, hs⟩
   · exact Or.inl ⟨n0, hr.1 n0 h0, hl⟩
-  · exact Or.inr ⟨hk, hr.rootMem hro, k, bl, hb k bl hkb, hs⟩
+  · exact Or.inr ⟨hk, hr.rootMem hro, InPay.grow hb ⟨k, bl, hkb, hs⟩⟩
 
 theorem ArcLanded.keep {m m' : Mem} {dep : Dep} {n : Val} (hr : RootKeep m m' dep.root)
     (h : ArcLanded m dep n) : ArcLanded m' dep n := by
@@ -63,10 +63,10 @@ theorem Landed.pay {m m' : Mem} {dep : Dep} {n : Val} (hb : BlkLe m.blk m'.blk)
     (hk : dep.kind = .share) (hro : RootMem m' dep.root) (h : Landed m dep n) : Landed m' dep n := by
   rcases h with ⟨n0, _, hl⟩ | ⟨hk, _, k, bl, hkb, hs⟩
   · rcases hl with ⟨h, _⟩ | ⟨h, _⟩ | ⟨h, _⟩ <;> rw [hk] at h <;> cases h
-  · exact Or.inr ⟨hk, hro, k, bl, hb k bl hkb, hs⟩
+  · exact Or.inr ⟨hk, hro, InPay.grow hb ⟨k, bl, hkb, hs⟩⟩
 
 theorem RootKeep.vkeep {m m' : Mem} {dep : Dep} (h : RootKeep m m' dep.root)
-    (hb : BlkLe m.blk m'.blk := by exact fun _ _ h => h) : VKeep m m' dep := by
+    (hb : BlkLe m.blk m'.blk := by exact BlkLe.of_le fun _ _ h => h) : VKeep m m' dep := by
   intro d o l s ⟨c, es, hks, hla, hl, hw⟩
   exact ⟨c, es, hks, hla.keep h hb, hl, hw⟩
 
@@ -204,13 +204,13 @@ theorem DataAt.eq {m : Mem} {d : Nat} {n : Val} (h : DataAt m d n) : ∃ ty c es
 /-- What lies in a live block's payload stays there while the block lives. -/
 theorem InMem.grow_pay {m m' : Mem} (hb : BlkLe m.blk m'.blk) {n : Val} {k : Nat} {bl : Blk}
     (hk : m.blk k = some bl) (hs : Sub n bl.rd) : InMem m' n :=
-  Or.inr ⟨k, bl, hb k bl hk, hs⟩
+  Or.inr (InPay.grow hb ⟨k, bl, hk, hs⟩)
 
 theorem InMem.mono {m m' : Mem} (hown : ∀ o T, OwnedAt m o T → OwnedAt m' o T)
     (hb : BlkLe m.blk m'.blk) {n : Val} (h : InMem m n) : InMem m' n := by
   rcases h with ⟨o, T, hT, h⟩ | ⟨k, bl, hk, h⟩
   · exact Or.inl ⟨o, T, hown o T hT, h⟩
-  · exact Or.inr ⟨k, bl, hb k bl hk, h⟩
+  · exact Or.inr (InPay.grow hb ⟨k, bl, hk, h⟩)
 
 theorem NodeAt.mono {m m' : Mem} (hown : ∀ o T, OwnedAt m o T → OwnedAt m' o T)
     (hb : BlkLe m.blk m'.blk) {c : Nat} {n : Val} (h : NodeAt m c n) : NodeAt m' c n := by
@@ -559,7 +559,7 @@ theorem rootKeep_frame {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     (hanch : RootbAnch Γ F)
     (hF : ∀ o ∈ F, m'.st o = m.st o) {r : Var} {Er : Entry} (hr : Γ r = some Er)
     (hroot : Er.mode.isRoot = true) (hsame : m'.st r = m.st r)
-    (hb : BlkLe m.blk m'.blk := by exact fun _ _ h => h) : RootKeep m m' r := by
+    (hb : BlkLe m.blk m'.blk := by exact BlkLe.of_le fun _ _ h => h) : RootKeep m m' r := by
   refine RootKeep.of_slot hsame fun n hn => ?_
   rcases hn with ⟨T, hown, ht⟩ | ⟨w, c, hc, ht, hnode⟩ | ⟨w, d, o, l, hc, ht, hdata⟩ | ⟨w, k, q, hc, ht, hn⟩
   · exact Or.inl ⟨T, by rw [hsame]; exact hown, ht⟩
@@ -655,7 +655,7 @@ theorem rootKeep_frame_sp {m m' : Mem} {Γ : Ctx} {F sp : List Var} (hi : MInv m
     (hpin : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ sp → ∀ r ∈ roots E.vdeps, r ∉ sp)
     (hF : ∀ o ∈ F, m'.st o = m.st o) {r : Var} {Er : Entry} (hr : Γ r = some Er) (hrs : r ∉ sp)
     (hroot : Er.mode.isRoot = true) (hsame : m'.st r = m.st r)
-    (hb : BlkLe m.blk m'.blk := by exact fun _ _ h => h) : RootKeep m m' r := by
+    (hb : BlkLe m.blk m'.blk := by exact BlkLe.of_le fun _ _ h => h) : RootKeep m m' r := by
   refine RootKeep.of_slot hsame fun n hn => ?_
   rcases hn with ⟨T, hown, ht⟩ | ⟨w, c, hc, ht, hnode⟩ | ⟨w, d, o, l, hc, ht, hdata⟩ | ⟨w, k, q, hc, ht, hn⟩
   · exact Or.inl ⟨T, by rw [hsame]; exact hown, ht⟩

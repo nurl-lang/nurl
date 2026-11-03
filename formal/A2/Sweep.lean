@@ -55,7 +55,7 @@ theorem Mem.sweep_blk {m : Mem} {k : Nat} {bl : Blk} :
 
 /-- The swept store keeps every block it keeps as it was. -/
 theorem Mem.sweepR_blkLe (R : Val → Prop) (m : Mem) : BlkLe (m.sweepR R).blk m.blk :=
-  fun _ _ h => (Mem.sweepR_blk.mp h).1
+  BlkLe.of_le fun _ _ h => (Mem.sweepR_blk.mp h).1
 
 theorem Mem.sweep_blkLe (m : Mem) : BlkLe m.sweep.blk m.blk := Mem.sweepR_blkLe m.vals m
 
@@ -73,14 +73,17 @@ theorem Refers.grow {B B' : Nat → Option Blk} (hb : BlkLe B B') {v : Val} {k :
     Refers B' v k := by
   rcases h with h | ⟨bl, hk, h⟩
   · exact Or.inl h
-  · exact Or.inr ⟨bl, hb k bl hk, h⟩
+  · obtain ⟨bl', hk', hrd⟩ := hb.rd hk
+    exact Or.inr ⟨bl', hk', hrd ▸ h⟩
 
 /-- Reachability from more values, through more blocks. -/
 theorem Reached.mono {R R' : Val → Prop} {B B' : Nat → Option Blk} (hR : ∀ v, R v → R' v)
     (hb : BlkLe B B') {k : Nat} (h : Reached R B k) : Reached R' B' k := by
   induction h with
   | root hv hr => exact .root (hR _ hv) (hr.grow hb)
-  | pay _ hk hr ih => exact .pay ih (hb _ _ hk) (hr.grow hb)
+  | pay _ hk hr ih =>
+    obtain ⟨bl', hk', hrd⟩ := hb.rd hk
+    exact .pay ih hk' (hrd ▸ hr.grow hb)
 
 /-- A block a slot's value refers to is reached. -/
 theorem Reached.of_slot {m : Mem} {x : Var} {o : Bool} {v : Val} (hx : m.st x = some ⟨o, some v⟩)
@@ -169,7 +172,7 @@ theorem Kept.slot (hR : ∀ v, m.vals v → R v) {x : Var} {o : Bool} {v : Val}
   fun _ h => .root (hR _ ⟨x, o, hx⟩) h
 
 theorem Kept.pay {k : Nat} {bl : Blk} (hr : Reached R m.blk k) (hk : m.blk k = some bl) :
-    Kept R m bl.tree := fun _ h => .pay hr hk h
+    Kept R m bl.rd := fun _ h => .pay hr hk h
 
 /-- Nothing (`.int 0`) refers to no block. -/
 theorem Kept.int (n : Nat) : Kept R m (.int n) := by
@@ -181,11 +184,7 @@ theorem Kept.int (n : Nat) : Kept R m (.int n) := by
 
 /-- A3.2: what a reached block's holders read is kept. -/
 theorem Kept.rd {k : Nat} {bl : Blk} (hr : Reached R m.blk k) (hk : m.blk k = some bl) :
-    Kept R m bl.rd := by
-  obtain ⟨t, kd, p⟩ := bl
-  cases kd with
-  | arc => exact Kept.pay hr hk
-  | lock => exact Kept.int 0
+    Kept R m bl.rd := Kept.pay hr hk
 
 theorem Kept.href {v : Val} (h : Kept R m v) {c : Nat} (hs : Sub (.href c) v) : KeptAddr R m c :=
   fun k bl hk hc => h k (Or.inr ⟨bl, hk, Or.inl ⟨c, hs, hc⟩⟩)
@@ -365,10 +364,12 @@ theorem MInv.sweepR {Γ : Ctx} (hi : MInv m Γ) : MInv (m.sweepR R) Γ where
   shares v E sl T hE hsl hown hT := (hi.shares v E sl T hE hsl hown hT).sweep (Kept.of_slot hR hsl T hT)
   blocks k bl hk := by
     obtain ⟨hk0, hr⟩ := Mem.sweepR_blk.mp hk
-    obtain ⟨h1, h2, h3⟩ := hi.blocks k bl hk0
-    refine ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.sweep ?_⟩⟩
-    have := Kept.pay hr hk0
-    rwa [show bl.tree = p by simp [Blk.tree, hp]] at this
+    obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k bl hk0
+    refine ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, ?_⟩, h4⟩
+    obtain ⟨t, kd, q⟩ := bl
+    cases kd with
+    | arc => simp only at hp; subst hp; exact (h3 _ rfl).2.sweep (Kept.pay hr hk0)
+    | lock => exact SharesOK.of_noArc (h4 rfl)
 
 end
 
@@ -412,19 +413,22 @@ theorem Reached.of_roots {R R' : Val → Prop} {B : Nat → Option Blk} {k : Nat
     way is kept (`CatchOK`). -/
 theorem Reached.catch {m m0 : Mem} {x : Var} {sp : List Var}
     (hst : ∀ v, v ∉ sp → v ≠ x → m.st v = m0.st v)
-    (hb : ∀ k bl, m0.blk k = some bl → Reached (OutVals m0 x sp) m0.blk k → m.blk k = some bl)
+    (hb : ∀ k bl, m0.blk k = some bl → Reached (OutVals m0 x sp) m0.blk k →
+      ∃ bl', m.blk k = some bl' ∧ BlkKeep bl bl')
     {k : Nat} (h : Reached (OutVals m0 x sp) m0.blk k) : Reached m.vals m.blk k := by
   have hrefers : ∀ {v k}, Reached (OutVals m0 x sp) m0.blk k → Refers m0.blk v k → Refers m.blk v k := by
     intro v k hk hr
     rcases hr with h | ⟨bl, hbl, h⟩
     · exact Or.inl h
-    · exact Or.inr ⟨bl, hb k bl hbl hk, h⟩
+    · obtain ⟨bl', h1, h2⟩ := hb k bl hbl hk
+      exact Or.inr ⟨bl', h1, by rw [h2.rd]; exact h⟩
   induction h with
   | root hv hr =>
     obtain ⟨y, o, hy, hyx, h0⟩ := hv
     exact .root ⟨y, o, by rw [hst y hy hyx]; exact h0⟩ (hrefers (.root ⟨y, o, hy, hyx, h0⟩ hr) hr)
   | pay hr' hk hr ih =>
-    exact .pay ih (hb _ _ hk hr') (hrefers (.pay hr' hk hr) hr)
+    obtain ⟨bl', h1, h2⟩ := hb _ _ hk hr'
+    exact .pay ih h1 (by rw [h2.rd]; exact hrefers (.pay hr' hk hr) hr)
 
 /-- The sweep keeps what a `recover` frame returns to. -/
 theorem CatchOK.sweepR {R : Val → Prop} {m : Mem} (hR : ∀ v, m.vals v → R v) :
@@ -436,8 +440,10 @@ theorem CatchOK.sweepR {R : Val → Prop} {m : Mem} (hR : ∀ v, m.vals v → R 
   | .frozen _ k, h => CatchOK.sweepR hR (s := k) h
   | .catchR x m0 k, h => by
     obtain ⟨h1, h2, h3, h4, h5⟩ := h
-    exact ⟨h1, h2, h3, fun k' bl hk hr => Mem.sweepR_blk.mpr ⟨h4 k' bl hk hr,
-      (Reached.catch h1 h4 hr).mono hR (BlkLe.refl _)⟩, CatchOK.sweepR hR (s := k) h5⟩
+    exact ⟨h1, h2, h3, fun k' bl hk hr => by
+        obtain ⟨bl', hk', hkp⟩ := h4 k' bl hk hr
+        exact ⟨bl', Mem.sweepR_blk.mpr ⟨hk', (Reached.catch h1 h4 hr).mono hR (BlkLe.refl _)⟩, hkp⟩,
+      CatchOK.sweepR hR (s := k) h5⟩
   | .skip, _ => trivial
   | .letv .., _ => trivial
   | .letcall .., _ => trivial
