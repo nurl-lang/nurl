@@ -165,8 +165,8 @@ Inside A2 (nurlc bugs):
   callee's summary carries a drop through an element of its parameter
   however the element was reached. Also a closure that changes elements,
   called where nurlc reads it by its interface only: #433, #435, #436
-  and #449. Its code is no `ThruFn` of an interface whose
-  plain parameters are unchanged (`Implements`).
+  and #449. Its code is no `ThruFn` of an interface whose plain
+  parameters are unchanged (`Implements`).
 - A view a value comes to hold, not recorded where it goes: #338, #341,
   #346, #348, #362, #367, #368, #369, #370, #377, #380, #381, #383, #390,
   #393, #422, #442 and #448. A2 records it in `Ty.holdsView`,
