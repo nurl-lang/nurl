@@ -398,6 +398,11 @@ inductive Rhs where
   | rwRead (a : Var)           -- `rw_read a`: a read guard of the lock `a` shares, a new view
                                -- of its payload (frozen while the view lives); `rguard_get g`
                                -- is `arcGet g` (the payload is the second field it lends)
+  | rwTryRead (a : Var)        -- `rw_try_read a`: `rw_read`'s guard as an owned `some` (`inr`),
+                               -- or `none` (`inl 0`) where `rw_read` would wait, with no wait
+  | rwTryWrite (a : Var)       -- `rw_try_write a`'s answer: `some` (`inr 0`) when a write's
+                               -- check-out (`withLock a`) would not wait, `none` (`inl 0`) where
+                               -- it would; the check-out itself is `withLock` (`Stmt.withTryWrite`)
   -- A3.5: a library handle whose copies are one state (a `PNCounter`, a
   -- `TcpConn`, a `Cell`) is a cell: a lock block whose shares are not Sync;
   -- the library's in-place change is a `withLock` on a cell share (`withCell`)

@@ -163,6 +163,10 @@ theorem EvalR.lift {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.
   | chanClose hy hk hnv => exact EvalR.chanClose hy hk hnv
   | arcGet hy hk => exact EvalR.arcGet hy hk
   | rwRead hy hk hfr => exact EvalR.rwRead hy hk hfr
+  | rwTryRead hy hk hfr => exact EvalR.rwTryRead hy hk hfr
+  | rwTryReadNone hy hk => exact EvalR.rwTryReadNone hy hk
+  | rwTryWrite hy hk hnv => exact EvalR.rwTryWrite hy hk hnv
+  | rwTryWriteNone hy hw => exact EvalR.rwTryWriteNone hy hw
   | glob hg hf => exact EvalR.glob hg hf
   | lockTake hy hk hnv => exact EvalR.lockTake hy hk hnv
   | lockRestore hy h1 hk hck => exact EvalR.lockRestore (m := liftMem a2 m) hy (TakeVal.lift h1 a2) hk hck

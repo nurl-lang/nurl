@@ -206,6 +206,10 @@ theorem EvalR.restrict {m : Mem} {r : Rhs} {res : RRes} (h : EvalR m r res) {a2 
   | chanClose hy hk hnv => exact ⟨_, .chanClose hy hk hnv, rfl, rfl, rfl⟩
   | arcGet hy hk => exact ⟨_, .arcGet hy hk, rfl, rfl, rfl⟩
   | rwRead hy hk hfr => exact ⟨_, .rwRead hy hk hfr, rfl, rfl, rfl⟩
+  | rwTryRead hy hk hfr => exact ⟨_, .rwTryRead hy hk hfr, rfl, rfl, rfl⟩
+  | rwTryReadNone hy hk => exact ⟨_, .rwTryReadNone hy hk, rfl, rfl, rfl⟩
+  | rwTryWrite hy hk hnv => exact ⟨_, .rwTryWrite hy hk hnv, rfl, rfl, rfl⟩
+  | rwTryWriteNone hy hw => exact ⟨_, .rwTryWriteNone hy hw, rfl, rfl, rfl⟩
   | glob hg hf => exact ⟨_, .glob hg hf, rfl, rfl, rfl⟩
   | globP hg => exact ⟨_, .globP hg, trivial⟩
   -- A3.2's second cut: a take and a restore check no address

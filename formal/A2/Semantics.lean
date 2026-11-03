@@ -612,6 +612,32 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
         (.ok (.arc m.nid (.pair (.lk k) p)) true
           { m with nid := m.nid + 1,
                    blk := upd m.blk m.nid (some ⟨.prod (.lk t) t, .view, some (.pair (.lk k) p)⟩) })
+  /-- A3.3: `rw_try_read a`: as `rw_read`, a new view of the block's payload
+      and its share, the read guard, here handed back as an owned `some`
+      (`inr`) ... -/
+  | rwTryRead {a : Var} {o : Bool} {k : Nat} {t : Ty} {p : Val} :
+      m.st a = some ⟨o, some (.lk k)⟩ → m.blk k = some ⟨t, .lock, some p⟩ → m.blk m.nid = none →
+      EvalR m (.rwTryRead a)
+        (.ok (.inr (.arc m.nid (.pair (.lk k) p))) true
+          { m with nid := m.nid + 1,
+                   blk := upd m.blk m.nid (some ⟨.prod (.lk t) t, .view, some (.pair (.lk k) p)⟩) })
+  /-- ... and `none` (`inl 0`), the store as it was, where `rw_read` waits (a
+      writer has the payload checked out): `pthread_rwlock_tryrdlock`'s
+      `EBUSY`, no wait. -/
+  | rwTryReadNone {a : Var} {o : Bool} {k : Nat} {t : Ty} :
+      m.st a = some ⟨o, some (.lk k)⟩ → m.blk k = some ⟨t, .lock, none⟩ →
+      EvalR m (.rwTryRead a) (.ok (.inl (.int 0)) true m)
+  /-- A3.3: `rw_try_write a`'s answer, the store as it was: `some` (`inr 0`)
+      when a write's check-out of the block would not wait (its payload is in
+      and no view of it lives) ... -/
+  | rwTryWrite {a : Var} {o : Bool} {k : Nat} {t : Ty} {p : Val} :
+      m.st a = some ⟨o, some (.lk k)⟩ → m.blk k = some ⟨t, .lock, some p⟩ → ¬ HasView m.blk k →
+      EvalR m (.rwTryWrite a) (.ok (.inr (.int 0)) true m)
+  /-- ... and `none` (`inl 0`) where it would wait (the payload out, or a
+      reader's view living): `pthread_rwlock_trywrlock`'s `EBUSY`, no wait. -/
+  | rwTryWriteNone {a : Var} {o : Bool} {k : Nat} :
+      m.st a = some ⟨o, some (.lk k)⟩ → ((∃ t, m.blk k = some ⟨t, .lock, none⟩) ∨ HasView m.blk k) →
+      EvalR m (.rwTryWrite a) (.ok (.inl (.int 0)) true m)
   /-- A3.6: a read of the module global `g`: a new share of its block, as
       `lockClone` / `arcClone` make one from a binding's.  The store holds the
       global's share (`Mem.gl`), which no step writes. -/
@@ -696,6 +722,8 @@ def Rhs.rename (ρ : Var → Var) : Rhs → Rhs
   | .chanRecv w a => .chanRecv w (ρ a)
   | .chanClose a => .chanClose (ρ a)
   | .rwRead a => .rwRead (ρ a)
+  | .rwTryRead a => .rwTryRead (ρ a)
+  | .rwTryWrite a => .rwTryWrite (ρ a)
   | .cellNew t y => .cellNew t (ρ y)
   | .cellClone a => .cellClone (ρ a)
   | .glob g t => .glob g t

@@ -282,6 +282,25 @@ theorem EvalR.codes {P : Prog} {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (he :
     cases hc with
     | fst => exact pkgOK_leaf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h)
     | snd => exact hp
+  | rwTryRead _ hk _ =>
+    -- A3.3: `rw_read`'s, the guard as `some`
+    have hp := (hB _ _ hk).1
+    refine ⟨pkgOK_of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_),
+      h.withBlk rfl (h.blk.upd (blkCodes_view ?_))⟩
+    · cases hc with
+      | inr => exact pkgOK_leaf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h)
+    refine pkgOK_of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
+    cases hc with
+    | fst => exact pkgOK_leaf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h)
+    | snd => exact hp
+  | rwTryReadNone _ _ | rwTryWriteNone _ _ =>
+    refine ⟨pkgOK_of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_), h⟩
+    cases hc with
+    | inl => exact pkgOK_int P _
+  | rwTryWrite _ _ _ =>
+    refine ⟨pkgOK_of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_), h⟩
+    cases hc with
+    | inr => exact pkgOK_int P _
   | atomic _ _ _ _ =>
     exact ⟨pkgOK_int P _, h.withBlk rfl (h.blk.upd (blkCodes_lock fun _ e => by cases e; exact pkgOK_int P _))⟩
   | @chanSend _ _ _ k _ u c d es _ _ _ h1 hk _ _ _ =>

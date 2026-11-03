@@ -1381,6 +1381,14 @@ theorem acquire_pres {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {k : N
       pkgs := hwv.pkgsOK_noView hvf
       shares := fun _ => hshv.grow hb }
 
+/-- A3.3: a read guard's type, `arc (prod (lk t) t)`, is an A2 type that holds
+    no view when its lock's is one. -/
+theorem guardTy_ok {t : Ty} (h : (Ty.lk t).ok = true) :
+    (Ty.arc (.prod (.lk t) t)).ok = true ∧ (Ty.arc (.prod (.lk t) t)).holdsView = false := by
+  simp only [Ty.ok, Ty.holdsView, Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true,
+    Bool.or_eq_false_iff] at h ⊢
+  exact ⟨⟨⟨h, h.1.1⟩, h.1.2, h.1.2⟩, h.1.2, h.1.2⟩
+
 theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} {v : Val} {o : Bool}
     (hi : MInv m Γ) (hanch : RootbAnch Γ F)
     (hr : RhsT Γ F r E Γ1) (he : EvalR m r (.ok v o m1)) :
@@ -1601,6 +1609,36 @@ theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry
       obtain ⟨_, hk'⟩ := hi.lk_val ha hl hty hv
       rw [hk] at hk'; cases hk'
       exact rhs_rwRead hi hk hfr
+  | @rwTryRead a E t ha hl hty =>
+    have hok : (Ty.lk t).ok = true := by rw [← hty]; exact hi.tyok ha
+    obtain ⟨hgok, hgvf⟩ := guardTy_ok hok
+    cases he with
+    | rwTryRead hv hk hfr =>
+      -- A3.3: `rw_read`'s view and guard, the guard wrapped as `some`
+      obtain ⟨_, hk'⟩ := hi.lk_val ha hl hty hv
+      rw [hk] at hk'; cases hk'
+      obtain ⟨post, out⟩ := rhs_rwRead (F := F) hi hk hfr
+      obtain ⟨_, hwv, _, _, _, _, _, _⟩ := out.valOwn rfl
+      refine ⟨post, out_ownNoView (show (Ty.int.ok && _) = true by rw [hgok]; rfl)
+        (show (Ty.int.holdsView || _) = false by rw [hgvf]; rfl)
+        (fun u k' q ha => by cases ha with | inr ha => exact out.shares rfl u k' q ha)
+        rfl (.inr hwv) (by simp [Val.ids]) (by simp [Val.ids]) (by simp [Val.ids]) (by simp [Val.ids])⟩
+    | rwTryReadNone _ _ =>
+      exact ⟨RhsPost.same hi, out_ownNoView (show (Ty.int.ok && _) = true by rw [hgok]; rfl)
+        (show (Ty.int.holdsView || _) = false by rw [hgvf]; rfl)
+        (fun u k' p ha => by cases ha with | inl ha => cases ha) rfl (.inl .int) (by simp) (by simp)
+        (by simp) (by simp)⟩
+  | rwTryWrite _ _ _ =>
+    -- A3.3: the answer, `some 0` or `none`, the store as it was
+    cases he with
+    | rwTryWrite _ _ _ =>
+      exact ⟨RhsPost.same hi, out_ownNoView rfl rfl
+        (fun u k' p ha => by cases ha with | inr ha => cases ha) rfl (.inr .int) (by simp) (by simp)
+        (by simp) (by simp)⟩
+    | rwTryWriteNone _ _ =>
+      exact ⟨RhsPost.same hi, out_ownNoView rfl rfl
+        (fun u k' p ha => by cases ha with | inl ha => cases ha) rfl (.inl .int) (by simp) (by simp)
+        (by simp) (by simp)⟩
   | atomic _ _ _ _ _ =>
     cases he with
     | atomic _ hk _ _ hnv => exact atomic_pres hi hk hnv
@@ -2638,6 +2676,7 @@ theorem EvalR.blk {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.o
   | chanRecv _ hk _ _ => exact BlkLe.setLock hk _
   | chanClose _ hk => exact BlkLe.setLock hk _
   | rwRead _ _ hfr => exact BlkLe.fresh hfr _
+  | rwTryRead _ _ hfr => exact BlkLe.fresh hfr _
   | lockTake _ hk _ => exact BlkLe.setLock hk _
   | lockRestore _ h1 hk => exact (BlkLe.of_eq (TakeVal.blk h1)).trans (BlkLe.setLock hk _)
   | _ => exact BlkLe.refl _
@@ -2755,6 +2794,7 @@ theorem EvalR.leafKeep {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m 
   | lockNew h1 hfr => exact .inl (fresh _ (TakeVal.blk h1) hfr)
   | cellNew h1 hfr => exact .inl (fresh _ (TakeVal.blk h1) hfr)
   | rwRead _ _ hfr => exact .inl (fresh (m1 := m) _ rfl hfr)
+  | rwTryRead _ _ hfr => exact .inl (fresh (m1 := m) _ rfl hfr)
   | @atomic op a e1 e2 o k0 n n1 n2 _ hk0 _ _ _ =>
     by_cases he : k = k0
     · subst he; rw [hk0] at hk; cases hk; exact absurd hs (Sub.leaf_int hw)

@@ -275,6 +275,12 @@ theorem covers_evalR {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (hc : Covers m)
     · exact Or.inl (Or.inl h)
     · have hne : k' ≠ m.nid := fun e => by rw [e, hfr] at hk'; cases hk'
       exact Or.inl (Or.inr ⟨k', bl, by simp [upd, hne, hk'], hik⟩)
+  | rwTryRead _ _ hfr =>
+    rcases hc i hi with h | ⟨k', bl, hk', hik⟩
+    · exact Or.inl (Or.inl h)
+    · have hne : k' ≠ m.nid := fun e => by rw [e, hfr] at hk'; cases hk'
+      exact Or.inl (Or.inr ⟨k', bl, by simp [upd, hne, hk'], hik⟩)
+  | rwTryReadNone _ _ | rwTryWrite _ _ _ | rwTryWriteNone _ _ => exact Or.inl (hc i hi)
   | @atomic _ _ _ _ _ k n _ _ _ hk _ _ =>
     rcases hc i hi with h | ⟨k', bl, hk', hik⟩
     · exact Or.inl (Or.inl h)
