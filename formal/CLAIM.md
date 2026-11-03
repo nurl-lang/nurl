@@ -469,7 +469,7 @@ Inside A2 (nurlc bugs):
   callee's summary carries a drop through an element of its parameter
   however the element was reached.
 - A view a value comes to hold, not recorded where it goes: #338, #341,
-  #346, #348, #362, #367, #368, #369, #370, #377, #380, #381, #383, #390,
+  #348, #362, #367, #368, #369, #370, #377, #380, #381, #383, #390,
   #393, #422 and #442. A2 records it in `Ty.holdsView`,
   `PushArg`, `pair`'s `Dy ++ Dz`, `callRes`'s `rholds` and `heldOfArgs`,
   `callPostAux`'s `outHeld` and `heldOfArgs`, and a package's interface

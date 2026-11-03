@@ -50686,6 +50686,17 @@ unsafe @ str_word_index s list s word → i {
     // judged as a store of that call's result, agora #200.)
     ? != 0 g_ncl_n { ( __nc_bind_store_park syms g_stmt_lex g_stmt_line name ( nurl_sym_get syms name ) `=` 0 `` ) } {}
     ( mem_record_kept_param syms name )
+    // (A local copy of a view parameter — `: s t p` — stored: the view is
+    // that parameter's, kept as the parameter stored by name is. Only a
+    // parameter that owns nothing: keeping it ties the caller's holder to
+    // the argument's source and moves nothing; agora #346.)
+    ? & < ( nurl_sym_word_index syms `__fn_param_names__` name ) 0 ! ( __type_needs_drop ( nurl_sym_get syms name ) syms ) {
+        : ~ s ps ( nurl_str_cat ( nurl_sym_get2 syms name `__paramsrc` ) `` )
+        ~ != 0 ( nurl_str_len ps ) {
+            : s pw ( str_first_word ps ) = ps ( str_skip_word ps )
+            ? & >= ( nurl_sym_word_index syms `__fn_param_names__` pw ) 0 ! ( __type_needs_drop ( nurl_sym_get syms pw ) syms ) { ( mem_record_kept_param syms pw ) } {}
+        }
+    } {}
     ? ! ( __self_param_keeps_nothing syms name ) {
         ? owned_store { ( __record_param_idx syms `__fn_inferred_store__` name ) }
         { ( __record_param_idx syms `__fn_inferred_handkeep__` name ) }
