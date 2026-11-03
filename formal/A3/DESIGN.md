@@ -1522,9 +1522,10 @@ carries the difference: a share of the block is a *cell share*,
   borrow of a handle that outlives the move it depends on is dead by
   typing, and memory cannot tell a dead borrow from a live one. (A3.5's
   third cut, below, makes a lent cell share the share, so a library
-  changes and copies a handle it was lent: the check then counts borrows
-  as their owner's thread's, and what that costs at a dead borrow is said
-  there.)
+  changes and copies a handle it was lent. The check still counts owners
+  only, and the invariant is still over owned slots: a live borrow is tied
+  to an owner of the same thread by typing, `MInv.cell_owned`, and a dead
+  one is ignored.)
 - *A cell's race is its own.* A cell is a lock block with no mutex. The
   model checks its state out as a lock's payload (A3.2's `withLock`), so in
   the model two threads would be serialized there, where the runtime's
@@ -3902,7 +3903,8 @@ gaps the earlier sections list as not typed:
 `CLAIM.md` / `README.md` are not updated here. `CLAIM.md`'s A3.3 note "The
 model lets a guard cross a spawn, which nurlc refuses" and its A3.5 "Not
 typed yet: a handle changed or copied through a borrow" and A3.2 "shares in
-a slice's elements" no longer hold.
+a slice's elements" no longer hold. A3.5's race (`CellOp`) asks, inside a
+check-out, an owner's share rather than any share (below).
 
 ### (A) A library handle used through a borrow
 
@@ -3942,61 +3944,92 @@ taken `inout`.
   copy, is still not typed: `PushArg` moves owners only. The copy is an
   explicit `cellClone`.
 
-**A2's proof.** A lent cell share is a lent lock share for every memory
-fact: each `ValOK.cell` case is `ValOK.lk`'s (`mono`, `onlyReaders`,
-`keep`, `grow`, `sweep`, `valOK_via`, `memDeps`, the lends `lend_valOK'`
-and `out_at`). `MInv.cell_val` and `MInv.cell_slot` give the share and its
-block through any live binding (an owner's `SharesOK`, a borrow's
-`ValOK.cell`), and `out_cellClone` and `MInv.lockOf_val` read them.
-
-**Confinement** (A3's `CellInv`). Its statement does not change: it counts
-every slot, so a borrowed share is counted as the owner's thread's.
-- *A borrow never leaves its thread.* A spawn moves owners (`MoveArgs`) of
-  types that hold no view (`SpawnOK`); a value going into a lock block is an
-  owner's tree (`PushArg`), checked. A borrowed slot is in the store of the
-  thread whose owner it was lent from.
-- *What a step lends is what the thread held* (`Step.cellKeep`). A lent
-  value holds the cell shares of what it was lent from (`sub_cell_lendOf`):
-  a slot of the thread's (a parameter's argument, a field, an element of an
-  owned `Vec`, a package's environment), or a block's payload that holders
-  read. No such payload holds one (`RdFree`): a lock block's is read by no
-  one (`Blk.rd`), and an `arc` block and a view are of a type that holds no
-  cell share. That is `MInv.blocks`' new fourth conjunct,
+**A2's proof.** A lent cell share is valid as a lent lock share is (its
+block is a lock block of its type), and it also *lands*, as a lent `Vec`
+does (`HrefAt`):
+- `ValOK.cell` asks `∃ dep ∈ P, CellLanded m dep k`: the share is where the
+  node its dependency's root reaches puts it (`RootNode`, `Lands`), never in
+  a payload. No payload its holders read holds one (`MInv.noCellPay`): a
+  lock block's is read by no one, an `arc` block and a view are of a type
+  that holds none. That is `MInv.blocks`' new fourth conjunct,
   `bl.kind = .lock ∨ bl.ty.hasCell = false`, which `RhsT.arcNew` and
   `RhsT.rwRead` give (the Sync question they ask), and `BlockOK` carries to
-  the other threads. `CInv.rdFree` reads it off the stepping thread's facts.
-- `CellInv.thread_of` takes `RdFree` of the thread's view; `spawn_of` and
-  `cellRaceFree` are unchanged.
+  the other threads.
+- `RootNode` gains a fifth case, a cell share at the top of a borrowed slot's
+  value (A3.1's fourth is an `arc` share there): a copy of a library's `in`
+  handle, or a field read out of a borrowed struct, lands on it.
+- `HKeep` gains a third component, so every A2 step that keeps a borrow's
+  dependency keeps its cell landing: `RootKeep.hkeep`, a root that grows or
+  shrinks in place (`Evolve.grow_hkeep`, `self_hkeep`, `perm_hkeep`), a rewrite
+  through a borrow (`deep_self_hkeep`, `Repl.top_cell`), a borrowed
+  parameter's end (`reroot_cellLanded`), the sweep, the frame and the lifts.
+  The lends give it (`lend_valOK'`, `out_at`, `out_sat`, the copy of a
+  borrowed root, `valOK_via`, a call's `in` argument, a package's lent
+  environment).
+- **The lemma** (`MInv.cell_owned`): a live binding whose slot holds a cell
+  share has an owner of that cell in the store. Back along its dependencies
+  (`valOK_cell_sub`, `MInv.cell_step`): to an owned tree, or to a node found
+  in one, or to a borrowed parameter holding the share at its top, whose own
+  dependencies are earlier bindings (`rootbLt`), by induction
+  (`MInv.rootb_cell`). This is "a borrow depends on its owner, and a move or
+  a drop of the owner kills it", as a statement about memory.
+- `MInv.cell_val` and `MInv.cell_slot` give the share and its block through
+  any live binding, and `out_cellClone` and `MInv.lockOf_val` read them.
 
-**The crossing check and the runtime's count.** The runtime counts owners:
-`mem_send_check` compares the places in the value with the block's
-reference count, which counts owners. The model's `SendCheck` asks that no
-slot left behind hold a share, owner or borrow.
-- Where the runtime's check fails, the model's does: an owner left behind is
-  a slot left behind.
-- Where the model's fails, a slot left behind holds a share of a crossing
-  cell. If it is an owner, the runtime's fails too. If it is a live borrow,
-  its owner is on the same thread and is left behind too: a borrow's root is
-  a binding of the thread, and an `in` parameter's is the caller's argument,
-  frozen for the call (so a library function that clones its `in` handle and
-  sends the copy fails both checks, `sendCheck_borrow_left`).
-- What is left is a *dead* borrow whose slot is still bound: a crossing made
-  in the scope of a borrow of the crossing handle (a field read out of the
-  struct that crosses, `: ~ f . s c`, then `spawn worker s` while `f` is in
-  scope). The move killed the borrow, so the program never uses it, but
-  memory cannot tell a dead borrow from a live one. There the model's check
-  panics where the runtime's passes, and such a program is covered up to
-  that crossing, as a re-entrant library is (A3.5).
-- *Why not count owners only.* `CellInv` would then hold only of live
-  borrows: a dead borrow left behind holds a share of a cell another thread
-  now owns. That needs an invariant tying each live lent cell share to an
-  owner of the same thread, kept through every A2 step, as `HrefAt` ties a
-  lent `Vec` to its node. A2 has it for nodes, not for shares. It is not
-  done.
-- **Phase D's statement**, unchanged in substance: the runtime's reference
-  count of a handle's block is the number of cell shares the model's owned
-  slots and lock payloads hold. Given it, the runtime's walk passes exactly
-  when the model's check does, but at a dead borrow still bound.
+**Two run-time premises**, which no typed program fails, keep what a step
+gives an owner an owner's (so confinement needs no typing of the step):
+- `TakeVal.bor`: a borrowed value handed on holds no cell share. A typed
+  program hands on a borrowed integer or slice only (`PushArg`,
+  `PushArg.bor_noCell`); a copy of a borrowed handle is a `cellClone`.
+- `EvalR.cellClone`: the copy is made where an owner of the cell is
+  (`OwnedCell`). For a live borrow, `MInv.cell_owned` gives it, so a typed
+  `cellClone` always steps (`evalR_exists`).
+
+**The crossing check counts owners**, as the runtime's does. `SendCheck`'s
+cell half asks that no *owned* slot left behind hold a share of a crossing
+cell.
+- An owner left behind fails it (`sendCheck_owner_left`), as the runtime's
+  count does: a library function that clones its `in` handle and sends the
+  copy leaves the caller's owner behind (the caller's argument, frozen for
+  the call).
+- A live borrow left behind has its owner left behind with it
+  (`MInv.cell_owned`, on the same thread), so it adds nothing to count.
+- A dead borrow left behind is not counted: `: PNCounter c …  : f c  …
+  spawn (sink c)`, where the move kills `f` but its slot is still bound,
+  passes the check (`sendCheck_dead_borrow_ok`), as it passes the runtime's.
+- *Why not every slot.* Counting borrows too keeps confinement over the
+  slots alone, with no typing, but then a dead borrow still bound makes the
+  model panic where the runtime goes on, a common pattern the first cut
+  covered. Counting owners needs the landing above, which ties every live
+  borrow to an owner of its thread; with it, the dead ones are simply not
+  counted.
+- **Phase D's statement**: the runtime's reference count of a handle's
+  block is the number of cell shares the model's owned slots and lock
+  payloads hold. Given it, the runtime's walk passes exactly when the
+  model's check does.
+
+**Confinement** (A3's `CellInv`) is over owners: owned slots
+(`CellAt`, `Thread.cellAt`) and lock payloads.
+- *A step keeps it with no typing* (`Step.cellKeep`). A value set in a
+  slot is counted only if it is an owner's (`CellKeep.setVal` reads the
+  right-hand side's own flag: a lend is a borrow); what an owner gains was
+  an owner's (`TakeVal.cell`, by `TakeVal.bor`'s premise) or a copy where an
+  owner is (`EvalR.cellClone`'s); a call's `in` parameter and a package's
+  lent environment are borrows (`BindParams.cellSt`, `CellAt.envMem`).
+- *A spawn keeps it* by the check: a cell the moved values hold a share of
+  keeps no owner in the spawner (`CellInv.spawn_of`).
+- *Owners and live borrows* (`CellInv.live_home`): two threads that each
+  hold a share of one cell, in an owned slot or in a borrowed slot live in
+  their typing context, are one thread (`cellAt_of_live`, from
+  `MInv.cell_owned`). Dead borrowed slots are ignored: no rule reads a dead
+  entry.
+- *No cell race* (`CellInv.cellRaceFree`) now reads the configuration's
+  typing (`CInv`). `CellOp`'s first case, a `withCell` through a borrowed
+  root, is typed at the redex (`Redex.typed`, `withLock_live`), so the root
+  is live and its owner is on the thread (`CellOp.cellAt`). `CellOp`'s second
+  case, a step inside a check-out, asks an owner's share: the check-out goes
+  through an owner, or through a borrowed parameter whose caller's argument
+  is one, on the same thread (argued, as A3.5 argued it of any share).
 
 **Faithful to the runtime.**
 - *The in-place change* through a borrowed parameter is A3.2's check-out,
@@ -4018,7 +4051,8 @@ slot left behind hold a share, owner or borrow.
 - h333, h356, h319: a field read out of a handle-holding struct is a borrow
   (`projE`), which now holds the share. A `withCell` through it is refused
   (`StmtT.withLock` asks a root), and the spawn that moves the struct kills
-  it; a copy of it (`cellClone`) is an owner the crossing check counts.
+  it, and passes the check, the borrow being dead; a copy of it (`cellClone`)
+  is an owner the crossing check counts.
 
 ### (B) Read guards are `% NotSend`
 
@@ -4098,9 +4132,10 @@ one block through a slice. It does not:
   (`Ty.ok (lk _)`, `RhsT.arcNew`), no global (`Ty.sync`). It and what it
   lends stay on the thread that took it;
 - what `sat` lends is what `vec_at` lends of the same `Vec`: an `arc` share
-  or a lock share, which are Sync, or a cell share, a borrow counted as its
-  owner's thread's (A): the node a slice views is in one of the thread's
-  owned trees, or in a frozen payload, which holds no cell share (`RdFree`).
+  or a lock share, which are Sync, or a cell share, a borrow whose owner is
+  on the thread (A, `MInv.cell_owned`): the node a slice views is in one of
+  the thread's owned trees, or in a frozen payload, which holds no cell share
+  (`MInv.noCellPay`).
   Two threads that view one `Arc`'s payload, each through its own slice,
   read Sync shares only (`RhsT.arcNew`'s `hasCell`).
 
@@ -4119,10 +4154,9 @@ needed. No rule asks for it now; it stays as the bottom of the order.
 ### Not proven here
 
 - *Phase D*, as above: the runtime's count of a handle's block is the cell
-  shares the model's owned slots and lock payloads hold. The model's check
-  fails also at a dead borrow still bound, where the runtime's passes.
-- A live lent cell share tied to an owner of the same thread, as an
-  invariant (above). It would let the check count owners only.
+  shares the model's owned slots and lock payloads hold.
+- That a thread inside a check-out of a cell holds an owner's share of it,
+  as a lemma (`CellOp`'s second case; A3.5 argued it of any share).
 - A store of a borrowed handle into an owner (an implicit copy), and
   `% Sync` / `% NotSend` assertions on a program's own types (A3.5b's and
   A3.5c's rest: a negative marker only removes typings).
