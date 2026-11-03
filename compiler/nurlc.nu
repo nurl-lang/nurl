@@ -21462,7 +21462,13 @@ unsafe @ gen_match i lex i syms i cg → s {
             // runs no bck_block_enter, so it is counted here, or its `=`
             // looks straight-line to mem_note_assign_lend (formal's #1610).
             = g_cg_blk_depth + g_cg_blk_depth 1
+            // (A field arm records its member path, as a `?` arm does: read
+            // by __sx_froot below, a path left by another read — this
+            // function's or another's — named the wrong field.)
+            : i arm_mp0 g_member_path_on
+            = g_member_path_on ? & & m_val != 0 __sx_mme == arm_tt0 TT_DOT 1 g_member_path_on
             : ~ s arm_result ( gen_stmt lex syms cg )
+            = g_member_path_on arm_mp0
             ? > g_cg_blk_depth 0 { = g_cg_blk_depth - g_cg_blk_depth 1 } {}
             : s arm_froot ( __arm_froot syms arm_tt0 )
             : i arm_fl ( __arm_flends syms arm_tt0 arm_froot g_join_flends )
@@ -21471,7 +21477,10 @@ unsafe @ gen_match i lex i syms i cg → s {
                 // (A payload handed back as is is part of the matched value.)
                 : s __atv ( nurl_sym_get syms `__tail_first_val__` )
                 : b __atp & & == g_did_ret 0 ( is_ident_tok ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) ) ) & != 0 ( nurl_str_len __atv ) ( str_contains_word ( nurl_str_cat4 pv0 ` ` pv1 ( nurl_str_cat3 ` ` pv2 ( nurl_str_cat ` ` pv_over ) ) ) __atv )
-                : s arm_sx ? != 0 g_did_ret ( nurl_str_cat `-` `` ) ? __atp ( nurl_str_cat __m_scrut_sx `` ) ? == g_sx_at + arm_sxn0 1 ( nurl_str_cat g_sx `` ) ( nurl_str_cat `*` `` )
+                // (Any other arm by its operand, as a `?` arm is: a bare
+                // binding by its name — what it holds, the views of it
+                // included — and a literal by none; agora #416.)
+                : s arm_sx ? != 0 g_did_ret ( nurl_str_cat `-` `` ) ? __atp ( nurl_str_cat __m_scrut_sx `` ) ( __sx_operand syms arm_tt0 arm_v0 ( nurl_get_last_type ) ( __sx_froot syms arm_tt0 ( nurl_get_last_type ) ) arm_sxn0 )
                 = m_sx ? m_sx_any ( __sx_join m_sx arm_sx ) ( nurl_str_cat arm_sx `` )
                 = m_sx_any T
                 ( __sx_publish __sx_mme m_sx )

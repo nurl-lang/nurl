@@ -138,11 +138,10 @@ Inside A2 (nurlc bugs):
   is no `ThruFn` (`Implements`).
 - A view a value comes to hold, not recorded where it goes: #338, #341,
   #346, #348, #362, #367, #368, #369, #370, #377, #380, #381, #383, #390,
-  #393, #394 and #416. A2 records it in `Ty.holdsView`,
+  #393 and #394. A2 records it in `Ty.holdsView`,
   `PushArg`, `pair`'s `Dy ++ Dz`, `callRes`'s `rholds` and `heldOfArgs`,
   `callPostAux`'s `outHeld` and `heldOfArgs`, and a package's interface
-  summary; past a join, `ite` and `while` keep what either path holds
-  (#416).
+  summary; past a join, `ite` and `while` keep what either path holds.
 - A move or take nurlc does not see: #280, #357 and #372 (`unpair`,
   `takel`, a `sink` takes an owner only, `lendable`).
 - A borrow ended by a binding's end, replacement or capture, missed:
