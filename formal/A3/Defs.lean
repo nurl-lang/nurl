@@ -121,6 +121,17 @@ def spawnSt (fn : Fn) (vs : List Val) : Var → Option Slot := fun v =>
 def SpawnRedex (spawn : Nat → Bool) (s : Stmt) : Prop :=
   ∃ K x f args k, Redex s K (.letcall x f args k) ∧ spawn f = true
 
+/-- **A3.5, the crossing check** (`mem_send_check`, docs/MEMORY.md §6.5): a
+    library handle whose copies are one state (a cell) may cross only with
+    every other owner of that state.  For every cell a moved value holds a
+    share of, no slot the spawner keeps holds one.  A lent cell share is no
+    share (`lendOf`), so the slots that hold one are its owners: the check
+    is the runtime's count of the places in the moved values that hold each
+    cell's block against its owners.  (A cell share lies in no payload, by
+    typing, so what the values hold is what they reach.) -/
+def SendCheck (vs : List Val) (st' : Var → Option Slot) : Prop :=
+  ∀ k, (∃ v ∈ vs, Sub (.cell k) v) → ∀ y o w, st' y = some ⟨o, some w⟩ → ¬ Sub (.cell k) w
+
 /-- One step of the configuration. -/
 inductive TStep (P : Prog) (spawn : Nat → Bool) : Cfg → Cfg → Prop
   /-- A thread takes one of A2's steps, unless its next step is a spawn;
@@ -136,11 +147,20 @@ inductive TStep (P : Prog) (spawn : Nat → Bool) : Cfg → Cfg → Prop
   | spawn {C : Cfg} {i : Nat} {t : Thread} {K : Stmt → Stmt} {x f : Nat} {args : List Var}
       {k : Stmt} {fn : Fn} {vs : List Val} {st' : Var → Option Slot} :
       C.ths[i]? = some t → Redex t.s K (.letcall x f args k) → spawn f = true → P[f]? = some fn →
-      t.st x = none → MoveArgs t.st args vs st' →
+      t.st x = none → MoveArgs t.st args vs st' → SendCheck vs st' →
       TStep P spawn C
         { C with ths := C.ths.set i ⟨upd st' x (some ⟨false, some (.int 0)⟩), t.nv, K (.scope x k)⟩ ++
                         [⟨spawnSt fn vs, fn.nvars,
                           wrapParams fn.params 0 0 (.scope fn.params.length fn.body)⟩] }
+  /-- A3.5: a spawn whose crossing check fails panics in the spawner, as
+      `mem_send_check` calls `nurl_panic`: no thread is made and nothing
+      moves, and the spawner's next step is A2's panic, which unwinds its
+      scopes (or a `recover` frame catches it). -/
+  | spawnFail {C : Cfg} {i : Nat} {t : Thread} {K : Stmt → Stmt} {x f : Nat} {args : List Var}
+      {k : Stmt} {fn : Fn} {vs : List Val} {st' : Var → Option Slot} :
+      C.ths[i]? = some t → Redex t.s K (.letcall x f args k) → spawn f = true → P[f]? = some fn →
+      t.st x = none → MoveArgs t.st args vs st' → ¬ SendCheck vs st' →
+      TStep P spawn C { C with ths := C.ths.set i ⟨t.st, t.nv, K (.seq .panic (.letcall x f args k))⟩ }
 
 inductive Reach (P : Prog) (spawn : Nat → Bool) : Cfg → Cfg → Prop
   | refl {C : Cfg} : Reach P spawn C C
