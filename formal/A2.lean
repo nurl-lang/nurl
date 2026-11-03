@@ -18,6 +18,7 @@ import A2.StepFrame
 import A2.TypingFacts
 import A2.EditB
 import A2.EditBV
+import A2.Elem
 import A2.Preservation
 import A2.Progress
 import A2.Wf

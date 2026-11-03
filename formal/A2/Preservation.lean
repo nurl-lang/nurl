@@ -1,4 +1,4 @@
-import A2.EditBV
+import A2.Elem
 
 /-! A2 — preservation: a step of a well-typed configuration leads to a
 well-typed configuration. -/
