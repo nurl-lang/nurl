@@ -20,7 +20,61 @@ every memory root of `x`'s path (`killThru`). The proof here follows that:
   (`editB_hrefAt`, `MInv.reset`; `MInv.editB_rest` puts these together);
 * A3.1: the blocks are as they were, and the new node's shares are the old
   node's (`MInv.thru_owner`) or the value's moved in (`Pushed.sh`), so the
-  owner's rewritten tree keeps its shares naming blocks (`SharesIn.repl`). -/
+  owner's rewritten tree keeps its shares naming blocks (`SharesIn.repl`).
+
+## View-holding elements (`StmtT.editBV`, `EditBV.lean`)
+
+`editB` takes elements that hold no views. Its sibling `StmtT.editBV` takes
+elements that hold views but no closure (`t.holdsView`, `t.hasFn = false`):
+a slice, a struct or enum holding one, a `Vec` of them. A push or an element
+set through `x` may then store a view, valid through what the stored value
+depends on in memory (`memDeps D`, as `PushArg` takes it); a truncation
+stores nothing and is typed too.
+
+* What the rule does. Each memory root of `x`'s path holds `memDeps D` too,
+  if its type holds views (`holdThru`, by `ownHeld`), and so does `x`. Each
+  root ends what its effect ends with views among its elements if its type
+  holds them (`killThruV`; `killThru`'s kills plus the borrows of the root's
+  whole handle, as `StmtT.push`'s `kill .realloc t.holdsView`). Beyond
+  `ThruOK`, `ThruV` asks of each root that this effect ends no view a
+  destructor reads (`DtorSafe` with views), that `letd` did not make it (a
+  destructor binding gains no view, as `push` asks), and that it is no root
+  of what is stored (no tree views itself, `SelfFree`).
+* Why the roots get the deps. The invariant asks every live owner's tree to
+  have each of its views valid through what the owner holds (`SlotOK`'s
+  `ViewsOK _ E.ty T E.held`; `ArmOK` for a `letd` binding), and a borrow's
+  node through what the borrow holds (`HrefAt`). The changed node lies in
+  the tree of one memory root of the path (`MInv.thru_owner`), which the
+  typing cannot tell apart, so every root holds the view's source, as
+  nurlc's `__bck_store_owners` does (`rules/t292.md`, `rules/t414.md`). A
+  root that holds no views cannot own the node (`WFv.node_holdsView`), so
+  `ownHeld` leaves it alone, and a binding held by name, which holds no
+  views, stays as it was. The borrows of a root's whole handle do not hold
+  the new view, so they end; the borrow `x` holds it and stays live.
+* What is still not typed. A closure stored through a borrow (`t.hasFn`: a
+  package enclosing the node would capture by name what the closure does,
+  `PkgsOK`); a pop or remove through a borrow, an element taken out as an
+  owned result (`vec_pop` is an `Rhs` on the owner's own slot; it needs a
+  step and a rule of its own); a change through a borrow inside a closure's
+  or a destructor's code (`Implements`, `DtorOK`) or in a callee handed
+  views (`StmtT.ren`'s `S.R = []`), as for `editB`; and a root that is a
+  `letd` binding, a borrowed parameter or reached through a share.
+* Probes. The five probes mapped to `StmtT.editB` (`field_arg_*_then_set`,
+  `element_or_whole_copy_by_arm_after_clear`,
+  `field_viewer_of_an_element_after_clear_through_a_borrow`) store no view:
+  `editB` types them as before. The agora #292 / #414 probes mapped to
+  `PushArg | A1` whose container is a borrow (an element borrow, a field
+  viewer, a field viewer of an element, an identity copy, a binding of a
+  join of names, a loop's element borrow) are the shape `editBV` types: the
+  owner holds the view, so a read through it after the source ends is
+  rejected; their `// map:` lines (outside `formal/`) can now name it.
+  Open holes #395 (a store through a borrow #292 does not follow to its
+  owner) and #454 (a callee storing a view through an element of its
+  parameter) are therefore nurlc bugs where A2 types the shape: the
+  container bound to a name first (an element borrow, an option payload
+  cursor), or a callee's parameter that allows the change (`inout`, whose
+  summary then holds the view, `FnOK`'s `outHolds`). Their closure forms
+  (inside a closure, `vec_each`) stay outside A2. -/
 
 namespace A2
 
