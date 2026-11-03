@@ -29,3 +29,13 @@
   over leaked. The binding's own per-call answer is now handed on, when it
   is returned bare, rebound, as a value block's tail or wrapped in an
   option.
+- **A join over a binding a call may have handed a value of its own keeps
+  that value alive** (Agora #459; probes
+  block_tail_join_over_a_call_bound_binding,
+  bound_block_join_over_a_call_bound_binding and
+  block_arm_join_over_a_call_bound_binding). `^ { : String x ( pick a k )
+  ? c x a }` handed back x's value and then released it, as x was dropped
+  on the way out (heap-use-after-free). The same happened with a binding
+  of such a join (`: String r { ? c x a } ^ r`) and with block arms
+  (`? c { x } { a }`). On the runs x owns its value, the join now copies
+  it, or takes it from x.
