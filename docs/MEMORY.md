@@ -2063,8 +2063,14 @@ instead of dropping it after the call, and the spawn adopts it in place
 (agora #142).
 
 **A closure stored into a struct, a slice, a container or an option owns
-what it captured.** A closure made in a function views the `String`s, `Vec`s and handles it
-captures: the function still owns them and drops them at its end. Stored
+what it captured.** A closure made in a function views the `String`s,
+`Vec`s and handles it captures, and the options and results that own one:
+the function still owns them and drops them at its end. A closure the
+function returns — as it is, or inside a struct literal or another
+closure it returns — owns them instead: a `String`, `Vec` or handle
+moves into its environment, an option or a result is copied in (the
+binding keeps its own), and the environment drops and copies them
+(agora #458). Stored
 into a struct field (a literal's or by `=`, through a pointer too), a
 slice of closures, an option or a container's element, the closure may
 outlive that function, so the stored
