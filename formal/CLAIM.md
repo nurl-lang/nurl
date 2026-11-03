@@ -333,10 +333,18 @@ the LLVM / C11 memory model rather than redefining it.
       assertions; `locked_take` through a cell share; a failed give-back
       frees the value where the runtime keeps it in the held lock (no one
       reaches it either way);
-      no subsumption between closure classes; a closure that changes a
-      capture it moved in. Phase C must give each closure the class
-      nurlc's follow-the-value check proved, and `any` where it cannot
-      follow the closure's origin.
+      a closure that changes a capture it moved in (an accumulator: A2's
+      call lends the code a copy of the environment, so the change needs
+      the environment handed over for the call and back, a step A2 does
+      not have yet; an `Atomic` it moved in is typed, `accum_sync`);
+      subsumption inside a container's element type (a `Vec` of `sync`
+      closures is no `Vec` of `any` ones). Classes are ordered bare ≤
+      sync ≤ send ≤ any, and a closure moved or copied up the order is
+      typed (`RhsT.moveUp`, `RhsT.copyUp`, `Cross.Fits.mono`), as is a
+      call through an interface declared at a higher class
+      (`StmtT.callcUp`, `StmtT.arcCallUp`). Phase C must give each closure
+      the class nurlc's follow-the-value check proved, and `any` where it
+      cannot follow the closure's origin.
     - **Trait objects (A3.5c).** A trait object is a package as a closure
       is (`Rhs.pack`), so A3.5b's class covers it: its class is the
       trait's bound (`TraitBound`: none, `: Send`, `: Send Sync` give
@@ -349,8 +357,14 @@ the LLVM / C11 memory model rather than redefining it.
       library handle (`dyn_cell_notSync`), and an `Arc` or a global's
       `Arc` takes only `: Send Sync` objects, and a lock or a channel a
       `: Send` one under the crossing check (A3.5's second cut). Not
-      typed: an `inout` receiver, supertraits and `[T: Send]` bounds; an impl is checked
-      where it is boxed, not where it is declared. Phase C must lower each
+      typed: an `inout` receiver (the same hand-over step as an
+      accumulator; no call hands its receiver `inout`, `callc_not_inout`,
+      and what an `Arc` or a read guard lends is never an `inout`
+      argument, h364's rule), and an upcast to a supertrait's objects; an
+      impl is checked where it is boxed, not where it is declared. A bound
+      is answered by the class (`TraitBound.Holds`, `holds_fn`; a
+      supertrait's bound is kept, `Holds.mono`), and A2 has no generics: a
+      `[T: Send]` bound is checked on each monomorphised instance. Phase C must lower each
       `%Trait` to `fn ms` at its bound's class. A library that re-enters its own state waits
       or panics in the model, where the runtime goes on: that is the
       library's code (phase B).
