@@ -47,6 +47,12 @@
   function that called a holder defined further down, then built a closure
   literal, was walked before that callee: a `dyn` method's result was
   taken to view nothing, and read after its receiver was released.
+- **A push through another handle on the same Rc ends what its payload
+  lends** (probe rc_payload_bound_then_sliced_while_another_handle_pushes).
+  A slice of an Rc's payload, taken through a binding of the payload, was
+  kept across a push through a clone of the Rc, which may move the
+  payload's buffer, and read freed memory. It now ends there, as it does
+  through the Rc itself.
 - **A view parameter is a view of what the caller passed, everywhere**
   (probes view_param_kept_in_a_string_global,
   view_param_captured_by_a_spawned_thread). A string global given a

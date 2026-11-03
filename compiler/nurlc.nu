@@ -36227,9 +36227,14 @@ unsafe @ bck_note_rc_arg s name s ty → v {
                     = why ( nurl_str_cat4 `'` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` wn ) ) `', which may be another handle on the same Rc value, was passed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) `', which may drop or replace what it holds` ) )
                     = eonly T
                 } {
-                    // …or move its buffer: the views of it end (agora #169).
+                    // …or move its buffer: the views of it end (agora #169),
+                    // and those reached through its payload — the part the
+                    // call changes, as a value lent from it is (agora #349):
+                    // `: ( Vec i ) p ( rc_get r )` then `( slice_from_vec p )`
+                    // points into the buffer the call moves.
                     ? ( nurl_sym_has_word g_fn_reallocs ( bck_field rec 5 ) ( bck_field rec 6 ) ) {
-                        = out ( bck_view_end out sid ( bck_field_int rec 3 ) ( nurl_str_cat4 `'` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` wn ) ) `', which may be another handle on the same Rc value, was passed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) `', which may move or free its buffer` ) ) )
+                        : s rcw ( nurl_str_cat4 `'` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` wn ) ) `', which may be another handle on the same Rc value, was passed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) `', which may move or free its buffer` ) )
+                        = out ( bck_view_end_ind ( bck_view_end out sid ( bck_field_int rec 3 ) rcw ) sid ( bck_field_int rec 3 ) rcw )
                     } {}
                 }
             } {}
