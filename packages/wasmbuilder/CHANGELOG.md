@@ -2,6 +2,17 @@
 
 All notable changes to this package are documented here.
 
+## [0.3.8] — 2026-11-04
+
+### Fixed
+
+- **A `simd v4` clone builds for wasm.** The WASI lowering replaces the
+  host CPU probe `nurl_cpu_x86_v4()` (NURL 0.80's x86-64-v4 dispatch,
+  Agora #227) with a constant, as it already did for `nurl_cpu_x86_v3()`:
+  a wasm module has no such import. This shipped in the tree without a
+  version bump, so nurl-mcp 0.14.2, which depends on wasmbuilder by path,
+  could not be published.
+
 ## [0.3.7] — 2026-10-20
 
 ### Changed
