@@ -14118,7 +14118,7 @@ unsafe @ __kw_trim s raw → s {
     ( nurl_print `(` ) ( nurl_print argstr ) ( nurl_print `)` ) ( emit_dbg_eol )
     ( nurl_sym_def syms `__last_call_guard__`
     ( mem_emit_fwd_own_guard syms cg fname fname res rlt ) )
-    ( mem_capture_hown syms cg fname rlt )
+    ( mem_capture_hown syms cg fname `` rlt )
     ( mem_raw_lendback syms cg fname raw_lends res rlt )
     = res ( mem_own_lendback syms cg fname res rlt lend_one lend_part lend_idx )
     ( mem_drop_arg_temps syms owned_temps )
@@ -17296,12 +17296,35 @@ unsafe @ gen_call i lex i syms i cg → s {
         ? & & & != 0 g_ncl_n summary_callee ( is_ident_tok bck_arg_tt ) ( __nc_held_ty at ) {
             ( __nc_bind_store_park syms lex ( nurl_lex_line lex ) bck_arg_val at call_name arg_idx fname )
         } {}
+        // …and a callee whose summaries are not final at this call — one
+        // defined below, a generic instance or a library function compiled
+        // later: whether it takes the argument over is a module-end fact
+        // (consume_flag, or the store flag below). A call's result that
+        // lends on some runs is copied on the runs it lends and the callee
+        // takes it; a value of its own goes as it is. Passed as is, a
+        // callee that took it released what its owner still drops — the
+        // same callee defined above was handed a copy (agora #459).
+        : b __apc & & & & & & & & summary_callee == arg_eff_tt TT_LPAREN == 0 ( nurl_sym_len g_fn_compiled call_name )
+        ! ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) != 0 ( nurl_str_len arg_lent ) ! ( seq arg_lent `0` ) ! ( seq arg_lent `false` )
+        != ( nurl_str_get at - ( nurl_str_len at ) 1 ) 42 ( __clone_supported at syms )
+        ? __apc {
+            : s __apk ( nurl_cg_reg cg )
+            ( emit_sink_flag_load ( consume_flag call_name fname arg_idx ) __apk )
+            : s __aps ( nurl_cg_reg cg )
+            ( emit_sink_flag_load ( nurl_str_cat `@.__nurl_store.` ( nurl_str_int ( store_flag call_name fname arg_idx ) ) ) __aps )
+            : s __apl ( mem_lent_reg cg arg_lent )
+            : s __apo ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print __apo ) ( nurl_print ` = or i1 ` ) ( nurl_print __apk ) ( nurl_print `, ` ) ( nurl_print __aps ) ( nurl_print `\n` )
+            : s __apw ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print __apw ) ( nurl_print ` = and i1 ` ) ( nurl_print __apo ) ( nurl_print `, ` ) ( nurl_print ? ( seq __apl `1` ) `true` __apl ) ( nurl_print `\n` )
+            = av ( mem_emit_cloneif cg at av __apw )
+        } {}
         // A borrowed String / Vec handed to a parameter its callee keeps
         // (vec_push's element): the callee gets a copy (docs/MEMORY.md
         // §7.6). A declared `sink` is an explicit release: left alone.
         // (Not a raw pointer: what it points at is not its to copy — a
         // generic `*A` over Vec elements asked for `clone_Vec__T*`.)
-        ? ? ! summary_callee F ? == 0 ( nurl_str_len arg_lent ) F & ! ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) != ( nurl_str_get at - ( nurl_str_len at ) 1 ) 42 {
+        ? & ! __apc ? ! summary_callee F ? == 0 ( nurl_str_len arg_lent ) F & ! ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) != ( nurl_str_get at - ( nurl_str_len at ) 1 ) 42 {
             = av ( mem_emit_cloneif_k cg at av ( nurl_str_cat `@.__nurl_store.` ( nurl_str_int ( store_flag call_name fname arg_idx ) ) ) arg_lent )
         } {}
         ? & & ( __is_autodrop_enum at syms ) ( is_ident_tok bck_arg_tt )
@@ -18294,7 +18317,7 @@ unsafe @ gen_call i lex i syms i cg → s {
                 ? == 0 ( nurl_str_len __dg ) {
                     ( nurl_sym_def syms `__last_call_guard__` ( mem_capture_return_guard cg __res __ret ) )
                 } { ( nurl_sym_def syms `__last_call_guard__` __dg ) }
-                ( mem_capture_hown syms cg call_name __ret )
+                ( mem_capture_hown syms cg call_name `` __ret )
                 ( mem_raw_lendback syms cg call_name raw_lends __res __ret )
                 = __res ( mem_own_lendback syms cg call_name __res __ret lendback_bits lendpart_bits lendback_idx )
                 ? ( __is_closure_ty __ret ) { ( mem_retclo_take syms cg __res __ret ) } {}
@@ -18395,7 +18418,7 @@ unsafe @ gen_call i lex i syms i cg → s {
             // returned closure or struct of owned fields is the caller's.
             ( nurl_sym_def syms `__last_call_guard__`
             ( mem_emit_fwd_own_guard syms cg impl_name impl_name res impl_ret ) )
-            ( mem_capture_hown syms cg impl_name impl_ret )
+            ( mem_capture_hown syms cg impl_name `` impl_ret )
             ( mem_raw_lendback syms cg impl_name raw_lends res impl_ret )
             = res ( mem_own_lendback syms cg impl_name res impl_ret lendback_bits lendpart_bits lendback_idx )
             ? ( __is_closure_ty impl_ret ) { ( mem_retclo_take syms cg res impl_ret ) } {}
@@ -18586,7 +18609,7 @@ unsafe @ gen_call i lex i syms i cg → s {
                 // evaluation can no longer clobber it.
                 ( nurl_sym_def syms `__last_call_guard__`
                 ( mem_emit_fwd_own_guard syms cg call_name fname res rlt ) )
-                ( mem_capture_hown syms cg call_name rlt )
+                ( mem_capture_hown syms cg call_name ? | __callee_shadowed ( seq call_name fname ) `` fname rlt )
                 ( mem_raw_lendback syms cg call_name raw_lends res rlt )
                 = res ( mem_own_lendback syms cg call_name res rlt lendback_bits lendpart_bits lendback_idx )
                 ( mem_note_vec_get syms cg call_name argstr )
@@ -25414,7 +25437,7 @@ unsafe @ mem_path_to_indices s path → s {
 // publishes the answer per call (`@.__nurl_retdyn`, mem_publish_hown);
 // any other answers with its module-end constant. The writer folds the
 // static case back to that constant.
-@ mem_capture_hown i syms i cg s cn s rlt → v {
+@ mem_capture_hown i syms i cg s cn s gen s rlt → v {
     ( nurl_sym_def syms `__last_call_own__` `` )
     ? ! ( __is_hown_ty rlt ) { ^ v } {}
     : ~ s c ( nurl_sym_get syms `__last_call_name__` )
@@ -25422,8 +25445,13 @@ unsafe @ mem_path_to_indices s path → s {
     ? != 0 ( nurl_sym_len syms `__last_call_forward__` ) {
         : s fw ( nurl_sym_get syms `__last_call_forward__` )
         = c ( str_first_word fw ) = gn ( str_first_word ( str_skip_word fw ) )
-    } {}
-    // A NURL function — or an instance of a generic one not compiled yet.
+    } {
+        // (An instance of generic `gen` compiled already answers per call
+        // too: a forwarder compiled after it read no answer and called a
+        // result lent on some runs its own, agora #459.)
+        ? & != 0 ( nurl_str_len gen ) != 0 ( nurl_sym_len2 syms gen `__garity` ) { = gn ( nurl_str_cat gen `` ) } {}
+    }
+    // A NURL function — or an instance of a generic one.
     ? & == 0 ( nurl_sym_len2 syms cn `__nurlfn` ) | == 0 ( nurl_str_len gn ) == 0 ( nurl_sym_len2 syms gn `__garity` ) { ^ v } {}
     ? == 0 ( nurl_str_len c ) { ^ v } {}
     ? == 0 ( nurl_str_len gn ) { = gn c } {}

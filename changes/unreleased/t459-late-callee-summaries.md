@@ -1,0 +1,22 @@
+### Fixed
+
+- **A lend handed to a callee compiled after its caller is copied where
+  the callee takes it over** (Agora #459; probes
+  option_lend_handed_to_a_generic_keeper,
+  option_lend_handed_to_a_keeper_defined_below,
+  result_lend_handed_to_a_library_keeper and three more).
+  `( unwrap_or [String] ( maybe o 0 ) d )`, with `unwrap_or` taking its
+  option over and `maybe` handing back `o` on that run, gave `o`'s own
+  value to the callee. The value was released under `o`, which read freed
+  memory. The same happened with stdlib's `res_unwrap_or` and with any
+  such callee defined below its caller. The call's result is now copied on
+  the runs it lends whenever the callee takes it over, decided from the
+  callee's final summary at the end of the module, as it already was for a
+  callee defined above.
+- **A generic forwarder compiled after its callee hands on the callee's
+  answer** (Agora #459; probes
+  lend_handed_back_through_a_generic_forwarder_compiled_after_its_callee
+  and its String form). `: T r ( g2 [T] a k f ) ^ r`, instantiated after
+  `g2 [?String]`, called `r` its own on every run and handed it back as
+  such, so its caller released what `o` still held. A call to a generic
+  instance compiled already now reads that instance's per-call answer.
