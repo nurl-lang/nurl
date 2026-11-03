@@ -33,50 +33,8 @@ inductive ViewIn : Ty → Val → Ty → Val → Prop
   | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {x : Val} {cs : List (Var × PMode × Ty)} {s : Ty}
       {v : Val} : ViewIn te x s v → ViewIn (.fn ms .any) (.pkg fs te ms x cs) s v
 
-/-- A3.1: tree `T` of type `τ` holds a share of block `k`, whose payload is
-    a `u`: the one it carries, `some p`, or (A3.2) none, for a lock share.
-    (Not inside a payload: the block's own shares are the block's.) -/
-inductive ArcIn : Ty → Val → Ty → Nat → Option Val → Prop
-  | here {u : Ty} {k : Nat} {p : Val} : ArcIn (.arc u) (.arc k p) u k (some p)
-  /-- A3.2: a lock share of block `k`, of payload type `u` (it carries no
-      payload: `none`). -/
-  | lk {u : Ty} {k : Nat} : ArcIn (.lk u) (.lk k) u k none
-  /-- A3.5: a cell share of block `k`, a lock block of payload type `u`. -/
-  | cell {u : Ty} {k : Nat} : ArcIn (.cell u) (.cell k) u k none
-  | child {t t' : Ty} {c d : Nat} {es : List Val} {e : Val} {u : Ty} {k : Nat} {p : Option Val} :
-      e ∈ es → ArcIn t e u k p → ArcIn (.vec t) (.node t' c d es) u k p
-  | fst {a b : Ty} {x y : Val} {u : Ty} {k : Nat} {p : Option Val} :
-      ArcIn a x u k p → ArcIn (.prod a b) (.pair x y) u k p
-  | snd {a b : Ty} {x y : Val} {u : Ty} {k : Nat} {p : Option Val} :
-      ArcIn b y u k p → ArcIn (.prod a b) (.pair x y) u k p
-  | inl {a b : Ty} {x : Val} {u : Ty} {k : Nat} {p : Option Val} : ArcIn a x u k p → ArcIn (.sum a b) (.inl x) u k p
-  | inr {a b : Ty} {x : Val} {u : Ty} {k : Nat} {p : Option Val} : ArcIn b x u k p → ArcIn (.sum a b) (.inr x) u k p
-  /-- (A3.5b: only a closure whose type may hold shares has one in its
-      environment; a bare one's holds none, `WFv.pkg`.) -/
-  | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {x : Val} {cs : List (Var × PMode × Ty)} {u : Ty}
-      {k : Nat} {p : Option Val} {q : Cross} :
-      ArcIn te x u k p → q.shares = true → ArcIn (.fn ms q) (.pkg fs te ms x cs) u k p
-
-/-- A3.3: a block an `arc` share names: an `arc` block holding `p`, or a
-    view of a lock block (`rw_read`'s guard), whose payload `p` is a share of
-    the lock block and that block's payload.  Both are frozen while they
-    live. -/
-def ArcBlk (b : Option Blk) (u : Ty) (p : Val) : Prop :=
-  b = some ⟨u, .arc, some p⟩ ∨ b = some ⟨u, .view, some p⟩
-
-/-- A3.2: what a share asks of its block: an `arc` share (carrying `some p`)
-    an `arc` block holding `p`, a lock share (`none`) a lock block of its
-    payload's type, holding its payload or not. -/
-def ShareFits (b : Option Blk) (u : Ty) : Option Val → Prop
-  | some p => ArcBlk b u p
-  | none => ∃ o, b = some ⟨u, .lock, o⟩
-
-/-- A3.1: every share a tree holds names a block of the store `B` that
-    holds the payload the share carries, of the share's type (the block
-    lives while a share of it is owned; an `arc` payload never changes), or
-    (A3.2) a lock block of its type. -/
-def SharesIn (B : Nat → Option Blk) (τ : Ty) (T : Val) : Prop :=
-  ∀ u k p, ArcIn τ T u k p → ShareFits (B k) u p
+-- `ArcIn`, `ArcBlk`, `ShareFits` and `SharesIn` are in `Semantics.lean` (A3.2's
+-- second cut: a lock scope gives back only a payload whose shares fit, `Giveable`).
 
 /-- `SharesIn` over a memory's blocks. -/
 def SharesOK (m : Mem) (τ : Ty) (T : Val) : Prop := SharesIn m.blk τ T
@@ -747,10 +705,12 @@ structure MInv (m : Mem) (Γ : Ctx) : Prop where
                 SharesOK m E.ty T
   /-- A3.1: a block's payload is a well-formed tree of a type that holds no
       views, and the shares it holds name blocks too (A3.2: while it is in
-      the block; a lock block's holds no share, this cut). -/
+      the block).  A3.2's second cut: a lock block's may hold `arc` and lock
+      shares, which keep their blocks alive (`Blk.keeps`), but no cell share
+      (a library handle's owners are slots, A3.5). -/
   blocks    : ∀ k bl, m.blk k = some bl → bl.ty.ok = true ∧ bl.ty.holdsView = false ∧
                 (∀ p, bl.pay = some p → WFv bl.ty p ∧ SharesOK m bl.ty p) ∧
-                (bl.kind = .lock → bl.ty.hasArc = false)
+                (bl.kind = .lock → bl.ty.hasCell = false)
 
 /-- The invariant of a configuration running `s` in context `Γ`, with `F`
     lent out. -/
@@ -1051,7 +1011,7 @@ def CodeOK (P : Prog) (fs : List Nat) (te : Ty) (ms : List Nat) (cs : List (Var 
 
 /-- Every package in memory names code that implements its interfaces: the
     ones the slots hold, and (A3.5b) the ones the blocks hold, which may be
-    closures (a Sync one in an `Arc`'s payload, a bare one in a lock's or a
+    closures (a Sync one in an `Arc`'s payload, a Sync or bare one in a lock's or a
     channel's), in what a block owns and in what its holders read. -/
 def MemCodes (P : Prog) (m : Mem) : Prop :=
   (∀ x o V fs te ms e cs, m.st x = some ⟨o, some V⟩ → Sub (.pkg fs te ms e cs) V → CodeOK P fs te ms cs) ∧

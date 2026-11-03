@@ -28,13 +28,16 @@ abbrev Var := Nat
              may move to another thread (Send; a cell share in it crosses
              only by the crossing check, `SendCheck`);
   * `sync` — also no cell share (a library handle is not Sync), so several
-             threads may hold it at once: an `Arc`'s payload.  Its code
-             changes nothing it captured: a closure's code is handed its
-             environment lent (`Implements`: `inp`, and no change through a
-             borrow), so what it may change is a binding captured by name,
-             which `send` already excludes;
-  * `bare` — also no share at all: a lock's payload or a channel's element
-             (A3.2's lock payloads hold no share). -/
+             threads may hold it at once: an `Arc`'s payload; and (A3.2's
+             second cut) a lock's payload or a channel's element, which hold
+             `arc` and lock shares but no cell share.  Its code changes
+             nothing it captured: a closure's code is handed its environment
+             lent (`Implements`: `inp`, and no change through a borrow), so
+             what it may change is a binding captured by name, which `send`
+             already excludes;
+  * `bare` — also no share at all: a slice's element (A3.1's views of a
+             `Vec` hold no share, `Ty.ok (slice t)`).  Since A3.2's second
+             cut a lock or a channel no longer needs it. -/
 inductive Cross where
   | any
   | send
@@ -136,6 +139,23 @@ def Ty.hasCell : Ty → Bool
   | .lk t => t.hasCell
   | .cell _ => true
 
+/-- A type that holds no share holds no cell share. -/
+theorem Ty.hasCell_of_hasArc {t : Ty} (h : t.hasArc = false) : t.hasCell = false := by
+  induction t with
+  | int => rfl
+  | vec t ih => exact ih h
+  | slice t ih => exact ih h
+  | prod a b iha ihb =>
+    simp only [Ty.hasArc, Bool.or_eq_false_iff] at h
+    simp [Ty.hasCell, iha h.1, ihb h.2]
+  | sum a b iha ihb =>
+    simp only [Ty.hasArc, Bool.or_eq_false_iff] at h
+    simp [Ty.hasCell, iha h.1, ihb h.2]
+  | fn _ q => cases q <;> first | rfl | cases h
+  | arc _ _ => cases h
+  | lk _ _ => cases h
+  | cell _ _ => cases h
+
 /-- A3.6: does a value of this type synchronise itself, so that a module
     global set at start may hold it and every thread reach it?  A lock share
     does (`Locked`, `RwLocked`, `Mutex`, `Atomic` and `Channel` are all
@@ -158,7 +178,9 @@ def Ty.ok : Ty → Bool
   | .sum a b => a.ok && b.ok
   | .fn _ _ => true
   | .arc t => t.ok && !t.holdsView   -- A3.1: a payload holds no views
-  | .lk t => t.ok && !t.holdsView && !t.hasArc  -- A3.2: nor does a lock's (it is Send); nor a share
+  | .lk t => t.ok && !t.holdsView && !t.hasCell  -- A3.2: nor does a lock's (it is Send); A3.2's
+                                                 -- second cut: it may hold `arc` and lock shares,
+                                                 -- not a cell share (A3.5's confinement counts slots)
   | .cell t => t.ok && !t.holdsView && !t.hasArc  -- A3.5: a cell's payload is a lock's
 
 /-- A type whose values own what they hold: a `Vec` or a struct.  Its

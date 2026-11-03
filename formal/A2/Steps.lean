@@ -465,7 +465,7 @@ theorem rhs_arcNew {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {t : Ty} {v : Val}
     tree and no payload, `Pushed`); every slot is as it was. -/
 theorem rhs_lockNew_post {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {t : Ty} {v : Val} {D : List Dep}
     (post : RhsPost m m1 Γ Γ1 F) (pu : Pushed m1 Γ1 t v D)
-    (hpl : t.holdsView = false ∧ t.hasFn = false ∧ t.hasArc = false)
+    (hpl : t.holdsView = false ∧ t.hasFn = false ∧ t.hasCell = false)
     (htok : t.ok = true) (hfr : m1.blk m1.nid = none) :
     RhsPost m { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, .lock, some v⟩) } Γ Γ1 F := by
   let m2 : Mem := { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, .lock, some v⟩) }
@@ -513,7 +513,7 @@ theorem rhs_lockNew_post {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {t : Ty} {v 
 
 theorem rhs_lockNew {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {t : Ty} {v : Val} {D : List Dep}
     (post : RhsPost m m1 Γ Γ1 F) (pu : Pushed m1 Γ1 t v D)
-    (hpl : t.holdsView = false ∧ t.hasFn = false ∧ t.hasArc = false)
+    (hpl : t.holdsView = false ∧ t.hasFn = false ∧ t.hasCell = false)
     (htok : t.ok = true) (hfr : m1.blk m1.nid = none) :
     RhsPost m { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, .lock, some v⟩) } Γ Γ1 F ∧
     RhsOut { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, .lock, some v⟩) } Γ1
@@ -529,7 +529,7 @@ theorem rhs_cellNew {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {t : Ty} {v : Val
     RhsPost m { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, .lock, some v⟩) } Γ Γ1 F ∧
     RhsOut { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, .lock, some v⟩) } Γ1
       ⟨.cell t, .own, true, [], [], false, false⟩ (.cell m1.nid) true :=
-  ⟨rhs_lockNew_post post pu hpl htok hfr, out_cellShare htok hpl.1 hpl.2.2 ⟨some v, by simp⟩⟩
+  ⟨rhs_lockNew_post post pu ⟨hpl.1, hpl.2.1, Ty.hasCell_of_hasArc hpl.2.2⟩ htok hfr, out_cellShare htok hpl.1 hpl.2.2 ⟨some v, by simp⟩⟩
 
 /-- **A3.3, `rw_read`**: a new view of the lock block `k`, whose payload `p`
     is in, at the fresh key `nid`: it owns nothing, and reads the block's
@@ -574,15 +574,16 @@ theorem rhs_rwRead {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {k : Nat
       exact ⟨k0, t0, q, rfl, by simp [m2, upd_ne _ _ hkn0, hk0]⟩
   have hheap : HeapOK m2 := HeapOK.mono hi.heap rfl (fun _ h => h) (Nat.le_succ _) hbo hv
   obtain ⟨htok, hvf, hpay, hna⟩ := hi.blocks k _ hk
-  obtain ⟨hwp, _⟩ := hpay p rfl
-  have hna' : t.hasArc = false := hna rfl
+  obtain ⟨hwp, hshp⟩ := hpay p rfl
+  have hna' : t.hasCell = false := hna rfl
   have hok : (Ty.prod (.lk t) t).ok = true := by simp [Ty.ok, htok, hvf, hna']
   have hvf' : (Ty.prod (.lk t) t).holdsView = false := by simp [Ty.holdsView, hvf]
   have hwv : WFv (.prod (.lk t) t) (.pair (.lk k) p) := .pair .lk hwp
+  -- A3.2's second cut: the view's copy of the payload holds the payload's shares
   have hsh : SharesOK m2 (.prod (.lk t) t) (.pair (.lk k) p) := fun u k' q ha => by
     cases ha with
     | fst ha => cases ha; exact ⟨_, hk2⟩
-    | snd ha => rw [ha.hasArc] at hna'; cases hna'
+    | snd ha => exact (hshp.grow hb) u k' q ha
   have hB : BlocksIn m2 := fun k' bl hk' => by
     rcases hcases k' bl hk' with ⟨rfl, rfl⟩ | ⟨_, h⟩
     · exact ⟨hok, hvf', fun q hq => by cases hq; exact ⟨hwv, hsh⟩, fun h => nomatch h⟩
@@ -1053,18 +1054,20 @@ theorem WFv.selfFree_noView {t : Ty} {v : Val} (hw : WFv t v) (hvf : t.holdsView
     obtain ⟨s, hin⟩ := hw.sub_view hs
     have := hin.holdsView; rw [hvf] at this; cases this
 
-/-- A channel's type is a lock's of a type that holds no view and no share. -/
+/-- A channel's type is a lock's of a type that holds no view and (A3.2's
+    second cut) no cell share. -/
 theorem chan_tyok {s : Ty} (h : (Ty.lk (.prod (.vec s) .int)).ok = true) :
-    s.ok = true ∧ s.holdsView = false ∧ s.hasArc = false := by
-  simp only [Ty.ok, Ty.holdsView, Ty.hasArc, Bool.and_true, Bool.or_false, Bool.and_eq_true,
+    s.ok = true ∧ s.holdsView = false ∧ s.hasCell = false := by
+  simp only [Ty.ok, Ty.holdsView, Ty.hasCell, Bool.and_true, Bool.or_false, Bool.and_eq_true,
     Bool.not_eq_eq_eq_not, Bool.not_true] at h
   exact ⟨h.1.1, h.1.2, h.2⟩
 
-/-- An owned value of a type that holds no view and no share, whose
+/-- An owned value of a type that holds no view, whose shares name blocks
+    (A3.2's second cut: a payload's part may hold shares), and whose
     addresses are live, distinct, in no owned tree and in no payload: what a
     right-hand side hands over holding nothing. -/
 theorem out_ownNoView {m : Mem} {Γ : Ctx} {t : Ty} {v : Val} (htok : t.ok = true)
-    (hvf : t.holdsView = false) (hna : t.hasArc = false) (ho : t.owning = true) (hw : WFv t v)
+    (hvf : t.holdsView = false) (hsh : SharesOK m t v) (ho : t.owning = true) (hw : WFv t v)
     (hnd : v.ids.Nodup) (hal : ∀ i ∈ v.ids, m.alloc i = true ∧ i < m.nid)
     (hdis : ∀ x U, OwnedAt m x U → ∀ i ∈ v.ids, i ∉ U.ids) (hnp : ∀ i ∈ v.ids, ¬ PayAddr m i) :
     RhsOut m Γ ⟨t, .own, true, [], [], false, false⟩ v true where
@@ -1078,19 +1081,21 @@ theorem out_ownNoView {m : Mem} {Γ : Ctx} {t : Ty} {v : Val} (htok : t.ok = tru
   names := fun _ => DepsNamed.nil _
   held := NamesIn.nil _ (hw.names_nil hvf)
   pkgs := hw.pkgsOK_noView hvf
-  shares := fun _ => SharesOK.of_noArc hna
+  shares := fun _ => hsh
 
 /-- A3.4: **a lock block's payload changed in place** to `p'`, a tree of its
     type whose every address was the payload's, or is taken in from no owned
-    tree and no payload (`hin`): the block is kept as a lock block of its
-    type (`BlkLe.setLock`), and the invariant holds over the new blocks. -/
+    tree and no payload (`hin`), and (A3.2's second cut) whose shares name
+    blocks: the block is kept as a lock block of its type (`BlkLe.setLock`),
+    and the invariant holds over the new blocks. -/
 theorem setPay_pres {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {k : Nat} {t : Ty} {p p' : Val}
     (hk : m.blk k = some ⟨t, .lock, some p⟩) (hnv : ¬ HasView m.blk k) (hw : WFv t p') (hnd : p'.ids.Nodup)
     (hin : ∀ i ∈ p'.ids, i ∈ p.ids ∨
-      (m.alloc i = true ∧ i < m.nid ∧ (∀ x T, OwnedAt m x T → i ∉ T.ids) ∧ ¬ PayAddr m i)) :
+      (m.alloc i = true ∧ i < m.nid ∧ (∀ x T, OwnedAt m x T → i ∉ T.ids) ∧ ¬ PayAddr m i))
+    (hsh : SharesOK m t p') :
     RhsPost m { m with blk := upd m.blk k (some ⟨t, .lock, some p'⟩) } Γ Γ F := by
   obtain ⟨htok, hvf, _, hna⟩ := hi.blocks k _ hk
-  have hna' : t.hasArc = false := hna rfl
+  have hna' : t.hasCell = false := hna rfl
   have hb : BlkLe m.blk (upd m.blk k (some ⟨t, .lock, some p'⟩)) := BlkLe.setLock hk _
   obtain ⟨hkey, _, hall⟩ := hi.heap.blk k _ hk
   have hcases : ∀ k' bl, upd m.blk k (some ⟨t, .lock, some p'⟩) k' = some bl →
@@ -1130,7 +1135,7 @@ theorem setPay_pres {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {k : Na
   have hB : BlocksIn { m with blk := upd m.blk k (some ⟨t, .lock, some p'⟩) } := fun k' bl hk' => by
     rcases hcases k' bl hk' with ⟨hkk, hbl⟩ | ⟨_, h⟩
     · subst hkk hbl
-      exact ⟨htok, hvf, fun q hq => by cases hq; exact ⟨hw, SharesOK.of_noArc hna'⟩, fun _ => hna'⟩
+      exact ⟨htok, hvf, fun q hq => by cases hq; exact ⟨hw, hsh.grow hb⟩, fun _ => hna'⟩
     · obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k' bl h
       exact ⟨h1, h2, fun q hq => ⟨(h3 q hq).1, (h3 q hq).2.grow hb⟩, h4⟩
   exact ⟨hi.grow rfl hheap (Nat.le_refl _) hb hB, rfl, Nat.le_refl _, fun _ => rfl, fun _ _ => rfl,
@@ -1149,7 +1154,7 @@ theorem chanSend_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {k : Nat} {s u 
     RhsPost m { m1 with blk := upd m1.blk k (some ⟨.prod (.vec s) .int, .lock,
       some (.pair (.node u c d (es ++ [v])) (.int 0))⟩) } Γ Γ1 F := by
   obtain ⟨_, _, hpay, _⟩ := post.inv.blocks k _ hk
-  obtain ⟨hwp, _⟩ := hpay _ rfl
+  obtain ⟨hwp, hshp⟩ := hpay _ rfl
   obtain ⟨_, hnd, _⟩ := post.inv.heap.blk k _ hk
   have hnd0 : (c :: d :: idsL es).Nodup := by
     have : (Val.pair (.node u c d es) (.int 0)).ids.Nodup := hnd
@@ -1171,7 +1176,10 @@ theorem chanSend_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {k : Nat} {s u 
     rw [hids]
     exact List.nodup_append.mpr ⟨hnd0, pu.nd, fun i hi' j hj he => by
       subst he; exact pu.np i hj (hold i hi')⟩
-  refine post.trans (setPay_pres post.inv hk hnv hw hnd' fun i hi' => ?_)
+  -- A3.2's second cut: the value sent may hold shares, which name blocks
+  have hsh : SharesOK m1 (.prod (.vec s) .int) (.pair (.node u c d (es ++ [v])) (.int 0)) :=
+    SharesOK.mk_pair (hshp.fst.node_push pu.sh rfl) hshp.snd
+  refine post.trans (setPay_pres post.inv hk hnv hw hnd' (fun i hi' => ?_) hsh)
   rw [hids] at hi'
   rcases List.mem_append.mp hi' with hi' | hi'
   · exact .inl (by simpa using hi')
@@ -1213,8 +1221,7 @@ theorem chanRecv_pres {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {k : 
         some (.pair (.node u c d es) (.int f))⟩) } Γ ⟨.sum .int s, .own, true, [], [], false, false⟩
       (.inr v) true := by
   obtain ⟨htok, hvf, hpay, hna⟩ := hi.blocks k _ hk
-  obtain ⟨hwp, _⟩ := hpay _ rfl
-  have hna' : (Ty.prod (.vec s) .int).hasArc = false := hna rfl
+  obtain ⟨hwp, hshp⟩ := hpay _ rfl
   obtain ⟨_, hnd, hall⟩ := hi.heap.blk k _ hk
   have hnd0 : (c :: d :: (v.ids ++ idsL es)).Nodup := by
     have : (Val.pair (.node u c d (v :: es)) (.int f)).ids.Nodup := hnd
@@ -1233,13 +1240,17 @@ theorem chanRecv_pres {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {k : 
     ((List.sublist_append_right v.ids (idsL es)).cons_cons d).cons_cons c
   have hpost := setPay_pres (F := F) hi hk hnv hwv.2 (by simpa using hnd0.sublist hsub)
     (fun i hi' => Or.inl (by simpa using hsub.subset (by simpa using hi')))
+    (SharesOK.mk_pair (hshp.fst.node_sub (fun e he => List.mem_cons_of_mem _ he) rfl) hshp.snd)
   refine ⟨hpost, ?_⟩
   have hso : s.ok = true := by simpa [Ty.ok] using htok
   have hsv : s.holdsView = false := by simpa [Ty.holdsView] using hvf
-  have hsa : s.hasArc = false := by simpa [Ty.hasArc] using hna'
   have hdv : (v.ids ++ idsL es).Nodup := (List.nodup_cons.mp (List.nodup_cons.mp hnd0).2).2
   have hin0 : ∀ i ∈ v.ids, i ∈ c :: d :: (v.ids ++ idsL es) := fun i hi' => by simp [hi']
-  refine out_ownNoView (by simp [Ty.ok, hso]) (by simp [Ty.holdsView, hsv]) (by simp [Ty.hasArc, hsa]) rfl
+  -- A3.2's second cut: the head may hold shares, which name blocks
+  have hshv : SharesOK { m with blk := upd m.blk k (some ⟨.prod (.vec s) .int, .lock,
+      some (.pair (.node u c d es) (.int f))⟩) } (.sum .int s) (.inr v) :=
+    SharesOK.mk_inr ((hshp.fst.elem (List.mem_cons_self ..)).grow (BlkLe.setLock hk _))
+  refine out_ownNoView (by simp [Ty.ok, hso]) (by simp [Ty.holdsView, hsv]) hshv rfl
     (.inr hwv.1) (by simpa using (List.nodup_append.mp hdv).1)
     (fun i hi' => ⟨(hall0 i (hin0 i (by simpa using hi'))).1, (hall0 i (hin0 i (by simpa using hi'))).2.1⟩)
     (fun x U hU i hi' => (hall0 i (hin0 i (by simpa using hi'))).2.2.1 x U hU) ?_
@@ -1266,7 +1277,7 @@ theorem chanClose_pres {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {k :
     RhsPost m { m with blk := upd m.blk k (some ⟨t, .lock, some (.pair q (.int 1))⟩) } Γ Γ F ∧
     RhsOut { m with blk := upd m.blk k (some ⟨t, .lock, some (.pair q (.int 1))⟩) } Γ intE (.int 0) false := by
   obtain ⟨_, _, hpay, _⟩ := hi.blocks k _ hk
-  obtain ⟨hwp, _⟩ := hpay _ rfl
+  obtain ⟨hwp, hshp⟩ := hpay _ rfl
   obtain ⟨_, hnd, _⟩ := hi.heap.blk k _ hk
   have hw : WFv t (.pair q (.int 1)) := by
     cases hwp with
@@ -1274,7 +1285,12 @@ theorem chanClose_pres {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {k :
   have hnd' : (Val.pair q (.int 1)).ids.Nodup := by
     have : (Val.pair q (.int f)).ids.Nodup := hnd
     simpa using this
-  exact ⟨setPay_pres hi hk hnv hw hnd' (fun i hi' => Or.inl (by simpa using hi')), intE_out _⟩
+  -- the flag holds no share
+  have hsh : SharesOK m t (.pair q (.int 1)) := fun u k' p ha => by
+    cases ha with
+    | fst ha => exact hshp u k' p (.fst ha)
+    | snd ha => cases ha
+  exact ⟨setPay_pres hi hk hnv hw hnd' (fun i hi' => Or.inl (by simpa using hi')) hsh, intE_out _⟩
 
 theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} {v : Val} {o : Bool}
     (hi : MInv m Γ) (hanch : RootbAnch Γ F)
@@ -1519,7 +1535,8 @@ theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry
     | chanRecvNone _ _ _ _ =>
       obtain ⟨hso, hsv, hsa⟩ := chan_tyok (by rw [← hty]; exact hi.tyok ha)
       exact ⟨RhsPost.same hi, out_ownNoView (by simp [Ty.ok, hso]) (by simp [Ty.holdsView, hsv])
-        (by simp [Ty.hasArc, hsa]) rfl (.inl .int) (by simp) (by simp) (by simp) (by simp)⟩
+        (fun u k' p ha => by cases ha with | inl ha => cases ha) rfl (.inl .int) (by simp) (by simp)
+        (by simp) (by simp)⟩
   | chanClose _ _ _ =>
     cases he with
     | chanClose _ hk hnv => exact chanClose_pres hi hk hnv
@@ -2765,8 +2782,8 @@ theorem acquire_pres {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {k : N
     RhsPost m { m with blk := upd m.blk k (some ⟨t, .lock, none⟩) } Γ Γ F ∧
     RhsOut { m with blk := upd m.blk k (some ⟨t, .lock, none⟩) } Γ (lockE t) v v.owns := by
   obtain ⟨htok, hvf, hpay, hna⟩ := hi.blocks k _ hk
-  obtain ⟨hwv, _⟩ := hpay v rfl
-  have hna' : t.hasArc = false := hna rfl
+  obtain ⟨hwv, hshv⟩ := hpay v rfl
+  have hna' : t.hasCell = false := hna rfl
   have hb : BlkLe m.blk (upd m.blk k (some ⟨t, .lock, none⟩)) := BlkLe.setLock hk none
   obtain ⟨hkey, hnd, hall⟩ := hi.heap.blk k _ hk
   have hcases : ∀ k' bl, upd m.blk k (some ⟨t, .lock, none⟩) k' = some bl →
@@ -2821,6 +2838,6 @@ theorem acquire_pres {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {k : N
       names := fun _ => DepsNamed.nil _
       held := NamesIn.nil _ (hwv.names_nil hvf)
       pkgs := hwv.pkgsOK_noView hvf
-      shares := fun _ => SharesOK.of_noArc hna' }
+      shares := fun _ => hshv.grow hb }
 
 end A2

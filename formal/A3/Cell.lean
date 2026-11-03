@@ -53,38 +53,40 @@ theorem not_sub_cell_lendOf : (v : Val) → ∀ {k : Nat}, Sub (.cell k) (lendOf
   | .lk _, _, h => by cases h
   | .cell _, _, h => by simp only [lendOf] at h; cases h
 
-/-- A tree of a type that holds no share holds no cell share. -/
-theorem _root_.A2.WFv.noCell {τ : Ty} {v : Val} (hw : WFv τ v) (hna : τ.hasArc = false) {k : Nat} :
+/-- A tree of a type that may hold no cell share holds none (A3.2's second
+    cut: it may hold `arc` and lock shares, which `Sub` does not enter). -/
+theorem _root_.A2.WFv.noCell {τ : Ty} {v : Val} (hw : WFv τ v) (hna : τ.hasCell = false) {k : Nat} :
     ¬ Sub (.cell k) v := by
   induction hw with
   | int => intro h; cases h
   | view => intro h; cases h
-  | arc => simp [Ty.hasArc] at hna
-  | lk => simp [Ty.hasArc] at hna
-  | cell => simp [Ty.hasArc] at hna
+  | arc => intro h; cases h
+  | lk => intro h; cases h
+  | cell => simp [Ty.hasCell] at hna
   | pkg _ hq ih =>
-    -- A3.5b: a bare closure's environment holds no share
+    -- A3.5b: a Sync or bare closure's environment holds no cell share
     intro h
-    cases h with | pkg h => exact ih (hq.2.2 hna) h
+    cases h with | pkg h => exact ih (hq.2.1 hna) h
   | node _ ih =>
     intro h
     cases h with
-    | child he hs => exact ih _ he (by simpa [Ty.hasArc] using hna) hs
+    | child he hs => exact ih _ he (by simpa [Ty.hasCell] using hna) hs
   | pair _ _ iha ihb =>
-    simp only [Ty.hasArc, Bool.or_eq_false_iff] at hna
+    simp only [Ty.hasCell, Bool.or_eq_false_iff] at hna
     intro h
     cases h with
     | fst h => exact iha hna.1 h
     | snd h => exact ihb hna.2 h
   | inl _ ih =>
-    simp only [Ty.hasArc, Bool.or_eq_false_iff] at hna
+    simp only [Ty.hasCell, Bool.or_eq_false_iff] at hna
     intro h; cases h with | inl h => exact ih hna.1 h
   | inr _ ih =>
-    simp only [Ty.hasArc, Bool.or_eq_false_iff] at hna
+    simp only [Ty.hasCell, Bool.or_eq_false_iff] at hna
     intro h; cases h with | inr h => exact ih hna.2 h
 
-/-- A thread's facts: no lock block's payload holds a cell share (a lock's
-    payload holds no share at all, `Ty.ok`). -/
+/-- A thread's facts: no lock block's payload holds a cell share (A3.2's
+    second cut: a lock's payload may hold `arc` and lock shares, not a cell
+    share, `Ty.ok`). -/
 theorem ThreadOK.noCellPay {P : Prog} {m : Mem} {s : Stmt} (h : ThreadOK P m s) {k : Nat} :
     ¬ CellPay m.blk k := by
   obtain ⟨Γ, F, Δ, _, hi, _⟩ := h

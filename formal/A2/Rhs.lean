@@ -189,7 +189,7 @@ theorem SlotOK.grow {m m' : Mem} (hst : m'.st = m.st) (hb : BlkLe m.blk m'.blk) 
 /-- What the invariant asks of the blocks. -/
 def BlocksIn (m : Mem) : Prop :=
   ∀ k bl, m.blk k = some bl → bl.ty.ok = true ∧ bl.ty.holdsView = false ∧
-    (∀ p, bl.pay = some p → WFv bl.ty p ∧ SharesOK m bl.ty p) ∧ (bl.kind = .lock → bl.ty.hasArc = false)
+    (∀ p, bl.pay = some p → WFv bl.ty p ∧ SharesOK m bl.ty p) ∧ (bl.kind = .lock → bl.ty.hasCell = false)
 
 /-- **More blocks**: the invariant holds over a store with the same slots and
     more blocks, each as the invariant asks. -/
@@ -1394,7 +1394,7 @@ theorem out_share {m : Mem} {Γ : Ctx} {t : Ty} {k : Nat} {p : Val} (htok : t.ok
 /-- A3.2: a lock share, owned: it holds nothing, and its block is a lock
     block of its type. -/
 theorem out_lkShare {m : Mem} {Γ : Ctx} {t : Ty} {k : Nat} (htok : t.ok = true)
-    (hvf : t.holdsView = false) (hna : t.hasArc = false) (hk : ∃ o, m.blk k = some ⟨t, .lock, o⟩) :
+    (hvf : t.holdsView = false) (hna : t.hasCell = false) (hk : ∃ o, m.blk k = some ⟨t, .lock, o⟩) :
     RhsOut m Γ ⟨.lk t, .own, true, [], [], false, false⟩ (.lk k) true where
   own := rfl
   mode := Or.inl rfl

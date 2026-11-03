@@ -151,29 +151,14 @@ theorem cell_spawnOK {t : Ty} (h : (Ty.cell t).ok = true) : (Ty.cell t).holdsVie
   simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true] at h
   exact h.1.2
 
-/-- A3.5, Sync: no shared payload holds a library handle.  A type that holds
-    no share holds no cell share, so a lock's payload (`RhsT.lockNew`,
-    `Ty.ok (lk t)`) and a channel's element (`RhsT.chanSend`) hold none;
-    an `Arc`'s payload holds none by `RhsT.arcNew`'s own premise. -/
-theorem _root_.A2.Ty.hasCell_of_hasArc {t : Ty} (h : t.hasArc = false) : t.hasCell = false := by
-  induction t with
-  | int => rfl
-  | vec t ih => exact ih h
-  | slice t ih => exact ih h
-  | prod a b iha ihb =>
-    simp only [Ty.hasArc, Bool.or_eq_false_iff] at h
-    simp [Ty.hasCell, iha h.1, ihb h.2]
-  | sum a b iha ihb =>
-    simp only [Ty.hasArc, Bool.or_eq_false_iff] at h
-    simp [Ty.hasCell, iha h.1, ihb h.2]
-  | fn _ q => cases q <;> first | rfl | cases h
-  | arc _ _ => cases h
-  | lk _ _ => cases h
-  | cell _ _ => cases h
-
+/-- A3.5, Sync: no shared payload holds a library handle: a lock's payload
+    (`RhsT.lockNew`, `Ty.ok (lk t)`) and a channel's element (`RhsT.chanSend`)
+    hold none (A3.2's second cut: they may hold `arc` and lock shares, not a
+    cell share); an `Arc`'s payload holds none by `RhsT.arcNew`'s own
+    premise; a cell's own payload holds no share at all (`Ty.hasCell_of_hasArc`). -/
 theorem lk_noCell {t : Ty} (h : (Ty.lk t).ok = true) : t.hasCell = false := by
   simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true] at h
-  exact Ty.hasCell_of_hasArc h.2
+  exact h.2
 
 /-! ### A3.6: module globals, as A2 types them
 
@@ -283,8 +268,8 @@ environment may hold (`Ty.fn ms q`, `Cross`): `pack` gives the class the
 captures fit, and the crossing rules ask their questions of the type, as of
 any type.  A spawn takes a Send closure (A3.0: a spawned function's
 parameters hold no view), an `Arc` a Sync one (A3.1, A3.5: no view, no
-closure that holds bindings by name, no library handle), a lock or a channel
-a bare one (A3.2, A3.4: no share). -/
+closure that holds bindings by name, no library handle), and (A3.2's second cut)
+a lock or a channel a Sync or bare one too (A3.2, A3.4: no cell share). -/
 
 /-- What `pack` makes: a closure of the class its captures fit. -/
 theorem _root_.A2.RhsT.pack_fits {Γ Γ1 : Ctx} {F : List Var} {fs : List Nat} {te : Ty} {ms : List Nat}
@@ -349,17 +334,18 @@ theorem arcNew_fn {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {q : Cross} {y :
   | arcNew _ _ _ _ hc _ => cases q <;> simp_all [Ty.hasCell]
 
 /-- h340 (`closure_sent_on_a_channel_captures_a_kept_handle`): a channel's
-    element holds no share (A3.4), so a closure sent on one is bare: it
-    captures no handle at all, kept or not ... -/
+    element holds no cell share (A3.4; A3.2's second cut: it may hold `arc`
+    and lock shares), so a closure sent on one is Sync or bare: it captures
+    no library handle, kept or not ... -/
 theorem chan_fn {ms : List Nat} {q : Cross} (h : (Ty.lk (.prod (.vec (.fn ms q)) .int)).ok = true) :
-    q = .bare := by
-  cases q <;> simp_all [Ty.ok, Ty.holdsView, Ty.hasArc]
+    q = .sync ∨ q = .bare := by
+  cases q <;> simp_all [Ty.ok, Ty.holdsView, Ty.hasCell]
 
 /-- ... and so is one a lock keeps (A3.2), which one thread at a time runs. -/
 theorem lockNew_fn {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {q : Cross} {y : Var} {E : Entry}
-    (h : RhsT Γ F (.lockNew (.fn ms q) y) E Γ1) : q = .bare := by
+    (h : RhsT Γ F (.lockNew (.fn ms q) y) E Γ1) : q = .sync ∨ q = .bare := by
   cases h with
-  | lockNew _ _ _ hp _ => cases q <;> simp_all [Ty.holdsView, Ty.hasArc]
+  | lockNew _ _ _ hp _ => cases q <;> simp_all [Ty.holdsView, Ty.hasCell]
 
 /-- A Send closure that captured a library handle crosses a spawn only with
     every other owner of the handle's state: the crossing check counts what
