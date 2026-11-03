@@ -5416,6 +5416,12 @@ unsafe @ gen_ret i lex i syms i cg → s {
     : s ret_first_val ( nurl_lex_val lex )
     ( nurl_sym_set_deep syms `__ret_agg__` ? == ret_first_tt TT_AT `1` `` )
     ( nurl_sym_set_deep syms `__ret_clo__` ? == ret_first_tt TT_BACKSLASH `1` `` )
+    // (A `^` in a closure body inside this return's operand sets them for
+    // itself: the enclosing return's come back after it, below.)
+    : i __rlp0 g_ret_lit_pos
+    : i __rll0 g_ret_lit_lex
+    : i __rvp0 g_ret_vpos
+    : i __rvl0 g_ret_vlex
     = g_ret_lit_pos ? == ret_first_tt TT_AT ( nurl_lex_cur_start lex ) -1
     = g_ret_lit_lex lex
     // `^ . p field` hands back a handle stored INSIDE a parameter — an
@@ -5444,7 +5450,8 @@ unsafe @ gen_ret i lex i syms i cg → s {
     = g_blk_fall_value & __ret_imp == ret_first_tt TT_LBRACE
     = g_ret_vpos ( nurl_lex_cur_start lex ) = g_ret_vlex lex
     : ~ s val ( gen_operand lex syms cg )
-    = g_ret_vpos -1
+    = g_ret_vpos __rvp0 = g_ret_vlex __rvl0
+    = g_ret_lit_pos __rlp0 = g_ret_lit_lex __rll0
     = g_member_path_on __rsxmp
     // A block whose tail is a field read hands back that field as `^ . x f`
     // does: its own locals are this frame's, dropped on the way out
@@ -15041,6 +15048,7 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
         ? ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) {
             : s __cc ( nurl_sym_get syms `__clo_consumed__` )
             ( nurl_sym_set_deep syms `__clo_consumed__` ( nurl_str_cat3 __cc ` ` bck_arg_val ) )
+            ( __clo_capture_gone syms cg bck_arg_val )
         } {}
         : s uptr ( mem_udrop_ptr_of syms bck_arg_val )
         ? != 0 ( nurl_str_len uptr ) {
@@ -16688,7 +16696,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         // as a copy): the closure runs at most once, as when it releases
         // the capture itself (the consumed-capture rule, gen_closure_expr).
         ? & & arg_pos_escapes ( is_ident_tok bck_arg_tt ) & ( __is_clo_capture syms bck_arg_val ) ( __nc_drop_ty at ) {
-            ( __clo_take_capture syms bck_arg_val )
+            ( __clo_take_capture syms cg bck_arg_val )
         } {}
         // §2.1b Freeing what the compiler already frees.
         //
@@ -17034,7 +17042,15 @@ unsafe @ gen_call i lex i syms i cg → s {
         // option whose payload the body had given away (agora #463).
         ? & & & & & & summary_callee != 0 g_bck_closure_depth == 0 g_clo_ret_body ( is_ident_tok bck_arg_tt ) ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) ( __type_needs_drop at syms ) ! ( __is_clo_capture syms bck_arg_val ) {
             : s __ctr ( __clo_nc_derived syms bck_arg_val )
-            ? & != 0 ( nurl_str_len __ctr ) ( __is_clo_capture syms __ctr ) { ( __clo_take_capture syms __ctr ) } {}
+            ? & != 0 ( nurl_str_len __ctr ) ( __is_clo_capture syms __ctr ) {
+                // (Only the payload of an option capture matched as it is,
+                // `?? x { T s → … }`: a field's is part of a struct the env
+                // keeps whole.)
+                : s __cct ( nurl_sym_get syms __ctr )
+                ? & & ( seq ( nurl_sym_get2 syms bck_arg_val `__plroot` ) __ctr ) != 0 ( nurl_str_starts __cct `{ i1, ` ) ( seq ( __wrap_part __cct 0 ) at ) {
+                    ( __clo_take_capture syms cg __ctr )
+                } {}
+            } {}
         } {}
         ? & & != 0 g_lm_depth ( is_ident_tok bck_arg_tt ) ! __callee_shadowed {
             = g_lm_calls ( nurl_str_cat4 g_lm_calls call_name ( nurl_str_cat4 ` ` ( nurl_str_int arg_idx ) ` ` bck_arg_val ) `\n` )
@@ -21658,7 +21674,10 @@ unsafe @ gen_match i lex i syms i cg → s {
             // function's or another's — named the wrong field.)
             : i arm_mp0 g_member_path_on
             = g_member_path_on ? & & m_sxv != 0 __sx_mme == arm_tt0 TT_DOT 1 g_member_path_on
-            ? m_retv { = g_ret_vpos ( nurl_lex_cur_start lex ) } {}
+            // (Only a closure literal written as the arm's value: a join
+            // there hands its arms' closures out through the match's copy,
+            // after the arm released them.)
+            ? & m_retv == arm_tt0 TT_BACKSLASH { = g_ret_vpos ( nurl_lex_cur_start lex ) } {}
             : ~ s arm_result ( gen_stmt lex syms cg )
             ? & & m_val != 0 g_borrowck ( __is_closure_ty ( nurl_get_last_type ) ) { = m_cm ( __words_join m_cm ( __clo_val_members syms arm_tt0 arm_v0 ) ) } {}
             = g_member_path_on arm_mp0
@@ -24709,6 +24728,21 @@ unsafe @ mem_path_to_indices s path → s {
         // (Not the whole the cursor's value is part of: __part_src.)
         ? ( __part_src syms ptr src ) {} { ( mem_udrop_flag_set syms cg src val ) ( mem_udrop_param_moved syms src ) }
     }
+}
+
+// Is owner slot `up` a cursor over a parameter this function only
+// borrows (an `inout` one included)? What it holds is the caller's.
+@ __alias_of_borrowed_param i syms s up → b {
+    // (A payload of an option parameter, `__optparam`: the parameter's
+    // name — one not declared `sink` is the caller's.)
+    : s op ( nurl_sym_get2 syms up `__optparam` )
+    ? & != 0 ( nurl_str_len op ) == 0 ( nurl_sym_len2 syms op `__sinkp` ) { ^ T } {}
+    : ~ s al ( nurl_sym_get2 syms up `__alias` )
+    ~ != 0 ( nurl_str_len al ) {
+        : s w ( str_first_word al ) = al ( str_skip_word al )
+        ? & != 0 ( nurl_sym_len2 syms w `__pname` ) ! ( __param_owned_slot syms w ) { ^ T } {}
+    }
+    ^ F
 }
 
 // Is owner slot `ptr` a parameter this function DECLARES it takes over
@@ -31722,6 +31756,27 @@ unsafe @ bck_xl_base s sp → s {
     ^ ( nurl_str_cat pre out )
 }
 
+// The `move` rows on the line of `ret` row `rec` after row `rp`: one of a
+// payload a call lends (`mcl_`), still a borrow, is released as if owned
+// (bck_diag_borrow_consumed, as when the walk reaches the move).
+@ __bck_ret_borrow_moves s st i rp i hi s rec → v {
+    : i ln ( bck_field_int rec 3 )
+    : ~ i q + rp 1
+    ~ < q hi {
+        : s qrec ( bck_rec q )
+        ? != ( bck_field_int qrec 3 ) ln { = q hi } {
+            ? == ( bck_kc q ) 4 {
+                : i mid ( bck_field_int qrec 1 )
+                : s ms ( nurl_str_int mid )
+                ? & & ( seq ( nurl_sym_get g_bck ( bck_bkey `mcl_` ms ) ) `1` ) == BCK_BORROWED_SHARED ( bck_st_get st mid ) == 0 ( nurl_sym_len g_bck ( bck_bkey `fb_` ms ) ) {
+                    ( bck_diag_borrow_consumed mid ln )
+                } {}
+            } {}
+            = q + q 1
+        }
+    }
+}
+
 // A `match-arm-edge` row: its payload names are declared in the arm's own
 // frame (bck_xlate_row opened it); the names they are lent from resolve
 // outside it.
@@ -32860,10 +32915,11 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                     // (A closure it stores into an owner is adopted: what it held a
                     // copy of a handle of, it copies in — `~id` goes.)
                     // (…but one it hands back as it is, `^ p` of a `sink`
-                    // parameter (g_fn_ret_param), is not adopted: the
+                    // parameter (g_fn_ret_alias — not one it stores into
+                    // a literal it returns, which adopts it), is not adopted: the
                     // result is that value — a closure with the copies of
                     // the handles it holds — as `retcap`'s is. Agora #463.)
-                    : b __erp & __esc & __rt_views ( nurl_sym_has_word g_fn_ret_param w js )
+                    : b __erp & __esc & __rt_views ( nurl_sym_has_word g_fn_ret_alias w js )
                     ? __erp {
                         : b __sv5 g_sxe_vonly
                         = g_sxe_vonly F
@@ -33204,6 +33260,12 @@ unsafe @ __bck_try_exit_check s st i line → v {
                 ? != 0 g_bck_fmv_any { ( __bck_inout_exit_check st ( bck_field_int rec 3 ) F ) } {}
                 // A view handed back points into what the caller has.
                 ? >= ( __bck_field_off rec 8 ) 0 { ( bck_ret_view_check st ( bck_field rec 8 ) ( bck_field_int rec 3 ) ( seq ( bck_field rec 5 ) `d` ) ! ( seq ( bck_field rec 5 ) `e` ) ) } {}
+                // A payload of what a call lends, handed in the returned
+                // expression to a callee that takes it (`^ ( eat s )` in `?? (
+                // rc_get r ) { T s → … }`): a borrow released as if owned,
+                // refused as the statement form is — its move row follows
+                // this one, where the walk does not go (agora #463).
+                ( __bck_ret_borrow_moves st p hi rec )
                 // The calls in the returned expression: their pending rows
                 // follow this one, and the walk stops here — an `inout`
                 // argument that does not own its value is asked now.
@@ -37228,6 +37290,9 @@ unsafe @ bck_note_rc_arg s name s ty → v {
                 : i amp ( nurl_str_find nm0 `&` )
                 : ~ b lent >= caret 0
                 : ~ s cursor_src ``
+                // (Out of a call that lends it: codegen hands it on as it is,
+                // never a copy — `mcl_`, the return's check below.)
+                : ~ b mcall F
                 // (A payload read in place out of a binding that owns it: a
                 // part of that binding's value, which what is stored into
                 // the payload lands in too — agora #414.)
@@ -37254,6 +37319,7 @@ unsafe @ bck_note_rc_arg s name s ty → v {
                     : i pc ( nurl_str_find after `%` )
                     ? >= pc 0 {
                         : s callee ( nurl_str_slice after 0 pc )
+                        = mcall T
                         : s cargs ( bck_swap_char ( nurl_str_slice after + pc 1 - - ( nurl_str_len after ) pc 1 ) 43 32 )
                         // (…or points into: a payload of a call's view result.)
                         : ~ s lix ( __word_union ( mem_fn_lend_sources callee ) ( nurl_sym_get g_pending_impl ( nurl_str_cat `retptr##` callee ) ) )
@@ -37337,6 +37403,7 @@ unsafe @ bck_note_rc_arg s name s ty → v {
                 // may have had one taken, agora #280.)
                 ? != 0 g_bck_fmv_any { = entry ( __bck_fmv_revive entry id ) } {}
                 ? & ( bck_sound ) lent { = entry ( bck_borrow_begin entry id lsrc ) } {}
+                ( bck_put ( bck_bkey `mcl_` ( nurl_str_int id ) ) ? & mcall lent `1` `` )
                 ? != 0 g_bck_hr_any { ( __bck_hr_drop_owner id ) } {}
                 ? | != 0 ( nurl_str_len part_of ) != 0 g_bck_hr_any { ( __bck_hr_set id part_of F ) } {}
                 = ids ? == 0 ( nurl_str_len ids ) ( nurl_str_int id ) ( nurl_str_cat3 ids ` ` ( nurl_str_int id ) )
@@ -44776,7 +44843,7 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         // env when it cannot be copied: the closure runs at most once (the
         // consumed-capture rule, gen_closure_expr).
         ? & & ( is_ident_tok fld_first_tt ) ( __is_clo_capture syms fld_first_val ) ( __nc_drop_ty fty ) {
-            ( __clo_take_capture syms fld_first_val )
+            ( __clo_take_capture syms cg fld_first_val )
         } {}
         // A returned literal takes a field of a struct this function owns
         // (`: String cn . names cn … ^ @ Csr { … cn … }`, or `. names cn`
@@ -47418,7 +47485,13 @@ unsafe @ __bck_made_from s name → s {
         // (A returned closure's env owns every one; any other only those
         // the spawn takes over, g_env_moved — not every handle because the
         // body releases one of them, agora #247.)
-        : b __owned_cap | __shared_cap & & & & | == g_env_owns_handles 1 ( str_contains_word g_env_moved var ) ( __env_handle_ty vty syms ) ! ( __is_capture_byref var syms ) ! ( __capture_lends var syms )
+        // (…and one the body takes over, which the env took from its binding:
+        // released by the env when the body never ran — the body empties its
+        // slot when it takes it, __clo_capture_gone. One with no Clone stays
+        // the body's to release: copying the env could not copy it.
+        // Agora #463.)
+        : b __rel_own & & & & ( str_contains_word g_env_released var ) ( __env_handle_ty vty syms ) ( __clone_supported vty syms ) ! ( __is_capture_byref var syms ) ! ( __capture_lends var syms )
+        : b __owned_cap | | __rel_own __shared_cap & & & & | == g_env_owns_handles 1 ( str_contains_word g_env_moved var ) ( __env_handle_ty vty syms ) ! ( __is_capture_byref var syms ) ! ( __capture_lends var syms )
         ! ( str_contains_word g_env_released var )
         ? & & & & ! __owned_cap ( __env_handle_ty vty syms ) ! ( __is_capture_byref var syms ) ! ( str_contains_word g_env_released var ) ( __clone_supported vty syms )
         { : s ht ( nurl_llty vty )
@@ -47676,7 +47749,12 @@ unsafe @ __bck_made_from s name → s {
         : b __rel_opt & & ( str_contains_word g_env_released var ) ! ( __is_handle_ty var_type ) ( __env_handle_ty var_type syms )
         ? & & & & | | == g_env_owns_handles 1 ( str_contains_word g_env_moved var ) ( str_contains_word g_env_released var ) ! ( str_contains_word g_env_shared var ) ! cap_byref | ( __is_handle_ty var_type ) __rel_opt ! ( __capture_lends var syms ) {
             : s up ( mem_udrop_ptr_of syms var )
-            ? != 0 ( nurl_str_len up ) {
+            // (A cursor over a parameter this function only borrows — a
+            // payload of `?? o`, `o` not `sink`: the value is the caller's,
+            // copied in. Taken over, the parameter became the function's to
+            // consume, and its caller's value was released twice; agora
+            // #463.)
+            ? & != 0 ( nurl_str_len up ) ! ( __alias_of_borrowed_param syms up ) {
                 // Owned by the binding, or — a cursor over an option
                 // binding, a match's payload — by the option, whose
                 // ownership the move takes along (agora #140).
@@ -49041,6 +49119,9 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
                 ( nurl_sym_def body_syms ( nurl_str_cat cap_name `__captured_byref` ) `1` )
                 ( __clo_cap_home body_syms cap_val cap_name ) }
             {  // Existing path: alloca + store so the body sees a local.
+                // (…and where it is in the env: emptied there when the body
+                // takes it over, __clo_capture_gone.)
+                ( nurl_sym_def body_syms ( nurl_str_cat cap_name `__envslot` ) cap_gep )
                 : s cap_ptr ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print cap_ptr )
                 ( nurl_print ` = alloca ` ) ( nurl_print ( nurl_llty cap_type ) ) ( nurl_print `\n` )
@@ -49666,7 +49747,11 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
         ~ != 0 ( nurl_str_len __cnr ) {
             : s __cnw ( str_first_word __cnr ) = __cnr ( str_skip_word __cnr )
             : s __cnt ( nurl_sym_get syms __cnw )
-            ? & & & & & != 0 ( nurl_str_starts __cnt `{ i1, ` ) ( __type_needs_drop __cnt syms ) ! ( __env_handle_ty __cnt syms ) ! ( __is_capture_byref __cnw syms ) ! ( __capture_lends __cnw syms ) ! ( str_contains_word g_nc_own_caps __cnw ) {
+            // (…one it owns outright: a binding that borrows or wraps what a
+            // parameter lends is not released here.)
+            : s __cnp ( mem_udrop_ptr_of syms __cnw )
+            : b __cno & & & != 0 ( nurl_str_len __cnp ) == 0 ( nurl_sym_len2 syms __cnp `__sborrow` ) == 0 ( nurl_sym_len2 syms __cnp `__alias` ) ! ( __alias_of_borrowed_param syms __cnp )
+            ? & & & & & & __cno != 0 ( nurl_str_starts __cnt `{ i1, ` ) ( __type_needs_drop __cnt syms ) ! ( __env_handle_ty __cnt syms ) ! ( __is_capture_byref __cnw syms ) ! ( __capture_lends __cnw syms ) ! ( str_contains_word g_nc_own_caps __cnw ) {
                 ( die_pos lex clo_line clo_col ( nurl_str_cat3 ( nurl_str_cat3 `this closure is returned and captures '` __cnw `', a '` ) ( llvm_to_nurl __cnt )
                 ( nurl_str_cat `' this function releases when it returns, and the closure cannot be given a copy of its own: it holds what has no Clone (a value with a Drop of its own), or an option of an option. Running it would read freed memory (agora #463). ` `Share the value instead — bind it as an ( Rc T ) (rc_new) and capture that — or capture what the closure needs out of it (a field, a copy of the payload).` ) ) )
             } {}
@@ -63629,13 +63714,28 @@ unsafe @ __sx_names_capture i syms s sx → b {
     }
 }
 
+// A capture the body takes over (the consumed-capture rule) leaves the env
+// when it is taken: its env slot is emptied there, so the env's drop —
+// which releases it when the body never ran — finds nothing (agora #463).
+@ __clo_capture_gone i syms i cg s name → v {
+    ? ! ( __is_clo_capture syms name ) { ^ v } {}
+    : s slot ( nurl_sym_get2 syms name `__envslot` )
+    ? == 0 ( nurl_str_len slot ) { ^ v } {}
+    // (Only one the env releases itself, gen_env_vtable's __rel_own: a
+    // closure handed to a `sink` is handed a copy of its env — it stays.)
+    : s ty ( nurl_sym_get syms name )
+    ? | ! ( __env_handle_ty ty syms ) ! ( __clone_supported ty syms ) { ^ v } {}
+    ( nurl_print `  store ` ) ( nurl_print ( nurl_llty ( nurl_sym_get syms name ) ) ) ( nurl_print ` zeroinitializer, ptr ` ) ( nurl_print slot ) ( nurl_print `\n` )
+}
+
 // A closure body moves its capture `name` out (into a literal, a container,
 // a callee that keeps it): the env takes it over from the enclosing binding
 // (gen_env_allocation), and every use of the closure may consume it — a
 // second call is a use after the move (bck_note_closure_caps).
-unsafe @ __clo_take_capture i syms s name → v {
+unsafe @ __clo_take_capture i syms i cg s name → v {
     : s cc ( nurl_sym_get syms `__clo_consumed__` )
     ? ! ( str_contains_word cc name ) { ( nurl_sym_set_deep syms `__clo_consumed__` ( nurl_str_cat3 cc ` ` name ) ) } {}
+    ( __clo_capture_gone syms cg name )
     ? & != g_borrowck 0 ! ( str_contains_word g_closure_consumed name ) {
         = g_closure_consumed ? == 0 ( nurl_str_len g_closure_consumed ) ( nurl_str_cat name `` ) ( nurl_str_cat3 g_closure_consumed ` ` name )
     } {}

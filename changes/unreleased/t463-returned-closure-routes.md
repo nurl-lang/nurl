@@ -36,3 +36,16 @@
   closure_captures_a_vec_get_payload and rc_of_an_option_builds). A closure
   capturing a `vec_get` payload (`use of undefined value` in the closure
   body), and an `( Rc ?String )` (`drop__w__opt.String` undefined).
+- **A returned closure over a borrowed parameter's payload copies it**
+  (Agora #463; probes closure_returned_as_an_arm_over_*_parameter_payload).
+  `^ ?? o { T s → \ → … s … }` with `o` not `sink` (an `inout` one
+  included) keeps `o` the caller's: the closure gets a copy of `s`. The
+  statement form, `?? o { T s → { ^ \ → … s … } }`, released the caller's
+  value twice.
+- **A closure that takes over a capture and never runs releases it**
+  (Agora #463; probes closure_local_releases_*_never_run).
+  `: c \ → i { ^ ( eat x ) }` with `c` never called leaked `x`.
+- **A borrow handed to a `sink` in a return is refused**
+  (Agora #463; probes rc_get_payload_handed_to_a_sink_in_*).
+  `?? ( rc_get r ) { T s → { ^ ( eat s ) } }` released what the Rc still
+  held; the same hand-over in a statement was already refused.
