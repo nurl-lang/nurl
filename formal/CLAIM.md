@@ -1,7 +1,7 @@
 # The claim
 
-> **Status: A1, A2, A3.0, A3.1, A3.4, and the first cuts of A3.2, A3.3,
-> A3.5 and A3.6 are proven** (`A1.memory_safe`, `A2.memory_safe`,
+> **Status: A1, A2, A3.0, A3.1, A3.4, A3.2's second cut and the first
+> cuts of A3.3, A3.5 and A3.6 are proven** (`A1.memory_safe`, `A2.memory_safe`,
 > `A2.no_leak_end`, `A3.claim`, [`README.md`](README.md)); the rest of
 > A3.2, A3.3, A3.5 and A3.6, and B–D, are the statement the proof is
 > working towards, not one it has reached.
@@ -163,10 +163,32 @@ the LLVM / C11 memory model rather than redefining it.
       atomically (trusted base, beside DRF-SC).
     - **In Lean.** `A2.memory_safe`, `A2.no_leak_end`, `A2.no_leak_panic`
       and `A3.claim` hold with all of this, on the standard axioms only.
-    - **Not typed yet:** a lock's payload that holds a share, a view or a
-      closure (a `Locked` of an `Arc`); a lock reached through a local
-      borrow (a field or an element); `locked_take` / `locked_restore`
-      (h267); and `Mutex` beside the data it guards.
+    - **Second cut: shares in payloads, `locked_take` / `locked_restore`.**
+      A lock's payload and a channel's element may hold `Arc`, lock,
+      `RwLocked`, `Atomic` and channel shares (`Ty.ok (lk t)` asks no view
+      and no library handle), so a `Locked ( Arc T )`, a
+      `Channel ( Arc T )` and a channel of `Atomic`s are typed, and a
+      `sync` closure fits in a lock or a channel. The sweep reaches
+      through a lock's payload (`Blk.keeps`). `locked_take` moves the
+      payload out to the caller and `locked_restore` moves a value back
+      (`Rhs.lockTake`, `Rhs.lockRestore`; restoring a value that is in
+      panics, as the runtime does). The take leaves the block empty, so a
+      restore drops nothing (h267). The runtime's `mem_take` moves the
+      value out too, so the model's move is exact.
+    - **Cycles.** The sweep frees a cycle of shares, where the runtime's
+      counts never reach zero. A cycle through a block's payload can form
+      only through a closure's environment (a closure kept in an `Arc` or
+      a lock that captures a share of it): types are finite otherwise.
+      nurlc refuses such stores (docs/MEMORY.md §7.7) and the model does
+      not, so `no_leak` agrees with the runtime for the programs nurlc
+      accepts: a phase C obligation, stated.
+    - **Not typed yet:** a library handle in a lock's payload or a
+      channel's element (it would need the crossing check at every
+      entry), and so a `: Send` trait object there; shares in a slice's
+      elements or a cell's state; `locked_set`, `locked_get`,
+      `locked_apply`'s result and `locked_await` as rules of their own; a
+      lock reached through a local borrow (a field or an element); and
+      `Mutex` beside the data it guards.
     - **Not proven here (phase D):** relocking a lock on the OS thread
       that holds it (a nested update, or another fiber on that thread).
       The model's thread waits or panics, but the runtime's default
@@ -200,9 +222,10 @@ the LLVM / C11 memory model rather than redefining it.
       the runtime mutex's (trusted base). Values in a queue are the
       block's tree, in no thread's part, so they race with nothing, and
       the sweep frees what is left in a queue with its block (`no_leak`).
-    - **Not typed yet:** a channel of values that hold a share, a view or
-      a closure (a `Channel` of `Arc`s, of closures: A3.5's crossing),
-      `chan_len`, `chan_is_closed` and `select`. Deadlock freedom, and that
+    - **Not typed yet:** a channel of values that hold a view or a
+      library handle (A3.2's second cut types `Arc`, lock and `Atomic`
+      shares and `sync` closures there), `chan_len`, `chan_is_closed` and
+      `select`. Deadlock freedom, and that
       a waiting `chan_recv` is woken, are not claimed.
   - **A3.3, first cut** *(proven)* — `RwLocked`: a value many threads
     read at once, through frozen read guards, and one changes.
@@ -279,8 +302,9 @@ the LLVM / C11 memory model rather than redefining it.
     - **Not typed yet:** a handle changed or copied through a borrow (the
       model takes a library's `in` handle as `inout`, and a store of a
       borrowed handle into an owner is not typed); `% Sync` / `% NotSend`
-      assertions; a `send` closure that captures a share in a lock or a
-      channel (refused where the runtime would move the handle along);
+      assertions; a `send` closure that captures a library handle in a
+      lock or a channel (refused where the runtime would move the handle
+      along; a `sync` one fits since A3.2's second cut);
       no subsumption between closure classes; a closure that changes a
       capture it moved in. Phase C must give each closure the class
       nurlc's follow-the-value check proved, and `any` where it cannot

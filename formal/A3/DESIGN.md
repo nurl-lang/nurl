@@ -8,7 +8,8 @@ defines A3.0's configuration (`Thread`, `Cfg`, `Cfg.view`), its steps
 (`Touch`), a race (`Race`), and the claim (`Claim`: `MemorySafe ∧ RaceFree ∧
 NoLeak` for every program A2 types); `../README.md` lists the modules of
 the proof. A3.1's `Arc` and A3.2's `Locked` are mechanized in the same
-claim (A3.1's and A3.2's mechanization, below; A3.2's first cut: what it
+claim (A3.1's and A3.2's mechanization, below; A3.2's second cut adds
+shares in lock payloads and `locked_take` / `locked_restore`, and what it
 leaves out is listed there), and so are A3.3's `RwLocked` (A3.3's
 mechanization, below: a lock block read through views, its read guards
 lending the value frozen) and A3.4's `Atomic` and channels (A3.4's
