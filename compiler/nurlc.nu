@@ -47569,6 +47569,9 @@ unsafe @ gen_closure_expr i lex i syms i cg → s {
     = g_last_alloc_reg ``
     = g_last_alloc_size ``
     : s r ( __gen_closure_expr lex syms cg )
+    // (One of the closures of its type a call nobody follows may run:
+    // __clo_nodes_close.)
+    ? & != 0 g_borrowck != 0 ( nurl_str_len g_last_closure_fn ) { ( __clo_ty_member ( nurl_get_last_type ) g_last_closure_fn ) } {}
     = g_last_alloc_reg ``
     = g_last_alloc_size ``
     = g_drop_glue_ty __glue_saved
@@ -60130,6 +60133,7 @@ unsafe @ __clo_node_of i syms s name i argc → s {
             } {
                 = nd ( __clo_node_new syms name )
                 ( __clo_node_add nd `*` )
+                ( __clo_node_ty nd ( nurl_sym_get syms name ) )
                 ( nurl_sym_def g_clo_nodes key nd )
                 = g_clo_lpnode_list ( __word_add g_clo_lpnode_list ( nurl_str_cat3 g_clo_cur `#` ( nurl_str_int lk ) ) )
             }
@@ -60158,9 +60162,27 @@ unsafe @ __clo_node_of i syms s name i argc → s {
             = nd ( __clo_node_new syms name )
             ( __clo_node_add nd `*` )
         }
+        ( __clo_node_ty nd ( nurl_sym_get syms name ) )
     } {}
     ( __clo_arity_at_least nd argc )
     ^ nd
+}
+
+// Closure literal (or node) `m` has closure type `ty`: one of what a call of
+// that type nobody follows may run (`tyl#ty`).
+@ __clo_ty_member s ty s m → v {
+    ? == 0 ( nurl_str_len ty ) { ^ v } {}
+    ? == 0 g_clo_nodes { = g_clo_nodes ( nurl_sym_new ) } {}
+    : s k ( nurl_str_cat `tyl#` ty )
+    : s cur ( nurl_sym_get g_clo_nodes k )
+    ? ( str_contains_word cur m ) { ^ v } {}
+    ( nurl_sym_def g_clo_nodes k ? == 0 ( nurl_str_len cur ) ( nurl_str_cat m `` ) ( nurl_str_cat3 cur ` ` m ) )
+}
+
+// Node `nd` holds a value of closure type `ty` (`ty#nd`).
+@ __clo_node_ty s nd s ty → v {
+    ? == 0 ( nurl_str_len ty ) { ^ v } {}
+    ( nurl_sym_def g_clo_nodes ( nurl_str_cat `ty#` nd ) ty )
 }
 
 // Closure value `tt`/`val` (type `ty`) handed to `callee` as argument `p`:
@@ -60278,6 +60300,7 @@ unsafe @ __clo_node_bind i syms s name s ty i tt s val b grow → v {
     // (Assigned: the node it already has — a parameter's, or one that may
     // still be whatever it held.)
     : s nd ? grow ( __clo_node_of syms name 0 ) ( __clo_node_new syms name )
+    ( __clo_node_ty nd ty )
     ( __clo_node_add_all nd ( __clo_val_members syms tt val ) )
 }
 
@@ -60312,6 +60335,19 @@ unsafe @ __clo_nodes_close → v {
             : s m ( str_first_word ms ) = ms ( str_skip_word ms )
             ( __clo_node_add nd m )
         }
+    }
+    // `*` — a closure nobody here follows (read out of a field or an
+    // element, a call's result, a payload) — is still read by the closure's
+    // interface (one built elsewhere, a function's), and may also be any
+    // closure literal of its type this program builds: the program is
+    // whole, so the value came from one of them (agora #418).
+    : ~ s sn ( nurl_str_cat g_clo_node_list `` )
+    ~ != 0 ( nurl_str_len sn ) {
+        : s nd ( str_first_word sn ) = sn ( str_skip_word sn )
+        ? ( str_contains_word ( nurl_sym_get g_clo_nodes nd ) `*` ) {
+            : s ty ( nurl_sym_get g_clo_nodes ( nurl_str_cat `ty#` nd ) )
+            ? != 0 ( nurl_str_len ty ) { ( __clo_node_add_all nd ( nurl_sym_get g_clo_nodes ( nurl_str_cat `tyl#` ty ) ) ) } {}
+        } {}
     }
     // A closure literal's closure parameter is what the calls through a
     // node it is a member of pass there — through each other's parameters
