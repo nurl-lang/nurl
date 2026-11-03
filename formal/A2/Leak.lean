@@ -248,6 +248,12 @@ theorem covers_evalR {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (hc : Covers m)
     · refine Or.inl (Or.inr (hgrow ?_))
       unfold PayAddr; rw [htk.blk]; exact hp
   | lockClone _ => exact Or.inl (hc i hi)
+  | @atomic _ _ _ _ _ k n _ _ _ hk _ _ =>
+    rcases hc i hi with h | ⟨k', bl, hk', hik⟩
+    · exact Or.inl (Or.inl h)
+    · by_cases he : k' = k
+      · subst he; rw [hk] at hk'; cases hk'; simp [Blk.tree] at hik
+      · exact Or.inl (Or.inr ⟨k', bl, by simp [upd, he, hk'], hik⟩)
   | arcClone _ | arcGet _ _ => exact Or.inl (hc i hi)
 
 /-- The binding that takes the value in flight owns it. -/

@@ -196,6 +196,31 @@ def PMode.bound : PMode → Eff
   | .inout b => b
   | _ => .none
 
+/-- A3.4: an `Atomic`'s operations (`stdlib/std/atomic.nu`), each one
+    `nurl_atomic_i64_*` (`__ATOMIC_SEQ_CST`) on the word. -/
+inductive AOp where
+  | load   -- `atomic_load a`
+  | store  -- `atomic_store a x`
+  | add    -- `atomic_add a d`: the old value
+  | sub    -- `atomic_sub a d`: the old value
+  | swap   -- `atomic_swap a x`: the old value
+  | max    -- `atomic_max a x`: the old value
+  | cas    -- `atomic_cas a expect desired`: whether it was `expect`
+deriving DecidableEq, Repr
+
+/-- What an operation answers, and the word it leaves, from the word `n`
+    and its arguments.  (The calculus's integers are `Nat`s, as `Expr`'s
+    are: `sub` saturates where the runtime's `i64` wraps; no memory fact
+    reads the number.) -/
+def AOp.run : AOp → Nat → Nat → Nat → Nat × Nat
+  | .load, n, _, _ => (n, n)
+  | .store, _, x, _ => (0, x)
+  | .add, n, d, _ => (n, n + d)
+  | .sub, n, d, _ => (n, n - d)
+  | .swap, n, x, _ => (n, x)
+  | .max, n, x, _ => (n, Nat.max n x)
+  | .cas, n, e, d => if n = e then (1, d) else (0, n)
+
 /-- Right-hand sides of a binding or an assignment. -/
 inductive Rhs where
   | expr (e : Expr)
@@ -225,6 +250,10 @@ inductive Rhs where
   | arcGet (a : Var)           -- A3.1: `arc_get`: the payload of `a`'s block, lent
   | lockNew (t : Ty) (y : Var) -- A3.2: `locked_new`: `y`'s value (a `t`) moves into a fresh lock block
   | lockClone (a : Var)        -- A3.2: `Locked_share`: a new share of the lock block `a` shares
+  | atomic (op : AOp) (a : Var) (e1 e2 : Expr)
+                               -- A3.4: an `Atomic`'s operation on the word of the integer
+                               -- lock block `a` shares, in one step (`atomic_new` is
+                               -- `lockNew .int`, `Atomic_share` is `lockClone`)
 deriving DecidableEq, Repr
 
 /-! ### Memory (here because a run-time form records a snapshot of it) -/

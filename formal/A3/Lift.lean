@@ -109,6 +109,7 @@ theorem EvalR.lift {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.
   | lockNew h1 hfr => exact EvalR.lockNew (TakeVal.lift h1 a2) hfr
   | arcClone hy => exact EvalR.arcClone hy
   | lockClone hy => exact EvalR.lockClone hy
+  | atomic hy hk h1 h2 => exact EvalR.atomic hy hk (Eval.lift h1 a2) (Eval.lift h2 a2)
   | arcGet hy hk => exact EvalR.arcGet hy hk
 
 theorem EvalR.liftP {m : Mem} {r : Rhs} (h : EvalR m r .panic) (a2 : Nat → Bool) :

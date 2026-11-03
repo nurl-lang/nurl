@@ -25,10 +25,22 @@ theorem ThreadOK.progress {P : Prog} (hP : ProgOK P) {m : Mem} {s : Stmt} (h : T
   obtain ⟨Γ, F, Δ, ht, hi, hcd, _, _⟩ := h
   exact progress' hP ht hcd hi
 
+/-- A3.4: an atomic operation waiting reads only the slots and the blocks. -/
+theorem RBlocked.of_eq {m m' : Mem} (hst : m'.st = m.st) (hb : m'.blk = m.blk) {r : Rhs} (h : RBlocked m r) :
+    RBlocked m' r := by
+  cases r with
+  | atomic _ a _ _ =>
+    obtain ⟨o, k, h1, h2⟩ := h
+    exact ⟨o, k, hst ▸ h1, hb ▸ h2⟩
+  | _ => exact h
+
 /-- A3.2: waiting for a lock reads only the slots and the blocks. -/
 theorem Blocked.of_eq {m m' : Mem} (hst : m'.st = m.st) (hb : m'.blk = m.blk) {s : Stmt} (h : Blocked m s) :
     Blocked m' s := by
   induction s with
+  | letv _ r _ _ => exact RBlocked.of_eq hst hb (r := r) h
+  | assign _ r => exact RBlocked.of_eq hst hb (r := r) h
+  | letd _ _ r _ _ => exact RBlocked.of_eq hst hb (r := r) h
   | withLock a _ _ _ =>
     obtain ⟨o, k, t, h1, h2⟩ := h
     exact ⟨o, k, t, hst ▸ h1, hb ▸ h2⟩
