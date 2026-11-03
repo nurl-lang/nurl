@@ -721,6 +721,77 @@ theorem spawn_pkgs_send {P : Prog} {spawn : Nat → Bool} (hS : SpawnOK P spawn)
   rw [hf] at hf'; cases hf'
   exact hw.noView_fits (hpar pt hin).2 hs
 
+/-! A3.5c: h344 (`dyn_object_carries_an_rc_to_a_thread`), a `%Churn` of a trait
+with no bound boxing a struct with an `Rc`, moved into a thread's closure
+while the spawner kept a clone.  The model has no `Rc` (the standard
+library's, phase B); what stands for a value that is not Send is a view (and
+a binding captured by name), and for one whose copies are one state, changed
+in place with no lock (an `Rc`'s count), a cell share (A3.5). -/
+
+/-- h344: a trait object whose box reaches a value that is not Send (a view)
+    is packed only at `any`: no impl of a `: Send` or `: Send Sync` trait
+    boxes it, and a closure that captures an `any` object (`te = fn ms' any`,
+    the thread's closure of h344) is `any` too ... -/
+theorem dyn_view_any {Γ Γ1 : Ctx} {F : List Var} {fs : List Nat} {te : Ty} {ms : List Nat} {y : Var}
+    {cs : List (Var × PMode × Ty)} {E : Entry} (h : RhsT Γ F (.pack fs te ms y cs) E Γ1)
+    (hv : te.holdsView = true) : E.ty = .fn ms .any := by
+  obtain ⟨q, hty, hq⟩ := h.pack_fits
+  rw [hty]
+  cases q with
+  | any => rfl
+  | _ => rw [(hq.1 rfl).1] at hv; cases hv
+
+/-- ... one whose box holds a library handle (a cell share: Send, not Sync) is
+    not packed at `: Send Sync` ... -/
+theorem dyn_cell_notSync {Γ Γ1 : Ctx} {F : List Var} {fs : List Nat} {te : Ty} {ms : List Nat} {y : Var}
+    {cs : List (Var × PMode × Ty)} {E : Entry} (h : RhsT Γ F (.pack fs te ms y cs) E Γ1)
+    (hc : te.hasCell = true) : E.ty = .fn ms .any ∨ E.ty = .fn ms .send := by
+  obtain ⟨q, hty, hq⟩ := h.pack_fits
+  rw [hty]
+  cases q with
+  | any => exact .inl rfl
+  | send => exact .inr rfl
+  | _ => rw [hq.2.1 rfl] at hc; cases hc
+
+/-- ... and an object of a trait with no bound (h344's `%Churn`) crosses no
+    spawn: a spawned function takes no `any` object (`spawn_not_any`), and an
+    object it takes at another class is no receiver of its trait's methods
+    (`callc_not_at`), so the thread cannot call it. -/
+theorem spawn_dyn_none {P : Prog} {spawn : Nat → Bool} (hS : SpawnOK P spawn) {f : Nat}
+    (hsp : spawn f = true) {fn : Fn} (hf : P[f]? = some fn) {ms : List Nat} (hb : TraitAt P ms .none)
+    {pm : PMode} {q : Cross} (hin : (pm, Ty.fn ms q) ∈ fn.params) {Γ Δ : Ctx} {F : List Var} {x c : Var}
+    {j : Nat} {zs : List Var} {k : Stmt} {Ec : Entry} (hc : Γ c = some Ec) (hty : Ec.ty = .fn ms q) :
+    ¬ StmtT P Γ F (.callc x c j zs k) Δ := by
+  refine callc_not_at hb hc hty fun hq => ?_
+  rw [hq] at hin
+  exact spawn_not_any hS hsp hf hin
+
+/-- A spawned function takes a trait object only of a trait with a bound
+    (`: Send` or `: Send Sync`) ... -/
+theorem spawn_dyn_bound {P : Prog} {spawn : Nat → Bool} (hS : SpawnOK P spawn) {f : Nat}
+    (hsp : spawn f = true) {fn : Fn} (hf : P[f]? = some fn) {pm : PMode} {ms : List Nat} {b : TraitBound}
+    (hin : (pm, Ty.fn ms b.cross) ∈ fn.params) : b ≠ .none := by
+  rintro rfl
+  exact spawn_not_any hS hsp hf hin
+
+/-- ... an `Arc` holds one only of a `: Send Sync` trait (`Arc T` asks `T`
+    Send and Sync) ... -/
+theorem arcNew_dyn {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {b : TraitBound} {y : Var} {E : Entry}
+    (h : RhsT Γ F (.arcNew (.fn ms b.cross) y) E Γ1) : b = .sendSync := by
+  rcases arcNew_fn h with hq | hq <;> cases b <;> first | rfl | cases hq
+
+/-- ... and a module global holds none but in an `Arc`, of a `: Send Sync`
+    trait (A3.6: `Ty.sync`). -/
+theorem glob_dyn {Γ Γ1 : Ctx} {F : List Var} {g : Nat} {ms : List Nat} {b : TraitBound} {E : Entry}
+    (h : RhsT Γ F (.glob g (.arc (.fn ms b.cross))) E Γ1) : b = .sendSync := by
+  have hs := h.glob_sync
+  cases b with
+  | sendSync => rfl
+  | _ => cases hs
+
+theorem glob_not_dyn {Γ Γ1 : Ctx} {F : List Var} {g : Nat} {ms : List Nat} {q : Cross} {E : Entry} :
+    ¬ RhsT Γ F (.glob g (.fn ms q)) E Γ1 := fun h => by cases h.glob_sync
+
 /-- One step of the configuration. -/
 inductive TStep (P : Prog) (spawn : Nat → Bool) : Cfg → Cfg → Prop
   /-- A thread takes one of A2's steps, unless its next step is a spawn;
