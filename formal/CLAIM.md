@@ -1,8 +1,8 @@
 # The claim
 
-> **Status: A1, A2 and A3.0 are proven** (`A1.memory_safe`,
+> **Status: A1, A2, A3.0 and A3.1 are proven** (`A1.memory_safe`,
 > `A2.memory_safe`, `A2.no_leak_end`, `A3.claim`, [`README.md`](README.md));
-> A3.1–A3.6 and B–D are the statement the proof is working towards, not one
+> A3.2–A3.6 and B–D are the statement the proof is working towards, not one
 > it has reached.
 
 ## Statement
@@ -10,9 +10,10 @@
 **Every program the NURL compiler accepts, outside the bodies of `unsafe`
 functions and its `unsafe` assertions, is memory-safe and leak-free** —
 *proven so far (A1, A2) for the ownership rules of the single-threaded
-language as the calculus models them, and (A3.0) for threads that share
-nothing but what they move; the data-race clause for what threads share is
-A3.1–A3.6, and the link from the rules to nurlc and its code is B–D*
+language as the calculus models them, (A3.0) for threads that share
+nothing but what they move, and (A3.1) for threads that also share `Arc`
+payloads; the data-race clause for the rest of what threads share is
+A3.2–A3.6, and the link from the rules to nurlc and its code is B–D*
 (below): no use after free, no double free, no read through a dangling
 view, no out-of-bounds access, no data race, and everything it allocated
 is released — on the panic path as much as the normal one.
@@ -103,9 +104,35 @@ the LLVM / C11 memory model rather than redefining it.
     on which A2's invariant holds: a step on the shared space is a step on
     the part and leaves the other parts as they were, and a spawn cuts the
     spawner's part in two.
-  - **A3.1–A3.6** — what threads share: `Arc`, `Locked` / `Mutex`,
+  - **A3.1** *(proven)* — `Arc`: a frozen payload shared by threads.
+    - **The calculus.** `arc_new` moves a value into a shared block,
+      `arc_clone` makes a new share, and `arc_get` lends the payload as a
+      borrow that depends on its share (`Kind.share`) and ends with it.
+      The payload may allocate (`Arc ( Vec … )`). It holds no view and no
+      closure.
+    - **What a block owns.** A block owns its payload tree (`BlkOwn`),
+      and no step writes a payload while its block lives (`BlkLe`). A
+      change through a borrow never reaches one (`ThruOK.noShare`).
+    - **Freeing.** A block lives while some thread's slot, or a live
+      payload, holds a share of it or a handle into it. A sweep at the end
+      of every step frees the rest, over all threads.
+    - **Threads.** The address space is each thread's part plus a
+      shared, read-only payload part. Two threads meet on a payload only
+      by reading it. The sweep's frees are writes to a block no thread
+      reaches.
+    - **In Lean.** `A2.memory_safe`, `A2.no_leak_end`, `A2.no_leak_panic`
+      and `A3.claim` hold with all of this, on the standard axioms only.
+    - **Not proven here (phase D):** the runtime frees an `Arc` at
+      refcount 0, which may be earlier than the sweep. Phase D must show
+      that refcount 0 means no live binding reaches the block. That
+      follows from typing, since every borrow of a payload depends on a
+      share. An `Arc` of a value that holds views or closures is not
+      typed yet, and neither is an `Arc` of a library handle whose copies
+      are one state (A3.5).
+  - **A3.2–A3.6** — the rest of what threads share: `Locked` / `Mutex`,
     `RwLocked` and `% Frozen` read guards, `Atomic` and channels, library
-    handles whose copies are one state, module globals. Not proven.
+    handles whose copies are one state, module globals. Not proven
+    (`A3/DESIGN.md` gives the design: they use A3.1's blocks).
 - **B** — the `unsafe` base of the standard library is semantically
   well-typed, so safe code built on it inherits the theorem.
 - **C** — every program nurlc accepts is well-typed in the formal rules.

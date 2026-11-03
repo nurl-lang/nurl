@@ -3,8 +3,8 @@ import A3.Pres
 /-! A3.0 — the claim, from the configuration invariant.
 
 Every reachable configuration keeps the invariant: the start has it
-(`CInv.init`), a thread's step keeps it (`CInv.thread_of`), and so does a
-spawn.  From it, no thread is stuck (A2's progress on the thread's part,
+(`CInv.init`), a thread's step and the sweep that ends it keep it
+(`CInv.thread_of`), and so does a spawn.  From it, no thread is stuck (A2's progress on the thread's part,
 lifted to the shared address space), no two threads race (`CInv.raceFree`)
 and nothing is left allocated once every thread has finished
 (`CInv.noLeak`).  The frame lemmas and the spawn case are hypotheses here,
@@ -23,21 +23,22 @@ def LiftLemma (P : Prog) : Prop :=
 theorem CInv.memSafe_of {P : Prog} (hP : ProgOK P) (hL : LiftLemma P) {C : Cfg} (h : CInv P C) :
     ∀ (i : Nat) (t : Thread), C.ths[i]? = some t → ¬ Stuck P (C.view t) t.s := by
   intro i t hi ⟨hne, hno⟩
-  have hlt := CInv.lt_nid h
-  obtain ⟨ps, hlen, hall, _, hok⟩ := h
-  obtain ⟨a, ha⟩ := part_of hlen hi
-  obtain ⟨hto, _⟩ := hok i t a hi ha
+  obtain ⟨ps, hc, _⟩ := h
+  have hlt := hc.lt_nid hi
+  obtain ⟨a, ha⟩ := part_of hc.len hi
+  obtain ⟨hto, _⟩ := hc.ok i t a hi ha
   rcases ThreadOK.progress hP hto with hs | ⟨r, hr⟩
   · exact hne hs
-  · have hd : ∀ k, (ownView C t a).alloc k = true → minus C.alloc a k = false :=
+  · have hd : ∀ k, (ownView C t a).alloc k = true → minus C.alloc (union a (payPart C.blk)) k = false :=
       fun k hk => minus_disj k hk
-    have hf : FreshFrom (minus C.alloc a) (ownView C t a).nid := fun k hk => by
-      cases hk' : minus C.alloc a k with
+    have hf : FreshFrom (minus C.alloc (union a (payPart C.blk))) (ownView C t a).nid := fun k hk => by
+      cases hk' : minus C.alloc (union a (payPart C.blk)) k with
       | false => rfl
       | true => exact absurd (hlt k (minus_le k hk')) (Nat.not_lt.mpr hk)
     obtain ⟨r', hr'⟩ := hL hr hd hf
-    have heq : { ownView C t a with alloc := union (ownView C t a).alloc (minus C.alloc a) } = C.view t := by
-      simp only [ownView, Cfg.view, union_minus (part_sub hall ha)]
+    have heq : { ownView C t a with
+        alloc := union (ownView C t a).alloc (minus C.alloc (union a (payPart C.blk))) } = C.view t := by
+      simp only [ownView, Cfg.view, union_minus (hc.view_sub ha)]
     rw [heq] at hr'
     exact hno r' hr'
 
@@ -77,7 +78,7 @@ theorem claim_of
   have hreach : ∀ C, Reach P spawn (Cfg.init s nv) C → CInv P C :=
     fun C hr => reach_cinv hP hPc (hR P) (hS P spawn hP hPc hSp) h0 hr
   exact ⟨fun C hr => CInv.memSafe_of hP (hL P) (hreach C hr),
-    fun C hr => CInv.raceFree (hreach C hr),
+    fun C hr => CInv.raceFree hP hPc (hR P) (hreach C hr),
     fun C hr hend => CInv.noLeak (hreach C hr) hend⟩
 
 end A3

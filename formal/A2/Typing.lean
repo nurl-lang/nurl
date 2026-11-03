@@ -565,11 +565,13 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       -- (a closure the environment holds that may change a binding by name:
       -- running this package changes it, its name is among what it holds)
       RhsT Γ F (.pack fs te ms y cs) ⟨.fn ms, .own, true, [], D ++ capDeps cs, false, false⟩ Γ1
-  /-- A3.1: `y`'s value, of a plain type (first cut), moves into a fresh
-      block (an owner moves, an integer is copied); the result is an owned
-      share, which holds nothing (the payload views nothing). -/
+  /-- A3.1: `y`'s value, of a type that holds no view and no closure, moves
+      into a fresh block (an owner moves its tree, which becomes the block's
+      payload; an integer is copied); the result is an owned share, which
+      holds nothing (the payload views nothing). -/
   | arcNew {t : Ty} {y : Var} {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
-      Γ y = some Ey → Ey.live = true → Ey.ty = t → t.plain = true → PushArg Γ F y Ey t D Γ1 →
+      Γ y = some Ey → Ey.live = true → Ey.ty = t → t.holdsView = false ∧ t.hasFn = false →
+      PushArg Γ F y Ey t D Γ1 →
       RhsT Γ F (.arcNew t y) ⟨.arc t, .own, true, [], [], false, false⟩ Γ1
   /-- A3.1: a new share of the block `a` shares: owned, holding nothing. -/
   | arcClone {a : Var} {E : Entry} {t : Ty} :

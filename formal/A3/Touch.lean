@@ -3,12 +3,15 @@ import A3.Thread
 /-! A3.0 — what a thread's next step touches is its own.
 
 Every address `Touch` names is in a tree one of the thread's owned slots
-holds: the rules read it off `VecOf`, `NodeAt`, `DataAt` and owned slots,
-which search the thread's own trees.  The one exception is a `sat` through
-a view, whose buffer the step finds only through the view's address; there
-the typing says the view is live, and a live view is into one of the
-thread's own buffers (`ViewAt`).  So two threads touch one address only if
-it is in both their trees, which the configuration invariant rules out. -/
+holds, or (A3.1) in a live block's payload that one of its values reaches:
+the rules read it off `VecOf`, `NodeAt`, `DataAt`, owned slots and shares,
+which search the thread's own trees and the payloads its handles and shares
+point into.  A `sat` through a view finds its buffer only through the view's
+address; there the typing says the view is live, and a live view is into
+one of the thread's own buffers or a payload (`ViewAt`).  Every write is to
+an owned tree.  So two threads touch one address only if it is in both
+their trees, which the configuration invariant rules out, or if it is a
+payload address, which both only read. -/
 
 namespace A3
 open A2
@@ -17,45 +20,33 @@ theorem OwnedId.st_eq {m m' : Mem} {i : Nat} (h : OwnedId m i) (hst : m'.st = m.
   obtain ⟨x, t, hx, hi⟩ := h
   exact ⟨x, t, by unfold OwnedAt at *; rw [hst]; exact hx, hi⟩
 
-theorem nodeAt_owned {m : Mem} (hp : PayFree m) {c : Nat} {n : Val} (h : NodeAt m c n) :
-    ∀ i ∈ n.ids, OwnedId m i := by
-  rcases h with ⟨x, t, hx, hs, _⟩ | ⟨k, bl, hk, hs, _⟩
-  · exact fun i hi => ⟨x, t, hx, Sub.ids hs i hi⟩
-  · exact fun i hi => (hp.no_node hk hs hi).elim
+/-- A3.1: a payload address the store's slots reach: it lies in the payload
+    of a block one of the thread's values refers to, through the blocks. -/
+def PaySeen (m : Mem) (i : Nat) : Prop :=
+  ∃ k bl, m.blk k = some bl ∧ i ∈ bl.pay.ids ∧ Reached m.vals m.blk k
 
-theorem dataAt_owned {m : Mem} (hp : PayFree m) {d : Nat} {n : Val} (h : DataAt m d n) :
-    ∀ i ∈ n.ids, OwnedId m i := by
-  rcases h with ⟨x, t, hx, hs, _⟩ | ⟨k, bl, hk, hs, _⟩
-  · exact fun i hi => ⟨x, t, hx, Sub.ids hs i hi⟩
-  · exact fun i hi => (hp.no_node hk hs hi).elim
+/-- What a thread may read: an address of its own trees, or one of a payload
+    its values reach. -/
+def Seen (m : Mem) (i : Nat) : Prop := OwnedId m i ∨ PaySeen m i
 
-theorem rootNode_owned {m : Mem} (hp : PayFree m) {r : Var} {n : Val} (h : RootNode m r n) :
-    ∀ i ∈ n.ids, OwnedId m i := by
-  rcases h with ⟨T, hT, htop⟩ | ⟨v, c, _, _, hn⟩ | ⟨v, d, o, l, _, _, hn⟩ | ⟨v, k, q, _, _, rfl⟩
-  · exact fun i hi => ⟨r, T, hT, Sub.ids (Top.sub htop) i hi⟩
-  · exact nodeAt_owned hp hn
-  · exact dataAt_owned hp hn
-  · exact fun i hi => nomatch hi
+/-- A node found through a handle that a slot holds: in an owned tree, or in a
+    payload the handle reaches into. -/
+theorem nodeAt_seen {m : Mem} {y : Var} {o : Bool} {c : Nat} (hy : m.st y = some ⟨o, some (.href c)⟩)
+    {n : Val} (h : NodeAt m c n) : ∀ i ∈ n.ids, Seen m i := by
+  rcases h with ⟨x, t, hx, hs, _⟩ | ⟨k, bl, hk, hs, ty, d, es, rfl⟩
+  · exact fun i hi => .inl ⟨x, t, hx, Sub.ids hs i hi⟩
+  · exact fun i hi => .inr ⟨k, bl, hk, Sub.ids hs i hi,
+      .root ⟨y, o, hy⟩ (Or.inr ⟨bl, hk, Or.inl ⟨c, Sub.refl _, Sub.ids hs c (by simp)⟩⟩)⟩
 
-/-- A valid view is into a buffer of one of the thread's own trees. -/
-theorem viewAt_owned {m : Mem} (hp : PayFree m) {dep : Dep} {d o l : Nat} {t : Ty}
-    (h : ViewAt m dep d o l t) : OwnedId m d := by
-  obtain ⟨c, es, _, hla, _, _⟩ := h
-  have hd : d ∈ (Val.node t c d es).ids := by simp [Val.ids]
-  rcases hla with ⟨n0, hr, hk⟩ | ⟨_, _, k, bl, hkb, hs⟩
-  · exact rootNode_owned hp hr d (Sub.ids hk.sub d hd)
-  · exact (hp.no_node hkb hs hd).elim
+theorem vecOf_seen {m : Mem} {x : Var} {t : Ty} {c d : Nat} {es : List Val}
+    (h : VecOf m x t c d es) : Seen m c ∧ Seen m d := by
+  obtain ⟨_, _, h | ⟨hx, hn⟩⟩ := h
+  · exact ⟨.inl ⟨x, _, h, by simp [Val.ids]⟩, .inl ⟨x, _, h, by simp [Val.ids]⟩⟩
+  · exact ⟨nodeAt_seen hx hn c (by simp [Val.ids]), nodeAt_seen hx hn d (by simp [Val.ids])⟩
 
-theorem vecOf_owned {m : Mem} (hp : PayFree m) {x : Var} {t : Ty} {c d : Nat} {es : List Val}
-    (h : VecOf m x t c d es) : OwnedId m c ∧ OwnedId m d := by
-  obtain ⟨_, _, h | ⟨_, hn⟩⟩ := h
-  · exact ⟨⟨x, _, h, by simp [Val.ids]⟩, ⟨x, _, h, by simp [Val.ids]⟩⟩
-  · exact ⟨nodeAt_owned hp hn c (by simp [Val.ids]), nodeAt_owned hp hn d (by simp [Val.ids])⟩
-
-theorem eReads_owned {m : Mem} (hp : PayFree m) {e : Expr} {i : Nat} (h : EReads m e i) :
-    OwnedId m i := by
+theorem eReads_seen {m : Mem} {e : Expr} {i : Nat} (h : EReads m e i) : Seen m i := by
   induction h with
-  | len hv => exact (vecOf_owned hp hv).1
+  | len hv => exact (vecOf_seen hv).1
   | addL _ ih => exact ih
   | addR _ ih => exact ih
   | ltL _ ih => exact ih
@@ -195,10 +186,11 @@ theorem TypedAt.assign_sat {P : Prog} {m : Mem} {x : Var} {r : Rhs} (h : TypedAt
   | sub hw _ _ ih => exact ih (hi.weaker hw) hs
   | _ => cases hs
 
-/-- A live slice binding's view is into a buffer of the thread's own trees. -/
-theorem sat_owned {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t : Ty}
+/-- A live slice binding's view is into a buffer of the thread's own trees,
+    or (A3.1) into a payload, which the view itself reaches. -/
+theorem sat_seen {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t : Ty}
     (hy : Γ y = some E) (hl : E.live = true) (ht : E.ty = .slice t) {d o l : Nat}
-    (hv : m.st y = some ⟨false, some (.view d o l)⟩) : OwnedId m d := by
+    (hv : m.st y = some ⟨false, some (.view d o l)⟩) : Seen m d := by
   obtain ⟨sl, hsl, _, hok⟩ := hi.slot y E hy
   rw [hv] at hsl
   cases hsl
@@ -208,49 +200,62 @@ theorem sat_owned {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t
   rw [ht] at hval
   obtain ⟨d', o', l', he, dep, _, hva⟩ := valOK_slice.mp hval
   cases he
-  exact viewAt_owned (fun k bl hk => hi.heap.bpay k bl hk) hva
+  rcases hva.owned with ⟨x, T, hT, hd⟩ | ⟨k, bl, hk, hd⟩
+  · exact .inl ⟨x, T, hT, hd⟩
+  · exact .inr ⟨k, bl, hk, hd, .root ⟨y, false, hv⟩ (Or.inr ⟨bl, hk, Or.inr ⟨d, o, l, Sub.refl _, hd⟩⟩)⟩
 
-theorem rTouch_owned {m m1 : Mem} (hp : PayFree m) {r : Rhs} {i : Nat} {w : Bool} (h : RTouch m r i w)
-    (hst : m1.st = m.st) (hsat : SatLive m1 r) : OwnedId m i := by
+theorem Seen.of_st {m m1 : Mem} {i : Nat} (h : Seen m1 i) (hst : m1.st = m.st) (hb : m1.blk = m.blk) :
+    Seen m i := by
+  have hv : m1.vals = m.vals := by funext v; simp only [Mem.vals, hst]
+  rcases h with h | ⟨k, bl, hk, hi, hr⟩
+  · exact .inl (h.st_eq hst.symm)
+  · rw [hv, hb] at hr; rw [hb] at hk; exact .inr ⟨k, bl, hk, hi, hr⟩
+
+theorem rTouch_seen {m m1 : Mem} {r : Rhs} {i : Nat} {w : Bool} (h : RTouch m r i w)
+    (hst : m1.st = m.st) (hb : m1.blk = m.blk) (hsat : SatLive m1 r) : OwnedId m i ∨ (w = false ∧ Seen m i) := by
   cases h with
-  | expr he => exact eReads_owned hp he
-  | atC hv => exact (vecOf_owned hp hv).1
-  | atD hv => exact (vecOf_owned hp hv).2
-  | atI he => exact eReads_owned hp he
-  | view hv => exact (vecOf_owned hp hv).1
+  | expr he => exact .inr ⟨rfl, eReads_seen he⟩
+  | atC hv => exact .inr ⟨rfl, (vecOf_seen hv).1⟩
+  | atD hv => exact .inr ⟨rfl, (vecOf_seen hv).2⟩
+  | atI he => exact .inr ⟨rfl, eReads_seen he⟩
+  | view hv => exact .inr ⟨rfl, (vecOf_seen hv).1⟩
   | sat hv =>
     obtain ⟨Γ, E, t, hi, hy, hl, ht⟩ := hsat _ _ rfl
-    exact (sat_owned hi hy hl ht (by rw [hst]; exact hv)).st_eq hst.symm
-  | satI he => exact eReads_owned hp he
-  | popC hy => exact ⟨_, _, hy, by simp [Val.ids]⟩
-  | popD hy => exact ⟨_, _, hy, by simp [Val.ids]⟩
+    exact .inr ⟨rfl, (sat_seen hi hy hl ht (by rw [hst]; exact hv)).of_st hst hb⟩
+  | satI he => exact .inr ⟨rfl, eReads_seen he⟩
+  | popC hy => exact .inl ⟨_, _, hy, by simp [Val.ids]⟩
+  | popD hy => exact .inl ⟨_, _, hy, by simp [Val.ids]⟩
+  | arcGet ha hk hi => exact .inr ⟨rfl, .inr ⟨_, _, hk, hi, .root ⟨_, _, ha⟩ (Or.inl ⟨_, Sub.refl _⟩)⟩⟩
 
-/-- **Every address a thread's next step touches is in one of its own trees.**
-    `m` is the store the step runs on; `m1` has its bindings and is where the
-    thread's typing holds (its own part of the address space). -/
-theorem touch_owned {P : Prog} {m m1 : Mem} (hp : PayFree m) {s : Stmt} {i : Nat} {w : Bool}
-    (h : Touch P m s i w) (hst : m1.st = m.st) (hty : TypedAt P m1 s) : OwnedId m i := by
+/-- **What a thread's next step touches is its own**: an address in one of
+    its own trees, or (A3.1) a payload address its values reach, which it
+    only reads.  `m` is the store the step runs on; `m1` has its bindings
+    and blocks and is where the thread's typing holds (its own part of the
+    address space). -/
+theorem touch_seen {P : Prog} {m m1 : Mem} {s : Stmt} {i : Nat} {w : Bool}
+    (h : Touch P m s i w) (hst : m1.st = m.st) (hb : m1.blk = m.blk) (hty : TypedAt P m1 s) :
+    OwnedId m i ∨ (w = false ∧ Seen m i) := by
   induction h with
   | seq _ ih => exact ih hty.seq
-  | letv hr => exact rTouch_owned hp hr hst hty.letv_sat
-  | letd hr => exact rTouch_owned hp hr hst hty.letd_sat
+  | letv hr => exact rTouch_seen hr hst hb hty.letv_sat
+  | letd hr => exact rTouch_seen hr hst hb hty.letd_sat
   | scopeD _ ih => exact ih hty.scopeD
-  | assign hr => exact rTouch_owned hp hr hst hty.assign_sat
-  | assignDrop hx hi => exact ⟨_, _, hx, hi⟩
-  | ite he => exact eReads_owned hp he
-  | pushC hx => exact ⟨_, _, hx, by simp [Val.ids]⟩
-  | pushD hx => exact ⟨_, _, hx, by simp [Val.ids]⟩
-  | free hx hi => exact ⟨_, _, hx, hi⟩
-  | editC hn => exact ⟨_, _, hn.2.2.1, hn.sub.ids _ (by simp [Val.ids])⟩
-  | editD hn => exact ⟨_, _, hn.2.2.1, hn.sub.ids _ (by simp [Val.ids])⟩
-  | editFree hn _ ha => exact ⟨_, _, hn.2.2.1, hn.sub.ids _ (ids_drop_sub ha)⟩
-  | editI he => exact eReads_owned hp he
-  | editSetFree hlt hn _ ha => exact ⟨_, _, hn.2.2.1, hn.sub.ids _ (ids_get_sub hlt ha)⟩
-  | editSetDrop _ _ _ hy ha => exact ⟨_, _, hy, ha⟩
-  | editSetI he => exact eReads_owned hp he
+  | assign hr => exact rTouch_seen hr hst hb hty.assign_sat
+  | assignDrop hx hi => exact .inl ⟨_, _, hx, hi⟩
+  | ite he => exact .inr ⟨rfl, eReads_seen he⟩
+  | pushC hx => exact .inl ⟨_, _, hx, by simp [Val.ids]⟩
+  | pushD hx => exact .inl ⟨_, _, hx, by simp [Val.ids]⟩
+  | free hx hi => exact .inl ⟨_, _, hx, hi⟩
+  | editC hn => exact .inl ⟨_, _, hn.2.2.1, hn.sub.ids _ (by simp [Val.ids])⟩
+  | editD hn => exact .inl ⟨_, _, hn.2.2.1, hn.sub.ids _ (by simp [Val.ids])⟩
+  | editFree hn _ ha => exact .inl ⟨_, _, hn.2.2.1, hn.sub.ids _ (ids_drop_sub ha)⟩
+  | editI he => exact .inr ⟨rfl, eReads_seen he⟩
+  | editSetFree hlt hn _ ha => exact .inl ⟨_, _, hn.2.2.1, hn.sub.ids _ (ids_get_sub hlt ha)⟩
+  | editSetDrop _ _ _ hy ha => exact .inl ⟨_, _, hy, ha⟩
+  | editSetI he => exact .inr ⟨rfl, eReads_seen he⟩
   | scope _ ih => exact ih hty.scope
-  | scopeEnd hx hi => exact ⟨_, _, hx, hi⟩
-  | scopeUnwind hs hx hi => exact ⟨_, _, Step.panic_st hs _ _ hx, hi⟩
+  | scopeEnd hx hi => exact .inl ⟨_, _, hx, hi⟩
+  | scopeUnwind hs hx hi => exact .inl ⟨_, _, Step.panic_st hs _ _ hx, hi⟩
   | rbind _ ih => exact ih hty.rbind
   | frozen _ ih => exact ih hty.frozen
   | catchR _ ih => exact ih hty.catchR

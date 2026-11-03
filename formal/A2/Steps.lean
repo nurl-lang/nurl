@@ -90,8 +90,7 @@ theorem MInv.add {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} (hx : Γ x = no
                 hi.heap.notPay (by
                   rcases ownedAt_set.mp hT with ⟨_, h⟩ | ⟨_, h⟩
                   · cases h
-                  · exact h) hi')
-              bpay := hi.heap.bpay }
+                  · exact h) hi') }
     | true =>
       have hown : E.mode = .own := by
         rcases hout.mode with h | h
@@ -274,7 +273,7 @@ theorem HeapOK.release {m : Mem} (hh : HeapOK m) {x : Var} {sl : Slot} (hx : m.s
       (fun o U hU i hi => by
         rcases hown o U hU with ⟨_, rfl⟩ | ⟨_, h⟩
         · exact (hput rfl U rfl).2.2.2.2 i hi
-        · exact hh.notPay h hi), hh.bpay⟩
+        · exact hh.notPay h hi)⟩
   · rcases hown o U hU with ⟨_, rfl⟩ | ⟨_, h⟩
     · exact (hput rfl U rfl).1
     · exact hh.nodup o U h
@@ -403,17 +402,19 @@ theorem push_take {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} (hi : MInv m Γ)
         exact ⟨d, o, l, rfl, dep, List.mem_append_left _ hd, ha⟩
       · exact wf_append (wf_derive hi hy hl hnint _) (wf_held hi hy hl hnint)
 
-/-- A3.1, `arc_new`: the value taken from `y`, plain, moves into a fresh
-    block, whose key no share names yet; every slot is as it was. -/
+/-- A3.1, `arc_new`: the tree taken from `y`, of a type that holds no view
+    and no closure, moves into a fresh block, whose key no share names yet:
+    its addresses leave the owned trees (`y`'s slot is empty) and become the
+    block's payload, which owns them (`BlkOwn`: they were in no other owned
+    tree and no payload, `Pushed`); every slot is as it was. -/
 theorem rhs_arcNew {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {t : Ty} {v : Val} {D : List Dep}
-    (post : RhsPost m m1 Γ Γ1 F) (pu : Pushed m1 Γ1 t v D) (hpl : t.plain = true) (htok : t.ok = true)
-    (hfr : m1.blk m1.nid = none) :
+    (post : RhsPost m m1 Γ Γ1 F) (pu : Pushed m1 Γ1 t v D) (hpl : t.holdsView = false ∧ t.hasFn = false)
+    (htok : t.ok = true) (hfr : m1.blk m1.nid = none) :
     RhsPost m { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, v⟩) } Γ Γ1 F ∧
     RhsOut { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, v⟩) } Γ1
       ⟨.arc t, .own, true, [], [], false, false⟩ (.arc m1.nid v) true := by
   let m2 : Mem := { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, v⟩) }
-  have hvf := Ty.plain_holdsView hpl
-  have hids : v.ids = [] := pu.wf.plain_ids hpl
+  have hvf := hpl.1
   have hb : BlkLe m1.blk m2.blk := by
     intro k bl hk
     have hne : k ≠ m1.nid := fun h => by rw [h, hfr] at hk; cases hk
@@ -443,10 +444,7 @@ theorem rhs_arcNew {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {t : Ty} {v : Val}
       rcases hcases k' bl' hk'' with ⟨rfl, rfl⟩ | ⟨_, h'⟩
       · exact fun hi' => pu.np i hi' ⟨k, bl, h, hi⟩
       · exact hoth k' bl' hk' h'
-  have hheap : HeapOK m2 := HeapOK.mono post.inv.heap rfl (fun _ h => h) (Nat.le_succ _) hbo (fun k bl hk => by
-    rcases hcases k bl hk with ⟨rfl, rfl⟩ | ⟨_, h⟩
-    · exact hids
-    · exact post.inv.heap.bpay k bl h)
+  have hheap : HeapOK m2 := HeapOK.mono post.inv.heap rfl (fun _ h => h) (Nat.le_succ _) hbo
   have hB : BlocksIn m2 := fun k bl hk => by
     rcases hcases k bl hk with ⟨rfl, rfl⟩ | ⟨_, h⟩
     · exact ⟨htok, hvf, pu.wf, pu.sh.grow hb⟩
@@ -1193,12 +1191,12 @@ theorem HeapOK.remove {m : Mem} (hh : HeapOK m) {x : Var} {sl : Slot} (hx : m.st
     exact ⟨fun o U h => hh.nodup o U (hown o U h).2,
       fun o1 o2 U1 U2 hne h1 h2 => hh.disj o1 o2 U1 U2 hne (hown o1 U1 h1).2 (hown o2 U2 h2).2,
       fun o U h => hh.alloc o U (hown o U h).2, fun o U h => hh.self o U (hown o U h).2,
-      hh.blk.frame rfl (Nat.le_refl _) (fun _ _ => rfl) (fun o U h i hi => hh.notPay (hown o U h).2 hi), hh.bpay⟩
+      hh.blk.frame rfl (Nat.le_refl _) (fun _ _ => rfl) (fun o U h i hi => hh.notPay (hown o U h).2 hi)⟩
   | borrowed =>
     exact ⟨fun o U h => hh.nodup o U (hown o U h).2,
       fun o1 o2 U1 U2 hne h1 h2 => hh.disj o1 o2 U1 U2 hne (hown o1 U1 h1).2 (hown o2 U2 h2).2,
       fun o U h => hh.alloc o U (hown o U h).2, fun o U h => hh.self o U (hown o U h).2,
-      hh.blk.frame rfl (Nat.le_refl _) (fun _ _ => rfl) (fun o U h i hi => hh.notPay (hown o U h).2 hi), hh.bpay⟩
+      hh.blk.frame rfl (Nat.le_refl _) (fun _ _ => rfl) (fun o U h i hi => hh.notPay (hown o U h).2 hi)⟩
 
 /-- The end of `x`'s scope: its value, if it owns one, is dropped. -/
 theorem step_scopeExit {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
@@ -1269,8 +1267,7 @@ theorem HeapOK.grow {m : Mem} (hh : HeapOK m) {x : Var} {t : Ty} {c d : Nat} {es
           · exact hh.notPay hT (by simp [h]) hp
           · exact hnp i h hp
         · exact hh.notPay h hi hp)
-  refine ⟨fun o U hU => ?_, fun o1 o2 U1 U2 hne h1 h2 => ?_, fun o U hU i hi => ?_, fun o U hU => ?_, hblk,
-    hh.bpay⟩
+  refine ⟨fun o U hU => ?_, fun o1 o2 U1 U2 hne h1 h2 => ?_, fun o U hU i hi => ?_, fun o U hU => ?_, hblk⟩
   · rcases hown o U hU with ⟨_, rfl⟩ | ⟨_, h⟩
     · simp only [ids_node, idsL_append, idsL_cons, idsL_nil, List.append_nil, List.nodup_cons,
         List.mem_cons, List.mem_append, not_or, List.nodup_append]

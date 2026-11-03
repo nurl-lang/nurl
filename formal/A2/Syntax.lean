@@ -73,17 +73,7 @@ def Ty.ok : Ty → Bool
   | .prod a b => a.ok && b.ok
   | .sum a b => a.ok && b.ok
   | .fn _ => true
-  | .arc t => t.ok && !t.holdsView   -- A3.1's first cut: a payload holds no views (nor a closure)
-
-/-- A3.1's first cut: what a block's payload may be — integers, and structs,
-    enums and shares of them (`Arc (Arc i)`, h211).  Such a value owns no
-    address, and holds no view and no closure. -/
-def Ty.plain : Ty → Bool
-  | .int => true
-  | .prod a b => a.plain && b.plain
-  | .sum a b => a.plain && b.plain
-  | .arc t => t.plain
-  | _ => false
+  | .arc t => t.ok && !t.holdsView   -- A3.1: a payload holds no views
 
 /-- A type whose values own what they hold: a `Vec` or a struct.  Its
     binding is an owner (or borrows one). -/
@@ -256,9 +246,10 @@ structure Slot where
 
 /-- A3.1: a counted block (`Arc`): its payload, a tree of type `ty` that no
     one writes.  How many shares it has is the number of `Val.arc` leaves
-    naming it (ghost, so nothing stores it).  In the first cut a payload owns
-    no address, so a block no share reaches frees nothing: no step removes a
-    block (`arcNew` adds one, `BlkLe`). -/
+    naming it (ghost, so nothing stores it).  The payload's addresses are the
+    block's (`BlkOwn`).  No step removes a block (`arcNew` adds one,
+    `BlkLe`); the sweep at a step's end removes those nothing reaches and
+    frees their payloads (`Mem.sweep`). -/
 structure Blk where
   ty  : Ty
   pay : Val

@@ -67,9 +67,8 @@ mutual
 inductive Frees : (Nat → Bool) → Val → (Nat → Bool) → Prop
   | int {a : Nat → Bool} {n : Nat} : Frees a (.int n) a
   | view {a : Nat → Bool} {d o l : Nat} : Frees a (.view d o l) a
-  /-- A3.1: a share frees nothing by itself.  (The count is ghost; in the
-      first cut a payload owns no address, so a block no share reaches
-      frees nothing either, and no step removes one: `BlkLe`.) -/
+  /-- A3.1: a share frees nothing by itself.  (The count is ghost; a block
+      no share reaches is freed by the sweep that ends the step, `Steps`.) -/
   | arc {a : Nat → Bool} {k : Nat} {p : Val} : Frees a (.arc k p) a
   | node {a a' : Nat → Bool} {t : Ty} {c d : Nat} {es : List Val} :
       a c = true → upd a c false d = true →

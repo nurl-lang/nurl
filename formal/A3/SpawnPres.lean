@@ -4,7 +4,7 @@ import A3.Assemble
 
 The spawner's part splits in two: the trees it moves to the new thread
 (their addresses become the new thread's part), and the rest, which stays
-its own.  The spawner's facts after the spawn and the new thread's facts
+its own.  The payloads stay shared: the new thread sees them too.  The spawner's facts after the spawn and the new thread's facts
 are the spawn case's two lemmas (`A3.SpawnOld`, `A3.SpawnNew`), taken here
 as hypotheses in the shapes they are proved in. -/
 
@@ -43,8 +43,8 @@ def NewThreadLemma (P : Prog) (spawn : Nat → Bool) : Prop :=
     ∀ {part : Nat → Bool}, (∀ i, part i = true ↔ ∃ v ∈ vs, i ∈ v.ids) →
     ∀ {N : Nat}, (∀ v ∈ vs, ∀ i ∈ v.ids, i < N) → ∀ {B : Nat → Option Blk},
     (∀ (j : Nat) (v : Val) (pt : PMode × Ty), vs[j]? = some v → fn.params[j]? = some pt →
-      SharesIn B pt.2 v) → BlocksOK B → (∀ k bl, B k = some bl → k < N) →
-    ThreadOK P { alloc := part, nid := N, nv := fn.nvars, st := spawnSt fn vs, blk := B }
+      SharesIn B pt.2 v) → BlocksAt B N → (∀ i, PayIn B i → ∀ v ∈ vs, i ∉ v.ids) →
+    ThreadOK P { alloc := union part (payPart B), nid := N, nv := fn.nvars, st := spawnSt fn vs, blk := B }
       (wrapParams fn.params 0 0 (.scope fn.params.length fn.body))
 
 theorem MoveArgs.slot {st st' : Var → Option Slot} {as : List Var} {vs : List Val}
@@ -59,6 +59,24 @@ theorem MoveArgs.slot {st st' : Var → Option Slot} {as : List Var} {vs : List 
       · cases h; exact .inr rfl
       · exact .inl h
     · exact .inr h
+
+/-- A3.1: a value a spawner's slot held is still there after the arguments
+    move out, or it is one of the moved ones. -/
+theorem MoveArgs.keep {st st' : Var → Option Slot} {as : List Var} {vs : List Val}
+    (h : MoveArgs st as vs st') :
+    ∀ y o v, st y = some ⟨o, some v⟩ → st' y = some ⟨o, some v⟩ ∨ v ∈ vs := by
+  induction h with
+  | nil => exact fun _ _ _ h => .inl h
+  | @cons st st' a as v vs ha _ ih =>
+    intro y o w hy
+    by_cases hya : y = a
+    · subst hya; rw [ha] at hy; cases hy; exact .inr (List.mem_cons_self ..)
+    · have hy' : upd st a (some ⟨true, none⟩) y = some ⟨o, some w⟩ := by
+        show (if y = a then _ else st y) = _
+        rw [ite_eq_right hya]; exact hy
+      rcases ih y o w hy' with h | h
+      · exact .inl h
+      · exact .inr (List.mem_cons_of_mem _ h)
 
 theorem list_append_get {α : Type} {l : List α} {y : α} {j : Nat} :
     (l ++ [y])[j]? = if j < l.length then l[j]? else if j = l.length then some y else none := by
@@ -89,86 +107,130 @@ theorem CInv.spawn_of {P : Prog} {spawn : Nat → Bool} (hSO : SpawnerLemma P sp
     CInv P { C with ths := C.ths.set i ⟨upd st' x (some ⟨false, some (.int 0)⟩), t.nv, K (.scope x k)⟩ ++
                       [⟨spawnSt fn vs, fn.nvars,
                         wrapParams fn.params 0 0 (.scope fn.params.length fn.body)⟩] } := by
-  obtain ⟨ps, hlen, hall, hdisj, hok⟩ := h
-  obtain ⟨a, ha⟩ := part_of hlen hi
-  obtain ⟨hto, hbo⟩ := hok i t a hi ha
+  obtain ⟨ps, hc, hreach⟩ := h
+  obtain ⟨a, ha⟩ := part_of hc.len hi
+  obtain ⟨hto, hbo⟩ := hc.ok i t a hi ha
   have hilen : i < C.ths.length := (List.getElem?_eq_some_iff.mp hi).1
-  have hilen' : i < ps.length := by rw [hlen]; exact hilen
+  have hilen' : i < ps.length := by rw [hc.len]; exact hilen
   obtain ⟨Γ, F, Δ, _, hinv, hcds, _, _⟩ := id hto
   obtain ⟨a', hfr, hto'⟩ := hSO hto hK hsp hf hx hmv
   obtain ⟨hvlen, hwf, hsh, hslots, hvdisj⟩ := hSA hto hK hsp hf hmv
+  -- the spawner's view: its part and the payloads
+  let A := union a (payPart C.blk)
+  have hA : ∀ k, A k = true ↔ a k = true ∨ PayIn C.blk k := fun k => ownView_alloc (t := t)
   -- the moved trees: owned slots of the spawner
   have hown : ∀ v ∈ vs, ∃ a0, t.st a0 = some ⟨true, some v⟩ := fun v hv => by
     obtain ⟨j, hj⟩ := List.mem_iff_getElem?.mp hv
     obtain ⟨a0, _, h0⟩ := hslots j v hj
     exact ⟨a0, h0⟩
-  have hids : ∀ v ∈ vs, ∀ k ∈ v.ids, a k = true ∧ k < C.nid := fun v hv k hk => by
+  have hids : ∀ v ∈ vs, ∀ k ∈ v.ids, A k = true ∧ k < C.nid := fun v hv k hk => by
     obtain ⟨a0, h0⟩ := hown v hv
     exact hinv.heap.alloc a0 v h0 k hk
-  -- the new thread's part
-  let aN : Nat → Bool := minus a a'
+  have hvnp : ∀ v ∈ vs, ∀ k ∈ v.ids, ¬ PayIn C.blk k := fun v hv k hk => by
+    obtain ⟨a0, h0⟩ := hown v hv
+    exact hinv.heap.notPay h0 hk
+  -- the payloads stay on the spawner's view
+  have hPa' : ∀ k, PayIn C.blk k → a' k = true := fun k hk => by
+    rw [FreesL.other hfr (fun hm => by
+      obtain ⟨v, hv, hkv⟩ := mem_idsL_iff.mp hm
+      exact hvnp v hv k hkv hk)]
+    exact (hA k).mpr (.inr hk)
+  -- the spawner keeps `aS`, the new thread gets `aN`
+  let aS : Nat → Bool := minus a' (payPart C.blk)
+  let aN : Nat → Bool := minus A a'
   have hpart : ∀ k, aN k = true ↔ ∃ v ∈ vs, k ∈ v.ids := fun k => by
     constructor
     · intro hk
       simp only [aN, minus, Bool.and_eq_true, Bool.not_eq_true'] at hk
       by_cases hm : k ∈ idsL vs
       · exact mem_idsL_iff.mp hm
-      · have h0 : a k = false := (FreesL.other hfr hm).symm.trans hk.2
+      · have h0 : A k = false := (FreesL.other hfr hm).symm.trans hk.2
         rw [hk.1] at h0; cases h0
     · rintro ⟨v, hv, hk⟩
       have h1 := (hids v hv k hk).1
       have h2 := FreesL.freed hfr (mem_idsL_iff.mpr ⟨v, hv, hk⟩)
       simp only [aN, minus, h1, h2]; rfl
+  have haSa : ∀ k, aS k = true → a k = true := fun k hk => by
+    simp only [aS, minus, Bool.and_eq_true, Bool.not_eq_true', payPart_false] at hk
+    rcases (hA k).mp (FreesL.le hfr hk.1) with h | h
+    · exact h
+    · exact absurd h hk.2
+  have haNa : ∀ k, aN k = true → a k = true := fun k hk => by
+    simp only [aN, minus, Bool.and_eq_true, Bool.not_eq_true'] at hk
+    rcases (hA k).mp hk.1 with h | h
+    · exact h
+    · rw [hPa' k h] at hk; cases hk.2
+  have hsplit : ∀ k, a k = true → aS k = true ∨ aN k = true := fun k hk => by
+    have hnp := hc.pay i a ha k hk
+    cases ha' : a' k with
+    | true => exact .inl (by simp only [aS, minus, ha', payPart_false.mpr hnp]; rfl)
+    | false => exact .inr (by simp only [aN, minus, (hA k).mpr (.inl hk), ha']; rfl)
+  have hSN : ∀ k, aS k = true → aN k = false := fun k hk => by
+    simp only [aS, minus, Bool.and_eq_true] at hk
+    simp [aN, minus, hk.1]
   have htoN := hNT (B := C.blk) hsp hf hvlen hwf
     (fun v hv => by obtain ⟨a0, h0⟩ := hown v hv; exact hinv.heap.nodup a0 v h0) hvdisj
     (fun v hv => by obtain ⟨a0, h0⟩ := hown v hv; exact hinv.heap.self a0 v h0)
     (fun v hv => by obtain ⟨a0, h0⟩ := hown v hv; exact hinv.pkgs a0 _ v h0 rfl)
     (fun v hv => by obtain ⟨a0, h0⟩ := hown v hv; exact memCodes_iff.mp hcds a0 true v h0)
-    hpart (fun v hv k hk => (hids v hv k hk).2) hsh
-    (fun k bl hk => ⟨(hinv.blocks k bl hk).1, (hinv.blocks k bl hk).2.1, (hinv.blocks k bl hk).2.2.1,
-      (hinv.blocks k bl hk).2.2.2, hinv.heap.bpay k bl hk⟩) (fun k bl hk => hinv.heap.bkey k bl hk)
-  -- the spawner keeps `a'`, the new thread gets `aN`
-  have ha'a : ∀ k, a' k = true → a k = true := fun k hk => FreesL.le hfr hk
-  have haNa : ∀ k, aN k = true → a k = true := fun k hk => minus_le k hk
-  have hsub := part_sub hall ha
+    hpart (fun v hv k hk => (hids v hv k hk).2) hsh hto.blocksAt
+    (fun k hk v hv hkv => hvnp v hv k hkv hk)
   have hlen' : (C.ths.set i ⟨upd st' x (some ⟨false, some (.int 0)⟩), t.nv, K (.scope x k)⟩).length =
-      ps.length := by rw [List.length_set, hlen]
-  refine ⟨ps.set i a' ++ [aN], by simp [hlen], fun k => ?_, ?_, ?_⟩
-  · -- every live address is on a part
+      ps.length := by rw [List.length_set, hc.len]
+  -- (A3.1) every value a slot held is still in one, and so every block stays reached
+  have hvals : ∀ v, C.vals v → Cfg.vals { C with ths := C.ths.set i ⟨upd st' x (some ⟨false, some (.int 0)⟩),
+      t.nv, K (.scope x k)⟩ ++ [⟨spawnSt fn vs, fn.nvars,
+        wrapParams fn.params 0 0 (.scope fn.params.length fn.body)⟩] } v := by
+    rintro v ⟨j, tj, hj, y, o, hy⟩
+    have hjl : j < C.ths.length := (List.getElem?_eq_some_iff.mp hj).1
+    by_cases hji : j = i
+    · subst hji; rw [hi] at hj; cases hj
+      have hyx : y ≠ x := fun he => by rw [he, hx] at hy; cases hy
+      rcases MoveArgs.keep hmv y o v hy with h' | h'
+      · refine ⟨j, _, by rw [get_set_append hilen, ite_eq_left hjl, ite_eq_left rfl], y, o, ?_⟩
+        show (if y = x then _ else st' y) = _
+        rw [ite_eq_right hyx]; exact h'
+      · obtain ⟨n, hn⟩ := List.mem_iff_getElem?.mp h'
+        have hnl : n < fn.params.length := by rw [← hvlen]; exact (List.getElem?_eq_some_iff.mp hn).1
+        refine ⟨C.ths.length, _, by rw [get_set_append hilen]; simp; rfl, n, true, ?_⟩
+        show spawnSt fn vs n = _
+        simp only [spawnSt, Nat.ne_of_lt hnl, ↓reduceIte, hn, Option.map_some]
+    · exact ⟨j, tj, by rw [get_set_append hilen, ite_eq_left hjl, ite_eq_right (Ne.symm hji)]; exact hj, y, o, hy⟩
+  refine ⟨ps.set i aS ++ [aN], ⟨by simp [hc.len], fun k => ?_, ?_, ?_, hc.uniq, ?_⟩,
+    fun k' bl hk' => (hreach k' bl hk').of_roots fun v hv _ _ => hvals v hv⟩
+  · -- every live address is on a part, or a payload's
     constructor
     · intro hk
-      obtain ⟨b, hb, hbk⟩ := (hall k).mp hk
-      obtain ⟨j, hj⟩ := List.mem_iff_getElem?.mp hb
-      by_cases hji : i = j
-      · subst hji; rw [ha] at hj; cases hj
-        cases ha' : a' k with
-        | true =>
-          exact ⟨a', List.mem_of_getElem? (i := i) (by rw [get_set_append hilen']; simp [hilen']), ha'⟩
-        | false =>
-          refine ⟨aN, List.mem_of_getElem? (i := ps.length) (by rw [get_set_append hilen']; simp), ?_⟩
-          show (a k && !a' k) = true
-          rw [hbk, ha']; rfl
-      · have hjl : j < ps.length := (List.getElem?_eq_some_iff.mp hj).1
-        exact ⟨b, List.mem_of_getElem? (i := j) (by rw [get_set_append hilen', ite_eq_left hjl, ite_eq_right hji]; exact hj), hbk⟩
-    · rintro ⟨b, hb, hbk⟩
-      obtain ⟨j, hj⟩ := List.mem_iff_getElem?.mp hb
-      rw [get_set_append hilen'] at hj
-      by_cases hjl : j < ps.length
-      · rw [ite_eq_left hjl] at hj
+      rcases (hc.all k).mp hk with ⟨b, hb, hbk⟩ | hp
+      · obtain ⟨j, hj⟩ := List.mem_iff_getElem?.mp hb
         by_cases hji : i = j
-        · rw [ite_eq_left hji] at hj; cases hj; exact hsub k (ha'a k hbk)
-        · rw [ite_eq_right hji] at hj; exact part_sub hall hj k hbk
-      · rw [ite_eq_right hjl] at hj
-        by_cases hje : j = ps.length
-        · rw [ite_eq_left hje] at hj; cases hj; exact hsub k (haNa k hbk)
-        · rw [ite_eq_right hje] at hj; cases hj
+        · subst hji; rw [ha] at hj; cases hj
+          rcases hsplit k hbk with h | h
+          · exact .inl ⟨aS, List.mem_of_getElem? (i := i) (by rw [get_set_append hilen']; simp [hilen']), h⟩
+          · exact .inl ⟨aN, List.mem_of_getElem? (i := ps.length) (by rw [get_set_append hilen']; simp), h⟩
+        · have hjl : j < ps.length := (List.getElem?_eq_some_iff.mp hj).1
+          exact .inl ⟨b, List.mem_of_getElem? (i := j)
+            (by rw [get_set_append hilen', ite_eq_left hjl, ite_eq_right hji]; exact hj), hbk⟩
+      · exact .inr hp
+    · rintro (⟨b, hb, hbk⟩ | hp)
+      · obtain ⟨j, hj⟩ := List.mem_iff_getElem?.mp hb
+        rw [get_set_append hilen'] at hj
+        by_cases hjl : j < ps.length
+        · rw [ite_eq_left hjl] at hj
+          by_cases hji : i = j
+          · rw [ite_eq_left hji] at hj; cases hj; exact hc.part_sub ha k (haSa k hbk)
+          · rw [ite_eq_right hji] at hj; exact hc.part_sub hj k hbk
+        · rw [ite_eq_right hjl] at hj
+          by_cases hje : j = ps.length
+          · rw [ite_eq_left hje] at hj; cases hj; exact hc.part_sub ha k (haNa k hbk)
+          · rw [ite_eq_right hje] at hj; cases hj
+      · exact (hc.all k).mpr (.inr hp)
   · -- the parts are disjoint
     intro j j' b c hjj hj hj' z hz
     rw [get_set_append hilen'] at hj hj'
-    -- what each index holds, and that it lies inside `a` or another thread's part
-    have side : ∀ (q : Nat) (e : Nat → Bool), (if q < ps.length then (if i = q then some a' else ps[q]?)
+    have side : ∀ (q : Nat) (e : Nat → Bool), (if q < ps.length then (if i = q then some aS else ps[q]?)
         else if q = ps.length then some aN else none) = some e →
-        (q = i ∧ e = a') ∨ (q = ps.length ∧ e = aN) ∨ (q ≠ i ∧ q < ps.length ∧ ps[q]? = some e) := by
+        (q = i ∧ e = aS) ∨ (q = ps.length ∧ e = aN) ∨ (q ≠ i ∧ q < ps.length ∧ ps[q]? = some e) := by
       intro q e he
       by_cases hq : q < ps.length
       · rw [ite_eq_left hq] at he
@@ -182,24 +244,39 @@ theorem CInv.spawn_of {P : Prog} {spawn : Nat → Bool} (hSO : SpawnerLemma P sp
     rcases side j b hj with ⟨hji, hbe⟩ | ⟨hjl, hbe⟩ | ⟨hji, _, hjp⟩ <;>
     rcases side j' c hj' with ⟨hji', hce⟩ | ⟨hjl', hce⟩ | ⟨hji', _, hjp'⟩
     · exact absurd (hji.trans hji'.symm) hjj
+    · rw [hbe] at hz; rw [hce]; exact hSN z hz
+    · rw [hbe] at hz; exact hc.disj i j' a c (Ne.symm hji') ha hjp' z (haSa z hz)
     · rw [hbe] at hz; rw [hce]
-      show (a z && !a' z) = false
-      rw [hz]; simp
-    · rw [hbe] at hz; exact hdisj i j' a c (Ne.symm hji') ha hjp' z (ha'a z hz)
-    · rw [hbe] at hz; rw [hce]
-      simp only [aN, minus, Bool.and_eq_true, Bool.not_eq_true'] at hz; exact hz.2
+      cases h' : aS z with
+      | false => rfl
+      | true => rw [hSN z h'] at hz; cases hz
     · exact absurd (hjl.trans hjl'.symm) hjj
-    · rw [hbe] at hz; exact hdisj i j' a c (Ne.symm hji') ha hjp' z (haNa z hz)
+    · rw [hbe] at hz; exact hc.disj i j' a c (Ne.symm hji') ha hjp' z (haNa z hz)
     · rw [hce]
-      cases hc : a' z with
+      cases hc' : aS z with
       | false => rfl
       | true =>
-        have := hdisj j i b a hji hjp ha z hz
-        rw [ha'a z hc] at this; cases this
+        have := hc.disj j i b a hji hjp ha z hz
+        rw [haSa z hc'] at this; cases this
     · rw [hce]
-      show (a z && !a' z) = false
-      rw [hdisj j i b a hji hjp ha z hz]; rfl
-    · exact hdisj j j' b c hjj hjp hjp' z hz
+      cases hc' : aN z with
+      | false => rfl
+      | true =>
+        have := hc.disj j i b a hji hjp ha z hz
+        rw [haNa z hc'] at this; cases this
+    · exact hc.disj j j' b c hjj hjp hjp' z hz
+  · -- no part holds a payload's address
+    intro j b hb z hz
+    rw [get_set_append hilen'] at hb
+    by_cases hjl : j < ps.length
+    · rw [ite_eq_left hjl] at hb
+      by_cases hij : i = j
+      · rw [ite_eq_left hij] at hb; cases hb; exact hc.pay i a ha z (haSa z hz)
+      · rw [ite_eq_right hij] at hb; exact hc.pay j b hb z hz
+    · rw [ite_eq_right hjl] at hb
+      by_cases hje : j = ps.length
+      · rw [ite_eq_left hje] at hb; cases hb; exact hc.pay i a ha z (haNa z hz)
+      · rw [ite_eq_right hje] at hb; cases hb
   · -- every thread has its facts
     intro j t0 b ht0 hb
     rw [get_set_append hilen'] at hb
@@ -208,15 +285,23 @@ theorem CInv.spawn_of {P : Prog} {spawn : Nat → Bool} (hSO : SpawnerLemma P sp
     · rw [ite_eq_left hjl] at hb ht0
       by_cases hij : i = j
       · rw [ite_eq_left hij] at hb ht0; cases hb; cases ht0
+        have hv : ownView { C with ths := C.ths.set i ⟨upd st' x (some ⟨false, some (.int 0)⟩), t.nv,
+            K (.scope x k)⟩ ++ [⟨spawnSt fn vs, fn.nvars, wrapParams fn.params 0 0 (.scope fn.params.length fn.body)⟩] }
+            ⟨upd st' x (some ⟨false, some (.int 0)⟩), t.nv, K (.scope x k)⟩ aS =
+            { ownView C t a with alloc := a', st := upd st' x (some ⟨false, some (.int 0)⟩) } := by
+          simp only [ownView, aS]
+          congr 1
+          exact union_minus' fun k hk => hPa' k (payPart_iff.mp hk)
+        rw [hv]
         refine ⟨hto', fun y v hy => ?_⟩
-        simp only [ownView, upd] at hy
+        simp only [upd] at hy
         split at hy
         · cases hy; rfl
         · rcases MoveArgs.slot hmv y _ hy with h0 | h0
           · exact hbo y v h0
           · cases h0
       · rw [ite_eq_right hij] at hb ht0
-        exact hok j t0 b ht0 hb
+        exact hc.ok j t0 b ht0 hb
     · rw [ite_eq_right hjl] at hb ht0
       by_cases hje : j = ps.length
       · rw [ite_eq_left hje] at hb ht0; cases hb; cases ht0

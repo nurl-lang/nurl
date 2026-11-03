@@ -1,7 +1,7 @@
 // arc_payload_lent_through_a_struct: an Arc's payload is frozen once made, and a view of it handed to anything that changes it is rejected (h212, h213) — when the call that lent the view took the Arc itself. A helper that took a struct HOLDING the Arc (`: Holder { ( Arc Page ) a }`) and handed back a view of the payload lent the same memory, but the view was not traced to the Arc: the caller's write through it compiled, and with the payload shared it raced every thread reading it.
 // Closed: a parameter whose type holds an Arc or a `% Frozen` handle — a struct's field, an enum's payload, an option, a generic argument; not through a handle that synchronises what it holds — lends frozen views like the Arc does (__ty_lend_frozen).
 // main (before this PR): compiled; the writer and the readers raced on the page (ThreadSanitizer: data race), and readers saw torn pages.
-// map: §6.5 | A3 | rejected | h288 | helper takes a struct holding an Arc and lends the payload; caller writes through the view while threads read
+// map: RhsT.arcGet | A3 | rejected | h288 | helper takes a struct holding an Arc and lends the payload; caller writes through the view while threads read
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 $ `stdlib/std/arc.nu`
