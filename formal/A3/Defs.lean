@@ -882,6 +882,50 @@ theorem lockedSet_check {P : Prog} {m m1 : Mem} {t : Ty} {a b x y : Var} {v : Va
     Step P m (Stmt.lockedSet t a b x y) (.panic m) :=
   Step.letvP (EvalR.lockNewFail ht hfail)
 
+/-- `locked_await`'s answer binding: an owned option of the result, holding
+    nothing. -/
+def awaitE (R : Ty) : Entry := outE (.sum .int R) .own
+
+/-- **`locked_await` is typed** (`Stmt.lockedAwait`): each round is
+    `locked_apply`'s (the closure's answer, an owned option that holds no lend
+    of the payload, `ApplyFn`, moved into `q`), so a round leaves the context
+    as it found it: `q` an owned option holding nothing, which nothing
+    borrows.  That is the loop's invariant, and the context after. -/
+theorem _root_.A2.StmtT.lockedAwait {P : Prog} {Γ : Ctx} {F : List Var} {a x c q : Var} {f : Nat} {fn : Fn}
+    {Ea : Entry} {t R : Ty} (hd : ApplyFn P f t (.sum .int R)) (hf : P[f]? = some fn)
+    (hro : fn.resOwn = true)
+    (ha : Γ a = some Ea) (hla : Ea.live = true) (hta : Ea.lockOf t) (hroot : Ea.mode.isRoot = true)
+    (htv : t.holdsView = false) (hto : t.owning = true)
+    (hx : Γ x = none) (hc : Γ c = none) (hxc : x ≠ c) (hxF : x ∉ F) (hcF : c ∉ F)
+    (hux : Unnamed Γ x) (huc : Unnamed Γ c) (haq : a ≠ q)
+    (hq : Γ q = some (awaitE R)) (hqF : q ∉ F) (huq : Unnamed Γ q) (hpin : NoPin Γ q) :
+    StmtT P Γ F (Stmt.lockedAwait a x c q f) Γ := by
+  have hmo : resMode fn = .own := by simp [resMode, hro]
+  have hb := StmtT.lockedApply (P := P) (F := F) (c := c) hd hf ha hla hta hroot htv hto hx hc hxc hxF hcF
+    hux huc haq hq hqF rfl (by rw [hmo]; rfl) rfl hpin (huq.endOK.2.1)
+  rw [huq.kill] at hb
+  have hq' : A2.setE Γ q (outE (.sum .int R) (awaitE R).mode) = Γ := setE_self hq
+  rw [hq'] at hb
+  exact StmtT.while rfl (ExprT.isl hq rfl rfl) hb
+
+/-- The loop ends only on a `some`: its test reads `0` of an option only of an
+    `inr`, so what `q` holds then is the result, which `taker` moves out with
+    no panic. -/
+theorem await_done {m : Mem} {q : Var} (h : Eval m (.isl q) 0) : ∃ o v, m.st q = some ⟨o, some (.inr v)⟩ := by
+  cases h with
+  | isr h => exact ⟨_, _, h⟩
+
+/-- **Its waiting is `Blocked`**: a round, at its check-out (the loop unrolled,
+    `Step.while` and `Step.iteT`), waits while another thread holds the lock
+    (its payload out, or a view of it living), and a configuration that waits
+    is not stuck. -/
+theorem await_blocked {P : Prog} {m : Mem} {a x c q : Var} {f : Nat} {k : Nat} {t : Ty}
+    (hk : LockAt m a k) (hout : m.blk k = some ⟨t, .lock, none⟩ ∨ HasView m.blk k) :
+    Blocked m (.seq (Stmt.lockedApply a x c q f) (Stmt.lockedAwait a x c q f)) ∧
+      ¬ Stuck P m (.seq (Stmt.lockedApply a x c q f) (Stmt.lockedAwait a x c q f)) := by
+  have hb : Blocked m (.seq (Stmt.lockedApply a x c q f) (Stmt.lockedAwait a x c q f)) := ⟨k, t, hk, hout⟩
+  exact ⟨hb, fun h => h.2.1 hb⟩
+
 /-! ### A3.6: module globals, as A2 types them
 
 A global set at start is read at a type that synchronises itself

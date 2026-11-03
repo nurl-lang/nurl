@@ -683,6 +683,15 @@ def Stmt.lockedGet (a x c z : Var) (f : Nat) : Stmt := Stmt.lockedApply a x c z 
 def Stmt.lockedSet (t : Ty) (a b x y : Var) : Stmt :=
   .letv b (.lockNew t y) (.withLock a x (.assign x (.lockTake b)))
 
+/-- A3.2: `locked_await a f`, a monitor's wait, as rounds of check-outs: while
+    the answer `q` (a caller's option, `none` to start) is `none`, a round is
+    `locked_apply`'s form, `f` run on the checked-out payload and its answer
+    (an `Option`) moved into `q`.  Each round lets the lock go, as the
+    runtime's `cond_wait` lets the mutex go between runs; a round waits at its
+    check-out while another thread holds the lock (`Blocked`).  The loop ends on
+    a `some`, whose payload the caller takes (`taker q`). -/
+def Stmt.lockedAwait (a x c q : Var) (f : Nat) : Stmt := .while (.isl q) (Stmt.lockedApply a x c q f)
+
 /-- A3.6: an update of a `Locked` global set at start (`locked_update g f`,
     with `f`'s body as `s` and its argument as `x`): the global's handle,
     cloned into `h`, and A3.2's `withLock` on it — `h` is an owner, a root,
