@@ -3,8 +3,8 @@ import A3.Pres
 /-! A3.0 — the claim, from the configuration invariant.
 
 Every reachable configuration keeps the invariant: the start has it
-(`CInv.init`), a thread's step keeps it (`CInv.thread_of`), and so does a
-spawn.  From it, no thread is stuck (A2's progress on the thread's part,
+(`CInv.init`), a thread's step and the sweep that ends it keep it
+(`CInv.thread_of`), and so does a spawn.  From it, no thread is stuck (A2's progress on the thread's part,
 lifted to the shared address space), no two threads race (`CInv.raceFree`)
 and nothing is left allocated once every thread has finished
 (`CInv.noLeak`).  The frame lemmas and the spawn case are hypotheses here,

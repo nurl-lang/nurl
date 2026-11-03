@@ -11,8 +11,10 @@ import A2.Soundness
   (`spawn f = true`) is called on a new thread. Its parameters are `sink`
   and of types that hold no views, so what moves to the new thread is a
   tree no binding of the spawner can reach any more (Send, as A3.0 has
-  it). The shared blocks (`Arc`, `Locked`, `RwLocked`, `Atomic`,
-  channels) are added by A3.1–A3.5.
+  it). A3.1's `Arc` is A2's own (`Mem.blk`, `Val.arc`): its blocks are
+  shared by every thread, and the configuration's sweep ends every
+  thread's step. The other shared blocks (`Locked`, `RwLocked`, `Atomic`,
+  channels) are added by A3.2–A3.5.
 -/
 
 namespace A3
@@ -281,8 +283,9 @@ def NoLeak (P : Prog) (spawn : Nat → Bool) (s : Stmt) (nv : Nat) : Prop :=
 
 /-- **The A3.0 claim**, for A2 plus `spawn`: a program A2 types, whose
     spawned functions take only view-free `sink` parameters, is memory-safe,
-    race-free and leak-free on every interleaving.  Milestone A3.0 proves it;
-    A3.1–A3.6 extend the language and restate it. -/
+    race-free and leak-free on every interleaving.  Milestone A3.0 proves it,
+    and A3.1 for A2 with `Arc` (shares of view-free payloads, collected by
+    reachability); A3.2–A3.6 extend the language and restate it. -/
 def Claim : Prop :=
   ∀ (P : Prog) (spawn : Nat → Bool) (s : Stmt) (Δ : Ctx) (nv : Nat),
     ProgOK P → ProgCodes P → SpawnOK P spawn →
