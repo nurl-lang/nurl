@@ -15108,7 +15108,7 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
                     { ( __park_append syms `__fn_pending_keep_impl__` ( nurl_str_cat4 ( nurl_str_int api ) ` ` call_name
                         ( nurl_str_cat4 ` ` fname ` ` ( nurl_str_int arg_idx ) ) ) ) } {}
                     // (Not the whole the cursor's value is part of: __part_src.)
-                    ? ( __part_src syms uptr asrc ) {} { ( mem_udrop_flag_clear_if syms cg asrc sflag ) } } }
+                    ? ( __src_keeps syms uptr asrc ) {} { ( mem_udrop_flag_clear_if syms cg asrc sflag ) } } }
         } {}
     } {}
 }
@@ -24752,7 +24752,7 @@ unsafe @ mem_path_to_indices s path → s {
     ~ != 0 ( nurl_str_len rest ) {
         : s src ( str_first_word rest ) = rest ( str_skip_word rest )
         // (Not the whole the cursor's value is part of: __part_src.)
-        ? ( __part_src syms ptr src ) {} { ( mem_udrop_flag_set syms cg src val ) ( mem_udrop_param_moved syms src ) }
+        ? ( __src_keeps syms ptr src ) {} { ( mem_udrop_flag_set syms cg src val ) ( mem_udrop_param_moved syms src ) }
     }
 }
 
@@ -24793,8 +24793,10 @@ unsafe @ mem_path_to_indices s path → s {
             ( __record_param_idx syms `__fn_retpart__` ( nurl_sym_get2 syms src `__pname` ) ) } {}
         // (Not the whole the cursor's value is part of: __part_src.)
         // (…by the identity key when the cursor's flag is a call's answer, as
-        // its return answers: __src_leaves_by_identity.)
-        ? ( __part_src syms ptr src ) {} { ? __pcall { ( __src_leaves_by_identity syms cg src ptr ) } { ( mem_alias_src_leaves syms cg src ptr ) } }
+        // its return answers: __src_leaves_by_identity, agora #459; and not
+        // at all for another binding lent by a bit, which was copied where
+        // it lent: __src_keeps, agora #457.)
+        ? ( __part_src syms ptr src ) {} { ? __pcall { ( __src_leaves_by_identity syms cg src ptr ) } { ? ( __src_keeps syms ptr src ) {} { ( mem_alias_src_leaves syms cg src ptr ) } } }
     }
 }
 
@@ -26399,6 +26401,11 @@ unsafe @ __src_has_raw_ptr s text → b {
     : s ls ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print ls ) ( nurl_print ` = alloca i1\n  store i1 ` ) ( nurl_print nr ) ( nurl_print `, ptr ` ) ( nurl_print ls ) ( nurl_print `\n` )
     ( __sb syms ptr ( nurl_str_cat `@` ls ) )
+    // (…and whether what it may lend is this frame's own — a local among
+    // the call's arguments: a returned literal copies it there, as `^ s`
+    // does, __bind_lends_local. Taken over instead, the local's own value
+    // leaked on the runs the call handed back a fresh one, agora #457.)
+    ? ( __args_name_local syms ( nurl_sym_get syms `__last_call_args__` ) ) { ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__llocal` ) `1` ) = g_part_n + g_part_n 1 } {}
     // …and which call made it (`cn gn`): whether that call can lend at
     // all is a module-end fact (__hown_dyn's `retdynif##`).
     ( nurl_sym_def syms ( nurl_str_cat ls `__sbcn` ) ( nurl_sym_get syms `__last_retown_const__` ) )
@@ -48114,7 +48121,7 @@ unsafe @ __bck_made_from s name → s {
                 ~ != 0 ( nurl_str_len al ) {
                     : s w ( str_first_word al ) = al ( str_skip_word al )
                     // (Not the whole the cursor's value is part of: __part_src.)
-                    : s wf ? ( __part_src syms up w ) ( nurl_str_cat `false` `` ) ( mem_udrop_flag_get syms cg w )
+                    : s wf ? ( __src_keeps syms up w ) ( nurl_str_cat `false` `` ) ( mem_udrop_flag_get syms cg w )
                     : s o ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print o ) ( nurl_print ` = or i1 ` ) ( nurl_print f ) ( nurl_print `, ` ) ( nurl_print wf ) ( nurl_print `\n` )
                     = f o
@@ -51634,7 +51641,7 @@ unsafe @ str_word_index s list s word → i {
             : s w ( str_first_word al ) = al ( str_skip_word al )
             ? != 0 ( nurl_sym_len2 syms w `__pname` ) { ( mem_udrop_alias_lend syms cg uptr ) }
             // (Not the whole the cursor's value is part of: __part_src.)
-            { ? ( __part_src syms uptr w ) {} { ( mem_udrop_flag_clear_if syms cg w kflag ) } }
+            { ? ( __src_keeps syms uptr w ) {} { ( mem_udrop_flag_clear_if syms cg w kflag ) } }
         }
     } {}
 }
@@ -64150,6 +64157,22 @@ unsafe @ __clo_take_capture i syms s name → v {
     ^ ( __clone_supported pt syms )
 }
 
+// …or does `src` go on owning its value whatever `ptr` does with its own:
+// the whole ptr's value is part of (above), or a value that a binding
+// whose lentness is a bit may be a lend of — one bound to a call that
+// answers per call whether it lent (`__sborrow` `@slot`,
+// __mem_bind_call_bit), or one given such a value (`dyn`: its flag). That
+// binding's value is its own where the bit says so and a copy where it
+// lent (mem_lent_cond reads the bit), never src's to hand over: taken for
+// src's, src's own value leaked where the call handed back a fresh one
+// (agora #457).
+@ __src_keeps i syms s ptr s src → b {
+    ? ( __part_src syms ptr src ) { ^ T } {}
+    : s sb ( nurl_sym_get2 syms ptr `__sborrow` )
+    ? | == 0 ( nurl_str_len sb ) & != ( nurl_str_get sb 0 ) 64 ! ( seq sb `dyn` ) { ^ F } {}
+    ^ ( __clone_supported ( nurl_sym_get2 syms ptr `__udty` ) syms )
+}
+
 // Is `up` a binding read out of a field that a store replacing the field
 // may hand the old value (__fs_viewers_take)?
 @ __is_fviewer i syms s up → b {
@@ -64250,7 +64273,7 @@ unsafe @ __clo_take_capture i syms s name → v {
         ~ != 0 ( nurl_str_len al ) {
             : s w ( str_first_word al ) = al ( str_skip_word al )
             ? | != 0 ( nurl_sym_len2 syms w `__pname` ) != 0 ( nurl_sym_len2 syms w `__optparam` ) { ^ ( nurl_str_cat `` `` ) } {}
-            : s wf ? ( __part_src syms up w ) ( nurl_str_cat `false` `` ) ( mem_udrop_flag_get syms cg w )
+            : s wf ? ( __src_keeps syms up w ) ( nurl_str_cat `false` `` ) ( mem_udrop_flag_get syms cg w )
             : s o ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print o ) ( nurl_print ` = or i1 ` ) ( nurl_print acc ) ( nurl_print `, ` ) ( nurl_print wf ) ( nurl_print `\n` )
             = acc o
@@ -64705,7 +64728,7 @@ unsafe @ __jpb_note i cg s up → v {
                     ( bck_note_payload_taken syms w g_stmt_line )
                 } {}
                 // (Not the whole the cursor's value is part of: __part_src.)
-                : s wf ? ( __part_src syms up w ) ( nurl_str_cat `false` `` ) ( mem_udrop_flag_get syms cg w )
+                : s wf ? ( __src_keeps syms up w ) ( nurl_str_cat `false` `` ) ( mem_udrop_flag_get syms cg w )
                 : s o ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print o ) ( nurl_print ` = or i1 ` ) ( nurl_print r ) ( nurl_print `, ` ) ( nurl_print wf ) ( nurl_print `\n` )
                 = r o
@@ -64736,7 +64759,7 @@ unsafe @ __jpb_note i cg s up → v {
                 : ~ s al ( nurl_sym_get2 syms up `__alias` )
                 ~ != 0 ( nurl_str_len al ) {
                     : s w ( str_first_word al ) = al ( str_skip_word al )
-                    : s wf ( mem_udrop_flag_get syms cg w )
+                    : s wf ? ( __src_keeps syms up w ) ( nurl_str_cat `false` `` ) ( mem_udrop_flag_get syms cg w )
                     : s o ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print o ) ( nurl_print ` = or i1 ` ) ( nurl_print r ) ( nurl_print `, ` ) ( nurl_print wf ) ( nurl_print `\n` )
                     = r o
