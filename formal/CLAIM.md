@@ -524,8 +524,8 @@ Inside A2 (nurlc bugs):
   `vv` end at the hand-over; A2/EditB.lean's note).
 
 Outside A2:
-- The hand-over of an old value to its borrower (above): #366, #373, #378,
-  #387 and #459, plus #427 (a call that may hand back the owner's value
+- The hand-over of an old value to its borrower (above): #366, #373, #378
+  and #387, plus #427 (a call that may hand back the owner's value
   where nurlc has no lend fact for it at the `=`: a wrapper, a generic
   or later-defined callee, a value block) and #450 (shapes the hand-over
   gate does not reach: a struct given a part of itself through a callee
