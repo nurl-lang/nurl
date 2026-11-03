@@ -276,6 +276,191 @@ def SpawnRedex (spawn : Nat → Bool) (s : Stmt) : Prop :=
 def SendCheck (vs : List Val) (st' : Var → Option Slot) : Prop :=
   ∀ k, (∃ v ∈ vs, Sub (.cell k) v) → ∀ y o w, st' y = some ⟨o, some w⟩ → ¬ Sub (.cell k) w
 
+/-! ### A3.5b: closures across threads, as A2 types them
+
+A closure's captures are not part of its type, so its type says what its
+environment may hold (`Ty.fn ms q`, `Cross`): `pack` gives the class the
+captures fit, and the crossing rules ask their questions of the type, as of
+any type.  A spawn takes a Send closure (A3.0: a spawned function's
+parameters hold no view), an `Arc` a Sync one (A3.1, A3.5: no view, no
+closure that holds bindings by name, no library handle), a lock or a channel
+a bare one (A3.2, A3.4: no share). -/
+
+/-- What `pack` makes: a closure of the class its captures fit. -/
+theorem _root_.A2.RhsT.pack_fits {Γ Γ1 : Ctx} {F : List Var} {fs : List Nat} {te : Ty} {ms : List Nat}
+    {y : Var} {cs : List (Var × PMode × Ty)} {E : Entry} (h : RhsT Γ F (.pack fs te ms y cs) E Γ1) :
+    ∃ q, E.ty = .fn ms q ∧ q.Fits te cs := by
+  cases h with | pack _ _ _ _ _ hq => exact ⟨_, rfl, hq⟩
+
+/-- h342 (`route_handler_changes_its_capture_on_two_threads`): a closure that
+    captures a binding by name, to change it each time it runs (a handler
+    pushing to a captured `Vec`), is not Send: `pack` types it `any` ... -/
+theorem pack_names_any {Γ Γ1 : Ctx} {F : List Var} {fs : List Nat} {te : Ty} {ms : List Nat}
+    {y : Var} {cs : List (Var × PMode × Ty)} {E : Entry} (h : RhsT Γ F (.pack fs te ms y cs) E Γ1)
+    (hcs : cs ≠ []) : E.ty = .fn ms .any := by
+  obtain ⟨q, hty, hq⟩ := h.pack_fits
+  rw [hty]
+  cases q with
+  | any => rfl
+  | _ => exact absurd (hq.send rfl).2.2 hcs
+
+/-- ... which no `Arc` holds (it may change what it captured from every
+    thread that reaches it) ... -/
+theorem arcNew_not_any {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {y : Var} {E : Entry} :
+    ¬ RhsT Γ F (.arcNew (.fn ms .any) y) E Γ1 := fun h => by
+  cases h with | arcNew _ _ _ hp _ _ => exact absurd hp.1 (by simp [Ty.holdsView])
+
+/-- ... and no spawn takes: a thread's body may run it only on the thread
+    that captured the binding.  (A closure's own code is handed its
+    environment lent, `Implements`, so what it may change is a binding
+    captured by name, never its environment: a Send closure changes nothing
+    it captured.) -/
+theorem spawn_not_any {P : Prog} {spawn : Nat → Bool} (hS : SpawnOK P spawn) {f : Nat} (hsp : spawn f = true)
+    {fn : Fn} (hf : P[f]? = some fn) {pm : PMode} {ms : List Nat} : (pm, Ty.fn ms .any) ∉ fn.params := by
+  intro hin
+  obtain ⟨fn', hf', _, hpar⟩ := hS f hsp
+  rw [hf] at hf'; cases hf'
+  have := (hpar _ hin).2
+  simp [Ty.holdsView] at this
+
+/-- A closure's code reads its environment, lent: the first parameter of the
+    code it names is the environment's, borrowed (`inp`). -/
+theorem _root_.A2.Implements.env_lent {P : Prog} {f : Nat} {te : Ty} {cs : List (Var × PMode × Ty)}
+    {σ : Nat} (h : Implements P f te cs σ) : ∃ fn, P[f]? = some fn ∧ fn.params.head? = some (.inp, te) ∧
+      ¬ ThruFn P f := by
+  obtain ⟨fn, _, hf, _, hps, _, _, _, _, _, hnt⟩ := h
+  exact ⟨fn, hf, by rw [hps]; rfl, hnt⟩
+
+/-- h339 (`closure_in_an_arc_captures_a_library_handle`): a closure whose
+    environment may hold a library handle (a cell share, A3.5) is not Sync:
+    `pack` types it `sync` or `bare` only when its environment's type holds
+    none ... -/
+theorem pack_sync_noCell {Γ Γ1 : Ctx} {F : List Var} {fs : List Nat} {te : Ty} {ms : List Nat}
+    {y : Var} {cs : List (Var × PMode × Ty)} {E : Entry} (h : RhsT Γ F (.pack fs te ms y cs) E Γ1)
+    (hc : E.ty.hasCell = false) : te.hasCell = false := by
+  obtain ⟨q, hty, hq⟩ := h.pack_fits
+  rw [hty] at hc
+  exact hq.2.1 hc
+
+/-- ... and an `Arc` holds no other closure: only a Sync or a bare one. -/
+theorem arcNew_fn {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {q : Cross} {y : Var} {E : Entry}
+    (h : RhsT Γ F (.arcNew (.fn ms q) y) E Γ1) : q = .sync ∨ q = .bare := by
+  cases h with
+  | arcNew _ _ _ _ hc _ => cases q <;> simp_all [Ty.hasCell]
+
+/-- h340 (`closure_sent_on_a_channel_captures_a_kept_handle`): a channel's
+    element holds no share (A3.4), so a closure sent on one is bare: it
+    captures no handle at all, kept or not ... -/
+theorem chan_fn {ms : List Nat} {q : Cross} (h : (Ty.lk (.prod (.vec (.fn ms q)) .int)).ok = true) :
+    q = .bare := by
+  cases q <;> simp_all [Ty.ok, Ty.holdsView, Ty.hasArc]
+
+/-- ... and so is one a lock keeps (A3.2), which one thread at a time runs. -/
+theorem lockNew_fn {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {q : Cross} {y : Var} {E : Entry}
+    (h : RhsT Γ F (.lockNew (.fn ms q) y) E Γ1) : q = .bare := by
+  cases h with
+  | lockNew _ _ _ hp _ => cases q <;> simp_all [Ty.holdsView, Ty.hasArc]
+
+/-- A Send closure that captured a library handle crosses a spawn only with
+    every other owner of the handle's state: the crossing check counts what
+    the moved values hold, closures' environments included (`Sub.pkg`). -/
+theorem sendCheck_env {vs : List Val} {st' : Var → Option Slot} (h : SendCheck vs st') {v : Val}
+    (hv : v ∈ vs) {fs : List Nat} {te : Ty} {ms : List Nat} {e : Val} {cs : List (Var × PMode × Ty)}
+    (hs : Sub (.pkg fs te ms e cs) v) {k : Nat} (hk : Sub (.cell k) e) :
+    ∀ x o w, st' x = some ⟨o, some w⟩ → ¬ Sub (.cell k) w :=
+  h k ⟨v, hv, (Sub.pkg hk).trans hs⟩
+
+/-- **A Sync closure in an `Arc`**: `arc_new` takes it (its type holds no
+    view, no closure that holds bindings by name and no library handle) ... -/
+theorem arcNew_sync {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {y : Var} {Ey : Entry} {D : List Dep}
+    (hy : Γ y = some Ey) (hl : Ey.live = true) (hty : Ey.ty = .fn ms .sync)
+    (hpa : PushArg Γ F y Ey (.fn ms .sync) D Γ1) :
+    RhsT Γ F (.arcNew (.fn ms .sync) y) ⟨.arc (.fn ms .sync), .own, true, [], [], false, false⟩ Γ1 :=
+  RhsT.arcNew hy hl hty ⟨rfl, rfl⟩ rfl hpa
+
+/-- ... `arc_get` lends it, through a share of the `Arc` (`getE`): a borrow
+    every change through which is refused (`ThruOK.noShare`, `canDo`) ... -/
+theorem arcGet_sync {Γ : Ctx} {F : List Var} {a : Var} {Ea : Entry} {ms : List Nat}
+    (ha : Γ a = some Ea) (hl : Ea.live = true) (hty : Ea.ty = .arc (.fn ms .sync)) :
+    RhsT Γ F (.arcGet a) (getE a Ea (.fn ms .sync)) Γ :=
+  RhsT.arcGet ha hl hty rfl rfl
+
+/-- ... and a call through what it lends is a call like any other: the
+    receiver is handed to the method lent (`inp`), and its code reads its
+    environment, lent again (`Implements`), so several threads calling it
+    only read the payload (A3.1's argument). -/
+theorem _root_.A2.callT_recv {P : Prog} {Γ : Ctx} {F : List Var} {σ : Nat} {sig : Fn} {c : Var}
+    {Ec : Entry} (hσ : P[σ]? = some sig) (hps : sig.params = [(.inp, Ec.ty)]) (hc : Γ c = some Ec)
+    (hl : Ec.live = true) (hn : ∀ d ∈ Ec.vdeps, d.kind.isName = false) (hnt : ¬ ThruFn P σ) :
+    CallT P Γ F σ [c] (callRes Γ sig [c]) (callPost Γ sig [c]) := by
+  have hmut : mutNames Γ [c] = [] := by
+    have : nameDeps (argE Γ c).vdeps = [] := by
+      simp only [nameDeps, argE, hc, Option.getD_some, List.filter_eq_nil_iff]
+      intro d hd; simp [hn d hd]
+    simp [mutNames, argNames, this]
+  refine ⟨sig, hσ, by simp [hps], fun i hi => ?_, fun d hd => ?_, ?_, rfl, rfl, fun h => absurd h hnt⟩
+  · have hi' : i = 0 := by rw [hps] at hi; simpa using hi
+    subst hi'
+    refine ⟨Ec, by simpa using hc, hl, ?_, fun h => ?_, fun h => ?_⟩
+    · simp only [hps, List.getElem_cons_zero]; rfl
+    · simp [hps, PMode.moves] at h
+    · simp only [hps, List.getElem_cons_zero] at h; rcases h with h | h <;> cases h
+  · rw [hmut] at hd; cases hd
+  · exact CallDtorSafe.of_inp (fun p hp => by rw [hps] at hp; simp at hp; rw [hp]) hmut
+
+/-- An `inp`-only call kills nothing. -/
+theorem _root_.A2.callPost_recv {Γ : Ctx} {sig : Fn} {c : Var} {t : Ty} (hps : sig.params = [(.inp, t)])
+    (hmut : mutNames Γ [c] = []) : callPost Γ sig [c] = Γ := by
+  simp [callPost, hps, callPostAux, hmut, killNames]
+
+/-- **The call through a closure an `Arc` lends** (h342's fix: a handler kept
+    in an `Arc`, run by every worker), typed by A2's `callc`, unchanged: the
+    borrow `c` (`arc_get`'s, or any) of a closure whose method `j` has the
+    interface `σ`, which takes only the receiver. -/
+theorem _root_.A2.StmtT.callc_recv {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c : Var} {j : Nat} {k : Stmt}
+    {Ec : Entry} {ms : List Nat} {q : Cross} {σ : Nat} {sig : Fn}
+    (hks : k.src = true) (hx : Γ x = none) (hxF : x ∉ F) (hc : Γ c = some Ec) (hl : Ec.live = true)
+    (hty : Ec.ty = .fn ms q) (hj : ms[j]? = some σ) (hσ : P[σ]? = some sig)
+    (hps : sig.params = [(.inp, .fn ms q)]) (hout : ∀ o ∈ sig.outHolds, o.2.1 ≠ 0) (hnt : ¬ ThruFn P σ)
+    (hn : ∀ d ∈ Ec.vdeps, d.kind.isName = false)
+    (hk : StmtT P (setE Γ x (recvRes c Ec (callRes Γ sig [c]))) F k Δ) (hend : EndOK Δ x) :
+    StmtT P Γ F (.callc x c j [] k) (exitScope x Δ) := by
+  have hcT := callT_recv (F := F) hσ (by rw [hps, hty]) hc hl hn hnt
+  have hmut : mutNames Γ [c] = [] := by
+    have : nameDeps (argE Γ c).vdeps = [] := by
+      simp only [nameDeps, argE, hc, Option.getD_some, List.filter_eq_nil_iff]
+      intro d hd; simp [hn d hd]
+    simp [mutNames, argNames, this]
+  have hpost := callPost_recv (Γ := Γ) (c := c) hps hmut
+  rw [hpost] at hcT
+  exact StmtT.callc hks hx hxF hc hty hj hσ (by rw [hps]; rfl) hout hcT (fun _ h => by cases h) hk hend hnt
+
+/-- What `arc_get` lends of an owned share names nothing by name: a call
+    through it is `callc_recv`'s. -/
+theorem getE_own_noName {a : Var} {t u : Ty} :
+    ∀ d ∈ (getE a ⟨.arc u, .own, true, [], [], false, false⟩ t).vdeps, d.kind.isName = false := by
+  intro d hd
+  cases t <;> simp_all [getE, Entry.vdeps, derive, Mode.isRoot, Mode.ownSlot, rootKind, intE, Kind.isName]
+
+/-- **h342's fix, typed**: a Sync handler kept in an `Arc` (the owner `a` of
+    a share), lent by `arc_get` and called by whichever thread holds the
+    share: A2's `letv` and `callc`, unchanged. -/
+theorem _root_.A2.StmtT.arcCall {P : Prog} {Γ Δ : Ctx} {F : List Var} {a g x : Var} {j : Nat} {k : Stmt}
+    {ms : List Nat} {σ : Nat} {sig : Fn}
+    (ha : Γ a = some ⟨.arc (.fn ms .sync), .own, true, [], [], false, false⟩) (hks : k.src = true)
+    (hg : Γ g = none) (hgF : g ∉ F) (hx : Γ x = none) (hxF : x ∉ F) (hxg : x ≠ g)
+    (hj : ms[j]? = some σ) (hσ : P[σ]? = some sig) (hps : sig.params = [(.inp, .fn ms .sync)])
+    (hout : ∀ o ∈ sig.outHolds, o.2.1 ≠ 0) (hnt : ¬ ThruFn P σ)
+    (hk : StmtT P (setE (setE Γ g (getE a ⟨.arc (.fn ms .sync), .own, true, [], [], false, false⟩ (.fn ms .sync))) x
+      (recvRes g (getE a ⟨.arc (.fn ms .sync), .own, true, [], [], false, false⟩ (.fn ms .sync))
+        (callRes (setE Γ g (getE a ⟨.arc (.fn ms .sync), .own, true, [], [], false, false⟩ (.fn ms .sync)))
+          sig [g]))) F k Δ)
+    (hend : EndOK Δ x) (hendg : EndOK (exitScope x Δ) g) :
+    StmtT P Γ F (.letv g (.arcGet a) (.callc x g j [] k)) (exitScope g (exitScope x Δ)) :=
+  StmtT.letv hks hg hgF (arcGet_sync ha rfl rfl)
+    (StmtT.callc_recv hks (by simp [setE, upd_ne _ _ hxg, hx]) hxF (upd_same _ _ _) rfl rfl hj hσ hps hout
+      hnt getE_own_noName hk hend) hendg
+
 /-- One step of the configuration. -/
 inductive TStep (P : Prog) (spawn : Nat → Bool) : Cfg → Cfg → Prop
   /-- A thread takes one of A2's steps, unless its next step is a spawn;
