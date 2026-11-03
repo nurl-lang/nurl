@@ -51,16 +51,30 @@ inductive Repl (n n' : Val) : Val → Val → Prop
   | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {cs : List (Var × PMode × Ty)} {a a' : Val} :
       Repl n n' a a' → Repl n n' (.pkg fs te ms a cs) (.pkg fs te ms a' cs)
 
+/-- A3.2: the tree a block owns: its payload, or nothing (`.int 0`, which
+    owns no address and holds no handle or share) while a `lock` block's
+    payload is checked out. -/
+def Blk.tree (bl : Blk) : Val := bl.pay.getD (.int 0)
+
+/-- A3.2: the payload a block's holders read: an `arc` block's.  No one
+    reads a `lock` block's payload while it is in the block, so nothing
+    (`.int 0`) is read of it. -/
+def Blk.rd (bl : Blk) : Val :=
+  match bl.kind with
+  | .arc => bl.tree
+  | .lock => .int 0
+
 /-- The node with control block `c`, found in an owned tree, or (A3.1) in a
-    live block's payload, which nothing writes. -/
+    live block's payload that its holders read (an `arc` block's, A3.2),
+    which nothing writes. -/
 def NodeAt (m : Mem) (c : Nat) (n : Val) : Prop :=
   (∃ x t, m.st x = some ⟨true, some t⟩ ∧ Sub n t ∧ ∃ ty d es, n = .node ty c d es) ∨
-  (∃ k bl, m.blk k = some bl ∧ Sub n bl.pay ∧ ∃ ty d es, n = .node ty c d es)
+  (∃ k bl, m.blk k = some bl ∧ Sub n bl.rd ∧ ∃ ty d es, n = .node ty c d es)
 
 /-- The node whose element buffer is `d`, found in an owned tree. -/
 def DataAt (m : Mem) (d : Nat) (n : Val) : Prop :=
   (∃ x t, m.st x = some ⟨true, some t⟩ ∧ Sub n t ∧ ∃ ty c es, n = .node ty c d es) ∨
-  (∃ k bl, m.blk k = some bl ∧ Sub n bl.pay ∧ ∃ ty c es, n = .node ty c d es)
+  (∃ k bl, m.blk k = some bl ∧ Sub n bl.rd ∧ ∃ ty c es, n = .node ty c d es)
 
 -- Releasing a tree: each address must be live when it is freed.
 mutual
@@ -70,6 +84,8 @@ inductive Frees : (Nat → Bool) → Val → (Nat → Bool) → Prop
   /-- A3.1: a share frees nothing by itself.  (The count is ghost; a block
       no share reaches is freed by the sweep that ends the step, `Steps`.) -/
   | arc {a : Nat → Bool} {k : Nat} {p : Val} : Frees a (.arc k p) a
+  /-- A3.2: so does a lock share. -/
+  | lk {a : Nat → Bool} {k : Nat} : Frees a (.lk k) a
   | node {a a' : Nat → Bool} {t : Ty} {c d : Nat} {es : List Val} :
       a c = true → upd a c false d = true →
       FreesL (upd (upd a c false) d false) es a' →
@@ -109,24 +125,32 @@ cycles, and the blocks nothing reaches are exactly those the runtime's
 count would have freed, one after the other, newest first; the model frees
 them together, at the end of the step (`Mem.sweep`). -/
 
+/-- A3.2: a share of block `k`: an `arc` share carrying its payload
+    (`some p`), or a lock share (`none`). -/
+def Val.share (k : Nat) : Option Val → Val
+  | some p => .arc k p
+  | none => .lk k
+
 /-- `v` refers to block `k` of `B`: it holds a share of it, or a handle whose
     address lies in its payload. -/
 def Refers (B : Nat → Option Blk) (v : Val) (k : Nat) : Prop :=
-  (∃ p, Sub (.arc k p) v) ∨ ∃ bl, B k = some bl ∧
-    ((∃ c, Sub (.href c) v ∧ c ∈ bl.pay.ids) ∨ ∃ d o l, Sub (.view d o l) v ∧ d ∈ bl.pay.ids)
+  (∃ p, Sub (Val.share k p) v) ∨ ∃ bl, B k = some bl ∧
+    ((∃ c, Sub (.href c) v ∧ c ∈ bl.rd.ids) ∨ ∃ d o l, Sub (.view d o l) v ∧ d ∈ bl.rd.ids)
 
 /-- The blocks of `B` reached from the values `R` (the slots' values), through
-    the payloads of reached blocks. -/
+    the payloads of reached blocks that their holders read (A3.2: an `arc`
+    block's; a lock block's payload holds no share, this cut, so it reaches
+    nothing). -/
 inductive Reached (R : Val → Prop) (B : Nat → Option Blk) : Nat → Prop
   | root {v : Val} {k : Nat} : R v → Refers B v k → Reached R B k
-  | pay {k k' : Nat} {bl : Blk} : Reached R B k' → B k' = some bl → Refers B bl.pay k → Reached R B k
+  | pay {k k' : Nat} {bl : Blk} : Reached R B k' → B k' = some bl → Refers B bl.rd k → Reached R B k
 
 /-- What a store's slots hold. -/
 def Mem.vals (m : Mem) (v : Val) : Prop := ∃ x o, m.st x = some ⟨o, some v⟩
 
 /-- An address the payload of a block nothing reaches owns: the sweep frees it. -/
 def Unreached (R : Val → Prop) (B : Nat → Option Blk) (i : Nat) : Prop :=
-  ∃ k bl, B k = some bl ∧ ¬ Reached R B k ∧ i ∈ bl.pay.ids
+  ∃ k bl, B k = some bl ∧ ¬ Reached R B k ∧ i ∈ bl.tree.ids
 
 open Classical in
 /-- The sweep's addresses: every one an unreached payload owns is freed. -/
@@ -148,6 +172,29 @@ inductive DropSlot : (Nat → Bool) → Slot → (Nat → Bool) → Prop
   | owned {a a' : Nat → Bool} {t : Val} : Frees a t a' → DropSlot a ⟨true, some t⟩ a'
   | moved {a : Nat → Bool} : DropSlot a ⟨true, none⟩ a
   | borrowed {a : Nat → Bool} {v : Option Val} : DropSlot a ⟨false, v⟩ a
+
+/-- A3.2: what `x`'s slot can give back to a lock whose payload is a `t`:
+    the tree it owns, or, for an integer payload, the integer it holds (an
+    integer binding is a plain one). -/
+def Giveable (t : Ty) : Slot → Prop
+  | ⟨true, some _⟩ => True
+  | ⟨false, some (.int _)⟩ => t = .int
+  | _ => False
+
+/-- A3.2: the end of `x`'s lock scope on lock block `k`, whose payload is a
+    `t`: `x`'s value goes back into the block, which has it checked out; or
+    else `x`'s slot is dropped as a scope's is.  That is when the block is
+    gone (no share reaches it any more), or `x` holds nothing it can give
+    back (it was moved out: the lock stays checked out for good, as
+    `locked_take` without `locked_restore` leaves it); a typed program meets
+    no other case (the block is the one `x` took its payload from), but
+    the rule needs no invariant to say so. -/
+inductive Release (m : Mem) (k : Nat) (t : Ty) (x : Var) : Mem → Prop
+  | put {o : Bool} {v : Val} : m.st x = some ⟨o, some v⟩ → Giveable t ⟨o, some v⟩ →
+      m.blk k = some ⟨t, .lock, none⟩ →
+      Release m k t x ({ m with blk := upd m.blk k (some ⟨t, .lock, some v⟩) }.remove x)
+  | drop {sl : Slot} {a' : Nat → Bool} : (m.blk k ≠ some ⟨t, .lock, none⟩ ∨ ¬ Giveable t sl) →
+      m.st x = some sl → DropSlot m.alloc sl a' → Release m k t x ({ m with alloc := a' }.remove x)
 
 /-- The vector `x` names — its own tree, or the one its borrow points at —
     with both of its addresses live. -/
@@ -209,6 +256,7 @@ def Val.owns : Val → Bool
   | .inr .. => true
   | .pkg .. => true
   | .arc _ _ => true   -- A3.1: a share is owned; dropping it is what counts
+  | .lk _ => true      -- A3.2: so is a lock share
   | _ => false
 
 /-- Handing a value on: an owner gives up its value, anything else is
@@ -287,7 +335,8 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
   | arcNew {t : Ty} {y : Var} {v : Val} {m1 : Mem} :
       TakeVal m y v m1 → m1.blk m1.nid = none →
       EvalR m (.arcNew t y)
-        (.ok (.arc m1.nid v) true { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, v⟩) })
+        (.ok (.arc m1.nid v) true
+          { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, .arc, some v⟩) })
   /-- A3.1: a read of the share `a` (owned or lent) makes a new share of its
       block. -/
   | arcClone {a : Var} {o : Bool} {k : Nat} {p : Val} :
@@ -295,7 +344,18 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
   /-- A3.1: the payload of the block the share `a` names, lent. -/
   | arcGet {a : Var} {o : Bool} {k : Nat} {p : Val} {bl : Blk} :
       m.st a = some ⟨o, some (.arc k p)⟩ → m.blk k = some bl →
-      EvalR m (.arcGet a) (.ok (lendOf bl.pay) false m)
+      EvalR m (.arcGet a) (.ok (lendOf bl.rd) false m)
+  /-- A3.2: a new lock block holds the value taken from `y`, at a key taken
+      from `nid`; the result is its one share. -/
+  | lockNew {t : Ty} {y : Var} {v : Val} {m1 : Mem} :
+      TakeVal m y v m1 → m1.blk m1.nid = none →
+      EvalR m (.lockNew t y)
+        (.ok (.lk m1.nid) true
+          { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, .lock, some v⟩) })
+  /-- A3.2: a read of the lock share `a` (owned or lent) makes a new share
+      of its block. -/
+  | lockClone {a : Var} {o : Bool} {k : Nat} :
+      m.st a = some ⟨o, some (.lk k)⟩ → EvalR m (.lockClone a) (.ok (.lk k) true m)
 
 /-! ### Calls
 
@@ -335,6 +395,8 @@ def Rhs.rename (ρ : Var → Var) : Rhs → Rhs
   | .arcNew t y => .arcNew t (ρ y)
   | .arcClone a => .arcClone (ρ a)
   | .arcGet a => .arcGet (ρ a)
+  | .lockNew t y => .lockNew t (ρ y)
+  | .lockClone a => .lockClone (ρ a)
 
 def Edit.rename (ρ : Var → Var) : Edit → Edit
   | .push y => .push (ρ y)
@@ -362,6 +424,8 @@ def Stmt.rename (ρ : Var → Var) : Stmt → Stmt
   | .letd x f r s => .letd (ρ x) f (r.rename ρ) (s.rename ρ)
   | .scopeD x f s => .scopeD (ρ x) f (s.rename ρ)
   | .edit b x op => .edit b (ρ x) (op.rename ρ)
+  | .withLock a x s => .withLock (ρ a) (ρ x) (s.rename ρ)
+  | .scopeL k t x s => .scopeL k t (ρ x) (s.rename ρ)
 
 /-- The renaming of a call of a function with parameters `ps` on `args`,
     its variables placed from `base`. -/
@@ -606,6 +670,26 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
   | scopeDPMoved {m m1 : Mem} {x : Var} {f : Nat} {s : Stmt} :
       Step P m s (.panic m1) → m1.st x = some ⟨true, none⟩ →
       Step P m (.scopeD x f s) (.panic (m1.remove x))
+  /-- A3.2: taking the lock `a` shares: its block's payload is checked out
+      to `x` (an owner moves in, an integer is a plain integer binding, as
+      `unpair` binds a field), and the body runs in `x`'s lock scope.  A
+      block whose payload is checked out has no step: the thread waits
+      (`Blocked`). -/
+  | withLock {m : Mem} {a x : Var} {s : Stmt} {o : Bool} {k : Nat} {t : Ty} {v : Val} :
+      m.st a = some ⟨o, some (.lk k)⟩ → m.blk k = some ⟨t, .lock, some v⟩ → m.st x = none →
+      Step P m (.withLock a x s)
+        (.ok ({ m with blk := upd m.blk k (some ⟨t, .lock, none⟩) }.set x ⟨v.owns, some v⟩)
+          (.scopeL k t x s))
+  | scopeLIn {m m' : Mem} {k : Nat} {t : Ty} {x : Var} {s s' : Stmt} :
+      Step P m s (.ok m' s') → Step P m (.scopeL k t x s) (.ok m' (.scopeL k t x s'))
+  /-- The lock scope's end gives the payload back (`Release`).  (This cut: a
+      panic unwinding through it drops `x`'s slot as a `scope` does, and the
+      lock stays checked out.) -/
+  | scopeLSkip {m m' : Mem} {k : Nat} {t : Ty} {x : Var} :
+      Release m k t x m' → Step P m (.scopeL k t x .skip) (.ok m' .skip)
+  | scopeLP {m m1 : Mem} {k : Nat} {t : Ty} {x : Var} {s : Stmt} {sl : Slot} {a' : Nat → Bool} :
+      Step P m s (.panic m1) → m1.st x = some sl → DropSlot m1.alloc sl a' →
+      Step P m (.scopeL k t x s) (.panic ({ m1 with alloc := a' }.remove x))
 
 /-- Reachability: A3.1, every step ends with the sweep, which frees the
     blocks no slot reaches (`Mem.sweep`). -/
@@ -623,9 +707,23 @@ inductive Steps0 (P : Prog) : Mem → Stmt → Res → Prop
       Step P m s (.ok m' s') → Steps0 P m' s' r → Steps0 P m s r
   | panic {m m' : Mem} {s : Stmt} : Step P m s (.panic m') → Steps0 P m s (.panic m')
 
-/-- A configuration that is neither finished nor able to step: the program
-    is about to touch memory it may not. -/
+/-- A3.2: the next step takes a lock whose payload is checked out: the
+    thread waits for it to come back.  (Whether it ever does is deadlock
+    freedom, which is not claimed.) -/
+def Blocked (m : Mem) : Stmt → Prop
+  | .withLock a _ _ => ∃ o k t, m.st a = some ⟨o, some (.lk k)⟩ ∧ m.blk k = some ⟨t, .lock, none⟩
+  | .seq a _ => Blocked m a
+  | .scope _ s => Blocked m s
+  | .rbind _ s => Blocked m s
+  | .frozen _ s => Blocked m s
+  | .catchR _ _ s => Blocked m s
+  | .scopeD _ _ s => Blocked m s
+  | .scopeL _ _ _ s => Blocked m s
+  | _ => False
+
+/-- A configuration that is neither finished nor able to step, nor (A3.2)
+    waiting for a lock: the program is about to touch memory it may not. -/
 def Stuck (P : Prog) (m : Mem) (s : Stmt) : Prop :=
-  s ≠ .skip ∧ ∀ r, ¬ Step P m s r
+  s ≠ .skip ∧ ¬ Blocked m s ∧ ∀ r, ¬ Step P m s r
 
 end A2

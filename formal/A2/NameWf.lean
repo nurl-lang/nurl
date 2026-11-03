@@ -314,7 +314,11 @@ theorem RhsT.names {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : Rhs
   | arcNew hy hly hty _ hpa =>
     obtain ⟨hn1, _, hk⟩ := hpa.names hy hly hty hn
     exact ⟨hn1, fun _ _ => DepsNamed.nil _, ⟨_, hk⟩⟩
+  | lockNew hy hly hty _ hpa =>
+    obtain ⟨hn1, _, hk⟩ := hpa.names hy hly hty hn
+    exact ⟨hn1, fun _ _ => DepsNamed.nil _, ⟨_, hk⟩⟩
   | arcClone _ _ _ => exact ⟨hn, fun _ _ => DepsNamed.nil _, ⟨[], Keeps.refl Γ []⟩⟩
+  | lockClone _ _ _ => exact ⟨hn, fun _ _ => DepsNamed.nil _, ⟨[], Keeps.refl Γ []⟩⟩
   | arcGet hy hl ht _ _ =>
     exact ⟨hn, fun _ _ => getE_named (hn _ _ hy hl (Or.inl (by rw [ht]; simp))) _, ⟨[], Keeps.refl Γ []⟩⟩
 
@@ -737,6 +741,10 @@ theorem StmtT.names {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : St
     have hx1 : Γ1 x = none := by
       have := (hr.domMode).1 x; rw [hx] at this; cases h : Γ1 x <;> simp_all
     exact (ih hks (NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h) (fun Ex h => by rw [hx1] at h; cases h) hE)).exitScope x
+  | @withLock Γ Δ F a x k Ea t hks hx _ _ _ _ _ _ _ _ _ ih =>
+    intro _ hn
+    exact (ih hks (NameWF.setE hn (fun Ex h => by rw [hx] at h; cases h) (fun Ex h => by rw [hx] at h; cases h)
+      (fun _ _ => by unfold NameOK; rw [lockE_vdeps]; exact DepsNamed.nil _))).exitScope x
   | @letd Γ Γ1 Δ F x _ r k E H hks hx _ hr hmo _ _ hH _ _ ih =>
     intro _ hn
     obtain ⟨hn1, hE, _⟩ := hr.names hn
@@ -836,6 +844,7 @@ theorem StmtT.names {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : St
   | catchR => intro hs; simp [Stmt.src] at hs
   | scope => intro hs; simp [Stmt.src] at hs
   | scopeD => intro hs; simp [Stmt.src] at hs
+  | scopeL => intro hs; simp [Stmt.src] at hs
   | rbind => intro hs; simp [Stmt.src] at hs
   | frozen => intro hs; simp [Stmt.src] at hs
 

@@ -5,18 +5,6 @@ of preservation, and the call case of progress. -/
 
 namespace A2
 
-theorem Expr.vars_rename (ρ : Var → Var) (e : Expr) : (e.rename ρ).vars = e.vars.map ρ := by
-  induction e <;> simp_all [Expr.rename, Expr.vars]
-
-theorem Rhs.vars_rename (ρ : Var → Var) (r : Rhs) : (r.rename ρ).vars = r.vars.map ρ := by
-  cases r <;> simp [Rhs.rename, Rhs.vars, Expr.vars_rename]
-
-theorem Edit.vars_rename (ρ : Var → Var) (op : Edit) : (op.rename ρ).vars = op.vars.map ρ := by
-  cases op <;> simp [Edit.rename, Edit.vars, Expr.vars_rename]
-
-theorem Stmt.vars_rename (ρ : Var → Var) (s : Stmt) : (s.rename ρ).vars = s.vars.map ρ := by
-  induction s <;> simp_all [Stmt.rename, Stmt.vars, Rhs.vars_rename, Expr.vars_rename, Edit.vars_rename]
-
 theorem callStmt_spine (fn : Fn) (args : List Var) (base : Nat) (x : Var) (k : Stmt) :
     (callStmt fn args base x k).spine =
       x :: (base + fn.params.length) :: (wrapSpine fn.params base 0 ++
@@ -103,6 +91,8 @@ theorem DtorPinOK.of_spine_dbind {Γ : Ctx} {s : Stmt}
     exact ⟨hin x k (h x (by simp [Stmt.spine])), ih fun v hv => h v (by simp [Stmt.spine, hv])⟩
   | rbind p k ih =>
     exact ⟨hin p k (h p (by simp [Stmt.spine])), ih fun v hv => h v (by simp [Stmt.spine, hv])⟩
+  | scopeL _ _ x k ih =>
+    exact ⟨hin x k (h x (by simp [Stmt.spine])), ih fun v hv => h v (by simp [Stmt.spine, hv])⟩
   | _ => trivial
 
 namespace CallH
@@ -634,7 +624,7 @@ theorem recCase {P : Prog} (hP : ProgOK P) : RecCase P := by
       StmtT.catchR hxF hIn hM hanchΔ hKO hDS
     refine ⟨_, StmtT.scope ⟨callX fn, h.canon_x _, by simp [callX, resMode_ne' fn]⟩ h.xF
       (StmtT.seq hk hcatch hkT) hpx, ?_, Nat.le_add_right _ _, hkeep, h.frz hi.toMInv hb⟩
-    refine hI.respine rfl (fun v hv => ?_) ⟨fun v hv hvx => ?_, ?_, Nat.le_add_right _ _, fun _ _ hk _ => hk,
+    refine hI.respine rfl (fun v hv => ?_) ⟨fun v hv hvx => ?_, ?_, Nat.le_add_right _ _, fun _ bl hk _ => ⟨bl, hk, BlkKeep.refl bl⟩,
       h.catchOK _ k⟩
       hI.pinIn hI.dtorIn
     · simp only [recStmt, Stmt.vars, List.mem_cons, List.mem_append] at hv

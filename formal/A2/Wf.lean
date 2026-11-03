@@ -290,6 +290,7 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
     | sum a b => exact app _ _ (hderive y Ey .inner hy hl hn') (hheld y Ey hy hl hn')
     | fn ms => exact app _ _ (hderive y Ey .inner hy hl hn') (hheld y Ey hy hl hn')
     | arc ms => exact app _ _ (hderive y Ey .inner hy hl hn') (hheld y Ey hy hl hn')
+    | lk ms => exact app _ _ (hderive y Ey .inner hy hl hn') (hheld y Ey hy hl hn')
   | @view y Ey t hy hl ht _ =>
     refine ⟨h, fun _ => rfl, same, fun _ _ => ?_⟩
     have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (by rw [ht]; simp)
@@ -307,6 +308,7 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
     | sum a b => exact app _ _ (hderive y Ey .inner hy hl hn') (hheld y Ey hy hl hn')
     | fn ms => exact app _ _ (hderive y Ey .inner hy hl hn') (hheld y Ey hy hl hn')
     | arc ms => exact app _ _ (hderive y Ey .inner hy hl hn') (hheld y Ey hy hl hn')
+    | lk ms => exact app _ _ (hderive y Ey .inner hy hl hn') (hheld y Ey hy hl hn')
   | @pop y Ey t hy hl ht _ _ =>
     have hwf := h.kill .drop t.holdsView y
     refine ⟨hwf, fun x => kill_dom .., fun x E1 h1 => ?_, fun _ hn r hr => ?_⟩
@@ -321,6 +323,7 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
         | sum a b => simpa [popE, roots, Entry.vdeps, Mode.ownSlot] using hr
         | fn ms => simpa [popE, roots, Entry.vdeps, Mode.ownSlot] using hr
         | arc ms => simpa [popE, roots, Entry.vdeps, Mode.ownSlot] using hr
+        | lk => simpa [popE, roots, Entry.vdeps, Mode.ownSlot] using hr
       obtain ⟨Er, hEr, hro⟩ := hheld y Ey hy hl hn' r hr'
       exact kill_root hEr hro
   | @pair y z Ey Ez Γ1 Γ2 Dy Dz hy hly hpa1 hz hlz hpa2 _ =>
@@ -449,6 +452,7 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
         | sum c d => exact ownHeld_roots (by simpa [compE, Entry.vdeps, Mode.ownSlot] using hr)
         | fn c => exact ownHeld_roots (by simpa [compE, Entry.vdeps, Mode.ownSlot] using hr)
         | arc c => exact ownHeld_roots (by simpa [compE, Entry.vdeps, Mode.ownSlot] using hr)
+        | lk c => exact ownHeld_roots (by simpa [compE, Entry.vdeps, Mode.ownSlot] using hr)
       have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (by rw [hty]; simp)
       obtain ⟨Er, hEr, hro⟩ := hheld y Ey hy hl hn' r hr'
       by_cases hry : r = y
@@ -478,6 +482,7 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
         | sum c d => exact ownHeld_roots (by simpa [compE, Entry.vdeps, Mode.ownSlot] using hr)
         | fn c => exact ownHeld_roots (by simpa [compE, Entry.vdeps, Mode.ownSlot] using hr)
         | arc c => exact ownHeld_roots (by simpa [compE, Entry.vdeps, Mode.ownSlot] using hr)
+        | lk c => exact ownHeld_roots (by simpa [compE, Entry.vdeps, Mode.ownSlot] using hr)
       have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (by rw [hty]; simp)
       obtain ⟨Er, hEr, hro⟩ := hheld y Ey hy hl hn' r hr'
       by_cases hry : r = y
@@ -487,7 +492,12 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
   | @arcNew t y Ey Γ1 D hy hly hty _ hpa =>
     obtain ⟨hw1, hd1, hm1, _⟩ := hpa.wf h hy hly hty
     exact ⟨hw1, hd1, hm1, fun _ _ r hr => by simp [roots, Entry.vdeps, Mode.ownSlot] at hr⟩
+  | @lockNew t y Ey Γ1 D hy hly hty _ hpa =>
+    obtain ⟨hw1, hd1, hm1, _⟩ := hpa.wf h hy hly hty
+    exact ⟨hw1, hd1, hm1, fun _ _ r hr => by simp [roots, Entry.vdeps, Mode.ownSlot] at hr⟩
   | arcClone _ _ _ =>
+    exact ⟨h, fun _ => rfl, same, fun _ _ r hr => by simp [roots, Entry.vdeps, Mode.ownSlot] at hr⟩
+  | lockClone _ _ _ =>
     exact ⟨h, fun _ => rfl, same, fun _ _ r hr => by simp [roots, Entry.vdeps, Mode.ownSlot] at hr⟩
   | @arcGet y Ey a hy hl ht _ _ =>
     refine ⟨h, fun _ => rfl, same, fun _ hn => ?_⟩
@@ -825,6 +835,7 @@ theorem RhsT.domMode {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : R
   | inr hy _ hpa _ => exact PushArg.domMode hy hpa
   | pack hy _ _ hpa => exact PushArg.domMode hy hpa
   | arcNew hy _ _ _ hpa => exact PushArg.domMode hy hpa
+  | lockNew hy _ _ _ hpa => exact PushArg.domMode hy hpa
   | @takel y Ey _ _ hy _ _ _ _ _ => exact (DomMode.refl Γ |>.kill .replace false y).setE ⟨Ey, hy, rfl⟩
   | @taker y Ey _ _ hy _ _ _ _ _ => exact (DomMode.refl Γ |>.kill .replace false y).setE ⟨Ey, hy, rfl⟩
   | _ => exact DomMode.refl Γ
@@ -884,6 +895,7 @@ theorem CtxWF.unpair {Γ : Ctx} (h : CtxWF Γ) {y x z : Var} {E : Entry} {a b : 
     | sum a b => exact hH r (ownHeld_roots (by simpa [compE, Entry.vdeps, Mode.ownSlot] using hr))
     | fn a => exact hH r (ownHeld_roots (by simpa [compE, Entry.vdeps, Mode.ownSlot] using hr))
     | arc a => exact hH r (ownHeld_roots (by simpa [compE, Entry.vdeps, Mode.ownSlot] using hr))
+    | lk a => exact hH r (ownHeld_roots (by simpa [compE, Entry.vdeps, Mode.ownSlot] using hr))
   have hx1 : A2.setE (A2.kill .replace false y Γ) y { E with live := false, dtor := false } x = none := by
     simp [A2.setE, upd_ne _ _ hxy, A2.kill, hx]
   have hw2 := hw1.add hx1 (hcomp _ a hheld)
@@ -961,7 +973,14 @@ theorem StmtT.keepF {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     obtain ⟨E2, h2, hm2⟩ := ih r hr E1 (by simp [A2.setE, upd_ne _ _ hrx, h1])
     exact ⟨killE .replace false x E2, by simp [A2.exitScope, upd_ne _ _ hrx, A2.kill, h2],
       by rw [killE_mode, hm2, hm1]⟩
-  | @scope Γ Δ F x k _ hxF _ _ ih | @scopeD Γ Δ F x _ k _ hxF _ _ _ _ _ _ ih =>
+  | @withLock Γ Δ F a x k Ea t _ hx hxF _ _ _ _ _ _ _ _ ih =>
+    intro r hr E h
+    have hrx : r ≠ x := fun e => hxF (e ▸ hr)
+    obtain ⟨E2, h2, hm2⟩ := ih r hr E (by simp [A2.setE, upd_ne _ _ hrx, h])
+    exact ⟨killE .replace false x E2, by simp [A2.exitScope, upd_ne _ _ hrx, A2.kill, h2],
+      by rw [killE_mode, hm2]⟩
+  | @scope Γ Δ F x k _ hxF _ _ ih | @scopeD Γ Δ F x _ k _ hxF _ _ _ _ _ _ ih
+    | @scopeL Γ Δ F _ _ x k _ hxF _ _ ih =>
     intro r hr E h
     have hrx : r ≠ x := fun e => hxF (e ▸ hr)
     obtain ⟨E2, h2, hm2⟩ := ih r hr E h
@@ -1070,6 +1089,11 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
       (fun ha => absurd ha (by simp [hc.dtor_false.1])) (fun hd => absurd hd (by simp [hc.dtor_false.2])))).exitScope
       x hpx.2.2
   | scope _ _ _ hpx ih => exact fun h => (ih h).exitScope _ hpx.2.2
+  | scopeL _ _ _ hpx ih => exact fun h => (ih h).exitScope _ hpx.2.2
+  | @withLock Γ Δ F a x k Ea t _ hx _ _ _ _ _ hpx _ _ _ ih =>
+    intro h
+    exact (ih (h.add hx (fun _ _ r hr => by simp [roots] at hr) (fun hd => absurd hd (by simp))
+      (fun ha => absurd ha (by simp)) (fun hd => absurd hd (by simp)))).exitScope x hpx.2.2
   | scopeD _ _ _ hpx _ _ _ _ ih => exact fun h => (ih h).exitScope _ hpx.2.2
   | @letd Γ Γ1 Δ F x _ r k E H _ hx _ hr hmo _ _ hH _ hpx ih =>
     intro h

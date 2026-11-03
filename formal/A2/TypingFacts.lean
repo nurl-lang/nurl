@@ -349,6 +349,31 @@ theorem Inv.scopeIn {m : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt} {Ex
           (by simp [Stmt.spine, hdk])
     dtorIn := hi.dtorIn.2 }
 
+theorem Inv.scopeLIn {m : Mem} {Γ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x : Var} {s : Stmt} {Ex : Entry}
+    (hi : Inv m Γ F (.scopeL k t x s)) (hx : Γ x = some Ex) (hnrb : Ex.mode ≠ .rootb) : Inv m Γ F s :=
+  { toMInv := hi.toMInv
+    nvS := fun v hv => hi.nvS v (by simp [Stmt.vars, hv])
+    nvF := hi.nvF
+    anch := fun p E hp hm hps => hi.anch p E hp hm (by
+      simp only [Stmt.spine, List.mem_cons, not_or]
+      refine ⟨fun h => ?_, hps⟩
+      subst h; rw [hx] at hp; cases hp; exact hnrb hm)
+    spineNd := by
+      have := hi.spineNd; simp only [Stmt.spine, List.nodup_cons] at this; exact this.2
+    spineDom := fun v hv => hi.spineDom v (by simp [Stmt.spine, hv])
+    catchOK := hi.catchOK
+    cover := hi.cover
+    pinOut := fun p E hp hm hps r hr hrk => by
+      have hpx : p ≠ x := fun h => by subst h; rw [hx] at hp; cases hp; exact hnrb hm
+      exact hi.pinOut p E hp hm (by simp [Stmt.spine, hpx, hps]) r hr (by simp [Stmt.spine, hrk])
+    pinIn := hi.pinIn
+    dtorOut := fun v E hv hd hos hn hvs d hdd hnm hdk => by
+      by_cases hvx : v = x
+      · subst hvx; exact hi.dtorIn.1 E hv hd hos hn d hdd hnm hdk
+      · exact hi.dtorOut v E hv hd hos hn (by simp [Stmt.spine, hvx, hvs]) d hdd hnm
+          (by simp [Stmt.spine, hdk])
+    dtorIn := hi.dtorIn.2 }
+
 /-- A destructor scope binds, names and catches as a plain scope does, and
     the invariant reads a statement only through those. -/
 theorem Inv.scopeD_iff {m : Mem} {Γ : Ctx} {F : List Var} {x : Var} {f : Nat} {k : Stmt} :
@@ -438,6 +463,12 @@ theorem StmtT.spine_F {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
   | frozen _ _ ih => exact fun v hv hF => ih v hv (List.mem_append_left _ hF)
   | catchR _ _ _ _ _ _ ih => exact fun v hv hF => ih v hv (List.mem_append_left _ hF)
   | scopeD _ hxF _ _ _ _ _ _ ih =>
+    intro v hv
+    simp only [Stmt.spine, List.mem_cons] at hv
+    rcases hv with rfl | hv
+    · exact hxF
+    · exact ih v hv
+  | scopeL _ hxF _ _ ih =>
     intro v hv
     simp only [Stmt.spine, List.mem_cons] at hv
     rcases hv with rfl | hv
@@ -605,6 +636,7 @@ theorem RhsT.dkeep {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (h : RhsT
   | taker hy => exact DKeep.moveOut hy _ _
   | pack hy _ _ hp _ => exact hp.dkeep hy
   | arcNew hy _ _ _ hp => exact hp.dkeep hy
+  | lockNew hy _ _ _ hp => exact hp.dkeep hy
   | _ => exact DKeep.refl Γ []
 
 theorem DKeep.killNames {Γ Γ' : Ctx} {sp : List Var} (h : DKeep Γ Γ' sp) :
@@ -706,6 +738,10 @@ theorem StmtT.dkeep {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (
     intro ho hp
     exact (iha ho hp).trans ((DKeep.of_src hb ihb).mono fun _ _ h => by cases h) fun _ h => h
   | letv hs _ _ hr _ _ ih => exact fun _ _ => DKeep.bind hr.dkeep (DKeep.of_src hs ih)
+  | withLock hs _ _ _ _ _ _ _ _ _ _ ih => exact fun _ _ => DKeep.bind (DKeep.refl _ _) (DKeep.of_src hs ih)
+  | @scopeL Γ Δ F k t x s0 _ _ _ _ ih =>
+    intro ho hp
+    exact ((ih (DtorOut.inner ho hp.1) hp.2).mono fun v hv h => hv (List.mem_cons_of_mem _ h)).exitScope x
   | letcall hs _ _ hc _ _ ih => exact fun _ _ => DKeep.bind hc.dkeep (DKeep.of_src hs ih)
   | @scope Γ Δ F x k _ _ _ _ ih =>
     intro ho hp
@@ -816,6 +852,7 @@ theorem RhsT.dstay {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (h : RhsT
   | taker hy => exact DStay.moveOut hy _ _
   | pack hy _ _ hp _ => exact hp.dstay hy
   | arcNew hy _ _ _ hp => exact hp.dstay hy
+  | lockNew hy _ _ _ hp => exact hp.dstay hy
   | _ => exact DStay.refl Γ []
 
 theorem DStay.killNames {Γ Γ' : Ctx} {sp : List Var} (h : DStay Γ Γ' sp) :
@@ -863,6 +900,8 @@ theorem StmtT.dstay {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (
   | skip => exact DStay.refl _ _
   | seq hb _ _ iha ihb => exact iha.trans (src0 hb ihb) fun _ _ h => by cases h
   | letv hs hx _ hr _ _ ih => exact DStay.bind hx hr.dstay (src0 hs ih)
+  | withLock hs hx _ _ _ _ _ _ _ _ _ ih => exact DStay.bind hx (DStay.refl _ _) (src0 hs ih)
+  | scopeL _ _ _ _ ih => exact ih.exitScope
   | letcall hs hx _ hc _ _ ih => exact DStay.bind hx hc.dstay (src0 hs ih)
   | scope _ _ _ _ ih => exact ih.exitScope
   | rbind _ _ _ _ _ _ _ ih => exact ih.exitRoot _

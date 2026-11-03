@@ -3,8 +3,10 @@ import A3.BorFree
 /-! A3.0 — what one thread's step does to the others: it moves the shared
 `nid` up, and (A3.1) adds blocks, whose payloads the shared part of the
 address space gains, and nothing else they see.  A2's per-thread facts
-survive that (`ThreadOK.grow`): `HeapOK.alloc` bounds owned addresses from
-above, and a new payload holds none of the other threads' addresses. -/
+survive that (`ThreadOK.move`): `HeapOK.alloc` bounds owned addresses from
+above, and a new payload holds none of the other threads' addresses.
+(A3.2: a lock block's payload may also leave the shared part, checked out
+to the stepping thread, or come back into it.) -/
 
 namespace A3
 open A2
@@ -46,7 +48,10 @@ theorem CatchOK.of_st {m m' : Mem} (hst : m'.st = m.st) (hnv : m.nv ≤ m'.nv) (
   | .catchR x m0 k, h => by
     obtain ⟨h1, h2, h3, h4, h5⟩ := h
     exact ⟨fun v hv hx => by rw [hst]; exact h1 v hv hx, h2, Nat.le_trans h3 hnv,
-      fun k' bl hk hr => hb k' bl (h4 k' bl hk hr), CatchOK.of_st hst hnv hb (s := k) h5⟩
+      fun k' bl hk hr => by
+        obtain ⟨bl', h1', h2'⟩ := h4 k' bl hk hr
+        obtain ⟨bl'', h3', h4'⟩ := hb k' bl' h1'
+        exact ⟨bl'', h3', h2'.trans h4'⟩, CatchOK.of_st hst hnv hb (s := k) h5⟩
   | .skip, _ => trivial
   | .letv .., _ => trivial
   | .letcall .., _ => trivial
@@ -61,6 +66,8 @@ theorem CatchOK.of_st {m m' : Mem} (hst : m'.st = m.st) (hnv : m.nv ≤ m'.nv) (
   | .callc .., _ => trivial
   | .letd .., _ => trivial
   | .edit .., _ => trivial
+  | .withLock .., _ => trivial
+  | .scopeL _ _ _ k, h => CatchOK.of_st hst hnv hb (s := k) h
 
 /-- What A2 knows of one thread, on the thread's own part of the address
     space: its statement is typed, the invariant holds, its packages' codes
@@ -69,7 +76,7 @@ def ThreadOK (P : Prog) (m : Mem) (s : Stmt) : Prop :=
   ∃ Γ F Δ, StmtT P Γ F s Δ ∧ Inv m Γ F s ∧ MemCodes P m ∧ s.codesOK P ∧ Closed Γ s
 
 /-- A3.1: an address the payload of a block of `B` owns. -/
-def PayIn (B : Nat → Option Blk) (i : Nat) : Prop := ∃ k bl, B k = some bl ∧ i ∈ bl.pay.ids
+def PayIn (B : Nat → Option Blk) (i : Nat) : Prop := ∃ k bl, B k = some bl ∧ i ∈ bl.tree.ids
 
 open Classical in
 /-- A3.1: the shared, read-only part of the address space: every address a
@@ -87,46 +94,58 @@ theorem payPart_false {B : Nat → Option Blk} {i : Nat} : payPart B i = false �
     a well-formed payload at a key below `n`, owning its addresses once,
     below `n` and apart from every other payload's. -/
 structure BlockOK (B : Nat → Option Blk) (n k : Nat) (bl : Blk) : Prop where
-  ok    : bl.ty.ok = true ∧ bl.ty.holdsView = false ∧ WFv bl.ty bl.pay ∧ SharesIn B bl.ty bl.pay
+  ok    : bl.ty.ok = true ∧ bl.ty.holdsView = false ∧
+    (∀ p, bl.pay = some p → WFv bl.ty p ∧ SharesIn B bl.ty p) ∧ (bl.kind = .lock → bl.ty.hasArc = false)
   key   : k < n
-  nodup : bl.pay.ids.Nodup
-  lt    : ∀ i ∈ bl.pay.ids, i < n
-  apart : ∀ i ∈ bl.pay.ids, ∀ k' bl', k' ≠ k → B k' = some bl' → i ∉ bl'.pay.ids
+  nodup : bl.tree.ids.Nodup
+  lt    : ∀ i ∈ bl.tree.ids, i < n
+  apart : ∀ i ∈ bl.tree.ids, ∀ k' bl', k' ≠ k → B k' = some bl' → i ∉ bl'.tree.ids
 
 /-- A3.1: every block of `B` is as `BlockOK` says. -/
 def BlocksAt (B : Nat → Option Blk) (n : Nat) : Prop := ∀ k bl, B k = some bl → BlockOK B n k bl
 
-/-- **Another thread allocated, or made a block**: a later `nid`, more blocks,
-    and the address space grown by their payloads keep every per-thread
-    fact, when the new payloads hold none of the thread's addresses. -/
-theorem inv_grow {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s) {A : Nat → Bool}
-    {n : Nat} {B : Nat → Option Blk} (ha : ∀ i, m.alloc i = true → A i = true)
-    (hA : ∀ i, A i = true → m.alloc i = true ∨ PayIn B i) (hpA : ∀ i, PayIn B i → A i = true)
-    (hn : m.nid ≤ n) (hb : BlkLe m.blk B) (hB : BlocksAt B n) (hP : ∀ i, PayIn B i → ∀ x T, OwnedAt m x T → i ∉ T.ids) :
+/-- **Another thread stepped**: a later `nid`, the blocks kept as their
+    holders see them (`BlkLe`: more blocks, and (A3.2) a lock block's payload
+    checked out or back in), and the address space the thread sees being its
+    owned trees and the blocks' payloads, which hold none of its
+    addresses. -/
+theorem inv_move {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s) {A : Nat → Bool}
+    {n : Nat} {B : Nat → Option Blk}
+    (hown : ∀ x T, OwnedAt m x T → ∀ i ∈ T.ids, A i = true)
+    (hA : ∀ i, A i = true → (∃ x T, OwnedAt m x T ∧ i ∈ T.ids) ∨ PayIn B i)
+    (hpA : ∀ i, PayIn B i → A i = true)
+    (hn : m.nid ≤ n) (hb : BlkLe m.blk B) (hB : BlocksAt B n)
+    (hP : ∀ i, PayIn B i → ∀ x T, OwnedAt m x T → i ∉ T.ids) :
     Inv { m with alloc := A, nid := n, blk := B } Γ F s :=
-  { toMInv := hi.toMInv.grow rfl (HeapOK.mono hi.heap rfl ha hn
-        (fun k bl hk => ⟨(hB k bl hk).key, (hB k bl hk).nodup, fun i hi' =>
+  have hh : HeapOK { m with alloc := A, nid := n, blk := B } :=
+    { nodup := hi.heap.nodup
+      disj := hi.heap.disj
+      alloc := fun x t h i hi' => ⟨hown x t h i hi', Nat.lt_of_lt_of_le (hi.heap.alloc x t h i hi').2 hn⟩
+      self := hi.heap.self
+      blk := fun k bl hk => ⟨(hB k bl hk).key, (hB k bl hk).nodup, fun i hi' =>
           ⟨hpA i ⟨k, bl, hk, hi'⟩, (hB k bl hk).lt i hi',
-           fun x T hT => hP i ⟨k, bl, hk, hi'⟩ x T hT, (hB k bl hk).apart i hi'⟩⟩))
-      (Nat.le_refl _) hb (fun k bl hk => (hB k bl hk).ok)
+           fun x T hT => hP i ⟨k, bl, hk, hi'⟩ x T hT, (hB k bl hk).apart i hi'⟩⟩ }
+  { toMInv := hi.toMInv.grow rfl hh (Nat.le_refl _) hb (fun k bl hk => (hB k bl hk).ok)
     nvS := hi.nvS, nvF := hi.nvF
     anch := hi.anch, spineNd := hi.spineNd, spineDom := hi.spineDom
     catchOK := CatchOK.of_st (m := m) (m' := { m with alloc := A, nid := n, blk := B }) rfl (Nat.le_refl _) hb
       hi.catchOK
     cover := fun i h => by
-      rcases hA i h with h | h
-      · exact (hi.cover i h).imp id (fun ⟨k, bl, hk, hik⟩ => ⟨k, bl, hb k bl hk, hik⟩)
+      rcases hA i h with ⟨x, T, hT, hiT⟩ | h
+      · exact Or.inl ⟨x, T, hT, hiT⟩
       · exact Or.inr h,
     pinOut := hi.pinOut, pinIn := hi.pinIn, dtorOut := hi.dtorOut,
     dtorIn := hi.dtorIn }
 
-theorem ThreadOK.grow {P : Prog} {m : Mem} {s : Stmt} (h : ThreadOK P m s) {A : Nat → Bool} {n : Nat}
-    {B : Nat → Option Blk} (ha : ∀ i, m.alloc i = true → A i = true)
-    (hA : ∀ i, A i = true → m.alloc i = true ∨ PayIn B i) (hpA : ∀ i, PayIn B i → A i = true)
-    (hn : m.nid ≤ n) (hb : BlkLe m.blk B) (hB : BlocksAt B n) (hP : ∀ i, PayIn B i → ∀ x T, OwnedAt m x T → i ∉ T.ids) :
+theorem ThreadOK.move {P : Prog} {m : Mem} {s : Stmt} (h : ThreadOK P m s) {A : Nat → Bool} {n : Nat}
+    {B : Nat → Option Blk} (hown : ∀ x T, OwnedAt m x T → ∀ i ∈ T.ids, A i = true)
+    (hA : ∀ i, A i = true → (∃ x T, OwnedAt m x T ∧ i ∈ T.ids) ∨ PayIn B i)
+    (hpA : ∀ i, PayIn B i → A i = true)
+    (hn : m.nid ≤ n) (hb : BlkLe m.blk B) (hB : BlocksAt B n)
+    (hP : ∀ i, PayIn B i → ∀ x T, OwnedAt m x T → i ∉ T.ids) :
     ThreadOK P { m with alloc := A, nid := n, blk := B } s := by
   obtain ⟨Γ, F, Δ, ht, hi, hcd, hsc, hc⟩ := h
-  exact ⟨Γ, F, Δ, ht, inv_grow hi ha hA hpA hn hb hB hP, hcd.of_st rfl, hsc, hc⟩
+  exact ⟨Γ, F, Δ, ht, inv_move hi hown hA hpA hn hb hB hP, hcd.of_st rfl, hsc, hc⟩
 
 /-- The blocks a thread's facts give. -/
 theorem ThreadOK.blocksAt {P : Prog} {m : Mem} {s : Stmt} (h : ThreadOK P m s) : BlocksAt m.blk m.nid := by

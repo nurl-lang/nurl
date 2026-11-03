@@ -19,11 +19,27 @@ theorem ThreadOK.step {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {m : Mem} {
   obtain ⟨Γ', ht', hi', hc', hcd', hsc'⟩ := reach_ok0 hP hPc ht hcd hsc hi hc (Steps0.step hst Steps0.refl)
   exact ⟨Γ', F, Δ, ht', hi', hcd', hsc', hc'⟩
 
-/-- A2's progress: a thread is finished, or it can step. -/
+/-- A2's progress: a thread is finished, or (A3.2) waits for a lock, or it can step. -/
 theorem ThreadOK.progress {P : Prog} (hP : ProgOK P) {m : Mem} {s : Stmt} (h : ThreadOK P m s) :
-    s = .skip ∨ ∃ r, Step P m s r := by
+    s = .skip ∨ Blocked m s ∨ ∃ r, Step P m s r := by
   obtain ⟨Γ, F, Δ, ht, hi, hcd, _, _⟩ := h
   exact progress' hP ht hcd hi
+
+/-- A3.2: waiting for a lock reads only the slots and the blocks. -/
+theorem Blocked.of_eq {m m' : Mem} (hst : m'.st = m.st) (hb : m'.blk = m.blk) {s : Stmt} (h : Blocked m s) :
+    Blocked m' s := by
+  induction s with
+  | withLock a _ _ _ =>
+    obtain ⟨o, k, t, h1, h2⟩ := h
+    exact ⟨o, k, t, hst ▸ h1, hb ▸ h2⟩
+  | seq _ _ ih _ => exact ih h
+  | scope _ _ ih => exact ih h
+  | rbind _ _ ih => exact ih h
+  | frozen _ _ ih => exact ih h
+  | catchR _ _ _ ih => exact ih h
+  | scopeD _ _ _ ih => exact ih h
+  | scopeL _ _ _ _ ih => exact ih h
+  | _ => exact h
 
 /-- A finished thread has no bindings. -/
 theorem ThreadOK.skip_st {P : Prog} {m : Mem} (h : ThreadOK P m .skip) : ∀ x, m.st x = none := by
@@ -70,6 +86,11 @@ theorem ThreadOK.owned {P : Prog} {m : Mem} {s : Stmt} (h : ThreadOK P m s) :
   rintro i ⟨o, T, hT, hiT⟩
   exact (hi.heap.alloc o T hT i hiT).1
 
+/-- Every live address of a thread's view is in an owned tree or a payload. -/
+theorem ThreadOK.cover {P : Prog} {m : Mem} {s : Stmt} (h : ThreadOK P m s) : Covers m := by
+  obtain ⟨Γ, F, Δ, _, hi, _, _, _⟩ := h
+  exact hi.cover
+
 /-- A thread's facts: no owned tree holds a payload address ... -/
 theorem ThreadOK.notPay {P : Prog} {m : Mem} {s : Stmt} (h : ThreadOK P m s) {i : Nat} (hi : OwnedId m i) :
     ¬ PayAddr m i := by
@@ -85,8 +106,8 @@ theorem ThreadOK.payAlloc {P : Prog} {m : Mem} {s : Stmt} (h : ThreadOK P m s) {
 
 /-- ... and one payload owns each payload address. -/
 theorem ThreadOK.pay_unique {P : Prog} {m : Mem} {s : Stmt} (h : ThreadOK P m s) {k k' : Nat} {bl bl' : Blk}
-    (hk : m.blk k = some bl) (hk' : m.blk k' = some bl') {i : Nat} (hi : i ∈ bl.pay.ids)
-    (hi' : i ∈ bl'.pay.ids) : k = k' :=
+    (hk : m.blk k = some bl) (hk' : m.blk k' = some bl') {i : Nat} (hi : i ∈ bl.tree.ids)
+    (hi' : i ∈ bl'.tree.ids) : k = k' :=
   Classical.byContradiction fun hne => (h.blocksAt k bl hk).apart i hi k' bl' (Ne.symm hne) hk' hi'
 
 /-! ### Parts -/

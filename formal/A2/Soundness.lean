@@ -26,7 +26,7 @@ theorem preservation {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
 /-- Progress, with the call cases discharged. -/
 theorem progress' {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     (ht : StmtT P Γ F s Δ) {m : Mem} (hcd : MemCodes P m) (hi : Inv m Γ F s) :
-    s = .skip ∨ ∃ r, Step P m s r :=
+    s = .skip ∨ Blocked m s ∨ ∃ r, Step P m s r :=
   progress (fun hx hc hi => callProgress hx hc hi)
     (fun hx _ hc htc hj hσ hhd hcT hnz hcd hi => cloProgress hP hx hc htc hj hσ hhd hcT hnz hcd hi) ht hcd hi
 
@@ -120,9 +120,10 @@ theorem soundness {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {F :
     (hi : Inv m Γ F s) (hc : Closed Γ s) {m' : Mem} {s' : Stmt}
     (hs : Steps P m s (.ok m' s')) : ¬ Stuck P m' s' := by
   obtain ⟨Γ', ht', hi', _, hcd', _⟩ := reach_ok hP hPc ht hcd hsc hi hc hs
-  rintro ⟨hne, hno⟩
-  rcases progress' hP ht' hcd' hi' with h | ⟨r, hr'⟩
+  rintro ⟨hne, hnb, hno⟩
+  rcases progress' hP ht' hcd' hi' with h | h | ⟨r, hr'⟩
   · exact hne h
+  · exact hnb h
   · exact hno r hr'
 
 /-- The empty store, with variables numbered from `nv` still fresh. -/

@@ -25,6 +25,7 @@ theorem lendOf_ids : (v : Val) → (lendOf v).ids = []
   | .inr a => by simp only [lendOf, Val.ids, lendOf_ids a]
   | .pkg _ _ _ a _ => by simp only [lendOf, Val.ids, lendOf_ids a]
   | .arc _ _ => rfl
+  | .lk _ => rfl
 
 /-- A slot that is owned, or borrowed with an address-free value. -/
 def SlotFree (sl : Slot) : Prop := sl.own = false → ∀ v, sl.val = some v → v.ids = []
@@ -96,7 +97,9 @@ theorem EvalR.borFree {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r
   | taker _ => exact ⟨hb.set _ (SlotFree.own _), fun h => ids_nonNode h⟩
   | pack h1 => exact ⟨(TakeVal.borFree h1 hb).1, fun h => by cases h⟩
   | arcNew h1 _ => exact ⟨((TakeVal.borFree h1 hb).1).of_st rfl, fun h => by cases h⟩
+  | lockNew h1 _ => exact ⟨((TakeVal.borFree h1 hb).1).of_st rfl, fun h => by cases h⟩
   | arcClone _ => exact ⟨hb, fun h => by cases h⟩
+  | lockClone _ => exact ⟨hb, fun h => by cases h⟩
   | arcGet _ _ => exact ⟨hb, fun _ => lendOf_ids _⟩
 
 theorem lendSlot_ids {m : Mem} (hb : BorFree m) {a : Var} {sl : Slot} {v : Val} (ha : m.st a = some sl)
@@ -172,5 +175,9 @@ theorem Step.borFree {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r
   | scopeDMoved _ => exact hb.remove _
   | scopeDP _ _ ih => exact ih.of_st rfl
   | scopeDPMoved _ _ ih => exact ih.remove _
+  | withLock _ _ _ => exact (hb.of_st rfl).set _ (SlotFree.ids ids_nonNode)
+  | scopeLIn _ ih => exact ih
+  | scopeLSkip hrl => cases hrl <;> exact (hb.of_st rfl).remove _
+  | scopeLP _ _ _ ih => exact (ih.of_st rfl).remove _
 
 end A3

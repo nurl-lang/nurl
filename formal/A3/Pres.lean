@@ -9,8 +9,8 @@ here as a hypothesis so this file builds before it), so A2's preservation
 gives the thread's facts after it, up to the store a `recover` frame
 remembers (`ThreadOK.ghost`).  It leaves the other threads' parts as they
 were (`Step.keep`), moves `nid` up and adds blocks, whose payloads it took
-from its own part, which the other threads' facts survive
-(`ThreadOK.grow`). -/
+from its own part, or (A3.2) checks a lock's payload out into its part or
+back in, which the other threads' facts survive (`ThreadOK.move`). -/
 
 namespace A3
 open A2
@@ -94,21 +94,6 @@ theorem CParts.down {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) (hR : Restric
     rw [← hview] at hst1
     exact ⟨ThreadOK.ghost (ThreadOK.step hP hPc hto hst1) hg, Step.borFree hst1 hbo,
       Step.keep hst hbf hav hfr⟩
-
-/-- What thread `i`'s step leaves of the other threads' parts: no payload it
-    makes holds an address of theirs. -/
-theorem CParts.down_pay {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) (hR : RestrictLemma P) {C : Cfg}
-    {ps : List (Nat → Bool)} (hc : CParts P C ps) {i : Nat} {t : Thread} {a : Nat → Bool}
-    (hi : C.ths[i]? = some t) (ha : ps[i]? = some a) {m' : Mem} {s' : Stmt}
-    (hst : Step P (C.view t) t.s (.ok m' s')) {k : Nat} (hk : PayIn m'.blk k) (hCk : C.alloc k = true) :
-    a k = true ∨ PayIn C.blk k := by
-  have h1 := (hc.down hP hPc hR hi ha hst).1.payAlloc (m := { m' with alloc := _ }) hk
-  have h2 : (m'.alloc k && !(C.alloc k && !(a k || payPart C.blk k))) = true := h1
-  cases ha' : a k
-  · cases hp : payPart C.blk k
-    · rw [ha', hp, hCk] at h2; simp at h2
-    · exact .inr (payPart_iff.mp hp)
-  · exact .inl rfl
 
 theorem union_minus' {a b : Nat → Bool} (h : ∀ i, b i = true → a i = true) : union (minus a b) b = a := by
   funext i
@@ -228,14 +213,15 @@ theorem CParts.thread_of {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) (hR : Re
         simp only [ownView, Cfg.put]
       have hB : BlocksAt m'.blk m'.nid := hto1.blocksAt
       rw [hv]
-      refine ⟨ThreadOK.grow htoj (fun k hk => ?_) (fun k hk => ?_) (fun k hk => ?_) hgrow.nid hblk hB
+      refine ⟨ThreadOK.move htoj (fun x T hT k hkT => ?_) (fun k hk => ?_) (fun k hk => ?_) hgrow.nid hblk hB
         (fun k hk x T hT hkT => ?_), hboj.of_st rfl⟩
-      · rcases ownView_alloc.mp hk with h | ⟨k', bl, hk', hkk⟩
-        · simp [union, h]
-        · simp only [union, Bool.or_eq_true, payPart_iff]; exact .inr ⟨k', bl, hblk k' bl hk', hkk⟩
+      · simp only [union, Bool.or_eq_true, payPart_iff]; exact .inl (owned_part htoj ⟨x, T, hT, hkT⟩)
       · simp only [union, Bool.or_eq_true, payPart_iff] at hk
         rcases hk with h | h
-        · exact .inl (ownView_alloc.mpr (.inl h))
+        · -- an address of the thread's part is in one of its trees: its part holds no payload's
+          rcases htoj.cover k (ownView_alloc.mpr (.inl h)) with ho | hp
+          · exact .inl ho
+          · exact absurd hp (hc.pay j b hb k h)
         · exact .inr h
       · simp only [union, Bool.or_eq_true, payPart_iff]; exact .inr hk
       · exact hnp j b k (Ne.symm hij) hb (owned_part htoj ⟨x, T, hT, hkT⟩) hk
@@ -252,7 +238,7 @@ theorem CParts.sweep {P : Prog} {C : Cfg} {ps : List (Nat → Bool)} (hc : CPart
   have halloc : ∀ i, C.sweep.alloc i = true ↔ C.alloc i = true ∧ ¬ Unreached C.vals C.blk i :=
     fun _ => sweepAlloc_true
   -- a reached payload's address is in no unreached one
-  have hnu : ∀ i k bl, C.blk k = some bl → Reached C.vals C.blk k → i ∈ bl.pay.ids →
+  have hnu : ∀ i k bl, C.blk k = some bl → Reached C.vals C.blk k → i ∈ bl.tree.ids →
       ¬ Unreached C.vals C.blk i := by
     rintro i k bl hk hr hi ⟨k', bl', hk', hnr, hi'⟩
     exact hnr (hc.uniq k k' bl bl' i hk hk' hi hi' ▸ hr)
@@ -345,34 +331,32 @@ theorem Cfg.valsBut_put {C : Cfg} {i : Nat} {m' : Mem} {s' : Stmt} {v : Val} (h 
 /-- **What a thread's next step touches**: an address of its own part; a
     read of a payload its own slots reach; or (what the sweep that ends it
     frees) a payload no other thread's slots reach. -/
-theorem CParts.ctouch {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) (hR : RestrictLemma P) {C : Cfg}
+theorem CParts.ctouch {P : Prog} {C : Cfg}
     {ps : List (Nat → Bool)} (hc : CParts P C ps) {q : Nat} {tq : Thread} {aq : Nat → Bool}
     (hq : C.ths[q]? = some tq) (haq : ps[q]? = some aq) {a : Nat} {b : Bool} (h : CTouch P C q tq a b) :
-    aq a = true ∨ ∃ k bl, C.blk k = some bl ∧ a ∈ bl.pay.ids ∧
+    aq a = true ∨ ∃ k bl, C.blk k = some bl ∧ a ∈ bl.tree.ids ∧
       ((b = false ∧ Reached (C.view tq).vals C.blk k) ∨ ¬ Reached (C.valsBut q) C.blk k) := by
-  obtain ⟨hto, _⟩ := hc.ok q tq aq hq haq
+  obtain ⟨hto, hbo⟩ := hc.ok q tq aq hq haq
   cases h with
   | step ht =>
     rcases touch_seen ht (m1 := ownView C tq aq) rfl rfl (TypedAt.of_threadOK hto) with
       h1 | ⟨hb, h1 | ⟨k, bl, hk, hak, hr⟩⟩
     · exact .inl (owned_part hto h1)
     · exact .inl (owned_part hto h1)
-    · exact .inr ⟨k, bl, hk, hak, .inl ⟨hb, hr⟩⟩
+    · exact .inr ⟨k, bl, hk, bl.rd_ids hak, .inl ⟨hb, hr⟩⟩
   | sweep hs =>
-    obtain ⟨m', s', hst, hCa, hma, hsw⟩ := hs
+    obtain ⟨m', s', hst, _, hma, hsw⟩ := hs
     -- the sweep frees `a`: an unreached block's payload owns it
     have hu : Unreached (C.put q m' s').vals m'.blk a := Classical.byContradiction fun hnu => by
       have : (C.put q m' s').sweep.alloc a = true := sweepAlloc_true.mpr ⟨hma, hnu⟩
       rw [hsw] at this; cases this
     obtain ⟨k, bl, hk, hnr, hak⟩ := hu
-    have hto1 := (hc.down hP hPc hR hq haq hst).1
-    rcases hc.down_pay hP hPc hR hq haq hst ⟨k, bl, hk, hak⟩ hCa with h1 | ⟨k0, bl0, hk0, hak0⟩
-    · exact .inl h1
-    · have hblk := (Step.grows hst).blk
-      have hkk : k0 = k := hto1.pay_unique (hblk k0 bl0 hk0) hk hak0 hak
-      subst hkk
-      exact .inr ⟨k0, bl0, hk0, hak0, .inr fun hr =>
-        hnr (hr.mono (fun v hv => Cfg.valsBut_put hv) hblk)⟩
+    -- A3.2: the same block's payload owned it before the step, or the
+    -- thread did (a new block's, or a lock's given back)
+    rcases Step.payAt hst (hbo.of_st rfl) k a ⟨bl, hk, hak⟩ with ⟨bl0, hk0, hak0⟩ | h1
+    · exact .inr ⟨k, bl0, hk0, hak0, .inr fun hr =>
+        hnr (hr.mono (fun v hv => Cfg.valsBut_put hv) (Step.grows hst).blk)⟩
+    · exact .inl (owned_part hto h1)
 
 /-- **No race**: two threads never touch one address, one of them writing.
     A write is to the writer's own part, or (the sweep's frees) to a payload
@@ -380,21 +364,21 @@ theorem CParts.ctouch {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) (hR : Restr
     or a payload its own slots reach, or one the sweep after its own step
     would free — and a block is reached from some thread (`CInv`), so not
     two threads' sweeps free it. -/
-theorem CInv.raceFree {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) (hR : RestrictLemma P) {C : Cfg}
+theorem CInv.raceFree {P : Prog} {C : Cfg}
     (h : CInv P C) : ¬ Race P C := by
   rintro ⟨i, j, ti, tj, a, w, hij, hi, hj, hti, htj⟩
   obtain ⟨ps, hc, hreach⟩ := h
   obtain ⟨ai, hai⟩ := part_of hc.len hi
   obtain ⟨aj, haj⟩ := part_of hc.len hj
-  rcases hc.ctouch hP hPc hR hi hai hti with h1 | ⟨k, bl, hk, hak, ⟨hf, _⟩ | hnr⟩
+  rcases hc.ctouch hi hai hti with h1 | ⟨k, bl, hk, hak, ⟨hf, _⟩ | hnr⟩
   · -- `i` writes its own part
     have hnp : ¬ PayIn C.blk a := hc.pay i ai hai a h1
-    rcases hc.ctouch hP hPc hR hj haj htj with h2 | ⟨k', bl', hk', hak', _⟩
+    rcases hc.ctouch hj haj htj with h2 | ⟨k', bl', hk', hak', _⟩
     · rw [hc.disj i j ai aj hij hai haj a h1] at h2; cases h2
     · exact hnp ⟨k', bl', hk', hak'⟩
   · cases hf
   · -- `i`'s sweep frees a payload no other thread reaches
-    rcases hc.ctouch hP hPc hR hj haj htj with h2 | ⟨k', bl', hk', hak', ⟨_, hr'⟩ | hnr'⟩
+    rcases hc.ctouch hj haj htj with h2 | ⟨k', bl', hk', hak', ⟨_, hr'⟩ | hnr'⟩
     · exact hc.pay j aj haj a h2 ⟨k, bl, hk, hak⟩
     · have := hc.uniq k k' bl bl' a hk hk' hak hak'; subst this
       exact hnr (hr'.mono (fun v ⟨x, o, hx⟩ => ⟨j, tj, Ne.symm hij, hj, x, o, hx⟩) (BlkLe.refl _))

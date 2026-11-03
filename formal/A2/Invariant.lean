@@ -31,6 +31,8 @@ inductive WFv : Ty → Val → Prop
   /-- A3.1: a share; its block, in memory, holds the payload it carries, one
       that holds no view. -/
   | arc {t : Ty} {k : Nat} {p : Val} : WFv t p → t.holdsView = false → WFv (.arc t) (.arc k p)
+  /-- A3.2: a lock share; its block, in memory, is a lock block of its type. -/
+  | lk {t : Ty} {k : Nat} : WFv (.lk t) (.lk k)
 
 /-- `v`, a view of element type `s`, is stored in tree `T` of type `τ`. -/
 inductive ViewIn : Ty → Val → Ty → Val → Prop
@@ -45,49 +47,115 @@ inductive ViewIn : Ty → Val → Ty → Val → Prop
       {v : Val} : ViewIn te x s v → ViewIn (.fn ms) (.pkg fs te ms x cs) s v
 
 /-- A3.1: tree `T` of type `τ` holds a share of block `k`, whose payload is
-    the `u` it carries, `p`. (Not inside a payload: the block's own shares
-    are the block's.) -/
-inductive ArcIn : Ty → Val → Ty → Nat → Val → Prop
-  | here {u : Ty} {k : Nat} {p : Val} : ArcIn (.arc u) (.arc k p) u k p
-  | child {t t' : Ty} {c d : Nat} {es : List Val} {e : Val} {u : Ty} {k : Nat} {p : Val} :
+    a `u`: the one it carries, `some p`, or (A3.2) none, for a lock share.
+    (Not inside a payload: the block's own shares are the block's.) -/
+inductive ArcIn : Ty → Val → Ty → Nat → Option Val → Prop
+  | here {u : Ty} {k : Nat} {p : Val} : ArcIn (.arc u) (.arc k p) u k (some p)
+  /-- A3.2: a lock share of block `k`, of payload type `u` (it carries no
+      payload: `none`). -/
+  | lk {u : Ty} {k : Nat} : ArcIn (.lk u) (.lk k) u k none
+  | child {t t' : Ty} {c d : Nat} {es : List Val} {e : Val} {u : Ty} {k : Nat} {p : Option Val} :
       e ∈ es → ArcIn t e u k p → ArcIn (.vec t) (.node t' c d es) u k p
-  | fst {a b : Ty} {x y : Val} {u : Ty} {k : Nat} {p : Val} :
+  | fst {a b : Ty} {x y : Val} {u : Ty} {k : Nat} {p : Option Val} :
       ArcIn a x u k p → ArcIn (.prod a b) (.pair x y) u k p
-  | snd {a b : Ty} {x y : Val} {u : Ty} {k : Nat} {p : Val} :
+  | snd {a b : Ty} {x y : Val} {u : Ty} {k : Nat} {p : Option Val} :
       ArcIn b y u k p → ArcIn (.prod a b) (.pair x y) u k p
-  | inl {a b : Ty} {x : Val} {u : Ty} {k : Nat} {p : Val} : ArcIn a x u k p → ArcIn (.sum a b) (.inl x) u k p
-  | inr {a b : Ty} {x : Val} {u : Ty} {k : Nat} {p : Val} : ArcIn b x u k p → ArcIn (.sum a b) (.inr x) u k p
+  | inl {a b : Ty} {x : Val} {u : Ty} {k : Nat} {p : Option Val} : ArcIn a x u k p → ArcIn (.sum a b) (.inl x) u k p
+  | inr {a b : Ty} {x : Val} {u : Ty} {k : Nat} {p : Option Val} : ArcIn b x u k p → ArcIn (.sum a b) (.inr x) u k p
   | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {x : Val} {cs : List (Var × PMode × Ty)} {u : Ty}
-      {k : Nat} {p : Val} : ArcIn te x u k p → ArcIn (.fn ms) (.pkg fs te ms x cs) u k p
+      {k : Nat} {p : Option Val} : ArcIn te x u k p → ArcIn (.fn ms) (.pkg fs te ms x cs) u k p
+
+/-- A3.2: what a share asks of its block: an `arc` share (carrying `some p`)
+    an `arc` block holding `p`, a lock share (`none`) a lock block of its
+    payload's type, holding its payload or not. -/
+def ShareFits (b : Option Blk) (u : Ty) : Option Val → Prop
+  | some p => b = some ⟨u, .arc, some p⟩
+  | none => ∃ o, b = some ⟨u, .lock, o⟩
 
 /-- A3.1: every share a tree holds names a block of the store `B` that
     holds the payload the share carries, of the share's type (the block
-    lives while a share of it is owned; a payload never changes). -/
+    lives while a share of it is owned; an `arc` payload never changes), or
+    (A3.2) a lock block of its type. -/
 def SharesIn (B : Nat → Option Blk) (τ : Ty) (T : Val) : Prop :=
-  ∀ u k p, ArcIn τ T u k p → B k = some ⟨u, p⟩
+  ∀ u k p, ArcIn τ T u k p → ShareFits (B k) u p
 
 /-- `SharesIn` over a memory's blocks. -/
 def SharesOK (m : Mem) (τ : Ty) (T : Val) : Prop := SharesIn m.blk τ T
 
-/-- A3.1: the blocks `B'` keep every block of `B`: a step's blocks only grow
-    (`arcNew` adds one); only the sweep at its end removes one. -/
-def BlkLe (B B' : Nat → Option Blk) : Prop := ∀ k bl, B k = some bl → B' k = some bl
+/-- A3.2: what a later store keeps of a block, as its holders see it: an
+    `arc` block as it was, a `lock` block as a lock block of the same type
+    (its payload, which no one reads, may have been checked out or back in). -/
+def BlkKeep (bl bl' : Blk) : Prop := bl'.ty = bl.ty ∧ bl'.kind = bl.kind ∧ (bl.kind = .arc → bl' = bl)
 
-theorem BlkLe.refl (B : Nat → Option Blk) : BlkLe B B := fun _ _ h => h
+theorem BlkKeep.refl (bl : Blk) : BlkKeep bl bl := ⟨rfl, rfl, fun _ => rfl⟩
+
+theorem BlkKeep.trans {b1 b2 b3 : Blk} (h1 : BlkKeep b1 b2) (h2 : BlkKeep b2 b3) : BlkKeep b1 b3 :=
+  ⟨h2.1.trans h1.1, h2.2.1.trans h1.2.1, fun h => (h2.2.2 (h1.2.1.trans h)).trans (h1.2.2 h)⟩
+
+/-- What a kept block's holders read is what they read before. -/
+theorem BlkKeep.rd {bl bl' : Blk} (h : BlkKeep bl bl') : bl'.rd = bl.rd := by
+  obtain ⟨_, hk, ha⟩ := h
+  cases hkd : bl.kind with
+  | arc => rw [ha hkd]
+  | lock =>
+    rw [hkd] at hk
+    obtain ⟨t, k, p⟩ := bl; obtain ⟨t', k', p'⟩ := bl'
+    simp only at hk hkd; subst hk; subst hkd; rfl
+
+/-- A3.1: the blocks `B'` keep every block of `B`: a step's blocks only grow
+    (`arcNew` adds one); only the sweep at its end removes one.  (A3.2: a
+    lock block is kept as a lock block of its type, `BlkKeep`: acquiring
+    and releasing it change its payload.) -/
+def BlkLe (B B' : Nat → Option Blk) : Prop := ∀ k bl, B k = some bl → ∃ bl', B' k = some bl' ∧ BlkKeep bl bl'
+
+/-- Blocks kept exactly are kept. -/
+theorem BlkLe.of_le {B B' : Nat → Option Blk} (h : ∀ k bl, B k = some bl → B' k = some bl) : BlkLe B B' :=
+  fun k bl hk => ⟨bl, h k bl hk, BlkKeep.refl bl⟩
+
+theorem BlkLe.refl (B : Nat → Option Blk) : BlkLe B B := BlkLe.of_le fun _ _ h => h
 
 theorem BlkLe.trans {B1 B2 B3 : Nat → Option Blk} (h1 : BlkLe B1 B2) (h2 : BlkLe B2 B3) : BlkLe B1 B3 :=
-  fun k bl h => h2 k bl (h1 k bl h)
+  fun k bl h => by
+    obtain ⟨b2, h2', hk2⟩ := h1 k bl h
+    obtain ⟨b3, h3', hk3⟩ := h2 k b2 h2'
+    exact ⟨b3, h3', hk2.trans hk3⟩
 
-theorem BlkLe.of_eq {B B' : Nat → Option Blk} (h : B' = B) : BlkLe B B' := fun _ _ hk => by rw [h]; exact hk
+theorem BlkLe.of_eq {B B' : Nat → Option Blk} (h : B' = B) : BlkLe B B' :=
+  BlkLe.of_le fun _ _ hk => by rw [h]; exact hk
 
 /-- A new block at a fresh key keeps every other. -/
 theorem BlkLe.fresh {B : Nat → Option Blk} {n : Nat} (h : B n = none) (b : Blk) : BlkLe B (upd B n (some b)) :=
-  fun k bl hk => by
+  BlkLe.of_le fun k bl hk => by
     have hne : k ≠ n := fun e => by rw [e, h] at hk; cases hk
     simpa [upd, hne] using hk
 
+/-- An `arc` block is kept as it was ... -/
+theorem BlkLe.arc {B B' : Nat → Option Blk} (hb : BlkLe B B') {k : Nat} {t : Ty} {p : Option Val}
+    (h : B k = some ⟨t, .arc, p⟩) : B' k = some ⟨t, .arc, p⟩ := by
+  obtain ⟨bl', h', hk⟩ := hb k _ h
+  rw [h', hk.2.2 rfl]
+
+/-- ... a lock block as a lock block of its type ... -/
+theorem BlkLe.lock {B B' : Nat → Option Blk} (hb : BlkLe B B') {k : Nat} {t : Ty} {o : Option Val}
+    (h : B k = some ⟨t, .lock, o⟩) : ∃ o', B' k = some ⟨t, .lock, o'⟩ := by
+  obtain ⟨⟨t', k', o'⟩, h', hty, hkd, _⟩ := hb k _ h
+  simp only at hty hkd; subst hty; subst hkd
+  exact ⟨o', h'⟩
+
+/-- ... and what holders read of a block is kept. -/
+theorem BlkLe.rd {B B' : Nat → Option Blk} (hb : BlkLe B B') {k : Nat} {bl : Blk} (h : B k = some bl) :
+    ∃ bl', B' k = some bl' ∧ bl'.rd = bl.rd := by
+  obtain ⟨bl', h', hk⟩ := hb k bl h
+  exact ⟨bl', h', hk.rd⟩
+
+theorem ShareFits.grow {B B' : Nat → Option Blk} (hb : BlkLe B B') {k : Nat} {u : Ty} {p : Option Val}
+    (h : ShareFits (B k) u p) : ShareFits (B' k) u p := by
+  cases p with
+  | some p => exact hb.arc h
+  | none => obtain ⟨o, h⟩ := h; exact hb.lock h
+
 theorem SharesIn.grow {B B' : Nat → Option Blk} {τ : Ty} {T : Val} (h : SharesIn B τ T) (hb : BlkLe B B') :
-    SharesIn B' τ T := fun u k p ha => hb k _ (h u k p ha)
+    SharesIn B' τ T := fun u k p ha => (h u k p ha).grow hb
 
 theorem SharesOK.grow {m m' : Mem} {τ : Ty} {T : Val} (h : SharesOK m τ T) (hb : BlkLe m.blk m'.blk) :
     SharesOK m' τ T := SharesIn.grow h hb
@@ -110,12 +178,16 @@ theorem SharesOK.pkg {m : Mem} {fs : List Nat} {te : Ty} {ms : List Nat} {x : Va
     {cs : List (Var × PMode × Ty)} (h : SharesOK m (.fn ms) (.pkg fs te ms x cs)) : SharesOK m te x :=
   fun u k p ha => h u k p (.pkg ha)
 theorem SharesOK.here {m : Mem} {t : Ty} {k : Nat} {p : Val} (h : SharesOK m (.arc t) (.arc k p)) :
-    m.blk k = some ⟨t, p⟩ := h t k p .here
+    m.blk k = some ⟨t, .arc, some p⟩ := h t k (some p) .here
+/-- A3.2: a lock share names a lock block of its type. -/
+theorem SharesOK.lk {m : Mem} {t : Ty} {k : Nat} (h : SharesOK m (.lk t) (.lk k)) :
+    ∃ o, m.blk k = some ⟨t, .lock, o⟩ := h t k none .lk
 
-theorem ArcIn.hasArc {τ : Ty} {T : Val} {u : Ty} {k : Nat} {p : Val} (h : ArcIn τ T u k p) :
+theorem ArcIn.hasArc {τ : Ty} {T : Val} {u : Ty} {k : Nat} {p : Option Val} (h : ArcIn τ T u k p) :
     τ.hasArc = true := by
   induction h with
   | here => rfl
+  | lk => rfl
   | child _ _ ih => exact ih
   | fst _ ih => simp [Ty.hasArc, ih]
   | snd _ ih => simp [Ty.hasArc, ih]
@@ -220,7 +292,14 @@ def Lands (k : Kind) (n n0 : Val) : Prop :=
   k = .self ∧ n = n0 ∨ k = .view ∧ n = n0 ∨ k = .inner ∧ Below n n0
 
 /-- A3.1: a value inside a live block's payload. -/
-def InPay (m : Mem) (n : Val) : Prop := ∃ k bl, m.blk k = some bl ∧ Sub n bl.pay
+def InPay (m : Mem) (n : Val) : Prop := ∃ k bl, m.blk k = some bl ∧ Sub n bl.rd
+
+/-- What lies in a payload holders read stays there while the blocks are
+    kept (A3.2: a lock block's payload is read by no one). -/
+theorem InPay.grow {m m' : Mem} (hb : BlkLe m.blk m'.blk) {n : Val} (h : InPay m n) : InPay m' n := by
+  obtain ⟨k, bl, hk, hs⟩ := h
+  obtain ⟨bl', hk', hrd⟩ := hb.rd hk
+  exact ⟨k, bl', hk', hrd ▸ hs⟩
 
 /-- Where a value reached through `dep` lies: where the node its root
     reaches puts it (`Lands`), or (A3.1), through a share, anywhere in a
@@ -299,8 +378,14 @@ inductive ValOK (m : Mem) : Ty → Val → List Dep → List Dep → Prop
       type (one that holds no view), and the share lands through a
       dependency, as a `Vec` handle does. -/
   | arc {t : Ty} {k : Nat} {p : Val} {P H : List Dep} :
-      m.blk k = some ⟨t, p⟩ → WFv t p → t.holdsView = false → (∃ dep ∈ P, ArcLanded m dep (.arc k p)) →
+      m.blk k = some ⟨t, .arc, some p⟩ → WFv t p → t.holdsView = false →
+      (∃ dep ∈ P, ArcLanded m dep (.arc k p)) →
       ValOK m (.arc t) (.arc k p) P H
+  /-- A3.2: a lock share lent: its block is a lock block of its type.  No
+      one borrows into a lock's payload, so it lands through nothing; the
+      sweep keeps the block while a slot holds the share. -/
+  | lk {t : Ty} {k : Nat} {P H : List Dep} :
+      (∃ o, m.blk k = some ⟨t, .lock, o⟩) → ValOK m (.lk t) (.lk k) P H
 
 section ValOK
 variable {m : Mem} {v : Val} {P H : List Dep}
@@ -364,9 +449,9 @@ def SelfFree (T : Val) : Prop :=
     block's payload, and are live and below `nid`.  The block's key was taken
     from `nid` too (a key is never an address), so a new one is fresh. -/
 def BlkOwn (m : Mem) : Prop :=
-  ∀ k bl, m.blk k = some bl → k < m.nid ∧ bl.pay.ids.Nodup ∧
-    ∀ i ∈ bl.pay.ids, m.alloc i = true ∧ i < m.nid ∧ (∀ x T, OwnedAt m x T → i ∉ T.ids) ∧
-      ∀ k' bl', k' ≠ k → m.blk k' = some bl' → i ∉ bl'.pay.ids
+  ∀ k bl, m.blk k = some bl → k < m.nid ∧ bl.tree.ids.Nodup ∧
+    ∀ i ∈ bl.tree.ids, m.alloc i = true ∧ i < m.nid ∧ (∀ x T, OwnedAt m x T → i ∉ T.ids) ∧
+      ∀ k' bl', k' ≠ k → m.blk k' = some bl' → i ∉ bl'.tree.ids
 
 /-- One owner per allocation, every owned address is live, and no owned tree
     views itself. -/
@@ -383,7 +468,7 @@ theorem HeapOK.bkey {m : Mem} (hh : HeapOK m) : ∀ k bl, m.blk k = some bl → 
   fun k bl hk => (hh.blk k bl hk).1
 
 /-- A3.1: an address a block's payload owns. -/
-def PayAddr (m : Mem) (i : Nat) : Prop := ∃ k bl, m.blk k = some bl ∧ i ∈ bl.pay.ids
+def PayAddr (m : Mem) (i : Nat) : Prop := ∃ k bl, m.blk k = some bl ∧ i ∈ bl.tree.ids
 
 /-- No owned tree holds a payload's address. -/
 theorem HeapOK.notPay {m : Mem} (hh : HeapOK m) {x : Var} {T : Val} (hT : OwnedAt m x T) {i : Nat}
@@ -397,7 +482,7 @@ theorem HeapOK.payAlloc {m : Mem} (hh : HeapOK m) {i : Nat} (hi : PayAddr m i) :
   exact ⟨((hh.blk k bl hk).2.2 i hik).1, ((hh.blk k bl hk).2.2 i hik).2.1⟩
 
 /-- Blocks whose payloads own no address own them trivially. -/
-theorem BlkOwn.of_none {m : Mem} (h : ∀ k bl, m.blk k = some bl → bl.pay.ids = [] ∧ k < m.nid) :
+theorem BlkOwn.of_none {m : Mem} (h : ∀ k bl, m.blk k = some bl → bl.tree.ids = [] ∧ k < m.nid) :
     BlkOwn m := fun k bl hk => by
   obtain ⟨h1, h2⟩ := h k bl hk
   rw [h1]; exact ⟨h2, List.nodup_nil, fun _ h => nomatch h⟩
@@ -442,6 +527,7 @@ def Stmt.spine : Stmt → List Var
   | .rbind p s => p :: s.spine
   | .frozen _ s => s.spine
   | .catchR _ _ s => s.spine
+  | .scopeL _ _ x s => x :: s.spine
   | _ => []
 
 /-- An address is covered: a tree some binding owns holds it, or (A3.1) a
@@ -468,8 +554,10 @@ def CatchOK (m : Mem) : Stmt → Prop
   | .frozen _ s => CatchOK m s
   | .catchR x m0 s => (∀ v, v ∉ s.spine → v ≠ x → m.st v = m0.st v) ∧
       x ∉ s.spine ∧ m0.nv ≤ m.nv ∧
-      (∀ k bl, m0.blk k = some bl → Reached (OutVals m0 x s.spine) m0.blk k → m.blk k = some bl) ∧
+      (∀ k bl, m0.blk k = some bl → Reached (OutVals m0 x s.spine) m0.blk k →
+        ∃ bl', m.blk k = some bl' ∧ BlkKeep bl bl') ∧
       CatchOK m s
+  | .scopeL _ _ _ s => CatchOK m s
   | _ => True
 
 /-- A borrowed parameter depends only on what was bound before its call: on
@@ -482,6 +570,7 @@ def PinOK (Γ : Ctx) : Stmt → Prop
   | .rbind p s => (∀ E, Γ p = some E → E.mode = .rootb → ∀ r ∈ roots E.vdeps, r ∉ s.spine) ∧ PinOK Γ s
   | .frozen _ s => PinOK Γ s
   | .catchR _ _ s => PinOK Γ s
+  | .scopeL _ _ _ s => PinOK Γ s
   | _ => True
 
 /-- A2-drop.2: a binding `letd` made depends, in memory, on no binding of
@@ -498,6 +587,7 @@ def DtorPinOK (Γ : Ctx) : Stmt → Prop
   | .rbind p s => DtorIn Γ p s ∧ DtorPinOK Γ s
   | .frozen _ s => DtorPinOK Γ s
   | .catchR _ _ s => DtorPinOK Γ s
+  | .scopeL _ _ x s => DtorIn Γ x s ∧ DtorPinOK Γ s
   | _ => True
 
 /-- A statement inside no run-time scope pins nothing. -/
@@ -509,6 +599,7 @@ theorem DtorPinOK.of_spine_nil {Γ : Ctx} {s : Stmt} (h : s.spine = []) : DtorPi
   | scope _ _ _ => simp [Stmt.spine] at h
   | scopeD _ _ _ _ => simp [Stmt.spine] at h
   | rbind _ _ _ => simp [Stmt.spine] at h
+  | scopeL _ _ _ _ _ => simp [Stmt.spine] at h
   | _ => trivial
 
 /-- `DtorPinOK` reads only what the `letd` bindings view: a context that
@@ -529,6 +620,7 @@ theorem DtorPinOK.of_dbind {Γ Γ' : Ctx}
   | rbind p k ih => exact ⟨hin p k hp.1, ih hp.2⟩
   | frozen _ k ih => exact ih hp
   | catchR _ _ k ih => exact ih hp
+  | scopeL _ _ x k ih => exact ⟨hin x k hp.1, ih hp.2⟩
   | _ => trivial
 
 theorem dtorOut_nil {Γ : Ctx} {s : Stmt} (h : s.spine = []) :
@@ -546,6 +638,7 @@ theorem PinOK.of_rootb {Γ Γ' : Ctx} (h : ∀ p E, Γ' p = some E → E.mode = 
   | rbind p k ih => exact ⟨fun E hE hm => hp.1 E (h p E hE hm) hm, ih hp.2⟩
   | frozen _ k ih => exact ih hp
   | catchR _ _ k ih => exact ih hp
+  | scopeL _ _ _ k ih => exact ih hp
   | _ => trivial
 
 /-- A statement inside no run-time scope is inside no call either. -/
@@ -557,6 +650,7 @@ theorem PinOK.of_spine_nil {Γ : Ctx} {s : Stmt} (h : s.spine = []) : PinOK Γ s
   | scope _ _ _ => simp [Stmt.spine] at h
   | scopeD _ _ _ _ => simp [Stmt.spine] at h
   | rbind _ _ _ => simp [Stmt.spine] at h
+  | scopeL _ _ _ _ _ => simp [Stmt.spine] at h
   | _ => trivial
 
 theorem pinOut_nil {Γ : Ctx} {s : Stmt} (h : s.spine = []) :
@@ -598,9 +692,11 @@ structure MInv (m : Mem) (Γ : Ctx) : Prop where
   shares    : ∀ v E sl T, Γ v = some E → m.st v = some sl → sl.own = true → sl.val = some T →
                 SharesOK m E.ty T
   /-- A3.1: a block's payload is a well-formed tree of a type that holds no
-      views, and the shares it holds name blocks too. -/
+      views, and the shares it holds name blocks too (A3.2: while it is in
+      the block; a lock block's holds no share, this cut). -/
   blocks    : ∀ k bl, m.blk k = some bl → bl.ty.ok = true ∧ bl.ty.holdsView = false ∧
-                WFv bl.ty bl.pay ∧ SharesOK m bl.ty bl.pay
+                (∀ p, bl.pay = some p → WFv bl.ty p ∧ SharesOK m bl.ty p) ∧
+                (bl.kind = .lock → bl.ty.hasArc = false)
 
 /-- The invariant of a configuration running `s` in context `Γ`, with `F`
     lent out. -/
@@ -750,6 +846,26 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       -- A2-drop.2: the binding, armed, views what the value does, or more
       HeldUp Γ1 E H → StmtT P (setE Γ1 x (Entry.arm { E with held := H })) F s Δ →
       EndOK Δ x → StmtT P Γ F (.letd x f r s) (exitScope x Δ)
+  /-- A3.2: `locked_update a f`: the lock `a` (a live lock share) shares is
+      taken, and its payload, a `t`, is checked out to `x` for the body:
+      owned (an integer is a plain integer binding), holding nothing (the
+      payload views nothing). `x`'s scope ends as a `letv`'s does; its value
+      goes back into the block (`scopeL`).  The runtime runs the update in
+      place, in the lock's own memory, so two more premises keep the model
+      faithful to it: the body leaves `a`'s slot alone (it does not name
+      `a`, and `a` is an owner or a borrowed parameter, whose share outlives
+      the body; no closure changes a lock share by name, `NamesFree`), so the
+      lock outlives the body; and `x` holds a `t` again at its end (it may
+      be replaced, not left moved out), so it is what goes back. -/
+  | withLock {Γ Δ : Ctx} {F : List Var} {a x : Var} {s : Stmt} {Ea : Entry} {t : Ty} :
+      s.src = true → Γ x = none → x ∉ F → Γ a = some Ea → Ea.live = true → Ea.ty = .lk t →
+      StmtT P (setE Γ x (lockE t)) F s Δ → EndOK Δ x →
+      Ea.mode.isRoot = true → a ∉ s.vars → (∃ E, Δ x = some E ∧ E.live = true) →
+      StmtT P Γ F (.withLock a x s) (exitScope x Δ)
+  /-- A3.2: run time: `x`'s lock scope, typed as a `scope`. -/
+  | scopeL {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x : Var} {s : Stmt} :
+      (∃ E, Γ x = some E ∧ E.mode ≠ .rootb ∧ E.ty = t) → x ∉ F → StmtT P Γ F s Δ → EndOK Δ x →
+      StmtT P Γ F (.scopeL k t x s) (exitScope x Δ)
   | scopeD {Γ Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {s : Stmt} :
       (∃ E, Γ x = some E ∧ E.mode = .own ∧ E.ty.hasFn = false ∧ DtorOK P f E.ty) → x ∉ F →
       StmtT P Γ F s Δ → EndOK Δ x →
@@ -849,6 +965,8 @@ def Stmt.codesOK (P : Prog) : Stmt → Prop
   | .callc _ _ _ _ s => s.codesOK P
   | .letd _ _ r s => r.codeOK P ∧ s.codesOK P
   | .scopeD _ _ s => s.codesOK P
+  | .withLock _ _ s => s.codesOK P
+  | .scopeL _ _ _ s => s.codesOK P
   | _ => True
 
 def ProgCodes (P : Prog) : Prop := ∀ fn ∈ P, fn.body.codesOK P

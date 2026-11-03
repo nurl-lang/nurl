@@ -47,7 +47,9 @@ theorem RhsT.ctxRel {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry}
   | taker hy _ hm _ hyF hpin => exact CtxRel.moved hanch hy (by rw [hm]; simp) hyF hpin
   | pack hy _ _ hp _ => exact hp.ctxRel hy hanch
   | arcNew hy _ _ _ hp => exact hp.ctxRel hy hanch
+  | lockNew hy _ _ _ hp => exact hp.ctxRel hy hanch
   | arcClone _ _ _ => exact CtxRel.refl _
+  | lockClone _ _ _ => exact CtxRel.refl _
   | arcGet _ _ _ _ _ => exact CtxRel.refl _
   | expr _ => exact CtxRel.refl _
   | new _ => exact CtxRel.refl _
@@ -125,6 +127,12 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
       (fun Ex h => by rw [hx1] at h; cases h) hE
     have hnrb : E.mode ≠ .rootb := by rcases (RhsT.out hr).1 with h | h <;> rw [h] <;> simp
     exact CtxRel.bind hanch hx hxF (hr.ctxRel hanch) hnrb (fun ha => ih hks ha hnx) hpin.1
+  | @withLock Γ Δ F a x k Ea t hks hx hxF _ _ _ _ hpin _ _ _ ih =>
+    intro _ hanch hn
+    have hnx := NameWF.setE hn (E := lockE t) (fun Ex h => by rw [hx] at h; cases h)
+      (fun Ex h => by rw [hx] at h; cases h) (fun _ _ => by unfold NameOK; rw [lockE_vdeps]; exact DepsNamed.nil _)
+    have hnrb : (lockE t).mode ≠ .rootb := by unfold lockE; split <;> simp [intE]
+    exact CtxRel.bind hanch hx hxF (CtxRel.refl _) hnrb (fun ha => ih hks ha hnx) hpin.1
   | @letd Γ Γ1 Δ F x f r k E H hks hx hxF hr hmo _ _ hH _ hpin ih =>
     intro _ hanch hn
     obtain ⟨hn1, hE, _⟩ := hr.names hn
@@ -240,6 +248,7 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
       rw [hfx (Or.inl hrb)]
   | catchR => intro hs; simp [Stmt.src] at hs
   | scopeD => intro hs; simp [Stmt.src] at hs
+  | scopeL => intro hs; simp [Stmt.src] at hs
   | scope => intro hs; simp [Stmt.src] at hs
   | rbind => intro hs; simp [Stmt.src] at hs
   | frozen => intro hs; simp [Stmt.src] at hs

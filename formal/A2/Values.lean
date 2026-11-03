@@ -47,7 +47,7 @@ theorem HeapOK.inMem_alloc {m : Mem} (hh : HeapOK m) {n : Val} (h : InMem m n) :
   intro i hi
   rcases h with ⟨o, T, hT, hs⟩ | ⟨k, bl, hk, hs⟩
   · exact (hh.alloc o T hT i (hs.ids i hi)).1
-  · exact (hh.payAlloc ⟨k, bl, hk, hs.ids i hi⟩).1
+  · exact (hh.payAlloc ⟨k, bl, hk, bl.rd_ids (hs.ids i hi)⟩).1
 
 /-- The `Vec` node a live binding of type `vec t` names, with the
     dependency of its own that reaches it (for a root: the binding itself). -/

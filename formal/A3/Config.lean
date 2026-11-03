@@ -31,7 +31,7 @@ structure CParts (P : Prog) (C : Cfg) (ps : List (Nat → Bool)) : Prop where
   /-- No part holds a payload's address. -/
   pay  : ∀ (j : Nat) (a : Nat → Bool), ps[j]? = some a → ∀ i, a i = true → ¬ PayIn C.blk i
   /-- One payload owns each payload address. -/
-  uniq : ∀ k k' bl bl' i, C.blk k = some bl → C.blk k' = some bl' → i ∈ bl.pay.ids → i ∈ bl'.pay.ids →
+  uniq : ∀ k k' bl bl' i, C.blk k = some bl → C.blk k' = some bl' → i ∈ bl.tree.ids → i ∈ bl'.tree.ids →
     k = k'
   ok   : ∀ (j : Nat) (t : Thread) (a : Nat → Bool), C.ths[j]? = some t → ps[j]? = some a →
     ThreadOK P (ownView C t a) t.s ∧ BorFree (ownView C t a)

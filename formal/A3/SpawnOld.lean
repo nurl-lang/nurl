@@ -56,6 +56,7 @@ theorem Redex.eq {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) : s = K r :=
   | frozen _ ih => subst ih; rfl
   | catchR _ ih => subst ih; rfl
   | scopeD _ ih => subst ih; rfl
+  | scopeL _ ih => subst ih; rfl
 
 /-- The frames read a statement's spine only through the hole's. -/
 theorem Redex.spine_eq {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {y y' : Stmt}
@@ -68,6 +69,7 @@ theorem Redex.spine_eq {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {y y' 
   | frozen _ ih => exact ih
   | catchR _ ih => exact ih
   | scopeD _ ih => simp only [Stmt.spine, ih]
+  | scopeL _ ih => simp only [Stmt.spine, ih]
 
 theorem Redex.vars_sub {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {y y' : Stmt}
     (hy : ∀ v ∈ y.vars, v ∈ y'.vars) : ∀ v ∈ (K y).vars, v ∈ (K y').vars := by
@@ -97,6 +99,10 @@ theorem Redex.vars_sub {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {y y' 
     intro v hv
     simp only [Stmt.vars, List.mem_cons] at hv ⊢
     exact hv.imp_right (ih v)
+  | scopeL _ ih =>
+    intro v hv
+    simp only [Stmt.vars, List.mem_cons] at hv ⊢
+    exact hv.imp_right (ih v)
 
 theorem Redex.catchOK {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {m : Mem} {y y' : Stmt}
     (hy : y.spine = y'.spine) (hc : CatchOK m y) (hc' : CatchOK m (K y')) : CatchOK m (K y) := by
@@ -111,6 +117,7 @@ theorem Redex.catchOK {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {m : Me
     have hsp := Redex.spine_eq h hy
     exact ⟨by rw [hsp]; exact h1, by rw [hsp]; exact h2, h3, by rw [hsp]; exact h4, ih h5⟩
   | scopeD _ ih => exact ih hc'
+  | scopeL _ ih => exact ih hc'
 
 theorem Redex.pinOK {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {Γ : Ctx} {y y' : Stmt}
     (hy : y.spine = y'.spine) (hp : PinOK Γ y) (hp' : PinOK Γ (K y')) : PinOK Γ (K y) := by
@@ -124,6 +131,7 @@ theorem Redex.pinOK {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {Γ : Ctx
   | frozen _ ih => exact ih hp'
   | catchR _ ih => exact ih hp'
   | scopeD _ ih => exact ih hp'
+  | scopeL _ ih => exact ih hp'
 
 theorem Redex.dtorPinOK {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {Γ : Ctx} {y y' : Stmt}
     (hy : y.spine = y'.spine) (hp : DtorPinOK Γ y) (hp' : DtorPinOK Γ (K y')) : DtorPinOK Γ (K y) := by
@@ -144,6 +152,10 @@ theorem Redex.dtorPinOK {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {Γ :
     obtain ⟨h1, h2⟩ := hp'
     exact ⟨fun E hE hd hos hn d hdd hnm => by
       rw [Redex.spine_eq h hy]; exact h1 E hE hd hos hn d hdd hnm, ih h2⟩
+  | scopeL h ih =>
+    obtain ⟨h1, h2⟩ := hp'
+    exact ⟨fun E hE hd hos hn d hdd hnm => by
+      rw [Redex.spine_eq h hy]; exact h1 E hE hd hos hn d hdd hnm, ih h2⟩
 
 theorem Redex.codesOK {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {P : Prog} {y y' : Stmt}
     (hy : y.codesOK P) (hy' : (K y').codesOK P) : (K y).codesOK P := by
@@ -155,6 +167,7 @@ theorem Redex.codesOK {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {P : Pr
   | frozen _ ih => exact ih hy'
   | catchR _ ih => exact ih hy'
   | scopeD _ ih => exact ih hy'
+  | scopeL _ ih => exact ih hy'
 
 /-- A step at the hole is a step of the whole. -/
 theorem Redex.step {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {P : Prog} {m m' : Mem}
@@ -167,6 +180,7 @@ theorem Redex.step {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {P : Prog}
   | frozen _ ih => exact Step.frozenIn ih
   | catchR _ ih => exact Step.catchIn ih
   | scopeD _ ih => exact Step.scopeDIn ih
+  | scopeL _ ih => exact Step.scopeLIn ih
 
 theorem Redex.steps {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {P : Prog} {m m' : Mem}
     {y y' : Stmt} (hst : Steps0 P m y (.ok m' y')) : Steps0 P m (K y) (.ok m' (K y')) := by
@@ -234,6 +248,16 @@ theorem Redex.typed {s r : Stmt} {K : Stmt → Stmt} (hR : Redex s K r) {P : Pro
       exact ih _ _ _ hs ((Inv.scopeD_iff.mp hi).scopeIn hx (by rw [hmo]; simp))
     | sub hw _ _ ih0 => exact ih0 hS (hi.weaker hw)
     | _ => cases hS
+  | @scopeL k t x s r K _ ih =>
+    intro Γ F Δ ht hi
+    generalize hS : Stmt.scopeL k t x s = S at ht hi
+    induction ht with
+    | scopeL hxE _ hs _ _ =>
+      cases hS
+      obtain ⟨Ex, hx, hnrb, _⟩ := hxE
+      exact ih _ _ _ hs (hi.scopeLIn hx hnrb)
+    | sub hw _ _ ih0 => exact ih0 hS (hi.weaker hw)
+    | _ => cases hS
 
 /-- **Replacing the hole keeps the typing**: if every typing of `r` at the
     hole, with the invariant there, types `r'` the same way, and `r'` has
@@ -299,6 +323,16 @@ theorem Redex.plug {s r : Stmt} {K : Stmt → Stmt} (hR : Redex s K r) {P : Prog
       exact StmtT.scopeD ⟨Ex, hx, hmo, hrest⟩ hxF
         (ih hsp hhole _ _ _ hs ((Inv.scopeD_iff.mp hi).scopeIn hx (by rw [hmo]; simp))) hpx
         (by rw [hsp']; exact hKO) hWd hNd hΔd
+    | sub hw _ ho ih0 => exact StmtT.sub hw (ih0 hS (hi.weaker hw)) ho
+    | _ => cases hS
+  | @scopeL k t x s r K _ ih =>
+    intro Γ F Δ ht hi
+    generalize hS : Stmt.scopeL k t x s = S at ht hi
+    induction ht with
+    | scopeL hxE hxF hs hpx _ =>
+      cases hS
+      obtain ⟨Ex, hx, hnrb, hty⟩ := hxE
+      exact StmtT.scopeL ⟨Ex, hx, hnrb, hty⟩ hxF (ih hsp hhole _ _ _ hs (hi.scopeLIn hx hnrb)) hpx
     | sub hw _ ho ih0 => exact StmtT.sub hw (ih0 hS (hi.weaker hw)) ho
     | _ => cases hS
 
@@ -652,6 +686,7 @@ theorem Redex.codes_hole {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {P :
   | frozen _ ih => exact ih hs
   | catchR _ ih => exact ih hs
   | scopeD _ ih => exact ih hs
+  | scopeL _ ih => exact ih hs
 
 /-- A typed call is checked against its callee, in a context of the
     invariant. -/

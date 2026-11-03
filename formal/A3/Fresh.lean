@@ -13,7 +13,8 @@ open A2
 structure Grows (m m' : Mem) : Prop where
   nid   : m.nid ≤ m'.nid
   fresh : ∀ i, m'.alloc i = true → m.alloc i = true ∨ m.nid ≤ i
-  /-- A3.1: the counted blocks only grow (`arcNew`). -/
+  /-- A3.1: the counted blocks only grow (`arcNew`); (A3.2) a lock block's
+      payload may be checked out or back in (`BlkLe`). -/
   blk   : BlkLe m.blk m'.blk
 
 theorem Grows.refl (m : Mem) : Grows m m := ⟨Nat.le_refl _, fun _ h => .inl h, BlkLe.refl _⟩
@@ -61,6 +62,8 @@ theorem EvalR.grows {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (
   | inr h1 => exact TakeVal.grows h1
   | pack h1 => exact TakeVal.grows h1
   | arcNew h1 hfr =>
+    exact (TakeVal.grows h1).trans ⟨Nat.le_succ _, fun _ hi => .inl hi, BlkLe.fresh hfr _⟩
+  | lockNew h1 hfr =>
     exact (TakeVal.grows h1).trans ⟨Nat.le_succ _, fun _ hi => .inl hi, BlkLe.fresh hfr _⟩
   | _ => exact Grows.of_eq rfl rfl
 
@@ -135,5 +138,13 @@ theorem Step.grows {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
   | scopeDMoved _ => exact Grows.of_eq rfl rfl
   | scopeDP _ _ ih => exact ih.trans (Grows.of_eq rfl rfl)
   | scopeDPMoved _ _ ih => exact ih.trans (Grows.of_eq rfl rfl)
+  | withLock _ hk _ =>
+    exact ⟨Nat.le_refl _, fun _ h => .inl h, (BlkLe.setLock hk none).trans (BlkLe.refl _)⟩
+  | scopeLIn _ ih => exact ih
+  | scopeLSkip hrl =>
+    cases hrl with
+    | put _ _ hk => exact ⟨Nat.le_refl _, fun _ h => .inl h, BlkLe.setLock hk _⟩
+    | drop _ _ hd => exact Grows.shrink (DropSlot.le hd) rfl
+  | scopeLP _ _ hd ih => exact ih.trans (Grows.shrink (DropSlot.le hd) rfl)
 
 end A3

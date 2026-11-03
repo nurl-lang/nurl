@@ -54,6 +54,7 @@ theorem pkgOK_lend {P : Prog} : ∀ {v : Val}, PkgOK P v → PkgOK P (lendOf v)
   | .href _, h => h
   | .view _ _ _, h => h
   | .arc _ _, h => h
+  | .lk _, h => h
   | .node _ c _ _, _ => pkgOK_href P c
   | .pair v w, h => by
     refine pkgOK_of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
@@ -93,23 +94,30 @@ theorem MemCodes.remove {P : Prog} {m : Mem} (h : MemCodes P m) (x : Var) : MemC
 theorem MemCodes.of_st {P : Prog} {m m' : Mem} (h : MemCodes P m) (hst : m'.st = m.st) : MemCodes P m' :=
   memCodes_iff.mpr fun y o V hy => h.slot (by rw [← hst]; exact hy)
 
+/-- A3.2: what a block's holders read of it holds only packages of its tree. -/
+theorem PkgOK.rd {P : Prog} {bl : Blk} (h : PkgOK P bl.tree) : PkgOK P bl.rd := by
+  obtain ⟨t, k, p⟩ := bl
+  cases k with
+  | arc => exact h
+  | lock => exact pkgOK_int P 0
+
 /-- A node found in memory: its packages name code of their signature. -/
 theorem MemCodes.nodeAt {P : Prog} {m : Mem} (h : MemCodes P m)
-    (hB : ∀ k bl, m.blk k = some bl → PkgOK P bl.pay) {c : Nat} {n : Val} (hn : NodeAt m c n) :
+    (hB : ∀ k bl, m.blk k = some bl → PkgOK P bl.tree) {c : Nat} {n : Val} (hn : NodeAt m c n) :
     PkgOK P n := by
   rcases hn with ⟨x, t, hx, hs, _⟩ | ⟨k, bl, hk, hs, _⟩
   · exact (h.slot hx).sub hs
-  · exact (hB k bl hk).sub hs
+  · exact (hB k bl hk).rd.sub hs
 
 theorem MemCodes.dataAt {P : Prog} {m : Mem} (h : MemCodes P m)
-    (hB : ∀ k bl, m.blk k = some bl → PkgOK P bl.pay) {d : Nat} {n : Val} (hn : DataAt m d n) :
+    (hB : ∀ k bl, m.blk k = some bl → PkgOK P bl.tree) {d : Nat} {n : Val} (hn : DataAt m d n) :
     PkgOK P n := by
   rcases hn with ⟨x, t, hx, hs, _⟩ | ⟨k, bl, hk, hs, _⟩
   · exact (h.slot hx).sub hs
-  · exact (hB k bl hk).sub hs
+  · exact (hB k bl hk).rd.sub hs
 
 theorem MemCodes.vecOf {P : Prog} {m : Mem} (h : MemCodes P m)
-    (hB : ∀ k bl, m.blk k = some bl → PkgOK P bl.pay) {y : Var} {t : Ty} {c d : Nat}
+    (hB : ∀ k bl, m.blk k = some bl → PkgOK P bl.tree) {y : Var} {t : Ty} {c d : Nat}
     {es : List Val} (hv : VecOf m y t c d es) : PkgOK P (.node t c d es) := by
   obtain ⟨_, _, hv | ⟨_, hn⟩⟩ := hv
   · exact h.slot hv
@@ -192,16 +200,19 @@ theorem WFv.noPkg {t : Ty} {v : Val} (hw : WFv t v) (ht : t.holdsView = false) {
     · cases hc with | inr => exact ih ht.2 hs'
   | pkg => simp [Ty.holdsView] at ht
   | arc => cases hs
+  | lk => cases hs
 
 /-- A3.1: a block's payload holds no package (it holds no views), so every
     package it holds names code of its signature. -/
 theorem MInv.blkCodes {m : Mem} {Γ : Ctx} (hi : MInv m Γ) (P : Prog) :
-    ∀ k bl, m.blk k = some bl → PkgOK P bl.pay := fun k bl hk _ _ _ _ _ hs => by
+    ∀ k bl, m.blk k = some bl → PkgOK P bl.tree := fun k bl hk _ _ _ _ _ hs => by
   obtain ⟨_, hv, hw, _⟩ := hi.blocks k bl hk
-  exact (hw.noPkg hv hs).elim
+  rcases Blk.sub_tree hs with ⟨q, hq, hs'⟩ | h
+  · exact ((hw q hq).1.noPkg hv hs').elim
+  · cases h
 
 theorem EvalR.codes {P : Prog} {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (he : EvalR m r (.ok v o m1))
-    (h : MemCodes P m) (hB : ∀ k bl, m.blk k = some bl → PkgOK P bl.pay) (hr : r.codeOK P) :
+    (h : MemCodes P m) (hB : ∀ k bl, m.blk k = some bl → PkgOK P bl.tree) (hr : r.codeOK P) :
     PkgOK P v ∧ MemCodes P m1 := by
   cases he with
   | expr _ => exact ⟨pkgOK_int P _, h⟩
@@ -250,8 +261,12 @@ theorem EvalR.codes {P : Prog} {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (he :
   | arcNew h1 _ =>
     obtain ⟨_, hm1⟩ := h1.codes h
     exact ⟨pkgOK_leaf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h), hm1.of_st rfl⟩
+  | lockNew h1 _ =>
+    obtain ⟨_, hm1⟩ := h1.codes h
+    exact ⟨pkgOK_leaf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h), hm1.of_st rfl⟩
   | arcClone _ => exact ⟨pkgOK_leaf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h), h⟩
-  | arcGet _ hk => exact ⟨pkgOK_lend (hB _ _ hk), h⟩
+  | lockClone _ => exact ⟨pkgOK_leaf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h), h⟩
+  | arcGet _ hk => exact ⟨pkgOK_lend (hB _ _ hk).rd, h⟩
 
 theorem BindParams.codes {P : Prog} {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var} {base i : Nat}
     (hb : BindParams m ps as base i m') (h : MemCodes P m) : MemCodes P m' := by
@@ -292,7 +307,8 @@ theorem Stmt.codesOK_rename {P : Prog} (ρ : Var → Var) (s : Stmt) : (s.rename
   | assign x r => simp only [Stmt.rename, Stmt.codesOK, Rhs.codeOK_rename]
   | ite c a b iha ihb => simp only [Stmt.rename, Stmt.codesOK, iha, ihb]
   | letcall _ _ _ _ ih | «while» _ _ ih | scope _ _ ih | rbind _ _ ih | frozen _ _ ih | letrec _ _ _ ih
-  | catchR _ _ _ ih | unpair _ _ _ _ ih | callc _ _ _ _ _ ih | scopeD _ _ _ ih =>
+  | catchR _ _ _ ih | unpair _ _ _ _ ih | callc _ _ _ _ _ ih | scopeD _ _ _ ih | withLock _ _ _ ih
+  | scopeL _ _ _ _ ih =>
     simp only [Stmt.rename, Stmt.codesOK, ih]
   | _ => exact Iff.rfl
 
@@ -314,7 +330,7 @@ theorem callIn_codes {P : Prog} (hPc : ProgCodes P) {f : Nat} {fn : Fn} (hf : P[
 
 /-- Every step keeps every package naming code of its signature. -/
 theorem codes_step {P : Prog} (hPc : ProgCodes P) {m : Mem} {s : Stmt} {r : Res} (hst : Step P m s r) :
-    MemCodes P m → (∀ k bl, m.blk k = some bl → PkgOK P bl.pay) → s.codesOK P →
+    MemCodes P m → (∀ k bl, m.blk k = some bl → PkgOK P bl.tree) → s.codesOK P →
       (∀ m' s', r = .ok m' s' → MemCodes P m' ∧ s'.codesOK P) ∧ (∀ m', r = .panic m' → MemCodes P m') := by
   induction hst with
   | seqSkip =>
@@ -340,12 +356,21 @@ theorem codes_step {P : Prog} (hPc : ProgCodes P) {m : Mem} {s : Stmt} {r : Res}
   | scopeSkip _ _ =>
     intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact ⟨(hm.of_st rfl).remove _, trivial⟩
-  | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | catchIn _ ih =>
+  | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | catchIn _ ih | scopeLIn _ ih =>
     intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     obtain ⟨h1, h2⟩ := (ih hm hB hs).1 _ _ rfl; exact ⟨h1, h2⟩
-  | scopeP _ _ _ ih =>
+  | scopeP _ _ _ ih | scopeLP _ _ _ ih =>
     intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact (((ih hm hB hs).2 _ rfl).of_st rfl).remove _
+  | withLock _ hk _ =>
+    -- A3.2: the payload checked out holds no package (it views nothing)
+    intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    exact ⟨(hm.of_st rfl).set (fun V e => by cases e; exact hB _ _ hk), hs⟩
+  | scopeLSkip hrl =>
+    intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    cases hrl with
+    | put _ _ _ => exact ⟨(hm.of_st rfl).remove _, trivial⟩
+    | drop _ _ _ => exact ⟨(hm.of_st rfl).remove _, trivial⟩
   | rbindSkip _ =>
     intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact ⟨hm.remove _, trivial⟩

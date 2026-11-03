@@ -13,6 +13,7 @@ theorem Frees.le {a a' : Nat → Bool} {T : Val} (h : Frees a T a') :
   | .int => exact hi
   | .view => exact hi
   | .arc => exact hi
+  | .lk => exact hi
   | @Frees.node _ _ _ c d _ _ _ hl =>
     have := FreesL.le hl hi
     by_cases hd : i = d
@@ -221,16 +222,32 @@ theorem covers_evalR {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (hc : Covers m)
   | @arcNew t y w m1 htk hfr =>
     -- A3.1: what `arc_new` moves into the new block is the block's payload
     have hi' : m.alloc i = true := by rw [← htk.alloc]; exact hi
-    have hgrow : ∀ {j}, PayAddr m1 j → PayAddr { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, w⟩) } j := by
+    have hgrow : ∀ {j}, PayAddr m1 j →
+        PayAddr { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, .arc, some w⟩) } j := by
       intro j ⟨k, bl, hk, hj⟩
       have hne : k ≠ m1.nid := fun e => by rw [e, hfr] at hk; cases hk
       exact ⟨k, bl, by simpa [upd, hne] using hk, hj⟩
     rcases hc i hi' with ⟨o', U, hU, hiU⟩ | hp
     · rcases htk.owned hU with hU1 | ⟨_, hUw⟩
       · exact Or.inl (Or.inl ⟨o', U, hU1, hiU⟩)
-      · exact Or.inl (Or.inr ⟨m1.nid, ⟨t, w⟩, by simp [upd], by rw [← hUw]; exact hiU⟩)
+      · exact Or.inl (Or.inr ⟨m1.nid, ⟨t, .arc, some w⟩, by simp [upd], by rw [← hUw]; exact hiU⟩)
     · refine Or.inl (Or.inr (hgrow ?_))
       unfold PayAddr; rw [htk.blk]; exact hp
+  | @lockNew t y w m1 htk hfr =>
+    -- A3.2: what `locked_new` moves into the new lock block is the block's payload
+    have hi' : m.alloc i = true := by rw [← htk.alloc]; exact hi
+    have hgrow : ∀ {j}, PayAddr m1 j →
+        PayAddr { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, .lock, some w⟩) } j := by
+      intro j ⟨k, bl, hk, hj⟩
+      have hne : k ≠ m1.nid := fun e => by rw [e, hfr] at hk; cases hk
+      exact ⟨k, bl, by simpa [upd, hne] using hk, hj⟩
+    rcases hc i hi' with ⟨o', U, hU, hiU⟩ | hp
+    · rcases htk.owned hU with hU1 | ⟨_, hUw⟩
+      · exact Or.inl (Or.inl ⟨o', U, hU1, hiU⟩)
+      · exact Or.inl (Or.inr ⟨m1.nid, ⟨t, .lock, some w⟩, by simp [upd], by rw [← hUw]; exact hiU⟩)
+    · refine Or.inl (Or.inr (hgrow ?_))
+      unfold PayAddr; rw [htk.blk]; exact hp
+  | lockClone _ => exact Or.inl (hc i hi)
   | arcClone _ | arcGet _ _ => exact Or.inl (hc i hi)
 
 /-- The binding that takes the value in flight owns it. -/
@@ -241,6 +258,23 @@ theorem covers_take {m : Mem} {v : Val} {o : Bool} (hc : CoversBut m v o) {x : V
   · exact Or.inl ⟨o', U, ownedAt_set.mpr (Or.inr ⟨fun e => by subst e; exact hx U hU, hU⟩), hiU⟩
   · exact Or.inr hp
   · exact Or.inl ⟨x, v, ownedAt_set.mpr (Or.inl ⟨rfl, rfl⟩), hiv⟩
+
+/-- A3.2: a value that owns an address is an owner's. -/
+theorem Val.owns_of_mem_ids {v : Val} {i : Nat} (h : i ∈ v.ids) : v.owns = true := by
+  cases v <;> simp_all [Val.ids, Val.owns]
+
+/-- A3.2: taking a lock: what block `k`'s payload owned is the value in
+    flight, which `x` owns. -/
+theorem covers_acquire {m : Mem} (hc : Covers m) {k : Nat} {t : Ty} {v : Val}
+    (hk : m.blk k = some ⟨t, .lock, some v⟩) :
+    CoversBut { m with blk := upd m.blk k (some ⟨t, .lock, none⟩) } v v.owns := by
+  intro i hi
+  rcases hc i hi with ⟨o, U, hU, hiU⟩ | ⟨k', bl, hk', hik⟩
+  · exact Or.inl (Or.inl ⟨o, U, hU, hiU⟩)
+  · by_cases he : k' = k
+    · subst he; rw [hk] at hk'; cases hk'
+      exact Or.inr ⟨Val.owns_of_mem_ids hik, hik⟩
+    · exact Or.inl (Or.inr ⟨k', bl, by simp [upd, he, hk'], hik⟩)
 
 /-- An assignment: the old value is dropped, the new one taken. -/
 theorem covers_assign {m : Mem} {v : Val} {o : Bool} (hc : CoversBut m v o) {x : Var} {sl : Slot}

@@ -392,6 +392,7 @@ def elemE (y : Var) (E : Entry) : Ty → Entry
   | .sum a b => ⟨.sum a b, .bor, true, derive y E .inner, E.held, false, false⟩
   | .fn ms => ⟨.fn ms, .bor, true, derive y E .inner, E.held, false, false⟩
   | .arc t => ⟨.arc t, .bor, true, derive y E .inner, E.held, false, false⟩
+  | .lk t => ⟨.lk t, .bor, true, derive y E .inner, E.held, false, false⟩
 
 /-- An element moved out of `y` by `vec_pop`: an element `Vec` or struct is
     owned. -/
@@ -401,6 +402,7 @@ def popE (y : Var) (E : Entry) : Ty → Entry
   | .sum a b => ⟨.sum a b, .own, true, [], E.held, false, false⟩
   | .fn ms => ⟨.fn ms, .own, true, [], E.held, false, false⟩
   | .arc t => ⟨.arc t, .own, true, [], E.held, false, false⟩
+  | .lk t => ⟨.lk t, .own, true, [], E.held, false, false⟩
   | t => elemE y E t
 
 /-- What a field of the struct `y` (entry `E`) lends: what is inside an
@@ -423,6 +425,20 @@ def projE (y : Var) (E : Entry) : Ty → Entry
 def getE (y : Var) (E : Entry) : Ty → Entry
   | .int => intE
   | t => ⟨t, .bor, true, derive y E .share, E.held, false, false⟩
+
+/-- A3.2: the binding a lock's payload is checked out to (`withLock`): owned,
+    holding nothing (a payload views nothing); an integer is a plain integer
+    binding, as `unpair` binds an integer field. -/
+def lockE (t : Ty) : Entry := if t = .int then intE else ⟨t, .own, true, [], [], false, false⟩
+
+@[simp] theorem lockE_dtor (t : Ty) : (lockE t).dtor = false := by unfold lockE; split <;> rfl
+@[simp] theorem lockE_dbind (t : Ty) : (lockE t).dbind = false := by unfold lockE; split <;> rfl
+@[simp] theorem lockE_ty (t : Ty) : (lockE t).ty = t := by unfold lockE; split <;> simp_all [intE]
+@[simp] theorem lockE_live (t : Ty) : (lockE t).live = true := by unfold lockE; split <;> rfl
+@[simp] theorem lockE_path (t : Ty) : (lockE t).path = [] := by unfold lockE; split <;> rfl
+@[simp] theorem lockE_held (t : Ty) : (lockE t).held = [] := by unfold lockE; split <;> rfl
+@[simp] theorem lockE_vdeps (t : Ty) : (lockE t).vdeps = [] := by
+  unfold lockE; split <;> simp [Entry.vdeps, intE, Mode.ownSlot]
 
 /-- What an owned value holds: nothing, if its type holds no views (no view
     and no closure lies inside it, so what it was made from says nothing). -/
@@ -584,6 +600,19 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
   | arcGet {a : Var} {E : Entry} {t : Ty} :
       Γ a = some E → E.live = true → E.ty = .arc t → t.holdsView = false → t.hasFn = false →
       RhsT Γ F (.arcGet a) (getE a E t) Γ
+  /-- A3.2: `locked_new`: `y`'s value, of a type that holds no view and no
+      closure (it is Send), and (this cut) no share, moves into a fresh lock
+      block; the result is an owned lock share, which holds nothing. -/
+  | lockNew {t : Ty} {y : Var} {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
+      Γ y = some Ey → Ey.live = true → Ey.ty = t →
+      t.holdsView = false ∧ t.hasFn = false ∧ t.hasArc = false →
+      PushArg Γ F y Ey t D Γ1 →
+      RhsT Γ F (.lockNew t y) ⟨.lk t, .own, true, [], [], false, false⟩ Γ1
+  /-- A3.2: `Locked_share`: a new share of the lock block `a` shares: owned,
+      holding nothing. -/
+  | lockClone {a : Var} {E : Entry} {t : Ty} :
+      Γ a = some E → E.live = true → E.ty = .lk t →
+      RhsT Γ F (.lockClone a) ⟨.lk t, .own, true, [], [], false, false⟩ Γ
 
 /-! ### Calls -/
 
@@ -619,6 +648,8 @@ theorem RhsT.out {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT 
   | arcNew => exact ⟨Or.inl rfl, rfl⟩
   | arcClone => exact ⟨Or.inl rfl, rfl⟩
   | @arcGet _ _ t => cases t <;> exact ⟨Or.inr rfl, rfl⟩
+  | lockNew => exact ⟨Or.inl rfl, rfl⟩
+  | lockClone => exact ⟨Or.inl rfl, rfl⟩
 
 /-- What the summary pair `(j, k)` means at this call.  An integer argument
     lends nothing. -/
@@ -1024,6 +1055,8 @@ def Stmt.hasThru : Stmt → Bool
   | .letd _ _ _ s => s.hasThru
   | .scopeD _ _ s => s.hasThru
   | .edit b _ _ => b
+  | .withLock _ _ s => s.hasThru
+  | .scopeL _ _ _ s => s.hasThru
   | _ => false
 
 /-- The functions a statement calls by index: a call, a `recover` body, a
@@ -1044,6 +1077,8 @@ def Stmt.calls : Stmt → List Nat
   | .callc _ _ _ _ s => s.calls
   | .letd _ f _ s => f :: s.calls
   | .scopeD _ f s => f :: s.calls
+  | .withLock _ _ s => s.calls
+  | .scopeL _ _ _ s => s.calls
   | _ => []
 
 /-- A function that changes elements through a borrow, or calls one that
@@ -1085,6 +1120,8 @@ theorem ite_r {c : Expr} {a b : Stmt} (h : b.Thru P) : (Stmt.ite c a b).Thru P :
 theorem wh {c : Expr} {k : Stmt} (h : k.Thru P) : (Stmt.while c k).Thru P :=
   h.mono (fun h => by simp [hasThru, h]) (fun g hg => by simp [calls, hg])
 theorem letv {x : Var} {r : Rhs} {k : Stmt} (h : k.Thru P) : (Stmt.letv x r k).Thru P :=
+  h.mono (fun h => by simp [hasThru, h]) (fun g hg => by simp [calls, hg])
+theorem withLock {a x : Var} {k : Stmt} (h : k.Thru P) : (Stmt.withLock a x k).Thru P :=
   h.mono (fun h => by simp [hasThru, h]) (fun g hg => by simp [calls, hg])
 theorem letcall {x : Var} {f : Nat} {args : List Var} {k : Stmt} (h : k.Thru P) :
     (Stmt.letcall x f args k).Thru P :=
@@ -1158,6 +1195,8 @@ def Stmt.src : Stmt → Bool
   | .letd _ _ _ s => s.src
   | .scopeD _ _ _ => false
   | .edit _ _ _ => true
+  | .withLock _ _ s => s.src
+  | .scopeL _ _ _ _ => false
 
 /-! ### Functions -/
 
@@ -1227,6 +1266,7 @@ theorem hasFn_holdsView {t : Ty} (h : t.hasFn = true) : t.holdsView = true := by
     exact h.imp iha ihb
   | fn _ => rfl
   | arc t ih => exact ih h
+  | lk t ih => exact ih h
 
 /-- A parameter's entry: a borrowed one depends on nothing the callee can
     see; every parameter whose type may hold a closure holds the symbolic
@@ -1298,6 +1338,8 @@ def Rhs.vars : Rhs → List Var
   | .arcNew _ y => [y]
   | .arcClone a => [a]
   | .arcGet a => [a]
+  | .lockNew _ y => [y]
+  | .lockClone a => [a]
 
 def Edit.vars : Edit → List Var
   | .push y => [y]
@@ -1325,6 +1367,20 @@ def Stmt.vars : Stmt → List Var
   | .letd x _ r s => x :: r.vars ++ s.vars
   | .scopeD x _ s => x :: s.vars
   | .edit _ x op => x :: op.vars
+  | .withLock a x s => x :: a :: s.vars
+  | .scopeL _ _ x s => x :: s.vars
+
+theorem Expr.vars_rename (ρ : Var → Var) (e : Expr) : (e.rename ρ).vars = e.vars.map ρ := by
+  induction e <;> simp_all [Expr.rename, Expr.vars]
+
+theorem Rhs.vars_rename (ρ : Var → Var) (r : Rhs) : (r.rename ρ).vars = r.vars.map ρ := by
+  cases r <;> simp [Rhs.rename, Rhs.vars, Expr.vars_rename]
+
+theorem Edit.vars_rename (ρ : Var → Var) (op : Edit) : (op.rename ρ).vars = op.vars.map ρ := by
+  cases op <;> simp [Edit.rename, Edit.vars, Expr.vars_rename]
+
+theorem Stmt.vars_rename (ρ : Var → Var) (s : Stmt) : (s.rename ρ).vars = s.vars.map ρ := by
+  induction s <;> simp_all [Stmt.rename, Stmt.vars, Rhs.vars_rename, Expr.vars_rename, Edit.vars_rename]
 
 
 

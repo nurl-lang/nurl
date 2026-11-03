@@ -23,7 +23,7 @@ theorem OwnedId.st_eq {m m' : Mem} {i : Nat} (h : OwnedId m i) (hst : m'.st = m.
 /-- A3.1: a payload address the store's slots reach: it lies in the payload
     of a block one of the thread's values refers to, through the blocks. -/
 def PaySeen (m : Mem) (i : Nat) : Prop :=
-  ∃ k bl, m.blk k = some bl ∧ i ∈ bl.pay.ids ∧ Reached m.vals m.blk k
+  ∃ k bl, m.blk k = some bl ∧ i ∈ bl.rd.ids ∧ Reached m.vals m.blk k
 
 /-- What a thread may read: an address of its own trees, or one of a payload
     its values reach. -/
@@ -78,6 +78,13 @@ theorem Step.panic_st {P : Prog} {m m1 : Mem} {s : Stmt} (h : Step P m s (.panic
   | panic => cases hr; exact fun _ _ h => h
   | letdP _ => cases hr; exact fun _ _ h => h
   | scopeDPMoved _ _ ih =>
+    cases hr
+    intro v sl hv
+    simp only [Mem.remove, upd] at hv
+    split at hv
+    · cases hv
+    · exact ih rfl v sl hv
+  | scopeLP _ _ _ ih =>
     cases hr
     intro v sl hv
     simp only [Mem.remove, upd] at hv
@@ -148,6 +155,15 @@ theorem TypedAt.scopeD {P : Prog} {m : Mem} {x : Var} {f : Nat} {s : Stmt}
   | sub hw _ _ ih => exact ih (hi.weaker hw) hs
   | _ => cases hs
 
+theorem TypedAt.scopeL {P : Prog} {m : Mem} {k : Nat} {t : Ty} {x : Var} {s : Stmt}
+    (h : TypedAt P m (.scopeL k t x s)) : TypedAt P m s := by
+  obtain ⟨Γ, F, Δ, ht, hi⟩ := h
+  generalize hs : Stmt.scopeL k t x s = s0 at ht
+  induction ht with
+  | scopeL _ _ hb _ _ => cases hs; exact ⟨_, _, _, hb, hi⟩
+  | sub hw _ _ ih => exact ih (hi.weaker hw) hs
+  | _ => cases hs
+
 /-- What a typed right-hand side's `sat` reads: a live slice binding. -/
 def SatLive (m : Mem) (r : Rhs) : Prop :=
   ∀ y i, r = .sat y i → ∃ Γ E t, MInv m Γ ∧ Γ y = some E ∧ E.live = true ∧ E.ty = .slice t
@@ -200,7 +216,7 @@ theorem sat_seen {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t 
   rw [ht] at hval
   obtain ⟨d', o', l', he, dep, _, hva⟩ := valOK_slice.mp hval
   cases he
-  rcases hva.owned with ⟨x, T, hT, hd⟩ | ⟨k, bl, hk, hd⟩
+  rcases hva.owned_rd with ⟨x, T, hT, hd⟩ | ⟨k, bl, hk, hd⟩
   · exact .inl ⟨x, T, hT, hd⟩
   · exact .inr ⟨k, bl, hk, hd, .root ⟨y, false, hv⟩ (Or.inr ⟨bl, hk, Or.inr ⟨d, o, l, Sub.refl _, hd⟩⟩)⟩
 
@@ -225,7 +241,7 @@ theorem rTouch_seen {m m1 : Mem} {r : Rhs} {i : Nat} {w : Bool} (h : RTouch m r 
   | satI he => exact .inr ⟨rfl, eReads_seen he⟩
   | popC hy => exact .inl ⟨_, _, hy, by simp [Val.ids]⟩
   | popD hy => exact .inl ⟨_, _, hy, by simp [Val.ids]⟩
-  | arcGet ha hk hi => exact .inr ⟨rfl, .inr ⟨_, _, hk, hi, .root ⟨_, _, ha⟩ (Or.inl ⟨_, Sub.refl _⟩)⟩⟩
+  | arcGet ha hk hi => exact .inr ⟨rfl, .inr ⟨_, _, hk, hi, .root ⟨_, _, ha⟩ (Or.inl ⟨some _, Sub.refl _⟩)⟩⟩
 
 /-- **What a thread's next step touches is its own**: an address in one of
     its own trees, or (A3.1) a payload address its values reach, which it
@@ -259,5 +275,8 @@ theorem touch_seen {P : Prog} {m m1 : Mem} {s : Stmt} {i : Nat} {w : Bool}
   | rbind _ ih => exact ih hty.rbind
   | frozen _ ih => exact ih hty.frozen
   | catchR _ ih => exact ih hty.catchR
+  | scopeL _ ih => exact ih hty.scopeL
+  | scopeLEnd hx hi => exact .inl ⟨_, _, hx, hi⟩
+  | scopeLUnwind hs hx hi => exact .inl ⟨_, _, Step.panic_st hs _ _ hx, hi⟩
 
 end A3

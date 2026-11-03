@@ -49,7 +49,7 @@ theorem Landed.keep {m m' : Mem} {dep : Dep} {n : Val} (hr : RootKeep m m' dep.r
     (hb : BlkLe m.blk m'.blk) (h : Landed m dep n) : Landed m' dep n := by
   rcases h with ⟨n0, h0, hl⟩ | ⟨hk, hro, k, bl, hkb, hs⟩
   · exact Or.inl ⟨n0, hr.1 n0 h0, hl⟩
-  · exact Or.inr ⟨hk, hr.rootMem hro, k, bl, hb k bl hkb, hs⟩
+  · exact Or.inr ⟨hk, hr.rootMem hro, InPay.grow hb ⟨k, bl, hkb, hs⟩⟩
 
 theorem ArcLanded.keep {m m' : Mem} {dep : Dep} {n : Val} (hr : RootKeep m m' dep.root)
     (h : ArcLanded m dep n) : ArcLanded m' dep n := by
@@ -63,10 +63,10 @@ theorem Landed.pay {m m' : Mem} {dep : Dep} {n : Val} (hb : BlkLe m.blk m'.blk)
     (hk : dep.kind = .share) (hro : RootMem m' dep.root) (h : Landed m dep n) : Landed m' dep n := by
   rcases h with ⟨n0, _, hl⟩ | ⟨hk, _, k, bl, hkb, hs⟩
   · rcases hl with ⟨h, _⟩ | ⟨h, _⟩ | ⟨h, _⟩ <;> rw [hk] at h <;> cases h
-  · exact Or.inr ⟨hk, hro, k, bl, hb k bl hkb, hs⟩
+  · exact Or.inr ⟨hk, hro, InPay.grow hb ⟨k, bl, hkb, hs⟩⟩
 
 theorem RootKeep.vkeep {m m' : Mem} {dep : Dep} (h : RootKeep m m' dep.root)
-    (hb : BlkLe m.blk m'.blk := by exact fun _ _ h => h) : VKeep m m' dep := by
+    (hb : BlkLe m.blk m'.blk := by exact BlkLe.of_le fun _ _ h => h) : VKeep m m' dep := by
   intro d o l s ⟨c, es, hks, hla, hl, hw⟩
   exact ⟨c, es, hks, hla.keep h hb, hl, hw⟩
 
@@ -105,6 +105,7 @@ theorem ValOK.keep {m m' : Mem} {τ : Ty} {v : Val} {P H : List Dep}
   | arc h hw hv hl =>
     obtain ⟨dep, hd, hla⟩ := hl
     exact .arc (by rw [hb]; exact h) hw hv ⟨dep, hd, (hp dep hd).2.2 _ _ hb hla⟩
+  | lk h => exact .lk (by rw [hb]; exact h)
   | href h =>
     obtain ⟨dep, hd, ha⟩ := h
     exact .href ⟨dep, hd, (hp dep hd).2.1 _ _ _ (fun h hh' => (hh h hh').1) hb ha⟩
@@ -165,7 +166,7 @@ theorem dataAt_of_owned {m : Mem} {o : Var} {T n : Val} (ho : OwnedAt m o T) (hs
 
 /-- A3.1: a value lying in an owned tree, or in a live block's payload. -/
 def InMem (m : Mem) (n : Val) : Prop :=
-  (∃ o T, OwnedAt m o T ∧ Sub n T) ∨ ∃ k bl, m.blk k = some bl ∧ Sub n bl.pay
+  (∃ o T, OwnedAt m o T ∧ Sub n T) ∨ ∃ k bl, m.blk k = some bl ∧ Sub n bl.rd
 
 theorem InMem.sub {m : Mem} {n n' : Val} (h : InMem m n) (hs : Sub n' n) : InMem m n' := by
   rcases h with ⟨o, T, hT, h⟩ | ⟨k, bl, hk, h⟩
@@ -202,14 +203,14 @@ theorem DataAt.eq {m : Mem} {d : Nat} {n : Val} (h : DataAt m d n) : ∃ ty c es
 
 /-- What lies in a live block's payload stays there while the block lives. -/
 theorem InMem.grow_pay {m m' : Mem} (hb : BlkLe m.blk m'.blk) {n : Val} {k : Nat} {bl : Blk}
-    (hk : m.blk k = some bl) (hs : Sub n bl.pay) : InMem m' n :=
-  Or.inr ⟨k, bl, hb k bl hk, hs⟩
+    (hk : m.blk k = some bl) (hs : Sub n bl.rd) : InMem m' n :=
+  Or.inr (InPay.grow hb ⟨k, bl, hk, hs⟩)
 
 theorem InMem.mono {m m' : Mem} (hown : ∀ o T, OwnedAt m o T → OwnedAt m' o T)
     (hb : BlkLe m.blk m'.blk) {n : Val} (h : InMem m n) : InMem m' n := by
   rcases h with ⟨o, T, hT, h⟩ | ⟨k, bl, hk, h⟩
   · exact Or.inl ⟨o, T, hown o T hT, h⟩
-  · exact Or.inr ⟨k, bl, hb k bl hk, h⟩
+  · exact Or.inr (InPay.grow hb ⟨k, bl, hk, h⟩)
 
 theorem NodeAt.mono {m m' : Mem} (hown : ∀ o T, OwnedAt m o T → OwnedAt m' o T)
     (hb : BlkLe m.blk m'.blk) {c : Nat} {n : Val} (h : NodeAt m c n) : NodeAt m' c n := by
@@ -344,6 +345,7 @@ theorem valOK_href {m : Mem} (hh : HeapOK m) {c : Nat} {n : Val} (hn : NodeAt m 
   induction hok with
   | int => cases ht
   | arc _ _ _ _ => cases ht
+  | lk => cases ht
   | view _ => cases ht
   | @href t c' P H h =>
     obtain ⟨dep, hd, d, es, hla, _⟩ := h
@@ -373,6 +375,7 @@ theorem valOK_view {m : Mem} (hh : HeapOK m) {d o l : Nat} {n : Val} (hn : DataA
   induction hok with
   | int => cases ht
   | arc _ _ _ _ => cases ht
+  | lk => cases ht
   | href _ => cases ht
   | @view t d' o' l' P H h =>
     obtain ⟨dep, hd, c, es, hks, hla, _, _⟩ := h
@@ -404,6 +407,7 @@ theorem valOK_via {m : Mem} {y : Var} {T : Val} (hy : m.st y = some ⟨false, so
   | @arc t k p P H h hw hv _ =>
     intro Q ht hq
     exact .arc h hw hv ⟨_, hq, Or.inl ⟨_, Or.inr (Or.inr (Or.inr ⟨T, k, p, hy, ht, rfl⟩)), Or.inr (Or.inl ⟨rfl, rfl⟩)⟩⟩
+  | lk h => intro _ _ _; exact .lk h
   | @href t c P H h =>
     intro Q ht hq
     obtain ⟨dep, hd, d, es, hla, hw, hv⟩ := h
@@ -441,6 +445,7 @@ theorem valOK_arc {m : Mem} {k : Nat} {q : Val} {τ : Ty} {w : Val} {P H : List 
     cases ht
     obtain ⟨dep, hd, hla⟩ := hl
     exact ⟨dep, List.mem_append_left _ hd, hla⟩
+  | lk _ => cases ht
   | pair _ _ ihx ihy =>
     cases ht with
     | fst ht => obtain ⟨dep, hd, rest⟩ := ihx ht; exact ⟨dep, append_assoc_sub hd, rest⟩
@@ -497,7 +502,7 @@ theorem lands_bound {k : Kind} {n n0 : Val} (h : Lands k n n0) : k.bound = .none
 theorem rootb_anchor {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     (hanch : RootbAnch Γ F) :
     ∀ p E n, Γ p = some E → E.mode = .rootb → RootNode m p n → (∀ k q, n ≠ .arc k q) →
-      (∃ o T, o ∈ F ∧ OwnedAt m o T ∧ Sub n T) ∨ ∃ k bl, m.blk k = some bl ∧ Sub n bl.pay := by
+      (∃ o T, o ∈ F ∧ OwnedAt m o T ∧ Sub n T) ∨ ∃ k bl, m.blk k = some bl ∧ Sub n bl.rd := by
   intro p
   induction p using Nat.strongRecOn with
   | _ p ih =>
@@ -554,7 +559,7 @@ theorem rootKeep_frame {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     (hanch : RootbAnch Γ F)
     (hF : ∀ o ∈ F, m'.st o = m.st o) {r : Var} {Er : Entry} (hr : Γ r = some Er)
     (hroot : Er.mode.isRoot = true) (hsame : m'.st r = m.st r)
-    (hb : BlkLe m.blk m'.blk := by exact fun _ _ h => h) : RootKeep m m' r := by
+    (hb : BlkLe m.blk m'.blk := by exact BlkLe.of_le fun _ _ h => h) : RootKeep m m' r := by
   refine RootKeep.of_slot hsame fun n hn => ?_
   rcases hn with ⟨T, hown, ht⟩ | ⟨w, c, hc, ht, hnode⟩ | ⟨w, d, o, l, hc, ht, hdata⟩ | ⟨w, k, q, hc, ht, hn⟩
   · exact Or.inl ⟨T, by rw [hsame]; exact hown, ht⟩
@@ -589,7 +594,7 @@ theorem rootb_anchor_sp {m : Mem} {Γ : Ctx} {F sp : List Var} (hi : MInv m Γ)
     (hanch : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ sp → Anchored E F)
     (hpin : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ sp → ∀ r ∈ roots E.vdeps, r ∉ sp) :
     ∀ p E n, Γ p = some E → E.mode = .rootb → p ∉ sp → RootNode m p n → (∀ k q, n ≠ .arc k q) →
-      (∃ o T, o ∈ F ∧ OwnedAt m o T ∧ Sub n T) ∨ ∃ k bl, m.blk k = some bl ∧ Sub n bl.pay := by
+      (∃ o T, o ∈ F ∧ OwnedAt m o T ∧ Sub n T) ∨ ∃ k bl, m.blk k = some bl ∧ Sub n bl.rd := by
   intro p
   induction p using Nat.strongRecOn with
   | _ p ih =>
@@ -650,7 +655,7 @@ theorem rootKeep_frame_sp {m m' : Mem} {Γ : Ctx} {F sp : List Var} (hi : MInv m
     (hpin : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ sp → ∀ r ∈ roots E.vdeps, r ∉ sp)
     (hF : ∀ o ∈ F, m'.st o = m.st o) {r : Var} {Er : Entry} (hr : Γ r = some Er) (hrs : r ∉ sp)
     (hroot : Er.mode.isRoot = true) (hsame : m'.st r = m.st r)
-    (hb : BlkLe m.blk m'.blk := by exact fun _ _ h => h) : RootKeep m m' r := by
+    (hb : BlkLe m.blk m'.blk := by exact BlkLe.of_le fun _ _ h => h) : RootKeep m m' r := by
   refine RootKeep.of_slot hsame fun n hn => ?_
   rcases hn with ⟨T, hown, ht⟩ | ⟨w, c, hc, ht, hnode⟩ | ⟨w, d, o, l, hc, ht, hdata⟩ | ⟨w, k, q, hc, ht, hn⟩
   · exact Or.inl ⟨T, by rw [hsame]; exact hown, ht⟩
@@ -712,6 +717,7 @@ theorem WFv.names_nil_fn {τ : Ty} {v : Val} (h : WFv τ v) (ht : τ.hasFn = fal
   | int => rfl
   | view => rfl
   | arc => rfl
+  | lk => rfl
   | node _ ih => exact namesL_nil fun e he => ih e he ht
   | pair _ _ iha ihb =>
     simp only [Ty.hasFn, Bool.or_eq_false_iff] at ht
@@ -732,6 +738,7 @@ theorem ValOK.memDeps {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK 
   | arc h hw hv hl =>
     obtain ⟨dep, hd, hla⟩ := hl
     exact .arc h hw hv ⟨dep, List.mem_filter.mpr ⟨hd, by simp [hla.notName]⟩, hla⟩
+  | lk h => exact .lk h
   | @href t c P H h =>
     obtain ⟨dep, hd, d, es, hla, hw', hv, hn, hsh⟩ := h
     have hkm : (!dep.kind.isName) = true := by simp [hla.notName]
@@ -759,6 +766,7 @@ theorem ValOK.names_nil_fn {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : V
   induction h with
   | int => rfl
   | arc => rfl
+  | lk => rfl
   | href => rfl
   | view => rfl
   | pair _ _ iha ihb =>
@@ -775,6 +783,7 @@ theorem WFv.names_nil {τ : Ty} {v : Val} (h : WFv τ v) (ht : τ.holdsView = fa
   | int => rfl
   | view => rfl
   | arc => rfl
+  | lk => rfl
   | node _ ih => exact namesL_nil fun e he => ih e he ht
   | pair _ _ iha ihb =>
     simp only [Ty.holdsView, Bool.or_eq_false_iff] at ht

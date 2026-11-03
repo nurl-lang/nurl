@@ -57,7 +57,7 @@ theorem VecOf.restrict {m : Mem} {x : Var} {t : Ty} {c d : Nat} {es : List Val}
     rcases hx with hx | ⟨_, ⟨y, u, hy, hs, _⟩ | ⟨k, bl, hk, hs, _⟩⟩
     · exact ⟨hav c (OwnedId.of_slot hx (by simp)), hav d (OwnedId.of_slot hx (by simp))⟩
     · exact ⟨hav c (OwnedId.of_slot hy (hs.ids c (by simp))), hav d (OwnedId.of_slot hy (hs.ids d (by simp)))⟩
-    · exact ⟨hp c ⟨k, bl, hk, hs.ids c (by simp)⟩, hp d ⟨k, bl, hk, hs.ids d (by simp)⟩⟩
+    · exact ⟨hp c ⟨k, bl, hk, bl.rd_ids (hs.ids c (by simp))⟩, hp d ⟨k, bl, hk, bl.rd_ids (hs.ids d (by simp))⟩⟩
   exact ⟨minus_true hc ho.1, minus_true hd ho.2, hx⟩
 
 /-- The node a binding names is in an owned tree: its addresses are live
@@ -119,7 +119,7 @@ theorem EvalR.restrict {m : Mem} {r : Rhs} {res : RRes} (h : EvalR m r res) {a2 
     have ho : a2 d = false := by
       rcases hda with ⟨x, u, hx, hs, _⟩ | ⟨k, bl, hk, hs, _⟩
       · exact hav d (OwnedId.of_slot hx (hs.ids d (by simp)))
-      · exact hp d ⟨k, bl, hk, hs.ids d (by simp)⟩
+      · exact hp d ⟨k, bl, hk, bl.rd_ids (hs.ids d (by simp))⟩
     exact ⟨_, .sat hn hy (Eval.restrict he hav hp) hl (minus_true hd ho) hda, rfl, rfl, rfl⟩
   | satOOB hy he hn => exact ⟨_, .satOOB hy (Eval.restrict he hav hp) hn, trivial⟩
   | pop hy hc hd =>
@@ -141,7 +141,9 @@ theorem EvalR.restrict {m : Mem} {r : Rhs} {res : RRes} (h : EvalR m r res) {a2 
   | takerP hy => exact ⟨_, .takerP hy, trivial⟩
   | pack h1 => exact ⟨_, .pack (TakeVal.restrict h1 a2), rfl, rfl, rfl⟩
   | arcNew h1 hfr => exact ⟨_, .arcNew (TakeVal.restrict h1 a2) hfr, rfl, rfl, rfl⟩
+  | lockNew h1 hfr => exact ⟨_, .lockNew (TakeVal.restrict h1 a2) hfr, rfl, rfl, rfl⟩
   | arcClone hy => exact ⟨_, .arcClone hy, rfl, rfl, rfl⟩
+  | lockClone hy => exact ⟨_, .lockClone hy, rfl, rfl, rfl⟩
   | arcGet hy hk => exact ⟨_, .arcGet hy hk, rfl, rfl, rfl⟩
 
 theorem EvalR.restrict_ok {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.ok v o m1))
@@ -180,6 +182,7 @@ theorem Frees.restrict {a a' : Nat → Bool} {T : Val} (h : Frees a T a') {a2 : 
   | .int => exact .int
   | .view => exact .view
   | .arc => exact .arc
+  | .lk => exact .lk
   | @Frees.node _ _ _ c d _ hc hd hl =>
     have hdc : d ≠ c := by
       intro e; subst e; simp [upd] at hd
@@ -255,7 +258,7 @@ theorem Step.restrict {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
   | scopeP hs hx hd ih =>
     obtain ⟨r1, h1, hd'⟩ := ih
     obtain rfl := ResDown.panic_inv hd'
-    exact ⟨_, .scopeP h1 hx (DropSlot.restrict hx hd (Step.avoids hs hb hav hf)), rfl⟩
+    exact ⟨_, .scopeP h1 hx (DropSlot.restrict hx hd (Step.avoids hs hb hav hf hp)), rfl⟩
   | rbindSkip hp => exact ⟨_, .rbindSkip hp, rfl, .refl _⟩
   | rbindIn _ ih =>
     obtain ⟨r1, h1, hd⟩ := ih
@@ -352,5 +355,19 @@ theorem Step.restrict {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
     obtain ⟨r1, h1, hd⟩ := ih
     obtain rfl := ResDown.panic_inv hd
     exact ⟨_, .scopeDPMoved h1 hx, rfl⟩
+  -- A3.2: taking a lock and giving it back touch no address
+  | withLock ha hk hx => exact ⟨_, .withLock ha hk hx, rfl, .refl _⟩
+  | scopeLIn _ ih =>
+    obtain ⟨r1, h1, hd⟩ := ih
+    obtain ⟨s1, rfl, hg⟩ := ResDown.ok_inv hd
+    exact ⟨_, .scopeLIn h1, rfl, .scopeL _ _ _ hg⟩
+  | scopeLSkip hrl =>
+    cases hrl with
+    | put hx hg hk => exact ⟨_, .scopeLSkip (.put hx hg hk), rfl, .refl _⟩
+    | drop hc hx hd => exact ⟨_, .scopeLSkip (.drop hc hx (DropSlot.restrict hx hd hav)), rfl, .refl _⟩
+  | scopeLP hs hx hd ih =>
+    obtain ⟨r1, h1, hd'⟩ := ih
+    obtain rfl := ResDown.panic_inv hd'
+    exact ⟨_, .scopeLP h1 hx (DropSlot.restrict hx hd (Step.avoids hs hb hav hf hp)), rfl⟩
 
 end A3
