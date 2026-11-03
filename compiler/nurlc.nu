@@ -37736,7 +37736,18 @@ unsafe @ bck_note_rc_arg s name s ty → v {
                                 = csx ( nurl_str_cat4 callee `(` cl `)` )
                             } {}
                             : s hsr ( bck_sx_sources state csx -1 )
-                            ? ! ( seq hsr `*` ) { = hv_deps ( __src_plain hsr ) } {}
+                            ? ! ( seq hsr `*` ) {
+                                = hv_deps ( __src_plain hsr )
+                                // (…a part of what the call lends — an element
+                                // read out of `items` — is tied to those
+                                // arguments by its borrow, below: what it holds
+                                // besides is what a copy of it holds, as for a
+                                // holder that borrows its value, bck_bind_row.)
+                                ? != 0 ( nurl_str_len lsrc ) {
+                                    : s hh ( bck_sx_held_sources state csx )
+                                    ? ! ( seq hh `*` ) { = hv_deps ( __word_union ( __src_plain hh ) ( __src_drop_plain hv_deps lsrc ) ) } {}
+                                } {}
+                            } {}
                         } {}
                     } {
                         // (The match row's reads are walk ids already.)

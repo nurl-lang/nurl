@@ -824,6 +824,16 @@ depends on what the argument it was given holds. Copy the strings
 themselves (a `( Vec String )` copies each element deep) for a copy that
 outlives them.
 
+A copy of a part of a value — an element of a `( Vec ( Vec s ) )`, a
+field, a slice — holds what that part holds, not the storage the part
+is in: `( vec_clone [s] ( vec_at [( Vec s )] vv 0 ) )` outlives `vv` as
+long as the strings it views live. A function the checker does not walk
+for views (the standard library, a function marked `unsafe`) is taken
+to leave each `inout` argument whose type holds views holding whatever
+its other arguments hold, as it is taken to hand back a result that
+does; a view of an argument's own storage it keeps is its author's word
+(§3).
+
 ### 2.14 A destructor's drop is a use
 
 A value whose type has a `% Drop` of the program's own runs that code when
