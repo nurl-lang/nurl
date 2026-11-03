@@ -20197,7 +20197,12 @@ unsafe @ gen_match i lex i syms i cg → s {
     // expression rides on the `match` row, h214.)
     = g_bck_match_sx ? & & != 0 g_srcx_on == match_first_tt TT_LPAREN == g_sx_at + __msxn0 1 ( nurl_str_cat g_sx `` ) ( nurl_str_cat `` `` )
     : b m_val | ! m_is_stmt != 0 g_blk_val_depth
-    : s __m_scrut_sx ? & m_val != 0 __sx_mme ( __sx_operand_c syms match_first_tt match_var_name ( bck_bind_class match_type ) `` __msxn0 ) ( nurl_str_cat `` `` )
+    // (Its source expression is published wherever its value is taken: a
+    // value, or an outer join's whole arm — `F → ?? o2 { … F → b }`, no
+    // braces. Unpublished, the outer arm was "not modelled" and lost what
+    // b views; agora #452.)
+    : b m_sxv | m_val m_armq
+    : s __m_scrut_sx ? & m_sxv != 0 __sx_mme ( __sx_operand_c syms match_first_tt match_var_name ( bck_bind_class match_type ) `` __msxn0 ) ( nurl_str_cat `` `` )
     ? ! ( __sx_nested g_bck_match_sx ) { = g_bck_match_sx `` } {}
     // What a payload binding may point into (a raw pointer taken from it
     // dies with that owner — __ptr_root_owner): the matched binding, or
@@ -21500,7 +21505,7 @@ unsafe @ gen_match i lex i syms i cg → s {
             // by __sx_froot below, a path left by another read — this
             // function's or another's — named the wrong field.)
             : i arm_mp0 g_member_path_on
-            = g_member_path_on ? & & m_val != 0 __sx_mme == arm_tt0 TT_DOT 1 g_member_path_on
+            = g_member_path_on ? & & m_sxv != 0 __sx_mme == arm_tt0 TT_DOT 1 g_member_path_on
             : ~ s arm_result ( gen_stmt lex syms cg )
             ? & & m_val != 0 g_borrowck ( __is_closure_ty ( nurl_get_last_type ) ) { = m_cm ( __words_join m_cm ( __clo_val_members syms arm_tt0 arm_v0 ) ) } {}
             = g_member_path_on arm_mp0
@@ -21508,7 +21513,7 @@ unsafe @ gen_match i lex i syms i cg → s {
             : s arm_froot ( __arm_froot syms arm_tt0 )
             : i arm_fl ( __arm_flends syms arm_tt0 arm_froot g_join_flends )
             : i arm_dp0 ? | == arm_tt0 TT_QUEST == arm_tt0 TT_QUESTQUEST g_join_deep 0
-            ? & m_val != 0 __sx_mme {
+            ? & m_sxv != 0 __sx_mme {
                 // (A payload handed back as is is part of the matched value.)
                 : s __atv ( nurl_sym_get syms `__tail_first_val__` )
                 : b __atp & & == g_did_ret 0 ( is_ident_tok ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) ) ) & != 0 ( nurl_str_len __atv ) ( str_contains_word ( nurl_str_cat4 pv0 ` ` pv1 ( nurl_str_cat3 ` ` pv2 ( nurl_str_cat ` ` pv_over ) ) ) __atv )
