@@ -155,27 +155,31 @@ one of two kinds:
   the claim says nothing about it until the form is added (or nurlc
   refuses it).
 
-Classified by claude-formal after v0.85.0 and github#1528 (2026-11-02).
+Classified by claude-formal after v0.85.0 and github#1549 (2026-11-03).
 The A2 rule that refuses each shape is named.
 
 Inside A2 (nurlc bugs):
 - A change in place that ends a borrow, missed: #333, #349, #350, #360,
-  #396 and #428 (`Eff.kills`, `StmtT.editB`, `callPostAux`'s
-  `kill`). Also #353 and #359, a closure that changes elements: its code
-  is no `ThruFn` (`Implements`).
+  #396, #424, #428, #434 and #447 (`Eff.kills`, `StmtT.editB`,
+  `callPostAux`'s `kill`). A keyword argument is the same call, and a
+  callee's summary carries a drop through an element of its parameter
+  however the element was reached. Also a closure that changes elements,
+  called where nurlc reads it by its interface only: #418, #420, #433,
+  #435, #436 and #449. Its code is no `ThruFn` of an interface whose
+  plain parameters are unchanged (`Implements`).
 - A view a value comes to hold, not recorded where it goes: #338, #341,
   #346, #348, #362, #367, #368, #369, #370, #377, #380, #381, #383, #390,
-  #393 and #394. A2 records it in `Ty.holdsView`,
+  #393, #422, #442 and #448. A2 records it in `Ty.holdsView`,
   `PushArg`, `pair`'s `Dy ++ Dz`, `callRes`'s `rholds` and `heldOfArgs`,
   `callPostAux`'s `outHeld` and `heldOfArgs`, and a package's interface
   summary; past a join, `ite` and `while` keep what either path holds.
-- A move or take nurlc does not see: #280, #357 and #372 (`unpair`,
+- A move or take nurlc does not see: #280, #357 and #446 (`unpair`,
   `takel`, a `sink` takes an owner only, `lendable`).
 - A borrow ended by a binding's end, replacement or capture, missed:
-  #242, #332, #339, #358, #364, #382, #384, #406, #407 and #408
-  (`exitScope`, `assign`'s `kill .replace`, `CapsOK`, `NamesFree`, `FnOK`
-  at the body's one end, where a `^`, a `\` exit and the defers lead,
-  `catchR`, `DtorSafe`).
+  #242, #364, #382, #384, #406, #407, #408, #444 and #445 (`exitScope`,
+  `assign`'s `kill .replace`, `CapsOK`, `NamesFree`, `FnOK` at the body's
+  one end, where a `^`, a `\` exit and the defers lead, `catchR`,
+  `DtorSafe`).
 - A struct built from an owner and a view of it: #294 (`pair`: the owned
   field is no root of the other's dependencies).
 - An `inout` option given a lend: #343 (`assign` gives an `inout` binding
