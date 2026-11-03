@@ -27,7 +27,11 @@ closure's type says where it may cross, an `Arc` holds a Sync one, a lock
 or a channel a bare one, a spawn a Send one). A3.5c's trait objects are
 covered by A3.5b's rules, with no new one (A3.5c's mechanization, below: a
 trait's bound is its objects' class, and the crossing check walks the
-box). This note fixes the
+box). A3.5's second cut puts library handles in lock payloads, cells' states
+and channel elements, and so Send closures and `: Send` trait objects, with
+the crossing check at every value going in (A3.5's second cut, below: a
+failed check panics, and a cell's shares are in one thread's slots or one
+lock block's payload). This note fixes the
 semantics, the theorem statements and the order of work, so the
 mechanization can be cut into tasks (Agora: formal track, F4–F8). The guarantee it targets is the
 "no data race" clause of `CLAIM.md` and `docs/MEMORY.md` §6.2. The rules
@@ -1559,7 +1563,7 @@ where the call places it).
   `locked_set`, `locked_restore`, after `locked_with`) need no run-time
   check here: their values hold no share at all, so the check has nothing
   to find. It is refused statically, which is more than the runtime
-  refuses.
+  refuses. (A3.5's second cut runs the check at each, below.)
 - *`% Sync` and `% NotSend` assertions* are not modeled: an `Arc` of a
   handle is refused whatever the handle asserts, and `PkMemberTable`
   (h319) is a cell, Send, where the runtime makes it `% NotSend`.
@@ -1596,7 +1600,9 @@ the spawned function, and its captures are `sink` arguments.
   payload type that may hold a cell share (`Ty.hasCell`).
 - h358 `rc_in_a_locked_in_an_arc_on_two_threads`: a lock's payload holds no
   share (`RhsT.lockNew`, `Ty.ok (lk t)`), so neither a library handle nor
-  (were it modeled) an `Rc` is a `Locked`'s value; `lk_noCell`.
+  (were it modeled) an `Rc` is a `Locked`'s value; `lk_noCell`. (A3.5's
+  second cut replaces this rule with the crossing check at `locked_new`,
+  below.)
 - h319 `member_table_copy_on_two_threads`: as h333. `a` is a borrow of the
   struct's field, dead once the struct moves, and a kept copy fails the
   crossing check.
@@ -1845,6 +1851,8 @@ closure's environment is a tree inside its value (`Sub.pkg`, `Val.ids`).
   `lockNew_fn`), which capture no handle. On a spawn, the crossing check
   counts the handles a closure's environment holds (`sendCheck_env`), so
   a handle kept behind fails it and the spawn panics (`TStep.spawnFail`).
+  (A3.5's second cut: a channel takes a Send closure, and the send's
+  crossing check panics on a kept handle, below.)
 - h342 `route_handler_changes_its_capture_on_two_threads`: a handler that
   changes a capture captures it by name, so `pack` types it `any`
   (`pack_names_any`). No `Arc` holds it (`arcNew_not_any`) and no spawn
@@ -1874,7 +1882,8 @@ closure's environment is a tree inside its value (`Sub.pkg`, `Val.ids`).
   walk proved (above).
 - Subsumption between classes; a closure that changes what it moved in.
 - A share in a lock's payload or a channel's element (A3.2, A3.4), so a
-  closure that captures one and is sent or locked.
+  closure that captures one and is sent or locked. (Closed: A3.2's second
+  cut for `arc` and lock shares, A3.5's second cut for cell shares, below.)
 - Trait objects' own statements are A3.5c's (below).
 - The probes as whole typed programs: `StmtT.arcCall` types the call
   through the `Arc`, not a program that `memory_safe` is applied to (as
@@ -2056,8 +2065,10 @@ A3.0's `spawn_args`.
 - *Phase D*: that the vtable's check counts what `Sub` finds in a box
   (A3.5's count, for boxes).
 - `Rc` itself (phase B): not Send, not Sync, and so with no crossing check.
-- Trait objects in a lock or a channel; `inout` receivers; supertraits and
-  generic bounds; `% Send` / `% Sync` assertions on an impl's type.
+- Trait objects in a lock or a channel (closed: `: Send Sync` ones by A3.2's
+  second cut, `: Send` ones by A3.5's second cut, below); `inout` receivers;
+  supertraits and generic bounds; `% Send` / `% Sync` assertions on an impl's
+  type.
 - The probes as typed programs (as `A2/DynCell.lean` types `pick`).
 - `CLAIM.md` / `README.md`.
 
@@ -2643,14 +2654,330 @@ dropped the value being handed back. The next take read freed memory.
 **Not proven here.**
 - *Cell shares in a lock's payload or a channel's element*, with the
   crossing check at every entry, and so `: Send` trait objects (class
-  `send`) in a lock or a channel.
-- *Shares in a cell's state.*
+  `send`) in a lock or a channel. (Closed by A3.5's second cut, below.)
+- *Shares in a cell's state.* (Closed by A3.5's second cut, below.)
 - *§7.7's store rule*, which keeps cycles out of thread-shared handles, and
   so phase D's agreement for programs that would close one (above).
 - The probe h267 as a whole typed program (a probe's encoding, as
   `A2/DynCell.lean` types `pick`). `lockTake_empties` and
   `lockRestore_frees_nothing` state its rule on one step each.
 - Deadlock freedom, and that a waiting take is ever let in.
+- `CLAIM.md` / `README.md`.
+
+## A3.5's second cut (library handles in locks and channels)
+
+**Status.** Mechanized. `check.sh` is green, and `A2.memory_safe`,
+`A2.soundness`, `A2.no_leak_end`, `A2.no_leak_panic`, the `DynCell`
+theorems and `A3.claim` are re-proven. A lock's payload, a cell's state and a
+channel's element may now hold library handles (cell shares), and so Send
+closures and `: Send` trait objects. Every value going into a lock block
+faces the crossing check, as a spawn's arguments do, and a failed check
+panics. A3's confinement keeps a cell's shares in one place: one thread's
+slots, or one lock block's payload. This closes the gaps A3.2's second cut,
+A3.5b and A3.5c listed (*Not proven here*, there). `CLAIM.md` / `README.md`
+are not updated here.
+
+The runtime it models is docs/MEMORY.md §6.5, *The crossing check*:
+`mem_send_check` runs at `chan_send` and at every value going into a
+`Locked` — `locked_new`, `locked_set`, `locked_restore`, and the value
+after a closure ran on it under the lock (`locked_with`, `locked_update`),
+checked before the lock is let go, a failure panicking with the lock held
+(`stdlib/std/thread.nu`, `stdlib/std/channel.nu`).
+
+### The check at every entry
+
+**Where it lives: A2's semantics.** `SendCheck vs st'` moves from A3 to
+`A2/Semantics.lean`, unchanged: for every cell a crossing value holds a share
+of (`Sub (.cell k) v`), no slot left behind (`st'`) holds one. A2's store is
+one thread's view, so its slots are the thread's slots, and the check reads
+nothing else. It is the run-time precondition A3.5 used for a spawn, now
+asked at each entry:
+- `EvalR.lockNew` and `EvalR.cellNew` (`locked_new`, a library handle's
+  constructor) ask `SendCheck [v] m1.st` of the value taken from `y`, over
+  the slots `TakeVal` left;
+- `EvalR.lockRestore` (`locked_restore`) asks it the same way;
+- `EvalR.chanSend` and `EvalR.chanSendClosed` (`chan_send`) ask it before
+  anything else: the runtime checks before it looks at the channel;
+- a lock scope's give-back asks `GiveCheck m x sl`: `x`'s value against
+  every other slot, `SendCheck [v] (m.remove x).st` (`Release.put`,
+  `Step.scopeLSkip`).
+
+**A failed check panics**, the store as it was, as `mem_send_check` calls
+`nurl_panic` before the crossing does anything:
+- `EvalR.lockNewFail`, `cellNewFail`, `lockRestoreFail` and
+  `chanSendFail`. A right-hand side's panic is A2's (`Step.letvP`), so the
+  unwinding drops `y` with its scope;
+- `Step.scopeLFail` for the give-back (below).
+
+**The give-back's check is a panic.** Neither of the other two choices fits:
+- *A premise* (no step when it fails) would make a typed program stuck,
+  and `memory_safe` false: the check does fail in typed programs.
+- *Typing* cannot rule it out. The body of a `withLock` may `cellClone` a
+  handle the value holds and move the copy to a binding outside the scope,
+  push it into an outer `Vec`, send it on a channel; or (h354) move a copy
+  of one kept outside into the value. A2's types do not say which owner a
+  cell share came from, so ruling these out would need an escape analysis
+  of cell owners across the body, which nurlc does not make either: it
+  checks at run time.
+- So it is the runtime's own: the check runs after the body, before the
+  lock is let go. `Step.scopeLFail` steps `.scopeL k t x .skip`, whose `x`
+  fails `GiveCheck`, to `.scopeL k t x .panic`, the store as it was: a
+  panic put in the scope, as `TStep.spawnFail` puts one before its call.
+  The panic then unwinds through the scope (`Step.scopeLP`), whose
+  `Release` drops `x` (`Release.drop`'s condition gains `¬ GiveCheck`), and
+  the block stays checked out: the lock is held, as the runtime's is.
+- `Step.scopeLSkip` asks the check, so a scope's normal end gives back or
+  panics, never drops silently (`scopeL_end`). On a panic's unwinding the
+  give-back is `Release.put` only past the check, and otherwise drops `x`.
+
+**A receive's check** (`RecvCheck v es`, `EvalR.chanRecv`,
+`EvalR.chanRecvFail`). The head `v` shares no cell with an element `es`
+left in the queue, or the receive panics.
+- The runtime has no such check and needs none: a `Channel`'s queue is
+  filled by `chan_send` alone, one checked value at a time, and a value
+  that passed the check holds every owner of each cell it holds. So no two
+  elements share a cell.
+- The model's channel is a lock block, and `Locked (Vec T, i)` and
+  `Channel T` are one type (`lk (prod (vec t) int)`). A `withLock` on it
+  may fill the queue with two elements that share a cell, which a receive
+  would then split between the receiver and the queue. The check keeps
+  the receive from splitting them; on the runtime's channels it never
+  fails.
+
+**Check-outs and takes need no check.** `withLock` and `lockTake` move the
+whole payload out, and the block holds none of it after. What the receiver
+gets is every owner the block held.
+
+### The types
+
+- `Ty.ok (lk t)` is `t.ok && !t.holdsView`: a `Locked`'s value, an
+  `RwLocked`'s and a channel's element face the Send question only.
+  `RhsT.lockNew` asks `t.holdsView = false ∧ t.hasFn = false`. `RhsT.chanSend`
+  reads `Ty.ok` of the channel's type (`chan_tyok`, now two conjuncts).
+- `Ty.ok (cell t)` is the same, and `RhsT.cellNew` asks what `lockNew` asks:
+  a cell's state is a lock block's payload, and may hold shares now
+  (A3.2's second cut left them out), the constructor checking it
+  (`cell_cell_ok`).
+- `Ty.hasCell (lk _)` is `false`. The Sync question asks whether several
+  threads may reach a value at once. A lock share is Sync whatever its
+  payload holds: the payload is reached by one thread at a time, and every
+  value going in is checked. This is docs/MEMORY.md's "a Sync marker
+  vouches for the container, never for its value, which faces the Send
+  question" (h358). So an `Arc (Locked PNCounter)`, a Sync closure that
+  captures a `Locked PNCounter`, and an `Arc` global of one are typed
+  (`lk_sync`).
+- `RhsT.rwRead` asks `t.hasCell = false`. An `RwLocked`'s read guards lend
+  its value to several threads at once, so its value faces the Sync
+  question, as an `Arc`'s payload does (h357, `rwRead_not_cell`).
+  - The model's `RwLocked` is a `lk t`, made by `lockNew`, so an
+    `RwLocked PNCounter` is made and written (`withLock`). It cannot be
+    read.
+  - A lent cell share is no share (`lendOf`), so a reader could not
+    change the handle even without the premise. The premise is there to
+    be faithful to the runtime, which asks the question.
+- `MInv.blocks` (and `BlocksIn`, `BlockOK.ok`) lose their fourth conjunct,
+  `bl.kind = .lock → bl.ty.hasCell = false`. Only A3's `ThreadOK.noCellPay`
+  read it, and it is gone (below).
+- So a Send closure and a `: Send` trait object fit in a lock and a channel:
+  - `lockNew_fn` and `chan_fn` say `q = .send ∨ q = .sync ∨ q = .bare`.
+    `chan_fn` is an iff;
+  - `lockNew_send`, `chanSend_send` and `lockNew_dyn_send` type them;
+  - `chan_dyn` and `lockNew_dyn`: an object of any trait with a bound fits,
+    none of a trait with no bound.
+
+**A2's proof.** The checks are premises of steps A2 already had, and the
+failures are panics with the store as it was, so A2's lemmas need no new
+argument. The new cases are:
+- `Release.exists` cases on the check, and A2's progress steps a scope's
+  end to `scopeLSkip` or `scopeLFail`, and a right-hand side to the
+  success or the failure (`evalR_exists`);
+- `scopeLFail`'s preservation types `.scopeL k t x .panic` where
+  `.scopeL k t x .skip` was, over the same store and context. A panic
+  types into any context (`StmtT.panic`), and `skip_inv` weakens it to the
+  scope's;
+- `scopeLFail` in `step_new`, `step_gone`, `codes_step`;
+- the lift and restrict lemmas: the checks read the slots only, which
+  neither lemma changes.
+
+With the fourth conjunct gone:
+- `out_lkShare` and `out_cellShare` lose their `hasCell` / `hasArc`
+  premise;
+- `rhs_lockNew_post`, `rhs_rwRead`, `setPay_pres`, `acquire_pres`,
+  `atomic_pres` and `step_release` no longer carry it.
+
+### A3: confinement over slots and lock payloads
+
+**Where a cell's shares are** (`A3/Cell.lean`).
+- `LockHolds B k' k` (in `A3/Defs.lean`, for `GlobsOK`): lock block `k'`'s
+  payload, while it is in the block, holds a share of cell `k`. That is a
+  lock's payload, a cell's state, or a channel's queue.
+- Two kinds of block are no place:
+  - an `arc` block's payload holds no cell share (`RhsT.arcNew`'s premise),
+    and nothing comes out of one but lent (`arcGet`);
+  - a view's payload is a copy its holders are lent.
+- `Holds m k`: a slot or a lock block holds one.
+- `OnePlace m k`: no lock block holds one, or no slot holds one and only
+  one lock block does.
+- `CellsBelow m`: every cell share held names a key below `nid`.
+
+**What a step does** (`CellKeep m m'`, `Step.cellKeep`). Every share the step
+leaves was held before, or is a new cell's, at a key taken from `nid` in the
+step (`holds`). And each cell's shares stay in one place (`one`, given
+`CellsBelow`). Each case is one of four combinators:
+- `CellKeep.shrink` / `slots` / `setVal`: shares move between slots or are
+  dropped, and the lock blocks hold no more. This is every step but those
+  below, including `arcNew` and `rwRead`, whose new blocks are no place.
+- `CellKeep.moveIn k0 v`: `v` goes into lock block `k0` from a slot, and no
+  slot left holds a share of a cell it holds. A cell's constructor's own
+  new share is allowed, at a fresh key. Used for `lockNew`, `cellNew`,
+  `chanSend`, `lockRestore` and `Release.put`. Before, the thread held the
+  cell, so no block did; after, only `k0` does.
+- `CellKeep.moveOut k0 v`: `v` comes out of block `k0` into a slot, and the
+  block keeps no share of a cell `v` holds. Used for `withLock` and
+  `lockTake` (the block is left empty) and `chanRecv` (`RecvCheck`).
+  Before, `k0` was the cell's one place; after, the receiving thread's
+  slots are.
+- Compound steps compose by `CellKeep.trans`: an unwinding through nested
+  lock scopes gives back to several blocks in one step, each give-back
+  checked against the slots still left. `EvalR.cellKeep` and
+  `Release.cellKeep` are the parts.
+
+**The invariant** (`CellInv`):
+- `home`: no two threads' slots hold a share of one cell (A3.5's);
+- `apart`: no thread's slot holds a share of a cell a lock block's payload
+  holds one of;
+- `one`: no two lock blocks' payloads do;
+- `below` and `blkBelow`: every cell share names a key below `nid`.
+
+It is kept by every step of the configuration:
+- *A thread's step* (`CellInv.thread_of`, which no longer reads `CInv`).
+  - A cell another thread holds was in no block and not the stepping
+    thread's, so it is neither after (`CellKeep.holds`).
+  - Any other cell was in one place in the thread's view
+    (`CellInv.onePlace`), and stays so (`CellKeep.one`).
+  - The sweep only removes blocks (`LockHolds.of_sweep`).
+- *A spawn* (`CellInv.spawn_of`) as before, by `SendCheck`. The blocks do
+  not change, so `apart` for the new thread is the spawner's.
+- *The start* (`CellInv.start`) holds no binding. Its blocks are the
+  globals'. `GlobsOK.cells` asks that a cell their payloads hold have all
+  its shares in one block, at a key below `nid`: the globals' `make`s ran
+  the crossing check, as every thread does. A `Locked PNCounter` global is
+  now typed (`Ty.sync (lk _)`), so the claim's hypothesis says it.
+  `GlobsOK.empty` meets it.
+
+**No cell race** (`CellInv.cellRaceFree`). `CellOp` still asks the thread to
+hold a share in a slot (`CellOp.cellAt`), and `home` says only one thread
+does. A share in a block's payload is reached by no thread's slot (`apart`)
+until a check-out, a take or a receive moves it out, and then the cell's
+shares are all in the receiving thread. `ThreadOK.noCellPay`, `CellPay`,
+`EvalR.cellVal`, `Step.cell` and `WFv.noCell` (a duplicate of
+`WFv.noCell_hasCell`) are gone.
+
+**The address race** (`AddrRace`) is A3.2's argument, unchanged. A cell share
+is a word that names a block and owns no address (`Val.ids`), so moving one
+with a payload is what a check-out already moves.
+
+### Faithful to the runtime
+
+- *The check counts what the runtime's does.* The model's check asks that
+  no slot left behind hold a share of a cell the value holds. The runtime's
+  asks that the value hold every owner. In a reachable configuration a cell
+  a thread's slot holds a share of has all its shares in that thread's
+  slots (`CellInv.apart`, `home`), so the two agree. The phase D
+  obligation is A3.5's, now for lock entries too: the runtime's count of a
+  handle's block equals the cell shares the model holds.
+- *What the walk follows.* `Sub` enters no share. A lock share in the value
+  moves no cell: the lock's payload is the lock block's place, and it stays
+  there. A cell whose state holds another cell's shares moves its shares,
+  and the inner cell stays in the outer one's state. The runtime walks a
+  handle's state and, where it does, counts there every owner of the inner
+  cells, which `CellInv` puts in that state. So it passes when the model's
+  check does.
+- *The give-back.* The runtime checks after the closure ran and panics with
+  the lock held, the value left in the `LockedImpl`. The model drops `x`
+  and leaves the block checked out, so every operation on it waits, as on
+  the runtime's held mutex. The value is freed sooner in the model, and
+  nothing reaches it either way. A `locked_restore` from another thread
+  could put a value into the held block: A3.2's over-approximation, which
+  the model tells from the runtime by nothing.
+- *A panic in the body* gives the payload back in the model when it passes
+  the check (`scopeLP`, `Release.put`), and drops it otherwise. The
+  runtime holds the lock (A3.3's over-approximation, unchanged).
+- *The receive's check* is the model's own (above): on a channel the
+  runtime fills it never fails.
+- *`locked_set`, `locked_get`, `locked_apply`, `locked_await`* are not rules
+  of their own (A3.2's second cut). `locked_set` is a take and a restore,
+  both checked here.
+
+### Probes (`tools/fuzz/holes/*.nu`)
+
+- **h340** `closure_sent_on_a_channel_captures_a_kept_handle`. The closure
+  captures the `PNCounter`: `pack` moves the handle into its environment
+  (`PushArg`), which is `send` (`Cross.Fits`: no view, nothing by name). A
+  channel's element may be a Send closure now (`chan_fn`, `chanSend_send`).
+  - The rule changes from "a channel takes no closure that captures a
+    handle" (`chan_fn` admitted only `sync` and `bare`) to the crossing
+    check at `chan_send`.
+  - A sender that kept an owner of the handle (a `cellClone` before the
+    capture) fails it, and the send panics, with no other outcome
+    (`chanSend_kept`, `EvalR.chanSendFail`).
+  - A send that took every owner along moves the closure, the handle with
+    it, into the queue (`chanSend_moves`). The receiver then holds the
+    cell's every share (`CellInv`), and the sender none.
+  - The runtime moves the captures statically, so the sender's later use is
+    rejected. In the model the capture moves too (the binding is dead past
+    `pack`), and a copy kept behind is caught at the send.
+- **h358** `rc_in_a_locked_in_an_arc_on_two_threads`. The model's stand-ins
+  for the `Rc` (A3.5c's h344) give two readings.
+  - As a view, it is refused statically, as before: `Ty.ok (lk t)` and
+    `RhsT.lockNew` ask `!t.holdsView`.
+  - As a cell share, `Locked` of it is typed (`lk_cell_ok`), and so is the
+    `Arc` of the `Locked` (`lk_sync`). The `locked_new r` while `r2` is
+    kept panics (`lockNew_kept`, `EvalR.lockNewFail`), and so does the
+    thread's `locked_restore` of `c` while `keep` holds clones
+    (`lockRestore_kept`).
+  - The rule changes from `lk_noCell` (`Ty.ok (lk t)`'s `!hasCell`) to the
+    crossing check at `locked_new` and `locked_restore`. The runtime
+    refuses the `Rc` statically, so here the model refuses less, and
+    soundly: a crossing that takes every clone along leaves no count
+    behind.
+- **h357** `rwlocked_of_a_library_handle_on_two_threads`. The rule changes
+  from `Ty.ok (lk t)` to two:
+  - `RhsT.rwRead` asks the Sync question of the value (`rwRead_not_cell`),
+    so no read guard of an `RwLocked PNCounter` is typed;
+  - the probe's `rw_new [PNCounter] ( PNCounter_share b )`, with `b` kept,
+    is `locked_new`'s check, which panics (`lockNew_kept`).
+- **h354** `locked_update_stores_a_kept_handle_into_the_value` (phase B's
+  probe, which runs clean). The give-back's check: a scope's end whose `x`
+  holds a share of a cell another slot holds panics, the lock held
+  (`scopeL_end`, `Step.scopeLFail`).
+
+### Simplifications in this cut
+
+Each is a restriction, and sound as stated.
+- *The receive's check* panics where the runtime's channels need none
+  (above).
+- *An `RwLocked` of a library handle* is made and written but not read.
+  The runtime refuses it where it crosses.
+- *A failed give-back drops the value* where the runtime keeps it in the
+  held lock. Nothing reaches it either way.
+- *`locked_take` takes only through a lock share*, not a cell share (A3.2's
+  second cut).
+
+### Not proven here
+
+- *Phase D*, now for lock entries: that the runtime's reference count of a
+  handle's block is the number of cell shares the model's slots and lock
+  payloads hold, so its walk passes exactly when `SendCheck` holds.
+- *§7.7's store rule*, and so phase D's agreement for a cycle through a
+  lock's payload (A3.2's second cut). A cell share in a lock's payload can
+  now close one too. The give-back's check refuses a cell's state holding
+  a share of the cell itself, but not one through a lock.
+- *Deadlock freedom*: a lock held after a failed give-back is held forever,
+  as the runtime's is.
+- The probes as whole typed programs (as `A2/DynCell.lean` types `pick`).
+  `chanSend_kept`, `lockNew_kept`, `lockRestore_kept` and `scopeL_end`
+  state their rules on one step each.
 - `CLAIM.md` / `README.md`.
 
 ## Open questions
