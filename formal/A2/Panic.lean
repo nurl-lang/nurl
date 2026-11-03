@@ -147,17 +147,110 @@ theorem Release.nv {m m' : Mem} {k : Nat} {t : Ty} {x : Var} (h : Release m k t 
 theorem Release.nid {m m' : Mem} {k : Nat} {t : Ty} {x : Var} (h : Release m k t x m') : m'.nid = m.nid := by
   cases h <;> rfl
 
-/-- What a panic leaves (A3.2: a lock scope it unwinds gives its payload
-    back, so a lock block's payload may have come back). -/
+/-- A lock scope's end, on the normal path or a panic's, always has a step:
+    the payload goes back, or `x`'s slot is dropped. -/
+theorem Release.exists {m : Mem} {k : Nat} {t : Ty} {x : Var} {sl : Slot} {a' : Nat → Bool}
+    (hsl : m.st x = some sl) (hd : DropSlot m.alloc sl a') : ∃ m', Release m k t x m' := by
+  by_cases hput : m.blk k = some ⟨t, .lock, none⟩ ∧ Giveable t sl
+  · obtain ⟨hkb, hg⟩ := hput
+    obtain ⟨o, w⟩ := sl
+    cases w with
+    | none => cases o <;> simp [Giveable] at hg
+    | some v => exact ⟨_, Release.put hsl hg hkb⟩
+  · have hc : m.blk k ≠ some ⟨t, .lock, none⟩ ∨ ¬ Giveable t sl := by
+      by_cases h1 : m.blk k = some ⟨t, .lock, none⟩
+      · exact Or.inr fun h2 => hput ⟨h1, h2⟩
+      · exact Or.inl h1
+    exact ⟨_, Release.drop hc hsl hd⟩
+
+/-- A3.3: what a panic's unwinding leaves of the blocks: each as it was, or
+    a lock block given back a payload of its type (`Release.put` on the way
+    out, as `RwLocked`'s write guard's drop on the drop journal). -/
+def BlkBack (B B' : Nat → Option Blk) : Prop :=
+  BlkLe B B' ∧ ∀ k bl, B' k = some bl → B k = some bl ∨
+    ∃ t v, bl = ⟨t, .lock, some v⟩ ∧ B k = some ⟨t, .lock, none⟩ ∧ WFv t v
+
+theorem BlkBack.refl (B : Nat → Option Blk) : BlkBack B B := ⟨BlkLe.refl _, fun _ _ h => .inl h⟩
+
+theorem BlkBack.trans {B1 B2 B3 : Nat → Option Blk} (h1 : BlkBack B1 B2) (h2 : BlkBack B2 B3) :
+    BlkBack B1 B3 := by
+  refine ⟨h1.1.trans h2.1, fun k bl hk => ?_⟩
+  rcases h2.2 k bl hk with h | ⟨t, v, rfl, hk2, hw⟩
+  · exact h1.2 k bl h
+  · rcases h1.2 k _ hk2 with h | ⟨t', v', he, _, _⟩
+    · exact .inr ⟨t, v, rfl, h, hw⟩
+    · cases he
+
+/-- What a lock scope gives back is a tree of the payload's type. -/
+theorem Giveable.wfv {t : Ty} {o : Bool} {v : Val} (h : Giveable t ⟨o, some v⟩) : WFv t v := by
+  cases o with
+  | true => exact h
+  | false =>
+    cases v with
+    | int n => simp only [Giveable] at h; subst h; exact .int
+    | _ => simp [Giveable] at h
+
+theorem Release.back {m m' : Mem} {k : Nat} {t : Ty} {x : Var} (h : Release m k t x m') :
+    BlkBack m.blk m'.blk := by
+  cases h with
+  | put _ hg hk =>
+    refine ⟨BlkLe.setLock hk _, fun k' bl hk' => ?_⟩
+    by_cases he : k' = k
+    · subst he; simp [upd] at hk'; subst hk'
+      exact .inr ⟨t, _, rfl, hk, hg.wfv⟩
+    · exact .inl (by simpa [upd, he] using hk')
+  | drop _ _ _ => exact BlkBack.refl _
+
+/-- A3.3: the blocks before a panic's give-backs, over the store the
+    unwinding left: a given-back payload's addresses are live and owned by
+    nothing there, every other block's are as the store after has them. -/
+theorem HeapOK.unback {m m1 : Mem} (hh : HeapOK m) (hh1 : HeapOK m1) (hb : BlkBack m.blk m1.blk) :
+    HeapOK { m1 with blk := m.blk } := by
+  -- a block of `m` is `m1`'s, or a lock block whose payload was out (it owns nothing)
+  have hsame : ∀ k bl, m.blk k = some bl → m1.blk k = some bl ∨ bl.tree.ids = [] := by
+    intro k bl hk
+    obtain ⟨bl', hk', _⟩ := hb.1 k bl hk
+    rcases hb.2 k bl' hk' with h | ⟨t, v, rfl, h0, _⟩
+    · rw [hk] at h; cases h; exact .inl hk'
+    · rw [hk] at h0; cases h0; exact .inr (by simp)
+  refine ⟨hh1.nodup, hh1.disj, hh1.alloc, hh1.self, fun k bl hk => ?_, hh.views⟩
+  obtain ⟨bl', hk', _⟩ := hb.1 k bl hk
+  have hkey : k < m1.nid := (hh1.blk k bl' hk').1
+  rcases hsame k bl hk with h1 | h0
+  · obtain ⟨_, hnd, hall⟩ := hh1.blk k bl h1
+    refine ⟨hkey, hnd, fun i hi => ?_⟩
+    obtain ⟨ha, hlt, hsl, hoth⟩ := hall i hi
+    refine ⟨ha, hlt, hsl, fun k' bl'' hk'' h'' => ?_⟩
+    rcases hsame k' bl'' h'' with h2 | h2
+    · exact hoth k' bl'' hk'' h2
+    · rw [h2]; exact List.not_mem_nil
+  · rw [h0]; exact ⟨hkey, List.nodup_nil, fun i hi => nomatch hi⟩
+
+/-- A3.3: the blocks a panic's unwinding leaves are as the invariant asks:
+    each as it was, or a lock block given back a tree of its type, which
+    holds no share. -/
+theorem MInv.blocks_back {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (hb : BlkBack m.blk m'.blk) : BlocksIn m' := by
+  intro k bl hk
+  rcases hb.2 k bl hk with h | ⟨t, v, rfl, hk0, hw⟩
+  · obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k bl h
+    exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.grow hb.1⟩, h4⟩
+  · obtain ⟨h1, h2, _, h4⟩ := hi.blocks k _ hk0
+    exact ⟨h1, h2, fun p hp => by cases hp; exact ⟨hw, SharesOK.of_noArc (h4 rfl)⟩, h4⟩
+
+/-- What a panic leaves (A3.3: a lock scope it unwinds gives its payload
+    back, so a lock block's payload may have come back, `BlkBack`). -/
 theorem panic_unwind {P : Prog} {m m1 : Mem} {s : Stmt} (hst : Step P m s (.panic m1))
     (hh : HeapOK m) (hc : Covers m) (hnd : s.spine.Nodup) :
     (∀ v, v ∉ s.spine → m1.st v = m.st v) ∧ (∀ v ∈ s.spine, m1.st v = none) ∧
-    HeapOK m1 ∧ Covers m1 ∧ m1.nv = m.nv ∧ m1.nid = m.nid ∧ m1.blk = m.blk := by
+    HeapOK m1 ∧ Covers m1 ∧ m1.nv = m.nv ∧ m1.nid = m.nid ∧ BlkBack m.blk m1.blk := by
   generalize hr : Res.panic m1 = r at hst
   induction hst generalizing m1 with
-  | letvP _ => cases hr; exact ⟨fun _ _ => rfl, fun v hv => by simp [Stmt.spine] at hv, hh, hc, rfl, rfl, rfl⟩
-  | assignP _ => cases hr; exact ⟨fun _ _ => rfl, fun v hv => by simp [Stmt.spine] at hv, hh, hc, rfl, rfl, rfl⟩
-  | panic => cases hr; exact ⟨fun _ _ => rfl, fun v hv => by simp [Stmt.spine] at hv, hh, hc, rfl, rfl, rfl⟩
+  | letvP _ =>
+    cases hr; exact ⟨fun _ _ => rfl, fun v hv => by simp [Stmt.spine] at hv, hh, hc, rfl, rfl, BlkBack.refl _⟩
+  | assignP _ =>
+    cases hr; exact ⟨fun _ _ => rfl, fun v hv => by simp [Stmt.spine] at hv, hh, hc, rfl, rfl, BlkBack.refl _⟩
+  | panic =>
+    cases hr; exact ⟨fun _ _ => rfl, fun v hv => by simp [Stmt.spine] at hv, hh, hc, rfl, rfl, BlkBack.refl _⟩
   | seqP _ ih => cases hr; exact ih hnd rfl
   | scopeP _ hsl hd ih =>
     rename_i x _ _ _ _
@@ -186,20 +279,24 @@ theorem panic_unwind {P : Prog} {m m1 : Mem} {s : Stmt} (hst : Step P m s (.pani
       · have hvp : v ≠ p := fun e => hnd.1 (e ▸ hv)
         simp [Mem.remove, upd_ne _ _ hvp, h2 v hv]
   | frozenP _ ih => cases hr; exact ih hnd rfl
-  | letdP _ => cases hr; exact ⟨fun _ _ => rfl, fun v hv => by simp [Stmt.spine] at hv, hh, hc, rfl, rfl, rfl⟩
-  | scopeLP _ hsl hd ih =>
-    rename_i x _ _ _ _
+  | letdP _ =>
+    cases hr; exact ⟨fun _ _ => rfl, fun v hv => by simp [Stmt.spine] at hv, hh, hc, rfl, rfl, BlkBack.refl _⟩
+  | scopeLP _ hrl ih =>
+    -- A3.3: the lock scope gives its payload back on the way out
+    rename_i x _ _
     cases hr
     simp only [Stmt.spine, List.nodup_cons] at hnd
     obtain ⟨h1, h2, hh1, hc1, hnv, hnid, hblk⟩ := ih hnd.2 rfl
-    refine ⟨fun v hv => ?_, fun v hv => ?_, hh1.remove hsl hd, covers_remove hc1 hsl hd, hnv, hnid, hblk⟩
+    refine ⟨fun v hv => ?_, fun v hv => ?_, hrl.heap hh1, hrl.covers hc1, hrl.nv.trans hnv, hrl.nid.trans hnid,
+      hblk.trans hrl.back⟩
     · simp only [Stmt.spine, List.mem_cons, not_or] at hv
-      simp [Mem.remove, upd_ne _ _ hv.1, h1 v hv.2]
+      rw [hrl.st, upd_ne _ _ hv.1, h1 v hv.2]
     · simp only [Stmt.spine, List.mem_cons] at hv
+      rw [hrl.st]
       rcases hv with rfl | hv
-      · simp [Mem.remove]
+      · simp
       · have hvx : v ≠ x := fun e => hnd.1 (e ▸ hv)
-        simp [Mem.remove, upd_ne _ _ hvx, h2 v hv]
+        rw [upd_ne _ _ hvx, h2 v hv]
   | scopeDPMoved _ hsl ih =>
     rename_i x _ _ _
     cases hr

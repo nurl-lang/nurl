@@ -184,11 +184,31 @@ inductive DropSlot : (Nat → Bool) → Slot → (Nat → Bool) → Prop
   | moved {a : Nat → Bool} : DropSlot a ⟨true, none⟩ a
   | borrowed {a : Nat → Bool} {v : Option Val} : DropSlot a ⟨false, v⟩ a
 
+/-- An owned tree of the given type: integers, views and owned element
+    `Vec`s, never a bare borrow. -/
+inductive WFv : Ty → Val → Prop
+  | int {n : Nat} : WFv .int (.int n)
+  | view {t : Ty} {d o l : Nat} : WFv (.slice t) (.view d o l)
+  | node {t : Ty} {c d : Nat} {es : List Val} :
+      (∀ e ∈ es, WFv t e) → WFv (.vec t) (.node t c d es)
+  | pair {a b : Ty} {v w : Val} : WFv a v → WFv b w → WFv (.prod a b) (.pair v w)
+  | inl {a b : Ty} {v : Val} : WFv a v → WFv (.sum a b) (.inl v)
+  | inr {a b : Ty} {v : Val} : WFv b v → WFv (.sum a b) (.inr v)
+  | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {v : Val} {cs : List (Var × PMode × Ty)} :
+      WFv te v → WFv (.fn ms) (.pkg fs te ms v cs)
+  /-- A3.1: a share; its block, in memory, holds the payload it carries, one
+      that holds no view. -/
+  | arc {t : Ty} {k : Nat} {p : Val} : WFv t p → t.holdsView = false → WFv (.arc t) (.arc k p)
+  /-- A3.2: a lock share; its block, in memory, is a lock block of its type. -/
+  | lk {t : Ty} {k : Nat} : WFv (.lk t) (.lk k)
+
 /-- A3.2: what `x`'s slot can give back to a lock whose payload is a `t`:
     the tree it owns, or, for an integer payload, the integer it holds (an
-    integer binding is a plain one). -/
+    integer binding is a plain one).  A3.3: a tree of the payload's type
+    (which a typed program's `x` always holds), so a give-back on a panic's
+    unwinding keeps the block well formed with no typing at hand. -/
 def Giveable (t : Ty) : Slot → Prop
-  | ⟨true, some _⟩ => True
+  | ⟨true, some v⟩ => WFv t v
   | ⟨false, some (.int _)⟩ => t = .int
   | _ => False
 
@@ -768,14 +788,17 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
           (.scopeL k t x s))
   | scopeLIn {m m' : Mem} {k : Nat} {t : Ty} {x : Var} {s s' : Stmt} :
       Step P m s (.ok m' s') → Step P m (.scopeL k t x s) (.ok m' (.scopeL k t x s'))
-  /-- The lock scope's end gives the payload back (`Release`).  (This cut: a
-      panic unwinding through it drops `x`'s slot as a `scope` does, and the
-      lock stays checked out.) -/
+  /-- The lock scope's end gives the payload back (`Release`). -/
   | scopeLSkip {m m' : Mem} {k : Nat} {t : Ty} {x : Var} :
       Release m k t x m' → Step P m (.scopeL k t x .skip) (.ok m' .skip)
-  | scopeLP {m m1 : Mem} {k : Nat} {t : Ty} {x : Var} {s : Stmt} {sl : Slot} {a' : Nat → Bool} :
-      Step P m s (.panic m1) → m1.st x = some sl → DropSlot m1.alloc sl a' →
-      Step P m (.scopeL k t x s) (.panic ({ m1 with alloc := a' }.remove x))
+  /-- A3.3: so does a panic unwinding through it, as `RwLocked`'s write
+      guard's drop does on the drop journal (docs/MEMORY.md §7.2): the lock
+      is released, and other threads may take it or read it.  (`Locked`'s
+      `locked_with` leaves the lock held on a panic: for it the model
+      over-approximates, letting other threads go on where the runtime's
+      wait.) -/
+  | scopeLP {m m1 m2 : Mem} {k : Nat} {t : Ty} {x : Var} {s : Stmt} :
+      Step P m s (.panic m1) → Release m1 k t x m2 → Step P m (.scopeL k t x s) (.panic m2)
 
 /-- Reachability: A3.1, every step ends with the sweep, which frees the
     blocks no slot reaches (`Mem.sweep`). -/

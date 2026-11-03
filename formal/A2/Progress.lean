@@ -476,17 +476,8 @@ theorem progress {P : Prog}
     rcases ih hcd hi0 with rfl | hbl | ⟨r, hr⟩
     · obtain ⟨sl, a', hsl, hd⟩ := dropSlot_exists hi.toMInv hx
       -- the payload goes back into its block, or `x`'s slot is dropped
-      by_cases hput : m.blk kk = some ⟨t, .lock, none⟩ ∧ Giveable t sl
-      · obtain ⟨hkb, hg⟩ := hput
-        obtain ⟨o, w⟩ := sl
-        cases w with
-        | none => cases o <;> simp [Giveable] at hg
-        | some v => exact Or.inr <| Or.inr ⟨_, Step.scopeLSkip (Release.put hsl hg hkb)⟩
-      · have hc : m.blk kk ≠ some ⟨t, .lock, none⟩ ∨ ¬ Giveable t sl := by
-          by_cases h1 : m.blk kk = some ⟨t, .lock, none⟩
-          · exact Or.inr fun h2 => hput ⟨h1, h2⟩
-          · exact Or.inl h1
-        exact Or.inr <| Or.inr ⟨_, Step.scopeLSkip (Release.drop hc hsl hd)⟩
+      obtain ⟨m', hrl⟩ := Release.exists (k := kk) (t := t) hsl hd
+      exact Or.inr <| Or.inr ⟨_, Step.scopeLSkip hrl⟩
     · exact Or.inr (Or.inl hbl)
     · cases r with
       | ok m' k' => exact Or.inr <| Or.inr ⟨_, Step.scopeLIn hr⟩
@@ -507,7 +498,9 @@ theorem progress {P : Prog}
               obtain ⟨_, hwf, _⟩ := hown (by simp at hso; exact hso)
               obtain ⟨a', ha⟩ := frees_owned hh1 hsl1 (hwf t rfl)
               exact ⟨a', DropSlot.owned ha⟩
-        exact Or.inr <| Or.inr ⟨_, Step.scopeLP hr hsl1 hd⟩
+        -- A3.3: on the way out too
+        obtain ⟨m2, hrl⟩ := Release.exists (k := kk) (t := t) hsl1 hd
+        exact Or.inr <| Or.inr ⟨_, Step.scopeLP hr hrl⟩
   | @letd Γ Γ1 Δ F x f r k E _ _ hx _ hr _ _ _ _ _ _ =>
     intro m hcd hi
     have hmx : m.st x = none := by

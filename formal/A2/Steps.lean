@@ -2493,7 +2493,7 @@ theorem Step.blk {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) : 
     | scopeDIn _ ih | scopeLIn _ ih => exact ih
   | withLock _ hk _ => exact BlkLe.setLock hk _
   | scopeLSkip hr => exact hr.blk
-  | scopeLP _ _ _ ih => exact ih
+  | scopeLP _ hr ih => exact ih.trans hr.blk
   | scopeP _ _ _ ih | rbindP _ _ ih | catchP _ _ ih | scopeDP _ _ ih | scopeDPMoved _ _ ih => exact ih
   | letv _ he | letd _ he | assign _ he _ _ => have := EvalR.blk he; exact this
   | letcall _ _ hb => have := BlkLe.of_eq (BindParams.blk hb); exact this

@@ -971,7 +971,7 @@ theorem SlotOK.keepRoots {m m1 : Mem} {E : Entry} {sl : Slot} (hs : SlotOK m E s
     disjoint from every other binding's, a binding that viewed one of them
     is dead, and what survives reaches the same memory (`pinOut`,
     `rootKeep_frame_sp`). -/
-theorem MInv.unwind {m m1 : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt} {Ex : Entry} {v0 : Val}
+theorem MInv.unwind0 {m m1 : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt} {Ex : Entry} {v0 : Val}
     (hi : Inv m Γ F (.scope x k)) (hx : Γ x = some Ex) (hmo : Ex.mode = .own)
     (hfn : Ex.ty.hasFn = false) (hdbv : Ex.ty.holdsView = true → Ex.dbind = true) (hxk : x ∉ k.spine)
     (hout : ∀ v, v ∉ k.spine → m1.st v = m.st v) (hin : ∀ v ∈ k.spine, m1.st v = none)
@@ -1201,6 +1201,21 @@ theorem MInv.unwind {m m1 : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt} 
   · rw [hblk] at hk'
     obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k' bl hk'
     exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.of_blk hblk⟩, h4⟩
+
+/-- **What a panic leaves at a destructor's frame**, (A3.3) whatever lock
+    payloads its unwinding gave back (`BlkBack`): the invariant over the
+    unwound slots with the blocks as they were (`MInv.unwind0`), then grown
+    to the blocks given back to (`MInv.grow`, `MInv.blocks_back`). -/
+theorem MInv.unwind {m m1 : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt} {Ex : Entry} {v0 : Val}
+    (hi : Inv m Γ F (.scope x k)) (hx : Γ x = some Ex) (hmo : Ex.mode = .own)
+    (hfn : Ex.ty.hasFn = false) (hdbv : Ex.ty.holdsView = true → Ex.dbind = true) (hxk : x ∉ k.spine)
+    (hout : ∀ v, v ∉ k.spine → m1.st v = m.st v) (hin : ∀ v ∈ k.spine, m1.st v = none)
+    (hh1 : HeapOK m1) (hnv : m1.nv = m.nv) (hsl : m1.st x = some ⟨true, some v0⟩)
+    (hkF : ∀ v ∈ k.spine, v ∉ F) (hblk : BlkBack m.blk m1.blk) : MInv m1 (unwindCtx k.spine x Γ) := by
+  have h0 : MInv { m1 with blk := m.blk } (unwindCtx k.spine x Γ) :=
+    MInv.unwind0 (m1 := { m1 with blk := m.blk }) hi hx hmo hfn hdbv hxk hout hin (hi.heap.unback hh1 hblk)
+      hnv hsl hkF rfl
+  exact h0.grow rfl hh1 (Nat.le_refl _) hblk.1 (hi.toMInv.blocks_back hblk)
 
 /-- What a panic leaves at a destructor's frame `x`: no binding `letd`
     made views `x` in memory (`dtorOut`), so `x`'s destructor may run and
@@ -2552,7 +2567,11 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         intro k bl hk
         obtain ⟨hk0, hr⟩ := Mem.sweep_blk.mp hk
         show ∃ bl', m1.blk k = some bl' ∧ BlkKeep bl bl'
-        rw [hblk1]
+        -- A3.3: and then as the unwinding gave lock payloads back
+        suffices h : ∃ bl', m.blk k = some bl' ∧ BlkKeep bl bl' by
+          obtain ⟨bl', h1, h2⟩ := h
+          obtain ⟨bl'', h3, h4⟩ := hblk1.1 k bl' h1
+          exact ⟨bl'', h3, h2.trans h4⟩
         refine hb0 k bl hk0 (hr.of_roots fun w ⟨y, o, hy⟩ k' hrf => ?_)
         by_cases hyx : y = x
         · subst hyx; simp at hy; obtain ⟨_, rfl⟩ := hy
@@ -2567,10 +2586,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           exact ⟨y, o, (hKO.2 y Ey hEy).1, hyx, hy⟩
       have hM' : MInv (m1.set x ⟨false, some (.int 1)⟩) Δ :=
         hM.sweep.grow hsteq (hh1.set_bor x _) (by simp [hnv1, hnv0]) hbl
-          (fun k bl hk => by
-            have hk' : m.blk k = some bl := by rw [← hblk1]; exact hk
-            obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k bl hk'
-            exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.grow (BlkLe.of_eq (show (m1.set x ⟨false, some (.int 1)⟩).blk = m.blk from hblk1))⟩, h4⟩)
+          (hi.toMInv.blocks_back (m' := m1.set x ⟨false, some (.int 1)⟩) hblk1)
       obtain ⟨E0, h0⟩ := (hKO.2 x Ex hEx).2
       have hxown : ∀ T, ¬ OwnedAt m1 x T := by
         intro T hT

@@ -376,9 +376,12 @@ theorem codes_step {P : Prog} (hPc : ProgCodes P) {m : Mem} {s : Stmt} {r : Res}
   | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | catchIn _ ih | scopeLIn _ ih =>
     intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     obtain ⟨h1, h2⟩ := (ih hm hB hs).1 _ _ rfl; exact ⟨h1, h2⟩
-  | scopeP _ _ _ ih | scopeLP _ _ _ ih =>
+  | scopeP _ _ _ ih =>
     intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact (((ih hm hB hs).2 _ rfl).of_st rfl).remove _
+  | scopeLP _ hrl ih =>
+    intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    exact (((ih hm hB hs).2 _ rfl).remove _).of_st (by rw [hrl.st]; rfl)
   | withLock _ hk _ =>
     -- A3.2: the payload checked out holds no package (it views nothing)
     intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h

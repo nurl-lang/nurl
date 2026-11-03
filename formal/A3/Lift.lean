@@ -318,8 +318,12 @@ theorem Step.lifts {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
       exact ⟨_, GhostRel.refl _, Step.scopeLSkip (m := liftMem a2 m) (Release.put hx hg hk)⟩
     | drop hc hx hdr =>
       exact ⟨_, GhostRel.refl _, Step.scopeLSkip (m := liftMem a2 m) (Release.drop hc hx (DropSlot.lift hdr hd))⟩
-  | @scopeLP m1 _ _ _ _ _ _ hs hx hdr ih =>
-    exact Step.scopeLP (m1 := liftMem a2 m1) ih hx (DropSlot.lift hdr ((Step.grows hs).disj hd hf))
+  | @scopeLP m1 _ _ _ _ _ hs hrl ih =>
+    -- A3.3: the payload goes back on the way out, or the slot is dropped
+    cases hrl with
+    | put hx hg hk => exact Step.scopeLP (m1 := liftMem a2 m1) ih (Release.put hx hg hk)
+    | drop hc hx hdr =>
+      exact Step.scopeLP (m1 := liftMem a2 m1) ih (Release.drop hc hx (DropSlot.lift hdr ((Step.grows hs).disj hd hf)))
 
 /-- A step to a configuration, lifted: its store with `a2` added, its
     statement equal but for the stores of `recover` frames. -/

@@ -384,9 +384,12 @@ theorem Step.restrict {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
     cases hrl with
     | put hx hg hk => exact ⟨_, .scopeLSkip (.put hx hg hk), rfl, .refl _⟩
     | drop hc hx hd => exact ⟨_, .scopeLSkip (.drop hc hx (DropSlot.restrict hx hd hav)), rfl, .refl _⟩
-  | scopeLP hs hx hd ih =>
+  | scopeLP hs hrl ih =>
     obtain ⟨r1, h1, hd'⟩ := ih
     obtain rfl := ResDown.panic_inv hd'
-    exact ⟨_, .scopeLP h1 hx (DropSlot.restrict hx hd (Step.avoids hs hb hav hf hp)), rfl⟩
+    -- A3.3: the payload goes back on the way out, or the slot is dropped
+    cases hrl with
+    | put hx hg hk => exact ⟨_, .scopeLP h1 (.put hx hg hk), rfl⟩
+    | drop hc hx hd => exact ⟨_, .scopeLP h1 (.drop hc hx (DropSlot.restrict hx hd (Step.avoids hs hb hav hf hp))), rfl⟩
 
 end A3

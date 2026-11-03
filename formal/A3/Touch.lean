@@ -84,10 +84,11 @@ theorem Step.panic_st {P : Prog} {m m1 : Mem} {s : Stmt} (h : Step P m s (.panic
     split at hv
     · cases hv
     · exact ih rfl v sl hv
-  | scopeLP _ _ _ ih =>
+  | scopeLP _ hrl ih =>
     cases hr
     intro v sl hv
-    simp only [Mem.remove, upd] at hv
+    rw [hrl.st] at hv
+    simp only [upd] at hv
     split at hv
     · cases hv
     · exact ih rfl v sl hv

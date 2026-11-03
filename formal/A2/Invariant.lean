@@ -16,23 +16,8 @@ import A2.Typing
 
 namespace A2
 
-/-- An owned tree of the given type: integers, views and owned element
-    `Vec`s, never a bare borrow. -/
-inductive WFv : Ty → Val → Prop
-  | int {n : Nat} : WFv .int (.int n)
-  | view {t : Ty} {d o l : Nat} : WFv (.slice t) (.view d o l)
-  | node {t : Ty} {c d : Nat} {es : List Val} :
-      (∀ e ∈ es, WFv t e) → WFv (.vec t) (.node t c d es)
-  | pair {a b : Ty} {v w : Val} : WFv a v → WFv b w → WFv (.prod a b) (.pair v w)
-  | inl {a b : Ty} {v : Val} : WFv a v → WFv (.sum a b) (.inl v)
-  | inr {a b : Ty} {v : Val} : WFv b v → WFv (.sum a b) (.inr v)
-  | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {v : Val} {cs : List (Var × PMode × Ty)} :
-      WFv te v → WFv (.fn ms) (.pkg fs te ms v cs)
-  /-- A3.1: a share; its block, in memory, holds the payload it carries, one
-      that holds no view. -/
-  | arc {t : Ty} {k : Nat} {p : Val} : WFv t p → t.holdsView = false → WFv (.arc t) (.arc k p)
-  /-- A3.2: a lock share; its block, in memory, is a lock block of its type. -/
-  | lk {t : Ty} {k : Nat} : WFv (.lk t) (.lk k)
+-- `WFv`, an owned tree of a given type, is in `Semantics.lean` (A3.3: a lock
+-- scope gives back only a well-formed payload, `Giveable`).
 
 /-- `v`, a view of element type `s`, is stored in tree `T` of type `τ`. -/
 inductive ViewIn : Ty → Val → Ty → Val → Prop
