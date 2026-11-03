@@ -253,7 +253,8 @@ theorem tryRead_some {Γ : Ctx} {F : List Var} {o : Var} {t : Ty} (ho : Γ o = s
     (`tryRead_some`); the option's scope ends after both. -/
 theorem _root_.A2.StmtT.withTryRead {P : Prog} {Γ Δs : Ctx} {F : List Var} {a o g y x : Var} {s e : Stmt}
     {Ea : Entry} {t : Ty} (hs : s.src = true) (he : e.src = true) (ho : Γ o = none) (hoF : o ∉ F)
-    (ha : Γ a = some Ea) (hla : Ea.live = true) (hta : Ea.ty = .lk t) (hg : Γ g = none) (hgo : g ≠ o)
+    (ha : Γ a = some Ea) (hla : Ea.live = true) (hta : Ea.ty = .lk t) (hnc : t.hasCell = false)
+    (hg : Γ g = none) (hgo : g ≠ o)
     (hgF : g ∉ F) (hpin : NoPin (setE Γ o (tryReadE t)) o)
     (hds : DtorSafe (setE Γ o (tryReadE t)) .replace false o)
     (hsome : StmtT P (setE (setE (kill .replace false o (setE Γ o (tryReadE t))) o
@@ -263,7 +264,7 @@ theorem _root_.A2.StmtT.withTryRead {P : Prog} {Γ Δs : Ctx} {F : List Var} {a 
     (hendo : EndOK (exitScope g Δs) o) :
     StmtT P Γ F (Stmt.withTryRead a o g y x s e) (exitScope o (exitScope g Δs)) := by
   have hgo' : (setE Γ o (tryReadE t)) g = none := by simp [setE, upd_ne _ _ hgo, hg]
-  refine StmtT.letv (by simp [Stmt.src, Stmt.readWith, hs, he]) ho hoF (RhsT.rwTryRead ha hla hta) ?_ hendo
+  refine StmtT.letv (by simp [Stmt.src, Stmt.readWith, hs, he]) ho hoF (RhsT.rwTryRead ha hla hta hnc) ?_ hendo
   refine StmtT.ite he (by simp [Stmt.src, Stmt.readWith, hs]) (ExprT.isl (upd_same _ _ _) rfl rfl) hnone ?_
   exact StmtT.letv (by simp [Stmt.readWith, Stmt.src, hs]) hgo' hgF
     (tryRead_some (upd_same _ _ _) hoF hpin hds) hsome hendg

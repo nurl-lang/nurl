@@ -259,12 +259,12 @@ theorem handOver_inv {P : Prog} {Γ : Ctx} {F : List Var} {x g : Nat} {t : Ty} {
 
 /-! #### Every reachable configuration of a `make`'s run has the invariant -/
 
-/-- A3.0's invariant in every configuration a typed start reaches, as `A3.claim`
-    draws it. -/
+/-- A3.0's invariant in every configuration a typed start reaches, and (A3.5)
+    the cells' homes, as `A3.claim` draws them. -/
 theorem reach_inv {P : Prog} {spawn : Nat → Bool} {G : Globs} {s : Stmt} {Δ : Ctx} {nv : Nat}
     (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn) (hG : GlobsOK P G)
     (ht : StmtT P (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P)
-    (hv : ∀ v ∈ s.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s nv) C) : CInv P C :=
+    (hv : ∀ v ∈ s.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s nv) C) : CInv P C ∧ CellInv C :=
   (reach_cinv hP hPc (fun h => fun hav hb hp hf => Step.restrict h hav hb hp hf)
     (fun {_ _ _ _ _ _ _ _ _ _ _} h hi hK hsp hf hx hmv => CInv.spawn_of
       (fun hok => fun hR hsp hf hx hmv => spawner_ok hP hPc hSp hok hR hsp hf hx hmv)
@@ -273,7 +273,7 @@ theorem reach_inv {P : Prog} {spawn : Nat → Bool} {G : Globs} {s : Stmt} {Δ :
         newThread_ok hP hPc hSp hsp hf hlen hwf hnd hdisj hself hpk hcd hpart hlt hsh hB hBc hBv)
       h hi hK hsp hf hx hmv)
     (fun {_ _ _ _ _ _ _ _} h hi hK => CInv.spawnFail_of (fun hok => fun hR => spawnFail_ok hok hR) h hi hK)
-    (CInv.start ht hs hsc hv hG) (CellInv.start G s nv) hr).1
+    (CInv.start ht hs hsc hv hG) (CellInv.start G s nv) hr)
 
 /-! #### What the hand-over leaves -/
 
@@ -328,7 +328,7 @@ theorem make_ok {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hPc : ProgCod
     GlobsOK P ⟨C.alloc, C.nid, C.blk, upd C.gl i (some v)⟩ ∧ GlobFits C.blk d.ty v ∧ C.gl = G.gl := by
   obtain ⟨hsy, _⟩ := hD i d hd
   obtain ⟨Δ0, ht0⟩ := makeStmt_typed hP hD hd
-  have hci := reach_inv hP hPc hSp hG ht0 rfl trivial (makeStmt_vars i d) hr
+  have hci := (reach_inv hP hPc hSp hG ht0 rfl trivial (makeStmt_vars i d) hr).1
   have hgl : C.gl = G.gl := Reach.gl hr
   obtain ⟨ps, hc, hreach⟩ := hci
   have hth : C.ths[0]? = some ⟨st, nv, .scope 0 (.assign 0 (.glob i d.ty))⟩ := by rw [hths]; rfl

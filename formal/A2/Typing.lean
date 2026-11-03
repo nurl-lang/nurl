@@ -658,9 +658,11 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       RhsT Γ F (.rwRead a) ⟨.arc (.prod (.lk t) t), .own, true, [], [], false, false⟩ Γ
   /-- A3.3: `rw_try_read a`: `rw_read`'s guard as an owned option
       (`Option` is `sum int _`), holding nothing; matched by value
-      (`taker`), its `some` is `rw_read`'s entry. -/
+      (`taker`), its `some` is `rw_read`'s entry.  A read guard lends the
+      payload to every reader at once, so the payload holds no library handle
+      (a cell share is not Sync, A3.5). -/
   | rwTryRead {a : Var} {E : Entry} {t : Ty} :
-      Γ a = some E → E.live = true → E.ty = .lk t →
+      Γ a = some E → E.live = true → E.ty = .lk t → t.hasCell = false →
       RhsT Γ F (.rwTryRead a) ⟨.sum .int (.arc (.prod (.lk t) t)), .own, true, [], [], false, false⟩ Γ
   /-- A3.3: `rw_try_write a`'s answer: an owned option of an integer, holding
       nothing; the write itself is `withLock`'s check-out (`Stmt.withTryWrite`). -/
