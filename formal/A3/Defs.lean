@@ -104,6 +104,38 @@ theorem lk_spawnOK {t : Ty} (h : (Ty.lk t).ok = true) : (Ty.lk t).holdsView = fa
   simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true] at h
   exact h.1.2
 
+/-- A3.5, Send: a library handle (a cell share) crosses to a new thread as a
+    lock share does, `SpawnOK`'s question unchanged; what it may not do is
+    leave an owner behind, which the crossing check asks at run time
+    (`SendCheck`). -/
+theorem cell_spawnOK {t : Ty} (h : (Ty.cell t).ok = true) : (Ty.cell t).holdsView = false := by
+  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true] at h
+  exact h.1.2
+
+/-- A3.5, Sync: no shared payload holds a library handle.  A type that holds
+    no share holds no cell share, so a lock's payload (`RhsT.lockNew`,
+    `Ty.ok (lk t)`) and a channel's element (`RhsT.chanSend`) hold none;
+    an `Arc`'s payload holds none by `RhsT.arcNew`'s own premise. -/
+theorem _root_.A2.Ty.hasCell_of_hasArc {t : Ty} (h : t.hasArc = false) : t.hasCell = false := by
+  induction t with
+  | int => rfl
+  | vec t ih => exact ih h
+  | slice t ih => exact ih h
+  | prod a b iha ihb =>
+    simp only [Ty.hasArc, Bool.or_eq_false_iff] at h
+    simp [Ty.hasCell, iha h.1, ihb h.2]
+  | sum a b iha ihb =>
+    simp only [Ty.hasArc, Bool.or_eq_false_iff] at h
+    simp [Ty.hasCell, iha h.1, ihb h.2]
+  | fn _ => cases h
+  | arc _ _ => cases h
+  | lk _ _ => cases h
+  | cell _ _ => cases h
+
+theorem lk_noCell {t : Ty} (h : (Ty.lk t).ok = true) : t.hasCell = false := by
+  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true] at h
+  exact Ty.hasCell_of_hasArc h.2
+
 /-- Moving the arguments out of the spawner: each owns its value, and its
     slot is left empty (its drop flag clear). -/
 inductive MoveArgs : (Var → Option Slot) → List Var → List Val → (Var → Option Slot) → Prop
@@ -368,7 +400,9 @@ def NoLeak (P : Prog) (spawn : Nat → Bool) (s : Stmt) (nv : Nat) : Prop :=
     spawned functions take only view-free `sink` parameters, is memory-safe,
     race-free and leak-free on every interleaving.  Milestone A3.0 proves it,
     and A3.1 for A2 with `Arc` (shares of view-free payloads, collected by
-    reachability); A3.2–A3.6 extend the language and restate it. -/
+    reachability); A3.2–A3.6 extend the language and restate it (A3.5: a
+    spawn runs the crossing check, `SendCheck`, and a race includes two
+    threads changing one library handle's state, `CellRace`). -/
 def Claim : Prop :=
   ∀ (P : Prog) (spawn : Nat → Bool) (s : Stmt) (Δ : Ctx) (nv : Nat),
     ProgOK P → ProgCodes P → SpawnOK P spawn →

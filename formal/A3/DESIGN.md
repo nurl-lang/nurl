@@ -13,7 +13,12 @@ leaves out is listed there), and so are A3.3's `RwLocked` (A3.3's
 mechanization, below: a lock block read through views, its read guards
 lending the value frozen) and A3.4's `Atomic` and channels (A3.4's
 mechanization, below; channels are primitive rules on a lock block's
-queue); A3.5 and A3.6 are design. This note fixes the
+queue). A3.5's first cut, library handles whose copies are one state and
+the crossing check, is mechanized too (A3.5's mechanization, below: a lock
+block shared by cell shares, which are not Sync; a spawn panics when its
+check fails; and a race includes two threads changing one handle's state).
+A3.5b/c (closures in shared payloads, trait objects) and A3.6 are design.
+This note fixes the
 semantics, the theorem statements and the order of work, so the
 mechanization can be cut into tasks (Agora: formal track, F4–F8). The guarantee it targets is the
 "no data race" clause of `CLAIM.md` and `docs/MEMORY.md` §6.2. The rules
@@ -1335,6 +1340,274 @@ the receiver's free.
 - channels whose elements hold shares or views, and `select`;
 - a typed program over the channel rules (a probe's encoding, as
   `A2/DynCell.lean` types `pick`);
+- `CLAIM.md` / `README.md`.
+
+## A3.5's mechanization (library handles, the crossing check)
+
+**Status (first cut).** Library handles whose copies are one state are
+mechanized, and so is the crossing check that lets one move to another
+thread. `check.sh` is green with them in A2 and A3, and `A2.memory_safe`,
+`A2.soundness`, `A2.no_leak_end`, `A2.no_leak_panic`, the `DynCell`
+theorems and `A3.claim` are re-proven. A3's race now includes two threads
+changing one handle's state, and the claim proves there is none. Closures
+in shared payloads and trait objects (A3.5b/c) are not done. `CLAIM.md` /
+`README.md` are not updated here.
+
+The runtime it models is docs/MEMORY.md §6.5. A library handle (`PNCounter
+{ ( Shared PNCounterImpl ) ctl }`, a `TcpConn`, a `Cell`) is a counted
+shared block whose state the library changes in place through any copy,
+with no lock. It is Send but not Sync: it may move to another thread only
+with every other owner of its state. The crossing checks that at run time:
+`mem_send_check [T] x what` counts the places in `x` that hold each such
+block and panics if the block has more owners than that.
+
+**Where a library handle lives: a lock block, shared by cell shares.** The
+handle's state is A3.2's lock block: a payload the block owns (`BlkOwn`),
+possibly allocating, checked out by one scope at a time. What differs from
+a `Locked` is not the block. It is who may hold a share, so that is what
+carries the difference: a share of the block is a *cell share*,
+`Val.cell k`, of type `Ty.cell t`, where a lock's is `Val.lk k` / `Ty.lk t`.
+- *Why not `BKind.cell` or a sync flag on lock blocks* (the draft's two
+  options). Every fact about the block is A3.2's: the check-out and the
+  give-back (`Release`), `BlkKeep`, `ViewsAt`, `MInv.blocks`, the sweep,
+  A3's partition and frame lemmas. A kind of its own, or a flag on `.lock`,
+  would have made each of them case on two kinds for no difference in
+  memory, and every lock rule would have had to say which of the two it
+  takes. A new value constructor touches only the functions on values,
+  each in one line.
+- *A lent cell share is no share*: `lendOf (.cell k) = .int 0`
+  (`ValOK.cell`). So a borrowed slot never holds a cell share, and the
+  slots that hold one are its owners. This makes the model's check count
+  what the runtime's counts, owners and not borrows (*The crossing check*,
+  below). It is also what lets the invariant be about the slots alone: a
+  borrow of a handle that outlives the move it depends on is dead by
+  typing, and memory cannot tell a dead borrow from a live one.
+- *A cell's race is its own.* A cell is a lock block with no mutex. The
+  model checks its state out as a lock's payload (A3.2's `withLock`), so in
+  the model two threads would be serialized there, where the runtime's
+  copies write one memory with no lock. So a cell's race is not an
+  address's touch, and the draft's "a write through `withCell` is to the
+  home thread's own part, so there is no race" holds of addresses with or
+  without the crossing check.
+  `Race` gets a disjunct of its own (`CellRace`, below), and the invariant
+  says no two threads hold a share of one cell.
+
+**The rules (A2).**
+- `Rhs.cellNew t y` (the handle's constructor, `pncounter_new`):
+  `EvalR.cellNew` moves `y`'s value into a fresh lock block at the key
+  `nid`, whose one share is the cell share `.cell nid`. `RhsT.cellNew`
+  asks what `lockNew` asks of the payload (no view, no closure, no share)
+  and gives an owned `cell t` that holds nothing (`rhs_cellNew`,
+  `out_cellShare`).
+- `Rhs.cellClone a` (`PNCounter_share`, and every copy the library
+  makes): a new cell share of the block `a` holds (`EvalR.cellClone`).
+  `RhsT.cellClone` asks that `a` own its slot (an owner or an `inout`
+  parameter, `E.mode.ownSlot`), since a lent cell share is no share
+  (`out_cellClone`).
+- **The in-place change** is `Stmt.withCell a x s := withLock a x s`.
+  `Step.withLock` checks out the payload of the lock block `a`'s share
+  names, through a lock share or a cell share (`LockAt`), and A3.2's scope
+  and `Release` give it back. `StmtT.withLock` asks `Entry.lockOf t`: `a`
+  is a lock share, or a cell share an owner holds. It keeps A3.2's
+  faithfulness premises: `a` is a root the body does not name, and `x` is
+  live at the end.
+- **A second check-out** of a cell that is out (a library re-entering its
+  own state) waits (`Blocked`: `LockAt` and the payload out) or panics
+  (`Step.waitPanic`), as `RefCell`'s borrow error would (the runtime goes
+  on in place: *Faithful to the runtime*, below).
+- **The Sync question** (h338, h358, h357). A cell share may not be in a
+  payload several threads reach:
+  - `RhsT.arcNew` refuses a payload type that may hold one (`Ty.hasCell`,
+    which a closure type answers `true`);
+  - a lock's payload, an `RwLocked`'s and a channel's element hold no share
+    at all (`Ty.ok (lk t)`, `RhsT.lockNew`, `RhsT.chanSend`), so none
+    holds a cell share (`Ty.hasCell_of_hasArc`, `lk_noCell`);
+  - a cell's own payload is a lock's, so it holds none either.
+- **Send.** A cell share crosses a spawn (`cell_spawnOK`: `SpawnOK`'s
+  question unchanged), subject to the crossing check.
+- The sweep keeps a cell's block while a slot holds a cell share of it
+  (`ShareIn`, `Refers`, `Kept.cell`).
+
+**A2's proof.** A cell share is a lock share for every memory fact:
+`WFv.cell`, `ArcIn.cell` (it fits a lock block of its payload's type,
+`SharesOK.cell`), `Frees.cell`, `Val.owns`, `ValOK.cell` (a lent one is
+`.int 0`, valid through anything), and a case in each function on types
+(`Ty.cell`: `holdsView`, `hasFn`, `hasArc`, `ok`, `owning`, `elemE`,
+`popE`). `MInv.lockOf_val` / `lockOf_slot` give the block `withLock`
+checks out from `Entry.lockOf`, through either share. `cellNew` is
+`locked_new`'s store with another share (`rhs_lockNew_post`), and
+`cellClone` is `lockClone`'s case for an owner (`MInv.cell_val`). The
+renaming lemma keeps `lockOf` (`Entry.lockOf.lift`: an owner stays one
+where the call places it).
+
+**A3's proof.**
+- **The crossing check** (`SendCheck vs st'`), a premise of `TStep.spawn`:
+  for every cell `k` a moved value holds a share of (`Sub (.cell k) v`), no
+  slot the spawner keeps holds one. It is stated on what the values hold.
+  For a cell that is what they reach, since no payload holds a cell share
+  (the Sync question, above).
+- **A failed check panics** (`TStep.spawnFail`): nothing moves and no
+  thread is made. The spawner's statement becomes the call with a panic
+  put before it (`K (.seq .panic (.letcall …))`), so its next step is A2's
+  panic, which unwinds its scopes or is caught by a `recover` frame.
+  `spawnFail_ok` types it where the call was, over the same store
+  (`Redex.plug`, the panic keeping the context as it is), and
+  `CInv.setStmt` / `CellInv.setStmt` keep both invariants.
+- **Confinement** (`CellInv`, `A3/Cell.lean`): no two threads' slots hold
+  a share of one cell (`home`), and every cell share names a key below
+  `nid` (`below`).
+  - *A thread's step hands on only what its slots held* (`Step.cell`). A
+    cell share in its slots afterwards was in its slots before, or in a
+    lock block's payload, or it is a new cell's, at a key taken from `nid`
+    in this step. A lent value holds none (`not_sub_cell_lendOf`), so
+    nothing read out of an `Arc`'s or a view's payload brings one. No lock
+    payload holds one (`ThreadOK.noCellPay`, from `Ty.ok`). A new cell's
+    key is no other thread's share's (`below`). So the stepping thread
+    never gains a share of another thread's cell (`CellInv.thread_of`).
+    The other threads' slots do not change, and the sweep removes blocks
+    only.
+  - *A spawn moves the home with the values* (`CellInv.spawn_of`): a cell
+    a moved value holds a share of keeps none in the spawner
+    (`SendCheck`), so the new thread is its only holder; every other cell
+    stays where it was, since the new thread holds only what moved.
+- **No cell race** (`CellInv.cellRaceFree`). `CellOp t k` is a thread whose
+  next step changes cell `k`'s state: a `withCell` through a share of it,
+  or a step inside a check-out of it (`k ∈ t.s.lkeys`) while holding a share
+  of it. Either way the thread holds a share (`CellOp.cellAt`), and only
+  one thread does. `Race` is `AddrRace ∨ CellRace`. `AddrRace` is A3's
+  race as it was, which A3.2's argument still proves: a checked-out
+  payload, a cell's too, is in its holder's part, and an in-block one is
+  read by no one.
+- *memory_safe* and *no_leak* are unchanged. A cell share frees nothing,
+  and the configuration's sweep frees a cell's block, with its state, once
+  no thread's slot holds a share of it.
+
+**Faithful to the runtime** (`stdlib/runtime_core.c`'s `mem_send_check`,
+`stdlib/dist/crdt.nu`).
+- *The count.* The runtime counts, for each handle's block that `x`
+  reaches, the places in `x` that hold it, and compares that with the
+  block's reference count. The check passes iff every owner goes along.
+  The model's owners are the slots that hold a cell share: a lent one is
+  `.int 0`, and a copy is an explicit `cellClone` (`PNCounter_share`,
+  `shared_clone`). The model asks, over what the moved values hold, that
+  no slot left behind holds one, which is "every owner goes along".
+  **Phase D obligation (stated, not proven):** the runtime's count of a
+  library handle's block equals the number of cell shares the model's
+  slots hold. Its copies are the model's `cellClone`s (a store of a
+  borrowed handle into an owner, a push, a capture), and its drops are
+  the model's slots ending. Given that, the runtime's walk passes exactly
+  when `SendCheck` holds.
+- *What the walk follows.* It follows fields, enum payloads, `Vec`
+  elements, containers' contents (`S_sendck`), closures' environments and
+  trait objects' boxes. The model's moved values are trees (`Sub`:
+  fields, payloads, elements, a package's environment). The model has no
+  trait objects or containers beyond `Vec`.
+- *The panic.* `mem_send_check` calls `nurl_panic` naming the crossing,
+  before the thread copies its environment. So no thread is made and
+  nothing has moved, as in `TStep.spawnFail`.
+- *The in-place change* is A3.2's: the runtime's `pncounter_inc` runs on
+  the state through the handle, and the model checks it out into `x` and
+  back. The two agree under `withLock`'s premises (A3.2, *Faithful to the
+  in-place runtime*).
+- *Re-entrance.* A library that reaches its own state again while it
+  changes it (`pncounter_merge a a`) runs on at run time, in place, on one
+  thread. The model's second check-out waits for the first (`Blocked`) or
+  panics (`waitPanic`), as `RefCell`'s borrow error would. A run past that
+  point is not modeled (*Simplifications*, below).
+- *The static rules come first.* The checker's own rules (h336, h337,
+  h333, h356: a moved handle's binding, a parameter of one and a binding
+  read out of a field of one are dead past the crossing) are A2's: a
+  `sink` move kills the binding and every borrow of it. What is left for
+  the run-time check is a copy, which the model makes with `cellClone`.
+
+**Simplifications in this cut.** Each is a restriction, and sound as stated.
+- *A library handle is changed only through an owner.* `withCell` and
+  `cellClone` take a cell share an owner holds (an owned binding or an
+  `inout` parameter, which is the caller's owner). A lent handle is no
+  share. So a library function that takes its handle `in`, as
+  `pncounter_inc PNCounter c__h …` does, is modeled taking it `inout`, and
+  a handle read out of a borrowed struct is not changed through.
+- *Copies are explicit*: `cellClone` of an owner. A store of a borrowed
+  handle into an owner, which the runtime makes a copy, is not typed:
+  `PushArg` moves owners only, as for every owning type.
+- *A cell's state is a lock's payload*: it holds no view, no closure and no
+  share.
+- *A closure that captures a handle* holds the share in its environment,
+  which a spawn moves and checks. But a call lends the environment
+  (`envMem`), so the closure's own code does not change the state. That
+  is A3.5b's.
+- *The other crossings.* `chan_send`'s and `Locked`'s (`locked_new`,
+  `locked_set`, `locked_restore`, after `locked_with`) need no run-time
+  check here: their values hold no share at all, so the check has nothing
+  to find. It is refused statically, which is more than the runtime
+  refuses.
+- *`% Sync` and `% NotSend` assertions* are not modeled: an `Arc` of a
+  handle is refused whatever the handle asserts, and `PkMemberTable`
+  (h319) is a cell, Send, where the runtime makes it `% NotSend`.
+- *Re-entrance* waits or panics where the runtime goes on (above): a
+  program that re-enters a handle's state is covered only up to that
+  point.
+- *`CellOp`'s second case* asks the thread inside a check-out to hold a
+  share of the cell. In a typed program it always does (the share the
+  check-out is through stays in `a` for the whole body, by `withLock`'s
+  premises). That is argued, not proven as a lemma (as A3.2's "a typed
+  lock scope ends in a `put`").
+
+**Probes** (`tools/fuzz/holes/*.nu`). In the model, a thread's closure is
+the spawned function, and its captures are `sink` arguments.
+- h336 `library_handle_captured_by_a_thread_and_kept`: the spawn moves the
+  handle (`MoveArgs`; `CallT` moves a `sink` argument), which kills its
+  binding, so the spawner's later `withCell a …` is refused (`a` is dead).
+  A copy the spawner kept (`cellClone`) is an owner left behind:
+  `SendCheck` fails and the spawn panics (`TStep.spawnFail`).
+- h337 `library_handle_parameter_captured_by_a_thread`: a parameter of the
+  handle is no `sink` argument (`paramOK`: a `sink` argument is an owner).
+  Taken `in`, it is a lent handle, no share, which `cellClone` refuses.
+  Taken `inout`, a copy of it leaves the caller's owner behind:
+  `SendCheck`. Taken `sink`, the handle moves.
+- h333 `library_handle_field_copy_on_two_threads`: `. h c` is a borrow of
+  `h` (`projE`, a dependency on `h`), and a lent handle is no share. The
+  spawn moves `h`, which kills the borrow, so `withCell mine …` after it
+  is refused, as is any change through a borrow.
+- h356 `library_handle_field_read_taken_by_a_thread`: a binding read out of
+  a field is a borrow, which is no `sink` argument (`paramOK`). The thread
+  takes the struct, or the field taken apart (`unpair`), and with it the
+  owner.
+- h338 `arc_of_a_library_handle_on_two_threads`: `RhsT.arcNew` refuses a
+  payload type that may hold a cell share (`Ty.hasCell`).
+- h358 `rc_in_a_locked_in_an_arc_on_two_threads`: a lock's payload holds no
+  share (`RhsT.lockNew`, `Ty.ok (lk t)`), so neither a library handle nor
+  (were it modeled) an `Rc` is a `Locked`'s value; `lk_noCell`.
+- h319 `member_table_copy_on_two_threads`: as h333. `a` is a borrow of the
+  struct's field, dead once the struct moves, and a kept copy fails the
+  crossing check.
+
+**Not proven here.**
+- *Phase D*: that the runtime's reference count of a handle's block is the
+  number of cell shares the model's slots hold, so its walk passes exactly
+  when `SendCheck` holds (above).
+- That a thread inside a check-out of a cell holds a share of it, as a
+  lemma (`CellOp`'s second case). It would need an invariant tying each
+  `scopeL k` frame to its binding `a`, which A3.2 also leaves out.
+- That a cell's checked-out state is in its home thread's part. It is in
+  the part of the thread whose frame holds it (A3.2's partition), and that
+  thread is the home by the argument above.
+- Deadlock freedom: a library re-entering its own state waits or panics.
+- **A3.5b/c, not done**:
+  - closures in shared payloads: h339
+    `closure_in_an_arc_captures_a_library_handle`, h340
+    `closure_sent_on_a_channel_captures_a_kept_handle`, h342
+    `route_handler_changes_its_capture_on_two_threads` (a closure kept in
+    an `Arc`, sent on a channel, or run by several threads, that captures
+    a handle or changes what it captured);
+  - trait objects: h344 `dyn_object_carries_an_rc_to_a_thread` (a `%Trait`
+    box crosses only when its trait is `: Send`, and the vtable checks
+    it).
+- A library handle changed through a borrow (`in` parameters), implicit
+  copies, handles in containers with `S_sendck` hooks, `% Sync` / `%
+  NotSend` assertions.
+- The probes as typed programs (a probe's encoding, as `A2/DynCell.lean`
+  types `pick`).
 - `CLAIM.md` / `README.md`.
 
 ## Open questions
