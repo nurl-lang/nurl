@@ -705,4 +705,584 @@ theorem recv_keep {Ea : Entry} {H : List Dep} {ds : List Dep}
     rw [hname d0 h0v (h2 ▸ hr')] at h0n; cases h0n
   · exact RSetup.kills_isName hbr _ (hname d' (List.mem_filter.mp h1).1 hr')
 
+/-- Every entry of `Γ'` is rooted in `Γ`: a binding `Γ` has none of ends nothing. -/
+def AllRooted (Γ Γ' : Ctx) : Prop := ∀ v E, Γ' v = some E → Rooted Γ E
+
+namespace AllRooted
+variable {Γ Γ' : Ctx}
+
+theorem kill_fresh (h : AllRooted Γ Γ') {w : Var} (hw : Γ w = none) (e : Eff) (hb : Bool) :
+    A2.kill e hb w Γ' = Γ' := by
+  funext v
+  simp only [A2.kill]
+  cases hv : Γ' v with
+  | none => rfl
+  | some E => simp only [Option.map_some, (h v E hv).killE_fresh hw]
+
+theorem kill (h : AllRooted Γ Γ') (e : Eff) (hb : Bool) (w : Var) : AllRooted Γ (A2.kill e hb w Γ') := by
+  intro v E hv
+  simp only [A2.kill] at hv
+  obtain ⟨E0, h0, rfl⟩ := Option.map_eq_some_iff.mp hv
+  exact (h v E0 h0).killE e hb w
+
+theorem setE (h : AllRooted Γ Γ') {w : Var} {E : Entry} (hE : Rooted Γ E) : AllRooted Γ (A2.setE Γ' w E) := by
+  intro v Ev hv
+  by_cases hvw : v = w
+  · subst hvw; simp only [A2.setE, upd_same, Option.some.injEq] at hv; subst hv; exact hE
+  · simp only [A2.setE, upd_ne _ _ hvw] at hv; exact h v Ev hv
+
+theorem upd_none (h : AllRooted Γ Γ') (w : Var) : AllRooted Γ (upd Γ' w none) := by
+  intro v Ev hv
+  by_cases hvw : v = w
+  · subst hvw; simp at hv
+  · simp only [upd_ne _ _ hvw] at hv; exact h v Ev hv
+
+theorem killNames (h : AllRooted Γ Γ') (ds : List Dep) : AllRooted Γ (A2.killNames ds Γ') := by
+  intro v E hv
+  rw [RSetup.killNames_eq] at hv
+  obtain ⟨E0, h0, rfl⟩ := Option.map_eq_some_iff.mp hv
+  exact (h v E0 h0).killAll ds
+
+end AllRooted
+
+theorem Rooted.of_dead {Γ : Ctx} {E : Entry} (h : E.live = false) : Rooted Γ E := Or.inl h
+
+theorem Rooted.of_roots {Γ : Ctx} {E : Entry} (h : ∀ d ∈ E.vdeps, (Γ d.root).isSome) : Rooted Γ E :=
+  Or.inr (Or.inr h)
+
+/-- The post-context of a call of one `inout` parameter. -/
+theorem callPost_one {Γ : Ctx} {fn : Fn} {b : Eff} {t : Ty} (hps : fn.params = [(.inout b, t)]) (a : Var) :
+    callPost Γ fn [a] = A2.killNames (mutNames Γ [a]) (setE (kill b t.elem.holdsView a Γ) a
+      { argE Γ a with held := if t.holdsView then (argE Γ a).held ++ outHeld Γ fn [a] 0 ++ heldOfArgs Γ [a]
+          else (argE Γ a).held }) := by
+  simp only [callPost, hps, callPostAux]
+
+theorem outHeld_nil {Γ : Ctx} {fn : Fn} (h : fn.outHolds = []) (args : List Var) (i : Nat) :
+    outHeld Γ fn args i = [] := by
+  simp [outHeld, h]
+
+/-- What `x := r` takes from the inner call's result: a move of an owned
+    result, a copy of a lent one. -/
+theorem hand_res {Γr : Ctx} {F : List Var} {r : Var} {E' : Entry} (hr : Γr r = some E') (hl : E'.live = true)
+    (hrF : r ∉ F) (hpin : NoPin Γr r) (hds : DtorSafe Γr .replace false r) (hm : E'.mode = .own ∨ E'.mode = .bor) :
+    ∃ Er Γ2, RhsT Γr F (.var r) Er Γ2 ∧ Er.mode = E'.mode ∧ Er.ty = E'.ty ∧ Er.live = true ∧
+      Er.path ⊆ E'.path ∧ Er.held ⊆ E'.held ∧ Er.dtor = false ∧ Er.dbind = false ∧
+      (Γ2 = setE (kill .replace false r Γr) r { E' with live := false, dtor := false } ∨ Γ2 = Γr) := by
+  rcases hm with hm | hm
+  · exact ⟨_, _, RhsT.moveOwn hr hl hm hrF hpin hds, hm.symm, rfl, rfl, List.nil_subset _,
+      List.Subset.refl _, rfl, rfl, Or.inl rfl⟩
+  · refine ⟨_, _, RhsT.copyBor hr hl hm, rfl, rfl, hl, List.Subset.refl _, List.Subset.refl _, rfl, rfl, Or.inr rfl⟩
+
+/-! ### The run-time form, typed -/
+
+/-- **The hand-over's run-time form is typed** (A2-envhand): in the context
+    the hand-over leaves, the environment's scope — the code's call on `y`
+    with its result moved to `x`, then `y`'s value back into `c` as a package
+    — is typed, and leaves a context that says no less than the one the
+    interface's call leaves the source (with `c` ended again: the
+    environment moved back in). -/
+theorem hand_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
+    (hanch : RootbAnch Γ F) (hFlt : ∀ v ∈ F, v < m.nv)
+    {c x : Var} {Ec E : Entry} {Γ1 : Ctx} {σ f : Nat} {sig fn : Fn} {b : Eff} {ms : List Nat} {q : Cross}
+    {te : Ty} {fs : List Nat} (hc : Γ c = some Ec) (htc : Ec.ty = .fn ms q) (hmo : Ec.mode = .own)
+    (hx : Γ x = none) (hxn : x < m.nv) (hxF : x ∉ F) (hcF : c ∉ F) (hny : NoPin Γ c)
+    (hdc : DtorSafe Γ .replace false c)
+    (hcT : CallT P (kill .replace false c Γ) F σ [c] E Γ1) (hσ : P[σ]? = some sig)
+    (hsp : sig.params = [(.inout b, .fn ms q)]) (hsl : sig.lends = []) (hsr : sig.rholds = [])
+    (hso : sig.outHolds = [])
+    (hf : P[f]? = some fn) (hps : fn.params = [(.inout b, te)]) (hto : te.owning = true) (hnt : ¬ ThruFn P f)
+    (hrt : fn.resTy = sig.resTy) (hro : fn.resOwn = sig.resOwn) (hfl : fn.lends ⊆ sig.lends)
+    (hfr : fn.rholds ⊆ sig.rholds) (hfo : fn.outHolds ⊆ sig.outHolds) (hq : q.Fits te []) :
+    ∃ Γe, StmtT P (handCtx Γ c x Ec te m.nv (callX fn)) F
+      (.scope m.nv (.seq (.letcall (m.nv + 1) f [m.nv] (.assign x (.var (m.nv + 1))))
+        (.assign c (.pack fs te ms m.nv [])))) Γe ∧
+      Weaker Γe (kill .replace false c (setE Γ1 x E)) := by
+  have hcT0 := hcT
+  obtain ⟨sig', hσ', _, hargs, hnf, hds, hE, hΓ1, _⟩ := hcT
+  rw [hσ] at hσ'; cases hσ'
+  subst hE hΓ1
+  have hτ : Ec.ty ≠ .int := by rw [htc]; simp
+  have hos : Ec.mode.ownSlot = true := by rw [hmo]; rfl
+  -- the package, where the interface's call takes it
+  obtain ⟨Ea, hEa, hla, _, _, _⟩ := hargs 0 (by simp [hsp])
+  simp only [List.getD_cons_zero, kill, hc, Option.map_some, Option.some.injEq] at hEa
+  subst hEa
+  obtain ⟨hlc, hnc⟩ := kill_live_self hla hτ
+  have hkc : killE .replace false c Ec = Ec := by
+    rw [killE_live] at hla
+    simp only [Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true] at hla
+    unfold killE; rw [hla.2]; rfl
+  have hΓkc : kill .replace false c Γ c = some Ec := by simp [kill, hc, hkc]
+  have hck : argE (kill .replace false c Γ) c = Ec := by simp [argE, hΓkc]
+  have hdbc : Ec.dbind = false := hds.2.2 0 (by simp [hsp]) b (by simp [hsp]) Ec (by simpa using hΓkc)
+  have hdtc : Ec.dtor = false := by
+    cases h : Ec.dtor
+    · rfl
+    · rw [hi.wf.arm c Ec hc h] at hdbc; cases hdbc
+  have hEcr : ∀ d ∈ Ec.vdeps, ∃ Er, Γ d.root = some Er := fun d hd => by
+    obtain ⟨Er, hEr, _⟩ := hi.wf c Ec hc hlc (Or.inl hτ) d.root (List.mem_map_of_mem (f := Dep.root) hd)
+    exact ⟨Er, hEr⟩
+  have hEch : Ec.vdeps = Ec.held := by simp [Entry.vdeps, hos]
+  -- the code's summaries are the interface's, none
+  have hfl0 : fn.lends = [] := List.eq_nil_of_subset_nil (hsl ▸ hfl)
+  have hfr0 : fn.rholds = [] := List.eq_nil_of_subset_nil (hsr ▸ hfr)
+  have hfo0 : fn.outHolds = [] := List.eq_nil_of_subset_nil (hso ▸ hfo)
+  -- where things are
+  have hcn : c < m.nv := hi.nvSt c (by rw [← hi.dom, hc]; rfl)
+  have hxy : x ≠ m.nv := fun e => by rw [e] at hxn; exact Nat.lt_irrefl _ hxn
+  have hxc : x ≠ c := fun e => by rw [e, hc] at hx; cases hx
+  have hyc : m.nv ≠ c := fun e => by rw [← e] at hcn; exact Nat.lt_irrefl _ hcn
+  have hrx : m.nv + 1 ≠ x := fun e => by rw [← e] at hxn; have := vlt hxn; omega
+  have hry : m.nv + 1 ≠ m.nv := by omega
+  have hrc : m.nv + 1 ≠ c := fun e => by rw [← e] at hcn; have := vlt hcn; omega
+  have hΓfresh : ∀ v, m.nv ≤ v → Γ v = none := fun v hv => by
+    cases h : Γ v with
+    | none => rfl
+    | some E0 =>
+      have h1 := hi.nvSt v (by rw [← hi.dom, h]; rfl)
+      exact absurd (Nat.lt_of_lt_of_le h1 hv) (Nat.lt_irrefl _)
+  have hΓy : Γ m.nv = none := hΓfresh _ (Nat.le_refl _)
+  have hΓr : Γ (m.nv + 1) = none := hΓfresh _ (Nat.le_succ _)
+  have hyF : m.nv ∉ F := fun h => Nat.lt_irrefl _ (hFlt _ h)
+  have hrF : m.nv + 1 ∉ F := fun h => by have := vlt (hFlt _ h); omega
+  have hrootb_c : ∀ v E0, Γ v = some E0 → E0.fixed → ∀ e hb, killE e hb c E0 = E0 := by
+    intro v E0 hv hf e hb
+    rcases hf with hm | ⟨b', hm, _⟩
+    · exact killE_rootb hanch hcF e hb (hny.kills e hb) hv hm
+    · exact absurd hm (hi.noInout v E0 b' hv)
+  -- the environment's binding
+  let Γh := handCtx Γ c x Ec te m.nv (callX fn)
+  have hEy : compE Ec te = ⟨te, .own, true, [], ownHeld true te Ec.held, false, false⟩ := compE_owning Ec hto
+  have hEyt : (compE Ec te).ty ≠ .int := by
+    rw [hEy]; intro h; simp only at h; subst h; simp [Ty.owning] at hto
+  have hEyv : (compE Ec te).vdeps ⊆ Ec.vdeps := by
+    intro d hd
+    rw [hEy] at hd
+    simp only [Entry.vdeps, Mode.ownSlot, ↓reduceIte, List.nil_append] at hd
+    rw [hEch]; exact ownHeld_sub _ _ _ hd
+  have hEyh : (compE Ec te).vdeps = (compE Ec te).held := by rw [hEy]; simp [Entry.vdeps, Mode.ownSlot]
+  have hhy : Γh m.nv = some (compE Ec te) := handCtx_y hxy
+  have hyE : argE Γh m.nv = compE Ec te := by simp only [argE, hhy, Option.getD_some]
+  have hhx : Γh x = some (callX fn) := handCtx_x
+  have hhc : Γh c = some { Ec with live := false, dtor := false } := handCtx_c hxc hyc
+  have hhr : Γh (m.nv + 1) = none := (handCtx_other hrx hry hrc).trans (by simp [kill, hΓr])
+  have hho : ∀ v, v ≠ x → v ≠ m.nv → v ≠ c → Γh v = kill .replace false c Γ v :=
+    fun v h1 h2 h3 => handCtx_other h1 h2 h3
+  -- what the environment's binding is handed after the call
+  let HyR : List Dep := if te.holdsView then (compE Ec te).held ++ outHeld Γh fn [m.nv] 0 ++ heldOfArgs Γh [m.nv]
+    else (compE Ec te).held
+  let Ey1 : Entry := { compE Ec te with held := HyR }
+  have hhoa : heldOfArgs Γh [m.nv] = allKinds (roots (memDeps (compE Ec te).held)) ++ nameDeps (compE Ec te).vdeps := by
+    simp [heldOfArgs, argNames, hyE, hEyt]
+  have hHyR : ∀ d' ∈ HyR, d' ∈ (compE Ec te).vdeps ∨ (∃ d0 ∈ memDeps (compE Ec te).vdeps, d'.root = d0.root) ∨
+      d' ∈ nameDeps (compE Ec te).vdeps := by
+    intro d' hd'
+    simp only [HyR] at hd'
+    split at hd'
+    · rw [outHeld_nil hfo0, List.append_nil, hhoa] at hd'
+      rcases List.mem_append.mp hd' with h | h
+      · exact Or.inl (hEyh ▸ h)
+      rcases List.mem_append.mp h with h | h
+      · obtain ⟨d0, hd0, hr0⟩ := List.mem_map.mp (RSetup.mem_allKinds h)
+        exact Or.inr (Or.inl ⟨d0, hEyh ▸ hd0, hr0.symm⟩)
+      · exact Or.inr (Or.inr h)
+    · exact Or.inl (hEyh ▸ hd')
+  have hHyR_Ec : ∀ d' ∈ HyR, ∃ d0 ∈ Ec.vdeps, d'.root = d0.root := by
+    intro d' hd'
+    rcases hHyR d' hd' with h | ⟨d0, h0, h1⟩ | h
+    · exact ⟨d', hEyv h, rfl⟩
+    · exact ⟨d0, hEyv (List.mem_filter.mp h0).1, h1⟩
+    · exact ⟨d', hEyv (List.mem_filter.mp h).1, rfl⟩
+  have hEy1r : Rooted Γ Ey1 := Rooted.of_roots fun d hd => by
+    have hd' : d ∈ HyR := by simpa [Ey1, Entry.vdeps, hEy, Mode.ownSlot] using hd
+    obtain ⟨d0, hd0, hr⟩ := hHyR_Ec d hd'
+    obtain ⟨Er, hEr⟩ := hEcr d0 hd0
+    rw [hr, hEr]; rfl
+  -- the hand-over's context is rooted and keeps the store's pins and destructors
+  have hrootΓ : AllRooted Γ (kill .replace false c Γ) :=
+    fun v E0 hv => by
+      simp only [kill] at hv
+      obtain ⟨E1, h1, rfl⟩ := Option.map_eq_some_iff.mp hv
+      exact (hi.rooted h1).killE _ _ _
+  have hrooth : AllRooted Γ Γh := by
+    refine ((hrootΓ.setE (Rooted.of_dead rfl)).setE ?_).setE (Rooted.of_dead rfl)
+    refine Rooted.of_roots fun d hd => ?_
+    obtain ⟨Er, hEr⟩ := hEcr d (hEyv hd)
+    rw [hEr]; rfl
+  have hfrΓk : FrameOK Γ (kill .replace false c Γ) :=
+    (FrameOK.refl Γ).kill _ _ _ fun p E0 hp hm => hrootb_c p E0 hp (Or.inl hm) _ _
+  have hfrh : FrameOK Γ Γh :=
+    ((hfrΓk.setE (by simp [hmo]) rfl (by simp [hdbc])).setE (by rw [hEy]; simp) (by rw [hEy]) (by rw [hEy])).setE
+      (resMode_ne' fn) rfl rfl
+  -- the code's call, and what it leaves
+  have hcT' := callT_hand hi hFlt hc htc hx hxn hcT0 hσ hsp hf hps hto hnt (E0 := callX fn) rfl (resMode_ne' fn)
+  have hcT'' := hcT'
+  obtain ⟨_, _, _, _, hnf', _, _, _, _⟩ := hcT''
+  have hmutA : ∀ d ∈ mutNames Γh [m.nv], d ∈ mutNames (kill .replace false c Γ) [c] ∧ d ∈ Ec.vdeps := by
+    intro d hd
+    simp only [mutNames, argNames, List.flatMap_cons, List.flatMap_nil, List.append_nil, hyE,
+      List.mem_filter, hEyt, ↓reduceIte] at hd
+    simp only [mutNames, argNames, List.flatMap_cons, List.flatMap_nil, List.append_nil, hck,
+      List.mem_filter, hτ, ↓reduceIte]
+    obtain ⟨hd1, hd2⟩ := hd
+    have h1 := hEyv (List.mem_filter.mp hd1).1
+    exact ⟨⟨List.mem_filter.mpr ⟨h1, (List.mem_filter.mp hd1).2⟩, hd2⟩, h1⟩
+  -- a name a closure the package holds may change by changes the binding at most by dropping elements
+  have hbr : ∀ d ∈ Ec.vdeps, d.kind.bound ≠ .none → d.kind.bound ≠ .replace := by
+    intro d hd hb
+    have hnm := RSetup.isName_of_bound hb
+    obtain ⟨rd, kd⟩ := d
+    cases kd with
+    | name b' t' =>
+      obtain ⟨_, _, _, _, _, _, hcb, _⟩ := hi.names c Ec hc hlc (Or.inl hτ) _ hd b' t' rfl
+      rcases hcb with h | ⟨h, _⟩
+      · exact absurd h hb
+      · exact h
+    | _ => simp [Kind.isName] at hnm
+  have hAok : ∀ d ∈ mutNames Γh [m.nv], d.kind.bound ≠ .none ∧ d.kind.bound ≠ .replace := fun d hd => by
+    have hb : d.kind.bound ≠ .none := by simpa [mutNames] using (List.mem_filter.mp hd).2
+    exact ⟨hb, hbr d (hmutA d hd).2 hb⟩
+  have hAF : ∀ d ∈ mutNames Γh [m.nv], d.root ∉ F ∧ d.kind.bound ≠ .replace :=
+    fun d hd => ⟨(hnf' d hd).2.2.1, (hAok d hd).2⟩
+  have huniqA : ∀ d ∈ mutNames Γh [m.nv], ∀ d' ∈ (compE Ec te).vdeps, d'.root = d.root →
+      d'.kind.bound = d.kind.bound := fun d hd d' hd' hr =>
+    (hnf' d hd).2.2.2.2 m.nv (by simp) (by rw [hyE]; exact Or.inl hEyt) d' (by rw [hyE]; exact hd') hr
+  have hΓ1' : callPost Γh fn [m.nv] = A2.killNames (mutNames Γh [m.nv]) (setE Γh m.nv Ey1) := by
+    rw [callPost_one hps, hrooth.kill_fresh hΓy, hyE]
+  have hkeepy : RSetup.killAll (mutNames Γh [m.nv]) Ey1 = Ey1 :=
+    recv_keep hHyR huniqA hAok (by rw [hEy]; rfl)
+  have h1y : callPost Γh fn [m.nv] m.nv = some Ey1 := by
+    rw [hΓ1', RSetup.killNames_eq]; simp [setE, hkeepy]
+  have h1x : callPost Γh fn [m.nv] x = some (callX fn) := by
+    rw [hΓ1', RSetup.killNames_eq]
+    simp only [setE, upd_ne _ _ hxy, hhx, Option.map_some, Option.some.injEq]
+    exact killAll_id fun d _ => by unfold hits; simp [callX_vdeps]
+  have h1r : callPost Γh fn [m.nv] (m.nv + 1) = none := by
+    rw [hΓ1', RSetup.killNames_eq]; simp [setE, hhr]
+  let Ecd1 := RSetup.killAll (mutNames Γh [m.nv]) { Ec with live := false, dtor := false }
+  have h1c : callPost Γh fn [m.nv] c = some Ecd1 := by
+    rw [hΓ1', RSetup.killNames_eq]; simp [setE, upd_ne _ _ hyc.symm, hhc, Ecd1]
+  have hEcd1 : Ecd1.mode = Ec.mode ∧ Ecd1.ty = Ec.ty ∧ Ecd1.dbind = Ec.dbind ∧ Ecd1.live = false := by
+    simp only [Ecd1]; unfold RSetup.killAll; split <;> exact ⟨rfl, rfl, rfl, rfl⟩
+  have hroot1 : AllRooted Γ (callPost Γh fn [m.nv]) := by
+    rw [hΓ1']; exact (hrooth.setE hEy1r).killNames _
+  have hfr1 : FrameOK Γ (callPost Γh fn [m.nv]) := by
+    rw [hΓ1']
+    refine (hfrh.setE (by simp [Ey1, hEy]) (by simp [Ey1, hEy]) (by simp [Ey1, hEy])).killNames _ ?_
+    intro p E0 hp hm
+    have h0 := (hfrh.setE (E := Ey1) (w := m.nv) (by simp [Ey1, hEy]) (by simp [Ey1, hEy]) (by simp [Ey1, hEy])).1 p E0 hp hm
+    exact rootb_names hanch hAF p E0 h0 hm
+  -- the inner call's result
+  have hE'r : ∀ d ∈ (callRes Γh fn [m.nv]).path ++ (callRes Γh fn [m.nv]).held, ∃ d0 ∈ Ec.vdeps, d.root = d0.root := by
+    intro d hd
+    have hd' : d ∈ heldOfArgs Γh [m.nv] := by
+      simp only [callRes, hfl0, hfr0, List.flatMap_nil, List.nil_append, List.mem_append] at hd
+      rcases hd with hd | hd
+      · exact hd
+      · exact ownHeld_sub _ _ _ hd
+    rw [hhoa] at hd'
+    rcases List.mem_append.mp hd' with h | h
+    · obtain ⟨d0, hd0, hr0⟩ := List.mem_map.mp (RSetup.mem_allKinds h)
+      exact ⟨d0, hEyv (hEyh ▸ (List.mem_filter.mp hd0).1), hr0.symm⟩
+    · exact ⟨d, hEyv (List.mem_filter.mp h).1, rfl⟩
+  have hE'R : Rooted Γ (callRes Γh fn [m.nv]) := Rooted.of_roots fun d hd => by
+    have hd' : d ∈ (callRes Γh fn [m.nv]).path ++ (callRes Γh fn [m.nv]).held := by
+      simp only [Entry.vdeps, List.mem_append] at hd ⊢
+      rcases hd with hd | hd
+      · split at hd
+        · cases hd
+        · exact Or.inl hd
+      · exact Or.inr hd
+    obtain ⟨d0, hd0, hr⟩ := hE'r d hd'
+    obtain ⟨Er, hEr⟩ := hEcr d0 hd0
+    rw [hr, hEr]; rfl
+  have hE'm : (callRes Γh fn [m.nv]).mode = .own ∨ (callRes Γh fn [m.nv]).mode = .bor := by
+    simp only [callRes, resMode]; split <;> simp
+  let Γr := setE (callPost Γh fn [m.nv]) (m.nv + 1) (callRes Γh fn [m.nv])
+  have hrootr : AllRooted Γ Γr := hroot1.setE hE'R
+  have hfrr : FrameOK Γ Γr := hfr1.setE (resMode_ne' fn) rfl rfl
+  obtain ⟨Er, Γ2, hRhs, hErm, hErt, hErl, hErp, hErh, hErd, hErdb, hΓ2⟩ :=
+    hand_res (Γr := Γr) (F := F) (by simp [Γr, setE]) rfl hrF (hfrr.noPin_fresh hi hΓr)
+      (hfrr.dtorSafe (DtorSafe.of_fresh hi.wf hΓr _ _)) hE'm
+  obtain ⟨Er2, hΓ2eq, hEr2m, hEr2d, hEr2db, hEr2R⟩ : ∃ Er2, Γ2 = setE (callPost Γh fn [m.nv]) (m.nv + 1) Er2 ∧
+      Er2.mode = (callRes Γh fn [m.nv]).mode ∧ Er2.dtor = false ∧ Er2.dbind = false ∧ Rooted Γ Er2 := by
+    rcases hΓ2 with h | h
+    · refine ⟨{ callRes Γh fn [m.nv] with live := false, dtor := false }, ?_, rfl, rfl, rfl, Rooted.of_dead rfl⟩
+      rw [h, hrootr.kill_fresh hΓr]
+      funext v; simp only [Γr, setE, upd]; split <;> rfl
+    · exact ⟨_, h, rfl, rfl, rfl, hE'R⟩
+  have hroot2 : AllRooted Γ Γ2 := by rw [hΓ2eq]; exact hroot1.setE hEr2R
+  have hfr2 : FrameOK Γ Γ2 := by
+    rw [hΓ2eq]; exact hfr1.setE (by rw [hEr2m]; exact resMode_ne' fn) hEr2d hEr2db
+  have hErv : ∀ d ∈ Er.vdeps, ∃ d0 ∈ Ec.vdeps, d.root = d0.root := by
+    intro d hd
+    simp only [Entry.vdeps, List.mem_append] at hd
+    apply hE'r
+    rcases hd with hd | hd
+    · split at hd
+      · cases hd
+      · exact List.mem_append_left _ (hErp hd)
+    · exact List.mem_append_right _ (hErh hd)
+  have hxroot : x ∉ roots Er.vdeps := by
+    intro h
+    obtain ⟨d, hd, hdr⟩ := List.mem_map.mp h
+    obtain ⟨d0, hd0, hr⟩ := hErv d hd
+    obtain ⟨Er0, hEr0⟩ := hEcr d0 hd0
+    rw [← hr, hdr, hx] at hEr0; cases hEr0
+  have hmodes : ((callX fn).mode = .own ∧ Er.mode = .own) ∨ ((callX fn).mode = .inout .replace ∧ Er.mode = .own) ∨
+      ((callX fn).mode = .bor ∧ Er.mode = .bor) := by
+    rw [hErm]; simp only [callX, callRes, resMode]; split <;> simp
+  have hTasg : StmtT P Γr F (.assign x (.var (m.nv + 1)))
+      (setE (kill .replace false x Γ2) x { Er with mode := (callX fn).mode }) :=
+    StmtT.assign (by simp [Γr, setE, upd_ne _ _ (Ne.symm hrx), h1x]) hxF hmodes hRhs
+      (by rw [hErt]; rfl) hxroot (by rw [hΓ2eq]; simp [setE, upd_ne _ _ (Ne.symm hrx), h1x])
+      (hfrr.noPin_fresh hi hx) (hfr2.dtorSafe (DtorSafe.of_fresh hi.wf hx _ _)) rfl
+  let Ex1 : Entry := { Er with mode := (callX fn).mode }
+  have hΔr : setE (kill .replace false x Γ2) x Ex1 = setE Γ2 x Ex1 := by rw [hroot2.kill_fresh hx]
+  have hEx1 : Ex1 = Er := by
+    have hmEq : (callX fn).mode = Er.mode := by rw [hErm]; rfl
+    simp only [Ex1, hmEq]
+  have hEx1R : Rooted Γ Ex1 := Rooted.of_roots fun d hd => by
+    rw [hEx1] at hd
+    obtain ⟨d0, hd0, hr⟩ := hErv d hd
+    obtain ⟨Er0, hEr0⟩ := hEcr d0 hd0
+    rw [hr, hEr0]; rfl
+  have hfrΔ : FrameOK Γ (setE (kill .replace false x Γ2) x Ex1) := by
+    rw [hΔr]; exact hfr2.setE (resMode_ne' fn) hErd hErdb
+  have hTcall : StmtT P Γh F (.letcall (m.nv + 1) f [m.nv] (.assign x (.var (m.nv + 1))))
+      (exitScope (m.nv + 1) (setE (kill .replace false x Γ2) x Ex1)) :=
+    StmtT.letcall rfl hhr hrF hcT' hTasg (hfrΔ.endOK_fresh hi hΓr)
+  -- the environment goes back into the package
+  have hrootΔ : AllRooted Γ (setE Γ2 x Ex1) := hroot2.setE hEx1R
+  have hΓ3 : exitScope (m.nv + 1) (setE (kill .replace false x Γ2) x Ex1) = upd (setE Γ2 x Ex1) (m.nv + 1) none := by
+    unfold exitScope; rw [hΔr, hrootΔ.kill_fresh hΓr]
+  have hroot3 : AllRooted Γ (exitScope (m.nv + 1) (setE (kill .replace false x Γ2) x Ex1)) := by
+    rw [hΓ3]; exact hrootΔ.upd_none _
+  have hfr3 : FrameOK Γ (exitScope (m.nv + 1) (setE (kill .replace false x Γ2) x Ex1)) := by
+    rw [hΓ3]; exact (hΔr ▸ hfrΔ).upd_none _
+  have h3y : exitScope (m.nv + 1) (setE (kill .replace false x Γ2) x Ex1) m.nv = some Ey1 := by
+    rw [hΓ3, hΓ2eq]; simp [setE, upd_ne _ _ (Ne.symm hxy), h1y]
+  have h3c : exitScope (m.nv + 1) (setE (kill .replace false x Γ2) x Ex1) c = some Ecd1 := by
+    rw [hΓ3, hΓ2eq]; simp [setE, upd_ne _ _ (Ne.symm hrc), upd_ne _ _ (Ne.symm hxc), h1c]
+  have h3x : exitScope (m.nv + 1) (setE (kill .replace false x Γ2) x Ex1) x = some Ex1 := by
+    rw [hΓ3]; simp [setE, upd_ne _ _ (Ne.symm hrx)]
+  have h3r : exitScope (m.nv + 1) (setE (kill .replace false x Γ2) x Ex1) (m.nv + 1) = none := by
+    rw [hΓ3]; simp
+  let Γ3 := exitScope (m.nv + 1) (setE (kill .replace false x Γ2) x Ex1)
+  have hEy1o : Ey1.mode = .own := by simp [Ey1, hEy]
+  have hpush : PushArg Γ3 F m.nv Ey1 te Ey1.held
+      (setE (kill .replace false m.nv Γ3) m.nv { Ey1 with live := false, dtor := false }) :=
+    PushArg.move hto hEy1o hyF (hfr3.noPin_fresh hi hΓy) (hfr3.dtorSafe (DtorSafe.of_fresh hi.wf hΓy _ _))
+  have hpk : RhsT Γ3 F (.pack fs te ms m.nv [])
+      ⟨.fn ms q, .own, true, [], Ey1.held ++ capDeps [], false, false⟩
+      (setE (kill .replace false m.nv Γ3) m.nv { Ey1 with live := false, dtor := false }) :=
+    RhsT.pack h3y (by simp [Ey1, hEy]) (by simp [Ey1, hEy]) hpush ⟨List.nodup_nil, fun _ h => by cases h⟩ hq
+  let Γ4 := setE (kill .replace false m.nv Γ3) m.nv { Ey1 with live := false, dtor := false }
+  have hroot4 : AllRooted Γ Γ4 := (hroot3.kill _ _ _).setE (Rooted.of_dead rfl)
+  have hfr4 : FrameOK Γ Γ4 :=
+    (hfr3.kill _ _ _ fun p E0 hp _ => (hroot3 p E0 hp).killE_fresh hΓy _ _).setE (by simp [Ey1, hEy])
+      (by rfl) (by simp [Ey1, hEy])
+  have h3c' : Γ3 c = some Ecd1 := h3c
+  have h4c : Γ4 c = some Ecd1 := by
+    simp only [Γ4, setE, upd_ne _ _ (Ne.symm hyc), kill, h3c', Option.map_some]
+    rw [killE_dead hEcd1.2.2.2]
+  have hcroot : c ∉ roots ((⟨.fn ms q, .own, true, [], Ey1.held ++ capDeps [], false, false⟩ : Entry).vdeps) := by
+    intro h
+    obtain ⟨d, hd, hdr⟩ := List.mem_map.mp h
+    have hd' : d ∈ HyR := by simpa [Entry.vdeps, Mode.ownSlot, capDeps, Ey1] using hd
+    obtain ⟨d0, hd0, hr⟩ := hHyR_Ec d hd'
+    exact hnc d0 hd0 (hr ▸ hdr)
+  have hTpack : StmtT P Γ3 F (.assign c (.pack fs te ms m.nv []))
+      (setE (kill .replace false c Γ4) c
+        { (⟨.fn ms q, .own, true, [], Ey1.held ++ capDeps [], false, false⟩ : Entry) with mode := Ecd1.mode }) :=
+    StmtT.assign h3c hcF (Or.inl ⟨by rw [hEcd1.1, hmo], rfl⟩) hpk (by show Ty.fn ms q = Ecd1.ty; rw [hEcd1.2.1, htc])
+      hcroot (by simp [Γ4, setE, upd_ne _ _ (Ne.symm hyc), kill, h3c']) (hfr3.noPin hny) (hfr4.dtorSafe hdc)
+      (by rw [hEcd1.2.2.1, hdbc])
+  let Epk : Entry := { (⟨.fn ms q, .own, true, [], Ey1.held ++ capDeps [], false, false⟩ : Entry) with mode := Ecd1.mode }
+  have hEpkR : Rooted Γ Epk := Rooted.of_roots fun d hd => by
+    have hd' : d ∈ HyR := by simpa [Epk, Entry.vdeps, Mode.ownSlot, capDeps, Ey1, hEcd1.1, hmo] using hd
+    obtain ⟨d0, hd0, hr⟩ := hHyR_Ec d hd'
+    obtain ⟨Er0, hEr0⟩ := hEcr d0 hd0
+    rw [hr, hEr0]; rfl
+  have hrootp : AllRooted Γ (setE (kill .replace false c Γ4) c Epk) := (hroot4.kill _ _ _).setE hEpkR
+  have hfrp : FrameOK Γ (setE (kill .replace false c Γ4) c Epk) :=
+    (hfr4.kill _ _ _ fun p E0 hp hm => hrootb_c p E0 (hfr4.1 p E0 hp hm) (Or.inl hm) _ _).setE
+      (by simp [Epk, hEcd1.1, hmo]) rfl (by simp [Epk])
+  refine ⟨_, StmtT.scope ⟨compE Ec te, hhy, by rw [hEy]; simp⟩ hyF (StmtT.seq rfl hTcall hTpack)
+    (hfrp.endOK_fresh hi hΓy), ?_⟩
+  show Weaker (exitScope m.nv (setE (kill .replace false c Γ4) c Epk)) _
+  -- the interface's call, in the source
+  let HcS : List Dep := if (Ty.fn ms q).holdsView then
+      (argE (kill .replace false c Γ) c).held ++ outHeld (kill .replace false c Γ) sig [c] 0 ++
+        heldOfArgs (kill .replace false c Γ) [c]
+    else (argE (kill .replace false c Γ) c).held
+  let Ec1 : Entry := { argE (kill .replace false c Γ) c with held := HcS }
+  have hΓ1 : callPost (kill .replace false c Γ) sig [c] = A2.killNames (mutNames (kill .replace false c Γ) [c])
+      (setE (kill b (Ty.fn ms q).elem.holdsView c (kill .replace false c Γ)) c Ec1) := callPost_one hsp c
+  have hhok : heldOfArgs (kill .replace false c Γ) [c] = allKinds (roots (memDeps Ec.held)) ++ nameDeps Ec.vdeps := by
+    simp [heldOfArgs, argNames, hck, hτ]
+  have hsubH : heldOfArgs Γh [m.nv] ⊆ heldOfArgs (kill .replace false c Γ) [c] := by
+    rw [hhoa, hhok]
+    intro d hd
+    rcases List.mem_append.mp hd with h | h
+    · refine List.mem_append_left _ (RSetup.mem_allKinds_iff.mpr ⟨?_, (RSetup.mem_allKinds_iff.mp h).2⟩)
+      obtain ⟨d0, hd0, hr⟩ := List.mem_map.mp (RSetup.mem_allKinds_iff.mp h).1
+      obtain ⟨h1, h2⟩ := List.mem_filter.mp hd0
+      exact List.mem_map.mpr ⟨d0, List.mem_filter.mpr ⟨by rw [← hEch]; exact hEyv (hEyh ▸ h1), h2⟩, hr⟩
+    · obtain ⟨h1, h2⟩ := List.mem_filter.mp h
+      exact List.mem_append_right _ (List.mem_filter.mpr ⟨hEyv h1, h2⟩)
+  have hown_sub : ∀ (o : Bool) (t : Ty) {H H' : List Dep}, H ⊆ H' → ownHeld o t H ⊆ ownHeld o t H' := by
+    intro o t H H' h; unfold ownHeld; split
+    · exact List.nil_subset _
+    · exact h
+  -- the result binding says no less than the interface's result
+  have hErmode : Er.mode = resMode fn := hErm
+  have hwx : EntryWeaker Ex1 (callRes (kill .replace false c Γ) sig [c]) := by
+    have hEx1m : Ex1.mode = resMode fn := by simp [Ex1, callX]
+    refine RSetup.EntryWeaker.mk' (by simp [callRes, Ex1, hErt, callRes, hrt]) (by simp [callRes, hEx1m, resMode, hro])
+      (fun hf => by
+        unfold Entry.fixed at hf; rw [hEx1m] at hf
+        rcases hf with h | ⟨b', h, _⟩ <;> (unfold resMode at h; split at h <;> cases h))
+      (by simp [callRes, Ex1, hErl]) (fun _ => ?_) ?_ (fun h => by simp [Ex1, hErd] at h) (by simp [callRes, Ex1, hErdb])
+      (fun h => by simp [callRes] at h) (fun h => by simp [Ex1, hErdb] at h)
+    · intro d hd
+      have := hErp hd
+      simp only [callRes, hfl0, hsl, List.flatMap_nil, List.nil_append] at this ⊢
+      exact hsubH this
+    · intro d hd
+      have := hErh hd
+      simp only [callRes, hfr0, hsr, List.flatMap_nil, List.nil_append, hro, hrt] at this ⊢
+      exact hown_sub _ _ hsubH this
+  -- the package says no less than the interface's receiver
+  have hEpkF : ¬ Epk.fixed := by
+    unfold Entry.fixed; simp only [Epk, hEcd1.1, hmo]; simp
+  have hHyS : HyR ⊆ HcS := by
+    intro d hd
+    simp only [HyR, HcS, hck] at hd ⊢
+    by_cases hv : te.holdsView = true
+    · have hqv : q.views = true := by
+        cases hqv : q.views
+        · rw [(hq.1 hqv).1] at hv; cases hv
+        · rfl
+      simp only [hv, ↓reduceIte, outHeld_nil hfo0, List.append_nil] at hd
+      simp only [Ty.holdsView, hqv, ↓reduceIte, outHeld_nil hso, List.append_nil]
+      rcases List.mem_append.mp hd with h | h
+      · exact List.mem_append_left _ (hEch ▸ hEyv (hEyh ▸ h))
+      · exact List.mem_append_right _ (hsubH h)
+    · simp only [hv, Bool.false_eq_true, ↓reduceIte] at hd
+      have h1 : d ∈ Ec.held := hEch ▸ hEyv (hEyh ▸ hd)
+      split
+      · exact List.mem_append_left _ (List.mem_append_left _ h1)
+      · exact h1
+  have hw0 : EntryWeaker Epk Ec1 :=
+    RSetup.EntryWeaker.mk' (by simp [Ec1, Epk, hck, htc]) (by simp [Ec1, Epk, hck, hEcd1.1]) hEpkF
+      (by simp [Ec1, Epk, hck, hlc]) (fun _ => by show [] ⊆ _; exact List.nil_subset _)
+      (fun d hd => by simpa [Ec1, Epk, capDeps] using hHyS (by simpa [Epk, capDeps, Ey1] using hd))
+      (fun h => by simp [Epk] at h) (by simp [Ec1, Epk, hck, hdbc]) (fun h => by simp [Ec1, hck, hdtc] at h)
+      (fun h => by simp [Epk] at h)
+  have hwc : EntryWeaker Epk (killE .replace false c (RSetup.killAll (mutNames (kill .replace false c Γ) [c]) Ec1)) := by
+    have h1 := weaker_killAll_more (Mc := []) (M := mutNames (kill .replace false c Γ) [c]) hw0
+      (fun d hd => by cases hd) (fun hf => absurd hf hEpkF)
+    rw [killAll_id (fun d hd => by cases hd)] at h1
+    exact h1.killR fun hf => absurd hf hEpkF
+  -- the two contexts, binding by binding outside the hand-over's
+  have hB : ∀ d ∈ mutNames (kill .replace false c Γ) [c], d.root ∉ F ∧ d.kind.bound ≠ .replace := by
+    intro d hd
+    refine ⟨(hnf d hd).2.2.1, ?_⟩
+    have hb : d.kind.bound ≠ .none := by simpa [mutNames] using (List.mem_filter.mp hd).2
+    have hdv : d ∈ Ec.vdeps := by
+      simp only [mutNames, argNames, List.flatMap_cons, List.flatMap_nil, List.append_nil, hck, hτ,
+        ↓reduceIte, List.mem_filter] at hd
+      exact (List.mem_filter.mp hd.1).1
+    exact hbr d hdv hb
+  have hfixB : ∀ v E0, Γ v = some E0 → E0.fixed → ∀ d ∈ mutNames (kill .replace false c Γ) [c],
+      hits d.kind.bound false d.root E0 = false := by
+    intro v E0 hv hf d hd
+    rcases hf with hm | ⟨b', hm, _⟩
+    · exact rootb_names hanch hB v E0 hv hm d hd
+    · exact absurd hm (hi.noInout v E0 b' hv)
+  have hfixc : ∀ v E0, Γ v = some E0 → E0.fixed → killE .replace false c E0 = E0 :=
+    fun v E0 hv hf => hrootb_c v E0 hv hf _ _
+  have hXn : ∀ v, v ∉ [x, m.nv, m.nv + 1, c] → v ≠ x ∧ v ≠ m.nv ∧ v ≠ m.nv + 1 ∧ v ≠ c := by
+    intro v hv; simp only [List.mem_cons, List.not_mem_nil, or_false, not_or] at hv; exact hv
+  have h0 : HandRel Γ [x, m.nv, m.nv + 1, c] Γh (kill .replace false c Γ) := by
+    intro v hv
+    obtain ⟨h1, h2, _, h4⟩ := hXn v hv
+    refine ⟨by rw [hho v h1 h2 h4], fun Ed Es hd hs => ?_⟩
+    rw [hho v h1 h2 h4] at hd
+    rw [hd] at hs; cases hs
+    refine ⟨EntryWeaker.refl _, hrootΓ v Ed hd, fun hf => ?_⟩
+    simp only [kill] at hd
+    obtain ⟨E0, h0', rfl⟩ := Option.map_eq_some_iff.mp hd
+    have hf0 : E0.fixed := by unfold Entry.fixed at hf ⊢; rwa [killE_mode, killE_ty] at hf
+    rw [hrootb_c v E0 h0' hf0]; exact h0'
+  have h3 : HandRel Γ [x, m.nv, m.nv + 1, c] (callPost Γh fn [m.nv]) (callPost (kill .replace false c Γ) sig [c]) := by
+    rw [hΓ1', hΓ1]
+    exact (((h0.killS b _ c fun v E0 hv hf => hrootb_c v E0 hv hf _ _).setD (by simp) Ey1).setS (by simp) Ec1).killNames
+      (fun d hd => Or.inl (hmutA d hd).1) hfixB
+  have h4 : HandRel Γ [x, m.nv, m.nv + 1, c] (setE Γ2 x Ex1) (callPost (kill .replace false c Γ) sig [c]) := by
+    rw [hΓ2eq]; exact (h3.setD (by simp) _).setD (by simp) _
+  have h7 : HandRel Γ [x, m.nv, m.nv + 1, c] Γ4 (callPost (kill .replace false c Γ) sig [c]) := by
+    have h6 : HandRel Γ [x, m.nv, m.nv + 1, c] Γ3 (callPost (kill .replace false c Γ) sig [c]) := by
+      show HandRel Γ _ (exitScope (m.nv + 1) (setE (kill .replace false x Γ2) x Ex1)) _
+      rw [hΓ3]; exact h4.updD (by simp) none
+    exact (h6.killD_fresh hΓy .replace false).setD (by simp) _
+  have h10 : HandRel Γ [x, m.nv, m.nv + 1, c] (setE (kill .replace false c Γ4) c Epk)
+      (kill .replace false c (setE (callPost (kill .replace false c Γ) sig [c]) x
+        (callRes (kill .replace false c Γ) sig [c]))) :=
+    ((h7.setS (by simp) _).kill2 .replace false c hfixc).setD (by simp) Epk
+  have hend : exitScope m.nv (setE (kill .replace false c Γ4) c Epk) = upd (setE (kill .replace false c Γ4) c Epk) m.nv none := by
+    unfold exitScope; rw [hrootp.kill_fresh hΓy]
+  -- the source's context is well formed
+  have hdom1 := (CallT.domTy hcT0).1
+  have hnone1 : ∀ v, Γ v = none → callPost (kill .replace false c Γ) sig [c] v = none := fun v hv => by
+    have := hdom1 v; simp only [kill, hv, Option.map_none, Option.isSome_none] at this
+    cases h : callPost (kill .replace false c Γ) sig [c] v <;> simp_all
+  have hwk : CtxWF (kill .replace false c Γ) := hi.wf.kill _ _ _
+  obtain ⟨hw1, _, hEroots⟩ := CallT.wf hP hcT0 hwk
+  have hwsrc := (hw1.add (hnone1 x hx) (fun _ _ => hEroots) (fun h => absurd h (by simp [callRes]))
+    (fun h => absurd h (by simp [callRes])) (fun h => absurd h (by simp [callRes]))).kill .replace false c
+  obtain ⟨hn1, hEn, _⟩ := CallT.names hP hcT0 (hi.names.kill .replace false c)
+  have hnsrc := (NameWF.setE hn1 (fun Ex h => by rw [hnone1 x hx] at h; cases h)
+    (fun Ex h => by rw [hnone1 x hx] at h; cases h) hEn).kill .replace false c
+  rw [hend]
+  refine ⟨fun v => ?_, hwsrc, hnsrc⟩
+  by_cases hvX : v ∈ [x, m.nv, m.nv + 1, c]
+  · simp only [List.mem_cons, List.not_mem_nil, or_false] at hvX
+    rcases hvX with hv | hv | hv | hv <;> rw [hv]
+    · -- the result
+      have hr : upd (setE (kill .replace false c Γ4) c Epk) m.nv none x = some (killE .replace false c Ex1) := by
+        have h3x' : Γ3 x = some Ex1 := h3x
+        simp only [upd_ne _ _ hxy, setE, upd_ne _ _ hxc, kill, Γ4, h3x', Option.map_some]
+        rw [hEx1R.killE_fresh hΓy]
+      have hs : kill .replace false c (setE (callPost (kill .replace false c Γ) sig [c]) x
+          (callRes (kill .replace false c Γ) sig [c])) x = some (killE .replace false c (callRes (kill .replace false c Γ) sig [c])) := by
+        simp [kill, setE]
+      rw [hr, hs]
+      exact ⟨by simp, fun E1 E2 h1 h2 => by cases h1; cases h2; exact killE_weaker hwx⟩
+    · -- the environment's binding, gone
+      have hs : kill .replace false c (setE (callPost (kill .replace false c Γ) sig [c]) x
+          (callRes (kill .replace false c Γ) sig [c])) m.nv = none := by
+        simp [kill, setE, upd_ne _ _ (Ne.symm hxy), hnone1 _ hΓy]
+      rw [hs]; exact ⟨by simp, fun E1 E2 h1 _ => by simp at h1⟩
+    · -- the inner result, gone
+      have hr : upd (setE (kill .replace false c Γ4) c Epk) m.nv none (m.nv + 1) = none := by
+        have h3r' : Γ3 (m.nv + 1) = none := h3r
+        simp [setE, upd_ne _ _ hrc, kill, Γ4, h3r']
+      have hs : kill .replace false c (setE (callPost (kill .replace false c Γ) sig [c]) x
+          (callRes (kill .replace false c Γ) sig [c])) (m.nv + 1) = none := by
+        simp [kill, setE, upd_ne _ _ hrx, hnone1 _ hΓr]
+      rw [hr, hs]; exact ⟨Iff.rfl, fun E1 E2 h1 _ => by cases h1⟩
+    · -- the package, its environment back
+      have hr : upd (setE (kill .replace false c Γ4) c Epk) m.nv none c = some Epk := by
+        simp [upd_ne _ _ hyc.symm, setE]
+      have hs : kill .replace false c (setE (callPost (kill .replace false c Γ) sig [c]) x
+          (callRes (kill .replace false c Γ) sig [c])) c =
+          some (killE .replace false c (RSetup.killAll (mutNames (kill .replace false c Γ) [c]) Ec1)) := by
+        rw [hΓ1]; simp [kill, setE, upd_ne _ _ (Ne.symm hxc), RSetup.killNames_eq]
+      rw [hr, hs]
+      exact ⟨by simp, fun E1 E2 h1 h2 => by cases h1; cases h2; exact hwc⟩
+  · obtain ⟨h1, h2⟩ := h10.updD (by simp : m.nv ∈ [x, m.nv, m.nv + 1, c]) none v hvX
+    exact ⟨h1, fun E1 E2 hE1 hE2 => (h2 E1 E2 hE1 hE2).1⟩
+
 end A2
