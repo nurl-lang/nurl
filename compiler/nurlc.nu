@@ -5553,7 +5553,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
     ? & == ret_first_tt TT_LBRACE ( is_ident_tok ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) ) ) {
         : s __btp ( mem_udrop_ptr_of syms ( nurl_sym_get syms `__tail_first_val__` ) )
         ? & != 0 ( nurl_str_len __btp ) != 0 ( nurl_str_len ( __call_owned_by syms __btp ) ) {
-            : s __bto ( __own_by_identity syms cg __btp )
+            : s __bto ( __own_by_identity syms cg __btp F )
             ? != 0 ( nurl_str_len __bto ) {
                 = hbit __bto
                 = ret_bind_bit T
@@ -5982,7 +5982,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
             // is: __call_owned_by — then what it holds is told by identity,
             // __own_by_identity.)
             : s __cob ( __call_owned_by syms cup )
-            : s __cid ? != 0 ( nurl_str_len __cob ) ( __own_by_identity syms cg cup ) ``
+            : s __cid ? != 0 ( nurl_str_len __cob ) ( __own_by_identity syms cg cup F ) ``
             : ~ s acc ( mem_udrop_flag_get syms cg cup )
             : ~ s al ( nurl_sym_get2 syms cup `__alias` )
             ~ != 0 ( nurl_str_len al ) {
@@ -24852,13 +24852,17 @@ unsafe @ mem_path_to_indices s path → s {
 // re-pointed on some path (`= y a`) holds another value there, and its
 // source's flag says nothing of it (agora #459). `` when a source has no
 // key to tell.
-@ __own_by_identity i syms i cg s ptr → s {
+@ __own_by_identity i syms i cg s ptr b anyreg → s {
     : ~ s acc ( mem_udrop_flag_get syms cg ptr )
     : s pt ( nurl_sym_get2 syms ptr `__udty` )
     : ~ s al ( nurl_sym_get2 syms ptr `__alias` )
     ~ != 0 ( nurl_str_len al ) {
         : s w ( str_first_word al ) = al ( str_skip_word al )
-        ? | & == 0 ( nurl_sym_len2 syms w `__pname` ) == 0 ( nurl_sym_len2 syms w `__optparam` ) ( __param_owned_slot syms w ) {
+        // (…or, `anyreg`, any source with a drop registration: a join's
+        // arm moving the binding out moves the value of whichever source it
+        // holds — a parameter included, whose flag it hands on as it did by
+        // the flags alone, mem_arm_hown.)
+        ? | | & == 0 ( nurl_sym_len2 syms w `__pname` ) == 0 ( nurl_sym_len2 syms w `__optparam` ) ( __param_owned_slot syms w ) & anyreg ( nurl_sym_has_word syms `__user_drops__` w ) {
             : s st ( nurl_sym_get2 syms w `__udty` )
             ? | == 0 ( nurl_str_len st ) ! ( seq st pt ) { ^ ( nurl_str_cat `` `` ) } {}
             : s ll ( nurl_llty st )
@@ -64346,7 +64350,7 @@ unsafe @ __clo_take_capture i syms s name → v {
         ? ! ( str_contains_word pnames id ) {
             : s up ( mem_udrop_ptr_of syms id )
             ? & & != 0 ( nurl_str_len up ) ( nurl_sym_has_word syms `__user_drops__` up ) != 0 ( nurl_str_len ( __call_owned_by syms up ) ) {
-                : ~ s ob ( __own_by_identity syms cg up )
+                : ~ s ob ( __own_by_identity syms cg up F )
                 ? == 0 ( nurl_str_len ob ) { = ob ( nurl_str_cat `1` `` ) } {}
                 ? == 0 ( nurl_str_len acc ) { = acc ( nurl_str_cat ob `` ) } {
                     : s o2 ( nurl_cg_reg cg )
@@ -64567,6 +64571,36 @@ unsafe @ __jpb_note i cg s up → v {
         // `^ ?? o { T v → v F → dflt }` dropped `dflt` under the caller.)
         : i hjd ( __jpb_jdepth syms up jdepth )
         ? & != 0 ( nurl_str_len up ) | > ( nurl_str_to_int ( nurl_sym_get2 syms up `__depth` ) ) hjd ( __param_owned_slot syms up ) {
+            // (A binding whose flag is a call's own answer hands over what
+            // it holds by identity, __own_by_identity: a source of its own
+            // — a local, or a parameter this function owns, that the call
+            // may have lent — leaves with it only where it holds that very
+            // value. By the flags alone, the arm cleared that source's flag
+            // on the runs the call handed back a fresh value too, and the
+            // source leaked: agora #459.)
+            : s __aid ? != 0 ( nurl_str_len ( __call_owned_by syms up ) ) ( __own_by_identity syms cg up T ) ``
+            ? != 0 ( nurl_str_len __aid ) {
+                ( mem_udrop_flag_set syms cg up `0` )
+                ? & != 0 g_jpb_on == hjd 0 { ( __jpb_note cg up ) } {}
+                ( mem_udrop_optparam_taken syms up )
+                : ~ s ial ( nurl_sym_get2 syms up `__alias` )
+                ~ != 0 ( nurl_str_len ial ) {
+                    : s iw ( str_first_word ial ) = ial ( str_skip_word ial )
+                    // (An option this function owns is moved on this path, as
+                    // below.)
+                    ? & & & & == 0 ( nurl_sym_len2 syms iw `__sborrow` ) == 0 ( nurl_sym_len2 syms iw `__alias` ) == 0 ( nurl_sym_len2 syms iw `__optparam` )
+                    != 0 ( nurl_str_starts ( nurl_sym_get2 syms iw `__udty` ) `%__opt.` )
+                    | == 0 ( nurl_sym_len2 syms iw `__pname` ) ( __param_owned_slot syms iw ) {
+                        ( bck_note_payload_taken syms iw g_stmt_line )
+                    } {}
+                    ? ( __part_src syms up iw ) {} {
+                        ? | | & == 0 ( nurl_sym_len2 syms iw `__pname` ) == 0 ( nurl_sym_len2 syms iw `__optparam` ) ( __param_owned_slot syms iw ) ( nurl_sym_has_word syms `__user_drops__` iw )
+                        { ( mem_alias_src_leaves syms cg iw up ) } { ( mem_udrop_flag_set syms cg iw `0` ) }
+                        ( mem_udrop_param_moved syms iw )
+                    }
+                }
+                ^ __aid
+            } {}
             : ~ s r ( mem_udrop_flag_get syms cg up )
             ( mem_udrop_flag_set syms cg up `0` )
             ? & != 0 g_jpb_on == hjd 0 { ( __jpb_note cg up ) } {}

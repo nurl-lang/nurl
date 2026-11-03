@@ -39,3 +39,9 @@
   of such a join (`: String r { ? c x a } ^ r`) and with block arms
   (`? c { x } { a }`). On the runs x owns its value, the join now copies
   it, or takes it from x.
+- **A join's arm hands over a parameter only where it holds that
+  parameter's value** (Agora #459; probe
+  joined_call_bound_binding_hands_over_its_source_only_by_identity).
+  `: String x ( pick a k ) ^ ? c x a` stopped dropping `a` whenever the x
+  arm was taken, also on the runs where `pick` handed back a fresh value,
+  and `a` leaked. It is now told by the values themselves.
