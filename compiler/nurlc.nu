@@ -5993,7 +5993,9 @@ unsafe @ gen_ret i lex i syms i cg → s {
                 // value back.
                 : b w_ownparam ( __param_owned_slot syms w )
                 ? w_ownparam { = ret_owned_param T } {}
-                ? | & == 0 ( nurl_sym_len2 syms w `__pname` ) == 0 ( nurl_sym_len2 syms w `__optparam` ) w_ownparam {
+                // (Not a value a binding lent by a bit may be a lend of: it
+                // is copied where it lent, and w keeps its own, agora #457.)
+                ? & | & == 0 ( nurl_sym_len2 syms w `__pname` ) == 0 ( nurl_sym_len2 syms w `__optparam` ) w_ownparam ! ( __src_keeps syms cup w ) {
                     : s wf ( mem_udrop_flag_get syms cg w )
                     : s o ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print o ) ( nurl_print ` = or i1 ` ) ( nurl_print acc ) ( nurl_print `, ` ) ( nurl_print wf ) ( nurl_print `\n` )
@@ -6020,19 +6022,29 @@ unsafe @ gen_ret i lex i syms i cg → s {
             // path owns answers statically.)
             : s __cpair ? & == 0 ( nurl_sym_len2 syms cup `__alias` ) == ( nurl_str_get csb 0 ) 64
             ( __retown_pair ( nurl_sym_get2 syms ( nurl_str_slice csb 1 - ( nurl_str_len csb ) 1 ) `__sbcn` ) ) ``
-            ? != 0 ( nurl_str_len __cpair ) { ( mem_hown_dyn_if syms __cpair ) } { ( mem_hown_mark_dyn syms ) }
-            = val ( mem_emit_cloneif cg cty val ( mem_hown_static syms cg c ) )
-            = hbit acc
-            // (When that flag is a call's own answer — the binding is bound
-            // straight from the call, or a cursor over one that is — it
-            // says exactly where the value is a lend of what the call may
-            // lend from, a parameter as much as a local: the binding hands
-            // back what the call did, as `^ ( g x )` does, and no rule below
-            // turns it into "lent" throughout. Answered "lent" on every run,
-            // a forwarder of a call that hands over on some runs, `: A x (
-            // ug [A] o d ) ^ x`, had its caller copy what it was handed,
-            // which leaked: agora #459.)
-            ? != 0 ( nurl_str_len __cid ) { = ret_bind_bit T } {}
+            // (Not a binding lent by a bit that may lend this frame's own
+            // value — a call handed a local, `: String y ( maybe x m )` —
+            // whose flag is not one call's own answer (that one answers by
+            // identity, below): no answer can lend what dies here, so it is
+            // copied where it lent and is the caller's then, agora #457.)
+            ? & & ( __lent_by_bit syms cup ) ( __bind_lends_local syms cup ) == 0 ( nurl_str_len __cid ) {
+                = val ( mem_emit_cloneif cg cty val nb )
+                = hbit ( nurl_str_cat `true` `` )
+            } {
+                ? != 0 ( nurl_str_len __cpair ) { ( mem_hown_dyn_if syms __cpair ) } { ( mem_hown_mark_dyn syms ) }
+                = val ( mem_emit_cloneif cg cty val ( mem_hown_static syms cg c ) )
+                = hbit acc
+                // (When that flag is a call's own answer — the binding is bound
+                // straight from the call, or a cursor over one that is — it
+                // says exactly where the value is a lend of what the call may
+                // lend from, a parameter as much as a local: the binding hands
+                // back what the call did, as `^ ( g x )` does, and no rule below
+                // turns it into "lent" throughout. Answered "lent" on every run,
+                // a forwarder of a call that hands over on some runs, `: A x (
+                // ug [A] o d ) ^ x`, had its caller copy what it was handed,
+                // which leaked: agora #459.)
+                ? != 0 ( nurl_str_len __cid ) { = ret_bind_bit T } {}
+            }
         } {}
         // A local that owns nothing at all (never registered: bound to a
         // literal that carries nothing, then assigned a borrow) likewise.
@@ -17383,8 +17395,16 @@ unsafe @ gen_call i lex i syms i cg → s {
         // §7.6). A declared `sink` is an explicit release: left alone.
         // (Not a raw pointer: what it points at is not its to copy — a
         // generic `*A` over Vec elements asked for `clone_Vec__T*`.)
+        // (…and a binding lent exactly where a bit says so, handed to a
+        // parameter its callee may keep at all — its sink flag, which also
+        // hands the binding's value over (mem_udrop_flag_clear_if): copied
+        // where it lent, as every move of it is, so what it lends stays its
+        // source's. `( rc_new [String] x )` kept the lend uncopied, agora
+        // #457.)
         ? & ! __apc ? ! summary_callee F ? == 0 ( nurl_str_len arg_lent ) F & ! ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) != ( nurl_str_get at - ( nurl_str_len at ) 1 ) 42 {
-            = av ( mem_emit_cloneif_k cg at av ( nurl_str_cat `@.__nurl_store.` ( nurl_str_int ( store_flag call_name fname arg_idx ) ) ) arg_lent )
+            : b __kbit & ( is_ident_tok bck_arg_tt ) ( __lent_by_bit syms ( mem_udrop_ptr_of syms bck_arg_val ) )
+            : s __kfl ? __kbit ( nurl_str_cat `@.__nurl_sink.` ( nurl_str_int ( sink_flag call_name fname arg_idx ) ) ) ( nurl_str_cat `@.__nurl_store.` ( nurl_str_int ( store_flag call_name fname arg_idx ) ) )
+            = av ( mem_emit_cloneif_k cg at av __kfl arg_lent )
         } {}
         ? & & ( __is_autodrop_enum at syms ) ( is_ident_tok bck_arg_tt )
         | summary_callee ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) {
@@ -64168,6 +64188,12 @@ unsafe @ __clo_take_capture i syms s name → v {
 // (agora #457).
 @ __src_keeps i syms s ptr s src → b {
     ? ( __part_src syms ptr src ) { ^ T } {}
+    ^ ( __lent_by_bit syms ptr )
+}
+
+// …the second of those: is the binding with drop slot `ptr` lent exactly
+// where a bit says so (`@slot`, `dyn`), and copied there by what moves it?
+@ __lent_by_bit i syms s ptr → b {
     : s sb ( nurl_sym_get2 syms ptr `__sborrow` )
     ? | == 0 ( nurl_str_len sb ) & != ( nurl_str_get sb 0 ) 64 ! ( seq sb `dyn` ) { ^ F } {}
     ^ ( __clone_supported ( nurl_sym_get2 syms ptr `__udty` ) syms )
