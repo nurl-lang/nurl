@@ -422,4 +422,287 @@ theorem callT_hand {P : Prog} {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m �
       simp only [List.getD_cons_zero, hy, Option.some.injEq] at hEa
       subst hEa; rw [hEy]
 
+/-! ### What the code's call and the give-back leave, beside the interface's call
+
+The run-time form's context and the source's are compared binding by
+binding, outside the bindings the hand-over makes or changes (`x`, the
+environment's `y`, the inner result `r`, the package `c`): there each
+run-time entry says no less than the source's (`EntryWeaker`), depends only on
+bindings of the store before the step (`Rooted`), and a fixed one is the
+store's as it was. -/
+
+/-- An entry that no change of a binding outside `Γ` ends: dead, a plain
+    integer, or depending only on bindings of `Γ`. -/
+def Rooted (Γ : Ctx) (E : Entry) : Prop :=
+  E.live = false ∨ (E.ty = .int ∧ E.mode ≠ .rootb) ∨ ∀ d ∈ E.vdeps, (Γ d.root).isSome
+
+theorem Rooted.killE_fresh {Γ : Ctx} {E : Entry} (h : Rooted Γ E) {v : Var} (hv : Γ v = none) (e : Eff)
+    (hb : Bool) : killE e hb v E = E := by
+  rcases h with h | ⟨ht, hm⟩ | h
+  · exact killE_dead h
+  · unfold killE hits; simp [ht, hm]
+  · exact killE_nohit fun d hd hr => by have := h d hd; rw [hr, hv] at this; cases this
+
+theorem Rooted.killE {Γ : Ctx} {E : Entry} (h : Rooted Γ E) (e : Eff) (hb : Bool) (v : Var) :
+    Rooted Γ (killE e hb v E) := by
+  rcases h with h | h | h
+  · exact Or.inl (by rw [killE_dead h]; exact h)
+  · exact Or.inr (Or.inl (by rw [killE_ty, killE_mode]; exact h))
+  · exact Or.inr (Or.inr (by rw [killE_vdeps]; exact h))
+
+theorem Rooted.killAll {Γ : Ctx} {E : Entry} (h : Rooted Γ E) (ds : List Dep) : Rooted Γ (RSetup.killAll ds E) := by
+  unfold RSetup.killAll; split
+  · rcases h with h | h | h
+    · exact Or.inl rfl
+    · exact Or.inl rfl
+    · exact Or.inl rfl
+  · exact h
+
+/-- A store's bindings are rooted in it. -/
+theorem MInv.rooted {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {v : Var} {E : Entry} (hv : Γ v = some E) : Rooted Γ E := by
+  cases hl : E.live
+  · exact Or.inl hl
+  by_cases hn : E.ty ≠ .int ∨ E.mode = .rootb
+  · refine Or.inr (Or.inr fun d hd => ?_)
+    obtain ⟨Er, hEr, _⟩ := hi.wf v E hv hl hn d.root (List.mem_map_of_mem (f := Dep.root) hd)
+    rw [hEr]; rfl
+  · simp only [not_or, ne_eq, Decidable.not_not] at hn
+    exact Or.inr (Or.inl hn)
+
+/-- An entry not fixed is not changed by a weaker one's being taken as it is. -/
+theorem EntryWeaker.killR {E E' : Entry} (hw : EntryWeaker E E') {e : Eff} {hb : Bool} {v : Var}
+    (hfix : E.fixed → killE e hb v E' = E') : EntryWeaker E (killE e hb v E') := by
+  obtain ⟨ht, hm, hr, hlv, hd, hdb, ha, hk⟩ := hw
+  refine ⟨by rw [killE_ty, ht], by rw [killE_mode, hm], fun h => by rw [hfix h, hr h], fun h => ?_,
+    fun h => by rw [killE_dtor, killE_held]; exact hd h, by rw [killE_dbind, hdb],
+    fun h => by rw [killE_dtor] at h; exact ha h, fun h hos hn d hnm => by rw [killE_held]; exact hk h hos hn d hnm⟩
+  rw [killE_live] at h
+  simp only [Bool.and_eq_true] at h
+  obtain ⟨hl, hp, hh⟩ := hlv h.1
+  exact ⟨hl, fun ho => by rw [killE_path]; exact hp ho, by rw [killE_held]; exact hh⟩
+
+/-- The run-time context `Γd` beside the source's `Γs`, outside `X`. -/
+def HandRel (Γ : Ctx) (X : List Var) (Γd Γs : Ctx) : Prop :=
+  ∀ v, v ∉ X → (Γd v = none ↔ Γs v = none) ∧
+    ∀ Ed Es, Γd v = some Ed → Γs v = some Es → EntryWeaker Ed Es ∧ Rooted Γ Ed ∧ (Ed.fixed → Γ v = some Ed)
+
+namespace HandRel
+variable {Γ : Ctx} {X : List Var} {Γd Γs : Ctx}
+
+/-- Only the run-time form ends what depends on a binding the store had none of. -/
+theorem killD_fresh (h : HandRel Γ X Γd Γs) {w : Var} (hw : Γ w = none) (e : Eff) (hb : Bool) :
+    HandRel Γ X (kill e hb w Γd) Γs := by
+  intro v hv
+  obtain ⟨hn, hr⟩ := h v hv
+  refine ⟨by simp [kill, hn], fun Ed Es hd hs => ?_⟩
+  simp only [kill] at hd
+  obtain ⟨Ed0, hd0, rfl⟩ := Option.map_eq_some_iff.mp hd
+  obtain ⟨h1, h2, h3⟩ := hr Ed0 Es hd0 hs
+  rw [h2.killE_fresh hw]
+  exact ⟨h1, h2, h3⟩
+
+/-- Both end what depends on one binding. -/
+theorem kill2 (h : HandRel Γ X Γd Γs) (e : Eff) (hb : Bool) (w : Var)
+    (hfix : ∀ v E, Γ v = some E → E.fixed → killE e hb w E = E) :
+    HandRel Γ X (kill e hb w Γd) (kill e hb w Γs) := by
+  intro v hv
+  obtain ⟨hn, hr⟩ := h v hv
+  refine ⟨by simp [kill, hn], fun Ed Es hd hs => ?_⟩
+  simp only [kill] at hd hs
+  obtain ⟨Ed0, hd0, rfl⟩ := Option.map_eq_some_iff.mp hd
+  obtain ⟨Es0, hs0, rfl⟩ := Option.map_eq_some_iff.mp hs
+  obtain ⟨h1, h2, h3⟩ := hr Ed0 Es0 hd0 hs0
+  refine ⟨killE_weaker h1, h2.killE e hb w, fun hf => ?_⟩
+  have hf0 : Ed0.fixed := by unfold Entry.fixed at hf ⊢; rwa [killE_mode, killE_ty] at hf
+  rw [hfix v Ed0 (h3 hf0) hf0]; exact h3 hf0
+
+/-- Only the source ends what depends on one binding. -/
+theorem killS (h : HandRel Γ X Γd Γs) (e : Eff) (hb : Bool) (w : Var)
+    (hfix : ∀ v E, Γ v = some E → E.fixed → killE e hb w E = E) :
+    HandRel Γ X Γd (kill e hb w Γs) := by
+  intro v hv
+  obtain ⟨hn, hr⟩ := h v hv
+  refine ⟨by simp [kill, hn], fun Ed Es hd hs => ?_⟩
+  simp only [kill] at hs
+  obtain ⟨Es0, hs0, rfl⟩ := Option.map_eq_some_iff.mp hs
+  obtain ⟨h1, h2, h3⟩ := hr Ed Es0 hd hs0
+  refine ⟨h1.killR fun hf => ?_, h2, h3⟩
+  rw [h1.fixed hf]; exact hfix v Ed (h3 hf) hf
+
+/-- A binding of `X` set, on either side. -/
+theorem setD (h : HandRel Γ X Γd Γs) {w : Var} (hw : w ∈ X) (E : Entry) : HandRel Γ X (setE Γd w E) Γs := by
+  intro v hv
+  have hvw : v ≠ w := fun e => hv (e ▸ hw)
+  simp only [setE, upd_ne _ _ hvw]; exact h v hv
+
+theorem setS (h : HandRel Γ X Γd Γs) {w : Var} (hw : w ∈ X) (E : Entry) : HandRel Γ X Γd (setE Γs w E) := by
+  intro v hv
+  have hvw : v ≠ w := fun e => hv (e ▸ hw)
+  simp only [setE, upd_ne _ _ hvw]; exact h v hv
+
+theorem updD (h : HandRel Γ X Γd Γs) {w : Var} (hw : w ∈ X) (o : Option Entry) : HandRel Γ X (upd Γd w o) Γs := by
+  intro v hv
+  have hvw : v ≠ w := fun e => hv (e ▸ hw)
+  simp only [upd_ne _ _ hvw]; exact h v hv
+
+/-- The run-time form's closures end no more than the source's, and neither
+    ends a fixed binding. -/
+theorem killNames (h : HandRel Γ X Γd Γs) {A B : List Dep} (hsub : ∀ d ∈ A, d ∈ B ∨ d.kind.bound = .none)
+    (hfix : ∀ v E, Γ v = some E → E.fixed → ∀ d ∈ B, hits d.kind.bound false d.root E = false) :
+    HandRel Γ X (A2.killNames A Γd) (A2.killNames B Γs) := by
+  intro v hv
+  obtain ⟨hn, hr⟩ := h v hv
+  refine ⟨by simp [RSetup.killNames_eq, hn], fun Ed Es hd hs => ?_⟩
+  rw [RSetup.killNames_eq] at hd hs
+  obtain ⟨Ed0, hd0, rfl⟩ := Option.map_eq_some_iff.mp hd
+  obtain ⟨Es0, hs0, rfl⟩ := Option.map_eq_some_iff.mp hs
+  obtain ⟨h1, h2, h3⟩ := hr Ed0 Es0 hd0 hs0
+  refine ⟨weaker_killAll_more h1 hsub fun hf => hfix v Ed0 (h3 hf) hf, h2.killAll A, fun hf => ?_⟩
+  have hf0 := killAll_fixed.mp hf
+  rw [killAll_id fun d hd => ?_]
+  · exact h3 hf0
+  · rcases hsub d hd with hd | hd
+    · exact hfix v Ed0 (h3 hf0) hf0 d hd
+    · rw [hd]; exact hits_none
+
+end HandRel
+
+/-! ### The bindings the rules read for pins and destructors -/
+
+/-- `Γ'`'s borrowed parameters, destructor bindings and `letd` bindings are
+    `Γ`'s, as they were (ended, perhaps): what `NoPin`, `DtorSafe` and
+    `DbindSafe` read. -/
+def FrameOK (Γ Γ' : Ctx) : Prop :=
+  (∀ p E, Γ' p = some E → E.mode = .rootb → Γ p = some E) ∧
+  (∀ v E, Γ' v = some E → E.dtor = true → ∃ E0, Γ v = some E0 ∧ E0.dtor = true ∧ E0.ty = E.ty ∧
+    E0.mode = E.mode ∧ E0.vdeps = E.vdeps) ∧
+  (∀ v E, Γ' v = some E → E.dbind = true → ∃ E0, Γ v = some E0 ∧ E0.dbind = true ∧ E0.ty = E.ty ∧
+    E0.mode = E.mode ∧ E0.vdeps = E.vdeps)
+
+namespace FrameOK
+variable {Γ Γ' : Ctx}
+
+theorem refl (Γ : Ctx) : FrameOK Γ Γ :=
+  ⟨fun _ _ h _ => h, fun _ E h _ => ⟨E, h, by assumption, rfl, rfl, rfl⟩,
+    fun _ E h _ => ⟨E, h, by assumption, rfl, rfl, rfl⟩⟩
+
+theorem kill (h : FrameOK Γ Γ') (e : Eff) (hb : Bool) (w : Var)
+    (hfix : ∀ p E, Γ' p = some E → E.mode = .rootb → killE e hb w E = E) : FrameOK Γ (A2.kill e hb w Γ') := by
+  refine ⟨fun p E hp hm => ?_, fun v E hv hd => ?_, fun v E hv hd => ?_⟩
+  · simp only [A2.kill] at hp
+    obtain ⟨E0, h0, rfl⟩ := Option.map_eq_some_iff.mp hp
+    rw [killE_mode] at hm
+    rw [hfix p E0 h0 hm]; exact h.1 p E0 h0 hm
+  · simp only [A2.kill] at hv
+    obtain ⟨E0, h0, rfl⟩ := Option.map_eq_some_iff.mp hv
+    rw [killE_dtor] at hd
+    obtain ⟨E1, h1, h2, h3, h4, h5⟩ := h.2.1 v E0 h0 hd
+    exact ⟨E1, h1, h2, by rw [killE_ty]; exact h3, by rw [killE_mode]; exact h4, by rw [killE_vdeps]; exact h5⟩
+  · simp only [A2.kill] at hv
+    obtain ⟨E0, h0, rfl⟩ := Option.map_eq_some_iff.mp hv
+    rw [killE_dbind] at hd
+    obtain ⟨E1, h1, h2, h3, h4, h5⟩ := h.2.2 v E0 h0 hd
+    exact ⟨E1, h1, h2, by rw [killE_ty]; exact h3, by rw [killE_mode]; exact h4, by rw [killE_vdeps]; exact h5⟩
+
+theorem setE (h : FrameOK Γ Γ') {w : Var} {E : Entry} (hm : E.mode ≠ .rootb) (hd : E.dtor = false)
+    (hdb : E.dbind = false) : FrameOK Γ (A2.setE Γ' w E) := by
+  refine ⟨fun p Ep hp hpm => ?_, fun v Ev hv hvd => ?_, fun v Ev hv hvd => ?_⟩
+  all_goals first
+    | (by_cases hpw : p = w
+       · subst hpw; simp only [A2.setE, upd_same, Option.some.injEq] at hp; subst hp; exact absurd hpm hm
+       · simp only [A2.setE, upd_ne _ _ hpw] at hp; exact h.1 p Ep hp hpm)
+    | (by_cases hvw : v = w
+       · subst hvw; simp only [A2.setE, upd_same, Option.some.injEq] at hv; subst hv; simp_all
+       · simp only [A2.setE, upd_ne _ _ hvw] at hv; first | exact h.2.1 v Ev hv hvd | exact h.2.2 v Ev hv hvd)
+
+theorem upd_none (h : FrameOK Γ Γ') (w : Var) : FrameOK Γ (upd Γ' w none) := by
+  refine ⟨fun p Ep hp hpm => ?_, fun v Ev hv hvd => ?_, fun v Ev hv hvd => ?_⟩
+  all_goals first
+    | (by_cases hpw : p = w
+       · subst hpw; simp at hp
+       · simp only [upd_ne _ _ hpw] at hp; exact h.1 p Ep hp hpm)
+    | (by_cases hvw : v = w
+       · subst hvw; simp at hv
+       · simp only [upd_ne _ _ hvw] at hv; first | exact h.2.1 v Ev hv hvd | exact h.2.2 v Ev hv hvd)
+
+theorem killNames (h : FrameOK Γ Γ') (ds : List Dep)
+    (hfix : ∀ p E, Γ' p = some E → E.mode = .rootb → ∀ d ∈ ds, hits d.kind.bound false d.root E = false) :
+    FrameOK Γ (A2.killNames ds Γ') := by
+  refine ⟨fun p E hp hm => ?_, fun v E hv hd => ?_, fun v E hv hd => ?_⟩
+  · rw [RSetup.killNames_eq] at hp
+    obtain ⟨E0, h0, rfl⟩ := Option.map_eq_some_iff.mp hp
+    have hm0 : E0.mode = .rootb := by unfold RSetup.killAll at hm; split at hm <;> exact hm
+    rw [killAll_id (hfix p E0 h0 hm0)]; exact h.1 p E0 h0 hm0
+  all_goals
+    rw [RSetup.killNames_eq] at hv
+    obtain ⟨E0, h0, rfl⟩ := Option.map_eq_some_iff.mp hv
+    unfold RSetup.killAll at hd ⊢
+    split <;> split at hd <;> first
+      | (obtain ⟨E1, h1, h2, h3, h4, h5⟩ := h.2.1 v E0 h0 hd; exact ⟨E1, h1, h2, h3, h4, h5⟩)
+      | (obtain ⟨E1, h1, h2, h3, h4, h5⟩ := h.2.2 v E0 h0 hd; exact ⟨E1, h1, h2, h3, h4, h5⟩)
+
+/-- A binding the store has none of: no borrowed parameter changes it by name. -/
+theorem noPin_fresh {m : Mem} (hi : MInv m Γ) (h : FrameOK Γ Γ') {w : Var} (hw : Γ w = none) : NoPin Γ' w := by
+  intro p E hp hm d hd _ hr
+  have h0 := h.1 p E hp hm
+  obtain ⟨Er, hEr, _⟩ := hi.wf p E h0 (hi.rootbLive p E h0 hm) (Or.inr hm) d.root
+    (List.mem_map_of_mem (f := Dep.root) hd)
+  rw [hr, hw] at hEr; cases hEr
+
+theorem noPin (h : FrameOK Γ Γ') {w : Var} (hp : NoPin Γ w) : NoPin Γ' w :=
+  fun p E hp' hm => hp p E (h.1 p E hp' hm) hm
+
+theorem dtorSafe (h : FrameOK Γ Γ') {e : Eff} {hb : Bool} {w : Var} (hd : DtorSafe Γ e hb w) :
+    DtorSafe Γ' e hb w := by
+  intro v E hv hvd hos
+  obtain ⟨E0, h0, h1, h2, h3, h4⟩ := h.2.1 v E hv hvd
+  have := hd v E0 h0 h1 (by rw [h3]; exact hos)
+  unfold hitsMem at this ⊢; rw [h2, h3, h4] at this; exact this
+
+theorem dbindSafe (h : FrameOK Γ Γ') {w : Var} (hd : DbindSafe Γ w) : DbindSafe Γ' w := by
+  intro v E hv hvd hos hn dd hdd hnm
+  obtain ⟨E0, h0, h1, h2, h3, h4⟩ := h.2.2 v E hv hvd
+  exact hd v E0 h0 h1 (by rw [h3]; exact hos) (by rw [h2, h3]; exact hn) dd (by rw [h4]; exact hdd) hnm
+
+theorem endOK_fresh {m : Mem} (hi : MInv m Γ) (h : FrameOK Γ Γ') {w : Var} (hw : Γ w = none) : EndOK Γ' w :=
+  ⟨h.noPin_fresh hi hw, h.dtorSafe (DtorSafe.of_fresh hi.wf hw _ _), h.dbindSafe (DbindSafe.of_fresh hi.wf hw)⟩
+
+end FrameOK
+
+/-- A borrowed parameter is reached by no change a call's closures make by
+    name: what it borrows from is lent out, which such a binding is not, and
+    what it holds by name changes no more than the name says. -/
+theorem rootb_names {Γ : Ctx} {F : List Var} (hanch : RootbAnch Γ F) {ds : List Dep}
+    (hds : ∀ d ∈ ds, d.root ∉ F ∧ d.kind.bound ≠ .replace) :
+    ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ ds, hits d.kind.bound false d.root E = false := by
+  intro p E hp hm d hd
+  obtain ⟨hF, hbr⟩ := hds d hd
+  refine RSetup.hits_false_of fun d' hd' hr' => ?_
+  by_cases hb0 : d'.kind.bound = .none
+  · exact absurd (hr' ▸ hanch p E hp hm d' hd' hb0) hF
+  · exact RSetup.kills_isName hbr _ (RSetup.isName_of_bound hb0)
+
+/-- **The receiver is not ended by its own closures**: an `inout` argument
+    reached by no other way than by names of their bound (`NamesFree`), each
+    no `replace` (a closure changes a binding by name at most by dropping
+    elements), holds after the call what it held and what it was handed, and
+    none of the call's changes by name ends it. -/
+theorem recv_keep {Ea : Entry} {H : List Dep} {ds : List Dep}
+    (hH : ∀ d' ∈ H, d' ∈ Ea.vdeps ∨ (∃ d0 ∈ memDeps Ea.vdeps, d'.root = d0.root) ∨
+      d' ∈ nameDeps Ea.vdeps)
+    (huniq : ∀ d ∈ ds, ∀ d' ∈ Ea.vdeps, d'.root = d.root → d'.kind.bound = d.kind.bound)
+    (hds : ∀ d ∈ ds, d.kind.bound ≠ .none ∧ d.kind.bound ≠ .replace) (hos : Ea.mode.ownSlot = true) :
+    RSetup.killAll ds { Ea with held := H } = { Ea with held := H } := by
+  refine killAll_id fun d hd => RSetup.hits_false_of fun d' hd' hr' => ?_
+  obtain ⟨hbn, hbr⟩ := hds d hd
+  have hv' : ({ Ea with held := H } : Entry).vdeps = H := by simp [Entry.vdeps, hos]
+  rw [hv'] at hd'
+  have hname : ∀ d'' ∈ Ea.vdeps, d''.root = d.root → d''.kind.isName = true := fun d'' h1 h2 =>
+    RSetup.isName_of_bound (by rw [huniq d hd d'' h1 h2]; exact hbn)
+  rcases hH d' hd' with h1 | ⟨d0, h0, h2⟩ | h1
+  · exact RSetup.kills_isName hbr _ (hname d' h1 hr')
+  · obtain ⟨h0v, h0n⟩ := List.mem_filter.mp h0
+    rw [hname d0 h0v (h2 ▸ hr')] at h0n; cases h0n
+  · exact RSetup.kills_isName hbr _ (hname d' (List.mem_filter.mp h1).1 hr')
+
 end A2
