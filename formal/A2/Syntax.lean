@@ -15,6 +15,49 @@ namespace A2
     from its caller's when it is called (`Semantics.lean`). -/
 abbrev Var := Nat
 
+/-- A3.5b: what a closure's type says its environment may hold, and so where
+    the closure may cross (docs/MEMORY.md §6.5).  The environment's type is
+    not part of a closure's type, so the type carries this instead; `pack`
+    gives it from the captures' type (`Cross.Fits`), and a call through the
+    closure does not read it.  The four are ordered, each holding less:
+
+  * `any`  — anything: views, and bindings captured by name (what A2's
+             closures are);
+  * `send` — no view and no binding by name: an owned environment that
+             depends on nothing of the thread that made it, so the closure
+             may move to another thread (Send; a cell share in it crosses
+             only by the crossing check, `SendCheck`);
+  * `sync` — also no cell share (a library handle is not Sync), so several
+             threads may hold it at once: an `Arc`'s payload.  Its code
+             changes nothing it captured: a closure's code is handed its
+             environment lent (`Implements`: `inp`, and no change through a
+             borrow), so what it may change is a binding captured by name,
+             which `send` already excludes;
+  * `bare` — also no share at all: a lock's payload or a channel's element
+             (A3.2's lock payloads hold no share). -/
+inductive Cross where
+  | any
+  | send
+  | sync
+  | bare
+deriving DecidableEq, Repr
+
+/-- The environment may hold views and bindings by name. -/
+@[simp] def Cross.views : Cross → Bool
+  | .any => true
+  | _ => false
+
+/-- The environment may hold a cell share (a library handle). -/
+@[simp] def Cross.cells : Cross → Bool
+  | .any => true
+  | .send => true
+  | _ => false
+
+/-- The environment may hold a share (an `Arc`, a lock, a cell). -/
+@[simp] def Cross.shares : Cross → Bool
+  | .bare => false
+  | _ => true
+
 /-- Types.  `vec t` is an owned, growable buffer of `t` (a `Vec`, or a
     `String` when `t` is a byte).  `slice t` is a view of such a buffer
     (`slice_from_vec`, `string_data`, a raw `s` that does not own its
@@ -25,9 +68,11 @@ inductive Ty where
   | slice (t : Ty)
   | prod (a b : Ty)   -- a struct value: its fields, nested in pairs (inline, no allocation)
   | sum (a b : Ty)    -- an enum value: one of two payloads, tagged (inline); `Option t` is `sum int t`
-  | fn (ms : List Nat) -- a closure or a trait object: code with an environment it owns; method `j`
+  | fn (ms : List Nat) (q : Cross)
+                        -- a closure or a trait object: code with an environment it owns; method `j`
                         -- has the interface `ms[j]` (a function of the program whose first parameter
-                        -- is the receiver); the environment's type is not part of the type
+                        -- is the receiver); the environment's type is not part of the type, what it
+                        -- may hold is (A3.5b: `q`, where the closure may cross)
   | arc (t : Ty)      -- A3.1: a share of a counted block whose payload, a `t`, is frozen
   | lk (t : Ty)       -- A3.2: a share of a lock block (`Locked`) whose payload is a `t`
   | cell (t : Ty)     -- A3.5: a share of a library handle's state (a `PNCounter`, a `TcpConn`, a
@@ -43,46 +88,50 @@ def Ty.holdsView : Ty → Bool
   | .slice _ => true
   | .prod a b => a.holdsView || b.holdsView
   | .sum a b => a.holdsView || b.holdsView
-  | .fn _ => true     -- what the environment holds is not part of the type
+  | .fn _ q => q.views  -- what the environment holds is not part of the type; A3.5b: what
+                         -- it may hold is
   | .arc t => t.holdsView
   | .lk t => t.holdsView
   | .cell t => t.holdsView
 
-/-- May a value of this type hold a closure (and so hold bindings by name)? -/
+/-- May a value of this type hold a closure that holds bindings by name (or
+    views)?  A3.5b: a Send closure (`fn ms q`, `q` not `any`) holds neither, so
+    a value of a type that answers `false` may still hold one. -/
 def Ty.hasFn : Ty → Bool
   | .int => false
   | .vec t => t.hasFn
   | .slice t => t.hasFn
   | .prod a b => a.hasFn || b.hasFn
   | .sum a b => a.hasFn || b.hasFn
-  | .fn _ => true
+  | .fn _ q => q.views
   | .arc t => t.hasFn
   | .lk t => t.hasFn
   | .cell t => t.hasFn
 
 /-- A3.1: may a value of this type hold a share (an `Arc`)?  A closure's
-    environment may. -/
+    environment may, unless its type says it holds none (A3.5b: `bare`). -/
 def Ty.hasArc : Ty → Bool
   | .int => false
   | .vec t => t.hasArc
   | .slice t => t.hasArc
   | .prod a b => a.hasArc || b.hasArc
   | .sum a b => a.hasArc || b.hasArc
-  | .fn _ => true
+  | .fn _ q => q.shares
   | .arc _ => true
   | .lk _ => true
   | .cell _ => true
 
 /-- A3.5: may a value of this type hold a cell share (a library handle whose
-    copies are one state)?  A closure's environment may.  This is the Sync
-    question: such a handle is not Sync, so no `Arc` payload holds one. -/
+    copies are one state)?  A closure's environment may, unless its type says
+    it holds none (A3.5b: `sync`, `bare`).  This is the Sync question: such a
+    handle is not Sync, so no `Arc` payload holds one. -/
 def Ty.hasCell : Ty → Bool
   | .int => false
   | .vec t => t.hasCell
   | .slice t => t.hasCell
   | .prod a b => a.hasCell || b.hasCell
   | .sum a b => a.hasCell || b.hasCell
-  | .fn _ => true
+  | .fn _ q => q.cells
   | .arc t => t.hasCell
   | .lk t => t.hasCell
   | .cell _ => true
@@ -107,7 +156,7 @@ def Ty.ok : Ty → Bool
   | .slice t => t.ok && !t.holdsView && !t.hasArc
   | .prod a b => a.ok && b.ok
   | .sum a b => a.ok && b.ok
-  | .fn _ => true
+  | .fn _ _ => true
   | .arc t => t.ok && !t.holdsView   -- A3.1: a payload holds no views
   | .lk t => t.ok && !t.holdsView && !t.hasArc  -- A3.2: nor does a lock's (it is Send); nor a share
   | .cell t => t.ok && !t.holdsView && !t.hasArc  -- A3.5: a cell's payload is a lock's
@@ -118,7 +167,7 @@ def Ty.owning : Ty → Bool
   | .vec _ => true
   | .prod _ _ => true
   | .sum _ _ => true
-  | .fn _ => true
+  | .fn _ _ => true
   | .arc _ => true
   | .lk _ => true
   | .cell _ => true
@@ -228,6 +277,23 @@ deriving DecidableEq, Repr
 def PMode.bound : PMode → Eff
   | .inout b => b
   | _ => .none
+
+/-- A3.5b: an environment of type `te`, with the bindings `cs` captured by
+    name, holds no more than a closure's type says (`Cross`): a Send one holds
+    no view and captures nothing by name, a Sync one also no cell share, a
+    bare one no share at all. -/
+def Cross.Fits (q : Cross) (te : Ty) (cs : List (Var × PMode × Ty)) : Prop :=
+  (q.views = false → te.holdsView = false ∧ cs = []) ∧
+  (q.cells = false → te.hasCell = false) ∧
+  (q.shares = false → te.hasArc = false)
+
+/-- What fits reads of the captures is whether there are any, not their names. -/
+theorem Cross.Fits.map {q : Cross} {te : Ty} {cs : List (Var × PMode × Ty)} (h : q.Fits te cs)
+    (f : Var × PMode × Ty → Var × PMode × Ty) : q.Fits te (cs.map f) :=
+  ⟨fun hq => ⟨(h.1 hq).1, by rw [(h.1 hq).2]; rfl⟩, h.2⟩
+
+theorem Cross.fits_any (te : Ty) (cs : List (Var × PMode × Ty)) : Cross.any.Fits te cs :=
+  ⟨fun h => absurd h (by decide), fun h => absurd h (by decide), fun h => absurd h (by decide)⟩
 
 /-- A3.4: an `Atomic`'s operations (`stdlib/std/atomic.nu`), each one
     `nurl_atomic_i64_*` (`__ATOMIC_SEQ_CST`) on the word. -/

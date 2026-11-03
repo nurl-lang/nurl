@@ -45,22 +45,23 @@ theorem inv_emptyGl {s : Stmt} {nv : Nat} (g : Nat → Option Val) (hs : s.src =
   dtorIn := DtorPinOK.of_spine_nil (src_spine hs)
 
 /-- A3.6: no global is a start the claim admits: A3.0–A3.5's. -/
-theorem GlobsOK.empty : GlobsOK Globs.empty where
+theorem GlobsOK.empty {P : Prog} : GlobsOK P Globs.empty where
   sync _ _ h := by cases h
   inv := (inv_empty (s := .skip) (nv := 0) rfl (fun _ h => by cases h)).toMInv
   cover _ h := by cases h
   reach _ _ h := by cases h
+  codes _ _ h := by cases h
 
 /-- A3.6: the blocks the globals' `make`s left are as every thread's view
     needs them ... -/
-theorem GlobsOK.blocksAt {G : Globs} (hG : GlobsOK G) : BlocksAt G.blk G.nid := by
+theorem GlobsOK.blocksAt {P : Prog} {G : Globs} (hG : GlobsOK P G) : BlocksAt G.blk G.nid := by
   intro k bl hk
   obtain ⟨hkey, hnd, hall⟩ := hG.inv.heap.blk k bl hk
   exact ⟨hG.inv.blocks k bl hk, hkey, hnd, fun i h => (hall i h).2.1, fun i h => (hall i h).2.2.2,
     fun hv => hG.inv.heap.views k bl hk hv⟩
 
 /-- ... and every address they left live is a payload's. -/
-theorem GlobsOK.alloc {G : Globs} (hG : GlobsOK G) (i : Nat) : G.alloc i = true ↔ PayIn G.blk i := by
+theorem GlobsOK.alloc {P : Prog} {G : Globs} (hG : GlobsOK P G) (i : Nat) : G.alloc i = true ↔ PayIn G.blk i := by
   constructor
   · intro h
     rcases hG.cover i h with ⟨x, T, hT, _⟩ | hp
@@ -74,15 +75,15 @@ theorem GlobsOK.alloc {G : Globs} (hG : GlobsOK G) (i : Nat) : G.alloc i = true 
     `make`s left (the empty store grown to them, `ThreadOK.move`). -/
 theorem ThreadOK.start {P : Prog} {s : Stmt} {Δ : Ctx} {nv : Nat}
     (ht : StmtT P (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P)
-    (hv : ∀ v ∈ s.vars, v < nv) {G : Globs} (hG : GlobsOK G) :
+    (hv : ∀ v ∈ s.vars, v < nv) {G : Globs} (hG : GlobsOK P G) :
     ThreadOK P { alloc := union (fun _ => false) (payPart G.blk), nid := G.nid, nv := nv,
                  st := fun _ => none, blk := G.blk, gl := G.gl } s := by
   have h0 : ThreadOK P { emptyMem nv with gl := G.gl } s :=
-    ⟨fun _ => none, [], Δ, ht, inv_emptyGl G.gl hs hv, (fun _ _ _ _ _ _ _ _ h => by cases h), hsc,
-      closed_empty s⟩
+    ⟨fun _ => none, [], Δ, ht, inv_emptyGl G.gl hs hv,
+      ⟨fun _ _ _ _ _ _ _ _ h => (by cases h), fun _ _ _ _ _ _ _ h => (by cases h)⟩, hsc, closed_empty s⟩
   exact h0.move (fun _ _ h => by cases h) (fun i hi => .inr (by simpa [union, payPart_iff] using hi))
     (fun i hi => by simp [union, payPart_iff, hi]) (Nat.zero_le _) (fun _ _ h => by cases h) hG.blocksAt
-    (fun _ _ _ _ h => by cases h)
+    hG.codes (fun _ _ _ _ h => by cases h)
 
 /-- A2's preservation, one step. -/
 theorem ThreadOK.step {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {m : Mem} {s : Stmt}

@@ -971,7 +971,7 @@ theorem DSH_repl_wf {n n' : Val} (hn : ∀ σ, WFv σ n → WFv σ n') {T T' : V
   | snd _ ih => intro τ h; cases h with | pair ha hb => exact WFv.pair ha (ih hb)
   | inl _ ih => intro τ h; cases h with | inl ha => exact WFv.inl (ih ha)
   | inr _ ih => intro τ h; cases h with | inr ha => exact WFv.inr (ih ha)
-  | pkg _ ih => intro τ h; cases h with | pkg ha => exact WFv.pkg (ih ha)
+  | pkg _ ih => intro τ h; cases h with | pkg ha hq => exact WFv.pkg (ih ha) hq
 
 /-- A view stored in the new tree is stored in the old one, when the
     replacement stores it at no type the hole is well-formed at. -/
@@ -1234,7 +1234,7 @@ theorem NSE_wf {n n' T T' : Val} (hr : Repl n n' T T') :
   | snd _ ih => intro τ hw h; cases hw with | pair ha hb => exact WFv.pair ha (ih hb h)
   | inl _ ih => intro τ hw h; cases hw with | inl ha => exact WFv.inl (ih ha h)
   | inr _ ih => intro τ hw h; cases hw with | inr ha => exact WFv.inr (ih ha h)
-  | pkg _ ih => intro τ hw h; cases hw with | pkg ha => exact WFv.pkg (ih ha h)
+  | pkg _ ih => intro τ hw h; cases hw with | pkg ha hq => exact WFv.pkg (ih ha h) hq
 
 /-- A view the rewritten tree stores is one the old tree stored, when the
     replacement stores none at the hole's type. -/
@@ -1357,39 +1357,6 @@ theorem NSE_sub {n n' T T' : Val} (hr : Repl n n' T T') :
         · exact Or.inr (Or.inl (Sub.pkg h))
         · exact Or.inr (Or.inr ⟨P0, Sub.pkg h0, h1⟩)
 
-/-- A package lies only in a value of a type that holds views. -/
-theorem NSE_pkg_hv {τ : Ty} {v : Val} (hw : WFv τ v) {fs : List Nat} {te : Ty} {ms : List Nat}
-    {e : Val} {cs : List (Var × PMode × Ty)} (hs : Sub (.pkg fs te ms e cs) v) :
-    τ.holdsView = true := by
-  induction hw with
-  | int => cases hs
-  | view => cases hs
-  | arc => cases hs
-  | lk => cases hs
-  | cell => cases hs
-  | node hes ih =>
-    rcases hs.cases' with h | ⟨x, hc, hsx⟩
-    · cases h
-    · cases hc with
-      | elem hx => simpa [Ty.holdsView] using ih x hx hsx
-  | pair _ _ iha ihb =>
-    rcases hs.cases' with h | ⟨x, hc, hsx⟩
-    · cases h
-    · cases hc with
-      | fst => simp [Ty.holdsView, iha hsx]
-      | snd => simp [Ty.holdsView, ihb hsx]
-  | inl _ ih =>
-    rcases hs.cases' with h | ⟨x, hc, hsx⟩
-    · cases h
-    · cases hc with
-      | inl => simp [Ty.holdsView, ih hsx]
-  | inr _ ih =>
-    rcases hs.cases' with h | ⟨x, hc, hsx⟩
-    · cases h
-    · cases hc with
-      | inr => simp [Ty.holdsView, ih hsx]
-  | pkg _ _ => rfl
-
 /-- The owner's new slot, when the change lands in its tree by `.drop`: the
     tree is well-formed at its type (`Repl` keeps the hole's type), its views
     are valid (the rewritten node holds none; every other view points out of
@@ -1489,8 +1456,8 @@ theorem NewSlot.edit {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
     have hpk := hi.pkgs o ⟨true, some T⟩ T hT rfl
     intro fs te ms e cs hs
     rcases NSE_sub hr hs with h | h | ⟨P0, h0, h1⟩
-    · have := NSE_pkg_hv hw' h
-      simp [Ty.holdsView, hhv] at this
+    · -- A3.5b: a package the new node holds is a Send one, which captures nothing
+      exact hw'.pkgsOK_noView (by simpa [Ty.holdsView] using hhv) fs te ms e cs h
     · exact hpk fs te ms e cs h
     · cases h1 with
       | pkg hr1 =>

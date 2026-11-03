@@ -170,7 +170,7 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
     have hnrb : E.mode ≠ .rootb := by
       obtain ⟨fn', _, _, hE', _⟩ := hc.toA hn hanch; rw [hE']; exact resMode_ne' fn'
     exact CtxRel.bind hanch hx hxF (hc.ctxRel hn hanch) hnrb (fun ha => ih hks ha hnx) hpin.1
-  | @callc Γ Γ1 Δ F x c j zs k Ec E ms σ sig hks hx hxF _ _ _ _ _ _ hcT _ _ hpin _ ih =>
+  | @callc Γ Γ1 Δ F x c j zs k Ec E ms q σ sig hks hx hxF _ _ _ _ _ _ hcT _ _ hpin _ ih =>
     intro _ hanch hn
     obtain ⟨hn1, hE, _⟩ := hcT.names hP hn
     have hx1 : Γ1 x = none := by

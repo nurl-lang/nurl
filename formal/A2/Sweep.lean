@@ -242,7 +242,7 @@ theorem ArcIn.sub {τ : Ty} {T : Val} {u : Ty} {k : Nat} {p : Option Val} (h : A
   | snd _ ih => exact ih.imp (fun ⟨p, h⟩ => ⟨p, Sub.snd h⟩) Sub.snd
   | inl _ ih => exact ih.imp (fun ⟨p, h⟩ => ⟨p, Sub.inl h⟩) Sub.inl
   | inr _ ih => exact ih.imp (fun ⟨p, h⟩ => ⟨p, Sub.inr h⟩) Sub.inr
-  | pkg _ ih => exact ih.imp (fun ⟨p, h⟩ => ⟨p, Sub.pkg h⟩) Sub.pkg
+  | pkg _ _ ih => exact ih.imp (fun ⟨p, h⟩ => ⟨p, Sub.pkg h⟩) Sub.pkg
 
 /-- A share a tree holds refers to its block. -/
 theorem Kept.shareIn {R : Val → Prop} {m : Mem} {v : Val} (h : Kept R m v) {k : Nat} (hs : ShareIn k v) :
@@ -340,7 +340,7 @@ theorem ValOK.sweep {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m τ v P H) 
   | pair _ _ ihx ihy => exact .pair (ihx (hv.sub (Sub.fst (Sub.refl _)))) (ihy (hv.sub (Sub.snd (Sub.refl _))))
   | inl _ ih => exact .inl (ih (hv.sub (Sub.inl (Sub.refl _))))
   | inr _ ih => exact .inr (ih (hv.sub (Sub.inr (Sub.refl _))))
-  | pkg _ ih => exact .pkg (ih (hv.sub (Sub.pkg (Sub.refl _))))
+  | pkg _ hq ih => exact .pkg (ih (hv.sub (Sub.pkg (Sub.refl _)))) hq
   | arc hk hw hvf hl =>
     obtain ⟨dep, hd, hla⟩ := hl
     exact .arc (ArcBlk.sweepR hk (hv.arc (Sub.refl _))) hw hvf ⟨dep, hd, hla.sweep hR⟩
@@ -509,9 +509,11 @@ theorem Inv.sweepR {R : Val → Prop} {m : Mem} (hR : ∀ v, m.vals v → R v) {
 theorem Inv.sweep {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s) : Inv m.sweep Γ F s :=
   hi.sweepR fun _ h => h
 
-/-- The packages in memory are the slots', which the sweep keeps. -/
-theorem MemCodes.sweepR {P : Prog} {R : Val → Prop} {m : Mem} (h : MemCodes P m) : MemCodes P (m.sweepR R) := h
+/-- The packages in memory are the slots' and the blocks', which the sweep
+    keeps (A3.5b: it only removes blocks). -/
+theorem MemCodes.sweepR {P : Prog} {R : Val → Prop} {m : Mem} (h : MemCodes P m) : MemCodes P (m.sweepR R) :=
+  ⟨h.1, fun k bl fs te ms e cs hk hs => h.2 k bl fs te ms e cs (Mem.sweepR_blk.mp hk).1 hs⟩
 
-theorem MemCodes.sweep {P : Prog} {m : Mem} (h : MemCodes P m) : MemCodes P m.sweep := h
+theorem MemCodes.sweep {P : Prog} {m : Mem} (h : MemCodes P m) : MemCodes P m.sweep := h.sweepR
 
 end A2

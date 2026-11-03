@@ -200,8 +200,9 @@ inductive WFv : Ty → Val → Prop
   | pair {a b : Ty} {v w : Val} : WFv a v → WFv b w → WFv (.prod a b) (.pair v w)
   | inl {a b : Ty} {v : Val} : WFv a v → WFv (.sum a b) (.inl v)
   | inr {a b : Ty} {v : Val} : WFv b v → WFv (.sum a b) (.inr v)
-  | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {v : Val} {cs : List (Var × PMode × Ty)} :
-      WFv te v → WFv (.fn ms) (.pkg fs te ms v cs)
+  /-- A3.5b: the environment holds no more than the closure's type says. -/
+  | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {q : Cross} {v : Val} {cs : List (Var × PMode × Ty)} :
+      WFv te v → q.Fits te cs → WFv (.fn ms q) (.pkg fs te ms v cs)
   /-- A3.1: a share; its block, in memory, holds the payload it carries, one
       that holds no view. -/
   | arc {t : Ty} {k : Nat} {p : Val} : WFv t p → t.holdsView = false → WFv (.arc t) (.arc k p)

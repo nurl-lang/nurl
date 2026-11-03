@@ -333,7 +333,7 @@ theorem SharesIn.repl {B : Nat → Option Blk} {n n' : Val}
     cases h with
     | pkg ha =>
       intro u k p hA
-      cases hA with | pkg h' => exact ih ha (fun u k p h => hs u k p (.pkg h)) u k p h'
+      cases hA with | pkg h' hsh => exact ih ha (fun u k p h => hs u k p (.pkg h hsh)) u k p h'
 
 /-- ... over a memory's blocks, for a node rewritten to one of its own type. -/
 theorem SharesOK.repl {m : Mem} {t : Ty} {c d d' : Nat} {es es' : List Val}

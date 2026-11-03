@@ -62,7 +62,10 @@ theorem _root_.A2.WFv.noCell {τ : Ty} {v : Val} (hw : WFv τ v) (hna : τ.hasAr
   | arc => simp [Ty.hasArc] at hna
   | lk => simp [Ty.hasArc] at hna
   | cell => simp [Ty.hasArc] at hna
-  | pkg => simp [Ty.hasArc] at hna
+  | pkg _ hq ih =>
+    -- A3.5b: a bare closure's environment holds no share
+    intro h
+    cases h with | pkg h => exact ih (hq.2.2 hna) h
   | node _ ih =>
     intro h
     cases h with

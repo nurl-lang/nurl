@@ -418,9 +418,9 @@ theorem progress {P : Prog}
       {E : Entry} {Γ1 : Ctx} {m : Mem}, Γ x = none → CallT P Γ F f args E Γ1 → MInv m Γ →
       ∃ r, Step P m (.letcall x f args k) r)
     (hclo : ∀ {Γ Γ1 : Ctx} {F : List Var} {x c : Var} {j : Nat} {zs : List Var} {k : Stmt}
-      {Ec E : Entry} {ms : List Nat} {σ : Nat} {sig : Fn} {m : Mem},
-      Γ x = none → x ∉ F → Γ c = some Ec → Ec.ty = .fn ms → ms[j]? = some σ → P[σ]? = some sig →
-      sig.params.head? = some (.inp, .fn ms) → CallT P Γ F σ (c :: zs) E Γ1 →
+      {Ec E : Entry} {ms : List Nat} {q : Cross} {σ : Nat} {sig : Fn} {m : Mem},
+      Γ x = none → x ∉ F → Γ c = some Ec → Ec.ty = .fn ms q → ms[j]? = some σ → P[σ]? = some sig →
+      sig.params.head? = some (.inp, .fn ms q) → CallT P Γ F σ (c :: zs) E Γ1 →
       (∀ z ∈ zs, ∀ d ∈ Ec.vdeps, d.kind.bound ≠ .none → d.root ≠ z) →
       MemCodes P m → Inv m Γ F (.callc x c j zs k) → ∃ r, Step P m (.callc x c j zs k) r)
     {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (ht : StmtT P Γ F s Δ) :

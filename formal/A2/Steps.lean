@@ -669,11 +669,15 @@ theorem WFv.sub_view {τ : Ty} {T : Val} (hw : WFv τ T) {d o l : Nat} (hs : Sub
     · cases h
     · cases hc with
       | inr => obtain ⟨s, h⟩ := ih hs'; exact ⟨s, ViewIn.inr h⟩
-  | pkg _ ih =>
+  | @pkg fs te ms q _ cs _ hq ih =>
     rcases hs.cases' with h | ⟨e, hc, hs'⟩
     · cases h
     · cases hc with
-      | pkg => obtain ⟨s, h⟩ := ih hs'; exact ⟨s, ViewIn.pkg h⟩
+      | pkg =>
+        obtain ⟨s, h⟩ := ih hs'
+        cases q with
+        | any => exact ⟨s, ViewIn.pkg h⟩
+        | _ => have := h.holdsView; rw [(hq.send rfl).1] at this; cases this
 
 /-- A valid view points into a buffer some owner holds, or (A3.1) into a
     live block's payload, one its holders read (A3.2). -/
@@ -869,9 +873,9 @@ theorem out_part {m : Mem} {Γ : Ctx} {E : Entry} {τ t : Ty} {T x : Val}
       hnd.sublist hids, fun i hi => hal i (hids.subset hi), fun o U hU i hi => hdis o U hU i (hids.subset hi),
       hsf.sub hsub, fun i hi => hnp i (hids.subset hi)⟩, (fun h => by cases h), fun _ => own_named hH', hnx',
       hpx, fun _ => hshx⟩
-  | pkg hwb =>
+  | pkg hwb hq =>
     refine ⟨rfl, Or.inl rfl, rfl, htok, fun _ r hr => hwfH' r (by simpa [Entry.vdeps, Mode.ownSlot,
-      compE] using hr), fun _ => ⟨rfl, WFv.pkg hwb, ViewsOK.ownHeld true (fun s v h => hvsT s v (hvin s v h)),
+      compE] using hr), fun _ => ⟨rfl, WFv.pkg hwb hq, ViewsOK.ownHeld true (fun s v h => hvsT s v (hvin s v h)),
       hnd.sublist hids, fun i hi => hal i (hids.subset hi), fun o U hU i hi => hdis o U hU i (hids.subset hi),
       hsf.sub hsub, fun i hi => hnp i (hids.subset hi)⟩, (fun h => by cases h), fun _ => own_named hH', hnx',
       hpx, fun _ => hshx⟩
@@ -1073,7 +1077,7 @@ theorem out_ownNoView {m : Mem} {Γ : Ctx} {t : Ty} {v : Val} (htok : t.ok = tru
   valBor := fun h => nomatch h
   names := fun _ => DepsNamed.nil _
   held := NamesIn.nil _ (hw.names_nil hvf)
-  pkgs := fun _ _ _ _ _ hp => (hw.noView_pkg hvf hp).elim
+  pkgs := hw.pkgsOK_noView hvf
   shares := fun _ => SharesOK.of_noArc hna
 
 /-- A3.4: **a lock block's payload changed in place** to `p'`, a tree of its
@@ -1369,14 +1373,14 @@ theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry
       obtain ⟨post, pu⟩ := push_take hi hanch hy hly rfl hpa htk 
       exact ⟨post, out_inj pu ha (Or.inr rfl) (Or.inr rfl) (WFv.inr pu.wf) (fun s x h => ViewIn.inr h)
         (fun s x h => ViewIn.inr_inv h) (hi.tyok hy) (fun u k p h => by cases h with | inr h => exact h)⟩
-  | @pack fs te ms y cs Ey Γ1 D hy hly hte hpa hcaps =>
+  | @pack fs te ms q y cs Ey Γ1 D hy hly hte hpa hcaps hq =>
     cases he with
     | pack htk =>
       obtain ⟨post, pu⟩ := push_take hi hanch hy hly hte hpa htk 
-      refine ⟨post, out_wrap pu rfl rfl (WFv.pkg pu.wf)
+      refine ⟨post, out_wrap pu rfl rfl (WFv.pkg pu.wf hq)
         (fun s x h => by cases h with | pkg h => exact h) (fun e h => by cases h; rfl) (by simp)
         (fun _ _ _ h => by cases h) (fun _ _ _ _ h => by cases h) (List.subset_append_left _ _)
-        ?_ (pu.nok.append hcaps.named) ?_ ?_ (fun u k p h => by cases h with | pkg h => exact h)⟩
+        ?_ (pu.nok.append hcaps.named) ?_ ?_ (fun u k p h => by cases h with | pkg h _ => exact h)⟩
       · intro r hr
         simp only [roots, List.map_append, List.mem_append] at hr
         rcases hr with hr | hr
@@ -2215,7 +2219,7 @@ theorem reroot_valOK_gen (hh : HeapOK m) (hp : m.st p = some ⟨false, some w⟩
     rw [happ] at hx hy; exact .pair hx hy
   | inl _ ih => intro D hDs hDm hlt hnp; have hx := ih hDs hDm hlt hnp; rw [happ] at hx; exact .inl hx
   | inr _ ih => intro D hDs hDm hlt hnp; have hx := ih hDs hDm hlt hnp; rw [happ] at hx; exact .inr hx
-  | @pkg fs te ms x cs P0 H0 _ ih =>
+  | @pkg fs te ms q x cs P0 H0 _ hq ih =>
     intro D hDs hDm hlt hnp
     -- the environment is rerooted through what the parameter held but a
     -- change of one of this package's own captures; the parameter was not
@@ -2236,7 +2240,7 @@ theorem reroot_valOK_gen (hh : HeapOK m) (hp : m.st p = some ⟨false, some w⟩
       (reroot_envDeps (p := p) (H := H0) (fun d hd => (mem_envDeps.mp hd).2) hH0).trans
         (envDeps_mono (reroot_sub (envDeps_sub _ _)))
     exact .pkg (hx.mono (List.append_subset.mpr ⟨fun _ h => List.mem_append_left _
-      (reroot_sub (envDeps_sub _ _) h), fun _ h => List.mem_append_right _ (hr h)⟩) hr)
+      (reroot_sub (envDeps_sub _ _) h), fun _ h => List.mem_append_right _ (hr h)⟩) hr) hq
   | view h =>
     intro D hDs hDm hlt _
     obtain ⟨dep, hd, ha⟩ := h
@@ -2621,7 +2625,7 @@ theorem acquire_pres {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {k : N
       valBor := fun h => nomatch h
       names := fun _ => DepsNamed.nil _
       held := NamesIn.nil _ (hwv.names_nil hvf)
-      pkgs := fun fs te ms e cs hp => (hwv.noView_pkg hvf hp).elim
+      pkgs := hwv.pkgsOK_noView hvf
       shares := fun _ => SharesOK.of_noArc hna' }
 
 end A2

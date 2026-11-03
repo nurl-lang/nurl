@@ -239,11 +239,19 @@ theorem WFv.node_holdsView {τ : Ty} {T : Val} (hw : WFv τ T) {u : Ty} {c d : N
     · cases h
     · cases hc with
       | inr => simp [Ty.holdsView, ih hsx]
-  | pkg _ _ => rfl
+  | @pkg fs te ms q _ cs _ hq ih =>
+    rcases hs.cases' with h | ⟨x, hc, hsx⟩
+    · cases h
+    · cases hc with
+      | pkg =>
+        cases q with
+        | any => rfl
+        | _ => have := ih hsx; rw [(hq.send rfl).1] at this; cases this
 
-/-- A value of a type that holds no closure holds no package. -/
+/-- A3.5b: a value of a type that holds no closure holding bindings by name
+    holds only Send packages, each capturing nothing by name. -/
 theorem WFv.no_pkg {τ : Ty} {v : Val} (hw : WFv τ v) (hf : τ.hasFn = false) {fs : List Nat} {te : Ty}
-    {ms : List Nat} {e : Val} {cs : List (Var × PMode × Ty)} (hs : Sub (.pkg fs te ms e cs) v) : False := by
+    {ms : List Nat} {e : Val} {cs : List (Var × PMode × Ty)} (hs : Sub (.pkg fs te ms e cs) v) : cs = [] := by
   induction hw with
   | int => cases hs
   | view => cases hs
@@ -274,7 +282,12 @@ theorem WFv.no_pkg {τ : Ty} {v : Val} (hw : WFv τ v) (hf : τ.hasFn = false) {
     · cases h
     · cases hc with
       | inr => exact ih hf.2 hsx
-  | pkg _ _ => cases hf
+  | pkg _ hq ih =>
+    obtain ⟨_, hf', hcs⟩ := hq.send hf
+    rcases hs.cases' with h | ⟨x, hc, hsx⟩
+    · cases h; exact hcs
+    · cases hc with
+      | pkg => exact ih hf' hsx
 
 /-- A view the rewritten tree stores is one the old tree stored, or one that
     the replacement stores and the hole did not (`Q`). -/
@@ -474,7 +487,7 @@ theorem NewSlot.editV {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1
     have hpk := hi.pkgs o ⟨true, some T⟩ T hT rfl
     intro fs te ms e cs hs
     rcases NSE_sub hr hs with h | h | ⟨P0, h0, h1⟩
-    · exact (hw'.no_pkg (by simpa [Ty.hasFn] using hfn) h).elim
+    · rw [hw'.no_pkg (by simpa [Ty.hasFn] using hfn) h]; simp
     · exact hpk fs te ms e cs h
     · cases h1 with
       | pkg hr1 =>

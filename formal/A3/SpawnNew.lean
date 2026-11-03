@@ -320,7 +320,7 @@ theorem newThread_ok {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hPc : Pr
     (hpart : ∀ i, part i = true ↔ ∃ v ∈ vs, i ∈ v.ids)
     {N : Nat} (hlt : ∀ v ∈ vs, ∀ i ∈ v.ids, i < N)
     (hsh : ∀ (j : Nat) (v : Val) (pt : PMode × Ty), vs[j]? = some v → fn.params[j]? = some pt →
-      SharesIn B pt.2 v) (hB : BlocksAt B N) (hBv : ∀ i, PayIn B i → ∀ v ∈ vs, i ∉ v.ids) :
+      SharesIn B pt.2 v) (hB : BlocksAt B N) (hBc : BlkCodes P B) (hBv : ∀ i, PayIn B i → ∀ v ∈ vs, i ∉ v.ids) :
     ThreadOK P { alloc := union part (payPart B), nid := N, nv := fn.nvars, st := spawnSt fn vs, blk := B,
                  gl := G }
       (wrapParams fn.params 0 0 (.scope fn.params.length fn.body)) := by
@@ -331,7 +331,7 @@ theorem newThread_ok {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hPc : Pr
   have hsrc : fn.body.src = true := by obtain ⟨h, -⟩ := hok; exact h
   obtain ⟨Δ, ht⟩ := newThread_typed hok hpar
   exact ⟨sigCtx fn, [], Δ, ht, newThread_inv hok hpar hres hlen hwf hnd hdisj hself hpk hpart hlt hsh hB hBv,
-    memCodes_iff.mpr fun x o V hx => hcd V (List.mem_of_getElem? (spawnSt_val hx rfl).1),
+    memCodes_iff.mpr ⟨fun x o V hx => hcd V (List.mem_of_getElem? (spawnSt_val hx rfl).1), hBc⟩,
     wrapParams_codes (s := .scope fn.params.length fn.body) (hPc fn (List.mem_of_getElem? hf)) _ _ _,
     newThread_closed hpar hsrc⟩
 

@@ -43,7 +43,7 @@ def NewThreadLemma (P : Prog) (spawn : Nat → Bool) : Prop :=
     ∀ {part : Nat → Bool}, (∀ i, part i = true ↔ ∃ v ∈ vs, i ∈ v.ids) →
     ∀ {N : Nat}, (∀ v ∈ vs, ∀ i ∈ v.ids, i < N) → ∀ {B : Nat → Option Blk} {G : Nat → Option Val},
     (∀ (j : Nat) (v : Val) (pt : PMode × Ty), vs[j]? = some v → fn.params[j]? = some pt →
-      SharesIn B pt.2 v) → BlocksAt B N → (∀ i, PayIn B i → ∀ v ∈ vs, i ∉ v.ids) →
+      SharesIn B pt.2 v) → BlocksAt B N → BlkCodes P B → (∀ i, PayIn B i → ∀ v ∈ vs, i ∉ v.ids) →
     ThreadOK P { alloc := union part (payPart B), nid := N, nv := fn.nvars, st := spawnSt fn vs, blk := B,
                  gl := G }
       (wrapParams fn.params 0 0 (.scope fn.params.length fn.body))
@@ -167,8 +167,8 @@ theorem CInv.spawn_of {P : Prog} {spawn : Nat → Bool} (hSO : SpawnerLemma P sp
     (fun v hv => by obtain ⟨a0, h0⟩ := hown v hv; exact hinv.heap.nodup a0 v h0) hvdisj
     (fun v hv => by obtain ⟨a0, h0⟩ := hown v hv; exact hinv.heap.self a0 v h0)
     (fun v hv => by obtain ⟨a0, h0⟩ := hown v hv; exact hinv.pkgs a0 _ v h0 rfl)
-    (fun v hv => by obtain ⟨a0, h0⟩ := hown v hv; exact memCodes_iff.mp hcds a0 true v h0)
-    hpart (fun v hv k hk => (hids v hv k hk).2) hsh hto.blocksAt
+    (fun v hv => by obtain ⟨a0, h0⟩ := hown v hv; exact (memCodes_iff.mp hcds).1 a0 true v h0)
+    hpart (fun v hv k hk => (hids v hv k hk).2) hsh hto.blocksAt hto.blkCodes
     (fun k hk v hv hkv => hvnp v hv k hkv hk)
   have hlen' : (C.ths.set i ⟨upd st' x (some ⟨false, some (.int 0)⟩), t.nv, K (.scope x k)⟩).length =
       ps.length := by rw [List.length_set, hc.len]

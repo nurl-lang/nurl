@@ -81,6 +81,17 @@ theorem ViewsOK.none {m : Mem} {t : Ty} (ht : t.holdsView = false) (T : Val) (H 
   have := hin.holdsView
   rw [ht] at this; cases this
 
+/-- A3.5b: the views a package's environment holds are the package's (a Send
+    one's holds none). -/
+theorem ViewsOK.pkg {m : Mem} {fs : List Nat} {te : Ty} {ms : List Nat} {q : Cross} {x : Val}
+    {cs : List (Var × PMode × Ty)} {H : List Dep} (h : ViewsOK m (.fn ms q) (.pkg fs te ms x cs) H)
+    (hq : q.Fits te cs) : ViewsOK m te x H := by
+  cases q with
+  | any => exact fun s v hin => h s v (ViewIn.pkg hin)
+  | send => exact ViewsOK.none (hq.send rfl).1 _ _
+  | sync => exact ViewsOK.none (hq.send rfl).1 _ _
+  | bare => exact ViewsOK.none (hq.send rfl).1 _ _
+
 theorem rootNode_st {m m' : Mem} (h : m'.st = m.st) {r : Var} {n : Val} (hn : RootNode m r n)
     (hb : BlkLe m.blk m'.blk := by exact BlkLe.of_le fun _ _ h => h) : RootNode m' r n := by
   have hown : ∀ o T, OwnedAt m o T → OwnedAt m' o T := fun o T hT => by
@@ -162,7 +173,7 @@ theorem ValOK.grow {m m' : Mem} (hst : m'.st = m.st) (hb : BlkLe m.blk m'.blk) {
   | pair _ _ ihx ihy => exact .pair ihx ihy
   | inl _ ih => exact .inl ih
   | inr _ ih => exact .inr ih
-  | pkg _ ih => exact .pkg ih
+  | pkg _ hq ih => exact .pkg ih hq
 
 theorem SlotOK.grow {m m' : Mem} (hst : m'.st = m.st) (hb : BlkLe m.blk m'.blk) {E : Entry} {sl : Slot}
     (hs : SlotOK m E sl) : SlotOK m' E sl := by
@@ -527,10 +538,11 @@ theorem PkgsOK.elem {t : Ty} {c d : Nat} {es : List Val} {e : Val} (h : PkgsOK (
     (he : e ∈ es) : PkgsOK e :=
   h.sub (Sub.child he (Sub.refl _))
 
-/-- A value of a type that holds no view holds no package. -/
+/-- A3.5b: a value of a type that holds no view holds only Send packages,
+    each capturing nothing by name (it used to hold none). -/
 theorem WFv.noView_pkg {τ : Ty} {v : Val} (hw : WFv τ v) (hhv : τ.holdsView = false) {fs : List Nat}
     {te : Ty} {ms : List Nat} {e : Val} {cs : List (Var × PMode × Ty)} (hs : Sub (.pkg fs te ms e cs) v) :
-    False := by
+    cs = [] := by
   induction hw with
   | int => cases hs
   | view => cases hs
@@ -544,18 +556,28 @@ theorem WFv.noView_pkg {τ : Ty} {v : Val} (hw : WFv τ v) (hhv : τ.holdsView =
     | snd h => exact ihb hhv.2 h
   | inl _ ih => simp only [Ty.holdsView, Bool.or_eq_false_iff] at hhv; cases hs with | inl h => exact ih hhv.1 h
   | inr _ ih => simp only [Ty.holdsView, Bool.or_eq_false_iff] at hhv; cases hs with | inr h => exact ih hhv.2 h
-  | pkg _ _ => simp [Ty.holdsView] at hhv
+  | pkg _ hq ih =>
+    obtain ⟨hv, _, hcs⟩ := hq.send hhv
+    cases hs with
+    | refl => exact hcs
+    | pkg h => exact ih hv h
   | arc _ _ => cases hs
   | lk => cases hs
   | cell => cases hs
 
-/-- A3.1: a payload holds no package. -/
+/-- ... so its packages are well formed (`PkgsOK`): none captures anything. -/
+theorem WFv.pkgsOK_noView {τ : Ty} {v : Val} (hw : WFv τ v) (hhv : τ.holdsView = false) : PkgsOK v := by
+  intro fs te ms e cs hs
+  rw [hw.noView_pkg hhv hs]
+  simp
+
+/-- A3.1: a payload's packages are well formed (A3.5b: it holds Sync ones). -/
 theorem MInv.pay_pkgs {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {k : Nat} {bl : Blk} (hk : m.blk k = some bl)
     {n : Val} (hs : Sub n bl.rd) : PkgsOK n := by
   obtain ⟨_, hhv, hw, _⟩ := hi.blocks k bl hk
   intro fs te ms e cs hp
   rcases Blk.sub_rd hs with ⟨_, q, hq, hs'⟩ | rfl
-  · exact ((hw q hq).1.noView_pkg hhv (hp.trans hs')).elim
+  · exact (hw q hq).1.pkgsOK_noView hhv _ _ _ _ _ (hp.trans hs')
   · cases hp
 
 theorem MInv.nodeAt_pkgs {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {c : Nat} {n : Val} (h : NodeAt m c n) :
@@ -845,13 +867,13 @@ theorem lend_valOK' {m : Mem} {H : List Dep} {τ : Ty} {e : Val} (hw : WFv τ e)
       (fun k q hs => upa (ha k q (Top.inr hs))) (fun s x hin => hvs s x (ViewIn.inr hin))
       ((hnm.sub fun x hx => by simp only [Val.names]; exact hx)) hsh.inr
       (fun s _ => ViewsOK.mono (List.subset_append_right _ _) (fun s x hin => hvs s x (ViewIn.inr hin))))
-  | @pkg fs te ms v cs _ ihv =>
+  | @pkg fs te ms q v cs _ hq ihv =>
     intro hpk P hn ha hvs hnm hsh _
     -- what the environment holds by name is no change of one of this
     -- package's own captures (one captured again inside is only read)
     have hdis := (hpk fs te ms v cs (Sub.refl _)).2.2
     have hvr : ViewsOK m te v (envDeps cs H) :=
-      ViewsOK.mono (readers_sub_envDeps cs H) (ViewsOK.readers (fun s x hin => hvs s x (ViewIn.pkg hin)))
+      ViewsOK.mono (readers_sub_envDeps cs H) (ViewsOK.readers (hvs.pkg hq))
     have hown : ∀ c' ∈ v.names, ownWriter cs (⟨c'.1, .name c'.2.1.bound c'.2.2⟩ : Dep) = false := by
       intro c' hc'
       simp only [ownWriter, Bool.and_eq_false_iff, bne_eq_false_iff_eq, Kind.bound]
@@ -864,7 +886,7 @@ theorem lend_valOK' {m : Mem} {H : List Dep} {τ : Ty} {e : Val} (hw : WFv τ e)
     exact .pkg (ihv (hpk.sub (Sub.pkg (Sub.refl _))) (fun t c d es hs => up (hn t c d es (Top.pkg hs)))
       (fun k q hs => upa (ha k q (Top.pkg hs))) hvr
       (fun c' hc' => mem_envDeps.mpr ⟨hnm c' (by simp only [Val.names]; exact List.mem_append_right _ hc'), hown c' hc'⟩)
-      hsh.pkg (fun s _ => ViewsOK.mono (List.subset_append_right _ _) hvr))
+      (hsh.pkg' hq) (fun s _ => ViewsOK.mono (List.subset_append_right _ _) hvr)) hq
 
 theorem lend_valOK {m : Mem} {H : List Dep} {τ : Ty} {e : Val} (hw : WFv τ e) (hpk : PkgsOK e) {P : List Dep}
     (hn : ∀ n, Sub n e → ∃ dep ∈ P, Landed m dep n)
@@ -890,7 +912,7 @@ theorem ValOK.lend {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m �
   | pair _ _ ihx ihy => simp [lendOf, ihx, ihy]
   | inl _ ih => simp [lendOf, ih]
   | inr _ ih => simp [lendOf, ih]
-  | pkg _ ih => simp [lendOf, ih]
+  | pkg _ _ ih => simp [lendOf, ih]
 
 theorem elemE_mode (y : Var) (E : Entry) (t : Ty) : (elemE y E t).mode = .bor := by
   cases t <;> rfl
@@ -966,10 +988,10 @@ theorem out_at {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t : 
         cases hm : E.mode <;> simp_all [Mode.isRoot])
       exact derive_lands (hroot ·) hbor' (Or.inr (Or.inr ⟨rfl, _, Child.elem hmem, hs⟩))
         (by rw [hty]; rfl)
-    | fn ms =>
+    | fn ms q =>
       refine lend_valOK hwe hpke (fun n' hs => ?_) (hvs.elem hmem) (hns.sub (names_elem hmem))
         (hshv.elem hmem) (fun s h => by cases h)
-      have hbor' : E.mode.isRoot = false → ∃ dep ∈ E.path, Landed m dep (.node (.fn ms) c d es) := fun h => hbor (by
+      have hbor' : E.mode.isRoot = false → ∃ dep ∈ E.path, Landed m dep (.node (.fn ms q) c d es) := fun h => hbor (by
         cases hm : E.mode <;> simp_all [Mode.isRoot])
       exact derive_lands (hroot ·) hbor' (Or.inr (Or.inr ⟨rfl, _, Child.elem hmem, hs⟩))
         (by rw [hty]; rfl)
@@ -1112,12 +1134,12 @@ theorem out_sat {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t :
         exact ⟨dep, hd, hla⟩
       exact derive_lands (hroot ·) hbor' (Or.inr (Or.inr ⟨rfl, _, Child.elem hmem, hs⟩))
         (by rw [hty]; rfl)
-    | fn ms =>
+    | fn ms q =>
       refine lend_valOK hwe hpke (fun n' hs => ?_)
         (ViewsOK.none (by simpa [Ty.holdsView] using hok.1.2) _ _)
         (NamesIn.nil _ (hwe.names_nil (by simpa [Ty.holdsView] using hok.1.2)))
         (SharesOK.of_noArc (by simpa [Ty.hasArc] using hok.2)) (fun s h => by cases h)
-      have hbor' : E.mode.isRoot = false → ∃ dep ∈ E.path, Landed m dep (.node (.fn ms) c d es) := fun h => by
+      have hbor' : E.mode.isRoot = false → ∃ dep ∈ E.path, Landed m dep (.node (.fn ms q) c d es) := fun h => by
         have hb : E.mode = .bor := by cases hm : E.mode <;> simp_all [Mode.isRoot]
         obtain ⟨dep, hd, _, hla⟩ := hbor hb
         exact ⟨dep, hd, hla⟩
@@ -1478,7 +1500,7 @@ theorem out_arcGet {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry} (
   simp only [Ty.ok, Bool.and_eq_true] at hok
   have htok := hok.1
   have hnint : E.ty ≠ .int := by rw [hty]; simp
-  have hpk : PkgsOK p := fun _ _ _ _ _ hs => (hwp.noView_pkg hvf hs).elim
+  have hpk : PkgsOK p := hwp.pkgsOK_noView hvf
   have key : ValOK m t (lendOf p) (derive a E .share) E.held :=
     lend_valOK hwp hpk (fun _ hs => hi.share_lands ha hl hty hv hk hs)
       (ViewsOK.none hvf _ _) (NamesIn.nil _ (hwp.names_nil hvf)) hsh
@@ -1927,12 +1949,12 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
           rcases hown1 x U hU with ⟨_, rfl⟩ | ⟨hxy, h⟩
           · exact hsep i hi' hiU
           · exact hi.heap.disj y x _ U (Ne.symm hxy) hT h i (hsube.subset hi') hiU
-    | fn ms =>
+    | fn ms q =>
       have hsumwf := hwe
       cases hwe with
-      | pkg _ =>
+      | pkg _ _ =>
         have hok := hi.tyok hy; rw [hty] at hok
-        show RhsOut _ _ ⟨.fn ms, .own, true, [], E.held, false, false⟩ _ true
+        show RhsOut _ _ ⟨.fn ms q, .own, true, [], E.held, false, false⟩ _ true
         refine ⟨rfl, Or.inl rfl, rfl, hok, fun _ r hr => ?_, fun _ => ⟨rfl, hsumwf, ?_, ?_,
           ?_, ?_, hsfT.sub (Sub.child hemem (Sub.refl _)),
           fun i hi' => hi.heap.notPay hT (hsube.subset hi')⟩, (fun h => by cases h),

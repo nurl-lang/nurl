@@ -858,6 +858,6 @@ theorem moved_trees {P : Prog} {m : Mem} {s : Stmt} (hok : ThreadOK P m s) {args
   obtain ⟨j, hj, hjv⟩ := List.getElem_of_mem hv
   obtain ⟨a, -, hav⟩ := hmv.get j v (by rw [List.getElem?_eq_getElem hj, hjv])
   exact ⟨hi.heap.nodup a v hav, hi.heap.self a v hav, hi.heap.alloc a v hav, hi.pkgs a _ v hav rfl,
-    memCodes_iff.mp hcd a true v hav⟩
+    (memCodes_iff.mp hcd).1 a true v hav⟩
 
 end A3

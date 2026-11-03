@@ -86,7 +86,7 @@ theorem frees_exists {τ : Ty} {T : Val} (hw : WFv τ T) :
     intro a hn ha
     obtain ⟨a1, h1⟩ := ih a (by simpa using hn) (fun i hi => ha i (by simpa using hi))
     exact ⟨a1, Frees.inr h1⟩
-  | pkg _ ih =>
+  | pkg _ _ ih =>
     intro a hn ha
     obtain ⟨a1, h1⟩ := ih a (by simpa using hn) (fun i hi => ha i (by simpa using hi))
     exact ⟨a1, Frees.pkg h1⟩

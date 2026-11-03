@@ -28,8 +28,10 @@ inductive ViewIn : Ty → Val → Ty → Val → Prop
   | snd {a b : Ty} {x y : Val} {s : Ty} {v : Val} : ViewIn b y s v → ViewIn (.prod a b) (.pair x y) s v
   | inl {a b : Ty} {x : Val} {s : Ty} {v : Val} : ViewIn a x s v → ViewIn (.sum a b) (.inl x) s v
   | inr {a b : Ty} {x : Val} {s : Ty} {v : Val} : ViewIn b x s v → ViewIn (.sum a b) (.inr x) s v
+  /-- (A3.5b: only a closure whose type may hold views has one in its
+      environment; another's holds none, `WFv.pkg`.) -/
   | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {x : Val} {cs : List (Var × PMode × Ty)} {s : Ty}
-      {v : Val} : ViewIn te x s v → ViewIn (.fn ms) (.pkg fs te ms x cs) s v
+      {v : Val} : ViewIn te x s v → ViewIn (.fn ms .any) (.pkg fs te ms x cs) s v
 
 /-- A3.1: tree `T` of type `τ` holds a share of block `k`, whose payload is
     a `u`: the one it carries, `some p`, or (A3.2) none, for a lock share.
@@ -49,8 +51,11 @@ inductive ArcIn : Ty → Val → Ty → Nat → Option Val → Prop
       ArcIn b y u k p → ArcIn (.prod a b) (.pair x y) u k p
   | inl {a b : Ty} {x : Val} {u : Ty} {k : Nat} {p : Option Val} : ArcIn a x u k p → ArcIn (.sum a b) (.inl x) u k p
   | inr {a b : Ty} {x : Val} {u : Ty} {k : Nat} {p : Option Val} : ArcIn b x u k p → ArcIn (.sum a b) (.inr x) u k p
+  /-- (A3.5b: only a closure whose type may hold shares has one in its
+      environment; a bare one's holds none, `WFv.pkg`.) -/
   | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {x : Val} {cs : List (Var × PMode × Ty)} {u : Ty}
-      {k : Nat} {p : Option Val} : ArcIn te x u k p → ArcIn (.fn ms) (.pkg fs te ms x cs) u k p
+      {k : Nat} {p : Option Val} {q : Cross} :
+      ArcIn te x u k p → q.shares = true → ArcIn (.fn ms q) (.pkg fs te ms x cs) u k p
 
 /-- A3.3: a block an `arc` share names: an `arc` block holding `p`, or a
     view of a lock block (`rw_read`'s guard), whose payload `p` is a share of
@@ -187,9 +192,10 @@ theorem SharesOK.inr {m : Mem} {a b : Ty} {x : Val} (h : SharesOK m (.sum a b) (
 theorem SharesOK.elem {m : Mem} {t t' : Ty} {c d : Nat} {es : List Val} {e : Val}
     (h : SharesOK m (.vec t) (.node t' c d es)) (he : e ∈ es) : SharesOK m t e :=
   fun u k p ha => h u k p (.child he ha)
-theorem SharesOK.pkg {m : Mem} {fs : List Nat} {te : Ty} {ms : List Nat} {x : Val}
-    {cs : List (Var × PMode × Ty)} (h : SharesOK m (.fn ms) (.pkg fs te ms x cs)) : SharesOK m te x :=
-  fun u k p ha => h u k p (.pkg ha)
+theorem SharesOK.pkg {m : Mem} {fs : List Nat} {te : Ty} {ms : List Nat} {q : Cross} {x : Val}
+    {cs : List (Var × PMode × Ty)} (h : SharesOK m (.fn ms q) (.pkg fs te ms x cs)) (hq : q.shares = true) :
+    SharesOK m te x :=
+  fun u k p ha => h u k p (.pkg ha hq)
 theorem SharesOK.here {m : Mem} {t : Ty} {k : Nat} {p : Val} (h : SharesOK m (.arc t) (.arc k p)) :
     ArcBlk (m.blk k) t p := h t k (some p) .here
 /-- A3.2: a lock share names a lock block of its type. -/
@@ -210,7 +216,7 @@ theorem ArcIn.hasArc {τ : Ty} {T : Val} {u : Ty} {k : Nat} {p : Option Val} (h 
   | snd _ ih => simp [Ty.hasArc, ih]
   | inl _ ih => simp [Ty.hasArc, ih]
   | inr _ ih => simp [Ty.hasArc, ih]
-  | pkg _ _ => rfl
+  | pkg _ hq _ => exact hq
 
 /-- A node whose elements are among another's, where the blocks are as
     they were (a `Vec` that shrank, or that was copied). -/
@@ -240,8 +246,8 @@ theorem SharesOK.mk_inl {m : Mem} {a b : Ty} {x : Val} (hx : SharesOK m a x) :
     SharesOK m (.sum a b) (.inl x) := fun u k p ha => by cases ha with | inl h => exact hx u k p h
 theorem SharesOK.mk_inr {m : Mem} {a b : Ty} {x : Val} (hx : SharesOK m b x) :
     SharesOK m (.sum a b) (.inr x) := fun u k p ha => by cases ha with | inr h => exact hx u k p h
-theorem SharesOK.mk_pkg {m : Mem} {fs : List Nat} {te : Ty} {ms : List Nat} {x : Val}
-    {cs : List (Var × PMode × Ty)} (hx : SharesOK m te x) : SharesOK m (.fn ms) (.pkg fs te ms x cs) :=
+theorem SharesOK.mk_pkg {m : Mem} {fs : List Nat} {te : Ty} {ms : List Nat} {q : Cross} {x : Val}
+    {cs : List (Var × PMode × Ty)} (hx : SharesOK m te x) : SharesOK m (.fn ms q) (.pkg fs te ms x cs) :=
   fun u k p ha => by cases ha with | pkg h => exact hx u k p h
 theorem SharesOK.nil_node {m : Mem} {t t1 : Ty} {c d : Nat} : SharesOK m (.vec t) (.node t1 c d []) :=
   fun u k p ha => by cases ha with | child he _ => cases he
@@ -249,6 +255,15 @@ theorem SharesOK.nil_node {m : Mem} {t t1 : Ty} {c d : Nat} : SharesOK m (.vec t
 /-- A tree of a type that holds no share holds none to check. -/
 theorem SharesOK.of_noArc {m : Mem} {τ : Ty} {T : Val} (h : τ.hasArc = false) : SharesOK m τ T :=
   fun _ _ _ ha => by rw [ha.hasArc] at h; cases h
+
+/-- A3.5b: the shares a package's environment holds are the package's (a bare
+    one's holds none). -/
+theorem SharesOK.pkg' {m : Mem} {fs : List Nat} {te : Ty} {ms : List Nat} {q : Cross} {x : Val}
+    {cs : List (Var × PMode × Ty)} (h : SharesOK m (.fn ms q) (.pkg fs te ms x cs)) (hq : q.Fits te cs) :
+    SharesOK m te x := by
+  cases hs : q.shares
+  · exact SharesOK.of_noArc (hq.2.2 hs)
+  · exact h.pkg hs
 
 /-- A3.1 (with #295): a node whose elements are the old node's or hold
     shares that name blocks, where the blocks are as they were. -/
@@ -388,9 +403,11 @@ inductive ValOK (m : Mem) : Ty → Val → List Dep → List Dep → Prop
   -- holds but its own writer captures, which are no part of it (they are its
   -- arguments of their own when it is called); a closure it holds that may
   -- change some other binding by name is part of it
-  | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {x : Val} {cs : List (Var × PMode × Ty)}
+  -- (A3.5b: and holds no more than the closure's type says, `Cross.Fits`)
+  | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {q : Cross} {x : Val} {cs : List (Var × PMode × Ty)}
       {P H : List Dep} :
-      ValOK m te x (P ++ envDeps cs H) (envDeps cs H) → ValOK m (.fn ms) (.pkg fs te ms x cs) P H
+      ValOK m te x (P ++ envDeps cs H) (envDeps cs H) → q.Fits te cs →
+      ValOK m (.fn ms q) (.pkg fs te ms x cs) P H
   /-- A3.1: a share lent: its block holds the payload it carries, of its
       type (one that holds no view), and the share lands through a
       dependency, as a `Vec` handle does. -/
@@ -444,12 +461,13 @@ theorem valOK_sum {a b : Ty} :
     · exact .inl hx
     · exact .inr hx
 
-theorem valOK_fn {ms : List Nat} :
-    ValOK m (.fn ms) v P H ↔
-      ∃ fs te x cs, v = .pkg fs te ms x cs ∧ ValOK m te x (P ++ envDeps cs H) (envDeps cs H) := by
+theorem valOK_fn {ms : List Nat} {q : Cross} :
+    ValOK m (.fn ms q) v P H ↔
+      ∃ fs te x cs, v = .pkg fs te ms x cs ∧ ValOK m te x (P ++ envDeps cs H) (envDeps cs H) ∧
+        q.Fits te cs := by
   constructor
-  · intro h; cases h with | pkg hx => exact ⟨_, _, _, _, rfl, hx⟩
-  · rintro ⟨f, te, x, cs, rfl, hx⟩; exact .pkg hx
+  · intro h; cases h with | pkg hx hq => exact ⟨_, _, _, _, rfl, hx, hq⟩
+  · rintro ⟨f, te, x, cs, rfl, hx, hq⟩; exact .pkg hx hq
 
 /-- An integer depends on nothing. -/
 theorem ValOK.int_any {m' : Mem} {P' H' : List Dep} (h : ValOK m .int v P H) : ValOK m' .int v P' H' := by
@@ -853,9 +871,9 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       NoPin Γ y → DtorSafe Γ .replace false y → EndOK Δ z → EndOK (exitScope z Δ) x →
       StmtT P Γ F (.unpair y x z s) (exitScope x (exitScope z Δ))
   | callc {Γ Γ1 Δ : Ctx} {F : List Var} {x c : Var} {j : Nat} {zs : List Var} {k : Stmt}
-      {Ec E : Entry} {ms : List Nat} {σ : Nat} {sig : Fn} :
-      k.src = true → Γ x = none → x ∉ F → Γ c = some Ec → Ec.ty = .fn ms → ms[j]? = some σ →
-      P[σ]? = some sig → sig.params.head? = some (.inp, .fn ms) → (∀ o ∈ sig.outHolds, o.2.1 ≠ 0) →
+      {Ec E : Entry} {ms : List Nat} {q : Cross} {σ : Nat} {sig : Fn} :
+      k.src = true → Γ x = none → x ∉ F → Γ c = some Ec → Ec.ty = .fn ms q → ms[j]? = some σ →
+      P[σ]? = some sig → sig.params.head? = some (.inp, .fn ms q) → (∀ o ∈ sig.outHolds, o.2.1 ≠ 0) →
       CallT P Γ F σ (c :: zs) E Γ1 →
       -- no argument is a binding the package may change by name (it is
       -- handed to the code as an `inout` argument of its own)
@@ -997,9 +1015,14 @@ def Implements (P : Prog) (f : Nat) (te : Ty) (cs : List (Var × PMode × Ty)) (
 def CodeOK (P : Prog) (fs : List Nat) (te : Ty) (ms : List Nat) (cs : List (Var × PMode × Ty)) : Prop :=
   fs.length = ms.length ∧ ∀ (j f σ : Nat), fs[j]? = some f → ms[j]? = some σ → Implements P f te cs σ
 
-/-- Every package in memory names code that implements its interfaces. -/
+/-- Every package in memory names code that implements its interfaces: the
+    ones the slots hold, and (A3.5b) the ones the blocks hold, which may be
+    closures (a Sync one in an `Arc`'s payload, a bare one in a lock's or a
+    channel's), in what a block owns and in what its holders read. -/
 def MemCodes (P : Prog) (m : Mem) : Prop :=
-  ∀ x o V fs te ms e cs, m.st x = some ⟨o, some V⟩ → Sub (.pkg fs te ms e cs) V → CodeOK P fs te ms cs
+  (∀ x o V fs te ms e cs, m.st x = some ⟨o, some V⟩ → Sub (.pkg fs te ms e cs) V → CodeOK P fs te ms cs) ∧
+  ∀ k bl fs te ms e cs, m.blk k = some bl →
+    (Sub (.pkg fs te ms e cs) bl.tree ∨ Sub (.pkg fs te ms e cs) bl.rd) → CodeOK P fs te ms cs
 
 def Rhs.codeOK (P : Prog) : Rhs → Prop
   | .pack fs te ms _ cs => CodeOK P fs te ms cs

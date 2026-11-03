@@ -53,7 +53,7 @@ theorem reach_ok {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {F : 
   | refl => cases hr; exact ⟨Γ, ht, hi, hc, hcd, hsc⟩
   | step hst _ ih =>
     obtain ⟨Γ', ht', hi', hk⟩ := preservation hP ht hcd hi hst
-    obtain ⟨hcd', hsc'⟩ := (codes_step hPc hst hcd (hi.toMInv.blkCodes P) hsc).1 _ _ rfl
+    obtain ⟨hcd', hsc'⟩ := (codes_step hPc hst hcd hcd.blk hsc).1 _ _ rfl
     exact ih ht' hcd'.sweep hsc' hi'.sweep (hc.step hk) hr
   | panic _ => cases hr
 
@@ -68,7 +68,7 @@ theorem reach_ok0 {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {F :
   | refl => cases hr; exact ⟨Γ, ht, hi, hc, hcd, hsc⟩
   | step hst _ ih =>
     obtain ⟨Γ', ht', hi', hk⟩ := preservation hP ht hcd hi hst
-    obtain ⟨hcd', hsc'⟩ := (codes_step hPc hst hcd (hi.toMInv.blkCodes P) hsc).1 _ _ rfl
+    obtain ⟨hcd', hsc'⟩ := (codes_step hPc hst hcd hcd.blk hsc).1 _ _ rfl
     exact ih ht' hcd' hsc' hi' (hc.step hk) hr
   | panic _ => cases hr
 
@@ -96,7 +96,7 @@ theorem reach_panic {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {F
   | refl => cases hr
   | step hst _ ih =>
     obtain ⟨Γ', ht', hi', hk⟩ := preservation hP ht hcd hi hst
-    obtain ⟨hcd', hsc'⟩ := (codes_step hPc hst hcd (hi.toMInv.blkCodes P) hsc).1 _ _ rfl
+    obtain ⟨hcd', hsc'⟩ := (codes_step hPc hst hcd hcd.blk hsc).1 _ _ rfl
     exact ih ht' hcd'.sweep hsc' hi'.sweep (hc.step hk) hr
   | @panic m0 m1 s0 hst =>
     cases hr
@@ -161,8 +161,8 @@ theorem inv_empty {s : Stmt} {nv : Nat} (hs : s.src = true) (hv : ∀ v ∈ s.va
 
 theorem closed_empty (s : Stmt) : Closed (fun _ => none) s := fun _ h => by cases h
 
-theorem codes_empty (P : Prog) (nv : Nat) : MemCodes P (emptyMem nv) := fun _ _ _ _ _ _ _ _ h => by
-  cases h
+theorem codes_empty (P : Prog) (nv : Nat) : MemCodes P (emptyMem nv) :=
+  ⟨fun _ _ _ _ _ _ _ _ h => (by cases h), fun _ _ _ _ _ _ _ h => (by cases h)⟩
 
 /-- The memory model of stage A2 is sound: a well-typed program, run from
     the empty store, never gets stuck — it finishes, panics, or runs on. -/

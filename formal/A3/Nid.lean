@@ -149,11 +149,16 @@ theorem ThreadOK.move {P : Prog} {m : Mem} {s : Stmt} (h : ThreadOK P m s) {A : 
     {B : Nat → Option Blk} (hown : ∀ x T, OwnedAt m x T → ∀ i ∈ T.ids, A i = true)
     (hA : ∀ i, A i = true → (∃ x T, OwnedAt m x T ∧ i ∈ T.ids) ∨ PayIn B i)
     (hpA : ∀ i, PayIn B i → A i = true)
-    (hn : m.nid ≤ n) (hb : BlkLe m.blk B) (hB : BlocksAt B n)
+    (hn : m.nid ≤ n) (hb : BlkLe m.blk B) (hB : BlocksAt B n) (hBc : BlkCodes P B)
     (hP : ∀ i, PayIn B i → ∀ x T, OwnedAt m x T → i ∉ T.ids) :
     ThreadOK P { m with alloc := A, nid := n, blk := B } s := by
   obtain ⟨Γ, F, Δ, ht, hi, hcd, hsc, hc⟩ := h
-  exact ⟨Γ, F, Δ, ht, inv_move hi hown hA hpA hn hb hB hP, hcd.of_st rfl, hsc, hc⟩
+  exact ⟨Γ, F, Δ, ht, inv_move hi hown hA hpA hn hb hB hP, hcd.withBlk rfl hBc, hsc, hc⟩
+
+/-- A3.5b: the packages the blocks hold, which a thread's facts give. -/
+theorem ThreadOK.blkCodes {P : Prog} {m : Mem} {s : Stmt} (h : ThreadOK P m s) : BlkCodes P m.blk := by
+  obtain ⟨_, _, _, _, _, hcd, _, _⟩ := h
+  exact hcd.blk
 
 /-- The blocks a thread's facts give. -/
 theorem ThreadOK.blocksAt {P : Prog} {m : Mem} {s : Stmt} (h : ThreadOK P m s) : BlocksAt m.blk m.nid := by
