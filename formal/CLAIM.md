@@ -186,14 +186,13 @@ Inside A2 (nurlc bugs):
   only an owned value).
 
 Outside A2:
-- The hand-over of an old value to its borrower (above): #366, #373,
-  #378, #387 and #388, plus #410 (a binding that lends the owner's old
-  value handed back through a forwarder) and #427 (a call that may hand
-  back the owner's value where nurlc has no lend fact for it at the
-  `=`: a wrapper, a generic or later-defined callee, a value block) and
-  #438 (shapes the hand-over gate does not reach: a struct given a part
-  of itself, an `inout` String given another's lend, a scalar enum key,
-  `o` inside a wrapper argument, a struct cursor copy).
+- The hand-over of an old value to its borrower (above): #366, #373, #378,
+  #387 and #388, plus #427 (a call that may hand back the owner's value
+  where nurlc has no lend fact for it at the `=`: a wrapper, a generic
+  or later-defined callee, a value block) and #438 (shapes the hand-over
+  gate does not reach: a struct given a part of itself, an `inout`
+  String given another's lend, a scalar enum key, `o` inside a wrapper
+  argument, a struct cursor copy).
 - An `Rc`'s shared state, which is the standard library's (B): #345 and
   #392.
 - A view stored through a borrow: #395 and #414 (`StmtT.editB` takes
