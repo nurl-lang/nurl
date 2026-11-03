@@ -537,12 +537,16 @@ theorem NoLeak.empty {P : Prog} {spawn : Nat → Bool} {s : Stmt} {nv : Nat}
       no binding (`MInv`: every block a well-formed tree of its type that owns
       its payload's addresses once; `Covers`: nothing else is allocated);
     - every block is reached from a global (the sweep that ended the last
-      `make` left no other). -/
-structure GlobsOK (G : Globs) : Prop where
+      `make` left no other);
+    - (A3.5b) every package a block holds (a closure an `Arc` global keeps)
+      names code of its signature, as A2's `MemCodes` says of the store a
+      typed `make` leaves. -/
+structure GlobsOK (P : Prog) (G : Globs) : Prop where
   sync  : ∀ g v, G.gl g = some v → ∃ t, t.sync = true ∧ t.ok = true ∧ GlobFits G.blk t v
   inv   : MInv (G.mem 0) (fun _ => none)
   cover : Covers (G.mem 0)
   reach : ∀ k bl, G.blk k = some bl → Reached (fun v => ∃ g, G.gl g = some v) G.blk k
+  codes : BlkCodes P G.blk
 
 /-- **The A3.0 claim**, for A2 plus `spawn`: a program A2 types, whose
     spawned functions take only view-free `sink` parameters, is memory-safe,
@@ -555,7 +559,7 @@ structure GlobsOK (G : Globs) : Prop where
     end). -/
 def Claim : Prop :=
   ∀ (P : Prog) (spawn : Nat → Bool) (G : Globs) (s : Stmt) (Δ : Ctx) (nv : Nat),
-    ProgOK P → ProgCodes P → SpawnOK P spawn → GlobsOK G →
+    ProgOK P → ProgCodes P → SpawnOK P spawn → GlobsOK P G →
     StmtT P (fun _ => none) [] s Δ → s.src = true → s.codesOK P → (∀ v ∈ s.vars, v < nv) →
     MemorySafe P spawn (Cfg.start G s nv) ∧ RaceFree P spawn (Cfg.start G s nv) ∧
       NoLeak P spawn (Cfg.start G s nv)

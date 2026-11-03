@@ -218,7 +218,7 @@ theorem CParts.thread_of {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) (hR : Re
       have hB : BlocksAt m'.blk m'.nid := hto1.blocksAt
       rw [hv]
       refine ⟨ThreadOK.move htoj (fun x T hT k hkT => ?_) (fun k hk => ?_) (fun k hk => ?_) hgrow.nid hblk hB
-        (fun k hk x T hT hkT => ?_), hboj.of_st rfl⟩
+        hto1.blkCodes (fun k hk x T hT hkT => ?_), hboj.of_st rfl⟩
       · simp only [union, Bool.or_eq_true, payPart_iff]; exact .inl (owned_part htoj ⟨x, T, hT, hkT⟩)
       · simp only [union, Bool.or_eq_true, payPart_iff] at hk
         rcases hk with h | h

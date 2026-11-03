@@ -21,7 +21,8 @@ theorem claim : Claim :=
     (fun _ _ hP hPc hS => fun hok => fun hR hsp hf hx hmv => spawner_ok hP hPc hS hok hR hsp hf hx hmv)
     (fun _ _ hP hS => fun hok => fun hR hsp hf hmv => spawn_args hP hS hok hR hsp hf hmv)
     (fun _ _ hP hPc hS => fun hsp hf => fun hlen hwf hnd hdisj hself hpk hcd => fun hpart => fun hlt =>
-      fun hsh hB hBv => newThread_ok hP hPc hS hsp hf hlen hwf hnd hdisj hself hpk hcd hpart hlt hsh hB hBv)
+      fun hsh hB hBc hBv => newThread_ok hP hPc hS hsp hf hlen hwf hnd hdisj hself hpk hcd hpart hlt hsh hB hBc
+        hBv)
     (fun _ => fun hok => fun hR => spawnFail_ok hok hR)
 
 /-- A3.6 with no module global, A3.0–A3.5's start: nothing is left allocated

@@ -185,7 +185,7 @@ theorem pkg_code {P : Prog} {m : Mem} (hcd : MemCodes P m) {c : Var} {o : Bool} 
       fn.params = (.inp, te) :: sig.params.tail ++ cs.map (·.2) ∧
       fn.resTy = sig.resTy ∧ fn.resOwn = sig.resOwn ∧ fn.lends ⊆ sig.lends ∧
       fn.rholds ⊆ sig.rholds ∧ fn.outHolds ⊆ sig.outHolds ∧ ¬ ThruFn P f := by
-  obtain ⟨hlen, himpl⟩ := hcd c o _ fs te ms env cs hslot (Sub.refl _)
+  obtain ⟨hlen, himpl⟩ := hcd.1 c o _ fs te ms env cs hslot (Sub.refl _)
   have hjl : j < fs.length := by rw [hlen]; exact (List.getElem?_eq_some_iff.mp hj).1
   have hfs : fs[j]? = some fs[j] := List.getElem?_eq_getElem hjl
   obtain ⟨fn, sig', hf, hσ', h⟩ := himpl j fs[j] σ hfs hj
