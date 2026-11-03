@@ -26421,11 +26421,6 @@ unsafe @ __src_has_raw_ptr s text → b {
     : s ls ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print ls ) ( nurl_print ` = alloca i1\n  store i1 ` ) ( nurl_print nr ) ( nurl_print `, ptr ` ) ( nurl_print ls ) ( nurl_print `\n` )
     ( __sb syms ptr ( nurl_str_cat `@` ls ) )
-    // (…and whether what it may lend is this frame's own — a local among
-    // the call's arguments: a returned literal copies it there, as `^ s`
-    // does, __bind_lends_local. Taken over instead, the local's own value
-    // leaked on the runs the call handed back a fresh one, agora #457.)
-    ? ( __args_name_local syms ( nurl_sym_get syms `__last_call_args__` ) ) { ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__llocal` ) `1` ) = g_part_n + g_part_n 1 } {}
     // …and which call made it (`cn gn`): whether that call can lend at
     // all is a module-end fact (__hown_dyn's `retdynif##`).
     ( nurl_sym_def syms ( nurl_str_cat ls `__sbcn` ) ( nurl_sym_get syms `__last_retown_const__` ) )
