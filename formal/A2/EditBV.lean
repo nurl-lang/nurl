@@ -814,7 +814,7 @@ theorem Pushed.views_out {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1
   cases hv1
   refine ⟨viewAt_not_in hi hanch hoF hT (hp.root dep.root (List.mem_map_of_mem hd))
     (fun e => hoD (by rw [← e]; exact List.mem_map_of_mem hd)) ha, ?_⟩
-  rcases ha.owned with ⟨ox, U, hU, hdU⟩ | hpa
+  rcases ha.owned hi.heap with ⟨ox, U, hU, hdU⟩ | hpa
   · exact (hi.heap.alloc ox U hU _ hdU).2
   · exact (hi.heap.payAlloc hpa).2
 
@@ -828,7 +828,7 @@ theorem MInv.views_owned {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {o : Var} {Eo : E
   obtain ⟨s, hin⟩ := hwT.sub_view hs
   obtain ⟨_, _, _, hv1, _, _, ha⟩ := hvsT s _ hin
   cases hv1
-  exact ha.owned
+  exact ha.owned hi.heap
 
 /-- A push through a borrow, of a value that may hold views, its buffer
     kept or moved to a fresh one: through a copy of a same-typed root's

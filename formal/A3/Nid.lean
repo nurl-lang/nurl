@@ -37,6 +37,7 @@ theorem heapOK_grow {m m' : Mem} (hh : HeapOK m) (hst : m'.st = m.st)
     exact ⟨ha i h1, Nat.lt_of_lt_of_le h2 hn⟩
   self x t h := hh.self x t (by unfold OwnedAt at *; rw [← hst]; exact h)
   blk := BlkOwn.grow hh.blk hst hb ha hn
+  views := by rw [hb]; exact hh.views
 
 theorem CatchOK.of_st {m m' : Mem} (hst : m'.st = m.st) (hnv : m.nv ≤ m'.nv) (hb : BlkLe m.blk m'.blk) :
     ∀ {s : Stmt}, CatchOK m s → CatchOK m' s
@@ -100,9 +101,15 @@ structure BlockOK (B : Nat → Option Blk) (n k : Nat) (bl : Blk) : Prop where
   nodup : bl.tree.ids.Nodup
   lt    : ∀ i ∈ bl.tree.ids, i < n
   apart : ∀ i ∈ bl.tree.ids, ∀ k' bl', k' ≠ k → B k' = some bl' → i ∉ bl'.tree.ids
+  /-- A3.3: a view reads its lock block's payload (`ViewsAt`). -/
+  view  : bl.kind = .view →
+    ∃ k0 t p, bl = ⟨.prod (.lk t) t, .view, some (.pair (.lk k0) p)⟩ ∧ B k0 = some ⟨t, .lock, some p⟩
 
 /-- A3.1: every block of `B` is as `BlockOK` says. -/
 def BlocksAt (B : Nat → Option Blk) (n : Nat) : Prop := ∀ k bl, B k = some bl → BlockOK B n k bl
+
+theorem BlocksAt.views {B : Nat → Option Blk} {n : Nat} (h : BlocksAt B n) : ViewsAt B :=
+  fun k bl hk hv => (h k bl hk).view hv
 
 /-- **Another thread stepped**: a later `nid`, the blocks kept as their
     holders see them (`BlkLe`: more blocks, and (A3.2) a lock block's payload
@@ -124,7 +131,8 @@ theorem inv_move {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F
       self := hi.heap.self
       blk := fun k bl hk => ⟨(hB k bl hk).key, (hB k bl hk).nodup, fun i hi' =>
           ⟨hpA i ⟨k, bl, hk, hi'⟩, (hB k bl hk).lt i hi',
-           fun x T hT => hP i ⟨k, bl, hk, hi'⟩ x T hT, (hB k bl hk).apart i hi'⟩⟩ }
+           fun x T hT => hP i ⟨k, bl, hk, hi'⟩ x T hT, (hB k bl hk).apart i hi'⟩⟩
+      views := hB.views }
   { toMInv := hi.toMInv.grow rfl hh (Nat.le_refl _) hb (fun k bl hk => (hB k bl hk).ok)
     nvS := hi.nvS, nvF := hi.nvF
     anch := hi.anch, spineNd := hi.spineNd, spineDom := hi.spineDom
@@ -152,6 +160,7 @@ theorem ThreadOK.blocksAt {P : Prog} {m : Mem} {s : Stmt} (h : ThreadOK P m s) :
   obtain ⟨Γ, F, Δ, _, hi, _, _, _⟩ := h
   intro k bl hk
   obtain ⟨hkey, hnd, hall⟩ := hi.heap.blk k bl hk
-  exact ⟨hi.blocks k bl hk, hkey, hnd, fun i h => (hall i h).2.1, fun i h => (hall i h).2.2.2⟩
+  exact ⟨hi.blocks k bl hk, hkey, hnd, fun i h => (hall i h).2.1, fun i h => (hall i h).2.2.2,
+    fun hv => hi.heap.views k bl hk hv⟩
 
 end A3

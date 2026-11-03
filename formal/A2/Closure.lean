@@ -1918,7 +1918,7 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
         · exact List.mem_append_right _ (envDeps_sub _ _ hd)
   let mn : Mem := { m with nv := m.nv + 1 }
   have hin : MInv mn Γ :=
-    hi.toMInv.of_st rfl ⟨hi.heap.nodup, hi.heap.disj, hi.heap.alloc, hi.heap.self, hi.heap.blk⟩ (Nat.le_succ _)
+    hi.toMInv.of_st rfl ⟨hi.heap.nodup, hi.heap.disj, hi.heap.alloc, hi.heap.self, hi.heap.blk, hi.heap.views⟩ (Nat.le_succ _)
   have hval : ValOK mn te (lendOf env) (envE c Ec te cs).path (envE c Ec te cs).held := by
     have hk : ∀ dep : Dep, VKeep m mn dep ∧ HKeep m mn dep := fun dep => by
       have hr : RootKeep m mn dep.root := RootKeep.of_st rfl
@@ -2351,6 +2351,7 @@ theorem cloProgress {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x 
   | letcall hf' hmx hb =>
     rw [hf] at hf'; cases hf'
     exact ⟨_, Step.callc hslot hfs hf (by simpa [envMem, Mem.set, upd_ne _ _ hxe] using hmx) hb⟩
+  | waitPanic hw => simp [Waits] at hw
 
 theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
   intro Γ Γ1 F x c j zs k Ec E ms σ sig Δ m m' s' hk hx hxF hc htc hj hσ hhd hnz hcT hnzs hkT hpx hcd hi hst

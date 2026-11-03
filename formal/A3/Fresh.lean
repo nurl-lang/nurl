@@ -71,6 +71,7 @@ theorem EvalR.grows {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (
   | chanSendClosed _ h1 _ hf => exact (TakeVal.grows h1).trans (Grows.shrink (Frees.le hf) rfl)
   | chanRecv _ hk _ _ => exact ⟨Nat.le_refl _, fun _ hi => .inl hi, BlkLe.setLock hk _⟩
   | chanClose _ hk => exact ⟨Nat.le_refl _, fun _ hi => .inl hi, BlkLe.setLock hk _⟩
+  | rwRead _ _ hfr => exact ⟨Nat.le_succ _, fun _ hi => .inl hi, BlkLe.fresh hfr _⟩
   | _ => exact Grows.of_eq rfl rfl
 
 theorem BindParams.grows {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var} {base i : Nat}
@@ -80,6 +81,12 @@ theorem BindParams.grows {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var} 
   | inp _ _ _ ih => refine Grows.trans ?_ ih; exact Grows.of_eq rfl rfl
   | sink _ _ ih => refine Grows.trans ?_ ih; exact Grows.of_eq rfl rfl
   | inout _ ih => exact ih
+
+/-- A lock scope's end, on either path, gives a payload back or drops a slot. -/
+theorem Release.grows {m m' : Mem} {k : Nat} {t : Ty} {x : Var} (h : Release m k t x m') : Grows m m' := by
+  cases h with
+  | put _ _ hk => exact ⟨Nat.le_refl _, fun _ h => .inl h, BlkLe.setLock hk _⟩
+  | drop _ _ hd => exact Grows.shrink (DropSlot.le hd) rfl
 
 /-- **A step allocates only fresh addresses**, and `nid` never goes back. -/
 theorem Step.grows {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) : Grows m r.mem := by
@@ -129,6 +136,7 @@ theorem Step.grows {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
   | editSet _ _ ht _ hf _ => exact (TakeVal.grows ht).trans (Grows.shrink (Frees.le hf) rfl)
   | editSetOOB _ ht _ _ hf => exact (TakeVal.grows ht).trans (Grows.shrink (Frees.le hf) rfl)
   | panic => exact Grows.refl _
+  | waitPanic _ => exact Grows.refl _
   | letrec _ _ _ => exact Grows.of_eq rfl rfl
   | catchIn _ ih => exact ih
   | catchSkip => exact Grows.refl _
@@ -147,10 +155,7 @@ theorem Step.grows {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
   | withLock _ hk _ =>
     exact ⟨Nat.le_refl _, fun _ h => .inl h, (BlkLe.setLock hk none).trans (BlkLe.refl _)⟩
   | scopeLIn _ ih => exact ih
-  | scopeLSkip hrl =>
-    cases hrl with
-    | put _ _ hk => exact ⟨Nat.le_refl _, fun _ h => .inl h, BlkLe.setLock hk _⟩
-    | drop _ _ hd => exact Grows.shrink (DropSlot.le hd) rfl
-  | scopeLP _ _ hd ih => exact ih.trans (Grows.shrink (DropSlot.le hd) rfl)
+  | scopeLSkip hrl => exact Release.grows hrl
+  | scopeLP _ hrl ih => exact ih.trans (Release.grows hrl)
 
 end A3

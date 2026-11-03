@@ -587,7 +587,7 @@ theorem HeapOK.editPush {m : Mem} (hh : HeapOK m) {o : Var} {T T' : Val} {t : Ty
           · exact hnp i h hp
         · exact hh.notPay h hi hp)
   refine ⟨fun o1 U hU => ?_, fun o1 o2 U1 U2 hne h1 h2 => ?_, fun o1 U hU i hi => ?_, fun o1 U hU => ?_,
-    hblk⟩
+    hblk, hh.views⟩
   · -- nodup: the hole's addresses give way to the new node's
     rcases hown o1 U hU with ⟨_, hUT⟩ | ⟨_, h⟩
     · rw [hUT]
@@ -839,7 +839,7 @@ theorem HeapOK.editTrunc {m : Mem} (hh : HeapOK m) {o : Var} {T T' : Val} {t : T
         · exact hh.notPay hT (hsub i hi) hp
         · exact hh.notPay h hi hp)
   refine ⟨fun x U hU => ?_, fun x y U V hne hx hy => ?_, fun x U hU i hi => ?_, fun x U hU => ?_,
-    hblk⟩
+    hblk, hh.views⟩
   · rcases hown x U hU with ⟨_, rfl⟩ | ⟨_, h⟩
     · exact hnT'
     · exact hh.nodup x U h
@@ -1644,7 +1644,7 @@ theorem MInv.editB_push {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
         obtain ⟨s, hin⟩ := hwT.sub_view hs
         obtain ⟨_, _, _, hv1, _, _, ha⟩ := hvsT s _ hin
         cases hv1
-        exact ha.owned
+        exact ha.owned hi.heap
       exact MInv.edit_drop hi hanch hEo hoF hcan hds hT0 hT' hst
         (HeapOK.editPush hi.heap hT0 hp.nd hp.al hp.dis hp.np (fun _ _ _ h => absurd h (hvv _ _ _)) hp.sf
           hvT (Or.inl ⟨rfl, rfl, rfl⟩) hr) (by simp)
@@ -1726,7 +1726,7 @@ theorem MInv.editB_pushRealloc {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv 
         obtain ⟨s, hin⟩ := hwT.sub_view hs
         obtain ⟨_, _, _, hv1, _, _, ha⟩ := hvsT s _ hin
         cases hv1
-        exact ha.owned
+        exact ha.owned hi.heap
       exact MInv.edit_drop hi hanch hEo hoF hcan hds hT0 hT' hst
         (HeapOK.editPush hi.heap hT0 hp.nd hp.al hp.dis hp.np (fun _ _ _ h => absurd h (hvv _ _ _)) hp.sf
           hvT (Or.inr ⟨rfl, rfl, rfl⟩) hr) (by simp)
@@ -1857,7 +1857,7 @@ theorem HeapOK.editSet {m : Mem} (hh : HeapOK m) {o : Var} {T T' : Val} {t : Ty}
           · exact hh.notPay hT h hp
         · exact hh.notPay h hi hp)
   refine ⟨fun o1 U hU => ?_, fun o1 o2 U1 U2 hne h1 h2 => ?_, fun o1 U hU i hi => ?_, fun o1 U hU => ?_,
-    hblk⟩
+    hblk, hh.views⟩
   · -- nodup: the old element's addresses give way to `v`'s
     rcases hown o1 U hU with ⟨_, hUT⟩ | ⟨_, h⟩
     · rw [hUT, hT's]
@@ -1934,6 +1934,7 @@ theorem HeapOK.freeV {m : Mem} (hh : HeapOK m) {v : Val}
   self o U hU := hh.self o U hU
   blk := hh.blk.frame rfl (Nat.le_refl _) (fun i hi => hf.other (fun h => hnp i h hi))
     (fun o U hU i hi => hh.notPay hU hi)
+  views := hh.views
 
 /-- A slot set to what it holds. -/
 theorem Mem.set_same {m : Mem} {x : Var} {s : Slot} (h : m.st x = some s) : m.set x s = m := by
@@ -2021,7 +2022,7 @@ theorem MInv.editB_set {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
     obtain ⟨s, hin⟩ := hwT.sub_view hs
     obtain ⟨_, _, _, hv1, _, _, ha⟩ := hvsT s _ hin
     cases hv1
-    exact ha.owned
+    exact ha.owned hi.heap
   exact MInv.editB_drops hi hanch hx hmx hl hty hhv (fun _ _ => rfl) hthru hno
     (HeapOK.editSet hi.heap hT0 hp.nd hp.al hp.dis hp.np (fun _ _ _ h => absurd h (hvv _ _ _)) hp.sf hvT hn
       hf hr)

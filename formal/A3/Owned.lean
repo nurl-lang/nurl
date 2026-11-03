@@ -49,6 +49,13 @@ theorem OwnedId.of_remove {m : Mem} {x : Var} {i : Nat} (h : OwnedId (m.remove x
   obtain ⟨y, t, hy, hi⟩ := h
   exact ⟨y, t, (ownedAt_remove.mp hy).2, hi⟩
 
+/-- A lock scope's end owns only what was owned: it removes its slot. -/
+theorem Release.ownedId {m m' : Mem} {k : Nat} {t : Ty} {x : Var} (h : Release m k t x m') {i : Nat}
+    (hi : OwnedId m' i) : OwnedId m i := by
+  obtain ⟨y, T, hy, hiy⟩ := hi
+  have hy' : (m.remove x).st y = some ⟨true, some T⟩ := by rw [show (m.remove x).st = m'.st by rw [h.st]; rfl]; exact hy
+  exact OwnedId.of_remove ⟨y, T, hy', hiy⟩
+
 /-- `OwnedId` reads the bindings only. -/
 theorem OwnedId.of_st {m m' : Mem} (hst : m'.st = m.st) {i : Nat} (h : OwnedId m' i) : OwnedId m i := by
   obtain ⟨y, t, hy, hi⟩ := h
@@ -151,6 +158,8 @@ theorem EvalR.ownedId {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r
     exact ⟨fun _ i hi => .inr (.inr ⟨_, _, hk, by simp only [ids_inr] at hi; simp [Blk.tree, hi]⟩),
       fun i hi => .inl hi⟩
   | chanRecvNone _ _ _ _ => exact ⟨fun _ i hi => by simp at hi, fun i hi => .inl hi⟩
+  -- A3.3: a read guard is a share, which owns no address
+  | rwRead _ _ _ => exact ⟨fun _ i hi => by simp [Val.ids] at hi, fun i hi => .inl hi⟩
   | _ => exact ⟨fun h => (nomatch h), fun i hi => .inl hi⟩
 
 /-- **Binding parameters**: a `sink` parameter owns what its argument owned,
@@ -284,6 +293,7 @@ theorem Step.ownedId {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r
     · exact .inl (b1 i hi)
   | editSetOOB _ ht _ _ _ => exact fun i hi => .inl ((TakeVal.ownedId ht hb).2 i hi)
   | panic => exact fun i hi => .inl hi
+  | waitPanic _ => exact fun i hi => .inl hi
   | letrec _ _ _ =>
     exact fun i hi => .inl (OwnedId.set_none (OwnedId.set_none (OwnedId.of_nv hi)))
   | catchIn _ ih => exact ih
@@ -322,7 +332,7 @@ theorem Step.ownedId {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r
     cases hrl with
     | put _ _ _ => exact fun i hi => .inl (OwnedId.of_remove hi)
     | drop _ _ _ => exact fun i hi => .inl (OwnedId.of_remove hi)
-  | scopeLP _ _ _ ih => exact fun i hi => ih i (OwnedId.of_remove hi)
+  | scopeLP _ hrl ih => exact fun i hi => ih i (Release.ownedId hrl hi)
 
 /-- A panicking step allocates nothing: its owned trees were owned before. -/
 theorem Step.ownedId_panic {P : Prog} {m m1 : Mem} {s : Stmt} (h : Step P m s (.panic m1)) :
@@ -336,9 +346,10 @@ theorem Step.ownedId_panic {P : Prog} {m m1 : Mem} {s : Stmt} (h : Step P m s (.
   | frozenP _ ih => exact ih hr
   | assignP _ => cases hr; exact fun i hi => hi
   | panic => cases hr; exact fun i hi => hi
+  | waitPanic _ => cases hr; exact fun i hi => hi
   | letdP _ => cases hr; exact fun i hi => hi
   | scopeDPMoved _ _ ih => cases hr; exact fun i hi => ih rfl i (OwnedId.of_remove hi)
-  | scopeLP _ _ _ ih => cases hr; exact fun i hi => ih rfl i (OwnedId.of_remove hi)
+  | scopeLP _ hrl ih => cases hr; exact fun i hi => ih rfl i (Release.ownedId hrl hi)
   | _ => cases hr
 
 /-! ### A3.2: where a payload's addresses come from -/
@@ -431,7 +442,37 @@ theorem EvalR.payAt {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (
       exact .inl ⟨_, hk0, by simpa [Blk.tree] using hi⟩
     · rw [upd_ne _ _ he] at hk'
       exact .inl ⟨bl, hk', hi⟩
+  -- A3.3: a new view owns nothing
+  | @rwRead _ _ _ _ _ _ _ _ =>
+    have hk' : upd m.blk m.nid _ k = some bl := hk
+    by_cases he : k = m.nid
+    · subst he; simp [upd] at hk'; subst hk'; simp at hi
+    · rw [upd_ne _ _ he] at hk'
+      exact .inl ⟨bl, hk', hi⟩
   | _ => exact .inl ⟨bl, hk, hi⟩
+
+/-- A lock scope's end: a payload's address afterwards was the same block's,
+    or (given back) the tree of the slot the scope ends. -/
+theorem Release.payAt {m m' : Mem} {k0 : Nat} {t : Ty} {x : Var} (hrl : Release m k0 t x m') :
+    ∀ k i, PayAt m'.blk k i → PayAt m.blk k i ∨ OwnedId m i := by
+  intro k i ⟨bl, hk, hi⟩
+  cases hrl with
+  | @put o v hx hg hk0 =>
+    have hk' : upd _ k0 (some ⟨t, .lock, some v⟩) k = some bl := hk
+    by_cases he : k = k0
+    · subst he
+      simp [upd] at hk'
+      subst hk'
+      simp only [Blk.tree, Option.getD_some] at hi
+      cases o with
+      | true => exact .inr (OwnedId.of_slot hx hi)
+      | false =>
+        cases v with
+        | int n => simp [Val.ids] at hi
+        | _ => simp [Giveable] at hg
+    · rw [upd_ne _ _ he] at hk'
+      exact .inl ⟨bl, hk', hi⟩
+  | drop _ _ _ => exact .inl ⟨bl, hk, hi⟩
 
 /-- **A step**: a payload's address afterwards was the same block's, or an
     owned tree's (a new block's, or a lock's given back).  Not a fresh one:
@@ -441,8 +482,7 @@ theorem Step.payAt {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
   induction h with
   | seqL _ ih | seqP _ ih | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | frozenP _ ih | catchIn _ ih
     | scopeDIn _ ih | scopeLIn _ ih => exact ih
-  | scopeP _ _ _ ih | rbindP _ _ ih | catchP _ _ ih | scopeDP _ _ ih | scopeDPMoved _ _ ih
-    | scopeLP _ _ _ ih => exact ih
+  | scopeP _ _ _ ih | rbindP _ _ ih | catchP _ _ ih | scopeDP _ _ ih | scopeDPMoved _ _ ih => exact ih
   | letv _ he | letd _ he | assign _ he _ _ => exact fun k i hp => EvalR.payAt he hb k i hp
   | letcall _ _ hbp =>
     intro k i ⟨bl, hk, hi⟩
@@ -471,25 +511,11 @@ theorem Step.payAt {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
       simp [Blk.tree] at hi
     · rw [upd_ne _ _ he] at hk'
       exact .inl ⟨bl, hk', hi⟩
-  | @scopeLSkip m' k0 t x hrl =>
-    intro k i ⟨bl, hk, hi⟩
-    cases hrl with
-    | @put o v hx hg hk0 =>
-      have hk' : upd _ k0 (some ⟨t, .lock, some v⟩) k = some bl := hk
-      by_cases he : k = k0
-      · subst he
-        simp [upd] at hk'
-        subst hk'
-        simp only [Blk.tree, Option.getD_some] at hi
-        cases o with
-        | true => exact .inr (OwnedId.of_slot hx hi)
-        | false =>
-          cases v with
-          | int n => simp [Val.ids] at hi
-          | _ => simp [Giveable] at hg
-      · rw [upd_ne _ _ he] at hk'
-        exact .inl ⟨bl, hk', hi⟩
-    | drop _ _ _ => exact .inl ⟨bl, hk, hi⟩
+  | scopeLSkip hrl => exact Release.payAt hrl
+  | scopeLP hs hrl ih =>
+    -- A3.3: what a panic's unwinding gives back was the thread's own
+    exact fun k i hp => (Release.payAt hrl k i hp).elim (ih k i)
+      (fun h => .inr (Step.ownedId_panic hs i h))
   | _ => exact fun k i h => .inl h
 
 /-! ### Avoiding another part -/
@@ -517,7 +543,7 @@ theorem Avoids.mono3 {m m' : Mem} {a2 : Nat → Bool} {n : Nat} (hav : Avoids m 
   · exact hav i h
   · exact hf i h
   · obtain ⟨k, bl, hk, hik⟩ := h
-    exact hpo i ⟨k, bl, hk, hik⟩
+    exact hpo i (.inl ⟨k, bl, hk, hik⟩)
 
 theorem TakeVal.avoids {m m1 : Mem} {y : Var} {v : Val} (h : TakeVal m y v m1) (hb : BorFree m)
     {a2 : Nat → Bool} (hav : Avoids m a2) : Avoids m1 a2 ∧ ∀ i ∈ v.ids, a2 i = false :=

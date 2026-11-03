@@ -127,6 +127,7 @@ theorem Step.keep {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) (
     exact (Frees.other hfr (fun hm => by
       have := hav2 i hm; rw [hi] at this; cases this)).trans (congrFun (TakeVal.alloc ht) i)
   | panic => intro _ _; rfl
+  | waitPanic _ => intro _ _; rfl
   | letrec _ _ _ => intro _ _; rfl
   | catchIn _ ih => exact ih
   | catchSkip => intro _ _; rfl
@@ -147,10 +148,13 @@ theorem Step.keep {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) (
     | put _ _ _ => intro _ _; rfl
     | drop _ hx hd =>
       exact DropSlot.keep hd (fun T hT i hi => hav i (OwnedId.of_slot (hx.trans (congrArg some hT)) hi))
-  | scopeLP hs hx hd ih =>
+  | scopeLP hs hrl ih =>
     intro i hi
     have hav1 := Step.avoids_panic hs hav
     rw [← ih i hi]
-    exact DropSlot.keep hd (fun T hT j hj => hav1 j (OwnedId.of_slot (hx.trans (congrArg some hT)) hj)) i hi
+    cases hrl with
+    | put _ _ _ => rfl
+    | drop _ hx hd =>
+      exact DropSlot.keep hd (fun T hT j hj => hav1 j (OwnedId.of_slot (hx.trans (congrArg some hT)) hj)) i hi
 
 end A3

@@ -100,6 +100,7 @@ theorem EvalR.borFree {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r
   | lockNew h1 _ => exact ⟨((TakeVal.borFree h1 hb).1).of_st rfl, fun h => by cases h⟩
   | arcClone _ => exact ⟨hb, fun h => by cases h⟩
   | lockClone _ => exact ⟨hb, fun h => by cases h⟩
+  | rwRead _ _ _ => exact ⟨hb.of_st rfl, fun h => by cases h⟩
   | atomic _ _ _ _ => exact ⟨hb.of_st rfl, fun _ => rfl⟩
   | chanSend _ h1 _ _ _ => exact ⟨((TakeVal.borFree h1 hb).1).of_st rfl, fun _ => rfl⟩
   | chanSendClosed _ h1 _ _ => exact ⟨((TakeVal.borFree h1 hb).1).of_st rfl, fun _ => rfl⟩
@@ -164,6 +165,7 @@ theorem Step.borFree {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r
   | editSet _ _ ht _ _ _ => exact (((TakeVal.borFree ht hb).1).of_st rfl).set _ (SlotFree.own _)
   | editSetOOB _ ht _ _ _ => exact ((TakeVal.borFree ht hb).1).of_st rfl
   | panic => exact hb
+  | waitPanic _ => exact hb
   | letrec _ _ _ => exact ((hb.set _ (SlotFree.none _)).set _ (SlotFree.none _)).of_st rfl
   | catchIn _ ih => exact ih
   | catchSkip => exact hb
@@ -184,6 +186,6 @@ theorem Step.borFree {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r
   | withLock _ _ _ => exact (hb.of_st rfl).set _ (SlotFree.ids ids_nonNode)
   | scopeLIn _ ih => exact ih
   | scopeLSkip hrl => cases hrl <;> exact (hb.of_st rfl).remove _
-  | scopeLP _ _ _ ih => exact (ih.of_st rfl).remove _
+  | scopeLP _ hrl ih => cases hrl <;> exact (ih.of_st rfl).remove _
 
 end A3

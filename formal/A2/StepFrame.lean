@@ -93,14 +93,20 @@ theorem panic_none {P : Prog} {m m1 : Mem} {s : Stmt} (hst : Step P m s (.panic 
   induction hst generalizing m1 with
   | letvP _ | assignP _ | panic => cases hr; exact fun _ h => h
   | seqP _ ih | frozenP _ ih => cases hr; exact ih rfl
-  | @scopeP _ y _ _ _ _ _ _ ih | @rbindP _ y _ _ _ _ ih | @scopeDPMoved _ y _ _ _ _ ih
-    | @scopeLP _ _ _ y _ _ _ _ _ _ ih =>
+  | @scopeP _ y _ _ _ _ _ _ ih | @rbindP _ y _ _ _ _ ih | @scopeDPMoved _ y _ _ _ _ ih =>
     cases hr; intro v hv
     simp only [Mem.remove_st]
     by_cases h : v = y
     · subst h; simp
     · rw [upd_ne _ _ h]; exact ih rfl v hv
+  | @scopeLP _ _ _ _ y _ _ hrl ih =>
+    cases hr; intro v hv
+    rw [hrl.st]
+    by_cases h : v = y
+    · subst h; simp
+    · rw [upd_ne _ _ h]; exact ih rfl v hv
   | letdP _ => cases hr; exact fun _ h => h
+  | waitPanic _ => cases hr; exact fun _ h => h
   | _ => cases hr
 
 /-- A panic unbinds the scopes it leaves. -/
@@ -119,9 +125,10 @@ theorem panic_spine {P : Prog} {m m1 : Mem} {s : Stmt} (hst : Step P m s (.panic
       simp only [Stmt.spine, List.mem_cons] at hv
       exact ih rfl v (hv.resolve_left h)
   | letdP _ => cases hr; intro v hv; simp [Stmt.spine] at hv
-  | @scopeLP _ _ _ y _ _ _ _ _ _ ih =>
+  | waitPanic hw => cases hr; intro v hv; rw [hw.spine] at hv; cases hv
+  | @scopeLP _ _ _ _ y _ _ hrl ih =>
     cases hr; intro v hv
-    simp only [Mem.remove_st]
+    rw [hrl.st]
     by_cases h : v = y
     · subst h; simp
     · rw [upd_ne _ _ h]

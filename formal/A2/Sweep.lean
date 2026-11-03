@@ -137,8 +137,20 @@ theorem HeapOK.sweepR {R : Val → Prop} {m : Mem} (hh : HeapOK m) : HeapOK (m.s
     by_cases he : k' = k
     · subst he; rw [hk0] at hk'; cases hk'; exact hnr hreach
     · exact hoth k' bl' he hk' hik'
+  -- A3.3: a reached view reaches its lock block (its payload holds a share of it)
+  views k' bl hk hv := by
+    obtain ⟨hk0, hreach⟩ := Mem.sweepR_blk.mp hk
+    obtain ⟨k, t, p, rfl, hkb⟩ := hh.views k' _ hk0 hv
+    exact ⟨k, t, p, rfl, Mem.sweepR_blk.mpr ⟨hkb, .pay hreach hk0 (Or.inl ⟨none, Sub.fst (Sub.refl _)⟩)⟩⟩
 
 theorem HeapOK.sweep {m : Mem} (hh : HeapOK m) : HeapOK m.sweep := hh.sweepR
+
+/-- A3.3: an `arc` share's block, reached, is kept. -/
+theorem ArcBlk.sweepR {R : Val → Prop} {m : Mem} {k : Nat} {u : Ty} {p : Val} (h : ArcBlk (m.blk k) u p)
+    (hr : Reached R m.blk k) : ArcBlk ((m.sweepR R).blk k) u p := by
+  rcases h with h | h
+  · exact Or.inl (Mem.sweepR_blk.mpr ⟨h, hr⟩)
+  · exact Or.inr (Mem.sweepR_blk.mpr ⟨h, hr⟩)
 
 /-! ### A3.1: the sweep keeps every borrow valid
 
@@ -290,7 +302,7 @@ omit hR in
 theorem SharesOK.sweep {τ : Ty} {T : Val} (h : SharesOK m τ T) (hT : Kept R m T) :
     SharesOK (m.sweepR R) τ T := fun u k p ha => by
   cases p with
-  | some p => exact Mem.sweepR_blk.mpr ⟨h u k _ ha, hT.share ha.sub⟩
+  | some p => exact ArcBlk.sweepR (h u k _ ha) (hT.share ha.sub)
   | none =>
     obtain ⟨o, ho⟩ := h u k none ha
     exact ⟨o, Mem.sweepR_blk.mpr ⟨ho, hT.share ha.sub⟩⟩
@@ -317,7 +329,7 @@ theorem ValOK.sweep {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m τ v P H) 
   | pkg _ ih => exact .pkg (ih (hv.sub (Sub.pkg (Sub.refl _))))
   | arc hk hw hvf hl =>
     obtain ⟨dep, hd, hla⟩ := hl
-    exact .arc (Mem.sweepR_blk.mpr ⟨hk, hv.arc (Sub.refl _)⟩) hw hvf ⟨dep, hd, hla.sweep hR⟩
+    exact .arc (ArcBlk.sweepR hk (hv.arc (Sub.refl _))) hw hvf ⟨dep, hd, hla.sweep hR⟩
   | lk h =>
     obtain ⟨o, ho⟩ := h
     exact .lk ⟨o, Mem.sweepR_blk.mpr ⟨ho, hv.lk (Sub.refl _)⟩⟩
@@ -369,6 +381,7 @@ theorem MInv.sweepR {Γ : Ctx} (hi : MInv m Γ) : MInv (m.sweepR R) Γ where
     obtain ⟨t, kd, q⟩ := bl
     cases kd with
     | arc => simp only at hp; subst hp; exact (h3 _ rfl).2.sweep (Kept.pay hr hk0)
+    | view => simp only at hp; subst hp; exact (h3 _ rfl).2.sweep (Kept.pay hr hk0)
     | lock => exact SharesOK.of_noArc (h4 rfl)
 
 end

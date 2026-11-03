@@ -1,9 +1,10 @@
 # The claim
 
-> **Status: A1, A2, A3.0, A3.1, A3.2's first cut and A3.4 are proven**
-> (`A1.memory_safe`, `A2.memory_safe`, `A2.no_leak_end`, `A3.claim`,
-> [`README.md`](README.md)); the rest of A3.2, A3.3, A3.5, A3.6 and B–D are
-> the statement the proof is working towards, not one it has reached.
+> **Status: A1, A2, A3.0, A3.1, A3.2's and A3.3's first cuts, and A3.4
+> are proven** (`A1.memory_safe`, `A2.memory_safe`, `A2.no_leak_end`,
+> `A3.claim`, [`README.md`](README.md)); the rest of A3.2 and A3.3, A3.5,
+> A3.6 and B–D are the statement the proof is working towards, not one it
+> has reached.
 
 ## Statement
 
@@ -12,9 +13,10 @@ functions and its `unsafe` assertions, is memory-safe and leak-free** —
 *proven so far (A1, A2) for the ownership rules of the single-threaded
 language as the calculus models them, (A3.0) for threads that share
 nothing but what they move, (A3.1) for threads that also share `Arc`
-payloads, (A3.2, first cut) `Locked` values and (A3.4) `Atomic` words
+payloads, (A3.2, first cut) `Locked` values, (A3.3, first cut)
+`RwLocked` values read through frozen guards, and (A3.4) `Atomic` words
 and channels; the data-race clause for the rest of what threads share is
-the rest of A3.2, A3.3, A3.5 and A3.6, and the link from the rules to
+the rest of A3.2 and A3.3, A3.5 and A3.6, and the link from the rules to
 nurlc and its code is B–D*
 (below): no use after free, no double free, no read through a dangling
 view, no out-of-bounds access, no data race, and everything it allocated
@@ -144,10 +146,14 @@ the LLVM / C11 memory model rather than redefining it.
       value inside the lock, where the model checks it out and back. The
       two agree because the typing keeps the lock alive through the body
       (the body does not name the share, which is an owner or a
-      parameter of the function the body is in) and has the binding hold a value again at the end. On a
-      panic, `locked_with` keeps the lock held, as the model does: other
-      threads wait, and nothing reaches the value until the last share's
-      drop frees it.
+      parameter of the function the body is in) and has the binding hold
+      a value again at the end.
+    - **Panics.** A panic through a lock scope gives the value back
+      (`Step.scopeLP`), as `RwLocked`'s guard drop does on the drop
+      journal. `locked_with` instead keeps the lock held, so its runs are
+      among the model's: other threads wait. A thread that would wait may
+      also panic (`Step.waitPanic`), which covers a runtime that detects
+      a self-deadlock and panics (`RwLocked` does).
     - **Threads.** A checked-out payload is in its holder's part, and a
       payload in its block is read by no one. Taking and giving back a
       lock touch only the lock word, which the runtime's mutex changes
@@ -160,8 +166,8 @@ the LLVM / C11 memory model rather than redefining it.
       (h267); and `Mutex` beside the data it guards.
     - **Not proven here (phase D):** relocking a lock on the OS thread
       that holds it (a nested update, or another fiber on that thread).
-      The model's thread waits, but the runtime's default pthread mutex
-      leaves it undefined (Agora #455).
+      The model's thread waits or panics, but the runtime's default
+      pthread mutex leaves it undefined (Agora #455).
   - **A3.4, `Atomic` and channels** *(proven)* — an integer every thread
     reads and changes, and a queue values move through.
     - **The calculus.** An `Atomic` is a lock block of an integer that is
@@ -195,10 +201,43 @@ the LLVM / C11 memory model rather than redefining it.
       a closure (a `Channel` of `Arc`s, of closures: A3.5's crossing),
       `chan_len`, `chan_is_closed` and `select`. Deadlock freedom, and that
       a waiting `chan_recv` is woken, are not claimed.
-  - **A3.3, A3.5, A3.6** — the rest of what threads share: `RwLocked` and
-    `% Frozen` read guards, library handles whose copies are one state,
-    module globals. Not proven (`A3/DESIGN.md` gives the design: they use
-    A3.1's blocks).
+  - **A3.3, first cut** *(proven)* — `RwLocked`: a value many threads
+    read at once, through frozen read guards, and one changes.
+    - **The calculus.** An `RwLocked` is A3.2's lock block. `rw_new`,
+      `RwLocked_share` and the write side (`rw_write` / `wguard_update` /
+      `rw_update` / `rw_set`) are `locked_new`, `Locked_share` and
+      `withLock`, with A3.2's faithfulness premises. A read (`rw_read`)
+      makes a view of the lock block: a block that owns nothing and holds
+      a share of the lock and its payload, frozen while it lives. The
+      read guard is a share of the view, and `rguard_get` lends the
+      payload as A3.1's `arc_get` does: its one dependency is the guard
+      (`Kind.share`), so no write goes through it (`ThruOK.noShare`,
+      `canDo`, an `inout` copy included), and the guard's end ends it.
+      A writer waits while a view of the block lives. The reader count
+      is ghost: the views still reached.
+    - **Panics.** A panic releases a write guard by giving the value back
+      (`Step.scopeLP`) and a read guard by dropping it, as the runtime's
+      drop journal does. Blocks may change while a panic unwinds. A
+      thread that asks for a lock it holds, which the runtime answers
+      with a panic, may panic in the model too (`Step.waitPanic`).
+    - **Threads.** Readers read the lock block's payload at once, and
+      only read it. A writer has it in its own part only while no view
+      lives. The reader count and the writer bit are the runtime's
+      rwlock (trusted base).
+    - **In Lean.** `A2.memory_safe`, `A2.no_leak_end`, `A2.no_leak_panic`
+      and `A3.claim` hold with all of this, on the standard axioms only.
+    - **Not typed yet:** `rw_try_read` / `rw_try_write`, `wguard_get`,
+      `rw_get`'s copy and `wguard_apply`'s result; payloads holding a
+      share, a view or a closure, or a library handle (A3.5: h317 h357).
+      The model lets a guard cross a spawn, which nurlc refuses
+      (`% NotSend`): the runtime's unlock must run on the locking thread.
+    - **Not proven here (phase D):** a view lives until no slot reaches
+      it, which may be after the guard's drop, where the runtime unlocks.
+      As for `Arc`'s refcount, phase D must show that no live binding
+      reaches the payload through the guard once it is dropped.
+  - **A3.5, A3.6** — the rest of what threads share: library handles whose
+    copies are one state, module globals. Not proven (`A3/DESIGN.md` gives
+    the design: they use A3.1's blocks).
 - **B** — the `unsafe` base of the standard library is semantically
   well-typed, so safe code built on it inherits the theorem.
 - **C** — every program nurlc accepts is well-typed in the formal rules.
