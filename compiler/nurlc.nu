@@ -24693,7 +24693,10 @@ unsafe @ mem_path_to_indices s path → s {
 @ __ud_keyable s vt → b {
     : s ll ( nurl_llty vt )
     : s t ? != 0 ( nurl_str_starts ll `{ i1, ` ) ( __wrap_part ll 0 ) ( nurl_str_cat vt `` )
-    ? | == 0 ( nurl_str_len t ) ( __is_handle_enum t ) { ^ F } {}
+    ? == 0 ( nurl_str_len t ) { ^ F } {}
+    // (An enum by its active variant's key, mem_enum_variant_key: one with
+    // a variant that owns a buffer.)
+    ? ( __is_handle_enum t ) { ^ ( __enum_any_keyed_variant t ) } {}
     ? | ( seq t `%String` ) != 0 ( nurl_str_starts t `%Vec__` ) { ^ T } {}
     ? ! ( __is_owned_struct_ty t ) { ^ F } {}
     : s sname ( nurl_str_slice t 1 - ( nurl_str_len t ) 1 )
@@ -25035,6 +25038,70 @@ unsafe @ mem_path_to_indices s path → s {
     ^ T
 }
 
+// Does some variant of enum `ty` own a heap buffer to key it by?
+@ __enum_any_keyed_variant s ty → b {
+    : s sname ( nurl_str_slice ty 1 - ( nurl_str_len ty ) 1 )
+    : ~ s scan ( nurl_str_cat ( nurl_sym_get2 g_root_syms sname `__variants` ) `` )
+    ~ != 0 ( nurl_str_len scan ) {
+        : s vname ( str_first_word scan ) = scan ( str_skip_word scan )
+        ? > ( __variant_key_slot vname ) 0 { ^ T } {}
+    }
+    ^ F
+}
+
+// The payload slot (1-based) that keys variant `vname`: its first payload
+// that is the value's own heap pointer — boxed, or a handle that owns its
+// buffer (enum_payload_storage 3, or 2 with a field that owns memory, as
+// __enum_keyed asks); 0 when none does.
+@ __variant_key_slot s vname → i {
+    : s pcs ( nurl_sym_get2 g_root_syms vname `__paycount` )
+    : i pc ? != 0 ( nurl_str_len pcs ) ( nurl_str_to_int pcs ) 0
+    : ~ i k 0
+    ~ < k pc {
+        : s pt ( nurl_sym_get g_root_syms ( nurl_str_cat3 vname `__payload__` ( nurl_str_int k ) ) )
+        : i st ( enum_payload_storage pt g_root_syms )
+        ? | == st 3 & == st 2 ( __type_needs_drop pt g_root_syms ) { ^ + k 1 } {}
+        = k + k 1
+    }
+    ^ 0
+}
+
+// An enum value's identity: the key of its ACTIVE variant — that variant's
+// first payload slot that owns a heap buffer, chosen by the tag — and null
+// for a variant that owns nothing. The first payload slot alone keyed `A 7
+// …` by the number 7, which another value holds too, so #419's identity
+// test took two different values for one (agora #450). `` when no variant
+// owns a buffer.
+@ mem_enum_variant_key i cg s ty s val → s {
+    : s sname ( nurl_str_slice ty 1 - ( nurl_str_len ty ) 1 )
+    : s ll ( nurl_llty ty )
+    : ~ s scan ( nurl_str_cat ( nurl_sym_get2 g_root_syms sname `__variants` ) `` )
+    : ~ s acc ``
+    : ~ s tag ``
+    ~ != 0 ( nurl_str_len scan ) {
+        : s vname ( str_first_word scan ) = scan ( str_skip_word scan )
+        : i ks ( __variant_key_slot vname )
+        ? > ks 0 {
+            ? == 0 ( nurl_str_len tag ) {
+                = tag ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print tag ) ( nurl_print ` = extractvalue ` ) ( nurl_print ll ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
+            } {}
+            : s c ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print c ) ( nurl_print ` = load i64, i64* @` ) ( nurl_print vname ) ( nurl_print `\n` )
+            : s eq ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print eq ) ( nurl_print ` = icmp eq i64 ` ) ( nurl_print tag ) ( nurl_print `, ` ) ( nurl_print c ) ( nurl_print `\n` )
+            : s sv ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print sv ) ( nurl_print ` = extractvalue ` ) ( nurl_print ll ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, ` ) ( nurl_print ( nurl_str_int ks ) ) ( nurl_print `\n` )
+            : s p ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print p ) ( nurl_print ` = inttoptr i64 ` ) ( nurl_print sv ) ( nurl_print ` to i8*\n` )
+            : s o ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print o ) ( nurl_print ` = select i1 ` ) ( nurl_print eq ) ( nurl_print `, i8* ` ) ( nurl_print p ) ( nurl_print `, i8* ` ) ( nurl_print ? == 0 ( nurl_str_len acc ) `null` acc ) ( nurl_print `\n` )
+            = acc o
+        } {}
+    }
+    ^ acc
+}
+
 // …that tells two values apart, not only a value from a copy of its
 // handle: a struct is keyed by its first field that keys whatever it holds
 // (__handle_keyed with `nonnull`) — not an enum field whose variant may hold
@@ -25043,7 +25110,9 @@ unsafe @ mem_path_to_indices s path → s {
 // compares a value with a copy of its own handle, asks mem_handle_key
 // (agora #431).
 @ mem_identity_key i cg s ty s val → s {
-    ? | | ( seq ty `%String` ) != 0 ( nurl_str_starts ty `%Vec__` ) ( __is_handle_enum ty ) { ^ ( mem_handle_key cg ty val ) } {}
+    ? | ( seq ty `%String` ) != 0 ( nurl_str_starts ty `%Vec__` ) { ^ ( mem_handle_key cg ty val ) } {}
+    // (An enum by its active variant's key: agora #450.)
+    ? ( __is_handle_enum ty ) { ^ ( mem_enum_variant_key cg ty val ) } {}
     ? ! ( __is_owned_struct_ty ty ) { ^ ( nurl_str_cat `` `` ) } {}
     : s sname ( nurl_str_slice ty 1 - ( nurl_str_len ty ) 1 )
     : i fc ( nurl_str_to_int ( nurl_sym_get2 g_root_syms sname `__field_count` ) )
