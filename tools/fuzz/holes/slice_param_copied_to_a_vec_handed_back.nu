@@ -1,6 +1,6 @@
 // slice_param_copied_to_a_vec_handed_back: a function handing back slice_to_vec of its ( Slice s ) parameter.
 // Closed: a copy of a value that holds views holds them too — what a callee makes of an argument's views (`%k` in g_fn_rviews, `h>%k` in g_fn_vkeeps) is derived from its walk, where a parameter's views stand for themselves (the pseudo `%p`); `mem_dup` hands back what its operand holds; a callee with no walk answer (trusted, library) holds what its arguments hold, A2's heldOfArgs.
-// main 4f15689: accepted; AddressSanitizer: heap-use-after-free.
+// main 836c0e9: accepted; AddressSanitizer: heap-use-after-free.
 // map: §2.8 | A2 | rejected | - | agora #377: a function handing back slice_to_vec of its ( Slice s ) parameter
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`

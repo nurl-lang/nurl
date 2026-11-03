@@ -1,6 +1,6 @@
 // mutual_recursion_handing_an_inout_holder_a_local_string_runs_clean: two mutually recursive functions take an inout struct of a view and a String; one hands the other a local String, neither stores a view (agora #371's c3).
 // Closed: parked walks that ask each other's answers settle them as their least fixed point (__bck_walk_scc): the cycle keeps nothing of either String in the holder, so handing it a local is safe. A cycle answered "may" before.
-// main 4f15689: rejected ('w' is storage the caller holds …); safe on every input.
+// main 836c0e9: accepted; ran clean (4f15689 refused it: 'w' is storage the caller holds — github#1605's fixed point accepts it, Agora #371).
 // map: §2.7 | A2 | runs-clean | - | agora #371: a cycle of two functions handing an inout holder a local String it never stores
 $ `stdlib/core/string.nu`
 

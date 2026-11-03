@@ -1,6 +1,6 @@
 // closure_handing_back_mem_dup_of_its_parameter_runs_clean: a vec_clone_with closure handing back mem_dup of its parameter.
 // Kept: a copy of a value that holds views holds them too — what a callee makes of an argument's views (`%k` in g_fn_rviews, `h>%k` in g_fn_vkeeps) is derived from its walk, where a parameter's views stand for themselves (the pseudo `%p`); `mem_dup` hands back what its operand holds; a callee with no walk answer (trusted, library) holds what its arguments hold, A2's heldOfArgs. What the copy does not hold is not followed.
-// main 4f15689: rejected (a closure handing back mem_dup of its own parameter was read as a capture); now runs clean.
+// main 836c0e9: rejected (a closure handing back mem_dup of its own parameter was read as a capture); now runs clean.
 // map: §7.5 | A2 | runs-clean | - | agora #368: a vec_clone_with closure handing back mem_dup of its parameter
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
