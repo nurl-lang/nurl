@@ -5469,6 +5469,9 @@ unsafe @ gen_ret i lex i syms i cg → s {
     // What a view handed back came from (the walk checks it points into
     // nothing this function releases on its way out).
     : i __ret_cls ( bck_walk_class ( nurl_get_last_type ) )
+    // (A bare `s` view: codegen's answer for it — lent, pointed into, a
+    // part of an argument: retlend / retptr / retpart — is the precise one.)
+    : b __ret_bare && == __ret_cls 2 ( seq ( nurl_llty ( nurl_get_last_type ) ) `i8*` )
     : ~ s __ret_sx ? & != 0 g_srcx_on == __ret_cls 2 ( __sx_operand syms ret_first_tt ret_first_val ( nurl_get_last_type ) ( __sx_froot syms ret_first_tt ( nurl_get_last_type ) ) __rsxn0 ) ``
     // …and an owner that may hold views handed back by name (a closure, a
     // container of views): what those point into (its dependencies).
@@ -6238,7 +6241,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
     // (A bare binding is the whole of it: an expression that starts with an
     // identifier is that identifier, prefix notation has nothing after it.)
     = g_bck_ret_whole ? ( is_ident_tok ret_first_tt ) ( nurl_str_cat ret_first_val `` ) ``
-    = g_bck_ret_dep ? __ret_dep 1 ? __ret_exp 2 0
+    = g_bck_ret_dep ? __ret_dep 1 ? __ret_exp 2 ? __ret_bare 3 0
     ( bck_flush_vpass )
     // With a `;` defer armed, the chain runs after the value is the
     // caller's: the owner this `^` hands back by name is lent to the
@@ -28523,7 +28526,7 @@ unsafe @ __sx_nested s sx → b {
         // A match's: field 8, the call it matches (h214).
         ? & != 0 ( nurl_str_len g_bck_match_sx ) ? == __k0 109 ( seq kind `match` ) F { = rec ( nurl_str_cat3 rec `\t\t\t\t` g_bck_match_sx ) = g_bck_match_sx `` } {}
         // A return's: field 8 (field 5 `d`: an owner by name).
-        ? & ? == __k0 114 ( seq kind `ret` ) F != 0 ( nurl_str_len g_bck_ret_sx ) { = rec ( nurl_str_cat3 rec ? == g_bck_ret_dep 1 `\td\t\t\t` ? == g_bck_ret_dep 2 `\te\t\t\t` `\t\t\t\t` g_bck_ret_sx ) } {}
+        ? & ? == __k0 114 ( seq kind `ret` ) F != 0 ( nurl_str_len g_bck_ret_sx ) { = rec ( nurl_str_cat3 rec ? == g_bck_ret_dep 1 `\td\t\t\t` ? == g_bck_ret_dep 2 `\te\t\t\t` ? == g_bck_ret_dep 3 `\tb\t\t\t` `\t\t\t\t` g_bck_ret_sx ) } {}
         ( bck_add `stmts`
         ? == 0 ( nurl_sym_len g_bck `stmts` ) rec ( nurl_str_cat `\n` rec ) )
         // What the right-hand side of a binding read: the sources a borrow
@@ -33182,7 +33185,7 @@ unsafe @ __bck_try_exit_check s st i line → v {
                 // (…and every `inout` parameter goes back to the caller.)
                 ? != 0 g_bck_fmv_any { ( __bck_inout_exit_check st ( bck_field_int rec 3 ) F ) } {}
                 // A view handed back points into what the caller has.
-                ? >= ( __bck_field_off rec 8 ) 0 { ( bck_ret_view_check st ( bck_field rec 8 ) ( bck_field_int rec 3 ) ( seq ( bck_field rec 5 ) `d` ) ! ( seq ( bck_field rec 5 ) `e` ) ) } {}
+                ? >= ( __bck_field_off rec 8 ) 0 { ( bck_ret_view_check st ( bck_field rec 8 ) ( bck_field_int rec 3 ) ( seq ( bck_field rec 5 ) `d` ) ! ( seq ( bck_field rec 5 ) `e` ) ( seq ( bck_field rec 5 ) `b` ) ) } {}
                 // The calls in the returned expression: their pending rows
                 // follow this one, and the walk stops here — an `inout`
                 // argument that does not own its value is asked now.
@@ -34798,7 +34801,7 @@ unsafe @ __vk_assumptions_check → v {
 // A view handed back (`^`, its source expression `sx`) must point into
 // what the caller has — a parameter, a global — not into a binding this
 // function releases on its way out.
-@ bck_ret_view_check s st s sx i line b deps b hand → v {
+@ bck_ret_view_check s st s sx i line b deps b hand b bare → v {
     // (An owner handed back by name: what the views it holds point into.)
     // (`hand`: the value is the binding the source expression names; a
     // closure or a literal written in the return hands nothing it holds
@@ -34815,16 +34818,17 @@ unsafe @ __vk_assumptions_check → v {
     // it holds after its block's end: it may view any parameter, as retclo
     // answers such a closure.)
     ? ( seq srcs `*` ) {
-        ? != 0 ( nurl_str_len g_bck_fn ) { ( __rv_note_all ) } {}
+        ? && != 0 ( nurl_str_len g_bck_fn ) ! bare { ( __rv_note_all ) } {}
         ^
     } {}
     // (What the value it hands back views of the parameters' own storage
     // is this function's answer to its callers, g_fn_rviews: the caller's
     // result depends on those arguments (agora #422, #341, #404). An owner
-    // of views by name, `d`, or as written, `e`; a view or a struct of
-    // views too — codegen's answer for a bare view (retlend / retptr) does
-    // not reach one picked by a join or a match, or made in a value block.)
-    ? != 0 ( nurl_str_len g_bck_fn ) { ( __rv_note ? deps ( __src_mark2 raw ( nurl_sym_get g_bck ( bck_bkey `vdi_` rroot ) ) hnd ) ( nurl_str_cat raw `` ) ) } {}
+    // of views by name, `d`, or as written, `e`; an option or a struct of
+    // views too, which codegen does not answer for. A bare `s` view, `b`,
+    // has codegen's answer — lent, pointed into, a part of an argument
+    // (retlend / retptr / retpart) — finer than a whole parameter's.)
+    ? && != 0 ( nurl_str_len g_bck_fn ) ! bare { ( __rv_note ? deps ( __src_mark2 raw ( nurl_sym_get g_bck ( bck_bkey `vdi_` rroot ) ) hnd ) ( nurl_str_cat raw `` ) ) } {}
     : ~ s rest ( nurl_str_cat srcs `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest ) = rest ( str_skip_word rest )
