@@ -6368,7 +6368,10 @@ unsafe @ gen_ret i lex i syms i cg → s {
     : ~ b __rb_nc F
     : ~ b __rb_h F
     ? | == ret_first_tt TT_DOT == ret_first_tt TT_HASH {
-        = __rb_h ( __is_handle_ty lt )
+        // (…an option or a result of one too: `^ . h o` of a `?String`
+        // field answered "owned", and the caller released what h still
+        // held — agora #459, as #388 for a parameter.)
+        = __rb_h | ( __is_handle_ty lt ) & ( __is_hown_ty lt ) != 0 ( nurl_str_starts ( nurl_llty lt ) `{ i1, ` )
         ? __rb_h {} { ? ( __nc_drop_ty lt ) { = __rb_nc ( __nc_field_lent syms ) } {} }
     } {}
     : b __rb_read & & & ! ret_field_copy | __rb_h __rb_nc
