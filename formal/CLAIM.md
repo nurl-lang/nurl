@@ -195,7 +195,7 @@ Outside A2:
   argument, a struct cursor copy).
 - An `Rc`'s shared state, which is the standard library's (B): #345 and
   #392.
-- A view stored through a borrow: #395 and #414 (`StmtT.editB` takes
+- A view stored through a borrow: #395 and #454 (`StmtT.editB` takes
   element types that hold no views; `rules/t292.md`).
 - A changed plain parameter handed an element rather than an owner: #391
   (above).
