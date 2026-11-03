@@ -101,6 +101,11 @@ theorem EvalR.borFree {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r
   | arcClone _ => exact ⟨hb, fun h => by cases h⟩
   | lockClone _ => exact ⟨hb, fun h => by cases h⟩
   | atomic _ _ _ _ => exact ⟨hb.of_st rfl, fun _ => rfl⟩
+  | chanSend _ h1 _ _ _ => exact ⟨((TakeVal.borFree h1 hb).1).of_st rfl, fun _ => rfl⟩
+  | chanSendClosed _ h1 _ _ => exact ⟨((TakeVal.borFree h1 hb).1).of_st rfl, fun _ => rfl⟩
+  | chanRecv _ _ _ _ => exact ⟨hb.of_st rfl, fun h => by cases h⟩
+  | chanRecvNone _ _ _ _ => exact ⟨hb, fun h => by cases h⟩
+  | chanClose _ _ => exact ⟨hb.of_st rfl, fun _ => rfl⟩
   | arcGet _ _ => exact ⟨hb, fun _ => lendOf_ids _⟩
 
 theorem lendSlot_ids {m : Mem} (hb : BorFree m) {a : Var} {sl : Slot} {v : Val} (ha : m.st a = some sl)

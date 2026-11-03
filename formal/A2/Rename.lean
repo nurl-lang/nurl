@@ -1671,6 +1671,22 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
     have hc : S.canon Γa (S.ρ a) = some (S.liftE a Ea) := by rw [canon_ρ h, ha]; rfl
     exact ⟨intE, RhsT.atomic hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab ha]; exact ht)
       (exprT_ren h hab he1) (exprT_ren h hab he2), fun x => intE_lift x⟩
+  | @chanSend a y Ea Ey s Γa1 D ha hl ht hy hly htyy hpa =>
+    have hca : S.canon Γa (S.ρ a) = some (S.liftE a Ea) := by rw [canon_ρ h, ha]; rfl
+    have hc1 : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
+    obtain ⟨D1, hp1, _, _⟩ := pushArg_ren h hab hy hpa
+    exact ⟨intE, RhsT.chanSend hca (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab ha]; exact ht)
+      hc1 (by rw [liftE_live]; exact hly) (by rw [liftE_ty' h hab hy]; exact htyy) hp1, fun x => intE_lift x⟩
+  | @chanRecv w a Ea s ha hl ht =>
+    have hc : S.canon Γa (S.ρ a) = some (S.liftE a Ea) := by rw [canon_ρ h, ha]; rfl
+    refine ⟨_, RhsT.chanRecv hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab ha]; exact ht),
+      fun x => ?_⟩
+    exact EntryWeaker.mk' (by simp [liftE]) (by simp [liftE, liftMode]) (by simp) (by simp [liftE])
+      (fun h' => by simp [Mode.ownSlot] at h') (by simp)
+  | @chanClose a Ea s ha hl ht =>
+    have hc : S.canon Γa (S.ρ a) = some (S.liftE a Ea) := by rw [canon_ρ h, ha]; rfl
+    exact ⟨intE, RhsT.chanClose hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab ha]; exact ht),
+      fun x => intE_lift x⟩
   | @lockClone a Ea t ha hl ht =>
     have hc : S.canon Γa (S.ρ a) = some (S.liftE a Ea) := by rw [canon_ρ h, ha]; rfl
     refine ⟨_, RhsT.lockClone hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab ha]; exact ht),
@@ -2901,6 +2917,7 @@ theorem RhsT.absOK {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : Rhs
   | pack hy _ _ hpa => exact PushArg.absOK hy hpa hab
   | arcNew hy _ _ _ hpa => exact PushArg.absOK hy hpa hab
   | lockNew hy _ _ _ hpa => exact PushArg.absOK hy hpa hab
+  | chanSend _ _ _ hy _ _ hpa => exact PushArg.absOK hy hpa hab
   | @takel y Ey _ _ hy _ hm _ _ _ =>
     exact (hab.kill _ _ _).setE' hab hy rfl rfl (by rw [hm]; simp) (fun hf => absurd hf (by simp [hm]))
   | @taker y Ey _ _ hy _ hm _ _ _ =>

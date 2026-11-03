@@ -9,9 +9,9 @@ defines A3.0's configuration (`Thread`, `Cfg`, `Cfg.view`), its steps
 NoLeak` for every program A2 types); `../README.md` lists the modules of
 the proof. A3.1's `Arc` and A3.2's `Locked` are mechanized in the same
 claim (A3.1's and A3.2's mechanization, below; A3.2's first cut: what it
-leaves out is listed there), and so is A3.4's `Atomic` (A3.4's
-mechanization, below: channels are designed there, not mechanized);
-A3.3, A3.4's channels, A3.5 and A3.6 are design. This note fixes the
+leaves out is listed there), and so are A3.4's `Atomic` and channels
+(A3.4's mechanization, below; channels are primitive rules on a lock
+block's queue); A3.3, A3.5 and A3.6 are design. This note fixes the
 semantics, the theorem statements and the order of work, so the
 mechanization can be cut into tasks (Agora: formal track, F4–F8). The guarantee it targets is the
 "no data race" clause of `CLAIM.md` and `docs/MEMORY.md` §6.2. The rules
@@ -849,12 +849,13 @@ stated.
 
 ## A3.4's mechanization (`Atomic`, channels)
 
-**Status.** `Atomic` is mechanized. `check.sh` is green with its
-operations in A2 and A3, and `A2.memory_safe`, `A2.soundness`,
-`A2.no_leak_end`, `A2.no_leak_panic` and `A3.claim` are re-proven with
-them. Channels are not mechanized in this cut. Their design is below, as a
-reading over `Locked`, with what primitive rules would need. `CLAIM.md` /
-`README.md` are not updated here.
+**Status.** `Atomic` and channels are mechanized. `check.sh` is green with
+their operations in A2 and A3, and `A2.memory_safe`, `A2.soundness`,
+`A2.no_leak_end`, `A2.no_leak_panic`, the `DynCell` theorems and
+`A3.claim` are re-proven with them. A channel is a lock block whose payload
+is its queue and its closed flag, and `chan_send`, `chan_recv`,
+`chan_try_recv` and `chan_close` are primitive rules on it (Channels,
+below). `CLAIM.md` / `README.md` are not updated here.
 
 **Where an `Atomic` lives: in an integer lock block.** The draft gave it a
 third block kind. The cut uses A3.2's lock block of type `int` instead.
@@ -932,49 +933,177 @@ third block kind. The cut uses A3.2's lock block of type `int` instead.
   reaches it (`Cfg.sweep`, `Reached`, `CInv`'s second half). The spawner's
   `atomic_load` after the join is `EvalR.atomic` on a block its own slot
   reaches.
-- `chan_send_then_use` (h21) maps to no channel rule, since channels are
-  not mechanized. Under the reading below, the send moves the value
-  (`PushArg.move`, through `StmtT.push`), and the sender's later read is
-  refused because its entry is dead.
+- `chan_send_then_use` (h21) maps to `RhsT.chanSend` (the channels'
+  probes, below).
 
-**Channels: designed, not mechanized.** The runtime's `ChImpl` is a mutex,
-a condition variable, a queue `Vec A`, a `closed` flag and a waiter count.
-So a channel reads as a lock block whose payload is the queue and the flag:
-`Channel A` is `Locked (Vec A, i64)`.
-- `chan_new` is `lockNew` of a fresh `Vec` and a 0, and `Channel_share` /
-  `Channel_drop` are a lock share's.
-- The queue's values are the block's payload tree. The sweep frees them
-  with the block, so `no_leak` covers values left in a channel.
-- `chan_send ch v` is one critical section: `v` moves into the queue, or
-  is dropped when the flag is set.
-- `chan_recv` is a critical section that takes the head when there is one.
-  When the queue is empty and open, it waits: in the reading as a retry
-  loop, as a primitive as `RBlocked`. When the queue is empty and closed,
-  it answers none.
-- The values in the queue are in the lock's payload, read by no one and in
-  no thread's part, so they race with nothing. The queue's ends are the
-  runtime mutex's (trusted base).
+**Channels.** Mechanized as primitive rules: `chan_send`, `chan_recv`,
+`chan_try_recv` and `chan_close` are right-hand sides, each one step on a
+lock block's payload.
 
-What primitive rules would need, so the reading is mechanized rather than
-argued:
-- `Rhs.chanSend c y` / `Rhs.chanRecv c` on `lk (Vec t)` blocks. Their
-  preservation is `rhs_lockNew`'s, with a value appended to an existing
-  block's tree, and `acquire_pres`'s, with the head taken out of it.
-- `EvalR.ownedId` would need a third case: the received value's addresses
-  were a payload's.
-- `RBlocked` would cover an empty, open queue.
-- The `closed` flag, or a pair payload.
-- `chan_try_recv` / `chan_close`.
+**Where a channel lives: in a lock block of its queue and its flag.** The
+runtime's `ChImpl` is a mutex, a condition variable, a queue `Vec A`, a
+`closed` flag and the waiters' lists. The model keeps the queue and the
+flag, as the payload of A3.2's lock block: `Channel s` is
+`Ty.lk (.prod (.vec s) .int)`, and its payload is
+`pair (node s c d es) (int f)`, with `es` the queue from the front and `f`
+the flag (0 is open).
+- The flag is a pair's second field, not a field of `Blk` or a third
+  `BKind`. Either of those would add a case to every function on blocks
+  (`BlkOwn`, `BlkKeep`, `Refers`, the sweep, `ShareFits`) and on types and
+  values, for no difference in memory. The pair is a lock payload as A3.2
+  has it, and it is `ChImpl`'s two fields. So creation, sharing, the drop,
+  the sweep and Send are a lock's, unchanged:
+  - `chan_new` is `lockNew (prod (vec s) int)` of a pair of a `new s` and a
+    `0` (`letv`, `pair`, `lockNew`);
+  - `Channel_share` is `lockClone`;
+  - `Channel_drop` and `chan_free` drop a share, which frees nothing
+    (`Frees.lk`);
+  - the sweep frees the block, the queue and every value still in it, once
+    no thread's slot reaches it.
+- The cost, as for `Atomic`: a model program may also `withLock` a channel
+  (an operation on it then waits, `RBlocked`), or make one by `lockNew` of a
+  non-empty queue or a set flag. The rules read the payload as it is, so
+  neither is unsound. A source channel is made by `chan_new` and has no
+  `locked_update`.
 
-Alternatively, the reading's library bodies could be typed as
-`A2/DynCell.lean` types `pick` (`withLock` / `unpair` / `push` / `pop`, and
-a loop for `chan_recv`). The A3.2 rules already cover them, with one
-deviation: `pop` takes the back where the queue takes the front, which no
-memory fact reads.
+**The rules.**
+- `Rhs.chanSend a y` (`chan_send a y`), typed by `RhsT.chanSend`:
+  - `a` is a live share of type `lk (prod (vec s) int)`, and `y` a live `s`,
+    handed over by `PushArg` as `vec_push` takes it (an owner moves and its
+    entry dies, an integer is copied). The answer is an integer (`intE`).
+  - `s` holds no view, no closure and no share: `Ty.ok (lk _)`'s condition,
+    as for a lock's payload (`chan_tyok` reads it).
+  - `EvalR.chanSend`: the flag is 0. `y`'s value (`TakeVal`) goes to the
+    back of the queue (`es ++ [v]`), and the answer is 1. The step checks
+    that the queue's two addresses are live, as `push` does.
+  - `EvalR.chanSendClosed`: the flag is not 0. The value is freed (`Frees`),
+    and the answer is 0.
+- `Rhs.chanRecv w a` (`chan_recv a` for `w = true`, `chan_try_recv a` for
+  `w = false`), typed by `RhsT.chanRecv`: through the same share, an owned
+  `sum int s` (A2's `Option s`, `inl` being `none`) that holds nothing.
+  - `EvalR.chanRecv`: the queue is `v :: es`. `v` moves out of the payload,
+    from the front as `vec_remove q 0` takes it, and the answer is `inr v`.
+  - `EvalR.chanRecvNone`: the queue is empty, and the flag is set or `w` is
+    false. The answer is `inl (int 0)`, the runtime's `@ ?A { F # A 0 }`.
+- `Rhs.chanClose a` (`chan_close a`), typed by `RhsT.chanClose`:
+  `EvalR.chanClose` sets the flag to 1. The queue stays, for receivers to
+  drain. The answer is 0.
+- `RBlocked` (A3.4's, for atomics) gains the channels. Each of the three
+  waits while a `withLock` has the payload checked out, and `chan_recv`
+  (`w = true`) waits while the queue is empty and the flag is 0. `Blocked`
+  reads `RBlocked` at `letv`, `assign` and `letd` as before, and
+  `evalR_exists` gives a step in every other case.
+
+**A2's proof.**
+- `setPay_pres`: a lock block's payload is changed in place to `p'`, a tree
+  of its type. Each of `p'`'s addresses was the payload's, or is taken in
+  from no owned tree and no payload. Then the block is kept
+  (`BlkLe.setLock`), `BlkOwn` and `BlocksIn` hold, and so does `MInv`
+  (`MInv.grow`). The three rules below are its instances.
+- `chanSend_pres`: `rhs_lockNew`'s argument, into a block that exists. The
+  tree taken from `y` (`push_take`'s `Pushed`: in no other owned tree and in
+  no payload) joins the payload, which owns it, and `y`'s slot is empty.
+- `chanSendClosed_pres`: `HeapOK.freeV`'s argument (an element set out of
+  range). A tree that no owner holds and no payload owns is freed, and no
+  owned or payload address is.
+- `chanRecv_pres`: `acquire_pres`'s argument, for a part of the payload.
+  The head's addresses leave the block's tree, which keeps the rest. They
+  are in no owned tree and in no other payload (`BlkOwn`), and apart from
+  the rest of their payload (`Nodup`), so the head is handed over owned
+  (`out_ownNoView`).
+- `chanClose_pres`: the flag owns no address, so the tree's addresses stay
+  as they were.
+- `covers_evalR`: a sent tree's addresses become the payload's, a dropped
+  tree's are not live, and a received head's are the value in flight's.
+- `evalR_exists`: the block is a lock block of the share's type
+  (`MInv.lk_val`). So its payload is checked out (`RBlocked`), or it is a
+  pair of a `Vec` and an integer, whose addresses are live (`BlkOwn`). A
+  closed send's `Frees` exists (`frees_exists`).
+- `Codes`: the head's packages are the payload's (`MInv.blkCodes`).
+  `Rename`, `Wf`, `NameWf`, `SrcKeep`, `TypingFacts`, `Call`: a send is
+  `lockNew`'s case, a receive `lockClone`'s and a close `atomic`'s.
+
+**A3's proof.**
+- *No touch for the queue's ends.* A send, a receive and a close change
+  only the payload of a lock block. No thread reads that payload while it
+  is in the block (`Blk.rd` of a lock block is nothing), and it is in no
+  thread's part. The runtime's mutex (`ChImpl.m`) orders the operations on
+  one channel, and it is trusted base, as a lock's word is (A3.2).
+  - `RTouch.chanSend` is the one new touch. It counts `y`'s tree as
+    written. A closed channel's drop frees that tree, and for a move into
+    the queue the touch over-approximates. The tree is the sender's own
+    (`rTouch_seen`).
+- *The values in the queue are in the block's payload*, in `payPart` and in
+  no thread's part (`CParts.pay`).
+- *The partition moves with each value.* `CParts.thread_of` computes the
+  stepping thread's new part from its view, so `CParts` gets no new field.
+  - Sender's part to the block: `EvalR.payAt` says a payload's address
+    after the step was the same block's, or in the sender's own trees.
+  - Block to the receiver's part: `EvalR.ownedId` now lets the value a
+    right-hand side hands back hold a payload's addresses (`PayAddr`).
+    `Step.ownedId` already had that case, for a lock's checked-out payload,
+    and `Step.avoids` takes it through `PayOff`.
+  - The other threads' facts survive by `ThreadOK.move`, unchanged: the
+    block is kept as a lock block of its type.
+- *The frame lemmas.* The queue's two addresses are a payload's, so
+  `EvalR.restrict` keeps their checks through `PayOff`, as for `VecOf`.
+  A closed channel's drop is of the sender's own tree. For it,
+  `EvalR.restrict` takes `BorFree`, `EvalR.keep` takes `BorFree` and
+  `Avoids`, and `EvalR.lift` takes the part's disjointness, as `Step`'s
+  versions already did. `Frees.lift` and `Frees.restrict` move before them.
+  `Grows`, `BorFree` and `RBlocked.of_eq` get the new cases.
+- *`no_leak` covers values left in a queue.* They are the block's tree, and
+  the configuration's sweep frees them with the block once no thread
+  reaches it, so `CInv.noLeak` is unchanged.
+- Send: a channel share is an `lk t` with a view-free `t`, so `lk_spawnOK`
+  covers it.
+- Sync: only the channel's steps reach the queue.
+
+**Faithful to the runtime** (`stdlib/std/channel.nu`).
+- `chan_send ch v` takes `ch`'s mutex.
+  - On a closed channel it unlocks and answers `F`, and the value it took
+    is dropped ("drops the value: nothing leaks"): `chanSendClosed`.
+  - Otherwise it pushes `v` at the back of `q`, wakes a receiver and
+    answers `T`: `chanSend`.
+  - Either way it is one critical section, and the model's one step.
+- `chan_recv ch` takes the mutex and waits, by `cond_wait` or by parking
+  the fiber, while `q` is empty and the channel is open. The model's thread
+  is `RBlocked` meanwhile, which is not stuck. A wake-up is scheduling: the
+  model simply does not step the thread. Then an empty queue answers `None`
+  (`chanRecvNone`), and otherwise `vec_remove q 0` takes the front
+  (`chanRecv`).
+- `chan_try_recv` answers `None` on an empty queue, whatever the flag:
+  `chanRecv false`.
+- `chan_close` sets `closed` to 1 and wakes the waiters: `chanClose`.
+- `Channel` is a `Shared ChImpl`. `Channel_share` is `shared_clone`, and the
+  last share's drop frees the `ChImpl` with whatever is still queued. The
+  model's sweep frees the block, and the queue's values with it, when no
+  slot reaches it (A3.1's phase-D obligation, unchanged).
+- `b` is 1 or 0, and `?A` is `sum int A`, as A2 reads `Option`.
+
+**Simplifications in this cut.** Each is a restriction, and sound as stated.
+- An element holds no view, no closure and no share, as a lock's payload
+  does not (A3.2). A `Channel` of `Arc`s or of `Channel`s waits for payloads
+  that keep blocks alive.
+- The queue's buffer never moves. Nothing views it, so `vec_push`'s
+  reallocation is not observable.
+- `chan_send`'s `mem_send_check` (the crossing check) is A3.5's. With no
+  share in the element, there is nothing for it to refuse.
+- The waiters' lists, the condition variable and `select` (`?? {}`) are not
+  modeled. Neither are `chan_len` and `chan_is_closed`, each one read of the
+  payload, as `chanRecvNone`'s.
+
+**Probes.** `chan_send_then_use` (h21) maps to `RhsT.chanSend`. The send
+moves `s` into the queue: `PushArg.move` kills `s`'s entry, and
+`EvalR.chanSend` empties its slot. So the sender's later `string_data s` is
+refused, because `s`'s entry is dead. At run time that read is a use after
+the receiver's free.
 
 **Not proven here.**
-- channels, as rules or as typed library bodies;
-- the `closed` flag and `chan_try_recv`;
+- deadlock freedom, and that a waiting `chan_recv` is ever woken;
+- channels whose elements hold shares or views, and `select`;
+- a typed program over the channel rules (a probe's encoding, as
+  `A2/DynCell.lean` types `pick`);
 - `CLAIM.md` / `README.md`.
 
 ## Open questions

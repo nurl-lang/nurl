@@ -367,6 +367,50 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
       EvalR m (.atomic op a e1 e2)
         (.ok (.int (op.run n n1 n2).1) false
           { m with blk := upd m.blk k (some ⟨.int, .lock, some (.int (op.run n n1 n2).2)⟩) })
+  /-- A3.4: `chan_send a y` on the channel `a` shares, a lock block whose
+      payload is its queue (a `Vec`) and its closed flag: the value taken
+      from `y` (an owner's tree moves, an integer is copied, as `vec_push`
+      takes it) goes to the back of the open queue, and the answer is 1.  The
+      queue's buffer is not moved: nothing views it. -/
+  | chanSend {a y : Var} {o : Bool} {k : Nat} {t u : Ty} {c d : Nat} {es : List Val} {v : Val}
+      {m1 : Mem} :
+      m.st a = some ⟨o, some (.lk k)⟩ → TakeVal m y v m1 →
+      m1.blk k = some ⟨t, .lock, some (.pair (.node u c d es) (.int 0))⟩ →
+      m1.alloc c = true → m1.alloc d = true →
+      EvalR m (.chanSend a y)
+        (.ok (.int 1) false
+          { m1 with blk := upd m1.blk k (some ⟨t, .lock, some (.pair (.node u c d (es ++ [v])) (.int 0))⟩) })
+  /-- ... on a closed channel the value is dropped, and the answer is 0. -/
+  | chanSendClosed {a y : Var} {o : Bool} {k : Nat} {t : Ty} {q : Val} {f : Nat} {v : Val} {m1 : Mem}
+      {a' : Nat → Bool} :
+      m.st a = some ⟨o, some (.lk k)⟩ → TakeVal m y v m1 →
+      m1.blk k = some ⟨t, .lock, some (.pair q (.int (f + 1)))⟩ → Frees m1.alloc v a' →
+      EvalR m (.chanSend a y) (.ok (.int 0) false { m1 with alloc := a' })
+  /-- A3.4: `chan_recv` / `chan_try_recv` on the channel `a` shares, a lock
+      block whose payload is its queue (a `Vec`, taken from the front) and
+      its closed flag: the head moves out of the queue, an owned `some`.
+      (Its payload checked out by a `withLock`, or, for `chan_recv`, its
+      queue empty and open, the channel has no step: the thread waits,
+      `RBlocked`.) -/
+  | chanRecv {w : Bool} {a : Var} {o : Bool} {k : Nat} {t u : Ty} {c d f : Nat} {v : Val}
+      {es : List Val} :
+      m.st a = some ⟨o, some (.lk k)⟩ →
+      m.blk k = some ⟨t, .lock, some (.pair (.node u c d (v :: es)) (.int f))⟩ →
+      m.alloc c = true → m.alloc d = true →
+      EvalR m (.chanRecv w a)
+        (.ok (.inr v) true { m with blk := upd m.blk k (some ⟨t, .lock, some (.pair (.node u c d es) (.int f))⟩) })
+  /-- ... `none` when the queue is empty and the flag set, or
+      (`chan_try_recv`) just empty. -/
+  | chanRecvNone {w : Bool} {a : Var} {o : Bool} {k : Nat} {t u : Ty} {c d f : Nat} :
+      m.st a = some ⟨o, some (.lk k)⟩ →
+      m.blk k = some ⟨t, .lock, some (.pair (.node u c d []) (.int f))⟩ → m.alloc c = true →
+      (w = false ∨ f ≠ 0) → EvalR m (.chanRecv w a) (.ok (.inl (.int 0)) true m)
+  /-- A3.4: `chan_close`: the flag is set; the queue stays, for receivers to
+      drain. -/
+  | chanClose {a : Var} {o : Bool} {k : Nat} {t : Ty} {q : Val} {f : Nat} :
+      m.st a = some ⟨o, some (.lk k)⟩ → m.blk k = some ⟨t, .lock, some (.pair q (.int f))⟩ →
+      EvalR m (.chanClose a)
+        (.ok (.int 0) false { m with blk := upd m.blk k (some ⟨t, .lock, some (.pair q (.int 1))⟩) })
 
 /-! ### Calls
 
@@ -409,6 +453,9 @@ def Rhs.rename (ρ : Var → Var) : Rhs → Rhs
   | .lockNew t y => .lockNew t (ρ y)
   | .lockClone a => .lockClone (ρ a)
   | .atomic op a e1 e2 => .atomic op (ρ a) (e1.rename ρ) (e2.rename ρ)
+  | .chanSend a y => .chanSend (ρ a) (ρ y)
+  | .chanRecv w a => .chanRecv w (ρ a)
+  | .chanClose a => .chanClose (ρ a)
 
 def Edit.rename (ρ : Var → Var) : Edit → Edit
   | .push y => .push (ρ y)
@@ -720,9 +767,15 @@ inductive Steps0 (P : Prog) : Mem → Stmt → Res → Prop
   | panic {m m' : Mem} {s : Stmt} : Step P m s (.panic m') → Steps0 P m s (.panic m')
 
 /-- A3.4: a right-hand side that waits: an atomic operation on an integer
-    lock block whose payload a `withLock` has checked out. -/
+    lock block whose payload a `withLock` has checked out; a channel
+    operation on one too, or a `chan_recv` on an empty, open queue. -/
 def RBlocked (m : Mem) : Rhs → Prop
   | .atomic _ a _ _ => ∃ o k, m.st a = some ⟨o, some (.lk k)⟩ ∧ m.blk k = some ⟨.int, .lock, none⟩
+  | .chanSend a _ => ∃ o k t, m.st a = some ⟨o, some (.lk k)⟩ ∧ m.blk k = some ⟨t, .lock, none⟩
+  | .chanRecv w a => ∃ o k t, m.st a = some ⟨o, some (.lk k)⟩ ∧
+      (m.blk k = some ⟨t, .lock, none⟩ ∨
+        (w = true ∧ ∃ u c d, m.blk k = some ⟨t, .lock, some (.pair (.node u c d []) (.int 0))⟩))
+  | .chanClose a => ∃ o k t, m.st a = some ⟨o, some (.lk k)⟩ ∧ m.blk k = some ⟨t, .lock, none⟩
   | _ => False
 
 /-- A3.2: the next step takes a lock whose payload is checked out: the

@@ -1,10 +1,9 @@
 # The claim
 
-> **Status: A1, A2, A3.0, A3.1, A3.2's first cut and A3.4's `Atomic` are
-> proven** (`A1.memory_safe`, `A2.memory_safe`, `A2.no_leak_end`,
-> `A3.claim`, [`README.md`](README.md)); the rest of A3.2, A3.3, A3.4's
-> channels, A3.5, A3.6 and B–D are the statement the proof is working
-> towards, not one it has reached.
+> **Status: A1, A2, A3.0, A3.1, A3.2's first cut and A3.4 are proven**
+> (`A1.memory_safe`, `A2.memory_safe`, `A2.no_leak_end`, `A3.claim`,
+> [`README.md`](README.md)); the rest of A3.2, A3.3, A3.5, A3.6 and B–D are
+> the statement the proof is working towards, not one it has reached.
 
 ## Statement
 
@@ -13,9 +12,9 @@ functions and its `unsafe` assertions, is memory-safe and leak-free** —
 *proven so far (A1, A2) for the ownership rules of the single-threaded
 language as the calculus models them, (A3.0) for threads that share
 nothing but what they move, (A3.1) for threads that also share `Arc`
-payloads, (A3.2, first cut) `Locked` values and (A3.4) `Atomic` words;
-the data-race clause for the rest of what threads share is the rest of
-A3.2, A3.3, A3.4's channels, A3.5 and A3.6, and the link from the rules to
+payloads, (A3.2, first cut) `Locked` values and (A3.4) `Atomic` words
+and channels; the data-race clause for the rest of what threads share is
+the rest of A3.2, A3.3, A3.5 and A3.6, and the link from the rules to
 nurlc and its code is B–D*
 (below): no use after free, no double free, no read through a dangling
 view, no out-of-bounds access, no data race, and everything it allocated
@@ -163,8 +162,8 @@ the LLVM / C11 memory model rather than redefining it.
       that holds it (a nested update, or another fiber on that thread).
       The model's thread waits, but the runtime's default pthread mutex
       leaves it undefined (Agora #455).
-  - **A3.4, `Atomic`** *(proven)* — an integer every thread reads and
-    changes.
+  - **A3.4, `Atomic` and channels** *(proven)* — an integer every thread
+    reads and changes, and a queue values move through.
     - **The calculus.** An `Atomic` is a lock block of an integer that is
       never checked out: `atomic_new`, `Atomic_share` and its drop are
       A3.2's `locked_new`, `Locked_share` and a share's drop.
@@ -180,11 +179,26 @@ the LLVM / C11 memory model rather than redefining it.
       and `A3.claim` hold with it, on the standard axioms only. The
       model's integers are naturals, so `atomic_sub` saturates where the
       runtime's wraps; no memory fact reads the number.
-  - **A3.3, A3.4's channels, A3.5, A3.6** — the rest of what threads
-    share: `RwLocked` and `% Frozen` read guards, channels, library handles
-    whose copies are one state, module globals. Not proven (`A3/DESIGN.md`
-    gives the design: they use A3.1's blocks; a channel is a lock block
-    whose payload is its queue).
+    - **Channels.** A channel is a lock block whose payload is its queue
+      and its closed flag, as the runtime's `ChImpl` holds a `Vec` and a
+      flag behind its mutex. `chan_new` and `Channel_share` are a lock's.
+      `chan_send` moves the value to the back of the queue, out of the
+      sender's part, or drops it when the channel is closed (answer 0).
+      `chan_recv` moves the front out to the receiver, owned (an option:
+      none when closed and empty), and waits while the queue is empty and
+      open (`RBlocked`). `chan_try_recv` answers none at once, and
+      `chan_close` sets the flag. Each is one step: the queue's ends are
+      the runtime mutex's (trusted base). Values in a queue are the
+      block's tree, in no thread's part, so they race with nothing, and
+      the sweep frees what is left in a queue with its block (`no_leak`).
+    - **Not typed yet:** a channel of values that hold a share, a view or
+      a closure (a `Channel` of `Arc`s, of closures: A3.5's crossing),
+      `chan_len`, `chan_is_closed` and `select`. Deadlock freedom, and that
+      a waiting `chan_recv` is woken, are not claimed.
+  - **A3.3, A3.5, A3.6** — the rest of what threads share: `RwLocked` and
+    `% Frozen` read guards, library handles whose copies are one state,
+    module globals. Not proven (`A3/DESIGN.md` gives the design: they use
+    A3.1's blocks).
 - **B** — the `unsafe` base of the standard library is semantically
   well-typed, so safe code built on it inherits the theorem.
 - **C** — every program nurlc accepts is well-typed in the formal rules.

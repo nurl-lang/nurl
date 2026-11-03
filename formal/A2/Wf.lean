@@ -500,6 +500,12 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
   | lockClone _ _ _ =>
     exact ⟨h, fun _ => rfl, same, fun _ _ r hr => by simp [roots, Entry.vdeps, Mode.ownSlot] at hr⟩
   | atomic _ _ _ _ _ => exact ⟨h, fun _ => rfl, same, fun _ hn => by simp [intE] at hn⟩
+  | chanSend _ _ _ hy hly htyy hpa =>
+    obtain ⟨hw1, hd1, hm1, _⟩ := hpa.wf h hy hly htyy
+    exact ⟨hw1, hd1, hm1, fun _ hn => by simp [intE] at hn⟩
+  | chanRecv _ _ _ =>
+    exact ⟨h, fun _ => rfl, same, fun _ _ r hr => by simp [roots, Entry.vdeps, Mode.ownSlot] at hr⟩
+  | chanClose _ _ _ => exact ⟨h, fun _ => rfl, same, fun _ hn => by simp [intE] at hn⟩
   | @arcGet y Ey a hy hl ht _ _ =>
     refine ⟨h, fun _ => rfl, same, fun _ hn => ?_⟩
     have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (by rw [ht]; simp)
@@ -837,6 +843,7 @@ theorem RhsT.domMode {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : R
   | pack hy _ _ hpa => exact PushArg.domMode hy hpa
   | arcNew hy _ _ _ hpa => exact PushArg.domMode hy hpa
   | lockNew hy _ _ _ hpa => exact PushArg.domMode hy hpa
+  | chanSend _ _ _ hy _ _ hpa => exact PushArg.domMode hy hpa
   | @takel y Ey _ _ hy _ _ _ _ _ => exact (DomMode.refl Γ |>.kill .replace false y).setE ⟨Ey, hy, rfl⟩
   | @taker y Ey _ _ hy _ _ _ _ _ => exact (DomMode.refl Γ |>.kill .replace false y).setE ⟨Ey, hy, rfl⟩
   | _ => exact DomMode.refl Γ

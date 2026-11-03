@@ -32,6 +32,15 @@ theorem RBlocked.of_eq {m m' : Mem} (hst : m'.st = m.st) (hb : m'.blk = m.blk) {
   | atomic _ a _ _ =>
     obtain ⟨o, k, h1, h2⟩ := h
     exact ⟨o, k, hst ▸ h1, hb ▸ h2⟩
+  | chanSend a _ =>
+    obtain ⟨o, k, t, h1, h2⟩ := h
+    exact ⟨o, k, t, hst ▸ h1, hb ▸ h2⟩
+  | chanRecv _ a =>
+    obtain ⟨o, k, t, h1, h2⟩ := h
+    exact ⟨o, k, t, hst ▸ h1, hb ▸ h2⟩
+  | chanClose a =>
+    obtain ⟨o, k, t, h1, h2⟩ := h
+    exact ⟨o, k, t, hst ▸ h1, hb ▸ h2⟩
   | _ => exact h
 
 /-- A3.2: waiting for a lock reads only the slots and the blocks. -/

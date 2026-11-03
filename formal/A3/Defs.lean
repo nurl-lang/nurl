@@ -189,6 +189,13 @@ inductive RTouch (m : Mem) : Rhs → Nat → Bool → Prop
   | arcGet {a : Var} {o : Bool} {k : Nat} {p : Val} {bl : Blk} {i : Nat} :
       m.st a = some ⟨o, some (.arc k p)⟩ → m.blk k = some bl → i ∈ bl.rd.ids →
       RTouch m (.arcGet a) i false
+  /-- A3.4: `chan_send` hands over the tree `y` owns: into the queue, or, on
+      a closed channel, dropped, which writes it (every address of it, either
+      way: an over-approximation).  The queue's ends, which a send or a
+      receive changes, are the runtime mutex's, as a lock's word is: no
+      address. -/
+  | chanSend {a y : Var} {v : Val} {i : Nat} :
+      m.st y = some ⟨true, some v⟩ → i ∈ v.ids → RTouch m (.chanSend a y) i true
 
 /-- What the next step of `s` touches. -/
 inductive Touch (P : Prog) (m : Mem) : Stmt → Nat → Bool → Prop

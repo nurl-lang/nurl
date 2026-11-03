@@ -86,6 +86,39 @@ theorem TakeVal.restrict {m m1 : Mem} {y : Var} {v : Val} (h : TakeVal m y v m1)
   | own hy => exact .own hy
   | bor hy => exact .bor hy
 
+mutual
+/-- Freeing a tree none of whose addresses is in the part frees it on the
+    own part. -/
+theorem Frees.restrict {a a' : Nat → Bool} {T : Val} (h : Frees a T a') {a2 : Nat → Bool}
+    (hT : ∀ i ∈ T.ids, a2 i = false) : Frees (minus a a2) T (minus a' a2) := by
+  match h with
+  | .int => exact .int
+  | .view => exact .view
+  | .arc => exact .arc
+  | .lk => exact .lk
+  | @Frees.node _ _ _ c d _ hc hd hl =>
+    have hdc : d ≠ c := by
+      intro e; subst e; simp [upd] at hd
+    refine .node (minus_true hc (hT c (by simp))) ?_ ?_
+    · rw [upd_ne _ _ hdc] at hd ⊢
+      exact minus_true hd (hT d (by simp))
+    · have h1 := FreesL.restrict hl (a2 := a2) fun i hi => hT i (by simp [hi])
+      rwa [minus_upd_false, minus_upd_false] at h1
+  | .pair h1 h2 =>
+    exact .pair (Frees.restrict h1 fun i hi => hT i (by simp [hi]))
+      (Frees.restrict h2 fun i hi => hT i (by simp [hi]))
+  | .inl h1 => exact .inl (Frees.restrict h1 fun i hi => hT i (by simpa using hi))
+  | .inr h1 => exact .inr (Frees.restrict h1 fun i hi => hT i (by simpa using hi))
+  | .pkg h1 => exact .pkg (Frees.restrict h1 fun i hi => hT i (by simpa using hi))
+theorem FreesL.restrict {a a' : Nat → Bool} {es : List Val} (h : FreesL a es a') {a2 : Nat → Bool}
+    (hT : ∀ i ∈ idsL es, a2 i = false) : FreesL (minus a a2) es (minus a' a2) := by
+  match h with
+  | .nil => exact .nil
+  | .cons h1 h2 =>
+    exact .cons (Frees.restrict h1 fun i hi => hT i (by simp [hi]))
+      (FreesL.restrict h2 fun i hi => hT i (by simp [hi]))
+end
+
 /-- `r1` is the evaluation `r` on the thread's own part: the same outcome,
     value and ownership, and the store without the addresses of `a2`. -/
 def RResDown (a2 : Nat → Bool) : RRes → RRes → Prop
@@ -96,7 +129,7 @@ def RResDown (a2 : Nat → Bool) : RRes → RRes → Prop
 /-- **Evaluating a right-hand side** on the own part: every address it
     checks is owned, and `new` allocates past the part. -/
 theorem EvalR.restrict {m : Mem} {r : Rhs} {res : RRes} (h : EvalR m r res) {a2 : Nat → Bool}
-    (hav : Avoids m a2) (hp : PayOff m a2) (hf : FreshFrom a2 m.nid) :
+    (hav : Avoids m a2) (hb : BorFree m) (hp : PayOff m a2) (hf : FreshFrom a2 m.nid) :
     ∃ res1, EvalR { m with alloc := minus m.alloc a2 } r res1 ∧ RResDown a2 res res1 := by
   cases h with
   | expr he => exact ⟨_, .expr (Eval.restrict he hav hp), rfl, rfl, rfl⟩
@@ -146,20 +179,36 @@ theorem EvalR.restrict {m : Mem} {r : Rhs} {res : RRes} (h : EvalR m r res) {a2 
   | lockClone hy => exact ⟨_, .lockClone hy, rfl, rfl, rfl⟩
   | atomic hy hk h1 h2 =>
     exact ⟨_, .atomic hy hk (Eval.restrict h1 hav hp) (Eval.restrict h2 hav hp), rfl, rfl, rfl⟩
+  -- A3.4: the queue's addresses are the channel's payload's; what a send to a
+  -- closed channel drops is the thread's own
+  | @chanSend _ _ _ k _ _ _ _ _ _ _ hy h1 hk hc hd =>
+    have hk0 := hk
+    rw [TakeVal.blk h1] at hk0
+    exact ⟨_, .chanSend hy (TakeVal.restrict h1 a2) hk (minus_true hc (hp _ ⟨_, _, hk0, by simp [Blk.tree]⟩))
+      (minus_true hd (hp _ ⟨_, _, hk0, by simp [Blk.tree]⟩)), rfl, rfl, rfl⟩
+  | chanSendClosed hy h1 hk hfr =>
+    exact ⟨_, .chanSendClosed hy (TakeVal.restrict h1 a2) hk
+      (Frees.restrict hfr (TakeVal.avoids h1 hb hav).2), rfl, rfl, rfl⟩
+  | chanRecv hy hk hc hd =>
+    exact ⟨_, .chanRecv hy hk (minus_true hc (hp _ ⟨_, _, hk, by simp [Blk.tree]⟩))
+      (minus_true hd (hp _ ⟨_, _, hk, by simp [Blk.tree]⟩)), rfl, rfl, rfl⟩
+  | chanRecvNone hy hk hc hw =>
+    exact ⟨_, .chanRecvNone hy hk (minus_true hc (hp _ ⟨_, _, hk, by simp [Blk.tree]⟩)) hw, rfl, rfl, rfl⟩
+  | chanClose hy hk => exact ⟨_, .chanClose hy hk, rfl, rfl, rfl⟩
   | arcGet hy hk => exact ⟨_, .arcGet hy hk, rfl, rfl, rfl⟩
 
 theorem EvalR.restrict_ok {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.ok v o m1))
-    {a2 : Nat → Bool} (hav : Avoids m a2) (hp : PayOff m a2) (hf : FreshFrom a2 m.nid) :
+    {a2 : Nat → Bool} (hav : Avoids m a2) (hb : BorFree m) (hp : PayOff m a2) (hf : FreshFrom a2 m.nid) :
     EvalR { m with alloc := minus m.alloc a2 } r (.ok v o { m1 with alloc := minus m1.alloc a2 }) := by
-  obtain ⟨res1, h1, hd⟩ := EvalR.restrict h hav hp hf
+  obtain ⟨res1, h1, hd⟩ := EvalR.restrict h hav hb hp hf
   cases res1 with
   | ok v1 o1 m2 => obtain ⟨rfl, rfl, rfl⟩ := hd; exact h1
   | panic => exact (hd : False).elim
 
 theorem EvalR.restrict_panic {m : Mem} {r : Rhs} (h : EvalR m r .panic) {a2 : Nat → Bool}
-    (hav : Avoids m a2) (hp : PayOff m a2) (hf : FreshFrom a2 m.nid) :
+    (hav : Avoids m a2) (hb : BorFree m) (hp : PayOff m a2) (hf : FreshFrom a2 m.nid) :
     EvalR { m with alloc := minus m.alloc a2 } r .panic := by
-  obtain ⟨res1, h1, hd⟩ := EvalR.restrict h hav hp hf
+  obtain ⟨res1, h1, hd⟩ := EvalR.restrict h hav hb hp hf
   cases res1 with
   | ok _ _ _ => exact (hd : False).elim
   | panic => exact h1
@@ -174,39 +223,6 @@ theorem BindParams.restrict {m m' : Mem} {ps : List (PMode × Ty)} {as : List Va
   | inp ha hl _ ih => exact .inp ha hl ih
   | sink ha _ ih => exact .sink ha ih
   | inout _ ih => exact .inout ih
-
-mutual
-/-- Freeing a tree none of whose addresses is in the part frees it on the
-    own part. -/
-theorem Frees.restrict {a a' : Nat → Bool} {T : Val} (h : Frees a T a') {a2 : Nat → Bool}
-    (hT : ∀ i ∈ T.ids, a2 i = false) : Frees (minus a a2) T (minus a' a2) := by
-  match h with
-  | .int => exact .int
-  | .view => exact .view
-  | .arc => exact .arc
-  | .lk => exact .lk
-  | @Frees.node _ _ _ c d _ hc hd hl =>
-    have hdc : d ≠ c := by
-      intro e; subst e; simp [upd] at hd
-    refine .node (minus_true hc (hT c (by simp))) ?_ ?_
-    · rw [upd_ne _ _ hdc] at hd ⊢
-      exact minus_true hd (hT d (by simp))
-    · have h1 := FreesL.restrict hl (a2 := a2) fun i hi => hT i (by simp [hi])
-      rwa [minus_upd_false, minus_upd_false] at h1
-  | .pair h1 h2 =>
-    exact .pair (Frees.restrict h1 fun i hi => hT i (by simp [hi]))
-      (Frees.restrict h2 fun i hi => hT i (by simp [hi]))
-  | .inl h1 => exact .inl (Frees.restrict h1 fun i hi => hT i (by simpa using hi))
-  | .inr h1 => exact .inr (Frees.restrict h1 fun i hi => hT i (by simpa using hi))
-  | .pkg h1 => exact .pkg (Frees.restrict h1 fun i hi => hT i (by simpa using hi))
-theorem FreesL.restrict {a a' : Nat → Bool} {es : List Val} (h : FreesL a es a') {a2 : Nat → Bool}
-    (hT : ∀ i ∈ idsL es, a2 i = false) : FreesL (minus a a2) es (minus a' a2) := by
-  match h with
-  | .nil => exact .nil
-  | .cons h1 h2 =>
-    exact .cons (Frees.restrict h1 fun i hi => hT i (by simp [hi]))
-      (FreesL.restrict h2 fun i hi => hT i (by simp [hi]))
-end
 
 /-- Dropping a slot of `m`, on the own part: an owned slot's tree is one of
     `m`'s owned trees. -/
@@ -249,8 +265,8 @@ theorem Step.restrict {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
     obtain ⟨r1, h1, hd⟩ := ih
     obtain rfl := ResDown.panic_inv hd
     exact ⟨_, .seqP h1, rfl⟩
-  | letv hx he => exact ⟨_, .letv hx (EvalR.restrict_ok he hav hp hf), rfl, .refl _⟩
-  | letvP he => exact ⟨_, .letvP (EvalR.restrict_panic he hav hp hf), rfl⟩
+  | letv hx he => exact ⟨_, .letv hx (EvalR.restrict_ok he hav hb hp hf), rfl, .refl _⟩
+  | letvP he => exact ⟨_, .letvP (EvalR.restrict_panic he hav hb hp hf), rfl⟩
   | letcall hP hx hbp => exact ⟨_, .letcall hP hx (BindParams.restrict hbp a2), rfl, .refl _⟩
   | scopeSkip hx hd => exact ⟨_, .scopeSkip hx (DropSlot.restrict hx hd hav), rfl, .refl _⟩
   | scopeIn _ ih =>
@@ -280,9 +296,9 @@ theorem Step.restrict {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
     obtain rfl := ResDown.panic_inv hd
     exact ⟨_, .frozenP h1, rfl⟩
   | assign hx he hx1 hd =>
-    exact ⟨_, .assign hx (EvalR.restrict_ok he hav hp hf) hx1
+    exact ⟨_, .assign hx (EvalR.restrict_ok he hav hb hp hf) hx1
       (DropSlot.restrict hx1 hd (EvalR.avoids he hb hav hf).1), rfl, .refl _⟩
-  | assignP he => exact ⟨_, .assignP (EvalR.restrict_panic he hav hp hf), rfl⟩
+  | assignP he => exact ⟨_, .assignP (EvalR.restrict_panic he hav hb hp hf), rfl⟩
   | iteT he hn => exact ⟨_, .iteT (Eval.restrict he hav hp) hn, rfl, .refl _⟩
   | iteF he => exact ⟨_, .iteF (Eval.restrict he hav hp), rfl, .refl _⟩
   | «while» => exact ⟨_, .while, rfl, .refl _⟩
@@ -341,8 +357,8 @@ theorem Step.restrict {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
     obtain ⟨r1, h1, hd⟩ := ih
     obtain rfl := ResDown.panic_inv hd
     exact ⟨_, .catchP h1 hx, rfl, .refl _⟩
-  | letd hx he => exact ⟨_, .letd hx (EvalR.restrict_ok he hav hp hf), rfl, .refl _⟩
-  | letdP he => exact ⟨_, .letdP (EvalR.restrict_panic he hav hp hf), rfl⟩
+  | letd hx he => exact ⟨_, .letd hx (EvalR.restrict_ok he hav hb hp hf), rfl, .refl _⟩
+  | letdP he => exact ⟨_, .letdP (EvalR.restrict_panic he hav hb hp hf), rfl⟩
   | scopeDIn _ ih =>
     obtain ⟨r1, h1, hd⟩ := ih
     obtain ⟨s1, rfl, hg⟩ := ResDown.ok_inv hd

@@ -78,63 +78,6 @@ theorem TakeVal.lift {m m1 : Mem} {y : Var} {v : Val} (h : TakeVal m y v m1) (a2
   | own hy => exact TakeVal.own hy
   | bor hy => exact TakeVal.bor hy
 
-theorem EvalR.lift {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.ok v o m1))
-    (a2 : Nat → Bool) : EvalR (liftMem a2 m) r (.ok v o (liftMem a2 m1)) := by
-  cases h with
-  | expr he => exact EvalR.expr (Eval.lift he a2)
-  | new =>
-    show EvalR _ _ (.ok _ _
-      ⟨union (upd (upd m.alloc m.nid true) (m.nid + 1) true) a2, m.nid + 2, m.nv, m.st, m.blk⟩)
-    rw [union_alloc2]
-    exact EvalR.new
-  | moveOwn hy => exact EvalR.moveOwn hy
-  | copy hy => exact EvalR.copy hy
-  | borrowOwn hy => exact EvalR.borrowOwn hy
-  | borrowBor hy => exact EvalR.borrowBor hy
-  | «at» hn hv he => exact EvalR.at hn (VecOf.lift hv a2) (Eval.lift he a2)
-  | view hv => exact EvalR.view (VecOf.lift hv a2)
-  | sat hn hy he hl hd hda => exact EvalR.sat hn hy (Eval.lift he a2) hl (union_true a2 hd) hda
-  | pop hy hc hd => exact EvalR.pop hy (union_true a2 hc) (union_true a2 hd)
-  | pair h1 h2 => exact EvalR.pair (TakeVal.lift h1 a2) (TakeVal.lift h2 a2)
-  | fst hy => exact EvalR.fst hy
-  | snd hy => exact EvalR.snd hy
-  | inl h1 => exact EvalR.inl (TakeVal.lift h1 a2)
-  | inr h1 => exact EvalR.inr (TakeVal.lift h1 a2)
-  | getl hy => exact EvalR.getl hy
-  | getr hy => exact EvalR.getr hy
-  | takel hy => exact EvalR.takel hy
-  | taker hy => exact EvalR.taker hy
-  | pack h1 => exact EvalR.pack (TakeVal.lift h1 a2)
-  | arcNew h1 hfr => exact EvalR.arcNew (TakeVal.lift h1 a2) hfr
-  | lockNew h1 hfr => exact EvalR.lockNew (TakeVal.lift h1 a2) hfr
-  | arcClone hy => exact EvalR.arcClone hy
-  | lockClone hy => exact EvalR.lockClone hy
-  | atomic hy hk h1 h2 => exact EvalR.atomic hy hk (Eval.lift h1 a2) (Eval.lift h2 a2)
-  | arcGet hy hk => exact EvalR.arcGet hy hk
-
-theorem EvalR.liftP {m : Mem} {r : Rhs} (h : EvalR m r .panic) (a2 : Nat → Bool) :
-    EvalR (liftMem a2 m) r .panic := by
-  cases h with
-  | atOOB hv he hl => exact EvalR.atOOB (VecOf.lift hv a2) (Eval.lift he a2) hl
-  | satOOB hy he hl => exact EvalR.satOOB hy (Eval.lift he a2) hl
-  | popEmpty hy => exact EvalR.popEmpty hy
-  | getlP hy => exact EvalR.getlP hy
-  | getrP hy => exact EvalR.getrP hy
-  | takelP hy => exact EvalR.takelP hy
-  | takerP hy => exact EvalR.takerP hy
-
-theorem BindParams.lift {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var} {base i : Nat}
-    (h : BindParams m ps as base i m') (a2 : Nat → Bool) :
-    BindParams (liftMem a2 m) ps as base i (liftMem a2 m') := by
-  induction h with
-  | nil => exact BindParams.nil
-  | inp ha hl _ ih => exact BindParams.inp ha hl ih
-  | sink ha _ ih => exact BindParams.sink ha ih
-  | inout _ ih => exact BindParams.inout ih
-
-theorem envMem_liftMem (a2 : Nat → Bool) (m : Mem) (env : Val) :
-    envMem (liftMem a2 m) env = liftMem a2 (envMem m env) := rfl
-
 mutual
 /-- Freeing a tree of the thread's own part frees it in the whole address
     space, and `a2` keeps every address. -/
@@ -170,6 +113,75 @@ theorem FreesL.lift {a a' : Nat → Bool} {es : List Val} (h : FreesL a es a') {
     exact FreesL.cons (Frees.lift h1 hd) (FreesL.lift h2 (fun i hi => hd i (Frees.le h1 hi)))
 end
 
+theorem EvalR.lift {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.ok v o m1))
+    (a2 : Nat → Bool) (hd : ∀ i, m.alloc i = true → a2 i = false) :
+    EvalR (liftMem a2 m) r (.ok v o (liftMem a2 m1)) := by
+  cases h with
+  | expr he => exact EvalR.expr (Eval.lift he a2)
+  | new =>
+    show EvalR _ _ (.ok _ _
+      ⟨union (upd (upd m.alloc m.nid true) (m.nid + 1) true) a2, m.nid + 2, m.nv, m.st, m.blk⟩)
+    rw [union_alloc2]
+    exact EvalR.new
+  | moveOwn hy => exact EvalR.moveOwn hy
+  | copy hy => exact EvalR.copy hy
+  | borrowOwn hy => exact EvalR.borrowOwn hy
+  | borrowBor hy => exact EvalR.borrowBor hy
+  | «at» hn hv he => exact EvalR.at hn (VecOf.lift hv a2) (Eval.lift he a2)
+  | view hv => exact EvalR.view (VecOf.lift hv a2)
+  | sat hn hy he hl hd hda => exact EvalR.sat hn hy (Eval.lift he a2) hl (union_true a2 hd) hda
+  | pop hy hc hd => exact EvalR.pop hy (union_true a2 hc) (union_true a2 hd)
+  | pair h1 h2 => exact EvalR.pair (TakeVal.lift h1 a2) (TakeVal.lift h2 a2)
+  | fst hy => exact EvalR.fst hy
+  | snd hy => exact EvalR.snd hy
+  | inl h1 => exact EvalR.inl (TakeVal.lift h1 a2)
+  | inr h1 => exact EvalR.inr (TakeVal.lift h1 a2)
+  | getl hy => exact EvalR.getl hy
+  | getr hy => exact EvalR.getr hy
+  | takel hy => exact EvalR.takel hy
+  | taker hy => exact EvalR.taker hy
+  | pack h1 => exact EvalR.pack (TakeVal.lift h1 a2)
+  | arcNew h1 hfr => exact EvalR.arcNew (TakeVal.lift h1 a2) hfr
+  | lockNew h1 hfr => exact EvalR.lockNew (TakeVal.lift h1 a2) hfr
+  | arcClone hy => exact EvalR.arcClone hy
+  | lockClone hy => exact EvalR.lockClone hy
+  | atomic hy hk h1 h2 => exact EvalR.atomic hy hk (Eval.lift h1 a2) (Eval.lift h2 a2)
+  | chanSend hy h1 hk hc hd =>
+    exact EvalR.chanSend (m := liftMem a2 m) hy (TakeVal.lift h1 a2) hk (union_true a2 hc)
+      (union_true a2 hd)
+  | @chanSendClosed _ _ _ _ _ _ _ _ m1 a' hy h1 hk hfr =>
+    -- A3.4: what a send to a closed channel drops is the thread's own
+    exact EvalR.chanSendClosed (m := liftMem a2 m) (m1 := liftMem a2 m1) (a' := union a' a2) hy
+      (TakeVal.lift h1 a2) hk
+      (Frees.lift hfr fun i h => hd i (by rw [← TakeVal.alloc h1]; exact h))
+  | chanRecv hy hk hc hd => exact EvalR.chanRecv hy hk (union_true a2 hc) (union_true a2 hd)
+  | chanRecvNone hy hk hc hw => exact EvalR.chanRecvNone hy hk (union_true a2 hc) hw
+  | chanClose hy hk => exact EvalR.chanClose hy hk
+  | arcGet hy hk => exact EvalR.arcGet hy hk
+
+theorem EvalR.liftP {m : Mem} {r : Rhs} (h : EvalR m r .panic) (a2 : Nat → Bool) :
+    EvalR (liftMem a2 m) r .panic := by
+  cases h with
+  | atOOB hv he hl => exact EvalR.atOOB (VecOf.lift hv a2) (Eval.lift he a2) hl
+  | satOOB hy he hl => exact EvalR.satOOB hy (Eval.lift he a2) hl
+  | popEmpty hy => exact EvalR.popEmpty hy
+  | getlP hy => exact EvalR.getlP hy
+  | getrP hy => exact EvalR.getrP hy
+  | takelP hy => exact EvalR.takelP hy
+  | takerP hy => exact EvalR.takerP hy
+
+theorem BindParams.lift {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var} {base i : Nat}
+    (h : BindParams m ps as base i m') (a2 : Nat → Bool) :
+    BindParams (liftMem a2 m) ps as base i (liftMem a2 m') := by
+  induction h with
+  | nil => exact BindParams.nil
+  | inp ha hl _ ih => exact BindParams.inp ha hl ih
+  | sink ha _ ih => exact BindParams.sink ha ih
+  | inout _ ih => exact BindParams.inout ih
+
+theorem envMem_liftMem (a2 : Nat → Bool) (m : Mem) (env : Val) :
+    envMem (liftMem a2 m) env = liftMem a2 (envMem m env) := rfl
+
 theorem DropSlot.lift {a a' : Nat → Bool} {sl : Slot} (h : DropSlot a sl a') {a2 : Nat → Bool}
     (hd : ∀ i, a i = true → a2 i = false) : DropSlot (union a a2) sl (union a' a2) := by
   cases h with
@@ -203,7 +215,7 @@ theorem Step.lifts {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
     exact ⟨_, GhostRel.seq _ hg, Step.seqL hs⟩
   | seqP _ ih => exact Step.seqP ih
   | letv hx he =>
-    exact ⟨_, GhostRel.refl _, Step.letv (m := liftMem a2 m) hx (EvalR.lift he a2)⟩
+    exact ⟨_, GhostRel.refl _, Step.letv (m := liftMem a2 m) hx (EvalR.lift he a2 hd)⟩
   | letvP he => exact Step.letvP (EvalR.liftP he a2)
   | letcall hfn hx hb =>
     exact ⟨_, GhostRel.refl _, Step.letcall (m := liftMem a2 m) hfn hx (BindParams.lift hb a2)⟩
@@ -226,7 +238,7 @@ theorem Step.lifts {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
   | frozenP _ ih => exact Step.frozenP ih
   | @assign m1 _ _ _ _ _ _ hx he hx1 hdr =>
     exact ⟨_, GhostRel.refl _, Step.assign (m := liftMem a2 m) (m1 := liftMem a2 m1) hx
-      (EvalR.lift he a2) hx1 (DropSlot.lift hdr ((EvalR.grows he).disj hd hf))⟩
+      (EvalR.lift he a2 hd) hx1 (DropSlot.lift hdr ((EvalR.grows he).disj hd hf))⟩
   | assignP he => exact Step.assignP (EvalR.liftP he a2)
   | iteT he hn => exact ⟨_, GhostRel.refl _, Step.iteT (Eval.lift he a2) hn⟩
   | iteF he => exact ⟨_, GhostRel.refl _, Step.iteF (Eval.lift he a2)⟩
@@ -284,7 +296,7 @@ theorem Step.lifts {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
   | @catchP m1 _ _ _ _ hx ih =>
     exact ⟨_, GhostRel.refl _, Step.catchP (m1 := liftMem a2 m1) ih hx⟩
   | letd hx he =>
-    exact ⟨_, GhostRel.refl _, Step.letd (m := liftMem a2 m) hx (EvalR.lift he a2)⟩
+    exact ⟨_, GhostRel.refl _, Step.letd (m := liftMem a2 m) hx (EvalR.lift he a2 hd)⟩
   | letdP he => exact Step.letdP (EvalR.liftP he a2)
   | scopeDIn _ ih =>
     obtain ⟨s'', hg, hs⟩ := ih

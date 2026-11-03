@@ -267,6 +267,23 @@ theorem EvalR.codes {P : Prog} {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (he :
   | arcClone _ => exact ⟨pkgOK_leaf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h), h⟩
   | lockClone _ => exact ⟨pkgOK_leaf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h), h⟩
   | atomic _ _ _ _ => exact ⟨pkgOK_int P _, h.of_st rfl⟩
+  | chanSend _ h1 _ _ _ =>
+    obtain ⟨_, hm1⟩ := h1.codes h
+    exact ⟨pkgOK_int P _, hm1.of_st rfl⟩
+  | chanSendClosed _ h1 _ _ =>
+    obtain ⟨_, hm1⟩ := h1.codes h
+    exact ⟨pkgOK_int P _, hm1.of_st rfl⟩
+  | @chanRecv _ _ _ _ _ u c d f v es _ hk _ _ =>
+    -- A3.4: the queue's head was in the channel's payload
+    have hp : PkgOK P (.pair (.node u c d (v :: es)) (.int f)) := hB _ _ hk
+    refine ⟨pkgOK_of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_), h.of_st rfl⟩
+    cases hc with
+    | inr => exact pkgOK_elem (hp.child Child.fst) (List.mem_cons_self ..)
+  | chanRecvNone _ _ _ _ =>
+    refine ⟨pkgOK_of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_), h⟩
+    cases hc with
+    | inl => exact pkgOK_int P _
+  | chanClose _ _ => exact ⟨pkgOK_int P _, h.of_st rfl⟩
   | arcGet _ hk => exact ⟨pkgOK_lend (hB _ _ hk).rd, h⟩
 
 theorem BindParams.codes {P : Prog} {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var} {base i : Nat}
