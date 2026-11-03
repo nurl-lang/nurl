@@ -860,4 +860,21 @@ theorem moved_trees {P : Prog} {m : Mem} {s : Stmt} (hok : ThreadOK P m s) {args
   exact ⟨hi.heap.nodup a v hav, hi.heap.self a v hav, hi.heap.alloc a v hav, hi.pkgs a _ v hav rfl,
     (memCodes_iff.mp hcd).1 a true v hav⟩
 
+/-- A3.5c: **a spawn of a typed thread moves no trait object but one whose box
+    `: Send` admits**, at any depth of what it moves: a moved tree is of its
+    parameter's type (`spawn_args`), which holds no view (`SpawnOK`), so each
+    package in it fits `send` (`spawn_pkgs_send`). -/
+theorem spawn_moves_send {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hS : SpawnOK P spawn)
+    {m : Mem} {s : Stmt} (hok : ThreadOK P m s) {K : Stmt → Stmt} {x f : Nat} {args : List Var} {k : Stmt}
+    {fn : Fn} {vs : List Val} {st' : Var → Option Slot}
+    (hR : Redex s K (.letcall x f args k)) (hsp : spawn f = true) (hf : P[f]? = some fn)
+    (hmv : MoveArgs m.st args vs st') {v : Val} (hv : v ∈ vs) {fs : List Nat} {te : Ty} {ms : List Nat}
+    {e : Val} {cs : List (Var × PMode × Ty)} (hs : Sub (.pkg fs te ms e cs) v) : Cross.send.Fits te cs := by
+  obtain ⟨hlen, hwf, -⟩ := spawn_args hP hS hok hR hsp hf hmv
+  obtain ⟨j, hj, hjv⟩ := List.getElem_of_mem hv
+  have hj' : j < fn.params.length := hlen ▸ hj
+  have hvj : vs[j]? = some v := by rw [List.getElem?_eq_getElem hj, hjv]
+  exact spawn_pkgs_send hS hsp hf (List.getElem_mem hj')
+    (hwf j v _ hvj (List.getElem?_eq_getElem hj')) hs
+
 end A3

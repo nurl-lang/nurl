@@ -282,9 +282,24 @@ the LLVM / C11 memory model rather than redefining it.
       assertions; a `send` closure that captures a share in a lock or a
       channel (refused where the runtime would move the handle along);
       no subsumption between closure classes; a closure that changes a
-      capture it moved in; trait objects (A3.5c: h344). Phase C must give
-      each closure the class nurlc's follow-the-value check proved, and
-      `any` where it cannot follow the closure's origin. A library that re-enters its own state waits
+      capture it moved in. Phase C must give each closure the class
+      nurlc's follow-the-value check proved, and `any` where it cannot
+      follow the closure's origin.
+    - **Trait objects (A3.5c).** A trait object is a package as a closure
+      is (`Rhs.pack`), so A3.5b's class covers it: its class is the
+      trait's bound (`TraitBound`: none, `: Send`, `: Send Sync` give
+      `any`, `send`, `sync`; `TraitAt`, `StmtT.callc_bound`), every
+      method's code reads the box lent (`CodeOK.env_lent`), the box faces
+      the bound at every pack (`ImplOK`), and the spawn's crossing check
+      walks the box (`Sub.pkg`; `sendCheck_box_kept`: a library handle
+      boxed and kept fails it, the runtime's vtable walk). h344: an
+      unbounded object crosses nothing, a `: Send Sync` one boxes no
+      library handle (`dyn_cell_notSync`), and an `Arc` or a global's
+      `Arc` takes only `: Send Sync` objects. Not typed: a `: Send` object
+      in a lock or a channel (they take `bare` packages), an `inout`
+      receiver, supertraits and `[T: Send]` bounds; an impl is checked
+      where it is boxed, not where it is declared. Phase C must lower each
+      `%Trait` to `fn ms` at its bound's class. A library that re-enters its own state waits
       or panics in the model, where the runtime goes on: that is the
       library's code (phase B).
     - **Not proven here:** that a thread inside a cell's check-out holds a

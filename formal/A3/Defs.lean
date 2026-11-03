@@ -461,6 +461,337 @@ theorem _root_.A2.StmtT.arcCall {P : Prog} {Γ Δ : Ctx} {F : List Var} {a g x :
     (StmtT.callc_recv hks (by simp [setE, upd_ne _ _ hxg, hx]) hxF (upd_same _ _ _) rfl rfl hj hσ hps hout
       hnt getE_own_noName hk hend) hendg
 
+/-! ### A3.5c: trait objects across threads, as A2 types them
+
+A trait object is a package as a closure is (`Ty.fn ms q`, A2): `dyn Trait v`
+packs the code of `v`'s impl, `fs`, one function per method, with the box `v`,
+of the impl's type `te`, under the trait's methods `ms`, and captures nothing
+by name (`Rhs.dyn`).  Its type does not say what the box holds, so the trait
+answers for it (docs/MEMORY.md §6.5): A3.5b's class is the trait's declared
+bound, `any` with none, `send` for `: Send`, `sync` for `: Send Sync`
+(`TraitBound.cross`).  The trait declares its methods' receivers at it
+(`TraitAt`), and a call through a trait object types only there
+(`StmtT.callc_bound`).  Packing an impl's value is A3.5b's `pack`: its
+`Cross.Fits` is the per-impl check, which reads the bound and the impl's type
+only (`ImplOK`), and the impl's code fixes that type (`CodeOK.recv_eq`); its
+`CodeOK` holds every method's code to its interface, on the box lent
+(`CodeOK.env_lent`), as a closure's one method is. -/
+
+/-- A3.5c: what a trait declares its objects may cross as: nothing (no bound),
+    `: Send`, or `: Send Sync`. -/
+inductive TraitBound where
+  | none
+  | send
+  | sendSync
+deriving DecidableEq, Repr
+
+/-- The class of a trait object whose trait has the bound `b` (A3.5b's
+    `Cross`).  No bound is `bare`: that class (no share at all, a lock's or a
+    channel's) is the model's, not a trait's. -/
+def TraitBound.cross : TraitBound → Cross
+  | .none => .any
+  | .send => .send
+  | .sendSync => .sync
+
+/-- A3.5c: `dyn Trait v`, a trait object: the impl's code `fs` (method `j`'s
+    is `fs[j]`), the box `y` (of the impl's type `te`) moved in, the trait's
+    methods `ms`; a box captures nothing by name. -/
+def _root_.A2.Rhs.dyn (fs : List Nat) (te : Ty) (ms : List Nat) (y : Var) : Rhs := .pack fs te ms y []
+
+/-- A3.5c: `ms` are the methods of a trait declared with the bound `b`: each
+    is an interface, a function of the program, whose receiver is the trait's
+    object at the bound, `(inp, fn ms b.cross)` (the receiver `StmtT.callc`
+    asks of a call through a `fn ms q` is `(inp, fn ms q)`). -/
+def TraitAt (P : Prog) (ms : List Nat) (b : TraitBound) : Prop :=
+  ∀ (j σ : Nat), ms[j]? = some σ → ∃ sig : Fn, P[σ]? = some sig ∧
+    sig.params.head? = some (.inp, .fn ms b.cross)
+
+/-- What a bound promises of each impl's type `te` (a box captures nothing by
+    name, `cs = []`): with no bound, nothing ... -/
+theorem TraitBound.fits_none (te : Ty) (cs : List (Var × PMode × Ty)) : TraitBound.none.cross.Fits te cs :=
+  Cross.fits_any te cs
+
+/-- ... with `: Send`, that the box holds no view (nothing of the thread that
+    made it) and nothing is captured by name ... -/
+theorem TraitBound.fits_send {te : Ty} {cs : List (Var × PMode × Ty)} :
+    TraitBound.send.cross.Fits te cs ↔ te.holdsView = false ∧ cs = [] :=
+  ⟨fun h => h.1 rfl, fun h => ⟨fun _ => h, fun h' => absurd h' (by decide), fun h' => absurd h' (by decide)⟩⟩
+
+/-- ... and with `: Send Sync`, also no library handle (a cell share, A3.5,
+    is not Sync). -/
+theorem TraitBound.fits_sendSync {te : Ty} {cs : List (Var × PMode × Ty)} :
+    TraitBound.sendSync.cross.Fits te cs ↔ (te.holdsView = false ∧ cs = []) ∧ te.hasCell = false :=
+  ⟨fun h => ⟨h.1 rfl, h.2.1 rfl⟩, fun h => ⟨fun _ => h.1, fun _ => h.2, fun h' => absurd h' (by decide)⟩⟩
+
+/-- A call through a package asks its receiver to be a package, `fn ms q`,
+    whose method `j` is an interface that takes it at `q`. -/
+theorem _root_.A2.StmtT.callc_recv_at {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c : Var} {j : Nat}
+    {zs : List Var} {k : Stmt} {Ec : Entry} (h : StmtT P Γ F (.callc x c j zs k) Δ) (hc : Γ c = some Ec) :
+    ∃ ms q σ sig, Ec.ty = .fn ms q ∧ ms[j]? = some σ ∧ P[σ]? = some sig ∧
+      sig.params.head? = some (.inp, .fn ms q) := by
+  generalize hs : Stmt.callc x c j zs k = s at h
+  induction h generalizing Ec with
+  | callc _ _ _ hc' hty hj hσ hhd =>
+    cases hs
+    rw [hc] at hc'; cases hc'
+    exact ⟨_, _, _, _, hty, hj, hσ, hhd⟩
+  | sub hw _ _ ih =>
+    obtain ⟨hn, hwe⟩ := hw.1 c
+    obtain ⟨E0, hE0⟩ : ∃ E0, _ = some E0 :=
+      Option.ne_none_iff_exists'.mp fun h0 => absurd (hn.mpr h0) (by rw [hc]; simp)
+    rw [← (hwe Ec E0 hc hE0).ty]
+    exact ih hE0 hs
+  | _ => cases hs
+
+/-- **A3.5b's class is the trait's bound**: a call through a trait object of
+    a trait declared with the bound `b` types only where the object's class
+    is `b.cross`. -/
+theorem _root_.A2.StmtT.callc_bound {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c : Var} {j : Nat}
+    {zs : List Var} {k : Stmt} {Ec : Entry} {ms : List Nat} {q : Cross} {b : TraitBound}
+    (h : StmtT P Γ F (.callc x c j zs k) Δ) (hc : Γ c = some Ec) (hty : Ec.ty = .fn ms q)
+    (hb : TraitAt P ms b) : q = b.cross := by
+  obtain ⟨ms', q', σ, sig, hty', hj, hσ, hhd⟩ := h.callc_recv_at hc
+  rw [hty] at hty'; cases hty'
+  obtain ⟨sig', hσ', hhd'⟩ := hb j σ hj
+  rw [hσ] at hσ'; cases hσ'
+  rw [hhd] at hhd'
+  simp only [Option.some.injEq, Prod.mk.injEq, Ty.fn.injEq, true_and] at hhd'
+  exact hhd'
+
+/-- So a trait object packed at another class than its trait's bound is inert:
+    no method of it is called. -/
+theorem callc_not_at {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c : Var} {j : Nat} {zs : List Var}
+    {k : Stmt} {Ec : Entry} {ms : List Nat} {q : Cross} {b : TraitBound} (hb : TraitAt P ms b)
+    (hc : Γ c = some Ec) (hty : Ec.ty = .fn ms q) (hq : q ≠ b.cross) : ¬ StmtT P Γ F (.callc x c j zs k) Δ :=
+  fun h => hq (h.callc_bound hc hty hb)
+
+/-- Every method's code of a package reads the environment, lent, and changes
+    nothing through a borrow (`Implements.env_lent`, method by method): an
+    impl's code reads its box, whichever method a call picks. -/
+theorem _root_.A2.CodeOK.env_lent {P : Prog} {fs : List Nat} {te : Ty} {ms : List Nat}
+    {cs : List (Var × PMode × Ty)} (h : CodeOK P fs te ms cs) {j f : Nat} (hf : fs[j]? = some f) :
+    ∃ fn, P[f]? = some fn ∧ fn.params.head? = some (.inp, te) ∧ ¬ ThruFn P f := by
+  have hj : j < ms.length := h.1 ▸ (List.getElem?_eq_some_iff.mp hf).1
+  exact (h.2 j f ms[j] hf (List.getElem?_eq_getElem hj)).env_lent
+
+/-- An impl's code fixes the type of the box it is packed with: its first
+    method takes it, as its receiver. -/
+theorem _root_.A2.CodeOK.recv_eq {P : Prog} {fs : List Nat} {te te' : Ty} {ms ms' : List Nat}
+    {cs cs' : List (Var × PMode × Ty)} (h : CodeOK P fs te ms cs) (h' : CodeOK P fs te' ms' cs')
+    (hne : fs ≠ []) : te = te' := by
+  obtain ⟨f, hf⟩ : ∃ f, fs[0]? = some f := by
+    cases fs with
+    | nil => exact absurd rfl hne
+    | cons f _ => exact ⟨f, rfl⟩
+  obtain ⟨fn, hfn, hhd, _⟩ := h.env_lent hf
+  obtain ⟨fn', hfn', hhd', _⟩ := h'.env_lent hf
+  rw [hfn] at hfn'; cases hfn'
+  rw [hhd] at hhd'; cases hhd'
+  rfl
+
+/-- A3.5c: `fs` is an impl, for the type `te`, of the trait whose methods are
+    `ms`, held to the bound `b` (docs/MEMORY.md §6.5: "holds every type
+    implementing `Job` to Send where its impl is"): its code implements every
+    method on a box of type `te` (`CodeOK`), and `te` keeps the bound's promise
+    (`Cross.Fits`). -/
+def ImplOK (P : Prog) (b : TraitBound) (fs : List Nat) (te : Ty) (ms : List Nat) : Prop :=
+  CodeOK P fs te ms [] ∧ b.cross.Fits te []
+
+/-- **Packing an impl's value into a trait object is the per-impl check**: a
+    `dyn` the program makes (`Stmt.codesOK`) at its trait's bound is an impl
+    held to that bound. -/
+theorem dyn_implOK {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {fs : List Nat} {te : Ty} {ms : List Nat}
+    {y : Var} {E : Entry} {b : TraitBound} (h : RhsT Γ F (Rhs.dyn fs te ms y) E Γ1)
+    (hty : E.ty = .fn ms b.cross) (hc : (Rhs.dyn fs te ms y).codeOK P) : ImplOK P b fs te ms := by
+  obtain ⟨q, hq, hf⟩ := h.pack_fits
+  rw [hty] at hq; cases hq
+  exact ⟨hc, hf⟩
+
+/-- The check is the impl's, not the pack's: it asks the bound's promise of
+    the one type the impl's code takes, so every pack of the impl gets the
+    answer one of them got (the runtime asks it once, where the impl is). -/
+theorem ImplOK.of_code {P : Prog} {b : TraitBound} {fs : List Nat} {te te' : Ty} {ms ms' : List Nat}
+    (h : ImplOK P b fs te ms) (h' : CodeOK P fs te' ms' []) (hne : fs ≠ []) : ImplOK P b fs te' ms' := by
+  obtain rfl := h.1.recv_eq h' hne
+  exact ⟨h', h.2⟩
+
+/-! A3.5c: the crossing check walks a trait object's box, as the runtime's
+`mem_send_check` walks it through the vtable (h360): the moved values are
+trees, and `Sub` enters a package's environment (`Sub.pkg`), on the side that
+moves and on the side that stays alike. -/
+
+/-- Moving the arguments out of the spawner gives one answer. -/
+theorem MoveArgs.det {st : Var → Option Slot} {as : List Var} {vs vs' : List Val}
+    {st1 st2 : Var → Option Slot} (h : MoveArgs st as vs st1) (h' : MoveArgs st as vs' st2) :
+    vs = vs' ∧ st1 = st2 := by
+  induction h generalizing vs' st2 with
+  | nil => cases h'; exact ⟨rfl, rfl⟩
+  | cons ha _ ih =>
+    cases h' with
+    | cons ha' hm' =>
+      rw [ha] at ha'; cases ha'
+      obtain ⟨rfl, rfl⟩ := ih hm'
+      exact ⟨rfl, rfl⟩
+
+/-- **A library handle in a trait object's box is counted**: a spawn whose
+    moved values hold a trait object (or a closure) whose box holds a share of
+    a cell that a slot the spawner keeps holds too, in its own box or not,
+    fails the crossing check, whatever it moves: it is no `TStep.spawn`, and
+    `TStep.spawnFail` panics. -/
+theorem sendCheck_box_kept {st st' : Var → Option Slot} {args : List Var} {vs : List Val}
+    (hm : MoveArgs st args vs st') {v : Val} (hv : v ∈ vs) {fs : List Nat} {te : Ty} {ms : List Nat}
+    {e : Val} {cs : List (Var × PMode × Ty)} (hs : Sub (.pkg fs te ms e cs) v) {k : Nat}
+    (hk : Sub (.cell k) e) {y : Var} {o : Bool} {w : Val} (hy : st' y = some ⟨o, some w⟩)
+    (hw : Sub (.cell k) w) {vs' : List Val} {st'' : Var → Option Slot} (hm' : MoveArgs st args vs' st'') :
+    ¬ SendCheck vs' st'' := by
+  obtain ⟨rfl, rfl⟩ := hm.det hm'
+  exact fun h => sendCheck_env h hv hs hk y o w hy hw
+
+/-- A tree of a type that holds no cell share holds none. -/
+theorem _root_.A2.WFv.noCell_hasCell {τ : Ty} {v : Val} (hw : WFv τ v) (hnc : τ.hasCell = false) {k : Nat} :
+    ¬ Sub (.cell k) v := by
+  induction hw with
+  | int => intro h; cases h
+  | view => intro h; cases h
+  | arc => intro h; cases h
+  | lk => intro h; cases h
+  | cell => simp [Ty.hasCell] at hnc
+  | pkg _ hq ih => intro h; cases h with | pkg h => exact ih (hq.2.1 hnc) h
+  | node _ ih =>
+    intro h
+    cases h with
+    | child he hs => exact ih _ he (by simpa [Ty.hasCell] using hnc) hs
+  | pair _ _ iha ihb =>
+    simp only [Ty.hasCell, Bool.or_eq_false_iff] at hnc
+    intro h
+    cases h with
+    | fst h => exact iha hnc.1 h
+    | snd h => exact ihb hnc.2 h
+  | inl _ ih =>
+    simp only [Ty.hasCell, Bool.or_eq_false_iff] at hnc
+    intro h; cases h with | inl h => exact ih hnc.1 h
+  | inr _ ih =>
+    simp only [Ty.hasCell, Bool.or_eq_false_iff] at hnc
+    intro h; cases h with | inr h => exact ih hnc.2 h
+
+/-- A `: Send Sync` trait object's box holds no library handle, at any depth:
+    the crossing check has nothing to count in it (the runtime fills the
+    vtable's check only for an impl of a `: Send` trait whose type reaches
+    one). -/
+theorem sendSync_box_noCell {ms : List Nat} {v : Val} (hw : WFv (.fn ms TraitBound.sendSync.cross) v)
+    {k : Nat} : ¬ Sub (.cell k) v :=
+  hw.noCell_hasCell rfl
+
+/-- A value of a type that holds no view holds only packages that fit `send`,
+    however deep they lie (a field, an element, another package's box): each
+    box holds no view, and nothing is captured by name. -/
+theorem _root_.A2.WFv.noView_fits {τ : Ty} {v : Val} (hw : WFv τ v) (hhv : τ.holdsView = false)
+    {fs : List Nat} {te : Ty} {ms : List Nat} {e : Val} {cs : List (Var × PMode × Ty)}
+    (hs : Sub (.pkg fs te ms e cs) v) : Cross.send.Fits te cs := by
+  induction hw with
+  | int => cases hs
+  | view => cases hs
+  | node _ ih =>
+    cases hs with
+    | child he h => exact ih _ he (by simpa [Ty.holdsView] using hhv) h
+  | pair _ _ iha ihb =>
+    simp only [Ty.holdsView, Bool.or_eq_false_iff] at hhv
+    cases hs with
+    | fst h => exact iha hhv.1 h
+    | snd h => exact ihb hhv.2 h
+  | inl _ ih => simp only [Ty.holdsView, Bool.or_eq_false_iff] at hhv; cases hs with | inl h => exact ih hhv.1 h
+  | inr _ ih => simp only [Ty.holdsView, Bool.or_eq_false_iff] at hhv; cases hs with | inr h => exact ih hhv.2 h
+  | pkg _ hq ih =>
+    obtain ⟨hv, _, hcs⟩ := hq.send hhv
+    cases hs with
+    | refl => exact TraitBound.fits_send.mpr ⟨hv, hcs⟩
+    | pkg h => exact ih hv h
+  | arc _ _ => cases hs
+  | lk => cases hs
+  | cell => cases hs
+
+/-- So what a spawned function takes holds no trait object but one whose box
+    `: Send` admits: none whose box holds a view, none of a trait the spawn's
+    type checks could not see into. -/
+theorem spawn_pkgs_send {P : Prog} {spawn : Nat → Bool} (hS : SpawnOK P spawn) {f : Nat}
+    (hsp : spawn f = true) {fn : Fn} (hf : P[f]? = some fn) {pt : PMode × Ty} (hin : pt ∈ fn.params)
+    {v : Val} (hw : WFv pt.2 v) {fs : List Nat} {te : Ty} {ms : List Nat} {e : Val}
+    {cs : List (Var × PMode × Ty)} (hs : Sub (.pkg fs te ms e cs) v) : Cross.send.Fits te cs := by
+  obtain ⟨fn', hf', -, hpar⟩ := hS f hsp
+  rw [hf] at hf'; cases hf'
+  exact hw.noView_fits (hpar pt hin).2 hs
+
+/-! A3.5c: h344 (`dyn_object_carries_an_rc_to_a_thread`), a `%Churn` of a trait
+with no bound boxing a struct with an `Rc`, moved into a thread's closure
+while the spawner kept a clone.  The model has no `Rc` (the standard
+library's, phase B); what stands for a value that is not Send is a view (and
+a binding captured by name), and for one whose copies are one state, changed
+in place with no lock (an `Rc`'s count), a cell share (A3.5). -/
+
+/-- h344: a trait object whose box reaches a value that is not Send (a view)
+    is packed only at `any`: no impl of a `: Send` or `: Send Sync` trait
+    boxes it, and a closure that captures an `any` object (`te = fn ms' any`,
+    the thread's closure of h344) is `any` too ... -/
+theorem dyn_view_any {Γ Γ1 : Ctx} {F : List Var} {fs : List Nat} {te : Ty} {ms : List Nat} {y : Var}
+    {cs : List (Var × PMode × Ty)} {E : Entry} (h : RhsT Γ F (.pack fs te ms y cs) E Γ1)
+    (hv : te.holdsView = true) : E.ty = .fn ms .any := by
+  obtain ⟨q, hty, hq⟩ := h.pack_fits
+  rw [hty]
+  cases q with
+  | any => rfl
+  | _ => rw [(hq.1 rfl).1] at hv; cases hv
+
+/-- ... one whose box holds a library handle (a cell share: Send, not Sync) is
+    not packed at `: Send Sync` ... -/
+theorem dyn_cell_notSync {Γ Γ1 : Ctx} {F : List Var} {fs : List Nat} {te : Ty} {ms : List Nat} {y : Var}
+    {cs : List (Var × PMode × Ty)} {E : Entry} (h : RhsT Γ F (.pack fs te ms y cs) E Γ1)
+    (hc : te.hasCell = true) : E.ty = .fn ms .any ∨ E.ty = .fn ms .send := by
+  obtain ⟨q, hty, hq⟩ := h.pack_fits
+  rw [hty]
+  cases q with
+  | any => exact .inl rfl
+  | send => exact .inr rfl
+  | _ => rw [hq.2.1 rfl] at hc; cases hc
+
+/-- ... and an object of a trait with no bound (h344's `%Churn`) crosses no
+    spawn: a spawned function takes no `any` object (`spawn_not_any`), and an
+    object it takes at another class is no receiver of its trait's methods
+    (`callc_not_at`), so the thread cannot call it. -/
+theorem spawn_dyn_none {P : Prog} {spawn : Nat → Bool} (hS : SpawnOK P spawn) {f : Nat}
+    (hsp : spawn f = true) {fn : Fn} (hf : P[f]? = some fn) {ms : List Nat} (hb : TraitAt P ms .none)
+    {pm : PMode} {q : Cross} (hin : (pm, Ty.fn ms q) ∈ fn.params) {Γ Δ : Ctx} {F : List Var} {x c : Var}
+    {j : Nat} {zs : List Var} {k : Stmt} {Ec : Entry} (hc : Γ c = some Ec) (hty : Ec.ty = .fn ms q) :
+    ¬ StmtT P Γ F (.callc x c j zs k) Δ := by
+  refine callc_not_at hb hc hty fun hq => ?_
+  rw [hq] at hin
+  exact spawn_not_any hS hsp hf hin
+
+/-- A spawned function takes a trait object only of a trait with a bound
+    (`: Send` or `: Send Sync`) ... -/
+theorem spawn_dyn_bound {P : Prog} {spawn : Nat → Bool} (hS : SpawnOK P spawn) {f : Nat}
+    (hsp : spawn f = true) {fn : Fn} (hf : P[f]? = some fn) {pm : PMode} {ms : List Nat} {b : TraitBound}
+    (hin : (pm, Ty.fn ms b.cross) ∈ fn.params) : b ≠ .none := by
+  rintro rfl
+  exact spawn_not_any hS hsp hf hin
+
+/-- ... an `Arc` holds one only of a `: Send Sync` trait (`Arc T` asks `T`
+    Send and Sync) ... -/
+theorem arcNew_dyn {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {b : TraitBound} {y : Var} {E : Entry}
+    (h : RhsT Γ F (.arcNew (.fn ms b.cross) y) E Γ1) : b = .sendSync := by
+  rcases arcNew_fn h with hq | hq <;> cases b <;> first | rfl | cases hq
+
+/-- ... and a module global holds none but in an `Arc`, of a `: Send Sync`
+    trait (A3.6: `Ty.sync`). -/
+theorem glob_dyn {Γ Γ1 : Ctx} {F : List Var} {g : Nat} {ms : List Nat} {b : TraitBound} {E : Entry}
+    (h : RhsT Γ F (.glob g (.arc (.fn ms b.cross))) E Γ1) : b = .sendSync := by
+  have hs := h.glob_sync
+  cases b with
+  | sendSync => rfl
+  | _ => cases hs
+
+theorem glob_not_dyn {Γ Γ1 : Ctx} {F : List Var} {g : Nat} {ms : List Nat} {q : Cross} {E : Entry} :
+    ¬ RhsT Γ F (.glob g (.fn ms q)) E Γ1 := fun h => by cases h.glob_sync
+
 /-- One step of the configuration. -/
 inductive TStep (P : Prog) (spawn : Nat → Bool) : Cfg → Cfg → Prop
   /-- A thread takes one of A2's steps, unless its next step is a spawn;
