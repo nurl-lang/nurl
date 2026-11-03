@@ -20,7 +20,10 @@ check fails; and a race includes two threads changing one handle's state).
 A3.6's module globals set at start are mechanized as well (A3.6's
 mechanization, below: the start holds them, every thread reads them
 through the configuration, no step writes them, and what they reach is
-left at the end). A3.5b/c (closures in shared payloads, trait objects) are
+left at the end). A3.5b's first cut, closures that cross threads or that
+several threads share, is mechanized too (A3.5b's mechanization, below: a
+closure's type says where it may cross, an `Arc` holds a Sync one, a lock
+or a channel a bare one, a spawn a Send one). A3.5c (trait objects) is
 design. This note fixes the
 semantics, the theorem statements and the order of work, so the
 mechanization can be cut into tasks (Agora: formal track, F4–F8). The guarantee it targets is the
@@ -1355,8 +1358,8 @@ thread. `check.sh` is green with them in A2 and A3, and `A2.memory_safe`,
 `A2.soundness`, `A2.no_leak_end`, `A2.no_leak_panic`, the `DynCell`
 theorems and `A3.claim` are re-proven. A3's race now includes two threads
 changing one handle's state, and the claim proves there is none. Closures
-in shared payloads and trait objects (A3.5b/c) are not done. `CLAIM.md` /
-`README.md` are not updated here.
+in shared payloads are A3.5b's (below); trait objects (A3.5c) are not done.
+`CLAIM.md` / `README.md` are not updated here.
 
 The runtime it models is docs/MEMORY.md §6.5. A library handle (`PNCounter
 { ( Shared PNCounterImpl ) ctl }`, a `TcpConn`, a `Cell`) is a counted
@@ -1539,8 +1542,9 @@ where the call places it).
   share.
 - *A closure that captures a handle* holds the share in its environment,
   which a spawn moves and checks. But a call lends the environment
-  (`envMem`), so the closure's own code does not change the state. That
-  is A3.5b's.
+  (`envMem`), so the closure's own code does not change the state. A3.5b
+  keeps such a closure out of an `Arc` (it is not Sync) and out of a
+  channel (it holds a share).
 - *The other crossings.* `chan_send`'s and `Locked`'s (`locked_new`,
   `locked_set`, `locked_restore`, after `locked_with`) need no run-time
   check here: their values hold no share at all, so the check has nothing
@@ -1598,21 +1602,275 @@ the spawned function, and its captures are `sink` arguments.
   the part of the thread whose frame holds it (A3.2's partition), and that
   thread is the home by the argument above.
 - Deadlock freedom: a library re-entering its own state waits or panics.
-- **A3.5b/c, not done**:
-  - closures in shared payloads: h339
-    `closure_in_an_arc_captures_a_library_handle`, h340
-    `closure_sent_on_a_channel_captures_a_kept_handle`, h342
-    `route_handler_changes_its_capture_on_two_threads` (a closure kept in
-    an `Arc`, sent on a channel, or run by several threads, that captures
-    a handle or changes what it captured);
-  - trait objects: h344 `dyn_object_carries_an_rc_to_a_thread` (a `%Trait`
-    box crosses only when its trait is `: Send`, and the vtable checks
-    it).
+- **A3.5c, not done**: trait objects, h344
+  `dyn_object_carries_an_rc_to_a_thread` (a `%Trait` box crosses only when
+  its trait is `: Send`, and the vtable checks it). Closures in shared
+  payloads (h339, h340, h342) are A3.5b's (below).
 - A library handle changed through a borrow (`in` parameters), implicit
   copies, handles in containers with `S_sendck` hooks, `% Sync` / `%
   NotSend` assertions.
 - The probes as typed programs (a probe's encoding, as `A2/DynCell.lean`
   types `pick`).
+- `CLAIM.md` / `README.md`.
+
+## A3.5b's mechanization (closures across threads)
+
+**Status (first cut).** Closures that cross threads, or that several
+threads reach at once, are mechanized. A closure's type says where it may
+cross; an `Arc` holds a Sync closure, a lock or a channel a bare one, and a
+spawn takes a Send one; a call through a closure an `Arc` lends is typed.
+`check.sh` is green with them in A2 and A3, and `A2.memory_safe`,
+`A2.soundness`, `A2.no_leak_end`, `A2.no_leak_panic`, the `DynCell`
+theorems and `A3.claim` are re-proven. Trait objects' own rules (A3.5c,
+h344) are not done. `CLAIM.md` / `README.md` are not updated here.
+
+The runtime it models is docs/MEMORY.md §6.5:
+- a closure's captures are not part of its type, so nurlc asks the Send
+  and Sync question of the value, followed from where the closure is built
+  to where it crosses;
+- a closure run on another thread moves its captures (A3.0's spawn does
+  this for a thread's body: its captures are `sink` arguments);
+- a closure kept in an `Arc`, or in a `% Sync` handle (a server's handler),
+  is reached by several threads at once. What it captures must be Sync, so
+  no library handle (h339), and its code may not change what it captured
+  (h342: a handler pushing to a captured `Vec` from every worker). It
+  counts in an `Atomic` or keeps the list in a `Locked` instead;
+- a closure sent on a channel, or kept beside a handle another thread takes
+  it from, moves its captures that are not Sync (h340).
+
+The gap before this cut: an `Arc`'s payload, a lock's payload and a
+channel's element all asked `hasFn = false`, and every closure type
+answered `true`, so no closure could be shared or sent.
+
+**Where the fact lives: a flag on `Ty.fn`.** The design offered three
+places: a flag on `Ty.fn`, a sibling type constructor, or a predicate on
+the packed value that typing tracks. The flag is taken:
+`Ty.fn ms q`, with `q : Cross`.
+- *Why not a predicate on the value.* The fact must survive everywhere a
+  closure goes after `pack`: a move, a field, a `Vec` element, an `Arc`'s
+  payload that `arc_clone` shares and `arc_get` lends, a channel's queue.
+  Each of these carries only a type. An entry's `held = []` says Send of
+  one binding, but the share `arc_new` makes holds nothing whatever its
+  payload holds, and the payload's type is all that `arc_get` has to go
+  on. So the fact has to be in the type.
+- *Why not a sibling constructor* (a `Ty.sfn ms`). Every function on types,
+  and every `cases` or `induction` on them, would get a case that repeats
+  `fn`'s. With the flag, `fn`'s one case reads `q`, and nothing on values
+  changes: the flag is the type's, never the package's (`Val.pkg` is as it
+  was).
+- *Why four classes, not a Bool.* An `Arc`'s payload may hold shares
+  (`Arc (Arc i)`, or an `Atomic` a handler counts in). A lock's payload and
+  a channel's element hold none: that is A3.2's and A3.4's simplification,
+  since the sweep reaches no block through a lock's payload. So Sync
+  (`sync`, which may hold `arc` and lock shares) and fit for a lock
+  (`bare`, no share at all) differ, and Send (`send`, which may hold a cell
+  share that a spawn's crossing check covers) is a third. They are
+  ordered, each holding less: `any`, `send`, `sync`, `bare`.
+
+**The rules** (A2, `Syntax.lean`, `Typing.lean`, `Invariant.lean`).
+- `Cross` is `any | send | sync | bare`, with `Cross.views` (`any`),
+  `Cross.cells` (`any`, `send`) and `Cross.shares` (all but `bare`).
+  - `Ty.holdsView (fn ms q) = q.views` and `Ty.hasFn (fn ms q) = q.views`.
+    `hasFn` now means "may hold a closure that holds bindings by name or
+    views". A Send closure holds neither, so a type that answers `false`
+    may still hold one.
+  - `Ty.hasCell (fn ms q) = q.cells` and `Ty.hasArc (fn ms q) = q.shares`.
+- `Cross.Fits q te cs`: the environment, of type `te`, with the captures by
+  name `cs`, holds no more than `q` says.
+  - `q.views = false → te.holdsView = false ∧ cs = []`;
+  - `q.cells = false → te.hasCell = false`;
+  - `q.shares = false → te.hasArc = false`.
+- `RhsT.pack` gains `q.Fits te cs`, and its result is a `fn ms q`. The rest
+  is A2's rule as it was: `PushArg` moves the environment in, and `CapsOK`
+  checks the captures by name. `pack` may give a closure any class its
+  environment fits (`RhsT.pack_fits`). The strongest is the one nurlc's
+  walk finds (*Faithful*, below).
+- `WFv.pkg` and `ValOK.pkg` ask `q.Fits te cs` of a package in memory, owned
+  or lent. `ViewIn.pkg` looks into an environment only at `any` (no other
+  holds a view), and `ArcIn.pkg` only where `q.shares` (a bare one holds no
+  share).
+- `StmtT.callc` reads `q` only to match the interface: the receiver is a
+  `fn ms q`, and the interface's first parameter is `(inp, fn ms q)`. A
+  call through a closure is otherwise unchanged.
+- The crossing rules are unchanged. Their premises read the flag through
+  the functions on types:
+  - A3.0's spawn (`SpawnOK`: a parameter whose type holds no view) takes a
+    `send`, `sync` or `bare` closure;
+  - A3.1's `arc_new` (`RhsT.arcNew`: no view, no closure that holds names,
+    no cell share) takes a `sync` or `bare` one (`arcNew_fn`,
+    `arcNew_sync`), and `arc_get` (no view, no such closure) lends it
+    (`arcGet_sync`);
+  - A3.2's `locked_new`, A3.5's cell constructor and A3.4's `chan_send`
+    (`Ty.ok (lk _)`: no view, no share) take a `bare` one (`lockNew_fn`,
+    `chan_fn`);
+  - A3.6: `Ty.sync (arc t)` is `!t.hasCell`, so an `Arc` global may keep a
+    Sync closure (a server's handler). `GlobsOK P G` asks that its code be
+    the program's (`codes`).
+- **A call through a closure an `Arc` lends** is A2's `callc`, unchanged
+  (`callT_recv`, `StmtT.callc_recv`, and `StmtT.arcCall` for `arc_get`
+  then the call).
+  - `arc_get`'s borrow (`getE a E t`) depends on `a` through a share
+    (`Kind.share`), and holds nothing by name.
+  - The call hands the borrow to the interface `inp`, and the code is handed
+    the environment lent again (`envMem`).
+  - `ThruOK.noShare` and `canDo` refuse every change through the borrow,
+    as through any payload borrow. A call needs no rule of its own: no
+    call changes its receiver.
+
+**What "its code changes no capture" is in the model.** A closure's code
+takes its environment as its first parameter, `inp`, and changes nothing
+through a borrow (`Implements`, `Implements.env_lent`: `¬ ThruFn`). So
+what a closure's code may change is a binding it captured by name (an
+`inout` capture, `CapsOK`), never its environment. A capture by name is a
+binding of the thread that built the closure, so `send` already excludes
+it (`cs = []`).
+- Every Send closure's code therefore reads its environment only. It
+  changes state only through the locks, atomics and channels the
+  environment holds, which synchronise themselves.
+- Sync is then Send with no cell share.
+- This refines the design's "Sync: additionally, its code changes no
+  capture, as `Implements` / `ThruFn` can say". `Implements` says it of
+  every closure, and the captures that can change are the ones by name.
+- What a lent cell share in an environment gives the code is no share
+  (`lendOf`, A3.5), so the code never changes a library handle's state.
+  The Sync question still refuses one (h339), to be faithful to the
+  runtime, whose code does change it.
+
+**A2's proof.**
+- *Every package a block holds names code of its signature* (`MemCodes`'
+  block half, `BlkCodes`, `MemCodes.blk`). This replaces `MInv.blkCodes`
+  ("a payload holds no package").
+  - Every step that changes a block keeps it: `arc_new`, `locked_new`, the
+    cell constructor, `rw_read`, an atomic or channel step, a lock's
+    check-out and its give-back (`EvalR.codes`, `Release.codes`).
+  - The sweep only removes blocks (`MemCodes.sweepR`).
+- *A value whose type holds no view holds only Send packages*, each
+  capturing nothing by name. Where the proof said such a value holds no
+  package, it now says this:
+  - `WFv.noView_pkg`, `WFv.pkgsOK_noView` (a payload's `PkgsOK`,
+    `MInv.pay_pkgs`) and `WFv.no_pkg` (for `hasFn = false`);
+  - `WFv.names_nil`, `WFv.names_nil_fn`, `ValOK.names_nil_fn` and
+    `ValOK.memDeps`, by `Cross.Fits.send`.
+- *The lemmas that walk a value read the class*: `WFv.sub_view`,
+  `WFv.node_holdsView`, `ViewsOK.pkg`, `SharesOK.pkg'`, `WFv.noCell`,
+  `lend_valOK'`.
+- `pkg_fits`: a live closure binding holds a package that fits its type.
+  `pkg_cap_mut` reads it (a closure that captured itself by name holds
+  views, so it is `any`).
+- *The renaming lemma*: `Cross.Fits.map` (fits reads only whether there are
+  captures, not their names) and `Cross.Fits.holdsView` (an environment
+  that may hold views lies in an `any` closure).
+
+**A3's proof.** A3's statements read nothing new. `Touch`, `Race`,
+`CellRace`, the partition and the frame lemmas are over values, and a
+closure's environment is a tree inside its value (`Sub.pkg`, `Val.ids`).
+- *race_free.* A Sync closure in an `Arc` is part of its payload.
+  - Its environment's addresses are the block's (`BlkOwn`): in `payPart`,
+    in no thread's part.
+  - A call through it (`Step.callc`) touches nothing: it binds the lent
+    environment, handles into the payload, to a fresh slot.
+  - What the code reads of the environment is a payload read (`touch_seen`,
+    `PaySeen`), which A3.1 proves is no race. What it writes is the
+    thread's own (its arguments, its result), or a lock's payload it has
+    checked out (A3.2).
+  - So two threads calling one Sync closure only read its environment.
+- *Send through a channel.* `chan_send` of a bare closure moves its tree,
+  environment and all, into the queue (`RTouch.chanSend` counts it as the
+  sender's write), and `chan_recv` hands it to the receiver's part: A3.4's
+  argument, for any value.
+- *A spawn* moves a Send closure as a `sink` argument. The crossing check
+  counts the cell shares its environment holds (`sendCheck_env`: `Sub`
+  enters packages), so `CellInv`'s confinement holds as for any moved
+  value.
+- *The blocks' codes across threads.* Every thread's view has the
+  configuration's blocks, so every `ThreadOK`'s `MemCodes` covers them.
+  - A thread's step gives the other threads the new blocks' codes
+    (`ThreadOK.blkCodes`, a premise of `ThreadOK.move`).
+  - A new thread gets the spawner's (`NewThreadLemma`).
+  - The start gets the globals' (`GlobsOK.codes`).
+
+**Faithful to the runtime.** nurlc follows the value; the model types it.
+- *How they relate.* nurlc asks the Send and Sync question of a closure
+  value, followed from its literal to where it crosses: through bindings,
+  fields, returns, captures and the parameters of functions that spawn or
+  keep it. It rejects a closure whose origin it cannot follow. The model
+  asks the question of the type.
+  - At the literal, both read the captures. `Cross.Fits` reads the
+    environment's type and whether anything is captured by name, so the
+    strongest class `pack` can give is the one nurlc's walk finds.
+  - From the literal on, nurlc follows the value and the model its type. A
+    move, a field, an element or a payload keeps the type, so it keeps the
+    class.
+  - **Phase C obligation (stated, not proven):** the lowering gives every
+    closure type the class nurlc's walk proved of the values it holds, and
+    `any` to a closure whose origin nurlc cannot follow.
+- *Where the model refuses more.*
+  - A parameter or field of closure type carries one class, and the model
+    has no subsumption (a `sync` closure where an `any` one is declared).
+    nurlc follows the value through.
+  - The runtime's closure moves its captures into its environment, and its
+    code may change them (an accumulator). The model's code reads its
+    environment, and changes only captures by name, which are not Send.
+    So a closure that changes what it captured is not Send in the model,
+    even one that the runtime lets cross because it moves.
+  - A channel's element and a lock's payload hold no share (A3.2, A3.4).
+    So a closure sent on a channel captures no handle at all, where the
+    runtime moves a non-Sync capture with it (h340).
+- *Where the model is the runtime.* h342's fix: a handler that counts in an
+  `Atomic`, or keeps its list in a `Locked`, captures a lock share, which
+  `sync` admits. Its code changes the state by `atomic` on the lent share,
+  or by `withLock` when the environment is the share itself (A3.2's
+  `withLock` takes a root, and a borrowed parameter is one; a share read
+  out of a field is not). Both synchronise themselves.
+
+**Probes** (`tools/fuzz/holes/*.nu`). The rules each probe maps to are in
+`A3/Defs.lean`, with A3.6's.
+- h339 `closure_in_an_arc_captures_a_library_handle`: `pack` types a
+  closure Sync only when its environment holds no cell share
+  (`pack_sync_noCell`), and an `Arc` holds only Sync or bare closures
+  (`arcNew_fn`). So a closure that captures a library handle is `send` at
+  best, and `RhsT.arcNew` refuses it (`hasCell`).
+- h340 `closure_sent_on_a_channel_captures_a_kept_handle`: a channel's
+  element and a lock's payload hold only bare closures (`chan_fn`,
+  `lockNew_fn`), which capture no handle. On a spawn, the crossing check
+  counts the handles a closure's environment holds (`sendCheck_env`), so
+  a handle kept behind fails it and the spawn panics (`TStep.spawnFail`).
+- h342 `route_handler_changes_its_capture_on_two_threads`: a handler that
+  changes a capture captures it by name, so `pack` types it `any`
+  (`pack_names_any`). No `Arc` holds it (`arcNew_not_any`) and no spawn
+  takes it (`spawn_not_any`). A closure's code reads its environment, lent
+  (`Implements.env_lent`). The fix, a Sync handler in an `Arc` called by
+  any thread, is typed (`StmtT.arcCall`).
+
+**Simplifications in this cut.** Each is a restriction, and sound as stated.
+- *No subsumption.* A `sync` closure is not an `any` one, so a function
+  declares the class of each closure it takes. Forgetting a class would be
+  sound (it only weakens the type) but is not a rule.
+- *One class per interface.* An interface's receiver is `(inp, fn ms q)`,
+  so an interface is declared at one class, and a method's code is checked
+  once for it.
+- *A lock or a channel takes only a bare closure* (no share), as A3.2 and
+  A3.4 take no share.
+- *A closure changes only what it captured by name* (A2's closure model).
+  A Send closure's code changes nothing it owns.
+- *A `% Sync` handle* other than an `Arc` (a server's `Route`) does not keep
+  a closure in the model: its handler is an `Arc` of a Sync closure.
+- *Trait objects.* A `dyn` is a `pack` too, so a trait object gets a class
+  the same way, and the interface's receiver type carries it, as a trait's
+  `: Send` / `: Send Sync` bound does. What A3.5c would add is not done:
+  the bound checked at each impl, `%Trait` boxes, the vtable's walk
+  (h344).
+
+**Not proven here.**
+- *Phase C*: that the lowering gives each closure type the class nurlc's
+  walk proved (above).
+- Subsumption between classes; a closure that changes what it moved in.
+- A share in a lock's payload or a channel's element (A3.2, A3.4), so a
+  closure that captures one and is sent or locked.
+- Trait objects, A3.5c (h344 `dyn_object_carries_an_rc_to_a_thread`).
+- The probes as whole typed programs: `StmtT.arcCall` types the call
+  through the `Arc`, not a program that `memory_safe` is applied to (as
+  `A2/DynCell.lean` types `pick`).
 - `CLAIM.md` / `README.md`.
 
 ## A3.6's mechanization (module globals)
@@ -1621,7 +1879,8 @@ the spawned function, and its captures are `sink` arguments.
 `check.sh` is green with them in A2 and A3, and `A2.memory_safe`,
 `A2.soundness`, `A2.no_leak_end`, `A2.no_leak_panic`, the `DynCell`
 theorems and `A3.claim` are re-proven. `A3.claim` now runs from a start
-that holds the globals (`Cfg.start G s nv`, under `GlobsOK G`), and its
+that holds the globals (`Cfg.start G s nv`, under `GlobsOK G`; since
+A3.5b `GlobsOK P G`), and its
 leak clause leaves what they reach. With no global it is A3.0–A3.5's
 claim (`Cfg.init_start`, `A3.no_leak_init`). `CLAIM.md` / `README.md` are
 not updated here.
@@ -1708,7 +1967,10 @@ once its result is the global's.
     of its type, owning its payload's addresses once; `Covers`: nothing
     else is allocated);
   - `reach`: every block is reached from a global, since the sweep that
-    ended the last `make` left no other.
+    ended the last `make` left no other;
+  - (A3.5b) `codes`: every package a block holds names code of the
+    program (`BlkCodes`), as `MemCodes` says of the store a typed `make`
+    leaves. So `GlobsOK` takes the program: `GlobsOK P G`.
 - `Cfg.roots`: the configuration's sweep counts the globals' shares as
   roots, beside every thread's slots (`Cfg.sweep`). So a global's block,
   and every block its payload reaches, lives as long as the program runs.
