@@ -68,6 +68,20 @@ theorem Keeps.killNames {Γ0 Γ : Ctx} {X : List Var} (h : Keeps Γ0 Γ X) : ∀
   | [] => h
   | _ :: ds => show Keeps Γ0 (A2.kill _ _ _ (A2.killNames ds Γ)) X from (Keeps.killNames h ds).kill _ _ _
 
+theorem Keeps.killHv {Γ0 Γ : Ctx} {X : List Var} (h : Keeps Γ0 Γ X) : ∀ ks, Keeps Γ0 (killHv ks Γ) X
+  | [] => h
+  | (_, _, _) :: ks => show Keeps Γ0 (A2.kill _ _ _ (A2.killHv ks Γ)) X from (Keeps.killHv h ks).kill _ _ _
+
+/-- Holding more keeps a binding that may be held by name one: its type
+    holds no views, so it holds nothing more. -/
+theorem Keeps.holdOn {Γ0 Γ : Ctx} {X : List Var} (h : Keeps Γ0 Γ X) (rs : List Var) (D : List Dep) :
+    Keeps Γ0 (holdOn rs D Γ) X := by
+  intro y E0 hy
+  obtain ⟨E, hE, ht, hm, hn⟩ := h y E0 hy
+  refine ⟨_, holdOn_some hE, by split <;> exact ht, by split <;> exact hm, fun hX h0 => ?_⟩
+  have hnE := hn hX h0
+  rw [E.hold_noView hnE.2.2.2, ite_self]; exact hnE
+
 /-- What a binding of a type that holds no views is held by name as, it is. -/
 theorem DepsNamed.root {Γ : Ctx} {D : List Dep} (h : DepsNamed Γ D) {d : Dep} (hd : d ∈ D)
     (hk : d.kind.isName = true) : ∃ Er, Γ d.root = some Er ∧ Er.named := by
@@ -130,6 +144,10 @@ theorem NameWF.setE {Γ : Ctx} (h : NameWF Γ) {x : Var} {E : Entry}
 theorem NameWF.killNames {Γ : Ctx} (h : NameWF Γ) : ∀ ds, NameWF (killNames ds Γ)
   | [] => h
   | _ :: ds => show NameWF (A2.kill _ _ _ (A2.killNames ds Γ)) from (NameWF.killNames h ds).kill _ _ _
+
+theorem NameWF.killHv {Γ : Ctx} (h : NameWF Γ) : ∀ ks, NameWF (killHv ks Γ)
+  | [] => h
+  | (_, _, _) :: ks => show NameWF (A2.kill _ _ _ (A2.killHv ks Γ)) from (NameWF.killHv h ks).kill _ _ _
 
 theorem DepsNamed.of_held {Γ : Ctx} {E : Entry} (h : NameOK Γ E) : DepsNamed Γ E.held := h.held
 
@@ -843,6 +861,41 @@ theorem StmtT.names {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : St
       rcases hE'c with rfl | rfl <;> (rw [hm1] at hos; cases hos)
     · exact (hn1 x Ex1 hx1 hl hni).keeps ((Keeps.refl Γ1 []).killNames (thruDeps op Γ1 Ex.ty Ex1.path))
         (fun _ _ _ h => by cases h)
+  | @editBV Γ Γ1 F x op Ex Ex1 t D hx hmx _ _ _ _ _ harg hyx hx1 hl1 _ hthru _ =>
+    intro _ hn
+    have hn1 : NameWF Γ1 := harg.names hn
+    have hE1 : Ex1 = Ex := harg.at_ne hyx hx hx1 hl1
+    have hm1 : Ex1.mode = .bor := by rw [hE1, hmx]
+    have hos : Ex1.mode.ownSlot = false := by rw [hm1]; rfl
+    have hxr := hthru.not_root hx1 hos
+    have hk : Keeps Γ1 (holdThru (memDeps D) Ex1.path (killThruV op Ex.ty Ex1.path Γ1)) [] :=
+      ((Keeps.refl Γ1 []).killHv _).holdOn _ _
+    obtain ⟨E', hE', hE'c⟩ := killHv_entry (thruKills op Γ1 Ex.ty Ex1.path) hx1
+    refine NameWF.setE ((hn1.killHv _).holdOn memDeps_noName) (fun Ex' h => ?_) (fun Ex' h hnm => ?_)
+      (fun hl hni => ?_)
+    · obtain ⟨E2, h2, rfl⟩ := holdOn_get h
+      rw [ite_eq_right hxr]
+      have h2' : killHv (thruKills op Γ1 Ex.ty Ex1.path) Γ1 x = some E2 := h2
+      rw [hE'] at h2'; cases h2'
+      rcases hE'c with rfl | rfl <;> exact ⟨rfl, rfl⟩
+    · obtain ⟨E2, h2, rfl⟩ := holdOn_get h
+      rw [ite_eq_right hxr] at hnm
+      have h2' : killHv (thruKills op Γ1 Ex.ty Ex1.path) Γ1 x = some E2 := h2
+      rw [hE'] at h2'; cases h2'
+      have hmE : E'.mode = Ex1.mode := by rcases hE'c with rfl | rfl <;> rfl
+      have := hnm.2.2.1
+      rw [hmE, hos] at this; cases this
+    · have hN := hn1 x Ex1 hx1 hl1 hni
+      refine NameOK.keeps (Γ0 := Γ1) (fun d hd b t' hk' => ?_) hk (fun _ _ _ h => by cases h)
+      have hd' : d ∈ Ex1.vdeps ∨ d ∈ memDeps D := by
+        simp only [Entry.vdeps, hos, Bool.false_eq_true, ↓reduceIte, List.mem_append] at hd ⊢
+        rcases hd with hd | hd | hd
+        · exact Or.inl (Or.inl hd)
+        · exact Or.inl (Or.inr hd)
+        · exact Or.inr hd
+      rcases hd' with hd' | hd'
+      · exact hN d hd' b t' hk'
+      · have := memDeps_noName d hd'; rw [hk'] at this; cases this
   | @free Γ F x E t hx _ _ _ _ _ =>
     intro _ hn
     exact hn.moved hx

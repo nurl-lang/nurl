@@ -48,6 +48,17 @@ theorem DomTy.killNames {Γ0 Γ : Ctx} (h : DomTy Γ0 Γ) : ∀ ds, DomTy Γ0 (A
   | [] => h
   | _ :: ds => show DomTy Γ0 (A2.kill _ _ _ (A2.killNames ds Γ)) from (DomTy.killNames h ds).kill _ _ _
 
+theorem DomTy.killHv {Γ0 Γ : Ctx} (h : DomTy Γ0 Γ) : ∀ ks, DomTy Γ0 (A2.killHv ks Γ)
+  | [] => h
+  | (_, _, _) :: ks => show DomTy Γ0 (A2.kill _ _ _ (A2.killHv ks Γ)) from (DomTy.killHv h ks).kill _ _ _
+
+theorem DomTy.holdOn {Γ0 Γ : Ctx} (h : DomTy Γ0 Γ) (rs : List Var) (D : List Dep) :
+    DomTy Γ0 (A2.holdOn rs D Γ) := by
+  refine ⟨fun x => by rw [holdOn_isSome]; exact h.1 x, fun x E' hE' => ?_⟩
+  obtain ⟨E, hE, rfl⟩ := holdOn_get hE'
+  obtain ⟨E0, h0, hm, ht⟩ := h.2 x E hE
+  exact ⟨E0, h0, by split <;> exact hm, by split <;> exact ht⟩
+
 /-- What running the closures handed to a call leaves of a binding. -/
 theorem killNames_get {Γ : Ctx} {y : Var} : ∀ (ds : List Dep) {E : Entry}, killNames ds Γ y = some E →
     ∃ E0, Γ y = some E0 ∧ E.ty = E0.ty ∧ E.mode = E0.mode ∧ E.path = E0.path ∧ E.held = E0.held ∧
@@ -195,6 +206,10 @@ theorem StmtT.domTy {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     intro _
     obtain ⟨E0, h0, hm0, ht0⟩ := harg.domTy.2 x Ex1 hx1
     exact (harg.domTy.killNames (thruDeps op Γ1 Ex.ty Ex1.path)).setE ⟨E0, h0, hm0, ht0⟩
+  | @editBV Γ Γ1 F x op Ex Ex1 t D _ _ _ _ _ _ _ harg _ hx1 _ _ _ _ =>
+    intro _
+    obtain ⟨E0, h0, hm0, ht0⟩ := harg.domTy.2 x Ex1 hx1
+    exact ((harg.domTy.killHv (thruKills op Γ1 Ex.ty Ex1.path)).holdOn _ _).setE ⟨E0, h0, hm0, ht0⟩
   | @free Γ F x E t hx _ _ _ _ _ => exact fun _ => ((DomTy.refl Γ).kill _ _ _).setE ⟨E, hx, rfl, rfl⟩
   | sub hw _ ho ih =>
     intro hs

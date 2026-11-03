@@ -561,6 +561,21 @@ theorem DomMode.killNames {Γ0 Γ : Ctx} (h : DomMode Γ0 Γ) : ∀ ds, DomMode 
   | [] => h
   | _ :: ds => show DomMode Γ0 (A2.kill _ _ _ (A2.killNames ds Γ)) from (DomMode.killNames h ds).kill _ _ _
 
+theorem CtxWF.killHv {Γ : Ctx} (h : CtxWF Γ) : ∀ ks, CtxWF (killHv ks Γ)
+  | [] => h
+  | (_, _, _) :: ks => show CtxWF (A2.kill _ _ _ (A2.killHv ks Γ)) from (CtxWF.killHv h ks).kill _ _ _
+
+theorem DomMode.killHv {Γ0 Γ : Ctx} (h : DomMode Γ0 Γ) : ∀ ks, DomMode Γ0 (killHv ks Γ)
+  | [] => h
+  | (_, _, _) :: ks => show DomMode Γ0 (A2.kill _ _ _ (A2.killHv ks Γ)) from (DomMode.killHv h ks).kill _ _ _
+
+theorem DomMode.holdOn {Γ0 Γ : Ctx} (h : DomMode Γ0 Γ) (rs : List Var) (D : List Dep) :
+    DomMode Γ0 (holdOn rs D Γ) := by
+  refine ⟨fun x => by rw [holdOn_isSome]; exact h.1 x, fun x E' hE' => ?_⟩
+  obtain ⟨E, hE, rfl⟩ := holdOn_get hE'
+  obtain ⟨E0, h0, hm⟩ := h.2 x E hE
+  exact ⟨E0, h0, by split <;> exact hm⟩
+
 theorem callPostAux_wf {Γ0 : Ctx} {fn : Fn} {args : List Var}
     (harm : ∀ v E, Γ0 v = some E → E.dtor = true → E.dbind = true)
     (hview : ∀ v E, Γ0 v = some E → E.dbind = true → E.ty.holdsView = true)
@@ -862,6 +877,15 @@ theorem EditArg.wf {Γ Γ1 : Ctx} {F : List Var} {op : Edit} {t : Ty} {D : List 
   | trunc _ => exact hw
   | set _ hy hly hty hpa => exact (hpa.wf hw hy hly hty).1
 
+/-- What a change of elements stores depends on bound roots. -/
+theorem EditArg.roots {Γ Γ1 : Ctx} {F : List Var} {op : Edit} {t : Ty} {D : List Dep}
+    (h : EditArg Γ F op t D Γ1) (hw : CtxWF Γ) :
+    ∀ r ∈ roots D, ∃ Er, Γ1 r = some Er ∧ Er.mode.isRoot = true := by
+  cases h with
+  | push hy hly hty hpa => exact (hpa.wf hw hy hly hty).2.2.2
+  | trunc _ => intro r hr; cases hr
+  | set _ hy hly hty hpa => exact (hpa.wf hw hy hly hty).2.2.2
+
 theorem DomMode.exitScope {Γ0 Γ : Ctx} (h : DomMode Γ0 Γ) {x : Var} {r : Var} (hrx : r ≠ x)
     {E : Entry} (hr : Γ0 r = some E) : ∃ E', exitScope x Γ r = some E' ∧ E'.mode = E.mode := by
   obtain ⟨E', h', hm⟩ := h.get hr
@@ -1075,6 +1099,13 @@ theorem StmtT.keepF {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     obtain ⟨E2, h2, hE2⟩ := killNames_entry (thruDeps op Γ1 Ex.ty Ex1.path) h1
     exact ⟨E2, by simp only [A2.setE, upd_ne _ _ hrx]; exact h2,
       by rcases hE2 with rfl | rfl <;> exact hm1⟩
+  | @editBV Γ Γ1 F x op Ex Ex1 t D _ _ _ _ _ _ hxF harg _ _ _ _ _ _ =>
+    intro r hr E h
+    have hrx : r ≠ x := fun e => hxF (e ▸ hr)
+    obtain ⟨E1, h1, hm1⟩ := harg.domMode.get h
+    obtain ⟨E2, h2, hE2⟩ := killHv_entry (thruKills op Γ1 Ex.ty Ex1.path) h1
+    exact ⟨_, by simp only [A2.setE, upd_ne _ _ hrx]; exact holdOn_some h2,
+      by split <;> (rcases hE2 with rfl | rfl <;> exact hm1)⟩
 
 /-- Every rule keeps a well-formed context well-formed. -/
 theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
@@ -1260,5 +1291,46 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
     have hrx : r ≠ x := fun e => by subst e; rw [hx1] at hEr; cases hEr; rw [hm1] at hro; cases hro
     obtain ⟨E2, h2, hE2⟩ := killNames_entry (thruDeps op Γ1 Ex.ty Ex1.path) hEr
     exact ⟨hrx, E2, h2, by rcases hE2 with rfl | rfl <;> exact hro⟩
+  | @editBV Γ Γ1 F x op Ex Ex1 t D hx hmx _ _ _ _ _ harg hyx hx1 hl1 _ hthru _ =>
+    intro h
+    have hw1 := harg.wf h
+    have hE1 : Ex1 = Ex := harg.at_ne hyx hx hx1 hl1
+    have hm1 : Ex1.mode = .bor := by rw [hE1, hmx]
+    -- what is bound and a root stays so
+    have hbr : ∀ r, (∃ Er, Γ1 r = some Er ∧ Er.mode.isRoot = true) →
+        ∃ Er, holdThru (memDeps D) Ex1.path (killThruV op Ex.ty Ex1.path Γ1) r = some Er ∧
+          Er.mode.isRoot = true := by
+      rintro r ⟨Er, hEr, hro⟩
+      obtain ⟨E2, h2, hE2⟩ := killHv_entry (thruKills op Γ1 Ex.ty Ex1.path) hEr
+      exact ⟨_, holdOn_some h2, by split <;> (rcases hE2 with rfl | rfl <;> exact hro)⟩
+    have hD : ∀ r ∈ roots (memDeps D), ∃ Er, Γ1 r = some Er ∧ Er.mode.isRoot = true :=
+      fun r hr => harg.roots h r (roots_memDeps hr)
+    have hk : CtxWF (holdThru (memDeps D) Ex1.path (killThruV op Ex.ty Ex1.path Γ1)) :=
+      (hw1.killHv _).holdOn fun r hr => by
+        obtain ⟨Er, hEr, hro⟩ := hD r hr
+        obtain ⟨E2, h2, hE2⟩ := killHv_entry (thruKills op Γ1 Ex.ty Ex1.path) hEr
+        exact ⟨E2, h2, by rcases hE2 with rfl | rfl <;> exact hro⟩
+    obtain ⟨E', hE', hE'c⟩ := killHv_entry (thruKills op Γ1 Ex.ty Ex1.path) hx1
+    have hxr := hthru.not_root hx1 (by rw [hm1]; rfl)
+    have hxE : holdThru (memDeps D) Ex1.path (killThruV op Ex.ty Ex1.path Γ1) x = some E' := by
+      show holdOn _ _ (killHv _ Γ1) x = some E'; rw [holdOn_some hE', ite_eq_right hxr]
+    refine hk.setE ⟨E', hxE, fun hro => by rcases hE'c with rfl | rfl <;> exact hro⟩
+      (fun hl hn r hr => Or.inr ?_)
+      (fun _ hos => by exact absurd hos (by show ¬ (Ex1.mode.ownSlot = true); rw [hm1]; decide))
+      (fun ha => hw1.arm x Ex1 hx1 ha) (fun hd => hw1.view x Ex1 hx1 hd)
+    have hos : Ex1.mode.ownSlot = false := by rw [hm1]; rfl
+    have hr' : r ∈ roots Ex1.vdeps ∨ r ∈ roots (memDeps D) := by
+      simp only [Entry.vdeps, hos, Bool.false_eq_true, ↓reduceIte, roots, List.map_append,
+        List.mem_append] at hr ⊢
+      rcases hr with hr | hr | hr
+      · exact Or.inl (Or.inl hr)
+      · exact Or.inl (Or.inr hr)
+      · exact Or.inr hr
+    obtain ⟨Er, hEr, hro⟩ : ∃ Er, Γ1 r = some Er ∧ Er.mode.isRoot = true := by
+      rcases hr' with hr' | hr'
+      · exact hw1 x Ex1 hx1 hl1 hn r hr'
+      · exact hD r hr'
+    have hrx : r ≠ x := fun e => by subst e; rw [hx1] at hEr; cases hEr; rw [hm1] at hro; cases hro
+    exact ⟨hrx, hbr r ⟨Er, hEr, hro⟩⟩
 
 end A2

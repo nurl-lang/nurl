@@ -1051,6 +1051,176 @@ theorem ThruOK.noShare {Γ1 : Ctx} {F : List Var} {op : Edit} {tx : Ty} {P : Lis
   obtain ⟨_, _, _, _, _, _, _, h⟩ := h d hd
   exact h
 
+/-! #### A view stored through a borrow (Agora #295, `StmtT.editBV`) -/
+
+/-- Effects run in turn, each on a binding, with whether that binding's
+    elements hold views (`kill`'s `hv`). -/
+def killHv : List (Eff × Bool × Var) → Ctx → Ctx
+  | [], Γ => Γ
+  | (e, hv, r) :: ks, Γ => kill e hv r (killHv ks Γ)
+
+/-- The per-root effects of a change through a borrow (those of
+    `thruDeps`), each with whether the root's type holds views. -/
+def thruKills (op : Edit) (Γ : Ctx) (tx : Ty) (P : List Dep) : List (Eff × Bool × Var) :=
+  (memDeps P).map fun d =>
+    (op.effAt d.kind (decide ((argE Γ d.root).ty = tx)), (argE Γ d.root).ty.holdsView, d.root)
+
+/-- What a change through a borrow that may store a view ends: on each
+    memory root, what its effect there ends, the root's elements holding
+    views if its type does, as the owner's own `push` does (`kill .realloc
+    t.holdsView`): a root that may hold the view also ends the borrows of its
+    whole handle, which do not hold what the view depends on. -/
+def killThruV (op : Edit) (tx : Ty) (P : List Dep) (Γ : Ctx) : Ctx :=
+  killHv (thruKills op Γ tx P) Γ
+
+theorem mem_thruKills {op : Edit} {Γ : Ctx} {tx : Ty} {P : List Dep} {k : Eff × Bool × Var} :
+    k ∈ thruKills op Γ tx P ↔ ∃ d ∈ memDeps P,
+      k = (op.effAt d.kind (decide ((argE Γ d.root).ty = tx)), (argE Γ d.root).ty.holdsView, d.root) := by
+  unfold thruKills
+  simp only [List.mem_map]
+  constructor
+  · rintro ⟨d, hd, rfl⟩; exact ⟨d, hd, rfl⟩
+  · rintro ⟨d, hd, rfl⟩; exact ⟨d, hd, rfl⟩
+
+theorem killHv_entry {Γ : Ctx} : ∀ (ks : List (Eff × Bool × Var)) {v : Var} {E : Entry}, Γ v = some E →
+    ∃ E', killHv ks Γ v = some E' ∧ (E' = E ∨ E' = { E with live := false })
+  | [], _, E, hv => ⟨E, hv, Or.inl rfl⟩
+  | (e, b, r) :: ks, v, E, hv => by
+    obtain ⟨E1, h1, hE1⟩ := killHv_entry ks hv
+    refine ⟨killE e b r E1, by show (killHv ks Γ v).map _ = _; rw [h1]; rfl, ?_⟩
+    unfold killE
+    split
+    · rcases hE1 with rfl | rfl <;> exact Or.inr rfl
+    · exact hE1
+
+theorem killHv_isSome (ks : List (Eff × Bool × Var)) (Γ : Ctx) (v : Var) :
+    (killHv ks Γ v).isSome = (Γ v).isSome := by
+  induction ks with
+  | nil => rfl
+  | cons k ks ih =>
+    obtain ⟨e, b, r⟩ := k
+    show ((killHv ks Γ v).map _).isSome = _
+    rw [Option.isSome_map]; exact ih
+
+/-- What the kills leave of a binding: its mode, type, path, held and flags. -/
+theorem killHv_same {Γ : Ctx} {ks : List (Eff × Bool × Var)} {v : Var} {E' : Entry}
+    (h : killHv ks Γ v = some E') : ∃ E, Γ v = some E ∧ E'.mode = E.mode ∧ E'.ty = E.ty ∧
+      E'.vdeps = E.vdeps ∧ E'.held = E.held ∧ E'.dtor = E.dtor ∧ E'.dbind = E.dbind ∧
+      (E'.live = true → E.live = true) := by
+  cases hE : Γ v with
+  | none =>
+    have := killHv_isSome ks Γ v
+    rw [h, hE] at this; cases this
+  | some E =>
+    obtain ⟨E1, h1, hE1⟩ := killHv_entry ks hE
+    rw [h] at h1; cases h1
+    rcases hE1 with rfl | rfl
+    · exact ⟨_, rfl, rfl, rfl, rfl, rfl, rfl, rfl, id⟩
+    · exact ⟨_, rfl, rfl, rfl, rfl, rfl, rfl, rfl, fun h => by cases h⟩
+
+/-- An entry that also holds `D`, if its type holds views (`ownHeld`: a
+    value of a type that holds no views holds nothing). -/
+def Entry.hold (D : List Dep) (E : Entry) : Entry := { E with held := E.held ++ ownHeld true E.ty D }
+
+/-- The bindings of `rs` also hold `D`. -/
+def holdOn (rs : List Var) (D : List Dep) (Γ : Ctx) : Ctx := fun v =>
+  (Γ v).map fun E => if v ∈ rs then E.hold D else E
+
+/-- What a change through a borrow whose path is `P` that stores a value
+    depending on `D` leaves its memory roots holding: `D` too. The change
+    lands in the tree of one of them, which the typing cannot tell apart
+    (`MInv.thru_owner`), so each holds it, as the owner of a `push` does. -/
+def holdThru (D P : List Dep) (Γ : Ctx) : Ctx := holdOn (roots (memDeps P)) D Γ
+
+@[simp] theorem Entry.hold_ty (D : List Dep) (E : Entry) : (E.hold D).ty = E.ty := rfl
+@[simp] theorem Entry.hold_mode (D : List Dep) (E : Entry) : (E.hold D).mode = E.mode := rfl
+@[simp] theorem Entry.hold_live (D : List Dep) (E : Entry) : (E.hold D).live = E.live := rfl
+@[simp] theorem Entry.hold_path (D : List Dep) (E : Entry) : (E.hold D).path = E.path := rfl
+@[simp] theorem Entry.hold_held (D : List Dep) (E : Entry) :
+    (E.hold D).held = E.held ++ ownHeld true E.ty D := rfl
+@[simp] theorem Entry.hold_dtor (D : List Dep) (E : Entry) : (E.hold D).dtor = E.dtor := rfl
+@[simp] theorem Entry.hold_dbind (D : List Dep) (E : Entry) : (E.hold D).dbind = E.dbind := rfl
+
+theorem Entry.hold_vdeps (D : List Dep) (E : Entry) :
+    (E.hold D).vdeps = E.vdeps ++ ownHeld true E.ty D := by
+  show (if E.mode.ownSlot then [] else E.path) ++ (E.held ++ ownHeld true E.ty D) = _
+  unfold Entry.vdeps; rw [List.append_assoc]
+
+/-- A binding of a type that holds no views holds nothing more. -/
+theorem Entry.hold_noView {E : Entry} (h : E.ty.holdsView = false) (D : List Dep) : E.hold D = E := by
+  cases E; simp_all [Entry.hold, ownHeld]
+
+theorem holdOn_some {rs : List Var} {D : List Dep} {Γ : Ctx} {v : Var} {E : Entry} (h : Γ v = some E) :
+    holdOn rs D Γ v = some (if v ∈ rs then E.hold D else E) := by
+  simp [holdOn, h]
+
+theorem holdOn_none {rs : List Var} {D : List Dep} {Γ : Ctx} {v : Var} (h : Γ v = none) :
+    holdOn rs D Γ v = none := by
+  simp [holdOn, h]
+
+/-- What a binding is after `holdOn`: what it was, perhaps holding more. -/
+theorem holdOn_get {rs : List Var} {D : List Dep} {Γ : Ctx} {v : Var} {E' : Entry}
+    (h : holdOn rs D Γ v = some E') : ∃ E, Γ v = some E ∧ (E' = if v ∈ rs then E.hold D else E) := by
+  cases hE : Γ v with
+  | none => rw [holdOn_none hE] at h; cases h
+  | some E => rw [holdOn_some hE] at h; exact ⟨E, rfl, (Option.some.inj h).symm⟩
+
+theorem holdOn_isSome (rs : List Var) (D : List Dep) (Γ : Ctx) (v : Var) :
+    (holdOn rs D Γ v).isSome = (Γ v).isSome := by
+  cases hE : Γ v with
+  | none => rw [holdOn_none hE]
+  | some E => rw [holdOn_some hE]; rfl
+
+/-- What a change through a borrow that may store a view asks of each memory
+    root `d.root` of the borrow's path `P`, beyond `ThruOK`, `D` being what
+    the stored value depends on in memory: its effect, the root's elements
+    holding views if its type does, ends no view a destructor will read
+    (`killThruV`); it was not made by `letd` (a destructor binding gains no
+    view, as `StmtT.push` asks); and what is stored depends on no root of
+    the path (no tree views itself). -/
+def ThruV (Γ1 : Ctx) (op : Edit) (tx : Ty) (P D : List Dep) : Prop :=
+  ∀ d ∈ memDeps P,
+    DtorSafe Γ1 (op.effAt d.kind (decide ((argE Γ1 d.root).ty = tx))) (argE Γ1 d.root).ty.holdsView d.root ∧
+    (argE Γ1 d.root).dbind = false ∧ d.root ∉ roots D
+
+/-- A memory root of a change through a borrow owns its slot and is not lent
+    out. -/
+theorem ThruOK.root {Γ1 : Ctx} {F : List Var} {op : Edit} {tx : Ty} {P : List Dep}
+    (h : ThruOK Γ1 F op tx P) {r : Var} (hr : r ∈ roots (memDeps P)) :
+    ∃ Er, Γ1 r = some Er ∧ Er.mode.ownSlot = true ∧ r ∉ F := by
+  obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hr
+  obtain ⟨hF, _, Er, hEr, _, hcan, _⟩ := h d hd
+  exact ⟨Er, hEr, hcan.ownSlot, hF⟩
+
+/-- ... so no borrow is one. -/
+theorem ThruOK.not_root {Γ1 : Ctx} {F : List Var} {op : Edit} {tx : Ty} {P : List Dep}
+    (h : ThruOK Γ1 F op tx P) {x : Var} {Ex : Entry} (hx : Γ1 x = some Ex) (hos : Ex.mode.ownSlot = false) :
+    x ∉ roots (memDeps P) := fun hr => by
+  obtain ⟨Er, hEr, ho, _⟩ := h.root hr
+  rw [hx] at hEr; cases hEr; rw [hos] at ho; cases ho
+
+theorem ThruV.dbind {Γ1 : Ctx} {op : Edit} {tx : Ty} {P D : List Dep} (h : ThruV Γ1 op tx P D) {r : Var}
+    (hr : r ∈ roots (memDeps P)) {E : Entry} (hE : Γ1 r = some E) : E.dbind = false := by
+  obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hr
+  have := (h d hd).2.1
+  simpa [argE, hE] using this
+
+theorem ThruV.notD {Γ1 : Ctx} {op : Edit} {tx : Ty} {P D : List Dep} (h : ThruV Γ1 op tx P D) {r : Var}
+    (hr : r ∈ roots (memDeps P)) : r ∉ roots D := by
+  obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hr
+  exact (h d hd).2.2
+
+/-- What a change kills is on a root none of whose memory `D` depends on. -/
+theorem ThruV.kills {Γ1 : Ctx} {op : Edit} {tx : Ty} {P D : List Dep} (h : ThruV Γ1 op tx P D) :
+    ∀ k ∈ thruKills op Γ1 tx P, k.2.2 ∉ roots D := by
+  intro k hk
+  obtain ⟨d, hd, rfl⟩ := mem_thruKills.mp hk
+  exact (h d hd).2.2
+
+/-- Memory dependencies are none by name. -/
+theorem memDeps_noName {D : List Dep} : ∀ d ∈ memDeps D, d.kind.isName = false := fun d hd => by
+  simpa [memDeps] using (List.mem_filter.mp hd).2
+
 /-- What a change of elements is handed: the value `vec_push` stores (as
     `PushArg` takes it; an element `Vec` moves), the integer expression a
     truncation evaluates, which only reads, or both, for `vec_set`: the
