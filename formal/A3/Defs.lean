@@ -89,9 +89,9 @@ theorem arc_spawnOK {t : Ty} (h : (Ty.arc t).ok = true) : (Ty.arc t).holdsView =
   simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true] at h
   exact h.2
 
-/-- ... and so does every share of a first-cut (plain) payload. -/
-theorem arc_spawnOK_plain {t : Ty} (h : t.plain = true) : (Ty.arc t).holdsView = false :=
-  Ty.plain_holdsView h
+/-- ... and so does every share `arc_new` makes: its payload's type holds no
+    views (`RhsT.arcNew`), whatever trees it owns. -/
+theorem arc_spawnOK_viewFree {t : Ty} (h : t.holdsView = false) : (Ty.arc t).holdsView = false := h
 
 /-- Moving the arguments out of the spawner: each owns its value, and its
     slot is left empty (its drop flag clear). -/

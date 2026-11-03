@@ -134,7 +134,6 @@ theorem HeapOK.sweepR {R : Val → Prop} {m : Mem} (hh : HeapOK m) : HeapOK (m.s
     by_cases he : k' = k
     · subst he; rw [hk0] at hk'; cases hk'; exact hnr hreach
     · exact hoth k' bl' he hk' hik'
-  bpay k bl hk := hh.bpay k bl (Mem.sweepR_blk.mp hk).1
 
 theorem HeapOK.sweep {m : Mem} (hh : HeapOK m) : HeapOK m.sweep := hh.sweepR
 

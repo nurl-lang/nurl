@@ -229,8 +229,7 @@ theorem newThread_inv {P : Prog} {fn : Fn} (hok : FnOK P fn)
       self := fun x t h => hself t (hmem h rfl)
       blk := fun k bl hk => ⟨(hB k bl hk).key, (hB k bl hk).nodup, fun i hi =>
         ⟨by simp [union, payPart_iff.mpr ⟨k, bl, hk, hi⟩], (hB k bl hk).lt i hi,
-         fun x T hT hiT => hBv i ⟨k, bl, hk, hi⟩ T (hmem hT rfl) hiT, (hB k bl hk).apart i hi⟩⟩
-      bpay := fun k bl hk => (hB k bl hk).none }
+         fun x T hT hiT => hBv i ⟨k, bl, hk, hi⟩ T (hmem hT rfl) hiT, (hB k bl hk).apart i hi⟩⟩ }
     nvSt := fun v hv => by
       have h1 : v ≤ fn.params.length := Nat.not_lt.mp fun h => by
         have h2 : (spawnSt fn vs v).isSome = true := hv

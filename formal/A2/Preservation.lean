@@ -1816,7 +1816,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         · exact hsc
         · exact hsc.weakenOut hm1.wf hm1.names (Or.inr (hw.exitScope x hpx.2.2))
       have hm' : MInv { m with nv := m.nv + 1 } (setE Γ x (Ex.revive x)) :=
-        hm1.of_st rfl ⟨hm1.heap.nodup, hm1.heap.disj, hm1.heap.alloc, hm1.heap.self, hm1.heap.blk, hm1.heap.bpay⟩ (Nat.le_succ _)
+        hm1.of_st rfl ⟨hm1.heap.nodup, hm1.heap.disj, hm1.heap.alloc, hm1.heap.self, hm1.heap.blk⟩ (Nat.le_succ _)
       refine ⟨setE Γ x (Ex.revive x), hfin, ?_, Nat.le_succ _,
         ⟨?_, ?_, (DKeep.refl Γ _).setE fun _ _ _ h => absurd (by simp [Stmt.spine]) h⟩,
         fun _ _ => rfl⟩
@@ -1967,7 +1967,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         by show m.nv ≤ m1.nv + 1; rw [hnv1]; exact Nat.le_succ _,
         ⟨?_, ?_, DKeep.unwind _ fun w hw h => hw (by simp [Stmt.spine, h])⟩, ?_⟩
       · exact
-        { toMInv := hMu.of_st rfl ⟨hMu.heap.nodup, hMu.heap.disj, hMu.heap.alloc, hMu.heap.self, hMu.heap.blk, hMu.heap.bpay⟩
+        { toMInv := hMu.of_st rfl ⟨hMu.heap.nodup, hMu.heap.disj, hMu.heap.alloc, hMu.heap.self, hMu.heap.blk⟩
             (Nat.le_succ _)
           nvS := fun w hw => by
             simp only [Stmt.vars, List.mem_cons, List.mem_append, List.not_mem_nil, or_false] at hw

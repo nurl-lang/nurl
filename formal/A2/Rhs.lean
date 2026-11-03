@@ -1156,99 +1156,10 @@ theorem out_snd {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (hy 
     | pair _ hb => exact ⟨hb, fun s x hin => hvs s x (ViewIn.snd hin), hsh.snd⟩
   · rw [hty] at h; obtain ⟨x, z, hxz, _, hz⟩ := valOK_prod.mp h; cases hxz; exact hz
 
-/-! ### A3.1: plain payloads and shares
+/-! ### A3.1: shares
 
-A first-cut payload is plain (`Ty.plain`): it owns no address and holds no
-view, handle or closure.  A share owns nothing either: its payload is the
-block's. -/
-
-theorem Ty.plain_holdsView {t : Ty} (h : t.plain = true) : t.holdsView = false := by
-  induction t with
-  | int => rfl
-  | prod a b iha ihb =>
-    simp only [Ty.plain, Bool.and_eq_true] at h
-    simp [Ty.holdsView, iha h.1, ihb h.2]
-  | sum a b iha ihb =>
-    simp only [Ty.plain, Bool.and_eq_true] at h
-    simp [Ty.holdsView, iha h.1, ihb h.2]
-  | arc t ih => exact ih h
-  | _ => simp [Ty.plain] at h
-
-/-- Every part of a plain value is a plain value. -/
-theorem WFv.plain_sub {t : Ty} {v : Val} (hw : WFv t v) (hp : t.plain = true) {n : Val} (hs : Sub n v) :
-    ∃ u, WFv u n ∧ u.plain = true := by
-  induction hw generalizing n with
-  | int => cases hs; exact ⟨_, .int, rfl⟩
-  | arc hwp hvf => cases hs; exact ⟨_, .arc hwp hvf, hp⟩
-  | pair hwa hwb iha ihb =>
-    simp only [Ty.plain, Bool.and_eq_true] at hp
-    cases hs with
-    | refl => exact ⟨_, .pair hwa hwb, by simp [Ty.plain, hp.1, hp.2]⟩
-    | fst h => exact iha hp.1 h
-    | snd h => exact ihb hp.2 h
-  | inl hwa iha =>
-    rename_i a b _
-    simp only [Ty.plain, Bool.and_eq_true] at hp
-    cases hs with
-    | refl => exact ⟨.sum a b, .inl hwa, by simp [Ty.plain, hp.1, hp.2]⟩
-    | inl h => exact iha hp.1 h
-  | inr hwb ihb =>
-    rename_i a b _
-    simp only [Ty.plain, Bool.and_eq_true] at hp
-    cases hs with
-    | refl => exact ⟨.sum a b, .inr hwb, by simp [Ty.plain, hp.1, hp.2]⟩
-    | inr h => exact ihb hp.2 h
-  | _ => simp [Ty.plain] at hp
-
-theorem WFv.plain_node {t : Ty} {v : Val} (hw : WFv t v) (hp : t.plain = true) {u : Ty} {c d : Nat}
-    {es : List Val} (hs : Sub (.node u c d es) v) : False := by
-  obtain ⟨u', hw', hp'⟩ := hw.plain_sub hp hs
-  cases hw'; simp [Ty.plain] at hp'
-
-theorem WFv.plain_view {t : Ty} {v : Val} (hw : WFv t v) (hp : t.plain = true) {d o l : Nat}
-    (hs : Sub (.view d o l) v) : False := by
-  obtain ⟨u', hw', hp'⟩ := hw.plain_sub hp hs
-  cases hw'; simp [Ty.plain] at hp'
-
-theorem WFv.plain_pkgs {t : Ty} {v : Val} (hw : WFv t v) (hp : t.plain = true) : PkgsOK v := by
-  intro fs te ms e cs hs
-  obtain ⟨u', hw', hp'⟩ := hw.plain_sub hp hs
-  cases hw'; simp [Ty.plain] at hp'
-
-theorem WFv.plain_self {t : Ty} {v : Val} (hw : WFv t v) (hp : t.plain = true) : SelfFree v :=
-  fun _ _ _ hv => absurd hv (fun h => hw.plain_view hp h)
-
-/-- A plain value owns no address. -/
-theorem WFv.plain_ids {t : Ty} {v : Val} (hw : WFv t v) (hp : t.plain = true) : v.ids = [] := by
-  induction hw with
-  | int => rfl
-  | arc => rfl
-  | pair _ _ iha ihb =>
-    simp only [Ty.plain, Bool.and_eq_true] at hp
-    simp [Val.ids, iha hp.1, ihb hp.2]
-  | inl _ ih =>
-    simp only [Ty.plain, Bool.and_eq_true] at hp
-    simp [Val.ids, ih hp.1]
-  | inr _ ih =>
-    simp only [Ty.plain, Bool.and_eq_true] at hp
-    simp [Val.ids, ih hp.2]
-  | _ => simp [Ty.plain] at hp
-
-/-- A plain value, lent, is itself. -/
-theorem WFv.plain_lend {t : Ty} {v : Val} (hw : WFv t v) (hp : t.plain = true) : lendOf v = v := by
-  induction hw with
-  | int => rfl
-  | arc => rfl
-  | pair _ _ iha ihb =>
-    simp only [Ty.plain, Bool.and_eq_true] at hp
-    simp [lendOf, iha hp.1, ihb hp.2]
-  | inl _ ih =>
-    simp only [Ty.plain, Bool.and_eq_true] at hp
-    simp [lendOf, ih hp.1]
-  | inr _ ih =>
-    simp only [Ty.plain, Bool.and_eq_true] at hp
-    simp [lendOf, ih hp.2]
-  | _ => simp [Ty.plain] at hp
+A share owns nothing: its payload is the block's, which owns its addresses
+(`BlkOwn`). -/
 
 /-- A share's block, through the binding that holds the share (an owner, or
     a borrow of it). -/
@@ -1396,8 +1307,7 @@ theorem rhs_new {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {t : Ty} (h
           have hlt := (hi.heap.payAlloc hi').2
           show upd (upd m.alloc m.nid true) (m.nid + 1) true i = m.alloc i
           rw [upd_ne _ _ (by omega), upd_ne _ _ (by omega)])
-        (fun o U hU i hi' => hi.heap.notPay hU hi')
-      bpay := hi.heap.bpay }
+        (fun o U hU i hi' => hi.heap.notPay hU hi') }
   refine ⟨⟨hi.of_st rfl hheap (Nat.le_refl _), rfl, by show m.nid ≤ m.nid + 2; omega, fun _ => rfl, fun _ _ => rfl,
     fun _ _ h _ => h, fun _ => rfl, fun x E1 h => ⟨E1, h, rfl, rfl⟩, DKeep.refl _ _, BlkLe.refl _⟩, ?_⟩
   refine ⟨rfl, Or.inl rfl, rfl, ht, fun _ r hr => by simp [roots, Entry.vdeps, Mode.ownSlot] at hr,
@@ -1638,8 +1548,7 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       blk := hi.heap.blk.frame rfl (Nat.le_refl _) (fun _ _ => rfl) (fun o U hU i hi' => by
         rcases hown1 o U hU with ⟨_, rfl⟩ | ⟨_, h⟩
         · exact hi.heap.notPay hT (hsubl.subset hi')
-        · exact hi.heap.notPay h hi')
-      bpay := hi.heap.bpay }
+        · exact hi.heap.notPay h hi') }
   have hsfT := hi.heap.self y _ hT
   have hkeepF : ∀ dep ∈ E.held, dep.root ≠ y → VKeep m m1 dep := by
     intro dep hd hne

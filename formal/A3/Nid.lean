@@ -35,7 +35,6 @@ theorem heapOK_grow {m m' : Mem} (hh : HeapOK m) (hst : m'.st = m.st)
     exact ⟨ha i h1, Nat.lt_of_lt_of_le h2 hn⟩
   self x t h := hh.self x t (by unfold OwnedAt at *; rw [← hst]; exact h)
   blk := BlkOwn.grow hh.blk hst hb ha hn
-  bpay k bl hk := hh.bpay k bl (by rw [← hb]; exact hk)
 
 theorem CatchOK.of_st {m m' : Mem} (hst : m'.st = m.st) (hnv : m.nv ≤ m'.nv) (hb : BlkLe m.blk m'.blk) :
     ∀ {s : Stmt}, CatchOK m s → CatchOK m' s
@@ -86,15 +85,13 @@ theorem payPart_false {B : Nat → Option Blk} {i : Nat} : payPart B i = false �
 
 /-- A3.1: what a block of the store `B` is, for every thread that reads it:
     a well-formed payload at a key below `n`, owning its addresses once,
-    below `n` and apart from every other payload's — and, the first cut,
-    none. -/
+    below `n` and apart from every other payload's. -/
 structure BlockOK (B : Nat → Option Blk) (n k : Nat) (bl : Blk) : Prop where
   ok    : bl.ty.ok = true ∧ bl.ty.holdsView = false ∧ WFv bl.ty bl.pay ∧ SharesIn B bl.ty bl.pay
   key   : k < n
   nodup : bl.pay.ids.Nodup
   lt    : ∀ i ∈ bl.pay.ids, i < n
   apart : ∀ i ∈ bl.pay.ids, ∀ k' bl', k' ≠ k → B k' = some bl' → i ∉ bl'.pay.ids
-  none  : bl.pay.ids = []
 
 /-- A3.1: every block of `B` is as `BlockOK` says. -/
 def BlocksAt (B : Nat → Option Blk) (n : Nat) : Prop := ∀ k bl, B k = some bl → BlockOK B n k bl
@@ -110,8 +107,7 @@ theorem inv_grow {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F
   { toMInv := hi.toMInv.grow rfl (HeapOK.mono hi.heap rfl ha hn
         (fun k bl hk => ⟨(hB k bl hk).key, (hB k bl hk).nodup, fun i hi' =>
           ⟨hpA i ⟨k, bl, hk, hi'⟩, (hB k bl hk).lt i hi',
-           fun x T hT => hP i ⟨k, bl, hk, hi'⟩ x T hT, (hB k bl hk).apart i hi'⟩⟩)
-        (fun k bl hk => (hB k bl hk).none))
+           fun x T hT => hP i ⟨k, bl, hk, hi'⟩ x T hT, (hB k bl hk).apart i hi'⟩⟩))
       (Nat.le_refl _) hb (fun k bl hk => (hB k bl hk).ok)
     nvS := hi.nvS, nvF := hi.nvF
     anch := hi.anch, spineNd := hi.spineNd, spineDom := hi.spineDom
@@ -137,7 +133,6 @@ theorem ThreadOK.blocksAt {P : Prog} {m : Mem} {s : Stmt} (h : ThreadOK P m s) :
   obtain ⟨Γ, F, Δ, _, hi, _, _, _⟩ := h
   intro k bl hk
   obtain ⟨hkey, hnd, hall⟩ := hi.heap.blk k bl hk
-  exact ⟨hi.blocks k bl hk, hkey, hnd, fun i h => (hall i h).2.1, fun i h => (hall i h).2.2.2,
-    hi.heap.bpay k bl hk⟩
+  exact ⟨hi.blocks k bl hk, hkey, hnd, fun i h => (hall i h).2.1, fun i h => (hall i h).2.2.2⟩
 
 end A3

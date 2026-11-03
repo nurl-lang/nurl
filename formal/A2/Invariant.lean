@@ -28,8 +28,8 @@ inductive WFv : Ty → Val → Prop
   | inr {a b : Ty} {v : Val} : WFv b v → WFv (.sum a b) (.inr v)
   | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {v : Val} {cs : List (Var × PMode × Ty)} :
       WFv te v → WFv (.fn ms) (.pkg fs te ms v cs)
-  /-- A3.1: a share; its block, in memory, holds the payload it carries (in
-      the first cut, one that holds no view). -/
+  /-- A3.1: a share; its block, in memory, holds the payload it carries, one
+      that holds no view. -/
   | arc {t : Ty} {k : Nat} {p : Val} : WFv t p → t.holdsView = false → WFv (.arc t) (.arc k p)
 
 /-- `v`, a view of element type `s`, is stored in tree `T` of type `τ`. -/
@@ -69,8 +69,8 @@ def SharesIn (B : Nat → Option Blk) (τ : Ty) (T : Val) : Prop :=
 /-- `SharesIn` over a memory's blocks. -/
 def SharesOK (m : Mem) (τ : Ty) (T : Val) : Prop := SharesIn m.blk τ T
 
-/-- A3.1: the blocks `B'` keep every block of `B`: blocks only grow (`arcNew`
-    adds one; in the first cut none is ever removed, below). -/
+/-- A3.1: the blocks `B'` keep every block of `B`: a step's blocks only grow
+    (`arcNew` adds one); only the sweep at its end removes one. -/
 def BlkLe (B B' : Nat → Option Blk) : Prop := ∀ k bl, B k = some bl → B' k = some bl
 
 theorem BlkLe.refl (B : Nat → Option Blk) : BlkLe B B := fun _ _ h => h
@@ -296,8 +296,8 @@ inductive ValOK (m : Mem) : Ty → Val → List Dep → List Dep → Prop
       {P H : List Dep} :
       ValOK m te x (P ++ envDeps cs H) (envDeps cs H) → ValOK m (.fn ms) (.pkg fs te ms x cs) P H
   /-- A3.1: a share lent: its block holds the payload it carries, of its
-      type (in the first cut, one that holds no view), and the share lands
-      through a dependency, as a `Vec` handle does. -/
+      type (one that holds no view), and the share lands through a
+      dependency, as a `Vec` handle does. -/
   | arc {t : Ty} {k : Nat} {p : Val} {P H : List Dep} :
       m.blk k = some ⟨t, p⟩ → WFv t p → t.holdsView = false → (∃ dep ∈ P, ArcLanded m dep (.arc k p)) →
       ValOK m (.arc t) (.arc k p) P H
@@ -377,9 +377,6 @@ structure HeapOK (m : Mem) : Prop where
   self  : ∀ x t, OwnedAt m x t → SelfFree t
   /-- A3.1: the blocks own their payloads (`BlkOwn`). -/
   blk   : BlkOwn m
-  -- A3.1's first cut: a payload owns no address (`arc_new` takes a plain
-  -- value), until the sweep frees a block no share reaches (A3.1, second cut)
-  bpay  : ∀ k bl, m.blk k = some bl → bl.pay.ids = []
 
 /-- A3.1: a block's key was taken from `nid`, so a new one is fresh. -/
 theorem HeapOK.bkey {m : Mem} (hh : HeapOK m) : ∀ k bl, m.blk k = some bl → k < m.nid :=
