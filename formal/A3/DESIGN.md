@@ -37,7 +37,12 @@ rest, below). A3.5's second cut puts library handles in lock payloads, cells' st
 and channel elements, and so Send closures and `: Send` trait objects, with
 the crossing check at every value going in (A3.5's second cut, below: a
 failed check panics, and a cell's shares are in one thread's slots or one
-lock block's payload). This note fixes the
+lock block's payload). The rest of A3.2's and A3.3's operations
+(`locked_get`, `locked_set`, `locked_apply`'s and `wguard_apply`'s result,
+`locked_await`, `rw_get` as one statement, `Mutex`, and a lock reached
+through a field or an element) are derived forms of these rules, each typed
+as one statement by a lemma of its own (A3.2's and A3.3's rest, below); with
+no new rule, the claim covers them unchanged. This note fixes the
 semantics, the theorem statements and the order of work, so the
 mechanization can be cut into tasks (Agora: formal track, F4–F8). The guarantee it targets is the
 "no data race" clause of `CLAIM.md` and `docs/MEMORY.md` §6.2. The rules
@@ -797,7 +802,9 @@ time. `StmtT.withLock` asks for both:
   - `a` is a root (`Ea.mode.isRoot`): an owner, whose slot holds the share,
     or a borrowed parameter, whose share is the caller's, frozen for the
     call. A local borrow (a field or element of a struct or `Vec` that holds
-    the share) is refused: the body could change its owner.
+    the share) is refused: the body could change its owner. (Since A3.2's
+    rest, below, such a lock is handed over first, so the body runs on an
+    owner of the share: `Stmt.withLockElem`, `Stmt.withLockField`.)
   - The suggested form, typing the body with `F ++ [a]` and stepping to
     `scopeL k t x (frozen [a] s)`, does not get through the renaming
     lemma (`StmtT.ren`). It types a callee's body under the call's frozen set
@@ -869,11 +876,14 @@ stated.
   that keep blocks alive. (A3.2's second cut lifts this for `arc` and lock
   shares.)
 - `withLock` takes a root that the body does not name, so a lock reached
-  through a local borrow (a field or an element) is refused.
+  through a local borrow (a field or an element) is refused. (A3.2's rest
+  hands it over first: an element by `withElem`, a field by taking the
+  struct apart, and a borrow of what the function does not own to a
+  function that takes it `in`.)
 - `locked_take` / `locked_restore` are not separate rules. (They are since
   A3.2's second cut.)
 - The update's body is a statement in place, not a closure called through
-  a package.
+  a package. (A3.2's rest: or a function of the program, `ApplyFn`.)
 
 **Not proven here.**
 - deadlock freedom;
@@ -1135,6 +1145,13 @@ no live entry anywhere lands in the payload. Instead:
     through a share and holds nothing) is typed, and its result's entry
     borrows from and holds nothing, so `exitScope g` leaves the copy
     (`copy_outlives`).
+  - `StmtT.rwGet` (A3.2's and A3.3's rest, below) types the whole as one
+    statement, with every scope's end: the context after is the one before,
+    `z` holding the copy.
+- `wguard_apply`'s result is the write scope's call of the closure on `x`,
+  its result moved out (`Stmt.callOut`, `StmtT.wguardApply`), and
+  `rw_apply` is `locked_apply`'s form (`Stmt.lockedApply`): A3.2's and
+  A3.3's rest, below.
 
 **A2's and A3's proof of the rest.** The cases of `Rhs.rwTryRead` are
 `rw_read`'s, with the guard wrapped (`rhs_pres` through `out_ownNoView`,
@@ -1151,7 +1168,8 @@ writer bit are the runtime's rwlock, trusted base).
 - A payload holds no share, no view and no closure, as a `Locked`'s
   (A3.2).
 - `wguard_apply`'s result, as `rw_apply`'s, is an assignment in the body,
-  not a rule of its own.
+  not a rule of its own. (Since A3.2's and A3.3's rest, a form with its own
+  typing lemma: `StmtT.wguardApply`, `StmtT.lockedApply`.)
 - The guards are scoped bindings; a guard moved into a struct or a
   `Vec` keeps its view as long as it lives, as the runtime's keeps the lock.
 
@@ -1188,10 +1206,10 @@ writer bit are the runtime's rwlock, trusted base).
   answered only where the runtime's would be: a view lives until the sweep,
   so a try may answer `none` after the runtime's guard is dropped (A3.1's
   phase-D obligation again);
-- `rw_get` as one typed statement: its parts are typed (`rguard_get_path`,
-  `dup_call`, `copy_outlives`, and A2's `letv`, `letcall` and `assign`), not
-  the whole with its scopes' end conditions; and `mem_dup` as a step of its
-  own (here a function of the program, `DupFn`);
+- `rw_get` as one typed statement, and `mem_dup` as a step of its own.
+  (Closed by A3.2's and A3.3's rest, below: `StmtT.rwGet` types the whole,
+  and `mem_dup` needs no step, its call being typed by its summary,
+  `DupFn`.)
 - a typed program over these rules (a probe's encoding, as
   `A2/DynCell.lean` types `pick`);
 - `CLAIM.md` / `README.md`.
@@ -2828,7 +2846,11 @@ dropped the value being handed back. The next take read freed memory.
 - `locked_take` takes only through a lock share (`lk`), not a cell share.
 - `locked_set` (a restore after a take), `locked_get` (a copy),
   `locked_with` (a closure called through a package), `locked_apply`'s
-  result and `locked_await` are not rules of their own.
+  result and `locked_await` are not rules of their own. (Since A3.2's and
+  A3.3's rest, below, `locked_set`, `locked_get`, `locked_apply`'s result
+  and `locked_await` are derived forms, each with its typing lemma; the
+  closure `locked_with` and `locked_update` run is a statement in place or a
+  function of the program, not a closure called through a package.)
 - A slice's element holds no share.
 
 **Not proven here.**
@@ -2841,6 +2863,10 @@ dropped the value being handed back. The next take read freed memory.
 - The probe h267 as a whole typed program (a probe's encoding, as
   `A2/DynCell.lean` types `pick`). `lockTake_empties` and
   `lockRestore_frees_nothing` state its rule on one step each.
+- *The rest of the lock operations*: `locked_get`, `locked_set`,
+  `locked_apply`'s result, `locked_await`, `Mutex` beside the data it
+  guards, and a lock reached through a local borrow. (Closed by A3.2's and
+  A3.3's rest, below.)
 - Deadlock freedom, and that a waiting take is ever let in.
 - `CLAIM.md` / `README.md`.
 
@@ -3085,9 +3111,12 @@ with a payload is what a check-out already moves.
   runtime holds the lock (A3.3's over-approximation, unchanged).
 - *The receive's check* is the model's own (above): on a channel the
   runtime fills it never fails.
-- *`locked_set`, `locked_get`, `locked_apply`, `locked_await`* are not rules
-  of their own (A3.2's second cut). `locked_set` is a take and a restore,
-  both checked here.
+- *`locked_set`, `locked_get`, `locked_apply`, `locked_await`* are derived
+  forms (A3.2's and A3.3's rest, below). `locked_set`'s value faces
+  `locked_new`'s check before the lock is touched, as the runtime's faces
+  `mem_send_check` before `mutex_lock`; the value after each closure run
+  (`locked_apply`, each round of `locked_await`) faces the give-back's
+  (`GiveCheck`), as the runtime's is checked before the lock is let go.
 
 ### Probes (`tools/fuzz/holes/*.nu`)
 
@@ -3416,6 +3445,242 @@ type variable and no instantiation.
 - An upcast from a trait's objects to a supertrait's.
 - The probes as whole typed programs (as `A2/DynCell.lean` types `pick`).
   `StmtT.callcUp` and `StmtT.arcCallUp` type the call, not a program.
+
+## A3.2's and A3.3's rest (the lock operations)
+
+**Status.** Mechanized. `check.sh` is green. Each operation below is a
+*derived form*: a statement of A2's rules (`A2/Syntax.lean`), typed as one
+statement, every scope's end included, by a lemma of its own
+(`A3/Defs.lean`). No rule is new, so `A2.memory_safe`, `A2.soundness`,
+`A2.no_leak_end`, `A2.no_leak_panic`, the `DynCell` theorems, `A3.claim` and
+`A3.claim_made` cover the forms with no new case, and `check.sh` re-proves
+them. This types every lock and `RwLocked` operation on A3.2's and A3.3's
+"not typed" lists. What those lists keep is deadlock freedom, which the
+claim excludes by design, and shares in a slice's elements, which is no
+lock operation (*Not proven here*, below). `CLAIM.md` / `README.md` are not
+updated here.
+
+For each form, *faithful* says whether the model has exactly the runtime's
+runs, or more. A form that only adds runs is fine: the claim covers every
+run of the model.
+
+### What the lemmas share
+
+- A binding a form makes is fresh: no entry of the context depends on it
+  (`Unnamed`). Its scope's end then ends nothing else (`Unnamed.kill`,
+  `Unnamed.endOK`, `exitScope_setE`, `exitScope_out`).
+- A result handed back once the lock is let go depends on nothing (`outE`).
+  It is a call's result moved to a caller's binding `z` (`Stmt.callOut`,
+  typed by `StmtT.callOut`; an owner moves, an integer is copied). So `z`
+  outlives every scope around the call.
+- Each lemma states the context after, computed. For a result, it is the
+  context before with `z` holding the result, and what borrowed `z` ended
+  by the assignment: `setE (kill .replace false z Γ) z (outE R _)`. For
+  `locked_set` it is the value's hand-over (`PushArg`). For `locked_await`
+  it is the context before.
+
+### The forms
+
+**`locked_get`** (`Stmt.lockedGet a x c z f`, `StmtT.lockedGet`).
+- The form is `withLock a x (callOut x c z f)`, with `f` of `mem_dup`'s
+  summary (`DupFn`: the payload lent in, an owned copy out). The payload is
+  checked out for the copy, as the runtime holds the mutex for it.
+- The lemma takes `t.hasCell = false`, as `rw_get`'s read guard does
+  (`RhsT.rwRead`). The runtime's `locked_get` panics on a library handle:
+  its copy is another owner of the state the lock's value holds, which
+  `mem_send_check` counts. And a function that takes the payload lent
+  cannot copy the handle: a lent cell share is no share (`lendOf`).
+- *Faithful, no runs added.* The check-out waits while the lock is held, as
+  the runtime waits on its mutex and `taken`. A3.2's premises make the
+  check-out agree with the runtime's in-place copy. With no library handle
+  in the value, the runtime's check of the copy and the model's give-back
+  check (`GiveCheck`) have nothing to find.
+
+**`locked_set`** (`Stmt.lockedSet t a b x y`, `StmtT.lockedSet`,
+`lockedSet_check`).
+- The form is `letv b (lockNew t y) (withLock a x (assign x (lockTake b)))`.
+  The new value goes into a fresh lock block `b`, a box no other binding
+  reaches. Then `a`'s payload is checked out to `x` and replaced by the box's
+  value: `assign` drops the old one, as `= . p val x` does. The scope's end
+  gives the new value back, and the empty box is swept.
+- `StmtT.lockedSet`: the context after is `y`'s hand-over, as for
+  `locked_new` of the same value (an owner moves and its entry dies, an
+  integer is copied).
+- **The check comes first** (`lockedSet_check`). A value that fails the
+  crossing check makes `locked_new`'s step panic, the store as it was
+  (`EvalR.lockNewFail`), before the lock is touched. The runtime's
+  `mem_send_check` likewise runs before `mutex_lock`, and its lock keeps the
+  old value.
+- *Why not a take and a restore, or a check at the give-back.* A take
+  empties the lock before the restore's check. A body `assign x (var y)`
+  checks only at the give-back, after the old value is dropped. Either way a
+  failed check leaves the lock empty and held, and other threads wait
+  forever. The runtime's lock keeps its old value, and other threads go on.
+  Those runs of the runtime would be missing from the model.
+- *Faithful, no runs added.* The box's steps are the runtime's check. In
+  both, another thread may step between the check and the lock. The
+  give-back's own check passes in every reachable configuration. The value
+  passed `locked_new`'s check, and since then the thread's slots took only
+  the box's share and the lock's old value, whose cells are in no other
+  place (`CellInv.one`). This is argued, as A3.2 argues that a lock scope
+  ends in a `put`, not proven as a lemma.
+- `rw_set` is the same form. The runtime's `rw_set` checks nothing, and
+  the model's `RwLocked` checks every value going in (A3.5's second cut).
+  The check finds nothing on a payload that holds no library handle, which
+  is every payload a read guard may read (`RhsT.rwRead`).
+
+**`locked_apply`'s, `rw_apply`'s and `wguard_apply`'s result**
+(`Stmt.lockedApply a x c z f`, `StmtT.lockedApply`, `StmtT.wguardApply`,
+`apply_call`).
+- `locked_apply` and `rw_apply` are `withLock a x (callOut x c z f)`, an
+  `RwLocked`'s write scope being a `withLock`. `wguard_apply` is the tail
+  alone, `callOut x c z f`, inside a write scope already open
+  (`StmtT.wguardApply`).
+- `f` has `ApplyFn`'s summary: it takes the payload `inout`, and lends
+  (`lends = []`) and holds (`rholds = []`) nothing of it. `apply_call`: the
+  call on the checked-out `x` leaves the context as it was, and its result
+  depends on nothing.
+- **The result holds no lend of the payload.** The payload is the closure's
+  only parameter, and the summary says the result borrows from no parameter
+  and holds no view of one. So its type holds no view of the payload, and
+  the lock scope's end (the guard's drop) leaves it. A result that borrowed
+  the payload would be ended by that end (`exitScope x`), and could not be
+  handed back.
+- The payload is of an owning type, as an `inout` argument's is
+  (`paramOK`). The apply of an integer payload is a body in place:
+  `withLock a x s`, with `s` assigning `z` from what holds nothing, which
+  `withLock` types and whose end leaves `z` (`copy_outlives`).
+- *Faithful, no runs added.* The runtime runs `f` in place with the mutex
+  held, checks the value, unlocks, and returns the result. In the model the
+  check-out and the give-back are A3.2's (its premises make them agree with
+  the in-place run), and the give-back's check is the runtime's. The result
+  reaches `z` before the lock is let go, where the runtime returns it after.
+  But `z` is the caller's, which no other thread reaches.
+- A3.5: a library's change of its state with a result, through a cell share
+  an owner holds, is the same form (`Entry.lockOf`).
+
+**`locked_await`** (`Stmt.lockedAwait a x c q f`, `StmtT.lockedAwait`,
+`await_done`, `await_blocked`).
+- The form is `while (isl q) (lockedApply a x c q f)`: rounds of check-outs.
+  Each round is `locked_apply`'s, with `f`'s answer, an `Option`, moved into
+  the caller's `q` (an owned `none` to start, `awaitE`).
+- `StmtT.lockedAwait`: a round leaves the context as it found it, which is
+  the loop's invariant.
+- `await_done`: the loop ends only on a `some`, so the caller's `taker q`
+  moves the result out without a panic.
+- **Its waiting is `Blocked`, not stuck** (`await_blocked`). A round waits at
+  its check-out while another thread holds the lock. That configuration is
+  `Blocked`, which `Stuck` excludes.
+- *Faithful, only adds runs.* Each round is the runtime's run of `f` with
+  the mutex held, and its give-back check is `mem_send_check`. Each round
+  lets the lock go, as `cond_wait` lets the mutex go between runs.
+  - Between rounds the runtime sleeps until another thread changes the value
+    (`waiters`, `cond_broadcast`). The model's next round waits only at its
+    check-out, so the model adds runs: a round with nothing changed since
+    the last.
+  - The runtime has such runs too, since `cond_wait` may wake spuriously
+    (`stdlib/std/thread.nu`: callers loop on the predicate).
+  - Every run of the runtime is a run of the model: its sleep is a schedule
+    that runs the other threads first.
+  - That a waiting thread is ever let in, and that the loop ends, are
+    deadlock freedom and fairness, which are not claimed.
+
+**`rw_get` as one statement** (`Stmt.rwGet`, `StmtT.rwGet`).
+- The guard `g` (`rw_read`), what `arcGet` lends through it (`y`), the
+  payload `x` lent frozen, the copy, and the copy moved out to `z`, are
+  typed with every scope's end. The context after is the one before, `z`
+  holding the copy.
+- **`mem_dup` needs no step of its own.** The copy is a call of a function
+  with `mem_dup`'s summary (`DupFn`), which `ProgOK` checks against that
+  summary. For a payload that holds no closure, such a function is written
+  in the calculus: elements read with `at` and pushed, a struct taken field
+  by field, recursively. A step would be a deep copy with fresh addresses: a
+  case in every lemma over right-hand sides, for no fact the summary does
+  not give (the copy is owned and depends on nothing). That nurlc's
+  intrinsic (`gen_mem_dup`) meets the summary is phase D's, as for every
+  call typed by its summary.
+
+**`Mutex`** (`Rhs.mutexNew`, `Stmt.mutexLock`, `Stmt.mutexUnlock`,
+`Stmt.mutexWith`; `RhsT.mutexNew`, `StmtT.mutexLock`, `StmtT.mutexUnlock`,
+`StmtT.mutexWith`).
+- A `Mutex` is a lock of an integer, `lk int` (A3.6: `Mutex` is a
+  `Locked`).
+  - `mutex_new` is `locked_new` of an integer.
+  - `mutex_lock m` takes the integer out (`lockTake`), and every other
+    `mutex_lock` waits until it is back.
+  - `mutex_unlock m` puts an integer back (`lockRestore`).
+  - `mutex_with` is `withLock`, with A3.2's premises (the mutex outlives the
+    body, which the runtime unlocks after).
+  - `Mutex_share` is `lockClone`, and its drop a share's.
+- **Memory safety never depends on a `Mutex`.** The thread that takes one
+  gets an integer binding, which depends on nothing and holds nothing
+  (`mutex_hands_int`). The mutex's block owns no address
+  (`mutex_owns_nothing`). So no memory fact of a program comes from a
+  `Mutex`, and no lemma of the claim reads one.
+- **A lock beside the data is not a lock on it** (docs/MEMORY.md §6.5,
+  h319 `member_table_copy_on_two_threads`). A race on the data a `Mutex` is
+  meant to guard is refused by the data's own type, whatever mutex calls
+  surround it:
+  - an owned tree is in one thread's part: a spawn moves it (A3.0's
+    `SpawnOK`, `MoveArgs`), and data two threads change is a `Locked`, whose
+    lock its type names;
+  - an `Arc`'s payload is frozen (A3.1, `ThruOK.noShare`);
+  - a library handle crosses a spawn only with every owner of its state.
+    That is h319's rule: the crossing check `SendCheck`, whose failure
+    panics (`TStep.spawnFail`). So a handle's shares are in one thread's
+    slots or one lock's payload (`CellInv.home`, `CellInv.apart`), and no two
+    threads change its state (`CellInv.cellRaceFree`).
+- *Faithful, only adds runs.* `pthread_mutex_lock` waits while another
+  thread holds the mutex, as the take waits while the integer is out.
+  - A `mutex_unlock` of a mutex the thread does not hold is undefined for a
+    default pthread mutex. The model's panics (the integer in,
+    `lockRestoreP`) or puts an integer back, which may let another thread
+    in. Neither touches memory, since the mutex guards none. This is beside
+    A3.2's relocking (Agora #455).
+  - The runtime's `mutex_with` does not unlock on a panic. The model's
+    releases (A3.3's `scopeLP`): more runs, as for `locked_with` (A3.2).
+  - `Cond` and `Semaphore` have no rule, as in A3.6.
+
+**A lock reached through a local borrow** (`Stmt.withLockElem`,
+`StmtT.withLockElem`; `Stmt.withLockField`, `StmtT.withLockField`;
+`LockFn`, `lock_call`, `lockFn_param_root`). `withLock` asks a root the body
+does not name (A3.2). A field or an element of a local owner is a borrow,
+whose owner the body could change. So the lock is handed over first, and
+the body runs on an owner of the share that nothing in it reaches.
+- *An element*: `withElem v i e (withLock e x s)`. A2-elem's hand-over moves
+  the element out to `e`, an owner (`popE`), and back at index `i` after.
+  The body names neither `e` nor `v` (`withElem`'s premise), so the lock
+  outlives the body.
+- *A field*: `unpair y l w (seq (withLock l x s) (assign y (pair l w)))`.
+  The struct is taken apart, as A2 replaces a field in place. The lock `l`
+  is an owner (`compE`: a lock share views nothing). The body names neither
+  `l` nor `y`, and the struct is put back together.
+- *A borrow of what the function does not own* (a borrowed parameter's
+  field, an element of a lent `Vec`): `withElem` and `unpair` ask an owner,
+  so it cannot be handed over. It is handed to a function that takes it
+  `in`, as the runtime's `locked_update l f` takes `l` (`LockFn`,
+  `lock_call`). Inside, the parameter is a borrowed one
+  (`lockFn_param_root`): a root whose share is the caller's, frozen for the
+  call (`callIn`'s `frozen`), which `withLock` takes.
+- *Faithful, no runs added.* The runtime locks the field or element in
+  place. The model moves it out and back, which agrees because the body
+  reaches neither the owner nor the share.
+
+### Not proven here
+
+- Deadlock freedom: that a waiting check-out, take or round is ever let in,
+  and that `locked_await`'s loop ends.
+- That `locked_set`'s give-back never fails its check in a reachable
+  configuration, as a lemma (argued above).
+- The closure that `locked_with`, `locked_update`, `locked_apply` and
+  `locked_await` run, called through a package (`callc`, whose `inout`
+  receiver is other work). Here it is a statement in place or a function of
+  the program.
+- Shares in a slice's elements (A3.1's first cut: `Ty.ok (slice t)`,
+  `RhsT.view`), which `CLAIM.md` lists with A3.2. It is no lock operation,
+  and is not lifted here.
+- Programs typed over these forms, as `A2/DynCell.lean` types `pick` (the
+  probes' encodings).
 - `CLAIM.md` / `README.md`.
 
 ## Open questions
