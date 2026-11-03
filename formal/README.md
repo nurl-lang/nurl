@@ -1,6 +1,6 @@
 # formal — a mechanized proof of NURL's memory model
 
-> **Status: A1, A2, A3.0, A3.1, A3.4, and the first cuts of A3.2, A3.3 and A3.5 are proven** (Lean 4, no `sorry`, only Lean's
+> **Status: A1, A2, A3.0, A3.1, A3.4, and the first cuts of A3.2, A3.3, A3.5 and A3.6 are proven** (Lean 4, no `sorry`, only Lean's
 > standard axioms — `./check.sh`). The later phases are not. Until a phase
 > below is marked done, the part of the guarantee in
 > [`docs/MEMORY.md` §6.2](../docs/MEMORY.md) it covers rests on the
@@ -35,7 +35,7 @@ the implementation (B–D) follow once the rules have stopped moving.
 |---|---|---|
 | **A1** | Core calculus: owned values, moves and drop flags, borrows and views, a `Vec` that reallocates (§2.10), `inout`, `sink`. Single-threaded, no panics. Soundness: progress and preservation. | **done** |
 | **A2** | A1 plus structs and their fields, enum and option payloads, closures and trait objects (packages: code on an environment, called through an interface) with captures by handle and by name, panics with unwinding and `recover`, the drop journal — and **leak freedom**. Generics add nothing to the memory model (a template is instantiated before it is checked). | **done** — see below for what A2 does not model yet |
-| **A3** | A2 plus threads: `Send` / `Sync`, `Arc`, `Mutex`, `Locked`, `RwLocked` and its frozen read guards (`% Frozen`), `Atomic`, channels, M:N fibers, foreign functions marked `sync`. Data-race freedom against the LLVM / C11 memory model. | **A3.0, A3.1, A3.4, and A3.2's, A3.3's and A3.5's first cuts done**: threads that only move, `Arc`'s frozen shared payloads, `Locked` values one thread at a time changes, `RwLocked` values read through frozen guards, `Atomic` words and channels, library handles that cross with all their owners (`A3.claim`); the rest of A3.2, A3.3 and A3.5, and A3.6 designed: [`A3/DESIGN.md`](A3/DESIGN.md) |
+| **A3** | A2 plus threads: `Send` / `Sync`, `Arc`, `Mutex`, `Locked`, `RwLocked` and its frozen read guards (`% Frozen`), `Atomic`, channels, M:N fibers, foreign functions marked `sync`. Data-race freedom against the LLVM / C11 memory model. | **A3.0, A3.1, A3.4, and A3.2's, A3.3's, A3.5's and A3.6's first cuts done**: threads that only move, `Arc`'s frozen shared payloads, `Locked` values one thread at a time changes, `RwLocked` values read through frozen guards, `Atomic` words and channels, library handles that cross with all their owners, module globals set at start (`A3.claim`); the rest of each cut is listed in `A3/DESIGN.md`: [`A3/DESIGN.md`](A3/DESIGN.md) |
 | **B** | The standard library's `unsafe` base proven to meet the semantic types it is given: `Vec`, `String`, `HashMap`, `Rc` and the cycle collector, `Arc`, channels. | later |
 | **C** | nurlc implements the rules: the compiler emits a certificate for each accepted program and a small verified checker validates it. | later |
 | **D** | Code generation preserves the semantics: drop insertion, drop flags and the panic journal, by translation validation. | later |
@@ -167,8 +167,9 @@ types, whose spawned functions take only `sink` parameters of view-free
 types, is memory-safe, race-free and leak-free on every interleaving.
 `Arc`'s frozen payloads (A3.1), `Locked` values (A3.2's first cut),
 `RwLocked` values (A3.3's first cut), `Atomic` words and channels (A3.4)
-and library handles (A3.5's first cut) are in it; module globals are A3.6
-(`A3/DESIGN.md`).
+library handles (A3.5's first cut) and module globals set at start
+(A3.6's first cut) are in it (`A3/DESIGN.md` lists what each cut leaves
+out).
 
 ## How it relates to the rest of the repository
 

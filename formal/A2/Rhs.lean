@@ -1420,6 +1420,17 @@ theorem out_cellClone {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry
   simp only [Ty.ok, Bool.and_eq_true] at hok
   exact out_cellShare hok.1.1 (by simpa using hok.1.2) (by simpa using hok.2) hk
 
+/-- A3.6, a read of a module global: the share the store holds, of a block
+    of the read's type (`GlobFits`); owned, it holds nothing. -/
+theorem out_glob {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {t : Ty} (htok : t.ok = true) {v : Val}
+    (hf : GlobFits m.blk t v) : RhsOut m Γ ⟨t, .own, true, [], [], false, false⟩ v true := by
+  rcases hf with ⟨u, k, o, rfl, rfl, hk⟩ | ⟨u, k, p, rfl, rfl, hk⟩
+  · simp only [Ty.ok, Bool.and_eq_true] at htok
+    exact out_lkShare htok.1.1 (by simpa using htok.1.2) (by simpa using htok.2) ⟨o, hk⟩
+  · obtain ⟨_, hvf, hpay, _⟩ := hi.blocks k _ hk
+    simp only [Ty.ok, Bool.and_eq_true] at htok
+    exact out_share htok.1 hvf (hpay p rfl).1 (Or.inl hk)
+
 /-- A3.2/A3.5: the lock block a `withLock` checks out, through the share its
     binding holds (`Entry.lockOf`): a lock block of the payload's type. -/
 theorem MInv.lockOf_val {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry} (ha : Γ a = some E)

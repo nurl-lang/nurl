@@ -681,6 +681,14 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
   | cellClone {a : Var} {E : Entry} {t : Ty} :
       Γ a = some E → E.live = true → E.ty = .cell t → E.mode.ownSlot = true →
       RhsT Γ F (.cellClone a) ⟨.cell t, .own, true, [], [], false, false⟩ Γ
+  /-- A3.6: a read of a module global set at start: an owned share of its
+      block, holding nothing (a clone of the global's handle, which the global
+      keeps).  Its type synchronises itself (`Ty.sync`: a lock share, or an
+      `Arc` of no library handle), so a global is never a `Vec` (h263), a
+      cell share or any owned tree; and no rule writes a global. -/
+  | glob {g : Nat} {t : Ty} :
+      t.sync = true → t.ok = true →
+      RhsT Γ F (.glob g t) ⟨t, .own, true, [], [], false, false⟩ Γ
 
 /-! ### Calls -/
 
@@ -725,6 +733,7 @@ theorem RhsT.out {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT 
   | chanClose => exact ⟨Or.inr rfl, rfl⟩
   | cellNew => exact ⟨Or.inl rfl, rfl⟩
   | cellClone => exact ⟨Or.inl rfl, rfl⟩
+  | glob => exact ⟨Or.inl rfl, rfl⟩
 
 /-- What the summary pair `(j, k)` means at this call.  An integer argument
     lends nothing. -/
@@ -1593,6 +1602,7 @@ def Rhs.vars : Rhs → List Var
   | .chanClose a => [a]
   | .cellNew _ y => [y]
   | .cellClone a => [a]
+  | .glob _ _ => []
 
 def Edit.vars : Edit → List Var
   | .push y => [y]

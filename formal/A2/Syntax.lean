@@ -87,6 +87,17 @@ def Ty.hasCell : Ty → Bool
   | .lk t => t.hasCell
   | .cell _ => true
 
+/-- A3.6: does a value of this type synchronise itself, so that a module
+    global set at start may hold it and every thread reach it?  A lock share
+    does (`Locked`, `RwLocked`, `Mutex`, `Atomic` and `Channel` are all
+    `lk _`), and so does an `Arc` whose payload holds no library handle (a
+    cell share is not Sync, A3.5).  A cell share does not, nor does an owned
+    tree (a `Vec` pushed from two threads through a global races: h263). -/
+def Ty.sync : Ty → Bool
+  | .lk _ => true
+  | .arc t => !t.hasCell
+  | _ => false
+
 /-- A2 types: a view's element type holds no views of its own (a view of a
     container of views is left to A2, with the other aggregates that
     carry views), and, in A3.1's first cut, no shares. -/
@@ -300,6 +311,12 @@ inductive Rhs where
                                -- fresh lock block, whose one share is a cell share
   | cellClone (a : Var)        -- `PNCounter_share a` (and any copy the library makes): a new
                                -- cell share of the block `a` (an owner) shares
+  -- A3.6: a module global set at start (`: ( Locked T ) g ( make )`) holds a
+  -- share of a block that synchronises itself; the store holds it (`Mem.gl`),
+  -- every thread reaches it, and nothing writes it
+  | glob (g : Nat) (t : Ty)    -- a read of global `g`, of type `t`: a new share of its block
+                               -- (`: ( Locked T ) h g` clones the handle; passing `g` to a
+                               -- function lends the clone)
 deriving DecidableEq, Repr
 
 /-! ### Memory (here because a run-time form records a snapshot of it) -/
@@ -364,6 +381,8 @@ structure Mem where
   nv    : Nat                 -- next fresh variable
   st    : Var → Option Slot
   blk   : Nat → Option Blk    -- A3.1: the counted blocks
+  gl    : Nat → Option Val    -- A3.6: the module globals set at start: global `g`'s share, made
+                              -- before `main`; no step writes it
 
 def upd {α : Type} (f : Nat → α) (k : Nat) (v : α) : Nat → α :=
   fun i => if i = k then v else f i
@@ -441,6 +460,26 @@ def Stmt.withCell (a x : Var) (s : Stmt) : Stmt := .withLock a x s
     a writer waits until then. -/
 def Stmt.withRead (a g y x : Var) (s : Stmt) : Stmt :=
   .letv g (.rwRead a) (.letv y (.arcGet g) (.letv x (.snd y) s))
+
+/-- A3.6: an update of a `Locked` global set at start (`locked_update g f`,
+    with `f`'s body as `s` and its argument as `x`): the global's handle,
+    cloned into `h`, and A3.2's `withLock` on it — `h` is an owner, a root,
+    which `s` does not name. -/
+def Stmt.lockGlobal (h x : Var) (g : Nat) (t : Ty) (s : Stmt) : Stmt :=
+  .letv h (.glob g (.lk t)) (.withLock h x s)
+
+/-- A3.6: a scalar module global (an integer, bool, float or `s` global, which
+    the runtime reads and writes with relaxed atomics) is an `Atomic` set at
+    start, a global of type `lk int`.  A read `: i x g` is an atomic load of
+    its word, through a clone `h` of its handle ... -/
+def Stmt.loadGlobal (h x : Var) (g : Nat) (s : Stmt) : Stmt :=
+  .letv h (.glob g (.lk .int)) (.letv x (.atomic .load h (.lit 0) (.lit 0)) s)
+
+/-- ... and a write `= g e` an atomic store (its answer, 0, in `x`).  What is
+    stored is an integer expression, which moves no owner: safe code cannot
+    hand a scalar global a value to own (h273, h202). -/
+def Stmt.storeGlobal (h x : Var) (g : Nat) (e : Expr) (s : Stmt) : Stmt :=
+  .letv h (.glob g (.lk .int)) (.letv x (.atomic .store h e (.lit 0)) s)
 
 /-- A function.  Its parameters are variables `0 … n-1`, its result slot is
     variable `n`, and every variable of its body is below `nvars`.

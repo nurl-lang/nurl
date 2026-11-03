@@ -213,7 +213,8 @@ theorem CParts.thread_of {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) (hR : Re
       obtain ⟨htoj, hboj⟩ := hc.ok j tj b htj hb
       have hv : ownView (C.put i m' s') tj b =
           { ownView C tj b with alloc := union b (payPart m'.blk), nid := m'.nid, blk := m'.blk } := by
-        simp only [ownView, Cfg.put]
+        have hgl : m'.gl = C.gl := Step.gl hst
+        simp only [ownView, Cfg.put, hgl]
       have hB : BlocksAt m'.blk m'.nid := hto1.blocksAt
       rw [hv]
       refine ⟨ThreadOK.move htoj (fun x T hT k hkT => ?_) (fun k hk => ?_) (fun k hk => ?_) hgrow.nid hblk hB
@@ -235,14 +236,14 @@ theorem CParts.thread_of {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) (hR : Re
     hold, and its facts survive that (`ThreadOK.sweepR`: the roots include
     its slots). -/
 theorem CParts.sweep {P : Prog} {C : Cfg} {ps : List (Nat → Bool)} (hc : CParts P C ps) :
-    CParts P C.sweep ps ∧ ∀ k bl, C.sweep.blk k = some bl → Reached C.sweep.vals C.sweep.blk k := by
-  have hblk : ∀ k bl, C.sweep.blk k = some bl ↔ C.blk k = some bl ∧ Reached C.vals C.blk k :=
+    CParts P C.sweep ps ∧ ∀ k bl, C.sweep.blk k = some bl → Reached C.sweep.roots C.sweep.blk k := by
+  have hblk : ∀ k bl, C.sweep.blk k = some bl ↔ C.blk k = some bl ∧ Reached C.roots C.blk k :=
     fun _ _ => sweepBlk_some
-  have halloc : ∀ i, C.sweep.alloc i = true ↔ C.alloc i = true ∧ ¬ Unreached C.vals C.blk i :=
+  have halloc : ∀ i, C.sweep.alloc i = true ↔ C.alloc i = true ∧ ¬ Unreached C.roots C.blk i :=
     fun _ => sweepAlloc_true
   -- a reached payload's address is in no unreached one
-  have hnu : ∀ i k bl, C.blk k = some bl → Reached C.vals C.blk k → i ∈ bl.tree.ids →
-      ¬ Unreached C.vals C.blk i := by
+  have hnu : ∀ i k bl, C.blk k = some bl → Reached C.roots C.blk k → i ∈ bl.tree.ids →
+      ¬ Unreached C.roots C.blk i := by
     rintro i k bl hk hr hi ⟨k', bl', hk', hnr, hi'⟩
     exact hnr (hc.uniq k k' bl bl' i hk hk' hi hi' ▸ hr)
   refine ⟨⟨hc.len, fun i => ?_, hc.disj,
@@ -266,7 +267,7 @@ theorem CParts.sweep {P : Prog} {C : Cfg} {ps : List (Nat → Bool)} (hc : CPart
         exact ⟨(hc.all i).mpr (.inr ⟨k, bl, hk0, hik⟩), hnu i k bl hk0 hr hik⟩
   · -- every thread keeps its facts: its view is swept from every thread's slots
     obtain ⟨hto, hbo⟩ := hc.ok j t a ht ha
-    have heq : ownView C.sweep t a = (ownView C t a).sweepR C.vals := by
+    have heq : ownView C.sweep t a = (ownView C t a).sweepR C.roots := by
       simp only [ownView, Mem.sweepR, Cfg.sweep]
       congr 1
       funext i
@@ -285,7 +286,7 @@ theorem CParts.sweep {P : Prog} {C : Cfg} {ps : List (Nat → Bool)} (hc : CPart
         · exact .inr ⟨k, bl, sweepBlk_some.mpr ⟨hk, Classical.byContradiction fun hr => hnu' ⟨k, bl, hk, hr, hik⟩⟩,
             hik⟩
     rw [heq]
-    exact ⟨hto.sweepR fun v ⟨x, o, hx⟩ => ⟨j, t, ht, x, o, hx⟩, hbo.of_st rfl⟩
+    exact ⟨hto.sweepR fun v ⟨x, o, hx⟩ => .inl ⟨j, t, ht, x, o, hx⟩, hbo.of_st rfl⟩
 
 /-- **A thread's step, and the sweep that ends it, keep the configuration
     invariant.** -/
@@ -300,9 +301,11 @@ theorem CInv.thread_of {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) (hR : Rest
 
 /-! ### No race -/
 
-/-- The values the threads other than the `i`-th hold. -/
-def Cfg.valsBut (C : Cfg) (i : Nat) (v : Val) : Prop :=
-  ∃ (j : Nat) (t : Thread), j ≠ i ∧ C.ths[j]? = some t ∧ ∃ x o, t.st x = some ⟨o, some v⟩
+/-- The roots no step of the `i`-th thread changes: the values the other
+    threads hold, and (A3.6) the module globals'. -/
+def Cfg.rootsBut (C : Cfg) (i : Nat) (v : Val) : Prop :=
+  (∃ (j : Nat) (t : Thread), j ≠ i ∧ C.ths[j]? = some t ∧ ∃ x o, t.st x = some ⟨o, some v⟩) ∨
+    C.globVals v
 
 /-- What is reached from two sets of roots is reached from one of them: a
     chain starts at one root. -/
@@ -318,27 +321,30 @@ theorem Reached.or {R1 R2 : Val → Prop} {B : Nat → Option Blk} {k : Nat}
     · exact .inl (.pay h hk hr)
     · exact .inr (.pay h hk hr)
 
-theorem Cfg.vals_split {C : Cfg} {i : Nat} {t : Thread} (hi : C.ths[i]? = some t) {v : Val}
-    (h : C.vals v) : (C.view t).vals v ∨ C.valsBut i v := by
-  obtain ⟨j, tj, hj, x, o, hx⟩ := h
-  by_cases hji : j = i
-  · subst hji; rw [hi] at hj; cases hj; exact .inl ⟨x, o, hx⟩
-  · exact .inr ⟨j, tj, hji, hj, x, o, hx⟩
+theorem Cfg.roots_split {C : Cfg} {i : Nat} {t : Thread} (hi : C.ths[i]? = some t) {v : Val}
+    (h : C.roots v) : (C.view t).vals v ∨ C.rootsBut i v := by
+  rcases h with ⟨j, tj, hj, x, o, hx⟩ | h
+  · by_cases hji : j = i
+    · subst hji; rw [hi] at hj; cases hj; exact .inl ⟨x, o, hx⟩
+    · exact .inr (.inl ⟨j, tj, hji, hj, x, o, hx⟩)
+  · exact .inr (.inr h)
 
-/-- Thread `i`'s step leaves the other threads' slots as they were. -/
-theorem Cfg.valsBut_put {C : Cfg} {i : Nat} {m' : Mem} {s' : Stmt} {v : Val} (h : C.valsBut i v) :
-    (C.put i m' s').vals v := by
-  obtain ⟨j, tj, hji, hj, x, o, hx⟩ := h
-  exact ⟨j, tj, by simp only [Cfg.put]; rw [List.getElem?_set_ne (Ne.symm hji)]; exact hj, x, o, hx⟩
+/-- Thread `i`'s step leaves the other threads' slots as they were, and
+    (A3.6) writes no global (`Step.gl`). -/
+theorem Cfg.rootsBut_put {C : Cfg} {i : Nat} {m' : Mem} {s' : Stmt} (hgl : m'.gl = C.gl) {v : Val}
+    (h : C.rootsBut i v) : (C.put i m' s').roots v := by
+  rcases h with ⟨j, tj, hji, hj, x, o, hx⟩ | ⟨g, hg⟩
+  · exact .inl ⟨j, tj, by simp only [Cfg.put]; rw [List.getElem?_set_ne (Ne.symm hji)]; exact hj, x, o, hx⟩
+  · exact .inr ⟨g, by show m'.gl g = some v; rw [hgl]; exact hg⟩
 
 /-- **What a thread's next step touches**: an address of its own part; a
     read of a payload its own slots reach; or (what the sweep that ends it
-    frees) a payload no other thread's slots reach. -/
+    frees) a payload no other thread's slots, nor (A3.6) a global, reach. -/
 theorem CParts.ctouch {P : Prog} {C : Cfg}
     {ps : List (Nat → Bool)} (hc : CParts P C ps) {q : Nat} {tq : Thread} {aq : Nat → Bool}
     (hq : C.ths[q]? = some tq) (haq : ps[q]? = some aq) {a : Nat} {b : Bool} (h : CTouch P C q tq a b) :
     aq a = true ∨ ∃ k bl, C.blk k = some bl ∧ a ∈ bl.tree.ids ∧
-      ((b = false ∧ Reached (C.view tq).vals C.blk k) ∨ ¬ Reached (C.valsBut q) C.blk k) := by
+      ((b = false ∧ Reached (C.view tq).vals C.blk k) ∨ ¬ Reached (C.rootsBut q) C.blk k) := by
   obtain ⟨hto, hbo⟩ := hc.ok q tq aq hq haq
   cases h with
   | step ht =>
@@ -351,7 +357,7 @@ theorem CParts.ctouch {P : Prog} {C : Cfg}
   | sweep hs =>
     obtain ⟨m', s', hst, _, hma, hsw⟩ := hs
     -- the sweep frees `a`: an unreached block's payload owns it
-    have hu : Unreached (C.put q m' s').vals m'.blk a := Classical.byContradiction fun hnu => by
+    have hu : Unreached (C.put q m' s').roots m'.blk a := Classical.byContradiction fun hnu => by
       have : (C.put q m' s').sweep.alloc a = true := sweepAlloc_true.mpr ⟨hma, hnu⟩
       rw [hsw] at this; cases this
     obtain ⟨k, bl, hk, hnr, hak⟩ := hu
@@ -359,15 +365,15 @@ theorem CParts.ctouch {P : Prog} {C : Cfg}
     -- thread did (a new block's, or a lock's given back)
     rcases Step.payAt hst (hbo.of_st rfl) k a ⟨bl, hk, hak⟩ with ⟨bl0, hk0, hak0⟩ | h1
     · exact .inr ⟨k, bl0, hk0, hak0, .inr fun hr =>
-        hnr (hr.mono (fun v hv => Cfg.valsBut_put hv) (Step.grows hst).blk)⟩
+        hnr (hr.mono (fun v hv => Cfg.rootsBut_put (Step.gl hst) hv) (Step.grows hst).blk)⟩
     · exact .inl (owned_part hto h1)
 
 /-- **No race**: two threads never touch one address, one of them writing.
     A write is to the writer's own part, or (the sweep's frees) to a payload
     no other thread reaches; what another thread touches is on its own part,
     or a payload its own slots reach, or one the sweep after its own step
-    would free — and a block is reached from some thread (`CInv`), so not
-    two threads' sweeps free it. -/
+    would free — and a block is reached from some thread or (A3.6) a global
+    (`CInv`), so not two threads' sweeps free it. -/
 theorem CInv.raceFree {P : Prog} {C : Cfg}
     (h : CInv P C) : ¬ AddrRace P C := by
   rintro ⟨i, j, ti, tj, a, w, hij, hi, hj, hti, htj⟩
@@ -385,12 +391,12 @@ theorem CInv.raceFree {P : Prog} {C : Cfg}
     rcases hc.ctouch hj haj htj with h2 | ⟨k', bl', hk', hak', ⟨_, hr'⟩ | hnr'⟩
     · exact hc.pay j aj haj a h2 ⟨k, bl, hk, hak⟩
     · have := hc.uniq k k' bl bl' a hk hk' hak hak'; subst this
-      exact hnr (hr'.mono (fun v ⟨x, o, hx⟩ => ⟨j, tj, Ne.symm hij, hj, x, o, hx⟩) (BlkLe.refl _))
+      exact hnr (hr'.mono (fun v ⟨x, o, hx⟩ => .inl ⟨j, tj, Ne.symm hij, hj, x, o, hx⟩) (BlkLe.refl _))
     · have := hc.uniq k k' bl bl' a hk hk' hak hak'; subst this
-      have hr0 : Reached (fun v => (C.view ti).vals v ∨ C.valsBut i v) C.blk k :=
-        (hreach k bl hk).mono (fun v hv => Cfg.vals_split hi hv) (BlkLe.refl _)
+      have hr0 : Reached (fun v => (C.view ti).vals v ∨ C.rootsBut i v) C.blk k :=
+        (hreach k bl hk).mono (fun v hv => Cfg.roots_split hi hv) (BlkLe.refl _)
       rcases Reached.or hr0 with h3 | h3
-      · exact hnr' (h3.mono (fun v ⟨x, o, hx⟩ => ⟨i, ti, hij, hi, x, o, hx⟩) (BlkLe.refl _))
+      · exact hnr' (h3.mono (fun v ⟨x, o, hx⟩ => .inl ⟨i, ti, hij, hi, x, o, hx⟩) (BlkLe.refl _))
       · exact hnr h3
 
 end A3

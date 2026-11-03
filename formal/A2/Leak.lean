@@ -264,6 +264,7 @@ theorem covers_evalR {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (hc : Covers m)
     · refine Or.inl (Or.inr (hgrow ?_))
       unfold PayAddr; rw [htk.blk]; exact hp
   | cellClone _ => exact Or.inl (hc i hi)
+  | glob _ _ => exact Or.inl (hc i hi)
   | rwRead _ _ hfr =>
     -- A3.3: a view owns nothing; every other block stays
     rcases hc i hi with h | ⟨k', bl, hk', hik⟩

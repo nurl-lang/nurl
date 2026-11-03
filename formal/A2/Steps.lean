@@ -1483,6 +1483,9 @@ theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry
   | cellClone ha hl hty hos =>
     cases he with
     | cellClone hv => exact ⟨RhsPost.same hi, out_cellClone hi ha hl hty hos hv⟩
+  | glob _ htok =>
+    cases he with
+    | glob _ hf => exact ⟨RhsPost.same hi, out_glob hi htok hf⟩
   | rwRead ha hl hty =>
     cases he with
     | rwRead hv hk hfr =>

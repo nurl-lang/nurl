@@ -41,10 +41,11 @@ def NewThreadLemma (P : Prog) (spawn : Nat → Bool) : Prop :=
     (∀ (j k : Nat) (v w : Val), j ≠ k → vs[j]? = some v → vs[k]? = some w → ∀ i ∈ v.ids, i ∉ w.ids) →
     (∀ v ∈ vs, SelfFree v) → (∀ v ∈ vs, PkgsOK v) → (∀ v ∈ vs, PkgOK P v) →
     ∀ {part : Nat → Bool}, (∀ i, part i = true ↔ ∃ v ∈ vs, i ∈ v.ids) →
-    ∀ {N : Nat}, (∀ v ∈ vs, ∀ i ∈ v.ids, i < N) → ∀ {B : Nat → Option Blk},
+    ∀ {N : Nat}, (∀ v ∈ vs, ∀ i ∈ v.ids, i < N) → ∀ {B : Nat → Option Blk} {G : Nat → Option Val},
     (∀ (j : Nat) (v : Val) (pt : PMode × Ty), vs[j]? = some v → fn.params[j]? = some pt →
       SharesIn B pt.2 v) → BlocksAt B N → (∀ i, PayIn B i → ∀ v ∈ vs, i ∉ v.ids) →
-    ThreadOK P { alloc := union part (payPart B), nid := N, nv := fn.nvars, st := spawnSt fn vs, blk := B }
+    ThreadOK P { alloc := union part (payPart B), nid := N, nv := fn.nvars, st := spawnSt fn vs, blk := B,
+                 gl := G }
       (wrapParams fn.params 0 0 (.scope fn.params.length fn.body))
 
 /-- A3.5: a spawn whose crossing check fails (proved in `A3.SpawnOld`): the
@@ -82,7 +83,7 @@ theorem CInv.setStmt {P : Prog} {C : Cfg} (h : CInv P C) {i : Nat} {t : Thread} 
       obtain ⟨hto, hbo⟩ := hc.ok i t b hi hb
       exact ⟨hs b hto, hbo⟩
     · rw [ite_eq_right hij] at hj; exact hc.ok j tj b hj hb
-  · exact (hreach k bl hk).mono (fun v hv => (hvals v).mpr hv) (BlkLe.refl _)
+  · exact (hreach k bl hk).mono (fun v hv => hv.elim (fun h => .inl ((hvals v).mpr h)) .inr) (BlkLe.refl _)
 
 /-- ... and so a spawn whose crossing check fails keeps it. -/
 theorem CInv.spawnFail_of {P : Prog} (hSF : SpawnFailLemma P) {C : Cfg} (h : CInv P C) {i : Nat}
@@ -162,7 +163,7 @@ theorem CInv.spawn_of {P : Prog} {spawn : Nat → Bool} (hSO : SpawnerLemma P sp
   have hSN : ∀ k, aS k = true → aN k = false := fun k hk => by
     simp only [aS, minus, Bool.and_eq_true] at hk
     simp [aN, minus, hk.1]
-  have htoN := hNT (B := C.blk) hsp hf hvlen hwf
+  have htoN := hNT (B := C.blk) (G := C.gl) hsp hf hvlen hwf
     (fun v hv => by obtain ⟨a0, h0⟩ := hown v hv; exact hinv.heap.nodup a0 v h0) hvdisj
     (fun v hv => by obtain ⟨a0, h0⟩ := hown v hv; exact hinv.heap.self a0 v h0)
     (fun v hv => by obtain ⟨a0, h0⟩ := hown v hv; exact hinv.pkgs a0 _ v h0 rfl)
@@ -191,7 +192,7 @@ theorem CInv.spawn_of {P : Prog} {spawn : Nat → Bool} (hSO : SpawnerLemma P sp
         simp only [spawnSt, Nat.ne_of_lt hnl, ↓reduceIte, hn, Option.map_some]
     · exact ⟨j, tj, by rw [get_set_append hilen, ite_eq_left hjl, ite_eq_right (Ne.symm hji)]; exact hj, y, o, hy⟩
   refine ⟨ps.set i aS ++ [aN], ⟨by simp [hc.len], fun k => ?_, ?_, ?_, hc.uniq, ?_⟩,
-    fun k' bl hk' => (hreach k' bl hk').of_roots fun v hv _ _ => hvals v hv⟩
+    fun k' bl hk' => (hreach k' bl hk').of_roots fun v hv _ _ => hv.elim (fun h => .inl (hvals v h)) .inr⟩
   · -- every live address is on a part, or a payload's
     constructor
     · intro hk

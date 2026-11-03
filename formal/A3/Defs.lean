@@ -14,7 +14,9 @@ import A2.Soundness
   it). A3.1's `Arc` is A2's own (`Mem.blk`, `Val.arc`): its blocks are
   shared by every thread, and the configuration's sweep ends every
   thread's step. The other shared blocks (`Locked`, `RwLocked`, `Atomic`,
-  channels) are added by A3.2–A3.5.
+  channels) are added by A3.2–A3.5.  A3.6's module globals set at start
+  are the configuration's (`Cfg.gl`): every thread reads them, no step
+  writes them, and the sweep keeps what they reach.
 -/
 
 namespace A3
@@ -33,33 +35,70 @@ structure Cfg where
   alloc : Nat → Bool
   nid   : Nat
   blk   : Nat → Option Blk   -- A3.1: the counted blocks, shared by every thread
+  gl    : Nat → Option Val     -- A3.6: the module globals set at start, which every thread reads
   ths   : List Thread
 
 /-- What A2's step runs on for thread `t`: the shared address space, the
     thread's own bindings. -/
 def Cfg.view (C : Cfg) (t : Thread) : Mem :=
-  { alloc := C.alloc, nid := C.nid, nv := t.nv, st := t.st, blk := C.blk }
+  { alloc := C.alloc, nid := C.nid, nv := t.nv, st := t.st, blk := C.blk, gl := C.gl }
 
 /-- Thread `i`'s step written back: the address space to the configuration,
     the bindings and the statement to the thread. -/
 def Cfg.put (C : Cfg) (i : Nat) (m : Mem) (s : Stmt) : Cfg :=
-  { alloc := m.alloc, nid := m.nid, blk := m.blk, ths := C.ths.set i ⟨m.st, m.nv, s⟩ }
+  { alloc := m.alloc, nid := m.nid, blk := m.blk, gl := m.gl, ths := C.ths.set i ⟨m.st, m.nv, s⟩ }
 
-/-- A3.1: the values the threads' slots hold: the roots of the
-    configuration's sweep. -/
+/-- A3.1: the values the threads' slots hold. -/
 def Cfg.vals (C : Cfg) (v : Val) : Prop :=
   ∃ (j : Nat) (t : Thread), C.ths[j]? = some t ∧ ∃ x o, t.st x = some ⟨o, some v⟩
 
+/-- A3.6: the values the module globals hold. -/
+def Cfg.globVals (C : Cfg) (v : Val) : Prop := ∃ g, C.gl g = some v
+
+/-- The roots of the configuration's sweep: what the threads' slots hold
+    (A3.1), and (A3.6) what the module globals hold, which every thread may
+    read for as long as the program runs. -/
+def Cfg.roots (C : Cfg) (v : Val) : Prop := C.vals v ∨ C.globVals v
+
 /-- A3.1: the configuration's sweep, which ends every thread's step: the
-    blocks no thread's slot reaches are removed and their payloads freed —
-    A2's `Mem.sweep`, from every thread's slots at once (the count of a
-    block's shares is over all threads). -/
+    blocks nothing reaches from a thread's slot or (A3.6) a global are
+    removed and their payloads freed — A2's `Mem.sweep`, from every thread's
+    slots at once (the count of a block's shares is over all threads) and
+    the globals (which hold a share each until the process exits). -/
 noncomputable def Cfg.sweep (C : Cfg) : Cfg :=
-  { C with alloc := sweepAlloc C.vals C.blk C.alloc, blk := sweepBlk C.vals C.blk }
+  { C with alloc := sweepAlloc C.roots C.blk C.alloc, blk := sweepBlk C.roots C.blk }
 
 /-- A program run from the empty store, on one thread (A2's `emptyMem`). -/
 def Cfg.init (s : Stmt) (nv : Nat) : Cfg :=
-  { alloc := fun _ => false, nid := 0, blk := fun _ => none, ths := [⟨fun _ => none, nv, s⟩] }
+  { alloc := fun _ => false, nid := 0, blk := fun _ => none, gl := fun _ => none,
+    ths := [⟨fun _ => none, nv, s⟩] }
+
+/-- **A3.6: the module globals set at start**, as `main` finds them: the
+    store their `make`s left — the blocks they built, the addresses those
+    blocks' payloads own, the next fresh address — and each global's share.
+    They are given with the start, not run before it: `GlobsOK` asks of them
+    what A2's invariant says of the store a typed `make` leaves once its
+    result is the global's. -/
+structure Globs where
+  alloc : Nat → Bool
+  nid   : Nat
+  blk   : Nat → Option Blk
+  gl    : Nat → Option Val
+
+/-- No global: A3.0–A3.5's start. -/
+def Globs.empty : Globs := ⟨fun _ => false, 0, fun _ => none, fun _ => none⟩
+
+/-- The store the globals' `make`s left, with no binding. -/
+def Globs.mem (G : Globs) (nv : Nat) : Mem := ⟨G.alloc, G.nid, nv, fun _ => none, G.blk, G.gl⟩
+
+/-- A3.6: a program run with its module globals set, on one thread, which
+    (as every thread it spawns) reads them through the configuration
+    (`Cfg.gl`, `Cfg.view`). -/
+def Cfg.start (G : Globs) (s : Stmt) (nv : Nat) : Cfg :=
+  { alloc := G.alloc, nid := G.nid, blk := G.blk, gl := G.gl, ths := [⟨fun _ => none, nv, s⟩] }
+
+/-- With no global, the start is A3.0's. -/
+theorem Cfg.init_start (s : Stmt) (nv : Nat) : Cfg.init s nv = Cfg.start Globs.empty s nv := rfl
 
 /-- Where a statement takes its next step: `s` is `K` around `r`, through
     the forms A2's step goes into (`seqL`, `scopeIn`, `rbindIn`, `frozenIn`,
@@ -135,6 +174,79 @@ theorem _root_.A2.Ty.hasCell_of_hasArc {t : Ty} (h : t.hasArc = false) : t.hasCe
 theorem lk_noCell {t : Ty} (h : (Ty.lk t).ok = true) : t.hasCell = false := by
   simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true] at h
   exact Ty.hasCell_of_hasArc h.2
+
+/-! ### A3.6: module globals, as A2 types them
+
+A global set at start is read at a type that synchronises itself
+(`RhsT.glob`, `Ty.sync`), into an owner of a clone of its share; A3.2–A3.4's
+rules then take that owner, a root, unchanged. -/
+
+/-- A global is read only at a type that synchronises itself. -/
+theorem _root_.A2.RhsT.glob_sync {Γ Γ1 : Ctx} {F : List Var} {g : Nat} {t : Ty} {E : Entry}
+    (h : RhsT Γ F (.glob g t) E Γ1) : t.sync = true := by
+  cases h with | glob hs _ => exact hs
+
+/-- h263 (`start_global_shared_unsynchronised`): no global is a `Vec`, which
+    two threads would push through it with no lock ... -/
+theorem glob_not_vec {Γ Γ1 : Ctx} {F : List Var} {g : Nat} {t : Ty} {E : Entry} :
+    ¬ RhsT Γ F (.glob g (.vec t)) E Γ1 := fun h => by cases h.glob_sync
+
+/-- ... h272 (`struct_global_torn_between_threads`): nor a struct of plain
+    values, more than one word, which no atomic access covers (it is
+    `unsafe`-only, trusted base; safe code keeps one in a `Locked`) ... -/
+theorem glob_not_prod {Γ Γ1 : Ctx} {F : List Var} {g : Nat} {a b : Ty} {E : Entry} :
+    ¬ RhsT Γ F (.glob g (.prod a b)) E Γ1 := fun h => by cases h.glob_sync
+
+/-- ... nor a bare integer: a scalar global is an `Atomic` (`lk int`), read and
+    written by atomic steps (`Stmt.loadGlobal`, `Stmt.storeGlobal`) ... -/
+theorem glob_not_int {Γ Γ1 : Ctx} {F : List Var} {g : Nat} {E : Entry} :
+    ¬ RhsT Γ F (.glob g .int) E Γ1 := fun h => by cases h.glob_sync
+
+/-- ... nor a library handle, which is not Sync (A3.5) ... -/
+theorem glob_not_cell {Γ Γ1 : Ctx} {F : List Var} {g : Nat} {t : Ty} {E : Entry} :
+    ¬ RhsT Γ F (.glob g (.cell t)) E Γ1 := fun h => by cases h.glob_sync
+
+/-- ... nor (h254, `symtab_shared_between_threads`) an `Arc` of one: a
+    `SymTab` shared through an `Arc` reaches two threads, which change it with
+    no lock (as `RhsT.arcNew` refuses making one, A3.5). -/
+theorem glob_not_arc_cell {Γ Γ1 : Ctx} {F : List Var} {g : Nat} {t : Ty} {E : Entry} :
+    ¬ RhsT Γ F (.glob g (.arc (.cell t))) E Γ1 := fun h => by cases h.glob_sync
+
+/-- An update of a `Locked` global (`locked_update g f`) is A3.2's `withLock`,
+    unchanged, on the owner `h` of a clone of the global's share: a root that
+    the body does not name, holding the share for the whole body. -/
+theorem _root_.A2.StmtT.lockGlobal {P : Prog} {Γ Δ : Ctx} {F : List Var} {h x : Var} {g : Nat} {t : Ty}
+    {s : Stmt} (hs : s.src = true) (hh : Γ h = none) (hhF : h ∉ F) (hx : Γ x = none) (hxF : x ∉ F)
+    (hxh : x ≠ h) (htok : (Ty.lk t).ok = true) (hhs : h ∉ s.vars)
+    (hb : StmtT P (setE (setE Γ h ⟨.lk t, .own, true, [], [], false, false⟩) x (lockE t)) F s Δ)
+    (hend : EndOK Δ x) (hlive : ∃ E, Δ x = some E ∧ E.live = true) (hendh : EndOK (exitScope x Δ) h) :
+    StmtT P Γ F (Stmt.lockGlobal h x g t s) (exitScope h (exitScope x Δ)) :=
+  StmtT.letv hs hh hhF (RhsT.glob rfl htok)
+    (StmtT.withLock hs (by simp [setE, upd_ne _ _ hxh, hx]) hxF (upd_same _ _ _) rfl (Or.inl rfl) hb hend
+      rfl hhs hlive) hendh
+
+/-- A read of a scalar global is an atomic load, A3.4's rule unchanged, on the
+    owner `h` of a clone of its share. -/
+theorem _root_.A2.StmtT.loadGlobal {P : Prog} {Γ Δ : Ctx} {F : List Var} {h x : Var} {g : Nat} {s : Stmt}
+    (hs : s.src = true) (hh : Γ h = none) (hhF : h ∉ F) (hx : Γ x = none) (hxF : x ∉ F) (hxh : x ≠ h)
+    (hb : StmtT P (setE (setE Γ h ⟨.lk .int, .own, true, [], [], false, false⟩) x intE) F s Δ)
+    (hend : EndOK Δ x) (hendh : EndOK (exitScope x Δ) h) :
+    StmtT P Γ F (Stmt.loadGlobal h x g s) (exitScope h (exitScope x Δ)) :=
+  StmtT.letv hs hh hhF (RhsT.glob rfl rfl)
+    (StmtT.letv hs (by simp [setE, upd_ne _ _ hxh, hx]) hxF
+      (RhsT.atomic (upd_same _ _ _) rfl rfl ExprT.lit ExprT.lit) hb hend) hendh
+
+/-- ... and a write an atomic store of an integer expression, which moves no
+    owner: safe code hands a scalar global nothing to own (h273, h202). -/
+theorem _root_.A2.StmtT.storeGlobal {P : Prog} {Γ Δ : Ctx} {F : List Var} {h x : Var} {g : Nat} {e : Expr}
+    {s : Stmt} (hs : s.src = true) (hh : Γ h = none) (hhF : h ∉ F) (hx : Γ x = none) (hxF : x ∉ F)
+    (hxh : x ≠ h) (he : ExprT (setE Γ h ⟨.lk .int, .own, true, [], [], false, false⟩) e)
+    (hb : StmtT P (setE (setE Γ h ⟨.lk .int, .own, true, [], [], false, false⟩) x intE) F s Δ)
+    (hend : EndOK Δ x) (hendh : EndOK (exitScope x Δ) h) :
+    StmtT P Γ F (Stmt.storeGlobal h x g e s) (exitScope h (exitScope x Δ)) :=
+  StmtT.letv hs hh hhF (RhsT.glob rfl rfl)
+    (StmtT.letv hs (by simp [setE, upd_ne _ _ hxh, hx]) hxF
+      (RhsT.atomic (upd_same _ _ _) rfl rfl he ExprT.lit) hb hend) hendh
 
 /-- Moving the arguments out of the spawner: each owns its value, and its
     slot is left empty (its drop flag clear). -/
@@ -381,20 +493,56 @@ def Race (P : Prog) (C : Cfg) : Prop := AddrRace P C ∨ CellRace C
 
 /-! ### The claims -/
 
-/-- No thread of a reachable configuration is stuck: A2's `memory_safe`, on
-    every thread. -/
-def MemorySafe (P : Prog) (spawn : Nat → Bool) (s : Stmt) (nv : Nat) : Prop :=
-  ∀ C, Reach P spawn (Cfg.init s nv) C → ∀ (i : Nat) (t : Thread), C.ths[i]? = some t →
+/-- No thread of a configuration reachable from `C0` is stuck: A2's
+    `memory_safe`, on every thread. -/
+def MemorySafe (P : Prog) (spawn : Nat → Bool) (C0 : Cfg) : Prop :=
+  ∀ C, Reach P spawn C0 C → ∀ (i : Nat) (t : Thread), C.ths[i]? = some t →
     ¬ Stuck P (C.view t) t.s
 
-/-- No reachable configuration has a race. -/
-def RaceFree (P : Prog) (spawn : Nat → Bool) (s : Stmt) (nv : Nat) : Prop :=
-  ∀ C, Reach P spawn (Cfg.init s nv) C → ¬ Race P C
+/-- No configuration reachable from `C0` has a race. -/
+def RaceFree (P : Prog) (spawn : Nat → Bool) (C0 : Cfg) : Prop :=
+  ∀ C, Reach P spawn C0 C → ¬ Race P C
 
-/-- When every thread has finished, nothing is allocated: A2's
-    `no_leak_end`, over the threads. -/
-def NoLeak (P : Prog) (spawn : Nat → Bool) (s : Stmt) (nv : Nat) : Prop :=
-  ∀ C, Reach P spawn (Cfg.init s nv) C → (∀ t ∈ C.ths, t.s = .skip) → ∀ i, C.alloc i = false
+/-- When every thread has finished, nothing is allocated but (A3.6) what the
+    module globals reach: A2's `no_leak_end`, over the threads.  Every live
+    address is owned by the payload of a block a global reaches, which lives
+    until the process exits, as the runtime's globals do.  With no global,
+    nothing is allocated (`NoLeak.empty`). -/
+def NoLeak (P : Prog) (spawn : Nat → Bool) (C0 : Cfg) : Prop :=
+  ∀ C, Reach P spawn C0 C → (∀ t ∈ C.ths, t.s = .skip) → ∀ i, C.alloc i = true →
+    ∃ k bl, C.blk k = some bl ∧ i ∈ bl.tree.ids ∧ Reached C0.globVals C.blk k
+
+/-- With no global (A3.0–A3.5's start), nothing is allocated once every
+    thread has finished: no block is reached from no root. -/
+theorem NoLeak.empty {P : Prog} {spawn : Nat → Bool} {s : Stmt} {nv : Nat}
+    (h : NoLeak P spawn (Cfg.start Globs.empty s nv)) :
+    ∀ C, Reach P spawn (Cfg.init s nv) C → (∀ t ∈ C.ths, t.s = .skip) → ∀ i, C.alloc i = false := by
+  intro C hr hend i
+  cases hi : C.alloc i with
+  | false => rfl
+  | true =>
+    obtain ⟨k, -, -, -, hk⟩ := h C hr hend i hi
+    exfalso
+    induction hk with
+    | root hv _ => obtain ⟨g, hg⟩ := hv; cases hg
+    | pay _ _ _ ih => exact ih
+
+/-- **A3.6, what a start-set global may be**, as the claim asks it of the
+    start:
+    - each global holds a share of a block that synchronises itself, at a
+      type `Ty.sync` admits (`GlobFits`): a lock share (`Locked`, `RwLocked`,
+      `Mutex`, `Atomic`, `Channel`) or an `Arc` of no library handle — never a
+      `Vec` (h263), a cell share or any other owned tree;
+    - the store the globals' `make`s left is one A2's invariant holds of with
+      no binding (`MInv`: every block a well-formed tree of its type that owns
+      its payload's addresses once; `Covers`: nothing else is allocated);
+    - every block is reached from a global (the sweep that ended the last
+      `make` left no other). -/
+structure GlobsOK (G : Globs) : Prop where
+  sync  : ∀ g v, G.gl g = some v → ∃ t, t.sync = true ∧ t.ok = true ∧ GlobFits G.blk t v
+  inv   : MInv (G.mem 0) (fun _ => none)
+  cover : Covers (G.mem 0)
+  reach : ∀ k bl, G.blk k = some bl → Reached (fun v => ∃ g, G.gl g = some v) G.blk k
 
 /-- **The A3.0 claim**, for A2 plus `spawn`: a program A2 types, whose
     spawned functions take only view-free `sink` parameters, is memory-safe,
@@ -402,12 +550,15 @@ def NoLeak (P : Prog) (spawn : Nat → Bool) (s : Stmt) (nv : Nat) : Prop :=
     and A3.1 for A2 with `Arc` (shares of view-free payloads, collected by
     reachability); A3.2–A3.6 extend the language and restate it (A3.5: a
     spawn runs the crossing check, `SendCheck`, and a race includes two
-    threads changing one library handle's state, `CellRace`). -/
+    threads changing one library handle's state, `CellRace`; A3.6: the start
+    holds the module globals, `GlobsOK`, and what they reach is left at the
+    end). -/
 def Claim : Prop :=
-  ∀ (P : Prog) (spawn : Nat → Bool) (s : Stmt) (Δ : Ctx) (nv : Nat),
-    ProgOK P → ProgCodes P → SpawnOK P spawn →
+  ∀ (P : Prog) (spawn : Nat → Bool) (G : Globs) (s : Stmt) (Δ : Ctx) (nv : Nat),
+    ProgOK P → ProgCodes P → SpawnOK P spawn → GlobsOK G →
     StmtT P (fun _ => none) [] s Δ → s.src = true → s.codesOK P → (∀ v ∈ s.vars, v < nv) →
-    MemorySafe P spawn s nv ∧ RaceFree P spawn s nv ∧ NoLeak P spawn s nv
+    MemorySafe P spawn (Cfg.start G s nv) ∧ RaceFree P spawn (Cfg.start G s nv) ∧
+      NoLeak P spawn (Cfg.start G s nv)
 
 /-- The view of the initial configuration is A2's empty store. -/
 theorem init_view (s : Stmt) (nv : Nat) :

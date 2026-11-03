@@ -13,5 +13,5 @@ import A3
 #print axioms A2.DynCell.main_safe
 #print axioms A2.DynCell.main_no_leak
 -- threads: moves, Arc's frozen shared payloads, Locked, RwLocked, Atomic, channels, library
--- handles and the crossing check (A3/Claim.lean)
+-- handles and the crossing check, module globals (A3/Claim.lean)
 #print axioms A3.claim
