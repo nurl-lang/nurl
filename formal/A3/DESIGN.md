@@ -17,8 +17,11 @@ queue). A3.5's first cut, library handles whose copies are one state and
 the crossing check, is mechanized too (A3.5's mechanization, below: a lock
 block shared by cell shares, which are not Sync; a spawn panics when its
 check fails; and a race includes two threads changing one handle's state).
-A3.5b/c (closures in shared payloads, trait objects) and A3.6 are design.
-This note fixes the
+A3.6's module globals set at start are mechanized as well (A3.6's
+mechanization, below: the start holds them, every thread reads them
+through the configuration, no step writes them, and what they reach is
+left at the end). A3.5b/c (closures in shared payloads, trait objects) are
+design. This note fixes the
 semantics, the theorem statements and the order of work, so the
 mechanization can be cut into tasks (Agora: formal track, F4–F8). The guarantee it targets is the
 "no data race" clause of `CLAIM.md` and `docs/MEMORY.md` §6.2. The rules
@@ -28,11 +31,13 @@ are §6.5's.
 
 For a program whose functions all check (`ProgOK`), with a source
 statement well-typed in the empty context, run from the empty
-configuration:
+configuration (A3.6: from a start that holds the module globals set at
+start, `Cfg.start`):
 
 - **`A3.memory_safe`**: no reachable configuration is stuck. A2's
   statement, now for every thread.
-- **`A3.no_leak`**: when every thread has ended, nothing is allocated.
+- **`A3.no_leak`**: when every thread has ended, nothing is allocated (A3.6:
+  but what the module globals reach, which lives until the process exits).
 - **`A3.race_free`**: no reachable configuration has a **race**. A race
   is two different threads whose next steps touch one address, at least
   one of them writing it, and not both through `Atomic` operations.
@@ -1607,6 +1612,305 @@ the spawned function, and its captures are `sink` arguments.
   copies, handles in containers with `S_sendck` hooks, `% Sync` / `%
   NotSend` assertions.
 - The probes as typed programs (a probe's encoding, as `A2/DynCell.lean`
+  types `pick`).
+- `CLAIM.md` / `README.md`.
+
+## A3.6's mechanization (module globals)
+
+**Status.** Module globals reached by several threads are mechanized.
+`check.sh` is green with them in A2 and A3, and `A2.memory_safe`,
+`A2.soundness`, `A2.no_leak_end`, `A2.no_leak_panic`, the `DynCell`
+theorems and `A3.claim` are re-proven. `A3.claim` now runs from a start
+that holds the globals (`Cfg.start G s nv`, under `GlobsOK G`), and its
+leak clause leaves what they reach. With no global it is A3.0–A3.5's
+claim (`Cfg.init_start`, `A3.no_leak_init`). `CLAIM.md` / `README.md` are
+not updated here.
+
+The runtime it models is docs/MEMORY.md §1, *Module globals*:
+- *A global set at start*, `: ( Locked T ) g ( make )`. `make` (no
+  arguments) runs once before `main`, and nothing writes `g` afterwards.
+  - Its type must synchronise itself: `Locked`, `Arc`, `Channel`, `Mutex`,
+    `RwLocked`, `Atomic`. A `( Vec T )` is refused (h263).
+  - A read borrows the handle. `: ( Locked T ) h g`, a struct field or a
+    `^ g` clones it, so the global is never moved or dropped.
+- *A scalar global* (an integer, bool, float or `s`) needs no `unsafe`. It
+  is read and written with relaxed atomics, so threads racing on it see
+  whole values.
+- *An owning global* (a `String`, a `Vec`, a struct of them, an option, a
+  closure, a library handle), and a struct or option global of plain
+  values (more than one word), are read and written only in `unsafe`
+  functions (h202 h272 h273). They are trusted base, hypotheses of the
+  theorem: there is nothing to type.
+
+**Where a global lives: in the configuration, read through a right-hand
+side.** The design offered two places: slots copied into each thread's
+`st` at a spawn, or a `Cfg` field read through a new `Rhs`. The second is
+taken:
+- `Mem.gl : Nat → Option Val` (A2) and `Cfg.gl` (A3): global `g`'s share.
+  `Cfg.view` gives every thread's view the configuration's globals, so the
+  first thread and each spawned one reads them, and a spawn copies nothing.
+- `Rhs.glob g t`, a read of global `g` at type `t`: a new owned share of its
+  block (`EvalR.glob`), as `lockClone` / `arcClone` make one from a
+  binding's. It names no variable, so a call's renaming leaves it as it is
+  (`Rhs.rename`, `RhsT.ren`).
+
+*Why not slots, with the global a borrowed root (`.rootb`).*
+- A function's variables are renamed apart at a call (`callRen`). A global
+  bound to a variable would have to be a parameter of every function that
+  reads it, passed down every call and to every spawn (whose parameters are
+  `sink`, `SpawnOK`). Otherwise the renaming would have to fix the
+  globals' variables, which is `Rename`'s whole lemma again.
+- A borrowed `arc` share is valid only through a dependency it lands
+  through (`ValOK.arc`, `ArcLanded`). A thread-level borrowed root has none:
+  `rootbLt` asks that a borrowed parameter's roots be older than it, so it
+  cannot depend on itself. A lock share would do (`ValOK.lk` asks only for
+  its block), but an `Arc` global would not.
+
+*What the clone keeps of the `.rootb` design.*
+- The reader's binding `h` is an owner, so a root. A3.2–A3.4's rules take
+  it unchanged: `withLock h x s` (`h` is a root the body does not name),
+  `rwRead h`, `chanSend h y`, `atomic op h …` (`Stmt.lockGlobal`,
+  `Stmt.loadGlobal`, `Stmt.storeGlobal`, typed by `StmtT.lockGlobal`,
+  `StmtT.loadGlobal`, `StmtT.storeGlobal`).
+- A thread can neither move, drop nor assign a global. It holds only
+  clones, and no rule writes `gl` (`Step.gl`, `TStep.gl`, `Reach.gl`).
+
+*Given with the start, not run before it.* The start holds the globals as
+the `make`s left them (`Globs`: the blocks, the addresses their payloads
+own, `nid`, each global's share). Running each `make` would add a phase
+before `main` to `TStep` (a thread that runs the `make`s and moves their
+results into `Cfg.gl`), for nothing the claim reads. `GlobsOK` asks of the
+given store what A2's invariant says of the store a typed `make` leaves
+once its result is the global's.
+
+**The rules.**
+- `Ty.sync` (A2, `Syntax.lean`): a type that synchronises itself. It holds
+  for `lk _` (`Locked`, `RwLocked`, `Atomic` and `Channel` are all lock
+  blocks, A3.2–A3.4) and for `arc t` with `t.hasCell = false` (an `Arc` of no
+  library handle, A3.5). It holds for nothing else: no `Vec`, struct, enum,
+  closure or cell share.
+- `RhsT.glob`: `t.sync = true → t.ok = true →
+  RhsT Γ F (.glob g t) ⟨t, .own, true, [], [], false, false⟩ Γ`. The read is
+  an owned share that holds nothing, and the context is unchanged.
+- `EvalR.glob`: `m.gl g = some v → GlobFits m.blk t v →
+  EvalR m (.glob g t) (.ok v true m)`. `GlobFits B t v`: `t = lk u` and `v`
+  is a lock share of a lock block of type `u`, or `t = arc u` and
+  `v = arc k p` with block `k` an `arc` block of type `u` holding `p`.
+- `EvalR.globP`: a read the store cannot answer at that type panics. A2's
+  one thread, run from the empty store, holds no global, so every read
+  panics there. In A3 a read of a start-set global, at the type the start
+  holds it at, never panics (`Reach.glob_noPanic`, below).
+- `GlobsOK G`, a premise of `A3.claim`:
+  - `sync`: each global holds a share of a block of a type `Ty.sync`
+    admits (`GlobFits`);
+  - `inv`, `cover`: the store the `make`s left is one A2's invariant holds
+    of with no binding (`MInv (G.mem 0) ∅`: every block a well-formed tree
+    of its type, owning its payload's addresses once; `Covers`: nothing
+    else is allocated);
+  - `reach`: every block is reached from a global, since the sweep that
+    ended the last `make` left no other.
+- `Cfg.roots`: the configuration's sweep counts the globals' shares as
+  roots, beside every thread's slots (`Cfg.sweep`). So a global's block,
+  and every block its payload reaches, lives as long as the program runs.
+- `NoLeak`, restated: when every thread has ended, every live address is
+  owned by the payload of a block the start's globals reach.
+- Scalar globals: `Stmt.loadGlobal h x g s` (`: i x g`) is an `Atomic` load
+  through a clone `h` of the global's share, and `Stmt.storeGlobal h x g e
+  s` (`= g e`) an `Atomic` store of the integer expression `e`. A scalar
+  global is an `Atomic` set at start, a global of type `lk int`, A3.4's
+  integer lock block.
+
+**A2's proof.**
+- `rhs_pres`: a read keeps the store (`RhsPost.same`), and its share is
+  `out_glob`. That is `out_lkShare` or `out_share`, with the payload's
+  well-formedness from `MInv.blocks`.
+- `evalR_exists`: `EvalR.glob` when the store holds the global at that
+  type, `EvalR.globP` otherwise, so progress never fails on a read.
+- `covers_evalR`: a share owns no address. `EvalR.codes`: it holds no
+  package. `Rename`, `Wf`, `NameWf` and `SrcKeep` take `new`'s case, since
+  the read names no variable.
+- No part of A2's invariant reads `gl`. A2's sweep (`Steps`) is still over
+  the slots: A2 runs one thread from the empty store, which holds no global.
+
+**A3's proof.**
+- *A read touches no address.* A share is no address, and its count is
+  ghost; the runtime's count is an atomic word, as for `arcClone` (A3.1).
+  `Touch` and `Race` are unchanged.
+- *The frame lemmas.* The read looks at `m.gl` and `m.blk`, which a thread's
+  own view and the configuration's share (`EvalR.restrict`, `EvalR.lift`,
+  `EvalR.borFree`, `EvalR.ownedId`). A global's share is a lock share or
+  an `arc` share, never a cell share, so CellInv is unchanged
+  (`EvalR.cellVal`).
+- *No step writes a global* (`Step.gl`, A3/Fresh.lean): every rule rebuilds
+  the store with `gl` as it was. `Cfg.put` writes back the step's `gl`,
+  which is the view's (`CParts.thread_of`), and a spawn and the sweep keep
+  it (`TStep.gl`, `Reach.gl`).
+- *The sweep keeps what the globals reach.* `CInv`'s second half: every
+  block is reached from a root, a thread's slot or a global. Race
+  freedom's sweep case counts the globals among the roots that no step of
+  the stepping thread changes (`Cfg.rootsBut`). So no sweep frees a
+  global's block, and two threads' sweeps never free one block.
+- *A global stays readable.* What a global's share fits at the start it
+  fits in every configuration the start reaches (`Reach.globFits`). A step
+  keeps a lock block as a lock block of its type and an `arc` block as it
+  was (`GlobFits.grow`), and the sweep keeps every block a global reaches
+  (`GlobFits.sweep`). So no thread's read at the start's type panics
+  (`Reach.glob_noPanic`).
+- *The start.* `CInv.start` and `ThreadOK.start`: one thread with no
+  binding, on the globals' payloads. That is A2's empty store with the
+  globals set (`inv_emptyGl`), grown to their blocks by `ThreadOK.move`
+  (`GlobsOK.blocksAt`, `GlobsOK.alloc`). `CellInv.start`: no thread holds a
+  cell share, and a global is no thread's binding.
+- *no_leak* (`CInv.noLeak`): a finished thread owns no tree and no slot is
+  left. So every live address is a payload's, of a block reached from a
+  root, and the only roots left are the globals.
+
+**no_leak: what the globals reach is left.** There were two choices:
+- the globals are roots only while some thread runs, and the sweep after
+  the last thread's last step frees them, so nothing is left;
+- the globals are roots for good, and the end leaves exactly what they
+  reach.
+
+The second is taken. It is the runtime's: a global set at start is never
+dropped, and the process's exit returns its memory, with no destructor
+run. The first would not even hold at a start that has already finished:
+with `s = skip` and allocating globals, no step runs, so no sweep does.
+`NoLeak` says every live address left is owned by a block the start's
+globals reach (`Reached C0.globVals`). With no global, nothing is left
+(`NoLeak.empty`, `A3.no_leak_init`: A3.0's statement).
+
+**Faithful to the runtime.**
+- *Set at start.* The start holds what `main` finds once the `make`s have
+  run: each global's share and the blocks they built (`GlobsOK`).
+- *Nothing writes `g` afterwards.* No step writes `gl` (`Step.gl`), so the
+  share a thread reads is the one the start holds (`Reach.gl`).
+- *A read borrows the handle.* The model reads a clone, a share the
+  reader's binding owns for the read's scope. Its drop frees nothing
+  (`Frees.lk`, `Frees.arc`), and the global keeps its block, a root. A
+  borrow of the handle and a clone reach the same block and the same
+  payload, so every step after the read is the same. The clone's count is
+  ghost, and the runtime's is never touched by a borrow; neither is
+  observable.
+- *`: ( Locked T ) h g`, a struct field, `^ g`.* They clone, and so does the
+  model: the clone moves into the binding, the field or the result.
+- *The global outlives every reader.* The runtime's global lives until the
+  process exits. The model's block is a root of every sweep. So A3.2's
+  faithfulness premise, that the lock outlives the body, holds of a
+  `Locked` global by construction (`Stmt.lockGlobal`: `h`, the clone, is
+  an owner the body does not name).
+- *Phase D* (A3.1's obligation) is trivial for a global's own share. The
+  runtime's count of a global's block never reaches 0 while the global
+  holds it, and the model never sweeps it. The clones are A3.1's case,
+  unchanged.
+- *`unsafe` globals.* An owning global, and a struct or option global of
+  plain values, are reached only in `unsafe` functions, which vouch that no
+  other thread replaces the value while it is in use. They are trusted
+  base, as an `unsafe` body is; the model has no rule for them.
+
+**Scalar globals: relaxed atomics (a stated assumption, not a proof).**
+- *The model.* A scalar global is an `Atomic` set at start (`lk int`). A
+  read is A3.4's `atomic load`, and a write `atomic store`, each one step on
+  the block's word.
+- *The runtime.* The compiler reads and writes a scalar global with relaxed
+  (LLVM `monotonic`) atomic loads and stores
+  (`compiler/tests/global_atomic_ir.sh`), where `stdlib/std/atomic.nu`'s
+  `Atomic` is `seq_cst`. A3's DRF-SC citation (*The theorem*, above) is for
+  programs whose atomics are all `seq_cst`.
+- *What holds either way: race freedom.* A C11 data race is two
+  conflicting accesses, unordered by happens-before, not both atomic.
+  Every access to a scalar global is atomic, a relaxed one included. So no
+  access to a scalar global takes part in a data race, under any ordering.
+  The model's word is no address, and the model's race freedom is about
+  every other address, which no scalar access touches.
+- *What the interleaving model may miss.* With relaxed accesses, C11 admits
+  executions that no interleaving has. A load may answer a store older than
+  an interleaving allows, and two threads may see stores to two globals in
+  different orders, since a relaxed store does not happen before the load
+  that reads it. DRF-SC, as cited, does not reduce such a program to the
+  model's interleavings.
+- **Assumption (A3.6).** A C11 execution of a program whose scalar globals
+  are relaxed agrees, on every fact the claim states (what is allocated,
+  which binding or block owns it, which non-atomic accesses happen in which
+  order), with an interleaving of the model in which each scalar load
+  answers some integer, possibly one no interleaving would give. Why this
+  is expected:
+  - a scalar's value decides no ownership: the word owns no address, and
+    an integer moves, lends and frees nothing;
+  - no non-atomic data is published through a scalar global, since in safe
+    NURL a thread reaches another's memory only through a spawn, a lock, a
+    channel or a frozen `Arc` payload, which are the runtime's
+    `seq_cst` / lock synchronisation, so DRF-SC as cited covers them.
+- *What would prove it.* A model whose scalar loads answer any integer. A3's
+  proof would carry over, since no lemma of it reads the integer an atomic
+  step answers (`atomic_pres`: an `intE` answer, `AOp.run` only computes
+  it). That model, and the relaxed-to-havoc reduction, are not mechanized.
+  The assumption joins DRF-SC in the trusted base.
+- *Scalars that are not integers.* A bool is 0 or 1. A float is a word whose
+  bits decide no ownership. An `s` global holds a literal's address: static
+  text, never freed (h273: safe code cannot store an owned string in it).
+  The calculus's `Nat` word stands for all of them, as A3.4 notes for
+  `sub`.
+
+**Simplifications in this cut.** Each is a restriction, and sound as stated.
+- *The globals are given with the start, not made by running `make`* (above).
+  That a typed `make`, run before `main`, leaves a store `GlobsOK` holds of
+  is argued, not proven.
+- *A read is a clone, not a borrow.* The two agree on every step (above).
+- *The read names its type* (`glob g t`), and the step checks it against
+  the store (`EvalR.globP` otherwise). The checker reads each global at its
+  declared type; the calculus does not tie `t` to the start's global
+  statically, which would be a program-wide premise like `codesOK`.
+  `Reach.glob_noPanic` says that a read at the start's type never panics.
+- *A global's payload is what a lock's or an `Arc`'s may hold* (A3.1–A3.4's
+  restrictions: no view or closure; a lock's, no share).
+- *`Mutex` is a `Locked`* (a lock block). `Cond` and `Semaphore` have no rule
+  in the calculus: they hold no payload a thread reaches. A global of one is
+  not modeled.
+- *Scalar globals are `Atomic`s*: integers, with A3.4's `Nat` arithmetic.
+
+**Probes** (`tools/fuzz/holes/*.nu`).
+- h263 `start_global_shared_unsynchronised`: a `( Vec i )` set at start and
+  pushed from two threads. `Ty.sync (vec _)` is false, so `RhsT.glob`
+  refuses any read of it (`glob_not_vec`), and `GlobsOK.sync` refuses the
+  start: a start-set global holds a share of a synchronising block only.
+- h272 `struct_global_torn_between_threads`: a struct global of plain values
+  (`Pair`), written and read by two threads. It is no scalar, so not an
+  `Atomic`, and `Ty.sync (prod _ _)` is false (`glob_not_prod`): safe code
+  cannot read it. At run time it is `unsafe`-only (trusted base); safe code
+  keeps it in a `Locked` set at start, or as two scalar globals.
+- h273 `string_global_freed_under_reader`: safe code assigned an `s` global a
+  fresh string, and the next assignment freed it under a reader on another
+  thread. No rule writes a global (`Step.gl`). A scalar global's write is an
+  atomic store of an integer expression (`Stmt.storeGlobal`, `RhsT.atomic`),
+  and an expression moves no owner, so safe code cannot hand a global
+  anything to own. Text that changes at run time lives in a
+  `( Locked String )` set at start, whose update is A3.2's `withLock`
+  (`Stmt.lockGlobal`), and a reader takes the lock too. An `unsafe` store
+  is trusted base.
+- h202 `global_string_from_per_call_owner_leaks`: a string global given the
+  result of a call whose ownership is decided per call. It is rejected since
+  h273, by the same rule: safe code hands a global nothing to own. The
+  owning codegen it exercised is `unsafe` code's, trusted base.
+- h254 `symtab_shared_between_threads`: a `SymTab` in an `Arc`, changed from
+  two threads with no lock. This is A3.5's rule. A `SymTab` is a library
+  handle whose table the library changes in place with no lock (`% NotSync`):
+  a cell. `RhsT.arcNew` refuses an `Arc` of one (`Ty.hasCell`), and a
+  start-set `( Arc SymTab )` is refused likewise (`Ty.sync (arc t)` asks
+  `t.hasCell = false`, `glob_not_arc_cell`).
+
+**Not proven here.**
+- *The static link* between a read's type and the start's global: that a
+  typed program reads each global at the type the start holds it at, so
+  that `EvalR.globP` never fires. In A3 a read at that type never panics
+  (`Reach.glob_noPanic`), but the calculus does not tie the read's `t` to
+  it.
+- *The `make` phase*: that running each `make` before `main` and handing its
+  result to the global leaves a store `GlobsOK` holds of. It is A2's
+  soundness for the `make`, then the result's slot emptied into `gl`.
+- *The relaxed-atomics assumption* above.
+- *`unsafe` globals* (owning, struct and option globals): trusted base.
+- *`Cond` and `Semaphore` globals.*
+- *The probes as typed programs* (a probe's encoding, as `A2/DynCell.lean`
   types `pick`).
 - `CLAIM.md` / `README.md`.
 
