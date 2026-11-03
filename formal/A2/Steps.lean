@@ -2874,7 +2874,7 @@ theorem Step.leafKeep {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
     intro k bl hk w hw hs
     exact .inl ⟨bl, (congrFun (BindParams.blk hb) k).trans hk, hs⟩
   | push ht _ _ _ | pushRealloc ht _ _ _ | editPush ht _ _ | editPushRealloc ht _ _
-    | editSet _ _ ht _ _ _ | editSetOOB _ ht _ _ _ =>
+    | editSet _ _ ht _ _ _ | editSetOOB _ ht _ _ _ | insert _ ht _ _ _ =>
     intro k bl hk w hw hs
     exact .inl ⟨bl, by rw [← TakeVal.blk ht] at hk; exact hk, hs⟩
   | _ => intro k bl hk w hw hs; exact .inl ⟨bl, hk, hs⟩
