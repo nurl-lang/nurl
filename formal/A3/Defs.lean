@@ -175,6 +175,79 @@ theorem lk_noCell {t : Ty} (h : (Ty.lk t).ok = true) : t.hasCell = false := by
   simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true] at h
   exact Ty.hasCell_of_hasArc h.2
 
+/-! ### A3.6: module globals, as A2 types them
+
+A global set at start is read at a type that synchronises itself
+(`RhsT.glob`, `Ty.sync`), into an owner of a clone of its share; A3.2–A3.4's
+rules then take that owner, a root, unchanged. -/
+
+/-- A global is read only at a type that synchronises itself. -/
+theorem _root_.A2.RhsT.glob_sync {Γ Γ1 : Ctx} {F : List Var} {g : Nat} {t : Ty} {E : Entry}
+    (h : RhsT Γ F (.glob g t) E Γ1) : t.sync = true := by
+  cases h with | glob hs _ => exact hs
+
+/-- h263 (`start_global_shared_unsynchronised`): no global is a `Vec`, which
+    two threads would push through it with no lock ... -/
+theorem glob_not_vec {Γ Γ1 : Ctx} {F : List Var} {g : Nat} {t : Ty} {E : Entry} :
+    ¬ RhsT Γ F (.glob g (.vec t)) E Γ1 := fun h => by cases h.glob_sync
+
+/-- ... h272 (`struct_global_torn_between_threads`): nor a struct of plain
+    values, more than one word, which no atomic access covers (it is
+    `unsafe`-only, trusted base; safe code keeps one in a `Locked`) ... -/
+theorem glob_not_prod {Γ Γ1 : Ctx} {F : List Var} {g : Nat} {a b : Ty} {E : Entry} :
+    ¬ RhsT Γ F (.glob g (.prod a b)) E Γ1 := fun h => by cases h.glob_sync
+
+/-- ... nor a bare integer: a scalar global is an `Atomic` (`lk int`), read and
+    written by atomic steps (`Stmt.loadGlobal`, `Stmt.storeGlobal`) ... -/
+theorem glob_not_int {Γ Γ1 : Ctx} {F : List Var} {g : Nat} {E : Entry} :
+    ¬ RhsT Γ F (.glob g .int) E Γ1 := fun h => by cases h.glob_sync
+
+/-- ... nor a library handle, which is not Sync (A3.5) ... -/
+theorem glob_not_cell {Γ Γ1 : Ctx} {F : List Var} {g : Nat} {t : Ty} {E : Entry} :
+    ¬ RhsT Γ F (.glob g (.cell t)) E Γ1 := fun h => by cases h.glob_sync
+
+/-- ... nor (h254, `symtab_shared_between_threads`) an `Arc` of one: a
+    `SymTab` shared through an `Arc` reaches two threads, which change it with
+    no lock (as `RhsT.arcNew` refuses making one, A3.5). -/
+theorem glob_not_arc_cell {Γ Γ1 : Ctx} {F : List Var} {g : Nat} {t : Ty} {E : Entry} :
+    ¬ RhsT Γ F (.glob g (.arc (.cell t))) E Γ1 := fun h => by cases h.glob_sync
+
+/-- An update of a `Locked` global (`locked_update g f`) is A3.2's `withLock`,
+    unchanged, on the owner `h` of a clone of the global's share: a root that
+    the body does not name, holding the share for the whole body. -/
+theorem _root_.A2.StmtT.lockGlobal {P : Prog} {Γ Δ : Ctx} {F : List Var} {h x : Var} {g : Nat} {t : Ty}
+    {s : Stmt} (hs : s.src = true) (hh : Γ h = none) (hhF : h ∉ F) (hx : Γ x = none) (hxF : x ∉ F)
+    (hxh : x ≠ h) (htok : (Ty.lk t).ok = true) (hhs : h ∉ s.vars)
+    (hb : StmtT P (setE (setE Γ h ⟨.lk t, .own, true, [], [], false, false⟩) x (lockE t)) F s Δ)
+    (hend : EndOK Δ x) (hlive : ∃ E, Δ x = some E ∧ E.live = true) (hendh : EndOK (exitScope x Δ) h) :
+    StmtT P Γ F (Stmt.lockGlobal h x g t s) (exitScope h (exitScope x Δ)) :=
+  StmtT.letv hs hh hhF (RhsT.glob rfl htok)
+    (StmtT.withLock hs (by simp [setE, upd_ne _ _ hxh, hx]) hxF (upd_same _ _ _) rfl (Or.inl rfl) hb hend
+      rfl hhs hlive) hendh
+
+/-- A read of a scalar global is an atomic load, A3.4's rule unchanged, on the
+    owner `h` of a clone of its share. -/
+theorem _root_.A2.StmtT.loadGlobal {P : Prog} {Γ Δ : Ctx} {F : List Var} {h x : Var} {g : Nat} {s : Stmt}
+    (hs : s.src = true) (hh : Γ h = none) (hhF : h ∉ F) (hx : Γ x = none) (hxF : x ∉ F) (hxh : x ≠ h)
+    (hb : StmtT P (setE (setE Γ h ⟨.lk .int, .own, true, [], [], false, false⟩) x intE) F s Δ)
+    (hend : EndOK Δ x) (hendh : EndOK (exitScope x Δ) h) :
+    StmtT P Γ F (Stmt.loadGlobal h x g s) (exitScope h (exitScope x Δ)) :=
+  StmtT.letv hs hh hhF (RhsT.glob rfl rfl)
+    (StmtT.letv hs (by simp [setE, upd_ne _ _ hxh, hx]) hxF
+      (RhsT.atomic (upd_same _ _ _) rfl rfl ExprT.lit ExprT.lit) hb hend) hendh
+
+/-- ... and a write an atomic store of an integer expression, which moves no
+    owner: safe code hands a scalar global nothing to own (h273, h202). -/
+theorem _root_.A2.StmtT.storeGlobal {P : Prog} {Γ Δ : Ctx} {F : List Var} {h x : Var} {g : Nat} {e : Expr}
+    {s : Stmt} (hs : s.src = true) (hh : Γ h = none) (hhF : h ∉ F) (hx : Γ x = none) (hxF : x ∉ F)
+    (hxh : x ≠ h) (he : ExprT (setE Γ h ⟨.lk .int, .own, true, [], [], false, false⟩) e)
+    (hb : StmtT P (setE (setE Γ h ⟨.lk .int, .own, true, [], [], false, false⟩) x intE) F s Δ)
+    (hend : EndOK Δ x) (hendh : EndOK (exitScope x Δ) h) :
+    StmtT P Γ F (Stmt.storeGlobal h x g e s) (exitScope h (exitScope x Δ)) :=
+  StmtT.letv hs hh hhF (RhsT.glob rfl rfl)
+    (StmtT.letv hs (by simp [setE, upd_ne _ _ hxh, hx]) hxF
+      (RhsT.atomic (upd_same _ _ _) rfl rfl he ExprT.lit) hb hend) hendh
+
 /-- Moving the arguments out of the spawner: each owns its value, and its
     slot is left empty (its drop flag clear). -/
 inductive MoveArgs : (Var → Option Slot) → List Var → List Val → (Var → Option Slot) → Prop

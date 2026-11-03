@@ -461,6 +461,26 @@ def Stmt.withCell (a x : Var) (s : Stmt) : Stmt := .withLock a x s
 def Stmt.withRead (a g y x : Var) (s : Stmt) : Stmt :=
   .letv g (.rwRead a) (.letv y (.arcGet g) (.letv x (.snd y) s))
 
+/-- A3.6: an update of a `Locked` global set at start (`locked_update g f`,
+    with `f`'s body as `s` and its argument as `x`): the global's handle,
+    cloned into `h`, and A3.2's `withLock` on it — `h` is an owner, a root,
+    which `s` does not name. -/
+def Stmt.lockGlobal (h x : Var) (g : Nat) (t : Ty) (s : Stmt) : Stmt :=
+  .letv h (.glob g (.lk t)) (.withLock h x s)
+
+/-- A3.6: a scalar module global (an integer, bool, float or `s` global, which
+    the runtime reads and writes with relaxed atomics) is an `Atomic` set at
+    start, a global of type `lk int`.  A read `: i x g` is an atomic load of
+    its word, through a clone `h` of its handle ... -/
+def Stmt.loadGlobal (h x : Var) (g : Nat) (s : Stmt) : Stmt :=
+  .letv h (.glob g (.lk .int)) (.letv x (.atomic .load h (.lit 0) (.lit 0)) s)
+
+/-- ... and a write `= g e` an atomic store (its answer, 0, in `x`).  What is
+    stored is an integer expression, which moves no owner: safe code cannot
+    hand a scalar global a value to own (h273, h202). -/
+def Stmt.storeGlobal (h x : Var) (g : Nat) (e : Expr) (s : Stmt) : Stmt :=
+  .letv h (.glob g (.lk .int)) (.letv x (.atomic .store h e (.lit 0)) s)
+
 /-- A function.  Its parameters are variables `0 … n-1`, its result slot is
     variable `n`, and every variable of its body is below `nvars`.
 
