@@ -46830,6 +46830,23 @@ unsafe @ __bck_made_from s name → s {
     ^ ! ( str_contains_word ( nurl_sym_get g_fn_sink ( nurl_sym_get syms `__fn_self_name__` ) ) ( nurl_str_int pi ) )
 }
 
+// A capture an env can own: a String, a Vec, another handle — and an option
+// or a result owning one that copies (its drop and copy go through its
+// twin, __wrap_twin). A returned closure's env owns them all: left to the
+// function, the option was released at its return under the closure the
+// caller then ran (agora #458).
+@ __env_handle_ty s ty i syms → b {
+    ? ( __is_handle_ty ty ) { ^ T } {}
+    ? == 0 ( nurl_str_starts ty `{ i1, ` ) { ^ F } {}
+    ^ & != 0 ( nurl_str_len ( __wrap_twin ty ) ) ( __clone_supported ty syms )
+}
+
+// …and its drop asked for (an option's: gen_drop_for_type, through its twin).
+@ __env_drop_ensure s ty i syms → v {
+    ? != 0 ( nurl_str_starts ty `{ i1, ` ) { ( gen_drop_for_type ty syms ) ^ v } {}
+    ( __handle_drop_ensure ty )
+}
+
 @ gen_env_vtable s fname s struct_name s captured_vars i syms → s {
     : s ll_desc `{ i64, void (i8*)*, void (i8*)*, void (i8*, i8*)*, i8*, void (i8*)*, void (i8*, i8*)* }`
     : ~ s drop_body ``
@@ -46881,16 +46898,16 @@ unsafe @ __bck_made_from s name → s {
         {}
         // A String / Vec / owning struct a returned closure captured is the
         // env's own (gen_env_allocation moved or copied it in).
-        : b __shared_cap & & ( str_contains_word g_env_shared var ) ( __is_handle_ty vty ) ! ( __is_capture_byref var syms )
+        : b __shared_cap & & ( str_contains_word g_env_shared var ) ( __env_handle_ty vty syms ) ! ( __is_capture_byref var syms )
         // (A returned closure's env owns every one; any other only those
         // the spawn takes over, g_env_moved — not every handle because the
         // body releases one of them, agora #247.)
-        : b __owned_cap | __shared_cap & & & & | == g_env_owns_handles 1 ( str_contains_word g_env_moved var ) ( __is_handle_ty vty ) ! ( __is_capture_byref var syms ) ! ( __capture_lends var syms )
+        : b __owned_cap | __shared_cap & & & & | == g_env_owns_handles 1 ( str_contains_word g_env_moved var ) ( __env_handle_ty vty syms ) ! ( __is_capture_byref var syms ) ! ( __capture_lends var syms )
         ! ( str_contains_word g_env_released var )
-        ? & & & & ! __owned_cap ( __is_handle_ty vty ) ! ( __is_capture_byref var syms ) ! ( str_contains_word g_env_released var ) ( __clone_supported vty syms )
+        ? & & & & ! __owned_cap ( __env_handle_ty vty syms ) ! ( __is_capture_byref var syms ) ! ( str_contains_word g_env_released var ) ( __clone_supported vty syms )
         { : s ht ( nurl_llty vty )
             : s hm ( __drop_mangle vty )
-            ( __handle_drop_ensure vty )
+            ( __env_drop_ensure vty syms )
             ( __clone_request vty )
             : s k ( nurl_str_int field_idx )
             : s gep ( nurl_str_cat4 `  %p` k ` = getelementptr ` ( nurl_str_cat4 struct_name `, ` struct_name `* %t, i32 0, i32 ` ) )
@@ -46910,7 +46927,7 @@ unsafe @ __bck_made_from s name → s {
         ? __owned_cap
         { : s ht ( nurl_llty vty )
             : s hm ( __drop_mangle vty )
-            ( __handle_drop_ensure vty )
+            ( __env_drop_ensure vty syms )
             ( __clone_request vty )
             : s k ( nurl_str_int field_idx )
             : s gep ( nurl_str_cat4 `  %p` k ` = getelementptr ` ( nurl_str_cat4 struct_name `, ` struct_name `* %t, i32 0, i32 ` ) )
@@ -47118,7 +47135,7 @@ unsafe @ __bck_made_from s name → s {
         // only borrowed is copied in instead.
         // A capture the thread takes a share of (still named by the
         // spawner): the env's copy is another owner — the spawner keeps its own.
-        ? & & ( str_contains_word g_env_shared var ) ! cap_byref ( __is_handle_ty var_type ) {
+        ? & & ( str_contains_word g_env_shared var ) ! cap_byref ( __env_handle_ty var_type syms ) {
             = loaded ( mem_emit_cloneif cg var_type loaded `1` )
         } {}
         // A value that cannot be copied (a `% Drop` with no clone), which
@@ -47136,6 +47153,8 @@ unsafe @ __bck_made_from s name → s {
         // the spawn stays a view: the spawn's adopt copies or shares it.
         // Moved because the body released another, it was dropped by the
         // thread under the spawner (agora #247).
+        // (An option or a result a returned closure captures is copied in
+        // instead, below: agora #458.)
         ? & & & & | | == g_env_owns_handles 1 ( str_contains_word g_env_moved var ) ( str_contains_word g_env_released var ) ! ( str_contains_word g_env_shared var ) ! cap_byref ( __is_handle_ty var_type ) ! ( __capture_lends var syms ) {
             : s up ( mem_udrop_ptr_of syms var )
             ? != 0 ( nurl_str_len up ) {
@@ -47158,6 +47177,17 @@ unsafe @ __bck_made_from s name → s {
                 ( mem_udrop_flag_set syms cg up `0` )
                 ( mem_udrop_alias_move syms cg up `0` )
             } { = loaded ( mem_emit_cloneif cg var_type loaded `1` ) }
+        } {}
+        // An option or a result owning a String, a Vec or another handle,
+        // captured by a returned closure: the env owns a copy, which its
+        // drop releases (gen_env_vtable), and the binding keeps its own.
+        // Left to the function alone, the binding's value was released at
+        // the return under the closure the caller then ran (agora #458).
+        // Moved in instead, a literal that also stores the binding (`^ @ H
+        // { \ … x … x }`) and a second name of a parameter (`: ?String x o`)
+        // left two owners of one value.
+        ? & & & & & & == g_env_owns_handles 1 ! ( str_contains_word g_env_shared var ) ! cap_byref ! ( __is_handle_ty var_type ) ( __env_handle_ty var_type syms ) ! ( __capture_lends var syms ) ! ( str_contains_word g_env_released var ) {
+            = loaded ( mem_emit_cloneif cg var_type loaded `1` )
         } {}
         // GEP to field and store with the effective type.
         : s store_ptr ( nurl_cg_reg cg )
@@ -59033,10 +59063,18 @@ unsafe @ __hmemo_close s key i mark b r → v {
 // named enum iff a variant payload does. Vec/String short-circuit so the
 // struct↔enum recursion is finite (value-nesting is acyclic).
 // A type as it is parked in a blank-separated work list (`__park_append`):
-// a closure by its slug, since its own spelling has blanks in it, and
-// __unpark_ty reads it back.
+// a closure by its slug and an option or a result by its drop name
+// (`w__opt.String`, registered as `wraplit##`), since their own spellings
+// have blanks in them, and __unpark_ty reads them back. (An option parked
+// as it is split into four words: a copy of one an env owns was never
+// emitted, agora #458.)
 @ __park_ty s ty → s {
     ? ( __is_closure_llty ty ) { ^ ( mangle_type ty ) } {}
+    ? & != 0 ( nurl_str_starts ty `{ i1, ` ) != 0 ( nurl_str_len ( __wrap_twin ty ) ) {
+        : s m ( __drop_mangle ty )
+        ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `wraplit##` m ) ty )
+        ^ m
+    } {}
     ^ ( nurl_str_cat ty `` )
 }
 
@@ -59044,6 +59082,10 @@ unsafe @ __hmemo_close s key i mark b r → v {
     ? ( __is_fn_slug w ) {
         : s c ( __clo_unslug w )
         ? != 0 ( nurl_str_len c ) { ^ c } {}
+    } {}
+    ? != 0 ( nurl_str_starts w `w__opt.` ) {
+        : s t ( nurl_sym_get2 g_impl_name_syms `wraplit##` w )
+        ? != 0 ( nurl_str_len t ) { ^ t } {}
     } {}
     ^ ( nurl_str_cat w `` )
 }
