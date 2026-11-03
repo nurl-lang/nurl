@@ -265,13 +265,10 @@ The A2 rule that refuses each shape is named.
 
 Inside A2 (nurlc bugs):
 - A change in place that ends a borrow, missed: #333, #349, #350, #360,
-  #396, #424, #428, #434 and #447 (`Eff.kills`, `StmtT.editB`,
+  #396, #424, #428, #434, #447 and #460 (`Eff.kills`, `StmtT.editB`,
   `callPostAux`'s `kill`). A keyword argument is the same call, and a
   callee's summary carries a drop through an element of its parameter
-  however the element was reached. Also a closure that changes elements,
-  called where nurlc reads it by its interface only: #449.
-  Its code is no `ThruFn` of an interface whose plain
-  parameters are unchanged (`Implements`).
+  however the element was reached.
 - A view a value comes to hold, not recorded where it goes: #338, #341,
   #346, #348, #362, #367, #368, #369, #370, #377, #380, #381, #383, #390,
   #393, #422, #442 and #448. A2 records it in `Ty.holdsView`,
