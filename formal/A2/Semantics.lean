@@ -629,6 +629,37 @@ def Res.mem : Res → Mem
   | .ok m _ => m
   | .panic m => m
 
+/-- A3.4: a right-hand side that waits: an atomic operation on an integer
+    lock block whose payload a `withLock` has checked out; a channel
+    operation on one too, or a `chan_recv` on an empty, open queue.  A3.3:
+    or one that would change a lock block a view of which lives, or a
+    `rw_read` of a block a writer has checked out. -/
+def RBlocked (m : Mem) : Rhs → Prop
+  | .atomic _ a _ _ => ∃ o k, m.st a = some ⟨o, some (.lk k)⟩ ∧
+      (m.blk k = some ⟨.int, .lock, none⟩ ∨ HasView m.blk k)
+  | .chanSend a _ => ∃ o k t, m.st a = some ⟨o, some (.lk k)⟩ ∧
+      (m.blk k = some ⟨t, .lock, none⟩ ∨ HasView m.blk k)
+  | .chanRecv w a => ∃ o k t, m.st a = some ⟨o, some (.lk k)⟩ ∧
+      (m.blk k = some ⟨t, .lock, none⟩ ∨
+        (w = true ∧ ∃ u c d, m.blk k = some ⟨t, .lock, some (.pair (.node u c d []) (.int 0))⟩) ∨
+        HasView m.blk k)
+  | .chanClose a => ∃ o k t, m.st a = some ⟨o, some (.lk k)⟩ ∧
+      (m.blk k = some ⟨t, .lock, none⟩ ∨ HasView m.blk k)
+  | .rwRead a => ∃ o k t, m.st a = some ⟨o, some (.lk k)⟩ ∧ m.blk k = some ⟨t, .lock, none⟩
+  | _ => False
+
+/-- A3.3: a statement whose next step waits, itself (`Blocked` looks
+    through the scopes around one): a `withLock` of a lock a writer has
+    checked out or a reader views, or a binding or an assignment whose
+    right-hand side waits. -/
+def Waits (m : Mem) : Stmt → Prop
+  | .withLock a _ _ => ∃ o k t, m.st a = some ⟨o, some (.lk k)⟩ ∧
+      (m.blk k = some ⟨t, .lock, none⟩ ∨ HasView m.blk k)
+  | .letv _ r _ => RBlocked m r
+  | .assign _ r => RBlocked m r
+  | .letd _ _ r _ => RBlocked m r
+  | _ => False
+
 inductive Step (P : Prog) : Mem → Stmt → Res → Prop
   | seqSkip {m : Mem} {b : Stmt} : Step P m (.seq .skip b) (.ok m b)
   | seqL {m m' : Mem} {a a' b : Stmt} :
@@ -721,6 +752,12 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
       m.st x = some ⟨true, some t⟩ → Frees m.alloc t a' →
       Step P m (.free x) (.ok ({ m with alloc := a' }.set x ⟨true, none⟩) .skip)
   | panic {m : Mem} : Step P m .panic (.panic m)
+  /-- A3.3: a thread that waits may panic instead, the store as it was: the
+      runtime's panic on a lock its holder would wait for itself (writing
+      an `RwLocked` it reads or writes, reading one it writes), and a
+      relock's detection in general (Agora #455).  An over-approximation:
+      a run may panic where it would wait. -/
+  | waitPanic {m : Mem} {s : Stmt} : Waits m s → Step P m s (.panic m)
   | letrec {m : Mem} {x : Var} {f : Nat} {s : Stmt} {fn : Fn} :
       P[f]? = some fn → fn.params = [] → m.st x = none →
       Step P m (.letrec x f s)
@@ -815,23 +852,6 @@ inductive Steps0 (P : Prog) : Mem → Stmt → Res → Prop
   | step {m m' : Mem} {s s' : Stmt} {r : Res} :
       Step P m s (.ok m' s') → Steps0 P m' s' r → Steps0 P m s r
   | panic {m m' : Mem} {s : Stmt} : Step P m s (.panic m') → Steps0 P m s (.panic m')
-
-/-- A3.4: a right-hand side that waits: an atomic operation on an integer
-    lock block whose payload a `withLock` has checked out; a channel
-    operation on one too, or a `chan_recv` on an empty, open queue. -/
-def RBlocked (m : Mem) : Rhs → Prop
-  | .atomic _ a _ _ => ∃ o k, m.st a = some ⟨o, some (.lk k)⟩ ∧
-      (m.blk k = some ⟨.int, .lock, none⟩ ∨ HasView m.blk k)
-  | .chanSend a _ => ∃ o k t, m.st a = some ⟨o, some (.lk k)⟩ ∧
-      (m.blk k = some ⟨t, .lock, none⟩ ∨ HasView m.blk k)
-  | .chanRecv w a => ∃ o k t, m.st a = some ⟨o, some (.lk k)⟩ ∧
-      (m.blk k = some ⟨t, .lock, none⟩ ∨
-        (w = true ∧ ∃ u c d, m.blk k = some ⟨t, .lock, some (.pair (.node u c d []) (.int 0))⟩) ∨
-        HasView m.blk k)
-  | .chanClose a => ∃ o k t, m.st a = some ⟨o, some (.lk k)⟩ ∧
-      (m.blk k = some ⟨t, .lock, none⟩ ∨ HasView m.blk k)
-  | .rwRead a => ∃ o k t, m.st a = some ⟨o, some (.lk k)⟩ ∧ m.blk k = some ⟨t, .lock, none⟩
-  | _ => False
 
 /-- A3.2: the next step takes a lock whose payload is checked out: the
     thread waits for it to come back.  (Whether it ever does is deadlock

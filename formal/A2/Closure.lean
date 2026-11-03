@@ -2351,6 +2351,7 @@ theorem cloProgress {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x 
   | letcall hf' hmx hb =>
     rw [hf] at hf'; cases hf'
     exact ⟨_, Step.callc hslot hfs hf (by simpa [envMem, Mem.set, upd_ne _ _ hxe] using hmx) hb⟩
+  | waitPanic hw => simp [Waits] at hw
 
 theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
   intro Γ Γ1 F x c j zs k Ec E ms σ sig Δ m m' s' hk hx hxF hc htc hj hσ hhd hnz hcT hnzs hkT hpx hcd hi hst

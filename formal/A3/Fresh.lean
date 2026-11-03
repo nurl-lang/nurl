@@ -136,6 +136,7 @@ theorem Step.grows {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
   | editSet _ _ ht _ hf _ => exact (TakeVal.grows ht).trans (Grows.shrink (Frees.le hf) rfl)
   | editSetOOB _ ht _ _ hf => exact (TakeVal.grows ht).trans (Grows.shrink (Frees.le hf) rfl)
   | panic => exact Grows.refl _
+  | waitPanic _ => exact Grows.refl _
   | letrec _ _ _ => exact Grows.of_eq rfl rfl
   | catchIn _ ih => exact ih
   | catchSkip => exact Grows.refl _

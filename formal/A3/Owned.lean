@@ -293,6 +293,7 @@ theorem Step.ownedId {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r
     · exact .inl (b1 i hi)
   | editSetOOB _ ht _ _ _ => exact fun i hi => .inl ((TakeVal.ownedId ht hb).2 i hi)
   | panic => exact fun i hi => .inl hi
+  | waitPanic _ => exact fun i hi => .inl hi
   | letrec _ _ _ =>
     exact fun i hi => .inl (OwnedId.set_none (OwnedId.set_none (OwnedId.of_nv hi)))
   | catchIn _ ih => exact ih
@@ -345,6 +346,7 @@ theorem Step.ownedId_panic {P : Prog} {m m1 : Mem} {s : Stmt} (h : Step P m s (.
   | frozenP _ ih => exact ih hr
   | assignP _ => cases hr; exact fun i hi => hi
   | panic => cases hr; exact fun i hi => hi
+  | waitPanic _ => cases hr; exact fun i hi => hi
   | letdP _ => cases hr; exact fun i hi => hi
   | scopeDPMoved _ _ ih => cases hr; exact fun i hi => ih rfl i (OwnedId.of_remove hi)
   | scopeLP _ hrl ih => cases hr; exact fun i hi => ih rfl i (Release.ownedId hrl hi)

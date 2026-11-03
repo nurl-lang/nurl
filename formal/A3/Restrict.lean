@@ -343,6 +343,7 @@ theorem Step.restrict {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
     exact ⟨_, .editSetOOB (Eval.restrict he hav hp) (TakeVal.restrict ht a2) (NodeOf.restrict hn hav'.1) hle
       (Frees.restrict hfr hav'.2), rfl, .refl _⟩
   | panic => exact ⟨_, .panic, rfl⟩
+  | waitPanic hw => exact ⟨_, .waitPanic (Waits.of_eq rfl rfl hw), rfl⟩
   | letrec hP hps hx =>
     exact ⟨_, .letrec hP hps hx, rfl,
       .scope _ (.seq _ (.catchR _ rfl rfl rfl rfl (fun _ hi => of_minus_true hi) (.refl _)))⟩

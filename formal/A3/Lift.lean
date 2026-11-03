@@ -278,6 +278,7 @@ theorem Step.lifts {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
       (TakeVal.lift ht a2) (NodeOf.lift hn a2) hle
       (Frees.lift hfr fun i h => hd i (by rw [← TakeVal.alloc ht]; exact h))⟩
   | panic => exact Step.panic
+  | waitPanic hw => exact Step.waitPanic (Waits.of_eq rfl rfl hw)
   | letrec hfn hp hx =>
     refine ⟨_, GhostRel.scope _ (GhostRel.seq _ (GhostRel.catchR _ ?_ ?_ ?_ ?_ ?_ (GhostRel.refl _))),
       Step.letrec (m := liftMem a2 m) hfn hp hx⟩

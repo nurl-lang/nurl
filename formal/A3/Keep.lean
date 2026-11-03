@@ -127,6 +127,7 @@ theorem Step.keep {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) (
     exact (Frees.other hfr (fun hm => by
       have := hav2 i hm; rw [hi] at this; cases this)).trans (congrFun (TakeVal.alloc ht) i)
   | panic => intro _ _; rfl
+  | waitPanic _ => intro _ _; rfl
   | letrec _ _ _ => intro _ _; rfl
   | catchIn _ ih => exact ih
   | catchSkip => intro _ _; rfl

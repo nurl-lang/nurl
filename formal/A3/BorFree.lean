@@ -165,6 +165,7 @@ theorem Step.borFree {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r
   | editSet _ _ ht _ _ _ => exact (((TakeVal.borFree ht hb).1).of_st rfl).set _ (SlotFree.own _)
   | editSetOOB _ ht _ _ _ => exact ((TakeVal.borFree ht hb).1).of_st rfl
   | panic => exact hb
+  | waitPanic _ => exact hb
   | letrec _ _ _ => exact ((hb.set _ (SlotFree.none _)).set _ (SlotFree.none _)).of_st rfl
   | catchIn _ ih => exact ih
   | catchSkip => exact hb

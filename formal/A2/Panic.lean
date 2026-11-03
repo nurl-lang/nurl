@@ -237,6 +237,43 @@ theorem MInv.blocks_back {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (hb : BlkBack 
   · obtain ⟨h1, h2, _, h4⟩ := hi.blocks k _ hk0
     exact ⟨h1, h2, fun p hp => by cases hp; exact ⟨hw, SharesOK.of_noArc (h4 rfl)⟩, h4⟩
 
+/-- A3.4: an atomic operation waiting reads only the slots and the blocks. -/
+theorem RBlocked.of_eq {m m' : Mem} (hst : m'.st = m.st) (hb : m'.blk = m.blk) {r : Rhs} (h : RBlocked m r) :
+    RBlocked m' r := by
+  cases r with
+  | atomic _ a _ _ =>
+    obtain ⟨o, k, h1, h2⟩ := h
+    exact ⟨o, k, hst ▸ h1, hb ▸ h2⟩
+  | chanSend a _ =>
+    obtain ⟨o, k, t, h1, h2⟩ := h
+    exact ⟨o, k, t, hst ▸ h1, hb ▸ h2⟩
+  | chanRecv _ a =>
+    obtain ⟨o, k, t, h1, h2⟩ := h
+    exact ⟨o, k, t, hst ▸ h1, hb ▸ h2⟩
+  | chanClose a =>
+    obtain ⟨o, k, t, h1, h2⟩ := h
+    exact ⟨o, k, t, hst ▸ h1, hb ▸ h2⟩
+  | rwRead a =>
+    obtain ⟨o, k, t, h1, h2⟩ := h
+    exact ⟨o, k, t, hst ▸ h1, hb ▸ h2⟩
+  | _ => exact h
+
+/-- A3.3: so does a statement that waits. -/
+theorem Waits.of_eq {m m' : Mem} (hst : m'.st = m.st) (hb : m'.blk = m.blk) {s : Stmt} (h : Waits m s) :
+    Waits m' s := by
+  cases s with
+  | letv _ r _ => exact RBlocked.of_eq hst hb (r := r) h
+  | assign _ r => exact RBlocked.of_eq hst hb (r := r) h
+  | letd _ _ r _ => exact RBlocked.of_eq hst hb (r := r) h
+  | withLock a _ _ =>
+    obtain ⟨o, k, t, h1, h2⟩ := h
+    exact ⟨o, k, t, hst ▸ h1, hb ▸ h2⟩
+  | _ => exact h
+
+/-- A3.3: a statement that waits opens no scope. -/
+theorem Waits.spine {m : Mem} {s : Stmt} (h : Waits m s) : s.spine = [] := by
+  cases s <;> simp_all [Waits, Stmt.spine]
+
 /-- What a panic leaves (A3.3: a lock scope it unwinds gives its payload
     back, so a lock block's payload may have come back, `BlkBack`). -/
 theorem panic_unwind {P : Prog} {m m1 : Mem} {s : Stmt} (hst : Step P m s (.panic m1))
@@ -251,6 +288,9 @@ theorem panic_unwind {P : Prog} {m m1 : Mem} {s : Stmt} (hst : Step P m s (.pani
     cases hr; exact ⟨fun _ _ => rfl, fun v hv => by simp [Stmt.spine] at hv, hh, hc, rfl, rfl, BlkBack.refl _⟩
   | panic =>
     cases hr; exact ⟨fun _ _ => rfl, fun v hv => by simp [Stmt.spine] at hv, hh, hc, rfl, rfl, BlkBack.refl _⟩
+  | waitPanic hw =>
+    cases hr; exact ⟨fun _ _ => rfl, fun v hv => (by rw [hw.spine] at hv; cases hv), hh, hc, rfl, rfl,
+      BlkBack.refl _⟩
   | seqP _ ih => cases hr; exact ih hnd rfl
   | scopeP _ hsl hd ih =>
     rename_i x _ _ _ _

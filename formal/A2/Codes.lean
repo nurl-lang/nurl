@@ -481,6 +481,9 @@ theorem codes_step {P : Prog} (hPc : ProgCodes P) {m : Mem} {s : Stmt} {r : Res}
   | panic =>
     intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact hm
+  | waitPanic _ =>
+    intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    exact hm
   | letrec hf _ _ =>
     intro hm _ hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact ⟨((hm.set (fun _ e => by cases e)).set (fun _ e => by cases e)).of_st rfl,
