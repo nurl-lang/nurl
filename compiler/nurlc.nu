@@ -27106,10 +27106,12 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
 // into (__ptr_root_owner) — the matched binding, or what the matched call
 // lends from.
 @ mem_note_plend i syms s pv i tt s mvar i ser → v {
-    ? ( is_ident_tok tt ) { ( nurl_sym_def syms ( nurl_str_cat pv `__plend` ) mvar ) ^ v } {}
+    // (In a closure body, a payload of a capture, or of what a call lends
+    // out of one, is that capture as a local read out of it is; agora #449.)
+    ? ( is_ident_tok tt ) { ( nurl_sym_def syms ( nurl_str_cat pv `__plend` ) mvar ) ( __clo_deriv_add pv mvar ) ^ v } {}
     ? != tt TT_LPAREN { ^ v } {}
     : s k ( nurl_str_cat `__mpl` ( nurl_str_int ser ) )
-    ? != 0 ( nurl_sym_len syms k ) { ( nurl_sym_def syms ( nurl_str_cat pv `__plend` ) ( nurl_sym_get syms k ) ) } {}
+    ? != 0 ( nurl_sym_len syms k ) { ( nurl_sym_def syms ( nurl_str_cat pv `__plend` ) ( nurl_sym_get syms k ) ) ( __clo_deriv_add pv ( nurl_sym_get syms k ) ) } {}
 }
 
 // A `??` payload `pv` is part of binding `root`'s value — the binding
@@ -27935,14 +27937,40 @@ unsafe @ __clo_effect_note_lent s name s callee i aix → v {
 // In a closure body, handle local `name` (type `vt`) given a value read out
 // of a capture — what a lending call lends (`lend`), a field, a copy of a
 // capture or of a local already read out of one: it reaches those captures.
-unsafe @ __clo_deriv_note i syms s name s vt i rhs_tt s rhs_val s lend → v {
+// `sx` is the value's source expression (what it may view): for a join, a
+// match, or a call whose lend is not known here (a generic identity), the
+// bindings it names are where it was read from (agora #449).
+unsafe @ __clo_deriv_note i syms s name s vt i rhs_tt s rhs_val s lend s sx → v {
     ? | == 0 g_bck_closure_depth == 0 ( nurl_str_len g_clo_caps_now ) { ^ v } {}
     ? ! ( bck_is_heap_lty ( nurl_llty vt ) ) { ^ v } {}
-    : s srcs ? == rhs_tt TT_LPAREN lend ? == rhs_tt TT_DOT ( nurl_sym_get syms `__last_member_root__` ) ? ( is_ident_tok rhs_tt ) rhs_val ``
-    ? | == 0 ( nurl_str_len srcs ) ( seq srcs `-` ) { ^ v } {}
+    : ~ s srcs ? == rhs_tt TT_LPAREN lend ? == rhs_tt TT_DOT ( nurl_sym_get syms `__last_member_root__` ) ? ( is_ident_tok rhs_tt ) rhs_val ``
     // (A value taken out of a shared cell — `locked_take` — is the body's
     // own until it is put back, as __pderiv_note has it.)
     ? == rhs_tt TT_LPAREN { ? ( __shared_cell_get ( bck_generic_base ( nurl_sym_get syms `__last_call_name__` ) ) ) { ^ v } {} } {}
+    ? & | == 0 ( nurl_str_len srcs ) ( seq srcs `-` ) | | == rhs_tt TT_LPAREN == rhs_tt TT_QUEST == rhs_tt TT_QUESTQUEST { = srcs ( __sx_bind_names sx ) } {}
+    ( __clo_deriv_add name srcs )
+}
+
+// The bindings (and field paths) a source expression names: its words
+// between `(`, `)`, `|`, `{`, `}`, `;` and `\` — the callees' names among
+// them name no capture.
+@ __sx_bind_names s sx → s {
+    ? | == 0 ( nurl_str_len sx ) | ( seq sx `-` ) ( seq sx `*` ) { ^ ( nurl_str_cat `` `` ) } {}
+    : ~ s t ( bck_swap_char sx 40 32 )
+    = t ( bck_swap_char t 41 32 )
+    = t ( bck_swap_char t 124 32 )
+    = t ( bck_swap_char t 123 32 )
+    = t ( bck_swap_char t 125 32 )
+    = t ( bck_swap_char t 59 32 )
+    = t ( bck_swap_char t 92 32 )
+    ^ t
+}
+
+// Closure-body local `name` was read out of `srcs` (bindings or paths, a
+// word each): the captures they reach, directly or through a local already
+// read out of one (g_clo_deriv).
+unsafe @ __clo_deriv_add s name s srcs → v {
+    ? | | == 0 g_bck_closure_depth == 0 ( nurl_str_len g_clo_caps_now ) | == 0 ( nurl_str_len srcs ) ( seq srcs `-` ) { ^ v } {}
     : ~ s out ``
     : ~ s rest ( nurl_str_cat srcs `` )
     ~ != 0 ( nurl_str_len rest ) {
@@ -39009,7 +39037,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         ( nurl_sym_def syms ( nurl_str_cat name `__ptr` ) ptr )
         // …and back, for the borrow checker (bck_note_payload_taken).
         ( nurl_sym_def syms ( nurl_str_cat ptr `__bname` ) name )
-        ? > ( nurl_str_len vt ) 1 { ( __pderiv_note syms name vt bck_rhs_tt bck_rhs_val g_bck_rhs_lend ) ( __clo_deriv_note syms name vt bck_rhs_tt bck_rhs_val g_bck_rhs_lend ) } {}
+        ? > ( nurl_str_len vt ) 1 { ( __pderiv_note syms name vt bck_rhs_tt bck_rhs_val g_bck_rhs_lend ) ( __clo_deriv_note syms name vt bck_rhs_tt bck_rhs_val g_bck_rhs_lend g_bck_let_sx_last ) } {}
         ? != 0 ( nurl_sym_len2 syms name `__eaddr` ) { ( nurl_sym_def syms ( nurl_str_cat ptr `__eaddr` ) ( nurl_sym_get2 syms name `__eaddr` ) ) } {}
         // Only mark mutability if explicitly specified with ~
         ? is_mutable
@@ -39390,7 +39418,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             ( rec_decl_loc syms name bck_line lex )
             ( nurl_sym_def syms ( nurl_str_cat name `__ptr` ) ptr )
             ( nurl_sym_def syms ( nurl_str_cat ptr `__bname` ) name )
-            ? > ( nurl_str_len ptype ) 1 { ( __pderiv_note syms name ptype bck_rhs_tt bck_rhs_val g_bck_rhs_lend ) ( __clo_deriv_note syms name ptype bck_rhs_tt bck_rhs_val g_bck_rhs_lend ) } {}
+            ? > ( nurl_str_len ptype ) 1 { ( __pderiv_note syms name ptype bck_rhs_tt bck_rhs_val g_bck_rhs_lend ) ( __clo_deriv_note syms name ptype bck_rhs_tt bck_rhs_val g_bck_rhs_lend g_bck_let_sx_last ) } {}
             ? != 0 ( nurl_sym_len2 syms name `__eaddr` ) { ( nurl_sym_def syms ( nurl_str_cat ptr `__eaddr` ) ( nurl_sym_get2 syms name `__eaddr` ) ) } {}
             // Only mark mutability if explicitly specified with ~
             ? is_mutable
@@ -39760,7 +39788,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // first and the sources move second (a self-referential
         // `= a ? f a …` is skipped inside, not ordered around).
         = g_bck_rhs_lend ? == bck_rhs_tt TT_LPAREN ( bck_call_lend_srcs syms ) `-`
-        ? > ( nurl_str_len vt ) 1 { ( __pderiv_note syms name vt bck_rhs_tt bck_rhs_val g_bck_rhs_lend ) ( __clo_deriv_note syms name vt bck_rhs_tt bck_rhs_val g_bck_rhs_lend ) } {}
+        ? > ( nurl_str_len vt ) 1 { ( __pderiv_note syms name vt bck_rhs_tt bck_rhs_val g_bck_rhs_lend ) ( __clo_deriv_note syms name vt bck_rhs_tt bck_rhs_val g_bck_rhs_lend __rhs_sx ) } {}
         = g_bck_rhs_whole ? & == bck_rhs_tt TT_LPAREN ( __one_word g_bck_rhs_lend ) ( mem_fn_lends_params syms ( nurl_sym_get syms `__last_call_name__` ) T 0 ) F
         = g_bck_rhs_ident ( is_ident_tok bck_rhs_tt )
         : s __rp_reads ? != 0 g_rpg_on ( nurl_str_cat ( nurl_sym_get g_bck `reads` ) `` ) ``
