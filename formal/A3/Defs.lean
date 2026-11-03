@@ -790,6 +790,28 @@ theorem _root_.A2.StmtT.arcCallUp {P : Prog} {Γ Δ : Ctx} {F : List Var} {a g g
     hj hσ hps hout hnt ?_ hk hend
   exact getE_own_noName
 
+/-! A3.5b: a closure that changes a capture it moved in (an accumulator).  The
+moved-in capture is the environment's own state.  A2's call hands the code that
+environment lent, a copy in a fresh slot (`envMem`), and its code changes
+nothing through a borrow (`Implements.env_lent`), so the state cannot be
+changed in place: an environment's plain value is read only.  What the model
+types instead is the state in a share the environment holds, which synchronises
+itself: an `Atomic` (or a `Locked`) moved in. -/
+
+/-- The accumulator's environment, an `Atomic` (a lock share of an integer
+    block), fits `sync`: a lock share is Sync, so an `Arc` keeps the closure
+    and several threads call it ... -/
+theorem accum_sync : Cross.sync.Fits (.lk .int) [] :=
+  ⟨fun _ => ⟨rfl, rfl⟩, fun _ => rfl, fun h => absurd h (by decide)⟩
+
+/-- ... and its code counts by one atomic step on the environment it is lent
+    (any live `lk int`, a borrowed parameter's too): the change synchronises
+    itself, where a change of a plain moved-in integer would race (h342's
+    shape). -/
+theorem accum_count {Γ : Ctx} {F : List Var} {e : Var} {E : Entry} (he : Γ e = some E)
+    (hl : E.live = true) (hty : E.ty = .lk .int) : RhsT Γ F (.atomic .add e (.lit 1) (.lit 0)) intE Γ :=
+  RhsT.atomic he hl hty .lit .lit
+
 /-! ### A3.5c: trait objects across threads, as A2 types them
 
 A trait object is a package as a closure is (`Ty.fn ms q`, A2): `dyn Trait v`
