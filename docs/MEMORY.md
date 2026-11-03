@@ -827,9 +827,11 @@ outlives them.
 A copy of a part of a value — an element of a `( Vec ( Vec s ) )`, a
 field, a slice — holds what that part holds, not the storage the part
 is in: `( vec_clone [s] ( vec_at [( Vec s )] vv 0 ) )` outlives `vv` as
-long as the strings it views live. A view copied whole is the same
-view: `( mem_dup @ Tok { Word ( string_data line ) } )` points into
-`line`. A function that copies a view of its parameter's views into a
+long as the strings it views live — unless the value views its own
+storage (an element viewing a sibling's String, a field viewing another
+field): then a copy of a part of it holds views of it, and outlives it
+no longer. A view copied whole is the same view:
+`( mem_dup @ Tok { Word ( string_data line ) } )` points into `line`. A function that copies a view of its parameter's views into a
 string global, or hands one to another thread, is refused as it is for
 a view parameter itself (§1, §6.5): those views point into storage its
 caller owns. A function the checker does not walk

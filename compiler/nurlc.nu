@@ -32829,6 +32829,8 @@ unsafe @ bck_sx_skip s e → v {
         : s rs ( nurl_str_int ( bck_path_root ( nurl_str_to_int w ) ) )
         ? != 0 ( nurl_sym_len g_bck ( bck_bkey `cv_` rs ) ) { = out ( __word_union out w ) } {}
         = out ( __word_union out ( __src_mark2 ( nurl_sym_get g_bck ( bck_bkey `vds_` rs ) ) ( nurl_sym_get g_bck ( bck_bkey `vdi_` rs ) ) ( nurl_sym_get g_bck ( bck_bkey `vdh_` rs ) ) ) )
+        // (…and one whose elements view its own storage, `vsv_`: itself.)
+        ? != 0 g_bck_has_deps { = out ( __word_union out ( __bck_self_view_src rs ) ) } {}
     }
     ^ out
 }
@@ -32900,6 +32902,9 @@ unsafe @ bck_sx_skip s e → v {
     // where this one does, `( mem_dup @ Tok { Word p } )`.)
     : ~ s vsrc ``
     ? & g_sxe_hctn | != 0 ( nurl_sym_len g_bck ( bck_bkey `vw_` rs ) ) != 0 ( nurl_sym_len g_bck ( bck_bkey `pv_` rs ) ) { = vsrc ( bck_sx_name st id F ) } {}
+    // (…and one that views its own storage holds views of itself: a copy
+    // of a part of it outlives it no longer, `vsv_`.)
+    ? != 0 g_bck_has_deps { = vsrc ( __word_union vsrc ( __bck_self_view_src rs ) ) } {}
     ? | | == vr BCK_BORROWED_SHARED == vr BCK_MAYBE_OWNED == vr BCK_BORROWED_MUT {
         ^ ( __word_union vsrc ( __word_union deps ( __src_elem_deps ( nurl_sym_get g_bck ( bck_bkey `bs_` rs ) ) ) ) )
     } {}
@@ -34342,10 +34347,20 @@ unsafe @ __bck_try_exit_check s st i line → v {
                             }
                             // (Where this function keeps it: its answer, g_fn_vholds.)
                             ? != 0 ( nurl_str_len g_bck_fn ) { ( __vholds_note vholders ( bck_field rec 8 ) vs ) } {}
+                            // (A value handed over whole that viewed its own storage
+                            // — a struct a field of which views another — lands
+                            // in the holder, its storage the holder's: so do those
+                            // views, the holder viewing itself, `vsv_`.)
+                            : s vsx8 ( bck_field rec 8 )
+                            : s vsin ? & != 0 g_bck_has_deps ( bck_sx_is_id vsx8 ) ( nurl_sym_get g_bck ( bck_bkey `vsv_` ( nurl_str_int ( bck_path_root ( nurl_str_to_int vsx8 ) ) ) ) ) ``
                             ~ != 0 ( nurl_str_len vholders ) {
                                 : s vhs ( str_first_word vholders ) = vholders ( str_skip_word vholders )
                                 : i vroot ( nurl_str_to_int vhs )
                                 ( bck_dep_add vroot vs )
+                                ? != 0 ( nurl_str_len vsin ) {
+                                    : s vsk ( bck_bkey `vsv_` ( nurl_str_int ( bck_path_root vroot ) ) )
+                                    ? | ( seq vsin `1` ) == 0 ( nurl_sym_len g_bck vsk ) { ( bck_put vsk vsin ) } {}
+                                } {}
                                 ? != 0 g_bck_udrop_any { ( bck_younger_view_check vroot vs p ( bck_field_int rec 3 ) ) } {}
                                 // (Where it was stored: what a diagnostic about
                                 // the dependency points at, bck_caller_view_diag.)
@@ -35687,6 +35702,31 @@ unsafe @ bck_sx_is_id s e → b {
 // sources binding d depends on, `vdd_<c>` the dependents of source c.
 // When a source ends (bck_borrow_end), its dependents become INVALID.
 
+// …whether binding `wid` is given a view of its own storage among `srcs0`
+// (marked; `srcs` plain): `vsv_` of its root, `^` when only through its
+// elements, `1` directly. Kept for the binding's life: a copy of a part of
+// it holds those views wherever it goes (agora #377's review).
+@ __bck_self_view_note i wid s srcs0 s srcs → v {
+    : i wr ( bck_path_root wid )
+    : ~ s rest ( nurl_str_cat srcs `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s c ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? == ( bck_path_root ( nurl_str_to_int c ) ) wr {
+            : s k ( bck_bkey `vsv_` ( nurl_str_int wr ) )
+            : b ind ( str_contains_word srcs0 ( nurl_str_cat `^` c ) )
+            ? | ! ind ! ( seq ( nurl_sym_get g_bck k ) `1` ) { ( bck_put k ? ind `^` `1` ) } {}
+        } {}
+    }
+}
+
+// The self-view of the binding whose root is `rs` (`vsv_`): the source it
+// stands for in what a copy of a part of it holds — `^rs`, `rs` — or ``.
+@ __bck_self_view_src s rs → s {
+    : s m ( nurl_sym_get g_bck ( bck_bkey `vsv_` rs ) )
+    ? == 0 ( nurl_str_len m ) { ^ ( nurl_str_cat `` `` ) } {}
+    ^ ? ( seq m `^` ) ( nurl_str_cat `^` rs ) ( nurl_str_cat rs `` )
+}
+
 // Binding `wid` was given a new value: it depends on `srcs` now.
 @ bck_dep_set i wid s srcs → v {
     ( bck_dep_clear wid )
@@ -35802,6 +35842,11 @@ unsafe @ bck_sx_is_id s e → b {
     ( bck_dep_mark_hnd wid srcs0 )
     : s srcs ( __src_plain srcs0 )
     : s ws ( nurl_str_int wid )
+    // (A view of its own storage — an element viewing a sibling's String,
+    // a field viewing another field — is no dependency to end it by, but
+    // what it holds all the same: `vsv_`, read by what a copy of a part of
+    // it holds, bck_sx_held_name.)
+    ( __bck_self_view_note wid srcs0 srcs )
     : s dk ( bck_bkey `vds_` ws )
     : ~ s have ( nurl_sym_get g_bck dk )
     : ~ s rest ( nurl_str_cat srcs `` )

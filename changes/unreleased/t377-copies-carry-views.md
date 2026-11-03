@@ -31,6 +31,12 @@
     `( Vec Tok )` or is handed as `( vec_at … )`.
 
   It holds what the part holds.
+- **A copy of a part of a value that views its own storage** (probes
+  *_viewing_its_sibling_*). A token Vec whose second token views the first
+  token's String, a struct element viewing a sibling's field, or a struct
+  whose field views another field, moved into a Vec: a copy of a part of
+  it (`mem_dup`, a foreach element, a match payload, a helper's copy) was
+  kept past the value and read the freed String. It is refused now.
 - **A copy of a parameter's views given to a global or another thread**
   (probes global_given_a_*_copy_of_*, thread_given_a_view_popped_off_*).
   A string global given the word of `mem_dup` of a token parameter kept a
