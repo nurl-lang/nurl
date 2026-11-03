@@ -513,6 +513,17 @@ theorem _root_.A2.EvalR.cellKeep {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h 
     rcases LockHolds.upd hk' with ⟨_, hk'⟩ | ⟨_, _, _, hb, _⟩
     · exact hk'
     · cases hb
+  | rwTryRead _ _ _ =>
+    -- A3.3: `rw_read`'s new view, the guard as `some`
+    refine CellKeep.setVal x o' hn hst (fun _ hs => by cases hs with | inr hs => cases hs)
+      (fun k' k hk' => ?_)
+    rcases LockHolds.upd hk' with ⟨_, hk'⟩ | ⟨_, _, _, hb, _⟩
+    · exact hk'
+    · cases hb
+  | rwTryReadNone _ _ | rwTryWriteNone _ _ =>
+    exact CellKeep.setVal x o' hn hst (fun _ hs => by cases hs with | inl hs => cases hs) (fun _ _ h => h)
+  | rwTryWrite _ _ _ =>
+    exact CellKeep.setVal x o' hn hst (fun _ hs => by cases hs with | inr hs => cases hs) (fun _ _ h => h)
   | glob _ hf =>
     refine CellKeep.setVal x o' hn hst (fun _ hs => ?_) (fun _ _ h => h)
     rcases hf with ⟨_, _, _, _, rfl, _⟩ | ⟨_, _, _, _, rfl, _⟩ <;> cases hs

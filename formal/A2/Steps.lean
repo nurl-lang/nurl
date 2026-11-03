@@ -1387,7 +1387,7 @@ theorem guardTy_ok {t : Ty} (h : (Ty.lk t).ok = true) :
     (Ty.arc (.prod (.lk t) t)).ok = true ∧ (Ty.arc (.prod (.lk t) t)).holdsView = false := by
   simp only [Ty.ok, Ty.holdsView, Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true,
     Bool.or_eq_false_iff] at h ⊢
-  exact ⟨⟨⟨h, h.1.1⟩, h.1.2, h.1.2⟩, h.1.2, h.1.2⟩
+  exact ⟨⟨⟨h, h.1⟩, h.2, h.2⟩, h.2, h.2⟩
 
 theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} {v : Val} {o : Bool}
     (hi : MInv m Γ) (hanch : RootbAnch Γ F)

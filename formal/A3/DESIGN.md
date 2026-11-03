@@ -1139,7 +1139,7 @@ no live entry anywhere lands in the payload. Instead:
 was. `covers_evalR`, `evalR_exists`, `EvalR.codes`, `EvalR.blk`,
 `EvalR.leafKeep`, `Rename`, `Wf`, `NameWf`, `SrcKeep`, and A3's
 `EvalR.restrict`, `EvalR.lift`, `EvalR.borFree`, `EvalR.grows`,
-`EvalR.ownedId`, `EvalR.payAt` and `EvalR.cellVal` get them. A try touches
+`EvalR.ownedId`, `EvalR.payAt` and `EvalR.cellKeep` get them. A try touches
 what `rw_read` does: nothing (a view owns no address; the count and the
 writer bit are the runtime's rwlock, trusted base).
 
@@ -2456,7 +2456,9 @@ globals reach (`Reached C0.globVals`). With no global, nothing is left
     (`Closed`), and it owns no address, so the store with no binding is a
     heap (`MInv.unbind`), every live address is a payload's (`Covers`), and
     every block is reached from a global: the result's or an earlier one's
-    (the sweep's `CInv` half).
+    (the sweep's `CInv` half). Each cell's shares are in one block, below
+    `nid` (`GlobsOK.cells`, A3.5's second cut): `CellInv`'s `one` and
+    `blkBelow`.
   - `made_ok`, `made_globsAt`: the phase leaves `GlobsOK`, each global made
     so far at its declared type, the later ones unset; once all are made,
     `GlobsAt G (declTy D)`.
