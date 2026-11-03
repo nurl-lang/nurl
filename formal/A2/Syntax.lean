@@ -87,6 +87,17 @@ def Ty.hasCell : Ty → Bool
   | .lk t => t.hasCell
   | .cell _ => true
 
+/-- A3.6: does a value of this type synchronise itself, so that a module
+    global set at start may hold it and every thread reach it?  A lock share
+    does (`Locked`, `RwLocked`, `Mutex`, `Atomic` and `Channel` are all
+    `lk _`), and so does an `Arc` whose payload holds no library handle (a
+    cell share is not Sync, A3.5).  A cell share does not, nor does an owned
+    tree (a `Vec` pushed from two threads through a global races: h263). -/
+def Ty.sync : Ty → Bool
+  | .lk _ => true
+  | .arc t => !t.hasCell
+  | _ => false
+
 /-- A2 types: a view's element type holds no views of its own (a view of a
     container of views is left to A2, with the other aggregates that
     carry views), and, in A3.1's first cut, no shares. -/
@@ -300,6 +311,12 @@ inductive Rhs where
                                -- fresh lock block, whose one share is a cell share
   | cellClone (a : Var)        -- `PNCounter_share a` (and any copy the library makes): a new
                                -- cell share of the block `a` (an owner) shares
+  -- A3.6: a module global set at start (`: ( Locked T ) g ( make )`) holds a
+  -- share of a block that synchronises itself; the store holds it (`Mem.gl`),
+  -- every thread reaches it, and nothing writes it
+  | glob (g : Nat) (t : Ty)    -- a read of global `g`, of type `t`: a new share of its block
+                               -- (`: ( Locked T ) h g` clones the handle; passing `g` to a
+                               -- function lends the clone)
 deriving DecidableEq, Repr
 
 /-! ### Memory (here because a run-time form records a snapshot of it) -/
@@ -364,6 +381,8 @@ structure Mem where
   nv    : Nat                 -- next fresh variable
   st    : Var → Option Slot
   blk   : Nat → Option Blk    -- A3.1: the counted blocks
+  gl    : Nat → Option Val    -- A3.6: the module globals set at start: global `g`'s share, made
+                              -- before `main`; no step writes it
 
 def upd {α : Type} (f : Nat → α) (k : Nat) (v : α) : Nat → α :=
   fun i => if i = k then v else f i

@@ -509,6 +509,8 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
     exact ⟨hw1, hd1, hm1, fun _ _ r hr => by simp [roots, Entry.vdeps, Mode.ownSlot] at hr⟩
   | cellClone _ _ _ _ =>
     exact ⟨h, fun _ => rfl, same, fun _ _ r hr => by simp [roots, Entry.vdeps, Mode.ownSlot] at hr⟩
+  | glob _ _ =>
+    exact ⟨h, fun _ => rfl, same, fun _ _ r hr => by simp [roots, Entry.vdeps, Mode.ownSlot] at hr⟩
   | rwRead _ _ _ =>
     exact ⟨h, fun _ => rfl, same, fun _ _ r hr => by simp [roots, Entry.vdeps, Mode.ownSlot] at hr⟩
   | atomic _ _ _ _ _ => exact ⟨h, fun _ => rfl, same, fun _ hn => by simp [intE] at hn⟩

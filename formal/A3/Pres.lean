@@ -213,7 +213,8 @@ theorem CParts.thread_of {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) (hR : Re
       obtain ⟨htoj, hboj⟩ := hc.ok j tj b htj hb
       have hv : ownView (C.put i m' s') tj b =
           { ownView C tj b with alloc := union b (payPart m'.blk), nid := m'.nid, blk := m'.blk } := by
-        simp only [ownView, Cfg.put]
+        have hgl : m'.gl = C.gl := Step.gl hst
+        simp only [ownView, Cfg.put, hgl]
       have hB : BlocksAt m'.blk m'.nid := hto1.blocksAt
       rw [hv]
       refine ⟨ThreadOK.move htoj (fun x T hT k hkT => ?_) (fun k hk => ?_) (fun k hk => ?_) hgrow.nid hblk hB

@@ -222,6 +222,12 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
   | cellClone ha hl hty hos =>
     obtain ⟨k, hv⟩ := hi.cell_slot ha hl hty hos
     exact ⟨_, EvalR.cellClone hv⟩
+  | @glob g t _ _ =>
+    -- A3.6: the global's share, or a panic if the store holds none of that type
+    by_cases h : ∃ v, m.gl g = some v ∧ GlobFits m.blk t v
+    · obtain ⟨v, hv, hf⟩ := h
+      exact ⟨_, EvalR.glob hv hf⟩
+    · exact ⟨_, EvalR.globP h⟩
   | rwRead ha hl hty =>
     -- A3.3: a new view of the payload, unless a writer has it checked out
     obtain ⟨o, k, hv⟩ := hi.lk_slot ha hl hty

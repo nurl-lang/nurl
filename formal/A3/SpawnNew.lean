@@ -186,11 +186,13 @@ theorem newThread_inv {P : Prog} {fn : Fn} (hok : FnOK P fn)
     (hdisj : ∀ (j k : Nat) (v w : Val), j ≠ k → vs[j]? = some v → vs[k]? = some w →
       ∀ i ∈ v.ids, i ∉ w.ids)
     (hself : ∀ v ∈ vs, SelfFree v) (hpk : ∀ v ∈ vs, PkgsOK v)
-    {part : Nat → Bool} {B : Nat → Option Blk} (hpart : ∀ i, part i = true ↔ ∃ v ∈ vs, i ∈ v.ids)
+    {part : Nat → Bool} {B : Nat → Option Blk} {G : Nat → Option Val}
+    (hpart : ∀ i, part i = true ↔ ∃ v ∈ vs, i ∈ v.ids)
     {N : Nat} (hlt : ∀ v ∈ vs, ∀ i ∈ v.ids, i < N)
     (hsh : ∀ (j : Nat) (v : Val) (pt : PMode × Ty), vs[j]? = some v → fn.params[j]? = some pt →
       SharesIn B pt.2 v) (hB : BlocksAt B N) (hBv : ∀ i, PayIn B i → ∀ v ∈ vs, i ∉ v.ids) :
-    Inv { alloc := union part (payPart B), nid := N, nv := fn.nvars, st := spawnSt fn vs, blk := B } (sigCtx fn) []
+    Inv { alloc := union part (payPart B), nid := N, nv := fn.nvars, st := spawnSt fn vs, blk := B,
+          gl := G } (sigCtx fn) []
       (wrapParams fn.params 0 0 (.scope fn.params.length fn.body)) := by
   obtain ⟨hsrc, hnv, hvars, hrok, hrown, hps, -⟩ := hok
   have hown : fn.resOwn = false := by
@@ -314,11 +316,13 @@ theorem newThread_ok {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hPc : Pr
     (hdisj : ∀ (j k : Nat) (v w : Val), j ≠ k → vs[j]? = some v → vs[k]? = some w →
       ∀ i ∈ v.ids, i ∉ w.ids)
     (hself : ∀ v ∈ vs, SelfFree v) (hpk : ∀ v ∈ vs, PkgsOK v) (hcd : ∀ v ∈ vs, PkgOK P v)
-    {part : Nat → Bool} {B : Nat → Option Blk} (hpart : ∀ i, part i = true ↔ ∃ v ∈ vs, i ∈ v.ids)
+    {part : Nat → Bool} {B : Nat → Option Blk} {G : Nat → Option Val}
+    (hpart : ∀ i, part i = true ↔ ∃ v ∈ vs, i ∈ v.ids)
     {N : Nat} (hlt : ∀ v ∈ vs, ∀ i ∈ v.ids, i < N)
     (hsh : ∀ (j : Nat) (v : Val) (pt : PMode × Ty), vs[j]? = some v → fn.params[j]? = some pt →
       SharesIn B pt.2 v) (hB : BlocksAt B N) (hBv : ∀ i, PayIn B i → ∀ v ∈ vs, i ∉ v.ids) :
-    ThreadOK P { alloc := union part (payPart B), nid := N, nv := fn.nvars, st := spawnSt fn vs, blk := B }
+    ThreadOK P { alloc := union part (payPart B), nid := N, nv := fn.nvars, st := spawnSt fn vs, blk := B,
+                 gl := G }
       (wrapParams fn.params 0 0 (.scope fn.params.length fn.body)) := by
   obtain ⟨fn', hf', hres, hpar⟩ := hS f hsp
   have hfn : fn' = fn := Option.some.inj (hf'.symm.trans hf)

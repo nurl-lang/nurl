@@ -41,10 +41,11 @@ def NewThreadLemma (P : Prog) (spawn : Nat → Bool) : Prop :=
     (∀ (j k : Nat) (v w : Val), j ≠ k → vs[j]? = some v → vs[k]? = some w → ∀ i ∈ v.ids, i ∉ w.ids) →
     (∀ v ∈ vs, SelfFree v) → (∀ v ∈ vs, PkgsOK v) → (∀ v ∈ vs, PkgOK P v) →
     ∀ {part : Nat → Bool}, (∀ i, part i = true ↔ ∃ v ∈ vs, i ∈ v.ids) →
-    ∀ {N : Nat}, (∀ v ∈ vs, ∀ i ∈ v.ids, i < N) → ∀ {B : Nat → Option Blk},
+    ∀ {N : Nat}, (∀ v ∈ vs, ∀ i ∈ v.ids, i < N) → ∀ {B : Nat → Option Blk} {G : Nat → Option Val},
     (∀ (j : Nat) (v : Val) (pt : PMode × Ty), vs[j]? = some v → fn.params[j]? = some pt →
       SharesIn B pt.2 v) → BlocksAt B N → (∀ i, PayIn B i → ∀ v ∈ vs, i ∉ v.ids) →
-    ThreadOK P { alloc := union part (payPart B), nid := N, nv := fn.nvars, st := spawnSt fn vs, blk := B }
+    ThreadOK P { alloc := union part (payPart B), nid := N, nv := fn.nvars, st := spawnSt fn vs, blk := B,
+                 gl := G }
       (wrapParams fn.params 0 0 (.scope fn.params.length fn.body))
 
 /-- A3.5: a spawn whose crossing check fails (proved in `A3.SpawnOld`): the
@@ -162,7 +163,7 @@ theorem CInv.spawn_of {P : Prog} {spawn : Nat → Bool} (hSO : SpawnerLemma P sp
   have hSN : ∀ k, aS k = true → aN k = false := fun k hk => by
     simp only [aS, minus, Bool.and_eq_true] at hk
     simp [aN, minus, hk.1]
-  have htoN := hNT (B := C.blk) hsp hf hvlen hwf
+  have htoN := hNT (B := C.blk) (G := C.gl) hsp hf hvlen hwf
     (fun v hv => by obtain ⟨a0, h0⟩ := hown v hv; exact hinv.heap.nodup a0 v h0) hvdisj
     (fun v hv => by obtain ⟨a0, h0⟩ := hown v hv; exact hinv.heap.self a0 v h0)
     (fun v hv => by obtain ⟨a0, h0⟩ := hown v hv; exact hinv.pkgs a0 _ v h0 rfl)

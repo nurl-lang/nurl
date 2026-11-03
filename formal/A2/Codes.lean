@@ -270,6 +270,9 @@ theorem EvalR.codes {P : Prog} {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (he :
     obtain ⟨_, hm1⟩ := h1.codes h
     exact ⟨pkgOK_leaf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h), hm1.of_st rfl⟩
   | cellClone _ => exact ⟨pkgOK_leaf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h), h⟩
+  | glob _ hf =>
+    rcases hf with ⟨_, _, _, _, rfl, _⟩ | ⟨_, _, _, _, rfl, _⟩ <;>
+      exact ⟨pkgOK_leaf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h), h⟩
   | rwRead _ _ _ => exact ⟨pkgOK_leaf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h), h.of_st rfl⟩
   | atomic _ _ _ _ => exact ⟨pkgOK_int P _, h.of_st rfl⟩
   | chanSend _ h1 _ _ _ =>

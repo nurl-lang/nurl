@@ -154,6 +154,10 @@ theorem EvalR.ownedId {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r
   | arcClone _ => exact ⟨fun _ i hi => by simp [Val.ids] at hi, fun i hi => .inl hi⟩
   | lockClone _ => exact ⟨fun _ i hi => by simp [Val.ids] at hi, fun i hi => .inl hi⟩
   | cellClone _ => exact ⟨fun _ i hi => by simp [Val.ids] at hi, fun i hi => .inl hi⟩
+  -- A3.6: a global's share owns no address
+  | glob _ hf =>
+    rcases hf with ⟨_, _, _, _, rfl, _⟩ | ⟨_, _, _, _, rfl, _⟩ <;>
+      exact ⟨fun _ i hi => by simp [Val.ids] at hi, fun i hi => .inl hi⟩
   -- A3.4: a value sent leaves the owned trees; one received was the channel's payload's
   | chanSend _ h1 _ _ _ => exact ⟨fun h => (nomatch h), fun i hi => .inl ((TakeVal.ownedId h1 hb).2 i hi)⟩
   | chanSendClosed _ h1 _ _ =>

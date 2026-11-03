@@ -33,17 +33,18 @@ structure Cfg where
   alloc : Nat → Bool
   nid   : Nat
   blk   : Nat → Option Blk   -- A3.1: the counted blocks, shared by every thread
+  gl    : Nat → Option Val     -- A3.6: the module globals set at start, which every thread reads
   ths   : List Thread
 
 /-- What A2's step runs on for thread `t`: the shared address space, the
     thread's own bindings. -/
 def Cfg.view (C : Cfg) (t : Thread) : Mem :=
-  { alloc := C.alloc, nid := C.nid, nv := t.nv, st := t.st, blk := C.blk }
+  { alloc := C.alloc, nid := C.nid, nv := t.nv, st := t.st, blk := C.blk, gl := C.gl }
 
 /-- Thread `i`'s step written back: the address space to the configuration,
     the bindings and the statement to the thread. -/
 def Cfg.put (C : Cfg) (i : Nat) (m : Mem) (s : Stmt) : Cfg :=
-  { alloc := m.alloc, nid := m.nid, blk := m.blk, ths := C.ths.set i ⟨m.st, m.nv, s⟩ }
+  { alloc := m.alloc, nid := m.nid, blk := m.blk, gl := m.gl, ths := C.ths.set i ⟨m.st, m.nv, s⟩ }
 
 /-- A3.1: the values the threads' slots hold: the roots of the
     configuration's sweep. -/
@@ -59,7 +60,8 @@ noncomputable def Cfg.sweep (C : Cfg) : Cfg :=
 
 /-- A program run from the empty store, on one thread (A2's `emptyMem`). -/
 def Cfg.init (s : Stmt) (nv : Nat) : Cfg :=
-  { alloc := fun _ => false, nid := 0, blk := fun _ => none, ths := [⟨fun _ => none, nv, s⟩] }
+  { alloc := fun _ => false, nid := 0, blk := fun _ => none, gl := fun _ => none,
+    ths := [⟨fun _ => none, nv, s⟩] }
 
 /-- Where a statement takes its next step: `s` is `K` around `r`, through
     the forms A2's step goes into (`seqL`, `scopeIn`, `rbindIn`, `frozenIn`,

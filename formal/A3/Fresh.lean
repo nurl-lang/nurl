@@ -160,4 +160,67 @@ theorem Step.grows {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
   | scopeLSkip hrl => exact Release.grows hrl
   | scopeLP _ hrl ih => exact ih.trans (Release.grows hrl)
 
+/-! ### A3.6: no step writes a module global -/
+
+theorem TakeVal.gl {m m1 : Mem} {y : Var} {v : Val} (h : TakeVal m y v m1) : m1.gl = m.gl := by
+  cases h <;> rfl
+
+theorem EvalR.gl {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.ok v o m')) :
+    m'.gl = m.gl := by
+  cases h with
+  | pair h1 h2 => have h := (TakeVal.gl h2).trans (TakeVal.gl h1); exact h
+  | inl h1 => have h := TakeVal.gl h1; exact h
+  | inr h1 => have h := TakeVal.gl h1; exact h
+  | pack h1 => have h := TakeVal.gl h1; exact h
+  | arcNew h1 _ => have h := TakeVal.gl h1; exact h
+  | lockNew h1 _ => have h := TakeVal.gl h1; exact h
+  | cellNew h1 _ => have h := TakeVal.gl h1; exact h
+  | chanSend _ h1 _ _ _ => have h := TakeVal.gl h1; exact h
+  | chanSendClosed _ h1 _ _ => have h := TakeVal.gl h1; exact h
+  | _ => rfl
+
+theorem BindParams.gl {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var} {base i : Nat}
+    (h : BindParams m ps as base i m') : m'.gl = m.gl := by
+  induction h with
+  | nil => rfl
+  | inp _ _ _ ih => exact ih
+  | sink _ _ ih => exact ih
+  | inout _ ih => exact ih
+
+theorem Release.gl {m m' : Mem} {k : Nat} {t : Ty} {x : Var} (h : Release m k t x m') : m'.gl = m.gl := by
+  cases h <;> rfl
+
+/-- **No step writes a module global** (A3.6): the globals set at start stay
+    as they were made, for every thread. -/
+theorem Step.gl {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) : r.mem.gl = m.gl := by
+  induction h with
+  | seqL _ ih => exact ih
+  | seqP _ ih => exact ih
+  | letv _ he => have h := EvalR.gl he; exact h
+  | letcall _ _ hb => have h := BindParams.gl hb; exact h
+  | scopeIn _ ih => exact ih
+  | scopeP _ _ _ ih => exact ih
+  | rbindIn _ ih => exact ih
+  | rbindP _ _ ih => exact ih
+  | frozenIn _ ih => exact ih
+  | frozenP _ ih => exact ih
+  | assign _ he _ _ => have h := EvalR.gl he; exact h
+  | push ht _ _ _ => have h := TakeVal.gl ht; exact h
+  | pushRealloc ht _ _ _ => have h := TakeVal.gl ht; exact h
+  | editPush ht _ _ => have h := TakeVal.gl ht; exact h
+  | editPushRealloc ht _ _ => have h := TakeVal.gl ht; exact h
+  | editSet _ _ ht _ _ _ => have h := TakeVal.gl ht; exact h
+  | editSetOOB _ ht _ _ _ => have h := TakeVal.gl ht; exact h
+  | catchIn _ ih => exact ih
+  | callc _ _ _ _ hb => have h := BindParams.gl hb; exact h
+  | catchP _ _ ih => exact ih
+  | letd _ he => have h := EvalR.gl he; exact h
+  | scopeDIn _ ih => exact ih
+  | scopeDP _ _ ih => exact ih
+  | scopeDPMoved _ _ ih => exact ih
+  | scopeLIn _ ih => exact ih
+  | scopeLSkip hrl => have h := Release.gl hrl; exact h
+  | scopeLP _ hrl ih => have h := (Release.gl hrl).trans ih; exact h
+  | _ => rfl
+
 end A3

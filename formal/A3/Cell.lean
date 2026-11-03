@@ -243,6 +243,8 @@ theorem _root_.A2.EvalR.cellVal {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h :
   | chanRecvNone _ _ _ _ => cases hs with | inl hs => cases hs
   | chanClose _ _ _ => cases hs
   | rwRead _ _ _ => cases hs
+  -- A3.6: a global's share is a lock share or an `arc` share, never a cell's
+  | glob _ hf => rcases hf with ⟨_, _, _, _, rfl, _⟩ | ⟨_, _, _, _, rfl, _⟩ <;> cases hs
 
 /-- Binding parameters hands each a value an argument held (an `in`
     parameter is lent its argument: no cell share). -/
