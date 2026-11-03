@@ -718,15 +718,20 @@ a cell whose payload one scope at a time checks out.
   - `s` then runs in `x`'s lock scope `scopeL k t x s` (`Step.withLock`).
     The scope carries the payload's type `t` as ghost data.
   - Typing: `StmtT.withLock` gives `x` the entry `lockE t` (owned, holding
-    nothing; `intE` for an integer) and ends `x` as a `letv` does.
-    `StmtT.scopeL` types the run-time scope as a `scope`.
+    nothing; `intE` for an integer) and ends `x` as a `letv` does. Two
+    premises keep the model faithful to the runtime (below): `a` is a root
+    (`Ea.mode.isRoot`) that the body does not name (`a ∉ s.vars`), and `x`
+    is live in the body's output context. `StmtT.scopeL` types the run-time
+    scope as a `scope` and needs neither, since `Release` is total.
 - The scope's end gives `x`'s value back (`Step.scopeLSkip`, `Release`).
   - `Release.put` applies when the block is there with its payload checked
     out and `x`'s slot can give it back (`Giveable`: an owned tree, or an
     integer for an `int` lock).
-  - Otherwise `Release.drop` drops `x`'s slot as a scope's end does. In a
-    typed program that happens only when `x` was moved out, or when the
-    block was swept because no share is left.
+  - Otherwise `Release.drop` drops `x`'s slot as a scope's end does. With
+    `StmtT.withLock`'s premises a typed program's normal-path end is always
+    a `put` (the block outlives the body, and `x` holds a `t` there); `drop`
+    keeps the rule total. That the end is a `put` is argued below, not
+    proven as a lemma.
   - `Release` is total by construction, so no invariant has to say that the
     frame's `x` holds what was checked out of block `k`. Such an invariant
     (`LockOK`) was tried and dropped: keeping it at `scopeLIn` needs facts
@@ -738,6 +743,42 @@ a cell whose payload one scope at a time checks out.
     Deadlock freedom is not claimed, as before.
   - Progress (`progress'`, `ThreadOK.progress`) has three cases: done,
     blocked, or a step.
+
+**Faithful to the in-place runtime.** `stdlib/std/thread.nu`'s
+`locked_with` / `locked_update` run `f` on the payload in place, inside the
+lock's own memory. The model checks the payload out into `x` and back. The
+two agree when the lock outlives the body and `x` holds the payload again
+at the body's end. Without that, a program the model accepts is a
+use-after-free (the lock freed under `f`, then unlocked) or a double free
+(a moved-out payload freed where it went and again with the lock) at run
+time. `StmtT.withLock` asks for both:
+- *The lock outlives the body.* `a`'s slot holds a share of the block, and
+  nothing in the body changes that slot.
+  - The body does not name `a` (`a ∉ s.vars`), so no move, drop, assignment
+    or `sink` argument of the body touches it. A call's callee runs in
+    fresh variables, and an `inout` argument is one the body names.
+  - No closure changes `a` either: a closure changes a binding by name only
+    if it is a `Vec` (`CapsOK`, `NamesFree`), and `a` is a lock share.
+  - `a` is a root (`Ea.mode.isRoot`): an owner, whose slot holds the share,
+    or a borrowed parameter, whose share is the caller's, frozen for the
+    call. A local borrow (a field or element of a struct or `Vec` that holds
+    the share) is refused: the body could change its owner.
+  - The suggested form, typing the body with `F ++ [a]` and stepping to
+    `scopeL k t x (frozen [a] s)`, does not get through the renaming
+    lemma (`StmtT.ren`). It types a callee's body under the call's frozen set
+    `S.Fc` whatever the callee froze, and `RSetup.OK.Fcout` keeps every
+    callee binding out of `S.Fc`. A frozen `a` would mean generalizing every
+    renamed rule's frozen set. Not naming `a` is invariant under renaming
+    (`Stmt.vars_rename`, `RSetup.OK.inj`) and gives the same guarantee for
+    a lock share.
+- *`x` holds a `t` at the body's end* (`∃ E, Δ x = some E ∧ E.live`). An
+  assignment that replaces it is fine: `assign` keeps an owned binding
+  owned, and an integer an integer. The body may not leave it moved out.
+- *The panic path matches the runtime.* `locked_with` has no unlock on the
+  panic path, so the lock stays held and other threads wait. The model's
+  `scopeLP` frees `x` at the panic and leaves the block checked out, so
+  another thread's `withLock` on it is `Blocked`. The runtime frees the
+  value at the last share's drop, and nothing reaches it in between.
 
 **A2's proof.**
 - `acquire_pres`: taking the payload out of a lock block is a move out of
@@ -786,19 +827,16 @@ stated.
 - A lock's payload holds no share (`hasArc = false`). It also holds no view
   and no closure, so it is Send. A `Locked` of an `Arc` waits for payloads
   that keep blocks alive.
-- A panic unwinding through a lock scope drops `x`'s slot (`scopeLP`). The
-  lock then stays checked out for good, like a poisoned mutex. Releasing it
-  on the panic path needs `MInv.unwind` and `catchP`'s case to accept a
-  block that changes during unwinding: they read `m1.blk = m.blk`.
-- An `x` moved out of its scope leaves the lock checked out
-  (`Release.drop`). `locked_take` / `locked_restore` are not separate
-  rules.
+- `withLock` takes a root that the body does not name, so a lock reached
+  through a local borrow (a field or an element) is refused.
+- `locked_take` / `locked_restore` are not separate rules.
 - The update's body is a statement in place, not a closure called through
   a package.
 
 **Not proven here.**
 - deadlock freedom;
-- the panic-path release;
+- that a typed program's lock scope ends in a `put`, as a lemma (it would
+  need an invariant tying each `scopeL k` frame to block `k`);
 - shares in a lock's payload;
 - the probes h267 h358;
 - `CLAIM.md` / `README.md`.
