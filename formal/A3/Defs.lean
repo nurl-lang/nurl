@@ -97,6 +97,13 @@ theorem arc_spawnOK {t : Ty} (h : (Ty.arc t).ok = true) : (Ty.arc t).holdsView =
     views (`RhsT.arcNew`), whatever trees it owns. -/
 theorem arc_spawnOK_viewFree {t : Ty} (h : t.holdsView = false) : (Ty.arc t).holdsView = false := h
 
+/-- A3.2, Send: a lock share crosses to a new thread when its payload holds
+    no views, `SpawnOK`'s question again; every A2 type `lk t` meets it
+    (`Ty.ok` asks it of the payload, `RhsT.lockNew` of what moves in). -/
+theorem lk_spawnOK {t : Ty} (h : (Ty.lk t).ok = true) : (Ty.lk t).holdsView = false := by
+  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true] at h
+  exact h.1.2
+
 /-- Moving the arguments out of the spawner: each owns its value, and its
     slot is left empty (its drop flag clear). -/
 inductive MoveArgs : (Var → Option Slot) → List Var → List Val → (Var → Option Slot) → Prop

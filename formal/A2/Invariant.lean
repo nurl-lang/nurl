@@ -148,24 +148,6 @@ theorem BlkLe.rd {B B' : Nat → Option Blk} (hb : BlkLe B B') {k : Nat} {bl : B
   obtain ⟨bl', h', hk⟩ := hb k bl h
   exact ⟨bl', h', hk.rd⟩
 
-/-- A3.2: the blocks `B'` keep every block of `B` exactly: blocks were only
-    added (no acquire or release in between). -/
-def BlkGrow (B B' : Nat → Option Blk) : Prop := ∀ k bl, B k = some bl → B' k = some bl
-
-theorem BlkGrow.le {B B' : Nat → Option Blk} (h : BlkGrow B B') : BlkLe B B' := BlkLe.of_le h
-
-theorem BlkGrow.refl (B : Nat → Option Blk) : BlkGrow B B := fun _ _ h => h
-
-theorem BlkGrow.trans {B1 B2 B3 : Nat → Option Blk} (h1 : BlkGrow B1 B2) (h2 : BlkGrow B2 B3) :
-    BlkGrow B1 B3 := fun k bl h => h2 k bl (h1 k bl h)
-
-theorem BlkGrow.of_eq {B B' : Nat → Option Blk} (h : B' = B) : BlkGrow B B' := fun _ _ hk => by rw [h]; exact hk
-
-theorem BlkGrow.fresh {B : Nat → Option Blk} {n : Nat} (h : B n = none) (b : Blk) :
-    BlkGrow B (upd B n (some b)) := fun k bl hk => by
-  have hne : k ≠ n := fun e => by rw [e, h] at hk; cases hk
-  simpa [upd, hne] using hk
-
 theorem ShareFits.grow {B B' : Nat → Option Blk} (hb : BlkLe B B') {k : Nat} {u : Ty} {p : Option Val}
     (h : ShareFits (B k) u p) : ShareFits (B' k) u p := by
   cases p with

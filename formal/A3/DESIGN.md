@@ -7,8 +7,9 @@ defines A3.0's configuration (`Thread`, `Cfg`, `Cfg.view`), its steps
 (`TStep`: a thread takes A2's own `Step`; `spawn`), what a step touches
 (`Touch`), a race (`Race`), and the claim (`Claim`: `MemorySafe ∧ RaceFree ∧
 NoLeak` for every program A2 types); `../README.md` lists the modules of
-the proof. A3.1's `Arc` is mechanized in the same claim (A3.1's
-mechanization, below); A3.2–A3.6 are design. This note fixes the
+the proof. A3.1's `Arc` and A3.2's `Locked` are mechanized in the same
+claim (A3.1's and A3.2's mechanization, below; A3.2's probes are still to
+do); A3.3–A3.6 are design. This note fixes the
 semantics, the theorem statements and the order of work, so the
 mechanization can be cut into tasks (Agora: formal track, F4–F8). The guarantee it targets is the
 "no data race" clause of `CLAIM.md` and `docs/MEMORY.md` §6.2. The rules
@@ -671,6 +672,137 @@ step.
    `Touch` / `Race` with atomic `rc`, and `A3.claim` again.
 4. Probes h211 h212 h213 h288 h289 h338 to A3.1; CLAIM.md and README.md.
 
+## A3.2's mechanization (`Locked`)
+
+**Status.** `check.sh` is green with lock blocks, lock shares and the
+three rules in A2 and A3. `A2.memory_safe`, `A2.soundness`,
+`A2.no_leak_end`, `A2.no_leak_panic` and `A3.claim` are re-proven for A2
+with `Locked`. Not done yet: the probes (h267 h358) and `CLAIM.md` /
+`README.md`, so `check.sh`'s last line still names A3.1.
+
+**Where a lock lives.** In A2, as an `Arc` does: a lock is a second kind
+of block. This answers the open question below. Single-threaded, a lock is
+a cell whose payload one scope at a time checks out.
+- `Blk := ⟨ty, kind, pay : Option Val⟩`, `BKind := arc | lock`.
+  - `Blk.tree` is what a block owns: its payload, or nothing while a lock's
+    payload is checked out. `BlkOwn`, `PayAddr`, `PayIn` and `Unreached`
+    use it.
+  - `Blk.rd` is what holders read: an arc block's payload, and nothing of a
+    lock block's. `NodeAt`, `DataAt`, `InPay`, `Refers` and A3's payload
+    reads use it.
+- The design's `held : Option Nat` is not stored. The holder is the thread
+  whose lock scope (`scopeL k t x s`) has the payload in slot `x`.
+  Meanwhile the block holds `none`.
+- `Ty.lk t` / `Val.lk k` is a share of lock block `k`. It carries nothing,
+  since the payload changes and no one reads it through the share. It owns
+  no address and frees nothing (`Frees.lk`). It keeps its block alive for
+  the sweep (`Refers` through `Val.share k none`).
+- `ArcIn`'s payload index is an `Option`, `none` for a lock share.
+  `SharesIn` asks `ShareFits`: an arc share fits its arc block, and a lock
+  share fits a lock block of its type.
+- `Ty.ok (lk t)` asks that `t` hold no view and no share
+  (`!t.holdsView && !t.hasArc`). So a lock's payload keeps no block alive
+  (`MInv.blocks`' fourth conjunct).
+
+**The rules.**
+- `Rhs.lockNew t y` (`locked_new`): `y`'s tree moves into a fresh lock block
+  at `nid` (`EvalR.lockNew`, `rhs_lockNew`, `out_lkShare`). The tree holds
+  no view, no closure and no share.
+- `Rhs.lockClone a` (`Locked_share`): a new owned share (`out_lockClone`).
+- `Stmt.withLock a x s` (`locked_update a f`, with `f`'s body as `s` and
+  its argument as `x`). This refines the design's `lock_with` as a `callc`
+  with an `inout` argument.
+  - When `a`'s block has its payload, the payload is checked out
+    (`pay := none`) into `x`, owned. An integer payload is a plain integer
+    binding.
+  - `s` then runs in `x`'s lock scope `scopeL k t x s` (`Step.withLock`).
+    The scope carries the payload's type `t` as ghost data.
+  - Typing: `StmtT.withLock` gives `x` the entry `lockE t` (owned, holding
+    nothing; `intE` for an integer) and ends `x` as a `letv` does.
+    `StmtT.scopeL` types the run-time scope as a `scope`.
+- The scope's end gives `x`'s value back (`Step.scopeLSkip`, `Release`).
+  - `Release.put` applies when the block is there with its payload checked
+    out and `x`'s slot can give it back (`Giveable`: an owned tree, or an
+    integer for an `int` lock).
+  - Otherwise `Release.drop` drops `x`'s slot as a scope's end does. In a
+    typed program that happens only when `x` was moved out, or when the
+    block was swept because no share is left.
+  - `Release` is total by construction, so no invariant has to say that the
+    frame's `x` holds what was checked out of block `k`. Such an invariant
+    (`LockOK`) was tried and dropped: keeping it at `scopeLIn` needs facts
+    from the typing.
+- A `withLock` on a block whose payload is out has no step, so the thread
+  waits (`Blocked m s`, through the evaluation contexts).
+  - `Stuck` excludes `Blocked`. `memory_safe` therefore says that no thread
+    is stuck on memory, and a thread waiting on a lock is not stuck.
+    Deadlock freedom is not claimed, as before.
+  - Progress (`progress'`, `ThreadOK.progress`) has three cases: done,
+    blocked, or a step.
+
+**A2's proof.**
+- `acquire_pres`: taking the payload out of a lock block is a move out of
+  an owned tree (`RhsPost` / `RhsOut` for `lockE t`). `covers_acquire`
+  hands the payload's addresses from the block's `tree` to `x`'s.
+- `step_release`: the way back (`HeapOK.release_put`,
+  `covers_release_put`, `MInv.change` and `MInv.grow`).
+- `BlkLe` is weakened to `BlkKeep`: an arc block is kept exactly, and a lock
+  block is kept as a lock block of its type (`BlkLe.arc` / `.lock` /
+  `.rd`). `Reached.mono`, `CatchOK` and `InPay.grow` follow it.
+  `MemCodes` reads a block's `tree` (`PkgOK.rd`).
+
+**A3's proof.**
+- *No touch for the lock word.* Taking a lock and giving it back change
+  only the lock's word. The runtime's mutex changes that word atomically,
+  which is trusted base, beside DRF-SC.
+  - `Touch.scopeL` passes through to the body.
+  - `scopeLEnd` / `scopeLUnwind` count `x`'s tree as written. That
+    over-approximates both the give-back and the drop.
+- *The partition moves with the payload.* A checked-out payload leaves
+  `payPart` for the holder's part, and a given-back one goes the other way.
+  - `CParts` gets no new field, since `CParts.thread_of` computes the
+    stepping thread's new part from its view.
+  - The other threads' facts survive the move by `ThreadOK.move` /
+    `inv_move`. Their address space is their owned trees and the live
+    payloads, and their blocks are kept up to `BlkLe`.
+  - `ThreadOK.move` / `inv_move` are the general form of A3.1's
+    `ThreadOK.grow` / `inv_grow`. Those are gone, with `BlkGrow`.
+- *Where a payload's address comes from* (`Step.payAt`, `EvalR.payAt`).
+  After a step, an address in block `k`'s payload was in the same block's
+  payload before, or in the stepping thread's own trees (a new block's
+  payload, or a lock's given back).
+  - This replaces A3.1's `CParts.down_pay` in `race_free`'s sweep case
+    (`CParts.ctouch`).
+  - `CParts.ctouch` and `CInv.raceFree` no longer take the frame lemmas.
+- `Step.ownedId` gains a third case: a checked-out payload's addresses
+  were a payload's (`PayAddr`). `Step.avoids` takes `PayOff`, which says
+  the other parts hold no payload address (`Avoids.mono3`).
+- Send: `(Ty.lk t).holdsView = t.holdsView`, which `Ty.ok` makes `false`
+  (`lk_spawnOK`). So a lock share crosses a spawn by `SpawnOK`, unchanged.
+  Sync holds because a lock's payload is read by no one while it is in the
+  block, and is in its holder's part while it is checked out.
+
+**Simplifications in this cut.** Each is a restriction, and sound as
+stated.
+- A lock's payload holds no share (`hasArc = false`). It also holds no view
+  and no closure, so it is Send. A `Locked` of an `Arc` waits for payloads
+  that keep blocks alive.
+- A panic unwinding through a lock scope drops `x`'s slot (`scopeLP`). The
+  lock then stays checked out for good, like a poisoned mutex. Releasing it
+  on the panic path needs `MInv.unwind` and `catchP`'s case to accept a
+  block that changes during unwinding: they read `m1.blk = m.blk`.
+- An `x` moved out of its scope leaves the lock checked out
+  (`Release.drop`). `locked_take` / `locked_restore` are not separate
+  rules.
+- The update's body is a statement in place, not a closure called through
+  a package.
+
+**Not proven here.**
+- deadlock freedom;
+- the panic-path release;
+- shares in a lock's payload;
+- the probes h267 h358;
+- `CLAIM.md` / `README.md`.
+
 ## Open questions
 
 - **How much of A2 to copy** (decided in A3.0): none. A3 imports A2 and
@@ -679,7 +811,8 @@ step.
   invariant holds. A3.1–A3.6 add the shared blocks. For `Arc` they go into
   A2 (above). `Locked`, `RwLocked`, `Atomic` and channels have no
   single-threaded meaning beyond A2's, so for them a step beside A2's may
-  fit better; A3.2 decides.
+  fit better; A3.2 decides. (Decided: `Locked` goes into A2 too, as a
+  second kind of block; A3.2's mechanization, above.)
 - **Scoped threads.** A thread that borrows its spawner's data and is
   joined before the frame ends (`par_map_index`) needs the borrow to
   outlive the spawn while the spawner is suspended. That would be A3.7,

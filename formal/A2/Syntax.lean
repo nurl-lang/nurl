@@ -336,7 +336,8 @@ inductive Stmt where
                                                           -- is checked out to `x` for `body`
   | scopeL (k : Nat) (t : Ty) (x : Var) (body : Stmt)     -- run time: `x` holds lock block `k`'s
                                                           -- payload (a `t`); it goes back at
-                                                          -- the end, on a panic too
+                                                          -- the end (a panic drops it, and the
+                                                          -- lock stays checked out)
 
 
 /-- A function.  Its parameters are variables `0 … n-1`, its result slot is

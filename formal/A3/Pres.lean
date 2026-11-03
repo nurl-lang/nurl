@@ -9,8 +9,8 @@ here as a hypothesis so this file builds before it), so A2's preservation
 gives the thread's facts after it, up to the store a `recover` frame
 remembers (`ThreadOK.ghost`).  It leaves the other threads' parts as they
 were (`Step.keep`), moves `nid` up and adds blocks, whose payloads it took
-from its own part, which the other threads' facts survive
-(`ThreadOK.grow`). -/
+from its own part, or (A3.2) checks a lock's payload out into its part or
+back in, which the other threads' facts survive (`ThreadOK.move`). -/
 
 namespace A3
 open A2
