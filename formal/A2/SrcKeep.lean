@@ -118,6 +118,15 @@ theorem CtxRel.bind {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {E : Entry}
   have h2 := hk hanch1
   exact CtxRel.exitScope_fresh hx hxF h1 h2 (h2.anch hanch1) hpin
 
+/-- An `inout` argument of a call is not lent out. -/
+theorem CallT.inout0_notF {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {σ : Nat} {sig : Fn} {c : Var} {E : Entry}
+    {b : Eff} {t : Ty} (hcT : CallT P Γ F σ [c] E Γ1) (hσ : P[σ]? = some sig)
+    (hsp : sig.params = [(.inout b, t)]) : c ∉ F := by
+  obtain ⟨sig', hσ', _, hargs, _⟩ := hcT
+  rw [hσ] at hσ'; cases hσ'
+  obtain ⟨_, _, _, _, hmv, _⟩ := hargs 0 (by simp [hsp])
+  exact (hmv (by simp [hsp, PMode.moves])).1
+
 /-- **Source typing keeps the borrowed parameters**: every binding stays with
     its mode and type, nothing new is bound, and a borrowed parameter whose
     sources are lent out keeps its entry. -/
@@ -139,6 +148,33 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
       (fun Ex h => by rw [hx1] at h; cases h) hE
     have hnrb : E.mode ≠ .rootb := by rcases (RhsT.out hr).1 with h | h <;> rw [h] <;> simp
     exact CtxRel.bind hanch hx hxF (hr.ctxRel hanch) hnrb (fun ha => ih hks ha hnx) hpin.1
+  | @callcE Γ Γ1 Δ F x c j k Ec E ms q σ sig b hks hx hxF _ _ _ _ _ hσ hsp _ _ _ hny _ hcT _ hpin _ ih =>
+    intro _ hanch hn
+    have hcF : c ∉ F := hcT.inout0_notF hσ hsp
+    have hk0 := CtxRel.kill hanch hcF .replace false (hny.kills .replace false)
+    have hanchk : RootbAnch (A2.kill .replace false c Γ) F := hanch.kill _ _ _
+    obtain ⟨hn1, hE, _⟩ := hcT.names hP (hn.kill .replace false c)
+    have hx1 : Γ1 x = none := by
+      have := (hcT.domMode).1 x; simp only [A2.kill, hx, Option.map_none, Option.isSome_none] at this
+      cases h : Γ1 x <;> simp_all
+    have hnx := NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h)
+      (fun Ex h => by rw [hx1] at h; cases h) hE
+    have hnrb : E.mode ≠ .rootb := by
+      obtain ⟨fn', _, _, hE', _⟩ := hcT.toA (hn.kill .replace false c) hanchk; rw [hE']; exact resMode_ne' fn'
+    have h1 : CtxRel Γ Γ1 := hk0.trans (hcT.ctxRel (hn.kill .replace false c) hanchk)
+    refine CtxRel.bind hanch hx hxF h1 hnrb (fun ha => ?_) hpin.1
+    -- no borrowed parameter changes the package by name: they are the store's
+    have hny1 : NoPin (A2.setE Γ1 x E) c := by
+      intro p Ep hp hm d hd hb
+      have hpx : p ≠ x := fun e => by
+        subst e; simp only [A2.setE, upd_same, Option.some.injEq] at hp; subst hp; exact hnrb hm
+      simp only [A2.setE, upd_ne _ _ hpx] at hp
+      obtain ⟨E0, h0, hm0, _⟩ := h1.mode p Ep hp
+      have := h1.rootb p E0 h0 (hm0 ▸ hm)
+      rw [hp] at this; cases this
+      exact hny p Ep h0 hm d hd hb
+    have h2 := CtxRel.kill ha hcF .replace false (hny1.kills .replace false)
+    exact h2.trans (ih hks (ha.kill _ _ _) (hnx.kill _ _ _))
   | @withElem Γ Γ1 Δ1 Δ F y x i k Ey E hks hx hxF _ _ _ hpy _ hr hk _ hpin _ ihs ihp =>
     intro _ hanch hn
     have hyF : y ∉ F := by cases hr; assumption

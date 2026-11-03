@@ -913,6 +913,32 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       RhsT (kill .replace false v Γ) F (.pop v) E Γ1 → StmtT P (setE Γ1 x E) F s Δ1 →
       StmtT P Δ1 F (.push v x) Δ → EndOK Δ x → v ∉ s.vars →
       StmtT P Γ F (.withElem v i x s) (exitScope x Δ)
+  /-- A2-envhand: a call through the package `c` of a method whose interface
+      `σ` takes the receiver `inout` (at the bound `b`, and nothing else): the
+      environment is handed over to the code (`Step.callcE`), which may change
+      it as `σ` says (`Implements`).  It is typed as a call of the interface
+      with `c` its `inout` argument, after what depends on `c` has ended, and
+      with it ended again after (the environment moves out of `c` and back,
+      as `withElem` takes an element: `kill .replace`).  The runtime passes
+      the code a pointer to the environment in place; the premises keep the
+      model faithful to it: `c` is an owner that may be replaced (`canDo`: an
+      owner, or an `inout` parameter of that bound — never a borrow, so never
+      what an `Arc` or a read guard lends), not lent out (`CallT`), changed by
+      name by no borrowed parameter (`NoPin`) and viewed by no destructor
+      (`DtorSafe`).  The receiver's class is at least `send`: a closure whose
+      code changes its environment is not Sync, so no `Arc` holds one
+      (`RhsT.arcNew`), and the one thread that owns it calls it.  First cut:
+      the interface takes only the receiver, and its result borrows and holds
+      nothing of it. -/
+  | callcE {Γ Γ1 Δ : Ctx} {F : List Var} {x c : Var} {j : Nat} {k : Stmt}
+      {Ec E : Entry} {ms : List Nat} {q : Cross} {σ : Nat} {sig : Fn} {b : Eff} :
+      k.src = true → Γ x = none → x ∉ F → Γ c = some Ec → Ec.ty = .fn ms q → canDo Ec.mode .replace →
+      Cross.send.Le q → ms[j]? = some σ → P[σ]? = some sig → sig.params = [(.inout b, .fn ms q)] →
+      sig.lends = [] → sig.rholds = [] → sig.outHolds = [] →
+      NoPin Γ c → DtorSafe Γ .replace false c →
+      CallT P (kill .replace false c Γ) F σ [c] E Γ1 →
+      StmtT P (kill .replace false c (setE Γ1 x E)) F k Δ →
+      EndOK Δ x → ¬ ThruFn P σ → StmtT P Γ F (.callcE x c j [] k) (exitScope x Δ)
   | scopeD {Γ Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {s : Stmt} :
       (∃ E, Γ x = some E ∧ E.mode = .own ∧ E.ty.hasFn = false ∧ DtorOK P f E.ty) → x ∉ F →
       StmtT P Γ F s Δ → EndOK Δ x →

@@ -400,6 +400,22 @@ def CloCase (P : Prog) : Prop :=
     ∃ Γ', StmtT P Γ' F s' (exitScope x Δ) ∧ Inv m' Γ' F s' ∧ m.nv ≤ m'.nv ∧
       Keep Γ Γ' (.callc x c j zs k) s' ∧ Frz F m m'
 
+/-- A2-envhand: the case of a call that hands the environment over, proven with
+    the store it leaves and the typing of its run-time form (`EnvHand.lean`). -/
+def HandCase (P : Prog) : Prop :=
+  ∀ {Γ Γ1 : Ctx} {F : List Var} {x c : Var} {j : Nat} {k : Stmt} {Ec E : Entry}
+    {ms : List Nat} {q : Cross} {σ : Nat} {sig : Fn} {b : Eff} {Δ : Ctx} {m m' : Mem} {s' : Stmt},
+    k.src = true → Γ x = none → x ∉ F → Γ c = some Ec → Ec.ty = .fn ms q → canDo Ec.mode .replace →
+    ms[j]? = some σ → P[σ]? = some sig → sig.params = [(.inout b, .fn ms q)] →
+    sig.lends = [] → sig.rholds = [] → sig.outHolds = [] →
+    NoPin Γ c → DtorSafe Γ .replace false c →
+    CallT P (kill .replace false c Γ) F σ [c] E Γ1 →
+    StmtT P (kill .replace false c (setE Γ1 x E)) F k Δ →
+    EndOK Δ x → MemCodes P m → Inv m Γ F (.callcE x c j [] k) →
+    Step P m (.callcE x c j [] k) (.ok m' s') →
+    ∃ Γ', StmtT P Γ' F s' (exitScope x Δ) ∧ Inv m' Γ' F s' ∧ m.nv ≤ m'.nv ∧
+      Keep Γ Γ' (.callcE x c j [] k) s' ∧ Frz F m m'
+
 /-- What a destructor's frame needs of its body's typing, proven separately
     (`SrcKeep.lean`): source typing keeps every binding with its mode and
     type, and a borrowed parameter whose sources are lent out with its entry,
@@ -1293,7 +1309,8 @@ theorem dtorCall_typed {P : Prog} {m : Mem} {Γ0 : Ctx} {F : List Var} {x : Var}
 
 /-- Preservation: every step of a well-typed configuration, given the call
     cases and what source typing keeps. -/
-theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloCase P) (hsk : SrcCase P)
+theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloCase P) (hhand : HandCase P)
+    (hsk : SrcCase P)
     {Γ : Ctx} {F : List Var} {s : Stmt}
     {Δ : Ctx} (ht : StmtT P Γ F s Δ) :
     ∀ {m m' : Mem} {s' : Stmt}, MemCodes P m → Inv m Γ F s → Step P m s (.ok m' s') →
@@ -2571,6 +2588,9 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
   | callc hk hx hxF hc htc hj hσ hhd hout hcT hnz hkT hpx _ =>
     intro m m' s' hcd hi hst
     exact hclo hk hx hxF hc htc hj hσ hhd hout hcT hnz hkT hpx hcd hi hst
+  | callcE hk hx hxF hc htc hcan _ hj hσ hsp hsl hsr hso hny hdc hcT hkT hpx _ =>
+    intro m m' s' hcd hi hst
+    exact hhand hk hx hxF hc htc hcan hj hσ hsp hsl hsr hso hny hdc hcT hkT hpx hcd hi hst
   | @catchR Γ Δ F x m0 s hxF hs hM hanchΔ hKO hds ih =>
     intro m m' s' hcd hi hst
     obtain ⟨hfr, hxs, hnv0, hb0, hck⟩ := hi.catchOK

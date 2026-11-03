@@ -32,10 +32,12 @@ abbrev Var := Nat
              element, every value going into which faces the check;
   * `sync` — also no cell share (a library handle is not Sync), so several
              threads may hold it at once: an `Arc`'s payload.  Its code
-             changes nothing it captured: a closure's code is handed its
-             environment lent (`Implements`: `inp`, and no change through a
-             borrow), so what it may change is a binding captured by name,
-             which `send` already excludes;
+             changes nothing it captured: a call through it hands its code
+             the environment lent (`Implements`: `inp`, and no change through
+             a borrow), and the one call whose code changes the environment
+             (A2-envhand, `StmtT.callcE`: handed over) types only at `send`
+             or `any`, through an owner; what else it may change is a binding
+             captured by name, which `send` already excludes;
   * `bare` — also no share at all: a slice's element (A3.1's views of a
              `Vec` hold no share, `Ty.ok (slice t)`).  Since A3.2's second
              cut a lock or a channel no longer needs it. -/
