@@ -2070,7 +2070,12 @@ function returns — as it is, or inside a struct literal or another
 closure it returns — owns them instead: a `String`, `Vec` or handle
 moves into its environment, an option or a result is copied in (the
 binding keeps its own), and the environment drops and copies them
-(agora #458). Stored
+(agora #458). A closure literal written as an arm value of a `?` or a
+`??` the function hands back is returned the same way; a capture the
+returned literal also stores is copied in; a capture the body hands to a
+`sink` is handed a copy, since the closure keeps it for its next call; and
+an option the environment cannot copy (a payload with no Clone, an option
+of an option) is refused (agora #463). Stored
 into a struct field (a literal's or by `=`, through a pointer too), a
 slice of closures, an option or a container's element, the closure may
 outlive that function, so the stored

@@ -19,3 +19,4 @@ inner_struct_field_through_a_cond_assigned_outward.nu     a field of an inner bl
 inner_view_through_a_cond_assigned_outward.nu             a view of an inner block's struct field through a `?`, bound then assigned outward
 raw_view_block_tail.nu                                    a raw view of a block's own local as its tail, bound then handed back
 qq_value_arm_vec_field_of_a_block_local_after_another_holders_read.nu  a field arm of a block-local struct through a `??`, bound then assigned outward
+closure_returned_from_an_arm_over_a_payload.nu            a `??` whose arms are closures capturing a payload of a local `??String`, bound then handed back (the arm binding's source is `*`)

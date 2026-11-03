@@ -1742,6 +1742,23 @@ unsafe @ agg_field_count i syms s ot → i {
 // closure whose body releases some captures itself: only those move in
 // (g_env_released), with what a spawn takes over (g_env_moved).
 : ~ i g_env_owns_handles 0
+// Where the value a `^` hands back starts (a lexer and a token position):
+// the return's operand, and through it an arm value of a `?` or a `??`
+// that is the return's value. A closure literal written there is returned
+// right here (`__ret_clo__`): `^ ? c \ … \ …` as `^ \ …` (agora #463).
+: ~ i g_ret_vpos -1
+: ~ i g_ret_vlex 0
+// Where the literal a `^` hands back starts (`^ @ H { … }`), and the names
+// read in it after a closure literal it holds, which that closure copies in
+// rather than moving: the literal stores them too (`^ @ H { \ … x … x }`;
+// agora #463).
+: ~ i g_ret_lit_pos -1
+: ~ i g_ret_lit_lex 0
+: ~ s g_ret_clo_share ``
+// 1 while the body of a closure that is returned right here is compiled:
+// its env owns its captures for every call, so a `sink` handed one of them
+// (or a payload read out of one) is handed a copy (agora #463).
+: ~ i g_clo_ret_body 0
 // …and, for a closure that releases some captures itself, which (their
 // env field is not dropped again).
 : ~ s g_env_released ``
@@ -5399,6 +5416,8 @@ unsafe @ gen_ret i lex i syms i cg → s {
     : s ret_first_val ( nurl_lex_val lex )
     ( nurl_sym_set_deep syms `__ret_agg__` ? == ret_first_tt TT_AT `1` `` )
     ( nurl_sym_set_deep syms `__ret_clo__` ? == ret_first_tt TT_BACKSLASH `1` `` )
+    = g_ret_lit_pos ? == ret_first_tt TT_AT ( nurl_lex_cur_start lex ) -1
+    = g_ret_lit_lex lex
     // `^ . p field` hands back a handle stored INSIDE a parameter — an
     // alias of the caller's value, exactly like `^ p`. The root has to be
     // peeked before gen_operand consumes the expression. Ownership only;
@@ -5423,7 +5442,9 @@ unsafe @ gen_ret i lex i syms i cg → s {
     : b __jmove & == 0 g_defer_count | == ret_first_tt TT_QUEST == ret_first_tt TT_QUESTQUEST
     ? __jmove { = g_join_rdepth 0 } {}
     = g_blk_fall_value & __ret_imp == ret_first_tt TT_LBRACE
+    = g_ret_vpos ( nurl_lex_cur_start lex ) = g_ret_vlex lex
     : ~ s val ( gen_operand lex syms cg )
+    = g_ret_vpos -1
     = g_member_path_on __rsxmp
     // A block whose tail is a field read hands back that field as `^ . x f`
     // does: its own locals are this frame's, dropped on the way out
@@ -16988,7 +17009,33 @@ unsafe @ gen_call i lex i syms i cg → s {
         // Consumption is a whole-module fact, including transitive forward
         // calls. Record every parameter implication; codegen order is irrelevant.
         : b summary_callee & ! __callee_shadowed ( __summarised_callee syms fname call_name )
-        ? ( is_ident_tok bck_arg_tt ) { ( mem_arg_consumption syms cg call_name fname arg_idx bck_arg_tt bck_arg_val at callee_sink summary_callee ) } {}
+        // A capture of a closure returned right here — its env keeps it for
+        // the next call — or a payload or a part read out of one, handed
+        // to a declared `sink`: the callee is handed a copy, as `^ x` in
+        // the body hands one back (consumed, the second call released it
+        // again; agora #463). One that cannot be copied is refused.
+        : ~ b __crcp & & & & & summary_callee != 0 g_clo_ret_body ( is_ident_tok bck_arg_tt ) ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) ( __type_needs_drop at syms ) ( __clo_ret_capture_root syms bck_arg_val )
+        // (Not one the env owns under a flag of its own, g_nc_own_caps: the
+        // body takes that over through the flag, and a second run stops.)
+        = __crcp & __crcp ! ( str_contains_word g_nc_own_caps ? ( __is_clo_capture syms bck_arg_val ) bck_arg_val ( __clo_nc_derived syms bck_arg_val ) )
+        ? & __crcp ! ( __clone_supported at syms ) {
+            ( die lex ( nurl_str_cat4 ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+            ( nurl_str_cat3 `' is '` bck_arg_val `', which this closure keeps for its next call (a capture, or read out of one), and '` )
+            ( nurl_str_cat3 fname `' takes it over ('sink'). The closure is returned, so it may run again, and a '` ( llvm_to_nurl at ) )
+            `' cannot be copied: the next call would hand over what this one released. Give the callee a value the body makes, take the value as a parameter of the closure, or hand it over outside the closure.` ) ) }
+        {}
+        ? & ( is_ident_tok bck_arg_tt ) ! __crcp { ( mem_arg_consumption syms cg call_name fname arg_idx bck_arg_tt bck_arg_val at callee_sink summary_callee ) } {}
+        ? __crcp { = av ( mem_emit_cloneif cg at av `1` ) } {}
+        // …and in any other closure, a payload or a part of a capture handed
+        // to one takes the capture over, as the capture itself handed there
+        // does: the env owns it from the closure's making, and running the
+        // closure frees it — a second call is a use after the move (the
+        // consumed-capture rule). Left alone, the binding released the
+        // option whose payload the body had given away (agora #463).
+        ? & & & & & & summary_callee != 0 g_bck_closure_depth == 0 g_clo_ret_body ( is_ident_tok bck_arg_tt ) ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) ( __type_needs_drop at syms ) ! ( __is_clo_capture syms bck_arg_val ) {
+            : s __ctr ( __clo_nc_derived syms bck_arg_val )
+            ? & != 0 ( nurl_str_len __ctr ) ( __is_clo_capture syms __ctr ) { ( __clo_take_capture syms __ctr ) } {}
+        } {}
         ? & & != 0 g_lm_depth ( is_ident_tok bck_arg_tt ) ! __callee_shadowed {
             = g_lm_calls ( nurl_str_cat4 g_lm_calls call_name ( nurl_str_cat4 ` ` ( nurl_str_int arg_idx ) ` ` bck_arg_val ) `\n` )
         } {}
@@ -19107,6 +19154,8 @@ unsafe @ gen_cond i lex i syms i cg → s {
     // (…and, for an arm's take of an enum payload, an arm's whole value.)
     : b c_armq == g_arm_qval 1
     = g_arm_qval 0
+    // (The value a `^` hands back: so are its arms' values, g_ret_vpos.)
+    : b c_retv ( __ret_vpos_here lex )
     ( nurl_lex_advance lex )
     // The condition is a value operand — a `^` here is a cascade.
     // Parsing a CONDITION: a `{` after a ternary in here opens this
@@ -19227,6 +19276,7 @@ unsafe @ gen_cond i lex i syms i cg → s {
     = g_join_flends 0
     = g_join_deep 0
     = g_join_rdepth ? & < c_jdepth c_jdepth0 | == t_tt0 TT_QUEST == t_tt0 TT_QUESTQUEST c_jdepth -1
+    ? c_retv { = g_ret_vpos ( nurl_lex_cur_start lex ) } {}
     : ~ s tv ( gen_expr lex syms cg )
     = g_dead_arm - g_dead_arm ? c_dead_then 1 0
     : s t_dtw ( nurl_str_cat ( nurl_sym_get syms `__deferred_temps__` ) `` )
@@ -19467,6 +19517,7 @@ unsafe @ gen_cond i lex i syms i cg → s {
     = g_join_flends 0
     = g_join_deep 0
     = g_join_rdepth ? & < c_jdepth c_jdepth0 | == e_tt0 TT_QUEST == e_tt0 TT_QUESTQUEST c_jdepth -1
+    ? c_retv { = g_ret_vpos ( nurl_lex_cur_start lex ) } {}
     : ~ s ev ( gen_expr lex syms cg )
     = g_dead_arm - g_dead_arm ? c_dead_else 1 0
     : s e_dtw ( nurl_str_cat ( nurl_sym_get syms `__deferred_temps__` ) `` )
@@ -20253,6 +20304,8 @@ unsafe @ gen_match i lex i syms i cg → s {
     // Does this `??` head a statement? Decided before the arms move the
     // statement anchor; the parked-drop verdict at the join reads it.
     : b m_is_stmt ( mem_join_heads_stmt lex )
+    // (The value a `^` hands back: so are its arms' values, g_ret_vpos.)
+    : b m_retv ( __ret_vpos_here lex )
     ( nurl_lex_advance lex )  // consume '??'
 
     // `?? {` (no scrutinee) is a Go-style channel select, not a match.
@@ -21605,6 +21658,7 @@ unsafe @ gen_match i lex i syms i cg → s {
             // function's or another's — named the wrong field.)
             : i arm_mp0 g_member_path_on
             = g_member_path_on ? & & m_sxv != 0 __sx_mme == arm_tt0 TT_DOT 1 g_member_path_on
+            ? m_retv { = g_ret_vpos ( nurl_lex_cur_start lex ) } {}
             : ~ s arm_result ( gen_stmt lex syms cg )
             ? & & m_val != 0 g_borrowck ( __is_closure_ty ( nurl_get_last_type ) ) { = m_cm ( __words_join m_cm ( __clo_val_members syms arm_tt0 arm_v0 ) ) } {}
             = g_member_path_on arm_mp0
@@ -32805,23 +32859,33 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                     = g_thv_precise 0
                     // (A closure it stores into an owner is adopted: what it held a
                     // copy of a handle of, it copies in — `~id` goes.)
-                    ? & __esc __rt_views {
-                        : b __sv g_sxe_vonly
-                        = g_sxe_vonly T
-                        = out ( __word_union out ( __src_drop_handles ( bck_sx_ev st e T ) ) )
-                        = g_sxe_vonly __sv
-                    } { ? ( nurl_sym_has_word g_fn_vcopies w js ) {
-                            // An argument whose elements the callee copies into
-                            // what it hands back (vec_clone, slice_to_vec — agora
-                            // #347): a copy of an element is the same view, so the
-                            // result holds what the elements view — not the
-                            // argument's own storage, which a Slice of it points
-                            // into and the copy does not.
-                            : b __sv4 g_sxe_vonly
-                            = g_sxe_vonly F
-                            = out ( __word_union out ( __src_elem_deps ( bck_sx_ev st e T ) ) )
-                            = g_sxe_vonly __sv4
-                        } { ( bck_sx_skip e ) } }
+                    // (…but one it hands back as it is, `^ p` of a `sink`
+                    // parameter (g_fn_ret_param), is not adopted: the
+                    // result is that value — a closure with the copies of
+                    // the handles it holds — as `retcap`'s is. Agora #463.)
+                    : b __erp & __esc & __rt_views ( nurl_sym_has_word g_fn_ret_param w js )
+                    ? __erp {
+                        : b __sv5 g_sxe_vonly
+                        = g_sxe_vonly F
+                        = out ( __word_union out ( bck_sx_ev st e F ) )
+                        = g_sxe_vonly __sv5
+                    } { ? & __esc __rt_views {
+                            : b __sv g_sxe_vonly
+                            = g_sxe_vonly T
+                            = out ( __word_union out ( __src_drop_handles ( bck_sx_ev st e T ) ) )
+                            = g_sxe_vonly __sv
+                        } { ? ( nurl_sym_has_word g_fn_vcopies w js ) {
+                                // An argument whose elements the callee copies into
+                                // what it hands back (vec_clone, slice_to_vec — agora
+                                // #347): a copy of an element is the same view, so the
+                                // result holds what the elements view — not the
+                                // argument's own storage, which a Slice of it points
+                                // into and the copy does not.
+                                : b __sv4 g_sxe_vonly
+                                = g_sxe_vonly F
+                                = out ( __word_union out ( __src_elem_deps ( bck_sx_ev st e T ) ) )
+                                = g_sxe_vonly __sv4
+                            } { ( bck_sx_skip e ) } } }
                 } }
             ? & < g_sxe_pos n == # i . ep g_sxe_pos 124 { = g_sxe_pos + g_sxe_pos 1 = j + j 1 } {
                 = more F
@@ -44586,7 +44650,10 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         // (gen_closure_expr). Left to the function, they were dropped at
         // the return under the closure the caller then ran — `^ @ Box { \ →
         // i { ^ ( vec_len [i] a ) } }` read a freed Vec.
-        ? & agg_moves_fields == fld_first_tt TT_BACKSLASH { ( nurl_sym_set_deep syms `__ret_clo__` `1` ) } {}
+        ? & agg_moves_fields == fld_first_tt TT_BACKSLASH { ( nurl_sym_set_deep syms `__ret_clo__` `1` )
+            // (…and the names the literal reads after it, which it stores
+            // too: copied in, g_ret_clo_share.)
+            = g_ret_clo_share ( __ret_lit_names_after lex ) } {}
         // A None's payload is never read: a cast written there as its
         // placeholder (`@ ?T { F # T 0 }`) makes nothing anyone can use.
         = g_dead_payload ? & & opt_is_none == idx 1 == fld_first_tt TT_HASH 1 0
@@ -46460,9 +46527,13 @@ unsafe @ __l2n_list s lst → s {
 @ gen_backslash_expr i lex i syms i cg → s {
     : i backslash_line ( nurl_lex_line lex )
     : i backslash_col ( nurl_lex_col lex )
+    // (Written where the return's value is — an arm of a join `^` hands
+    // back: returned right here, as `^ \ …` is; g_ret_vpos.)
+    : b bs_retv ( __ret_vpos_here lex )
     ( nurl_lex_advance lex )  // consume '\'
     ? ( __backslash_is_closure lex syms )
     {
+        ? bs_retv { ( nurl_sym_set_deep syms `__ret_clo__` `1` ) } {}
         : s value ( gen_closure_expr lex syms cg )
         ( nurl_sym_def syms `__last_backslash_try__` `0` )
         = g_blk_tail_eff 0
@@ -46473,6 +46544,35 @@ unsafe @ __l2n_list s lst → s {
         ( nurl_sym_def syms `__last_backslash_try__` `1` )
         ^ value
     }
+}
+
+// The names read after the closure literal at `lex` (its `\`) up to the
+// end of the literal the `^` hands back (g_ret_lit_pos): what that literal
+// stores besides the closure. Lexer position restored.
+@ __ret_lit_names_after i lex → s {
+    ? | < g_ret_lit_pos 0 != g_ret_lit_lex lex { ^ ( nurl_str_cat `` `` ) } {}
+    : i here ( nurl_lex_cur_start lex )
+    ( nurl_lex_set_pos lex g_ret_lit_pos )
+    ( skip_balanced lex )
+    : i lend ( nurl_lex_cur_start lex )
+    ( nurl_lex_set_pos lex here )
+    ( skip_balanced lex )
+    : ~ s out ``
+    ~ & < ( nurl_lex_cur_start lex ) lend != ( nurl_lex_type lex ) TT_EOF {
+        ? ( is_ident_tok ( nurl_lex_type lex ) ) {
+            : s v ( nurl_lex_val lex )
+            ? ! ( str_contains_word out v ) { = out ( nurl_str_cat3 out ` ` v ) } {}
+        } {}
+        ( nurl_lex_advance lex )
+    }
+    ( nurl_lex_set_pos lex here )
+    ^ out
+}
+
+// Is the token at `lex` where the value a `^` hands back starts
+// (g_ret_vpos)?
+@ __ret_vpos_here i lex → b {
+    ^ & == g_ret_vpos ( nurl_lex_cur_start lex ) == g_ret_vlex lex
 }
 
 // Whether the '\' just consumed opens a closure literal rather than a
@@ -47571,7 +47671,10 @@ unsafe @ __bck_made_from s name → s {
         // thread under the spawner (agora #247).
         // (An option or a result a returned closure captures is copied in
         // instead, below: agora #458.)
-        ? & & & & | | == g_env_owns_handles 1 ( str_contains_word g_env_moved var ) ( str_contains_word g_env_released var ) ! ( str_contains_word g_env_shared var ) ! cap_byref ( __is_handle_ty var_type ) ! ( __capture_lends var syms ) {
+        // (…and an option or a result owning one the body releases: it
+        // moves in as a handle does, agora #463.)
+        : b __rel_opt & & ( str_contains_word g_env_released var ) ! ( __is_handle_ty var_type ) ( __env_handle_ty var_type syms )
+        ? & & & & | | == g_env_owns_handles 1 ( str_contains_word g_env_moved var ) ( str_contains_word g_env_released var ) ! ( str_contains_word g_env_shared var ) ! cap_byref | ( __is_handle_ty var_type ) __rel_opt ! ( __capture_lends var syms ) {
             : s up ( mem_udrop_ptr_of syms var )
             ? != 0 ( nurl_str_len up ) {
                 // Owned by the binding, or — a cursor over an option
@@ -48411,6 +48514,9 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     // Returned right here (`^ \ …`): the env owns its handle captures.
     : b clo_returned ( seq ( nurl_sym_get syms `__ret_clo__` ) `1` )
     ( nurl_sym_set_deep syms `__ret_clo__` `` )
+    // (…what the literal it is returned in stores too: copied in.)
+    : s clo_rshare ? clo_returned ( nurl_str_cat g_ret_clo_share `` ) ``
+    = g_ret_clo_share ``
     // Run by a thread or a fiber: a literal handed straight to one, or a
     // binding (its name) that may be (__clo_detach_moves). Read before
     // the body can build a closure of its own.
@@ -48960,6 +49066,12 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
                     ( mem_udrop_flag_set body_syms cg cap_ptr `0` )
                     ( __sb body_syms cap_ptr `1` )
                 } {} }
+            // (A payload of a `vec_get` result outside reads that Vec's slot
+            // through the enclosing function's registers: in the body it is
+            // a capture, no slot of its own — taking it there emptied the
+            // slot through a register the body has not got. Agora #463.)
+            ( nurl_sym_def body_syms ( nurl_str_cat cap_name `__vget` ) `` )
+            ( nurl_sym_def body_syms ( nurl_str_cat cap_name `__vgetl` ) `` )
             ( origin_parameter body_syms cap_name + param_count - cap_idx 1 )
             = caps ( str_skip_word caps )
             = cap_idx + cap_idx 1
@@ -49065,6 +49177,8 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     // body — its statements must not inline into the enclosing
     // function's list (where they would conflate same-named bindings).
     = g_bck_closure_depth + g_bck_closure_depth 1
+    : i __crb_saved g_clo_ret_body
+    = g_clo_ret_body ? clo_returned 1 0
     // The closure body is its own function for summary purposes: a
     // mutation inside it belongs to the closure, not to the enclosing
     // declaration. Without the save/restore an outer function would
@@ -49325,6 +49439,7 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     = g_bck_rcty __cl_rcty_saved
     = g_bck_cap_via __cl_capvia_saved
     = g_bck_closure_depth - g_bck_closure_depth 1
+    = g_clo_ret_body __crb_saved
     // What the body did to its own parameters is its literal's summary,
     // closed over its calls with every function's (resolve_mutation_summaries,
     // resolve_drop_summaries).
@@ -49539,7 +49654,34 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     = g_clo_detach_shared ``
     : s clo_moved ? & > captured_count 0 ! clo_returned
     ( __clo_detach_moves lex syms captured_vars clo_detach_lit clo_bind_name ) ``
-    : s clo_shared ( nurl_str_cat g_clo_detach_shared `` )
+    : ~ s clo_shared ( nurl_str_cat g_clo_detach_shared `` )
+    // An option or a result this frame releases, captured by a closure
+    // returned right here, that the env cannot copy in (gen_env_allocation:
+    // a payload with no Clone, an option of an option): the env would hold
+    // a copy of its handle, released at the return under the closure the
+    // caller runs (agora #463). Refused, as a captured Vec of `% Drop`
+    // values is (agora #161).
+    ? clo_returned {
+        : ~ s __cnr ( nurl_str_cat captured_vars `` )
+        ~ != 0 ( nurl_str_len __cnr ) {
+            : s __cnw ( str_first_word __cnr ) = __cnr ( str_skip_word __cnr )
+            : s __cnt ( nurl_sym_get syms __cnw )
+            ? & & & & & != 0 ( nurl_str_starts __cnt `{ i1, ` ) ( __type_needs_drop __cnt syms ) ! ( __env_handle_ty __cnt syms ) ! ( __is_capture_byref __cnw syms ) ! ( __capture_lends __cnw syms ) ! ( str_contains_word g_nc_own_caps __cnw ) {
+                ( die_pos lex clo_line clo_col ( nurl_str_cat3 ( nurl_str_cat3 `this closure is returned and captures '` __cnw `', a '` ) ( llvm_to_nurl __cnt )
+                ( nurl_str_cat `' this function releases when it returns, and the closure cannot be given a copy of its own: it holds what has no Clone (a value with a Drop of its own), or an option of an option. Running it would read freed memory (agora #463). ` `Share the value instead — bind it as an ( Rc T ) (rc_new) and capture that — or capture what the closure needs out of it (a field, a copy of the payload).` ) ) )
+            } {}
+        }
+    } {}
+    // A capture the returned literal also stores (`^ @ H { \ … x … x }`):
+    // the env owns a copy, the field the binding's value. Moved in, both
+    // owned one value (agora #463).
+    ? != 0 ( nurl_str_len clo_rshare ) {
+        : ~ s __crs ( nurl_str_cat captured_vars `` )
+        ~ != 0 ( nurl_str_len __crs ) {
+            : s __crw ( str_first_word __crs ) = __crs ( str_skip_word __crs )
+            ? & ( str_contains_word clo_rshare __crw ) ! ( str_contains_word clo_shared __crw ) { = clo_shared ( nurl_str_cat3 clo_shared ` ` __crw ) } {}
+        }
+    } {}
     = g_clo_detach_shared ``
 
     // Stop capturing and store as deferred closure function
@@ -62119,7 +62261,11 @@ unsafe @ __cc_note_call i syms s call_name s fname s arg_cs s arg_tys s arg_ids 
     // may have asked for — the last handle releases it through the
     // runtime (nurl_rc_drop_value), not through a drop in this program.
     // (A closure's env too: `Rc ( @ … )`.)
-    ? ( __elem_owns t syms ) { ( __dropif_request t ( __drop_mangle t ) ) } {}
+    // (…its drop graph queued now, walked with every other at module end:
+    // emit_pending_cc runs after that walk, and an option's drop asked for
+    // there was parked and never emitted — `drop__w__opt.String` undefined
+    // for an `Rc ?String`, agora #463.)
+    ? ( __elem_owns t syms ) { ( __dropif_request t ( __drop_mangle t ) ) ( queue_drop_for_type t ) } {}
 }
 
 // `( mem_cyclic [T] )` — can an `Rc T` be part of a cycle? A constant.
@@ -63092,6 +63238,14 @@ unsafe @ __die_at_fn s fname s what s msg → v {
         } {}
     }
     ^ ( nurl_str_cat `` `` )
+}
+
+// Is `name`, in a closure body, one of its captures, or read out of one
+// (a payload, a part, a copy of its handle: __clo_nc_derived)?
+@ __clo_ret_capture_root i syms s name → b {
+    ? ( __is_clo_capture syms name ) { ^ T } {}
+    : s r ( __clo_nc_derived syms name )
+    ^ & != 0 ( nurl_str_len r ) ( __is_clo_capture syms r )
 }
 
 @ __is_clo_capture i syms s name → b {
