@@ -27934,6 +27934,21 @@ unsafe @ __clo_effect_note_lent s name s callee i aix → v {
     ^ ( nurl_str_cat e `` )
 }
 
+// In a closure body, a join or a match bound reads what its source
+// expression `sx` names — its arms read them already — so the binding's
+// row says what it may view: a parameter or capture the walk cannot see
+// into makes it one too (bck_bind_row; agora #448).
+@ __clo_join_reads i syms i tt s vt s sx → v {
+    ? | == 0 g_bck_closure_depth & != tt TT_QUEST != tt TT_QUESTQUEST { ^ v } {}
+    ? < ( bck_walk_class vt ) 2 { ^ v } {}
+    : ~ s jn ( __sx_bind_names sx )
+    ~ != 0 ( nurl_str_len jn ) {
+        : s w ( str_first_word jn ) = jn ( str_skip_word jn )
+        : s r ( __path_root_name w )
+        ? != 0 ( nurl_sym_len syms r ) { ( bck_note_read r ) } {}
+    }
+}
+
 // In a closure body, handle local `name` (type `vt`) given a value read out
 // of a capture — what a lending call lends (`lend`), a field, a copy of a
 // capture or of a local already read out of one: it reaches those captures.
@@ -39016,6 +39031,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         // of where the copy came from; an `s` that owns its buffer (tracked
         // or guarded) is marked so that a copy of it borrows it.
         = g_bck_rhs_sx ? lit_track ( nurl_str_cat `-` `` ) ( nurl_str_cat __rhs_sx `` )
+        ( __clo_join_reads syms bck_rhs_tt vt g_bck_rhs_sx )
         // (Asked of a string binding only: `&` and `|` evaluate both sides.)
         = g_bck_bind_sown 0
         ? & != 0 g_auto_drop_strings ( seq ( nurl_llty vt ) `i8*` ) {
@@ -39389,6 +39405,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             ? & == bck_rhs_tt TT_LPAREN ( seq val ( nurl_sym_get syms `__last_fresh_reg__` ) ) { = g_bck_rhs_callee `mem_dup` } {}
             // (As on the inferred path: a copy is fresh, an owning `s` marked.)
             = g_bck_rhs_sx ? lit_track ( nurl_str_cat `-` `` ) ( nurl_str_cat __rhs_sx `` )
+            ( __clo_join_reads syms bck_rhs_tt ptype g_bck_rhs_sx )
             = g_bck_bind_sown 0
             ? & != 0 g_auto_drop_strings ( seq ( nurl_llty ptype ) `i8*` ) {
                 ? | lit_track ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` ) { = g_bck_bind_sown 1 } {
