@@ -21,3 +21,14 @@
   binding of the function's own parameter. A closure
   may not hand back a value holding views of what it captured: a struct or
   an enum now follows the rule a bare view always did.
+- **A cursor that may own its value is released when it moves on**
+  (probes cursor_over_a_local_view_resliced_in_a_loop,
+  cursor_given_its_own_slice_on_one_arm and others). A binding that
+  borrowed on one path and held a value of its own on another was taken
+  for a plain borrow where the paths met. Re-pointing it was thought to
+  free nothing, so a copy taken from it before was read after the value
+  it pointed into was released. That covered the split-on-delimiter loop
+  whose last piece is the cursor itself, and a `?` or `??` arm that gave
+  the cursor a slice of its own. Such a binding now may own its value:
+  re-pointing it ends what was borrowed from it. nurlc's own unused-import
+  lint had this shape and now reads each piece before moving on.

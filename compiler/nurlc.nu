@@ -3729,12 +3729,14 @@ unsafe @ lint_note_used_type_word s w → v {
     ~ & != 0 ( nurl_str_len drest ) ! used {
         : i dt ( nurl_str_find drest `\t` )
         : i dl ( nurl_str_len drest )
+        // (The last name is `drest` itself: read before `drest` moves on,
+        // which releases the piece it held.)
         : s nm ? < dt 0 drest ( nurl_str_slice drest 0 dt )
-        = drest ? < dt 0 `` ( nurl_str_slice drest + dt 1 - dl + dt 1 )
         ? == 0 ( nurl_str_len nm ) {}
         { ? != 0 ( nurl_sym_len g_lint_used
             ( nurl_str_cat3 top ` ` nm ) )
             { = used T } {} }
+        = drest ? < dt 0 `` ( nurl_str_slice drest + dt 1 - dl + dt 1 )
     }
     ? used {} {
         ( lint_warn top ( nurl_str_to_int ln ) ( nurl_str_to_int cl )
@@ -28462,8 +28464,6 @@ unsafe @ bck_add_cap_name s name → v {
 // (bck_put, __cj_note; agora #311).
 : ~ i g_cj_depth 0
 : ~ s g_cj_log ``
-// (Whether a join marked a binding borrowed on some path only, `bm_`.)
-: ~ i g_bck_bm_any 0
 // …and the state the innermost such join started from, by address — the
 // join's own `state`, alive while its arms are walked: a binding not yet
 // declared there is the arm's own, gone past the join, and not logged.
@@ -30848,7 +30848,9 @@ unsafe @ bck_record_binding s kind s name i line i cls s lty → v {
 //   Uninit < Owned < { Moved, BorrowedShared, BorrowedMut } < Invalid
 //
 // with MaybeMoved sitting above Owned/Moved as the join of a value
-// moved on one control-flow path and live on another. The join
+// moved on one control-flow path and live on another, and MaybeOwned
+// above Owned/BorrowedShared as the join of a borrow and a value of the
+// binding's own (bck_join_state). The join
 // (bck_join) is the least upper bound used at every forward merge;
 // Uninit is the bottom element, Invalid the top.
 //
@@ -30877,6 +30879,16 @@ unsafe @ bck_record_binding s kind s name i line i cls s lty → v {
 // MAYBE_MOVED, which means "freed on some path": a read of that one is a
 // use-after-free.
 : i BCK_MAYBE_ALIAS 8
+// A borrow on one path into a merge and the binding's own value on another
+// (BorrowedShared ⊔ Owned): a cursor `rest` a loop re-points at a fresh
+// slice each round, a `?` that gives it a value of its own on one arm. It
+// is a borrow to every rule — what it borrows from may not go first, so
+// bck_st_get reads it as BCK_BORROWED_SHARED — but where it owns, its value
+// is its own: given a new value, that one is released, and what was
+// borrowed from it ends (bck_borrow_sweep); a borrow of it borrows it, not
+// only what it borrows (bck_borrow_owners). Only bck_st_may_own tells it
+// apart. A `let` / `=` gives it one kind or the other again.
+: i BCK_MAYBE_OWNED 9
 
 // The sound-and-complete rules (docs/SOUND_COMPLETE_PLAN.md): moves and
 // borrows. Under development they run when NURL_SOUND is set; they become
@@ -31205,9 +31217,27 @@ unsafe @ bck_paths_release → v {
 unsafe @ bck_st_get s state i id → i {
     ? < id ( nurl_str_len state ) {
         : *u sp # *u state
+        : i v - # i . sp id 48
+        // (A binding that may own its value is a borrow to every rule that
+        // asks this: bck_st_may_own.)
+        ^ ? == v BCK_MAYBE_OWNED BCK_BORROWED_SHARED v
+    } {}
+    BCK_UNINIT
+}
+
+// The digit as it is — BCK_MAYBE_OWNED too: a state put back as it was.
+unsafe @ bck_st_raw s state i id → i {
+    ? < id ( nurl_str_len state ) {
+        : *u sp # *u state
         ^ - # i . sp id 48
     } {}
     BCK_UNINIT
+}
+
+// Does `id` borrow its value on some path here and own it on another
+// (BCK_MAYBE_OWNED)?
+@ bck_st_may_own s state i id → b {
+    ^ == ( bck_st_raw state id ) BCK_MAYBE_OWNED
 }
 
 // State update — a fresh state with id's digit set to `val`, any gap
@@ -31260,9 +31290,15 @@ unsafe @ bck_join_state s a s b → s {
     : *u bp # *u b
     : ~ i i 0
     ~ < i m {
-        : i va ? < i na - # i . ap i 48 BCK_UNINIT
-        : i vb ? < i nb - # i . bp i 48 BCK_UNINIT
+        : i ra ? < i na - # i . ap i 48 BCK_UNINIT
+        : i rb ? < i nb - # i . bp i 48 BCK_UNINIT
+        : i va ? == ra BCK_MAYBE_OWNED BCK_BORROWED_SHARED ra
+        : i vb ? == rb BCK_MAYBE_OWNED BCK_BORROWED_SHARED rb
         : ~ i jv ( bck_join va vb )
+        // (A borrow on one path and the binding's own value on the other —
+        // or a binding that already may own its value on either: it may
+        // own it here. BCK_MAYBE_OWNED.)
+        ? & == jv BCK_BORROWED_SHARED | | == va BCK_OWNED == vb BCK_OWNED | == ra BCK_MAYBE_OWNED == rb BCK_MAYBE_OWNED { = jv BCK_MAYBE_OWNED } {}
         // (A borrow on one path met a binding consumed, stored or ended on
         // the other: it may hold nothing here. Remembered as the reason a
         // later use names — none was, and the use printed an empty source
@@ -32637,8 +32673,10 @@ unsafe @ bck_sx_skip s e → v {
         // handle into ITS value's own storage, which its owners hold.
         : s ind ? != 0 ( nurl_str_len vwm ) ( nurl_sym_get g_bck ( bck_bkey `vi_` rs ) ) ( nurl_str_cat bsl `` )
         : s bv ( __word_union ( __src_mark bsl ind ) deps )
-        // (A guarded `s` lent this time may own what it holds next.)
-        ^ ? own ( __word_union bv ids ) bv
+        // (A guarded `s` lent this time may own what it holds next; one
+        // that may own what it holds now, BCK_MAYBE_OWNED, points into its
+        // own buffer on that path: a copy of it borrows it too.)
+        ^ ? | own & ( bck_st_may_own st r ) | arg ! g_sxe_handover ( __word_union bv ids ) bv
     } {}
     ? own { ^ ( __word_union ids deps ) } {}
     // (A view that owns nothing — `w` — has no storage to point into.)
@@ -33190,7 +33228,7 @@ unsafe @ __bck_try_exit_check s st i line → v {
                 ? ! ( nurl_sym_has_word g_fn_invoke_only ( bck_field rec 5 ) ( bck_field rec 6 ) ) {
                     = g_bck_has_borrow 1
                     : s ows ( bck_field rec 1 )
-                    : ~ s cr ( bck_borrow_owners ( bck_field rec 2 ) )
+                    : ~ s cr ( bck_borrow_owners st ( bck_field rec 2 ) )
                     ~ != 0 ( nurl_str_len cr ) {
                         : s c ( str_first_word cr ) = cr ( str_skip_word cr )
                         : s dk ( bck_bkey `dd_` c )
@@ -33220,7 +33258,7 @@ unsafe @ __bck_try_exit_check s st i line → v {
                 // (The kind by its prefix: no copy of it per visit.)
                 : b bfvh != 0 ( nurl_str_starts rec `fborrowh\t` )
                 : b bfv | bfvh != 0 ( nurl_str_starts rec `fborrow\t` )
-                = g_bck_br_next ? | | bfv != 0 ( nurl_str_starts rec `vborrow\t` ) != 0 ( nurl_str_starts rec `vcborrow\t` ) ? | == 0 ( nurl_str_len bprior ) ( __words_within bprior ( bck_borrow_owners bsrcs ) ) ( bck_byte_root st bsrcs ) -1 -1
+                = g_bck_br_next ? | | bfv != 0 ( nurl_str_starts rec `vborrow\t` ) != 0 ( nurl_str_starts rec `vcborrow\t` ) ? | == 0 ( nurl_str_len bprior ) ( __words_within bprior ( bck_borrow_owners st bsrcs ) ) ( bck_byte_root st bsrcs ) -1 -1
                 = st ( bck_borrow_begin st bwid ? == 0 ( nurl_str_len bprior ) bsrcs ( nurl_str_cat3 bprior ` ` bsrcs ) )
                 = g_bck_br_next -1
                 // (A field viewer, `fborrow` — bck_note_borrow — and the one
@@ -33318,7 +33356,9 @@ unsafe @ __bck_try_exit_check s st i line → v {
                 : s asx ? != 0 amk ( bck_field rec 8 ) ``
                 : s asrcs ? != 0 ( nurl_str_len asx ) ( bck_sx_sources st asx asid ) ( nurl_str_cat `*` `` )
                 : s anest ? == amk0 110 ( bck_sx_sources st ( bck_field rec 8 ) asid ) ``
-                ? & == BCK_OWNED ( bck_st_get st asid ) ( bck_has_stored_in asid )
+                // (…or may own on some path only, BCK_MAYBE_OWNED: there it
+                // goes the same way.)
+                ? & | == BCK_OWNED ( bck_st_get st asid ) ( bck_st_may_own st asid ) ( bck_has_stored_in asid )
                 { = st ( bck_kill_stored_in st asid ( bck_field_int rec 3 ) T ) } {}
                 // The old value is dropped — when this name still owns it: a
                 // buffer it shared with a partner may go with it. One whose
@@ -33444,7 +33484,10 @@ unsafe @ __bck_try_exit_check s st i line → v {
                         }
                     }
                 } {
-                    = st ( bck_st_set st avid ( bck_alias_step ( bck_st_get st avid ) ) )
+                    // (A state the step leaves as it is stays as it is —
+                    // BCK_MAYBE_OWNED, which reads as a borrow, too.)
+                    : i avst ( bck_alias_step ( bck_st_get st avid ) )
+                    ? != avst ( bck_st_get st avid ) { = st ( bck_st_set st avid avst ) } {}
                     ? apart {
                         ( bck_partner_link avid ( nurl_str_to_int ( nurl_str_slice apf 1 - ( nurl_str_len apf ) 1 ) ) )
                     } {}
@@ -34057,8 +34100,9 @@ unsafe @ __bck_try_exit_check s st i line → v {
     } {}
     // Flattened to owners: a borrow of a borrow borrows from what that one
     // borrows from. Re-pointing a borrow binding (a cursor walking a tree)
-    // frees nothing, so it must not end the borrows taken through it.
-    : ~ s rest ( bck_borrow_owners srcs )
+    // frees nothing, so it must not end the borrows taken through it — one
+    // that may own its value on some path (BCK_MAYBE_OWNED) excepted.
+    : ~ s rest ( bck_borrow_owners st srcs )
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest ) = rest ( str_skip_word rest )
         ? & ! ( seq w bids ) ! ( str_contains_word set w ) {
@@ -35528,15 +35572,19 @@ unsafe @ bck_sx_is_id s e → b {
     ^ == r g_bck_end_wroot
 }
 
-// `srcs` with every borrow binding replaced by its own sources.
-@ bck_borrow_owners s srcs → s {
+// `srcs` with every borrow binding replaced by its own sources (in state
+// `st`).
+@ bck_borrow_owners s st s srcs → s {
     : ~ s out ``
     : ~ s rest ( nurl_str_cat srcs `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest ) = rest ( str_skip_word rest )
         // A field of a borrow borrows what that borrow does.
-        : s ws ( nurl_sym_get g_bck ( bck_bkey `bs_` ( nurl_str_int ( bck_path_root ( nurl_str_to_int w ) ) ) ) )
-        : s add ? == 0 ( nurl_str_len ws ) ( nurl_str_cat w `` ) ws
+        : i wr ( bck_path_root ( nurl_str_to_int w ) )
+        : s ws ( nurl_sym_get g_bck ( bck_bkey `bs_` ( nurl_str_int wr ) ) )
+        // (…and of it, where it may own its value — BCK_MAYBE_OWNED: given
+        // a new value, it releases that one there.)
+        : s add ? == 0 ( nurl_str_len ws ) ( nurl_str_cat w `` ) ? ( bck_st_may_own st wr ) ( nurl_str_cat3 ws ` ` w ) ws
         = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat add `` ) ( nurl_str_cat3 out ` ` add )
     }
     ^ out
@@ -35992,7 +36040,11 @@ unsafe @ bck_note_rc_arg s name s ty → v {
             // …the field itself or one holding it, or a field of it (a row
             // naming just the binding changed some part of it).
             : b whole | ! wfield & != wroot wid ( bck_id_holds wid sid )
-            ? & | == kc 3 == kc 2 != BCK_BORROWED_SHARED ( bck_st_get ist rid ) { = why `it was given a new value` } {}
+            // (A borrow binding re-pointed frees nothing — unless it may own
+            // what it held on some path: BCK_MAYBE_OWNED, a cursor a loop
+            // gave a fresh slice. Its new value releases that one there.)
+            : b repoint_frees | != BCK_BORROWED_SHARED ( bck_st_get ist rid ) ( bck_st_may_own ist rid )
+            ? & | == kc 3 == kc 2 repoint_frees { = why `it was given a new value` } {}
             ? == kc 8 {
                 // (A library call dropping or replacing elements of it: a
                 // copy of its handle still reaches what it holds now.)
@@ -36012,7 +36064,7 @@ unsafe @ bck_note_rc_arg s name s ty → v {
                 // (`@assign`: a closure that runs here gives it, or a field of
                 // it, a new value — __clo_assign_note — as a `= x …` here
                 // would, agora #151.)
-                ? & & == kc 32 ( seq ( bck_field rec 5 ) `@assign` ) != BCK_BORROWED_SHARED ( bck_st_get ist rid ) {
+                ? & & == kc 32 ( seq ( bck_field rec 5 ) `@assign` ) repoint_frees {
                     = why ? whole `a closure that runs here gives it a new value` `a closure that runs here gives a field of it a new value`
                 } {}
                 ? ( seq ( bck_field rec 5 ) `@opaqueclo` ) {
@@ -36852,11 +36904,11 @@ unsafe @ bck_note_rc_arg s name s ty → v {
         ( bck_put ( nurl_str_cat3 `mc_` tname ( bck_field rec 3 ) ) why )
         ^ out
     } {}
-    ( bck_diag_borrow_replaced root ( bck_field_int rec 3 ) cal )
+    ( bck_diag_borrow_replaced st root ( bck_field_int rec 3 ) cal )
     ^ st
 }
 
-@ bck_diag_borrow_replaced i id i line s cal → v {
+@ bck_diag_borrow_replaced s st i id i line s cal → v {
     : s ids ( nurl_str_int id )
     : s tag ( nurl_str_cat3 ( nurl_str_cat `br:` ( nurl_str_int line ) ) `:` ids )
     : s ws ( nurl_sym_get g_bck `warnset` )
@@ -36874,9 +36926,9 @@ unsafe @ bck_note_rc_arg s name s ty → v {
     : s from ? == 0 ( nurl_str_len sname ) ( nurl_str_cat `` `` ) ? sparam ( nurl_str_cat pfrom `` ) ( nurl_str_cat3 ` from '` sname `'` )
     : s whose ? sparam ( nurl_str_cat `what the caller of this function owns` `` ) ? == 0 ( nurl_str_len sname ) ( nurl_str_cat `what its owner still holds, which goes on reading and dropping it` `` ) ( nurl_str_cat3 `what '` sname `' still holds, which goes on reading and dropping it` )
     : s fs ( bck_fn_show cal )
-    // (Borrowed on some path only — a join's `bm_` — or with no source the
+    // (Borrowed on some path only — BCK_MAYBE_OWNED — or with no source the
     // walk knows: it may not own it.)
-    : b somep | == 0 ( nurl_str_len sname ) ( seq ( nurl_sym_get g_bck ( bck_bkey `bm_` ids ) ) `1` )
+    : b somep | == 0 ( nurl_str_len sname ) ( bck_st_may_own st id )
     : s m1 ? somep ( nurl_str_cat4 `'` name `' may not own its value: on some path it borrows it` from ) ( nurl_str_cat4 `'` name `' does not own its value: it borrows it` from )
     : s m2 ( nurl_str_cat4 ` (a ': ~' binding of another binding, of a field or of what a call lends shares that value), and '` fs `' gives what it is handed 'inout' a new value, or one of its fields — releasing ` whose )
     : s m3a ( nurl_str_cat3 `. Make '` name `' a value of its own where it is bound — ': ~ T ` )
@@ -37485,7 +37537,7 @@ unsafe @ bck_scope_drop s st s lets i line → s {
         : s js ( str_first_word rest ) = rest ( str_skip_word rest )
         : i id ( bck_field_int ( bck_rec ( nurl_str_to_int js ) ) 1 )
         ? ends { ( bck_put ( bck_bkey `oos_` ( nurl_str_int id ) ) `1` ) } {}
-        = out ( bck_st_set out id ( bck_st_get pre id ) )
+        = out ( bck_st_set out id ( bck_st_raw pre id ) )
         ( bck_partner_unlink id )
     }
     ^ out
@@ -37504,7 +37556,7 @@ unsafe @ bck_scope_drop s st s lets i line → s {
         // (The kind by its prefix: no copy of it per row.)
         ? != 0 ( nurl_str_starts rec `let\t` ) {
             : i id ( bck_field_int rec 1 )
-            = out ( bck_st_set out id ( bck_st_get pre id ) )
+            = out ( bck_st_set out id ( bck_st_raw pre id ) )
             ( bck_partner_unlink id )
             = j + j 1
         } {
@@ -37529,7 +37581,7 @@ unsafe @ bck_scope_drop s st s lets i line → s {
         : s w ( str_first_word rest )
         = rest ( str_skip_word rest )
         : i id ( nurl_str_to_int w )
-        = out ( bck_st_set out id ( bck_st_get pre id ) )
+        = out ( bck_st_set out id ( bck_st_raw pre id ) )
         ( bck_partner_unlink id )
     }
     ^ out
@@ -37682,8 +37734,6 @@ unsafe @ bck_loop_mask s pre s post → s {
 @ bck_put_bf s pre s ids s val → v {
     : s k ( bck_bkey pre ids )
     ? != 0 g_cj_depth { ( __cj_note k ( bck_path_root ( nurl_str_to_int ids ) ) ) } {}
-    // (Sources set anew: a join's "on some path" mark goes.)
-    ? != 0 g_bck_bm_any { ? == 98 ( nurl_str_get pre 0 ) { ( bck_put ( bck_bkey `bm_` ids ) `` ) } {} } {}
     ( bck_put k val )
 }
 
@@ -38033,18 +38083,6 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
         : s v2 ? ( __cj_has j2 k ) ( __cj_get j2 k ) ( __cj_get s0 k )
         : s jv ? & == 118 ( nurl_str_get k 0 ) == 100 ( nurl_str_get k 1 ) ( __vd_combine k v1 v2 s1 s2 j1 j2 s0 ) ? & & == 118 ( nurl_str_get k 0 ) == 105 ( nurl_str_get k 1 ) == 95 ( nurl_str_get k 2 ) ( __vi_combine k v1 v2 s1 s2 j1 j2 s0 ) ( __cj_combine k v1 v2 s1 s2 )
         = out ( nurl_str_cat4 out `\n` k ( nurl_str_cat `\t` jv ) )
-        // (A binding borrowed on one path and its own on the other is
-        // marked `bm_`: a diagnostic says it may not own its value, and from
-        // what it borrows on the path that does — bck_diag_borrow_replaced.)
-        ? & == 98 ( nurl_str_get k 0 ) ! ( seq v1 v2 ) {
-            : i bid ( __cj_key_root k )
-            : i t1 ( bck_st_get s1 bid )
-            : i t2 ( bck_st_get s2 bid )
-            ? | & == t1 BCK_OWNED == t2 BCK_BORROWED_SHARED & == t2 BCK_OWNED == t1 BCK_BORROWED_SHARED {
-                = out ( nurl_str_cat4 out `\nbm` ( nurl_str_slice k 2 - ( nurl_str_len k ) 2 ) `\t1` )
-                = g_bck_bm_any 1
-            } {}
-        } {}
     }
     ^ out
 }
@@ -38309,7 +38347,6 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     = g_cj_depth 0
     = g_cj_log ``
     = g_cj_entry 0
-    = g_bck_bm_any 0
     // New function, new dense id space: bumping the generation
     // invalidates every intern entry left by earlier functions.
     ? != 0 g_bck_has_paths { ( bck_paths_release ) } {}
