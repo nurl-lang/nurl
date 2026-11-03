@@ -646,6 +646,30 @@ theorem DKeep.killNames {Γ Γ' : Ctx} {sp : List Var} (h : DKeep Γ Γ' sp) :
   | d :: ds => show DKeep Γ (A2.kill d.kind.bound false d.root (A2.killNames ds Γ')) sp from
       (DKeep.killNames h ds).kill _ _ _
 
+theorem DKeep.killHv {Γ Γ' : Ctx} {sp : List Var} (h : DKeep Γ Γ' sp) :
+    ∀ ks, DKeep Γ (A2.killHv ks Γ') sp
+  | [] => h
+  | (e, b, r) :: ks => show DKeep Γ (A2.kill e b r (A2.killHv ks Γ')) sp from (DKeep.killHv h ks).kill _ _ _
+
+/-- Holding more, at bindings `letd` did not make, keeps what each binding
+    `letd` made views. -/
+theorem DKeep.holdOn {Γ Γ' : Ctx} {sp : List Var} (h : DKeep Γ Γ' sp) {rs : List Var} {D : List Dep}
+    (hrs : ∀ v ∈ rs, ∀ E, Γ' v = some E → E.dbind = false) : DKeep Γ (A2.holdOn rs D Γ') sp := by
+  intro v E hE hd hos hn hvs
+  obtain ⟨E0, h0, rfl⟩ := holdOn_get hE
+  by_cases hvr : v ∈ rs
+  · rw [ite_eq_left hvr, Entry.hold_dbind, hrs v hvr E0 h0] at hd; cases hd
+  · rw [ite_eq_right hvr] at hd hos hn ⊢; exact h v E0 h0 hd hos hn hvs
+
+/-- Agora #295: the roots of a change through a borrow that stores a view
+    were made by no `letd` (`ThruV`), so their holding it keeps what each
+    binding `letd` made views. -/
+theorem DKeep.thruV {Γ Γ1 : Ctx} {sp : List Var} (h : DKeep Γ Γ1 sp) {op : Edit} {tx : Ty}
+    {P D : List Dep} (hV : ThruV Γ1 op tx P D) : DKeep Γ (holdThru D P (killThruV op tx P Γ1)) sp :=
+  (h.killHv _).holdOn fun v hv E hE => by
+    obtain ⟨E0, h0, _, _, _, _, _, hb, _⟩ := killHv_same hE
+    rw [hb]; exact hV.dbind hv h0
+
 /-- A call moves a `sink` argument as it is, and changes an `inout` one that
     `letd` made only if it holds no views (`CallDtorSafe`): what it views
     stays. -/
@@ -786,6 +810,11 @@ theorem StmtT.dkeep {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (
     intro _ _
     refine (harg.dkeep.killNames _).setE fun _ hos _ _ => ?_
     rw [harg.at_ne hyx hx hx1 hl1, hmx] at hos; cases hos
+  | @editBV Γ Γ1 F x op Ex Ex1 t D hx hmx _ _ _ _ _ harg hyx hx1 hl1 _ _ hV =>
+    intro _ _
+    refine (harg.dkeep.thruV hV).setE fun _ hos _ _ => ?_
+    have hm : Ex1.mode = .bor := by rw [harg.at_ne hyx hx hx1 hl1, hmx]
+    exact absurd hos (by show ¬ (Ex1.mode.ownSlot = true); rw [hm]; decide)
 
 /-! ### A2-drop.2: a binding `letd` made stays one -/
 
@@ -863,6 +892,16 @@ theorem DStay.killNames {Γ Γ' : Ctx} {sp : List Var} (h : DStay Γ Γ' sp) :
   | d :: ds => show DStay Γ (A2.kill d.kind.bound false d.root (A2.killNames ds Γ')) sp from
       (DStay.killNames h ds).kill _ _ _
 
+theorem DStay.killHv {Γ Γ' : Ctx} {sp : List Var} (h : DStay Γ Γ' sp) :
+    ∀ ks, DStay Γ (A2.killHv ks Γ') sp
+  | [] => h
+  | (e, b, r) :: ks => show DStay Γ (A2.kill e b r (A2.killHv ks Γ')) sp from (DStay.killHv h ks).kill _ _ _
+
+theorem DStay.holdOn {Γ Γ' : Ctx} {sp : List Var} (h : DStay Γ Γ' sp) (rs : List Var) (D : List Dep) :
+    DStay Γ (A2.holdOn rs D Γ') sp := fun v E hE hd hos hvs => by
+  obtain ⟨E', h', hd', hos'⟩ := h v E hE hd hos hvs
+  exact ⟨_, holdOn_some h', by split <;> exact hd', by split <;> exact hos'⟩
+
 /-- A call moves a `sink` argument and changes an `inout` one as it is. -/
 theorem DStay.callPostAux {Γ0 : Ctx} {fn : Fn} {args : List Var} :
     ∀ (ps : List (PMode × Ty)) (as : List Var) (i : Nat) (Γ : Ctx), DStay Γ0 Γ [] →
@@ -936,6 +975,9 @@ theorem StmtT.dstay {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (
   | scopeD _ _ _ _ _ _ _ _ ih => exact ih.exitScope
   | editB hx hmx _ _ _ _ harg _ _ _ _ _ =>
     refine (harg.dstay.killNames _).setE fun E0 h0 _ hos _ => ?_
+    rw [hx] at h0; cases h0; rw [hmx] at hos; cases hos
+  | editBV hx hmx _ _ _ _ _ harg _ _ _ _ _ _ =>
+    refine ((harg.dstay.killHv _).holdOn _ _).setE fun E0 h0 _ hos _ => ?_
     rw [hx] at h0; cases h0; rw [hmx] at hos; cases hos
 
 theorem HeapOK.set_bor {m : Mem} (hh : HeapOK m) (x : Var) (w : Option Val) :

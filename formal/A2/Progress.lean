@@ -600,6 +600,9 @@ theorem progress {P : Prog}
   | editB hx hmx hl hty _ _ harg hyx hx1 hl1 _ hthru =>
     intro m hcd hi
     exact Or.inr <| Or.inr (progress_editB hi.toMInv (hi.leafAnch rfl) hx hmx hl hty harg hyx hx1 hl1 hthru)
+  | editBV hx hmx hl hty _ _ _ harg hyx hx1 hl1 _ hthru _ =>
+    intro m hcd hi
+    exact Or.inr <| Or.inr (progress_editB hi.toMInv (hi.leafAnch rfl) hx hmx hl hty harg hyx hx1 hl1 hthru)
 
   | panic => exact fun _ _ => Or.inr <| Or.inr ⟨_, Step.panic⟩
   | @letrec Γ Γ1 Δ F x f k E fn _ hx _ hf hp _ _ _ _ _ _ =>

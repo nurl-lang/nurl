@@ -1183,6 +1183,44 @@ def ThruV (Γ1 : Ctx) (op : Edit) (tx : Ty) (P D : List Dep) : Prop :=
     DtorSafe Γ1 (op.effAt d.kind (decide ((argE Γ1 d.root).ty = tx))) (argE Γ1 d.root).ty.holdsView d.root ∧
     (argE Γ1 d.root).dbind = false ∧ d.root ∉ roots D
 
+/-- A memory root of a change through a borrow owns its slot and is not lent
+    out. -/
+theorem ThruOK.root {Γ1 : Ctx} {F : List Var} {op : Edit} {tx : Ty} {P : List Dep}
+    (h : ThruOK Γ1 F op tx P) {r : Var} (hr : r ∈ roots (memDeps P)) :
+    ∃ Er, Γ1 r = some Er ∧ Er.mode.ownSlot = true ∧ r ∉ F := by
+  obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hr
+  obtain ⟨hF, _, Er, hEr, _, hcan, _⟩ := h d hd
+  exact ⟨Er, hEr, hcan.ownSlot, hF⟩
+
+/-- ... so no borrow is one. -/
+theorem ThruOK.not_root {Γ1 : Ctx} {F : List Var} {op : Edit} {tx : Ty} {P : List Dep}
+    (h : ThruOK Γ1 F op tx P) {x : Var} {Ex : Entry} (hx : Γ1 x = some Ex) (hos : Ex.mode.ownSlot = false) :
+    x ∉ roots (memDeps P) := fun hr => by
+  obtain ⟨Er, hEr, ho, _⟩ := h.root hr
+  rw [hx] at hEr; cases hEr; rw [hos] at ho; cases ho
+
+theorem ThruV.dbind {Γ1 : Ctx} {op : Edit} {tx : Ty} {P D : List Dep} (h : ThruV Γ1 op tx P D) {r : Var}
+    (hr : r ∈ roots (memDeps P)) {E : Entry} (hE : Γ1 r = some E) : E.dbind = false := by
+  obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hr
+  have := (h d hd).2.1
+  simpa [argE, hE] using this
+
+theorem ThruV.notD {Γ1 : Ctx} {op : Edit} {tx : Ty} {P D : List Dep} (h : ThruV Γ1 op tx P D) {r : Var}
+    (hr : r ∈ roots (memDeps P)) : r ∉ roots D := by
+  obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hr
+  exact (h d hd).2.2
+
+/-- What a change kills is on a root none of whose memory `D` depends on. -/
+theorem ThruV.kills {Γ1 : Ctx} {op : Edit} {tx : Ty} {P D : List Dep} (h : ThruV Γ1 op tx P D) :
+    ∀ k ∈ thruKills op Γ1 tx P, k.2.2 ∉ roots D := by
+  intro k hk
+  obtain ⟨d, hd, rfl⟩ := mem_thruKills.mp hk
+  exact (h d hd).2.2
+
+/-- Memory dependencies are none by name. -/
+theorem memDeps_noName {D : List Dep} : ∀ d ∈ memDeps D, d.kind.isName = false := fun d hd => by
+  simpa [memDeps] using (List.mem_filter.mp hd).2
+
 /-- What a change of elements is handed: the value `vec_push` stores (as
     `PushArg` takes it; an element `Vec` moves), the integer expression a
     truncation evaluates, which only reads, or both, for `vec_set`: the

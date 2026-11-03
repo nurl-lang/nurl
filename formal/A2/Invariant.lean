@@ -890,6 +890,28 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       Γ1 x = some Ex1 → Ex1.live = true → memDeps Ex1.path ≠ [] →
       ThruOK Γ1 F op Ex.ty Ex1.path →
       StmtT P Γ F (.edit true x op) (setE (killThru op Ex.ty Ex1.path Γ1) x Ex1)
+  /-- Agora #295: the same change through a borrow `x`, of an element type
+      that holds views (and no closure): a push or an element set may store
+      a view, valid through what the stored value depends on in memory
+      (`memDeps D`, as `PushArg` takes it). The value lands in the tree of
+      one of the memory roots of `x`'s path, which the typing cannot tell
+      apart, so each of them holds that too, if its type holds views, as
+      the owner of a `push` does (`holdThru`), and so does `x`, whose node
+      holds the value. Each root ends what its effect ends, with views
+      among its elements if its type holds views (`killThruV`: also the
+      borrows of its whole handle, which do not hold what was stored), and
+      must allow it as for `editB` (`ThruOK`), end no view a destructor
+      will read by it, not be made by `letd` (a destructor binding gains no
+      view), and not be a root of what is stored (`ThruV`). -/
+  | editBV {Γ Γ1 : Ctx} {F : List Var} {x : Var} {op : Edit} {Ex Ex1 : Entry} {t : Ty}
+      {D : List Dep} :
+      Γ x = some Ex → Ex.mode = .bor → Ex.live = true → Ex.ty = .vec t → t.holdsView = true →
+      t.hasFn = false → x ∉ F → EditArg Γ F op t D Γ1 → (∀ y, op.stored = some y → y ≠ x) →
+      Γ1 x = some Ex1 → Ex1.live = true → memDeps Ex1.path ≠ [] →
+      ThruOK Γ1 F op Ex.ty Ex1.path → ThruV Γ1 op Ex.ty Ex1.path (memDeps D) →
+      StmtT P Γ F (.edit true x op)
+        (setE (holdThru (memDeps D) Ex1.path (killThruV op Ex.ty Ex1.path Γ1)) x
+          { Ex1 with held := Ex1.held ++ memDeps D })
 
 /-- A function is well-typed when its body is, from its own view of the
     parameters, and ends as its summary says: the result is set and borrows

@@ -229,6 +229,8 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
           rw [killE_vdeps]; simpa [Entry.vdeps, ownHeld, hnv hd] using hdd⟩))
   | editB hx hmx _ _ _ _ harg hyx hx1 hl1 _ hthru =>
     exact fun _ hanch _ => CtxRel.editB hanch hx hmx harg hyx hx1 hl1 hthru
+  | editBV hx hmx _ _ _ _ _ harg hyx hx1 hl1 _ hthru hV =>
+    exact fun _ hanch _ => CtxRel.editBV hanch hx hmx harg hyx hx1 hl1 hthru hV
   | @free Γ F x E t hx _ hmo _ hxF hpin =>
     exact fun _ hanch _ => CtxRel.moved hanch hx (by rw [hmo]; simp) hxF hpin.1
   | sub hw _ ho ih =>
