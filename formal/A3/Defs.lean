@@ -674,6 +674,122 @@ theorem _root_.A2.StmtT.arcCall {P : Prog} {Γ Δ : Ctx} {F : List Var} {a g x :
     (StmtT.callc_recv hks (by simp [setE, upd_ne _ _ hxg, hx]) hxF (upd_same _ _ _) rfl rfl hj hσ hps hout
       hnt getE_own_noName hk hend) hendg
 
+/-! ### A3.5b: subsumption between closure classes
+
+A closure may be taken at a class above its own, `bare ≤ sync ≤ send ≤ any`
+(`Cross.Le`): a move of an owner (`RhsT.moveUp`) or a copy of a borrow
+(`RhsT.copyUp`).  The step is the move's or the copy's, and the value is what
+it was: its environment fits the class above (`Cross.Fits.mono`), so A2's
+invariant holds of it there (`WFv.up`, `ValOK.up`, `ViewsOK.up`, `SharesOK.up`,
+`RhsOut.up`).  What changes is only where the closure may go: the crossing
+rules read the type it is taken at.  A call through it is A2's `callc` at that
+type, so its code is checked against the interface it is called at
+(`Implements`, which reads only the interface's other parameters and result,
+whatever the class of its receiver). -/
+
+/-- **The class only forgets**: a closure moved or copied keeps its interfaces,
+    at its class or one above, never below. -/
+theorem _root_.A2.RhsT.var_up {Γ Γ1 : Ctx} {F : List Var} {y : Var} {E Ey : Entry} {ms ms' : List Nat}
+    {q q' : Cross} (h : RhsT Γ F (.var y) E Γ1) (hy : Γ y = some Ey) (hty : Ey.ty = .fn ms q)
+    (hE : E.ty = .fn ms' q') : ms' = ms ∧ q.Le q' := by
+  cases h with
+  | moveOwn hy' =>
+    rw [hy] at hy'; cases hy'
+    rw [hty] at hE; cases hE; exact ⟨rfl, .refl _⟩
+  | copyRoot hy' =>
+    rw [hy] at hy'; cases hy'
+    rw [hty] at hE; cases hE; exact ⟨rfl, .refl _⟩
+  | copyBor hy' =>
+    rw [hy] at hy'; cases hy'
+    have : Ey.ty = .fn ms' q' := hE
+    rw [hty] at this; cases this; exact ⟨rfl, .refl _⟩
+  | moveUp hy' _ _ _ _ _ hty' hle =>
+    rw [hy] at hy'; cases hy'
+    rw [hty] at hty'; cases hty'; cases hE; exact ⟨rfl, hle⟩
+  | copyUp hy' _ _ hty' hle =>
+    rw [hy] at hy'; cases hy'
+    rw [hty] at hty'; cases hty'; cases hE; exact ⟨rfl, hle⟩
+
+/-- So a closure `pack` typed `any` (h342's handler, which changes a binding it
+    captured by name) is `any` wherever a move or a copy takes it: no `Arc`
+    (`arcNew_not_any`), spawn (`spawn_not_any`), lock or channel (`lockNew_fn`,
+    `chan_fn`) takes it, however it is passed on. -/
+theorem _root_.A2.RhsT.var_any {Γ Γ1 : Ctx} {F : List Var} {y : Var} {E Ey : Entry} {ms : List Nat}
+    (h : RhsT Γ F (.var y) E Γ1) (hy : Γ y = some Ey) (hty : Ey.ty = .fn ms .any) : E.ty = .fn ms .any := by
+  cases h with
+  | moveOwn hy' => rw [hy] at hy'; cases hy'; exact hty
+  | copyRoot hy' => rw [hy] at hy'; cases hy'; exact hty
+  | copyBor hy' => rw [hy] at hy'; cases hy'; exact hty
+  | moveUp hy' _ _ _ _ _ hty' hle =>
+    rw [hy] at hy'; cases hy'
+    rw [hty] at hty'; cases hty'; rw [hle.any_eq]
+  | copyUp hy' _ _ hty' hle =>
+    rw [hy] at hy'; cases hy'
+    rw [hty] at hty'; cases hty'; show Ty.fn _ _ = _; rw [hle.any_eq]
+
+/-- A Sync handler (or a bare closure) where a Send one is declared: moved as
+    `send`, it is a spawn's argument (`SpawnOK`: its type holds no view) ... -/
+theorem moveUp_send {Γ : Ctx} {F : List Var} {y : Var} {Ey : Entry} {ms : List Nat} {q : Cross}
+    (hy : Γ y = some Ey) (hl : Ey.live = true) (hm : Ey.mode = .own) (hyF : y ∉ F) (hp : NoPin Γ y)
+    (hds : DtorSafe Γ .replace false y) (hty : Ey.ty = .fn ms q) (hq : q = .sync ∨ q = .bare) :
+    RhsT Γ F (.var y) ⟨.fn ms .send, .own, true, [], Ey.held, false, false⟩
+      (setE (kill .replace false y Γ) y { Ey with live := false, dtor := false }) ∧
+    (Ty.fn ms .send).holdsView = false :=
+  ⟨RhsT.moveUp hy hl hm hyF hp hds hty (by rcases hq with rfl | rfl <;> decide), rfl⟩
+
+/-- ... and any closure may be moved as `any`, where it crosses nothing: the
+    class a negative marker (`% NotSend`) gives a value is one subsumption
+    reaches, so the marker only removes typings. -/
+theorem moveUp_any {Γ : Ctx} {F : List Var} {y : Var} {Ey : Entry} {ms : List Nat} {q : Cross}
+    (hy : Γ y = some Ey) (hl : Ey.live = true) (hm : Ey.mode = .own) (hyF : y ∉ F) (hp : NoPin Γ y)
+    (hds : DtorSafe Γ .replace false y) (hty : Ey.ty = .fn ms q) :
+    RhsT Γ F (.var y) ⟨.fn ms .any, .own, true, [], Ey.held, false, false⟩
+      (setE (kill .replace false y Γ) y { Ey with live := false, dtor := false }) :=
+  RhsT.moveUp hy hl hm hyF hp hds hty (Cross.le_any q)
+
+/-- **A call through the weaker type**: a borrowed closure of class `q`, copied
+    as one of class `q'` above it, is called through an interface declared at
+    `q'` — A2's `callc` at the copy's type, so the code is checked against the
+    interface it is called at (`Implements`). -/
+theorem _root_.A2.StmtT.callcUp {P : Prog} {Γ Δ : Ctx} {F : List Var} {c c' x : Var} {j : Nat}
+    {zs : List Var} {k : Stmt} {Ec : Entry} {ms : List Nat} {q q' : Cross}
+    (hc : Γ c = some Ec) (hl : Ec.live = true) (hm : Ec.mode = .bor) (hty : Ec.ty = .fn ms q)
+    (hle : q.Le q') (hks : k.src = true) (hc' : Γ c' = none) (hc'F : c' ∉ F)
+    (hcall : StmtT P (setE Γ c' { Ec with ty := .fn ms q', dtor := false, dbind := false }) F
+      (.callc x c' j zs k) Δ) (hend : EndOK Δ c') :
+    StmtT P Γ F (.letv c' (.var c) (.callc x c' j zs k)) (exitScope c' Δ) :=
+  StmtT.letv hks hc' hc'F (RhsT.copyUp hc hl hm hty hle) hcall hend
+
+/-- **h342's fix through an interface declared at `any`**: the Sync handler an
+    `Arc` keeps, lent by `arc_get` (`g`), copied as an `any` closure (`g'`) and
+    called through an interface whose receiver is `(inp, fn ms any)`.  The
+    handler is Sync in the `Arc`, and the interface need not say so. -/
+theorem _root_.A2.StmtT.arcCallUp {P : Prog} {Γ Δ : Ctx} {F : List Var} {a g g' x : Var} {j : Nat}
+    {k : Stmt} {ms : List Nat} {q : Cross} {σ : Nat} {sig : Fn}
+    (ha : Γ a = some ⟨.arc (.fn ms .sync), .own, true, [], [], false, false⟩) (hks : k.src = true)
+    (hg : Γ g = none) (hgF : g ∉ F) (hg' : Γ g' = none) (hg'F : g' ∉ F) (hgg : g' ≠ g)
+    (hx : Γ x = none) (hxF : x ∉ F) (hxg : x ≠ g) (hxg' : x ≠ g') (hle : Cross.sync.Le q)
+    (hj : ms[j]? = some σ) (hσ : P[σ]? = some sig) (hps : sig.params = [(.inp, .fn ms q)])
+    (hout : ∀ o ∈ sig.outHolds, o.2.1 ≠ 0) (hnt : ¬ ThruFn P σ)
+    (hk : StmtT P
+      (setE (setE (setE Γ g (getE a ⟨.arc (.fn ms .sync), .own, true, [], [], false, false⟩ (.fn ms .sync))) g'
+          { getE a ⟨.arc (.fn ms .sync), .own, true, [], [], false, false⟩ (.fn ms .sync) with
+            ty := .fn ms q, dtor := false, dbind := false }) x
+        (recvRes g' { getE a ⟨.arc (.fn ms .sync), .own, true, [], [], false, false⟩ (.fn ms .sync) with
+            ty := .fn ms q, dtor := false, dbind := false }
+          (callRes (setE (setE Γ g (getE a ⟨.arc (.fn ms .sync), .own, true, [], [], false, false⟩ (.fn ms .sync)))
+            g' { getE a ⟨.arc (.fn ms .sync), .own, true, [], [], false, false⟩ (.fn ms .sync) with
+              ty := .fn ms q, dtor := false, dbind := false }) sig [g']))) F k Δ)
+    (hend : EndOK Δ x) (hendg' : EndOK (exitScope x Δ) g') (hendg : EndOK (exitScope g' (exitScope x Δ)) g) :
+    StmtT P Γ F (.letv g (.arcGet a) (.letv g' (.var g) (.callc x g' j [] k)))
+      (exitScope g (exitScope g' (exitScope x Δ))) := by
+  refine StmtT.letv hks hg hgF (arcGet_sync ha rfl rfl) ?_ hendg
+  refine StmtT.callcUp (upd_same _ _ _) rfl rfl rfl hle hks (by simp [setE, upd_ne _ _ hgg, hg'])
+    hg'F ?_ hendg'
+  refine StmtT.callc_recv hks (by simp [setE, upd_ne _ _ hxg', upd_ne _ _ hxg, hx]) hxF (upd_same _ _ _) rfl rfl
+    hj hσ hps hout hnt ?_ hk hend
+  exact getE_own_noName
+
 /-! ### A3.5c: trait objects across threads, as A2 types them
 
 A trait object is a package as a closure is (`Ty.fn ms q`, A2): `dyn Trait v`

@@ -330,6 +330,62 @@ theorem RhsOut.widen {m1 : Mem} {Γ1 : Ctx} {E : Entry} {v : Val} {o : Bool}
   · have hb' : E.mode = .bor := hb
     rw [hmo] at hb'; cases hb'
 
+/-! #### A3.5b: subsumption between closure classes
+
+A closure taken at a class above its own (`RhsT.moveUp`, `RhsT.copyUp`) is the
+value it was: what the invariant asks of it at the new class it had at the old
+one.  The class is read only by `Cross.Fits` (monotone, `Cross.Fits.mono`) and
+by where an environment may hold views (`ViewIn.pkg`: at `any` only) or shares
+(`ArcIn.pkg`: where `q.shares`), and an environment that fits a class below holds
+none of what that class excludes. -/
+
+theorem WFv.up {ms : List Nat} {q q' : Cross} {v : Val} (h : WFv (.fn ms q) v) (hle : q.Le q') :
+    WFv (.fn ms q') v := by
+  cases h with | pkg hw hq => exact .pkg hw (hq.mono hle)
+
+theorem ValOK.up {m : Mem} {ms : List Nat} {q q' : Cross} {v : Val} {P H : List Dep}
+    (h : ValOK m (.fn ms q) v P H) (hle : q.Le q') : ValOK m (.fn ms q') v P H := by
+  cases h with | pkg hx hq => exact .pkg hx (hq.mono hle)
+
+theorem ViewsOK.up {m : Mem} {ms : List Nat} {q q' : Cross} {v : Val} {H : List Dep}
+    (hw : WFv (.fn ms q) v) (h : ViewsOK m (.fn ms q) v H) : ViewsOK m (.fn ms q') v H := by
+  intro s w hin
+  cases hin with
+  | pkg hin' =>
+    cases q with
+    | any => exact h s w (.pkg hin')
+    | _ =>
+      cases hw with
+      | pkg _ hq => exact absurd hin'.holdsView (by rw [(hq.1 rfl).1]; simp)
+
+theorem SharesOK.up {m : Mem} {ms : List Nat} {q q' : Cross} {v : Val}
+    (hw : WFv (.fn ms q) v) (h : SharesOK m (.fn ms q) v) : SharesOK m (.fn ms q') v := by
+  cases hw with
+  | pkg _ hq => exact SharesOK.mk_pkg (h.pkg' hq)
+
+/-- What a right-hand side makes, taken at a class above its own. -/
+theorem RhsOut.up {m1 : Mem} {Γ1 : Ctx} {E : Entry} {v : Val} {o : Bool} {ms : List Nat} {q q' : Cross}
+    (h : RhsOut m1 Γ1 E v o) (hty : E.ty = .fn ms q) (hle : q.Le q') :
+    RhsOut m1 Γ1 { E with ty := .fn ms q' } v o := by
+  have hni : E.ty ≠ .int := by rw [hty]; simp
+  refine ⟨h.own, h.mode, h.live, rfl, fun _ => h.wf hni, fun hm => ?_, fun hb => ?_,
+    fun _ => h.names (Or.inl hni), h.held, h.pkgs, fun hos => ?_⟩
+  · obtain ⟨_, hw, hv, h1, h2, h3, h4, h5⟩ := h.valOwn hm
+    rw [hty] at hw hv
+    exact ⟨rfl, hw.up hle, hv.up hw, h1, h2, h3, h4, h5⟩
+  · have := h.valBor hb
+    rw [hty] at this
+    exact this.up hle
+  · have hm : E.mode = .own := by
+      rcases h.mode with hm | hm
+      · exact hm
+      · have : E.mode.ownSlot = true := hos
+        rw [hm] at this; cases this
+    have hw := (h.valOwn hm).2.1
+    have hs := h.shares hos
+    rw [hty] at hw hs
+    exact hs.up hw
+
 theorem RhsPost.same {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) : RhsPost m m Γ Γ F :=
   ⟨hi, rfl, Nat.le_refl _, fun _ => rfl, fun _ _ => rfl, fun _ _ h _ => h, fun _ => rfl,
     fun _ E1 h => ⟨E1, h, rfl, rfl⟩, DKeep.refl Γ [], BlkLe.refl _⟩

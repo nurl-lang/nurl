@@ -37,6 +37,7 @@ theorem RhsT.ctxRel {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry}
     (hr : RhsT Γ F r E Γ1) (hanch : RootbAnch Γ F) : CtxRel Γ Γ1 := by
   cases hr with
   | moveOwn hy _ hm hyF hpin => exact CtxRel.moved hanch hy (by rw [hm]; simp) hyF hpin
+  | moveUp hy _ hm hyF hpin => exact CtxRel.moved hanch hy (by rw [hm]; simp) hyF hpin
   | pop _ _ _ _ hyF => exact CtxRel.kill hanch hyF .drop _ (hmn_of_ne_replace _ (by simp) _)
   | pair hy _ hp1 hz _ hp2 _ =>
     have h1 := hp1.ctxRel hy hanch
@@ -65,6 +66,7 @@ theorem RhsT.ctxRel {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry}
   | new _ => exact CtxRel.refl _
   | copyRoot _ _ _ => exact CtxRel.refl _
   | copyBor _ _ _ => exact CtxRel.refl _
+  | copyUp _ _ _ _ _ => exact CtxRel.refl _
   | borrow _ _ _ => exact CtxRel.refl _
   | «at» _ _ _ _ => exact CtxRel.refl _
   | view _ _ _ _ => exact CtxRel.refl _

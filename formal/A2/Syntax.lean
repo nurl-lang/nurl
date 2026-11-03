@@ -19,7 +19,8 @@ abbrev Var := Nat
     the closure may cross (docs/MEMORY.md §6.5).  The environment's type is
     not part of a closure's type, so the type carries this instead; `pack`
     gives it from the captures' type (`Cross.Fits`), and a call through the
-    closure does not read it.  The four are ordered, each holding less:
+    closure does not read it.  The four are ordered, each holding less, and a
+    closure may be taken at a class above its own (`Cross.Le`, `RhsT.moveUp`):
 
   * `any`  — anything: views, and bindings captured by name (what A2's
              closures are);
@@ -322,6 +323,50 @@ theorem Cross.Fits.map {q : Cross} {te : Ty} {cs : List (Var × PMode × Ty)} (h
 
 theorem Cross.fits_any (te : Ty) (cs : List (Var × PMode × Ty)) : Cross.any.Fits te cs :=
   ⟨fun h => absurd h (by decide), fun h => absurd h (by decide), fun h => absurd h (by decide)⟩
+
+/-- A3.5b's order on classes, by what an environment may hold: `bare`, `sync`,
+    `send`, `any`, each holding more than the one before. -/
+def Cross.rank : Cross → Nat
+  | .bare => 0
+  | .sync => 1
+  | .send => 2
+  | .any => 3
+
+/-- A3.5b, subsumption: a closure of class `q` may be taken as one of class `q'`
+    (`bare ≤ sync ≤ send ≤ any`).  Its environment then holds no more than `q'`
+    says (`Cross.Fits.mono`), so the class only forgets where it may cross. -/
+def Cross.Le (q q' : Cross) : Prop := q.rank ≤ q'.rank
+
+instance (q q' : Cross) : Decidable (Cross.Le q q') := inferInstanceAs (Decidable (_ ≤ _))
+
+theorem Cross.Le.refl (q : Cross) : q.Le q := Nat.le_refl _
+
+theorem Cross.Le.trans {q q' q'' : Cross} (h : q.Le q') (h' : q'.Le q'') : q.Le q'' := Nat.le_trans h h'
+
+theorem Cross.le_any (q : Cross) : q.Le .any := by cases q <;> decide
+
+theorem Cross.bare_le (q : Cross) : Cross.bare.Le q := Nat.zero_le _
+
+/-- Only `any` is above `any`. -/
+theorem Cross.Le.any_eq {q : Cross} (h : Cross.any.Le q) : q = .any := by
+  cases q <;> first | rfl | exact absurd h (by decide)
+
+/-- What a class says its environment holds none of, a class below it holds
+    none of either. -/
+theorem Cross.Le.views {q q' : Cross} (h : q.Le q') (h' : q'.views = false) : q.views = false := by
+  cases q <;> cases q' <;> first | rfl | exact absurd h (by decide) | exact absurd h' (by decide)
+
+theorem Cross.Le.cells {q q' : Cross} (h : q.Le q') (h' : q'.cells = false) : q.cells = false := by
+  cases q <;> cases q' <;> first | rfl | exact absurd h (by decide) | exact absurd h' (by decide)
+
+theorem Cross.Le.shares {q q' : Cross} (h : q.Le q') (h' : q'.shares = false) : q.shares = false := by
+  cases q <;> cases q' <;> first | rfl | exact absurd h (by decide) | exact absurd h' (by decide)
+
+/-- **Subsumption is sound for what a package holds**: an environment that fits
+    a class fits every class above it. -/
+theorem Cross.Fits.mono {q q' : Cross} {te : Ty} {cs : List (Var × PMode × Ty)} (h : q.Fits te cs)
+    (hle : q.Le q') : q'.Fits te cs :=
+  ⟨fun hv => h.1 (hle.views hv), fun hc => h.2.1 (hle.cells hc), fun hs => h.2.2 (hle.shares hs)⟩
 
 /-- A3.4: an `Atomic`'s operations (`stdlib/std/atomic.nu`), each one
     `nurl_atomic_i64_*` (`__ATOMIC_SEQ_CST`) on the word. -/

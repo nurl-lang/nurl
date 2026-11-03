@@ -263,6 +263,11 @@ theorem RhsT.names {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : Rhs
       ⟨[], Keeps.refl Γ []⟩⟩
   | copyBor hy hl hm =>
     exact ⟨hn, fun _ h => (hn _ _ hy hl (Or.inl (nonint h (Or.inl hm))) :), ⟨[], Keeps.refl Γ []⟩⟩
+  | moveUp hy hl _ _ _ _ hty _ =>
+    refine ⟨hn.moved hy, fun _ _ => own_named (moved_named hn hy hl (by rw [hty]; simp)),
+      ⟨_, Keeps.moved Γ hy⟩⟩
+  | copyUp hy hl _ hty _ =>
+    exact ⟨hn, fun _ _ => (hn _ _ hy hl (Or.inl (by rw [hty]; simp)) :), ⟨[], Keeps.refl Γ []⟩⟩
   | borrow hy hl ht =>
     have hN := hn _ _ hy hl (Or.inl (by rw [ht]; simp))
     exact ⟨hn, fun _ _ => by

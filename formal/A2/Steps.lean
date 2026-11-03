@@ -1420,6 +1420,20 @@ theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry
       obtain ⟨w, hw, _⟩ := hi.bor_val hy hl (by rw [hm]; rfl)
       rw [hw] at hv; cases hv
     | copy hv => exact ⟨RhsPost.same hi, (out_copyBor hi hy hl hm hv).setDtor false false⟩
+  | moveUp hy hl hm hyF hpin hds hty hle =>
+    cases he with
+    | moveOwn hv =>
+      obtain ⟨hp, ho⟩ := rhs_move hi hanch hy hl hm hyF hpin hv hds
+      exact ⟨hp, ho.up hty hle⟩
+    | copy hv =>
+      obtain ⟨T, hT, _⟩ := hi.own_val hy hl (by rw [hm]; rfl)
+      rw [hT] at hv; cases hv
+  | copyUp hy hl hm hty hle =>
+    cases he with
+    | moveOwn hv =>
+      obtain ⟨w, hw, _⟩ := hi.bor_val hy hl (by rw [hm]; rfl)
+      rw [hw] at hv; cases hv
+    | copy hv => exact ⟨RhsPost.same hi, ((out_copyBor hi hy hl hm hv).setDtor false false).up hty hle⟩
   | borrow hy hl ht =>
     rename_i y E t
     cases he with
