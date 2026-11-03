@@ -63,7 +63,7 @@ theorem reach_cinv {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hPc : Prog
   | refl => exact ⟨h, hc⟩
   | step hst _ ih =>
     cases hst with
-    | thread hi _ hs => exact ih (CInv.thread_of hP hPc hR h hi hs) (hc.thread_of h hi hs)
+    | thread hi _ hs => exact ih (CInv.thread_of hP hPc hR h hi hs) (hc.thread_of hi hs)
     | spawn hi hK hsp hf hx hmv hsc => exact ih (hS h hi hK hsp hf hx hmv) (hc.spawn_of hi hmv hsc)
     | spawnFail hi hK _ _ _ _ _ => exact ih (hF h hi hK) (hc.setStmt hi _)
 
@@ -85,7 +85,7 @@ theorem claim_of
   intro P spawn G s Δ nv hP hPc hSp hG ht hs hsc hv
   have h0 := CInv.start ht hs hsc hv hG
   have hreach : ∀ C, Reach P spawn (Cfg.start G s nv) C → CInv P C ∧ CellInv C :=
-    fun C hr => reach_cinv hP hPc (hR P) (hS P spawn hP hPc hSp) (hF P) h0 (CellInv.start G s nv) hr
+    fun C hr => reach_cinv hP hPc (hR P) (hS P spawn hP hPc hSp) (hF P) h0 (CellInv.start hG s nv) hr
   refine ⟨fun C hr => CInv.memSafe_of hP (hL P) (hreach C hr).1,
     fun C hr hrace => hrace.elim (CInv.raceFree (hreach C hr).1) (CellInv.cellRaceFree (hreach C hr).2),
     fun C hr hend i hi => ?_⟩

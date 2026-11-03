@@ -143,28 +143,29 @@ theorem EvalR.lift {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.
   | taker hy => exact EvalR.taker hy
   | pack h1 => exact EvalR.pack (TakeVal.lift h1 a2)
   | arcNew h1 hfr => exact EvalR.arcNew (TakeVal.lift h1 a2) hfr
-  | lockNew h1 hfr => exact EvalR.lockNew (TakeVal.lift h1 a2) hfr
-  | cellNew h1 hfr => exact EvalR.cellNew (TakeVal.lift h1 a2) hfr
+  | lockNew h1 hfr hck => exact EvalR.lockNew (TakeVal.lift h1 a2) hfr hck
+  | cellNew h1 hfr hck => exact EvalR.cellNew (TakeVal.lift h1 a2) hfr hck
   | arcClone hy => exact EvalR.arcClone hy
   | lockClone hy => exact EvalR.lockClone hy
   | cellClone hy => exact EvalR.cellClone hy
   | atomic hy hk h1 h2 hnv => exact EvalR.atomic hy hk (Eval.lift h1 a2) (Eval.lift h2 a2) hnv
-  | chanSend hy h1 hk hc hd hnv =>
+  | chanSend hy h1 hk hc hd hnv hck =>
     exact EvalR.chanSend (m := liftMem a2 m) hy (TakeVal.lift h1 a2) hk (union_true a2 hc)
-      (union_true a2 hd) hnv
-  | @chanSendClosed _ _ _ _ _ _ _ _ m1 a' hy h1 hk hfr =>
+      (union_true a2 hd) hnv hck
+  | @chanSendClosed _ _ _ _ _ _ _ _ m1 a' hy h1 hk hfr hck =>
     -- A3.4: what a send to a closed channel drops is the thread's own
     exact EvalR.chanSendClosed (m := liftMem a2 m) (m1 := liftMem a2 m1) (a' := union a' a2) hy
       (TakeVal.lift h1 a2) hk
-      (Frees.lift hfr fun i h => hd i (by rw [← TakeVal.alloc h1]; exact h))
-  | chanRecv hy hk hc hd hnv => exact EvalR.chanRecv hy hk (union_true a2 hc) (union_true a2 hd) hnv
+      (Frees.lift hfr fun i h => hd i (by rw [← TakeVal.alloc h1]; exact h)) hck
+  | chanRecv hy hk hc hd hnv hck =>
+    exact EvalR.chanRecv hy hk (union_true a2 hc) (union_true a2 hd) hnv hck
   | chanRecvNone hy hk hc hw => exact EvalR.chanRecvNone hy hk (union_true a2 hc) hw
   | chanClose hy hk hnv => exact EvalR.chanClose hy hk hnv
   | arcGet hy hk => exact EvalR.arcGet hy hk
   | rwRead hy hk hfr => exact EvalR.rwRead hy hk hfr
   | glob hg hf => exact EvalR.glob hg hf
   | lockTake hy hk hnv => exact EvalR.lockTake hy hk hnv
-  | lockRestore hy h1 hk => exact EvalR.lockRestore (m := liftMem a2 m) hy (TakeVal.lift h1 a2) hk
+  | lockRestore hy h1 hk hck => exact EvalR.lockRestore (m := liftMem a2 m) hy (TakeVal.lift h1 a2) hk hck
 
 theorem EvalR.liftP {m : Mem} {r : Rhs} (h : EvalR m r .panic) (a2 : Nat → Bool) :
     EvalR (liftMem a2 m) r .panic := by
@@ -178,6 +179,12 @@ theorem EvalR.liftP {m : Mem} {r : Rhs} (h : EvalR m r .panic) (a2 : Nat → Boo
   | takerP hy => exact EvalR.takerP hy
   | globP hg => exact EvalR.globP hg
   | lockRestoreP hy hk => exact EvalR.lockRestoreP hy hk
+  -- A3.5's second cut: the crossing check reads the slots only
+  | lockNewFail h1 hck => exact EvalR.lockNewFail (TakeVal.lift h1 a2) hck
+  | cellNewFail h1 hck => exact EvalR.cellNewFail (TakeVal.lift h1 a2) hck
+  | chanSendFail h1 hck => exact EvalR.chanSendFail (TakeVal.lift h1 a2) hck
+  | chanRecvFail hy hk hck => exact EvalR.chanRecvFail hy hk hck
+  | lockRestoreFail h1 hck => exact EvalR.lockRestoreFail (TakeVal.lift h1 a2) hck
 
 theorem BindParams.lift {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var} {base i : Nat}
     (h : BindParams m ps as base i m') (a2 : Nat → Bool) :
@@ -328,16 +335,18 @@ theorem Step.lifts {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
   | scopeLIn _ ih =>
     obtain ⟨s'', hg, hs⟩ := ih
     exact ⟨_, GhostRel.scopeL _ _ _ hg, Step.scopeLIn hs⟩
-  | scopeLSkip hrl =>
+  | scopeLSkip hrl hck =>
     cases hrl with
-    | put hx hg hk =>
-      exact ⟨_, GhostRel.refl _, Step.scopeLSkip (m := liftMem a2 m) (Release.put hx hg hk)⟩
+    | put hx hg hk hck' =>
+      exact ⟨_, GhostRel.refl _, Step.scopeLSkip (m := liftMem a2 m) (Release.put hx hg hk hck') hck⟩
     | drop hc hx hdr =>
-      exact ⟨_, GhostRel.refl _, Step.scopeLSkip (m := liftMem a2 m) (Release.drop hc hx (DropSlot.lift hdr hd))⟩
+      exact ⟨_, GhostRel.refl _,
+        Step.scopeLSkip (m := liftMem a2 m) (Release.drop hc hx (DropSlot.lift hdr hd)) hck⟩
+  | scopeLFail hx hck => exact ⟨_, GhostRel.refl _, Step.scopeLFail (m := liftMem a2 m) hx hck⟩
   | @scopeLP m1 _ _ _ _ _ hs hrl ih =>
     -- A3.3: the payload goes back on the way out, or the slot is dropped
     cases hrl with
-    | put hx hg hk => exact Step.scopeLP (m1 := liftMem a2 m1) ih (Release.put hx hg hk)
+    | put hx hg hk hck => exact Step.scopeLP (m1 := liftMem a2 m1) ih (Release.put hx hg hk hck)
     | drop hc hx hdr =>
       exact Step.scopeLP (m1 := liftMem a2 m1) ih (Release.drop hc hx (DropSlot.lift hdr ((Step.grows hs).disj hd hf)))
 

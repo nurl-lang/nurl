@@ -164,6 +164,7 @@ theorem Step.grows {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
     exact ⟨Nat.le_refl _, fun _ h => .inl h, (BlkLe.setLock hk none).trans (BlkLe.refl _)⟩
   | scopeLIn _ ih => exact ih
   | scopeLSkip hrl => exact Release.grows hrl
+  | scopeLFail _ _ => exact Grows.refl _
   | scopeLP _ hrl ih => exact ih.trans (Release.grows hrl)
 
 /-! ### A3.6: no step writes a module global -/

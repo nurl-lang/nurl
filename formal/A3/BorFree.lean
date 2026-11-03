@@ -195,6 +195,7 @@ theorem Step.borFree {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r
   | withLock _ _ _ => exact (hb.of_st rfl).set _ (SlotFree.ids ids_nonNode)
   | scopeLIn _ ih => exact ih
   | scopeLSkip hrl => cases hrl <;> exact (hb.of_st rfl).remove _
+  | scopeLFail _ _ => exact hb
   | scopeLP _ hrl ih => cases hrl <;> exact (ih.of_st rfl).remove _
 
 end A3

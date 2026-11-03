@@ -201,7 +201,9 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
       cases h : m.blk m.nid with
       | none => rfl
       | some bl => exact absurd (hi.heap.bkey _ bl h) (Nat.lt_irrefl _)
-    exact ⟨_, EvalR.lockNew htk hfr⟩
+    by_cases hck : SendCheck [v] m1.st
+    · exact ⟨_, EvalR.lockNew htk hfr hck⟩
+    · exact ⟨_, EvalR.lockNewFail htk hck⟩
   | arcClone ha hl hty =>
     obtain ⟨o, k, p, hv⟩ := hi.arc_slot ha hl hty
     exact ⟨_, EvalR.arcClone hv⟩
@@ -218,7 +220,9 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
       cases h : m.blk m.nid with
       | none => rfl
       | some bl => exact absurd (hi.heap.bkey _ bl h) (Nat.lt_irrefl _)
-    exact ⟨_, EvalR.cellNew htk hfr⟩
+    by_cases hck : SendCheck [v] m1.st
+    · exact ⟨_, EvalR.cellNew htk hfr hck⟩
+    · exact ⟨_, EvalR.cellNewFail htk hck⟩
   | cellClone ha hl hty hos =>
     obtain ⟨k, hv⟩ := hi.cell_slot ha hl hty hos
     exact ⟨_, EvalR.cellClone hv⟩
@@ -247,7 +251,7 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
     cases ob with
     | none => exact absurd ⟨o, k, hv, Or.inl hk⟩ hnb
     | some p =>
-      obtain ⟨_, _, hpay, _⟩ := hi.blocks k _ hk
+      obtain ⟨_, _, hpay⟩ := hi.blocks k _ hk
       obtain ⟨hw, _⟩ := hpay p rfl
       cases hw with
       | int =>
@@ -263,12 +267,15 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
     cases ob with
     | none => exact absurd ⟨o, k, _, hv, Or.inl hk⟩ hnb
     | some p =>
-      obtain ⟨_, _, hpay, _⟩ := hi.blocks k _ hk
+      obtain ⟨_, _, hpay⟩ := hi.blocks k _ hk
       obtain ⟨hw, _⟩ := hpay p rfl
       obtain ⟨_, _, hall⟩ := hi.heap.blk k _ hk
       obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly
       have hb1 : m1.blk = m.blk := by cases htk <;> rfl
       have ha1 : m1.alloc = m.alloc := by cases htk <;> rfl
+      -- A3.5's second cut: the crossing check first
+      by_cases hck : SendCheck [v] m1.st
+      case neg => exact ⟨_, EvalR.chanSendFail htk hck⟩
       cases hw with
       | pair hq hf =>
         cases hq with
@@ -279,11 +286,11 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
             | zero =>
               exact ⟨_, EvalR.chanSend hv htk (by rw [hb1]; exact hk)
                 (by rw [ha1]; exact (hall c (by simp [Blk.tree])).1)
-                (by rw [ha1]; exact (hall d (by simp [Blk.tree])).1) (by rw [hb1]; exact hnv)⟩
+                (by rw [ha1]; exact (hall d (by simp [Blk.tree])).1) (by rw [hb1]; exact hnv) hck⟩
             | succ f =>
               obtain ⟨_, hp⟩ := push_take hi hanch hy hly htyy hpa htk
               obtain ⟨a', hfr⟩ := frees_exists hp.wf m1.alloc hp.nd (fun i hi' => (hp.al i hi').1)
-              exact ⟨_, EvalR.chanSendClosed hv htk (by rw [hb1]; exact hk) hfr⟩
+              exact ⟨_, EvalR.chanSendClosed hv htk (by rw [hb1]; exact hk) hfr hck⟩
   | @chanRecv w a E s ha hl hty =>
     -- A3.4: the queue's head, or none, unless the channel's payload is
     -- checked out or (`chan_recv`) its queue is empty and open
@@ -293,7 +300,7 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
     cases ob with
     | none => exact absurd ⟨o, k, _, hv, Or.inl hk⟩ hnb
     | some p =>
-      obtain ⟨_, _, hpay, _⟩ := hi.blocks k _ hk
+      obtain ⟨_, _, hpay⟩ := hi.blocks k _ hk
       obtain ⟨hw, _⟩ := hpay p rfl
       obtain ⟨_, _, hall⟩ := hi.heap.blk k _ hk
       cases hw with
@@ -306,7 +313,9 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
             cases es with
             | cons v es =>
               have hd : m.alloc d = true := (hall d (by simp [Blk.tree])).1
-              exact ⟨_, EvalR.chanRecv hv hk hc hd hnv⟩
+              by_cases hck : RecvCheck v es
+              · exact ⟨_, EvalR.chanRecv hv hk hc hd hnv hck⟩
+              · exact ⟨_, EvalR.chanRecvFail hv hk hck⟩
             | nil =>
               by_cases hb : w = true ∧ f = 0
               · obtain ⟨rfl, rfl⟩ := hb
@@ -319,7 +328,7 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
     cases ob with
     | none => exact absurd ⟨o, k, _, hv, Or.inl hk⟩ hnb
     | some p =>
-      obtain ⟨_, _, hpay, _⟩ := hi.blocks k _ hk
+      obtain ⟨_, _, hpay⟩ := hi.blocks k _ hk
       obtain ⟨hw, _⟩ := hpay p rfl
       cases hw with
       | pair _ hf =>
@@ -341,7 +350,9 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
     | none =>
       obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly
       have hb1 : m1.blk = m.blk := by cases htk <;> rfl
-      exact ⟨_, EvalR.lockRestore hv htk (by rw [hb1]; exact hk)⟩
+      by_cases hck : SendCheck [v] m1.st
+      · exact ⟨_, EvalR.lockRestore hv htk (by rw [hb1]; exact hk) hck⟩
+      · exact ⟨_, EvalR.lockRestoreFail htk hck⟩
     | some p => exact ⟨_, EvalR.lockRestoreP hv hk⟩
   | arcGet ha hl hty _ _ =>
     obtain ⟨o, k, p, hv⟩ := hi.arc_slot ha hl hty
@@ -515,7 +526,10 @@ theorem progress {P : Prog}
     · obtain ⟨sl, a', hsl, hd⟩ := dropSlot_exists hi.toMInv hx
       -- the payload goes back into its block, or `x`'s slot is dropped
       obtain ⟨m', hrl⟩ := Release.exists (k := kk) (t := t) hsl hd
-      exact Or.inr <| Or.inr ⟨_, Step.scopeLSkip hrl⟩
+      -- A3.5's second cut: unless it fails the crossing check, which panics
+      by_cases hck : GiveCheck m x sl
+      · exact Or.inr <| Or.inr ⟨_, Step.scopeLSkip hrl fun sl' h => by rw [hsl] at h; cases h; exact hck⟩
+      · exact Or.inr <| Or.inr ⟨_, Step.scopeLFail hsl hck⟩
     · exact Or.inr (Or.inl hbl)
     · cases r with
       | ok m' k' => exact Or.inr <| Or.inr ⟨_, Step.scopeLIn hr⟩

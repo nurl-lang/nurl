@@ -139,8 +139,8 @@ theorem MInv.of_st {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) (
   shares v E sl T hE hsl hown hT := (hi.shares v E sl T hE (by rw [h] at hsl; exact hsl) hown hT).of_blk hb
   blocks k bl hk := by
     rw [hb] at hk
-    obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k bl hk
-    exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.of_blk hb⟩, h4⟩
+    obtain ⟨h1, h2, h3⟩ := hi.blocks k bl hk
+    exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.of_blk hb⟩⟩
 
 /-! ### A3.1: more blocks
 
@@ -189,7 +189,7 @@ theorem SlotOK.grow {m m' : Mem} (hst : m'.st = m.st) (hb : BlkLe m.blk m'.blk) 
 /-- What the invariant asks of the blocks. -/
 def BlocksIn (m : Mem) : Prop :=
   ∀ k bl, m.blk k = some bl → bl.ty.ok = true ∧ bl.ty.holdsView = false ∧
-    (∀ p, bl.pay = some p → WFv bl.ty p ∧ SharesOK m bl.ty p) ∧ (bl.kind = .lock → bl.ty.hasCell = false)
+    (∀ p, bl.pay = some p → WFv bl.ty p ∧ SharesOK m bl.ty p)
 
 /-- **More blocks**: the invariant holds over a store with the same slots and
     more blocks, each as the invariant asks. -/
@@ -633,7 +633,7 @@ theorem WFv.pkgsOK_noView {τ : Ty} {v : Val} (hw : WFv τ v) (hhv : τ.holdsVie
 /-- A3.1: a payload's packages are well formed (A3.5b: it holds Sync ones). -/
 theorem MInv.pay_pkgs {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {k : Nat} {bl : Blk} (hk : m.blk k = some bl)
     {n : Val} (hs : Sub n bl.rd) : PkgsOK n := by
-  obtain ⟨_, hhv, hw, _⟩ := hi.blocks k bl hk
+  obtain ⟨_, hhv, hw⟩ := hi.blocks k bl hk
   intro fs te ms e cs hp
   rcases Blk.sub_rd hs with ⟨_, q, hq, hs'⟩ | rfl
   · exact (hw q hq).1.pkgsOK_noView hhv _ _ _ _ _ (hp.trans hs')
@@ -1304,7 +1304,7 @@ A share owns nothing: its payload is the block's, which owns its addresses
     payload it carries, whose shares name blocks. -/
 theorem MInv.arcBlk_shares {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {k : Nat} {t : Ty} {p : Val}
     (hk : ArcBlk (m.blk k) t p) : SharesOK m t p := by
-  rcases hk with hk | hk <;> exact ((hi.blocks k _ hk).2.2.1 p rfl).2
+  rcases hk with hk | hk <;> exact ((hi.blocks k _ hk).2.2 p rfl).2
 
 /-- A share's block, through the binding that holds the share (an owner, or
     a borrow of it). -/
@@ -1394,12 +1394,12 @@ theorem out_share {m : Mem} {Γ : Ctx} {t : Ty} {k : Nat} {p : Val} (htok : t.ok
 /-- A3.2: a lock share, owned: it holds nothing, and its block is a lock
     block of its type. -/
 theorem out_lkShare {m : Mem} {Γ : Ctx} {t : Ty} {k : Nat} (htok : t.ok = true)
-    (hvf : t.holdsView = false) (hna : t.hasCell = false) (hk : ∃ o, m.blk k = some ⟨t, .lock, o⟩) :
+    (hvf : t.holdsView = false) (hk : ∃ o, m.blk k = some ⟨t, .lock, o⟩) :
     RhsOut m Γ ⟨.lk t, .own, true, [], [], false, false⟩ (.lk k) true where
   own := rfl
   mode := Or.inl rfl
   live := rfl
-  tyok := by simp [Ty.ok, htok, hvf, hna]
+  tyok := by simp [Ty.ok, htok, hvf]
   wf _ r hr := by simp [roots, Entry.vdeps, Mode.ownSlot] at hr
   valOwn _ := ⟨rfl, .lk, ViewsOK.none (show (Ty.lk t).holdsView = false from hvf) _ _,
     List.nodup_nil, fun _ h => (nomatch h), fun _ _ _ _ h => (nomatch h), fun _ _ _ h => (by cases h),
@@ -1451,17 +1451,17 @@ theorem out_lockClone {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry
   have hk := hi.lk_val ha hl hty hv
   have hok := hi.tyok ha; rw [hty] at hok
   simp only [Ty.ok, Bool.and_eq_true] at hok
-  exact out_lkShare hok.1.1 (by simpa using hok.1.2) (by simpa using hok.2) hk
+  exact out_lkShare hok.1 (by simpa using hok.2) hk
 
 /-- A3.5: a cell share, owned: it holds nothing, and names a lock block of
     its type. -/
 theorem out_cellShare {m : Mem} {Γ : Ctx} {t : Ty} {k : Nat} (htok : t.ok = true)
-    (hvf : t.holdsView = false) (hna : t.hasArc = false) (hk : ∃ o, m.blk k = some ⟨t, .lock, o⟩) :
+    (hvf : t.holdsView = false) (hk : ∃ o, m.blk k = some ⟨t, .lock, o⟩) :
     RhsOut m Γ ⟨.cell t, .own, true, [], [], false, false⟩ (.cell k) true where
   own := rfl
   mode := Or.inl rfl
   live := rfl
-  tyok := by simp [Ty.ok, htok, hvf, hna]
+  tyok := by simp [Ty.ok, htok, hvf]
   wf _ r hr := by simp [roots, Entry.vdeps, Mode.ownSlot] at hr
   valOwn _ := ⟨rfl, .cell, ViewsOK.none (show (Ty.cell t).holdsView = false from hvf) _ _,
     List.nodup_nil, fun _ h => (nomatch h), fun _ _ _ _ h => (nomatch h), fun _ _ _ h => (by cases h),
@@ -1499,7 +1499,7 @@ theorem out_cellClone {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry
   have hk := hi.cell_val ha hl hty hos hv
   have hok := hi.tyok ha; rw [hty] at hok
   simp only [Ty.ok, Bool.and_eq_true] at hok
-  exact out_cellShare hok.1.1 (by simpa using hok.1.2) (by simpa using hok.2) hk
+  exact out_cellShare hok.1 (by simpa using hok.2) hk
 
 /-- A3.6, a read of a module global: the share the store holds, of a block
     of the read's type (`GlobFits`); owned, it holds nothing. -/
@@ -1507,8 +1507,8 @@ theorem out_glob {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {t : Ty} (htok : t.ok = t
     (hf : GlobFits m.blk t v) : RhsOut m Γ ⟨t, .own, true, [], [], false, false⟩ v true := by
   rcases hf with ⟨u, k, o, rfl, rfl, hk⟩ | ⟨u, k, p, rfl, rfl, hk⟩
   · simp only [Ty.ok, Bool.and_eq_true] at htok
-    exact out_lkShare htok.1.1 (by simpa using htok.1.2) (by simpa using htok.2) ⟨o, hk⟩
-  · obtain ⟨_, hvf, hpay, _⟩ := hi.blocks k _ hk
+    exact out_lkShare htok.1 (by simpa using htok.2) ⟨o, hk⟩
+  · obtain ⟨_, hvf, hpay⟩ := hi.blocks k _ hk
     simp only [Ty.ok, Bool.and_eq_true] at htok
     exact out_share htok.1 hvf (hpay p rfl).1 (Or.inl hk)
 

@@ -26,15 +26,15 @@ abbrev Var := Nat
   * `send` — no view and no binding by name: an owned environment that
              depends on nothing of the thread that made it, so the closure
              may move to another thread (Send; a cell share in it crosses
-             only by the crossing check, `SendCheck`);
+             only by the crossing check, `SendCheck`): a spawn's argument,
+             and (A3.5's second cut) a lock's payload or a channel's
+             element, every value going into which faces the check;
   * `sync` — also no cell share (a library handle is not Sync), so several
-             threads may hold it at once: an `Arc`'s payload; and (A3.2's
-             second cut) a lock's payload or a channel's element, which hold
-             `arc` and lock shares but no cell share.  Its code changes
-             nothing it captured: a closure's code is handed its environment
-             lent (`Implements`: `inp`, and no change through a borrow), so
-             what it may change is a binding captured by name, which `send`
-             already excludes;
+             threads may hold it at once: an `Arc`'s payload.  Its code
+             changes nothing it captured: a closure's code is handed its
+             environment lent (`Implements`: `inp`, and no change through a
+             borrow), so what it may change is a binding captured by name,
+             which `send` already excludes;
   * `bare` — also no share at all: a slice's element (A3.1's views of a
              `Vec` hold no share, `Ty.ok (slice t)`).  Since A3.2's second
              cut a lock or a channel no longer needs it. -/
@@ -127,7 +127,12 @@ def Ty.hasArc : Ty → Bool
 /-- A3.5: may a value of this type hold a cell share (a library handle whose
     copies are one state)?  A closure's environment may, unless its type says
     it holds none (A3.5b: `sync`, `bare`).  This is the Sync question: such a
-    handle is not Sync, so no `Arc` payload holds one. -/
+    handle is not Sync, so no `Arc` payload holds one.  A3.5's second cut: a
+    lock share answers `false` whatever its payload holds.  A lock's payload
+    is the lock's, reached by one thread at a time, and every value going
+    into it faces the crossing check, so `Locked T` is Sync when `T` is Send
+    (docs/MEMORY.md §6.5: a Sync marker vouches for the container, and its
+    value faces the Send question, h358). -/
 def Ty.hasCell : Ty → Bool
   | .int => false
   | .vec t => t.hasCell
@@ -136,7 +141,7 @@ def Ty.hasCell : Ty → Bool
   | .sum a b => a.hasCell || b.hasCell
   | .fn _ q => q.cells
   | .arc t => t.hasCell
-  | .lk t => t.hasCell
+  | .lk _ => false
   | .cell _ => true
 
 /-- A type that holds no share holds no cell share. -/
@@ -178,10 +183,11 @@ def Ty.ok : Ty → Bool
   | .sum a b => a.ok && b.ok
   | .fn _ _ => true
   | .arc t => t.ok && !t.holdsView   -- A3.1: a payload holds no views
-  | .lk t => t.ok && !t.holdsView && !t.hasCell  -- A3.2: nor does a lock's (it is Send); A3.2's
-                                                 -- second cut: it may hold `arc` and lock shares,
-                                                 -- not a cell share (A3.5's confinement counts slots)
-  | .cell t => t.ok && !t.holdsView && !t.hasArc  -- A3.5: a cell's payload is a lock's
+  | .lk t => t.ok && !t.holdsView  -- A3.2: nor does a lock's (it is Send); A3.2's second cut: it
+                                   -- may hold `arc` and lock shares; A3.5's second cut: and cell
+                                   -- shares, each value going in past the crossing check
+  | .cell t => t.ok && !t.holdsView  -- A3.5: a cell's payload is a lock's (A3.5's second cut:
+                                     -- shares in it too, each going in past the crossing check)
 
 /-- A type whose values own what they hold: a `Vec` or a struct.  Its
     binding is an owner (or borrows one). -/

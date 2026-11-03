@@ -450,9 +450,12 @@ theorem codes_step {P : Prog} (hPc : ProgCodes P) {m : Mem} {s : Stmt} {r : Res}
     intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     refine ⟨MemCodes.set ?_ (fun V e => by cases e; exact (hB _ _ hk).1), hs⟩
     exact hm.withBlk rfl (hm.blk.upd (blkCodes_lock fun _ e => by cases e))
-  | scopeLSkip hrl =>
+  | scopeLSkip hrl _ =>
     intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact ⟨hrl.codes hm, trivial⟩
+  | scopeLFail _ _ =>
+    intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    exact ⟨hm, trivial⟩
   | rbindSkip _ =>
     intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact ⟨hm.remove _, trivial⟩

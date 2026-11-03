@@ -1,6 +1,6 @@
 # formal — a mechanized proof of NURL's memory model
 
-> **Status: A1, A2, A3.0, A3.1, A3.4, A3.2's second cut and the first cuts of A3.3, A3.5 and A3.6 are proven** (Lean 4, no `sorry`, only Lean's
+> **Status: A1, A2, A3.0, A3.1, A3.4, the second cuts of A3.2 and A3.5, and the first cuts of A3.3 and A3.6 are proven** (Lean 4, no `sorry`, only Lean's
 > standard axioms — `./check.sh`). The later phases are not. Until a phase
 > below is marked done, the part of the guarantee in
 > [`docs/MEMORY.md` §6.2](../docs/MEMORY.md) it covers rests on the
