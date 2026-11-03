@@ -926,6 +926,63 @@ theorem await_blocked {P : Prog} {m : Mem} {a x c q : Var} {f : Nat} {k : Nat} {
   have hb : Blocked m (.seq (Stmt.lockedApply a x c q f) (Stmt.lockedAwait a x c q f)) := ⟨k, t, hk, hout⟩
   exact ⟨hb, fun h => h.2.1 hb⟩
 
+/-! #### `Mutex`: a lock of an integer, guarding nothing in memory
+
+A `Mutex` is a lock block of an integer (`Rhs.mutexNew`, `Stmt.mutexLock`,
+`Stmt.mutexUnlock`, `Stmt.mutexWith`).  Its rules hand the thread that takes
+it an integer binding and nothing else (`mutex_hands_int`), and its block owns
+no address (`mutex_owns_nothing`): no memory fact of the program comes from
+a `Mutex`.  The data beside one is typed by its own rules, which refuse a race
+on it whatever mutex calls surround it (A3/DESIGN.md, A3.2: h319's rule). -/
+
+/-- What a `Mutex` hands the thread that takes it: an integer binding, which
+    depends on nothing and holds nothing ... -/
+theorem mutex_hands_int : lockE .int = intE := by simp [lockE]
+
+/-- ... and what its block owns while the integer is in, or out: no address. -/
+theorem mutex_owns_nothing {o : Option Val} (ho : o = none ∨ ∃ n, o = some (.int n)) :
+    (Blk.mk .int .lock o).tree.ids = [] := by
+  rcases ho with rfl | ⟨n, rfl⟩ <;> simp
+
+/-- `mutex_new`: a lock block of an integer, its one share owned, holding
+    nothing. -/
+theorem _root_.A2.RhsT.mutexNew {Γ : Ctx} {F : List Var} {y : Var} {Ey : Entry}
+    (hy : Γ y = some Ey) (hly : Ey.live = true) (hty : Ey.ty = .int) :
+    RhsT Γ F (Rhs.mutexNew y) ⟨.lk .int, .own, true, [], [], false, false⟩ Γ :=
+  RhsT.lockNew hy hly hty ⟨rfl, rfl⟩ PushArg.int
+
+/-- **`mutex_lock` is typed**: the integer taken out of the lock (`lockTake`),
+    an integer binding for what follows; every other `mutex_lock` waits until
+    it is put back. -/
+theorem _root_.A2.StmtT.mutexLock {P : Prog} {Γ Δ : Ctx} {F : List Var} {u m : Var} {s : Stmt} {Em : Entry}
+    (hs : s.src = true) (hm : Γ m = some Em) (hlm : Em.live = true) (htm : Em.ty = .lk .int)
+    (hu : Γ u = none) (huF : u ∉ F) (hb : StmtT P (A2.setE Γ u intE) F s Δ) (hend : EndOK Δ u) :
+    StmtT P Γ F (Stmt.mutexLock u m s) (exitScope u Δ) := by
+  have hr := RhsT.lockTake (F := F) hm hlm htm
+  rw [mutex_hands_int] at hr
+  exact StmtT.letv hs hu huF hr hb hend
+
+/-- **`mutex_unlock` is typed**: an integer put back (`lockRestore`, the
+    integer copied); its answer an integer. -/
+theorem _root_.A2.StmtT.mutexUnlock {P : Prog} {Γ Δ : Ctx} {F : List Var} {r m u : Var} {s : Stmt}
+    {Em Eu : Entry} (hs : s.src = true) (hm : Γ m = some Em) (hlm : Em.live = true) (htm : Em.ty = .lk .int)
+    (hu : Γ u = some Eu) (hlu : Eu.live = true) (htu : Eu.ty = .int)
+    (hr : Γ r = none) (hrF : r ∉ F) (hb : StmtT P (A2.setE Γ r intE) F s Δ) (hend : EndOK Δ r) :
+    StmtT P Γ F (Stmt.mutexUnlock r m u s) (exitScope r Δ) :=
+  StmtT.letv hs hr hrF (RhsT.lockRestore hm hlm htm hu hlu htu PushArg.int) hb hend
+
+/-- **`mutex_with` is typed**: A3.2's `withLock` on the integer lock, with its
+    faithfulness premises (the mutex outlives the body: the runtime unlocks it
+    after), its body handed an integer binding and nothing else. -/
+theorem _root_.A2.StmtT.mutexWith {P : Prog} {Γ Δ : Ctx} {F : List Var} {m x : Var} {s : Stmt} {Em : Entry}
+    (hs : s.src = true) (hm : Γ m = some Em) (hlm : Em.live = true) (htm : Em.ty = .lk .int)
+    (hroot : Em.mode.isRoot = true) (hms : m ∉ s.vars)
+    (hx : Γ x = none) (hxF : x ∉ F) (hb : StmtT P (A2.setE Γ x intE) F s Δ) (hend : EndOK Δ x)
+    (hlive : ∃ E, Δ x = some E ∧ E.live = true) :
+    StmtT P Γ F (Stmt.mutexWith m x s) (exitScope x Δ) := by
+  rw [← mutex_hands_int] at hb
+  exact StmtT.withLock hs hx hxF hm hlm (Or.inl htm) hb hend hroot hms hlive
+
 /-! ### A3.6: module globals, as A2 types them
 
 A global set at start is read at a type that synchronises itself

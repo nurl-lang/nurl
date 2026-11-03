@@ -692,6 +692,26 @@ def Stmt.lockedSet (t : Ty) (a b x y : Var) : Stmt :=
     a `some`, whose payload the caller takes (`taker q`). -/
 def Stmt.lockedAwait (a x c q : Var) (f : Nat) : Stmt := .while (.isl q) (Stmt.lockedApply a x c q f)
 
+/-! A3.2: a `Mutex` (`stdlib/std/thread.nu`) guards nothing in memory: it is a
+lock of an integer, `lk int`, whose payload no one reads.  `mutex_new` is
+`locked_new` of an integer, `Mutex_share` is `lockClone`, its drop a share's;
+`mutex_lock` takes the integer out (`lockTake`: every other `mutex_lock`
+waits until it is back), `mutex_unlock` puts one back (`lockRestore`), and
+`mutex_with` is A3.2's `withLock`.  What the data beside a `Mutex` is allowed
+is its own type's business. -/
+
+/-- `mutex_new`, its word taken from the integer binding `y`. -/
+def Rhs.mutexNew (y : Var) : Rhs := .lockNew .int y
+
+/-- `mutex_lock m`, the integer taken out to `u` for what follows (`s`). -/
+def Stmt.mutexLock (u m : Var) (s : Stmt) : Stmt := .letv u (.lockTake m) s
+
+/-- `mutex_unlock m`, the integer `u` put back, its answer in `r`. -/
+def Stmt.mutexUnlock (r m u : Var) (s : Stmt) : Stmt := .letv r (.lockRestore m u) s
+
+/-- `mutex_with m body`: lock, run, unlock. -/
+def Stmt.mutexWith (m x : Var) (s : Stmt) : Stmt := .withLock m x s
+
 /-- A3.6: an update of a `Locked` global set at start (`locked_update g f`,
     with `f`'s body as `s` and its argument as `x`): the global's handle,
     cloned into `h`, and A3.2's `withLock` on it — `h` is an owner, a root,
