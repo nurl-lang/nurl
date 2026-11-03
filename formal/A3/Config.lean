@@ -137,4 +137,54 @@ theorem Reach.gl {P : Prog} {spawn : Nat → Bool} {C C' : Cfg} (h : Reach P spa
   | refl => rfl
   | step hst _ ih => exact ih.trans (TStep.gl hst)
 
+/-- A3.6: a global's share fits its block as a later store keeps it: a lock
+    block as a lock block of its type, an `arc` block as it was ... -/
+theorem _root_.A2.GlobFits.grow {B B' : Nat → Option Blk} (hb : BlkLe B B') {t : Ty} {v : Val}
+    (h : GlobFits B t v) : GlobFits B' t v := by
+  rcases h with ⟨u, k, o, rfl, rfl, hk⟩ | ⟨u, k, p, rfl, rfl, hk⟩
+  · obtain ⟨⟨u', kd, o'⟩, hk', hty, hkd, _⟩ := hb k _ hk
+    simp only at hty hkd
+    subst hty; subst hkd
+    exact .inl ⟨_, _, _, rfl, rfl, hk'⟩
+  · exact .inr ⟨_, _, _, rfl, rfl, hb.arc hk⟩
+
+/-- ... and the configuration's sweep keeps it: a global is a root. -/
+theorem _root_.A2.GlobFits.sweep {C : Cfg} {g : Nat} {t : Ty} {v : Val} (hg : C.gl g = some v)
+    (h : GlobFits C.blk t v) : GlobFits C.sweep.blk t v := by
+  rcases h with ⟨u, k, o, rfl, rfl, hk⟩ | ⟨u, k, p, rfl, rfl, hk⟩
+  · exact .inl ⟨u, k, o, rfl, rfl,
+      sweepBlk_some.mpr ⟨hk, .root (.inr ⟨g, hg⟩) (.inl (.inl ⟨none, Sub.refl _⟩))⟩⟩
+  · exact .inr ⟨u, k, p, rfl, rfl,
+      sweepBlk_some.mpr ⟨hk, .root (.inr ⟨g, hg⟩) (.inl (.inl ⟨some p, Sub.refl _⟩))⟩⟩
+
+/-- **A3.6: a global stays readable**: what a global's share fits, it fits after
+    every step of the configuration ... -/
+theorem TStep.globFits {P : Prog} {spawn : Nat → Bool} {C C' : Cfg} (h : TStep P spawn C C') {g : Nat}
+    {t : Ty} {v : Val} (hg : C.gl g = some v) (hf : GlobFits C.blk t v) : GlobFits C'.blk t v := by
+  cases h with
+  | @thread i th m' s' _ _ hs =>
+    have hgl : m'.gl = C.gl := Step.gl hs
+    exact GlobFits.sweep (C := C.put i m' s') (by show m'.gl g = some v; rw [hgl]; exact hg)
+      (hf.grow (Step.grows hs).blk)
+  | spawn => exact hf
+  | spawnFail => exact hf
+
+/-- ... and so in every configuration the start reaches ... -/
+theorem Reach.globFits {P : Prog} {spawn : Nat → Bool} {C C' : Cfg} (h : Reach P spawn C C') {g : Nat}
+    {t : Ty} {v : Val} (hg : C.gl g = some v) (hf : GlobFits C.blk t v) :
+    C'.gl g = some v ∧ GlobFits C'.blk t v := by
+  induction h with
+  | refl => exact ⟨hg, hf⟩
+  | step hst _ ih => exact ih (by rw [TStep.gl hst]; exact hg) (hst.globFits hg hf)
+
+/-- ... so no thread's read of a start-set global, at the type the start holds
+    it at, panics: it is always `EvalR.glob`, never `globP`. -/
+theorem Reach.glob_noPanic {P : Prog} {spawn : Nat → Bool} {G : Globs} {s : Stmt} {nv : Nat} {C : Cfg}
+    (hr : Reach P spawn (Cfg.start G s nv) C) {g : Nat} {t : Ty} {v : Val} (hg : G.gl g = some v)
+    (hf : GlobFits G.blk t v) (th : Thread) : ¬ EvalR (C.view th) (.glob g t) .panic := by
+  intro he
+  obtain ⟨hg', hf'⟩ := hr.globFits (C := Cfg.start G s nv) hg hf
+  cases he with
+  | globP hn => exact hn ⟨v, hg', hf'⟩
+
 end A3
