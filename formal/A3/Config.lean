@@ -146,7 +146,7 @@ theorem _root_.A2.GlobFits.grow {B B' : Nat → Option Blk} (hb : BlkLe B B') {t
     simp only at hty hkd
     subst hty; subst hkd
     exact .inl ⟨_, _, _, rfl, rfl, hk'⟩
-  · exact .inr ⟨_, _, _, rfl, rfl, hb.arc hk⟩
+  · exact .inr ⟨_, _, _, rfl, rfl, ArcBlk.grow hb hk⟩
 
 /-- ... and the configuration's sweep keeps it: a global is a root. -/
 theorem _root_.A2.GlobFits.sweep {C : Cfg} {g : Nat} {t : Ty} {v : Val} (hg : C.gl g = some v)
@@ -154,8 +154,10 @@ theorem _root_.A2.GlobFits.sweep {C : Cfg} {g : Nat} {t : Ty} {v : Val} (hg : C.
   rcases h with ⟨u, k, o, rfl, rfl, hk⟩ | ⟨u, k, p, rfl, rfl, hk⟩
   · exact .inl ⟨u, k, o, rfl, rfl,
       sweepBlk_some.mpr ⟨hk, .root (.inr ⟨g, hg⟩) (.inl (.inl ⟨none, Sub.refl _⟩))⟩⟩
-  · exact .inr ⟨u, k, p, rfl, rfl,
-      sweepBlk_some.mpr ⟨hk, .root (.inr ⟨g, hg⟩) (.inl (.inl ⟨some p, Sub.refl _⟩))⟩⟩
+  · have hr : Reached C.roots C.blk k := .root (.inr ⟨g, hg⟩) (.inl (.inl ⟨some p, Sub.refl _⟩))
+    rcases hk with hk | hk
+    · exact .inr ⟨u, k, p, rfl, rfl, .inl (sweepBlk_some.mpr ⟨hk, hr⟩)⟩
+    · exact .inr ⟨u, k, p, rfl, rfl, .inr (sweepBlk_some.mpr ⟨hk, hr⟩)⟩
 
 /-- **A3.6: a global stays readable**: what a global's share fits, it fits after
     every step of the configuration ... -/

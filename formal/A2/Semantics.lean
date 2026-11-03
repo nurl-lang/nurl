@@ -418,10 +418,12 @@ inductive RRes where
 
 /-- A3.6: what a read of a module global of type `t` finds: a share of a
     block of that type — a lock share of a lock block, or an `arc` share of
-    the `arc` block whose payload it carries. -/
+    the block whose payload it carries (`ArcBlk`: an `arc` block, or a view, a
+    read guard a `make` handed back, which the model's `arc` type does not
+    tell from an `Arc`). -/
 def GlobFits (B : Nat → Option Blk) (t : Ty) (v : Val) : Prop :=
   (∃ u k o, t = .lk u ∧ v = .lk k ∧ B k = some ⟨u, .lock, o⟩) ∨
-  (∃ u k p, t = .arc u ∧ v = .arc k p ∧ B k = some ⟨u, .arc, some p⟩)
+  (∃ u k p, t = .arc u ∧ v = .arc k p ∧ ArcBlk (B k) u p)
 
 inductive EvalR (m : Mem) : Rhs → RRes → Prop
   | expr {e : Expr} {n : Nat} : Eval m e n → EvalR m (.expr e) (.ok (.int n) false m)
