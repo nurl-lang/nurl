@@ -40387,8 +40387,40 @@ unsafe @ gen_assign i lex i syms i cg → s {
         : b __io_cap & != 0 ( nurl_str_len __io_rptr ) ( str_contains_word ( nurl_sym_get syms `__clo_cap_ptrs__` ) __io_rptr )
         : s __io_fs ? != 0 ( nurl_str_len __io_src ) ( nurl_sym_get2 syms __io_src `__fsrc` ) ``
         : b __io_fread & != 0 ( nurl_str_len __io_fs ) ! ( seq ( str_first_word __io_fs ) ptr )
+        // (…and a local that holds a value it does not own — bound as a
+        // borrow outright, `: String t ( id other )`, or a cursor over
+        // another binding, `: String t other`, `: String t ( id l )`: stored
+        // as is, the caller's binding shared a buffer its owner still drops;
+        // agora #456. Not a cursor over this very binding: that one is its
+        // own value, handed back.)
+        : s __io_rup ? ( is_ident_tok bck_rhs_tt ) ( mem_udrop_ptr_of syms bck_rhs_val ) ``
+        : s __io_ral ? == 0 ( nurl_str_len __io_rup ) `` ( nurl_sym_get2 syms __io_rup `__alias` )
+        // (A String or a Vec only, and not one whose lend may be this
+        // binding's own value — a payload of a call handed it, `?? ( f o ) {
+        // T x → { = o x } }`: copied, its old value released under x.)
+        : b __io_rlend & & & & | ( seq vt `%String` ) != 0 ( nurl_str_starts vt `%Vec__` ) != 0 ( nurl_str_len __io_rup ) | ( seq ( nurl_sym_get2 syms __io_rup `__sborrow` ) `1` ) != 0 ( nurl_str_len __io_ral ) ! ( str_contains_word __io_ral ptr ) ! ( str_contains_word ( bck_swap_char ( nurl_sym_get2 syms bck_rhs_val `__pljr` ) 10 32 ) name )
+        // (…and one whose lend may be this binding's own value or another's
+        // — `: String t ( pick o other k )  = o t`: by its key at run time,
+        // as #438 does for the call itself: the old value itself stays; any
+        // other value is copied in and the old one released; agora #456.)
+        ? & & & & & & & != 0 g_auto_drop_strings != 0 ( nurl_str_len ptr ) ( seq ( nurl_sym_get2 syms name `__inout` ) `1` ) | ( seq vt `%String` ) != 0 ( nurl_str_starts vt `%Vec__` ) != 0 ( nurl_str_len __io_rup ) ! __io_keyed ( str_contains_word ( bck_swap_char ( nurl_sym_get2 syms bck_rhs_val `__pljr` ) 10 32 ) name ) ( __clone_supported vt syms ) {
+            : s __io_ov5 ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print __io_ov5 ) ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print `, ptr ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+            : s __io_ok5 ( mem_identity_key cg vt __io_ov5 )
+            : s __io_nk5 ( mem_identity_key cg vt store_val )
+            ? & != 0 ( nurl_str_len __io_ok5 ) != 0 ( nurl_str_len __io_nk5 ) {
+                : s __io_sm5 ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print __io_sm5 ) ( nurl_print ` = icmp ne i8* ` ) ( nurl_print __io_nk5 ) ( nurl_print `, ` ) ( nurl_print __io_ok5 ) ( nurl_print `\n` )
+                = store_val ( mem_emit_cloneif cg vt store_val __io_sm5 )
+                ( __handle_drop_ensure vt )
+                ( __dropifv_request vt )
+                ( nurl_print `  call void @__dropifv_` ) ( nurl_print ( __drop_mangle vt ) ) ( nurl_print `(i1 ` ) ( nurl_print __io_sm5 )
+                ( nurl_print `, ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print ` ` ) ( nurl_print __io_ov5 ) ( nurl_print `)` ) ( emit_dbg_eol )
+                = __io_keyed T
+            } {}
+        } {}
         : b __io_bparam & & & ( is_ident_tok bck_rhs_tt ) ! ( seq bck_rhs_val name ) ! __io_move
-        | | & ( nurl_sym_has_word syms `__fn_param_names__` bck_rhs_val ) == 0 ( nurl_sym_len2 syms bck_rhs_val `__sinkp` ) __io_cap __io_fread
+        | | | & ( nurl_sym_has_word syms `__fn_param_names__` bck_rhs_val ) == 0 ( nurl_sym_len2 syms bck_rhs_val `__sinkp` ) __io_cap __io_fread __io_rlend
         ? & & & & != 0 g_auto_drop_strings != 0 ( nurl_str_len ptr ) ( seq ( nurl_sym_get2 syms name `__inout` ) `1` ) | ( __is_handle_ty vt ) __io_oty
         __io_bparam {
             = store_val ( mem_emit_clone_on cg vt store_val `1` )
