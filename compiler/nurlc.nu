@@ -8549,7 +8549,8 @@ unsafe @ extract_fn_ptr_return_type s fn_ptr_type → s {
                         : s c ( nurl_str_slice w 0 b1 )
                         = w ( nurl_str_slice w + b1 1 - - ( nurl_str_len w ) b1 1 )
                         : i b2 ( nurl_str_find w `|` )
-                        : s ty ( nurl_str_slice w 0 b2 )
+                        // (A type parked by its drop name: an option's, agora #457.)
+                        : s ty ( __unpark_ty ( nurl_str_slice w 0 b2 ) )
                         : s v ( nurl_str_slice w + b2 1 - - ( nurl_str_len w ) b2 1 )
                         ( nurl_print `  call void @__dropifv_` ) ( nurl_print ( __drop_mangle ty ) ) ( nurl_print `(i1 ` ) ( nurl_print c )
                         ( nurl_print `, ` ) ( nurl_print ( nurl_llty ty ) ) ( nurl_print ` ` ) ( nurl_print v ) ( nurl_print `)` ) ( emit_dbg_eol )
@@ -25661,11 +25662,15 @@ unsafe @ mem_path_to_indices s path → s {
             // `f|reg|bit` defines reg there (mem_drop_arg_temps). (Only
             // for a result that cannot hold a view, which a fresh one then
             // cannot point into this temporary through.)
-            ? & & & != 0 ( nurl_str_len __tlb_one ) ( __is_handle_ty at ) & == 0 ( nurl_str_len __top ) == 0 ( nurl_str_len __toe ) ! ( __ty_holds_view __crt 0 ) {
+            // (An option or a result temporary that owns something goes
+            // whole, through its twin's drop: its type is parked by its
+            // drop name in the word, which has no blanks.)
+            : b __tfopt & != 0 ( nurl_str_starts at `{ i1, ` ) != 0 ( nurl_str_len ( __wrap_twin at ) )
+            ? & & != 0 ( nurl_str_len __tlb_one ) | ( __is_handle_ty at ) __tfopt ! ( __ty_holds_view __crt 0 ) {
                 : s __tfr ( nurl_cg_reg cg )
-                ( __handle_drop_ensure at )
+                ? __tfopt { ( gen_drop_for_type at syms ) } { ( __handle_drop_ensure at ) }
                 ( __dropifv_request at )
-                : s __tfw ( nurl_str_cat4 ( nurl_str_cat4 `f|` __tfr `|` __tlb_one ) ` ` ( nurl_str_cat4 `h|` __tfr ( nurl_str_cat3 `|` at `|` ) av ) `` )
+                : s __tfw ( nurl_str_cat4 ( nurl_str_cat4 `f|` __tfr `|` __tlb_one ) ` ` ( nurl_str_cat4 `h|` __tfr ( nurl_str_cat3 `|` ( __park_ty at ) `|` ) av ) `` )
                 = owned ? == 0 ( nurl_str_len owned ) __tfw ( nurl_str_cat3 owned ` ` __tfw )
             } {}
             // The part the result was copied from goes now.
