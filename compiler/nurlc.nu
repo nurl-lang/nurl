@@ -15807,11 +15807,13 @@ unsafe @ gen_call i lex i syms i cg → s {
             // (Any callee, compiled or not: a summary is final only after
             // the module — resolve_mutation_summaries. Not one already
             // reported inline.)
+            // (…and a closure value's: its node's summary, closed at module
+            // end — __clo_nodes_close runs first; agora #436.)
+            : b __im_clo & __callee_shadowed != 0 ( nurl_str_len __clo_node )
             ? & & & & & fe_iterated ! fe_helper_mutates ! fe_mutates ! is_inout_arg ! fe_takes
-            & ( __summarised_callee syms fname call_name )
-            ! __callee_shadowed
+            | __im_clo & ( __summarised_callee syms fname call_name ) ! __callee_shadowed
             { : s __im_rec ( nurl_str_cat3
-                ( nurl_str_cat3 call_name ` ` fname )
+                ( nurl_str_cat3 ? __im_clo __clo_node call_name ` ` ? __im_clo __clo_node fname )
                 ( nurl_str_cat4 ` ` ( nurl_str_int arg_idx ) ` ` bck_arg_root )
                 ( nurl_str_cat4 ` ` ( nurl_str_int bck_arg_line ) ` `
                 ( nurl_lex_filename lex ) ) )
