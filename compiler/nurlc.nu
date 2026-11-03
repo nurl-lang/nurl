@@ -10284,7 +10284,8 @@ unsafe @ origin_guard_retained i root → b {
     // the module has compiled, answers then — the caller's walk waits for
     // it, behind it (bck_defer_fn's `q`, __bck_walk_deferred). Agora #422.)
     ? & & & != 0 g_borrowck == 0 g_bck_rec_off != 0 ( nurl_str_len cn ) | == 0 ( nurl_sym_len g_fn_compiled cn ) ( __vk_pend cn ) {
-        ? == ( bck_walk_class ( nurl_get_last_type ) ) 3 {
+        // (Its declared result: the call's own type is not set yet here.)
+        ? ( __rv_holder_result cn ) {
             ( bck_put `deferred` `1` )
             ( bck_add_word_once `rvcallees` cn )
         } {}
@@ -16285,12 +16286,13 @@ unsafe @ gen_call i lex i syms i cg → s {
             // not final yet parks this function's walk behind its own.
             // (An owner passed `inout` is one too: agora #337.)
             // (A closure value's node answers as a callee does: agora #403.)
-            // (…and a view handed beside it — a view parameter the callee
-            // stores is a source of its own, so its answer names the holder:
+            // (…and a view handed beside it, written any way — a name, a
+            // call, a literal of views: a view parameter the callee stores
+            // is a source of its own, so its answer names the holder, and
             // the holder depends on what the view points into, not on the
-            // first argument, `vpass`'s guess — agora #346, #370.)
+            // first argument, `vpass`'s guess — agora #346, #370, #380.)
             : s __vkc ? != 0 ( nurl_str_len __clo_node ) __clo_node call_name
-            ? & __vk_live & & & | | == __sx_c0 0 == __sx_c0 2 == __sx_c0 3 | | ( is_ident_tok bck_arg_tt ) == bck_arg_tt TT_DOT & == __sx_c0 2 == bck_arg_tt TT_LPAREN | ! __callee_shadowed != 0 ( nurl_str_len __clo_node ) ! ( bck_unsafe_ctx ) {
+            ? & __vk_live & & & | | == __sx_c0 0 == __sx_c0 2 == __sx_c0 3 | | ( is_ident_tok bck_arg_tt ) == bck_arg_tt TT_DOT == __sx_c0 2 | ! __callee_shadowed != 0 ( nurl_str_len __clo_node ) ! ( bck_unsafe_ctx ) {
                 : i __vk ( __vkeep_ask __vkc arg_idx )
                 ? > __vk 0 {
                     : s __vk_sx ( __sx_operand_c syms bck_arg_tt bck_arg_val __sx_c0 ( __sx_froot syms bck_arg_tt at ) __sx_n0 )
