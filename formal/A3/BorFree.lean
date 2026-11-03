@@ -161,6 +161,9 @@ theorem Step.borFree {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r
   | iteF _ => exact hb
   | «while» => exact hb
   | push ht _ _ _ => exact (TakeVal.borFree ht hb).1.set _ (SlotFree.own _)
+  | insert _ ht _ _ _ => exact (TakeVal.borFree ht hb).1.set _ (SlotFree.own _)
+  | withElem _ _ _ _ _ _ => exact (hb.set _ (SlotFree.own _)).set _ (SlotFree.ids ids_nonNode)
+  | withElemOOB _ _ _ _ => exact hb
   | pushRealloc ht _ _ _ => exact (((TakeVal.borFree ht hb).1).of_st rfl).set _ (SlotFree.own _)
   | free _ _ => exact (hb.of_st rfl).set _ (SlotFree.own _)
   | editPush ht _ _ => exact (TakeVal.borFree ht hb).1.set _ (SlotFree.own _)

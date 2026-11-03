@@ -78,6 +78,7 @@ theorem Step.panic_st {P : Prog} {m m1 : Mem} {s : Stmt} (h : Step P m s (.panic
   | panic => cases hr; exact fun _ _ h => h
   | waitPanic _ => cases hr; exact fun _ _ h => h
   | letdP _ => cases hr; exact fun _ _ h => h
+  | withElemOOB _ _ _ _ => cases hr; exact fun _ _ h => h
   | scopeDPMoved _ _ ih =>
     cases hr
     intro v sl hv
@@ -264,6 +265,12 @@ theorem touch_seen {P : Prog} {m m1 : Mem} {s : Stmt} {i : Nat} {w : Bool}
   | ite he => exact .inr ⟨rfl, eReads_seen he⟩
   | pushC hx => exact .inl ⟨_, _, hx, by simp [Val.ids]⟩
   | pushD hx => exact .inl ⟨_, _, hx, by simp [Val.ids]⟩
+  | insertC hx => exact .inl ⟨_, _, hx, by simp [Val.ids]⟩
+  | insertD hx => exact .inl ⟨_, _, hx, by simp [Val.ids]⟩
+  | insertI he => exact .inr ⟨rfl, eReads_seen he⟩
+  | withElemC hv => exact .inl ⟨_, _, hv, by simp [Val.ids]⟩
+  | withElemD hv => exact .inl ⟨_, _, hv, by simp [Val.ids]⟩
+  | withElemI he => exact .inr ⟨rfl, eReads_seen he⟩
   | free hx hi => exact .inl ⟨_, _, hx, hi⟩
   | editC hn => exact .inl ⟨_, _, hn.2.2.1, hn.sub.ids _ (by simp [Val.ids])⟩
   | editD hn => exact .inl ⟨_, _, hn.2.2.1, hn.sub.ids _ (by simp [Val.ids])⟩

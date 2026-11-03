@@ -624,6 +624,53 @@ theorem progress {P : Prog}
     obtain ⟨v, m1, htk, hst, hal⟩ := htake
     exact Or.inr <| Or.inr ⟨_, Step.push htk (by rw [hst]; exact hT) (by rw [hal]; exact hac)
       (by rw [hal]; exact had)⟩
+  | @withElem Γ Γ1 Δ1 Δ F y x i k Ey' E _ hx _ _ _ he _ _ hr _ _ _ _ _ _ =>
+    -- `y` owns a `Vec`: element `i` moves out, or the index is out of range
+    intro m hcd hi
+    have hmx : m.st x = none := by
+      have := hi.dom x; rw [hx] at this; cases h : m.st x <;> simp_all
+    cases hr with
+    | @pop _ E0 t hy0 hl0 hty0 hcan _ _ =>
+    obtain ⟨Ey, hy, rfl⟩ : ∃ Ey, Γ y = some Ey ∧ E0 = killE .replace false y Ey := by
+      simp only [A2.kill] at hy0
+      cases h : Γ y with
+      | none => rw [h] at hy0; cases hy0
+      | some Ey => rw [h] at hy0; cases hy0; exact ⟨Ey, rfl, rfl⟩
+    have hl : Ey.live = true := by
+      unfold killE at hl0; split at hl0
+      · cases hl0
+      · exact hl0
+    rw [killE_ty] at hty0
+    rw [killE_mode] at hcan
+    have hmy : Ey.mode = .own := by
+      rcases hcan with h | ⟨b, h, _⟩
+      · exact h
+      · exact absurd h (hi.noInout y Ey b hy)
+    obtain ⟨c, d, es, ⟨hac, had, hvec⟩, _⟩ := hi.vec_node hy hl hty0
+    have hT : m.st y = some ⟨true, some (.node t c d es)⟩ := by
+      rcases hvec with h | ⟨h, _⟩
+      · exact h
+      · obtain ⟨T, hT, _⟩ := hi.own_val hy hl (by rw [hmy]; rfl); rw [hT] at h; cases h
+    obtain ⟨n, hn⟩ := eval_exists hi.toMInv he
+    by_cases hlt : n < es.length
+    · exact Or.inr <| Or.inr ⟨_, Step.withElem hlt hT hac had hn hmx⟩
+    · exact Or.inr <| Or.inr ⟨_, Step.withElemOOB hT hac hn (by omega)⟩
+  | @insert Γ Δ F x y i he _ _ ih =>
+    -- the push it is typed as has a step, so it has one
+    intro m hcd hi
+    have hi0 : Inv m Γ F (.push x y) :=
+      hi.respine rfl (fun v hv => by
+        rcases List.mem_cons.mp hv with h | h
+        · simp [Stmt.vars, h]
+        · simp only [List.mem_singleton] at h; simp [Stmt.vars, h]) trivial trivial trivial
+    obtain ⟨n, hn⟩ := eval_exists hi.toMInv he
+    rcases ih hcd hi0 with h | h | ⟨r, hr⟩
+    · cases h
+    · exact absurd h (by simp [Blocked])
+    · cases hr with
+      | push htk hT hc hd => exact Or.inr <| Or.inr ⟨_, Step.insert hn htk hT hc hd⟩
+      | pushRealloc htk hT hc hd => exact Or.inr <| Or.inr ⟨_, Step.insert hn htk hT hc hd⟩
+      | waitPanic hw => exact absurd hw (by simp [Waits])
   | @free Γ F x E t hx hl hm hty _ _ =>
     intro m hcd hi
     obtain ⟨T, hT, hwf, _⟩ := hi.own_val hx hl (by rw [hm]; rfl)

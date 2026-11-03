@@ -260,6 +260,13 @@ theorem Step.lifts {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
     rw [union_realloc had]
     exact Step.pushRealloc (m1 := liftMem a2 m1) (TakeVal.lift ht a2) hx (union_true a2 hc)
       (union_true a2 hdd)
+  | withElem hn hv hc hdd he hx =>
+    exact ⟨_, GhostRel.refl _, Step.withElem (m := liftMem a2 m) hn hv (union_true a2 hc) (union_true a2 hdd)
+      (Eval.lift he a2) hx⟩
+  | withElemOOB hv hc he hle => exact Step.withElemOOB (m := liftMem a2 m) hv (union_true a2 hc) (Eval.lift he a2) hle
+  | insert he ht hx hc hdd =>
+    exact ⟨_, GhostRel.refl _,
+      Step.insert (Eval.lift he a2) (TakeVal.lift ht a2) hx (union_true a2 hc) (union_true a2 hdd)⟩
   | free hx hfr =>
     exact ⟨_, GhostRel.refl _, Step.free (m := liftMem a2 m) hx (Frees.lift hfr hd)⟩
   | editPush ht hn hr =>

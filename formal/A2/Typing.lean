@@ -1317,6 +1317,7 @@ def Stmt.hasThru : Stmt → Bool
   | .edit b _ _ => b
   | .withLock _ _ s => s.hasThru
   | .scopeL _ _ _ s => s.hasThru
+  | .withElem _ _ _ s => s.hasThru
   | _ => false
 
 /-- The functions a statement calls by index: a call, a `recover` body, a
@@ -1339,6 +1340,7 @@ def Stmt.calls : Stmt → List Nat
   | .scopeD _ f s => f :: s.calls
   | .withLock _ _ s => s.calls
   | .scopeL _ _ _ s => s.calls
+  | .withElem _ _ _ s => s.calls
   | _ => []
 
 /-- A function that changes elements through a borrow, or calls one that
@@ -1394,6 +1396,8 @@ theorem callc {x c : Var} {j : Nat} {zs : List Var} {k : Stmt} (h : k.Thru P) :
     (Stmt.callc x c j zs k).Thru P :=
   h.mono (fun h => by simp [hasThru, h]) (fun g hg => by simp [calls, hg])
 theorem letd {x : Var} {f : Nat} {r : Rhs} {k : Stmt} (h : k.Thru P) : (Stmt.letd x f r k).Thru P :=
+  h.mono (fun h => by simp [hasThru, h]) (fun g hg => by simp [calls, hg])
+theorem withElem {v x : Var} {i : Expr} {k : Stmt} (h : k.Thru P) : (Stmt.withElem v i x k).Thru P :=
   h.mono (fun h => by simp [hasThru, h]) (fun g hg => by simp [calls, hg])
 
 end Stmt.Thru
@@ -1457,6 +1461,8 @@ def Stmt.src : Stmt → Bool
   | .edit _ _ _ => true
   | .withLock _ _ s => s.src
   | .scopeL _ _ _ _ => false
+  | .insert _ _ _ => true
+  | .withElem _ _ _ s => s.src
 
 /-! ### Functions -/
 
@@ -1662,6 +1668,8 @@ def Stmt.vars : Stmt → List Var
   | .edit _ x op => x :: op.vars
   | .withLock a x s => x :: a :: s.vars
   | .scopeL _ _ x s => x :: s.vars
+  | .insert x i y => x :: y :: i.vars
+  | .withElem v i x s => x :: v :: i.vars ++ s.vars
 
 theorem Expr.vars_rename (ρ : Var → Var) (e : Expr) : (e.rename ρ).vars = e.vars.map ρ := by
   induction e <;> simp_all [Expr.rename, Expr.vars]

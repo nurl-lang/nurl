@@ -321,6 +321,8 @@ theorem panic_unwind {P : Prog} {m m1 : Mem} {s : Stmt} (hst : Step P m s (.pani
   | frozenP _ ih => cases hr; exact ih hnd rfl
   | letdP _ =>
     cases hr; exact ⟨fun _ _ => rfl, fun v hv => by simp [Stmt.spine] at hv, hh, hc, rfl, rfl, BlkBack.refl _⟩
+  | withElemOOB _ _ _ _ =>
+    cases hr; exact ⟨fun _ _ => rfl, fun v hv => by simp [Stmt.spine] at hv, hh, hc, rfl, rfl, BlkBack.refl _⟩
   | scopeLP _ hrl ih =>
     -- A3.3: the lock scope gives its payload back on the way out
     rename_i x _ _

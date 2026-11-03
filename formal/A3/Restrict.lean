@@ -312,6 +312,17 @@ theorem Step.restrict {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
     have hav1 := (TakeVal.avoids ht hb hav).1
     exact ⟨_, .push (TakeVal.restrict ht a2) hx (minus_true hc (hav1 _ (OwnedId.of_slot hx (by simp))))
       (minus_true hd (hav1 _ (OwnedId.of_slot hx (by simp)))), rfl, .refl _⟩
+  | withElem hn hv hc hd he hx =>
+    exact ⟨_, .withElem hn hv (minus_true hc (hav _ (OwnedId.of_slot hv (by simp))))
+      (minus_true hd (hav _ (OwnedId.of_slot hv (by simp)))) (Eval.restrict he hav hp) hx, rfl, .refl _⟩
+  | withElemOOB hv hc he hle =>
+    exact ⟨_, .withElemOOB hv (minus_true hc (hav _ (OwnedId.of_slot hv (by simp))))
+      (Eval.restrict he hav hp) hle, rfl⟩
+  | insert he ht hx hc hd =>
+    have hav1 := (TakeVal.avoids ht hb hav).1
+    exact ⟨_, .insert (Eval.restrict he hav hp) (TakeVal.restrict ht a2) hx
+      (minus_true hc (hav1 _ (OwnedId.of_slot hx (by simp))))
+      (minus_true hd (hav1 _ (OwnedId.of_slot hx (by simp)))), rfl, .refl _⟩
   | @pushRealloc m1 x y v t c d es ht hx hc hd =>
     have hav1 := (TakeVal.avoids ht hb hav).1
     have h1 : Step P { m with alloc := minus m.alloc a2 } (.push x y)

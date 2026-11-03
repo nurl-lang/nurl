@@ -87,25 +87,77 @@ stores nothing and is typed too.
   `vv`, handed over `inout`, holds the view (`callPostAux`'s `outHeld`),
   so a read of it after `loc` ends is refused. As for every `ThruFn`
   callee, the call passes no argument that already holds views (`CallT`).
-* Not typed: a change rooted at a borrowed parameter (`.rootb`). #391 needs
-  it when its caller hands an element (`( vec_at vv 0 )`, or a local bound
-  from it) to `f`'s changed `Vec` parameter. Inside a call, what a borrowed
-  parameter reaches is frozen: its entry depends on its argument's owners
-  (`callPe`), each lent out for the call (`pe_Fc`, `WrapCond`,
-  `Inv.rbindIn`), and every step keeps a lent-out slot as it was (`Frz`,
-  which `recover`'s `CatchOK` relies on; `rootb_anchor` and
-  `rootKeep_frame` follow the same owners). A change through the parameter
-  rewrites one of those owners' trees. Reading the parameter as `inout`
-  does not help either: the call renames an `inout` parameter to its
-  argument (`callRen`) and lifts it as an owner (`RSetup.liftE`), but a
-  borrow's slot is a borrowed one. Typing #391 needs one of: owners a call
-  lends unfrozen but pinned, changed only through the parameter that
-  borrows them (`Frz`, `RootbAnch` and `rootb_anchor` exempting them, every
-  rule that changes a binding asking that it pins none, and the views stored
-  among what the call's lifted bindings may hold, `RSetup.A`); or a reading
-  of the call as handing the element over, moved out of `vv` into an owner
-  the callee takes `inout` and moved back after, which needs an element swap
-  the calculus does not have. -/
+* Why a change rooted at a borrowed parameter (`.rootb`) is not typed. #391
+  hands an element (`( vec_at vv 0 )`, or a local bound from it) to `f`'s
+  changed `Vec` parameter. Inside a call, what a borrowed parameter reaches
+  is frozen: its entry depends on its argument's owners (`callPe`), each
+  lent out for the call (`pe_Fc`, `WrapCond`, `Inv.rbindIn`), and every step
+  keeps a lent-out slot as it was (`Frz`, which `recover`'s `CatchOK` relies
+  on; `rootb_anchor` and `rootKeep_frame` follow the same owners). A change
+  through the parameter rewrites one of those owners' trees. Reading the
+  parameter as `inout` does not help either: the call renames an `inout`
+  parameter to its argument (`callRen`) and lifts it as an owner
+  (`RSetup.liftE`), but a borrow's slot is a borrowed one.
+* Typed (A2-elem): #391, read as handing the element over
+  (`StmtT.withElem`, `A2/Elem.lean`). A call that hands a changed plain or
+  `inout` parameter an element, `( f … ( vec_at vv i ) … )`, reads as
+  `withElem vv i x (call f … x …)`: element `i` moves out of `vv` into the
+  owner `x`, the call takes `x` `inout` (a plain parameter it changes reads
+  as `inout b`, RULES.md's first reading: `realloc` for #391's push), and
+  `x`'s value goes back in at `i` after it. (RULES.md's table of readings
+  gains this row when nurlc reads the call so.)
+  - The semantics. `Step.withElem` moves element `n` out of `vv`'s tree
+    into `x` (`es.take n ++ es.drop (n + 1)`; out of range it panics, as
+    `vec_at` does), and the body runs as `scope x (s; insert vv n x)`.
+    `Stmt.insert` puts `x`'s value back at index `n`. A panic in the body
+    drops `x` with its scope (`scopeP`), not back into `vv`: `panic_unwind`
+    keeps every slot outside the frames it leaves, and nothing reads `vv`
+    again before its own frame drops it (no `recover` frame lies between,
+    since `vv` is not lent out, and no destructor views it), so the
+    element is freed either way, as the runtime frees it with `vv`.
+  - The typing. `x` gets the entry `vec_pop vv` hands over (`RhsT.pop`'s
+    `popE`: owned, holding what `vv` holds). The give-back is typed as
+    `vec_push vv x` (`StmtT.insert` from `StmtT.push`): `vv` holds what `x`
+    holds at the body's end (`ownHeld`). For #391, `f`'s push of
+    `( string_data src )` into its `inout` parameter makes `x` hold `src`
+    (`callPostAux`'s `outHeld`), and the give-back makes `vv` hold it, so a
+    read of `vv`'s element after `src` ends is refused.
+  - The proof. The invariant does not see the order of an owner's
+    elements (`MInv.perm`, `HeapOK.perm`, `Covers.perm`): the check-out is
+    the pop of the element moved to the end (`elem_pres`), and the
+    give-back the push moved to its index (preservation's `insert` case,
+    from the push's).
+  - Faithful to the runtime, which passes a pointer to the element in
+    place (A3.2's check-out premises, for an element): `vv` is an owner
+    that is not lent out; what depends on it ends at the check-out
+    (`kill .replace false vv`: a borrow of `vv`, of its buffer or of an
+    element could read the element the body changes through `x`, and a
+    closure that holds `vv` by name could reach it), so no borrowed
+    parameter may change it by name (`NoPin`) and no destructor views it
+    (`DtorSafe`); the body does not name `vv` (`vv ∉ s.vars`); and `x`
+    holds a `t` again at the body's end (the push's premises).
+  - nurlc's reading. A local bound from the element (`: e ( vec_at vv i )`,
+    then `( f … e … )`) reads the same way: `e` ends at the hand-over, and
+    a use after the call is a new `vec_at vv i`. A call whose result is
+    kept reads with the result moved out to a binding made before it, and a
+    result that borrows the element ends with it. nurlc must then record
+    that `vv` holds what the callee stores into its parameter (its
+    `outHolds`), which is #391's fix.
+* Still not typed:
+  - an element of an `inout` parameter (a callee handing on its
+    parameter's element): `withElem` takes an owner, since the caller's
+    frame may hold the argument by name, which `kill .replace` would end
+    too (`Allowed`); an element of a borrowed parameter, or one reached
+    through a borrow (a nested element is typed by nesting, on the owner
+    `x`);
+  - a call that names `vv` in another argument (`( f vv ( vec_at vv 0 ) )`):
+    the runtime aliases the two;
+  - a borrow other than an element handed to the changed parameter (#391's
+    "or a borrow": a cursor of a whole `Vec`, a field viewer), and a struct
+    field handed over;
+  - as for A3.2's `put`, that the give-back finds `vv` as the check-out
+    left it is argued, not proven: `insert` puts the element at index `n`
+    of whatever `vv` holds (at its end if it is shorter). -/
 
 namespace A2
 
@@ -198,11 +250,14 @@ theorem SlotOK.killE {m : Mem} {E : Entry} {sl : Slot} (h : SlotOK m E sl) (e : 
   · exact ⟨h.1, fun hos => ⟨(h.2.1 hos).1, (h.2.1 hos).2.1, fun hl => by cases hl⟩, fun _ hl => by cases hl⟩
   · exact h
 
-/-- Ending entries at a root that is not lent out, by an effect below
-    `replace`, changes no memory and keeps the invariant: no borrowed
-    parameter ends (`killE_rootb`). -/
-theorem MInv.kill_more {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : RootbAnch Γ F)
-    {r : Var} (hrF : r ∉ F) {e : Eff} (he : e ≠ .replace) (hv : Bool) : MInv m (A2.kill e hv r Γ) where
+/-- Ending entries at a root that is not lent out changes no memory and
+    keeps the invariant, as long as no borrowed parameter ends: none holds
+    by name, and may change, what the kill ends (`killE_rootb`; `NoPin` for
+    a `replace`). -/
+theorem MInv.kill_pin {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : RootbAnch Γ F)
+    {r : Var} (hrF : r ∉ F) {e : Eff} {hv : Bool}
+    (hmn : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none →
+      e.kills hv d.kind = true → d.root ≠ r) : MInv m (A2.kill e hv r Γ) where
   dom v := by rw [kill_dom]; exact hi.dom v
   slot v E' h := by
     simp only [A2.kill] at h
@@ -220,7 +275,7 @@ theorem MInv.kill_more {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (han
     simp only [A2.kill] at h
     obtain ⟨E, hE, rfl⟩ := Option.map_eq_some_iff.mp h
     rw [killE_mode] at hm
-    rw [killE_rootb hanch hrF e hv (hmn_of_ne_replace hv he r) hE hm]
+    rw [killE_rootb hanch hrF e hv hmn hE hm]
     exact hi.rootbLive p E hE hm
   rootbLt p E' h hm := by
     simp only [A2.kill] at h
@@ -246,6 +301,11 @@ theorem MInv.kill_more {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (han
     obtain ⟨E, hE, rfl⟩ := Option.map_eq_some_iff.mp h
     rw [killE_ty]; exact hi.shares v E sl T hE hsl hown hT
   blocks := hi.blocks
+
+/-- ... which an effect below `replace` never ends. -/
+theorem MInv.kill_more {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : RootbAnch Γ F)
+    {r : Var} (hrF : r ∉ F) {e : Eff} (he : e ≠ .replace) (hv : Bool) : MInv m (A2.kill e hv r Γ) :=
+  hi.kill_pin hanch hrF (hmn_of_ne_replace hv he r)
 
 theorem MInv.killNames_more {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : RootbAnch Γ F) :
     ∀ ds : List Dep, (∀ d ∈ ds, d.root ∉ F ∧ d.kind.bound ≠ .replace) → MInv m (A2.killNames ds Γ)

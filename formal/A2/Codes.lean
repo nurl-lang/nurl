@@ -372,7 +372,7 @@ theorem Stmt.codesOK_rename {P : Prog} (ρ : Var → Var) (s : Stmt) : (s.rename
   | ite c a b iha ihb => simp only [Stmt.rename, Stmt.codesOK, iha, ihb]
   | letcall _ _ _ _ ih | «while» _ _ ih | scope _ _ ih | rbind _ _ ih | frozen _ _ ih | letrec _ _ _ ih
   | catchR _ _ _ ih | unpair _ _ _ _ ih | callc _ _ _ _ _ ih | scopeD _ _ _ ih | withLock _ _ _ ih
-  | scopeL _ _ _ _ ih =>
+  | scopeL _ _ _ _ ih | withElem _ _ _ _ ih =>
     simp only [Stmt.rename, Stmt.codesOK, ih]
   | _ => exact Iff.rfl
 
@@ -490,6 +490,35 @@ theorem codes_step {P : Prog} (hPc : ProgCodes P) {m : Mem} {s : Stmt} {r : Res}
       rcases List.mem_append.mp he with he | he
       · exact pkgOK_elem hT he
       · simp at he; subst he; exact hv
+  | withElem hn hv _ _ _ _ =>
+    intro hm _ hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    have hT := hm.slot hv
+    refine ⟨(hm.set (fun V e => ?_)).set (fun V e => ?_), hs, trivial⟩
+    · cases e
+      refine pkgOK_of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
+      cases hc with
+      | elem he =>
+        rcases List.mem_append.mp he with he | he
+        · exact pkgOK_elem hT (List.mem_of_mem_take he)
+        · exact pkgOK_elem hT (List.mem_of_mem_drop he)
+    · cases e; exact pkgOK_elem hT (List.getElem_mem hn)
+  | withElemOOB _ _ _ _ =>
+    intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    exact hm
+  | insert _ ht hx _ _ =>
+    intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    obtain ⟨hv, hm1⟩ := ht.codes hm
+    have hT := hm1.slot hx
+    refine ⟨(hm1.of_st rfl).set (fun V e => ?_), trivial⟩
+    cases e
+    refine pkgOK_of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
+    cases hc with
+    | elem he =>
+      rcases List.mem_append.mp he with he | he
+      · exact pkgOK_elem hT (List.mem_of_mem_take he)
+      · rcases List.mem_cons.mp he with he | he
+        · subst he; exact hv
+        · exact pkgOK_elem hT (List.mem_of_mem_drop he)
   | free _ _ =>
     intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact ⟨(hm.of_st rfl).set (fun _ e => by cases e), trivial⟩

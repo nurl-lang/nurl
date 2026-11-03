@@ -1021,6 +1021,15 @@ theorem StmtT.keepF {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     obtain ⟨E2, h2, hm2⟩ := ih r hr E1 (by simp [A2.setE, upd_ne _ _ hrx, h1])
     exact ⟨killE .replace false x E2, by simp [A2.exitScope, upd_ne _ _ hrx, A2.kill, h2],
       by rw [killE_mode, hm2, hm1]⟩
+  | @withElem Γ Γ1 Δ1 Δ F y x i k Ey E0 _ hx hxF _ _ _ _ _ hrh _ _ _ _ ihs ihp =>
+    intro r hr E h
+    have hrx : r ≠ x := fun e => hxF (e ▸ hr)
+    obtain ⟨E1, h1, hm1⟩ := hrh.domMode.get (show A2.kill .replace false y Γ r =
+      some (killE .replace false y E) by simp [A2.kill, h])
+    obtain ⟨E2, h2, hm2⟩ := ihs r hr E1 (by simp [A2.setE, upd_ne _ _ hrx, h1])
+    obtain ⟨E3, h3, hm3⟩ := ihp r hr E2 h2
+    exact ⟨killE .replace false x E3, by simp [A2.exitScope, upd_ne _ _ hrx, A2.kill, h3],
+      by rw [killE_mode, hm3, hm2, hm1, killE_mode]⟩
   | @withLock Γ Δ F a x k Ea t _ hx hxF _ _ _ _ _ _ _ _ ih =>
     intro r hr E h
     have hrx : r ≠ x := fun e => hxF (e ▸ hr)
@@ -1068,6 +1077,7 @@ theorem StmtT.keepF {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     obtain ⟨E1, h1, hm1⟩ := (hpa.domMode hy).get h
     exact ⟨killE .realloc t.holdsView x E1, by simp [A2.setE, upd_ne _ _ hrx, A2.kill, h1],
       by rw [killE_mode, hm1]⟩
+  | insert _ _ _ ih => exact ih
   | @free Γ F x E0 t _ _ _ _ hxF _ =>
     intro r hr E h
     have hrx : r ≠ x := fun e => hxF (e ▸ hr)
@@ -1145,6 +1155,14 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
       x hpx.2.2
   | scope _ _ _ hpx ih => exact fun h => (ih h).exitScope _ hpx.2.2
   | scopeL _ _ _ hpx ih => exact fun h => (ih h).exitScope _ hpx.2.2
+  | @withElem Γ Γ1 Δ1 Δ F y x i k Ey E _ hx _ _ _ _ _ _ hr _ _ hpx _ ihs ihp =>
+    intro h
+    obtain ⟨hw1, hdom, _, hE⟩ := hr.wf (h.kill .replace false y)
+    have hx1 : Γ1 x = none := by
+      have := hdom x; simp only [A2.kill, hx, Option.map_none] at this; cases h' : Γ1 x <;> simp_all
+    exact (ihp (ihs (hw1.add hx1 hE (fun hd => absurd hd (by simp [hr.dtor_false.2]))
+      (fun ha => absurd ha (by simp [hr.dtor_false.1])) (fun hd => absurd hd (by simp [hr.dtor_false.2]))))).exitScope
+      x hpx.2.2
   | @withLock Γ Δ F a x k Ea t _ hx _ _ _ _ _ hpx _ _ _ ih =>
     intro h
     exact (ih (h.add hx (fun _ _ r hr => by simp [roots] at hr) (fun hd => absurd hd (by simp))
@@ -1274,6 +1292,7 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
         have hdd1 : d ∈ Ex1.vdeps := by simpa [Entry.vdeps, hos, ownHeld, ht] using hdd
         obtain ⟨Er, hEr, hro⟩ := hw1.dtor x Ex1 hx1 hd hos (Or.inl hnint) d hdd1 hnm
         exact kill_root hEr hro
+  | insert _ _ _ ih => exact ih
   | @free Γ F x E t hx hl hm hty hxF _ =>
     intro h
     exact h.moveOut hx .replace false

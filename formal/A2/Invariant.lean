@@ -920,6 +920,38 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
   | scopeL {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x : Var} {s : Stmt} :
       (∃ E, Γ x = some E ∧ E.mode ≠ .rootb ∧ E.ty = t) → x ∉ F → StmtT P Γ F s Δ → EndOK Δ x →
       StmtT P Γ F (.scopeL k t x s) (exitScope x Δ)
+  /-- A2-elem (Agora #391): `y`'s value moves into `x` at index `i`: a push
+      whose element then moves to index `i`.  The invariant does not see the
+      order of an owner's elements (`MInv.perm`), so it is typed as the push
+      `vec_push x y` is.  It is the give-back of an element handed over
+      (`withElem`). -/
+  | insert {Γ Δ : Ctx} {F : List Var} {x y : Var} {i : Expr} :
+      ExprT Γ i → x ∉ F → StmtT P Γ F (.push x y) Δ → StmtT P Γ F (.insert x i y) Δ
+  /-- A2-elem (Agora #391): element `i` of `v` handed over, as a call hands
+      an element to a parameter it changes (`( f ( vec_at v i ) )`, read as
+      `withElem v i x (call f x)`).  Element `i` moves out to `x`, which
+      takes it as `vec_pop v` hands it over (`popE`: owned, holding what `v`
+      holds); the body runs in `x`'s scope; then `x`'s value goes back in at
+      index `i`, typed as `vec_push v x`, so `v` holds what was stored into
+      the element (`ownHeld`).  The runtime passes a pointer to the element
+      in place; the premises keep the model faithful to it:
+      * `v` is an owner, not lent out (`RhsT.pop`), and what depends on it
+        ends first (`kill .replace false v`): a borrow of `v`, its buffer or
+        an element could read the element the body changes through `x`, and
+        a closure that holds `v` by name could reach it; so no borrowed
+        parameter may change it by name (`NoPin`), no destructor views it
+        (`DtorSafe`), and `v` itself stays live (it depends on itself in no
+        way).  (An `inout` parameter is no such root: its caller's frame may
+        hold its argument by name, which `kill .replace` would end too.);
+      * the body does not name `v` (`v ∉ s.vars`), so nothing in it reaches
+        `v`, and the element goes back where it was;
+      * `x` holds a `t` at the body's end (the push's premises). -/
+  | withElem {Γ Γ1 Δ1 Δ : Ctx} {F : List Var} {v x : Var} {i : Expr} {s : Stmt} {Ev E : Entry} :
+      s.src = true → Γ x = none → x ∉ F → Γ v = some Ev → Ev.mode = .own → ExprT Γ i →
+      NoPin Γ v → DtorSafe Γ .replace false v →
+      RhsT (kill .replace false v Γ) F (.pop v) E Γ1 → StmtT P (setE Γ1 x E) F s Δ1 →
+      StmtT P Δ1 F (.push v x) Δ → EndOK Δ x → v ∉ s.vars →
+      StmtT P Γ F (.withElem v i x s) (exitScope x Δ)
   | scopeD {Γ Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {s : Stmt} :
       (∃ E, Γ x = some E ∧ E.mode = .own ∧ E.ty.hasFn = false ∧ DtorOK P f E.ty) → x ∉ F →
       StmtT P Γ F s Δ → EndOK Δ x →
@@ -1048,6 +1080,7 @@ def Stmt.codesOK (P : Prog) : Stmt → Prop
   | .scopeD _ _ s => s.codesOK P
   | .withLock _ _ s => s.codesOK P
   | .scopeL _ _ _ s => s.codesOK P
+  | .withElem _ _ _ s => s.codesOK P
   | _ => True
 
 def ProgCodes (P : Prog) : Prop := ∀ fn ∈ P, fn.body.codesOK P

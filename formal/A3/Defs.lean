@@ -897,6 +897,22 @@ inductive Touch (P : Prog) (m : Mem) : Stmt → Nat → Bool → Prop
       m.st x = some ⟨true, some (.node t c d es)⟩ → Touch P m (.push x y) c true
   | pushD {x y : Var} {t : Ty} {c d : Nat} {es : List Val} :
       m.st x = some ⟨true, some (.node t c d es)⟩ → Touch P m (.push x y) d true
+  /-- A2-elem (#391): an element put back writes its `Vec`'s cell and buffer,
+      as a push does, and reads what its index reads. -/
+  | insertC {x y : Var} {i : Expr} {t : Ty} {c d : Nat} {es : List Val} :
+      m.st x = some ⟨true, some (.node t c d es)⟩ → Touch P m (.insert x i y) c true
+  | insertD {x y : Var} {i : Expr} {t : Ty} {c d : Nat} {es : List Val} :
+      m.st x = some ⟨true, some (.node t c d es)⟩ → Touch P m (.insert x i y) d true
+  | insertI {x y : Var} {i : Expr} {a : Nat} : EReads m i a → Touch P m (.insert x i y) a false
+  /-- ... and one handed over (`withElem`) writes them as a pop does, and
+      reads what its index reads.  (The element's own tree moves between the
+      thread's slots: no address of it is touched.) -/
+  | withElemC {v x : Var} {i : Expr} {s : Stmt} {t : Ty} {c d : Nat} {es : List Val} :
+      m.st v = some ⟨true, some (.node t c d es)⟩ → Touch P m (.withElem v i x s) c true
+  | withElemD {v x : Var} {i : Expr} {s : Stmt} {t : Ty} {c d : Nat} {es : List Val} :
+      m.st v = some ⟨true, some (.node t c d es)⟩ → Touch P m (.withElem v i x s) d true
+  | withElemI {v x : Var} {i : Expr} {s : Stmt} {a : Nat} :
+      EReads m i a → Touch P m (.withElem v i x s) a false
   | free {x : Var} {t : Val} {i : Nat} :
       m.st x = some ⟨true, some t⟩ → i ∈ t.ids → Touch P m (.free x) i true
   /-- A change of a `Vec`'s elements (#295) writes its node's cell and

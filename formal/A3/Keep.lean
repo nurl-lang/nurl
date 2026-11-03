@@ -86,6 +86,9 @@ theorem Step.keep {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) (
   | iteF _ => intro _ _; rfl
   | «while» => intro _ _; rfl
   | push ht _ _ _ => intro i _; exact congrFun (TakeVal.alloc ht) i
+  | insert _ ht _ _ _ => intro i _; exact congrFun (TakeVal.alloc ht) i
+  | withElem _ _ _ _ _ _ => intro _ _; rfl
+  | withElemOOB _ _ _ _ => intro _ _; rfl
   | @pushRealloc m1 x _ _ _ _ d _ ht hx _ _ =>
     intro i hi
     have hav1 := (TakeVal.avoids ht hb hav).1
