@@ -1,6 +1,6 @@
 # formal — a mechanized proof of NURL's memory model
 
-> **Status: A1, A2, A3.0, A3.1, A3.4, the second cuts of A3.2 and A3.5, and the first cuts of A3.3 and A3.6 are proven** (Lean 4, no `sorry`, only Lean's
+> **Status: A1, A2, A3.0, A3.1, A3.4, and the second cuts of A3.2, A3.3, A3.5 and A3.6 are proven** (Lean 4, no `sorry`, only Lean's
 > standard axioms — `./check.sh`). The later phases are not. Until a phase
 > below is marked done, the part of the guarantee in
 > [`docs/MEMORY.md` §6.2](../docs/MEMORY.md) it covers rests on the
@@ -160,6 +160,7 @@ thread's bindings. No A2 rule is copied.
 | `Config`, `Pres`, `SpawnPres`, `Assemble` | the configuration invariant (`CInv`: disjoint parts, A2's facts on each), its start, and that every step keeps it; `RaceFree` and `NoLeak` from it |
 | `SpawnOld`, `SpawnNew` | a spawn: the spawner's side is the A2 run of `letv x (.var a) .skip; …; letv x 0 k` (the moved trees leave its part), and the new thread runs the body with its parameters' trees as its part |
 | `Cell` | A3.5: confinement of library handles (`CellInv`: no two threads hold a share of one cell), kept by every step and by a spawn through `SendCheck`; no `CellRace` |
+| `Make` | A3.6: the make phase (each global's `make` before `main`, `Made`, `make_ok`) and `A3.claim_made`: the claim from the program's global declarations, `GlobsOK` derived |
 | `Claim` | `A3.claim : A3.Claim` |
 
 The theorem, `A3.claim` (`check.sh` prints its axioms): a program A2

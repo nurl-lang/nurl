@@ -656,6 +656,19 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       -- once, so it faces the Sync question, as an `Arc`'s payload does (h357)
       t.hasCell = false →
       RhsT Γ F (.rwRead a) ⟨.arc (.prod (.lk t) t), .own, true, [], [], false, false⟩ Γ
+  /-- A3.3: `rw_try_read a`: `rw_read`'s guard as an owned option
+      (`Option` is `sum int _`), holding nothing; matched by value
+      (`taker`), its `some` is `rw_read`'s entry.  A read guard lends the
+      payload to every reader at once, so the payload holds no library handle
+      (a cell share is not Sync, A3.5). -/
+  | rwTryRead {a : Var} {E : Entry} {t : Ty} :
+      Γ a = some E → E.live = true → E.ty = .lk t → t.hasCell = false →
+      RhsT Γ F (.rwTryRead a) ⟨.sum .int (.arc (.prod (.lk t) t)), .own, true, [], [], false, false⟩ Γ
+  /-- A3.3: `rw_try_write a`'s answer: an owned option of an integer, holding
+      nothing; the write itself is `withLock`'s check-out (`Stmt.withTryWrite`). -/
+  | rwTryWrite {a : Var} {E : Entry} {t : Ty} :
+      Γ a = some E → E.live = true → E.ty = .lk t →
+      RhsT Γ F (.rwTryWrite a) ⟨.sum .int .int, .own, true, [], [], false, false⟩ Γ
   /-- A3.4: an `Atomic`'s operation, through a live share of an integer lock
       block (`Atomic` is `lk int`): an integer. -/
   | atomic {op : AOp} {a : Var} {e1 e2 : Expr} {E : Entry} :
@@ -757,6 +770,8 @@ theorem RhsT.out {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT 
   | lockNew => exact ⟨Or.inl rfl, rfl⟩
   | lockClone => exact ⟨Or.inl rfl, rfl⟩
   | rwRead => exact ⟨Or.inl rfl, rfl⟩
+  | rwTryRead => exact ⟨Or.inl rfl, rfl⟩
+  | rwTryWrite => exact ⟨Or.inl rfl, rfl⟩
   | atomic => exact ⟨Or.inr rfl, rfl⟩
   | chanSend => exact ⟨Or.inr rfl, rfl⟩
   | chanRecv => exact ⟨Or.inl rfl, rfl⟩
@@ -1658,6 +1673,8 @@ def Rhs.vars : Rhs → List Var
   | .lockNew _ y => [y]
   | .lockClone a => [a]
   | .rwRead a => [a]
+  | .rwTryRead a => [a]
+  | .rwTryWrite a => [a]
   | .atomic _ a e1 e2 => a :: e1.vars ++ e2.vars
   | .chanSend a y => [a, y]
   | .chanRecv _ a => [a]

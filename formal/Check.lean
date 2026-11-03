@@ -15,3 +15,6 @@ import A3
 -- threads: moves, Arc's frozen shared payloads, Locked, RwLocked, Atomic, channels, library
 -- handles and the crossing check, module globals (A3/Claim.lean)
 #print axioms A3.claim
+-- module globals made before main by their declarations' makes, read at their declared types
+-- (A3/Make.lean)
+#print axioms A3.claim_made

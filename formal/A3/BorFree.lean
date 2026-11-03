@@ -105,6 +105,8 @@ theorem EvalR.borFree {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r
   | cellClone _ => exact ⟨hb, fun h => by cases h⟩
   | glob _ _ => exact ⟨hb, fun h => by cases h⟩
   | rwRead _ _ _ => exact ⟨hb.of_st rfl, fun h => by cases h⟩
+  | rwTryRead _ _ _ => exact ⟨hb.of_st rfl, fun h => by cases h⟩
+  | rwTryReadNone _ _ | rwTryWrite _ _ _ | rwTryWriteNone _ _ => exact ⟨hb, fun h => by cases h⟩
   | atomic _ _ _ _ => exact ⟨hb.of_st rfl, fun _ => rfl⟩
   | chanSend _ h1 _ _ _ => exact ⟨((TakeVal.borFree h1 hb).1).of_st rfl, fun _ => rfl⟩
   | chanSendClosed _ h1 _ _ => exact ⟨((TakeVal.borFree h1 hb).1).of_st rfl, fun _ => rfl⟩

@@ -171,7 +171,9 @@ theorem EvalR.ownedId {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r
     exact ⟨fun _ i hi => .inr (.inr ⟨_, _, hk, by simpa [Blk.tree] using hi⟩), fun i hi => .inl hi⟩
   | lockRestore _ h1 _ => exact ⟨fun h => (nomatch h), fun i hi => .inl ((TakeVal.ownedId h1 hb).2 i hi)⟩
   -- A3.3: a read guard is a share, which owns no address
-  | rwRead _ _ _ => exact ⟨fun _ i hi => by simp [Val.ids] at hi, fun i hi => .inl hi⟩
+  | rwRead _ _ _ | rwTryRead _ _ _ => exact ⟨fun _ i hi => by simp [Val.ids] at hi, fun i hi => .inl hi⟩
+  | rwTryReadNone _ _ | rwTryWrite _ _ _ | rwTryWriteNone _ _ =>
+    exact ⟨fun _ i hi => by simp [Val.ids] at hi, fun i hi => .inl hi⟩
   | _ => exact ⟨fun h => (nomatch h), fun i hi => .inl hi⟩
 
 /-- **Binding parameters**: a `sink` parameter owns what its argument owned,
@@ -486,7 +488,7 @@ theorem EvalR.payAt {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (
     · rw [upd_ne _ _ he] at hk'
       exact .inl ⟨bl, hk', hi⟩
   -- A3.3: a new view owns nothing
-  | @rwRead _ _ _ _ _ _ _ _ =>
+  | @rwRead _ _ _ _ _ _ _ _ | @rwTryRead _ _ _ _ _ _ _ _ =>
     have hk' : upd m.blk m.nid _ k = some bl := hk
     by_cases he : k = m.nid
     · subst he; simp [upd] at hk'; subst hk'; simp at hi

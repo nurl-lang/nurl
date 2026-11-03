@@ -1508,9 +1508,14 @@ theorem out_glob {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {t : Ty} (htok : t.ok = t
   rcases hf with ⟨u, k, o, rfl, rfl, hk⟩ | ⟨u, k, p, rfl, rfl, hk⟩
   · simp only [Ty.ok, Bool.and_eq_true] at htok
     exact out_lkShare htok.1 (by simpa using htok.2) ⟨o, hk⟩
-  · obtain ⟨_, hvf, hpay⟩ := hi.blocks k _ hk
+  · have hk' : ∃ kd, m.blk k = some ⟨u, kd, some p⟩ := by
+      rcases hk with hk | hk
+      · exact ⟨_, hk⟩
+      · exact ⟨_, hk⟩
+    obtain ⟨_, hk'⟩ := hk'
+    obtain ⟨_, hvf, hpay⟩ := hi.blocks k _ hk'
     simp only [Ty.ok, Bool.and_eq_true] at htok
-    exact out_share htok.1 hvf (hpay p rfl).1 (Or.inl hk)
+    exact out_share htok.1 hvf (hpay p rfl).1 hk
 
 /-- A3.2/A3.5: the lock block a `withLock` checks out, through the share its
     binding holds (`Entry.lockOf`): a lock block of the payload's type. -/

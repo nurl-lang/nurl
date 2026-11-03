@@ -219,6 +219,163 @@ theorem lockRestore_frees_nothing {m m' : Mem} {a y : Var} {v : Val} {o : Bool}
     have ha := TakeVal.alloc h1
     exact ⟨ha, k, t, w, by rw [← TakeVal.blk h1]; exact hk, by simp [upd]⟩
 
+/-! ### A3.3's rest: `rw_try_read`, `rw_try_write`, `wguard_get`, `rw_get`
+
+`rw_try_read` and `rw_try_write` answer an option where `rw_read` and the
+write check-out would wait (`Rhs.rwTryRead`, `Rhs.rwTryWrite`).  `wguard_get`
+is the write scope's `x` lent: A2's borrow, through which the payload's
+containers change, as the borrow of an owner does.  `rw_get` is a read scope
+whose body hands the payload to `mem_dup` (`DupFn`) and moves the copy out. -/
+
+/-- A3.3: a read guard's entry, `rw_read`'s: an owned `arc` share of the view
+    of a lock block of `t`, holding nothing. -/
+def guardE (t : Ty) : Entry := ⟨.arc (.prod (.lk t) t), .own, true, [], [], false, false⟩
+
+/-- A3.3: `rw_try_read`'s answer: an owned option of a read guard, holding
+    nothing. -/
+def tryReadE (t : Ty) : Entry := ⟨.sum .int (.arc (.prod (.lk t) t)), .own, true, [], [], false, false⟩
+
+/-- `rw_try_read`'s `some`, matched by value, is `rw_read`'s guard: what
+    `withRead` binds, so its read scope (`rguard_get_path`'s frozen lend,
+    ended with the guard) is the same. -/
+theorem tryRead_some {Γ : Ctx} {F : List Var} {o : Var} {t : Ty} (ho : Γ o = some (tryReadE t))
+    (hoF : o ∉ F) (hpin : NoPin Γ o) (hds : DtorSafe Γ .replace false o) :
+    RhsT Γ F (.taker o) (guardE t)
+      (setE (kill .replace false o Γ) o { tryReadE t with live := false, dtor := false }) := by
+  have h := RhsT.taker (F := F) (a := .int) (b := .arc (.prod (.lk t) t)) ho rfl rfl rfl hoF hpin hds
+  have he : compE (tryReadE t) (.arc (.prod (.lk t) t)) = guardE t := by
+    simp [compE, ownHeld, tryReadE, guardE]
+  rw [he] at h
+  exact h
+
+/-- **`rw_try_read`, matched, is typed**: on `none` the other branch, on
+    `some` `withRead`'s read scope under the guard moved out of the option
+    (`tryRead_some`); the option's scope ends after both. -/
+theorem _root_.A2.StmtT.withTryRead {P : Prog} {Γ Δs : Ctx} {F : List Var} {a o g y x : Var} {s e : Stmt}
+    {Ea : Entry} {t : Ty} (hs : s.src = true) (he : e.src = true) (ho : Γ o = none) (hoF : o ∉ F)
+    (ha : Γ a = some Ea) (hla : Ea.live = true) (hta : Ea.ty = .lk t) (hnc : t.hasCell = false)
+    (hg : Γ g = none) (hgo : g ≠ o)
+    (hgF : g ∉ F) (hpin : NoPin (setE Γ o (tryReadE t)) o)
+    (hds : DtorSafe (setE Γ o (tryReadE t)) .replace false o)
+    (hsome : StmtT P (setE (setE (kill .replace false o (setE Γ o (tryReadE t))) o
+        { tryReadE t with live := false, dtor := false }) g (guardE t)) F (Stmt.readWith g y x s) Δs)
+    (hendg : EndOK Δs g)
+    (hnone : StmtT P (setE Γ o (tryReadE t)) F e (exitScope g Δs))
+    (hendo : EndOK (exitScope g Δs) o) :
+    StmtT P Γ F (Stmt.withTryRead a o g y x s e) (exitScope o (exitScope g Δs)) := by
+  have hgo' : (setE Γ o (tryReadE t)) g = none := by simp [setE, upd_ne _ _ hgo, hg]
+  refine StmtT.letv (by simp [Stmt.src, Stmt.readWith, hs, he]) ho hoF (RhsT.rwTryRead ha hla hta hnc) ?_ hendo
+  refine StmtT.ite he (by simp [Stmt.src, Stmt.readWith, hs]) (ExprT.isl (upd_same _ _ _) rfl rfl) hnone ?_
+  exact StmtT.letv (by simp [Stmt.readWith, Stmt.src, hs]) hgo' hgF
+    (tryRead_some (upd_same _ _ _) hoF hpin hds) hsome hendg
+
+/-- A3.3: `rw_try_write`'s answer: an owned option of an integer. -/
+def tryWriteE : Entry := ⟨.sum .int .int, .own, true, [], [], false, false⟩
+
+/-- **`rw_try_write`, matched, is typed**: on `none` the other branch, on
+    `some` A3.2's `withLock`, with its faithfulness premises (the lock `a`, a
+    root the body does not name, outlives the body; `x` holds a `t` at its
+    end). -/
+theorem _root_.A2.StmtT.withTryWrite {P : Prog} {Γ Δ : Ctx} {F : List Var} {a o x : Var} {s e : Stmt}
+    {Ea : Entry} {t : Ty} (hs : s.src = true) (he : e.src = true) (ho : Γ o = none) (hoF : o ∉ F)
+    (ha : Γ a = some Ea) (hla : Ea.live = true) (hta : Ea.ty = .lk t) (hroot : Ea.mode.isRoot = true)
+    (hao : a ≠ o) (hx : Γ x = none) (hxo : x ≠ o) (hxF : x ∉ F) (has : a ∉ s.vars)
+    (hb : StmtT P (setE (setE Γ o tryWriteE) x (lockE t)) F s Δ) (hend : EndOK Δ x)
+    (hlive : ∃ E, Δ x = some E ∧ E.live = true)
+    (hnone : StmtT P (setE Γ o tryWriteE) F e (exitScope x Δ)) (hendo : EndOK (exitScope x Δ) o) :
+    StmtT P Γ F (Stmt.withTryWrite a o x s e) (exitScope o (exitScope x Δ)) := by
+  refine StmtT.letv (by simp [Stmt.src, hs, he]) ho hoF (RhsT.rwTryWrite ha hla hta) ?_ hendo
+  refine StmtT.ite he (by simp [Stmt.src, hs]) (ExprT.isl (upd_same _ _ _) rfl rfl) hnone ?_
+  exact StmtT.withLock hs (by simp [setE, upd_ne _ _ hxo, hx]) hxF (by simp [setE, upd_ne _ _ hao, ha])
+    hla (Or.inl hta) hb hend hroot has hlive
+
+/-- **`wguard_get`**: in a write scope on a lock of a `Vec` (`withLock a x`,
+    `x` the payload checked out: `lockE`), the value lent is a borrow of `x`
+    (`: ~ y ( borrow x )`), whose one dependency is `x` itself, an owner —
+    not a share, as `rguard_get`'s is (`rguard_get_path`). -/
+theorem wguard_get_path {Γ : Ctx} {F : List Var} {x : Var} {u : Ty} (hx : Γ x = some (lockE (.vec u))) :
+    RhsT Γ F (.borrow x) ⟨.vec u, .bor, true, [⟨x, .self⟩], [], false, false⟩ Γ := by
+  have hl : lockE (.vec u) = ⟨.vec u, .own, true, [], [], false, false⟩ := by simp [lockE]
+  rw [hl] at hx
+  have h := RhsT.borrow (F := F) hx rfl rfl
+  simpa [derive, Mode.isRoot, rootKind] using h
+
+/-- ... so what is done to its containers changes the value: a change of the
+    lent `Vec`'s elements (here `vec_truncate`) is typed (`StmtT.editB`), its
+    effect on `x` the owner's own, which `x` allows.  A change through a
+    read guard's lend is refused, its dependency being a share
+    (`ThruOK.noShare`). -/
+theorem _root_.A2.StmtT.wguardGet {P : Prog} {Γ : Ctx} {F : List Var} {x y : Var} {u : Ty} {i : Expr}
+    (hx : Γ x = some (lockE (.vec u))) (hy : Γ y = some ⟨.vec u, .bor, true, [⟨x, .self⟩], [], false, false⟩)
+    (huv : u.holdsView = false) (hyF : y ∉ F) (hxF : x ∉ F) (hi : ExprT Γ i)
+    (hds : DtorSafe Γ .drop false x) :
+    StmtT P Γ F (.edit true y (.trunc i))
+      (setE (killThru (.trunc i) (.vec u) [⟨x, .self⟩] Γ) y ⟨.vec u, .bor, true, [⟨x, .self⟩], [], false, false⟩) := by
+  have hl : lockE (.vec u) = ⟨.vec u, .own, true, [], [], false, false⟩ := by simp [lockE]
+  rw [hl] at hx
+  refine StmtT.editB (t := u) hy rfl rfl rfl huv hyF (EditArg.trunc hi) (fun _ h => by cases h) hy rfl
+    (by simp [memDeps, Kind.isName]) ?_
+  intro d hd
+  simp only [memDeps, Kind.isName, Bool.not_false, List.filter_cons_of_pos, List.filter_nil,
+    List.mem_singleton] at hd
+  subst hd
+  exact ⟨hxF, fun _ h => (by cases h), _, hx, rfl, Or.inl rfl, by simpa [Edit.effAt] using hds, by simp⟩
+
+/-- ... where a read guard's lend refuses every change through it. -/
+theorem rguard_no_change {Γ1 : Ctx} {F : List Var} {op : Edit} {tx : Ty} {g : Var} :
+    ¬ ThruOK Γ1 F op tx [⟨g, .share⟩] := fun h =>
+  h.noShare ⟨g, .share⟩ (by simp [memDeps, Kind.isName]) rfl
+
+/-- **A3.3, `mem_dup` at `t`** (`rw_get`'s copy), as the calculus has it: a
+    function of the program that takes a `t` lent (`in`) and hands back a `t`
+    of its own: its result borrows from nothing (`lends = []`) and holds
+    nothing (`rholds = []`).  A lock's payload holds no view (`Ty.ok (lk t)`),
+    so a deep copy of it depends on nothing it was copied from; the program's
+    typing checks the function's body against this summary (`ProgOK`). -/
+def DupFn (P : Prog) (f : Nat) (t : Ty) : Prop :=
+  ∃ fn, P[f]? = some fn ∧ fn.params = [(.inp, t)] ∧ fn.resTy = t ∧ fn.lends = [] ∧ fn.rholds = []
+
+/-- **The copy depends on nothing**: `mem_dup` called on a lend `x` of the
+    payload (`rguard_get`'s, which depends on the guard through a share and
+    holds nothing) is a call whose result borrows from nothing and holds
+    nothing, and which leaves the context as it was.  So `exitScope` of the
+    guard leaves the copy (`copy_outlives`). -/
+theorem dup_call {P : Prog} {Γ : Ctx} {F : List Var} {f : Nat} {t : Ty} {x : Var} {Ex : Entry}
+    (hd : DupFn P f t) (hx : Γ x = some Ex) (hl : Ex.live = true) (ht : Ex.ty = t) (hh : Ex.held = [])
+    (hn : ∀ d ∈ Ex.vdeps, d.kind.isName = false) :
+    ∃ fn, P[f]? = some fn ∧ CallT P Γ F f [x] ⟨t, resMode fn, true, [], [], false, false⟩ Γ := by
+  obtain ⟨fn, hf, hps, hrt, hle, hrh⟩ := hd
+  have hargE : argE Γ x = Ex := by simp [argE, hx]
+  have hnm : argNames Γ [x] = [] := by
+    simp only [argNames, List.flatMap_cons, List.flatMap_nil, List.append_nil, hargE]
+    split
+    · rfl
+    · simp only [nameDeps, List.filter_eq_nil_iff]
+      intro d hd; simp [hn d hd]
+  have hmut : mutNames Γ [x] = [] := by simp [mutNames, hnm]
+  have hheld : heldOfArgs Γ [x] = [] := by
+    simp only [heldOfArgs, hnm, List.append_nil, List.flatMap_cons, List.flatMap_nil, hargE, hh]
+    split <;> simp [memDeps, roots, allKinds]
+  refine ⟨fn, hf, fn, hf, by simp [hps], ?_, ?_, CallDtorSafe.of_inp (by simp [hps]) hmut, ?_, ?_, ?_⟩
+  · intro i hi
+    simp only [hps, List.length_singleton, Nat.lt_one_iff] at hi
+    subst hi
+    refine ⟨Ex, by simpa using hx, hl, by simp [hps, paramOK, ht], fun h => (by simp [hps, PMode.moves] at h),
+      fun h => (by simp [hps] at h)⟩
+  · intro d hd; rw [hmut] at hd; cases hd
+  · simp [callRes, hle, hrh, hheld, hrt, ownHeld]
+  · funext v
+    simp [callPost, hmut, killNames, hps, callPostAux]
+  · intro _
+    simp only [callR, List.flatMap_cons, List.flatMap_nil, List.append_nil, hargE, hh]
+    split <;> simp [memDeps, roots]
+
+/-- ... and a binding that depends on nothing outlives the guard's scope's
+    end: `exitScope g` ends only what depends on `g`. -/
+theorem copy_outlives {Γ : Ctx} {g z : Var} {E : Entry} (hz : Γ z = some E) (hzg : z ≠ g)
+    (hd : E.vdeps = []) : exitScope g Γ z = some E := by
+  simp [exitScope, upd_ne _ _ hzg, kill, hz, killE, hits, hd]
+
 /-! ### A3.6: module globals, as A2 types them
 
 A global set at start is read at a type that synchronises itself

@@ -1,7 +1,7 @@
 # The claim
 
-> **Status: A1, A2, A3.0, A3.1, A3.4, the second cuts of A3.2 and A3.5,
-> and the first cuts of A3.3 and A3.6 are proven** (`A1.memory_safe`, `A2.memory_safe`,
+> **Status: A1, A2, A3.0, A3.1, A3.4, and the second cuts of A3.2, A3.3,
+> A3.5 and A3.6 are proven** (`A1.memory_safe`, `A2.memory_safe`,
 > `A2.no_leak_end`, `A3.claim`, [`README.md`](README.md)); the rest of
 > A3.2, A3.3, A3.5 and A3.6, and B–D, are the statement the proof is
 > working towards, not one it has reached.
@@ -224,7 +224,7 @@ the LLVM / C11 memory model rather than redefining it.
       typed since A3.2's and A3.5's second cuts), `chan_len`,
       `chan_is_closed` and `select`. Deadlock freedom, and that
       a waiting `chan_recv` is woken, are not claimed.
-  - **A3.3, first cut** *(proven)* — `RwLocked`: a value many threads
+  - **A3.3, second cut** *(proven)* — `RwLocked`: a value many threads
     read at once, through frozen read guards, and one changes.
     - **The calculus.** An `RwLocked` is A3.2's lock block. `rw_new`,
       `RwLocked_share` and the write side (`rw_write` / `wguard_update` /
@@ -249,8 +249,16 @@ the LLVM / C11 memory model rather than redefining it.
       rwlock (trusted base).
     - **In Lean.** `A2.memory_safe`, `A2.no_leak_end`, `A2.no_leak_panic`
       and `A3.claim` hold with all of this, on the standard axioms only.
-    - **Not typed yet:** `rw_try_read` / `rw_try_write`, `wguard_get`,
-      `rw_get`'s copy and `wguard_apply`'s result. A read guard refuses a
+    - **Second cut.** `rw_try_read` / `rw_try_write` answer none where
+      they would wait (`Rhs.rwTryRead`, `Rhs.rwTryWrite`; a try-read's
+      `some` is `rw_read`'s guard). A try-write is the answer followed by
+      the write check-out, two steps: another thread may take the lock
+      between them, which only adds runs. `wguard_get` is a borrow of the
+      write scope's binding (`wguard_get_path`, `StmtT.wguardGet`), and
+      `rw_get` a read scope whose body copies the value out with
+      `mem_dup` (`Stmt.rwGet`, `dup_call`, `copy_outlives`).
+    - **Not typed yet:** `rw_get` as one typed statement (its pieces are),
+      `mem_dup` as a step of its own, and `wguard_apply`'s result. A read guard refuses a
       payload that holds a library handle (`RhsT.rwRead`'s `hasCell`,
       h357): readers read it at once, so it faces Sync. An `RwLocked` of
       one is still made and written.
@@ -350,7 +358,7 @@ the LLVM / C11 memory model rather than redefining it.
       share of it is argued from typing, not a lemma, and phase D must
       show the runtime's reference count of a handle's block equals the
       model's owners.
-  - **A3.6, first cut** *(proven)* — module globals reached by several
+  - **A3.6, second cut** *(proven)* — module globals reached by several
     threads.
     - **The calculus.** A global set at start (`: ( Locked T ) g ( make )`)
       is a field of the configuration (`Cfg.gl`, `Mem.gl`) that every
@@ -375,11 +383,19 @@ the LLVM / C11 memory model rather than redefining it.
       Every access is atomic, so there is no data race either way; the
       interleaving model is exact up to the integers a load returns, and
       no ownership fact reads them.
-    - **Not typed yet:** the `make` phase (that running each `make` leaves
-      a start satisfying `GlobsOK`); a read's type tied to its global's
-      declared type (a read at another type panics in the model, and
-      nurlc types each read by the declaration); `Cond` / `Semaphore`
-      globals. Owning, struct and option globals are `unsafe`-only, the
+    - **Second cut: the make phase.** `A3.claim_made` states the claim
+      from the program's global declarations (`Decl`: a `make` of no
+      parameters returning an owned value of a `Ty.sync` type, `DeclsOK`).
+      Each `make` runs before `main`, single-threaded, from the empty
+      store (`makeStmt`, `Made`), and is itself memory-safe and race-free
+      (`made_safe`). What the makes leave satisfies `GlobsOK` (`make_ok`,
+      `made_ok`), so the premise is derived, not assumed; a make that
+      panics ends the program before `main` (`MakePanics`). A typed
+      program reads each global at its declared type (`ProgGlobs`,
+      `Stmt.globsAt`), so no read panics (`Reach.glob_typed`).
+    - **Not typed yet:** that the make phase terminates (a make that loops
+      or deadlocks never reaches `main`); a make that spawns a thread;
+      `Cond` / `Semaphore` globals. Owning, struct and option globals are `unsafe`-only, the
       trusted base (h202 h272 h273).
 - **B** — the `unsafe` base of the standard library is semantically
   well-typed, so safe code built on it inherits the theorem.

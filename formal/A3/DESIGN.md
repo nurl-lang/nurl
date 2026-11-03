@@ -12,7 +12,8 @@ claim (A3.1's and A3.2's mechanization, below; A3.2's second cut adds
 shares in lock payloads and `locked_take` / `locked_restore`, and what it
 leaves out is listed there), and so are A3.3's `RwLocked` (A3.3's
 mechanization, below: a lock block read through views, its read guards
-lending the value frozen) and A3.4's `Atomic` and channels (A3.4's
+lending the value frozen; its rest, the try forms, `wguard_get` and
+`rw_get`, too) and A3.4's `Atomic` and channels (A3.4's
 mechanization, below; channels are primitive rules on a lock block's
 queue). A3.5's first cut, library handles whose copies are one state and
 the crossing check, is mechanized too (A3.5's mechanization, below: a lock
@@ -21,7 +22,9 @@ check fails; and a race includes two threads changing one handle's state).
 A3.6's module globals set at start are mechanized as well (A3.6's
 mechanization, below: the start holds them, every thread reads them
 through the configuration, no step writes them, and what they reach is
-left at the end). A3.5b's first cut, closures that cross threads or that
+left at the end; its rest runs the `make`s before `main`, which leave such
+a start, and ties each read to its global's declared type,
+`A3.claim_made`). A3.5b's first cut, closures that cross threads or that
 several threads share, is mechanized too (A3.5b's mechanization, below: a
 closure's type says where it may cross, an `Arc` holds a Sync one, a lock
 or a channel a bare one, a spawn a Send one). A3.5c's trait objects are
@@ -42,7 +45,7 @@ are §6.5's.
 For a program whose functions all check (`ProgOK`), with a source
 statement well-typed in the empty context, run from the empty
 configuration (A3.6: from a start that holds the module globals set at
-start, `Cfg.start`):
+start, `Cfg.start`, which the make phase leaves, `A3.claim_made`):
 
 - **`A3.memory_safe`**: no reachable configuration is stuck. A2's
   statement, now for every thread.
@@ -890,6 +893,12 @@ a *view*, a third kind of block that its read guard shares. A panic now
 gives a lock scope's payload back, and a thread that waits may panic
 instead. `CLAIM.md` / `README.md` are not updated here.
 
+The rest of A3.3 is mechanized too (*The rest*, below): `rw_try_read` and
+`rw_try_write` are right-hand sides that answer `none` where `rw_read` and
+the write check-out would wait, and `wguard_get` and `rw_get` are forms of
+the rules there are, with no new rule. `check.sh` is green and the same
+theorems are re-proven.
+
 **Where an `RwLocked` lives: a lock block, read through views.** The draft
 (the `rw` block above) stored a reader count in the block and lent the
 payload to readers straight from it. That needs
@@ -1061,12 +1070,84 @@ no live entry anywhere lands in the payload. Instead:
 - `% NotSend` on guards is not modeled: a model guard may cross a spawn
   (more programs, all safe). `% Frozen` is the share dependency.
 
+**The rest: `rw_try_read`, `rw_try_write`, `wguard_get`, `rw_get`**
+(`A2/Semantics.lean`, `A2/Typing.lean`; the derived forms in
+`A2/Syntax.lean`, their typing in `A3/Defs.lean`).
+- `Rhs.rwTryRead a` (`rw_try_read`): `rw_read`, answering an option (A2's
+  `Option` is `sum int _`) and never waiting.
+  - `EvalR.rwTryRead`: with the payload in, `rw_read`'s new view, and its
+    share handed back as an owned `some` (`inr`).
+  - `EvalR.rwTryReadNone`: with the payload checked out, where `rw_read`
+    waits, `none` (`inl 0`), the store as it was. It has no `RBlocked`
+    case, so it never waits.
+  - `RhsT.rwTryRead`: `a` a live `lk t`, `t.hasCell = false` (a read guard
+    lends to every reader at once: no library handle, as A3.5's second cut
+    asks of `rw_read`); the result is `tryReadE t`, an owned option of a
+    guard, holding nothing.
+  - `Stmt.withTryRead a o g y x s e` spells the match: on `none`, `e`; on
+    `some`, the guard moves out of the option into `g` (`taker`), and
+    `withRead`'s read scope runs under it (`Stmt.readWith`, which
+    `Stmt.withRead` is now built on). `tryRead_some`: the guard moved out
+    is `rw_read`'s entry (`guardE t`), so `rguard_get_path` and `exitScope g`
+    hold as for `rw_read`. `StmtT.withTryRead` types the whole.
+- `Rhs.rwTryWrite a` (`rw_try_write`'s answer): `some` (`inr 0`) where a
+  write's check-out would not wait (the payload in and no view of it,
+  `EvalR.rwTryWrite`), `none` (`inl 0`) where it would
+  (`EvalR.rwTryWriteNone`); the store as it was either way, and no wait.
+  `RhsT.rwTryWrite`: an owned `sum int int` (`tryWriteE`).
+  - `Stmt.withTryWrite a o x s e`: on `none`, `e`; on `some`, A3.2's
+    `withLock a x s`, with its faithfulness premises (`StmtT.withTryWrite`).
+  - **Why two steps.** A write guard is no value in the model: it is the
+    lock scope `scopeL`, which only `withLock`'s step makes, and which gives
+    the payload back on both paths. An atomic try would be a statement of
+    its own, a `withLock` with an else branch, which every lemma over
+    statements would get a case for. A try that took the payload out as a
+    value (`lockTake`) would leave the block empty on a panic, where the
+    runtime's write guard gives it back. So the answer and the check-out
+    are two steps. Another thread may take the lock between them, and the
+    check-out then waits (or panics, `Step.waitPanic`) where
+    `pthread_rwlock_trywrlock` takes it at once. These are more runs than
+    the runtime has, and every one of the runtime's is a run of the model
+    (the two steps back to back), so the claim covers it.
+- `wguard_get` needs no rule. It is the write scope's `x` lent: `: ~ y (
+  borrow x )`, a borrow whose one dependency is `x` itself, an owner
+  (`wguard_get_path`). What is done to its containers changes the value: a
+  change of the lent `Vec`'s elements is typed (`StmtT.wguardGet`, a
+  truncation through `editB`), its effect on `x` the owner's own. A read
+  guard's lend, whose dependency is a share, refuses every change
+  (`rguard_no_change`). A scalar field changes in place by an assignment
+  to `x` in the body (`wguard_update`).
+- `rw_get` is a read scope whose body copies out:
+  `Stmt.rwGet a g y x c z f` is `withRead a g y x` around a call of `f` on
+  the lend `x`, whose result `c` moves to the caller's `z`.
+  - **The copy is `mem_dup`**, a deep copy of a view-free value. The calculus
+    has no deep-copy step, so `mem_dup` at the payload's type is a function
+    of the program with `mem_dup`'s summary (`DupFn`): it takes a `t` lent
+    (`in`) and hands back a `t` of its own, lending (`lends = []`) and
+    holding (`rholds = []`) nothing. A lock's payload holds no view, so a
+    deep copy of it depends on nothing it was copied from; `ProgOK` checks
+    the function's body against the summary.
+  - `dup_call`: the call on the payload's lend (which depends on the guard
+    through a share and holds nothing) is typed, and its result's entry
+    borrows from and holds nothing, so `exitScope g` leaves the copy
+    (`copy_outlives`).
+
+**A2's and A3's proof of the rest.** The cases of `Rhs.rwTryRead` are
+`rw_read`'s, with the guard wrapped (`rhs_pres` through `out_ownNoView`,
+`guardTy_ok`); its `none` and both of `Rhs.rwTryWrite`'s are
+`chan_try_recv`'s `none`: an owned option of an integer, the store as it
+was. `covers_evalR`, `evalR_exists`, `EvalR.codes`, `EvalR.blk`,
+`EvalR.leafKeep`, `Rename`, `Wf`, `NameWf`, `SrcKeep`, and A3's
+`EvalR.restrict`, `EvalR.lift`, `EvalR.borFree`, `EvalR.grows`,
+`EvalR.ownedId`, `EvalR.payAt` and `EvalR.cellKeep` get them. A try touches
+what `rw_read` does: nothing (a view owns no address; the count and the
+writer bit are the runtime's rwlock, trusted base).
+
 **Simplifications in this cut.** Each is a restriction, and sound as stated.
 - A payload holds no share, no view and no closure, as a `Locked`'s
   (A3.2).
-- `rw_try_read` / `rw_try_write`, `wguard_get` (a lend under the write
-  lock), `rw_get` (a copy) and `wguard_apply`'s result are not separate
-  rules; `rw_apply`'s result is an assignment in the body.
+- `wguard_apply`'s result, as `rw_apply`'s, is an assignment in the body,
+  not a rule of its own.
 - The guards are scoped bindings; a guard moved into a struct or a
   `Vec` keeps its view as long as it lives, as the runtime's keeps the lock.
 
@@ -1098,7 +1179,15 @@ no live entry anywhere lands in the payload. Instead:
   binding;
 - payloads that hold shares, views or closures, and library handles in a
   payload (A3.5);
-- `rw_try_*`, `wguard_get`, `rw_get`;
+- that `rw_try_write`'s check-out after a `some` never waits (the model's
+  two steps let another thread in between, above), and that a `none` is
+  answered only where the runtime's would be: a view lives until the sweep,
+  so a try may answer `none` after the runtime's guard is dropped (A3.1's
+  phase-D obligation again);
+- `rw_get` as one typed statement: its parts are typed (`rguard_get_path`,
+  `dup_call`, `copy_outlives`, and A2's `letv`, `letcall` and `assign`), not
+  the whole with its scopes' end conditions; and `mem_dup` as a step of its
+  own (here a function of the program, `DupFn`);
 - a typed program over these rules (a probe's encoding, as
   `A2/DynCell.lean` types `pick`);
 - `CLAIM.md` / `README.md`.
@@ -2084,6 +2173,15 @@ leak clause leaves what they reach. With no global it is A3.0–A3.5's
 claim (`Cfg.init_start`, `A3.no_leak_init`). `CLAIM.md` / `README.md` are
 not updated here.
 
+The rest of A3.6 is mechanized too (*The rest*, below, `A3/Make.lean`): the
+`make`s run before `main` and leave a start `GlobsOK` holds of (`Made`,
+`made_ok`), and each read is tied to its global's declared type, so that
+`EvalR.globP` is never taken in a typed program (`ProgGlobs`,
+`Reach.glob_typed`). `A3.claim_made` is `A3.claim` from the program's
+declarations, with `GlobsOK` derived from the make phase; `A3.claim` keeps
+`GlobsOK` as a premise. `check.sh` is green, and the same theorems are
+re-proven.
+
 The runtime it models is docs/MEMORY.md §1, *Module globals*:
 - *A global set at start*, `: ( Locked T ) g ( make )`. `make` (no
   arguments) runs once before `main`, and nothing writes `g` afterwards.
@@ -2133,13 +2231,12 @@ taken:
 - A thread can neither move, drop nor assign a global. It holds only
   clones, and no rule writes `gl` (`Step.gl`, `TStep.gl`, `Reach.gl`).
 
-*Given with the start, not run before it.* The start holds the globals as
-the `make`s left them (`Globs`: the blocks, the addresses their payloads
-own, `nid`, each global's share). Running each `make` would add a phase
-before `main` to `TStep` (a thread that runs the `make`s and moves their
-results into `Cfg.gl`), for nothing the claim reads. `GlobsOK` asks of the
-given store what A2's invariant says of the store a typed `make` leaves
-once its result is the global's.
+*Given with the start, and made before it.* `A3.claim` takes the start as
+the `make`s left it (`Globs`: the blocks, the addresses their payloads own,
+`nid`, each global's share), under `GlobsOK`, which asks of it what A2's
+invariant says of the store a typed `make` leaves once its result is the
+global's. The make phase (*The rest*, below) runs the `make`s and shows
+that the store they leave is such a start, without a phase in `TStep`.
 
 **The rules.**
 - `Ty.sync` (A2, `Syntax.lean`): a type that synchronises itself. It holds
@@ -2153,7 +2250,9 @@ once its result is the global's.
 - `EvalR.glob`: `m.gl g = some v → GlobFits m.blk t v →
   EvalR m (.glob g t) (.ok v true m)`. `GlobFits B t v`: `t = lk u` and `v`
   is a lock share of a lock block of type `u`, or `t = arc u` and
-  `v = arc k p` with block `k` an `arc` block of type `u` holding `p`.
+  `v = arc k p` with block `k` an `arc` block of type `u` holding `p` (since
+  A3.6's rest, `ArcBlk`: an `arc` block or a view, a read guard a `make`
+  may hand back, whose type the model does not tell from an `Arc`'s).
 - `EvalR.globP`: a read the store cannot answer at that type panics. A2's
   one thread, run from the empty store, holds no global, so every read
   panics there. In A3 a read of a start-set global, at the type the start
@@ -2312,16 +2411,83 @@ globals reach (`Reached C0.globVals`). With no global, nothing is left
   The calculus's `Nat` word stands for all of them, as A3.4 notes for
   `sub`.
 
+**The rest: the make phase, and the read's type tied to the declaration**
+(`A3/Make.lean`; `Stmt.globsAt` in `A2/Codes.lean`).
+- *The declarations.* A program's globals are a list of `Decl`s, global `g`
+  the `g`-th: its `make`, a function of the program, and its declared type.
+  `declTy D` is the program's global type environment (`GTy`). `DeclsOK P D`:
+  each `make` takes no parameter and hands back an owned value of a type
+  `Ty.sync` admits.
+- *The read's type.* `Rhs.globAt GT` asks `GT g = some t` of a read
+  `glob g t`, `Stmt.globsAt GT` of every read in a statement, and
+  `ProgGlobs P GT` of every function's body. It is a program-wide check
+  beside the typing, as `ProgCodes` is: `RhsT` takes no program, and giving
+  it one would touch every rule and lemma over right-hand sides. `RhsT.glob`
+  is unchanged; a read typed by it and checked by `globsAt` is at its
+  global's declared type.
+  - `globs_step` (A2): a step leaves a part of its statement or a function's
+    body, renamed (`Stmt.globsAt_rename`, `callIn_globs`), which reads what
+    it read.
+  - `Reach.globsAt`: a spawn leaves the spawner's statement with its call
+    replaced and the spawned body (`Redex.globsAt`, `Redex.globs_hole`).
+  - `Reach.glob_typed`: from a start that holds each declared global at its
+    declared type (`GlobsAt`), no thread's next read of a global
+    (`NextRhs`) is `EvalR.globP`: the read is at the declared type
+    (`NextRhs.globAt`), and A3.6's `Reach.glob_noPanic` does the rest.
+- *The make phase.* `Made P spawn D i G`: the first `i` globals are
+  made, leaving `G`.
+  - Global `i`'s `make` runs on a thread of its own from the store the
+    earlier ones left (`Cfg.start G (makeStmt i d) 1`), by the program's own
+    steps and sweeps (`Reach`), so a `make` may read an earlier global; a read
+    of a later one is `EvalR.globP`, a panic before `main`.
+  - `makeStmt i d` calls the `make` into variable 0, then reaches the
+    hand-over point, `= 0 ( glob i t )`, which never runs. The phase takes
+    the configuration of one thread at the hand-over point, moves 0's value
+    into global `i` (`upd C.gl i`) and drops the binding, and the next `make`
+    starts there.
+  - The hand-over point is typed only if 0 is an owner of a `t`
+    (`assignGlob_inv`, `handOver_inv`), so the thread's typing there, which
+    A3's invariant holds (`ThreadOK`), says what 0 holds: a share of the
+    declared type, whose block `MInv.shares` names (`globFits_of`).
+  - `make_ok`: from a start `GlobsOK` holds of, the store one `make` leaves,
+    its result handed over, is one again, with global `i` fitting its type.
+    `reach_inv` is A3's invariant at the hand-over point (`CInv`, as
+    `A3.claim` draws it, and `CellInv`). 0 is the thread's one binding
+    (`Closed`), and it owns no address, so the store with no binding is a
+    heap (`MInv.unbind`), every live address is a payload's (`Covers`), and
+    every block is reached from a global: the result's or an earlier one's
+    (the sweep's `CInv` half). Each cell's shares are in one block, below
+    `nid` (`GlobsOK.cells`, A3.5's second cut): `CellInv`'s `one` and
+    `blkBelow`.
+  - `made_ok`, `made_globsAt`: the phase leaves `GlobsOK`, each global made
+    so far at its declared type, the later ones unset; once all are made,
+    `GlobsAt G (declTy D)`.
+  - `made_safe`: every `make`'s run is memory-safe and race-free (`A3.claim`
+    on its start). The other way a `make` ends is a panic no frame catches,
+    before `main` (`MakePanics`). A `make` may also run forever, or wait
+    forever on a lock, and the phase never ends.
+- `A3.claim_made`: for a program A2 types whose globals are declared
+  (`DeclsOK`) and read at their declared types (`ProgGlobs`, and the main
+  statement's `globsAt`): every `make`'s run is safe, and once every global
+  is made, the run from that start is memory-safe, race-free and leaves
+  only what the globals reach, and no thread's read of a global panics.
+
+**Faithful to the runtime** (the rest).
+- *`make` runs once before `main`*, in declaration order, each on the store
+  the earlier ones left. The model runs each on a thread of its own, with
+  the program's steps, and starts `main` from the store the last one left.
+- *The result is stored as the global* and the `make`'s frame is gone: the
+  phase moves the result out of variable 0 and drops the binding, which
+  owns no address (a share): the global keeps the block.
+- *The read's type* is the declaration's in nurlc, which types each read by
+  it; `ProgGlobs` is that check.
+
 **Simplifications in this cut.** Each is a restriction, and sound as stated.
-- *The globals are given with the start, not made by running `make`* (above).
-  That a typed `make`, run before `main`, leaves a store `GlobsOK` holds of
-  is argued, not proven.
+- *A `make` is single-threaded.* A `make` that spawns a thread never
+  reaches a configuration of one thread at the hand-over point, so it never
+  completes the phase in the model.
+- *A `make` hands back an owned share* (`resOwn`).
 - *A read is a clone, not a borrow.* The two agree on every step (above).
-- *The read names its type* (`glob g t`), and the step checks it against
-  the store (`EvalR.globP` otherwise). The checker reads each global at its
-  declared type; the calculus does not tie `t` to the start's global
-  statically, which would be a program-wide premise like `codesOK`.
-  `Reach.glob_noPanic` says that a read at the start's type never panics.
 - *A global's payload is what a lock's or an `Arc`'s may hold* (A3.1–A3.4's
   restrictions: no view or closure; a lock's, no share).
 - *`Mutex` is a `Locked`* (a lock block). `Cond` and `Semaphore` have no rule
@@ -2360,14 +2526,11 @@ globals reach (`Reached C0.globVals`). With no global, nothing is left
   `t.hasCell = false`, `glob_not_arc_cell`).
 
 **Not proven here.**
-- *The static link* between a read's type and the start's global: that a
-  typed program reads each global at the type the start holds it at, so
-  that `EvalR.globP` never fires. In A3 a read at that type never panics
-  (`Reach.glob_noPanic`), but the calculus does not tie the read's `t` to
-  it.
-- *The `make` phase*: that running each `make` before `main` and handing its
-  result to the global leaves a store `GlobsOK` holds of. It is A2's
-  soundness for the `make`, then the result's slot emptied into `gl`.
+- that the make phase ends: a `make` may loop or wait forever (deadlock
+  freedom, as before); and a `make` that spawns a thread;
+- the hand-over point as a statement of the calculus: the phase's move of
+  the result into `gl` is the phase's, not a step's, so no rule writes a
+  global still (`Step.gl`);
 - *The relaxed-atomics assumption* above.
 - *`unsafe` globals* (owning, struct and option globals): trusted base.
 - *`Cond` and `Semaphore` globals.*

@@ -398,6 +398,11 @@ inductive Rhs where
   | rwRead (a : Var)           -- `rw_read a`: a read guard of the lock `a` shares, a new view
                                -- of its payload (frozen while the view lives); `rguard_get g`
                                -- is `arcGet g` (the payload is the second field it lends)
+  | rwTryRead (a : Var)        -- `rw_try_read a`: `rw_read`'s guard as an owned `some` (`inr`),
+                               -- or `none` (`inl 0`) where `rw_read` would wait, with no wait
+  | rwTryWrite (a : Var)       -- `rw_try_write a`'s answer: `some` (`inr 0`) when a write's
+                               -- check-out (`withLock a`) would not wait, `none` (`inl 0`) where
+                               -- it would; the check-out itself is `withLock` (`Stmt.withTryWrite`)
   -- A3.5: a library handle whose copies are one state (a `PNCounter`, a
   -- `TcpConn`, a `Cell`) is a cell: a lock block whose shares are not Sync;
   -- the library's in-place change is a `withLock` on a cell share (`withCell`)
@@ -559,6 +564,11 @@ inductive Stmt where
     or panics (`Blocked`, `Step.waitPanic`), as `RefCell`'s borrow error. -/
 def Stmt.withCell (a x : Var) (s : Stmt) : Stmt := .withLock a x s
 
+/-- A3.3: the read scope under a guard `g` already bound: `rguard_get g` lent
+    to `x` (through `y`, a share of the lock and the payload) for `s`. -/
+def Stmt.readWith (g y x : Var) (s : Stmt) : Stmt :=
+  .letv y (.arcGet g) (.letv x (.snd y) s)
+
 /-- A3.3: a read scope of an `RwLocked` (`: ( RGuard A ) g ( rw_read a )`,
     then `rguard_get g`), as the calculus spells it: the guard `g`, what
     `arcGet` lends through it (`y`, a share of the lock and the payload), and
@@ -567,7 +577,33 @@ def Stmt.withCell (a x : Var) (s : Stmt) : Stmt := .withLock a x s
     of the payload, and the view `g` holds lives until nothing reaches it;
     a writer waits until then. -/
 def Stmt.withRead (a g y x : Var) (s : Stmt) : Stmt :=
-  .letv g (.rwRead a) (.letv y (.arcGet g) (.letv x (.snd y) s))
+  .letv g (.rwRead a) (Stmt.readWith g y x s)
+
+/-- A3.3: `rw_try_read a`, matched (`?? ( rw_try_read a ) { T g → s } { F → e }`):
+    the option `o`; on `none` (the tag `isl` is 1), `e`; on `some`, the guard
+    moves out of the option into `g` (a match by value, `taker`), and the read
+    scope runs under it as `withRead`'s does. -/
+def Stmt.withTryRead (a o g y x : Var) (s e : Stmt) : Stmt :=
+  .letv o (.rwTryRead a) (.ite (.isl o) e (.letv g (.taker o) (Stmt.readWith g y x s)))
+
+/-- A3.3: `rw_try_write a`, matched: the answer `o`; on `none`, `e`; on `some`,
+    the write's check-out, A3.2's `withLock` (`wguard_update` / `rw_set` in
+    its body, `wguard_get` a borrow of `x`, `StmtT.wguardGet`).  The answer
+    and the check-out are two steps: another thread may take the lock
+    between them, and the check-out then waits (or panics, `Step.waitPanic`),
+    where the runtime's `pthread_rwlock_trywrlock` takes it at once — more
+    runs than the runtime has, every one of the runtime's among them (the
+    two steps back to back). -/
+def Stmt.withTryWrite (a o x : Var) (s e : Stmt) : Stmt :=
+  .letv o (.rwTryWrite a) (.ite (.isl o) e (.withLock a x s))
+
+/-- A3.3: `rw_get a`, the payload copied out under a read (`stdlib/std/rwlock.nu`:
+    `rw_read`, then `mem_dup ( rguard_get g )`): the read scope's body hands
+    the payload `x`, lent, to the copy `f` (`mem_dup` at the payload's type,
+    a function of the program, `DupFn`), and the copy `c` moves out to `z`,
+    a binding of the caller's, before the guard goes. -/
+def Stmt.rwGet (a g y x c z : Var) (f : Nat) : Stmt :=
+  Stmt.withRead a g y x (.letcall c f [x] (.assign z (.var c)))
 
 /-- A3.6: an update of a `Locked` global set at start (`locked_update g f`,
     with `f`'s body as `s` and its argument as `x`): the global's handle,

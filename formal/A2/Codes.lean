@@ -282,6 +282,25 @@ theorem EvalR.codes {P : Prog} {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (he :
     cases hc with
     | fst => exact pkgOK_leaf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h)
     | snd => exact hp
+  | rwTryRead _ hk _ =>
+    -- A3.3: `rw_read`'s, the guard as `some`
+    have hp := (hB _ _ hk).1
+    refine ⟨pkgOK_of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_),
+      h.withBlk rfl (h.blk.upd (blkCodes_view ?_))⟩
+    · cases hc with
+      | inr => exact pkgOK_leaf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h)
+    refine pkgOK_of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
+    cases hc with
+    | fst => exact pkgOK_leaf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h)
+    | snd => exact hp
+  | rwTryReadNone _ _ | rwTryWriteNone _ _ =>
+    refine ⟨pkgOK_of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_), h⟩
+    cases hc with
+    | inl => exact pkgOK_int P _
+  | rwTryWrite _ _ _ =>
+    refine ⟨pkgOK_of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_), h⟩
+    cases hc with
+    | inr => exact pkgOK_int P _
   | atomic _ _ _ _ =>
     exact ⟨pkgOK_int P _, h.withBlk rfl (h.blk.upd (blkCodes_lock fun _ e => by cases e; exact pkgOK_int P _))⟩
   | @chanSend _ _ _ k _ u c d es _ _ _ h1 hk _ _ _ =>
@@ -616,5 +635,97 @@ theorem codes_step {P : Prog} (hPc : ProgCodes P) {m : Mem} {s : Stmt} {r : Res}
       (hm.set (fun V e => by cases e; exact pkgOK_lend (hT.child Child.pkg))).of_st rfl
     exact ⟨(((hb.codes hme).set (fun _ e => by cases e)).set (fun _ e => by cases e)).of_st rfl,
       ⟨callIn_codes hPc hf _ _ _, hs⟩⟩
+
+/-! ### A3.6: a program reads each module global at its declared type
+
+The static link between a read `glob g t` and global `g`'s declaration.  A
+program's global type environment `GT` gives each declared global its type
+(A3/Make.lean: the declarations' types); a typed program reads every global
+at it (`ProgGlobs`, `Stmt.globsAt`), a program-wide check beside the typing,
+as `ProgCodes` is (`RhsT` takes no program).  No step makes a read the
+statement did not have, but one of a function's body, renamed, which reads
+what the body reads (`globs_step`). -/
+
+/-- A3.6: a global type environment: global `g`'s declared type. -/
+abbrev GTy := Nat → Option Ty
+
+/-- A read of a global is at its declared type. -/
+def Rhs.globAt (GT : GTy) : Rhs → Prop
+  | .glob g t => GT g = some t
+  | _ => True
+
+/-- Every read of a global a statement makes is at its declared type. -/
+def Stmt.globsAt (GT : GTy) : Stmt → Prop
+  | .seq a b => a.globsAt GT ∧ b.globsAt GT
+  | .letv _ r s => r.globAt GT ∧ s.globsAt GT
+  | .letcall _ _ _ s => s.globsAt GT
+  | .assign _ r => r.globAt GT
+  | .ite _ a b => a.globsAt GT ∧ b.globsAt GT
+  | .while _ s => s.globsAt GT
+  | .scope _ s => s.globsAt GT
+  | .rbind _ s => s.globsAt GT
+  | .frozen _ s => s.globsAt GT
+  | .letrec _ _ s => s.globsAt GT
+  | .catchR _ _ s => s.globsAt GT
+  | .unpair _ _ _ s => s.globsAt GT
+  | .callc _ _ _ _ s => s.globsAt GT
+  | .letd _ _ r s => r.globAt GT ∧ s.globsAt GT
+  | .scopeD _ _ s => s.globsAt GT
+  | .withLock _ _ s => s.globsAt GT
+  | .scopeL _ _ _ s => s.globsAt GT
+  | .withElem _ _ _ s => s.globsAt GT
+  | _ => True
+
+/-- **A3.6: the program reads its globals at their declared types**: every
+    function's body does. -/
+def ProgGlobs (P : Prog) (GT : GTy) : Prop := ∀ fn ∈ P, fn.body.globsAt GT
+
+/-- A read names no variable: renaming leaves it. -/
+theorem Rhs.globAt_rename {GT : GTy} (ρ : Var → Var) (r : Rhs) : (r.rename ρ).globAt GT ↔ r.globAt GT := by
+  cases r <;> exact Iff.rfl
+
+theorem Stmt.globsAt_rename {GT : GTy} (ρ : Var → Var) (s : Stmt) : (s.rename ρ).globsAt GT ↔ s.globsAt GT := by
+  induction s with
+  | seq a b iha ihb => simp only [Stmt.rename, Stmt.globsAt, iha, ihb]
+  | letv x r s ih => simp only [Stmt.rename, Stmt.globsAt, ih, Rhs.globAt_rename]
+  | letd x f r s ih => simp only [Stmt.rename, Stmt.globsAt, ih, Rhs.globAt_rename]
+  | assign x r => simp only [Stmt.rename, Stmt.globsAt, Rhs.globAt_rename]
+  | ite c a b iha ihb => simp only [Stmt.rename, Stmt.globsAt, iha, ihb]
+  | letcall _ _ _ _ ih | «while» _ _ ih | scope _ _ ih | rbind _ _ ih | frozen _ _ ih | letrec _ _ _ ih
+  | catchR _ _ _ ih | unpair _ _ _ _ ih | callc _ _ _ _ _ ih | scopeD _ _ _ ih | withLock _ _ _ ih
+  | scopeL _ _ _ _ ih | withElem _ _ _ _ ih =>
+    simp only [Stmt.rename, Stmt.globsAt, ih]
+  | _ => exact Iff.rfl
+
+theorem wrapParams_globs {GT : GTy} {s : Stmt} (hs : s.globsAt GT) :
+    ∀ (ps : List (PMode × Ty)) (base i : Nat), (wrapParams ps base i s).globsAt GT := by
+  intro ps
+  induction ps with
+  | nil => intro _ _; exact hs
+  | cons p ps ih =>
+    intro base i
+    obtain ⟨pm, t⟩ := p
+    cases pm <;> simp only [wrapParams, Stmt.globsAt] <;> exact ih base (i + 1)
+
+theorem callIn_globs {P : Prog} {GT : GTy} (hPG : ProgGlobs P GT) {f : Nat} {fn : Fn} (hf : P[f]? = some fn)
+    (args : List Var) (base : Nat) (x : Var) : (callIn fn args base x).globsAt GT := by
+  have hb : (fn.body.rename (callRen fn.params args base)).globsAt GT :=
+    (Stmt.globsAt_rename _ _).mpr (hPG fn (List.mem_of_getElem? hf))
+  exact ⟨wrapParams_globs hb _ _ _, trivial⟩
+
+/-- **A3.6: a step reads globals only at their declared types**: what it
+    leaves to run is a part of the statement, or a function's body. -/
+theorem globs_step {P : Prog} {GT : GTy} (hPG : ProgGlobs P GT) {m : Mem} {s : Stmt} {r : Res}
+    (hst : Step P m s r) : s.globsAt GT → ∀ m' s', r = .ok m' s' → s'.globsAt GT := by
+  induction hst with
+  | seqL _ ih => intro hs _ _ h; cases h; exact ⟨ih hs.1 _ _ rfl, hs.2⟩
+  | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | catchIn _ ih | scopeDIn _ ih | scopeLIn _ ih =>
+    intro hs _ _ h; cases h; simp only [Stmt.globsAt]; exact ih hs _ _ rfl
+  | letcall hf _ _ => intro hs _ _ h; cases h; exact ⟨callIn_globs hPG hf _ _ _, hs⟩
+  | letrec hf _ _ => intro hs _ _ h; cases h; exact ⟨callIn_globs hPG hf _ _ _, hs⟩
+  | callc _ _ hf _ _ => intro hs _ _ h; cases h; exact ⟨callIn_globs hPG hf _ _ _, hs⟩
+  | «while» => intro hs _ _ h; cases h; exact ⟨⟨hs, hs⟩, trivial⟩
+  | withElem _ _ _ _ _ => intro hs _ _ h; cases h; exact ⟨hs, trivial⟩
+  | _ => intro hs _ _ h; cases h <;> simp_all [Stmt.globsAt]
 
 end A2

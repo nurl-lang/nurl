@@ -56,7 +56,7 @@ theorem RhsT.ctxRel {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry}
   | lockClone _ _ _ => exact CtxRel.refl _
   | cellClone _ _ _ _ => exact CtxRel.refl _
   | glob _ _ => exact CtxRel.refl _
-  | rwRead _ _ _ => exact CtxRel.refl _
+  | rwRead _ _ _ | rwTryRead _ _ _ | rwTryWrite _ _ _ => exact CtxRel.refl _
   | atomic _ _ _ _ _ => exact CtxRel.refl _
   | chanRecv _ _ _ => exact CtxRel.refl _
   | chanClose _ _ _ => exact CtxRel.refl _
