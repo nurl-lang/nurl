@@ -28024,8 +28024,13 @@ unsafe @ __clo_cap_marks i syms s caps i line → v {
         : b lent & > ( nurl_str_len nm ) 1 == ( nurl_str_get nm 0 ) 126
         : s pn ? lent ( nurl_str_slice nm 1 - ( nurl_str_len nm ) 1 ) ( nurl_str_cat nm `` )
         ( bck_stash_pending_kind pn line cal aix `` ? lent `pendlend` `pendeff` )
-        // (Run inside another closure's body: its effect too.)
-        ? lent { ( __clo_effect_note_lent pn cal aix ) } { ( __clo_effect_note pn cal aix ) }
+        // (Run inside another closure's body: its effect too — and, on one
+        // of that literal's own parameters, a drop of its summary, as the
+        // call written there inline would be; agora #435.)
+        ? lent { ( __clo_effect_note_lent pn cal aix ) } {
+            ( __clo_effect_note pn cal aix )
+            ? & != 0 g_bck_closure_depth != 0 ( nurl_str_len g_clo_cur ) { ? ( __clo_drop_note pn cal aix ) {} {} } {}
+        }
     }
 }
 
