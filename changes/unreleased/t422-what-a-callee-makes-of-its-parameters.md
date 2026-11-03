@@ -18,9 +18,14 @@
   caller passed. Before, it tied the first argument or nothing. The same
   holds for a view stored whole into an `inout` holder as part of a
   struct, and for one stored through a loop element, a join or an element
-  binding of the function's own parameter. A closure
+  binding of the function's own parameter. The value handed back may be
+  written as a field read (`^ . b h`), and it may be a view or a struct of
+  views picked by a join or a match, or made in a value block. A closure
   may not hand back a value holding views of what it captured: a struct or
-  an enum now follows the rule a bare view always did.
+  an enum now follows the rule a bare view always did. A recursion, direct
+  or through other functions, answers exactly what it hands back and keeps:
+  a function that passes a view down a recursion that only reads it is not
+  taken to keep it.
 - **A cursor that may own its value is released when it moves on**
   (probes cursor_over_a_local_view_resliced_in_a_loop,
   cursor_given_its_own_slice_on_one_arm and others). A binding that
@@ -29,9 +34,25 @@
   free nothing, so a copy taken from it before was read after the value
   it pointed into was released. That covered the split-on-delimiter loop
   whose last piece is the cursor itself, and a `?` or `??` arm that gave
-  the cursor a slice of its own. Such a binding now may own its value:
-  re-pointing it ends what was borrowed from it. nurlc's own unused-import
+  the cursor a slice of its own, a join value with a fresh arm and a view
+  arm, a call that hands back a fresh value on some calls, a closure
+  that gives the cursor a value of its own, and a field given a value
+  through a `: ~` copy of a struct. Such a binding now may own its
+  value: re-pointing it, or the end of its scope, ends what was borrowed
+  from it. A cursor only ever given views and literals still owns nothing,
+  and a copy of it outlives a re-point as before. nurlc's own unused-import
   lint had this shape and now reads each piece before moving on.
+- **A holder callee defined below a closure literal is answered by its
+  own walk** (probe dyn_holder_defined_below_a_closure_literal). A
+  function that called a holder defined further down, then built a closure
+  literal, was walked before that callee: a `dyn` method's result was
+  taken to view nothing, and read after its receiver was released.
+- **A push through another handle on the same Rc ends what its payload
+  lends** (probe rc_payload_bound_then_sliced_while_another_handle_pushes).
+  A slice of an Rc's payload, taken through a binding of the payload, was
+  kept across a push through a clone of the Rc, which may move the
+  payload's buffer, and read freed memory. It now ends there, as it does
+  through the Rc itself.
 - **A view parameter is a view of what the caller passed, everywhere**
   (probes view_param_kept_in_a_string_global,
   view_param_captured_by_a_spawned_thread). A string global given a

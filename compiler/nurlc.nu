@@ -175,6 +175,9 @@
 : ~ s g_bck_own_params ``  // the parameters the function being walked owns (a safe `sink s`)
 : ~ i g_bck_end_views 0  // 1 while bck_root_end ends a field path's borrows: only its views (agora #309)
 : ~ s g_bck_fn ``  // the function being walked, whose g_fn_vkeeps it decides (a closure body's: its literal's, `__closure_N`)
+: ~ i g_bck_quiet 0  // 1 while a walk only makes its answers: no diagnostic (__bck_walk_scc)
+: ~ i g_bck_ans_union 0  // 1 while a walk's answers add to the ones published (a component's fixed point)
+: ~ i g_dfs_n 0  // the parked walks numbered so far (__bck_walk_deferred, Tarjan's algorithm)
 // A call through a closure value is a call of its summary node (agora #359,
 // #403): `name__cloN`, whose members are the literals (`__closure_N`, each
 // summarised from its own body as a function is) and the nodes bound to the
@@ -5469,6 +5472,9 @@ unsafe @ gen_ret i lex i syms i cg → s {
     // What a view handed back came from (the walk checks it points into
     // nothing this function releases on its way out).
     : i __ret_cls ( bck_walk_class ( nurl_get_last_type ) )
+    // (A bare `s` view: codegen's answer for it — lent, pointed into, a
+    // part of an argument: retlend / retptr / retpart — is the precise one.)
+    : b __ret_bare && == __ret_cls 2 ( seq ( nurl_llty ( nurl_get_last_type ) ) `i8*` )
     : ~ s __ret_sx ? & != 0 g_srcx_on == __ret_cls 2 ( __sx_operand syms ret_first_tt ret_first_val ( nurl_get_last_type ) ( __sx_froot syms ret_first_tt ( nurl_get_last_type ) ) __rsxn0 ) ``
     // …and an owner that may hold views handed back by name (a closure, a
     // container of views): what those point into (its dependencies).
@@ -5481,8 +5487,9 @@ unsafe @ gen_ret i lex i syms i cg → s {
     // (…and a call written in the return, `^ ( wrap x )`: what its result
     // holds views of, by the callee's summaries — bck_sx_ev.)
     // (…and a join or a value block written there, `^ ? c a b`: what
-    // each arm's value views — agora #422's join form.)
-    : b __ret_exp & & & != 0 g_srcx_on >= __ret_cls 3 ! __ret_dep | | | | | == ret_first_tt TT_BACKSLASH == ret_first_tt TT_AT == ret_first_tt TT_LPAREN == ret_first_tt TT_QUEST == ret_first_tt TT_QUESTQUEST == ret_first_tt TT_LBRACE
+    // each arm's value views — agora #422's join form; and a field read,
+    // `^ . b h`, by its path or its binding.)
+    : b __ret_exp & & & != 0 g_srcx_on >= __ret_cls 3 ! __ret_dep | | | | | | == ret_first_tt TT_BACKSLASH == ret_first_tt TT_AT == ret_first_tt TT_LPAREN == ret_first_tt TT_QUEST == ret_first_tt TT_QUESTQUEST == ret_first_tt TT_LBRACE == ret_first_tt TT_DOT
     ? __ret_exp { = __ret_sx ( __sx_operand syms ret_first_tt ret_first_val ( nurl_get_last_type ) ( __sx_froot syms ret_first_tt ( nurl_get_last_type ) ) __rsxn0 ) } {}
     // A closure handed back (as written, bound first, a join of them): the
     // parameters what it holds was made from — through the views, borrows
@@ -6237,7 +6244,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
     // (A bare binding is the whole of it: an expression that starts with an
     // identifier is that identifier, prefix notation has nothing after it.)
     = g_bck_ret_whole ? ( is_ident_tok ret_first_tt ) ( nurl_str_cat ret_first_val `` ) ``
-    = g_bck_ret_dep ? __ret_dep 1 ? __ret_exp 2 0
+    = g_bck_ret_dep ? __ret_dep 1 ? __ret_exp 2 ? __ret_bare 3 0
     ( bck_flush_vpass )
     // With a `;` defer armed, the chain runs after the value is the
     // caller's: the owner this `^` hands back by name is lent to the
@@ -28522,7 +28529,7 @@ unsafe @ __sx_nested s sx → b {
         // A match's: field 8, the call it matches (h214).
         ? & != 0 ( nurl_str_len g_bck_match_sx ) ? == __k0 109 ( seq kind `match` ) F { = rec ( nurl_str_cat3 rec `\t\t\t\t` g_bck_match_sx ) = g_bck_match_sx `` } {}
         // A return's: field 8 (field 5 `d`: an owner by name).
-        ? & ? == __k0 114 ( seq kind `ret` ) F != 0 ( nurl_str_len g_bck_ret_sx ) { = rec ( nurl_str_cat3 rec ? == g_bck_ret_dep 1 `\td\t\t\t` ? == g_bck_ret_dep 2 `\te\t\t\t` `\t\t\t\t` g_bck_ret_sx ) } {}
+        ? & ? == __k0 114 ( seq kind `ret` ) F != 0 ( nurl_str_len g_bck_ret_sx ) { = rec ( nurl_str_cat3 rec ? == g_bck_ret_dep 1 `\td\t\t\t` ? == g_bck_ret_dep 2 `\te\t\t\t` ? == g_bck_ret_dep 3 `\tb\t\t\t` `\t\t\t\t` g_bck_ret_sx ) } {}
         ( bck_add `stmts`
         ? == 0 ( nurl_sym_len g_bck `stmts` ) rec ( nurl_str_cat `\n` rec ) )
         // What the right-hand side of a binding read: the sources a borrow
@@ -31301,10 +31308,11 @@ unsafe @ bck_join_state s a s b → s {
             : i va ? == ra BCK_MAYBE_OWNED BCK_BORROWED_SHARED ra
             : i vb ? == rb BCK_MAYBE_OWNED BCK_BORROWED_SHARED rb
             = jv ( bck_join va vb )
-            // (A borrow on one path and the binding's own value on the
-            // other — or a binding that already may own its value on
-            // either: it may own it here. BCK_MAYBE_OWNED.)
-            ? && == jv BCK_BORROWED_SHARED || || == va BCK_OWNED == vb BCK_OWNED || == ra BCK_MAYBE_OWNED == rb BCK_MAYBE_OWNED { = jv BCK_MAYBE_OWNED } {}
+            // (A binding that already may own its value on either path, or
+            // a borrow on one path and its own value on the other: it may own
+            // it here, BCK_MAYBE_OWNED — when some row may give it a value of
+            // its own, not only views and literals, bck_may_own_some.)
+            ? && == jv BCK_BORROWED_SHARED || || == ra BCK_MAYBE_OWNED == rb BCK_MAYBE_OWNED && || == va BCK_OWNED == vb BCK_OWNED ( bck_may_own_some i ) { = jv BCK_MAYBE_OWNED } {}
             // (A borrow on one path met a binding consumed, stored or ended
             // on the other: it may hold nothing here. Remembered as the
             // reason a later use names — none was, and the use printed an
@@ -31997,15 +32005,56 @@ unsafe @ bck_index_closes i n → v {
     : ~ i t2 0
     : ~ i j 0
     ~ < j n {
-        : s k ( bck_field ( bck_rec j ) 0 )
-        ? ( seq k `cond` ) { ( nurl_poke stk t0 j ) = t0 + t0 1 } {}
-        ? ( seq k `match` ) { ( nurl_poke stk + n t1 j ) = t1 + t1 1 } {}
-        ? ( seq k `block` ) { ( nurl_poke stk + * n 2 t2 j ) = t2 + t2 1 } {}
-        ? & ( seq k `endcond` ) > t0 0 { = t0 - t0 1 ( nurl_poke # s g_bck_close ( nurl_peek stk t0 ) + j 1 ) } {}
-        ? & ( seq k `endmatch` ) > t1 0 { = t1 - t1 1 ( nurl_poke # s g_bck_close ( nurl_peek stk + n t1 ) + j 1 ) } {}
-        ? & ( seq k `endblock` ) > t2 0 { = t2 - t2 1 ( nurl_poke # s g_bck_close ( nurl_peek stk + * n 2 t2 ) + j 1 ) } {}
+        // (By kind code, bck_kind_code: cond 25, match 27, block 23 and
+        // their ends 26, 28, 24 — no copy of the kind per row.)
+        : i kc ( bck_kc j )
+        ? == kc 25 { ( nurl_poke stk t0 j ) = t0 + t0 1 } {}
+        ? == kc 27 { ( nurl_poke stk + n t1 j ) = t1 + t1 1 } {}
+        ? == kc 23 { ( nurl_poke stk + * n 2 t2 j ) = t2 + t2 1 } {}
+        ? && == kc 26 > t0 0 { = t0 - t0 1 ( nurl_poke # s g_bck_close ( nurl_peek stk t0 ) + j 1 ) } {}
+        ? && == kc 28 > t1 0 { = t1 - t1 1 ( nurl_poke # s g_bck_close ( nurl_peek stk + n t1 ) + j 1 ) } {}
+        ? && == kc 24 > t2 0 { = t2 - t2 1 ( nurl_poke # s g_bck_close ( nurl_peek stk + * n 2 t2 ) + j 1 ) } {}
+        // (A view binding — an `s`, a Slice, a struct of views: its `let`
+        // and `=` rows (2, 3) are marked `v` `w` `o` — whose value with no
+        // source may own nothing, a literal: bck_may_own_some.)
+        ? || == kc 2 == kc 3 {
+            : i m5 ( __bck_row_mark ( bck_rec j ) )
+            ? || || == m5 118 == m5 119 == m5 111 { ( bck_put ( bck_bkey `vnm_` ( bck_field ( bck_rec j ) 1 ) ) `1` ) } {}
+        } {}
         = j + j 1
     }
+}
+
+// A `let` / `=` row whose value may be the binding's own (`o`: a guarded
+// call that hands back a fresh value on some calls and a lend on others,
+// a join with a fresh arm and a view arm) and that also borrows from what
+// the other paths point into: the binding may own its value, as at a join
+// of paths (bck_join_state) — BCK_MAYBE_OWNED, not a plain borrow.
+@ bck_may_own_row s st i id i mk → s {
+    ? != mk 111 { ^ st } {}
+    ( bck_note_may_own id )
+    ? != BCK_BORROWED_SHARED ( bck_st_raw st id ) { ^ st } {}
+    ^ ( bck_st_set st id BCK_MAYBE_OWNED )
+}
+
+// May binding `id`'s value with no source be its own? An owner's always
+// is. A view binding's (bck_index_closes) is only once the walk has passed
+// a row giving it a value that may be its own (`vmo_`, bck_note_may_own): a
+// `let` or `=` marked `o` (a fresh string, an owned call's result, a guarded
+// call's, a join with a fresh arm), a closure's `@assign` of it. Every path
+// into a join is walked before the join, so where a path that borrows meets
+// one that does not (BCK_MAYBE_OWNED, bck_join_state), a view binding given
+// only views and literals on the way there owns nothing on either.
+@ bck_may_own_some i id → b {
+    : s ids ( nurl_str_int id )
+    ? == 0 ( nurl_sym_len g_bck ( bck_bkey `vnm_` ids ) ) { ^ T } {}
+    ^ != 0 ( nurl_sym_len g_bck ( bck_bkey `vmo_` ids ) )
+}
+
+// The walk passes a row giving binding `id` a value that may be its own.
+@ bck_note_may_own i id → v {
+    : s k ( bck_bkey `vmo_` ( nurl_str_int id ) )
+    ? == 0 ( nurl_sym_len g_bck k ) { ( bck_put k `1` ) } {}
 }
 
 // Index of the close marker matching the open marker at `idx`. The
@@ -32046,6 +32095,9 @@ unsafe @ bck_match_close i idx s openk s closek → i {
 // The source line is re-read from disk. Shared by every borrow-checker
 // emitter so the format can't drift from `die`'s.
 unsafe @ bck_emit_error s file i line s msg → v {
+    // (A walk that only makes its answers reports nothing: the walk made
+    // on the final ones does, __bck_walk_scc.)
+    ? != 0 g_bck_quiet { ^ v } {}
     // Owned strings (`src`, `lt`) are reclaimed by auto-drop at scope
     // exit — no manual frees here (they would double-free).
     : s src ( compiler_read_source file )
@@ -32770,6 +32822,16 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 : i __a0 g_sxe_pos
                 : ~ s __lj ( bck_sx_ev st e ? __adop F ! ( str_contains_word ( nurl_sym_get g_pending_impl ( nurl_str_cat `retpass##` w ) ) js ) )
                 ? == __rva 2 { = __lj ( __src_as_ind __lj ) } {}
+                // (A part of the argument — an element, a field — that owns
+                // its storage and holds no view, `( vec_at [String] v k )`,
+                // asked for the storage it points into by the call it is an
+                // argument of: what it owns, reached through the argument's
+                // element, as a binding of it is — `( string_data … )` of
+                // it lives while `v` grows, agora #422's review.)
+                ? && && arg __lrp ( str_contains_word ( nurl_sym_get g_pending_impl ( nurl_str_cat `retpart##` w ) ) js ) {
+                    : s __prt ( nurl_sym_get g_root_syms w )
+                    ? && != 0 ( nurl_str_len __prt ) == 0 ( bck_bind_class ( nurl_llty __prt ) ) { = __lj ( __src_as_ind __lj ) } {}
+                } {}
                 // (An owner the returned closure only captured: a copy of
                 // its handle, `~id` — not an address into its storage.)
                 ? | __hcap & & & ! ( seq w `\\` ) ! __adop ( __fn_retclo_arg w js ) ! | ( mem_fn_lends_arg w js ) ( mem_fn_retptr_arg w js ) {
@@ -33139,7 +33201,7 @@ unsafe @ __bck_try_exit_check s st i line → v {
                 // (…and every `inout` parameter goes back to the caller.)
                 ? != 0 g_bck_fmv_any { ( __bck_inout_exit_check st ( bck_field_int rec 3 ) F ) } {}
                 // A view handed back points into what the caller has.
-                ? >= ( __bck_field_off rec 8 ) 0 { ( bck_ret_view_check st ( bck_field rec 8 ) ( bck_field_int rec 3 ) ( seq ( bck_field rec 5 ) `d` ) ! ( seq ( bck_field rec 5 ) `e` ) ) } {}
+                ? >= ( __bck_field_off rec 8 ) 0 { ( bck_ret_view_check st ( bck_field rec 8 ) ( bck_field_int rec 3 ) ( seq ( bck_field rec 5 ) `d` ) ! ( seq ( bck_field rec 5 ) `e` ) ( seq ( bck_field rec 5 ) `b` ) ) } {}
                 // The calls in the returned expression: their pending rows
                 // follow this one, and the walk stops here — an `inout`
                 // argument that does not own its value is asked now.
@@ -33344,6 +33406,7 @@ unsafe @ __bck_try_exit_check s st i line → v {
                 ? & == lmk0 110 == 0 ( nurl_str_len ( bck_field rec 6 ) ) { ( bck_put `plend` `` ) } {}
                 = st ( bck_bind_row st ( bck_field_int rec 1 ) rec lsrcs lmk )
                 ? == lmk0 110 { = st ( bck_nest_borrow st ( bck_field_int rec 1 ) lnest ) } {}
+                = st ( bck_may_own_row st ( bck_field_int rec 1 ) lmk0 )
                 // (An owner that may hold views: what its handle may be a copy
                 // of, or a part of — a join of names, a value a call lends —
                 // where what is stored into it lands too, agora #414.)
@@ -33394,6 +33457,7 @@ unsafe @ __bck_try_exit_check s st i line → v {
                 ? & == amk0 110 == 0 ( nurl_str_len ( bck_field rec 6 ) ) { ( bck_put `plend` `` ) } {}
                 = st ( bck_bind_row st asid rec asrcs amk )
                 ? == amk0 110 { = st ( bck_nest_borrow st asid anest ) } {}
+                = st ( bck_may_own_row st asid amk0 )
                 // (…and what its new value's handle may be part of, instead of
                 // the old one's; what was a part of its old value is no part
                 // of this one — agora #414.)
@@ -33720,6 +33784,16 @@ unsafe @ __bck_try_exit_check s st i line → v {
                 // What a closure that may run here does to its captures: the
                 // sweep below ends what that ends (bck_borrow_sweep).
                 ? != 0 g_bck_has_cursor { = st ( bck_cursor_follow st rec kc ) } {}
+                // (A closure that runs here and gives a borrowing binding a
+                // new value, `@assign`: from here on it may hold the closure's
+                // value, its own on that path — BCK_MAYBE_OWNED.)
+                ? ( seq ( bck_field rec 5 ) `@assign` ) {
+                    : i aid ( bck_field_int rec 1 )
+                    ? == ( bck_path_root aid ) aid {
+                        ( bck_note_may_own aid )
+                        ? == BCK_BORROWED_SHARED ( bck_st_raw st aid ) { = st ( bck_st_set st aid BCK_MAYBE_OWNED ) } {}
+                    } {}
+                } {}
                 = p + p 1
                 = done T
             } {}
@@ -34570,6 +34644,9 @@ unsafe @ __vk_assume_reset → v { = g_vk_assumed `` }
 // assumed some impl leaves no view: record the call, to be checked.
 unsafe @ __vk_assume_note s cal s k i h i line → v {
     ? == 0 ( nurl_str_len g_vk_assumed ) { ^ v } {}
+    // (…by the walk that reports: one that only makes its answers would
+    // record the call twice, __bck_walk_scc.)
+    ? != 0 g_bck_quiet { = g_vk_assumed `` ^ v } {}
     : s e ( nurl_str_cat4 ( nurl_str_cat3 cal `|` k ) ( nurl_str_cat3 `|` ( nurl_str_int h ) `|` ) ( nurl_str_int line ) ( nurl_str_cat `|` ( nurl_sym_get g_bck `file` ) ) )
     = g_vk_assumptions ? == 0 ( nurl_str_len g_vk_assumptions ) ( nurl_str_cat e `` ) ( nurl_str_cat3 g_vk_assumptions `\n` e )
     = g_vk_assumed ``
@@ -34662,6 +34739,18 @@ unsafe @ __vk_assumptions_check → v {
     }
 }
 
+// …every parameter, for a value whose sources are not known (`*`).
+@ __rv_note_all → v {
+    : ~ s rest ( nurl_sym_get g_bck `vkparams` )
+    : ~ s ids ``
+    ~ != 0 ( nurl_str_len rest ) {
+        : s pn ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s w ( nurl_str_int ( bck_intern pn ) )
+        = ids ? == 0 ( nurl_str_len ids ) ( nurl_str_cat w `` ) ( nurl_str_cat3 ids ` ` w )
+    }
+    ( __rv_note ids )
+}
+
 // `cal`'s g_fn_rviews answer: its own, else for an indirect callee the
 // union of what it may run (a `dyn` method's impls, a closure node's
 // members), else its generic base's; `` when there is none yet.
@@ -34691,9 +34780,10 @@ unsafe @ __vk_assumptions_check → v {
 // May `cal`'s result view its argument `aix` (g_fn_rviews)? 0 no, 1 its
 // own storage, 2 only its elements'. One whose walk has not answered yet
 // — the function being walked calling itself, or one parked behind it in
-// a cycle — may (1), when what it hands back is an owner that may hold
-// views: the answer is made only of those (a bare view's is codegen's,
-// retlend / retptr, final already).
+// a cycle, where their component of parked walks has not settled
+// (__bck_walk_scc) — may (1), when what it hands back is an owner that may
+// hold views: the answer is made only of those (a bare view's is
+// codegen's, retlend / retptr, final already).
 @ __rv_ask s cal s aix → i {
     : s rv ( __rv_of cal )
     ? != 0 ( nurl_str_len rv ) {
@@ -34731,7 +34821,7 @@ unsafe @ __vk_assumptions_check → v {
 // A view handed back (`^`, its source expression `sx`) must point into
 // what the caller has — a parameter, a global — not into a binding this
 // function releases on its way out.
-@ bck_ret_view_check s st s sx i line b deps b hand → v {
+@ bck_ret_view_check s st s sx i line b deps b hand b bare → v {
     // (An owner handed back by name: what the views it holds point into.)
     // (`hand`: the value is the binding the source expression names; a
     // closure or a literal written in the return hands nothing it holds
@@ -34744,14 +34834,21 @@ unsafe @ __vk_assumptions_check → v {
     // that captured them, `~id`.)
     : s hnd ? deps ( nurl_sym_get g_bck ( bck_bkey `vdh_` rroot ) ) ( __src_handle raw )
     : s srcs ? deps ( nurl_str_cat raw `` ) ( __src_plain0 raw )
-    ? ( seq srcs `*` ) { ^ } {}
-    // (What an owner of views it hands back — by name, `d`, or as written,
-    // `e` — views of the parameters' own storage is this function's answer
-    // to its callers, g_fn_rviews: the caller's result depends on those
-    // arguments (agora #422, #341, #404). A bare view handed back has its
-    // answer already, from how codegen hands it back — lent, pointed into
-    // or copied (retlend / retptr / an owned copy of a raw string).)
-    ? & != 0 ( nurl_str_len g_bck_fn ) | deps ! hand { ( __rv_note ? deps ( __src_mark2 raw ( nurl_sym_get g_bck ( bck_bkey `vdi_` rroot ) ) hnd ) ( nurl_str_cat raw `` ) ) } {}
+    // (What it views is not known — a value block's tail name, given what
+    // it holds after its block's end: it may view any parameter, as retclo
+    // answers such a closure.)
+    ? ( seq srcs `*` ) {
+        ? && != 0 ( nurl_str_len g_bck_fn ) ! bare { ( __rv_note_all ) } {}
+        ^
+    } {}
+    // (What the value it hands back views of the parameters' own storage
+    // is this function's answer to its callers, g_fn_rviews: the caller's
+    // result depends on those arguments (agora #422, #341, #404). An owner
+    // of views by name, `d`, or as written, `e`; an option or a struct of
+    // views too, which codegen does not answer for. A bare `s` view, `b`,
+    // has codegen's answer — lent, pointed into, a part of an argument
+    // (retlend / retptr / retpart) — finer than a whole parameter's.)
+    ? && != 0 ( nurl_str_len g_bck_fn ) ! bare { ( __rv_note ? deps ( __src_mark2 raw ( nurl_sym_get g_bck ( bck_bkey `vdi_` rroot ) ) hnd ) ( nurl_str_cat raw `` ) ) } {}
     : ~ s rest ( nurl_str_cat srcs `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest ) = rest ( str_skip_word rest )
@@ -36130,9 +36227,14 @@ unsafe @ bck_note_rc_arg s name s ty → v {
                     = why ( nurl_str_cat4 `'` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` wn ) ) `', which may be another handle on the same Rc value, was passed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) `', which may drop or replace what it holds` ) )
                     = eonly T
                 } {
-                    // …or move its buffer: the views of it end (agora #169).
+                    // …or move its buffer: the views of it end (agora #169),
+                    // and those reached through its payload — the part the
+                    // call changes, as a value lent from it is (agora #349):
+                    // `: ( Vec i ) p ( rc_get r )` then `( slice_from_vec p )`
+                    // points into the buffer the call moves.
                     ? ( nurl_sym_has_word g_fn_reallocs ( bck_field rec 5 ) ( bck_field rec 6 ) ) {
-                        = out ( bck_view_end out sid ( bck_field_int rec 3 ) ( nurl_str_cat4 `'` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` wn ) ) `', which may be another handle on the same Rc value, was passed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) `', which may move or free its buffer` ) ) )
+                        : s rcw ( nurl_str_cat4 `'` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` wn ) ) `', which may be another handle on the same Rc value, was passed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) `', which may move or free its buffer` ) )
+                        = out ( bck_view_end_ind ( bck_view_end out sid ( bck_field_int rec 3 ) rcw ) sid ( bck_field_int rec 3 ) rcw )
                     } {}
                 }
             } {}
@@ -36216,7 +36318,10 @@ unsafe @ bck_note_rc_arg s name s ty → v {
             // same bytes holds the same handles — bck_br_survives.)
             = g_bck_end_wroot ( bck_br_get ( nurl_str_int wroot ) )
             = g_bck_end_wid wroot
-            : i keep ( bck_st_get out wroot )
+            // (Its state as it was, raw: one that may own its value,
+            // BCK_MAYBE_OWNED, still may — read as a borrow, it was put
+            // back as one, and re-pointing it ended nothing.)
+            : i keep ( bck_st_raw out wroot )
             : ~ s orest ( nurl_str_cat wsrc `` )
             ~ != 0 ( nurl_str_len orest ) {
                 : s o ( str_first_word orest ) = orest ( str_skip_word orest )
@@ -36231,6 +36336,15 @@ unsafe @ bck_note_rc_arg s name s ty → v {
                 }
             }
             = out ( bck_st_set out wroot keep )
+            // (A field given a value through a binding that borrows — a
+            // cursor copy of a struct, `: ~ H cur root` — is that binding's
+            // own: codegen stores it into the binding's copy and releases it
+            // where the binding is given a new value or goes out of scope.
+            // The binding may own its value from here on.)
+            ? && && == kc 8 == keep BCK_BORROWED_SHARED ! ( seq ( bck_field rec 6 ) `e` ) {
+                = out ( bck_st_set out wroot BCK_MAYBE_OWNED )
+                ( bck_note_may_own wroot )
+            } {}
             = g_bck_end_eonly 0
             = g_bck_end_wroot -1
             = g_bck_end_wid -1
@@ -37363,7 +37477,9 @@ unsafe @ bck_note_rc_arg s name s ty → v {
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest ) = rest ( str_skip_word rest )
         : i id ( nurl_str_to_int w )
-        : i v ( bck_st_get out id )
+        // (…one that may own its value on some path too, BCK_MAYBE_OWNED.)
+        : i vr ( bck_st_raw out id )
+        : i v ? == vr BCK_MAYBE_OWNED BCK_OWNED vr
         // (A cursor payload's field view ends with its arm too — handed to
         // the matched owner, it outlived a change of that owner's payload
         // made in place through a second match, which the walk does not end
@@ -37499,7 +37615,10 @@ unsafe @ bck_scope_drop s st s lets i line → s {
     ~ != 0 ( nurl_str_len rest ) {
         : s js ( str_first_word rest ) = rest ( str_skip_word rest )
         : i id ( bck_field_int ( bck_rec ( nurl_str_to_int js ) ) 1 )
-        : i v ( bck_st_get out id )
+        // (…and one that may own its value on some path, BCK_MAYBE_OWNED:
+        // there its value is released.)
+        : i vr ( bck_st_raw out id )
+        : i v ? == vr BCK_MAYBE_OWNED BCK_OWNED vr
         ? | == v BCK_OWNED == v BCK_MAYBE_MOVED { = out ( bck_root_end out id line `it went out of scope at the end of its block` ) } {}
         = g_bck_ending ? == 0 ( nurl_str_len g_bck_ending ) ( nurl_str_int id ) ( nurl_str_cat3 g_bck_ending ` ` ( nurl_str_int id ) )
     }
@@ -38502,11 +38621,11 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     // this function's answer to its callers now (g_fn_vkeeps).
     ? != 0 ( nurl_str_len g_bck_fn ) {
         ? != 0 ( nurl_sym_len g_bck `vkself` ) { ( bck_vkeeps_self ) } {}
-        ( nurl_sym_def g_fn_vkeeps g_bck_fn ( nurl_str_cat `:` ( nurl_sym_get g_bck `vkacc` ) ) )
+        ( __bck_publish g_fn_vkeeps ( nurl_sym_get g_bck `vkacc` ) )
         // (…and what the value it hands back views of them: g_fn_rviews.)
-        ( nurl_sym_def g_fn_rviews g_bck_fn ( nurl_str_cat `:` ( nurl_sym_get g_bck `rvacc` ) ) )
+        ( __bck_publish g_fn_rviews ( nurl_sym_get g_bck `rvacc` ) )
         // (…and where the values it keeps may be kept: g_fn_vholds.)
-        ( nurl_sym_def g_fn_vholds g_bck_fn ( nurl_str_cat `:` ( nurl_sym_get g_bck `vhacc` ) ) )
+        ( __bck_publish g_fn_vholds ( nurl_sym_get g_bck `vhacc` ) )
         ? != 0 ( nurl_sym_len g_fn_vkpend g_bck_fn ) { ( nurl_sym_def g_fn_vkpend g_bck_fn `` ) } {}
     } {}
     // Every `ret` row replayed the defers armed on its path; anything
@@ -38517,6 +38636,19 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     // further. Reference it in a void `?` so the body type-checks as
     // `v` without a spurious unused binding.
     ? != 0 ( nurl_str_len final ) {} {}
+}
+
+// The walk's answer `acc` for the function walked, in `tbl` (`:` and its
+// words). In a component of walks that ask each other (__bck_walk_scc) it
+// adds to the one published: the answers only grow to their fixed point.
+@ __bck_publish i tbl s acc → v {
+    ? != 0 g_bck_ans_union {
+        : s cur ( nurl_sym_get tbl g_bck_fn )
+        : s ws ? == 0 ( nurl_str_len cur ) ( nurl_str_cat `` `` ) ( nurl_str_slice cur 1 - ( nurl_str_len cur ) 1 )
+        ( nurl_sym_def tbl g_bck_fn ( nurl_str_cat `:` ( __word_union ws acc ) ) )
+        ^ v
+    } {}
+    ( nurl_sym_def tbl g_bck_fn ( nurl_str_cat `:` acc ) )
 }
 
 // Park a whole function's captured statement list for a later walk.
@@ -38577,15 +38709,30 @@ unsafe @ __vbuf_callees s stmts → s {
     ^ out
 }
 
-// Walk parked function `i`, once — after each parked function its `bK`
-// rows wait on, so that one's g_fn_vkeeps is final when they ask (agora
-// #301). Source order otherwise: a callee defined below its caller is the
-// only one walked out of turn. In a cycle the one reached first walks
-// before the other, which answers "may" (bck_callee_vkeeps).
+// Walk parked function `i`, once — after the parked functions whose
+// answers its walk asks (their `bK` rows' g_fn_vkeeps, agora #301; the
+// g_fn_rviews of `q`, #422), so each is final when it is asked. Source
+// order otherwise: a callee defined below its caller is the only one
+// walked out of turn. Functions that ask each other — a recursion, direct
+// or through others: a strongly connected component of the asking, found
+// as Tarjan's algorithm finds one (`di`/`dl` its numbers, `do` on the
+// stack `dstk`) — have no such order: they settle their answers together
+// (__bck_walk_scc).
 unsafe @ __bck_walk_deferred i i → v {
     : s ix ( nurl_str_int i )
     ? != 0 ( nurl_sym_len g_deferred_bck ( nurl_str_cat `w` ix ) ) { ^ } {}
     ( nurl_sym_def g_deferred_bck ( nurl_str_cat `w` ix ) `1` )
+    : i num g_dfs_n
+    = g_dfs_n + g_dfs_n 1
+    ( nurl_sym_def g_deferred_bck ( nurl_str_cat `di` ix ) ( nurl_str_int num ) )
+    ( nurl_sym_def g_deferred_bck ( nurl_str_cat `do` ix ) `1` )
+    : s stk0 ( nurl_sym_get g_deferred_bck `dstk` )
+    ( nurl_sym_def g_deferred_bck `dstk` ? == 0 ( nurl_str_len stk0 ) ( nurl_str_cat ix `` ) ( nurl_str_cat3 ix ` ` stk0 ) )
+    : ~ i low num
+    // (Its own result answer asked by a call of itself, `q`: its walk asks
+    // what it makes. A call of itself its `bK` rows ask is answered by its
+    // own walk, bck_vkeeps_self.)
+    : b selfq ( str_contains_word ( nurl_sym_get g_deferred_bck ( nurl_str_cat `q` ix ) ) ( nurl_sym_get g_deferred_bck ( nurl_str_cat `n` ix ) ) )
     : ~ s cs ( __word_union ( __vbuf_callees ( nurl_sym_get g_deferred_bck ( nurl_str_cat `s` ix ) ) ) ( nurl_sym_get g_deferred_bck ( nurl_str_cat `q` ix ) ) )
     : ~ s seen ``
     ~ != 0 ( nurl_str_len cs ) {
@@ -38594,11 +38741,43 @@ unsafe @ __bck_walk_deferred i i → v {
         = seen ? == 0 ( nurl_str_len seen ) ( nurl_str_cat c `` ) ( nurl_str_cat3 seen ` ` c )
         : ~ s jx ( nurl_sym_get g_deferred_bck ( nurl_str_cat `x` c ) )
         ? == 0 ( nurl_str_len jx ) { = jx ( nurl_sym_get g_deferred_bck ( nurl_str_cat `x` ( bck_generic_base c ) ) ) } {}
-        ? != 0 ( nurl_str_len jx ) { ( __bck_walk_deferred ( nurl_str_to_int jx ) ) } {}
+        ? && != 0 ( nurl_str_len jx ) ! ( seq jx ix ) {
+            ? == 0 ( nurl_sym_len g_deferred_bck ( nurl_str_cat `w` jx ) ) {
+                ( __bck_walk_deferred ( nurl_str_to_int jx ) )
+                : i lj ( nurl_str_to_int ( nurl_sym_get g_deferred_bck ( nurl_str_cat `dl` jx ) ) )
+                ? < lj low { = low lj } {}
+            } {
+                // (One on the stack: this walk's component.)
+                ? != 0 ( nurl_sym_len g_deferred_bck ( nurl_str_cat `do` jx ) ) {
+                    : i dj ( nurl_str_to_int ( nurl_sym_get g_deferred_bck ( nurl_str_cat `di` jx ) ) )
+                    ? < dj low { = low dj } {}
+                } {}
+            }
+        } {}
         // (An indirect callee answers with what it may run: those first.)
         : s cms ( __indirect_members c )
         ? != 0 ( nurl_str_len cms ) { = cs ( __words_join cs cms ) } {}
     }
+    ( nurl_sym_def g_deferred_bck ( nurl_str_cat `dl` ix ) ( nurl_str_int low ) )
+    // (Not its component's root: the root walks it with the others.)
+    ? != low num { ^ v } {}
+    : ~ s mem ``
+    : ~ s stk ( nurl_sym_get g_deferred_bck `dstk` )
+    : ~ b more T
+    ~ more {
+        : s m ( str_first_word stk ) = stk ( str_skip_word stk )
+        ( nurl_sym_def g_deferred_bck ( nurl_str_cat `do` m ) `` )
+        = mem ? == 0 ( nurl_str_len mem ) ( nurl_str_cat m `` ) ( nurl_str_cat3 mem ` ` m )
+        = more & ! ( seq m ix ) != 0 ( nurl_str_len stk )
+    }
+    ( nurl_sym_def g_deferred_bck `dstk` stk )
+    ? & ! selfq ( seq mem ix ) { ( __bck_walk_one ix ) ^ v } {}
+    ( __bck_walk_scc mem )
+}
+
+// Walk parked function `ix` (its rows, parameters, file and the facts
+// codegen parked with them: bck_defer_fn).
+unsafe @ __bck_walk_one s ix → v {
     ( bck_put `file` ( nurl_sym_get g_deferred_bck ( nurl_str_cat `f` ix ) ) )
     ( bck_put `stmts` ( nurl_sym_get g_deferred_bck ( nurl_str_cat `s` ix ) ) )
     ( bck_put `reads` `` )
@@ -38607,6 +38786,75 @@ unsafe @ __bck_walk_deferred i i → v {
     = g_bck_rcty ( nurl_sym_get g_deferred_bck ( nurl_str_cat `r` ix ) )
     = g_bck_fn ( nurl_sym_get g_deferred_bck ( nurl_str_cat `n` ix ) )
     ( bck_analyze ( nurl_sym_get g_deferred_bck ( nurl_str_cat `p` ix ) ) )
+}
+
+// The parked walks `mem` (deepest first) ask each other's answers: a
+// recursion that keeps a view in an argument (g_fn_vkeeps), or hands one
+// back (g_fn_rviews), only through its fellows' calls. Their answers are
+// the least fixed point — what a recursion that returns can make: each
+// starts as "nothing" (keeps, views, holds none; no longer pending), and
+// every member is walked quietly with its fellows' latest answers, its own
+// growing (g_bck_ans_union), until a round grows none. Then each is
+// walked once more, on those answers, for its diagnostics. Asked "may"
+// instead, a function that passes a view down a recursion it only reads
+// was refused as keeping it (agora #422's review). (A component that does
+// not settle in the bound — it cannot: the answers only grow, over
+// finitely many words — is asked "may" again.)
+unsafe @ __bck_walk_scc s mem → v {
+    : ~ s r0 ( nurl_str_cat mem `` )
+    ~ != 0 ( nurl_str_len r0 ) {
+        : s m ( str_first_word r0 ) = r0 ( str_skip_word r0 )
+        : s fn ( nurl_sym_get g_deferred_bck ( nurl_str_cat `n` m ) )
+        ? != 0 ( nurl_str_len fn ) {
+            ( nurl_sym_def g_fn_vkeeps fn `:` )
+            ( nurl_sym_def g_fn_rviews fn `:` )
+            ( nurl_sym_def g_fn_vholds fn `:` )
+            ( nurl_sym_def g_fn_vkpend fn `` )
+        } {}
+    }
+    = g_bck_ans_union 1
+    = g_bck_quiet 1
+    : ~ b changed T
+    : ~ i round 0
+    ~ & changed < round 16 {
+        = changed F
+        : ~ s r1 ( nurl_str_cat mem `` )
+        ~ != 0 ( nurl_str_len r1 ) {
+            : s m ( str_first_word r1 ) = r1 ( str_skip_word r1 )
+            : s fn ( nurl_sym_get g_deferred_bck ( nurl_str_cat `n` m ) )
+            : s a0 ( __bck_answers fn )
+            ( __bck_walk_one m )
+            ? ! ( seq a0 ( __bck_answers fn ) ) { = changed T } {}
+        }
+        = round + round 1
+    }
+    = g_bck_quiet 0
+    ? changed {
+        = g_bck_ans_union 0
+        : ~ s r3 ( nurl_str_cat mem `` )
+        ~ != 0 ( nurl_str_len r3 ) {
+            : s m ( str_first_word r3 ) = r3 ( str_skip_word r3 )
+            : s fn ( nurl_sym_get g_deferred_bck ( nurl_str_cat `n` m ) )
+            ? != 0 ( nurl_str_len fn ) {
+                ( nurl_sym_def g_fn_vkeeps fn `` )
+                ( nurl_sym_def g_fn_rviews fn `` )
+                ( nurl_sym_def g_fn_vholds fn `` )
+                ( nurl_sym_def g_fn_vkpend fn `1` )
+            } {}
+        }
+    } {}
+    : ~ s r2 ( nurl_str_cat mem `` )
+    ~ != 0 ( nurl_str_len r2 ) {
+        : s m ( str_first_word r2 ) = r2 ( str_skip_word r2 )
+        ( __bck_walk_one m )
+    }
+    = g_bck_ans_union 0
+}
+
+// What function `fn` answers (g_fn_vkeeps, g_fn_rviews, g_fn_vholds), as
+// one string: a round of __bck_walk_scc changed it or not.
+@ __bck_answers s fn → s {
+    ^ ( nurl_str_cat4 ( nurl_sym_get g_fn_vkeeps fn ) `|` ( nurl_sym_get g_fn_rviews fn ) ( nurl_str_cat `|` ( nurl_sym_get g_fn_vholds fn ) ) )
 }
 
 // Walk every parked function, now that every summary is final. Called
@@ -49179,6 +49427,10 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     : ~ s __cl_bck_side ( nurl_str_cat `` `` )
     : ~ s __cl_bck_warnset ( nurl_str_cat `` `` )
     : ~ s __cl_bck_deferred ( nurl_str_cat `` `` )
+    // (…and the callees the enclosing walk waits for, `rvcallees`: the
+    // closure's own bck_fn_begin clears them, and the enclosing function,
+    // parked behind them, must still be walked after them.)
+    : ~ s __cl_bck_rvcallees ( nurl_str_cat `` `` )
     // (…and the `~` loops the closure literal sits in: what it does when it
     // runs is checked against them after its body, __iter_closure_effs_check.)
     : ~ s __cl_bck_iterc ( nurl_str_cat `` `` )
@@ -49194,6 +49446,7 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
         = __cl_bck_side ( bck_side_lists_take )
         = __cl_bck_warnset ( nurl_sym_get g_bck `warnset` )
         = __cl_bck_deferred ( nurl_sym_get g_bck `deferred` )
+        = __cl_bck_rvcallees ( nurl_sym_get g_bck `rvcallees` )
         = __cl_bck_iterc ( nurl_sym_get g_bck `iter_containers` )
     } {}
     : i __cl_bck_depth g_bck_depth
@@ -49317,6 +49570,7 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
         ( bck_side_lists_put __cl_bck_side )
         ( bck_put `warnset` __cl_bck_warnset )
         ( bck_put `deferred` __cl_bck_deferred )
+        ( bck_put `rvcallees` __cl_bck_rvcallees )
         ( bck_put `iter_containers` __cl_bck_iterc )
     } {}
     = g_bck_iter_live __cl_iter_live
@@ -63119,7 +63373,28 @@ unsafe @ __sx_names_capture i syms s sx → b {
                 ? ! callee {
                     ? ( seq w `*` ) { ^ T } {}
                     ? | ( __is_clo_capture syms w ) ( seq ( nurl_sym_get2 syms w `__cvt` ) `1` ) { ^ T } {}
-                } {}
+                } {
+                    // (A call whose result can hold no view — an owned copy,
+                    // `( string_clone line )`, a length — carries none of
+                    // what its arguments point into: its arguments are
+                    // skipped, up to its `)`.)
+                    : s rt ( nurl_sym_get g_root_syms w )
+                    ? != 0 ( nurl_str_len rt ) {
+                        = g_thv_precise 1
+                        : b hv ( __ty_holds_view ( nurl_llty rt ) 0 )
+                        = g_thv_precise 0
+                        ? ! hv {
+                            : ~ i dep 0
+                            = i + i 1
+                            ~ & < i n | > dep 0 != # i . sp i 41 {
+                                : i ch # i . sp i
+                                ? == ch 40 { = dep + dep 1 } {}
+                                ? == ch 41 { = dep - dep 1 } {}
+                                = i + i 1
+                            }
+                        } {}
+                    } {}
+                }
             } {}
             // (A field path's later parts are field names: skipped.)
             ? == c 46 {

@@ -1,0 +1,21 @@
+// cursor_repointed_at_a_static_call_on_one_arm_runs_clean: a cursor over a String's view re-pointed on one arm at what a function hands back (a string literal); copy; re-point at the view again; copy read.
+// Kept: only a view binding that the walk has seen given a value that may be its own (a row marked `o`, an `@assign`) may own its value where paths meet (bck_may_own_some); one given only views and literals owns nothing, and re-pointing it frees nothing.
+// main 4f15689: accepted; ran clean.
+// map: StmtT.assign | A1 | runs-clean | - | a cursor re-pointed at a literal a function hands back on one arm: a copy outlives a re-point
+$ `stdlib/core/string.nu`
+
+@ default_name → s { ^ `a default name long enough to matter here` }
+
+@ pick String src b dflt → i {
+    : ~ s cur ( string_data src )
+    ? dflt { = cur ( default_name ) } {}
+    : s nm cur
+    = cur ( string_data src )
+    ^ ( nurl_str_len nm )
+}
+
+@ main → i {
+    : String s ( string_from `abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ` )
+    ( nurl_print_int ( pick s T ) ) ( nurl_print `\n` )
+    ^ 0
+}

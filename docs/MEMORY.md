@@ -2207,7 +2207,9 @@ are dropped, moved and copied by the same rules:
   value: reassigning it then releases that value, so a copy taken from it
   before (`: s nm rest`) ends there, as a copy of any owner given a new
   value does. Read the copy first, or make it a value of its own
-  (`( string_from nm )`).
+  (`( string_from nm )`). A field given a value through the cursor (`= .
+  cur name …`) is the cursor's own in the same way: reassigning the cursor
+  releases it, so a view of it taken before ends there.
 - **Stores move.** A value stored into a literal, a field or a container
   element leaves its binding. A parameter stored that way makes the
   function keep its argument, which the caller hands over like a `sink`.
