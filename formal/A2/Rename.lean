@@ -1626,21 +1626,21 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
     simp only [liftE, reduceCtorEq, ↓reduceIte]
     exact fun d hd => append_sub (List.Subset.refl _)
       (ownHeld_mono (fun h => by simp [Ty.holdsView, h]) _) (hD1o rfl hd)
-  | @pack fs te ms y cs Ey Γa1 D hy hly hte hpa hcaps =>
+  | @pack fs te ms q y cs Ey Γa1 D hy hly hte hpa hcaps hq =>
     have hc1 : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
     obtain ⟨D1, hp1, hD1, hD1o⟩ := pushArg_ren h hab hy hpa
     have hty1 := liftE_ty' h hab hy
     refine ⟨_, RhsT.pack hc1 (by rw [liftE_live]; exact hly) (by rw [hty1]; exact hte) hp1
-      (CapsOK.lift h (PushArg.absOK hy hpa hab) hcaps hD1), fun x => ?_⟩
+      (CapsOK.lift h (PushArg.absOK hy hpa hab) hcaps hD1) (hq.map _), fun x => ?_⟩
     refine EntryWeaker.mk' (by rw [liftE_ty x (by simp)]) (by simp [liftE, liftMode]) (by simp)
       (by simp [liftE]) (fun h' => by simp [Mode.ownSlot] at h') ?_
     simp only [liftE, reduceCtorEq, ↓reduceIte]
     intro d hd
     rcases List.mem_append.mp hd with hd | hd
-    · rcases List.mem_append.mp (hD1 hd) with hd' | hd'
+    · rcases List.mem_append.mp (hD1o hte hd) with hd' | hd'
       · obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp hd'
         exact List.mem_append_left _ (mem_rds.mpr ⟨d0, List.mem_append_left _ hd0, rfl⟩)
-      · exact List.mem_append_right _ hd'
+      · exact List.mem_append_right _ (ownHeld_mono hq.holdsView _ hd')
     · obtain ⟨c', hc', rfl⟩ := List.mem_map.mp hd
       obtain ⟨c, hc, rfl⟩ := List.mem_map.mp hc'
       exact List.mem_append_left _ (mem_rds.mpr ⟨⟨c.1, .name c.2.1.bound c.2.2⟩,
@@ -3624,7 +3624,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (h.Fcout x) hr' hm' (by rw [← hl]; exact hview) (by rw [← hl]; exact hdtor) hH'
       (StmtT.weakenIn ⟨PW.setE (PW.refl _) hEW, hwc, hnc⟩ tk)
       (EndOK.lift h abk hbx hpe)
-  | @callc Γ Γ1 Δ F x c j zs k Ec E ms σ sig hks hx hxF hc htc hj hσ hhd hout hcT hnz hk hpe hnσ ih =>
+  | @callc Γ Γ1 Δ F x c j zs k Ec E ms q σ sig hks hx hxF hc htc hj hσ hhd hout hcT hnz hk hpe hnσ ih =>
     intro _ hab hw hn hT
     obtain ⟨E', Γ', hc', hpw, hE'⟩ := callT_ren h hab hP hcT (fun ht => absurd ht hnσ)
     obtain ⟨hn1, hEn, _⟩ := hcT.names hP hn

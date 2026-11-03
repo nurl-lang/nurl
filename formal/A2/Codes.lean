@@ -255,7 +255,7 @@ theorem EvalR.codes {P : Prog} {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (he :
     · cases he; exact hr
     · cases hc with | pkg => exact hv
   | arcNew h1 _ =>
-    -- the payload's packages are the ones the value moved in held
+    -- A3.5b: the payload may hold packages, the ones the value moved in held
     obtain ⟨hv, hm1⟩ := h1.codes h
     exact ⟨pkgOK_leaf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h),
       hm1.withBlk rfl (hm1.blk.upd (blkCodes_arc hv))⟩

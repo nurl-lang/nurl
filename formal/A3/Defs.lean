@@ -166,7 +166,7 @@ theorem _root_.A2.Ty.hasCell_of_hasArc {t : Ty} (h : t.hasArc = false) : t.hasCe
   | sum a b iha ihb =>
     simp only [Ty.hasArc, Bool.or_eq_false_iff] at h
     simp [Ty.hasCell, iha h.1, ihb h.2]
-  | fn _ => cases h
+  | fn _ q => cases q <;> first | rfl | cases h
   | arc _ _ => cases h
   | lk _ _ => cases h
   | cell _ _ => cases h
@@ -538,9 +538,9 @@ theorem NoLeak.empty {P : Prog} {spawn : Nat → Bool} {s : Stmt} {nv : Nat}
       its payload's addresses once; `Covers`: nothing else is allocated);
     - every block is reached from a global (the sweep that ended the last
       `make` left no other);
-    - (A3.5b) every package a block holds (a closure an `Arc` global keeps)
-      names code of its signature, as A2's `MemCodes` says of the store a
-      typed `make` leaves. -/
+    - (A3.5b) every package a block holds (a Sync closure an `Arc` global
+      keeps) names code of its signature, as A2's `MemCodes` says of the
+      store a typed `make` leaves. -/
 structure GlobsOK (P : Prog) (G : Globs) : Prop where
   sync  : ∀ g v, G.gl g = some v → ∃ t, t.sync = true ∧ t.ok = true ∧ GlobFits G.blk t v
   inv   : MInv (G.mem 0) (fun _ => none)

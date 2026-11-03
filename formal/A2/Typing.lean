@@ -116,7 +116,7 @@ def rootKind (t : Ty) (k : Kind) : Kind :=
   | .slice _, .self => .view
   | .prod _ _, .self => .view
   | .sum _ _, .self => .view
-  | .fn _, .self => .view
+  | .fn _ _, .self => .view
   | _, k => k
 
 /-- What a value borrowed from `y` (whose entry is `E`) in way `k` depends
@@ -390,7 +390,7 @@ def elemE (y : Var) (E : Entry) : Ty → Entry
   | .vec s => ⟨.vec s, .bor, true, derive y E .inner, E.held, false, false⟩
   | .prod a b => ⟨.prod a b, .bor, true, derive y E .inner, E.held, false, false⟩
   | .sum a b => ⟨.sum a b, .bor, true, derive y E .inner, E.held, false, false⟩
-  | .fn ms => ⟨.fn ms, .bor, true, derive y E .inner, E.held, false, false⟩
+  | .fn ms q => ⟨.fn ms q, .bor, true, derive y E .inner, E.held, false, false⟩
   | .arc t => ⟨.arc t, .bor, true, derive y E .inner, E.held, false, false⟩
   | .lk t => ⟨.lk t, .bor, true, derive y E .inner, E.held, false, false⟩
   | .cell t => ⟨.cell t, .bor, true, derive y E .inner, E.held, false, false⟩
@@ -401,7 +401,7 @@ def popE (y : Var) (E : Entry) : Ty → Entry
   | .vec s => ⟨.vec s, .own, true, [], E.held, false, false⟩
   | .prod a b => ⟨.prod a b, .own, true, [], E.held, false, false⟩
   | .sum a b => ⟨.sum a b, .own, true, [], E.held, false, false⟩
-  | .fn ms => ⟨.fn ms, .own, true, [], E.held, false, false⟩
+  | .fn ms q => ⟨.fn ms q, .own, true, [], E.held, false, false⟩
   | .arc t => ⟨.arc t, .own, true, [], E.held, false, false⟩
   | .lk t => ⟨.lk t, .own, true, [], E.held, false, false⟩
   | .cell t => ⟨.cell t, .own, true, [], E.held, false, false⟩
@@ -594,12 +594,18 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       Γ y = some E → E.live = true → E.mode = .own → E.ty = .sum a b → y ∉ F → NoPin Γ y →
       DtorSafe Γ .replace false y →
       RhsT Γ F (.taker y) (compE E b) (setE (kill .replace false y Γ) y { E with live := false, dtor := false })
-  | pack {fs : List Nat} {te : Ty} {ms : List Nat} {y : Var} {cs : List (Var × PMode × Ty)} {Ey : Entry}
-      {Γ1 : Ctx} {D : List Dep} :
+  /-- A closure literal.  A3.5b: its type says what its environment may hold
+      (`q`), from the environment's type and the captures by name
+      (`Cross.Fits`): one that holds no view and captures nothing by name is
+      Send, one that also holds no cell share Sync, one that holds no share
+      at all a lock's or a channel's. -/
+  | pack {fs : List Nat} {te : Ty} {ms : List Nat} {q : Cross} {y : Var} {cs : List (Var × PMode × Ty)}
+      {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
       Γ y = some Ey → Ey.live = true → Ey.ty = te → PushArg Γ F y Ey te D Γ1 → CapsOK Γ1 F D cs →
+      q.Fits te cs →
       -- (a closure the environment holds that may change a binding by name:
       -- running this package changes it, its name is among what it holds)
-      RhsT Γ F (.pack fs te ms y cs) ⟨.fn ms, .own, true, [], D ++ capDeps cs, false, false⟩ Γ1
+      RhsT Γ F (.pack fs te ms y cs) ⟨.fn ms q, .own, true, [], D ++ capDeps cs, false, false⟩ Γ1
   /-- A3.1: `y`'s value, of a type that holds no view and no closure, moves
       into a fresh block (an owner moves its tree, which becomes the block's
       payload; an integer is copied); the result is an owned share, which
@@ -1518,10 +1524,34 @@ theorem hasFn_holdsView {t : Ty} (h : t.hasFn = true) : t.holdsView = true := by
     simp only [Ty.hasFn, Bool.or_eq_true] at h
     simp only [Ty.holdsView, Bool.or_eq_true]
     exact h.imp iha ihb
-  | fn _ => rfl
+  | fn _ _ => exact h
   | arc t ih => exact ih h
   | lk t ih => exact ih h
   | cell t ih => exact ih h
+
+/-- A3.5b: the environment of a Send closure (its type's `q` is not `any`)
+    holds no view, so no closure that holds bindings by name, and the closure
+    captures nothing by name. -/
+theorem Cross.Fits.send {q : Cross} {te : Ty} {cs : List (Var × PMode × Ty)} (h : q.Fits te cs)
+    (hq : q.views = false) : te.holdsView = false ∧ te.hasFn = false ∧ cs = [] := by
+  obtain ⟨hv, hc⟩ := h.1 hq
+  refine ⟨hv, ?_, hc⟩
+  cases hf : te.hasFn
+  · rfl
+  · rw [hasFn_holdsView hf] at hv; cases hv
+
+/-- A3.5b: an environment that may hold views is a closure's whose type says
+    it may. -/
+theorem Cross.Fits.holdsView {q : Cross} {te : Ty} {cs : List (Var × PMode × Ty)} {ms : List Nat}
+    (h : q.Fits te cs) (hv : te.holdsView = true) : (Ty.fn ms q).holdsView = true := by
+  cases q with
+  | any => rfl
+  | _ => rw [(h.1 rfl).1] at hv; cases hv
+
+/-- A package that captures nothing by name: what its environment is valid
+    through is everything it holds. -/
+@[simp] theorem envDeps_nil (H : List Dep) : envDeps [] H = H := by
+  simp [envDeps, ownWriter, capRootsW]
 
 /-- A parameter's entry: a borrowed one depends on nothing the callee can
     see; every parameter whose type may hold a closure holds the symbolic

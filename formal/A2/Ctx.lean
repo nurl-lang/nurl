@@ -132,8 +132,8 @@ theorem ValOK.mono' {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m 
   | pair _ _ ihx ihy => intro P' H' hp hs; exact .pair (ihx (app hp hs) hs) (ihy (app hp hs) hs)
   | inl _ ih => intro P' H' hp hs; exact .inl (ih (app hp hs) hs)
   | inr _ ih => intro P' H' hp hs; exact .inr (ih (app hp hs) hs)
-  | pkg _ ih =>
-    intro P' H' hp hs; exact .pkg (ih (app hp (envDeps_mono hs)) (envDeps_mono hs))
+  | pkg _ hq ih =>
+    intro P' H' hp hs; exact .pkg (ih (app hp (envDeps_mono hs)) (envDeps_mono hs)) hq
   | arc h hw hv hl =>
     intro P' H' hp _; obtain ⟨dep, hd, hla⟩ := hl; exact .arc h hw hv ⟨dep, hp hd, hla⟩
   | lk h => intro _ _ _ _; exact .lk h
@@ -165,7 +165,7 @@ theorem ValOK.onlyReaders {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : Va
   | pair _ _ ihx ihy => intro P' hp; exact .pair (ihx (app hp)) (ihy (app hp))
   | inl _ ih => intro P' hp; exact .inl (ih (app hp))
   | inr _ ih => intro P' hp; exact .inr (ih (app hp))
-  | pkg _ ih => intro P' hp; exact .pkg (ih (app hp))
+  | pkg _ hq ih => intro P' hp; exact .pkg (ih (app hp)) hq
   | arc h hw hv hl =>
     intro P' hp; obtain ⟨dep, hd, hla⟩ := hl; exact .arc h hw hv ⟨dep, hp dep hd hla.bound, hla⟩
   | lk h => intro _ _; exact .lk h

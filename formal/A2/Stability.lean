@@ -131,13 +131,13 @@ theorem ValOK.keep {m m' : Mem} {τ : Ty} {v : Val} {P H : List Dep}
       · exact hp dep hd
       · exact hh dep hd
     exact .inr (ih hph hh)
-  | @pkg fs te ms x cs P H _ ih =>
+  | @pkg fs te ms q x cs P H _ hq ih =>
     have hr : ∀ dep ∈ envDeps cs H, VKeep m m' dep ∧ HKeep m m' dep := fun dep hd => hh dep (envDeps_sub _ _ hd)
     have hph : ∀ dep ∈ P ++ envDeps cs H, VKeep m m' dep ∧ HKeep m m' dep := fun dep hd => by
       rcases List.mem_append.mp hd with hd | hd
       · exact hp dep hd
       · exact hr dep hd
-    exact .pkg (ih hph hr)
+    exact .pkg (ih hph hr) hq
 
 /-! ### Borrowed parameters reach only frozen owners -/
 
@@ -149,7 +149,7 @@ theorem ViewIn.holdsView {τ T s v} (h : ViewIn τ T s v) : τ.holdsView = true 
   | snd _ ih => simp [Ty.holdsView, ih]
   | inl _ ih => simp [Ty.holdsView, ih]
   | inr _ ih => simp [Ty.holdsView, ih]
-  | pkg _ ih => simp [Ty.holdsView]
+  | pkg _ ih => rfl
 
 theorem no_views {t : Ty} (ht : t.holdsView = false) (m : Mem) (T : Val) (H : List Dep) :
     ViewsOK m (.vec t) T H := by
@@ -365,7 +365,7 @@ theorem valOK_href {m : Mem} (hh : HeapOK m) {c : Nat} {n : Val} (hn : NodeAt m 
   | inr _ ih =>
     cases ht with
     | inr ht => obtain ⟨dep, hd, rest⟩ := ih ht; exact ⟨dep, append_assoc_sub hd, rest⟩
-  | pkg _ ih =>
+  | pkg _ _ ih =>
     cases ht with
     | pkg ht => obtain ⟨dep, hd, rest⟩ := ih ht; exact ⟨dep, append_envDeps_sub hd, rest⟩
 
@@ -396,7 +396,7 @@ theorem valOK_view {m : Mem} (hh : HeapOK m) {d o l : Nat} {n : Val} (hn : DataA
   | inr _ ih =>
     cases ht with
     | inr ht => obtain ⟨dep, hd, rest⟩ := ih ht; exact ⟨dep, append_assoc_sub hd, rest⟩
-  | pkg _ ih =>
+  | pkg _ _ ih =>
     cases ht with
     | pkg ht => obtain ⟨dep, hd, rest⟩ := ih ht; exact ⟨dep, append_envDeps_sub hd, rest⟩
 
@@ -433,9 +433,9 @@ theorem valOK_via {m : Mem} {y : Var} {T : Val} (hy : m.st y = some ⟨false, so
   | inr _ ih =>
     intro Q ht hq
     exact .inr (ih (Top.trans (Top.inr (Top.refl _)) ht) (List.mem_append_left _ hq))
-  | pkg _ ih =>
+  | pkg _ hfq ih =>
     intro Q ht hq
-    exact .pkg (ih (Top.trans (Top.pkg (Top.refl _)) ht) (List.mem_append_left _ hq))
+    exact .pkg (ih (Top.trans (Top.pkg (Top.refl _)) ht) (List.mem_append_left _ hq)) hfq
 
 /-- A3.1: a share at the top of a borrowed value lands through one of the
     value's dependencies. -/
@@ -461,7 +461,7 @@ theorem valOK_arc {m : Mem} {k : Nat} {q : Val} {τ : Ty} {w : Val} {P H : List 
   | inr _ ih =>
     cases ht with
     | inr ht => obtain ⟨dep, hd, rest⟩ := ih ht; exact ⟨dep, append_assoc_sub hd, rest⟩
-  | pkg _ ih =>
+  | pkg _ _ ih =>
     cases ht with
     | pkg ht => obtain ⟨dep, hd, rest⟩ := ih ht; exact ⟨dep, append_envDeps_sub hd, rest⟩
 
@@ -730,7 +730,11 @@ theorem WFv.names_nil_fn {τ : Ty} {v : Val} (h : WFv τ v) (ht : τ.hasFn = fal
     simp [Val.names, iha ht.1, ihb ht.2]
   | inl _ ih => simp only [Ty.hasFn, Bool.or_eq_false_iff] at ht; exact ih ht.1
   | inr _ ih => simp only [Ty.hasFn, Bool.or_eq_false_iff] at ht; exact ih ht.2
-  | pkg => cases ht
+  | pkg _ hq ih =>
+    -- A3.5b: a Send closure captures nothing by name, and its environment
+    -- holds no closure that does
+    obtain ⟨_, hf, hcs⟩ := hq.send ht
+    simp [Val.names, hcs, ih hf]
 
 /-- A value of a type that holds no closure is valid through its
     dependencies on memory alone: it holds nothing by name, and its handles
@@ -765,7 +769,14 @@ theorem ValOK.memDeps {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK 
   | inr _ ih =>
     simp only [Ty.hasFn, Bool.or_eq_false_iff] at hf
     have hx := ih hf.2; rw [app] at hx; exact .inr hx
-  | pkg => cases hf
+  | @pkg fs te ms q x cs P H _ hq ih =>
+    -- A3.5b: a Send closure captures nothing by name
+    obtain ⟨_, hf', hcs⟩ := hq.send hf
+    subst hcs
+    have hx := ih hf'
+    simp only [envDeps_nil] at hx ⊢
+    rw [app] at hx
+    exact .pkg (by simpa using hx) hq
 
 /-- A borrowed value of a type that holds no closure holds nothing by name. -/
 theorem ValOK.names_nil_fn {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m τ v P H)
@@ -782,7 +793,9 @@ theorem ValOK.names_nil_fn {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : V
     simp [Val.names, iha hf.1, ihb hf.2]
   | inl _ ih => simp only [Ty.hasFn, Bool.or_eq_false_iff] at hf; exact ih hf.1
   | inr _ ih => simp only [Ty.hasFn, Bool.or_eq_false_iff] at hf; exact ih hf.2
-  | pkg => cases hf
+  | pkg _ hq ih =>
+    obtain ⟨_, hf', hcs⟩ := hq.send hf
+    simp [Val.names, hcs, ih hf']
 
 /-- A value whose type holds no views holds no closure, so captures nothing
     by name. -/
@@ -799,7 +812,9 @@ theorem WFv.names_nil {τ : Ty} {v : Val} (h : WFv τ v) (ht : τ.holdsView = fa
     simp [Val.names, iha ht.1, ihb ht.2]
   | inl _ ih => simp only [Ty.holdsView, Bool.or_eq_false_iff] at ht; exact ih ht.1
   | inr _ ih => simp only [Ty.holdsView, Bool.or_eq_false_iff] at ht; exact ih ht.2
-  | pkg _ _ => simp [Ty.holdsView] at ht
+  | pkg _ hq ih =>
+    obtain ⟨hv, _, hcs⟩ := hq.send ht
+    simp [Val.names, hcs, ih hv]
 
 theorem no_names {t : Ty} {T : Val} (hw : WFv (.vec t) T) (ht : t.holdsView = false) (H : List Dep) :
     NamesIn T H := by
