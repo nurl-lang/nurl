@@ -250,6 +250,12 @@ Inside A2 (nurlc bugs):
   field is no root of the other's dependencies).
 - An `inout` option given a lend: #343 (`assign` gives an `inout` binding
   only an owned value).
+- A view stored through a borrow that nurlc does not follow to its owner:
+  #395's call as the container and its option payload cursor, and #454's
+  forms where the callee's root is an owner or an `inout` parameter
+  (`StmtT.editBV`: the stored view's dependencies land on every
+  view-holding root of the borrow's path, `holdThru`, as nurlc's
+  `__bck_store_owners` does; `rules/t292.md`).
 
 Outside A2:
 - The hand-over of an old value to its borrower (above): #366, #373, #378,
@@ -261,8 +267,11 @@ Outside A2:
   and #456 (an `inout` given a lend by name, or of a Box, map, Rc or Arc).
 - An `Rc`'s shared state, which is the standard library's (B): #345 and
   #392.
-- A view stored through a borrow: #395 and #454 (`StmtT.editB` takes
-  element types that hold no views; `rules/t292.md`).
+- A view stored through a borrow inside closure code, or rooted at a
+  plain borrowed parameter: #395's store through a borrow of a capture,
+  and #454's plain-parameter and `vec_each` forms (`StmtT.editBV` types a
+  store through a borrow outside closures, rooted at owners and `inout`
+  parameters).
 - A changed plain parameter handed an element rather than an owner: #391
   (above).
 
