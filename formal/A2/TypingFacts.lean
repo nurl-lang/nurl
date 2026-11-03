@@ -628,6 +628,7 @@ theorem RhsT.dkeep {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (h : RhsT
     DKeep Γ Γ1 [] := by
   cases h with
   | moveOwn hy => exact DKeep.moveOut hy _ _
+  | moveUp hy => exact DKeep.moveOut hy _ _
   | pop => exact (DKeep.refl Γ []).kill _ _ _
   | pair hy _ hp1 hz _ hp2 _ => exact (hp1.dkeep hy).trans (hp2.dkeep hz) fun _ h => h
   | inl hy _ hp _ => exact hp.dkeep hy
@@ -880,6 +881,7 @@ theorem RhsT.dstay {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (h : RhsT
     DStay Γ Γ1 [] := by
   cases h with
   | moveOwn hy => exact DStay.moveOut hy _ _
+  | moveUp hy => exact DStay.moveOut hy _ _
   | pop => exact (DStay.refl Γ []).kill _ _ _
   | pair hy _ hp1 hz _ hp2 _ => exact (hp1.dstay hy).trans (hp2.dstay hz) fun _ h => h
   | inl hy _ hp _ => exact hp.dstay hy

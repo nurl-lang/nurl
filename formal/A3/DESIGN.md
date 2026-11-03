@@ -30,7 +30,10 @@ closure's type says where it may cross, an `Arc` holds a Sync one, a lock
 or a channel a bare one, a spawn a Send one). A3.5c's trait objects are
 covered by A3.5b's rules, with no new one (A3.5c's mechanization, below: a
 trait's bound is its objects' class, and the crossing check walks the
-box). A3.5's second cut puts library handles in lock payloads, cells' states
+box). Their rest types subsumption between classes, answers a generic bound
+by the class, and decides what A2's closure model leaves out: a closure that
+changes a capture it moved in, and an `inout` receiver (A3.5b's and A3.5c's
+rest, below). A3.5's second cut puts library handles in lock payloads, cells' states
 and channel elements, and so Send closures and `: Send` trait objects, with
 the crossing check at every value going in (A3.5's second cut, below: a
 failed check panics, and a cell's shares are in one thread's slots or one
@@ -168,7 +171,8 @@ drop it. The thread rules add:
 - **The markers.** A positive `% Send` / `% Sync` outside the standard
   library is `unsafe` (§3), a hypothesis of the theorem, as an `unsafe`
   body is for B. A negative one (`% NotSend`, `% NotSync`, `% Frozen`)
-  only removes typings.
+  only removes typings. (How the classes reflect both: A3.5b's and A3.5c's
+  rest, below.)
 - **The crossing check** (`mem_send_check`, §6.5). A library handle whose
   copies are one state may cross only with every other owner of that
   state. The calculus takes this as the crossing's run-time
@@ -1912,12 +1916,16 @@ closure's environment is a tree inside its value (`Sub.pkg`, `Val.ids`).
 - *Where the model refuses more.*
   - A parameter or field of closure type carries one class, and the model
     has no subsumption (a `sync` closure where an `any` one is declared).
-    nurlc follows the value through.
+    nurlc follows the value through. (Closed for a closure's own type by
+    A3.5b's and A3.5c's rest, below: a move or a copy takes it at a class
+    above its own. A container's element type keeps one class.)
   - The runtime's closure moves its captures into its environment, and its
     code may change them (an accumulator). The model's code reads its
     environment, and changes only captures by name, which are not Send.
     So a closure that changes what it captured is not Send in the model,
-    even one that the runtime lets cross because it moves.
+    even one that the runtime lets cross because it moves. (Decided in
+    A3.5b's and A3.5c's rest, below: out of A2's closure model. The model's
+    accumulator keeps its state in an `Atomic` or a `Locked`.)
   - A channel's element and a lock's payload hold no share (A3.2, A3.4).
     So a closure sent on a channel captures no handle at all, where the
     runtime moves a non-Sync capture with it (h340).
@@ -1952,14 +1960,17 @@ closure's environment is a tree inside its value (`Sub.pkg`, `Val.ids`).
 **Simplifications in this cut.** Each is a restriction, and sound as stated.
 - *No subsumption.* A `sync` closure is not an `any` one, so a function
   declares the class of each closure it takes. Forgetting a class would be
-  sound (it only weakens the type) but is not a rule.
+  sound (it only weakens the type) but is not a rule. (Closed: `RhsT.moveUp`
+  and `RhsT.copyUp`, A3.5b's and A3.5c's rest, below.)
 - *One class per interface.* An interface's receiver is `(inp, fn ms q)`,
   so an interface is declared at one class, and a method's code is checked
-  once for it.
+  once for it. (Kept: a borrowed receiver is copied up to the interface's
+  class, `StmtT.callcUp`, below.)
 - *A lock or a channel takes only a bare closure* (no share), as A3.2 and
   A3.4 take no share.
 - *A closure changes only what it captured by name* (A2's closure model).
-  A Send closure's code changes nothing it owns.
+  A Send closure's code changes nothing it owns. (Kept, and decided:
+  A3.5b's and A3.5c's rest, below.)
 - *A `% Sync` handle* other than an `Arc` (a server's `Route`) does not keep
   a closure in the model: its handler is an `Arc` of a Sync closure.
 - *Trait objects.* A `dyn` is a `pack` too, so a trait object gets a class
@@ -1970,6 +1981,8 @@ closure's environment is a tree inside its value (`Sub.pkg`, `Val.ids`).
 - *Phase C*: that the lowering gives each closure type the class nurlc's
   walk proved (above).
 - Subsumption between classes; a closure that changes what it moved in.
+  (Closed: subsumption is typed, and the second is decided out of A2's
+  closure model, in A3.5b's and A3.5c's rest, below.)
 - A share in a lock's payload or a channel's element (A3.2, A3.4), so a
   closure that captures one and is sent or locked. (Closed: A3.2's second
   cut for `arc` and lock shares, A3.5's second cut for cell shares, below.)
@@ -2038,7 +2051,8 @@ which it declares their receivers.
   - a call through a trait object types only at its trait's bound
     (`StmtT.callc_bound`);
   - an object packed at another class is inert: no method of it is called
-    (`callc_not_at`).
+    (`callc_not_at`). (A3.5b's and A3.5c's rest, below: one packed below the
+    bound is moved up to it, `dyn_up_bound`.)
 - *Why no `bare` bound.* `bare` (no share at all) is the class a lock's
   payload and a channel's element take (A3.2, A3.4). No NURL bound says
   it.
@@ -2136,15 +2150,18 @@ A3.0's `spawn_args`.
 - *A trait is its methods' interfaces.* There is no trait declaration,
   supertrait or `[T: Send]` bound. `TraitAt` is a fact about the program's
   interfaces, not a premise of the claim: no rule needs it, and the claim
-  holds for any class.
+  holds for any class. (Decided: a generic bound is monomorphised and
+  answered by the class, A3.5b's and A3.5c's rest, below.)
 - *One class per trait, no subsumption* (A3.5b's). A parameter of a trait
-  object's type is declared at its trait's bound.
+  object's type is declared at its trait's bound. (Subsumption: closed,
+  below.)
 - *A `: Send` trait's objects cross a spawn only.* A lock and a channel
   take only a bare package (A3.2 and A3.4 take no share), and no bound is
   bare. The runtime's `chan_send` and `locked_new` take any Send value.
 - *A method takes its receiver `inp`* (A2's `callc`). A method with an
   `inout` receiver that changes the box (h364–h366's) is not a call
-  through the object in the model.
+  through the object in the model. (Decided: out of A2's closure model, and
+  h364's rule holds, below.)
 - *An impl is checked where it is boxed*, not where it is declared
   (above).
 
@@ -2157,7 +2174,7 @@ A3.0's `spawn_args`.
 - Trait objects in a lock or a channel (closed: `: Send Sync` ones by A3.2's
   second cut, `: Send` ones by A3.5's second cut, below); `inout` receivers;
   supertraits and generic bounds; `% Send` / `% Sync` assertions on an impl's
-  type.
+  type (decided in A3.5b's and A3.5c's rest, below).
 - The probes as typed programs (as `A2/DynCell.lean` types `pick`).
 - `CLAIM.md` / `README.md`.
 
@@ -3141,6 +3158,264 @@ Each is a restriction, and sound as stated.
 - The probes as whole typed programs (as `A2/DynCell.lean` types `pick`).
   `chanSend_kept`, `lockNew_kept`, `lockRestore_kept` and `scopeL_end`
   state their rules on one step each.
+- `CLAIM.md` / `README.md`.
+
+## A3.5b's and A3.5c's rest (subsumption, bounds, what A2's closures leave out)
+
+**Status.** Mechanized where it fits A2's closure model, and decided where it
+does not. Subsumption between closure classes is typed (A2: two typing rules,
+A3: the crossing facts). A generic bound and a supertrait's bound are answered
+by the class. A closure that changes a capture it moved in, and an `inout`
+receiver through a trait object, are out of A2's closure model, for one
+reason: a call through a package lends its code a copy of the environment.
+Both are refused, and h364's rule holds. The markers are the classes'
+subsumption one way and the trusted base the other. `check.sh` is green, and
+`A2.memory_safe`, `A2.soundness`, `A2.no_leak_end`, `A2.no_leak_panic`, the
+`DynCell` theorems, `A3.claim` and `A3.claim_made` are re-proven. `CLAIM.md` /
+`README.md` are not updated here.
+
+### Subsumption between closure classes
+
+**The order.** `Cross.rank` puts the classes in a line by what an environment
+may hold: `bare` 0, `sync` 1, `send` 2, `any` 3. `Cross.Le q q'` (`q ≤ q'`)
+says that a closure of class `q` may be taken as one of class `q'`.
+
+**Every order is sound** (`Cross.Fits.mono`). `Cross.Fits` has three
+conjuncts, each guarded by one flag of the class: `views`, `cells` and
+`shares`. A flag that is false at a class is false at every class below it
+(`Cross.Le.views`, `.cells`, `.shares`). So an environment that fits a class
+fits every class above it. A2's soundness reads the class only through
+`Cross.Fits` and through where an environment may hold views (`ViewIn.pkg`, at
+`any`) or shares (`ArcIn.pkg`, where `q.shares`). The class only restricts
+where a value may go.
+
+**Where it lives: a typing of `Rhs.var`.** Three places were open.
+- *A subtyping step on values.* Taken, as two typing rules of the
+  right-hand side `Rhs.var`, not as a new right-hand side (`Rhs.coerce`).
+  - `RhsT.moveUp` moves an owned closure at a class above its own. Its
+    premises are `moveOwn`'s, with `E.ty = fn ms q` and `q ≤ q'`, and its
+    result is `⟨fn ms q', own, true, [], E.held, false, false⟩`.
+  - `RhsT.copyUp` copies a borrowed closure at a class above its own:
+    `copyBor`'s result, of type `fn ms q'`.
+  - The step is `moveOwn`'s or `copy`'s: the value moves or is copied as it
+    is. So no step, renaming, frame, sweep or touch lemma gets a case. Only
+    the lemmas on `RhsT` do.
+  - A new right-hand side would have needed all of those, for a step that
+    does what `.var`'s already does.
+- *A premise on argument passing* (`paramOK` taking an argument at a class
+  below its parameter's). Not taken.
+  - A call's renaming places the callee's parameter entry where the caller's
+    argument is: the parameter's type is the argument's (`CallH.sig_abs`,
+    `callPe`).
+  - Two types for one binding would reach the renaming, `CallT`'s
+    post-context and the callee's frame.
+  - A move or a copy before the call does the same: `: h2 h`, then
+    `( f h2 )`.
+- *Interfaces at several classes.* Not a rule, for the same reason: a call's
+  receiver is `CallT`'s first argument, so its class is the interface's.
+  - With `copyUp`, a borrowed receiver reaches every interface declared at a
+    class above its own (`StmtT.callcUp`).
+  - So an interface is declared once, at the weakest class its callers have.
+    A `sync` handler an `Arc` lends is called through an interface declared
+    at `any` (`StmtT.arcCallUp`), and the interface need not say the
+    handler is Sync.
+  - An owned receiver is moved up first, so its class is then forgotten.
+- *A call through the weaker type* checks the code against the interface it
+  is called at. It is A2's `callc` at the weaker type, and `Implements`
+  holds each method's code to its interface's other parameters and result,
+  whatever the class of the interface's receiver.
+
+**A2's proof.**
+- What the invariant asks of a value at the new class it had at the old one:
+  - `WFv.up` and `ValOK.up` (by `Cross.Fits.mono`);
+  - `ViewsOK.up`: at `any`, a view in an environment whose closure was below
+    `any` is none, since that environment's type holds no view
+    (`ViewIn.holdsView`);
+  - `SharesOK.up`: the shares are the environment's (`SharesOK.pkg'`,
+    `SharesOK.mk_pkg`);
+  - `RhsOut.up`, for what a right-hand side makes.
+- `rhs_pres`: the move's case (`rhs_move`) or the copy's (`out_copyBor`),
+  then `RhsOut.up`. `evalR_exists`: the move's or the copy's step.
+- The context lemmas on `RhsT` (`RhsT.out`, `dkeep`, `dstay`, `domMode`,
+  `domTy`, `wf`, `names`, `ctxRel`, `absOK`) take the move's or the copy's
+  argument.
+- The renaming (`RhsT.ren`) is the only one with more to it. Lifted into the
+  caller, the moved-up entry holds at least what the moved entry holds,
+  because `ownHeld` holds more at a type that holds views.
+
+**The crossing facts** (`A3/Defs.lean`).
+- *The class only forgets* (`RhsT.var_up`). A closure moved or copied keeps
+  its interfaces, at its class or above it. So an `any` closure stays `any`
+  (`RhsT.var_any`).
+  - h342's handler captures by name, so it is `any` (`pack_names_any`).
+  - However it is passed on, no `Arc`, spawn, lock or channel takes it.
+- *A Sync handler where a Send one is declared.* A `sync` or `bare` closure
+  moved as `send` is a spawn's argument (`moveUp_send`: its type holds no
+  view, `SpawnOK`).
+- *Any closure may be moved as `any`* (`moveUp_any`), where it crosses
+  nothing.
+- A3's statements read the type a value is taken at, and A3's invariants are
+  over values (`Touch`, `CellInv`, the partition), so A3's proof is
+  unchanged.
+
+**Subsumption is at the top of a closure's type only.** A `Vec` of `sync`
+closures is not a `Vec` of `any` ones: a node carries its element type
+(`Val.node t`, `WFv.node`), and a `push` asks the element's type to be the
+`Vec`'s. A closure taken out (`pop`, a field) is moved up on its own.
+
+### A closure that changes a capture it moved in
+
+An example is the accumulator `\ → i { = n + n 1 ^ n }`, with `n` moved in.
+
+**The decision.**
+- *The moved-in capture is the environment's own state.* The package owns
+  it, and only a call through the package reaches it.
+- *A `send` closure may own it.* The state moves with the closure, and only
+  the thread that holds the closure calls it.
+- *A `sync` one must not change it.* Threads calling it at once through an
+  `Arc` would race on it: this is h342's shape, with the state inside the
+  closure instead of captured by name.
+- So the change needs an owner of the package. Its class stays about what
+  the environment holds.
+  - An environment that holds only a plain integer fits `sync`. Such a
+    closure may be put in an `Arc`.
+  - A call through the `Arc`'s borrow (`getE`, `Kind.share`) is not an
+    owner's, so it cannot change the state.
+
+**Not typed: out of A2's closure model.**
+- A2's call through a package hands the code a copy of the environment,
+  lent, in a fresh slot (`envMem`, `lendOf`).
+- `Implements` takes the environment `inp`, and the code changes nothing
+  through a borrow (`Implements.env_lent`). A change would land in the copy,
+  never in the package.
+- Typing the accumulator needs the environment handed over for the call:
+  - moved out of the package's slot into a binding the code takes `inout`;
+  - and back into the package at the end, on a panic's unwinding too, as
+    `withElem` hands over an element.
+- That is a new step and run-time form of A2, with its own preservation,
+  progress, renaming, frame and leak cases. It also needs A3's touch, lift,
+  restrict and confinement cases. It is A2's work before it is A3's: h365
+  and h366, single-threaded, are its A2 probes (below).
+- When it is added, the decision above is its rule. The hand-over asks for
+  an owner: `canDo`, `c ∉ F`, as `CallT` asks of an `inout` argument. A
+  borrow, an `Arc`'s or anyone's, is never one (h364, below).
+
+**What the model types instead** (`A3/Defs.lean`). This is h342's fix: the
+state lives in a share the environment holds, which synchronises itself.
+- Take `\ → i { atomic_add n 1 }`, with `n` an `Atomic` moved in. The
+  environment is a lock share, which `sync` admits (`accum_sync`: a lock
+  share is Sync, A3.5's second cut).
+- The code changes the state by one atomic step on the lent share
+  (`accum_count`: `RhsT.atomic` takes any live `lk int`, a borrowed
+  parameter's too).
+- With a `Locked` share as the environment, the code changes the state by
+  `withLock`, since a borrowed parameter is a root.
+- In both cases several threads may call the closure.
+
+### Trait objects: subsumption, bounds, receivers
+
+**Subsumption** is A3.5b's.
+- An object packed at a class below its trait's bound is taken up to the
+  bound by a move or a copy (`dyn_up_bound`). An example is an impl of a
+  `: Send` trait whose box holds no handle, packed `sync`.
+- The object is then a receiver of the trait's methods, and the pack kept the
+  bound's promise (`ImplOK.of_le`).
+- `callc_not_at` is still true of the call itself. An object is inert only
+  above its bound, since no rule lowers a class.
+
+**Generic bounds and supertraits: monomorphised.** A2 has no generics, no
+type variable and no instantiation.
+- A generic function `f [T: Send]` is a family of functions of the program,
+  one for each type it is called at.
+- Each instance is at concrete types. A closure's or a trait object's class
+  is the one `Rhs.pack` gave it (`RhsT.pack_fits`) and subsumption kept
+  (`RhsT.var_up`). Any other type's Send and Sync are read off the type
+  (`holdsView`, `hasCell`).
+- So a bound is a fact about the instance's type, the one the crossing
+  rules ask of it (`TraitBound.Holds`):
+  - no bound asks nothing;
+  - `[T: Send]` asks no view (`Holds.send`: what A3.0's spawn, a lock and a
+    channel ask, so no closure that holds names either);
+  - `[T: Send Sync]` also asks no library handle (`Holds.arc`: what
+    `RhsT.arcNew` asks).
+- *A bound is answered by the class* (`TraitBound.holds_fn`). A closure or a
+  trait object meets a bound exactly when its class is at most the bound's:
+  - `[T: Send]` holds of `fn ms q` iff `q ≤ send`;
+  - `[T: Send Sync]` holds iff `q ≤ sync`.
+- *A supertrait's bound is kept* (`Holds.mono`). What meets a bound meets
+  every weaker one.
+  - So a trait declared `: A`, with `A : Send`, is held to Send. Its bound
+    is the strongest of its own and its supertraits'.
+  - Its objects meet `A`'s bound.
+  - An upcast of an object from a trait to its supertrait is not typed: it
+    changes the interfaces `ms`, which a package's type fixes.
+- **Phase C obligation (stated, not proven):** the lowering instantiates
+  each generic function at the types it is called with. nurlc's bound check
+  at an instance is `TraitBound.Holds` of the instance's type.
+
+**An `inout` receiver** (h364–h366: a method that changes the box).
+- *Can `Implements` hold impls to it?* It can say it: the code's first
+  parameter would take the box in the interface's receiver mode, one more
+  conjunct.
+- *A2's call cannot run it.* The box is the environment, which `envMem`
+  lends as a copy. A change through an `inout` receiver needs the box handed
+  over, the step above. So it is out of scope here, as the accumulator is.
+- *What holds now.*
+  - A call through a package takes its receiver `inp` (`StmtT.callc_inp`).
+  - So a method whose interface takes the receiver `inout` is called
+    through no object (`callc_not_inout`).
+  - What an `Arc` or a read guard lends is a borrow (`getE_bor`), and so is
+    each copy of it. A borrow is no `inout` argument of any function
+    (`paramOK_inout_not_bor`: `paramOK` asks `canDo`).
+- *h364* `dyn_inout_method_through_a_read_guard`. `( rename k )`, on `k` (a
+  `: ~` copy of `rguard_get`), is refused twice:
+  - `rename` takes its receiver `inout`;
+  - `k` is a borrow.
+  When the hand-over is added, the second refusal stays. That is h364's
+  rule: the box every reader sees is frozen.
+- *h365* `dyn_inout_method_replaces_what_a_view_reads`, and *h366*
+  `helper_hands_its_parameter_to_a_dyn_method` (A2 probes). They are
+  refused: no `inout` method is called through an object.
+  - With the hand-over, the call would be typed as `CallT` over the
+    interface, with the receiver `inout`.
+  - Its bound's `kill` would end h365's view of the replaced `String`.
+  - h366's helper takes the object `inout` and hands it on to the method.
+    Its caller's argument is an ordinary `inout` one, which A2 types
+    already, and the helper's parameter is an owner for the hand-over
+    (`canDo`).
+
+### The markers (`% Send`, `% Sync`, `% NotSend`, `% NotSync`)
+
+- *A positive marker* outside the standard library is `unsafe` (§3), so it
+  is trusted base: a hypothesis of the theorem, as an `unsafe` body is.
+  - The model has no rule that raises a class. `pack` gives only the classes
+    the captures fit (`RhsT.pack_fits`), and a move or a copy only forgets
+    (`RhsT.var_up`).
+  - A false positive marker would let a value cross where its type says it
+    may not. The claim does not cover it.
+- *A negative marker only removes typings.*
+  - On a closure or a trait object's type, it can only lower the class:
+    - `% NotSend` takes the closure at `any` (`moveUp_any`);
+    - `% NotSync` takes a `sync` or `bare` closure at `send` (`moveUp_send`).
+    Each is a class subsumption reaches, and sound by `Cross.Fits.mono`.
+  - On any other type it is a refusal nurlc adds and the model needs not. The
+    model computes Send and Sync from the type (`holdsView`, `hasCell`), and
+    the theorem covers every program the model types. These include those
+    nurlc accepts with the marker.
+  - `% Frozen` is A3.3's read guard.
+
+### Not proven here
+
+- *Phase C*: the lowering gives each closure type the class nurlc's walk
+  proved (A3.5b), and instantiates each generic function at its call types,
+  its bound checked there (above).
+- A closure that changes a capture it moved in, and an `inout` receiver: the
+  environment's hand-over, an A2 step (above).
+- Subsumption inside a container's element type, or at argument passing.
+  A move or a copy up before the call is typed instead (above).
+- An upcast from a trait's objects to a supertrait's.
+- The probes as whole typed programs (as `A2/DynCell.lean` types `pick`).
+  `StmtT.callcUp` and `StmtT.arcCallUp` type the call, not a program.
 - `CLAIM.md` / `README.md`.
 
 ## Open questions

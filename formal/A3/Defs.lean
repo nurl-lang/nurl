@@ -674,6 +674,144 @@ theorem _root_.A2.StmtT.arcCall {P : Prog} {Γ Δ : Ctx} {F : List Var} {a g x :
     (StmtT.callc_recv hks (by simp [setE, upd_ne _ _ hxg, hx]) hxF (upd_same _ _ _) rfl rfl hj hσ hps hout
       hnt getE_own_noName hk hend) hendg
 
+/-! ### A3.5b: subsumption between closure classes
+
+A closure may be taken at a class above its own, `bare ≤ sync ≤ send ≤ any`
+(`Cross.Le`): a move of an owner (`RhsT.moveUp`) or a copy of a borrow
+(`RhsT.copyUp`).  The step is the move's or the copy's, and the value is what
+it was: its environment fits the class above (`Cross.Fits.mono`), so A2's
+invariant holds of it there (`WFv.up`, `ValOK.up`, `ViewsOK.up`, `SharesOK.up`,
+`RhsOut.up`).  What changes is only where the closure may go: the crossing
+rules read the type it is taken at.  A call through it is A2's `callc` at that
+type, so its code is checked against the interface it is called at
+(`Implements`, which reads only the interface's other parameters and result,
+whatever the class of its receiver). -/
+
+/-- **The class only forgets**: a closure moved or copied keeps its interfaces,
+    at its class or one above, never below. -/
+theorem _root_.A2.RhsT.var_up {Γ Γ1 : Ctx} {F : List Var} {y : Var} {E Ey : Entry} {ms ms' : List Nat}
+    {q q' : Cross} (h : RhsT Γ F (.var y) E Γ1) (hy : Γ y = some Ey) (hty : Ey.ty = .fn ms q)
+    (hE : E.ty = .fn ms' q') : ms' = ms ∧ q.Le q' := by
+  cases h with
+  | moveOwn hy' =>
+    rw [hy] at hy'; cases hy'
+    rw [hty] at hE; cases hE; exact ⟨rfl, .refl _⟩
+  | copyRoot hy' =>
+    rw [hy] at hy'; cases hy'
+    rw [hty] at hE; cases hE; exact ⟨rfl, .refl _⟩
+  | copyBor hy' =>
+    rw [hy] at hy'; cases hy'
+    have : Ey.ty = .fn ms' q' := hE
+    rw [hty] at this; cases this; exact ⟨rfl, .refl _⟩
+  | moveUp hy' _ _ _ _ _ hty' hle =>
+    rw [hy] at hy'; cases hy'
+    rw [hty] at hty'; cases hty'; cases hE; exact ⟨rfl, hle⟩
+  | copyUp hy' _ _ hty' hle =>
+    rw [hy] at hy'; cases hy'
+    rw [hty] at hty'; cases hty'; cases hE; exact ⟨rfl, hle⟩
+
+/-- So a closure `pack` typed `any` (h342's handler, which changes a binding it
+    captured by name) is `any` wherever a move or a copy takes it: no `Arc`
+    (`arcNew_not_any`), spawn (`spawn_not_any`), lock or channel (`lockNew_fn`,
+    `chan_fn`) takes it, however it is passed on. -/
+theorem _root_.A2.RhsT.var_any {Γ Γ1 : Ctx} {F : List Var} {y : Var} {E Ey : Entry} {ms : List Nat}
+    (h : RhsT Γ F (.var y) E Γ1) (hy : Γ y = some Ey) (hty : Ey.ty = .fn ms .any) : E.ty = .fn ms .any := by
+  cases h with
+  | moveOwn hy' => rw [hy] at hy'; cases hy'; exact hty
+  | copyRoot hy' => rw [hy] at hy'; cases hy'; exact hty
+  | copyBor hy' => rw [hy] at hy'; cases hy'; exact hty
+  | moveUp hy' _ _ _ _ _ hty' hle =>
+    rw [hy] at hy'; cases hy'
+    rw [hty] at hty'; cases hty'; rw [hle.any_eq]
+  | copyUp hy' _ _ hty' hle =>
+    rw [hy] at hy'; cases hy'
+    rw [hty] at hty'; cases hty'; show Ty.fn _ _ = _; rw [hle.any_eq]
+
+/-- A Sync handler (or a bare closure) where a Send one is declared: moved as
+    `send`, it is a spawn's argument (`SpawnOK`: its type holds no view) ... -/
+theorem moveUp_send {Γ : Ctx} {F : List Var} {y : Var} {Ey : Entry} {ms : List Nat} {q : Cross}
+    (hy : Γ y = some Ey) (hl : Ey.live = true) (hm : Ey.mode = .own) (hyF : y ∉ F) (hp : NoPin Γ y)
+    (hds : DtorSafe Γ .replace false y) (hty : Ey.ty = .fn ms q) (hq : q = .sync ∨ q = .bare) :
+    RhsT Γ F (.var y) ⟨.fn ms .send, .own, true, [], Ey.held, false, false⟩
+      (setE (kill .replace false y Γ) y { Ey with live := false, dtor := false }) ∧
+    (Ty.fn ms .send).holdsView = false :=
+  ⟨RhsT.moveUp hy hl hm hyF hp hds hty (by rcases hq with rfl | rfl <;> decide), rfl⟩
+
+/-- ... and any closure may be moved as `any`, where it crosses nothing: the
+    class a negative marker (`% NotSend`) gives a value is one subsumption
+    reaches, so the marker only removes typings. -/
+theorem moveUp_any {Γ : Ctx} {F : List Var} {y : Var} {Ey : Entry} {ms : List Nat} {q : Cross}
+    (hy : Γ y = some Ey) (hl : Ey.live = true) (hm : Ey.mode = .own) (hyF : y ∉ F) (hp : NoPin Γ y)
+    (hds : DtorSafe Γ .replace false y) (hty : Ey.ty = .fn ms q) :
+    RhsT Γ F (.var y) ⟨.fn ms .any, .own, true, [], Ey.held, false, false⟩
+      (setE (kill .replace false y Γ) y { Ey with live := false, dtor := false }) :=
+  RhsT.moveUp hy hl hm hyF hp hds hty (Cross.le_any q)
+
+/-- **A call through the weaker type**: a borrowed closure of class `q`, copied
+    as one of class `q'` above it, is called through an interface declared at
+    `q'` — A2's `callc` at the copy's type, so the code is checked against the
+    interface it is called at (`Implements`). -/
+theorem _root_.A2.StmtT.callcUp {P : Prog} {Γ Δ : Ctx} {F : List Var} {c c' x : Var} {j : Nat}
+    {zs : List Var} {k : Stmt} {Ec : Entry} {ms : List Nat} {q q' : Cross}
+    (hc : Γ c = some Ec) (hl : Ec.live = true) (hm : Ec.mode = .bor) (hty : Ec.ty = .fn ms q)
+    (hle : q.Le q') (hks : k.src = true) (hc' : Γ c' = none) (hc'F : c' ∉ F)
+    (hcall : StmtT P (setE Γ c' { Ec with ty := .fn ms q', dtor := false, dbind := false }) F
+      (.callc x c' j zs k) Δ) (hend : EndOK Δ c') :
+    StmtT P Γ F (.letv c' (.var c) (.callc x c' j zs k)) (exitScope c' Δ) :=
+  StmtT.letv hks hc' hc'F (RhsT.copyUp hc hl hm hty hle) hcall hend
+
+/-- **h342's fix through an interface declared at `any`**: the Sync handler an
+    `Arc` keeps, lent by `arc_get` (`g`), copied as an `any` closure (`g'`) and
+    called through an interface whose receiver is `(inp, fn ms any)`.  The
+    handler is Sync in the `Arc`, and the interface need not say so. -/
+theorem _root_.A2.StmtT.arcCallUp {P : Prog} {Γ Δ : Ctx} {F : List Var} {a g g' x : Var} {j : Nat}
+    {k : Stmt} {ms : List Nat} {q : Cross} {σ : Nat} {sig : Fn}
+    (ha : Γ a = some ⟨.arc (.fn ms .sync), .own, true, [], [], false, false⟩) (hks : k.src = true)
+    (hg : Γ g = none) (hgF : g ∉ F) (hg' : Γ g' = none) (hg'F : g' ∉ F) (hgg : g' ≠ g)
+    (hx : Γ x = none) (hxF : x ∉ F) (hxg : x ≠ g) (hxg' : x ≠ g') (hle : Cross.sync.Le q)
+    (hj : ms[j]? = some σ) (hσ : P[σ]? = some sig) (hps : sig.params = [(.inp, .fn ms q)])
+    (hout : ∀ o ∈ sig.outHolds, o.2.1 ≠ 0) (hnt : ¬ ThruFn P σ)
+    (hk : StmtT P
+      (setE (setE (setE Γ g (getE a ⟨.arc (.fn ms .sync), .own, true, [], [], false, false⟩ (.fn ms .sync))) g'
+          { getE a ⟨.arc (.fn ms .sync), .own, true, [], [], false, false⟩ (.fn ms .sync) with
+            ty := .fn ms q, dtor := false, dbind := false }) x
+        (recvRes g' { getE a ⟨.arc (.fn ms .sync), .own, true, [], [], false, false⟩ (.fn ms .sync) with
+            ty := .fn ms q, dtor := false, dbind := false }
+          (callRes (setE (setE Γ g (getE a ⟨.arc (.fn ms .sync), .own, true, [], [], false, false⟩ (.fn ms .sync)))
+            g' { getE a ⟨.arc (.fn ms .sync), .own, true, [], [], false, false⟩ (.fn ms .sync) with
+              ty := .fn ms q, dtor := false, dbind := false }) sig [g']))) F k Δ)
+    (hend : EndOK Δ x) (hendg' : EndOK (exitScope x Δ) g') (hendg : EndOK (exitScope g' (exitScope x Δ)) g) :
+    StmtT P Γ F (.letv g (.arcGet a) (.letv g' (.var g) (.callc x g' j [] k)))
+      (exitScope g (exitScope g' (exitScope x Δ))) := by
+  refine StmtT.letv hks hg hgF (arcGet_sync ha rfl rfl) ?_ hendg
+  refine StmtT.callcUp (upd_same _ _ _) rfl rfl rfl hle hks (by simp [setE, upd_ne _ _ hgg, hg'])
+    hg'F ?_ hendg'
+  refine StmtT.callc_recv hks (by simp [setE, upd_ne _ _ hxg', upd_ne _ _ hxg, hx]) hxF (upd_same _ _ _) rfl rfl
+    hj hσ hps hout hnt ?_ hk hend
+  exact getE_own_noName
+
+/-! A3.5b: a closure that changes a capture it moved in (an accumulator).  The
+moved-in capture is the environment's own state.  A2's call hands the code that
+environment lent, a copy in a fresh slot (`envMem`), and its code changes
+nothing through a borrow (`Implements.env_lent`), so the state cannot be
+changed in place: an environment's plain value is read only.  What the model
+types instead is the state in a share the environment holds, which synchronises
+itself: an `Atomic` (or a `Locked`) moved in. -/
+
+/-- The accumulator's environment, an `Atomic` (a lock share of an integer
+    block), fits `sync`: a lock share is Sync, so an `Arc` keeps the closure
+    and several threads call it ... -/
+theorem accum_sync : Cross.sync.Fits (.lk .int) [] :=
+  ⟨fun _ => ⟨rfl, rfl⟩, fun _ => rfl, fun h => absurd h (by decide)⟩
+
+/-- ... and its code counts by one atomic step on the environment it is lent
+    (any live `lk int`, a borrowed parameter's too): the change synchronises
+    itself, where a change of a plain moved-in integer would race (h342's
+    shape). -/
+theorem accum_count {Γ : Ctx} {F : List Var} {e : Var} {E : Entry} (he : Γ e = some E)
+    (hl : E.live = true) (hty : E.ty = .lk .int) : RhsT Γ F (.atomic .add e (.lit 1) (.lit 0)) intE Γ :=
+  RhsT.atomic he hl hty .lit .lit
+
 /-! ### A3.5c: trait objects across threads, as A2 types them
 
 A trait object is a package as a closure is (`Ty.fn ms q`, A2): `dyn Trait v`
@@ -1004,6 +1142,122 @@ theorem glob_dyn {Γ Γ1 : Ctx} {F : List Var} {g : Nat} {ms : List Nat} {b : Tr
 
 theorem glob_not_dyn {Γ Γ1 : Ctx} {F : List Var} {g : Nat} {ms : List Nat} {q : Cross} {E : Entry} :
     ¬ RhsT Γ F (.glob g (.fn ms q)) E Γ1 := fun h => by cases h.glob_sync
+
+/-! ### A3.5c: subsumption, bounds and receivers
+
+* *Subsumption* is A3.5b's: an object packed at a class below its trait's
+  bound (an impl of a `: Send` trait whose box holds no handle, packed `sync`)
+  is taken up to the bound by a move or a copy (`dyn_up_bound`), and is then a
+  receiver of the trait's methods; the pack kept the bound's promise
+  (`ImplOK.of_le`).
+* *Generic bounds and supertraits.*  A2 has no generics: a generic function is
+  monomorphised, each instance a function of the program at concrete types, so
+  a bound `[T: Send]` or `[T: Send Sync]` is a fact about the instance's type,
+  the one the crossing rules ask (`TraitBound.Holds`).  For a closure or a
+  trait object it is its class (`TraitBound.holds_fn`), as `pack` gave it.  A
+  supertrait's bound is a bound the trait's objects keep (`Holds.mono`).
+* *An `inout` receiver.*  A2's call through a package hands the code its
+  environment lent, a copy in a fresh slot (`envMem`), so no call through an
+  object changes its box: an interface with an `inout` receiver has no typed
+  call (`callc_not_inout`).  A borrow of what an `Arc` or a read guard lends is
+  no `inout` argument of any function either (`paramOK_inout_not_bor`, h364). -/
+
+/-- An object packed at a class below its trait's bound is taken up to the bound
+    by a move (A3.5b's subsumption), where its trait's methods take it. -/
+theorem dyn_up_bound {Γ : Ctx} {F : List Var} {y : Var} {Ey : Entry} {ms : List Nat} {q : Cross}
+    {b : TraitBound} (hy : Γ y = some Ey) (hl : Ey.live = true) (hm : Ey.mode = .own) (hyF : y ∉ F)
+    (hp : NoPin Γ y) (hds : DtorSafe Γ .replace false y) (hty : Ey.ty = .fn ms q) (hq : q.Le b.cross) :
+    RhsT Γ F (.var y) ⟨.fn ms b.cross, .own, true, [], Ey.held, false, false⟩
+      (setE (kill .replace false y Γ) y { Ey with live := false, dtor := false }) :=
+  RhsT.moveUp hy hl hm hyF hp hds hty hq
+
+/-- ... and the pack at the class below kept the bound's promise: the impl is
+    held to the bound. -/
+theorem ImplOK.of_le {P : Prog} {b : TraitBound} {fs : List Nat} {te : Ty} {ms : List Nat} {q : Cross}
+    (hc : CodeOK P fs te ms []) (hf : q.Fits te []) (hq : q.Le b.cross) : ImplOK P b fs te ms :=
+  ⟨hc, hf.mono hq⟩
+
+/-- A3.5c: what a bound asks of a type: nothing; Send (`: Send`, `[T: Send]`),
+    the question a spawn, a lock and a channel ask (no view); or Send and Sync
+    (`: Send Sync`, `[T: Send Sync]`), the question an `Arc` asks (also no
+    library handle).  A generic function is monomorphised, so its bound is
+    asked of each instance's concrete type. -/
+def TraitBound.Holds : TraitBound → Ty → Prop
+  | .none, _ => True
+  | .send, t => t.holdsView = false
+  | .sendSync, t => t.holdsView = false ∧ t.hasCell = false
+
+/-- **A bound is answered by the class**: a closure or a trait object meets a
+    bound exactly when its class is at most the bound's. -/
+theorem TraitBound.holds_fn {b : TraitBound} {ms : List Nat} {q : Cross} :
+    b.Holds (.fn ms q) ↔ q.Le b.cross := by
+  cases b <;> cases q <;> simp [TraitBound.Holds, TraitBound.cross, Ty.holdsView, Ty.hasCell, Cross.Le,
+    Cross.rank]
+
+/-- A supertrait's bound is kept: what meets a bound meets every weaker one (a
+    trait declared `: A` with `A : Send` is held to Send, and its objects meet
+    `A`'s bound). -/
+theorem TraitBound.Holds.mono {b b' : TraitBound} {t : Ty} (h : b.Holds t) (hle : b.cross.Le b'.cross) :
+    b'.Holds t := by
+  cases b <;> cases b' <;> simp_all [TraitBound.Holds, TraitBound.cross, Cross.Le, Cross.rank]
+
+/-- An instance whose type meets `[T: Send]` is what a spawn's parameter, a
+    lock's value and a channel's element ask: no view (A3.0's `SpawnOK`,
+    `RhsT.lockNew`, `Ty.ok (lk _)`), and so no closure that holds names ... -/
+theorem TraitBound.Holds.send {b : TraitBound} {t : Ty} (h : b.Holds t) (hb : b ≠ .none) :
+    t.holdsView = false ∧ t.hasFn = false := by
+  have hv : t.holdsView = false := by
+    cases b with
+    | none => exact absurd rfl hb
+    | send => exact h
+    | sendSync => exact h.1
+  refine ⟨hv, ?_⟩
+  cases hf : t.hasFn
+  · rfl
+  · rw [hasFn_holdsView hf] at hv; cases hv
+
+/-- ... and one whose type meets `[T: Send Sync]` is what an `Arc`'s payload
+    asks (`RhsT.arcNew`). -/
+theorem TraitBound.Holds.arc {t : Ty} (h : TraitBound.sendSync.Holds t) :
+    (t.holdsView = false ∧ t.hasFn = false) ∧ t.hasCell = false :=
+  ⟨h.send (by decide), h.2⟩
+
+/-- A call through a package hands its receiver to an interface that takes it
+    `inp` ... -/
+theorem _root_.A2.StmtT.callc_inp {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c : Var} {j : Nat}
+    {zs : List Var} {k : Stmt} {Ec : Entry} (h : StmtT P Γ F (.callc x c j zs k) Δ) (hc : Γ c = some Ec) :
+    ∃ ms q σ sig, Ec.ty = .fn ms q ∧ ms[j]? = some σ ∧ P[σ]? = some sig ∧
+      ∃ t, sig.params.head? = some (.inp, t) := by
+  obtain ⟨ms, q, σ, sig, hty, hj, hσ, hhd⟩ := h.callc_recv_at hc
+  exact ⟨ms, q, σ, sig, hty, hj, hσ, _, hhd⟩
+
+/-- ... so a method whose interface takes the receiver `inout` (h364–h366's
+    `rename`, which changes the box) is called through no object: A2's call
+    lends the code a copy of the environment (`envMem`), and has no step that
+    would change the box in place. -/
+theorem callc_not_inout {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c : Var} {j : Nat} {zs : List Var}
+    {k : Stmt} {Ec : Entry} {ms : List Nat} {q : Cross} {σ : Nat} {sig : Fn} (hc : Γ c = some Ec)
+    (hty : Ec.ty = .fn ms q) (hj : ms[j]? = some σ) (hσ : P[σ]? = some sig) {b : Eff} {t : Ty}
+    (hio : sig.params.head? = some (.inout b, t)) : ¬ StmtT P Γ F (.callc x c j zs k) Δ := by
+  intro h
+  obtain ⟨ms', q', σ', sig', hty', hj', hσ', t', hhd⟩ := h.callc_inp hc
+  rw [hty] at hty'; cases hty'
+  rw [hj] at hj'; cases hj'
+  rw [hσ] at hσ'; cases hσ'
+  rw [hio] at hhd; cases hhd
+
+/-- h364 (`dyn_inout_method_through_a_read_guard`): a trait object an `Arc` or
+    a read guard lends (`getE`), and every copy of it (`copyBor`, `copyUp`), is
+    a borrow, which is no `inout` argument of any function (`paramOK` asks
+    `canDo`): the box every holder reads is changed by no call. -/
+theorem paramOK_inout_not_bor {b : Eff} {t : Ty} {E : Entry} (h : paramOK (.inout b) t E) :
+    E.mode ≠ .bor := by
+  intro hm
+  rcases (paramOK_inout h).1 with h' | ⟨_, h', _⟩ <;> rw [hm] at h' <;> cases h'
+
+/-- What `arc_get` lends of anything but an integer is such a borrow. -/
+theorem getE_bor {a : Var} {E : Entry} {t : Ty} (ht : t ≠ .int) : (getE a E t).mode = .bor := by
+  cases t <;> first | exact absurd rfl ht | rfl
 
 /-! ### A3.5's second cut: library handles in locks and channels
 

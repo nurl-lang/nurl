@@ -273,6 +273,26 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
     exact app _ _ (hderive y Ey .self hy hl hn') (hheld y Ey hy hl hn')
   | @copyBor y Ey hy hl hm =>
     exact ⟨h, fun _ => rfl, same, fun _ hn r hr => h y _ hy hl hn r hr⟩
+  | @moveUp y Ey ms q q' hy hl hm _ _ _ hty _ =>
+    have hwf : CtxWF (A2.setE (kill .replace false y Γ) y { Ey with live := false, dtor := false }) :=
+      h.moveOut hy .replace false
+    refine ⟨hwf, fun x => ?_, fun x E1 h1 => ?_, fun _ _ r hr => ?_⟩
+    · by_cases hxy : x = y
+      · subst hxy; simp [A2.setE, hy]
+      · simp only [A2.setE, upd_ne _ _ hxy]; exact kill_dom ..
+    · by_cases hxy : x = y
+      · subst hxy; simp only [A2.setE, upd_same, Option.some.injEq] at h1; subst h1; exact ⟨Ey, hy, rfl⟩
+      · simp only [A2.setE, upd_ne _ _ hxy] at h1
+        obtain ⟨E0, h0, hm0, _⟩ := kill_cmode h1; exact ⟨E0, h0, hm0⟩
+    · have hr' : r ∈ roots Ey.held := by simpa [roots, Entry.vdeps, Mode.ownSlot] using hr
+      have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (by rw [hty]; simp)
+      obtain ⟨Er, hEr, hro⟩ := hheld y Ey hy hl hn' r hr'
+      by_cases hry : r = y
+      · subst hry; exact ⟨{ Ey with live := false, dtor := false }, by simp [A2.setE], by rw [hm]; rfl⟩
+      · obtain ⟨E', h', hro'⟩ := kill_root (e := .replace) (hv := false) (y := y) hEr hro
+        exact ⟨E', by simp only [A2.setE, upd_ne _ _ hry]; exact h', hro'⟩
+  | @copyUp y Ey ms q q' hy hl hm hty _ =>
+    exact ⟨h, fun _ => rfl, same, fun _ _ r hr => h y _ hy hl (Or.inl (by rw [hty]; simp)) r hr⟩
   | @borrow y Ey t hy hl ht =>
     refine ⟨h, fun _ => rfl, same, fun _ _ => ?_⟩
     have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (by rw [ht]; simp)
@@ -871,6 +891,8 @@ theorem RhsT.domMode {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : R
     DomMode Γ Γ1 := by
   cases hr with
   | @moveOwn y Ey hy _ _ _ _ =>
+    exact (DomMode.refl Γ |>.kill .replace false y).setE ⟨Ey, hy, rfl⟩
+  | @moveUp y Ey _ _ _ hy =>
     exact (DomMode.refl Γ |>.kill .replace false y).setE ⟨Ey, hy, rfl⟩
   | pop _ _ _ _ _ => exact (DomMode.refl Γ).kill _ _ _
   | pair hy _ hpa1 hz _ hpa2 _ => exact (hpa1.domMode hy).trans (hpa2.domMode hz)

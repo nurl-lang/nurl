@@ -549,6 +549,20 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
   | copyBor {y : Var} {E : Entry} :
       Γ y = some E → E.live = true → E.mode = .bor →
       RhsT Γ F (.var y) { E with dtor := false, dbind := false } Γ
+  /-- A3.5b, subsumption: an owned closure moved as one of a class above its
+      own (`Cross.Le`): a `sync` one where a `send` or an `any` one is
+      declared.  The step is `moveOwn`'s; only the type forgets where the
+      closure may cross. -/
+  | moveUp {y : Var} {E : Entry} {ms : List Nat} {q q' : Cross} :
+      Γ y = some E → E.live = true → E.mode = .own → y ∉ F → NoPin Γ y → DtorSafe Γ .replace false y →
+      E.ty = .fn ms q → q.Le q' →
+      RhsT Γ F (.var y) ⟨.fn ms q', .own, true, [], E.held, false, false⟩
+        (setE (kill .replace false y Γ) y { E with live := false, dtor := false })
+  /-- ... and a borrowed closure copied as one of a class above its own (the
+      step is `copyBor`'s). -/
+  | copyUp {y : Var} {E : Entry} {ms : List Nat} {q q' : Cross} :
+      Γ y = some E → E.live = true → E.mode = .bor → E.ty = .fn ms q → q.Le q' →
+      RhsT Γ F (.var y) { E with ty := .fn ms q', dtor := false, dbind := false } Γ
   | borrow {y : Var} {E : Entry} {t : Ty} :
       Γ y = some E → E.live = true → E.ty = .vec t →
       RhsT Γ F (.borrow y) ⟨E.ty, .bor, true, derive y E .self, E.held, false, false⟩ Γ
@@ -749,6 +763,8 @@ theorem RhsT.out {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT 
   | moveOwn => exact ⟨Or.inl rfl, rfl⟩
   | copyRoot => exact ⟨Or.inr rfl, rfl⟩
   | copyBor _ hl hm => exact ⟨Or.inr hm, hl⟩
+  | moveUp => exact ⟨Or.inl rfl, rfl⟩
+  | copyUp _ hl hm => exact ⟨Or.inr hm, hl⟩
   | borrow => exact ⟨Or.inr rfl, rfl⟩
   | @«at» _ _ _ t => cases t <;> exact ⟨Or.inr rfl, rfl⟩
   | view => exact ⟨Or.inr rfl, rfl⟩

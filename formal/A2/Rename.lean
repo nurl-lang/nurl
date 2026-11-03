@@ -1528,6 +1528,37 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
     have he : S.liftE x { Ey with dtor := false, dbind := false } =
         { S.liftE y Ey with dtor := false, dbind := false } := by simp [liftE, hrb]
     rw [he]; exact EntryWeaker.refl _
+  | @moveUp y Ey ms q q' hy hl hm hyF _ hds hty hle =>
+    have hc : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
+    have hrb : Ey.mode ≠ .rootb := by rw [hm]; simp
+    have hctx : S.canon (setE (kill .replace false y Γa) y { Ey with live := false, dtor := false }) =
+        setE (kill .replace false (S.ρ y) (S.canon Γa)) (S.ρ y) { S.liftE y Ey with live := false, dtor := false } := by
+      rw [canon_setE h, canon_kill h hab (allowed_own hab hy hm _ _), liftE_moved _ hrb]
+    rw [hctx]
+    refine ⟨_, RhsT.moveUp hc (by rw [liftE_live]; exact hl) (by rw [liftE_mode y hrb, hm]; rfl)
+      (h.Fcout y) (NoPin.lift h hab (bnd_own hab hy hm))
+      (DtorSafe.canon h (allowed_own hab hy hm _ _) hds) (by rw [liftE_ty y hrb]; exact hty) hle, fun x => ?_⟩
+    have hoh : ownHeld true Ey.ty S.A ⊆ ownHeld true (.fn ms q') S.A := by
+      rw [hty]
+      cases q with
+      | any => rw [hle.any_eq]; exact List.Subset.refl _
+      | _ => simp [ownHeld, Ty.holdsView]
+    refine EntryWeaker.mk' (by simp [liftE]) (by simp [liftE, liftMode]) (by simp) (by simp [liftE])
+      (fun h' => by simp [Mode.ownSlot] at h') ?_
+    simp only [liftE, hm, reduceCtorEq, ↓reduceIte, Mode.ownSlot]
+    intro d hd
+    rcases List.mem_append.mp hd with hd | hd
+    · exact List.mem_append_left _ hd
+    · exact List.mem_append_right _ (hoh hd)
+  | @copyUp y Ey ms q q' hy hl hm hty hle =>
+    have hc : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
+    have hrb : Ey.mode ≠ .rootb := by rw [hm]; simp
+    refine ⟨_, RhsT.copyUp hc (by rw [liftE_live]; exact hl) (by rw [liftE_mode y hrb, hm]; rfl)
+      (by rw [liftE_ty y hrb]; exact hty) hle, fun x => ?_⟩
+    have he : S.liftE x { Ey with ty := .fn ms q', dtor := false, dbind := false } =
+        { S.liftE y Ey with ty := .fn ms q', dtor := false, dbind := false } := by
+      simp [liftE, hm, Mode.ownSlot]
+    rw [he]; exact EntryWeaker.refl _
   | @borrow y Ey t hy hl ht =>
     have hc : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
     refine ⟨_, RhsT.borrow hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab hy]; exact ht),
@@ -2983,6 +3014,8 @@ theorem RhsT.absOK {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : Rhs
     (hab : S.AbsOK Γ) : S.AbsOK Γ1 := by
   cases hr with
   | @moveOwn y Ey hy _ hm _ _ =>
+    exact (hab.kill _ _ _).setE' hab hy rfl rfl (by rw [hm]; simp) (fun hf => absurd hf (by simp [hm]))
+  | @moveUp y Ey _ _ _ hy _ hm =>
     exact (hab.kill _ _ _).setE' hab hy rfl rfl (by rw [hm]; simp) (fun hf => absurd hf (by simp [hm]))
   | pop => exact hab.kill _ _ _
   | pair hy _ hpa1 hz _ hpa2 _ => exact PushArg.absOK hz hpa2 (PushArg.absOK hy hpa1 hab)

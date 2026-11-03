@@ -112,6 +112,12 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
   | copyBor hy hl hm =>
     obtain ⟨v, hv, _⟩ := hi.bor_val hy hl (by rw [hm]; rfl)
     exact ⟨_, EvalR.copy hv⟩
+  | moveUp hy hl hm =>
+    obtain ⟨T, hT, _⟩ := hi.own_val hy hl (by rw [hm]; rfl)
+    exact ⟨_, EvalR.moveOwn hT⟩
+  | copyUp hy hl hm =>
+    obtain ⟨v, hv, _⟩ := hi.bor_val hy hl (by rw [hm]; rfl)
+    exact ⟨_, EvalR.copy hv⟩
   | borrow hy hl ht =>
     obtain ⟨c, d, es, ⟨_, _, hvec⟩, _⟩ := hi.vec_node hy hl ht
     rcases hvec with h | ⟨h, _⟩
