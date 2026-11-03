@@ -480,13 +480,14 @@ structure CellInv (C : Cfg) : Prop where
   home  : ∀ (i j : Nat) (ti tj : Thread) (k : Nat), C.ths[i]? = some ti → C.ths[j]? = some tj →
     ti.cellAt k → tj.cellAt k → i = j
 
-/-- The start: one thread, holding nothing. -/
-theorem CellInv.init (s : Stmt) (nv : Nat) : CellInv (Cfg.init s nv) := by
-  have hnone : ∀ (j : Nat) (t : Thread) (k : Nat), (Cfg.init s nv).ths[j]? = some t → ¬ t.cellAt k := by
+/-- The start: one thread, holding nothing (A3.6: a global is no thread's
+    binding). -/
+theorem CellInv.start (G : Globs) (s : Stmt) (nv : Nat) : CellInv (Cfg.start G s nv) := by
+  have hnone : ∀ (j : Nat) (t : Thread) (k : Nat), (Cfg.start G s nv).ths[j]? = some t → ¬ t.cellAt k := by
     rintro j t k hj ⟨y, o, v, hy, _⟩
     cases j with
-    | zero => simp [Cfg.init] at hj; subst hj; cases hy
-    | succ j => simp [Cfg.init] at hj
+    | zero => simp [Cfg.start] at hj; subst hj; cases hy
+    | succ j => simp [Cfg.start] at hj
   exact ⟨fun j t k hj hk => absurd hk (hnone j t k hj), fun i _ ti _ k hi _ hk _ => absurd hk (hnone i ti k hi)⟩
 
 /-- **A thread's step, and the sweep that ends it, keep the cells' homes**:

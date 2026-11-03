@@ -12,6 +12,78 @@ theorem ThreadOK.init {P : Prog} {s : Stmt} {Δ : Ctx} {nv : Nat}
     (hv : ∀ v ∈ s.vars, v < nv) : ThreadOK P (emptyMem nv) s :=
   ⟨fun _ => none, [], Δ, ht, inv_empty hs hv, codes_empty P nv, hsc, closed_empty s⟩
 
+/-- A3.6: the empty store with the module globals `g` set, and none of their
+    blocks yet: A2's `inv_empty`, which reads no global. -/
+theorem inv_emptyGl {s : Stmt} {nv : Nat} (g : Nat → Option Val) (hs : s.src = true)
+    (hv : ∀ v ∈ s.vars, v < nv) : Inv { emptyMem nv with gl := g } (fun _ => none) [] s where
+  dom _ := rfl
+  slot _ _ h := by cases h
+  heap := ⟨fun _ _ h => (by cases h), fun _ _ _ _ _ h => (by cases h), fun _ _ h => (by cases h),
+    fun _ _ h => (by cases h), fun _ _ h => (by cases h), fun _ _ h => (by cases h)⟩
+  nvSt _ h := by cases h
+  noInout _ _ _ h := by cases h
+  wf := ⟨fun _ _ h => (by cases h), fun _ _ h => (by cases h), fun _ _ h => (by cases h),
+    fun _ _ h => (by cases h)⟩
+  rootbLive _ _ h := by cases h
+  rootbLt _ _ h := by cases h
+  names _ _ h := by cases h
+  held _ _ _ _ h := by cases h
+  pkgs _ _ _ h := by cases h
+  armed _ _ _ h := by cases h
+  shares _ _ _ _ h := by cases h
+  blocks _ _ h := by cases h
+  nvS := hv
+  nvF _ h := by cases h
+  anch _ _ h := by cases h
+  spineNd := by rw [src_spine hs]; exact List.nodup_nil
+  spineDom v h := by rw [src_spine hs] at h; cases h
+  catchOK := catchOK_src hs
+  cover _ h := by cases h
+  pinOut _ _ h := by cases h
+  pinIn := PinOK.of_spine_nil (src_spine hs)
+  dtorOut _ _ h := by cases h
+  dtorIn := DtorPinOK.of_spine_nil (src_spine hs)
+
+/-- A3.6: no global is a start the claim admits: A3.0–A3.5's. -/
+theorem GlobsOK.empty : GlobsOK Globs.empty where
+  sync _ _ h := by cases h
+  inv := (inv_empty (s := .skip) (nv := 0) rfl (fun _ h => by cases h)).toMInv
+  cover _ h := by cases h
+  reach _ _ h := by cases h
+
+/-- A3.6: the blocks the globals' `make`s left are as every thread's view
+    needs them ... -/
+theorem GlobsOK.blocksAt {G : Globs} (hG : GlobsOK G) : BlocksAt G.blk G.nid := by
+  intro k bl hk
+  obtain ⟨hkey, hnd, hall⟩ := hG.inv.heap.blk k bl hk
+  exact ⟨hG.inv.blocks k bl hk, hkey, hnd, fun i h => (hall i h).2.1, fun i h => (hall i h).2.2.2,
+    fun hv => hG.inv.heap.views k bl hk hv⟩
+
+/-- ... and every address they left live is a payload's. -/
+theorem GlobsOK.alloc {G : Globs} (hG : GlobsOK G) (i : Nat) : G.alloc i = true ↔ PayIn G.blk i := by
+  constructor
+  · intro h
+    rcases hG.cover i h with ⟨x, T, hT, _⟩ | hp
+    · cases hT
+    · exact hp
+  · intro hp
+    exact (hG.inv.heap.payAlloc hp).1
+
+/-- **A3.6: the program's start, with its module globals set**: the one
+    thread, with no binding, on the payloads of the blocks the globals'
+    `make`s left (the empty store grown to them, `ThreadOK.move`). -/
+theorem ThreadOK.start {P : Prog} {s : Stmt} {Δ : Ctx} {nv : Nat}
+    (ht : StmtT P (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P)
+    (hv : ∀ v ∈ s.vars, v < nv) {G : Globs} (hG : GlobsOK G) :
+    ThreadOK P { alloc := union (fun _ => false) (payPart G.blk), nid := G.nid, nv := nv,
+                 st := fun _ => none, blk := G.blk, gl := G.gl } s := by
+  have h0 : ThreadOK P { emptyMem nv with gl := G.gl } s :=
+    ⟨fun _ => none, [], Δ, ht, inv_emptyGl G.gl hs hv, (fun _ _ _ _ _ _ _ _ h => by cases h), hsc,
+      closed_empty s⟩
+  exact h0.move (fun _ _ h => by cases h) (fun i hi => .inr (by simpa [union, payPart_iff] using hi))
+    (fun i hi => by simp [union, payPart_iff, hi]) (Nat.zero_le _) (fun _ _ h => by cases h) hG.blocksAt
+    (fun _ _ _ _ h => by cases h)
+
 /-- A2's preservation, one step. -/
 theorem ThreadOK.step {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {m : Mem} {s : Stmt}
     (h : ThreadOK P m s) {m' : Mem} {s' : Stmt} (hst : Step P m s (.ok m' s')) : ThreadOK P m' s' := by

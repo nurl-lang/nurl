@@ -83,7 +83,7 @@ theorem CInv.setStmt {P : Prog} {C : Cfg} (h : CInv P C) {i : Nat} {t : Thread} 
       obtain ⟨hto, hbo⟩ := hc.ok i t b hi hb
       exact ⟨hs b hto, hbo⟩
     · rw [ite_eq_right hij] at hj; exact hc.ok j tj b hj hb
-  · exact (hreach k bl hk).mono (fun v hv => (hvals v).mpr hv) (BlkLe.refl _)
+  · exact (hreach k bl hk).mono (fun v hv => hv.elim (fun h => .inl ((hvals v).mpr h)) .inr) (BlkLe.refl _)
 
 /-- ... and so a spawn whose crossing check fails keeps it. -/
 theorem CInv.spawnFail_of {P : Prog} (hSF : SpawnFailLemma P) {C : Cfg} (h : CInv P C) {i : Nat}
@@ -192,7 +192,7 @@ theorem CInv.spawn_of {P : Prog} {spawn : Nat → Bool} (hSO : SpawnerLemma P sp
         simp only [spawnSt, Nat.ne_of_lt hnl, ↓reduceIte, hn, Option.map_some]
     · exact ⟨j, tj, by rw [get_set_append hilen, ite_eq_left hjl, ite_eq_right (Ne.symm hji)]; exact hj, y, o, hy⟩
   refine ⟨ps.set i aS ++ [aN], ⟨by simp [hc.len], fun k => ?_, ?_, ?_, hc.uniq, ?_⟩,
-    fun k' bl hk' => (hreach k' bl hk').of_roots fun v hv _ _ => hvals v hv⟩
+    fun k' bl hk' => (hreach k' bl hk').of_roots fun v hv _ _ => hv.elim (fun h => .inl (hvals v h)) .inr⟩
   · -- every live address is on a part, or a payload's
     constructor
     · intro hk

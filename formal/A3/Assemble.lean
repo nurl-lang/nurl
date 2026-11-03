@@ -82,12 +82,15 @@ theorem claim_of
       {k : Stmt}, CInv P C → C.ths[i]? = some t → Redex t.s K (.letcall x f args k) →
       CInv P { C with ths := C.ths.set i ⟨t.st, t.nv, K (.seq .panic (.letcall x f args k))⟩ }) :
     Claim := by
-  intro P spawn s Δ nv hP hPc hSp ht hs hsc hv
-  have h0 := CInv.init ht hs hsc hv
-  have hreach : ∀ C, Reach P spawn (Cfg.init s nv) C → CInv P C ∧ CellInv C :=
-    fun C hr => reach_cinv hP hPc (hR P) (hS P spawn hP hPc hSp) (hF P) h0 (CellInv.init s nv) hr
-  exact ⟨fun C hr => CInv.memSafe_of hP (hL P) (hreach C hr).1,
+  intro P spawn G s Δ nv hP hPc hSp hG ht hs hsc hv
+  have h0 := CInv.start ht hs hsc hv hG
+  have hreach : ∀ C, Reach P spawn (Cfg.start G s nv) C → CInv P C ∧ CellInv C :=
+    fun C hr => reach_cinv hP hPc (hR P) (hS P spawn hP hPc hSp) (hF P) h0 (CellInv.start G s nv) hr
+  refine ⟨fun C hr => CInv.memSafe_of hP (hL P) (hreach C hr).1,
     fun C hr hrace => hrace.elim (CInv.raceFree (hreach C hr).1) (CellInv.cellRaceFree (hreach C hr).2),
-    fun C hr hend => CInv.noLeak (hreach C hr).1 hend⟩
+    fun C hr hend i hi => ?_⟩
+  -- A3.6: what is left is what the start's globals reach: no step wrote them
+  obtain ⟨k, bl, hk, hik, hgr⟩ := CInv.noLeak (hreach C hr).1 hend i hi
+  exact ⟨k, bl, hk, hik, hgr.mono (fun v ⟨g, hg⟩ => ⟨g, by rw [← Reach.gl hr]; exact hg⟩) (BlkLe.refl _)⟩
 
 end A3

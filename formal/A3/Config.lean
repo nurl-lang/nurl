@@ -8,9 +8,9 @@ every thread's (`payPart`); together they are the whole of it.  Each thread
 sees its own part and the payloads (`ownView`), and there it has A2's facts
 (`ThreadOK`) and address-free borrows (`BorFree`).  This file states it,
 shows the program's start has it, and draws the leak claim from it: when
-every thread has finished nothing is allocated (each finished thread's part
-is empty, and no slot is left to reach a block, so the last sweep left no
-payload).  The race claim is drawn in `A3.Pres`, from a thread's step on its
+every thread has finished nothing is allocated but what the module globals
+reach (each finished thread's part is empty, and no slot is left to reach a
+block, so the last sweep left only the payloads a global reaches, A3.6).  The race claim is drawn in `A3.Pres`, from a thread's step on its
 own view. -/
 
 namespace A3
@@ -37,9 +37,10 @@ structure CParts (P : Prog) (C : Cfg) (ps : List (Nat → Bool)) : Prop where
     ThreadOK P (ownView C t a) t.s ∧ BorFree (ownView C t a)
 
 /-- The configuration invariant: its parts, and (A3.1) every block is
-    reached from some thread's slots — the last sweep left no other. -/
+    reached from some thread's slots or (A3.6) a global — the last sweep
+    left no other. -/
 def CInv (P : Prog) (C : Cfg) : Prop :=
-  ∃ ps : List (Nat → Bool), CParts P C ps ∧ ∀ k bl, C.blk k = some bl → Reached C.vals C.blk k
+  ∃ ps : List (Nat → Bool), CParts P C ps ∧ ∀ k bl, C.blk k = some bl → Reached C.roots C.blk k
 
 theorem part_of {α β : Type} {ps : List α} {ths : List β} (hlen : ps.length = ths.length) {j : Nat}
     {t : β} (hj : ths[j]? = some t) : ∃ a, ps[j]? = some a := by
@@ -64,32 +65,33 @@ theorem owned_part {P : Prog} {C : Cfg} {t : Thread} {a : Nat → Bool} {s : Stm
   · exact h1
   · exact absurd h1 (h.notPay hi')
 
-/-- The start: one thread, the whole (empty) address space its part. -/
-theorem CInv.init {P : Prog} {s : Stmt} {Δ : Ctx} {nv : Nat}
+/-- The start (A3.6: with the module globals set): one thread, whose part
+    is empty; every live address is a payload of a block a global reaches. -/
+theorem CInv.start {P : Prog} {s : Stmt} {Δ : Ctx} {nv : Nat} {G : Globs}
     (ht : StmtT P (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P)
-    (hv : ∀ v ∈ s.vars, v < nv) : CInv P (Cfg.init s nv) := by
-  have hnp : ∀ i, ¬ PayIn (Cfg.init s nv).blk i := fun i ⟨_, _, hk, _⟩ => by simp [Cfg.init] at hk
-  refine ⟨[fun _ => false], ⟨rfl, fun i => ?_, fun j k a b hjk hj hk => ?_, fun j a _ i _ => hnp i,
-    fun k _ bl _ _ hk => by simp [Cfg.init] at hk, fun j t a hj ha => ?_⟩, fun k bl hk => by simp [Cfg.init] at hk⟩
-  · constructor
-    · intro h; simp [Cfg.init] at h
+    (hv : ∀ v ∈ s.vars, v < nv) (hG : GlobsOK G) : CInv P (Cfg.start G s nv) := by
+  refine ⟨[fun _ => false], ⟨rfl, fun i => ?_, fun j k a b hjk hj hk => ?_, fun j a ha i hai _ => ?_,
+    fun k k' bl bl' i hk hk' hi hi' => ?_, fun j t a hj ha => ?_⟩,
+    fun k bl hk => (hG.reach k bl hk).mono (fun v hv => .inr hv) (BlkLe.refl _)⟩
+  · show G.alloc i = true ↔ _
+    rw [hG.alloc i]
+    constructor
+    · exact .inr
     · rintro (⟨a, ha, h⟩ | h)
       · simp only [List.mem_singleton] at ha; subst ha; cases h
-      · exact absurd h (hnp i)
+      · exact h
   · cases j <;> cases k <;> simp_all
   · cases j with
-    | succ j => simp [Cfg.init] at hj
+    | zero => simp at ha; subst ha; cases hai
+    | succ j => simp at ha
+  · exact Classical.byContradiction fun hne =>
+      (hG.blocksAt k bl hk).apart i hi k' bl' (fun e => hne e.symm) hk' hi'
+  · cases j with
+    | succ j => simp [Cfg.start] at hj
     | zero =>
-      simp [Cfg.init] at hj ha
+      simp [Cfg.start] at hj ha
       subst hj; subst ha
-      have heq : ownView (Cfg.init s nv) ⟨fun _ => none, nv, s⟩ (fun _ => false) = emptyMem nv := by
-        simp only [ownView, emptyMem, Cfg.init]
-        congr 1
-        funext i
-        simp only [union, Bool.false_or]
-        exact payPart_false.mpr (hnp i)
-      rw [heq]
-      exact ⟨ThreadOK.init ht hs hsc hv, fun _ _ h => by cases h⟩
+      exact ⟨ThreadOK.start ht hs hsc hv hG, fun _ _ h => by cases h⟩
 
 /-- When every thread has finished, no slot holds a value. -/
 theorem CParts.vals_end {P : Prog} {C : Cfg} {ps : List (Nat → Bool)} (hc : CParts P C ps)
@@ -102,28 +104,37 @@ theorem CParts.vals_end {P : Prog} {C : Cfg} {ps : List (Nat → Bool)} (hc : CP
   simp only [ownView] at this
   rw [this] at hx; cases hx
 
-/-- **No leak**: when every thread has finished, nothing is allocated: no
-    thread owns a tree, and (A3.1) no slot is left to reach a block, so the
-    last sweep left none. -/
+/-- **No leak**: when every thread has finished, nothing is allocated but
+    what the module globals reach: no thread owns a tree, and (A3.1) no slot
+    is left to reach a block, so the last sweep left only (A3.6) the blocks a
+    global reaches, which own every live address. -/
 theorem CInv.noLeak {P : Prog} {C : Cfg} (h : CInv P C) (hend : ∀ t ∈ C.ths, t.s = .skip) :
-    ∀ i, C.alloc i = false := by
+    ∀ i, C.alloc i = true → ∃ k bl, C.blk k = some bl ∧ i ∈ bl.tree.ids ∧ Reached C.globVals C.blk k := by
   obtain ⟨ps, hc, hreach⟩ := h
-  have hnr : ∀ k, ¬ Reached C.vals C.blk k := by
-    intro k hr
-    induction hr with
-    | root hv _ => exact hc.vals_end hend _ hv
-    | pay _ _ _ ih => exact ih
-  have hnb : ∀ k bl, C.blk k ≠ some bl := fun k bl hk => hnr k (hreach k bl hk)
-  intro i
-  cases hai : C.alloc i with
-  | false => rfl
-  | true =>
-    rcases (hc.all i).mp hai with ⟨a, ha, hai'⟩ | ⟨k, bl, hk, _⟩
-    · obtain ⟨j, hj⟩ := List.mem_iff_getElem?.mp ha
-      obtain ⟨t, ht⟩ := thread_of hc.len hj
-      obtain ⟨hto, _⟩ := hc.ok j t a ht hj
-      rw [hend t (List.mem_of_getElem? ht)] at hto
-      exact absurd (hto.no_leak i (ownView_alloc.mpr (.inl hai'))) (hc.pay j a hj i hai')
-    · exact absurd hk (hnb k bl)
+  intro i hai
+  rcases (hc.all i).mp hai with ⟨a, ha, hai'⟩ | ⟨k, bl, hk, hik⟩
+  · obtain ⟨j, hj⟩ := List.mem_iff_getElem?.mp ha
+    obtain ⟨t, ht⟩ := thread_of hc.len hj
+    obtain ⟨hto, _⟩ := hc.ok j t a ht hj
+    rw [hend t (List.mem_of_getElem? ht)] at hto
+    exact absurd (hto.no_leak i (ownView_alloc.mpr (.inl hai'))) (hc.pay j a hj i hai')
+  · refine ⟨k, bl, hk, hik, (hreach k bl hk).of_roots fun v hv _ _ => ?_⟩
+    rcases hv with hv | hv
+    · exact absurd hv (hc.vals_end hend v)
+    · exact hv
+
+/-- **A3.6: no step of the configuration writes a module global**: a thread's
+    step writes none (`Step.gl`), and a spawn and the sweep leave them. -/
+theorem TStep.gl {P : Prog} {spawn : Nat → Bool} {C C' : Cfg} (h : TStep P spawn C C') : C'.gl = C.gl := by
+  cases h with
+  | thread _ _ hs => have h := Step.gl hs; exact h
+  | spawn => rfl
+  | spawnFail => rfl
+
+/-- ... so every configuration the start reaches holds its globals. -/
+theorem Reach.gl {P : Prog} {spawn : Nat → Bool} {C C' : Cfg} (h : Reach P spawn C C') : C'.gl = C.gl := by
+  induction h with
+  | refl => rfl
+  | step hst _ ih => exact ih.trans (TStep.gl hst)
 
 end A3
