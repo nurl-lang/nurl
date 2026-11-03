@@ -866,8 +866,8 @@ gives a lock scope's payload back, and a thread that waits may panic
 instead. `CLAIM.md` / `README.md` are not updated here.
 
 **Where an `RwLocked` lives: a lock block, read through views.** The draft
-(the `rw` block above, and the task's first sketch) stored a reader count
-in the block and lent the payload to readers straight from it. That needs
+(the `rw` block above) stored a reader count in the block and lent the
+payload to readers straight from it. That needs
 an invariant the proof does not have: when the count goes back to 0 and a
 writer takes the payload, no binding may still land a borrow in it. A
 borrow lands in a payload through a share dependency anywhere in a live
