@@ -613,6 +613,11 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
   | lockClone {a : Var} {E : Entry} {t : Ty} :
       Γ a = some E → E.live = true → E.ty = .lk t →
       RhsT Γ F (.lockClone a) ⟨.lk t, .own, true, [], [], false, false⟩ Γ
+  /-- A3.4: an `Atomic`'s operation, through a live share of an integer lock
+      block (`Atomic` is `lk int`): an integer. -/
+  | atomic {op : AOp} {a : Var} {e1 e2 : Expr} {E : Entry} :
+      Γ a = some E → E.live = true → E.ty = .lk .int → ExprT Γ e1 → ExprT Γ e2 →
+      RhsT Γ F (.atomic op a e1 e2) intE Γ
 
 /-! ### Calls -/
 
@@ -650,6 +655,7 @@ theorem RhsT.out {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT 
   | @arcGet _ _ t => cases t <;> exact ⟨Or.inr rfl, rfl⟩
   | lockNew => exact ⟨Or.inl rfl, rfl⟩
   | lockClone => exact ⟨Or.inl rfl, rfl⟩
+  | atomic => exact ⟨Or.inr rfl, rfl⟩
 
 /-- What the summary pair `(j, k)` means at this call.  An integer argument
     lends nothing. -/
@@ -1340,6 +1346,7 @@ def Rhs.vars : Rhs → List Var
   | .arcGet a => [a]
   | .lockNew _ y => [y]
   | .lockClone a => [a]
+  | .atomic _ a e1 e2 => a :: e1.vars ++ e2.vars
 
 def Edit.vars : Edit → List Var
   | .push y => [y]

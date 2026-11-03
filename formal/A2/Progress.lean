@@ -98,7 +98,7 @@ theorem pair_slot {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (h
 
 theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hi : MInv m Γ)
     (hanch : RootbAnch Γ F)
-    (hr : RhsT Γ F r E Γ1) : ∃ res, EvalR m r res := by
+    (hr : RhsT Γ F r E Γ1) (hnb : ¬ RBlocked m r) : ∃ res, EvalR m r res := by
   cases hr with
   | expr he =>
     obtain ⟨n, hn⟩ := eval_exists hi he; exact ⟨_, EvalR.expr hn⟩
@@ -208,6 +208,20 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
   | lockClone ha hl hty =>
     obtain ⟨o, k, hv⟩ := hi.lk_slot ha hl hty
     exact ⟨_, EvalR.lockClone hv⟩
+  | atomic ha hl hty he1 he2 =>
+    -- A3.4: the word is there unless a `withLock` has it checked out
+    obtain ⟨o, k, hv⟩ := hi.lk_slot ha hl hty
+    obtain ⟨ob, hk⟩ := hi.lk_val ha hl hty hv
+    cases ob with
+    | none => exact absurd ⟨o, k, hv, hk⟩ hnb
+    | some p =>
+      obtain ⟨_, _, hpay, _⟩ := hi.blocks k _ hk
+      obtain ⟨hw, _⟩ := hpay p rfl
+      cases hw with
+      | int =>
+        obtain ⟨n1, h1⟩ := eval_exists hi he1
+        obtain ⟨n2, h2⟩ := eval_exists hi he2
+        exact ⟨_, EvalR.atomic hv hk h1 h2⟩
   | arcGet ha hl hty _ _ =>
     obtain ⟨o, k, p, hv⟩ := hi.arc_slot ha hl hty
     exact ⟨_, EvalR.arcGet hv (hi.arc_val ha hl hty hv).1⟩
@@ -322,7 +336,9 @@ theorem progress {P : Prog}
     intro m hcd hi
     have hmx : m.st x = none := by
       have := hi.dom x; rw [hx] at this; cases h : m.st x <;> simp_all
-    obtain ⟨res, hres⟩ := evalR_exists hi.toMInv (hi.leafAnch rfl) hr
+    by_cases hrb : RBlocked m r
+    · exact Or.inr (Or.inl hrb)
+    obtain ⟨res, hres⟩ := evalR_exists hi.toMInv (hi.leafAnch rfl) hr hrb
     cases res with
     | ok v o m1 => exact Or.inr <| Or.inr ⟨_, Step.letv hmx hres⟩
     | panic => exact Or.inr <| Or.inr ⟨_, Step.letvP hres⟩
@@ -409,7 +425,9 @@ theorem progress {P : Prog}
     intro m hcd hi
     have hmx : m.st x = none := by
       have := hi.dom x; rw [hx] at this; cases h : m.st x <;> simp_all
-    obtain ⟨res, hres⟩ := evalR_exists hi.toMInv (hi.leafAnch rfl) hr
+    by_cases hrb : RBlocked m r
+    · exact Or.inr (Or.inl hrb)
+    obtain ⟨res, hres⟩ := evalR_exists hi.toMInv (hi.leafAnch rfl) hr hrb
     cases res with
     | ok v o m1 => exact Or.inr <| Or.inr ⟨_, Step.letd hmx hres⟩
     | panic => exact Or.inr <| Or.inr ⟨_, Step.letdP hres⟩
@@ -466,7 +484,9 @@ theorem progress {P : Prog}
       | panic => exact Or.inr <| Or.inr ⟨_, Step.frozenP hr⟩
   | @assign Γ Γ1 F x r Ex E hx _ _ hr _ _ _ _ =>
     intro m hcd hi
-    obtain ⟨res, hres⟩ := evalR_exists hi.toMInv (hi.leafAnch rfl) hr
+    by_cases hrb : RBlocked m r
+    · exact Or.inr (Or.inl hrb)
+    obtain ⟨res, hres⟩ := evalR_exists hi.toMInv (hi.leafAnch rfl) hr hrb
     cases res with
     | panic => exact Or.inr <| Or.inr ⟨_, Step.assignP hres⟩
     | ok v o m1 =>

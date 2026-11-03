@@ -356,6 +356,17 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
       of its block. -/
   | lockClone {a : Var} {o : Bool} {k : Nat} :
       m.st a = some ⟨o, some (.lk k)⟩ → EvalR m (.lockClone a) (.ok (.lk k) true m)
+  /-- A3.4: an `Atomic`'s operation: one step on the word, the integer
+      payload of the lock block `a` shares; the answer is an integer.  (A
+      lock block of an integer whose payload a `withLock` has checked out
+      has no step: the thread waits, `RBlocked`.  A source `Atomic` is never
+      checked out.) -/
+  | atomic {op : AOp} {a : Var} {e1 e2 : Expr} {o : Bool} {k n n1 n2 : Nat} :
+      m.st a = some ⟨o, some (.lk k)⟩ → m.blk k = some ⟨.int, .lock, some (.int n)⟩ →
+      Eval m e1 n1 → Eval m e2 n2 →
+      EvalR m (.atomic op a e1 e2)
+        (.ok (.int (op.run n n1 n2).1) false
+          { m with blk := upd m.blk k (some ⟨.int, .lock, some (.int (op.run n n1 n2).2)⟩) })
 
 /-! ### Calls
 
@@ -397,6 +408,7 @@ def Rhs.rename (ρ : Var → Var) : Rhs → Rhs
   | .arcGet a => .arcGet (ρ a)
   | .lockNew t y => .lockNew t (ρ y)
   | .lockClone a => .lockClone (ρ a)
+  | .atomic op a e1 e2 => .atomic op (ρ a) (e1.rename ρ) (e2.rename ρ)
 
 def Edit.rename (ρ : Var → Var) : Edit → Edit
   | .push y => .push (ρ y)
@@ -707,11 +719,21 @@ inductive Steps0 (P : Prog) : Mem → Stmt → Res → Prop
       Step P m s (.ok m' s') → Steps0 P m' s' r → Steps0 P m s r
   | panic {m m' : Mem} {s : Stmt} : Step P m s (.panic m') → Steps0 P m s (.panic m')
 
+/-- A3.4: a right-hand side that waits: an atomic operation on an integer
+    lock block whose payload a `withLock` has checked out. -/
+def RBlocked (m : Mem) : Rhs → Prop
+  | .atomic _ a _ _ => ∃ o k, m.st a = some ⟨o, some (.lk k)⟩ ∧ m.blk k = some ⟨.int, .lock, none⟩
+  | _ => False
+
 /-- A3.2: the next step takes a lock whose payload is checked out: the
     thread waits for it to come back.  (Whether it ever does is deadlock
-    freedom, which is not claimed.) -/
+    freedom, which is not claimed.)  A3.4: or a right-hand side waits
+    (`RBlocked`). -/
 def Blocked (m : Mem) : Stmt → Prop
   | .withLock a _ _ => ∃ o k t, m.st a = some ⟨o, some (.lk k)⟩ ∧ m.blk k = some ⟨t, .lock, none⟩
+  | .letv _ r _ => RBlocked m r
+  | .assign _ r => RBlocked m r
+  | .letd _ _ r _ => RBlocked m r
   | .seq a _ => Blocked m a
   | .scope _ s => Blocked m s
   | .rbind _ s => Blocked m s
