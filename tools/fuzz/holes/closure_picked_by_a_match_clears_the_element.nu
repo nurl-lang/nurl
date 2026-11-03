@@ -1,0 +1,19 @@
+// closure_picked_by_a_match_clears_the_element: a closure picked by a `??` match whose arms are closure bindings, one clearing, called with a Vec whose element is still read.
+// Closed: a closure picked by a join or a block, and a closure literal's own closure parameter, is the closures it may be — each arm's, and what the calls through the literal's holders pass (a node per literal parameter, with anything a call nobody sees may pass) — not any closure read by its interface (agora #420).
+// main's compiler: compiled; ASan reported heap-use-after-free.
+// map: §2.4 | A2 | rejected | - | agora #420: a closure picked by a `??` match whose arms are closure bindings, one clearing, called with a Vec whose element is still read
+$ `stdlib/core/string.nu`
+$ `stdlib/core/vec.nu`
+
+@ main → i {
+    : ( Vec String ) inner ( vec_new [String] )
+    ( vec_push [String] inner ( string_from `an element string long enough for a heap buffer` ) )
+    : ?i o @ ?i { T 1 }
+    : ( @ v ( Vec String ) ) clr \ ( Vec String ) x → v { ( vec_clear [String] x ) }
+    : ( @ v ( Vec String ) ) nop \ ( Vec String ) x → v {}
+    : ( @ v ( Vec String ) ) f ?? o { T n → { clr } F → { nop } }
+    : String s0 ( vec_at [String] inner 0 )
+    ( f inner )
+    ( nurl_println_int ( string_len s0 ) )
+    ^ 0
+}

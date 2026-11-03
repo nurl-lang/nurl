@@ -20131,6 +20131,9 @@ unsafe @ gen_match i lex i syms i cg → s {
     : i __sx_mme ( __sx_enter )
     : ~ s m_sx ``
     : ~ b m_sx_any F
+    // (The closures a closure-valued match may be: its arms', published as
+    // each arm ends — __clo_val_members; agora #420.)
+    : ~ s m_cm ``
     // Does this `??` head a statement? Decided before the arms move the
     // statement anchor; the parked-drop verdict at the join reads it.
     : b m_is_stmt ( mem_join_heads_stmt lex )
@@ -21478,6 +21481,7 @@ unsafe @ gen_match i lex i syms i cg → s {
             : i arm_mp0 g_member_path_on
             = g_member_path_on ? & & m_val != 0 __sx_mme == arm_tt0 TT_DOT 1 g_member_path_on
             : ~ s arm_result ( gen_stmt lex syms cg )
+            ? & & m_val != 0 g_borrowck ( __is_closure_ty ( nurl_get_last_type ) ) { = m_cm ( __words_join m_cm ( __clo_val_members syms arm_tt0 arm_v0 ) ) } {}
             = g_member_path_on arm_mp0
             ? > g_cg_blk_depth 0 { = g_cg_blk_depth - g_cg_blk_depth 1 } {}
             : s arm_froot ( __arm_froot syms arm_tt0 )
@@ -21664,6 +21668,8 @@ unsafe @ gen_match i lex i syms i cg → s {
             ? == arm_did_ret 0
             { ( mem_drop_new_closure_envs syms cg old_closure_m ) } {}
             ? != 0 g_auto_drop_strings { ( nurl_sym_pop syms ) } {}
+            // (Outside the arm's scope, where the match's consumer reads it.)
+            ? != 0 ( nurl_str_len m_cm ) { ( nurl_sym_def syms `__last_clo_members__` m_cm ) } {}
 
             // Branch to end + record phi entry only when the arm didn't
             // return (a returning arm terminates with `ret`, so its block
@@ -59651,13 +59657,14 @@ unsafe @ __clo_arg_note i syms s callee i p i tt s val s ty b thru → v {
 }
 
 // The closures a closure value spelled from `tt`/`val` may be, as node
-// members: the literal just built, a binding's node, a `?` join's or a
-// block's arms (`__last_clo_members__`: gen_cond, gen_block_expr), or `*`
+// members: the literal just built, a binding's node, a `?` join's, a
+// `??` match's or a block's arms (`__last_clo_members__`: gen_cond,
+// gen_match, gen_block_expr), or `*`
 // — a value nobody here follows (a field, an element, a call's result).
 unsafe @ __clo_val_members i syms i tt s val → s {
     ? & == tt TT_BACKSLASH != 0 ( nurl_str_len g_last_closure_fn ) { ^ ( nurl_str_cat g_last_closure_fn `` ) } {}
     ? & ( is_ident_tok tt ) ( __is_closure_ty ( nurl_sym_get syms val ) ) { ^ ( __clo_node_of syms val 0 ) } {}
-    ? | == tt TT_QUEST == tt TT_LBRACE {
+    ? | | == tt TT_QUEST == tt TT_QUESTQUEST == tt TT_LBRACE {
         : s m ( nurl_sym_get syms `__last_clo_members__` )
         ? != 0 ( nurl_str_len m ) { ^ ( nurl_str_cat m `` ) } {}
     } {}
