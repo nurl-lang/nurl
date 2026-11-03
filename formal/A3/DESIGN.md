@@ -9,9 +9,11 @@ defines A3.0's configuration (`Thread`, `Cfg`, `Cfg.view`), its steps
 NoLeak` for every program A2 types); `../README.md` lists the modules of
 the proof. A3.1's `Arc` and A3.2's `Locked` are mechanized in the same
 claim (A3.1's and A3.2's mechanization, below; A3.2's first cut: what it
-leaves out is listed there), and so are A3.4's `Atomic` and channels
-(A3.4's mechanization, below; channels are primitive rules on a lock
-block's queue); A3.3, A3.5 and A3.6 are design. This note fixes the
+leaves out is listed there), and so are A3.3's `RwLocked` (A3.3's
+mechanization, below: a lock block read through views, its read guards
+lending the value frozen) and A3.4's `Atomic` and channels (A3.4's
+mechanization, below; channels are primitive rules on a lock block's
+queue); A3.5 and A3.6 are design. This note fixes the
 semantics, the theorem statements and the order of work, so the
 mechanization can be cut into tasks (Agora: formal track, F4–F8). The guarantee it targets is the
 "no data race" clause of `CLAIM.md` and `docs/MEMORY.md` §6.2. The rules
@@ -729,8 +731,8 @@ a cell whose payload one scope at a time checks out.
     scope as a `scope` and needs neither, since `Release` is total.
 - The scope's end gives `x`'s value back (`Step.scopeLSkip`, `Release`).
   - `Release.put` applies when the block is there with its payload checked
-    out and `x`'s slot can give it back (`Giveable`: an owned tree, or an
-    integer for an `int` lock).
+    out and `x`'s slot can give it back (`Giveable`: an owned tree, since
+    A3.3 one of the payload's type, or an integer for an `int` lock).
   - Otherwise `Release.drop` drops `x`'s slot as a scope's end does. With
     `StmtT.withLock`'s premises a typed program's normal-path end is always
     a `put` (the block outlives the body, and `x` holds a `t` there); `drop`
@@ -778,11 +780,15 @@ time. `StmtT.withLock` asks for both:
 - *`x` holds a `t` at the body's end* (`∃ E, Δ x = some E ∧ E.live`). An
   assignment that replaces it is fine: `assign` keeps an owned binding
   owned, and an integer an integer. The body may not leave it moved out.
-- *The panic path matches the runtime.* `locked_with` has no unlock on the
-  panic path, so the lock stays held and other threads wait. The model's
-  `scopeLP` frees `x` at the panic and leaves the block checked out, so
-  another thread's `withLock` on it is `Blocked`. The runtime frees the
-  value at the last share's drop, and nothing reaches it in between.
+- *The panic path over-approximates the runtime* (since A3.3).
+  `locked_with` has no unlock on the panic path, so the lock stays held and
+  other threads wait; the value stays in the lock until the last share's
+  drop frees it. A3.2's `scopeLP` freed `x` at the panic and left the block
+  checked out. A3.3 makes `scopeLP` give the payload back (`Release`), as
+  `RwLocked`'s write guard's drop does (A3.3's mechanization, below). For
+  `Locked` this is more behaviours than the runtime has: other threads may
+  take the lock again, where the runtime's wait. The value stays in the
+  block, as the runtime's stays in the lock.
 
 **A2's proof.**
 - `acquire_pres`: taking the payload out of a lock block is a move out of
@@ -793,7 +799,8 @@ time. `StmtT.withLock` asks for both:
 - `BlkLe` is weakened to `BlkKeep`: an arc block is kept exactly, and a lock
   block is kept as a lock block of its type (`BlkLe.arc` / `.lock` /
   `.rd`). `Reached.mono`, `CatchOK` and `InPay.grow` follow it.
-  `MemCodes` reads a block's `tree` (`PkgOK.rd`).
+  `MemCodes` reads a block's `tree` and (A3.3) what its holders read
+  (`MInv.blkCodes`).
 
 **A3's proof.**
 - *No touch for the lock word.* Taking a lock and giving it back change
@@ -844,8 +851,232 @@ stated.
 - shares in a lock's payload;
 - the probes h267 h358;
 - relocking a lock on the OS thread that holds it: the model's thread
-  waits (`Blocked`), but the runtime's default pthread mutex leaves it
-  undefined (Agora #455, phase D).
+  waits (`Blocked`) or, since A3.3, panics (`Step.waitPanic`), but the
+  runtime's default pthread mutex leaves it undefined (Agora #455, phase
+  D).
+
+## A3.3's mechanization (`RwLocked`, `% Frozen`)
+
+**Status.** `RwLocked` is mechanized. `check.sh` is green with its rules in
+A2 and A3, and `A2.memory_safe`, `A2.soundness`, `A2.no_leak_end`,
+`A2.no_leak_panic`, the `DynCell` theorems and `A3.claim` are re-proven with
+them. An `RwLocked` is a lock block (A3.2's), and a reader reads it through
+a *view*, a third kind of block that its read guard shares. A panic now
+gives a lock scope's payload back, and a thread that waits may panic
+instead. `CLAIM.md` / `README.md` are not updated here.
+
+**Where an `RwLocked` lives: a lock block, read through views.** The draft
+(the `rw` block above, and the task's first sketch) stored a reader count
+in the block and lent the payload to readers straight from it. That needs
+an invariant the proof does not have: when the count goes back to 0 and a
+writer takes the payload, no binding may still land a borrow in it. A
+borrow lands in a payload through a share dependency anywhere in a live
+block's payload (`Landed`'s share case, `InPay`), and through a borrowed
+root's handles (`NodeAt`), neither of which says which reader it came
+from. The typing ends every such borrow with its reader (`exitScope`), but
+the invariant cannot tell a live borrow from the reader's from one that
+outlived it, so the step where the count reaches 0 would have to show that
+no live entry anywhere lands in the payload. Instead:
+- A view is a block of kind `BKind.view`. Its payload is a share of the
+  lock block and a copy of the lock block's payload,
+  `pair (lk k) p`, at type `prod (lk t) t`. It owns nothing
+  (`Blk.tree` is `.int 0`), and its holders read its payload (`Blk.rd`).
+- `HeapOK.views` (`ViewsAt`): every view reads its lock block's payload as
+  the block holds it now. So a view lives only while the payload is in,
+  and no step changes the payload while a view of it lives.
+- A view is frozen while it lives, as an `arc` block (`BlkKeep`: a block
+  that is not a lock block is kept exactly). An `arc` share may name one
+  (`ArcBlk`, `ShareFits`, `ValOK.arc`). So a reader's borrows are A3.1's
+  `arc_get` borrows into a frozen payload, with all of A3.1's machinery.
+- A view is collected as an `arc` block is: by the sweep, once no slot
+  reaches it. A reached view reaches its lock block, through the share in
+  its payload (`Reached.pay`), so the sweep never frees a payload a view
+  reads (`HeapOK.sweepR`'s `views`).
+- The reader count is ghost: it is the number of views of the block that
+  are still reached, as A3.1's reference count is the number of shares.
+  The writer bit is the payload being checked out (`pay = none`).
+- `RwLocked A` is `Ty.lk A`, a `Locked A`. A second type would add a case
+  to every function on types and values for no difference in memory, as
+  A3.4 found for `Atomic`.
+
+**The rules.**
+- `rw_new` is `Rhs.lockNew`, `RwLocked_share` is `Rhs.lockClone`, and
+  `RwLocked_drop` drops a share (`Frees.lk`), as for `Locked`.
+- `Rhs.rwRead a` (`rw_read`), typed by `RhsT.rwRead`: `a` is a live share
+  `lk t`; the result is an owned `arc (prod (lk t) t)` share that holds
+  nothing, the read guard.
+  - `EvalR.rwRead`: the block's payload `p` is in. A new view
+    `⟨prod (lk t) t, view, some (pair (lk k) p)⟩` is made at the key `nid`,
+    and the guard is its share `arc nid (pair (lk k) p)`.
+  - `RBlocked`: while a writer has the payload checked out, `rw_read` has
+    no step and the reader waits.
+- `rguard_get g` is `arcGet g` and then the second field (`Rhs.snd`).
+  `Stmt.withRead a g y x s` spells the whole read scope: the guard `g`,
+  what `arcGet` lends through it (`y`), and the payload, lent frozen
+  (`x`). `rguard_get_path`: what `x` depends on is `⟨g, share⟩` and nothing
+  else (`getE`'s `derive g E .share`, then `projE`).
+  - `ThruOK.noShare` refuses every change through it (`StmtT.editB`), and
+    the other changes need an owner or an `inout` binding (`canDo`,
+    `paramOK`: a `push`, a `free`, a `sink` or `inout` argument). A copy of
+    it (`.var x`, `: ~`) is a borrow with the same dependency, which
+    `paramOK` refuses as an `inout` argument.
+  - `exitScope g` ends it with the guard: no live borrow of the payload
+    outlives the guard's scope.
+- `rw_write` + `wguard_update`, `rw_update`, `rw_apply` and `rw_set` are
+  `Stmt.withLock` (A3.2's, with its faithfulness premises: the body does not
+  name `a`, `a` is a root, `x` is live at the end). `Step.withLock` now
+  also asks that no view of the block lives (`¬ HasView`); `Blocked` says
+  the writer waits while the payload is out or a view lives.
+- The atomic and channel steps that change a lock block's payload
+  (`EvalR.atomic`, `chanSend`, `chanRecv`, `chanClose`) ask the same, and
+  `RBlocked` waits likewise. A source `Atomic` or `Channel` has no reader,
+  so for them nothing changes; for a model program that reads one, the
+  wait keeps `ViewsAt` and race freedom.
+- **The panic path releases.** `Step.scopeLP` ends a lock scope that a
+  panic unwinds through with `Release`, as its normal end does: the
+  payload goes back to the block (or the slot is dropped, if `x` holds
+  nothing to give). A read guard's release on a panic is `scope g`'s drop
+  of the guard on the way out, after which the view is swept. `Giveable`
+  asks for a tree of the payload's type (`WFv`, moved to `Semantics.lean`), so
+  a give-back keeps the block well formed with no typing at hand.
+- **A thread that waits may panic instead** (`Step.waitPanic`): a
+  statement that waits (`Waits`: a `withLock` of a lock that is checked out
+  or viewed, or a binding or an assignment whose right-hand side waits)
+  steps to a panic and leaves the store as it was. The panic unwinds through
+  the scopes around it as any other.
+
+**A2's proof.**
+- *The kinds.* `Blk.rd` of a view lies in its lock block's tree
+  (`ViewsAt.rd_ids`, `HeapOK.rd_ids`, `HeapOK.rd_sub`; `Blk.rd_ids` is
+  gone). This keeps the uniqueness of nodes found in memory (`pay_unique`,
+  `owned_pay_head`: two views of one block read the same nodes) and their
+  liveness (`HeapOK.inMem_alloc`).
+  `ViewsAt` holds through every step:
+  - a new block that is no view (`ViewsAt.fresh`);
+  - a lock block's payload changed, checked out or given back while no
+    view of it lives (`ViewsAt.setLock`);
+  - a checked-out block has no view (`ViewsAt.noView`);
+  - the sweep (above).
+- `rhs_rwRead`: the new view owns nothing (`BlkOwn`), reads the block's
+  payload (`ViewsAt`), and its payload is well formed with its share named
+  (`BlocksIn`). The guard is `out_share` of an `ArcBlk`. `covers_evalR`'s
+  case moves no address.
+- `arc_get` of a guard is A3.1's `out_arcGet`, through `ArcBlk` (`arc_val`,
+  `share_lands`, `arcBlk_shares`).
+- `atomic_pres`, `setPay_pres` (and so the channel steps) and
+  `acquire_pres` take the step's `¬ HasView`.
+- *The panic path.* A panic's unwinding may now change blocks:
+  `panic_unwind` gives `BlkBack` (each block as it was, or a lock block given
+  back a payload of its type; `Release.back`).
+  - `MInv.unwind` (a destructor's frame) is the invariant over the unwound
+    slots with the blocks as they were (`MInv.unwind0`, over
+    `HeapOK.unback`), grown to the blocks given back (`MInv.grow`,
+    `MInv.blocks_back`).
+  - `catchP` composes `CatchOK`'s blocks with `BlkBack`, and takes the
+    blocks' invariant from `MInv.blocks_back`.
+  - `Release.exists` gives the step on both paths (progress).
+- *Waiting panics.* A statement that waits opens no scope (`Waits.spine`),
+  so `panic_unwind`, `no_leak_panic` and the frame lemmas take
+  `waitPanic` as they take `letvP`.
+
+**A3's proof.**
+- *Readers read the shared part.* A view owns nothing, so the payload part
+  (`payPart`, by `Blk.tree`) and the parts are unchanged by a read. What a
+  reader reads (`RTouch.arcGet`, and the nodes `NodeAt` / `DataAt` find
+  through a view) are addresses of the lock block's tree, in the shared
+  read-only part. `PayOff` now covers what holders read, and
+  `ViewsAt.rd_reached` gives the lock block, reached from the reader's
+  slots, for `race_free` (`CParts.ctouch`).
+- *A writer is alone.* The payload is checked out only when no view lives,
+  so no reader reaches it; once it is out it is in the writer's part (A3.2's
+  check-out), and no view can be made of it (`RBlocked`).
+- *Readers only read.* No step writes a view's payload, and none changes
+  the lock block's while a view lives (`¬ HasView`), so readers on two
+  threads meeting at an address are both reading.
+- *The other threads' facts.* Their views are kept exactly (`BlkKeep`),
+  and a new view is a fresh block (`ThreadOK.move` unchanged).
+  `BlockOK.view` carries `ViewsAt` to the other threads' heaps
+  (`BlocksAt.views`). A new view's payload is the lock block's
+  (`EvalR.payAt`: a view owns no address), and a guard owns none
+  (`EvalR.ownedId`).
+- *The panic path.* A give-back on the way out is of the thread's own tree,
+  as on the normal path (`Release.payAt`, `Release.ownedId`, `Release.grows`;
+  `Touch.scopeLUnwind` already counted it as written). A waiting panic
+  touches nothing (`Waits.of_eq`, `RBlocked.of_eq`, moved to
+  `A2/Panic.lean`).
+- *The count and the writer bit* are the runtime's rwlock, trusted base
+  beside the lock word (A3.2) and DRF-SC. The model has no address for
+  them.
+- Send: a guard is an `arc` of a view-free type, so `arc_spawnOK` lets it
+  cross (below).
+
+**Faithful to the runtime** (`stdlib/std/rwlock.nu`).
+- *In place.* A reader's borrows are the lock's own payload addresses,
+  read in place, as `rguard_get` lends `. ( shared_ptr … ) val`. A writer's
+  `withLock` checks the payload out to `x` and back, which A3.2's
+  premises make agree with `wguard_update`'s in-place `inout` (A3.2,
+  *Faithful to the in-place runtime*).
+- *The release on a panic.* A guard's drop runs on the drop journal
+  (docs/MEMORY.md §7.2): a write guard's gives the payload back
+  (`scopeLP`'s `Release`), a read guard's drops the guard (`scope g`'s
+  `scopeP`), after which other threads read and write the value.
+- *The self-deadlock panic.* Writing a lock its holder reads, or reading or
+  writing one it writes, panics at run time. The model's thread waits for
+  itself (a writer for its own view, a reader for its own check-out), and
+  `Step.waitPanic` lets it panic.
+- *A second read by the same holder is counted*, not taken again: each
+  `rw_read` makes its own view, and the writer waits for all of them.
+- *When the read ends.* The runtime unlocks at the guard's drop; the model's
+  view lives until no slot reaches it, which may be later, when a dead
+  borrow's slot still holds a handle into the payload. The two agree on
+  every live binding: no live borrow of the payload outlives the guard
+  (`rguard_get_path`, `exitScope`). This is A3.1's phase-D obligation for
+  `Arc`, unchanged, and it is not proven here. Until it is, a writer the
+  runtime lets in may wait in the model.
+- `% NotSend` on guards is not modeled: a model guard may cross a spawn
+  (more programs, all safe). `% Frozen` is the share dependency.
+
+**Simplifications in this cut.** Each is a restriction, and sound as stated.
+- A payload holds no share, no view and no closure, as a `Locked`'s
+  (A3.2).
+- `rw_try_read` / `rw_try_write`, `wguard_get` (a lend under the write
+  lock), `rw_get` (a copy) and `wguard_apply`'s result are not separate
+  rules; `rw_apply`'s result is an assignment in the body.
+- The guards are scoped bindings; a guard moved into a struct or a
+  `Vec` keeps its view as long as it lives, as the runtime's keeps the lock.
+
+**Probes.**
+- h364 `dyn_inout_method_through_a_read_guard`: a trait object lent
+  through a read guard, copied into a `: ~` binding and handed to a method
+  with an `inout` receiver. The rule is the lend's share dependency
+  (`rguard_get_path`): the copy is a borrow, and `paramOK` (`canDo`)
+  refuses a borrow as an `inout` argument, as `ThruOK.noShare` refuses a
+  change through it. The probe's payload, a trait object, is a closure,
+  which this cut's payloads exclude; the rule does not depend on it.
+- h317 `frozen_asserted_over_a_cell`: a program's own `% Frozen` struct of
+  a `Cell`, in an `RwLocked`, written through read guards on two threads.
+  The write through either guard is a change through the frozen lend,
+  refused by the same rule. The `Cell` is a library handle whose copies
+  are one state, and its Sync question is A3.5's.
+- h357 `rwlocked_of_a_library_handle_on_two_threads`: an `RwLocked` of a
+  `PNCounter` crossed to a thread while the spawner kept a share of the
+  counter. A writer under the lock and the spawner with no lock changed it
+  together. This is the crossing check for library handles (A3.5:
+  `mem_send_check`, an `RwLocked`'s value facing the Sync question where
+  it crosses). This cut's payloads hold no share, so a library handle is
+  not a payload here.
+
+**Not proven here.**
+- deadlock freedom, and that a waiting reader or writer is ever let in;
+- A3.1's phase-D obligation, which here is that the runtime's unlock at the
+  guard's drop agrees with the model's sweep of the view on every live
+  binding;
+- payloads that hold shares, views or closures, and library handles in a
+  payload (A3.5);
+- `rw_try_*`, `wguard_get`, `rw_get`;
+- a typed program over these rules (a probe's encoding, as
+  `A2/DynCell.lean` types `pick`);
+- `CLAIM.md` / `README.md`.
 
 ## A3.4's mechanization (`Atomic`, channels)
 
