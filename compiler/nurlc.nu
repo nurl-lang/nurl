@@ -192,6 +192,7 @@
 : ~ s g_clo_pnode_list ``  // `f#p`: the named functions' closure parameters that have a node
 : ~ s g_clo_lpnode_list ``  // `lit#p`: the closure literals' closure parameters that have a node
 : ~ s g_clo_cla_list ``  // `node#p`: the closure calls that passed a closure argument (`cpm#node#p`)
+: ~ s g_clo_inl_list ``  // `node|f#p`: a closure binding handed to `f`'s inout parameter `p`
 : ~ i g_clo_closed 0
 // While the parked walks run (resolve_deferred_borrowck), a `dyn` impl whose
 // walk has not answered yet is taken to leave no view (g_vk_assumed names
@@ -15657,6 +15658,12 @@ unsafe @ gen_call i lex i syms i cg → s {
         // binding's backing pointer (`__ptr`) typed `<T>*`; emit no
         // value load. Everything else is the ordinary by-value path.
         : b is_inout_arg ( str_contains_word callee_inout ( nurl_str_int arg_idx ) )
+        // A closure binding handed to a function's `inout` parameter comes
+        // back as whatever the callee gives that parameter: its node gains
+        // the parameter's (`cp#f#p`, at module end; agora #433).
+        ? & & & & != 0 g_borrowck is_inout_arg ! __callee_shadowed ( is_ident_tok bck_arg_tt ) ( __is_closure_ty ( nurl_sym_get syms bck_arg_val ) ) {
+            = g_clo_inl_list ( __word_add g_clo_inl_list ( nurl_str_cat4 ( __clo_node_of syms bck_arg_val 0 ) `|` call_name ( nurl_str_cat `#` ( nurl_str_int arg_idx ) ) ) )
+        } {}
         // An `inout` argument rooted at a parameter of this function: an
         // edge of the replacement summary, closed at module end.
         // (…and a field of one handed to any parameter: a callee that takes
@@ -60384,6 +60391,15 @@ unsafe @ __clo_nodes_close → v {
             : s m ( str_first_word ms ) = ms ( str_skip_word ms )
             ( __clo_node_add nd m )
         }
+    }
+    // A binding handed to an inout closure parameter may be what the callee
+    // gave the parameter (agora #433).
+    : ~ s il ( nurl_str_cat g_clo_inl_list `` )
+    ~ != 0 ( nurl_str_len il ) {
+        : s w ( str_first_word il ) = il ( str_skip_word il )
+        : i bar ( nurl_str_find w `|` )
+        : s pn ( nurl_sym_get g_clo_nodes ( nurl_str_cat `cp#` ( nurl_str_slice w + bar 1 - - ( nurl_str_len w ) bar 1 ) ) )
+        ? != 0 ( nurl_str_len pn ) { ( __clo_node_add ( nurl_str_slice w 0 bar ) pn ) } {}
     }
     // `*` — a closure nobody here follows (read out of a field or an
     // element, a call's result, a payload) — is still read by the closure's
