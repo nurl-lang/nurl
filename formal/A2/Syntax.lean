@@ -712,6 +712,21 @@ def Stmt.mutexUnlock (r m u : Var) (s : Stmt) : Stmt := .letv r (.lockRestore m 
 /-- `mutex_with m body`: lock, run, unlock. -/
 def Stmt.mutexWith (m x : Var) (s : Stmt) : Stmt := .withLock m x s
 
+/-- A3.2: `locked_update ( vec_at v i ) f`, a lock reached as an element of the
+    `Vec` `v`: element `i` handed over to `e` (A2-elem's `withElem`: it moves
+    out, and back at index `i` after), and `withLock` on `e`, an owner the body
+    names neither (`withLock`'s premise) nor reaches through `v` (`withElem`'s:
+    the body does not name `v`). -/
+def Stmt.withLockElem (v : Var) (i : Expr) (e x : Var) (s : Stmt) : Stmt :=
+  .withElem v i e (.withLock e x s)
+
+/-- A3.2: `locked_update . y l f`, a lock reached as a field of the struct `y`:
+    `y` taken apart into the lock `l` and the rest `w` (`unpair`, as a field
+    replaced in place is), `withLock` on `l`, an owner the body does not name,
+    and the struct put back together (`= y @ { l w }`). -/
+def Stmt.withLockField (y l w x : Var) (s : Stmt) : Stmt :=
+  .unpair y l w (.seq (.withLock l x s) (.assign y (.pair l w)))
+
 /-- A3.6: an update of a `Locked` global set at start (`locked_update g f`,
     with `f`'s body as `s` and its argument as `x`): the global's handle,
     cloned into `h`, and A3.2's `withLock` on it — `h` is an owner, a root,

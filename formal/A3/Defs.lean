@@ -983,6 +983,126 @@ theorem _root_.A2.StmtT.mutexWith {P : Prog} {Γ Δ : Ctx} {F : List Var} {m x :
   rw [← mutex_hands_int] at hb
   exact StmtT.withLock hs hx hxF hm hlm (Or.inl htm) hb hend hroot hms hlive
 
+/-! #### A lock reached through a local borrow
+
+A3.2's `withLock` takes a root the body does not name: the lock must outlive
+the body, which the runtime runs in the lock's own memory.  A lock reached
+through a field or an element of a local owner is a borrow, whose owner the
+body could change.  It is handed over first, so that the body runs on an owner
+of the share that nothing in it reaches: an element by A2-elem's `withElem`
+(`Stmt.withLockElem`), a field by taking the struct apart
+(`Stmt.withLockField`).  A lock reached through what the function does not own
+(a borrowed parameter's field, an element lent) is handed to a function that
+takes it `in`, as the runtime's `locked_update l f` takes `l` (`lock_call`):
+inside, a borrowed parameter, the caller's share frozen for the call. -/
+
+/-- The element handed over: an owned lock share, holding what the `Vec` held
+    (`popE`). -/
+def elemLockE (t : Ty) (Ev : Entry) : Entry := ⟨.lk t, .own, true, [], Ev.held, false, false⟩
+
+/-- **A lock that is an element is typed** (`Stmt.withLockElem`): the element
+    `e` handed over is an owner (`popE`), so a root; the body names neither it
+    nor the `Vec` `v` (`withElem`'s premise: the element goes back where it
+    was), so the lock outlives the body, as `withLock` asks.  The give-back is
+    `vec_push v e`'s typing. -/
+theorem _root_.A2.StmtT.withLockElem {P : Prog} {Γ Δs Δ : Ctx} {F : List Var} {v e x : Var} {i : Expr}
+    {s : Stmt} {Ev : Entry} {t : Ty}
+    (hs : s.src = true) (hv : Γ v = some Ev) (hlv : Ev.live = true) (hmv : Ev.mode = .own)
+    (htv : Ev.ty = .vec (.lk t)) (hvF : v ∉ F) (hvv : ∀ d ∈ Ev.vdeps, d.root ≠ v) (hi : ExprT Γ i)
+    (hpin : NoPin Γ v) (hds : DtorSafe Γ .replace false v)
+    (hdd : DtorSafe (A2.kill .replace false v Γ) .drop t.holdsView v)
+    (he : Γ e = none) (heF : e ∉ F) (hx : Γ x = none) (hxF : x ∉ F) (hxe : x ≠ e)
+    (hb : StmtT P (A2.setE (A2.setE (A2.kill .drop t.holdsView v (A2.kill .replace false v Γ)) e
+      (elemLockE t Ev)) x (lockE t)) F s Δs)
+    (hend : EndOK Δs x) (hlive : ∃ E, Δs x = some E ∧ E.live = true) (hes : e ∉ s.vars) (hvs : v ∉ s.vars)
+    (hvx : v ≠ x) (hve : v ≠ e)
+    (hpush : StmtT P (exitScope x Δs) F (.push v e) Δ) (hende : EndOK Δ e) :
+    StmtT P Γ F (Stmt.withLockElem v i e x s) (exitScope e Δ) := by
+  have hkv : A2.kill .replace false v Γ v = some Ev := by simp [A2.kill, hv, killE_nohit hvv]
+  have hpop := RhsT.pop (F := F) (t := .lk t) hkv hlv htv (Or.inl hmv) hvF hdd
+  have hpe : popE v Ev (.lk t) = elemLockE t Ev := rfl
+  rw [hpe] at hpop
+  have hex : A2.setE (A2.kill .drop t.holdsView v (A2.kill .replace false v Γ)) e (elemLockE t Ev) x = none := by
+    simp [A2.setE, A2.kill, upd_ne _ _ hxe, hx]
+  refine StmtT.withElem (by simp [Stmt.src, hs]) he heF hv hmv hi hpin hds hpop ?_ hpush hende ?_
+  · exact StmtT.withLock hs hex hxF (upd_same _ _ _) rfl (Or.inl rfl) hb hend rfl hes hlive
+  · simp [Stmt.vars, hvs, hvx, hve]
+
+/-- **A lock that is a field is typed** (`Stmt.withLockField`): the field `l`
+    taken out of `y` is an owner (`compE`, holding nothing: a lock share views
+    nothing), so a root; the body names neither it nor `y`, so the lock
+    outlives the body, as `withLock` asks, and the struct is put back as it
+    was.  The reassembly is the assignment's typing. -/
+theorem _root_.A2.StmtT.withLockField {P : Prog} {Γ Δs Δ : Ctx} {F : List Var} {y l w x : Var} {s : Stmt}
+    {Ey : Entry} {t b : Ty}
+    (hs : s.src = true) (hy : Γ y = some Ey) (hly : Ey.live = true) (hcy : canDo Ey.mode .replace)
+    (hty : Ey.ty = .prod (.lk t) b) (hyF : y ∉ F) (htv : t.holdsView = false)
+    (hl : Γ l = none) (hw : Γ w = none) (hlw : l ≠ w) (hlF : l ∉ F) (hwF : w ∉ F)
+    (hx : Γ x = none) (hxF : x ∉ F) (hxl : x ≠ l) (hxw : x ≠ w) (hxy : x ≠ y)
+    (hpin : NoPin Γ y) (hds : DtorSafe Γ .replace false y)
+    (hb : StmtT P (A2.setE (A2.setE (A2.setE (A2.setE (A2.kill .replace false y Γ) y
+        { Ey with live := false, dtor := false }) l (outE (.lk t) .own)) w (compE Ey b)) x (lockE t)) F s Δs)
+    (hend : EndOK Δs x) (hlive : ∃ E, Δs x = some E ∧ E.live = true) (hls : l ∉ s.vars) (_hys : y ∉ s.vars)
+    (hput : StmtT P (exitScope x Δs) F (.assign y (.pair l w)) Δ)
+    (hendw : EndOK Δ w) (hendl : EndOK (exitScope w Δ) l) :
+    StmtT P Γ F (Stmt.withLockField y l w x s) (exitScope l (exitScope w Δ)) := by
+  have hcl : compE Ey (.lk t) = outE (.lk t) .own := by
+    simp [compE, ownHeld, Ty.holdsView, htv, outE]
+  refine StmtT.unpair (a := .lk t) (b := b) (by simp [Stmt.src, hs]) hy hly hcy hty hyF hl hw hlw hlF hwF ?_
+    hpin hds hendw hendl
+  rw [hcl]
+  refine StmtT.seq rfl ?_ hput
+  refine StmtT.withLock hs (by simp [A2.setE, A2.kill, upd_ne _ _ hxw, upd_ne _ _ hxl, upd_ne _ _ hxy, hx]) hxF
+    (show _ = some (outE (.lk t) .own) by simp [A2.setE, upd_ne _ _ hlw]) rfl (Or.inl rfl) hb hend
+    rfl hls hlive
+
+/-- A3.2: a function of the program that takes a lock `in` (as the runtime's
+    `locked_update l f` takes `l`), and whose result borrows from and holds
+    nothing of it. -/
+def LockFn (P : Prog) (f : Nat) (t : Ty) : Prop :=
+  ∃ fn, P[f]? = some fn ∧ fn.params = [(.inp, .lk t)] ∧ fn.lends = [] ∧ fn.rholds = []
+
+/-- **A lock reached through any borrow is handed to a function that takes it
+    `in`**: a field read out of a borrowed struct, an element lent — any live
+    binding of the lock share that holds nothing — is the call's `in`
+    argument, and the call leaves the context as it was. -/
+theorem lock_call {P : Prog} {Γ : Ctx} {F : List Var} {f : Nat} {t : Ty} {x : Var} {Ex : Entry}
+    (hd : LockFn P f t) (hx : Γ x = some Ex) (hl : Ex.live = true) (ht : Ex.ty = .lk t) (hh : Ex.held = [])
+    (hn : ∀ d ∈ Ex.vdeps, d.kind.isName = false) :
+    ∃ fn, P[f]? = some fn ∧ CallT P Γ F f [x] (outE fn.resTy (resMode fn)) Γ := by
+  obtain ⟨fn, hf, hps, hle, hrh⟩ := hd
+  have hargE : argE Γ x = Ex := by simp [argE, hx]
+  have hnm : argNames Γ [x] = [] := by
+    simp only [argNames, List.flatMap_cons, List.flatMap_nil, List.append_nil, hargE]
+    split
+    · rfl
+    · simp only [nameDeps, List.filter_eq_nil_iff]
+      intro d hd; simp [hn d hd]
+  have hmut : mutNames Γ [x] = [] := by simp [mutNames, hnm]
+  have hheld : heldOfArgs Γ [x] = [] := by
+    simp only [heldOfArgs, hnm, List.append_nil, List.flatMap_cons, List.flatMap_nil, hargE, hh]
+    split <;> simp [memDeps, roots, allKinds]
+  refine ⟨fn, hf, fn, hf, by simp [hps], ?_, ?_, CallDtorSafe.of_inp (by simp [hps]) hmut, ?_, ?_, ?_⟩
+  · intro i hi
+    simp only [hps, List.length_singleton, Nat.lt_one_iff] at hi
+    subst hi
+    refine ⟨Ex, by simpa using hx, hl, by simp [hps, paramOK, ht], fun h => (by simp [hps, PMode.moves] at h),
+      fun h => (by simp [hps] at h)⟩
+  · intro d hd; rw [hmut] at hd; cases hd
+  · simp [callRes, outE, hle, hrh, hheld, ownHeld]
+  · funext v
+    simp [callPost, hmut, killNames, hps, callPostAux]
+  · intro _
+    simp only [callR, List.flatMap_cons, List.flatMap_nil, List.append_nil, hargE, hh]
+    split <;> simp [memDeps, roots]
+
+/-- ... where, inside, the parameter is a borrowed one (`paramE`'s `rootb`): a
+    root, whose share is the caller's, frozen for the call (`callIn`'s
+    `frozen`), which A3.2's `withLock` takes. -/
+theorem lockFn_param_root {fn : Fn} {t : Ty} (hps : fn.params = [(.inp, .lk t)]) :
+    ∃ E, sigCtx fn 0 = some E ∧ E.ty = .lk t ∧ E.live = true ∧ E.mode.isRoot = true :=
+  ⟨paramE fn.params (.inp, .lk t), by simp [sigCtx, hps], rfl, rfl, rfl⟩
+
 /-! ### A3.6: module globals, as A2 types them
 
 A global set at start is read at a type that synchronises itself
