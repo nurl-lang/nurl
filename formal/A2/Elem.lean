@@ -168,7 +168,8 @@ theorem Evolve.perm_vkeep {m m' : Mem} {x : Var} {t : Ty} {c d : Nat} {es es' : 
 theorem Evolve.perm_hkeep {m m' : Mem} {x : Var} {t : Ty} {c d : Nat} {es es' : List Val}
     (hev : Evolve m m' x t c d d es es') (hp : es.Perm es') (k : Kind)
     (hsh' : SharesOK m' (.vec t) (.node t c d es')) : HKeep m m' ⟨x, k⟩ := by
-  refine ⟨fun c2 t2 H hH hb ⟨d2, es2, hla, hw, hv, hn, hsh⟩ => ?_, fun k2 p2 hb hla => ?_⟩
+  refine ⟨fun c2 t2 H hH hb ⟨d2, es2, hla, hw, hv, hn, hsh⟩ => ?_, fun k2 p2 hb hla => ?_,
+    fun k2 hla => ?_⟩
   rotate_left
   · rcases hla with ⟨n0, hr, hkk⟩ | ⟨hsk, _⟩
     · have := rootNode_node hev.before hr
@@ -182,6 +183,16 @@ theorem Evolve.perm_hkeep {m m' : Mem} {x : Var} {t : Ty} {c d : Nat} {es es' : 
           exact Or.inl ⟨_, Or.inl ⟨_, hev.after, Top.refl _⟩,
             Or.inr (Or.inr ⟨hin, e, Child.elem (hp.subset he), hs⟩)⟩
     · exact Or.inr ⟨hsk, RootMem.own hev.after⟩
+  · obtain ⟨n0, hr, hkk⟩ := hla
+    have := rootNode_node hev.before hr
+    subst this
+    rcases hkk with ⟨_, heq⟩ | ⟨_, heq⟩ | ⟨hin, hbl⟩
+    · cases heq
+    · cases heq
+    · obtain ⟨e, hc, hs⟩ := hbl
+      cases hc with
+      | elem he =>
+        exact ⟨_, Or.inl ⟨_, hev.after, Top.refl _⟩, Or.inr (Or.inr ⟨hin, e, Child.elem (hp.subset he), hs⟩)⟩
   rcases hla with ⟨n0, hr, hkk⟩ | ⟨hsk, _, k0, bl, hk0, hs⟩
   · have := rootNode_node hev.before hr
     subst this

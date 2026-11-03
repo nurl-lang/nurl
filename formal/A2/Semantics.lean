@@ -271,22 +271,43 @@ def ShareFits (b : Option Blk) (u : Ty) : Option Val → Prop
 def SharesIn (B : Nat → Option Blk) (τ : Ty) (T : Val) : Prop :=
   ∀ u k p, ArcIn τ T u k p → ShareFits (B k) u p
 
+/-- A3.3, **read guards are `% NotSend`**: a read guard (a share of a view,
+    what `rw_read` hands back) is released by the thread that took it — the
+    runtime's `RGuard_drop` unlocks on that thread — so no guard crosses to
+    another: neither one a crossing value holds, at any depth (a field, an
+    element, a closure's environment), nor one in a block the value reaches
+    (an `Arc`'s payload, a lock's).  As a check: no view is reached from the
+    values (`Reached`, through the payloads of the blocks their shares name).
+    nurlc refuses such a crossing statically (`% NotSend RGuard`, which
+    propagates through fields, elements, closures and containers); the model
+    asks it at run time, with the library handles' count (`SendCheck`), so a
+    crossing nurlc refuses panics here.  A write guard is no value (it is a
+    lock scope, `scopeL`), and a value lent through a guard is a borrow, which
+    no crossing takes. -/
+def NoGuard (B : Nat → Option Blk) (vs : List Val) : Prop :=
+  ∀ k, Reached (· ∈ vs) B k → ∀ bl, B k = some bl → bl.kind ≠ .view
+
 /-- A3.5, **the crossing check** (`mem_send_check`, docs/MEMORY.md §6.5): a
     library handle whose copies are one state (a cell) may cross only with
     every other owner of that state.  For every cell a crossing value holds a
-    share of, no slot left behind (`st'`) holds one.  A lent cell share is no
-    share (`lendOf`), so the slots that hold one are its owners: the check is
-    the runtime's count of the places in the values that hold each cell's
-    block against its owners.  (`Sub` does not enter a share: a lock share's
+    share of, no owned slot left behind (`st'`) holds one: the check is the
+    runtime's count of the places in the values that hold each cell's block
+    against its owners.  A borrow left behind is not counted (A3.5's third
+    cut: a lent cell share is the share), as the runtime's count does not
+    count it: a live borrow's owner is in the store (`MInv.cell_owned`), so
+    where no owner is left behind no live borrow is, and a dead one is never
+    read.  (`Sub` does not enter a share: a lock share's
     payload is the lock's, and moves with no crossing.)  A3.5 runs it at a
     spawn (`TStep.spawn`); A3.5's second cut at every value going into a lock
     block too — `locked_new` and a cell's constructor (`EvalR.lockNew`,
     `EvalR.cellNew`), `locked_restore` (`EvalR.lockRestore`), the give-back
     at a lock scope's end (`Release.put`, `Step.scopeLSkip`) and `chan_send`
     (`EvalR.chanSend`) — and a failed check panics there, as
-    `mem_send_check` calls `nurl_panic`. -/
-def SendCheck (vs : List Val) (st' : Var → Option Slot) : Prop :=
-  ∀ k, (∃ v ∈ vs, Sub (.cell k) v) → ∀ y o w, st' y = some ⟨o, some w⟩ → ¬ Sub (.cell k) w
+    `mem_send_check` calls `nurl_panic`.  A3.3: the check also asks that no
+    read guard crosses (`NoGuard`), which nurlc asks statically. -/
+def SendCheck (B : Nat → Option Blk) (vs : List Val) (st' : Var → Option Slot) : Prop :=
+  (∀ k, (∃ v ∈ vs, Sub (.cell k) v) → ∀ y w, st' y = some ⟨true, some w⟩ → ¬ Sub (.cell k) w) ∧
+  NoGuard B vs
 
 /-- A3.5's second cut: a channel's head, received, holds every owner of each
     cell it holds that the rest of the queue held: no element left behind
@@ -304,7 +325,7 @@ def RecvCheck (v : Val) (es : List Val) : Prop := ∀ k, Sub (.cell k) v → ∀
     check the value after the closure ran on it, before they let the lock
     go: the closure may have kept a copy of a handle in it, or stored into
     it one kept outside. -/
-def GiveCheck (m : Mem) (x : Var) (sl : Slot) : Prop := ∀ v, sl.val = some v → SendCheck [v] (m.remove x).st
+def GiveCheck (m : Mem) (x : Var) (sl : Slot) : Prop := ∀ v, sl.val = some v → SendCheck m.blk [v] (m.remove x).st
 
 /-- A3.2: what `x`'s slot can give back to a lock whose payload is a `t`:
     the tree it owns, or, for an integer payload, the integer it holds (an
@@ -366,17 +387,20 @@ inductive Eval (m : Mem) : Expr → Nat → Prop
   | isr {x : Var} {o : Bool} {v : Val} : m.st x = some ⟨o, some (.inr v)⟩ → Eval m (.isl x) 0
 
 /-- An element read out of a buffer: an element `Vec` is lent, as `href`;
-    a struct is copied with what it holds lent.  A3.5: a cell share lent is
-    no share (`.int 0`): a borrow of a library handle reads nothing of its
-    state and changes none of it, and is never an owner (the runtime's
-    crossing check counts owners). -/
+    a struct is copied with what it holds lent.  A share is lent as itself,
+    a word that names its block: an `arc` share, a lock share and (A3.5's
+    third cut) a cell share.  A borrow of a library handle is the handle, as
+    the runtime's pointer copy is: the library changes the state through it
+    and copies it (`withCell`, `cellClone` through a borrowed root).  It
+    never leaves its thread (a spawn's and a lock's value is owned and holds
+    no view), so the crossing check counts it as its owner's thread's
+    (`SendCheck`). -/
 def lendOf : Val → Val
   | .node _ c _ _ => .href c
   | .pair v w => .pair (lendOf v) (lendOf w)
   | .inl v => .inl (lendOf v)
   | .inr v => .inr (lendOf v)
   | .pkg fs te ms v cs => .pkg fs te ms (lendOf v) cs
-  | .cell _ => .int 0
   | v => v
 
 mutual
@@ -407,10 +431,17 @@ def Val.owns : Val → Bool
   | _ => false
 
 /-- Handing a value on: an owner gives up its value, anything else is
-    copied. -/
+    copied.  A3.5's third cut: a borrowed value handed on holds no library
+    handle — a typed program hands on a borrowed integer or slice only
+    (`PushArg`), and a copy of a borrowed handle is a `cellClone` — so what
+    an owned tree gains is an owner's (`A3/Cell.lean`'s confinement over
+    owned slots). -/
 inductive TakeVal (m : Mem) : Var → Val → Mem → Prop
   | own {y : Var} {v : Val} : m.st y = some ⟨true, some v⟩ → TakeVal m y v (m.set y ⟨true, none⟩)
-  | bor {y : Var} {v : Val} : m.st y = some ⟨false, some v⟩ → TakeVal m y v m
+  | bor {y : Var} {v : Val} : m.st y = some ⟨false, some v⟩ → (∀ k, ¬ Sub (.cell k) v) → TakeVal m y v m
+
+/-- A3.5's third cut: an owned slot of the store holds a share of cell `k`. -/
+def OwnedCell (m : Mem) (k : Nat) : Prop := ∃ x T, m.st x = some ⟨true, some T⟩ ∧ Sub (.cell k) T
 
 inductive RRes where
   | ok (v : Val) (own : Bool) (m : Mem)
@@ -504,7 +535,7 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
   /-- A3.2: a new lock block holds the value taken from `y`, at a key taken
       from `nid`; the result is its one share. -/
   | lockNew {t : Ty} {y : Var} {v : Val} {m1 : Mem} :
-      TakeVal m y v m1 → m1.blk m1.nid = none → SendCheck [v] m1.st →
+      TakeVal m y v m1 → m1.blk m1.nid = none → SendCheck m1.blk [v] m1.st →
       EvalR m (.lockNew t y)
         (.ok (.lk m1.nid) true
           { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, .lock, some v⟩) })
@@ -512,7 +543,7 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
       slot left behind holds a share of a cell it holds), `locked_new` panics,
       the store as it was, as `mem_send_check` does. -/
   | lockNewFail {t : Ty} {y : Var} {v : Val} {m1 : Mem} :
-      TakeVal m y v m1 → ¬ SendCheck [v] m1.st → EvalR m (.lockNew t y) .panic
+      TakeVal m y v m1 → ¬ SendCheck m1.blk [v] m1.st → EvalR m (.lockNew t y) .panic
   /-- A3.2: a read of the lock share `a` (owned or lent) makes a new share
       of its block. -/
   | lockClone {a : Var} {o : Bool} {k : Nat} :
@@ -521,17 +552,20 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
       taken from `y`, at a key taken from `nid`; the result is its one cell
       share. -/
   | cellNew {t : Ty} {y : Var} {v : Val} {m1 : Mem} :
-      TakeVal m y v m1 → m1.blk m1.nid = none → SendCheck [v] m1.st →
+      TakeVal m y v m1 → m1.blk m1.nid = none → SendCheck m1.blk [v] m1.st →
       EvalR m (.cellNew t y)
         (.ok (.cell m1.nid) true
           { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, .lock, some v⟩) })
   /-- ... and panics when the state fails the crossing check (A3.5's second
       cut: a cell's state is a lock's payload). -/
   | cellNewFail {t : Ty} {y : Var} {v : Val} {m1 : Mem} :
-      TakeVal m y v m1 → ¬ SendCheck [v] m1.st → EvalR m (.cellNew t y) .panic
-  /-- A3.5: a copy of the cell share `a` holds: a new share of its block. -/
+      TakeVal m y v m1 → ¬ SendCheck m1.blk [v] m1.st → EvalR m (.cellNew t y) .panic
+  /-- A3.5: a copy of the cell share `a` holds: a new share of its block.
+      A3.5's third cut: `a` may be a borrow, and the copy is a new owner on the
+      thread an owner of the cell is on (`OwnedCell`: a live borrow's owner
+      is in the store, `MInv.cell_owned`, so a typed copy always steps). -/
   | cellClone {a : Var} {o : Bool} {k : Nat} :
-      m.st a = some ⟨o, some (.cell k)⟩ → EvalR m (.cellClone a) (.ok (.cell k) true m)
+      m.st a = some ⟨o, some (.cell k)⟩ → OwnedCell m k → EvalR m (.cellClone a) (.ok (.cell k) true m)
   /-- A3.4: an `Atomic`'s operation: one step on the word, the integer
       payload of the lock block `a` shares; the answer is an integer.  (A
       lock block of an integer whose payload a `withLock` has checked out
@@ -552,7 +586,7 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
       {m1 : Mem} :
       m.st a = some ⟨o, some (.lk k)⟩ → TakeVal m y v m1 →
       m1.blk k = some ⟨t, .lock, some (.pair (.node u c d es) (.int 0))⟩ →
-      m1.alloc c = true → m1.alloc d = true → ¬ HasView m1.blk k → SendCheck [v] m1.st →
+      m1.alloc c = true → m1.alloc d = true → ¬ HasView m1.blk k → SendCheck m1.blk [v] m1.st →
       EvalR m (.chanSend a y)
         (.ok (.int 1) false
           { m1 with blk := upd m1.blk k (some ⟨t, .lock, some (.pair (.node u c d (es ++ [v])) (.int 0))⟩) })
@@ -561,12 +595,12 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
       {a' : Nat → Bool} :
       m.st a = some ⟨o, some (.lk k)⟩ → TakeVal m y v m1 →
       m1.blk k = some ⟨t, .lock, some (.pair q (.int (f + 1)))⟩ → Frees m1.alloc v a' →
-      SendCheck [v] m1.st →
+      SendCheck m1.blk [v] m1.st →
       EvalR m (.chanSend a y) (.ok (.int 0) false { m1 with alloc := a' })
   /-- A3.5's second cut: a value that fails the crossing check is not sent:
       `chan_send` panics, before it looks at the channel, the store as it was. -/
   | chanSendFail {a y : Var} {v : Val} {m1 : Mem} :
-      TakeVal m y v m1 → ¬ SendCheck [v] m1.st → EvalR m (.chanSend a y) .panic
+      TakeVal m y v m1 → ¬ SendCheck m1.blk [v] m1.st → EvalR m (.chanSend a y) .panic
   /-- A3.4: `chan_recv` / `chan_try_recv` on the channel `a` shares, a lock
       block whose payload is its queue (a `Vec`, taken from the front) and
       its closed flag: the head moves out of the queue, an owned `some`.
@@ -665,14 +699,14 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
       out; the answer is 0. -/
   | lockRestore {a y : Var} {o : Bool} {k : Nat} {t : Ty} {v : Val} {m1 : Mem} :
       m.st a = some ⟨o, some (.lk k)⟩ → TakeVal m y v m1 → m1.blk k = some ⟨t, .lock, none⟩ →
-      SendCheck [v] m1.st →
+      SendCheck m1.blk [v] m1.st →
       EvalR m (.lockRestore a y)
         (.ok (.int 0) false { m1 with blk := upd m1.blk k (some ⟨t, .lock, some v⟩) })
   /-- A3.5's second cut: ... a value that fails the crossing check is not
       restored: `locked_restore` panics, before it takes the lock, the store
       as it was. -/
   | lockRestoreFail {a y : Var} {v : Val} {m1 : Mem} :
-      TakeVal m y v m1 → ¬ SendCheck [v] m1.st → EvalR m (.lockRestore a y) .panic
+      TakeVal m y v m1 → ¬ SendCheck m1.blk [v] m1.st → EvalR m (.lockRestore a y) .panic
   /-- ... and with the payload in, it panics ("the value was not taken"),
       the store as it was. -/
   | lockRestoreP {a y : Var} {o : Bool} {k : Nat} {t : Ty} {p : Val} :

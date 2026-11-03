@@ -1101,13 +1101,20 @@ theorem deep_self_hkeep {m m' : Mem} {o : Var} {T T' : Val} {t : Ty} {c d d' : N
     (hnd : T.ids.Nodup) (hr : Repl (.node t c d es) (.node t c d' es') T T')
     (hw' : WFv (.vec t) (.node t c d' es')) (hhv : t.holdsView = false)
     (hsh' : SharesOK m' (.vec t) (.node t c d' es')) : HKeep m m' ⟨o, .self⟩ := by
-  refine ⟨fun c2 t2 H hH hb ⟨d2, es2, hlan, hw, hv, hnm, hsh⟩ => ?_, fun k p _ hla => ?_⟩
+  refine ⟨fun c2 t2 H hH hb ⟨d2, es2, hlan, hw, hv, hnm, hsh⟩ => ?_, fun k p _ hla => ?_, fun k hla => ?_⟩
   rotate_left
   · -- a share at the top of the tree stays at its top
     obtain ⟨n0, hrn, hl⟩ := hla.root (by intro h; cases h)
     have htop := rootNode_own hT hrn
     rcases hl with ⟨_, rfl⟩ | ⟨h, _⟩ | ⟨h, _⟩
     · exact Or.inl ⟨_, Or.inl ⟨T', hT', hr.top_arc htop⟩, Or.inl ⟨rfl, rfl⟩⟩
+    · cases h
+    · cases h
+  · -- A3.5's third cut: so does a cell share
+    obtain ⟨n0, hrn, hl⟩ := hla
+    have htop := rootNode_own hT hrn
+    rcases hl with ⟨_, rfl⟩ | ⟨h, _⟩ | ⟨h, _⟩
+    · exact ⟨_, Or.inl ⟨T', hT', hr.top_cell htop⟩, Or.inl ⟨rfl, rfl⟩⟩
     · cases h
     · cases h
   obtain ⟨n0, hrn, hla⟩ := hlan.root (by intro h; cases h)

@@ -127,6 +127,7 @@ the LLVM / C11 memory model rather than redefining it.
       shared, read-only payload part. Two threads meet on a payload only
       by reading it. The sweep's frees are writes to a block no thread
       reaches.
+    - **Slices of shares.** A slice's elements may hold shares (`Ty.ok (slice t)` asks no view): a slice holds a view, so it never crosses a thread (`slice_not_send`).
     - **In Lean.** `A2.memory_safe`, `A2.no_leak_end`, `A2.no_leak_panic`
       and `A3.claim` hold with all of this, on the standard axioms only.
     - **Not proven here (phase D):** the runtime frees an `Arc` at
@@ -205,7 +206,7 @@ the LLVM / C11 memory model rather than redefining it.
         first (`StmtT.withLockElem`, `StmtT.withLockField`), and one the
         function does not own is passed in as `locked_update` takes it
         (`LockFn`).
-    - **Not typed yet:** shares in a slice's elements; that `locked_set`'s
+    - **Not typed yet:** that `locked_set`'s
       give-back check never fails in a reachable configuration (argued
       from `CellInv.one`); the closure the operations run called through
       a package (here a statement in place or a function of the
@@ -288,8 +289,13 @@ the LLVM / C11 memory model rather than redefining it.
       payload that holds a library handle (`RhsT.rwRead`'s `hasCell`,
       h357): readers read it at once, so it faces Sync. An `RwLocked` of
       one is still made and written.
-      The model lets a guard cross a spawn, which nurlc refuses
-      (`% NotSend`): the runtime's unlock must run on the locking thread.
+      A read guard is `% NotSend`: the crossing check refuses a value that
+      holds a guard at any depth (`NoGuard`, part of `SendCheck`), so a
+      spawn, a value going into a lock and a lock scope's give-back never
+      carry one to another thread, and the runtime's unlock runs on the
+      locking thread (`spawn_guard`, `lockNew_guard`, `chanSend_guard`).
+      That no guard leaves its thread is argued over reachable
+      configurations, not a lemma.
     - **Not proven here (phase D):** a view lives until no slot reaches
       it, which may be after the guard's drop, where the runtime unlocks.
       As for `Arc`'s refcount, phase D must show that no live binding
@@ -353,10 +359,23 @@ the LLVM / C11 memory model rather than redefining it.
       a lock block in the model, so a lock check-out could fill a queue
       the runtime's checked sends never do. `GlobsOK` asks the globals'
       blocks to keep each cell's shares in one block.
-    - **Not typed yet:** a handle changed or copied through a borrow (the
-      model takes a library's `in` handle as `inout`, and a store of a
-      borrowed handle into an owner is not typed); `% Sync` / `% NotSend`
-      assertions; `locked_take` through a cell share; a failed give-back
+    - **Third cut: a handle used through a borrow.** A lent handle is the
+      share itself (`lendOf`), so a library's `in` handle is changed in
+      place (`withCell` through a borrowed root, `StmtT.withCellIn`) and
+      copied from (`cellClone` of a borrow, as `PNCounter_share`). A lent
+      share lands in an owner's tree (`CellLanded`): a live binding holding
+      a cell share has an owner of it in the same store
+      (`MInv.cell_owned`). So the crossing check counts owners only, as
+      the runtime's count does (`sendCheck_owner_left`), and a dead borrow
+      left in scope does not fail it (`sendCheck_dead_borrow_ok`).
+      Confinement is over owners and live borrows (`CellInv`,
+      `cellAt_of_live`), and a race on a cell is two threads with an
+      owner's share at a check-out (`CellOp`).
+    - **Not typed yet:** a store of a borrowed handle into an owner (the
+      runtime's implicit copy); a handle changed through a borrow that is
+      no root; `% Sync` / `% NotSend` assertions on a program's own types;
+      that a thread inside a cell's check-out holds an owner's share is
+      argued from typing, not a lemma; `locked_take` through a cell share; a failed give-back
       frees the value where the runtime keeps it in the held lock (no one
       reaches it either way);
       a closure that captures by name and also changes its environment;

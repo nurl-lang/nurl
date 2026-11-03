@@ -32,13 +32,15 @@ theorem rootKeep_move {m m' : Mem} (hown : ∀ o T, OwnedAt m o T → ∃ o', Ow
       exact Or.inl ⟨o2, T, h2, hs⟩
     · exact Or.inr (InPay.grow hb ⟨k, bl, hk, hs⟩)
   refine RootKeep.of_slot hr fun n hn => ?_
-  rcases hn with ⟨T0, hn, ht⟩ | ⟨v, c, hc, ht, hnode⟩ | ⟨v, d, o', l, hc, ht, hdata⟩ | ⟨v, k, q, hc, ht, hn⟩
+  rcases hn with ⟨T0, hn, ht⟩ | ⟨v, c, hc, ht, hnode⟩ | ⟨v, d, o', l, hc, ht, hdata⟩ | ⟨v, k, q, hc, ht, hn⟩ |
+    ⟨v, k, hc, ht, hn⟩
   · exact Or.inl ⟨T0, by rw [hr]; exact hn, ht⟩
   · obtain ⟨t, d, es, rfl⟩ := hnode.eq
     exact Or.inr (Or.inl ⟨v, c, by rw [hr]; exact hc, ht, (hin _ hnode.inMem).nodeAt rfl⟩)
   · obtain ⟨t, c, es, rfl⟩ := hdata.eq
     exact Or.inr (Or.inr (Or.inl ⟨v, d, o', l, by rw [hr]; exact hc, ht, (hin _ hdata.inMem).dataAt rfl⟩))
-  · exact Or.inr (Or.inr (Or.inr ⟨v, k, q, by rw [hr]; exact hc, ht, hn⟩))
+  · exact Or.inr (Or.inr (Or.inr (Or.inl ⟨v, k, q, by rw [hr]; exact hc, ht, hn⟩)))
+  · exact Or.inr (Or.inr (Or.inr (Or.inr ⟨v, k, by rw [hr]; exact hc, ht, hn⟩)))
 
 theorem SlotOK.clean {m : Mem} {E : Entry} {sl : Slot} (h : SlotOK m E sl) : SlotOK m E.clean sl := by
   unfold Entry.clean
@@ -464,7 +466,8 @@ theorem slot_inp (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
       rw [hd]
       refine lend_valOK' hw (hi.pkgs _ _ T hT rfl) (fun t c d es ht => ⟨_, List.mem_singleton_self _,
         Or.inl ⟨_, Or.inl ⟨T, hT, ht⟩, lands_rootKind_self _ _⟩⟩) (fun k q ht => ⟨_, List.mem_singleton_self _,
-        Or.inl ⟨_, Or.inl ⟨T, hT, ht⟩, lands_rootKind_self _ _⟩⟩) hvs (hi.held _ Ea _ T hEa hl hT rfl)
+        Or.inl ⟨_, Or.inl ⟨T, hT, ht⟩, lands_rootKind_self _ _⟩⟩) (fun k ht => ⟨_, List.mem_singleton_self _,
+        _, Or.inl ⟨T, hT, ht⟩, lands_rootKind_self _ _⟩) hvs (hi.held _ Ea _ T hEa hl hT rfl)
         (hi.shares _ Ea _ T hEa hT rfl rfl) (fun s hs => ?_)
       rw [hs] at hown'; cases hown'
     · obtain ⟨v, hv, _⟩ := hi.bor_val hEa hl (by rw [hm]; rfl)
@@ -1039,8 +1042,8 @@ theorem minv (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
         rw [clean_ty, ht0]; exact (hi.shares y E0 sl T h0 hst hown hT).of_blk hb.blk
   blocks k bl hk := by
     rw [show (callMem m m1 fn x).blk = m.blk from hb.blk] at hk
-    obtain ⟨h1, h2, h3⟩ := hi.blocks k bl hk
-    exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.of_blk hb.blk⟩⟩
+    obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k bl hk
+    exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.of_blk hb.blk⟩, h4⟩
   rootbLive p E hp hrb := by
     rcases h.ctx_cases p with ⟨rfl, hc⟩ | ⟨rfl, hc⟩ | ⟨k, t, hk, rfl, hc⟩ | ⟨k, t, hk, rfl, hc⟩ |
         ⟨k, b', t, hk, rfl, hc⟩ | ⟨hy', hyx, hc⟩ | ⟨hc, v, hv, rfl⟩ <;> rw [hc] at hp <;> (try cases hp)

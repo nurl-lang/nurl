@@ -87,7 +87,7 @@ theorem claim_of
   have hreach : ∀ C, Reach P spawn (Cfg.start G s nv) C → CInv P C ∧ CellInv C :=
     fun C hr => reach_cinv hP hPc (hR P) (hS P spawn hP hPc hSp) (hF P) h0 (CellInv.start hG s nv) hr
   refine ⟨fun C hr => CInv.memSafe_of hP (hL P) (hreach C hr).1,
-    fun C hr hrace => hrace.elim (CInv.raceFree (hreach C hr).1) (CellInv.cellRaceFree (hreach C hr).2),
+    fun C hr hrace => hrace.elim (CInv.raceFree (hreach C hr).1) (CellInv.cellRaceFree (hreach C hr).1 (hreach C hr).2),
     fun C hr hend i hi => ?_⟩
   -- A3.6: what is left is what the start's globals reach: no step wrote them
   obtain ⟨k, bl, hk, hik, hgr⟩ := CInv.noLeak (hreach C hr).1 hend i hi

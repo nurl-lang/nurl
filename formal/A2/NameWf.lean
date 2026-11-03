@@ -345,7 +345,7 @@ theorem RhsT.names {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : Rhs
   | cellNew hy hly hty _ hpa =>
     obtain ⟨hn1, _, hk⟩ := hpa.names hy hly hty hn
     exact ⟨hn1, fun _ _ => DepsNamed.nil _, ⟨_, hk⟩⟩
-  | cellClone _ _ _ _ => exact ⟨hn, fun _ _ => DepsNamed.nil _, ⟨[], Keeps.refl Γ []⟩⟩
+  | cellClone _ _ _ => exact ⟨hn, fun _ _ => DepsNamed.nil _, ⟨[], Keeps.refl Γ []⟩⟩
   | glob _ _ => exact ⟨hn, fun _ _ => DepsNamed.nil _, ⟨[], Keeps.refl Γ []⟩⟩
   | rwRead _ _ _ | rwTryRead _ _ _ | rwTryWrite _ _ _ =>
     exact ⟨hn, fun _ _ => DepsNamed.nil _, ⟨[], Keeps.refl Γ []⟩⟩

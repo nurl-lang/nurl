@@ -38,9 +38,10 @@ abbrev Var := Nat
              (A2-envhand, `StmtT.callcE`: handed over) types only at `send`
              or `any`, through an owner; what else it may change is a binding
              captured by name, which `send` already excludes;
-  * `bare` — also no share at all: a slice's element (A3.1's views of a
-             `Vec` hold no share, `Ty.ok (slice t)`).  Since A3.2's second
-             cut a lock or a channel no longer needs it. -/
+  * `bare` — also no share at all.  A3.1's first cut asked it of a
+             slice's element (`Ty.ok (slice t)`); since A3.2's second cut a
+             lock or a channel no longer needs it, and since A3.1's slices of
+             shares a slice does not either: no rule asks for it now. -/
 inductive Cross where
   | any
   | send
@@ -177,11 +178,13 @@ def Ty.sync : Ty → Bool
 
 /-- A2 types: a view's element type holds no views of its own (a view of a
     container of views is left to A2, with the other aggregates that
-    carry views), and, in A3.1's first cut, no shares. -/
+    carry views).  (A3.1's first cut also asked it to hold no shares; A3.1's
+    slices of shares lift that: a slice of `Arc`s, of locks, of library
+    handles is typed, its elements lent as `vec_at` lends them.) -/
 def Ty.ok : Ty → Bool
   | .int => true
   | .vec t => t.ok
-  | .slice t => t.ok && !t.holdsView && !t.hasArc
+  | .slice t => t.ok && !t.holdsView
   | .prod a b => a.ok && b.ok
   | .sum a b => a.ok && b.ok
   | .fn _ _ => true
@@ -456,7 +459,8 @@ inductive Rhs where
   | cellNew (t : Ty) (y : Var) -- the handle's constructor: `y`'s value (a `t`) moves into a
                                -- fresh lock block, whose one share is a cell share
   | cellClone (a : Var)        -- `PNCounter_share a` (and any copy the library makes): a new
-                               -- cell share of the block `a` (an owner) shares
+                               -- cell share of the block `a` (an owner, or a borrow: A3.5's
+                               -- third cut) shares
   -- A3.6: a module global set at start (`: ( Locked T ) g ( make )`) holds a
   -- share of a block that synchronises itself; the store holds it (`Mem.gl`),
   -- every thread reaches it, and nothing writes it
@@ -492,8 +496,9 @@ inductive Val where
   | lk (k : Nat)                                 -- A3.2: a share of the lock block `k` (it carries
                                                -- nothing: the payload changes, and no one reads it)
   | cell (k : Nat)                               -- A3.5: a cell share of the lock block `k` (a
-                                               -- library handle's state); lent, it is no share
-                                               -- (`lendOf`): only an owner changes the state
+                                               -- library handle's state); lent, it is itself
+                                               -- (`lendOf`), a borrow the library changes the
+                                               -- state through (A3.5's third cut)
 deriving Repr, Inhabited
 
 /-- A binding's storage: whether it owns its value (it is dropped at the end
@@ -610,7 +615,8 @@ inductive Stmt where
 
 /-- A3.5: a library's in-place change of its state (`pncounter_inc a …`,
     with the change as `body` on the state `x`): a `withLock` on a cell
-    share.  Its check-out is the lock's (A3.2), with the lock's faithfulness
+    share, an owner's or (A3.5's third cut) a borrowed root's, a library's
+    `in` handle.  Its check-out is the lock's (A3.2), with the lock's faithfulness
     premises; what differs is who may hold the share — one thread's
     bindings only (A3's confinement), since there is no mutex.  A second
     check-out while one is out (a library re-entering its own state) waits

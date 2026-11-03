@@ -1926,7 +1926,8 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
           envDeps_mono (List.subset_append_right _ _)
         refine lend_valOK' hwe hpkE (fun t c' d es ht => ⟨⟨c, .view⟩, ?_,
           Or.inl ⟨_, Or.inl ⟨_, hslot, Top.pkg ht⟩, Or.inr (Or.inl ⟨rfl, rfl⟩)⟩⟩) (fun k q ht => ⟨⟨c, .view⟩, ?_,
-          Or.inl ⟨_, Or.inl ⟨_, hslot, Top.pkg ht⟩, Or.inr (Or.inl ⟨rfl, rfl⟩)⟩⟩) hvr hnmE
+          Or.inl ⟨_, Or.inl ⟨_, hslot, Top.pkg ht⟩, Or.inr (Or.inl ⟨rfl, rfl⟩)⟩⟩) (fun k ht => ⟨⟨c, .view⟩, ?_,
+          _, Or.inl ⟨_, hslot, Top.pkg ht⟩, Or.inr (Or.inl ⟨rfl, rfl⟩)⟩) hvr hnmE
           (by have := hi.shares c Ec _ _ hc hslot rfl rfl; rw [htc] at this; exact this.pkg' hq)
           (fun s _ => ViewsOK.mono hsub hvr)
         all_goals simp [envE, hd, mem_envDeps, ownWriter, Kind.bound]

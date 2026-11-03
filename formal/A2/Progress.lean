@@ -73,15 +73,33 @@ theorem dropSlot_exists {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {E : Ent
       obtain ⟨a', ha⟩ := frees_owned hi.heap hsl (hwf t rfl)
       exact ⟨_, a', hsl, DropSlot.owned ha⟩
 
+/-- A3.5's third cut: what a hand-over takes from a borrowed binding is an
+    integer or a slice (`PushArg`), which holds no library handle. -/
+theorem PushArg.bor_noCell {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {F : List Var} {y : Var} {E : Entry}
+    {t : Ty} {D : List Dep} {Γ1 : Ctx} (hpa : PushArg Γ F y E t D Γ1) (hy : Γ y = some E)
+    (hl : E.live = true) (hty : E.ty = t) {v : Val} (hv : m.st y = some ⟨false, some v⟩) :
+    ∀ k, ¬ Sub (.cell k) v := by
+  obtain ⟨sl, hsl, _, hso, _, hbor⟩ := hi.slot y E hy
+  rw [hv] at hsl; cases hsl
+  have hos : E.mode.ownSlot = false := by simpa using hso.symm
+  obtain ⟨w, hw, hok⟩ := hbor hos hl
+  cases hw
+  intro k hs
+  cases hpa with
+  | move _ hm _ _ _ => rw [hm] at hos; cases hos
+  | int => rw [hty] at hok; obtain ⟨n, rfl⟩ := valOK_int.mp hok; cases hs
+  | slice => rw [hty] at hok; obtain ⟨d, o, l, rfl, _⟩ := valOK_slice.mp hok; cases hs
+
 /-- A live binding has a value to hand on. -/
 theorem takeVal_exists {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (hy : Γ y = some E)
-    (hl : E.live = true) : ∃ v m1, TakeVal m y v m1 := by
+    (hl : E.live = true) {F : List Var} {t : Ty} {D : List Dep} {Γ1 : Ctx} (hpa : PushArg Γ F y E t D Γ1)
+    (hty : E.ty = t) : ∃ v m1, TakeVal m y v m1 := by
   rcases hi.mode_cases hy with hm | hm | hm
   · obtain ⟨T, hT, _⟩ := hi.own_val hy hl (by rw [hm]; rfl)
     exact ⟨T, _, TakeVal.own hT⟩
   all_goals
     obtain ⟨v, hv, _⟩ := hi.bor_val hy hl (by rw [hm]; rfl)
-    exact ⟨v, m, TakeVal.bor hv⟩
+    exact ⟨v, m, TakeVal.bor hv (hpa.bor_noCell hi hy hl hty hv)⟩
 
 /-- A live struct binding holds a struct. -/
 theorem pair_slot {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (hy : Γ y = some E)
@@ -150,10 +168,10 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
       · rw [List.concat_eq_append] at h; exact ⟨_, EvalR.pop h hac had⟩
     · obtain ⟨T, hT, _⟩ := hi.own_val hy hl (by rw [hm]; rfl)
       rw [hT] at h; cases h
-  | @pair y z Ey Ez Γ1 Γ2 Dy Dz hy hly hpa1 hz hlz _ _ =>
-    obtain ⟨v, m1, htk1⟩ := takeVal_exists hi hy hly
+  | @pair y z Ey Ez Γ1 Γ2 Dy Dz hy hly hpa1 hz hlz hpa2 _ =>
+    obtain ⟨v, m1, htk1⟩ := takeVal_exists hi hy hly hpa1 rfl
     obtain ⟨post1, _⟩ := push_take hi hanch hy hly rfl hpa1 htk1
-    obtain ⟨w, m2, htk2⟩ := takeVal_exists post1.inv hz hlz
+    obtain ⟨w, m2, htk2⟩ := takeVal_exists post1.inv hz hlz hpa2 rfl
     exact ⟨_, EvalR.pair htk1 htk2⟩
   | fst hy hl ht =>
     obtain ⟨o, v, w, hv⟩ := pair_slot hi hy hl ht
@@ -161,14 +179,14 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
   | snd hy hl ht =>
     obtain ⟨o, v, w, hv⟩ := pair_slot hi hy hl ht
     exact ⟨_, EvalR.snd hv⟩
-  | inl hy hly _ _ =>
-    obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly
+  | inl hy hly hpa _ =>
+    obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly hpa rfl
     exact ⟨_, EvalR.inl htk⟩
-  | inr hy hly _ _ =>
-    obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly
+  | inr hy hly hpa _ =>
+    obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly hpa rfl
     exact ⟨_, EvalR.inr htk⟩
-  | pack hy hly _ _ _ =>
-    obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly
+  | pack hy hly hte hpa _ _ =>
+    obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly hpa hte
     exact ⟨_, EvalR.pack htk⟩
   | getl hy hl ht =>
     obtain ⟨v, hv | hv⟩ := sum_slot hi hy hl ht
@@ -186,8 +204,8 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
     obtain ⟨v, hv | hv⟩ := sum_slot hi hy hl ht <;> rw [hm] at hv
     · exact ⟨_, EvalR.takerP hv⟩
     · exact ⟨_, EvalR.taker hv⟩
-  | arcNew hy hly _ _ _ _ =>
-    obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly
+  | arcNew hy hly hty _ _ hpa =>
+    obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly hpa hty
     -- the key `nid` is fresh: every block's key is below it
     have hfr : m1.blk m1.nid = none := by
       have hb := TakeVal.blk htk
@@ -197,8 +215,8 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
       | none => rfl
       | some bl => exact absurd (hi.heap.bkey _ bl h) (Nat.lt_irrefl _)
     exact ⟨_, EvalR.arcNew htk hfr⟩
-  | lockNew hy hly _ _ _ =>
-    obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly
+  | lockNew hy hly hty _ hpa =>
+    obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly hpa hty
     -- the key `nid` is fresh: every block's key is below it
     have hfr : m1.blk m1.nid = none := by
       have hb := TakeVal.blk htk
@@ -207,7 +225,7 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
       cases h : m.blk m.nid with
       | none => rfl
       | some bl => exact absurd (hi.heap.bkey _ bl h) (Nat.lt_irrefl _)
-    by_cases hck : SendCheck [v] m1.st
+    by_cases hck : SendCheck m1.blk [v] m1.st
     · exact ⟨_, EvalR.lockNew htk hfr hck⟩
     · exact ⟨_, EvalR.lockNewFail htk hck⟩
   | arcClone ha hl hty =>
@@ -216,8 +234,8 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
   | lockClone ha hl hty =>
     obtain ⟨o, k, hv⟩ := hi.lk_slot ha hl hty
     exact ⟨_, EvalR.lockClone hv⟩
-  | cellNew hy hly _ _ _ =>
-    obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly
+  | cellNew hy hly hty _ hpa =>
+    obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly hpa hty
     -- the key `nid` is fresh: every block's key is below it
     have hfr : m1.blk m1.nid = none := by
       have hb := TakeVal.blk htk
@@ -226,12 +244,12 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
       cases h : m.blk m.nid with
       | none => rfl
       | some bl => exact absurd (hi.heap.bkey _ bl h) (Nat.lt_irrefl _)
-    by_cases hck : SendCheck [v] m1.st
+    by_cases hck : SendCheck m1.blk [v] m1.st
     · exact ⟨_, EvalR.cellNew htk hfr hck⟩
     · exact ⟨_, EvalR.cellNewFail htk hck⟩
-  | cellClone ha hl hty hos =>
-    obtain ⟨k, hv⟩ := hi.cell_slot ha hl hty hos
-    exact ⟨_, EvalR.cellClone hv⟩
+  | cellClone ha hl hty =>
+    obtain ⟨o, k, hv⟩ := hi.cell_slot ha hl hty
+    exact ⟨_, EvalR.cellClone hv (hi.cell_owned ha hl hv (Sub.refl _))⟩
   | @glob g t _ _ =>
     -- A3.6: the global's share, or a panic if the store holds none of that type
     by_cases h : ∃ v, m.gl g = some v ∧ GlobFits m.blk t v
@@ -277,7 +295,7 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
     cases ob with
     | none => exact absurd ⟨o, k, hv, Or.inl hk⟩ hnb
     | some p =>
-      obtain ⟨_, _, hpay⟩ := hi.blocks k _ hk
+      obtain ⟨_, _, hpay, _⟩ := hi.blocks k _ hk
       obtain ⟨hw, _⟩ := hpay p rfl
       cases hw with
       | int =>
@@ -293,14 +311,14 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
     cases ob with
     | none => exact absurd ⟨o, k, _, hv, Or.inl hk⟩ hnb
     | some p =>
-      obtain ⟨_, _, hpay⟩ := hi.blocks k _ hk
+      obtain ⟨_, _, hpay, _⟩ := hi.blocks k _ hk
       obtain ⟨hw, _⟩ := hpay p rfl
       obtain ⟨_, _, hall⟩ := hi.heap.blk k _ hk
-      obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly
+      obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly hpa htyy
       have hb1 : m1.blk = m.blk := by cases htk <;> rfl
       have ha1 : m1.alloc = m.alloc := by cases htk <;> rfl
       -- A3.5's second cut: the crossing check first
-      by_cases hck : SendCheck [v] m1.st
+      by_cases hck : SendCheck m1.blk [v] m1.st
       case neg => exact ⟨_, EvalR.chanSendFail htk hck⟩
       cases hw with
       | pair hq hf =>
@@ -326,7 +344,7 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
     cases ob with
     | none => exact absurd ⟨o, k, _, hv, Or.inl hk⟩ hnb
     | some p =>
-      obtain ⟨_, _, hpay⟩ := hi.blocks k _ hk
+      obtain ⟨_, _, hpay, _⟩ := hi.blocks k _ hk
       obtain ⟨hw, _⟩ := hpay p rfl
       obtain ⟨_, _, hall⟩ := hi.heap.blk k _ hk
       cases hw with
@@ -354,7 +372,7 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
     cases ob with
     | none => exact absurd ⟨o, k, _, hv, Or.inl hk⟩ hnb
     | some p =>
-      obtain ⟨_, _, hpay⟩ := hi.blocks k _ hk
+      obtain ⟨_, _, hpay, _⟩ := hi.blocks k _ hk
       obtain ⟨hw, _⟩ := hpay p rfl
       cases hw with
       | pair _ hf =>
@@ -368,15 +386,15 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
     cases ob with
     | none => exact absurd ⟨o, k, _, hv, Or.inl hk⟩ hnb
     | some p => exact ⟨_, EvalR.lockTake hv hk hnv⟩
-  | lockRestore ha hl hty hy hly _ _ =>
+  | lockRestore ha hl hty hy hly htyy hpa =>
     -- ... a restore puts the value back, or panics: it never waits
     obtain ⟨o, k, hv⟩ := hi.lk_slot ha hl hty
     obtain ⟨ob, hk⟩ := hi.lk_val ha hl hty hv
     cases ob with
     | none =>
-      obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly
+      obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly hpa htyy
       have hb1 : m1.blk = m.blk := by cases htk <;> rfl
-      by_cases hck : SendCheck [v] m1.st
+      by_cases hck : SendCheck m1.blk [v] m1.st
       · exact ⟨_, EvalR.lockRestore hv htk (by rw [hb1]; exact hk) hck⟩
       · exact ⟨_, EvalR.lockRestoreFail htk hck⟩
     | some p => exact ⟨_, EvalR.lockRestoreP hv hk⟩
@@ -425,7 +443,7 @@ theorem progress_editB {P : Prog} {m : Mem} {Γ Γ1 : Ctx} {F : List Var} (hi : 
       exact ⟨Er, hEr, hcan.ownSlot⟩
   cases harg with
   | push hy hly htyy hpa =>
-    obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly
+    obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly hpa htyy
     obtain ⟨post, _⟩ := push_take hi hanch hy hly htyy hpa htk
     obtain ⟨_, _, _, _, c, d, es, _, _, _, _, _, _, hno, _⟩ := post.inv.thru_owner hx1 hmx hl hty hro hthru.noShare
     obtain ⟨T', hr⟩ := Repl.exists hno.sub (.node t c d (es ++ [v]))
@@ -450,7 +468,7 @@ theorem progress_editB {P : Prog} {m : Mem} {Γ Γ1 : Ctx} {F : List Var} (hi : 
     exact ⟨_, Step.editTrunc hev hno hfr hr⟩
   | set hie hy hly htyy hpa =>
     obtain ⟨n, hev⟩ := eval_exists hi hie
-    obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly
+    obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly hpa htyy
     obtain ⟨post, hp⟩ := push_take hi hanch hy hly htyy hpa htk
     obtain ⟨_, _, T, _, c, d, es, _, hT, _, _, _, hw, hno, _⟩ := post.inv.thru_owner hx1 hmx hl hty hro hthru.noShare
     by_cases hn : n < es.length
@@ -683,7 +701,7 @@ theorem progress {P : Prog}
         exact ⟨T, _, TakeVal.own hT', by simp [upd_ne _ _ (Ne.symm hyx)], rfl⟩
       all_goals
         obtain ⟨v, hv, _⟩ := hi.bor_val hy hly (by rw [h]; rfl)
-        exact ⟨v, m, TakeVal.bor hv, rfl, rfl⟩
+        exact ⟨v, m, TakeVal.bor hv (hpa.bor_noCell hi.toMInv hy hly htyy hv), rfl, rfl⟩
     obtain ⟨v, m1, htk, hst, hal⟩ := htake
     exact Or.inr <| Or.inr ⟨_, Step.push htk (by rw [hst]; exact hT) (by rw [hal]; exact hac)
       (by rw [hal]; exact had)⟩

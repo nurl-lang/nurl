@@ -84,7 +84,7 @@ theorem TakeVal.restrict {m m1 : Mem} {y : Var} {v : Val} (h : TakeVal m y v m1)
     TakeVal { m with alloc := minus m.alloc a2 } y v { m1 with alloc := minus m1.alloc a2 } := by
   cases h with
   | own hy => exact .own hy
-  | bor hy => exact .bor hy
+  | bor hy hnc => exact .bor hy hnc
 
 mutual
 /-- Freeing a tree none of whose addresses is in the part frees it on the
@@ -185,7 +185,7 @@ theorem EvalR.restrict {m : Mem} {r : Rhs} {res : RRes} (h : EvalR m r res) {a2 
   | lockRestoreFail h1 hck => exact ⟨_, .lockRestoreFail (TakeVal.restrict h1 a2) hck, trivial⟩
   | arcClone hy => exact ⟨_, .arcClone hy, rfl, rfl, rfl⟩
   | lockClone hy => exact ⟨_, .lockClone hy, rfl, rfl, rfl⟩
-  | cellClone hy => exact ⟨_, .cellClone hy, rfl, rfl, rfl⟩
+  | cellClone hy ho => exact ⟨_, .cellClone hy ho, rfl, rfl, rfl⟩
   | atomic hy hk h1 h2 hnv =>
     exact ⟨_, .atomic hy hk (Eval.restrict h1 hav hp) (Eval.restrict h2 hav hp) hnv, rfl, rfl, rfl⟩
   -- A3.4: the queue's addresses are the channel's payload's; what a send to a

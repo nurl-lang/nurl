@@ -403,7 +403,10 @@ theorem ValOK.sweep {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m τ v P H) 
   | lk h =>
     obtain ⟨o, ho⟩ := h
     exact .lk ⟨o, Mem.sweepR_blk.mpr ⟨ho, hv.lk (Sub.refl _)⟩⟩
-  | cell => exact .cell
+  | cell h hl =>
+    obtain ⟨o, ho⟩ := h
+    obtain ⟨dep, hd, n0, hr, hlk⟩ := hl
+    exact .cell ⟨o, Mem.sweepR_blk.mpr ⟨ho, hv.cell (Sub.refl _)⟩⟩ ⟨dep, hd, n0, hr.sweep hR, hlk⟩
 
 theorem SlotOK.sweep {E : Entry} {sl : Slot} (h : SlotOK m E sl)
     (hk : ∀ v, sl.val = some v → Kept R m v) : SlotOK (m.sweepR R) E sl := by
@@ -447,8 +450,8 @@ theorem MInv.sweepR {Γ : Ctx} (hi : MInv m Γ) : MInv (m.sweepR R) Γ where
   shares v E sl T hE hsl hown hT := (hi.shares v E sl T hE hsl hown hT).sweep (Kept.of_slot hR hsl T hT)
   blocks k bl hk := by
     obtain ⟨hk0, hr⟩ := Mem.sweepR_blk.mp hk
-    obtain ⟨h1, h2, h3⟩ := hi.blocks k bl hk0
-    refine ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, ?_⟩⟩
+    obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k bl hk0
+    refine ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, ?_⟩, h4⟩
     -- A3.2's second cut: a payload, a lock's too, keeps what it holds alive
     have hkp : Kept R m p := by
       have := Kept.pay hr hk0
