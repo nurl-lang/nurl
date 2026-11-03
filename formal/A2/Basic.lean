@@ -23,6 +23,8 @@ theorem upd_apply {α : Type} (f : Nat → α) (k : Nat) (v : α) (i : Nat) :
 @[simp] theorem Mem.remove_alloc (m : Mem) (x : Var) : (m.remove x).alloc = m.alloc := rfl
 @[simp] theorem Mem.remove_nid (m : Mem) (x : Var) : (m.remove x).nid = m.nid := rfl
 @[simp] theorem Mem.remove_nv (m : Mem) (x : Var) : (m.remove x).nv = m.nv := rfl
+@[simp] theorem Mem.set_blk (m : Mem) (x : Var) (s : Slot) : (m.set x s).blk = m.blk := rfl
+@[simp] theorem Mem.remove_blk (m : Mem) (x : Var) : (m.remove x).blk = m.blk := rfl
 
 /-! ### Addresses of a tree -/
 

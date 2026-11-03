@@ -259,6 +259,23 @@ theorem covers_take {m : Mem} {v : Val} {o : Bool} (hc : CoversBut m v o) {x : V
   · exact Or.inr hp
   · exact Or.inl ⟨x, v, ownedAt_set.mpr (Or.inl ⟨rfl, rfl⟩), hiv⟩
 
+/-- A3.2: a value that owns an address is an owner's. -/
+theorem Val.owns_of_mem_ids {v : Val} {i : Nat} (h : i ∈ v.ids) : v.owns = true := by
+  cases v <;> simp_all [Val.ids, Val.owns]
+
+/-- A3.2: taking a lock: what block `k`'s payload owned is the value in
+    flight, which `x` owns. -/
+theorem covers_acquire {m : Mem} (hc : Covers m) {k : Nat} {t : Ty} {v : Val}
+    (hk : m.blk k = some ⟨t, .lock, some v⟩) :
+    CoversBut { m with blk := upd m.blk k (some ⟨t, .lock, none⟩) } v v.owns := by
+  intro i hi
+  rcases hc i hi with ⟨o, U, hU, hiU⟩ | ⟨k', bl, hk', hik⟩
+  · exact Or.inl (Or.inl ⟨o, U, hU, hiU⟩)
+  · by_cases he : k' = k
+    · subst he; rw [hk] at hk'; cases hk'
+      exact Or.inr ⟨Val.owns_of_mem_ids hik, hik⟩
+    · exact Or.inl (Or.inr ⟨k', bl, by simp [upd, he, hk'], hik⟩)
+
 /-- An assignment: the old value is dropped, the new one taken. -/
 theorem covers_assign {m : Mem} {v : Val} {o : Bool} (hc : CoversBut m v o) {x : Var} {sl : Slot}
     (hx : m.st x = some sl) {a' : Nat → Bool} (hd : DropSlot m.alloc sl a') :

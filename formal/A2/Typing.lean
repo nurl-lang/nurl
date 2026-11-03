@@ -426,6 +426,20 @@ def getE (y : Var) (E : Entry) : Ty → Entry
   | .int => intE
   | t => ⟨t, .bor, true, derive y E .share, E.held, false, false⟩
 
+/-- A3.2: the binding a lock's payload is checked out to (`withLock`): owned,
+    holding nothing (a payload views nothing); an integer is a plain integer
+    binding, as `unpair` binds an integer field. -/
+def lockE (t : Ty) : Entry := if t = .int then intE else ⟨t, .own, true, [], [], false, false⟩
+
+@[simp] theorem lockE_dtor (t : Ty) : (lockE t).dtor = false := by unfold lockE; split <;> rfl
+@[simp] theorem lockE_dbind (t : Ty) : (lockE t).dbind = false := by unfold lockE; split <;> rfl
+@[simp] theorem lockE_ty (t : Ty) : (lockE t).ty = t := by unfold lockE; split <;> simp_all [intE]
+@[simp] theorem lockE_live (t : Ty) : (lockE t).live = true := by unfold lockE; split <;> rfl
+@[simp] theorem lockE_path (t : Ty) : (lockE t).path = [] := by unfold lockE; split <;> rfl
+@[simp] theorem lockE_held (t : Ty) : (lockE t).held = [] := by unfold lockE; split <;> rfl
+@[simp] theorem lockE_vdeps (t : Ty) : (lockE t).vdeps = [] := by
+  unfold lockE; split <;> simp [Entry.vdeps, intE, Mode.ownSlot]
+
 /-- What an owned value holds: nothing, if its type holds no views (no view
     and no closure lies inside it, so what it was made from says nothing). -/
 def ownHeld (o : Bool) (t : Ty) (H : List Dep) : List Dep := if o && !t.holdsView then [] else H
@@ -1041,6 +1055,8 @@ def Stmt.hasThru : Stmt → Bool
   | .letd _ _ _ s => s.hasThru
   | .scopeD _ _ s => s.hasThru
   | .edit b _ _ => b
+  | .withLock _ _ s => s.hasThru
+  | .scopeL _ _ _ s => s.hasThru
   | _ => false
 
 /-- The functions a statement calls by index: a call, a `recover` body, a
@@ -1061,6 +1077,8 @@ def Stmt.calls : Stmt → List Nat
   | .callc _ _ _ _ s => s.calls
   | .letd _ f _ s => f :: s.calls
   | .scopeD _ f s => f :: s.calls
+  | .withLock _ _ s => s.calls
+  | .scopeL _ _ _ s => s.calls
   | _ => []
 
 /-- A function that changes elements through a borrow, or calls one that
@@ -1102,6 +1120,8 @@ theorem ite_r {c : Expr} {a b : Stmt} (h : b.Thru P) : (Stmt.ite c a b).Thru P :
 theorem wh {c : Expr} {k : Stmt} (h : k.Thru P) : (Stmt.while c k).Thru P :=
   h.mono (fun h => by simp [hasThru, h]) (fun g hg => by simp [calls, hg])
 theorem letv {x : Var} {r : Rhs} {k : Stmt} (h : k.Thru P) : (Stmt.letv x r k).Thru P :=
+  h.mono (fun h => by simp [hasThru, h]) (fun g hg => by simp [calls, hg])
+theorem withLock {a x : Var} {k : Stmt} (h : k.Thru P) : (Stmt.withLock a x k).Thru P :=
   h.mono (fun h => by simp [hasThru, h]) (fun g hg => by simp [calls, hg])
 theorem letcall {x : Var} {f : Nat} {args : List Var} {k : Stmt} (h : k.Thru P) :
     (Stmt.letcall x f args k).Thru P :=
@@ -1175,6 +1195,8 @@ def Stmt.src : Stmt → Bool
   | .letd _ _ _ s => s.src
   | .scopeD _ _ _ => false
   | .edit _ _ _ => true
+  | .withLock _ _ s => s.src
+  | .scopeL _ _ _ _ => false
 
 /-! ### Functions -/
 
@@ -1345,6 +1367,8 @@ def Stmt.vars : Stmt → List Var
   | .letd x _ r s => x :: r.vars ++ s.vars
   | .scopeD x _ s => x :: s.vars
   | .edit _ x op => x :: op.vars
+  | .withLock a x s => x :: a :: s.vars
+  | .scopeL _ _ x s => x :: s.vars
 
 
 

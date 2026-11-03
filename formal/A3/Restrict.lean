@@ -258,7 +258,7 @@ theorem Step.restrict {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
   | scopeP hs hx hd ih =>
     obtain ⟨r1, h1, hd'⟩ := ih
     obtain rfl := ResDown.panic_inv hd'
-    exact ⟨_, .scopeP h1 hx (DropSlot.restrict hx hd (Step.avoids hs hb hav hf)), rfl⟩
+    exact ⟨_, .scopeP h1 hx (DropSlot.restrict hx hd (Step.avoids hs hb hav hf hp)), rfl⟩
   | rbindSkip hp => exact ⟨_, .rbindSkip hp, rfl, .refl _⟩
   | rbindIn _ ih =>
     obtain ⟨r1, h1, hd⟩ := ih
@@ -355,5 +355,19 @@ theorem Step.restrict {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
     obtain ⟨r1, h1, hd⟩ := ih
     obtain rfl := ResDown.panic_inv hd
     exact ⟨_, .scopeDPMoved h1 hx, rfl⟩
+  -- A3.2: taking a lock and giving it back touch no address
+  | withLock ha hk hx => exact ⟨_, .withLock ha hk hx, rfl, .refl _⟩
+  | scopeLIn _ ih =>
+    obtain ⟨r1, h1, hd⟩ := ih
+    obtain ⟨s1, rfl, hg⟩ := ResDown.ok_inv hd
+    exact ⟨_, .scopeLIn h1, rfl, .scopeL _ _ _ hg⟩
+  | scopeLSkip hrl =>
+    cases hrl with
+    | put hx hg hk => exact ⟨_, .scopeLSkip (.put hx hg hk), rfl, .refl _⟩
+    | drop hc hx hd => exact ⟨_, .scopeLSkip (.drop hc hx (DropSlot.restrict hx hd hav)), rfl, .refl _⟩
+  | scopeLP hs hx hd ih =>
+    obtain ⟨r1, h1, hd'⟩ := ih
+    obtain rfl := ResDown.panic_inv hd'
+    exact ⟨_, .scopeLP h1 hx (DropSlot.restrict hx hd (Step.avoids hs hb hav hf hp)), rfl⟩
 
 end A3

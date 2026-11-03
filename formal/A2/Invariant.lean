@@ -545,6 +545,7 @@ def Stmt.spine : Stmt → List Var
   | .rbind p s => p :: s.spine
   | .frozen _ s => s.spine
   | .catchR _ _ s => s.spine
+  | .scopeL _ _ x s => x :: s.spine
   | _ => []
 
 /-- An address is covered: a tree some binding owns holds it, or (A3.1) a
@@ -574,6 +575,7 @@ def CatchOK (m : Mem) : Stmt → Prop
       (∀ k bl, m0.blk k = some bl → Reached (OutVals m0 x s.spine) m0.blk k →
         ∃ bl', m.blk k = some bl' ∧ BlkKeep bl bl') ∧
       CatchOK m s
+  | .scopeL _ _ _ s => CatchOK m s
   | _ => True
 
 /-- A borrowed parameter depends only on what was bound before its call: on
@@ -586,6 +588,7 @@ def PinOK (Γ : Ctx) : Stmt → Prop
   | .rbind p s => (∀ E, Γ p = some E → E.mode = .rootb → ∀ r ∈ roots E.vdeps, r ∉ s.spine) ∧ PinOK Γ s
   | .frozen _ s => PinOK Γ s
   | .catchR _ _ s => PinOK Γ s
+  | .scopeL _ _ _ s => PinOK Γ s
   | _ => True
 
 /-- A2-drop.2: a binding `letd` made depends, in memory, on no binding of
@@ -602,6 +605,7 @@ def DtorPinOK (Γ : Ctx) : Stmt → Prop
   | .rbind p s => DtorIn Γ p s ∧ DtorPinOK Γ s
   | .frozen _ s => DtorPinOK Γ s
   | .catchR _ _ s => DtorPinOK Γ s
+  | .scopeL _ _ x s => DtorIn Γ x s ∧ DtorPinOK Γ s
   | _ => True
 
 /-- A statement inside no run-time scope pins nothing. -/
@@ -613,6 +617,7 @@ theorem DtorPinOK.of_spine_nil {Γ : Ctx} {s : Stmt} (h : s.spine = []) : DtorPi
   | scope _ _ _ => simp [Stmt.spine] at h
   | scopeD _ _ _ _ => simp [Stmt.spine] at h
   | rbind _ _ _ => simp [Stmt.spine] at h
+  | scopeL _ _ _ _ _ => simp [Stmt.spine] at h
   | _ => trivial
 
 /-- `DtorPinOK` reads only what the `letd` bindings view: a context that
@@ -633,6 +638,7 @@ theorem DtorPinOK.of_dbind {Γ Γ' : Ctx}
   | rbind p k ih => exact ⟨hin p k hp.1, ih hp.2⟩
   | frozen _ k ih => exact ih hp
   | catchR _ _ k ih => exact ih hp
+  | scopeL _ _ x k ih => exact ⟨hin x k hp.1, ih hp.2⟩
   | _ => trivial
 
 theorem dtorOut_nil {Γ : Ctx} {s : Stmt} (h : s.spine = []) :
@@ -650,6 +656,7 @@ theorem PinOK.of_rootb {Γ Γ' : Ctx} (h : ∀ p E, Γ' p = some E → E.mode = 
   | rbind p k ih => exact ⟨fun E hE hm => hp.1 E (h p E hE hm) hm, ih hp.2⟩
   | frozen _ k ih => exact ih hp
   | catchR _ _ k ih => exact ih hp
+  | scopeL _ _ _ k ih => exact ih hp
   | _ => trivial
 
 /-- A statement inside no run-time scope is inside no call either. -/
@@ -661,6 +668,7 @@ theorem PinOK.of_spine_nil {Γ : Ctx} {s : Stmt} (h : s.spine = []) : PinOK Γ s
   | scope _ _ _ => simp [Stmt.spine] at h
   | scopeD _ _ _ _ => simp [Stmt.spine] at h
   | rbind _ _ _ => simp [Stmt.spine] at h
+  | scopeL _ _ _ _ _ => simp [Stmt.spine] at h
   | _ => trivial
 
 theorem pinOut_nil {Γ : Ctx} {s : Stmt} (h : s.spine = []) :
@@ -856,6 +864,19 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       -- A2-drop.2: the binding, armed, views what the value does, or more
       HeldUp Γ1 E H → StmtT P (setE Γ1 x (Entry.arm { E with held := H })) F s Δ →
       EndOK Δ x → StmtT P Γ F (.letd x f r s) (exitScope x Δ)
+  /-- A3.2: `locked_update a f`: the lock `a` (a live lock share) shares is
+      taken, and its payload, a `t`, is checked out to `x` for the body:
+      owned (an integer is a plain integer binding), holding nothing (the
+      payload views nothing). `x`'s scope ends as a `letv`'s does; its value
+      goes back into the block (`scopeL`). -/
+  | withLock {Γ Δ : Ctx} {F : List Var} {a x : Var} {s : Stmt} {Ea : Entry} {t : Ty} :
+      s.src = true → Γ x = none → x ∉ F → Γ a = some Ea → Ea.live = true → Ea.ty = .lk t →
+      StmtT P (setE Γ x (lockE t)) F s Δ → EndOK Δ x →
+      StmtT P Γ F (.withLock a x s) (exitScope x Δ)
+  /-- A3.2: run time: `x`'s lock scope, typed as a `scope`. -/
+  | scopeL {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x : Var} {s : Stmt} :
+      (∃ E, Γ x = some E ∧ E.mode ≠ .rootb ∧ E.ty = t) → x ∉ F → StmtT P Γ F s Δ → EndOK Δ x →
+      StmtT P Γ F (.scopeL k t x s) (exitScope x Δ)
   | scopeD {Γ Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {s : Stmt} :
       (∃ E, Γ x = some E ∧ E.mode = .own ∧ E.ty.hasFn = false ∧ DtorOK P f E.ty) → x ∉ F →
       StmtT P Γ F s Δ → EndOK Δ x →
@@ -955,6 +976,8 @@ def Stmt.codesOK (P : Prog) : Stmt → Prop
   | .callc _ _ _ _ s => s.codesOK P
   | .letd _ _ r s => r.codeOK P ∧ s.codesOK P
   | .scopeD _ _ s => s.codesOK P
+  | .withLock _ _ s => s.codesOK P
+  | .scopeL _ _ _ s => s.codesOK P
   | _ => True
 
 def ProgCodes (P : Prog) : Prop := ∀ fn ∈ P, fn.body.codesOK P

@@ -293,6 +293,19 @@ theorem Step.lifts {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
   | @scopeDP m1 _ _ _ _ _ hx ih =>
     exact ⟨_, GhostRel.refl _, Step.scopeDP (m1 := liftMem a2 m1) ih hx⟩
   | @scopeDPMoved m1 _ _ _ _ hx ih => exact Step.scopeDPMoved (m1 := liftMem a2 m1) ih hx
+  -- A3.2: taking a lock and giving it back touch no address
+  | withLock ha hk hx => exact ⟨_, GhostRel.refl _, Step.withLock (m := liftMem a2 m) ha hk hx⟩
+  | scopeLIn _ ih =>
+    obtain ⟨s'', hg, hs⟩ := ih
+    exact ⟨_, GhostRel.scopeL _ _ _ hg, Step.scopeLIn hs⟩
+  | scopeLSkip hrl =>
+    cases hrl with
+    | put hx hg hk =>
+      exact ⟨_, GhostRel.refl _, Step.scopeLSkip (m := liftMem a2 m) (Release.put hx hg hk)⟩
+    | drop hc hx hdr =>
+      exact ⟨_, GhostRel.refl _, Step.scopeLSkip (m := liftMem a2 m) (Release.drop hc hx (DropSlot.lift hdr hd))⟩
+  | @scopeLP m1 _ _ _ _ _ _ hs hx hdr ih =>
+    exact Step.scopeLP (m1 := liftMem a2 m1) ih hx (DropSlot.lift hdr ((Step.grows hs).disj hd hf))
 
 /-- A step to a configuration, lifted: its store with `a2` added, its
     statement equal but for the stores of `recover` frames. -/

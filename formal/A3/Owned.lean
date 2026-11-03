@@ -167,7 +167,7 @@ theorem BindParams.ownedId {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var
 /-- **A step's owned trees** hold only addresses its start owned, or fresh
     ones. -/
 theorem Step.ownedId {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) (hb : BorFree m) :
-    ∀ i, OwnedId r.mem i → OwnedId m i ∨ m.nid ≤ i := by
+    ∀ i, OwnedId r.mem i → OwnedId m i ∨ m.nid ≤ i ∨ PayAddr m i := by
   induction h with
   | seqSkip => exact fun i hi => .inl hi
   | seqL _ ih => exact ih
@@ -175,8 +175,8 @@ theorem Step.ownedId {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r
   | letv _ he =>
     intro i hi
     rcases OwnedId.set_some hi with ⟨ho, hiv⟩ | hi
-    · exact (EvalR.ownedId he hb).1 ho i hiv
-    · exact (EvalR.ownedId he hb).2 i hi
+    · exact ((EvalR.ownedId he hb).1 ho i hiv).imp_right .inl
+    · exact ((EvalR.ownedId he hb).2 i hi).imp_right .inl
   | letvP _ => exact fun i hi => .inl hi
   | letcall _ _ hbp =>
     exact fun i hi =>
@@ -193,8 +193,8 @@ theorem Step.ownedId {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r
   | assign _ he _ _ =>
     intro i hi
     rcases OwnedId.set_some hi with ⟨ho, hiv⟩ | hi
-    · exact (EvalR.ownedId he hb).1 ho i hiv
-    · exact (EvalR.ownedId he hb).2 i hi
+    · exact ((EvalR.ownedId he hb).1 ho i hiv).imp_right .inl
+    · exact ((EvalR.ownedId he hb).2 i hi).imp_right .inl
   | assignP _ => exact fun i hi => .inl hi
   | iteT _ _ => exact fun i hi => .inl hi
   | iteF _ => exact fun i hi => .inl hi
@@ -215,7 +215,7 @@ theorem Step.ownedId {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r
       · simp only [ids_node, List.mem_cons] at hi
         rcases hi with hi | hi | hi
         · exact .inl (b1 i (OwnedId.of_slot hx (by simp [hi])))
-        · subst hi; exact .inr (TakeVal.grows ht).nid
+        · subst hi; exact .inr (.inl (TakeVal.grows ht).nid)
         · exact .inl (b1 i (OwnedId.of_slot hx (by simp [hi])))
       · exact .inl (a1 i hi)
     · exact .inl (b1 i hi)
@@ -239,7 +239,7 @@ theorem Step.ownedId {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r
         · simp only [ids_node, List.mem_cons] at hi
           rcases hi with hi | hi | hi
           · exact .inl (b1 i (OwnedId.of_slot hn.2.2.1 (hr.sub.ids i (by simp [hi]))))
-          · subst hi; exact .inr (TakeVal.grows ht).nid
+          · subst hi; exact .inr (.inl (TakeVal.grows ht).nid)
           · exact .inl (b1 i (OwnedId.of_slot hn.2.2.1 (hr.sub.ids i (by simp [hi]))))
         · exact .inl (a1 i hi)
       · exact .inl (b1 i (OwnedId.of_slot hn.2.2.1 hi))
@@ -295,14 +295,26 @@ theorem Step.ownedId {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r
   | letd _ he =>
     intro i hi
     rcases OwnedId.set_some hi with ⟨ho, hiv⟩ | hi
-    · exact (EvalR.ownedId he hb).1 ho i hiv
-    · exact (EvalR.ownedId he hb).2 i hi
+    · exact ((EvalR.ownedId he hb).1 ho i hiv).imp_right .inl
+    · exact ((EvalR.ownedId he hb).2 i hi).imp_right .inl
   | letdP _ => exact fun i hi => .inl hi
   | scopeDIn _ ih => exact ih
   | scopeDEnd _ => exact fun i hi => .inl (OwnedId.of_nv hi)
   | scopeDMoved _ => exact fun i hi => .inl (OwnedId.of_remove hi)
   | scopeDP _ _ ih => exact fun i hi => ih i (OwnedId.of_nv hi)
   | scopeDPMoved _ _ ih => exact fun i hi => ih i (OwnedId.of_remove hi)
+  -- A3.2: a lock's payload checked out is owned; one given back is the block's
+  | withLock _ hk _ =>
+    intro i hi
+    rcases OwnedId.set_some hi with ⟨_, hiv⟩ | hi
+    · exact .inr (.inr ⟨_, _, hk, hiv⟩)
+    · exact .inl hi
+  | scopeLIn _ ih => exact ih
+  | scopeLSkip hrl =>
+    cases hrl with
+    | put _ _ _ => exact fun i hi => .inl (OwnedId.of_remove hi)
+    | drop _ _ _ => exact fun i hi => .inl (OwnedId.of_remove hi)
+  | scopeLP _ _ _ ih => exact fun i hi => ih i (OwnedId.of_remove hi)
 
 /-- A panicking step allocates nothing: its owned trees were owned before. -/
 theorem Step.ownedId_panic {P : Prog} {m m1 : Mem} {s : Stmt} (h : Step P m s (.panic m1)) :
@@ -318,7 +330,102 @@ theorem Step.ownedId_panic {P : Prog} {m m1 : Mem} {s : Stmt} (h : Step P m s (.
   | panic => cases hr; exact fun i hi => hi
   | letdP _ => cases hr; exact fun i hi => hi
   | scopeDPMoved _ _ ih => cases hr; exact fun i hi => ih rfl i (OwnedId.of_remove hi)
+  | scopeLP _ _ _ ih => cases hr; exact fun i hi => ih rfl i (OwnedId.of_remove hi)
   | _ => cases hr
+
+/-! ### A3.2: where a payload's addresses come from -/
+
+/-- An address the payload of block `k` of `B` owns. -/
+def PayAt (B : Nat → Option Blk) (k i : Nat) : Prop := ∃ bl, B k = some bl ∧ i ∈ bl.tree.ids
+
+/-- **Evaluating a right-hand side**: a payload's address afterwards was the
+    same block's, or (a new block) an owned tree's. -/
+theorem EvalR.payAt {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.ok v o m'))
+    (hb : BorFree m) : ∀ k i, PayAt m'.blk k i → PayAt m.blk k i ∨ OwnedId m i := by
+  intro k i ⟨bl, hk, hi⟩
+  cases h with
+  | pair h1 h2 => rw [TakeVal.blk h2, TakeVal.blk h1] at hk; exact .inl ⟨bl, hk, hi⟩
+  | inl h1 => rw [TakeVal.blk h1] at hk; exact .inl ⟨bl, hk, hi⟩
+  | inr h1 => rw [TakeVal.blk h1] at hk; exact .inl ⟨bl, hk, hi⟩
+  | pack h1 => rw [TakeVal.blk h1] at hk; exact .inl ⟨bl, hk, hi⟩
+  | @arcNew t y v1 m1 h1 _ =>
+    by_cases he : k = m1.nid
+    · subst he
+      simp [upd] at hk
+      subst hk
+      exact .inr ((TakeVal.ownedId h1 hb).1 i (by simpa [Blk.tree] using hi))
+    · have hk' : upd m1.blk m1.nid _ k = some bl := hk
+      rw [upd_ne _ _ he, TakeVal.blk h1] at hk'
+      exact .inl ⟨bl, hk', hi⟩
+  | @lockNew t y v1 m1 h1 _ =>
+    by_cases he : k = m1.nid
+    · subst he
+      simp [upd] at hk
+      subst hk
+      exact .inr ((TakeVal.ownedId h1 hb).1 i (by simpa [Blk.tree] using hi))
+    · have hk' : upd m1.blk m1.nid _ k = some bl := hk
+      rw [upd_ne _ _ he, TakeVal.blk h1] at hk'
+      exact .inl ⟨bl, hk', hi⟩
+  | _ => exact .inl ⟨bl, hk, hi⟩
+
+/-- **A step**: a payload's address afterwards was the same block's, or an
+    owned tree's (a new block's, or a lock's given back).  Not a fresh one:
+    a step's fresh addresses go to its slots. -/
+theorem Step.payAt {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) (hb : BorFree m) :
+    ∀ k i, PayAt r.mem.blk k i → PayAt m.blk k i ∨ OwnedId m i := by
+  induction h with
+  | seqL _ ih | seqP _ ih | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | frozenP _ ih | catchIn _ ih
+    | scopeDIn _ ih | scopeLIn _ ih => exact ih
+  | scopeP _ _ _ ih | rbindP _ _ ih | catchP _ _ ih | scopeDP _ _ ih | scopeDPMoved _ _ ih
+    | scopeLP _ _ _ ih => exact ih
+  | letv _ he | letd _ he | assign _ he _ _ => exact fun k i hp => EvalR.payAt he hb k i hp
+  | letcall _ _ hbp =>
+    intro k i ⟨bl, hk, hi⟩
+    have hk' : _ = some bl := hk
+    simp only [Mem.set_blk] at hk'
+    rw [BindParams.blk hbp] at hk'
+    exact .inl ⟨bl, hk', hi⟩
+  | callc _ _ _ _ hbp =>
+    intro k i ⟨bl, hk, hi⟩
+    have hk' : _ = some bl := hk
+    simp only [Mem.set_blk] at hk'
+    rw [BindParams.blk hbp] at hk'
+    exact .inl ⟨bl, hk', hi⟩
+  | push ht _ _ _ | pushRealloc ht _ _ _ | editPush ht _ _ | editPushRealloc ht _ _
+    | editSet _ _ ht _ _ _ | editSetOOB _ ht _ _ _ =>
+    intro k i ⟨bl, hk, hi⟩
+    rw [← TakeVal.blk ht]
+    exact .inl ⟨bl, hk, hi⟩
+  | @withLock a x s0 o k0 t v _ hk0 _ =>
+    intro k i ⟨bl, hk, hi⟩
+    have hk' : upd _ k0 (some ⟨t, .lock, none⟩) k = some bl := hk
+    by_cases he : k = k0
+    · subst he
+      simp [upd] at hk'
+      subst hk'
+      simp [Blk.tree] at hi
+    · rw [upd_ne _ _ he] at hk'
+      exact .inl ⟨bl, hk', hi⟩
+  | @scopeLSkip m' k0 t x hrl =>
+    intro k i ⟨bl, hk, hi⟩
+    cases hrl with
+    | @put o v hx hg hk0 =>
+      have hk' : upd _ k0 (some ⟨t, .lock, some v⟩) k = some bl := hk
+      by_cases he : k = k0
+      · subst he
+        simp [upd] at hk'
+        subst hk'
+        simp only [Blk.tree, Option.getD_some] at hi
+        cases o with
+        | true => exact .inr (OwnedId.of_slot hx hi)
+        | false =>
+          cases v with
+          | int n => simp [Val.ids] at hi
+          | _ => simp [Giveable] at hg
+      · rw [upd_ne _ _ he] at hk'
+        exact .inl ⟨bl, hk', hi⟩
+    | drop _ _ _ => exact .inl ⟨bl, hk, hi⟩
+  | _ => exact fun k i h => .inl h
 
 /-! ### Avoiding another part -/
 
@@ -335,6 +442,17 @@ theorem Avoids.mono {m m' : Mem} {a2 : Nat → Bool} {n : Nat} (hav : Avoids m a
   rcases h i hi with h | h
   · exact hav i h
   · exact hf i h
+
+/-- A3.2: ... and so does one that owns besides a payload's addresses of `m`,
+    when the part has none. -/
+theorem Avoids.mono3 {m m' : Mem} {a2 : Nat → Bool} {n : Nat} (hav : Avoids m a2) (hf : FreshFrom a2 n)
+    (hpo : PayOff m a2) (h : ∀ i, OwnedId m' i → OwnedId m i ∨ n ≤ i ∨ PayAddr m i) : Avoids m' a2 := by
+  intro i hi
+  rcases h i hi with h | h | h
+  · exact hav i h
+  · exact hf i h
+  · obtain ⟨k, bl, hk, hik⟩ := h
+    exact hpo i ⟨k, bl, hk, hik⟩
 
 theorem TakeVal.avoids {m m1 : Mem} {y : Var} {v : Val} (h : TakeVal m y v m1) (hb : BorFree m)
     {a2 : Nat → Bool} (hav : Avoids m a2) : Avoids m1 a2 ∧ ∀ i ∈ v.ids, a2 i = false :=
@@ -356,8 +474,8 @@ theorem BindParams.avoids {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var}
 /-- **A step keeps avoiding** a part its start's owned trees avoid, if the
     part has no fresh address. -/
 theorem Step.avoids {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) (hb : BorFree m)
-    {a2 : Nat → Bool} (hav : Avoids m a2) (hf : FreshFrom a2 m.nid) : Avoids r.mem a2 :=
-  Avoids.mono hav hf (Step.ownedId h hb)
+    {a2 : Nat → Bool} (hav : Avoids m a2) (hf : FreshFrom a2 m.nid) (hpo : PayOff m a2) : Avoids r.mem a2 :=
+  Avoids.mono3 hav hf hpo (Step.ownedId h hb)
 
 /-- A panicking step keeps avoiding every part its start's owned trees avoid. -/
 theorem Step.avoids_panic {P : Prog} {m m1 : Mem} {s : Stmt} (h : Step P m s (.panic m1))

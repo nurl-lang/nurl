@@ -173,6 +173,29 @@ inductive DropSlot : (Nat → Bool) → Slot → (Nat → Bool) → Prop
   | moved {a : Nat → Bool} : DropSlot a ⟨true, none⟩ a
   | borrowed {a : Nat → Bool} {v : Option Val} : DropSlot a ⟨false, v⟩ a
 
+/-- A3.2: what `x`'s slot can give back to a lock whose payload is a `t`:
+    the tree it owns, or, for an integer payload, the integer it holds (an
+    integer binding is a plain one). -/
+def Giveable (t : Ty) : Slot → Prop
+  | ⟨true, some _⟩ => True
+  | ⟨false, some (.int _)⟩ => t = .int
+  | _ => False
+
+/-- A3.2: the end of `x`'s lock scope on lock block `k`, whose payload is a
+    `t`: `x`'s value goes back into the block, which has it checked out; or
+    else `x`'s slot is dropped as a scope's is.  That is when the block is
+    gone (no share reaches it any more), or `x` holds nothing it can give
+    back (it was moved out: the lock stays checked out for good, as
+    `locked_take` without `locked_restore` leaves it); a typed program meets
+    no other case (the block is the one `x` took its payload from), but
+    the rule needs no invariant to say so. -/
+inductive Release (m : Mem) (k : Nat) (t : Ty) (x : Var) : Mem → Prop
+  | put {o : Bool} {v : Val} : m.st x = some ⟨o, some v⟩ → Giveable t ⟨o, some v⟩ →
+      m.blk k = some ⟨t, .lock, none⟩ →
+      Release m k t x ({ m with blk := upd m.blk k (some ⟨t, .lock, some v⟩) }.remove x)
+  | drop {sl : Slot} {a' : Nat → Bool} : (m.blk k ≠ some ⟨t, .lock, none⟩ ∨ ¬ Giveable t sl) →
+      m.st x = some sl → DropSlot m.alloc sl a' → Release m k t x ({ m with alloc := a' }.remove x)
+
 /-- The vector `x` names — its own tree, or the one its borrow points at —
     with both of its addresses live. -/
 def VecOf (m : Mem) (x : Var) (t : Ty) (c d : Nat) (es : List Val) : Prop :=
@@ -401,6 +424,8 @@ def Stmt.rename (ρ : Var → Var) : Stmt → Stmt
   | .letd x f r s => .letd (ρ x) f (r.rename ρ) (s.rename ρ)
   | .scopeD x f s => .scopeD (ρ x) f (s.rename ρ)
   | .edit b x op => .edit b (ρ x) (op.rename ρ)
+  | .withLock a x s => .withLock (ρ a) (ρ x) (s.rename ρ)
+  | .scopeL k t x s => .scopeL k t (ρ x) (s.rename ρ)
 
 /-- The renaming of a call of a function with parameters `ps` on `args`,
     its variables placed from `base`. -/
@@ -645,6 +670,26 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
   | scopeDPMoved {m m1 : Mem} {x : Var} {f : Nat} {s : Stmt} :
       Step P m s (.panic m1) → m1.st x = some ⟨true, none⟩ →
       Step P m (.scopeD x f s) (.panic (m1.remove x))
+  /-- A3.2: taking the lock `a` shares: its block's payload is checked out
+      to `x` (an owner moves in, an integer is a plain integer binding, as
+      `unpair` binds a field), and the body runs in `x`'s lock scope.  A
+      block whose payload is checked out has no step: the thread waits
+      (`Blocked`). -/
+  | withLock {m : Mem} {a x : Var} {s : Stmt} {o : Bool} {k : Nat} {t : Ty} {v : Val} :
+      m.st a = some ⟨o, some (.lk k)⟩ → m.blk k = some ⟨t, .lock, some v⟩ → m.st x = none →
+      Step P m (.withLock a x s)
+        (.ok ({ m with blk := upd m.blk k (some ⟨t, .lock, none⟩) }.set x ⟨v.owns, some v⟩)
+          (.scopeL k t x s))
+  | scopeLIn {m m' : Mem} {k : Nat} {t : Ty} {x : Var} {s s' : Stmt} :
+      Step P m s (.ok m' s') → Step P m (.scopeL k t x s) (.ok m' (.scopeL k t x s'))
+  /-- The lock scope's end gives the payload back (`Release`).  (This cut: a
+      panic unwinding through it drops `x`'s slot as a `scope` does, and the
+      lock stays checked out.) -/
+  | scopeLSkip {m m' : Mem} {k : Nat} {t : Ty} {x : Var} :
+      Release m k t x m' → Step P m (.scopeL k t x .skip) (.ok m' .skip)
+  | scopeLP {m m1 : Mem} {k : Nat} {t : Ty} {x : Var} {s : Stmt} {sl : Slot} {a' : Nat → Bool} :
+      Step P m s (.panic m1) → m1.st x = some sl → DropSlot m1.alloc sl a' →
+      Step P m (.scopeL k t x s) (.panic ({ m1 with alloc := a' }.remove x))
 
 /-- Reachability: A3.1, every step ends with the sweep, which frees the
     blocks no slot reaches (`Mem.sweep`). -/
@@ -662,9 +707,23 @@ inductive Steps0 (P : Prog) : Mem → Stmt → Res → Prop
       Step P m s (.ok m' s') → Steps0 P m' s' r → Steps0 P m s r
   | panic {m m' : Mem} {s : Stmt} : Step P m s (.panic m') → Steps0 P m s (.panic m')
 
-/-- A configuration that is neither finished nor able to step: the program
-    is about to touch memory it may not. -/
+/-- A3.2: the next step takes a lock whose payload is checked out: the
+    thread waits for it to come back.  (Whether it ever does is deadlock
+    freedom, which is not claimed.) -/
+def Blocked (m : Mem) : Stmt → Prop
+  | .withLock a _ _ => ∃ o k t, m.st a = some ⟨o, some (.lk k)⟩ ∧ m.blk k = some ⟨t, .lock, none⟩
+  | .seq a _ => Blocked m a
+  | .scope _ s => Blocked m s
+  | .rbind _ s => Blocked m s
+  | .frozen _ s => Blocked m s
+  | .catchR _ _ s => Blocked m s
+  | .scopeD _ _ s => Blocked m s
+  | .scopeL _ _ _ s => Blocked m s
+  | _ => False
+
+/-- A configuration that is neither finished nor able to step, nor (A3.2)
+    waiting for a lock: the program is about to touch memory it may not. -/
 def Stuck (P : Prog) (m : Mem) (s : Stmt) : Prop :=
-  s ≠ .skip ∧ ∀ r, ¬ Step P m s r
+  s ≠ .skip ∧ ¬ Blocked m s ∧ ∀ r, ¬ Step P m s r
 
 end A2

@@ -458,6 +458,8 @@ theorem CatchOK.sweepR {R : Val → Prop} {m : Mem} (hR : ∀ v, m.vals v → R 
   | .callc .., _ => trivial
   | .letd .., _ => trivial
   | .edit .., _ => trivial
+  | .withLock .., _ => trivial
+  | .scopeL _ _ _ k, h => CatchOK.sweepR hR (s := k) h
 
 /-- **The sweep keeps the invariant** of a running configuration, from any
     roots that include the store's slots. -/

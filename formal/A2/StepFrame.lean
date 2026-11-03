@@ -93,7 +93,8 @@ theorem panic_none {P : Prog} {m m1 : Mem} {s : Stmt} (hst : Step P m s (.panic 
   induction hst generalizing m1 with
   | letvP _ | assignP _ | panic => cases hr; exact fun _ h => h
   | seqP _ ih | frozenP _ ih => cases hr; exact ih rfl
-  | @scopeP _ y _ _ _ _ _ _ ih | @rbindP _ y _ _ _ _ ih | @scopeDPMoved _ y _ _ _ _ ih =>
+  | @scopeP _ y _ _ _ _ _ _ ih | @rbindP _ y _ _ _ _ ih | @scopeDPMoved _ y _ _ _ _ ih
+    | @scopeLP _ _ _ y _ _ _ _ _ _ ih =>
     cases hr; intro v hv
     simp only [Mem.remove_st]
     by_cases h : v = y
@@ -118,6 +119,14 @@ theorem panic_spine {P : Prog} {m m1 : Mem} {s : Stmt} (hst : Step P m s (.panic
       simp only [Stmt.spine, List.mem_cons] at hv
       exact ih rfl v (hv.resolve_left h)
   | letdP _ => cases hr; intro v hv; simp [Stmt.spine] at hv
+  | @scopeLP _ _ _ y _ _ _ _ _ _ ih =>
+    cases hr; intro v hv
+    simp only [Mem.remove_st]
+    by_cases h : v = y
+    · subst h; simp
+    · rw [upd_ne _ _ h]
+      simp only [Stmt.spine, List.mem_cons] at hv
+      exact ih rfl v (hv.resolve_left h)
   | _ => cases hr
 
 /-- Writing a slot that is already bound binds no other variable. -/
@@ -184,10 +193,21 @@ theorem step_new {P : Prog} {m m' : Mem} {s s' : Stmt} (hst : Step P m s (.ok m'
   induction hst generalizing m' s' with
   | seqSkip | iteT _ _ | iteF _ | «while» | frozenSkip | catchSkip =>
     cases hr; intro v h h'; exact absurd h h'
-  | seqL _ ih | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | catchIn _ ih | scopeDIn _ ih =>
+  | seqL _ ih | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | catchIn _ ih | scopeDIn _ ih | scopeLIn _ ih =>
     cases hr; intro v h h'
     have := ih rfl v h h'
     simp only [Stmt.spine, List.mem_cons]; first | exact this | exact Or.inr this
+  | @withLock _ x _ _ _ _ _ _ _ _ =>
+    cases hr; intro v h h'
+    by_cases hvx : v = x
+    · subst hvx; simp [Stmt.spine]
+    · simp [upd_ne _ _ hvx, h] at h'
+  | @scopeLSkip _ _ _ y hrel =>
+    cases hr; intro v h h'
+    rw [hrel.st] at h'
+    by_cases hvx : v = y
+    · subst hvx; simp at h'
+    · rw [upd_ne _ _ hvx] at h'; exact absurd h h'
   | @letd _ x _ _ _ _ _ _ he =>
     cases hr; intro v h h'
     by_cases hvx : v = x
@@ -294,10 +314,14 @@ theorem step_gone {P : Prog} {m m' : Mem} {s s' : Stmt} (hst : Step P m s (.ok m
     cases hr; intro v h h'; exact ih hck rfl v h h'
   | catchIn _ ih =>
     cases hr; intro v h h'; exact ih hck.2.2.2.2 rfl v h h'
-  | scopeIn _ ih | rbindIn _ ih | scopeDIn _ ih =>
+  | scopeIn _ ih | rbindIn _ ih | scopeDIn _ ih | scopeLIn _ ih =>
     cases hr; intro v h h'
     simp only [Stmt.spine, List.mem_cons, not_or] at h h'
     exact ih hck rfl v (h.resolve_left h'.1) h'.2
+  | scopeLSkip hrel =>
+    cases hr; intro v h _
+    simp only [Stmt.spine, List.mem_cons, List.not_mem_nil, or_false] at h
+    subst h; rw [hrel.st]; simp
   | scopeSkip _ _ | rbindSkip _ | scopeDMoved _ =>
     cases hr; intro v h _
     simp only [Stmt.spine, List.mem_cons, List.not_mem_nil, or_false] at h

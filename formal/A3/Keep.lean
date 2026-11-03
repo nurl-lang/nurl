@@ -133,5 +133,17 @@ theorem Step.keep {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) (
   | scopeDMoved _ => intro _ _; rfl
   | scopeDP _ _ ih => exact ih
   | scopeDPMoved _ _ ih => exact ih
+  | withLock _ _ _ => intro _ _; rfl
+  | scopeLIn _ ih => exact ih
+  | scopeLSkip hrl =>
+    cases hrl with
+    | put _ _ _ => intro _ _; rfl
+    | drop _ hx hd =>
+      exact DropSlot.keep hd (fun T hT i hi => hav i (OwnedId.of_slot (hx.trans (congrArg some hT)) hi))
+  | scopeLP hs hx hd ih =>
+    intro i hi
+    have hav1 := Step.avoids_panic hs hav
+    rw [← ih i hi]
+    exact DropSlot.keep hd (fun T hT j hj => hav1 j (OwnedId.of_slot (hx.trans (congrArg some hT)) hj)) i hi
 
 end A3

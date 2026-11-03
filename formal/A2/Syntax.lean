@@ -331,6 +331,12 @@ inductive Stmt where
   | edit (thru : Bool) (x : Var) (op : Edit)             -- a change of `x`'s elements (#295):
                                                           -- `thru` marks one made through a
                                                           -- borrow; the step ignores it
+  | withLock (a x : Var) (body : Stmt)                    -- A3.2: `locked_update a f`: the lock
+                                                          -- `a` shares is taken and its payload
+                                                          -- is checked out to `x` for `body`
+  | scopeL (k : Nat) (t : Ty) (x : Var) (body : Stmt)     -- run time: `x` holds lock block `k`'s
+                                                          -- payload (a `t`); it goes back at
+                                                          -- the end, on a panic too
 
 
 /-- A function.  Its parameters are variables `0 … n-1`, its result slot is

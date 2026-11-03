@@ -84,6 +84,13 @@ theorem Step.panic_st {P : Prog} {m m1 : Mem} {s : Stmt} (h : Step P m s (.panic
     split at hv
     · cases hv
     · exact ih rfl v sl hv
+  | scopeLP _ _ _ ih =>
+    cases hr
+    intro v sl hv
+    simp only [Mem.remove, upd] at hv
+    split at hv
+    · cases hv
+    · exact ih rfl v sl hv
   | _ => cases hr
 
 /-! ### Typing at the touched statement -/
@@ -145,6 +152,15 @@ theorem TypedAt.scopeD {P : Prog} {m : Mem} {x : Var} {f : Nat} {s : Stmt}
   generalize hs : Stmt.scopeD x f s = s0 at ht
   induction ht with
   | scopeD _ _ hb _ _ _ _ _ => cases hs; exact ⟨_, _, _, hb, hi⟩
+  | sub hw _ _ ih => exact ih (hi.weaker hw) hs
+  | _ => cases hs
+
+theorem TypedAt.scopeL {P : Prog} {m : Mem} {k : Nat} {t : Ty} {x : Var} {s : Stmt}
+    (h : TypedAt P m (.scopeL k t x s)) : TypedAt P m s := by
+  obtain ⟨Γ, F, Δ, ht, hi⟩ := h
+  generalize hs : Stmt.scopeL k t x s = s0 at ht
+  induction ht with
+  | scopeL _ _ hb _ _ => cases hs; exact ⟨_, _, _, hb, hi⟩
   | sub hw _ _ ih => exact ih (hi.weaker hw) hs
   | _ => cases hs
 
@@ -259,5 +275,8 @@ theorem touch_seen {P : Prog} {m m1 : Mem} {s : Stmt} {i : Nat} {w : Bool}
   | rbind _ ih => exact ih hty.rbind
   | frozen _ ih => exact ih hty.frozen
   | catchR _ ih => exact ih hty.catchR
+  | scopeL _ ih => exact ih hty.scopeL
+  | scopeLEnd hx hi => exact .inl ⟨_, _, hx, hi⟩
+  | scopeLUnwind hs hx hi => exact .inl ⟨_, _, Step.panic_st hs _ _ hx, hi⟩
 
 end A3

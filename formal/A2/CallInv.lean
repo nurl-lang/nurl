@@ -103,6 +103,8 @@ theorem DtorPinOK.of_spine_dbind {Γ : Ctx} {s : Stmt}
     exact ⟨hin x k (h x (by simp [Stmt.spine])), ih fun v hv => h v (by simp [Stmt.spine, hv])⟩
   | rbind p k ih =>
     exact ⟨hin p k (h p (by simp [Stmt.spine])), ih fun v hv => h v (by simp [Stmt.spine, hv])⟩
+  | scopeL _ _ x k ih =>
+    exact ⟨hin x k (h x (by simp [Stmt.spine])), ih fun v hv => h v (by simp [Stmt.spine, hv])⟩
   | _ => trivial
 
 namespace CallH

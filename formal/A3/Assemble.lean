@@ -22,13 +22,15 @@ def LiftLemma (P : Prog) : Prop :=
 /-- **No thread is stuck.** -/
 theorem CInv.memSafe_of {P : Prog} (hP : ProgOK P) (hL : LiftLemma P) {C : Cfg} (h : CInv P C) :
     ∀ (i : Nat) (t : Thread), C.ths[i]? = some t → ¬ Stuck P (C.view t) t.s := by
-  intro i t hi ⟨hne, hno⟩
+  intro i t hi ⟨hne, hnb, hno⟩
   obtain ⟨ps, hc, _⟩ := h
   have hlt := hc.lt_nid hi
   obtain ⟨a, ha⟩ := part_of hc.len hi
   obtain ⟨hto, _⟩ := hc.ok i t a hi ha
-  rcases ThreadOK.progress hP hto with hs | ⟨r, hr⟩
+  rcases ThreadOK.progress hP hto with hs | hb | ⟨r, hr⟩
   · exact hne hs
+  · -- A3.2: waiting for a lock is not stuck
+    exact hnb (Blocked.of_eq (m := ownView C t a) (m' := C.view t) rfl rfl hb)
   · have hd : ∀ k, (ownView C t a).alloc k = true → minus C.alloc (union a (payPart C.blk)) k = false :=
       fun k hk => minus_disj k hk
     have hf : FreshFrom (minus C.alloc (union a (payPart C.blk))) (ownView C t a).nid := fun k hk => by
@@ -78,7 +80,7 @@ theorem claim_of
   have hreach : ∀ C, Reach P spawn (Cfg.init s nv) C → CInv P C :=
     fun C hr => reach_cinv hP hPc (hR P) (hS P spawn hP hPc hSp) h0 hr
   exact ⟨fun C hr => CInv.memSafe_of hP (hL P) (hreach C hr),
-    fun C hr => CInv.raceFree hP hPc (hR P) (hreach C hr),
+    fun C hr => CInv.raceFree (hreach C hr),
     fun C hr hend => CInv.noLeak (hreach C hr) hend⟩
 
 end A3

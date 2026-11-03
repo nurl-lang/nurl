@@ -77,6 +77,8 @@ inductive Redex : Stmt → (Stmt → Stmt) → Stmt → Prop
       Redex s K r → Redex (.catchR x m0 s) (fun y => .catchR x m0 (K y)) r
   | scopeD {x : Var} {f : Nat} {s r : Stmt} {K : Stmt → Stmt} :
       Redex s K r → Redex (.scopeD x f s) (fun y => .scopeD x f (K y)) r
+  | scopeL {k : Nat} {t : Ty} {x : Var} {s r : Stmt} {K : Stmt → Stmt} :
+      Redex s K r → Redex (.scopeL k t x s) (fun y => .scopeL k t x (K y)) r
 
 /-- A spawned function: every parameter is a `sink` of a type that holds no
     views, and it returns an integer. -/
@@ -241,6 +243,19 @@ inductive Touch (P : Prog) (m : Mem) : Stmt → Nat → Bool → Prop
       Touch P m s i w → Touch P m (.frozen z s) i w
   | catchR {x : Var} {m0 : Mem} {s : Stmt} {i : Nat} {w : Bool} :
       Touch P m s i w → Touch P m (.catchR x m0 s) i w
+  /-- A3.2: a lock scope: its body's step; its end drops what `x` owns, or
+      gives it back to the block, which touches none of its addresses (an
+      over-approximation: both are counted as writes of `x`'s tree); and so
+      does a panic unwinding through it.  Taking a lock (`withLock`) and
+      giving it back change only the lock's word, which the runtime's mutex
+      changes atomically (the trusted base): no address. -/
+  | scopeL {k : Nat} {t : Ty} {x : Var} {s : Stmt} {i : Nat} {w : Bool} :
+      Touch P m s i w → Touch P m (.scopeL k t x s) i w
+  | scopeLEnd {k : Nat} {t : Ty} {x : Var} {T : Val} {i : Nat} :
+      m.st x = some ⟨true, some T⟩ → i ∈ T.ids → Touch P m (.scopeL k t x .skip) i true
+  | scopeLUnwind {k : Nat} {t : Ty} {x : Var} {s : Stmt} {m1 : Mem} {T : Val} {i : Nat} :
+      Step P m s (.panic m1) → m1.st x = some ⟨true, some T⟩ → i ∈ T.ids →
+      Touch P m (.scopeL k t x s) i true
 
 /-- A3.1: what the sweep that ends thread `i`'s next step frees: an address
     live before the step and after it, which the sweep frees — the payload
