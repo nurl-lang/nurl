@@ -4091,6 +4091,16 @@ unsafe @ nurl_cg_lbl i h s hint → s {
     ? | ( seq bit `false` ) != 0 ( nurl_sym_len syms `__ret_path_lends__` ) { ( nurl_sym_set_deep syms `__hown_saw_false__` `1` ) } {
         ( nurl_sym_set_deep syms `__hown_saw_owned__` `1` ) }
     ? & != 0 ( nurl_sym_len syms `__hown_saw_false__` ) != 0 ( nurl_sym_len syms `__hown_saw_owned__` ) { ( mem_hown_mark_dyn syms ) } {}
+    // (A path handing back a `sink` parameter hands over this function's
+    // own value — its flag says so per run — beside a path that lends: no
+    // static answer is right on both. Taken for "lent" throughout, a
+    // function handing back a borrowed parameter on one path and its
+    // `sink` one on another left the caller's `inout` holding the sink
+    // argument with its old value never released: agora #456.)
+    ? != 0 ( nurl_sym_len syms `__ret_path_sink__` ) { ( nurl_sym_set_deep syms `__hown_saw_sink__` `1` ) } {
+        ? | ( seq bit `false` ) != 0 ( nurl_sym_len syms `__ret_path_lends__` ) { ( nurl_sym_set_deep syms `__hown_saw_lendp__` `1` ) } {}
+    }
+    ? & != 0 ( nurl_sym_len syms `__hown_saw_sink__` ) != 0 ( nurl_sym_len syms `__hown_saw_lendp__` ) { ( mem_hown_mark_dyn syms ) } {}
     ( nurl_print `  store i1 ` ) ( nurl_print bit ) ( nurl_print `, ptr ` ) ( nurl_print hs ) ( nurl_print `\n` )
 }
 
@@ -5250,6 +5260,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
     ( nurl_sym_set_deep syms `__agg_direct__` `` )
     ( nurl_sym_set_deep syms `__agg_take_own__` `` )
     ( nurl_sym_set_deep syms `__ret_path_lends__` `` )
+    ( nurl_sym_set_deep syms `__ret_path_sink__` `` )
     // Cascade guard: a `^` reached here while parsing a value operand
     // (g_ret_forbidden set by gen_operand / a `?`-condition / `??`-
     // scrutinee / a return value) means a preceding fixed-arity prefix
@@ -5814,6 +5825,9 @@ unsafe @ gen_ret i lex i syms i cg → s {
         ? >= ( nurl_sym_word_index syms `__fn_param_names__` ret_first_val ) 0
         { ( __record_param_idx syms `__fn_retlend__` ret_first_val )
             ( nurl_sym_set_deep syms `__ret_path_lends__` `1` )
+            // (A `sink` parameter is this function's own: its flag says
+            // per run whether it is handed over — mem_store_hown.)
+            ? ( __capture_sinkp ret_first_val syms ) { ( nurl_sym_set_deep syms `__ret_path_sink__` `1` ) } {}
             : s pup ( mem_udrop_ptr_of syms ret_first_val )
             = hbit ? == 0 ( nurl_str_len pup ) ( nurl_str_cat `false` `` ) ( mem_udrop_flag_get syms cg pup ) } {}
     } {}
@@ -25113,6 +25127,8 @@ unsafe @ mem_path_to_indices s path → s {
     ? | ( seq ty `%String` ) != 0 ( nurl_str_starts ty `%Vec__` ) { ^ ( mem_handle_key cg ty val ) } {}
     // (An enum by its active variant's key: agora #450.)
     ? ( __is_handle_enum ty ) { ^ ( mem_enum_variant_key cg ty val ) } {}
+    // (A library handle that is one pointer: agora #456.)
+    ? ( __is_libh ty ) { ^ ( mem_libh_key cg ty val ) } {}
     ? ! ( __is_owned_struct_ty ty ) { ^ ( nurl_str_cat `` `` ) } {}
     : s sname ( nurl_str_slice ty 1 - ( nurl_str_len ty ) 1 )
     : i fc ( nurl_str_to_int ( nurl_sym_get2 g_root_syms sname `__field_count` ) )
@@ -25128,6 +25144,28 @@ unsafe @ mem_path_to_indices s path → s {
         = i + i 1
     }
     ^ ( nurl_str_cat `` `` )
+}
+
+// A library handle whose whole value is one pointer — a Box's, an Rc's or
+// an Arc's control block — or one such handle (a map's Box, a lock's
+// share): that pointer is the value's identity. Two values holding it are
+// one value (an Rc share of the same block is the same state), and no
+// other value holds it. `` for a handle with more fields: a modified copy
+// may share its first one (agora #456).
+@ mem_libh_key i cg s ty s val → s {
+    : s sname ( nurl_str_slice ty 1 - ( nurl_str_len ty ) 1 )
+    ? != 1 ( nurl_str_to_int ( nurl_sym_get2 g_root_syms sname `__field_count` ) ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s ft ( nurl_sym_get g_root_syms ( nurl_str_cat sname `__idx_0__type` ) )
+    : s fl ( nurl_llty ft )
+    : b __ptr & != 0 ( nurl_str_len fl ) == ( nurl_str_get fl - ( nurl_str_len fl ) 1 ) 42
+    ? ! | __ptr ( __is_libh ft ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s f ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print f ) ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty ty ) ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
+    ? ! __ptr { ^ ( mem_libh_key cg ft f ) } {}
+    ? ( seq fl `i8*` ) { ^ f } {}
+    : s r ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ` = bitcast ` ) ( nurl_print fl ) ( nurl_print ` ` ) ( nurl_print f ) ( nurl_print ` to i8*\n` )
+    ^ r
 }
 
 // An i8* that identifies an owned value of type `ty` (register `val`): the
@@ -55945,6 +55983,8 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     = g_rawlit_n 0
     ( nurl_sym_def syms `__hown_saw_false__` `` )
     ( nurl_sym_def syms `__hown_saw_owned__` `` )
+    ( nurl_sym_def syms `__hown_saw_sink__` `` )
+    ( nurl_sym_def syms `__hown_saw_lendp__` `` )
     ( nurl_sym_def syms `__fn_self_name__` fname )
     ( nurl_sym_def syms `__fn_scratch_objs__` `` )
     ( nurl_sym_def syms `__fn_inferred_store__` `` )
