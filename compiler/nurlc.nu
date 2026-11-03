@@ -1612,6 +1612,8 @@ unsafe @ agg_field_count i syms s ot → i {
 : ~ i g_retcap_n 0  // …and with a `retcap##` one (a `sink` parameter the returned closure took over)
 : ~ i g_thv_precise 0  // 1 while __ty_holds_view answers for a library handle by its type arguments
 : ~ i g_thv_memo 0  // __ty_holds_view's per-question memo of named types (2 in progress, 1 holds a view, 0 none); 0 between questions
+: ~ i g_thv_final 0  // …and its answers that are final: a named type's, asked once its layout and every layout it reaches are known (`ty`, `ty!` when g_thv_precise)
+: ~ i g_thv_unknown 0  // 1 while the question being answered met a type whose layout is not known yet (its answer is then not kept in g_thv_final)
 : ~ i g_clolend_n 0  // bindings that recorded a `__clolend` (mem_check_ret_clo_lend skips idents while 0)
 : ~ i g_sealed_views 0  // bindings marked `__sealed_view` so far (agora #159): none, no lookup
 // The last field read (gen_member) was out of a sealed representation, at
@@ -29664,9 +29666,15 @@ unsafe @ __ty_holds_view s ty i depth → b {
     // is exact however deep or recursive the type (`Json` in `( Vec Json )`,
     // a struct holding a Vec of itself) and the walk ends with no depth cap.
     // (A cap of 16 levels stood here: a view 17 struct levels down was
-    // answered "none".) bck_bind_class keeps the answer per type.
+    // answered "none".) A question's answer is exact, so it is kept for
+    // every later one (g_thv_final) — unless it met a type whose layout is
+    // not known yet (a generic instance recorded ahead of its
+    // instantiation), which is asked again.
+    : s fkey ? != 0 g_thv_precise ( nurl_str_cat ty `!` ) ty
+    : i fin ? == 0 g_thv_final -1 ( nurl_sym_int g_thv_final fkey )
+    ? >= fin 0 { ^ == fin 1 } {}
     : b top == g_thv_memo 0
-    ? top { = g_thv_memo ( nurl_sym_new ) } {}
+    ? top { = g_thv_memo ( nurl_sym_new ) = g_thv_unknown 0 } {}
     : i known ( nurl_sym_int g_thv_memo ty )
     : ~ b r F
     ? >= known 0 { = r == known 1 } {
@@ -29674,7 +29682,11 @@ unsafe @ __ty_holds_view s ty i depth → b {
         = r ( __thv_named ty ( nurl_str_slice ty 1 - n 1 ) depth )
         ( nurl_sym_set g_thv_memo ty ? r `1` `0` )
     }
-    ? top { ( nurl_sym_free g_thv_memo ) = g_thv_memo 0 } {}
+    ? top {
+        ( nurl_sym_free g_thv_memo )
+        = g_thv_memo 0
+        ? & == 0 g_thv_unknown != 0 g_thv_final { ( nurl_sym_def g_thv_final fkey ? r `1` `0` ) } {}
+    } {}
     ^ r
 }
 
@@ -29690,11 +29702,17 @@ unsafe @ __ty_holds_view s ty i depth → b {
             : s hta ( nurl_sym_get2 g_impl_name_syms `libhta##` ty )
             ? != 0 ( nurl_str_len hta ) { ^ ( __src_tys_hold_view hta + depth 1 ) } {}
             ? & == 0 ( nurl_sym_len2 g_root_syms sname `__variants` ) != 0 ( nurl_sym_len2 g_root_syms sname `__field_count` ) { ^ ( __fields_hold_view sname depth ) } {}
+            // (Its type arguments not recorded yet: asked again later.)
+            = g_thv_unknown 1
         } {}
         ^ T
     } {}
     ? != 0 ( nurl_sym_len2 g_root_syms sname `__variants` ) { ^ ( __variants_hold_view sname depth ) } {}
-    ? == 0 ( nurl_sym_len2 g_root_syms sname `__field_count` ) { ^ T } {}
+    // A type whose layout is not known here is taken to hold one, for now.
+    ? == 0 ( nurl_sym_len2 g_root_syms sname `__field_count` ) {
+        = g_thv_unknown 1
+        ^ T
+    } {}
     ^ ( __fields_hold_view sname depth )
 }
 
@@ -54182,6 +54200,10 @@ unsafe @ check_type_known i lex i syms s llvm_ty s ctx i tline i tcol → v {
     ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `ncd##` ty ) `` )
     ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `libhp##` ty ) `` )
     ? != 0 g_bcls_memo { ( nurl_sym_def g_bcls_memo ty `-1` ) } {}
+    ? != 0 g_thv_final {
+        ( nurl_sym_def g_thv_final ty `-1` )
+        ( nurl_sym_def g_thv_final ( nurl_str_cat ty `!` ) `-1` )
+    } {}
 }
 
 unsafe @ ensure_struct_instantiated i syms s sname s ta_list → v {
@@ -75528,6 +75550,7 @@ unsafe @ main → i {
     = g_impl_ret_syms ( nurl_sym_new )
     = g_impl_name_syms ( nurl_sym_new )
     = g_bcls_memo ( nurl_sym_new )
+    = g_thv_final ( nurl_sym_new )
     = g_drop_base ( nurl_sym_new )
     = g_lib_kind_memo ( nurl_sym_new )
     = g_drop_edges ( nurl_sym_new )
