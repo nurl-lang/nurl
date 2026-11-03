@@ -746,9 +746,6 @@ theorem valOK_cell_sub {m : Mem} {k : Nat} {τ : Ty} {w : Val} {P H : List Dep}
     cases hs with
     | pkg hs => obtain ⟨dep, hd, rest⟩ := ih hs; exact ⟨dep, append_envDeps_sub hd, rest⟩
 
-/-- An owned slot of the store holds a share of cell `k`. -/
-def OwnedCell (m : Mem) (k : Nat) : Prop := ∃ x T, m.st x = some ⟨true, some T⟩ ∧ Sub (.cell k) T
-
 /-- One step back along a live borrow's dependencies: the cell share it holds
     is in an owned slot's tree, or at the top of a borrowed parameter it
     depends on. -/

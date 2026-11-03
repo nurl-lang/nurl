@@ -290,12 +290,13 @@ def NoGuard (B : Nat → Option Blk) (vs : List Val) : Prop :=
 /-- A3.5, **the crossing check** (`mem_send_check`, docs/MEMORY.md §6.5): a
     library handle whose copies are one state (a cell) may cross only with
     every other owner of that state.  For every cell a crossing value holds a
-    share of, no slot left behind (`st'`) holds one.  The slots that hold one
-    are its owners and (A3.5's third cut) its borrows, which are on their
-    owner's thread: the check is the runtime's count of the places in the
-    values that hold each cell's block against its owners, with a borrow left
-    behind counted as its owner is (A3/DESIGN.md, *A library handle used
-    through a borrow*).  (`Sub` does not enter a share: a lock share's
+    share of, no owned slot left behind (`st'`) holds one: the check is the
+    runtime's count of the places in the values that hold each cell's block
+    against its owners.  A borrow left behind is not counted (A3.5's third
+    cut: a lent cell share is the share), as the runtime's count does not
+    count it: a live borrow's owner is in the store (`MInv.cell_owned`), so
+    where no owner is left behind no live borrow is, and a dead one is never
+    read.  (`Sub` does not enter a share: a lock share's
     payload is the lock's, and moves with no crossing.)  A3.5 runs it at a
     spawn (`TStep.spawn`); A3.5's second cut at every value going into a lock
     block too — `locked_new` and a cell's constructor (`EvalR.lockNew`,
@@ -305,7 +306,7 @@ def NoGuard (B : Nat → Option Blk) (vs : List Val) : Prop :=
     `mem_send_check` calls `nurl_panic`.  A3.3: the check also asks that no
     read guard crosses (`NoGuard`), which nurlc asks statically. -/
 def SendCheck (B : Nat → Option Blk) (vs : List Val) (st' : Var → Option Slot) : Prop :=
-  (∀ k, (∃ v ∈ vs, Sub (.cell k) v) → ∀ y o w, st' y = some ⟨o, some w⟩ → ¬ Sub (.cell k) w) ∧
+  (∀ k, (∃ v ∈ vs, Sub (.cell k) v) → ∀ y w, st' y = some ⟨true, some w⟩ → ¬ Sub (.cell k) w) ∧
   NoGuard B vs
 
 /-- A3.5's second cut: a channel's head, received, holds every owner of each
@@ -430,10 +431,17 @@ def Val.owns : Val → Bool
   | _ => false
 
 /-- Handing a value on: an owner gives up its value, anything else is
-    copied. -/
+    copied.  A3.5's third cut: a borrowed value handed on holds no library
+    handle — a typed program hands on a borrowed integer or slice only
+    (`PushArg`), and a copy of a borrowed handle is a `cellClone` — so what
+    an owned tree gains is an owner's (`A3/Cell.lean`'s confinement over
+    owned slots). -/
 inductive TakeVal (m : Mem) : Var → Val → Mem → Prop
   | own {y : Var} {v : Val} : m.st y = some ⟨true, some v⟩ → TakeVal m y v (m.set y ⟨true, none⟩)
-  | bor {y : Var} {v : Val} : m.st y = some ⟨false, some v⟩ → TakeVal m y v m
+  | bor {y : Var} {v : Val} : m.st y = some ⟨false, some v⟩ → (∀ k, ¬ Sub (.cell k) v) → TakeVal m y v m
+
+/-- A3.5's third cut: an owned slot of the store holds a share of cell `k`. -/
+def OwnedCell (m : Mem) (k : Nat) : Prop := ∃ x T, m.st x = some ⟨true, some T⟩ ∧ Sub (.cell k) T
 
 inductive RRes where
   | ok (v : Val) (own : Bool) (m : Mem)
@@ -552,9 +560,12 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
       cut: a cell's state is a lock's payload). -/
   | cellNewFail {t : Ty} {y : Var} {v : Val} {m1 : Mem} :
       TakeVal m y v m1 → ¬ SendCheck m1.blk [v] m1.st → EvalR m (.cellNew t y) .panic
-  /-- A3.5: a copy of the cell share `a` holds: a new share of its block. -/
+  /-- A3.5: a copy of the cell share `a` holds: a new share of its block.
+      A3.5's third cut: `a` may be a borrow, and the copy is a new owner on the
+      thread an owner of the cell is on (`OwnedCell`: a live borrow's owner
+      is in the store, `MInv.cell_owned`, so a typed copy always steps). -/
   | cellClone {a : Var} {o : Bool} {k : Nat} :
-      m.st a = some ⟨o, some (.cell k)⟩ → EvalR m (.cellClone a) (.ok (.cell k) true m)
+      m.st a = some ⟨o, some (.cell k)⟩ → OwnedCell m k → EvalR m (.cellClone a) (.ok (.cell k) true m)
   /-- A3.4: an `Atomic`'s operation: one step on the word, the integer
       payload of the lock block `a` shares; the answer is an integer.  (A
       lock block of an integer whose payload a `withLock` has checked out

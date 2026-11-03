@@ -1207,10 +1207,14 @@ c__h …`) changes the state through it — a `withCell` through the borrowed
 root, `Entry.lockOf` — and copies it — `cellClone` of a borrow, as
 `PNCounter_share` copies a handle it was lent.  A borrow never leaves its
 thread: what a spawn moves is owned (`MoveArgs`) and holds no view
-(`SpawnOK`), and what goes into a lock block is owned too (`PushArg`).  So
-a borrowed share is on its owner's thread, and the crossing check counts it
-there (`SendCheck` reads every slot left behind, owned or borrowed; A3's
-`CellInv` counts every slot). -/
+(`SpawnOK`), and what goes into a lock block is owned too (`PushArg`).  And
+while a borrow is live its owner is in the store (A2's `MInv.cell_owned`: a
+lent cell share lands, through its dependencies, in an owned tree,
+`CellLanded`).  So the crossing check counts owners only, as the runtime's
+does (`SendCheck`): where no owner is left behind no live borrow is, and a
+dead borrow still bound is not counted (`sendCheck_dead_borrow_ok`).  A3's
+`CellInv` counts owners, and a live borrow through its owner
+(`CellInv.live_home`). -/
 
 /-- A library's `in` handle parameter is a borrowed root (`rootb`), live for
     the call, whose cell share a `withCell` checks out (`Entry.lockOf`; the
@@ -1241,14 +1245,33 @@ theorem cellClone_in {Γ : Ctx} {F : List Var} {a : Var} {ps : List (PMode × Ty
     RhsT Γ F (.cellClone a) ⟨.cell t, .own, true, [], [], false, false⟩ Γ :=
   .cellClone ha rfl rfl
 
-/-- A borrow left behind is counted as its owner is: a crossing value that
-    holds a share of a cell a borrowed slot left behind holds one of fails the
-    check.  (A live borrow's owner is left behind with it, on the same thread,
-    so the runtime's count of owners fails too.) -/
-theorem sendCheck_borrow_left {B : Nat → Option Blk} {vs : List Val} {st : Var → Option Slot} {k : Nat}
-    {v : Val} (hv : v ∈ vs) (hs : Sub (.cell k) v) {y : Var} {w : Val} (hy : st y = some ⟨false, some w⟩)
+/-- The crossing check counts owners, as the runtime's does: a slot left behind
+    that is an owner of a crossing cell fails it ... -/
+theorem sendCheck_owner_left {B : Nat → Option Blk} {vs : List Val} {st : Var → Option Slot} {k : Nat}
+    {v : Val} (hv : v ∈ vs) (hs : Sub (.cell k) v) {y : Var} {w : Val} (hy : st y = some ⟨true, some w⟩)
     (hw : Sub (.cell k) w) : ¬ SendCheck B vs st :=
-  fun h => h.1 k ⟨v, hv, hs⟩ y false w hy hw
+  fun h => h.1 k ⟨v, hv, hs⟩ y w hy hw
+
+/-- ... and **a dead borrow left behind does not** (`: PNCounter c …  : f c  …
+    spawn (sink c)`): the spawn moves the owner `c`, which kills the borrow
+    `f`, whose slot still holds the share until its scope ends.  The model's
+    check passes, as the runtime's does.  (A live borrow left behind has its
+    owner left behind too, `MInv.cell_owned`, which fails the check.) -/
+theorem sendCheck_dead_borrow_ok {B : Nat → Option Blk} {c f : Var} {k : Nat}
+    (hng : NoGuard B [.cell k]) :
+    let st : Var → Option Slot := fun y =>
+      if y = c then some ⟨true, some (.cell k)⟩ else if y = f then some ⟨false, some (.cell k)⟩ else none
+    MoveArgs st [c] [.cell k] (upd st c (some ⟨true, none⟩)) ∧
+      SendCheck B [.cell k] (upd st c (some ⟨true, none⟩)) := by
+  intro st
+  refine ⟨MoveArgs.cons (by simp [st]) MoveArgs.nil, fun k' _ y w hy _ => ?_, hng⟩
+  simp only [upd, st] at hy
+  by_cases hyc : y = c
+  · rw [ite_eq_left hyc] at hy; cases hy
+  · rw [ite_eq_right hyc, ite_eq_right hyc] at hy
+    by_cases hyf : y = f
+    · rw [ite_eq_left hyf] at hy; cases hy
+    · rw [ite_eq_right hyf] at hy; cases hy
 
 /-! ### A3.1: shares in a slice's elements
 
@@ -1261,8 +1284,9 @@ It lets no two threads reach one block through a slice: a slice is a view,
 which no crossing takes (`slice_not_send`), so it and what it lends stay on
 the thread that took it.  What its elements are lent is what a `Vec`'s are:
 an `Arc` share or a lock share, which are Sync, or (A3.5's third cut) a cell
-share, a borrow counted as its owner's thread's — the node it views is that
-thread's own, or a frozen payload's, which holds no cell share (`RdFree`). -/
+share, a borrow whose owner is on the thread (`MInv.cell_owned`) — the node
+it views is in that thread's owned tree, or a frozen payload's, which holds
+no cell share (`MInv.noCellPay`). -/
 
 /-- A slice of shares is an A2 type ... -/
 theorem slice_share_ok {t : Ty} (h : t.ok = true) (hv : t.holdsView = false) : (Ty.slice t).ok = true := by
@@ -1401,7 +1425,7 @@ theorem chanSend_send {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {a y : Var} 
 theorem sendCheck_env {B : Nat → Option Blk} {vs : List Val} {st' : Var → Option Slot} (h : SendCheck B vs st') {v : Val}
     (hv : v ∈ vs) {fs : List Nat} {te : Ty} {ms : List Nat} {e : Val} {cs : List (Var × PMode × Ty)}
     (hs : Sub (.pkg fs te ms e cs) v) {k : Nat} (hk : Sub (.cell k) e) :
-    ∀ x o w, st' x = some ⟨o, some w⟩ → ¬ Sub (.cell k) w :=
+    ∀ x w, st' x = some ⟨true, some w⟩ → ¬ Sub (.cell k) w :=
   h.1 k ⟨v, hv, (Sub.pkg hk).trans hs⟩
 
 /-- **A Sync closure in an `Arc`**: `arc_new` takes it (its type holds no
@@ -1817,11 +1841,11 @@ theorem MoveArgs.det {st : Var → Option Slot} {as : List Var} {vs vs' : List V
 theorem sendCheck_box_kept {st st' : Var → Option Slot} {args : List Var} {vs : List Val}
     (hm : MoveArgs st args vs st') {v : Val} (hv : v ∈ vs) {fs : List Nat} {te : Ty} {ms : List Nat}
     {e : Val} {cs : List (Var × PMode × Ty)} (hs : Sub (.pkg fs te ms e cs) v) {k : Nat}
-    (hk : Sub (.cell k) e) {y : Var} {o : Bool} {w : Val} (hy : st' y = some ⟨o, some w⟩)
+    (hk : Sub (.cell k) e) {y : Var} {w : Val} (hy : st' y = some ⟨true, some w⟩)
     (hw : Sub (.cell k) w) {vs' : List Val} {st'' : Var → Option Slot} (hm' : MoveArgs st args vs' st'')
     {B : Nat → Option Blk} : ¬ SendCheck B vs' st'' := by
   obtain ⟨rfl, rfl⟩ := hm.det hm'
-  exact fun h => sendCheck_env h hv hs hk y o w hy hw
+  exact fun h => sendCheck_env h hv hs hk y w hy hw
 
 /-- A `: Send Sync` trait object's box holds no library handle, at any depth:
     the crossing check has nothing to count in it (the runtime fills the
@@ -2669,18 +2693,18 @@ theorem _root_.A2.TakeVal.det {m m1 m2 : Mem} {y : Var} {v w : Val} (h1 : TakeVa
     | own hy' => rw [hy] at hy'; cases hy'
     | bor hy' => rw [hy] at hy'; cases hy'; exact ⟨rfl, rfl⟩
 
-/-- A value that holds a share of a cell a slot left behind holds one of fails
-    the crossing check. -/
+/-- A value that holds a share of a cell an owner left behind holds one of
+    fails the crossing check. -/
 theorem not_sendCheck {B : Nat → Option Blk} {st : Var → Option Slot} {v : Val} {k : Nat} (hv : Sub (.cell k) v)
-    {z : Var} {o : Bool} {w : Val} (hz : st z = some ⟨o, some w⟩) (hw : Sub (.cell k) w) : ¬ SendCheck B [v] st :=
-  fun h => h.1 k ⟨v, List.mem_singleton_self _, hv⟩ z o w hz hw
+    {z : Var} {w : Val} (hz : st z = some ⟨true, some w⟩) (hw : Sub (.cell k) w) : ¬ SendCheck B [v] st :=
+  fun h => h.1 k ⟨v, List.mem_singleton_self _, hv⟩ z w hz hw
 
 /-- **h340** (`closure_sent_on_a_channel_captures_a_kept_handle`): a closure
     that captured a library handle the sender still holds a share of (in any
     slot, inside any value) is not sent: `chan_send`'s crossing check fails,
     and the send panics (`EvalR.chanSendFail`), with no other outcome ... -/
 theorem chanSend_kept {m m1 : Mem} {a y : Var} {v : Val} (ht : TakeVal m y v m1) {k : Nat}
-    (hv : Sub (.cell k) v) {z : Var} {o : Bool} {w : Val} (hz : m1.st z = some ⟨o, some w⟩)
+    (hv : Sub (.cell k) v) {z : Var} {w : Val} (hz : m1.st z = some ⟨true, some w⟩)
     (hw : Sub (.cell k) w) :
     EvalR m (.chanSend a y) .panic ∧ ∀ r o' m', ¬ EvalR m (.chanSend a y) (.ok r o' m') := by
   refine ⟨EvalR.chanSendFail ht (not_sendCheck hv hz hw), fun r o' m' h => ?_⟩
@@ -2706,7 +2730,7 @@ theorem chanSend_moves {m m' : Mem} {a y : Var} {r : Val} {o : Bool} (h : EvalR 
     library handle the caller kept a share of goes into no lock: `locked_new`
     (and `rw_new`) panics (`EvalR.lockNewFail`) ... -/
 theorem lockNew_kept {m m1 : Mem} {t : Ty} {y : Var} {v : Val} (ht : TakeVal m y v m1) {k : Nat}
-    (hv : Sub (.cell k) v) {z : Var} {o : Bool} {w : Val} (hz : m1.st z = some ⟨o, some w⟩)
+    (hv : Sub (.cell k) v) {z : Var} {w : Val} (hz : m1.st z = some ⟨true, some w⟩)
     (hw : Sub (.cell k) w) :
     EvalR m (.lockNew t y) .panic ∧ ∀ r o' m', ¬ EvalR m (.lockNew t y) (.ok r o' m') := by
   refine ⟨EvalR.lockNewFail ht (not_sendCheck hv hz hw), fun r o' m' h => ?_⟩
@@ -2718,7 +2742,7 @@ theorem lockNew_kept {m m1 : Mem} {t : Ty} {y : Var} {v : Val} (ht : TakeVal m y
 /-- ... nor back into one: `locked_restore` panics (`EvalR.lockRestoreFail`;
     h358's thread restores the `Rc` after pushing clones of it) ... -/
 theorem lockRestore_kept {m m1 : Mem} {a y : Var} {v : Val} (ht : TakeVal m y v m1) {k : Nat}
-    (hv : Sub (.cell k) v) {z : Var} {o : Bool} {w : Val} (hz : m1.st z = some ⟨o, some w⟩)
+    (hv : Sub (.cell k) v) {z : Var} {w : Val} (hz : m1.st z = some ⟨true, some w⟩)
     (hw : Sub (.cell k) w) :
     EvalR m (.lockRestore a y) .panic ∧ ∀ r o' m', ¬ EvalR m (.lockRestore a y) (.ok r o' m') := by
   refine ⟨EvalR.lockRestoreFail ht (not_sendCheck hv hz hw), fun r o' m' h => ?_⟩
@@ -3040,16 +3064,17 @@ def _root_.A2.Stmt.lkeys : Stmt → List Nat
 
 /-- A3.5: thread `t`'s next step changes the state of cell `k` (a library
     handle's, which the library changes in place with no lock): it checks the
-    state out through a share of it (`withCell`), or it runs inside a
-    check-out of it, holding a share of it (the one the check-out is
-    through, which `withLock`'s premises keep in its binding for the whole
-    body).  Such a step writes the state wherever it is: the model checks it
+    state out through a share of it (`withCell`, through an owner or, A3.5's
+    third cut, a borrow), or it runs inside a check-out of it, holding an
+    owner's share of it (the one the check-out is through, which `withLock`'s
+    premises keep in its binding for the whole body, or, for a borrowed
+    parameter, its caller's owner).  Such a step writes the state wherever it is: the model checks it
     out as a lock's payload, so two threads at once would be serialized
     there, where the runtime's copies write one memory with no lock; so a
     step on a cell is not an address's touch, but a race of its own. -/
 def CellOp (t : Thread) (k : Nat) : Prop :=
   (∃ K a x s o, Redex t.s K (.withLock a x s) ∧ t.st a = some ⟨o, some (.cell k)⟩) ∨
-  (k ∈ t.s.lkeys ∧ ∃ y o v, t.st y = some ⟨o, some v⟩ ∧ Sub (.cell k) v)
+  (k ∈ t.s.lkeys ∧ ∃ y v, t.st y = some ⟨true, some v⟩ ∧ Sub (.cell k) v)
 
 /-- A3.5: two threads whose next steps change one cell's state. -/
 def CellRace (C : Cfg) : Prop :=

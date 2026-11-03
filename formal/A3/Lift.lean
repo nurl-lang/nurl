@@ -76,7 +76,7 @@ theorem TakeVal.lift {m m1 : Mem} {y : Var} {v : Val} (h : TakeVal m y v m1) (a2
     TakeVal (liftMem a2 m) y v (liftMem a2 m1) := by
   cases h with
   | own hy => exact TakeVal.own hy
-  | bor hy => exact TakeVal.bor hy
+  | bor hy hnc => exact TakeVal.bor hy hnc
 
 mutual
 /-- Freeing a tree of the thread's own part frees it in the whole address
@@ -147,7 +147,7 @@ theorem EvalR.lift {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.
   | cellNew h1 hfr hck => exact EvalR.cellNew (TakeVal.lift h1 a2) hfr hck
   | arcClone hy => exact EvalR.arcClone hy
   | lockClone hy => exact EvalR.lockClone hy
-  | cellClone hy => exact EvalR.cellClone hy
+  | cellClone hy ho => exact EvalR.cellClone hy ho
   | atomic hy hk h1 h2 hnv => exact EvalR.atomic hy hk (Eval.lift h1 a2) (Eval.lift h2 a2) hnv
   | chanSend hy h1 hk hc hd hnv hck =>
     exact EvalR.chanSend (m := liftMem a2 m) hy (TakeVal.lift h1 a2) hk (union_true a2 hc)
