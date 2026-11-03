@@ -55620,6 +55620,30 @@ unsafe @ __ha_is_alloca s line → b {
     ^ ? >= ( nurl_str_find line ` = alloca ` ) 0 T F
 }
 
+// The start of the first line at or after `p` (a line start) that
+// __ha_is_alloca accepts, or `bend` when none before it does. One strstr
+// over the body for the `oca ` that ends a ` = alloca `, not one per
+// line: strstr skips ahead to the needle's first two bytes, and ` =`
+// opens every `  %` line, `al` every `align` and `call`.
+unsafe @ __ha_next_alloca * u fp i p i bend → i {
+    : ~ i k + p 6
+    : ~ i at bend
+    ~ & == at bend <= k bend {
+        : i r ( nurl_str_find # s + # i fp k `oca ` )
+        ? | < r 0 > + + k r 4 bend { = k + bend 1 } {
+            : i m - + k r 6
+            ? != 0 ( nurl_str_starts # s + # i fp m ` = alloca ` ) {
+                // the line holding it, which must open `  %`
+                : ~ i ls m
+                ~ & > ls p != # i . fp - ls 1 10 { = ls - ls 1 }
+                ? & & == # i . fp ls 32 == # i . fp + ls 1 32 == # i . fp + ls 2 37 { = at ls } {}
+            } {}
+            = k + m 7
+        }
+    }
+    ^ at
+}
+
 // Re-print a complete `define … { entry: … }` IR string with every
 // alloca instruction moved to the top of the entry block (original
 // relative order preserved); all other instructions — including each
@@ -55644,66 +55668,84 @@ unsafe @ __emit_hoisted_body s funcdef → v {
     // The function ends at its first `}` line: what follows rides along (a
     // closure's env descriptor and thunks, gen_env_vtable) and is printed as
     // it is — none of its allocas belongs to this entry block, nor any of
-    // its returns to this frame table.
-    : i __fe ( nurl_memmem_range # s + # i fp hdr_end - flen hdr_end `\n}\n` 3 )
+    // its returns to this frame table. strstr, not memmem (no NUL before
+    // flen): a `\n}` opens nothing else, so its pair scan skips the body
+    // 64 bytes a step, where memmem's pair hash stepped two.
+    : i __fe ( nurl_str_find # s + # i fp hdr_end `\n}\n` )
     : i bend ? < __fe 0 flen + + hdr_end __fe 1
-    // The frame table of the owned string bindings (`;jfs` lines, see
+    // The frame table of the owned string bindings (`\n  ;jfs ` lines, see
     // mem_journal_push_str): one word per distinct slot, in first-seen
-    // order.
-    : ~ s jf_slots ``
-    : ~ i jf_n 0
-    : ~ i jq ( nurl_str_find funcdef `\n  ;jfs ` )
-    ~ >= jq 0 {
-        : i js + jq 8
-        : i je ( __ha_line_end funcdef js flen )
-        : s jw ( nurl_str_slice funcdef js - je js )
-        ? ! ( str_contains_word jf_slots jw ) {
-            = jf_slots ? == 0 jf_n ( nurl_str_cat jw `` ) ( nurl_str_cat3 jf_slots ` ` jw )
-            = jf_n + jf_n 1
-        } {}
-        : i jr ( nurl_memmem_range # s + # i fp je - flen je `\n  ;jfs ` 8 )
-        = jq ? < jr 0 -1 + je jr
-    }
-    // The closure frame table (`;jcs <value> <slot>` lines, see
+    // order. The closure frame table (`\n  ;jcs <value> <slot>` lines, see
     // mem_clo_slot_new): a pair of words per closure binding — where its
     // value is and its owner slot. Both are allocas, so the table is filled
     // here at entry; a slot is null until its binding owns an env, and
     // again once the env is moved on or dropped (agora #131).
+    // Both read off one walk over the text's `;`s, which a body has only
+    // in such markers (a strstr per kind stopped on every line's `\n `).
+    // A frame table, a `;jcs` or, with field owners about, a `;ff` makes
+    // pass 2 look at every line.
+    : ~ s jf_slots ``
+    : ~ i jf_n 0
     : ~ s jc_pairs ``
     : ~ i jc_n 0
-    : ~ i cq ( nurl_str_find funcdef `\n  ;jcs ` )
-    ~ >= cq 0 {
-        : i cs + cq 8
-        : i ce ( __ha_line_end funcdef cs flen )
-        : s cw ( nurl_str_slice funcdef cs - ce cs )
-        = jc_pairs ? == 0 jc_n ( nurl_str_cat cw `` ) ( nurl_str_cat3 jc_pairs ` ` cw )
-        = jc_n + jc_n 1
-        : i cr ( nurl_memmem_range # s + # i fp ce - flen ce `\n  ;jcs ` 8 )
-        = cq ? < cr 0 -1 + ce cr
+    : ~ b by_line F
+    : ~ i sq ( nurl_str_find funcdef `;` )
+    ~ >= sq 0 {
+        : b mark & & >= sq 3 == # i . fp - sq 3 10 & == # i . fp - sq 2 32 == # i . fp - sq 1 32
+        : s tail # s + # i fp + sq 1
+        ? & mark != 0 ( nurl_str_starts tail `jfs ` ) {
+            : i js + sq 5
+            : i je ( __ha_line_end funcdef js flen )
+            : s jw ( nurl_str_slice funcdef js - je js )
+            ? ! ( str_contains_word jf_slots jw ) {
+                = jf_slots ? == 0 jf_n ( nurl_str_cat jw `` ) ( nurl_str_cat3 jf_slots ` ` jw )
+                = jf_n + jf_n 1
+            } {}
+        } {}
+        ? != 0 ( nurl_str_starts tail `jcs` ) {
+            = by_line T
+            ? & mark != 0 ( nurl_str_starts tail `jcs ` ) {
+                : i cs + sq 5
+                : i ce ( __ha_line_end funcdef cs flen )
+                : s cw ( nurl_str_slice funcdef cs - ce cs )
+                = jc_pairs ? == 0 jc_n ( nurl_str_cat cw `` ) ( nurl_str_cat3 jc_pairs ` ` cw )
+                = jc_n + jc_n 1
+            } {}
+        } {}
+        ? & != 0 g_ff_any != 0 ( nurl_str_starts tail `ff` ) { = by_line T } {}
+        : i nr ( nurl_str_find tail `;` )
+        = sq ? < nr 0 -1 + + sq 1 nr
     }
+    ? > jf_n 0 { = by_line T } {}
     // Header [0, hdr_end).
     : u sv_h . fp hdr_end
     = . fp hdr_end # u 0
     ( nurl_print funcdef )
     = . fp hdr_end sv_h
     // Pass 1: the alloca instructions, hoisted into the entry block.
-    : ~ i p hdr_end
+    : ~ i p ( __ha_next_alloca fp hdr_end bend )
     ~ < p bend {
         : i le ( __ha_line_end funcdef p bend )
         : u sv . fp le
         = . fp le # u 0
         : s line # s + # i fp p
-        ? ( __ha_is_alloca line ) { ( nurl_print line ) ( nurl_print `\n` )
-            // Null-init every i8* slot at entry. The deferred arm-local
-            // drop (mem_defer_new_strings) frees these slots at function
-            // exit on EVERY path — including paths where the arm that
-            // stores the slot never ran, where the load would otherwise
-            // read stack garbage. nurl_free(NULL) is a no-op.
-            // A field-owner flag (mem_ff_slot) starts clear on every path.
+        ( nurl_print line ) ( nurl_print `\n` )
+        // Null-init every i8* slot at entry. The deferred arm-local
+        // drop (mem_defer_new_strings) frees these slots at function
+        // exit on EVERY path — including paths where the arm that
+        // stores the slot never ran, where the load would otherwise
+        // read stack garbage. nurl_free(NULL) is a no-op.
+        // A field-owner flag (mem_ff_slot) starts clear on every path.
+        // Each wants its alloca to end the line, so only a line ending
+        // `1` or `*` is searched for it.
+        : i lc # i . fp - le 1
+        ? == lc 49 {
             : i __zb ( nurl_str_find line ` = alloca i1, align 1` )
             ? & >= __zb 0 == ( nurl_str_get line + __zb 21 ) 0 {
                 ( nurl_print `  store i1 false, ptr ` ) ( nurl_print ( nurl_str_slice line 2 - __zb 2 ) ) ( nurl_print `\n` )
             } {}
+        } {}
+        ? == lc 42 {
             : i __zf ( nurl_str_find line ` = alloca i8*` )
             ? & >= __zf 0 == ( nurl_str_get line + __zf 13 ) 0 {
                 : s __zr ( nurl_str_slice line 2 - __zf 2 )
@@ -55712,7 +55754,10 @@ unsafe @ __emit_hoisted_body s funcdef → v {
             } {}
         } {}
         = . fp le sv
-        = p + le 1
+        // Its first byte, a space, becomes a NUL until pass 2 reaches
+        // it: there the text up to it prints as it stands.
+        ? ! by_line { = . fp p # u 0 } {}
+        = p ( __ha_next_alloca fp + le 1 bend )
     }
     // The frame table: cleared, its size in word 0, a pointer to each
     // entry, registered once (the journal-elision pass drops the
@@ -55746,33 +55791,56 @@ unsafe @ __emit_hoisted_body s funcdef → v {
         ( nurl_print `  call void @nurl_journal_push_drop2(ptr %__jc, ptr null, ptr @nurl_jframe_clo_drop)\n` )
     } {}
     // Pass 2: everything else, in original order.
-    = p hdr_end
-    ~ < p bend {
-        : i le ( __ha_line_end funcdef p bend )
-        : u sv2 . fp le
-        = . fp le # u 0
-        : s line # s + # i fp p
-        ? & ! ( __ha_is_alloca line ) ! ( __ha_is_jcs line ) {
-            ? & > jf_n 0 ( __ha_is_jfs line ) {
-                // A binding's slot now holds an owned value: its table
-                // entry points at it (idempotent on a loop's next pass).
-                : s jw ( nurl_str_slice line 7 - ( strlen line ) 7 )
-                ( nurl_print `  store ptr ` ) ( nurl_print jw ) ( nurl_print `, ptr %__jf` )
-                ( nurl_print ( nurl_str_int + ( str_word_index jf_slots jw ) 1 ) ) ( nurl_print `\n` )
+    ? by_line {
+        = p hdr_end
+        ~ < p bend {
+            : i le ( __ha_line_end funcdef p bend )
+            : u sv2 . fp le
+            = . fp le # u 0
+            : s line # s + # i fp p
+            ? & ! ( __ha_is_alloca line ) ! ( __ha_is_jcs line ) {
+                ? & > jf_n 0 ( __ha_is_jfs line ) {
+                    // A binding's slot now holds an owned value: its table
+                    // entry points at it (idempotent on a loop's next pass).
+                    : s jw ( nurl_str_slice line 7 - ( strlen line ) 7 )
+                    ( nurl_print `  store ptr ` ) ( nurl_print jw ) ( nurl_print `, ptr %__jf` )
+                    ( nurl_print ( nurl_str_int + ( str_word_index jf_slots jw ) 1 ) ) ( nurl_print `\n` )
+                } {
+                    // Every return leaves the frame: its table is unregistered
+                    // first.
+                    ? & > jf_n 0 ( __ha_is_ret line ) {
+                        ( nurl_print `  call void @nurl_journal_forget_slot(ptr %__jf)\n` )
+                    } {}
+                    ? & > jc_n 0 ( __ha_is_ret line ) {
+                        ( nurl_print `  call void @nurl_journal_forget_slot(ptr %__jc)\n` )
+                    } {}
+                    ? & != 0 g_ff_any ( __ha_is_ffx line ) { ( __ffx_expand line ) } { ( nurl_print line ) ( nurl_print `\n` ) }
+                }
+            } {}
+            = . fp le sv2
+            = p + le 1
+        }
+    } {
+        // Only the allocas want a look, and pass 1 left a NUL on each: the
+        // lines up to the next one print as they stand, a run at a time,
+        // then its space goes back and the line is skipped.
+        : u sv_b . fp bend
+        = . fp bend # u 0
+        = p hdr_end
+        ~ < p bend {
+            : i n ( strlen # s + # i fp p )
+            ? > n 0 { ( nurl_print # s + # i fp p ) } {}
+            = p + p n
+            ? < p bend {
+                = . fp p # u 32
+                = p + ( __ha_line_end funcdef p bend ) 1
             } {
-                // Every return leaves the frame: its table is unregistered
-                // first.
-                ? & > jf_n 0 ( __ha_is_ret line ) {
-                    ( nurl_print `  call void @nurl_journal_forget_slot(ptr %__jf)\n` )
-                } {}
-                ? & > jc_n 0 ( __ha_is_ret line ) {
-                    ( nurl_print `  call void @nurl_journal_forget_slot(ptr %__jc)\n` )
-                } {}
-                ? & != 0 g_ff_any ( __ha_is_ffx line ) { ( __ffx_expand line ) } { ( nurl_print line ) ( nurl_print `\n` ) }
+                // A last line the text ends without its newline gets one,
+                // as printed line by line.
+                ? & > n 0 != # i . fp - p 1 10 { ( nurl_print `\n` ) } {}
             }
-        } {}
-        = . fp le sv2
-        = p + le 1
+        }
+        = . fp bend sv_b
     }
     ? < bend flen { ( nurl_print # s + # i fp bend ) } {}
 }
@@ -56350,11 +56418,26 @@ unsafe @ __vabi_icalls s ir → s {
     ^ ( nurl_str_cat out ( nurl_str_slice ir done - n done ) )
 }
 
+// Does `t` hold a `<4 x i64>` or an `<8 x i64>`? One strchr walk over its
+// `<`s, which a function's IR opens only for a vector type, where a strstr
+// per width read all of it twice.
+unsafe @ __ha_has_wide s t → b {
+    : *u tp # *u t
+    : ~ i k ( nurl_str_find t `<` )
+    ~ >= k 0 {
+        : s at # s + # i tp + k 1
+        ? | != 0 ( nurl_str_starts at `4 x i64>` ) != 0 ( nurl_str_starts at `8 x i64>` ) { ^ T } {}
+        : i r ( nurl_str_find at `<` )
+        = k ? < r 0 -1 + + k 1 r
+    }
+    ^ F
+}
+
 // Emit one function's IR with its allocas hoisted (__emit_hoisted_body),
 // its wide-vector indirect calls first routed through their thunks when
 // it could have any.
 unsafe @ emit_hoisted s funcdef → v {
-    ? | | != 0 g_wide_struct >= ( nurl_str_find funcdef `<4 x i64>` ) 0 >= ( nurl_str_find funcdef `<8 x i64>` ) 0 {
+    ? | != 0 g_wide_struct ( __ha_has_wide funcdef ) {
         : s fx ( __vabi_icalls funcdef )
         ( __emit_hoisted_body fx )
         ^ v
@@ -74092,6 +74175,69 @@ unsafe @ __sl_key_append i tab i a i b s w → v {
     = . mp b sv
 }
 
+// What line [p, e), not a push or a forget, is to __jrnl_slot_elide's
+// search: 5 a call that may panic, 3 a branch, 4 a `ret` / `unreachable`,
+// else 0.
+unsafe @ __jrnl_line_kind i p i e → i {
+    : i cr ( nurl_memmem_range # s + g_dce_mod p - e p ` call ` 6 )
+    ? >= cr 0 {
+        : i c ( __mp_callee + + p cr 6 e )
+        ? | == c -2 & >= c 0 != 0 ( nurl_peek # s g_mp c ) { ^ 5 } {}
+    } {}
+    ? | ( __fold_at p `  br ` 5 ) ( __fold_at p `  switch ` 9 ) { ^ 3 } {}
+    ? | ( __fold_at p `  ret` 5 ) ( __fold_at p `  unreachable` 13 ) { ^ 4 } {}
+    ^ 0
+}
+
+// __jrnl_slot_elide's maps of names — bytes [a, b) of the module — to
+// numbers: open addressing over `cap` (a power of two, above twice the
+// names) entries of three words, the name's start, its end and its number
+// + 1 (0: a free entry). The entry of map `m` for [a, b): its own, or the
+// free one it would take.
+unsafe @ __jrnl_map_at i m i cap i a i b → i {
+    : *i t # *i m
+    : *u mp # *u # s g_dce_mod
+    : i n - b a
+    : ~ i h n
+    : ~ i q a
+    ~ < q b { = h & + * h 31 & # i . mp q 255 1073741823 = q + q 1 }
+    : ~ i e & h - cap 1
+    ~ != 0 . t + * e 3 2 {
+        : i ea . t * e 3
+        ? && == - . t + * e 3 1 ea n == 0 # i ( memcmp # s + g_dce_mod ea # s + g_dce_mod a n ) { ^ e } {}
+        = e & + e 1 - cap 1
+    }
+    ^ e
+}
+
+// __jrnl_slot_elide's labels, into map `m`: each `name:` opening a block
+// among lines [0, nl) (starts `lsta`, kinds `kinda`) → its line, the last
+// of a name's. A line that is a call that may panic opens none.
+unsafe @ __jrnl_index_labels i m i cap i lsta i kinda i nl → v {
+    : *i t # *i m
+    : *i lst # *i lsta
+    : *i kind # *i kinda
+    : ~ i k 0
+    ~ < k nl {
+        : i p . lst k
+        ? ( __dce_ident_byte ( __fold_byte p ) ) {
+            : i e - . lst + k 1 1
+            ? == . kind k 6 { = . kind k ( __jrnl_line_kind p e ) } {}
+            ? == . kind k 0 {
+                : ~ i q p
+                ~ & < q e ( __dce_ident_byte ( __fold_byte q ) ) { = q + q 1 }
+                ? & < q e == ( __fold_byte q ) 58 {
+                    : i x * 3 ( __jrnl_map_at m cap p q )
+                    = . t x p
+                    = . t + x 1 q
+                    = . t + x 2 + k 1
+                } {}
+            } {}
+        } {}
+        = k + k 1
+    }
+}
+
 // Drop the registration of every handle binding that no panic can meet
 // while it is held, with its forgets. A registration is held on exactly
 // the paths from its push to a forget of the same slot, and a panic starts
@@ -74118,14 +74264,25 @@ unsafe @ __jrnl_slot_elide i fi → v {
     : s pp `  call void @nurl_journal_push_drop2(ptr `
     : s fp `  call void @nurl_journal_forget_slot(ptr `
     ? < ( nurl_memmem_range # s + g_dce_mod st - en st pp 41 ) 0 { ^ v } {}
-    // the line count, for the tables below
+    // Line starts: [k] line k's, [nl] one past the last line's end.
+    : ~ i lcap + / - en st 32 2
+    : Buf lst_own @ Buf { # i ( nurl_alloc * lcap 8 ) }
     : ~ i nl 0
     : ~ i p st
-    ~ < p en { = p + ( __mp_eol p en ) 1 = nl + nl 1 }
-    : Buf lst_own @ Buf { # i ( nurl_alloc * + nl 1 8 ) }  // line starts
+    ~ < p en {
+        ? >= + nl 1 lcap {
+            = lcap * lcap 2
+            = . lst_own p # i ( nurl_realloc # s . lst_own p * lcap 8 )
+        } {}
+        ( nurl_poke # s . lst_own p nl p )
+        = p + ( __mp_eol p en ) 1
+        = nl + nl 1
+    }
+    ( nurl_poke # s . lst_own p nl p )
     : *i lst # *i . lst_own p
     // 1 a push, 2 a forget, 3 a branch, 4 a `ret` / `unreachable`, 5 a call
-    // that may panic
+    // that may panic, 6 not looked at yet (only the lines a search reaches
+    // are: __jrnl_line_kind)
     : Buf kind_own @ Buf { # i ( nurl_zalloc * + nl 1 8 ) }
     : *i kind # *i . kind_own p
     : Buf sid_own @ Buf { # i ( nurl_zalloc * + nl 1 8 ) }  // a push's or forget's slot number
@@ -74134,57 +74291,60 @@ unsafe @ __jrnl_slot_elide i fi → v {
     : *i seen # *i . seen_own p
     : Buf todo_own @ Buf { # i ( nurl_alloc * + nl 1 8 ) }  // the search's worklist
     : *i todo # *i . todo_own p
-    : Tab labels @ Tab { ( nurl_sym_new ) }  // label → its line
-    : Tab slots @ Tab { ( nurl_sym_new ) }  // slot → its number
-    : ~ i nslots 0
-    = p st
+    // The pushes and forgets (listed in `todo` for now), and how many lines
+    // may open a block.
+    : ~ i npf 0
+    : ~ i nid 0
     : ~ i k 0
-    ~ < p en {
-        : i e ( __mp_eol p en )
-        = . lst k p
-        : ~ i kd 0
-        : b push ( __fold_at p pp 41 )
-        : b fgt ( __fold_at p fp 42 )
-        ? | push fgt {
-            : i ss + p ? push 41 42
-            : ~ i se ss
-            ~ & < se e & != ( __fold_byte se ) 44 != ( __fold_byte se ) 41 { = se + se 1 }
-            : ~ i id ( __sl_key_int . slots h ss se )
-            ? < id 0 {
-                = id nslots
-                ( __sl_key_def . slots h ss se ( nurl_str_int id ) )
-                = nslots + nslots 1
-            } {}
-            = . sid k id
-            = kd ? push 1 2
+    ~ < k nl {
+        = p . lst k
+        : ~ i kd 6
+        // (`  c`: the start both share)
+        ? ( __fold_at p `  c` 3 ) {
+            ? ( __fold_at p pp 41 ) { = kd 1 } {
+                ? ( __fold_at p fp 42 ) { = kd 2 } {}
+            }
         } {
-            : i cr ( nurl_memmem_range # s + g_dce_mod p - e p ` call ` 6 )
-            ? >= cr 0 {
-                : i c ( __mp_callee + + p cr 6 e )
-                ? | == c -2 & >= c 0 != 0 ( nurl_peek # s g_mp c ) { = kd 5 } {}
-            } {}
-            ? == kd 0 {
-                ? | ( __fold_at p `  br ` 5 ) ( __fold_at p `  switch ` 9 ) { = kd 3 } {
-                    ? | ( __fold_at p `  ret` 5 ) ( __fold_at p `  unreachable` 13 ) { = kd 4 } {
-                        // `name:` opening a block
-                        ? ( __dce_ident_byte ( __fold_byte p ) ) {
-                            : ~ i q p
-                            ~ & < q e ( __dce_ident_byte ( __fold_byte q ) ) { = q + q 1 }
-                            ? & < q e == ( __fold_byte q ) 58 { ( __sl_key_def . labels h p q ( nurl_str_int k ) ) } {}
-                        } {}
-                    }
-                }
-            } {}
+            ? ( __dce_ident_byte ( __fold_byte p ) ) { = nid + nid 1 } {}
         }
+        ? < kd 6 { = . todo npf k = npf + npf 1 } {}
         = . kind k kd
-        = p + e 1
         = k + k 1
     }
+    // slot → its number (__jrnl_map_at), in the order the lines name them
+    : ~ i scap 4
+    ~ <= scap * 2 npf { = scap * scap 2 }
+    : Buf smap_own @ Buf { # i ( nurl_zalloc * scap 24 ) }
+    : *i smap # *i . smap_own p
+    : ~ i nslots 0
+    : ~ i j 0
+    ~ < j npf {
+        = k . todo j
+        : i ss + . lst k ? == . kind k 1 41 42
+        : i e - . lst + k 1 1
+        : ~ i se ss
+        ~ & < se e & != ( __fold_byte se ) 44 != ( __fold_byte se ) 41 { = se + se 1 }
+        : i x * 3 ( __jrnl_map_at . smap_own p scap ss se )
+        ? == 0 . smap + x 2 {
+            = . smap x ss
+            = . smap + x 1 se
+            = nslots + nslots 1
+            = . smap + x 2 nslots
+        } {}
+        = . sid k - . smap + x 2 1
+        = j + j 1
+    }
+    // label → its line, indexed when a search first follows a branch
+    : ~ i bcap 4
+    ~ <= bcap * 2 nid { = bcap * bcap 2 }
+    : Buf lmap_own @ Buf { # i ( nurl_zalloc * bcap 24 ) }
+    : *i lmap # *i . lmap_own p
+    : ~ b indexed F
     // Per slot: 1 while every push of it so far met no call that may panic,
     // 0 once one did.
     : Buf ok_own @ Buf { # i ( nurl_alloc * + nslots 1 8 ) }
     : *i ok # *i . ok_own p
-    : ~ i j 0
+    = j 0
     ~ < j nslots { = . ok j 1 = j + j 1 }
     = k 0
     ~ < k nl {
@@ -74206,12 +74366,13 @@ unsafe @ __jrnl_slot_elide i fi → v {
                     ? != . seen i mark {
                         = . seen i mark
                         = steps + steps 1
+                        ? == . kind i 6 { = . kind i ( __jrnl_line_kind . lst i - . lst + i 1 1 ) } {}
                         : i kd . kind i
                         ? | > steps 4000 == kd 5 { = bad T } {
                             ? | & | == kd 1 == kd 2 == . sid i id == kd 4 {} {
                                 ? == kd 3 {
                                     : i lp . lst i
-                                    : i le ( __mp_eol lp en )
+                                    : i le - . lst + i 1 1
                                     ? & >= ( nurl_memmem_range # s + g_dce_mod lp - le lp `[` 1 ) 0 < ( nurl_memmem_range # s + g_dce_mod lp - le lp `]` 1 ) 0 { = bad T } {
                                         : ~ i q lp
                                         ~ & ! bad < q le {
@@ -74220,7 +74381,11 @@ unsafe @ __jrnl_slot_elide i fi → v {
                                                 : i ns + + q lr 7
                                                 : ~ i ne ns
                                                 ~ & < ne le ( __dce_ident_byte ( __fold_byte ne ) ) { = ne + ne 1 }
-                                                : i at ( __sl_key_int . labels h ns ne )
+                                                ? ! indexed {
+                                                    ( __jrnl_index_labels . lmap_own p bcap . lst_own p . kind_own p nl )
+                                                    = indexed T
+                                                } {}
+                                                : i at - . lmap + * 3 ( __jrnl_map_at . lmap_own p bcap ns ne ) 2 1
                                                 ? | < at 0 >= nt nl { = bad T } {
                                                     = . todo nt at
                                                     = nt + nt 1
@@ -74258,8 +74423,7 @@ unsafe @ __jrnl_slot_elide i fi → v {
     ~ < k nl {
         : i kd . kind k
         ? & | == kd 1 == kd 2 & != 0 . has . sid k != 0 . ok . sid k {
-            : i lp . lst k
-            ( __jrnl_blank_line lp ( __mp_eol lp en ) )
+            ( __jrnl_blank_line . lst k - . lst + k 1 1 )
         } {}
         = k + k 1
     }
