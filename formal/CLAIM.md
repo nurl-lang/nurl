@@ -393,6 +393,12 @@ Inside A2 (nurlc bugs):
   as `inout drop` (RULES.md's first reading), its summary holds the view
   (`outHolds`), and the caller's owner holds it after the call
   (`callPostAux`'s `outHeld`; A2/EditB.lean's note).
+- A changed parameter handed an element of the caller's owner: #391
+  (`( f 1 ( vec_at vv 0 ) src )`, and a local bound from the element).
+  The call reads as handing the element over (`Stmt.withElem`: the
+  element moves out into an owner the callee takes `inout`, and back at
+  its index, so `vv` holds what the callee stored into it; borrows of
+  `vv` end at the hand-over; A2/EditB.lean's note).
 
 Outside A2:
 - The hand-over of an old value to its borrower (above): #366, #373, #378,
@@ -408,12 +414,12 @@ Outside A2:
 - A view stored through a borrow inside closure code: #395's store
   through a borrow of a capture, and #454's `vec_each` form (`StmtT.editBV`
   types a store through a borrow outside closures).
-- A changed plain parameter handed an element or a borrow rather than an
-  owner: #391. Inside a call, what a borrowed parameter reaches
-  is frozen, so A2 has no change rooted at one. Typing it needs the call
-  read as handing the element over (moved out into an owner the callee
-  takes `inout`, and back), an element swap the calculus does not have
-  yet (A2/EditB.lean's note).
+- #391's other forms: a changed parameter handed an element of an
+  `inout` or borrowed parameter, or a borrow that is not an element (a
+  cursor of a whole `Vec`, a field viewer), or a call that also names the
+  `Vec` in another argument. Inside a call, what a borrowed parameter
+  reaches is frozen, so A2 has no change rooted at one, and
+  `Stmt.withElem` takes an owner's element only.
 
 ## Destructors, and a panic while a panic unwinds
 
