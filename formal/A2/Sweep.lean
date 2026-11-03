@@ -447,8 +447,8 @@ theorem MInv.sweepR {Γ : Ctx} (hi : MInv m Γ) : MInv (m.sweepR R) Γ where
   shares v E sl T hE hsl hown hT := (hi.shares v E sl T hE hsl hown hT).sweep (Kept.of_slot hR hsl T hT)
   blocks k bl hk := by
     obtain ⟨hk0, hr⟩ := Mem.sweepR_blk.mp hk
-    obtain ⟨h1, h2, h3⟩ := hi.blocks k bl hk0
-    refine ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, ?_⟩⟩
+    obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k bl hk0
+    refine ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, ?_⟩, h4⟩
     -- A3.2's second cut: a payload, a lock's too, keeps what it holds alive
     have hkp : Kept R m p := by
       have := Kept.pay hr hk0

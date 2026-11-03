@@ -116,16 +116,16 @@ theorem step_release {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch
       cases v with
       | int n => simp [Giveable] at hg; subst hg; exact ⟨.int, SharesOK.of_noArc rfl⟩
       | _ => simp [Giveable] at hg
-  obtain ⟨htok, hvf, _⟩ := hi.blocks k _ hk
+  obtain ⟨htok, hvf, _, _⟩ := hi.blocks k _ hk
   have hb : BlkLe m.blk (upd m.blk k (some ⟨t, .lock, some v⟩)) := BlkLe.setLock hk _
   refine h0.grow rfl (hi.heap.release_put hsl hg hk) (Nat.le_refl _) hb ?_
   intro k' bl hk'
   by_cases he : k' = k
   · subst he; simp [upd] at hk'; subst hk'
-    exact ⟨htok, hvf, fun p hp => by cases hp; exact ⟨hwv.1, hwv.2.grow hb⟩⟩
+    exact ⟨htok, hvf, fun p hp => (by cases hp; exact ⟨hwv.1, hwv.2.grow hb⟩), Or.inl rfl⟩
   · have h' : m.blk k' = some bl := by simpa [upd, he] using hk'
-    obtain ⟨h1, h2, h3⟩ := hi.blocks k' bl h'
-    exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.grow hb⟩⟩
+    obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k' bl h'
+    exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.grow hb⟩, h4⟩
 
 theorem Release.heap {m m' : Mem} {k : Nat} {t : Ty} {x : Var} (h : Release m k t x m') (hh : HeapOK m) :
     HeapOK m' := by
@@ -250,10 +250,10 @@ theorem HeapOK.unback {m m1 : Mem} (hh : HeapOK m) (hh1 : HeapOK m1) (hb : BlkBa
 theorem MInv.blocks_back {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (hb : BlkBack m.blk m'.blk) : BlocksIn m' := by
   intro k bl hk
   rcases hb.2 k bl hk with h | ⟨t, v, rfl, hk0, hw, hsh⟩
-  · obtain ⟨h1, h2, h3⟩ := hi.blocks k bl h
-    exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.grow hb.1⟩⟩
-  · obtain ⟨h1, h2, _⟩ := hi.blocks k _ hk0
-    exact ⟨h1, h2, fun p hp => by cases hp; exact ⟨hw, hsh⟩⟩
+  · obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k bl h
+    exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.grow hb.1⟩, h4⟩
+  · obtain ⟨h1, h2, _, _⟩ := hi.blocks k _ hk0
+    exact ⟨h1, h2, fun p hp => (by cases hp; exact ⟨hw, hsh⟩), Or.inl rfl⟩
 
 /-- A3.4: an atomic operation waiting reads only the slots and the blocks. -/
 theorem RBlocked.of_eq {m m' : Mem} (hst : m'.st = m.st) (hb : m'.blk = m.blk) {r : Rhs} (h : RBlocked m r) :

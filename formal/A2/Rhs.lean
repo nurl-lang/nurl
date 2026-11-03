@@ -139,8 +139,8 @@ theorem MInv.of_st {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) (
   shares v E sl T hE hsl hown hT := (hi.shares v E sl T hE (by rw [h] at hsl; exact hsl) hown hT).of_blk hb
   blocks k bl hk := by
     rw [hb] at hk
-    obtain ⟨h1, h2, h3⟩ := hi.blocks k bl hk
-    exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.of_blk hb⟩⟩
+    obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k bl hk
+    exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.of_blk hb⟩, h4⟩
 
 /-! ### A3.1: more blocks
 
@@ -189,7 +189,7 @@ theorem SlotOK.grow {m m' : Mem} (hst : m'.st = m.st) (hb : BlkLe m.blk m'.blk) 
 /-- What the invariant asks of the blocks. -/
 def BlocksIn (m : Mem) : Prop :=
   ∀ k bl, m.blk k = some bl → bl.ty.ok = true ∧ bl.ty.holdsView = false ∧
-    (∀ p, bl.pay = some p → WFv bl.ty p ∧ SharesOK m bl.ty p)
+    (∀ p, bl.pay = some p → WFv bl.ty p ∧ SharesOK m bl.ty p) ∧ (bl.kind = .lock ∨ bl.ty.hasCell = false)
 
 /-- **More blocks**: the invariant holds over a store with the same slots and
     more blocks, each as the invariant asks. -/
@@ -689,7 +689,7 @@ theorem WFv.pkgsOK_noView {τ : Ty} {v : Val} (hw : WFv τ v) (hhv : τ.holdsVie
 /-- A3.1: a payload's packages are well formed (A3.5b: it holds Sync ones). -/
 theorem MInv.pay_pkgs {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {k : Nat} {bl : Blk} (hk : m.blk k = some bl)
     {n : Val} (hs : Sub n bl.rd) : PkgsOK n := by
-  obtain ⟨_, hhv, hw⟩ := hi.blocks k bl hk
+  obtain ⟨_, hhv, hw, _⟩ := hi.blocks k bl hk
   intro fs te ms e cs hp
   rcases Blk.sub_rd hs with ⟨_, q, hq, hs'⟩ | rfl
   · exact (hw q hq).1.pkgsOK_noView hhv _ _ _ _ _ (hp.trans hs')
@@ -1360,7 +1360,7 @@ A share owns nothing: its payload is the block's, which owns its addresses
     payload it carries, whose shares name blocks. -/
 theorem MInv.arcBlk_shares {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {k : Nat} {t : Ty} {p : Val}
     (hk : ArcBlk (m.blk k) t p) : SharesOK m t p := by
-  rcases hk with hk | hk <;> exact ((hi.blocks k _ hk).2.2 p rfl).2
+  rcases hk with hk | hk <;> exact ((hi.blocks k _ hk).2.2.1 p rfl).2
 
 /-- A share's block, through the binding that holds the share (an owner, or
     a borrow of it). -/
@@ -1569,7 +1569,7 @@ theorem out_glob {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {t : Ty} (htok : t.ok = t
       · exact ⟨_, hk⟩
       · exact ⟨_, hk⟩
     obtain ⟨_, hk'⟩ := hk'
-    obtain ⟨_, hvf, hpay⟩ := hi.blocks k _ hk'
+    obtain ⟨_, hvf, hpay, _⟩ := hi.blocks k _ hk'
     simp only [Ty.ok, Bool.and_eq_true] at htok
     exact out_share htok.1 hvf (hpay p rfl).1 hk
 

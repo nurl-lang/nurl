@@ -707,9 +707,14 @@ structure MInv (m : Mem) (Γ : Ctx) : Prop where
       views, and the shares it holds name blocks too (A3.2: while it is in
       the block).  A3.2's second cut: a lock block's may hold `arc` and lock
       shares, which keep their blocks alive (`Blk.keeps`); A3.5's second cut:
-      and cell shares, whose owners are then the payload (A3's `CellInv`). -/
+      and cell shares, whose owners are then the payload (A3's `CellInv`).
+      A3.5's third cut: a block that is no lock block (an `arc` block, a
+      view) is of a type that holds no cell share (`RhsT.arcNew`'s and
+      `RhsT.rwRead`'s premise, the Sync question): what its holders are lent
+      (a lent cell share being the share) brings no library handle. -/
   blocks    : ∀ k bl, m.blk k = some bl → bl.ty.ok = true ∧ bl.ty.holdsView = false ∧
-                (∀ p, bl.pay = some p → WFv bl.ty p ∧ SharesOK m bl.ty p)
+                (∀ p, bl.pay = some p → WFv bl.ty p ∧ SharesOK m bl.ty p) ∧
+                (bl.kind = .lock ∨ bl.ty.hasCell = false)
 
 /-- The invariant of a configuration running `s` in context `Γ`, with `F`
     lent out. -/

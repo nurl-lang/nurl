@@ -277,7 +277,7 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
     cases ob with
     | none => exact absurd ⟨o, k, hv, Or.inl hk⟩ hnb
     | some p =>
-      obtain ⟨_, _, hpay⟩ := hi.blocks k _ hk
+      obtain ⟨_, _, hpay, _⟩ := hi.blocks k _ hk
       obtain ⟨hw, _⟩ := hpay p rfl
       cases hw with
       | int =>
@@ -293,7 +293,7 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
     cases ob with
     | none => exact absurd ⟨o, k, _, hv, Or.inl hk⟩ hnb
     | some p =>
-      obtain ⟨_, _, hpay⟩ := hi.blocks k _ hk
+      obtain ⟨_, _, hpay, _⟩ := hi.blocks k _ hk
       obtain ⟨hw, _⟩ := hpay p rfl
       obtain ⟨_, _, hall⟩ := hi.heap.blk k _ hk
       obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly
@@ -326,7 +326,7 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
     cases ob with
     | none => exact absurd ⟨o, k, _, hv, Or.inl hk⟩ hnb
     | some p =>
-      obtain ⟨_, _, hpay⟩ := hi.blocks k _ hk
+      obtain ⟨_, _, hpay, _⟩ := hi.blocks k _ hk
       obtain ⟨hw, _⟩ := hpay p rfl
       obtain ⟨_, _, hall⟩ := hi.heap.blk k _ hk
       cases hw with
@@ -354,7 +354,7 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
     cases ob with
     | none => exact absurd ⟨o, k, _, hv, Or.inl hk⟩ hnb
     | some p =>
-      obtain ⟨_, _, hpay⟩ := hi.blocks k _ hk
+      obtain ⟨_, _, hpay, _⟩ := hi.blocks k _ hk
       obtain ⟨hw, _⟩ := hpay p rfl
       cases hw with
       | pair _ hf =>
