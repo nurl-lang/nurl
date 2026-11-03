@@ -656,6 +656,33 @@ def Stmt.callOut (x c z : Var) (f : Nat) : Stmt := .letcall c f [x] (.assign z (
 def Stmt.rwGet (a g y x c z : Var) (f : Nat) : Stmt :=
   Stmt.withRead a g y x (Stmt.callOut x c z f)
 
+/-- A3.2: `locked_apply a f` (and `rw_apply`, an `RwLocked`'s write scope being
+    a `withLock`): the payload checked out to `x`, the closure `f` (a function
+    of the program, `ApplyFn`) run on it `inout`, and its result `c` moved out
+    to `z`, a binding of the caller's, before the lock is let go.  Inside a
+    write scope already open, the tail alone (`Stmt.callOut`) is
+    `wguard_apply`. -/
+def Stmt.lockedApply (a x c z : Var) (f : Nat) : Stmt := .withLock a x (Stmt.callOut x c z f)
+
+/-- A3.2: `locked_get a`, a copy taken under the lock (`stdlib/std/thread.nu`:
+    `mem_dup . p val` with the mutex held): `locked_apply`'s form, `f` being
+    `mem_dup` at the payload's type (`DupFn`), which takes the payload lent.
+    The payload is checked out for the copy, as the runtime holds the mutex for
+    it. -/
+def Stmt.lockedGet (a x c z : Var) (f : Nat) : Stmt := Stmt.lockedApply a x c z f
+
+/-- A3.2: `locked_set a y`, the value replaced under the lock
+    (`stdlib/std/thread.nu`: `mem_send_check x`, then `= . p val x` with the
+    mutex held, the old value dropped).  The new value faces the crossing check
+    before the lock is touched, as the runtime's: it moves into a fresh lock
+    block `b`, a box no other binding reaches (`locked_new`'s check, which
+    panics with the store as it was).  Then `a`'s payload is checked out to
+    `x` (waiting while it is out, as the runtime waits on `taken`), replaced by
+    the box's value (`assign` drops the old one), and given back at the scope's
+    end.  The box, empty, goes with its scope. -/
+def Stmt.lockedSet (t : Ty) (a b x y : Var) : Stmt :=
+  .letv b (.lockNew t y) (.withLock a x (.assign x (.lockTake b)))
+
 /-- A3.6: an update of a `Locked` global set at start (`locked_update g f`,
     with `f`'s body as `s` and its argument as `x`): the global's handle,
     cloned into `h`, and A3.2's `withLock` on it — `h` is an owner, a root,
