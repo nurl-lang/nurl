@@ -426,6 +426,17 @@ def getE (y : Var) (E : Entry) : Ty → Entry
   | .int => intE
   | t => ⟨t, .bor, true, derive y E .share, E.held, false, false⟩
 
+/-- A3.3: `rguard_get g` of a read guard `g` (`rw_read`'s owned share, of
+    type `arc (prod (lk t) t)`, holding nothing) is `arcGet g` and then its
+    second field: what it lends of the payload depends on `g` through a
+    share, and on nothing else.  So `ThruOK` and `canDo` refuse every change
+    through it (a copy of it is a borrow too, which `paramOK` refuses as an
+    `inout` argument), and the guard's scope ends it (`exitScope g`). -/
+theorem rguard_get_path {t : Ty} (ht : t ≠ .int) (g y : Var) :
+    (projE y (getE g ⟨.arc (.prod (.lk t) t), .own, true, [], [], false, false⟩ (.prod (.lk t) t)) t).path =
+      [⟨g, .share⟩] := by
+  cases t <;> simp_all [projE, getE, derive, projDeps, rootKind, Mode.isRoot, Mode.ownSlot]
+
 /-- A3.2: the binding a lock's payload is checked out to (`withLock`): owned,
     holding nothing (a payload views nothing); an integer is a plain integer
     binding, as `unpair` binds an integer field. -/

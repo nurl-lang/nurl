@@ -391,6 +391,16 @@ inductive Stmt where
                                                           -- lock stays checked out)
 
 
+/-- A3.3: a read scope of an `RwLocked` (`: ( RGuard A ) g ( rw_read a )`,
+    then `rguard_get g`), as the calculus spells it: the guard `g`, what
+    `arcGet` lends through it (`y`, a share of the lock and the payload), and
+    the payload, lent frozen (`x`, the second field), for `s`.  The scopes
+    are `letv`'s: `g`'s end (on a panic's unwinding too) ends every borrow
+    of the payload, and the view `g` holds lives until nothing reaches it;
+    a writer waits until then. -/
+def Stmt.withRead (a g y x : Var) (s : Stmt) : Stmt :=
+  .letv g (.rwRead a) (.letv y (.arcGet g) (.letv x (.snd y) s))
+
 /-- A function.  Its parameters are variables `0 … n-1`, its result slot is
     variable `n`, and every variable of its body is below `nvars`.
 
