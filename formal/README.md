@@ -141,7 +141,19 @@ rather than a gap in what it proves:
   `=`), not only at the end of the binding `letd` made (A2-drop.3, Agora
   #253; `CLAIM.md`, Destructors);
 - `Rc` and its cycle collector, which are the standard library's `unsafe`
-  base (phase B).
+  base (phase B);
+- leaving early: `break` and `continue` out of a loop, and a `^` before
+  the end of a function's body. A2's `Stmt` has none of them. Its loop
+  is left only from its head (`Step.while`, `StmtT.while`: the exit is
+  the loop's invariant), and a function returns at the end of its body
+  (`Fn.body`). nurlc's rules for them are therefore not yet rules of the
+  calculus: a loop's exit is the join of its `break`s' states and its
+  head's, except that a loop whose condition is the literal `T` and that
+  has a `break` leaves only by its `break`s (`bck_loop`; Agora #413,
+  #453). The refinement is an early exit as a step result beside
+  `Res.panic`, caught by the innermost loop or by the call, as `catchR`
+  catches a panic. Until it lands, that nurlc's rules for these exits
+  agree with the calculus is part of phase C.
 
 ### A3.0 — threads that only move
 
