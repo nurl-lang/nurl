@@ -99,10 +99,10 @@ theorem TakeVal.ownedId {m m1 : Mem} {y : Var} {v : Val} (h : TakeVal m y v m1) 
     store it leaves owns, was owned before or is fresh. -/
 theorem EvalR.ownedId {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.ok v o m1))
     (hb : BorFree m) :
-    (o = true → ∀ i ∈ v.ids, OwnedId m i ∨ m.nid ≤ i) ∧ ∀ i, OwnedId m1 i → OwnedId m i ∨ m.nid ≤ i := by
+    (o = true → ∀ i ∈ v.ids, OwnedId m i ∨ m.nid ≤ i ∨ PayAddr m i) ∧ ∀ i, OwnedId m1 i → OwnedId m i ∨ m.nid ≤ i := by
   cases h with
   | new =>
-    refine ⟨fun _ i hi => .inr ?_, fun i hi => .inl hi⟩
+    refine ⟨fun _ i hi => .inr (.inl ?_), fun i hi => .inl hi⟩
     simp only [ids_node, idsL_nil, List.mem_cons, List.not_mem_nil, or_false] at hi
     rcases hi with rfl | rfl <;> omega
   | moveOwn hy => exact ⟨fun _ i hi => .inl (OwnedId.of_slot hy hi), fun i hi => .inl (OwnedId.set_none hi)⟩
@@ -143,6 +143,11 @@ theorem EvalR.ownedId {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r
     exact ⟨fun _ i hi => by simp [Val.ids] at hi, fun i hi => .inl (b1 i hi)⟩
   | arcClone _ => exact ⟨fun _ i hi => by simp [Val.ids] at hi, fun i hi => .inl hi⟩
   | lockClone _ => exact ⟨fun _ i hi => by simp [Val.ids] at hi, fun i hi => .inl hi⟩
+  -- A3.4: a value received was the channel's payload's
+  | chanRecv _ hk _ _ =>
+    exact ⟨fun _ i hi => .inr (.inr ⟨_, _, hk, by simp only [ids_inr] at hi; simp [Blk.tree, hi]⟩),
+      fun i hi => .inl hi⟩
+  | chanRecvNone _ _ _ _ => exact ⟨fun _ i hi => by simp at hi, fun i hi => .inl hi⟩
   | _ => exact ⟨fun h => (nomatch h), fun i hi => .inl hi⟩
 
 /-- **Binding parameters**: a `sink` parameter owns what its argument owned,
@@ -175,7 +180,7 @@ theorem Step.ownedId {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r
   | letv _ he =>
     intro i hi
     rcases OwnedId.set_some hi with ⟨ho, hiv⟩ | hi
-    · exact ((EvalR.ownedId he hb).1 ho i hiv).imp_right .inl
+    · exact (EvalR.ownedId he hb).1 ho i hiv
     · exact ((EvalR.ownedId he hb).2 i hi).imp_right .inl
   | letvP _ => exact fun i hi => .inl hi
   | letcall _ _ hbp =>
@@ -193,7 +198,7 @@ theorem Step.ownedId {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r
   | assign _ he _ _ =>
     intro i hi
     rcases OwnedId.set_some hi with ⟨ho, hiv⟩ | hi
-    · exact ((EvalR.ownedId he hb).1 ho i hiv).imp_right .inl
+    · exact (EvalR.ownedId he hb).1 ho i hiv
     · exact ((EvalR.ownedId he hb).2 i hi).imp_right .inl
   | assignP _ => exact fun i hi => .inl hi
   | iteT _ _ => exact fun i hi => .inl hi
@@ -295,7 +300,7 @@ theorem Step.ownedId {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r
   | letd _ he =>
     intro i hi
     rcases OwnedId.set_some hi with ⟨ho, hiv⟩ | hi
-    · exact ((EvalR.ownedId he hb).1 ho i hiv).imp_right .inl
+    · exact (EvalR.ownedId he hb).1 ho i hiv
     · exact ((EvalR.ownedId he hb).2 i hi).imp_right .inl
   | letdP _ => exact fun i hi => .inl hi
   | scopeDIn _ ih => exact ih
@@ -373,6 +378,33 @@ theorem EvalR.payAt {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (
       simp [upd] at hk'
       subst hk'
       simp [Blk.tree] at hi
+    · rw [upd_ne _ _ he] at hk'
+      exact .inl ⟨bl, hk', hi⟩
+  -- A3.4: a channel's payload keeps its addresses, but for a head received
+  | @chanRecv _ _ _ k0 _ _ _ _ _ _ _ _ hk0 _ _ =>
+    have hk' : upd _ k0 _ k = some bl := hk
+    by_cases he : k = k0
+    · subst he
+      simp [upd] at hk'
+      subst hk'
+      simp only [Blk.tree, Option.getD_some, ids_pair, ids_node, ids_int, List.append_nil,
+        List.mem_cons] at hi
+      refine .inl ⟨_, hk0, ?_⟩
+      simp only [Blk.tree, Option.getD_some, ids_pair, ids_node, idsL_cons, ids_int, List.append_nil,
+        List.mem_cons, List.mem_append]
+      rcases hi with h | h | h
+      · exact .inl h
+      · exact .inr (.inl h)
+      · exact .inr (.inr (.inr h))
+    · rw [upd_ne _ _ he] at hk'
+      exact .inl ⟨bl, hk', hi⟩
+  | @chanClose _ _ k0 _ _ _ _ hk0 =>
+    have hk' : upd _ k0 _ k = some bl := hk
+    by_cases he : k = k0
+    · subst he
+      simp [upd] at hk'
+      subst hk'
+      exact .inl ⟨_, hk0, by simpa [Blk.tree] using hi⟩
     · rw [upd_ne _ _ he] at hk'
       exact .inl ⟨bl, hk', hi⟩
   | _ => exact .inl ⟨bl, hk, hi⟩
@@ -469,11 +501,12 @@ theorem TakeVal.avoids {m m1 : Mem} {y : Var} {v : Val} (h : TakeVal m y v m1) (
 
 theorem EvalR.avoids {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.ok v o m1))
     (hb : BorFree m) {a2 : Nat → Bool} (hav : Avoids m a2) (hf : FreshFrom a2 m.nid) :
-    Avoids m1 a2 ∧ (o = true → ∀ i ∈ v.ids, a2 i = false) := by
+    Avoids m1 a2 ∧ (o = true → ∀ i ∈ v.ids, a2 i = false ∨ PayAddr m i) := by
   refine ⟨Avoids.mono hav hf (EvalR.ownedId h hb).2, fun ho i hi => ?_⟩
-  rcases (EvalR.ownedId h hb).1 ho i hi with h | h
-  · exact hav i h
-  · exact hf i h
+  rcases (EvalR.ownedId h hb).1 ho i hi with h | h | h
+  · exact .inl (hav i h)
+  · exact .inl (hf i h)
+  · exact .inr h
 
 theorem BindParams.avoids {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var} {base i : Nat}
     (h : BindParams m ps as base i m') (hb : BorFree m) {a2 : Nat → Bool} (hav : Avoids m a2) :

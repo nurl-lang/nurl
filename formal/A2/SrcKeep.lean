@@ -51,6 +51,8 @@ theorem RhsT.ctxRel {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry}
   | arcClone _ _ _ => exact CtxRel.refl _
   | lockClone _ _ _ => exact CtxRel.refl _
   | atomic _ _ _ _ _ => exact CtxRel.refl _
+  | chanRecv _ _ _ => exact CtxRel.refl _
+  | chanClose _ _ _ => exact CtxRel.refl _
   | arcGet _ _ _ _ _ => exact CtxRel.refl _
   | expr _ => exact CtxRel.refl _
   | new _ => exact CtxRel.refl _

@@ -254,6 +254,32 @@ theorem covers_evalR {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (hc : Covers m)
     · by_cases he : k' = k
       · subst he; rw [hk] at hk'; cases hk'; simp [Blk.tree] at hik
       · exact Or.inl (Or.inr ⟨k', bl, by simp [upd, he, hk'], hik⟩)
+  | @chanRecv _ _ _ k t u c d f v es _ hk _ _ =>
+    -- A3.4: the queue's head leaves the payload as the value in flight
+    rcases hc i hi with h | ⟨k', bl, hk', hik⟩
+    · exact Or.inl (Or.inl h)
+    · by_cases he : k' = k
+      · subst he; rw [hk] at hk'; cases hk'
+        have hik' : i ∈ c :: d :: (v.ids ++ idsL es) := by simpa [Blk.tree] using hik
+        have hnew : ∀ j ∈ c :: d :: idsL es,
+            PayAddr { m with blk := upd m.blk k' (some ⟨t, .lock, some (.pair (.node u c d es) (.int f))⟩) } j :=
+          fun j hj => ⟨k', ⟨t, .lock, some (.pair (.node u c d es) (.int f))⟩, by simp [upd], by simpa [Blk.tree] using hj⟩
+        simp only [List.mem_cons, List.mem_append] at hik'
+        rcases hik' with h | h | h | h
+        · exact Or.inl (Or.inr (hnew i (by simp [h])))
+        · exact Or.inl (Or.inr (hnew i (by simp [h])))
+        · exact Or.inr ⟨rfl, by simpa using h⟩
+        · exact Or.inl (Or.inr (hnew i (by simp [h])))
+      · exact Or.inl (Or.inr ⟨k', bl, by simp [upd, he, hk'], hik⟩)
+  | chanRecvNone _ _ _ _ => exact Or.inl (hc i hi)
+  | @chanClose _ _ k t q f _ hk =>
+    rcases hc i hi with h | ⟨k', bl, hk', hik⟩
+    · exact Or.inl (Or.inl h)
+    · by_cases he : k' = k
+      · subst he; rw [hk] at hk'; cases hk'
+        exact Or.inl (Or.inr ⟨k', ⟨t, .lock, some (.pair q (.int 1))⟩, by simp [upd],
+          by simpa [Blk.tree] using hik⟩)
+      · exact Or.inl (Or.inr ⟨k', bl, by simp [upd, he, hk'], hik⟩)
   | arcClone _ | arcGet _ _ => exact Or.inl (hc i hi)
 
 /-- The binding that takes the value in flight owns it. -/

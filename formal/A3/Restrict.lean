@@ -146,6 +146,13 @@ theorem EvalR.restrict {m : Mem} {r : Rhs} {res : RRes} (h : EvalR m r res) {a2 
   | lockClone hy => exact ⟨_, .lockClone hy, rfl, rfl, rfl⟩
   | atomic hy hk h1 h2 =>
     exact ⟨_, .atomic hy hk (Eval.restrict h1 hav hp) (Eval.restrict h2 hav hp), rfl, rfl, rfl⟩
+  -- A3.4: the queue's addresses are the channel's payload's
+  | chanRecv hy hk hc hd =>
+    exact ⟨_, .chanRecv hy hk (minus_true hc (hp _ ⟨_, _, hk, by simp [Blk.tree]⟩))
+      (minus_true hd (hp _ ⟨_, _, hk, by simp [Blk.tree]⟩)), rfl, rfl, rfl⟩
+  | chanRecvNone hy hk hc hw =>
+    exact ⟨_, .chanRecvNone hy hk (minus_true hc (hp _ ⟨_, _, hk, by simp [Blk.tree]⟩)) hw, rfl, rfl, rfl⟩
+  | chanClose hy hk => exact ⟨_, .chanClose hy hk, rfl, rfl, rfl⟩
   | arcGet hy hk => exact ⟨_, .arcGet hy hk, rfl, rfl, rfl⟩
 
 theorem EvalR.restrict_ok {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.ok v o m1))

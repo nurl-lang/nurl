@@ -254,6 +254,15 @@ inductive Rhs where
                                -- A3.4: an `Atomic`'s operation on the word of the integer
                                -- lock block `a` shares, in one step (`atomic_new` is
                                -- `lockNew .int`, `Atomic_share` is `lockClone`)
+  -- A3.4: a `Channel A` is a lock block whose payload is its queue and its
+  -- closed flag, a `prod (vec A) int` (`chan_new` is `lockNew` of a new
+  -- `Vec` and a 0, `Channel_share` is `lockClone`); each operation is one
+  -- step on the payload, under the channel's mutex
+  | chanRecv (w : Bool) (a : Var)
+                               -- `chan_recv a` (`w`) / `chan_try_recv a`: the queue's head
+                               -- moves out, as `some` (`inr`); `none` (`inl 0`) when it is
+                               -- empty and closed (or, `chan_try_recv`, just empty)
+  | chanClose (a : Var)        -- `chan_close a`: the closed flag is set
 deriving DecidableEq, Repr
 
 /-! ### Memory (here because a run-time form records a snapshot of it) -/

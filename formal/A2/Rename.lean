@@ -1671,6 +1671,16 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
     have hc : S.canon Γa (S.ρ a) = some (S.liftE a Ea) := by rw [canon_ρ h, ha]; rfl
     exact ⟨intE, RhsT.atomic hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab ha]; exact ht)
       (exprT_ren h hab he1) (exprT_ren h hab he2), fun x => intE_lift x⟩
+  | @chanRecv w a Ea s ha hl ht =>
+    have hc : S.canon Γa (S.ρ a) = some (S.liftE a Ea) := by rw [canon_ρ h, ha]; rfl
+    refine ⟨_, RhsT.chanRecv hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab ha]; exact ht),
+      fun x => ?_⟩
+    exact EntryWeaker.mk' (by simp [liftE]) (by simp [liftE, liftMode]) (by simp) (by simp [liftE])
+      (fun h' => by simp [Mode.ownSlot] at h') (by simp)
+  | @chanClose a Ea s ha hl ht =>
+    have hc : S.canon Γa (S.ρ a) = some (S.liftE a Ea) := by rw [canon_ρ h, ha]; rfl
+    exact ⟨intE, RhsT.chanClose hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab ha]; exact ht),
+      fun x => intE_lift x⟩
   | @lockClone a Ea t ha hl ht =>
     have hc : S.canon Γa (S.ρ a) = some (S.liftE a Ea) := by rw [canon_ρ h, ha]; rfl
     refine ⟨_, RhsT.lockClone hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab ha]; exact ht),

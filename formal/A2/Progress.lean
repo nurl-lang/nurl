@@ -222,6 +222,45 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
         obtain ⟨n1, h1⟩ := eval_exists hi he1
         obtain ⟨n2, h2⟩ := eval_exists hi he2
         exact ⟨_, EvalR.atomic hv hk h1 h2⟩
+  | @chanRecv w a E s ha hl hty =>
+    -- A3.4: the queue's head, or none, unless the channel's payload is
+    -- checked out or (`chan_recv`) its queue is empty and open
+    obtain ⟨o, k, hv⟩ := hi.lk_slot ha hl hty
+    obtain ⟨ob, hk⟩ := hi.lk_val ha hl hty hv
+    cases ob with
+    | none => exact absurd ⟨o, k, _, hv, Or.inl hk⟩ hnb
+    | some p =>
+      obtain ⟨_, _, hpay, _⟩ := hi.blocks k _ hk
+      obtain ⟨hw, _⟩ := hpay p rfl
+      obtain ⟨_, _, hall⟩ := hi.heap.blk k _ hk
+      cases hw with
+      | pair hq hf =>
+        cases hq with
+        | @node _ c d es _ =>
+          cases hf with
+          | @int f =>
+            have hc : m.alloc c = true := (hall c (by simp [Blk.tree])).1
+            cases es with
+            | cons v es =>
+              have hd : m.alloc d = true := (hall d (by simp [Blk.tree])).1
+              exact ⟨_, EvalR.chanRecv hv hk hc hd⟩
+            | nil =>
+              by_cases hb : w = true ∧ f = 0
+              · obtain ⟨rfl, rfl⟩ := hb
+                exact absurd ⟨o, k, _, hv, Or.inr ⟨rfl, _, _, _, hk⟩⟩ hnb
+              · exact ⟨_, EvalR.chanRecvNone hv hk hc (by cases w <;> simp_all)⟩
+  | chanClose ha hl hty =>
+    obtain ⟨o, k, hv⟩ := hi.lk_slot ha hl hty
+    obtain ⟨ob, hk⟩ := hi.lk_val ha hl hty hv
+    cases ob with
+    | none => exact absurd ⟨o, k, _, hv, hk⟩ hnb
+    | some p =>
+      obtain ⟨_, _, hpay, _⟩ := hi.blocks k _ hk
+      obtain ⟨hw, _⟩ := hpay p rfl
+      cases hw with
+      | pair _ hf =>
+        cases hf with
+        | int => exact ⟨_, EvalR.chanClose hv hk⟩
   | arcGet ha hl hty _ _ =>
     obtain ⟨o, k, p, hv⟩ := hi.arc_slot ha hl hty
     exact ⟨_, EvalR.arcGet hv (hi.arc_val ha hl hty hv).1⟩

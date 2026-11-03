@@ -618,6 +618,17 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
   | atomic {op : AOp} {a : Var} {e1 e2 : Expr} {E : Entry} :
       Γ a = some E → E.live = true → E.ty = .lk .int → ExprT Γ e1 → ExprT Γ e2 →
       RhsT Γ F (.atomic op a e1 e2) intE Γ
+  /-- A3.4: `chan_recv` / `chan_try_recv`, through a live share of a channel
+      (`Channel s` is `lk (prod (vec s) int)`: its queue and its flag): an
+      owned `Option s` (`sum int s`), holding nothing (`s` holds no view and
+      no share: `Ty.ok`). -/
+  | chanRecv {w : Bool} {a : Var} {E : Entry} {s : Ty} :
+      Γ a = some E → E.live = true → E.ty = .lk (.prod (.vec s) .int) →
+      RhsT Γ F (.chanRecv w a) ⟨.sum .int s, .own, true, [], [], false, false⟩ Γ
+  /-- A3.4: `chan_close`, through a live share of a channel. -/
+  | chanClose {a : Var} {E : Entry} {s : Ty} :
+      Γ a = some E → E.live = true → E.ty = .lk (.prod (.vec s) .int) →
+      RhsT Γ F (.chanClose a) intE Γ
 
 /-! ### Calls -/
 
@@ -656,6 +667,8 @@ theorem RhsT.out {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT 
   | lockNew => exact ⟨Or.inl rfl, rfl⟩
   | lockClone => exact ⟨Or.inl rfl, rfl⟩
   | atomic => exact ⟨Or.inr rfl, rfl⟩
+  | chanRecv => exact ⟨Or.inl rfl, rfl⟩
+  | chanClose => exact ⟨Or.inr rfl, rfl⟩
 
 /-- What the summary pair `(j, k)` means at this call.  An integer argument
     lends nothing. -/
@@ -1347,6 +1360,8 @@ def Rhs.vars : Rhs → List Var
   | .lockNew _ y => [y]
   | .lockClone a => [a]
   | .atomic _ a e1 e2 => a :: e1.vars ++ e2.vars
+  | .chanRecv _ a => [a]
+  | .chanClose a => [a]
 
 def Edit.vars : Edit → List Var
   | .push y => [y]
