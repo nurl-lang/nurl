@@ -9,7 +9,9 @@ defines A3.0's configuration (`Thread`, `Cfg`, `Cfg.view`), its steps
 NoLeak` for every program A2 types); `../README.md` lists the modules of
 the proof. A3.1's `Arc` and A3.2's `Locked` are mechanized in the same
 claim (A3.1's and A3.2's mechanization, below; A3.2's first cut: what it
-leaves out is listed there); A3.3–A3.6 are design. This note fixes the
+leaves out is listed there), and so is A3.4's `Atomic` (A3.4's
+mechanization, below: channels are designed there, not mechanized);
+A3.3, A3.4's channels, A3.5 and A3.6 are design. This note fixes the
 semantics, the theorem statements and the order of work, so the
 mechanization can be cut into tasks (Agora: formal track, F4–F8). The guarantee it targets is the
 "no data race" clause of `CLAIM.md` and `docs/MEMORY.md` §6.2. The rules
@@ -844,6 +846,136 @@ stated.
 - relocking a lock on the OS thread that holds it: the model's thread
   waits (`Blocked`), but the runtime's default pthread mutex leaves it
   undefined (Agora #455, phase D).
+
+## A3.4's mechanization (`Atomic`, channels)
+
+**Status.** `Atomic` is mechanized. `check.sh` is green with its
+operations in A2 and A3, and `A2.memory_safe`, `A2.soundness`,
+`A2.no_leak_end`, `A2.no_leak_panic` and `A3.claim` are re-proven with
+them. Channels are not mechanized in this cut. Their design is below, as a
+reading over `Locked`, with what primitive rules would need. `CLAIM.md` /
+`README.md` are not updated here.
+
+**Where an `Atomic` lives: in an integer lock block.** The draft gave it a
+third block kind. The cut uses A3.2's lock block of type `int` instead.
+- An `Atomic` holds one integer, which owns no address. Its shares, its
+  creation and its drop are exactly a lock's:
+  - `atomic_new i x` is `Rhs.lockNew .int x`;
+  - `Atomic_share` is `Rhs.lockClone`;
+  - `Atomic_drop` drops a share, which frees nothing (`Frees.lk`);
+  - the sweep frees the block once no thread's slot reaches it.
+- A kind of its own would add a `Ty` and a `Val` case to every function on
+  types and values, and a `ShareFits` case, for no difference in memory.
+  The type `Atomic` is `Ty.lk .int`.
+- The cost: a model program may also `withLock` an `lk int`. An operation
+  on a word that is checked out then waits (`RBlocked`, below). A source
+  `Atomic` has no `locked_update`, so it is never checked out.
+
+**The rules.**
+- `AOp` (`load`, `store`, `add`, `sub`, `swap`, `max`, `cas`) and
+  `AOp.run op n x y`. It gives the answer and the new word from the word `n`
+  and the arguments, as `atomic.nu` does:
+  - `add`, `sub`, `swap` and `max` answer the old value;
+  - `store` answers 0;
+  - `cas` answers 1 when the word was `expect`, else 0.
+- `Rhs.atomic op a e1 e2`, typed by `RhsT.atomic`: `a` is a live share of
+  type `lk int`, `e1` and `e2` are integer expressions, and the answer is an
+  integer (`intE`).
+- `EvalR.atomic`: one step. It reads the word `n` of `a`'s block (a lock
+  block of `int` with its payload in), writes `(op.run n n1 n2).2` and
+  answers `(op.run n n1 n2).1`.
+- `RBlocked m r`: an atomic operation whose block has its payload checked
+  out. `Blocked` reads it at `letv`, `assign` and `letd`, the statements
+  that run a right-hand side. `evalR_exists` takes `¬ RBlocked`, and
+  progress answers `Blocked` otherwise.
+
+**A2's proof.**
+- `atomic_pres`: the block is kept (`BlkLe.setLock`, moved before
+  `rhs_pres`). Its tree owns no address before or after (`BlkOwn`), and
+  `BlocksIn` holds for the new word (`WFv.int`).
+- The answer is a plain integer (`intE_out`).
+- `covers_evalR`'s case: no payload address moves.
+- `Codes`: an integer is a leaf.
+- `Rename`, `Wf`, `NameWf`, `SrcKeep`: the expression cases.
+
+**A3's proof.**
+- *The word is no address*, as the lock word and `Arc`'s count are not.
+  An atomic operation touches nothing (`Touch` and `Race` are unchanged),
+  so no "both atomic" mark is needed: no address is ever touched
+  atomically.
+- The operation changes one block's word: `Grows` (`BlkLe.setLock`),
+  `EvalR.payAt` (the word owns no address), `BorFree`, `Restrict`, `Lift`.
+- `RBlocked.of_eq` gives `Blocked.of_eq`'s new cases.
+- Send: a share is an `lk int`, so `lk_spawnOK` covers it.
+- Sync: only the atomic steps reach the word.
+
+**Faithful to the runtime.**
+- `atomic.nu`'s `Atomic` is a `shared_new` cell (`AtomicCell`):
+  - `Atomic_share` is `shared_clone`;
+  - each operation is one `nurl_atomic_i64_*` on the cell's word, all
+    `__ATOMIC_SEQ_CST`;
+  - so the model's one step on the block's word is the runtime's one
+    instruction.
+- The word is never a data race: every access to it is a `seq_cst` atomic
+  (DRF-SC, as above).
+- The cell is freed at the last share's drop. The model's sweep frees the
+  block when no slot reaches it.
+- The numbers differ: the calculus's integers are `Nat`s, so `sub`
+  saturates where the runtime's `i64` wraps. No memory fact reads the
+  number.
+
+**Probes.**
+- `thread_consumes_one_capture_frees_shared_atomic` and
+  `fiber_consumes_one_capture_frees_shared_atomic`: a thread consumed one
+  capture and freed the spawner's `Atomic`. In the model a share's drop
+  frees nothing (`Frees.lk`), and a block lives while some thread's slot
+  reaches it (`Cfg.sweep`, `Reached`, `CInv`'s second half). The spawner's
+  `atomic_load` after the join is `EvalR.atomic` on a block its own slot
+  reaches.
+- `chan_send_then_use` (h21) maps to no channel rule, since channels are
+  not mechanized. Under the reading below, the send moves the value
+  (`PushArg.move`, through `StmtT.push`), and the sender's later read is
+  refused because its entry is dead.
+
+**Channels: designed, not mechanized.** The runtime's `ChImpl` is a mutex,
+a condition variable, a queue `Vec A`, a `closed` flag and a waiter count.
+So a channel reads as a lock block whose payload is the queue and the flag:
+`Channel A` is `Locked (Vec A, i64)`.
+- `chan_new` is `lockNew` of a fresh `Vec` and a 0, and `Channel_share` /
+  `Channel_drop` are a lock share's.
+- The queue's values are the block's payload tree. The sweep frees them
+  with the block, so `no_leak` covers values left in a channel.
+- `chan_send ch v` is one critical section: `v` moves into the queue, or
+  is dropped when the flag is set.
+- `chan_recv` is a critical section that takes the head when there is one.
+  When the queue is empty and open, it waits: in the reading as a retry
+  loop, as a primitive as `RBlocked`. When the queue is empty and closed,
+  it answers none.
+- The values in the queue are in the lock's payload, read by no one and in
+  no thread's part, so they race with nothing. The queue's ends are the
+  runtime mutex's (trusted base).
+
+What primitive rules would need, so the reading is mechanized rather than
+argued:
+- `Rhs.chanSend c y` / `Rhs.chanRecv c` on `lk (Vec t)` blocks. Their
+  preservation is `rhs_lockNew`'s, with a value appended to an existing
+  block's tree, and `acquire_pres`'s, with the head taken out of it.
+- `EvalR.ownedId` would need a third case: the received value's addresses
+  were a payload's.
+- `RBlocked` would cover an empty, open queue.
+- The `closed` flag, or a pair payload.
+- `chan_try_recv` / `chan_close`.
+
+Alternatively, the reading's library bodies could be typed as
+`A2/DynCell.lean` types `pick` (`withLock` / `unpair` / `push` / `pop`, and
+a loop for `chan_recv`). The A3.2 rules already cover them, with one
+deviation: `pop` takes the back where the queue takes the front, which no
+memory fact reads.
+
+**Not proven here.**
+- channels, as rules or as typed library bodies;
+- the `closed` flag and `chan_try_recv`;
+- `CLAIM.md` / `README.md`.
 
 ## Open questions
 
