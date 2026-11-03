@@ -31301,10 +31301,11 @@ unsafe @ bck_join_state s a s b → s {
             : i va ? == ra BCK_MAYBE_OWNED BCK_BORROWED_SHARED ra
             : i vb ? == rb BCK_MAYBE_OWNED BCK_BORROWED_SHARED rb
             = jv ( bck_join va vb )
-            // (A borrow on one path and the binding's own value on the
-            // other — or a binding that already may own its value on
-            // either: it may own it here. BCK_MAYBE_OWNED.)
-            ? && == jv BCK_BORROWED_SHARED || || == va BCK_OWNED == vb BCK_OWNED || == ra BCK_MAYBE_OWNED == rb BCK_MAYBE_OWNED { = jv BCK_MAYBE_OWNED } {}
+            // (A binding that already may own its value on either path, or
+            // a borrow on one path and its own value on the other: it may own
+            // it here, BCK_MAYBE_OWNED — when some row may give it a value of
+            // its own, not only views and literals, bck_may_own_some.)
+            ? && == jv BCK_BORROWED_SHARED || || == ra BCK_MAYBE_OWNED == rb BCK_MAYBE_OWNED && || == va BCK_OWNED == vb BCK_OWNED ( bck_may_own_some i ) { = jv BCK_MAYBE_OWNED } {}
             // (A borrow on one path met a binding consumed, stored or ended
             // on the other: it may hold nothing here. Remembered as the
             // reason a later use names — none was, and the use printed an
@@ -32004,8 +32005,47 @@ unsafe @ bck_index_closes i n → v {
         ? & ( seq k `endcond` ) > t0 0 { = t0 - t0 1 ( nurl_poke # s g_bck_close ( nurl_peek stk t0 ) + j 1 ) } {}
         ? & ( seq k `endmatch` ) > t1 0 { = t1 - t1 1 ( nurl_poke # s g_bck_close ( nurl_peek stk + n t1 ) + j 1 ) } {}
         ? & ( seq k `endblock` ) > t2 0 { = t2 - t2 1 ( nurl_poke # s g_bck_close ( nurl_peek stk + * n 2 t2 ) + j 1 ) } {}
+        // (A view binding — an `s`, a Slice, a struct of views: its rows are
+        // marked `v` `w` `o` — whose value with no source may own nothing,
+        // a literal: bck_may_own_some.)
+        ? || ( seq k `let` ) ( seq k `assign` ) {
+            : s m5 ( bck_field ( bck_rec j ) 5 )
+            ? || || ( seq m5 `v` ) ( seq m5 `w` ) ( seq m5 `o` ) { ( bck_put ( bck_bkey `vnm_` ( bck_field ( bck_rec j ) 1 ) ) `1` ) } {}
+        } {}
         = j + j 1
     }
+}
+
+// A `let` / `=` row whose value may be the binding's own (`o`: a guarded
+// call that hands back a fresh value on some calls and a lend on others,
+// a join with a fresh arm and a view arm) and that also borrows from what
+// the other paths point into: the binding may own its value, as at a join
+// of paths (bck_join_state) — BCK_MAYBE_OWNED, not a plain borrow.
+@ bck_may_own_row s st i id s rec → s {
+    ? ! ( seq ( bck_field rec 5 ) `o` ) { ^ st } {}
+    ( bck_note_may_own id )
+    ? != BCK_BORROWED_SHARED ( bck_st_raw st id ) { ^ st } {}
+    ^ ( bck_st_set st id BCK_MAYBE_OWNED )
+}
+
+// May binding `id`'s value with no source be its own? An owner's always
+// is. A view binding's (bck_index_closes) is only once the walk has passed
+// a row giving it a value that may be its own (`vmo_`, bck_note_may_own): a
+// `let` or `=` marked `o` (a fresh string, an owned call's result, a guarded
+// call's, a join with a fresh arm), a closure's `@assign` of it. Every path
+// into a join is walked before the join, so where a path that borrows meets
+// one that does not (BCK_MAYBE_OWNED, bck_join_state), a view binding given
+// only views and literals on the way there owns nothing on either.
+@ bck_may_own_some i id → b {
+    : s ids ( nurl_str_int id )
+    ? == 0 ( nurl_sym_len g_bck ( bck_bkey `vnm_` ids ) ) { ^ T } {}
+    ^ != 0 ( nurl_sym_len g_bck ( bck_bkey `vmo_` ids ) )
+}
+
+// The walk passes a row giving binding `id` a value that may be its own.
+@ bck_note_may_own i id → v {
+    : s k ( bck_bkey `vmo_` ( nurl_str_int id ) )
+    ? == 0 ( nurl_sym_len g_bck k ) { ( bck_put k `1` ) } {}
 }
 
 // Index of the close marker matching the open marker at `idx`. The
@@ -33344,6 +33384,7 @@ unsafe @ __bck_try_exit_check s st i line → v {
                 ? & == lmk0 110 == 0 ( nurl_str_len ( bck_field rec 6 ) ) { ( bck_put `plend` `` ) } {}
                 = st ( bck_bind_row st ( bck_field_int rec 1 ) rec lsrcs lmk )
                 ? == lmk0 110 { = st ( bck_nest_borrow st ( bck_field_int rec 1 ) lnest ) } {}
+                = st ( bck_may_own_row st ( bck_field_int rec 1 ) rec )
                 // (An owner that may hold views: what its handle may be a copy
                 // of, or a part of — a join of names, a value a call lends —
                 // where what is stored into it lands too, agora #414.)
@@ -33394,6 +33435,7 @@ unsafe @ __bck_try_exit_check s st i line → v {
                 ? & == amk0 110 == 0 ( nurl_str_len ( bck_field rec 6 ) ) { ( bck_put `plend` `` ) } {}
                 = st ( bck_bind_row st asid rec asrcs amk )
                 ? == amk0 110 { = st ( bck_nest_borrow st asid anest ) } {}
+                = st ( bck_may_own_row st asid rec )
                 // (…and what its new value's handle may be part of, instead of
                 // the old one's; what was a part of its old value is no part
                 // of this one — agora #414.)
@@ -33720,6 +33762,16 @@ unsafe @ __bck_try_exit_check s st i line → v {
                 // What a closure that may run here does to its captures: the
                 // sweep below ends what that ends (bck_borrow_sweep).
                 ? != 0 g_bck_has_cursor { = st ( bck_cursor_follow st rec kc ) } {}
+                // (A closure that runs here and gives a borrowing binding a
+                // new value, `@assign`: from here on it may hold the closure's
+                // value, its own on that path — BCK_MAYBE_OWNED.)
+                ? ( seq ( bck_field rec 5 ) `@assign` ) {
+                    : i aid ( bck_field_int rec 1 )
+                    ? == ( bck_path_root aid ) aid {
+                        ( bck_note_may_own aid )
+                        ? == BCK_BORROWED_SHARED ( bck_st_raw st aid ) { = st ( bck_st_set st aid BCK_MAYBE_OWNED ) } {}
+                    } {}
+                } {}
                 = p + p 1
                 = done T
             } {}
@@ -37363,7 +37415,9 @@ unsafe @ bck_note_rc_arg s name s ty → v {
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest ) = rest ( str_skip_word rest )
         : i id ( nurl_str_to_int w )
-        : i v ( bck_st_get out id )
+        // (…one that may own its value on some path too, BCK_MAYBE_OWNED.)
+        : i vr ( bck_st_raw out id )
+        : i v ? == vr BCK_MAYBE_OWNED BCK_OWNED vr
         // (A cursor payload's field view ends with its arm too — handed to
         // the matched owner, it outlived a change of that owner's payload
         // made in place through a second match, which the walk does not end
@@ -37499,7 +37553,10 @@ unsafe @ bck_scope_drop s st s lets i line → s {
     ~ != 0 ( nurl_str_len rest ) {
         : s js ( str_first_word rest ) = rest ( str_skip_word rest )
         : i id ( bck_field_int ( bck_rec ( nurl_str_to_int js ) ) 1 )
-        : i v ( bck_st_get out id )
+        // (…and one that may own its value on some path, BCK_MAYBE_OWNED:
+        // there its value is released.)
+        : i vr ( bck_st_raw out id )
+        : i v ? == vr BCK_MAYBE_OWNED BCK_OWNED vr
         ? | == v BCK_OWNED == v BCK_MAYBE_MOVED { = out ( bck_root_end out id line `it went out of scope at the end of its block` ) } {}
         = g_bck_ending ? == 0 ( nurl_str_len g_bck_ending ) ( nurl_str_int id ) ( nurl_str_cat3 g_bck_ending ` ` ( nurl_str_int id ) )
     }

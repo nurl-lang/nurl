@@ -29,8 +29,12 @@
   free nothing, so a copy taken from it before was read after the value
   it pointed into was released. That covered the split-on-delimiter loop
   whose last piece is the cursor itself, and a `?` or `??` arm that gave
-  the cursor a slice of its own. Such a binding now may own its value:
-  re-pointing it ends what was borrowed from it. nurlc's own unused-import
+  the cursor a slice of its own, a join value with a fresh arm and a view
+  arm, a call that hands back a fresh value on some calls, and a closure
+  that gives the cursor a value of its own. Such a binding now may own its
+  value: re-pointing it, or the end of its scope, ends what was borrowed
+  from it. A cursor only ever given views and literals still owns nothing,
+  and a copy of it outlives a re-point as before. nurlc's own unused-import
   lint had this shape and now reads each piece before moving on.
 - **A view parameter is a view of what the caller passed, everywhere**
   (probes view_param_kept_in_a_string_global,
