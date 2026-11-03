@@ -31999,19 +31999,21 @@ unsafe @ bck_index_closes i n → v {
     : ~ i t2 0
     : ~ i j 0
     ~ < j n {
-        : s k ( bck_field ( bck_rec j ) 0 )
-        ? ( seq k `cond` ) { ( nurl_poke stk t0 j ) = t0 + t0 1 } {}
-        ? ( seq k `match` ) { ( nurl_poke stk + n t1 j ) = t1 + t1 1 } {}
-        ? ( seq k `block` ) { ( nurl_poke stk + * n 2 t2 j ) = t2 + t2 1 } {}
-        ? & ( seq k `endcond` ) > t0 0 { = t0 - t0 1 ( nurl_poke # s g_bck_close ( nurl_peek stk t0 ) + j 1 ) } {}
-        ? & ( seq k `endmatch` ) > t1 0 { = t1 - t1 1 ( nurl_poke # s g_bck_close ( nurl_peek stk + n t1 ) + j 1 ) } {}
-        ? & ( seq k `endblock` ) > t2 0 { = t2 - t2 1 ( nurl_poke # s g_bck_close ( nurl_peek stk + * n 2 t2 ) + j 1 ) } {}
-        // (A view binding — an `s`, a Slice, a struct of views: its rows are
-        // marked `v` `w` `o` — whose value with no source may own nothing,
-        // a literal: bck_may_own_some.)
-        ? || ( seq k `let` ) ( seq k `assign` ) {
-            : s m5 ( bck_field ( bck_rec j ) 5 )
-            ? || || ( seq m5 `v` ) ( seq m5 `w` ) ( seq m5 `o` ) { ( bck_put ( bck_bkey `vnm_` ( bck_field ( bck_rec j ) 1 ) ) `1` ) } {}
+        // (By kind code, bck_kind_code: cond 25, match 27, block 23 and
+        // their ends 26, 28, 24 — no copy of the kind per row.)
+        : i kc ( bck_kc j )
+        ? == kc 25 { ( nurl_poke stk t0 j ) = t0 + t0 1 } {}
+        ? == kc 27 { ( nurl_poke stk + n t1 j ) = t1 + t1 1 } {}
+        ? == kc 23 { ( nurl_poke stk + * n 2 t2 j ) = t2 + t2 1 } {}
+        ? && == kc 26 > t0 0 { = t0 - t0 1 ( nurl_poke # s g_bck_close ( nurl_peek stk t0 ) + j 1 ) } {}
+        ? && == kc 28 > t1 0 { = t1 - t1 1 ( nurl_poke # s g_bck_close ( nurl_peek stk + n t1 ) + j 1 ) } {}
+        ? && == kc 24 > t2 0 { = t2 - t2 1 ( nurl_poke # s g_bck_close ( nurl_peek stk + * n 2 t2 ) + j 1 ) } {}
+        // (A view binding — an `s`, a Slice, a struct of views: its `let`
+        // and `=` rows (2, 3) are marked `v` `w` `o` — whose value with no
+        // source may own nothing, a literal: bck_may_own_some.)
+        ? || == kc 2 == kc 3 {
+            : i m5 ( __bck_row_mark ( bck_rec j ) )
+            ? || || == m5 118 == m5 119 == m5 111 { ( bck_put ( bck_bkey `vnm_` ( bck_field ( bck_rec j ) 1 ) ) `1` ) } {}
         } {}
         = j + j 1
     }
@@ -32022,8 +32024,8 @@ unsafe @ bck_index_closes i n → v {
 // a join with a fresh arm and a view arm) and that also borrows from what
 // the other paths point into: the binding may own its value, as at a join
 // of paths (bck_join_state) — BCK_MAYBE_OWNED, not a plain borrow.
-@ bck_may_own_row s st i id s rec → s {
-    ? ! ( seq ( bck_field rec 5 ) `o` ) { ^ st } {}
+@ bck_may_own_row s st i id i mk → s {
+    ? != mk 111 { ^ st } {}
     ( bck_note_may_own id )
     ? != BCK_BORROWED_SHARED ( bck_st_raw st id ) { ^ st } {}
     ^ ( bck_st_set st id BCK_MAYBE_OWNED )
@@ -33385,7 +33387,7 @@ unsafe @ __bck_try_exit_check s st i line → v {
                 ? & == lmk0 110 == 0 ( nurl_str_len ( bck_field rec 6 ) ) { ( bck_put `plend` `` ) } {}
                 = st ( bck_bind_row st ( bck_field_int rec 1 ) rec lsrcs lmk )
                 ? == lmk0 110 { = st ( bck_nest_borrow st ( bck_field_int rec 1 ) lnest ) } {}
-                = st ( bck_may_own_row st ( bck_field_int rec 1 ) rec )
+                = st ( bck_may_own_row st ( bck_field_int rec 1 ) lmk0 )
                 // (An owner that may hold views: what its handle may be a copy
                 // of, or a part of — a join of names, a value a call lends —
                 // where what is stored into it lands too, agora #414.)
@@ -33436,7 +33438,7 @@ unsafe @ __bck_try_exit_check s st i line → v {
                 ? & == amk0 110 == 0 ( nurl_str_len ( bck_field rec 6 ) ) { ( bck_put `plend` `` ) } {}
                 = st ( bck_bind_row st asid rec asrcs amk )
                 ? == amk0 110 { = st ( bck_nest_borrow st asid anest ) } {}
-                = st ( bck_may_own_row st asid rec )
+                = st ( bck_may_own_row st asid amk0 )
                 // (…and what its new value's handle may be part of, instead of
                 // the old one's; what was a part of its old value is no part
                 // of this one — agora #414.)
