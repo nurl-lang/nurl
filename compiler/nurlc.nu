@@ -22712,8 +22712,9 @@ unsafe @ gen_match i lex i syms i cg → s {
         ( nurl_sym_def syms `__loop_snap_cenv__` old_closure_lp )
         = g_did_ret 0
         // Borrow checker (Phase 0c): a `~` while-body is a back-edge —
-        // the analyze walk must iterate it to a fixpoint.
-        ( bck_set_block_kind `loop` )
+        // the analyze walk must iterate it to a fixpoint. (A literal-true
+        // condition's loop, `loopt`, is left only by a `break`: agora #453.)
+        ( bck_set_block_kind ? __lp_true `loopt` `loop` )
         ( gen_block_stmts lex syms cg )
         ( nurl_sym_def syms `__loop_depth__` old_bc_ldepth )
         ( nurl_sym_def syms `__loop_sdepth__` old_bc_sdepth )
@@ -33909,14 +33910,14 @@ unsafe @ __bck_try_exit_check s st i line → v {
                     // (bck_scope_restore): one that shadowed an outer name
                     // must not leave its state on that name.
                     : s blk_pre ( nurl_str_cat st `` )
-                    : b isloop | ( seq bk `loop` ) ( seq bk `foreach` )
+                    : b isloop | | ( seq bk `loop` ) ( seq bk `loopt` ) ( seq bk `foreach` )
                     ( bck_scope_push + p 1 eb isloop )
                     ? isloop {
                         // Pass the controlling `~ cond` reads (carried in the
                         // block row's reads field) and its line so bck_loop can
                         // re-check them against the loop's back-edge state.
                         : s lpost ( bck_loop + p 1 eb st ( bck_field rec 2 )
-                        ( bck_field_int rec 3 ) )
+                        ( bck_field_int rec 3 ) ( seq bk `loopt` ) )
                         = st ( bck_scope_restore + p 1 eb blk_pre lpost )
                     } {
                         // …and what it declared and still holds is released at
@@ -36584,7 +36585,7 @@ unsafe @ bck_note_rc_arg s name s ty → v {
         : s r ( bck_rec j )
         ? != 0 ( nurl_str_starts r `block\t` ) {
             : s k ( bck_field r 1 )
-            ? | ( seq k `loop` ) ( seq k `foreach` ) { ? > ( bck_match_close j `block` `endblock` ) d { ^ T } {} } {}
+            ? | | ( seq k `loop` ) ( seq k `loopt` ) ( seq k `foreach` ) { ? > ( bck_match_close j `block` `endblock` ) d { ^ T } {} } {}
         } {}
         = j + j 1
     }
@@ -37624,6 +37625,41 @@ unsafe @ bck_loop_mask s pre s post → s {
     ^ out
 }
 
+// The dependencies made exactly `snap`'s (a union of snapshots): each
+// pair the tables hold that no snapshot word has is dropped, then the
+// snapshot's are held again (__vd_join). Where a loop is left only by its
+// `break`s, what it leaves with is theirs (agora #453).
+@ __vd_restore s snap → v {
+    : ~ s rest ( nurl_sym_get g_bck ( bck_bkey `bsrcs` `` ) )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s c ( str_first_word rest ) = rest ( str_skip_word rest )
+        : ~ s hs ( nurl_sym_get g_bck ( bck_bkey `vdd_` c ) )
+        ~ != 0 ( nurl_str_len hs ) {
+            : s h ( str_first_word hs ) = hs ( str_skip_word hs )
+            ? ! ( __vd_snap_has snap c h ) { ( bck_dep_clear_one ( nurl_str_to_int h ) ( nurl_str_to_int c ) ) } {}
+        }
+    }
+    ( __vd_join snap )
+}
+
+// Does a snapshot word `c:h1k,h2k…` of `snap` hold source `c` for holder
+// `h` (any kind suffix)?
+@ __vd_snap_has s snap s c s h → b {
+    : s pre ( nurl_str_cat c `:` )
+    : ~ s rest ( nurl_str_cat snap `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? != 0 ( nurl_str_starts w pre ) {
+            : ~ s hs ( bck_swap_char ( nurl_str_slice w ( nurl_str_len pre ) - ( nurl_str_len w ) ( nurl_str_len pre ) ) 44 32 )
+            ~ != 0 ( nurl_str_len hs ) {
+                : s hw ( str_first_word hs ) = hs ( str_skip_word hs )
+                ? ( seq ( nurl_str_slice hw 0 - ( nurl_str_len hw ) 1 ) h ) { ^ T } {}
+            }
+        } {}
+    }
+    ^ F
+}
+
 // …put back: each dependency of `snap` the tables lost since (a holder
 // given a new value on a path other than the one the snapshot was taken
 // on) is held again, the way the snapshot held it; one held both ways —
@@ -38008,7 +38044,7 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     }
 }
 
-@ bck_loop i lo i hi s pre s cond_reads i cond_line → s {
+@ bck_loop i lo i hi s pre s cond_reads i cond_line b ltrue → s {
     : ~ s head ( nurl_str_cat pre `` )
     : ~ i iter 0
     : ~ b done F
@@ -38118,10 +38154,17 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
         ? != 0 ( nurl_str_len vend ) {} {}
     } {}
     // (The loop is left from its head: its borrow sources hold after it,
-    // and so do the dependencies it was left with there.)
-    ( __bs_join bhead )
-    ( __fv_join fvhead )
-    ? != 0 g_bck_has_deps { ( __vd_join vdhead ) } {}
+    // and so do the dependencies it was left with there. A loop whose
+    // condition is the literal `T` is never left from its head — only by
+    // its `break`s, below: joined, a holder repointed before every
+    // `break` still viewed what it viewed when the loop was entered,
+    // agora #453. One with no `break` is never left at all.)
+    : b __lbrk_only & ltrue != 0 ( nurl_str_len brk )
+    ? ! __lbrk_only {
+        ( __bs_join bhead )
+        ( __fv_join fvhead )
+        ? != 0 g_bck_has_deps { ( __vd_join vdhead ) } {}
+    } {}
     ( bck_put `lbrk` outer_brk )
     ( bck_put `lcnt` outer_cnt )
     ( bck_put `lbrkvd` outer_brkvd )
@@ -38130,11 +38173,15 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     ( bck_put `lcntbs` outer_cntbs )
     // (…and a `break`'s borrows, agora #399.)
     ( __bs_join brkbs )
-    // (…and by a `break`, with the dependencies it left with.)
-    ? != 0 g_bck_has_deps { ( __vd_join brkvd ) } {}
-    // The loop is left at its condition (the head state) or by a `break`.
+    // (…and by a `break`, with the dependencies it left with — only
+    // those where nothing else leads out: the tables the walks left hold
+    // the head's again, put back at every turn.)
+    ? != 0 g_bck_has_deps { ? __lbrk_only { ( __vd_restore brkvd ) } { ( __vd_join brkvd ) } } {}
+    // The loop is left at its condition (the head state) or by a `break`
+    // — only by a `break` where the condition is the literal `T`.
     ? == 0 ( nurl_str_len brk ) { ^ head } {}
     : s left ( bck_loop_mask pre brk )
+    ? __lbrk_only { ^ left } {}
     ^ ( bck_join_state head left )
 }
 
