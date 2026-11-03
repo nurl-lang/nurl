@@ -10,6 +10,722 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Unreleased changes are fragments in [`changes/unreleased/`](changes/unreleased/) until a release folds them in here (`tools/changelog.py`).
 
+## [0.86.0] — 2026-11-03
+
+### Changed
+
+- **A `~ T` loop is left only by its `break`s** (Agora #453; probes
+  holder_repointed_*_while_true_*). Since #413 a loop leaves with the
+  dependencies its head held, for the run that never enters it. A loop whose
+  condition is the literal `T` (or `1`) never ends at its head, yet it was
+  joined there too. So a holder repointed right before every `break` was
+  refused as still viewing a local that had ended. Such a loop now leaves
+  with what its `break`s held. A holder that still views the local on a path
+  that breaks is refused as before.
+
+### Fixed
+
+- **A closure cannot give its captures or its Vec parameter a view
+  through a local, or a view of a capture** (Agora #332; probes
+  closure_local_bound_from_*, closure_pushes_a_view_of_its_capture_*,
+  closure_handed_to_a_function_pushes_its_captures_view). Inside a closure
+  body, `: s t p` followed by `= w @ V { t }` stored a view of the
+  closure's parameter into a capture, as `= w @ V { p }` would, but only
+  the direct form was refused. And `\ ( Vec s ) out → v { ( vec_push [s]
+  out ( string_data cap ) ) }` left the caller's Vec viewing a String the
+  closure captured. Both read freed memory once the source ended. Both are
+  refused now. A view of the closure's own other parameter stored into its
+  Vec parameter is tied to that argument at the call (Agora #403).
+
+- **A callee clearing inside its parameter's elements is summarised as
+  dropping them** (Agora #333; probes callee_clears_*). These are the four
+  forms of #315's drop half: through a local, directly, under a nested
+  borrow, and through a struct element's field. #443 and #447 closed
+  them; their probes now hold it.
+
+- **An enum that can hold a view is an owner of views** (Agora #338;
+  probes enum_viewing_a_line_*, *_viewing_a_line_pushed_out). The borrow
+  check asked whether a type can hold a view and answered no for every
+  enum, so a token over a line (`Tok { Word s Num i Bad String }` holding
+  `( string_data line )`) was an owner of nothing borrowed. Pushed into an
+  outer Vec, stored into a field, copied into a literal, captured by a
+  closure, passed through a generic, wrapped in an option, an outer enum or
+  a struct, or made in a loop, it was kept past its String and read freed
+  memory. An enum now holds a view when one of its variants' payloads can,
+  as a struct does when one of its fields can, and the answer is exact for
+  recursive and deeply nested types (it used to stop 16 levels down, so a
+  view 17 struct levels down was missed too). A `??` payload read out of
+  such an owner holds what the owner views, so it may outlive the token
+  but not the String the token views.
+
+- **A closure is not called with a binding it replaces** (Agora #339;
+  probes closure_called_with_*). `: ( @ v String ) c \ String p → v { = o
+  ( same p ) }` then `( c o )` freed `o`'s old value, which the parameter
+  `p` still was: a heap-use-after-free. The call is now refused, as `(
+  put x x )` with an `inout` parameter is: pass a copy, or let the
+  closure take the value as an `inout` parameter instead of capturing
+  it. A closure that only reads its capture may still be called with it.
+
+- **An `inout` option given a lend of another value copies it** (Agora
+  #343; probes inout_option_given_*). `@ put inout ?String o ( Vec String )
+  vs i k → v { = o ( vec_get [String] vs 0 ) }` stored the element as it
+  was, so the caller's binding and the Vec both owned it
+  (heap-use-after-free). The same happened with a lend of another
+  parameter (`= o ( idopt other )`) or a call that hands one back on some
+  runs. The same shape with a local Vec failed to compile (an undefined
+  helper). The result is now compared with the old value by its payload,
+  as for an `inout` String: the old value itself stays, and anything else
+  is copied in and the old value released.
+
+- **A function storing a local copy of its view parameter into an `inout`
+  holder ties the holder to the caller's value** (Agora #346; probes
+  function_stores_a_local_copy_of_its_view_parameter_*).
+  `@ setw inout V w s p → v { : s t p  = w @ V { t } }` gave the caller no
+  record that `w` views what `p` views, and the caller read freed memory
+  once its String ended. The direct `= w @ V { p }` was refused. This form
+  is now refused too, and accepted while the String lives.
+
+- **A closure that changes a local read out of its capture changes the
+  capture** (Agora #353; probes closure_clears_a_local_read_out_*,
+  closure_grows_a_local_read_out_*). `\ → v { : ( Vec String ) e (
+  vec_at [( Vec String )] vv 0 ) ( vec_clear [String] e ) }`, run while
+  the caller borrowed an element of `vv`'s element, freed it under the
+  borrow: only the direct form `( vec_clear ( vec_at vv 0 ) )` counted as
+  an effect of running the closure. A body local read out of a capture
+  now reaches that capture, through copies too.
+
+- **A closure made after a capture's borrow ended is refused where it is
+  made** (Agora #358; probes closure_made_*,
+  closure_under_recover_reads_*). `: W w` given a view of a block's
+  local String, then `\ → v { ( nurl_println . w v ) }` after the block,
+  read freed memory when called. The direct read was refused, but the
+  closure's reads of its captures were checked only inside its own body.
+  Making the closure now reads what it captures, as A2 types a package
+  literal. A capture the closure only assigns to is not read.
+
+- **A call through a closure value or a trait object answers with what the
+  code it runs does** (Agora #359, #403, #394; probes closure_*_ends_*,
+  closure_*_handed_to_a_function_*, closure_pushing_a_view_*,
+  dyn_method_*). A closure literal is now summarised from its own body as
+  a function is: what it changes, moves or drops of its parameters, and
+  the views it leaves one parameter holding of another. A call through a
+  binding holding it is a call of the binding's summary node, the union
+  of every closure bound to the name. A closure parameter of a function is
+  the union of what every caller passes there. Before, `( clr inner )`
+  with `clr = \ ( Vec String ) x → v { ( vec_clear [String] x ) }` ended
+  no borrow of `inner`'s elements (heap-use-after-free), and neither did
+  the same closure handed to a function that calls it. A closure pushing a
+  view of its String argument into its Vec argument left the caller's Vec
+  untied to the String. A `dyn` call whose impl stores a view of one
+  argument into another left the caller's holder dangling: the virtual
+  callee now answers with the union of its impls' holder/source pairs.
+  A closure that only reads or pushes into its parameter is accepted as
+  before.
+
+- **A closure no longer hands back a lend of a Vec it drops** (Agora #372;
+  probes closure_returns_*). `\ → Conn { : ( Vec Conn ) cs … : Conn c (
+  vec_at [Conn] cs 0 ) ^ c }` handed its caller the element as owned, then
+  dropped it with `cs` on the way out: a double drop. The same body as a
+  function was refused. A closure's `^` of a binding that a call may lend
+  (out of the body's own Vec, a capture, or through a join) is now refused
+  the same way when the value cannot be copied. A String element is
+  copied, and a `vec_get` payload is taken out of its slot, as before.
+
+- **A `\` that hands a failure back is checked as a way out** (Agora #379;
+  probes inout_holder_*try_exit*). `@ fill inout W w i k → !i E { : String
+  b … = w @ W { ( string_data b ) }  : i x \ ( may k )  = w @ W { `literal`
+  } … }` handed `w` back viewing the released `b` whenever `may` failed: a
+  `\` exit had none of the checks a `^` and the body's end make. It now
+  has them (after the defers that run there), and the success path goes
+  on as before.
+
+- **A function handing back its option parameter says it lent it**
+  (Agora #388; probe option_owner_given_back_its_value_on_some_runs_by_a_call).
+  `@ maybe ?String a i k → ?String`, returning `a` when `k` is 0 and a fresh
+  value otherwise, told its caller the value it handed back was its own on
+  both runs. `= o ( maybe o k )` then released `o`'s old value on the run
+  that handed it back, and `o` went on to hold freed memory. A parameter
+  handed back as is is now answered "lent" for options and results too, as
+  it already was for a String or a Vec.
+
+- **A borrow that views a Vec's own buffer on one path is not taken for
+  an element view past the join** (Agora #399; probes
+  slice_of_a_vec_*). `: ~ W a @ W { … ( string_data e ) }` (e an element
+  of `vv`), then `? c { = a @ W { ( slice_from_vec [String] vv ) … } }
+  {}`: past the join `a` counted as viewing only `vv`'s element, so a
+  push that moved `vv`'s buffer left its slice dangling. The same held
+  when a loop that ran zero times re-gave it the element view. A source
+  borrowed directly on either path is now borrowed directly past the
+  join; one borrowed only through an element on every path stays so.
+
+- **A defer body's own bindings live until the defer chain has run**
+  (Agora #405; test defer_body_own_locals). Take a `;` defer that declares
+  a Vec or a String of its own, with no later defer to snapshot it:
+  `; { : ( Vec i ) g ( vec_new [i] ) … }`. `g` was dropped at every `^` in
+  the main flow, before the body had run, from a slot that held nothing
+  (segmentation fault). It was never dropped after the body had run (a
+  leak). It is now snapshotted after the body, as what came before the
+  `;` is, and reclaimed after the chain, so child defers armed in the body
+  still read it. One case is still open (open/t405.md): a defer in an arm
+  that is not taken, which binds a value of its own.
+
+- **A view of a match payload's field ends with its arm again** (Agora
+  #409, claude-formal's review of #336; probes
+  cursor_field_view_kept_past_*, cursor_element_view_kept_past_*). 0.85.0
+  let such a view outlive its arm while the option still owned the
+  payload, but nothing then ended it when the payload was changed in place
+  through a second match (`?? oh { T q → ( string_push_str . q name … ) }`,
+  `vec_clear`, an `inout` callee): heap-use-after-free. The transfer is
+  withdrawn, so the 0.84.0 refusal of a cursor payload's field view kept
+  past its arm is back. It comes back accepted once a change through a
+  second match ends it (#411).
+
+- **An owner given back its own old value keeps it** (Agora #410; probes
+  *_owner_given_back_*). Take `: ?String e ? == c 1 ( fwd o ) ( make2 )`
+  and then `= o ( fwd e )`. On the run where `e` held `o`'s value, the `=`
+  released it while `o` went on to hold it (heap-use-after-free). The same
+  happened when `e` came from a forwarder defined below its caller, from `(
+  fwd ( fwd o ) )`, or was re-pointed to `( fwd o )` by `=`, or with `= o
+  e` by name. Where `e` was a known borrower, the old value went to the
+  first borrower holding it, which could release it under `o`. An owner
+  given a value whose key at run time is its old value's now keeps it, for
+  options, Strings, Vecs and keyed structs, and nothing is dropped or
+  handed over.
+
+- **A change made in place through a match payload or a copy of an
+  owner's handle ends the owner's views** (Agora #411, #293; probes
+  option_payload_field_view_lent_by_a_callee_*,
+  option_inner_payload_view_lent_by_a_callee_*,
+  struct_field_view_kept_past_a_push_through_a_cursor_copy_of_its_owner,
+  vec_slice_kept_past_*, vec_field_slice_kept_past_*). Each of these
+  was a heap-use-after-free:
+  - A view of an option's payload field handed back by a callee from its
+    own `??` arm (`: s w ( name_of oh )`) was not seen to borrow from
+    `oh`. Replacing `oh`, growing the field through a second `?? oh` (or a
+    nested `?? . q inner`), or growing it in an `inout` callee's own `??`
+    left `w` reading freed memory.
+  - A view of a struct's field, or a slice of a Vec, survived a change
+    made through a copy of the owner's handle. For example, `: ~ H q hs`
+    then `( string_push_str . q name … )`; or `( id vs )`, a field viewer
+    `. o buf`, or `: ~ ( Vec i ) w vs`, then `vec_reserve` or `vec_push`.
+
+  All are refused now, naming the line and the route of the change. A
+  view of another field stays valid, as does a slice of a Vec whose
+  element was changed through a copy of that element.
+
+- **An option or result owner given what a call may lend out of itself
+  or another argument is refused** (Agora #412, claude-formal's review of
+  #342; probes *_may_lend_itself_or_*). Example: `= o ( pick o other 1 )`,
+  where `pick` may lend either argument. Since #342, `o` kept its old
+  ownership after storing `other`'s value, so both dropped it
+  (heap-use-after-free). Before #342, the run that handed back `o` itself
+  freed it under `o`. No answer per run is right on both runs, so the
+  form is refused.
+  - The other argument may be a lend rather than a bare name: `( id other
+    )`, a field `. s y`, or a `?` join.
+  - `o` may be a local or an `inout` parameter.
+  - The message gives the fix: give `o` a copy, `= o ( mem_dup ( pick o
+    other k ) )`, or bind the result to a new name.
+  - Still accepted: `= o ( id o )`, and a fresh value as the other
+    argument (`( pick o ( mk … ) k )`).
+
+- **A loop that may run no time keeps what its holders viewed when it was
+  entered** (Agora #413; probes *_in_a_loop_*). Take a holder given a view
+  of a block local, then a new value inside a loop with a scratch owner.
+  After the loop, the holder was taken to view nothing, because the loop's
+  last check walked the body once and kept its result. On a run that skips
+  the loop, the holder still viewed the local, and reading it after the
+  block read freed memory. This held for a struct holder, a Vec holder,
+  one returned from the function, and an `inout` holder at the exit. The
+  dependencies the loop was entered with are now joined back after that
+  walk, as its borrow sources are.
+
+- **A view stored through a copy of an owner's handle reaches the owner**
+  (Agora #414; probes view_pushed_through_a_join_of_names_outlives_its_source,
+  view_pushed_into_a_join_of_names_outlives_its_source,
+  view_pushed_through_a_loop_element_outlives_its_source and 15 more).
+  `( vec_push [s] w ( string_data loc ) )` with `w` a binding of a join of
+  names (`: ( Vec s ) w ? c { vs } { vs2 }`, or a `??`), a `~` loop's
+  element, a program enum's payload, or a value handed back through a call
+  (`( id ( vec_at vv 0 ) )`, `( opt_unwrap ( vec_get vv 0 ) )`), or with
+  such a join or call written as the container itself, recorded the view in
+  `w` only. The owner read after `loc` ended read freed memory. The store
+  now lands in every owner the container may be a part of, as it does
+  through a borrow (#292), and that read is refused. Reading while `loc`
+  is in scope is unchanged, and so is a binding given a new value since, or
+  an owner whose value moved away for good.
+
+- **A view is not stored into a Slice's elements** (Agora #415; probes
+  view_stored_into_a_slice_element, view_copied_into_a_slice_from_another).
+  `( slice_put [s] sl 0 ( string_data loc ) )`, with `sl` a slice of a Vec,
+  or a `slice_copy` from a Vec holding a view, recorded no dependency at
+  all. So the Vec, or the slice, read after `loc` ended read freed memory.
+  Writing a Slice whose elements hold views is now refused outside
+  `unsafe`. The message points to the Vec that owns the storage (`vec_put`,
+  `vec_set`, whose stores are followed). Reading a Slice of views, and
+  writing a Slice of owned values, are unchanged.
+
+- **A `??` used as a value keeps what a bare-binding arm views** (Agora
+  #416; probes qq_value_arm_*). Take `= a ?? o { T m → @ W { `lit` } F →
+  a }`, with `a` holding a view of a block local. The join's value was
+  taken to view nothing, so `a` was kept past the local and read freed
+  memory. The same held for a holder bound from such a join, a user enum's
+  match, another holder as the arm, and a view pushed into a Vec through
+  the join. Each arm of a `??` value is now taken by its operand, as a `?`
+  arm is. A field arm (`F → . p vs`) records its own member path as a `?`
+  arm does: before, it read a path left by an earlier field read, so a
+  holder's field viewing a block local was missed and an unrelated one
+  was refused.
+
+- **A closure read out of a field, an element or a call's result is
+  called as any closure of its type** (Agora #418; probes
+  closure_read_out_of_*, closure_returned_by_a_call_*). A clearing
+  closure stored in a struct field, pushed into a Vec of closures, or
+  returned by a function, then read back and called with a Vec whose
+  element was still borrowed, ended no borrow of that element: it was
+  read by its interface only. Such a call now answers with every closure
+  literal of that type the program builds. A reader stays accepted.
+
+- **A String or Vec owner given what a call may lend out of itself or
+  another argument holds the right value on every run** (Agora #419;
+  probes string_owner_given_a_call_*, vec_owner_given_a_call_*). Take `=
+  o ( pick o other k )`, where `pick` lends either argument. On the run
+  that handed back `other`'s value, `o` kept its old ownership flag over
+  it, so `o` and `other` both dropped it (heap-use-after-free). The
+  hand-over now keeps the old value only when the result is that very
+  value, compared by handle key at run time. Otherwise the old value is
+  dropped by its flag, and `o` holds the other argument's value as a lend.
+  `= o ( id o )` is unchanged.
+
+- **A closure picked by a join, or a closure literal's own closure
+  parameter, is called as the closures it may be** (Agora #420; probes
+  closure_picked_by_a_join_of_*, closure_picked_by_a_match_*,
+  closure_join_handed_to_a_function_*,
+  closure_given_a_join_by_assignment_*,
+  closure_literals_closure_parameter_*). `: f ? c clr nop`, or a `??`
+  match picking `clr`, followed by `( f inner )`, with `clr` clearing its parameter, kept a borrow of
+  `inner`'s element alive past the clear. So did a closure literal that
+  calls its closure parameter (`\ y g → v { ( g y ) }`) given a clearing
+  closure. Both were read as an unknown closure. Both are refused now, as
+  binding `clr` by name was. A join of readers stays accepted.
+
+- **A clearing callee handed an element a call lends ends the borrows of
+  that element's contents** (Agora #421, #443; probes
+  closure_called_with_an_element_*, function_hands_its_parameters_element_*).
+  `( f ( vec_at outer 0 ) )`, with `f` a closure that clears its
+  parameter, kept a borrow of the element's element alive past the clear:
+  a named callee there was refused. A function handing `( vec_at vv 0 )`
+  of its parameter to a clearing callee, or to its closure parameter,
+  had no drop in its own summary, so its caller's borrows survived too.
+  Both are refused now. A reader stays accepted.
+
+- **What a function makes of its parameters' views reaches its callers**
+  (Agora #422, #341, #370, #380, #404, #442, #454, #369; probes
+  holder_viewing_a_string_param_*, view_param_*,
+  enum_literal_viewing_a_param_returned and others). A function that
+  handed back a value holding views of its parameters' storage gave its
+  caller a result that depended on nothing. That covered a local Vec
+  filled with views of a String parameter, by itself or by a named, `dyn`
+  or recursive callee, in a loop or a join; views of a parameter's
+  elements; and a struct or enum literal of a view beside an owned field.
+  Kept past the argument, the result read freed memory. The function's own
+  borrow walk now records which parameters the value it hands back views,
+  and the caller's result depends on those arguments. A view parameter
+  (an `s` its caller owns) now counts as a source too. Stored into a local
+  copy, into an `inout` holder that is not the first argument, or through
+  a borrow, a field or an element of one, it ties that holder to what the
+  caller passed. Before, it tied the first argument or nothing. The same
+  holds for a view stored whole into an `inout` holder as part of a
+  struct, and for one stored through a loop element, a join or an element
+  binding of the function's own parameter. The value handed back may be
+  written as a field read (`^ . b h`), and it may be a view or a struct of
+  views picked by a join or a match, or made in a value block. A closure
+  may not hand back a value holding views of what it captured: a struct or
+  an enum now follows the rule a bare view always did. A recursion, direct
+  or through other functions, answers exactly what it hands back and keeps:
+  a function that passes a view down a recursion that only reads it is not
+  taken to keep it.
+- **A cursor that may own its value is released when it moves on**
+  (probes cursor_over_a_local_view_resliced_in_a_loop,
+  cursor_given_its_own_slice_on_one_arm and others). A binding that
+  borrowed on one path and held a value of its own on another was taken
+  for a plain borrow where the paths met. Re-pointing it was thought to
+  free nothing, so a copy taken from it before was read after the value
+  it pointed into was released. That covered the split-on-delimiter loop
+  whose last piece is the cursor itself, and a `?` or `??` arm that gave
+  the cursor a slice of its own, a join value with a fresh arm and a view
+  arm, a call that hands back a fresh value on some calls, a closure
+  that gives the cursor a value of its own, and a field given a value
+  through a `: ~` copy of a struct. Such a binding now may own its
+  value: re-pointing it, or the end of its scope, ends what was borrowed
+  from it. A cursor only ever given views and literals still owns nothing,
+  and a copy of it outlives a re-point as before. nurlc's own unused-import
+  lint had this shape and now reads each piece before moving on.
+- **A holder callee defined below a closure literal is answered by its
+  own walk** (probe dyn_holder_defined_below_a_closure_literal). A
+  function that called a holder defined further down, then built a closure
+  literal, was walked before that callee: a `dyn` method's result was
+  taken to view nothing, and read after its receiver was released.
+- **A push through another handle on the same Rc ends what its payload
+  lends** (probe rc_payload_bound_then_sliced_while_another_handle_pushes).
+  A slice of an Rc's payload, taken through a binding of the payload, was
+  kept across a push through a clone of the Rc, which may move the
+  payload's buffer, and read freed memory. It now ends there, as it does
+  through the Rc itself.
+- **A view parameter is a view of what the caller passed, everywhere**
+  (probes view_param_kept_in_a_string_global,
+  view_param_captured_by_a_spawned_thread). A string global given a
+  function's view parameter, or a closure holding one handed to another
+  thread, used to be accepted, and kept a view of the caller's String
+  past its release. Both are refused now, as for a view of a local.
+  The packages that did this keep copies of their own:
+  - registry's, pki-server's and anomaly's configuration setters, and
+    nurlbox's applet name, assign an owned copy from a small `unsafe`
+    setter, called once before serving;
+  - image's and anomaly's literal-only setters assign their literals
+    directly;
+  - nurl-mcp's HTTP handler and the fuzz harness's feeder threads capture
+    a String of their own.
+
+- **An option owner given a binding of a lend of its own value compiles**
+  (Agora #425; probes option_owner_given_a_bound_lend_*). For example,
+  `: ?String t ( pick o other k )` then `= o t`. The hand-over of `o`'s
+  old value to its borrower `t` keyed the owner by its payload and the
+  borrower by its own option type, which has no key. The comparison
+  printed an empty operand (`icmp eq i8* , %r…`), which clang rejected.
+  Both sides are now keyed by the payload. A missing key is reported as
+  nurlc's internal error, not as invalid IR.
+
+- **Telling a struct value from another by key uses a field that
+  identifies it** (Agora #431; probes struct_owner_keyed_*). #419's
+  identity test (is a lent result the owner's old value?) keyed a struct
+  by its first handle field. An enum field whose variant holds a number
+  (`Id 1`) keys by that number, which a different value can hold too. So
+  `= o ( pick o other k )` with `P { Tag t String s }` took `other`'s
+  value for `o`'s own, and both dropped it (heap-use-after-free). The test
+  now keys by the first field that is an identity whatever it holds: the
+  String here, or past an option field. The hand-over to a borrower keeps
+  its key, since it compares a value with a copy of its own handle.
+
+- **A defer in an arm not taken leaves the values its body would have
+  bound alone** (Agora #432; test defer_in_an_arm_not_taken). Take `? c
+  { ; { : ( Vec i ) g ( vec_new [i] ) … } } {}` with `c` false. The
+  defer is never armed, but fn_cleanup still released `g` from a slot
+  nothing had filled (a misaligned read, or a crash). An owner bound in a
+  defer body now gets a drop flag cleared at the function's entry. The
+  snapshot fn_cleanup reclaims from carries each owner's flag, even where
+  the arm that named it has closed.
+
+- **A closure binding a callee reassigns through an `inout` parameter is
+  called as the closures the callee may give it** (Agora #433; probes
+  closure_binding_given_*). `( setf g clr )` with
+  `@ setf inout ( @ v ( Vec String ) ) f … { = f src }` left `g`'s calls
+  answered by the reader it was bound to, so a later `( g v )` ended no
+  borrow of `v`'s element. It is refused now. A callee assigning a reader
+  stays accepted.
+
+- **A closure that clears its parameter through a nested closure is
+  summarised as clearing it** (Agora #435; probes
+  closure_*_its_parameter_through_a_nested_closure*).
+  `\ ( Vec String ) x → v { : ( @ v ) g \ → v { ( vec_clear [String] x ) } ( g ) }`
+  called with a Vec whose element was still borrowed ended no borrow of
+  that element. It is refused now, as the clear written directly in the
+  outer body was. A nested reader stays accepted.
+
+- **A `~` loop calling a closure that clears the loop's container is
+  refused** (Agora #436; probes loop_calls_a_*). `~ x xs { ( f xs ) … x … }`
+  with `f` a closure binding, or a function's closure parameter, that
+  clears its Vec compiled, and read freed memory. The check asked the
+  closure's summary before it was final. It is now decided at module end,
+  as for a function compiled later. A loop calling a reader stays accepted.
+
+- **An owner given a part of its own value keeps that part alive**
+  (Agora #437, claude-formal's HOLD on #419; probes
+  enum_owner_given_a_part_*). Take `= o ( kid o )`, where `kid` hands
+  back `( vec_at v 0 )` out of `o`'s own payload. #419's identity test
+  found the result's key different from the old value's, took it for
+  another owner's value, and released the old value with the part inside
+  it (heap-use-after-free). Where the callee may hand back a part of a
+  parameter rather than whole parameters, a result that is not the old
+  value is now copied. The old value then goes by its flag, and `o` owns
+  its copy. A type that cannot be copied is refused there.
+
+- **An `inout` String or Vec given a lend of another value copies it**
+  (Agora #438; probes inout_*_given_a_*). Inside `@ put inout String o
+  String other → v { = o ( id other ) }`, the call's result was stored in
+  the caller's binding as it was. The binding then shared `other`'s buffer
+  (heap-use-after-free once one of them was released), and its own old
+  value leaked. The same happened with `= o ( pick o other 1 )` and `= o (
+  id ( id other ) )`. The result is now compared with the old value at run
+  time: the old value itself stays as it is, and anything else is copied
+  in where it was lent, with the old value released.
+
+- **A view taken through an element ends when that element's buffer
+  moves** (Agora #439, #349; probes element_view_kept_past_*). `: s v (
+  string_data ( vec_at vs 0 ) )` survived the element growing through a
+  binding of it (`: String e ( vec_at vs 0 )`), a `vec_get` payload, or a
+  callee that grows an element of the Vec it is handed (heap-use-after-free). Where an element's buffer may move, the
+  owner's views end now: the ones into its elements and the ones recorded
+  of the owner itself, as such a view is. A slice of the Vec itself is
+  ended there too. That is safe but stricter than it needs to be until
+  views through an element are marked so (#430).
+
+- **A buffer moved through more kinds of handle copy ends the owner's
+  views** (Agora #440; probes view_kept_past_a_push_through_a_copy_*,
+  field_view_kept_past_a_push_through_a_copy_a_callee_lends). Three kinds
+  of copy were missed:
+  - a copy made by a call that may hand back either of two arguments (`:
+    ~ String o ( pick x other 1 )`);
+  - a copy made by `=` over an owned binding (`= c ( id b )`);
+  - a field a callee hands back (`: String c ( name_of hs )`).
+
+  A view of the original survived the copy growing (heap-use-after-free).
+  A String or Vec borrowed from bindings of its own type now counts as a
+  copy of their handle. A field lent by a callee, when its buffer moves,
+  ends the views of the struct and its fields.
+
+- **A closure that reads its capture on some path before giving it a value
+  is checked where it is made** (Agora #444; probes closure_made_assigns_*,
+  closure_made_reads_its_capture_on_an_early_return_path). #358 skipped a
+  capture assigned anywhere earlier in the body. An assignment in one
+  branch, in a loop that may not run, in a nested or recover closure, or
+  to another field, left a later read reading a dead capture. These are
+  refused now. An assignment and read in the same block, or of the same
+  field, stay accepted.
+
+- **A closure cannot hand back a non-copyable value it read out of a
+  capture or its parameter, by any route** (Agora #446; probes
+  closure_hands_back_*). #372 refused a binding of an element of the
+  closure's own Vec. The same element of a captured Vec, reached through
+  a join, a rebind, a generic identity or a `??` payload, and a captured
+  struct's field, a captured enum's payload or the capture itself bound
+  first, were handed to the caller as its own and released twice. These
+  are refused now, with a message that suggests taking the value out
+  (`vec_pop`) or building a fresh one. Both of those stay accepted. The
+  function forms are #462.
+
+- **A function that clears an element of its parameter through a local or
+  a `??` payload says so in its summary** (Agora #447; probes
+  function_clears_its_parameters_element_*,
+  function_clears_a_payload_matched_out_of_its_parameter). `: e ( vec_at vv 0 ) ( clr e )`,
+  the same through the function's closure parameter, and
+  `?? ( vec_get vv 0 ) { T e → { ( clr e ) } … }` put no drop of `vv`'s
+  elements in the function's summary, so a caller still reading a String
+  inside that element read freed memory. These are refused now, as the
+  element handed on directly was (#443). A reader stays accepted. The
+  nested and generic forms are #461.
+
+- **A closure storing a join of its view parameter into a capture is
+  refused** (Agora #448; probes closure_stores_a_join_of_*).
+  `: s t ? c p `x`` followed by `= w @ V { t }`, with `w` captured, gave
+  `w` a view of the caller's String that outlived it. The plain
+  `: s t p` was refused (#332). The join is now too. A join of literals
+  stays accepted.
+
+- **A closure clearing a local it read out of its capture through a join,
+  a `??` payload or a generic identity ends the caller's borrows of the
+  capture's elements** (Agora #449; probes closure_clears_a_*_capture,
+  closure_clears_a_local_passed_through_a_generic_identity). #353 covered
+  `: e ( vec_at vv 0 ) ( vec_clear e )`. The same element reached through
+  `? c ( vec_at vv 0 ) ( vec_at vv 0 )`, `?? ( vec_get vv 0 ) { T e → … }`
+  or `( idv ( vec_at vv 0 ) )` was not seen as the capture, and the caller
+  read freed memory. These are refused now. A reader stays accepted. The
+  enum-payload form is #460.
+
+- **An enum is told apart from another by its active variant's buffer**
+  (Agora #450; probes enum_owner_given_*,
+  inout_enum_given_a_value_with_an_equal_scalar_key). The run-time
+  identity test that decides whether an owner was given back its own value
+  keyed an enum by its first payload slot. In `: | E { A i String N }`,
+  two values `A 7 …` had the same key, so `= o ( epick o other 1 )` took
+  `other`'s value for `o`'s own and both released it. An enum is now keyed
+  by the first payload of its active variant that owns a heap buffer, so
+  an enum owner given back its own value through a forwarder keeps it too.
+
+- **A join of two owners handed to a consuming parameter is copied**
+  (Agora #451; probes join_of_two_owners_handed_to_*,
+  match_of_two_owners_handed_to_a_sink). `( eat ? c u t )`, with `u` and
+  `t` owned Strings and `eat` taking a `sink String`, gave `eat` the buffer
+  of whichever owner the join picked, and that owner released it again at
+  the end of its block (heap-use-after-free). The same happened with a
+  `??` and with a callee that keeps its parameter without declaring
+  `sink`. Such a join lends on every path, so it is now copied for the
+  callee, as a join that lends on some paths already was.
+
+- **A `??` written as another `??`'s arm without braces keeps what its arms
+  view** (Agora #452; probe qq_value_arm_that_is_an_unbraced_inner_join).
+  In `= a ?? o { T m → @ W { `lit` } F → ?? o2 { T k → @ W { `l2` } F → b }
+  }`, with `b` viewing a block local, the outer join took the inner join to
+  view nothing, so `a` was kept past the local and read freed memory. The
+  braced form was already refused, and so is this one now.
+
+- **An `inout` String given a borrowed local by name copies it** (Agora
+  #456; probes inout_string_given_a_*by_name). Inside `@ put inout String o
+  String other → v { : String t ( id other )  = o t }`, `t` holds a lend of
+  `other`, and it was stored in the caller's binding as it was. The two
+  then shared one buffer (heap-use-after-free). The same happened with `:
+  String t other`, and with a lend of a `sink` parameter or of a local.
+  Such a local is now copied in, as a borrowed parameter given by name
+  already was.
+
+- **An `inout` Box, HashMap, Rc or Arc given a lend of another value copies
+  it in** (Agora #456; probes inout_box_given_*, inout_hashmap_*,
+  inout_rc_*, inout_arc_*). `@ put inout ( Box String ) o ( Box String )
+  other → v { = o ( idbox other ) }` stored `other`'s Box as it was: the
+  caller's binding and `other`'s owner then shared one value and both
+  released it. A library handle that is one pointer is now told apart by
+  that pointer, as a String is by its buffer: a lend of another value is
+  copied in (an Rc or Arc as a new share) and the old value released; the
+  binding's own value, or another share of the same Rc, stays.
+- **A function handing back its `sink` argument on some runs says so per
+  run** (Agora #456; probes inout_string_given_a_sink_argument_*).
+  `@ cpick String a sink String b i k → String` returning `a` on one path
+  and `b` on another answered "lent" on both, so `= o ( cpick o ( mk ) 1 )`
+  over an `inout` never released `o`'s old value. A `sink` parameter is the
+  function's own, and its handed-back value now counts as the caller's.
+
+- **An option temporary the callee does not hand back is released**
+  (Agora #457; probes option_temporary_not_handed_back_*). The fix for
+  String and Vec temporaries now covers an option or result temporary
+  too: `( maybe ( mk … ) 1 )`, with `maybe ?String a i k → ?String`, no
+  longer leaks the temporary's payload on the run that hands back a fresh
+  option.
+
+- **A temporary argument the callee does not hand back is released**
+  (Agora #457; probes *temporary_not_handed_back*). `( maybe ( string_from
+  … ) 1 )`, with `maybe` handing back its argument on one path and a fresh
+  value on another, never released the temporary on the run that handed
+  back the fresh value. The caller now asks the call's own answer: where the
+  result is the callee's own, the temporary goes after the call; where the
+  callee lent it back, it is the result. This covers String, Vec and handle
+  temporaries; option temporaries, two-argument pickers and `\` paths are
+  still open under #457.
+
+- **A returned closure owns a copy of the options and results it captures**
+  (Agora #458; probes option_local_captured_by_a_returned_closure and its
+  variants). `: ?String x ( mk … )  ^ \ → i { ?? x { … } }` left `x` to
+  the function, which released it at its return; calling the closure
+  then read freed memory. A captured String already moved into the
+  closure. An option or result that owns a String, a Vec or another
+  handle is now copied in, whether the closure is returned as it is or
+  inside a struct literal or another closure; the closure releases its
+  copy, and copying the closure copies it.
+
+- **A function handing back an option field of its parameter says it lent
+  it** (Agora #459; probes *field_of_a_parameter_handed_back_on_some_runs).
+  `@ pick H h i k → ?String`, returning `. h o` when `k` is 0 and a fresh
+  value otherwise, told its caller the field was its own on both runs. The
+  caller then released what `h` still held, and reading `h`'s field read
+  freed memory. A field handed back as is is now answered "lent" for
+  options and results too, as it already was for a String or a Vec field.
+
+- **A trait-object owner given back its own value keeps it** (Agora #459;
+  probe trait_object_owner_given_back_its_own_value_on_some_runs).
+  `= o ( pass o 0 )`, with `pass` handing back its `%Show` parameter on one
+  run and a fresh trait object on another, released `o`'s value on the run
+  that handed it back, and `o` went on to hold freed memory. A trait object
+  is now told apart from another by the box that holds its value, as a
+  String is by its buffer.
+- **Handing back a lend of a local `?( Vec D )` is refused** (Agora #459;
+  probe option_of_a_vec_of_drop_values_lent_out_of_a_local_returned).
+  `^ ( maybe o k )` of a local option of a Vec of `% Drop` values that
+  cannot be copied was accepted, and the caller read the Vec after it was
+  released. It is now refused as an option of such a value already was.
+
+### Added
+
+- **formal: shared state across threads, proven in first and second
+  cuts.** A3.1 (`Arc`'s frozen shared payloads, with `arc_new`,
+  `arc_clone` and `arc_get`) and A3.4 (`Atomic` words and channels: send,
+  recv, try_recv and close as one step each) are proven. A3.2 (`Locked`:
+  locked_new, share, update, take, restore, get, set, apply, await,
+  Mutex), A3.3 (`RwLocked`: reads through frozen guards, try_read /
+  try_write, wguard_get, rw_get), A3.5 (library handles whose copies are
+  one state, closures and trait objects that cross threads, `% NotSend`
+  read guards) and A3.6 (module globals set at start, the make phase) are
+  proven in their first and second cuts (`formal/check.sh`, Lean 4.35.0,
+  standard axioms only; `formal/CLAIM.md` says what each covers). A2 gains
+  the environment handed over (`callcE`), a view stored through a borrow
+  (`StmtT.editBV`) and an element hand-over (`Stmt.withElem`), and
+  formal/README.md says that leaving early (`break`, `continue`, an early
+  `^`) is not modelled by A2 yet.
+
+### Packages
+
+- **onnx 0.12.5**: `rt_name` names the device through `gk_device_name`,
+  a view of the kit's own `Gpu` rather than of a temporary.
+- **anomaly 0.36.7, image 0.7.8, nurlbox 0.5.1, nurl-mcp 0.14.2,
+  pki-server 0.5.3, registry 0.4.9** build with this release, which
+  refuses a view of a caller's string kept in a module global or handed
+  to another thread (Agora #422): their configuration setters keep
+  copies of their own, and a global that only ever holds literals is
+  assigned them directly.
+
+### Known issues
+
+- **47 soundness holes are open, each with a fix in progress**: agora
+  #242 (a join or a value block bound by `:` and then handed on by name,
+  in nine remaining shapes), #280 (a field a `sink` took, used again by
+  a route the check does not see), #294 (a struct built from an owner
+  and a view of it views its own buffer), #345 (a view of an Rc's state
+  through one share, replaced through another), #348 (a nested field
+  store of a view), #349 (an element of a Vec handed out by a program
+  function or by nested calls, then grown), #350 (a change through a `~
+  e vv` loop's element), #357 (a field of a match payload handed to a
+  `sink`), #360 (a `?` / `??` join whose arms are field paths), #362 (a
+  callee that returns its `( Vec W )` parameter wrapped in a struct
+  literal, where `W` is a `% Drop` holder of views), #364 (an enum
+  binding given a new value inside its own match arm), #366 (an owner's
+  old value whose hand-over has no key: kept back (a leak) on a lend
+  path, freed under its borrower on an owned one), #367 (a `??` used as
+  a value whose arm hands out a view payload), #368 (a copy (`mem_dup`)
+  or a popped element (`vec_pop`) of a value that holds views), #373 (a
+  `vec_get` binding kept across a call that moves the elements), #377 (a
+  copy of a Vec of views made some other way than the library's element
+  copies), #378 (an option owner given a lend inside a closure, out of a
+  capture, through a forwarder defined above the closure), #381 (a
+  callee's local viewed by an `inout` holder, then moved into the
+  caller's `inout` field), #382 (a panic under `recover` between a
+  holder's store of a callee local's view and its repoint), #383 (a
+  callee that leaves one argument viewing another's elements), #384 (a
+  handle's own drop hook that reads a view), #387 (a second reader of a
+  field, after the field is replaced), #390 (a callee that views its
+  `inout String` into a holder, then grows that String), #391 (a Vec
+  element passed as a holder argument), #392 (a view-holding value
+  stored into an Rc's shared state), #393 (mutual recursion that swaps
+  its source arguments), #395 (a store through a borrow that #292 does
+  not follow to its owner), #396 (a view taken through a String field
+  reader, kept past a realloc of that field), #406 (a `\` whose tried
+  call changes an `inout` holder and then fails), #407 (a defer armed
+  inside a loop or an arm that stores a local's view into an `inout`
+  holder), #408 (a defer that reads a holder viewing a value bound after
+  the defer), #424 (a borrow of a `??` payload, and the scrutinee handed
+  to a callee that clears it), #427 (an option owner given what a call
+  may hand back of its own value, where nurlc has no lend fact for the
+  call at that line), #428 (a change made in place by a route that does
+  not reach the owner), #434 (a keyword-argument call records no borrow
+  rows), #445 (a closure called with a binding it replaces, by any route
+  but a direct call), #450 (an owner given a part of its own value, or a
+  value that shares part of it, while nurlc takes the result for another
+  value), #459 (a value handed back on some runs that the callee's
+  per-call answer still calls its own), #460 (two `??` payload bindings
+  of one enum value, a change through one), #461 (a parameter's element
+  reached by a route #447 does not follow, handed to a clearing callee),
+  #462 (a function binding a lent element of its parameter, or an enum
+  payload of one, and handing the binding back), #463 (a returned
+  closure through a join, a match arm, a generic identity, or one whose
+  body hands its capture to a `sink`), #464 (a temporary argument freed
+  right after the call while the callee's result views it), #466 (an
+  `inout` view parameter kept in a second holder, an `s` global or a
+  thread), #467 (a returned closure that captured a holder given a view
+  of a parameter), #468 (a closure literal whose `( Vec s )` parameter
+  is the holder of `vec_extend`) and #469 (a closure that captured an
+  owner of views by value, run on another thread). `docs/LIMITATIONS.md`
+  gives each one's shape and how to stay clear of it. Closed in this
+  release: agora #293, #332, #333, #338, #339, #341, #343, #346, #353,
+  #358, #359, #369, #370, #372, #379, #380, #388, #394, #399. A release
+  does not say "no hole is known open" while one is.
+
 ## [0.85.0] — 2026-11-02
 
 ### Fixed
