@@ -43,6 +43,18 @@ def Cfg.view (C : Cfg) (t : Thread) : Mem :=
 def Cfg.put (C : Cfg) (i : Nat) (m : Mem) (s : Stmt) : Cfg :=
   { alloc := m.alloc, nid := m.nid, blk := m.blk, ths := C.ths.set i ⟨m.st, m.nv, s⟩ }
 
+/-- A3.1: the values the threads' slots hold: the roots of the
+    configuration's sweep. -/
+def Cfg.vals (C : Cfg) (v : Val) : Prop :=
+  ∃ (j : Nat) (t : Thread), C.ths[j]? = some t ∧ ∃ x o, t.st x = some ⟨o, some v⟩
+
+/-- A3.1: the configuration's sweep, which ends every thread's step: the
+    blocks no thread's slot reaches are removed and their payloads freed —
+    A2's `Mem.sweep`, from every thread's slots at once (the count of a
+    block's shares is over all threads). -/
+noncomputable def Cfg.sweep (C : Cfg) : Cfg :=
+  { C with alloc := sweepAlloc C.vals C.blk C.alloc, blk := sweepBlk C.vals C.blk }
+
 /-- A program run from the empty store, on one thread (A2's `emptyMem`). -/
 def Cfg.init (s : Stmt) (nv : Nat) : Cfg :=
   { alloc := fun _ => false, nid := 0, blk := fun _ => none, ths := [⟨fun _ => none, nv, s⟩] }
@@ -100,10 +112,12 @@ def SpawnRedex (spawn : Nat → Bool) (s : Stmt) : Prop :=
 
 /-- One step of the configuration. -/
 inductive TStep (P : Prog) (spawn : Nat → Bool) : Cfg → Cfg → Prop
-  /-- A thread takes one of A2's steps, unless its next step is a spawn. -/
+  /-- A thread takes one of A2's steps, unless its next step is a spawn;
+      (A3.1) the configuration's sweep ends it, as A2's `Steps` ends every
+      step with the store's. -/
   | thread {C : Cfg} {i : Nat} {t : Thread} {m' : Mem} {s' : Stmt} :
       C.ths[i]? = some t → ¬ SpawnRedex spawn t.s → Step P (C.view t) t.s (.ok m' s') →
-      TStep P spawn C (C.put i m' s')
+      TStep P spawn C (C.put i m' s').sweep
   /-- A spawn: the arguments move to a new thread, which runs the body in
       its parameters' scopes and its result's (variable `n`, the number of
       parameters, as in the body's own numbering — so its end drops the
@@ -226,12 +240,27 @@ inductive Touch (P : Prog) (m : Mem) : Stmt → Nat → Bool → Prop
   | catchR {x : Var} {m0 : Mem} {s : Stmt} {i : Nat} {w : Bool} :
       Touch P m s i w → Touch P m (.catchR x m0 s) i w
 
+/-- A3.1: what the sweep that ends thread `i`'s next step frees: an address
+    live before the step and after it, which the sweep frees — the payload
+    of a block no thread reaches any more.  (A fresh address is no touch, as
+    above.) -/
+def SweepFrees (P : Prog) (C : Cfg) (i : Nat) (t : Thread) (a : Nat) : Prop :=
+  ∃ m' s', Step P (C.view t) t.s (.ok m' s') ∧ C.alloc a = true ∧ m'.alloc a = true ∧
+    (C.put i m' s').sweep.alloc a = false
+
+/-- What thread `t` (the `i`-th) touches next in the configuration: what its
+    rule touches, and (A3.1) what the sweep that ends its step frees, a
+    write. -/
+inductive CTouch (P : Prog) (C : Cfg) (i : Nat) (t : Thread) : Nat → Bool → Prop
+  | step {a : Nat} {w : Bool} : Touch P (C.view t) t.s a w → CTouch P C i t a w
+  | sweep {a : Nat} : SweepFrees P C i t a → CTouch P C i t a true
+
 /-- A race: two threads whose next steps touch one address, one of them
-    writing it.  (A3.4's `Atomic` steps are atomic and are no race.) -/
+    writing it.  (A3.4's `Atomic` steps are atomic and are no race; so is a
+    share's count, which is ghost here.) -/
 def Race (P : Prog) (C : Cfg) : Prop :=
   ∃ (i j : Nat) (ti tj : Thread) (a : Nat) (w : Bool), i ≠ j ∧ C.ths[i]? = some ti ∧
-    C.ths[j]? = some tj ∧
-    Touch P (C.view ti) ti.s a true ∧ Touch P (C.view tj) tj.s a w
+    C.ths[j]? = some tj ∧ CTouch P C i ti a true ∧ CTouch P C j tj a w
 
 /-! ### The claims -/
 

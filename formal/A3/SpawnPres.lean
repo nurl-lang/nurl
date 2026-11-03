@@ -60,6 +60,24 @@ theorem MoveArgs.slot {st st' : Var → Option Slot} {as : List Var} {vs : List 
       · exact .inl h
     · exact .inr h
 
+/-- A3.1: a value a spawner's slot held is still there after the arguments
+    move out, or it is one of the moved ones. -/
+theorem MoveArgs.keep {st st' : Var → Option Slot} {as : List Var} {vs : List Val}
+    (h : MoveArgs st as vs st') :
+    ∀ y o v, st y = some ⟨o, some v⟩ → st' y = some ⟨o, some v⟩ ∨ v ∈ vs := by
+  induction h with
+  | nil => exact fun _ _ _ h => .inl h
+  | @cons st st' a as v vs ha _ ih =>
+    intro y o w hy
+    by_cases hya : y = a
+    · subst hya; rw [ha] at hy; cases hy; exact .inr (List.mem_cons_self ..)
+    · have hy' : upd st a (some ⟨true, none⟩) y = some ⟨o, some w⟩ := by
+        show (if y = a then _ else st y) = _
+        rw [ite_eq_right hya]; exact hy
+      rcases ih y o w hy' with h | h
+      · exact .inl h
+      · exact .inr (List.mem_cons_of_mem _ h)
+
 theorem list_append_get {α : Type} {l : List α} {y : α} {j : Nat} :
     (l ++ [y])[j]? = if j < l.length then l[j]? else if j = l.length then some y else none := by
   by_cases h : j < l.length
@@ -89,7 +107,7 @@ theorem CInv.spawn_of {P : Prog} {spawn : Nat → Bool} (hSO : SpawnerLemma P sp
     CInv P { C with ths := C.ths.set i ⟨upd st' x (some ⟨false, some (.int 0)⟩), t.nv, K (.scope x k)⟩ ++
                       [⟨spawnSt fn vs, fn.nvars,
                         wrapParams fn.params 0 0 (.scope fn.params.length fn.body)⟩] } := by
-  obtain ⟨ps, hc⟩ := h
+  obtain ⟨ps, hc, hreach⟩ := h
   obtain ⟨a, ha⟩ := part_of hc.len hi
   obtain ⟨hto, hbo⟩ := hc.ok i t a hi ha
   have hilen : i < C.ths.length := (List.getElem?_eq_some_iff.mp hi).1
@@ -159,7 +177,27 @@ theorem CInv.spawn_of {P : Prog} {spawn : Nat → Bool} (hSO : SpawnerLemma P sp
     (fun k hk v hv hkv => hvnp v hv k hkv hk)
   have hlen' : (C.ths.set i ⟨upd st' x (some ⟨false, some (.int 0)⟩), t.nv, K (.scope x k)⟩).length =
       ps.length := by rw [List.length_set, hc.len]
-  refine ⟨ps.set i aS ++ [aN], ⟨by simp [hc.len], fun k => ?_, ?_, ?_, hc.first, ?_⟩⟩
+  -- (A3.1) every value a slot held is still in one, and so every block stays reached
+  have hvals : ∀ v, C.vals v → Cfg.vals { C with ths := C.ths.set i ⟨upd st' x (some ⟨false, some (.int 0)⟩),
+      t.nv, K (.scope x k)⟩ ++ [⟨spawnSt fn vs, fn.nvars,
+        wrapParams fn.params 0 0 (.scope fn.params.length fn.body)⟩] } v := by
+    rintro v ⟨j, tj, hj, y, o, hy⟩
+    have hjl : j < C.ths.length := (List.getElem?_eq_some_iff.mp hj).1
+    by_cases hji : j = i
+    · subst hji; rw [hi] at hj; cases hj
+      have hyx : y ≠ x := fun he => by rw [he, hx] at hy; cases hy
+      rcases MoveArgs.keep hmv y o v hy with h' | h'
+      · refine ⟨j, _, by rw [get_set_append hilen, ite_eq_left hjl, ite_eq_left rfl], y, o, ?_⟩
+        show (if y = x then _ else st' y) = _
+        rw [ite_eq_right hyx]; exact h'
+      · obtain ⟨n, hn⟩ := List.mem_iff_getElem?.mp h'
+        have hnl : n < fn.params.length := by rw [← hvlen]; exact (List.getElem?_eq_some_iff.mp hn).1
+        refine ⟨C.ths.length, _, by rw [get_set_append hilen]; simp; rfl, n, true, ?_⟩
+        show spawnSt fn vs n = _
+        simp only [spawnSt, Nat.ne_of_lt hnl, ↓reduceIte, hn, Option.map_some]
+    · exact ⟨j, tj, by rw [get_set_append hilen, ite_eq_left hjl, ite_eq_right (Ne.symm hji)]; exact hj, y, o, hy⟩
+  refine ⟨ps.set i aS ++ [aN], ⟨by simp [hc.len], fun k => ?_, ?_, ?_, hc.uniq, ?_⟩,
+    fun k' bl hk' => (hreach k' bl hk').of_roots fun v hv _ _ => hvals v hv⟩
   · -- every live address is on a part, or a payload's
     constructor
     · intro hk
