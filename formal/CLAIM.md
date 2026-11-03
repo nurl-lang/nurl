@@ -262,12 +262,29 @@ the LLVM / C11 memory model rather than redefining it.
       spawn through `SendCheck`.
     - **In Lean.** `A2.memory_safe`, `A2.no_leak_end`, `A2.no_leak_panic`
       and `A3.claim` hold with all of this, on the standard axioms only.
+    - **Closures that cross (A3.5b, first cut).** A closure's type says
+      where it may go: `Ty.fn ms q`, with `q` one of `any`, `send` (an
+      owned environment that holds no view; a library handle in it is
+      covered by the spawn's crossing check), `sync` (`send` and no
+      library handle) and `bare` (no share at all). `Rhs.pack` gives the
+      class from the captures. An `Arc` keeps a `sync` closure (h342: a
+      handler that changes a by-name capture is `any`, h339: one that
+      captures a library handle is not `sync`), a lock, `RwLocked` or
+      channel a `bare` one (h340), and a spawn takes a `send` one. A call
+      through a closure an `Arc` lends is typed (`StmtT.arcCall`): its
+      code gets its environment read-only (`Implements`), so threads
+      calling it at once only read the payload, A3.1's argument. A
+      global `Arc` may keep a handler, so `GlobsOK` asks that every
+      closure a block holds names the program's code (`BlkCodes`).
     - **Not typed yet:** a handle changed or copied through a borrow (the
       model takes a library's `in` handle as `inout`, and a store of a
-      borrowed handle into an owner is not typed); a closure whose code
-      changes a captured handle; `% Sync` / `% NotSend` assertions;
-      closures in shared payloads (A3.5b: h339 h340 h342) and trait
-      objects (A3.5c: h344). A library that re-enters its own state waits
+      borrowed handle into an owner is not typed); `% Sync` / `% NotSend`
+      assertions; a `send` closure that captures a share in a lock or a
+      channel (refused where the runtime would move the handle along);
+      no subsumption between closure classes; a closure that changes a
+      capture it moved in; trait objects (A3.5c: h344). Phase C must give
+      each closure the class nurlc's follow-the-value check proved, and
+      `any` where it cannot follow the closure's origin. A library that re-enters its own state waits
       or panics in the model, where the runtime goes on: that is the
       library's code (phase B).
     - **Not proven here:** that a thread inside a cell's check-out holds a
