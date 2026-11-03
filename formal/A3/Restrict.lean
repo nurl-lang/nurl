@@ -175,8 +175,14 @@ theorem EvalR.restrict {m : Mem} {r : Rhs} {res : RRes} (h : EvalR m r res) {a2 
   | takerP hy => exact ⟨_, .takerP hy, trivial⟩
   | pack h1 => exact ⟨_, .pack (TakeVal.restrict h1 a2), rfl, rfl, rfl⟩
   | arcNew h1 hfr => exact ⟨_, .arcNew (TakeVal.restrict h1 a2) hfr, rfl, rfl, rfl⟩
-  | lockNew h1 hfr => exact ⟨_, .lockNew (TakeVal.restrict h1 a2) hfr, rfl, rfl, rfl⟩
-  | cellNew h1 hfr => exact ⟨_, .cellNew (TakeVal.restrict h1 a2) hfr, rfl, rfl, rfl⟩
+  | lockNew h1 hfr hck => exact ⟨_, .lockNew (TakeVal.restrict h1 a2) hfr hck, rfl, rfl, rfl⟩
+  | cellNew h1 hfr hck => exact ⟨_, .cellNew (TakeVal.restrict h1 a2) hfr hck, rfl, rfl, rfl⟩
+  -- A3.5's second cut: the crossing check reads the slots only
+  | lockNewFail h1 hck => exact ⟨_, .lockNewFail (TakeVal.restrict h1 a2) hck, trivial⟩
+  | cellNewFail h1 hck => exact ⟨_, .cellNewFail (TakeVal.restrict h1 a2) hck, trivial⟩
+  | chanSendFail h1 hck => exact ⟨_, .chanSendFail (TakeVal.restrict h1 a2) hck, trivial⟩
+  | chanRecvFail hy hk hck => exact ⟨_, .chanRecvFail hy hk hck, trivial⟩
+  | lockRestoreFail h1 hck => exact ⟨_, .lockRestoreFail (TakeVal.restrict h1 a2) hck, trivial⟩
   | arcClone hy => exact ⟨_, .arcClone hy, rfl, rfl, rfl⟩
   | lockClone hy => exact ⟨_, .lockClone hy, rfl, rfl, rfl⟩
   | cellClone hy => exact ⟨_, .cellClone hy, rfl, rfl, rfl⟩
@@ -184,17 +190,17 @@ theorem EvalR.restrict {m : Mem} {r : Rhs} {res : RRes} (h : EvalR m r res) {a2 
     exact ⟨_, .atomic hy hk (Eval.restrict h1 hav hp) (Eval.restrict h2 hav hp) hnv, rfl, rfl, rfl⟩
   -- A3.4: the queue's addresses are the channel's payload's; what a send to a
   -- closed channel drops is the thread's own
-  | @chanSend _ _ _ k _ _ _ _ _ _ _ hy h1 hk hc hd hnv =>
+  | @chanSend _ _ _ k _ _ _ _ _ _ _ hy h1 hk hc hd hnv hck =>
     have hk0 := hk
     rw [TakeVal.blk h1] at hk0
     exact ⟨_, .chanSend hy (TakeVal.restrict h1 a2) hk (minus_true hc (hp _ (.inl ⟨_, _, hk0, by simp [Blk.tree]⟩)))
-      (minus_true hd (hp _ (.inl ⟨_, _, hk0, by simp [Blk.tree]⟩))) hnv, rfl, rfl, rfl⟩
-  | chanSendClosed hy h1 hk hfr =>
+      (minus_true hd (hp _ (.inl ⟨_, _, hk0, by simp [Blk.tree]⟩))) hnv hck, rfl, rfl, rfl⟩
+  | chanSendClosed hy h1 hk hfr hck =>
     exact ⟨_, .chanSendClosed hy (TakeVal.restrict h1 a2) hk
-      (Frees.restrict hfr (TakeVal.avoids h1 hb hav).2), rfl, rfl, rfl⟩
-  | chanRecv hy hk hc hd hnv =>
+      (Frees.restrict hfr (TakeVal.avoids h1 hb hav).2) hck, rfl, rfl, rfl⟩
+  | chanRecv hy hk hc hd hnv hck =>
     exact ⟨_, .chanRecv hy hk (minus_true hc (hp _ (.inl ⟨_, _, hk, by simp [Blk.tree]⟩)))
-      (minus_true hd (hp _ (.inl ⟨_, _, hk, by simp [Blk.tree]⟩))) hnv, rfl, rfl, rfl⟩
+      (minus_true hd (hp _ (.inl ⟨_, _, hk, by simp [Blk.tree]⟩))) hnv hck, rfl, rfl, rfl⟩
   | chanRecvNone hy hk hc hw =>
     exact ⟨_, .chanRecvNone hy hk (minus_true hc (hp _ (.inl ⟨_, _, hk, by simp [Blk.tree]⟩))) hw, rfl, rfl, rfl⟩
   | chanClose hy hk hnv => exact ⟨_, .chanClose hy hk hnv, rfl, rfl, rfl⟩
@@ -204,7 +210,7 @@ theorem EvalR.restrict {m : Mem} {r : Rhs} {res : RRes} (h : EvalR m r res) {a2 
   | globP hg => exact ⟨_, .globP hg, trivial⟩
   -- A3.2's second cut: a take and a restore check no address
   | lockTake hy hk hnv => exact ⟨_, .lockTake hy hk hnv, rfl, rfl, rfl⟩
-  | lockRestore hy h1 hk => exact ⟨_, .lockRestore hy (TakeVal.restrict h1 a2) hk, rfl, rfl, rfl⟩
+  | lockRestore hy h1 hk hck => exact ⟨_, .lockRestore hy (TakeVal.restrict h1 a2) hk hck, rfl, rfl, rfl⟩
   | lockRestoreP hy hk => exact ⟨_, .lockRestoreP hy hk, trivial⟩
 
 theorem EvalR.restrict_ok {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.ok v o m1))

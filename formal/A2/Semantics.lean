@@ -373,6 +373,33 @@ inductive TakeVal (m : Mem) : Var → Val → Mem → Prop
   | own {y : Var} {v : Val} : m.st y = some ⟨true, some v⟩ → TakeVal m y v (m.set y ⟨true, none⟩)
   | bor {y : Var} {v : Val} : m.st y = some ⟨false, some v⟩ → TakeVal m y v m
 
+/-- A3.5, **the crossing check** (`mem_send_check`, docs/MEMORY.md §6.5): a
+    library handle whose copies are one state (a cell) may cross only with
+    every other owner of that state.  For every cell a crossing value holds a
+    share of, no slot left behind (`st'`) holds one.  A lent cell share is no
+    share (`lendOf`), so the slots that hold one are its owners: the check is
+    the runtime's count of the places in the values that hold each cell's
+    block against its owners.  (`Sub` does not enter a share: a lock share's
+    payload is the lock's, and moves with no crossing.)  A3.5 runs it at a
+    spawn (`TStep.spawn`); A3.5's second cut at every value going into a lock
+    block too — `locked_new` and a cell's constructor (`EvalR.lockNew`,
+    `EvalR.cellNew`), `locked_restore` (`EvalR.lockRestore`), the give-back
+    at a lock scope's end (`Release.put`, `Step.scopeLSkip`) and `chan_send`
+    (`EvalR.chanSend`) — and a failed check panics there, as
+    `mem_send_check` calls `nurl_panic`. -/
+def SendCheck (vs : List Val) (st' : Var → Option Slot) : Prop :=
+  ∀ k, (∃ v ∈ vs, Sub (.cell k) v) → ∀ y o w, st' y = some ⟨o, some w⟩ → ¬ Sub (.cell k) w
+
+/-- A3.5's second cut: a channel's head, received, holds every owner of each
+    cell it holds that the rest of the queue held: no element left behind
+    holds a share of one.  The runtime has no such check, and needs none: a
+    `Channel`'s queue is filled by `chan_send` alone, one checked value at a
+    time.  The model's channel is a lock block, whose queue a `withLock` may
+    also fill (`Locked (Vec T, i)` and `Channel T` are one type here), with
+    two elements that share a cell; receiving one of them panics
+    (`EvalR.chanRecvFail`), so no receive splits a cell's owners. -/
+def RecvCheck (v : Val) (es : List Val) : Prop := ∀ k, Sub (.cell k) v → ∀ e ∈ es, ¬ Sub (.cell k) e
+
 inductive RRes where
   | ok (v : Val) (own : Bool) (m : Mem)
   | panic
@@ -463,10 +490,15 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
   /-- A3.2: a new lock block holds the value taken from `y`, at a key taken
       from `nid`; the result is its one share. -/
   | lockNew {t : Ty} {y : Var} {v : Val} {m1 : Mem} :
-      TakeVal m y v m1 → m1.blk m1.nid = none →
+      TakeVal m y v m1 → m1.blk m1.nid = none → SendCheck [v] m1.st →
       EvalR m (.lockNew t y)
         (.ok (.lk m1.nid) true
           { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, .lock, some v⟩) })
+  /-- A3.5's second cut: ... and when the value fails the crossing check (a
+      slot left behind holds a share of a cell it holds), `locked_new` panics,
+      the store as it was, as `mem_send_check` does. -/
+  | lockNewFail {t : Ty} {y : Var} {v : Val} {m1 : Mem} :
+      TakeVal m y v m1 → ¬ SendCheck [v] m1.st → EvalR m (.lockNew t y) .panic
   /-- A3.2: a read of the lock share `a` (owned or lent) makes a new share
       of its block. -/
   | lockClone {a : Var} {o : Bool} {k : Nat} :
@@ -475,10 +507,14 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
       taken from `y`, at a key taken from `nid`; the result is its one cell
       share. -/
   | cellNew {t : Ty} {y : Var} {v : Val} {m1 : Mem} :
-      TakeVal m y v m1 → m1.blk m1.nid = none →
+      TakeVal m y v m1 → m1.blk m1.nid = none → SendCheck [v] m1.st →
       EvalR m (.cellNew t y)
         (.ok (.cell m1.nid) true
           { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, .lock, some v⟩) })
+  /-- ... and panics when the state fails the crossing check (A3.5's second
+      cut: a cell's state is a lock's payload). -/
+  | cellNewFail {t : Ty} {y : Var} {v : Val} {m1 : Mem} :
+      TakeVal m y v m1 → ¬ SendCheck [v] m1.st → EvalR m (.cellNew t y) .panic
   /-- A3.5: a copy of the cell share `a` holds: a new share of its block. -/
   | cellClone {a : Var} {o : Bool} {k : Nat} :
       m.st a = some ⟨o, some (.cell k)⟩ → EvalR m (.cellClone a) (.ok (.cell k) true m)
@@ -502,7 +538,7 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
       {m1 : Mem} :
       m.st a = some ⟨o, some (.lk k)⟩ → TakeVal m y v m1 →
       m1.blk k = some ⟨t, .lock, some (.pair (.node u c d es) (.int 0))⟩ →
-      m1.alloc c = true → m1.alloc d = true → ¬ HasView m1.blk k →
+      m1.alloc c = true → m1.alloc d = true → ¬ HasView m1.blk k → SendCheck [v] m1.st →
       EvalR m (.chanSend a y)
         (.ok (.int 1) false
           { m1 with blk := upd m1.blk k (some ⟨t, .lock, some (.pair (.node u c d (es ++ [v])) (.int 0))⟩) })
@@ -511,7 +547,12 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
       {a' : Nat → Bool} :
       m.st a = some ⟨o, some (.lk k)⟩ → TakeVal m y v m1 →
       m1.blk k = some ⟨t, .lock, some (.pair q (.int (f + 1)))⟩ → Frees m1.alloc v a' →
+      SendCheck [v] m1.st →
       EvalR m (.chanSend a y) (.ok (.int 0) false { m1 with alloc := a' })
+  /-- A3.5's second cut: a value that fails the crossing check is not sent:
+      `chan_send` panics, before it looks at the channel, the store as it was. -/
+  | chanSendFail {a y : Var} {v : Val} {m1 : Mem} :
+      TakeVal m y v m1 → ¬ SendCheck [v] m1.st → EvalR m (.chanSend a y) .panic
   /-- A3.4: `chan_recv` / `chan_try_recv` on the channel `a` shares, a lock
       block whose payload is its queue (a `Vec`, taken from the front) and
       its closed flag: the head moves out of the queue, an owned `some`.
@@ -522,9 +563,17 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
       {es : List Val} :
       m.st a = some ⟨o, some (.lk k)⟩ →
       m.blk k = some ⟨t, .lock, some (.pair (.node u c d (v :: es)) (.int f))⟩ →
-      m.alloc c = true → m.alloc d = true → ¬ HasView m.blk k →
+      m.alloc c = true → m.alloc d = true → ¬ HasView m.blk k → RecvCheck v es →
       EvalR m (.chanRecv w a)
         (.ok (.inr v) true { m with blk := upd m.blk k (some ⟨t, .lock, some (.pair (.node u c d es) (.int f))⟩) })
+  /-- A3.5's second cut: a head that shares a cell with an element left in the
+      queue is not received: the receive panics, the store as it was
+      (`RecvCheck`: a state the runtime's channels never reach). -/
+  | chanRecvFail {w : Bool} {a : Var} {o : Bool} {k : Nat} {t u : Ty} {c d f : Nat} {v : Val}
+      {es : List Val} :
+      m.st a = some ⟨o, some (.lk k)⟩ →
+      m.blk k = some ⟨t, .lock, some (.pair (.node u c d (v :: es)) (.int f))⟩ → ¬ RecvCheck v es →
+      EvalR m (.chanRecv w a) .panic
   /-- ... `none` when the queue is empty and the flag set, or
       (`chan_try_recv`) just empty. -/
   | chanRecvNone {w : Bool} {a : Var} {o : Bool} {k : Nat} {t u : Ty} {c d f : Nat} :
@@ -576,8 +625,14 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
       out; the answer is 0. -/
   | lockRestore {a y : Var} {o : Bool} {k : Nat} {t : Ty} {v : Val} {m1 : Mem} :
       m.st a = some ⟨o, some (.lk k)⟩ → TakeVal m y v m1 → m1.blk k = some ⟨t, .lock, none⟩ →
+      SendCheck [v] m1.st →
       EvalR m (.lockRestore a y)
         (.ok (.int 0) false { m1 with blk := upd m1.blk k (some ⟨t, .lock, some v⟩) })
+  /-- A3.5's second cut: ... a value that fails the crossing check is not
+      restored: `locked_restore` panics, before it takes the lock, the store
+      as it was. -/
+  | lockRestoreFail {a y : Var} {v : Val} {m1 : Mem} :
+      TakeVal m y v m1 → ¬ SendCheck [v] m1.st → EvalR m (.lockRestore a y) .panic
   /-- ... and with the payload in, it panics ("the value was not taken"),
       the store as it was. -/
   | lockRestoreP {a y : Var} {o : Bool} {k : Nat} {t : Ty} {p : Val} :

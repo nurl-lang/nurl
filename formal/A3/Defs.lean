@@ -280,16 +280,10 @@ def spawnSt (fn : Fn) (vs : List Val) : Var → Option Slot := fun v =>
 def SpawnRedex (spawn : Nat → Bool) (s : Stmt) : Prop :=
   ∃ K x f args k, Redex s K (.letcall x f args k) ∧ spawn f = true
 
-/-- **A3.5, the crossing check** (`mem_send_check`, docs/MEMORY.md §6.5): a
-    library handle whose copies are one state (a cell) may cross only with
-    every other owner of that state.  For every cell a moved value holds a
-    share of, no slot the spawner keeps holds one.  A lent cell share is no
-    share (`lendOf`), so the slots that hold one are its owners: the check
-    is the runtime's count of the places in the moved values that hold each
-    cell's block against its owners.  (A cell share lies in no payload, by
-    typing, so what the values hold is what they reach.) -/
-def SendCheck (vs : List Val) (st' : Var → Option Slot) : Prop :=
-  ∀ k, (∃ v ∈ vs, Sub (.cell k) v) → ∀ y o w, st' y = some ⟨o, some w⟩ → ¬ Sub (.cell k) w
+/-! **A3.5, the crossing check** is A2's `SendCheck` (`A2/Semantics.lean`),
+since A3.5's second cut runs it at every lock entry and `chan_send` too: a
+spawn asks it of the moved values against the slots the spawner keeps
+(`TStep.spawn`), and panics when it fails (`TStep.spawnFail`). -/
 
 /-! ### A3.5b: closures across threads, as A2 types them
 
