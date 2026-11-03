@@ -5806,7 +5806,10 @@ unsafe @ gen_ret i lex i syms i cg → s {
         = val ( mem_emit_cloneif cg ( nurl_get_last_type ) val `1` )
         = ret_field_copy T
     } {}
-    ? & & ( is_ident_tok ret_first_tt ) | ( __is_handle_ty ( nurl_get_last_type ) ) ( __nc_held_ty ( nurl_get_last_type ) ) ! ( __is_clo_param syms ret_first_val ) {
+    // (…an option or a result of one too — `^ a` of a `?String` parameter
+    // answered "owned", and the caller released the value it still held on
+    // the run that handed it back: agora #388.)
+    ? & & ( is_ident_tok ret_first_tt ) | | ( __is_handle_ty ( nurl_get_last_type ) ) ( __nc_held_ty ( nurl_get_last_type ) ) ( __is_hown_ty ( nurl_get_last_type ) ) ! ( __is_clo_param syms ret_first_val ) {
         ? >= ( nurl_sym_word_index syms `__fn_param_names__` ret_first_val ) 0
         { ( __record_param_idx syms `__fn_retlend__` ret_first_val )
             ( nurl_sym_set_deep syms `__ret_path_lends__` `1` )

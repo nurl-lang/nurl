@@ -225,7 +225,7 @@ Inside A2 (nurlc bugs):
   `PushArg`, `pair`'s `Dy ++ Dz`, `callRes`'s `rholds` and `heldOfArgs`,
   `callPostAux`'s `outHeld` and `heldOfArgs`, and a package's interface
   summary; past a join, `ite` and `while` keep what either path holds.
-- A move or take nurlc does not see: #280, #357, #446 and #451 (`unpair`,
+- A move or take nurlc does not see: #280, #357, #446, #451 and #458 (`unpair`,
   `takel`, a `sink` takes an owner only, `lendable`).
 - A borrow ended by a binding's end, replacement or capture, missed:
   #242, #364, #382, #384, #406, #407, #408, #444 and #445 (`exitScope`,
@@ -239,7 +239,7 @@ Inside A2 (nurlc bugs):
 
 Outside A2:
 - The hand-over of an old value to its borrower (above): #366, #373, #378,
-  #387 and #388, plus #427 (a call that may hand back the owner's value
+  #387 and #459, plus #427 (a call that may hand back the owner's value
   where nurlc has no lend fact for it at the `=`: a wrapper, a generic
   or later-defined callee, a value block) and #450 (shapes the hand-over
   gate does not reach: a struct given a part of itself through a callee
