@@ -332,7 +332,7 @@ The A2 rule that refuses each shape is named.
 
 Inside A2 (nurlc bugs):
 - A change in place that ends a borrow, missed: #333, #349, #350, #360,
-  #396, #424, #428, #434, #447 and #460 (`Eff.kills`, `StmtT.editB`,
+  #396, #424, #428, #434, #460 and #461 (`Eff.kills`, `StmtT.editB`,
   `callPostAux`'s `kill`). A keyword argument is the same call, and a
   callee's summary carries a drop through an element of its parameter
   however the element was reached.

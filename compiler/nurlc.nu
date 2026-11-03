@@ -17279,7 +17279,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         ? & & != 0 ( nurl_str_len arg_froot ) __row_callee ( bck_sound ) {
             ( bck_stash_store arg_froot ( nurl_lex_line lex ) __rc ( nurl_str_int arg_idx ) `pendfield` )
             ( __clo_effect_note arg_froot __rc arg_idx )
-            ( __drop_note arg_froot __rc arg_idx )
+            ( __drop_note_via syms arg_froot __rc arg_idx at )
         } {}
         // A call made as this argument that lends from a binding — `( vec_push
         // [i] ( rc_get [( Vec i )] r ) x )`, an Rc's payload: what this call
@@ -17302,7 +17302,7 @@ unsafe @ gen_call i lex i syms i cg → s {
                     // (A drop edge only: growing the element's buffer is the
                     // irealloc edge's, and is not the parameter's own buffer
                     // moving.)
-                    ( __drop_note __ln __rc arg_idx )
+                    ( __drop_note_via syms __ln __rc arg_idx at )
                 } {}
             }
         } {}
@@ -17319,7 +17319,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         { ( bck_stash_pending_call bck_arg_val ( nurl_lex_line lex )
             __rc arg_idx fname F )
             ( __clo_effect_note bck_arg_val __rc arg_idx )
-            ( __drop_note bck_arg_val __rc arg_idx )
+            ( __drop_note_via syms bck_arg_val __rc arg_idx at )
             // A handle it may keep instead (bck_stash_store) — or an option
             // or a result that owns one (`{ i1, … }`): kept, it lives as long
             // as the container does. A parameter too: kept by the callee it
@@ -35225,9 +35225,12 @@ unsafe @ bck_sx_is_id s e → b {
 // payload is frozen (bck_arc_frozen_check), and a lock's value is reached
 // only through a guard, which the lock makes exclusive at run time (a
 // write lock taken while this thread reads panics). So a handle read past
-// one is no parameter's storage to a caller's borrows (agora #315).
+// one is no parameter's storage to a caller's borrows (agora #315). A
+// Locked's value is the same: `locked_take` moves it out of the shared
+// cell for this thread alone until `locked_restore` puts it back, and
+// `locked_get` hands back a copy (agora #447).
 @ __shared_cell_get s base → b {
-    ^ ( str_contains_word `arc_get rw_read rw_write rguard_get wguard_get` base )
+    ^ ( str_contains_word `arc_get rw_read rw_write rguard_get wguard_get locked_take locked_get` base )
 }
 
 // The parameters binding `name` of the function compiling now is part of:
@@ -35307,6 +35310,44 @@ unsafe @ __pderiv_note i syms s name s vt i rhs_tt s rhs_val s lend → v {
     : s e ( nurl_str_cat4 ks `:` callee ( nurl_str_cat `:` ( nurl_str_int aix ) ) )
     : s cur ( nurl_sym_get g_drop_edges g_rpg_me_self )
     ? ! ( str_contains_word cur e ) { ( nurl_sym_def g_drop_edges g_rpg_me_self ? == 0 ( nurl_str_len cur ) ( nurl_str_cat e `` ) ( nurl_str_cat3 cur ` ` e ) ) } {}
+}
+
+// …and, for a local read out of a parameter (g_pderiv: an element bound
+// first, a copy of one) or a `??` payload matched out of one (its
+// `__plend` / `__plroot`), what the callee drops of it this function drops
+// of that parameter's elements (agora #447) — for a container handed on
+// (`at`, the argument's type) that has any to drop: a Vec of values that
+// own something, a String. A Vec of numbers frees nothing when cleared or
+// written (its buffer moving is the irealloc edge's); a struct handed on
+// is not followed here — a drop edge names no path, so a change deep in
+// one field would end every borrow of the parameter (agora #461).
+@ __drop_note_via i syms s name s callee i aix s at → v {
+    ( __drop_note name callee aix )
+    ? | == 0 g_srcx_on == 0 ( nurl_str_len g_cur_params ) { ^ v } {}
+    ? ! ( seq at `%String` ) {
+        ? == 0 ( nurl_str_starts at `%Vec__` ) { ^ v } {}
+        ? ! ( __elem_owns ( __vec_elem_llvm at ) syms ) { ^ v } {}
+    } {}
+    : s root ( __path_root_name name )
+    ? ( str_contains_word g_cur_params root ) { ^ v } {}
+    : ~ s srcs ( __pderiv_params syms root )
+    = srcs ( __word_union srcs ( nurl_sym_get2 syms root `__plend` ) )
+    = srcs ( __word_union srcs ( nurl_sym_get2 syms root `__plroot` ) )
+    : ~ s seen ( nurl_str_cat root `` )
+    : ~ i hops 0
+    ~ & != 0 ( nurl_str_len srcs ) < hops 8 {
+        : s w ( str_first_word srcs ) = srcs ( str_skip_word srcs )
+        : s r ( __path_root_name w )
+        ? ! ( str_contains_word seen r ) {
+            = seen ( nurl_str_cat3 seen ` ` r )
+            ? ( str_contains_word g_cur_params r ) { ( __drop_note r callee aix ) } {
+                = srcs ( __word_union srcs ( __pderiv_params syms r ) )
+                = srcs ( __word_union srcs ( nurl_sym_get2 syms r `__plend` ) )
+                = srcs ( __word_union srcs ( nurl_sym_get2 syms r `__plroot` ) )
+            }
+        } {}
+        = hops + hops 1
+    }
 }
 
 // …the closure literal compiling now's (g_clo_cur), for its parameters.
