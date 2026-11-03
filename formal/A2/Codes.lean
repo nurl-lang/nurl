@@ -381,7 +381,7 @@ theorem codeOK_caps_rename {P : Prog} {fs : List Nat} {te : Ty} {ms : List Nat} 
   have h : (cs.map (fun c => (ρ c.1, c.2))).map (·.2) = cs.map (·.2) := by
     simp [List.map_map, Function.comp_def]
   unfold CodeOK Implements
-  simp only [h]
+  simp only [h, List.map_eq_nil_iff]
 
 theorem Rhs.codeOK_rename {P : Prog} (ρ : Var → Var) (r : Rhs) : (r.rename ρ).codeOK P ↔ r.codeOK P := by
   cases r with

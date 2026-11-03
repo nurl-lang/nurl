@@ -1246,13 +1246,25 @@ theorem spawn_not_any {P : Prog} {spawn : Nat → Bool} (hS : SpawnOK P spawn) {
   have := (hpar _ hin).2
   simp [Ty.holdsView] at this
 
-/-- A closure's code reads its environment, lent: the first parameter of the
-    code it names is the environment's, borrowed (`inp`). -/
+/-- A closure's code takes its environment where its interface takes the
+    receiver, in the interface's mode: the first parameter of the code it
+    names is the environment's ... -/
+theorem _root_.A2.Implements.env_recv {P : Prog} {f : Nat} {te : Ty} {cs : List (Var × PMode × Ty)}
+    {σ : Nat} (h : Implements P f te cs σ) : ∃ fn sig, P[f]? = some fn ∧ P[σ]? = some sig ∧
+      fn.params.head? = some (sig.recvMode, te) ∧ ¬ ThruFn P f := by
+  obtain ⟨fn, sig, hf, hσ, hps, _, _, _, _, _, _, hnt⟩ := h
+  exact ⟨fn, sig, hf, hσ, by rw [hps]; rfl, hnt⟩
+
+/-- ... lent (`inp`) where the interface lends it: the code reads it.  (A2-envhand:
+    only an interface that takes it `inout` has code that changes it, called with
+    the environment handed over, `StmtT.callcE`.) -/
 theorem _root_.A2.Implements.env_lent {P : Prog} {f : Nat} {te : Ty} {cs : List (Var × PMode × Ty)}
-    {σ : Nat} (h : Implements P f te cs σ) : ∃ fn, P[f]? = some fn ∧ fn.params.head? = some (.inp, te) ∧
+    {σ : Nat} (h : Implements P f te cs σ) {sig : Fn} (hσ : P[σ]? = some sig)
+    (hr : sig.recvMode = .inp) : ∃ fn, P[f]? = some fn ∧ fn.params.head? = some (.inp, te) ∧
       ¬ ThruFn P f := by
-  obtain ⟨fn, _, hf, _, hps, _, _, _, _, _, hnt⟩ := h
-  exact ⟨fn, hf, by rw [hps]; rfl, hnt⟩
+  obtain ⟨fn, sig', hf, hσ', hhd, hnt⟩ := h.env_recv
+  rw [hσ] at hσ'; cases hσ'
+  exact ⟨fn, hf, by rw [hhd, hr], hnt⟩
 
 /-- h339 (`closure_in_an_arc_captures_a_library_handle`): a closure whose
     environment may hold a library handle (a cell share, A3.5) is not Sync:
@@ -1552,8 +1564,8 @@ bound, `any` with none, `send` for `: Send`, `sync` for `: Send Sync`
 (`StmtT.callc_bound`).  Packing an impl's value is A3.5b's `pack`: its
 `Cross.Fits` is the per-impl check, which reads the bound and the impl's type
 only (`ImplOK`), and the impl's code fixes that type (`CodeOK.recv_eq`); its
-`CodeOK` holds every method's code to its interface, on the box lent
-(`CodeOK.env_lent`), as a closure's one method is. -/
+`CodeOK` holds every method's code to its interface, on the box in the
+interface's receiver mode (`CodeOK.env_recv`), as a closure's one method is. -/
 
 /-- A3.5c: what a trait declares its objects may cross as: nothing (no bound),
     `: Send`, or `: Send Sync`. -/
@@ -1643,14 +1655,16 @@ theorem callc_not_at {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c : Var} {j : Na
     (hc : Γ c = some Ec) (hty : Ec.ty = .fn ms q) (hq : q ≠ b.cross) : ¬ StmtT P Γ F (.callc x c j zs k) Δ :=
   fun h => hq (h.callc_bound hc hty hb)
 
-/-- Every method's code of a package reads the environment, lent, and changes
-    nothing through a borrow (`Implements.env_lent`, method by method): an
-    impl's code reads its box, whichever method a call picks. -/
-theorem _root_.A2.CodeOK.env_lent {P : Prog} {fs : List Nat} {te : Ty} {ms : List Nat}
+/-- Every method's code of a package takes the environment as its receiver,
+    and changes nothing through a borrow (`Implements.env_recv`, method by
+    method): an impl's code takes its box, whichever method a call picks
+    (lent, or, A2-envhand, handed over where its interface takes it `inout`). -/
+theorem _root_.A2.CodeOK.env_recv {P : Prog} {fs : List Nat} {te : Ty} {ms : List Nat}
     {cs : List (Var × PMode × Ty)} (h : CodeOK P fs te ms cs) {j f : Nat} (hf : fs[j]? = some f) :
-    ∃ fn, P[f]? = some fn ∧ fn.params.head? = some (.inp, te) ∧ ¬ ThruFn P f := by
+    ∃ fn pm, P[f]? = some fn ∧ fn.params.head? = some (pm, te) ∧ ¬ ThruFn P f := by
   have hj : j < ms.length := h.1 ▸ (List.getElem?_eq_some_iff.mp hf).1
-  exact (h.2 j f ms[j] hf (List.getElem?_eq_getElem hj)).env_lent
+  obtain ⟨fn, sig, hfn, _, hhd, hnt⟩ := (h.2 j f ms[j] hf (List.getElem?_eq_getElem hj)).env_recv
+  exact ⟨fn, sig.recvMode, hfn, hhd, hnt⟩
 
 /-- An impl's code fixes the type of the box it is packed with: its first
     method takes it, as its receiver. -/
@@ -1661,8 +1675,8 @@ theorem _root_.A2.CodeOK.recv_eq {P : Prog} {fs : List Nat} {te te' : Ty} {ms ms
     cases fs with
     | nil => exact absurd rfl hne
     | cons f _ => exact ⟨f, rfl⟩
-  obtain ⟨fn, hfn, hhd, _⟩ := h.env_lent hf
-  obtain ⟨fn', hfn', hhd', _⟩ := h'.env_lent hf
+  obtain ⟨fn, pm, hfn, hhd, _⟩ := h.env_recv hf
+  obtain ⟨fn', pm', hfn', hhd', _⟩ := h'.env_recv hf
   rw [hfn] at hfn'; cases hfn'
   rw [hhd] at hhd'; cases hhd'
   rfl

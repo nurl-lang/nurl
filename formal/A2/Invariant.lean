@@ -991,14 +991,31 @@ def ProgOK (P : Prog) : Prop := ∀ fn ∈ P, FnOK P fn
 
 /-! ### Packages name code of their signature -/
 
+/-- The mode an interface takes its receiver in: `inout` (A2-envhand: a call
+    of it hands the environment over, `StmtT.callcE`), or lent (any other
+    first parameter: `StmtT.callc` asks `inp`). -/
+def Fn.recvMode (sig : Fn) : PMode :=
+  match sig.params.head? with
+  | some (.inout b, _) => .inout b
+  | _ => .inp
+
+theorem Fn.recvMode_of_head {sig : Fn} {pm : PMode} {t : Ty} (h : sig.params.head? = some (pm, t))
+    (hs : pm ≠ .sink) : sig.recvMode = pm := by
+  unfold Fn.recvMode; rw [h]; cases pm <;> simp_all
+
 /-- Code `f`, on an environment of type `te`, implements the interface `σ`:
-    it takes the environment where the interface takes the receiver, and
-    the interface's other parameters as the interface does; it returns what
-    the interface returns, and lends, holds and stores no more than the
-    interface says. -/
+    it takes the environment where the interface takes the receiver, in the
+    interface's mode (lent, or, A2-envhand, `inout` at the interface's
+    bound: the environment handed over, which the code may change as the
+    interface says, and hold afterwards what its `outHolds` says the
+    receiver holds), and the interface's other parameters as the interface
+    does; it returns what the interface returns, and lends, holds and stores
+    no more than the interface says.  A package with a method that changes
+    its environment captures nothing by name. -/
 def Implements (P : Prog) (f : Nat) (te : Ty) (cs : List (Var × PMode × Ty)) (σ : Nat) : Prop :=
   ∃ fn sig, P[f]? = some fn ∧ P[σ]? = some sig ∧
-    fn.params = (.inp, te) :: sig.params.tail ++ cs.map (·.2) ∧
+    fn.params = (sig.recvMode, te) :: sig.params.tail ++ cs.map (·.2) ∧
+    (sig.recvMode ≠ .inp → cs = []) ∧
     fn.resTy = sig.resTy ∧ fn.resOwn = sig.resOwn ∧ fn.lends ⊆ sig.lends ∧ fn.rholds ⊆ sig.rholds ∧
     fn.outHolds ⊆ sig.outHolds ∧
     -- a closure's code changes no elements through a borrow (Agora #295)
