@@ -180,7 +180,7 @@ theorem MInv.thru_owner {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {Ex : En
   have hsl1 : sl.own = true := by rw [hso, hEro]
   -- an owning root reaches its own tree
   obtain ⟨T, hT, htop⟩ : ∃ T, m.st dep.root = some ⟨true, some T⟩ ∧ Top n0 T := by
-    rcases hr with ⟨T, h, ht⟩ | ⟨_, _, h, _⟩ | ⟨_, _, _, _, h, _⟩ | ⟨_, _, _, h, _⟩
+    rcases hr with ⟨T, h, ht⟩ | ⟨_, _, h, _⟩ | ⟨_, _, _, _, h, _⟩ | ⟨_, _, _, h, _⟩ | ⟨_, _, h, _⟩
     · exact ⟨T, h, ht⟩
     all_goals rw [hsl] at h; cases h; simp at hsl1
   have hsub : Sub (.node t c d es) T := hla.sub.trans htop.sub

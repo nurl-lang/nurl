@@ -1823,33 +1823,6 @@ theorem sendCheck_box_kept {st st' : Var → Option Slot} {args : List Var} {vs 
   obtain ⟨rfl, rfl⟩ := hm.det hm'
   exact fun h => sendCheck_env h hv hs hk y o w hy hw
 
-/-- A tree of a type that holds no cell share holds none. -/
-theorem _root_.A2.WFv.noCell_hasCell {τ : Ty} {v : Val} (hw : WFv τ v) (hnc : τ.hasCell = false) {k : Nat} :
-    ¬ Sub (.cell k) v := by
-  induction hw with
-  | int => intro h; cases h
-  | view => intro h; cases h
-  | arc => intro h; cases h
-  | lk => intro h; cases h
-  | cell => simp [Ty.hasCell] at hnc
-  | pkg _ hq ih => intro h; cases h with | pkg h => exact ih (hq.2.1 hnc) h
-  | node _ ih =>
-    intro h
-    cases h with
-    | child he hs => exact ih _ he (by simpa [Ty.hasCell] using hnc) hs
-  | pair _ _ iha ihb =>
-    simp only [Ty.hasCell, Bool.or_eq_false_iff] at hnc
-    intro h
-    cases h with
-    | fst h => exact iha hnc.1 h
-    | snd h => exact ihb hnc.2 h
-  | inl _ ih =>
-    simp only [Ty.hasCell, Bool.or_eq_false_iff] at hnc
-    intro h; cases h with | inl h => exact ih hnc.1 h
-  | inr _ ih =>
-    simp only [Ty.hasCell, Bool.or_eq_false_iff] at hnc
-    intro h; cases h with | inr h => exact ih hnc.2 h
-
 /-- A `: Send Sync` trait object's box holds no library handle, at any depth:
     the crossing check has nothing to count in it (the runtime fills the
     vtable's check only for an impl of a `: Send` trait whose type reaches

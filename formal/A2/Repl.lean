@@ -235,6 +235,24 @@ theorem top_arc {t : Ty} {c d : Nat} {es : List Val} {n' : Val} {k : Nat} {q : V
   | inr h ih => cases hr with | inr hr' => exact Top.inr (ih hr')
   | pkg h ih => cases hr with | pkg hr' => exact Top.pkg (ih hr')
 
+/-- A3.5's third cut: so does a cell share. -/
+theorem top_cell {t : Ty} {c d : Nat} {es : List Val} {n' : Val} {k : Nat} {T T' : Val}
+    (hr : Repl (.node t c d es) n' T T') (ht : Top (.cell k) T) : Top (.cell k) T' := by
+  generalize ha : Val.cell k = a at ht
+  induction ht generalizing T' with
+  | refl => subst ha; cases hr
+  | fst h ih =>
+    cases hr with
+    | fst hr' => exact Top.fst (ih hr')
+    | snd _ => subst ha; exact Top.fst h
+  | snd h ih =>
+    cases hr with
+    | fst _ => subst ha; exact Top.snd h
+    | snd hr' => exact Top.snd (ih hr')
+  | inl h ih => cases hr with | inl hr' => exact Top.inl (ih hr')
+  | inr h ih => cases hr with | inr hr' => exact Top.inr (ih hr')
+  | pkg h ih => cases hr with | pkg hr' => exact Top.pkg (ih hr')
+
 /-- A node of a tree replaced by itself: the tree is unchanged (an element
     set out of range, Agora #295). -/
 theorem self {T : Val} (h : Sub n T) : Repl n n T T := by

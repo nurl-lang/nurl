@@ -257,6 +257,33 @@ theorem SharesIn.sub {B : Nat → Option Blk} {n T : Val} (hs : Sub n T) :
       · exact ih hwe (fun _ _ _ ha => by have h := ha.hasArc; rw [hq.2.2 hqs] at h; cases h)
       · exact ih hwe (fun u k p h => hsh u k p (.pkg h hqs))
 
+/-- A tree of a type that holds no cell share holds none. -/
+theorem WFv.noCell_hasCell {τ : Ty} {v : Val} (hw : WFv τ v) (hnc : τ.hasCell = false) {k : Nat} :
+    ¬ Sub (.cell k) v := by
+  induction hw with
+  | int => intro h; cases h
+  | view => intro h; cases h
+  | arc => intro h; cases h
+  | lk => intro h; cases h
+  | cell => simp [Ty.hasCell] at hnc
+  | pkg _ hq ih => intro h; cases h with | pkg h => exact ih (hq.2.1 hnc) h
+  | node _ ih =>
+    intro h
+    cases h with
+    | child he hs => exact ih _ he (by simpa [Ty.hasCell] using hnc) hs
+  | pair _ _ iha ihb =>
+    simp only [Ty.hasCell, Bool.or_eq_false_iff] at hnc
+    intro h
+    cases h with
+    | fst h => exact iha hnc.1 h
+    | snd h => exact ihb hnc.2 h
+  | inl _ ih =>
+    simp only [Ty.hasCell, Bool.or_eq_false_iff] at hnc
+    intro h; cases h with | inl h => exact ih hnc.1 h
+  | inr _ ih =>
+    simp only [Ty.hasCell, Bool.or_eq_false_iff] at hnc
+    intro h; cases h with | inr h => exact ih hnc.2 h
+
 /-- ... so a node found in a well-formed tree holds the shares the tree's type
     says, at its own type `vec t`. -/
 theorem SharesOK.sub_node {m : Mem} {τ : Ty} {T : Val} (hw : WFv τ T) (hsh : SharesOK m τ T)
@@ -305,12 +332,15 @@ inductive Top : Val → Val → Prop
 /-- A node a root's slot reaches directly: one at the top of its own tree, or
     one a handle it holds names (a borrowed struct is a bundle of handles),
     or (A3.1) a share at the top of a borrowed slot's value: through it the
-    slot reaches its block's payload. -/
+    slot reaches its block's payload.  A3.5's third cut: or a cell share at
+    the top of a borrowed slot's value (a library's `in` handle), which a
+    copy of the slot, or a field read out of it, lands on. -/
 def RootNode (m : Mem) (r : Var) (n : Val) : Prop :=
   (∃ T, m.st r = some ⟨true, some T⟩ ∧ Top n T) ∨
   (∃ v c, m.st r = some ⟨false, some v⟩ ∧ Top (.href c) v ∧ NodeAt m c n) ∨
   (∃ v d o l, m.st r = some ⟨false, some v⟩ ∧ Top (.view d o l) v ∧ DataAt m d n) ∨
-  (∃ v k q, m.st r = some ⟨false, some v⟩ ∧ Top (.arc k q) v ∧ n = .arc k q)
+  (∃ v k q, m.st r = some ⟨false, some v⟩ ∧ Top (.arc k q) v ∧ n = .arc k q) ∨
+  (∃ v k, m.st r = some ⟨false, some v⟩ ∧ Top (.cell k) v ∧ n = .cell k)
 
 /-- A3.1: a root that reaches memory: an owned slot (its tree, if it still
     has one), or a borrowed one whose value holds a handle or a share at its
@@ -352,6 +382,33 @@ def Landed (m : Mem) (dep : Dep) (n : Val) : Prop :=
     parameter's end passes on (`reroot`). -/
 def ArcLanded (m : Mem) (dep : Dep) (n : Val) : Prop :=
   (∃ n0, RootNode m dep.root n0 ∧ Lands dep.kind n n0) ∨ (dep.kind = .share ∧ RootMem m dep.root)
+
+/-- A3.5's third cut: where a cell share reached through `dep` lies: where
+    the node its root reaches puts it, never in a payload (no payload its
+    holders read holds one).  So a borrow of a library handle has, through
+    its dependencies, an owner of the handle in the store
+    (`MInv.cell_owned`). -/
+def CellLanded (m : Mem) (dep : Dep) (k : Nat) : Prop :=
+  ∃ n0, RootNode m dep.root n0 ∧ Lands dep.kind (.cell k) n0
+
+theorem CellLanded.landed {m : Mem} {dep : Dep} {k : Nat} (h : CellLanded m dep k) : Landed m dep (.cell k) :=
+  Or.inl h
+
+theorem CellLanded.bound {m : Mem} {dep : Dep} {k : Nat} (h : CellLanded m dep k) : dep.kind.bound = .none := by
+  obtain ⟨_, _, hk⟩ := h
+  rcases hk with ⟨hk, _⟩ | ⟨hk, _⟩ | ⟨hk, _⟩ <;> rw [hk] <;> rfl
+
+theorem CellLanded.notName {m : Mem} {dep : Dep} {k : Nat} (h : CellLanded m dep k) :
+    dep.kind.isName = false := by
+  obtain ⟨_, _, hk⟩ := h
+  rcases hk with ⟨hk, _⟩ | ⟨hk, _⟩ | ⟨hk, _⟩ <;> rw [hk] <;> rfl
+
+/-- A cell share that lands off a payload lands where its root's node puts it. -/
+theorem CellLanded.of_landed {m : Mem} {dep : Dep} {k : Nat} (h : Landed m dep (.cell k))
+    (hp : ¬ InPay m (.cell k)) : CellLanded m dep k := by
+  rcases h with h | ⟨_, _, hin⟩
+  · exact h
+  · exact absurd hin hp
 
 theorem Landed.arc {m : Mem} {dep : Dep} {n : Val} (h : Landed m dep n) : ArcLanded m dep n := by
   rcases h with h | ⟨hk, hro, _⟩
@@ -422,9 +479,13 @@ inductive ValOK (m : Mem) : Ty → Val → List Dep → List Dep → Prop
       (∃ o, m.blk k = some ⟨t, .lock, o⟩) → ValOK m (.lk t) (.lk k) P H
   /-- A3.5: a cell share lent: as a lock share, its block is a lock block of
       its type (A3.5's third cut: a lent cell share is the share, `lendOf`;
-      the sweep keeps the block while a slot holds it). -/
+      the sweep keeps the block while a slot holds it), and it lands through
+      a dependency, as a `Vec` handle does: in a tree its root reaches, so a
+      live borrow of a library handle has an owner of it in the store
+      (`MInv.cell_owned`). -/
   | cell {t : Ty} {k : Nat} {P H : List Dep} :
-      (∃ o, m.blk k = some ⟨t, .lock, o⟩) → ValOK m (.cell t) (.cell k) P H
+      (∃ o, m.blk k = some ⟨t, .lock, o⟩) → (∃ dep ∈ P, CellLanded m dep k) →
+      ValOK m (.cell t) (.cell k) P H
 
 section ValOK
 variable {m : Mem} {v : Val} {P H : List Dep}
