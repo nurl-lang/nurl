@@ -146,6 +146,10 @@ theorem covers_set_none {m : Mem} (hc : Covers m) {x : Var} (hx : ∀ T, ¬ Owne
 def CoversBut (m : Mem) (v : Val) (o : Bool) : Prop :=
   ∀ i, m.alloc i = true → Covered m i ∨ (o = true ∧ i ∈ v.ids)
 
+/-- A3.2: a value that owns an address is an owner's. -/
+theorem Val.owns_of_mem_ids {v : Val} {i : Nat} (h : i ∈ v.ids) : v.owns = true := by
+  cases v <;> simp_all [Val.ids, Val.owns]
+
 theorem covers_evalR {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (hc : Covers m)
     (he : EvalR m r (.ok v o m1)) : CoversBut m1 v o := by
   intro i hi
@@ -329,6 +333,27 @@ theorem covers_evalR {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (hc : Covers m)
         · exact Or.inl (Or.inr (hnew i (by simp [h])))
       · exact Or.inl (Or.inr ⟨k', bl, by simp [upd, he, hk'], hik⟩)
   | chanRecvNone _ _ _ _ => exact Or.inl (hc i hi)
+  | @lockTake _ _ k t v _ hk _ =>
+    -- A3.2's second cut: the taken payload is the value in flight, as a check-out's
+    rcases hc i hi with h | ⟨k', bl, hk', hik⟩
+    · exact Or.inl (Or.inl h)
+    · by_cases he : k' = k
+      · subst he; rw [hk] at hk'; cases hk'
+        exact Or.inr ⟨Val.owns_of_mem_ids hik, hik⟩
+      · exact Or.inl (Or.inr ⟨k', bl, by simp [upd, he, hk'], hik⟩)
+  | @lockRestore _ _ _ k t w m1 _ htk hk =>
+    -- ... and the restored one the block's payload, as what `chan_send` queues
+    have hi' : m.alloc i = true := by rw [← htk.alloc]; exact hi
+    have hnew : ∀ j ∈ w.ids, PayAddr { m1 with blk := upd m1.blk k (some ⟨t, .lock, some w⟩) } j :=
+      fun j hj => ⟨k, ⟨t, .lock, some w⟩, by simp [upd], hj⟩
+    rcases hc i hi' with ⟨o', U, hU, hiU⟩ | ⟨k', bl, hk', hik⟩
+    · rcases htk.owned hU with hU1 | ⟨_, hUw⟩
+      · exact Or.inl (Or.inl ⟨o', U, hU1, hiU⟩)
+      · exact Or.inl (Or.inr (hnew i (by subst hUw; exact hiU)))
+    · rw [← htk.blk] at hk'
+      by_cases he : k' = k
+      · subst he; rw [hk] at hk'; cases hk'; simp [Blk.tree] at hik
+      · exact Or.inl (Or.inr ⟨k', bl, by simp [upd, he, hk'], hik⟩)
   | @chanClose _ _ k t q f _ hk =>
     rcases hc i hi with h | ⟨k', bl, hk', hik⟩
     · exact Or.inl (Or.inl h)
@@ -348,9 +373,6 @@ theorem covers_take {m : Mem} {v : Val} {o : Bool} (hc : CoversBut m v o) {x : V
   · exact Or.inr hp
   · exact Or.inl ⟨x, v, ownedAt_set.mpr (Or.inl ⟨rfl, rfl⟩), hiv⟩
 
-/-- A3.2: a value that owns an address is an owner's. -/
-theorem Val.owns_of_mem_ids {v : Val} {i : Nat} (h : i ∈ v.ids) : v.owns = true := by
-  cases v <;> simp_all [Val.ids, Val.owns]
 
 /-- A3.2: taking a lock: what block `k`'s payload owned is the value in
     flight, which `x` owns. -/

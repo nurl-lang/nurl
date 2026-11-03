@@ -154,13 +154,28 @@ def Refers (B : Nat → Option Blk) (v : Val) (k : Nat) : Prop :=
   ShareIn k v ∨ ∃ bl, B k = some bl ∧
     ((∃ c, Sub (.href c) v ∧ c ∈ bl.rd.ids) ∨ ∃ d o l, Sub (.view d o l) v ∧ d ∈ bl.rd.ids)
 
+/-- A3.2's second cut: what a block's payload keeps alive, whatever its kind:
+    the payload it holds — an `arc` block's and a view's (what their holders
+    read), and a lock block's while it is in the block (no one reads it, but
+    the shares in it are the block's).  A checked-out payload is in its
+    holder's slot, a root of its own. -/
+def Blk.keeps (bl : Blk) : Val := bl.pay.getD (.int 0)
+
 /-- The blocks of `B` reached from the values `R` (the slots' values), through
-    the payloads of reached blocks that their holders read (A3.2: an `arc`
-    block's; a lock block's payload holds no share, this cut, so it reaches
-    nothing). -/
+    the payloads of reached blocks (`Blk.keeps`; A3.2's second cut: a lock
+    block's too, which may hold shares). -/
 inductive Reached (R : Val → Prop) (B : Nat → Option Blk) : Nat → Prop
   | root {v : Val} {k : Nat} : R v → Refers B v k → Reached R B k
-  | pay {k k' : Nat} {bl : Blk} : Reached R B k' → B k' = some bl → Refers B bl.rd k → Reached R B k
+  | pay {k k' : Nat} {bl : Blk} : Reached R B k' → B k' = some bl → Refers B bl.keeps k → Reached R B k
+
+/-- A3.2's second cut: a block as its holders see it, a lock block with its
+    payload left out (no one reads it while it is in).  What `R` reaches
+    through these (`Reached R (rdBlk B)`) it reaches through payloads that
+    are read, which no step changes; a `recover` frame's store keeps that
+    (`CatchOK`), where a lock's payload may change under it. -/
+def Blk.rdOnly (bl : Blk) : Blk := if bl.kind = .lock then { bl with pay := none } else bl
+
+def rdBlk (B : Nat → Option Blk) : Nat → Option Blk := fun k => (B k).map Blk.rdOnly
 
 /-- What a store's slots hold. -/
 def Mem.vals (m : Mem) (v : Val) : Prop := ∃ x o, m.st x = some ⟨o, some v⟩
@@ -211,13 +226,61 @@ inductive WFv : Ty → Val → Prop
   /-- A3.5: a cell share; its block is a lock block of its type too. -/
   | cell {t : Ty} {k : Nat} : WFv (.cell t) (.cell k)
 
+/-- A3.1: tree `T` of type `τ` holds a share of block `k`, whose payload is
+    a `u`: the one it carries, `some p`, or (A3.2) none, for a lock share.
+    (Not inside a payload: the block's own shares are the block's.) -/
+inductive ArcIn : Ty → Val → Ty → Nat → Option Val → Prop
+  | here {u : Ty} {k : Nat} {p : Val} : ArcIn (.arc u) (.arc k p) u k (some p)
+  /-- A3.2: a lock share of block `k`, of payload type `u` (it carries no
+      payload: `none`). -/
+  | lk {u : Ty} {k : Nat} : ArcIn (.lk u) (.lk k) u k none
+  /-- A3.5: a cell share of block `k`, a lock block of payload type `u`. -/
+  | cell {u : Ty} {k : Nat} : ArcIn (.cell u) (.cell k) u k none
+  | child {t t' : Ty} {c d : Nat} {es : List Val} {e : Val} {u : Ty} {k : Nat} {p : Option Val} :
+      e ∈ es → ArcIn t e u k p → ArcIn (.vec t) (.node t' c d es) u k p
+  | fst {a b : Ty} {x y : Val} {u : Ty} {k : Nat} {p : Option Val} :
+      ArcIn a x u k p → ArcIn (.prod a b) (.pair x y) u k p
+  | snd {a b : Ty} {x y : Val} {u : Ty} {k : Nat} {p : Option Val} :
+      ArcIn b y u k p → ArcIn (.prod a b) (.pair x y) u k p
+  | inl {a b : Ty} {x : Val} {u : Ty} {k : Nat} {p : Option Val} : ArcIn a x u k p → ArcIn (.sum a b) (.inl x) u k p
+  | inr {a b : Ty} {x : Val} {u : Ty} {k : Nat} {p : Option Val} : ArcIn b x u k p → ArcIn (.sum a b) (.inr x) u k p
+  /-- (A3.5b: only a closure whose type may hold shares has one in its
+      environment; a bare one's holds none, `WFv.pkg`.) -/
+  | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {x : Val} {cs : List (Var × PMode × Ty)} {u : Ty}
+      {k : Nat} {p : Option Val} {q : Cross} :
+      ArcIn te x u k p → q.shares = true → ArcIn (.fn ms q) (.pkg fs te ms x cs) u k p
+
+/-- A3.3: a block an `arc` share names: an `arc` block holding `p`, or a
+    view of a lock block (`rw_read`'s guard), whose payload `p` is a share of
+    the lock block and that block's payload.  Both are frozen while they
+    live. -/
+def ArcBlk (b : Option Blk) (u : Ty) (p : Val) : Prop :=
+  b = some ⟨u, .arc, some p⟩ ∨ b = some ⟨u, .view, some p⟩
+
+/-- A3.2: what a share asks of its block: an `arc` share (carrying `some p`)
+    an `arc` block holding `p`, a lock share (`none`) a lock block of its
+    payload's type, holding its payload or not. -/
+def ShareFits (b : Option Blk) (u : Ty) : Option Val → Prop
+  | some p => ArcBlk b u p
+  | none => ∃ o, b = some ⟨u, .lock, o⟩
+
+/-- A3.1: every share a tree holds names a block of the store `B` that
+    holds the payload the share carries, of the share's type (the block
+    lives while a share of it is owned; an `arc` payload never changes), or
+    (A3.2) a lock block of its type. -/
+def SharesIn (B : Nat → Option Blk) (τ : Ty) (T : Val) : Prop :=
+  ∀ u k p, ArcIn τ T u k p → ShareFits (B k) u p
+
 /-- A3.2: what `x`'s slot can give back to a lock whose payload is a `t`:
     the tree it owns, or, for an integer payload, the integer it holds (an
     integer binding is a plain one).  A3.3: a tree of the payload's type
     (which a typed program's `x` always holds), so a give-back on a panic's
-    unwinding keeps the block well formed with no typing at hand. -/
-def Giveable (t : Ty) : Slot → Prop
-  | ⟨true, some v⟩ => WFv t v
+    unwinding keeps the block well formed with no typing at hand.  A3.2's
+    second cut: and whose shares name blocks of `B` as the payload's type
+    says (`SharesIn`), for the same reason, now that a payload may hold
+    shares. -/
+def Giveable (B : Nat → Option Blk) (t : Ty) : Slot → Prop
+  | ⟨true, some v⟩ => WFv t v ∧ SharesIn B t v
   | ⟨false, some (.int _)⟩ => t = .int
   | _ => False
 
@@ -225,15 +288,15 @@ def Giveable (t : Ty) : Slot → Prop
     `t`: `x`'s value goes back into the block, which has it checked out; or
     else `x`'s slot is dropped as a scope's is.  That is when the block is
     gone (no share reaches it any more), or `x` holds nothing it can give
-    back (it was moved out: the lock stays checked out for good, as
-    `locked_take` without `locked_restore` leaves it); a typed program meets
+    back (it was moved out: the lock stays checked out until a restore, as
+    `locked_take` leaves it, `Rhs.lockTake`); a typed program meets
     no other case (the block is the one `x` took its payload from), but
     the rule needs no invariant to say so. -/
 inductive Release (m : Mem) (k : Nat) (t : Ty) (x : Var) : Mem → Prop
-  | put {o : Bool} {v : Val} : m.st x = some ⟨o, some v⟩ → Giveable t ⟨o, some v⟩ →
+  | put {o : Bool} {v : Val} : m.st x = some ⟨o, some v⟩ → Giveable m.blk t ⟨o, some v⟩ →
       m.blk k = some ⟨t, .lock, none⟩ →
       Release m k t x ({ m with blk := upd m.blk k (some ⟨t, .lock, some v⟩) }.remove x)
-  | drop {sl : Slot} {a' : Nat → Bool} : (m.blk k ≠ some ⟨t, .lock, none⟩ ∨ ¬ Giveable t sl) →
+  | drop {sl : Slot} {a' : Nat → Bool} : (m.blk k ≠ some ⟨t, .lock, none⟩ ∨ ¬ Giveable m.blk t sl) →
       m.st x = some sl → DropSlot m.alloc sl a' → Release m k t x ({ m with alloc := a' }.remove x)
 
 /-- The vector `x` names — its own tree, or the one its borrow points at —
@@ -499,6 +562,27 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
       one thread, run from the empty store, holds none.) -/
   | globP {g : Nat} {t : Ty} :
       (¬ ∃ v, m.gl g = some v ∧ GlobFits m.blk t v) → EvalR m (.glob g t) .panic
+  /-- A3.2's second cut: `locked_take a`: the payload of the lock block `a`
+      shares moves out to the caller, owned (an integer is a plain integer, as
+      `withLock` checks one out), and the block holds nothing, as `locked_take`
+      leaves zero bytes in the slot and sets `taken`.  With the payload out
+      (or a view of it living) it has no step: the thread waits (`RBlocked`),
+      as every operation on a taken `Locked` does. -/
+  | lockTake {a : Var} {o : Bool} {k : Nat} {t : Ty} {v : Val} :
+      m.st a = some ⟨o, some (.lk k)⟩ → m.blk k = some ⟨t, .lock, some v⟩ → ¬ HasView m.blk k →
+      EvalR m (.lockTake a) (.ok v v.owns { m with blk := upd m.blk k (some ⟨t, .lock, none⟩) })
+  /-- ... `locked_restore a y`: the value taken from `y` (an owner's tree
+      moves, an integer is copied) goes back into the block, whose payload is
+      out; the answer is 0. -/
+  | lockRestore {a y : Var} {o : Bool} {k : Nat} {t : Ty} {v : Val} {m1 : Mem} :
+      m.st a = some ⟨o, some (.lk k)⟩ → TakeVal m y v m1 → m1.blk k = some ⟨t, .lock, none⟩ →
+      EvalR m (.lockRestore a y)
+        (.ok (.int 0) false { m1 with blk := upd m1.blk k (some ⟨t, .lock, some v⟩) })
+  /-- ... and with the payload in, it panics ("the value was not taken"),
+      the store as it was. -/
+  | lockRestoreP {a y : Var} {o : Bool} {k : Nat} {t : Ty} {p : Val} :
+      m.st a = some ⟨o, some (.lk k)⟩ → m.blk k = some ⟨t, .lock, some p⟩ →
+      EvalR m (.lockRestore a y) .panic
 
 /-! ### Calls
 
@@ -548,6 +632,8 @@ def Rhs.rename (ρ : Var → Var) : Rhs → Rhs
   | .cellNew t y => .cellNew t (ρ y)
   | .cellClone a => .cellClone (ρ a)
   | .glob g t => .glob g t
+  | .lockTake a => .lockTake (ρ a)
+  | .lockRestore a y => .lockRestore (ρ a) (ρ y)
 
 def Edit.rename (ρ : Var → Var) : Edit → Edit
   | .push y => .push (ρ y)
@@ -694,6 +780,9 @@ def RBlocked (m : Mem) : Rhs → Prop
   | .chanClose a => ∃ o k t, m.st a = some ⟨o, some (.lk k)⟩ ∧
       (m.blk k = some ⟨t, .lock, none⟩ ∨ HasView m.blk k)
   | .rwRead a => ∃ o k t, m.st a = some ⟨o, some (.lk k)⟩ ∧ m.blk k = some ⟨t, .lock, none⟩
+  -- A3.2's second cut: a take waits while the payload is out or read
+  | .lockTake a => ∃ o k t, m.st a = some ⟨o, some (.lk k)⟩ ∧
+      (m.blk k = some ⟨t, .lock, none⟩ ∨ HasView m.blk k)
   | _ => False
 
 /-- A3.2/A3.5: `a` holds a share of the lock block `k`: a lock share, or a

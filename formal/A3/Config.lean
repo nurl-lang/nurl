@@ -72,7 +72,7 @@ theorem CInv.start {P : Prog} {s : Stmt} {Δ : Ctx} {nv : Nat} {G : Globs}
     (hv : ∀ v ∈ s.vars, v < nv) (hG : GlobsOK P G) : CInv P (Cfg.start G s nv) := by
   refine ⟨[fun _ => false], ⟨rfl, fun i => ?_, fun j k a b hjk hj hk => ?_, fun j a ha i hai _ => ?_,
     fun k k' bl bl' i hk hk' hi hi' => ?_, fun j t a hj ha => ?_⟩,
-    fun k bl hk => (hG.reach k bl hk).mono (fun v hv => .inr hv) (BlkLe.refl _)⟩
+    fun k bl hk => (hG.reach k bl hk).roots (fun v hv => .inr hv)⟩
   · show G.alloc i = true ↔ _
     rw [hG.alloc i]
     constructor

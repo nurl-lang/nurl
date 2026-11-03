@@ -98,7 +98,7 @@ theorem payPart_false {B : Nat → Option Blk} {i : Nat} : payPart B i = false �
     below `n` and apart from every other payload's. -/
 structure BlockOK (B : Nat → Option Blk) (n k : Nat) (bl : Blk) : Prop where
   ok    : bl.ty.ok = true ∧ bl.ty.holdsView = false ∧
-    (∀ p, bl.pay = some p → WFv bl.ty p ∧ SharesIn B bl.ty p) ∧ (bl.kind = .lock → bl.ty.hasArc = false)
+    (∀ p, bl.pay = some p → WFv bl.ty p ∧ SharesIn B bl.ty p) ∧ (bl.kind = .lock → bl.ty.hasCell = false)
   key   : k < n
   nodup : bl.tree.ids.Nodup
   lt    : ∀ i ∈ bl.tree.ids, i < n

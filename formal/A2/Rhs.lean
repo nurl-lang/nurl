@@ -189,7 +189,7 @@ theorem SlotOK.grow {m m' : Mem} (hst : m'.st = m.st) (hb : BlkLe m.blk m'.blk) 
 /-- What the invariant asks of the blocks. -/
 def BlocksIn (m : Mem) : Prop :=
   ∀ k bl, m.blk k = some bl → bl.ty.ok = true ∧ bl.ty.holdsView = false ∧
-    (∀ p, bl.pay = some p → WFv bl.ty p ∧ SharesOK m bl.ty p) ∧ (bl.kind = .lock → bl.ty.hasArc = false)
+    (∀ p, bl.pay = some p → WFv bl.ty p ∧ SharesOK m bl.ty p) ∧ (bl.kind = .lock → bl.ty.hasCell = false)
 
 /-- **More blocks**: the invariant holds over a store with the same slots and
     more blocks, each as the invariant asks. -/
@@ -212,6 +212,65 @@ theorem MInv.grow {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) (h
     (RootKeep.of_st (r := dep.root) h hb).vkeep hb
   shares v E sl T hE hsl hown hT := (hi.shares v E sl T hE (by rw [h] at hsl; exact hsl) hown hT).grow hb
   blocks := hB
+
+/-- A3.2's second cut: **the invariant of the slots over another store that
+    keeps only the blocks the slots reach through payloads that are read**
+    (`rdBlk`; what a lock's payload reaches may be gone).  The slots' facts
+    read only those: they are carried to the store with every lock's payload
+    left out, swept from the slots there, and grown to `m'`.  (`m` itself
+    with the locks' payloads left out need not be a heap: a view reads its
+    lock's payload.) -/
+theorem MInv.regrow {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) (hh : HeapOK m')
+    (hnv : m.nv ≤ m'.nv)
+    (hb : ∀ k bl, m.blk k = some bl → Reached m.vals (rdBlk m.blk) k → ∃ bl', m'.blk k = some bl' ∧ BlkKeep bl bl')
+    (hB : BlocksIn m') : MInv m' Γ := by
+  let mb : Mem := { m with blk := rdBlk m.blk }
+  let ms : Mem := mb.sweep
+  have hb1 : BlkLe m.blk mb.blk := BlkLe.rdBlk m.blk
+  have hst2 : m'.st = ms.st := h
+  have hb2 : BlkLe ms.blk m'.blk := by
+    intro k bl hk
+    obtain ⟨hk1, hr⟩ := Mem.sweep_blk.mp hk
+    obtain ⟨bl0, hk0, rfl⟩ := rdBlk_some.mp hk1
+    obtain ⟨bl', h1, h2⟩ := hb k bl0 hk0 hr
+    refine ⟨bl', h1, ?_⟩
+    obtain ⟨hty, hkd, ha⟩ := h2
+    refine ⟨by rw [hty, Blk.rdOnly_ty], by rw [hkd, Blk.rdOnly_kind], fun hl => ?_⟩
+    rw [Blk.rdOnly_kind] at hl
+    rw [ha hl]
+    obtain ⟨t, kd, p⟩ := bl0
+    cases kd with
+    | lock => exact absurd rfl hl
+    | arc => rfl
+    | view => rfl
+  have hR : ∀ v, mb.vals v → mb.vals v := fun _ h => h
+  have hslot : ∀ x sl, m.st x = some sl → mb.st x = some sl := fun _ _ h => h
+  exact {
+    dom := fun v => by rw [h]; exact hi.dom v
+    slot := fun v E hv => by
+      obtain ⟨sl, hsl, hok, hs⟩ := hi.slot v E hv
+      exact ⟨sl, by rw [h]; exact hsl, hok,
+        ((hs.grow (m := m) (m' := mb) rfl hb1).sweep hR (Kept.of_slot hR (hslot v sl hsl))).grow hst2 hb2⟩
+    heap := hh
+    nvSt := fun v hv => by rw [h] at hv; exact Nat.lt_of_lt_of_le (hi.nvSt v hv) hnv
+    noInout := hi.noInout
+    wf := hi.wf
+    rootbLive := hi.rootbLive
+    rootbLt := hi.rootbLt
+    names := hi.names
+    held := fun v E sl T hE hl hsl hT => hi.held v E sl T hE hl (by rw [h] at hsl; exact hsl) hT
+    pkgs := fun v sl T hsl hT => hi.pkgs v sl T (by rw [h] at hsl; exact hsl) hT
+    armed := fun v E sl hE hsl => by
+      have hsl0 : m.st v = some sl := by rw [h] at hsl; exact hsl
+      have h1 : ArmOK mb E sl := (hi.armed v E sl hE hsl0).keep fun _ _ _ dep _ =>
+        (RootKeep.of_st (m := m) (m' := mb) (r := dep.root) rfl hb1).vkeep hb1
+      exact (h1.sweep hR (Kept.of_slot hR (hslot v sl hsl0))).keep fun _ _ _ dep _ =>
+        (RootKeep.of_st (r := dep.root) hst2 hb2).vkeep hb2
+    shares := fun v E sl T hE hsl hown hT => by
+      have hsl0 : m.st v = some sl := by rw [h] at hsl; exact hsl
+      exact (((hi.shares v E sl T hE hsl0 hown hT).grow (m' := mb) hb1).sweep
+        (Kept.of_slot hR (hslot v sl hsl0) T hT)).grow hb2
+    blocks := hB }
 
 /-- What a right-hand side hands to the binding that takes it. -/
 structure RhsOut (m1 : Mem) (Γ1 : Ctx) (E : Entry) (v : Val) (o : Bool) : Prop where
@@ -1335,7 +1394,7 @@ theorem out_share {m : Mem} {Γ : Ctx} {t : Ty} {k : Nat} {p : Val} (htok : t.ok
 /-- A3.2: a lock share, owned: it holds nothing, and its block is a lock
     block of its type. -/
 theorem out_lkShare {m : Mem} {Γ : Ctx} {t : Ty} {k : Nat} (htok : t.ok = true)
-    (hvf : t.holdsView = false) (hna : t.hasArc = false) (hk : ∃ o, m.blk k = some ⟨t, .lock, o⟩) :
+    (hvf : t.holdsView = false) (hna : t.hasCell = false) (hk : ∃ o, m.blk k = some ⟨t, .lock, o⟩) :
     RhsOut m Γ ⟨.lk t, .own, true, [], [], false, false⟩ (.lk k) true where
   own := rfl
   mode := Or.inl rfl

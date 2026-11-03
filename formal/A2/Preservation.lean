@@ -2656,9 +2656,10 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           · rw [hin v hvs, hlo v hvx (hs.spine_F v hvs)]
           · rw [hout v hvs]; exact hfr v hvs hvx
       -- A3.1: the blocks the caller's store reaches outside the frame are kept
-      have hbl : BlkLe (m0.set x ⟨false, some (.int 1)⟩).sweep.blk (m1.set x ⟨false, some (.int 1)⟩).blk := by
-        intro k bl hk
-        obtain ⟨hk0, hr⟩ := Mem.sweep_blk.mp hk
+      have hbl : ∀ k bl, (m0.set x ⟨false, some (.int 1)⟩).blk k = some bl →
+          Reached (m0.set x ⟨false, some (.int 1)⟩).vals (rdBlk (m0.set x ⟨false, some (.int 1)⟩).blk) k →
+          ∃ bl', (m1.set x ⟨false, some (.int 1)⟩).blk k = some bl' ∧ BlkKeep bl bl' := by
+        intro k bl hk0 hr
         show ∃ bl', m1.blk k = some bl' ∧ BlkKeep bl bl'
         -- A3.3: and then as the unwinding gave lock payloads back
         suffices h : ∃ bl', m.blk k = some bl' ∧ BlkKeep bl bl' by
@@ -2679,7 +2680,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           obtain ⟨Ey, hEy⟩ := Option.isSome_iff_exists.mp hd
           exact ⟨y, o, (hKO.2 y Ey hEy).1, hyx, hy⟩
       have hM' : MInv (m1.set x ⟨false, some (.int 1)⟩) Δ :=
-        hM.sweep.grow hsteq (hh1.set_bor x _) (by simp [hnv1, hnv0]) hbl
+        hM.regrow hsteq (hh1.set_bor x _) (by simp [hnv1, hnv0]) hbl
           (hi.toMInv.blocks_back (m' := m1.set x ⟨false, some (.int 1)⟩) hblk1)
       obtain ⟨E0, h0⟩ := (hKO.2 x Ex hEx).2
       have hxown : ∀ T, ¬ OwnedAt m1 x T := by

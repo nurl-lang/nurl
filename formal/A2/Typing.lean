@@ -597,8 +597,9 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
   /-- A closure literal.  A3.5b: its type says what its environment may hold
       (`q`), from the environment's type and the captures by name
       (`Cross.Fits`): one that holds no view and captures nothing by name is
-      Send, one that also holds no cell share Sync, one that holds no share
-      at all a lock's or a channel's. -/
+      Send, one that also holds no cell share Sync (an `Arc`'s, and since
+      A3.2's second cut a lock's or a channel's), one that holds no share at
+      all bare. -/
   | pack {fs : List Nat} {te : Ty} {ms : List Nat} {q : Cross} {y : Var} {cs : List (Var × PMode × Ty)}
       {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
       Γ y = some Ey → Ey.live = true → Ey.ty = te → PushArg Γ F y Ey te D Γ1 → CapsOK Γ1 F D cs →
@@ -629,11 +630,13 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       Γ a = some E → E.live = true → E.ty = .arc t → t.holdsView = false → t.hasFn = false →
       RhsT Γ F (.arcGet a) (getE a E t) Γ
   /-- A3.2: `locked_new`: `y`'s value, of a type that holds no view and no
-      closure (it is Send), and (this cut) no share, moves into a fresh lock
-      block; the result is an owned lock share, which holds nothing. -/
+      closure (it is Send), and (A3.2's second cut) no cell share — `arc` and
+      lock shares it may hold, which the lock's block keeps alive — moves into
+      a fresh lock block; the result is an owned lock share, which holds
+      nothing. -/
   | lockNew {t : Ty} {y : Var} {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
       Γ y = some Ey → Ey.live = true → Ey.ty = t →
-      t.holdsView = false ∧ t.hasFn = false ∧ t.hasArc = false →
+      t.holdsView = false ∧ t.hasFn = false ∧ t.hasCell = false →
       PushArg Γ F y Ey t D Γ1 →
       RhsT Γ F (.lockNew t y) ⟨.lk t, .own, true, [], [], false, false⟩ Γ1
   /-- A3.2: `Locked_share`: a new share of the lock block `a` shares: owned,
@@ -655,8 +658,8 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       Γ a = some E → E.live = true → E.ty = .lk .int → ExprT Γ e1 → ExprT Γ e2 →
       RhsT Γ F (.atomic op a e1 e2) intE Γ
   /-- A3.4: `chan_send a y`, through a live share of a channel of `s`:
-      `y`'s value, an `s` (which holds no view, no closure and no share:
-      `Ty.ok`, as a lock's payload), is handed over as `vec_push` takes it
+      `y`'s value, an `s` (which holds no view, no closure and, A3.2's second
+      cut, no cell share: `Ty.ok`, as a lock's payload), is handed over as `vec_push` takes it
       (`PushArg`: an owner moves, an integer is copied); the answer is an
       integer. -/
   | chanSend {a y : Var} {Ea Ey : Entry} {s : Ty} {Γ1 : Ctx} {D : List Dep} :
@@ -665,8 +668,8 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       RhsT Γ F (.chanSend a y) intE Γ1
   /-- A3.4: `chan_recv` / `chan_try_recv`, through a live share of a channel
       (`Channel s` is `lk (prod (vec s) int)`: its queue and its flag): an
-      owned `Option s` (`sum int s`), holding nothing (`s` holds no view and
-      no share: `Ty.ok`). -/
+      owned `Option s` (`sum int s`), holding nothing (`s` holds no view:
+      `Ty.ok`; the shares it holds the queue's block kept alive). -/
   | chanRecv {w : Bool} {a : Var} {E : Entry} {s : Ty} :
       Γ a = some E → E.live = true → E.ty = .lk (.prod (.vec s) .int) →
       RhsT Γ F (.chanRecv w a) ⟨.sum .int s, .own, true, [], [], false, false⟩ Γ
@@ -695,6 +698,21 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
   | glob {g : Nat} {t : Ty} :
       t.sync = true → t.ok = true →
       RhsT Γ F (.glob g t) ⟨t, .own, true, [], [], false, false⟩ Γ
+  /-- A3.2's second cut: `locked_take a`, through a live lock share of a
+      `Locked t`: the payload, owned, of its type, holding nothing (it views
+      nothing; its shares the block kept alive) — `withLock`'s `lockE t`
+      (an integer is a plain integer). -/
+  | lockTake {a : Var} {E : Entry} {t : Ty} :
+      Γ a = some E → E.live = true → E.ty = .lk t →
+      RhsT Γ F (.lockTake a) (lockE t) Γ
+  /-- ... `locked_restore a y`: `y`'s value, a `t`, is handed back as
+      `vec_push` takes it (`PushArg`: an owner moves and its entry dies, an
+      integer is copied), as `chan_send` hands its value over; the answer is
+      an integer. -/
+  | lockRestore {a y : Var} {Ea Ey : Entry} {t : Ty} {Γ1 : Ctx} {D : List Dep} :
+      Γ a = some Ea → Ea.live = true → Ea.ty = .lk t →
+      Γ y = some Ey → Ey.live = true → Ey.ty = t → PushArg Γ F y Ey t D Γ1 →
+      RhsT Γ F (.lockRestore a y) intE Γ1
 
 /-! ### Calls -/
 
@@ -740,6 +758,8 @@ theorem RhsT.out {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT 
   | cellNew => exact ⟨Or.inl rfl, rfl⟩
   | cellClone => exact ⟨Or.inl rfl, rfl⟩
   | glob => exact ⟨Or.inl rfl, rfl⟩
+  | @lockTake _ _ t => unfold lockE; split <;> first | exact ⟨Or.inl rfl, rfl⟩ | exact ⟨Or.inr rfl, rfl⟩
+  | lockRestore => exact ⟨Or.inr rfl, rfl⟩
 
 /-- What the summary pair `(j, k)` means at this call.  An integer argument
     lends nothing. -/
@@ -1639,6 +1659,8 @@ def Rhs.vars : Rhs → List Var
   | .cellNew _ y => [y]
   | .cellClone a => [a]
   | .glob _ _ => []
+  | .lockTake a => [a]
+  | .lockRestore a y => [a, y]
 
 def Edit.vars : Edit → List Var
   | .push y => [y]

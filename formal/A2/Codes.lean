@@ -322,6 +322,12 @@ theorem EvalR.codes {P : Prog} {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (he :
     refine ⟨pkgOK_of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_), h⟩
     cases hc with
     | inl => exact pkgOK_int P _
+  | lockTake _ hk _ =>
+    -- A3.2's second cut: the taken payload's packages were the block's
+    exact ⟨(hB _ _ hk).1, h.withBlk rfl (h.blk.upd (blkCodes_lock fun _ e => by cases e))⟩
+  | lockRestore _ h1 _ =>
+    obtain ⟨hv, hm1⟩ := h1.codes h
+    exact ⟨pkgOK_int P _, hm1.withBlk rfl (hm1.blk.upd (blkCodes_lock fun _ e => by cases e; exact hv))⟩
   | @chanClose _ _ k _ q _ _ hk _ =>
     have hp : PkgOK P (.pair q (.int _)) := (hB _ _ hk).1
     refine ⟨pkgOK_int P _, h.withBlk rfl (h.blk.upd (blkCodes_lock fun _ e => ?_))⟩

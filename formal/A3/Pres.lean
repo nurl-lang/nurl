@@ -337,6 +337,30 @@ theorem Cfg.rootsBut_put {C : Cfg} {i : Nat} {m' : Mem} {s' : Stmt} (hgl : m'.gl
   · exact .inl ⟨j, tj, by simp only [Cfg.put]; rw [List.getElem?_set_ne (Ne.symm hji)]; exact hj, x, o, hx⟩
   · exact .inr ⟨g, by show m'.gl g = some v; rw [hgl]; exact hg⟩
 
+/-- What the stepping thread's slots hold after its step is a root of the
+    configuration it writes back. -/
+theorem Cfg.put_vals {C : Cfg} {i : Nat} {t : Thread} (hi : C.ths[i]? = some t) {m' : Mem} {s' : Stmt}
+    {v : Val} (h : m'.vals v) : (C.put i m' s').roots v := by
+  obtain ⟨x, o, hx⟩ := h
+  have hlt : i < C.ths.length := (List.getElem?_eq_some_iff.mp hi).1
+  exact .inl ⟨i, ⟨m'.st, m'.nv, s'⟩, by simp [Cfg.put, hlt], x, o, hx⟩
+
+/-- A3.2's second cut: **what other roots reach before a thread's step, the
+    roots after it reach**: every block is kept (`Step.blk`), a payload that
+    is read as it was, and what a lock's payload held is in it still, or in
+    one of the stepping thread's slots (`Step.leafKeep`). -/
+theorem _root_.A2.Reached.step {P : Prog} {m m' : Mem} {s s' : Stmt} (hst : Step P m s (.ok m' s'))
+    {R R' : Val → Prop} (hR : ∀ v, R v → R' v) (hR' : ∀ v, m'.vals v → R' v) {k : Nat}
+    (h : Reached R m.blk k) : Reached R' m'.blk k := by
+  have hb : BlkLe m.blk m'.blk := Step.blk hst
+  induction h with
+  | root hv hr => exact .root (hR _ hv) (hr.grow hb)
+  | pay _ hk hr ih =>
+    obtain ⟨w, hw, hs, hall⟩ := hr.leaf
+    rcases Step.leafKeep hst hk hw hs with ⟨bl', hk', hs'⟩ | ⟨v, hv, hs'⟩
+    · exact .pay ih hk' ((hall _ hs').grow hb)
+    · exact .root (hR' v hv) ((hall _ hs').grow hb)
+
 /-- **What a thread's next step touches**: an address of its own part; a
     read of a payload its own slots reach; or (what the sweep that ends it
     frees) a payload no other thread's slots, nor (A3.6) a global, reach. -/
@@ -365,7 +389,7 @@ theorem CParts.ctouch {P : Prog} {C : Cfg}
     -- thread did (a new block's, or a lock's given back)
     rcases Step.payAt hst (hbo.of_st rfl) k a ⟨bl, hk, hak⟩ with ⟨bl0, hk0, hak0⟩ | h1
     · exact .inr ⟨k, bl0, hk0, hak0, .inr fun hr =>
-        hnr (hr.mono (fun v hv => Cfg.rootsBut_put (Step.gl hst) hv) (Step.grows hst).blk)⟩
+        hnr (hr.step hst (fun v hv => Cfg.rootsBut_put (Step.gl hst) hv) (fun v hv => Cfg.put_vals hq hv))⟩
     · exact .inl (owned_part hto h1)
 
 /-- **No race**: two threads never touch one address, one of them writing.
@@ -391,12 +415,12 @@ theorem CInv.raceFree {P : Prog} {C : Cfg}
     rcases hc.ctouch hj haj htj with h2 | ⟨k', bl', hk', hak', ⟨_, hr'⟩ | hnr'⟩
     · exact hc.pay j aj haj a h2 ⟨k, bl, hk, hak⟩
     · have := hc.uniq k k' bl bl' a hk hk' hak hak'; subst this
-      exact hnr (hr'.mono (fun v ⟨x, o, hx⟩ => .inl ⟨j, tj, Ne.symm hij, hj, x, o, hx⟩) (BlkLe.refl _))
+      exact hnr (hr'.roots (fun v ⟨x, o, hx⟩ => .inl ⟨j, tj, Ne.symm hij, hj, x, o, hx⟩))
     · have := hc.uniq k k' bl bl' a hk hk' hak hak'; subst this
       have hr0 : Reached (fun v => (C.view ti).vals v ∨ C.rootsBut i v) C.blk k :=
-        (hreach k bl hk).mono (fun v hv => Cfg.roots_split hi hv) (BlkLe.refl _)
+        (hreach k bl hk).roots (fun v hv => Cfg.roots_split hi hv)
       rcases Reached.or hr0 with h3 | h3
-      · exact hnr' (h3.mono (fun v ⟨x, o, hx⟩ => .inl ⟨i, ti, hij, hi, x, o, hx⟩) (BlkLe.refl _))
+      · exact hnr' (h3.roots (fun v ⟨x, o, hx⟩ => .inl ⟨i, ti, hij, hi, x, o, hx⟩))
       · exact hnr h3
 
 end A3

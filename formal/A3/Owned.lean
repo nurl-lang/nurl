@@ -166,6 +166,10 @@ theorem EvalR.ownedId {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r
     exact ⟨fun _ i hi => .inr (.inr ⟨_, _, hk, by simp only [ids_inr] at hi; simp [Blk.tree, hi]⟩),
       fun i hi => .inl hi⟩
   | chanRecvNone _ _ _ _ => exact ⟨fun _ i hi => by simp at hi, fun i hi => .inl hi⟩
+  -- A3.2's second cut: a taken payload was the block's; a restored one leaves the owned trees
+  | lockTake _ hk _ =>
+    exact ⟨fun _ i hi => .inr (.inr ⟨_, _, hk, by simpa [Blk.tree] using hi⟩), fun i hi => .inl hi⟩
+  | lockRestore _ h1 _ => exact ⟨fun h => (nomatch h), fun i hi => .inl ((TakeVal.ownedId h1 hb).2 i hi)⟩
   -- A3.3: a read guard is a share, which owns no address
   | rwRead _ _ _ => exact ⟨fun _ i hi => by simp [Val.ids] at hi, fun i hi => .inl hi⟩
   | _ => exact ⟨fun h => (nomatch h), fun i hi => .inl hi⟩
@@ -486,6 +490,20 @@ theorem EvalR.payAt {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (
     by_cases he : k = m.nid
     · subst he; simp [upd] at hk'; subst hk'; simp at hi
     · rw [upd_ne _ _ he] at hk'
+      exact .inl ⟨bl, hk', hi⟩
+  -- A3.2's second cut: a taken payload leaves the block, a restored one is the thread's tree
+  | @lockTake _ _ k0 _ _ _ _ _ =>
+    have hk' : upd _ k0 _ k = some bl := hk
+    by_cases he : k = k0
+    · subst he; simp [upd] at hk'; subst hk'; simp [Blk.tree] at hi
+    · rw [upd_ne _ _ he] at hk'
+      exact .inl ⟨bl, hk', hi⟩
+  | @lockRestore _ _ _ k0 _ _ m1 _ h1 _ =>
+    have hk' : upd m1.blk k0 _ k = some bl := hk
+    by_cases he : k = k0
+    · subst he; simp [upd] at hk'; subst hk'
+      exact .inr ((TakeVal.ownedId h1 hb).1 i (by simpa [Blk.tree] using hi))
+    · rw [upd_ne _ _ he, TakeVal.blk h1] at hk'
       exact .inl ⟨bl, hk', hi⟩
   | _ => exact .inl ⟨bl, hk, hi⟩
 

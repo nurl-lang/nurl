@@ -123,6 +123,43 @@ theorem Sub.trans {a b c : Val} (h1 : Sub a b) (h2 : Sub b c) : Sub a c := by
 @[simp] theorem Blk.rd_arc (t : Ty) (p : Option Val) : (Blk.mk t .arc p).rd = p.getD (.int 0) := rfl
 @[simp] theorem Blk.rd_lock (t : Ty) (p : Option Val) : (Blk.mk t .lock p).rd = .int 0 := rfl
 @[simp] theorem Blk.rd_view (t : Ty) (p : Option Val) : (Blk.mk t .view p).rd = p.getD (.int 0) := rfl
+@[simp] theorem Blk.keeps_mk (t : Ty) (k : BKind) (p : Option Val) : (Blk.mk t k p).keeps = p.getD (.int 0) := rfl
+@[simp] theorem Blk.rdOnly_arc (t : Ty) (p : Option Val) : (Blk.mk t .arc p).rdOnly = ⟨t, .arc, p⟩ := rfl
+@[simp] theorem Blk.rdOnly_lock (t : Ty) (p : Option Val) : (Blk.mk t .lock p).rdOnly = ⟨t, .lock, none⟩ := rfl
+@[simp] theorem Blk.rdOnly_view (t : Ty) (p : Option Val) : (Blk.mk t .view p).rdOnly = ⟨t, .view, p⟩ := rfl
+
+/-- A3.2's second cut: what a block's holders read it keeps alive (a lock
+    block's holders read nothing). -/
+theorem Blk.rd_keeps (bl : Blk) : bl.rd = bl.keeps ∨ bl.rd = .int 0 := by
+  obtain ⟨t, k, p⟩ := bl
+  cases k with
+  | arc => exact Or.inl rfl
+  | lock => exact Or.inr rfl
+  | view => exact Or.inl rfl
+
+/-- ... and what a block as its holders see it keeps alive is what they read. -/
+theorem Blk.rdOnly_keeps (bl : Blk) : bl.rdOnly.keeps = bl.rd := by
+  obtain ⟨t, k, p⟩ := bl
+  cases k <;> rfl
+
+theorem Blk.rdOnly_rd (bl : Blk) : bl.rdOnly.rd = bl.rd := by
+  obtain ⟨t, k, p⟩ := bl
+  cases k <;> rfl
+
+theorem Blk.rdOnly_ty (bl : Blk) : bl.rdOnly.ty = bl.ty := by
+  obtain ⟨t, k, p⟩ := bl
+  cases k <;> rfl
+
+theorem Blk.rdOnly_kind (bl : Blk) : bl.rdOnly.kind = bl.kind := by
+  obtain ⟨t, k, p⟩ := bl
+  cases k <;> rfl
+
+theorem rdBlk_some {B : Nat → Option Blk} {k : Nat} {bl : Blk} :
+    rdBlk B k = some bl ↔ ∃ bl0, B k = some bl0 ∧ bl = bl0.rdOnly := by
+  unfold rdBlk
+  cases B k with
+  | none => simp
+  | some b => simp [eq_comm]
 
 theorem Sub.int_eq {n : Val} {j : Nat} (h : Sub n (.int j)) : n = .int j := by
   cases h; rfl

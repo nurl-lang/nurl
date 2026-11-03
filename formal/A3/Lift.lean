@@ -163,6 +163,8 @@ theorem EvalR.lift {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.
   | arcGet hy hk => exact EvalR.arcGet hy hk
   | rwRead hy hk hfr => exact EvalR.rwRead hy hk hfr
   | glob hg hf => exact EvalR.glob hg hf
+  | lockTake hy hk hnv => exact EvalR.lockTake hy hk hnv
+  | lockRestore hy h1 hk => exact EvalR.lockRestore (m := liftMem a2 m) hy (TakeVal.lift h1 a2) hk
 
 theorem EvalR.liftP {m : Mem} {r : Rhs} (h : EvalR m r .panic) (a2 : Nat → Bool) :
     EvalR (liftMem a2 m) r .panic := by
@@ -175,6 +177,7 @@ theorem EvalR.liftP {m : Mem} {r : Rhs} (h : EvalR m r .panic) (a2 : Nat → Boo
   | takelP hy => exact EvalR.takelP hy
   | takerP hy => exact EvalR.takerP hy
   | globP hg => exact EvalR.globP hg
+  | lockRestoreP hy hk => exact EvalR.lockRestoreP hy hk
 
 theorem BindParams.lift {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var} {base i : Nat}
     (h : BindParams m ps as base i m') (a2 : Nat → Bool) :

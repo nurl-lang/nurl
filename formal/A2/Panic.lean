@@ -14,8 +14,8 @@ theorem HeapOK.remove_bor {m : Mem} (hh : HeapOK m) {p : Var} {w : Option Val}
 /-- A3.2: what `x`'s slot gives back to a lock owns its addresses once, and
     none of them is another slot's or a payload's: the tree `x` owns, or an
     integer. -/
-theorem Giveable.ids {m : Mem} (hh : HeapOK m) {x : Var} {o : Bool} {v : Val} {t : Ty}
-    (hx : m.st x = some ⟨o, some v⟩) (hg : Giveable t ⟨o, some v⟩) :
+theorem Giveable.ids {m : Mem} (hh : HeapOK m) {x : Var} {o : Bool} {v : Val} {B : Nat → Option Blk} {t : Ty}
+    (hx : m.st x = some ⟨o, some v⟩) (hg : Giveable B t ⟨o, some v⟩) :
     v.ids.Nodup ∧ (∀ i ∈ v.ids, m.alloc i = true ∧ i < m.nid) ∧
     (∀ y U, y ≠ x → OwnedAt m y U → ∀ i ∈ v.ids, i ∉ U.ids) ∧ (∀ i ∈ v.ids, ¬ PayAddr m i) := by
   cases o with
@@ -31,7 +31,8 @@ theorem Giveable.ids {m : Mem} (hh : HeapOK m) {x : Var} {o : Bool} {v : Val} {t
 /-- A3.2: a lock's payload given back: the block owns the tree `x` gave
     (it was in no other tree and no payload), and `x`'s slot is gone. -/
 theorem HeapOK.release_put {m : Mem} (hh : HeapOK m) {k : Nat} {t : Ty} {x : Var} {o : Bool} {v : Val}
-    (hx : m.st x = some ⟨o, some v⟩) (hg : Giveable t ⟨o, some v⟩) (hk : m.blk k = some ⟨t, .lock, none⟩) :
+    {B : Nat → Option Blk}
+    (hx : m.st x = some ⟨o, some v⟩) (hg : Giveable B t ⟨o, some v⟩) (hk : m.blk k = some ⟨t, .lock, none⟩) :
     HeapOK ({ m with blk := upd m.blk k (some ⟨t, .lock, some v⟩) }.remove x) := by
   obtain ⟨hnd, hal, hdis, hnp⟩ := Giveable.ids hh hx hg
   have hown : ∀ o U, OwnedAt ({ m with blk := upd m.blk k (some ⟨t, .lock, some v⟩) }.remove x) o U →
@@ -93,7 +94,7 @@ theorem HeapOK.remove_keep {m : Mem} (hh : HeapOK m) (x : Var) : HeapOK (m.remov
 theorem step_release {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : RootbAnch Γ F)
     {x : Var} {E : Entry} (hx : Γ x = some E) (hnrb : E.mode ≠ .rootb) (hxF : x ∉ F) (hpin : EndOK Γ x)
     {k : Nat} {t : Ty} (hty : E.ty = t) {o : Bool} {v : Val} (hsl : m.st x = some ⟨o, some v⟩)
-    (hg : Giveable t ⟨o, some v⟩) (hk : m.blk k = some ⟨t, .lock, none⟩) :
+    (hg : Giveable m.blk t ⟨o, some v⟩) (hk : m.blk k = some ⟨t, .lock, none⟩) :
     MInv ({ m with blk := upd m.blk k (some ⟨t, .lock, some v⟩) }.remove x) (exitScope x Γ) := by
   have h0 : MInv (m.remove x) (exitScope x Γ) :=
     hi.change hanch hx hxF (hpin.1.kills _ _) hnrb (fun o ho => by simp [upd_ne _ _ ho])
@@ -151,13 +152,13 @@ theorem Release.nid {m m' : Mem} {k : Nat} {t : Ty} {x : Var} (h : Release m k t
     the payload goes back, or `x`'s slot is dropped. -/
 theorem Release.exists {m : Mem} {k : Nat} {t : Ty} {x : Var} {sl : Slot} {a' : Nat → Bool}
     (hsl : m.st x = some sl) (hd : DropSlot m.alloc sl a') : ∃ m', Release m k t x m' := by
-  by_cases hput : m.blk k = some ⟨t, .lock, none⟩ ∧ Giveable t sl
+  by_cases hput : m.blk k = some ⟨t, .lock, none⟩ ∧ Giveable m.blk t sl
   · obtain ⟨hkb, hg⟩ := hput
     obtain ⟨o, w⟩ := sl
     cases w with
     | none => cases o <;> simp [Giveable] at hg
     | some v => exact ⟨_, Release.put hsl hg hkb⟩
-  · have hc : m.blk k ≠ some ⟨t, .lock, none⟩ ∨ ¬ Giveable t sl := by
+  · have hc : m.blk k ≠ some ⟨t, .lock, none⟩ ∨ ¬ Giveable m.blk t sl := by
       by_cases h1 : m.blk k = some ⟨t, .lock, none⟩
       · exact Or.inr fun h2 => hput ⟨h1, h2⟩
       · exact Or.inl h1
@@ -165,10 +166,11 @@ theorem Release.exists {m : Mem} {k : Nat} {t : Ty} {x : Var} {sl : Slot} {a' : 
 
 /-- A3.3: what a panic's unwinding leaves of the blocks: each as it was, or
     a lock block given back a payload of its type (`Release.put` on the way
-    out, as `RwLocked`'s write guard's drop on the drop journal). -/
+    out, as `RwLocked`'s write guard's drop on the drop journal), whose
+    shares (A3.2's second cut) name blocks. -/
 def BlkBack (B B' : Nat → Option Blk) : Prop :=
   BlkLe B B' ∧ ∀ k bl, B' k = some bl → B k = some bl ∨
-    ∃ t v, bl = ⟨t, .lock, some v⟩ ∧ B k = some ⟨t, .lock, none⟩ ∧ WFv t v
+    ∃ t v, bl = ⟨t, .lock, some v⟩ ∧ B k = some ⟨t, .lock, none⟩ ∧ WFv t v ∧ SharesIn B' t v
 
 theorem BlkBack.refl (B : Nat → Option Blk) : BlkBack B B := ⟨BlkLe.refl _, fun _ _ h => .inl h⟩
 
@@ -176,18 +178,32 @@ theorem BlkBack.trans {B1 B2 B3 : Nat → Option Blk} (h1 : BlkBack B1 B2) (h2 :
     BlkBack B1 B3 := by
   refine ⟨h1.1.trans h2.1, fun k bl hk => ?_⟩
   rcases h2.2 k bl hk with h | ⟨t, v, rfl, hk2, hw⟩
-  · exact h1.2 k bl h
+  · rcases h1.2 k bl h with h' | ⟨t, v, rfl, hk1, hw, hsh⟩
+    · exact .inl h'
+    · exact .inr ⟨t, v, rfl, hk1, hw, hsh.grow h2.1⟩
   · rcases h1.2 k _ hk2 with h | ⟨t', v', he, _, _⟩
     · exact .inr ⟨t, v, rfl, h, hw⟩
     · cases he
 
 /-- What a lock scope gives back is a tree of the payload's type. -/
-theorem Giveable.wfv {t : Ty} {o : Bool} {v : Val} (h : Giveable t ⟨o, some v⟩) : WFv t v := by
+theorem Giveable.wfv {B : Nat → Option Blk} {t : Ty} {o : Bool} {v : Val} (h : Giveable B t ⟨o, some v⟩) :
+    WFv t v := by
   cases o with
-  | true => exact h
+  | true => exact h.1
   | false =>
     cases v with
     | int n => simp only [Giveable] at h; subst h; exact .int
+    | _ => simp [Giveable] at h
+
+/-- A3.2's second cut: ... and its shares name blocks of the payload's type
+    (an integer holds none). -/
+theorem Giveable.shares {B : Nat → Option Blk} {t : Ty} {o : Bool} {v : Val} (h : Giveable B t ⟨o, some v⟩) :
+    SharesIn B t v := by
+  cases o with
+  | true => exact h.2
+  | false =>
+    cases v with
+    | int n => exact fun _ _ _ ha => by cases ha
     | _ => simp [Giveable] at h
 
 theorem Release.back {m m' : Mem} {k : Nat} {t : Ty} {x : Var} (h : Release m k t x m') :
@@ -197,7 +213,7 @@ theorem Release.back {m m' : Mem} {k : Nat} {t : Ty} {x : Var} (h : Release m k 
     refine ⟨BlkLe.setLock hk _, fun k' bl hk' => ?_⟩
     by_cases he : k' = k
     · subst he; simp [upd] at hk'; subst hk'
-      exact .inr ⟨t, _, rfl, hk, hg.wfv⟩
+      exact .inr ⟨t, _, rfl, hk, hg.wfv, hg.shares.grow (BlkLe.setLock hk _)⟩
     · exact .inl (by simpa [upd, he] using hk')
   | drop _ _ _ => exact BlkBack.refl _
 
@@ -227,15 +243,15 @@ theorem HeapOK.unback {m m1 : Mem} (hh : HeapOK m) (hh1 : HeapOK m1) (hb : BlkBa
   · rw [h0]; exact ⟨hkey, List.nodup_nil, fun i hi => nomatch hi⟩
 
 /-- A3.3: the blocks a panic's unwinding leaves are as the invariant asks:
-    each as it was, or a lock block given back a tree of its type, which
-    holds no share. -/
+    each as it was, or a lock block given back a tree of its type whose
+    shares name blocks. -/
 theorem MInv.blocks_back {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (hb : BlkBack m.blk m'.blk) : BlocksIn m' := by
   intro k bl hk
-  rcases hb.2 k bl hk with h | ⟨t, v, rfl, hk0, hw⟩
+  rcases hb.2 k bl hk with h | ⟨t, v, rfl, hk0, hw, hsh⟩
   · obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k bl h
     exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.grow hb.1⟩, h4⟩
   · obtain ⟨h1, h2, _, h4⟩ := hi.blocks k _ hk0
-    exact ⟨h1, h2, fun p hp => by cases hp; exact ⟨hw, SharesOK.of_noArc (h4 rfl)⟩, h4⟩
+    exact ⟨h1, h2, fun p hp => by cases hp; exact ⟨hw, hsh⟩, h4⟩
 
 /-- A3.4: an atomic operation waiting reads only the slots and the blocks. -/
 theorem RBlocked.of_eq {m m' : Mem} (hst : m'.st = m.st) (hb : m'.blk = m.blk) {r : Rhs} (h : RBlocked m r) :
@@ -254,6 +270,9 @@ theorem RBlocked.of_eq {m m' : Mem} (hst : m'.st = m.st) (hb : m'.blk = m.blk) {
     obtain ⟨o, k, t, h1, h2⟩ := h
     exact ⟨o, k, t, hst ▸ h1, hb ▸ h2⟩
   | rwRead a =>
+    obtain ⟨o, k, t, h1, h2⟩ := h
+    exact ⟨o, k, t, hst ▸ h1, hb ▸ h2⟩
+  | lockTake a =>
     obtain ⟨o, k, t, h1, h2⟩ := h
     exact ⟨o, k, t, hst ▸ h1, hb ▸ h2⟩
   | _ => exact h

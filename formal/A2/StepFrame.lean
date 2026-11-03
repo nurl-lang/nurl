@@ -192,6 +192,7 @@ theorem evalR_none {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (he : EvalR m r (
   | cellNew h1 _ => exact takeVal_none h1 hx
   | chanSend _ h1 _ _ _ => exact takeVal_none h1 hx
   | chanSendClosed _ h1 _ _ => exact takeVal_none h1 hx
+  | lockRestore _ h1 _ => exact takeVal_none h1 hx
   | @takel y _ hy | @taker y _ hy =>
     have : x ≠ y := fun e => by subst e; rw [hx] at hy; cases hy
     simp [Mem.set, upd_ne _ _ this, hx]
