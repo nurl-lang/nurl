@@ -8,8 +8,8 @@ defines A3.0's configuration (`Thread`, `Cfg`, `Cfg.view`), its steps
 (`Touch`), a race (`Race`), and the claim (`Claim`: `MemorySafe ∧ RaceFree ∧
 NoLeak` for every program A2 types); `../README.md` lists the modules of
 the proof. A3.1's `Arc` and A3.2's `Locked` are mechanized in the same
-claim (A3.1's and A3.2's mechanization, below; A3.2's probes are still to
-do); A3.3–A3.6 are design. This note fixes the
+claim (A3.1's and A3.2's mechanization, below; A3.2's first cut: what it
+leaves out is listed there); A3.3–A3.6 are design. This note fixes the
 semantics, the theorem statements and the order of work, so the
 mechanization can be cut into tasks (Agora: formal track, F4–F8). The guarantee it targets is the
 "no data race" clause of `CLAIM.md` and `docs/MEMORY.md` §6.2. The rules
@@ -677,8 +677,10 @@ step.
 **Status.** `check.sh` is green with lock blocks, lock shares and the
 three rules in A2 and A3. `A2.memory_safe`, `A2.soundness`,
 `A2.no_leak_end`, `A2.no_leak_panic` and `A3.claim` are re-proven for A2
-with `Locked`. Not done yet: the probes (h267 h358) and `CLAIM.md` /
-`README.md`, so `check.sh`'s last line still names A3.1.
+with `Locked`, and `CLAIM.md`, `README.md` and `check.sh` say A3.2's
+first cut is proven. The probes h267 (`locked_take` / `locked_restore`)
+and h358 (an `Rc` in a `Locked`, the Send question) wait for what this cut
+leaves out.
 
 **Where a lock lives.** In A2, as an `Arc` does: a lock is a second kind
 of block. This answers the open question below. Single-threaded, a lock is
@@ -839,7 +841,9 @@ stated.
   need an invariant tying each `scopeL k` frame to block `k`);
 - shares in a lock's payload;
 - the probes h267 h358;
-- `CLAIM.md` / `README.md`.
+- relocking a lock on the OS thread that holds it: the model's thread
+  waits (`Blocked`), but the runtime's default pthread mutex leaves it
+  undefined (Agora #455, phase D).
 
 ## Open questions
 
