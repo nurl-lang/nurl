@@ -212,8 +212,9 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
     -- A3.4: the word is there unless a `withLock` has it checked out
     obtain ⟨o, k, hv⟩ := hi.lk_slot ha hl hty
     obtain ⟨ob, hk⟩ := hi.lk_val ha hl hty hv
+    have hnv : ¬ HasView m.blk k := fun h => hnb ⟨o, k, hv, Or.inr h⟩
     cases ob with
-    | none => exact absurd ⟨o, k, hv, hk⟩ hnb
+    | none => exact absurd ⟨o, k, hv, Or.inl hk⟩ hnb
     | some p =>
       obtain ⟨_, _, hpay, _⟩ := hi.blocks k _ hk
       obtain ⟨hw, _⟩ := hpay p rfl
@@ -221,14 +222,15 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
       | int =>
         obtain ⟨n1, h1⟩ := eval_exists hi he1
         obtain ⟨n2, h2⟩ := eval_exists hi he2
-        exact ⟨_, EvalR.atomic hv hk h1 h2⟩
+        exact ⟨_, EvalR.atomic hv hk h1 h2 hnv⟩
   | chanSend ha hl hty hy hly htyy hpa =>
     -- A3.4: into the queue, or (closed) dropped, unless the channel's payload
     -- is checked out
     obtain ⟨o, k, hv⟩ := hi.lk_slot ha hl hty
     obtain ⟨ob, hk⟩ := hi.lk_val ha hl hty hv
+    have hnv : ¬ HasView m.blk k := fun h => hnb ⟨o, k, .int, hv, Or.inr h⟩
     cases ob with
-    | none => exact absurd ⟨o, k, _, hv, hk⟩ hnb
+    | none => exact absurd ⟨o, k, _, hv, Or.inl hk⟩ hnb
     | some p =>
       obtain ⟨_, _, hpay, _⟩ := hi.blocks k _ hk
       obtain ⟨hw, _⟩ := hpay p rfl
@@ -246,7 +248,7 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
             | zero =>
               exact ⟨_, EvalR.chanSend hv htk (by rw [hb1]; exact hk)
                 (by rw [ha1]; exact (hall c (by simp [Blk.tree])).1)
-                (by rw [ha1]; exact (hall d (by simp [Blk.tree])).1)⟩
+                (by rw [ha1]; exact (hall d (by simp [Blk.tree])).1) (by rw [hb1]; exact hnv)⟩
             | succ f =>
               obtain ⟨_, hp⟩ := push_take hi hanch hy hly htyy hpa htk
               obtain ⟨a', hfr⟩ := frees_exists hp.wf m1.alloc hp.nd (fun i hi' => (hp.al i hi').1)
@@ -256,6 +258,7 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
     -- checked out or (`chan_recv`) its queue is empty and open
     obtain ⟨o, k, hv⟩ := hi.lk_slot ha hl hty
     obtain ⟨ob, hk⟩ := hi.lk_val ha hl hty hv
+    have hnv : ¬ HasView m.blk k := fun h => hnb ⟨o, k, .int, hv, Or.inr (Or.inr h)⟩
     cases ob with
     | none => exact absurd ⟨o, k, _, hv, Or.inl hk⟩ hnb
     | some p =>
@@ -272,27 +275,29 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
             cases es with
             | cons v es =>
               have hd : m.alloc d = true := (hall d (by simp [Blk.tree])).1
-              exact ⟨_, EvalR.chanRecv hv hk hc hd⟩
+              exact ⟨_, EvalR.chanRecv hv hk hc hd hnv⟩
             | nil =>
               by_cases hb : w = true ∧ f = 0
               · obtain ⟨rfl, rfl⟩ := hb
-                exact absurd ⟨o, k, _, hv, Or.inr ⟨rfl, _, _, _, hk⟩⟩ hnb
+                exact absurd ⟨o, k, _, hv, Or.inr (Or.inl ⟨rfl, _, _, _, hk⟩)⟩ hnb
               · exact ⟨_, EvalR.chanRecvNone hv hk hc (by cases w <;> simp_all)⟩
   | chanClose ha hl hty =>
     obtain ⟨o, k, hv⟩ := hi.lk_slot ha hl hty
     obtain ⟨ob, hk⟩ := hi.lk_val ha hl hty hv
+    have hnv : ¬ HasView m.blk k := fun h => hnb ⟨o, k, .int, hv, Or.inr h⟩
     cases ob with
-    | none => exact absurd ⟨o, k, _, hv, hk⟩ hnb
+    | none => exact absurd ⟨o, k, _, hv, Or.inl hk⟩ hnb
     | some p =>
       obtain ⟨_, _, hpay, _⟩ := hi.blocks k _ hk
       obtain ⟨hw, _⟩ := hpay p rfl
       cases hw with
       | pair _ hf =>
         cases hf with
-        | int => exact ⟨_, EvalR.chanClose hv hk⟩
+        | int => exact ⟨_, EvalR.chanClose hv hk hnv⟩
   | arcGet ha hl hty _ _ =>
     obtain ⟨o, k, p, hv⟩ := hi.arc_slot ha hl hty
-    exact ⟨_, EvalR.arcGet hv (hi.arc_val ha hl hty hv).1⟩
+    obtain ⟨bl, hbl, _⟩ := (hi.arc_val ha hl hty hv).1.rd
+    exact ⟨_, EvalR.arcGet hv hbl⟩
 
 /-- A part of a tree whose addresses are distinct has distinct addresses. -/
 theorem Sub.nodup {a b : Val} (h : Sub a b) (hn : b.ids.Nodup) : a.ids.Nodup := by
@@ -447,9 +452,12 @@ theorem progress {P : Prog}
       have := hi.dom x; rw [hx] at this; cases h : m.st x <;> simp_all
     obtain ⟨o, kk, hv⟩ := hi.lk_slot ha hla hta
     obtain ⟨ob, hk⟩ := hi.lk_val ha hla hta hv
+    -- A3.3: a writer also waits while a view of the block lives
+    by_cases hnv : HasView m.blk kk
+    · exact Or.inr (Or.inl ⟨o, kk, t, hv, Or.inr hnv⟩)
     cases ob with
-    | none => exact Or.inr (Or.inl ⟨o, kk, t, hv, hk⟩)
-    | some w => exact Or.inr <| Or.inr ⟨_, Step.withLock hv hk hmx⟩
+    | none => exact Or.inr (Or.inl ⟨o, kk, t, hv, Or.inl hk⟩)
+    | some w => exact Or.inr <| Or.inr ⟨_, Step.withLock hv hk hmx hnv⟩
   | @scopeL Γ Δ1 F kk t x k hxE _ _ _ ih =>
     intro m hcd hi
     obtain ⟨Ex, hx, hnrb, _⟩ := hxE

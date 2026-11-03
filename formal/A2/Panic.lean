@@ -45,7 +45,7 @@ theorem HeapOK.release_put {m : Mem} (hh : HeapOK m) {k : Nat} {t : Ty} {x : Var
     · exact Or.inr ⟨he, by simpa [upd, he] using h⟩
   refine ⟨fun o U h => hh.nodup o U (hown o U h).2,
     fun o1 o2 U1 U2 hne h1 h2 => hh.disj o1 o2 U1 U2 hne (hown o1 U1 h1).2 (hown o2 U2 h2).2,
-    fun o U h => hh.alloc o U (hown o U h).2, fun o U h => hh.self o U (hown o U h).2, ?_⟩
+    fun o U h => hh.alloc o U (hown o U h).2, fun o U h => hh.self o U (hown o U h).2, ?_, hh.views.setLock hk (hh.views.noView hk) _⟩
   intro k' bl hk'
   rcases hcases k' bl hk' with ⟨rfl, rfl⟩ | ⟨hne, h⟩
   · refine ⟨hkey, hnd, fun i hi => ⟨(hal i hi).1, (hal i hi).2,
@@ -83,7 +83,8 @@ theorem HeapOK.remove_keep {m : Mem} (hh : HeapOK m) (x : Var) : HeapOK (m.remov
   exact ⟨fun o U h => hh.nodup o U (hown o U h).2,
     fun o1 o2 U1 U2 hne h1 h2 => hh.disj o1 o2 U1 U2 hne (hown o1 U1 h1).2 (hown o2 U2 h2).2,
     fun o U h => hh.alloc o U (hown o U h).2, fun o U h => hh.self o U (hown o U h).2,
-    hh.blk.frame rfl (Nat.le_refl _) (fun _ _ => rfl) (fun o U h i hi => hh.notPay (hown o U h).2 hi)⟩
+    hh.blk.frame rfl (Nat.le_refl _) (fun _ _ => rfl) (fun o U h i hi => hh.notPay (hown o U h).2 hi),
+    hh.views⟩
 
 /-- **A3.2: the end of a lock scope that gives the payload back.** `x`'s slot
     is gone and what borrows from it ends, as at a scope's end; its tree,

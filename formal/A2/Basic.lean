@@ -115,42 +115,134 @@ theorem Sub.trans {a b c : Val} (h1 : Sub a b) (h2 : Sub b c) : Sub a c := by
 
 /-! ### A3.2: what a block owns, and what its holders read -/
 
-@[simp] theorem Blk.tree_some (t : Ty) (k : BKind) (p : Val) : (Blk.mk t k (some p)).tree = p := rfl
-@[simp] theorem Blk.tree_none (t : Ty) (k : BKind) : (Blk.mk t k none).tree = .int 0 := rfl
-@[simp] theorem Blk.rd_arc (t : Ty) (p : Option Val) : (Blk.mk t .arc p).rd = (Blk.mk t .arc p).tree :=
-  rfl
+@[simp] theorem Blk.tree_arc (t : Ty) (p : Option Val) : (Blk.mk t .arc p).tree = p.getD (.int 0) := rfl
+@[simp] theorem Blk.tree_lock (t : Ty) (p : Option Val) : (Blk.mk t .lock p).tree = p.getD (.int 0) := rfl
+@[simp] theorem Blk.tree_view (t : Ty) (p : Option Val) : (Blk.mk t .view p).tree = .int 0 := rfl
+@[simp] theorem Blk.tree_none (t : Ty) (k : BKind) : (Blk.mk t k none).tree = .int 0 := by
+  cases k <;> rfl
+@[simp] theorem Blk.rd_arc (t : Ty) (p : Option Val) : (Blk.mk t .arc p).rd = p.getD (.int 0) := rfl
 @[simp] theorem Blk.rd_lock (t : Ty) (p : Option Val) : (Blk.mk t .lock p).rd = .int 0 := rfl
+@[simp] theorem Blk.rd_view (t : Ty) (p : Option Val) : (Blk.mk t .view p).rd = p.getD (.int 0) := rfl
 
 theorem Sub.int_eq {n : Val} {j : Nat} (h : Sub n (.int j)) : n = .int j := by
   cases h; rfl
 
-/-- What a block's holders read lies in what it owns. -/
-theorem Blk.rd_ids (bl : Blk) {i : Nat} (h : i ∈ bl.rd.ids) : i ∈ bl.tree.ids := by
-  obtain ⟨t, k, p⟩ := bl
-  cases k with
-  | arc => exact h
-  | lock => simp [Blk.rd] at h
+theorem Sub.lk_eq {n : Val} {j : Nat} (h : Sub n (.lk j)) : n = .lk j := by
+  cases h; rfl
 
 /-- What lies in a block's tree lies in its payload, or is the nothing a
-    checked-out lock owns. -/
+    checked-out lock (or, A3.3, a view) owns. -/
 theorem Blk.sub_tree {bl : Blk} {n : Val} (h : Sub n bl.tree) :
     (∃ p, bl.pay = some p ∧ Sub n p) ∨ n = .int 0 := by
   obtain ⟨t, k, p⟩ := bl
   cases p with
-  | none => exact Or.inr h.int_eq
-  | some p => exact Or.inl ⟨p, rfl, h⟩
+  | none => rw [Blk.tree_none] at h; exact Or.inr h.int_eq
+  | some p =>
+    cases k with
+    | view => exact Or.inr h.int_eq
+    | arc => exact Or.inl ⟨p, rfl, h⟩
+    | lock => exact Or.inl ⟨p, rfl, h⟩
 
-/-- What a block's holders read lies in an `arc` block's payload, or is
-    nothing. -/
+/-- What a block's holders read lies in an `arc` block's or (A3.3) a view's
+    payload, or is nothing. -/
 theorem Blk.sub_rd {bl : Blk} {n : Val} (h : Sub n bl.rd) :
-    (bl.kind = .arc ∧ ∃ p, bl.pay = some p ∧ Sub n p) ∨ n = .int 0 := by
+    (bl.kind ≠ .lock ∧ ∃ p, bl.pay = some p ∧ Sub n p) ∨ n = .int 0 := by
   obtain ⟨t, k, p⟩ := bl
   cases k with
   | lock => exact Or.inr h.int_eq
   | arc =>
-    rcases Blk.sub_tree h with ⟨q, hq, hs⟩ | h
-    · exact Or.inl ⟨rfl, q, hq, hs⟩
-    · exact Or.inr h
+    cases p with
+    | none => exact Or.inr h.int_eq
+    | some q => exact Or.inl ⟨by simp, q, rfl, h⟩
+  | view =>
+    cases p with
+    | none => exact Or.inr h.int_eq
+    | some q => exact Or.inl ⟨by simp, q, rfl, h⟩
+
+/-- A3.3: a new block that is no view, at a fresh key, keeps every view's
+    lock block. -/
+theorem ViewsAt.fresh {B : Nat → Option Blk} (h : ViewsAt B) {n : Nat} (hn : B n = none) {bl : Blk}
+    (hbl : bl.kind ≠ .view) : ViewsAt (upd B n (some bl)) := by
+  intro k' b hk' hv
+  by_cases he : k' = n
+  · subst he; simp at hk'; subst hk'; exact absurd hv hbl
+  · rw [upd_ne _ _ he] at hk'
+    obtain ⟨k, t, p, rfl, hk⟩ := h k' _ hk' hv
+    have hkn : k ≠ n := fun e => by rw [e, hn] at hk; cases hk
+    exact ⟨k, t, p, rfl, by rw [upd_ne _ _ hkn]; exact hk⟩
+
+/-- A3.3: a lock block no view reads may have its payload changed, checked
+    out or given back: the views read what they read. -/
+theorem ViewsAt.setLock {B : Nat → Option Blk} (h : ViewsAt B) {k : Nat} {t : Ty} {o : Option Val}
+    (hk : B k = some ⟨t, .lock, o⟩) (hnv : ¬ HasView B k) (o' : Option Val) :
+    ViewsAt (upd B k (some ⟨t, .lock, o'⟩)) := by
+  intro k' b hk' hv
+  by_cases he : k' = k
+  · subst he; simp at hk'; subst hk'; cases hv
+  · rw [upd_ne _ _ he] at hk'
+    obtain ⟨k0, t0, p, rfl, hk0⟩ := h k' _ hk' hv
+    have hkn : k0 ≠ k := fun e => by subst e; exact hnv ⟨k', _, p, hk'⟩
+    exact ⟨k0, t0, p, rfl, by rw [upd_ne _ _ hkn]; exact hk0⟩
+
+/-- A3.3: a lock block whose payload is checked out has no view. -/
+theorem ViewsAt.noView {B : Nat → Option Blk} (h : ViewsAt B) {k : Nat} {t : Ty}
+    (hk : B k = some ⟨t, .lock, none⟩) : ¬ HasView B k := by
+  rintro ⟨k', t', p, hk'⟩
+  obtain ⟨k0, t0, q, he, hk0⟩ := h k' _ hk' rfl
+  simp only [Blk.mk.injEq, Option.some.injEq, Val.pair.injEq, Val.lk.injEq] at he
+  obtain ⟨_, _, rfl, _⟩ := he
+  rw [hk] at hk0; cases hk0
+
+/-- A3.3: a view's payload: a share of its lock block, and that block's
+    payload. -/
+theorem ViewsAt.view {B : Nat → Option Blk} (hv : ViewsAt B) {k : Nat} {t : Ty} {p : Option Val}
+    (hk : B k = some ⟨t, .view, p⟩) :
+    ∃ k0 t0 q, t = .prod (.lk t0) t0 ∧ p = some (.pair (.lk k0) q) ∧ B k0 = some ⟨t0, .lock, some q⟩ := by
+  obtain ⟨k0, t0, q, he, hk0⟩ := hv k _ hk rfl
+  simp only [Blk.mk.injEq] at he
+  exact ⟨k0, t0, q, he.1, he.2.2, hk0⟩
+
+theorem HeapOK.view {m : Mem} (hh : HeapOK m) {k : Nat} {t : Ty} {p : Option Val}
+    (hk : m.blk k = some ⟨t, .view, p⟩) :
+    ∃ k0 t0 q, t = .prod (.lk t0) t0 ∧ p = some (.pair (.lk k0) q) ∧ m.blk k0 = some ⟨t0, .lock, some q⟩ :=
+  hh.views.view hk
+
+/-- A3.3: what a block's holders read lies in what some block owns: its own
+    tree, or a view's lock block's. -/
+theorem ViewsAt.rd_ids {B : Nat → Option Blk} (hv : ViewsAt B) {k : Nat} {bl : Blk} (hk : B k = some bl)
+    {i : Nat} (h : i ∈ bl.rd.ids) : ∃ k0 bl0, B k0 = some bl0 ∧ i ∈ bl0.tree.ids := by
+  obtain ⟨t, kd, p⟩ := bl
+  cases kd with
+  | arc => exact ⟨k, _, hk, h⟩
+  | lock => simp [Blk.rd] at h
+  | view =>
+    obtain ⟨k0, t0, q, rfl, rfl, hk0⟩ := hv.view hk
+    refine ⟨k0, _, hk0, ?_⟩
+    simp only [Blk.rd_view, Option.getD_some, Val.ids, List.mem_append] at h
+    rcases h with h | h
+    · simp at h
+    · simpa using h
+
+theorem HeapOK.rd_ids {m : Mem} (hh : HeapOK m) {k : Nat} {bl : Blk} (hk : m.blk k = some bl) {i : Nat}
+    (h : i ∈ bl.rd.ids) : PayAddr m i := hh.views.rd_ids hk h
+
+/-- A3.3: ... and the block that owns it is reached when the one read is: a
+    view reaches its lock block (its payload holds a share of it). -/
+theorem ViewsAt.rd_reached {B : Nat → Option Blk} (hv : ViewsAt B) {R : Val → Prop} {k : Nat} {bl : Blk}
+    (hk : B k = some bl) {i : Nat} (h : i ∈ bl.rd.ids) (hr : Reached R B k) :
+    ∃ k0 bl0, B k0 = some bl0 ∧ i ∈ bl0.tree.ids ∧ Reached R B k0 := by
+  obtain ⟨t, kd, p⟩ := bl
+  cases kd with
+  | arc => exact ⟨k, _, hk, h, hr⟩
+  | lock => simp [Blk.rd] at h
+  | view =>
+    obtain ⟨k0, t0, q, rfl, rfl, hk0⟩ := hv.view hk
+    refine ⟨k0, _, hk0, ?_, .pay hr hk (Or.inl ⟨none, Sub.fst (Sub.refl _)⟩)⟩
+    simp only [Blk.rd_view, Option.getD_some, Val.ids, List.mem_append] at h
+    rcases h with h | h
+    · simp at h
+    · simpa using h
+
 
 theorem Below.sub {n t : Val} (h : Below n t) : Sub n t := by
   obtain ⟨e, hc, hs⟩ := h
@@ -293,26 +385,45 @@ theorem owned_unique {m : Mem} (hh : HeapOK m) {x y : Var} {t u n1 n2 : Val}
   subst htu
   exact ⟨rfl, sub_unique (hh.nodup x t hx) h1 h2 hi1 hi2⟩
 
+/-- A3.3: a part with a head address of what a block's holders read is a part
+    of what some block owns. -/
+theorem HeapOK.rd_sub {m : Mem} (hh : HeapOK m) {k : Nat} {bl : Blk} (hk : m.blk k = some bl) {n : Val}
+    (h : Sub n bl.rd) {i : Nat} (hi : i ∈ n.head) : ∃ k0 bl0, m.blk k0 = some bl0 ∧ Sub n bl0.tree := by
+  obtain ⟨t, kd, p⟩ := bl
+  cases kd with
+  | arc => exact ⟨k, _, hk, h⟩
+  | lock => rw [Blk.rd_lock] at h; rw [h.int_eq] at hi; simp [Val.head] at hi
+  | view =>
+    obtain ⟨k0, t0, q, rfl, rfl, hk0⟩ := hh.view hk
+    refine ⟨k0, _, hk0, ?_⟩
+    simp only [Blk.rd_view, Option.getD_some] at h
+    simp only [Blk.tree_lock, Option.getD_some]
+    cases h with
+    | refl => simp [Val.head] at hi
+    | fst h1 => rw [h1.lk_eq] at hi; simp [Val.head] at hi
+    | snd h1 => exact h1
+
 /-- A3.1: two parts of payloads sharing a head address are the same part
     (a block owns its payload, `BlkOwn`). -/
 theorem pay_unique {m : Mem} (hh : HeapOK m) {k1 k2 : Nat} {b1 b2 : Blk} (hk1 : m.blk k1 = some b1)
     (hk2 : m.blk k2 = some b2) {n1 n2 : Val} (h1 : Sub n1 b1.rd) (h2 : Sub n2 b2.rd) {i : Nat}
     (hi1 : i ∈ n1.head) (hi2 : i ∈ n2.head) : n1 = n2 := by
-  have hk : k1 = k2 := by
+  -- A3.3: what holders read is part of what some block owns
+  obtain ⟨j1, c1, hj1, hs1⟩ := hh.rd_sub hk1 h1 hi1
+  obtain ⟨j2, c2, hj2, hs2⟩ := hh.rd_sub hk2 h2 hi2
+  have hk : j1 = j2 := by
     refine Classical.byContradiction fun hne => ?_
-    exact ((hh.blk k1 b1 hk1).2.2 i (b1.rd_ids (h1.ids i (Val.head_ids _ i hi1)))).2.2.2 k2 b2
-      (Ne.symm hne) hk2 (b2.rd_ids (h2.ids i (Val.head_ids _ i hi2)))
-  subst hk; rw [hk1] at hk2; cases hk2
-  obtain ⟨t, k, p⟩ := b1
-  cases k with
-  | arc => exact sub_unique (hh.blk k1 _ hk1).2.1 h1 h2 hi1 hi2
-  | lock => rw [h1.int_eq] at hi1; simp [Val.head] at hi1
+    exact ((hh.blk j1 c1 hj1).2.2 i (hs1.ids i (Val.head_ids _ i hi1))).2.2.2 j2 c2
+      (Ne.symm hne) hj2 (hs2.ids i (Val.head_ids _ i hi2))
+  subst hk; rw [hj1] at hj2; cases hj2
+  exact sub_unique (hh.blk j1 _ hj1).2.1 hs1 hs2 hi1 hi2
 
 /-- A3.1: no owned tree and no payload share a head address. -/
 theorem owned_pay_head {m : Mem} (hh : HeapOK m) {x : Var} {t : Val} (hx : OwnedAt m x t) {k : Nat}
     {bl : Blk} (hk : m.blk k = some bl) {n1 n2 : Val} (h1 : Sub n1 t) (h2 : Sub n2 bl.rd) {i : Nat}
-    (hi1 : i ∈ n1.head) (hi2 : i ∈ n2.head) : False :=
-  ((hh.blk k bl hk).2.2 i (bl.rd_ids (h2.ids i (Val.head_ids _ i hi2)))).2.2.1 x t hx
+    (hi1 : i ∈ n1.head) (hi2 : i ∈ n2.head) : False := by
+  obtain ⟨j, c, hj, hs⟩ := hh.rd_sub hk h2 hi2
+  exact ((hh.blk j c hj).2.2 i (hs.ids i (Val.head_ids _ i hi2))).2.2.1 x t hx
     (h1.ids i (Val.head_ids _ i hi1))
 
 theorem nodeAt_unique {m : Mem} (hh : HeapOK m) {c : Nat} {n1 n2 : Val}

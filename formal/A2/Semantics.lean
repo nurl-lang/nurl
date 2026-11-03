@@ -54,15 +54,26 @@ inductive Repl (n n' : Val) : Val → Val → Prop
 /-- A3.2: the tree a block owns: its payload, or nothing (`.int 0`, which
     owns no address and holds no handle or share) while a `lock` block's
     payload is checked out. -/
-def Blk.tree (bl : Blk) : Val := bl.pay.getD (.int 0)
+def Blk.tree (bl : Blk) : Val :=
+  match bl.kind with
+  | .view => .int 0   -- A3.3: a view owns nothing (its lock block owns what it reads)
+  | _ => bl.pay.getD (.int 0)
 
 /-- A3.2: the payload a block's holders read: an `arc` block's.  No one
     reads a `lock` block's payload while it is in the block, so nothing
-    (`.int 0`) is read of it. -/
+    (`.int 0`) is read of it.  A3.3: a view's holders read its payload (the
+    share of its lock block, and that block's payload). -/
 def Blk.rd (bl : Blk) : Val :=
   match bl.kind with
   | .arc => bl.tree
   | .lock => .int 0
+  | .view => bl.pay.getD (.int 0)
+
+/-- A3.3: a view of lock block `k` lives (a read guard of an `RwLocked`): its
+    payload is read, so whatever would change it waits (a writer's
+    `withLock`, and an atomic or channel step on the block). -/
+def HasView (B : Nat → Option Blk) (k : Nat) : Prop :=
+  ∃ k' t p, B k' = some ⟨t, .view, some (.pair (.lk k) p)⟩
 
 /-- The node with control block `c`, found in an owned tree, or (A3.1) in a
     live block's payload that its holders read (an `arc` block's, A3.2),
@@ -363,7 +374,7 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
       checked out.) -/
   | atomic {op : AOp} {a : Var} {e1 e2 : Expr} {o : Bool} {k n n1 n2 : Nat} :
       m.st a = some ⟨o, some (.lk k)⟩ → m.blk k = some ⟨.int, .lock, some (.int n)⟩ →
-      Eval m e1 n1 → Eval m e2 n2 →
+      Eval m e1 n1 → Eval m e2 n2 → ¬ HasView m.blk k →
       EvalR m (.atomic op a e1 e2)
         (.ok (.int (op.run n n1 n2).1) false
           { m with blk := upd m.blk k (some ⟨.int, .lock, some (.int (op.run n n1 n2).2)⟩) })
@@ -376,7 +387,7 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
       {m1 : Mem} :
       m.st a = some ⟨o, some (.lk k)⟩ → TakeVal m y v m1 →
       m1.blk k = some ⟨t, .lock, some (.pair (.node u c d es) (.int 0))⟩ →
-      m1.alloc c = true → m1.alloc d = true →
+      m1.alloc c = true → m1.alloc d = true → ¬ HasView m1.blk k →
       EvalR m (.chanSend a y)
         (.ok (.int 1) false
           { m1 with blk := upd m1.blk k (some ⟨t, .lock, some (.pair (.node u c d (es ++ [v])) (.int 0))⟩) })
@@ -396,7 +407,7 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
       {es : List Val} :
       m.st a = some ⟨o, some (.lk k)⟩ →
       m.blk k = some ⟨t, .lock, some (.pair (.node u c d (v :: es)) (.int f))⟩ →
-      m.alloc c = true → m.alloc d = true →
+      m.alloc c = true → m.alloc d = true → ¬ HasView m.blk k →
       EvalR m (.chanRecv w a)
         (.ok (.inr v) true { m with blk := upd m.blk k (some ⟨t, .lock, some (.pair (.node u c d es) (.int f))⟩) })
   /-- ... `none` when the queue is empty and the flag set, or
@@ -409,6 +420,7 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
       drain. -/
   | chanClose {a : Var} {o : Bool} {k : Nat} {t : Ty} {q : Val} {f : Nat} :
       m.st a = some ⟨o, some (.lk k)⟩ → m.blk k = some ⟨t, .lock, some (.pair q (.int f))⟩ →
+      ¬ HasView m.blk k →
       EvalR m (.chanClose a)
         (.ok (.int 0) false { m with blk := upd m.blk k (some ⟨t, .lock, some (.pair q (.int 1))⟩) })
 
@@ -736,6 +748,7 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
       (`Blocked`). -/
   | withLock {m : Mem} {a x : Var} {s : Stmt} {o : Bool} {k : Nat} {t : Ty} {v : Val} :
       m.st a = some ⟨o, some (.lk k)⟩ → m.blk k = some ⟨t, .lock, some v⟩ → m.st x = none →
+      ¬ HasView m.blk k →
       Step P m (.withLock a x s)
         (.ok ({ m with blk := upd m.blk k (some ⟨t, .lock, none⟩) }.set x ⟨v.owns, some v⟩)
           (.scopeL k t x s))
@@ -770,12 +783,16 @@ inductive Steps0 (P : Prog) : Mem → Stmt → Res → Prop
     lock block whose payload a `withLock` has checked out; a channel
     operation on one too, or a `chan_recv` on an empty, open queue. -/
 def RBlocked (m : Mem) : Rhs → Prop
-  | .atomic _ a _ _ => ∃ o k, m.st a = some ⟨o, some (.lk k)⟩ ∧ m.blk k = some ⟨.int, .lock, none⟩
-  | .chanSend a _ => ∃ o k t, m.st a = some ⟨o, some (.lk k)⟩ ∧ m.blk k = some ⟨t, .lock, none⟩
+  | .atomic _ a _ _ => ∃ o k, m.st a = some ⟨o, some (.lk k)⟩ ∧
+      (m.blk k = some ⟨.int, .lock, none⟩ ∨ HasView m.blk k)
+  | .chanSend a _ => ∃ o k t, m.st a = some ⟨o, some (.lk k)⟩ ∧
+      (m.blk k = some ⟨t, .lock, none⟩ ∨ HasView m.blk k)
   | .chanRecv w a => ∃ o k t, m.st a = some ⟨o, some (.lk k)⟩ ∧
       (m.blk k = some ⟨t, .lock, none⟩ ∨
-        (w = true ∧ ∃ u c d, m.blk k = some ⟨t, .lock, some (.pair (.node u c d []) (.int 0))⟩))
-  | .chanClose a => ∃ o k t, m.st a = some ⟨o, some (.lk k)⟩ ∧ m.blk k = some ⟨t, .lock, none⟩
+        (w = true ∧ ∃ u c d, m.blk k = some ⟨t, .lock, some (.pair (.node u c d []) (.int 0))⟩) ∨
+        HasView m.blk k)
+  | .chanClose a => ∃ o k t, m.st a = some ⟨o, some (.lk k)⟩ ∧
+      (m.blk k = some ⟨t, .lock, none⟩ ∨ HasView m.blk k)
   | _ => False
 
 /-- A3.2: the next step takes a lock whose payload is checked out: the
@@ -783,7 +800,8 @@ def RBlocked (m : Mem) : Rhs → Prop
     freedom, which is not claimed.)  A3.4: or a right-hand side waits
     (`RBlocked`). -/
 def Blocked (m : Mem) : Stmt → Prop
-  | .withLock a _ _ => ∃ o k t, m.st a = some ⟨o, some (.lk k)⟩ ∧ m.blk k = some ⟨t, .lock, none⟩
+  | .withLock a _ _ => ∃ o k t, m.st a = some ⟨o, some (.lk k)⟩ ∧
+      (m.blk k = some ⟨t, .lock, none⟩ ∨ HasView m.blk k)
   | .letv _ r _ => RBlocked m r
   | .assign _ r => RBlocked m r
   | .letd _ _ r _ => RBlocked m r

@@ -134,7 +134,7 @@ theorem inv_empty {s : Stmt} {nv : Nat} (hs : s.src = true) (hv : ∀ v ∈ s.va
   dom _ := rfl
   slot _ _ h := by cases h
   heap := ⟨fun _ _ h => (by cases h), fun _ _ _ _ _ h => (by cases h), fun _ _ h => (by cases h),
-    fun _ _ h => (by cases h), fun _ _ h => (by cases h)⟩
+    fun _ _ h => (by cases h), fun _ _ h => (by cases h), fun _ _ h => (by cases h)⟩
   nvSt _ h := by cases h
   noInout _ _ _ h := by cases h
   wf := ⟨fun _ _ h => (by cases h), fun _ _ h => (by cases h), fun _ _ h => (by cases h),

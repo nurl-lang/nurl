@@ -517,7 +517,7 @@ theorem Avoids.mono3 {m m' : Mem} {a2 : Nat → Bool} {n : Nat} (hav : Avoids m 
   · exact hav i h
   · exact hf i h
   · obtain ⟨k, bl, hk, hik⟩ := h
-    exact hpo i ⟨k, bl, hk, hik⟩
+    exact hpo i (.inl ⟨k, bl, hk, hik⟩)
 
 theorem TakeVal.avoids {m m1 : Mem} {y : Var} {v : Val} (h : TakeVal m y v m1) (hb : BorFree m)
     {a2 : Nat → Bool} (hav : Avoids m a2) : Avoids m1 a2 ∧ ∀ i ∈ v.ids, a2 i = false :=

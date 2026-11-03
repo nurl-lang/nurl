@@ -57,7 +57,7 @@ theorem VecOf.restrict {m : Mem} {x : Var} {t : Ty} {c d : Nat} {es : List Val}
     rcases hx with hx | ⟨_, ⟨y, u, hy, hs, _⟩ | ⟨k, bl, hk, hs, _⟩⟩
     · exact ⟨hav c (OwnedId.of_slot hx (by simp)), hav d (OwnedId.of_slot hx (by simp))⟩
     · exact ⟨hav c (OwnedId.of_slot hy (hs.ids c (by simp))), hav d (OwnedId.of_slot hy (hs.ids d (by simp)))⟩
-    · exact ⟨hp c ⟨k, bl, hk, bl.rd_ids (hs.ids c (by simp))⟩, hp d ⟨k, bl, hk, bl.rd_ids (hs.ids d (by simp))⟩⟩
+    · exact ⟨hp c (.inr ⟨k, bl, hk, hs.ids c (by simp)⟩), hp d (.inr ⟨k, bl, hk, hs.ids d (by simp)⟩)⟩
   exact ⟨minus_true hc ho.1, minus_true hd ho.2, hx⟩
 
 /-- The node a binding names is in an owned tree: its addresses are live
@@ -152,7 +152,7 @@ theorem EvalR.restrict {m : Mem} {r : Rhs} {res : RRes} (h : EvalR m r res) {a2 
     have ho : a2 d = false := by
       rcases hda with ⟨x, u, hx, hs, _⟩ | ⟨k, bl, hk, hs, _⟩
       · exact hav d (OwnedId.of_slot hx (hs.ids d (by simp)))
-      · exact hp d ⟨k, bl, hk, bl.rd_ids (hs.ids d (by simp))⟩
+      · exact hp d (.inr ⟨k, bl, hk, hs.ids d (by simp)⟩)
     exact ⟨_, .sat hn hy (Eval.restrict he hav hp) hl (minus_true hd ho) hda, rfl, rfl, rfl⟩
   | satOOB hy he hn => exact ⟨_, .satOOB hy (Eval.restrict he hav hp) hn, trivial⟩
   | pop hy hc hd =>
@@ -177,24 +177,24 @@ theorem EvalR.restrict {m : Mem} {r : Rhs} {res : RRes} (h : EvalR m r res) {a2 
   | lockNew h1 hfr => exact ⟨_, .lockNew (TakeVal.restrict h1 a2) hfr, rfl, rfl, rfl⟩
   | arcClone hy => exact ⟨_, .arcClone hy, rfl, rfl, rfl⟩
   | lockClone hy => exact ⟨_, .lockClone hy, rfl, rfl, rfl⟩
-  | atomic hy hk h1 h2 =>
-    exact ⟨_, .atomic hy hk (Eval.restrict h1 hav hp) (Eval.restrict h2 hav hp), rfl, rfl, rfl⟩
+  | atomic hy hk h1 h2 hnv =>
+    exact ⟨_, .atomic hy hk (Eval.restrict h1 hav hp) (Eval.restrict h2 hav hp) hnv, rfl, rfl, rfl⟩
   -- A3.4: the queue's addresses are the channel's payload's; what a send to a
   -- closed channel drops is the thread's own
-  | @chanSend _ _ _ k _ _ _ _ _ _ _ hy h1 hk hc hd =>
+  | @chanSend _ _ _ k _ _ _ _ _ _ _ hy h1 hk hc hd hnv =>
     have hk0 := hk
     rw [TakeVal.blk h1] at hk0
-    exact ⟨_, .chanSend hy (TakeVal.restrict h1 a2) hk (minus_true hc (hp _ ⟨_, _, hk0, by simp [Blk.tree]⟩))
-      (minus_true hd (hp _ ⟨_, _, hk0, by simp [Blk.tree]⟩)), rfl, rfl, rfl⟩
+    exact ⟨_, .chanSend hy (TakeVal.restrict h1 a2) hk (minus_true hc (hp _ (.inl ⟨_, _, hk0, by simp [Blk.tree]⟩)))
+      (minus_true hd (hp _ (.inl ⟨_, _, hk0, by simp [Blk.tree]⟩))) hnv, rfl, rfl, rfl⟩
   | chanSendClosed hy h1 hk hfr =>
     exact ⟨_, .chanSendClosed hy (TakeVal.restrict h1 a2) hk
       (Frees.restrict hfr (TakeVal.avoids h1 hb hav).2), rfl, rfl, rfl⟩
-  | chanRecv hy hk hc hd =>
-    exact ⟨_, .chanRecv hy hk (minus_true hc (hp _ ⟨_, _, hk, by simp [Blk.tree]⟩))
-      (minus_true hd (hp _ ⟨_, _, hk, by simp [Blk.tree]⟩)), rfl, rfl, rfl⟩
+  | chanRecv hy hk hc hd hnv =>
+    exact ⟨_, .chanRecv hy hk (minus_true hc (hp _ (.inl ⟨_, _, hk, by simp [Blk.tree]⟩)))
+      (minus_true hd (hp _ (.inl ⟨_, _, hk, by simp [Blk.tree]⟩))) hnv, rfl, rfl, rfl⟩
   | chanRecvNone hy hk hc hw =>
-    exact ⟨_, .chanRecvNone hy hk (minus_true hc (hp _ ⟨_, _, hk, by simp [Blk.tree]⟩)) hw, rfl, rfl, rfl⟩
-  | chanClose hy hk => exact ⟨_, .chanClose hy hk, rfl, rfl, rfl⟩
+    exact ⟨_, .chanRecvNone hy hk (minus_true hc (hp _ (.inl ⟨_, _, hk, by simp [Blk.tree]⟩))) hw, rfl, rfl, rfl⟩
+  | chanClose hy hk hnv => exact ⟨_, .chanClose hy hk hnv, rfl, rfl, rfl⟩
   | arcGet hy hk => exact ⟨_, .arcGet hy hk, rfl, rfl, rfl⟩
 
 theorem EvalR.restrict_ok {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.ok v o m1))
@@ -374,7 +374,7 @@ theorem Step.restrict {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
     obtain rfl := ResDown.panic_inv hd
     exact ⟨_, .scopeDPMoved h1 hx, rfl⟩
   -- A3.2: taking a lock and giving it back touch no address
-  | withLock ha hk hx => exact ⟨_, .withLock ha hk hx, rfl, .refl _⟩
+  | withLock ha hk hx hnv => exact ⟨_, .withLock ha hk hx hnv, rfl, .refl _⟩
   | scopeLIn _ ih =>
     obtain ⟨r1, h1, hd⟩ := ih
     obtain ⟨s1, rfl, hg⟩ := ResDown.ok_inv hd

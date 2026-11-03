@@ -26,7 +26,9 @@ def OwnedId (m : Mem) (i : Nat) : Prop := ∃ x t, OwnedAt m x t ∧ i ∈ t.ids
 /-- A3.1: a part holding none of the store's payload addresses: the frame
     layer takes it out of the address space, and a node a step finds in a
     payload (`NodeAt`, `DataAt`) keeps its addresses live. -/
-def PayOff (m : Mem) (a2 : Nat → Bool) : Prop := ∀ i, PayAddr m i → a2 i = false
+def PayOff (m : Mem) (a2 : Nat → Bool) : Prop :=
+  ∀ i, (PayAddr m i ∨ ∃ k bl, m.blk k = some bl ∧ i ∈ bl.rd.ids) → a2 i = false
+  -- A3.3: or one a block's holders read (a view's are its lock block's)
 
 /-- No owned tree of `m` has an address of `a2`. -/
 def Avoids (m : Mem) (a2 : Nat → Bool) : Prop := ∀ i, OwnedId m i → a2 i = false

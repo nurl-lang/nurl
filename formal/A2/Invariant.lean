@@ -65,11 +65,18 @@ inductive ArcIn : Ty → Val → Ty → Nat → Option Val → Prop
   | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {x : Val} {cs : List (Var × PMode × Ty)} {u : Ty}
       {k : Nat} {p : Option Val} : ArcIn te x u k p → ArcIn (.fn ms) (.pkg fs te ms x cs) u k p
 
+/-- A3.3: a block an `arc` share names: an `arc` block holding `p`, or a
+    view of a lock block (`rw_read`'s guard), whose payload `p` is a share of
+    the lock block and that block's payload.  Both are frozen while they
+    live. -/
+def ArcBlk (b : Option Blk) (u : Ty) (p : Val) : Prop :=
+  b = some ⟨u, .arc, some p⟩ ∨ b = some ⟨u, .view, some p⟩
+
 /-- A3.2: what a share asks of its block: an `arc` share (carrying `some p`)
     an `arc` block holding `p`, a lock share (`none`) a lock block of its
     payload's type, holding its payload or not. -/
 def ShareFits (b : Option Blk) (u : Ty) : Option Val → Prop
-  | some p => b = some ⟨u, .arc, some p⟩
+  | some p => ArcBlk b u p
   | none => ∃ o, b = some ⟨u, .lock, o⟩
 
 /-- A3.1: every share a tree holds names a block of the store `B` that
@@ -85,18 +92,19 @@ def SharesOK (m : Mem) (τ : Ty) (T : Val) : Prop := SharesIn m.blk τ T
 /-- A3.2: what a later store keeps of a block, as its holders see it: an
     `arc` block as it was, a `lock` block as a lock block of the same type
     (its payload, which no one reads, may have been checked out or back in). -/
-def BlkKeep (bl bl' : Blk) : Prop := bl'.ty = bl.ty ∧ bl'.kind = bl.kind ∧ (bl.kind = .arc → bl' = bl)
+def BlkKeep (bl bl' : Blk) : Prop := bl'.ty = bl.ty ∧ bl'.kind = bl.kind ∧ (bl.kind ≠ .lock → bl' = bl)
 
 theorem BlkKeep.refl (bl : Blk) : BlkKeep bl bl := ⟨rfl, rfl, fun _ => rfl⟩
 
 theorem BlkKeep.trans {b1 b2 b3 : Blk} (h1 : BlkKeep b1 b2) (h2 : BlkKeep b2 b3) : BlkKeep b1 b3 :=
-  ⟨h2.1.trans h1.1, h2.2.1.trans h1.2.1, fun h => (h2.2.2 (h1.2.1.trans h)).trans (h1.2.2 h)⟩
+  ⟨h2.1.trans h1.1, h2.2.1.trans h1.2.1, fun h => (h2.2.2 (by rw [h1.2.1]; exact h)).trans (h1.2.2 h)⟩
 
 /-- What a kept block's holders read is what they read before. -/
 theorem BlkKeep.rd {bl bl' : Blk} (h : BlkKeep bl bl') : bl'.rd = bl.rd := by
   obtain ⟨_, hk, ha⟩ := h
   cases hkd : bl.kind with
-  | arc => rw [ha hkd]
+  | arc => rw [ha (by rw [hkd]; simp)]
+  | view => rw [ha (by rw [hkd]; simp)]
   | lock =>
     rw [hkd] at hk
     obtain ⟨t, k, p⟩ := bl; obtain ⟨t', k', p'⟩ := bl'
@@ -133,7 +141,25 @@ theorem BlkLe.fresh {B : Nat → Option Blk} {n : Nat} (h : B n = none) (b : Blk
 theorem BlkLe.arc {B B' : Nat → Option Blk} (hb : BlkLe B B') {k : Nat} {t : Ty} {p : Option Val}
     (h : B k = some ⟨t, .arc, p⟩) : B' k = some ⟨t, .arc, p⟩ := by
   obtain ⟨bl', h', hk⟩ := hb k _ h
-  rw [h', hk.2.2 rfl]
+  rw [h', hk.2.2 (by simp)]
+
+/-- ... (A3.3) and so is a view ... -/
+theorem BlkLe.view {B B' : Nat → Option Blk} (hb : BlkLe B B') {k : Nat} {t : Ty} {p : Option Val}
+    (h : B k = some ⟨t, .view, p⟩) : B' k = some ⟨t, .view, p⟩ := by
+  obtain ⟨bl', h', hk⟩ := hb k _ h
+  rw [h', hk.2.2 (by simp)]
+
+theorem ArcBlk.grow {B B' : Nat → Option Blk} (hb : BlkLe B B') {k : Nat} {t : Ty} {p : Val}
+    (h : ArcBlk (B k) t p) : ArcBlk (B' k) t p := by
+  rcases h with h | h
+  · exact Or.inl (hb.arc h)
+  · exact Or.inr (hb.view h)
+
+/-- What the holders of a share read of its block is the payload it carries. -/
+theorem ArcBlk.rd {b : Option Blk} {t : Ty} {p : Val} (h : ArcBlk b t p) : ∃ bl, b = some bl ∧ bl.rd = p := by
+  rcases h with h | h
+  · exact ⟨_, h, rfl⟩
+  · exact ⟨_, h, rfl⟩
 
 /-- ... a lock block as a lock block of its type ... -/
 theorem BlkLe.lock {B B' : Nat → Option Blk} (hb : BlkLe B B') {k : Nat} {t : Ty} {o : Option Val}
@@ -151,7 +177,7 @@ theorem BlkLe.rd {B B' : Nat → Option Blk} (hb : BlkLe B B') {k : Nat} {bl : B
 theorem ShareFits.grow {B B' : Nat → Option Blk} (hb : BlkLe B B') {k : Nat} {u : Ty} {p : Option Val}
     (h : ShareFits (B k) u p) : ShareFits (B' k) u p := by
   cases p with
-  | some p => exact hb.arc h
+  | some p => exact ArcBlk.grow hb h
   | none => obtain ⟨o, h⟩ := h; exact hb.lock h
 
 theorem SharesIn.grow {B B' : Nat → Option Blk} {τ : Ty} {T : Val} (h : SharesIn B τ T) (hb : BlkLe B B') :
@@ -178,7 +204,7 @@ theorem SharesOK.pkg {m : Mem} {fs : List Nat} {te : Ty} {ms : List Nat} {x : Va
     {cs : List (Var × PMode × Ty)} (h : SharesOK m (.fn ms) (.pkg fs te ms x cs)) : SharesOK m te x :=
   fun u k p ha => h u k p (.pkg ha)
 theorem SharesOK.here {m : Mem} {t : Ty} {k : Nat} {p : Val} (h : SharesOK m (.arc t) (.arc k p)) :
-    m.blk k = some ⟨t, .arc, some p⟩ := h t k (some p) .here
+    ArcBlk (m.blk k) t p := h t k (some p) .here
 /-- A3.2: a lock share names a lock block of its type. -/
 theorem SharesOK.lk {m : Mem} {t : Ty} {k : Nat} (h : SharesOK m (.lk t) (.lk k)) :
     ∃ o, m.blk k = some ⟨t, .lock, o⟩ := h t k none .lk
@@ -378,7 +404,7 @@ inductive ValOK (m : Mem) : Ty → Val → List Dep → List Dep → Prop
       type (one that holds no view), and the share lands through a
       dependency, as a `Vec` handle does. -/
   | arc {t : Ty} {k : Nat} {p : Val} {P H : List Dep} :
-      m.blk k = some ⟨t, .arc, some p⟩ → WFv t p → t.holdsView = false →
+      ArcBlk (m.blk k) t p → WFv t p → t.holdsView = false →
       (∃ dep ∈ P, ArcLanded m dep (.arc k p)) →
       ValOK m (.arc t) (.arc k p) P H
   /-- A3.2: a lock share lent: its block is a lock block of its type.  No
@@ -453,6 +479,18 @@ def BlkOwn (m : Mem) : Prop :=
     ∀ i ∈ bl.tree.ids, m.alloc i = true ∧ i < m.nid ∧ (∀ x T, OwnedAt m x T → i ∉ T.ids) ∧
       ∀ k' bl', k' ≠ k → m.blk k' = some bl' → i ∉ bl'.tree.ids
 
+/-- A3.3: every view of a lock block (`rw_read`'s guard) reads the payload
+    its lock block holds now: its payload is a share of that block and the
+    block's payload, at the type `prod (lk t) t`.  (So the block's payload
+    is in, and no writer has it checked out, while a view of it lives.) -/
+def ViewsAt (B : Nat → Option Blk) : Prop :=
+  ∀ k' bl, B k' = some bl → bl.kind = .view →
+    ∃ k t p, bl = ⟨.prod (.lk t) t, .view, some (.pair (.lk k) p)⟩ ∧ B k = some ⟨t, .lock, some p⟩
+
+/-- No view is left of the blocks of a store with no view. -/
+theorem ViewsAt.of_none {B : Nat → Option Blk} (h : ∀ k bl, B k = some bl → bl.kind ≠ .view) : ViewsAt B :=
+  fun k bl hk hv => absurd hv (h k bl hk)
+
 /-- One owner per allocation, every owned address is live, and no owned tree
     views itself. -/
 structure HeapOK (m : Mem) : Prop where
@@ -462,6 +500,8 @@ structure HeapOK (m : Mem) : Prop where
   self  : ∀ x t, OwnedAt m x t → SelfFree t
   /-- A3.1: the blocks own their payloads (`BlkOwn`). -/
   blk   : BlkOwn m
+  /-- A3.3: every view reads its lock block's payload (`ViewsAt`). -/
+  views : ViewsAt m.blk
 
 /-- A3.1: a block's key was taken from `nid`, so a new one is fresh. -/
 theorem HeapOK.bkey {m : Mem} (hh : HeapOK m) : ∀ k bl, m.blk k = some bl → k < m.nid :=

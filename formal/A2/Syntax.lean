@@ -301,6 +301,11 @@ structure Slot where
 inductive BKind where
   | arc
   | lock
+  /-- A3.3: a read view of a lock block (`rw_read`'s guard, `RwLocked`): its
+      payload is a share of the lock block and a copy of that block's payload,
+      which it owns none of; its holders read it, frozen, while the view
+      lives.  A writer waits until no view of the block is left. -/
+  | view
 deriving DecidableEq, Repr
 
 /-- A shared block: its kind, and its payload, a tree of type `ty`.  How

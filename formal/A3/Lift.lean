@@ -145,18 +145,18 @@ theorem EvalR.lift {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.
   | lockNew h1 hfr => exact EvalR.lockNew (TakeVal.lift h1 a2) hfr
   | arcClone hy => exact EvalR.arcClone hy
   | lockClone hy => exact EvalR.lockClone hy
-  | atomic hy hk h1 h2 => exact EvalR.atomic hy hk (Eval.lift h1 a2) (Eval.lift h2 a2)
-  | chanSend hy h1 hk hc hd =>
+  | atomic hy hk h1 h2 hnv => exact EvalR.atomic hy hk (Eval.lift h1 a2) (Eval.lift h2 a2) hnv
+  | chanSend hy h1 hk hc hd hnv =>
     exact EvalR.chanSend (m := liftMem a2 m) hy (TakeVal.lift h1 a2) hk (union_true a2 hc)
-      (union_true a2 hd)
+      (union_true a2 hd) hnv
   | @chanSendClosed _ _ _ _ _ _ _ _ m1 a' hy h1 hk hfr =>
     -- A3.4: what a send to a closed channel drops is the thread's own
     exact EvalR.chanSendClosed (m := liftMem a2 m) (m1 := liftMem a2 m1) (a' := union a' a2) hy
       (TakeVal.lift h1 a2) hk
       (Frees.lift hfr fun i h => hd i (by rw [← TakeVal.alloc h1]; exact h))
-  | chanRecv hy hk hc hd => exact EvalR.chanRecv hy hk (union_true a2 hc) (union_true a2 hd)
+  | chanRecv hy hk hc hd hnv => exact EvalR.chanRecv hy hk (union_true a2 hc) (union_true a2 hd) hnv
   | chanRecvNone hy hk hc hw => exact EvalR.chanRecvNone hy hk (union_true a2 hc) hw
-  | chanClose hy hk => exact EvalR.chanClose hy hk
+  | chanClose hy hk hnv => exact EvalR.chanClose hy hk hnv
   | arcGet hy hk => exact EvalR.arcGet hy hk
 
 theorem EvalR.liftP {m : Mem} {r : Rhs} (h : EvalR m r .panic) (a2 : Nat → Bool) :
@@ -307,7 +307,7 @@ theorem Step.lifts {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
     exact ⟨_, GhostRel.refl _, Step.scopeDP (m1 := liftMem a2 m1) ih hx⟩
   | @scopeDPMoved m1 _ _ _ _ hx ih => exact Step.scopeDPMoved (m1 := liftMem a2 m1) ih hx
   -- A3.2: taking a lock and giving it back touch no address
-  | withLock ha hk hx => exact ⟨_, GhostRel.refl _, Step.withLock (m := liftMem a2 m) ha hk hx⟩
+  | withLock ha hk hx hnv => exact ⟨_, GhostRel.refl _, Step.withLock (m := liftMem a2 m) ha hk hx hnv⟩
   | scopeLIn _ ih =>
     obtain ⟨s'', hg, hs⟩ := ih
     exact ⟨_, GhostRel.scopeL _ _ _ hg, Step.scopeLIn hs⟩

@@ -79,7 +79,10 @@ theorem CParts.down {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) (hR : Restric
   have hav : Avoids (C.view t) (minus C.alloc (union a (payPart C.blk))) := fun k hk =>
     minus_disj k (hto.owned k (hk.st_eq rfl))
   have hpo : PayOff (C.view t) (minus C.alloc (union a (payPart C.blk))) := fun k hk =>
-    minus_disj k (ownView_alloc (t := t) (a := a).mpr (.inr hk))
+    minus_disj k (ownView_alloc (t := t) (a := a).mpr (.inr (by
+      rcases hk with hk | ⟨k', bl, hk', hik⟩
+      · exact hk
+      · exact hto.blocksAt.views.rd_ids hk' hik)))
   have hbf : BorFree (C.view t) := hbo.of_st rfl
   have hfr : FreshFrom (minus C.alloc (union a (payPart C.blk))) C.nid := fun k hk => by
     cases hk' : minus C.alloc (union a (payPart C.blk)) k with
@@ -343,7 +346,8 @@ theorem CParts.ctouch {P : Prog} {C : Cfg}
       h1 | ⟨hb, h1 | ⟨k, bl, hk, hak, hr⟩⟩
     · exact .inl (owned_part hto h1)
     · exact .inl (owned_part hto h1)
-    · exact .inr ⟨k, bl, hk, bl.rd_ids hak, .inl ⟨hb, hr⟩⟩
+    · obtain ⟨k0, bl0, hk0, hak0, hr0⟩ := hto.blocksAt.views.rd_reached hk hak hr
+      exact .inr ⟨k0, bl0, hk0, hak0, .inl ⟨hb, hr0⟩⟩
   | sweep hs =>
     obtain ⟨m', s', hst, _, hma, hsw⟩ := hs
     -- the sweep frees `a`: an unreached block's payload owns it

@@ -1375,12 +1375,12 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
   | @withLock Γ Δ F a x k Ea t hsrc hx hxF ha hla hta hs hpx _ _ _ _ =>
     intro m m' s' hcd hi hst
     cases hst with
-    | @withLock _ _ _ o kk t' v ha' hk hmx =>
+    | @withLock _ _ _ o kk t' v ha' hk hmx hnv =>
       -- the share names a lock block of the payload's type
       obtain ⟨ob, hk0⟩ := hi.lk_val ha hla hta ha'
       rw [hk] at hk0; cases hk0
       have hanch := hi.leafAnch rfl
-      obtain ⟨post, out⟩ := acquire_pres (F := F) hi.toMInv hk
+      obtain ⟨post, out⟩ := acquire_pres (F := F) hi.toMInv hk hnv
       have hx1 : Γ x = none := hx
       have hxn : x < m.nv := hi.nvS x (by simp [Stmt.vars])
       have hm := post.inv.add hx1 hxn out
@@ -2110,7 +2110,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         · exact hsc
         · exact hsc.weakenOut hm1.wf hm1.names (Or.inr (hw.exitScope x hpx.2.2))
       have hm' : MInv { m with nv := m.nv + 1 } (setE Γ x (Ex.revive x)) :=
-        hm1.of_st rfl ⟨hm1.heap.nodup, hm1.heap.disj, hm1.heap.alloc, hm1.heap.self, hm1.heap.blk⟩ (Nat.le_succ _)
+        hm1.of_st rfl ⟨hm1.heap.nodup, hm1.heap.disj, hm1.heap.alloc, hm1.heap.self, hm1.heap.blk, hm1.heap.views⟩ (Nat.le_succ _)
       refine ⟨setE Γ x (Ex.revive x), hfin, ?_, Nat.le_succ _,
         ⟨?_, ?_, (DKeep.refl Γ _).setE fun _ _ _ h => absurd (by simp [Stmt.spine]) h⟩,
         fun _ _ => rfl⟩
@@ -2261,7 +2261,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         by show m.nv ≤ m1.nv + 1; rw [hnv1]; exact Nat.le_succ _,
         ⟨?_, ?_, DKeep.unwind _ fun w hw h => hw (by simp [Stmt.spine, h])⟩, ?_⟩
       · exact
-        { toMInv := hMu.of_st rfl ⟨hMu.heap.nodup, hMu.heap.disj, hMu.heap.alloc, hMu.heap.self, hMu.heap.blk⟩
+        { toMInv := hMu.of_st rfl ⟨hMu.heap.nodup, hMu.heap.disj, hMu.heap.alloc, hMu.heap.self, hMu.heap.blk, hMu.heap.views⟩
             (Nat.le_succ _)
           nvS := fun w hw => by
             simp only [Stmt.vars, List.mem_cons, List.mem_append, List.not_mem_nil, or_false] at hw
