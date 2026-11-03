@@ -22,7 +22,10 @@
   written as a field read (`^ . b h`), and it may be a view or a struct of
   views picked by a join or a match, or made in a value block. A closure
   may not hand back a value holding views of what it captured: a struct or
-  an enum now follows the rule a bare view always did.
+  an enum now follows the rule a bare view always did. A recursion, direct
+  or through other functions, answers exactly what it hands back and keeps:
+  a function that passes a view down a recursion that only reads it is not
+  taken to keep it.
 - **A cursor that may own its value is released when it moves on**
   (probes cursor_over_a_local_view_resliced_in_a_loop,
   cursor_given_its_own_slice_on_one_arm and others). A binding that
@@ -32,12 +35,18 @@
   it pointed into was released. That covered the split-on-delimiter loop
   whose last piece is the cursor itself, and a `?` or `??` arm that gave
   the cursor a slice of its own, a join value with a fresh arm and a view
-  arm, a call that hands back a fresh value on some calls, and a closure
-  that gives the cursor a value of its own. Such a binding now may own its
+  arm, a call that hands back a fresh value on some calls, a closure
+  that gives the cursor a value of its own, and a field given a value
+  through a `: ~` copy of a struct. Such a binding now may own its
   value: re-pointing it, or the end of its scope, ends what was borrowed
   from it. A cursor only ever given views and literals still owns nothing,
   and a copy of it outlives a re-point as before. nurlc's own unused-import
   lint had this shape and now reads each piece before moving on.
+- **A holder callee defined below a closure literal is answered by its
+  own walk** (probe dyn_holder_defined_below_a_closure_literal). A
+  function that called a holder defined further down, then built a closure
+  literal, was walked before that callee: a `dyn` method's result was
+  taken to view nothing, and read after its receiver was released.
 - **A view parameter is a view of what the caller passed, everywhere**
   (probes view_param_kept_in_a_string_global,
   view_param_captured_by_a_spawned_thread). A string global given a
