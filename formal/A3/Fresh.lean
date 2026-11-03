@@ -149,6 +149,7 @@ theorem Step.grows {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
   | catchIn _ ih => exact ih
   | catchSkip => exact Grows.refl _
   | unpair _ _ _ _ => exact Grows.of_eq rfl rfl
+  | callcE _ _ _ _ => exact Grows.of_eq rfl rfl
   | callc _ _ _ _ hb =>
     refine Grows.trans (Grows.trans ?_ (BindParams.grows hb)) (Grows.of_eq rfl rfl)
     exact Grows.of_eq rfl rfl

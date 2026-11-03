@@ -704,6 +704,12 @@ theorem _root_.A2.Step.cellKeep {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : S
     exact CellKeep.shrink (BindParams.grows hbp).nid
       (fun _ hc => .inl (CellAt.envMem (hbp.cellSt (CellAt.set_none (CellAt.set_none (CellAt.of_st rfl hc))))))
       (fun _ _ h => LockHolds.of_blk (BindParams.blk hbp) h)
+  | callcE hc _ _ _ =>
+    -- A2-envhand: the environment's shares move to its binding
+    refine CellKeep.slots (Nat.le_refl _) (fun k hc' => .inl ?_) rfl
+    rcases CellAt.set (CellAt.set_none (CellAt.of_st rfl hc')) with ⟨w, hw, hs⟩ | hc'
+    · cases hw; exact .of_slot hc (Sub.pkg hs)
+    · exact CellAt.set_none hc'
   | catchP _ _ ih =>
     refine ih.trans (CellKeep.slots (Nat.le_refl _) (fun k hc => .inl ?_) rfl)
     rcases CellAt.set hc with ⟨w, hw, hs⟩ | hc

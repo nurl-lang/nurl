@@ -71,6 +71,7 @@ theorem CatchOK.of_st {m m' : Mem} (hst : m'.st = m.st) (hnv : m.nv ≤ m'.nv) (
   | .scopeL _ _ _ k, h => CatchOK.of_st hst hnv hb (s := k) h
   | .insert .., _ => trivial
   | .withElem .., _ => trivial
+  | .callcE .., _ => trivial
 
 /-- What A2 knows of one thread, on the thread's own part of the address
     space: its statement is typed, the invariant holds, its packages' codes

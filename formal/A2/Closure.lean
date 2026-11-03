@@ -191,13 +191,14 @@ theorem callT_recv_live {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {σ : Nat} {c :
   rw [hc] at hEa; cases hEa; exact hl
 
 /-- The code a package runs for its method `j`, implementing the method's
-    interface. -/
-theorem pkg_code {P : Prog} {m : Mem} (hcd : MemCodes P m) {c : Var} {o : Bool} {fs : List Nat}
+    interface (A2-envhand: in the interface's receiver mode). -/
+theorem pkg_code_recv {P : Prog} {m : Mem} (hcd : MemCodes P m) {c : Var} {o : Bool} {fs : List Nat}
     {te : Ty} {ms : List Nat} {env : Val} {cs : List (Var × PMode × Ty)}
     (hslot : m.st c = some ⟨o, some (.pkg fs te ms env cs)⟩)
     {j σ : Nat} (hj : ms[j]? = some σ) {sig : Fn} (hσ : P[σ]? = some sig) :
     ∃ f fn, fs[j]? = some f ∧ P[f]? = some fn ∧
-      fn.params = (.inp, te) :: sig.params.tail ++ cs.map (·.2) ∧
+      fn.params = (sig.recvMode, te) :: sig.params.tail ++ cs.map (·.2) ∧
+      (sig.recvMode ≠ .inp → cs = []) ∧
       fn.resTy = sig.resTy ∧ fn.resOwn = sig.resOwn ∧ fn.lends ⊆ sig.lends ∧
       fn.rholds ⊆ sig.rholds ∧ fn.outHolds ⊆ sig.outHolds ∧ ¬ ThruFn P f := by
   obtain ⟨hlen, himpl⟩ := hcd.1 c o _ fs te ms env cs hslot (Sub.refl _)
@@ -206,6 +207,21 @@ theorem pkg_code {P : Prog} {m : Mem} (hcd : MemCodes P m) {c : Var} {o : Bool} 
   obtain ⟨fn, sig', hf, hσ', h⟩ := himpl j fs[j] σ hfs hj
   rw [hσ] at hσ'; cases hσ'
   exact ⟨fs[j], fn, hfs, hf, h⟩
+
+/-- ... of an interface that takes its receiver lent: the code takes the
+    environment lent. -/
+theorem pkg_code {P : Prog} {m : Mem} (hcd : MemCodes P m) {c : Var} {o : Bool} {fs : List Nat}
+    {te : Ty} {ms : List Nat} {env : Val} {cs : List (Var × PMode × Ty)}
+    (hslot : m.st c = some ⟨o, some (.pkg fs te ms env cs)⟩)
+    {j σ : Nat} (hj : ms[j]? = some σ) {sig : Fn} (hσ : P[σ]? = some sig) {t : Ty}
+    (hhd : sig.params.head? = some (.inp, t)) :
+    ∃ f fn, fs[j]? = some f ∧ P[f]? = some fn ∧
+      fn.params = (.inp, te) :: sig.params.tail ++ cs.map (·.2) ∧
+      fn.resTy = sig.resTy ∧ fn.resOwn = sig.resOwn ∧ fn.lends ⊆ sig.lends ∧
+      fn.rholds ⊆ sig.rholds ∧ fn.outHolds ⊆ sig.outHolds ∧ ¬ ThruFn P f := by
+  obtain ⟨f, fn, hfs, hf, hps, _, h⟩ := pkg_code_recv hcd hslot hj hσ
+  rw [Fn.recvMode_of_head hhd (by simp)] at hps
+  exact ⟨f, fn, hfs, hf, hps, h⟩
 
 theorem memDeps_mono {a b : List Dep} (h : a ⊆ b) : memDeps a ⊆ memDeps b :=
   fun _ hd => List.mem_filter.mpr ⟨h (List.mem_filter.mp hd).1, (List.mem_filter.mp hd).2⟩
@@ -2355,7 +2371,7 @@ theorem cloProgress {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x 
     ∃ s, Step P m (.callc x c j zs k) s := by
   have hlc := callT_recv_live hcT hc
   obtain ⟨o, fs, te, env, cs, hslot⟩ := pkg_slot hi.toMInv hc hlc htc
-  obtain ⟨f, fn, hfs, hf, hps, _, _, _, _, _, hnt⟩ := pkg_code hcd hslot hj hσ
+  obtain ⟨f, fn, hfs, hf, hps, _, _, _, _, _, hnt⟩ := pkg_code hcd hslot hj hσ hhd
   have hnint : Ec.ty ≠ .int := by rw [htc]; simp
   have hcc : cleanC Γ c = some Ec := by rw [cleanC_of hc, clean_id (Or.inl hnint) hlc]
   obtain ⟨hie, _, hcT'⟩ := open_pkg hP (cleanC_none.mpr hx) hcc htc hσ hhd (hcT.clean hσ) hnz
@@ -2379,7 +2395,7 @@ theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
     obtain ⟨_, _, _, _, _, hslot'⟩ := pkg_slot hi.toMInv hc (callT_recv_live hcT hc) htc
     rw [hslot] at hslot'; cases hslot'
     -- the code, implementing the method's interface
-    obtain ⟨f', fn', hfs', hf', hps0, hty, hown, hl, hr, ho, hnt⟩ := pkg_code hcd hslot hj hσ
+    obtain ⟨f', fn', hfs', hf', hps0, hty, hown, hl, hr, ho, hnt⟩ := pkg_code hcd hslot hj hσ hhd
     rw [hfs] at hfs'; cases hfs'; rw [hf] at hf'; cases hf'
     obtain ⟨rest, hsp⟩ : ∃ rest, sig.params = (.inp, .fn ms q) :: rest := by
       cases h : sig.params with

@@ -359,10 +359,7 @@ the LLVM / C11 memory model rather than redefining it.
       assertions; `locked_take` through a cell share; a failed give-back
       frees the value where the runtime keeps it in the held lock (no one
       reaches it either way);
-      a closure that changes a capture it moved in (an accumulator: A2's
-      call lends the code a copy of the environment, so the change needs
-      the environment handed over for the call and back, a step A2 does
-      not have yet; an `Atomic` it moved in is typed, `accum_sync`);
+      a closure that captures by name and also changes its environment;
       subsumption inside a container's element type (a `Vec` of `sync`
       closures is no `Vec` of `any` ones). Classes are ordered bare ≤
       sync ≤ send ≤ any, and a closure moved or copied up the order is
@@ -371,6 +368,22 @@ the LLVM / C11 memory model rather than redefining it.
       (`StmtT.callcUp`, `StmtT.arcCallUp`). Phase C must give each closure
       the class nurlc's follow-the-value check proved, and `any` where it
       cannot follow the closure's origin.
+    - **The environment handed over (`callcE`).** A call through an owned
+      closure or trait object may change its environment: the environment
+      moves out of the package into a fresh owner, the code takes it
+      `inout` (`Implements` with an `inout` receiver), and the package is
+      rebuilt after (`StmtT.callcE`, A2/EnvHand.lean). A panic drops the
+      environment, as the drop journal does with the closure's binding.
+      Such a package is at most `send` (`callcE_not_sync`,
+      `callcE_not_arc`), so threads sharing a closure never change its
+      environment, and a borrow never hands it over (`callcE_not_bor`:
+      what an `Arc` or a read guard lends is never an `inout` argument,
+      h364). An accumulator is typed whole and `memory_safe` / `no_leak`
+      apply to it (`accMain_safe`, `accMain_no_leak`), and h365's and
+      h366's rules are named (`hand_ends`, `canDo_inout_replace`). Not
+      typed yet: an interface with parameters beside the receiver, or
+      whose result borrows from the receiver; a hand-over through a
+      borrowed closure parameter.
     - **Trait objects (A3.5c).** A trait object is a package as a closure
       is (`Rhs.pack`), so A3.5b's class covers it: its class is the
       trait's bound (`TraitBound`: none, `: Send`, `: Send Sync` give
@@ -383,10 +396,7 @@ the LLVM / C11 memory model rather than redefining it.
       library handle (`dyn_cell_notSync`), and an `Arc` or a global's
       `Arc` takes only `: Send Sync` objects, and a lock or a channel a
       `: Send` one under the crossing check (A3.5's second cut). Not
-      typed: an `inout` receiver (the same hand-over step as an
-      accumulator; no call hands its receiver `inout`, `callc_not_inout`,
-      and what an `Arc` or a read guard lends is never an `inout`
-      argument, h364's rule), and an upcast to a supertrait's objects; an
+      typed: an upcast to a supertrait's objects; an
       impl is checked where it is boxed, not where it is declared. A bound
       is answered by the class (`TraitBound.Holds`, `holds_fn`; a
       supertrait's bound is kept, `Holds.mono`), and A2 has no generics: a

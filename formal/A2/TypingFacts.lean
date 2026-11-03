@@ -808,6 +808,9 @@ theorem StmtT.dkeep {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (
   | unpair hs hy _ _ _ _ _ _ _ _ _ _ _ _ _ _ ih =>
     exact fun _ _ => DKeep.bind (DKeep.moveOut hy _ _) (DKeep.bind (DKeep.refl _ []) (DKeep.of_src hs ih))
   | callc hk _ _ _ _ _ _ _ _ hc _ _ _ _ ih => exact fun _ _ => DKeep.bind hc.dkeep (DKeep.of_src hk ih)
+  | callcE hk _ _ _ _ _ _ _ _ _ _ _ _ _ _ hc _ _ _ ih =>
+    exact fun _ _ => DKeep.bind (((DKeep.refl _ []).kill _ _ _).trans hc.dkeep fun _ h => h)
+      (((DKeep.refl _ []).kill _ _ _).trans (DKeep.of_src hk ih) fun _ h => h)
   | catchR _ _ _ _ _ _ ih => exact ih
   | letd hs _ _ hr _ _ _ _ _ _ ih => exact fun _ _ => DKeep.bind hr.dkeep (DKeep.of_src hs ih)
   | @scopeD Γ Δ F x f k _ _ _ _ _ _ _ _ ih =>
@@ -984,6 +987,9 @@ theorem StmtT.dstay {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (
       simp [A2.setE, upd_ne _ _ (Ne.symm hxz), upd_ne _ _ hzy, A2.kill, hz]
     exact DStay.bind hx (DStay.moveOut hy _ _) (DStay.bind hz1 (DStay.refl _ []) (src0 hks ih))
   | callc hk hx _ _ _ _ _ _ _ hc _ _ _ _ ih => exact DStay.bind hx hc.dstay (src0 hk ih)
+  | callcE hk hx _ _ _ _ _ _ _ _ _ _ _ _ _ hc _ _ _ ih =>
+    exact DStay.bind hx (((DStay.refl _ []).kill _ _ _).trans hc.dstay fun _ h => h)
+      (((DStay.refl _ []).kill _ _ _).trans (src0 hk ih) fun _ h => h)
   | catchR _ _ _ _ _ hst _ => exact hst
   | letd hs hx _ hr _ _ _ _ _ _ ih => exact DStay.bind hx hr.dstay (src0 hs ih)
   | scopeD _ _ _ _ _ _ _ _ ih => exact ih.exitScope

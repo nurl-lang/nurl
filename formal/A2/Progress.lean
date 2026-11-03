@@ -478,6 +478,11 @@ theorem progress {P : Prog}
       sig.params.head? = some (.inp, .fn ms q) → CallT P Γ F σ (c :: zs) E Γ1 →
       (∀ z ∈ zs, ∀ d ∈ Ec.vdeps, d.kind.bound ≠ .none → d.root ≠ z) →
       MemCodes P m → Inv m Γ F (.callc x c j zs k) → ∃ r, Step P m (.callc x c j zs k) r)
+    (hhand : ∀ {Γ Γ1 : Ctx} {F : List Var} {x c : Var} {j : Nat} {k : Stmt} {Ec E : Entry}
+      {ms : List Nat} {q : Cross} {σ : Nat} {sig : Fn} {b : Eff} {m : Mem},
+      Γ x = none → Γ c = some Ec → Ec.ty = .fn ms q → canDo Ec.mode .replace → ms[j]? = some σ →
+      P[σ]? = some sig → sig.params = [(.inout b, .fn ms q)] → CallT P (kill .replace false c Γ) F σ [c] E Γ1 →
+      MemCodes P m → Inv m Γ F (.callcE x c j [] k) → ∃ r, Step P m (.callcE x c j [] k) r)
     {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (ht : StmtT P Γ F s Δ) :
     ∀ {m : Mem}, MemCodes P m → Inv m Γ F s → s = .skip ∨ Blocked m s ∨ ∃ r, Step P m s r := by
   induction ht with
@@ -750,6 +755,9 @@ theorem progress {P : Prog}
   | callc _ hx hxF hc htc hj hσ hhd _ hcT hnz _ _ _ =>
     intro m hcd hi
     exact Or.inr <| Or.inr (hclo hx hxF hc htc hj hσ hhd hcT hnz hcd hi)
+  | callcE _ hx _ hc htc hcan _ hj hσ hsp _ _ _ _ _ hcT _ _ _ _ =>
+    intro m hcd hi
+    exact Or.inr <| Or.inr (hhand hx hc htc hcan hj hσ hsp hcT hcd hi)
   | @catchR Γ Δ F x m0 s _ _ hM _ hKO _ ih =>
     intro m hcd hi
     rcases ih hcd hi.catchIn with rfl | hbl | ⟨r, hr⟩

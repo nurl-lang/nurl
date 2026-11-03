@@ -1246,13 +1246,25 @@ theorem spawn_not_any {P : Prog} {spawn : Nat → Bool} (hS : SpawnOK P spawn) {
   have := (hpar _ hin).2
   simp [Ty.holdsView] at this
 
-/-- A closure's code reads its environment, lent: the first parameter of the
-    code it names is the environment's, borrowed (`inp`). -/
+/-- A closure's code takes its environment where its interface takes the
+    receiver, in the interface's mode: the first parameter of the code it
+    names is the environment's ... -/
+theorem _root_.A2.Implements.env_recv {P : Prog} {f : Nat} {te : Ty} {cs : List (Var × PMode × Ty)}
+    {σ : Nat} (h : Implements P f te cs σ) : ∃ fn sig, P[f]? = some fn ∧ P[σ]? = some sig ∧
+      fn.params.head? = some (sig.recvMode, te) ∧ ¬ ThruFn P f := by
+  obtain ⟨fn, sig, hf, hσ, hps, _, _, _, _, _, _, hnt⟩ := h
+  exact ⟨fn, sig, hf, hσ, by rw [hps]; rfl, hnt⟩
+
+/-- ... lent (`inp`) where the interface lends it: the code reads it.  (A2-envhand:
+    only an interface that takes it `inout` has code that changes it, called with
+    the environment handed over, `StmtT.callcE`.) -/
 theorem _root_.A2.Implements.env_lent {P : Prog} {f : Nat} {te : Ty} {cs : List (Var × PMode × Ty)}
-    {σ : Nat} (h : Implements P f te cs σ) : ∃ fn, P[f]? = some fn ∧ fn.params.head? = some (.inp, te) ∧
+    {σ : Nat} (h : Implements P f te cs σ) {sig : Fn} (hσ : P[σ]? = some sig)
+    (hr : sig.recvMode = .inp) : ∃ fn, P[f]? = some fn ∧ fn.params.head? = some (.inp, te) ∧
       ¬ ThruFn P f := by
-  obtain ⟨fn, _, hf, _, hps, _, _, _, _, _, hnt⟩ := h
-  exact ⟨fn, hf, by rw [hps]; rfl, hnt⟩
+  obtain ⟨fn, sig', hf, hσ', hhd, hnt⟩ := h.env_recv
+  rw [hσ] at hσ'; cases hσ'
+  exact ⟨fn, hf, by rw [hhd, hr], hnt⟩
 
 /-- h339 (`closure_in_an_arc_captures_a_library_handle`): a closure whose
     environment may hold a library handle (a cell share, A3.5) is not Sync:
@@ -1518,12 +1530,13 @@ theorem _root_.A2.StmtT.arcCallUp {P : Prog} {Γ Δ : Ctx} {F : List Var} {a g g
   exact getE_own_noName
 
 /-! A3.5b: a closure that changes a capture it moved in (an accumulator).  The
-moved-in capture is the environment's own state.  A2's call hands the code that
-environment lent, a copy in a fresh slot (`envMem`), and its code changes
-nothing through a borrow (`Implements.env_lent`), so the state cannot be
-changed in place: an environment's plain value is read only.  What the model
-types instead is the state in a share the environment holds, which synchronises
-itself: an `Atomic` (or a `Locked`) moved in. -/
+moved-in capture is the environment's own state.  A call that lends the code the
+environment (`callc`: a copy in a fresh slot, `envMem`; the code changes nothing
+through a borrow, `Implements.env_lent`) reads it only.  The owner of a `send`
+closure changes it by handing the environment over (A2-envhand, `StmtT.callcE`,
+below: `accum_hand`), which no `sync` closure allows (`callcE_not_sync`).  What
+several threads may change at once is the state in a share the environment
+holds, which synchronises itself: an `Atomic` (or a `Locked`) moved in. -/
 
 /-- The accumulator's environment, an `Atomic` (a lock share of an integer
     block), fits `sync`: a lock share is Sync, so an `Arc` keeps the closure
@@ -1552,8 +1565,8 @@ bound, `any` with none, `send` for `: Send`, `sync` for `: Send Sync`
 (`StmtT.callc_bound`).  Packing an impl's value is A3.5b's `pack`: its
 `Cross.Fits` is the per-impl check, which reads the bound and the impl's type
 only (`ImplOK`), and the impl's code fixes that type (`CodeOK.recv_eq`); its
-`CodeOK` holds every method's code to its interface, on the box lent
-(`CodeOK.env_lent`), as a closure's one method is. -/
+`CodeOK` holds every method's code to its interface, on the box in the
+interface's receiver mode (`CodeOK.env_recv`), as a closure's one method is. -/
 
 /-- A3.5c: what a trait declares its objects may cross as: nothing (no bound),
     `: Send`, or `: Send Sync`. -/
@@ -1578,11 +1591,12 @@ def _root_.A2.Rhs.dyn (fs : List Nat) (te : Ty) (ms : List Nat) (y : Var) : Rhs 
 
 /-- A3.5c: `ms` are the methods of a trait declared with the bound `b`: each
     is an interface, a function of the program, whose receiver is the trait's
-    object at the bound, `(inp, fn ms b.cross)` (the receiver `StmtT.callc`
-    asks of a call through a `fn ms q` is `(inp, fn ms q)`). -/
+    object at the bound, `fn ms b.cross`, taken lent (`inp`: the receiver
+    `StmtT.callc` asks of a call through a `fn ms q` is `(inp, fn ms q)`) or,
+    A2-envhand, `inout` (a method that changes the box, `StmtT.callcE`). -/
 def TraitAt (P : Prog) (ms : List Nat) (b : TraitBound) : Prop :=
   ∀ (j σ : Nat), ms[j]? = some σ → ∃ sig : Fn, P[σ]? = some sig ∧
-    sig.params.head? = some (.inp, .fn ms b.cross)
+    ∃ pm, pm ≠ .sink ∧ sig.params.head? = some (pm, .fn ms b.cross)
 
 /-- What a bound promises of each impl's type `te` (a box captures nothing by
     name, `cs = []`): with no bound, nothing ... -/
@@ -1630,11 +1644,11 @@ theorem _root_.A2.StmtT.callc_bound {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c
     (hb : TraitAt P ms b) : q = b.cross := by
   obtain ⟨ms', q', σ, sig, hty', hj, hσ, hhd⟩ := h.callc_recv_at hc
   rw [hty] at hty'; cases hty'
-  obtain ⟨sig', hσ', hhd'⟩ := hb j σ hj
+  obtain ⟨sig', hσ', pm, _, hhd'⟩ := hb j σ hj
   rw [hσ] at hσ'; cases hσ'
   rw [hhd] at hhd'
   simp only [Option.some.injEq, Prod.mk.injEq, Ty.fn.injEq, true_and] at hhd'
-  exact hhd'
+  exact hhd'.2
 
 /-- So a trait object packed at another class than its trait's bound is inert:
     no method of it is called. -/
@@ -1643,14 +1657,16 @@ theorem callc_not_at {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c : Var} {j : Na
     (hc : Γ c = some Ec) (hty : Ec.ty = .fn ms q) (hq : q ≠ b.cross) : ¬ StmtT P Γ F (.callc x c j zs k) Δ :=
   fun h => hq (h.callc_bound hc hty hb)
 
-/-- Every method's code of a package reads the environment, lent, and changes
-    nothing through a borrow (`Implements.env_lent`, method by method): an
-    impl's code reads its box, whichever method a call picks. -/
-theorem _root_.A2.CodeOK.env_lent {P : Prog} {fs : List Nat} {te : Ty} {ms : List Nat}
+/-- Every method's code of a package takes the environment as its receiver,
+    and changes nothing through a borrow (`Implements.env_recv`, method by
+    method): an impl's code takes its box, whichever method a call picks
+    (lent, or, A2-envhand, handed over where its interface takes it `inout`). -/
+theorem _root_.A2.CodeOK.env_recv {P : Prog} {fs : List Nat} {te : Ty} {ms : List Nat}
     {cs : List (Var × PMode × Ty)} (h : CodeOK P fs te ms cs) {j f : Nat} (hf : fs[j]? = some f) :
-    ∃ fn, P[f]? = some fn ∧ fn.params.head? = some (.inp, te) ∧ ¬ ThruFn P f := by
+    ∃ fn pm, P[f]? = some fn ∧ fn.params.head? = some (pm, te) ∧ ¬ ThruFn P f := by
   have hj : j < ms.length := h.1 ▸ (List.getElem?_eq_some_iff.mp hf).1
-  exact (h.2 j f ms[j] hf (List.getElem?_eq_getElem hj)).env_lent
+  obtain ⟨fn, sig, hfn, _, hhd, hnt⟩ := (h.2 j f ms[j] hf (List.getElem?_eq_getElem hj)).env_recv
+  exact ⟨fn, sig.recvMode, hfn, hhd, hnt⟩
 
 /-- An impl's code fixes the type of the box it is packed with: its first
     method takes it, as its receiver. -/
@@ -1661,8 +1677,8 @@ theorem _root_.A2.CodeOK.recv_eq {P : Prog} {fs : List Nat} {te te' : Ty} {ms ms
     cases fs with
     | nil => exact absurd rfl hne
     | cons f _ => exact ⟨f, rfl⟩
-  obtain ⟨fn, hfn, hhd, _⟩ := h.env_lent hf
-  obtain ⟨fn', hfn', hhd', _⟩ := h'.env_lent hf
+  obtain ⟨fn, pm, hfn, hhd, _⟩ := h.env_recv hf
+  obtain ⟨fn', pm', hfn', hhd', _⟩ := h'.env_recv hf
   rw [hfn] at hfn'; cases hfn'
   rw [hhd] at hhd'; cases hhd'
   rfl
@@ -1883,11 +1899,13 @@ theorem glob_not_dyn {Γ Γ1 : Ctx} {F : List Var} {g : Nat} {ms : List Nat} {q 
   the one the crossing rules ask (`TraitBound.Holds`).  For a closure or a
   trait object it is its class (`TraitBound.holds_fn`), as `pack` gave it.  A
   supertrait's bound is a bound the trait's objects keep (`Holds.mono`).
-* *An `inout` receiver.*  A2's call through a package hands the code its
-  environment lent, a copy in a fresh slot (`envMem`), so no call through an
-  object changes its box: an interface with an `inout` receiver has no typed
-  call (`callc_not_inout`).  A borrow of what an `Arc` or a read guard lends is
-  no `inout` argument of any function either (`paramOK_inout_not_bor`, h364). -/
+* *An `inout` receiver.*  A2's call through a package that lends its code the
+  environment (`callc`, a copy in a fresh slot, `envMem`) takes no interface
+  with an `inout` receiver (`callc_not_inout`); a method that changes the box
+  is called with the box handed over (A2-envhand, `StmtT.callcE`), through an
+  owner only.  A borrow of what an `Arc` or a read guard lends is no `inout`
+  argument of any function (`paramOK_inout_not_bor`), nor a hand-over's
+  receiver (`callcE_not_bor`, h364). -/
 
 /-- An object packed at a class below its trait's bound is taken up to the bound
     by a move (A3.5b's subsumption), where its trait's methods take it. -/
@@ -1959,9 +1977,9 @@ theorem _root_.A2.StmtT.callc_inp {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c :
   exact ⟨ms, q, σ, sig, hty, hj, hσ, _, hhd⟩
 
 /-- ... so a method whose interface takes the receiver `inout` (h364–h366's
-    `rename`, which changes the box) is called through no object: A2's call
-    lends the code a copy of the environment (`envMem`), and has no step that
-    would change the box in place. -/
+    `rename`, which changes the box) is called through no object by `callc`,
+    which lends the code a copy of the environment (`envMem`): it is called
+    with the box handed over (A2-envhand, `StmtT.callcE`). -/
 theorem callc_not_inout {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c : Var} {j : Nat} {zs : List Var}
     {k : Stmt} {Ec : Entry} {ms : List Nat} {q : Cross} {σ : Nat} {sig : Fn} (hc : Γ c = some Ec)
     (hty : Ec.ty = .fn ms q) (hj : ms[j]? = some σ) (hσ : P[σ]? = some sig) {b : Eff} {t : Ty}
@@ -1985,6 +2003,594 @@ theorem paramOK_inout_not_bor {b : Eff} {t : Ty} {E : Entry} (h : paramOK (.inou
 /-- What `arc_get` lends of anything but an integer is such a borrow. -/
 theorem getE_bor {a : Var} {E : Entry} {t : Ty} (ht : t ≠ .int) : (getE a E t).mode = .bor := by
   cases t <;> first | exact absurd rfl ht | rfl
+
+/-! ### A2-envhand: the environment handed over, across threads
+
+A call whose code changes the package's environment (an accumulator's moved-in
+count, a trait object's `inout` method) hands the environment over
+(`StmtT.callcE`): it moves out of the package into a binding the code takes
+`inout`, and back.  Two things keep such a call to the one thread that owns the
+package:
+
+* *an owner*: the package is an owner that may be replaced (`canDo .replace`),
+  never a borrow, so never what an `Arc` or a read guard lends, nor a copy of
+  that (h364's rule stays: `callcE_not_bor`);
+* *the class*: the package's class is at least `send` (`callcE_send`): a
+  `sync` or `bare` one has no such call (`callcE_not_sync`), so a package
+  whose environment is handed over is no `Arc`'s payload (`callcE_not_arc`)
+  and no object of a `: Send Sync` trait (`callcE_not_sendSync`).  Two threads
+  never call it at once: h342's shape, with the state inside the closure, is
+  refused by the type. -/
+
+/-- A hand-over takes the package as an owner, at a class at least `send`,
+    through an interface that takes it `inout` and nothing else. -/
+theorem _root_.A2.StmtT.callcE_recv_at {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c : Var} {j : Nat}
+    {zs : List Var} {k : Stmt} {Ec : Entry} (h : StmtT P Γ F (.callcE x c j zs k) Δ) (hc : Γ c = some Ec) :
+    ∃ ms q σ sig b, Ec.ty = .fn ms q ∧ canDo Ec.mode .replace ∧ Cross.send.Le q ∧ ms[j]? = some σ ∧
+      P[σ]? = some sig ∧ sig.params = [(.inout b, .fn ms q)] := by
+  generalize hs : Stmt.callcE x c j zs k = s at h
+  induction h generalizing Ec with
+  | callcE _ _ _ hc' hty hcan hq hj hσ hsp =>
+    cases hs
+    rw [hc] at hc'; cases hc'
+    exact ⟨_, _, _, _, _, hty, hcan, hq, hj, hσ, hsp⟩
+  | sub hw _ _ ih =>
+    obtain ⟨hn, hwe⟩ := hw.1 c
+    obtain ⟨E0, hE0⟩ : ∃ E0, _ = some E0 :=
+      Option.ne_none_iff_exists'.mp fun h0 => absurd (hn.mpr h0) (by rw [hc]; simp)
+    have hw0 := hwe Ec E0 hc hE0
+    rw [← hw0.ty, ← hw0.mode]
+    exact ih hE0 hs
+  | _ => cases hs
+
+/-- **A package whose environment is handed over is at most Send** (Send, not
+    Sync): the class of a hand-over's receiver is `send` or `any`. -/
+theorem callcE_send {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c : Var} {j : Nat} {zs : List Var}
+    {k : Stmt} {Ec : Entry} {ms : List Nat} {q : Cross} (h : StmtT P Γ F (.callcE x c j zs k) Δ)
+    (hc : Γ c = some Ec) (hty : Ec.ty = .fn ms q) : Cross.send.Le q := by
+  obtain ⟨ms', q', _, _, _, hty', _, hq, _⟩ := h.callcE_recv_at hc
+  rw [hty] at hty'; cases hty'; exact hq
+
+/-- ... so a `sync` or `bare` package's environment is never handed over: what
+    several threads may hold at once is changed by no call through it. -/
+theorem callcE_not_sync {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c : Var} {j : Nat} {zs : List Var}
+    {k : Stmt} {Ec : Entry} {ms : List Nat} {q : Cross} (hc : Γ c = some Ec) (hty : Ec.ty = .fn ms q)
+    (hq : q = .sync ∨ q = .bare) : ¬ StmtT P Γ F (.callcE x c j zs k) Δ := fun h => by
+  have := callcE_send h hc hty
+  rcases hq with rfl | rfl <;> exact absurd this (by decide)
+
+/-- ... nor an `Arc`'s payload: an `Arc` holds only a `sync` or `bare` closure
+    (`arcNew_fn`). -/
+theorem callcE_not_arc {P : Prog} {Γ Δ Γ' Γ1 : Ctx} {F F' : List Var} {x c y : Var} {j : Nat}
+    {zs : List Var} {k : Stmt} {Ec E : Entry} {ms : List Nat} {q : Cross}
+    (h : StmtT P Γ F (.callcE x c j zs k) Δ) (hc : Γ c = some Ec) (hty : Ec.ty = .fn ms q) :
+    ¬ RhsT Γ' F' (.arcNew (.fn ms q) y) E Γ1 := fun ha =>
+  callcE_not_sync hc hty (arcNew_fn ha) h
+
+/-- **h364's rule stays**: a hand-over takes an owner, never a borrow, so never
+    what an `Arc` or a read guard lends (`getE_bor`), nor a copy of it. -/
+theorem callcE_not_bor {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c : Var} {j : Nat} {zs : List Var}
+    {k : Stmt} {Ec : Entry} (hc : Γ c = some Ec) (hm : Ec.mode = .bor ∨ Ec.mode = .rootb) :
+    ¬ StmtT P Γ F (.callcE x c j zs k) Δ := fun h => by
+  obtain ⟨_, _, _, _, _, _, hcan, _⟩ := h.callcE_recv_at hc
+  rcases hcan with h' | ⟨_, h', _⟩ <;> rcases hm with hm | hm <;> rw [hm] at h' <;> cases h'
+
+/-- A3.5c: a hand-over through a trait object types only where the object's
+    class is its trait's bound ... -/
+theorem _root_.A2.StmtT.callcE_bound {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c : Var} {j : Nat}
+    {zs : List Var} {k : Stmt} {Ec : Entry} {ms : List Nat} {q : Cross} {b : TraitBound}
+    (h : StmtT P Γ F (.callcE x c j zs k) Δ) (hc : Γ c = some Ec) (hty : Ec.ty = .fn ms q)
+    (hb : TraitAt P ms b) : q = b.cross := by
+  obtain ⟨ms', q', σ, sig, e, hty', _, _, hj, hσ, hsp⟩ := h.callcE_recv_at hc
+  rw [hty] at hty'; cases hty'
+  obtain ⟨sig', hσ', pm, _, hhd'⟩ := hb j σ hj
+  rw [hσ] at hσ'; cases hσ'
+  rw [hsp] at hhd'
+  simp only [List.head?_cons, Option.some.injEq, Prod.mk.injEq, Ty.fn.injEq, true_and] at hhd'
+  exact hhd'.2
+
+/-- ... so the `inout` methods of a `: Send Sync` trait are called through no
+    object: every reader of an `Arc` of one may call its other methods at once. -/
+theorem callcE_not_sendSync {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c : Var} {j : Nat} {zs : List Var}
+    {k : Stmt} {Ec : Entry} {ms : List Nat} {q : Cross} (hc : Γ c = some Ec) (hty : Ec.ty = .fn ms q)
+    (hb : TraitAt P ms .sendSync) : ¬ StmtT P Γ F (.callcE x c j zs k) Δ := fun h => by
+  have hq := h.callcE_bound hc hty hb
+  exact callcE_not_sync hc hty (Or.inl hq) h
+
+/-- h365 (`dyn_inout_method_replaces_what_a_view_reads`): after a hand-over,
+    every binding that depended on the package — a `String` read out of the
+    box, a borrow of the box, a closure that holds it by name — is ended
+    (`StmtT.callcE`'s `kill .replace`): what the code replaced is read by no
+    view. -/
+theorem hand_ends {Γ : Ctx} {c n : Var} {En : Entry} (hn : Γ n = some En) (hd : ∃ d ∈ En.vdeps, d.root = c)
+    (hτ : En.ty ≠ .int ∨ En.mode = .rootb) : ∃ E', kill .replace false c Γ n = some E' ∧ E'.live = false := by
+  refine ⟨killE .replace false c En, by simp [kill, hn], ?_⟩
+  obtain ⟨d, hdd, hdr⟩ := hd
+  have hh : hits .replace false c En = true := by
+    unfold hits
+    simp only [Bool.and_eq_true, Bool.or_eq_true, bne_iff_ne, ne_eq, beq_iff_eq, List.any_eq_true]
+    exact ⟨hτ, d, hdd, hdr, by cases d.kind <;> rfl⟩
+  unfold killE; simp [hh]
+
+/-- h366 (`helper_hands_its_parameter_to_a_dyn_method`): a helper's `inout`
+    parameter that may be replaced is an owner for the hand-over: the helper
+    hands the object on to the method by `StmtT.callcE`, and its caller's
+    argument is an ordinary `inout` one, which `callPost` ends what depends on
+    (h365's view). -/
+theorem canDo_inout_replace : canDo (.inout .replace) .replace := Or.inr ⟨.replace, rfl, Nat.le_refl _⟩
+
+/-- What no destructor views at all, none views for any effect. -/
+theorem _root_.A2.DtorSafe.of_replace {Γ : Ctx} {x : Var} (h : DtorSafe Γ .replace false x) (e : Eff)
+    (hv : Bool) : DtorSafe Γ e hv x := by
+  intro v E hE hd hos
+  have h0 := h v E hE hd hos
+  unfold hitsMem at h0 ⊢
+  simp only [Bool.and_eq_false_iff, List.any_eq_false, Bool.and_eq_true, beq_iff_eq, Bool.not_eq_eq_eq_not,
+    Bool.not_true] at h0 ⊢
+  rcases h0 with h0 | h0
+  · exact Or.inl h0
+  · exact Or.inr fun d hd hc => absurd ⟨hc.1, by cases d.kind <;> rfl⟩ (h0 d hd)
+
+/-- The interface's call on a receiver that holds nothing by name, where every
+    dependency on it has ended: the receiver, an owner, is its `inout`
+    argument. -/
+theorem _root_.A2.callT_recv_inout {P : Prog} {Γ : Ctx} {F : List Var} {σ : Nat} {sig : Fn} {c : Var}
+    {Ec : Entry} {b : Eff} (hσ : P[σ]? = some sig) (hps : sig.params = [(.inout b, Ec.ty)])
+    (hc : Γ c = some Ec) (hl : Ec.live = true) (hm : Ec.mode = .own) (ho : Ec.ty.owning = true)
+    (hcF : c ∉ F) (hself : ∀ d ∈ Ec.vdeps, d.root ≠ c) (hn : ∀ d ∈ Ec.vdeps, d.kind.isName = false)
+    (hdb : Ec.dbind = false) (hny : NoPin Γ c) (hdc : DtorSafe Γ .replace false c) (hnt : ¬ ThruFn P σ) :
+    CallT P (kill .replace false c Γ) F σ [c] (callRes (kill .replace false c Γ) sig [c])
+      (callPost (kill .replace false c Γ) sig [c]) := by
+  have hkc : killE .replace false c Ec = Ec := killE_nohit hself
+  have hΓk : kill .replace false c Γ c = some Ec := by simp [kill, hc, hkc]
+  have hmut : mutNames (kill .replace false c Γ) [c] = [] := by
+    have : nameDeps (argE (kill .replace false c Γ) c).vdeps = [] := by
+      simp only [nameDeps, argE, hΓk, Option.getD_some, List.filter_eq_nil_iff]
+      intro d hd; simp [hn d hd]
+    simp [mutNames, argNames, this]
+  refine ⟨sig, hσ, by simp [hps], fun i hi => ?_, fun d hd => ?_, ?_, rfl, rfl, fun h => absurd h hnt⟩
+  · have hi0 : i = 0 := by rw [hps] at hi; simpa using hi
+    subst hi0
+    have hp0 : sig.params[0]'hi = (.inout b, Ec.ty) := by simp [hps]
+    refine ⟨Ec, by simpa using hΓk, hl, ?_, ?_, ?_⟩
+    · rw [hp0]; exact ⟨rfl, Or.inl hm, ho⟩
+    · intro _
+      refine ⟨by simpa using hcF, ?_, ?_, ?_, ?_⟩
+      · intro h
+        simp only [List.getD_cons_zero, roots, List.mem_map] at h
+        obtain ⟨d, hd, hdr⟩ := h
+        exact hself d (List.mem_filter.mp hd).1 hdr
+      · intro h; rw [hp0] at h; cases h
+      · intro _ _ d hd hr; exact absurd hr (hself d hd)
+      · intro j hj hj0; exact absurd (by simpa [hps] using hj) hj0
+    · intro _ p E hp hpr d hd hb hdr
+      simp only [kill] at hp
+      obtain ⟨E0, h0, rfl⟩ := Option.map_eq_some_iff.mp hp
+      rw [killE_mode] at hpr; rw [killE_vdeps] at hd
+      exact hny p E0 h0 hpr d hd hb (by simpa using hdr)
+  · rw [hmut] at hd; cases hd
+  · refine ⟨fun i hi => ⟨fun hs => ?_, fun b' _ => ?_⟩, fun d hd => ?_, fun i hi b' _ Ea hEa => ?_⟩
+    · have hi0 : i = 0 := by rw [hps] at hi; simpa using hi
+      subst hi0; simp [hps] at hs
+    · have hi0 : i = 0 := by rw [hps] at hi; simpa using hi
+      subst hi0
+      exact (hdc.of_replace _ _).kill _ _ _
+    · rw [hmut] at hd; cases hd
+    · have hi0 : i = 0 := by rw [hps] at hi; simpa using hi
+      subst hi0
+      simp only [List.getD_cons_zero, hΓk, Option.some.injEq] at hEa
+      subst hEa; exact hdb
+
+/-- **A hand-over through an owned receiver that holds nothing by name** (an
+    owned closure, or a trait object, whose environment holds no closure that
+    holds names): A2's `callcE`, its call the interface's (`callT_recv_inout`). -/
+theorem _root_.A2.StmtT.callcE_recv {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c : Var} {j : Nat} {k : Stmt}
+    {Ec : Entry} {ms : List Nat} {q : Cross} {σ : Nat} {sig : Fn} {b : Eff}
+    (hks : k.src = true) (hx : Γ x = none) (hxF : x ∉ F) (hc : Γ c = some Ec) (hl : Ec.live = true)
+    (hm : Ec.mode = .own) (hty : Ec.ty = .fn ms q) (hq : Cross.send.Le q) (hj : ms[j]? = some σ)
+    (hσ : P[σ]? = some sig) (hps : sig.params = [(.inout b, .fn ms q)]) (hsl : sig.lends = [])
+    (hsr : sig.rholds = []) (hso : sig.outHolds = []) (hnt : ¬ ThruFn P σ) (hcF : c ∉ F)
+    (hself : ∀ d ∈ Ec.vdeps, d.root ≠ c) (hn : ∀ d ∈ Ec.vdeps, d.kind.isName = false) (hdb : Ec.dbind = false)
+    (hny : NoPin Γ c) (hdc : DtorSafe Γ .replace false c)
+    (hk : StmtT P (kill .replace false c (setE (callPost (kill .replace false c Γ) sig [c]) x
+      (callRes (kill .replace false c Γ) sig [c]))) F k Δ) (hend : EndOK Δ x) :
+    StmtT P Γ F (.callcE x c j [] k) (exitScope x Δ) :=
+  StmtT.callcE hks hx hxF hc hty (Or.inl hm) hq hj hσ hps hsl hsr hso hny hdc
+    (callT_recv_inout hσ (by rw [hty]; exact hps) hc hl hm (by rw [hty]; rfl) hcF hself hn hdb hny hdc hnt)
+    hk hend hnt
+
+/-! A3.5b: the accumulator `\ → i { = n + n 1 ^ n }`, with `n` moved in, as a
+`send` closure whose one method changes its environment. -/
+
+/-- Its environment: a struct of the count.  A2's structs are pairs, and A2 has
+    no `inout` integer (an integer binding is copied, not owned), so the
+    one-capture environment is the count beside a field the code keeps as it
+    is. -/
+def accEnv : Ty := .prod .int .int
+
+/-- The closure's type: one method, the interface `accSig` (the program's
+    function 0), at `send`. -/
+def accTy : Ty := .fn [0] .send
+
+/-- The interface: takes the closure `inout` (it may be replaced), returns an
+    integer, and lends, holds and stores nothing.  (An interface is a function
+    of the program; its body says what any implementation returns.) -/
+def accSig : Fn where
+  params := [(.inout .replace, accTy)]
+  resTy := .int
+  resOwn := false
+  lends := []
+  rholds := []
+  outHolds := []
+  body := .assign 1 (.expr (.lit 0))
+  nvars := 2
+
+/-- The code (the program's function 1): the environment `e` (variable 0) taken
+    `inout`; `: i n . e 0`, `: i p . e 1`, `: i n2 + n 1`, `= e { n2 p }`,
+    `^ n2`. -/
+def accCode : Fn where
+  params := [(.inout .replace, accEnv)]
+  resTy := .int
+  resOwn := false
+  lends := []
+  rholds := []
+  outHolds := []
+  body := .letv 2 (.fst 0) (.letv 3 (.snd 0) (.letv 4 (.expr (.add (.var 2) (.lit 1)))
+    (.seq (.assign 0 (.pair 4 3)) (.assign 1 (.var 4)))))
+  nvars := 5
+
+def accP : Prog := [accSig, accCode]
+
+theorem accP_noThru (f : Nat) : ¬ ThruFn accP f := by
+  have hall : ∀ fn ∈ accP, fn.body.hasThru = false ∧ fn.body.calls = [] := by
+    simp [accP, accSig, accCode, Stmt.hasThru, Stmt.calls]
+  intro h
+  cases h with
+  | here hf hb => rw [(hall _ (List.mem_of_getElem? hf)).1] at hb; cases hb
+  | call hf hg _ => rw [(hall _ (List.mem_of_getElem? hf)).2] at hg; cases hg
+
+/-- **The accumulator's code implements its interface**: it takes the
+    environment where the interface takes the closure, `inout` at the
+    interface's bound — the environment handed over, which it changes. -/
+theorem accum_impl : Implements accP 1 accEnv [] 0 :=
+  ⟨accCode, accSig, rfl, rfl, by simp [Fn.recvMode, accCode, accSig], fun _ => rfl, rfl, rfl,
+    List.Subset.refl _, List.Subset.refl _, List.Subset.refl _, accP_noThru 1⟩
+
+theorem accum_codes : CodeOK accP [1] accEnv [0] [] := by
+  refine ⟨rfl, fun j f σ hf hσ => ?_⟩
+  rcases j with _ | j
+  · simp at hf hσ; subst hf hσ; exact accum_impl
+  · simp at hf
+
+/-- Its environment, a plain pair of integers, fits every class: the closure
+    could be packed `sync` or `bare`.  Its interface takes it at `send`, so the
+    method that changes the count is called only at `send` (a `sync` one is
+    moved up first, `RhsT.moveUp`, and is then no `Arc`'s payload). -/
+theorem accum_fits (q : Cross) : q.Fits accEnv [] :=
+  ⟨fun _ => ⟨rfl, rfl⟩, fun _ => rfl, fun _ => rfl⟩
+
+/-- **The accumulator, typed through `callcE` on the owned closure**: its owner
+    calls it, the environment handed over to the code, which adds one to the
+    count it moved in. -/
+theorem accum_hand {Γ Δ : Ctx} {F : List Var} {x acc : Var} {k : Stmt} (hks : k.src = true)
+    (hx : Γ x = none) (hxF : x ∉ F) (hacc : Γ acc = some ⟨accTy, .own, true, [], [], false, false⟩)
+    (haccF : acc ∉ F) (hny : NoPin Γ acc) (hdc : DtorSafe Γ .replace false acc)
+    (hk : StmtT accP (kill .replace false acc (setE (callPost (kill .replace false acc Γ) accSig [acc]) x
+      (callRes (kill .replace false acc Γ) accSig [acc]))) F k Δ) (hend : EndOK Δ x) :
+    StmtT accP Γ F (.callcE x acc 0 [] k) (exitScope x Δ) :=
+  StmtT.callcE_recv (sig := accSig) (ms := [0]) (q := .send) hks hx hxF hacc rfl rfl rfl (by decide) rfl rfl rfl
+    rfl rfl rfl (accP_noThru 0) haccF (fun _ h => by cases h) (fun _ h => by cases h) rfl hny hdc hk hend
+
+/-- ... and a `sync` one has no such call: its count is changed by no thread
+    while several may hold it. -/
+theorem accum_not_sync {Γ Δ : Ctx} {F : List Var} {x acc : Var} {k : Stmt} {Ec : Entry}
+    (hacc : Γ acc = some Ec) (hty : Ec.ty = .fn [0] .sync) : ¬ StmtT accP Γ F (.callcE x acc 0 [] k) Δ :=
+  callcE_not_sync hacc hty (Or.inl rfl)
+
+/-! The accumulator's interface and code, typed (`FnOK`): the code changes the
+count in the environment it is handed `inout`.  Its contexts hold only plain
+bindings, which no change ends and no rule pins. -/
+
+/-- A context of plain bindings: none borrowed, none a destructor's, none
+    depending on anything. -/
+def PlainCtx (Γ : Ctx) : Prop :=
+  ∀ v E, Γ v = some E → E.vdeps = [] ∧ E.mode ≠ .rootb ∧ E.dtor = false ∧ E.dbind = false
+
+namespace PlainCtx
+variable {Γ : Ctx}
+
+theorem kill (h : PlainCtx Γ) (e : Eff) (hv : Bool) (x : Var) : A2.kill e hv x Γ = Γ := funext fun v => by
+  simp only [A2.kill]
+  cases hv' : Γ v with
+  | none => rfl
+  | some E => simp [killE_nil (h v E hv').1]
+
+theorem setE (h : PlainCtx Γ) {x : Var} {E : Entry}
+    (hE : E.vdeps = [] ∧ E.mode ≠ .rootb ∧ E.dtor = false ∧ E.dbind = false) : PlainCtx (A2.setE Γ x E) := by
+  intro v E' hv
+  by_cases hvx : v = x
+  · subst hvx; simp only [A2.setE, upd_same, Option.some.injEq] at hv; subst hv; exact hE
+  · simp only [A2.setE, upd_ne _ _ hvx] at hv; exact h v E' hv
+
+theorem upd_none (h : PlainCtx Γ) (x : Var) : PlainCtx (upd Γ x none) := by
+  intro v E' hv
+  by_cases hvx : v = x
+  · subst hvx; simp at hv
+  · simp only [upd_ne _ _ hvx] at hv; exact h v E' hv
+
+theorem exitScope (h : PlainCtx Γ) (x : Var) : A2.exitScope x Γ = upd Γ x none := by
+  unfold A2.exitScope; rw [h.kill]
+
+theorem endOK (h : PlainCtx Γ) (x : Var) : EndOK Γ x :=
+  ⟨fun p E hp hm => absurd hm (h p E hp).2.1, DtorSafe.of_none (fun v E hv => (h v E hv).2.2.1) _ _ _,
+    DbindSafe.of_none (fun v E hv => (h v E hv).2.2.2) x⟩
+
+end PlainCtx
+
+theorem intE_plain : intE.vdeps = [] ∧ intE.mode ≠ .rootb ∧ intE.dtor = false ∧ intE.dbind = false :=
+  ⟨by simp [intE, Entry.vdeps, Mode.ownSlot], by simp [intE], rfl, rfl⟩
+
+/-- A function of `inout` parameters that hold nothing by name starts in a
+    plain context. -/
+theorem sigCtx_plain {fn : Fn} (hio : ∀ pt ∈ fn.params, ∃ b, pt.1 = .inout b)
+    (hs : symNames fn.params = []) : PlainCtx (sigCtx fn) := by
+  intro v E hv
+  unfold sigCtx at hv
+  split at hv
+  · rename_i hvl
+    cases hv
+    obtain ⟨b, hb⟩ := hio _ (List.getElem_mem hvl)
+    generalize fn.params[v] = pt at hb
+    obtain ⟨pm, t⟩ := pt
+    simp only at hb; subst hb
+    simp [paramE, hs, Entry.vdeps, Mode.ownSlot]
+  · split at hv
+    · cases hv; simp [Entry.vdeps, resMode]; split <;> simp [Mode.ownSlot]
+    · cases hv
+
+/-- The accumulator's environment as its code changes it: the pair it
+    replaces. -/
+def accEp : Entry := ⟨accEnv, .inout .replace, true, [], [], false, false⟩
+
+/-- The accumulator code's context after its three `let`s ... -/
+def accCtx3 : Ctx := setE (setE (setE (sigCtx accCode) 2 intE) 3 intE) 4 intE
+
+/-- ... and after it has replaced the environment and set its result. -/
+def accCtx4 : Ctx := setE (setE accCtx3 0 accEp) 1 intE
+
+/-- **The accumulator's code is typed**: `: i n . e 0`, `: i p . e 1`,
+    `: i n2 + n 1`, `= e { n2 p }`, `^ n2` changes the environment it is handed
+    `inout` (it replaces it: `inout .replace`) and returns an integer, lending
+    and holding nothing. -/
+theorem accCode_ok : FnOK accP accCode := by
+  have h0 : PlainCtx (sigCtx accCode) := sigCtx_plain (fun pt hpt => by
+    simp only [accCode, List.mem_singleton] at hpt; subst hpt; exact ⟨_, rfl⟩) rfl
+  have hs0 : sigCtx accCode 0 = some accEp := by simp [sigCtx, accCode, paramE, accEnv, Ty.hasFn, accEp]
+  have hs1 : sigCtx accCode 1 = some ⟨.int, .bor, false, [], [], false, false⟩ := by
+    simp [sigCtx, accCode, resMode]
+  have hEp : accEp.vdeps = [] ∧ accEp.mode ≠ .rootb ∧ accEp.dtor = false ∧ accEp.dbind = false :=
+    ⟨by simp [accEp, Entry.vdeps, Mode.ownSlot], by simp [accEp], rfl, rfl⟩
+  have hp3 : PlainCtx accCtx3 :=
+    ((h0.setE (x := 2) intE_plain).setE (x := 3) intE_plain).setE (x := 4) intE_plain
+  have hp3a : PlainCtx (setE accCtx3 0 accEp) := hp3.setE hEp
+  have hp4 : PlainCtx accCtx4 := hp3a.setE (x := 1) intE_plain
+  have hpair : RhsT accCtx3 [] (.pair 4 3) ⟨.prod .int .int, .own, true, [], [], false, false⟩ accCtx3 :=
+    RhsT.pair (Ey := intE) (Ez := intE) (by simp [accCtx3, setE]) rfl PushArg.int (by simp [accCtx3, setE]) rfl
+      PushArg.int (fun h => by simp [intE, Mode.ownSlot] at h)
+  have hA0 : StmtT accP accCtx3 [] (.assign 0 (.pair 4 3)) (setE accCtx3 0 accEp) := by
+    have h := StmtT.assign (P := accP) (F := []) (x := 0) (Ex := accEp)
+      (E := ⟨.prod .int .int, .own, true, [], [], false, false⟩) (by simp [accCtx3, setE, hs0]) (by simp)
+      (Or.inr (Or.inl ⟨rfl, rfl⟩)) hpair rfl (by simp [Entry.vdeps, Mode.ownSlot, roots])
+      (by simp [accCtx3, setE, hs0]) (hp3.endOK 0).1 (hp3.endOK 0).2.1 rfl
+    rw [hp3.kill] at h; exact h
+  have hA1 : StmtT accP (setE accCtx3 0 accEp) [] (.assign 1 (.var 4)) accCtx4 := by
+    have h := StmtT.assign (P := accP) (F := []) (x := 1) (Γ := setE accCtx3 0 accEp)
+      (Ex := ⟨.int, .bor, false, [], [], false, false⟩) (E := { intE with dtor := false, dbind := false })
+      (by simp [accCtx3, setE, hs1]) (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
+      (RhsT.copyBor (y := 4) (E := intE) (by simp [accCtx3, setE]) rfl rfl) rfl
+      (by simp [intE, Entry.vdeps, Mode.ownSlot, roots]) (by simp [accCtx3, setE, hs1])
+      (hp3a.endOK 1).1 (hp3a.endOK 1).2.1 rfl
+    rw [hp3a.kill] at h; exact h
+  have h4 : StmtT accP (setE (setE (sigCtx accCode) 2 intE) 3 intE) []
+      (.letv 4 (.expr (.add (.var 2) (.lit 1))) (.seq (.assign 0 (.pair 4 3)) (.assign 1 (.var 4))))
+      (A2.exitScope 4 accCtx4) :=
+    StmtT.letv (E := intE) rfl (by simp [setE, sigCtx, accCode]) (by simp)
+      (RhsT.expr (ExprT.add (ExprT.var (E := intE) (by simp [setE]) rfl rfl) ExprT.lit))
+      (StmtT.seq rfl hA0 hA1) (hp4.endOK 4)
+  have hp5 := hp4.upd_none 4
+  have h3 : StmtT accP (setE (sigCtx accCode) 2 intE) []
+      (.letv 3 (.snd 0) (.letv 4 (.expr (.add (.var 2) (.lit 1)))
+        (.seq (.assign 0 (.pair 4 3)) (.assign 1 (.var 4)))))
+      (A2.exitScope 3 (A2.exitScope 4 accCtx4)) :=
+    StmtT.letv (E := projE 0 accEp .int) rfl (by simp [setE, sigCtx, accCode]) (by simp)
+      (RhsT.snd (b := .int) (by simp [setE, hs0]) rfl rfl) h4 (by rw [hp4.exitScope]; exact hp5.endOK 3)
+  have hp6 := hp5.upd_none 3
+  have h2 : StmtT accP (sigCtx accCode) [] accCode.body
+      (A2.exitScope 2 (A2.exitScope 3 (A2.exitScope 4 accCtx4))) :=
+    StmtT.letv (E := projE 0 accEp .int) rfl (by simp [sigCtx, accCode]) (by simp)
+      (RhsT.fst (b := .int) hs0 rfl rfl) h3 (by rw [hp4.exitScope, hp5.exitScope]; exact hp6.endOK 2)
+  have hΔ : A2.exitScope 2 (A2.exitScope 3 (A2.exitScope 4 accCtx4)) =
+      upd (upd (upd accCtx4 4 none) 3 none) 2 none := by
+    rw [hp4.exitScope, hp5.exitScope, hp6.exitScope]
+  have hp7 := hp6.upd_none 2
+  refine ⟨rfl, by decide, by decide, rfl, by simp [accCode], ?_, by simp [accCode], by simp [accCode],
+    by simp [accCode], by simp [accCode], by simp [accCode], _, h2, ?_, ?_, ?_⟩
+  · intro pt hpt
+    simp only [accCode, List.mem_singleton] at hpt; subst hpt
+    simp [accEnv, Ty.ok, Ty.owning]
+  · intro v E hv
+    rw [hΔ] at hv
+    exact ⟨(hp7 v E hv).2.2.1, (hp7 v E hv).2.2.2⟩
+  · refine ⟨intE, by rw [hΔ]; simp [accCtx4, setE, accCode], rfl, rfl, rfl, by simp [intE], by simp [intE],
+      fun h => by simp [accCode] at h⟩
+  · intro i hi b _
+    have hi0 : i = 0 := by simpa [accCode] using hi
+    subst hi0
+    exact ⟨accEp, by rw [hΔ]; simp [accCtx4, setE], rfl, by simp [accEp], fun _ => rfl⟩
+
+/-- ... and so is its interface: it returns an integer, and changes nothing of
+    the closure it takes `inout`. -/
+theorem accSig_ok : FnOK accP accSig := by
+  have hsym : symNames accSig.params = [] := by decide
+  have h0 : PlainCtx (sigCtx accSig) := sigCtx_plain (fun pt hpt => by
+    simp only [accSig, List.mem_singleton] at hpt; subst hpt; exact ⟨_, rfl⟩) hsym
+  have hs0 : sigCtx accSig 0 = some ⟨accTy, .inout .replace, true, [], [], false, false⟩ := by
+    simp only [sigCtx, accSig, List.length_singleton, Nat.zero_lt_one]
+    simp [paramE, accTy, Ty.hasFn, ← hsym, accSig]
+  have hs1 : sigCtx accSig 1 = some ⟨.int, .bor, false, [], [], false, false⟩ := by
+    simp [sigCtx, accSig, resMode]
+  have hA : StmtT accP (sigCtx accSig) [] accSig.body (setE (sigCtx accSig) 1 intE) := by
+    have h := StmtT.assign (P := accP) (F := []) (x := 1) (r := .expr (.lit 0)) (Γ := sigCtx accSig)
+      (Ex := ⟨.int, .bor, false, [], [], false, false⟩) hs1 (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
+      (RhsT.expr ExprT.lit) rfl (by simp [intE, Entry.vdeps, Mode.ownSlot, roots]) (by simp [hs1])
+      (h0.endOK 1).1 (h0.endOK 1).2.1 rfl
+    rw [h0.kill] at h; exact h
+  have hp := h0.setE (x := 1) intE_plain
+  refine ⟨rfl, by decide, by decide, rfl, by simp [accSig], ?_, by simp [accSig], by simp [accSig],
+    by simp [accSig], by simp [accSig], by simp [accSig], _, hA, ?_, ?_, ?_⟩
+  · intro pt hpt
+    simp only [accSig, List.mem_singleton] at hpt; subst hpt
+    simp [accTy, Ty.ok, Ty.owning]
+  · intro v E hv
+    exact ⟨(hp v E hv).2.2.1, (hp v E hv).2.2.2⟩
+  · exact ⟨intE, by simp [setE, accSig], rfl, rfl, rfl, by simp [intE], by simp [intE], fun h => by simp [accSig] at h⟩
+  · intro i hi b _
+    have hi0 : i = 0 := by simpa [accSig] using hi
+    subst hi0
+    exact ⟨⟨accTy, .inout .replace, true, [], [], false, false⟩, by simp [setE, hs0], rfl, by simp, fun _ => rfl⟩
+
+/-- **The accumulator's program is typed**: its interface and code meet their
+    summaries, and they make no package. -/
+theorem accP_ok : ProgOK accP := by
+  intro fn hfn
+  simp only [accP, List.mem_cons, List.mem_nil_iff, or_false] at hfn
+  rcases hfn with rfl | rfl
+  · exact accSig_ok
+  · exact accCode_ok
+
+theorem accP_codes : ProgCodes accP := by
+  intro fn hfn
+  simp only [accP, List.mem_cons, List.mem_nil_iff, or_false] at hfn
+  rcases hfn with rfl | rfl <;> simp [accSig, accCode, Stmt.codesOK, Rhs.codeOK]
+
+/-! The accumulator's caller, a whole program:
+
+        : i n 0  : i p 0  : e { n p }
+        : acc \ → i { … }        -- moves e in: the closure owns its environment
+        : i r ( acc )            -- hands the environment over to the code
+
+typed from nothing, so `A2.memory_safe` and the two `no_leak`s hold of it. -/
+
+/-- The accumulator's caller. -/
+def accMain : Stmt :=
+  .letv 0 (.expr (.lit 0)) (.letv 1 (.expr (.lit 0)) (.letv 2 (.pair 0 1)
+    (.letv 3 (.pack [1] accEnv [0] 2 []) (.callcE 4 3 0 [] .skip))))
+
+/-- The environment before it moves into the closure, ... -/
+def accPairE : Entry := ⟨accEnv, .own, true, [], [], false, false⟩
+
+/-- ... the closure that owns it, ... -/
+def accCloE : Entry := ⟨accTy, .own, true, [], [], false, false⟩
+
+/-- ... and the caller's context once the closure is made. -/
+def accMainCtx : Ctx :=
+  setE (setE (setE (setE (setE (fun _ => none) 0 intE) 1 intE) 2 accPairE) 2
+    { accPairE with live := false, dtor := false }) 3 accCloE
+
+/-- **The accumulator's caller is typed** from nothing: the pair moves into
+    the closure (`RhsT.pack`, at `send`), and the closure's owner calls it,
+    handing the environment over (`StmtT.callcE`, by `accum_hand`). -/
+theorem accMain_typed : ∃ Δ, StmtT accP (fun _ => none) [] accMain Δ := by
+  have he : PlainCtx (fun _ => none) := fun _ _ h => by cases h
+  have hpE : accPairE.vdeps = [] ∧ accPairE.mode ≠ .rootb ∧ accPairE.dtor = false ∧ accPairE.dbind = false :=
+    ⟨by simp [accPairE, Entry.vdeps, Mode.ownSlot], by simp [accPairE], rfl, rfl⟩
+  have hdE : ({ accPairE with live := false, dtor := false } : Entry).vdeps = [] ∧
+      ({ accPairE with live := false, dtor := false } : Entry).mode ≠ .rootb ∧
+      ({ accPairE with live := false, dtor := false } : Entry).dtor = false ∧
+      ({ accPairE with live := false, dtor := false } : Entry).dbind = false :=
+    ⟨by simp [accPairE, Entry.vdeps, Mode.ownSlot], by simp [accPairE], rfl, rfl⟩
+  have hcE : accCloE.vdeps = [] ∧ accCloE.mode ≠ .rootb ∧ accCloE.dtor = false ∧ accCloE.dbind = false :=
+    ⟨by simp [accCloE, Entry.vdeps, Mode.ownSlot], by simp [accCloE], rfl, rfl⟩
+  have hp2 : PlainCtx (setE (setE (fun _ => none) 0 intE) 1 intE) :=
+    (he.setE (x := 0) intE_plain).setE (x := 1) intE_plain
+  have hp3 : PlainCtx (setE (setE (setE (fun _ => none) 0 intE) 1 intE) 2 accPairE) := hp2.setE hpE
+  have hp4 : PlainCtx accMainCtx := (hp3.setE (x := 2) hdE).setE (x := 3) hcE
+  have hcp : callPost accMainCtx accSig [3] = setE accMainCtx 3 accCloE := by
+    have h : callPost accMainCtx accSig [3] = setE (A2.kill .replace false 3 accMainCtx) 3 accCloE := by
+      simp [callPost, callPostAux, accSig, mutNames, argNames, killNames, nameDeps, argE, accMainCtx, setE,
+        accCloE, accTy, Ty.holdsView, Ty.elem, Entry.vdeps, Mode.ownSlot]
+    rw [h, hp4.kill]
+  have hcr : callRes accMainCtx accSig [3] = intE := by
+    simp [callRes, accSig, heldOfArgs, argNames, allKinds, nameDeps, memDeps, roots, argE, accMainCtx, setE,
+      accCloE, accTy, Entry.vdeps, Mode.ownSlot, ownHeld, resMode, intE]
+  have hpc : PlainCtx (setE (setE accMainCtx 3 accCloE) 4 intE) := (hp4.setE hcE).setE (x := 4) intE_plain
+  have hΔc : A2.kill .replace false 3 (setE (callPost (A2.kill .replace false 3 accMainCtx) accSig [3]) 4
+      (callRes (A2.kill .replace false 3 accMainCtx) accSig [3])) = setE (setE accMainCtx 3 accCloE) 4 intE := by
+    rw [hp4.kill, hcp, hcr]; exact hpc.kill _ _ _
+  have hC : StmtT accP accMainCtx [] (.callcE 4 3 0 [] .skip)
+      (A2.exitScope 4 (setE (setE accMainCtx 3 accCloE) 4 intE)) := by
+    have h := accum_hand (F := []) (x := 4) (acc := 3) (k := .skip) rfl (by simp [accMainCtx, setE]) (by simp)
+      (by simp [accMainCtx, setE, accCloE]) (by simp) (hp4.endOK 3).1 (hp4.endOK 3).2.1 StmtT.skip
+      (by rw [hΔc]; exact hpc.endOK 4)
+    rw [hΔc] at h; exact h
+  have q4 := hpc.upd_none 4
+  have q3 := q4.upd_none 3
+  have q2 := q3.upd_none 2
+  have q1 := q2.upd_none 1
+  have hpack : RhsT (setE (setE (setE (fun _ => none) 0 intE) 1 intE) 2 accPairE) [] (.pack [1] accEnv [0] 2 [])
+      accCloE (setE (setE (setE (setE (fun _ => none) 0 intE) 1 intE) 2 accPairE) 2
+        { accPairE with live := false, dtor := false }) := by
+    have h := RhsT.pack (Γ := setE (setE (setE (fun _ => none) 0 intE) 1 intE) 2 accPairE) (F := [])
+      (fs := [1]) (te := accEnv) (ms := [0]) (q := .send) (y := 2) (cs := []) (Ey := accPairE)
+      (by simp [setE]) rfl rfl
+      (PushArg.move (by simp [accEnv, Ty.owning]) rfl (by simp) (hp3.endOK 2).1 (hp3.endOK 2).2.1)
+      ⟨List.nodup_nil, fun _ h => by cases h⟩ (accum_fits .send)
+    rw [hp3.kill] at h; exact h
+  have h3 : StmtT accP (setE (setE (setE (fun _ => none) 0 intE) 1 intE) 2 accPairE) []
+      (.letv 3 (.pack [1] accEnv [0] 2 []) (.callcE 4 3 0 [] .skip))
+      (A2.exitScope 3 (A2.exitScope 4 (setE (setE accMainCtx 3 accCloE) 4 intE))) :=
+    StmtT.letv rfl (by simp [setE]) (by simp) hpack hC (by rw [hpc.exitScope]; exact q4.endOK 3)
+  have h2 : StmtT accP (setE (setE (fun _ => none) 0 intE) 1 intE) []
+      (.letv 2 (.pair 0 1) (.letv 3 (.pack [1] accEnv [0] 2 []) (.callcE 4 3 0 [] .skip)))
+      (A2.exitScope 2 (A2.exitScope 3 (A2.exitScope 4 (setE (setE accMainCtx 3 accCloE) 4 intE)))) :=
+    StmtT.letv (E := accPairE) rfl (by simp [setE])
+      (by simp) (RhsT.pair (Ey := intE) (Ez := intE) (by simp [setE]) rfl PushArg.int (by simp [setE]) rfl
+        PushArg.int (fun h => by simp [intE, Mode.ownSlot] at h)) h3
+      (by rw [hpc.exitScope, q4.exitScope]; exact q3.endOK 2)
+  have h1 : StmtT accP (setE (fun _ => none) 0 intE) []
+      (.letv 1 (.expr (.lit 0)) (.letv 2 (.pair 0 1) (.letv 3 (.pack [1] accEnv [0] 2 [])
+        (.callcE 4 3 0 [] .skip))))
+      (A2.exitScope 1 (A2.exitScope 2 (A2.exitScope 3 (A2.exitScope 4
+        (setE (setE accMainCtx 3 accCloE) 4 intE))))) :=
+    StmtT.letv rfl (by simp [setE]) (by simp) (RhsT.expr ExprT.lit) h2
+      (by rw [hpc.exitScope, q4.exitScope, q3.exitScope]; exact q2.endOK 1)
+  exact ⟨_, StmtT.letv rfl rfl (by simp) (RhsT.expr ExprT.lit) h1
+    (by rw [hpc.exitScope, q4.exitScope, q3.exitScope, q2.exitScope]; exact q1.endOK 0)⟩
+
+theorem accMain_codes : accMain.codesOK accP := by
+  simp only [accMain, Stmt.codesOK, Rhs.codeOK, true_and, and_true]
+  exact accum_codes
+
+theorem accMain_vars : ∀ v ∈ accMain.vars, v < 5 := by decide
+
+/-- **The accumulator's program is memory-safe**: no run of it from empty
+    memory reaches a stuck state ... -/
+theorem accMain_safe {m' : Mem} {s' : Stmt} (hr : Steps accP (emptyMem 5) accMain (.ok m' s')) :
+    ¬ Stuck accP m' s' :=
+  have ⟨_, ht⟩ := accMain_typed
+  memory_safe accP_ok accP_codes ht rfl accMain_codes accMain_vars hr
+
+/-- ... and frees everything it allocated, when it ends ... -/
+theorem accMain_no_leak {m' : Mem} (hr : Steps accP (emptyMem 5) accMain (.ok m' .skip)) :
+    ∀ i, m'.alloc i = false :=
+  have ⟨_, ht⟩ := accMain_typed
+  no_leak_end accP_ok accP_codes ht rfl accMain_codes accMain_vars hr
+
+/-- ... and when it panics. -/
+theorem accMain_no_leak_panic {m' : Mem} (hr : Steps accP (emptyMem 5) accMain (.panic m')) :
+    ∀ i, m'.alloc i = false :=
+  have ⟨_, ht⟩ := accMain_typed
+  no_leak_panic accP_ok accP_codes ht rfl accMain_codes accMain_vars hr
 
 /-! ### A3.5's second cut: library handles in locks and channels
 

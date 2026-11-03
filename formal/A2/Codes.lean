@@ -381,7 +381,7 @@ theorem codeOK_caps_rename {P : Prog} {fs : List Nat} {te : Ty} {ms : List Nat} 
   have h : (cs.map (fun c => (ρ c.1, c.2))).map (·.2) = cs.map (·.2) := by
     simp [List.map_map, Function.comp_def]
   unfold CodeOK Implements
-  simp only [h]
+  simp only [h, List.map_eq_nil_iff]
 
 theorem Rhs.codeOK_rename {P : Prog} (ρ : Var → Var) (r : Rhs) : (r.rename ρ).codeOK P ↔ r.codeOK P := by
   cases r with
@@ -397,7 +397,7 @@ theorem Stmt.codesOK_rename {P : Prog} (ρ : Var → Var) (s : Stmt) : (s.rename
   | ite c a b iha ihb => simp only [Stmt.rename, Stmt.codesOK, iha, ihb]
   | letcall _ _ _ _ ih | «while» _ _ ih | scope _ _ ih | rbind _ _ ih | frozen _ _ ih | letrec _ _ _ ih
   | catchR _ _ _ ih | unpair _ _ _ _ ih | callc _ _ _ _ _ ih | scopeD _ _ _ ih | withLock _ _ _ ih
-  | scopeL _ _ _ _ ih | withElem _ _ _ _ ih =>
+  | scopeL _ _ _ _ ih | withElem _ _ _ _ ih | callcE _ _ _ _ _ ih =>
     simp only [Stmt.rename, Stmt.codesOK, ih]
   | _ => exact Iff.rfl
 
@@ -636,6 +636,14 @@ theorem codes_step {P : Prog} (hPc : ProgCodes P) {m : Mem} {s : Stmt} {r : Res}
     exact ⟨(((hb.codes hme).set (fun _ e => by cases e)).set (fun _ e => by cases e)).of_st rfl,
       ⟨callIn_codes hPc hf _ _ _, hs⟩⟩
 
+  | callcE hc _ _ _ =>
+    -- A2-envhand: the environment, with its packages, moves to its binding;
+    -- the package it goes back into names the code it came from
+    intro hm _ hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    have hT := hm.slot hc
+    exact ⟨(((hm.set (fun _ e => by cases e)).set (fun V e => by cases e; exact hT.child Child.pkg)).set
+      (fun _ e => by cases e)).of_st rfl, ⟨trivial, hm.1 _ _ _ _ _ _ _ _ hc (Sub.refl _)⟩, hs⟩
+
 /-! ### A3.6: a program reads each module global at its declared type
 
 The static link between a read `glob g t` and global `g`'s declaration.  A
@@ -674,6 +682,7 @@ def Stmt.globsAt (GT : GTy) : Stmt → Prop
   | .withLock _ _ s => s.globsAt GT
   | .scopeL _ _ _ s => s.globsAt GT
   | .withElem _ _ _ s => s.globsAt GT
+  | .callcE _ _ _ _ s => s.globsAt GT
   | _ => True
 
 /-- **A3.6: the program reads its globals at their declared types**: every
@@ -693,7 +702,7 @@ theorem Stmt.globsAt_rename {GT : GTy} (ρ : Var → Var) (s : Stmt) : (s.rename
   | ite c a b iha ihb => simp only [Stmt.rename, Stmt.globsAt, iha, ihb]
   | letcall _ _ _ _ ih | «while» _ _ ih | scope _ _ ih | rbind _ _ ih | frozen _ _ ih | letrec _ _ _ ih
   | catchR _ _ _ ih | unpair _ _ _ _ ih | callc _ _ _ _ _ ih | scopeD _ _ _ ih | withLock _ _ _ ih
-  | scopeL _ _ _ _ ih | withElem _ _ _ _ ih =>
+  | scopeL _ _ _ _ ih | withElem _ _ _ _ ih | callcE _ _ _ _ _ ih =>
     simp only [Stmt.rename, Stmt.globsAt, ih]
   | _ => exact Iff.rfl
 
@@ -726,6 +735,7 @@ theorem globs_step {P : Prog} {GT : GTy} (hPG : ProgGlobs P GT) {m : Mem} {s : S
   | callc _ _ hf _ _ => intro hs _ _ h; cases h; exact ⟨callIn_globs hPG hf _ _ _, hs⟩
   | «while» => intro hs _ _ h; cases h; exact ⟨⟨hs, hs⟩, trivial⟩
   | withElem _ _ _ _ _ => intro hs _ _ h; cases h; exact ⟨hs, trivial⟩
+  | callcE _ _ _ _ => intro hs _ _ h; cases h; exact ⟨⟨trivial, trivial⟩, hs⟩
   | _ => intro hs _ _ h; cases h <;> simp_all [Stmt.globsAt]
 
 end A2

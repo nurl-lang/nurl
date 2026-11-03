@@ -3720,6 +3720,46 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     · rcases liftE_vdeps_cases hrb hd with ⟨d0, hd0, rfl⟩ | ha
       · exact hnz z0 hz0 d0 hd0 hb (h.inj _ _ hdr)
       · exact A_out h ha z0 hdr.symm
+  | @callcE Γ Γ1 Δ F x c j k Ec E ms q σ sig b hks hx hxF hc htc hcan hq hj hσ hsp hsl hsr hso hny hdc hcT hk
+      hpe hnσ ih =>
+    intro _ hab hw hn hT
+    -- the package may be replaced: what depends on it ends where it is placed
+    have hal : Allowed S .replace false c := by
+      rcases allowed_canDo' hab hc hcan with h0 | ⟨b', hb', hbb, hk'⟩
+      · exact Or.inl h0
+      · exact Or.inr ⟨b', hb', hbb, fun k' _ => hk' k' (by cases k' <;> rfl)⟩
+    have habk : S.AbsOK (A2.kill .replace false c Γ) := hab.kill _ _ _
+    obtain ⟨E', Γ', hc', hpw, hE'⟩ := callT_ren h habk hP hcT (fun ht => absurd ht hnσ)
+    obtain ⟨hn1, hEn, _⟩ := hcT.names hP (hn.kill .replace false c)
+    obtain ⟨hab1, hmo, _⟩ := CallT.absOK (S := S) hcT habk
+    obtain ⟨hw1, hdm, hE⟩ := hcT.wf hP (hw.kill .replace false c)
+    have hxk : A2.kill .replace false c Γ x = none := by simp [A2.kill, hx]
+    have hx1 : Γ1 x = none := by have := hdm.1 x; rw [hxk] at this; cases h' : Γ1 x <;> simp_all
+    have hdb0 : E.dbind = false := hcT.dtor_false.2
+    have hwx := (hw1.add hx1 (fun _ _ => hE) (fun hd => absurd hd (by simp [hdb0]))
+      (fun ha => absurd ha (by simp [hcT.dtor_false.1])) (fun hd => absurd hd (by simp [hdb0]))).kill .replace false c
+    have hnx := (NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h) (fun Ex h => by rw [hx1] at h; cases h)
+      hEn).kill .replace false c
+    have habx := (habk.add hab1 hxk hmo).kill .replace false c
+    obtain ⟨tk, abk⟩ := ih hks habx hwx hnx (fun ht => hT ht.callcE)
+    have hbx := hab.fresh hx
+    refine ⟨?_, abk.exitScope hbx⟩
+    rw [canon_exitScope h abk (Or.inl hbx)]
+    have hwc := canon_wf h habx hwx
+    have hnc := canon_names h habx hnx
+    rw [canon_kill h (habk.add hab1 hxk hmo) hal, canon_setE h] at hwc hnc tk
+    rw [canon_kill h hab hal] at hc'
+    have hrb : Ec.mode ≠ .rootb := by rcases hcan with h0 | ⟨b', h0, _⟩ <;> rw [h0] <;> simp
+    have hbr : ∀ bh, S.bnd c = some bh → bh.1 = .replace := by
+      refine bnd_replace hab hc ?_
+      rcases canDo_replace_cases hcan with h0 | h0
+      · exact Or.inl h0
+      · exact Or.inr (Or.inl h0)
+    exact StmtT.callcE (by rw [src_rename]; exact hks) (by rw [canon_ρ h, hx]; rfl) (h.Fcout x)
+      (by rw [canon_ρ h, hc]; rfl) (by rw [liftE_ty' h hab hc]; exact htc)
+      (by rw [liftE_mode c hrb]; exact canDo_lift hcan) hq hj hσ hsp hsl hsr hso
+      (NoPin.lift h hab hbr) (DtorSafe.canon h hal hdc) (by simpa using hc')
+      (StmtT.weakenIn ⟨(hpw.setE (hE' x)).kill _ _ _, hwc, hnc⟩ tk) (EndOK.lift h abk hbx hpe) hnσ
   | @letcall Γ Γ1 Δ F x f args k E hks hx hxF hc hk hpe ih =>
     intro _ hab hw hn hT
     obtain ⟨E', Γ', hc', hpw, hE'⟩ := callT_ren h hab hP hc (fun ht => hT (.inr ⟨f, by simp [Stmt.calls], ht⟩))

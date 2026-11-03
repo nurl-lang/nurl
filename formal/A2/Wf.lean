@@ -1087,6 +1087,15 @@ theorem StmtT.keepF {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     obtain ⟨E2, h2, hm2⟩ := ih r hr E1 (by simp [A2.setE, upd_ne _ _ hrx, h1])
     exact ⟨killE .replace false x E2, by simp [A2.exitScope, upd_ne _ _ hrx, A2.kill, h2],
       by rw [killE_mode, hm2, hm1]⟩
+  | @callcE Γ Γ1 Δ F x c j k Ec E0 ms q σ sig b _ hx hxF _ _ _ _ _ _ _ _ _ _ _ _ hcT _ _ _ ih =>
+    intro r hr E h
+    have hrx : r ≠ x := fun e => hxF (e ▸ hr)
+    have hk : (A2.kill .replace false c Γ) r = some (killE .replace false c E) := by simp [A2.kill, h]
+    obtain ⟨E1, h1, hm1⟩ := hcT.domMode.get hk
+    obtain ⟨E2, h2, hm2⟩ := ih r hr (killE .replace false c E1)
+      (by simp [A2.kill, A2.setE, upd_ne _ _ hrx, h1])
+    exact ⟨killE .replace false x E2, by simp [A2.exitScope, upd_ne _ _ hrx, A2.kill, h2],
+      by rw [killE_mode, hm2, killE_mode, hm1, killE_mode]⟩
   | @rbind Γ Δ F p k Ep _ _ _ _ hpF _ _ ih =>
     intro r hr E h
     have hrp : r ≠ p := fun e => hpF (e ▸ hr)
@@ -1223,6 +1232,16 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
       (fun hd => absurd hd (by simp [hcT.dtor_false.2]))
       (fun ha => absurd ha (by simp [hcT.dtor_false.1])) (fun hd => absurd hd (by simp [hcT.dtor_false.2])))).exitScope
       x hpx.2.2
+  | @callcE Γ Γ1 Δ F x c j k Ec E0 ms q σ sig b _ hx _ _ _ _ _ _ _ _ _ _ _ _ _ hcT _ hpx _ ih =>
+    intro h
+    obtain ⟨hw1, hdm, hE⟩ := hcT.wf hP (h.kill _ _ _)
+    have hx1 : Γ1 x = none := by
+      have := hdm.1 x; simp only [A2.kill, hx, Option.map_none, Option.isSome_none] at this
+      cases h' : Γ1 x <;> simp_all
+    exact (ih ((hw1.add hx1 (fun _ _ => hE)
+      (fun hd => absurd hd (by simp [hcT.dtor_false.2]))
+      (fun ha => absurd ha (by simp [hcT.dtor_false.1])) (fun hd => absurd hd (by simp [hcT.dtor_false.2]))).kill
+        _ _ _)).exitScope x hpx.2.2
   | @rbind Γ Δ F p k E hp hm hl hroots hpF hk hrr ih =>
     intro h
     have hos : E.mode.ownSlot = false := by rw [hm]; rfl

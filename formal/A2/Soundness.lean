@@ -1,5 +1,6 @@
 import A2.Codes
 import A2.SrcKeep
+import A2.EnvHand
 
 /-! A2 — soundness: a well-typed program never reaches a configuration that
 is about to touch memory it may not.  Every step checks allocation and
@@ -20,7 +21,8 @@ namespace A2
 theorem preservation {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     (ht : StmtT P Γ F s Δ) {m m' : Mem} {s' : Stmt} (hcd : MemCodes P m) (hi : Inv m Γ F s)
     (hst : Step P m s (.ok m' s')) : ∃ Γ', StmtT P Γ' F s' Δ ∧ Inv m' Γ' F s' ∧ Keep Γ Γ' s s' := by
-  obtain ⟨Γ', ht', hi', _, hk, _⟩ := preserve (callCase hP) (recCase hP) (cloCase hP) (srcCase hP) ht hcd hi hst
+  obtain ⟨Γ', ht', hi', _, hk, _⟩ :=
+    preserve (callCase hP) (recCase hP) (cloCase hP) (handCase hP) (srcCase hP) ht hcd hi hst
   exact ⟨Γ', ht', hi', hk⟩
 
 /-- Progress, with the call cases discharged. -/
@@ -28,7 +30,8 @@ theorem progress' {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt
     (ht : StmtT P Γ F s Δ) {m : Mem} (hcd : MemCodes P m) (hi : Inv m Γ F s) :
     s = .skip ∨ Blocked m s ∨ ∃ r, Step P m s r :=
   progress (fun hx hc hi => callProgress hx hc hi)
-    (fun hx _ hc htc hj hσ hhd hcT hnz hcd hi => cloProgress hP hx hc htc hj hσ hhd hcT hnz hcd hi) ht hcd hi
+    (fun hx _ hc htc hj hσ hhd hcT hnz hcd hi => cloProgress hP hx hc htc hj hσ hhd hcT hnz hcd hi)
+    (fun hx hc htc hcan hj hσ hsp hcT hcd hi => handProgress hx hc htc hcan hj hσ hsp hcT hcd hi) ht hcd hi
 
 /-- Every binding is bound by a run-time scope the statement is inside of:
     the program's own top level binds nothing else. -/

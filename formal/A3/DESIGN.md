@@ -3191,17 +3191,18 @@ Each is a restriction, and sound as stated.
 
 ## A3.5b's and A3.5c's rest (subsumption, bounds, what A2's closures leave out)
 
-**Status.** Mechanized where it fits A2's closure model, and decided where it
-does not. Subsumption between closure classes is typed (A2: two typing rules,
-A3: the crossing facts). A generic bound and a supertrait's bound are answered
-by the class. A closure that changes a capture it moved in, and an `inout`
-receiver through a trait object, are out of A2's closure model, for one
-reason: a call through a package lends its code a copy of the environment.
-Both are refused, and h364's rule holds. The markers are the classes'
-subsumption one way and the trusted base the other. `check.sh` is green, and
-`A2.memory_safe`, `A2.soundness`, `A2.no_leak_end`, `A2.no_leak_panic`, the
-`DynCell` theorems, `A3.claim` and `A3.claim_made` are re-proven. `CLAIM.md` /
-`README.md` are not updated here.
+**Status.** Mechanized. Subsumption between closure classes is typed (A2:
+two typing rules, A3: the crossing facts). A generic bound and a supertrait's
+bound are answered by the class. A closure that changes a capture it moved in,
+and an `inout` receiver through a trait object, were out of A2's closure model
+(a call through a package lends its code a copy of the environment); they are
+now typed by the environment's hand-over, an A2 call of its own
+(`StmtT.callcE`, the section "A2-envhand" below), in a first cut: an interface
+whose only parameter is the receiver. h364's rule holds. The markers are the
+classes' subsumption one way and the trusted base the other. `check.sh` is
+green, and `A2.memory_safe`, `A2.soundness`, `A2.no_leak_end`,
+`A2.no_leak_panic`, the `DynCell` theorems, `A3.claim` and `A3.claim_made` are
+re-proven. `CLAIM.md` / `README.md` are not updated here.
 
 ### Subsumption between closure classes
 
@@ -3311,26 +3312,34 @@ An example is the accumulator `\ → i { = n + n 1 ^ n }`, with `n` moved in.
   - A call through the `Arc`'s borrow (`getE`, `Kind.share`) is not an
     owner's, so it cannot change the state.
 
-**Not typed: out of A2's closure model.**
-- A2's call through a package hands the code a copy of the environment,
-  lent, in a fresh slot (`envMem`, `lendOf`).
-- `Implements` takes the environment `inp`, and the code changes nothing
-  through a borrow (`Implements.env_lent`). A change would land in the copy,
-  never in the package.
-- Typing the accumulator needs the environment handed over for the call:
-  - moved out of the package's slot into a binding the code takes `inout`;
-  - and back into the package at the end, on a panic's unwinding too, as
-    `withElem` hands over an element.
-- That is a new step and run-time form of A2, with its own preservation,
-  progress, renaming, frame and leak cases. It also needs A3's touch, lift,
-  restrict and confinement cases. It is A2's work before it is A3's: h365
-  and h366, single-threaded, are its A2 probes (below).
-- When it is added, the decision above is its rule. The hand-over asks for
-  an owner: `canDo`, `c ∉ F`, as `CallT` asks of an `inout` argument. A
-  borrow, an `Arc`'s or anyone's, is never one (h364, below).
+**Typed: the environment handed over** (A2-envhand, the section below).
+- A2's call that lends the code a copy of the environment (`callc`: `envMem`,
+  `lendOf`) still changes nothing of it (`Implements.env_lent`).
+- A method whose interface takes the receiver `inout` is called with the
+  environment handed over (`StmtT.callcE`): it moves out of the package into a
+  binding the code takes `inout`, and back into the package after, as
+  `withElem` hands over an element.
+- The decision above is its rule. The hand-over asks for an owner
+  (`canDo Ec.mode .replace`, `c ∉ F`, as `CallT` asks of an `inout`
+  argument); a borrow, an `Arc`'s or anyone's, is never one
+  (`callcE_not_bor`, h364).
+- *Refined*: the call also asks the receiver's class to be at least `send`
+  (`callcE_send`). The owner rule alone keeps one thread to a hand-over (an
+  `Arc` only lends), but the type is the promise the crossing rules read: a
+  closure whose environment is handed over is Send and not Sync, so no `Arc`
+  holds it at that type (`callcE_not_arc`). A closure whose environment fits
+  `sync` (a plain integer) may still be packed `sync` and put in an `Arc`; its
+  `inout` method is then called through no copy (`callcE_not_sync`), and its
+  owner moves it up to `send` (`RhsT.moveUp`) to call it.
+- The accumulator, typed: `accum_impl`, `accum_codes` and `accum_hand`, and
+  whole, its code and a caller (`accP_ok`, `accMain_typed`, `accMain_safe`;
+  `A3/Defs.lean`). Its environment is a struct of the count: A2 has no
+  `inout` integer (an integer binding is copied, not owned), so the
+  one-capture environment is the count beside a field the code keeps.
 
-**What the model types instead** (`A3/Defs.lean`). This is h342's fix: the
-state lives in a share the environment holds, which synchronises itself.
+**What several threads may change at once** (`A3/Defs.lean`). This is h342's
+fix: the state lives in a share the environment holds, which synchronises
+itself.
 - Take `\ → i { atomic_add n 1 }`, with `n` an `Atomic` moved in. The
   environment is a lock share, which `sync` admits (`accum_sync`: a lock
   share is Sync, A3.5's second cut).
@@ -3383,35 +3392,40 @@ type variable and no instantiation.
   at an instance is `TraitBound.Holds` of the instance's type.
 
 **An `inout` receiver** (h364–h366: a method that changes the box).
-- *Can `Implements` hold impls to it?* It can say it: the code's first
-  parameter would take the box in the interface's receiver mode, one more
-  conjunct.
-- *A2's call cannot run it.* The box is the environment, which `envMem`
-  lends as a copy. A change through an `inout` receiver needs the box handed
-  over, the step above. So it is out of scope here, as the accumulator is.
-- *What holds now.*
-  - A call through a package takes its receiver `inp` (`StmtT.callc_inp`).
-  - So a method whose interface takes the receiver `inout` is called
-    through no object (`callc_not_inout`).
-  - What an `Arc` or a read guard lends is a borrow (`getE_bor`), and so is
-    each copy of it. A borrow is no `inout` argument of any function
-    (`paramOK_inout_not_bor`: `paramOK` asks `canDo`).
+- *`Implements` holds impls to it.* The code's first parameter takes the box
+  in the interface's receiver mode (`Fn.recvMode`): lent, or `inout` at the
+  interface's bound. What the receiver holds afterwards is the interface's
+  `outHolds` for it (`fn.outHolds ⊆ sig.outHolds`, the code's `FnOK` holding
+  its parameter to its own).
+- *A trait declares it* (`TraitAt`: a method's receiver is the object at the
+  bound, taken `inp` or `inout`).
+- *A2 calls it with the box handed over* (`StmtT.callcE`). `callc` still takes
+  its receiver `inp` only (`StmtT.callc_inp`, `callc_not_inout`).
+- *A borrow never hands it over.* What an `Arc` or a read guard lends is a
+  borrow (`getE_bor`), and so is each copy of it: no `inout` argument of any
+  function (`paramOK_inout_not_bor`), no hand-over's receiver
+  (`callcE_not_bor`).
+- *A `: Send Sync` trait's `inout` methods are called through no object*
+  (`callcE_bound`, `callcE_not_sendSync`): its objects are `sync`, which
+  several threads read at once.
 - *h364* `dyn_inout_method_through_a_read_guard`. `( rename k )`, on `k` (a
-  `: ~` copy of `rguard_get`), is refused twice:
-  - `rename` takes its receiver `inout`;
-  - `k` is a borrow.
-  When the hand-over is added, the second refusal stays. That is h364's
-  rule: the box every reader sees is frozen.
-- *h365* `dyn_inout_method_replaces_what_a_view_reads`, and *h366*
-  `helper_hands_its_parameter_to_a_dyn_method` (A2 probes). They are
-  refused: no `inout` method is called through an object.
-  - With the hand-over, the call would be typed as `CallT` over the
-    interface, with the receiver `inout`.
-  - Its bound's `kill` would end h365's view of the replaced `String`.
-  - h366's helper takes the object `inout` and hands it on to the method.
-    Its caller's argument is an ordinary `inout` one, which A2 types
-    already, and the helper's parameter is an owner for the hand-over
-    (`canDo`).
+  `: ~` copy of `rguard_get`), is refused: `k` is a borrow, not an owner
+  (`callcE_not_bor`; `rename`'s trait is `: Send Sync`, so
+  `callcE_not_sendSync` refuses it too). That is h364's rule: the box every
+  reader sees is frozen.
+- *h365* `dyn_inout_method_replaces_what_a_view_reads` (A2). `( rename k )` on
+  the owned object `k` is typed by `StmtT.callcE`, and its `kill .replace`
+  ends everything that depended on `k` (`hand_ends`): the `String` `n` read
+  out of the box by `( name k )` is dead, so `( string_data n )` after it is
+  refused. That is h365's rule.
+- *h366* `helper_hands_its_parameter_to_a_dyn_method` (A2). The helper's
+  parameter `o` is `inout` of bound `replace`, an owner for the hand-over
+  (`canDo_inout_replace`): `( rename o )` is `StmtT.callcE` in the helper's
+  body, and the helper's summary says it replaces `o`. Its caller's
+  `( relabel k )` is an ordinary call with `k` an `inout .replace` argument,
+  whose `callPost` ends `n` as h365's does. That is h366's rule: a function
+  that hands its parameter to a `dyn` method does to it what the method
+  does.
 
 ### The markers (`% Send`, `% Sync`, `% NotSend`, `% NotSync`)
 
@@ -3438,8 +3452,10 @@ type variable and no instantiation.
 - *Phase C*: the lowering gives each closure type the class nurlc's walk
   proved (A3.5b), and instantiates each generic function at its call types,
   its bound checked there (above).
-- A closure that changes a capture it moved in, and an `inout` receiver: the
-  environment's hand-over, an A2 step (above).
+- The hand-over's second cut: an interface with parameters beside the
+  receiver, or whose result borrows or holds views of the receiver; a package
+  that captures by name with a method that changes its environment (section
+  "A2-envhand" below).
 - Subsumption inside a container's element type, or at argument passing.
   A move or a copy up before the call is typed instead (above).
 - An upcast from a trait's objects to a supertrait's.
@@ -3682,6 +3698,171 @@ the body runs on an owner of the share that nothing in it reaches.
 - Programs typed over these forms, as `A2/DynCell.lean` types `pick` (the
   probes' encodings).
 - `CLAIM.md` / `README.md`.
+
+## A2-envhand: the environment handed over (`callcE`)
+
+**Status.** Mechanized in A2 (`A2/EnvHand.lean`, the rule `StmtT.callcE`) and
+A3 (`A3/Defs.lean`: the classes, the probes' rules, the accumulator), in a
+first cut: a method whose interface takes only the receiver, `inout`, and
+whose result borrows and holds nothing of it. `check.sh` is green;
+`A2.memory_safe`, `A2.soundness`, `A2.no_leak_end`, `A2.no_leak_panic`, the
+`DynCell` theorems, `A3.claim` and `A3.claim_made` are re-proven with the new
+statement and rule. Probes: h365 and h366 (A2), h364 (A3).
+
+### Why
+
+A call through a package (`callc`) lends its code a copy of the environment
+(`envMem`): a change would land in the copy. An accumulator that changes the
+count it moved in, and a trait object's method with an `inout` receiver,
+change the environment itself. The runtime passes the code a pointer to the
+environment, in the closure's heap block (`NurlCenvVt`'s env,
+`stdlib/runtime_core.c`).
+
+### The statement and its step
+
+- `Stmt.callcE x c j zs k`: `: x ( m c zs… )`, through the package `c`, of
+  method `j`. (The syntax and the step take `zs`; the first cut types
+  `zs = []`.)
+- `Step.callcE` (`c` owns `pkg fs te ms env []`, `fs[j] = f`): the store
+  becomes `handMem` — `c`'s slot owns nothing, the environment is owned by the
+  first fresh variable `y`, the result binding `x` is bound unset — and the
+  statement `handStmt`:
+
+      scope x ( seq ( scope y ( seq ( letcall r f [y] ( = x r ) )
+                                    ( = c ( pack fs te ms y [] ) ) ) )
+                    k )
+
+  with `r = y + 1`: an ordinary call of the code with `y` its `inout`
+  receiver, its result moved to `x`, then the environment back into `c` as a
+  package of the same code and interfaces. Every form it leaves is one A2
+  already types and runs; only the hand-over step itself is new.
+- *The design said "a new run-time form"; refined:* none is needed. Moving
+  the environment back is `= c ( pack … )`, an assignment of a pack, which A2
+  types (`c` is moved out, so its old value drops nothing); the place it goes
+  back to is `c`'s slot, as `withElem`'s give-back is its index.
+
+**A panic drops the environment, as `withElem` drops an element.** The
+unwinding drops `y`'s value with `y`'s scope; `c`'s slot owns nothing, so its
+scope drops nothing. That is the runtime's release, at another slot:
+docs/MEMORY.md §7.2 — a panic jumps to the nearest `recover` frame, and the
+allocation journal drops each closure binding's environment through its owner
+slot (h375, h376). The frame that binds `c` is unwound before the `recover`
+frame catches the panic: `recover f` calls a function of no parameters, so a
+`c` the code was handed lies in a frame the panic leaves (an `inout`
+parameter's argument is in a caller's frame inside the `recover` too). So the
+environment is released once either way, and `c` is never read after; the
+model need not put it back.
+
+### The rule (`StmtT.callcE`)
+
+    k.src   Γ x = none   x ∉ F   Γ c = Ec   Ec.ty = fn ms q
+    canDo Ec.mode replace   send ≤ q   ms[j] = σ   σ.params = [(inout b, fn ms q)]
+    σ.lends = σ.rholds = σ.outHolds = []   NoPin Γ c   DtorSafe Γ replace c
+    CallT P (kill replace c Γ) F σ [c] E Γ1
+    StmtT P (kill replace c (setE Γ1 x E)) F k Δ   EndOK Δ x   ¬ ThruFn P σ
+    ───────────────────────────────────────────────────────────────────────
+    StmtT P Γ F (callcE x c j [] k) (exitScope x Δ)
+
+- The call is the interface's, with `c` its `inout` argument, after what
+  depends on `c` has ended and with it ended again after: the environment
+  moves out of `c` and back (`kill .replace`, as `withElem` takes an
+  element). So a view of the box (h365's `n`) does not survive the call.
+- The faithfulness premises (the runtime changes the environment in place):
+  `c` is an owner that may be replaced — an owner, or an `inout` parameter of
+  bound `replace` (h366's helper) — never a borrow; not lent out; changed by
+  name by no borrowed parameter; viewed by no destructor.
+- The receiver's class is at least `send`: the package is Send, not Sync.
+
+**`Implements` with an `inout` receiver.** `Fn.recvMode σ` is the mode the
+interface takes its receiver in. The code's first parameter is the
+environment in that mode: `inout` at the interface's bound, so `FnOK` holds
+the code to that effect on its environment, and what the environment holds
+afterwards to the code's `outHolds`, which are among the interface's
+(`fn.outHolds ⊆ sig.outHolds`). A package with such a method captures
+nothing by name (`cs = []`).
+
+### The proof
+
+- *The store* (`hand_minv`): the package's tree moved from `c` to `y`, as a
+  field of a struct taken apart (`rhs_move'`, `out_part`), and `x` bound unset
+  (`MInv.addUnset`).
+- *The code's call* (`callT_hand`): typed from the interface's; `y` is fresh
+  and holds what `c` held, so it is reached by no other binding, what its
+  closures may change the interface's call may change, and no destructor
+  views it.
+- *The run-time form* (`hand_typed`): typed by A2's own rules, and the context
+  it leaves is `Weaker` than the one the source's continuation is typed in.
+  `HandRel` compares the two binding by binding outside `x`, `y`, `r`, `c`
+  (each step: a kill of a fresh binding, one both make, the closures' kills
+  by name, sets of the excluded bindings); `FrameOK` keeps the borrowed
+  parameters and destructor bindings the store's; `recv_keep`: the call's
+  changes by name do not end `y`.
+- *Preservation* (`handCase`, a case of `preserve` as `CloCase` is),
+  *progress* (`handProgress`: the package's code takes the environment
+  `inout`, and it captures nothing by name), and the inductions over typing
+  (well-formedness, names, frozen and `letd` bindings, the callee renaming —
+  `callcE`'s kill is `Allowed` where a call places it — and source typing's
+  context relation).
+- A3: the step touches no address (the tree moves between the thread's
+  slots); its frame, ownership, cell, lift and restrict cases are the moves'.
+
+### Classes (A3)
+
+- `callcE_send`: a package whose environment is handed over is at most Send
+  (its class is `send` or `any`); `callcE_not_sync`: a `sync` or `bare` one
+  has no such call; `callcE_not_arc`: no `Arc` holds it at that type. Two
+  threads never call it at once: h342's shape, with the state inside the
+  closure, is refused by the type.
+- `callcE_not_bor`: a borrow — an `Arc`'s, a read guard's, a copy of either —
+  is no hand-over's receiver (h364).
+- `callcE_bound`, `callcE_not_sendSync`: through a trait object, a hand-over
+  types only at the trait's bound, so a `: Send Sync` trait's `inout` methods
+  are called through no object.
+
+### The rules for the probes
+
+- *h365* (`dyn_inout_method_replaces_what_a_view_reads`, A2): the hand-over's
+  `kill .replace` on the object (`StmtT.callcE`, `hand_ends`) ends the view
+  read out of its box before the call.
+- *h366* (`helper_hands_its_parameter_to_a_dyn_method`, A2): the helper's
+  `inout .replace` parameter is an owner for the hand-over
+  (`canDo_inout_replace`); its caller's argument is an `inout` one, whose
+  `callPost` ends the view.
+- *h364* (`dyn_inout_method_through_a_read_guard`, A3): `callcE_not_bor`.
+
+### The accumulator
+
+The accumulator, `n` moved in, `= n + n 1 ^ n` (`A3/Defs.lean`): its
+interface `accSig` takes the closure `inout` at `send`; its code `accCode`
+takes the environment, a struct of the count (`accEnv`, a pair: A2 has no
+`inout` integer), `inout`, adds one, and returns it (`accum_impl`,
+`accum_codes`); its environment fits every class (`accum_fits`); its owner's
+call is `StmtT.callcE` (`accum_hand`, through `StmtT.callcE_recv`); a `sync`
+one has no such call (`accum_not_sync`).
+
+The program is typed whole, as `A2/DynCell.lean` types `pick`'s:
+- its code and its interface meet their summaries (`accCode_ok`,
+  `accSig_ok`, so `accP_ok : ProgOK accP`; `accP_codes`). The code's
+  contexts hold only plain bindings (`PlainCtx`: none borrowed, none a
+  destructor's, none depending on anything), so no change ends anything
+  and every `EndOK` holds;
+- its caller `accMain` (`: i n 0  : i p 0  : e { n p }`, the closure moving
+  `e` in at `send`, `: i r ( acc )`) is typed from nothing
+  (`accMain_typed`), so `A2.memory_safe`, `A2.no_leak_end` and
+  `A2.no_leak_panic` hold of it (`accMain_safe`, `accMain_no_leak`,
+  `accMain_no_leak_panic`).
+
+### Still not typed
+
+- An interface with parameters beside the receiver, or whose result borrows
+  from or holds views of the receiver (the second cut: the tail of the
+  call's post-context, as `post_rel` does for `callc`).
+- A package that captures by name and has a method that changes its
+  environment (`Implements` asks `cs = []`).
+- A hand-over through a borrowed parameter (an `in` closure parameter): it is
+  no owner.
+- The probes h365 and h366 as whole programs: their rules are named above,
+  and the accumulator is the one program typed whole.
 
 ## Open questions
 

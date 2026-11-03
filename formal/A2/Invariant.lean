@@ -913,6 +913,32 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       RhsT (kill .replace false v Γ) F (.pop v) E Γ1 → StmtT P (setE Γ1 x E) F s Δ1 →
       StmtT P Δ1 F (.push v x) Δ → EndOK Δ x → v ∉ s.vars →
       StmtT P Γ F (.withElem v i x s) (exitScope x Δ)
+  /-- A2-envhand: a call through the package `c` of a method whose interface
+      `σ` takes the receiver `inout` (at the bound `b`, and nothing else): the
+      environment is handed over to the code (`Step.callcE`), which may change
+      it as `σ` says (`Implements`).  It is typed as a call of the interface
+      with `c` its `inout` argument, after what depends on `c` has ended, and
+      with it ended again after (the environment moves out of `c` and back,
+      as `withElem` takes an element: `kill .replace`).  The runtime passes
+      the code a pointer to the environment in place; the premises keep the
+      model faithful to it: `c` is an owner that may be replaced (`canDo`: an
+      owner, or an `inout` parameter of that bound — never a borrow, so never
+      what an `Arc` or a read guard lends), not lent out (`CallT`), changed by
+      name by no borrowed parameter (`NoPin`) and viewed by no destructor
+      (`DtorSafe`).  The receiver's class is at least `send`: a closure whose
+      code changes its environment is not Sync, so no `Arc` holds one
+      (`RhsT.arcNew`), and the one thread that owns it calls it.  First cut:
+      the interface takes only the receiver, and its result borrows and holds
+      nothing of it. -/
+  | callcE {Γ Γ1 Δ : Ctx} {F : List Var} {x c : Var} {j : Nat} {k : Stmt}
+      {Ec E : Entry} {ms : List Nat} {q : Cross} {σ : Nat} {sig : Fn} {b : Eff} :
+      k.src = true → Γ x = none → x ∉ F → Γ c = some Ec → Ec.ty = .fn ms q → canDo Ec.mode .replace →
+      Cross.send.Le q → ms[j]? = some σ → P[σ]? = some sig → sig.params = [(.inout b, .fn ms q)] →
+      sig.lends = [] → sig.rholds = [] → sig.outHolds = [] →
+      NoPin Γ c → DtorSafe Γ .replace false c →
+      CallT P (kill .replace false c Γ) F σ [c] E Γ1 →
+      StmtT P (kill .replace false c (setE Γ1 x E)) F k Δ →
+      EndOK Δ x → ¬ ThruFn P σ → StmtT P Γ F (.callcE x c j [] k) (exitScope x Δ)
   | scopeD {Γ Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {s : Stmt} :
       (∃ E, Γ x = some E ∧ E.mode = .own ∧ E.ty.hasFn = false ∧ DtorOK P f E.ty) → x ∉ F →
       StmtT P Γ F s Δ → EndOK Δ x →
@@ -991,14 +1017,31 @@ def ProgOK (P : Prog) : Prop := ∀ fn ∈ P, FnOK P fn
 
 /-! ### Packages name code of their signature -/
 
+/-- The mode an interface takes its receiver in: `inout` (A2-envhand: a call
+    of it hands the environment over, `StmtT.callcE`), or lent (any other
+    first parameter: `StmtT.callc` asks `inp`). -/
+def Fn.recvMode (sig : Fn) : PMode :=
+  match sig.params.head? with
+  | some (.inout b, _) => .inout b
+  | _ => .inp
+
+theorem Fn.recvMode_of_head {sig : Fn} {pm : PMode} {t : Ty} (h : sig.params.head? = some (pm, t))
+    (hs : pm ≠ .sink) : sig.recvMode = pm := by
+  unfold Fn.recvMode; rw [h]; cases pm <;> simp_all
+
 /-- Code `f`, on an environment of type `te`, implements the interface `σ`:
-    it takes the environment where the interface takes the receiver, and
-    the interface's other parameters as the interface does; it returns what
-    the interface returns, and lends, holds and stores no more than the
-    interface says. -/
+    it takes the environment where the interface takes the receiver, in the
+    interface's mode (lent, or, A2-envhand, `inout` at the interface's
+    bound: the environment handed over, which the code may change as the
+    interface says, and hold afterwards what its `outHolds` says the
+    receiver holds), and the interface's other parameters as the interface
+    does; it returns what the interface returns, and lends, holds and stores
+    no more than the interface says.  A package with a method that changes
+    its environment captures nothing by name. -/
 def Implements (P : Prog) (f : Nat) (te : Ty) (cs : List (Var × PMode × Ty)) (σ : Nat) : Prop :=
   ∃ fn sig, P[f]? = some fn ∧ P[σ]? = some sig ∧
-    fn.params = (.inp, te) :: sig.params.tail ++ cs.map (·.2) ∧
+    fn.params = (sig.recvMode, te) :: sig.params.tail ++ cs.map (·.2) ∧
+    (sig.recvMode ≠ .inp → cs = []) ∧
     fn.resTy = sig.resTy ∧ fn.resOwn = sig.resOwn ∧ fn.lends ⊆ sig.lends ∧ fn.rholds ⊆ sig.rholds ∧
     fn.outHolds ⊆ sig.outHolds ∧
     -- a closure's code changes no elements through a borrow (Agora #295)
@@ -1042,6 +1085,7 @@ def Stmt.codesOK (P : Prog) : Stmt → Prop
   | .withLock _ _ s => s.codesOK P
   | .scopeL _ _ _ s => s.codesOK P
   | .withElem _ _ _ s => s.codesOK P
+  | .callcE _ _ _ _ s => s.codesOK P
   | _ => True
 
 def ProgCodes (P : Prog) : Prop := ∀ fn ∈ P, fn.body.codesOK P
