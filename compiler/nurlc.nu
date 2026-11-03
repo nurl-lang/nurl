@@ -24792,7 +24792,9 @@ unsafe @ mem_path_to_indices s path → s {
         { ( nurl_sym_set_deep syms ? __pcall `__agg_lends_call__` `__agg_lends__` `1` )
             ( __record_param_idx syms `__fn_retpart__` ( nurl_sym_get2 syms src `__pname` ) ) } {}
         // (Not the whole the cursor's value is part of: __part_src.)
-        ? ( __part_src syms ptr src ) {} { ( mem_alias_src_leaves syms cg src ptr ) }
+        // (…by the identity key when the cursor's flag is a call's answer, as
+        // its return answers: __src_leaves_by_identity.)
+        ? ( __part_src syms ptr src ) {} { ? __pcall { ( __src_leaves_by_identity syms cg src ptr ) } { ( mem_alias_src_leaves syms cg src ptr ) } }
     }
 }
 
@@ -24844,6 +24846,16 @@ unsafe @ mem_path_to_indices s path → s {
     ? != 0 ( nurl_str_len pname ) { ( mem_record_kept_param syms pname ) ( bck_record_inferred_sink syms pname ) } {}
 }
 
+// The value type of a drop registration's type `ty`: an option's or a
+// result's twin (`%__opt.String`) is registered for `{ i1, %String }`, its
+// layout (`optlay##`), which is what an identity key reads.
+@ __udty_val s ty → s {
+    ? == 0 ( nurl_str_starts ty `%__opt.` ) { ^ ( nurl_str_cat ty `` ) } {}
+    : s lay ( nurl_sym_get2 g_impl_name_syms `optlay##` ty )
+    ? == 0 ( nurl_str_len lay ) { ^ ( nurl_str_cat ty `` ) } {}
+    ^ ( nurl_llty lay )
+}
+
 // Whether `ptr`'s value is this frame's own, as an i1, when its flag is a
 // call's answer (__call_owned_by): its flag, or — where it holds the very
 // value of a local it may be a cursor over (or of a parameter this
@@ -24865,14 +24877,15 @@ unsafe @ mem_path_to_indices s path → s {
         ? | | & == 0 ( nurl_sym_len2 syms w `__pname` ) == 0 ( nurl_sym_len2 syms w `__optparam` ) ( __param_owned_slot syms w ) & anyreg ( nurl_sym_has_word syms `__user_drops__` w ) {
             : s st ( nurl_sym_get2 syms w `__udty` )
             ? | == 0 ( nurl_str_len st ) ! ( seq st pt ) { ^ ( nurl_str_cat `` `` ) } {}
-            : s ll ( nurl_llty st )
+            : s vt ( __udty_val st )
+            : s ll ( nurl_llty vt )
             : s wv ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print wv ) ( nurl_print ` = load ` ) ( nurl_print ll ) ( nurl_print `, ptr ` ) ( nurl_print w ) ( nurl_print `\n` )
-            : s wk ( mem_ud_ident_key cg st wv )
+            : s wk ( mem_ud_ident_key cg vt wv )
             ? == 0 ( nurl_str_len wk ) { ^ ( nurl_str_cat `` `` ) } {}
             : s pv ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print pv ) ( nurl_print ` = load ` ) ( nurl_print ll ) ( nurl_print `, ptr ` ) ( nurl_print ptr ) ( nurl_print `\n` )
-            : s pk ( mem_ud_ident_key cg st pv )
+            : s pk ( mem_ud_ident_key cg vt pv )
             : s same ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print same ) ( nurl_print ` = icmp eq i8* ` ) ( nurl_print wk ) ( nurl_print `, ` ) ( nurl_print pk ) ( nurl_print `\n` )
             : s wf ( mem_udrop_flag_get syms cg w )
@@ -24884,6 +24897,33 @@ unsafe @ mem_path_to_indices s path → s {
         } {}
     }
     ^ acc
+}
+
+// `src` stops owning its value where `ptr` holds that very value, told by
+// the identity key __own_by_identity reads (mem_ud_ident_key: an option or
+// a result by its payload, a library handle by its one pointer), so the two
+// agree. A type with no key at all keeps mem_alias_src_leaves' answer —
+// it goes, a leak at worst: kept where `ptr` does hold it, `src` would
+// release what is handed on (agora #459).
+@ __src_leaves_by_identity i syms i cg s src s ptr → v {
+    : s st ( nurl_sym_get2 syms src `__udty` )
+    : s pt ( nurl_sym_get2 syms ptr `__udty` )
+    ? | == 0 ( nurl_str_len st ) ! ( seq st pt ) { ( mem_udrop_flag_set syms cg src `0` ) ^ v } {}
+    : s vt ( __udty_val st )
+    : s ll ( nurl_llty vt )
+    : s sv ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print sv ) ( nurl_print ` = load ` ) ( nurl_print ll ) ( nurl_print `, ptr ` ) ( nurl_print src ) ( nurl_print `\n` )
+    : s sk ( mem_ud_ident_key cg vt sv )
+    ? == 0 ( nurl_str_len sk ) { ( mem_udrop_flag_set syms cg src `0` ) ^ v } {}
+    : s pv ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print pv ) ( nurl_print ` = load ` ) ( nurl_print ll ) ( nurl_print `, ptr ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+    : s pk ( mem_ud_ident_key cg vt pv )
+    : s ne ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print ne ) ( nurl_print ` = icmp ne i8* ` ) ( nurl_print sk ) ( nurl_print `, ` ) ( nurl_print pk ) ( nurl_print `\n` )
+    : s f ( mem_udrop_flag_get syms cg src )
+    : s nf ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print nf ) ( nurl_print ` = and i1 ` ) ( nurl_print f ) ( nurl_print `, ` ) ( nurl_print ne ) ( nurl_print `\n` )
+    ( mem_udrop_flag_set syms cg src nf )
 }
 
 // The binding whose flag says, per run, whether `ptr`'s value is this
@@ -64595,7 +64635,7 @@ unsafe @ __jpb_note i cg s up → v {
                     } {}
                     ? ( __part_src syms up iw ) {} {
                         ? | | & == 0 ( nurl_sym_len2 syms iw `__pname` ) == 0 ( nurl_sym_len2 syms iw `__optparam` ) ( __param_owned_slot syms iw ) ( nurl_sym_has_word syms `__user_drops__` iw )
-                        { ( mem_alias_src_leaves syms cg iw up ) } { ( mem_udrop_flag_set syms cg iw `0` ) }
+                        { ( __src_leaves_by_identity syms cg iw up ) } { ( mem_udrop_flag_set syms cg iw `0` ) }
                         ( mem_udrop_param_moved syms iw )
                     }
                 }
