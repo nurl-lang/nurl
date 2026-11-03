@@ -141,7 +141,9 @@ theorem EvalR.restrict {m : Mem} {r : Rhs} {res : RRes} (h : EvalR m r res) {a2 
   | takerP hy => exact ⟨_, .takerP hy, trivial⟩
   | pack h1 => exact ⟨_, .pack (TakeVal.restrict h1 a2), rfl, rfl, rfl⟩
   | arcNew h1 hfr => exact ⟨_, .arcNew (TakeVal.restrict h1 a2) hfr, rfl, rfl, rfl⟩
+  | lockNew h1 hfr => exact ⟨_, .lockNew (TakeVal.restrict h1 a2) hfr, rfl, rfl, rfl⟩
   | arcClone hy => exact ⟨_, .arcClone hy, rfl, rfl, rfl⟩
+  | lockClone hy => exact ⟨_, .lockClone hy, rfl, rfl, rfl⟩
   | arcGet hy hk => exact ⟨_, .arcGet hy hk, rfl, rfl, rfl⟩
 
 theorem EvalR.restrict_ok {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.ok v o m1))
@@ -180,6 +182,7 @@ theorem Frees.restrict {a a' : Nat → Bool} {T : Val} (h : Frees a T a') {a2 : 
   | .int => exact .int
   | .view => exact .view
   | .arc => exact .arc
+  | .lk => exact .lk
   | @Frees.node _ _ _ c d _ hc hd hl =>
     have hdc : d ≠ c := by
       intro e; subst e; simp [upd] at hd

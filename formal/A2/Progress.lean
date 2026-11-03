@@ -191,9 +191,23 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
       | none => rfl
       | some bl => exact absurd (hi.heap.bkey _ bl h) (Nat.lt_irrefl _)
     exact ⟨_, EvalR.arcNew htk hfr⟩
+  | lockNew hy hly _ _ _ =>
+    obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly
+    -- the key `nid` is fresh: every block's key is below it
+    have hfr : m1.blk m1.nid = none := by
+      have hb := TakeVal.blk htk
+      have hn : m1.nid = m.nid := by cases htk <;> rfl
+      rw [hb, hn]
+      cases h : m.blk m.nid with
+      | none => rfl
+      | some bl => exact absurd (hi.heap.bkey _ bl h) (Nat.lt_irrefl _)
+    exact ⟨_, EvalR.lockNew htk hfr⟩
   | arcClone ha hl hty =>
     obtain ⟨o, k, p, hv⟩ := hi.arc_slot ha hl hty
     exact ⟨_, EvalR.arcClone hv⟩
+  | lockClone ha hl hty =>
+    obtain ⟨o, k, hv⟩ := hi.lk_slot ha hl hty
+    exact ⟨_, EvalR.lockClone hv⟩
   | arcGet ha hl hty _ _ =>
     obtain ⟨o, k, p, hv⟩ := hi.arc_slot ha hl hty
     exact ⟨_, EvalR.arcGet hv (hi.arc_val ha hl hty hv).1⟩

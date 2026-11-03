@@ -175,7 +175,7 @@ theorem Kept.pay {k : Nat} {bl : Blk} (hr : Reached R m.blk k) (hk : m.blk k = s
 theorem Kept.int (n : Nat) : Kept R m (.int n) := by
   intro k hr
   rcases hr with ⟨p, hp⟩ | ⟨bl, _, ⟨c, hc, _⟩ | ⟨d, o, l, hd, _⟩⟩
-  · cases hp
+  · cases p <;> cases hp
   · cases hc
   · cases hd
 
@@ -194,9 +194,16 @@ theorem Kept.view {v : Val} (h : Kept R m v) {d o l : Nat} (hs : Sub (.view d o 
     KeptAddr R m d :=
   fun k bl hk hd => h k (Or.inr ⟨bl, hk, Or.inr ⟨d, o, l, hs, hd⟩⟩)
 
-theorem Kept.arc {v : Val} (h : Kept R m v) {k : Nat} {p : Val} (hs : Sub (.arc k p) v) :
+theorem Kept.share {v : Val} (h : Kept R m v) {k : Nat} {p : Option Val} (hs : Sub (Val.share k p) v) :
     Reached R m.blk k :=
   h k (Or.inl ⟨p, hs⟩)
+
+theorem Kept.arc {v : Val} (h : Kept R m v) {k : Nat} {p : Val} (hs : Sub (.arc k p) v) :
+    Reached R m.blk k :=
+  h k (Or.inl ⟨some p, hs⟩)
+
+theorem Kept.lk {v : Val} (h : Kept R m v) {k : Nat} (hs : Sub (.lk k) v) : Reached R m.blk k :=
+  h k (Or.inl ⟨none, hs⟩)
 
 /-- A node holding a kept address lies in a kept place. -/
 theorem KeptAddr.node {i : Nat} (h : KeptAddr R m i) {n : Val} (hi : i ∈ n.ids) :
@@ -205,10 +212,11 @@ theorem KeptAddr.node {i : Nat} (h : KeptAddr R m i) {n : Val} (hi : i ∈ n.ids
 
 end
 
-theorem ArcIn.sub {τ : Ty} {T : Val} {u : Ty} {k : Nat} {p : Val} (h : ArcIn τ T u k p) :
-    Sub (.arc k p) T := by
+theorem ArcIn.sub {τ : Ty} {T : Val} {u : Ty} {k : Nat} {p : Option Val} (h : ArcIn τ T u k p) :
+    Sub (Val.share k p) T := by
   induction h with
   | here => exact Sub.refl _
+  | lk => exact Sub.refl _
   | child he _ ih => exact Sub.child he ih
   | fst _ ih => exact Sub.fst ih
   | snd _ ih => exact Sub.snd ih
@@ -281,8 +289,12 @@ theorem ViewsOK.sweep {τ : Ty} {T : Val} {H : List Dep} (h : ViewsOK m τ T H) 
 
 omit hR in
 theorem SharesOK.sweep {τ : Ty} {T : Val} (h : SharesOK m τ T) (hT : Kept R m T) :
-    SharesOK (m.sweepR R) τ T := fun u k p ha =>
-  Mem.sweepR_blk.mpr ⟨h u k p ha, hT.arc ha.sub⟩
+    SharesOK (m.sweepR R) τ T := fun u k p ha => by
+  cases p with
+  | some p => exact Mem.sweepR_blk.mpr ⟨h u k _ ha, hT.share ha.sub⟩
+  | none =>
+    obtain ⟨o, ho⟩ := h u k none ha
+    exact ⟨o, Mem.sweepR_blk.mpr ⟨ho, hT.share ha.sub⟩⟩
 
 theorem HrefAt.sweep {dep : Dep} {c : Nat} {t : Ty} {H : List Dep} (h : HrefAt m dep c t H)
     (hc : KeptAddr R m c) : HrefAt (m.sweepR R) dep c t H := by
@@ -307,6 +319,9 @@ theorem ValOK.sweep {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m τ v P H) 
   | arc hk hw hvf hl =>
     obtain ⟨dep, hd, hla⟩ := hl
     exact .arc (Mem.sweepR_blk.mpr ⟨hk, hv.arc (Sub.refl _)⟩) hw hvf ⟨dep, hd, hla.sweep hR⟩
+  | lk h =>
+    obtain ⟨o, ho⟩ := h
+    exact .lk ⟨o, Mem.sweepR_blk.mpr ⟨ho, hv.lk (Sub.refl _)⟩⟩
 
 theorem SlotOK.sweep {E : Entry} {sl : Slot} (h : SlotOK m E sl)
     (hk : ∀ v, sl.val = some v → Kept R m v) : SlotOK (m.sweepR R) E sl := by

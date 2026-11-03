@@ -31,6 +31,8 @@ inductive WFv : Ty → Val → Prop
   /-- A3.1: a share; its block, in memory, holds the payload it carries, one
       that holds no view. -/
   | arc {t : Ty} {k : Nat} {p : Val} : WFv t p → t.holdsView = false → WFv (.arc t) (.arc k p)
+  /-- A3.2: a lock share; its block, in memory, is a lock block of its type. -/
+  | lk {t : Ty} {k : Nat} : WFv (.lk t) (.lk k)
 
 /-- `v`, a view of element type `s`, is stored in tree `T` of type `τ`. -/
 inductive ViewIn : Ty → Val → Ty → Val → Prop
@@ -45,26 +47,37 @@ inductive ViewIn : Ty → Val → Ty → Val → Prop
       {v : Val} : ViewIn te x s v → ViewIn (.fn ms) (.pkg fs te ms x cs) s v
 
 /-- A3.1: tree `T` of type `τ` holds a share of block `k`, whose payload is
-    the `u` it carries, `p`. (Not inside a payload: the block's own shares
-    are the block's.) -/
-inductive ArcIn : Ty → Val → Ty → Nat → Val → Prop
-  | here {u : Ty} {k : Nat} {p : Val} : ArcIn (.arc u) (.arc k p) u k p
-  | child {t t' : Ty} {c d : Nat} {es : List Val} {e : Val} {u : Ty} {k : Nat} {p : Val} :
+    a `u`: the one it carries, `some p`, or (A3.2) none, for a lock share.
+    (Not inside a payload: the block's own shares are the block's.) -/
+inductive ArcIn : Ty → Val → Ty → Nat → Option Val → Prop
+  | here {u : Ty} {k : Nat} {p : Val} : ArcIn (.arc u) (.arc k p) u k (some p)
+  /-- A3.2: a lock share of block `k`, of payload type `u` (it carries no
+      payload: `none`). -/
+  | lk {u : Ty} {k : Nat} : ArcIn (.lk u) (.lk k) u k none
+  | child {t t' : Ty} {c d : Nat} {es : List Val} {e : Val} {u : Ty} {k : Nat} {p : Option Val} :
       e ∈ es → ArcIn t e u k p → ArcIn (.vec t) (.node t' c d es) u k p
-  | fst {a b : Ty} {x y : Val} {u : Ty} {k : Nat} {p : Val} :
+  | fst {a b : Ty} {x y : Val} {u : Ty} {k : Nat} {p : Option Val} :
       ArcIn a x u k p → ArcIn (.prod a b) (.pair x y) u k p
-  | snd {a b : Ty} {x y : Val} {u : Ty} {k : Nat} {p : Val} :
+  | snd {a b : Ty} {x y : Val} {u : Ty} {k : Nat} {p : Option Val} :
       ArcIn b y u k p → ArcIn (.prod a b) (.pair x y) u k p
-  | inl {a b : Ty} {x : Val} {u : Ty} {k : Nat} {p : Val} : ArcIn a x u k p → ArcIn (.sum a b) (.inl x) u k p
-  | inr {a b : Ty} {x : Val} {u : Ty} {k : Nat} {p : Val} : ArcIn b x u k p → ArcIn (.sum a b) (.inr x) u k p
+  | inl {a b : Ty} {x : Val} {u : Ty} {k : Nat} {p : Option Val} : ArcIn a x u k p → ArcIn (.sum a b) (.inl x) u k p
+  | inr {a b : Ty} {x : Val} {u : Ty} {k : Nat} {p : Option Val} : ArcIn b x u k p → ArcIn (.sum a b) (.inr x) u k p
   | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {x : Val} {cs : List (Var × PMode × Ty)} {u : Ty}
-      {k : Nat} {p : Val} : ArcIn te x u k p → ArcIn (.fn ms) (.pkg fs te ms x cs) u k p
+      {k : Nat} {p : Option Val} : ArcIn te x u k p → ArcIn (.fn ms) (.pkg fs te ms x cs) u k p
+
+/-- A3.2: what a share asks of its block: an `arc` share (carrying `some p`)
+    an `arc` block holding `p`, a lock share (`none`) a lock block of its
+    payload's type, holding its payload or not. -/
+def ShareFits (b : Option Blk) (u : Ty) : Option Val → Prop
+  | some p => b = some ⟨u, .arc, some p⟩
+  | none => ∃ o, b = some ⟨u, .lock, o⟩
 
 /-- A3.1: every share a tree holds names a block of the store `B` that
     holds the payload the share carries, of the share's type (the block
-    lives while a share of it is owned; a payload never changes). -/
+    lives while a share of it is owned; an `arc` payload never changes), or
+    (A3.2) a lock block of its type. -/
 def SharesIn (B : Nat → Option Blk) (τ : Ty) (T : Val) : Prop :=
-  ∀ u k p, ArcIn τ T u k p → B k = some ⟨u, .arc, some p⟩
+  ∀ u k p, ArcIn τ T u k p → ShareFits (B k) u p
 
 /-- `SharesIn` over a memory's blocks. -/
 def SharesOK (m : Mem) (τ : Ty) (T : Val) : Prop := SharesIn m.blk τ T
@@ -86,8 +99,14 @@ theorem BlkLe.fresh {B : Nat → Option Blk} {n : Nat} (h : B n = none) (b : Blk
     have hne : k ≠ n := fun e => by rw [e, h] at hk; cases hk
     simpa [upd, hne] using hk
 
+theorem ShareFits.grow {B B' : Nat → Option Blk} (hb : BlkLe B B') {k : Nat} {u : Ty} {p : Option Val}
+    (h : ShareFits (B k) u p) : ShareFits (B' k) u p := by
+  cases p with
+  | some p => exact hb k _ h
+  | none => obtain ⟨o, h⟩ := h; exact ⟨o, hb k _ h⟩
+
 theorem SharesIn.grow {B B' : Nat → Option Blk} {τ : Ty} {T : Val} (h : SharesIn B τ T) (hb : BlkLe B B') :
-    SharesIn B' τ T := fun u k p ha => hb k _ (h u k p ha)
+    SharesIn B' τ T := fun u k p ha => (h u k p ha).grow hb
 
 theorem SharesOK.grow {m m' : Mem} {τ : Ty} {T : Val} (h : SharesOK m τ T) (hb : BlkLe m.blk m'.blk) :
     SharesOK m' τ T := SharesIn.grow h hb
@@ -110,12 +129,16 @@ theorem SharesOK.pkg {m : Mem} {fs : List Nat} {te : Ty} {ms : List Nat} {x : Va
     {cs : List (Var × PMode × Ty)} (h : SharesOK m (.fn ms) (.pkg fs te ms x cs)) : SharesOK m te x :=
   fun u k p ha => h u k p (.pkg ha)
 theorem SharesOK.here {m : Mem} {t : Ty} {k : Nat} {p : Val} (h : SharesOK m (.arc t) (.arc k p)) :
-    m.blk k = some ⟨t, .arc, some p⟩ := h t k p .here
+    m.blk k = some ⟨t, .arc, some p⟩ := h t k (some p) .here
+/-- A3.2: a lock share names a lock block of its type. -/
+theorem SharesOK.lk {m : Mem} {t : Ty} {k : Nat} (h : SharesOK m (.lk t) (.lk k)) :
+    ∃ o, m.blk k = some ⟨t, .lock, o⟩ := h t k none .lk
 
-theorem ArcIn.hasArc {τ : Ty} {T : Val} {u : Ty} {k : Nat} {p : Val} (h : ArcIn τ T u k p) :
+theorem ArcIn.hasArc {τ : Ty} {T : Val} {u : Ty} {k : Nat} {p : Option Val} (h : ArcIn τ T u k p) :
     τ.hasArc = true := by
   induction h with
   | here => rfl
+  | lk => rfl
   | child _ _ ih => exact ih
   | fst _ ih => simp [Ty.hasArc, ih]
   | snd _ ih => simp [Ty.hasArc, ih]
@@ -302,6 +325,11 @@ inductive ValOK (m : Mem) : Ty → Val → List Dep → List Dep → Prop
       m.blk k = some ⟨t, .arc, some p⟩ → WFv t p → t.holdsView = false →
       (∃ dep ∈ P, ArcLanded m dep (.arc k p)) →
       ValOK m (.arc t) (.arc k p) P H
+  /-- A3.2: a lock share lent: its block is a lock block of its type.  No
+      one borrows into a lock's payload, so it lands through nothing; the
+      sweep keeps the block while a slot holds the share. -/
+  | lk {t : Ty} {k : Nat} {P H : List Dep} :
+      (∃ o, m.blk k = some ⟨t, .lock, o⟩) → ValOK m (.lk t) (.lk k) P H
 
 section ValOK
 variable {m : Mem} {v : Val} {P H : List Dep}

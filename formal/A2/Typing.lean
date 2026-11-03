@@ -392,6 +392,7 @@ def elemE (y : Var) (E : Entry) : Ty → Entry
   | .sum a b => ⟨.sum a b, .bor, true, derive y E .inner, E.held, false, false⟩
   | .fn ms => ⟨.fn ms, .bor, true, derive y E .inner, E.held, false, false⟩
   | .arc t => ⟨.arc t, .bor, true, derive y E .inner, E.held, false, false⟩
+  | .lk t => ⟨.lk t, .bor, true, derive y E .inner, E.held, false, false⟩
 
 /-- An element moved out of `y` by `vec_pop`: an element `Vec` or struct is
     owned. -/
@@ -401,6 +402,7 @@ def popE (y : Var) (E : Entry) : Ty → Entry
   | .sum a b => ⟨.sum a b, .own, true, [], E.held, false, false⟩
   | .fn ms => ⟨.fn ms, .own, true, [], E.held, false, false⟩
   | .arc t => ⟨.arc t, .own, true, [], E.held, false, false⟩
+  | .lk t => ⟨.lk t, .own, true, [], E.held, false, false⟩
   | t => elemE y E t
 
 /-- What a field of the struct `y` (entry `E`) lends: what is inside an
@@ -584,6 +586,18 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
   | arcGet {a : Var} {E : Entry} {t : Ty} :
       Γ a = some E → E.live = true → E.ty = .arc t → t.holdsView = false → t.hasFn = false →
       RhsT Γ F (.arcGet a) (getE a E t) Γ
+  /-- A3.2: `locked_new`: `y`'s value, of a type that holds no view and no
+      closure (it is Send), moves into a fresh lock block; the result is an
+      owned lock share, which holds nothing. -/
+  | lockNew {t : Ty} {y : Var} {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
+      Γ y = some Ey → Ey.live = true → Ey.ty = t → t.holdsView = false ∧ t.hasFn = false →
+      PushArg Γ F y Ey t D Γ1 →
+      RhsT Γ F (.lockNew t y) ⟨.lk t, .own, true, [], [], false, false⟩ Γ1
+  /-- A3.2: `Locked_share`: a new share of the lock block `a` shares: owned,
+      holding nothing. -/
+  | lockClone {a : Var} {E : Entry} {t : Ty} :
+      Γ a = some E → E.live = true → E.ty = .lk t →
+      RhsT Γ F (.lockClone a) ⟨.lk t, .own, true, [], [], false, false⟩ Γ
 
 /-! ### Calls -/
 
@@ -619,6 +633,8 @@ theorem RhsT.out {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT 
   | arcNew => exact ⟨Or.inl rfl, rfl⟩
   | arcClone => exact ⟨Or.inl rfl, rfl⟩
   | @arcGet _ _ t => cases t <;> exact ⟨Or.inr rfl, rfl⟩
+  | lockNew => exact ⟨Or.inl rfl, rfl⟩
+  | lockClone => exact ⟨Or.inl rfl, rfl⟩
 
 /-- What the summary pair `(j, k)` means at this call.  An integer argument
     lends nothing. -/
@@ -1227,6 +1243,7 @@ theorem hasFn_holdsView {t : Ty} (h : t.hasFn = true) : t.holdsView = true := by
     exact h.imp iha ihb
   | fn _ => rfl
   | arc t ih => exact ih h
+  | lk t ih => exact ih h
 
 /-- A parameter's entry: a borrowed one depends on nothing the callee can
     see; every parameter whose type may hold a closure holds the symbolic
@@ -1298,6 +1315,8 @@ def Rhs.vars : Rhs → List Var
   | .arcNew _ y => [y]
   | .arcClone a => [a]
   | .arcGet a => [a]
+  | .lockNew _ y => [y]
+  | .lockClone a => [a]
 
 def Edit.vars : Edit → List Var
   | .push y => [y]

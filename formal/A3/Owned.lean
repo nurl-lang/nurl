@@ -138,7 +138,11 @@ theorem EvalR.ownedId {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r
   | arcNew h1 _ =>
     obtain ⟨_, b1⟩ := TakeVal.ownedId h1 hb
     exact ⟨fun _ i hi => by simp [Val.ids] at hi, fun i hi => .inl (b1 i hi)⟩
+  | lockNew h1 _ =>
+    obtain ⟨_, b1⟩ := TakeVal.ownedId h1 hb
+    exact ⟨fun _ i hi => by simp [Val.ids] at hi, fun i hi => .inl (b1 i hi)⟩
   | arcClone _ => exact ⟨fun _ i hi => by simp [Val.ids] at hi, fun i hi => .inl hi⟩
+  | lockClone _ => exact ⟨fun _ i hi => by simp [Val.ids] at hi, fun i hi => .inl hi⟩
   | _ => exact ⟨fun h => (nomatch h), fun i hi => .inl hi⟩
 
 /-- **Binding parameters**: a `sink` parameter owns what its argument owned,

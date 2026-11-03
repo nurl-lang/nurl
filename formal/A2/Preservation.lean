@@ -2262,7 +2262,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         by_cases hyx : y = x
         · subst hyx; simp at hy; obtain ⟨_, rfl⟩ := hy
           rcases hrf with ⟨p, hp⟩ | ⟨_, _, ⟨c, hc, _⟩ | ⟨d, o', l, hd, _⟩⟩
-          · cases hp
+          · cases p <;> cases hp
           · cases hc
           · cases hd
         · simp only [Mem.set_st, upd_ne _ _ hyx] at hy

@@ -39,6 +39,7 @@ theorem EvalR.keep {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.
   | inr h1 => rw [TakeVal.alloc h1]
   | pack h1 => rw [TakeVal.alloc h1]
   | arcNew h1 _ => exact congrFun (TakeVal.alloc h1) i
+  | lockNew h1 _ => exact congrFun (TakeVal.alloc h1) i
   | _ => rfl
 
 /-- **A step leaves another part as it was.** -/

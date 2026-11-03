@@ -29,6 +29,7 @@ inductive Ty where
                         -- has the interface `ms[j]` (a function of the program whose first parameter
                         -- is the receiver); the environment's type is not part of the type
   | arc (t : Ty)      -- A3.1: a share of a counted block whose payload, a `t`, is frozen
+  | lk (t : Ty)       -- A3.2: a share of a lock block (`Locked`) whose payload is a `t`
 deriving DecidableEq, Repr
 
 /-- Does a value of this type hold views (so that storing one into a
@@ -41,6 +42,7 @@ def Ty.holdsView : Ty → Bool
   | .sum a b => a.holdsView || b.holdsView
   | .fn _ => true     -- what the environment holds is not part of the type
   | .arc t => t.holdsView
+  | .lk t => t.holdsView
 
 /-- May a value of this type hold a closure (and so hold bindings by name)? -/
 def Ty.hasFn : Ty → Bool
@@ -51,6 +53,7 @@ def Ty.hasFn : Ty → Bool
   | .sum a b => a.hasFn || b.hasFn
   | .fn _ => true
   | .arc t => t.hasFn
+  | .lk t => t.hasFn
 
 /-- A3.1: may a value of this type hold a share (an `Arc`)?  A closure's
     environment may. -/
@@ -62,6 +65,7 @@ def Ty.hasArc : Ty → Bool
   | .sum a b => a.hasArc || b.hasArc
   | .fn _ => true
   | .arc _ => true
+  | .lk _ => true
 
 /-- A2 types: a view's element type holds no views of its own (a view of a
     container of views is left to A2, with the other aggregates that
@@ -74,6 +78,7 @@ def Ty.ok : Ty → Bool
   | .sum a b => a.ok && b.ok
   | .fn _ => true
   | .arc t => t.ok && !t.holdsView   -- A3.1: a payload holds no views
+  | .lk t => t.ok && !t.holdsView    -- A3.2: nor does a lock's (it is Send)
 
 /-- A type whose values own what they hold: a `Vec` or a struct.  Its
     binding is an owner (or borrows one). -/
@@ -83,6 +88,7 @@ def Ty.owning : Ty → Bool
   | .sum _ _ => true
   | .fn _ => true
   | .arc _ => true
+  | .lk _ => true
   | _ => false
 
 /-- What an operation does to a container, ordered by what it ends.
@@ -217,6 +223,8 @@ inductive Rhs where
   | arcNew (t : Ty) (y : Var)  -- A3.1: `arc_new`: `y`'s value (a `t`) moves into a fresh block
   | arcClone (a : Var)         -- A3.1: `arc_clone`: a new share of the block `a` shares
   | arcGet (a : Var)           -- A3.1: `arc_get`: the payload of `a`'s block, lent
+  | lockNew (t : Ty) (y : Var) -- A3.2: `locked_new`: `y`'s value (a `t`) moves into a fresh lock block
+  | lockClone (a : Var)        -- A3.2: `Locked_share`: a new share of the lock block `a` shares
 deriving DecidableEq, Repr
 
 /-! ### Memory (here because a run-time form records a snapshot of it) -/
@@ -236,6 +244,8 @@ inductive Val where
   | arc (k : Nat) (p : Val)                      -- A3.1: a share of block `k`, carrying the block's
                                                -- payload `p` as ghost data (a borrow reaches it
                                                -- through the share; the block owns its addresses)
+  | lk (k : Nat)                                 -- A3.2: a share of the lock block `k` (it carries
+                                               -- nothing: the payload changes, and no one reads it)
 deriving Repr, Inhabited
 
 /-- A binding's storage: whether it owns its value (it is dropped at the end

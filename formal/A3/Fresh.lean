@@ -62,6 +62,8 @@ theorem EvalR.grows {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (
   | pack h1 => exact TakeVal.grows h1
   | arcNew h1 hfr =>
     exact (TakeVal.grows h1).trans ⟨Nat.le_succ _, fun _ hi => .inl hi, BlkLe.fresh hfr _⟩
+  | lockNew h1 hfr =>
+    exact (TakeVal.grows h1).trans ⟨Nat.le_succ _, fun _ hi => .inl hi, BlkLe.fresh hfr _⟩
   | _ => exact Grows.of_eq rfl rfl
 
 theorem BindParams.grows {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var} {base i : Nat}

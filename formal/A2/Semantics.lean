@@ -84,6 +84,8 @@ inductive Frees : (Nat → Bool) → Val → (Nat → Bool) → Prop
   /-- A3.1: a share frees nothing by itself.  (The count is ghost; a block
       no share reaches is freed by the sweep that ends the step, `Steps`.) -/
   | arc {a : Nat → Bool} {k : Nat} {p : Val} : Frees a (.arc k p) a
+  /-- A3.2: so does a lock share. -/
+  | lk {a : Nat → Bool} {k : Nat} : Frees a (.lk k) a
   | node {a a' : Nat → Bool} {t : Ty} {c d : Nat} {es : List Val} :
       a c = true → upd a c false d = true →
       FreesL (upd (upd a c false) d false) es a' →
@@ -123,10 +125,16 @@ cycles, and the blocks nothing reaches are exactly those the runtime's
 count would have freed, one after the other, newest first; the model frees
 them together, at the end of the step (`Mem.sweep`). -/
 
+/-- A3.2: a share of block `k`: an `arc` share carrying its payload
+    (`some p`), or a lock share (`none`). -/
+def Val.share (k : Nat) : Option Val → Val
+  | some p => .arc k p
+  | none => .lk k
+
 /-- `v` refers to block `k` of `B`: it holds a share of it, or a handle whose
     address lies in its payload. -/
 def Refers (B : Nat → Option Blk) (v : Val) (k : Nat) : Prop :=
-  (∃ p, Sub (.arc k p) v) ∨ ∃ bl, B k = some bl ∧
+  (∃ p, Sub (Val.share k p) v) ∨ ∃ bl, B k = some bl ∧
     ((∃ c, Sub (.href c) v ∧ c ∈ bl.rd.ids) ∨ ∃ d o l, Sub (.view d o l) v ∧ d ∈ bl.rd.ids)
 
 /-- The blocks of `B` reached from the values `R` (the slots' values), through
@@ -224,6 +232,7 @@ def Val.owns : Val → Bool
   | .inr .. => true
   | .pkg .. => true
   | .arc _ _ => true   -- A3.1: a share is owned; dropping it is what counts
+  | .lk _ => true      -- A3.2: so is a lock share
   | _ => false
 
 /-- Handing a value on: an owner gives up its value, anything else is
@@ -312,6 +321,17 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
   | arcGet {a : Var} {o : Bool} {k : Nat} {p : Val} {bl : Blk} :
       m.st a = some ⟨o, some (.arc k p)⟩ → m.blk k = some bl →
       EvalR m (.arcGet a) (.ok (lendOf bl.rd) false m)
+  /-- A3.2: a new lock block holds the value taken from `y`, at a key taken
+      from `nid`; the result is its one share. -/
+  | lockNew {t : Ty} {y : Var} {v : Val} {m1 : Mem} :
+      TakeVal m y v m1 → m1.blk m1.nid = none →
+      EvalR m (.lockNew t y)
+        (.ok (.lk m1.nid) true
+          { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, .lock, some v⟩) })
+  /-- A3.2: a read of the lock share `a` (owned or lent) makes a new share
+      of its block. -/
+  | lockClone {a : Var} {o : Bool} {k : Nat} :
+      m.st a = some ⟨o, some (.lk k)⟩ → EvalR m (.lockClone a) (.ok (.lk k) true m)
 
 /-! ### Calls
 
@@ -351,6 +371,8 @@ def Rhs.rename (ρ : Var → Var) : Rhs → Rhs
   | .arcNew t y => .arcNew t (ρ y)
   | .arcClone a => .arcClone (ρ a)
   | .arcGet a => .arcGet (ρ a)
+  | .lockNew t y => .lockNew t (ρ y)
+  | .lockClone a => .lockClone (ρ a)
 
 def Edit.rename (ρ : Var → Var) : Edit → Edit
   | .push y => .push (ρ y)
