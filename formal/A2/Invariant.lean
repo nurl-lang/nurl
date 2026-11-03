@@ -850,10 +850,17 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       taken, and its payload, a `t`, is checked out to `x` for the body:
       owned (an integer is a plain integer binding), holding nothing (the
       payload views nothing). `x`'s scope ends as a `letv`'s does; its value
-      goes back into the block (`scopeL`). -/
+      goes back into the block (`scopeL`).  The runtime runs the update in
+      place, in the lock's own memory, so two more premises keep the model
+      faithful to it: the body leaves `a`'s slot alone (it does not name
+      `a`, and `a` is an owner or a borrowed parameter, whose share outlives
+      the body; no closure changes a lock share by name, `NamesFree`), so the
+      lock outlives the body; and `x` holds a `t` again at its end (it may
+      be replaced, not left moved out), so it is what goes back. -/
   | withLock {Γ Δ : Ctx} {F : List Var} {a x : Var} {s : Stmt} {Ea : Entry} {t : Ty} :
       s.src = true → Γ x = none → x ∉ F → Γ a = some Ea → Ea.live = true → Ea.ty = .lk t →
       StmtT P (setE Γ x (lockE t)) F s Δ → EndOK Δ x →
+      Ea.mode.isRoot = true → a ∉ s.vars → (∃ E, Δ x = some E ∧ E.live = true) →
       StmtT P Γ F (.withLock a x s) (exitScope x Δ)
   /-- A3.2: run time: `x`'s lock scope, typed as a `scope`. -/
   | scopeL {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x : Var} {s : Stmt} :

@@ -741,7 +741,7 @@ theorem StmtT.names {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : St
     have hx1 : Γ1 x = none := by
       have := (hr.domMode).1 x; rw [hx] at this; cases h : Γ1 x <;> simp_all
     exact (ih hks (NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h) (fun Ex h => by rw [hx1] at h; cases h) hE)).exitScope x
-  | @withLock Γ Δ F a x k Ea t hks hx _ _ _ _ _ _ ih =>
+  | @withLock Γ Δ F a x k Ea t hks hx _ _ _ _ _ _ _ _ _ ih =>
     intro _ hn
     exact (ih hks (NameWF.setE hn (fun Ex h => by rw [hx] at h; cases h) (fun Ex h => by rw [hx] at h; cases h)
       (fun _ _ => by unfold NameOK; rw [lockE_vdeps]; exact DepsNamed.nil _))).exitScope x

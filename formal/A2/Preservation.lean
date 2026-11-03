@@ -1300,7 +1300,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           exact ⟨by simp [Stmt.spine], E0, h0⟩
       · have hvx : v ≠ x := fun e => hxF (e ▸ hv)
         simp only [Mem.set_st, upd_ne _ _ hvx]; exact post.frz v hv
-  | @withLock Γ Δ F a x k Ea t hsrc hx hxF ha hla hta hs hpx _ =>
+  | @withLock Γ Δ F a x k Ea t hsrc hx hxF ha hla hta hs hpx _ _ _ _ =>
     intro m m' s' hcd hi hst
     cases hst with
     | @withLock _ _ _ o kk t' v ha' hk hmx =>

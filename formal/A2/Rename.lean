@@ -3145,7 +3145,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     exact StmtT.letv (by rw [src_rename]; exact hks) (by rw [canon_ρ h, hx]; rfl) (h.Fcout x) hr'
       (StmtT.weakenIn ⟨PW.setE (PW.refl _) (hE' x), hwc, hnc⟩ tk)
       (EndOK.lift h abk hbx hpe)
-  | @withLock Γ Δ F a x k Ea t hks hx hxF ha hla hta hk hpe ih =>
+  | @withLock Γ Δ F a x k Ea t hks hx hxF ha hla hta hk hpe hroot hav hxl ih =>
     intro _ hab hw hn hT
     have hca : S.canon Γ (S.ρ a) = some (S.liftE a Ea) := by rw [canon_ρ h, ha]; rfl
     have hmo : (lockE t).mode = .own ∨ (lockE t).mode = .bor := by
@@ -3166,6 +3166,17 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (by rw [liftE_live]; exact hla) (by rw [liftE_ty' h hab ha]; exact hta)
       (StmtT.weakenIn ⟨PW.setE (PW.refl _) (lockE_lift x t), hwc, hnc⟩ tk)
       (EndOK.lift h abk hbx hpe)
+      (by
+        unfold RSetup.liftE; split
+        · simp [h.pe_rb, Mode.isRoot]
+        · cases hm : Ea.mode <;> simp_all [liftMode, Mode.isRoot])
+      (by
+        rw [Stmt.vars_rename]; intro hm
+        obtain ⟨w, hw, he⟩ := List.mem_map.mp hm
+        exact hav (h.inj _ _ he ▸ hw))
+      (by
+        obtain ⟨E, hE, hl⟩ := hxl
+        exact ⟨S.liftE x E, by rw [canon_ρ h, hE]; rfl, by rw [liftE_live]; exact hl⟩)
   | @letd Γ Γ1 Δ F x f r k E H hks hx hxF hr hown hview hdtor hH hk hpe ih =>
     intro _ hab hw hn hT
     obtain ⟨E', hr', hE'⟩ := RhsT.ren h hab hr
