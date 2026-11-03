@@ -39,73 +39,12 @@ Each is a use of freed or moved-out memory in safe code, with a fix in progress:
   Until the fix ships, give the field a value right after the take
   (`= . h buf ( vec_new [u] )`), or hand the callee a copy
   (`( mem_dup . h buf )`) and keep the field.
-- **agora #293: an owner's buffer moved through a copy of its handle
-  leaves a slice of it live.** `: ( Slice i ) sl ( slice_from_vec [i] vs
-  )`, then `: ( Vec i ) w ( id vs )` (or a field viewer `. o buf`) and `(
-  vec_reserve [i] w 4096 )`, or pushes through `w`: `sl` still points into
-  the buffer that moved. Through `vs` itself it is refused. Until the fix
-  ships, grow or reserve a Vec only by its owner's own name while a slice
-  of it is live.
 - **agora #294: a struct built from an owner and a view of it views its
   own buffer.** `: ( Slice u ) sv ( slice_from_vec [u] b )` then `: S o @
   S { sv b }`: growing or replacing `. o buf` (`( vec_reserve [u] . o buf
   4096 )`, `= . o buf …`) leaves `. o v` pointing into the old buffer, and
   a String field grown by `string_push_str` does the same. Until the fix
   ships, never put an owner and a view of it into the same struct.
-- **agora #332: a view a closure gives a capture through a local, or a
-  push into a plain Vec parameter.** Inside a closure body, a local bound
-  from the closure's own parameter or from a view capture (`: ( @ v s ) setw
-  \ s p → v { : s t p = w @ V { t } }`) is not followed to what it points
-  into, so storing the local into a capture (whole, by field, by push, or
-  into the closure's own `inout` parameter) is accepted. And a closure's
-  plain `( Vec s )` parameter is no target, so `\ ( Vec s ) out → v { (
-  vec_push [s] out ( string_data b ) ) }` is accepted too. When what the view
-  points into ends before the capture or the caller's Vec is read, that read
-  is of freed memory. Until the fix ships, give the view through a function's
-  `inout` parameter, passing the view itself (`s v`), not from a closure.
-- **agora #333: a callee that clears inside its parameter's elements.**
-  `@ clear_first ( Vec ( Vec String ) ) p → v { ( vec_clear [String] (
-  vec_at [( Vec String )] p 0 ) ) }`, or the same through a local element
-  borrow or on a field of an element: the call ends none of the caller's
-  borrows of that element's contents, so reading one after the call reads
-  freed memory. (A callee that grows such an element is followed since
-  agora #315.) Until the fix ships, take such a borrow again after the call
-  instead of holding it across it.
-- **agora #338: an enum with a view variant is taken to hold no view.**
-  The borrow check asks whether a type can hold a view, and for every enum
-  it answers no (`__ty_holds_view`). So an enum whose variant is a view
-  (`: | Tok { Word s Num i Bad String }`) loses its source wherever that
-  question decides: returned from a function over a temporary, copied into
-  a literal or a join, pushed into a Vec, stored into a field, or given to
-  a closure's capture or its `inout` parameter. When the source ends
-  before the enum is read, the read is of freed memory. Until the fix
-  ships, keep the source of an enum's view alive as long as the enum, or
-  give the variant an owned payload (`String`, not `s`).
-- **agora #339: a closure called with the capture it changes.** A closure
-  that assigns one of its by-reference captures (`: ( @ v String ) c \
-  String p → v { = o ( same p ) }`) can be called with that capture as its
-  argument, `( c o )`. Its body drops the capture's old value, which the
-  argument still is, and the read after the call is of freed memory. A
-  function with an `inout` parameter, called with the same binding twice,
-  is refused. Until the fix ships, do not hand a closure a binding it
-  assigns: pass a copy (`( string_from ( string_data o ) )`), or make the
-  closure a function with an `inout` parameter.
-- **agora #341: a callee that pushes a literal holding its parameter's
-  view into a Vec it returns.** In `@ mk s v → ( Vec W ) { : ( Vec W ) ws (
-  vec_new [W] ) ( vec_push [W] ws @ W { v } ) ^ ws }` the caller's result is
-  not seen to view the argument. A source that ends first, or a younger one
-  when `W` has a `% Drop`, leaves the Vec reading freed memory. A struct
-  literal returned directly, and a bare `( Vec s )`, are tracked. Until the
-  fix ships, build such a Vec in the caller, or keep the argument's source
-  alive as long as the result.
-- **agora #343: an `inout` option given a lend out of a borrowed Vec
-  parameter.** `@ put inout ?String o ( Vec String ) vs → v { = o (
-  vec_get [String] vs 0 ) }` stores the lend as it is. The caller's option
-  and its Vec then both own the element, and the second release reads
-  freed memory. With the Vec a local of the callee instead, the program
-  does not compile: clang reports an undefined `__dropifv_w__opt.String`.
-  Until the fix ships, store a copy into an `inout` option (`T (
-  string_from ( string_data e ) )`), not the lend itself.
 - **agora #345: a view of an Rc's state through one share, replaced
   through another.** Take a program's own handle over an `Rc` (`: X { (
   Rc Impl ) ctl }`, with `X_share` an `rc_clone`). A view of the state
@@ -115,36 +54,20 @@ Each is a use of freed or moved-out memory in safe code, with a fix in progress:
   field directly is checked. Until the fix ships, do not keep a view of an
   Rc's state across a call that may `rc_set` it through any share; copy
   what you need first.
-- **agora #346: a view parameter stored into an `inout` struct through a
-  local copy.** `@ setw inout V w s p → v { : s t p = w @ V { t } }` gives
-  the caller no record that `w` now views what `p` views, because the keep
-  is recorded only when the stored name is the parameter itself. When the
-  source ends before `w` is read, the read is of freed memory. The direct
-  form `= w @ V { p }` is refused. Until the fix ships, store the parameter
-  itself into the `inout` holder, not a local copy of it.
 - **agora #348: a nested field store of a view.** `= . . h w v (
   string_data b )` records no dependency of `h` on `b`, plainly or inside
   a closure, so reading `. . h w v` after `b` ends reads freed memory. The
   one-level store `= . w v ( string_data b )` is refused. Until the fix
   ships, store a view only one field deep, or give the inner struct a new
   value whole (`= . h w @ V { ( string_data b ) }`).
-- **agora #349: a buffer-moving call handed an element lent by a call.**
-  `( vec_reserve [u] ( vec_at [( Vec u )] vv 0 ) 4096 )` moves the
-  element's buffer, but the borrow check ends the views of `vv`'s own
-  buffer instead, so a slice of that element taken before the call reads
-  freed memory after it. The same call through a `:` binding of the
-  element is refused. Until the fix ships, bind the element first (`: ( Vec
-  u ) e ( vec_at … vv 0 )`) and grow it through that binding.
-
-  The same move, with the element reached some other way, also leaves a
-  `string_bytes` view of it reading freed memory: an element handed out by
-  a program function (`( string_push_str ( first_str vs ) … )`, first_str
-  defined above its caller), a `vec_get` match payload grown by a callee
-  (`?? ( vec_get vs 0 ) { T e → ( grow e ) }`), a nested lend (`(
-  string_push_str ( vec_at ( vec_at vv 0 ) 0 ) … )`), and a callee that
-  grows an element of the Vec it was handed (`( work vs )` with `work`
-  calling string_push_str on `( vec_at p 0 )`). Found by the #352
-  adversarial pass.
+- **agora #349: an element of a Vec handed out by a program function or
+  by nested calls, then grown.** `: s v ( string_data ( vec_at [String] vs 0
+  ) )`, then `( string_push_str ( first_str vs ) … )` with `first_str`
+  handing back `( vec_at vs 0 )`, or `( string_push_str ( vec_at ( vec_at vv
+  0 ) 0 ) … )` for a nested lend: the change reaches no owner, so `v` reads
+  freed memory after it. A binding of the element, a `vec_get` payload and a
+  callee growing an element of its Vec are refused. Until the fix ships,
+  bind the element first (`: String e ( vec_at vs 0 )`) and grow through it.
 - **agora #350: a change through a `~ e vv` loop's element.** The loop's
   element binding is not a borrow of `vv` to the borrow check, so `~ e vv {
   ( vec_clear [String] e ) }` (or a buffer move through `e`) ends no
@@ -153,14 +76,6 @@ Each is a use of freed or moved-out memory in safe code, with a fix in progress:
   through a `:` binding of the element is refused. Until the fix ships, do
   not keep a view of an element's contents across a loop that changes its
   elements.
-- **agora #353: a closure that changes a capture's element through a local
-  of its body.** `\ → v { : ( Vec String ) e ( vec_at [( Vec String )] vv
-  0 ) ( vec_clear [String] e ) }` is not recorded as an effect of running
-  the closure on `vv`, so a view of that element's contents taken before
-  the call survives it and reads freed memory. The direct form `( vec_clear
-  [String] ( vec_at … vv 0 ) )` in the closure is refused. Until the fix
-  ships, write such a change directly on the capture's element, not
-  through a local of the closure's body.
 - **agora #357: a field of a match payload handed to a `sink`.** In `??
   ( vec_get [H] vs 0 ) { T p → ( take . p buf ) … }`, or a match of a user
   enum binding that leaves it in place, the take empties the field in the
@@ -170,24 +85,6 @@ Each is a use of freed or moved-out memory in safe code, with a fix in progress:
   `vec_at` element bound first is refused. Until the fix ships, take the
   element out whole first (`vec_remove`, a consuming match), or hand the
   `sink` a copy (`( mem_dup . p buf )`).
-- **agora #358: a closure made after a borrow ended.** With `w` holding a
-  view of a block-local `b`, a read of `. w v` after `b`'s block is
-  refused, but a closure created after that point (`\ → v { ( nurl_println
-  . w v ) }`, or a `recover` closure) captures `w` without the check, and
-  calling it reads freed memory. Until the fix ships, do not capture a
-  binding whose view's source has ended.
-- **agora #359: a closure that changes its own parameter's contents.** A
-  closure such as `\ ( Vec String ) x → v { ( vec_clear [String] x ) }`
-  records no effect on its parameters, so calling it with a Vec whose
-  element a caller binding still borrows leaves that binding reading freed
-  memory. The same body as a function is refused at the call. Until the
-  fix ships, write such a change as a function, or end the borrows of the
-  argument's elements before calling the closure.
-
-  The same goes for a closure handed to a function that calls it on the
-  lent value: `( apply ( vec_at vv 0 ) \ ( Vec String ) x → v { (
-  vec_clear [String] x ) } )` ends no borrow of that element, in either
-  definition order. Found by the #352 adversarial pass.
 - **agora #360: a `?` / `??` join whose arms are field paths.** `: ( Vec S )
   j ? == c 1 . h a . h b`, then `( vec_clear [S] j )`, or the same join as
   `vec_clear`'s argument: the join carries no source of `h.a` or `h.b`, so
@@ -244,35 +141,6 @@ Each is a use of freed or moved-out memory in safe code, with a fix in progress:
   freed memory. The same holds for a struct with a view beside an owned
   field. Until the fix ships, keep copies and popped elements of
   view-holding values inside the scope that owns their source.
-- **agora #369: a closure that returns a value holding a view of its
-  capture.** `: ( @ Tok ) mk \ → Tok { ^ @ Tok { Word ( string_data line
-  ) } }`, then `( vec_push [Tok] toks ( mk ) )` with `toks` outliving
-  `line`: the closure's result has no source, so the token is kept past
-  the String it views and reads freed memory. The same holds for a struct
-  with a view beside an owned field. A named function returning such a
-  value is tracked; a closure is not. Until the fix ships, return such
-  values from a named function, or keep them in the scope that owns the
-  captured source.
-- **agora #370: a view parameter a callee keeps in a holder other than its
-  first argument.** `@ second inout W first inout W other s src → v { =
-  other @ W { src } }`, called with `( string_data s )` and a String that
-  ends before `other`'s argument is read. The view is tied to the first
-  argument, not the one the callee stored it in, so the later read is of
-  freed memory. The same holds for a Vec of views that is not the first
-  argument, and for self-recursion through a local holder with view
-  arguments. #337 ties an owner argument (a String) to the right holder; a
-  view argument still goes through #259's row. The same holds for a callee
-  that stores a view parameter into another parameter through a borrow of
-  it (`: ( Vec s ) w ( id v ) ( vec_push [s] w x )`, a field viewer, an
-  element; agora #397, folded in here). Until the fix ships, have the
-  callee take the String itself (`String src`, then `string_data src`
-  inside), or make the holder its first parameter.
-- **agora #372: a closure that hands back an element of its own local
-  Vec.** A closure body that binds `: Conn c ( vec_at [Conn] cs 0 )` of a Vec
-  `cs` it made itself and returns `c` hands back a lend of a Vec it drops on
-  the way out, a double drop. The same body as a function is refused. Until
-  the fix ships, write such code as a function, or copy the element out of
-  the Vec before returning it.
 - **agora #373: a `vec_get` binding kept across a call that moves the
   elements.** `: ?String o ( vec_get [String] vs 0 )`, then `( vec_swap
   [String] vs 0 1 )` or `( vec_insert [String] vs 0 … )`, then `o`'s
@@ -301,21 +169,6 @@ Each is a use of freed or moved-out memory in safe code, with a fix in progress:
   below the closure, the forwarder is clean. Until the fix ships, make the
   assignment outside the closure, or free the old value first (`= o @
   ?String { F }`).
-- **agora #379: a `\` try-return while an `inout` holder views a callee's
-  local.** `@ fill inout W w i k → !i E { : String b … = w @ W { (
-  string_data b ) }  : i x \ ( may k )  = w @ W { `literal` } … }`: the
-  try-propagate exit has no return row, so the check a `^` and the body's
-  end make (the caller's storage must not view a released local) is skipped,
-  and the caller reads `. w v` after `b` was freed. Until the fix ships,
-  repoint the holder before any `\` in a function that stores a local's
-  view into an `inout` parameter.
-- **agora #380: a struct of views stored whole into an `inout` holder.**
-  `@ put inout W w W x → v { = w x }` (or `put [T] inout T w T x`), called
-  with `@ W { ( string_data b ) }` for a `b` that ends before `w`: the caller
-  records no dependency of `w` on what `x` views, so reading `. w v` after
-  `b` ends reads freed memory. A plain view parameter (`s x`) is refused.
-  Until the fix ships, pass the String itself and take the view inside the
-  callee, or keep the source alive as long as the holder.
 - **agora #381: a callee's local viewed by an `inout` holder, then moved
   into the caller's `inout` field.** `= w @ W { ( string_data b ) }  = . h
   keep b`: `b` is not released at the exit, so the exit check passes, but
@@ -353,16 +206,6 @@ Each is a use of freed or moved-out memory in safe code, with a fix in progress:
   g1 is consumed or reassigned all compile and reach freed memory. Until
   the fix ships, keep at most one reader of a field across a replace of
   that field, or copy the second one (`mem_dup`).
-- **agora #388: an option owner given back its own value through a call
-  that hands it back on some runs only.** `= o ( maybe o k )`, with `maybe`
-  returning its argument when `k` is 0 and a fresh value otherwise, drops
-  o's old value on the run that hands it back, and o then holds freed
-  memory. The String form is right, and so is a call that always hands its
-  argument back. The same happens with a Vec read out of the option on the
-  way: `: ( Vec Node ) w ( optkids_fwd o )  = o ( firstn_fwd w )`, with
-  forwarders defined below their caller, frees the old `o` that the new `o`
-  lives in. Until the fix ships, do not give an option binding the result of
-  such a call that is handed that same binding.
 - **agora #390: a callee that views its `inout String` into a holder, then
   grows that String.** `@ f inout W w inout String s → v { = w @ W { (
   string_data s ) } ( string_push_str s … ) }`: the push moves `s`'s buffer
@@ -388,13 +231,6 @@ Each is a use of freed or moved-out memory in safe code, with a fix in progress:
   pair for the swapped argument, so the caller's `w` may view the String
   that ends first. Until the fix ships, keep a holder's source in the same
   argument position through mutually recursive calls.
-- **agora #394: a call through a `%Trait` object whose impl stores one
-  argument's view into another.** `( fill d a s )`, `d` a `dyn Fill` whose
-  impl does `= a @ W { ( string_data s ) }`: a dyn call has no holder/source
-  summary, so the caller ties nothing, and `a` read after `s` ends reads
-  freed memory. Static dispatch is tracked. Until the fix ships, don't let a
-  trait method store a view of one argument into another when called
-  through a trait object.
 - **agora #395: a store through a borrow that #292 does not follow to
   its owner.** Inside a closure, through a borrow of a capture (`: ( Vec s
   ) w ( id vs )  ( vec_push [s] w ( string_data loc ) )` with `vs`
@@ -411,14 +247,76 @@ Each is a use of freed or moved-out memory in safe code, with a fix in progress:
   put, but the field's own buffer is what the push moves, so reading `o`
   afterwards reads freed memory. Until the fix ships, take views of a
   String field only after its last change, or store a copy (`string_from`).
-- **agora #399: a borrow that views a source's own buffer on one path and
-  only an element of it on the other.** `: ~ W a @ W { … ( string_data e )
-  }` (e an element of `vv`), then `? c { = a @ W { ( slice_from_vec
-  [String] vv ) … } } {}`: past the join `a` counts as viewing only an
-  element of `vv`, so a push that moves `vv`'s buffer leaves `a`'s slice
-  dangling. The same holds when a loop that runs zero times re-gives it the
-  element-only view. Until the fix ships, don't keep a binding that may hold
-  a slice of a Vec across a push into that Vec.
+- **agora #406: a `\` whose tried call changes an `inout` holder and then
+  fails.** `: i x \ ( setw w ( string_data b ) k )`, where `setw` stores the
+  view into `w` and returns an error: the `\` exit is checked on the state
+  from before the call, so `w` goes back to the caller viewing the released
+  local `b`. A tried `sink` call that takes a field and fails is the same.
+  Until the fix ships, handle such a call's failure with `??` and an
+  explicit `^`, which is checked.
+- **agora #407: a defer armed inside a loop or an arm that stores a local's
+  view into an `inout` holder.** `~ < n 1 { ; { = w @ W { ( string_data b
+  ) } } … }`: at the way out the defer runs, but the checks replay only the
+  defers armed on every path, so `w` goes back viewing the released `b`.
+  Until the fix ships, arm such a defer at the function's top level, or
+  don't store a local's view into a parameter from a defer.
+- **agora #408: a defer that reads a holder viewing a value bound after the
+  defer.** `; { ( nurl_println . w v ) … }` armed first, then `: String b …
+  = w @ W { ( string_data b ) }`: at the way out `b` is dropped before the
+  defer runs, so the defer reads freed memory. Until the fix ships, don't
+  read, in a defer, a holder that may view a value declared after that
+  defer.
+- **agora #424: a borrow of a `??` payload, and the scrutinee handed to a callee that clears it.** Inside `?? o { T inner → … }`, a borrow of an element of `inner` survives `( clr o )`, where `clr` clears what the option's payload holds, so reading it afterwards is a heap-use-after-free. The same goes for an enum payload, and for named callees as for closures. Until the fix ships, end the payload's borrows before passing the scrutinee on.
+- **agora #427: an option owner given what a call may hand back of its
+  own value, where nurlc has no lend fact for the call at that line.** `=
+  o ( id ( pick o other k ) )`, a generic or `dyn` callee, a callee defined
+  below the call, mutual recursion, or the call inside a value block (`= o
+  { ( pick o other k ) }`): the old value is dropped by its own flag, so the
+  run that hands `o`'s own value back frees it under `o`
+  (heap-use-after-free). The direct form `= o ( pick o other k )` is
+  refused (#412). Until the fix ships, give `o` a copy of such a call's
+  result (`( mem_dup … )`) or bind the result to a new name.
+- **agora #428: a change made in place by a route that does not reach the
+  owner.** A view of an option's payload, or a slice of a Vec, stays live
+  while the payload or the buffer is changed through a `: ~` copy of a
+  match payload (`?? oh { T q → { : ~ H c q ( string_push_str . c name … ) }
+  }`), a closure, an option held in a struct field or in another payload,
+  a user enum's payload, a `( vec_at … )` payload, or a chain of copies of
+  the owner's handle (`( id ( id vs ) )`, `: ~ w2 w`, a join of copies). A
+  later read of the view is of freed memory. Until the fix ships, change
+  an option's payload, or grow a Vec, through the owner's own name or a
+  direct `??` over it while a view of it is still read.
+- **agora #434: a keyword-argument call records no borrow rows.** `( clr v: v )` with `clr` clearing its Vec parameter ends no borrow of `v`'s elements, where the positional `( clr v )` is refused. So does a closure handed by keyword. Reading the borrow afterwards is a heap-use-after-free. Until the fix ships, call a function that changes its arguments positionally.
+- **agora #445: a closure called with a binding it replaces, by any route but a direct call.** `( c o )`, with `c` giving its capture `o` a new value, is refused. Handing `c` and `o` to a function that calls one with the other, calling a copy of `c`, a literal passed inline, a nested closure doing the assignment, or an argument that is a view, an element or a payload of `o` are not refused, and the parameter is read after it is freed. Until the fix ships, pass the closure a copy that owns its data.
+- **agora #450: an owner given a part of its own value, or a value that
+  shares part of it, while nurlc takes the result for another value.** `=
+  o ( first o )`, with `first` handing back an element of o's own Vec
+  field through a generic it calls, or a `: ~` cursor copy of a struct
+  whose first field was replaced: o's old value is released with the part
+  inside it, and reading o reads freed memory. Until the fix ships, take
+  the part out of the owner into a new binding (or copy it, `mem_dup`)
+  before giving it to the owner.
+- **agora #459: a value handed back on some runs that the callee's per-call
+  answer still calls its own.** A generic callee that keeps its option
+  parameter given a call that may lend it (`unwrap_or [A]`,
+  `res_unwrap_or`), or a generic forwarder compiled after its callee: the
+  caller takes the value as its own and releases what its owner still
+  holds. Until the fix ships, give such a call's result a value of its own
+  (`mem_dup`) before the owner is reused.
+- **agora #460: two `??` payload bindings of one enum value, a change through one.** `: E e @ E { Some inner }` matched twice, `Some xs` and then `Some ys` inside it. `xs` and `ys` are one Vec. `( vec_clear [String] ys )` ends no borrow taken through `xs`, so a String read out of `xs` before the clear is freed memory after it: a heap-use-after-free. A closure that clears its capture's payload (`\ → v { ?? e { Some xs → { ( vec_clear [String] xs ) } None → {} } }`), run while the caller holds a borrow through its own payload binding, is the same hole. Until the fix ships, match an enum value once and clear the Vec through that one binding.
+- **agora #461: a parameter's element reached by a route #447 does not follow, handed to a clearing callee.** Three routes put no drop in the function's summary:
+  - an element of an element, `( clr ( vec_at ( vec_at vvv 0 ) 0 ) )`;
+  - a generic function handing its closure parameter its parameter's element, `@ each0 [T] ( Vec T ) vv ( @ v T ) f → v { ( f ( vec_at [T] vv 0 ) ) }` given a clearing closure;
+  - a struct read out of a parameter, handed to a callee that drops inside it.
+
+  A caller still reading a String inside that element reads freed memory: a heap-use-after-free. Until the fix ships, bind the element to a local first (`: ( Vec String ) e ( vec_at … )`), which #447's rule follows, and call a non-generic function with it.
+- **agora #462: a function binding a lent element of its parameter, or an enum payload of one, and handing the binding back.** `@ g ( Vec Conn ) cs → Conn { : Conn c ( vec_at [Conn] cs 0 ) ^ c }`, with Conn a `% Drop` type, gives its caller an owner of what `cs` still owns, so both release it: a double drop. The direct `^ ( vec_at [Conn] cs 0 )` is lent back and runs clean. An enum parameter's payload, `?? e { Has c → { ^ c } … }`, is the same. Until the fix ships, hand back the call itself (`^ ( vec_at … )`) rather than a binding of it.
+- **agora #463: a returned closure through a join, a match arm, a generic identity, or one whose body hands its capture to a `sink`.** `^ ? c \ → … \ → …` over a captured option, a closure returned as a match-arm value or out of a payload cursor, one passed through a generic identity before the `^`, a `??String` or `?Drop` capture, a body that gives its capture (or the capture's payload) to a `sink`, and a returned literal that both captures a String and stores it: the environment does not own the capture on every route, so a call reads freed memory or a second call frees it again. Until the fix ships, return the closure literal directly (`^ \ → …`), bind the arm's choice first and return one literal, and copy a capture before handing it to a `sink` in the body.
+- **agora #464: a temporary argument freed right after the call while the callee's result views it.** `( show ( mk ( string_from … ) ) )`, with `mk String line → Tok` handing back an enum or struct that holds a view of its parameter (`Tok { Word s … }` given `( string_data line )`), drops the temporary after the call, and the result reads freed memory, even inside one statement. Until the fix ships, bind the argument to a name first.
+- **agora #466: an `inout` view parameter kept in a second holder, an `s` global or a thread.** `@ put inout ( Vec s ) first inout ( Vec s ) h inout s x → v { ( vec_push [s] h x ) }` stores a view of the caller's string into the caller's other holder without tying that holder to the string, so it is read after the string is freed. The same goes for a field of an `inout` struct of views, an `s` global and a spawned thread. Until the fix ships, pass the view as a plain (not `inout`) parameter.
+- **agora #467: a returned closure that captured a holder given a view of a parameter.** `@ mk String s → ( @ v ) { : ( Vec s ) h ( vec_new [s] ) ( vec_push [s] h ( string_data s ) ) ^ \ → v { … h … } }` hands back a closure tied to nothing, so calling it after the caller's String ended reads freed memory. A captured struct of a view and an owned String filled from the parameter is the same. Until the fix ships, capture a copy of the text (a String the closure owns) rather than a holder of views.
+- **agora #468: a closure literal whose `( Vec s )` parameter is the holder of `vec_extend`.** `\ ( Vec s ) d ( Vec s ) t → v { ( vec_extend [s] d t ) }` called as `( f ws t )` leaves `ws` holding `t`'s views after the string they view ended; the named function of the same body is refused. Until the fix ships, write the extend as a named function.
+- **agora #469: a closure that captured an owner of views by value, run on another thread.** A closure capturing a `( Vec s )` of views (or a `vec_clone` of one) is spawned with `thread_spawn`, and the views cross to the thread unchecked: the string they view can be freed while the thread reads it. Until the fix ships, give the thread Strings it owns (copies) or an `Arc` share, not a Vec of views.
 <!-- END open holes -->
 
 Every other safe program found accepted and faulting is closed, and held

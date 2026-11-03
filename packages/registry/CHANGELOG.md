@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.9] — 2026-11-03
+
+Requires NURL 0.86.0.
+
+### Changed
+
+- Builds with NURL 0.86.0 (Agora #422): `reg_service_config` keeps copies of the caller's strings, which may go before the server does.
+
 ## [0.4.8] — 2026-10-28
 
 ### Added

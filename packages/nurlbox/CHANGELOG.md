@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.1] — 2026-11-03
+
+Requires NURL 0.86.0.
+
+### Changed
+
+- Builds with NURL 0.86.0 (Agora #422): `bx_set_name` keeps a copy of the dispatcher's name, which may go before the global does.
+
 ## [0.5.0] — 2026-10-15
 
 ### Changed

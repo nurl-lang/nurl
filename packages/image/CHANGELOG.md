@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.8] — 2026-11-03
+
+Requires NURL 0.86.0.
+
+### Changed
+
+- Builds with NURL 0.86.0 (Agora #422): the decoders assign their error message to the module global directly (`_img_set_err` is gone), so a literal is all the global ever holds.
+
 ## [0.7.7] — 2026-10-14
 
 Requires NURL 0.73.0 (`slice_at`, `slice_put`, `rc_take`, `locked_take`).

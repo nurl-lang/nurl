@@ -2,6 +2,14 @@
 
 All notable changes to this package are documented here.
 
+## [0.14.2] — 2026-11-03
+
+Requires NURL 0.86.0.
+
+### Changed
+
+- Builds with NURL 0.86.0 (Agora #422): the bearer-auth handler, which runs on the server's threads, gets its own copy of `--token` instead of a view of main's string.
+
 ## [0.14.1] — 2026-10-22
 
 Requires NURL 0.76.0.

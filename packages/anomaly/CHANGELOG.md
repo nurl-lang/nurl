@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.36.7] — 2026-11-03
+
+Requires NURL 0.86.0.
+
+### Changed
+
+- Builds with NURL 0.86.0, which refuses a view of a caller's string kept in a module global (Agora #422): the service's configuration setters (`analyze_set_exe`, `anomaly_authz_set_root`, `anomaly_service_set_root`, `anomaly_service_set_webroot`) keep copies of their own, and the current action is assigned as a literal where each operation starts (`_an_set_action` is gone).
+
 ## [0.36.6] — 2026-10-27
 
 ### Fixed

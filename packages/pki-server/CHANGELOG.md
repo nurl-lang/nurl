@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.3] — 2026-11-03
+
+Requires NURL 0.86.0.
+
+### Changed
+
+- Builds with NURL 0.86.0 (Agora #422): the service's configuration keeps copies of the caller's strings.
+
 ## [0.5.2] — 2026-10-14
 
 Requires NURL 0.73.0 (`rand_bytes`).
