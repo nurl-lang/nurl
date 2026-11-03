@@ -27966,6 +27966,37 @@ unsafe @ __clo_deriv_note i syms s name s vt i rhs_tt s rhs_val s lend s sx → 
     ( __clo_deriv_add name srcs )
 }
 
+// The capture scan's scoped assignments (`name@depth` words, agora #444):
+// `name` given a value at brace depth `d`; whether one is still open; and
+// the list once the block at depth above `d` has closed.
+@ __cs_scope_add s l s name i d → s {
+    : s w ( nurl_str_cat3 name `@` ( nurl_str_int d ) )
+    ? ( str_contains_word l w ) { ^ ( nurl_str_cat l `` ) } {}
+    ^ ( __words_join l w )
+}
+
+@ __cs_scope_has s l s name → b {
+    : s key ( nurl_str_cat name `@` )
+    : ~ s r ( nurl_str_cat l `` )
+    ~ != 0 ( nurl_str_len r ) {
+        : s w ( str_first_word r ) = r ( str_skip_word r )
+        ? != 0 ( nurl_str_starts w key ) { ^ T } {}
+    }
+    ^ F
+}
+
+@ __cs_scope_prune s l i d → s {
+    ? == 0 ( nurl_str_len l ) { ^ ( nurl_str_cat `` `` ) } {}
+    : ~ s out ``
+    : ~ s r ( nurl_str_cat l `` )
+    ~ != 0 ( nurl_str_len r ) {
+        : s w ( str_first_word r ) = r ( str_skip_word r )
+        : i at ( nurl_str_find w `@` )
+        ? <= ( nurl_str_to_int ( nurl_str_slice w + at 1 - - ( nurl_str_len w ) at 1 ) ) d { = out ( __words_join out w ) } {}
+    }
+    ^ out
+}
+
 // The bindings (and field paths) a source expression names: its words
 // between `(`, `)`, `|`, `{`, `}`, `;` and `\` — the callees' names among
 // them name no capture.
@@ -49473,6 +49504,11 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
     : ~ b fld_root F
     : ~ s fld_roots ( nurl_str_cat `` `` )
     : ~ s reads ( nurl_str_cat `` `` )
+    // (…and what it has given a value of its own so far, in a block still
+    // open — `name@depth`, or `name.field@depth` for a field: a read there
+    // reads that value; one after the block (a branch, a loop body, a
+    // nested closure) may read what the closure was made with; agora #444.)
+    : ~ s assigned_top ( nurl_str_cat `` `` )
     : ~ i captured_count 0
     // Anchor for the unclosed-brace diagnostic below: the opening '{'.
     : i sca_open_line ( nurl_lex_line lex )
@@ -49610,6 +49646,7 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
             ? == tt TT_RBRACE
             {
                 = brace_depth - brace_depth 1 = ctx ( __clo_ctx_pop ctx 123 ) = clen ( nurl_str_len ctx )
+                = assigned_top ( __cs_scope_prune assigned_top brace_depth )
                 : i nl clen
                 ? > ( __cs_lvl bl ) nl { = bl ( __cs_cut bl nl T ) } {}
                 ? > ( __cs_lvl sl ) nl { = sl ( __cs_cut sl nl T ) } {}
@@ -49660,6 +49697,7 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
                                 ? ! ( str_contains_word assigned target_var ) {
                                     = assigned ( nurl_str_cat3 assigned ` ` target_var )
                                 } {}
+                                = assigned_top ( __cs_scope_add assigned_top target_var brace_depth )
                                 ? ! ( str_contains_word captured_vars target_var ) {
                                     = captured_vars ? == 0 captured_count
                                     target_var
@@ -49764,13 +49802,19 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
                         // (Read, not the root of a store: agora #358.)
                         // (…before the body gives it a value of its own: one
                         // assigned first needs none where the closure is made.)
-                        ? & & & & ! is_clo_param ! fld_root ! ( str_contains_word reads var_name ) ! ( str_contains_word assigned var_name ) ! ( str_contains_word fld_roots var_name ) { = reads ( nurl_str_cat3 reads ` ` var_name ) } {}
+                        // (A field given a value is no whole new value: the
+                        // binding's other fields are still what it held;
+                        // agora #444.)
+                        : s rpath ? & == prev1 TT_DOT | == ( nurl_lex_peek_type lex ) TT_IDENT == ( nurl_lex_peek_type lex ) TT_TYPE_KW ( nurl_str_cat3 var_name `.` ( nurl_lex_peek_val lex ) ) ( nurl_str_cat var_name `` )
+                        ? & & & & ! is_clo_param ! fld_root ! ( str_contains_word reads var_name ) ! ( __cs_scope_has assigned_top var_name ) ! ( __cs_scope_has assigned_top rpath ) { = reads ( nurl_str_cat3 reads ` ` var_name ) } {}
                         // The root of a field-path store target.
                         ? fld_root {
                             = fld_root F
                             ? & & ! is_clo_param ! ( str_contains_word fld_roots var_name ) ( __cs_outer outer_syms var_name ) {
                                 = fld_roots ( nurl_str_cat3 fld_roots ` ` var_name )
                             } {}
+                            // (That field is given a value of its own here.)
+                            ? | == ( nurl_lex_peek_type lex ) TT_IDENT == ( nurl_lex_peek_type lex ) TT_TYPE_KW { = assigned_top ( __cs_scope_add assigned_top ( nurl_str_cat3 var_name `.` ( nurl_lex_peek_val lex ) ) brace_depth ) } {}
                         } {}
                         // Capture locals (have __ptr) and outer fn params (have
                         // __param), each once: a name already captured is not

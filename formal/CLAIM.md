@@ -377,7 +377,7 @@ Inside A2 (nurlc bugs):
 - A move or take nurlc does not see: #280, #357, #446 and #458 (`unpair`,
   `takel`, a `sink` takes an owner only, `lendable`).
 - A borrow ended by a binding's end, replacement or capture, missed:
-  #242, #364, #382, #384, #406, #407, #408, #444 and #445 (`exitScope`,
+  #242, #364, #382, #384, #406, #407, #408 and #445 (`exitScope`,
   `assign`'s `kill .replace`, `CapsOK`, `NamesFree`, `FnOK` at the body's
   one end, where a `^`, a `\` exit and the defers lead, `catchR`,
   `DtorSafe`).
