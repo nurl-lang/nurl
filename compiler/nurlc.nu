@@ -66938,6 +66938,9 @@ unsafe @ __rt_decl_ptypes s region → s {
 // 3 for a v256 one, 1 for a v128 one, with 8 for a SHA one and 16 for
 // an IFMA one; 0 for none.
 @ __ir_crypto_level s ir → i {
+    // (Every primitive is a `@nurl_v…` call: a body that makes none — all
+    // but a handful — is read once, not once per primitive below.)
+    ? < ( nurl_str_find ir `@nurl_v` ) 0 { ^ 0 } {}
     // (On AArch64 the wide, IFMA and Intel-shaped SHA primitives are
     // stubs, and on x86-64 the ARM-shaped SHA ones: each target counts
     // only the SHA primitives it lowers.)
