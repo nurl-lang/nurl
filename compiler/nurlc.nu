@@ -40209,6 +40209,40 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // place (h199: `= o @ ?String { … }` over an `inout ?String`, or an
         // owned `?T` global, left the old string).
         : b __io_oty & & ! ( __is_handle_ty vt ) ! ( __is_closure_llty vt ) | ( __type_needs_drop vt syms ) != 0 ( nurl_str_len ( __nc_opt_payload vt ) )
+        // (…an option or a result of an owned value given a call's lend,
+        // by its payload's key, as a String or a Vec is above: the old value
+        // itself stays; a lend of anything else — `( vec_get [String] vs 0
+        // )` out of a borrowed parameter, `( idopt other )` — is copied in
+        // and the old value released in place. Stored as is, the caller's
+        // binding and the other owner shared one value; agora #343.)
+        ? & & & & & & != 0 g_auto_drop_strings != 0 ( nurl_str_len ptr ) ( seq ( nurl_sym_get2 syms name `__inout` ) `1` ) __io_oty == bck_rhs_tt TT_LPAREN ! __io_keyed ( __ud_keyable vt ) {
+            : s __io_ro4 ( mem_call_retown syms cg )
+            : s __io_lr4 ( __word_union ( nurl_sym_get syms `__last_call_lend_idents__` ) g_call_lend_roots )
+            : b __io_self4 & & != 0 ( nurl_str_len __io_lr4 ) ( __words_all_equal __io_lr4 name ) ! g_call_lend_unnamed
+            : b __io_cl4 ( __clone_supported vt syms )
+            : b __io_other4 | g_call_lend_unnamed & != 0 ( nurl_str_len __io_lr4 ) ! ( __words_all_equal __io_lr4 name )
+            ? & & & != 0 ( nurl_str_len __io_ro4 ) ! ( seq __io_ro4 `true` ) __io_other4 ! __io_cl4 { ( __nc_copy_die ( nurl_sym_get syms `__fn_self_name__` ) vt ) } {}
+            ? & & & != 0 ( nurl_str_len __io_ro4 ) ! ( seq __io_ro4 `true` ) ! __io_self4 __io_cl4 {
+                : s __io_ov4 ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print __io_ov4 ) ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print `, ptr ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+                : s __io_ok4 ( mem_ud_ident_key cg vt __io_ov4 )
+                : s __io_nk4 ( mem_ud_ident_key cg vt store_val )
+                ? & != 0 ( nurl_str_len __io_ok4 ) != 0 ( nurl_str_len __io_nk4 ) {
+                    : s __io_sm4 ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __io_sm4 ) ( nurl_print ` = icmp ne i8* ` ) ( nurl_print __io_nk4 ) ( nurl_print `, ` ) ( nurl_print __io_ok4 ) ( nurl_print `\n` )
+                    : s __io_nr4 ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __io_nr4 ) ( nurl_print ` = xor i1 ` ) ( nurl_print __io_ro4 ) ( nurl_print `, 1\n` )
+                    : s __io_cp4 ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __io_cp4 ) ( nurl_print ` = and i1 ` ) ( nurl_print __io_nr4 ) ( nurl_print `, ` ) ( nurl_print __io_sm4 ) ( nurl_print `\n` )
+                    = store_val ( mem_emit_cloneif cg vt store_val __io_cp4 )
+                    : s __io_dc4 ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __io_dc4 ) ( nurl_print ` = or i1 ` ) ( nurl_print __io_ro4 ) ( nurl_print `, ` ) ( nurl_print __io_sm4 ) ( nurl_print `\n` )
+                    ( nurl_print `  call void @__nurl_rawdrop.` ) ( nurl_print ( __rawdrop_request vt ) )
+                    ( nurl_print `(i1 ` ) ( nurl_print __io_dc4 ) ( nurl_print `, ptr ` ) ( nurl_print ptr ) ( nurl_print `)` ) ( emit_dbg_eol )
+                    = __io_keyed T
+                } {}
+            } {}
+        } {}
         // …and a call — or a block or a try ending in one — that may lend
         // out of this function's own locals, which are gone when it returns
         // while the caller keeps the value: a copy where it lent, or a
@@ -40286,7 +40320,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
                 }
             } {}
         } {}
-        ? & & & & != 0 g_auto_drop_strings != 0 ( nurl_str_len ptr ) ( seq ( nurl_sym_get2 syms name `__inout` ) `1` ) __io_oty
+        ? & & & & & != 0 g_auto_drop_strings != 0 ( nurl_str_len ptr ) ( seq ( nurl_sym_get2 syms name `__inout` ) `1` ) __io_oty ! __io_keyed
         | == bck_rhs_tt TT_AT & == rhs_eff_tt TT_LPAREN == 0 ( nurl_sym_len syms `__last_value_borrow__` ) {
             : s __io_ro3 ? == bck_rhs_tt TT_AT ( nurl_str_cat `true` `` ) ( mem_call_retown syms cg )
             ? != 0 ( nurl_str_len __io_ro3 ) {

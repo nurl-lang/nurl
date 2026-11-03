@@ -248,8 +248,6 @@ Inside A2 (nurlc bugs):
   `DtorSafe`).
 - A struct built from an owner and a view of it: #294 (`pair`: the owned
   field is no root of the other's dependencies).
-- An `inout` option given a lend: #343 (`assign` gives an `inout` binding
-  only an owned value).
 - A view stored through a borrow that nurlc does not follow to its owner:
   #395's call as the container and its option payload cursor, and #454's
   forms where the callee's root is an owner or an `inout` parameter
