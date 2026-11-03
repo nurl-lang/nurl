@@ -2551,6 +2551,200 @@ theorem Step.blk {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) : 
   | editSet _ _ ht _ _ _ | editSetOOB _ ht _ _ _ => have := BlkLe.of_eq (TakeVal.blk ht); exact this
   | _ => exact BlkLe.refl _
 
+/-! ### A3.2's second cut: where what a payload holds goes
+
+A lock block's payload may hold shares, and keeps their blocks alive
+(`Reached`).  A step changes a lock's payload only by taking a part of it
+out to the stepping thread (a check-out, a received element), adding to it,
+or changing what owns no address; so a share (or any handle: `Val.leaf`) a
+payload held is still in it afterwards, or in one of the thread's slots
+(`Step.leafKeep`).  A3 reads this to show that what another thread reached
+through a lock it still reaches, or the stepping thread does. -/
+
+/-- A value `Sub` does not look into and that is no tree: a handle or a
+    share, what `Refers` looks for. -/
+def Val.leaf : Val → Prop
+  | .href _ => True
+  | .view _ _ _ => True
+  | .arc _ _ => True
+  | .lk _ => True
+  | .cell _ => True
+  | _ => False
+
+theorem Sub.leaf_int {w : Val} (hw : w.leaf) {n : Nat} (h : Sub w (.int n)) : False := by
+  rw [h.int_eq] at hw; exact hw
+
+theorem Sub.pair_inv {x a b : Val} (h : Sub x (.pair a b)) : x = .pair a b ∨ Sub x a ∨ Sub x b := by
+  cases h with
+  | refl => exact .inl rfl
+  | fst h => exact .inr (.inl h)
+  | snd h => exact .inr (.inr h)
+
+theorem Sub.node_inv {x : Val} {t : Ty} {c d : Nat} {es : List Val} (h : Sub x (.node t c d es)) :
+    x = .node t c d es ∨ ∃ e ∈ es, Sub x e := by
+  cases h with
+  | refl => exact .inl rfl
+  | child he h => exact .inr ⟨_, he, h⟩
+
+theorem Sub.leaf_pair {w a b : Val} (hw : w.leaf) (h : Sub w (.pair a b)) : Sub w a ∨ Sub w b := by
+  rcases h.pair_inv with he | h | h
+  · subst he; exact absurd hw id
+  · exact .inl h
+  · exact .inr h
+
+theorem Sub.leaf_node {w : Val} (hw : w.leaf) {t : Ty} {c d : Nat} {es : List Val}
+    (h : Sub w (.node t c d es)) : ∃ e ∈ es, Sub w e := by
+  rcases h.node_inv with he | h
+  · subst he; exact absurd hw id
+  · exact h
+
+/-- What refers to a block does so through one handle or share it holds. -/
+theorem Refers.leaf {B : Nat → Option Blk} {v : Val} {k : Nat} (h : Refers B v k) :
+    ∃ w, w.leaf ∧ Sub w v ∧ ∀ v', Sub w v' → Refers B v' k := by
+  rcases h with (⟨p, hp⟩ | hp) | ⟨bl, hk, ⟨c, hc, hci⟩ | ⟨d, o, l, hd, hdi⟩⟩
+  · refine ⟨Val.share k p, by cases p <;> trivial, hp, fun v' h => Or.inl (Or.inl ⟨p, h⟩)⟩
+  · exact ⟨.cell k, trivial, hp, fun v' h => Or.inl (Or.inr h)⟩
+  · exact ⟨.href c, trivial, hc, fun v' h => Or.inr ⟨bl, hk, Or.inl ⟨c, h, hci⟩⟩⟩
+  · exact ⟨.view d o l, trivial, hd, fun v' h => Or.inr ⟨bl, hk, Or.inr ⟨d, o, l, h, hdi⟩⟩⟩
+
+/-- A3.2's second cut: **a right-hand side keeps what a payload holds**: in
+    the block's payload, or in the value it hands back (a received element,
+    a taken payload). -/
+theorem EvalR.leafKeep {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.ok v o m'))
+    {k : Nat} {bl : Blk} (hk : m.blk k = some bl) {w : Val} (hw : w.leaf) (hs : Sub w bl.keeps) :
+    (∃ bl', m'.blk k = some bl' ∧ Sub w bl'.keeps) ∨ Sub w v := by
+  have same : ∀ {m1 : Mem}, m1.blk = m.blk → ∃ bl', m1.blk k = some bl' ∧ Sub w bl'.keeps :=
+    fun he => ⟨bl, by rw [he]; exact hk, hs⟩
+  -- a new block at a fresh key keeps the others
+  have fresh : ∀ {m1 : Mem} (b : Blk), m1.blk = m.blk → m1.blk m1.nid = none →
+      ∃ bl', upd m1.blk m1.nid (some b) k = some bl' ∧ Sub w bl'.keeps := by
+    intro m1 b he hfr
+    have hne : k ≠ m1.nid := fun e => by rw [← he, e, hfr] at hk; cases hk
+    exact ⟨bl, by rw [upd_ne _ _ hne, he]; exact hk, hs⟩
+  -- a lock's payload changed at `k0`: another block is as it was
+  have other : ∀ {k0 : Nat} (b : Blk), k ≠ k0 → ∃ bl', upd m.blk k0 (some b) k = some bl' ∧ Sub w bl'.keeps :=
+    fun b hne => ⟨bl, by rw [upd_ne _ _ hne]; exact hk, hs⟩
+  cases h with
+  | pair h1 h2 => exact .inl (same ((TakeVal.blk h2).trans (TakeVal.blk h1)))
+  | inl h1 => exact .inl (same (TakeVal.blk h1))
+  | inr h1 => exact .inl (same (TakeVal.blk h1))
+  | pack h1 => exact .inl (same (TakeVal.blk h1))
+  | arcNew h1 hfr => exact .inl (fresh _ (TakeVal.blk h1) hfr)
+  | lockNew h1 hfr => exact .inl (fresh _ (TakeVal.blk h1) hfr)
+  | cellNew h1 hfr => exact .inl (fresh _ (TakeVal.blk h1) hfr)
+  | rwRead _ _ hfr => exact .inl (fresh (m1 := m) _ rfl hfr)
+  | @atomic op a e1 e2 o k0 n n1 n2 _ hk0 _ _ _ =>
+    by_cases he : k = k0
+    · subst he; rw [hk0] at hk; cases hk; exact absurd hs (Sub.leaf_int hw)
+    · exact .inl (other _ he)
+  | @chanSend a y o k0 t u c d es v1 m1 _ h1 hk0 _ _ _ =>
+    have hk1 : m1.blk k = some bl := by rw [TakeVal.blk h1]; exact hk
+    by_cases he : k = k0
+    · subst he; rw [hk0] at hk1; cases hk1
+      refine .inl ⟨⟨t, .lock, some (.pair (.node u c d (es ++ [v1])) (.int 0))⟩, by simp [upd], ?_⟩
+      simp only [Blk.keeps_mk, Option.getD_some] at hs ⊢
+      rcases Sub.leaf_pair hw hs with hs1 | hs1
+      · obtain ⟨e, he, hs2⟩ := Sub.leaf_node hw hs1
+        exact Sub.fst (Sub.child (List.mem_append_left _ he) hs2)
+      · exact absurd hs1 (Sub.leaf_int hw)
+    · exact .inl ⟨bl, by show upd m1.blk k0 _ k = some bl; rw [upd_ne _ _ he]; exact hk1, hs⟩
+  | chanSendClosed _ h1 _ _ => have := TakeVal.blk h1; exact .inl (same this)
+  | @chanRecv w' a o k0 t u c d f v1 es _ hk0 _ _ _ =>
+    by_cases he : k = k0
+    · subst he; rw [hk0] at hk; cases hk
+      simp only [Blk.keeps_mk, Option.getD_some] at hs
+      rcases Sub.leaf_pair hw hs with hs1 | hs1
+      · obtain ⟨e, he, hs2⟩ := Sub.leaf_node hw hs1
+        rcases List.mem_cons.mp he with he1 | he1
+        · subst he1; exact .inr (Sub.inr hs2)
+        · refine .inl ⟨⟨t, .lock, some (.pair (.node u c d es) (.int f))⟩, by simp [upd], ?_⟩
+          simp only [Blk.keeps_mk, Option.getD_some]
+          exact Sub.fst (Sub.child he1 hs2)
+      · exact absurd hs1 (Sub.leaf_int hw)
+    · exact .inl (other _ he)
+  | @chanClose a o k0 t q f _ hk0 _ =>
+    by_cases he : k = k0
+    · subst he; rw [hk0] at hk; cases hk
+      refine .inl ⟨⟨t, .lock, some (.pair q (.int 1))⟩, by simp [upd], ?_⟩
+      simp only [Blk.keeps_mk, Option.getD_some] at hs ⊢
+      rcases Sub.leaf_pair hw hs with hs1 | hs1
+      · exact Sub.fst hs1
+      · exact absurd hs1 (Sub.leaf_int hw)
+    · exact .inl (other _ he)
+  | _ => exact .inl (same rfl)
+
+/-- A3.2's second cut: what a step's result says of what the stepping
+    thread's slots hold afterwards (a panic's: nothing, its unwinding may drop
+    it). -/
+def Res.holds (r : Res) (w : Val) : Prop :=
+  match r with
+  | .ok m _ => ∃ v, m.vals v ∧ Sub w v
+  | .panic _ => False
+
+theorem Release.leafKeep {m m' : Mem} {k0 : Nat} {t : Ty} {x : Var} (h : Release m k0 t x m')
+    {k : Nat} {bl : Blk} (hk : m.blk k = some bl) {w : Val} (hw : w.leaf) (hs : Sub w bl.keeps) :
+    ∃ bl', m'.blk k = some bl' ∧ Sub w bl'.keeps := by
+  cases h with
+  | put _ _ hk0 =>
+    by_cases he : k = k0
+    · subst he; rw [hk0] at hk; cases hk; exact absurd hs (Sub.leaf_int hw)
+    · exact ⟨bl, by show upd m.blk k0 _ k = some bl; rw [upd_ne _ _ he]; exact hk, hs⟩
+  | drop _ _ _ => exact ⟨bl, hk, hs⟩
+
+/-- A3.2's second cut: **a step keeps what a payload holds**: a share or a
+    handle in a block's payload is in it afterwards, or (a step that does not
+    panic) in one of the thread's slots — a checked-out payload, a received
+    element, a taken one. -/
+theorem Step.leafKeep {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) :
+    ∀ {k : Nat} {bl : Blk}, m.blk k = some bl → ∀ {w : Val}, w.leaf → Sub w bl.keeps →
+      (∃ bl', r.mem.blk k = some bl' ∧ Sub w bl'.keeps) ∨ r.holds w := by
+  induction h with
+  | seqL _ ih | seqP _ ih | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | frozenP _ ih | catchIn _ ih
+    | scopeDIn _ ih | scopeLIn _ ih => exact ih
+  | scopeP _ _ _ ih | rbindP _ _ ih | scopeDPMoved _ _ ih | catchP _ _ ih | scopeDP _ _ ih =>
+    intro k bl hk w hw hs
+    rcases ih hk hw hs with h | h
+    · exact .inl h
+    · exact absurd h id
+  | scopeLP _ hr ih =>
+    intro k bl hk w hw hs
+    rcases ih hk hw hs with ⟨bl', hk', hs'⟩ | h
+    · exact .inl (hr.leafKeep hk' hw hs')
+    · exact absurd h id
+  | scopeLSkip hr => intro k bl hk w hw hs; exact .inl (hr.leafKeep hk hw hs)
+  | @letv m' x r s v o _ he =>
+    intro k bl hk w hw hs
+    rcases he.leafKeep hk hw hs with h | h
+    · exact .inl h
+    · exact .inr ⟨v, ⟨x, o, by simp [Mem.set, upd]⟩, h⟩
+  | @letd m' x f r s v o _ he =>
+    intro k bl hk w hw hs
+    rcases he.leafKeep hk hw hs with h | h
+    · exact .inl h
+    · exact .inr ⟨v, ⟨x, o, by simp [Mem.set, upd]⟩, h⟩
+  | @assign m1 x r v o sl a' _ he _ _ =>
+    intro k bl hk w hw hs
+    rcases he.leafKeep hk hw hs with h | h
+    · exact .inl h
+    · exact .inr ⟨v, ⟨x, o, by simp [Mem.set, upd]⟩, h⟩
+  | @withLock a x s0 k0 t v _ hk0 _ _ =>
+    intro k bl hk w hw hs
+    by_cases he : k = k0
+    · subst he; rw [hk0] at hk; cases hk
+      exact .inr ⟨v, ⟨x, v.owns, by simp [Mem.set, upd]⟩, by simpa using hs⟩
+    · exact .inl ⟨bl, by show upd m.blk k0 _ k = some bl; rw [upd_ne _ _ he]; exact hk, hs⟩
+  | letcall _ _ hb =>
+    intro k bl hk w hw hs
+    exact .inl ⟨bl, by rw [← BindParams.blk hb] at hk; exact hk, hs⟩
+  | callc _ _ _ _ hb =>
+    intro k bl hk w hw hs
+    exact .inl ⟨bl, (congrFun (BindParams.blk hb) k).trans hk, hs⟩
+  | push ht _ _ _ | pushRealloc ht _ _ _ | editPush ht _ _ | editPushRealloc ht _ _
+    | editSet _ _ ht _ _ _ | editSetOOB _ ht _ _ _ =>
+    intro k bl hk w hw hs
+    exact .inl ⟨bl, by rw [← TakeVal.blk ht] at hk; exact hk, hs⟩
+  | _ => intro k bl hk w hw hs; exact .inl ⟨bl, hk, hs⟩
+
 /-! ### A3.2: taking a lock -/
 
 /-- A tree of a type that holds no view, other than an integer, is owned. -/

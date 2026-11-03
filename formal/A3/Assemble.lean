@@ -91,6 +91,6 @@ theorem claim_of
     fun C hr hend i hi => ?_⟩
   -- A3.6: what is left is what the start's globals reach: no step wrote them
   obtain ⟨k, bl, hk, hik, hgr⟩ := CInv.noLeak (hreach C hr).1 hend i hi
-  exact ⟨k, bl, hk, hik, hgr.mono (fun v ⟨g, hg⟩ => ⟨g, by rw [← Reach.gl hr]; exact hg⟩) (BlkLe.refl _)⟩
+  exact ⟨k, bl, hk, hik, hgr.roots (fun v ⟨g, hg⟩ => ⟨g, by rw [← Reach.gl hr]; exact hg⟩)⟩
 
 end A3

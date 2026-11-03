@@ -83,7 +83,7 @@ theorem CInv.setStmt {P : Prog} {C : Cfg} (h : CInv P C) {i : Nat} {t : Thread} 
       obtain ⟨hto, hbo⟩ := hc.ok i t b hi hb
       exact ⟨hs b hto, hbo⟩
     · rw [ite_eq_right hij] at hj; exact hc.ok j tj b hj hb
-  · exact (hreach k bl hk).mono (fun v hv => hv.elim (fun h => .inl ((hvals v).mpr h)) .inr) (BlkLe.refl _)
+  · exact (hreach k bl hk).roots (fun v hv => hv.elim (fun h => .inl ((hvals v).mpr h)) .inr)
 
 /-- ... and so a spawn whose crossing check fails keeps it. -/
 theorem CInv.spawnFail_of {P : Prog} (hSF : SpawnFailLemma P) {C : Cfg} (h : CInv P C) {i : Nat}

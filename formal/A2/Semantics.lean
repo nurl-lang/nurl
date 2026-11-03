@@ -154,13 +154,28 @@ def Refers (B : Nat → Option Blk) (v : Val) (k : Nat) : Prop :=
   ShareIn k v ∨ ∃ bl, B k = some bl ∧
     ((∃ c, Sub (.href c) v ∧ c ∈ bl.rd.ids) ∨ ∃ d o l, Sub (.view d o l) v ∧ d ∈ bl.rd.ids)
 
+/-- A3.2's second cut: what a block's payload keeps alive, whatever its kind:
+    the payload it holds — an `arc` block's and a view's (what their holders
+    read), and a lock block's while it is in the block (no one reads it, but
+    the shares in it are the block's).  A checked-out payload is in its
+    holder's slot, a root of its own. -/
+def Blk.keeps (bl : Blk) : Val := bl.pay.getD (.int 0)
+
 /-- The blocks of `B` reached from the values `R` (the slots' values), through
-    the payloads of reached blocks that their holders read (A3.2: an `arc`
-    block's; a lock block's payload holds no share, this cut, so it reaches
-    nothing). -/
+    the payloads of reached blocks (`Blk.keeps`; A3.2's second cut: a lock
+    block's too, which may hold shares). -/
 inductive Reached (R : Val → Prop) (B : Nat → Option Blk) : Nat → Prop
   | root {v : Val} {k : Nat} : R v → Refers B v k → Reached R B k
-  | pay {k k' : Nat} {bl : Blk} : Reached R B k' → B k' = some bl → Refers B bl.rd k → Reached R B k
+  | pay {k k' : Nat} {bl : Blk} : Reached R B k' → B k' = some bl → Refers B bl.keeps k → Reached R B k
+
+/-- A3.2's second cut: a block as its holders see it, a lock block with its
+    payload left out (no one reads it while it is in).  What `R` reaches
+    through these (`Reached R (rdBlk B)`) it reaches through payloads that
+    are read, which no step changes; a `recover` frame's store keeps that
+    (`CatchOK`), where a lock's payload may change under it. -/
+def Blk.rdOnly (bl : Blk) : Blk := if bl.kind = .lock then { bl with pay := none } else bl
+
+def rdBlk (B : Nat → Option Blk) : Nat → Option Blk := fun k => (B k).map Blk.rdOnly
 
 /-- What a store's slots hold. -/
 def Mem.vals (m : Mem) (v : Val) : Prop := ∃ x o, m.st x = some ⟨o, some v⟩

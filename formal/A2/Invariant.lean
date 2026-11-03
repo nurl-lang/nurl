@@ -597,7 +597,9 @@ def OutVals (m0 : Mem) (x : Var) (sp : List Var) (v : Val) : Prop :=
 /-- A `recover` frame returns to its caller's store: every binding outside
     the frames it has opened (and its result `x`) is as the caller left it,
     and (A3.1) so is every block those bindings reach (the sweep keeps
-    them). -/
+    them).  A3.2's second cut: reach through payloads that are read
+    (`rdBlk`), which is what the bindings' facts read; a lock's payload, and
+    so what it reaches, may change inside the frame. -/
 def CatchOK (m : Mem) : Stmt → Prop
   | .seq a _ => CatchOK m a
   | .scope _ s => CatchOK m s
@@ -606,7 +608,7 @@ def CatchOK (m : Mem) : Stmt → Prop
   | .frozen _ s => CatchOK m s
   | .catchR x m0 s => (∀ v, v ∉ s.spine → v ≠ x → m.st v = m0.st v) ∧
       x ∉ s.spine ∧ m0.nv ≤ m.nv ∧
-      (∀ k bl, m0.blk k = some bl → Reached (OutVals m0 x s.spine) m0.blk k →
+      (∀ k bl, m0.blk k = some bl → Reached (OutVals m0 x s.spine) (rdBlk m0.blk) k →
         ∃ bl', m.blk k = some bl' ∧ BlkKeep bl bl') ∧
       CatchOK m s
   | .scopeL _ _ _ s => CatchOK m s
