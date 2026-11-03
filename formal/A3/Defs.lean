@@ -376,6 +376,251 @@ theorem copy_outlives {Γ : Ctx} {g z : Var} {E : Entry} (hz : Γ z = some E) (h
     (hd : E.vdeps = []) : exitScope g Γ z = some E := by
   simp [exitScope, upd_ne _ _ hzg, kill, hz, killE, hits, hd]
 
+/-! ### The lock operations as derived forms: what their scopes leave
+
+The lock and `RwLocked` operations below (`rw_get`, `locked_get`,
+`locked_set`, `locked_apply`'s and `wguard_apply`'s result, `locked_await`,
+`Mutex`, a lock reached through a field or an element) are spelled with A2's
+rules (`A2/Syntax.lean`), and each is typed as one statement here, with every
+scope's end.  A variable a derived form binds is fresh: nothing in the context
+depends on it (`Unnamed`), so its scope's end changes nothing else. -/
+
+/-- No binding of `Γ` depends on `v` (a fresh variable, about to be bound). -/
+def Unnamed (Γ : Ctx) (v : Var) : Prop := ∀ w E, Γ w = some E → ∀ d ∈ E.vdeps, d.root ≠ v
+
+/-- Nothing depends on `v`, so an effect on `v` ends nothing ... -/
+theorem Unnamed.kill {Γ : Ctx} {v : Var} (h : Unnamed Γ v) (e : Eff) (hv : Bool) : kill e hv v Γ = Γ := by
+  funext w
+  cases hw : Γ w with
+  | none => simp [A2.kill, hw]
+  | some E => simp [A2.kill, hw, killE_nohit (h w E hw)]
+
+/-- ... and `v`'s scope may end. -/
+theorem Unnamed.endOK {Γ : Ctx} {v : Var} (h : Unnamed Γ v) : EndOK Γ v := by
+  refine ⟨fun p E hp _ d hd _ => h p E hp d hd, fun w E hw _ _ => ?_, fun w E hw _ _ _ d hd _ => h w E hw d hd⟩
+  unfold hitsMem
+  simp only [Bool.and_eq_false_iff, List.any_eq_false]
+  right; intro d hdd hk
+  simp only [Bool.and_eq_true, beq_iff_eq] at hk
+  exact h w E hw d hdd hk.1.1
+
+theorem Unnamed.setE {Γ : Ctx} {v : Var} (h : Unnamed Γ v) {x : Var} {E : Entry}
+    (hE : ∀ d ∈ E.vdeps, d.root ≠ v) : Unnamed (A2.setE Γ x E) v := by
+  intro w E' hw
+  by_cases hwx : w = x
+  · subst hwx; simp only [A2.setE, upd_same, Option.some.injEq] at hw; subst hw; exact hE
+  · simp only [A2.setE, upd_ne _ _ hwx] at hw; exact h w E' hw
+
+theorem Unnamed.setE_nil {Γ : Ctx} {v : Var} (h : Unnamed Γ v) {x : Var} {E : Entry}
+    (hE : E.vdeps = []) : Unnamed (A2.setE Γ x E) v :=
+  h.setE (by simp [hE])
+
+theorem Unnamed.kill' {Γ : Ctx} {v : Var} (h : Unnamed Γ v) (e : Eff) (hv : Bool) (x : Var) :
+    Unnamed (A2.kill e hv x Γ) v := by
+  intro w E hw
+  simp only [A2.kill] at hw
+  obtain ⟨E0, h0, rfl⟩ := Option.map_eq_some_iff.mp hw
+  rw [killE_vdeps]; exact h w E0 h0
+
+/-- Binding an entry that depends on nothing pins nothing. -/
+theorem _root_.A2.NoPin.setE_nil {Γ : Ctx} {x : Var} (h : NoPin Γ x) {v : Var} {E : Entry}
+    (hE : E.vdeps = []) : NoPin (A2.setE Γ v E) x := by
+  intro p E' hp hm d hd
+  by_cases hpv : p = v
+  · subst hpv; simp only [A2.setE, upd_same, Option.some.injEq] at hp; subst hp; rw [hE] at hd; cases hd
+  · simp only [A2.setE, upd_ne _ _ hpv] at hp; exact h p E' hp hm d hd
+
+/-- A binding that depends on nothing, in mode `mo`: a result handed back once
+    the lock is let go. -/
+def outE (R : Ty) (mo : Mode) : Entry := ⟨R, mo, true, [], [], false, false⟩
+
+@[simp] theorem outE_vdeps (R : Ty) (mo : Mode) : (outE R mo).vdeps = [] := by
+  cases mo <;> rfl
+
+/-- A scope that ends around a result moved out leaves the result, and the
+    context as it was. -/
+theorem exitScope_out {Γ : Ctx} {v z : Var} {E Ez : Entry} (hv : Γ v = none) (hu : Unnamed Γ v)
+    (hvz : v ≠ z) (hEz : ∀ d ∈ Ez.vdeps, d.root ≠ v) (e : Eff) (hb : Bool) :
+    exitScope v (A2.setE (A2.kill e hb z (A2.setE Γ v E)) z Ez) = A2.setE (A2.kill e hb z Γ) z Ez := by
+  funext w
+  by_cases hwv : w = v
+  · subst hwv; simp [exitScope, A2.setE, A2.kill, upd_ne _ _ hvz, hv]
+  by_cases hwz : w = z
+  · subst hwz; simp only [exitScope, A2.setE, A2.kill, upd_ne _ _ hwv, upd_same, Option.map_some]
+    exact congrArg some (killE_nohit hEz)
+  cases hw : Γ w with
+  | none => simp [exitScope, A2.setE, A2.kill, upd_ne _ _ hwv, upd_ne _ _ hwz, hw]
+  | some E' =>
+    simp only [exitScope, A2.setE, A2.kill, upd_ne _ _ hwv, upd_ne _ _ hwz, hw, Option.map_some]
+    rw [killE_nohit (x := v) (by rw [killE_vdeps]; exact hu w E' hw)]
+
+/-- **The result moved out** (`Stmt.callOut`, the tail of `rw_get`,
+    `locked_get`, `locked_apply` and `wguard_apply`): a call of `f` on `x`
+    whose result depends on nothing, bound to the fresh `c`, and moved to the
+    caller's `z` (an owner moves, an integer is copied: `z`'s mode is the
+    result's).  The call leaves the context as it was.  After it, `z` holds the
+    result, depending on nothing, so it outlives every scope around the call
+    but its own, and every other binding is as it was but what borrowed `z`,
+    which the assignment ends. -/
+theorem _root_.A2.StmtT.callOut {P : Prog} {Γ : Ctx} {F : List Var} {x c z : Var} {f : Nat} {fn : Fn}
+    {R : Ty} {Ez : Entry}
+    (hcall : CallT P Γ F f [x] (outE R (resMode fn)) Γ)
+    (hc : Γ c = none) (hcF : c ∉ F) (huc : Unnamed Γ c)
+    (hz : Γ z = some Ez) (hzF : z ∉ F) (hzt : Ez.ty = R) (hzm : Ez.mode = resMode fn)
+    (hzd : Ez.dbind = false) (hpin : NoPin Γ z) (hds : DtorSafe Γ .replace false z) :
+    StmtT P Γ F (Stmt.callOut x c z f) (A2.setE (A2.kill .replace false z Γ) z (outE R Ez.mode)) := by
+  have hzc : z ≠ c := fun h => by rw [h, hc] at hz; cases hz
+  have h4c : A2.setE Γ c (outE R (resMode fn)) c = some (outE R (resMode fn)) := upd_same _ _ _
+  have h4z : A2.setE Γ c (outE R (resMode fn)) z = some Ez := by simp [A2.setE, upd_ne _ _ hzc, hz]
+  have hu4 : Unnamed (A2.setE Γ c (outE R (resMode fn))) c := huc.setE_nil (outE_vdeps _ _)
+  have hpin4 : NoPin (A2.setE Γ c (outE R (resMode fn))) z := NoPin.setE_nil hpin (outE_vdeps _ _)
+  have key : ∃ Δ4, StmtT P (A2.setE Γ c (outE R (resMode fn))) F (.assign z (.var c)) Δ4 ∧
+      Unnamed Δ4 c ∧ exitScope c Δ4 = A2.setE (A2.kill .replace false z Γ) z (outE R Ez.mode) := by
+    cases hro : fn.resOwn with
+    | true =>
+      -- an owned result moves, its binding dead
+      have hmo : resMode fn = .own := by simp [resMode, hro]
+      rw [hmo] at h4c h4z hu4 hpin4 hzm ⊢
+      have hr := RhsT.moveOwn (F := F) h4c rfl rfl hcF hu4.endOK.1 hu4.endOK.2.1
+      rw [hu4.kill] at hr
+      refine ⟨_, StmtT.assign h4z hzF (Or.inl ⟨hzm, rfl⟩) hr (by simp [outE, hzt])
+        (by simp [roots, Entry.vdeps, Mode.ownSlot, outE]) (by simp [A2.setE, upd_ne _ _ hzc, hz]) hpin4
+        ((hds.setE_off rfl).setE_off rfl) hzd, ?_, ?_⟩
+      · exact ((hu4.setE_nil (by simp [Entry.vdeps, outE, Mode.ownSlot])).kill' _ _ _).setE_nil
+          (show (outE R Ez.mode).vdeps = [] from outE_vdeps _ _)
+      · funext w
+        by_cases hwc : w = c
+        · subst hwc; simp [exitScope, A2.setE, A2.kill, upd_ne _ _ (Ne.symm hzc), hc]
+        by_cases hwz : w = z
+        · subst hwz; simp only [exitScope, A2.setE, A2.kill, upd_ne _ _ hwc, upd_same, Option.map_some]
+          exact congrArg some (killE_nil (outE_vdeps R Ez.mode) _ _ _)
+        cases hw : Γ w with
+        | none => simp [exitScope, A2.setE, A2.kill, upd_ne _ _ hwc, upd_ne _ _ hwz, hw]
+        | some E =>
+          simp only [exitScope, A2.setE, A2.kill, upd_ne _ _ hwc, upd_ne _ _ hwz, hw, Option.map_some]
+          rw [killE_nohit (x := c) (by rw [killE_vdeps]; exact huc w E hw)]
+    | false =>
+      -- an integer result is copied
+      have hmo : resMode fn = .bor := by simp [resMode, hro]
+      rw [hmo] at h4c h4z hu4 hpin4 hzm ⊢
+      have hr := RhsT.copyBor (F := F) h4c rfl rfl
+      refine ⟨_, StmtT.assign h4z hzF (Or.inr (Or.inr ⟨hzm, rfl⟩)) hr (by simp [outE, hzt])
+        (by simp [roots, Entry.vdeps, outE, Mode.ownSlot]) (by simp [A2.setE, upd_ne _ _ hzc, hz]) hpin4
+        (hds.setE_off rfl) hzd, ?_, ?_⟩
+      · exact (hu4.kill' _ _ _).setE_nil (show (outE R Ez.mode).vdeps = [] from outE_vdeps _ _)
+      · exact exitScope_out (Ez := outE R Ez.mode) hc huc hzc.symm (by simp) _ _
+  obtain ⟨Δ4, h4, hu, heq⟩ := key
+  rw [← heq]
+  exact StmtT.letcall rfl hc hcF hcall h4 hu.endOK
+
+/-- A3.3: what `arcGet` lends through a read guard: the pair of the lock's
+    share and the payload, depending on the guard through a share. -/
+def guardGetE (g : Var) (t : Ty) : Entry := ⟨.prod (.lk t) t, .bor, true, [⟨g, .share⟩], [], false, false⟩
+
+theorem guardGet_eq (g : Var) (t : Ty) : getE g (guardE t) (.prod (.lk t) t) = guardGetE g t := by
+  simp [getE, guardE, guardGetE, derive, Mode.isRoot, rootKind]
+
+/-- ... and the payload, its second field, lent: it depends on the guard
+    alone, through a share (`rguard_get_path`), holding nothing. -/
+theorem guardSnd_deps (g y : Var) (t : Ty) :
+    ∀ d ∈ (projE y (guardGetE g t) t).vdeps, d.root = g ∧ d.kind = .share := by
+  intro d hd
+  cases t <;> simp_all [projE, guardGetE, projDeps, Entry.vdeps, Mode.ownSlot, intE]
+
+theorem guardSnd_held (g y : Var) (t : Ty) : (projE y (guardGetE g t) t).held = [] := by
+  cases t <;> simp [projE, guardGetE, intE]
+
+theorem guardSnd_ty (g y : Var) (t : Ty) : (projE y (guardGetE g t) t).ty = t := by
+  cases t <;> simp [projE, guardGetE, intE]
+
+theorem guardSnd_live (g y : Var) (t : Ty) : (projE y (guardGetE g t) t).live = true := by
+  cases t <;> simp [projE, guardGetE, intE]
+
+/-- **`rw_get` is typed, as one statement** (`Stmt.rwGet`), with every scope's
+    end: the guard `g` (`rw_read`), what `arcGet` lends through it (`y`), the
+    payload `x` lent frozen, the copy (`mem_dup`, a function with `DupFn`'s
+    summary, on `x` lent), and the copy moved out to the caller's `z`.  The
+    copy's scope, then `x`'s, `y`'s and the guard's end, and each leaves `z`,
+    which holds the copy and depends on nothing (`copy_outlives`); every
+    other binding is as it was, but what borrowed `z`, which the assignment
+    ends.  The payload holds no view and (the read guard's premise, A3.5's
+    second cut) no library handle. -/
+theorem _root_.A2.StmtT.rwGet {P : Prog} {Γ : Ctx} {F : List Var} {a g y x c z : Var} {f : Nat} {fn : Fn}
+    {Ea Ez : Entry} {t : Ty} (hd : DupFn P f t) (hf : P[f]? = some fn)
+    (ha : Γ a = some Ea) (hla : Ea.live = true) (hta : Ea.ty = .lk t) (htv : t.holdsView = false)
+    (hnc : t.hasCell = false)
+    (hg : Γ g = none) (hy : Γ y = none) (hx : Γ x = none) (hc : Γ c = none)
+    (hgy : g ≠ y) (hgx : g ≠ x) (hgc : g ≠ c) (hyx : y ≠ x) (hyc : y ≠ c) (hxc : x ≠ c)
+    (hgF : g ∉ F) (hyF : y ∉ F) (hxF : x ∉ F) (hcF : c ∉ F)
+    (hug : Unnamed Γ g) (huy : Unnamed Γ y) (hux : Unnamed Γ x) (huc : Unnamed Γ c)
+    (hz : Γ z = some Ez) (hzF : z ∉ F) (hzt : Ez.ty = t) (hzm : Ez.mode = resMode fn)
+    (hzd : Ez.dbind = false) (hpin : NoPin Γ z) (hds : DtorSafe Γ .replace false z) :
+    StmtT P Γ F (Stmt.rwGet a g y x c z f) (A2.setE (A2.kill .replace false z Γ) z (outE t Ez.mode)) := by
+  have hzg : z ≠ g := fun h => by rw [h, hg] at hz; cases hz
+  have hzy : z ≠ y := fun h => by rw [h, hy] at hz; cases hz
+  have hzx : z ≠ x := fun h => by rw [h, hx] at hz; cases hz
+  let Γ1 := A2.setE Γ g (guardE t)
+  let Γ2 := A2.setE Γ1 y (guardGetE g t)
+  let Γ3 := A2.setE Γ2 x (projE y (guardGetE g t) t)
+  have hfv : (Ty.prod (.lk t) t).holdsView = false := by simp [Ty.holdsView, htv]
+  have hff : (Ty.prod (.lk t) t).hasFn = false := by
+    cases h : (Ty.prod (.lk t) t).hasFn
+    · rfl
+    · rw [hasFn_holdsView h] at hfv; cases hfv
+  have hgv : ∀ d ∈ (guardGetE g t).vdeps, d.root = g := by simp [guardGetE, Entry.vdeps, Mode.ownSlot]
+  have hsv : ∀ d ∈ (projE y (guardGetE g t) t).vdeps, d.root = g := fun d hd' => (guardSnd_deps g y t d hd').1
+  have hgE : (guardE t).vdeps = [] := by simp [guardE, Entry.vdeps, Mode.ownSlot]
+  -- the copy, moved out
+  obtain ⟨fn', hf', hcall⟩ := dup_call (F := F) hd
+    (show Γ3 x = some (projE y (guardGetE g t) t) from upd_same _ _ _)
+    (guardSnd_live g y t) (guardSnd_ty g y t) (guardSnd_held g y t)
+    (fun d hd' => by rw [(guardSnd_deps g y t d hd').2]; rfl)
+  rw [hf] at hf'; cases hf'
+  have hu3c : Unnamed Γ3 c :=
+    ((huc.setE_nil hgE).setE (fun d hd' => by rw [hgv d hd']; exact hgc)).setE
+      (fun d hd' => by rw [hsv d hd']; exact hgc)
+  have h3z : Γ3 z = some Ez := by
+    simp [Γ3, Γ2, Γ1, A2.setE, upd_ne _ _ hzg, upd_ne _ _ hzy, upd_ne _ _ hzx, hz]
+  have hpin3 : NoPin Γ3 z := by
+    intro p E hp hm d hd'
+    simp only [Γ3, Γ2, Γ1, A2.setE, upd_apply] at hp
+    split at hp
+    · cases hp; cases t <;> simp [projE, guardGetE, intE] at hm
+    split at hp
+    · cases hp; simp [guardGetE] at hm
+    split at hp
+    · cases hp; simp [guardE] at hm
+    · exact hpin p E hp hm d hd'
+  have hds3 : DtorSafe Γ3 .replace false z :=
+    ((hds.setE_off rfl).setE_off rfl).setE_off (projE_dtor _ _ _)
+  have h4 := StmtT.callOut (z := z) hcall (show Γ3 c = none by
+      simp [Γ3, Γ2, Γ1, A2.setE, upd_ne _ _ (Ne.symm hxc), upd_ne _ _ (Ne.symm hyc), upd_ne _ _ (Ne.symm hgc), hc])
+    hcF hu3c h3z hzF hzt hzm hzd hpin3 hds3
+  -- the payload's scope
+  have h2x : Γ2 x = none := by simp [Γ2, Γ1, A2.setE, upd_ne _ _ (Ne.symm hyx), upd_ne _ _ (Ne.symm hgx), hx]
+  have hu2x : Unnamed Γ2 x := (hux.setE_nil hgE).setE (fun d hd' => by rw [hgv d hd']; exact hgx)
+  have h3 : StmtT P Γ2 F (.letv x (.snd y) (Stmt.callOut x c z f))
+      (A2.setE (A2.kill .replace false z Γ2) z (outE t Ez.mode)) := by
+    rw [← exitScope_out h2x hu2x hzx.symm (by simp) .replace false]
+    refine StmtT.letv rfl h2x hxF (RhsT.snd (show Γ2 y = some (guardGetE g t) from upd_same _ _ _) rfl rfl) h4
+      (Unnamed.endOK ?_)
+    exact ((hu2x.setE (fun d hd' => by rw [hsv d hd']; exact hgx)).kill' _ _ _).setE_nil (by simp)
+  -- the lend's scope
+  have h1y : Γ1 y = none := by simp [Γ1, A2.setE, upd_ne _ _ (Ne.symm hgy), hy]
+  have hu1y : Unnamed Γ1 y := huy.setE_nil hgE
+  have h2 : StmtT P Γ1 F (Stmt.readWith g y x (Stmt.callOut x c z f))
+      (A2.setE (A2.kill .replace false z Γ1) z (outE t Ez.mode)) := by
+    rw [← exitScope_out h1y hu1y hzy.symm (by simp) .replace false]
+    refine StmtT.letv rfl h1y hyF
+      (RhsT.arcGet (show Γ1 g = some (guardE t) from upd_same _ _ _) rfl rfl hfv hff) ?_ (Unnamed.endOK ?_)
+    · rw [guardGet_eq]; exact h3
+    · exact ((hu1y.setE (fun d hd' => by rw [hgv d hd']; exact hgy)).kill' _ _ _).setE_nil (by simp)
+  -- the guard's scope
+  show StmtT P Γ F (.letv g (.rwRead a) (Stmt.readWith g y x (Stmt.callOut x c z f))) _
+  rw [← exitScope_out hg hug hzg.symm (by simp) .replace false]
+  exact StmtT.letv rfl hg hgF (RhsT.rwRead ha hla hta hnc) h2
+    (Unnamed.endOK (((hug.setE_nil hgE).kill' _ _ _).setE_nil (by simp)))
+
 /-! ### A3.6: module globals, as A2 types them
 
 A global set at start is read at a type that synchronises itself

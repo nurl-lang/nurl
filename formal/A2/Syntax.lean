@@ -642,13 +642,19 @@ def Stmt.withTryRead (a o g y x : Var) (s e : Stmt) : Stmt :=
 def Stmt.withTryWrite (a o x : Var) (s e : Stmt) : Stmt :=
   .letv o (.rwTryWrite a) (.ite (.isl o) e (.withLock a x s))
 
+/-- A3.2/A3.3: a call of `f` on `x` whose result `c` moves out to `z`, a
+    binding of the caller's: the tail of `rw_get`, `locked_get`,
+    `locked_apply` and `wguard_apply`, where `x` is the payload (lent or
+    checked out) and the result is handed back once the lock is let go. -/
+def Stmt.callOut (x c z : Var) (f : Nat) : Stmt := .letcall c f [x] (.assign z (.var c))
+
 /-- A3.3: `rw_get a`, the payload copied out under a read (`stdlib/std/rwlock.nu`:
     `rw_read`, then `mem_dup ( rguard_get g )`): the read scope's body hands
     the payload `x`, lent, to the copy `f` (`mem_dup` at the payload's type,
     a function of the program, `DupFn`), and the copy `c` moves out to `z`,
     a binding of the caller's, before the guard goes. -/
 def Stmt.rwGet (a g y x c z : Var) (f : Nat) : Stmt :=
-  Stmt.withRead a g y x (.letcall c f [x] (.assign z (.var c)))
+  Stmt.withRead a g y x (Stmt.callOut x c z f)
 
 /-- A3.6: an update of a `Locked` global set at start (`locked_update g f`,
     with `f`'s body as `s` and its argument as `x`): the global's handle,
