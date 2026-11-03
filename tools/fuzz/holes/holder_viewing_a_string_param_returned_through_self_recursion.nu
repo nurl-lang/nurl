@@ -13,6 +13,7 @@ $ `stdlib/core/vec.nu`
     } {}
     ^ ( fr s - n 1 )
 }
+
 @ main → i {
     : ~ ( Vec s ) hold ( vec_new [s] )
     {

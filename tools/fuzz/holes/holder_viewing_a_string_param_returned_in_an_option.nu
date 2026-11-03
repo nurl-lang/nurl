@@ -10,8 +10,9 @@ $ `stdlib/core/vec.nu`
     ( vec_push [s] h ( string_data s ) )
     ^ @ ?( Vec s ) { T h }
 }
+
 @ main → i {
-    : ~ ?( Vec s ) hold @ ?( Vec s ) { F }
+    : ~ ? ( Vec s ) hold @ ?( Vec s ) { F }
     {
         : String s ( string_from `a heap string long enough to be on the heap for sure` )
         = hold ( mo s )

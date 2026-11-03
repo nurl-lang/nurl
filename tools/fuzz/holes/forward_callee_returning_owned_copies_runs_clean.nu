@@ -14,6 +14,7 @@ $ `stdlib/core/vec.nu`
     ( nurl_println ( string_data ( vec_at [String] hold 0 ) ) )
     ^ 0
 }
+
 @ mk String s → ( Vec String ) {
     : ( Vec String ) h ( vec_new [String] )
     ( vec_push [String] h ( string_from ( string_data s ) ) )

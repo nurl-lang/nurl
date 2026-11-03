@@ -3,8 +3,11 @@
 // main 4d57d596: accepted; AddressSanitizer: heap-use-after-free.
 // map: §2.7 | A2 | rejected | - | agora #380: a struct-of-views literal argument stored whole into an inout holder, read after its source ends
 $ `stdlib/core/string.nu`
+
 : W { s v }
+
 @ put inout W w W x → v { = w x }
+
 @ main → i {
     : ~ W w @ W { `a literal` }
     {

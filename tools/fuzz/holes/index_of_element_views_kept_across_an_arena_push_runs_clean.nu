@@ -11,6 +11,7 @@ $ `stdlib/core/vec.nu`
     ( vec_push [s] idx ( string_data e ) )
     ^ idx
 }
+
 @ main → i {
     : ~ ( Vec String ) arena ( vec_new [String] )
     ( vec_push [String] arena ( string_from `a heap string long enough to be on the heap for sure` ) )

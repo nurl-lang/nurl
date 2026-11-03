@@ -4,12 +4,15 @@
 // map: §2.8 | A2 | rejected | - | agora #422: a local holder a named callee filled with a view of the String parameter, handed back
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+
 @ put inout ( Vec s ) h String s → v { ( vec_push [s] h ( string_data s ) ) }
+
 @ mkh String s → ( Vec s ) {
     : ~ ( Vec s ) h ( vec_new [s] )
     ( put h s )
     ^ h
 }
+
 @ main → i {
     : ~ ( Vec s ) hold ( vec_new [s] )
     {

@@ -4,11 +4,13 @@
 // map: §2.8 | A2 | runs-clean | - | agora #422: a returned holder of owned copies outlives the String
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+
 @ mkh String s → ( Vec String ) {
     : ( Vec String ) h ( vec_new [String] )
     ( vec_push [String] h ( string_from ( string_data s ) ) )
     ^ h
 }
+
 @ main → i {
     : ~ ( Vec String ) hold ( vec_new [String] )
     {

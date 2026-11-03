@@ -4,10 +4,12 @@
 // map: §2.7 | A2 | runs-clean | - | agora #454: the element-binding store, read while the viewed String lives
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+
 @ fill ( Vec ( Vec s ) ) vv s x → v {
     : ( Vec s ) e ( vec_at [( Vec s )] vv 0 )
     ( vec_push [s] e x )
 }
+
 @ main → i {
     : ( Vec ( Vec s ) ) vv ( vec_new [( Vec s )] )
     ( vec_push [( Vec s )] vv ( vec_new [s] ) )

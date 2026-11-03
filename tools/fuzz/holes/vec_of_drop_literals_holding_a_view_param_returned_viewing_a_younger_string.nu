@@ -4,13 +4,17 @@
 // map: §7.6 | A2 | rejected | - | agora #341: a `% Drop` literal holding a view parameter pushed into a returned Vec, given a view of a younger String
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+
 : W { s v }
+
 % Drop W { @ drop W self → v { ( nurl_println . self v ) } }
+
 @ mk s v → ( Vec W ) {
     : ( Vec W ) ws ( vec_new [W] )
     ( vec_push [W] ws @ W { v } )
     ^ ws
 }
+
 @ main → i {
     : ~ ( Vec W ) a ( mk `literal` )
     : String s ( string_from `a string declared after a, so dropped before it at the end of main` )

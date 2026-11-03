@@ -6,15 +6,19 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 
 : Filler { i n }
+
 % Fill [T] { @ fill T self inout ( Vec s ) h String s → v }
+
 % Fill Filler {
     @ fill Filler self inout ( Vec s ) h String s → v { ( vec_push [s] h ( string_data s ) ) }
 }
+
 @ mkh %Fill f String s → ( Vec s ) {
     : ~ ( Vec s ) h ( vec_new [s] )
     ( fill f h s )
     ^ h
 }
+
 @ main → i {
     : %Fill f ( dyn Fill @ Filler { 0 } )
     : ~ ( Vec s ) hold ( vec_new [s] )

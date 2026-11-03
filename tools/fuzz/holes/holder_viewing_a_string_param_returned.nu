@@ -4,11 +4,13 @@
 // map: §2.8 | A2 | rejected | - | agora #422: a local holder given a view of a String parameter handed back, kept past the String
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+
 @ mkh String s → ( Vec s ) {
     : ( Vec s ) h ( vec_new [s] )
     ( vec_push [s] h ( string_data s ) )
     ^ h
 }
+
 @ main → i {
     : ~ ( Vec s ) hold ( vec_new [s] )
     {

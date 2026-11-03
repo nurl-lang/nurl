@@ -6,7 +6,9 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 
 : Src { String text }
+
 % Lex [T] { @ toks T self → ( Vec s ) }
+
 % Lex Src {
     @ toks Src self → ( Vec s ) {
         : ( Vec s ) h ( vec_new [s] )
@@ -14,6 +16,7 @@ $ `stdlib/core/vec.nu`
         ^ h
     }
 }
+
 @ main → i {
     : ~ ( Vec s ) hold ( vec_new [s] )
     {

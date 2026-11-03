@@ -4,12 +4,14 @@
 // map: §2.8 | A2 | rejected | - | agora #404: a local Vec of views of a parameter element handed back, the parameter cleared after
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+
 @ index ( Vec String ) arena → ( Vec s ) {
     : ( Vec s ) idx ( vec_new [s] )
     : String e ( vec_at [String] arena 0 )
     ( vec_push [s] idx ( string_data e ) )
     ^ idx
 }
+
 @ main → i {
     : ( Vec String ) arena ( vec_new [String] )
     ( vec_push [String] arena ( string_from `an arena string long enough for the heap, surely` ) )

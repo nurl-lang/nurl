@@ -11,6 +11,7 @@ $ `stdlib/core/vec.nu`
     ( vec_push [String] v ( string_from ( string_data s ) ) )
     ^ v
 }
+
 @ main → i {
     : ~ ( Vec String ) hold ( vec_new [String] )
     {

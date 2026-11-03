@@ -4,7 +4,9 @@
 // map: §2.7 | A2 | rejected | - | agora #454: a view parameter pushed into each element of a Vec parameter by a `~` loop, read after its source ends
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+
 @ fill ( Vec ( Vec s ) ) vv s x → v { ~ e vv { ( vec_push [s] e x ) } }
+
 @ main → i {
     : ( Vec ( Vec s ) ) vv ( vec_new [( Vec s )] )
     ( vec_push [( Vec s )] vv ( vec_new [s] ) )

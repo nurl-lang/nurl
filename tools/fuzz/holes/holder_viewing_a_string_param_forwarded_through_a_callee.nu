@@ -10,7 +10,9 @@ $ `stdlib/core/vec.nu`
     ( vec_push [s] h ( string_data s ) )
     ^ h
 }
+
 @ outer String s → ( Vec s ) { ^ ( mkh s ) }
+
 @ main → i {
     : ~ ( Vec s ) hold ( vec_new [s] )
     {

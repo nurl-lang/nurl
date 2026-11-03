@@ -4,6 +4,7 @@
 // map: §2.8 | A2 | rejected | - | agora #422: a join of local holders, one viewing a String the function releases, handed back
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+
 @ bad i c → ( Vec s ) {
     : String own ( string_from `a local heap string long enough for the heap` )
     : ( Vec s ) a ( vec_new [s] )
@@ -11,6 +12,7 @@ $ `stdlib/core/vec.nu`
     : ( Vec s ) b ( vec_new [s] )
     ^ ? == c 0 a b
 }
+
 @ main → i {
     : ( Vec s ) h ( bad 0 )
     ( nurl_println ( vec_at [s] h 0 ) )

@@ -12,6 +12,7 @@ $ `stdlib/core/vec.nu`
     ( vec_push [s] b `static` )
     ^ ? == c 0 a b
 }
+
 @ main → i {
     : ~ ( Vec s ) hold ( vec_new [s] )
     {

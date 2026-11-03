@@ -13,7 +13,9 @@ $ `stdlib/core/vec.nu`
     } {}
     ^ ( fb s - n 1 )
 }
+
 @ fb String s i n → ( Vec s ) { ^ ( fa s n ) }
+
 @ main → i {
     : ~ ( Vec s ) hold ( vec_new [s] )
     {

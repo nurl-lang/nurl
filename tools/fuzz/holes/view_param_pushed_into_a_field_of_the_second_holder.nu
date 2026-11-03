@@ -6,7 +6,9 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 
 : Bag { ( Vec s ) items }
+
 @ put inout Bag first inout Bag b s x → v { ( vec_push [s] . b items x ) }
+
 @ main → i {
     : ~ Bag other @ Bag { ( vec_new [s] ) }
     : ~ Bag hold @ Bag { ( vec_new [s] ) }

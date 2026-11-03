@@ -10,6 +10,7 @@ $ `stdlib/core/vec.nu`
     ( vec_push [String] h ( string_from `fresh` ) )
     ^ h
 }
+
 @ main → i {
     : ~ ( Vec String ) hold ( vec_new [String] )
     {

@@ -4,11 +4,13 @@
 // map: §2.8 | A2 | runs-clean | - | agora #422: a returned holder of static literals outlives the String argument
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+
 @ mkh String s → ( Vec s ) {
     : ( Vec s ) h ( vec_new [s] )
     ( vec_push [s] h `static` )
     ^ h
 }
+
 @ main → i {
     : ~ ( Vec s ) hold ( vec_new [s] )
     {

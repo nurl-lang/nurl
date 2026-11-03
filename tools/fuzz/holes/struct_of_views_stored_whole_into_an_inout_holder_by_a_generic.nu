@@ -3,8 +3,11 @@
 // main 4d57d596: accepted; AddressSanitizer: heap-use-after-free.
 // map: §2.7 | A2 | rejected | - | agora #380: a generic callee stores a struct of views whole into its inout holder
 $ `stdlib/core/string.nu`
+
 : W { s v }
+
 @ put [T] inout T w T x → v { = w x }
+
 @ main → i {
     : ~ W w @ W { `a literal` }
     {

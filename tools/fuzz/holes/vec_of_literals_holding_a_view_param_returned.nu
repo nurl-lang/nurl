@@ -4,12 +4,15 @@
 // map: §2.8 | A2 | rejected | - | agora #341: a literal holding a view parameter pushed into a local Vec that is handed back, kept past the String
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+
 : W { s v }
+
 @ mk s v → ( Vec W ) {
     : ( Vec W ) ws ( vec_new [W] )
     ( vec_push [W] ws @ W { v } )
     ^ ws
 }
+
 @ main → i {
     : ~ ( Vec W ) a ( mk `literal` )
     {

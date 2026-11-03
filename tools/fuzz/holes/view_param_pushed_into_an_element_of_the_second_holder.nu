@@ -6,6 +6,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 
 @ put inout ( Vec ( Vec s ) ) first inout ( Vec ( Vec s ) ) vv s x → v { ( vec_push [s] ( vec_at [( Vec s )] vv 0 ) x ) }
+
 @ main → i {
     : ~ ( Vec ( Vec s ) ) other ( vec_new [( Vec s )] )
     : ~ ( Vec ( Vec s ) ) hold ( vec_new [( Vec s )] )

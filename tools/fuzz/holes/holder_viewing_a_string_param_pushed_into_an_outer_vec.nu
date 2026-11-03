@@ -10,6 +10,7 @@ $ `stdlib/core/vec.nu`
     ( vec_push [s] h ( string_data s ) )
     ^ h
 }
+
 @ main → i {
     : ( Vec ( Vec s ) ) all ( vec_new [( Vec s )] )
     {

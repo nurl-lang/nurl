@@ -6,11 +6,13 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 
 : Box1 { ( Vec s ) items }
+
 @ mkh String s → ( Vec s ) {
     : ( Vec s ) h ( vec_new [s] )
     ( vec_push [s] h ( string_data s ) )
     ^ h
 }
+
 @ main → i {
     : Box1 b @ Box1 { ( vec_new [s] ) }
     {

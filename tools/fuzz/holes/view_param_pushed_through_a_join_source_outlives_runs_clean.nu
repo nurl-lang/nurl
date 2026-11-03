@@ -4,10 +4,12 @@
 // map: §2.7 | A2 | runs-clean | - | agora #454: the join store, read while the viewed String lives
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+
 @ fill inout ( Vec s ) a inout ( Vec s ) b i c s x → v {
     : ( Vec s ) t ? == c 0 a b
     ( vec_push [s] t x )
 }
+
 @ main → i {
     : ~ ( Vec s ) a ( vec_new [s] )
     : ~ ( Vec s ) b ( vec_new [s] )

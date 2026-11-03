@@ -6,10 +6,12 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 
 : W2 { s t String x }
+
 @ mk String p → W2 {
     : W2 w @ W2 { ( string_data p ) ( string_from `x` ) }
     ^ w
 }
+
 @ main → i {
     : ~ W2 hold @ W2 { `a` ( string_from `b` ) }
     {

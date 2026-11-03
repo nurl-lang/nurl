@@ -6,10 +6,12 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 
 @ idv ( Vec s ) v → ( Vec s ) { ^ v }
+
 @ put inout ( Vec s ) first inout ( Vec s ) v s x → v {
     : ( Vec s ) w ( idv v )
     ( vec_push [s] w x )
 }
+
 @ main → i {
     : ~ ( Vec s ) other ( vec_new [s] )
     : ~ ( Vec s ) hold ( vec_new [s] )
