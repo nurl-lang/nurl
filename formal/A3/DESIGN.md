@@ -23,8 +23,10 @@ through the configuration, no step writes them, and what they reach is
 left at the end). A3.5b's first cut, closures that cross threads or that
 several threads share, is mechanized too (A3.5b's mechanization, below: a
 closure's type says where it may cross, an `Arc` holds a Sync one, a lock
-or a channel a bare one, a spawn a Send one). A3.5c (trait objects) is
-design. This note fixes the
+or a channel a bare one, a spawn a Send one). A3.5c's trait objects are
+covered by A3.5b's rules, with no new one (A3.5c's mechanization, below: a
+trait's bound is its objects' class, and the crossing check walks the
+box). This note fixes the
 semantics, the theorem statements and the order of work, so the
 mechanization can be cut into tasks (Agora: formal track, F4–F8). The guarantee it targets is the
 "no data race" clause of `CLAIM.md` and `docs/MEMORY.md` §6.2. The rules
@@ -1358,7 +1360,7 @@ thread. `check.sh` is green with them in A2 and A3, and `A2.memory_safe`,
 `A2.soundness`, `A2.no_leak_end`, `A2.no_leak_panic`, the `DynCell`
 theorems and `A3.claim` are re-proven. A3's race now includes two threads
 changing one handle's state, and the claim proves there is none. Closures
-in shared payloads are A3.5b's (below); trait objects (A3.5c) are not done.
+in shared payloads are A3.5b's (below), and trait objects A3.5c's.
 `CLAIM.md` / `README.md` are not updated here.
 
 The runtime it models is docs/MEMORY.md §6.5. A library handle (`PNCounter
@@ -1508,8 +1510,9 @@ where the call places it).
 - *What the walk follows.* It follows fields, enum payloads, `Vec`
   elements, containers' contents (`S_sendck`), closures' environments and
   trait objects' boxes. The model's moved values are trees (`Sub`:
-  fields, payloads, elements, a package's environment). The model has no
-  trait objects or containers beyond `Vec`.
+  fields, payloads, elements, a package's environment). A trait object's
+  box is a package's environment (A3.5c, below). The model has no
+  containers beyond `Vec`.
 - *The panic.* `mem_send_check` calls `nurl_panic` naming the crossing,
   before the thread copies its environment. So no thread is made and
   nothing has moved, as in `TStep.spawnFail`.
@@ -1602,10 +1605,10 @@ the spawned function, and its captures are `sink` arguments.
   the part of the thread whose frame holds it (A3.2's partition), and that
   thread is the home by the argument above.
 - Deadlock freedom: a library re-entering its own state waits or panics.
-- **A3.5c, not done**: trait objects, h344
-  `dyn_object_carries_an_rc_to_a_thread` (a `%Trait` box crosses only when
-  its trait is `: Send`, and the vtable checks it). Closures in shared
-  payloads (h339, h340, h342) are A3.5b's (below).
+- Trait objects, h344 `dyn_object_carries_an_rc_to_a_thread` (a `%Trait`
+  box crosses only when its trait is `: Send`, and the vtable checks it),
+  are A3.5c's (below), and closures in shared payloads (h339, h340, h342)
+  A3.5b's.
 - A library handle changed through a borrow (`in` parameters), implicit
   copies, handles in containers with `S_sendck` hooks, `% Sync` / `%
   NotSend` assertions.
@@ -1621,8 +1624,8 @@ cross; an `Arc` holds a Sync closure, a lock or a channel a bare one, and a
 spawn takes a Send one; a call through a closure an `Arc` lends is typed.
 `check.sh` is green with them in A2 and A3, and `A2.memory_safe`,
 `A2.soundness`, `A2.no_leak_end`, `A2.no_leak_panic`, the `DynCell`
-theorems and `A3.claim` are re-proven. Trait objects' own rules (A3.5c,
-h344) are not done. `CLAIM.md` / `README.md` are not updated here.
+theorems and `A3.claim` are re-proven. Trait objects' statements (h344)
+are A3.5c's (below). `CLAIM.md` / `README.md` are not updated here.
 
 The runtime it models is docs/MEMORY.md §6.5:
 - a closure's captures are not part of its type, so nurlc asks the Send
@@ -1857,9 +1860,7 @@ closure's environment is a tree inside its value (`Sub.pkg`, `Val.ids`).
   a closure in the model: its handler is an `Arc` of a Sync closure.
 - *Trait objects.* A `dyn` is a `pack` too, so a trait object gets a class
   the same way, and the interface's receiver type carries it, as a trait's
-  `: Send` / `: Send Sync` bound does. What A3.5c would add is not done:
-  the bound checked at each impl, `%Trait` boxes, the vtable's walk
-  (h344).
+  `: Send` / `: Send Sync` bound does (A3.5c, below).
 
 **Not proven here.**
 - *Phase C*: that the lowering gives each closure type the class nurlc's
@@ -1867,10 +1868,190 @@ closure's environment is a tree inside its value (`Sub.pkg`, `Val.ids`).
 - Subsumption between classes; a closure that changes what it moved in.
 - A share in a lock's payload or a channel's element (A3.2, A3.4), so a
   closure that captures one and is sent or locked.
-- Trait objects, A3.5c (h344 `dyn_object_carries_an_rc_to_a_thread`).
+- Trait objects' own statements are A3.5c's (below).
 - The probes as whole typed programs: `StmtT.arcCall` types the call
   through the `Arc`, not a program that `memory_safe` is applied to (as
   `A2/DynCell.lean` types `pick`).
+- `CLAIM.md` / `README.md`.
+
+## A3.5c's mechanization (trait objects)
+
+**Status (first cut).** Trait objects that cross threads are covered, and
+A3.5b already held all of it: **no rule, invariant or claim changes**. A
+trait object is A2's package, as a closure is, so A3.5b's class is what
+its trait's bound says, and the crossing check already walks its box. What
+this cut adds is the trait, which A2 has no word for, and the statements
+that tie the class to the bound and the box to the check (`A3/Defs.lean`,
+and `spawn_moves_send` in `A3/SpawnOld.lean`). `check.sh` is green, and
+`A2.memory_safe`, `A2.soundness`, `A2.no_leak_end`, `A2.no_leak_panic`, the
+`DynCell` theorems and `A3.claim` hold as they were. `CLAIM.md` /
+`README.md` are not updated here.
+
+The runtime it models is docs/MEMORY.md §6.5, the Send/Sync table and the
+paragraph after it, and `formal/RULES.md`'s h344 row:
+- a trait object `%Trait` is Send only when its trait declares `: Send`,
+  and Sync only with `: Send Sync`;
+- the bound is a promise each impl is held to: the derivation checks the
+  impl's type where the impl is, and rejects it there if it reaches an
+  `Rc` or another value that is not Send;
+- the crossing check walks a trait object's box through its vtable
+  (`mem_send_check`): an impl of a `: Send` trait whose type reaches a
+  library handle puts that type's check in the vtable's last slot, so a
+  handle in the box is counted (h360).
+
+**What A3.5b already had.** A2 makes a closure and a trait object by one
+rule, and nothing in it tells them apart. Nothing has to:
+- *The package.* `dyn Trait v` is `Rhs.pack fs te ms y []`: the impl's
+  code `fs` (method `j`'s is `fs[j]`), the box `y`, of the impl's type
+  `te`, moved in (`PushArg`), and the trait's methods `ms`. A box captures
+  nothing by name. `Rhs.dyn` names this `pack`; a closure is the case of
+  one method that may capture by name.
+- *The box faces `Cross.Fits`.* `RhsT.pack` asks `q.Fits te cs` and gives
+  `fn ms q`; `WFv.pkg` and `ValOK.pkg` keep it in memory.
+- *Every method's code is checked.* `CodeOK P fs te ms cs` asks
+  `fs.length = ms.length` and `Implements` of each method: its code takes
+  the box lent where the interface takes the receiver (`inp`), and changes
+  nothing through a borrow (`CodeOK.env_lent`, method by method). A
+  closure's one method is the case `ms = [σ]`. `MemCodes` holds it of
+  every package in memory, blocks included.
+- *A call reads the class only to match the interface.* `StmtT.callc` asks
+  method `j`'s interface to take the receiver as `(inp, fn ms q)`.
+- *The crossing check enters packages.* `SendCheck` and `CellInv` ask
+  `Sub (.cell k) v`, and `Sub.pkg` enters a package's environment
+  (`sendCheck_env`). So no `Sub` or `SendCheck` case is new.
+
+**Where the bound lives: in the methods' receivers.** A trait, in the
+model, is its methods' interfaces `ms`, and its bound is the class at
+which it declares their receivers.
+- `TraitBound` is `none | send | sendSync`. `TraitBound.cross` maps it to
+  A3.5b's class: `any`, `send`, `sync`.
+- `TraitAt P ms b`: every interface `ms[j]` is a function of the program
+  whose first parameter is `(inp, fn ms b.cross)`.
+- *Why not a premise of `pack`.* `RhsT` has no program, so it cannot see
+  the interfaces. And the class is the type's, never the package's
+  (`Val.pkg` has no class). Neither change is needed either:
+  - a call through a trait object types only at its trait's bound
+    (`StmtT.callc_bound`);
+  - an object packed at another class is inert: no method of it is called
+    (`callc_not_at`).
+- *Why no `bare` bound.* `bare` (no share at all) is the class a lock's
+  payload and a channel's element take (A3.2, A3.4). No NURL bound says
+  it.
+
+**The statements** (`A3/Defs.lean`, after A3.5b's).
+- What each bound promises of an impl's type, with no capture by name:
+  - `TraitBound.fits_none`: nothing;
+  - `TraitBound.fits_send`: the box's type holds no view;
+  - `TraitBound.fits_sendSync`: it also holds no cell share.
+- The class is the bound: `StmtT.callc_recv_at` (a call's receiver is a
+  `fn ms q` whose interface takes it at `q`, through `StmtT.sub` too),
+  `StmtT.callc_bound` and `callc_not_at`.
+- The per-impl check:
+  - `ImplOK P b fs te ms`: `CodeOK P fs te ms []` and `b.cross.Fits te []`;
+  - `dyn_implOK`: a `dyn` the program makes (`Stmt.codesOK`) at its trait's
+    bound is an impl held to it;
+  - `CodeOK.recv_eq`: the impl's code fixes the box's type, since its first
+    method takes it as its receiver;
+  - `ImplOK.of_code`: so the check is the impl's. Every pack of an impl
+    gets the answer one of them got.
+- The crossing check walks the box:
+  - `sendCheck_box_kept`: a moved box that holds a share of a cell a kept
+    slot also holds (in its own box or not) fails the check, whatever the
+    spawn moves (`MoveArgs.det`). So the spawn is `TStep.spawnFail`'s
+    panic;
+  - `WFv.noCell_hasCell`, `sendSync_box_noCell`: a `: Send Sync` object's
+    box holds no handle at any depth. There is nothing to count;
+  - `WFv.noView_fits`, `spawn_pkgs_send`, and for a typed thread
+    `spawn_moves_send` (`A3/SpawnOld.lean`, from `spawn_args`): every
+    package a spawn moves, however deep (a field, an element, another
+    box), fits `send`.
+
+**A2's and A3's proofs.** No proof changes: the rules are A3.5b's, and
+`check.sh` re-checks every theorem as it was. The statements above are
+corollaries of A2's typing and of `SendCheck`; `spawn_moves_send` reads
+A3.0's `spawn_args`.
+
+**Faithful to the runtime.**
+- *The bound.* The runtime's bound is the trait's. The model's is in the
+  methods' receivers (`TraitAt`), and an object whose methods are called
+  has it as its class (`StmtT.callc_bound`).
+  **Phase C obligation (stated, not proven):** the lowering gives every
+  `%Trait` the type `fn ms b.cross`, `b` its trait's bound, and declares
+  its methods' receivers at it, so `TraitAt` holds of every trait.
+- *Where the impl is checked.* The runtime asks once, where the impl is.
+  The model asks at each pack, but the answer is the impl's. `Fits` reads
+  the bound and the box's type only, and the impl's code fixes the box's
+  type (`ImplOK.of_code`). An impl that is never boxed is not checked: the
+  model accepts it where the runtime rejects it, and nothing of it
+  crosses.
+- *The vtable's walk.* The runtime walks a box through the vtable's last
+  slot, the boxed type's own check. The model's `Sub` enters the box.
+  **Phase D obligation (stated, not proven):** A3.5's, for boxes. The
+  vtable's check of an impl whose type reaches a handle counts the places
+  in the box that `Sub` finds. A `: Send Sync` box holds none
+  (`sendSync_box_noCell`), and a trait with no bound has no object that
+  crosses.
+
+**Probes** (`tools/fuzz/holes/*.nu`).
+- h344 `dyn_object_carries_an_rc_to_a_thread`. A `%Churn`, whose trait
+  `Churn` has no bound, boxes a `Holder` of an `Rc`. It moves into a
+  thread's closure while the spawner keeps a clone in `h2`.
+  - *The model's stand-in for the `Rc`.* The model has no `Rc`: it is the
+    standard library's (phase B). An `Rc` is not Send because its clones
+    are one count, changed in place with no lock. The model has two
+    stand-ins. A value that is never Send is a view, or a binding captured
+    by name. A value whose copies are one state is a cell share (A3.5),
+    which crosses only with every owner.
+  - *As written* (no bound): `Churn`'s objects are `any`. No spawn takes
+    one (`spawn_not_any`, `spawn_dyn_none`), and an object taken at
+    another class is no receiver of `churn`, so the thread cannot call
+    it. A closure that captures it is `any` too (`dyn_view_any`, since
+    `(fn ms any).holdsView`), so it crosses nothing either. Nor do an
+    `Arc` (`arcNew_dyn`, `arcNew_not_any`), a lock or a channel
+    (`lockNew_fn`, `chan_fn`) or a global (`glob_dyn`, `glob_not_dyn`)
+    take it.
+  - *With `: Send`*. The impl for `Holder` keeps the promise only if its
+    box holds no view (`TraitBound.fits_send`). With a view for the `Rc`,
+    the box is packed at `any` only (`dyn_view_any`), never at the trait's
+    bound, and an object at `any` is inert (`callc_not_at`): the model
+    refuses where the runtime refuses the impl. With a cell share for the
+    `Rc`, the object is `send`, and the spawn's check counts the box:
+    `h2`'s kept clone fails it, and the spawn panics
+    (`sendCheck_box_kept`). The runtime refuses the `Rc` statically, so
+    here the model refuses less, and soundly: a crossing that takes every
+    clone along leaves no count behind.
+  - *With `: Send Sync`*. A box that holds a cell share is not packed at
+    `sync` (`dyn_cell_notSync`, `TraitBound.fits_sendSync`).
+- h360 `dyn_object_carries_a_kept_share_to_a_thread` (phase B's probe,
+  which runs clean). A `: Send` trait's object boxes a `PNCounter`, and the
+  spawner keeps a share. The box is counted (`Sub.pkg`), and the kept share
+  fails the check: `sendCheck_box_kept`, `TStep.spawnFail`.
+
+**Simplifications in this cut.** Each is a restriction, and sound as stated.
+- *A trait is its methods' interfaces.* There is no trait declaration,
+  supertrait or `[T: Send]` bound. `TraitAt` is a fact about the program's
+  interfaces, not a premise of the claim: no rule needs it, and the claim
+  holds for any class.
+- *One class per trait, no subsumption* (A3.5b's). A parameter of a trait
+  object's type is declared at its trait's bound.
+- *A `: Send` trait's objects cross a spawn only.* A lock and a channel
+  take only a bare package (A3.2 and A3.4 take no share), and no bound is
+  bare. The runtime's `chan_send` and `locked_new` take any Send value.
+- *A method takes its receiver `inp`* (A2's `callc`). A method with an
+  `inout` receiver that changes the box (h364–h366's) is not a call
+  through the object in the model.
+- *An impl is checked where it is boxed*, not where it is declared
+  (above).
+
+**Not proven here.**
+- *Phase C*: that the lowering gives each `%Trait` its trait's class and
+  declares its methods there (`TraitAt`).
+- *Phase D*: that the vtable's check counts what `Sub` finds in a box
+  (A3.5's count, for boxes).
+- `Rc` itself (phase B): not Send, not Sync, and so with no crossing check.
+- Trait objects in a lock or a channel; `inout` receivers; supertraits and
+  generic bounds; `% Send` / `% Sync` assertions on an impl's type.
+- The probes as typed programs (as `A2/DynCell.lean` types `pick`).
 - `CLAIM.md` / `README.md`.
 
 ## A3.6's mechanization (module globals)
