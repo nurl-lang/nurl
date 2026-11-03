@@ -3,7 +3,7 @@
 > **Interactive Explorer:** You can also explore this proof interactively (with a step-by-step memory & borrow-checker simulator, clickable theorem dependency graph, and searchable soundness-hole corpus) on **[nurl-lang.org/docs/formal-verification](https://nurl-lang.org/docs/formal-verification)**.
 
 * **Toolchain:** `leanprover/lean4:v4.35.0` (zero external dependencies; standard axioms `propext`, `Classical.choice`, `Quot.sound` only; `0` `sorry`s)
-* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **33 modules**, **33,252 lines of Lean 4**, **1455 theorems**, **1787 total declarations**
+* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **33 modules**, **33,270 lines of Lean 4**, **1455 theorems**, **1787 total declarations**
 * **Phase A1 (Core Calculus):** **22 modules**, **9,571 lines of Lean 4**, **449 theorems**, **613 total declarations**
 * **Soundness Corpus (`corpus/map.tsv`):** every hole probe in [`tools/fuzz/holes/`](../tools/fuzz/holes/), with the rule and the proof phase (A1, A2, A3, B) that covers it. The table is generated from the probes' `// map:` lines by `tools/fuzz/holes/map.sh` (build.sh writes it; it is not committed); `tools/fuzz/holes/map.py --counts` gives the totals
 
@@ -141,7 +141,7 @@ flowchart BT
   Basic["Basic<br/>(337L, 28 thms)"]
   Bind["Bind<br/>(188L, 4 thms)"]
   Call["Call<br/>(3407L, 161 thms)"]
-  CallInv["CallInv<br/>(653L, 25 thms)"]
+  CallInv["CallInv<br/>(641L, 21 thms)"]
   CallMem["CallMem<br/>(1083L, 46 thms)"]
   Closure["Closure<br/>(2808L, 99 thms)"]
   Codes["Codes<br/>(504L, 30 thms)"]
@@ -150,13 +150,13 @@ flowchart BT
   EditB["EditB<br/>(1965L, 60 thms)"]
   Frame["Frame<br/>(638L, 40 thms)"]
   Heap["Heap<br/>(203L, 14 thms)"]
-  Invariant["Invariant<br/>(968L, 54 thms)"]
+  Invariant["Invariant<br/>(975L, 54 thms)"]
   Leak["Leak<br/>(505L, 25 thms)"]
   NameWf["NameWf<br/>(852L, 43 thms)"]
   Panic["Panic<br/>(219L, 12 thms)"]
   Preservation["Preservation<br/>(2460L, 55 thms)"]
   Progress["Progress<br/>(552L, 11 thms)"]
-  Rename["Rename<br/>(3570L, 166 thms)"]
+  Rename["Rename<br/>(3581L, 166 thms)"]
   Repl["Repl<br/>(353L, 20 thms)"]
   Rhs["Rhs<br/>(1861L, 94 thms)"]
   Semantics["Semantics<br/>(730L, 0 thms)"]
@@ -167,7 +167,7 @@ flowchart BT
   Steps["Steps<br/>(2214L, 66 thms)"]
   Sweep["Sweep<br/>(490L, 55 thms)"]
   Syntax["Syntax<br/>(363L, 0 thms)"]
-  Typing["Typing<br/>(1376L, 61 thms)"]
+  Typing["Typing<br/>(1388L, 65 thms)"]
   TypingFacts["TypingFacts<br/>(951L, 57 thms)"]
   Values["Values<br/>(203L, 14 thms)"]
   Wf["Wf<br/>(1257L, 35 thms)"]
@@ -222,10 +222,10 @@ flowchart BT
 | 0. Syntax & Store | [`A2/Syntax.lean`](A2/Syntax.lean) | 363 | 0 | 31 | Types, effect & kill lattice (Eff.kills), expressions, statements, and store values (Mem, Slot, Val). |
 | 1. Flow-Sensitive Typing | [`A2/Basic.lean`](A2/Basic.lean) | 337 | 28 | 1 | Foundational lemmas for store updates (upd), value subtrees, and contexts. |
 | 1. Flow-Sensitive Typing | [`A2/Ctx.lean`](A2/Ctx.lean) | 294 | 30 | 0 | Algebraic properties and monotonicity of context operations (kill, exitScope, derive). |
-| 1. Flow-Sensitive Typing | [`A2/Typing.lean`](A2/Typing.lean) | 1376 | 61 | 98 | Flow-sensitive context Γ, kill operation, and typing rules for RHS, statements, calls, and functions (RhsT, StmtT, CallT, FnOK). |
+| 1. Flow-Sensitive Typing | [`A2/Typing.lean`](A2/Typing.lean) | 1388 | 65 | 98 | Flow-sensitive context Γ, kill operation, and typing rules for RHS, statements, calls, and functions (RhsT, StmtT, CallT, FnOK). |
 | 1. Flow-Sensitive Typing | [`A2/TypingFacts.lean`](A2/TypingFacts.lean) | 951 | 57 | 1 | Inversion lemmas and structural properties of well-typed statements (StmtT). |
 | 2. Memory Invariant | [`A2/Heap.lean`](A2/Heap.lean) | 203 | 14 | 0 | Preservation of heap disjointness and allocation validity (HeapOK) across store operations. |
-| 2. Memory Invariant | [`A2/Invariant.lean`](A2/Invariant.lean) | 968 | 54 | 53 | Configuration invariant (Inv, HeapOK, Covers, ValOK, ViewsOK): single ownership and valid borrows/views. |
+| 2. Memory Invariant | [`A2/Invariant.lean`](A2/Invariant.lean) | 975 | 54 | 53 | Configuration invariant (Inv, HeapOK, Covers, ValOK, ViewsOK): single ownership and valid borrows/views. |
 | 2. Memory Invariant | [`A2/NameWf.lean`](A2/NameWf.lean) | 852 | 43 | 3 | Well-formedness and invariants for by-name closure captures (Kind.name). |
 | 2. Memory Invariant | [`A2/SrcKeep.lean`](A2/SrcKeep.lean) | 268 | 12 | 0 | Source typing keeps a borrowed parameter's entry (StmtT.ctxRel), so a destructor's frame gets KeepOut, CtxWF and NameWF of its body without premises on letd (srcCase). |
 | 2. Memory Invariant | [`A2/Stability.lean`](A2/Stability.lean) | 936 | 75 | 5 | Stability of borrows and views under store and context updates. |
@@ -242,11 +242,11 @@ flowchart BT
 | 3. Step & Unwinding Lemmas | [`A2/Steps.lean`](A2/Steps.lean) | 2214 | 66 | 1 | Preservation lemmas for individual statement steps (letv, assign, push, free, unpair). |
 | 4. Calls & Closures | [`A2/Bind.lean`](A2/Bind.lean) | 188 | 4 | 1 | Binding call arguments (in, inout, sink) from caller context into callee frame. |
 | 4. Calls & Closures | [`A2/Call.lean`](A2/Call.lean) | 3407 | 161 | 20 | Typing of expanded function calls (callStmt) from function summaries (FnOK + CallT). |
-| 4. Calls & Closures | [`A2/CallInv.lean`](A2/CallInv.lean) | 653 | 25 | 0 | Full invariant preservation (callCase, recCase) across function call and recover expansion. |
+| 4. Calls & Closures | [`A2/CallInv.lean`](A2/CallInv.lean) | 641 | 21 | 0 | Full invariant preservation (callCase, recCase) across function call and recover expansion. |
 | 4. Calls & Closures | [`A2/CallMem.lean`](A2/CallMem.lean) | 1083 | 46 | 2 | Store state and owned trees immediately after binding parameters in a call. |
 | 4. Calls & Closures | [`A2/Closure.lean`](A2/Closure.lean) | 2808 | 99 | 5 | Closure and trait-object package calls (callc, cloCase, cloProgress) and by-name capture soundness. |
 | 4. Calls & Closures | [`A2/Codes.lean`](A2/Codes.lean) | 504 | 30 | 1 | Package code-pointer integrity (ProgCodes, MemCodes, codes_step) across execution steps. |
-| 4. Calls & Closures | [`A2/Rename.lean`](A2/Rename.lean) | 3570 | 166 | 13 | Alpha-renaming of function body variables to fresh variables at a call site. |
+| 4. Calls & Closures | [`A2/Rename.lean`](A2/Rename.lean) | 3581 | 166 | 13 | Alpha-renaming of function body variables to fresh variables at a call site. |
 | 5. Soundness Theorems | [`A2/Preservation.lean`](A2/Preservation.lean) | 2460 | 55 | 11 | Preservation theorem (preserve): every execution step preserves typing StmtT and memory invariant Inv. |
 | 5. Soundness Theorems | [`A2/Progress.lean`](A2/Progress.lean) | 552 | 11 | 0 | Progress theorem (progress): a well-typed statement is either .skip or can step (never Stuck). |
 | 5. Soundness Theorems | [`A2/Soundness.lean`](A2/Soundness.lean) | 221 | 14 | 2 | Main theorems: soundness, memory_safe, no_leak_end, and no_leak_panic. |
