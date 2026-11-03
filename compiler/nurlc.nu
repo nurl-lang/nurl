@@ -15834,6 +15834,9 @@ unsafe @ gen_call i lex i syms i cg → s {
         // (…and whether a `?` / `??` join made as it owns what it yields,
         // before mem_lent_cond takes the bit: mem_arg_temps.)
         : ~ s arg_join_own ``
+        // (…and the bindings its arms lend, where it lends them on every
+        // path — no ownership of its own published: agora #451.)
+        : ~ s arg_join_ids ``
         // (What a call made as this argument lends from: bck_call_lend_srcs.)
         : ~ s arg_lend_srcs ``
         // (…and whether that call reaches into a shared cell: __shared_cell_get.)
@@ -16037,6 +16040,7 @@ unsafe @ gen_call i lex i syms i cg → s {
             // value: __val_eff_tt, agora #189, #198, #199.)
             = arg_eff_tt ( __val_eff_tt bck_arg_tt )
             = arg_join_own ? | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST ( nurl_sym_get syms `__last_join_own__` ) ``
+            = arg_join_ids ? & == 0 ( nurl_str_len arg_join_own ) | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST ( nurl_sym_get syms `__last_phi_idents__` ) ``
             = arg_lent ( mem_lent_cond syms cg at arg_eff_tt bck_arg_val )
             // (A call that may lend its result — by name, as a view, or on
             // some paths — for a value no copy can stand in for, h228.)
@@ -17181,6 +17185,12 @@ unsafe @ gen_call i lex i syms i cg → s {
                     ( nurl_print `  ` ) ( nurl_print __sjl ) ( nurl_print ` = xor i1 ` ) ( nurl_print arg_join_own ) ( nurl_print `, 1\n` )
                     = av ( mem_emit_cloneif cg at av __sjl )
                 } { ? ( __nc_drop_ty at ) { ( __nc_copy_die ( nurl_sym_get syms `__fn_self_name__` ) at ) } {} }
+            } {}
+            // (…and one whose arms lend bindings on every path — `( eat ? c
+            // u t )`, u and t owners: no ownership of its own is published,
+            // and the callee released the buffer its owner still drops.)
+            ? & & | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST == 0 ( nurl_str_len arg_join_own ) != 0 ( nurl_str_len arg_join_ids ) {
+                ? ( __clone_supported at syms ) { = av ( mem_emit_cloneif cg at av `1` ) } { ? ( __nc_drop_ty at ) { ( __nc_copy_die ( nurl_sym_get syms `__fn_self_name__` ) at ) } {} }
             } {}
             // An enum's payload, which the arm only borrows: a copy goes
             // over; one that cannot be copied is rejected (h231). (Other
