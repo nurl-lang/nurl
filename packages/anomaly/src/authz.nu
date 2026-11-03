@@ -203,8 +203,11 @@ $ `stdlib/std/thread.nu`
 // should be a deliberate answer rather than a default nobody saw.
 : ~ b g_az_multi F
 
-@ anomaly_authz_set_root s root → v {
-    = g_az_root root
+// (The global keeps a copy of its own: the caller's string may go first.
+// `unsafe`: a string global that owns its text is handed it only where
+// nothing reads it meanwhile — once, before serving.)
+unsafe @ anomaly_authz_set_root s root → v {
+    = g_az_root ( nurl_str_cat root `` )
 }
 
 // `on` gates the whole thing; `open_ingest` keeps /detect and /detect_only

@@ -32,3 +32,17 @@
   the cursor a slice of its own. Such a binding now may own its value:
   re-pointing it ends what was borrowed from it. nurlc's own unused-import
   lint had this shape and now reads each piece before moving on.
+- **A view parameter is a view of what the caller passed, everywhere**
+  (probes view_param_kept_in_a_string_global,
+  view_param_captured_by_a_spawned_thread). A string global given a
+  function's view parameter, or a closure holding one handed to another
+  thread, used to be accepted, and kept a view of the caller's String
+  past its release. Both are refused now, as for a view of a local.
+  The packages that did this keep copies of their own:
+  - registry's, pki-server's and anomaly's configuration setters, and
+    nurlbox's applet name, assign an owned copy from a small `unsafe`
+    setter, called once before serving;
+  - image's and anomaly's literal-only setters assign their literals
+    directly;
+  - nurl-mcp's HTTP handler and the fuzz harness's feeder threads capture
+    a String of their own.

@@ -48,16 +48,17 @@ $ `stdlib/core/slice.nu`
 : ~ s g_reg_gh_id ``  // GitHub OAuth app (empty = OAuth disabled)
 : ~ s g_reg_gh_secret ``
 
-// The caller OWNS the config strings and must keep them alive for the
-// server's lifetime (main holds them; the anomaly service follows the
-// same contract).
-@ reg_service_config s data s dbpath s pepper s base_url s gh_id s gh_secret → v {
-    = g_reg_data data
-    = g_reg_dbpath dbpath
-    = g_reg_pepper pepper
-    = g_reg_base_url base_url
-    = g_reg_gh_id gh_id
-    = g_reg_gh_secret gh_secret
+// The globals keep copies of their own: the caller's strings may go
+// before the server does. (`unsafe`: a string global that owns its text
+// is handed it only where nothing reads it meanwhile — once, before
+// serving.)
+unsafe @ reg_service_config s data s dbpath s pepper s base_url s gh_id s gh_secret → v {
+    = g_reg_data ( nurl_str_cat data `` )
+    = g_reg_dbpath ( nurl_str_cat dbpath `` )
+    = g_reg_pepper ( nurl_str_cat pepper `` )
+    = g_reg_base_url ( nurl_str_cat base_url `` )
+    = g_reg_gh_id ( nurl_str_cat gh_id `` )
+    = g_reg_gh_secret ( nurl_str_cat gh_secret `` )
 }
 
 @ __reg_now → i {

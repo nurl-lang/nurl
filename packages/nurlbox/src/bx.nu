@@ -34,7 +34,12 @@ $ `stdlib/core/slice.nu`
 
 @ bx_name → s { ^ g_bx_name }
 
-@ bx_set_name s n → v { = g_bx_name n }
+// (The global keeps a copy of its own: the dispatcher's name may go
+// first. `unsafe`: a string global that owns its text is handed it only
+// where nothing reads it meanwhile — nurlbox starts no thread, and the
+// name changes only between applets: the shell's in-process dispatch sets
+// it back once the applet it ran has returned.)
+unsafe @ bx_set_name s n → v { = g_bx_name ( nurl_str_cat n `` ) }
 
 // ── Diagnostics ───────────────────────────────────────────────────
 

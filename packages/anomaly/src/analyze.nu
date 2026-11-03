@@ -322,7 +322,10 @@ $ `orgfiles.nu`
 // same store — so tests point this at something harmless.
 : ~ s g_ana_exe ``
 
-@ analyze_set_exe s exe → v { = g_ana_exe exe }
+// (The global keeps a copy of its own: the caller's string may go first.
+// `unsafe`: a string global that owns its text is handed it only where
+// nothing reads it meanwhile — once, before serving.)
+unsafe @ analyze_set_exe s exe → v { = g_ana_exe ( nurl_str_cat exe `` ) }
 
 @ analyze_exe → String {
     ? > ( nurl_str_len g_ana_exe ) 0 { ^ ( string_from g_ana_exe ) } {}

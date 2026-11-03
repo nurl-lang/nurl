@@ -318,7 +318,10 @@ unsafe @ __fz_fd TcpConn conn → i { ^ ( nurl_tcp_get_fd ( tcp_conn_fd conn ) )
 // One server connection per input: the client feeder runs on a thread
 // while the server under test accepts and serves on this one.
 @ __fz_serve_one HttpServer srv i port s path → v {
-    : ( @ v ) feeder \ → v { ( __fz_client_feed port path ) }
+    // (The feeder thread gets a copy it owns: a view of the caller's path
+    // may not cross to another thread.)
+    : String fp ( string_from path )
+    : ( @ v ) feeder \ → v { ( __fz_client_feed port ( string_data fp ) ) }
     : !Thread ThreadErr ft ( thread_spawn feeder )
     ?? ( server_run_once srv ) { T _ → {} F _ → {} }
     : i _j ?? ft { T th → ( thread_join th ) F _ → 0 }
@@ -327,7 +330,8 @@ unsafe @ __fz_fd TcpConn conn → i { ^ ( nurl_tcp_get_fd ( tcp_conn_fd conn ) )
 @ __fz_ws_one TcpListener l i port s path → v {
     : ( Vec u ) data ( __fuzz_bytes path )
     : i mode ? > ( vec_len [u] data ) 0 ( __fz_byte data 0 ) 0
-    : ( @ v ) feeder \ → v { ( __fz_client_feed port path ) }
+    : String fp ( string_from path )
+    : ( @ v ) feeder \ → v { ( __fz_client_feed port ( string_data fp ) ) }
     : !Thread ThreadErr ft ( thread_spawn feeder )
     ?? ( tcp_accept l ) {
         T conn → {
@@ -361,7 +365,8 @@ unsafe @ __fz_fd TcpConn conn → i { ^ ( nurl_tcp_get_fd ( tcp_conn_fd conn ) )
 
 // The client under test connects to a feeder that plays the server.
 @ __fz_tlscli_one TcpListener l i port s path → v {
-    : ( @ v ) feeder \ → v { ( __fz_server_feed l path ) }
+    : String fp ( string_from path )
+    : ( @ v ) feeder \ → v { ( __fz_server_feed l ( string_data fp ) ) }
     : !Thread ThreadErr ft ( thread_spawn feeder )
     ?? ( tcp_connect_tls `127.0.0.1` port `localhost` 0 ) {
         T c → {
@@ -375,7 +380,8 @@ unsafe @ __fz_fd TcpConn conn → i { ^ ( nurl_tcp_get_fd ( tcp_conn_fd conn ) )
 }
 
 @ __fz_http1resp_one TcpListener l i port s path → v {
-    : ( @ v ) feeder \ → v { ( __fz_server_feed l path ) }
+    : String fp ( string_from path )
+    : ( @ v ) feeder \ → v { ( __fz_server_feed l ( string_data fp ) ) }
     : !Thread ThreadErr ft ( thread_spawn feeder )
     : String url ( string_from `http://127.0.0.1:` )
     ( string_push_str url ( nurl_str_int port ) )
@@ -386,7 +392,8 @@ unsafe @ __fz_fd TcpConn conn → i { ^ ( nurl_tcp_get_fd ( tcp_conn_fd conn ) )
 }
 
 @ __fz_mqtt_one TcpListener l i port s path → v {
-    : ( @ v ) feeder \ → v { ( __fz_server_feed l path ) }
+    : String fp ( string_from path )
+    : ( @ v ) feeder \ → v { ( __fz_server_feed l ( string_data fp ) ) }
     : !Thread ThreadErr ft ( thread_spawn feeder )
     ?? ( __fz_connect port ) {
         T conn → {

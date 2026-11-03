@@ -129,17 +129,14 @@ $ `stdlib/std/arc.nu`
 
 // The actor is the global's own copy (the caller's string lives only as
 // long as its request; a long name is cut). The action is always a
-// literal and is kept as given.
+// literal, assigned where the operation starts: a string global holds
+// literals in safe code.
 @ anomaly_set_actor s who → v {
     : ( Slice u ) wv ( slice_of_str who )
     : i n ( slice_len [u] wv )
     : ~ String a ( string_with_cap ? > n ANOM_ACTOR_MAX ANOM_ACTOR_MAX n )
     ( string_push_window a wv 0 ? > n ANOM_ACTOR_MAX ANOM_ACTOR_MAX n )
     ( locked_set [String] g_an_actor a )
-}
-
-@ _an_set_action s what → v {
-    = g_an_action what
 }
 
 // The newest `limit` audit entries of a model (all when ≤ 0).
@@ -2900,7 +2897,7 @@ $ `stdlib/std/arc.nu`
 @ model_autotune_at inout Model mo f rate i now → b {
     ? & & > rate 0.0 == . . mo meta tuned_at 0 ( model_is_trained mo ) {} { ^ F }
     ? >= * rate # f ( vec_len [String] . mo lines ) 1.0 {} { ^ F }
-    ( _an_set_action `autotune` )
+    = g_an_action `autotune`
     : ( Vec String ) none ( vec_new [String] )
     : FineTuneReport ft ( model_finetune_at mo rate 0 0 T none )
     = . . mo meta tuned_at now
@@ -2914,7 +2911,7 @@ $ `stdlib/std/arc.nu`
 @ _an_fc_autotune inout Model mo → v {
     ? == ( f64_to_bits ( meta_version_margin . mo meta ANOM_FC_NAME ANOM_FC_SIGMA ) ) ( f64_to_bits ANOM_FC_SIGMA ) {} { ^ }
     ? >= * ANOM_FT_RATE # f ( vec_len [String] . mo lines ) 1.0 {} { ^ }
-    ( _an_set_action `autotune` )
+    = g_an_action `autotune`
     : ( Vec String ) only ( vec_new [String] )
     ( vec_push [String] only ( string_from ANOM_FC_NAME ) )
     : FineTuneReport ft ( model_finetune_at mo ANOM_FT_RATE 0 0 T only )
@@ -3046,7 +3043,7 @@ $ `stdlib/std/arc.nu`
 }
 
 @ model_finetune_at inout Model mo f rate i from_ts i to_ts b apply ( Vec String ) only → FineTuneReport {
-    ? apply { ( _an_set_action ? == ( nurl_str_eq g_an_action `autotune` ) 1 `autotune` `finetune` ) } {}
+    ? apply { = g_an_action ? == ( nurl_str_eq g_an_action `autotune` ) 1 `autotune` `finetune` } {}
     : ( Vec FtVer ) items ( vec_new [FtVer] )
     : CalReport cal ( model_calibrate mo from_ts to_ts )
     : ~ i need . . mo meta votes
@@ -3147,7 +3144,7 @@ $ `stdlib/std/arc.nu`
     }
     : i nr . cal n_rows
     : i nex . cal excluded
-    ( _an_set_action `set_margin` )
+    = g_an_action `set_margin`
     ^ @ FineTuneReport { items rate from_ts to_ts nr apply nex need q cons_before cons_after cnote }
 }
 
@@ -4388,7 +4385,7 @@ $ `stdlib/std/arc.nu`
             ? < ( meta_apply_versions_json . mo meta vj want_replace ) 0 {
                 ^ ( string_from `versions must be a JSON object of version configs` )
             } {}
-            ( _an_set_action `edit` )
+            = g_an_action `edit`
             = vk 0
             ~ < vk ( vec_len [String] an ) {
                 ?? ( vec_get [String] an vk ) {

@@ -73,8 +73,11 @@ $ `stdlib/core/slice.nu`
 // Store root used by every handler; set once before serving.
 : ~ s g_an_root `.`
 
-@ anomaly_service_set_root s root → v {
-    = g_an_root root
+// (The global keeps a copy of its own: the caller's string may go first.
+// `unsafe`: a string global that owns its text is handed it only where
+// nothing reads it meanwhile — once, before serving.)
+unsafe @ anomaly_service_set_root s root → v {
+    = g_an_root ( nurl_str_cat root `` )
     ( orgfiles_set_root root )
 }
 
@@ -82,8 +85,11 @@ $ `stdlib/core/slice.nu`
 // static serving disabled (API-only). Set once before serving.
 : ~ s g_an_webroot ``
 
-@ anomaly_service_set_webroot s root → v {
-    = g_an_webroot root
+// (The global keeps a copy of its own: the caller's string may go first.
+// `unsafe`: a string global that owns its text is handed it only where
+// nothing reads it meanwhile — once, before serving.)
+unsafe @ anomaly_service_set_webroot s root → v {
+    = g_an_webroot ( nurl_str_cat root `` )
 }
 
 // ── Static dashboard serving ──────────────────────────────────────────
