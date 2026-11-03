@@ -127,7 +127,9 @@ def SpawnOK (P : Prog) (spawn : Nat → Bool) : Prop :=
 
 /-- A3.1, Send: a share crosses to a new thread when its payload holds no
     views — `SpawnOK`'s question asked of `Ty.arc t`, unchanged.  Every A2
-    type `arc t` meets it (`Ty.ok` asks it of the payload) ... -/
+    type `arc t` meets it (`Ty.ok` asks it of the payload) ... (A3.3: a read
+    guard, a share of a view, is of such a type too, and is `% NotSend`: the
+    crossing check refuses it at run time, `NoGuard`, `spawn_guard`.) -/
 theorem arc_spawnOK {t : Ty} (h : (Ty.arc t).ok = true) : (Ty.arc t).holdsView = false := by
   simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true] at h
   exact h.2
@@ -877,7 +879,7 @@ theorem _root_.A2.StmtT.lockedSet {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {a b 
     touched, the store as it was (`locked_new`'s check), as the runtime's
     `mem_send_check` panics before `mutex_lock`. -/
 theorem lockedSet_check {P : Prog} {m m1 : Mem} {t : Ty} {a b x y : Var} {v : Val}
-    (ht : TakeVal m y v m1) (hfail : ¬ SendCheck [v] m1.st) :
+    (ht : TakeVal m y v m1) (hfail : ¬ SendCheck m1.blk [v] m1.st) :
     Step P m (Stmt.lockedSet t a b x y) (.panic m) :=
   Step.letvP (EvalR.lockNewFail ht hfail)
 
@@ -1243,10 +1245,10 @@ theorem cellClone_in {Γ : Ctx} {F : List Var} {a : Var} {ps : List (PMode × Ty
     holds a share of a cell a borrowed slot left behind holds one of fails the
     check.  (A live borrow's owner is left behind with it, on the same thread,
     so the runtime's count of owners fails too.) -/
-theorem sendCheck_borrow_left {vs : List Val} {st : Var → Option Slot} {k : Nat} {v : Val}
-    (hv : v ∈ vs) (hs : Sub (.cell k) v) {y : Var} {w : Val} (hy : st y = some ⟨false, some w⟩)
-    (hw : Sub (.cell k) w) : ¬ SendCheck vs st :=
-  fun h => h k ⟨v, hv, hs⟩ y false w hy hw
+theorem sendCheck_borrow_left {B : Nat → Option Blk} {vs : List Val} {st : Var → Option Slot} {k : Nat}
+    {v : Val} (hv : v ∈ vs) (hs : Sub (.cell k) v) {y : Var} {w : Val} (hy : st y = some ⟨false, some w⟩)
+    (hw : Sub (.cell k) w) : ¬ SendCheck B vs st :=
+  fun h => h.1 k ⟨v, hv, hs⟩ y false w hy hw
 
 /-! ### A3.5b: closures across threads, as A2 types them
 
@@ -1366,11 +1368,11 @@ theorem chanSend_send {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {a y : Var} 
 /-- A Send closure that captured a library handle crosses a spawn only with
     every other owner of the handle's state: the crossing check counts what
     the moved values hold, closures' environments included (`Sub.pkg`). -/
-theorem sendCheck_env {vs : List Val} {st' : Var → Option Slot} (h : SendCheck vs st') {v : Val}
+theorem sendCheck_env {B : Nat → Option Blk} {vs : List Val} {st' : Var → Option Slot} (h : SendCheck B vs st') {v : Val}
     (hv : v ∈ vs) {fs : List Nat} {te : Ty} {ms : List Nat} {e : Val} {cs : List (Var × PMode × Ty)}
     (hs : Sub (.pkg fs te ms e cs) v) {k : Nat} (hk : Sub (.cell k) e) :
     ∀ x o w, st' x = some ⟨o, some w⟩ → ¬ Sub (.cell k) w :=
-  h k ⟨v, hv, (Sub.pkg hk).trans hs⟩
+  h.1 k ⟨v, hv, (Sub.pkg hk).trans hs⟩
 
 /-- **A Sync closure in an `Arc`**: `arc_new` takes it (its type holds no
     view, no closure that holds bindings by name and no library handle) ... -/
@@ -1786,8 +1788,8 @@ theorem sendCheck_box_kept {st st' : Var → Option Slot} {args : List Var} {vs 
     (hm : MoveArgs st args vs st') {v : Val} (hv : v ∈ vs) {fs : List Nat} {te : Ty} {ms : List Nat}
     {e : Val} {cs : List (Var × PMode × Ty)} (hs : Sub (.pkg fs te ms e cs) v) {k : Nat}
     (hk : Sub (.cell k) e) {y : Var} {o : Bool} {w : Val} (hy : st' y = some ⟨o, some w⟩)
-    (hw : Sub (.cell k) w) {vs' : List Val} {st'' : Var → Option Slot} (hm' : MoveArgs st args vs' st'') :
-    ¬ SendCheck vs' st'' := by
+    (hw : Sub (.cell k) w) {vs' : List Val} {st'' : Var → Option Slot} (hm' : MoveArgs st args vs' st'')
+    {B : Nat → Option Blk} : ¬ SendCheck B vs' st'' := by
   obtain ⟨rfl, rfl⟩ := hm.det hm'
   exact fun h => sendCheck_env h hv hs hk y o w hy hw
 
@@ -2666,9 +2668,9 @@ theorem _root_.A2.TakeVal.det {m m1 m2 : Mem} {y : Var} {v w : Val} (h1 : TakeVa
 
 /-- A value that holds a share of a cell a slot left behind holds one of fails
     the crossing check. -/
-theorem not_sendCheck {st : Var → Option Slot} {v : Val} {k : Nat} (hv : Sub (.cell k) v) {z : Var} {o : Bool}
-    {w : Val} (hz : st z = some ⟨o, some w⟩) (hw : Sub (.cell k) w) : ¬ SendCheck [v] st :=
-  fun h => h k ⟨v, List.mem_singleton_self _, hv⟩ z o w hz hw
+theorem not_sendCheck {B : Nat → Option Blk} {st : Var → Option Slot} {v : Val} {k : Nat} (hv : Sub (.cell k) v)
+    {z : Var} {o : Bool} {w : Val} (hz : st z = some ⟨o, some w⟩) (hw : Sub (.cell k) w) : ¬ SendCheck B [v] st :=
+  fun h => h.1 k ⟨v, List.mem_singleton_self _, hv⟩ z o w hz hw
 
 /-- **h340** (`closure_sent_on_a_channel_captures_a_kept_handle`): a closure
     that captured a library handle the sender still holds a share of (in any
@@ -2691,7 +2693,7 @@ theorem chanSend_kept {m m1 : Mem} {a y : Var} {v : Val} (ht : TakeVal m y v m1)
     tree, the handle in its environment with it, into the queue (or drops it
     on a closed channel), and no slot left holds a share of a cell it holds. -/
 theorem chanSend_moves {m m' : Mem} {a y : Var} {r : Val} {o : Bool} (h : EvalR m (.chanSend a y) (.ok r o m')) :
-    ∃ v m1, TakeVal m y v m1 ∧ m'.st = m1.st ∧ SendCheck [v] m'.st := by
+    ∃ v m1, TakeVal m y v m1 ∧ m'.st = m1.st ∧ SendCheck m1.blk [v] m'.st := by
   cases h with
   | chanSend _ ht _ _ _ _ hck => exact ⟨_, _, ht, rfl, hck⟩
   | chanSendClosed _ ht _ _ hck => exact ⟨_, _, ht, rfl, hck⟩
@@ -2777,7 +2779,7 @@ inductive TStep (P : Prog) (spawn : Nat → Bool) : Cfg → Cfg → Prop
   | spawn {C : Cfg} {i : Nat} {t : Thread} {K : Stmt → Stmt} {x f : Nat} {args : List Var}
       {k : Stmt} {fn : Fn} {vs : List Val} {st' : Var → Option Slot} :
       C.ths[i]? = some t → Redex t.s K (.letcall x f args k) → spawn f = true → P[f]? = some fn →
-      t.st x = none → MoveArgs t.st args vs st' → SendCheck vs st' →
+      t.st x = none → MoveArgs t.st args vs st' → SendCheck C.blk vs st' →
       TStep P spawn C
         { C with ths := C.ths.set i ⟨upd st' x (some ⟨false, some (.int 0)⟩), t.nv, K (.scope x k)⟩ ++
                         [⟨spawnSt fn vs, fn.nvars,
@@ -2785,12 +2787,74 @@ inductive TStep (P : Prog) (spawn : Nat → Bool) : Cfg → Cfg → Prop
   /-- A3.5: a spawn whose crossing check fails panics in the spawner, as
       `mem_send_check` calls `nurl_panic`: no thread is made and nothing
       moves, and the spawner's next step is A2's panic, which unwinds its
-      scopes (or a `recover` frame catches it). -/
+      scopes (or a `recover` frame catches it).  (A3.3: a moved value that
+      reaches a read guard fails it too, `NoGuard`, which nurlc asks
+      statically.) -/
   | spawnFail {C : Cfg} {i : Nat} {t : Thread} {K : Stmt → Stmt} {x f : Nat} {args : List Var}
       {k : Stmt} {fn : Fn} {vs : List Val} {st' : Var → Option Slot} :
       C.ths[i]? = some t → Redex t.s K (.letcall x f args k) → spawn f = true → P[f]? = some fn →
-      t.st x = none → MoveArgs t.st args vs st' → ¬ SendCheck vs st' →
+      t.st x = none → MoveArgs t.st args vs st' → ¬ SendCheck C.blk vs st' →
       TStep P spawn C { C with ths := C.ths.set i ⟨t.st, t.nv, K (.seq .panic (.letcall x f args k))⟩ }
+
+/-! ### A3.3: read guards are `% NotSend`
+
+A read guard is a share of a view (`rw_read`'s), which the runtime's
+`RGuard_drop` unlocks on the thread that took it.  So no guard crosses to
+another thread: the crossing check asks it (`NoGuard`, part of `SendCheck`) of
+what a spawn moves, of every value going into a lock block, and of a lock
+scope's give-back.  It asks it of a guard a value holds at any depth (a
+field, an element, a closure's environment, `Sub`) and of one in a block a
+value's shares reach (an `Arc`'s payload, a lock's: `Reached`), so a guard
+kept in an `Arc` or a `Locked` does not cross either.  nurlc refuses such a
+crossing statically (`% NotSend RGuard`); the model's crossing panics
+(`TStep.spawnFail`, `EvalR.lockNewFail`, `EvalR.chanSendFail`, ...).  A write
+guard is no value (the lock scope `scopeL`), and what a guard lends is a
+borrow, which no crossing takes (a spawn's and a lock's value is owned). -/
+
+/-- A value that holds a read guard fails `NoGuard`. -/
+theorem guard_not_noGuard {B : Nat → Option Blk} {vs : List Val} {v : Val} (hv : v ∈ vs) {k : Nat}
+    {p : Val} (hs : Sub (.arc k p) v) {bl : Blk} (hk : B k = some bl) (hview : bl.kind = .view) :
+    ¬ NoGuard B vs :=
+  fun h => h k (.root hv (.inl (.inl ⟨some p, hs⟩))) bl hk hview
+
+/-- ... and so does one whose shares reach a block holding one (a guard kept
+    in an `Arc`'s payload, or in a lock's). -/
+theorem guard_pay_not_noGuard {B : Nat → Option Blk} {vs : List Val} {k' : Nat} {bl' : Blk}
+    (hr : Reached (· ∈ vs) B k') (hk' : B k' = some bl') {k : Nat} {p : Val} (hs : Sub (.arc k p) bl'.keeps)
+    {bl : Blk} (hk : B k = some bl) (hview : bl.kind = .view) : ¬ NoGuard B vs :=
+  fun h => h k (.pay hr hk' (.inl (.inl ⟨some p, hs⟩))) bl hk hview
+
+/-- **A read guard does not cross a spawn**: a spawn whose moved values hold
+    one, or reach one through a block, fails the crossing check, so it is no
+    `TStep.spawn` and the spawner panics (`TStep.spawnFail`). -/
+theorem spawn_guard {C : Cfg} {st' : Var → Option Slot} {vs : List Val} (hng : ¬ NoGuard C.blk vs) :
+    ¬ SendCheck C.blk vs st' :=
+  fun h => hng h.2
+
+/-- **Nor into a lock or a channel**: `locked_new` (and `rw_new`) of a value
+    that reaches a read guard panics (`EvalR.lockNewFail`), with no other
+    outcome ... -/
+theorem lockNew_guard {m m1 : Mem} {t : Ty} {y : Var} {v : Val} (ht : TakeVal m y v m1)
+    (hng : ¬ NoGuard m1.blk [v]) :
+    EvalR m (.lockNew t y) .panic ∧ ∀ r o' m', ¬ EvalR m (.lockNew t y) (.ok r o' m') := by
+  refine ⟨EvalR.lockNewFail ht (fun h => hng h.2), fun r o' m' h => ?_⟩
+  cases h with
+  | lockNew ht' _ hck =>
+    obtain ⟨rfl, rfl⟩ := ht.det ht'
+    exact hng hck.2
+
+/-- ... and `chan_send` of one panics (`EvalR.chanSendFail`). -/
+theorem chanSend_guard {m m1 : Mem} {a y : Var} {v : Val} (ht : TakeVal m y v m1)
+    (hng : ¬ NoGuard m1.blk [v]) :
+    EvalR m (.chanSend a y) .panic ∧ ∀ r o' m', ¬ EvalR m (.chanSend a y) (.ok r o' m') := by
+  refine ⟨EvalR.chanSendFail ht (fun h => hng h.2), fun r o' m' h => ?_⟩
+  cases h with
+  | chanSend _ ht' _ _ _ _ hck =>
+    obtain ⟨rfl, rfl⟩ := ht.det ht'
+    exact hng hck.2
+  | chanSendClosed _ ht' _ _ hck =>
+    obtain ⟨rfl, rfl⟩ := ht.det ht'
+    exact hng hck.2
 
 inductive Reach (P : Prog) (spawn : Nat → Bool) : Cfg → Cfg → Prop
   | refl {C : Cfg} : Reach P spawn C C

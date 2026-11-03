@@ -495,7 +495,7 @@ theorem _root_.A2.EvalR.cellKeep {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h 
       · cases hb; exact .inr ⟨rfl, hs⟩
     · rcases CellAt.set hc with ⟨u, hu, hs'⟩ | ⟨y', oy, u, hy', hs'⟩
       · cases hu; cases hs'
-      · exact absurd hs' (hck k ⟨w, List.mem_singleton_self _, hs⟩ y' oy u hy')
+      · exact absurd hs' (hck.1 k ⟨w, List.mem_singleton_self _, hs⟩ y' oy u hy')
   | lockClone _ => exact CellKeep.setVal x o' hn hst (fun _ hs => by cases hs) (fun _ _ h => h)
   | @cellNew t y w m2 h1 _ hck =>
     -- the state goes into a new lock block, past the crossing check; the new
@@ -512,7 +512,7 @@ theorem _root_.A2.EvalR.cellKeep {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h 
       · cases hb; exact .inr ⟨rfl, hs⟩
     · rcases CellAt.set hc with ⟨u, hu, hs'⟩ | ⟨y', oy, u, hy', hs'⟩
       · cases hu; cases hs'; exact Nat.le_of_eq hn2.symm
-      · exact absurd hs' (hck k ⟨w, List.mem_singleton_self _, hs⟩ y' oy u hy')
+      · exact absurd hs' (hck.1 k ⟨w, List.mem_singleton_self _, hs⟩ y' oy u hy')
   | cellClone hy => exact CellKeep.setVal x o' hn hst (fun _ hs => .of_slot hy hs) (fun _ _ h => h)
   | atomic _ hk _ _ _ =>
     refine CellKeep.setVal x o' hn hst (fun _ hs => by cases hs) (fun k' k hk' => ?_)
@@ -538,7 +538,7 @@ theorem _root_.A2.EvalR.cellKeep {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h 
         | snd hs => cases hs
     · rcases CellAt.set hc with ⟨u', hu, hs'⟩ | ⟨y', oy, u', hy', hs'⟩
       · cases hu; cases hs'
-      · exact absurd hs' (hck k ⟨w, List.mem_singleton_self _, hs⟩ y' oy u' hy')
+      · exact absurd hs' (hck.1 k ⟨w, List.mem_singleton_self _, hs⟩ y' oy u' hy')
   | chanSendClosed _ h1 _ _ _ =>
     exact CellKeep.setVal x o' hn hst (fun _ hs => by cases hs) (fun _ _ h => LockHolds.of_blk (TakeVal.blk h1) h)
   | @chanRecv w a o0 k0 t u c d f hd es _ hk _ _ _ hck =>
@@ -608,7 +608,7 @@ theorem _root_.A2.EvalR.cellKeep {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h 
       · cases hb; exact .inr ⟨rfl, hs⟩
     · rcases CellAt.set hc with ⟨u', hu, hs'⟩ | ⟨y', oy, u', hy', hs'⟩
       · cases hu; cases hs'
-      · exact absurd hs' (hck k ⟨w, List.mem_singleton_self _, hs⟩ y' oy u' hy')
+      · exact absurd hs' (hck.1 k ⟨w, List.mem_singleton_self _, hs⟩ y' oy u' hy')
 
 /-- **A lock scope's end**: what goes back passed the crossing check
     (`Release.put`), or `x`'s slot is dropped. -/
@@ -622,7 +622,7 @@ theorem _root_.A2.Release.cellKeep {m m' : Mem} {k0 : Nat} {t : Ty} {x : Var} (h
       · exact .inl hk'
       · cases hb; exact .inr ⟨rfl, hs⟩
     · obtain ⟨y', oy, u', hy', hs'⟩ := hc
-      exact absurd hs' (hck v rfl k ⟨v, List.mem_singleton_self _, hs⟩ y' oy u' hy')
+      exact absurd hs' ((hck v rfl).1 k ⟨v, List.mem_singleton_self _, hs⟩ y' oy u' hy')
   | drop _ _ _ =>
     exact CellKeep.slots (Nat.le_refl _) (fun k hc => .inl (CellAt.remove (CellAt.of_st rfl hc))) rfl
 
@@ -1020,7 +1020,7 @@ theorem MoveArgs.val {st st' : Var → Option Slot} {as : List Var} {vs : List V
     the new thread becomes its home; any other stays where it was. -/
 theorem CellInv.spawn_of {C : Cfg} (h : CellInv C) {i : Nat} {t : Thread} {K : Stmt → Stmt} {x : Nat}
     {k0 : Stmt} {fn : Fn} {args : List Var} {vs : List Val} {st' : Var → Option Slot}
-    (hi : C.ths[i]? = some t) (hmv : MoveArgs t.st args vs st') (hsc : SendCheck vs st') :
+    (hi : C.ths[i]? = some t) (hmv : MoveArgs t.st args vs st') (hsc : SendCheck C.blk vs st') :
     CellInv { C with ths := C.ths.set i ⟨upd st' x (some ⟨false, some (.int 0)⟩), t.nv, K (.scope x k0)⟩ ++
                       [⟨spawnSt fn vs, fn.nvars, wrapParams fn.params 0 0 (.scope fn.params.length fn.body)⟩] } := by
   have hilen : i < C.ths.length := (List.getElem?_eq_some_iff.mp hi).1
@@ -1091,12 +1091,12 @@ theorem CellInv.spawn_of {C : Cfg} (h : CellInv C) {i : Nat} {t : Thread} {K : S
     · -- the spawner and the new thread: the crossing check
       subst f1; subst f2
       obtain ⟨y, o, w, hy, hs⟩ := hS k hk1
-      exact absurd hs (hsc k (hN k hk2) y o w hy)
+      exact absurd hs (hsc.1 k (hN k hk2) y o w hy)
     · subst f1
       exact absurd (h.home _ _ _ _ k hi hj2' (hS' k hk1) hk2).symm hji2
     · subst f1; subst f2
       obtain ⟨y, o, w, hy, hs⟩ := hS k hk2
-      exact absurd hs (hsc k (hN k hk1) y o w hy)
+      exact absurd hs (hsc.1 k (hN k hk1) y o w hy)
     · rw [e1, e2]
     · subst f1
       exact absurd (h.home _ _ _ _ k hi hj2' (hN' k (hN k hk1)) hk2).symm hji2

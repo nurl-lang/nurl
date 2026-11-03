@@ -207,7 +207,7 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
       cases h : m.blk m.nid with
       | none => rfl
       | some bl => exact absurd (hi.heap.bkey _ bl h) (Nat.lt_irrefl _)
-    by_cases hck : SendCheck [v] m1.st
+    by_cases hck : SendCheck m1.blk [v] m1.st
     · exact ⟨_, EvalR.lockNew htk hfr hck⟩
     · exact ⟨_, EvalR.lockNewFail htk hck⟩
   | arcClone ha hl hty =>
@@ -226,7 +226,7 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
       cases h : m.blk m.nid with
       | none => rfl
       | some bl => exact absurd (hi.heap.bkey _ bl h) (Nat.lt_irrefl _)
-    by_cases hck : SendCheck [v] m1.st
+    by_cases hck : SendCheck m1.blk [v] m1.st
     · exact ⟨_, EvalR.cellNew htk hfr hck⟩
     · exact ⟨_, EvalR.cellNewFail htk hck⟩
   | cellClone ha hl hty =>
@@ -300,7 +300,7 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
       have hb1 : m1.blk = m.blk := by cases htk <;> rfl
       have ha1 : m1.alloc = m.alloc := by cases htk <;> rfl
       -- A3.5's second cut: the crossing check first
-      by_cases hck : SendCheck [v] m1.st
+      by_cases hck : SendCheck m1.blk [v] m1.st
       case neg => exact ⟨_, EvalR.chanSendFail htk hck⟩
       cases hw with
       | pair hq hf =>
@@ -376,7 +376,7 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
     | none =>
       obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly
       have hb1 : m1.blk = m.blk := by cases htk <;> rfl
-      by_cases hck : SendCheck [v] m1.st
+      by_cases hck : SendCheck m1.blk [v] m1.st
       · exact ⟨_, EvalR.lockRestore hv htk (by rw [hb1]; exact hk) hck⟩
       · exact ⟨_, EvalR.lockRestoreFail htk hck⟩
     | some p => exact ⟨_, EvalR.lockRestoreP hv hk⟩
