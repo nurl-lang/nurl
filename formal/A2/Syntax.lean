@@ -598,6 +598,12 @@ inductive Stmt where
   | withElem (v : Var) (i : Expr) (x : Var) (body : Stmt) -- A2-elem (#391): element `i` of the
                                                           -- `Vec` `v` is handed over: it moves
                                                           -- out to `x` for `body`, and back after
+  | callcE (x c : Var) (j : Nat) (zs : List Var) (body : Stmt)
+                                                          -- A2-envhand: `: x ( m c zs… )`, a call
+                                                          -- of method `j` of the package `c` that
+                                                          -- takes its receiver `inout`: the
+                                                          -- environment is handed over to the
+                                                          -- code, and back into `c` after
 
 
 /-- A3.5: a library's in-place change of its state (`pncounter_inc a …`,

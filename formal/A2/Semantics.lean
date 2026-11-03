@@ -762,6 +762,7 @@ def Stmt.rename (ρ : Var → Var) : Stmt → Stmt
   | .scopeL k t x s => .scopeL k t (ρ x) (s.rename ρ)
   | .insert x i y => .insert (ρ x) (i.rename ρ) (ρ y)
   | .withElem v i x s => .withElem (ρ v) (i.rename ρ) (ρ x) (s.rename ρ)
+  | .callcE x c j zs s => .callcE (ρ x) (ρ c) j (zs.map ρ) (s.rename ρ)
 
 /-- The renaming of a call of a function with parameters `ps` on `args`,
     its variables placed from `base`. -/
@@ -848,6 +849,24 @@ def heldFor (ps : List (PMode × Ty)) (args : List Var) (base x : Nat) : List Va
     first fresh variable. -/
 def envMem (m : Mem) (env : Val) : Mem :=
   { m.set m.nv ⟨false, some (lendOf env)⟩ with nv := m.nv + 1 }
+
+/-- A2-envhand: the store a hand-over leaves.  The package `c` is moved out
+    (its slot owns nothing), its environment `env` is owned by the first
+    fresh variable, and the call's result binding `x` is bound, unset (`o`:
+    whether the result is owned).  The next fresh variable is the inner
+    call's result, so two are taken. -/
+def handMem (m : Mem) (c x : Var) (env : Val) (o : Bool) : Mem :=
+  { ((m.set c ⟨true, none⟩).set m.nv ⟨true, some env⟩).set x ⟨o, none⟩ with nv := m.nv + 2 }
+
+/-- A2-envhand: what a hand-over runs, in `x`'s scope: in the scope of the
+    environment's binding `y`, the code `f` is called as an ordinary call,
+    with `y` as its receiver, an `inout` argument (its result in `y + 1`,
+    moved to `x`); then the environment goes back into `c`, a package of the
+    same code and interfaces again; then the continuation `k`. -/
+def handStmt (x c : Var) (f : Nat) (zs : List Var) (fs : List Nat) (te : Ty) (ms : List Nat) (y : Var)
+    (k : Stmt) : Stmt :=
+  .scope x (.seq (.scope y (.seq (.letcall (y + 1) f (y :: zs) (.assign x (.var (y + 1))))
+    (.assign c (.pack fs te ms y [])))) k)
 
 /-- A step's outcome: a configuration, or a panic — with the store the
     unwinding left. -/
@@ -1057,6 +1076,25 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
                 with nv := m.nv + 1 + fn.nvars })
              (.scope x (.seq (.frozen (heldFor fn.params (m.nv :: zs ++ cs.map (·.1)) m.nv x)
                (.rbind m.nv (callIn fn (m.nv :: zs ++ cs.map (·.1)) (m.nv + 1) x))) k)))
+  /-- A2-envhand: a call through an owned package of a method whose interface
+      takes the receiver `inout`.  The environment is handed over: it moves
+      out of the package `c` (whose slot owns nothing for the call) into a
+      fresh binding, which the code `f` takes as its `inout` receiver in an
+      ordinary call, and it goes back into `c` after, as a package of the same
+      code and interfaces (`handStmt`).  The runtime passes the code a pointer
+      to the environment in place; `StmtT.callcE`'s premises make the two
+      agree.  A panic in the code drops the environment with its binding's
+      scope, as `withElem` drops an element: the runtime's journal drops it
+      with the closure's binding (docs/MEMORY.md §7.2), and the frames a
+      panic unwinds to a `recover` include the one that binds `c` (`recover`
+      calls a function of no parameters), so `c` is never read again either
+      way.  A package that captures by name has no such method
+      (`Implements`). -/
+  | callcE {m : Mem} {x c : Var} {j : Nat} {zs : List Var} {k : Stmt} {fs : List Nat} {te : Ty}
+      {ms : List Nat} {env : Val} {f : Nat} {fn : Fn} :
+      m.st c = some ⟨true, some (.pkg fs te ms env [])⟩ → fs[j]? = some f → P[f]? = some fn →
+      m.st x = none →
+      Step P m (.callcE x c j zs k) (.ok (handMem m c x env fn.resOwn) (handStmt x c f zs fs te ms m.nv k))
   | catchP {m m1 : Mem} {x : Var} {m0 : Mem} {s : Stmt} :
       Step P m s (.panic m1) → (m1.st x).isSome →
       Step P m (.catchR x m0 s) (.ok (m1.set x ⟨false, some (.int 1)⟩) .skip)

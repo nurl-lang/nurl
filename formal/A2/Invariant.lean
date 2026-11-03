@@ -1042,6 +1042,7 @@ def Stmt.codesOK (P : Prog) : Stmt → Prop
   | .withLock _ _ s => s.codesOK P
   | .scopeL _ _ _ s => s.codesOK P
   | .withElem _ _ _ s => s.codesOK P
+  | .callcE _ _ _ _ s => s.codesOK P
   | _ => True
 
 def ProgCodes (P : Prog) : Prop := ∀ fn ∈ P, fn.body.codesOK P
