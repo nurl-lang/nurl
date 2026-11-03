@@ -526,7 +526,10 @@ theorem progress {P : Prog}
     · obtain ⟨sl, a', hsl, hd⟩ := dropSlot_exists hi.toMInv hx
       -- the payload goes back into its block, or `x`'s slot is dropped
       obtain ⟨m', hrl⟩ := Release.exists (k := kk) (t := t) hsl hd
-      exact Or.inr <| Or.inr ⟨_, Step.scopeLSkip hrl⟩
+      -- A3.5's second cut: unless it fails the crossing check, which panics
+      by_cases hck : GiveCheck m x sl
+      · exact Or.inr <| Or.inr ⟨_, Step.scopeLSkip hrl fun sl' h => by rw [hsl] at h; cases h; exact hck⟩
+      · exact Or.inr <| Or.inr ⟨_, Step.scopeLFail hsl hck⟩
     · exact Or.inr (Or.inl hbl)
     · cases r with
       | ok m' k' => exact Or.inr <| Or.inr ⟨_, Step.scopeLIn hr⟩

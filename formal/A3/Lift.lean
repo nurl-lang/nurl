@@ -335,16 +335,18 @@ theorem Step.lifts {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
   | scopeLIn _ ih =>
     obtain ⟨s'', hg, hs⟩ := ih
     exact ⟨_, GhostRel.scopeL _ _ _ hg, Step.scopeLIn hs⟩
-  | scopeLSkip hrl =>
+  | scopeLSkip hrl hck =>
     cases hrl with
-    | put hx hg hk =>
-      exact ⟨_, GhostRel.refl _, Step.scopeLSkip (m := liftMem a2 m) (Release.put hx hg hk)⟩
+    | put hx hg hk hck' =>
+      exact ⟨_, GhostRel.refl _, Step.scopeLSkip (m := liftMem a2 m) (Release.put hx hg hk hck') hck⟩
     | drop hc hx hdr =>
-      exact ⟨_, GhostRel.refl _, Step.scopeLSkip (m := liftMem a2 m) (Release.drop hc hx (DropSlot.lift hdr hd))⟩
+      exact ⟨_, GhostRel.refl _,
+        Step.scopeLSkip (m := liftMem a2 m) (Release.drop hc hx (DropSlot.lift hdr hd)) hck⟩
+  | scopeLFail hx hck => exact ⟨_, GhostRel.refl _, Step.scopeLFail (m := liftMem a2 m) hx hck⟩
   | @scopeLP m1 _ _ _ _ _ hs hrl ih =>
     -- A3.3: the payload goes back on the way out, or the slot is dropped
     cases hrl with
-    | put hx hg hk => exact Step.scopeLP (m1 := liftMem a2 m1) ih (Release.put hx hg hk)
+    | put hx hg hk hck => exact Step.scopeLP (m1 := liftMem a2 m1) ih (Release.put hx hg hk hck)
     | drop hc hx hdr =>
       exact Step.scopeLP (m1 := liftMem a2 m1) ih (Release.drop hc hx (DropSlot.lift hdr ((Step.grows hs).disj hd hf)))
 

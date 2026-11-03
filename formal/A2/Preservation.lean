@@ -1968,7 +1968,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
     have hxsp : x ∉ k.spine := by
       have := hi.spineNd; simp only [Stmt.spine, List.nodup_cons] at this; exact this.1
     cases hst with
-    | scopeLSkip hrl =>
+    | scopeLSkip hrl _ =>
       have hanch : RootbAnch Γ F := by
         intro p E hp hm
         refine hi.anch p E hp hm ?_
@@ -1982,7 +1982,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       -- the payload goes back into its block, or `x`'s slot is dropped as a scope's
       have key : MInv m' (exitScope x Γ) ∧ Covers m' := by
         cases hrl with
-        | put hsl hg hkb =>
+        | put hsl hg hkb _ =>
           exact ⟨step_release hi.toMInv hanch hx hnrb hxF hxn hty hsl hg hkb, covers_release_put hi.cover hsl hkb⟩
         | drop _ hsl hd =>
           exact ⟨step_scopeExit hi.toMInv hanch hx hnrb hxF hsl hd hxn, covers_remove hi.cover hsl hd⟩
@@ -2014,6 +2014,15 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       · intro v E' hv _
         obtain ⟨hvx, E, hE, _⟩ := hrel v E' hv
         exact ⟨by simp [Stmt.spine, hvx], E, hE⟩
+    | scopeLFail _ _ =>
+      -- A3.5's second cut: the give-back fails its crossing check: a panic in
+      -- the scope, over the same store and context
+      refine ⟨Γ, StmtT.scopeL ⟨Ex, hx, hnrb, hty⟩ hxF ((StmtT.panic hi.wf hi.names (fun _ => rfl)
+          (fun _ E h => ⟨E, h, rfl, rfl, fun _ => rfl⟩) (DKeep.refl _ _) (DStay.refl _ _)).weakenOut
+          hi.wf hi.names (skip_inv hs)) hpx,
+        hi.respine rfl (fun v hv => by simpa [Stmt.vars] using hv) hi.catchOK trivial ⟨hi.dtorIn.1, trivial⟩,
+        Nat.le_refl _, ⟨fun v E hv hvs => ⟨hvs, E, hv, rfl, rfl, fun _ => rfl⟩, fun v E' hv hvs => ⟨hvs, E', hv⟩,
+          DKeep.refl _ _⟩, fun _ _ => rfl⟩
     | scopeLIn hst' =>
       have hi0 : Inv m Γ F k := hi.scopeLIn hx hnrb
       obtain ⟨Γ', ht', hi', hnv, hk, hfz⟩ := ihs hcd hi0 hst'

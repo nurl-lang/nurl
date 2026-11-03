@@ -152,15 +152,17 @@ theorem Release.nid {m m' : Mem} {k : Nat} {t : Ty} {x : Var} (h : Release m k t
     the payload goes back, or `x`'s slot is dropped. -/
 theorem Release.exists {m : Mem} {k : Nat} {t : Ty} {x : Var} {sl : Slot} {a' : Nat → Bool}
     (hsl : m.st x = some sl) (hd : DropSlot m.alloc sl a') : ∃ m', Release m k t x m' := by
-  by_cases hput : m.blk k = some ⟨t, .lock, none⟩ ∧ Giveable m.blk t sl
-  · obtain ⟨hkb, hg⟩ := hput
+  by_cases hput : m.blk k = some ⟨t, .lock, none⟩ ∧ Giveable m.blk t sl ∧ GiveCheck m x sl
+  · obtain ⟨hkb, hg, hck⟩ := hput
     obtain ⟨o, w⟩ := sl
     cases w with
     | none => cases o <;> simp [Giveable] at hg
-    | some v => exact ⟨_, Release.put hsl hg hkb⟩
-  · have hc : m.blk k ≠ some ⟨t, .lock, none⟩ ∨ ¬ Giveable m.blk t sl := by
+    | some v => exact ⟨_, Release.put hsl hg hkb hck⟩
+  · have hc : m.blk k ≠ some ⟨t, .lock, none⟩ ∨ ¬ Giveable m.blk t sl ∨ ¬ GiveCheck m x sl := by
       by_cases h1 : m.blk k = some ⟨t, .lock, none⟩
-      · exact Or.inr fun h2 => hput ⟨h1, h2⟩
+      · by_cases h2 : Giveable m.blk t sl
+        · exact Or.inr (Or.inr fun h3 => hput ⟨h1, h2, h3⟩)
+        · exact Or.inr (Or.inl h2)
       · exact Or.inl h1
     exact ⟨_, Release.drop hc hsl hd⟩
 

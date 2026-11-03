@@ -407,16 +407,17 @@ theorem Step.restrict {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
     obtain ⟨r1, h1, hd⟩ := ih
     obtain ⟨s1, rfl, hg⟩ := ResDown.ok_inv hd
     exact ⟨_, .scopeLIn h1, rfl, .scopeL _ _ _ hg⟩
-  | scopeLSkip hrl =>
+  | scopeLSkip hrl hck =>
     cases hrl with
-    | put hx hg hk => exact ⟨_, .scopeLSkip (.put hx hg hk), rfl, .refl _⟩
-    | drop hc hx hd => exact ⟨_, .scopeLSkip (.drop hc hx (DropSlot.restrict hx hd hav)), rfl, .refl _⟩
+    | put hx hg hk hck' => exact ⟨_, .scopeLSkip (.put hx hg hk hck') hck, rfl, .refl _⟩
+    | drop hc hx hd => exact ⟨_, .scopeLSkip (.drop hc hx (DropSlot.restrict hx hd hav)) hck, rfl, .refl _⟩
+  | scopeLFail hx hck => exact ⟨_, .scopeLFail hx hck, rfl, .refl _⟩
   | scopeLP hs hrl ih =>
     obtain ⟨r1, h1, hd'⟩ := ih
     obtain rfl := ResDown.panic_inv hd'
     -- A3.3: the payload goes back on the way out, or the slot is dropped
     cases hrl with
-    | put hx hg hk => exact ⟨_, .scopeLP h1 (.put hx hg hk), rfl⟩
+    | put hx hg hk hck => exact ⟨_, .scopeLP h1 (.put hx hg hk hck), rfl⟩
     | drop hc hx hd => exact ⟨_, .scopeLP h1 (.drop hc hx (DropSlot.restrict hx hd (Step.avoids hs hb hav hf hp))), rfl⟩
 
 end A3

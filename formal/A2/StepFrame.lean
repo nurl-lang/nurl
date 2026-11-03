@@ -203,7 +203,7 @@ theorem step_new {P : Prog} {m m' : Mem} {s s' : Stmt} (hst : Step P m s (.ok m'
     ∀ v, m.st v = none → m'.st v ≠ none → v ∈ s'.spine := by
   generalize hr : Res.ok m' s' = r at hst
   induction hst generalizing m' s' with
-  | seqSkip | iteT _ _ | iteF _ | «while» | frozenSkip | catchSkip =>
+  | seqSkip | iteT _ _ | iteF _ | «while» | frozenSkip | catchSkip | scopeLFail _ _ =>
     cases hr; intro v h h'; exact absurd h h'
   | seqL _ ih | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | catchIn _ ih | scopeDIn _ ih | scopeLIn _ ih =>
     cases hr; intro v h h'
@@ -345,6 +345,10 @@ theorem step_gone {P : Prog} {m m' : Mem} {s s' : Stmt} (hst : Step P m s (.ok m
     cases hr; intro v h _
     simp only [Stmt.spine, List.mem_cons, List.not_mem_nil, or_false] at h
     subst h; rw [hrel.st]; simp
+  | scopeLFail _ _ =>
+    cases hr; intro v h h'
+    simp only [Stmt.spine, List.mem_cons, List.not_mem_nil, or_false] at h h'
+    exact absurd h h'
   | scopeSkip _ _ | rbindSkip _ | scopeDMoved _ =>
     cases hr; intro v h _
     simp only [Stmt.spine, List.mem_cons, List.not_mem_nil, or_false] at h

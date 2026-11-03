@@ -364,6 +364,7 @@ theorem Step.ownedId {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r
     cases hrl with
     | put _ _ _ => exact fun i hi => .inl (OwnedId.of_remove hi)
     | drop _ _ _ => exact fun i hi => .inl (OwnedId.of_remove hi)
+  | scopeLFail _ _ => exact fun i hi => .inl hi
   | scopeLP _ hrl ih => exact fun i hi => ih i (Release.ownedId hrl hi)
 
 /-- A panicking step allocates nothing: its owned trees were owned before. -/

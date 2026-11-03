@@ -438,6 +438,7 @@ theorem _root_.A2.Step.cell {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step 
     · exact .inl (CellAt.of_st rfl hc)
   | scopeLIn _ ih => exact ih
   | scopeLSkip hrl => exact fun hc => .inl (CellAt.of_upd hrl.st hc)
+  | scopeLFail _ _ => exact fun hc => .inl hc
   | scopeLP _ hrl ih =>
     intro k hc
     have h := ih (CellAt.of_upd hrl.st hc)
