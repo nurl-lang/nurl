@@ -642,13 +642,90 @@ def Stmt.withTryRead (a o g y x : Var) (s e : Stmt) : Stmt :=
 def Stmt.withTryWrite (a o x : Var) (s e : Stmt) : Stmt :=
   .letv o (.rwTryWrite a) (.ite (.isl o) e (.withLock a x s))
 
+/-- A3.2/A3.3: a call of `f` on `x` whose result `c` moves out to `z`, a
+    binding of the caller's: the tail of `rw_get`, `locked_get`,
+    `locked_apply` and `wguard_apply`, where `x` is the payload (lent or
+    checked out) and the result is handed back once the lock is let go. -/
+def Stmt.callOut (x c z : Var) (f : Nat) : Stmt := .letcall c f [x] (.assign z (.var c))
+
 /-- A3.3: `rw_get a`, the payload copied out under a read (`stdlib/std/rwlock.nu`:
     `rw_read`, then `mem_dup ( rguard_get g )`): the read scope's body hands
     the payload `x`, lent, to the copy `f` (`mem_dup` at the payload's type,
     a function of the program, `DupFn`), and the copy `c` moves out to `z`,
     a binding of the caller's, before the guard goes. -/
 def Stmt.rwGet (a g y x c z : Var) (f : Nat) : Stmt :=
-  Stmt.withRead a g y x (.letcall c f [x] (.assign z (.var c)))
+  Stmt.withRead a g y x (Stmt.callOut x c z f)
+
+/-- A3.2: `locked_apply a f` (and `rw_apply`, an `RwLocked`'s write scope being
+    a `withLock`): the payload checked out to `x`, the closure `f` (a function
+    of the program, `ApplyFn`) run on it `inout`, and its result `c` moved out
+    to `z`, a binding of the caller's, before the lock is let go.  Inside a
+    write scope already open, the tail alone (`Stmt.callOut`) is
+    `wguard_apply`. -/
+def Stmt.lockedApply (a x c z : Var) (f : Nat) : Stmt := .withLock a x (Stmt.callOut x c z f)
+
+/-- A3.2: `locked_get a`, a copy taken under the lock (`stdlib/std/thread.nu`:
+    `mem_dup . p val` with the mutex held): `locked_apply`'s form, `f` being
+    `mem_dup` at the payload's type (`DupFn`), which takes the payload lent.
+    The payload is checked out for the copy, as the runtime holds the mutex for
+    it. -/
+def Stmt.lockedGet (a x c z : Var) (f : Nat) : Stmt := Stmt.lockedApply a x c z f
+
+/-- A3.2: `locked_set a y`, the value replaced under the lock
+    (`stdlib/std/thread.nu`: `mem_send_check x`, then `= . p val x` with the
+    mutex held, the old value dropped).  The new value faces the crossing check
+    before the lock is touched, as the runtime's: it moves into a fresh lock
+    block `b`, a box no other binding reaches (`locked_new`'s check, which
+    panics with the store as it was).  Then `a`'s payload is checked out to
+    `x` (waiting while it is out, as the runtime waits on `taken`), replaced by
+    the box's value (`assign` drops the old one), and given back at the scope's
+    end.  The box, empty, goes with its scope. -/
+def Stmt.lockedSet (t : Ty) (a b x y : Var) : Stmt :=
+  .letv b (.lockNew t y) (.withLock a x (.assign x (.lockTake b)))
+
+/-- A3.2: `locked_await a f`, a monitor's wait, as rounds of check-outs: while
+    the answer `q` (a caller's option, `none` to start) is `none`, a round is
+    `locked_apply`'s form, `f` run on the checked-out payload and its answer
+    (an `Option`) moved into `q`.  Each round lets the lock go, as the
+    runtime's `cond_wait` lets the mutex go between runs; a round waits at its
+    check-out while another thread holds the lock (`Blocked`).  The loop ends on
+    a `some`, whose payload the caller takes (`taker q`). -/
+def Stmt.lockedAwait (a x c q : Var) (f : Nat) : Stmt := .while (.isl q) (Stmt.lockedApply a x c q f)
+
+/-! A3.2: a `Mutex` (`stdlib/std/thread.nu`) guards nothing in memory: it is a
+lock of an integer, `lk int`, whose payload no one reads.  `mutex_new` is
+`locked_new` of an integer, `Mutex_share` is `lockClone`, its drop a share's;
+`mutex_lock` takes the integer out (`lockTake`: every other `mutex_lock`
+waits until it is back), `mutex_unlock` puts one back (`lockRestore`), and
+`mutex_with` is A3.2's `withLock`.  What the data beside a `Mutex` is allowed
+is its own type's business. -/
+
+/-- `mutex_new`, its word taken from the integer binding `y`. -/
+def Rhs.mutexNew (y : Var) : Rhs := .lockNew .int y
+
+/-- `mutex_lock m`, the integer taken out to `u` for what follows (`s`). -/
+def Stmt.mutexLock (u m : Var) (s : Stmt) : Stmt := .letv u (.lockTake m) s
+
+/-- `mutex_unlock m`, the integer `u` put back, its answer in `r`. -/
+def Stmt.mutexUnlock (r m u : Var) (s : Stmt) : Stmt := .letv r (.lockRestore m u) s
+
+/-- `mutex_with m body`: lock, run, unlock. -/
+def Stmt.mutexWith (m x : Var) (s : Stmt) : Stmt := .withLock m x s
+
+/-- A3.2: `locked_update ( vec_at v i ) f`, a lock reached as an element of the
+    `Vec` `v`: element `i` handed over to `e` (A2-elem's `withElem`: it moves
+    out, and back at index `i` after), and `withLock` on `e`, an owner the body
+    names neither (`withLock`'s premise) nor reaches through `v` (`withElem`'s:
+    the body does not name `v`). -/
+def Stmt.withLockElem (v : Var) (i : Expr) (e x : Var) (s : Stmt) : Stmt :=
+  .withElem v i e (.withLock e x s)
+
+/-- A3.2: `locked_update . y l f`, a lock reached as a field of the struct `y`:
+    `y` taken apart into the lock `l` and the rest `w` (`unpair`, as a field
+    replaced in place is), `withLock` on `l`, an owner the body does not name,
+    and the struct put back together (`= y @ { l w }`). -/
+def Stmt.withLockField (y l w x : Var) (s : Stmt) : Stmt :=
+  .unpair y l w (.seq (.withLock l x s) (.assign y (.pair l w)))
 
 /-- A3.6: an update of a `Locked` global set at start (`locked_update g f`,
     with `f`'s body as `s` and its argument as `x`): the global's handle,
