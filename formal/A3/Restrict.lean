@@ -202,6 +202,10 @@ theorem EvalR.restrict {m : Mem} {r : Rhs} {res : RRes} (h : EvalR m r res) {a2 
   | rwRead hy hk hfr => exact ⟨_, .rwRead hy hk hfr, rfl, rfl, rfl⟩
   | glob hg hf => exact ⟨_, .glob hg hf, rfl, rfl, rfl⟩
   | globP hg => exact ⟨_, .globP hg, trivial⟩
+  -- A3.2's second cut: a take and a restore check no address
+  | lockTake hy hk hnv => exact ⟨_, .lockTake hy hk hnv, rfl, rfl, rfl⟩
+  | lockRestore hy h1 hk => exact ⟨_, .lockRestore hy (TakeVal.restrict h1 a2) hk, rfl, rfl, rfl⟩
+  | lockRestoreP hy hk => exact ⟨_, .lockRestoreP hy hk, trivial⟩
 
 theorem EvalR.restrict_ok {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.ok v o m1))
     {a2 : Nat → Bool} (hav : Avoids m a2) (hb : BorFree m) (hp : PayOff m a2) (hf : FreshFrom a2 m.nid) :

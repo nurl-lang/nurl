@@ -50,6 +50,8 @@ theorem RhsT.ctxRel {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry}
   | lockNew hy _ _ _ hp => exact hp.ctxRel hy hanch
   | cellNew hy _ _ _ hp => exact hp.ctxRel hy hanch
   | chanSend _ _ _ hy _ _ hp => exact hp.ctxRel hy hanch
+  | lockRestore _ _ _ hy _ _ hp => exact hp.ctxRel hy hanch
+  | lockTake _ _ _ => exact CtxRel.refl _
   | arcClone _ _ _ => exact CtxRel.refl _
   | lockClone _ _ _ => exact CtxRel.refl _
   | cellClone _ _ _ _ => exact CtxRel.refl _

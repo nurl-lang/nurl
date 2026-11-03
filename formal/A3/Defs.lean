@@ -160,6 +160,36 @@ theorem lk_noCell {t : Ty} (h : (Ty.lk t).ok = true) : t.hasCell = false := by
   simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true] at h
   exact h.2
 
+/-! ### A3.2's second cut: `locked_take` / `locked_restore` (h267)
+
+h267 (`option_taken_from_locked_stays_in_slot`): an option holding an `Arc`,
+taken out of a `Locked` and restored in a loop, was left in the lock's slot
+by `locked_take`, and the restore dropped what the slot held, which was the
+value handed back.  In the model the take moves the payload out and the
+block holds nothing (`EvalR.lockTake`: the runtime's zero bytes and its
+`taken` flag), so the restore finds nothing to drop: it moves the value in,
+freeing no address (`EvalR.lockRestore`).  The option's `Arc` is kept alive
+by the lock's payload while it is in (`Blk.keeps`) and by the taker's slot
+while it is out. -/
+
+/-- A take leaves the block holding nothing, the payload handed out as it
+    was, and frees nothing. -/
+theorem lockTake_empties {m m' : Mem} {a : Var} {v : Val} {o : Bool}
+    (h : EvalR m (.lockTake a) (.ok v o m')) :
+    m'.alloc = m.alloc ∧ ∃ k t, m.blk k = some ⟨t, .lock, some v⟩ ∧ m'.blk k = some ⟨t, .lock, none⟩ := by
+  cases h with
+  | @lockTake _ _ k t _ _ hk _ => exact ⟨rfl, k, t, hk, by simp [upd]⟩
+
+/-- ... and a restore, into a block that holds nothing, frees nothing either:
+    no address is freed (what `y` owned becomes the payload). -/
+theorem lockRestore_frees_nothing {m m' : Mem} {a y : Var} {v : Val} {o : Bool}
+    (h : EvalR m (.lockRestore a y) (.ok v o m')) :
+    m'.alloc = m.alloc ∧ ∃ k t w, m.blk k = some ⟨t, .lock, none⟩ ∧ m'.blk k = some ⟨t, .lock, some w⟩ := by
+  cases h with
+  | @lockRestore _ _ _ k t w m1 _ h1 hk =>
+    have ha := TakeVal.alloc h1
+    exact ⟨ha, k, t, w, by rw [← TakeVal.blk h1]; exact hk, by simp [upd]⟩
+
 /-! ### A3.6: module globals, as A2 types them
 
 A global set at start is read at a type that synchronises itself

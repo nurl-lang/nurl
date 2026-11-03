@@ -198,6 +198,7 @@ theorem _root_.A2.EvalR.cellSt {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : 
   | cellNew h1 _ => exact h1.cell.2 (CellAt.of_st rfl hc)
   | chanSend _ h1 _ _ _ _ => exact h1.cell.2 (CellAt.of_st rfl hc)
   | chanSendClosed _ h1 _ _ => exact h1.cell.2 (CellAt.of_st rfl hc)
+  | lockRestore _ h1 _ => exact h1.cell.2 (CellAt.of_st rfl hc)
   | _ => exact CellAt.of_st rfl hc
 
 /-- **What a right-hand side hands back** holds a cell share a slot held, or
@@ -248,6 +249,9 @@ theorem _root_.A2.EvalR.cellVal {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h :
   | chanRecvNone _ _ _ _ => cases hs with | inl hs => cases hs
   | chanClose _ _ _ => cases hs
   | rwRead _ _ _ => cases hs
+  -- A3.2's second cut: a taken payload was a lock's (which holds no cell share)
+  | lockTake _ hk _ => exact .inr (.inl ⟨_, _, _, hk, hs⟩)
+  | lockRestore _ _ _ => cases hs
   -- A3.6: a global's share is a lock share or an `arc` share, never a cell's
   | glob _ hf => rcases hf with ⟨_, _, _, _, rfl, _⟩ | ⟨_, _, _, _, rfl, _⟩ <;> cases hs
 

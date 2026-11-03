@@ -272,6 +272,9 @@ theorem RBlocked.of_eq {m m' : Mem} (hst : m'.st = m.st) (hb : m'.blk = m.blk) {
   | rwRead a =>
     obtain ⟨o, k, t, h1, h2⟩ := h
     exact ⟨o, k, t, hst ▸ h1, hb ▸ h2⟩
+  | lockTake a =>
+    obtain ⟨o, k, t, h1, h2⟩ := h
+    exact ⟨o, k, t, hst ▸ h1, hb ▸ h2⟩
   | _ => exact h
 
 /-- A3.3: so does a statement that waits. -/

@@ -1715,6 +1715,16 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
     have hc : S.canon Γa (S.ρ a) = some (S.liftE a Ea) := by rw [canon_ρ h, ha]; rfl
     exact ⟨intE, RhsT.chanClose hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab ha]; exact ht),
       fun x => intE_lift x⟩
+  | @lockTake a Ea t ha hl ht =>
+    have hc : S.canon Γa (S.ρ a) = some (S.liftE a Ea) := by rw [canon_ρ h, ha]; rfl
+    exact ⟨_, RhsT.lockTake hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab ha]; exact ht),
+      fun x => lockE_lift x t⟩
+  | @lockRestore a y Ea Ey t Γa1 D ha hl ht hy hly htyy hpa =>
+    have hca : S.canon Γa (S.ρ a) = some (S.liftE a Ea) := by rw [canon_ρ h, ha]; rfl
+    have hc1 : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
+    obtain ⟨D1, hp1, _, _⟩ := pushArg_ren h hab hy hpa
+    exact ⟨intE, RhsT.lockRestore hca (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab ha]; exact ht)
+      hc1 (by rw [liftE_live]; exact hly) (by rw [liftE_ty' h hab hy]; exact htyy) hp1, fun x => intE_lift x⟩
   | @lockClone a Ea t ha hl ht =>
     have hc : S.canon Γa (S.ρ a) = some (S.liftE a Ea) := by rw [canon_ρ h, ha]; rfl
     refine ⟨_, RhsT.lockClone hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab ha]; exact ht),
@@ -2971,6 +2981,7 @@ theorem RhsT.absOK {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : Rhs
   | lockNew hy _ _ _ hpa => exact PushArg.absOK hy hpa hab
   | cellNew hy _ _ _ hpa => exact PushArg.absOK hy hpa hab
   | chanSend _ _ _ hy _ _ hpa => exact PushArg.absOK hy hpa hab
+  | lockRestore _ _ _ hy _ _ hpa => exact PushArg.absOK hy hpa hab
   | @takel y Ey _ _ hy _ hm _ _ _ =>
     exact (hab.kill _ _ _).setE' hab hy rfl rfl (by rw [hm]; simp) (fun hf => absurd hf (by simp [hm]))
   | @taker y Ey _ _ hy _ hm _ _ _ =>

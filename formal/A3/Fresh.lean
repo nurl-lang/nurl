@@ -74,6 +74,9 @@ theorem EvalR.grows {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (
   | chanRecv _ hk _ _ => exact ⟨Nat.le_refl _, fun _ hi => .inl hi, BlkLe.setLock hk _⟩
   | chanClose _ hk => exact ⟨Nat.le_refl _, fun _ hi => .inl hi, BlkLe.setLock hk _⟩
   | rwRead _ _ hfr => exact ⟨Nat.le_succ _, fun _ hi => .inl hi, BlkLe.fresh hfr _⟩
+  | lockTake _ hk _ => exact ⟨Nat.le_refl _, fun _ hi => .inl hi, BlkLe.setLock hk _⟩
+  | lockRestore _ h1 hk =>
+    exact (TakeVal.grows h1).trans ⟨Nat.le_refl _, fun _ hi => .inl hi, BlkLe.setLock hk _⟩
   | _ => exact Grows.of_eq rfl rfl
 
 theorem BindParams.grows {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var} {base i : Nat}
@@ -180,6 +183,7 @@ theorem EvalR.gl {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.ok
   | cellNew h1 _ => have h := TakeVal.gl h1; exact h
   | chanSend _ h1 _ _ _ => have h := TakeVal.gl h1; exact h
   | chanSendClosed _ h1 _ _ => have h := TakeVal.gl h1; exact h
+  | lockRestore _ h1 _ => have h := TakeVal.gl h1; exact h
   | _ => rfl
 
 theorem BindParams.gl {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var} {base i : Nat}

@@ -405,6 +405,13 @@ inductive Rhs where
   | glob (g : Nat) (t : Ty)    -- a read of global `g`, of type `t`: a new share of its block
                                -- (`: ( Locked T ) h g` clones the handle; passing `g` to a
                                -- function lends the clone)
+  -- A3.2's second cut: a `Locked`'s value checked out to the caller and back
+  -- (`stdlib/std/thread.nu`; the `taken` flag is the payload being out)
+  | lockTake (a : Var)         -- `locked_take a`: the payload of the lock block `a` shares moves
+                               -- out, owned; the block holds nothing until a restore, and every
+                               -- other operation on it waits
+  | lockRestore (a y : Var)    -- `locked_restore a y`: `y`'s value moves back in, to a block whose
+                               -- payload is out (answer 0); with the payload in, a panic
 deriving DecidableEq, Repr
 
 /-! ### Memory (here because a run-time form records a snapshot of it) -/

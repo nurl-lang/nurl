@@ -325,6 +325,24 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
       | pair _ hf =>
         cases hf with
         | int => exact ⟨_, EvalR.chanClose hv hk hnv⟩
+  | lockTake ha hl hty =>
+    -- A3.2's second cut: the payload, unless it is out or read
+    obtain ⟨o, k, hv⟩ := hi.lk_slot ha hl hty
+    obtain ⟨ob, hk⟩ := hi.lk_val ha hl hty hv
+    have hnv : ¬ HasView m.blk k := fun h => hnb ⟨o, k, .int, hv, Or.inr h⟩
+    cases ob with
+    | none => exact absurd ⟨o, k, _, hv, Or.inl hk⟩ hnb
+    | some p => exact ⟨_, EvalR.lockTake hv hk hnv⟩
+  | lockRestore ha hl hty hy hly _ _ =>
+    -- ... a restore puts the value back, or panics: it never waits
+    obtain ⟨o, k, hv⟩ := hi.lk_slot ha hl hty
+    obtain ⟨ob, hk⟩ := hi.lk_val ha hl hty hv
+    cases ob with
+    | none =>
+      obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly
+      have hb1 : m1.blk = m.blk := by cases htk <;> rfl
+      exact ⟨_, EvalR.lockRestore hv htk (by rw [hb1]; exact hk)⟩
+    | some p => exact ⟨_, EvalR.lockRestoreP hv hk⟩
   | arcGet ha hl hty _ _ =>
     obtain ⟨o, k, p, hv⟩ := hi.arc_slot ha hl hty
     obtain ⟨bl, hbl, _⟩ := (hi.arc_val ha hl hty hv).1.rd

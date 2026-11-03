@@ -698,6 +698,21 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
   | glob {g : Nat} {t : Ty} :
       t.sync = true → t.ok = true →
       RhsT Γ F (.glob g t) ⟨t, .own, true, [], [], false, false⟩ Γ
+  /-- A3.2's second cut: `locked_take a`, through a live lock share of a
+      `Locked t`: the payload, owned, of its type, holding nothing (it views
+      nothing; its shares the block kept alive) — `withLock`'s `lockE t`
+      (an integer is a plain integer). -/
+  | lockTake {a : Var} {E : Entry} {t : Ty} :
+      Γ a = some E → E.live = true → E.ty = .lk t →
+      RhsT Γ F (.lockTake a) (lockE t) Γ
+  /-- ... `locked_restore a y`: `y`'s value, a `t`, is handed back as
+      `vec_push` takes it (`PushArg`: an owner moves and its entry dies, an
+      integer is copied), as `chan_send` hands its value over; the answer is
+      an integer. -/
+  | lockRestore {a y : Var} {Ea Ey : Entry} {t : Ty} {Γ1 : Ctx} {D : List Dep} :
+      Γ a = some Ea → Ea.live = true → Ea.ty = .lk t →
+      Γ y = some Ey → Ey.live = true → Ey.ty = t → PushArg Γ F y Ey t D Γ1 →
+      RhsT Γ F (.lockRestore a y) intE Γ1
 
 /-! ### Calls -/
 
@@ -743,6 +758,8 @@ theorem RhsT.out {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT 
   | cellNew => exact ⟨Or.inl rfl, rfl⟩
   | cellClone => exact ⟨Or.inl rfl, rfl⟩
   | glob => exact ⟨Or.inl rfl, rfl⟩
+  | @lockTake _ _ t => unfold lockE; split <;> first | exact ⟨Or.inl rfl, rfl⟩ | exact ⟨Or.inr rfl, rfl⟩
+  | lockRestore => exact ⟨Or.inr rfl, rfl⟩
 
 /-- What the summary pair `(j, k)` means at this call.  An integer argument
     lends nothing. -/
@@ -1642,6 +1659,8 @@ def Rhs.vars : Rhs → List Var
   | .cellNew _ y => [y]
   | .cellClone a => [a]
   | .glob _ _ => []
+  | .lockTake a => [a]
+  | .lockRestore a y => [a, y]
 
 def Edit.vars : Edit → List Var
   | .push y => [y]

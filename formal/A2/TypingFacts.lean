@@ -639,6 +639,7 @@ theorem RhsT.dkeep {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (h : RhsT
   | lockNew hy _ _ _ hp => exact hp.dkeep hy
   | cellNew hy _ _ _ hp => exact hp.dkeep hy
   | chanSend _ _ _ hy _ _ hp => exact hp.dkeep hy
+  | lockRestore _ _ _ hy _ _ hp => exact hp.dkeep hy
   | _ => exact DKeep.refl Γ []
 
 theorem DKeep.killNames {Γ Γ' : Ctx} {sp : List Var} (h : DKeep Γ Γ' sp) :
@@ -890,6 +891,7 @@ theorem RhsT.dstay {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (h : RhsT
   | lockNew hy _ _ _ hp => exact hp.dstay hy
   | cellNew hy _ _ _ hp => exact hp.dstay hy
   | chanSend _ _ _ hy _ _ hp => exact hp.dstay hy
+  | lockRestore _ _ _ hy _ _ hp => exact hp.dstay hy
   | _ => exact DStay.refl Γ []
 
 theorem DStay.killNames {Γ Γ' : Ctx} {sp : List Var} (h : DStay Γ Γ' sp) :

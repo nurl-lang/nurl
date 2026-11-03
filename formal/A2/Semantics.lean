@@ -288,8 +288,8 @@ def Giveable (B : Nat → Option Blk) (t : Ty) : Slot → Prop
     `t`: `x`'s value goes back into the block, which has it checked out; or
     else `x`'s slot is dropped as a scope's is.  That is when the block is
     gone (no share reaches it any more), or `x` holds nothing it can give
-    back (it was moved out: the lock stays checked out for good, as
-    `locked_take` without `locked_restore` leaves it); a typed program meets
+    back (it was moved out: the lock stays checked out until a restore, as
+    `locked_take` leaves it, `Rhs.lockTake`); a typed program meets
     no other case (the block is the one `x` took its payload from), but
     the rule needs no invariant to say so. -/
 inductive Release (m : Mem) (k : Nat) (t : Ty) (x : Var) : Mem → Prop
@@ -562,6 +562,27 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
       one thread, run from the empty store, holds none.) -/
   | globP {g : Nat} {t : Ty} :
       (¬ ∃ v, m.gl g = some v ∧ GlobFits m.blk t v) → EvalR m (.glob g t) .panic
+  /-- A3.2's second cut: `locked_take a`: the payload of the lock block `a`
+      shares moves out to the caller, owned (an integer is a plain integer, as
+      `withLock` checks one out), and the block holds nothing, as `locked_take`
+      leaves zero bytes in the slot and sets `taken`.  With the payload out
+      (or a view of it living) it has no step: the thread waits (`RBlocked`),
+      as every operation on a taken `Locked` does. -/
+  | lockTake {a : Var} {o : Bool} {k : Nat} {t : Ty} {v : Val} :
+      m.st a = some ⟨o, some (.lk k)⟩ → m.blk k = some ⟨t, .lock, some v⟩ → ¬ HasView m.blk k →
+      EvalR m (.lockTake a) (.ok v v.owns { m with blk := upd m.blk k (some ⟨t, .lock, none⟩) })
+  /-- ... `locked_restore a y`: the value taken from `y` (an owner's tree
+      moves, an integer is copied) goes back into the block, whose payload is
+      out; the answer is 0. -/
+  | lockRestore {a y : Var} {o : Bool} {k : Nat} {t : Ty} {v : Val} {m1 : Mem} :
+      m.st a = some ⟨o, some (.lk k)⟩ → TakeVal m y v m1 → m1.blk k = some ⟨t, .lock, none⟩ →
+      EvalR m (.lockRestore a y)
+        (.ok (.int 0) false { m1 with blk := upd m1.blk k (some ⟨t, .lock, some v⟩) })
+  /-- ... and with the payload in, it panics ("the value was not taken"),
+      the store as it was. -/
+  | lockRestoreP {a y : Var} {o : Bool} {k : Nat} {t : Ty} {p : Val} :
+      m.st a = some ⟨o, some (.lk k)⟩ → m.blk k = some ⟨t, .lock, some p⟩ →
+      EvalR m (.lockRestore a y) .panic
 
 /-! ### Calls
 
@@ -611,6 +632,8 @@ def Rhs.rename (ρ : Var → Var) : Rhs → Rhs
   | .cellNew t y => .cellNew t (ρ y)
   | .cellClone a => .cellClone (ρ a)
   | .glob g t => .glob g t
+  | .lockTake a => .lockTake (ρ a)
+  | .lockRestore a y => .lockRestore (ρ a) (ρ y)
 
 def Edit.rename (ρ : Var → Var) : Edit → Edit
   | .push y => .push (ρ y)
@@ -757,6 +780,9 @@ def RBlocked (m : Mem) : Rhs → Prop
   | .chanClose a => ∃ o k t, m.st a = some ⟨o, some (.lk k)⟩ ∧
       (m.blk k = some ⟨t, .lock, none⟩ ∨ HasView m.blk k)
   | .rwRead a => ∃ o k t, m.st a = some ⟨o, some (.lk k)⟩ ∧ m.blk k = some ⟨t, .lock, none⟩
+  -- A3.2's second cut: a take waits while the payload is out or read
+  | .lockTake a => ∃ o k t, m.st a = some ⟨o, some (.lk k)⟩ ∧
+      (m.blk k = some ⟨t, .lock, none⟩ ∨ HasView m.blk k)
   | _ => False
 
 /-- A3.2/A3.5: `a` holds a share of the lock block `k`: a lock share, or a
