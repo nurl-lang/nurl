@@ -2287,6 +2287,311 @@ theorem accum_not_sync {Γ Δ : Ctx} {F : List Var} {x acc : Var} {k : Stmt} {Ec
     (hacc : Γ acc = some Ec) (hty : Ec.ty = .fn [0] .sync) : ¬ StmtT accP Γ F (.callcE x acc 0 [] k) Δ :=
   callcE_not_sync hacc hty (Or.inl rfl)
 
+/-! The accumulator's interface and code, typed (`FnOK`): the code changes the
+count in the environment it is handed `inout`.  Its contexts hold only plain
+bindings, which no change ends and no rule pins. -/
+
+/-- A context of plain bindings: none borrowed, none a destructor's, none
+    depending on anything. -/
+def PlainCtx (Γ : Ctx) : Prop :=
+  ∀ v E, Γ v = some E → E.vdeps = [] ∧ E.mode ≠ .rootb ∧ E.dtor = false ∧ E.dbind = false
+
+namespace PlainCtx
+variable {Γ : Ctx}
+
+theorem kill (h : PlainCtx Γ) (e : Eff) (hv : Bool) (x : Var) : A2.kill e hv x Γ = Γ := funext fun v => by
+  simp only [A2.kill]
+  cases hv' : Γ v with
+  | none => rfl
+  | some E => simp [killE_nil (h v E hv').1]
+
+theorem setE (h : PlainCtx Γ) {x : Var} {E : Entry}
+    (hE : E.vdeps = [] ∧ E.mode ≠ .rootb ∧ E.dtor = false ∧ E.dbind = false) : PlainCtx (A2.setE Γ x E) := by
+  intro v E' hv
+  by_cases hvx : v = x
+  · subst hvx; simp only [A2.setE, upd_same, Option.some.injEq] at hv; subst hv; exact hE
+  · simp only [A2.setE, upd_ne _ _ hvx] at hv; exact h v E' hv
+
+theorem upd_none (h : PlainCtx Γ) (x : Var) : PlainCtx (upd Γ x none) := by
+  intro v E' hv
+  by_cases hvx : v = x
+  · subst hvx; simp at hv
+  · simp only [upd_ne _ _ hvx] at hv; exact h v E' hv
+
+theorem exitScope (h : PlainCtx Γ) (x : Var) : A2.exitScope x Γ = upd Γ x none := by
+  unfold A2.exitScope; rw [h.kill]
+
+theorem endOK (h : PlainCtx Γ) (x : Var) : EndOK Γ x :=
+  ⟨fun p E hp hm => absurd hm (h p E hp).2.1, DtorSafe.of_none (fun v E hv => (h v E hv).2.2.1) _ _ _,
+    DbindSafe.of_none (fun v E hv => (h v E hv).2.2.2) x⟩
+
+end PlainCtx
+
+theorem intE_plain : intE.vdeps = [] ∧ intE.mode ≠ .rootb ∧ intE.dtor = false ∧ intE.dbind = false :=
+  ⟨by simp [intE, Entry.vdeps, Mode.ownSlot], by simp [intE], rfl, rfl⟩
+
+/-- A function of `inout` parameters that hold nothing by name starts in a
+    plain context. -/
+theorem sigCtx_plain {fn : Fn} (hio : ∀ pt ∈ fn.params, ∃ b, pt.1 = .inout b)
+    (hs : symNames fn.params = []) : PlainCtx (sigCtx fn) := by
+  intro v E hv
+  unfold sigCtx at hv
+  split at hv
+  · rename_i hvl
+    cases hv
+    obtain ⟨b, hb⟩ := hio _ (List.getElem_mem hvl)
+    generalize fn.params[v] = pt at hb
+    obtain ⟨pm, t⟩ := pt
+    simp only at hb; subst hb
+    simp [paramE, hs, Entry.vdeps, Mode.ownSlot]
+  · split at hv
+    · cases hv; simp [Entry.vdeps, resMode]; split <;> simp [Mode.ownSlot]
+    · cases hv
+
+/-- The accumulator's environment as its code changes it: the pair it
+    replaces. -/
+def accEp : Entry := ⟨accEnv, .inout .replace, true, [], [], false, false⟩
+
+/-- The accumulator code's context after its three `let`s ... -/
+def accCtx3 : Ctx := setE (setE (setE (sigCtx accCode) 2 intE) 3 intE) 4 intE
+
+/-- ... and after it has replaced the environment and set its result. -/
+def accCtx4 : Ctx := setE (setE accCtx3 0 accEp) 1 intE
+
+/-- **The accumulator's code is typed**: `: i n . e 0`, `: i p . e 1`,
+    `: i n2 + n 1`, `= e { n2 p }`, `^ n2` changes the environment it is handed
+    `inout` (it replaces it: `inout .replace`) and returns an integer, lending
+    and holding nothing. -/
+theorem accCode_ok : FnOK accP accCode := by
+  have h0 : PlainCtx (sigCtx accCode) := sigCtx_plain (fun pt hpt => by
+    simp only [accCode, List.mem_singleton] at hpt; subst hpt; exact ⟨_, rfl⟩) rfl
+  have hs0 : sigCtx accCode 0 = some accEp := by simp [sigCtx, accCode, paramE, accEnv, Ty.hasFn, accEp]
+  have hs1 : sigCtx accCode 1 = some ⟨.int, .bor, false, [], [], false, false⟩ := by
+    simp [sigCtx, accCode, resMode]
+  have hEp : accEp.vdeps = [] ∧ accEp.mode ≠ .rootb ∧ accEp.dtor = false ∧ accEp.dbind = false :=
+    ⟨by simp [accEp, Entry.vdeps, Mode.ownSlot], by simp [accEp], rfl, rfl⟩
+  have hp3 : PlainCtx accCtx3 :=
+    ((h0.setE (x := 2) intE_plain).setE (x := 3) intE_plain).setE (x := 4) intE_plain
+  have hp3a : PlainCtx (setE accCtx3 0 accEp) := hp3.setE hEp
+  have hp4 : PlainCtx accCtx4 := hp3a.setE (x := 1) intE_plain
+  have hpair : RhsT accCtx3 [] (.pair 4 3) ⟨.prod .int .int, .own, true, [], [], false, false⟩ accCtx3 :=
+    RhsT.pair (Ey := intE) (Ez := intE) (by simp [accCtx3, setE]) rfl PushArg.int (by simp [accCtx3, setE]) rfl
+      PushArg.int (fun h => by simp [intE, Mode.ownSlot] at h)
+  have hA0 : StmtT accP accCtx3 [] (.assign 0 (.pair 4 3)) (setE accCtx3 0 accEp) := by
+    have h := StmtT.assign (P := accP) (F := []) (x := 0) (Ex := accEp)
+      (E := ⟨.prod .int .int, .own, true, [], [], false, false⟩) (by simp [accCtx3, setE, hs0]) (by simp)
+      (Or.inr (Or.inl ⟨rfl, rfl⟩)) hpair rfl (by simp [Entry.vdeps, Mode.ownSlot, roots])
+      (by simp [accCtx3, setE, hs0]) (hp3.endOK 0).1 (hp3.endOK 0).2.1 rfl
+    rw [hp3.kill] at h; exact h
+  have hA1 : StmtT accP (setE accCtx3 0 accEp) [] (.assign 1 (.var 4)) accCtx4 := by
+    have h := StmtT.assign (P := accP) (F := []) (x := 1) (Γ := setE accCtx3 0 accEp)
+      (Ex := ⟨.int, .bor, false, [], [], false, false⟩) (E := { intE with dtor := false, dbind := false })
+      (by simp [accCtx3, setE, hs1]) (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
+      (RhsT.copyBor (y := 4) (E := intE) (by simp [accCtx3, setE]) rfl rfl) rfl
+      (by simp [intE, Entry.vdeps, Mode.ownSlot, roots]) (by simp [accCtx3, setE, hs1])
+      (hp3a.endOK 1).1 (hp3a.endOK 1).2.1 rfl
+    rw [hp3a.kill] at h; exact h
+  have h4 : StmtT accP (setE (setE (sigCtx accCode) 2 intE) 3 intE) []
+      (.letv 4 (.expr (.add (.var 2) (.lit 1))) (.seq (.assign 0 (.pair 4 3)) (.assign 1 (.var 4))))
+      (A2.exitScope 4 accCtx4) :=
+    StmtT.letv (E := intE) rfl (by simp [setE, sigCtx, accCode]) (by simp)
+      (RhsT.expr (ExprT.add (ExprT.var (E := intE) (by simp [setE]) rfl rfl) ExprT.lit))
+      (StmtT.seq rfl hA0 hA1) (hp4.endOK 4)
+  have hp5 := hp4.upd_none 4
+  have h3 : StmtT accP (setE (sigCtx accCode) 2 intE) []
+      (.letv 3 (.snd 0) (.letv 4 (.expr (.add (.var 2) (.lit 1)))
+        (.seq (.assign 0 (.pair 4 3)) (.assign 1 (.var 4)))))
+      (A2.exitScope 3 (A2.exitScope 4 accCtx4)) :=
+    StmtT.letv (E := projE 0 accEp .int) rfl (by simp [setE, sigCtx, accCode]) (by simp)
+      (RhsT.snd (b := .int) (by simp [setE, hs0]) rfl rfl) h4 (by rw [hp4.exitScope]; exact hp5.endOK 3)
+  have hp6 := hp5.upd_none 3
+  have h2 : StmtT accP (sigCtx accCode) [] accCode.body
+      (A2.exitScope 2 (A2.exitScope 3 (A2.exitScope 4 accCtx4))) :=
+    StmtT.letv (E := projE 0 accEp .int) rfl (by simp [sigCtx, accCode]) (by simp)
+      (RhsT.fst (b := .int) hs0 rfl rfl) h3 (by rw [hp4.exitScope, hp5.exitScope]; exact hp6.endOK 2)
+  have hΔ : A2.exitScope 2 (A2.exitScope 3 (A2.exitScope 4 accCtx4)) =
+      upd (upd (upd accCtx4 4 none) 3 none) 2 none := by
+    rw [hp4.exitScope, hp5.exitScope, hp6.exitScope]
+  have hp7 := hp6.upd_none 2
+  refine ⟨rfl, by decide, by decide, rfl, by simp [accCode], ?_, by simp [accCode], by simp [accCode],
+    by simp [accCode], by simp [accCode], by simp [accCode], _, h2, ?_, ?_, ?_⟩
+  · intro pt hpt
+    simp only [accCode, List.mem_singleton] at hpt; subst hpt
+    simp [accEnv, Ty.ok, Ty.owning]
+  · intro v E hv
+    rw [hΔ] at hv
+    exact ⟨(hp7 v E hv).2.2.1, (hp7 v E hv).2.2.2⟩
+  · refine ⟨intE, by rw [hΔ]; simp [accCtx4, setE, accCode], rfl, rfl, rfl, by simp [intE], by simp [intE],
+      fun h => by simp [accCode] at h⟩
+  · intro i hi b _
+    have hi0 : i = 0 := by simpa [accCode] using hi
+    subst hi0
+    exact ⟨accEp, by rw [hΔ]; simp [accCtx4, setE], rfl, by simp [accEp], fun _ => rfl⟩
+
+/-- ... and so is its interface: it returns an integer, and changes nothing of
+    the closure it takes `inout`. -/
+theorem accSig_ok : FnOK accP accSig := by
+  have hsym : symNames accSig.params = [] := by decide
+  have h0 : PlainCtx (sigCtx accSig) := sigCtx_plain (fun pt hpt => by
+    simp only [accSig, List.mem_singleton] at hpt; subst hpt; exact ⟨_, rfl⟩) hsym
+  have hs0 : sigCtx accSig 0 = some ⟨accTy, .inout .replace, true, [], [], false, false⟩ := by
+    simp only [sigCtx, accSig, List.length_singleton, Nat.zero_lt_one]
+    simp [paramE, accTy, Ty.hasFn, ← hsym, accSig]
+  have hs1 : sigCtx accSig 1 = some ⟨.int, .bor, false, [], [], false, false⟩ := by
+    simp [sigCtx, accSig, resMode]
+  have hA : StmtT accP (sigCtx accSig) [] accSig.body (setE (sigCtx accSig) 1 intE) := by
+    have h := StmtT.assign (P := accP) (F := []) (x := 1) (r := .expr (.lit 0)) (Γ := sigCtx accSig)
+      (Ex := ⟨.int, .bor, false, [], [], false, false⟩) hs1 (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
+      (RhsT.expr ExprT.lit) rfl (by simp [intE, Entry.vdeps, Mode.ownSlot, roots]) (by simp [hs1])
+      (h0.endOK 1).1 (h0.endOK 1).2.1 rfl
+    rw [h0.kill] at h; exact h
+  have hp := h0.setE (x := 1) intE_plain
+  refine ⟨rfl, by decide, by decide, rfl, by simp [accSig], ?_, by simp [accSig], by simp [accSig],
+    by simp [accSig], by simp [accSig], by simp [accSig], _, hA, ?_, ?_, ?_⟩
+  · intro pt hpt
+    simp only [accSig, List.mem_singleton] at hpt; subst hpt
+    simp [accTy, Ty.ok, Ty.owning]
+  · intro v E hv
+    exact ⟨(hp v E hv).2.2.1, (hp v E hv).2.2.2⟩
+  · exact ⟨intE, by simp [setE, accSig], rfl, rfl, rfl, by simp [intE], by simp [intE], fun h => by simp [accSig] at h⟩
+  · intro i hi b _
+    have hi0 : i = 0 := by simpa [accSig] using hi
+    subst hi0
+    exact ⟨⟨accTy, .inout .replace, true, [], [], false, false⟩, by simp [setE, hs0], rfl, by simp, fun _ => rfl⟩
+
+/-- **The accumulator's program is typed**: its interface and code meet their
+    summaries, and they make no package. -/
+theorem accP_ok : ProgOK accP := by
+  intro fn hfn
+  simp only [accP, List.mem_cons, List.mem_nil_iff, or_false] at hfn
+  rcases hfn with rfl | rfl
+  · exact accSig_ok
+  · exact accCode_ok
+
+theorem accP_codes : ProgCodes accP := by
+  intro fn hfn
+  simp only [accP, List.mem_cons, List.mem_nil_iff, or_false] at hfn
+  rcases hfn with rfl | rfl <;> simp [accSig, accCode, Stmt.codesOK, Rhs.codeOK]
+
+/-! The accumulator's caller, a whole program:
+
+        : i n 0  : i p 0  : e { n p }
+        : acc \ → i { … }        -- moves e in: the closure owns its environment
+        : i r ( acc )            -- hands the environment over to the code
+
+typed from nothing, so `A2.memory_safe` and the two `no_leak`s hold of it. -/
+
+/-- The accumulator's caller. -/
+def accMain : Stmt :=
+  .letv 0 (.expr (.lit 0)) (.letv 1 (.expr (.lit 0)) (.letv 2 (.pair 0 1)
+    (.letv 3 (.pack [1] accEnv [0] 2 []) (.callcE 4 3 0 [] .skip))))
+
+/-- The environment before it moves into the closure, ... -/
+def accPairE : Entry := ⟨accEnv, .own, true, [], [], false, false⟩
+
+/-- ... the closure that owns it, ... -/
+def accCloE : Entry := ⟨accTy, .own, true, [], [], false, false⟩
+
+/-- ... and the caller's context once the closure is made. -/
+def accMainCtx : Ctx :=
+  setE (setE (setE (setE (setE (fun _ => none) 0 intE) 1 intE) 2 accPairE) 2
+    { accPairE with live := false, dtor := false }) 3 accCloE
+
+/-- **The accumulator's caller is typed** from nothing: the pair moves into
+    the closure (`RhsT.pack`, at `send`), and the closure's owner calls it,
+    handing the environment over (`StmtT.callcE`, by `accum_hand`). -/
+theorem accMain_typed : ∃ Δ, StmtT accP (fun _ => none) [] accMain Δ := by
+  have he : PlainCtx (fun _ => none) := fun _ _ h => by cases h
+  have hpE : accPairE.vdeps = [] ∧ accPairE.mode ≠ .rootb ∧ accPairE.dtor = false ∧ accPairE.dbind = false :=
+    ⟨by simp [accPairE, Entry.vdeps, Mode.ownSlot], by simp [accPairE], rfl, rfl⟩
+  have hdE : ({ accPairE with live := false, dtor := false } : Entry).vdeps = [] ∧
+      ({ accPairE with live := false, dtor := false } : Entry).mode ≠ .rootb ∧
+      ({ accPairE with live := false, dtor := false } : Entry).dtor = false ∧
+      ({ accPairE with live := false, dtor := false } : Entry).dbind = false :=
+    ⟨by simp [accPairE, Entry.vdeps, Mode.ownSlot], by simp [accPairE], rfl, rfl⟩
+  have hcE : accCloE.vdeps = [] ∧ accCloE.mode ≠ .rootb ∧ accCloE.dtor = false ∧ accCloE.dbind = false :=
+    ⟨by simp [accCloE, Entry.vdeps, Mode.ownSlot], by simp [accCloE], rfl, rfl⟩
+  have hp2 : PlainCtx (setE (setE (fun _ => none) 0 intE) 1 intE) :=
+    (he.setE (x := 0) intE_plain).setE (x := 1) intE_plain
+  have hp3 : PlainCtx (setE (setE (setE (fun _ => none) 0 intE) 1 intE) 2 accPairE) := hp2.setE hpE
+  have hp4 : PlainCtx accMainCtx := (hp3.setE (x := 2) hdE).setE (x := 3) hcE
+  have hcp : callPost accMainCtx accSig [3] = setE accMainCtx 3 accCloE := by
+    have h : callPost accMainCtx accSig [3] = setE (A2.kill .replace false 3 accMainCtx) 3 accCloE := by
+      simp [callPost, callPostAux, accSig, mutNames, argNames, killNames, nameDeps, argE, accMainCtx, setE,
+        accCloE, accTy, Ty.holdsView, Ty.elem, Entry.vdeps, Mode.ownSlot]
+    rw [h, hp4.kill]
+  have hcr : callRes accMainCtx accSig [3] = intE := by
+    simp [callRes, accSig, heldOfArgs, argNames, allKinds, nameDeps, memDeps, roots, argE, accMainCtx, setE,
+      accCloE, accTy, Entry.vdeps, Mode.ownSlot, ownHeld, resMode, intE]
+  have hpc : PlainCtx (setE (setE accMainCtx 3 accCloE) 4 intE) := (hp4.setE hcE).setE (x := 4) intE_plain
+  have hΔc : A2.kill .replace false 3 (setE (callPost (A2.kill .replace false 3 accMainCtx) accSig [3]) 4
+      (callRes (A2.kill .replace false 3 accMainCtx) accSig [3])) = setE (setE accMainCtx 3 accCloE) 4 intE := by
+    rw [hp4.kill, hcp, hcr]; exact hpc.kill _ _ _
+  have hC : StmtT accP accMainCtx [] (.callcE 4 3 0 [] .skip)
+      (A2.exitScope 4 (setE (setE accMainCtx 3 accCloE) 4 intE)) := by
+    have h := accum_hand (F := []) (x := 4) (acc := 3) (k := .skip) rfl (by simp [accMainCtx, setE]) (by simp)
+      (by simp [accMainCtx, setE, accCloE]) (by simp) (hp4.endOK 3).1 (hp4.endOK 3).2.1 StmtT.skip
+      (by rw [hΔc]; exact hpc.endOK 4)
+    rw [hΔc] at h; exact h
+  have q4 := hpc.upd_none 4
+  have q3 := q4.upd_none 3
+  have q2 := q3.upd_none 2
+  have q1 := q2.upd_none 1
+  have hpack : RhsT (setE (setE (setE (fun _ => none) 0 intE) 1 intE) 2 accPairE) [] (.pack [1] accEnv [0] 2 [])
+      accCloE (setE (setE (setE (setE (fun _ => none) 0 intE) 1 intE) 2 accPairE) 2
+        { accPairE with live := false, dtor := false }) := by
+    have h := RhsT.pack (Γ := setE (setE (setE (fun _ => none) 0 intE) 1 intE) 2 accPairE) (F := [])
+      (fs := [1]) (te := accEnv) (ms := [0]) (q := .send) (y := 2) (cs := []) (Ey := accPairE)
+      (by simp [setE]) rfl rfl
+      (PushArg.move (by simp [accEnv, Ty.owning]) rfl (by simp) (hp3.endOK 2).1 (hp3.endOK 2).2.1)
+      ⟨List.nodup_nil, fun _ h => by cases h⟩ (accum_fits .send)
+    rw [hp3.kill] at h; exact h
+  have h3 : StmtT accP (setE (setE (setE (fun _ => none) 0 intE) 1 intE) 2 accPairE) []
+      (.letv 3 (.pack [1] accEnv [0] 2 []) (.callcE 4 3 0 [] .skip))
+      (A2.exitScope 3 (A2.exitScope 4 (setE (setE accMainCtx 3 accCloE) 4 intE))) :=
+    StmtT.letv rfl (by simp [setE]) (by simp) hpack hC (by rw [hpc.exitScope]; exact q4.endOK 3)
+  have h2 : StmtT accP (setE (setE (fun _ => none) 0 intE) 1 intE) []
+      (.letv 2 (.pair 0 1) (.letv 3 (.pack [1] accEnv [0] 2 []) (.callcE 4 3 0 [] .skip)))
+      (A2.exitScope 2 (A2.exitScope 3 (A2.exitScope 4 (setE (setE accMainCtx 3 accCloE) 4 intE)))) :=
+    StmtT.letv (E := accPairE) rfl (by simp [setE])
+      (by simp) (RhsT.pair (Ey := intE) (Ez := intE) (by simp [setE]) rfl PushArg.int (by simp [setE]) rfl
+        PushArg.int (fun h => by simp [intE, Mode.ownSlot] at h)) h3
+      (by rw [hpc.exitScope, q4.exitScope]; exact q3.endOK 2)
+  have h1 : StmtT accP (setE (fun _ => none) 0 intE) []
+      (.letv 1 (.expr (.lit 0)) (.letv 2 (.pair 0 1) (.letv 3 (.pack [1] accEnv [0] 2 [])
+        (.callcE 4 3 0 [] .skip))))
+      (A2.exitScope 1 (A2.exitScope 2 (A2.exitScope 3 (A2.exitScope 4
+        (setE (setE accMainCtx 3 accCloE) 4 intE))))) :=
+    StmtT.letv rfl (by simp [setE]) (by simp) (RhsT.expr ExprT.lit) h2
+      (by rw [hpc.exitScope, q4.exitScope, q3.exitScope]; exact q2.endOK 1)
+  exact ⟨_, StmtT.letv rfl rfl (by simp) (RhsT.expr ExprT.lit) h1
+    (by rw [hpc.exitScope, q4.exitScope, q3.exitScope, q2.exitScope]; exact q1.endOK 0)⟩
+
+theorem accMain_codes : accMain.codesOK accP := by
+  simp only [accMain, Stmt.codesOK, Rhs.codeOK, true_and, and_true]
+  exact accum_codes
+
+theorem accMain_vars : ∀ v ∈ accMain.vars, v < 5 := by decide
+
+/-- **The accumulator's program is memory-safe**: no run of it from empty
+    memory reaches a stuck state ... -/
+theorem accMain_safe {m' : Mem} {s' : Stmt} (hr : Steps accP (emptyMem 5) accMain (.ok m' s')) :
+    ¬ Stuck accP m' s' :=
+  have ⟨_, ht⟩ := accMain_typed
+  memory_safe accP_ok accP_codes ht rfl accMain_codes accMain_vars hr
+
+/-- ... and frees everything it allocated, when it ends ... -/
+theorem accMain_no_leak {m' : Mem} (hr : Steps accP (emptyMem 5) accMain (.ok m' .skip)) :
+    ∀ i, m'.alloc i = false :=
+  have ⟨_, ht⟩ := accMain_typed
+  no_leak_end accP_ok accP_codes ht rfl accMain_codes accMain_vars hr
+
+/-- ... and when it panics. -/
+theorem accMain_no_leak_panic {m' : Mem} (hr : Steps accP (emptyMem 5) accMain (.panic m')) :
+    ∀ i, m'.alloc i = false :=
+  have ⟨_, ht⟩ := accMain_typed
+  no_leak_panic accP_ok accP_codes ht rfl accMain_codes accMain_vars hr
+
 /-! ### A3.5's second cut: library handles in locks and channels
 
 A lock's payload and a channel's element may hold cell shares (`Ty.ok (lk t)`
