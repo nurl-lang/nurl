@@ -53,7 +53,10 @@ $ `stdlib/ext/http.nu`
     ?? ( tcp_listen `127.0.0.1` 0 ) {
         T l → {
             : i port ( port_of l )
-            : ( @ v ) server \ → v { ( serve_one l resp ) }
+            // (The server thread gets a copy it owns: a view of the
+            // caller's response may not cross to another thread.)
+            : String r ( string_from resp )
+            : ( @ v ) server \ → v { ( serve_one l ( string_data r ) ) }
             : !Thread ThreadErr st ( thread_spawn server )
             : String url ( string_from `http://127.0.0.1:` )
             ( string_push_str url ( nurl_str_int port ) )
