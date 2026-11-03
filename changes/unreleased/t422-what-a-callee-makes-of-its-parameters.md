@@ -18,7 +18,9 @@
   caller passed. Before, it tied the first argument or nothing. The same
   holds for a view stored whole into an `inout` holder as part of a
   struct, and for one stored through a loop element, a join or an element
-  binding of the function's own parameter. A closure
+  binding of the function's own parameter. The value handed back may be
+  written as a field read (`^ . b h`), and it may be a view or a struct of
+  views picked by a join or a match, or made in a value block. A closure
   may not hand back a value holding views of what it captured: a struct or
   an enum now follows the rule a bare view always did.
 - **A cursor that may own its value is released when it moves on**

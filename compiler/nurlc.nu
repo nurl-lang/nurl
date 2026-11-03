@@ -5481,8 +5481,9 @@ unsafe @ gen_ret i lex i syms i cg → s {
     // (…and a call written in the return, `^ ( wrap x )`: what its result
     // holds views of, by the callee's summaries — bck_sx_ev.)
     // (…and a join or a value block written there, `^ ? c a b`: what
-    // each arm's value views — agora #422's join form.)
-    : b __ret_exp & & & != 0 g_srcx_on >= __ret_cls 3 ! __ret_dep | | | | | == ret_first_tt TT_BACKSLASH == ret_first_tt TT_AT == ret_first_tt TT_LPAREN == ret_first_tt TT_QUEST == ret_first_tt TT_QUESTQUEST == ret_first_tt TT_LBRACE
+    // each arm's value views — agora #422's join form; and a field read,
+    // `^ . b h`, by its path or its binding.)
+    : b __ret_exp & & & != 0 g_srcx_on >= __ret_cls 3 ! __ret_dep | | | | | | == ret_first_tt TT_BACKSLASH == ret_first_tt TT_AT == ret_first_tt TT_LPAREN == ret_first_tt TT_QUEST == ret_first_tt TT_QUESTQUEST == ret_first_tt TT_LBRACE == ret_first_tt TT_DOT
     ? __ret_exp { = __ret_sx ( __sx_operand syms ret_first_tt ret_first_val ( nurl_get_last_type ) ( __sx_froot syms ret_first_tt ( nurl_get_last_type ) ) __rsxn0 ) } {}
     // A closure handed back (as written, bound first, a join of them): the
     // parameters what it holds was made from — through the views, borrows
@@ -34714,6 +34715,18 @@ unsafe @ __vk_assumptions_check → v {
     }
 }
 
+// …every parameter, for a value whose sources are not known (`*`).
+@ __rv_note_all → v {
+    : ~ s rest ( nurl_sym_get g_bck `vkparams` )
+    : ~ s ids ``
+    ~ != 0 ( nurl_str_len rest ) {
+        : s pn ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s w ( nurl_str_int ( bck_intern pn ) )
+        = ids ? == 0 ( nurl_str_len ids ) ( nurl_str_cat w `` ) ( nurl_str_cat3 ids ` ` w )
+    }
+    ( __rv_note ids )
+}
+
 // `cal`'s g_fn_rviews answer: its own, else for an indirect callee the
 // union of what it may run (a `dyn` method's impls, a closure node's
 // members), else its generic base's; `` when there is none yet.
@@ -34796,14 +34809,20 @@ unsafe @ __vk_assumptions_check → v {
     // that captured them, `~id`.)
     : s hnd ? deps ( nurl_sym_get g_bck ( bck_bkey `vdh_` rroot ) ) ( __src_handle raw )
     : s srcs ? deps ( nurl_str_cat raw `` ) ( __src_plain0 raw )
-    ? ( seq srcs `*` ) { ^ } {}
-    // (What an owner of views it hands back — by name, `d`, or as written,
-    // `e` — views of the parameters' own storage is this function's answer
-    // to its callers, g_fn_rviews: the caller's result depends on those
-    // arguments (agora #422, #341, #404). A bare view handed back has its
-    // answer already, from how codegen hands it back — lent, pointed into
-    // or copied (retlend / retptr / an owned copy of a raw string).)
-    ? & != 0 ( nurl_str_len g_bck_fn ) | deps ! hand { ( __rv_note ? deps ( __src_mark2 raw ( nurl_sym_get g_bck ( bck_bkey `vdi_` rroot ) ) hnd ) ( nurl_str_cat raw `` ) ) } {}
+    // (What it views is not known — a value block's tail name, given what
+    // it holds after its block's end: it may view any parameter, as retclo
+    // answers such a closure.)
+    ? ( seq srcs `*` ) {
+        ? != 0 ( nurl_str_len g_bck_fn ) { ( __rv_note_all ) } {}
+        ^
+    } {}
+    // (What the value it hands back views of the parameters' own storage
+    // is this function's answer to its callers, g_fn_rviews: the caller's
+    // result depends on those arguments (agora #422, #341, #404). An owner
+    // of views by name, `d`, or as written, `e`; a view or a struct of
+    // views too — codegen's answer for a bare view (retlend / retptr) does
+    // not reach one picked by a join or a match, or made in a value block.)
+    ? != 0 ( nurl_str_len g_bck_fn ) { ( __rv_note ? deps ( __src_mark2 raw ( nurl_sym_get g_bck ( bck_bkey `vdi_` rroot ) ) hnd ) ( nurl_str_cat raw `` ) ) } {}
     : ~ s rest ( nurl_str_cat srcs `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest ) = rest ( str_skip_word rest )
