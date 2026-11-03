@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_closure_hands_back_what_it_read_out_of_a_capture.nu:17:44: error: a closure hands its result to its caller as the caller's own, but 'c' is read out of 'p', which the closure keeps (a capture) or its caller does (a parameter), and a 'Conn' cannot be copied — the value would be released twice. Hand back a value the body makes (a literal, or a call that hands its result over), or take the value out of the Vec it is in (vec_remove, vec_pop) so the body owns it.
+    : ( @ Conn ) f \ → Conn { : Conn c p ^ c }
+                                           ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.
