@@ -33156,9 +33156,11 @@ unsafe @ bck_check_moved_reads s reads i line s state → v {
 // their elements (`2`, __rv_ask) in the evaluation in progress — or a view
 // read there was bound to such an answer (`rva_`): a bare view handed back
 // hands that answer on for them, and for no other source (bck_ret_view_check,
-// agora #471). The walk's table holds them (`rvsrc`, __rvsrc_add); 0 here:
-// none since the evaluation began.
+// agora #471). A table of their own holds them (g_sxe_rvtab: scratch of
+// one evaluation, no fact of the walk's); 0 here: none since the
+// evaluation began.
 : ~ i g_sxe_rvn 0
+: ~ i g_sxe_rvtab 0
 // Whether a binding of this function's walk was bound to such an answer
 // (`rva_`).
 : ~ i g_bck_rva_any 0
@@ -35917,16 +35919,16 @@ unsafe @ __vk_assumptions_check → v {
 }
 
 // The sources a callee's walk answered views only through their elements,
-// since the evaluation in progress began (g_sxe_rvn): the walk's own
-// table holds them, a scratch fact no state digest follows.
+// since the evaluation in progress began (g_sxe_rvn, g_sxe_rvtab).
 @ __rvsrc_get → s {
     ? == 0 g_sxe_rvn { ^ ( nurl_str_cat `` `` ) } {}
-    ^ ( nurl_sym_get g_bck `rvsrc` )
+    ^ ( nurl_sym_get g_sxe_rvtab `rvsrc` )
 }
 
 @ __rvsrc_add s srcs → v {
     ? == 0 ( nurl_str_len srcs ) { ^ v } {}
-    ( nurl_sym_set g_bck `rvsrc` ? == 0 g_sxe_rvn ( nurl_str_cat srcs `` ) ( __word_union ( nurl_sym_get g_bck `rvsrc` ) srcs ) )
+    ? == 0 g_sxe_rvtab { = g_sxe_rvtab ( nurl_sym_new ) } {}
+    ( nurl_sym_set g_sxe_rvtab `rvsrc` ? == 0 g_sxe_rvn ( nurl_str_cat srcs `` ) ( __word_union ( nurl_sym_get g_sxe_rvtab `rvsrc` ) srcs ) )
     = g_sxe_rvn 1
 }
 
