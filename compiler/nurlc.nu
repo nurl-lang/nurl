@@ -37492,7 +37492,11 @@ unsafe @ bck_note_rc_arg s name s ty → v {
     // Dropping elements or replacing a field THROUGH a borrow reaches what
     // it borrows from: the other borrows of those owners end (the borrow
     // used for it still reaches a live value).
-    : s wsrc ? < wid 0 `` ( nurl_sym_get g_bck ( bck_bkey `bs_` ( nurl_str_int wroot ) ) )
+    // (…and through a `~` loop's element: a part of what its loop iterates,
+    // `fe_` — a change made through it is made to an element of those
+    // owners, as through a `vec_at` binding of one; agora #350, #471.)
+    : s wsrc0 ? < wid 0 `` ( nurl_sym_get g_bck ( bck_bkey `bs_` ( nurl_str_int wroot ) ) )
+    : s wsrc ? || || < wid 0 != 0 ( nurl_str_len wsrc0 ) != BCK_UNINIT ( bck_st_raw st wroot ) wsrc0 ( nurl_sym_get g_bck ( bck_bkey `fe_` ( nurl_str_int wroot ) ) )
     // (A borrow of a cursor payload, or of a field of one — `?? . q inner
     // { T r → … }` with q a cursor over `oh` — changed in place: the change
     // is the option's, as made through the cursor (bck_cursor_edit, agora

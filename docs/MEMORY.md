@@ -689,8 +689,11 @@ holding it moves. The same holds:
 - for a function of your own that hands such a view of its parameter's
   element back, in a container, a struct or as a bare `s`.
 
-The mark is one level deep: growing an element of `xs` ends a view of a
-String inside that element, as the `vec_at` spelling does.
+A change made through `x` is made to an element of `xs`: growing,
+clearing or replacing it ends the views of the elements' contents taken
+before it, as the same change through a `vec_at` binding does. The mark is
+one level deep: growing an element of `xs` ends a view of a String inside
+that element, as the `vec_at` spelling does.
 
 ```nurl expect-error="'ws' holds a view of 't'"
 $ `stdlib/core/string.nu`
