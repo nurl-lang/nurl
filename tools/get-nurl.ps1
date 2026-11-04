@@ -30,6 +30,29 @@ param(
 if ($env:NURL_INSTALL_INSECURE -eq "1") { $Insecure = $true }
 $ErrorActionPreference = "Stop"
 
+# Windows PowerShell must load its own modules, not PowerShell 7's.
+# `nurl upgrade` runs this file with powershell.exe (5.1), and when the
+# user's shell is pwsh 7 the child inherits pwsh's PSModulePath: its
+# Documents\PowerShell\Modules, Program Files\PowerShell\Modules and
+# $PSHOME\Modules come first. 5.1 strips them only when pwsh starts it
+# directly - not through cmd or nurl.exe - so it autoloads PowerShell 7's
+# Microsoft.PowerShell.Utility, which it cannot import, and Get-FileHash
+# "is not recognized". Drop those entries; in a plain 5.1 session there
+# are none and this changes nothing. (Pure .NET: no module cmdlets yet.)
+function Use-OwnModulePath {
+    if ($PSVersionTable.PSEdition -eq "Core" -or -not $env:PSModulePath) { return }
+    $keep = foreach ($d in ($env:PSModulePath -split ';')) {
+        if (-not $d) { continue }
+        $trim = $d.TrimEnd('\')
+        if ($trim -match '\\PowerShell\\Modules$') { continue }  # not ...\WindowsPowerShell\Modules
+        $parent = [System.IO.Path]::GetDirectoryName($trim)
+        if ($parent -and [System.IO.File]::Exists([System.IO.Path]::Combine($parent, "pwsh.exe"))) { continue }
+        $d
+    }
+    $env:PSModulePath = @($keep) -join ';'
+}
+Use-OwnModulePath
+
 # Delete a toolchain-owned path. Anything Windows refuses to delete because
 # it is IN USE (the running nurlpkg.exe during `nurl upgrade`) is renamed
 # out of the way instead - a rename is permitted where a delete is not -
@@ -38,15 +61,23 @@ function New-StalePath($p) {
     return ($p + ".old-" + [System.Guid]::NewGuid().ToString("N").Substring(0, 8))
 }
 function Remove-ToolchainPath($p) {
-    if (-not (Test-Path $p)) { return }
-    try { Remove-Item -Recurse -Force -ErrorAction Stop $p; return } catch { }
+    if (-not (Test-Path -LiteralPath $p)) { return }
+    try { Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction Stop; return } catch { }
     # Something under $p is in use. Clear what we can, rename what we can't.
-    Get-ChildItem -Recurse -File -Force $p -ErrorAction SilentlyContinue | ForEach-Object {
-        try { Remove-Item -Force -ErrorAction Stop $_.FullName }
-        catch { Move-Item -Force $_.FullName (New-StalePath $_.FullName) }
+    # A foreach, not ForEach-Object: inside a catch block $_ is the error
+    # record, so a pipeline's $_.FullName there is $null - which is how
+    # replacing a running bin\nurl.exe used to abort `nurl upgrade`.
+    # (For a file, Get-ChildItem yields the file itself.)
+    foreach ($item in @(Get-ChildItem -LiteralPath $p -Recurse -File -Force -ErrorAction SilentlyContinue)) {
+        $f = $item.FullName
+        try { Remove-Item -LiteralPath $f -Force -ErrorAction Stop }
+        catch { Move-Item -LiteralPath $f -Destination (New-StalePath $f) -Force }
     }
-    try { Remove-Item -Recurse -Force -ErrorAction Stop $p }
-    catch { Move-Item -Force $p (New-StalePath $p) }
+    # A lone file is gone by now (deleted or renamed); a directory may
+    # still hold the renamed files, so it is renamed aside as a whole.
+    if (-not (Test-Path -LiteralPath $p)) { return }
+    try { Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction Stop }
+    catch { Move-Item -LiteralPath $p -Destination (New-StalePath $p) -Force }
 }
 
 $repo = "nurl-lang/nurl"
