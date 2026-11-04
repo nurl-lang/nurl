@@ -16587,8 +16587,13 @@ unsafe @ gen_call i lex i syms i cg → s {
         // Whether it may lend is its own call's answer, g_call_may_lend —
         // read before any other call — or one a module-end note still owes:
         // a lender compiled before its own callee's lends are known reads as
-        // lending nothing here (__lend_pending).
-        ? & & arg_sxl != 0 g_borrowck | | | == arg_eff_tt TT_DOT == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST & == arg_eff_tt TT_LPAREN | g_call_may_lend ( __lend_pending ( nurl_sym_get syms `__last_call_name__` ) ) {
+        // lending nothing here (__lend_pending). (A value block whose tail
+        // is no call or join — a block-local binding of a lend, `{ : t (
+        // vec_at vv 0 ) t }`, a field of a call's result — has no one call
+        // to ask: its sx, closed over the block's names (__sx_close), names
+        // the lends, and the walk and module end decide by the final
+        // summaries, as for a join.)
+        ? & & arg_sxl != 0 g_borrowck | | | | == arg_eff_tt TT_DOT == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST == arg_eff_tt TT_LBRACE & == arg_eff_tt TT_LPAREN | g_call_may_lend ( __lend_pending ( nurl_sym_get syms `__last_call_name__` ) ) {
             = arg_xsx ? & ( __is_handle_ty at ) ( __arg_may_change syms call_name fname arg_idx __clo_node ) ( nurl_str_cat arg_sx `` ) ``
         } {}
         // Closure-env reclamation: if this argument was an inline closure
@@ -38088,12 +38093,13 @@ unsafe @ __sx_names_any s sx → b {
 
 // May the value just generated, its first token `tt` (a call, a join, a
 // value block, a field of a call's result), lend what it was handed: a
-// join's arms may; a call by its own answer, g_call_may_lend, or one a
-// module-end note still owes (__lend_pending) — as gen_call asks of an
-// argument (agora #461).
+// join's arms may, and so may a value block whose tail is no call or join
+// (its closed sx says, __sx_lendy); a call by its own answer,
+// g_call_may_lend, or one a module-end note still owes (__lend_pending) —
+// as gen_call asks of an argument (agora #461).
 @ __val_may_lend i syms i tt → b {
     : i et ( __val_eff_tt tt )
-    ? | == et TT_QUEST == et TT_QUESTQUEST { ^ T } {}
+    ? | | == et TT_QUEST == et TT_QUESTQUEST == et TT_LBRACE { ^ T } {}
     ? | == et TT_LPAREN == et TT_DOT { ^ | g_call_may_lend ( __lend_pending ( nurl_sym_get syms `__last_call_name__` ) ) } {}
     ^ F
 }
