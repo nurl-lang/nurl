@@ -687,10 +687,13 @@ unsafe @ ty_to_unsigned s t → s {
 // survive), and the char after must not be an identifier char (`*`, `,`,
 // space, `)`, `}` and end-of-string all terminate a type token).
 unsafe @ __llty_word_at s t i pos s w → b {
-    : i wl ( nurl_str_len w )
     : *u w_p # *u w
-    : i tl ( nurl_str_len t )
     : *u t_p # *u t
+    // (`pos` is inside `t` and every word has a second byte, so a probe
+    // that fails there — most do — fails before either string is measured.)
+    ? != # i . t_p + pos 1 # i . w_p 1 { ^ F } {}
+    : i wl ( nurl_str_len w )
+    : i tl ( nurl_str_len t )
     ? > + pos wl tl { ^ F } {}
     // Direct char compare — this runs per character of every lowered
     // type; the old slice+seq allocated a 2-4 byte string per probe
@@ -708,6 +711,18 @@ unsafe @ __llty_word_at s t i pos s w → b {
     { ? ( __is_ident_char ( nurl_str_at t_p tl + pos wl ) ) { ^ F } {} }
     {}
     ^ T
+}
+
+// Can a word of nurl_llty's start at byte `p` of `t_p` (length `tl`)?
+// Each is a letter and then a digit, and __llty_word_at refuses one after
+// an identifier byte or a `%`: the part of its test that is the same for
+// every word, asked once per position.
+unsafe @ __llty_tok_at * u t_p i tl i p → b {
+    : i c1 ( nurl_str_at t_p tl + p 1 )
+    ? | < c1 48 > c1 57 { ^ F } {}
+    ? == p 0 { ^ T } {}
+    : i pc ( nurl_str_at t_p tl - p 1 )
+    ^ ! | ( __is_ident_char pc ) == pc 37
 }
 
 // nurl_llty: lower an internal type to its LLVM spelling. Rewrites every
@@ -780,21 +795,28 @@ unsafe @ nurl_llty s t → s {
     : *u t_p # *u t
     : ~ i p 0
     ~ < p tl {
-        ? & == ( nurl_str_at t_p tl p ) 117
-        | | ( __llty_word_at t p `u8` ) ( __llty_word_at t p `u16` )
-        | ( __llty_word_at t p `u32` ) ( __llty_word_at t p `u64` )
-        { : s head ? > p 0 ( nurl_str_slice t 0 p ) ``
-            : s tail ( nurl_str_slice t + p 1 - tl + p 1 )
-            ^ ( nurl_llty ( nurl_str_cat3 head `i` tail ) ) }
-        {}
-        // A vector inside a compound spelling — the `v128*` an `inout v128`
-        // passes, a `{ i1, v128 }` option — lowers like the bare one; left
-        // alone it reached the IR as the undefined type `v128`.
-        ? & == ( nurl_str_at t_p tl p ) 118 | | ( __llty_word_at t p `v128` ) ( __llty_word_at t p `v256` ) ( __llty_word_at t p `v512` ) {
-            : s head ? > p 0 ( nurl_str_slice t 0 p ) ``
-            : s tail ( nurl_str_slice t + p 4 - tl + p 4 )
-            : s vt ? ( __llty_word_at t p `v128` ) `<4 x i32>` ? ( __llty_word_at t p `v256` ) `<4 x i64>` `<8 x i64>`
-            ^ ( nurl_llty ( nurl_str_cat3 head vt tail ) )
+        : i c ( nurl_str_at t_p tl p )
+        // Each word rewritten below is a `u` or a `v` and then a digit,
+        // standing as a token: test that once here, not in each of seven
+        // probes (`%Vec__u8`, the commonest type with a `u`, ran four).
+        ? & | == c 117 == c 118 ( __llty_tok_at t_p tl p ) {
+            ? & == c 117
+            | | ( __llty_word_at t p `u8` ) ( __llty_word_at t p `u16` )
+            | ( __llty_word_at t p `u32` ) ( __llty_word_at t p `u64` )
+            { : s head ? > p 0 ( nurl_str_slice t 0 p ) ``
+                : s tail ( nurl_str_slice t + p 1 - tl + p 1 )
+                ^ ( nurl_llty ( nurl_str_cat3 head `i` tail ) ) }
+            {}
+            // A vector inside a compound spelling — the `v128*` an
+            // `inout v128` passes, a `{ i1, v128 }` option — lowers like the
+            // bare one; left alone it reached the IR as the undefined type
+            // `v128`.
+            ? & == c 118 | | ( __llty_word_at t p `v128` ) ( __llty_word_at t p `v256` ) ( __llty_word_at t p `v512` ) {
+                : s head ? > p 0 ( nurl_str_slice t 0 p ) ``
+                : s tail ( nurl_str_slice t + p 4 - tl + p 4 )
+                : s vt ? ( __llty_word_at t p `v128` ) `<4 x i32>` ? ( __llty_word_at t p `v256` ) `<4 x i64>` `<8 x i64>`
+                ^ ( nurl_llty ( nurl_str_cat3 head vt tail ) )
+            } {}
         } {}
         = p + p 1
     }
@@ -8789,7 +8811,7 @@ unsafe @ extract_fn_ptr_return_type s fn_ptr_type → s {
     ~ != 0 ( nurl_str_len rest ) {
         : i comma ( nurl_str_find rest `,` )
         : s param ( nurl_str_slice rest 0 ? < comma 0 ( nurl_str_len rest ) comma )
-        : b data ( str_contains_word value_only ( nurl_str_int index ) )
+        : b data ( str_has_index value_only index )
         ? | data ( str_contains_word param `nocapture` )
         { = captures ( nurl_str_cat3 captures ` ` ( nurl_str_int index ) ) } {}
         // A readonly function cannot retain new state; a pointer not marked
@@ -15140,18 +15162,18 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
     // module-end sink flag for a parameter whose consumption is only
     // inferred.
     ? & & ! ( __is_autodrop_enum at syms ) ( is_ident_tok bck_arg_tt )
-    | summary_callee ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) {
+    | summary_callee ( str_has_index callee_sink arg_idx ) {
         // Released here for certain: a closure body doing so to one of
         // its captures takes that capture over (gen_closure_expr).
-        ? ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) {
+        ? ( str_has_index callee_sink arg_idx ) {
             : s __cc ( nurl_sym_get syms `__clo_consumed__` )
             ( nurl_sym_set_deep syms `__clo_consumed__` ( nurl_str_cat3 __cc ` ` bck_arg_val ) )
             ( __clo_capture_gone syms cg bck_arg_val )
         } {}
         : s uptr ( mem_udrop_ptr_of syms bck_arg_val )
         ? != 0 ( nurl_str_len uptr ) {
-            ? ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
-            { ( mem_udrop_flag_set syms cg uptr `0` ) ( mem_udrop_alias_move_copied syms cg uptr & & & & positional summary_callee ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) ( __clone_supported at syms ) ( __lent_by_call syms bck_arg_tt bck_arg_val ) )
+            ? ( str_has_index callee_sink arg_idx )
+            { ( mem_udrop_flag_set syms cg uptr `0` ) ( mem_udrop_alias_move_copied syms cg uptr & & & & positional summary_callee ( str_has_index callee_sink arg_idx ) ( __clone_supported at syms ) ( __lent_by_call syms bck_arg_tt bck_arg_val ) )
                 // A local this scope owns outright, handed to a release
                 // function: a candidate for the redundant-free lint.
                 ? & & & & & & & & != 0 g_lint == 0 g_bck_closure_depth == arg_idx 0 != 0 ( nurl_sym_len2 syms fname `__emptybody` )
@@ -15849,7 +15871,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         // binding — the callee mutates it in place. Pass the
         // binding's backing pointer (`__ptr`) typed `<T>*`; emit no
         // value load. Everything else is the ordinary by-value path.
-        : b is_inout_arg ( str_contains_word callee_inout ( nurl_str_int arg_idx ) )
+        : b is_inout_arg ( str_has_index callee_inout arg_idx )
         // A closure binding handed to a function's `inout` parameter comes
         // back as whatever the callee gives that parameter: its node gains
         // the parameter's (`cp#f#p`, at module end; agora #433).
@@ -15984,7 +16006,7 @@ unsafe @ gen_call i lex i syms i cg → s {
             : b fe_helper_mutates ( str_contains_word
             ( nurl_sym_get g_fn_mutates call_name ) ( nurl_str_int arg_idx ) )
             // …or takes it (`sink`): it is released under the loop's cursor.
-            : b fe_takes ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
+            : b fe_takes ( str_has_index callee_sink arg_idx )
             ? & fe_iterated | | is_inout_arg | fe_mutates fe_helper_mutates fe_takes
             { ( bck_esc_warn lex bck_arg_line ( nurl_str_cat3
                 `cannot mutate '` bck_arg_root
@@ -16666,7 +16688,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         // below its caller is missed (§6.4).
         ? ( is_ident_tok bck_arg_tt )
         { : s __pk_mut ( nurl_sym_get g_fn_reallocs call_name )
-            ? ( str_contains_word __pk_mut ( nurl_str_int arg_idx ) )
+            ? ( str_has_index __pk_mut arg_idx )
             { = __pk_defer ( nurl_str_cat4 __pk_defer `k ` bck_arg_val ( nurl_str_cat3 ` ` ( nurl_str_int bck_arg_line ) ` - - - ` ) ) }
             {  // Not known to reallocate — and a summary is final only
                 // after the module (a callee compiled later, or one whose
@@ -16715,7 +16737,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         // A `sink` closure parameter takes the closure over: a temporary
         // moves in (not dropped here), anything else is handed a copy — the
         // binding it came from keeps its own.
-        : b __clo_sink & ( __is_closure_ty at ) ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
+        : b __clo_sink & ( __is_closure_ty at ) ( str_has_index callee_sink arg_idx )
         ? != 0 ( nurl_str_len __cle )
         {  // A temporary closure (a literal, or a call's result) belongs to
             // this call site and is dropped after the call: a callee only
@@ -16825,7 +16847,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         ( seq fname `vec_push` ) ( seq fname `vec_insert` ) ( seq fname `vec_set` )
         : b builtin_escape_slot & is_escape_call ! & vec_family_call == arg_idx 0
         : b arg_pos_escapes | builtin_escape_slot
-        ( str_contains_word callee_escapes ( nurl_str_int arg_idx ) )
+        ( str_has_index callee_escapes arg_idx )
         // A closure handing its capture to a callee that keeps it moves it
         // out of its env when it cannot be copied (one that can is stored
         // as a copy): the closure runs at most once, as when it releases
@@ -17125,7 +17147,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         // ownership kinds still require their own transfer support.
         // A `% Drop` impl handing its value to a disposer (`( t_free t )`):
         // the disposer releases the fields, so no glue follows.
-        ? & & & != 0 ( nurl_str_len g_drop_glue_ty ) ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
+        ? & & & != 0 ( nurl_str_len g_drop_glue_ty ) ( str_has_index callee_sink arg_idx )
         ( is_ident_tok bck_arg_tt ) ( seq bck_arg_val ( str_first_word ( nurl_sym_get syms `__fn_param_names__` ) ) )
         { ( nurl_sym_set_deep syms `__drop_glue_moved__` `1` ) ( mem_journal_forget_glue syms ) } {}
         // (An option / result that owns nothing — `?i` — is a plain value:
@@ -17134,7 +17156,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         // copy of its env, gen_call above — and a number or a flag, a
         // generic `sink T` instantiated at one: `( locked_new [i] n )`.)
         : b __sink_plain_wrap | & != 0 ( nurl_str_starts at `{ i1, ` ) == 0 ( nurl_str_len ( __wrap_twin at ) ) ( __is_closure_ty at )
-        : b __sink_bare & & ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) ( is_ident_tok bck_arg_tt ) ! __sink_plain_wrap
+        : b __sink_bare & & ( str_has_index callee_sink arg_idx ) ( is_ident_tok bck_arg_tt ) ! __sink_plain_wrap
         ? & __sink_bare ! ? __sink_bare ( __plain_scalar_lty at ) F
         { : s sink_ptr ( nurl_sym_get2 syms bck_arg_val `__ptr` )
             ? & ! ( __is_autodrop_enum at syms ) | ( nurl_sym_has_word syms `__owned_slices__` bck_arg_val )
@@ -17157,7 +17179,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         // to a declared `sink`: the callee is handed a copy, as `^ x` in
         // the body hands one back (consumed, the second call released it
         // again; agora #463). One that cannot be copied is refused.
-        : ~ b __crcp & & & & & summary_callee != 0 g_clo_ret_body ( is_ident_tok bck_arg_tt ) ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) ( __type_needs_drop at syms ) ( __clo_ret_capture_root syms bck_arg_val )
+        : ~ b __crcp & & & & & summary_callee != 0 g_clo_ret_body ( is_ident_tok bck_arg_tt ) ( str_has_index callee_sink arg_idx ) ( __type_needs_drop at syms ) ( __clo_ret_capture_root syms bck_arg_val )
         // (Not one the env owns under a flag of its own, g_nc_own_caps: the
         // body takes that over through the flag, and a second run stops.)
         = __crcp & __crcp ! ( str_contains_word g_nc_own_caps ? ( __is_clo_capture syms bck_arg_val ) bck_arg_val ( __clo_nc_derived syms bck_arg_val ) )
@@ -17175,7 +17197,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         // closure frees it — a second call is a use after the move (the
         // consumed-capture rule). Left alone, the binding released the
         // option whose payload the body had given away (agora #463).
-        ? & & & & & & summary_callee != 0 g_bck_closure_depth == 0 g_clo_ret_body ( is_ident_tok bck_arg_tt ) ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) ( __type_needs_drop at syms ) ! ( __is_clo_capture syms bck_arg_val ) {
+        ? & & & & & & summary_callee != 0 g_bck_closure_depth == 0 g_clo_ret_body ( is_ident_tok bck_arg_tt ) ( str_has_index callee_sink arg_idx ) ( __type_needs_drop at syms ) ! ( __is_clo_capture syms bck_arg_val ) {
             : s __ctr ( __clo_nc_derived syms bck_arg_val )
             ? & != 0 ( nurl_str_len __ctr ) ( __is_clo_capture syms __ctr ) {
                 // (Only the payload of an option capture matched as it is,
@@ -17197,7 +17219,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         // A callee that STORES the borrowed payload is handed a copy instead
         // (below): then the slot keeps its value.
         ? & & ( is_ident_tok bck_arg_tt ) ( __vget_live syms bck_arg_val ) ( __type_needs_drop at g_root_syms ) {
-            : b __vg_decl ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
+            : b __vg_decl ( str_has_index callee_sink arg_idx )
             // (A value the callee only keeps in memory it manages by hand
             // stays in its slot: consume_flag.)
             : s __vg_base ? __vg_decl `1`
@@ -17230,7 +17252,7 @@ unsafe @ gen_call i lex i syms i cg → s {
             // memory the program manages itself keeps a VIEW (`( wc_new . m
             // code )`, a cursor over a raw-pointer struct's buffer), which
             // emptying would destroy.
-            ? ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) {
+            ? ( str_has_index callee_sink arg_idx ) {
                 ( nurl_print `  store ` ) ( nurl_print ( nurl_llty at ) ) ( nurl_print ` zeroinitializer, ptr ` ) ( nurl_print fa_p ) ( nurl_print `\n` )
             } { ? summary_callee {
                     : s fa_c ( nurl_cg_reg cg )
@@ -17260,7 +17282,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         ? & & ( is_ident_tok bck_arg_tt ) != 0 ( nurl_sym_len2 syms bck_arg_val `__eslot` ) ( __is_handle_ty at ) {
             : s es ( nurl_sym_get2 syms bck_arg_val `__eslot` )
             : s fl ( nurl_llty at )
-            ? ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) {
+            ? ( str_has_index callee_sink arg_idx ) {
                 ( nurl_print `  store ` ) ( nurl_print fl ) ( nurl_print ` zeroinitializer, ptr ` ) ( nurl_print es ) ( nurl_print `\n` )
             } { ? summary_callee {
                     : s zc ( nurl_cg_reg cg )
@@ -17275,7 +17297,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         // for a storing callee (below) leaves the original in place.
         // (A closure never consumes its argument — its parameters are
         // borrowed, gen_closure_expr — so a field handed to one stays.)
-        ? & != 0 ( nurl_str_len arg_fread ) | summary_callee ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) {
+        ? & != 0 ( nurl_str_len arg_fread ) | summary_callee ( str_has_index callee_sink arg_idx ) {
             : ~ s fr ( nurl_str_cat arg_fread `` )
             : s fr_ptr ( str_first_word fr ) = fr ( str_skip_word fr )
             : s fr_sty ( str_first_word fr ) = fr ( str_skip_word fr )
@@ -17320,7 +17342,7 @@ unsafe @ gen_call i lex i syms i cg → s {
             } {}
             // (…and in an `inout` parameter, the caller's own struct.)
             ? ? fr_h | | | ( nurl_sym_has_word syms `__user_drops__` fr_ptr ) ( __vget_live syms fr_ptr ) fr_glue ( __is_inout_ptr syms fr_ptr ) F {
-                : b fr_decl ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
+                : b fr_decl ( str_has_index callee_sink arg_idx )
                 : ~ s zc ( nurl_str_cat `1` `` )
                 ? ! fr_decl {
                     // (consume_flag: a callee that keeps only a view in
@@ -17402,7 +17424,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         // takes it over: the callee would free what the caller still holds,
         // and the caller frees it again.
         ? & & & & summary_callee ( is_ident_tok bck_arg_tt )
-        ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) ( __type_needs_drop at syms )
+        ( str_has_index callee_sink arg_idx ) ( __type_needs_drop at syms )
         ( __is_clo_param syms bck_arg_val ) {
             ( die lex ( nurl_str_cat ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
             ( nurl_str_cat3 `' is '` bck_arg_val `', a parameter of this closure — and a closure only BORROWS its parameters: its caller keeps what it passed and drops it (a call through a closure value cannot know what the body would take). But the parameter is 'sink': the callee takes ownership and releases the value, which the caller then releases again. Do not release it — the owner does; a *_free_with hook is lent each element and the container drops it afterwards. To give the callee a value of its own, pass a copy (( string_clone x ), ( vec_clone [T] x ), …).` ) ) ) }
@@ -17413,7 +17435,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         // an element read out of a container is taken over instead — its
         // slot is emptied, mem_vget_consume.)
         ? & & & & & summary_callee != 0 ( nurl_str_len arg_lent ) ! ( seq arg_lent `1` )
-        ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) ( __clone_supported at syms )
+        ( str_has_index callee_sink arg_idx ) ( __clone_supported at syms )
         ( __lent_by_call syms bck_arg_tt bck_arg_val ) {
             = av ( mem_emit_cloneif cg at av arg_lent )
         } {}
@@ -17422,7 +17444,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         // (h228). One that can be copied is handed a copy; one that cannot
         // is rejected — and so is a field that cannot be copied of a struct
         // that still drops it (`( eat . h r )`, `h` a local).
-        ? & summary_callee ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) {
+        ? & summary_callee ( str_has_index callee_sink arg_idx ) {
             // A field of a call's result: it left with the read only where
             // the call handed its result over (`__last_tmp_field_own__`'s
             // flag); of a result the call lends (`. ( box_get b ) name`) it
@@ -17506,7 +17528,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         ? & != 0 ( nurl_str_len arg_join_own ) ! ( seq arg_join_own `true` ) 2
         ? & == 0 ( nurl_str_len arg_join_own ) != 0 ( nurl_str_len arg_join_ids ) 3 0 0
         : b __apc & & & & & summary_callee != __apm 0 == 0 ( nurl_sym_len g_fn_compiled call_name )
-        ! ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
+        ! ( str_has_index callee_sink arg_idx )
         != ( nurl_str_get at - ( nurl_str_len at ) 1 ) 42 ( __clone_supported at syms )
         ? __apc {
             : s __apk ( nurl_cg_reg cg )
@@ -17540,16 +17562,16 @@ unsafe @ gen_call i lex i syms i cg → s {
         // where it lent, as every move of it is, so what it lends stays its
         // source's. `( rc_new [String] x )` kept the lend uncopied, agora
         // #457.)
-        ? & ! __apc ? ! summary_callee F ? == 0 ( nurl_str_len arg_lent ) F & ! ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) != ( nurl_str_get at - ( nurl_str_len at ) 1 ) 42 {
+        ? & ! __apc ? ! summary_callee F ? == 0 ( nurl_str_len arg_lent ) F & ! ( str_has_index callee_sink arg_idx ) != ( nurl_str_get at - ( nurl_str_len at ) 1 ) 42 {
             : b __kbit & ( is_ident_tok bck_arg_tt ) ( __lent_by_bit syms ( mem_udrop_ptr_of syms bck_arg_val ) )
             : s __kfl ? __kbit ( nurl_str_cat `@.__nurl_sink.` ( nurl_str_int ( sink_flag call_name fname arg_idx ) ) ) ( nurl_str_cat `@.__nurl_store.` ( nurl_str_int ( store_flag call_name fname arg_idx ) ) )
             = av ( mem_emit_cloneif_k cg at av __kfl arg_lent )
         } {}
         ? & & ( __is_autodrop_enum at syms ) ( is_ident_tok bck_arg_tt )
-        | summary_callee ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) {
+        | summary_callee ( str_has_index callee_sink arg_idx ) {
             : s owner ( enum_owner_ptr syms bck_arg_val )
             ? & != 0 ( nurl_str_len owner ) ( nurl_sym_has_word syms `__user_drops__` owner ) {
-                : s flag ? ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
+                : s flag ? ( str_has_index callee_sink arg_idx )
                 ( nurl_str_cat `true` `` ) ( nurl_str_cat `@.__nurl_sink.` ( nurl_str_int ( sink_flag call_name fname arg_idx ) ) )
                 = moved_enum_args ( nurl_str_cat4 moved_enum_args owner ` ` ( nurl_str_cat4 at ` ` flag ` ` ) )
             } {}
@@ -17632,7 +17654,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         // (A value that holds nothing — a number, a struct of numbers — is
         // a copy: there is no move to decide and nothing to lend.)
         ? & & & ( is_ident_tok bck_arg_tt )
-        ! ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
+        ! ( str_has_index callee_sink arg_idx )
         __row_callee != ( bck_walk_class at ) 1
         { ( bck_stash_pending_call bck_arg_val ( nurl_lex_line lex )
             __rc arg_idx fname F )
@@ -17955,7 +17977,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         // own — a closure only borrows, and a foreign or runtime function
         // takes nothing over.
         ? & & & & != 0 g_auto_drop_strings ( seq ( nurl_llty at ) `i8*` ) ! __callee_shadowed ! ( bck_unsafe_ctx ) ( __user_callee syms call_name fname ) {
-            ? | ! ( __callee_auto_str syms call_name fname ) ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) {
+            ? | ! ( __callee_auto_str syms call_name fname ) ( str_has_index callee_sink arg_idx ) {
                 = av ( mem_sink_str_arg syms cg call_name arg_idx bck_arg_tt bck_arg_val av argument_owner )
             } {}
         } {}
@@ -35378,7 +35400,7 @@ unsafe @ bck_ret_drop_check s st i line → v {
             ~ != 0 ( nurl_str_len srcs ) {
                 : s xs ( str_first_word srcs ) = srcs ( str_skip_word srcs )
                 : i x ( bck_path_root ( nurl_str_to_int xs ) )
-                ? ( str_contains_word gone ( nurl_str_int x ) ) {
+                ? ( str_has_index gone x ) {
                     ( bck_drop_view_diag ( nurl_str_to_int ds ) x line ( nurl_str_cat3 `the return drops it before '` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ds ) ) `', which was declared before it` ) == BCK_MAYBE_MOVED ( bck_st_get st ( nurl_str_to_int ds ) ) )
                 } {}
             }
@@ -37514,7 +37536,7 @@ unsafe @ bck_note_rc_arg s name s ty → v {
     : i orid ( bck_path_root o )
     : ~ s out st
     : ~ s rest ( nurl_str_cat ( nurl_sym_get g_bck ( bck_bkey `bsrcs` `` ) ) `` )
-    ? ! ( str_contains_word rest ( nurl_str_int o ) ) { = rest ( nurl_str_cat3 rest ` ` ( nurl_str_int o ) ) } {}
+    ? ! ( str_has_index rest o ) { = rest ( nurl_str_cat3 rest ` ` ( nurl_str_int o ) ) } {}
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest ) = rest ( str_skip_word rest )
         : i id ( nurl_str_to_int w )
@@ -51456,7 +51478,7 @@ unsafe @ __clo_scan_inout_call i lex i outer_syms s closure_params → s {
     }
     ~ & != ( nurl_lex_type lex ) TT_RPAREN != ( nurl_lex_type lex ) TT_EOF {
         : i t ( nurl_lex_type lex )
-        : b at_io | ! exact ( str_contains_word idx ( nurl_str_int k ) )
+        : b at_io | ! exact ( str_has_index idx k )
         ? | == t TT_IDENT == t TT_TYPE_KW {
             : s w ( nurl_lex_val lex )
             ? & at_io & != 0 ( nurl_sym_len2 outer_syms w `__ptr` ) != 0 ( nurl_sym_len2 outer_syms w `__mutable` ) {
@@ -52571,14 +52593,30 @@ unsafe @ __span_dup s list i pos i end → s {
 
 // Byte offset of `word` as a whole word of `list`, or -1. The shared
 // engine of str_contains_word and str_word_index.
+//
+// Nearly every list asked about is empty or a few dozen bytes. An empty
+// one is answered here, before either string is measured; the rest is
+// __str_word_find's.
 unsafe @ __str_word_at s list s word → i {
+    : *u lp # *u list
+    : *u wp # *u word
+    ? | == 0 # i . lp 0 == 0 # i . wp 0 { ^ -1 } {}
+    ^ ( __str_word_find list word )
+}
+
+// __str_word_at of a list and a word that are not empty. A list under 256
+// bytes is searched with strstr: memmem builds a 256-entry shift table on
+// every call, which costs more than the whole search of a short list. The list
+// ends at `n`, so strstr from `from` finds the match memmem over
+// [from, n) finds. A long list keeps memmem, whose shifts step over an
+// entry that shares the word's first bytes where strstr compares them.
+unsafe @ __str_word_find s list s word → i {
     : i n ( nurl_str_len list )
     : i wl ( nurl_str_len word )
-    ? | == n 0 == wl 0 { ^ -1 } {}
     : *u lp # *u list
     : ~ i from 0
     ~ <= + from wl n {
-        : i r ( nurl_memmem_range # s + # i lp from - n from word wl )
+        : i r ? < - n from 256 ( nurl_str_find # s + # i lp from word ) ( nurl_memmem_range # s + # i lp from - n from word wl )
         ? < r 0 { ^ -1 } {}
         : i pos + from r
         : i after + pos wl
@@ -52603,6 +52641,15 @@ unsafe @ str_word_index s list s word → i {
         = k + k 1
     }
     idx
+}
+
+// str_contains_word of `k`'s decimal spelling: an argument index in one
+// of a callee's per-parameter lists (its sinks, its inout parameters).
+// Most of those lists are empty, and asking one needs no spelling made.
+unsafe @ str_has_index s list i k → b {
+    : *u lp # *u list
+    ? == 0 # i . lp 0 { ^ F } {}
+    ^ ( str_contains_word list ( nurl_str_int k ) )
 }
 
 // Auto-sink inference (critic v0.9.0 §2): when a body call moves /
@@ -59065,7 +59112,7 @@ unsafe @ __alloca_struct_params i syms i cg → v {
     ~ != 0 ( nurl_str_len names ) {
         : s name ( str_first_word names ) = names ( str_skip_word names )
         : s ty ( nurl_sym_get syms name )
-        ? & & ( __is_closure_ty ty ) ( str_contains_word sinks ( nurl_str_int index ) ) == 0 ( nurl_sym_len2 syms name `__inout` ) {
+        ? & & ( __is_closure_ty ty ) ( str_has_index sinks index ) == 0 ( nurl_sym_len2 syms name `__inout` ) {
             : s ll ( nurl_llty ty )
             : s pptr ( nurl_sym_get2 syms name `__ptr` )
             : ~ s val ( nurl_str_cat `%` name )
@@ -59143,10 +59190,10 @@ unsafe @ __alloca_struct_params i syms i cg → v {
     ~ != 0 ( nurl_str_len names ) {
         : s name ( str_first_word names ) = names ( str_skip_word names )
         : b __raw & ( seq ( nurl_llty ( nurl_sym_get syms name ) ) `i8*` ) == 0 ( nurl_sym_len2 syms name `__inout` )
-        ? & __raw ! ( str_contains_word sinks ( nurl_str_int index ) ) {
+        ? & __raw ! ( str_has_index sinks index ) {
             = strp ? == 0 ( nurl_str_len strp ) ( nurl_str_int index ) ( nurl_str_cat3 strp ` ` ( nurl_str_int index ) )
         } {}
-        ? & & __raw ( str_contains_word sinks ( nurl_str_int index ) ) == 0 ( nurl_sym_len2 syms name `__ptr` ) {
+        ? & & __raw ( str_has_index sinks index ) == 0 ( nurl_sym_len2 syms name `__ptr` ) {
             : s vslot ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print vslot ) ( nurl_print ` = alloca i8*\n` )
             ( nurl_print `  store i8* %` ) ( nurl_print name ) ( nurl_print `, i8** ` ) ( nurl_print vslot ) ( nurl_print `\n` )
@@ -59168,7 +59215,7 @@ unsafe @ __alloca_struct_params i syms i cg → v {
         // views: what this function makes of it is tied to that argument by
         // its answers, g_fn_rviews and g_fn_vkeeps (`~name`, the walk's
         // `pv_`; agora #341, #346).
-        ? & & == 0 ( nurl_sym_len2 syms name `__inout` ) ! ( str_contains_word sinks ( nurl_str_int index ) ) == ( bck_walk_class ( nurl_llty __pty ) ) 2 {
+        ? & & == 0 ( nurl_sym_len2 syms name `__inout` ) ! ( str_has_index sinks index ) == ( bck_walk_class ( nurl_llty __pty ) ) 2 {
             ( nurl_sym_def syms `__fn_ownstr_params__` ( nurl_str_cat4 ( nurl_sym_get syms `__fn_ownstr_params__` ) ` ` `~` name ) )
         } {}
         // A parameter that holds views — an owner of them (a ( Vec s ), a
@@ -59188,7 +59235,7 @@ unsafe @ __alloca_struct_params i syms i cg → v {
             // container's elements view: g_fn_eparams.)
             ? & == __hcl 2 ! ( nurl_sym_has_word g_fn_eparams fname ( nurl_str_int index ) ) { ( nurl_sym_append_word g_fn_eparams fname ( nurl_str_int index ) ) } {}
         } {}
-        ? & & & ! __raw ( str_contains_word sinks ( nurl_str_int index ) ) == 0 ( nurl_sym_len2 syms name `__inout` )
+        ? & & & ! __raw ( str_has_index sinks index ) == 0 ( nurl_sym_len2 syms name `__inout` )
         | | ( __type_needs_drop __pty syms ) ( __nc_drop_ty __pty ) ( __is_closure_ty __pty ) {
             ( nurl_sym_def syms `__fn_ownstr_params__` ( nurl_str_cat4 ( nurl_sym_get syms `__fn_ownstr_params__` ) ` ` `!` name ) )
         } {}
@@ -59242,7 +59289,7 @@ unsafe @ __alloca_struct_params i syms i cg → v {
             : s owner ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print owner ) ( nurl_print ` = alloca ` ) ( nurl_print ( nurl_llty ty ) ) ( nurl_print `\n` )
             : s arg ( nurl_str_cat `%` name )
-            : s value ? ( str_contains_word sinks ( nurl_str_int index ) ) ( nurl_str_cat arg `` ) {
+            : s value ? ( str_has_index sinks index ) ( nurl_str_cat arg `` ) {
                 : s flag ( nurl_str_cat `@.__nurl_sink.` ( nurl_str_int ( sink_flag fname fname index ) ) )
                 ( nurl_sym_def syms ( nurl_str_cat owner `__sinkflag` ) flag )
                 : s cond ( nurl_cg_reg cg )
@@ -59286,7 +59333,7 @@ unsafe @ __alloca_struct_params i syms i cg → v {
             : ~ s pc ( nurl_str_cat `1` `` )
             // (Not one kept only in memory managed by hand, g_fn_handkeeps:
             // that memory holds it on some paths, so no path drops it.)
-            ? ! ( str_contains_word sinks ( nurl_str_int index ) ) {
+            ? ! ( str_has_index sinks index ) {
                 : s pflag ( consume_flag fname fname index )
                 = pc ( nurl_cg_reg cg )
                 ( emit_sink_flag_load pflag pc )
@@ -60177,7 +60224,7 @@ unsafe @ __ffi_param_count s pt → i {
             : s lt ? __ff_io ( nurl_str_cat lt0 `*` ) ( nurl_str_cat lt0 `` )
             ? __ff_io {
                 : s __fio ( nurl_sym_get g_fn_inout fname )
-                ? ! ( str_contains_word __fio ( nurl_str_int pct ) ) {
+                ? ! ( str_has_index __fio pct ) {
                     ( nurl_sym_def g_fn_inout fname ? == 0 ( nurl_str_len __fio ) ( nurl_str_int pct ) ( nurl_str_cat3 __fio ` ` ( nurl_str_int pct ) ) )
                 } {}
             } {}
@@ -74101,6 +74148,8 @@ unsafe @ llvm_linkage_init → v {
 : ~ i g_dce_qn 0  // worklist length
 : ~ i g_dce_at 0  // i64[n]: 1 when the scan saw function n's address taken
 : ~ i g_dce_map 0  // symtab: function name → its index, as decimal text
+: ~ b g_dce_dotfn F  // some function's name starts with a `.`
+: ~ i g_dce_idb 0  // u8[256]: 1 for each byte __dce_ident_byte accepts
 
 // Is `c` a byte that can appear in an LLVM global identifier?
 @ __dce_ident_byte i c → b {
@@ -74134,25 +74183,33 @@ unsafe @ __dce_mark_name s nm → i {
 // scan deliberately does no context analysis at all.
 unsafe @ __dce_scan i from i to → v {
     : *u mp # *u # s g_dce_mod
+    : *u idb # *u # s g_dce_idb
     : ~ i p from
     ~ < p to {
-        ? != & # i . mp p 255 64 { = p + p 1 } {  // '@'
+        // To the next '@' sixteen bytes a step: a body is mostly not names.
+        = p + p ( nurl_scan_byte3 # s + # i mp p - to p 64 64 64 )
+        ? < p to {
             : ~ i q + p 1
-            ~ & < q to ( __dce_ident_byte & # i . mp q 255 ) { = q + q 1 }
-            ? == q + p 1 { = p q } {
-                // NUL-terminate the name in place for the lookup, then
-                // put the byte back — same trick emit_hoisted uses to
-                // hand a line to a `s`-taking helper without copying.
-                : u sv . mp q
-                = . mp q # u 0
-                : i fi ( __dce_mark_name # s + # i mp + p 1 )
-                = . mp q sv
-                // Not a direct call's callee (`@name(`): its address is
-                // taken (__ext_compute).
-                ? & >= fi 0 != # i sv 40 { ( nurl_poke # s g_dce_at fi 1 ) } {}
-                = p q
+            // `@.str.N`, `@.__nurl_k.N`: unless a function's name starts
+            // with a `.`, its lookup can only miss — and a name holds no
+            // '@', so the next one is found from here.
+            ? & ! g_dce_dotfn == & # i . mp q 255 46 { = p q } {
+                ~ & < q to != 0 # i . idb & # i . mp q 255 { = q + q 1 }
+                ? == q + p 1 { = p q } {
+                    // NUL-terminate the name in place for the lookup, then
+                    // put the byte back — same trick emit_hoisted uses to
+                    // hand a line to a `s`-taking helper without copying.
+                    : u sv . mp q
+                    = . mp q # u 0
+                    : i fi ( __dce_mark_name # s + # i mp + p 1 )
+                    = . mp q sv
+                    // Not a direct call's callee (`@name(`): its address is
+                    // taken (__ext_compute).
+                    ? & >= fi 0 != # i sv 40 { ( nurl_poke # s g_dce_at fi 1 ) } {}
+                    = p q
+                }
             }
-        }
+        } {}
     }
 }
 
@@ -74168,15 +74225,28 @@ unsafe @ __dce_record_name i st i idx → v {
     : ~ i q ns
     ~ ( __dce_ident_byte & # i . mp q 255 ) { = q + q 1 }
     ? == q ns { ^ v } {}
+    ? == & # i . mp ns 255 46 { = g_dce_dotfn T } {}
     : u sv . mp q
     = . mp q # u 0
     ( nurl_sym_def g_dce_map # s + # i mp ns ( nurl_str_int idx ) )
     = . mp q sv
 }
 
-// Walk the module and locate every `define … }` block. With `counting`
-// non-zero this only counts them (so the index arrays can be sized
-// exactly); otherwise it fills the arrays and the name→index map.
+// The first `needle` at or after module byte `from`, or -1. strstr, not
+// memmem: the module is one C string of exactly g_dce_mod_len bytes
+// (dce_emit_module measured it with strlen; __types_first only moves
+// lines), so its terminator ends the search where the range would, and
+// strstr's vector scan for the needle's first two bytes crosses a body
+// ~8× faster than memmem, which steps through `\n}\n` two at a time.
+unsafe @ __dce_find i from s needle → i {
+    : i hit # i ( strstr # s + g_dce_mod from needle )
+    ? == hit 0 { ^ -1 } {}
+    ^ - hit g_dce_mod
+}
+
+// Walk the module and locate every `define … }` block into g_dce_start
+// and g_dce_end, grown as it goes (one walk, not a count and then a
+// fill). Returns how many.
 //
 // A function begins at a line starting `define ` and ends at the first
 // line that is exactly `}` — body instructions are indented and labels
@@ -74187,21 +74257,24 @@ unsafe @ __dce_record_name i st i idx → v {
 // constant is escaped as `\0A`, never a raw byte, so no string can
 // forge either delimiter. (The module always opens with its `; NURL
 // compiler output` banner, so a `define` at offset 0 cannot occur.)
-unsafe @ __dce_index i mlen i counting → i {
+unsafe @ __dce_index i mlen → i {
     : ~ i n 0
+    : ~ i cap 0
     : ~ i pos 0
     ~ < pos mlen {
-        : i rel ( nurl_memmem_range # s + # i # *u # s g_dce_mod pos - mlen pos `\ndefine ` 8 )
-        ? < rel 0 { = pos mlen } {
-            : i st + + pos rel 1
-            : i rel2 ( nurl_memmem_range # s + # i # *u # s g_dce_mod st - mlen st `\n}\n` 3 )
-            ? < rel2 0 { = pos mlen } {
-                : i en + + st rel2 3
-                ? == 0 counting {
-                    ( nurl_poke # s g_dce_start n st )
-                    ( nurl_poke # s g_dce_end n en )
-                    ( __dce_record_name st n )
+        : i at ( __dce_find pos `\ndefine ` )
+        ? < at 0 { = pos mlen } {
+            : i st + at 1
+            : i fe ( __dce_find st `\n}\n` )
+            ? < fe 0 { = pos mlen } {
+                : i en + fe 3
+                ? >= n cap {
+                    = cap ? == cap 0 1024 * cap 2
+                    = g_dce_start # i ( nurl_realloc # s g_dce_start * cap 8 )
+                    = g_dce_end # i ( nurl_realloc # s g_dce_end * cap 8 )
                 } {}
+                ( nurl_poke # s g_dce_start n st )
+                ( nurl_poke # s g_dce_end n en )
                 = n + n 1
                 // Resume ONE BYTE BACK. The two delimiters overlap when
                 // a `define` follows a closing brace with no blank line
@@ -74347,18 +74420,59 @@ unsafe @ __dce_print_range i from i to → v {
 : ~ i g_fold_k 0
 : ~ i g_fold_x 0
 : ~ i g_fold_y 0
+: ~ b g_fold_noq F  // the function being folded has no `"` (__fold_next_pct)
+: ~ i g_fold_pc0 0  // no `%` in [g_fold_pc0, g_fold_pc) of that function
+: ~ i g_fold_pc 0
+: ~ b g_fold_jdirty F  // a registered flag may hold a pending store
+: ~ b g_fold_adirty F  // any flag may hold one (__fold_commit_all)
+: ~ i g_fold_eols 0  // i[n]: the line ends pass 1 found, for pass 2
+: ~ i g_fold_neol 0
+: ~ i g_fold_eolcap 0
+: ~ i g_fold_wa 0  // [g_fold_wa, g_fold_wb): written, not yet printed (__fold_write)
+: ~ i g_fold_wb 0
 
 unsafe @ __fold_at i p s lit i n → b {
     ? > + p n g_dce_mod_len { ^ F } {}
     ^ == 0 # i ( memcmp # s + g_dce_mod p lit n )
 }
 
+// The writer's one-byte searches (a line's end, the next `%`) run a few
+// million times a module: memchr directly, not memmem's way to it.
+& `c` @ memchr *u hay i c i n → s
+
 // Where byte `c` next occurs in the module text's [from, to), or `to`.
-unsafe @ __fold_next i from i to s c → i {
+unsafe @ __fold_next i from i to i c → i {
     ? >= from to { ^ to } {}
-    : i rel ( nurl_memmem_range # s + g_dce_mod from - to from c 1 )
-    ? < rel 0 { ^ to } {}
-    ^ + from rel
+    : i at # i ( memchr # *u + g_dce_mod from c - to from )
+    ? == at 0 { ^ to } {}
+    ^ - at g_dce_mod
+}
+
+// The next `%` in [p, to) of a function with no `"` (g_fold_noq), or
+// `to`. One search to the function's end answers every later query up to
+// the `%` it found, so a line costs a search per `%`, not one more for
+// its end.
+unsafe @ __fold_next_pct i p i to → i {
+    ? | < p g_fold_pc0 > p g_fold_pc {
+        = g_fold_pc0 p
+        = g_fold_pc ( __fold_next p g_fold_fn_end 37 )
+    } {}
+    ^ ? < g_fold_pc to g_fold_pc to
+}
+
+// The first `pat` (`n` bytes) in the module text's [from, to), relative
+// to `from`, or -1, as memmem finds it — but by a memchr from one of its
+// byte `k` to the next, a byte (`@`, `(`, `c`) a line holds few of.
+unsafe @ __fold_find i from i to s pat i n i k → i {
+    : *u pp # *u pat
+    : i c & # i . pp k 255
+    : ~ i a ( __fold_next + from k to c )
+    ~ < a to {
+        : i x - a k
+        ? & <= + x n to ( __fold_at x pat n ) { ^ - x from } {}
+        = a ( __fold_next + a 1 to c )
+    }
+    ^ -1
 }
 
 unsafe @ __fold_byte i p → i {
@@ -74378,6 +74492,7 @@ unsafe @ __fold_byte i p → i {
 // the journal, nearly all of it temporaries such as a `nurl_str_int`
 // handed to a concatenation and freed after it.
 : ~ i g_mp 0  // i64[n]: 1 when function n may panic
+: ~ i g_mp_rt 0  // symtab: a runtime callee's name → 2 when it may panic, else 1
 
 // A runtime / external function that can start a panic on this thread.
 unsafe @ __mp_runtime_panics s nm i p i le → b {
@@ -74403,16 +74518,19 @@ unsafe @ __mp_runtime_panics s nm i p i le → b {
 // `le`: its function index (>= 0), -1 for an external function that cannot
 // panic, -2 for one that can or one not known (a call through a pointer).
 unsafe @ __mp_callee i cp i le → i {
-    : ~ i p cp
+    : *u mp # *u # s g_dce_mod
+    // (The name's bytes: __dce_scan's table, alive for the whole module
+    // pass this runs in.)
+    : *u idb # *u # s g_dce_idb
+    // (Only a `(` can end the name: step from one to the next.)
+    : ~ i p + cp ( nurl_scan_byte3 # s + # i mp cp - le cp 40 40 40 )
     ~ < p le {
-        ? & == ( __fold_byte p ) 40 & > p cp ( __dce_ident_byte ( __fold_byte - p 1 ) ) {
+        ? & > p cp != 0 # i . idb & # i . mp - p 1 255 {
             : ~ i ts - p 1
-            ~ & > ts cp ( __dce_ident_byte ( __fold_byte - ts 1 ) ) { = ts - ts 1 }
+            ~ & > ts cp != 0 # i . idb & # i . mp - ts 1 255 { = ts - ts 1 }
             ? != ( __fold_byte - ts 1 ) 64 { ^ -2 } {}
-            : *u mp # *u # s g_dce_mod
             : u sv . mp p
             = . mp p # u 0
-            : ~ i r -1
             : i ent ( nurl_sym_int g_dce_map # s + g_dce_mod ts )
             ? >= ent 0 { = . mp p sv ^ ent } {}
             : b vwalk | != 0 ( nurl_str_starts # s + g_dce_mod ts `nurl_vec_drop` ) != 0 ( nurl_str_starts # s + g_dce_mod ts `nurl_vec_clone` )
@@ -74432,11 +74550,17 @@ unsafe @ __mp_callee i cp i le → i {
                 ^ ? >= hent 0 hent -2
             } {}
             = . mp p # u 0
-            ? ( __mp_runtime_panics # s + g_dce_mod ts p le ) { = r -2 } {}
+            // What a runtime function may do is a matter of its name alone
+            // (the walks above are the one exception): classify each once.
+            : ~ i rk ( nurl_sym_int g_mp_rt # s + g_dce_mod ts )
+            ? < rk 0 {
+                = rk ? ( __mp_runtime_panics # s + g_dce_mod ts p le ) 2 1
+                ( nurl_sym_def g_mp_rt # s + g_dce_mod ts ( nurl_str_int rk ) )
+            } {}
             = . mp p sv
-            ^ r
+            ^ - 0 rk
         } {}
-        = p + p 1
+        = p + + p 1 ( nurl_scan_byte3 # s + # i mp + p 1 - le + p 1 40 40 40 )
     }
     ^ -2
 }
@@ -74451,6 +74575,7 @@ unsafe @ __mp_eol i p i en → i {
 // graph to a fixpoint.
 unsafe @ __mp_compute i n → v {
     = g_mp # i # s ( nurl_zalloc * n 8 )
+    = g_mp_rt ( nurl_sym_new )
     : ~ i ecap 4096
     : Buf edges_own @ Buf { # i ( nurl_alloc * ecap 8 ) }
     : ~ s edges # s . edges_own p
@@ -75345,6 +75470,8 @@ unsafe @ __jrnl_elide i n b lib → v {
     }
     ( nurl_free # s g_mp )
     = g_mp 0
+    ( nurl_sym_free g_mp_rt )
+    = g_mp_rt 0
     ( nurl_free # s g_ext )
     = g_ext 0
 }
@@ -75353,11 +75480,10 @@ unsafe @ __jrnl_elide i n b lib → v {
 unsafe @ __fold_scan_flags i from i to → v {
     : ~ i pos from
     ~ < pos to {
-        : i rel ( nurl_memmem_range # s + g_dce_mod pos - to pos `\n@.__nurl_` 10 )
+        : i rel ( __fold_find pos to `\n@.__nurl_` 10 1 )
         ? < rel 0 { = pos to } {
             : i ns + + pos rel 1
-            : i le ( nurl_memmem_range # s + g_dce_mod ns - to ns `\n` 1 )
-            : i lend ? < le 0 to + ns le
+            : i lend ( __fold_next ns to 10 )
             : i eq ( nurl_memmem_range # s + g_dce_mod ns - lend ns ` = private constant i1 ` 23 )
             ? >= eq 0 {
                 : i ne + ns eq
@@ -75375,10 +75501,12 @@ unsafe @ __fold_scan_flags i from i to → v {
 
 // The value of the flag global named at `p` (the `@`), -1 if unknown.
 unsafe @ __fold_flag i p i le → i {
-    : ~ i q p
-    ~ & < q le | ( __dce_ident_byte ( __fold_byte q ) ) == 64 ( __fold_byte q ) { = q + q 1 }
-    = g_fold_end q
     : *u mp # *u # s g_dce_mod
+    // The name's end; its `@.__nurl_` (which the callers matched) is
+    // stepped over whole.
+    : ~ i q ? & <= + p 9 le ( __fold_at p `@.__nurl_` 9 ) + p 9 p
+    ~ & < q le | ( __dce_ident_byte & # i . mp q 255 ) == 64 & # i . mp q 255 { = q + q 1 }
+    = g_fold_end q
     : u sv . mp q
     = . mp q # u 0
     : s v ( nurl_sym_get g_fold_flags # s + g_dce_mod p )
@@ -75491,6 +75619,22 @@ unsafe @ __fold_rec_line i ls i le → v {
     = g_fold_nrl + g_fold_nrl 1
 }
 
+// Pass 1's next line ends at `le`: pass 2 walks the same lines.
+unsafe @ __fold_rec_eol i le → v {
+    ? >= g_fold_neol g_fold_eolcap {
+        : i cap ? == g_fold_eolcap 0 1024 * g_fold_eolcap 2
+        : i fresh # i ( nurl_zalloc * cap 8 )
+        ? != g_fold_eols 0 {
+            ( memcpy # s fresh # s g_fold_eols * g_fold_neol 8 )
+            ( nurl_free # s g_fold_eols )
+        } {}
+        = g_fold_eols fresh
+        = g_fold_eolcap cap
+    } {}
+    ( nurl_poke # s g_fold_eols g_fold_neol le )
+    = g_fold_neol + g_fold_neol 1
+}
+
 unsafe @ __fold_rec_load i r i f → v {
     = g_fold_loads ( __fold_rec2 g_fold_loads g_fold_nld g_fold_ldcap r f )
     = g_fold_ldcap g_fold_grown
@@ -75535,12 +75679,14 @@ unsafe @ __fold_add_jflag i r → v {
     } {}
     ( nurl_poke # s g_fold_jlist g_fold_nj r )
     = g_fold_nj + g_fold_nj 1
+    = g_fold_jdirty T
 }
 
 // A call: every journaled flag's pending store may be read by a drain.
 unsafe @ __fold_commit_jflags → v {
     : ~ i i 0
     ~ < i g_fold_nj { ( __fold_commit ( nurl_peek # s g_fold_jlist i ) ) = i + i 1 }
+    = g_fold_jdirty F
 }
 
 // The slot and flag registers of a registration line
@@ -75560,7 +75706,7 @@ unsafe @ __fold_commit_jflags → v {
 
 // Does line [ls, le) make a call?
 unsafe @ __fold_has_call i ls i le → b {
-    ^ >= ( nurl_memmem_range # s + g_dce_mod ls - le ls ` call ` 6 ) 0
+    ^ >= ( __fold_find ls le ` call ` 6 1 ) 0
 }
 
 // Length of the `%rN` token that ends at `fe`.
@@ -75597,8 +75743,11 @@ unsafe @ __fold_add_flag i r → v {
 }
 
 unsafe @ __fold_commit_all → v {
+    // No flag store since the last commit: none is pending.
+    ? ! g_fold_adirty { ^ v } {}
     : ~ i i 0
     ~ < i g_fold_nf { ( __fold_commit ( nurl_peek # s g_fold_flist i ) ) = i + i 1 }
+    = g_fold_adirty F
 }
 
 // End of the operand token starting at `p`.
@@ -75671,6 +75820,18 @@ unsafe @ __fold_commit_all → v {
 
 // Mark every flag register named in [from, to) as address-taken.
 @ __fold_escape i from i to → v {
+    // Nothing is quoted: only a `%` can start a register.
+    ? g_fold_noq {
+        : ~ i q ( __fold_next_pct from to )
+        ~ < q to {
+            : i r ( __fold_reg q to )
+            ? >= r 0 {
+                ? == 1 ( __fold_get r 3 ) { ( __fold_put r 3 2 ) } {}
+                = q ( __fold_next_pct g_fold_end to )
+            } { = q ( __fold_next_pct + q 1 to ) }
+        }
+        ^ v
+    } {}
     : ~ i p from
     : ~ b quoted F
     ~ < p to {
@@ -75702,9 +75863,13 @@ unsafe @ __fold_commit_all → v {
     } {}
     // A block boundary: a pending store may be read in a successor.
     ? & != 32 ( __fold_byte ls ) == 58 ( __fold_byte - le 1 ) { ( __fold_commit_all ) ^ T } {}
-    ? | | | ( __fold_at ls `  br ` 5 ) ( __fold_at ls `  ret` 5 ) ( __fold_at ls `  switch ` 9 ) ( __fold_at ls `  unreachable` 13 ) {
+    // Every shape below is told apart by its third byte first.
+    : i c2 ( __fold_byte + ls 2 )
+    ? | | | & == c2 98 ( __fold_at ls `  br ` 5 ) & == c2 114 ( __fold_at ls `  ret` 5 ) & == c2 115 ( __fold_at ls `  switch ` 9 ) & == c2 117 ( __fold_at ls `  unreachable` 13 ) {
         ( __fold_commit_all )
     } {}
+    // Each `  call void @…` shape below needs a `c` there.
+    : b cl == 99 c2
     // A journal registration (nurl_journal_push_drop2: slot, flag, drop)
     // reads its flag only when a panic drains it — inside a call made
     // while it is registered — and takes its address for nothing else. So
@@ -75715,7 +75880,7 @@ unsafe @ __fold_commit_all → v {
     // parameter, a view, a temporary a callee sinks — and gives one whose
     // flag folds true a null flag (always drop). A slot registered under
     // two different flags keeps both unfolded, so its forgets stay paired.
-    ? ( __fold_at ls `  call void @nurl_journal_push_drop2(ptr ` 41 ) {
+    ? & cl ( __fold_at ls `  call void @nurl_journal_push_drop2(ptr ` 41 ) {
         : i fj ( __fold_jrnl_regs ls le )
         ? >= fj 0 {
             : i sr g_fold_x
@@ -75741,12 +75906,18 @@ unsafe @ __fold_commit_all → v {
             ^ T
         } {}
     } {}
-    // A call may panic, and the drain reads every registered flag then.
-    ? & > g_fold_nj 0 ( __fold_has_call ls le ) { ( __fold_commit_jflags ) } {}
+    // A call may panic, and the drain reads every registered flag then —
+    // which changes something only while one holds a pending store.
+    ? & & > g_fold_nj 0 g_fold_jdirty ( __fold_has_call ls le ) { ( __fold_commit_jflags ) } {}
+    // The line's own register, `  %rN`, for the escape below.
+    : ~ i dr -1
+    : ~ i de ls
     ? ( __fold_at ls `  %r` 4 ) {
         : i r ( __fold_reg + ls 2 le )
         ? >= r 0 {
             : i e g_fold_end
+            = dr r
+            = de e
             ? & ( __fold_at e ` = alloca i1` 12 ) == le + e 12 { ( __fold_add_flag r ) ^ T } {}
             ? ( __fold_at e ` = load i1, ` 12 ) {
                 : i f ( __fold_ptr_reg + e 12 le )
@@ -75759,7 +75930,7 @@ unsafe @ __fold_commit_all → v {
             } {}
         } {}
     } {}
-    : i sf ( __fold_store_flag ls le )
+    : i sf ? == c2 115 ( __fold_store_flag ls le ) -1
     ? & >= sf 0 != 0 ( __fold_get sf 3 ) {
         : i vx g_fold_x
         : i vy g_fold_y
@@ -75768,26 +75939,31 @@ unsafe @ __fold_commit_all → v {
         // A later round reads the value again if the store is live.
         ? & g_fold_rec == bits 4 { = bits | 4 << + ( __fold_rec_dstore vx vy ) 1 3 } {}
         ( __fold_put sf 5 bits )
+        = g_fold_jdirty T
+        = g_fold_adirty T
         ^ T
     } {}
     // A per-call ownership publish that folds away reads nothing.
-    ? ( __fold_at ls `  call void @__nurl_hown_pub(ptr @.__nurl_retdyn.` 49 ) {
+    ? & cl ( __fold_at ls `  call void @__nurl_hown_pub(ptr @.__nurl_retdyn.` 49 ) {
         ? == 0 ( __fold_flag + ls 33 le ) { ^ T } {}
     } {}
-    ? ( __fold_at ls `  call void @__nurl_clear_if(ptr @.__nurl_` 42 ) {
+    ? & cl ( __fold_at ls `  call void @__nurl_clear_if(ptr @.__nurl_` 42 ) {
         : i f ( __fold_flag + ls 33 le )
         ? ( __fold_at g_fold_end `, ptr ` 6 ) {
             : i fr ( __fold_reg + g_fold_end 6 le )
             ? & >= fr 0 != 0 ( __fold_get fr 3 ) {
                 // select(f, false, old): f false changes nothing; f true
                 // overwrites; unknown may leave either.
-                ? == f 1 { ( __fold_put fr 5 1 ) } {}
+                ? == f 1 { ( __fold_put fr 5 1 ) = g_fold_jdirty T = g_fold_adirty T } {}
                 ? < f 0 { ( __fold_commit fr ) ( __fold_put fr 4 | ( __fold_get fr 4 ) 1 ) } {}
                 ^ T
             } {}
         } {}
     } {}
-    ( __fold_escape ls le )
+    // The escape: the line's own register as the scan would meet it
+    // first, then the rest of the line past it.
+    ? >= dr 0 { ? == 1 ( __fold_get dr 3 ) { ( __fold_put dr 3 2 ) } {} } {}
+    ( __fold_escape de le )
     ^ F
 }
 
@@ -75808,16 +75984,18 @@ unsafe @ __fold_value_line i ls i le → v {
     ? < r 0 { ^ v } {}
     : i o + g_fold_end 3
     ? ! ( __fold_at g_fold_end ` = ` 3 ) { ^ v } {}
-    ? ( __fold_at o `load i1, ptr @.__nurl_` 22 ) {
+    // The opcode's first byte rules out every shape but one.
+    : i c0 ( __fold_byte o )
+    ? & == c0 108 ( __fold_at o `load i1, ptr @.__nurl_` 22 ) {
         : i f ( __fold_flag + o 13 le )
         ? & >= f 0 == g_fold_end le { ( __fold_set r 1 f 0 ) } {}
         ^ v
     } {}
     : ~ i op 0
     : ~ i ap 0
-    ? ( __fold_at o `xor i1 ` 7 ) { = op 1 = ap + o 7 } {}
-    ? ( __fold_at o `and i1 ` 7 ) { = op 2 = ap + o 7 } {}
-    ? ( __fold_at o `or i1 ` 6 ) { = op 3 = ap + o 6 } {}
+    ? & == c0 120 ( __fold_at o `xor i1 ` 7 ) { = op 1 = ap + o 7 } {}
+    ? & == c0 97 ( __fold_at o `and i1 ` 7 ) { = op 2 = ap + o 7 } {}
+    ? & == c0 111 ( __fold_at o `or i1 ` 6 ) { = op 3 = ap + o 6 } {}
     ? != op 0 {
         : i ae ( __fold_tok_end ap le )
         ? ! ( __fold_at ae `, ` 2 ) { ^ v } {}
@@ -75843,7 +76021,7 @@ unsafe @ __fold_value_line i ls i le → v {
         } {}
         ^ v
     } {}
-    ? ( __fold_at o `select i1 ` 10 ) {
+    ? & == c0 115 ( __fold_at o `select i1 ` 10 ) {
         : i cp + o 10
         : i ce ( __fold_tok_end cp le )
         ? ! ( __fold_at ce `, ` 2 ) { ^ v } {}
@@ -75866,6 +76044,7 @@ unsafe @ __fold_value_line i ls i le → v {
         ( __fold_set r g_fold_k g_fold_x g_fold_y )
         ^ v
     } {}
+    ? != c0 99 { ^ v } {}
     // Per-call ownership of a callee that answers statically: its constant.
     ? ( __fold_at o `call i1 @__nurl_ret_own(ptr @.__nurl_retdyn.` 44 ) {
         : i d ( __fold_flag + o 28 le )
@@ -75889,13 +76068,13 @@ unsafe @ __fold_value_line i ls i le → v {
         ^ v
     } {}
     ? ( __fold_at o `call ` 5 ) {
-        : i at ( nurl_memmem_range # s + g_dce_mod o - le o ` @__nurl_cloneif` 16 )
+        : i at ( __fold_find o le ` @__nurl_cloneif` 16 1 )
         ? < at 0 { ^ v } {}
         : i np + + o at 16
         : ~ b none F
         ? ( __fold_at np `_` 1 ) {
             // __nurl_cloneif_T(i1 C, T V)
-            : i lp ( nurl_memmem_range # s + g_dce_mod np - le np `(i1 ` 4 )
+            : i lp ( __fold_find np le `(i1 ` 4 0 )
             ? < lp 0 { ^ v } {}
             : i cq + + np lp 4
             ( __fold_operand cq ( __fold_tok_end cq le ) T )
@@ -75903,7 +76082,7 @@ unsafe @ __fold_value_line i ls i le → v {
         } {
             : b rv ( __fold_at np `kr_` 3 )
             ? & ! rv ! ( __fold_at np `k_` 2 ) { ^ v } {}
-            : i lp ( nurl_memmem_range # s + g_dce_mod np - le np `(ptr @.__nurl_` 14 )
+            : i lp ( __fold_find np le `(ptr @.__nurl_` 14 5 )
             ? < lp 0 { ^ v } {}
             : i f1 ( __fold_flag + + np lp 5 le )
             ? < f1 0 { ^ v } {}
@@ -76009,7 +76188,25 @@ unsafe @ __fold_replay → v {
 }
 
 @ __fold_puts s t i part → v {
+    ( __fold_flush part )
     ? == part 0 { ( nurl_print t ) } { ( __sp_puts t ) }
+}
+
+// Write module bytes [a, b) — held back while the next write goes on
+// from where it ends, so a run of unchanged lines is written in one piece.
+@ __fold_write i a i b i part → v {
+    ? >= a b { ^ v } {}
+    ? == a g_fold_wb { = g_fold_wb b ^ v } {}
+    ( __ir_write_range g_fold_wa g_fold_wb part )
+    = g_fold_wa a
+    = g_fold_wb b
+}
+
+// Write what __fold_write holds back.
+@ __fold_flush i part → v {
+    ( __ir_write_range g_fold_wa g_fold_wb part )
+    = g_fold_wa 0
+    = g_fold_wb 0
 }
 
 // Write the mapping of register r (depth-limited: an alias names an
@@ -76030,15 +76227,15 @@ unsafe @ __fold_replay → v {
         // start a register to fold. The search jumps from one to the next;
         // a byte loop over every line of the function cost more than the
         // folding did (agora #305).
-        : i qe ( __fold_next p to `"` )
+        : i qe ? g_fold_noq to ( __fold_next p to 34 )
         ~ < p qe {
-            = p ( __fold_next p qe `%` )
+            = p ? g_fold_noq ( __fold_next_pct p qe ) ( __fold_next p qe 37 )
             ? < p qe {
                 ? & < depth 16 ! ( __dce_ident_byte ( __fold_byte - p 1 ) ) {
                     : i r ( __fold_reg p to )
                     : i re g_fold_end
                     ? & >= r 0 != 0 ( __fold_kind r ) {
-                        ( __ir_write_range run p part )
+                        ( __fold_write run p part )
                         ( __fold_put_reg r part + depth 1 )
                         = p re
                         = run p
@@ -76048,11 +76245,11 @@ unsafe @ __fold_replay → v {
         }
         // A quoted stretch, written as it is: up to and past its closing `"`.
         ? < p to {
-            : i ce ( __fold_next + p 1 to `"` )
+            : i ce ( __fold_next + p 1 to 34 )
             = p ? < ce to + ce 1 to
         } {}
     }
-    ( __ir_write_range run to part )
+    ( __fold_write run to part )
 }
 
 // Is the first argument of the call at `lp` (just past `(i1 `) a constant
@@ -76064,10 +76261,15 @@ unsafe @ __fold_replay → v {
 
 // Pass 2 over one line [ls, le] (le at its newline).
 unsafe @ __fold_emit_line i ls i le i part → v {
+    // The line's own register, `  %rN`, for the write at the end.
+    : ~ i dr -1
+    : ~ i de ls
     ? ( __fold_at ls `  %r` 4 ) {
         : i r ( __fold_reg + ls 2 le )
         ? >= r 0 {
             : i e g_fold_end
+            = dr r
+            = de e
             ? ( __fold_at e ` = ` 3 ) {
                 ? != 0 ( __fold_kind r ) { ^ v } {}
                 // A constant flag's slot.
@@ -76076,11 +76278,11 @@ unsafe @ __fold_emit_line i ls i le i part → v {
             // A copy whose flag turned out set: call __nurl_cloneif_T directly.
             : i o + e 3
             ? ( __fold_at o `call ` 5 ) {
-                : i at ( nurl_memmem_range # s + g_dce_mod o - le o ` @__nurl_cloneifk` 17 )
+                : i at ( __fold_find o le ` @__nurl_cloneifk` 17 1 )
                 ? >= at 0 {
                     : i np + + o at 17
                     : b rv ( __fold_at np `r_` 2 )
-                    : i lp ( nurl_memmem_range # s + g_dce_mod np - le np `(ptr @.__nurl_` 14 )
+                    : i lp ( __fold_find np le `(ptr @.__nurl_` 14 5 )
                     ? >= lp 0 {
                         : i f1 ( __fold_flag + + np lp 5 le )
                         : i a2 + g_fold_end 2
@@ -76102,9 +76304,9 @@ unsafe @ __fold_emit_line i ls i le i part → v {
                             }
                             ? != 37 ( __fold_byte ts ) { = cond_ok F } {}
                             ? cond_ok {
-                                ( __ir_write_range ls + + o at 16 part )
+                                ( __fold_write ls + + o at 16 part )
                                 ( __fold_puts `_` part )
-                                ( __ir_write_range + np ? rv 2 1 + np lp part )
+                                ( __fold_write + np ? rv 2 1 + np lp part )
                                 ( __fold_puts `(i1 ` part )
                                 ? == ce 0 { ( __fold_puts `true` part ) } { ( __fold_put_range cs ce part 0 ) }
                                 ( __fold_puts `, ` part )
@@ -76117,35 +76319,39 @@ unsafe @ __fold_emit_line i ls i le i part → v {
             } {}
         } {}
     } {}
-    ? != 0 g_fold_nf {
+    // A flag store needs an `s` as the third byte, each `  call void @…`
+    // shape below a `c`.
+    : i c2 ( __fold_byte + ls 2 )
+    ? & != 0 g_fold_nf == c2 115 {
         : i sf ( __fold_store_flag ls le )
         ? & >= sf 0 >= ( __fold_get sf 3 ) 3 { ^ v } {}
     } {}
+    : b cl == 99 c2
     // Journal registrations by their folded flag (__fold_flag_line): one
     // that never owns goes, with its forgets; one that always owns drops
     // unconditionally (a null flag).
-    ? & != 0 g_fold_nf ( __fold_at ls `  call void @nurl_journal_push_drop2(ptr ` 41 ) {
+    ? & & cl != 0 g_fold_nf ( __fold_at ls `  call void @nurl_journal_push_drop2(ptr ` 41 ) {
         : i fj ( __fold_jrnl_regs ls le )
         ? >= fj 0 {
             : i fs ( __fold_get fj 3 )
             ? == fs 3 { ^ v } {}
             ? == fs 4 {
                 : i fe g_fold_end
-                ( __ir_write_range ls - fe ( __fold_jrnl_tok fe ) part )
+                ( __fold_write ls - fe ( __fold_jrnl_tok fe ) part )
                 ( __fold_puts `null` part )
                 ( __fold_put_range fe + le 1 part 0 )
                 ^ v
             } {}
         } {}
     } {}
-    ? & != 0 g_fold_nf ( __fold_at ls `  call void @nurl_journal_forget_slot(ptr ` 42 ) {
+    ? & & cl != 0 g_fold_nf ( __fold_at ls `  call void @nurl_journal_forget_slot(ptr ` 42 ) {
         : i sr ( __fold_reg + ls 42 le )
         ? >= sr 0 {
             : i f1 ( __fold_get sr 1 )
             ? > f1 0 { ? == 3 ( __fold_get - f1 1 3 ) { ^ v } {} } {}
         } {}
     } {}
-    ? ( __fold_at ls `  call void @__nurl_clear_if(ptr @.__nurl_` 42 ) {
+    ? & cl ( __fold_at ls `  call void @__nurl_clear_if(ptr @.__nurl_` 42 ) {
         : i f ( __fold_flag + ls 33 le )
         ? == f 0 { ^ v } {}
         ? ( __fold_at g_fold_end `, ptr ` 6 ) {
@@ -76159,40 +76365,47 @@ unsafe @ __fold_emit_line i ls i le i part → v {
             } {}
         } {}
     } {}
-    ? ( __fold_at ls `  call void @__nurl_hown_pub(ptr @.__nurl_retdyn.` 49 ) {
+    ? & cl ( __fold_at ls `  call void @__nurl_hown_pub(ptr @.__nurl_retdyn.` 49 ) {
         ? == 0 ( __fold_flag + ls 33 le ) { ^ v } {}
     } {}
     // A string argument its callee does not take: nothing to hand over.
-    ? ( __fold_at ls `  call void @__nurl_argxfer(ptr @.__nurl_` 41 ) {
+    ? & cl ( __fold_at ls `  call void @__nurl_argxfer(ptr @.__nurl_` 41 ) {
         ? == 0 ( __fold_flag + ls 32 le ) { ^ v } {}
     } {}
     // The drop of a binding that never owns; a field zeroed only if a
     // callee took it, when none does.
-    ? | ( __fold_at ls `  call void @__dropif` 20 ) ( __fold_at ls `  call void @__nurl_zero_if.` 28 ) {
-        : i lp ( nurl_memmem_range # s + g_dce_mod ls - le ls `(i1 ` 4 )
+    ? & cl | ( __fold_at ls `  call void @__dropif` 20 ) ( __fold_at ls `  call void @__nurl_zero_if.` 28 ) {
+        : i lp ( __fold_find ls le `(i1 ` 4 0 )
         ? >= lp 0 { ? ( __fold_arg_false + + ls lp 4 le ) { ^ v } {} } {}
     } {}
     // …and the field address computed for it alone, on the line before.
     ? ( __fold_zeroes_next ls le ) { ^ v } {}
+    // A line's own register that does not fold is written as is, and
+    // only the rest of the line is searched.
+    ? & >= dr 0 == 0 ( __fold_kind dr ) {
+        ( __fold_write ls de part )
+        ( __fold_put_range de + le 1 part 0 )
+        ^ v
+    } {}
     ( __fold_put_range ls + le 1 part 0 )
 }
 
 // Is [ls, le) `  %rG = getelementptr …` whose only use is the next line,
 // a `__nurl_zero_if` that folds away? mem_zero_field emits the pair.
 unsafe @ __fold_zeroes_next i ls i le → b {
+    // The next line first: it rules out nearly every line.
+    : i ns + le 1
+    ? >= ns g_fold_fn_end { ^ F } {}
+    ? ! ( __fold_at ns `  call void @__nurl_zero_if.` 28 ) { ^ F } {}
     ? ! ( __fold_at ls `  %r` 4 ) { ^ F } {}
     : i g ( __fold_reg + ls 2 le )
     ? < g 0 { ^ F } {}
     ? ! ( __fold_at g_fold_end ` = getelementptr ` 17 ) { ^ F } {}
     : i gs + ls 2
     : i ge g_fold_end
-    : i ns + le 1
-    ? >= ns g_fold_fn_end { ^ F } {}
-    ? ! ( __fold_at ns `  call void @__nurl_zero_if.` 28 ) { ^ F } {}
-    : i rel ( nurl_memmem_range # s + g_dce_mod ns - g_fold_fn_end ns `\n` 1 )
-    ? < rel 0 { ^ F } {}
-    : i ne + ns rel
-    : i lp ( nurl_memmem_range # s + g_dce_mod ns - ne ns `(i1 ` 4 )
+    : i ne ( __fold_next ns g_fold_fn_end 10 )
+    ? >= ne g_fold_fn_end { ^ F } {}
+    : i lp ( __fold_find ns ne `(i1 ` 4 0 )
     ? < lp 0 { ^ F } {}
     ? ! ( __fold_arg_false + + ns lp 4 ne ) { ^ F } {}
     // `…, ptr %rG)` ends the call.
@@ -76203,7 +76416,7 @@ unsafe @ __fold_zeroes_next i ls i le → b {
 
 // Write function [st, en) with its flags folded.
 unsafe @ __ir_fold_range i st i en i part → v {
-    ? | == g_fold_flags 0 < ( nurl_memmem_range # s + g_dce_mod st - en st `@.__nurl_` 9 ) 0 {
+    ? | == g_fold_flags 0 < ( __fold_find st en `@.__nurl_` 9 0 ) 0 {
         ( __ir_write_range st en part ) ^ v
     } {}
     // The first round reads the function's text and keeps what the rounds
@@ -76215,10 +76428,16 @@ unsafe @ __ir_fold_range i st i en i part → v {
     = g_fold_nds 0
     = g_fold_nld 0
     = g_fold_rec T
+    = g_fold_jdirty F
+    = g_fold_adirty F
+    = g_fold_neol 0
+    = g_fold_fn_end en
+    = g_fold_noq == ( __fold_next st en 34 ) en
+    = g_fold_pc -1
     : ~ i p st
     ~ < p en {
-        : i rel ( nurl_memmem_range # s + g_dce_mod p - en p `\n` 1 )
-        : i le ? < rel 0 en + p rel
+        : i le ( __fold_next p en 10 )
+        ( __fold_rec_eol le )
         ( __fold_scan_line p le )
         = p + le 1
     }
@@ -76231,16 +76450,18 @@ unsafe @ __ir_fold_range i st i en i part → v {
         = again & > ( __fold_settle_flags ) 0 < round 4
     }
     ? == g_fold_nt 0 { ( __ir_write_range st en part ) ^ v } {}
-    = g_fold_fn_end en
+    // The same lines again, from pass 1's ends (en: no newline).
     : ~ i p st
+    : ~ i k 0
     ~ < p en {
-        : i rel ( nurl_memmem_range # s + g_dce_mod p - en p `\n` 1 )
-        ? < rel 0 { ( __fold_put_range p en part 0 ) = p en } {
-            : i le + p rel
+        : i le ( nurl_peek # s g_fold_eols k )
+        = k + k 1
+        ? >= le en { ( __fold_put_range p en part 0 ) = p en } {
             ( __fold_emit_line p le part )
             = p + le 1
         }
     }
+    ( __fold_flush part )
     ( __fold_reset )
 }
 
@@ -76346,20 +76567,21 @@ unsafe @ __tf_record i mp i st i en i k → i {
 
 // The end of the line starting at `st` (just past its newline).
 unsafe @ __tf_eol i mp i mlen i st → i {
-    : i nl ( nurl_memmem_range # s + mp st - mlen st `\n` 1 )
-    ^ ? < nl 0 mlen + + st nl 1
+    ? >= st mlen { ^ mlen } {}
+    : i nl # i ( memchr # *u + mp st 10 - mlen st )
+    ^ ? == nl 0 mlen + - nl mp 1
 }
 
 // The next `\n%` at or after `pos` (relative to it), or -1: a line
-// ending found at memchr speed, then its next byte — the module is
-// megabytes, and a two-byte memmem walks it byte by byte.
+// ending found by memchr, then its next byte — the module is megabytes,
+// and a two-byte memmem walks it byte by byte.
 unsafe @ __tf_next i mp i mlen i pos → i {
     : *u m # *u # s mp
     : ~ i p pos
     ~ < p mlen {
-        : i nl ( nurl_memmem_range # s + mp p - mlen p `\n` 1 )
-        ? < nl 0 { ^ -1 } {}
-        : i at + p nl
+        : i nl # i ( memchr # *u + mp p 10 - mlen p )
+        ? == nl 0 { ^ -1 } {}
+        : i at - nl mp
         ? & < + at 1 mlen == & # i . m + at 1 255 37 { ^ - at pos } {}
         = p + at 1
     }
@@ -76374,12 +76596,29 @@ unsafe @ __types_first s mod i mlen → s {
     // inside a string constant is escaped.
     : b at0 & > mlen 0 == & # i . m 0 255 37
     : ~ i n ? at0 1 0
+    // The start of every `%` line after a newline, kept from the one walk
+    // over the module's lines that finds them.
+    : ~ i lcap 256
+    : ~ i lst # i # s ( nurl_alloc * lcap 8 )
+    : ~ i nl 0
     : ~ i pos 0
     ~ < pos mlen {
         : i rel ( __tf_next mp mlen pos )
-        ? < rel 0 { = pos mlen } { = n + n 1 = pos + + pos rel 2 }
+        ? < rel 0 { = pos mlen } {
+            ? >= nl lcap {
+                = lcap * lcap 2
+                : i grown # i # s ( nurl_alloc * lcap 8 )
+                ( memcpy # s grown # s lst * nl 8 )
+                ( nurl_free # s lst )
+                = lst grown
+            } {}
+            ( nurl_poke # s lst nl + + pos rel 1 )
+            = nl + nl 1
+            = pos + + pos rel 2
+        }
     }
-    ? == n 0 { ^ # s 0 } {}
+    = n + n nl
+    ? == n 0 { ( nurl_free # s lst ) ^ # s 0 } {}
     = g_tf_st # i # s ( nurl_zalloc * n 8 )
     = g_tf_en # i # s ( nurl_zalloc * n 8 )
     = g_tf_body # i # s ( nurl_zalloc * n 8 )
@@ -76387,16 +76626,13 @@ unsafe @ __types_first s mod i mlen → s {
     = g_tf_map ( nurl_sym_new )
     : ~ i k 0
     ? at0 { = k ( __tf_record mp 0 ( __tf_eol mp mlen 0 ) k ) } {}
-    = pos 0
-    ~ < pos mlen {
-        : i rel ( __tf_next mp mlen pos )
-        ? < rel 0 { = pos mlen } {
-            : i st + + pos rel 1
-            : i en ( __tf_eol mp mlen st )
-            = k ( __tf_record mp st en k )
-            = pos - en 1
-        }
+    : ~ i li 0
+    ~ < li nl {
+        : i st ( nurl_peek # s lst li )
+        = k ( __tf_record mp st ( __tf_eol mp mlen st ) k )
+        = li + li 1
     }
+    ( nurl_free # s lst )
     : ~ s out # s 0
     ? > k 0 {
         = g_tf_out # i # s ( nurl_alloc + mlen 1 )
@@ -76474,16 +76710,23 @@ unsafe @ __dce_emit_module s mod i mlen → v {
     = g_split_n 0
     // Neither pass wants the index — hand the module straight to stdout.
     ? & & == 0 g_dce == 0 g_split_max == 0 g_sanitize_address { ( __dce_print_range 0 mlen ) ^ v } {}
-    : i n ( __dce_index mlen 1 )
+    : i n ( __dce_index mlen )
     ? == 0 n { ( __sp_whole mlen ) ^ v } {}
-    = g_dce_start # i # s ( nurl_zalloc * n 8 )
-    = g_dce_end # i # s ( nurl_zalloc * n 8 )
     = g_dce_live # i # s ( nurl_zalloc * n 8 )
     = g_dce_at # i # s ( nurl_zalloc * n 8 )
     = g_dce_queue # i # s ( nurl_zalloc * n 8 )
     = g_dce_map ( nurl_sym_new )
     = g_dce_qn 0
-    ( __dce_index mlen 0 )
+    = g_dce_dotfn F
+    : ~ i ri 0
+    ~ < ri n { ( __dce_record_name ( nurl_peek # s g_dce_start ri ) ri ) = ri + ri 1 }
+    // __dce_scan walks every name it looks up, and __mp_callee (the
+    // journal's panic graph, below) every callee's: one table read a byte
+    // instead of __dce_ident_byte's range tests.
+    = g_dce_idb # i # s ( nurl_zalloc 256 )
+    : *u idb # *u # s g_dce_idb
+    : ~ i ib 0
+    ~ < ib 256 { ? ( __dce_ident_byte ib ) { = . idb ib # u 1 } {} = ib + ib 1 }
     // The ownership flags are final by now; the writer folds them (see
     // __ir_fold_range). They live at module scope, between the bodies.
     = g_fold_flags ( nurl_sym_new )
@@ -76571,6 +76814,7 @@ unsafe @ dce_free → v {
     ( nurl_free # s g_dce_end )
     ( nurl_free # s g_dce_live )
     ( nurl_free # s g_dce_at ) = g_dce_at 0
+    ( nurl_free # s g_dce_idb ) = g_dce_idb 0
     ( nurl_free # s g_dce_queue )
     ( nurl_sym_free g_dce_map )
     ? != g_fold_flags 0 { ( nurl_sym_free g_fold_flags ) = g_fold_flags 0 } {}
