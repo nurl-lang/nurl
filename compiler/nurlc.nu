@@ -36649,17 +36649,19 @@ unsafe @ bck_sx_split s args → s {
 // handle (`ret_alias`, `retpass`), is that argument's storage; any other
 // lend a part of it, `^` (an element, a field); a join's, each arm's. Not
 // what the views it holds point into, which a change of it leaves where
-// they are. `*` when it holds a value not modelled (agora #349).
-@ bck_sx_mut_roots s st s sx → s {
+// they are. `*` when it holds a value not modelled (agora #349). (`named`:
+// a binding as the name it is, a borrow too — the row naming it follows
+// what it borrows from, as a `:`-bound argument's row does.)
+@ bck_sx_mut_roots s st s sx b named → s {
     = g_sxe_pos 0
     = g_sxe_unk F
-    : s all ( __sx_mut_roots st sx )
+    : s all ( __sx_mut_roots st sx named )
     ? g_sxe_unk { ^ ( nurl_str_cat `*` `` ) } {}
     ^ all
 }
 
 // …of the sub-expression of `e` at g_sxe_pos.
-unsafe @ __sx_mut_roots s st s e → s {
+unsafe @ __sx_mut_roots s st s e b named → s {
     : i n ( nurl_str_len e )
     ? >= g_sxe_pos n { ^ ( nurl_str_cat `` `` ) } {}
     : *u ep # *u e
@@ -36668,7 +36670,7 @@ unsafe @ __sx_mut_roots s st s e → s {
         : ~ s out ``
         : ~ b more T
         ~ more {
-            = out ( __word_union out ( __sx_mut_roots st e ) )
+            = out ( __word_union out ( __sx_mut_roots st e named ) )
             ? & < g_sxe_pos n == # i . ep g_sxe_pos 59 { = g_sxe_pos + g_sxe_pos 1 } {
                 = more F
                 ? & < g_sxe_pos n == # i . ep g_sxe_pos 125 { = g_sxe_pos + g_sxe_pos 1 } {}
@@ -36689,7 +36691,7 @@ unsafe @ __sx_mut_roots s st s e → s {
         ~ more {
             : s js ( nurl_str_int j )
             ? ( mem_fn_lends_arg w js ) {
-                : s r ( __sx_mut_roots st e )
+                : s r ( __sx_mut_roots st e named )
                 : b whole | ( str_contains_word ( nurl_sym_get g_fn_ret_alias w ) js ) ( str_contains_word ( nurl_sym_get g_pending_impl ( nurl_str_cat `retpass##` w ) ) js )
                 = out ( __word_union out ? whole r ( __src_as_ind r ) )
             } { ( bck_sx_skip e ) }
@@ -36702,6 +36704,7 @@ unsafe @ __sx_mut_roots s st s e → s {
     } {}
     ? ( seq w `-` ) { ^ ( nurl_str_cat `` `` ) } {}
     ? ( seq w `*` ) { = g_sxe_unk T ^ ( nurl_str_cat `` `` ) } {}
+    ? named { ^ ( nurl_str_cat w `` ) } {}
     ^ ( bck_sx_mut_storage st w )
 }
 
@@ -36724,7 +36727,7 @@ unsafe @ __sx_mut_roots s st s e → s {
 // call's temporary, a literal: nothing another argument can share).
 @ bck_sx_mut_storage s st s e → s {
     ? | | == 0 ( nurl_str_len e ) ( seq e `-` ) ( seq e `*` ) { ^ ( nurl_str_cat `` `` ) } {}
-    ? | >= ( nurl_str_find e `(` ) 0 >= ( nurl_str_find e `{` ) 0 { ^ ( bck_sx_mut_roots st e ) } {}
+    ? | >= ( nurl_str_find e `(` ) 0 >= ( nurl_str_find e `{` ) 0 { ^ ( bck_sx_mut_roots st e F ) } {}
     : i id ( nurl_str_to_int e )
     : i r ( bck_path_root id )
     : s rs ( nurl_str_int r )
@@ -38870,9 +38873,10 @@ unsafe @ __bck_row_sx s rec → b {
 }
 
 // A pending row named by its argument's source expression, `@sx`: swept as
-// the row naming each storage the sx is by the final summaries
-// (bck_sx_mut_roots, g_bck_sx_wid) — a binding's own, `R`, as the row
-// naming R; an element of one, `^R` (`( vec_at vv 0 )`, g_bck_sx_part), as
+// the row naming each binding the sx is, or is a part of, by the final
+// summaries (bck_sx_mut_roots, g_bck_sx_wid) — `R`, as the row naming R
+// (a borrow followed to what it borrows from, as for a `:`-bound
+// argument); an element of one, `^R` (`( vec_at vv 0 )`, g_bck_sx_part), as
 // a value lent from R, `pendlend`: its views and those into its elements
 // end, as through its `:`-bound twin's borrow. (Not the views of R's own
 // buffer only, which stays where it is: a view or a holder of both R's
@@ -38885,7 +38889,7 @@ unsafe @ __bck_row_sx s rec → b {
     : s aix ( bck_field rec 6 )
     ? ! | | | ( bck_callee_drops_elems cal aix ) ( nurl_sym_has_word g_fn_reallocs cal aix ) & != 0 g_irealloc_any ( nurl_sym_has_word g_fn_ireallocs cal aix ) != 0 ( nurl_str_len ( __repl_of cal aix ) ) { ^ st } {}
     : s w1 ( bck_field rec 1 )
-    : s roots ( bck_sx_mut_roots st ( nurl_str_slice w1 1 - ( nurl_str_len w1 ) 1 ) )
+    : s roots ( bck_sx_mut_roots st ( nurl_str_slice w1 1 - ( nurl_str_len w1 ) 1 ) T )
     ? | == 0 ( nurl_str_len roots ) ( seq roots `*` ) { ^ st } {}
     : ~ s out st
     : ~ s rest ( nurl_str_cat roots `` )
