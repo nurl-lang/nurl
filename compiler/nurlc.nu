@@ -10400,7 +10400,7 @@ unsafe @ origin_guard_retained i root → b {
     // (`&&` / `||`: asked of every call, so only as far as needed.)
     ? && && != 0 g_borrowck == 0 g_bck_rec_off && != 0 ( nurl_str_len cn ) || == 0 ( nurl_sym_len g_fn_compiled cn ) ( __vk_pend cn ) {
         // (Its declared result: the call's own type is not set yet here.)
-        ? ( __rv_holder_result cn ) {
+        ? ( __rv_holder_result cn F ) {
             ( bck_put `deferred` `1` )
             ( bck_add_word_once `rvcallees` cn )
         } {}
@@ -30314,6 +30314,11 @@ unsafe @ __ty_holds_view s ty i depth → b {
 // function, the trusted library) vouches for its addresses; what its
 // results view of their arguments reaches safe code through its summaries
 // (retptr / retlend, raw provenance).
+// It is codegen's question, about the function compiling now
+// (bck_unsafe_ctx). The walk does not ask it: what it evaluates — source
+// expressions — only safe code has (g_srcx_on), so a type there is
+// bck_bind_class's. A walk parked until the module has compiled
+// (bck_defer_fn) runs where the context is the last function compiled's.
 // The borrow-walk class of a `:` binding of a closure that does not own
 // its env (mem_bind_closure_owner: not a literal, a call's fresh result, or
 // a move out of a binding that owned it): 5 (`k`), a borrow of what its
@@ -33409,7 +33414,7 @@ unsafe @ __sx_view_at s st s e → b {
     : s w ( nurl_str_slice e s0 - p s0 )
     ? & < p n == # i . ep p 40 {
         ? == 0 ( nurl_sym_len g_root_syms w ) { ^ F } {}
-        ^ == 2 ( bck_walk_class ( nurl_llty ( nurl_sym_get g_root_syms w ) ) )
+        ^ == 2 ( bck_bind_class ( nurl_llty ( nurl_sym_get g_root_syms w ) ) )
     } {}
     ? | ( seq w `-` ) ( seq w `*` ) { ^ F } {}
     : s rs ( nurl_str_int ( bck_path_root ( nurl_str_to_int w ) ) )
@@ -33574,7 +33579,7 @@ unsafe @ bck_sx_ev s st s e b arg → s {
         = g_sxe_hctn F
         // (…and what its result is: a view's copy holds what the elements
         // of the storage it points into view, below.)
-        : i __vcls ? & __vh != 0 ( nurl_sym_len g_root_syms w ) ( bck_walk_class ( nurl_llty ( nurl_sym_get g_root_syms w ) ) ) -1
+        : i __vcls ? & __vh != 0 ( nurl_sym_len g_root_syms w ) ( bck_bind_class ( nurl_llty ( nurl_sym_get g_root_syms w ) ) ) -1
         ? ! | | | | ( seq w `\\` ) ( seq w `\\~` ) ( seq w `\\~!` ) ( seq w `\\~*` ) ( seq w `\\a` ) { = g_sxe_vonly F } {}
         : ~ s out ``
         : ~ i j 0
@@ -35748,16 +35753,19 @@ unsafe @ __vk_assumptions_check → v {
         ? ( str_contains_word ws ( nurl_str_cat `^` aix ) ) { ^ ? hk 1 2 } {}
         ^ ? hk 3 0
     } {}
-    ? || && != 0 ( nurl_str_len g_bck_fn ) ( seq cal g_bck_fn ) ( __vk_pend cal ) { ^ ? ( __rv_holder_result cal ) 1 0 } {}
+    ? || && != 0 ( nurl_str_len g_bck_fn ) ( seq cal g_bck_fn ) ( __vk_pend cal ) { ^ ? ( __rv_holder_result cal T ) 1 0 } {}
     ^ 0
 }
 
 // Does `cal` hand back an owner that may hold views (class 3: a Vec of
-// views, a struct or an enum with a view in it)?
-@ __rv_holder_result s cal → b {
+// views, a struct or an enum with a view in it)? Codegen asks it of the
+// function compiling now (bck_walk_class: raw code reads views as
+// scalars); the walk, `walk`, of the safe code it evaluates
+// (bck_bind_class).
+@ __rv_holder_result s cal b walk → b {
     : s rt ( nurl_sym_get g_root_syms cal )
     ? == 0 ( nurl_str_len rt ) { ^ F } {}
-    ^ == ( bck_walk_class ( nurl_llty rt ) ) 3
+    ^ == ? walk ( bck_bind_class ( nurl_llty rt ) ) ( bck_walk_class ( nurl_llty rt ) ) 3
 }
 
 // `list` (sources), each plain one marked `^`: reached only through an
