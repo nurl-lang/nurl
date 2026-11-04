@@ -3238,14 +3238,16 @@ unsafe @ note_unsafe_item s pos s what → v {
 // what it names — a lend no name carries at codegen (`: r ( vec_at (
 // vec_at p 0 ) 0 )`, a join's, one a module-end note owes): `ptr=p#c`
 // words, `c` the `&`-joined `w>sx` that must hold, by the final summaries,
-// for the read to be one (__cond_holds; agora #461).
-: ~ s g_pderiv_c ``
+// for the read to be one (__cond_holds; agora #461). They are g_cedges'
+// `#pdc`, no function's name: their writers assign no `s` global, so
+// they need no `unsafe`. g_pderiv_cn is 1 once the function compiling now
+// has one.
+: ~ i g_pderiv_cn 0
 // The summary edges such a read conditions, per function (g_rpg_me_self):
 // `B:k:c` the elements of parameter k dropped, `D:k:callee:aix:c` a drop
 // edge, `R:k:callee:aix:c` an irealloc edge — kept at module end where `c`
-// holds (resolve_cond_edges); `g_cedge_fns` the functions with any.
+// holds (resolve_cond_edges); under `#fns` the functions with any.
 : ~ i g_cedges 0
-: ~ s g_cedge_fns ``
 // (The names each source expression lends out of, asked by
 // resolve_cond_edges: `:` and its words, per sx.)
 : ~ i g_nroots_memo 0
@@ -16679,7 +16681,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         // under the condition that it does: an argument named by its source
         // expression, the parameters its sx leads to, in place of the names
         // codegen has for it (__irealloc_edge_note_c; agora #461).)
-        ? | | != 0 ( nurl_str_len g_pderiv ) != 0 ( nurl_str_len arg_lend_srcs ) | != 0 ( nurl_str_len g_pderiv_c ) != 0 ( nurl_str_len arg_xsx ) {
+        ? | | != 0 ( nurl_str_len g_pderiv ) != 0 ( nurl_str_len arg_lend_srcs ) | != 0 g_pderiv_cn != 0 ( nurl_str_len arg_xsx ) {
             ? & != 0 ( nurl_str_len g_cur_params ) == 0 g_bck_closure_depth {
                 : ~ s __pr ``
                 ? ( is_ident_tok bck_arg_tt ) { = __pr ( nurl_str_cat bck_arg_val `` ) } {}
@@ -16688,13 +16690,13 @@ unsafe @ gen_call i lex i syms i cg → s {
                 // __mut_edge_note.)
                 ? & != 0 ( nurl_str_len __pr ) ( __rprov_param syms __pr ) {} {
                     : ~ s __pd ? | == 0 ( nurl_str_len __pr ) == 0 ( nurl_str_len g_pderiv ) `` ( __pderiv_params syms __pr )
-                    : ~ s __pc ? | == 0 ( nurl_str_len __pr ) == 0 ( nurl_str_len g_pderiv_c ) `` ( __pderiv_cparams syms __pr )
+                    : ~ s __pc ? | == 0 ( nurl_str_len __pr ) == 0 g_pderiv_cn `` ( __pderiv_cparams syms __pr )
                     ? != 0 ( nurl_str_len arg_xsx ) { = __pc ( __word_union __pc ( __sx_param_reach syms arg_xsx F ) ) } {}
                     : ~ s __pl ? | __arg_shared != 0 ( nurl_str_len arg_xsx ) `` ( nurl_str_cat arg_lend_srcs `` )
                     ~ != 0 ( nurl_str_len __pl ) {
                         : s __pw ( str_first_word __pl ) = __pl ( str_skip_word __pl )
                         = __pd ( __word_union __pd ( __pderiv_params syms ( __path_root_name __pw ) ) )
-                        ? != 0 ( nurl_str_len g_pderiv_c ) { = __pc ( __word_union __pc ( __pderiv_cparams syms ( __path_root_name __pw ) ) ) } {}
+                        ? != 0 g_pderiv_cn { = __pc ( __word_union __pc ( __pderiv_cparams syms ( __path_root_name __pw ) ) ) } {}
                     }
                     ~ != 0 ( nurl_str_len __pd ) {
                         : s __pn ( str_first_word __pd ) = __pd ( str_skip_word __pd )
@@ -36685,7 +36687,11 @@ unsafe @ bck_sx_split s args → s {
     ^ all
 }
 
-// …of the sub-expression of `e` at g_sxe_pos.
+// …of the sub-expression of `e` at g_sxe_pos. (`unsafe` for the pointer
+// `e`'s bytes are read through, as __sx_hroots',
+// docs/dev/COMPILER_INTERNALS.md §4: read with nurl_str_get, each byte
+// measures `e` up to it, and a word sliced out to find its end cost a
+// third more here.)
 unsafe @ __sx_mut_roots s st s e b named → s {
     : i n ( nurl_str_len e )
     ? >= g_sxe_pos n { ^ ( nurl_str_cat `` `` ) } {}
@@ -37856,8 +37862,11 @@ unsafe @ bck_sx_is_id s e → b {
 
 // Does lend list `ws` name nothing — empty, or every word `-`: an argument
 // that is no binding (a nested call, a literal), every argument of a callee
-// not compiled yet? (Walked through a pointer: nurl_str_get would measure
-// `ws` again for every byte.)
+// not compiled yet? (`unsafe` for the pointer `ws` is walked through, the
+// scan docs/dev/COMPILER_INTERNALS.md §4 prescribes: asked of every handle
+// binding __pderiv_note reaches, the safe spelling — its words copied out,
+// str_first_word — cost the self-compile 1.0M instructions more, a fifth
+// of __pderiv_note's.)
 unsafe @ __lend_unnamed s ws → b {
     : i n ( nurl_str_len ws )
     : *u wp # *u ws
@@ -37871,16 +37880,17 @@ unsafe @ __lend_unnamed s ws → b {
 }
 
 // …and those it was read out of only where a source expression lends out
-// of what it names (g_pderiv_c): `p#c` words (agora #461).
+// of what it names (g_cedges' `#pdc`): `p#c` words (agora #461).
 @ __pderiv_cparams i syms s name → s {
-    ? == 0 ( nurl_str_len g_pderiv_c ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? == 0 g_pderiv_cn { ^ ( nurl_str_cat `` `` ) } {}
     : s ptr ( nurl_sym_get2 syms name `__ptr` )
     ? == 0 ( nurl_str_len ptr ) { ^ ( nurl_str_cat `` `` ) } {}
     : s key ( nurl_str_cat ptr `=` )
+    : s all ( nurl_sym_get g_cedges `#pdc` )
     // (Most bindings have none: one search decides.)
-    ? < ( nurl_str_find g_pderiv_c key ) 0 { ^ ( nurl_str_cat `` `` ) } {}
+    ? < ( nurl_str_find all key ) 0 { ^ ( nurl_str_cat `` `` ) } {}
     : ~ s out ``
-    : ~ s rest ( nurl_str_cat g_pderiv_c `` )
+    : ~ s rest ( nurl_str_cat all `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest ) = rest ( str_skip_word rest )
         ? ( nurl_str_starts w key ) { = out ( __word_union out ( nurl_str_slice w ( nurl_str_len key ) - ( nurl_str_len w ) ( nurl_str_len key ) ) ) } {}
@@ -37888,18 +37898,24 @@ unsafe @ __lend_unnamed s ws → b {
     ^ out
 }
 
-// Binding slot `ptr` was read out of each `p#c` of `pcs` (g_pderiv_c).
+// Binding slot `ptr` was read out of each `p#c` of `pcs` (`#pdc`).
 // One condition per parameter: read out of it on several paths, the
 // conditions they share (__cond_list_put) — a binding given a value read
 // out of its own (`= a ( f ( g a ) )`) would otherwise double its
-// alternatives with every such statement. (`unsafe` for the global it
-// assigns, as g_pderiv's.)
-unsafe @ __pderiv_cnote s ptr s pcs → v {
+// alternatives with every such statement.
+@ __pderiv_cnote s ptr s pcs → v {
+    ? == 0 ( nurl_str_len pcs ) { ^ v } {}
+    = g_pderiv_cn 1
     : ~ s rest ( nurl_str_cat pcs `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest ) = rest ( str_skip_word rest )
         : i h ( nurl_str_find w `#` )
-        = g_pderiv_c ( __cond_list_put g_pderiv_c ( nurl_str_cat4 ptr `=` ( nurl_str_slice w 0 h ) `#` ) ( nurl_str_slice w + h 1 - - ( nurl_str_len w ) h 1 ) )
+        : s ck ( nurl_str_cat4 ptr `=` ( nurl_str_slice w 0 h ) `#` )
+        : s cc ( nurl_str_slice w + h 1 - - ( nurl_str_len w ) h 1 )
+        // (A key not there yet — the usual case — is appended in place, as
+        // the compiler's accumulators are, nurl_sym_append_word; one there
+        // already keeps what both conditions share.)
+        ? < ( nurl_str_find ( nurl_sym_get g_cedges `#pdc` ) ck ) 0 { ( nurl_sym_append_word g_cedges `#pdc` ( nurl_str_cat ck cc ) ) } { ( nurl_sym_set g_cedges `#pdc` ( __cond_list_put ( nurl_sym_get g_cedges `#pdc` ) ck cc ) ) }
     }
 }
 
@@ -37970,7 +37986,7 @@ unsafe @ __pderiv_cnote s ptr s pcs → v {
 // now was read out of — through the handles it was read out of (g_pderiv),
 // a `??` payload's binding (`__plend` / `__plroot`), eight hops at most:
 // each `p`, or `p#c` where a source expression's lend leads there
-// (g_pderiv_c; agora #461).
+// (g_cedges' `#pdc`; agora #461).
 @ __pderiv_reach i syms s root → s {
     : ~ s srcs ( __pderiv_params syms root )
     = srcs ( __word_union srcs ( nurl_sym_get2 syms root `__plend` ) )
@@ -38009,7 +38025,7 @@ unsafe @ __pderiv_cnote s ptr s pcs → v {
         ? ( str_contains_word g_cur_params r ) { = out ( __word_union out ( nurl_str_cat4 r `#` r ( nurl_str_cat `>` sx ) ) ) } {
             // (With nothing read out of a parameter yet — most functions —
             // a local leads to none, but through a `??` payload: deep.)
-            ? | | deep != 0 ( nurl_str_len g_pderiv ) != 0 ( nurl_str_len g_pderiv_c ) {
+            ? | | deep != 0 ( nurl_str_len g_pderiv ) != 0 g_pderiv_cn {
                 : s ps ? deep ( __pderiv_reach syms r ) ( __word_union ( __pderiv_params syms r ) ( __pderiv_cparams syms r ) )
                 ? != 0 ( nurl_str_len ps ) { = out ( __word_union out ( __cond_onto ps ( nurl_str_cat3 r `>` sx ) ) ) } {}
             } {}
@@ -38019,7 +38035,10 @@ unsafe @ __pderiv_cnote s ptr s pcs → v {
 }
 
 // The bindings (and field paths) a source expression names: its words but
-// a callee's (one followed by `(`), `-` and `*` (agora #461).
+// a callee's (one followed by `(`), `-` and `*` (agora #461). (`unsafe` for
+// the pointer `sx` is walked through, docs/dev/COMPILER_INTERNALS.md §4:
+// the safe spelling, __sx_names_any's, cost 2.6 times as much on
+// compiler/tests/dst_flagship.nu, 1.5M instructions.)
 unsafe @ __sx_leaf_names s sx → s {
     : i n ( nurl_str_len sx )
     : *u sp # *u sx
@@ -38047,7 +38066,11 @@ unsafe @ __sx_leaf_names s sx → s {
 }
 
 // Does a source expression name a binding: a word no `(` follows (a
-// callee's), other than `-`?
+// callee's), other than `-`? (`unsafe` for the pointer `sx` is walked
+// through, docs/dev/COMPILER_INTERNALS.md §4: asked of every argument that
+// is a call, the safe spelling — the delimiters but `(` made spaces
+// (bck_swap_char), each word's last part copied out — cost the
+// self-compile 15M instructions more, 0.09%.)
 unsafe @ __sx_names_any s sx → b {
     : i n ( nurl_str_len sx )
     : *u sp # *u sx
@@ -38077,12 +38100,11 @@ unsafe @ __sx_names_any s sx → b {
 
 // The summary edges a source expression conditions (g_cedges), of the
 // function compiling now: `key` (`D:k:callee:aix:`, …) under condition
-// `c`, one condition per edge (__cond_list_put). (`unsafe` for the global
-// it assigns.)
-unsafe @ __cedge_add s key s c → v {
+// `c`, one condition per edge (__cond_list_put).
+@ __cedge_add s key s c → v {
     : s cur ( nurl_sym_get g_cedges g_rpg_me_self )
-    ? == 0 ( nurl_str_len cur ) { = g_cedge_fns ( __words_join g_cedge_fns g_rpg_me_self ) } {}
-    ( nurl_sym_def g_cedges g_rpg_me_self ( __cond_list_put cur key c ) )
+    ? == 0 ( nurl_str_len cur ) { ( nurl_sym_append_word g_cedges `#fns` g_rpg_me_self ) } {}
+    ( nurl_sym_set g_cedges g_rpg_me_self ( __cond_list_put cur key c ) )
 }
 
 // __drop_note's edge of parameter `name` (or a field path of one), under
@@ -38147,8 +38169,8 @@ unsafe @ __cedge_add s key s c → v {
 // in a lend, a join's or a block's arms, a field of a call's result, or one
 // a module-end note still owes, `` or `-`s here — is read out of each
 // parameter the sx leads to, where the sx lends out of what it names by the
-// final summaries: g_pderiv_c, as __clo_deriv_note falls back to the names
-// (agora #449, #461).)
+// final summaries: g_cedges' `#pdc`, as __clo_deriv_note falls back to the
+// names (agora #449, #461).)
 unsafe @ __pderiv_note i syms s name s vt i rhs_tt s rhs_val s lend s sx → v {
     // (A number or a string view holds no handle: most bindings stop here.)
     ? <= ( nurl_str_len vt ) 1 { ^ v } {}
@@ -38175,7 +38197,7 @@ unsafe @ __pderiv_note i syms s name s vt i rhs_tt s rhs_val s lend s sx → v {
         : s w ( str_first_word rest ) = rest ( str_skip_word rest )
         : s r ( __path_root_name w )
         ? | != 0 ( nurl_str_len g_pderiv ) ( __rprov_param syms r ) { = out ( __word_union out ( __pderiv_params syms r ) ) } {}
-        ? != 0 ( nurl_str_len g_pderiv_c ) { = cout ( __word_union cout ( __pderiv_cparams syms r ) ) } {}
+        ? != 0 g_pderiv_cn { = cout ( __word_union cout ( __pderiv_cparams syms r ) ) } {}
     }
     ? & == 0 ( nurl_str_len out ) == 0 ( nurl_str_len cout ) { ^ v } {}
     : s ptr ( nurl_sym_get2 syms name `__ptr` )
@@ -38409,7 +38431,9 @@ unsafe @ resolve_irealloc_summaries → v {
     ^ ( __sx_nroots sx ns )
 }
 
-// …of the sub-expression of `e` at g_sxe_pos.
+// …of the sub-expression of `e` at g_sxe_pos. (`unsafe` for the pointer
+// `e`'s bytes are read through, as __sx_mut_roots': safe, a tenth more on
+// compiler/tests/dst_flagship.nu.)
 unsafe @ __sx_nroots s e b ns → s {
     : i n ( nurl_str_len e )
     ? >= g_sxe_pos n { ^ ( nurl_str_cat `` `` ) } {}
@@ -38481,9 +38505,9 @@ unsafe @ __sx_nroots s e b ns → s {
 // over the calls. After resolve_retfwd_lends: the lends of a forwarder
 // compiled before its callee wait on it (agora #461).
 @ resolve_cond_edges → v {
-    ? == 0 ( nurl_str_len g_cedge_fns ) { ^ v } {}
+    ? == 0 ( nurl_sym_len g_cedges `#fns` ) { ^ v } {}
     = g_nroots_memo ( nurl_sym_new )
-    : ~ s fr ( nurl_str_cat g_cedge_fns `` )
+    : ~ s fr ( nurl_str_cat ( nurl_sym_get g_cedges `#fns` ) `` )
     ~ != 0 ( nurl_str_len fr ) {
         : s f ( str_first_word fr ) = fr ( str_skip_word fr )
         : ~ s es ( nurl_sym_get g_cedges f )
@@ -59625,7 +59649,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     = g_cur_params ? != 0 g_srcx_on ( nurl_sym_get syms `__fn_param_names__` ) ``
     = g_outer_params ( nurl_str_cat ( nurl_sym_get syms `__fn_param_names__` ) `` )
     = g_pderiv ``
-    = g_pderiv_c ``
+    ? != 0 g_pderiv_cn { ( nurl_sym_set g_cedges `#pdc` `` ) = g_pderiv_cn 0 } {}
     = g_mplx ``
     ? & != 0 g_srcx_on == 0 ( nurl_sym_len g_fn_safe fname ) {
         ( nurl_sym_def g_fn_safe fname `1` )
