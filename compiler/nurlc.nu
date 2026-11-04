@@ -35779,7 +35779,7 @@ unsafe @ __bck_try_exit_check s st i line → v {
                         // container's element, __bck_fe_retire — and what it is
                         // a part of ends it no longer, `feo_`, on a path that
                         // leaves the loop by none.)
-                        ? fel { ? ! ( seq lpost `!` ) { ( __bck_fe_retire lpost ( bck_field_int frec 1 ) ) } { ( bck_put ( bck_bkey `feo_` ( bck_field frec 1 ) ) `` ) } } {}
+                        ? fel { ? ! ( seq lpost `!` ) { ( __bck_fe_retire lpost ( bck_field_int frec 1 ) ) } { ( __bck_fe_unfile ( bck_field frec 1 ) ) } } {}
                         = st ( bck_scope_restore + p 1 eb blk_pre lpost )
                     } {
                         // …and what it declared and still holds is released at
@@ -35837,8 +35837,13 @@ unsafe @ __bck_try_exit_check s st i line → v {
                 : b feown & != 0 ( nurl_str_len fesx ) | | == 0 ( nurl_str_len fecls ) ( seq fecls `d` ) ( seq fecls `c` )
                 : s feo ? feown ( bck_borrow_owners st ? ( __fe_cont_expr fesx ) ( bck_sx_hroots fesx ) fesx ) ``
                 ( bck_put ( bck_bkey `fe_` ( bck_field rec 1 ) ) ? ( seq fecls `c` ) `` feo )
-                ( bck_put ( bck_bkey `feo_` ( bck_field rec 1 ) ) feo )
-                ? != 0 ( nurl_str_len feo ) { ( __fe_owner_note ( bck_field rec 1 ) feo ) } {}
+                // (…written, and its owners filed, when it changes: the next
+                // round of the same loop finds them as they were.)
+                : s fok ( bck_bkey `feo_` ( bck_field rec 1 ) )
+                ? ! ( seq feo ( nurl_sym_get g_bck fok ) ) {
+                    ( bck_put fok feo )
+                    ? != 0 ( nurl_str_len feo ) { ( __fe_owner_note ( bck_field rec 1 ) feo ( __fe_cont_expr fesx ) ) } {}
+                } {}
                 ? != 0 g_bck_hr_any { ( __bck_hr_drop_owner fid ) } {}
                 ? | != 0 ( nurl_str_len fesx ) != 0 g_bck_hr_any { ( __bck_hr_set fid ( bck_sx_hroots fesx ) F ) } {}
                 // (…and it holds what the container's elements view — what
@@ -37871,17 +37876,26 @@ unsafe @ bck_sx_is_id s e → b {
 }
 
 // A `~` loop's element `xs` (an id) is a part of each owner in `owners`
-// (ids; anything else — `*`, `-` — names none): filed under `feb_<owner>`,
-// and the owner made a source the borrow sweep visits (`bsrcs`), so what
+// (ids; anything else — `*`, `-` — names none): filed under `feb_<owner>`
+// (and the owner under `feoall`, what bck_borrow_end asks first), so what
 // ends a borrow of an element of it ends the loop's element (agora #482).
-@ __fe_owner_note s xs s owners → v {
+// The borrow sweep visits an owner by `bsrcs`, where a borrow of it put it
+// — and one the loop iterates by name or path, codegen keeps unchanged by
+// that name in the body (bck_iter_enter). The owners of a container a call
+// lends (`expr`: `~ x . ( vec_at [B] bs 0 ) items`) have neither: they are
+// made sources the sweep visits here.
+@ __fe_owner_note s xs s owners b expr → v {
     : ~ s rest ( nurl_str_cat owners `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s o ( str_first_word rest ) = rest ( str_skip_word rest )
         : i c0 ( nurl_str_get o 0 )
         ? & >= c0 48 <= c0 57 {
             ( bck_add_word_once ( bck_bkey `feb_` o ) xs )
-            ( bck_add_word_once ( bck_bkey `bsrcs` `` ) o )
+            ( bck_add_word_once `feoall` o )
+            ? expr {
+                = g_bck_has_borrow 1
+                ( bck_add_word_once ( bck_bkey `bsrcs` `` ) o )
+            } {}
         } {}
     }
 }
@@ -37931,8 +37945,9 @@ unsafe @ bck_sx_is_id s e → b {
     : s fids ( nurl_str_int fid )
     // (Its owners, read before they go: a holder of a copy of its handle
     // holds one of the handle in their element, below.)
-    : s feo ? == 0 g_bck_hn_any `` ( nurl_str_cat ( nurl_sym_get g_bck ( bck_bkey `feo_` fids ) ) `` )
-    ( bck_put ( bck_bkey `feo_` fids ) `` )
+    : s fok ( bck_bkey `feo_` fids )
+    : s feo ? == 0 g_bck_hn_any `` ( nurl_str_cat ( nurl_sym_get g_bck fok ) `` )
+    ? != 0 ( nurl_sym_len g_bck fok ) { ( bck_put fok `` ) } {}
     : s fe ( nurl_sym_get g_bck ( bck_bkey `fe_` fids ) )
     ? & == 0 ( nurl_str_len fe ) == 0 ( nurl_str_len feo ) { ^ v } {}
     : ~ s rest ? == 0 ( nurl_str_len fe ) `` ( nurl_sym_get g_bck ( bck_bkey `bb_` fids ) )
@@ -39597,8 +39612,9 @@ unsafe @ bck_note_rc_arg s name s ty → v {
     // gone is what the loop's next round asks, bck_loop. But `sid` ended
     // only as a holder of views — INVALID, its storage as it was — ends the
     // element as one, `!fev`: it holds what those elements view. Inside a
-    // `~` loop's walk only, g_bck_fe_live.)
-    ? != 0 g_bck_fe_live {
+    // `~` loop's walk only, g_bck_fe_live, and of an owner one was filed
+    // under, `feoall`.)
+    ? & != 0 g_bck_fe_live ( nurl_sym_has_word g_bck `feoall` sids ) {
         : b fev == BCK_INVALID ( bck_st_get out ( bck_path_root sid ) )
         : ~ s ferest ( nurl_sym_get g_bck ( bck_bkey `feb_` sids ) )
         ~ != 0 ( nurl_str_len ferest ) {
@@ -39648,6 +39664,13 @@ unsafe @ bck_note_rc_arg s name s ty → v {
         } {}
     }
     ^ out
+}
+
+// A `~` loop's element `xs` is a part of what it iterates no longer: its
+// loop is left (`feo_`, agora #482).
+@ __bck_fe_unfile s xs → v {
+    : s fok ( bck_bkey `feo_` xs )
+    ? != 0 ( nurl_sym_len g_bck fok ) { ( bck_put fok `` ) } {}
 }
 
 // Did `~` loop element `xs` end with its storage (bv_ `!fe`,
@@ -41543,6 +41566,7 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     ? != 0 g_arcp_any { ( bck_put `plarc` `` ) } {}
     = g_bck_watch 0
     = g_bck_fe_live 0
+    ( bck_put `feoall` `` )
     = g_cj_depth 0
     = g_cj_log ``
     = g_cj_entry 0
