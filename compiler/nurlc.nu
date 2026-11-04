@@ -32967,10 +32967,29 @@ unsafe @ __sx_view_at s st s e → b {
 
 // What the value of `sx` holds as callee `cal`'s argument `k`: what copies
 // of its elements hold, for a parameter that is a view of a container
-// (g_fn_eparams); what a copy of it holds otherwise.
-@ bck_sx_arg_held s st s sx s cal s k → s {
+// (g_fn_eparams); what a copy of it holds otherwise. An owner copied whole
+// (`own`: a `%K.H` row's, always an owner of views; otherwise one whose
+// value is no view) reads a view at its top as a field of it, g_sxe_hctn;
+// a view argument holds what the elements of its storage view — where it
+// points is the callee's `h>k` answer, its author's word for an `unsafe`
+// one (A2's outHolds), not what it holds.
+@ bck_sx_arg_held s st s sx s cal s k b own → s {
     ? ( __rv_eparam cal k ) { ^ ( bck_sx_elem_sources st sx ) } {}
-    ^ ( bck_sx_held_sources st sx )
+    = g_sxe_pos 0
+    ? | own ! ( __sx_view_at st sx ) { ^ ( bck_sx_held_sources st sx ) } {}
+    ^ ( bck_sx_held_view_sources st sx )
+}
+
+// …and what a view's value holds (no field of an owner): bck_sx_held_sources
+// without g_sxe_hctn.
+@ bck_sx_held_view_sources s st s sx → s {
+    = g_sxe_pos 0
+    = g_sxe_unk F
+    = g_sxe_held T
+    : s all ( bck_sx_ev st sx T )
+    = g_sxe_held F
+    ? g_sxe_unk { ^ ( nurl_str_cat `*` `` ) } {}
+    ^ all
 }
 
 // Is `cal`'s parameter `k` a view of a container (g_fn_eparams)?
@@ -34257,7 +34276,7 @@ unsafe @ __bck_try_exit_check s st i line → v {
                     // follows only parameter holders, cannot (agora #337).)
                     : ~ b vself_kept F
                     ? vself {
-                        : s vsrc ? == vb0 66 ( nurl_str_cat `!` `` ) ( bck_swap_char ( __src_plain ? vheld ( bck_sx_arg_held st ( bck_field rec 8 ) vcal ( __vk_row_k vaix ) ) ( bck_sx_arg_sources st ( bck_field rec 8 ) ) ) 32 44 )
+                        : s vsrc ? == vb0 66 ( nurl_str_cat `!` `` ) ( bck_swap_char ( __src_plain ? vheld ( bck_sx_arg_held st ( bck_field rec 8 ) vcal ( __vk_row_k vaix ) T ) ( bck_sx_arg_sources st ( bck_field rec 8 ) ) ) 32 44 )
                         // (A `%K.H` row's entry keeps its `%`: bck_vkeeps_self.)
                         ( bck_add_word `vkself` ( nurl_str_cat4 ? vheld ( nurl_str_cat vaix `` ) ( nurl_str_slice vaix 1 - ( nurl_str_len vaix ) 1 ) `#` ( nurl_str_int ( bck_path_root ( nurl_str_to_int vc ) ) ) ( nurl_str_cat4 `#` ( bck_field rec 3 ) `#` vsrc ) ) )
                         // (…and a `bK.H` row answers `h>%k` too: its entry for
@@ -34265,7 +34284,7 @@ unsafe @ __bck_try_exit_check s st i line → v {
                         // that hands an argument's views on under another
                         // index carries them into this function's answer.)
                         ? & == vb0 98 ! vheld {
-                            : s vhs0 ( bck_sx_arg_held st ( bck_field rec 8 ) vcal ( __vk_row_k vaix ) )
+                            : s vhs0 ( bck_sx_arg_held st ( bck_field rec 8 ) vcal ( __vk_row_k vaix ) F )
                             ? & ! ( seq vhs0 `*` ) != 0 ( nurl_str_len vhs0 ) {
                                 ( bck_add_word `vkself` ( nurl_str_cat4 ( nurl_str_cat `%` ( nurl_str_slice vaix 1 - ( nurl_str_len vaix ) 1 ) ) `#` ( nurl_str_int ( bck_path_root ( nurl_str_to_int vc ) ) ) ( nurl_str_cat4 `#` ( bck_field rec 3 ) `#` ( bck_swap_char ( __src_plain vhs0 ) 32 44 ) ) ) )
                             } {}
@@ -34305,7 +34324,7 @@ unsafe @ __bck_try_exit_check s st i line → v {
                         // (Into a closure's capture or `inout` parameter: refused.)
                         : s vcc ? vcx ( nurl_str_cat `` `` ) ( nurl_sym_get g_bck ( bck_bkey `cc_` ( nurl_str_int ( bck_path_root ( nurl_str_to_int vc ) ) ) ) )
                         = g_bck_cv_leaf ? | == 0 ( nurl_str_len vcc ) ( seq vcc `v` ) 0 1
-                        : s vs ? vhs ( __src_drop_handles ( bck_sx_arg_held st ( bck_field rec 8 ) vcal vk ) ) ? vbuf ( bck_sx_arg_sources st ( bck_field rec 8 ) ) ( __src_drop_handles ( bck_sx_sources st ( bck_field rec 8 ) -1 ) )
+                        : s vs ? vhs ( __src_drop_handles ( bck_sx_arg_held st ( bck_field rec 8 ) vcal vk vheld ) ) ? vbuf ( bck_sx_arg_sources st ( bck_field rec 8 ) ) ( __src_drop_handles ( bck_sx_sources st ( bck_field rec 8 ) -1 ) )
                         = g_bck_cv_leaf 0
                         // (…a plain parameter's: a capture's view, stored whole
                         // or not — the leaves a capture or its local stands
@@ -34313,7 +34332,7 @@ unsafe @ __bck_try_exit_check s st i line → v {
                         : ~ s vsc ``
                         ? ( seq vcc `v` ) {
                             = g_bck_cv_leaf 1
-                            = vsc ? vhs ( __src_drop_handles ( bck_sx_arg_held st ( bck_field rec 8 ) vcal vk ) ) ? vbuf ( bck_sx_arg_sources st ( bck_field rec 8 ) ) ( __src_drop_handles ( bck_sx_sources st ( bck_field rec 8 ) -1 ) )
+                            = vsc ? vhs ( __src_drop_handles ( bck_sx_arg_held st ( bck_field rec 8 ) vcal vk vheld ) ) ? vbuf ( bck_sx_arg_sources st ( bck_field rec 8 ) ) ( __src_drop_handles ( bck_sx_sources st ( bck_field rec 8 ) -1 ) )
                             = g_bck_cv_leaf 0
                         } {}
                         ? & != 0 ( nurl_str_len vcc ) ? ( seq vcc `v` ) | ( __srcs_any_capture st vs ) ( __srcs_any_capture st vsc ) | ( seq vs `*` ) != 0 ( nurl_str_len ( __src_plain vs ) ) {
@@ -35635,7 +35654,8 @@ unsafe @ bck_sx_is_id s e → b {
 @ bck_send_view_check s st s sx s cal i line → v {
     // (A handle a closure holds a copy of goes along with it, or as a share
     // of its own: `~id` is no view of this side's.)
-    : s srcs ( __src_plain0 ( __src_drop_handles_all ( bck_sx_sources st sx -1 ) ) )
+    : s raw ( bck_sx_sources st sx -1 )
+    : s srcs ( __src_plain0 ( __src_drop_handles_all raw ) )
     ? ( seq srcs `*` ) { ^ } {}
     : ~ s rest ( nurl_str_cat srcs `` )
     ~ != 0 ( nurl_str_len rest ) {
@@ -35650,14 +35670,23 @@ unsafe @ bck_sx_is_id s e → b {
         // What a parameter holds, its pseudo `%p`: views into what the
         // caller passed, which its caller may release while the other
         // thread runs — as a view parameter's own storage is. Unless the
-        // parameter escapes there whole (g_fn_escapes): the caller asks of
-        // its argument then, as of its own value.
-        ? & & ! ( bck_id_is_global r ) != 0 ( nurl_str_len ph ) ! ( nurl_sym_has_word g_fn_escapes g_bck_fn ph ) {
+        // parameter goes along whole: it escapes there (g_fn_escapes), or
+        // its own handle crosses too (`~p`, a closure that captured it or
+        // a value built of it) — then what it holds goes as an owner's
+        // views do, and whether an owner of views may cross is agora #469's.
+        ? & & & ! ( bck_id_is_global r ) != 0 ( nurl_str_len ph ) ! ( nurl_sym_has_word g_fn_escapes g_bck_fn ph ) ! ( str_contains_word raw ( nurl_str_cat `~` ( nurl_str_int ( __bck_pseudo_param r ) ) ) ) {
             : s nm ( __bck_pseudo_show r )
             ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat4 `what '` ( bck_fn_show cal ) `' runs on another thread holds a copy of the views '` ( nurl_str_cat4 nm `' holds — into its caller's storage, which the caller may release while the other runs. Give it values that own their data — Strings moved in (string_from), a Vec of them — or ones shared through Arc.` `` `` ) ) )
             ^
         } {}
     }
+}
+
+// …and its binding.
+@ __bck_pseudo_param i r → i {
+    : s n ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int r ) )
+    ? == 37 ( nurl_str_get n 0 ) { ^ ( bck_intern ( nurl_str_slice n 1 - ( nurl_str_len n ) 1 ) ) } {}
+    ^ -1
 }
 
 // The parameter a pseudo source `%p` stands for (__bck_seed_held), by name.
