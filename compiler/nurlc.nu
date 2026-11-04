@@ -74101,6 +74101,8 @@ unsafe @ llvm_linkage_init → v {
 : ~ i g_dce_qn 0  // worklist length
 : ~ i g_dce_at 0  // i64[n]: 1 when the scan saw function n's address taken
 : ~ i g_dce_map 0  // symtab: function name → its index, as decimal text
+: ~ b g_dce_dotfn F  // some function's name starts with a `.`
+: ~ i g_dce_idb 0  // u8[256]: 1 for each byte __dce_ident_byte accepts
 
 // Is `c` a byte that can appear in an LLVM global identifier?
 @ __dce_ident_byte i c → b {
@@ -74134,25 +74136,33 @@ unsafe @ __dce_mark_name s nm → i {
 // scan deliberately does no context analysis at all.
 unsafe @ __dce_scan i from i to → v {
     : *u mp # *u # s g_dce_mod
+    : *u idb # *u # s g_dce_idb
     : ~ i p from
     ~ < p to {
-        ? != & # i . mp p 255 64 { = p + p 1 } {  // '@'
+        // To the next '@' sixteen bytes a step: a body is mostly not names.
+        = p + p ( nurl_scan_byte3 # s + # i mp p - to p 64 64 64 )
+        ? < p to {
             : ~ i q + p 1
-            ~ & < q to ( __dce_ident_byte & # i . mp q 255 ) { = q + q 1 }
-            ? == q + p 1 { = p q } {
-                // NUL-terminate the name in place for the lookup, then
-                // put the byte back — same trick emit_hoisted uses to
-                // hand a line to a `s`-taking helper without copying.
-                : u sv . mp q
-                = . mp q # u 0
-                : i fi ( __dce_mark_name # s + # i mp + p 1 )
-                = . mp q sv
-                // Not a direct call's callee (`@name(`): its address is
-                // taken (__ext_compute).
-                ? & >= fi 0 != # i sv 40 { ( nurl_poke # s g_dce_at fi 1 ) } {}
-                = p q
+            // `@.str.N`, `@.__nurl_k.N`: unless a function's name starts
+            // with a `.`, its lookup can only miss — and a name holds no
+            // '@', so the next one is found from here.
+            ? & ! g_dce_dotfn == & # i . mp q 255 46 { = p q } {
+                ~ & < q to != 0 # i . idb & # i . mp q 255 { = q + q 1 }
+                ? == q + p 1 { = p q } {
+                    // NUL-terminate the name in place for the lookup, then
+                    // put the byte back — same trick emit_hoisted uses to
+                    // hand a line to a `s`-taking helper without copying.
+                    : u sv . mp q
+                    = . mp q # u 0
+                    : i fi ( __dce_mark_name # s + # i mp + p 1 )
+                    = . mp q sv
+                    // Not a direct call's callee (`@name(`): its address is
+                    // taken (__ext_compute).
+                    ? & >= fi 0 != # i sv 40 { ( nurl_poke # s g_dce_at fi 1 ) } {}
+                    = p q
+                }
             }
-        }
+        } {}
     }
 }
 
@@ -74168,15 +74178,28 @@ unsafe @ __dce_record_name i st i idx → v {
     : ~ i q ns
     ~ ( __dce_ident_byte & # i . mp q 255 ) { = q + q 1 }
     ? == q ns { ^ v } {}
+    ? == & # i . mp ns 255 46 { = g_dce_dotfn T } {}
     : u sv . mp q
     = . mp q # u 0
     ( nurl_sym_def g_dce_map # s + # i mp ns ( nurl_str_int idx ) )
     = . mp q sv
 }
 
-// Walk the module and locate every `define … }` block. With `counting`
-// non-zero this only counts them (so the index arrays can be sized
-// exactly); otherwise it fills the arrays and the name→index map.
+// The first `needle` at or after module byte `from`, or -1. strstr, not
+// memmem: the module is one C string of exactly g_dce_mod_len bytes
+// (dce_emit_module measured it with strlen; __types_first only moves
+// lines), so its terminator ends the search where the range would, and
+// strstr's vector scan for the needle's first two bytes crosses a body
+// ~8× faster than memmem, which steps through `\n}\n` two at a time.
+unsafe @ __dce_find i from s needle → i {
+    : i hit # i ( strstr # s + g_dce_mod from needle )
+    ? == hit 0 { ^ -1 } {}
+    ^ - hit g_dce_mod
+}
+
+// Walk the module and locate every `define … }` block into g_dce_start
+// and g_dce_end, grown as it goes (one walk, not a count and then a
+// fill). Returns how many.
 //
 // A function begins at a line starting `define ` and ends at the first
 // line that is exactly `}` — body instructions are indented and labels
@@ -74187,21 +74210,24 @@ unsafe @ __dce_record_name i st i idx → v {
 // constant is escaped as `\0A`, never a raw byte, so no string can
 // forge either delimiter. (The module always opens with its `; NURL
 // compiler output` banner, so a `define` at offset 0 cannot occur.)
-unsafe @ __dce_index i mlen i counting → i {
+unsafe @ __dce_index i mlen → i {
     : ~ i n 0
+    : ~ i cap 0
     : ~ i pos 0
     ~ < pos mlen {
-        : i rel ( nurl_memmem_range # s + # i # *u # s g_dce_mod pos - mlen pos `\ndefine ` 8 )
-        ? < rel 0 { = pos mlen } {
-            : i st + + pos rel 1
-            : i rel2 ( nurl_memmem_range # s + # i # *u # s g_dce_mod st - mlen st `\n}\n` 3 )
-            ? < rel2 0 { = pos mlen } {
-                : i en + + st rel2 3
-                ? == 0 counting {
-                    ( nurl_poke # s g_dce_start n st )
-                    ( nurl_poke # s g_dce_end n en )
-                    ( __dce_record_name st n )
+        : i at ( __dce_find pos `\ndefine ` )
+        ? < at 0 { = pos mlen } {
+            : i st + at 1
+            : i fe ( __dce_find st `\n}\n` )
+            ? < fe 0 { = pos mlen } {
+                : i en + fe 3
+                ? >= n cap {
+                    = cap ? == cap 0 1024 * cap 2
+                    = g_dce_start # i ( nurl_realloc # s g_dce_start * cap 8 )
+                    = g_dce_end # i ( nurl_realloc # s g_dce_end * cap 8 )
                 } {}
+                ( nurl_poke # s g_dce_start n st )
+                ( nurl_poke # s g_dce_end n en )
                 = n + n 1
                 // Resume ONE BYTE BACK. The two delimiters overlap when
                 // a `define` follows a closing brace with no blank line
@@ -76474,16 +76500,22 @@ unsafe @ __dce_emit_module s mod i mlen → v {
     = g_split_n 0
     // Neither pass wants the index — hand the module straight to stdout.
     ? & & == 0 g_dce == 0 g_split_max == 0 g_sanitize_address { ( __dce_print_range 0 mlen ) ^ v } {}
-    : i n ( __dce_index mlen 1 )
+    : i n ( __dce_index mlen )
     ? == 0 n { ( __sp_whole mlen ) ^ v } {}
-    = g_dce_start # i # s ( nurl_zalloc * n 8 )
-    = g_dce_end # i # s ( nurl_zalloc * n 8 )
     = g_dce_live # i # s ( nurl_zalloc * n 8 )
     = g_dce_at # i # s ( nurl_zalloc * n 8 )
     = g_dce_queue # i # s ( nurl_zalloc * n 8 )
     = g_dce_map ( nurl_sym_new )
     = g_dce_qn 0
-    ( __dce_index mlen 0 )
+    = g_dce_dotfn F
+    : ~ i ri 0
+    ~ < ri n { ( __dce_record_name ( nurl_peek # s g_dce_start ri ) ri ) = ri + ri 1 }
+    // __dce_scan walks every name it looks up: one table read a byte
+    // instead of __dce_ident_byte's range tests.
+    = g_dce_idb # i # s ( nurl_zalloc 256 )
+    : *u idb # *u # s g_dce_idb
+    : ~ i ib 0
+    ~ < ib 256 { ? ( __dce_ident_byte ib ) { = . idb ib # u 1 } {} = ib + ib 1 }
     // The ownership flags are final by now; the writer folds them (see
     // __ir_fold_range). They live at module scope, between the bodies.
     = g_fold_flags ( nurl_sym_new )
@@ -76571,6 +76603,7 @@ unsafe @ dce_free → v {
     ( nurl_free # s g_dce_end )
     ( nurl_free # s g_dce_live )
     ( nurl_free # s g_dce_at ) = g_dce_at 0
+    ( nurl_free # s g_dce_idb ) = g_dce_idb 0
     ( nurl_free # s g_dce_queue )
     ( nurl_sym_free g_dce_map )
     ? != g_fold_flags 0 { ( nurl_sym_free g_fold_flags ) = g_fold_flags 0 } {}
