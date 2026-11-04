@@ -14068,7 +14068,7 @@ unsafe @ __kw_trim s raw → s {
         // the positional path's rule (a kwargs callee declares no `sink`,
         // but may hand the argument on to one, possibly defined later).
         ? ( is_ident_tok origin_tt ) { ( mem_arg_consumption syms cg fname fname slot origin_tt origin_value at ``
-            ( __summarised_callee syms fname fname ) ) } {}
+            ( __summarised_callee syms fname fname ) F ) } {}
         // The same per-argument type law as gen_call's positional path.
         // The kwargs reorder previously bypassed EVERY argument check —
         // `( scale x: 1.5 k: 2 )` slid a float into an 'i' parameter
@@ -15042,7 +15042,11 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
     ^ >= ( nurl_sym_word_index syms `__fn_param_names__` name ) 0
 }
 
-@ mem_arg_consumption i syms i cg s call_name s fname i arg_idx i bck_arg_tt s bck_arg_val s at s callee_sink b summary_callee → v {
+// (`positional`: gen_call's own argument loop, which copies a binding lent
+// by a bit where it lent when the callee may keep or consume it — so its
+// sources keep their values, agora #457; a keyword call makes no such
+// copy, and its sources go with it as before.)
+@ mem_arg_consumption i syms i cg s call_name s fname i arg_idx i bck_arg_tt s bck_arg_val s at s callee_sink b summary_callee b positional → v {
     ? & & summary_callee ( is_ident_tok bck_arg_tt ) ! ( __safe_str_param syms bck_arg_val ) {
         : i param ( nurl_sym_word_index syms `__fn_param_names__` bck_arg_val )
         ? >= param 0 {
@@ -15071,7 +15075,7 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
         : s uptr ( mem_udrop_ptr_of syms bck_arg_val )
         ? != 0 ( nurl_str_len uptr ) {
             ? ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
-            { ( mem_udrop_flag_set syms cg uptr `0` ) ( mem_udrop_alias_move_copied syms cg uptr & & & summary_callee ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) ( __clone_supported at syms ) ( __lent_by_call syms bck_arg_tt bck_arg_val ) )
+            { ( mem_udrop_flag_set syms cg uptr `0` ) ( mem_udrop_alias_move_copied syms cg uptr & & & & positional summary_callee ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) ( __clone_supported at syms ) ( __lent_by_call syms bck_arg_tt bck_arg_val ) )
                 // A local this scope owns outright, handed to a release
                 // function: a candidate for the redundant-free lint.
                 ? & & & & & & & & != 0 g_lint == 0 g_bck_closure_depth == arg_idx 0 != 0 ( nurl_sym_len2 syms fname `__emptybody` )
@@ -15108,7 +15112,7 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
                     { ( __park_append syms `__fn_pending_keep_impl__` ( nurl_str_cat4 ( nurl_str_int api ) ` ` call_name
                         ( nurl_str_cat4 ` ` fname ` ` ( nurl_str_int arg_idx ) ) ) ) } {}
                     // (Not the whole the cursor's value is part of: __part_src.)
-                    ? ( __src_keeps syms uptr asrc ) {} { ( mem_udrop_flag_clear_if syms cg asrc sflag ) } } }
+                    ? & positional ( __src_keeps syms uptr asrc ) {} { ( mem_udrop_flag_clear_if syms cg asrc sflag ) } } }
         } {}
     } {}
 }
@@ -17035,7 +17039,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         // Consumption is a whole-module fact, including transitive forward
         // calls. Record every parameter implication; codegen order is irrelevant.
         : b summary_callee & ! __callee_shadowed ( __summarised_callee syms fname call_name )
-        ? ( is_ident_tok bck_arg_tt ) { ( mem_arg_consumption syms cg call_name fname arg_idx bck_arg_tt bck_arg_val at callee_sink summary_callee ) } {}
+        ? ( is_ident_tok bck_arg_tt ) { ( mem_arg_consumption syms cg call_name fname arg_idx bck_arg_tt bck_arg_val at callee_sink summary_callee T ) } {}
         ? & & != 0 g_lm_depth ( is_ident_tok bck_arg_tt ) ! __callee_shadowed {
             = g_lm_calls ( nurl_str_cat4 g_lm_calls call_name ( nurl_str_cat4 ` ` ( nurl_str_int arg_idx ) ` ` bck_arg_val ) `\n` )
         } {}
