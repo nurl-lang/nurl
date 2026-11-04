@@ -17770,7 +17770,9 @@ unsafe @ gen_call i lex i syms i cg → s {
             // parameter its sx leads to where it lends out of that by the
             // final summaries — the names codegen has for it miss a nested
             // or late lend, and stand for every argument of a callee not
-            // compiled yet; in a closure body, the names' (agora #461).)
+            // compiled yet; in a closure body, the literal's parameters and
+            // the enclosing function's, and the names' as well (agora
+            // #461).)
             ( __drop_note_sx syms __lsx __rc arg_idx at )
         } {}
         ? & != 0 ( nurl_str_len arg_lend_srcs ) __row_callee {
@@ -38113,33 +38115,37 @@ unsafe @ __sx_names_any s sx → b {
     ^ F
 }
 
-// The summary edges a source expression conditions (g_cedges), of the
-// function compiling now: `key` (`D:k:callee:aix:`, …) under condition
-// `c`, one condition per edge (__cond_list_put).
-@ __cedge_add s key s c → v {
-    : s cur ( nurl_sym_get g_cedges g_rpg_me_self )
-    ? == 0 ( nurl_str_len cur ) { ( nurl_sym_append_word g_cedges `#fns` g_rpg_me_self ) } {}
-    ( nurl_sym_set g_cedges g_rpg_me_self ( __cond_list_put cur key c ) )
+// The summary edges a source expression conditions (g_cedges), of
+// function `f` — the one compiling now, or a closure literal in its body
+// (g_clo_cur): `key` (`D:k:callee:aix:`, …) under condition `c`, one
+// condition per edge (__cond_list_put).
+@ __cedge_add s f s key s c → v {
+    : s cur ( nurl_sym_get g_cedges f )
+    ? == 0 ( nurl_str_len cur ) { ( nurl_sym_append_word g_cedges `#fns` f ) } {}
+    ( nurl_sym_set g_cedges f ( __cond_list_put cur key c ) )
 }
 
-// __drop_note's edge of parameter `name` (or a field path of one), under
+// __drop_note's edge of parameter `name` (or a field path of one) of
+// function `f`, whose parameters are `ps` — the function compiling now's
+// (g_rpg_me_self, g_cur_params), or in a closure body the literal's
+// (g_clo_cur, g_clo_params), as __clo_drop_note has them — under
 // condition `c`.
-@ __drop_note_c i syms s name s callee i aix s c → v {
+@ __drop_note_c i syms s f s ps s name s callee i aix s c → v {
     : i dot ( nurl_str_find name `.` )
-    : i k ? > dot 0 ( str_word_index g_cur_params ( nurl_str_slice name 0 dot ) ) ( str_word_index g_cur_params name )
+    : i k ? > dot 0 ( str_word_index ps ( nurl_str_slice name 0 dot ) ) ( str_word_index ps name )
     ? < k 0 { ^ v } {}
     : s ks ( nurl_str_int k )
     : i lk ( bck_lib_kind ( bck_generic_base callee ) )
-    ? == lk 1 { ? == aix 0 { ( __cedge_add ( nurl_str_cat3 `B:` ks `:` ) c ) } {} ^ v } {}
+    ? == lk 1 { ? == aix 0 { ( __cedge_add f ( nurl_str_cat3 `B:` ks `:` ) c ) } {} ^ v } {}
     ? == lk 2 { ^ v } {}
-    ( __cedge_add ( nurl_str_cat4 ( nurl_str_cat4 `D:` ks `:` callee ) `:` ( nurl_str_int aix ) `:` ) c )
+    ( __cedge_add f ( nurl_str_cat4 ( nurl_str_cat4 `D:` ks `:` callee ) `:` ( nurl_str_int aix ) `:` ) c )
 }
 
 // __irealloc_edge_note's, under condition `c`.
 @ __irealloc_edge_note_c i syms s pn s callee i aix s c → v {
     : i k ( nurl_sym_word_index syms `__fn_param_names__` pn )
     ? < k 0 { ^ v } {}
-    ( __cedge_add ( nurl_str_cat4 ( nurl_str_cat4 `R:` ( nurl_str_int k ) `:` callee ) `:` ( nurl_str_int aix ) `:` ) c )
+    ( __cedge_add g_rpg_me_self ( nurl_str_cat4 ( nurl_str_cat4 `R:` ( nurl_str_int k ) `:` callee ) `:` ( nurl_str_int aix ) `:` ) c )
 }
 
 // What a callee drops of an argument that is no binding but a value lent
@@ -38149,21 +38155,29 @@ unsafe @ __sx_names_any s sx → b {
 // out of one — for a container that has any to drop, as __drop_note_via
 // has it — where the sx lends out of that name by the final summaries
 // (agora #461).
+// (In a closure body, as __drop_note has the names': one of the literal's
+// own parameters, its literal's summary — what a call through a value
+// holding it does; and the enclosing function's parameter of that name, a
+// capture, its function's — the closure may run there, its effect replayed
+// where it does, and the function's summary is what its callers read.)
 @ __drop_note_sx i syms s sx s callee i aix s at → v {
-    ? | | == 0 g_srcx_on == 0 ( nurl_str_len g_cur_params ) != 0 g_bck_closure_depth { ^ v } {}
+    ? == 0 g_srcx_on { ^ v } {}
+    : b clo & != 0 g_bck_closure_depth != 0 ( nurl_str_len g_clo_cur )
+    ? & ! clo == 0 ( nurl_str_len g_cur_params ) { ^ v } {}
     : b via | ( seq at `%String` ) & != 0 ( nurl_str_starts at `%Vec__` ) ( __elem_owns ( __vec_elem_llvm at ) syms )
     : ~ s rest ( __sx_leaf_names sx )
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest ) = rest ( str_skip_word rest )
         : s r ( __path_root_name w )
         : s c ( nurl_str_cat3 r `>` sx )
-        ? ( str_contains_word g_cur_params r ) { ( __drop_note_c syms r callee aix c ) } {
-            ? via {
+        ? clo { ( __drop_note_c syms g_clo_cur g_clo_params r callee aix c ) } {}
+        ? ( str_contains_word g_cur_params r ) { ( __drop_note_c syms g_rpg_me_self g_cur_params r callee aix c ) } {
+            ? & via != 0 ( nurl_str_len g_cur_params ) {
                 : ~ s ps ( __cond_onto ( __pderiv_reach syms r ) c )
                 ~ != 0 ( nurl_str_len ps ) {
                     : s pw ( str_first_word ps ) = ps ( str_skip_word ps )
                     : i h ( nurl_str_find pw `#` )
-                    ( __drop_note_c syms ( nurl_str_slice pw 0 h ) callee aix ( nurl_str_slice pw + h 1 - - ( nurl_str_len pw ) h 1 ) )
+                    ( __drop_note_c syms g_rpg_me_self g_cur_params ( nurl_str_slice pw 0 h ) callee aix ( nurl_str_slice pw + h 1 - - ( nurl_str_len pw ) h 1 ) )
                 }
             } {}
         }
@@ -38284,7 +38298,7 @@ unsafe @ __pderiv_note i syms s name s vt i rhs_tt s rhs_val s lend s sx → v {
     ~ != 0 ( nurl_str_len ps ) {
         : s pw ( str_first_word ps ) = ps ( str_skip_word ps )
         : i h ( nurl_str_find pw `#` )
-        ? < h 0 { ( __drop_note pw callee aix ) } { ( __drop_note_c syms ( nurl_str_slice pw 0 h ) callee aix ( nurl_str_slice pw + h 1 - - ( nurl_str_len pw ) h 1 ) ) }
+        ? < h 0 { ( __drop_note pw callee aix ) } { ( __drop_note_c syms g_rpg_me_self g_cur_params ( nurl_str_slice pw 0 h ) callee aix ( nurl_str_slice pw + h 1 - - ( nurl_str_len pw ) h 1 ) ) }
     }
 }
 
