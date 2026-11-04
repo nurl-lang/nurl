@@ -14094,7 +14094,7 @@ unsafe @ __kw_trim s raw → s {
         // the positional path's rule (a kwargs callee declares no `sink`,
         // but may hand the argument on to one, possibly defined later).
         ? ( is_ident_tok origin_tt ) { ( mem_arg_consumption syms cg fname fname slot origin_tt origin_value at ``
-            ( __summarised_callee syms fname fname ) ) } {}
+            ( __summarised_callee syms fname fname ) F ) } {}
         // The same per-argument type law as gen_call's positional path.
         // The kwargs reorder previously bypassed EVERY argument check —
         // `( scale x: 1.5 k: 2 )` slid a float into an 'i' parameter
@@ -15068,7 +15068,11 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
     ^ >= ( nurl_sym_word_index syms `__fn_param_names__` name ) 0
 }
 
-@ mem_arg_consumption i syms i cg s call_name s fname i arg_idx i bck_arg_tt s bck_arg_val s at s callee_sink b summary_callee → v {
+// (`positional`: gen_call's own argument loop, which copies a binding lent
+// by a bit where it lent when the callee may keep or consume it — so its
+// sources keep their values, agora #457; a keyword call makes no such
+// copy, and its sources go with it as before.)
+@ mem_arg_consumption i syms i cg s call_name s fname i arg_idx i bck_arg_tt s bck_arg_val s at s callee_sink b summary_callee b positional → v {
     ? & & summary_callee ( is_ident_tok bck_arg_tt ) ! ( __safe_str_param syms bck_arg_val ) {
         : i param ( nurl_sym_word_index syms `__fn_param_names__` bck_arg_val )
         ? >= param 0 {
@@ -15097,7 +15101,7 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
         : s uptr ( mem_udrop_ptr_of syms bck_arg_val )
         ? != 0 ( nurl_str_len uptr ) {
             ? ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
-            { ( mem_udrop_flag_set syms cg uptr `0` ) ( mem_udrop_alias_move syms cg uptr `0` )
+            { ( mem_udrop_flag_set syms cg uptr `0` ) ( mem_udrop_alias_move_copied syms cg uptr & & & & positional summary_callee ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) ( __clone_supported at syms ) ( __lent_by_call syms bck_arg_tt bck_arg_val ) )
                 // A local this scope owns outright, handed to a release
                 // function: a candidate for the redundant-free lint.
                 ? & & & & & & & & != 0 g_lint == 0 g_bck_closure_depth == arg_idx 0 != 0 ( nurl_sym_len2 syms fname `__emptybody` )
@@ -15134,7 +15138,7 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
                     { ( __park_append syms `__fn_pending_keep_impl__` ( nurl_str_cat4 ( nurl_str_int api ) ` ` call_name
                         ( nurl_str_cat4 ` ` fname ` ` ( nurl_str_int arg_idx ) ) ) ) } {}
                     // (Not the whole the cursor's value is part of: __part_src.)
-                    ? ( __part_src syms uptr asrc ) {} { ( mem_udrop_flag_clear_if syms cg asrc sflag ) } } }
+                    ? & positional ( __src_keeps syms uptr asrc ) {} { ( mem_udrop_flag_clear_if syms cg asrc sflag ) } } }
         } {}
     } {}
 }
@@ -17098,7 +17102,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         // Consumption is a whole-module fact, including transitive forward
         // calls. Record every parameter implication; codegen order is irrelevant.
         : b summary_callee & ! __callee_shadowed ( __summarised_callee syms fname call_name )
-        ? ( is_ident_tok bck_arg_tt ) { ( mem_arg_consumption syms cg call_name fname arg_idx bck_arg_tt bck_arg_val at callee_sink summary_callee ) } {}
+        ? ( is_ident_tok bck_arg_tt ) { ( mem_arg_consumption syms cg call_name fname arg_idx bck_arg_tt bck_arg_val at callee_sink summary_callee T ) } {}
         ? & & != 0 g_lm_depth ( is_ident_tok bck_arg_tt ) ! __callee_shadowed {
             = g_lm_calls ( nurl_str_cat4 g_lm_calls call_name ( nurl_str_cat4 ` ` ( nurl_str_int arg_idx ) ` ` bck_arg_val ) `\n` )
         } {}
@@ -17446,8 +17450,16 @@ unsafe @ gen_call i lex i syms i cg → s {
         // §7.6). A declared `sink` is an explicit release: left alone.
         // (Not a raw pointer: what it points at is not its to copy — a
         // generic `*A` over Vec elements asked for `clone_Vec__T*`.)
+        // (…and a binding lent exactly where a bit says so, handed to a
+        // parameter its callee may keep at all — its sink flag, which also
+        // hands the binding's value over (mem_udrop_flag_clear_if): copied
+        // where it lent, as every move of it is, so what it lends stays its
+        // source's. `( rc_new [String] x )` kept the lend uncopied, agora
+        // #457.)
         ? & ! __apc ? ! summary_callee F ? == 0 ( nurl_str_len arg_lent ) F & ! ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) != ( nurl_str_get at - ( nurl_str_len at ) 1 ) 42 {
-            = av ( mem_emit_cloneif_k cg at av ( nurl_str_cat `@.__nurl_store.` ( nurl_str_int ( store_flag call_name fname arg_idx ) ) ) arg_lent )
+            : b __kbit & ( is_ident_tok bck_arg_tt ) ( __lent_by_bit syms ( mem_udrop_ptr_of syms bck_arg_val ) )
+            : s __kfl ? __kbit ( nurl_str_cat `@.__nurl_sink.` ( nurl_str_int ( sink_flag call_name fname arg_idx ) ) ) ( nurl_str_cat `@.__nurl_store.` ( nurl_str_int ( store_flag call_name fname arg_idx ) ) )
+            = av ( mem_emit_cloneif_k cg at av __kfl arg_lent )
         } {}
         ? & & ( __is_autodrop_enum at syms ) ( is_ident_tok bck_arg_tt )
         | summary_callee ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) {
@@ -24817,6 +24829,28 @@ unsafe @ mem_path_to_indices s path → s {
         // (Not the whole the cursor's value is part of: __part_src.)
         ? ( __part_src syms ptr src ) {} { ( mem_udrop_flag_set syms cg src val ) ( mem_udrop_param_moved syms src ) }
     }
+}
+
+// …moved on by a route that copied it where it lent (a `sink` argument,
+// a capture: mem_lent_cond's bit): a binding lent by a bit holds its own
+// value or that copy, never its sources' (__src_keeps), so they keep
+// theirs. Taken along, a source's own value leaked on the runs the call
+// that made the binding handed back a fresh one (agora #457).
+@ mem_udrop_alias_move_copied i syms i cg s ptr b copied → v {
+    ? == 0 ( nurl_str_len ptr ) { ^ v } {}
+    // (A parameter it may be a lend of is still recorded as moved on — an
+    // inferred `sink`, as before: only what is dropped changes here, not
+    // which programs are accepted.)
+    ? & copied ( __lent_by_bit syms ptr ) {
+        ( mem_udrop_optparam_taken syms ptr )
+        : ~ s rest ( nurl_sym_get2 syms ptr `__alias` )
+        ~ != 0 ( nurl_str_len rest ) {
+            : s src ( str_first_word rest ) = rest ( str_skip_word rest )
+            ? ( __part_src syms ptr src ) {} { ( mem_udrop_param_moved syms src ) }
+        }
+        ^ v
+    } {}
+    ( mem_udrop_alias_move syms cg ptr `0` )
 }
 
 // Is owner slot `ptr` a parameter this function DECLARES it takes over
@@ -48794,7 +48828,7 @@ unsafe @ __bck_made_from s name → s {
                 ~ != 0 ( nurl_str_len al ) {
                     : s w ( str_first_word al ) = al ( str_skip_word al )
                     // (Not the whole the cursor's value is part of: __part_src.)
-                    : s wf ? ( __part_src syms up w ) ( nurl_str_cat `false` `` ) ( mem_udrop_flag_get syms cg w )
+                    : s wf ? ( __src_keeps syms up w ) ( nurl_str_cat `false` `` ) ( mem_udrop_flag_get syms cg w )
                     : s o ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print o ) ( nurl_print ` = or i1 ` ) ( nurl_print f ) ( nurl_print `, ` ) ( nurl_print wf ) ( nurl_print `\n` )
                     = f o
@@ -48803,7 +48837,7 @@ unsafe @ __bck_made_from s name → s {
                 ( nurl_print `  ` ) ( nurl_print lr ) ( nurl_print ` = xor i1 ` ) ( nurl_print f ) ( nurl_print `, 1\n` )
                 = loaded ( mem_emit_cloneif cg var_type loaded lr )
                 ( mem_udrop_flag_set syms cg up `0` )
-                ( mem_udrop_alias_move syms cg up `0` )
+                ( mem_udrop_alias_move_copied syms cg up T )
             } { = loaded ( mem_emit_cloneif cg var_type loaded `1` ) }
         } {}
         // An option or a result owning a String, a Vec or another handle,
@@ -52314,7 +52348,7 @@ unsafe @ str_word_index s list s word → i {
             : s w ( str_first_word al ) = al ( str_skip_word al )
             ? != 0 ( nurl_sym_len2 syms w `__pname` ) { ( mem_udrop_alias_lend syms cg uptr ) }
             // (Not the whole the cursor's value is part of: __part_src.)
-            { ? ( __part_src syms uptr w ) {} { ( mem_udrop_flag_clear_if syms cg w kflag ) } }
+            { ? ( __src_keeps syms uptr w ) {} { ( mem_udrop_flag_clear_if syms cg w kflag ) } }
         }
     } {}
 }
@@ -64929,6 +64963,28 @@ unsafe @ __clo_take_capture i syms s name → v {
     : s pt ( nurl_sym_get2 syms ptr `__udty` )
     ? | | == 0 ( nurl_str_len st ) ( seq st pt ) != 0 ( nurl_str_starts st `%__opt.` ) { ^ F } {}
     ^ ( __clone_supported pt syms )
+}
+
+// …or does `src` go on owning its value whatever `ptr` does with its own:
+// the whole ptr's value is part of (above), or a value that a binding
+// whose lentness is a bit may be a lend of — one bound to a call that
+// answers per call whether it lent (`__sborrow` `@slot`,
+// __mem_bind_call_bit), or one given such a value (`dyn`: its flag). That
+// binding's value is its own where the bit says so and a copy where it
+// lent (mem_lent_cond reads the bit), never src's to hand over: taken for
+// src's, src's own value leaked where the call handed back a fresh one
+// (agora #457).
+@ __src_keeps i syms s ptr s src → b {
+    ? ( __part_src syms ptr src ) { ^ T } {}
+    ^ ( __lent_by_bit syms ptr )
+}
+
+// …the second of those: is the binding with drop slot `ptr` lent exactly
+// where a bit says so (`@slot`, `dyn`), and copied there by what moves it?
+@ __lent_by_bit i syms s ptr → b {
+    : s sb ( nurl_sym_get2 syms ptr `__sborrow` )
+    ? | == 0 ( nurl_str_len sb ) & != ( nurl_str_get sb 0 ) 64 ! ( seq sb `dyn` ) { ^ F } {}
+    ^ ( __clone_supported ( nurl_sym_get2 syms ptr `__udty` ) syms )
 }
 
 // Is `up` a binding read out of a field that a store replacing the field
