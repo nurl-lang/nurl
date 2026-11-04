@@ -1,6 +1,6 @@
 // view_of_an_inner_string_kept_across_a_loop_clearing_rows_through_their_loop_element: agora #350 — a view of a String in `vv`'s first row, then `~ e vv { ( vec_clear [String] e ) }`; the view read after the loop
 // Closed: a change made through a `~` loop's element is made to an element of what the loop iterates (`fe_`): its elements dropped end the borrows of the container's elements (agora #350, #471).
-// main 0c11a93: accepted; AddressSanitizer: heap-use-after-free.
+// main 9d2e7cd: accepted; AddressSanitizer: heap-use-after-free.
 // map: §2.10 | A2 | rejected | - | agora #350: a view of an inner String kept across a loop that clears each row through its loop element
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`

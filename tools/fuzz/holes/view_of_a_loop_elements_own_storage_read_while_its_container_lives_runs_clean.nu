@@ -1,6 +1,6 @@
 // view_of_a_loop_elements_own_storage_read_while_its_container_lives_runs_clean: agora #471 — views of `~` loop elements' own storage kept in an outer `( Vec s )`, read inside the loop and after it while the container lives, the container grown in between (the shape the fix must keep)
 // Closed: a view of a loop element's own storage is reached through an element of the container (`^t`), which the container growing leaves where it is — a String's buffer does not move when the Vec grows (agora #471).
-// main 0c11a93: runs clean.
+// main 9d2e7cd: runs clean.
 // map: §2.10 | A2 | runs-clean | - | agora #471: views of `~` loop elements' own storage read while the container lives, after it grew
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`

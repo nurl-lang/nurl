@@ -684,10 +684,16 @@ holding it moves. The same holds:
 - for a loop over a field: replacing `. r xs` ends the view, replacing
   `. r name` does not;
 - for a loop over a borrow or a cursor: what it borrows from;
+- for a loop over a part of a call's result (`~ x . ( vec_at [B] bs 0 )
+  items`, a `box_get`, `rc_get`, `map_get` or `vec_get` payload, a
+  function of your own that lends): what the call lends from;
 - for an inner loop over an outer loop's element: what the outer loop
   iterates;
 - for a function of your own that hands such a view of its parameter's
-  element back, in a container, a struct or as a bare `s`.
+  element back, in a container, a struct, an option or an enum, or as a
+  bare `s`: directly, through a binding, or handed on from another such
+  function. Its callers depend on that argument's elements, also when the
+  function comes later in the program.
 
 A change made through `x` is made to an element of `xs`: growing,
 clearing or replacing it ends the views of the elements' contents taken

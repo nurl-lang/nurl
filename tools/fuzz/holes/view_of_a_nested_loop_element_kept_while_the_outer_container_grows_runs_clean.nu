@@ -1,6 +1,6 @@
 // view_of_a_nested_loop_element_kept_while_the_outer_container_grows_runs_clean: agora #471 — views of `~ v vv { ~ x v { … } }` elements read after `vv` grew (the shape the fix must keep)
 // Closed: the outer container growing moves its rows' handles, not the Strings' buffers: the views, reached through its elements (`^vv`), stay (agora #471).
-// main 0c11a93: runs clean.
+// main 9d2e7cd: runs clean.
 // map: §2.10 | A2 | runs-clean | - | agora #471: views of nested loop elements read after the outer container grew
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`

@@ -33152,11 +33152,16 @@ unsafe @ bck_check_moved_reads s reads i line s state → v {
 // where it does. Seen by that top node only: a call clears it for its own
 // arguments.
 : ~ b g_sxe_hctn F
-// …and whether a callee's walk answered that its result views an argument
-// only through its elements (`2`, __rv_ask) in the evaluation in progress:
-// a bare view handed back hands that answer on (bck_ret_view_check, agora
-// #471).
-: ~ b g_sxe_rvind F
+// …and the sources a callee's walk answered its result views only through
+// their elements (`2`, __rv_ask) in the evaluation in progress — or a view
+// read there was bound to such an answer (`rva_`): a bare view handed back
+// hands that answer on for them, and for no other source (bck_ret_view_check,
+// agora #471). The walk's table holds them (`rvsrc`, __rvsrc_add); 0 here:
+// none since the evaluation began.
+: ~ i g_sxe_rvn 0
+// Whether a binding of this function's walk was bound to such an answer
+// (`rva_`).
+: ~ i g_bck_rva_any 0
 // __held_fallback's answers while the parked walks run (every summary is
 // final then); 0 otherwise.
 : ~ i g_hfb_memo 0
@@ -33551,6 +33556,11 @@ unsafe @ __sx_view_at s st s e → b {
     ? & g_sxe_vonly == 0 ( nurl_str_len vwm ) { ^ ( nurl_str_cat deps `` ) } {}
     : b own & ( seq vwm `o` ) | arg ! g_sxe_handover
     ? == v BCK_BORROWED_SHARED {
+        // (…bound to a callee's walk answer `2`, `rva_`: so is a copy of it.)
+        ? != 0 g_bck_rva_any {
+            : s rva ( nurl_sym_get g_bck ( bck_bkey `rva_` rs ) )
+            ( __rvsrc_add rva )
+        } {}
         : s bsl ( nurl_sym_get g_bck ( bck_bkey `bs_` rs ) )
         // A view points where it points; a borrowed element or field
         // handle into ITS value's own storage, which its owners hold.
@@ -33670,7 +33680,7 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 ? __hpart { = g_sxe_held F } {}
                 ? == __rva 2 {
                     = __lj ( __src_as_ind __lj )
-                    = g_sxe_rvind T
+                    ( __rvsrc_add ( __src_indirect __lj ) )
                 } {}
                 // (A part of the argument — an element, a field — that owns
                 // its storage and holds no view, `( vec_at [String] v k )`,
@@ -34294,7 +34304,9 @@ unsafe @ __bck_try_exit_check s st i line → v {
                 : i lmk0 ( __bck_row_mark rec )
                 : i lmk ? == lmk0 110 0 lmk0
                 : s lsx ? != 0 lmk ( bck_field rec 8 ) ``
+                = g_sxe_rvn 0
                 : s lsrcs ? != 0 ( nurl_str_len lsx ) ( bck_sx_sources st lsx ( bck_field_int rec 1 ) ) ( nurl_str_cat `*` `` )
+                ? | != 0 g_sxe_rvn != 0 g_bck_rva_any { ( __bck_rva_set ( bck_field rec 1 ) ) } {}
                 : s lnest ? == lmk0 110 ( bck_sx_sources st ( bck_field rec 8 ) ( bck_field_int rec 1 ) ) ``
                 ( bck_partner_unlink ( bck_field_int rec 1 ) )
                 ( bck_put ( bck_bkey `oos_` ( bck_field rec 1 ) ) `` )
@@ -34346,7 +34358,9 @@ unsafe @ __bck_try_exit_check s st i line → v {
                 : i amk0 ( __bck_row_mark rec )
                 : i amk ? == amk0 110 0 amk0
                 : s asx ? != 0 amk ( bck_field rec 8 ) ``
+                = g_sxe_rvn 0
                 : s asrcs ? != 0 ( nurl_str_len asx ) ( bck_sx_sources st asx asid ) ( nurl_str_cat `*` `` )
+                ? | != 0 g_sxe_rvn != 0 g_bck_rva_any { ( __bck_rva_set ( nurl_str_int asid ) ) } {}
                 : s anest ? == amk0 110 ( bck_sx_sources st ( bck_field rec 8 ) asid ) ``
                 // (…or may own on some path only, BCK_MAYBE_OWNED: there it
                 // goes the same way.)
@@ -35088,7 +35102,7 @@ unsafe @ __bck_try_exit_check s st i line → v {
                 // a view's storage is what it points into, a scalar has
                 // none — agora #471.)
                 : s fecls ( bck_field rec 5 )
-                ( bck_put ( bck_bkey `fe_` ( bck_field rec 1 ) ) ? & != 0 ( nurl_str_len fesx ) | == 0 ( nurl_str_len fecls ) ( seq fecls `d` ) ( bck_borrow_owners st fesx ) `` )
+                ( bck_put ( bck_bkey `fe_` ( bck_field rec 1 ) ) ? & != 0 ( nurl_str_len fesx ) | == 0 ( nurl_str_len fecls ) ( seq fecls `d` ) ( bck_borrow_owners st ? ( __fe_cont_expr fesx ) ( bck_sx_hroots fesx ) fesx ) `` )
                 ? != 0 g_bck_hr_any { ( __bck_hr_drop_owner fid ) } {}
                 ? | != 0 ( nurl_str_len fesx ) != 0 g_bck_hr_any { ( __bck_hr_set fid ( bck_sx_hroots fesx ) F ) } {}
                 // (…and it holds what the container's elements view — what
@@ -35831,16 +35845,26 @@ unsafe @ __vk_assumptions_check → v {
 // of the function compiling now:
 // - its result is an owner that may hold views (bck_walk_class: raw code
 //   reads views as scalars), whose answer is its walk's (agora #422);
-// - or a bare `s` it may make of a `~` loop's element over an argument: its
-//   walk answers that (`^k`, bck_ret_view_check), codegen's lend answer
-//   (retlend / retptr / retpart) does not (agora #471).
+// - or a view it may make of a `~` loop's element over an argument — a bare
+//   `s`, or a struct, an option or an enum of views (class 2): its walk
+//   answers that (`^k`, bck_ret_view_check), codegen's lend answer (retlend
+//   / retptr / retpart) does not (agora #471).
 @ __rv_waits s cal → b {
     : s rt ( nurl_sym_get g_root_syms cal )
     ? == 0 ( nurl_str_len rt ) { ^ F } {}
-    : s lty ( nurl_llty rt )
-    ? == ( bck_walk_class lty ) 3 { ^ T } {}
-    ? ! ( seq lty `i8*` ) { ^ F } {}
+    : i c ( bck_walk_class ( nurl_llty rt ) )
+    ? == c 3 { ^ T } {}
+    ? != c 2 { ^ F } {}
     ^ ( __rv_bare_params cal )
+}
+
+// A parameter type, as its source spells it, that no `~` loop iterates a part
+// of: a number, a view, a String, or an option of one. Any other — a Vec, a
+// slice, a struct (`Bag`, `bag`, `_Bag`), an option of one, a trait object, an
+// alias — may be.
+@ __rv_plain_param s w → b {
+    : s t ? == ( nurl_str_get w 0 ) 63 ( nurl_str_slice w 1 - ( nurl_str_len w ) 1 ) ( nurl_str_cat w `` )
+    ^ ( str_contains_word `s String i u f b i8 i16 i32 i64 u8 u16 u32 u64 f32 f64` t )
 }
 
 // __rv_bare_params' answers, per callee: a callee's declared parameter types
@@ -35849,24 +35873,70 @@ unsafe @ __vk_assumptions_check → v {
 : ~ i g_rbv_memo 0
 
 // Is one of `cal`'s parameters something a `~` loop could iterate a part of:
-// not a number, a view or a String? Not known: it may be.
+// not a number, a view, a String or an option of one (__rv_plain_param)?
+// Only a function of the program's own
+// has a walk that answers (g_fn_link_sources, a generic instance's through
+// its generic): a foreign or runtime one (`nurl_str_int`, `memcpy`) has
+// none, and one with no parameters (scan_fn_sigs' `__kw_n`) iterates none.
+// An indirect callee answers for its members. Not known: it may be.
 @ __rv_bare_params s cal → b {
     ? != 0 g_rbv_memo {
         : i m ( nurl_sym_int g_rbv_memo cal )
         ? >= m 0 { ^ == m 1 } {}
     } {}
+    : s gb ( bck_generic_base cal )
+    : ~ b none F
+    ? && == 0 ( nurl_sym_len g_fn_link_sources cal ) == 0 ( nurl_sym_len g_fn_link_sources gb ) {
+        = none && == 0 ( nurl_str_len ( __indirect_members cal ) ) ! ( __clo_is_node cal )
+    } {}
     : ~ s rest ( nurl_sym_get2 g_root_syms cal `__ptypes_src` )
-    ? == 0 ( nurl_str_len rest ) { ^ T } {}
+    ? && ! none == 0 ( nurl_str_len rest ) { = rest ( nurl_sym_get2 g_root_syms gb `__ptypes_src` ) } {}
+    ? && ! none == 0 ( nurl_str_len rest ) {
+        ? ! ( seq ( nurl_sym_get2 g_root_syms cal `__kw_n` ) `0` ) { ^ T } {}
+        = none T
+    } {}
+    ? none {
+        ? != 0 g_rbv_memo { ( nurl_sym_def g_rbv_memo cal `0` ) } {}
+        ^ F
+    } {}
     : ~ b r F
     ~ & ! r != 0 ( nurl_str_len rest ) {
         : s w0 ( str_first_word rest ) = rest ( str_skip_word rest )
         // (`;` opens each parameter's type after the first.)
         : s w ? == ( nurl_str_get w0 0 ) 59 ( nurl_str_slice w0 1 - ( nurl_str_len w0 ) 1 ) ( nurl_str_cat w0 `` )
-        : i c0 ( nurl_str_get w 0 )
-        ? | | == c0 40 == c0 91 & & >= c0 65 <= c0 90 ! ( seq w `String` ) { = r T } {}
+        ? ! ( __rv_plain_param w ) { = r T } {}
     }
     ? != 0 g_rbv_memo { ( nurl_sym_def g_rbv_memo cal ? r `1` `0` ) } {}
     ^ r
+}
+
+// The words of `a` that are in `b`.
+@ __word_keep s a s b → s {
+    ? | == 0 ( nurl_str_len a ) == 0 ( nurl_str_len b ) { ^ ( nurl_str_cat `` `` ) } {}
+    ^ ( __word_drop_all a ( __word_drop_all a b ) )
+}
+
+// The sources a callee's walk answered views only through their elements,
+// since the evaluation in progress began (g_sxe_rvn): the walk's own
+// table holds them, a scratch fact no state digest follows.
+@ __rvsrc_get → s {
+    ? == 0 g_sxe_rvn { ^ ( nurl_str_cat `` `` ) } {}
+    ^ ( nurl_sym_get g_bck `rvsrc` )
+}
+
+@ __rvsrc_add s srcs → v {
+    ? == 0 ( nurl_str_len srcs ) { ^ v } {}
+    ( nurl_sym_set g_bck `rvsrc` ? == 0 g_sxe_rvn ( nurl_str_cat srcs `` ) ( __word_union ( nurl_sym_get g_bck `rvsrc` ) srcs ) )
+    = g_sxe_rvn 1
+}
+
+// A `let` / `=` row's binding `ids` takes a value: the sources a callee's
+// walk answered it views only through their elements, as its evaluation
+// gathered them (__rvsrc_get) — joined at a `?` / `??` as a borrow's
+// sources are. (Asked only where there is one, or was one before.)
+@ __bck_rva_set s ids → v {
+    = g_bck_rva_any 1
+    ( bck_put_bf `rva_` ids ( __rvsrc_get ) )
 }
 
 // `list` (sources), each plain one marked `^`: reached only through an
@@ -35916,9 +35986,9 @@ unsafe @ __vk_assumptions_check → v {
     // over — mark `e`.)
     = g_sxe_handover hand
     : s rroot ? deps ( nurl_str_int ( bck_path_root ( nurl_str_to_int sx ) ) ) ``
-    = g_sxe_rvind F
+    = g_sxe_rvn 0
     : s raw ? deps ( nurl_sym_get g_bck ( bck_bkey `vds_` rroot ) ) ( bck_sx_sources st sx -1 )
-    : b rvind g_sxe_rvind
+    : s rvs ( __rvsrc_get )
     = g_sxe_handover F
     // (The ones reached only through a copy of their handle — a closure
     // that captured them, `~id`.)
@@ -35944,10 +36014,11 @@ unsafe @ __vk_assumptions_check → v {
     ? && != 0 ( nurl_str_len g_bck_fn ) bare { ( __rv_note ( __src_pseudos raw ) ) } {}
     // (…and what it views only through a parameter's elements, `^k`, which
     // codegen's answer, lent or pointed into, does not see: the own storage
-    // of a `~` loop's element over it (`fe_`, __src_fe_ind), and — where a
-    // callee's walk answered so for an argument (`2`, bck_sx_ev) — what that
-    // answer hands on; agora #471.)
-    ? && != 0 ( nurl_str_len g_bck_fn ) bare { ( __rv_note ( __word_union ( __src_fe_ind st raw ) ? rvind ( __src_as_ind ( __src_indirect raw ) ) `` ) ) } {}
+    // of a `~` loop's element over it (`fe_`, __src_fe_ind), and what a
+    // callee's walk answered so of an argument (`2`, bck_sx_ev) hands on —
+    // in the return, or through a view bound to that answer (`rva_`) — of
+    // those sources only, not of another view beside them; agora #471.)
+    ? && != 0 ( nurl_str_len g_bck_fn ) bare { ( __rv_note ( __word_union ( __src_fe_ind st raw ) ? != 0 ( nurl_str_len rvs ) ( __src_as_ind ( __word_keep ( __src_indirect raw ) rvs ) ) `` ) ) } {}
     : ~ s rest ( nurl_str_cat srcs `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest ) = rest ( str_skip_word rest )
@@ -36927,6 +36998,16 @@ unsafe @ bck_sx_is_id s e → b {
         = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat add `` ) ( nurl_str_cat3 out ` ` add )
     }
     ^ out
+}
+
+// Is a `~` loop's container, as its source expression `fesx` names it, a
+// value an expression makes — a path rooted at a call or a join (`. (
+// vec_at [B] bs 0 ) items`), whose owners are the bindings the call lends or
+// each arm is (bck_sx_hroots) — not a binding or a field path of one, which
+// is its own (path-precise)? Read as a binding's id, its text named the
+// first one; agora #471.
+@ __fe_cont_expr s fesx → b {
+    ^ || || || >= ( nurl_str_find fesx `(` ) 0 >= ( nurl_str_find fesx `{` ) 0 >= ( nurl_str_find fesx `\\` ) 0 | ( seq fesx `*` ) ( seq fesx `-` )
 }
 
 @ bck_dead_state i v → b {
@@ -39821,6 +39902,7 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     ( bck_put `pml` `` )
     = g_bck_ab_any 0
     = g_bck_nch_any 0
+    = g_bck_rva_any 0
     ? != 0 g_arcp_any { ( bck_put `plarc` `` ) } {}
     = g_bck_watch 0
     = g_cj_depth 0

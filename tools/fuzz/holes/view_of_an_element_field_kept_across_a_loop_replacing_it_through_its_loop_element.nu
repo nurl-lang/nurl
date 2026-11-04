@@ -1,6 +1,6 @@
 // view_of_an_element_field_kept_across_a_loop_replacing_it_through_its_loop_element: agora #350 — a view of `. e name` (`e` read out of `ps` with vec_at), then `~ x ps { = . x name … }`; the view read after the loop
 // Closed: a field replaced through a `~` loop's element is replaced in an element of what the loop iterates (`fe_`; agora #350, #471).
-// main 0c11a93: accepted; AddressSanitizer: heap-use-after-free.
+// main 9d2e7cd: accepted; AddressSanitizer: heap-use-after-free.
 // map: §2.10 | A2 | rejected | - | agora #350: a view of an element's field kept across a loop that replaces the field through its loop element
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
