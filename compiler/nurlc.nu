@@ -15071,7 +15071,7 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
         : s uptr ( mem_udrop_ptr_of syms bck_arg_val )
         ? != 0 ( nurl_str_len uptr ) {
             ? ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
-            { ( mem_udrop_flag_set syms cg uptr `0` ) ( mem_udrop_alias_move_copied syms cg uptr )
+            { ( mem_udrop_flag_set syms cg uptr `0` ) ( mem_udrop_alias_move_copied syms cg uptr & & & summary_callee ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) ( __clone_supported at syms ) ( __lent_by_call syms bck_arg_tt bck_arg_val ) )
                 // A local this scope owns outright, handed to a release
                 // function: a candidate for the redundant-free lint.
                 ? & & & & & & & & != 0 g_lint == 0 g_bck_closure_depth == arg_idx 0 != 0 ( nurl_sym_len2 syms fname `__emptybody` )
@@ -24769,9 +24769,9 @@ unsafe @ mem_path_to_indices s path → s {
 // value or that copy, never its sources' (__src_keeps), so they keep
 // theirs. Taken along, a source's own value leaked on the runs the call
 // that made the binding handed back a fresh one (agora #457).
-@ mem_udrop_alias_move_copied i syms i cg s ptr → v {
+@ mem_udrop_alias_move_copied i syms i cg s ptr b copied → v {
     ? == 0 ( nurl_str_len ptr ) { ^ v } {}
-    ? ( __lent_by_bit syms ptr ) { ( mem_udrop_optparam_taken syms ptr ) ^ v } {}
+    ? & copied ( __lent_by_bit syms ptr ) { ( mem_udrop_optparam_taken syms ptr ) ^ v } {}
     ( mem_udrop_alias_move syms cg ptr `0` )
 }
 
@@ -48142,7 +48142,7 @@ unsafe @ __bck_made_from s name → s {
                 ( nurl_print `  ` ) ( nurl_print lr ) ( nurl_print ` = xor i1 ` ) ( nurl_print f ) ( nurl_print `, 1\n` )
                 = loaded ( mem_emit_cloneif cg var_type loaded lr )
                 ( mem_udrop_flag_set syms cg up `0` )
-                ( mem_udrop_alias_move_copied syms cg up )
+                ( mem_udrop_alias_move_copied syms cg up T )
             } { = loaded ( mem_emit_cloneif cg var_type loaded `1` ) }
         } {}
         // An option or a result owning a String, a Vec or another handle,
