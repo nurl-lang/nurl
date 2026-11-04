@@ -40392,14 +40392,24 @@ unsafe @ bck_note_rc_arg s name s ty → v {
                                 // cursor: it has no value of its own to hand
                                 // over.)
                                 ? & isview != 0 ( nurl_str_len sdeps ) { = lsrc ( nurl_str_cat sdeps `` ) } {
-                                    // …an owner's: the payload is a cursor over it —
-                                    // its own to hand on or release, but the buffer is
-                                    // the option's while the option holds it. Released
-                                    // or replaced any other way than by a `=` here
-                                    // (which hands the old value to the cursor,
-                                    // mem_udrop_hand_over), it ends the payload
-                                    // (agora #170).
-                                    ? & & ( bck_sound ) ( seq after `*` ) == BCK_OWNED ( bck_st_get state sid ) { = cursor_src sr } {}
+                                    // (…a `~` loop's element — UNINIT, `fe_` or `feo_`
+                                    // set — is a copy of the handle in an element of
+                                    // what its loop iterates, as a `vec_at` binding
+                                    // is: the payload read in place out of it is a
+                                    // borrow of it, which bck_borrow_begin flattens to
+                                    // the container's owners (bck_borrow_owners,
+                                    // `fe_`), and ends with them as a `vec_at`
+                                    // binding's payload does; agora #482, #483.)
+                                    ? & == BCK_UNINIT ( bck_st_raw state sid ) | != 0 ( nurl_sym_len g_bck ( bck_bkey `fe_` sr ) ) != 0 ( nurl_sym_len g_bck ( bck_bkey `feo_` sr ) ) { = lsrc ( nurl_str_cat sr `` ) } {
+                                        // …an owner's: the payload is a cursor over it —
+                                        // its own to hand on or release, but the buffer is
+                                        // the option's while the option holds it. Released
+                                        // or replaced any other way than by a `=` here
+                                        // (which hands the old value to the cursor,
+                                        // mem_udrop_hand_over), it ends the payload
+                                        // (agora #170).
+                                        ? & & ( bck_sound ) ( seq after `*` ) == BCK_OWNED ( bck_st_get state sid ) { = cursor_src sr } {}
+                                    }
                                 }
                             }
                             ? ishv { = hv_deps sdeps } {}
