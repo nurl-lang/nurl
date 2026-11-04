@@ -16392,13 +16392,6 @@ unsafe @ gen_call i lex i syms i cg → s {
             // value it names: the owner a keeping callee stores into.)
             : i __sx_c0 ( bck_walk_class ? & is_inout_arg != 0 ( nurl_str_ends at `*` ) ( nurl_str_slice at 0 - ( nurl_str_len at ) 1 ) at )
             ? != __sx_c0 1 { = __sx_naddr + __sx_naddr 1 } {}
-            // (A holder the caller sees changed: one passed `inout`, or a
-            // value with storage of its own a callee can push into — not a
-            // view or a struct of views, the callee's own copy.)
-            ? & & __vk_live >= __sx_c0 2 | is_inout_arg ( bck_is_heap_lty at ) {
-                : s __hn ? ( is_ident_tok bck_arg_tt ) ( nurl_str_cat bck_arg_val `` ) ? == bck_arg_tt TT_DOT ? is_inout_arg ( nurl_str_slice arg_sx 0 ( nurl_str_find arg_sx `.` ) ) ( nurl_str_cat ( nurl_sym_get syms `__last_member_root__` ) `` ) ``
-                ? > ( nurl_str_len __hn ) 0 { = __vk_hold ( nurl_str_cat4 __vk_hold ? == 0 ( nurl_str_len __vk_hold ) `` ` ` ( nurl_str_int arg_idx ) ( nurl_str_cat `=` __hn ) ) } {}
-            } {}
             ? & | == __sx_c0 0 == __sx_c0 3 | ( is_ident_tok bck_arg_tt ) == bck_arg_tt TT_DOT { = __sx_nown + __sx_nown 1 } {}
             // (…and so is an `inout` struct of views: the callee may store
             // into its fields, agora #259.)
@@ -16406,6 +16399,19 @@ unsafe @ gen_call i lex i syms i cg → s {
             : b __sx_cand | | | == __sx_c0 4 & > arg_idx 0 != 0 ( nurl_str_len __sx_arg0 ) ( __thr_is_detach fname_bare ) & ! is_inout_arg != 0 ( nurl_str_len callee_inout )
             ? & ! is_inout_arg | __sx_need & __sx_cand >= __sx_c0 2 { = arg_sx ? == __sx_c0 1 ( nurl_str_cat `-` `` ) ( __sx_operand_c syms bck_arg_tt bck_arg_val __sx_c0 ( __sx_froot syms bck_arg_tt at ) __sx_n0 ) } {}
             ? __sx_need { = call_sx ? == arg_idx 0 ( nurl_str_cat arg_sx `` ) ( nurl_str_cat3 call_sx `|` arg_sx ) } {}
+            // (A holder the caller sees changed: one passed `inout`, or a
+            // value with storage of its own a callee can push into — not a
+            // view or a struct of views, the callee's own copy.)
+            // (…named by its binding, or, when it is no binding but a value
+            // lent out of one — an element, `( vec_at vv 0 )`, a field of one,
+            // a payload, a function's lend, a join of them — by its source
+            // expression, `@sx`, as #414's first argument is: what the callee
+            // leaves viewing in it lands in what it lends, agora #391.)
+            ? & & __vk_live >= __sx_c0 2 | is_inout_arg ( bck_is_heap_lty at ) {
+                : s __hn0 ? ( is_ident_tok bck_arg_tt ) ( nurl_str_cat bck_arg_val `` ) ? == bck_arg_tt TT_DOT ? is_inout_arg ( nurl_str_slice arg_sx 0 ( nurl_str_find arg_sx `.` ) ) ( nurl_str_cat ( nurl_sym_get syms `__last_member_root__` ) `` ) ``
+                : s __hn ? & & == 0 ( nurl_str_len __hn0 ) ! is_inout_arg ( __sx_lends_any arg_sx ) ( nurl_str_cat `@` arg_sx ) __hn0
+                ? > ( nurl_str_len __hn ) 0 { = __vk_hold ( nurl_str_cat4 __vk_hold ? == 0 ( nurl_str_len __vk_hold ) `` ` ` ( nurl_str_int arg_idx ) ( nurl_str_cat `=` __hn ) ) } {}
+            } {}
             // (`. w h` passed inout names no member root: its source
             // expression's does — `w.h` is `w`'s.)
             ? & & & == arg_idx 0 is_inout_arg == bck_arg_tt TT_DOT & == 0 ( nurl_str_len __sx_arg0 ) | == __sx_c0 0 == __sx_c0 3 {
@@ -35255,13 +35261,19 @@ unsafe @ __bck_try_exit_check s st i line → v {
                     // (`B`: the owner is a temporary this statement made and
                     // releases after the call — nothing to depend on; one the
                     // callee keeps or takes is the callee's.)
-                    ? & & & & vbuf ! ( seq vc `-` ) vkept0 == vb0 66 ! ( bck_callee_keeps vcal vk ) {
-                        ( bck_diag_vbuf_temp ( bck_path_root ( nurl_str_to_int vc ) ) vcal ( nurl_str_to_int vk ) ( bck_field_int rec 3 ) )
+                    // (…a holder lent out of a binding, `@sx`: the owners it is
+                    // a part of — bck_sx_hroots, as a store into it lands;
+                    // agora #391.)
+                    : s vlr ? & vcx vpair ( __bck_store_roots st ( bck_sx_hroots ( nurl_str_slice vc0 1 - ( nurl_str_len vc0 ) 1 ) ) `` ) ``
+                    ? & & & & vbuf | ! ( seq vc `-` ) != 0 ( nurl_str_len vlr ) vkept0 == vb0 66 ! ( bck_callee_keeps vcal vk ) {
+                        ( bck_diag_vbuf_temp ? vcx ( nurl_str_to_int ( str_first_word vlr ) ) ( bck_path_root ( nurl_str_to_int vc ) ) vcal ( nurl_str_to_int vk ) ( bck_field_int rec 3 ) )
                     } {}
                     // (…one lent out of a binding only by a callee that changes
                     // what its first argument holds: a keeping callee may keep
                     // the value elsewhere — an `inout` argument, bck_vpass_own.)
-                    ? & & | & & vcx ( nurl_sym_has_word g_fn_mutates vcal `0` ) ( __vholds_may vcal vaix 0 ) ! ( seq vc `-` ) vkept != vb0 66 {
+                    // (…and a pair row's holder lent out of a binding, `@sx`: the
+                    // answer names it, agora #391.)
+                    ? & & | | & & vcx ( nurl_sym_has_word g_fn_mutates vcal `0` ) ( __vholds_may vcal vaix 0 ) & vcx vpair ! ( seq vc `-` ) vkept != vb0 66 {
                         // (A closure kept in a container is adopted: what it
                         // held a copy of a handle of, it copies in — `~id`.)
                         // (An owner viewed is its own storage.)
