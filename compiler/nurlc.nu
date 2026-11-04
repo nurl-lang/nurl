@@ -35770,10 +35770,21 @@ unsafe @ __bck_try_exit_check s st i line → v {
                         // asks `feb_` only then, g_bck_fe_live — agora #482.)
                         : s frec ( bck_rec + p 1 )
                         : b fel != 0 ( nurl_str_starts frec `fevar\t` )
-                        ? fel { = g_bck_fe_live + g_bck_fe_live 1 } {}
+                        // (…and whose elements those are, `felv`: an inner
+                        // loop keeps what its body did to them, __bck_fe_carry.
+                        // Taken off again after the loop, through the digest's
+                        // wrappers: the facts digest comes back as it was;
+                        // agora #482.)
+                        ? fel {
+                            = g_bck_fe_live + g_bck_fe_live 1
+                            ( bck_add_word `felv` ( bck_field frec 1 ) )
+                        } {}
                         : s lpost ( bck_loop + p 1 eb st ( bck_field rec 2 )
                         ( bck_field_int rec 3 ) ( seq bk `loopt` ) )
-                        ? fel { = g_bck_fe_live - g_bck_fe_live 1 } {}
+                        ? fel {
+                            = g_bck_fe_live - g_bck_fe_live 1
+                            ( __bck_felv_pop )
+                        } {}
                         // (A `~` loop's element is gone with its loop: what
                         // views or borrows it lets go of its name for the
                         // container's element, __bck_fe_retire — and what it is
@@ -40772,24 +40783,37 @@ unsafe @ bck_loop_mask s pre s post → s {
     ^ out
 }
 
+// The `~` loop whose walk ends is the innermost one: its element comes off
+// the end of `felv`, which the loop-block handler (bck_walk_seq) put it
+// on, and the list is what it was before the loop — the facts digest too,
+// through bck_put (agora #482).
+@ __bck_felv_pop → v {
+    : s lv ( nurl_sym_get g_bck `felv` )
+    : i k ( str_last_space lv )
+    ( bck_put `felv` ? < k 0 `` ( nurl_str_slice lv 0 k ) )
+}
+
 // `masked` — bck_loop_mask's `post` — with each `~` loop element bound
 // outside this loop that its body ended kept ended. UNINIT in `pre`, as
-// a binding the body declares is, it is no body-local one: while its
-// own loop is walked (`feo_` set) — not this loop's element `own` — the
-// end an inner loop's body gave it holds past that loop (agora #482).
-unsafe @ __bck_fe_carry s masked s post i own → s {
+// a binding the body declares is, it is no body-local one: the element of
+// an enclosing `~` loop being walked (`felv`, and `feo_` set) — not this
+// loop's own, `own` — keeps the end an inner loop's body gave it past that
+// loop (agora #482). Only those ids are asked, and `masked` comes back as
+// it is when none is restored.
+@ __bck_fe_carry s masked s post i own → s {
+    : ~ s out masked
     : i nm ( nurl_str_len masked )
-    : i np ( nurl_str_len post )
-    : i n ? < np nm np nm
-    : *u mp # *u masked
-    : *u qp # *u post
-    : ~ s out ( nurl_str_cat masked `` )
-    : ~ i i 0
-    ~ < i n {
-        ? & & & == - # i . mp i 48 BCK_UNINIT == - # i . qp i 48 BCK_INVALID != i own != 0 ( nurl_sym_len g_bck ( bck_bkey `feo_` ( nurl_str_int i ) ) ) {
-            = out ( bck_st_set out i BCK_INVALID )
+    : s lv ( nurl_sym_get g_bck `felv` )
+    : i n ( nurl_str_len lv )
+    : ~ i pos 0
+    ~ < pos n {
+        : i e ( __word_end lv n pos )
+        : s xs ( __span_dup lv pos e )
+        = pos + e 1
+        : i x ( nurl_str_to_int xs )
+        ? & & & & != x own < x nm == BCK_UNINIT ( bck_st_raw masked x ) == BCK_INVALID ( bck_st_raw post x ) != 0 ( nurl_sym_len g_bck ( bck_bkey `feo_` xs ) ) {
+            = out ( bck_st_set out x BCK_INVALID )
         } {}
-        = i + i 1
     }
     ^ out
 }
@@ -41426,8 +41450,8 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
         : s tok1 ( bck_facts_tok )
         // (Bound: a fresh raw string handed straight to a user function is
         // not released as a call temporary.)
-        : s carried0 ( bck_loop_mask pre post )
-        : s carried ? > g_bck_fe_live fe_self ( __bck_fe_carry carried0 post fe_own ) carried0
+        : ~ s carried ( bck_loop_mask pre post )
+        ? > g_bck_fe_live fe_self { = carried ( __bck_fe_carry carried post fe_own ) } {}
         : s merged ( bck_join_state head carried )
         // Converged when the next walk would repeat one already made: the
         // state is where this walk started, and the facts are where this
@@ -41507,8 +41531,8 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     // The loop is left at its condition (the head state) or by a `break`
     // — only by a `break` where the condition is the literal `T`.
     ? == 0 ( nurl_str_len brk ) { ^ head } {}
-    : s left0 ( bck_loop_mask pre brk )
-    : s left ? > g_bck_fe_live fe_self ( __bck_fe_carry left0 brk fe_own ) left0
+    : ~ s left ( bck_loop_mask pre brk )
+    ? > g_bck_fe_live fe_self { = left ( __bck_fe_carry left brk fe_own ) } {}
     ? __lbrk_only { ^ left } {}
     ^ ( bck_join_state head left )
 }
