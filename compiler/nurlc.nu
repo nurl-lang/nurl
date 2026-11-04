@@ -37809,6 +37809,15 @@ unsafe @ bck_sx_is_id s e → b {
     : i v ( bck_st_get st r )
     ? == v BCK_OWNED { ^ + * r 2 1 } {}
     ? == v BCK_BORROWED_SHARED { ^ ( bck_br_get ( nurl_str_int r ) ) } {}
+    // (A `~` loop's element — UNINIT, a part of what its loop iterates while
+    // that is walked, `feo_` — is a value read through a handle, as a
+    // `vec_at` binding is, its code its own id twice: a field viewer or
+    // `vborrow` of a part of it reads its bytes. Copied whole, `: ~ T c x`,
+    // it is the copy's own value, as a `vec_at` binding's copy is — a
+    // `cborrow`, bck_note_borrow; agora #482.)
+    ? & == v BCK_UNINIT != 0 ( nurl_sym_len g_bck ( bck_bkey `feo_` ( nurl_str_int r ) ) ) {
+        ? ! ( str_contains_word srcs ( nurl_str_int r ) ) { ^ * r 2 } {}
+    } {}
     ^ -1
 }
 
@@ -39659,20 +39668,50 @@ unsafe @ bck_note_rc_arg s name s ty → v {
 // a path overlapping it: the `~` loop elements filed under `os` (`feb_`)
 // that are a part of it still, bound this round and not yet ended, end
 // (agora #482).
+// (Elements alone dropped or replaced (g_bck_end_eonly) through a borrow
+// whose bytes are a part of the element — a field viewer of it,
+// bck_byte_root — leave the element as they leave a `vec_at` borrow of the
+// same bytes, bck_br_survives: its own code, its id twice, is the code of
+// what the change went through. Through the element or a copy of it —
+// __bck_fe_own_change — it ends as a `vec_at` borrow does, but its slot
+// in the container and the container's storage are as they were: `!fes`,
+// which the loop's next round does not ask, bck_loop.)
 @ __bck_fe_end s st i sid s os i line s why → s {
     : ~ s out st
     : b fev == BCK_INVALID ( bck_st_get out ( bck_path_root sid ) )
+    : b eo != 0 g_bck_end_eonly
     : ~ s ferest ( nurl_sym_get g_bck ( bck_bkey `feb_` os ) )
     ~ != 0 ( nurl_str_len ferest ) {
         : s fs ( str_first_word ferest ) = ferest ( str_skip_word ferest )
         : i fx ( nurl_str_to_int fs )
         : i fxv ( bck_st_get out fx )
-        ? & | == BCK_UNINIT fxv & & ! fev == BCK_INVALID fxv ! ( __bck_fe_ended fs ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `feo_` fs ) ) os ) {
+        ? & & | == BCK_UNINIT fxv & & ! fev == BCK_INVALID fxv ! ( __bck_fe_ended fs ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `feo_` fs ) ) os ) | | fev ! eo != * fx 2 g_bck_end_wroot {
+            : b own & & ! fev eo ( __bck_fe_own_change fx )
             = out ( bck_st_set out fx BCK_INVALID )
-            ( bck_put ( bck_bkey `bv_` fs ) ( nurl_str_cat4 ( nurl_str_int line ) ` ` os ( nurl_str_cat ? fev ` !fev ` ` !fe ` why ) ) )
+            ( bck_put ( bck_bkey `bv_` fs ) ( nurl_str_cat4 ( nurl_str_int line ) ` ` os ( nurl_str_cat ? fev ` !fev ` ? own ` !fes ` ` !fe ` why ) ) )
         } {}
     }
     ^ out
+}
+
+// Elements alone changed (g_bck_end_eonly) through borrow g_bck_end_wid:
+// is it `~` loop element `fx` itself, or a borrow of it — a source rooted
+// at `fx`, and every other an owner of what `fx` is a part of (`feo_`), as
+// bck_borrow_owners flattens a borrow of it? Then the elements dropped are
+// `fx`'s own or a part of its, not its container's (agora #482).
+@ __bck_fe_own_change i fx → b {
+    ? < g_bck_end_wid 0 { ^ F } {}
+    ? == g_bck_end_wid fx { ^ T } {}
+    : s feo ( nurl_sym_get g_bck ( bck_bkey `feo_` ( nurl_str_int fx ) ) )
+    : ~ s rest ( nurl_sym_get g_bck ( bck_bkey `bs_` ( nurl_str_int g_bck_end_wid ) ) )
+    : ~ b mine F
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? == fx ( bck_path_root ( nurl_str_to_int w ) ) { = mine T } {
+            ? ! ( str_contains_word feo w ) { ^ F } {}
+        }
+    }
+    ^ mine
 }
 
 // The owners holding views of `sids` (bck_dep_set) are good no longer —
@@ -39718,7 +39757,8 @@ unsafe @ bck_note_rc_arg s name s ty → v {
 }
 
 // Did `~` loop element `xs` end with its storage (bv_ `!fe`,
-// bck_borrow_end) — not only as a holder of views (agora #482)?
+// bck_borrow_end) — not only as a holder of views, `!fev`, nor with its
+// own elements alone, `!fes` (agora #482)?
 @ __bck_fe_ended s xs → b {
     : ~ s info ( nurl_sym_get g_bck ( bck_bkey `bv_` xs ) )
     = info ( str_skip_word ( str_skip_word info ) )
@@ -39800,8 +39840,8 @@ unsafe @ bck_note_rc_arg s name s ty → v {
         ^ v
     } {}
     // (A `~` loop's element, a part of what ended — bck_borrow_end, agora
-    // #482.)
-    ? ( seq ( str_first_word info ) `!fe` ) {
+    // #482 — or whose own elements changed through a copy of it, `!fes`.)
+    ? | ( seq ( str_first_word info ) `!fe` ) ( seq ( str_first_word info ) `!fes` ) {
         : s fwhy ( str_skip_word info )
         : s f1 ( nurl_str_cat4 `'` name `' is the element a '~' loop is at, a part of '` sname )
         : s f2 ( nurl_str_cat4 `', which ended at line ` ln ` — ` fwhy )
