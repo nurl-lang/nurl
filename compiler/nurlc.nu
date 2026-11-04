@@ -687,10 +687,13 @@ unsafe @ ty_to_unsigned s t → s {
 // survive), and the char after must not be an identifier char (`*`, `,`,
 // space, `)`, `}` and end-of-string all terminate a type token).
 unsafe @ __llty_word_at s t i pos s w → b {
-    : i wl ( nurl_str_len w )
     : *u w_p # *u w
-    : i tl ( nurl_str_len t )
     : *u t_p # *u t
+    // (`pos` is inside `t` and every word has a second byte, so a probe
+    // that fails there — most do — fails before either string is measured.)
+    ? != # i . t_p + pos 1 # i . w_p 1 { ^ F } {}
+    : i wl ( nurl_str_len w )
+    : i tl ( nurl_str_len t )
     ? > + pos wl tl { ^ F } {}
     // Direct char compare — this runs per character of every lowered
     // type; the old slice+seq allocated a 2-4 byte string per probe
@@ -708,6 +711,18 @@ unsafe @ __llty_word_at s t i pos s w → b {
     { ? ( __is_ident_char ( nurl_str_at t_p tl + pos wl ) ) { ^ F } {} }
     {}
     ^ T
+}
+
+// Can a word of nurl_llty's start at byte `p` of `t_p` (length `tl`)?
+// Each is a letter and then a digit, and __llty_word_at refuses one after
+// an identifier byte or a `%`: the part of its test that is the same for
+// every word, asked once per position.
+unsafe @ __llty_tok_at * u t_p i tl i p → b {
+    : i c1 ( nurl_str_at t_p tl + p 1 )
+    ? | < c1 48 > c1 57 { ^ F } {}
+    ? == p 0 { ^ T } {}
+    : i pc ( nurl_str_at t_p tl - p 1 )
+    ^ ! | ( __is_ident_char pc ) == pc 37
 }
 
 // nurl_llty: lower an internal type to its LLVM spelling. Rewrites every
@@ -780,21 +795,28 @@ unsafe @ nurl_llty s t → s {
     : *u t_p # *u t
     : ~ i p 0
     ~ < p tl {
-        ? & == ( nurl_str_at t_p tl p ) 117
-        | | ( __llty_word_at t p `u8` ) ( __llty_word_at t p `u16` )
-        | ( __llty_word_at t p `u32` ) ( __llty_word_at t p `u64` )
-        { : s head ? > p 0 ( nurl_str_slice t 0 p ) ``
-            : s tail ( nurl_str_slice t + p 1 - tl + p 1 )
-            ^ ( nurl_llty ( nurl_str_cat3 head `i` tail ) ) }
-        {}
-        // A vector inside a compound spelling — the `v128*` an `inout v128`
-        // passes, a `{ i1, v128 }` option — lowers like the bare one; left
-        // alone it reached the IR as the undefined type `v128`.
-        ? & == ( nurl_str_at t_p tl p ) 118 | | ( __llty_word_at t p `v128` ) ( __llty_word_at t p `v256` ) ( __llty_word_at t p `v512` ) {
-            : s head ? > p 0 ( nurl_str_slice t 0 p ) ``
-            : s tail ( nurl_str_slice t + p 4 - tl + p 4 )
-            : s vt ? ( __llty_word_at t p `v128` ) `<4 x i32>` ? ( __llty_word_at t p `v256` ) `<4 x i64>` `<8 x i64>`
-            ^ ( nurl_llty ( nurl_str_cat3 head vt tail ) )
+        : i c ( nurl_str_at t_p tl p )
+        // Each word rewritten below is a `u` or a `v` and then a digit,
+        // standing as a token: test that once here, not in each of seven
+        // probes (`%Vec__u8`, the commonest type with a `u`, ran four).
+        ? & | == c 117 == c 118 ( __llty_tok_at t_p tl p ) {
+            ? & == c 117
+            | | ( __llty_word_at t p `u8` ) ( __llty_word_at t p `u16` )
+            | ( __llty_word_at t p `u32` ) ( __llty_word_at t p `u64` )
+            { : s head ? > p 0 ( nurl_str_slice t 0 p ) ``
+                : s tail ( nurl_str_slice t + p 1 - tl + p 1 )
+                ^ ( nurl_llty ( nurl_str_cat3 head `i` tail ) ) }
+            {}
+            // A vector inside a compound spelling — the `v128*` an
+            // `inout v128` passes, a `{ i1, v128 }` option — lowers like the
+            // bare one; left alone it reached the IR as the undefined type
+            // `v128`.
+            ? & == c 118 | | ( __llty_word_at t p `v128` ) ( __llty_word_at t p `v256` ) ( __llty_word_at t p `v512` ) {
+                : s head ? > p 0 ( nurl_str_slice t 0 p ) ``
+                : s tail ( nurl_str_slice t + p 4 - tl + p 4 )
+                : s vt ? ( __llty_word_at t p `v128` ) `<4 x i32>` ? ( __llty_word_at t p `v256` ) `<4 x i64>` `<8 x i64>`
+                ^ ( nurl_llty ( nurl_str_cat3 head vt tail ) )
+            } {}
         } {}
         = p + p 1
     }
@@ -8789,7 +8811,7 @@ unsafe @ extract_fn_ptr_return_type s fn_ptr_type → s {
     ~ != 0 ( nurl_str_len rest ) {
         : i comma ( nurl_str_find rest `,` )
         : s param ( nurl_str_slice rest 0 ? < comma 0 ( nurl_str_len rest ) comma )
-        : b data ( str_contains_word value_only ( nurl_str_int index ) )
+        : b data ( str_has_index value_only index )
         ? | data ( str_contains_word param `nocapture` )
         { = captures ( nurl_str_cat3 captures ` ` ( nurl_str_int index ) ) } {}
         // A readonly function cannot retain new state; a pointer not marked
@@ -15140,18 +15162,18 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
     // module-end sink flag for a parameter whose consumption is only
     // inferred.
     ? & & ! ( __is_autodrop_enum at syms ) ( is_ident_tok bck_arg_tt )
-    | summary_callee ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) {
+    | summary_callee ( str_has_index callee_sink arg_idx ) {
         // Released here for certain: a closure body doing so to one of
         // its captures takes that capture over (gen_closure_expr).
-        ? ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) {
+        ? ( str_has_index callee_sink arg_idx ) {
             : s __cc ( nurl_sym_get syms `__clo_consumed__` )
             ( nurl_sym_set_deep syms `__clo_consumed__` ( nurl_str_cat3 __cc ` ` bck_arg_val ) )
             ( __clo_capture_gone syms cg bck_arg_val )
         } {}
         : s uptr ( mem_udrop_ptr_of syms bck_arg_val )
         ? != 0 ( nurl_str_len uptr ) {
-            ? ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
-            { ( mem_udrop_flag_set syms cg uptr `0` ) ( mem_udrop_alias_move_copied syms cg uptr & & & & positional summary_callee ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) ( __clone_supported at syms ) ( __lent_by_call syms bck_arg_tt bck_arg_val ) )
+            ? ( str_has_index callee_sink arg_idx )
+            { ( mem_udrop_flag_set syms cg uptr `0` ) ( mem_udrop_alias_move_copied syms cg uptr & & & & positional summary_callee ( str_has_index callee_sink arg_idx ) ( __clone_supported at syms ) ( __lent_by_call syms bck_arg_tt bck_arg_val ) )
                 // A local this scope owns outright, handed to a release
                 // function: a candidate for the redundant-free lint.
                 ? & & & & & & & & != 0 g_lint == 0 g_bck_closure_depth == arg_idx 0 != 0 ( nurl_sym_len2 syms fname `__emptybody` )
@@ -15849,7 +15871,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         // binding — the callee mutates it in place. Pass the
         // binding's backing pointer (`__ptr`) typed `<T>*`; emit no
         // value load. Everything else is the ordinary by-value path.
-        : b is_inout_arg ( str_contains_word callee_inout ( nurl_str_int arg_idx ) )
+        : b is_inout_arg ( str_has_index callee_inout arg_idx )
         // A closure binding handed to a function's `inout` parameter comes
         // back as whatever the callee gives that parameter: its node gains
         // the parameter's (`cp#f#p`, at module end; agora #433).
@@ -15984,7 +16006,7 @@ unsafe @ gen_call i lex i syms i cg → s {
             : b fe_helper_mutates ( str_contains_word
             ( nurl_sym_get g_fn_mutates call_name ) ( nurl_str_int arg_idx ) )
             // …or takes it (`sink`): it is released under the loop's cursor.
-            : b fe_takes ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
+            : b fe_takes ( str_has_index callee_sink arg_idx )
             ? & fe_iterated | | is_inout_arg | fe_mutates fe_helper_mutates fe_takes
             { ( bck_esc_warn lex bck_arg_line ( nurl_str_cat3
                 `cannot mutate '` bck_arg_root
@@ -16666,7 +16688,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         // below its caller is missed (§6.4).
         ? ( is_ident_tok bck_arg_tt )
         { : s __pk_mut ( nurl_sym_get g_fn_reallocs call_name )
-            ? ( str_contains_word __pk_mut ( nurl_str_int arg_idx ) )
+            ? ( str_has_index __pk_mut arg_idx )
             { = __pk_defer ( nurl_str_cat4 __pk_defer `k ` bck_arg_val ( nurl_str_cat3 ` ` ( nurl_str_int bck_arg_line ) ` - - - ` ) ) }
             {  // Not known to reallocate — and a summary is final only
                 // after the module (a callee compiled later, or one whose
@@ -16715,7 +16737,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         // A `sink` closure parameter takes the closure over: a temporary
         // moves in (not dropped here), anything else is handed a copy — the
         // binding it came from keeps its own.
-        : b __clo_sink & ( __is_closure_ty at ) ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
+        : b __clo_sink & ( __is_closure_ty at ) ( str_has_index callee_sink arg_idx )
         ? != 0 ( nurl_str_len __cle )
         {  // A temporary closure (a literal, or a call's result) belongs to
             // this call site and is dropped after the call: a callee only
@@ -16825,7 +16847,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         ( seq fname `vec_push` ) ( seq fname `vec_insert` ) ( seq fname `vec_set` )
         : b builtin_escape_slot & is_escape_call ! & vec_family_call == arg_idx 0
         : b arg_pos_escapes | builtin_escape_slot
-        ( str_contains_word callee_escapes ( nurl_str_int arg_idx ) )
+        ( str_has_index callee_escapes arg_idx )
         // A closure handing its capture to a callee that keeps it moves it
         // out of its env when it cannot be copied (one that can is stored
         // as a copy): the closure runs at most once, as when it releases
@@ -17125,7 +17147,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         // ownership kinds still require their own transfer support.
         // A `% Drop` impl handing its value to a disposer (`( t_free t )`):
         // the disposer releases the fields, so no glue follows.
-        ? & & & != 0 ( nurl_str_len g_drop_glue_ty ) ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
+        ? & & & != 0 ( nurl_str_len g_drop_glue_ty ) ( str_has_index callee_sink arg_idx )
         ( is_ident_tok bck_arg_tt ) ( seq bck_arg_val ( str_first_word ( nurl_sym_get syms `__fn_param_names__` ) ) )
         { ( nurl_sym_set_deep syms `__drop_glue_moved__` `1` ) ( mem_journal_forget_glue syms ) } {}
         // (An option / result that owns nothing — `?i` — is a plain value:
@@ -17134,7 +17156,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         // copy of its env, gen_call above — and a number or a flag, a
         // generic `sink T` instantiated at one: `( locked_new [i] n )`.)
         : b __sink_plain_wrap | & != 0 ( nurl_str_starts at `{ i1, ` ) == 0 ( nurl_str_len ( __wrap_twin at ) ) ( __is_closure_ty at )
-        : b __sink_bare & & ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) ( is_ident_tok bck_arg_tt ) ! __sink_plain_wrap
+        : b __sink_bare & & ( str_has_index callee_sink arg_idx ) ( is_ident_tok bck_arg_tt ) ! __sink_plain_wrap
         ? & __sink_bare ! ? __sink_bare ( __plain_scalar_lty at ) F
         { : s sink_ptr ( nurl_sym_get2 syms bck_arg_val `__ptr` )
             ? & ! ( __is_autodrop_enum at syms ) | ( nurl_sym_has_word syms `__owned_slices__` bck_arg_val )
@@ -17157,7 +17179,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         // to a declared `sink`: the callee is handed a copy, as `^ x` in
         // the body hands one back (consumed, the second call released it
         // again; agora #463). One that cannot be copied is refused.
-        : ~ b __crcp & & & & & summary_callee != 0 g_clo_ret_body ( is_ident_tok bck_arg_tt ) ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) ( __type_needs_drop at syms ) ( __clo_ret_capture_root syms bck_arg_val )
+        : ~ b __crcp & & & & & summary_callee != 0 g_clo_ret_body ( is_ident_tok bck_arg_tt ) ( str_has_index callee_sink arg_idx ) ( __type_needs_drop at syms ) ( __clo_ret_capture_root syms bck_arg_val )
         // (Not one the env owns under a flag of its own, g_nc_own_caps: the
         // body takes that over through the flag, and a second run stops.)
         = __crcp & __crcp ! ( str_contains_word g_nc_own_caps ? ( __is_clo_capture syms bck_arg_val ) bck_arg_val ( __clo_nc_derived syms bck_arg_val ) )
@@ -17175,7 +17197,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         // closure frees it — a second call is a use after the move (the
         // consumed-capture rule). Left alone, the binding released the
         // option whose payload the body had given away (agora #463).
-        ? & & & & & & summary_callee != 0 g_bck_closure_depth == 0 g_clo_ret_body ( is_ident_tok bck_arg_tt ) ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) ( __type_needs_drop at syms ) ! ( __is_clo_capture syms bck_arg_val ) {
+        ? & & & & & & summary_callee != 0 g_bck_closure_depth == 0 g_clo_ret_body ( is_ident_tok bck_arg_tt ) ( str_has_index callee_sink arg_idx ) ( __type_needs_drop at syms ) ! ( __is_clo_capture syms bck_arg_val ) {
             : s __ctr ( __clo_nc_derived syms bck_arg_val )
             ? & != 0 ( nurl_str_len __ctr ) ( __is_clo_capture syms __ctr ) {
                 // (Only the payload of an option capture matched as it is,
@@ -17197,7 +17219,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         // A callee that STORES the borrowed payload is handed a copy instead
         // (below): then the slot keeps its value.
         ? & & ( is_ident_tok bck_arg_tt ) ( __vget_live syms bck_arg_val ) ( __type_needs_drop at g_root_syms ) {
-            : b __vg_decl ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
+            : b __vg_decl ( str_has_index callee_sink arg_idx )
             // (A value the callee only keeps in memory it manages by hand
             // stays in its slot: consume_flag.)
             : s __vg_base ? __vg_decl `1`
@@ -17230,7 +17252,7 @@ unsafe @ gen_call i lex i syms i cg → s {
             // memory the program manages itself keeps a VIEW (`( wc_new . m
             // code )`, a cursor over a raw-pointer struct's buffer), which
             // emptying would destroy.
-            ? ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) {
+            ? ( str_has_index callee_sink arg_idx ) {
                 ( nurl_print `  store ` ) ( nurl_print ( nurl_llty at ) ) ( nurl_print ` zeroinitializer, ptr ` ) ( nurl_print fa_p ) ( nurl_print `\n` )
             } { ? summary_callee {
                     : s fa_c ( nurl_cg_reg cg )
@@ -17260,7 +17282,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         ? & & ( is_ident_tok bck_arg_tt ) != 0 ( nurl_sym_len2 syms bck_arg_val `__eslot` ) ( __is_handle_ty at ) {
             : s es ( nurl_sym_get2 syms bck_arg_val `__eslot` )
             : s fl ( nurl_llty at )
-            ? ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) {
+            ? ( str_has_index callee_sink arg_idx ) {
                 ( nurl_print `  store ` ) ( nurl_print fl ) ( nurl_print ` zeroinitializer, ptr ` ) ( nurl_print es ) ( nurl_print `\n` )
             } { ? summary_callee {
                     : s zc ( nurl_cg_reg cg )
@@ -17275,7 +17297,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         // for a storing callee (below) leaves the original in place.
         // (A closure never consumes its argument — its parameters are
         // borrowed, gen_closure_expr — so a field handed to one stays.)
-        ? & != 0 ( nurl_str_len arg_fread ) | summary_callee ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) {
+        ? & != 0 ( nurl_str_len arg_fread ) | summary_callee ( str_has_index callee_sink arg_idx ) {
             : ~ s fr ( nurl_str_cat arg_fread `` )
             : s fr_ptr ( str_first_word fr ) = fr ( str_skip_word fr )
             : s fr_sty ( str_first_word fr ) = fr ( str_skip_word fr )
@@ -17320,7 +17342,7 @@ unsafe @ gen_call i lex i syms i cg → s {
             } {}
             // (…and in an `inout` parameter, the caller's own struct.)
             ? ? fr_h | | | ( nurl_sym_has_word syms `__user_drops__` fr_ptr ) ( __vget_live syms fr_ptr ) fr_glue ( __is_inout_ptr syms fr_ptr ) F {
-                : b fr_decl ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
+                : b fr_decl ( str_has_index callee_sink arg_idx )
                 : ~ s zc ( nurl_str_cat `1` `` )
                 ? ! fr_decl {
                     // (consume_flag: a callee that keeps only a view in
@@ -17402,7 +17424,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         // takes it over: the callee would free what the caller still holds,
         // and the caller frees it again.
         ? & & & & summary_callee ( is_ident_tok bck_arg_tt )
-        ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) ( __type_needs_drop at syms )
+        ( str_has_index callee_sink arg_idx ) ( __type_needs_drop at syms )
         ( __is_clo_param syms bck_arg_val ) {
             ( die lex ( nurl_str_cat ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
             ( nurl_str_cat3 `' is '` bck_arg_val `', a parameter of this closure — and a closure only BORROWS its parameters: its caller keeps what it passed and drops it (a call through a closure value cannot know what the body would take). But the parameter is 'sink': the callee takes ownership and releases the value, which the caller then releases again. Do not release it — the owner does; a *_free_with hook is lent each element and the container drops it afterwards. To give the callee a value of its own, pass a copy (( string_clone x ), ( vec_clone [T] x ), …).` ) ) ) }
@@ -17413,7 +17435,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         // an element read out of a container is taken over instead — its
         // slot is emptied, mem_vget_consume.)
         ? & & & & & summary_callee != 0 ( nurl_str_len arg_lent ) ! ( seq arg_lent `1` )
-        ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) ( __clone_supported at syms )
+        ( str_has_index callee_sink arg_idx ) ( __clone_supported at syms )
         ( __lent_by_call syms bck_arg_tt bck_arg_val ) {
             = av ( mem_emit_cloneif cg at av arg_lent )
         } {}
@@ -17422,7 +17444,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         // (h228). One that can be copied is handed a copy; one that cannot
         // is rejected — and so is a field that cannot be copied of a struct
         // that still drops it (`( eat . h r )`, `h` a local).
-        ? & summary_callee ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) {
+        ? & summary_callee ( str_has_index callee_sink arg_idx ) {
             // A field of a call's result: it left with the read only where
             // the call handed its result over (`__last_tmp_field_own__`'s
             // flag); of a result the call lends (`. ( box_get b ) name`) it
@@ -17506,7 +17528,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         ? & != 0 ( nurl_str_len arg_join_own ) ! ( seq arg_join_own `true` ) 2
         ? & == 0 ( nurl_str_len arg_join_own ) != 0 ( nurl_str_len arg_join_ids ) 3 0 0
         : b __apc & & & & & summary_callee != __apm 0 == 0 ( nurl_sym_len g_fn_compiled call_name )
-        ! ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
+        ! ( str_has_index callee_sink arg_idx )
         != ( nurl_str_get at - ( nurl_str_len at ) 1 ) 42 ( __clone_supported at syms )
         ? __apc {
             : s __apk ( nurl_cg_reg cg )
@@ -17540,16 +17562,16 @@ unsafe @ gen_call i lex i syms i cg → s {
         // where it lent, as every move of it is, so what it lends stays its
         // source's. `( rc_new [String] x )` kept the lend uncopied, agora
         // #457.)
-        ? & ! __apc ? ! summary_callee F ? == 0 ( nurl_str_len arg_lent ) F & ! ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) != ( nurl_str_get at - ( nurl_str_len at ) 1 ) 42 {
+        ? & ! __apc ? ! summary_callee F ? == 0 ( nurl_str_len arg_lent ) F & ! ( str_has_index callee_sink arg_idx ) != ( nurl_str_get at - ( nurl_str_len at ) 1 ) 42 {
             : b __kbit & ( is_ident_tok bck_arg_tt ) ( __lent_by_bit syms ( mem_udrop_ptr_of syms bck_arg_val ) )
             : s __kfl ? __kbit ( nurl_str_cat `@.__nurl_sink.` ( nurl_str_int ( sink_flag call_name fname arg_idx ) ) ) ( nurl_str_cat `@.__nurl_store.` ( nurl_str_int ( store_flag call_name fname arg_idx ) ) )
             = av ( mem_emit_cloneif_k cg at av __kfl arg_lent )
         } {}
         ? & & ( __is_autodrop_enum at syms ) ( is_ident_tok bck_arg_tt )
-        | summary_callee ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) {
+        | summary_callee ( str_has_index callee_sink arg_idx ) {
             : s owner ( enum_owner_ptr syms bck_arg_val )
             ? & != 0 ( nurl_str_len owner ) ( nurl_sym_has_word syms `__user_drops__` owner ) {
-                : s flag ? ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
+                : s flag ? ( str_has_index callee_sink arg_idx )
                 ( nurl_str_cat `true` `` ) ( nurl_str_cat `@.__nurl_sink.` ( nurl_str_int ( sink_flag call_name fname arg_idx ) ) )
                 = moved_enum_args ( nurl_str_cat4 moved_enum_args owner ` ` ( nurl_str_cat4 at ` ` flag ` ` ) )
             } {}
@@ -17632,7 +17654,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         // (A value that holds nothing — a number, a struct of numbers — is
         // a copy: there is no move to decide and nothing to lend.)
         ? & & & ( is_ident_tok bck_arg_tt )
-        ! ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
+        ! ( str_has_index callee_sink arg_idx )
         __row_callee != ( bck_walk_class at ) 1
         { ( bck_stash_pending_call bck_arg_val ( nurl_lex_line lex )
             __rc arg_idx fname F )
@@ -17955,7 +17977,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         // own — a closure only borrows, and a foreign or runtime function
         // takes nothing over.
         ? & & & & != 0 g_auto_drop_strings ( seq ( nurl_llty at ) `i8*` ) ! __callee_shadowed ! ( bck_unsafe_ctx ) ( __user_callee syms call_name fname ) {
-            ? | ! ( __callee_auto_str syms call_name fname ) ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) {
+            ? | ! ( __callee_auto_str syms call_name fname ) ( str_has_index callee_sink arg_idx ) {
                 = av ( mem_sink_str_arg syms cg call_name arg_idx bck_arg_tt bck_arg_val av argument_owner )
             } {}
         } {}
@@ -35378,7 +35400,7 @@ unsafe @ bck_ret_drop_check s st i line → v {
             ~ != 0 ( nurl_str_len srcs ) {
                 : s xs ( str_first_word srcs ) = srcs ( str_skip_word srcs )
                 : i x ( bck_path_root ( nurl_str_to_int xs ) )
-                ? ( str_contains_word gone ( nurl_str_int x ) ) {
+                ? ( str_has_index gone x ) {
                     ( bck_drop_view_diag ( nurl_str_to_int ds ) x line ( nurl_str_cat3 `the return drops it before '` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ds ) ) `', which was declared before it` ) == BCK_MAYBE_MOVED ( bck_st_get st ( nurl_str_to_int ds ) ) )
                 } {}
             }
@@ -37514,7 +37536,7 @@ unsafe @ bck_note_rc_arg s name s ty → v {
     : i orid ( bck_path_root o )
     : ~ s out st
     : ~ s rest ( nurl_str_cat ( nurl_sym_get g_bck ( bck_bkey `bsrcs` `` ) ) `` )
-    ? ! ( str_contains_word rest ( nurl_str_int o ) ) { = rest ( nurl_str_cat3 rest ` ` ( nurl_str_int o ) ) } {}
+    ? ! ( str_has_index rest o ) { = rest ( nurl_str_cat3 rest ` ` ( nurl_str_int o ) ) } {}
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest ) = rest ( str_skip_word rest )
         : i id ( nurl_str_to_int w )
@@ -51456,7 +51478,7 @@ unsafe @ __clo_scan_inout_call i lex i outer_syms s closure_params → s {
     }
     ~ & != ( nurl_lex_type lex ) TT_RPAREN != ( nurl_lex_type lex ) TT_EOF {
         : i t ( nurl_lex_type lex )
-        : b at_io | ! exact ( str_contains_word idx ( nurl_str_int k ) )
+        : b at_io | ! exact ( str_has_index idx k )
         ? | == t TT_IDENT == t TT_TYPE_KW {
             : s w ( nurl_lex_val lex )
             ? & at_io & != 0 ( nurl_sym_len2 outer_syms w `__ptr` ) != 0 ( nurl_sym_len2 outer_syms w `__mutable` ) {
@@ -52571,14 +52593,30 @@ unsafe @ __span_dup s list i pos i end → s {
 
 // Byte offset of `word` as a whole word of `list`, or -1. The shared
 // engine of str_contains_word and str_word_index.
+//
+// Nearly every list asked about is empty or a few dozen bytes. An empty
+// one is answered here, before either string is measured; the rest is
+// __str_word_find's.
 unsafe @ __str_word_at s list s word → i {
+    : *u lp # *u list
+    : *u wp # *u word
+    ? | == 0 # i . lp 0 == 0 # i . wp 0 { ^ -1 } {}
+    ^ ( __str_word_find list word )
+}
+
+// __str_word_at of a list and a word that are not empty. A list under 256
+// bytes is searched with strstr: memmem builds a 256-entry shift table on
+// every call, which costs more than the whole search of a short list. The list
+// ends at `n`, so strstr from `from` finds the match memmem over
+// [from, n) finds. A long list keeps memmem, whose shifts step over an
+// entry that shares the word's first bytes where strstr compares them.
+unsafe @ __str_word_find s list s word → i {
     : i n ( nurl_str_len list )
     : i wl ( nurl_str_len word )
-    ? | == n 0 == wl 0 { ^ -1 } {}
     : *u lp # *u list
     : ~ i from 0
     ~ <= + from wl n {
-        : i r ( nurl_memmem_range # s + # i lp from - n from word wl )
+        : i r ? < - n from 256 ( nurl_str_find # s + # i lp from word ) ( nurl_memmem_range # s + # i lp from - n from word wl )
         ? < r 0 { ^ -1 } {}
         : i pos + from r
         : i after + pos wl
@@ -52603,6 +52641,15 @@ unsafe @ str_word_index s list s word → i {
         = k + k 1
     }
     idx
+}
+
+// str_contains_word of `k`'s decimal spelling: an argument index in one
+// of a callee's per-parameter lists (its sinks, its inout parameters).
+// Most of those lists are empty, and asking one needs no spelling made.
+unsafe @ str_has_index s list i k → b {
+    : *u lp # *u list
+    ? == 0 # i . lp 0 { ^ F } {}
+    ^ ( str_contains_word list ( nurl_str_int k ) )
 }
 
 // Auto-sink inference (critic v0.9.0 §2): when a body call moves /
@@ -59065,7 +59112,7 @@ unsafe @ __alloca_struct_params i syms i cg → v {
     ~ != 0 ( nurl_str_len names ) {
         : s name ( str_first_word names ) = names ( str_skip_word names )
         : s ty ( nurl_sym_get syms name )
-        ? & & ( __is_closure_ty ty ) ( str_contains_word sinks ( nurl_str_int index ) ) == 0 ( nurl_sym_len2 syms name `__inout` ) {
+        ? & & ( __is_closure_ty ty ) ( str_has_index sinks index ) == 0 ( nurl_sym_len2 syms name `__inout` ) {
             : s ll ( nurl_llty ty )
             : s pptr ( nurl_sym_get2 syms name `__ptr` )
             : ~ s val ( nurl_str_cat `%` name )
@@ -59143,10 +59190,10 @@ unsafe @ __alloca_struct_params i syms i cg → v {
     ~ != 0 ( nurl_str_len names ) {
         : s name ( str_first_word names ) = names ( str_skip_word names )
         : b __raw & ( seq ( nurl_llty ( nurl_sym_get syms name ) ) `i8*` ) == 0 ( nurl_sym_len2 syms name `__inout` )
-        ? & __raw ! ( str_contains_word sinks ( nurl_str_int index ) ) {
+        ? & __raw ! ( str_has_index sinks index ) {
             = strp ? == 0 ( nurl_str_len strp ) ( nurl_str_int index ) ( nurl_str_cat3 strp ` ` ( nurl_str_int index ) )
         } {}
-        ? & & __raw ( str_contains_word sinks ( nurl_str_int index ) ) == 0 ( nurl_sym_len2 syms name `__ptr` ) {
+        ? & & __raw ( str_has_index sinks index ) == 0 ( nurl_sym_len2 syms name `__ptr` ) {
             : s vslot ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print vslot ) ( nurl_print ` = alloca i8*\n` )
             ( nurl_print `  store i8* %` ) ( nurl_print name ) ( nurl_print `, i8** ` ) ( nurl_print vslot ) ( nurl_print `\n` )
@@ -59168,7 +59215,7 @@ unsafe @ __alloca_struct_params i syms i cg → v {
         // views: what this function makes of it is tied to that argument by
         // its answers, g_fn_rviews and g_fn_vkeeps (`~name`, the walk's
         // `pv_`; agora #341, #346).
-        ? & & == 0 ( nurl_sym_len2 syms name `__inout` ) ! ( str_contains_word sinks ( nurl_str_int index ) ) == ( bck_walk_class ( nurl_llty __pty ) ) 2 {
+        ? & & == 0 ( nurl_sym_len2 syms name `__inout` ) ! ( str_has_index sinks index ) == ( bck_walk_class ( nurl_llty __pty ) ) 2 {
             ( nurl_sym_def syms `__fn_ownstr_params__` ( nurl_str_cat4 ( nurl_sym_get syms `__fn_ownstr_params__` ) ` ` `~` name ) )
         } {}
         // A parameter that holds views — an owner of them (a ( Vec s ), a
@@ -59188,7 +59235,7 @@ unsafe @ __alloca_struct_params i syms i cg → v {
             // container's elements view: g_fn_eparams.)
             ? & == __hcl 2 ! ( nurl_sym_has_word g_fn_eparams fname ( nurl_str_int index ) ) { ( nurl_sym_append_word g_fn_eparams fname ( nurl_str_int index ) ) } {}
         } {}
-        ? & & & ! __raw ( str_contains_word sinks ( nurl_str_int index ) ) == 0 ( nurl_sym_len2 syms name `__inout` )
+        ? & & & ! __raw ( str_has_index sinks index ) == 0 ( nurl_sym_len2 syms name `__inout` )
         | | ( __type_needs_drop __pty syms ) ( __nc_drop_ty __pty ) ( __is_closure_ty __pty ) {
             ( nurl_sym_def syms `__fn_ownstr_params__` ( nurl_str_cat4 ( nurl_sym_get syms `__fn_ownstr_params__` ) ` ` `!` name ) )
         } {}
@@ -59242,7 +59289,7 @@ unsafe @ __alloca_struct_params i syms i cg → v {
             : s owner ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print owner ) ( nurl_print ` = alloca ` ) ( nurl_print ( nurl_llty ty ) ) ( nurl_print `\n` )
             : s arg ( nurl_str_cat `%` name )
-            : s value ? ( str_contains_word sinks ( nurl_str_int index ) ) ( nurl_str_cat arg `` ) {
+            : s value ? ( str_has_index sinks index ) ( nurl_str_cat arg `` ) {
                 : s flag ( nurl_str_cat `@.__nurl_sink.` ( nurl_str_int ( sink_flag fname fname index ) ) )
                 ( nurl_sym_def syms ( nurl_str_cat owner `__sinkflag` ) flag )
                 : s cond ( nurl_cg_reg cg )
@@ -59286,7 +59333,7 @@ unsafe @ __alloca_struct_params i syms i cg → v {
             : ~ s pc ( nurl_str_cat `1` `` )
             // (Not one kept only in memory managed by hand, g_fn_handkeeps:
             // that memory holds it on some paths, so no path drops it.)
-            ? ! ( str_contains_word sinks ( nurl_str_int index ) ) {
+            ? ! ( str_has_index sinks index ) {
                 : s pflag ( consume_flag fname fname index )
                 = pc ( nurl_cg_reg cg )
                 ( emit_sink_flag_load pflag pc )
@@ -60177,7 +60224,7 @@ unsafe @ __ffi_param_count s pt → i {
             : s lt ? __ff_io ( nurl_str_cat lt0 `*` ) ( nurl_str_cat lt0 `` )
             ? __ff_io {
                 : s __fio ( nurl_sym_get g_fn_inout fname )
-                ? ! ( str_contains_word __fio ( nurl_str_int pct ) ) {
+                ? ! ( str_has_index __fio pct ) {
                     ( nurl_sym_def g_fn_inout fname ? == 0 ( nurl_str_len __fio ) ( nurl_str_int pct ) ( nurl_str_cat3 __fio ` ` ( nurl_str_int pct ) ) )
                 } {}
             } {}
@@ -74445,6 +74492,7 @@ unsafe @ __fold_byte i p → i {
 // the journal, nearly all of it temporaries such as a `nurl_str_int`
 // handed to a concatenation and freed after it.
 : ~ i g_mp 0  // i64[n]: 1 when function n may panic
+: ~ i g_mp_rt 0  // symtab: a runtime callee's name → 2 when it may panic, else 1
 
 // A runtime / external function that can start a panic on this thread.
 unsafe @ __mp_runtime_panics s nm i p i le → b {
@@ -74470,16 +74518,19 @@ unsafe @ __mp_runtime_panics s nm i p i le → b {
 // `le`: its function index (>= 0), -1 for an external function that cannot
 // panic, -2 for one that can or one not known (a call through a pointer).
 unsafe @ __mp_callee i cp i le → i {
-    : ~ i p cp
+    : *u mp # *u # s g_dce_mod
+    // (The name's bytes: __dce_scan's table, alive for the whole module
+    // pass this runs in.)
+    : *u idb # *u # s g_dce_idb
+    // (Only a `(` can end the name: step from one to the next.)
+    : ~ i p + cp ( nurl_scan_byte3 # s + # i mp cp - le cp 40 40 40 )
     ~ < p le {
-        ? & == ( __fold_byte p ) 40 & > p cp ( __dce_ident_byte ( __fold_byte - p 1 ) ) {
+        ? & > p cp != 0 # i . idb & # i . mp - p 1 255 {
             : ~ i ts - p 1
-            ~ & > ts cp ( __dce_ident_byte ( __fold_byte - ts 1 ) ) { = ts - ts 1 }
+            ~ & > ts cp != 0 # i . idb & # i . mp - ts 1 255 { = ts - ts 1 }
             ? != ( __fold_byte - ts 1 ) 64 { ^ -2 } {}
-            : *u mp # *u # s g_dce_mod
             : u sv . mp p
             = . mp p # u 0
-            : ~ i r -1
             : i ent ( nurl_sym_int g_dce_map # s + g_dce_mod ts )
             ? >= ent 0 { = . mp p sv ^ ent } {}
             : b vwalk | != 0 ( nurl_str_starts # s + g_dce_mod ts `nurl_vec_drop` ) != 0 ( nurl_str_starts # s + g_dce_mod ts `nurl_vec_clone` )
@@ -74499,11 +74550,17 @@ unsafe @ __mp_callee i cp i le → i {
                 ^ ? >= hent 0 hent -2
             } {}
             = . mp p # u 0
-            ? ( __mp_runtime_panics # s + g_dce_mod ts p le ) { = r -2 } {}
+            // What a runtime function may do is a matter of its name alone
+            // (the walks above are the one exception): classify each once.
+            : ~ i rk ( nurl_sym_int g_mp_rt # s + g_dce_mod ts )
+            ? < rk 0 {
+                = rk ? ( __mp_runtime_panics # s + g_dce_mod ts p le ) 2 1
+                ( nurl_sym_def g_mp_rt # s + g_dce_mod ts ( nurl_str_int rk ) )
+            } {}
             = . mp p sv
-            ^ r
+            ^ - 0 rk
         } {}
-        = p + p 1
+        = p + + p 1 ( nurl_scan_byte3 # s + # i mp + p 1 - le + p 1 40 40 40 )
     }
     ^ -2
 }
@@ -74518,6 +74575,7 @@ unsafe @ __mp_eol i p i en → i {
 // graph to a fixpoint.
 unsafe @ __mp_compute i n → v {
     = g_mp # i # s ( nurl_zalloc * n 8 )
+    = g_mp_rt ( nurl_sym_new )
     : ~ i ecap 4096
     : Buf edges_own @ Buf { # i ( nurl_alloc * ecap 8 ) }
     : ~ s edges # s . edges_own p
@@ -75412,6 +75470,8 @@ unsafe @ __jrnl_elide i n b lib → v {
     }
     ( nurl_free # s g_mp )
     = g_mp 0
+    ( nurl_sym_free g_mp_rt )
+    = g_mp_rt 0
     ( nurl_free # s g_ext )
     = g_ext 0
 }
@@ -76660,7 +76720,8 @@ unsafe @ __dce_emit_module s mod i mlen → v {
     = g_dce_dotfn F
     : ~ i ri 0
     ~ < ri n { ( __dce_record_name ( nurl_peek # s g_dce_start ri ) ri ) = ri + ri 1 }
-    // __dce_scan walks every name it looks up: one table read a byte
+    // __dce_scan walks every name it looks up, and __mp_callee (the
+    // journal's panic graph, below) every callee's: one table read a byte
     // instead of __dce_ident_byte's range tests.
     = g_dce_idb # i # s ( nurl_zalloc 256 )
     : *u idb # *u # s g_dce_idb
