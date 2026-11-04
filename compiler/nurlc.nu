@@ -29217,7 +29217,16 @@ unsafe @ __clo_deriv_note i syms s name s vt i rhs_tt s rhs_val s lend s sx → 
     // (A value taken out of a shared cell — `locked_take` — is the body's
     // own until it is put back, as __pderiv_note has it.)
     ? == rhs_tt TT_LPAREN { ? ( __shared_cell_get ( bck_generic_base ( nurl_sym_get syms `__last_call_name__` ) ) ) { ^ v } {} } {}
-    ? & | == 0 ( nurl_str_len srcs ) ( seq srcs `-` ) | | == rhs_tt TT_LPAREN == rhs_tt TT_QUEST == rhs_tt TT_QUESTQUEST { = srcs ( __sx_bind_names sx ) } {}
+    // (A lend no name carries — ``, or every word `-`: one nested in a lend
+    // through a generic instance not compiled yet reads `- -` — of a call
+    // or a join, or of a value block (its sx closed over the block's names)
+    // or a field of a call's result that may lend (__val_may_lend), is read
+    // out of what the sx names; and a call one of whose lent arguments has
+    // no name beside those that do is read out of those as well
+    // (g_call_lend_unnamed): the tests __pderiv_note makes, agora #461.)
+    ? & ( __lend_unnamed srcs ) | | | == rhs_tt TT_LPAREN == rhs_tt TT_QUEST == rhs_tt TT_QUESTQUEST & | == rhs_tt TT_LBRACE == rhs_tt TT_DOT ( __val_may_lend syms rhs_tt ) { = srcs ( __sx_bind_names sx ) } {
+        ? & == rhs_tt TT_LPAREN g_call_lend_unnamed { = srcs ( __word_union srcs ( __sx_bind_names sx ) ) } {}
+    }
     ( __clo_deriv_add name srcs )
 }
 
