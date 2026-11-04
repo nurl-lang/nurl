@@ -673,6 +673,51 @@ vec_at p 0 )`, then `( vec_push [u] e 1 )`) ends, at the call, the
 caller's views into that element's buffer, as the same push written in
 place does; its handles of the elements stay.
 
+A `~ x xs` loop's element is a part of `xs`, as an element `( vec_at xs k
+)` lends is. A view of its own storage (`( string_data x )`, a field of
+it, a Slice of a Vec element, an element read out of it), or a borrow of
+it, ends when `xs` is released, moved or given a new value, when its
+elements are dropped or replaced (`vec_clear`, `vec_pop`, `vec_set`,
+`vec_truncate`, …), and when that element's own buffer moves. It does not
+end when `xs` grows: a `String`'s buffer stays where it is when the Vec
+holding it moves. The same holds:
+- for a loop over a field: replacing `. r xs` ends the view, replacing
+  `. r name` does not;
+- for a loop over a borrow or a cursor: what it borrows from;
+- for an inner loop over an outer loop's element: what the outer loop
+  iterates;
+- for a function of your own that hands such a view of its parameter's
+  element back, in a container, a struct or as a bare `s`.
+
+The mark is one level deep: growing an element of `xs` ends a view of a
+String inside that element, as the `vec_at` spelling does.
+
+```nurl expect-error="'ws' holds a view of 't'"
+$ `stdlib/core/string.nu`
+$ `stdlib/core/vec.nu`
+
+: ~ ( Vec s ) ws ( vec_new [s] )
+{
+    : ( Vec String ) t ( vec_new [String] )
+    ( vec_push [String] t ( string_from `a heap string` ) )
+    ~ x t { ( vec_push [s] ws ( string_data x ) ) }
+}
+( nurl_println ( vec_at [s] ws 0 ) ) // error: 'ws' holds a view of 't',
+                                     //        which ended at the end of its block
+```
+
+```nurl
+$ `stdlib/core/string.nu`
+$ `stdlib/core/vec.nu`
+
+: ~ ( Vec String ) t ( vec_new [String] )
+( vec_push [String] t ( string_from `a heap string` ) )
+: ~ ( Vec s ) ws ( vec_new [s] )
+~ x t { ( vec_push [s] ws ( string_data x ) ) }
+( vec_push [String] t ( string_from `grown: its strings stay where they are` ) )
+( nurl_println ( vec_at [s] ws 0 ) )   // fine: t lives, and growing it moves no string
+```
+
 A string binding (`s`) is a view or an owner. One that owns its buffer —
 bound to an allocating call, or a mutable one born from a literal or an
 owned string — is an owner like a `String`: a copy of it (`: s y x`, or an
