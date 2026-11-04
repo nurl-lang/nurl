@@ -29143,7 +29143,7 @@ unsafe @ __clo_effect_note_lent s name s callee i aix → v {
 // of one, or a body local read out of one. Unmarked, it was replayed as a
 // `pendeff` row, which leaves the views into the element's buffer be
 // (agora #349).
-unsafe @ __clo_effect_note_sx s sx s callee i aix → v {
+@ __clo_effect_note_sx s sx s callee i aix → v {
     ? == 0 ( nurl_str_len g_clo_caps_now ) { ^ } {}
     : ~ s rest ( __sx_leaf_names sx )
     ~ != 0 ( nurl_str_len rest ) {
@@ -37856,7 +37856,8 @@ unsafe @ bck_sx_is_id s e → b {
 
 // Does lend list `ws` name nothing — empty, or every word `-`: an argument
 // that is no binding (a nested call, a literal), every argument of a callee
-// not compiled yet?
+// not compiled yet? (Walked through a pointer: nurl_str_get would measure
+// `ws` again for every byte.)
 unsafe @ __lend_unnamed s ws → b {
     : i n ( nurl_str_len ws )
     : *u wp # *u ws
@@ -37892,7 +37893,7 @@ unsafe @ __lend_unnamed s ws → b {
 // conditions they share (__cond_list_put) — a binding given a value read
 // out of its own (`= a ( f ( g a ) )`) would otherwise double its
 // alternatives with every such statement. (`unsafe` for the global it
-// appends to, as g_pderiv.)
+// assigns, as g_pderiv's.)
 unsafe @ __pderiv_cnote s ptr s pcs → v {
     : ~ s rest ( nurl_str_cat pcs `` )
     ~ != 0 ( nurl_str_len rest ) {
@@ -38076,7 +38077,8 @@ unsafe @ __sx_names_any s sx → b {
 
 // The summary edges a source expression conditions (g_cedges), of the
 // function compiling now: `key` (`D:k:callee:aix:`, …) under condition
-// `c`, one condition per edge (__cond_list_put).
+// `c`, one condition per edge (__cond_list_put). (`unsafe` for the global
+// it assigns.)
 unsafe @ __cedge_add s key s c → v {
     : s cur ( nurl_sym_get g_cedges g_rpg_me_self )
     ? == 0 ( nurl_str_len cur ) { = g_cedge_fns ( __words_join g_cedge_fns g_rpg_me_self ) } {}
@@ -38542,11 +38544,10 @@ unsafe @ bck_note_rc_arg s name s ty → v {
 
 // Does row `rec` name what it is about by a source expression (field 1
 // `@sx`: a pending row's argument that is no binding, bck_xlate_row1)?
-unsafe @ __bck_row_sx s rec → b {
+@ __bck_row_sx s rec → b {
     : i off ( __bck_field_off rec 1 )
     ? < off 0 { ^ F } {}
-    : *u rp # *u rec
-    ^ == # i . rp off 64
+    ^ == ( nurl_str_get rec off ) 64
 }
 
 @ bck_borrow_sweep s ist s st s rec i kc → s {
