@@ -3095,6 +3095,10 @@ unsafe @ note_unsafe_item s pos s what → v {
 // …and once a binding was marked a copy of another's handle or a part of
 // one (`hr_`, __bck_hr_set): a `let` clears the mark only then.
 : ~ i g_bck_hr_any 0
+// …and how many `~` loops are being walked: only inside one can a
+// borrow's end reach a loop's element (`feb_`, bck_borrow_end; agora
+// #482).
+: ~ i g_bck_fe_live 0
 // …and the ids a row may concern them through (bck_cursor_watch): up to
 // four in `g_bck_cw0`…`g_bck_cw3` (`g_bck_cwn` of them), more in the `cuw`
 // key (`g_bck_cwn` 5).
@@ -35680,13 +35684,21 @@ unsafe @ __bck_try_exit_check s st i line → v {
                         // Pass the controlling `~ cond` reads (carried in the
                         // block row's reads field) and its line so bck_loop can
                         // re-check them against the loop's back-edge state.
+                        // (While a `~` loop's body is walked, what ends a part
+                        // of what it iterates may end its element: bck_borrow_end
+                        // asks `feb_` only then, g_bck_fe_live — agora #482.)
+                        : s frec ( bck_rec + p 1 )
+                        : b fel != 0 ( nurl_str_starts frec `fevar\t` )
+                        ? fel { = g_bck_fe_live + g_bck_fe_live 1 } {}
                         : s lpost ( bck_loop + p 1 eb st ( bck_field rec 2 )
                         ( bck_field_int rec 3 ) ( seq bk `loopt` ) )
+                        ? fel { = g_bck_fe_live - g_bck_fe_live 1 } {}
                         // (A `~` loop's element is gone with its loop: what
                         // views or borrows it lets go of its name for the
-                        // container's element, __bck_fe_retire.)
-                        : s frec ( bck_rec + p 1 )
-                        ? & ! ( seq lpost `!` ) != 0 ( nurl_str_starts frec `fevar\t` ) { ( __bck_fe_retire lpost ( bck_field_int frec 1 ) ) } {}
+                        // container's element, __bck_fe_retire — and what it is
+                        // a part of ends it no longer, `feo_`, on a path that
+                        // leaves the loop by none.)
+                        ? fel { ? ! ( seq lpost `!` ) { ( __bck_fe_retire lpost ( bck_field_int frec 1 ) ) } { ( bck_put ( bck_bkey `feo_` ( bck_field frec 1 ) ) `` ) } } {}
                         = st ( bck_scope_restore + p 1 eb blk_pre lpost )
                     } {
                         // …and what it declared and still holds is released at
@@ -35734,7 +35746,18 @@ unsafe @ __bck_try_exit_check s st i line → v {
                 // a view's storage is what it points into, a scalar has
                 // none — agora #471.)
                 : s fecls ( bck_field rec 5 )
-                ( bck_put ( bck_bkey `fe_` ( bck_field rec 1 ) ) ? & != 0 ( nurl_str_len fesx ) | == 0 ( nurl_str_len fecls ) ( seq fecls `d` ) ( bck_borrow_owners st ? ( __fe_cont_expr fesx ) ( bck_sx_hroots fesx ) fesx ) `` )
+                // (…and it lives only as long as that element does: what ends
+                // a borrow of an element of those owners — released, moved,
+                // given a new value, its elements dropped or replaced, by any
+                // route — ends the element itself, `feo_`; growing them does
+                // not. A closure's too: its env is in the element. Written
+                // afresh at each round, so an earlier loop of the name ends
+                // none of it; agora #482.)
+                : b feown & != 0 ( nurl_str_len fesx ) | | == 0 ( nurl_str_len fecls ) ( seq fecls `d` ) ( seq fecls `c` )
+                : s feo ? feown ( bck_borrow_owners st ? ( __fe_cont_expr fesx ) ( bck_sx_hroots fesx ) fesx ) ``
+                ( bck_put ( bck_bkey `fe_` ( bck_field rec 1 ) ) ? ( seq fecls `c` ) `` feo )
+                ( bck_put ( bck_bkey `feo_` ( bck_field rec 1 ) ) feo )
+                ? != 0 ( nurl_str_len feo ) { ( __fe_owner_note ( bck_field rec 1 ) feo ) } {}
                 ? != 0 g_bck_hr_any { ( __bck_hr_drop_owner fid ) } {}
                 ? | != 0 ( nurl_str_len fesx ) != 0 g_bck_hr_any { ( __bck_hr_set fid ( bck_sx_hroots fesx ) F ) } {}
                 // (…and it holds what the container's elements view — what
@@ -37714,6 +37737,22 @@ unsafe @ bck_sx_is_id s e → b {
     ^ == r g_bck_end_wroot
 }
 
+// A `~` loop's element `xs` (an id) is a part of each owner in `owners`
+// (ids; anything else — `*`, `-` — names none): filed under `feb_<owner>`,
+// and the owner made a source the borrow sweep visits (`bsrcs`), so what
+// ends a borrow of an element of it ends the loop's element (agora #482).
+@ __fe_owner_note s xs s owners → v {
+    : ~ s rest ( nurl_str_cat owners `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s o ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i c0 ( nurl_str_get o 0 )
+        ? & >= c0 48 <= c0 57 {
+            ( bck_add_word_once ( bck_bkey `feb_` o ) xs )
+            ( bck_add_word_once ( bck_bkey `bsrcs` `` ) o )
+        } {}
+    }
+}
+
 // `srcs` with every borrow binding replaced by its own sources (in state
 // `st`).
 @ bck_borrow_owners s st s srcs → s {
@@ -37752,9 +37791,12 @@ unsafe @ bck_sx_is_id s e → b {
 // names, and a later loop, or any later binding, of the name is another
 // value: they let go of the name for the container's element, as the views
 // of a value stored into an owner do (bck_borrow_transfer). A later binding
-// of the name ends none of them; agora #471.
+// of the name ends none of them; agora #471. (Nor is the name a part of
+// those owners any more, `feo_`: their end ends no later binding of it,
+// agora #482.)
 @ __bck_fe_retire s st i fid → v {
     : s fids ( nurl_str_int fid )
+    ( bck_put ( bck_bkey `feo_` fids ) `` )
     : s fe ( nurl_sym_get g_bck ( bck_bkey `fe_` fids ) )
     ? == 0 ( nurl_str_len fe ) { ^ v } {}
     : ~ s rest ( nurl_sym_get g_bck ( bck_bkey `bb_` fids ) )
@@ -39376,6 +39418,27 @@ unsafe @ bck_note_rc_arg s name s ty → v {
             ? < depth 8 { = out ( bck_borrow_end out b line ( nurl_str_cat3 `what it borrows from ended (` why `)` ) + depth 1 ) } {}
         } {}
     }
+    // (A `~` loop's element that is a part of `sid` — bound this round, not
+    // yet ended — ends with it, as a `vec_at` borrow of it does: its handle
+    // is a copy of the one in an element of `sid` (`feb_`, `feo_`; agora
+    // #482), `!fe`. One whose views alone ended ends so too: its storage
+    // gone is what the loop's next round asks, bck_loop. But `sid` ended
+    // only as a holder of views — INVALID, its storage as it was — ends the
+    // element as one, `!fev`: it holds what those elements view. Inside a
+    // `~` loop's walk only, g_bck_fe_live.)
+    ? != 0 g_bck_fe_live {
+        : b fev == BCK_INVALID ( bck_st_get out ( bck_path_root sid ) )
+        : ~ s ferest ( nurl_sym_get g_bck ( bck_bkey `feb_` sids ) )
+        ~ != 0 ( nurl_str_len ferest ) {
+            : s fs ( str_first_word ferest ) = ferest ( str_skip_word ferest )
+            : i fx ( nurl_str_to_int fs )
+            : i fxv ( bck_st_get out fx )
+            ? & | == BCK_UNINIT fxv & & ! fev == BCK_INVALID fxv ! ( __bck_fe_ended fs ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `feo_` fs ) ) sids ) {
+                = out ( bck_st_set out fx BCK_INVALID )
+                ( bck_put ( bck_bkey `bv_` fs ) ( nurl_str_cat4 ( nurl_str_int line ) ` ` sids ( nurl_str_cat ? fev ` !fev ` ` !fe ` why ) ) )
+            } {}
+        }
+    } {}
     = out ( bck_deps_end out sids line why depth F )
     ^ out
 }
@@ -39413,6 +39476,35 @@ unsafe @ bck_note_rc_arg s name s ty → v {
     ^ out
 }
 
+// Did `~` loop element `xs` end with its storage (bv_ `!fe`,
+// bck_borrow_end) — not only as a holder of views (agora #482)?
+@ __bck_fe_ended s xs → b {
+    : ~ s info ( nurl_sym_get g_bck ( bck_bkey `bv_` xs ) )
+    = info ( str_skip_word ( str_skip_word info ) )
+    ^ ( seq ( str_first_word info ) `!fe` )
+}
+
+// A `~` loop's element `id` ended (bv_, `!fe`: bck_borrow_end) on a path
+// that goes on to the loop's next element, which the loop reads from the
+// storage that ended (agora #482).
+@ bck_diag_fe_next i id i line → v {
+    : s ids ( nurl_str_int id )
+    : s tag ( nurl_str_cat3 ( nurl_str_cat `fn:` ( nurl_str_int line ) ) `:` ids )
+    : s ws ( nurl_sym_get g_bck `warnset` )
+    ? ( str_contains_word ws tag ) { ^ v } {}
+    ( bck_put `warnset` ? == 0 ( nurl_str_len ws ) ( nurl_str_cat tag `` ) ( nurl_str_cat3 ws ` ` tag ) )
+    : s name ( nurl_sym_get2 g_bck `rv_` ids )
+    : ~ s info ( nurl_sym_get g_bck ( bck_bkey `bv_` ids ) )
+    : s ln ( str_first_word info ) = info ( str_skip_word info )
+    : s srcid ( str_first_word info ) = info ( str_skip_word info )
+    ? ( seq ( str_first_word info ) `!fe` ) { = info ( str_skip_word info ) } {}
+    : s sname ( bck_name_show ( nurl_sym_get2 g_bck `rv_` srcid ) )
+    : s m1 ( nurl_str_cat4 `this '~' loop goes on to its next element, but its element '` name `' is a part of '` sname )
+    : s m2 ( nurl_str_cat4 `', which ended at line ` ln ` — ` info )
+    : s m3 ( nurl_str_cat3 `. The loop reads its next element from the storage that held '` name `', which may be freed or moved now. Make the change after the loop, or leave the loop ('break') right after it.` )
+    ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat3 m1 m2 m3 ) )
+}
+
 @ bck_diag_invalid i id i useline → v {
     : s ids ( nurl_str_int id )
     : s tag ( nurl_str_cat3 ( nurl_str_cat `bi:` ( nurl_str_int useline ) ) `:` ids )
@@ -39442,6 +39534,26 @@ unsafe @ bck_note_rc_arg s name s ty → v {
         : s v3a ( nurl_str_cat4 `. Using '` name `' now would read freed memory. End '` sname )
         : s v3 ( nurl_str_cat4 v3a `' only after '` ( nurl_str_cat3 name `' is done, or have '` name ) `' hold a copy that owns its data (string_from, slice_to_vec).` )
         ( bck_emit_error ( nurl_sym_get g_bck `file` ) useline ( nurl_str_cat3 v1 v2 v3 ) )
+        ^ v
+    } {}
+    // (A `~` loop's element whose container's elements' views ended:
+    // bck_borrow_end, agora #482.)
+    ? ( seq ( str_first_word info ) `!fev` ) {
+        : s vwhy ( str_skip_word info )
+        : s e1 ( nurl_str_cat4 `'` name `' is the element a '~' loop is at, a part of '` sname )
+        : s e2 ( nurl_str_cat4 `', whose elements hold views that ended at line ` ln ` — ` vwhy )
+        : s e3 ( nurl_str_cat4 `. '` name `' holds them too, so using it now would read freed memory. Read it before that line, or have '` ( nurl_str_cat3 sname `' hold values that own their data (string_from, slice_to_vec).` `` ) )
+        ( bck_emit_error ( nurl_sym_get g_bck `file` ) useline ( nurl_str_cat3 e1 e2 e3 ) )
+        ^ v
+    } {}
+    // (A `~` loop's element, a part of what ended — bck_borrow_end, agora
+    // #482.)
+    ? ( seq ( str_first_word info ) `!fe` ) {
+        : s fwhy ( str_skip_word info )
+        : s f1 ( nurl_str_cat4 `'` name `' is the element a '~' loop is at, a part of '` sname )
+        : s f2 ( nurl_str_cat4 `', which ended at line ` ln ` — ` fwhy )
+        : s f3 ( nurl_str_cat4 `. The element is gone with it, so reading '` name `' now would read freed memory. Read it before that line — a copy taken there, ( mem_dup ` ( nurl_str_cat3 name ` ), lives on its own — or make the change after the loop.` `` ) )
+        ( bck_emit_error ( nurl_sym_get g_bck `file` ) useline ( nurl_str_cat3 f1 f2 f3 ) )
         ^ v
     } {}
     ? ( seq ( str_first_word info ) `!dep` ) {
@@ -40451,6 +40563,28 @@ unsafe @ bck_loop_mask s pre s post → s {
     ^ out
 }
 
+// `masked` — bck_loop_mask's `post` — with each `~` loop element bound
+// outside this loop that its body ended kept ended. UNINIT in `pre`, as
+// a binding the body declares is, it is no body-local one: while its
+// own loop is walked (`feo_` set) — not this loop's element `own` — the
+// end an inner loop's body gave it holds past that loop (agora #482).
+unsafe @ __bck_fe_carry s masked s post i own → s {
+    : i nm ( nurl_str_len masked )
+    : i np ( nurl_str_len post )
+    : i n ? < np nm np nm
+    : *u mp # *u masked
+    : *u qp # *u post
+    : ~ s out ( nurl_str_cat masked `` )
+    : ~ i i 0
+    ~ < i n {
+        ? & & & == - # i . mp i 48 BCK_UNINIT == - # i . qp i 48 BCK_INVALID != i own != 0 ( nurl_sym_len g_bck ( bck_bkey `feo_` ( nurl_str_int i ) ) ) {
+            = out ( bck_st_set out i BCK_INVALID )
+        } {}
+        = i + i 1
+    }
+    ^ out
+}
+
 // ── The walk's facts (agora #210) ─────────────────────────────────
 // A walk is not a function of its state string alone. It also reads
 // the facts it and earlier walks wrote into g_bck (a borrow's source,
@@ -41025,6 +41159,12 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     : ~ s back ``
     // The facts each walk started from since `head` last changed.
     : ~ s seen ``
+    // (A `~` loop's own element, and whether g_bck_fe_live counts it: an
+    // outer loop's element keeps what this body did to it,
+    // __bck_fe_carry — agora #482.)
+    : b fe_lp == ( bck_kc lo ) 35
+    : i fe_own ? fe_lp ( bck_field_int ( bck_rec lo ) 1 ) -1
+    : i fe_self ? fe_lp 1 0
     = g_bck_watch + g_bck_watch 1
     ~ & ! done < iter 16 {
         ( bck_put `lbrk` `` )
@@ -41054,6 +41194,13 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
         // (bck_loop_mask) — carried, a body-local `( string_free x )`
         // read as a free of the NEXT iteration's x.
         : s post ? == 0 ( nurl_str_len cnt ) post0 ( bck_join_state post0 cnt )
+        // (A `~ x C` loop reads C's next element from there: its element
+        // ended on such a path — the element dropped or replaced, what held
+        // it given a new value or ended, `!fe` — is storage the loop still
+        // walks; agora #482. Not one whose views alone ended.)
+        ? & fe_lp ! ( seq post `!` ) {
+            ? & == BCK_INVALID ( bck_st_get post fe_own ) ( __bck_fe_ended ( nurl_str_int fe_own ) ) { ( bck_diag_fe_next fe_own cond_line ) } {}
+        } {}
         // (The head's borrow sources: what both paths into it borrow from.)
         : s fvown ( __fv_owned fvsnap post )
         ( __bs_join bsnap )
@@ -41063,7 +41210,8 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
         : s tok1 ( bck_facts_tok )
         // (Bound: a fresh raw string handed straight to a user function is
         // not released as a call temporary.)
-        : s carried ( bck_loop_mask pre post )
+        : s carried0 ( bck_loop_mask pre post )
+        : s carried ? > g_bck_fe_live fe_self ( __bck_fe_carry carried0 post fe_own ) carried0
         : s merged ( bck_join_state head carried )
         // Converged when the next walk would repeat one already made: the
         // state is where this walk started, and the facts are where this
@@ -41107,6 +41255,11 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     ? | ! done cyc { = back ( bck_scope_end lo hi ( bck_walk_seq lo hi head ) ( bck_field_int ( bck_rec hi ) 3 ) ) } {}
     : s verif ( bck_loop_carry_seed pre back )
     ( bck_check_moved_reads cond_reads cond_line verif )
+    // (…and under the head itself: a borrow the body ended — INVALID, which
+    // the seed does not carry — is read again by a `~ cond` before the next
+    // round, `~ < i ( vec_len [String] b )` after the body cleared what `b`
+    // borrows from; agora #482.)
+    ? ! fe_lp { ( bck_check_moved_reads cond_reads cond_line head ) } {}
     ? | ! done ! ( seq verif head ) {
         : s vend ( bck_walk_seq lo hi verif )
         ? != 0 ( nurl_str_len vend ) {} {}
@@ -41138,7 +41291,8 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     // The loop is left at its condition (the head state) or by a `break`
     // — only by a `break` where the condition is the literal `T`.
     ? == 0 ( nurl_str_len brk ) { ^ head } {}
-    : s left ( bck_loop_mask pre brk )
+    : s left0 ( bck_loop_mask pre brk )
+    : s left ? > g_bck_fe_live fe_self ( __bck_fe_carry left0 brk fe_own ) left0
     ? __lbrk_only { ^ left } {}
     ^ ( bck_join_state head left )
 }
@@ -41194,6 +41348,7 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     = g_bck_rva_any 0
     ? != 0 g_arcp_any { ( bck_put `plarc` `` ) } {}
     = g_bck_watch 0
+    = g_bck_fe_live 0
     = g_cj_depth 0
     = g_cj_log ``
     = g_cj_entry 0
