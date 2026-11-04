@@ -1,5 +1,5 @@
 // fresh_cat_of_a_local_view_in_a_parked_walk_runs_clean: a function hands back nurl_str_cat3 of a view of its own String; its walk is parked, and an `unsafe` generic's instance compiles last.
-// Kept: a parked walk runs after the module, in its own function's trust context (bck_defer_fn's `u`), not the last function compiled's. Read in an `unsafe` one's, the view was an owner, and the fresh string a view of the local.
+// Kept: the walk asks a type's class as safe code's (bck_bind_class): only safe code has the source expressions it evaluates. Asked in the context the module left, a parked walk's, an `unsafe` function's, the view was an owner, and the fresh string a view of the local.
 // main 0032747 (Family G, github#1609): rejected, as unikernel/net/sockets.nu's __addr_string was in the simulation gate; 0f24558, before it: runs clean.
 // map: §2.13 | A2 | runs-clean | - | a fresh string built from a view of a local String, handed back by a function whose walk is parked, an unsafe instance compiled last
 $ `stdlib/core/string.nu`
