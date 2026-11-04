@@ -38209,6 +38209,13 @@ unsafe @ __pderiv_note i syms s name s vt i rhs_tt s rhs_val s lend s sx → v {
         ? | != 0 ( nurl_str_len g_pderiv ) ( __rprov_param syms r ) { = out ( __word_union out ( __pderiv_params syms r ) ) } {}
         ? != 0 g_pderiv_cn { = cout ( __word_union cout ( __pderiv_cparams syms r ) ) } {}
     }
+    // (…and a call one of whose lent arguments has no name beside those
+    // that do — a lend nested in it, `( either ( vec_at p 0 ) q k )`,
+    // gen_call's g_call_lend_unnamed: the names above miss what that one
+    // lends, so the value is read out of each parameter the sx leads to as
+    // well, where it lends there, as a lend no name carries is; agora
+    // #461.)
+    ? & & == rhs_tt TT_LPAREN g_call_lend_unnamed ( __sx_lendy sx ) { = cout ( __word_union cout ( __sx_param_reach syms sx F ) ) } {}
     ? & == 0 ( nurl_str_len out ) == 0 ( nurl_str_len cout ) { ^ v } {}
     : s ptr ( nurl_sym_get2 syms name `__ptr` )
     ? == 0 ( nurl_str_len ptr ) { ^ v } {}
