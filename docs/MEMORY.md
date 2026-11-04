@@ -695,6 +695,11 @@ holding it moves. The same holds:
   function. Its callers depend on that argument's elements, also when the
   function comes later in the program.
 
+The loop's element is gone with its loop: a later binding of its name, or
+a later loop of the same name over another container, is another value
+and ends none of these views. A closure that captured the element is tied
+to the container as a view of it is.
+
 A change made through `x` is made to an element of `xs`: growing,
 clearing or replacing it ends the views of the elements' contents taken
 before it, as the same change through a `vec_at` binding does. The mark is

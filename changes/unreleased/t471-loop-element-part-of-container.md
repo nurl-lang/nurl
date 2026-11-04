@@ -1,6 +1,6 @@
 ### Fixed
 
-- **A `~` loop's element is a part of what the loop iterates** (Agora #471, #350). Before this, a view of the element's own storage could be kept past its container (a heap-use-after-free). The view can be `( string_data x )`, a field of it, a slice of its buffer, or an element read out of it; a borrow of the element behaves the same way. It now ends as a `( vec_at xs k )` binding's does:
+- **A `~` loop's element is a part of what the loop iterates** (Agora #471, #350). Before this, a view of the element's own storage could be kept past its container (a heap-use-after-free). The view can be `( string_data x )`, a field of it, a slice of its buffer, or an element read out of it; a borrow of the element, or a closure that captured it, behaves the same way. It now ends as a `( vec_at xs k )` binding's does:
   - when the container is released, moved or given a new value;
   - when the container's elements are dropped or replaced;
   - when the element's own buffer moves.

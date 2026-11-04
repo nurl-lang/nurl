@@ -33684,6 +33684,26 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                     = __lj ( __src_as_ind __lj )
                     ( __rvsrc_add ( __src_indirect __lj ) )
                 } {}
+                // (4: the argument's own storage through its elements, and
+                // what it holds — read again as `%k` reads it, and kept as it
+                // is: a copy of its views ends with them, not with its
+                // growth.)
+                ? == __rva 4 {
+                    : i __a1 g_sxe_pos
+                    = g_sxe_pos __a0
+                    : b __sv7 g_sxe_vonly
+                    = g_sxe_vonly F
+                    = g_sxe_held T
+                    = g_sxe_hctn T
+                    : s __hl ( __src_drop_handles ( bck_sx_ev st e T ) )
+                    = g_sxe_hctn F
+                    = g_sxe_held F
+                    = g_sxe_vonly __sv7
+                    = g_sxe_pos __a1
+                    : s __own ( __src_as_ind ( __word_drop_all __lj __hl ) )
+                    ( __rvsrc_add ( __src_indirect __own ) )
+                    = __lj ( __word_union __own __hl )
+                } {}
                 // (A part of the argument — an element, a field — that owns
                 // its storage and holds no view, `( vec_at [String] v k )`,
                 // asked for the storage it points into by the call it is an
@@ -35057,6 +35077,11 @@ unsafe @ __bck_try_exit_check s st i line → v {
                         // re-check them against the loop's back-edge state.
                         : s lpost ( bck_loop + p 1 eb st ( bck_field rec 2 )
                         ( bck_field_int rec 3 ) ( seq bk `loopt` ) )
+                        // (A `~` loop's element is gone with its loop: what
+                        // views or borrows it lets go of its name for the
+                        // container's element, __bck_fe_retire.)
+                        : s frec ( bck_rec + p 1 )
+                        ? & ! ( seq lpost `!` ) != 0 ( nurl_str_starts frec `fevar\t` ) { ( __bck_fe_retire lpost ( bck_field_int frec 1 ) ) } {}
                         = st ( bck_scope_restore + p 1 eb blk_pre lpost )
                     } {
                         // …and what it declared and still holds is released at
@@ -35810,7 +35835,9 @@ unsafe @ __vk_assumptions_check → v {
 
 // May `cal`'s result view its argument `aix` (g_fn_rviews)? 0 no, 1 its
 // own storage, 2 only its elements', 3 only what it holds (a copy of its
-// views, `%k`). One whose walk has not answered yet
+// views, `%k`), 4 its elements' and what it holds (`^k %k`: a `~` loop's
+// element's own storage, or a copy of a view the element holds — agora
+// #471). One whose walk has not answered yet
 // — the function being walked calling itself, or one parked behind it in
 // a cycle, where their component of parked walks has not settled
 // (__bck_walk_scc) — may (1), when what it hands back is an owner that may
@@ -35821,11 +35848,12 @@ unsafe @ __vk_assumptions_check → v {
     ? != 0 ( nurl_str_len rv ) {
         : s ws ( nurl_str_slice rv 1 - ( nurl_str_len rv ) 1 )
         ? ( str_contains_word ws aix ) { ^ 1 } {}
-        // (`%k`: what argument k holds, a copy of its views — 3. Beside
-        // `^k` it is k's own storage's answer: a held view marked `^`
-        // would outlive the argument's growth, which it does not.)
+        // (`%k`: what argument k holds, a copy of its views — 3; beside
+        // `^k`, 4: each as it is, not the whole argument — a held view
+        // marked `^` would outlive what it views being grown, and the
+        // whole argument would end at the argument's growth.)
         : b hk ( str_contains_word ws ( nurl_str_cat `%` aix ) )
-        ? ( str_contains_word ws ( nurl_str_cat `^` aix ) ) { ^ ? hk 1 2 } {}
+        ? ( str_contains_word ws ( nurl_str_cat `^` aix ) ) { ^ ? hk 4 2 } {}
         ^ ? hk 3 0
     } {}
     ? || && != 0 ( nurl_str_len g_bck_fn ) ( seq cal g_bck_fn ) ( __vk_pend cal ) { ^ ? ( __rv_holder_result cal ) 1 0 } {}
@@ -35930,6 +35958,14 @@ unsafe @ __vk_assumptions_check → v {
     ? == 0 g_sxe_rvtab { = g_sxe_rvtab ( nurl_sym_new ) } {}
     ( nurl_sym_set g_sxe_rvtab `rvsrc` ? == 0 g_sxe_rvn ( nurl_str_cat srcs `` ) ( __word_union ( nurl_sym_get g_sxe_rvtab `rvsrc` ) srcs ) )
     = g_sxe_rvn 1
+}
+
+// …and `srcs`, the owners of a `~` loop's element binding `ids` let go of
+// (__bck_fe_retire): handed back, a view of them hands them on as the
+// element's own storage was.
+@ __bck_rva_add s ids s srcs → v {
+    = g_bck_rva_any 1
+    ( bck_put_bf `rva_` ids ( __word_union ( nurl_sym_get g_bck ( bck_bkey `rva_` ids ) ) srcs ) )
 }
 
 // A `let` / `=` row's binding `ids` takes a value: the sources a callee's
@@ -37010,6 +37046,51 @@ unsafe @ bck_sx_is_id s e → b {
 // first one; agora #471.
 @ __fe_cont_expr s fesx → b {
     ^ || || || >= ( nurl_str_find fesx `(` ) 0 >= ( nurl_str_find fesx `{` ) 0 >= ( nurl_str_find fesx `\\` ) 0 | ( seq fesx `*` ) ( seq fesx `-` )
+}
+
+// A `~` loop's element binding `fid` is gone with its loop. What views or
+// borrows the element it was is a part of its container (`fe_`, among their
+// sources already), not of the name — the walk's ids are a function's
+// names, and a later loop, or any later binding, of the name is another
+// value: they let go of the name for the container's element, as the views
+// of a value stored into an owner do (bck_borrow_transfer). A later binding
+// of the name ends none of them; agora #471.
+@ __bck_fe_retire s st i fid → v {
+    : s fids ( nurl_str_int fid )
+    : s fe ( nurl_sym_get g_bck ( bck_bkey `fe_` fids ) )
+    ? == 0 ( nurl_str_len fe ) { ^ v } {}
+    : ~ s rest ( nurl_sym_get g_bck ( bck_bkey `bb_` fids ) )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s bs ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i b ( nurl_str_to_int bs )
+        : s bk ( bck_bkey `bs_` bs )
+        ? & == BCK_BORROWED_SHARED ( bck_st_get st b ) ( str_contains_word ( nurl_sym_get g_bck bk ) fids ) {
+            ( bck_put_bf `bs_` bs ( __word_union ( __word_drop ( nurl_sym_get g_bck bk ) fids ) fe ) )
+            : s ik ( bck_bkey `vi_` bs )
+            ( bck_put_bf `vi_` bs ( __word_union ( __word_drop ( nurl_sym_get g_bck ik ) fids ) fe ) )
+            // (…which a bare view handed back hands on, as the element did:
+            // `rva_`, read by bck_ret_view_check through bck_sx_name.)
+            ( __bck_rva_add bs fe )
+            : ~ s orest ( nurl_str_cat fe `` )
+            ~ != 0 ( nurl_str_len orest ) {
+                : s os ( str_first_word orest ) = orest ( str_skip_word orest )
+                : s obk ( bck_bkey `bb_` os )
+                : s obl ( nurl_sym_get g_bck obk )
+                ? ! ( str_contains_word obl bs ) { ( bck_put obk ? == 0 ( nurl_str_len obl ) ( nurl_str_cat bs `` ) ( nurl_str_cat3 obl ` ` bs ) ) } {}
+                : s al ( nurl_sym_get g_bck ( bck_bkey `bsrcs` `` ) )
+                ? ! ( str_contains_word al os ) { ( bck_put ( bck_bkey `bsrcs` `` ) ? == 0 ( nurl_str_len al ) ( nurl_str_cat os `` ) ( nurl_str_cat3 al ` ` os ) ) } {}
+            }
+        } {}
+    }
+    : ~ s drest ( nurl_sym_get g_bck ( bck_bkey `vdd_` fids ) )
+    ~ != 0 ( nurl_str_len drest ) {
+        : s ds ( str_first_word drest ) = drest ( str_skip_word drest )
+        : i d ( nurl_str_to_int ds )
+        ? & ! ( bck_dead_state ( bck_st_get st d ) ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vds_` ds ) ) fids ) {
+            ( bck_dep_clear_one d fid )
+            ( bck_dep_add d ( __src_as_ind fe ) )
+        } {}
+    }
 }
 
 @ bck_dead_state i v → b {
