@@ -3019,6 +3019,10 @@ unsafe @ note_unsafe_item s pos s what → v {
 : ~ i g_vis_file_gen 0
 : ~ i g_ut_gen -1
 : ~ b g_ut_res F
+// …and a parked walk's: its function's answer where it compiled (bck_defer_fn's
+// `u`), 0 or 1 while __bck_walk_one runs it, -1 otherwise. The walk runs after
+// the module, where g_in_unsafe and the current file are the last function's.
+: ~ i g_bck_uctx -1
 // Whether this function's walk has recorded any view dependency
 // (bck_dep_add), and statement `vpass` rows pending (bck_stash_vpass).
 : ~ i g_bck_has_deps 0
@@ -28953,6 +28957,7 @@ unsafe @ bck_trusted_file s path → b {
 }
 
 @ bck_unsafe_ctx → b {
+    ? >= g_bck_uctx 0 { ^ != g_bck_uctx 0 } {}
     ? != 0 g_in_unsafe { ^ T } {}
     // (Asked per binding and per argument: answered once per source file.)
     ? == g_ut_gen g_vis_file_gen { ^ g_ut_res } {}
@@ -39635,6 +39640,9 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     } {}
     ( nurl_sym_def g_deferred_bck ( nurl_str_cat `f` ix )
     ( nurl_sym_get g_bck `file` ) )
+    // (…and whether it is raw code, bck_unsafe_ctx's answer here: the walk
+    // reads a view as a scalar there, bck_walk_class.)
+    ( nurl_sym_def g_deferred_bck ( nurl_str_cat `u` ix ) ? ( bck_unsafe_ctx ) `1` `0` )
     // Park the closure-attribution list with the rows. It is a global
     // that the next function clears, and a parked walk runs after the
     // whole module — without this the "which closure holds it" clause
@@ -39746,7 +39754,11 @@ unsafe @ __bck_walk_one s ix → v {
     = g_bck_own_params ( nurl_sym_get g_deferred_bck ( nurl_str_cat `o` ix ) )
     = g_bck_rcty ( nurl_sym_get g_deferred_bck ( nurl_str_cat `r` ix ) )
     = g_bck_fn ( nurl_sym_get g_deferred_bck ( nurl_str_cat `n` ix ) )
+    // (…in its own function's trust context, not the last one compiled's.)
+    : i u0 g_bck_uctx
+    = g_bck_uctx ? ( seq ( nurl_sym_get g_deferred_bck ( nurl_str_cat `u` ix ) ) `1` ) 1 0
     ( bck_analyze ( nurl_sym_get g_deferred_bck ( nurl_str_cat `p` ix ) ) )
+    = g_bck_uctx u0
 }
 
 // The parked walks `mem` (deepest first) ask each other's answers: a
