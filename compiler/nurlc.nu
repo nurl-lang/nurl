@@ -3110,6 +3110,13 @@ unsafe @ note_unsafe_item s pos s what → v {
 : ~ i g_bck_end_wroot -1
 // …and that borrow itself (bck_br_survives): -1 for none.
 : ~ i g_bck_end_wid -1
+// While a row named by a source expression (`@sx`) is swept for one
+// storage it is (bck_sx_row_sweep): that binding's id, read in place of
+// the row's field 1 (-1: none), and whether a value lent out of an element
+// of it was handed over, `^` — a `pendlend` row's, also as an arm of a
+// join (agora #349).
+: ~ i g_bck_sx_wid -1
+: ~ b g_bck_sx_part F
 // What the borrow a borrow row begins is a copy of (bck_byte_root), handed
 // to bck_borrow_begin; -1 for none known.
 : ~ i g_bck_br_next -1
@@ -16101,6 +16108,9 @@ unsafe @ gen_call i lex i syms i cg → s {
         // (…and whether those are the bindings a `?` / `??` argument's arms
         // select: agora #314.)
         : ~ b __arg_join F
+        // (…and whether it is no binding but an expression that may lend:
+        // named by its source expression, `@sx`, below — agora #349.)
+        : ~ b arg_xlend F
         : ~ s arg_fread ``
         // (A field of a call's result: `1` when the object was a call, and
         // the flag that says the field left with the read, if it did.)
@@ -16272,11 +16282,7 @@ unsafe @ gen_call i lex i syms i cg → s {
                 } {}
             } {}
             ? != 0 ( nurl_str_len arg_lend_srcs ) {
-                : s __lix ( nurl_str_int arg_idx )
-                // (…or a closure value's node, whose summary closes at module
-                // end as a function's does: agora #421.)
-                : b __lmut | | | | | ( bck_is_container_mutator ( bck_generic_base call_name ) ) ( nurl_sym_has_word g_fn_mutates call_name __lix ) ( nurl_sym_has_word g_fn_reallocs call_name __lix ) ( nurl_sym_has_word g_fn_sink call_name __lix ) ( __user_callee syms call_name fname ) != 0 ( nurl_str_len __clo_node )
-                ? ! __lmut { = arg_lend_srcs `` } {}
+                ? ! ( __arg_may_change syms call_name fname arg_idx __clo_node ) { = arg_lend_srcs `` } {}
             } {}
             = arg_lit_own ? == bck_arg_tt TT_AT ( nurl_sym_get syms `__agg_arg_own__` ) ``
             ( nurl_sym_def syms `__agg_arg_own__` __aao_saved )
@@ -16399,6 +16405,10 @@ unsafe @ gen_call i lex i syms i cg → s {
             : b __sx_cand | | | == __sx_c0 4 & > arg_idx 0 != 0 ( nurl_str_len __sx_arg0 ) ( __thr_is_detach fname_bare ) & ! is_inout_arg != 0 ( nurl_str_len callee_inout )
             ? & ! is_inout_arg | __sx_need & __sx_cand >= __sx_c0 2 { = arg_sx ? == __sx_c0 1 ( nurl_str_cat `-` `` ) ( __sx_operand_c syms bck_arg_tt bck_arg_val __sx_c0 ( __sx_froot syms bck_arg_tt at ) __sx_n0 ) } {}
             ? __sx_need { = call_sx ? == arg_idx 0 ( nurl_str_cat arg_sx `` ) ( nurl_str_cat3 call_sx `|` arg_sx ) } {}
+            // (…and an owner that is no binding but a value lent out of one:
+            // `( vec_at vv 0 )` grown beside a view of it is the element its
+            // `:`-bound twin is, bck_sx_mut_storage — agora #349.)
+            ? & & | == __sx_c0 0 == __sx_c0 3 ! | ( is_ident_tok bck_arg_tt ) == bck_arg_tt TT_DOT ( __sx_lends_any arg_sx ) { = __sx_nown + __sx_nown 1 } {}
             // (A holder the caller sees changed: one passed `inout`, or a
             // value with storage of its own a callee can push into — not a
             // view or a struct of views, the callee's own copy.)
@@ -17109,9 +17119,12 @@ unsafe @ gen_call i lex i syms i cg → s {
         // (A call: one that may lend what it was handed — as the argument's
         // own call left g_call_may_lend — or one not compiled yet.)
         ? ( seq bck_arg_nm `-` ) {
-            ? | | | | == arg_eff_tt TT_DOT == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST ( is_ident_tok arg_eff_tt ) & == arg_eff_tt TT_LPAREN g_call_may_lend {
-                = arg_lendy ( nurl_str_cat3 arg_lendy ` ` ( nurl_str_int arg_idx ) )
-            } {}
+            : b __al | | | | == arg_eff_tt TT_DOT == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST ( is_ident_tok arg_eff_tt ) & == arg_eff_tt TT_LPAREN g_call_may_lend
+            ? __al { = arg_lendy ( nurl_str_cat3 arg_lendy ` ` ( nurl_str_int arg_idx ) ) } {}
+            // (…and, for the walk, one whose lender's answer a module-end
+            // note still owes: a lend it forwards from a callee compiled
+            // after it, `retfwd`, reads as none here — agora #349.)
+            = arg_xlend | __al & == arg_eff_tt TT_LPAREN ( __lend_pending ( nurl_sym_get syms `__last_call_name__` ) )
         } {}
         : s __acs ( __clo_cs_expr syms bck_arg_tt bck_arg_val at )
         // (Built only once an argument carries something: the lists stay
@@ -17692,6 +17705,19 @@ unsafe @ gen_call i lex i syms i cg → s {
         // decides from the callee's summaries (a `pendlend` row, an effect),
         // and in a closure body it is an effect of running the closure
         // (agora #169). (Only for a callee that may change it: above.)
+        // (…named by its source expression, `@sx`, as a holder is (agora
+        // #391): one row the walk sweeps for each storage the sx is by the
+        // final summaries, bck_sx_mut_roots. The names codegen has are a
+        // lender's answer as it stands here: none for a lend nested in a
+        // lend, a join's or a block's arms, a field of a call's result, or
+        // a lend a module-end note still owes; every argument for a callee
+        // not compiled yet. An sx not modelled, `*`, keeps them — agora
+        // #349.)
+        : s __lsx ? & & & & & arg_xlend __row_callee == 0 ( nurl_str_len arg_froot ) ( __is_handle_ty at ) ( __sx_lends_any arg_sx ) < ( nurl_str_find arg_sx `*` ) 0 ? ( __arg_may_change syms call_name fname arg_idx __clo_node ) arg_sx `` ``
+        ? != 0 ( nurl_str_len __lsx ) {
+            ( bck_stash_pending_kind ( nurl_str_cat `@` __lsx ) ( nurl_lex_line lex ) __rc arg_idx `` ? | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST `pendjoin` `pendlend` )
+            ( __clo_effect_note_sx __lsx __rc arg_idx )
+        } {}
         ? & != 0 ( nurl_str_len arg_lend_srcs ) __row_callee {
             : ~ s __lr ( nurl_str_cat arg_lend_srcs `` )
             ~ != 0 ( nurl_str_len __lr ) {
@@ -17699,8 +17725,10 @@ unsafe @ gen_call i lex i syms i cg → s {
                 : i __ld ( nurl_str_find __ln `.` )
                 : s __lb ? > __ld 0 ( nurl_str_slice __ln 0 __ld ) ( nurl_str_cat __ln `` )
                 ? ( bck_is_heap_lty ( nurl_llty ( nurl_sym_get syms __lb ) ) ) {
-                    ( bck_stash_pending_kind __ln ( nurl_lex_line lex ) __rc arg_idx `` ? __arg_join `pendjoin` `pendlend` )
-                    ( __clo_effect_note __ln __rc arg_idx )
+                    ? == 0 ( nurl_str_len __lsx ) {
+                        ( bck_stash_pending_kind __ln ( nurl_lex_line lex ) __rc arg_idx `` ? __arg_join `pendjoin` `pendlend` )
+                        ( __clo_effect_note __ln __rc arg_idx )
+                    } {}
                     // (…and what the callee drops of a value lent out of a
                     // parameter, this function drops of that parameter's
                     // elements: its drop summary, agora #443.)
@@ -29020,11 +29048,39 @@ unsafe @ __clo_effect_note s name s callee i aix → v {
 // what the callee drops or changes through it, not a new value given the
 // local, which owns what it was handed or is a borrow the inout check
 // follows (agora #353).
+// (A field path of a capture is its capture's; a body local read out of
+// captures is each of them, as __clo_effect_note has it — agora #349.)
 unsafe @ __clo_effect_note_lent s name s callee i aix → v {
-    ? ! ( str_contains_word g_clo_caps_now name ) { ^ } {}
+    : i dot ( nurl_str_find name `.` )
+    : s root ? > dot 0 ( nurl_str_slice name 0 dot ) ( nurl_str_cat name `` )
+    ? ! ( str_contains_word g_clo_caps_now root ) {
+        ? != 0 ( nurl_str_len g_clo_deriv ) {
+            : ~ s dr ( bck_swap_char ( __clo_deriv_caps root ) 44 32 )
+            ~ != 0 ( nurl_str_len dr ) {
+                : s c ( str_first_word dr ) = dr ( str_skip_word dr )
+                ( __clo_effect_note_lent c callee aix )
+            }
+        } {}
+        ^
+    } {}
     : s e ( nurl_str_cat4 ( nurl_str_cat `~` name ) `:` callee ( nurl_str_cat `:` ( nurl_str_int aix ) ) )
     ? ( str_contains_word g_closure_effects e ) { ^ } {}
     = g_closure_effects ? == 0 ( nurl_str_len g_closure_effects ) ( nurl_str_cat e `` ) ( nurl_str_cat3 g_closure_effects ` ` e )
+}
+
+// …what a call does to an argument that is no binding but a value lent
+// out of one, by its source expression `sx` (`( vec_reserve ( vec_at vv 0
+// ) n )`): lent, `~`, out of each capture the sx names — directly, a field
+// of one, or a body local read out of one. Unmarked, it was replayed as a
+// `pendeff` row, which leaves the views into the element's buffer be
+// (agora #349).
+unsafe @ __clo_effect_note_sx s sx s callee i aix → v {
+    ? == 0 ( nurl_str_len g_clo_caps_now ) { ^ } {}
+    : ~ s rest ( __sx_bind_names sx )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ( __clo_effect_note_lent w callee aix )
+    }
 }
 
 // The captures body local `name` was read out of (g_clo_deriv), `,`-joined:
@@ -29769,6 +29825,23 @@ unsafe @ __callee_decl_name s cn → s {
 @ __sealed_msg s ty s what → s {
     ^ ( nurl_str_cat4 what ` '` ( __ty_src_show ty )
     `' is raw memory, which only an 'unsafe' function may touch: its representation (a raw-pointer field, a library handle's control block or the state behind one, or a 'raw' struct's fields) carries an invariant the code managing it relies on, so a value built or changed field by field could point anywhere. Build and change it through its API — its constructors and accessors (slice_from_vec / slice_empty / slice_len, vec_new / vec_len, …) — or, if this function genuinely manages that memory and you vouch for its memory safety, declare it 'unsafe @ name …'.` )
+}
+
+// May `callee` change what argument `aix` holds — a container mutator, a
+// summary that says so, or any NURL function, the program's or the
+// library's, or a closure value's node (`clo`), whose summaries close only
+// at module end (agora #169, #352, #421)?
+@ __arg_may_change i syms s callee s generic i aix s clo → b {
+    : s ix ( nurl_str_int aix )
+    ^ | | | | | ( bck_is_container_mutator ( bck_generic_base callee ) ) ( nurl_sym_has_word g_fn_mutates callee ix ) ( nurl_sym_has_word g_fn_reallocs callee ix ) ( nurl_sym_has_word g_fn_sink callee ix ) ( __user_callee syms callee generic ) != 0 ( nurl_str_len clo )
+}
+
+// Does `cn`'s lend summary still wait on a module-end note: a lend it
+// forwards from a callee compiled after it (`retfwd`, resolve_retfwd_lends)?
+// Until then it reads as lending nothing (agora #349, #461).
+@ __lend_pending s cn → b {
+    ? == 0 ( nurl_str_len cn ) { ^ F } {}
+    ^ != 0 ( nurl_sym_len2 g_pending_impl `retfwd##` cn )
 }
 
 // The arguments the result of the call just generated may borrow from:
@@ -32814,7 +32887,10 @@ unsafe @ bck_sx_ids s sx → s {
     // iterates, the enclosing scope's — read before the element is
     // declared; agora #414.)
     : s fesx ? ? == __k0 102 ( seq kind `fevar` ) F ( bck_sx_ids ( bck_field rec 6 ) ) ``
-    : s w2 ? ? == __k0 108 ( seq kind `let` ) ? == __k0 102 ( seq kind `fevar` ) F ( nurl_str_int ( bck_xl_declare_id w ) ) ? __named ( nurl_str_int ( bck_intern ( bck_xl_resolve w ) ) ) ( nurl_str_cat w `` )
+    // (A pending row's `@sx`: an argument that is no binding but a value
+    // lent out of one, by its source expression — as a `vpass` row's
+    // container; agora #349.)
+    : s w2 ? ? == __k0 108 ( seq kind `let` ) ? == __k0 102 ( seq kind `fevar` ) F ( nurl_str_int ( bck_xl_declare_id w ) ) ? __named ? & __pend == 64 ( nurl_str_get w 0 ) ( nurl_str_cat `@` ( bck_sx_ids ( nurl_str_slice w 1 - ( nurl_str_len w ) 1 ) ) ) ( nurl_str_int ( bck_intern ( bck_xl_resolve w ) ) ) ( nurl_str_cat w `` )
     : s head ( nurl_str_cat4 kind `\t` w2 `\t` )
     // (Fields 3 and 4, the line and the depth, as they are: one copy.)
     : s five ( nurl_str_cat4 head rds `\t` ( __bck_field_span rec 3 4 ) )
@@ -35533,7 +35609,9 @@ unsafe @ __bck_try_exit_check s st i line → v {
         }
         // A borrow ends with what it borrows from: compare this row's
         // states with the ones it started from.
-        ? & != 0 g_bck_has_borrow ! ( seq st `!` ) { = st ( bck_borrow_sweep ist st rec kc ) } {}
+        // (A row named by its argument's source expression, `@sx`: for each
+        // storage it is, bck_sx_row_sweep — agora #349.)
+        ? & != 0 g_bck_has_borrow ! ( seq st `!` ) { = st ? & == kc 32 ( __bck_row_sx rec ) ( bck_sx_row_sweep ist st rec kc ) ( bck_borrow_sweep ist st rec kc ) } {}
     }
     st
 }
@@ -36508,6 +36586,68 @@ unsafe @ bck_sx_split s args → s {
     ^ out
 }
 
+// The storage the value of source expression `sx` is, as an argument a
+// callee changes (bck_sx_mut_storage, by a name): a call's, what it lends
+// of its arguments by the final summaries — one handed back whole, its own
+// handle (`ret_alias`, `retpass`), is that argument's storage; any other
+// lend a part of it, `^` (an element, a field); a join's, each arm's. Not
+// what the views it holds point into, which a change of it leaves where
+// they are. `*` when it holds a value not modelled (agora #349).
+@ bck_sx_mut_roots s st s sx → s {
+    = g_sxe_pos 0
+    = g_sxe_unk F
+    : s all ( __sx_mut_roots st sx )
+    ? g_sxe_unk { ^ ( nurl_str_cat `*` `` ) } {}
+    ^ all
+}
+
+// …of the sub-expression of `e` at g_sxe_pos.
+unsafe @ __sx_mut_roots s st s e → s {
+    : i n ( nurl_str_len e )
+    ? >= g_sxe_pos n { ^ ( nurl_str_cat `` `` ) } {}
+    : *u ep # *u e
+    ? == # i . ep g_sxe_pos 123 {
+        = g_sxe_pos + g_sxe_pos 1
+        : ~ s out ``
+        : ~ b more T
+        ~ more {
+            = out ( __word_union out ( __sx_mut_roots st e ) )
+            ? & < g_sxe_pos n == # i . ep g_sxe_pos 59 { = g_sxe_pos + g_sxe_pos 1 } {
+                = more F
+                ? & < g_sxe_pos n == # i . ep g_sxe_pos 125 { = g_sxe_pos + g_sxe_pos 1 } {}
+            }
+        }
+        ^ out
+    } {}
+    : i s0 g_sxe_pos
+    ~ & < g_sxe_pos n ! ( __sx_delim # i . ep g_sxe_pos ) { = g_sxe_pos + g_sxe_pos 1 }
+    ? == s0 g_sxe_pos { ^ ( nurl_str_cat `` `` ) } {}
+    : s w ( nurl_str_slice e s0 - g_sxe_pos s0 )
+    ? & < g_sxe_pos n == # i . ep g_sxe_pos 40 {
+        = g_sxe_pos + g_sxe_pos 1
+        : ~ s out ``
+        : ~ i j 0
+        : ~ b more ! & < g_sxe_pos n == # i . ep g_sxe_pos 41
+        ? ! more { = g_sxe_pos + g_sxe_pos 1 } {}
+        ~ more {
+            : s js ( nurl_str_int j )
+            ? ( mem_fn_lends_arg w js ) {
+                : s r ( __sx_mut_roots st e )
+                : b whole | ( str_contains_word ( nurl_sym_get g_fn_ret_alias w ) js ) ( str_contains_word ( nurl_sym_get g_pending_impl ( nurl_str_cat `retpass##` w ) ) js )
+                = out ( __word_union out ? whole r ( __src_as_ind r ) )
+            } { ( bck_sx_skip e ) }
+            ? & < g_sxe_pos n == # i . ep g_sxe_pos 124 { = g_sxe_pos + g_sxe_pos 1 = j + j 1 } {
+                = more F
+                ? & < g_sxe_pos n == # i . ep g_sxe_pos 41 { = g_sxe_pos + g_sxe_pos 1 } {}
+            }
+        }
+        ^ out
+    } {}
+    ? ( seq w `-` ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? ( seq w `*` ) { = g_sxe_unk T ^ ( nurl_str_cat `` `` ) } {}
+    ^ ( bck_sx_mut_storage st w )
+}
+
 // The sources of one argument of a call (bck_sx_ev in argument mode): what
 // its storage is, or what it points into; `*` when not modelled.
 @ bck_sx_arg_sources s st s e → s {
@@ -36521,12 +36661,13 @@ unsafe @ bck_sx_split s args → s {
 // …the storage an argument the callee changes IS: a binding (a field of
 // one) by name — its own storage, or, a borrow, its owners' element (`^`);
 // not what the views it holds point into (changing a container of views
-// moves its buffer, not theirs). `-` for anything else (a call's
-// temporary, a literal: nothing another argument can share).
+// moves its buffer, not theirs). A value lent out of one — `( vec_at vv 0
+// )`, a join of such — is what it lends of it, bck_sx_mut_roots: `^vv`, as
+// its `:`-bound twin's borrow is (agora #349). `-` for anything else (a
+// call's temporary, a literal: nothing another argument can share).
 @ bck_sx_mut_storage s st s e → s {
     ? | | == 0 ( nurl_str_len e ) ( seq e `-` ) ( seq e `*` ) { ^ ( nurl_str_cat `` `` ) } {}
-    ? >= ( nurl_str_find e `(` ) 0 { ^ ( nurl_str_cat `` `` ) } {}
-    ? >= ( nurl_str_find e `{` ) 0 { ^ ( nurl_str_cat `` `` ) } {}
+    ? | >= ( nurl_str_find e `(` ) 0 >= ( nurl_str_find e `{` ) 0 { ^ ( bck_sx_mut_roots st e ) } {}
     : i id ( nurl_str_to_int e )
     : i r ( bck_path_root id )
     : s rs ( nurl_str_int r )
@@ -37912,9 +38053,20 @@ unsafe @ bck_note_rc_arg s name s ty → v {
     ^ ``
 }
 
+// Does row `rec` name what it is about by a source expression (field 1
+// `@sx`: a pending row's argument that is no binding, bck_xlate_row1)?
+unsafe @ __bck_row_sx s rec → b {
+    : i off ( __bck_field_off rec 1 )
+    ? < off 0 { ^ F } {}
+    : *u rp # *u rec
+    ^ == # i . rp off 64
+}
+
 @ bck_borrow_sweep s ist s st s rec i kc → s {
     : ~ s out st
-    : s wn ( bck_field rec 1 )
+    // (…or, for a row named by a source expression, the storage it is swept
+    // for now: g_bck_sx_wid.)
+    : s wn ? >= g_bck_sx_wid 0 ( nurl_str_int g_bck_sx_wid ) ( bck_field rec 1 )
     : ~ s rest ( nurl_sym_get g_bck ( bck_bkey `bsrcs` `` ) )
     // The row's binding — a field of one (`s.items`) for a field written or
     // handed over, which reaches only the fields it overlaps.
@@ -37970,9 +38122,12 @@ unsafe @ bck_note_rc_arg s name s ty → v {
                 // (`pendeff`: a closure that runs here does it.)
                 // (`pendlend`: a value lent from it handed to the callee;
                 // `pendjoin`: it, as one of the values a `?` / `??` argument
-                // chose between — agora #314.)
-                : b plend & == kc 32 ( seq ( bck_field rec 0 ) `pendlend` )
-                : b pjoin & == kc 32 ( seq ( bck_field rec 0 ) `pendjoin` )
+                // chose between — agora #314; or one arm of it a value lent
+                // out of an element of it, g_bck_sx_part, as `pendlend` —
+                // agora #349.)
+                : s pk0 ? == kc 32 ( bck_field rec 0 ) ``
+                : b plend | & == kc 32 g_bck_sx_part ( seq pk0 `pendlend` )
+                : b pjoin ( seq pk0 `pendjoin` )
                 : s pw0 ? plend `a value lent from it was passed to '` ? pjoin `it was one of the values a '?' / '??' argument chose between, passed to '` ? == kc 32 ? whole `a closure that runs here passes it to '` `a closure that runs here passes a field of it to '` ? whole `it was passed to '` `a field of it was passed to '`
                 // (`@assign`: a closure that runs here gives it, or a field of
                 // it, a new value — __clo_assign_note — as a `= x …` here
@@ -38308,7 +38463,9 @@ unsafe @ bck_note_rc_arg s name s ty → v {
 // mem_udrop_link_alias), so the option is consumed as well, and handing it
 // on after that would release the value a second time (agora #170).
 @ bck_cursor_follow s st s rec i kc → s {
-    : i rid0 ( bck_field_id rec 1 )
+    // (…or the storage a row named by a source expression is followed for
+    // now: g_bck_sx_wid.)
+    : i rid0 ? >= g_bck_sx_wid 0 g_bck_sx_wid ( bck_field_id rec 1 )
     ? < rid0 0 { ^ st } {}
     : i rid ( bck_path_root rid0 )
     ? ! ( bck_cursor_watched rid ) { ^ st } {}
@@ -38368,6 +38525,38 @@ unsafe @ bck_note_rc_arg s name s ty → v {
             }
         } {}
     }
+    ^ out
+}
+
+// A pending row named by its argument's source expression, `@sx`: swept as
+// the row naming each storage the sx is by the final summaries
+// (bck_sx_mut_roots, g_bck_sx_wid) — a binding's own, `R`, as the row
+// naming R; an element of one, `^R` (`( vec_at vv 0 )`, g_bck_sx_part), as
+// a value lent from R, `pendlend`: its views and those into its elements
+// end, as through its `:`-bound twin's borrow. (Not the views of R's own
+// buffer only, which stays where it is: a view or a holder of both R's
+// buffer and an element's is recorded as R's alone — one kind per source,
+// the direct one — so ending only those into elements would miss it.) A
+// callee that drops, moves or replaces nothing there ends nothing: the sx
+// is not evaluated (agora #349).
+@ bck_sx_row_sweep s ist s st s rec i kc → s {
+    : s cal ( bck_field rec 5 )
+    : s aix ( bck_field rec 6 )
+    ? ! | | | ( bck_callee_drops_elems cal aix ) ( nurl_sym_has_word g_fn_reallocs cal aix ) & != 0 g_irealloc_any ( nurl_sym_has_word g_fn_ireallocs cal aix ) != 0 ( nurl_str_len ( __repl_of cal aix ) ) { ^ st } {}
+    : s w1 ( bck_field rec 1 )
+    : s roots ( bck_sx_mut_roots st ( nurl_str_slice w1 1 - ( nurl_str_len w1 ) 1 ) )
+    ? | == 0 ( nurl_str_len roots ) ( seq roots `*` ) { ^ st } {}
+    : ~ s out st
+    : ~ s rest ( nurl_str_cat roots `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s r0 ( str_first_word rest ) = rest ( str_skip_word rest )
+        = g_bck_sx_part == ( nurl_str_get r0 0 ) 94
+        = g_bck_sx_wid ( nurl_str_to_int ? g_bck_sx_part ( nurl_str_slice r0 1 - ( nurl_str_len r0 ) 1 ) r0 )
+        ? != 0 g_bck_has_cursor { = out ( bck_cursor_follow out rec kc ) } {}
+        = out ( bck_borrow_sweep ist out rec kc )
+    }
+    = g_bck_sx_wid -1
+    = g_bck_sx_part F
     ^ out
 }
 
