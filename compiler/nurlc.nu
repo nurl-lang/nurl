@@ -3099,6 +3099,9 @@ unsafe @ note_unsafe_item s pos s what → v {
 // borrow's end reach a loop's element (`feb_`, bck_borrow_end; agora
 // #482).
 : ~ i g_bck_fe_live 0
+// …and whether one was filed under a path (`feoallp`, __fe_owner_note):
+// the end of a binding holding that path ends it too (agora #482).
+: ~ i g_bck_fep_any 0
 // …and the ids a row may concern them through (bck_cursor_watch): up to
 // four in `g_bck_cw0`…`g_bck_cw3` (`g_bck_cwn` of them), more in the `cuw`
 // key (`g_bck_cwn` 5).
@@ -37892,9 +37895,14 @@ unsafe @ bck_sx_is_id s e → b {
 // ends a borrow of an element of it ends the loop's element (agora #482).
 // The borrow sweep visits an owner by `bsrcs`, where a borrow of it put it
 // — and one the loop iterates by name or path, codegen keeps unchanged by
-// that name in the body (bck_iter_enter). The owners of a container a call
-// lends (`expr`: `~ x . ( vec_at [B] bs 0 ) items`) have neither: they are
-// made sources the sweep visits here.
+// that name in the body (bck_iter_enter). An alias of a binding the loop
+// iterates by name puts that very id there. An alias of a binding that
+// holds a path the loop iterates puts the binding (`: ~ H hc h` for `~ x .
+// h items`, `: ~ I ic . h inner` for `~ x . . h inner items`), and the
+// sweep ends that binding, not the path: a path is filed under `feoallp`
+// too, which bck_borrow_end asks for an id overlapping it. The owners of a
+// container a call lends (`expr`: `~ x . ( vec_at [B] bs 0 ) items`) have
+// neither: they are made sources the sweep visits here.
 @ __fe_owner_note s xs s owners b expr → v {
     : ~ s rest ( nurl_str_cat owners `` )
     ~ != 0 ( nurl_str_len rest ) {
@@ -37906,7 +37914,13 @@ unsafe @ bck_sx_is_id s e → b {
             ? expr {
                 = g_bck_has_borrow 1
                 ( bck_add_word_once ( bck_bkey `bsrcs` `` ) o )
-            } {}
+            } {
+                : i oi ( nurl_str_to_int o )
+                ? != ( bck_path_root oi ) oi {
+                    ( bck_add_word_once `feoallp` o )
+                    = g_bck_fep_any 1
+                } {}
+            }
         } {}
     }
 }
@@ -39624,21 +39638,40 @@ unsafe @ bck_note_rc_arg s name s ty → v {
     // only as a holder of views — INVALID, its storage as it was — ends the
     // element as one, `!fev`: it holds what those elements view. Inside a
     // `~` loop's walk only, g_bck_fe_live, and of an owner one was filed
-    // under, `feoall`.)
-    ? & != 0 g_bck_fe_live ( nurl_sym_has_word g_bck `feoall` sids ) {
-        : b fev == BCK_INVALID ( bck_st_get out ( bck_path_root sid ) )
-        : ~ s ferest ( nurl_sym_get g_bck ( bck_bkey `feb_` sids ) )
-        ~ != 0 ( nurl_str_len ferest ) {
-            : s fs ( str_first_word ferest ) = ferest ( str_skip_word ferest )
-            : i fx ( nurl_str_to_int fs )
-            : i fxv ( bck_st_get out fx )
-            ? & | == BCK_UNINIT fxv & & ! fev == BCK_INVALID fxv ! ( __bck_fe_ended fs ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `feo_` fs ) ) sids ) {
-                = out ( bck_st_set out fx BCK_INVALID )
-                ( bck_put ( bck_bkey `bv_` fs ) ( nurl_str_cat4 ( nurl_str_int line ) ` ` sids ( nurl_str_cat ? fev ` !fev ` ` !fe ` why ) ) )
-            } {}
-        }
+    // under, `feoall` — or of a binding holding a path one was filed under,
+    // `feoallp`: `h` ended through an alias of it ends `. h items`'s
+    // elements, as it ends a `vec_at` borrow of `. h items`.)
+    ? != 0 g_bck_fe_live {
+        ? ( nurl_sym_has_word g_bck `feoall` sids ) { = out ( __bck_fe_end out sid sids line why ) } {}
+        ? != 0 g_bck_fep_any {
+            : ~ s prest ( nurl_sym_get g_bck `feoallp` )
+            ~ != 0 ( nurl_str_len prest ) {
+                : s po ( str_first_word prest ) = prest ( str_skip_word prest )
+                ? & ! ( seq po sids ) ( bck_paths_overlap sid ( nurl_str_to_int po ) ) { = out ( __bck_fe_end out sid po line why ) } {}
+            }
+        } {}
     } {}
     = out ( bck_deps_end out sids line why depth F )
+    ^ out
+}
+
+// `sid` ended (bck_borrow_end), and with it owner `os` — `sid` itself, or
+// a path overlapping it: the `~` loop elements filed under `os` (`feb_`)
+// that are a part of it still, bound this round and not yet ended, end
+// (agora #482).
+@ __bck_fe_end s st i sid s os i line s why → s {
+    : ~ s out st
+    : b fev == BCK_INVALID ( bck_st_get out ( bck_path_root sid ) )
+    : ~ s ferest ( nurl_sym_get g_bck ( bck_bkey `feb_` os ) )
+    ~ != 0 ( nurl_str_len ferest ) {
+        : s fs ( str_first_word ferest ) = ferest ( str_skip_word ferest )
+        : i fx ( nurl_str_to_int fs )
+        : i fxv ( bck_st_get out fx )
+        ? & | == BCK_UNINIT fxv & & ! fev == BCK_INVALID fxv ! ( __bck_fe_ended fs ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `feo_` fs ) ) os ) {
+            = out ( bck_st_set out fx BCK_INVALID )
+            ( bck_put ( bck_bkey `bv_` fs ) ( nurl_str_cat4 ( nurl_str_int line ) ` ` os ( nurl_str_cat ? fev ` !fev ` ` !fe ` why ) ) )
+        } {}
+    }
     ^ out
 }
 
@@ -41591,6 +41624,7 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     = g_bck_watch 0
     = g_bck_fe_live 0
     ( bck_put `feoall` `` )
+    ? != 0 g_bck_fep_any { ( bck_put `feoallp` `` ) = g_bck_fep_any 0 } {}
     = g_cj_depth 0
     = g_cj_log ``
     = g_cj_entry 0
