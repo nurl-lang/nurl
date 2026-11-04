@@ -38180,7 +38180,11 @@ unsafe @ __pderiv_note i syms s name s vt i rhs_tt s rhs_val s lend s sx → v {
     ? == 0 ( nurl_str_len g_pderiv ) { ? == 0 ( nurl_sym_len syms `__fn_storage_params__` ) { ^ v } {} } {}
     : s srcs ? == rhs_tt TT_LPAREN lend ? == rhs_tt TT_DOT ( nurl_sym_get syms `__last_member_root__` ) ? ( is_ident_tok rhs_tt ) rhs_val ``
     ? ( __lend_unnamed srcs ) {
-        ? | | ( is_ident_tok rhs_tt ) ! ( bck_is_heap_lty ( nurl_llty vt ) ) ! ( __sx_lendy sx ) { ^ v } {}
+        // (__sx_lendy's cheap tests first — most values here lend nothing
+        // — then the type, whose LLVM spelling nurl_llty builds, and the
+        // scan for a name the sx carries last.)
+        ? | | | ( is_ident_tok rhs_tt ) ! ( __sx_lends_any sx ) >= ( nurl_str_find sx `*` ) 0 ! ( bck_is_heap_lty ( nurl_llty vt ) ) { ^ v } {}
+        ? ! ( __sx_names_any sx ) { ^ v } {}
         ? ! ( __val_may_lend syms rhs_tt ) { ^ v } {}
         ? == rhs_tt TT_LPAREN { ? ( __shared_cell_get ( bck_generic_base ( nurl_sym_get syms `__last_call_name__` ) ) ) { ^ v } {} } {}
         : s xptr ( nurl_sym_get2 syms name `__ptr` )
