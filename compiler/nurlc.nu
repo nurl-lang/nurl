@@ -24775,7 +24775,18 @@ unsafe @ mem_path_to_indices s path → s {
 // that made the binding handed back a fresh one (agora #457).
 @ mem_udrop_alias_move_copied i syms i cg s ptr b copied → v {
     ? == 0 ( nurl_str_len ptr ) { ^ v } {}
-    ? & copied ( __lent_by_bit syms ptr ) { ( mem_udrop_optparam_taken syms ptr ) ^ v } {}
+    // (A parameter it may be a lend of is still recorded as moved on — an
+    // inferred `sink`, as before: only what is dropped changes here, not
+    // which programs are accepted.)
+    ? & copied ( __lent_by_bit syms ptr ) {
+        ( mem_udrop_optparam_taken syms ptr )
+        : ~ s rest ( nurl_sym_get2 syms ptr `__alias` )
+        ~ != 0 ( nurl_str_len rest ) {
+            : s src ( str_first_word rest ) = rest ( str_skip_word rest )
+            ? ( __part_src syms ptr src ) {} { ( mem_udrop_param_moved syms src ) }
+        }
+        ^ v
+    } {}
     ( mem_udrop_alias_move syms cg ptr `0` )
 }
 
