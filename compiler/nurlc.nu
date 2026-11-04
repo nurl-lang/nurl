@@ -20776,7 +20776,7 @@ unsafe @ gen_match i lex i syms i cg → s {
     ? & == match_first_tt TT_LPAREN != 0 ( nurl_sym_len syms `__last_call_lend_idents__` ) {
         ( nurl_sym_def syms ( nurl_str_cat `__mpl` ( nurl_str_int __m_ser ) ) ( nurl_sym_get syms `__last_call_lend_idents__` ) )
     } {
-        ? & == match_first_tt TT_LPAREN ( __sx_lendy __m_csx ) { ( nurl_sym_def syms ( nurl_str_cat `__mplx` ( nurl_str_int __m_ser ) ) __m_csx ) } {}
+        ? & & == match_first_tt TT_LPAREN ( __sx_lendy __m_csx ) | g_call_may_lend ( __lend_pending ( nurl_sym_get syms `__last_call_name__` ) ) { ( nurl_sym_def syms ( nurl_str_cat `__mplx` ( nurl_str_int __m_ser ) ) __m_csx ) } {}
     }
     // …and the call itself, for a decision at module end: a payload handed
     // out of this match may lend from what that call lends from
@@ -37861,20 +37861,64 @@ unsafe @ __lend_unnamed s ws → b {
 }
 
 // Binding slot `ptr` was read out of each `p#c` of `pcs` (g_pderiv_c).
-// (`unsafe` for the global it appends to, as g_pderiv.)
+// One condition per parameter: read out of it on several paths, the
+// conditions they share (__cond_list_put) — a binding given a value read
+// out of its own (`= a ( f ( g a ) )`) would otherwise double its
+// alternatives with every such statement. (`unsafe` for the global it
+// appends to, as g_pderiv.)
 unsafe @ __pderiv_cnote s ptr s pcs → v {
     : ~ s rest ( nurl_str_cat pcs `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s e ( nurl_str_cat3 ptr `=` w )
-        ? ! ( str_contains_word g_pderiv_c e ) { = g_pderiv_c ? == 0 ( nurl_str_len g_pderiv_c ) ( nurl_str_cat e `` ) ( nurl_str_cat3 g_pderiv_c ` ` e ) } {}
+        : i h ( nurl_str_find w `#` )
+        = g_pderiv_c ( __cond_list_put g_pderiv_c ( nurl_str_cat4 ptr `=` ( nurl_str_slice w 0 h ) `#` ) ( nurl_str_slice w + h 1 - - ( nurl_str_len w ) h 1 ) )
     }
 }
 
-// Two conditions (`&`-joined `w>sx` lists) that must both hold.
+// The conjuncts (`w>sx`) of condition `a` that `b` has too: what holds
+// wherever either does — `` when one of them is ``, always.
+@ __cond_meet s a s b → s {
+    ? | == 0 ( nurl_str_len a ) == 0 ( nurl_str_len b ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? ( seq a b ) { ^ ( nurl_str_cat a `` ) } {}
+    : s bb ( nurl_str_cat3 `&` b `&` )
+    : ~ s out ``
+    : ~ s rest ( nurl_str_cat a `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : i k ( nurl_str_find rest `&` )
+        : s cj ? < k 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 k )
+        = rest ? < k 0 `` ( nurl_str_slice rest + k 1 - - ( nurl_str_len rest ) k 1 )
+        ? >= ( nurl_str_find bb ( nurl_str_cat3 `&` cj `&` ) ) 0 { = out ( __cond_and out cj ) } {}
+    }
+    ^ out
+}
+
+// The word list `l` with `key` + `c` in it: one word per key, whose
+// condition is what each one put under that key shares (__cond_meet).
+@ __cond_list_put s l s key s c → s {
+    : s e ( nurl_str_cat key c )
+    ? == 0 ( nurl_str_len l ) { ^ e } {}
+    : ~ s out ``
+    : ~ b found F
+    : ~ s rest ( nurl_str_cat l `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        : ~ s nw ( nurl_str_cat w `` )
+        ? & ! found != 0 ( nurl_str_starts w key ) {
+            = found T
+            = nw ( nurl_str_cat key ( __cond_meet ( nurl_str_slice w ( nurl_str_len key ) - ( nurl_str_len w ) ( nurl_str_len key ) ) c ) )
+        } {}
+        = out ? == 0 ( nurl_str_len out ) nw ( nurl_str_cat3 out ` ` nw )
+    }
+    ? found { ^ out } {}
+    ^ ( nurl_str_cat3 l ` ` e )
+}
+
+// Two conditions (`&`-joined `w>sx` lists) that must both hold. (A long
+// chain of reads stops adding to one past 2 KB: fewer conjuncts hold more
+// often, so the edge it guards is kept where it may be needed.)
 @ __cond_and s a s b → s {
     ? == 0 ( nurl_str_len a ) { ^ ( nurl_str_cat b `` ) } {}
-    ? == 0 ( nurl_str_len b ) { ^ ( nurl_str_cat a `` ) } {}
+    ? | == 0 ( nurl_str_len b ) > ( nurl_str_len a ) 2048 { ^ ( nurl_str_cat a `` ) } {}
     ^ ( nurl_str_cat3 a `&` b )
 }
 
@@ -37946,13 +37990,25 @@ unsafe @ __pderiv_cnote s ptr s pcs → v {
     ^ & ( __sx_lends_any sx ) < ( nurl_str_find sx `*` ) 0
 }
 
+// May the value just generated, its first token `tt` (a call, a join, a
+// value block, a field of a call's result), lend what it was handed: a
+// join's arms may; a call by its own answer, g_call_may_lend, or one a
+// module-end note still owes (__lend_pending) — as gen_call asks of an
+// argument (agora #461).
+@ __val_may_lend i syms i tt → b {
+    : i et ( __val_eff_tt tt )
+    ? | == et TT_QUEST == et TT_QUESTQUEST { ^ T } {}
+    ? | == et TT_LPAREN == et TT_DOT { ^ | g_call_may_lend ( __lend_pending ( nurl_sym_get syms `__last_call_name__` ) ) } {}
+    ^ F
+}
+
 // The summary edges a source expression conditions (g_cedges), of the
-// function compiling now.
-unsafe @ __cedge_add s e → v {
+// function compiling now: `key` (`D:k:callee:aix:`, …) under condition
+// `c`, one condition per edge (__cond_list_put).
+unsafe @ __cedge_add s key s c → v {
     : s cur ( nurl_sym_get g_cedges g_rpg_me_self )
-    ? ( str_contains_word cur e ) { ^ v } {}
     ? == 0 ( nurl_str_len cur ) { = g_cedge_fns ( __words_join g_cedge_fns g_rpg_me_self ) } {}
-    ( nurl_sym_def g_cedges g_rpg_me_self ? == 0 ( nurl_str_len cur ) ( nurl_str_cat e `` ) ( nurl_str_cat3 cur ` ` e ) )
+    ( nurl_sym_def g_cedges g_rpg_me_self ( __cond_list_put cur key c ) )
 }
 
 // __drop_note's edge of parameter `name` (or a field path of one), under
@@ -37963,16 +38019,16 @@ unsafe @ __cedge_add s e → v {
     ? < k 0 { ^ v } {}
     : s ks ( nurl_str_int k )
     : i lk ( bck_lib_kind ( bck_generic_base callee ) )
-    ? == lk 1 { ? == aix 0 { ( __cedge_add ( nurl_str_cat4 `B:` ks `:` c ) ) } {} ^ v } {}
+    ? == lk 1 { ? == aix 0 { ( __cedge_add ( nurl_str_cat3 `B:` ks `:` ) c ) } {} ^ v } {}
     ? == lk 2 { ^ v } {}
-    ( __cedge_add ( nurl_str_cat4 ( nurl_str_cat4 `D:` ks `:` callee ) `:` ( nurl_str_int aix ) ( nurl_str_cat `:` c ) ) )
+    ( __cedge_add ( nurl_str_cat4 ( nurl_str_cat4 `D:` ks `:` callee ) `:` ( nurl_str_int aix ) `:` ) c )
 }
 
 // __irealloc_edge_note's, under condition `c`.
 @ __irealloc_edge_note_c i syms s pn s callee i aix s c → v {
     : i k ( nurl_sym_word_index syms `__fn_param_names__` pn )
     ? < k 0 { ^ v } {}
-    ( __cedge_add ( nurl_str_cat4 ( nurl_str_cat4 `R:` ( nurl_str_int k ) `:` callee ) `:` ( nurl_str_int aix ) ( nurl_str_cat `:` c ) ) )
+    ( __cedge_add ( nurl_str_cat4 ( nurl_str_cat4 `R:` ( nurl_str_int k ) `:` callee ) `:` ( nurl_str_int aix ) `:` ) c )
 }
 
 // What a callee drops of an argument that is no binding but a value lent
@@ -38027,7 +38083,7 @@ unsafe @ __pderiv_note i syms s name s vt i rhs_tt s rhs_val s lend s sx → v {
     // of one, can be one.)
     ? == 0 ( nurl_str_len g_pderiv ) { ? == 0 ( nurl_sym_len syms `__fn_storage_params__` ) { ^ v } {} } {}
     : s srcs ? == rhs_tt TT_LPAREN lend ? == rhs_tt TT_DOT ( nurl_sym_get syms `__last_member_root__` ) ? ( is_ident_tok rhs_tt ) rhs_val ``
-    : b sxr & & ( __lend_unnamed srcs ) ! ( is_ident_tok rhs_tt ) ( __sx_lendy sx )
+    : b sxr & & & ( __lend_unnamed srcs ) ! ( is_ident_tok rhs_tt ) ( __sx_lendy sx ) ( __val_may_lend syms rhs_tt )
     ? & ! sxr | == 0 ( nurl_str_len srcs ) ( seq srcs `-` ) { ^ v } {}
     ? ! ( bck_is_heap_lty ( nurl_llty vt ) ) { ^ v } {}
     ? == rhs_tt TT_LPAREN { ? ( __shared_cell_get ( bck_generic_base ( nurl_sym_get syms `__last_call_name__` ) ) ) { ^ v } {} } {}
