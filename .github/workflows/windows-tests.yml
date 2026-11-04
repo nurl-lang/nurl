@@ -81,6 +81,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: get-nurl.ps1 replaces a running toolchain, started from pwsh
+        # `nurl upgrade` runs the installer with Windows PowerShell 5.1
+        # from inside the toolchain it replaces. Start 5.1 the same way,
+        # from pwsh through cmd, so it inherits pwsh 7's PSModulePath.
+        if: ${{ !inputs.update_goldens }}
+        shell: pwsh
+        run: |
+          $env:NURL_TEST_EXPECT_PWSH_PARENT = "1"
+          cmd /c "powershell -NoProfile -ExecutionPolicy Bypass -File tools\tests\test_installer_inuse.ps1"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Install LLVM/clang
         # windows-latest ships a clang via Visual Studio, but pin the
         # LLVM one on PATH explicitly so build.bat's probe is stable.
