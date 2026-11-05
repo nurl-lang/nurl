@@ -7,6 +7,10 @@ jobs:
   verify:
     runs-on: macos-15
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - uses: actions/checkout@v4
       - name: deps
@@ -17,31 +21,21 @@ jobs:
         env:
           PKG_CONFIG_PATH: /opt/homebrew/opt/sqlite/lib/pkgconfig:/opt/homebrew/opt/zstd/lib/pkgconfig
         run: ./build.sh --no-tests
-      - name: compile old and new test, printing worst_delay always
+      - name: compile the three-stamp test
+        run: ./nurl.sh tools/diag/saa_three.nu saa3
+      - name: the three-stamp test in a loop beside the full corpus (jobs=3)
+        env:
+          PKG_CONFIG_PATH: /opt/homebrew/opt/sqlite/lib/pkgconfig:/opt/homebrew/opt/zstd/lib/pkgconfig
         run: |
-          for t in new old; do
-            src=compiler/tests/sched_accept_admission.nu; [ $t = old ] && src=tools/diag/saa_old.nu
-            sed 's|? >= worst / y 2 {|? T {|' $src > tools/diag/saa_${t}_w.nu
-            grep -c "? T {" tools/diag/saa_${t}_w.nu
-            ./nurl.sh tools/diag/saa_${t}_w.nu saa_$t
+          ( NURL_TEST_JOBS=3 compiler/tests/run_tests.sh > corpus.log 2>&1; echo done > corpus.done ) &
+          i=0
+          while [ ! -f corpus.done ]; do
+            i=$((i+1))
+            ./saa3 | tr '
+' ' ' | sed -E 's/accepted=.*//' >> three.log; echo >> three.log
           done
-      - name: 60 runs each, idle, under 3 and 6 CPU hogs, and beside a corpus run
-        run: |
-          n=$(getconf _NPROCESSORS_ONLN); echo "cpus=$n"
-          dist() { sort -n | uniq -c | awk '{printf " %s:%s", $2, $1}'; echo; }
-          for hogs in 0 $n $((2*n)); do
-            for h in $(seq 1 $hogs); do ( while :; do :; done ) & done
-            for t in old new; do
-              printf "hogs=%s %s worst_delay(value:count):" $hogs $t
-              for i in $(seq 1 60); do ./saa_$t | sed -n 's/worst_delay=//p'; done | dist
-            done
-            kill $(jobs -p) 2>/dev/null; wait 2>/dev/null || true
-          done
-          # The CI shape: the corpus running with 3 jobs beside it.
-          ( NURL_TEST_JOBS=3 compiler/tests/run_tests.sh > corpus.log 2>&1 ) &
-          sleep 20
-          for t in old new; do
-            printf "corpus %s worst_delay(value:count):" $t
-            for i in $(seq 1 60); do ./saa_$t | sed -n 's/worst_delay=//p'; done | dist
-          done
-          wait || true
+          echo "runs=$i"
+          echo "w_connect distribution:"; sed -nE 's/.*w_connect=([0-9]+).*//p' three.log | sort -n | uniq -c | awk '{printf " %s:%s", $2, $1}'; echo
+          echo "w_arrival distribution:"; sed -nE 's/.*w_arrival=([0-9]+).*//p' three.log | sort -n | uniq -c | awk '{printf " %s:%s", $2, $1}'; echo
+          echo "runs where either >= 32:"; awk '{ split($1,a,"="); split($2,b,"="); if (a[2]>=32 || b[2]>=32) print }' three.log
+          grep -E "PASS [0-9]+ ·|sched_accept" corpus.log | head -5
