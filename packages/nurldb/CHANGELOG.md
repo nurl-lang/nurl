@@ -2,9 +2,29 @@
 
 ## [0.2.0] — unreleased
 
-Requires the NURL with std/net's `NetDialer` and std/net_sim.nu's `netsim_crash`.
+Requires NURL 0.88.0 (std/pfile.nu's `pfile_try_lock`, std/net's `NetDialer`,
+std/net_sim.nu's `netsim_crash`).
 
 ### Added
+
+- **A TEXT value may be longer than a page.** A row whose tuple would be
+  larger than 2 KiB keeps its longest TEXT values out of line, longest
+  first, each on a chain of overflow pages (`ovf.nu`), and the row holds
+  the value's length and first page. A value can be up to 2^31 - 1 bytes
+  long; until now an INSERT of a row larger than a page failed with "a row
+  larger than a page". The pages are written before the tuple that names
+  them and never change after, each logged whole, so redo rebuilds them
+  and a crash or a rollback leaves only unread pages, like a dead row
+  version. `tests/ovf_test.nu` covers every size edge, a scan, LIKE, an
+  UPDATE of either column, a rollback, four threads at once, a clean close
+  and a crash.
+- **The database directory is locked while it is open.** `db_open` takes an
+  exclusive lock on the file `lock` in the directory (`pfile_try_lock`:
+  flock(2), LockFileEx on Windows) and refuses a second open, by another
+  process or by this one: "the database is already open". Before, a second
+  open recovered from a log the first was still appending to, and both
+  wrote the same files. The lock goes with `db_close`, `db_crash` or the
+  process, so a killed server leaves no stale lock.
 
 - `serve_on db listener` — serve a listener the caller made: `tcp_listen`'s, or a node's of a simulated network (`netsim_listen`). It returns once the listener stops accepting (closed, or its node crashed) and the connections it accepted have ended; `serve` is `serve_on` over `tcp_listen`.
 - `client_connect_with dialer host port` — the client dialed through a std/net `NetDialer`: the kernel's, or a simulated network's node (`netsim_dialer`).
@@ -14,6 +34,13 @@ Requires the NURL with std/net's `NetDialer` and std/net_sim.nu's `netsim_crash`
 ### Changed
 
 - The checkpointer takes no last checkpoint when its server stops. What is committed is in the log, and recovery replays it.
+- The data file's format is version 2, which nurldb 0.1 cannot read when a
+  value is kept out of line. A version 1 database opens and becomes
+  version 2 at its first checkpoint. A database written by a newer
+  version than this one is refused instead of misread.
+- The SQL lexer's token type is `SqlTok`, not `Tok`. NURL has no
+  namespaces, and a program that imported both nurldb and the tokenizer
+  package (nurllama) had two types named `Tok`.
 
 ## [0.1.1] — 2026-10-26
 

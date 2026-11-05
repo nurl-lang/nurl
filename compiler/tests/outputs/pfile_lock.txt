@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+first:         held by this handle
+second:        held by another
+another file:  held by this handle
+second, after: held by this handle

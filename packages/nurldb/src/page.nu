@@ -47,6 +47,7 @@ $ `stdlib/std/deflate.nu`
 : i PT_LEAF 3
 : i PT_INNER 4
 : i PT_CLOG 5
+: i PT_OVERFLOW 6
 
 // "No page": a link that leads nowhere (page 0 is the meta page, which
 // nothing links to).

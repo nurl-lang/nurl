@@ -31,7 +31,10 @@ $ `deps/nurldb/src/nurldb.nu`
 ```
 
 A `Db` is shared by every thread that uses it; each thread works through
-a `Session` of its own.
+a `Session` of its own. It holds the directory's lock while it is open: a
+second `db_open` of the directory — from another process, or from this
+one — fails with "the database is already open" until `db_close` (or
+`db_crash`, or the process ending, killed or not) lets it go.
 
 The server and its client take the network from the caller as well:
 `serve_on db listener` serves any `TcpListener` (`tcp_listen`'s, or a
@@ -75,6 +78,7 @@ BY` takes a select-list alias or position.
 | buffer pool | `bufpool.nu` | frames under reader-writer latches; pins, dirty and clock bits are atomics; a page table under its own latch; clock eviction that never waits on a latched frame; a dirty victim is written after the log up to its LSN (the WAL rule), its checksum computed on a copy |
 | log | `wal.nu` | records `[len][crc][payload]`, LSN = log position; appenders copy into a shared buffer, one flusher thread writes and `fdatasync`s it and wakes every committer it covered: **group commit** |
 | heap | `heap.nu` | slotted pages of tuple versions (xmin, xmax, cmin, cmax); every change logged first, the same code redoing it |
+| overflow | `ovf.nu` | a row whose tuple would pass 2 KiB keeps its longest TEXT values on chains of overflow pages, written before the tuple and never changed after; a value may be up to 2^31 - 1 bytes |
 | transactions | `txn.nu` | ids, the commit log, snapshots, visibility; a lock manager with shared/exclusive locks, FIFO waiting and a waits-for graph checked at every wait (**deadlock detection**) |
 | tables | `table.nu` | MVCC insert/update/delete/scan; a writer meeting a version another running transaction claimed waits for it, one claimed by a transaction that committed after its snapshot gets a **serialization failure** |
 | keys, B+tree | `keys.nu`, `btree.nu` | memcmp-ordered keys; **latch crabbing** — readers hand over hand under read latches, inserts optimistic under the leaf's write latch, pessimistic top-down with ancestors let go above every node with room; root splits through an anchor page |
@@ -107,6 +111,7 @@ done
 | `db_test` | catalog, unique keys, a waiter for a key a running transaction holds, 10 racing threads, CREATE INDEX on a populated table, reopen |
 | `sql_test` | the SQL above, statement by statement |
 | `conc_test` | 8 SQL sessions moving money while 2 total it; a 200 000-row GROUP BY on 4 threads and on 1 |
+| `ovf_test` | TEXT of every size edge up to 300 KB, by key, by scan and LIKE, through UPDATEs, a rollback, four threads, a clean close and a crash; the directory lock against this process and another |
 | `crash_test` | a child with 4 threads is killed with SIGKILL mid-flight, twice; every acknowledged commit survives and the money adds up; a transaction running at the crash stays undone once new ones commit |
 
 Every test runs clean under AddressSanitizer and LeakSanitizer
@@ -120,8 +125,8 @@ one-thread plan (scan, filter, hash aggregate).
 
 ## Limits
 
-- No VACUUM yet: dead row versions and their index entries stay, and the
-  file only grows. Pages are never reused.
+- No VACUUM yet: dead row versions, their index entries and their
+  overflow pages stay, and the file only grows. Pages are never reused.
 - Snapshot isolation, not serializable (write skew is possible).
 - No subqueries, outer joins, `DROP`, or `ALTER`; DDL runs outside a
   transaction. One join per query.

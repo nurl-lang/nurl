@@ -297,6 +297,20 @@ int fcntl(int fd, int cmd, long arg) {
     return dup(fd);
 }
 
+/* flock(2), which nurl_fd_try_lock calls to keep a second opener off a
+ * file (a database directory's lock). The guest is the one program on
+ * its machine and its disk is its own, so there is no other process to
+ * keep out, and the lock is granted. What it does not do here is refuse
+ * a SECOND open of the same file inside the guest, which flock(2) does
+ * on a host: the disk layer has no per-file lock to ask (stdlib/std/
+ * pfile.nu says so where pfile_try_lock is documented). A descriptor
+ * that is not open is EBADF, as it is to the kernel. */
+int flock(int fd, int op) {
+    (void)op;
+    if (!disk_is_fd(fd) && !ifs_is_fd(fd)) { nl_errno_slot = 9 /* EBADF */; return -1; }
+    return 0;
+}
+
 /* Close a saved slot; ordinary descriptors go to fs_close_fd. */
 int vfs_close_saved(int fd) {
     if (fd < VFS_SAVED_BASE || fd >= VFS_SAVED_BASE + VFS_SAVED_MAX) return 0;

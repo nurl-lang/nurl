@@ -43624,13 +43624,40 @@ unsafe @ gen_assign i lex i syms i cg → s {
     ^ lk
 }
 
-// A library handle's control-block pointer: its first scalar — field 0,
-// or field 0 of a `( Shared T )` there (stdlib/core/rcbox.nu).
+// A library handle's control-block pointer: field 0, followed through
+// every one-field struct that wraps it. A `( Shared T )` is `{ s ctl }`
+// (stdlib/core/rcbox.nu), and a `( Locked T )` is a `( Shared … )` of its
+// own, so a handle that opens with a Locked — gpukit's `GpuKit { ( Locked
+// GkState ) st … }` — reaches its pointer two levels down. This followed
+// one level (the casts' __cast_f0_path), handed `icmp eq i8*` the Locked
+// struct itself, and nurllama no longer compiled. "" when field 0 does not
+// end at a pointer: the handle has no identity to compare, and every
+// caller then falls back to what it would do without one.
 @ __libh_key i cg s ty s val → s {
+    : ~ s t ( nurl_sym_get2 g_root_syms ( nurl_str_slice ty 1 - ( nurl_str_len ty ) 1 ) `__idx_0__type` )
+    : ~ s p `0`
+    : ~ i d 0
+    ~ & < d 8 ( __libh_wraps t ) {
+        = t ( nurl_sym_get2 g_root_syms ( nurl_str_slice t 1 - ( nurl_str_len t ) 1 ) `__idx_0__type` )
+        = p ( nurl_str_cat p `, 0` )
+        = d + d 1
+    }
+    : i n ( nurl_str_len t )
+    ? | == n 0 != ( nurl_str_get t - n 1 ) 42 { ^ ( nurl_str_cat `` `` ) } {}
     : s r ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty ty ) ) ( nurl_print ` ` ) ( nurl_print val )
-    ( nurl_print `, ` ) ( nurl_print ( __cast_f0_path g_root_syms ( nurl_str_slice ty 1 - ( nurl_str_len ty ) 1 ) ) ) ( nurl_print `\n` )
+    ( nurl_print `, ` ) ( nurl_print p ) ( nurl_print `\n` )
     ^ r
+}
+
+// Is `t` a struct of exactly one field (not an enum, not a pointer)?
+@ __libh_wraps s t → b {
+    : i n ( nurl_str_len t )
+    ? | < n 2 != ( nurl_str_get t 0 ) 37 { ^ F } {}
+    ? == ( nurl_str_get t - n 1 ) 42 { ^ F } {}
+    : s nm ( nurl_str_slice t 1 - n 1 )
+    ? != 0 ( nurl_sym_len2 g_root_syms nm `__variants` ) { ^ F } {}
+    ^ ( seq ( nurl_sym_get2 g_root_syms nm `__field_count` ) `1` )
 }
 
 // A store about to replace the `fty` at `gep` (the field `place`): every

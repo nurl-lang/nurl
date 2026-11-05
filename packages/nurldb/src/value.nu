@@ -7,7 +7,9 @@
 //   INT   8 bytes, little-endian two's complement
 //   REAL  8 bytes, the IEEE 754 bits
 //   BOOL  1 byte
-//   TEXT  u32 length, then the bytes
+//   TEXT  u32 length, then the bytes — or, for a value kept out of line
+//         on overflow pages (ovf.nu), u32 length | 2^31 and the u32
+//         number of its first page
 //
 // Values compare the way SQL orders them within one type (NULL sorts
 // first, and = with NULL is decided by the caller: SQL's three-valued
@@ -142,18 +144,40 @@ $ `stdlib/std/float.nu`
 
 // ── row bytes ──────────────────────────────────────────────────────────
 
+// A TEXT length with this bit set names a value kept out of line.
+: i TEXT_OUT 2147483648
+
+// The bytes a value kept out of line takes in its row: its length and
+// its first overflow page.
+: i TEXT_OUT_SIZE 8
+
+// Column `k`'s first overflow page, or 0 when it is in the row (`ext` is
+// empty when every column is).
+@ __ext_at ( Vec i ) ext i k → i { ^ ? < k ( vec_len [i] ext ) ( vec_at [i] ext k ) 0 }
+
 // The encoded size of `row`'s columns (bitmap included).
-@ row_size ( Vec Value ) row → i {
+@ row_size ( Vec Value ) row → i { ^ ( row_size_ext row ( vec_new [i] ) ) }
+
+// The same, with the TEXT columns `ext` names kept out of line.
+@ row_size_ext ( Vec Value ) row ( Vec i ) ext → i {
     : i n ( vec_len [Value] row )
     : ~ i size / + n 7 8
+    : ~ i k 0
     ~ c row {
-        = size + size ?? c { VNull → 0 VInt _ → 8 VReal _ → 8 VBool _ → 1 VText s → + 4 ( string_len s ) }
+        : i out ( __ext_at ext k )
+        = size + size ?? c { VNull → 0 VInt _ → 8 VReal _ → 8 VBool _ → 1 VText s → ? > out 0 TEXT_OUT_SIZE + 4 ( string_len s ) }
+        = k + k 1
     }
     ^ size
 }
 
 // Encode `row` at `off` of `dst` (which holds row_size bytes from there).
-@ row_encode ( Vec Value ) row ( Slice u ) dst i off → v {
+@ row_encode ( Vec Value ) row ( Slice u ) dst i off → v { ( row_encode_ext row ( vec_new [i] ) dst off ) }
+
+// The same, with the TEXT columns `ext` names kept out of line: column k,
+// when ext[k] > 0, is stored as its length and ext[k], the first of the
+// overflow pages that hold its bytes.
+@ row_encode_ext ( Vec Value ) row ( Vec i ) ext ( Slice u ) dst i off → v {
     : i n ( vec_len [Value] row )
     : i nb / + n 7 8
     : ~ i k 0
@@ -171,17 +195,27 @@ $ `stdlib/std/float.nu`
             VBool x → { ( slice_put [u] dst at # u ? x 1 0 ) = at + at 1 }
             VText s → {
                 : i len ( string_len s )
-                ( slice_put_u32_le dst at len )
-                ( slice_copy [u] ( slice_window [u] dst + at 4 len ) ( string_bytes s ) )
-                = at + + at 4 len
+                : i out ( __ext_at ext k )
+                ? > out 0 {
+                    ( slice_put_u32_le dst at | len TEXT_OUT )
+                    ( slice_put_u32_le dst + at 4 out )
+                    = at + at TEXT_OUT_SIZE
+                } {
+                    ( slice_put_u32_le dst at len )
+                    ( slice_copy [u] ( slice_window [u] dst + at 4 len ) ( string_bytes s ) )
+                    = at + + at 4 len
+                }
             }
         }
         = k + k 1
     }
 }
 
-// Decode `ncols` columns of the types `types` from `src` at `off`.
-@ row_decode ( Slice u ) src i off ( Vec i ) types → ( Vec Value ) {
+// Decode `ncols` columns of the types `types` from `src` at `off`. A TEXT
+// column kept out of line decodes as NULL, and its column, length and
+// first overflow page are appended to `outs` (three entries each): the
+// caller reads the value from its pages (ovf.nu's tuple_row_full).
+@ row_decode ( Slice u ) src i off ( Vec i ) types inout ( Vec i ) outs → ( Vec Value ) {
     : i n ( vec_len [i] types )
     : i nb / + n 7 8
     : ( Vec Value ) row ( vec_with_cap [Value] n )
@@ -196,10 +230,18 @@ $ `stdlib/std/float.nu`
             ? == t TY_BOOL { ( vec_push [Value] row @ Value { VBool != 0 # i ( slice_at [u] src at ) } ) = at + at 1 } {}
             ? == t TY_TEXT {
                 : i len ( slice_u32_le src at )
-                : String s ( string_new )
-                ( string_push_window s src + at 4 len )
-                ( vec_push [Value] row @ Value { VText s } )
-                = at + + at 4 len
+                ? != 0 & len TEXT_OUT {
+                    ( vec_push [i] outs k )
+                    ( vec_push [i] outs & len - TEXT_OUT 1 )
+                    ( vec_push [i] outs ( slice_u32_le src + at 4 ) )
+                    ( vec_push [Value] row @ Value { VNull } )
+                    = at + at TEXT_OUT_SIZE
+                } {
+                    : String s ( string_new )
+                    ( string_push_window s src + at 4 len )
+                    ( vec_push [Value] row @ Value { VText s } )
+                    = at + + at 4 len
+                }
             } {}
         }
         = k + k 1

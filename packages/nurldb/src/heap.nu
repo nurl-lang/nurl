@@ -136,19 +136,24 @@ $ `value.nu`
 }
 
 // A tuple's bytes for `row`, made by `xmin` in its command `cmin`.
-@ tuple_build i xmin i cmin ( Vec Value ) row → ( Vec u ) {
-    : i n + TH_SIZE ( row_size row )
+@ tuple_build i xmin i cmin ( Vec Value ) row → ( Vec u ) { ^ ( tuple_build_ext xmin cmin row ( vec_new [i] ) ) }
+
+// The same, with the TEXT columns `ext` names kept out of line (value.nu's
+// row_encode_ext; ovf.nu wrote their pages).
+@ tuple_build_ext i xmin i cmin ( Vec Value ) row ( Vec i ) ext → ( Vec u ) {
+    : i n + TH_SIZE ( row_size_ext row ext )
     : ( Vec u ) t ( vec_zeroed [u] n )
     : ( Slice u ) ts ( slice_from_vec [u] t )
     ( slice_put_u64_le ts TH_XMIN xmin )
     ( slice_put_u32_le ts TH_CMIN cmin )
     ( slice_put_u16_le ts TH_NCOLS ( vec_len [Value] row ) )
-    ( row_encode row ts TH_SIZE )
+    ( row_encode_ext row ext ts TH_SIZE )
     ^ t
 }
 
-// The row a tuple holds.
-@ tuple_row ( Slice u ) t ( Vec i ) types → ( Vec Value ) { ^ ( row_decode t TH_SIZE types ) }
+// The row a tuple holds, its out-of-line TEXT columns NULL and named in
+// `outs` (value.nu's row_decode): ovf.nu's tuple_row_full reads them.
+@ tuple_row ( Slice u ) t ( Vec i ) types inout ( Vec i ) outs → ( Vec Value ) { ^ ( row_decode t TH_SIZE types outs ) }
 
 // ── logged changes ─────────────────────────────────────────────────────
 

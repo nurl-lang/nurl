@@ -53,13 +53,13 @@ $ `stdlib/std/thread.nu`
 : ~ i g_api_style 0
 
 // Config for the wizard-started server (`nurllama start`): the default
-// model the web UI chats with, the bearer token (empty = open access),
-// and the SQLite history path.
+// model the web UI chats with and the bearer token (empty = open access).
+// The conversation history is history.nu's, opened once at startup.
 : ~ i g_api_auth 0
 
 // The server's text settings: the resident model's name (it changes as
 // requests load and unload models), the model store's root, and the
-// wizard's default model, bearer token, history path and --weights file.
+// wizard's default model, bearer token and --weights file.
 // Handlers run on many threads, so they live in a Locked struct and are
 // read as copies; as plain string globals, a model switch freed the name
 // another request was comparing against.
@@ -68,24 +68,22 @@ $ `stdlib/std/thread.nu`
     String root
     String token
     String model
-    String histpath
     String weights  // serve --weights (empty = none)
 }
 
 @ __api_cfg0 → ( Locked ApiCfg ) {
-    ^ ( locked_new [ApiCfg] @ ApiCfg { ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) } )
+    ^ ( locked_new [ApiCfg] @ ApiCfg { ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) } )
 }
 
 : ( Locked ApiCfg ) g_api_cfg ( __api_cfg0 )
 
-// Setting `k` (0 name, 1 root, 2 token, 3 model, 4 histpath, 5 weights).
+// Setting `k` (0 name, 1 root, 2 token, 3 model, 5 weights).
 @ __api_cfg_set i k s v → v {
     : ~ ApiCfg c ( locked_take [ApiCfg] g_api_cfg )
     ? == k 0 { = . c name ( string_from v ) } {}
     ? == k 1 { = . c root ( string_from v ) } {}
     ? == k 2 { = . c token ( string_from v ) } {}
     ? == k 3 { = . c model ( string_from v ) } {}
-    ? == k 4 { = . c histpath ( string_from v ) } {}
     ? == k 5 { = . c weights ( string_from v ) } {}
     ( locked_restore [ApiCfg] g_api_cfg c )
 }
@@ -98,7 +96,6 @@ $ `stdlib/std/thread.nu`
     ? == k 1 { = r ( string_from ( string_data . c root ) ) } {}
     ? == k 2 { = r ( string_from ( string_data . c token ) ) } {}
     ? == k 3 { = r ( string_from ( string_data . c model ) ) } {}
-    ? == k 4 { = r ( string_from ( string_data . c histpath ) ) } {}
     ? == k 5 { = r ( string_from ( string_data . c weights ) ) } {}
     ( locked_restore [ApiCfg] g_api_cfg c )
     ^ r
@@ -112,15 +109,11 @@ $ `stdlib/std/thread.nu`
 
 @ __api_cfg_model → String { ^ ( __api_cfg_get 3 ) }
 
-@ __api_cfg_histpath → String { ^ ( __api_cfg_get 4 ) }
-
 @ __api_cfg_weights → String { ^ ( __api_cfg_get 5 ) }
 
 @ __api_set_token s tok → v { ( __api_cfg_set 2 tok ) }
 
 @ __api_set_model s m → v { ( __api_cfg_set 3 m ) }
-
-@ __api_set_histpath s p → v { ( __api_cfg_set 4 p ) }
 
 @ __api_set_name s name → v { ( __api_cfg_set 0 name ) }
 
@@ -555,7 +548,7 @@ i npredict f temp i topk f topp i seed → b {
     }
 }
 
-// ── the web chat UI: cookie sessions + SQLite history ───────────────
+// ── the web chat UI: cookie sessions + the nurldb history ────────────
 
 // The per-client GUID. Read from the `nl_client` cookie; minted (and
 // set on the response) on first contact. Each browser thereby carries
@@ -689,7 +682,7 @@ i npredict f temp i topk f topp i seed → b {
     ? ( __web_authed req ) {} { ^ ( __web_unauth ) }
     : HttpResponse resp ( response_new 200 )
     : String guid ( __web_guid req resp )
-    : b _e ( hist_ensure_client ( string_data ( __api_cfg_histpath ) ) ( string_data guid ) ( hist_now ) )
+    : b _e ( hist_ensure_client ( string_data guid ) ( hist_now ) )
     : Json o ( json_obj_new )
     : b _1 ( json_obj_set o `client` ( json_str_lit ( string_data guid ) ) )
     : b _2 ( json_obj_set o `model` ( json_str_lit ( string_data ( __api_cfg_model ) ) ) )
@@ -703,7 +696,7 @@ i npredict f temp i topk f topp i seed → b {
     ? ( __web_authed req ) {} { ^ ( __web_unauth ) }
     : HttpResponse resp ( response_new 200 )
     : String guid ( __web_guid req resp )
-    : Json arr ( hist_list_conversations ( string_data ( __api_cfg_histpath ) ) ( string_data guid ) )
+    : Json arr ( hist_list_conversations ( string_data guid ) )
     : String txt ( json_stringify arr )
     : HttpResponse r ( __web_json resp ( string_data txt ) )
     ^ r
@@ -721,12 +714,12 @@ i npredict f temp i topk f topp i seed → b {
         }
         F → {}
     }
-    : String owner ( hist_conversation_owner ( string_data ( __api_cfg_histpath ) ) conv )
+    : String owner ( hist_conversation_owner conv )
     : b owns ( nurl_str_eq ( string_data owner ) ( string_data guid ) )
     ? owns {} {
         ^ ( response_text 404 `{"error":"not found"}\n` )
     }
-    : Json arr ( hist_get_messages ( string_data ( __api_cfg_histpath ) ) conv )
+    : Json arr ( hist_get_messages conv )
     : String txt ( json_stringify arr )
     : HttpResponse r ( __web_json resp ( string_data txt ) )
     ^ r
@@ -744,7 +737,7 @@ i npredict f temp i topk f topp i seed → b {
         }
         F → {}
     }
-    : b ok ( hist_delete_conversation ( string_data ( __api_cfg_histpath ) ) conv ( string_data guid ) )
+    : b ok ( hist_delete_conversation conv ( string_data guid ) )
     : Json o ( json_obj_new )
     : b _1 ( json_obj_set o `ok` ( json_bool ok ) )
     : String txt ( json_stringify o )
@@ -759,7 +752,7 @@ i npredict f temp i topk f topp i seed → b {
     ? ( __web_authed req ) {} { ^ ( __web_unauth ) }
     : HttpResponse resp ( response_new 200 )
     : String guid ( __web_guid req resp )
-    : b _e ( hist_ensure_client ( string_data ( __api_cfg_histpath ) ) ( string_data guid ) ( hist_now ) )
+    : b _e ( hist_ensure_client ( string_data guid ) ( hist_now ) )
     : ~ i rc_status 200
     : ~ String out_txt ( string_new )
     ?? ( __api_body_json req ) {
@@ -780,18 +773,18 @@ i npredict f temp i topk f topp i seed → b {
                 }
                 // an unknown or someone-else's conversation starts a new one
                 ? >= conv 0 {
-                    : String own ( hist_conversation_owner ( string_data ( __api_cfg_histpath ) ) conv )
+                    : String own ( hist_conversation_owner conv )
                     ? ( nurl_str_eq ( string_data own ) ( string_data guid ) ) {} { = conv -1 }
                 } {}
                 ? < conv 0 {
-                    = conv ( hist_new_conversation ( string_data ( __api_cfg_histpath ) ) ( string_data guid ) ( string_data ( __api_cfg_model ) ) ( hist_now ) )
+                    = conv ( hist_new_conversation ( string_data guid ) ( string_data ( __api_cfg_model ) ) ( hist_now ) )
                 } {}
                 // the prior turns (before adding this one) are the context
-                : Json history ( hist_get_messages ( string_data ( __api_cfg_histpath ) ) conv )
-                : b _u ( hist_add_message ( string_data ( __api_cfg_histpath ) ) conv `user` ( string_data content ) ( hist_now ) )
+                : Json history ( hist_get_messages conv )
+                : b _u ( hist_add_message conv `user` ( string_data content ) ( hist_now ) )
                 ?? ( __web_reply history ( string_data content ) ) {
                     T reply → {
-                        : b _a ( hist_add_message ( string_data ( __api_cfg_histpath ) ) conv `assistant` ( string_data reply ) ( hist_now ) )
+                        : b _a ( hist_add_message conv `assistant` ( string_data reply ) ( hist_now ) )
                         : Json o ( json_obj_new )
                         : b _1 ( json_obj_set o `conversation_id` ( json_int conv ) )
                         : b _2 ( json_obj_set o `reply` ( json_str_lit ( string_data reply ) ) )
@@ -807,14 +800,13 @@ i npredict f temp i topk f topp i seed → b {
             }
         }
     }
-    ? == rc_status 200 {
-        : HttpResponse r ( __web_json resp ( string_data out_txt ) )
-        ^ r
-    } {}
-    : HttpResponse er ( response_text rc_status `` )
-    ( response_set_header er `Content-Type` `application/json` )
-    ( response_set_body_str er ( string_data out_txt ) )
-    ^ er
+    // A failure answers on `resp` too: it carries the Set-Cookie a first
+    // contact was given, and the conversation just made for that cookie
+    // stays reachable (a fresh response dropped it, and the client never
+    // saw its own conversation again).
+    = . resp status rc_status
+    : HttpResponse r ( __web_json resp ( string_data out_txt ) )
+    ^ r
 }
 
 // GET / — the web chat app for a browser (Accept: text/html), or the
@@ -858,8 +850,14 @@ i npredict f temp i topk f topp i seed → b {
     = g_api_auth ? ( nurl_str_eq ( string_data . cfg auth ) `token` ) 1 0
     ( __api_set_token ( string_data . cfg token ) )
     ( __api_set_model ( string_data . cfg model ) )
-    : String hp ( hist_db_path root )
-    ( __api_set_histpath ( string_data hp ) )
+    // The history before the port: a second server on this NURLLAMA_HOME
+    // (the database's lock) fails here, before it serves anything.
+    : String hdir ( hist_dir root )
+    : String herr ( hist_open hdir )
+    ? > ( string_len herr ) 0 {
+        ( nurl_eprintln ( string_data herr ) )
+        ^ 1
+    } {}
 
     : HttpApp a ( http_app_new )
     ( http_app_workers a 1 )
@@ -882,5 +880,6 @@ i npredict f temp i topk f topp i seed → b {
     ( nurl_print `\n` )
     : i rc ( http_app_listen a ( string_data . cfg host ) . cfg port )
     ( __api_unload )
+    ( hist_close )
     ^ rc
 }

@@ -3,6 +3,10 @@
 //
 // A database is a directory:
 //
+//   lock   held (pfile_try_lock) by the one Db that has the directory open:
+//          a second open — another process, or this one again — is
+//          refused instead of writing the same files. The lock goes with
+//          db_close, db_crash or the process.
 //   data   the pages (page.nu); page 0 is the meta page
 //   log    the write-ahead log (wal.nu)
 //   clog   every transaction's fate as of the last checkpoint
@@ -10,7 +14,12 @@
 // The meta page, after the common header:
 //
 //   32  u64 magic        "NURLDB01"
-//   40  u32 version
+//   40  u32 version      2: a TEXT value may be kept out of line on
+//                        overflow pages (ovf.nu), which version 1 —
+//                        nurldb 0.1 — cannot read. Every open of an
+//                        existing database checkpoints after recovery,
+//                        so a version 1 one is version 2 before it is
+//                        written to
 //   44  u32 nurldb_tables root      the catalog's own tables (heap
 //   48  u32 nurldb_columns root     tables like any other, made by the
 //   52  u32 nurldb_indexes root     bootstrap transaction)
@@ -67,7 +76,7 @@ $ `keys.nu`
 $ `btree.nu`
 
 : i META_MAGIC 3544395820347757646
-: i META_VERSION 1
+: i META_VERSION 2
 : i M_MAGIC 32
 : i M_VERSION 40
 : i M_TABLES 44
@@ -139,6 +148,8 @@ $ `btree.nu`
     Table sys_tables
     Table sys_columns
     Table sys_indexes
+    // The directory's lock: held until db_close or db_crash lets it go.
+    ( Locked ? PFile ) lock
 }
 
 : Db { ( Arc DbImpl ) a }
@@ -651,14 +662,22 @@ $ `btree.nu`
         ?? ( dir_create_all dir ) { T _ → {} F _ → { ^ @ !Db String { F ( string_from `nurldb: cannot create the database directory` ) } } }
     } {}
     : String dirs ( string_from dir )
+    // The lock before anything else is read: recovery from a log another
+    // Db is still appending to would replay half of its work.
+    : String kpath ( __path dirs `/lock` )
+    : PFile lk ?? ( pfile_open ( string_data kpath ) PFILE_CREATE ) { T h → h F _ → { ^ @ !Db String { F ( string_from `nurldb: cannot open the database's lock file` ) } } }
+    ?? ( pfile_try_lock lk ) {
+        T mine → { ? mine {} { ^ @ !Db String { F ( string_from `nurldb: the database is already open (by another process, or another db_open in this one)` ) } } }
+        F _ → { ^ @ !Db String { F ( string_from `nurldb: cannot lock the database directory` ) } }
+    }
     : String dpath ( __path dirs `/data` )
     : String lpath ( __path dirs `/log` )
     ? ( file_exists ( string_data dpath ) ) {
         : i end ?? ( __recover dirs o ) { T e → e F e → { ^ @ !Db String { F e } } }
         ?? ( wal_reset ( string_data lpath ) end ) { T _ → {} F e → { ^ @ !Db String { F e } } }
-        ^ ( __open dirs o F )
+        ^ ( __open dirs o F lk )
     } {}
-    ^ ( __open dirs o T )
+    ^ ( __open dirs o T lk )
 }
 
 // The meta page's fields, read once.
@@ -675,6 +694,7 @@ $ `btree.nu`
     : PageRead meta ( pool_read . st pool 0 )
     : ( Slice u ) mp ( page_bytes meta )
     ? != ( slice_u64_le mp M_MAGIC ) META_MAGIC { ^ @ !Meta String { F ( string_from `nurldb: not a nurldb database` ) } } {}
+    ? > ( slice_u32_le mp M_VERSION ) META_VERSION { ^ @ !Meta String { F ( string_from `nurldb: the database was written by a newer nurldb` ) } } {}
     ^ @ !Meta String { T @ Meta {
             ( slice_u32_le mp M_TABLES ) ( slice_u32_le mp M_COLUMNS ) ( slice_u32_le mp M_INDEXES )
             ( slice_u64_le mp M_NEXT_XID ) ( slice_u64_le mp M_REDO ) ( slice_u64_le mp M_NEXT_OID )
@@ -718,7 +738,7 @@ $ `btree.nu`
 }
 
 // Open the files for use (after recovery, or a new database).
-@ __open String dirs DbOpts o b fresh → !Db String {
+@ __open String dirs DbOpts o b fresh PFile lk → !Db String {
     : String dpath ( __path dirs `/data` )
     : String lpath ( __path dirs `/log` )
     : String cpath ( __path dirs `/clog` )
@@ -749,6 +769,7 @@ $ `btree.nu`
             ( rw_new [i] 0 ) ( mutex_new )
             ( atomic_new . m next_oid ) ( atomic_new . m next_xid )
             st_t st_c st_i
+            ( locked_new [? PFile] @ ?PFile { T lk } )
         } ) }
     ( __load_catalog d )
     ? fresh { ( db_checkpoint d ) } {}
@@ -861,6 +882,9 @@ $ `btree.nu`
         ( slice_put_u64_le mp M_NEXT_XID ? > xid_floor nx xid_floor nx )
         ( slice_put_u64_le mp M_REDO redo )
         ( slice_put_u64_le mp M_NEXT_OID next_oid )
+        // A version 1 database opened here may hold out-of-line values from
+        // now on: it is version 2.
+        ( slice_put_u32_le mp M_VERSION META_VERSION )
         ( __bt_image_db st meta )
     }
     ( wal_flush_all . st wal )
@@ -869,10 +893,14 @@ $ `btree.nu`
     ( pool_set_redo . st pool ( wal_next . st wal ) )
 }
 
-// Let go of the database: a checkpoint, and the log flusher stopped.
+// Let go of the database: a checkpoint, the log flusher stopped, and the
+// directory's lock let go — the directory may be opened again, by this
+// process too, while copies of this handle are still around (they must not
+// be used).
 @ db_close Db d → v {
     ( db_checkpoint d )
     ( wal_close . . ( db_impl d ) st wal )
+    ( locked_set [? PFile] . ( db_impl d ) lock @ ?PFile { F } )
 }
 
 // The database as a killed process leaves it: the log's flusher writes
@@ -883,7 +911,11 @@ $ `btree.nu`
 // (std/net_sim.nu's netsim_crash) and restarts it. Consumes this handle;
 // no session may still be using a copy (serve_on returns only once its
 // connections have ended).
-@ db_crash sink Db d → v { ( wal_close . . ( db_impl d ) st wal ) }
+@ db_crash sink Db d → v {
+    ( wal_close . . ( db_impl d ) st wal )
+    // A killed process's lock goes with it.
+    ( locked_set [? PFile] . ( db_impl d ) lock @ ?PFile { F } )
+}
 
 // Statements run under the checkpoint latch, shared.
 @ db_stmt_latch Db d → ( RGuard i ) { ^ ( rw_read [i] . ( db_impl d ) ckpt ) }
