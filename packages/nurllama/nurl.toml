@@ -17,4 +17,4 @@ gpukit = { path = "../gpukit", version = "^0.11.13" }
 tensor = { path = "../tensor", version = "^0.6" }
 
 hub = { path = "../hub", version = "^0" }
-nurldb = { path = "../nurldb", version = "^0.2" }
+nurldb = { path = "../nurldb", version = "^0.3" }

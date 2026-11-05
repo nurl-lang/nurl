@@ -20,10 +20,8 @@ $ `stdlib/std/rng.nu`
 $ `stdlib/std/time.nu`
 $ `nurldb.nu`
 
-: s VERSION `0.2.0`
-
 @ usage → i {
-    ( nurl_println ( nurl_str_cat `nurldb ` VERSION ) )
+    ( nurl_println ( nurl_str_cat `nurldb ` ( pkg_version ) ) )
     ( nurl_println `usage: nurldb DIR [-c SQL] | serve DIR [PORT] | client [HOST] [PORT] | bench DIR [THREADS] [SECONDS]` )
     ^ 2
 }
@@ -180,7 +178,7 @@ $ `nurldb.nu`
     ? < argc 2 { ^ ( usage ) } {}
     : s cmd ( nurl_argv_get 1 )
     ? | != 0 ( nurl_str_eq cmd `-h` ) != 0 ( nurl_str_eq cmd `--help` ) { ^ ( usage ) } {}
-    ? != 0 ( nurl_str_eq cmd `--version` ) { ( nurl_println ( nurl_str_cat `nurldb ` VERSION ) ) ^ 0 } {}
+    ? != 0 ( nurl_str_eq cmd `--version` ) { ( nurl_println ( nurl_str_cat `nurldb ` ( pkg_version ) ) ) ^ 0 } {}
     ? != 0 ( nurl_str_eq cmd `serve` ) {
         ? < argc 3 { ^ ( usage ) } {}
         : i port ? > argc 3 ( nurl_str_to_int ( nurl_argv_get 3 ) ) 5433
