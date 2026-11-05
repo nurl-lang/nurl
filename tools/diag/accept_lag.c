@@ -16,6 +16,8 @@
 #include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
+#include <poll.h>
+#include <sched.h>
 #if defined(__APPLE__) || defined(__FreeBSD__)
 #include <sys/event.h>
 #define KQ 1
@@ -55,7 +57,7 @@ static int cmp(const void *a, const void *b) { long long x = *(const long long *
 int main(int argc, char **argv) {
     int hogs = argc > 1 ? atoi(argv[1]) : 0;
     int every = argc > 2 ? atoi(argv[2]) : 1;       /* poll every Nth tick */
-    int sysc = argc > 3 ? atoi(argv[3]) : 0;        /* a cheap syscall every tick */
+    int sysc = argc > 3 ? atoi(argv[3]) : 0;        /* every tick: 1 getppid, 2 kevent(empty kq), 3 sched_yield, 4 poll(listener) */
     int l = socket(AF_INET, SOCK_STREAM, 0);
     int one = 1; setsockopt(l, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
     struct sockaddr_in a; memset(&a, 0, sizeof a);
@@ -64,6 +66,7 @@ int main(int argc, char **argv) {
     socklen_t al = sizeof a; getsockname(l, (struct sockaddr *)&a, &al); port = ntohs(a.sin_port);
     fcntl(l, F_SETFL, fcntl(l, F_GETFL) | O_NONBLOCK);
 #ifdef KQ
+    int q2 = kqueue();
     int q = kqueue(); struct kevent ev; EV_SET(&ev, l, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, NULL); kevent(q, &ev, 1, NULL, 0, NULL);
 #else
     int q = epoll_create1(0); struct epoll_event ev = { .events = EPOLLIN | EPOLLET, .data.fd = l }; epoll_ctl(q, EPOLL_CTL_ADD, l, &ev);
@@ -82,7 +85,12 @@ int main(int argc, char **argv) {
 #endif
         if (n <= 0) {
             long long t0 = now_ns(); while (now_ns() - t0 < 20000) {}
-            if (sysc) (void)getppid();
+            if (sysc == 1) (void)getppid();
+#ifdef KQ
+            else if (sysc == 2) { struct kevent o2[1]; struct timespec z2 = {0, 0}; (void)kevent(q2, NULL, 0, o2, 1, &z2); }
+#endif
+            else if (sysc == 3) sched_yield();
+            else if (sysc == 4) { struct pollfd pf = { .fd = l, .events = POLLIN }; (void)poll(&pf, 1, 0); }
             atomic_fetch_add(&ticks, 1);
             continue;
         }

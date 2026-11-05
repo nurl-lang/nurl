@@ -16,8 +16,6 @@ jobs:
       - run: |
           n=$(getconf _NPROCESSORS_ONLN)
           echo "cpus=$n"
-          for h in 0 $n; do
-            ./accept_lag $h 1 0
-            ./accept_lag $h 16 0
-            ./accept_lag $h 16 1
+          for rep in 1 2; do
+            for a in 0 1 2 3 4; do ./accept_lag $n 16 $a; done
           done
