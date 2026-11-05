@@ -54,6 +54,8 @@ static int cmp(const void *a, const void *b) { long long x = *(const long long *
 
 int main(int argc, char **argv) {
     int hogs = argc > 1 ? atoi(argv[1]) : 0;
+    int every = argc > 2 ? atoi(argv[2]) : 1;       /* poll every Nth tick */
+    int sysc = argc > 3 ? atoi(argv[3]) : 0;        /* a cheap syscall every tick */
     int l = socket(AF_INET, SOCK_STREAM, 0);
     int one = 1; setsockopt(l, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
     struct sockaddr_in a; memset(&a, 0, sizeof a);
@@ -72,12 +74,15 @@ int main(int argc, char **argv) {
     while (got < N) {
 #ifdef KQ
         struct kevent out[4]; struct timespec z = {0, 0};
-        int n = kevent(q, NULL, 0, out, 4, &z);
+        int n = 0;
+        if (atomic_load(&ticks) % every == 0) n = kevent(q, NULL, 0, out, 4, &z);
 #else
-        struct epoll_event out[4]; int n = epoll_wait(q, out, 4, 0);
+        struct epoll_event out[4]; int n = 0;
+        if (atomic_load(&ticks) % every == 0) n = epoll_wait(q, out, 4, 0);
 #endif
         if (n <= 0) {
             long long t0 = now_ns(); while (now_ns() - t0 < 20000) {}
+            if (sysc) (void)getppid();
             atomic_fetch_add(&ticks, 1);
             continue;
         }
@@ -93,12 +98,24 @@ int main(int argc, char **argv) {
     atomic_store(&hog_stop, 1);
     for (int i = 0; i < hogs && i < 64; i++) pthread_join(hs[i], NULL);
     static long long lag[N]; int early = 0; int over15 = 0, over31 = 0;
+    int phase[64] = {0};
+    for (int i = 0; i < N; i++) phase[atomic_load(&t_conn[i]) % (every < 64 ? every : 64)]++;
     for (int i = 0; i < N; i++) { lag[i] = t_ready[i] - atomic_load(&t_conn[i]); if (lag[i] > 0) early++; }
     qsort(lag, N, sizeof lag[0], cmp);
     for (int i = 0; i < N; i++) { if (lag[i] >= 16) over15++; if (lag[i] >= 32) over31++; }
+    printf("every=%d syscall=%d ", every, sysc);
     printf("hogs=%d n=%d  readiness after connect() returned: %d/%d\n", hogs, N, early, N);
     printf("  lag in 20us main-thread ticks (ready - connect return): min %lld p50 %lld p90 %lld p99 %lld p999 %lld max %lld\n",
            lag[0], lag[N / 2], lag[N * 9 / 10], lag[N * 99 / 100], lag[N * 999 / 1000], lag[N - 1]);
     printf("  lag >= 16 ticks (one poll window): %d   lag >= 32 ticks (the test's bound): %d\n", over15, over31);
+    if (every > 1) {
+        printf("  connect() returned at tick %% %d:", every);
+        for (int k = 0; k < every && k < 64; k++) printf(" %d", phase[k]);
+        printf("\n  lag histogram (ticks, bucket 4):");
+        int hist[40] = {0};
+        for (int i = 0; i < N; i++) { long long b = lag[i] < 0 ? 0 : lag[i] / 4; if (b > 39) b = 39; hist[b]++; }
+        for (int k = 0; k < 40; k++) if (hist[k]) printf(" [%d..%d]=%d", k * 4, k * 4 + 3, hist[k]);
+        printf("\n");
+    }
     return 0;
 }
