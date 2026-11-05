@@ -1,0 +1,38 @@
+name: diag-t500v
+# Agora #500 verification only; this branch is deleted after the run.
+on:
+  push:
+    branches: [diag/t500-verify]
+jobs:
+  verify:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: deps
+        run: |
+          brew install llvm coreutils pkg-config sqlite zstd
+          echo "CLANG=$(brew --prefix llvm)/bin/clang" >> "$GITHUB_ENV"
+      - name: build
+        env:
+          PKG_CONFIG_PATH: /opt/homebrew/opt/sqlite/lib/pkgconfig:/opt/homebrew/opt/zstd/lib/pkgconfig
+        run: ./build.sh --no-tests
+      - name: compile old and new test
+        run: |
+          ./nurl.sh compiler/tests/sched_accept_admission.nu saa_new
+          ./nurl.sh tools/diag/saa_old.nu saa_old
+      - name: 30 runs each, under 3 and 6 CPU hogs
+        run: |
+          n=$(getconf _NPROCESSORS_ONLN); echo "cpus=$n"
+          for hogs in $n $((2*n)); do
+            for h in $(seq 1 $hogs); do ( while :; do :; done ) & done
+            for t in old new; do
+              fail=0; worst=""
+              for i in $(seq 1 30); do
+                o=$(./saa_$t)
+                case "$o" in *"=yes"*) ;; *) fail=$((fail+1)); worst="$worst $(echo "$o" | sed -n 's/worst_delay=//p')";; esac
+              done
+              echo "hogs=$hogs $t: fails=$fail/30 worst_delays:$worst"
+            done
+            kill $(jobs -p) 2>/dev/null; wait 2>/dev/null || true
+          done
