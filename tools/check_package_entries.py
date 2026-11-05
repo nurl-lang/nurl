@@ -21,12 +21,21 @@ each `deps/…` and sibling import resolves as it does after
 `nurlpkg install`. A program's entry (it defines `main`) is checked
 as it is; a library's is wrapped with an empty `main`.
 
+With --ir every entry is also LOWERED: nurlc writes its LLVM IR (every
+function body, --no-dce) and clang parses, verifies and compiles it at
+-O0. --check stops before code generation, so a compiler change that
+emits IR clang rejects, for code the corpus does not have, passed it:
+gpukit's GpuKit opens with a ( Locked T ), the field-identity check
+compared that struct as a pointer, and nurllama stopped compiling with
+the gate green (fixed in github#1620). A failure says which stage
+refused it, nurlc or clang.
+
 An entry whose stdlib module needs an optional native library the
 toolchain was built without ("… is required but no build-time
 sentinel") is SKIPPED, not failed: that is the host, not the package.
 
-Usage:  tools/check_package_entries.py [-j N] [-v] [PKG…]
-        NURL_PKGCHECK_JOBS=N (default min(4, cores))
+Usage:  tools/check_package_entries.py [--ir] [-j N] [-v] [PKG…]
+        NURL_PKGCHECK_JOBS=N (default min(4, cores)); CLANG (default clang)
 Exit:   0 all compile (or skip) · 1 a failure · 2 no build/nurlc
 """
 import concurrent.futures
@@ -99,7 +108,18 @@ def classify(rc, stderr):
     return "fail"
 
 
-def check_one(nurlc, cwd, root, pkg_dir, name, entry):
+def lower(clang, ll, env):
+    """rc and stderr of clang compiling the IR file `ll` at -O0."""
+    try:
+        p = subprocess.run([clang, "-x", "ir", "-c", "-O0", "-w", ll, "-o", os.devnull],
+                           env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                           text=True, errors="replace", timeout=900)
+        return p.returncode, p.stderr
+    except subprocess.TimeoutExpired:
+        return 124, "clang timed out after 900 s"
+
+
+def check_one(nurlc, cwd, root, pkg_dir, name, entry, clang=None):
     path = os.path.join(root, "packages", pkg_dir, "src", entry)
     with open(path, encoding="utf-8", errors="replace") as f:
         is_program = bool(MAIN.search(f.read()))
@@ -108,19 +128,42 @@ def check_one(nurlc, cwd, root, pkg_dir, name, entry):
         f.write(wrapper(name, entry, is_program))
     t0 = time.monotonic()
     env = dict(os.environ, NURL_STDLIB=root)
+    if clang is None:
+        try:
+            p = subprocess.run([nurlc, "--check", "--no-dce", unit], cwd=cwd, env=env,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                               text=True, errors="replace", timeout=600)
+            rc, err = p.returncode, p.stderr
+        except subprocess.TimeoutExpired:
+            rc, err = 124, "nurlc --check timed out after 600 s"
+        return pkg_dir, entry, classify(rc, err), err, time.monotonic() - t0
+    ll = unit + ".ll"
     try:
-        p = subprocess.run([nurlc, "--check", "--no-dce", unit], cwd=cwd, env=env,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                           text=True, errors="replace", timeout=600)
-        rc, err = p.returncode, p.stderr
-    except subprocess.TimeoutExpired:
-        rc, err = 124, "nurlc --check timed out after 600 s"
-    return pkg_dir, entry, classify(rc, err), err, time.monotonic() - t0
+        with open(ll, "w", encoding="utf-8") as out:
+            try:
+                p = subprocess.run([nurlc, "--no-dce", unit], cwd=cwd, env=env,
+                                   stdout=out, stderr=subprocess.PIPE,
+                                   text=True, errors="replace", timeout=600)
+                rc, err = p.returncode, p.stderr
+            except subprocess.TimeoutExpired:
+                rc, err = 124, "nurlc timed out after 600 s"
+        if rc != 0:
+            return pkg_dir, entry, classify(rc, err), "nurlc: " + err, time.monotonic() - t0
+        rc, err = lower(clang, ll, env)
+        if rc != 0:
+            err = "clang rejected the IR nurlc wrote (a code generation bug): " + err
+        return pkg_dir, entry, classify(rc, err), err, time.monotonic() - t0
+    finally:
+        try:
+            os.remove(ll)
+        except OSError:
+            pass
 
 
 def main(argv):
     jobs = int(os.environ.get("NURL_PKGCHECK_JOBS", min(4, os.cpu_count() or 1)))
     verbose = False
+    ir = False
     only = []
     k = 0
     while k < len(argv):
@@ -131,6 +174,8 @@ def main(argv):
             continue
         if a in ("-v", "--verbose"):
             verbose = True
+        elif a == "--ir":
+            ir = True
         else:
             only.append(a.rstrip("/").split("/")[-1])
         k += 1
@@ -138,6 +183,12 @@ def main(argv):
     if not os.access(nurlc, os.X_OK):
         print("error: build/nurlc not built — run ./build.sh first", file=sys.stderr)
         return 2
+    clang = None
+    if ir:
+        clang = os.environ.get("CLANG", "clang")
+        if not shutil.which(clang):
+            print(f"error: --ir needs clang ({clang} not found)", file=sys.stderr)
+            return 2
     pkgs = packages(ROOT)
     unknown = [o for o in only if o not in {d for d, _ in pkgs}]
     if unknown:
@@ -148,7 +199,7 @@ def main(argv):
     results = []
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, jobs)) as ex:
-            futs = [ex.submit(check_one, nurlc, cwd, ROOT, d, n, e) for d, n, e in work]
+            futs = [ex.submit(check_one, nurlc, cwd, ROOT, d, n, e, clang) for d, n, e in work]
             for fu in concurrent.futures.as_completed(futs):
                 results.append(fu.result())
     finally:
@@ -166,7 +217,7 @@ def main(argv):
             print(f"packages/{pkg_dir}/src/{entry}: SKIP (an optional native library this build lacks)")
         elif verbose:
             print(f"packages/{pkg_dir}/src/{entry}: ok ({secs:.1f} s)")
-    print(f"\npackage entry points: PASS {len(results) - len(fails) - len(skips)} · "
+    print(f"\npackage entry points{' (lowered to IR)' if ir else ''}: PASS {len(results) - len(fails) - len(skips)} · "
           f"FAIL {len(fails)} · SKIP {len(skips)}  ({len({r[0] for r in results})} packages, jobs={jobs})")
     return 1 if fails else 0
 

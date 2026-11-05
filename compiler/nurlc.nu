@@ -50782,6 +50782,15 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
             ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty eff_type ) )
             ( nurl_print `, ` ) ( nurl_print ( nurl_llty eff_type ) )
             ( nurl_print `* ` ) ( nurl_print cap_gep ) ( nurl_print `\n` )
+            // A captured `~` loop element is not its container's slot in
+            // here: `__eslot` names the enclosing function's element
+            // pointer, a register this body does not have. Inherited, a
+            // capture handed to a consumer emptied that register — IR
+            // clang rejects ("use of undefined value"), in nurldb's ParAgg,
+            // seen once every package entry was lowered (--no-dce). What
+            // the body consumes is its own snapshot (by value) or the
+            // caller's binding (by pointer), never the slot behind it.
+            ( nurl_sym_def body_syms ( nurl_str_cat cap_name `__eslot` ) `` )
             ? cap_byref
             {  // The loaded value IS the caller's alloca pointer.
                 ( nurl_sym_def body_syms cap_name cap_type )
