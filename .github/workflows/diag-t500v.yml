@@ -17,22 +17,31 @@ jobs:
         env:
           PKG_CONFIG_PATH: /opt/homebrew/opt/sqlite/lib/pkgconfig:/opt/homebrew/opt/zstd/lib/pkgconfig
         run: ./build.sh --no-tests
-      - name: compile old and new test
+      - name: compile old and new test, printing worst_delay always
         run: |
-          ./nurl.sh compiler/tests/sched_accept_admission.nu saa_new
-          ./nurl.sh tools/diag/saa_old.nu saa_old
-      - name: 30 runs each, under 3 and 6 CPU hogs
+          for t in new old; do
+            src=compiler/tests/sched_accept_admission.nu; [ $t = old ] && src=tools/diag/saa_old.nu
+            sed 's|? >= worst / y 2 {|? T {|' $src > tools/diag/saa_${t}_w.nu
+            grep -c "? T {" tools/diag/saa_${t}_w.nu
+            ./nurl.sh tools/diag/saa_${t}_w.nu saa_$t
+          done
+      - name: 60 runs each, idle, under 3 and 6 CPU hogs, and beside a corpus run
         run: |
           n=$(getconf _NPROCESSORS_ONLN); echo "cpus=$n"
-          for hogs in $n $((2*n)); do
+          dist() { sort -n | uniq -c | awk '{printf " %s:%s", $2, $1}'; echo; }
+          for hogs in 0 $n $((2*n)); do
             for h in $(seq 1 $hogs); do ( while :; do :; done ) & done
             for t in old new; do
-              fail=0; worst=""
-              for i in $(seq 1 30); do
-                o=$(./saa_$t)
-                case "$o" in *"=yes"*) ;; *) fail=$((fail+1)); worst="$worst $(echo "$o" | sed -n 's/worst_delay=//p')";; esac
-              done
-              echo "hogs=$hogs $t: fails=$fail/30 worst_delays:$worst"
+              printf "hogs=%s %s worst_delay(value:count):" $hogs $t
+              for i in $(seq 1 60); do ./saa_$t | sed -n 's/worst_delay=//p'; done | dist
             done
             kill $(jobs -p) 2>/dev/null; wait 2>/dev/null || true
           done
+          # The CI shape: the corpus running with 3 jobs beside it.
+          ( NURL_TEST_JOBS=3 compiler/tests/run_tests.sh > corpus.log 2>&1 ) &
+          sleep 20
+          for t in old new; do
+            printf "corpus %s worst_delay(value:count):" $t
+            for i in $(seq 1 60); do ./saa_$t | sed -n 's/worst_delay=//p'; done | dist
+          done
+          wait || true
