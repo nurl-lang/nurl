@@ -31,11 +31,10 @@ jobs:
           i=0
           while [ ! -f corpus.done ]; do
             i=$((i+1))
-            ./saa3 | tr '
-' ' ' | sed -E 's/accepted=.*//' >> three.log; echo >> three.log
+            ./saa3 | paste -sd' ' - | sed -E 's/accepted=.*//' >> three.log
           done
           echo "runs=$i"
-          echo "w_connect distribution:"; sed -nE 's/.*w_connect=([0-9]+).*//p' three.log | sort -n | uniq -c | awk '{printf " %s:%s", $2, $1}'; echo
-          echo "w_arrival distribution:"; sed -nE 's/.*w_arrival=([0-9]+).*//p' three.log | sort -n | uniq -c | awk '{printf " %s:%s", $2, $1}'; echo
+          echo "w_connect distribution:"; sed -nE "s/.*w_connect=([0-9]+).*/\1/p" three.log | sort -n | uniq -c | awk '{printf " %s:%s", $2, $1}'; echo
+          echo "w_arrival distribution:"; sed -nE "s/.*w_arrival=([0-9]+).*/\1/p" three.log | sort -n | uniq -c | awk '{printf " %s:%s", $2, $1}'; echo
           echo "runs where either >= 32:"; awk '{ split($1,a,"="); split($2,b,"="); if (a[2]>=32 || b[2]>=32) print }' three.log
           grep -E "PASS [0-9]+ ·|sched_accept" corpus.log | head -5
