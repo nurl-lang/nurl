@@ -233,7 +233,7 @@ Unreleased changes are fragments in [`changes/unreleased/`](changes/unreleased/)
 
 ### Known issues
 
-- **57 soundness holes are open, each with a fix in progress**: agora
+- **64 soundness holes are open, each with a fix in progress**: agora
   #242 (a join or a value block bound by `:` and then handed on by name,
   in nine remaining shapes), #280 (a field a `sink` took, used again by
   a route the check does not see), #294 (a struct built from an owner
@@ -285,27 +285,36 @@ Unreleased changes are fragments in [`changes/unreleased/`](changes/unreleased/)
   `vec_extend`), #469 (a closure that captured an owner of views by
   value, run on another thread), #472 (an iterator yields copies of what
   it captured), #473 (a closure literal hands back a local holder of its
-  captures' views), #478 (a second name of a fresh `s` binding's buffer
-  handed back), #479 (a copied closure that views a local, a closure
-  body handing a `sink` a value derived from its capture, and a
-  statement-form match arm returning a closure over a borrowed field),
-  #481 (a `dyn` impl that calls its own method through a dyn field),
-  #482 (a `~ x b` loop over a borrow of a container's element, the
-  container changed in the body by its own name), #483 (a closure
-  literal capturing a `vec_at` binding's element), #484 (a `~` loop's
-  element moved into another Vec leaks), #485 (an owned slice literal of
-  Strings never drops its Strings), #487 (a bare `s` view handed back
-  through a `?` join, or from a `??` payload inside an `if`, a loop or
-  after another statement), #488 (a field given a new value through a
-  `~` loop's struct element), #489 (an `unsafe` function handing back a
-  view of its `~` loop's element over a parameter), #490 (a `~` loop's
-  element moved out — handed to a sink, `string_free`, `vec_free`), #491
-  (a defer armed in an inner block reading a borrow bound in that block)
-  and #492 (a view-class `~` loop element read after what it views
-  changes). `docs/LIMITATIONS.md` gives each one's shape and how to stay
-  clear of it. Closed in this release: agora #377, #362, #368, #347,
-  #457, #459, #463, #471. A release does not say "no hole is known open"
-  while one is.
+  captures' views), #475 (the keep rule and the `inout` store for a `!i
+  String`, a `? ?String` or a `!( Rc String ) String`), #478 (a second
+  name of a fresh `s` binding's buffer handed back), #479 (a copied
+  closure that views a local, a closure body handing a `sink` a value
+  derived from its capture, and a statement-form match arm returning a
+  closure over a borrowed field), #481 (a `dyn` impl that calls its own
+  method through a dyn field), #482 (a `~ x b` loop over a borrow of a
+  container's element, the container changed in the body by its own
+  name), #483 (a closure literal capturing a `vec_at` binding's
+  element), #484 (a `~` loop's element moved into another Vec leaks),
+  #485 (an owned slice literal of Strings never drops its Strings), #487
+  (a bare `s` view handed back through a `?` join, or from a `??`
+  payload inside an `if`, a loop or after another statement), #488 (a
+  field given a new value through a `~` loop's struct element), #489 (an
+  `unsafe` function handing back a view of its `~` loop's element over a
+  parameter), #490 (a `~` loop's element moved out — handed to a sink,
+  `string_free`, `vec_free`), #491 (a defer armed in an inner block
+  reading a borrow bound in that block), #492 (a view-class `~` loop
+  element read after what it views changes), #493 (a `~ x t` loop going
+  on after `t` grew through another name), #494 (a container handed to a
+  `sink` parameter together with a borrow of its element), #496 (a
+  parameter's element grown by a closure, a closure parameter or through
+  a `??` payload), #497 (an element bound through one Rc handle and
+  grown, viewed through another handle of the same Rc), #498 (a `: ~`
+  cursor bound to a `?` join whose arms are owners or their fields) and
+  #499 (a value block whose tail is an outer borrow).
+  `docs/LIMITATIONS.md` gives each one's shape and how to stay clear of
+  it. Closed in this release: agora #377, #362, #368, #347, #457, #459,
+  #463, #471. A release does not say "no hole is known open" while one
+  is.
 
 ## [0.86.0] — 2026-11-03
 
