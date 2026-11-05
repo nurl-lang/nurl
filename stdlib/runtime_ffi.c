@@ -3740,6 +3740,38 @@ char *nurl_tcp_local_addr(long long handle) {
     return out ? out : strdup("");
 }
 
+/* Whether a connection waits in a listener's accept queue, taking none:
+ * 1 yes, 0 not within `timeout_ms` (< 0 waits for ever, 0 answers now),
+ * -1 not a running listener. POLLIN on a listening socket is exactly
+ * "an accept would not block", so this is the moment a connection
+ * arrives as far as the server can know. A client's connect() returning
+ * is not that moment on every host: on macOS the server side of a
+ * loopback handshake completes in a later kernel step, which a busy
+ * server thread only lets run at its next kevent call (agora #500).
+ * Counted in like an accept, so a concurrent stop closes the fd only
+ * after this poll (nurl__tcp_listener_stop); any thread may ask while
+ * another accepts. */
+long long nurl_tcp_listener_pending(long long listener, long long timeout_ms) {
+    NurlTcp *l = (NurlTcp*)(uintptr_t)listener;
+    if (!l || l->kind != NURL_TCP_KIND_LISTENER) return -1;
+    __atomic_add_fetch(&l->accepting, 1, __ATOMIC_SEQ_CST);
+    long long verdict = -1;
+    if (!__atomic_load_n(&l->shutting_down, __ATOMIC_SEQ_CST) && l->fd != NURL_INVALID_SOCK) {
+        nurl_pollfd_t p;
+        p.fd = l->fd;
+        p.events = POLLIN;
+        p.revents = 0;
+        int ms = timeout_ms < 0 ? -1 : timeout_ms > INT_MAX ? INT_MAX : (int)timeout_ms;
+        int r = nurl__poll(&p, 1, ms);
+#ifndef _WIN32
+        while (r < 0 && errno == EINTR) r = nurl__poll(&p, 1, ms);
+#endif
+        if (r >= 0) verdict = (r > 0 && (p.revents & POLLIN)) ? 1 : 0;
+    }
+    __atomic_sub_fetch(&l->accepting, 1, __ATOMIC_SEQ_CST);
+    return verdict;
+}
+
 /* The deadline a read on this socket should honour, in ms; 0 = wait for
  * ever. `std/net.nu`'s fiber path asks, because a parked fiber does not
  * go through SO_RCVTIMEO and would otherwise wait for ever on a socket
@@ -5087,6 +5119,9 @@ char *nurl_tcp_local_addr(long long h) {
     long long n = nurl__ni_tcp_local_addr(h, buf, (long long)sizeof(buf));
     return nurl__net_take(buf, n);
 }
+/* The bridge has no call that looks into a host listener's queue: -1,
+ * "cannot tell", which callers read as "no answer" rather than "no". */
+long long nurl_tcp_listener_pending(long long h, long long ms) { (void)h; (void)ms; return -1; }
 void nurl_tcp_set_timeout(long long h, long long ms) { nurl__ni_tcp_set_timeout(h, ms); }
 long long nurl_tcp_set_send_buffer(long long h, long long bytes) { return nurl__ni_tcp_set_send_buffer(h, bytes); }
 long long nurl_tcp_timeout_ms(long long h)           { return nurl__ni_tcp_timeout_ms(h); }
@@ -5281,6 +5316,7 @@ void nurl_tcp_conn_shutdown(long long h, long long both) { (void)h; (void)both; 
 long long nurl_tcp_err_kind(long long h) { (void)h; return NURL_NET_ERR_OTHER; }
 const char *nurl_tcp_peer_addr(long long h) { (void)h; return ""; }
 char       *nurl_tcp_local_addr(long long h) { (void)h; return strdup(""); }
+long long   nurl_tcp_listener_pending(long long h, long long ms) { (void)h; (void)ms; return -1; }
 void nurl_tcp_set_timeout(long long h, long long ms) { (void)h; (void)ms; }
 long long nurl_tcp_set_send_buffer(long long h, long long bytes) { (void)h; (void)bytes; return 8; }
 /* Async-runtime hooks. The non-WASI variants live above the #else gate;

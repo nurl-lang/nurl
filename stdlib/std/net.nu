@@ -1464,6 +1464,22 @@ unsafe & `c` @ nurl_tcp_local_addr i handle → sink s
     ^ ( string_adopt ( nurl_tcp_local_addr . p raw ) )
 }
 
+unsafe & `c` @ nurl_tcp_listener_pending i handle i timeout_ms → i
+
+// Whether a connection waits in `l`'s accept queue, taking none: 1 yes,
+// 0 not within `timeout_ms` (< 0 waits for ever, 0 answers now), -1
+// cannot tell (a stopped listener, one over a transport, or a target
+// whose sockets cannot be asked, such as the wasm bridge). This is when
+// a connection arrives as far as the server can know. A client's
+// connect() returning is not always that moment: on macOS the server
+// side of a loopback handshake completes in a later kernel step (agora
+// #500). Any thread may ask while another accepts.
+@ tcp_listener_pending TcpListener l i timeout_ms → i {
+    : *TcpListenerImpl p ( __tli l )
+    ? != . p nt 0 { ^ -1 } {}
+    ^ ( nurl_tcp_listener_pending . p raw timeout_ms )
+}
+
 @ tcp_set_timeout TcpConn c i ms → v {
     ? ( __tc_is_nt c ) { ( nt_set_timeout ( __tc_nt c ) ms ) ^ v } {}
     ? ( __tc_tls_tt c ) { ( tls_transport_set_timeout # TlsConn ( __conn_tlsptr c ) ms ) ^ v } {}

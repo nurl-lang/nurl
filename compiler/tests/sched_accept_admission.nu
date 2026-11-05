@@ -4,10 +4,21 @@
 // ONE worker. Y yielders keep its run queue from ever emptying; each
 // dispatch of one does ~20 µs of work and counts itself in `ticks`. An
 // acceptor fiber accepts on a loopback listener; a client THREAD — the
-// outside world — connects N times, one at a time, and notes `ticks` as
-// each connect returns. The acceptor notes `ticks` as each accept
-// returns. A connection's admission delay is the yielder dispatches
-// between the two.
+// outside world — connects N times, one at a time, and notes `ticks`
+// when each connection ARRIVES: when it waits in the listener's accept
+// queue (tcp_listener_pending), or the acceptor has already taken it.
+// The acceptor notes `ticks` as each accept returns. A connection's
+// admission delay is the yielder dispatches between the two.
+//
+// Arrival is not the client's connect() returning. On Linux the two are
+// one moment: the loopback handshake runs inside the client's syscall.
+// On macOS the server side completes in a later kernel step, and with
+// every CPU busy that step runs only at a scheduling point of the busy
+// thread: here, the worker's kevent, every 16th dispatch. Stamped at
+// connect(), a connection then looked 32 and 48 dispatches late on the
+// macOS CI runner, where the runtime had run the acceptor at the first
+// poll that saw it (agora #500; a C program with no NURL runtime, polling
+// every 16th 20 µs unit, measured the same steps).
 //
 // The rule (Admission, stdlib/runtime_ffi.c "Service order"): a fiber
 // parked in an accept runs as soon as its listener is polled ready,
@@ -60,12 +71,13 @@ $ `stdlib/core/vec.nu`
     }
 }
 
-@ __acceptor TcpListener l i n Atomic ticks Atomic done ( Channel i ) acc → v {
+@ __acceptor TcpListener l i n Atomic ticks Atomic taken Atomic done ( Channel i ) acc → v {
     : ~ i k 0
     ~ < k n {
         ?? ( tcp_accept_transport l ) {
             T c → {
                 : b _s ( chan_send [i] acc ( atomic_load ticks ) )
+                : i _k ( atomic_add taken 1 )
                 ( tcp_close_conn c )
                 = k + k 1
             }
@@ -83,24 +95,35 @@ $ `stdlib/core/vec.nu`
     : i port ( __port l )
     : Atomic ticks ( atomic_new 0 )
     : Atomic done ( atomic_new 0 )
+    : Atomic taken ( atomic_new 0 )
     : ( Channel i ) acc ( chan_new [i] )
     // The acceptor first: it parks in its accept before the yielders
     // fill the queue, so every connection meets it parked.
-    ( spawn_owned \ → v { ( __acceptor l n ticks done acc ) } )
+    ( spawn_owned \ → v { ( __acceptor l n ticks taken done acc ) } )
     : ~ i i 0
     ~ < i y {
         ( spawn_owned \ → v { ( __yielder ticks done ) } )
         = i + i 1
     }
-    // The outside world: connect, note the tick, close, let the server
-    // get busy again.
+    // The outside world: connect, note the tick the connection arrives
+    // at, close, let the server get busy again. Arrived: it waits in the
+    // listener's queue, or the acceptor took it already (a delay of 0).
+    // A listener that cannot be asked (-1) leaves connect()'s return.
     : Atomic ct ( Atomic_share ticks )
+    : Atomic ctaken ( Atomic_share taken )
+    : TcpListener cl ( TcpListener_share l )
     : ( Channel i ) cv ( chan_new [i] )
     : !Thread ThreadErr client ( thread_spawn \ → v {
         : ~ i j 0
         ~ < j n {
             ?? ( tcp_connect `127.0.0.1` port ) {
                 T c → {
+                    : ~ b here F
+                    ~ ! here {
+                        ? > ( atomic_load ctaken ) j { = here T } {
+                            ? != ( tcp_listener_pending cl 1 ) 0 { = here T } {}
+                        }
+                    }
                     : b _s ( chan_send [i] cv ( atomic_load ct ) )
                     ( tcp_close_conn c )
                 }

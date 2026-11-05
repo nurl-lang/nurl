@@ -70,7 +70,11 @@ $ `stdlib/std/async.nu`
   (resumed, 1.85 before); rustls's ratio moved between 1.42 and 2.05 on
   that host. `compiler/tests/sched_accept_admission` holds the bound: a
   connection is accepted within half a pass of a 64-fiber queue (before:
-  never, a full pass and more). The bound needs a busy worker to poll
+  never, a full pass and more). It counts from the connection's arrival
+  in the listener's queue (`tcp_listener_pending`), not from the
+  client's `connect()`: on macOS the server side of a loopback handshake
+  completes a kernel step later, and with every CPU busy that step waits
+  for the busy worker's next `kevent` (agora #500). The bound needs a busy worker to poll
   I/O itself, which the netpoller's workers do (Linux, macOS, FreeBSD,
   Windows). Where the reactor is a thread of its own (the poll(2)
   fallback), the wake waits for that thread's time slice first: before
