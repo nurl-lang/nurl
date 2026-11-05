@@ -970,6 +970,14 @@ unsafe @ nurl_ktls_recv i conn * u buf i n i nowait → i { ^ -1 }
 
 @ nurl_reactor_wait_write i fd i timeout_ms → i { ^ ( __wait fd 1 timeout_ms ) }
 
+// Whether a connection waits in `listener`'s accept queue, taking none:
+// 1 yes, 0 not within `timeout_ms` (< 0 waits for ever, 0 answers after
+// one drive of the stack). An accept's readiness wait, without the
+// accept and without admission (stdlib/runtime_ffi.c has the hosted one).
+@ nurl_tcp_listener_pending i listener i timeout_ms → i {
+    ^ ? > ( __wait_k listener 0 timeout_ms 0 ) 0 1 0
+}
+
 // ── addresses ────────────────────────────────────────────────────
 
 @ __addr_string i ip i port → s {
