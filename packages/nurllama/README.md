@@ -261,9 +261,12 @@ self-contained web chat UI at `/` (no external requests — it embeds its
 own CSS and JS). A programmatic client that hits `/` still gets the
 `nurllama is running` status line; a browser gets the chat page. Each
 browser is issued a GUID in an `nl_client` cookie, and **every
-conversation — each turn, both sides — is persisted to SQLite**
-(`$NURLLAMA_HOME/history.db`) scoped to that GUID, so a client only ever
-sees its own history. When the wizard chose token access, the page is
+conversation — each turn, both sides — is persisted to
+[nurldb](../nurldb)** (the database directory `$NURLLAMA_HOME/history`)
+scoped to that GUID, so a client only ever sees its own history. A reply
+of any length is kept whole. The server holds the database's lock while
+it runs, so a second server on the same `NURLLAMA_HOME` stops at startup
+with "the database is already open" instead of writing the same files. When the wizard chose token access, the page is
 served to everyone but every `/web/*` and `/api/*` request must carry
 `Authorization: Bearer <token>` (the UI prompts for it once and
 remembers it).
@@ -374,14 +377,15 @@ Not by trusting itself:
 ./tests/tokenizer_test.sh && ./tests/infer_test.sh   # NURL_NET_TESTS=1 adds real models
 ./tests/store_test.sh && ./tests/api_test.sh
 ./tests/convert_test.sh && ./tests/llada_infer_test.sh && ./tests/bailing_tok_test.sh
-./tests/start_test.sh    # wizard, config, cookie sessions, SQLite scoping, token auth
+./tests/start_test.sh    # wizard, config, cookie sessions, history store and scoping, token auth
 ```
 
 ## Built on
 
 [`gguf`](../gguf) — the container and its dequantisation — and
 [`gpukit`](../gpukit) over [`gpu`](../gpu) — CUDA/NVRTC, or the same
-kernels on the CPU.
+kernels on the CPU. The web chat's history is a [`nurldb`](../nurldb)
+database.
 
 ## License
 

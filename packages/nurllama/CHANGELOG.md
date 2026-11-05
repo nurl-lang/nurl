@@ -2,6 +2,44 @@
 
 All notable changes to the `nurllama` package.
 
+## [0.23.0] — unreleased
+
+Requires NURL 0.88.0 and nurldb 0.2.
+
+### Changed
+
+- **The web chat's history is a nurldb database, not SQLite.** It lives in
+  the directory `$NURLLAMA_HOME/history`, and nurllama no longer links
+  libsqlite3. The server opens it once at startup and every request works
+  through its own session on it; until now SQLite was opened anew for
+  every request. The endpoints and their JSON are unchanged.
+- **A history from an earlier version is not carried over.** The old
+  `$NURLLAMA_HOME/history.db` stays where it is, untouched, and the new
+  history starts empty.
+- Adding a message and setting the conversation's title from it is one
+  transaction, and so is deleting a conversation with its messages: a
+  crash leaves both or neither.
+
+### Fixed
+
+- A second server on the same `NURLLAMA_HOME` stops at startup with "the
+  database is already open" (nurldb's directory lock). Before, both
+  servers wrote one history.
+- nurllama compiles again. Since the compiler began checking a binding
+  read out of a field against the field's current value (agora #265), a
+  `GpuKit` read out of the model's struct and used inside the layer loop
+  was compared as the wrong type, and clang rejected the program. The
+  compiler now reaches the handle's pointer through its `Locked`.
+- A browser's first chat turn that fails (no model, a model that does not
+  load) now answers with the `nl_client` cookie it was given. Before, the
+  error response was a fresh one without it: the conversation the turn
+  had made belonged to a GUID the browser never learned, and it never saw
+  that conversation again.
+- `tests/start_test.sh` tests the history without a model: a 20 KB
+  message with quotes and UTF-8 read back byte for byte, its title,
+  scoping for listing, reading and deleting, a restart, and the
+  second-server refusal.
+
 ## [0.22.2] — 2026-10-21
 
 ### Fixed

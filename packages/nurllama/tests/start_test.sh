@@ -4,7 +4,7 @@
 # ============================================================
 #  tests/start_test.sh — proof of `nurllama start`: the setup wizard,
 #  the config file, the web chat server with per-client cookie sessions,
-#  the SQLite conversation store, and token auth.
+#  the conversation store (nurldb, $NURLLAMA_HOME/history), and token auth.
 #
 #    1. wizard: answers piped on stdin → config.json with the right
 #       values; a network+token run generates a token
@@ -13,6 +13,12 @@
 #       browser, and the ollama status line to a plain client
 #    4. sessions: two cookie jars are two clients; each sees only its
 #       own conversations (scoping)
+#    4b. the store, without a model: a chat turn whose generation fails
+#       still persists the conversation and the user's message — a 20 KB
+#       message with quotes and UTF-8 reads back byte for byte, its title
+#       is its opening, another client neither lists nor reads it, it
+#       survives a restart, only its owner deletes it, and a second server
+#       on the same NURLLAMA_HOME is refused (the database's lock)
 #    5. token auth: the page is always served, but /web/* is 401 without
 #       the bearer token and 200 with it
 #    6. (model-gated) a real chat turn round-trips through /web/chat and
@@ -41,7 +47,7 @@ PASS=0; FAIL=0
 ok()  { echo "  PASS $1"; PASS=$((PASS+1)); }
 bad() { echo "  FAIL $1"; FAIL=$((FAIL+1)); }
 
-for d in gguf safetensor gpu tokenizer http; do
+for d in gguf safetensor gpu tokenizer http grad nn gpukit tensor hub nurldb; do
     [ -e "deps/$d" ] || { mkdir -p deps && ln -s "../../$d" "deps/$d"; }
 done
 
@@ -132,6 +138,52 @@ grep -qi 'text/html' <<<"$hdrs" && grep -q 'nurllama' "$WORK/page.html" && ok "G
 g1=$(curl -s -c "$WORK/j1" "$base/web/session" | python3 -c 'import json,sys;print(json.load(sys.stdin)["client"])')
 g2=$(curl -s -c "$WORK/j2" "$base/web/session" | python3 -c 'import json,sys;print(json.load(sys.stdin)["client"])')
 [ -n "$g1" ] && [ -n "$g2" ] && [ "$g1" != "$g2" ] && ok "two clients get distinct GUIDs" || bad "distinct GUIDs"
+
+# The store, without a model (the dummy one cannot load, so generation
+# fails — after the conversation and the user's turn are persisted).
+if [ -z "${NURLLAMA_LLADA_GGUF:-}" ]; then
+    python3 - "$WORK/msg.txt" "$WORK/msg.json" <<'PY'
+import json, sys
+body = (("It's a \"quoted\" line — ääkköset, 日本語, emoji 🦙" + chr(10)) * 400)[:20000]
+open(sys.argv[1], "w", encoding="utf-8").write(body)
+json.dump({"conversation_id": None, "content": body}, open(sys.argv[2], "w", encoding="utf-8"))
+PY
+    code=$(curl -s -o "$WORK/chat1.out" -w '%{http_code}' -b "$WORK/j1" -c "$WORK/j1" -X POST "$base/web/chat"         -H 'Content-Type: application/json' --data-binary @"$WORK/msg.json")
+    [ "$code" = 500 ] && ok "a chat turn with an unloadable model fails (500)" || bad "unloadable model ($code)"
+    conv=$(curl -s -b "$WORK/j1" "$base/web/conversations" | python3 -c 'import json,sys;c=json.load(sys.stdin);print(c[0]["id"] if len(c)==1 else "")')
+    [ -n "$conv" ] && ok "the conversation is persisted and listed for its client" || bad "conversation listing"
+    curl -s -b "$WORK/j1" "$base/web/conversations/$conv/messages" > "$WORK/msgs.json"
+    python3 - "$WORK/msgs.json" "$WORK/msg.txt" <<'PY' && ok "a 20 KB message reads back byte for byte" || bad "message round trip"
+import json, sys
+m = json.load(open(sys.argv[1], encoding="utf-8"))
+want = open(sys.argv[2], encoding="utf-8").read()
+sys.exit(0 if len(m) == 1 and m[0]["role"] == "user" and m[0]["content"] == want else 1)
+PY
+    curl -s -b "$WORK/j1" "$base/web/conversations" | python3 -c 'import json,sys;t=json.load(sys.stdin)[0]["title"];sys.exit(0 if t.startswith("It'"'"'s a \"quoted\" line") else 1)'         && ok "its title is its opening" || bad "title"
+    [ "$(curl -s -b "$WORK/j2" "$base/web/conversations")" = "[]" ] && ok "another client lists none of it" || bad "scoping (list)"
+    [ "$(curl -s -o /dev/null -w '%{http_code}' -b "$WORK/j2" "$base/web/conversations/$conv/messages")" = 404 ]         && ok "another client cannot read it (404)" || bad "scoping (read)"
+    PORT2=$(( PORT + 1 ))
+    sed "s/\"port\": $PORT/\"port\": $PORT2/" "$NURLLAMA_HOME/config.json" > "$WORK/cfg2.json"
+    cp "$NURLLAMA_HOME/config.json" "$WORK/cfg1.json"; cp "$WORK/cfg2.json" "$NURLLAMA_HOME/config.json"
+    timeout 10 "$NL" start -y > "$WORK/srv_second.log" 2>&1; rc2=$?
+    cp "$WORK/cfg1.json" "$NURLLAMA_HOME/config.json"
+    [ "$rc2" != 0 ] && [ "$rc2" != 124 ] && grep -q "already open" "$WORK/srv_second.log"         && ok "a second server on the same NURLLAMA_HOME is refused" || bad "second server (rc=$rc2: $(head -c 300 "$WORK/srv_second.log"))"
+    kill "$SRVPID" 2>/dev/null; wait "$SRVPID" 2>/dev/null
+    "$NL" start -y > "$WORK/srv_again.log" 2>&1 &
+    SRVPID=$!
+    sleep 3
+    curl -s -b "$WORK/j1" "$base/web/conversations/$conv/messages" > "$WORK/msgs2.json"
+    cmp -s "$WORK/msgs.json" "$WORK/msgs2.json" && ok "the conversation survives a restart" || bad "restart"
+    curl -s -b "$WORK/j2" -X DELETE "$base/web/conversations/$conv" | grep -q '"ok":false'         && ok "another client cannot delete it" || bad "foreign delete"
+    curl -s -b "$WORK/j1" -X DELETE "$base/web/conversations/$conv" | grep -q '"ok":true'         && [ "$(curl -s -b "$WORK/j1" "$base/web/conversations")" = "[]" ]         && ok "its owner deletes it" || bad "owner delete"
+    # A first contact whose chat turn fails still gets its cookie, and with
+    # it the conversation the turn made.
+    code=$(curl -s -o /dev/null -w '%{http_code}' -c "$WORK/j3" -X POST "$base/web/chat" \
+        -H 'Content-Type: application/json' -d '{"conversation_id":null,"content":"hello"}')
+    n3=$(curl -s -b "$WORK/j3" "$base/web/conversations" | python3 -c 'import json,sys;print(len(json.load(sys.stdin)))')
+    [ "$code" = 500 ] && grep -q nl_client "$WORK/j3" && [ "$n3" = 1 ] \
+        && ok "a first contact's failed turn sets its cookie and keeps its conversation" || bad "first-contact cookie ($code, $n3)"
+fi
 
 echo "[4/4] token auth"
 kill "$SRVPID" 2>/dev/null; wait "$SRVPID" 2>/dev/null

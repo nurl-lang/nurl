@@ -2765,6 +2765,42 @@ long long nurl_fd_truncate(int fd, long long len) {
 #endif
 }
 
+/* Take an exclusive lock on the file behind `fd` without waiting: 0 when
+ * this descriptor now holds it, 1 when another holder has it, -1 on an
+ * error (errno says which). The lock belongs to the open descriptor: it
+ * goes when the descriptor is closed, and the kernel lets go of it when
+ * the process dies, killed or not — so a crash never leaves a stale lock
+ * behind, as a lock FILE (created, then deleted at exit) would. Two
+ * opens of one file are two holders, even inside one process (not on the
+ * unikernel, whose flock grants every lock: unikernel/boot/vfs.c).
+ *   POSIX: flock(2), whole file, LOCK_EX | LOCK_NB. (Not fcntl(F_SETLK):
+ *          its locks belong to the process, so a second open in the same
+ *          process takes it too, and closing ANY descriptor of the file
+ *          drops it.)
+ *   Windows: LockFileEx on the file's first byte, exclusive, fail
+ *          immediately. Locking past the end of a file is allowed.
+ *   WASI: no locks; 0, for the reason nurl_fd_sync gives for its 0. */
+#if !defined(_WIN32) && !defined(__wasi__)
+#include <sys/file.h>
+#endif
+long long nurl_fd_try_lock(int fd) {
+#ifdef _WIN32
+    HANDLE h = (HANDLE)_get_osfhandle(fd);
+    if (h == INVALID_HANDLE_VALUE) { errno = EBADF; return -1; }
+    OVERLAPPED ov = nurl__ov_at(0);
+    if (LockFileEx(h, LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &ov)) return 0;
+    if (GetLastError() == ERROR_LOCK_VIOLATION) return 1;
+    errno = EIO;
+    return -1;
+#elif defined(__wasi__)
+    (void)fd;
+    return 0;
+#else
+    if (flock(fd, LOCK_EX | LOCK_NB) == 0) return 0;
+    return errno == EWOULDBLOCK ? 1 : -1;
+#endif
+}
+
 /* Cut a file down to `len` bytes (or extend it with zeros). Returns 0 on
  * success, -1 on failure.
  *

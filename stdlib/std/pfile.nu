@@ -33,6 +33,9 @@
 //   ( pfile_datasync f )              → !v IoErr   the data on the device
 //                                      (fdatasync where there is one: the
 //                                      write-ahead log's commit barrier)
+//   ( pfile_try_lock f )              → !b IoErr   T: this handle now holds
+//                                      the file's exclusive lock; F:
+//                                      another holder has it (no wait)
 //
 // A PFile is a shared handle over one open descriptor: every copy is the
 // same file, the last one closes it, and copies may be used from any
@@ -62,6 +65,8 @@ $ `stdlib/std/fs.nu`
 & `c` @ nurl_fd_datasync i32 fd → i
 
 & `c` @ nurl_fd_truncate i32 fd i len → i
+
+& `c` @ nurl_fd_try_lock i32 fd → i
 
 : i PFILE_READ 0
 : i PFILE_RW 1
@@ -191,4 +196,22 @@ unsafe @ pfile_write_at PFile f ( Slice u ) src i off → !v IoErr {
 @ pfile_datasync PFile f → !v IoErr {
     ? == 0 ( nurl_fd_datasync ( __pfile_fd f ) ) { ^ @ !v IoErr { T 0 } } {}
     ^ @ !v IoErr { F ( __pfile_err ) }
+}
+
+// The file's exclusive lock, taken without waiting: T when this handle
+// now holds it, F when another holder has it. It is how a program keeps a
+// second one off files only one may write — a database directory's. The
+// lock belongs to the open descriptor: it goes when the last copy of the
+// handle does, and the kernel lets go of it when the process dies, killed
+// or not, so a crash leaves no stale lock behind (a lock FILE, created
+// and deleted, would). Two opens of one file are two holders, inside one
+// process too — on a host: on the unikernel the guest is the only
+// program, and every lock is granted (unikernel/boot/vfs.c). Take it
+// once per handle: asked again, a handle that holds it is answered T on
+// POSIX and F on Windows, whose byte-range locks do not stack.
+@ pfile_try_lock PFile f → !b IoErr {
+    : i r ( nurl_fd_try_lock ( __pfile_fd f ) )
+    ? == r 0 { ^ @ !b IoErr { T T } } {}
+    ? == r 1 { ^ @ !b IoErr { T F } } {}
+    ^ @ !b IoErr { F ( __pfile_err ) }
 }

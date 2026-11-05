@@ -34,6 +34,7 @@ $ `stdlib/std/panic.nu`
 $ `page.nu`
 $ `bufpool.nu`
 $ `heap.nu`
+$ `ovf.nu`
 $ `txn.nu`
 $ `value.nu`
 
@@ -76,7 +77,10 @@ $ `value.nu`
 
 @ tbl_insert Store st Table tb TxnCtx x ( Vec Value ) row → i {
     : TableImpl t ( arc_get [TableImpl] . tb a )
-    : ( Vec u ) tup ( tuple_build . x xid . x cid row )
+    // Long TEXT values out of line first (ovf.nu): what is left of a row
+    // is larger than a page only with hundreds of columns.
+    : ( Vec i ) ext ( ovf_place st row )
+    : ( Vec u ) tup ( tuple_build_ext . x xid . x cid row ext )
     : ( Slice u ) tv ( slice_from_vec [u] tup )
     ? > ( slice_len [u] tv ) - - PAGE_SIZE HP_SLOTS 8 { ( panic `nurldb: a row larger than a page` ) } {}
     ~ T {
@@ -116,7 +120,7 @@ $ `value.nu`
         ? > ( slice_len [u] tup ) 0 {
             ? ( tuple_visible tm snap tup ) {
                 ( vec_push [i] tids ( tid_of pid k ) )
-                ( vec_push [( Vec Value )] rows ( tuple_row tup . t types ) )
+                ( vec_push [( Vec Value )] rows ( tuple_row_full st tup . t types ) )
             } {}
         } {}
         = k + k 1
@@ -155,7 +159,7 @@ $ `value.nu`
                 ? > ( slice_len [u] tup ) 0 {
                     ? ( tuple_visible tm snap tup ) {
                         ( vec_push [i] tids ( tid_of pid k ) )
-                        ( vec_push [( Vec Value )] rows ( tuple_row tup . t types ) )
+                        ( vec_push [( Vec Value )] rows ( tuple_row_full st tup . t types ) )
                     } {}
                 } {}
                 = k + k 1
@@ -190,7 +194,7 @@ $ `value.nu`
                 ? > ( slice_len [u] tup ) 0 {
                     ? != ( clog_get tm ( th_xmin tup ) ) XS_ABORTED {
                         ( vec_push [i] tids ( tid_of pid k ) )
-                        ( vec_push [( Vec Value )] rows ( tuple_row tup . t types ) )
+                        ( vec_push [( Vec Value )] rows ( tuple_row_full st tup . t types ) )
                     } {}
                 } {}
                 = k + k 1
@@ -211,7 +215,7 @@ $ `value.nu`
     : PageRead pr ( pool_read . st pool ( tid_pid tid ) )
     : ( Slice u ) tup ( hp_tuple ( page_bytes pr ) ( tid_slot tid ) )
     ? | == ( slice_len [u] tup ) 0 ! ( tuple_visible tm snap tup ) { ^ @ ?( Vec Value ) { F } } {}
-    ^ @ ?( Vec Value ) { T ( tuple_row tup . t types ) }
+    ^ @ ?( Vec Value ) { T ( tuple_row_full st tup . t types ) }
 }
 
 @ abort_serialization → v {

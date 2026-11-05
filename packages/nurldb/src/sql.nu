@@ -41,7 +41,7 @@ $ `value.nu`
 : i TK_STR 4
 : i TK_OP 5
 
-: Tok {
+: SqlTok {
     i kind
     String text  // an identifier folded to lower case; an operator's spelling
     i ival
@@ -56,13 +56,13 @@ $ `value.nu`
 
 @ __w s a s b → b { ^ != 0 ( nurl_str_eq a b ) }
 
-@ __tok i kind String text → Tok { ^ @ Tok { kind text 0 0.0 } }
+@ __tok i kind String text → SqlTok { ^ @ SqlTok { kind text 0 0.0 } }
 
 // The tokens of `src`; a stray character is an error.
-@ sql_lex String src → !( Vec Tok ) String {
+@ sql_lex String src → !( Vec SqlTok ) String {
     : ( Slice u ) b ( string_bytes src )
     : i n ( slice_len [u] b )
-    : ( Vec Tok ) out ( vec_new [Tok] )
+    : ( Vec SqlTok ) out ( vec_new [SqlTok] )
     : ~ i k 0
     ~ < k n {
         : i c ( slice_byte b k )
@@ -78,7 +78,7 @@ $ `value.nu`
                 ( string_push_char t ( __lower ( slice_byte b k ) ) )
                 = k + k 1
             }
-            ( vec_push [Tok] out ( __tok TK_ID t ) )
+            ( vec_push [SqlTok] out ( __tok TK_ID t ) )
             continue
         } {}
         // "Quoted identifier": kept as written.
@@ -87,7 +87,7 @@ $ `value.nu`
             = k + k 1
             ~ & < k n != ( slice_byte b k ) 34 { ( string_push_char t ( slice_byte b k ) ) = k + k 1 }
             = k + k 1
-            ( vec_push [Tok] out ( __tok TK_ID t ) )
+            ( vec_push [SqlTok] out ( __tok TK_ID t ) )
             continue
         } {}
         ? ( __is_digit c ) {
@@ -102,9 +102,9 @@ $ `value.nu`
                     = scale / scale 10.0
                     = k + k 1
                 }
-                ( vec_push [Tok] out @ Tok { TK_REAL ( string_new ) 0 fv } )
+                ( vec_push [SqlTok] out @ SqlTok { TK_REAL ( string_new ) 0 fv } )
             } {
-                ( vec_push [Tok] out @ Tok { TK_INT ( string_new ) iv 0.0 } )
+                ( vec_push [SqlTok] out @ SqlTok { TK_INT ( string_new ) iv 0.0 } )
             }
             continue
         } {}
@@ -121,9 +121,9 @@ $ `value.nu`
                 ( string_push_char t d )
                 = k + k 1
             }
-            ? >= k n { ^ @ !( Vec Tok ) String { F ( string_from `nurldb: a text literal is not closed` ) } } {}
+            ? >= k n { ^ @ !( Vec SqlTok ) String { F ( string_from `nurldb: a text literal is not closed` ) } } {}
             = k + k 1
-            ( vec_push [Tok] out ( __tok TK_STR t ) )
+            ( vec_push [SqlTok] out ( __tok TK_STR t ) )
             continue
         } {}
         // Operators: the two-character ones first.
@@ -132,21 +132,21 @@ $ `value.nu`
         ? two {
             : String t ( string_new )
             ( string_push_char t c ) ( string_push_char t c2 )
-            ( vec_push [Tok] out ( __tok TK_OP t ) )
+            ( vec_push [SqlTok] out ( __tok TK_OP t ) )
             = k + k 2
             continue
         } {}
         ? >= ( nurl_str_find `(),;.*+-/%=<>` ( nurl_str_slice ( string_data src ) k 1 ) ) 0 {
             : String t ( string_new )
             ( string_push_char t c )
-            ( vec_push [Tok] out ( __tok TK_OP t ) )
+            ( vec_push [SqlTok] out ( __tok TK_OP t ) )
             = k + k 1
             continue
         } {}
-        ^ @ !( Vec Tok ) String { F ( string_concat ( string_from `nurldb: unexpected character in SQL at offset ` ) ( string_from ( nurl_str_int k ) ) ) }
+        ^ @ !( Vec SqlTok ) String { F ( string_concat ( string_from `nurldb: unexpected character in SQL at offset ` ) ( string_from ( nurl_str_int k ) ) ) }
     }
-    ( vec_push [Tok] out ( __tok TK_EOF ( string_new ) ) )
-    ^ @ !( Vec Tok ) String { T out }
+    ( vec_push [SqlTok] out ( __tok TK_EOF ( string_new ) ) )
+    ^ @ !( Vec SqlTok ) String { T out }
 }
 
 // ── the tree ───────────────────────────────────────────────────────────
@@ -266,26 +266,26 @@ $ `value.nu`
 // ── the parser ─────────────────────────────────────────────────────────
 
 : P {
-    ( Vec Tok ) toks
+    ( Vec SqlTok ) toks
     i pos
     ( Vec Ex ) ex
 }
 
 @ __err P p s what → v {
-    : Tok t ( vec_at [Tok] . p toks . p pos )
+    : SqlTok t ( vec_at [SqlTok] . p toks . p pos )
     : String near ? == . t kind TK_EOF ( string_from `the end` ) ( string_concat ( string_from `'` ) ( string_concat ( string_clone . t text ) ( string_from `'` ) ) )
     ( panic_with ( string_concat ( string_from `nurldb: syntax error: expected ` ) ( string_concat ( string_from what ) ( string_concat ( string_from ` near ` ) near ) ) ) )
 }
 
-@ __peek P p → Tok { ^ ( vec_at [Tok] . p toks . p pos ) }
+@ __peek P p → SqlTok { ^ ( vec_at [SqlTok] . p toks . p pos ) }
 
 @ __is_kw P p s kw → b {
-    : Tok t ( vec_at [Tok] . p toks . p pos )
+    : SqlTok t ( vec_at [SqlTok] . p toks . p pos )
     ^ & == . t kind TK_ID ( __w ( string_data . t text ) kw )
 }
 
 @ __is_op P p s op → b {
-    : Tok t ( vec_at [Tok] . p toks . p pos )
+    : SqlTok t ( vec_at [SqlTok] . p toks . p pos )
     ^ & == . t kind TK_OP ( __w ( string_data . t text ) op )
 }
 
@@ -305,14 +305,14 @@ $ `value.nu`
 
 // A name (an identifier that is not a reserved word of the statement).
 @ __ident inout P p → String {
-    : Tok t ( vec_at [Tok] . p toks . p pos )
+    : SqlTok t ( vec_at [SqlTok] . p toks . p pos )
     ? != . t kind TK_ID { ( __err p `a name` ) } {}
     = . p pos + . p pos 1
     ^ ( string_clone . t text )
 }
 
 @ __int inout P p → i {
-    : Tok t ( vec_at [Tok] . p toks . p pos )
+    : SqlTok t ( vec_at [SqlTok] . p toks . p pos )
     ? != . t kind TK_INT { ( __err p `a number` ) } {}
     = . p pos + . p pos 1
     ^ . t ival
@@ -436,7 +436,7 @@ $ `value.nu`
 }
 
 @ __primary inout P p → i {
-    : Tok t ( vec_at [Tok] . p toks . p pos )
+    : SqlTok t ( vec_at [SqlTok] . p toks . p pos )
     ? == . t kind TK_INT { = . p pos + . p pos 1 ^ ( __lit p @ Value { VInt . t ival } ) } {}
     ? == . t kind TK_REAL { = . p pos + . p pos 1 ^ ( __lit p @ Value { VReal . t fval } ) } {}
     ? == . t kind TK_STR { = . p pos + . p pos 1 ^ ( __lit p @ Value { VText ( string_clone . t text ) } ) } {}
@@ -470,7 +470,7 @@ $ `value.nu`
 // [AS] alias, when one follows.
 @ __alias inout P p → String {
     ? ( __accept_kw p `as` ) { ^ ( __ident p ) } {}
-    : Tok t ( vec_at [Tok] . p toks . p pos )
+    : SqlTok t ( vec_at [SqlTok] . p toks . p pos )
     ? & == . t kind TK_ID ! ( __is_reserved . t text ) { ^ ( __ident p ) } {}
     ^ ( string_new )
 }
@@ -570,7 +570,7 @@ $ `value.nu`
 
 // Parse one statement (a trailing `;` is fine).
 @ sql_parse String src → Stmt {
-    : ( Vec Tok ) toks ?? ( sql_lex src ) { T v → v F e → { ( panic_with e ) ^ ( stmt_new 0 ) } }
+    : ( Vec SqlTok ) toks ?? ( sql_lex src ) { T v → v F e → { ( panic_with e ) ^ ( stmt_new 0 ) } }
     : ~ P p @ P { toks 0 ( vec_new [Ex] ) }
     : ~ Stmt st ( stmt_new 0 )
     = . st explain ( __accept_kw p `explain` )
@@ -645,7 +645,7 @@ $ `value.nu`
         }
     }
     : b _semi ( __accept_op p `;` )
-    ? != . ( vec_at [Tok] . p toks . p pos ) kind TK_EOF { ( __err p `the end of the statement` ) } {}
+    ? != . ( vec_at [SqlTok] . p toks . p pos ) kind TK_EOF { ( __err p `the end of the statement` ) } {}
     = . st ex ( mem_replace [( Vec Ex )] . p ex ( vec_new [Ex] ) )
     ^ st
 }

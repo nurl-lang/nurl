@@ -10,7 +10,7 @@
 //                                             (-y = without asking). The server
 //                                             hosts a web chat UI with per-
 //                                             browser cookie sessions and a
-//                                             SQLite conversation history.
+//                                             conversation history in nurldb.
 //   nurllama pull <src> [--name N]            download into ~/.nurllama
 //                                             (hf.co/ORG/REPO/FILE.gguf or a
 //                                             URL; resumes a broken pull)

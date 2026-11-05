@@ -106,6 +106,7 @@ void nl_exit_group(int code) {
 #define SYS_fork_      57
 #define SYS_wait4_     61
 #define SYS_fcntl_     72
+#define SYS_flock_     73
 #define SYS_ioctl_     16
 #define SYS_access_    21
 #define SYS_nanosleep_ 35
@@ -232,6 +233,10 @@ int   truncate(const char *p, long long len)        { return (int)nl_ret(nl_sysc
  * an open descriptor names. */
 int   fdatasync(int fd)                             { return (int)nl_ret(nl_syscall6(SYS_fdatasync_, fd, 0, 0, 0, 0, 0)); }
 int   ftruncate(int fd, long long len)              { return (int)nl_ret(nl_syscall6(SYS_ftruncate_, fd, (long)len, 0, 0, 0, 0)); }
+/* flock(2): nurl_fd_try_lock's exclusive, non-blocking lock, which keeps
+ * a second opener (another process, or a second open in this one) off a
+ * database directory. */
+int   flock(int fd, int op)                         { return (int)nl_ret(nl_syscall6(SYS_flock_, fd, op, 0, 0, 0, 0)); }
 int   mprotect(void *p, unsigned long len, int prot) { return (int)nl_ret(nl_syscall6(SYS_mprotect_, (long)p, (long)len, prot, 0, 0, 0)); }
 /* Time and entropy. A simulation build (build_nolibc.sh --sim) takes
  * these three from sim.c instead: a virtual clock and a seeded stream,
