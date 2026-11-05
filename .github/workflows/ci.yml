@@ -405,6 +405,14 @@ jobs:
       # installs the .debs it holds with no network. A miss downloads once,
       # trying archive.ubuntu.com before the Azure mirror, under a cold-path
       # budget, and saves them.
+      # The .debs go in with dpkg, not apt-get (Agora #502). Handed a local
+      # .deb whose version is also the mirror's candidate, apt-get fetched
+      # the mirror's copy: every cache hit downloaded all 115 MB again, and
+      # with the mirror stalled the 10-minute budget ran out on 2026-11-05
+      # (twice, a merge-queue run and the v0.88.0 release PR). dpkg installs
+      # the files it is given and nothing else; a dependency the runner
+      # lacks fails here, by name. The miss path installs the same way, so
+      # the run that saves the cache has proved it complete.
       - name: Restore the MinGW packages
         uses: actions/cache@v4
         with:
@@ -415,17 +423,20 @@ jobs:
         run: |
           if ! command -v x86_64-w64-mingw32-gcc >/dev/null; then
             if ls ~/mingw-debs/*.deb >/dev/null 2>&1; then
-              sudo apt-get install -y --no-install-recommends ~/mingw-debs/*.deb
+              sudo dpkg -i ~/mingw-debs/*.deb
             else
               if [ -f /etc/apt/apt-mirrors.txt ]; then
                 { printf 'http://archive.ubuntu.com/ubuntu/\tpriority:1\n'; cat /etc/apt/apt-mirrors.txt; } | sudo tee /etc/apt/apt-mirrors.txt.new >/dev/null
                 sudo mv /etc/apt/apt-mirrors.txt.new /etc/apt/apt-mirrors.txt
               fi
               sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 update --error-on=any
+              # (Only this toolchain's .debs in the archive: what is cached
+              # is exactly what dpkg installs.)
+              sudo apt-get clean
               sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 install -y --no-install-recommends --download-only gcc-mingw-w64-x86-64
               mkdir -p ~/mingw-debs
               cp /var/cache/apt/archives/*.deb ~/mingw-debs/
-              sudo apt-get install -y --no-install-recommends ~/mingw-debs/*.deb
+              sudo dpkg -i ~/mingw-debs/*.deb
             fi
           fi
           command -v x86_64-w64-mingw32-gcc
