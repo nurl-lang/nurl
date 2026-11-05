@@ -68,12 +68,19 @@ class VerdictTest(unittest.TestCase):
 
 @unittest.skipUnless(NURLC.exists(), 'build/nurlc not built')
 class EndToEndTest(Tree):
-    def run_one(self, text):
+    def run_one(self, text, clang=None):
         self.package('demo', 'demo', {'src/demo.nu': text})
         cwd = cpe.make_root(str(ROOT), [])
         self.addCleanup(shutil.rmtree, cwd, ignore_errors=True)
         os.symlink(self.root / 'packages' / 'demo', os.path.join(cwd, 'deps', 'demo'))
-        return cpe.check_one(str(NURLC), cwd, str(self.root), 'demo', 'demo', 'demo.nu')
+        return cpe.check_one(str(NURLC), cwd, str(self.root), 'demo', 'demo', 'demo.nu', clang)
+
+    def fake_clang(self, rc, stderr):
+        """A clang that answers `rc` and `stderr` to anything (--ir controls)."""
+        p = self.root / 'fake-clang'
+        p.write_text(f"#!/bin/sh\necho '{stderr}' >&2\nexit {rc}\n")
+        p.chmod(0o755)
+        return str(p)
 
     def test_a_library_that_compiles_passes(self):
         self.assertEqual(self.run_one('@ twice i x → i { ^ * 2 x }\n')[2], 'ok')
@@ -82,6 +89,26 @@ class EndToEndTest(Tree):
         _, _, verdict, err, _ = self.run_one('@ twice i x → i { ^ ( nope x ) }\n')
         self.assertEqual(verdict, 'fail')
         self.assertIn('nope', err)
+
+    @unittest.skipUnless(shutil.which('clang'), 'no clang')
+    def test_ir_a_library_that_lowers_passes(self):
+        self.assertEqual(self.run_one('@ twice i x → i { ^ * 2 x }\n', 'clang')[2], 'ok')
+
+    @unittest.skipIf(os.name == 'nt', 'the fake clang is a shell script')
+    def test_ir_clang_refusing_the_ir_fails_and_says_so(self):
+        clang = self.fake_clang(1, "error: use of undefined value '%r488'")
+        _, _, verdict, err, _ = self.run_one('@ twice i x → i { ^ * 2 x }\n', clang)
+        self.assertEqual(verdict, 'fail')
+        self.assertIn('clang rejected the IR', err)
+        self.assertIn('%r488', err)
+
+    @unittest.skipIf(os.name == 'nt', 'the fake clang is a shell script')
+    def test_ir_a_frontend_error_is_nurlc_s_and_clang_is_not_asked(self):
+        clang = self.fake_clang(1, 'clang must not run')
+        _, _, verdict, err, _ = self.run_one('@ twice i x → i { ^ ( nope x ) }\n', clang)
+        self.assertEqual(verdict, 'fail')
+        self.assertTrue(err.startswith('nurlc: '))
+        self.assertNotIn('clang must not run', err)
 
 
 if __name__ == '__main__':
