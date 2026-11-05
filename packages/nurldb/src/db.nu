@@ -16,7 +16,7 @@
 //   32  u64 magic        "NURLDB01"
 //   40  u32 version      2: a TEXT value may be kept out of line on
 //                        overflow pages (ovf.nu), which version 1 —
-//                        nurldb 0.1 — cannot read. Every open of an
+//                        nurldb 0.1 and 0.2 — cannot read. Every open of an
 //                        existing database checkpoints after recovery,
 //                        so a version 1 one is version 2 before it is
 //                        written to

@@ -1,9 +1,8 @@
 # Changelog
 
-## [0.2.0] — unreleased
+## [0.3.0] — 2026-11-05
 
-Requires NURL 0.88.0 (std/pfile.nu's `pfile_try_lock`, std/net's `NetDialer`,
-std/net_sim.nu's `netsim_crash`).
+Requires NURL 0.88.0 (std/pfile.nu's `pfile_try_lock`).
 
 ### Added
 
@@ -26,6 +25,23 @@ std/net_sim.nu's `netsim_crash`).
   wrote the same files. The lock goes with `db_close`, `db_crash` or the
   process, so a killed server leaves no stale lock.
 
+### Changed
+
+- The data file's format is version 2, which nurldb 0.1 and 0.2 cannot
+  read when a value is kept out of line. A version 1 database opens and
+  becomes version 2 at the checkpoint every open makes. A database
+  written by a newer version than this one is refused instead of misread.
+- The SQL lexer's token type is `SqlTok`, not `Tok`. NURL has no
+  namespaces, and a program that imported both nurldb and the tokenizer
+  package (nurllama) had two types named `Tok`.
+
+## [0.2.0] — 2026-11-03
+
+Published with NURL v0.86.0. Requires std/net's `NetDialer` and
+std/net_sim.nu's `netsim_crash`.
+
+### Added
+
 - `serve_on db listener` — serve a listener the caller made: `tcp_listen`'s, or a node's of a simulated network (`netsim_listen`). It returns once the listener stops accepting (closed, or its node crashed) and the connections it accepted have ended; `serve` is `serve_on` over `tcp_listen`.
 - `client_connect_with dialer host port` — the client dialed through a std/net `NetDialer`: the kernel's, or a simulated network's node (`netsim_dialer`).
 - `client_set_timeout client ms` — each read and write of a statement waits at most `ms`, so a server that crashed with the statement in hand fails the statement instead of holding its client forever (found by the DST flagship scenario, NURL agora #262).
@@ -34,13 +50,6 @@ std/net_sim.nu's `netsim_crash`).
 ### Changed
 
 - The checkpointer takes no last checkpoint when its server stops. What is committed is in the log, and recovery replays it.
-- The data file's format is version 2, which nurldb 0.1 cannot read when a
-  value is kept out of line. A version 1 database opens and becomes
-  version 2 at its first checkpoint. A database written by a newer
-  version than this one is refused instead of misread.
-- The SQL lexer's token type is `SqlTok`, not `Tok`. NURL has no
-  namespaces, and a program that imported both nurldb and the tokenizer
-  package (nurllama) had two types named `Tok`.
 
 ## [0.1.1] — 2026-10-26
 

@@ -2,9 +2,9 @@
 
 All notable changes to the `nurllama` package.
 
-## [0.23.0] — unreleased
+## [0.23.0] — 2026-11-05
 
-Requires NURL 0.88.0 and nurldb 0.2.
+Requires NURL 0.88.0 and nurldb 0.3.
 
 ### Changed
 
