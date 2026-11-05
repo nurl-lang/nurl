@@ -280,544 +280,572 @@ Regenerate after adding/renaming globals:
 
 | global | declared | written by | holds |
 |---|---|---|---|
-| `g_agg_arg_lend` | :3159 | `mem_arg_consumption` | 1 while the call argument being compiled is an aggregate literal its callee may hand back whole (gen_call); ge |
-| `g_arcp_any` | :2027 | `__arcp_note` | Whether any callee takes an Arc (`arcp##`, §6.5), and whether the function being compiled has handled one (gen |
-| `g_arg_dyn_box` | :1825 | `gen_dyn_construct`, `mem_arg_consumption`, `mem_arg_temps` | An argument that is `( dyn Trait v )`: the box is a temporary of the call (mem_arg_temps); gen_dyn_construct s |
-| `g_arg_ident_log` | :1496 | `mem_arg_consumption`, `store_global` | --strict-borrowck only: every binding NAME read while generating the current call argument, including reads ne |
-| `g_arg_join_set` | :1834 | `mem_arg_consumption`, `mem_arg_temps` | Set when a `?` / `??` argument's ownership bit waits in `__argtmp_joinown__` for mem_arg_temps (agora #174): t |
-| `g_arg_litown_set` | :1829 | `mem_arg_consumption`, `mem_arg_temps` | Set when a literal argument's owned fields wait in `__argtmp_litown__` for mem_arg_temps: the symbol is writte |
-| `g_arm_qval` | :3167 | `emit_or_chain`, `mem_join_heads_stmt` | 1 from gen_match to the `?` / `??` that is an arm's whole value, in a match whose value is taken: that join's  |
-| `g_arm_valu` | :3163 | `emit_or_chain`, `mem_join_heads_stmt` | 1 while mem_arm_hown asks about an arm of a join whose value is taken (gen_cond's c_valu, gen_match's m_val):  |
-| `g_at` | :72941 | `__ext_calls_back` | ── Which functions run inside a recover extent ───────────────── |
-| `g_auto_drop_strings` | :2862 | `__target_arch` | Phase 2B auto-drop-strings feature flag. Default ON. Compiler's own source uses patterns (strings stored via n |
-| `g_bck` | :1584 | `__target_arch` |  |
-| `g_bck_ab_any` | :2043 | `bck_analyze`, `bck_borrow_begin` | Whether any borrow of this function's walk is one of a payload (`ab_`). |
+| `g_agg_arg_lend` | :3233 | `mem_arg_consumption` | 1 while the call argument being compiled is an aggregate literal its callee may hand back whole (gen_call); ge |
+| `g_arcp_any` | :2101 | `__arcp_note` | Whether any callee takes an Arc (`arcp##`, §6.5), and whether the function being compiled has handled one (gen |
+| `g_arg_dyn_box` | :1889 | `gen_dyn_construct`, `mem_arg_consumption`, `mem_arg_temps` | An argument that is `( dyn Trait v )`: the box is a temporary of the call (mem_arg_temps); gen_dyn_construct s |
+| `g_arg_ident_log` | :1518 | `mem_arg_consumption`, `store_global` | --strict-borrowck only: every binding NAME read while generating the current call argument, including reads ne |
+| `g_arg_join_set` | :1898 | `mem_arg_consumption`, `mem_arg_temps` | Set when a `?` / `??` argument's ownership bit waits in `__argtmp_joinown__` for mem_arg_temps (agora #174): t |
+| `g_arg_litown_set` | :1893 | `mem_arg_consumption`, `mem_arg_temps` | Set when a literal argument's owned fields wait in `__argtmp_litown__` for mem_arg_temps: the symbol is writte |
+| `g_arm_qval` | :3241 | `emit_or_chain`, `mem_join_heads_stmt` | 1 from gen_match to the `?` / `??` that is an arm's whole value, in a match whose value is taken: that join's  |
+| `g_arm_valu` | :3237 | `emit_or_chain`, `mem_join_heads_stmt` | 1 while mem_arm_hown asks about an arm of a join whose value is taken (gen_cond's c_valu, gen_match's m_val):  |
+| `g_at` | :74970 | `__ext_calls_back` | ── Which functions run inside a recover extent ───────────────── |
+| `g_auto_drop_strings` | :2936 | `__target_arch` | Phase 2B auto-drop-strings feature flag. Default ON. Compiler's own source uses patterns (strings stored via n |
+| `g_bck` | :1606 | `__target_arch` |  |
+| `g_bck_ab_any` | :2117 | `bck_analyze`, `bck_borrow_begin` | Whether any borrow of this function's walk is one of a payload (`ab_`). |
 | `g_bck_ans_union` | :179 | `bck_defer_fn` |  |
-| `g_bck_bind_owns` | :28452 | `__note_vcopy`, `bck_flush_moves` | …and 1 while gen_let records a binding that owns its value — not one a call lent it (g_bck_rhs_lend), whose dr |
-| `g_bck_bind_scalar` | :28438 | `bck_flush_moves` | Set by bck_record_binding for its row: 1 when the binding holds no heap value and no address (a scalar), so no |
-| `g_bck_bind_sown` | :28461 | `__assign_result_lent`, `__note_vcopy`, `bck_flush_moves` | …and 1 when it is an `s` that owns the buffer it points at (field 5 `o`): a tracked owned string, every assign |
-| `g_bck_bind_udrop` | :28445 | `bck_flush_moves` | …and 1 when an owner that may hold views (class 3) holds a value with a `% Drop` of the program's own that may |
-| `g_bck_bind_wview` | :28440 | `bck_flush_moves` | …and 1 when that view owns nothing (field 5 `w`, bck_record_binding). |
-| `g_bck_br_next` | :3040 | `bck_walk_seq` | What the borrow a borrow row begins is a copy of (bck_byte_root), handed to bck_borrow_begin; -1 for none know |
-| `g_bck_brev_id` | :3044 | `bck_analyze`, `bck_br_event` | The binding whose `let` / `=` row the walk is in, and what it was a copy of before that row (bck_br_event): th |
-| `g_bck_brev_prev` | :3046 | `bck_br_event`, `bck_br_set` | (-2: not read yet — read at the event's first mark, bck_br_set.) |
-| `g_bck_cap_names` | :1518 | `__csv_has`, `bck_clear_cap_name`, `bck_fn_begin` | Names of `:`-bound closures in the CURRENT function whose capture list is non-empty — the allocation-free pre- |
-| `g_bck_cap_via` | :1529 | `__csv_has`, `bck_defer_fn`, `bck_fn_begin`, `bck_opaque_param_run` | `<handle> <closure>` pairs for the current function: which closure binding made a captured handle reachable at |
-| `g_bck_close` | :31996 | `bck_kill_stored_in_d` | The close marker of every open marker, found once per walk with a stack per bracket kind: the walk asks for th |
-| `g_bck_closure_depth` | :1662 | `__csv_has` |  |
-| `g_bck_cv_leaf` | :28482 | `bck_walk_seq` | Set while the walk asks what a value stored into a closure's capture views (bck_sx_name's `cv_` leaves; agora  |
-| `g_bck_cw0` | :3024 | `bck_cursor_watch` |  |
-| `g_bck_cw1` | :3025 | `bck_cursor_watch` |  |
-| `g_bck_cw2` | :3026 | `bck_cursor_watch` |  |
-| `g_bck_cw3` | :3027 | `bck_cursor_watch` |  |
-| `g_bck_cwn` | :3023 | `bck_cursor_watch` | …and the ids a row may concern them through (bck_cursor_watch): up to four in `g_bck_cw0`…`g_bck_cw3` (`g_bck_ |
-| `g_bck_depth` | :1593 | `__csv_has`, `bck_block_enter`, `bck_block_exit`, `bck_fn_begin` |  |
-| `g_bck_dg` | :1590 | `bck_add`, `bck_add_word`, `bck_put` | A digest of g_bck's content, kept while a loop is walked (bck_put): the XOR of one hash per key and value, so  |
-| `g_bck_dser` | :3215 | `bck_alias_step` |  |
-| `g_bck_end_eonly` | :3031 | `bck_borrow_sweep`, `bck_cursor_edit` | Set while a borrow end comes from elements dropped or replaced (not the value itself): an owner holding a clos |
+| `g_bck_bind_owns` | :28988 | `__note_vcopy`, `bck_flush_moves` | …and 1 while gen_let records a binding that owns its value — not one a call lent it (g_bck_rhs_lend), whose dr |
+| `g_bck_bind_scalar` | :28974 | `bck_flush_moves` | Set by bck_record_binding for its row: 1 when the binding holds no heap value and no address (a scalar), so no |
+| `g_bck_bind_sown` | :28997 | `__assign_result_lent`, `__note_vcopy`, `bck_flush_moves` | …and 1 when it is an `s` that owns the buffer it points at (field 5 `o`): a tracked owned string, every assign |
+| `g_bck_bind_udrop` | :28981 | `bck_flush_moves` | …and 1 when an owner that may hold views (class 3) holds a value with a `% Drop` of the program's own that may |
+| `g_bck_bind_wview` | :28976 | `bck_flush_moves` | …and 1 when that view owns nothing (field 5 `w`, bck_record_binding). |
+| `g_bck_br_next` | :3114 | `bck_walk_seq` | What the borrow a borrow row begins is a copy of (bck_byte_root), handed to bck_borrow_begin; -1 for none know |
+| `g_bck_brev_id` | :3118 | `bck_analyze`, `bck_br_event` | The binding whose `let` / `=` row the walk is in, and what it was a copy of before that row (bck_br_event): th |
+| `g_bck_brev_prev` | :3120 | `bck_br_event`, `bck_br_set` | (-2: not read yet — read at the event's first mark, bck_br_set.) |
+| `g_bck_cap_names` | :1540 | `__csv_has`, `bck_clear_cap_name`, `bck_fn_begin` | Names of `:`-bound closures in the CURRENT function whose capture list is non-empty — the allocation-free pre- |
+| `g_bck_cap_via` | :1551 | `__csv_has`, `bck_defer_fn`, `bck_fn_begin`, `bck_opaque_param_run` | `<handle> <closure>` pairs for the current function: which closure binding made a captured handle reachable at |
+| `g_bck_close` | :32627 | `bck_kill_stored_in_d` | The close marker of every open marker, found once per walk with a stack per bracket kind: the walk asks for th |
+| `g_bck_closure_depth` | :1684 | `__csv_has` |  |
+| `g_bck_cv_leaf` | :29018 | `bck_walk_seq` | Set while the walk asks what a value stored into a closure's capture views (bck_sx_name's `cv_` leaves; agora  |
+| `g_bck_cw0` | :3098 | `bck_cursor_watch` |  |
+| `g_bck_cw1` | :3099 | `bck_cursor_watch` |  |
+| `g_bck_cw2` | :3100 | `bck_cursor_watch` |  |
+| `g_bck_cw3` | :3101 | `bck_cursor_watch` |  |
+| `g_bck_cwn` | :3097 | `bck_cursor_watch` | …and the ids a row may concern them through (bck_cursor_watch): up to four in `g_bck_cw0`…`g_bck_cw3` (`g_bck_ |
+| `g_bck_depth` | :1615 | `__csv_has`, `bck_block_enter`, `bck_block_exit`, `bck_fn_begin` |  |
+| `g_bck_dg` | :1612 | `bck_add`, `bck_add_word`, `bck_put` | A digest of g_bck's content, kept while a loop is walked (bck_put): the XOR of one hash per key and value, so  |
+| `g_bck_dser` | :3289 | `bck_alias_step` |  |
+| `g_bck_end_eonly` | :3105 | `bck_borrow_sweep`, `bck_cursor_edit` | Set while a borrow end comes from elements dropped or replaced (not the value itself): an owner holding a clos |
 | `g_bck_end_views` | :176 | `bck_join_giveback` |  |
-| `g_bck_end_wid` | :3037 | `bck_borrow_sweep` | …and that borrow itself (bck_br_survives): -1 for none. |
-| `g_bck_end_wroot` | :3035 | `bck_borrow_sweep` | …and, when the elements changed through a borrow, what that borrow's bytes are a copy of (bck_byte_root): a bo |
-| `g_bck_ending` | :28455 | `bck_join_giveback` | The ids a scope's end has released so far, as it releases them (bck_scope_drop): dropped already, not after wh |
-| `g_bck_errors` | :1666 | `__ptr_stale_warn`, `__ptr_stale_warn_at`, `bck_note_may_own` | capture hooks no-op so closure statements do not inline into the enclosing function's list (so closure scopes  |
-| `g_bck_fevar` | :1769 | `bck_block_enter`, `bck_fn_begin`, `gen_foreach` | A `~ x xs` loop's element binding is waiting for its body's block row (`pending_fevar` in g_bck names it). |
-| `g_bck_fmv_any` | :3198 | `bck_analyze`, `bck_walk_seq` | Whether a callee took a field path in the function being walked: its ids, one a word, are g_bck's `fmv`, asked |
+| `g_bck_end_wid` | :3111 | `bck_borrow_sweep` | …and that borrow itself (bck_br_survives): -1 for none. |
+| `g_bck_end_wroot` | :3109 | `bck_borrow_sweep` | …and, when the elements changed through a borrow, what that borrow's bytes are a copy of (bck_byte_root): a bo |
+| `g_bck_ending` | :28991 | `bck_join_giveback` | The ids a scope's end has released so far, as it releases them (bck_scope_drop): dropped already, not after wh |
+| `g_bck_errors` | :1688 | `__ptr_stale_warn`, `__ptr_stale_warn_at`, `bck_note_may_own` | capture hooks no-op so closure statements do not inline into the enclosing function's list (so closure scopes  |
+| `g_bck_fevar` | :1833 | `bck_block_enter`, `bck_fn_begin`, `gen_foreach` | A `~ x xs` loop's element binding is waiting for its body's block row (`pending_fevar` in g_bck names it). |
+| `g_bck_fmv_any` | :3272 | `bck_analyze`, `bck_walk_seq` | Whether a callee took a field path in the function being walked: its ids, one a word, are g_bck's `fmv`, asked |
 | `g_bck_fn` | :177 | `__bck_answers`, `__csv_has`, `bck_defer_fn` |  |
-| `g_bck_gen` | :1631 | `bck_analyze` |  |
-| `g_bck_has_borrow` | :30921 | `bck_analyze`, `bck_borrow_begin`, `bck_dep_add`, `bck_walk_seq` | Set once a function records a borrow: only then does the walk compare states row by row to end borrows whose s |
-| `g_bck_has_cursor` | :3011 | `bck_analyze`, `bck_handle_match` | …and whether it has bound a `??` arm's payload as a cursor over the option binding it matched (bck_handle_matc |
-| `g_bck_has_defers` | :1637 | `bck_analyze` |  |
-| `g_bck_has_deps` | :3008 | `bck_analyze`, `bck_dep_add` | Whether this function's walk has recorded any view dependency (bck_dep_add), and statement `vpass` rows pendin |
-| `g_bck_has_paths` | :30923 | `bck_alias_step`, `bck_analyze` | Set once a function interns a field path (`s.items`, bck_intern). |
-| `g_bck_hc_any` | :3014 | `bck_analyze`, `bck_walk_seq` | …and whether it has marked a borrow a copy of an owner's own handle (`hc_`, bck_view_end_via): a `let` clears  |
-| `g_bck_hr_any` | :3019 | `__bck_hr_set`, `bck_analyze` | …and once a binding was marked a copy of another's handle or a part of one (`hr_`, __bck_hr_set): a `let` clea |
-| `g_bck_inew` | :3216 | `bck_alias_step` |  |
-| `g_bck_inn` | :1635 | `bck_alias_step`, `bck_analyze` | intern table — bumped per bck_analyze so entries from earlier functions read as misses without any table clear |
-| `g_bck_inp_any` | :3201 | `bck_analyze` | …and whether it has an `inout` parameter (g_bck's `inp`, their ids): each exit hands those back to the caller  |
-| `g_bck_iter_live` | :3174 | `__csv_has`, `bck_fn_begin`, `bck_iter_enter`, `bck_iter_exit` | 1 while the code being compiled sits in a `~` loop over a container (`iter_containers` in g_bck is not empty): |
-| `g_bck_jgb_any` | :3016 | `bck_analyze`, `bck_walk_seq` | Set once a `:` binding of a `?` / `??` took an owner (bck_join_giveback). |
-| `g_bck_let_sx_last` | :1605 | `__assign_result_lent`, `__note_vcopy` | The last `let`'s right-hand source expression (g_bck_rhs_sx), kept past its row: a join it bound is followed b |
-| `g_bck_match_sx` | :2045 | `bck_record`, `emit_or_chain` | The source expression of the call a `match` row matches (gen_match). |
-| `g_bck_nch_any` | :32510 | `__src_mark_nc`, `bck_analyze` | …and whether any handle copy was marked one an owner cannot copy in (`nch_`, __src_mark_nc) — none: __src_drop |
-| `g_bck_nrows` | :30930 | `bck_kill_stored_in_d` |  |
+| `g_bck_gen` | :1653 | `bck_analyze` |  |
+| `g_bck_has_borrow` | :31531 | `bck_analyze`, `bck_borrow_begin`, `bck_dep_add`, `bck_walk_seq` | Set once a function records a borrow: only then does the walk compare states row by row to end borrows whose s |
+| `g_bck_has_cursor` | :3085 | `bck_analyze`, `bck_handle_match` | …and whether it has bound a `??` arm's payload as a cursor over the option binding it matched (bck_handle_matc |
+| `g_bck_has_defers` | :1659 | `bck_analyze` |  |
+| `g_bck_has_deps` | :3082 | `bck_analyze`, `bck_dep_add` | Whether this function's walk has recorded any view dependency (bck_dep_add), and statement `vpass` rows pendin |
+| `g_bck_has_paths` | :31533 | `bck_alias_step`, `bck_analyze` | Set once a function interns a field path (`s.items`, bck_intern). |
+| `g_bck_hc_any` | :3088 | `bck_analyze`, `bck_walk_seq` | …and whether it has marked a borrow a copy of an owner's own handle (`hc_`, bck_view_end_via): a `let` clears  |
+| `g_bck_held_any` | :33172 | `__bck_seed_held`, `bck_analyze` | 1 once the function walked has a parameter's pseudo (__bck_seed_held): only then can a holder hold a copy of a |
+| `g_bck_hr_any` | :3093 | `__bck_hr_set`, `bck_analyze` | …and once a binding was marked a copy of another's handle or a part of one (`hr_`, __bck_hr_set): a `let` clea |
+| `g_bck_inew` | :3290 | `bck_alias_step` |  |
+| `g_bck_inn` | :1657 | `bck_alias_step`, `bck_analyze` | intern table — bumped per bck_analyze so entries from earlier functions read as misses without any table clear |
+| `g_bck_inp_any` | :3275 | `bck_analyze` | …and whether it has an `inout` parameter (g_bck's `inp`, their ids): each exit hands those back to the caller  |
+| `g_bck_iter_live` | :3248 | `__csv_has`, `bck_fn_begin`, `bck_iter_enter`, `bck_iter_exit` | 1 while the code being compiled sits in a `~` loop over a container (`iter_containers` in g_bck is not empty): |
+| `g_bck_jgb_any` | :3090 | `bck_analyze`, `bck_walk_seq` | Set once a `:` binding of a `?` / `??` took an owner (bck_join_giveback). |
+| `g_bck_let_sx_last` | :1627 | `__assign_result_lent`, `__note_vcopy` | The last `let`'s right-hand source expression (g_bck_rhs_sx), kept past its row: a join it bound is followed b |
+| `g_bck_match_sx` | :2119 | `bck_record`, `emit_or_chain` | The source expression of the call a `match` row matches (gen_match). |
+| `g_bck_nch_any` | :33141 | `__src_mark_nc`, `bck_analyze` | …and whether any handle copy was marked one an owner cannot copy in (`nch_`, __src_mark_nc) — none: __src_drop |
+| `g_bck_nrows` | :31540 | `bck_kill_stored_in_d` |  |
 | `g_bck_own_params` | :175 | `__bck_answers`, `bck_defer_fn` |  |
-| `g_bck_ownerless` | :1629 | `bck_flush_moves`, `bck_stash_store`, `bck_take_owner_stores` |  |
-| `g_bck_pcap` | :30936 | `bck_alias_step` |  |
-| `g_bck_pm_slot` | :14678 | `__strget_loop_warn` |  |
-| `g_bck_pn` | :30935 | `bck_alias_step` |  |
-| `g_bck_pr` | :30934 | `bck_alias_step` | Per id of the function analysed now: the binding it belongs to (itself unless a field path) and a path's spell |
-| `g_bck_pvpass_n` | :3047 | `bck_flush_vpass`, `bck_side_lists_put`, `bck_side_lists_take`, `bck_stash_arcx` +4 |  |
+| `g_bck_ownerless` | :1651 | `bck_flush_moves`, `bck_stash_store`, `bck_take_owner_stores` |  |
+| `g_bck_pcap` | :31546 | `bck_alias_step` |  |
+| `g_bck_pm_slot` | :14817 | `__strget_loop_warn` |  |
+| `g_bck_pn` | :31545 | `bck_alias_step` |  |
+| `g_bck_pr` | :31544 | `bck_alias_step` | Per id of the function analysed now: the binding it belongs to (itself unless a field path) and a path's spell |
+| `g_bck_pvpass_n` | :3121 | `bck_flush_vpass`, `bck_side_lists_put`, `bck_side_lists_take`, `bck_stash_arcx` +5 |  |
 | `g_bck_quiet` | :178 | `bck_defer_fn` |  |
-| `g_bck_rcap` | :30931 | `bck_kill_stored_in_d` |  |
+| `g_bck_rcap` | :31541 | `bck_kill_stored_in_d` |  |
 | `g_bck_rcty` | :215 | `__csv_has`, `bck_defer_fn`, `bck_elem_keeper`, `bck_fn_begin` | The bindings and field paths of the function being walked that hold an `Rc` handle, as `name=type` words (bck_ |
-| `g_bck_rd_slot` | :14677 | `__strget_loop_warn` | Byte length of one of g_bck's statement lists (`reads`, `pmoves`) in O(1): g_bck is one flat scope that never  |
-| `g_bck_rec_off` | :1649 | (init only) | >0 while the borrow checker's capture hooks must not record. Used to be spelled `g_bck_closure_depth != 0`, wh |
-| `g_bck_ret_dep` | :3190 | `mem_note_ret_clo_cap` |  |
-| `g_bck_ret_guard` | :1636 | `bck_walk_seq` |  |
-| `g_bck_ret_line` | :1638 | `bck_walk_seq` |  |
-| `g_bck_ret_sx` | :3189 | `mem_note_ret_clo_cap` | The source expression of a returned view (field 8 of its `ret` row), and 1 when it is an owner returned by nam |
-| `g_bck_ret_whole` | :3194 | `mem_note_ret_clo_cap` | The bare binding a `^` hands back whole (`^ h`, not `^ . h f`): the ret row's name field, so the walk can ask  |
-| `g_bck_rhs_callee` | :28467 | `__assign_result_lent`, `__note_vcopy` | The call a `let` / `assign` binds the result of (field 6 of its row): a lend the walk learns from the callee's |
-| `g_bck_rhs_lend` | :28885 | `__assign_result_lent`, `__note_vcopy` | Set by a binding whose right-hand side is a call: the sources a borrow of its result has (bck_call_lend_srcs); |
-| `g_bck_rhs_path` | :3116 | `__assign_result_lent`, `__note_vcopy`, `bck_note_borrow` | …and the path a binding's field-read right-hand side named (`: T n . h name` → `h.name`): what a borrow decide |
-| `g_bck_rhs_sx` | :28470 | `__assign_result_lent`, `__note_vcopy` | The source expression of a `let` / `assign`'s right-hand side (field 8 of a view's row, g_srcx_on): its source |
-| `g_bck_rk` | :30929 | `bck_kill_stored_in_d` | …and each row's kind code (bck_kind_code). |
-| `g_bck_rlen` | :30927 | `bck_kill_stored_in_d` |  |
-| `g_bck_rows` | :30926 | `bck_kill_stored_in_d` | The rows of the function being walked (bck_explode / bck_rec): copies and their lengths. |
-| `g_bck_sc` | :3221 | `__cursor_src_of` |  |
-| `g_bck_sc_cap` | :3220 | `__cursor_src_of` |  |
-| `g_bck_sc_n` | :3219 | `__cursor_src_of`, `bck_walk_seq` | The blocks the walk is in, innermost last (bck_scope_push): rows [lo, hi) of each, and whether it is a loop's  |
-| `g_bck_sx_gen` | :1630 | `bck_walk_seq` |  |
-| `g_bck_udrop_any` | :28448 | `bck_analyze`, `bck_kill_stored_in_d`, `bck_xlate_row1` | …and 1 once a row of the function being walked marks one (bck_xlate_row): only then does a return ask its drop |
-| `g_bck_view_reads` | :28463 | `bck_flush_moves` | What a view binding's right-hand side read (bck_record_binding). |
-| `g_bck_watch` | :1592 | `bck_analyze`, `bck_loop` | Loops being walked, nesting included; g_bck_dg follows writes only while > 0. |
-| `g_bcls_memo` | :3002 | `__target_arch` | A binding class per LLVM type (bck_bind_class), and the trusted-file answer for the current source file (bck_u |
-| `g_blk_depth` | :2053 | `__blk_enter` |  |
-| `g_blk_froot` | :3060 | `gen_block_expr`, `mem_note_payload_part` |  |
-| `g_blk_lets` | :2052 | `__blk_enter`, `__blk_tail_sx` | What the bindings declared in value-position blocks hold (h216): words `D:name=sx` (a `let` at block depth D), |
-| `g_blk_scalar_let` | :1772 | `__note_vcopy`, `gen_block_expr` | The `:` binding the next block initialises is a number or a flag (gen_let_or_struct → gen_block_expr, consumed |
-| `g_blk_tail_eff` | :3063 | `gen_backslash_expr`, `gen_block_expr`, `gen_try_expr` | …and the first token of its tail statement, through a tail that is itself a block (`^ { … { … ( g x ) } }`: a  |
-| `g_blk_tail_lit_col` | :6683 | `gen_block_expr`, `gen_block_ret` |  |
-| `g_blk_tail_lit_line` | :6682 | `emit_or_chain`, `gen_block_expr`, `gen_block_ret`, `gen_block_stmts` +1 | g_blk_tail_lit_line/col — the dangling-literal exemption's escape hatch, closed. A bare literal as a value blo |
-| `g_blk_val_depth` | :2054 | `__blk_enter` |  |
-| `g_body_ends` | :12061 | `body_ends_reset` | Where each brace block ends: "<text identity> <offset of a '{'>" → the offset just past its matching '}'. Ever |
-| `g_borrowck` | :1544 | `__target_arch` | ── Borrow-checker state ───────────────────────────────────────── g_borrowck is 1 (ON) by default; `--no-borro |
-| `g_call_lend_roots` | :2988 | `gen_mem_dup`, `mem_arg_consumption` |  |
-| `g_call_roots` | :2987 | `gen_mem_dup`, `mem_arg_consumption` | The call just generated, when one of its arguments was a field path (`. b items`): its arguments with that fie |
-| `g_cast_fresh_in` | :1656 | `__gen_cast_body`, `is_ptr_ty` |  |
-| `g_cg_blk_depth` | :1597 | `bck_block_enter`, `bck_block_exit`, `emit_or_chain` | …and the same as code generation sees it, whether or not the borrow walk records (bck_block_enter / exit): an  |
-| `g_cj_depth` | :28474 | `__bck_hr_drop_owner`, `bck_analyze`, `bck_handle_cond`, `bck_handle_match` | While a `?` / `??` join's arms are walked: how deep, and the borrow facts the arm walked now has changed, with |
-| `g_cj_entry` | :28479 | `__bck_hr_drop_owner`, `bck_analyze`, `bck_handle_cond`, `bck_handle_match` | …and the state the innermost such join started from, by address — the join's own `state`, alive while its arms |
-| `g_cj_log` | :28475 | `__bck_hr_drop_owner`, `__cj_key_root`, `bck_analyze`, `bck_handle_cond` +1 |  |
+| `g_bck_rd_slot` | :14816 | `__strget_loop_warn` | Byte length of one of g_bck's statement lists (`reads`, `pmoves`) in O(1): g_bck is one flat scope that never  |
+| `g_bck_rec_off` | :1671 | (init only) | >0 while the borrow checker's capture hooks must not record. Used to be spelled `g_bck_closure_depth != 0`, wh |
+| `g_bck_ret_dep` | :3264 | `mem_note_ret_clo_cap` |  |
+| `g_bck_ret_guard` | :1658 | `bck_walk_seq` |  |
+| `g_bck_ret_line` | :1660 | `bck_walk_seq` |  |
+| `g_bck_ret_sx` | :3263 | `mem_note_ret_clo_cap` | The source expression of a returned view (field 8 of its `ret` row), and 1 when it is an owner returned by nam |
+| `g_bck_ret_whole` | :3268 | `mem_note_ret_clo_cap` | The bare binding a `^` hands back whole (`^ h`, not `^ . h f`): the ret row's name field, so the walk can ask  |
+| `g_bck_rhs_callee` | :29003 | `__assign_result_lent`, `__note_vcopy` | The call a `let` / `assign` binds the result of (field 6 of its row): a lend the walk learns from the callee's |
+| `g_bck_rhs_lend` | :29421 | `__assign_result_lent`, `__note_vcopy` | Set by a binding whose right-hand side is a call: the sources a borrow of its result has (bck_call_lend_srcs); |
+| `g_bck_rhs_path` | :3190 | `__assign_result_lent`, `__note_vcopy`, `bck_note_borrow` | …and the path a binding's field-read right-hand side named (`: T n . h name` → `h.name`): what a borrow decide |
+| `g_bck_rhs_sx` | :29006 | `__assign_result_lent`, `__note_vcopy` | The source expression of a `let` / `assign`'s right-hand side (field 8 of a view's row, g_srcx_on): its source |
+| `g_bck_rk` | :31539 | `bck_kill_stored_in_d` | …and each row's kind code (bck_kind_code). |
+| `g_bck_rlen` | :31537 | `bck_kill_stored_in_d` |  |
+| `g_bck_rows` | :31536 | `bck_kill_stored_in_d` | The rows of the function being walked (bck_explode / bck_rec): copies and their lengths. |
+| `g_bck_rva_any` | :33166 | `__bck_rva_add`, `__bck_rva_set`, `bck_analyze` | Whether a binding of this function's walk was bound to such an answer (`rva_`). |
+| `g_bck_sc` | :3295 | `__cursor_src_of` |  |
+| `g_bck_sc_cap` | :3294 | `__cursor_src_of` |  |
+| `g_bck_sc_n` | :3293 | `__cursor_src_of`, `bck_walk_seq` | The blocks the walk is in, innermost last (bck_scope_push): rows [lo, hi) of each, and whether it is a loop's  |
+| `g_bck_sx_gen` | :1652 | `bck_walk_seq` |  |
+| `g_bck_udrop_any` | :28984 | `bck_analyze`, `bck_kill_stored_in_d`, `bck_xlate_row1` | …and 1 once a row of the function being walked marks one (bck_xlate_row): only then does a return ask its drop |
+| `g_bck_view_reads` | :28999 | `bck_flush_moves` | What a view binding's right-hand side read (bck_record_binding). |
+| `g_bck_watch` | :1614 | `bck_analyze`, `bck_loop` | Loops being walked, nesting included; g_bck_dg follows writes only while > 0. |
+| `g_bcls_memo` | :3076 | `__target_arch` | A binding class per LLVM type (bck_bind_class), and the trusted-file answer for the current source file (bck_u |
+| `g_blk_depth` | :2127 | `__blk_enter` |  |
+| `g_blk_froot` | :3134 | `gen_block_expr`, `mem_note_payload_part` |  |
+| `g_blk_lets` | :2126 | `__blk_enter`, `__blk_tail_sx` | What the bindings declared in value-position blocks hold (h216): words `D:name=sx` (a `let` at block depth D), |
+| `g_blk_scalar_let` | :1836 | `__note_vcopy`, `gen_block_expr` | The `:` binding the next block initialises is a number or a flag (gen_let_or_struct → gen_block_expr, consumed |
+| `g_blk_tail_eff` | :3137 | `gen_backslash_expr`, `gen_block_expr`, `gen_try_expr` | …and the first token of its tail statement, through a tail that is itself a block (`^ { … { … ( g x ) } }`: a  |
+| `g_blk_tail_lit_col` | :6808 | `gen_block_expr`, `gen_block_ret` |  |
+| `g_blk_tail_lit_line` | :6807 | `emit_or_chain`, `gen_block_expr`, `gen_block_ret`, `gen_block_stmts` +1 | g_blk_tail_lit_line/col — the dangling-literal exemption's escape hatch, closed. A bare literal as a value blo |
+| `g_blk_val_depth` | :2128 | `__blk_enter` |  |
+| `g_body_ends` | :12193 | `body_ends_reset` | Where each brace block ends: "<text identity> <offset of a '{'>" → the offset just past its matching '}'. Ever |
+| `g_borrowck` | :1566 | `__target_arch` | ── Borrow-checker state ───────────────────────────────────────── g_borrowck is 1 (ON) by default; `--no-borro |
+| `g_call_lend_roots` | :3062 | `gen_mem_dup`, `mem_arg_consumption` |  |
+| `g_call_roots` | :3061 | `gen_mem_dup`, `mem_arg_consumption` | The call just generated, when one of its arguments was a field path (`. b items`): its arguments with that fie |
+| `g_cast_fresh_in` | :1678 | `__gen_cast_body`, `is_ptr_ty` |  |
+| `g_cg_blk_depth` | :1619 | `bck_block_enter`, `bck_block_exit`, `emit_or_chain` | …and the same as code generation sees it, whether or not the borrow walk records (bck_block_enter / exit): an  |
+| `g_cj_depth` | :29010 | `__bck_hr_drop_owner`, `bck_analyze`, `bck_handle_cond`, `bck_handle_match` | While a `?` / `??` join's arms are walked: how deep, and the borrow facts the arm walked now has changed, with |
+| `g_cj_entry` | :29015 | `__bck_hr_drop_owner`, `bck_analyze`, `bck_handle_cond`, `bck_handle_match` | …and the state the innermost such join started from, by address — the join's own `state`, alive while its arms |
+| `g_cj_log` | :29011 | `__bck_hr_drop_owner`, `__cj_key_root`, `bck_analyze`, `bck_handle_cond` +1 |  |
 | `g_clo_all_params` | :189 | `__csv_has` |  |
-| `g_clo_assigned` | :1766 | `__csv_has` | The `: ~` scalars the closure being built assigns (simple_capture_analysis finds them; __gen_closure_expr publ |
-| `g_clo_bind_name` | :1812 | `__csv_has`, `__note_vcopy` |  |
-| `g_clo_cap_set` | :1628 | `mem_arg_consumption` |  |
-| `g_clo_caps_now` | :3178 | `__csv_has` | While a closure body is compiled: what it captured (g_clo_caps_now) and the calls it hands one of them — or a  |
+| `g_clo_assigned` | :1830 | `__csv_has` | The `: ~` scalars the closure being built assigns (simple_capture_analysis finds them; __gen_closure_expr publ |
+| `g_clo_bind_name` | :1876 | `__csv_has`, `__note_vcopy` |  |
+| `g_clo_cap_set` | :1650 | `mem_arg_consumption` |  |
+| `g_clo_caps_now` | :3252 | `__csv_has` | While a closure body is compiled: what it captured (g_clo_caps_now) and the calls it hands one of them — or a  |
 | `g_clo_cla_list` | :197 | `__clo_node_ty` |  |
 | `g_clo_closed` | :199 | `__indirect_members` |  |
 | `g_clo_cur` | :187 | `__csv_has` | A call through a closure value is a call of its summary node (agora #359, #403): `name__cloN`, whose members a |
-| `g_clo_deriv` | :3186 | `__csv_has`, `__sx_bind_names` | In the closure body compiling now, its handle locals read out of a capture — an element (`: ( Vec String ) e ( |
-| `g_clo_detach` | :1801 | `__csv_has`, `mem_arg_consumption` | Set by a call compiling a closure literal as the closure a thread or a fiber runs, or by a `:` binding of one  |
-| `g_clo_detach_shared` | :1795 | `__csv_has` | The detached closure's captures taken by share (__clo_detach_moves); consumed by gen_closure_expr like the mov |
-| `g_clo_fld_roots` | :1782 | `__csv_has` | The outer bindings the closure being built stores a FIELD of (`= . w f …`, `= . . h w f …`): captured by refer |
+| `g_clo_deriv` | :3260 | `__csv_has`, `__sx_bind_names` | In the closure body compiling now, its handle locals read out of a capture — an element (`: ( Vec String ) e ( |
+| `g_clo_detach` | :1865 | `__csv_has`, `mem_arg_consumption` | Set by a call compiling a closure literal as the closure a thread or a fiber runs, or by a `:` binding of one  |
+| `g_clo_detach_shared` | :1859 | `__csv_has` | The detached closure's captures taken by share (__clo_detach_moves); consumed by gen_closure_expr like the mov |
+| `g_clo_fld_roots` | :1846 | `__csv_has` | The outer bindings the closure being built stores a FIELD of (`= . w f …`, `= . . h w f …`): captured by refer |
 | `g_clo_inl_list` | :198 | `mem_arg_consumption` |  |
-| `g_clo_lend_set` | :1627 | `mem_arg_consumption` |  |
+| `g_clo_lend_set` | :1649 | `mem_arg_consumption` |  |
 | `g_clo_lpnode_list` | :196 | `__clo_cs_expr` |  |
 | `g_clo_node_list` | :193 | `__clo_lits_of` |  |
 | `g_clo_node_n` | :194 | `__clo_lits_of` |  |
 | `g_clo_nodes` | :192 | `__clo_cs_expr`, `__clo_lits_of`, `__clo_node_ty`, `__clo_ty_member` +1 |  |
 | `g_clo_params` | :188 | `__csv_has` |  |
 | `g_clo_pnode_list` | :195 | `__clo_cs_expr` |  |
-| `g_clo_read` | :1776 | `__csv_has` |  |
-| `g_clo_scan_assigned` | :1773 | `__cs_outer` |  |
-| `g_clo_scan_decl` | :1789 | `__clo_ctx_pop` | The names the type the scan just skipped declares: a `:` binding's, or a nested closure's parameters (__clo_sc |
-| `g_clo_scan_fld_roots` | :1783 | `__cs_outer` |  |
-| `g_clo_scan_read` | :1775 | `__cs_outer` | …and the outer bindings it reads (not only stores into): agora #358. |
-| `g_clo_scan_structs` | :1786 | `__clo_ctx_pop`, `__cs_outer` | The closure body's own bindings of a plain struct type, as the capture scan meets them: a name after `. <one o |
-| `g_clo_tmp` | :1919 | `mem_retclo_own_result` | The owned closure temporary most recently produced, as `<value> <env>` (docs/MEMORY.md §7.4): published by a c |
-| `g_clolend_n` | :1620 | `mem_note_clo_bind_lend`, `mem_note_clo_lend` |  |
-| `g_closure_consumed` | :1508 | `__csv_has`, `__sx_bind_names`, `bck_assign_alias`, `resolve_clo_nc_rets` | Names a closure BODY consumed. bck_stash_move drops its records while inside a closure — the body's statements |
-| `g_closure_defs` | :1530 | `__target_arch` |  |
-| `g_closure_effects` | :3179 | `__csv_has`, `bck_cap_via_of` |  |
-| `g_closure_emit_base` | :1534 | `__target_arch`, `emit_closure_globals` |  |
-| `g_closure_types` | :1531 | `__target_arch` |  |
-| `g_cond_depth` | :1582 | `gen_loop`, `mem_join_heads_stmt` | Nesting depth of "we are parsing an enclosing construct's CONDITION". The arity check above fires when a `{` f |
-| `g_coverage_link_ir` | :2126 | `__target_arch` |  |
-| `g_coverage_meta_id` | :2133 | `dbg_flush` |  |
-| `g_coverage_notes` | :2125 | `__target_arch` |  |
-| `g_coverage_prefix` | :2124 | `__target_arch` |  |
-| `g_cpu_dispatch` | :3270 | `__target_arch` | Which wider ISA the `simd` prefix dispatches to. 1 = x86-64-v3 (AVX2 + BMI2 + FMA), 0 = no dispatch, emit the  |
-| `g_crypto_defer` | :3241 | `__target_arch` | Crypto-tier functions held back the same way (emit_fn_ir), and the ones among them that ask to be inlined (`in |
-| `g_crypto_defer_n` | :3242 | `__emit_fn_ir`, `__target_arch`, `flush_simd_deferred` |  |
-| `g_crypto_fns` | :3231 | `__target_arch` | Functions whose own IR uses a hardware crypto primitive, by IR name (emit_fn_ir) — what a deferred `simd` func |
-| `g_crypto_inl` | :3243 | `__target_arch` |  |
-| `g_crypto_target` | :3280 | `__target_arch` | Which hardware crypto tiers the module is built for: 1 x86-64 (AES-NI + PCLMULQDQ, and the VAES ones), 2 AArch |
-| `g_cur_params` | :3149 | `resolve_clone_hooks` |  |
+| `g_clo_read` | :1840 | `__csv_has` |  |
+| `g_clo_ret_body` | :1811 | `__csv_has` | 1 while the body of a closure that is returned right here is compiled: its env owns its captures for every cal |
+| `g_clo_scan_assigned` | :1837 | `__cs_outer` |  |
+| `g_clo_scan_decl` | :1853 | `__clo_ctx_pop` | The names the type the scan just skipped declares: a `:` binding's, or a nested closure's parameters (__clo_sc |
+| `g_clo_scan_fld_roots` | :1847 | `__cs_outer` |  |
+| `g_clo_scan_read` | :1839 | `__cs_outer` | …and the outer bindings it reads (not only stores into): agora #358. |
+| `g_clo_scan_structs` | :1850 | `__clo_ctx_pop`, `__cs_outer` | The closure body's own bindings of a plain struct type, as the capture scan meets them: a name after `. <one o |
+| `g_clo_tk_body` | :1773 | `__csv_has` | 1 while the body of a closure whose env may mark a capture taken is compiled: a use of such a capture checks i |
+| `g_clo_tmp` | :1993 | `mem_retclo_own_result` | The owned closure temporary most recently produced, as `<value> <env>` (docs/MEMORY.md §7.4): published by a c |
+| `g_clolend_n` | :1642 | `mem_note_clo_bind_lend`, `mem_note_clo_lend` |  |
+| `g_closure_consumed` | :1530 | `__clo_capture_gone`, `__csv_has`, `__sx_bind_names`, `bck_assign_alias` | Names a closure BODY consumed. bck_stash_move drops its records while inside a closure — the body's statements |
+| `g_closure_defs` | :1552 | `__target_arch` |  |
+| `g_closure_effects` | :3253 | `__csv_has`, `bck_cap_via_of` |  |
+| `g_closure_emit_base` | :1556 | `__target_arch`, `emit_closure_globals` |  |
+| `g_closure_types` | :1553 | `__target_arch` |  |
+| `g_cond_depth` | :1604 | `gen_loop`, `mem_join_heads_stmt` | Nesting depth of "we are parsing an enclosing construct's CONDITION". The arity check above fires when a `{` f |
+| `g_coverage_link_ir` | :2200 | `__target_arch` |  |
+| `g_coverage_meta_id` | :2207 | `dbg_flush` |  |
+| `g_coverage_notes` | :2199 | `__target_arch` |  |
+| `g_coverage_prefix` | :2198 | `__target_arch` |  |
+| `g_cpu_dispatch` | :3344 | `__target_arch` | Which wider ISA the `simd` prefix dispatches to. 1 = x86-64-v3 (AVX2 + BMI2 + FMA), 0 = no dispatch, emit the  |
+| `g_crypto_defer` | :3315 | `__target_arch` | Crypto-tier functions held back the same way (emit_fn_ir), and the ones among them that ask to be inlined (`in |
+| `g_crypto_defer_n` | :3316 | `__emit_fn_ir`, `__target_arch`, `flush_simd_deferred` |  |
+| `g_crypto_fns` | :3305 | `__target_arch` | Functions whose own IR uses a hardware crypto primitive, by IR name (emit_fn_ir) — what a deferred `simd` func |
+| `g_crypto_inl` | :3317 | `__target_arch` |  |
+| `g_crypto_target` | :3354 | `__target_arch` | Which hardware crypto tiers the module is built for: 1 x86-64 (AES-NI + PCLMULQDQ, and the VAES ones), 2 AArch |
+| `g_cur_params` | :3223 | `resolve_clone_hooks` |  |
 | `g_cur_ret_llty` | :166 | `resolve_clone_hooks` | LLVM return type of the function whose body is currently being generated. Diagnostics-only: gen_field_store co |
-| `g_dbg_blob_syms` | :2136 | `dbg_init` | module-flag id we might add later |
-| `g_dbg_cu_id` | :2139 | `dbg_init` |  |
-| `g_dbg_current_file_id` | :2168 | `resolve_clone_hooks` | defining path for the mono being emitted (the mono's lexer filename is the synthetic `<generic …>`). Set/resto |
-| `g_dbg_current_loc` | :2142 | `__csv_has`, `__gen_stmt_level`, `dbg_synth_begin`, `dbg_synth_end` +5 | (0 outside any function) |
-| `g_dbg_current_subprogram` | :2140 | `__csv_has`, `dbg_synth_begin`, `dbg_synth_end`, `resolve_clone_hooks` |  |
-| `g_dbg_enabled` | :2123 | `__target_arch` | ── DWARF debug-info state ─────────────────────────────────────── All zero/empty when --g is OFF; emit helpers |
-| `g_dbg_file_id` | :2138 | `dbg_init` | flushed at end-of-module by dbg_flush |
-| `g_dbg_file_syms` | :2157 | `dbg_init` | uses this instead of `nurl_lex_line` for the !DISubprogram source line. Set by emit_one_instantiation so per-m |
-| `g_dbg_next_id` | :2134 | `dbg_alloc_id` |  |
-| `g_dbg_override_file` | :2162 | `gen_fn_decl_or_lazy`, `gen_import_decl` | every source file gets its own !DIFile and a subprogram debug-attributes to the file that DEFINES it (imports, |
-| `g_dbg_override_line` | :2151 | `gen_fn_decl_or_lazy`, `gen_import_decl` | the type for every local until Phase 6 lays down per-LLVM-type DIBasicType entries indexed by `vt`. |
-| `g_dbg_placeholder_ty` | :2147 | `dbg_init` | dbg_init and reused for every fn. Phase 6 will replace with per-fn signature types. |
-| `g_dbg_subroutine_ty` | :2144 | `dbg_init` | emit_dbg_eol then omits `, !dbg !N`) |
-| `g_dbg_type_syms` | :2195 | `dbg_init` |  |
-| `g_dce` | :72411 | `__target_arch` |  |
-| `g_dce_at` | :72481 | `__sp_parts` |  |
-| `g_dce_end` | :72477 | `__sp_parts` |  |
-| `g_dce_keep` | :72422 | `__target_arch` | `--keep=a,b,c` — extra DCE roots.  The pass's root set is `main` plus whatever module-scope constants name. Th |
-| `g_dce_live` | :72478 | `__sp_parts` |  |
-| `g_dce_map` | :72482 | `__sp_parts` |  |
-| `g_dce_mod` | :72474 | `__sp_parts` | The module text, as an integer cast of a BORROWED `s`. Deliberately not a `: ~ s` global: a mutable string glo |
-| `g_dce_mod_len` | :72475 | `__sp_parts` |  |
-| `g_dce_qn` | :72480 | `__dce_ident_byte`, `__sp_parts` |  |
-| `g_dce_queue` | :72479 | `__sp_parts` |  |
-| `g_dce_start` | :72476 | `__sp_parts` |  |
-| `g_dead_arm` | :2941 | `__ice_report`, `mem_join_heads_stmt` | `--unsafe-report`: what the program asks to be trusted (outside the standard library), one `file:line what` pe |
-| `g_dead_payload` | :43293 | `__gen_cast_body` | Set while the payload of a None literal is generated, when that payload is a cast (gen_agg_lit): the one cast  |
-| `g_defer_body_depth` | :1820 | `gen_defer` | …and how many `;` defer bodies enclose the code being generated: an owner bound there may never be bound at al |
-| `g_defer_count` | :1360 | `gen_defer`, `resolve_clone_hooks` |  |
-| `g_deferred_bck` | :1964 | `__target_arch` | Functions whose borrow-check walk is parked until the whole module has compiled (see borrowck_fn_end). `n` is  |
+| `g_dbg_blob_syms` | :2210 | `dbg_init` | module-flag id we might add later |
+| `g_dbg_cu_id` | :2213 | `dbg_init` |  |
+| `g_dbg_current_file_id` | :2242 | `resolve_clone_hooks` | defining path for the mono being emitted (the mono's lexer filename is the synthetic `<generic …>`). Set/resto |
+| `g_dbg_current_loc` | :2216 | `__csv_has`, `__gen_stmt_level`, `dbg_synth_begin`, `dbg_synth_end` +5 | (0 outside any function) |
+| `g_dbg_current_subprogram` | :2214 | `__csv_has`, `dbg_synth_begin`, `dbg_synth_end`, `resolve_clone_hooks` |  |
+| `g_dbg_enabled` | :2197 | `__target_arch` | ── DWARF debug-info state ─────────────────────────────────────── All zero/empty when --g is OFF; emit helpers |
+| `g_dbg_file_id` | :2212 | `dbg_init` | flushed at end-of-module by dbg_flush |
+| `g_dbg_file_syms` | :2231 | `dbg_init` | uses this instead of `nurl_lex_line` for the !DISubprogram source line. Set by emit_one_instantiation so per-m |
+| `g_dbg_next_id` | :2208 | `dbg_alloc_id` |  |
+| `g_dbg_override_file` | :2236 | `gen_fn_decl_or_lazy`, `gen_import_decl` | every source file gets its own !DIFile and a subprogram debug-attributes to the file that DEFINES it (imports, |
+| `g_dbg_override_line` | :2225 | `gen_fn_decl_or_lazy`, `gen_import_decl` | the type for every local until Phase 6 lays down per-LLVM-type DIBasicType entries indexed by `vt`. |
+| `g_dbg_placeholder_ty` | :2221 | `dbg_init` | dbg_init and reused for every fn. Phase 6 will replace with per-fn signature types. |
+| `g_dbg_subroutine_ty` | :2218 | `dbg_init` | emit_dbg_eol then omits `, !dbg !N`) |
+| `g_dbg_type_syms` | :2269 | `dbg_init` |  |
+| `g_dce` | :74362 | `__target_arch` |  |
+| `g_dce_at` | :74432 | `__sp_parts` |  |
+| `g_dce_end` | :74428 | `__dce_ident_byte`, `__sp_parts` |  |
+| `g_dce_idb` | :74435 | `__sp_parts` |  |
+| `g_dce_keep` | :74373 | `__target_arch` | `--keep=a,b,c` — extra DCE roots.  The pass's root set is `main` plus whatever module-scope constants name. Th |
+| `g_dce_live` | :74429 | `__sp_parts` |  |
+| `g_dce_map` | :74433 | `__sp_parts` |  |
+| `g_dce_mod` | :74425 | `__sp_parts` | The module text, as an integer cast of a BORROWED `s`. Deliberately not a `: ~ s` global: a mutable string glo |
+| `g_dce_mod_len` | :74426 | `__sp_parts` |  |
+| `g_dce_qn` | :74431 | `__dce_ident_byte`, `__sp_parts` |  |
+| `g_dce_queue` | :74430 | `__sp_parts` |  |
+| `g_dce_start` | :74427 | `__dce_ident_byte`, `__sp_parts` |  |
+| `g_dead_arm` | :3015 | `__ice_report`, `mem_join_heads_stmt` | `--unsafe-report`: what the program asks to be trusted (outside the standard library), one `file:line what` pe |
+| `g_dead_payload` | :44770 | `__gen_cast_body` | Set while the payload of a None literal is generated, when that payload is a cast (gen_agg_lit): the one cast  |
+| `g_defer_body_depth` | :1884 | `gen_defer` | …and how many `;` defer bodies enclose the code being generated: an owner bound there may never be bound at al |
+| `g_defer_count` | :1382 | `gen_defer`, `resolve_clone_hooks` |  |
+| `g_deferred_bck` | :2038 | `__target_arch` | Functions whose borrow-check walk is parked until the whole module has compiled (see borrowck_fn_end). `n` is  |
 | `g_dfs_n` | :180 | `bck_defer_fn` |  |
 | `g_diag_ctx` | :157 | `dyn_sig_parts`, `emit_lit_check`, `gen_import_decl`, `scan_method_signature` +2 | Diagnostic context suffix, appended to every die/warn message while non-empty. Set (and saved/restored — insta |
 | `g_diag_recover_active` | :135 | `__ice_report`, `__target_arch` |  |
-| `g_did_ret` | :1316 | `__close_dead_block`, `__csv_has`, `__handle_unreachable_stmt`, `__tail_noreturn_close` +9 |  |
-| `g_dmrv_memo` | :59536 | `__drop_may_read_view` | Does dropping a value of `ty` run a destructor that may read a view — a value somewhere inside it (as __holds_ |
-| `g_drain_n` | :3071 | `mem_drain_deferred` | How many function exits have emitted the deferred-drop list (mem_drain_deferred) so far: a slot parked after o |
-| `g_drop_base` | :3136 | `__target_arch` | Which parameters each safe function may drop or replace the elements of (bck_callee_drops_elems): witnessed wh |
-| `g_drop_edges` | :3138 | `__target_arch` |  |
+| `g_did_ret` | :1338 | `__close_dead_block`, `__csv_has`, `__handle_unreachable_stmt`, `__tail_noreturn_close` +9 |  |
+| `g_dmrv_memo` | :61338 | `__drop_may_read_view` | Does dropping a value of `ty` run a destructor that may read a view — a value somewhere inside it (as __holds_ |
+| `g_drain_n` | :3145 | `mem_drain_deferred` | How many function exits have emitted the deferred-drop list (mem_drain_deferred) so far: a slot parked after o |
+| `g_drop_base` | :3210 | `__target_arch` | Which parameters each safe function may drop or replace the elements of (bck_callee_drops_elems): witnessed wh |
+| `g_drop_edges` | :3212 | `__target_arch` |  |
 | `g_drop_glue_ty` | :170 | `__csv_has`, `gen_dyn_construct`, `resolve_clone_hooks` | The LLVM type of the value a `% Drop` impl's `drop` is being compiled for (`%R`), or `` — while set, every exi |
-| `g_dyn_dtout` | :1470 | `dyn_method_slot` | dyn_method_decltrait's result rides a global too: its callers sit ABOVE its definition, so an owned return wou |
-| `g_dyn_flat_out` | :1464 | `__dyn_flat_reset` | Scratch accumulators for dyn_flat_methods (a NURL fn returns one value, so the recursive supertrait walk threa |
-| `g_dyn_flat_seen` | :1465 | `__dyn_flat_reset` |  |
-| `g_dyn_needed` | :1461 | `__dyn_unslug` | Dynamic trait objects (`%Trait`, docs/spec.md §4.9). Space-separated set of trait names that appear as a `%Tra |
-| `g_env_moved` | :1792 | `__csv_has` | …and, for one that a thread or a fiber will run, the captures it takes over from bindings the function no long |
-| `g_env_owns_handles` | :1747 | `__csv_has` | Set around a returned closure literal's env generation (1): its String / Vec / owning-struct captures move int |
-| `g_env_released` | :1750 | `__csv_has` | …and, for a closure that releases some captures itself, which (their env field is not dropped again). |
-| `g_env_shared` | :1797 | `__csv_has` | …and the same set while that closure's env is built and described. |
+| `g_dyn_dtout` | :1492 | `dyn_method_slot` | dyn_method_decltrait's result rides a global too: its callers sit ABOVE its definition, so an owned return wou |
+| `g_dyn_flat_out` | :1486 | `__dyn_flat_reset` | Scratch accumulators for dyn_flat_methods (a NURL fn returns one value, so the recursive supertrait walk threa |
+| `g_dyn_flat_seen` | :1487 | `__dyn_flat_reset` |  |
+| `g_dyn_needed` | :1483 | `__dyn_unslug` | Dynamic trait objects (`%Trait`, docs/spec.md §4.9). Space-separated set of trait names that appear as a `%Tra |
+| `g_env_join_views` | :1799 | `__csv_has` | The captures of the closure literal being built that its env only views although it is returned right here: in |
+| `g_env_moved` | :1856 | `__csv_has` | …and, for one that a thread or a fiber will run, the captures it takes over from bindings the function no long |
+| `g_env_nfields` | :1807 | `gen_env_struct_type` | The number of fields of the env struct type gen_env_struct_type built last. |
+| `g_env_owns_handles` | :1780 | `__csv_has` | Set around a returned closure literal's env generation (1): its String / Vec / owning-struct captures move int |
+| `g_env_released` | :1814 | `__csv_has` | …and, for a closure that releases some captures itself, which (their env field is not dropped again). |
+| `g_env_shared` | :1861 | `__csv_has` | …and the same set while that closure's env is built and described. |
+| `g_env_tk_p` | :1804 | `__csv_has` | The field of the env being built that holds one `i1` per capture, set when the body takes that capture over (` |
 | `g_err_count` | :134 | `__diag_abort` |  |
-| `g_etake_n` | :3170 | `mem_enum_take_note`, `resolve_clone_hooks` | Payload bindings of an enum the function being compiled owns (mem_enum_take_note): while 0, nothing asks wheth |
-| `g_ext` | :72938 | `__ext_calls_back` |  |
-| `g_ext_glob` | :72946 | `__ext_calls_back` |  |
-| `g_ext_mlen` | :72947 | `__ext_calls_back` |  |
-| `g_ext_q` | :72942 | `__ext_calls_back` |  |
-| `g_ext_qn` | :72943 | `__dce_ident_byte`, `__ext_calls_back` |  |
-| `g_ext_sig` | :72945 | `__ext_calls_back`, `__ext_types` |  |
-| `g_ff_any` | :1600 | `mem_ff_slot`, `resolve_clone_hooks` |  |
-| `g_ff_gen` | :1599 | `resolve_clone_hooks` |  |
-| `g_ff_mark` | :1608 | `mem_emit_gated_drop` |  |
-| `g_ffi_host_imports` | :1551 | `__target_arch` | g_ffi_host_imports is 1 when `--ffi-host-imports` is passed: external `&`-FFI libraries are then satisfied by  |
-| `g_ffx_n` | :1609 | `__ffx_expand` |  |
-| `g_fn_arcseen` | :2035 | `mem_arg_consumption`, `resolve_clone_hooks` |  |
-| `g_fn_compiled` | :1988 | `__target_arch` | Names of functions whose body has been compiled — the "is the inline summary trustworthy for this callee?" tes |
-| `g_fn_drops` | :3146 | `__target_arch` |  |
-| `g_fn_escapes` | :1883 | `__target_arch` | Per-function escaping-parameter map. `g_fn_escapes[fname]` is the space-separated list of 0-based indices of p |
-| `g_fn_handkeeps` | :1855 | `__target_arch` | The kept parameters whose value this function keeps ONLY in a struct the program manages by hand through a poi |
-| `g_fn_inout` | :1681 | `__target_arch` | Per-function inout-parameter map. `g_fn_inout[fname]` is the space-separated list of 0-based indices of `inout |
-| `g_fn_invoke_only` | :1910 | `__target_arch` | Per-function *invoke-only* parameter map (closure-env reclamation, docs/MEMORY.md §7.4). `g_fn_invoke_only[fna |
-| `g_fn_ireallocs` | :3141 | `__target_arch` |  |
-| `g_fn_keeps` | :1699 | `__target_arch` | Per-function KEPT-parameter map (docs/MEMORY.md §7.6): indices of parameters whose value the body stores somew |
-| `g_fn_link_exports` | :1409 | `__target_arch` |  |
-| `g_fn_link_sources` | :1408 | `__target_arch` | Source identities stay unmangled in semantic tables and diagnostics. Only their LLVM linkage names enter the p |
-| `g_fn_mutates` | :2023 | `__target_arch` | Per-function container-mutation summary (docs/MEMORY.md §2.5). `g_fn_mutates[fname]` lists the 0-based paramet |
-| `g_fn_mutates_witness` | :2024 | `__csv_has`, `mem_arg_consumption`, `resolve_clone_hooks` |  |
-| `g_fn_noreturn` | :2102 | `__target_arch` | Noreturn registry. `g_fn_noreturn[fname]` is `1` when a call to fname never returns to its caller. Seeded with |
-| `g_fn_pos_syms` | :1404 | `__target_arch` |  |
-| `g_fn_reallocs` | :2073 | `__target_arch` | `g_fn_reallocs[fname]`: the parameters whose BUFFER the function may move or release (a reallocation, a free)  |
-| `g_fn_reallocs_witness` | :2074 | `__csv_has`, `resolve_clone_hooks` |  |
-| `g_fn_replaces` | :2084 | `__target_arch` | `g_fn_replaces[fname]`: the `inout` parameters an owned field of which (or the whole value) the function may r |
-| `g_fn_replaces_witness` | :2085 | `__csv_has`, `emit_rawdrop_thunk`, `resolve_clone_hooks` |  |
-| `g_fn_ret_alias` | :2014 | `__target_arch` | Per-function returned-HANDLE map — the ownership dual of g_fn_ret_param, and deliberately a separate map rathe |
-| `g_fn_ret_count` | :2107 | `mem_note_ret_clo_cap`, `resolve_clone_hooks` | Count of `^` statements seen while compiling the current function body (closure bodies included — that over-co |
-| `g_fn_ret_param` | :2000 | `__target_arch` | Per-function returned-parameter map. `g_fn_ret_param[fname]` is the space-separated list of 0-based indices of |
-| `g_fn_ret_view` | :1896 | `__target_arch` | Per-function RETURNS-A-VIEW map. `g_fn_ret_view[fname]` is set when the body builds an aggregate one of whose  |
-| `g_fn_rviews` | :1722 | `__target_arch` | Per-function RESULT answer (A2's `rholds`, agora #422): `:` then the parameter indices whose own storage the v |
-| `g_fn_safe` | :3147 | `__target_arch` |  |
-| `g_fn_safe_list` | :3148 | `__csv_has`, `__indirect_members`, `resolve_clone_hooks` |  |
-| `g_fn_sink` | :1689 | `__target_arch` | Per-function sink-parameter map: space-separated parameter indices from explicit signatures and consuming call |
-| `g_fn_slice_decls` | :1358 | `mem_slice_decl_add`, `resolve_clone_hooks` | Cheap per-function gate for the Phase 2D slice machinery: most functions declare no owned slices at all, and t |
-| `g_fn_stores` | :1848 | `__target_arch` | The kept parameters whose value ends up somewhere the compiler drops — a literal, a local struct, a container  |
+| `g_etake_n` | :3244 | `mem_enum_take_note`, `resolve_clone_hooks` | Payload bindings of an enum the function being compiled owns (mem_enum_take_note): while 0, nothing asks wheth |
+| `g_ext` | :74967 | `__ext_calls_back` |  |
+| `g_ext_glob` | :74975 | `__ext_calls_back` |  |
+| `g_ext_mlen` | :74976 | `__ext_calls_back` |  |
+| `g_ext_q` | :74971 | `__ext_calls_back` |  |
+| `g_ext_qn` | :74972 | `__dce_ident_byte`, `__ext_calls_back` |  |
+| `g_ext_sig` | :74974 | `__ext_calls_back`, `__ext_types` |  |
+| `g_ff_any` | :1622 | `mem_ff_slot`, `resolve_clone_hooks` |  |
+| `g_ff_gen` | :1621 | `resolve_clone_hooks` |  |
+| `g_ff_mark` | :1630 | `mem_emit_gated_drop` |  |
+| `g_ffi_host_imports` | :1573 | `__target_arch` | g_ffi_host_imports is 1 when `--ffi-host-imports` is passed: external `&`-FFI libraries are then satisfied by  |
+| `g_ffx_n` | :1631 | `__ffx_expand` |  |
+| `g_fn_arcseen` | :2109 | `mem_arg_consumption`, `resolve_clone_hooks` |  |
+| `g_fn_cloparams` | :1938 | `__target_arch` | Per-callee CLOSURE-ARGUMENT map: the argument indices a call handed a closure at (gen_call), for __bck_param_c |
+| `g_fn_compiled` | :2062 | `__target_arch` | Names of functions whose body has been compiled — the "is the inline summary trustworthy for this callee?" tes |
+| `g_fn_drops` | :3220 | `__target_arch` |  |
+| `g_fn_eparams` | :1934 | `__target_arch` | `g_fn_eparams[fname]`: the parameters that are views of a container — a Slice, a struct of views, not an `s` — |
+| `g_fn_escapes` | :1957 | `__target_arch` | Per-function escaping-parameter map. `g_fn_escapes[fname]` is the space-separated list of 0-based indices of p |
+| `g_fn_handkeeps` | :1919 | `__target_arch` | The kept parameters whose value this function keeps ONLY in a struct the program manages by hand through a poi |
+| `g_fn_inout` | :1703 | `__target_arch` | Per-function inout-parameter map. `g_fn_inout[fname]` is the space-separated list of 0-based indices of `inout |
+| `g_fn_invoke_only` | :1984 | `__target_arch` | Per-function *invoke-only* parameter map (closure-env reclamation, docs/MEMORY.md §7.4). `g_fn_invoke_only[fna |
+| `g_fn_ireallocs` | :3215 | `__target_arch` |  |
+| `g_fn_keeps` | :1721 | `__target_arch` | Per-function KEPT-parameter map (docs/MEMORY.md §7.6): indices of parameters whose value the body stores somew |
+| `g_fn_link_exports` | :1431 | `__target_arch` |  |
+| `g_fn_link_sources` | :1430 | `__target_arch` | Source identities stay unmangled in semantic tables and diagnostics. Only their LLVM linkage names enter the p |
+| `g_fn_mutates` | :2097 | `__target_arch` | Per-function container-mutation summary (docs/MEMORY.md §2.5). `g_fn_mutates[fname]` lists the 0-based paramet |
+| `g_fn_mutates_witness` | :2098 | `__csv_has`, `mem_arg_consumption`, `resolve_clone_hooks` |  |
+| `g_fn_noreturn` | :2176 | `__target_arch` | Noreturn registry. `g_fn_noreturn[fname]` is `1` when a call to fname never returns to its caller. Seeded with |
+| `g_fn_pos_syms` | :1426 | `__target_arch` |  |
+| `g_fn_reallocs` | :2147 | `__target_arch` | `g_fn_reallocs[fname]`: the parameters whose BUFFER the function may move or release (a reallocation, a free)  |
+| `g_fn_reallocs_witness` | :2148 | `__csv_has`, `resolve_clone_hooks` |  |
+| `g_fn_replaces` | :2158 | `__target_arch` | `g_fn_replaces[fname]`: the `inout` parameters an owned field of which (or the whole value) the function may r |
+| `g_fn_replaces_witness` | :2159 | `__csv_has`, `emit_rawdrop_thunk`, `resolve_clone_hooks` |  |
+| `g_fn_ret_alias` | :2088 | `__target_arch` | Per-function returned-HANDLE map — the ownership dual of g_fn_ret_param, and deliberately a separate map rathe |
+| `g_fn_ret_count` | :2181 | `mem_note_ret_clo_cap`, `resolve_clone_hooks` | Count of `^` statements seen while compiling the current function body (closure bodies included — that over-co |
+| `g_fn_ret_param` | :2074 | `__target_arch` | Per-function returned-parameter map. `g_fn_ret_param[fname]` is the space-separated list of 0-based indices of |
+| `g_fn_ret_view` | :1970 | `__target_arch` | Per-function RETURNS-A-VIEW map. `g_fn_ret_view[fname]` is set when the body builds an aggregate one of whose  |
+| `g_fn_rviews` | :1750 | `__target_arch` | Per-function RESULT answer (A2's `rholds`, agora #422): `:` then the parameter indices whose own storage the v |
+| `g_fn_safe` | :3221 | `__target_arch` |  |
+| `g_fn_safe_list` | :3222 | `__csv_has`, `__indirect_members`, `resolve_clone_hooks` |  |
+| `g_fn_sink` | :1711 | `__target_arch` | Per-function sink-parameter map: space-separated parameter indices from explicit signatures and consuming call |
+| `g_fn_slice_decls` | :1380 | `mem_slice_decl_add`, `resolve_clone_hooks` | Cheap per-function gate for the Phase 2D slice machinery: most functions declare no owned slices at all, and t |
+| `g_fn_stores` | :1912 | `__target_arch` | The kept parameters whose value ends up somewhere the compiler drops — a literal, a local struct, a container  |
 | `g_fn_strp` | :172 | `__own_sink_str_params` |  |
-| `g_fn_unverified` | :1868 | `__target_arch` | Retention through an unverified foreign or indirect call. Lifetime-only facts; kept separate from diagnostic e |
-| `g_fn_vcopies` | :1864 | `__target_arch` | The parameters whose elements' views a function copies into another container it was handed, or into its resul |
-| `g_fn_vholds` | :1733 | `__target_arch` | Per-function HOLDER map of the values it keeps (agora #414): `:` then `h>k` pairs, parameter h may be left hol |
-| `g_fn_vkeeps` | :1710 | `__target_arch` | Per-function BUFFER-VIEW map (agora #301): indices of the parameters whose own storage — a String's buffer, a  |
-| `g_fn_vkpend` | :1711 | `__target_arch` |  |
-| `g_fold_cap` | :72688 | `__fold_kind` |  |
-| `g_fold_dscap` | :72717 | `__fold_kind` |  |
-| `g_fold_dstores` | :72715 | `__fold_kind` |  |
-| `g_fold_end` | :72724 | `__ext_calls_back`, `__fold_reg` |  |
-| `g_fold_fcap` | :72694 | `__fold_jrnl_tok` |  |
-| `g_fold_flags` | :72679 | `__sp_parts` | ── Late flag folding ────────────────────────────────────────────  Whether a callee takes a parameter over (si |
-| `g_fold_flist` | :72692 | `__fold_jrnl_tok` |  |
-| `g_fold_fn_end` | :72725 | `__fold_arg_false` |  |
-| `g_fold_fsave` | :72721 | `__fold_flag_line` |  |
-| `g_fold_fscap` | :72722 | `__fold_flag_line` |  |
-| `g_fold_grown` | :72723 | `__fold_kind` |  |
-| `g_fold_jcap` | :72700 | `__fold_kind` |  |
-| `g_fold_jlist` | :72698 | `__fold_kind` | The flags a journal registration reads (nurl_journal_push_drop2), this round: a call made while one is registe |
-| `g_fold_k` | :72726 | `__fold_operand` |  |
-| `g_fold_ldcap` | :72720 | `__fold_kind` |  |
-| `g_fold_loads` | :72718 | `__fold_kind` |  |
-| `g_fold_map` | :72687 | `__fold_kind` | Six words per register: 0 kind (0 none, 1 i1 constant, 2 text alias), 1-2 the constant or the alias's byte ran |
-| `g_fold_nds` | :72716 | `__fold_arg_false`, `__fold_kind` |  |
-| `g_fold_nf` | :72693 | `__fold_arg_false`, `__fold_jrnl_tok`, `__fold_kind` |  |
-| `g_fold_nj` | :72699 | `__fold_arg_false`, `__fold_kind` |  |
-| `g_fold_nld` | :72719 | `__fold_arg_false`, `__fold_kind` |  |
-| `g_fold_nrl` | :72713 | `__fold_arg_false`, `__fold_kind` |  |
-| `g_fold_nt` | :72690 | `__fold_kind` |  |
-| `g_fold_rlcap` | :72714 | `__fold_kind` |  |
-| `g_fold_rlines` | :72712 | `__fold_kind` |  |
-| `g_fold_tcap` | :72691 | `__fold_kind` |  |
-| `g_fold_touched` | :72689 | `__fold_kind` |  |
-| `g_fold_x` | :72727 | `__fold_jrnl_regs`, `__fold_last_arg`, `__fold_operand`, `__fold_store_flag` |  |
-| `g_fold_y` | :72728 | `__fold_last_arg`, `__fold_operand`, `__fold_store_flag` |  |
-| `g_frozen_impls` | :2032 | `__coherence_register` | Whether the program declares any `% Frozen` impl (gen_call asks only then). |
-| `g_frz_memo` | :2034 | `__lty_frozen` | __ty_lend_frozen's answers, per lowered type (`0` / `1` / `2`). |
-| `g_frzp_any` | :2030 | `__arcp_note` | Whether any callee takes a `% Frozen` handle (`frzp##`): what it lends is frozen as an Arc's payload is, and r |
-| `g_func_count` | :1533 | `__csv_has`, `__target_arch`, `gen_call_kwargs`, `store_closure_func` |  |
-| `g_generic_struct_syms` | :1362 | `__target_arch` |  |
-| `g_generic_syms` | :1361 | `__target_arch` |  |
-| `g_hmemo_depth` | :59250 | `__is_owned_struct_ty` |  |
-| `g_hmemo_log` | :59249 | `__is_owned_struct_ty` | ── Coinductive memo for the handle predicates ─────────────────────  `__is_owned_struct_ty` and `__clone_suppo |
-| `g_ic_cap` | :52788 | `__resolve_handkeep_list` |  |
-| `g_ic_dirty` | :52789 | `__resolve_handkeep_list` |  |
-| `g_ic_hi` | :52792 | `__resolve_handkeep_list` |  |
-| `g_ic_idx` | :52790 | `__resolve_handkeep_list` |  |
-| `g_ic_lo` | :52791 | `__resolve_handkeep_list` |  |
-| `g_ic_n` | :52787 | `__resolve_handkeep_list` |  |
-| `g_ic_next` | :52793 | `__resolve_handkeep_list` |  |
-| `g_ic_off` | :52786 | `__resolve_handkeep_list` |  |
-| `g_ic_rec` | :52785 | `__resolve_handkeep_list` | ── The implication rounds, semi-naively (agora #305) ────────────  The resolvers run their rounds until nothin |
-| `g_impl_name_syms` | :1367 | `__target_arch` |  |
-| `g_impl_pos_syms` | :1433 | `__target_arch` | `@ fname` scan registration. Two files are free to each have a private `__get`-style helper IN THEIR OWN HEADS |
-| `g_impl_ret_syms` | :1366 | `__target_arch` |  |
-| `g_impl_trait_syms` | :1368 | `__target_arch` |  |
-| `g_impl_unsafe` | :2970 | `__coherence_register`, `scan_fn_sigs` | 1 while scan_impl_decl reads an impl written `unsafe % Trait Type { }`. |
-| `g_import_roots` | :2132 | `collect_alias_targets` | The directories an import may resolve into (--import-root=DIR, repeatable, else NURL_IMPORT_ROOTS=DIR:DIR…), c |
-| `g_in_cap` | :10911 | `__sym_hash_n` |  |
-| `g_in_chunk` | :10913 | `__sym_hash_n` |  |
-| `g_in_end` | :10915 | `__sym_hash_n` |  |
-| `g_in_match_arm` | :1348 | `emit_or_chain` | Non-zero while parsing a `??` match-arm body. The XOR-confusion warning in gen_ret keys off "a non-terminator  |
-| `g_in_n` | :10912 | `__sym_hash_n` |  |
-| `g_in_pos` | :10914 | `__sym_hash_n` |  |
-| `g_in_tab` | :10910 | `__sym_hash_n` | ── Interned strings ────────────────────────────────────────────── Every key and every plain value the symbol  |
-| `g_in_unsafe` | :2973 | `resolve_clone_hooks` | 1 while the body of an `unsafe` function (or of a closure inside one) is being compiled. |
-| `g_init_globals` | :1331 | `const_eval_int` | Globals set once at program start (`: ( Locked T ) g ( make )`), as `<name> <function> <type>;` triples: the e |
-| `g_init_terminated` | :3327 | `__note_vcopy` | g_init_terminated — 1 while a `:` binding's own INITIALISER terminated the block and the statement's remaining |
-| `g_inl_wrap` | :3247 | `__target_arch` | Inline-wanting functions that use no crypto primitive themselves, by emission order (emit_fn_ir): the candidat |
-| `g_inl_wrap_n` | :3248 | `__emit_fn_ir`, `__target_arch`, `flush_simd_deferred` |  |
-| `g_input_key` | :72614 | `__target_arch` |  |
-| `g_input_source` | :72613 | `__target_arch` | Borrowed aliases to main's live source/key bindings when --stdin supplies an overlay. Every source read (inclu |
-| `g_inst_done` | :65646 | `flush_deferred_instantiations` | flush_deferred_instantiations: emit all queued generic instantiations. Re-reads count each iteration so transi |
-| `g_inst_tmpl` | :2983 | `gen_import_decl` | The template a generic instance is being compiled from (its unsafe-ness). |
-| `g_irealloc_any` | :3145 | `__irealloc_edge_note` |  |
-| `g_irealloc_edges` | :3140 | `__target_arch` | g_fn_ireallocs and its call edges (resolve_irealloc_summaries). |
-| `g_irealloc_fns` | :3144 | `__irealloc_edge_note` | …and the functions that have such an edge, and whether any function has such a summary (the walks ask g_fn_ire |
-| `g_join_deep` | :3109 | `__assign_result_lent`, `emit_or_chain`, `mem_join_heads_stmt`, `mem_note_ret_clo_cap` | …and whether one of those arms lent what it bound there (a view, a field of one): the assignment copies the jo |
-| `g_join_droot` | :3111 | `emit_or_chain`, `mem_join_heads_stmt` | (…and the binding that arm read: what a refusal names.) |
-| `g_join_flends` | :3059 | `emit_or_chain`, `mem_join_heads_stmt`, `mem_note_ret_clo_cap` | Whether a lending arm of the last `?` / `??` lent a field of this frame's own value (`? c . p s ( mk )`, p a l |
-| `g_join_lent` | :3106 | `emit_or_chain`, `mem_join_heads_stmt` | Did an arm of the join that last published its ownership (`__last_join_own__`) lend what it yields — the const |
-| `g_join_rdepth` | :3088 | `__assign_result_lent`, `__blk_bind_tt`, `emit_or_chain`, `mem_join_heads_stmt` +1 | The scope depth of the binding the next `?` / `??` hands its value to, when that binding is assigned (`= t ? … |
-| `g_jpb_depth0` | :3098 | `__blk_bind_tt` |  |
-| `g_jpb_last` | :3101 | `__note_vcopy` | What the `:` binding being made took over from its join, while it is registered: those owners are its own now, |
-| `g_jpb_list` | :3097 | `__blk_bind_tt`, `__jpb_jdepth`, `__note_vcopy` |  |
-| `g_jpb_on` | :3096 | `__blk_bind_tt`, `__note_vcopy` | A `:` binding of a `?` / `??` (docs/MEMORY.md §2.2): the owner an arm selects moves into the binding on that p |
-| `g_last_alloc_reg` | :1655 | `__assign_result_lent`, `__csv_has`, `__note_vcopy`, `is_ptr_ty` +2 | The register a fresh allocation's address is in (nurl_alloc, nurl_zalloc, malloc, calloc, alloc, zalloc — thro |
-| `g_last_alloc_size` | :1661 | `__csv_has`, `is_ptr_ty`, `mem_arg_consumption`, `resolve_clone_hooks` | …and its byte count, when that memory is not zeroed (nurl_alloc, nurl_malloc, malloc): a cast of it to a struc |
-| `g_last_cast_direct` | :1318 | `__gen_cast_body` | 1 when the last cast cast a binding (gen_cast; gen_agg_lit reads it) |
-| `g_last_closure_cs` | :1498 | `__csv_has` |  |
+| `g_fn_unverified` | :1942 | `__target_arch` | Retention through an unverified foreign or indirect call. Lifetime-only facts; kept separate from diagnostic e |
+| `g_fn_vcopies` | :1928 | `__target_arch` | The parameters whose elements' views a function copies into another container it was handed, or into its resul |
+| `g_fn_vholds` | :1761 | `__target_arch` | Per-function HOLDER map of the values it keeps (agora #414): `:` then `h>k` pairs, parameter h may be left hol |
+| `g_fn_vkeeps` | :1735 | `__target_arch` | Per-function BUFFER-VIEW map (agora #301): indices of the parameters whose own storage — a String's buffer, a  |
+| `g_fn_vkpend` | :1736 | `__target_arch` |  |
+| `g_fold_cap` | :74665 | `__fold_kind` |  |
+| `g_fold_dscap` | :74694 | `__fold_kind` |  |
+| `g_fold_dstores` | :74692 | `__fold_kind` |  |
+| `g_fold_end` | :74701 | `__ext_calls_back`, `__fold_reg` |  |
+| `g_fold_eolcap` | :74713 | `__fold_kind` |  |
+| `g_fold_eols` | :74711 | `__fold_kind` |  |
+| `g_fold_fcap` | :74671 | `__fold_jrnl_tok` |  |
+| `g_fold_flags` | :74656 | `__sp_parts` | ── Late flag folding ────────────────────────────────────────────  Whether a callee takes a parameter over (si |
+| `g_fold_flist` | :74669 | `__fold_jrnl_tok` |  |
+| `g_fold_fn_end` | :74702 | `__fold_arg_false` |  |
+| `g_fold_fsave` | :74698 | `__fold_flag_line` |  |
+| `g_fold_fscap` | :74699 | `__fold_flag_line` |  |
+| `g_fold_grown` | :74700 | `__fold_kind` |  |
+| `g_fold_jcap` | :74677 | `__fold_kind` |  |
+| `g_fold_jlist` | :74675 | `__fold_kind` | The flags a journal registration reads (nurl_journal_push_drop2), this round: a call made while one is registe |
+| `g_fold_k` | :74703 | `__fold_operand` |  |
+| `g_fold_ldcap` | :74697 | `__fold_kind` |  |
+| `g_fold_loads` | :74695 | `__fold_kind` |  |
+| `g_fold_map` | :74664 | `__fold_kind` | Six words per register: 0 kind (0 none, 1 i1 constant, 2 text alias), 1-2 the constant or the alias's byte ran |
+| `g_fold_nds` | :74693 | `__fold_arg_false`, `__fold_kind` |  |
+| `g_fold_neol` | :74712 | `__fold_arg_false`, `__fold_kind` |  |
+| `g_fold_nf` | :74670 | `__fold_arg_false`, `__fold_jrnl_tok`, `__fold_kind` |  |
+| `g_fold_nj` | :74676 | `__fold_arg_false`, `__fold_kind` |  |
+| `g_fold_nld` | :74696 | `__fold_arg_false`, `__fold_kind` |  |
+| `g_fold_nrl` | :74690 | `__fold_arg_false`, `__fold_kind` |  |
+| `g_fold_nt` | :74667 | `__fold_kind` |  |
+| `g_fold_pc` | :74708 | `__dce_ident_byte`, `__fold_arg_false` |  |
+| `g_fold_pc0` | :74707 | `__dce_ident_byte` |  |
+| `g_fold_rlcap` | :74691 | `__fold_kind` |  |
+| `g_fold_rlines` | :74689 | `__fold_kind` |  |
+| `g_fold_tcap` | :74668 | `__fold_kind` |  |
+| `g_fold_touched` | :74666 | `__fold_kind` |  |
+| `g_fold_wa` | :74714 | `__fold_flush`, `__fold_write` |  |
+| `g_fold_wb` | :74715 | `__fold_flush`, `__fold_write` |  |
+| `g_fold_x` | :74704 | `__fold_jrnl_regs`, `__fold_last_arg`, `__fold_operand`, `__fold_store_flag` |  |
+| `g_fold_y` | :74705 | `__fold_last_arg`, `__fold_operand`, `__fold_store_flag` |  |
+| `g_frozen_impls` | :2106 | `__coherence_register` | Whether the program declares any `% Frozen` impl (gen_call asks only then). |
+| `g_frz_memo` | :2108 | `__lty_frozen` | __ty_lend_frozen's answers, per lowered type (`0` / `1` / `2`). |
+| `g_frzp_any` | :2104 | `__arcp_note` | Whether any callee takes a `% Frozen` handle (`frzp##`): what it lends is frozen as an Arc's payload is, and r |
+| `g_func_count` | :1555 | `__csv_has`, `__target_arch`, `gen_call_kwargs`, `store_closure_func` |  |
+| `g_generic_struct_syms` | :1384 | `__target_arch` |  |
+| `g_generic_syms` | :1383 | `__target_arch` |  |
+| `g_hfb_memo` | :33169 | `__bck_answers` | __held_fallback's answers while the parked walks run (every summary is final then); 0 otherwise. |
+| `g_hmemo_depth` | :61052 | `__is_owned_struct_ty` |  |
+| `g_hmemo_log` | :61051 | `__is_owned_struct_ty` | ── Coinductive memo for the handle predicates ─────────────────────  `__is_owned_struct_ty` and `__clone_suppo |
+| `g_ic_cap` | :54489 | `__resolve_handkeep_list` |  |
+| `g_ic_dirty` | :54490 | `__resolve_handkeep_list` |  |
+| `g_ic_hi` | :54493 | `__resolve_handkeep_list` |  |
+| `g_ic_idx` | :54491 | `__resolve_handkeep_list` |  |
+| `g_ic_lo` | :54492 | `__resolve_handkeep_list` |  |
+| `g_ic_n` | :54488 | `__resolve_handkeep_list` |  |
+| `g_ic_next` | :54494 | `__resolve_handkeep_list` |  |
+| `g_ic_off` | :54487 | `__resolve_handkeep_list` |  |
+| `g_ic_rec` | :54486 | `__resolve_handkeep_list` | ── The implication rounds, semi-naively (agora #305) ────────────  The resolvers run their rounds until nothin |
+| `g_impl_name_syms` | :1389 | `__target_arch` |  |
+| `g_impl_pos_syms` | :1455 | `__target_arch` | `@ fname` scan registration. Two files are free to each have a private `__get`-style helper IN THEIR OWN HEADS |
+| `g_impl_ret_syms` | :1388 | `__target_arch` |  |
+| `g_impl_trait_syms` | :1390 | `__target_arch` |  |
+| `g_impl_unsafe` | :3044 | `__coherence_register`, `scan_fn_sigs` | 1 while scan_impl_decl reads an impl written `unsafe % Trait Type { }`. |
+| `g_import_roots` | :2206 | `collect_alias_targets` | The directories an import may resolve into (--import-root=DIR, repeatable, else NURL_IMPORT_ROOTS=DIR:DIR…), c |
+| `g_in_cap` | :11040 | `__sym_hash_n` |  |
+| `g_in_chunk` | :11042 | `__sym_hash_n` |  |
+| `g_in_end` | :11044 | `__sym_hash_n` |  |
+| `g_in_match_arm` | :1370 | `emit_or_chain` | Non-zero while parsing a `??` match-arm body. The XOR-confusion warning in gen_ret keys off "a non-terminator  |
+| `g_in_n` | :11041 | `__sym_hash_n` |  |
+| `g_in_pos` | :11043 | `__sym_hash_n` |  |
+| `g_in_tab` | :11039 | `__sym_hash_n` | ── Interned strings ────────────────────────────────────────────── Every key and every plain value the symbol  |
+| `g_in_unsafe` | :3047 | `resolve_clone_hooks` | 1 while the body of an `unsafe` function (or of a closure inside one) is being compiled. |
+| `g_init_globals` | :1353 | `const_eval_int` | Globals set once at program start (`: ( Locked T ) g ( make )`), as `<name> <function> <type>;` triples: the e |
+| `g_init_terminated` | :3401 | `__note_vcopy` | g_init_terminated — 1 while a `:` binding's own INITIALISER terminated the block and the statement's remaining |
+| `g_inl_wrap` | :3321 | `__target_arch` | Inline-wanting functions that use no crypto primitive themselves, by emission order (emit_fn_ir): the candidat |
+| `g_inl_wrap_n` | :3322 | `__emit_fn_ir`, `__target_arch`, `flush_simd_deferred` |  |
+| `g_input_key` | :74591 | `__target_arch` |  |
+| `g_input_source` | :74590 | `__target_arch` | Borrowed aliases to main's live source/key bindings when --stdin supplies an overlay. Every source read (inclu |
+| `g_inst_done` | :67597 | `flush_deferred_instantiations` | flush_deferred_instantiations: emit all queued generic instantiations. Re-reads count each iteration so transi |
+| `g_inst_tmpl` | :3057 | `gen_import_decl` | The template a generic instance is being compiled from (its unsafe-ness). |
+| `g_irealloc_any` | :3219 | `__irealloc_edge_note` |  |
+| `g_irealloc_edges` | :3214 | `__target_arch` | g_fn_ireallocs and its call edges (resolve_irealloc_summaries). |
+| `g_irealloc_fns` | :3218 | `__irealloc_edge_note` | …and the functions that have such an edge, and whether any function has such a summary (the walks ask g_fn_ire |
+| `g_join_deep` | :3183 | `__assign_result_lent`, `emit_or_chain`, `mem_join_heads_stmt`, `mem_note_ret_clo_cap` | …and whether one of those arms lent what it bound there (a view, a field of one): the assignment copies the jo |
+| `g_join_droot` | :3185 | `emit_or_chain`, `mem_join_heads_stmt` | (…and the binding that arm read: what a refusal names.) |
+| `g_join_flends` | :3133 | `emit_or_chain`, `mem_join_heads_stmt`, `mem_note_ret_clo_cap` | Whether a lending arm of the last `?` / `??` lent a field of this frame's own value (`? c . p s ( mk )`, p a l |
+| `g_join_lent` | :3180 | `emit_or_chain`, `mem_join_heads_stmt` | Did an arm of the join that last published its ownership (`__last_join_own__`) lend what it yields — the const |
+| `g_join_rdepth` | :3162 | `__assign_result_lent`, `__blk_bind_tt`, `emit_or_chain`, `mem_join_heads_stmt` +1 | The scope depth of the binding the next `?` / `??` hands its value to, when that binding is assigned (`= t ? … |
+| `g_jpb_depth0` | :3172 | `__blk_bind_tt` |  |
+| `g_jpb_last` | :3175 | `__note_vcopy` | What the `:` binding being made took over from its join, while it is registered: those owners are its own now, |
+| `g_jpb_list` | :3171 | `__blk_bind_tt`, `__jpb_jdepth`, `__note_vcopy` |  |
+| `g_jpb_on` | :3170 | `__blk_bind_tt`, `__note_vcopy` | A `:` binding of a `?` / `??` (docs/MEMORY.md §2.2): the owner an arm selects moves into the binding on that p |
+| `g_last_alloc_reg` | :1677 | `__assign_result_lent`, `__csv_has`, `__note_vcopy`, `is_ptr_ty` +2 | The register a fresh allocation's address is in (nurl_alloc, nurl_zalloc, malloc, calloc, alloc, zalloc — thro |
+| `g_last_alloc_size` | :1683 | `__csv_has`, `is_ptr_ty`, `mem_arg_consumption`, `resolve_clone_hooks` | …and its byte count, when that memory is not zeroed (nurl_alloc, nurl_malloc, malloc): a cast of it to a struc |
+| `g_last_cast_direct` | :1340 | `__gen_cast_body` | 1 when the last cast cast a binding (gen_cast; gen_agg_lit reads it) |
+| `g_last_closure_cs` | :1520 | `__csv_has` |  |
 | `g_last_closure_fn` | :191 | `__csv_has` |  |
-| `g_last_closure_nonsend` | :1481 | `__csv_has` | record per impl block, verified after scan_fn_sigs once every impl across the program (incl. imports) is regis |
-| `g_last_type_ptr` | :10767 | `nurl_str_cmp` |  |
-| `g_lazy` | :56026 | `nurlc_print_help` |  |
-| `g_lazy_edges` | :56046 | `lazy_reach`, `nurlc_print_help` | The program's reference graph, collected while scan_fn_sigs walks every file (0 when lazy compilation cannot r |
-| `g_lazy_force` | :56028 | `gen_fn_decl_or_lazy`, `gen_import_decl`, `verify_super_obligations` |  |
-| `g_lazy_live` | :56048 | `lazy_reach` | The functions lazy_reach found reachable from the roots: compiled in place. |
-| `g_lazy_queue` | :56030 | `gen_fn_decl_or_lazy` |  |
-| `g_lazy_root` | :56027 | `nurlc_print_help` |  |
-| `g_lazy_scan` | :56029 | `gen_fn_decl_or_lazy` |  |
-| `g_lazy_trace` | :56031 | `nurlc_print_help` |  |
-| `g_lib_kind_memo` | :3137 | `__target_arch` |  |
-| `g_lint` | :3312 | `__target_arch` | Unused-symbol lint (opt-in via `--lint`). Default OFF so ordinary builds — and the compiler's own bootstrap, w |
-| `g_lint_fpend` | :3318 | `lint_init` | g_lint_fpend — the redundant-free lint's pending release calls (see lint_free_cand). |
-| `g_lint_gen` | :3319 | `lint_fn_begin` |  |
-| `g_lint_reads` | :3315 | `lint_init` |  |
-| `g_lint_recording` | :3334 | `nurlc_print_help` | 1 only during the main parse_program pass. Cleared before flush_deferred_instantiations so synthetic generic m |
-| `g_lint_syms` | :3313 | `lint_init` |  |
-| `g_lint_used` | :3314 | `lint_init` |  |
-| `g_live_lexers` | :11139 | `__lx_is_space` |  |
-| `g_live_symtables` | :11138 | `__sym_hash_n` |  |
-| `g_lm_calls` | :1973 | `__gen_cast_body`, `mem_arg_consumption` | While an aggregate literal is built (g_lm_depth > 0): every bare identifier a call in it hands to its callee,  |
-| `g_lm_depth` | :1975 | `__gen_cast_body` |  |
-| `g_lm_inner` | :1974 | `__gen_cast_body` |  |
-| `g_lm_pend` | :1976 | `__lm_moved_names` |  |
-| `g_lm_pend_n` | :1982 | `__lm_moved_names` |  |
-| `g_loop_break_used` | :2118 | `__target_arch` | `g_loop_break_used[serial]` is `1` when a `break` targeting the loop numbered `serial` (g_loop_serial, which n |
-| `g_loop_nest` | :1607 | `gen_foreach`, `gen_loop` |  |
-| `g_loop_serial` | :1802 | `gen_foreach`, `gen_loop` |  |
-| `g_lsrc_imemo` | :2998 | `__bck_answers` | …and as bits per callee (mem_fn_lends_arg). |
-| `g_lsrc_memo` | :2996 | `__bck_answers` | What each callee lends (mem_fn_lend_sources), once every summary is final: the deferred walks' memo, 0 outside |
-| `g_match_ser` | :1606 | `emit_or_chain` |  |
+| `g_last_closure_nonsend` | :1503 | `__csv_has` | record per impl block, verified after scan_fn_sigs once every impl across the program (incl. imports) is regis |
+| `g_last_type_ptr` | :10896 | `nurl_str_cmp` |  |
+| `g_lazy` | :57810 | `nurlc_print_help` |  |
+| `g_lazy_edges` | :57830 | `lazy_reach`, `nurlc_print_help` | The program's reference graph, collected while scan_fn_sigs walks every file (0 when lazy compilation cannot r |
+| `g_lazy_force` | :57812 | `gen_fn_decl_or_lazy`, `gen_import_decl`, `verify_super_obligations` |  |
+| `g_lazy_live` | :57832 | `lazy_reach` | The functions lazy_reach found reachable from the roots: compiled in place. |
+| `g_lazy_queue` | :57814 | `gen_fn_decl_or_lazy` |  |
+| `g_lazy_root` | :57811 | `nurlc_print_help` |  |
+| `g_lazy_scan` | :57813 | `gen_fn_decl_or_lazy` |  |
+| `g_lazy_trace` | :57815 | `nurlc_print_help` |  |
+| `g_lib_kind_memo` | :3211 | `__target_arch` |  |
+| `g_lint` | :3386 | `__target_arch` | Unused-symbol lint (opt-in via `--lint`). Default OFF so ordinary builds — and the compiler's own bootstrap, w |
+| `g_lint_fpend` | :3392 | `lint_init` | g_lint_fpend — the redundant-free lint's pending release calls (see lint_free_cand). |
+| `g_lint_gen` | :3393 | `lint_fn_begin` |  |
+| `g_lint_reads` | :3389 | `lint_init` |  |
+| `g_lint_recording` | :3408 | `nurlc_print_help` | 1 only during the main parse_program pass. Cleared before flush_deferred_instantiations so synthetic generic m |
+| `g_lint_syms` | :3387 | `lint_init` |  |
+| `g_lint_used` | :3388 | `lint_init` |  |
+| `g_live_lexers` | :11268 | `__lx_is_space` |  |
+| `g_live_symtables` | :11267 | `__sym_hash_n` |  |
+| `g_lm_calls` | :2047 | `__gen_cast_body`, `mem_arg_consumption` | While an aggregate literal is built (g_lm_depth > 0): every bare identifier a call in it hands to its callee,  |
+| `g_lm_depth` | :2049 | `__gen_cast_body` |  |
+| `g_lm_inner` | :2048 | `__gen_cast_body` |  |
+| `g_lm_pend` | :2050 | `__lm_moved_names` |  |
+| `g_lm_pend_n` | :2056 | `__lm_moved_names` |  |
+| `g_loop_break_used` | :2192 | `__target_arch` | `g_loop_break_used[serial]` is `1` when a `break` targeting the loop numbered `serial` (g_loop_serial, which n |
+| `g_loop_nest` | :1629 | `gen_foreach`, `gen_loop` |  |
+| `g_loop_serial` | :1866 | `gen_foreach`, `gen_loop` |  |
+| `g_lsrc_imemo` | :3072 | `__bck_answers` | …and as bits per callee (mem_fn_lends_arg). |
+| `g_lsrc_memo` | :3070 | `__bck_answers` | What each callee lends (mem_fn_lend_sources), once every summary is final: the deferred walks' memo, 0 outside |
+| `g_match_ser` | :1628 | `emit_or_chain` |  |
 | `g_max_nesting` | :143 | `__target_arch` | The limit, 0 for none: --max-nesting / NURL_MAX_NESTING, else 1000 (nurlc_print_help says so too). |
 | `g_max_nesting_set` | :146 | `__target_arch` | Who set g_max_nesting: 0 the default or the variable, 1 a flag, 2 --max-nesting-fixed (then nothing changes it |
-| `g_maybe_moved` | :1562 | `__target_arch` |  |
-| `g_member_obj` | :1611 | `__gen_cast_body`, `mem_arg_consumption`, `store_global` |  |
-| `g_member_path` | :3053 | `__gen_cast_body` |  |
-| `g_member_path_on` | :3052 | `__assign_result_lent`, `__gen_cast_body`, `__note_vcopy`, `emit_or_chain` +4 | The field path the last member read named (`. . s a h` → `s.a.h`; an element read through a pointer is the poi |
-| `g_mono_tparam_tys` | :2185 | `gen_import_decl` | Space-separated list of the concrete type-arguments substituted for a generic function's type parameters in th |
-| `g_mp` | :72759 | `__dce_ident_byte`, `__ext_calls_back` | ── Journal elision ───────────────────────────────────────────────── A temporary registered with the panic jou |
-| `g_msealed` | :1625 | `__gen_cast_body` | The last field read (gen_member) was out of a sealed representation, at any depth of its chain, or out of a bi |
-| `g_msealed_ty` | :1626 | `__gen_cast_body` |  |
-| `g_nc_flag_caps` | :1756 | `__csv_has` | The captures of the closure being built that cannot be copied, owned by a binding of the enclosing frame, in a |
-| `g_nc_own_caps` | :1761 | `__csv_has` | …and those of a closure returned from the frame: the env owns them under a flag of its own, which the body cle |
-| `g_ncl_n` | :3067 | `__nc_bind_lend_note`, `resolve_clone_hooks` | How many bindings of the function being compiled hold a value that cannot be copied which a call may lend (`__ |
+| `g_maybe_moved` | :1584 | `__target_arch` |  |
+| `g_member_obj` | :1633 | `__gen_cast_body`, `mem_arg_consumption`, `store_global` |  |
+| `g_member_path` | :3127 | `__gen_cast_body` |  |
+| `g_member_path_on` | :3126 | `__assign_result_lent`, `__gen_cast_body`, `__note_vcopy`, `emit_or_chain` +5 | The field path the last member read named (`. . s a h` → `s.a.h`; an element read through a pointer is the poi |
+| `g_mono_tparam_tys` | :2259 | `gen_import_decl` | Space-separated list of the concrete type-arguments substituted for a generic function's type parameters in th |
+| `g_mp` | :74777 | `__dce_ident_byte`, `__ext_calls_back` | ── Journal elision ───────────────────────────────────────────────── A temporary registered with the panic jou |
+| `g_mp_rt` | :74778 | `__dce_ident_byte`, `__ext_calls_back` |  |
+| `g_msealed` | :1647 | `__gen_cast_body` | The last field read (gen_member) was out of a sealed representation, at any depth of its chain, or out of a bi |
+| `g_msealed_ty` | :1648 | `__gen_cast_body` |  |
+| `g_nc_flag_caps` | :1820 | `__csv_has` | The captures of the closure being built that cannot be copied, owned by a binding of the enclosing frame, in a |
+| `g_nc_own_caps` | :1825 | `__csv_has` | …and those of a closure returned from the frame: the env owns them under a flag of its own, which the body cle |
+| `g_ncl_n` | :3141 | `__nc_bind_lend_note`, `resolve_clone_hooks` | How many bindings of the function being compiled hold a value that cannot be copied which a call may lend (`__ |
 | `g_nest_abort` | :149 | `__nest_die` | 1 once a program passed the nesting limit: every parse_program walk stops at the declaration it is in, without |
 | `g_nest_depth` | :140 | `__ice_report`, `__nest_enter`, `gen_expr`, `gen_stmt` +1 | The nesting limit (see `── Nesting limit` above gen_expr): the gen_expr / gen_stmt / parse_type levels open no |
-| `g_nl_buf` | :54164 | `collect_fn_body` | N newlines — the re-lex padding that maps a template buffer's line 1 onto the template's real source line (see |
-| `g_noaddr_visiting` | :1598 | `__ty_no_address_enum` |  |
-| `g_open_bind_col` | :1811 | `__note_vcopy` |  |
-| `g_open_bind_line` | :1810 | `__note_vcopy` |  |
-| `g_open_bind_name` | :1809 | `__note_vcopy` | The binding whose initialiser is being generated (name, and where its `:` statement starts), "" outside one. A |
-| `g_origin_functions` | :51482 | `__target_arch` |  |
-| `g_origin_named` | :51480 | `bck_record_inferred_escape`, `origin_expr` |  |
-| `g_origin_nodes` | :51479 | `bck_record_inferred_escape`, `origin_expr` | Return-escape inference (docs/MEMORY.md §2.8): record that the enclosing function may RETURN this bare-identif |
-| `g_origin_returns` | :51483 | `__target_arch` |  |
-| `g_origin_work` | :51481 | `bck_record_inferred_escape`, `origin_expr` |  |
+| `g_nl_buf` | :55865 | `collect_fn_body` | N newlines — the re-lex padding that maps a template buffer's line 1 onto the template's real source line (see |
+| `g_noaddr_visiting` | :1620 | `__ty_no_address_enum` |  |
+| `g_open_bind_col` | :1875 | `__note_vcopy` |  |
+| `g_open_bind_line` | :1874 | `__note_vcopy` |  |
+| `g_open_bind_name` | :1873 | `__note_vcopy` | The binding whose initialiser is being generated (name, and where its `:` statement starts), "" outside one. A |
+| `g_origin_functions` | :53182 | `__target_arch` |  |
+| `g_origin_named` | :53180 | `bck_record_inferred_escape`, `origin_expr` |  |
+| `g_origin_nodes` | :53179 | `bck_record_inferred_escape`, `origin_expr` | Return-escape inference (docs/MEMORY.md §2.8): record that the enclosing function may RETURN this bare-identif |
+| `g_origin_returns` | :53183 | `__target_arch` |  |
+| `g_origin_work` | :53181 | `bck_record_inferred_escape`, `origin_expr` |  |
 | `g_outer_params` | :190 | `resolve_clone_hooks` |  |
-| `g_owned_globals` | :1326 | `const_eval_int` | Names of the mutable string globals that own their buffer (each has a compiler-emitted `<name>__nurlown` flag) |
-| `g_part_n` | :3075 | `__mem_udrop_bind_flag`, `resolve_clone_hooks` | How many bindings of the function being compiled are cursors over part of a value (`__alias_part`) or may hold |
-| `g_pderiv` | :3154 | `__pderiv_params`, `resolve_clone_hooks` | The handle bindings of the safe function compiling now that were read out of a parameter — an element (`( vec_ |
-| `g_pending_escape` | :1936 | `__target_arch` | Deferred interprocedural-escape checks (docs/MEMORY.md §3 forward / generic boundary). A stack reference passe |
-| `g_pending_impl` | :1958 | `__target_arch` | Deferred summary IMPLICATIONS (docs/MEMORY.md §2.7 / §2.8). A summary is inferred as each body compiles, so a  |
-| `g_pending_inline` | :2888 | `parse_toplevel_decl`, `resolve_clone_hooks`, `scan_fn_sigs` | g_pending_inline is the `inline` prefix's counterpart to g_pending_simd: set when the parser consumes a TT_INL |
-| `g_pending_pub` | :2877 | `parse_toplevel_decl`, `scan_fn_sigs`, `vis_take_pending_pub` | Visibility (grammar v2.0). Tracks the source-file of every @-defined function and per-file strict-mode opt-in. |
-| `g_pending_raw` | :2897 | `scan_fn_sigs` |  |
-| `g_pending_rawrep` | :2901 | `gen_struct_decl`, `parse_toplevel_decl` | `raw : Name { … }`: the struct's fields carry an invariant its API keeps (a device address that must stay insi |
-| `g_pending_simd` | :2883 | `parse_toplevel_decl`, `resolve_clone_hooks`, `scan_fn_sigs` | g_pending_simd is the `simd` prefix's counterpart to g_pending_pub: set when the parser consumes a TT_SIMD ahe |
-| `g_pending_unsafe` | :2890 | `gen_ffi_decl`, `parse_toplevel_decl`, `resolve_clone_hooks`, `scan_fn_sigs` | The `unsafe` prefix parsed ahead of the next declaration. |
-| `g_pkgver_memo` | :12211 | `__lx_is_space` | ── `( pkg_version )` ───────────────────────────────────────────  `( pkg_version )` is the `version` of the pa |
-| `g_priv_file_count` | :1400 | `priv_file_id` |  |
-| `g_priv_file_ids` | :1399 | `__target_arch` | `??`/`?` arms). Consumers that NEED a value (a cast, a let/assign) die with this appended, so "produced no val |
-| `g_priv_owner_files` | :1402 | `__target_arch` |  |
-| `g_priv_owner_ids` | :1401 | `__target_arch` |  |
-| `g_priv_warned` | :1403 | `__target_arch` |  |
-| `g_pt_star` | :826 | `parse_type_paren`, `parse_type_ptr` | Raw-pointer types parse_type has read (`*T` anywhere but inside a closure type): a struct field whose type mov |
-| `g_ptr_own_n` | :1610 | `__ptr_own_set`, `resolve_clone_hooks` |  |
-| `g_ptrtab` | :1583 | `__target_arch` |  |
-| `g_raw_fns` | :2896 | `scan_fn_sigs` | `raw @ f …` (grammar v2.9): f's body may use raw memory, as an `unsafe` one's may, and f's CALLER must vouch f |
-| `g_rawlit_n` | :1613 | `mem_note_rawlit`, `resolve_clone_hooks` |  |
-| `g_rawlit_pending` | :1612 | `__gen_cast_body`, `mem_note_rawlit`, `mem_rawlit_unclaimed`, `resolve_clone_hooks` |  |
-| `g_rawret_memo` | :28676 | `__fn_raw_ret` |  |
-| `g_repl_edges` | :2086 | `__dyn_virtual_round`, `mem_arg_consumption` |  |
+| `g_owned_globals` | :1348 | `const_eval_int` | Names of the mutable string globals that own their buffer (each has a compiler-emitted `<name>__nurlown` flag) |
+| `g_part_n` | :3149 | `__mem_udrop_bind_flag`, `resolve_clone_hooks` | How many bindings of the function being compiled are cursors over part of a value (`__alias_part`) or may hold |
+| `g_pderiv` | :3228 | `__pderiv_params`, `resolve_clone_hooks` | The handle bindings of the safe function compiling now that were read out of a parameter — an element (`( vec_ |
+| `g_pending_escape` | :2010 | `__target_arch` | Deferred interprocedural-escape checks (docs/MEMORY.md §3 forward / generic boundary). A stack reference passe |
+| `g_pending_impl` | :2032 | `__target_arch` | Deferred summary IMPLICATIONS (docs/MEMORY.md §2.7 / §2.8). A summary is inferred as each body compiles, so a  |
+| `g_pending_inline` | :2962 | `parse_toplevel_decl`, `resolve_clone_hooks`, `scan_fn_sigs` | g_pending_inline is the `inline` prefix's counterpart to g_pending_simd: set when the parser consumes a TT_INL |
+| `g_pending_pub` | :2951 | `parse_toplevel_decl`, `scan_fn_sigs`, `vis_take_pending_pub` | Visibility (grammar v2.0). Tracks the source-file of every @-defined function and per-file strict-mode opt-in. |
+| `g_pending_raw` | :2971 | `scan_fn_sigs` |  |
+| `g_pending_rawrep` | :2975 | `gen_struct_decl`, `parse_toplevel_decl` | `raw : Name { … }`: the struct's fields carry an invariant its API keeps (a device address that must stay insi |
+| `g_pending_simd` | :2957 | `parse_toplevel_decl`, `resolve_clone_hooks`, `scan_fn_sigs` | g_pending_simd is the `simd` prefix's counterpart to g_pending_pub: set when the parser consumes a TT_SIMD ahe |
+| `g_pending_unsafe` | :2964 | `gen_ffi_decl`, `parse_toplevel_decl`, `resolve_clone_hooks`, `scan_fn_sigs` | The `unsafe` prefix parsed ahead of the next declaration. |
+| `g_pkgver_memo` | :12343 | `__lx_is_space` | ── `( pkg_version )` ───────────────────────────────────────────  `( pkg_version )` is the `version` of the pa |
+| `g_priv_file_count` | :1422 | `priv_file_id` |  |
+| `g_priv_file_ids` | :1421 | `__target_arch` | `??`/`?` arms). Consumers that NEED a value (a cast, a let/assign) die with this appended, so "produced no val |
+| `g_priv_owner_files` | :1424 | `__target_arch` |  |
+| `g_priv_owner_ids` | :1423 | `__target_arch` |  |
+| `g_priv_warned` | :1425 | `__target_arch` |  |
+| `g_pt_star` | :848 | `parse_type_paren`, `parse_type_ptr` | Raw-pointer types parse_type has read (`*T` anywhere but inside a closure type): a struct field whose type mov |
+| `g_ptr_own_n` | :1632 | `__ptr_own_set`, `resolve_clone_hooks` |  |
+| `g_ptrtab` | :1605 | `__target_arch` |  |
+| `g_raw_fns` | :2970 | `scan_fn_sigs` | `raw @ f …` (grammar v2.9): f's body may use raw memory, as an `unsafe` one's may, and f's CALLER must vouch f |
+| `g_rawlit_n` | :1635 | `mem_note_rawlit`, `resolve_clone_hooks` |  |
+| `g_rawlit_pending` | :1634 | `__gen_cast_body`, `mem_note_rawlit`, `mem_rawlit_unclaimed`, `resolve_clone_hooks` |  |
+| `g_rawret_memo` | :29212 | `__fn_raw_ret` |  |
+| `g_rbv_memo` | :35903 | `__target_arch` | __rv_bare_params' answers, per callee: a callee's declared parameter types do not change once known (one whose |
+| `g_repl_edges` | :2160 | `__dyn_virtual_round`, `mem_arg_consumption` |  |
 | `g_res_type_syms` | :592 | `__target_arch` | ── Res-type NURL tracking (must be declared before parse_type_res) ── g_res_type_syms is initialized to a new  |
-| `g_ret_forbidden` | :1342 | `__gen_stmt_level`, `gen_logical_or_bitwise_and`, `gen_logical_or_bitwise_or`, `gen_operand` +1 | Cascade guard: 1 while parsing a VALUE OPERAND (a binary/unary/cast/ member operand, a call argument, a `?`/`? |
-| `g_retcap_n` | :1615 | `resolve_clone_hooks` |  |
-| `g_retclo_n` | :1614 | `resolve_clone_hooks` |  |
-| `g_root_syms` | :1737 | `__target_arch` | The module's root symbol table, for the type questions asked where no table is at hand (__is_handle_ty on a st |
-| `g_rpg_cur` | :28955 | `bck_owning_reads` |  |
-| `g_rpg_cur_id` | :28956 | `bck_owning_reads` |  |
-| `g_rpg_cur_pfx` | :28957 | `bck_owning_reads` |  |
-| `g_rpg_ecap` | :28974 | `resolve_pending_ret_escapes` |  |
-| `g_rpg_edge` | :28972 | `resolve_pending_ret_escapes` |  |
-| `g_rpg_f` | :28969 | `bck_owning_reads` | A function's row, RPG_FW words: 0 its name (a copy), 1 1 when it has records, 2 what its other summaries say i |
-| `g_rpg_fcap` | :28971 | `bck_owning_reads` |  |
-| `g_rpg_fid` | :28958 | `bck_owning_reads` |  |
-| `g_rpg_list` | :53056 | `__raw_writer` | The records of function `f`, in order: g_rpg_list[ row 11 .. next ). |
-| `g_rpg_me_id` | :28976 | `resolve_clone_hooks`, `resolve_pending_ret_escapes` |  |
-| `g_rpg_me_self` | :28975 | `resolve_clone_hooks` |  |
-| `g_rpg_names` | :28954 | `bck_owning_reads` |  |
-| `g_rpg_nedge` | :28973 | `resolve_pending_ret_escapes` |  |
-| `g_rpg_nfn` | :28970 | `bck_owning_reads` |  |
-| `g_rpg_nrec` | :28947 | `bck_owning_reads` |  |
-| `g_rpg_nslot` | :28952 | `bck_owning_reads` |  |
-| `g_rpg_on` | :2981 | `resolve_clone_hooks` | …and its graph is recorded (g_rpg): raw code with a parameter that can hold storage. Without one, nothing the  |
-| `g_rpg_rcap` | :28948 | `bck_owning_reads` |  |
-| `g_rpg_rec` | :28946 | `bck_owning_reads` |  |
-| `g_rpg_scap` | :28953 | `bck_owning_reads` |  |
-| `g_rpg_sname` | :28951 | `bck_owning_reads` |  |
-| `g_rpg_tmp` | :29218 | `__rprov_lend_expr` | A returned pointer (or a returned literal's pointer field) whose expression read `reads`: bound to a name of i |
-| `g_rpg_u` | :28950 | `bck_owning_reads` |  |
-| `g_rpg_v` | :28949 | `bck_owning_reads` |  |
-| `g_rprov_on` | :2977 | `resolve_clone_hooks` | Raw provenance is followed in this body (__rprov_note): it is raw code, an `unsafe` function or the trusted st |
-| `g_sanitize_address` | :72606 | `__target_arch` | Emission policy, set by main's --sanitize-address flag. |
-| `g_sealed_views` | :1621 | `__sealed_view_bind` |  |
-| `g_sh_pend` | :1980 | `mem_arg_consumption` | A sealed representation's field handed to a function of the program not compiled yet: whether it changes that  |
-| `g_sh_pend_n` | :1981 | `mem_arg_consumption` |  |
-| `g_simd_defer` | :3235 | `__target_arch` | `simd` functions held back until the module is complete (defer_multiversion): `<k>.ir` / `.n` / `.r` / `.p` →  |
-| `g_simd_defer_n` | :3236 | `__target_arch`, `defer_multiversion`, `flush_simd_deferred` |  |
-| `g_simd_fns` | :3227 | `__crypto_fn_ir` | Every `simd` function emit_multiversion has written, by its IR name (`__nurl_fn.f`), space-separated. The spli |
-| `g_sound` | :30905 | `bck_sound` | The sound-and-complete rules (docs/SOUND_COMPLETE_PLAN.md): moves and borrows. Under development they run when |
-| `g_source_snapshots` | :72615 | `__dce_ident_byte`, `__target_arch` |  |
-| `g_sp_buf` | :54149 | `collect_fn_body` | The spaces that put the first token of a re-lexed template line at its SOURCE column. Tokens are joined by sin |
-| `g_sp_pin` | :75285 | `__sp_whole` |  |
-| `g_sp_pq` | :75286 | `__sp_whole` |  |
-| `g_sp_pqn` | :75287 | `__sp_whole` |  |
-| `g_sp_rchg` | :72452 | `__sp_whole` |  |
-| `g_split_fh` | :72470 | `__sp_emit_global` |  |
-| `g_split_fill` | :72448 | `__sp_target` |  |
-| `g_split_max` | :72442 | `__target_arch` |  |
-| `g_split_min` | :72443 | `__target_arch` |  |
-| `g_split_n` | :72441 | `__sp_parts`, `__sp_target`, `__sp_whole` | Partitioned emission — see "Partitioned emission" below. |
-| `g_split_name` | :72445 | `__sp_emit_global` |  |
-| `g_split_out` | :72444 | `__target_arch` |  |
-| `g_split_part` | :72447 | `__sp_target` |  |
-| `g_split_priv` | :72449 | `__sp_target` |  |
-| `g_split_rep` | :72450 | `__sp_target` |  |
-| `g_split_repmask` | :72451 | `__sp_target` |  |
-| `g_srcx_on` | :3129 | `resolve_clone_hooks` | Source expressions (srcx): where a view's value came from, as an expression the walk evaluates once every summ |
-| `g_stmt_bare_lit` | :6669 | `__gen_stmt_level` | g_stmt_bare_lit — set by gen_stmt to 1 when the statement it just parsed was a bare numeric/string LITERAL in  |
-| `g_stmt_bare_value` | :6696 | `__gen_stmt_level` | g_stmt_bare_value — the literal flag's general sibling (critic A2, the last silent prefix-arity cascade): set  |
-| `g_stmt_col` | :6506 | `__gen_stmt_level`, `gen_block_ret` | g_stmt_col — column of the current statement's first token, captured alongside g_stmt_line. `die_stmt` anchors |
-| `g_stmt_lex` | :6512 | `__gen_stmt_level`, `__lx_is_space` | g_stmt_lex — the lexer that statement came from, so a check deep in codegen that has no lexer of its own (__nc |
-| `g_stmt_line` | :6499 | `__gen_stmt_level`, `gen_block_ret` | g_stmt_line — source line of the statement gen_stmt is currently parsing. Read by gen_ident's "unexpected toke |
-| `g_str_idx` | :1314 | `emit_deferred_cstr`, `emit_str_global`, `gen_str_lit` |  |
-| `g_str_syms` | :1315 | `__target_arch` |  |
-| `g_strict_arity` | :1573 | `__target_arch` | strict-arity: the n-ary `&`/`\|` arity trap is an ERROR by default. The trap is the language's one documented f |
-| `g_strict_borrowck` | :1561 | `__target_arch` | `--strict-borrowck` (off by default) enables three additional checks: (1) aliased mutation through `. obj fiel |
-| `g_struct_inst_syms` | :1365 | `__target_arch` | <sname>__stparams → space-separated type-var names (e.g. "T" or "K V") <sname>__sbody    → raw body source inc |
-| `g_struct_ll` | :3253 | `__target_arch` | Every struct's LLVM field types, by IR name (`%` dropped), as its body lists them: what __ty_has_wide asks whe |
-| `g_struct_tmp` | :1924 | `__csv_has`, `mem_arg_consumption`, `mem_clo_drop_discarded`, `resolve_clone_hooks` | The struct temporary with owned fields most recently returned by a call, as `<value> <%Type> <owned-field toke |
-| `g_summaries_final` | :1601 | `mem_emit_arg_flags` |  |
-| `g_super_obligations` | :1471 | `__coherence_register` |  |
-| `g_sx` | :3204 | `__sx_enter` |  |
-| `g_sx_at` | :3203 | `__sx_enter` |  |
-| `g_sx_n` | :3202 | `__sx_enter` |  |
-| `g_sxe_arc` | :2041 | `bck_arc_frozen_check`, `bck_borrow_begin`, `bck_sx_handle_mark`, `bck_sx_name` +2 | At the borrow walk: whether the value of the source expression being evaluated is a view of an Arc's payload — |
-| `g_sxe_pos` | :32502 | `__src_mark`, `bck_sx_arg_sources`, `bck_sx_handle_mark`, `bck_sx_hroots` +1 | ── Source expressions in the walk ── The cursor of the evaluation in progress (bck_sx_sources), and whether it |
-| `g_target_x86` | :3288 | `__target_arch` | Is the module for x86-64? The native default is the host's architecture, `--target=` names another, `--cpu-dis |
-| `g_tf_body` | :74593 | `__ir_write_range` |  |
-| `g_tf_en` | :74592 | `__ir_write_range` |  |
-| `g_tf_map` | :74595 | `__ir_write_range` |  |
-| `g_tf_olen` | :74597 | `__ir_write_range` |  |
-| `g_tf_out` | :74596 | `__ir_write_range` |  |
-| `g_tf_st` | :74591 | `__ir_write_range` | ── Type definitions first ──────────────────────────────────────────  A named struct is printed where the gene |
-| `g_tf_state` | :74594 | `__ir_write_range` |  |
-| `g_thv_final` | :1618 | `__target_arch` |  |
-| `g_thv_memo` | :1617 | `__view_may_own` |  |
-| `g_thv_precise` | :1616 | `__gen_cast_body`, `__is_clo_capture`, `__note_vcopy`, `bck_bind_class0` +2 |  |
-| `g_thv_unknown` | :1619 | `__thv_named`, `__view_may_own` |  |
-| `g_trait_pending` | :1454 | `__target_arch` | <Trait>__tparam           → trait's generic type-var name (e.g. "T") <Trait>__defaults         → space-separat |
-| `g_trait_syms` | :1440 | `__target_arch` | first registration. A `$`-imported impl is scanned once per importer, so the SAME (method, type) is registered |
-| `g_trust_memo` | :28556 | `__trust_root` | ── Raw memory and `unsafe` (docs/SOUND_COMPLETE_PLAN.md, P1) ───────  The stdlib is the vouched-for base: its  |
-| `g_trust_roots` | :28557 | `__trust_root` |  |
-| `g_type_count` | :1532 | `__target_arch`, `store_closure_type` |  |
-| `g_type_emit_base` | :1535 | `__target_arch` |  |
-| `g_type_layouts` | :1872 | `__target_arch` | Type layout metadata precedes cleanup decisions; IR definitions retain their source ordering. This table owns  |
-| `g_udrop_noinit` | :1816 | `__gen_cast_body`, `__note_vcopy`, `__sb`, `emit_or_chain` | Set by a `:` binding just before registering its value: the binding rule stores the drop flag itself, so regis |
-| `g_udrop_tmpown` | :1840 | `__gen_cast_body`, `__sb`, `emit_or_chain` | Set by a call's temporary given an owner of its own (h233, h330) just before registering it: its journal regis |
-| `g_unsafe_fns` | :2892 | `gen_dyn_construct`, `scan_fn_sigs` | The functions declared `unsafe` (name → 1; 0 until the first one). |
-| `g_unsafe_list` | :2943 | `mem_velem_tag` |  |
-| `g_unsafe_report` | :2942 | `__target_arch` |  |
-| `g_use_argxfer` | :1741 | `mem_emit_string_arg_transfers`, `mem_sink_str_arg` |  |
-| `g_use_clear_if` | :1740 | `mem_udrop_flag_clear_if` | Whether this module calls the drop-flag helpers (emitted at module end). |
-| `g_use_hown` | :1742 | `emit_dyn_method_thunk`, `mem_capture_hown`, `mem_publish_hown` |  |
+| `g_ret_clo_share` | :1793 | `__csv_has`, `__gen_cast_body` |  |
+| `g_ret_forbidden` | :1364 | `__gen_stmt_level`, `gen_logical_or_bitwise_and`, `gen_logical_or_bitwise_or`, `gen_operand` +1 | Cascade guard: 1 while parsing a VALUE OPERAND (a binary/unary/cast/ member operand, a call argument, a `?`/`? |
+| `g_ret_lit_lex` | :1792 | `mem_note_ret_clo_cap` |  |
+| `g_ret_lit_pos` | :1791 | `mem_note_ret_clo_cap` | Where the literal a `^` hands back starts (`^ @ H { … }`), and the names read in it after a closure literal it |
+| `g_ret_vlex` | :1786 | `mem_note_ret_clo_cap` |  |
+| `g_ret_vpos` | :1785 | `emit_or_chain`, `mem_join_heads_stmt`, `mem_note_ret_clo_cap` | Where the value a `^` hands back starts (a lexer and a token position): the return's operand, and through it a |
+| `g_retcap_n` | :1637 | `resolve_clone_hooks` |  |
+| `g_retclo_n` | :1636 | `resolve_clone_hooks` |  |
+| `g_root_syms` | :1765 | `__target_arch` | The module's root symbol table, for the type questions asked where no table is at hand (__is_handle_ty on a st |
+| `g_rpg_cur` | :29491 | `bck_owning_reads` |  |
+| `g_rpg_cur_id` | :29492 | `bck_owning_reads` |  |
+| `g_rpg_cur_pfx` | :29493 | `bck_owning_reads` |  |
+| `g_rpg_ecap` | :29510 | `resolve_pending_ret_escapes` |  |
+| `g_rpg_edge` | :29508 | `resolve_pending_ret_escapes` |  |
+| `g_rpg_f` | :29505 | `bck_owning_reads` | A function's row, RPG_FW words: 0 its name (a copy), 1 1 when it has records, 2 what its other summaries say i |
+| `g_rpg_fcap` | :29507 | `bck_owning_reads` |  |
+| `g_rpg_fid` | :29494 | `bck_owning_reads` |  |
+| `g_rpg_list` | :54757 | `__raw_writer` | The records of function `f`, in order: g_rpg_list[ row 11 .. next ). |
+| `g_rpg_me_id` | :29512 | `resolve_clone_hooks`, `resolve_pending_ret_escapes` |  |
+| `g_rpg_me_self` | :29511 | `resolve_clone_hooks` |  |
+| `g_rpg_names` | :29490 | `bck_owning_reads` |  |
+| `g_rpg_nedge` | :29509 | `resolve_pending_ret_escapes` |  |
+| `g_rpg_nfn` | :29506 | `bck_owning_reads` |  |
+| `g_rpg_nrec` | :29483 | `bck_owning_reads` |  |
+| `g_rpg_nslot` | :29488 | `bck_owning_reads` |  |
+| `g_rpg_on` | :3055 | `resolve_clone_hooks` | …and its graph is recorded (g_rpg): raw code with a parameter that can hold storage. Without one, nothing the  |
+| `g_rpg_rcap` | :29484 | `bck_owning_reads` |  |
+| `g_rpg_rec` | :29482 | `bck_owning_reads` |  |
+| `g_rpg_scap` | :29489 | `bck_owning_reads` |  |
+| `g_rpg_sname` | :29487 | `bck_owning_reads` |  |
+| `g_rpg_tmp` | :29754 | `__rprov_lend_expr` | A returned pointer (or a returned literal's pointer field) whose expression read `reads`: bound to a name of i |
+| `g_rpg_u` | :29486 | `bck_owning_reads` |  |
+| `g_rpg_v` | :29485 | `bck_owning_reads` |  |
+| `g_rprov_on` | :3051 | `resolve_clone_hooks` | Raw provenance is followed in this body (__rprov_note): it is raw code, an `unsafe` function or the trusted st |
+| `g_sanitize_address` | :74583 | `__target_arch` | Emission policy, set by main's --sanitize-address flag. |
+| `g_sealed_views` | :1643 | `__sealed_view_bind` |  |
+| `g_sh_pend` | :2054 | `mem_arg_consumption` | A sealed representation's field handed to a function of the program not compiled yet: whether it changes that  |
+| `g_sh_pend_n` | :2055 | `mem_arg_consumption` |  |
+| `g_simd_defer` | :3309 | `__target_arch` | `simd` functions held back until the module is complete (defer_multiversion): `<k>.ir` / `.n` / `.r` / `.p` →  |
+| `g_simd_defer_n` | :3310 | `__target_arch`, `defer_multiversion`, `flush_simd_deferred` |  |
+| `g_simd_fns` | :3301 | `__crypto_fn_ir` | Every `simd` function emit_multiversion has written, by its IR name (`__nurl_fn.f`), space-separated. The spli |
+| `g_sound` | :31515 | `bck_sound` | The sound-and-complete rules (docs/SOUND_COMPLETE_PLAN.md): moves and borrows. Under development they run when |
+| `g_source_snapshots` | :74592 | `__dce_ident_byte`, `__target_arch` |  |
+| `g_sp_buf` | :55850 | `collect_fn_body` | The spaces that put the first token of a re-lexed template line at its SOURCE column. Tokens are joined by sin |
+| `g_sp_pin` | :77514 | `__sp_whole` |  |
+| `g_sp_pq` | :77515 | `__sp_whole` |  |
+| `g_sp_pqn` | :77516 | `__sp_whole` |  |
+| `g_sp_rchg` | :74403 | `__sp_whole` |  |
+| `g_split_fh` | :74421 | `__sp_emit_global` |  |
+| `g_split_fill` | :74399 | `__sp_target` |  |
+| `g_split_max` | :74393 | `__target_arch` |  |
+| `g_split_min` | :74394 | `__target_arch` |  |
+| `g_split_n` | :74392 | `__sp_parts`, `__sp_target`, `__sp_whole` | Partitioned emission — see "Partitioned emission" below. |
+| `g_split_name` | :74396 | `__sp_emit_global` |  |
+| `g_split_out` | :74395 | `__target_arch` |  |
+| `g_split_part` | :74398 | `__sp_target` |  |
+| `g_split_priv` | :74400 | `__sp_target` |  |
+| `g_split_rep` | :74401 | `__sp_target` |  |
+| `g_split_repmask` | :74402 | `__sp_target` |  |
+| `g_srcx_on` | :3203 | `resolve_clone_hooks` | Source expressions (srcx): where a view's value came from, as an expression the walk evaluates once every summ |
+| `g_stmt_bare_lit` | :6794 | `__gen_stmt_level` | g_stmt_bare_lit — set by gen_stmt to 1 when the statement it just parsed was a bare numeric/string LITERAL in  |
+| `g_stmt_bare_value` | :6821 | `__gen_stmt_level` | g_stmt_bare_value — the literal flag's general sibling (critic A2, the last silent prefix-arity cascade): set  |
+| `g_stmt_col` | :6631 | `__gen_stmt_level`, `gen_block_ret` | g_stmt_col — column of the current statement's first token, captured alongside g_stmt_line. `die_stmt` anchors |
+| `g_stmt_lex` | :6637 | `__gen_stmt_level`, `__lx_is_space` | g_stmt_lex — the lexer that statement came from, so a check deep in codegen that has no lexer of its own (__nc |
+| `g_stmt_line` | :6624 | `__gen_stmt_level`, `gen_block_ret` | g_stmt_line — source line of the statement gen_stmt is currently parsing. Read by gen_ident's "unexpected toke |
+| `g_str_idx` | :1336 | `emit_deferred_cstr`, `emit_str_global`, `gen_str_lit` |  |
+| `g_str_syms` | :1337 | `__target_arch` |  |
+| `g_strict_arity` | :1595 | `__target_arch` | strict-arity: the n-ary `&`/`\|` arity trap is an ERROR by default. The trap is the language's one documented f |
+| `g_strict_borrowck` | :1583 | `__target_arch` | `--strict-borrowck` (off by default) enables three additional checks: (1) aliased mutation through `. obj fiel |
+| `g_struct_inst_syms` | :1387 | `__target_arch` | <sname>__stparams → space-separated type-var names (e.g. "T" or "K V") <sname>__sbody    → raw body source inc |
+| `g_struct_ll` | :3327 | `__target_arch` | Every struct's LLVM field types, by IR name (`%` dropped), as its body lists them: what __ty_has_wide asks whe |
+| `g_struct_tmp` | :1998 | `__csv_has`, `mem_arg_consumption`, `mem_clo_drop_discarded`, `resolve_clone_hooks` | The struct temporary with owned fields most recently returned by a call, as `<value> <%Type> <owned-field toke |
+| `g_summaries_final` | :1623 | `mem_emit_arg_flags` |  |
+| `g_super_obligations` | :1493 | `__coherence_register` |  |
+| `g_sx` | :3278 | `__sx_enter` |  |
+| `g_sx_at` | :3277 | `__sx_enter` |  |
+| `g_sx_n` | :3276 | `__sx_enter` |  |
+| `g_sxe_arc` | :2115 | `bck_arc_frozen_check`, `bck_borrow_begin`, `bck_sx_handle_mark`, `bck_sx_name` +2 | At the borrow walk: whether the value of the source expression being evaluated is a view of an Arc's payload — |
+| `g_sxe_pos` | :33133 | `__src_mark`, `bck_sx_arg_held`, `bck_sx_arg_sources`, `bck_sx_elem_sources` +5 | ── Source expressions in the walk ── The cursor of the evaluation in progress (bck_sx_sources), and whether it |
+| `g_sxe_rvn` | :33162 | `__rvsrc_add`, `bck_ret_view_check`, `bck_walk_seq` | …and the sources a callee's walk answered its result views only through their elements (`2`, __rv_ask) in the  |
+| `g_sxe_rvtab` | :33163 | `__rvsrc_add` |  |
+| `g_target_x86` | :3362 | `__target_arch` | Is the module for x86-64? The native default is the host's architecture, `--target=` names another, `--cpu-dis |
+| `g_tf_body` | :76799 | `__ir_write_range` |  |
+| `g_tf_en` | :76798 | `__ir_write_range` |  |
+| `g_tf_map` | :76801 | `__ir_write_range` |  |
+| `g_tf_olen` | :76803 | `__ir_write_range` |  |
+| `g_tf_out` | :76802 | `__ir_write_range` |  |
+| `g_tf_st` | :76797 | `__ir_write_range` | ── Type definitions first ──────────────────────────────────────────  A named struct is printed where the gene |
+| `g_tf_state` | :76800 | `__ir_write_range` |  |
+| `g_thv_final` | :1640 | `__target_arch` |  |
+| `g_thv_memo` | :1639 | `__view_may_own` |  |
+| `g_thv_precise` | :1638 | `__gen_cast_body`, `__held_fallback`, `__is_clo_capture`, `__note_vcopy` +3 |  |
+| `g_thv_unknown` | :1641 | `__thv_named`, `__view_may_own` |  |
+| `g_trait_pending` | :1476 | `__target_arch` | <Trait>__tparam           → trait's generic type-var name (e.g. "T") <Trait>__defaults         → space-separat |
+| `g_trait_syms` | :1462 | `__target_arch` | first registration. A `$`-imported impl is scanned once per importer, so the SAME (method, type) is registered |
+| `g_trust_memo` | :29092 | `__trust_root` | ── Raw memory and `unsafe` (docs/SOUND_COMPLETE_PLAN.md, P1) ───────  The stdlib is the vouched-for base: its  |
+| `g_trust_roots` | :29093 | `__trust_root` |  |
+| `g_type_count` | :1554 | `__target_arch`, `store_closure_type` |  |
+| `g_type_emit_base` | :1557 | `__target_arch` |  |
+| `g_type_layouts` | :1946 | `__target_arch` | Type layout metadata precedes cleanup decisions; IR definitions retain their source ordering. This table owns  |
+| `g_udrop_noinit` | :1880 | `__gen_cast_body`, `__note_vcopy`, `__sb`, `emit_or_chain` | Set by a `:` binding just before registering its value: the binding rule stores the drop flag itself, so regis |
+| `g_udrop_tmpown` | :1904 | `__gen_cast_body`, `__sb`, `emit_or_chain` | Set by a call's temporary given an owner of its own (h233, h330) just before registering it: its journal regis |
+| `g_unsafe_fns` | :2966 | `gen_dyn_construct`, `scan_fn_sigs` | The functions declared `unsafe` (name → 1; 0 until the first one). |
+| `g_unsafe_list` | :3017 | `mem_velem_tag` |  |
+| `g_unsafe_report` | :3016 | `__target_arch` |  |
+| `g_use_argxfer` | :1774 | `mem_emit_string_arg_transfers`, `mem_sink_str_arg` |  |
+| `g_use_clear_if` | :1768 | `mem_udrop_flag_clear_if` | Whether this module calls the drop-flag helpers (emitted at module end). |
+| `g_use_hown` | :1775 | `emit_dyn_method_thunk`, `mem_capture_hown`, `mem_publish_hown` |  |
 | `g_use_ownstr` | :174 | `mem_clo_ret_own_str`, `mem_note_ret_clo_cap` |  |
 | `g_use_sinkstr` | :171 | `mem_sink_str_arg` |  |
+| `g_use_taken_check` | :1770 | `__clo_taken_check` | …and the taken-capture check (__clo_taken_check, agora #463). |
 | `g_user_drop_seen` | :219 | `__coherence_register`, `emit_dyn_drop_fn` | 1 once the program declares a `% Drop` impl of its own (scan_impl_decl): until then no type has one, and the q |
-| `g_ut_gen` | :3004 | `bck_unsafe_ctx` |  |
-| `g_vcall` | :3254 | `__target_arch` |  |
-| `g_vcall_n` | :3255 | `__target_arch`, `__vcall_thunk` |  |
-| `g_vcall_site` | :3256 | `__vcall_thunk` |  |
-| `g_vctl_seen` | :2920 | `mem_arg_consumption`, `mem_note_velem`, `resolve_clone_hooks` | Set by a call to nurl_vctl_data; the let that binds its result marks the pointer `__velem` (its element access |
-| `g_vis_file_gen` | :3003 | `vis_set_current_src_file` |  |
-| `g_vis_inst_targs` | :2188 | `__ty_memo_forget` | The type arguments of the generic struct being instantiated (its field types are parsed in a pseudo-file); see |
-| `g_vis_syms` | :2878 | `__target_arch` |  |
+| `g_ut_gen` | :3078 | `bck_unsafe_ctx` |  |
+| `g_vcall` | :3328 | `__target_arch` |  |
+| `g_vcall_n` | :3329 | `__target_arch`, `__vcall_thunk` |  |
+| `g_vcall_site` | :3330 | `__vcall_thunk` |  |
+| `g_vctl_seen` | :2994 | `mem_arg_consumption`, `mem_note_velem`, `resolve_clone_hooks` | Set by a call to nurl_vctl_data; the let that binds its result marks the pointer `__velem` (its element access |
+| `g_vis_file_gen` | :3077 | `vis_set_current_src_file` |  |
+| `g_vis_inst_targs` | :2262 | `__ty_memo_forget` | The type arguments of the generic struct being instantiated (its field types are parsed in a pseudo-file); see |
+| `g_vis_syms` | :2952 | `__target_arch` |  |
 | `g_vk_assume_on` | :207 | `bck_diag_vbuf_self`, `nurlc_print_help` | While the parked walks run (resolve_deferred_borrowck), a `dyn` impl whose walk has not answered yet is taken  |
 | `g_vk_assumed` | :208 | `__vk_of_d`, `bck_diag_vbuf_self` |  |
 | `g_vk_assumptions` | :209 | `bck_diag_vbuf_self` |  |
-| `g_void_reason` | :1369 | `__void_reason_clear`, `emit_or_chain`, `int_width`, `mem_join_heads_stmt` |  |
-| `g_wide_struct` | :3259 | `__note_struct_field` | Set once a struct field is itself a wide vector: from then on every function is looked at for indirect calls p |
-| `g_xl_cap` | :3213 | `bck_xl_resolve` |  |
-| `g_xl_depth` | :3209 | `bck_xl_declare`, `bck_xl_resolve` | The frame depth and renames of the lexical scopes the borrow walk's rows are translated in (bck_xl_declare_id) |
-| `g_xl_nser` | :3214 | `bck_xl_declare`, `bck_xl_resolve` |  |
-| `g_xl_op` | :3212 | `bck_xl_resolve` |  |
-| `g_xl_ren` | :3210 | `bck_xl_resolve` |  |
-| `g_xl_ss` | :3211 | `bck_xl_resolve` |  |
+| `g_void_reason` | :1391 | `__void_reason_clear`, `emit_or_chain`, `int_width`, `mem_join_heads_stmt` |  |
+| `g_wide_struct` | :3333 | `__note_struct_field` | Set once a struct field is itself a wide vector: from then on every function is looked at for indirect calls p |
+| `g_xl_cap` | :3287 | `bck_xl_resolve` |  |
+| `g_xl_depth` | :3283 | `bck_xl_declare`, `bck_xl_resolve` | The frame depth and renames of the lexical scopes the borrow walk's rows are translated in (bck_xl_declare_id) |
+| `g_xl_nser` | :3288 | `bck_xl_declare`, `bck_xl_resolve` |  |
+| `g_xl_op` | :3286 | `bck_xl_resolve` |  |
+| `g_xl_ren` | :3284 | `bck_xl_resolve` |  |
+| `g_xl_ss` | :3285 | `bck_xl_resolve` |  |

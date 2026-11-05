@@ -489,7 +489,9 @@ one of two kinds:
   refuses it).
 
 Classified by claude-formal after v0.85.0 and github#1549 (2026-11-03).
-The A2 rule that refuses each shape is named.
+The A2 rule that refuses each shape is named. The holes opened since
+then (#464 and later, listed in `docs/LIMITATIONS.md`) are not classified
+here yet.
 
 Inside A2 (nurlc bugs):
 - A change in place that ends a borrow, missed: #349, #350, #360,
@@ -497,8 +499,8 @@ Inside A2 (nurlc bugs):
   `callPostAux`'s `kill`). A keyword argument is the same call, and a
   callee's summary carries a drop through an element of its parameter
   however the element was reached.
-- A view a value comes to hold, not recorded where it goes: #348, #362,
-  #367, #368, #377, #381, #383, #390 and #393. A2 records it in `Ty.holdsView`,
+- A view a value comes to hold, not recorded where it goes: #348, #367,
+  #381, #383, #390 and #393. A2 records it in `Ty.holdsView`,
   `PushArg`, `pair`'s `Dy ++ Dz`, `callRes`'s `rholds` and `heldOfArgs`,
   `callPostAux`'s `outHeld` and `heldOfArgs`, and a package's interface
   summary; past a join, `ite` and `while` keep what either path holds.

@@ -10,6 +10,303 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Unreleased changes are fragments in [`changes/unreleased/`](changes/unreleased/) until a release folds them in here (`tools/changelog.py`).
 
+## [0.87.0] — 2026-11-05
+
+### Changed
+
+- `vec_map` with a closure that hands back fresh values is refused where
+  its result outlives the views of the Vec it maps: a closure parameter's
+  result is taken to hold what its argument holds (MEMORY.md §7.5).
+  Copy the strings (`( Vec String )`) to keep a result past them.
+- The element `vec_replace` hands back is taken to hold what every
+  argument holds, the replacing value's views too (A2's `heldOfArgs`):
+  kept past the string the new value views, it is refused. Keep that
+  string alive as long as the old element, or copy the strings.
+
+- The element mark is one level deep, as `vec_at`'s already was. Growing an element of a `( Vec ( Vec String ) )` ends a view of a String inside that element. A holder emptied before the container ends, or a `vec_set` of another index, is refused as its `vec_at` spelling is.
+
+- **wasmbuilder 0.3.8** and **nurl-mcp 0.14.2** are published.
+  wasmbuilder's WASI lowering already replaced the `nurl_cpu_x86_v4()`
+  probe (Agora #227), but that change had no version bump, so nurl-mcp,
+  which depends on wasmbuilder by path, could not be published with
+  v0.86.0. Published with v0.86.0 too: http 0.7.10, http-client 0.3.7,
+  nurldb 0.2.0, psql 0.6.0 and redis 0.3.7, which were in earlier
+  releases' trees but never uploaded.
+
+### Performance
+
+- **The compiler's IR passes do the same work in less of it**
+  (github#1614). Dead-code elimination indexes the module in one pass and
+  jumps from `@` name to `@` name; the flag-folding pass jumps between
+  `%`s and writes contiguous ranges at once; type and list words are asked
+  without allocating. dst_flagship compiles in 7.7 % fewer instructions
+  and the compiler's own self-compile in 8.1 % fewer. The output is byte
+  for byte the same.
+
+### Fixed
+
+- **A copy of a value that holds views holds them too** (Agora #362,
+  #368, #377, #347; probes mem_dup_of_*, token_popped_*, clone_of_*,
+  wrapper_around_vec_extend_* and others). A copy of a value holding views
+  carried none of them, so it was kept, and read, after the String the
+  views pointed into was freed. That covered `mem_dup` of a token or a
+  struct of views; an element taken out with `vec_pop`, or matched out of
+  `?? ( vec_pop … )`; `opt_unwrap_or`; a clone made by `vec_filter`,
+  `vec_clone_with`, `vec_fold`, `Deque_clone` or `map_clone`, or by a clone
+  of a clone; a function of your own that hands back `vec_clone` of its
+  parameter, `slice_to_vec` of a Slice parameter, or a local it extended
+  with one; and a wrapper of `vec_extend` (inout or not, generic,
+  recursive, a `dyn` impl, given a temporary, or one of your own marked
+  `unsafe`). The same held for an `inout` parameter given a new value in a
+  loop that may not run: after the loop it still holds what its argument
+  held. A closure handing back `mem_dup` of its own parameter, which was
+  refused as if it handed back a capture, is accepted.
+- **A copy of a part of a value outlives that value** (probes
+  vec_clone_of_an_element_*, mem_dup_of_an_element_*,
+  slice_to_vec_of_a_slice_*, *_payload_*_runs_clean,
+  callee_handing_back_a_dup_*, dup_helper_given_a_lent_element_*). A copy
+  of a part was refused once the value it was part of ended, though the
+  strings its views point into lived on. That covered:
+  - `( vec_clone [s] ( vec_at [( Vec s )] vv 0 ) )`, `mem_dup` of it or a
+    binding of it, refused once `vv` ended;
+  - a payload matched out of `( vec_at … )` or `( map_get … )`;
+  - `( slice_to_vec [s] ( slice_from_vec [s] t ) )`, refused once `t`
+    ended;
+  - `mem_dup` of a token a function of your own reads out of its
+    `( Vec Tok )` or is handed as `( vec_at … )`.
+
+  It holds what the part holds.
+- **A copy of a part of a value that views its own storage** (probes
+  *_viewing_its_sibling_*). A token Vec whose second token views the first
+  token's String, a struct element viewing a sibling's field, or a struct
+  whose field views another field, moved into a Vec: a copy of a part of
+  it (`mem_dup`, a foreach element, a match payload, a helper's copy) was
+  kept past the value and read the freed String. It is refused now.
+- **A copy of a parameter's views given to a global or another thread**
+  (probes global_given_a_*_copy_of_*, thread_given_a_view_popped_off_*).
+  A string global given the word of `mem_dup` of a token parameter kept a
+  view into the caller's string past its release. That shape, and a view
+  popped off a copy of a `( Vec s )` parameter stored in a global or
+  captured by a thread, are refused in the function, as a view parameter
+  itself is.
+- **A copier given a literal** (probes token_copier_given_a_literal_*,
+  copy_function_given_a_token_literal_*). A callee pushing `mem_dup` of its
+  token into an `inout` Vec, given a token literal viewing a local line,
+  left the Vec viewing the line after it was freed.
+- **A function handing back a view popped off a copy of its parameter**
+  (probe bare_view_popped_off_a_copy_of_a_param_runs_clean) was refused as
+  if the view pointed into the copy. It points into what the caller passed;
+  the caller now checks what it keeps.
+- **A generic instance's type read as an owner holding no views** when it
+  was asked again after its layout became known (a `( Slice s )` handed
+  back by `slice_from_vec`, among others): the type memos' "ask again"
+  (`-1`) read as an answer, 0, since #1545.
+
+- **A binding that may be a lend of a local no longer takes the local's
+  value when it moves on** (Agora #457; probes
+  string_maybe_lend_of_a_local_*). With `: String x ( maybe o k )`,
+  where `maybe` hands back `o` on one run and a fresh String on another,
+  handing `x` to a `sink`, pushing it (also inside a literal), capturing
+  it in a returned closure, or handing it to a keeper such as `rc_new`
+  leaked `o` on the run that handed back the fresh value. Now `x` is its
+  own value where the call says so and a copy where it lent, and `o`
+  always drops its own.
+
+- **A lend handed to a callee compiled after its caller is copied where
+  the callee takes it over** (Agora #459; probes
+  option_lend_handed_to_a_generic_keeper,
+  option_lend_handed_to_a_keeper_defined_below,
+  result_lend_handed_to_a_library_keeper and three more).
+  `( unwrap_or [String] ( maybe o 0 ) d )`, with `unwrap_or` taking its
+  option over and `maybe` handing back `o` on that run, gave `o`'s own
+  value to the callee. The value was released under `o`, which read freed
+  memory. The same happened with stdlib's `res_unwrap_or` and with any
+  such callee defined below its caller. The call's result is now copied on
+  the runs it lends whenever the callee takes it over, decided from the
+  callee's final summary at the end of the module, as it already was for a
+  callee defined above.
+- **A generic forwarder compiled after its callee hands on the callee's
+  answer** (Agora #459; probes
+  lend_handed_back_through_a_generic_forwarder_compiled_after_its_callee
+  and its String form). `: T r ( g2 [T] a k f ) ^ r`, instantiated after
+  `g2 [?String]`, called `r` its own on every run and handed it back as
+  such, so its caller released what `o` still held. A call to a generic
+  instance compiled already now reads that instance's per-call answer.
+- **A forwarder of a keeper says per call whether it hands its result
+  over** (Agora #459; probes
+  forwarder_of_a_generic_keeper_hands_on_its_answer and three more).
+  `@ gfw [A] ? A o A d → A { : A x ( ug [A] o d ) ^ x }`, with `ug` taking
+  `o` over and handing back `d` otherwise, told its caller "lent" on every
+  run. The caller copied what it was given, and the value `gfw` had handed
+  over leaked. The binding's own per-call answer is now handed on, when it
+  is returned bare, rebound, as a value block's tail or wrapped in an
+  option.
+- **A join over a binding a call may have handed a value of its own keeps
+  that value alive** (Agora #459; probes
+  block_tail_join_over_a_call_bound_binding,
+  bound_block_join_over_a_call_bound_binding and
+  block_arm_join_over_a_call_bound_binding). `^ { : String x ( pick a k )
+  ? c x a }` handed back x's value and then released it, as x was dropped
+  on the way out (heap-use-after-free). The same happened with a binding
+  of such a join (`: String r { ? c x a } ^ r`) and with block arms
+  (`? c { x } { a }`). On the runs x owns its value, the join now copies
+  it, or takes it from x.
+- **A join's arm hands over a parameter only where it holds that
+  parameter's value** (Agora #459; probe
+  joined_call_bound_binding_hands_over_its_source_only_by_identity).
+  `: String x ( pick a k ) ^ ? c x a` stopped dropping `a` whenever the x
+  arm was taken, also on the runs where `pick` handed back a fresh value,
+  and `a` leaked. It is now told by the values themselves: an option or a
+  result by the side it holds (two errors that own memory are told apart
+  by them), an `Rc`, a `Box` or a map by its handle.
+
+- **A closure returned as a join's arm owns its captures** (Agora #463;
+  probe closure_returned_from_an_arm_over_a_payload). A closure literal
+  written as an arm value of the `?` or `??` a `^` hands back now owns its
+  captures as `^ \ …` does, where they were left to the function and read
+  after its return. What the borrow checker accepts is unchanged: a join
+  it refuses (h310) is still refused.
+- **A closure handed back through an identity function is checked**
+  (Agora #463; probes closure_returned_through_a_sink_identity and
+  closure_returned_through_a_generic_identity). A callee that hands a
+  `sink` parameter back as it is (`@ idc [A] sink A f → A { ^ f }`) gives
+  its caller the closure it was handed, with the copies of the handles it
+  holds; `^ ( idc \ → … x … )` over a local `x` is refused, as `^ c` of a
+  closure bound first is.
+- **A returned literal that captures a String and stores it gives the closure a copy**
+  (Agora #463; probes closure_in_a_returned_literal_that_also_stores_its_capture
+  and closure_literal_with_two_closures_and_a_stored_capture).
+  `^ @ H { \ → i { … x … } x }` moved `x` into the closure and into the
+  field, and both released it.
+- **A returned closure that hands its capture to a `sink` hands a copy**
+  (Agora #463; probes closure_returned_hands_*). `^ \ → i { ^ ( eat x ) }`
+  released the closure's own `x`, and the next call and the closure's drop
+  released it again. The callee is now handed a copy, as `^ x` in the body
+  hands one back; a capture that cannot be copied is refused there.
+- **A closure that hands a captured option's payload to a `sink` owns the
+  option** (Agora #463; probes closure_local_hands_* and
+  closure_local_releases_*_never_run). `: c \ → i { ?? x { T s → ( eat s
+  ) } }` left `x` to the function, which released it again; the closure
+  now takes it over and marks it taken when it hands it on: a copy of the
+  closure made after it ran no longer copies what was given away, a later
+  run that uses the capture again stops with a clean panic where it uses
+  it, and a closure that never runs releases what it took over (a
+  String's leaked too).
+- **A returned closure that cannot copy an option it captures is refused**
+  (Agora #463; probes closure_returned_captures_an_option_of_*). An option
+  of a `% Drop` struct with no Clone, or an option of an option, was left
+  to the function and read after its release.
+- **A borrow handed to a `sink` in a return is refused**
+  (Agora #463; probes rc_get_payload_handed_to_a_sink_in_*).
+  `?? ( rc_get r ) { T s → { ^ ( eat s ) } }` released what the Rc still
+  held; the same hand-over in a statement was already refused.
+- **Two programs that failed to build now build** (Agora #463; probes
+  closure_captures_a_vec_get_payload and rc_of_an_option_builds). A closure
+  capturing a `vec_get` payload (`use of undefined value` in the closure
+  body), and an `( Rc ?String )` (`drop__w__opt.String` undefined).
+
+- **A `~` loop's element is a part of what the loop iterates** (Agora #471, #350). Before this, a view of the element's own storage could be kept past its container (a heap-use-after-free). The view can be `( string_data x )`, a field of it, a slice of its buffer, or an element read out of it; a borrow of the element, or a closure that captured it, behaves the same way. It now ends as a `( vec_at xs k )` binding's does:
+  - when the container is released, moved or given a new value;
+  - when the container's elements are dropped or replaced;
+  - when the element's own buffer moves.
+
+  The container growing does not end it. The same holds for a loop over a field, a borrow, a parameter or a part of a call's result (`~ x . ( vec_at [B] bs 0 ) items`, a `box_get` or `map_get` payload), and for nested loops. A function of your own that hands such a view of its parameter's element back now tells its callers: in a container, a struct, an option or an enum, or as a bare `s`, directly or through a binding, also when the function comes later in the program. A change made through the loop's element (`string_push_str x …`, `vec_clear e`, `= . x name …`) now ends the views into the container's elements taken before it, within a function (Agora #350).
+
+- **`nurl upgrade` works on Windows again.** It always failed with
+  `ForEach-Object : Cannot bind argument to parameter 'Path' because it is
+  null`, leaving the toolchain unchanged. The installer
+  (`tools/get-nurl.ps1`, bundled as `libexec\get-nurl.ps1`) renames
+  whatever Windows will not delete, such as the `nurlpkg.exe` running the
+  upgrade. It named that file by `$_.FullName` inside a `catch` block,
+  where `$_` is the error record, so the rename got a `$null` path. The
+  helper now loops with `foreach` over named items, and no longer tries to
+  rename a file it has already moved.
+- **`nurl upgrade` from PowerShell 7.** The installer runs under Windows
+  PowerShell 5.1 (`powershell.exe`). Launched from pwsh 7 through cmd or
+  `nurl.exe`, 5.1 inherited pwsh's `PSModulePath` and loaded PowerShell 7's
+  `Microsoft.PowerShell.Utility`, which it cannot import, so the checksum
+  step stopped at "`Get-FileHash` is not recognized". The installer now
+  removes PowerShell 7's module directories from its own module path
+  before it uses any module cmdlet. `tools/tests/test_installer_inuse.ps1`
+  checks both cases on the Windows runner: it starts 5.1 from pwsh through
+  cmd, against a prefix whose executables are running.
+
+### Known issues
+
+- **57 soundness holes are open, each with a fix in progress**: agora
+  #242 (a join or a value block bound by `:` and then handed on by name,
+  in nine remaining shapes), #280 (a field a `sink` took, used again by
+  a route the check does not see), #294 (a struct built from an owner
+  and a view of it views its own buffer), #345 (a view of an Rc's state
+  through one share, replaced through another), #348 (a nested field
+  store of a view), #349 (an element of a Vec handed out by a program
+  function or by nested calls, then grown), #350 (a change through a `~
+  e vv` loop's element, made by a callee), #357 (a field of a match
+  payload handed to a `sink`), #360 (a `?` / `??` join whose arms are
+  field paths), #364 (an enum binding given a new value inside its own
+  match arm), #366 (an owner's old value whose hand-over has no key:
+  kept back (a leak) on a lend path, freed under its borrower on an
+  owned one), #367 (a `??` used as a value whose arm hands out a view
+  payload), #373 (a `vec_get` binding kept across a call that moves the
+  elements), #378 (an option owner given a lend inside a closure, out of
+  a capture, through a forwarder defined above the closure), #381 (a
+  callee's local viewed by an `inout` holder, then moved into the
+  caller's `inout` field), #382 (a panic under `recover` between a
+  holder's store of a callee local's view and its repoint), #383 (a
+  callee that leaves one argument viewing another's elements), #384 (a
+  handle's own drop hook that reads a view), #387 (a second reader of a
+  field, after the field is replaced), #390 (a callee that views its
+  `inout String` into a holder, then grows that String), #391 (a Vec
+  element passed as a holder argument), #392 (a view-holding value
+  stored into an Rc's shared state), #393 (mutual recursion that swaps
+  its source arguments), #395 (a store through a borrow that #292 does
+  not follow to its owner), #396 (a view taken through a String field
+  reader, kept past a realloc of that field), #406 (a `\` whose tried
+  call changes an `inout` holder and then fails), #407 (a defer armed
+  inside a loop or an arm that stores a local's view into an `inout`
+  holder), #408 (a defer that reads a holder viewing a value bound after
+  the defer), #424 (a borrow of a `??` payload, and the scrutinee handed
+  to a callee that clears it), #427 (an option owner given what a call
+  may hand back of its own value, where nurlc has no lend fact for the
+  call at that line), #428 (a change made in place by a route that does
+  not reach the owner), #434 (a keyword-argument call records no borrow
+  rows), #445 (a closure called with a binding it replaces, by any route
+  but a direct call), #450 (an owner given a part of its own value, or a
+  value that shares part of it, while nurlc takes the result for another
+  value), #460 (two `??` payload bindings of one enum value, a change
+  through one), #461 (a parameter's element reached by a route #447 does
+  not follow, handed to a clearing callee), #462 (a function binding a
+  lent element of its parameter, or an enum payload of one, and handing
+  the binding back), #464 (a temporary argument freed right after the
+  call while the callee's result views it), #466 (an `inout` view
+  parameter kept in a second holder, an `s` global or a thread), #467 (a
+  returned closure that captured a holder given a view of a parameter),
+  #468 (a closure literal whose `( Vec s )` parameter is the holder of
+  `vec_extend`), #469 (a closure that captured an owner of views by
+  value, run on another thread), #472 (an iterator yields copies of what
+  it captured), #473 (a closure literal hands back a local holder of its
+  captures' views), #478 (a second name of a fresh `s` binding's buffer
+  handed back), #479 (a copied closure that views a local, a closure
+  body handing a `sink` a value derived from its capture, and a
+  statement-form match arm returning a closure over a borrowed field),
+  #481 (a `dyn` impl that calls its own method through a dyn field),
+  #482 (a `~ x b` loop over a borrow of a container's element, the
+  container changed in the body by its own name), #483 (a closure
+  literal capturing a `vec_at` binding's element), #484 (a `~` loop's
+  element moved into another Vec leaks), #485 (an owned slice literal of
+  Strings never drops its Strings), #487 (a bare `s` view handed back
+  through a `?` join, or from a `??` payload inside an `if`, a loop or
+  after another statement), #488 (a field given a new value through a
+  `~` loop's struct element), #489 (an `unsafe` function handing back a
+  view of its `~` loop's element over a parameter), #490 (a `~` loop's
+  element moved out — handed to a sink, `string_free`, `vec_free`), #491
+  (a defer armed in an inner block reading a borrow bound in that block)
+  and #492 (a view-class `~` loop element read after what it views
+  changes). `docs/LIMITATIONS.md` gives each one's shape and how to stay
+  clear of it. Closed in this release: agora #377, #362, #368, #347,
+  #457, #459, #463, #471. A release does not say "no hole is known open"
+  while one is.
+
 ## [0.86.0] — 2026-11-03
 
 ### Changed
