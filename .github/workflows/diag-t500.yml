@@ -1,0 +1,19 @@
+name: diag-t500
+# Agora #500 measurement only; this branch is deleted after the run.
+on:
+  push:
+    branches: [diag/t500-accept-lag]
+jobs:
+  lag:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: cc -O2 -Wall -pthread tools/diag/accept_lag.c -o accept_lag
+      - run: |
+          n=$(getconf _NPROCESSORS_ONLN)
+          echo "cpus=$n"
+          for h in 0 $n $((2*n)) $((4*n)); do ./accept_lag $h; done
