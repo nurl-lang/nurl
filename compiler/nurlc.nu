@@ -45461,6 +45461,16 @@ unsafe @ gen_cast i lex i syms i cg → s {
 
 // ── Member . obj field|index ───────────────────────────────────────
 
+// Whether the object of a field read is a temporary the read's expression
+// owns, as an i1 operand (`` when nothing says): a call's result — the
+// call's own answer (mem_call_retown) — or a field the read inside this
+// one took out of such a result, owned exactly when that read's flag holds
+// (`. . ( f ) v b`, agora #474).
+@ __mb_tmp_flag i syms i cg i mb_tt s inner_tfo → s {
+    ? == mb_tt TT_LPAREN { ^ ( mem_call_retown syms cg ) } {}
+    ^ ( nurl_str_cat inner_tfo `` )
+}
+
 unsafe @ gen_member i lex i syms i cg → s {
     ( nurl_lex_advance lex )
     : i __mb_tt ( nurl_lex_type lex )
@@ -45527,6 +45537,14 @@ unsafe @ gen_member i lex i syms i cg → s {
     // struct the binding holds by value (`. . x a f`) is in the same
     // storage: its index is a path (`a,f`), extended from the object's read.
     : s __mb_inner_fr ? == __mb_tt TT_DOT ( nurl_sym_get syms `__last_field_read__` ) ``
+    // A field the read inside this one took out of a call's result (`. .
+    // ( f ) v b`: `v` left the temporary) is a temporary too, owned exactly
+    // when that read's flag says so: this read releases it as a read
+    // straight off the call releases the call's result. Seen only as a
+    // field of something, nothing released it (agora #474).
+    : s __mb_inner_tfo ? == __mb_tt TT_DOT ( nurl_sym_get syms `__last_tmp_field_own__` ) ``
+    : s __mb_inner_rk ? == __mb_tt TT_DOT ( nurl_sym_get syms `__last_tmp_field_rk__` ) ``
+    : b __mb_tobj | == __mb_tt TT_LPAREN & == __mb_tt TT_DOT != 0 ( nurl_str_len __mb_inner_tfo )
     ( nurl_sym_def syms `__last_field_read__` `` )
     ( nurl_sym_def syms `__last_tmp_field_own__` `` )
     // Where the object itself was loaded from, when it was read through a
@@ -45650,6 +45668,9 @@ unsafe @ gen_member i lex i syms i cg → s {
                 ( nurl_sym_def syms `__last_member_root__` __mb_root )
                 = g_member_path ( nurl_str_cat __mb_path `` )
                 ( nurl_sym_def syms `__last_field_read__` `` )
+                // (…nor a field taken out of a temporary: what the index
+                // read took is the index's, not this element's.)
+                ( nurl_sym_def syms `__last_tmp_field_own__` `` )
                 : s idx_type ( nurl_get_last_type )
                 ( die_if_not_index lex idx_type `element` )
                 : s gep ( nurl_cg_reg cg )
@@ -45845,9 +45866,9 @@ unsafe @ gen_member i lex i syms i cg → s {
                     // A field that owns nothing read out of a call's result
                     // (`. ( mk ) n`): the rest of that temporary is dropped
                     // here, when the call handed it over (h232) — it leaked.
-                    ? & & & & == __mb_tt TT_LPAREN != 0 g_auto_drop_strings ( __type_needs_drop ot syms )
+                    ? & & & & __mb_tobj != 0 g_auto_drop_strings ( __type_needs_drop ot syms )
                     ! ( __type_needs_drop ftype syms ) ! ( __is_closure_ty ftype ) {
-                        : s tro ( mem_call_retown syms cg )
+                        : s tro ( __mb_tmp_flag syms cg __mb_tt __mb_inner_tfo )
                         ? != 0 ( nurl_str_len tro ) {
                             ( __handle_drop_ensure ot )
                             ( __dropifv_request ot )
@@ -45866,16 +45887,16 @@ unsafe @ gen_member i lex i syms i cg → s {
                     // literal takes over.
                     : ~ s __tf_res ( nurl_str_cat res `` )
                     : ~ b __tf_taken F
-                    ? & & & & & == __mb_tt TT_LPAREN != 0 g_auto_drop_strings ( __type_needs_drop ot syms )
+                    ? & & & & & __mb_tobj != 0 g_auto_drop_strings ( __type_needs_drop ot syms )
                     ( __is_handle_ty ftype ) ! ( __has_user_drop ot ) ( __clone_supported ftype syms ) {
                         // (Exactly when the call handed its result over — its
                         // flag: a lent one, `. ( arc_get a ) file`, stays a
                         // view of its owner.)
-                        : s tro2 ( mem_call_retown syms cg )
+                        : s tro2 ( __mb_tmp_flag syms cg __mb_tt __mb_inner_tfo )
                         ? != 0 ( nurl_str_len tro2 ) {
                             = __tf_taken T
                             ( nurl_sym_def syms `__last_tmp_field_own__` tro2 )
-                            ( nurl_sym_def syms `__last_tmp_field_rk__` ( nurl_sym_get syms `__last_retown_const__` ) )
+                            ( nurl_sym_def syms `__last_tmp_field_rk__` ? == __mb_tt TT_LPAREN ( nurl_sym_get syms `__last_retown_const__` ) __mb_inner_rk )
                             : s rest ( nurl_cg_reg cg )
                             ( nurl_print `  ` ) ( nurl_print rest ) ( nurl_print ` = insertvalue ` ) ( nurl_print ( nurl_llty ot ) )
                             ( nurl_print ` ` ) ( nurl_print ov ) ( nurl_print `, ` ) ( nurl_print ( nurl_llty ftype ) )
@@ -45892,9 +45913,9 @@ unsafe @ gen_member i lex i syms i cg → s {
                     // an owned closure temporary (g_clo_tmp) for the binding,
                     // argument, return or store that takes it. Neither the
                     // temporary nor the read released the env (h323).
-                    ? & & & & == __mb_tt TT_LPAREN != 0 g_auto_drop_strings ( __type_needs_drop ot syms )
+                    ? & & & & __mb_tobj != 0 g_auto_drop_strings ( __type_needs_drop ot syms )
                     ( __is_closure_ty ftype ) ! ( __has_user_drop ot ) {
-                        : s tro3 ( mem_call_retown syms cg )
+                        : s tro3 ( __mb_tmp_flag syms cg __mb_tt __mb_inner_tfo )
                         ? != 0 ( nurl_str_len tro3 ) {
                             = __tf_taken T
                             : s cll ( nurl_llty ftype )
@@ -45932,9 +45953,9 @@ unsafe @ gen_member i lex i syms i cg → s {
                     // leaked, and its destructors never ran (h329, h330). Journaled
                     // once its value is in place, as h233's owner is
                     // (mem_journal_push_tmpown).
-                    ? & & & & ! __tf_taken == __mb_tt TT_LPAREN != 0 g_auto_drop_strings ( __type_needs_drop ot syms )
+                    ? & & & & ! __tf_taken __mb_tobj != 0 g_auto_drop_strings ( __type_needs_drop ot syms )
                     | ( __type_needs_drop ftype syms ) ( __is_closure_ty ftype ) {
-                        : s tro4 ( mem_call_retown syms cg )
+                        : s tro4 ( __mb_tmp_flag syms cg __mb_tt __mb_inner_tfo )
                         ? != 0 ( nurl_str_len tro4 ) {
                             : s tp ( nurl_cg_reg cg )
                             ( nurl_print `  ` ) ( nurl_print tp ) ( nurl_print ` = alloca ` ) ( nurl_print ( nurl_llty ot ) ) ( nurl_print `\n` )
