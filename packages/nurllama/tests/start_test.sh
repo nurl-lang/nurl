@@ -67,7 +67,11 @@ printf '%s\n2\n2\n1\nmytoken\n%s\n' "$WORK/models" "$PORT" \
     | timeout 10 "$NL" start >/dev/null 2>&1 &
 WPID=$!
 sleep 4
-kill "$WPID" 2>/dev/null
+# …and wait for it to be gone (here and after the second wizard below): the
+# server a wizard launches holds the history database's lock on
+# NURLLAMA_HOME until it has shut down, and a server started while it still
+# does is refused — start -y in [3/4] raced it and failed about one run in two
+kill "$WPID" 2>/dev/null; wait "$WPID" 2>/dev/null
 python3 - "$NURLLAMA_HOME/config.json" "$WORK/models" "$PORT" <<'EOF'
 import json, sys
 cfg = json.load(open(sys.argv[1]))
@@ -102,7 +106,7 @@ rm -f "$NURLLAMA_HOME/config.json"
 printf '%s\n1\nn\n' "$WORK/ckpt" | timeout 8 "$NL" start > "$WORK/wizard2.out" 2>&1 &
 WPID2=$!
 sleep 4
-kill "$WPID2" 2>/dev/null
+kill "$WPID2" 2>/dev/null; wait "$WPID2" 2>/dev/null
 grep -q 'HF checkpoint → convert to GGUF' "$WORK/wizard2.out" \
     && ok "the wizard lists an HF checkpoint directory for conversion" \
     || bad "checkpoint listing"
@@ -196,6 +200,19 @@ sleep 3
 [ "$(curl -s -o /dev/null -w '%{http_code}' -H 'Accept: text/html' "$base/")" = 200 ] && ok "login page served without a token" || bad "login page"
 [ "$(curl -s -o /dev/null -w '%{http_code}' "$base/web/session")" = 401 ] && ok "no token → 401" || bad "no token"
 [ "$(curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer sekret' "$base/web/session")" = 200 ] && ok "correct token → 200" || bad "token 200"
+# Every data route asks for the token — ollama's /api/* and OpenAI's /v1/*
+# as well as /web/* (the generating ones refuse before any model loads).
+for r in "GET /api/tags" "POST /api/show" "POST /api/generate" "POST /api/chat" \
+         "GET /v1/models" "GET /v1/models/x" "POST /v1/chat/completions" "POST /v1/completions"; do
+    set -- $r
+    code=$(curl -s -o /dev/null -w '%{http_code}' -X "$1" "$base$2" -d '{"model":"x","prompt":"x","messages":[]}')
+    [ "$code" = 401 ] && ok "no token → 401 on $1 $2" || bad "no token on $1 $2 ($code)"
+    code=$(curl -s -o /dev/null -w '%{http_code}' -X "$1" "$base$2" -H 'Authorization: Bearer wrong' -d '{"model":"x","prompt":"x","messages":[]}')
+    [ "$code" = 401 ] && ok "wrong token → 401 on $1 $2" || bad "wrong token on $1 $2 ($code)"
+done
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer sekret' "$base/api/tags")" = 200 ] && ok "correct token → 200 on /api/tags" || bad "token /api/tags"
+curl -s -H 'Authorization: Bearer sekret' "$base/v1/models" | grep -q '"object":"list"' && ok "correct token → the /v1/models list" || bad "token /v1/models"
+curl -s "$base/v1/models" | grep -q '"code":"invalid_api_key"' && ok "a /v1 refusal is in OpenAI's error shape" || bad "/v1 401 shape"
 
 # model-gated: a real chat turn persists and scopes
 if [ -n "${NURLLAMA_LLADA_GGUF:-}" ] && [ -f "$NURLLAMA_LLADA_GGUF" ]; then

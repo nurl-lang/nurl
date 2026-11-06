@@ -1,8 +1,9 @@
 # nurllama
 
 Run language models locally. Pull a GGUF model, chat with it, or serve
-an **ollama-compatible API** your existing clients already speak — all
-in pure NURL, from the GGUF parser to the GPU kernels.
+an **ollama-compatible** and an **OpenAI-compatible API** your existing
+clients already speak — all in pure NURL, from the GGUF parser to the
+GPU kernels.
 
 ```sh
 nurlpkg install nurllama
@@ -27,8 +28,8 @@ $ nurllama serve qwen2.5-0.5b-instruct-q4_k_m
 nurllama serving on http://127.0.0.1:11434
 ```
 
-That last line is two things at once: the **ollama-compatible API** and
-a **web chat UI** — open <http://127.0.0.1:11434> in a browser and talk
+That last line is three things at once: the **ollama-compatible API**,
+the **OpenAI-compatible API** under `/v1`, and a **web chat UI** — open <http://127.0.0.1:11434> in a browser and talk
 to the named model. The model you pass to `serve` is the default: the
 web UI chats with it, and an API request that names no model of its own
 falls back to it. (Without a default, the web UI cannot chat and an API
@@ -56,7 +57,7 @@ resident at a time.
 | `pull <src> [--name N]` | `hf.co/ORG/REPO/FILE.gguf` or any URL. Resumes an interrupted download. |
 | `run <model> "<prompt>"` | `-n` tokens, `--temp` (0 = greedy), `--topk`, `--topp`, `--seed`, `--ctx` |
 | `chat <model>` | interactive; uses the model's own chat template |
-| `serve [model] [--host] [--port] [--weights F]` | ollama-compatible API + web chat UI on 11434; `model` is the default the web UI uses |
+| `serve [model] [--host] [--port] [--weights F]` | ollama- and OpenAI-compatible APIs + web chat UI on 11434; `model` is the default the web UI and the APIs use |
 | `list` · `rm <name>` · `verify <name>` | the local store |
 | `convert <hf-dir> <out.gguf> [--type T]` | HF checkpoint → GGUF (`q8_0` default, `f16`, `bf16`, `f32`) |
 | `tokenize` · `detok` · `vocab` · `logits` | inspection taps |
@@ -81,7 +82,56 @@ $ nurllama serve model.gguf
 ```
 
 **HTTP API:** `POST /api/generate`, `POST /api/chat`, `GET /api/tags`,
-`POST /api/show`.
+`POST /api/show` (ollama's), and `POST /v1/chat/completions`,
+`POST /v1/completions`, `GET /v1/models`, `GET /v1/models/{id}`
+(OpenAI's).
+
+### The OpenAI-compatible API
+
+Point any OpenAI client at `http://HOST:11434/v1`:
+
+```python
+from openai import OpenAI
+client = OpenAI(base_url="http://127.0.0.1:11434/v1", api_key="unused")
+r = client.chat.completions.create(model="qwen2.5-0.5b-instruct-q4_k_m",
+        messages=[{"role": "user", "content": "Why is the sky blue?"}])
+print(r.choices[0].message.content)
+```
+
+```sh
+$ curl localhost:11434/v1/chat/completions -d '{"messages":[{"role":"user","content":"hi"}],"stream":true}'
+data: {"id":"chatcmpl-…","object":"chat.completion.chunk",…,"choices":[{"index":0,"delta":{"role":"assistant","content":""},…}]}
+data: {…"choices":[{"index":0,"delta":{"content":"Hello"},…}]}
+…
+data: {…"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+data: [DONE]
+```
+
+* `messages` go through the model's own chat template; `content` is a
+  string or an array of `text` parts (`developer` is read as `system`).
+* `max_tokens` / `max_completion_tokens`, `temperature`, `top_p`, `seed`,
+  `stop` (a string or an array) and `stream` with
+  `stream_options.include_usage` behave as OpenAI documents them, with
+  OpenAI's defaults (temperature 1, top_p 1; a chat runs to the end of its
+  turn, a completion to 16 tokens). `top_k` is taken too.
+* Every response carries `usage`; `finish_reason` is `stop` (end of turn
+  or a stop sequence) or `length` (the token budget or the context).
+* A stop sequence is never sent, not even the part of it that arrived
+  first: a stream holds back what might be the start of one until the
+  next token says otherwise, and a token that ends inside a UTF-8
+  character waits for the rest of it. Bytes a model emits that are not
+  UTF-8 reach the client as U+FFFD — JSON is UTF-8 — the same streamed or
+  not.
+* What the server cannot do is refused with OpenAI's error shape rather
+  than ignored: `n` > 1, `tools`, a `response_format` other than text,
+  `logprobs`, image or audio content.
+* `stop` (as `options.stop`) and `finish_reason` (as `done_reason`) work
+  on ollama's routes too: both protocols run one generation loop.
+
+A server started with a token (`nurllama start`) answers every data
+route — `/api/*`, `/v1/*` and `/web/*` — only with
+`Authorization: Bearer <token>`; an OpenAI client sends its `api_key`
+exactly that way.
 
 ## Serving a finetuned model
 
@@ -301,7 +351,7 @@ checkpoint directory is offered with `(HF checkpoint → convert to GGUF)`,
 and picking it runs `nurllama convert` (Q8_0) and serves the result. An
 already-converted GGUF beside it is reused after a prompt.
 
-The server it launches is the ollama-compatible API **plus** a
+The server it launches is the ollama- and OpenAI-compatible APIs **plus** a
 self-contained web chat UI at `/` (no external requests — it embeds its
 own CSS and JS). A programmatic client that hits `/` still gets the
 `nurllama is running` status line; a browser gets the chat page. Each

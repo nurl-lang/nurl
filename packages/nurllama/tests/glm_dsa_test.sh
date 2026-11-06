@@ -23,6 +23,8 @@
 #    3. a prompt longer than one prefill chunk (64 positions)
 #    4. the same checkpoint at q8_0: same argmax, logits near f32's
 #    5. the GLM tokenizer (tokenizer.ggml.pre glm4) gives HF's ids
+#    6. sampled text served through the OpenAI API is UTF-8, piece by
+#       piece and whole
 #
 #  Needs python3 with torch + transformers >= 5.15 (GlmMoeDsa), the
 #  llama.cpp source tree for its converter (LLAMA_CPP=/path/to/llama.cpp),
@@ -69,13 +71,13 @@ if [ -z "$TOK" ]; then
     done
 fi
 
-echo "[1/6] build nurllama"
+echo "[1/7] build nurllama"
 if ! $NURL src/main.nu "$WORK/nurllama" >/dev/null 2>"$WORK/build.err"; then
     echo "FAIL: could not build nurllama:"; tail -5 "$WORK/build.err"; exit 1
 fi
 NL="$WORK/nurllama"
 
-echo "[2/6] the tiny checkpoint, through llama.cpp's converter"
+echo "[2/7] the tiny checkpoint, through llama.cpp's converter"
 HF="$WORK/hf"
 if ! "$PY" tests/glm_dsa_ref.py make "$HF" "$TOK" >"$WORK/make.log" 2>&1; then
     echo "FAIL: could not make the checkpoint:"; tail -5 "$WORK/make.log"; exit 1
@@ -116,13 +118,13 @@ PYEOF
 # The tiny model's index_topk is 8.
 ntok() { "$NL" tokenize "$M" "$1" | wc -w; }
 
-echo "[3/6] a prompt within index_topk, decoding past it"
+echo "[3/7] a prompt within index_topk, decoding past it"
 SHORT="The capital of France is"
 N=$(ntok "$SHORT")
 [ "$N" -le 8 ] && ok "the short prompt is $N tokens (≤ index_topk 8)" || bad "short prompt is $N tokens"
 parity "short prompt" "$SHORT" 16
 
-echo "[4/6] a prompt past index_topk, and one past a prefill chunk"
+echo "[4/7] a prompt past index_topk, and one past a prefill chunk"
 MID="In 1905 Albert Einstein published four papers that changed physics: on the photoelectric effect, on Brownian motion, on special relativity."
 N=$(ntok "$MID")
 [ "$N" -gt 8 ] && ok "the mid prompt is $N tokens (> index_topk 8)" || bad "mid prompt only $N tokens"
@@ -132,7 +134,7 @@ N=$(ntok "$LONG")
 [ "$N" -gt 64 ] && ok "the long prompt is $N tokens (more than one 64-position chunk)" || bad "long prompt only $N tokens"
 parity "long prompt" "$LONG" 8
 
-echo "[5/6] q8_0"
+echo "[5/7] q8_0"
 Q="$WORK/tiny-q8_0.gguf"
 "$NL" logits "$Q" "$MID" > "$WORK/q8.logits"
 "$PY" tests/glm_dsa_ref.py logits "$HF" "$("$NL" tokenize "$Q" "$MID")" > "$WORK/ref.logits" 2>/dev/null
@@ -147,7 +149,7 @@ assert a.argmax() == b.argmax(), "argmax differs"
 assert d < span*0.02, "max delta %g vs span %g" % (d, span)
 PYEOF
 
-echo "[6/6] the GLM tokenizer vs HF"
+echo "[6/7] the GLM tokenizer vs HF"
 if "$PY" -c 'import tokenizers' >/dev/null 2>&1; then
     for S in "The capital of France is" "café naïve" "中文和English混合" "  two  spaces
 and a newline" "x = f(42) + 3.14159;"; do
@@ -158,6 +160,36 @@ and a newline" "x = f(42) + 3.14159;"; do
 else
     echo "  SKIP (python3 tokenizers)"
 fi
+
+echo "[7/7] sampled text through the OpenAI API is UTF-8, streamed or not"
+# The random model samples from GLM's byte-level vocabulary, so its tokens
+# end characters halfway and start malformed ones: a stream must hold a
+# half character back until it is whole, and a malformed byte must reach
+# the client as U+FFFD — JSON text is UTF-8 — the same in every piece as in
+# the whole reply.
+PORT=$(( (RANDOM % 20000) + 25000 ))
+NURLLAMA_HOME="$WORK/home" "$NL" serve "$M" --port "$PORT" > "$WORK/serve.log" 2>&1 &
+SRV=$!
+for _ in $(seq 60); do curl -sf "http://127.0.0.1:$PORT/" >/dev/null 2>&1 && break; sleep 0.25; done
+"$PY" - "$PORT" "$M" <<'PYEOF' && ok "64-token samples: every event UTF-8 JSON, stream text == reply text" || bad "UTF-8 through the API"
+import json, sys, urllib.request
+port, model = sys.argv[1], sys.argv[2]
+def post(body):
+    r = urllib.request.Request("http://127.0.0.1:%s/v1/completions" % port, data=json.dumps(body).encode(),
+                               headers={"Content-Type": "application/json"})
+    return urllib.request.urlopen(r, timeout=600).read()
+held = 0
+for seed in range(6):
+    b = {"model": model, "prompt": "中文和English混合", "max_tokens": 64, "temperature": 1.5, "seed": seed}
+    once = json.loads(post(b).decode("utf-8"))["choices"][0]["text"]
+    ev = [e[6:] for e in post(dict(b, stream=True)).decode("utf-8").split("\n\n") if e.strip()]
+    assert ev[-1] == "[DONE]"
+    pieces = [json.loads(e)["choices"][0]["text"] for e in ev[:-1]]
+    assert "".join(pieces) == once, seed
+    held += 64 - (len(pieces) - 1)
+print("    pieces held back for a whole character: %d" % held)
+PYEOF
+kill "$SRV" 2>/dev/null; wait "$SRV" 2>/dev/null
 
 echo "== nurllama glm-dsa tests: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
