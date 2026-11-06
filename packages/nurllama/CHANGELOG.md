@@ -72,6 +72,19 @@ Requires NURL 0.89.0 and tokenizer 0.6.
   `nurllama chat-template STYLE|MODEL [MESSAGES.json]` renders any
   conversation.
 
+- **Reasoning apart from the answer** (Agora #518): a chat reply inside a
+  `<think>` block — the template left it there, or the reply opened one —
+  comes back as `reasoning_content` (OpenAI, `message` and stream
+  `delta`) and `thinking` (ollama), its answer as `content`; a stream
+  holds back a possible `</think>`, stop sequences end only the answer,
+  and the web chat keeps the answer. An incoming assistant message's
+  `reasoning_content` / `thinking` reaches the template; the template's
+  switches — `reasoning_effort`, `chat_template_kwargs`
+  (`reasoning_effort`, `enable_thinking`), ollama's `think` — render as
+  the model's template renders them (checked against HF). The parser is
+  one pure function of the text, shared by the stream, the whole reply
+  and `nurllama think-split` (a hidden test command).
+
 ### Fixed
 
 - **A generation now ends on the model's end-of-turn and end-of-message

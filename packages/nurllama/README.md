@@ -122,6 +122,22 @@ data: [DONE]
   character waits for the rest of it. Bytes a model emits that are not
   UTF-8 reach the client as U+FFFD — JSON is UTF-8 — the same streamed or
   not.
+* **A reasoning model's reasoning comes apart from its answer.** When the
+  chat template leaves the reply inside `<think>` (GLM's do), or the reply
+  opens one itself, everything up to `</think>` is the reasoning:
+  `message.reasoning_content` / `delta.reasoning_content` (the field
+  DeepSeek's API, vLLM and llama.cpp's server use) and ollama's
+  `message.thinking`; the rest is `content`. A stream holds back a
+  possible `</think>` like a stop sequence, and stop sequences end the
+  answer, never the reasoning. An assistant message in the history may
+  carry its own `reasoning_content` (ollama: `thinking`); the template
+  gets it as the model's template expects.
+* The template's own switches: `reasoning_effort` (GLM-5.2 / 5.3: `low`,
+  `high`; anything else is its default, Max) and vLLM's
+  `chat_template_kwargs` (`reasoning_effort`, `enable_thinking` — GLM-5's
+  `false` closes the think block in the prompt); ollama's `think` is
+  `enable_thinking`. They render exactly as the model's template renders
+  them.
 * What the server cannot do is refused with OpenAI's error shape rather
   than ignored: `n` > 1, `tools`, a `response_format` other than text,
   `logprobs`, image or audio content.

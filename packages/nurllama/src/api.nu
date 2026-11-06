@@ -263,7 +263,9 @@ $ `stdlib/std/utf8.nu`
 
 // ── NDJSON frames ───────────────────────────────────────────────────
 
-@ __api_frame_token s model s field s piece → String {
+// A chat frame's piece is the answer's, or with `thinking` the reasoning's
+// (ollama's message.thinking).
+@ __api_frame_token s model s field s piece b thinking → String {
     : Json j ( json_obj_new )
     : b _1 ( json_obj_set j `model` ( json_str_lit model ) )
     ? ( nurl_str_eq field `response` ) {
@@ -271,7 +273,8 @@ $ `stdlib/std/utf8.nu`
     } {
         : Json msg ( json_obj_new )
         : b _3 ( json_obj_set msg `role` ( json_str_lit `assistant` ) )
-        : b _4 ( json_obj_set msg `content` ( json_str_lit piece ) )
+        : b _4 ( json_obj_set msg `content` ( json_str_lit ? thinking `` piece ) )
+        ? thinking { : b _t ( json_obj_set msg `thinking` ( json_str_lit piece ) ) } {}
         : b _5 ( json_obj_set j `message` msg )
     }
     : b _6 ( json_obj_set j `done` ( json_bool F ) )
@@ -280,7 +283,8 @@ $ `stdlib/std/utf8.nu`
     ^ out
 }
 
-@ __api_frame_done s model s field i nprompt i neval b with_text s finish s full → String {
+// `thinking`: the whole reasoning, on a non-streamed chat reply that had one.
+@ __api_frame_done s model s field i nprompt i neval b with_text s finish s full b has_think s thinking → String {
     : Json j ( json_obj_new )
     : b _1 ( json_obj_set j `model` ( json_str_lit model ) )
     ? ( nurl_str_eq field `response` ) {
@@ -289,6 +293,7 @@ $ `stdlib/std/utf8.nu`
         : Json msg ( json_obj_new )
         : b _3 ( json_obj_set msg `role` ( json_str_lit `assistant` ) )
         : b _4 ( json_obj_set msg `content` ( json_str_lit ? with_text full `` ) )
+        ? & with_text has_think { : b _t ( json_obj_set msg `thinking` ( json_str_lit thinking ) ) } {}
         : b _5 ( json_obj_set j `message` msg )
     }
     : b _6 ( json_obj_set j `done` ( json_bool T ) )
@@ -351,6 +356,10 @@ $ `stdlib/std/utf8.nu`
     b usage  // OpenAI stream_options.include_usage
     String id  // OpenAI: chatcmpl-… / cmpl-…
     i created  // OpenAI: unix seconds
+    // A chat reply's reasoning goes apart from its answer (__api_think_split);
+    // `think_open`: the prompt leaves the reply inside a <think> block
+    b split
+    b think_open
 }
 
 // An error in the asking protocol's shape — ollama's {"error": msg}, or
@@ -422,8 +431,10 @@ $ `stdlib/std/utf8.nu`
 
 // One streamed chunk: `text` as the delta (chat) or the text (completions);
 // `role` puts the assistant role on a chat delta (the first chunk); a
-// non-empty `finish` closes the choice (its delta is then empty).
-@ __oai_chunk GenReq rq s text b role s finish → String {
+// non-empty `finish` closes the choice (its delta is then empty);
+// `reasoning`: the text is the reasoning's (delta.reasoning_content, the
+// field DeepSeek's API, vLLM and llama.cpp's server use).
+@ __oai_chunk GenReq rq s text b role s finish b reasoning → String {
     : b chat == . rq proto API_OAI_CHAT
     : Json j ( __oai_head rq ? chat `chat.completion.chunk` `text_completion` )
     : Json ch ( json_obj_new )
@@ -432,7 +443,7 @@ $ `stdlib/std/utf8.nu`
     ? chat {
         : Json d ( json_obj_new )
         ? role { : b _2 ( json_obj_set d `role` ( json_str_lit `assistant` ) ) } {}
-        ? fin {} { : b _3 ( json_obj_set d `content` ( json_str_lit text ) ) }
+        ? fin {} { : b _3 ( json_obj_set d ? reasoning `reasoning_content` `content` ( json_str_lit text ) ) }
         : b _4 ( json_obj_set ch `delta` d )
     } {
         : b _5 ( json_obj_set ch `text` ( json_str_lit text ) )
@@ -450,19 +461,58 @@ $ `stdlib/std/utf8.nu`
 
 // ── the generation loop ─────────────────────────────────────────────
 
-// Where the first stop sequence starts in `full`, or -1.
-@ __api_stop_at String full ( Vec String ) stops → i {
+// Where the first stop sequence starts in `full` at or after `from`, or -1.
+@ __api_stop_at String full i from ( Vec String ) stops → i {
+    : String rest ( string_substr full from - ( string_len full ) from )
     : ~ i best -1
     : ~ i k 0
     ~ < k ( vec_len [String] stops ) {
         : s sp ( string_data ( vec_at [String] stops k ) )
         ? > ( nurl_str_len sp ) 0 {
-            : i at ( nurl_str_find ( string_data full ) sp )
+            : i at ( nurl_str_find ( string_data rest ) sp )
             ? & >= at 0 | < best 0 < at best { = best at } {}
         } {}
         = k + k 1
     }
-    ^ best
+    ^ ? < best 0 -1 + from best
+}
+
+// Where a chat reply's reasoning and answer lie in its text so far: the
+// reasoning is full[rs, re), the answer full[cs …) — cs = -1 while the
+// reasoning is still open. `has`: there is reasoning at all; `undecided`:
+// the text so far (whitespace, or the start of `<think>`) may still open a
+// block, and nothing of it can be sent yet. A reply is inside a block from
+// its first byte when the prompt left it there (`open` — GLM's templates
+// end the prompt with <think>), or when it opens one itself, first thing;
+// the block closes at the first `</think>`. Without `split` — a raw
+// completion — all of it is answer. A pure function of the text: the
+// stream and the whole reply cut it the same way.
+: ThinkSplit {
+    i rs
+    i re
+    i cs
+    b has
+    b undecided
+}
+
+@ __api_think_split String full b split b open → ThinkSplit {
+    : i n ( string_len full )
+    : ThinkSplit none @ ThinkSplit { 0 0 0 F F }
+    ? split {} { ^ none }
+    : ~ i rs 0
+    ? open {} {
+        : ~ i lead 0
+        ~ & < lead n != ( is_space ( string_get full lead ) ) 0 { = lead + lead 1 }
+        : String tail ( string_substr full lead - n lead )
+        ? != 0 ( nurl_str_starts ( string_data tail ) `<think>` ) { = rs + lead 7 } {
+            ? != 0 ( nurl_str_starts `<think>` ( string_data tail ) ) { ^ @ ThinkSplit { 0 0 -1 F T } } {}
+            ^ none
+        }
+    }
+    : String body ( string_substr full rs - n rs )
+    : i e ( nurl_str_find ( string_data body ) `</think>` )
+    ? < e 0 { ^ @ ThinkSplit { rs n -1 T F } } {}
+    ^ @ ThinkSplit { rs + rs e + + rs e 8 T F }
 }
 
 // How many bytes at the end of `full` (past `from`, which is already out)
@@ -523,14 +573,100 @@ $ `stdlib/std/utf8.nu`
     ^ out
 }
 
-// Stream full[from, upto) as one piece in the request's protocol.
-@ __api_send TcpConn c GenReq rq String full i from i upto → b {
+// Stream full[from, upto) as one piece in the request's protocol — of the
+// reasoning, or of the answer.
+@ __api_send TcpConn c GenReq rq String full i from i upto b reasoning → b {
     : String piece ( __api_utf8 ( string_substr full from - upto from ) )
     ? ( __api_is_oai . rq proto ) {
-        ^ ( __api_write_str c ( __oai_chunk rq ( string_data piece ) F `` ) )
+        ^ ( __api_write_str c ( __oai_chunk rq ( string_data piece ) F `` reasoning ) )
     } {}
     : s field ? == . rq proto API_OLLAMA_GEN `response` `message`
-    ^ ( __api_write_str c ( __api_frame_token ( string_data . rq model ) field ( string_data piece ) ) )
+    ^ ( __api_write_str c ( __api_frame_token ( string_data . rq model ) field ( string_data piece ) reasoning ) )
+}
+
+// Append one token's text to the reply `full`; T when a stop sequence in
+// the answer (never in the reasoning) has ended it — cut off at the stop.
+@ _api_take inout String full s piece b split b open ( Vec String ) stops → b {
+    ( string_push_str full piece )
+    : i ans . ( __api_think_split full split open ) cs
+    ? < ans 0 { ^ F } {}
+    : i cut ( __api_stop_at full ans stops )
+    ? < cut 0 { ^ F } {}
+    = full ( string_substr full 0 cut )
+    ^ T
+}
+
+// What of `full` can go out now and can no longer change: reasoning
+// full[rfrom, rupto) and answer full[cfrom, cupto), each from where the last
+// send of it stopped (rsent, csent; -1 = nothing yet — both are moved on).
+// While a reasoning block is open, a possible start of `</think>` is held
+// back; in the answer, a possible start of a stop sequence; in both, a half
+// UTF-8 character. `last`: the reply is over, nothing is held.
+: Ready {
+    i rfrom
+    i rupto
+    i cfrom
+    i cupto
+}
+
+@ _api_ready String full b split b open ( Vec String ) stops b last inout i rsent inout i csent → Ready {
+    : ~ Ready r @ Ready { 0 0 0 0 }
+    : ThinkSplit ts ( __api_think_split full split open )
+    ? & . ts undecided ! last { ^ r } {}
+    : i n ( string_len full )
+    ? . ts has {
+        ? < rsent 0 { = rsent . ts rs } {}
+        : ~ i rup . ts re
+        ? & < . ts cs 0 ! last {
+            : ( Vec String ) close ( vec_new [String] )
+            ( vec_push [String] close ( string_from `</think>` ) )
+            = rup - n ( __api_hold full rsent close )
+        } {}
+        ? > rup rsent {
+            = . r rfrom rsent
+            = . r rupto rup
+            = rsent rup
+        } {}
+    } {}
+    // (a reply that ends while it might still have opened a block: answer)
+    : i cs ? . ts undecided 0 . ts cs
+    ? >= cs 0 {
+        ? < csent 0 { = csent cs } {}
+        : i cup ? last n - n ( __api_hold full csent stops )
+        ? > cup csent {
+            = . r cfrom csent
+            = . r cupto cup
+            = csent cup
+        } {}
+    } {}
+    ^ r
+}
+
+// Send what _api_ready says can go: the reasoning's piece, then the answer's.
+@ __api_flush TcpConn c GenReq rq String full b last inout i rsent inout i csent → b {
+    : Ready r ( _api_ready full . rq split . rq think_open . rq stops last rsent csent )
+    ? > . r rupto . r rfrom { ? ( __api_send c rq full . r rfrom . r rupto T ) {} { ^ F } } {}
+    ? > . r cupto . r cfrom { ? ( __api_send c rq full . r cfrom . r cupto F ) {} { ^ F } } {}
+    ^ T
+}
+
+// The finished reply's reasoning and answer, as one non-streamed reply
+// gives them (has = it reasoned at all).
+: Parts {
+    b has
+    String reasoning
+    String answer
+}
+
+@ _api_parts String full b split b open → Parts {
+    : ThinkSplit ts ( __api_think_split full split open )
+    : i n ( string_len full )
+    : i cs ? . ts undecided 0 . ts cs
+    ^ @ Parts {
+        . ts has
+        ? . ts has ( string_substr full . ts rs - . ts re . ts rs ) ( string_new )
+        ? >= cs 0 ( string_substr full cs - n cs ) ( string_new )
+    }
 }
 
 // Open the response a streaming request is answered on. An OpenAI chat
@@ -542,7 +678,7 @@ $ `stdlib/std/utf8.nu`
         ( vec_push [Header] hs ( header_new `Cache-Control` `no-cache` ) )
         : !v NetErr r ( response_begin_chunked c 200 hs )
         ?? r { T _ → {} F _ → { ^ F } }
-        ? == . rq proto API_OAI_CHAT { ^ ( __api_write_str c ( __oai_chunk rq `` T `` ) ) } {}
+        ? == . rq proto API_OAI_CHAT { ^ ( __api_write_str c ( __oai_chunk rq `` T `` F ) ) } {}
         ^ T
     } {}
     ^ ( __api_begin_ndjson c )
@@ -552,7 +688,7 @@ $ `stdlib/std/utf8.nu`
 // chunk when asked for, and `data: [DONE]`.
 @ __api_end_stream TcpConn c GenReq rq s finish i nprompt i neval → v {
     ? ( __api_is_oai . rq proto ) {
-        : b _1 ( __api_write_str c ( __oai_chunk rq `` F finish ) )
+        : b _1 ( __api_write_str c ( __oai_chunk rq `` F finish F ) )
         ? . rq usage {
             : Json j ( __oai_head rq ? == . rq proto API_OAI_CHAT `chat.completion.chunk` `text_completion` )
             : b _2 ( json_obj_set j `choices` ( json_arr_new ) )
@@ -562,14 +698,17 @@ $ `stdlib/std/utf8.nu`
         : b _5 ( __api_write_str c ( string_from `data: [DONE]\n\n` ) )
     } {
         : s field ? == . rq proto API_OLLAMA_GEN `response` `message`
-        : b _6 ( __api_write_str c ( __api_frame_done ( string_data . rq model ) field nprompt neval F finish `` ) )
+        : b _6 ( __api_write_str c ( __api_frame_done ( string_data . rq model ) field nprompt neval F finish `` F `` ) )
     }
     : !v NetErr _e ( response_end_chunked c )
 }
 
-// Answer a non-streaming request with the whole text at once.
+// Answer a non-streaming request with the whole text at once: its answer,
+// and its reasoning apart when it had one.
 @ __api_reply_once TcpConn c GenReq rq s finish i nprompt i neval String raw → v {
-    : String full ( __api_utf8 raw )
+    : Parts ts ( _api_parts raw . rq split . rq think_open )
+    : String full ( __api_utf8 . ts answer )
+    : String thinking ( __api_utf8 . ts reasoning )
     ? ( __api_is_oai . rq proto ) {
         : b chat == . rq proto API_OAI_CHAT
         : Json j ( __oai_head rq ? chat `chat.completion` `text_completion` )
@@ -579,6 +718,7 @@ $ `stdlib/std/utf8.nu`
             : Json msg ( json_obj_new )
             : b _2 ( json_obj_set msg `role` ( json_str_lit `assistant` ) )
             : b _3 ( json_obj_set msg `content` ( json_str_lit ( string_data full ) ) )
+            ? . ts has { : b _r ( json_obj_set msg `reasoning_content` ( json_str_lit ( string_data thinking ) ) ) } {}
             : b _4 ( json_obj_set ch `message` msg )
         } {
             : b _5 ( json_obj_set ch `text` ( json_str_lit ( string_data full ) ) )
@@ -601,14 +741,14 @@ $ `stdlib/std/utf8.nu`
     } {}
     ? ( __api_begin_ndjson c ) {} { ^ }
     : s field ? == . rq proto API_OLLAMA_GEN `response` `message`
-    : b _w2 ( __api_write_str c ( __api_frame_done ( string_data . rq model ) field nprompt neval T finish ( string_data full ) ) )
+    : b _w2 ( __api_write_str c ( __api_frame_done ( string_data . rq model ) field nprompt neval T finish ( string_data full ) . ts has ( string_data thinking ) ) )
     : !v NetErr _e2 ( response_end_chunked c )
 }
 
 // Generate for `rq` and answer it. Every token's text is appended to
-// `full`; a stop sequence ends the generation and is cut off; while
-// streaming, everything that can no longer change goes out at once, and
-// only what __api_hold names waits for the next token. finish_reason is
+// `full`; a stop sequence in the answer (not the reasoning) ends the
+// generation and is cut off; while streaming, everything that can no
+// longer change goes out at once (__api_flush). finish_reason is
 // `stop` when the model ended its turn (end-of-sequence, its dialect's
 // terminator) or a stop sequence matched, `length` when the token budget
 // or the context ran out.
@@ -625,7 +765,8 @@ $ `stdlib/std/utf8.nu`
     ? . rq stream { ? ( __api_begin_stream c rq ) {} { ^ T } } {}
 
     : ~ String full ( string_new )
-    : ~ i sent 0
+    : ~ i rsent -1
+    : ~ i csent -1
     : ~ i produced 0
     : ~ b ended F
     : ~ b broken F
@@ -643,20 +784,10 @@ $ `stdlib/std/utf8.nu`
             : String piece ( bytes_to_str ( tok_piece t nt ) )
             // a chat dialect's terminator may arrive as plain text
             ? & ! diffusion ( chat_stop_matches g_api_style ( string_data piece ) ) { = ended T } {
-                ( string_push_str full ( string_data piece ) )
                 = produced + produced 1
-                : i cut ( __api_stop_at full . rq stops )
-                ? >= cut 0 {
-                    = full ( string_substr full 0 cut )
-                    = ended T
-                } {}
-                ? . rq stream {
-                    : i upto ? ended ( string_len full ) - ( string_len full ) ( __api_hold full sent . rq stops )
-                    ? > upto sent {
-                        ? ( __api_send c rq full sent upto ) {} { = broken T }
-                        = sent upto
-                    } {}
-                } {}
+                // a stop sequence ends the answer (never the reasoning)
+                ? ( _api_take full ( string_data piece ) . rq split . rq think_open . rq stops ) { = ended T } {}
+                ? . rq stream { ? ( __api_flush c rq full ended rsent csent ) {} { = broken T } } {}
                 ? | | ended broken diffusion {} {
                     ( llm_eval m nt pos )
                     = pos + pos 1
@@ -667,10 +798,8 @@ $ `stdlib/std/utf8.nu`
     ? broken { ^ T } {}
     : s finish ? ended `stop` ? & diffusion < produced limit `stop` `length`
     ? . rq stream {
-        // what was held back for a stop that never came
-        ? > ( string_len full ) sent {
-            ? ( __api_send c rq full sent ( string_len full ) ) {} { ^ T }
-        } {}
+        // what was held back for a stop or a `</think>` that never came
+        ? ( __api_flush c rq full T rsent csent ) {} { ^ T }
         ( __api_end_stream c rq finish nprompt produced )
     } {
         ( __api_reply_once c rq finish nprompt produced full )
@@ -747,7 +876,34 @@ $ `stdlib/std/utf8.nu`
 // What this server cannot do is refused with a reason rather than ignored:
 // more than one choice, tools, a structured response format, logprobs, an
 // image part.
-@ __oai_parse Json j inout GenReq rq inout ( Vec ChatMsg ) msgs → String {
+// A chat message from a request: its role, its text, and an assistant
+// message's reasoning when the request gives it apart (`rkey`: OpenAI's
+// reasoning_content, ollama's thinking).
+@ _api_chat_msg s role String content Json mo s rkey → ChatMsg {
+    ?? ( json_obj_get mo rkey ) {
+        T rv → {
+            ? & ( json_is_str rv ) != 0 ( nurl_str_eq role `assistant` ) { ^ ( chat_msg_r role ( string_data content ) ( json_str_data rv ) ) } {}
+        }
+        F → {}
+    }
+    ^ ( chat_msg role ( string_data content ) )
+}
+
+// The template switches a request may set (ChatOpts): OpenAI's top-level
+// reasoning_effort, and vLLM's chat_template_kwargs {reasoning_effort,
+// enable_thinking} — the template's own variables, passed through.
+@ _api_chat_opts Json j inout ChatOpts o → v {
+    ?? ( json_obj_get j `reasoning_effort` ) { T v → { ? ( json_is_str v ) { = . o effort ( string_from ( json_str_data v ) ) } {} } F → {} }
+    ?? ( json_obj_get j `chat_template_kwargs` ) {
+        T kw → {
+            ?? ( json_obj_get kw `reasoning_effort` ) { T v → { ? ( json_is_str v ) { = . o effort ( string_from ( json_str_data v ) ) } {} } F → {} }
+            ?? ( json_obj_get kw `enable_thinking` ) { T v → { ? ( json_is_bool v ) { = . o thinking ? ( json_bool_val v ) 1 0 } {} } F → {} }
+        }
+        F → {}
+    }
+}
+
+@ __oai_parse Json j inout GenReq rq inout ( Vec ChatMsg ) msgs inout ChatOpts opts → String {
     : b chat == . rq proto API_OAI_CHAT
     ? > ( __api_num_i j `n` 1 ) 1 { ^ ( string_from `n > 1 is not supported: nurllama returns one choice` ) } {}
     ? > ( __api_num_i j `best_of` 1 ) 1 { ^ ( string_from `best_of > 1 is not supported` ) } {}
@@ -790,7 +946,7 @@ $ `stdlib/std/utf8.nu`
                             ? ( nurl_str_eq ( string_data role ) `developer` ) { = role ( string_from `system` ) } {}
                             : ~ String content ( string_new )
                             ? ( __oai_content mo content ) {} { ^ ( string_from `only text message content is supported` ) }
-                            ( vec_push [ChatMsg] msgs ( chat_msg ( string_data role ) ( string_data content ) ) )
+                            ( vec_push [ChatMsg] msgs ( _api_chat_msg ( string_data role ) content mo `reasoning_content` ) )
                         }
                         F → {}
                     }
@@ -799,6 +955,7 @@ $ `stdlib/std/utf8.nu`
             }
             F → { ^ ( string_from `missing "messages"` ) }
         }
+        ( _api_chat_opts j opts )
     } {
         ?? ( json_obj_get j `prompt` ) {
             T pv → {
@@ -834,7 +991,7 @@ $ `stdlib/std/utf8.nu`
                         T mo → {
                             : String role ( __api_str mo `role` `user` )
                             : String content ( __api_str mo `content` `` )
-                            ( vec_push [ChatMsg] msgs ( chat_msg ( string_data role ) ( string_data content ) ) )
+                            ( vec_push [ChatMsg] msgs ( _api_chat_msg ( string_data role ) content mo `thinking` ) )
                         }
                         F → {}
                     }
@@ -843,7 +1000,10 @@ $ `stdlib/std/utf8.nu`
             }
             F → {}
         }
-        = . rq prompt ( chat_render g_api_style msgs )
+        // ollama's `think` is the template's enable_thinking
+        : ~ ChatOpts opts ( chat_opts_none )
+        ?? ( json_obj_get j `think` ) { T v → { ? ( json_is_bool v ) { = . opts thinking ? ( json_bool_val v ) 1 0 } {} } F → {} }
+        = . rq prompt ( chat_render_opts g_api_style msgs opts )
     }
     = . rq stream ( __api_bool j `stream` T )
     = . rq npredict ( __api_opt_i j `num_predict` 128 )
@@ -887,10 +1047,12 @@ $ `stdlib/std/utf8.nu`
             : b oai ( __api_is_oai proto )
             : String idp ( string_from ? == proto API_OAI_CHAT `chatcmpl-` `cmpl-` )
             ( string_push_str idp ( string_data ( uuid_v4 ) ) )
-            : ~ GenReq rq @ GenReq { proto ( string_clone model ) ( string_new ) F 0 0.0 0 1.0 0 ( vec_new [String] ) F idp ( now_seconds ) }
+            : b chat | == proto API_OAI_CHAT == proto API_OLLAMA_CHAT
+            : ~ GenReq rq @ GenReq { proto ( string_clone model ) ( string_new ) F 0 0.0 0 1.0 0 ( vec_new [String] ) F idp ( now_seconds ) chat F }
             : ~ ( Vec ChatMsg ) msgs ( vec_new [ChatMsg] )
+            : ~ ChatOpts opts ( chat_opts_none )
             ? oai {
-                : String perr ( __oai_parse j rq msgs )
+                : String perr ( __oai_parse j rq msgs opts )
                 ? > ( string_len perr ) 0 { ^ ( __api_error_chunked c proto 400 ( string_data perr ) `` ) } {}
             } {}
             // (the model loads after the request is known to be one it can
@@ -900,8 +1062,11 @@ $ `stdlib/std/utf8.nu`
                 ^ ( __api_error_chunked c proto 404 ( string_data lerr ) `model_not_found` )
             } {}
             ? oai {
-                ? == proto API_OAI_CHAT { = . rq prompt ( chat_render g_api_style msgs ) } {}
+                ? == proto API_OAI_CHAT { = . rq prompt ( chat_render_opts g_api_style msgs opts ) } {}
             } { ( __ollama_parse j rq ) }
+            // a chat prompt that ends inside <think> (GLM's) leaves the reply
+            // reasoning from its first token
+            = . rq think_open & chat ( string_ends_with ( string_trim_end . rq prompt ) `<think>` )
             ^ ( __api_generate c rq )
         }
     }
@@ -1182,7 +1347,10 @@ $ `stdlib/std/utf8.nu`
     : String prompt ( chat_render g_api_style msgs )
     : ( Vec i ) ids ( tok_encode t ( string_data prompt ) T )
     : String reply ( __web_gen_reply m ids 512 0.0 42 )
-    ^ @ !String String { T reply }
+    // the conversation keeps the answer; a reasoning model's reasoning is
+    // cut off as the APIs cut it (__api_think_split)
+    : b open ( string_ends_with ( string_trim_end prompt ) `<think>` )
+    ^ @ !String String { T . ( _api_parts reply T open ) answer }
 }
 
 // GET /web/session — mint/refresh the cookie, return the client id and
