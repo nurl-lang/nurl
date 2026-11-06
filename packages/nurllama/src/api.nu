@@ -1,7 +1,8 @@
-// packages/nurllama/src/api.nu — an ollama-compatible HTTP API.
+// packages/nurllama/src/api.nu — an ollama-compatible and an
+// OpenAI-compatible HTTP API, on one server.
 //
-// Speaks enough of ollama's wire protocol that existing clients work
-// unchanged:
+// Speaks enough of ollama's and of OpenAI's wire protocols that existing
+// clients of either work unchanged. ollama's:
 //
 //   POST /api/generate   { model, prompt, stream?, options? }
 //   POST /api/chat       { model, messages[{role,content}], stream?, options? }
@@ -11,6 +12,20 @@
 //   GET  /api/tags       the local store, as ollama's model list
 //   POST /api/show       { model } → the model's metadata
 //   GET  /                "nurllama is running"
+//
+// OpenAI's:
+//
+//   POST /v1/chat/completions  { model, messages, stream?, max_tokens?,
+//        temperature?, top_p?, seed?, stop?, stream_options? }
+//        → one chat.completion, or server-sent chat.completion.chunk
+//          events ending in `data: [DONE]`
+//   POST /v1/completions       { model, prompt, … } → text_completion
+//   GET  /v1/models            the local store (+ the default model)
+//   GET  /v1/models/:id
+//
+// Both protocols run the same generation loop (__api_generate). A server
+// started with a token answers every data route — /api/*, /v1/*, /web/* —
+// only with `Authorization: Bearer <token>`.
 //
 // Streaming rides the http package's stream hook (http_app_stream):
 // the handler owns the TcpConn and writes chunked NDJSON itself, so a
@@ -42,6 +57,7 @@ $ `history.nu`
 $ `webui.nu`
 $ `stdlib/ext/uuid.nu`
 $ `stdlib/std/thread.nu`
+$ `stdlib/std/utf8.nu`
 
 // The resident model + the store root, reachable from the handlers. A
 // mutable `s` global owns the string it is given (docs/MEMORY.md §1): an
@@ -264,7 +280,7 @@ $ `stdlib/std/thread.nu`
     ^ out
 }
 
-@ __api_frame_done s model s field i nprompt i neval b with_text s full → String {
+@ __api_frame_done s model s field i nprompt i neval b with_text s finish s full → String {
     : Json j ( json_obj_new )
     : b _1 ( json_obj_set j `model` ( json_str_lit model ) )
     ? ( nurl_str_eq field `response` ) {
@@ -276,7 +292,7 @@ $ `stdlib/std/thread.nu`
         : b _5 ( json_obj_set j `message` msg )
     }
     : b _6 ( json_obj_set j `done` ( json_bool T ) )
-    : b _7 ( json_obj_set j `done_reason` ( json_str_lit `stop` ) )
+    : b _7 ( json_obj_set j `done_reason` ( json_str_lit finish ) )
     : b _8 ( json_obj_set j `prompt_eval_count` ( json_int nprompt ) )
     : b _9 ( json_obj_set j `eval_count` ( json_int neval ) )
     : String out ( json_stringify j )
@@ -301,116 +317,564 @@ $ `stdlib/std/thread.nu`
     ^ ok
 }
 
-@ __api_error_chunked TcpConn c i status s msg → b {
+// ── the wire protocols ──────────────────────────────────────────────
+//
+// ONE generation loop (__api_generate) serves every endpoint; what differs
+// is only how its text goes out:
+//   API_OLLAMA_GEN   POST /api/generate          NDJSON frames, `response`
+//   API_OLLAMA_CHAT  POST /api/chat              NDJSON frames, `message`
+//   API_OAI_CHAT     POST /v1/chat/completions   SSE chat.completion.chunk
+//                                                events, or one chat.completion
+//   API_OAI_TEXT     POST /v1/completions        SSE / one text_completion
+// so a stop sequence, a chat dialect's terminator, a token that ends inside
+// a UTF-8 character or the context running out behave the same whichever
+// protocol asked.
+: i API_OLLAMA_GEN 0
+: i API_OLLAMA_CHAT 1
+: i API_OAI_CHAT 2
+: i API_OAI_TEXT 3
+
+@ __api_is_oai i proto → b { ^ >= proto API_OAI_CHAT }
+
+// One generation request, whatever protocol it came in.
+: GenReq {
+    i proto
+    String model
+    String prompt
+    b stream
+    i npredict  // tokens at most; ≤ 0 = until the turn or the context ends
+    f temp
+    i topk  // ≤ 0: no top-k filter
+    f topp
+    i seed
+    ( Vec String ) stops  // generation ends at the first; it is not emitted
+    b usage  // OpenAI stream_options.include_usage
+    String id  // OpenAI: chatcmpl-… / cmpl-…
+    i created  // OpenAI: unix seconds
+}
+
+// An error in the asking protocol's shape — ollama's {"error": msg}, or
+// OpenAI's {"error": {message, type, param, code}} (`code` may be empty).
+@ __api_error_body i proto i status s msg s code → String {
+    : Json j ( json_obj_new )
+    ? ( __api_is_oai proto ) {
+        : Json e ( json_obj_new )
+        : b _1 ( json_obj_set e `message` ( json_str_lit msg ) )
+        : s ty ? == status 401 `authentication_error` ? >= status 500 `server_error` `invalid_request_error`
+        : b _2 ( json_obj_set e `type` ( json_str_lit ty ) )
+        : b _3 ( json_obj_set e `param` ( json_null ) )
+        : b _4 ( json_obj_set e `code` ? > ( nurl_str_len code ) 0 ( json_str_lit code ) ( json_null ) )
+        : b _5 ( json_obj_set j `error` e )
+    } {
+        : b _6 ( json_obj_set j `error` ( json_str_lit msg ) )
+    }
+    : String txt ( json_stringify j )
+    ( string_push_char txt 10 )
+    ^ txt
+}
+
+@ __api_error_chunked TcpConn c i proto i status s msg s code → b {
     : ( Vec Header ) hs ( vec_new [Header] )
     ( vec_push [Header] hs ( header_new `Content-Type` `application/json` ) )
     : !v NetErr r ( response_begin_chunked c status hs )
     ?? r { T _ → {} F _ → { ^ T } }
-    : Json j ( json_obj_new )
-    : b _1 ( json_obj_set j `error` ( json_str_lit msg ) )
-    : String txt ( json_stringify j )
-    ( string_push_char txt 10 )
-    : b _w ( __api_write_str c txt )
+    : b _w ( __api_write_str c ( __api_error_body proto status msg code ) )
     : !v NetErr _e ( response_end_chunked c )
     ^ T
 }
 
-// ── the generation core, shared by /api/generate and /api/chat ──────
-//
-// Streams NDJSON frames as tokens decode (stream=true), or accumulates
-// and answers with a single object (stream=false).
-@ __api_generate TcpConn c s model String prompt s field b stream
-i npredict f temp i topk f topp i seed → b {
-    : Llm m ( __api_llm )
-    : Tok t ( Tok_share ( llm_tok m ) )
-    : ( Vec i ) ids ( tok_encode t ( string_data prompt ) T )
-    : i nprompt ( vec_len [i] ids )
-    ? > nprompt ( llm_n_ctx m ) {
-        ^ ( __api_error_chunked c 400 `prompt is longer than the model's context` )
-    } {}
-    ? stream { ? ( __api_begin_ndjson c ) {} { ^ T } } {}
+// The same error as a plain response (the non-streaming routes).
+@ __api_error_resp i proto i status s msg s code → HttpResponse {
+    : HttpResponse resp ( response_new status )
+    ( response_set_header resp `Content-Type` `application/json` )
+    ( response_set_body_str resp ( string_data ( __api_error_body proto status msg code ) ) )
+    ^ resp
+}
 
-    // Diffusion model: the block-denoise loop produces the whole
-    // response (src/diffuse.nu); a streaming client then receives the
-    // pieces as ordinary token frames, just all at once.
-    ? ( llm_is_diffusion m ) {
-        : Rng drng ( rng_seed seed )
-        : ( Vec i ) gen ( dz_generate m ids npredict 32 0.7 0.5 16 temp drng )
-        : String dfull ( string_new )
-        : ~ b dbroken F
-        : ~ i gi 0
-        ~ < gi ( vec_len [i] gen ) {
-            : ~ i gid 0
-            ?? ( vec_get [i] gen gi ) { T x → { = gid x } F → {} }
-            : ( Vec u ) pb ( tok_piece t gid )
-            : String piece ( bytes_to_str pb )
-            ( string_push_str dfull ( string_data piece ) )
-            ? & stream ! dbroken {
-                : String fr ( __api_frame_token model field ( string_data piece ) )
-                ? ( __api_write_str c fr ) {} { = dbroken T }
-            } {}
-            = gi + gi 1
-        }
-        : i dproduced ( vec_len [i] gen )
-        ? dbroken {
-            ^ T
+// ── OpenAI frames ───────────────────────────────────────────────────
+
+// The fields every OpenAI completion object starts with.
+@ __oai_head GenReq rq s object → Json {
+    : Json j ( json_obj_new )
+    : b _1 ( json_obj_set j `id` ( json_str_lit ( string_data . rq id ) ) )
+    : b _2 ( json_obj_set j `object` ( json_str_lit object ) )
+    : b _3 ( json_obj_set j `created` ( json_int . rq created ) )
+    : b _4 ( json_obj_set j `model` ( json_str_lit ( string_data . rq model ) ) )
+    ^ j
+}
+
+@ __oai_usage i nprompt i neval → Json {
+    : Json u ( json_obj_new )
+    : b _1 ( json_obj_set u `prompt_tokens` ( json_int nprompt ) )
+    : b _2 ( json_obj_set u `completion_tokens` ( json_int neval ) )
+    : b _3 ( json_obj_set u `total_tokens` ( json_int + nprompt neval ) )
+    ^ u
+}
+
+// `data: <obj>\n\n` — one server-sent event.
+@ __oai_event Json j → String {
+    : String out ( string_from `data: ` )
+    : String txt ( json_stringify j )
+    ( string_push_str out ( string_data txt ) )
+    ( string_push_str out `\n\n` )
+    ^ out
+}
+
+// One streamed chunk: `text` as the delta (chat) or the text (completions);
+// `role` puts the assistant role on a chat delta (the first chunk); a
+// non-empty `finish` closes the choice (its delta is then empty).
+@ __oai_chunk GenReq rq s text b role s finish → String {
+    : b chat == . rq proto API_OAI_CHAT
+    : Json j ( __oai_head rq ? chat `chat.completion.chunk` `text_completion` )
+    : Json ch ( json_obj_new )
+    : b _1 ( json_obj_set ch `index` ( json_int 0 ) )
+    : b fin > ( nurl_str_len finish ) 0
+    ? chat {
+        : Json d ( json_obj_new )
+        ? role { : b _2 ( json_obj_set d `role` ( json_str_lit `assistant` ) ) } {}
+        ? fin {} { : b _3 ( json_obj_set d `content` ( json_str_lit text ) ) }
+        : b _4 ( json_obj_set ch `delta` d )
+    } {
+        : b _5 ( json_obj_set ch `text` ( json_str_lit text ) )
+    }
+    : b _6 ( json_obj_set ch `logprobs` ( json_null ) )
+    : b _7 ( json_obj_set ch `finish_reason` ? fin ( json_str_lit finish ) ( json_null ) )
+    : Json arr ( json_arr_new )
+    : b _8 ( json_arr_push arr ch )
+    : b _9 ( json_obj_set j `choices` arr )
+    // with include_usage every chunk carries `usage: null`; the counts
+    // come in a chunk of their own at the end
+    ? . rq usage { : b _a ( json_obj_set j `usage` ( json_null ) ) } {}
+    ^ ( __oai_event j )
+}
+
+// ── the generation loop ─────────────────────────────────────────────
+
+// Where the first stop sequence starts in `full`, or -1.
+@ __api_stop_at String full ( Vec String ) stops → i {
+    : ~ i best -1
+    : ~ i k 0
+    ~ < k ( vec_len [String] stops ) {
+        : s sp ( string_data ( vec_at [String] stops k ) )
+        ? > ( nurl_str_len sp ) 0 {
+            : i at ( nurl_str_find ( string_data full ) sp )
+            ? & >= at 0 | < best 0 < at best { = best at } {}
         } {}
-        ? stream {} { ? ( __api_begin_ndjson c ) {} { ^ T } }
-        : String dfin ( __api_frame_done model field nprompt dproduced ! stream ( string_data dfull ) )
-        : b _dw ( __api_write_str c dfin )
-        : !v NetErr _de ( response_end_chunked c )
+        = k + k 1
+    }
+    ^ best
+}
+
+// How many bytes at the end of `full` (past `from`, which is already out)
+// must wait for the next token before they can be sent: a UTF-8 character
+// the last token ended inside (byte-level BPE splits CJK and emoji across
+// tokens, and half a character is not text a client can show), or the
+// start of a stop sequence the next token may complete.
+@ __api_hold String full i from ( Vec String ) stops → i {
+    : i n ( string_len full )
+    : ~ i hold 0
+    // an unfinished UTF-8 sequence: its lead byte, and how long it says it is
+    : ~ i p - n 1
+    : ~ i back 0
+    ~ & & >= p from < back 4 == & ( string_get full p ) 192 128 {
+        = p - p 1
+        = back + back 1
+    }
+    ? >= p from {
+        : i lead ( string_get full p )
+        : i need ? < lead 128 1 ? < lead 224 2 ? < lead 240 3 4
+        ? < - n p need { = hold - n p } {}
+    } {}
+    // a proper prefix of a stop sequence
+    : ~ i k 0
+    ~ < k ( vec_len [String] stops ) {
+        : String sp ( string_clone ( vec_at [String] stops k ) )
+        : ~ i len - ( string_len sp ) 1
+        ? > len - n from { = len - n from } {}
+        ~ > len hold {
+            : String pre ( string_substr sp 0 len )
+            ? ( string_ends_with full ( string_data pre ) ) {
+                = hold len
+                = len 0
+            } { = len - len 1 }
+        }
+        = k + k 1
+    }
+    ^ hold
+}
+
+// Generated bytes as text. A model's tokens are bytes, and nothing makes
+// a sequence of them UTF-8 — a byte-level vocabulary can end a character
+// and start a wrong one — but both APIs hand out text, inside JSON, which
+// must be UTF-8 (RFC 8259 §8.1): every malformed byte becomes U+FFFD (the
+// validating decoder's own recovery), well-formed text passes unchanged.
+// A streamed piece never ends inside a character (__api_hold), so the
+// pieces come out exactly as the whole text does.
+@ __api_utf8 String raw → String {
+    : ( Slice u ) v ( string_bytes raw )
+    : i n ( slice_len [u] v )
+    : String out ( string_with_cap n )
+    : ~ i p 0
+    ~ < p n {
+        : Utf8Dec d ( utf8_decode_at v p )
+        ( utf8_push_cp out . d cp )
+        = p + p ? > . d width 0 . d width 1
+    }
+    ^ out
+}
+
+// Stream full[from, upto) as one piece in the request's protocol.
+@ __api_send TcpConn c GenReq rq String full i from i upto → b {
+    : String piece ( __api_utf8 ( string_substr full from - upto from ) )
+    ? ( __api_is_oai . rq proto ) {
+        ^ ( __api_write_str c ( __oai_chunk rq ( string_data piece ) F `` ) )
+    } {}
+    : s field ? == . rq proto API_OLLAMA_GEN `response` `message`
+    ^ ( __api_write_str c ( __api_frame_token ( string_data . rq model ) field ( string_data piece ) ) )
+}
+
+// Open the response a streaming request is answered on. An OpenAI chat
+// stream's first event carries the assistant role and no text.
+@ __api_begin_stream TcpConn c GenReq rq → b {
+    ? ( __api_is_oai . rq proto ) {
+        : ( Vec Header ) hs ( vec_new [Header] )
+        ( vec_push [Header] hs ( header_new `Content-Type` `text/event-stream` ) )
+        ( vec_push [Header] hs ( header_new `Cache-Control` `no-cache` ) )
+        : !v NetErr r ( response_begin_chunked c 200 hs )
+        ?? r { T _ → {} F _ → { ^ F } }
+        ? == . rq proto API_OAI_CHAT { ^ ( __api_write_str c ( __oai_chunk rq `` T `` ) ) } {}
         ^ T
     } {}
+    ^ ( __api_begin_ndjson c )
+}
 
-    ( llm_prefill m ids )
+// Close a stream: ollama's done frame; OpenAI's closing chunk, the usage
+// chunk when asked for, and `data: [DONE]`.
+@ __api_end_stream TcpConn c GenReq rq s finish i nprompt i neval → v {
+    ? ( __api_is_oai . rq proto ) {
+        : b _1 ( __api_write_str c ( __oai_chunk rq `` F finish ) )
+        ? . rq usage {
+            : Json j ( __oai_head rq ? == . rq proto API_OAI_CHAT `chat.completion.chunk` `text_completion` )
+            : b _2 ( json_obj_set j `choices` ( json_arr_new ) )
+            : b _3 ( json_obj_set j `usage` ( __oai_usage nprompt neval ) )
+            : b _4 ( __api_write_str c ( __oai_event j ) )
+        } {}
+        : b _5 ( __api_write_str c ( string_from `data: [DONE]\n\n` ) )
+    } {
+        : s field ? == . rq proto API_OLLAMA_GEN `response` `message`
+        : b _6 ( __api_write_str c ( __api_frame_done ( string_data . rq model ) field nprompt neval F finish `` ) )
+    }
+    : !v NetErr _e ( response_end_chunked c )
+}
 
-    : Rng rng ( rng_seed seed )
-    : String full ( string_new )
-    : ~ i pos nprompt
+// Answer a non-streaming request with the whole text at once.
+@ __api_reply_once TcpConn c GenReq rq s finish i nprompt i neval String raw → v {
+    : String full ( __api_utf8 raw )
+    ? ( __api_is_oai . rq proto ) {
+        : b chat == . rq proto API_OAI_CHAT
+        : Json j ( __oai_head rq ? chat `chat.completion` `text_completion` )
+        : Json ch ( json_obj_new )
+        : b _1 ( json_obj_set ch `index` ( json_int 0 ) )
+        ? chat {
+            : Json msg ( json_obj_new )
+            : b _2 ( json_obj_set msg `role` ( json_str_lit `assistant` ) )
+            : b _3 ( json_obj_set msg `content` ( json_str_lit ( string_data full ) ) )
+            : b _4 ( json_obj_set ch `message` msg )
+        } {
+            : b _5 ( json_obj_set ch `text` ( json_str_lit ( string_data full ) ) )
+        }
+        : b _6 ( json_obj_set ch `logprobs` ( json_null ) )
+        : b _7 ( json_obj_set ch `finish_reason` ( json_str_lit finish ) )
+        : Json arr ( json_arr_new )
+        : b _8 ( json_arr_push arr ch )
+        : b _9 ( json_obj_set j `choices` arr )
+        : b _a ( json_obj_set j `usage` ( __oai_usage nprompt neval ) )
+        : ( Vec Header ) hs ( vec_new [Header] )
+        ( vec_push [Header] hs ( header_new `Content-Type` `application/json` ) )
+        : !v NetErr r ( response_begin_chunked c 200 hs )
+        ?? r { T _ → {} F _ → { ^ } }
+        : String txt ( json_stringify j )
+        ( string_push_char txt 10 )
+        : b _w ( __api_write_str c txt )
+        : !v NetErr _e ( response_end_chunked c )
+        ^
+    } {}
+    ? ( __api_begin_ndjson c ) {} { ^ }
+    : s field ? == . rq proto API_OLLAMA_GEN `response` `message`
+    : b _w2 ( __api_write_str c ( __api_frame_done ( string_data . rq model ) field nprompt neval T finish ( string_data full ) ) )
+    : !v NetErr _e2 ( response_end_chunked c )
+}
+
+// Generate for `rq` and answer it. Every token's text is appended to
+// `full`; a stop sequence ends the generation and is cut off; while
+// streaming, everything that can no longer change goes out at once, and
+// only what __api_hold names waits for the next token. finish_reason is
+// `stop` when the model ended its turn (end-of-sequence, its dialect's
+// terminator) or a stop sequence matched, `length` when the token budget
+// or the context ran out.
+@ __api_generate TcpConn c GenReq rq → b {
+    : Llm m ( __api_llm )
+    : Tok t ( Tok_share ( llm_tok m ) )
+    : ( Vec i ) ids ( tok_encode t ( string_data . rq prompt ) T )
+    : i nprompt ( vec_len [i] ids )
+    ? >= nprompt ( llm_n_ctx m ) {
+        ^ ( __api_error_chunked c . rq proto 400 `prompt is longer than the model's context` `context_length_exceeded` )
+    } {}
+    : ~ i limit - ( llm_n_ctx m ) nprompt
+    ? & > . rq npredict 0 < . rq npredict limit { = limit . rq npredict } {}
+    ? . rq stream { ? ( __api_begin_stream c rq ) {} { ^ T } } {}
+
+    : ~ String full ( string_new )
+    : ~ i sent 0
     : ~ i produced 0
-    : ~ b stop F
+    : ~ b ended F
     : ~ b broken F
-    ~ & & & < produced npredict < pos ( llm_n_ctx m ) ! stop ! broken {
-        : i nt ( sample_next m rng temp topk topp )
-        ? == nt ( tok_eos t ) { = stop T } {
-            : ( Vec u ) pb ( tok_piece t nt )
-            : String piece ( bytes_to_str pb )
+    // Diffusion model: the block-denoise loop produces the whole response
+    // (src/diffuse.nu); its tokens then go through the same path as an
+    // autoregressive model's, just all at once.
+    : b diffusion ( llm_is_diffusion m )
+    : Rng rng ( rng_seed . rq seed )
+    : ~ ( Vec i ) gen ( vec_new [i] )
+    ? diffusion { = gen ( dz_generate m ids limit 32 0.7 0.5 16 . rq temp rng ) } { ( llm_prefill m ids ) }
+    : ~ i pos nprompt
+    ~ & & ! ended ! broken ? diffusion < produced ( vec_len [i] gen ) < produced limit {
+        : i nt ? diffusion ( vec_at [i] gen produced ) ( sample_next m rng . rq temp . rq topk . rq topp )
+        ? & ! diffusion == nt ( tok_eos t ) { = ended T } {
+            : String piece ( bytes_to_str ( tok_piece t nt ) )
             // a chat dialect's terminator may arrive as plain text
-            ? ( chat_stop_matches g_api_style ( string_data piece ) ) { = stop T } {
+            ? & ! diffusion ( chat_stop_matches g_api_style ( string_data piece ) ) { = ended T } {
                 ( string_push_str full ( string_data piece ) )
-                ? stream {
-                    : String fr ( __api_frame_token model field ( string_data piece ) )
-                    ? ( __api_write_str c fr ) {} { = broken T }
-                } {}
-                ( llm_eval m nt pos )
-                = pos + pos 1
                 = produced + produced 1
+                : i cut ( __api_stop_at full . rq stops )
+                ? >= cut 0 {
+                    = full ( string_substr full 0 cut )
+                    = ended T
+                } {}
+                ? . rq stream {
+                    : i upto ? ended ( string_len full ) - ( string_len full ) ( __api_hold full sent . rq stops )
+                    ? > upto sent {
+                        ? ( __api_send c rq full sent upto ) {} { = broken T }
+                        = sent upto
+                    } {}
+                } {}
+                ? | | ended broken diffusion {} {
+                    ( llm_eval m nt pos )
+                    = pos + pos 1
+                }
             }
         }
     }
-
-    ? broken {
-        ^ T
-    } {}
-    ? stream {} { ? ( __api_begin_ndjson c ) {} { ^ T } }
-    : String fin ( __api_frame_done model field nprompt produced ! stream ( string_data full ) )
-    : b _w ( __api_write_str c fin )
-    : !v NetErr _e ( response_end_chunked c )
+    ? broken { ^ T } {}
+    : s finish ? ended `stop` ? & diffusion < produced limit `stop` `length`
+    ? . rq stream {
+        // what was held back for a stop that never came
+        ? > ( string_len full ) sent {
+            ? ( __api_send c rq full sent ( string_len full ) ) {} { ^ T }
+        } {}
+        ( __api_end_stream c rq finish nprompt produced )
+    } {
+        ( __api_reply_once c rq finish nprompt produced full )
+    }
     ^ T
 }
 
-// ── the stream hook: /api/generate + /api/chat ──────────────────────
+// ── request parsing ─────────────────────────────────────────────────
+
+// A top-level number of the body (OpenAI puts its knobs there).
+@ __api_num_i Json j s key i def → i {
+    ?? ( json_obj_get j key ) {
+        T v → { ?? ( json_num_as_i v ) { T n → { ^ n } F → { ^ def } } }
+        F → { ^ def }
+    }
+}
+
+@ __api_num_f Json j s key f def → f {
+    ?? ( json_obj_get j key ) {
+        T v → { ?? ( json_num_as_f v ) { T x → { ^ x } F → { ^ def } } }
+        F → { ^ def }
+    }
+}
+
+// `stop`: one string or an array of them (OpenAI; ollama's options.stop).
+@ __api_stops Json v inout ( Vec String ) out → v {
+    ? ( json_is_str v ) { ( vec_push [String] out ( string_from ( json_str_data v ) ) ) ^ } {}
+    ? ( json_is_arr v ) {
+        : ~ i k 0
+        ~ < k ( json_arr_len v ) {
+            ?? ( json_arr_get v k ) {
+                T e → { ? ( json_is_str e ) { ( vec_push [String] out ( string_from ( json_str_data e ) ) ) } {} }
+                F → {}
+            }
+            = k + k 1
+        }
+    } {}
+}
+
+// An OpenAI message's content as text: a string, or an array of parts of
+// which only `text` ones are understood — an image or audio part is
+// refused (F), not silently dropped.
+@ __oai_content Json mo inout String out → b {
+    ?? ( json_obj_get mo `content` ) {
+        T cv → {
+            ? ( json_is_str cv ) { ( string_push_str out ( json_str_data cv ) ) ^ T } {}
+            ? ( json_is_null cv ) { ^ T } {}
+            ? ( json_is_arr cv ) {
+                : ~ i k 0
+                ~ < k ( json_arr_len cv ) {
+                    ?? ( json_arr_get cv k ) {
+                        T part → {
+                            : String ty ( __api_str part `type` `` )
+                            ? ( nurl_str_eq ( string_data ty ) `text` ) {} { ^ F }
+                            ? & > k 0 > ( string_len out ) 0 { ( string_push_char out 10 ) } {}
+                            : String tx ( __api_str part `text` `` )
+                            ( string_push_str out ( string_data tx ) )
+                        }
+                        F → {}
+                    }
+                    = k + k 1
+                }
+                ^ T
+            } {}
+            ^ F
+        }
+        F → { ^ T }
+    }
+}
+
+// The OpenAI fields of `j` into `rq` — a chat's messages into `msgs`, to be
+// rendered once the model (and so its chat template) is loaded; an error
+// message (empty = none).
+// What this server cannot do is refused with a reason rather than ignored:
+// more than one choice, tools, a structured response format, logprobs, an
+// image part.
+@ __oai_parse Json j inout GenReq rq inout ( Vec ChatMsg ) msgs → String {
+    : b chat == . rq proto API_OAI_CHAT
+    ? > ( __api_num_i j `n` 1 ) 1 { ^ ( string_from `n > 1 is not supported: nurllama returns one choice` ) } {}
+    ? > ( __api_num_i j `best_of` 1 ) 1 { ^ ( string_from `best_of > 1 is not supported` ) } {}
+    ?? ( json_obj_get j `tools` ) {
+        T tv → { ? & ( json_is_arr tv ) > ( json_arr_len tv ) 0 { ^ ( string_from `tools are not supported` ) } {} }
+        F → {}
+    }
+    ?? ( json_obj_get j `response_format` ) {
+        T rf → {
+            : String ty ( __api_str rf `type` `text` )
+            ? ( nurl_str_eq ( string_data ty ) `text` ) {} { ^ ( string_from `response_format other than text is not supported` ) }
+        }
+        F → {}
+    }
+    ? ( __api_bool j `logprobs` F ) { ^ ( string_from `logprobs are not supported` ) } {}
+    = . rq stream ( __api_bool j `stream` F )
+    ?? ( json_obj_get j `stream_options` ) {
+        T so → { = . rq usage ( __api_bool so `include_usage` F ) }
+        F → {}
+    }
+    // OpenAI's own defaults: temperature 1, top_p 1, no top-k (top_k is
+    // not OpenAI's, but servers commonly take it); a chat runs to the end
+    // of its turn, a completion to 16 tokens
+    = . rq npredict ( __api_num_i j `max_completion_tokens` ( __api_num_i j `max_tokens` ? chat 0 16 ) )
+    = . rq temp ( __api_num_f j `temperature` 1.0 )
+    = . rq topp ( __api_num_f j `top_p` 1.0 )
+    = . rq topk ( __api_num_i j `top_k` 0 )
+    = . rq seed ( __api_num_i j `seed` ( monotonic_ns ) )
+    ?? ( json_obj_get j `stop` ) { T sv → { ( __api_stops sv . rq stops ) } F → {} }
+    ? chat {
+        ?? ( json_obj_get j `messages` ) {
+            T arr → {
+                ? ( json_is_arr arr ) {} { ^ ( string_from `messages must be an array` ) }
+                : ~ i k 0
+                ~ < k ( json_arr_len arr ) {
+                    ?? ( json_arr_get arr k ) {
+                        T mo → {
+                            : ~ String role ( __api_str mo `role` `user` )
+                            // OpenAI's newer name for the system turn
+                            ? ( nurl_str_eq ( string_data role ) `developer` ) { = role ( string_from `system` ) } {}
+                            : ~ String content ( string_new )
+                            ? ( __oai_content mo content ) {} { ^ ( string_from `only text message content is supported` ) }
+                            ( vec_push [ChatMsg] msgs ( chat_msg ( string_data role ) ( string_data content ) ) )
+                        }
+                        F → {}
+                    }
+                    = k + k 1
+                }
+            }
+            F → { ^ ( string_from `missing "messages"` ) }
+        }
+    } {
+        ?? ( json_obj_get j `prompt` ) {
+            T pv → {
+                ? ( json_is_str pv ) { = . rq prompt ( string_from ( json_str_data pv ) ) } {
+                    ? & ( json_is_arr pv ) == ( json_arr_len pv ) 1 {
+                        ?? ( json_arr_get pv 0 ) {
+                            T p0 → {
+                                ? ( json_is_str p0 ) { = . rq prompt ( string_from ( json_str_data p0 ) ) } { ^ ( string_from `prompt must be a string` ) }
+                            }
+                            F → {}
+                        }
+                    } { ^ ( string_from `prompt must be a string (or an array of exactly one)` ) }
+                }
+            }
+            F → { ^ ( string_from `missing "prompt"` ) }
+        }
+    }
+    ^ ( string_new )
+}
+
+// The ollama fields of `j` into `rq`.
+@ __ollama_parse Json j inout GenReq rq → v {
+    ? == . rq proto API_OLLAMA_GEN {
+        = . rq prompt ( __api_str j `prompt` `` )
+    } {
+        // the message list through the model's own chat template
+        : ( Vec ChatMsg ) msgs ( vec_new [ChatMsg] )
+        ?? ( json_obj_get j `messages` ) {
+            T arr → {
+                : ~ i k 0
+                ~ < k ( json_arr_len arr ) {
+                    ?? ( json_arr_get arr k ) {
+                        T mo → {
+                            : String role ( __api_str mo `role` `user` )
+                            : String content ( __api_str mo `content` `` )
+                            ( vec_push [ChatMsg] msgs ( chat_msg ( string_data role ) ( string_data content ) ) )
+                        }
+                        F → {}
+                    }
+                    = k + k 1
+                }
+            }
+            F → {}
+        }
+        = . rq prompt ( chat_render g_api_style msgs )
+    }
+    = . rq stream ( __api_bool j `stream` T )
+    = . rq npredict ( __api_opt_i j `num_predict` 128 )
+    = . rq temp ( __api_opt_f j `temperature` 0.8 )
+    = . rq topk ( __api_opt_i j `top_k` 40 )
+    = . rq topp ( __api_opt_f j `top_p` 0.95 )
+    = . rq seed ( __api_opt_i j `seed` 42 )
+    ?? ( json_obj_get j `options` ) {
+        T o → { ?? ( json_obj_get o `stop` ) { T sv → { ( __api_stops sv . rq stops ) } F → {} } }
+        F → {}
+    }
+}
+
+// ── the stream hook: every generating route ─────────────────────────
 
 @ __api_stream_hook TcpConn c HttpRequest req → b {
     : s path ( string_data . req path )
-    : b is_gen ? ( nurl_str_eq path `/api/generate` ) T F
-    : b is_chat ? ( nurl_str_eq path `/api/chat` ) T F
-    ? | is_gen is_chat {} { ^ F }
+    : ~ i proto -1
+    ? ( nurl_str_eq path `/api/generate` ) { = proto API_OLLAMA_GEN } {}
+    ? ( nurl_str_eq path `/api/chat` ) { = proto API_OLLAMA_CHAT } {}
+    ? ( nurl_str_eq path `/v1/chat/completions` ) { = proto API_OAI_CHAT } {}
+    ? ( nurl_str_eq path `/v1/completions` ) { = proto API_OAI_TEXT } {}
+    ? < proto 0 { ^ F } {}
     ? ( nurl_str_eq ( string_data . req method ) `POST` ) {} { ^ F }
+    ? ( __api_authed req ) {} {
+        ^ ( __api_error_chunked c proto 401 `unauthorized: this server wants Authorization: Bearer <token>` `invalid_api_key` )
+    }
 
     : !Json JsonError pj ( __api_body_json req )
     ?? pj {
-        F _ → { ^ ( __api_error_chunked c 400 `invalid JSON body` ) }
+        F _ → { ^ ( __api_error_chunked c proto 400 `invalid JSON body` `` ) }
         T j → {
             // the request's own model, or the server's default
             : ~ String model ( __api_str j `model` `` )
@@ -418,88 +882,66 @@ i npredict f temp i topk f topp i seed → b {
                 = model ( __api_cfg_model )
             }
             ? > ( string_len model ) 0 {} {
-                ^ ( __api_error_chunked c 400 `missing "model" and the server has no default — start it as: nurllama serve <model>` )
+                ^ ( __api_error_chunked c proto 400 `missing "model" and the server has no default — start it as: nurllama serve <model>` `` )
             }
+            : b oai ( __api_is_oai proto )
+            : String idp ( string_from ? == proto API_OAI_CHAT `chatcmpl-` `cmpl-` )
+            ( string_push_str idp ( string_data ( uuid_v4 ) ) )
+            : ~ GenReq rq @ GenReq { proto ( string_clone model ) ( string_new ) F 0 0.0 0 1.0 0 ( vec_new [String] ) F idp ( now_seconds ) }
+            : ~ ( Vec ChatMsg ) msgs ( vec_new [ChatMsg] )
+            ? oai {
+                : String perr ( __oai_parse j rq msgs )
+                ? > ( string_len perr ) 0 { ^ ( __api_error_chunked c proto 400 ( string_data perr ) `` ) } {}
+            } {}
+            // (the model loads after the request is known to be one it can
+            // answer — a refused request must not swap the resident model)
             : String lerr ( __api_ensure ( string_data model ) )
             ? > ( string_len lerr ) 0 {
-                : b r ( __api_error_chunked c 404 ( string_data lerr ) )
-                ^ r
+                ^ ( __api_error_chunked c proto 404 ( string_data lerr ) `model_not_found` )
             } {}
-
-            // prompt: /api/generate takes it verbatim; /api/chat renders
-            // the message list through the model's own chat template
-            : ~ String prompt ( string_new )
-            ? is_gen {
-                = prompt ( __api_str j `prompt` `` )
-            } {
-                : ( Vec ChatMsg ) msgs ( vec_new [ChatMsg] )
-                ?? ( json_obj_get j `messages` ) {
-                    T arr → {
-                        : ~ i k 0
-                        ~ < k ( json_arr_len arr ) {
-                            ?? ( json_arr_get arr k ) {
-                                T mo → {
-                                    : String role ( __api_str mo `role` `user` )
-                                    : String content ( __api_str mo `content` `` )
-                                    ( vec_push [ChatMsg] msgs ( chat_msg ( string_data role ) ( string_data content ) ) )
-                                }
-                                F → {}
-                            }
-                            = k + k 1
-                        }
-                    }
-                    F → {}
-                }
-                = prompt ( chat_render g_api_style msgs )
-            }
-
-            : b stream ( __api_bool j `stream` T )
-            : i npredict ( __api_opt_i j `num_predict` 128 )
-            : f temp ( __api_opt_f j `temperature` 0.8 )
-            : i topk ( __api_opt_i j `top_k` 40 )
-            : f topp ( __api_opt_f j `top_p` 0.95 )
-            : i seed ( __api_opt_i j `seed` 42 )
-            : s field ? is_gen `response` `message`
-            : b r ( __api_generate c ( string_data model ) prompt field stream npredict temp topk topp seed )
-            ^ r
+            ? oai {
+                ? == proto API_OAI_CHAT { = . rq prompt ( chat_render g_api_style msgs ) } {}
+            } { ( __ollama_parse j rq ) }
+            ^ ( __api_generate c rq )
         }
     }
 }
 
 // ── plain JSON routes ───────────────────────────────────────────────
 
-@ __api_tags HttpRequest req Params ps → HttpResponse {
-    : Json arr ( json_arr_new )
-    : String rootS ( __api_cfg_root )
+// The names in the local store.
+@ __api_store_names → ( Vec String ) {
     : String mdir ( path_join ( string_data ( __api_cfg_root ) ) `manifests` )
     ?? ( dir_list ( string_data mdir ) ) {
-        T names → {
-            : ~ i k 0
-            ~ < k ( vec_len [String] names ) {
-                ?? ( vec_get [String] names k ) {
-                    T nm → {
-                        : Json o ( json_obj_new )
-                        : b _1 ( json_obj_set o `name` ( json_str_lit ( string_data nm ) ) )
-                        : b _2 ( json_obj_set o `model` ( json_str_lit ( string_data nm ) ) )
-                        : ~ i sz 0
-                        ?? ( nl_resolve rootS ( string_data nm ) ) {
-                            T bp → {
-                                ?? ( file_size ( string_data bp ) ) {
-                                    T n → { = sz n }
-                                    F _ → {}
-                                }
-                            }
-                            F → {}
-                        }
-                        : b _3 ( json_obj_set o `size` ( json_int sz ) )
-                        : b _4 ( json_arr_push arr o )
-                    }
-                    F → {}
+        T names → { ^ names }
+        F _ → { ^ ( vec_new [String] ) }
+    }
+}
+
+@ __api_tags HttpRequest req Params ps → HttpResponse {
+    ? ( __api_authed req ) {} { ^ ( __web_unauth ) }
+    : Json arr ( json_arr_new )
+    : String rootS ( __api_cfg_root )
+    : ( Vec String ) names ( __api_store_names )
+    : ~ i k 0
+    ~ < k ( vec_len [String] names ) {
+        : s nm ( string_data ( vec_at [String] names k ) )
+        : Json o ( json_obj_new )
+        : b _1 ( json_obj_set o `name` ( json_str_lit nm ) )
+        : b _2 ( json_obj_set o `model` ( json_str_lit nm ) )
+        : ~ i sz 0
+        ?? ( nl_resolve rootS nm ) {
+            T bp → {
+                ?? ( file_size ( string_data bp ) ) {
+                    T n → { = sz n }
+                    F _ → {}
                 }
-                = k + k 1
             }
+            F → {}
         }
-        F _ → {}
+        : b _3 ( json_obj_set o `size` ( json_int sz ) )
+        : b _4 ( json_arr_push arr o )
+        = k + k 1
     }
     : Json root ( json_obj_new )
     : b _r ( json_obj_set root `models` arr )
@@ -511,6 +953,7 @@ i npredict f temp i topk f topp i seed → b {
 }
 
 @ __api_show HttpRequest req Params ps → HttpResponse {
+    ? ( __api_authed req ) {} { ^ ( __web_unauth ) }
     : !Json JsonError pj ( __api_body_json req )
     ?? pj {
         F _ → { ^ ( response_text 400 `{"error":"invalid JSON body"}\n` ) }
@@ -548,6 +991,71 @@ i npredict f temp i topk f topp i seed → b {
     }
 }
 
+// ── OpenAI's model list ─────────────────────────────────────────────
+
+// One OpenAI model object: `created` is when the model file was written.
+@ __oai_model_obj s name → Json {
+    : Json o ( json_obj_new )
+    : b _1 ( json_obj_set o `id` ( json_str_lit name ) )
+    : b _2 ( json_obj_set o `object` ( json_str_lit `model` ) )
+    : ~ i created 0
+    ?? ( nl_resolve ( __api_cfg_root ) name ) {
+        T bp → { ?? ( fs_stat ( string_data bp ) ) { T st → { = created . st mtime } F _ → {} } }
+        F → {}
+    }
+    : b _3 ( json_obj_set o `created` ( json_int created ) )
+    : b _4 ( json_obj_set o `owned_by` ( json_str_lit `nurllama` ) )
+    ^ o
+}
+
+// GET /v1/models — the store, and the server's default model when it is
+// not one of them (a path given to `serve`).
+@ __oai_models HttpRequest req Params ps → HttpResponse {
+    ? ( __api_authed req ) {} { ^ ( __api_error_resp API_OAI_CHAT 401 `unauthorized: this server wants Authorization: Bearer <token>` `invalid_api_key` ) }
+    : Json arr ( json_arr_new )
+    : ( Vec String ) names ( __api_store_names )
+    : String dflt ( __api_cfg_model )
+    : ~ b listed F
+    : ~ i k 0
+    ~ < k ( vec_len [String] names ) {
+        : s nm ( string_data ( vec_at [String] names k ) )
+        ? ( nurl_str_eq nm ( string_data dflt ) ) { = listed T } {}
+        : b _1 ( json_arr_push arr ( __oai_model_obj nm ) )
+        = k + k 1
+    }
+    ? & ! listed > ( string_len dflt ) 0 { : b _2 ( json_arr_push arr ( __oai_model_obj ( string_data dflt ) ) ) } {}
+    : Json root ( json_obj_new )
+    : b _3 ( json_obj_set root `object` ( json_str_lit `list` ) )
+    : b _4 ( json_obj_set root `data` arr )
+    : String txt ( json_stringify root )
+    : HttpResponse resp ( response_new 200 )
+    ( response_set_header resp `Content-Type` `application/json` )
+    ( response_set_body_str resp ( string_data txt ) )
+    ^ resp
+}
+
+// GET /v1/models/:id — a model this server can open.
+@ __oai_model HttpRequest req Params ps → HttpResponse {
+    ? ( __api_authed req ) {} { ^ ( __api_error_resp API_OAI_CHAT 401 `unauthorized: this server wants Authorization: Bearer <token>` `invalid_api_key` ) }
+    : ~ String id ( string_new )
+    ?? ( params_get ps `id` ) { T v → { = id ( string_from ( string_data v ) ) } F → {} }
+    ?? ( nl_resolve ( __api_cfg_root ) ( string_data id ) ) {
+        T _p → {
+            : String txt ( json_stringify ( __oai_model_obj ( string_data id ) ) )
+            : HttpResponse resp ( response_new 200 )
+            ( response_set_header resp `Content-Type` `application/json` )
+            ( response_set_body_str resp ( string_data txt ) )
+            ^ resp
+        }
+        F → {
+            : String msg ( string_from `model '` )
+            ( string_push_str msg ( string_data id ) )
+            ( string_push_str msg `' not found` )
+            ^ ( __api_error_resp API_OAI_CHAT 404 ( string_data msg ) `model_not_found` )
+        }
+    }
+}
+
 // ── the web chat UI: cookie sessions + the nurldb history ────────────
 
 // The per-client GUID. Read from the `nl_client` cookie; minted (and
@@ -568,7 +1076,8 @@ i npredict f temp i topk f topp i seed → b {
 
 // True when the request may touch the data endpoints: always, for an
 // open server; otherwise it must carry `Authorization: Bearer <token>`.
-@ __web_authed HttpRequest req → b {
+// Every data route asks this — /api/*, /v1/* and /web/* alike.
+@ __api_authed HttpRequest req → b {
     ? == g_api_auth 0 { ^ T } {}
     ?? ( header_get . req headers `Authorization` ) {
         T h → {
@@ -617,7 +1126,7 @@ i npredict f temp i topk f topp i seed → b {
             ( string_push_str out ( string_data piece ) )
             = gi + gi 1
         }
-        ^ out
+        ^ ( __api_utf8 out )
     } {}
     // autoregressive
     ( llm_prefill m ids )
@@ -639,7 +1148,7 @@ i npredict f temp i topk f topp i seed → b {
             }
         }
     }
-    ^ out
+    ^ ( __api_utf8 out )
 }
 
 // Ensure the configured model is loaded, render the message history
@@ -679,7 +1188,7 @@ i npredict f temp i topk f topp i seed → b {
 // GET /web/session — mint/refresh the cookie, return the client id and
 // the configured model.
 @ __web_session HttpRequest req Params ps → HttpResponse {
-    ? ( __web_authed req ) {} { ^ ( __web_unauth ) }
+    ? ( __api_authed req ) {} { ^ ( __web_unauth ) }
     : HttpResponse resp ( response_new 200 )
     : String guid ( __web_guid req resp )
     : b _e ( hist_ensure_client ( string_data guid ) ( hist_now ) )
@@ -693,7 +1202,7 @@ i npredict f temp i topk f topp i seed → b {
 
 // GET /web/conversations — this client's conversations, newest first.
 @ __web_conversations HttpRequest req Params ps → HttpResponse {
-    ? ( __web_authed req ) {} { ^ ( __web_unauth ) }
+    ? ( __api_authed req ) {} { ^ ( __web_unauth ) }
     : HttpResponse resp ( response_new 200 )
     : String guid ( __web_guid req resp )
     : Json arr ( hist_list_conversations ( string_data guid ) )
@@ -704,7 +1213,7 @@ i npredict f temp i topk f topp i seed → b {
 
 // GET /web/conversations/:id/messages — only if this client owns it.
 @ __web_messages HttpRequest req Params ps → HttpResponse {
-    ? ( __web_authed req ) {} { ^ ( __web_unauth ) }
+    ? ( __api_authed req ) {} { ^ ( __web_unauth ) }
     : HttpResponse resp ( response_new 200 )
     : String guid ( __web_guid req resp )
     : ~ i conv -1
@@ -727,7 +1236,7 @@ i npredict f temp i topk f topp i seed → b {
 
 // DELETE /web/conversations/:id — only if this client owns it.
 @ __web_delete HttpRequest req Params ps → HttpResponse {
-    ? ( __web_authed req ) {} { ^ ( __web_unauth ) }
+    ? ( __api_authed req ) {} { ^ ( __web_unauth ) }
     : HttpResponse resp ( response_new 200 )
     : String guid ( __web_guid req resp )
     : ~ i conv -1
@@ -749,7 +1258,7 @@ i npredict f temp i topk f topp i seed → b {
 // Persists the user turn, generates a reply against the conversation's
 // full history, persists that too, and returns { conversation_id, reply }.
 @ __web_chat HttpRequest req Params ps → HttpResponse {
-    ? ( __web_authed req ) {} { ^ ( __web_unauth ) }
+    ? ( __api_authed req ) {} { ^ ( __web_unauth ) }
     : HttpResponse resp ( response_new 200 )
     : String guid ( __web_guid req resp )
     : b _e ( hist_ensure_client ( string_data guid ) ( hist_now ) )
@@ -865,6 +1374,8 @@ i npredict f temp i topk f topp i seed → b {
     ( http_app_get a `/` \ HttpRequest rq Params ps → HttpResponse { ^ ( __api_root rq ps ) } )
     ( http_app_get a `/api/tags` \ HttpRequest rq Params ps → HttpResponse { ^ ( __api_tags rq ps ) } )
     ( http_app_post a `/api/show` \ HttpRequest rq Params ps → HttpResponse { ^ ( __api_show rq ps ) } )
+    ( http_app_get a `/v1/models` \ HttpRequest rq Params ps → HttpResponse { ^ ( __oai_models rq ps ) } )
+    ( http_app_get a `/v1/models/:id` \ HttpRequest rq Params ps → HttpResponse { ^ ( __oai_model rq ps ) } )
     ( http_app_get a `/web/session` \ HttpRequest rq Params ps → HttpResponse { ^ ( __web_session rq ps ) } )
     ( http_app_get a `/web/conversations` \ HttpRequest rq Params ps → HttpResponse { ^ ( __web_conversations rq ps ) } )
     ( http_app_get a `/web/conversations/:id/messages` \ HttpRequest rq Params ps → HttpResponse { ^ ( __web_messages rq ps ) } )

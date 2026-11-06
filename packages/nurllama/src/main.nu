@@ -15,7 +15,7 @@
 //                                             (hf.co/ORG/REPO/FILE.gguf or a
 //                                             URL; resumes a broken pull)
 //   nurllama list · rm <name> · verify <name> the local model store
-//   nurllama serve [model] [--host H] [--port N]  ollama-compatible HTTP API
+//   nurllama serve [model] [--host H] [--port N]  ollama- + OpenAI-compatible HTTP API
 //                                             + the web chat UI at /. The
 //                                             model is the default: the web
 //                                             UI chats with it, /api requests

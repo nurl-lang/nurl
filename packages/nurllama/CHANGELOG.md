@@ -48,6 +48,44 @@ Requires NURL 0.89.0 and tokenizer 0.6.
   indexer's top-k, one past it and one past a prefill chunk; q8_0 keeps
   the argmax; the tokenizer gives HF's ids.
 
+- **An OpenAI-compatible API** on the same server (Agora #514):
+  `POST /v1/chat/completions`, `POST /v1/completions`, `GET /v1/models`,
+  `GET /v1/models/{id}`. Server-sent `chat.completion.chunk` /
+  `text_completion` events ending in `data: [DONE]` (the role in the first
+  chunk, `finish_reason` in the last, a usage chunk with
+  `stream_options.include_usage`), or one object; `usage` on every reply;
+  `max_tokens` / `max_completion_tokens`, `temperature`, `top_p`, `seed`,
+  `stop`, `top_k`, with OpenAI's defaults; message content as a string or
+  text parts; OpenAI's error shape. What it cannot do (`n` > 1, tools,
+  structured output, logprobs, images) is refused, not ignored. The
+  official `openai` Python client works against it.
+- **One generation loop for both protocols.** ollama's and OpenAI's
+  routes differ only in framing, so stop sequences (`options.stop` on
+  ollama's) and `finish_reason` / `done_reason` (`stop` or `length` — it
+  was always `stop`) are the same on both. A stop sequence is never sent,
+  even one that spans tokens: a stream holds back what may start one.
+
+### Fixed
+
+- **A token-auth server left ollama's routes open** (Agora #515):
+  `/api/generate`, `/api/chat`, `/api/tags` and `/api/show` answered
+  without the bearer token; only `/web/*` checked it. Every data route
+  now asks the same check.
+- **Sampling without top-k was quadratic in the vocabulary.** The top-k
+  filter was a selection sort of the k best, run with k = the vocabulary
+  when top-k was off: 2.4·10¹⁰ steps a token for a 155k vocabulary, a
+  hang in practice. The candidates are now sorted (O(n log n)) only when
+  a top-k or top-p filter needs them in order.
+- **Generated text could reach a client as invalid UTF-8.** A token may
+  end inside a character, and a byte-level vocabulary can produce
+  malformed sequences; a streamed piece carried the half character, and
+  either broke the JSON it went out in. A stream now holds a half
+  character back until it is whole, and every malformed byte goes out as
+  U+FFFD — streamed, non-streamed and in the web chat alike.
+- `tests/start_test.sh` no longer races: it waited for neither wizard
+  server it killed, and one still holding the history database's lock
+  made `start -y` fail about one run in two.
+
 ## [0.24.0] — 2026-11-06
 
 Requires NURL 0.89.0 and tokenizer 0.5.
