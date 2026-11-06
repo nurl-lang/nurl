@@ -9,7 +9,8 @@
 //   hub rm     <handle>       forget a model, GC unshared blobs
 //
 // A ref is org/repo, org/repo/path/file.gguf, org/repo@rev[/path],
-// hf.co/… , or an http(s):// URL. The cache is $NURL_MODELS or
+// hf.co/… , a Hugging Face web URL (https://huggingface.co/org/repo,
+// …/blob/<rev>/<path>), or any other http(s):// URL. The cache is $NURL_MODELS or
 // ~/.nurl/models.
 
 $ `stdlib/core/io.nu`
@@ -59,7 +60,7 @@ $ `hub.nu`
     ? ( args_present p `help` ) {
         : String u ( args_usage p )
         ( nurl_print ( string_data u ) )
-        ( nurl_print `\ncommands:\n  pull <ref>   fetch a file or a whole repo (auto)\n  file <ref>   fetch one file, print its path\n  dir <ref>    fetch a whole repo, print its directory\n  ls           list cached models\n  path <ref>   print the cached path without fetching\n  verify <h>   re-hash every blob against its sha256\n  rm <handle>  forget a model, GC unshared blobs\n\nrefs: org/repo · org/repo/file.gguf · org/repo@rev[/path] · hf.co/… · https://…\ncache: $NURL_MODELS or ~/.nurl/models\n` )
+        ( nurl_print `\ncommands:\n  pull <ref>   fetch a file or a whole repo (auto)\n  file <ref>   fetch one file, print its path\n  dir <ref>    fetch a whole repo, print its directory\n  ls           list cached models\n  path <ref>   print the cached path without fetching\n  verify <h>   re-hash every blob against its sha256\n  rm <handle>  forget a model, GC unshared blobs\n\nrefs: org/repo · org/repo/file.gguf · org/repo@rev[/path] · hf.co/… · https://huggingface.co/org/repo[/blob/rev/file] · https://…\ncache: $NURL_MODELS or ~/.nurl/models\n` )
         ^ 0
     } {}
     ? ( args_present p `version` ) {

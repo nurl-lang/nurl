@@ -25,7 +25,14 @@ A **ref** is a Hugging Face shorthand or a URL:
 | `org/repo/path/to/file.gguf` | one file |
 | `org/repo@revision[/path]` | pinned to a branch, tag or commit |
 | `hf.co/org/repo/…` | the `hf.co/` shorthand (prefix stripped) |
-| `https://…` | a direct URL, downloaded as-is |
+| `https://huggingface.co/org/repo` | the repository page a browser shows: the whole repo (`/tree/<rev>`: at that revision) |
+| `https://huggingface.co/org/repo/blob/<rev>/path` | a file page (`/resolve/` and `/raw/` too): that one file at `<rev>` |
+| `https://…` | any other URL: downloaded as-is |
+
+A Hugging Face web URL is read as the ref it shows, never downloaded as a
+web page; that holds for `hf.co`, `www.huggingface.co`, the `$HF_ENDPOINT`
+mirror's host and the same URL without `https://`. A URL hub cannot fetch
+(a dataset, a Space, a subdirectory of a tree) is an error.
 
 ## From NURL
 

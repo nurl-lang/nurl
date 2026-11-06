@@ -1,5 +1,18 @@
 # hub changelog
 
+## [0.2.5] — 2026-11-06
+
+### Fixed
+
+- A Hugging Face web URL — what a browser's address bar shows — is the ref
+  it names: `https://huggingface.co/org/repo` pulls the repository,
+  `…/tree/<rev>` the repository at that revision, and `…/blob/<rev>/<path>`
+  (or `/resolve/`, `/raw/`) that one file. hub used to download every
+  `https://` ref as-is, so the repository page's HTML landed in the cache
+  in place of the model. The same holds for `hf.co`, `www.huggingface.co`,
+  the `$HF_ENDPOINT` host and the URL without `https://`; a dataset, a
+  Space or a tree subdirectory is an error instead of a page download.
+
 ## [0.2.4] — 2026-10-21
 
 ### Fixed
