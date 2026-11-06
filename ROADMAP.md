@@ -466,7 +466,15 @@ platform-specific shims.
   Hugging Face checkpoint (`nurllama convert`, streaming a model larger than
   RAM to GGUF at constant memory) and generates by block denoising — parallel
   commits with token editing, not left-to-right — its logits matched to a
-  numpy forward and its decoded ids to a reference-faithful loop.
+  numpy forward and its decoded ids to a reference-faithful loop. Since 0.90.0: **GLM-5.x** (`glm-dsa` —
+  MLA attention run in the absorbed form, DeepSeek sparse attention, a
+  sigmoid-routed MoE), checked against HF transformers; an **OpenAI-compatible
+  API** (`/v1/chat/completions`, `/v1/completions`, `/v1/models`, SSE) beside
+  the ollama one, with a reasoning model's reasoning returned apart from its
+  answer; **EXL3** (exllamav3's trellis quantisation) as a weight type the
+  matvec runs without expanding it, bit-exact against exllamav3's reference;
+  and a **Hugging Face checkpoint directory** (llama, mistral, qwen2, qwen3,
+  glm_moe_dsa — any linear EXL3) run directly, with no GGUF copy.
 - **Speech recognition, in pure NURL** (`whisper` + `audio` + `safetensor` +
   `tokenizer`): a WAV goes in and text comes out — *word for word what
   Hugging Face transformers produces from the same model*, on whisper-tiny
