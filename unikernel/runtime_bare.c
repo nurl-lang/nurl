@@ -1601,3 +1601,15 @@ long long nurl_signal_pending(long long signum) {
 void nurl_signal_install_shutdown(long long listener) {
     (void)listener;
 }
+
+/* ── §15  The system's TLS chain verifier ─────────────────────────
+ *
+ * runtime_ffi.c §14a asks Windows' chain engine whether it trusts a
+ * server's chain; stdlib/std/tls_verify.nu calls it when no PEM bundle
+ * anchors the chain. A guest has no operating system to ask, so the
+ * answer is the one every non-Windows host gives: -1, no system
+ * verifier. Trust comes from a bundle (SSL_CERT_FILE) or not at all. */
+long long nurl_sys_chain_trusted(const void *chain, long long len) {
+    (void)chain; (void)len;
+    return -1;
+}
