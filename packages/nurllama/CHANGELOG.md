@@ -65,8 +65,20 @@ Requires NURL 0.89.0 and tokenizer 0.6.
   was always `stop`) are the same on both. A stop sequence is never sent,
   even one that spans tokens: a stream holds back what may start one.
 
+- **GLM chat templates** (Agora #517): GLM-5.2 / 5.3's and GLM-5 /
+  5.1's (GLM-4.7's too), picked from the GGUF's own template and rendered
+  byte-identical to HF's `apply_chat_template` — they were taken for
+  phi3's (both have `<|assistant|>`), whose format is not GLM's.
+  `nurllama chat-template STYLE|MODEL [MESSAGES.json]` renders any
+  conversation.
+
 ### Fixed
 
+- **A generation now ends on the model's end-of-turn and end-of-message
+  ids, not only its eos** (Agora #517): `tokenizer.ggml.eot_token_id` /
+  `eom_token_id`, as llama.cpp's `llama_vocab_is_eog` reads them. GLM ends
+  its turn with `<|user|>` (its eot), so a GLM reply ran on into the next
+  turn.
 - **A token-auth server left ollama's routes open** (Agora #515):
   `/api/generate`, `/api/chat`, `/api/tags` and `/api/show` answered
   without the bearer token; only `/web/*` checked it. Every data route

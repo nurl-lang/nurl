@@ -25,12 +25,19 @@
 #    5. the GLM tokenizer (tokenizer.ggml.pre glm4) gives HF's ids
 #    6. sampled text served through the OpenAI API is UTF-8, piece by
 #       piece and whole
+#    7. the chat templates: GLM-5.3's (the tokenizer's chat_template.jinja)
+#       and, net-gated, GLM-5's and GLM-4.7's render six conversations
+#       byte-identical to HF's apply_chat_template, and the GGUF's own
+#       template selects GLM-5.3's style
+#    8. end of generation: a GGUF whose eot_token_id is the token greedy
+#       decoding picks first generates nothing (nurllama stops on eos, eot
+#       and eom, as llama.cpp does — GLM ends its turn with its eot)
 #
 #  Needs python3 with torch + transformers >= 5.15 (GlmMoeDsa), the
 #  llama.cpp source tree for its converter (LLAMA_CPP=/path/to/llama.cpp),
-#  and the GLM-5 tokenizer files (GLM_TOKENIZER_DIR with tokenizer.json and
-#  tokenizer_config.json — or NURL_NET_TESTS=1 to fetch them). SKIPs
-#  without them.
+#  and the GLM-5 tokenizer files (GLM_TOKENIZER_DIR with tokenizer.json,
+#  tokenizer_config.json and chat_template.jinja — or NURL_NET_TESTS=1 to
+#  fetch them). SKIPs without them.
 #
 #  Run from the package dir:  ./tests/glm_dsa_test.sh
 # ============================================================
@@ -65,19 +72,19 @@ if [ -z "$TOK" ]; then
         echo "  SKIP (set GLM_TOKENIZER_DIR, or NURL_NET_TESTS=1 with curl)"; exit 0
     fi
     TOK="$WORK/tok"; mkdir -p "$TOK"
-    for f in tokenizer.json tokenizer_config.json; do
+    for f in tokenizer.json tokenizer_config.json chat_template.jinja; do
         curl -sfL --max-time 600 -o "$TOK/$f" "https://huggingface.co/zai-org/GLM-5.3/resolve/main/$f" \
             || { echo "  SKIP tokenizer download failed"; exit 0; }
     done
 fi
 
-echo "[1/7] build nurllama"
+echo "[1/9] build nurllama"
 if ! $NURL src/main.nu "$WORK/nurllama" >/dev/null 2>"$WORK/build.err"; then
     echo "FAIL: could not build nurllama:"; tail -5 "$WORK/build.err"; exit 1
 fi
 NL="$WORK/nurllama"
 
-echo "[2/7] the tiny checkpoint, through llama.cpp's converter"
+echo "[2/9] the tiny checkpoint, through llama.cpp's converter"
 HF="$WORK/hf"
 if ! "$PY" tests/glm_dsa_ref.py make "$HF" "$TOK" >"$WORK/make.log" 2>&1; then
     echo "FAIL: could not make the checkpoint:"; tail -5 "$WORK/make.log"; exit 1
@@ -118,13 +125,13 @@ PYEOF
 # The tiny model's index_topk is 8.
 ntok() { "$NL" tokenize "$M" "$1" | wc -w; }
 
-echo "[3/7] a prompt within index_topk, decoding past it"
+echo "[3/9] a prompt within index_topk, decoding past it"
 SHORT="The capital of France is"
 N=$(ntok "$SHORT")
 [ "$N" -le 8 ] && ok "the short prompt is $N tokens (≤ index_topk 8)" || bad "short prompt is $N tokens"
 parity "short prompt" "$SHORT" 16
 
-echo "[4/7] a prompt past index_topk, and one past a prefill chunk"
+echo "[4/9] a prompt past index_topk, and one past a prefill chunk"
 MID="In 1905 Albert Einstein published four papers that changed physics: on the photoelectric effect, on Brownian motion, on special relativity."
 N=$(ntok "$MID")
 [ "$N" -gt 8 ] && ok "the mid prompt is $N tokens (> index_topk 8)" || bad "mid prompt only $N tokens"
@@ -134,7 +141,7 @@ N=$(ntok "$LONG")
 [ "$N" -gt 64 ] && ok "the long prompt is $N tokens (more than one 64-position chunk)" || bad "long prompt only $N tokens"
 parity "long prompt" "$LONG" 8
 
-echo "[5/7] q8_0"
+echo "[5/9] q8_0"
 Q="$WORK/tiny-q8_0.gguf"
 "$NL" logits "$Q" "$MID" > "$WORK/q8.logits"
 "$PY" tests/glm_dsa_ref.py logits "$HF" "$("$NL" tokenize "$Q" "$MID")" > "$WORK/ref.logits" 2>/dev/null
@@ -149,7 +156,7 @@ assert a.argmax() == b.argmax(), "argmax differs"
 assert d < span*0.02, "max delta %g vs span %g" % (d, span)
 PYEOF
 
-echo "[6/7] the GLM tokenizer vs HF"
+echo "[6/9] the GLM tokenizer vs HF"
 if "$PY" -c 'import tokenizers' >/dev/null 2>&1; then
     for S in "The capital of France is" "café naïve" "中文和English混合" "  two  spaces
 and a newline" "x = f(42) + 3.14159;"; do
@@ -161,7 +168,7 @@ else
     echo "  SKIP (python3 tokenizers)"
 fi
 
-echo "[7/7] sampled text through the OpenAI API is UTF-8, streamed or not"
+echo "[7/9] sampled text through the OpenAI API is UTF-8, streamed or not"
 # The random model samples from GLM's byte-level vocabulary, so its tokens
 # end characters halfway and start malformed ones: a stream must hold a
 # half character back until it is whole, and a malformed byte must reach
@@ -190,6 +197,49 @@ for seed in range(6):
 print("    pieces held back for a whole character: %d" % held)
 PYEOF
 kill "$SRV" 2>/dev/null; wait "$SRV" 2>/dev/null
+
+echo "[8/9] chat templates vs HF apply_chat_template"
+# the conversations (tests/glm_chats.json), one file each
+CHATS="$WORK/chats"; mkdir -p "$CHATS"
+"$PY" -c 'import json,sys
+for i, c in enumerate(json.load(open(sys.argv[1], encoding="utf-8"))):
+    json.dump(c, open("%s/%d.json" % (sys.argv[2], i), "w", encoding="utf-8"), ensure_ascii=False)' tests/glm_chats.json "$CHATS"
+tpl_check() {   # <label> <template.jinja> <style>
+    local same=0 i
+    for i in 0 1 2 3 4 5; do
+        "$PY" tests/glm_chat_ref.py "$TOK" "$2" "$CHATS/$i.json" > "$WORK/ref.txt" 2>"$WORK/ref.err"
+        "$NL" chat-template "$3" "$CHATS/$i.json" > "$WORK/ours.txt"
+        # (an empty prompt is a failure on either side, not a match)
+        if [ -s "$WORK/ref.txt" ] && cmp -s "$WORK/ref.txt" "$WORK/ours.txt"; then same=$((same+1)); else
+            echo "    conversation $i differs:"; echo "    ref: $(head -c 300 "$WORK/ref.txt")"; echo "    our: $(head -c 300 "$WORK/ours.txt")"; fi
+    done
+    [ "$same" = 6 ] && ok "$1: 6 conversations byte-identical to HF" || bad "$1 template ($same/6)"
+}
+if [ -f "$TOK/chat_template.jinja" ]; then
+    tpl_check "GLM-5.3 (style from the GGUF's own template)" "$TOK/chat_template.jinja" "$M"
+else
+    echo "  SKIP GLM-5.3 (no chat_template.jinja in $TOK)"
+fi
+if [ "${NURL_NET_TESTS:-0}" = 1 ]; then
+    for r in GLM-5 GLM-4.7; do
+        if curl -sfL --max-time 120 -o "$WORK/$r.jinja" "https://huggingface.co/zai-org/$r/resolve/main/chat_template.jinja"; then
+            tpl_check "$r" "$WORK/$r.jinja" glm5
+        else echo "  SKIP $r template download failed"; fi
+    done
+else
+    echo "  SKIP GLM-5 / GLM-4.7 templates (NURL_NET_TESTS=1)"
+fi
+
+echo "[9/9] end of generation on eot"
+FIRST=$("$PY" tests/glm_dsa_ref.py greedy "$HF" "$("$NL" tokenize "$M" "$SHORT")" 1 2>/dev/null)
+cp "$M" "$WORK/eot.gguf"
+if PYTHONPATH="$LLAMA_CPP/gguf-py" "$PY" "$LLAMA_CPP/gguf-py/gguf/scripts/gguf_set_metadata.py" --force         "$WORK/eot.gguf" tokenizer.ggml.eot_token_id "$FIRST" >/dev/null 2>&1; then
+    A=$("$NL" run "$M" "$SHORT" -n 4 --temp 0 --ctx 512)
+    B=$("$NL" run "$WORK/eot.gguf" "$SHORT" -n 4 --temp 0 --ctx 512)
+    [ -n "$A" ] && [ -z "$B" ] && ok "greedy's first token as eot_token_id ends the generation at once"         || { bad "eot stop"; echo "    as eos only: [$A]"; echo "    as eot    : [$B]"; }
+else
+    bad "could not set eot_token_id with gguf_set_metadata.py"
+fi
 
 echo "== nurllama glm-dsa tests: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

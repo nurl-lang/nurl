@@ -377,11 +377,24 @@ remembers it).
 ## Chat templates
 
 The template comes from the model's own metadata
-(`tokenizer.chat_template` → ChatML, llama3, llama2, gemma, phi3 or
-bailing; a ChatML template that thinks only when `enable_thinking` is
+(`tokenizer.chat_template` → ChatML, llama3, llama2, gemma, phi3,
+bailing or GLM; a ChatML template that thinks only when `enable_thinking` is
 true — Qwen3.5's — gets its default empty `<think></think>` block). A model with no
 template is a **base** model, and nurllama will not invent turns for it
 — it completes your text, which is what such a model was trained to do.
+
+GLM has two: GLM-5.2 / 5.3's (`[gMASK]<sop><|system|>Reasoning Effort:
+Max`, an empty `<think></think>` on every earlier assistant turn) and
+GLM-5 / 5.1's (also GLM-4.7's: an earlier turn's reasoning dropped to a
+bare `</think>`). Both are checked byte for byte against HF's
+`apply_chat_template` on the models' own templates
+(`tests/glm_dsa_test.sh`), and both open the reply with `<think>` — the
+templates' default is to reason.
+
+A generation ends on any of the model's end-of-generation ids — its eos,
+and its end-of-turn and end-of-message ids where the GGUF states them
+(`tokenizer.ggml.eot_token_id` / `eom_token_id`), as llama.cpp reads them.
+GLM ends its turn with `<|user|>`, its eot, not with its eos.
 
 ## Finetuning (in progress — the M6 arc)
 

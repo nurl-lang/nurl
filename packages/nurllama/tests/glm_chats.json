@@ -1,0 +1,12 @@
+[
+  [{"role": "user", "content": "hi"}],
+  [{"role": "system", "content": "be brief"}, {"role": "user", "content": "What is 2+2?"}],
+  [{"role": "system", "content": "You are helpful."}, {"role": "user", "content": "Hello"},
+   {"role": "assistant", "content": "Hi! How can I help?"}, {"role": "user", "content": "Tell me a joke."}],
+  [{"role": "user", "content": "Q1"}, {"role": "assistant", "content": "<think>\nLet me think.\n</think>\n\nA1."},
+   {"role": "user", "content": "Q2"}, {"role": "assistant", "content": "<think>reason two</think>  A2  "}],
+  [{"role": "user", "content": "  spaced\n\nlines  "}, {"role": "assistant", "content": "\n\nanswer with ääkköset 中文\n"},
+   {"role": "user", "content": "emoji 🦙 and <|user|> text"}],
+  [{"role": "user", "content": "a"}, {"role": "assistant", "content": "<think>  \n </think>b"},
+   {"role": "assistant", "content": "no think here"}]
+]

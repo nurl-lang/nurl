@@ -24,6 +24,15 @@
 //                 assistant's role is spelled "model", and gemma has NO
 //                 system role — the system prompt folds into the first
 //                 user turn, which is what its own template does)
+//   CHAT_GLM5     [gMASK]<sop><|system|>…<|user|>…<|assistant|>…  (GLM-5,
+//                 GLM-5.1: no newlines between turns; an earlier assistant
+//                 turn is `</think>` + its answer, the last one keeps its
+//                 <think>reasoning</think>; the generation prompt opens
+//                 <think>)
+//   CHAT_GLM53    GLM-5.2 / GLM-5.3: the same turns, opened by the
+//                 template's `<|system|>Reasoning Effort: Max` (its default
+//                 effort), and an assistant turn always carries its
+//                 <think>…</think> block, empty when it has none
 //   CHAT_PLAIN    no template — the messages are concatenated; a base
 //                 (non-chat) model gets its raw prompt, which is the
 //                 honest thing to do rather than inventing turns.
@@ -42,6 +51,8 @@ $ `deps/gguf/src/gguf.nu`
 : i CHAT_PHI3 5
 : i CHAT_BAILING 6
 : i CHAT_CHATML_NT 7
+: i CHAT_GLM5 8
+: i CHAT_GLM53 9
 
 : ChatMsg {
     String role
@@ -58,6 +69,12 @@ $ `deps/gguf/src/gguf.nu`
 @ chat_style_of Gguf g → i {
     : s tpl ( gguf_kv_str_or g `tokenizer.chat_template` `` )
     ? > ( nurl_str_len tpl ) 0 {
+        // GLM before the other `<|assistant|>` dialects: its turn tags are
+        // phi3's, its format is not
+        ? >= ( nurl_str_find tpl `[gMASK]<sop>` ) 0 {
+            ? >= ( nurl_str_find tpl `Reasoning Effort` ) 0 { ^ CHAT_GLM53 } {}
+            ^ CHAT_GLM5
+        } {}
         ? >= ( nurl_str_find tpl `<|im_start|>` ) 0 {
             ? >= ( nurl_str_find tpl `enable_thinking is defined and enable_thinking is true` ) 0 { ^ CHAT_CHATML_NT } {}
             ^ CHAT_CHATML
@@ -251,6 +268,116 @@ $ `deps/gguf/src/gguf.nu`
     ^ out
 }
 
+// The index of the last user turn, -1 when there is none.
+@ __chat_last_user ( Vec ChatMsg ) msgs → i {
+    : ~ i last -1
+    : ~ i k 0
+    ~ < k ( vec_len [ChatMsg] msgs ) {
+        ? ( __chat_is ( vec_at [ChatMsg] msgs k ) `user` ) { = last k } {}
+        = k + k 1
+    }
+    ^ last
+}
+
+// Python's str.split(sep)[0] and [-1]: the text before the FIRST `sep`,
+// and after the LAST (the whole text when there is none).
+@ __chat_before_first String t s sep → String {
+    : i at ( nurl_str_find ( string_data t ) sep )
+    ? < at 0 { ^ ( string_clone t ) } {}
+    ^ ( string_substr t 0 at )
+}
+
+@ __chat_after_last String t s sep → String {
+    : i sl ( nurl_str_len sep )
+    : ~ String rest ( string_clone t )
+    : ~ i at ( nurl_str_find ( string_data rest ) sep )
+    ~ >= at 0 {
+        = rest ( string_substr rest + at sl - - ( string_len rest ) at sl )
+        = at ( nurl_str_find ( string_data rest ) sep )
+    }
+    ^ rest
+}
+
+// Strip only newlines at one end (Python's rstrip('\n') / lstrip('\n')).
+@ __chat_rstrip_nl String t → String {
+    : ~ i n ( string_len t )
+    ~ & > n 0 == ( string_get t - n 1 ) 10 { = n - n 1 }
+    ^ ( string_substr t 0 n )
+}
+
+@ __chat_lstrip_nl String t → String {
+    : i n ( string_len t )
+    : ~ i k 0
+    ~ & < k n == ( string_get t k ) 10 { = k + k 1 }
+    ^ ( string_substr t k - n k )
+}
+
+// GLM-5.x, turn by turn, as its template renders text messages: no
+// separator between turns; a system or user turn is its tag and its text.
+// An assistant turn's reasoning is the part of its text before `</think>`
+// (after any `<think>`), its answer the part after the last `</think>`.
+//   glm53  GLM-5.2 / 5.3: the prompt opens with the template's default
+//          `<|system|>Reasoning Effort: Max`; every assistant turn writes
+//          <think>reasoning</think> (empty when it has none) and its
+//          stripped answer
+//   glm5   GLM-5 / 5.1: reasoning and answer lose their newlines at the
+//          seam; only an assistant turn after the last user turn keeps
+//          <think>reasoning</think> (and only a non-empty one), an earlier
+//          one writes `</think>`
+// The generation prompt is `<|assistant|><think>`: both templates reason
+// by default.
+@ __chat_glm ( Vec ChatMsg ) msgs b glm53 → String {
+    : String out ( string_from `[gMASK]<sop>` )
+    ? glm53 { ( string_push_str out `<|system|>Reasoning Effort: Max` ) } {}
+    : i last_user ( __chat_last_user msgs )
+    : ~ i k 0
+    ~ < k ( vec_len [ChatMsg] msgs ) {
+        : ChatMsg m ( vec_at [ChatMsg] msgs k )
+        ? ( __chat_is m `system` ) {
+            ( string_push_str out `<|system|>` )
+            ( string_push_str out ( __chat_text m ) )
+        } {}
+        ? ( __chat_is m `user` ) {
+            ( string_push_str out `<|user|>` )
+            ( string_push_str out ( __chat_text m ) )
+        } {}
+        ? ( __chat_is m `assistant` ) {
+            ( string_push_str out `<|assistant|>` )
+            : ~ String answer ( string_clone . m content )
+            : ~ String reasoning ( string_new )
+            : b has_think >= ( nurl_str_find ( __chat_text m ) `</think>` ) 0
+            ? has_think {
+                : String head ( __chat_before_first . m content `</think>` )
+                ? glm53 {
+                    = reasoning ( __chat_after_last head `<think>` )
+                    = answer ( __chat_after_last . m content `</think>` )
+                } {
+                    = reasoning ( __chat_lstrip_nl ( __chat_after_last ( __chat_rstrip_nl head ) `<think>` ) )
+                    = answer ( __chat_lstrip_nl ( __chat_after_last . m content `</think>` ) )
+                }
+            } {}
+            ? glm53 {
+                ( string_push_str out `<think>` )
+                ? has_think { ( string_push_str out ( string_data reasoning ) ) } {}
+                ( string_push_str out `</think>` )
+            } {
+                // (non-empty BEFORE the strip, as the template tests it)
+                : String rs ( string_trim reasoning )
+                ? & > k last_user > ( string_len reasoning ) 0 {
+                    ( string_push_str out `<think>` )
+                    ( string_push_str out ( string_data rs ) )
+                    ( string_push_str out `</think>` )
+                } { ( string_push_str out `</think>` ) }
+            }
+            : String ans ( string_trim answer )
+            ( string_push_str out ( string_data ans ) )
+        } {}
+        = k + k 1
+    }
+    ( string_push_str out `<|assistant|><think>` )
+    ^ out
+}
+
 // bailing / Ling 2.0 / LLaDA2: every prompt opens with a SYSTEM turn —
 // the (optional) system message, then the template's own literal
 // `detailed thinking off` switch — and each turn closes with
@@ -311,6 +438,8 @@ $ `deps/gguf/src/gguf.nu`
     ? == style CHAT_GEMMA { ^ ( __chat_gemma msgs ) } {}
     ? == style CHAT_PHI3 { ^ ( __chat_phi3 msgs ) } {}
     ? == style CHAT_BAILING { ^ ( __chat_bailing msgs ) } {}
+    ? == style CHAT_GLM5 { ^ ( __chat_glm msgs F ) } {}
+    ? == style CHAT_GLM53 { ^ ( __chat_glm msgs T ) } {}
     ^ ( __chat_plain msgs )
 }
 
@@ -324,5 +453,9 @@ $ `deps/gguf/src/gguf.nu`
     ? == style CHAT_GEMMA { ^ ? >= ( nurl_str_find piece `<end_of_turn>` ) 0 T F } {}
     ? == style CHAT_PHI3 { ^ ? >= ( nurl_str_find piece `<|end|>` ) 0 T F } {}
     ? == style CHAT_BAILING { ^ ? >= ( nurl_str_find piece `<|role_end|>` ) 0 T F } {}
+    // GLM ends its turn by opening the next one
+    ? | == style CHAT_GLM5 == style CHAT_GLM53 {
+        ^ ? | >= ( nurl_str_find piece `<|user|>` ) 0 >= ( nurl_str_find piece `<|observation|>` ) 0 T F
+    } {}
     ^ F
 }
