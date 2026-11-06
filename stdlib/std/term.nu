@@ -32,7 +32,9 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/slice.nu`
 $ `stdlib/core/posix.nu`  // read / write / close / posix_const
+$ `stdlib/std/utf8.nu`
 $ `stdlib/ext/env.nu`  // $COLUMNS / $LINES fallback for term_width
 
 & `c` @ isatty i32 fd → i32
@@ -182,18 +184,144 @@ raw : TermState { i fd ( Vec u ) saved }
     ^ ( read 0 # *u ( mem_addr b ) 1 )
 }
 
+// Terminal display width of one Unicode scalar (0 for controls and combining
+// marks, 2 for East Asian Wide / Fullwidth / emoji blocks, 1 otherwise).
+@ __term_cp_width i cp → i {
+    ? | < cp 32 & >= cp 127 < cp 160 { ^ 0 } {}
+    ? < cp 768 { ^ 1 } {}
+    ? | & >= cp 768 <= cp 879
+    | & >= cp 1155 <= cp 1161
+    | & >= cp 1425 <= cp 1469
+    | == cp 1471
+    | & >= cp 1473 <= cp 1474
+    | & >= cp 1476 <= cp 1477
+    | == cp 1479
+    | & >= cp 1552 <= cp 1562
+    | & >= cp 1611 <= cp 1631
+    | == cp 1648
+    | & >= cp 1750 <= cp 1773
+    | == cp 3633
+    | & >= cp 3636 <= cp 3642
+    | & >= cp 3655 <= cp 3662
+    | & >= cp 4448 <= cp 4607
+    | & >= cp 6832 <= cp 6911
+    | & >= cp 7616 <= cp 7679
+    | & >= cp 8203 <= cp 8207
+    | & >= cp 8288 <= cp 8292
+    | & >= cp 8400 <= cp 8447
+    | & >= cp 12441 <= cp 12442
+    | & >= cp 65024 <= cp 65039
+    | & >= cp 65056 <= cp 65071
+    == cp 65279 { ^ 0 } {}
+    ? | & >= cp 4352 <= cp 4447
+    | & >= cp 9001 <= cp 9002
+    | & >= cp 11904 <= cp 12350
+    | & >= cp 12352 <= cp 42191
+    | & >= cp 44032 <= cp 55203
+    | & >= cp 63744 <= cp 64255
+    | & >= cp 65040 <= cp 65049
+    | & >= cp 65072 <= cp 65135
+    | & >= cp 65280 <= cp 65376
+    | & >= cp 65504 <= cp 65510
+    | & >= cp 127744 <= cp 128591
+    | & >= cp 128640 <= cp 128767
+    | & >= cp 129280 <= cp 129535
+    | & >= cp 129648 <= cp 129791
+    | & >= cp 131072 <= cp 196605
+    & >= cp 196608 <= cp 262141 { ^ 2 } {}
+    ^ 1
+}
+
+// Terminal columns occupied by `buf[pos .. len)`.
+@ _term_cols_from String buf i pos → i {
+    : ( Slice u ) v ( slice_of_str ( string_data buf ) )
+    : i n ( slice_len [u] v )
+    : ~ i p ? < pos 0 0 pos
+    : ~ i cols 0
+    ~ < p n {
+        : Utf8Dec d ( utf8_decode_at v p )
+        : i step ? > . d width 0 . d width 1
+        = cols + cols ( __term_cp_width . d cp )
+        = p + p step
+    }
+    ^ cols
+}
+
+@ __term_is_cont i b → b {
+    ^ & >= b 128 < b 192
+}
+
+// Step back one UTF-8 scalar boundary in `v` from `pos > 0`.
+@ __term_prev_scalar ( Slice u ) v i pos → i {
+    ? <= pos 0 { ^ 0 } {}
+    : ~ i p - pos 1
+    : ~ i steps 0
+    ~ & > p 0 & < steps 3 ( __term_is_cont ( slice_byte v p ) ) {
+        = p - p 1
+        = steps + steps 1
+    }
+    : Utf8Dec d ( utf8_decode_at v p )
+    ? & == . d ok 1 == + p . d width pos { ^ p } {}
+    ^ - pos 1
+}
+
+// Previous cursor boundary before byte `pos` (steps across any trailing
+// zero-width combining marks onto their base character).
+@ _term_prev_pos String buf i pos → i {
+    ? <= pos 0 { ^ 0 } {}
+    : ( Slice u ) v ( slice_of_str ( string_data buf ) )
+    : ~ i p ( __term_prev_scalar v pos )
+    : ~ b more T
+    ~ & > p 0 more {
+        : Utf8Dec d ( utf8_decode_at v p )
+        ? & == . d ok 1 == ( __term_cp_width . d cp ) 0 {
+            = p ( __term_prev_scalar v p )
+        } {
+            = more F
+        }
+    }
+    ^ p
+}
+
+// Next cursor boundary after byte `pos` (advances past one character and any
+// zero-width combining marks attached to it).
+@ _term_next_pos String buf i pos → i {
+    : ( Slice u ) v ( slice_of_str ( string_data buf ) )
+    : i n ( slice_len [u] v )
+    ? >= pos n { ^ n } {}
+    : Utf8Dec d0 ( utf8_decode_at v pos )
+    : ~ i p + pos ? > . d0 width 0 . d0 width 1
+    : ~ b more T
+    ~ & < p n more {
+        : Utf8Dec d ( utf8_decode_at v p )
+        ? & == . d ok 1 == ( __term_cp_width . d cp ) 0 {
+            = p + p . d width
+        } {
+            = more F
+        }
+    }
+    ^ p
+}
+
+// Build the repaint frame: erase line + CR + prompt + buffer, then walk the
+// cursor left by the display columns of `buf[pos .. len)`.
+@ _term_repaint_str s prompt String buf i pos → String {
+    : String out ( ansi_clear_line )
+    ( string_push_str out prompt )
+    ( string_append out buf )
+    : i tail ( _term_cols_from buf pos )
+    ? > tail 0 {
+        : String back ( ansi_cursor_left tail )
+        ( string_append out back )
+    } {}
+    ^ out
+}
+
 // Repaint: CR + erase line + prompt + buffer, then walk the cursor
 // back to `pos`.
 @ __term_repaint s prompt String buf i pos → v {
-    : String cl ( ansi_clear_line )
-    ( nurl_print ( string_data cl ) )
-    ( nurl_print prompt )
-    ( nurl_print ( string_data buf ) )
-    : i tail - ( string_len buf ) pos
-    ? > tail 0 {
-        : String back ( ansi_cursor_left tail )
-        ( nurl_print ( string_data back ) )
-    } {}
+    : String frame ( _term_repaint_str prompt buf pos )
+    ( nurl_print ( string_data frame ) )
     ( nurl_flush_stdout )
 }
 
@@ -203,14 +331,15 @@ raw : TermState { i fd ( Vec u ) saved }
     ( string_push_str buf src )
 }
 
-// Remove the byte at `idx` (rebuild via substr — lines are short).
-@ __term_delete_at String buf i idx → v {
+// Remove bytes `[from, to)` from `buf` (rebuild via substr — lines are short).
+@ __term_delete_range String buf i from i to → v {
     : i n ( string_len buf )
-    : String head ( string_substr buf 0 idx )
-    : String tail ( string_substr buf + idx 1 - n + idx 1 )
+    ? | < from 0 | >= from to > to n { ^ } {}
+    : String head ( string_substr buf 0 from )
+    : String tail ( string_substr buf to - n to )
     ( string_clear buf )
-    ( string_push_str buf ( string_data head ) )
-    ( string_push_str buf ( string_data tail ) )
+    ( string_append buf head )
+    ( string_append buf tail )
 }
 
 // Insert byte `c` at `idx`.
@@ -219,16 +348,209 @@ raw : TermState { i fd ( Vec u ) saved }
     : String head ( string_substr buf 0 idx )
     : String tail ( string_substr buf idx - n idx )
     ( string_clear buf )
-    ( string_push_str buf ( string_data head ) )
+    ( string_append buf head )
     ( string_push_char buf c )
-    ( string_push_str buf ( string_data tail ) )
+    ( string_append buf tail )
+}
+
+// Insert `ins` at byte `idx`.
+@ __term_insert_str String buf i idx String ins → v {
+    : i n ( string_len buf )
+    : String head ( string_substr buf 0 idx )
+    : String tail ( string_substr buf idx - n idx )
+    ( string_clear buf )
+    ( string_append buf head )
+    ( string_append buf ins )
+    ( string_append buf tail )
 }
 
 // Drop everything from `keep` onward (Ctrl-K).
 @ __term_truncate String buf i keep → v {
     : String head ( string_substr buf 0 keep )
     ( string_clear buf )
-    ( string_push_str buf ( string_data head ) )
+    ( string_append buf head )
+}
+
+// Pure scalar state for one `term_read_line` session:
+//   done: 0 = editing, 1 = accepted, 2 = cancelled / EOF
+//   esc:  0 = ground, 1 = after ESC, 2 = CSI (`ESC [`), 3 = SS3 (`ESC O`)
+: _TermEd {
+    i pos
+    i hidx
+    i done
+    i esc
+    i csi_param
+    i utf8_need
+    i utf8_cp
+    i utf8_min
+}
+
+@ _term_ed_new ( Vec String ) history → _TermEd {
+    ^ @ _TermEd { 0 ( vec_len [String] history ) 0 0 0 0 0 0 }
+}
+
+// Feed one raw input byte `c` (-1 on EOF) into `(st, buf)`.
+@ _term_feed _TermEd st String buf i c ( Vec String ) history → _TermEd {
+    : ~ i pos . st pos
+    : ~ i hidx . st hidx
+    : ~ i done . st done
+    : ~ i esc . st esc
+    : ~ i csi . st csi_param
+    : ~ i need . st utf8_need
+    : ~ i cp . st utf8_cp
+    : ~ i umin . st utf8_min
+
+    ? < c 0 {
+        ^ @ _TermEd { pos hidx 2 0 0 0 0 0 }
+    } {}
+
+    ? > need 0 {
+        ? & >= c 128 < c 192 {
+            = cp | << cp 6 & c 63
+            = need - need 1
+            ? == need 0 {
+                ? & >= cp umin & <= cp 1114111 ! & >= cp 55296 <= cp 57343 {
+                    : String ins ( utf8_encode_cp cp )
+                    : i w ( string_len ins )
+                    ( __term_insert_str buf pos ins )
+                    = pos + pos w
+                } {}
+                = cp 0
+                = umin 0
+            } {}
+            ^ @ _TermEd { pos hidx done esc csi need cp umin }
+        } {
+            = need 0
+            = cp 0
+            = umin 0
+        }
+    } {}
+
+    ? != esc 0 {
+        ? == c 3 {
+            ^ @ _TermEd { pos hidx 2 0 0 0 0 0 }
+        } {}
+        ? == esc 1 {
+            ? == c 91 { ^ @ _TermEd { pos hidx done 2 0 0 0 0 } } {}
+            ? == c 79 { ^ @ _TermEd { pos hidx done 3 0 0 0 0 } } {}
+            ? == c 27 { ^ @ _TermEd { pos hidx done 1 0 0 0 0 } } {}
+            ^ @ _TermEd { pos hidx done 0 0 0 0 0 }
+        } {}
+        ? == esc 3 {
+            ? == c 72 { = pos 0 } {}
+            ? == c 70 { = pos ( string_len buf ) } {}
+            ? == c 68 { = pos ( _term_prev_pos buf pos ) } {}
+            ? == c 67 { = pos ( _term_next_pos buf pos ) } {}
+            ^ @ _TermEd { pos hidx done 0 0 0 0 0 }
+        } {}
+        ? == esc 2 {
+            ? & >= c 48 <= c 57 {
+                ? >= csi 0 { = csi + * csi 10 - c 48 } {}
+                ^ @ _TermEd { pos hidx done 2 csi 0 0 0 }
+            } {}
+            ? & >= c 32 <= c 63 {
+                ? == c 59 { = csi -1 } {}
+                ^ @ _TermEd { pos hidx done 2 csi 0 0 0 }
+            } {}
+            ? & >= c 64 <= c 126 {
+                ? == c 68 { = pos ( _term_prev_pos buf pos ) } {}
+                ? == c 67 { = pos ( _term_next_pos buf pos ) } {}
+                ? == c 72 { = pos 0 } {}
+                ? == c 70 { = pos ( string_len buf ) } {}
+                ? & == c 65 > hidx 0 {
+                    = hidx - hidx 1
+                    ?? ( vec_get [String] history hidx ) {
+                        T h → { ( __term_setbuf buf ( string_data h ) ) = pos ( string_len buf ) }
+                        F _ → {}
+                    }
+                } {}
+                ? & == c 66 < hidx ( vec_len [String] history ) {
+                    = hidx + hidx 1
+                    ? == hidx ( vec_len [String] history ) {
+                        ( __term_setbuf buf `` )
+                        = pos 0
+                    } {
+                        ?? ( vec_get [String] history hidx ) {
+                            T h → { ( __term_setbuf buf ( string_data h ) ) = pos ( string_len buf ) }
+                            F _ → {}
+                        }
+                    }
+                } {}
+                ? == c 126 {
+                    ? | == csi 1 == csi 7 { = pos 0 } {}
+                    ? | == csi 4 == csi 8 { = pos ( string_len buf ) } {}
+                    ? == csi 3 {
+                        : i nx ( _term_next_pos buf pos )
+                        ( __term_delete_range buf pos nx )
+                    } {}
+                } {}
+                ^ @ _TermEd { pos hidx done 0 0 0 0 0 }
+            } {}
+            ? == c 27 { ^ @ _TermEd { pos hidx done 1 0 0 0 0 } } {}
+            ^ @ _TermEd { pos hidx done 0 0 0 0 0 }
+        } {}
+    } {}
+
+    ? | == c 13 == c 10 {
+        = done 1
+    } {
+        ? | == c 3 & == c 4 == ( string_len buf ) 0 {
+            = done 2
+        } {
+            ? == c 4 {
+                : i nx ( _term_next_pos buf pos )
+                ( __term_delete_range buf pos nx )
+            } {
+                ? | == c 127 == c 8 {
+                    ? > pos 0 {
+                        : i pv ( _term_prev_pos buf pos )
+                        ( __term_delete_range buf pv pos )
+                        = pos pv
+                    } {}
+                } {
+                    ? == c 1 {
+                        = pos 0
+                    } {
+                        ? == c 5 {
+                            = pos ( string_len buf )
+                        } {
+                            ? == c 11 {
+                                ( __term_truncate buf pos )
+                            } {
+                                ? == c 27 {
+                                    = esc 1
+                                } {
+                                    ? & >= c 32 < c 127 {
+                                        ( __term_insert_at buf pos c )
+                                        = pos + pos 1
+                                    } {
+                                        ? & >= c 194 < c 224 {
+                                            = cp & c 31
+                                            = need 1
+                                            = umin 160
+                                        } {
+                                            ? & >= c 224 < c 240 {
+                                                = cp & c 15
+                                                = need 2
+                                                = umin 2048
+                                            } {
+                                                ? & >= c 240 < c 245 {
+                                                    = cp & c 7
+                                                    = need 3
+                                                    = umin 65536
+                                                } {}
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    ^ @ _TermEd { pos hidx done esc csi need cp umin }
 }
 
 @ term_read_line s prompt ( Vec String ) history → ?String {
@@ -243,62 +565,18 @@ raw : TermState { i fd ( Vec u ) saved }
 // returning on every path).
 @ __term_edit TermState st s prompt ( Vec String ) history → ?String {
     : String buf ( string_with_cap 64 )
-    : ~ i pos 0
-    : ~ i hidx ( vec_len [String] history )  // one past newest
-    : ~ i done 0  // 0 = editing, 1 = accepted, 2 = cancelled
-    ( __term_repaint prompt buf pos )
-    ~ == done 0 {
+    : ~ _TermEd ed ( _term_ed_new history )
+    ( __term_repaint prompt buf . ed pos )
+    ~ == . ed done 0 {
         : i c ( __term_getb )
-        ? | == c 13 == c 10 { = done 1 } {
-            ? | == c 3 & == c 4 == ( string_len buf ) 0 { = done 2 } {
-                ? | == c 127 == c 8 {
-                    ? > pos 0 {
-                        ( __term_delete_at buf - pos 1 )
-                        = pos - pos 1
-                    } {}
-                } {
-                    ? == c 1 { = pos 0 } {  // Ctrl-A
-                        ? == c 5 { = pos ( string_len buf ) } {  // Ctrl-E
-                            ? == c 11 {  // Ctrl-K
-                                ( __term_truncate buf pos )
-                            } {
-                                ? == c 27 {  // ESC [ ...
-                                    : i c1 ( __term_getb )
-                                    ? == c1 91 {
-                                        : i c2 ( __term_getb )
-                                        ? & == c2 68 > pos 0 { = pos - pos 1 } {}  // left
-                                        ? & == c2 67 < pos ( string_len buf ) { = pos + pos 1 } {}  // right
-                                        ? & == c2 65 > hidx 0 {  // up
-                                            = hidx - hidx 1
-                                            ?? ( vec_get [String] history hidx ) {
-                                                T h → { ( __term_setbuf buf ( string_data h ) ) = pos ( string_len buf ) }
-                                                F _ → {}
-                                            }
-                                        } {}
-                                        ? & == c2 66 < hidx ( vec_len [String] history ) {  // down
-                                            = hidx + hidx 1
-                                            ? == hidx ( vec_len [String] history ) {
-                                                ( __term_setbuf buf `` )
-                                                = pos 0
-                                            } {
-                                                ?? ( vec_get [String] history hidx ) {
-                                                    T h → { ( __term_setbuf buf ( string_data h ) ) = pos ( string_len buf ) }
-                                                    F _ → {}
-                                                }
-                                            }
-                                        } {}
-                                    } {}
-                                } {
-                                    ? & >= c 32 < c 127 {  // printable insert
-                                        ( __term_insert_at buf pos c )
-                                        = pos + pos 1
-                                    } {}
-                                } } } } } } }
-        ? == done 0 { ( __term_repaint prompt buf pos ) } {}
+        = ed ( _term_feed ed buf c history )
+        ? & == . ed done 0 & == . ed utf8_need 0 == . ed esc 0 {
+            ( __term_repaint prompt buf . ed pos )
+        } {}
     }
     ( term_raw_disable st )
     ( nurl_print `\n` )
-    ? == done 1 { ^ @ ?String { T buf } } {}
+    ? == . ed done 1 { ^ @ ?String { T buf } } {}
     ^ @ ?String { F }
 }
 
