@@ -10,6 +10,197 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Unreleased changes are fragments in [`changes/unreleased/`](changes/unreleased/) until a release folds them in here (`tools/changelog.py`).
 
+## [0.90.0] — 2026-11-07
+
+### Added
+
+- **nurllama runs GLM-5.x (`glm-dsa`)** (Agora #513). MLA attention in
+  the absorbed form (every head attends one shared `[latent | rope]` cache
+  row; per-head `k_b` / `v_b`), DeepSeek sparse attention (the lightning
+  indexer's top-k selection, "shared" layers reusing the last full
+  layer's), and the sigmoid-routed MoE with a shared expert, read from
+  llama.cpp's `glm-dsa` GGUF layout. The tokenizer reads the `glm4` /
+  `glm5` pre-split (digits in threes) with `ignore_merges`.
+  `tests/glm_dsa_test.sh` checks logits and greedy text against HF
+  transformers on a tiny random checkpoint.
+
+- **nurllama serves an OpenAI-compatible API** (Agora #514):
+  `/v1/chat/completions`, `/v1/completions` and `/v1/models` beside
+  ollama's routes, with SSE streaming, usage, stop sequences and OpenAI's
+  error shape; ollama's and OpenAI's routes run one generation loop.
+
+- **nurllama renders GLM's chat templates** (Agora #517): GLM-5.2 / 5.3
+  and GLM-5 / 5.1 (and GLM-4.7), byte-identical to HF's
+  `apply_chat_template`; they were taken for phi3's.
+
+- **nurllama returns a reasoning model's reasoning apart from its answer**
+  (Agora #518): `reasoning_content` on the OpenAI routes and `thinking` on
+  ollama's, streamed and whole, and takes `reasoning_effort`,
+  `chat_template_kwargs` and ollama's `think` as the model's chat template
+  reads them.
+
+- **nurllama runs EXL3 weights** (Agora #519): exllamav3's trellis
+  quantisation (MCG, MUL1 and 3INST codebooks, 1–8 and half-integer bits)
+  as a weight type its matvec runs without expanding it, bit-exact against
+  exllamav3's own reference on CUDA and the CPU backend.
+
+- **nurllama runs a Hugging Face checkpoint directory directly** (Agora
+  #520): config.json, tokenizer.json and the safetensors shards, with no
+  GGUF copy — llama, mistral, qwen2, qwen3 and glm_moe_dsa, any linear
+  stored as EXL3 run as EXL3.
+
+### Fixed
+
+- **A closure cannot hand back a local holder of views of what it captured, nor drop locals under a tail return without `^`** (Agora #473). A closure body that pushed a captured view or view-holder into a local `Vec`, assigned one into a field of a local struct, passed it through a view-propagating helper, or popped an element back out and returned the local holder did not record the capture in the holder's view dependencies, letting views of freed storage escape to the caller (`h220`). Likewise, a function or closure body ending in a `?` or `??` expression without `^` closed its local scope before checking the returned value, and a body ending in a closure literal `\ … → … { … }` without `^` did not mark the closure as returned, leaving bitwise copies of released locals in its environment. Capture roots that hold views now propagate through calls, field writes, and container operations into local holders, `bck_ret_view_check` refuses any closure return whose view or handle-copy sources reach a capture while still allowing views of the closure's own parameters, implicit tail `?`/`??` returns are checked before scope exit, and tail closure literals take the returned-closure path.
+
+- **A field read two or more levels deep off a call's result releases the temporary** (Agora #474). `. . ( boxit … ) v b`, `: String s . . ( boxit … ) v a`, `. . . ( box2 k ) w v b` and the generic forms leaked the struct the inner read took out of the call's result, with everything it owned: the inner read handed that struct on as a value of its own, but the outer read only treated a call's result as a temporary. A read whose object is a field just taken out of a call's result now treats it as that temporary, owned exactly when the call handed its result over: the rest is dropped where it is read, and an owning field (a String, a Vec, a closure) leaves as a value of its own that a binding, an argument, a return or a literal takes over. A result the call only lent releases nothing.
+
+- **A slice literal owns its elements** (Agora #485). `[ String | ( string_from … ) ]`, a slice of Vecs, of struct or enum literals that own something, never released those values: freeing the slice's buffer released only the buffer, whether the slice was a binding, reassigned (`= sl [ … ]`), a struct's field or a function's result. A slice literal that named a binding (`[ String | a ]`) held that binding's very buffer instead, a second owner no rule saw: `a` handed to a keeper and released left the slice reading freed memory, and a loop element of the slice handed to a `sink` released `a` under its owner. An owned slice whose element type owns something now owns its elements, as a slice of closures owns its environments: a fresh element moves in, any other (a binding, a parameter, a field, a borrowing call's result) is copied in, an element store (`= . sl k v`) drops the element it replaces, and freeing the buffer drops the elements first. An element that cannot be copied must be a fresh value, and a binding stored into an element is refused (store a copy, `( string_clone b )`). A slice of numbers, raw strings or views is unchanged.
+- **A slice literal handed back bare is freed by the caller** (Agora #485). `^ [ i | 1 2 3 ]`, a fall-off `[ … ]`, a join of literals or a forwarder of one returned a buffer no one freed; `^ s` with `s` bound to the literal already was.
+- **A function that returns its own slice on one path and its slice parameter on another no longer has the caller free the parameter** (Agora #485). Whether a function hands back an owned slice was one flag set by any return site, so `? c { ^ p } {} ^ s` (and a closure's `^ [ … ]` inside it) made the caller free the slice it had passed in, which its owner freed again (a double free). As for a raw string, every return site must now hand back the function's own slice.
+- **A `~` loop's element kept by a callee no longer leaks** (Agora #484). `~ x t { ( vec_push [String] keep x ) }` handed `keep` a copy of the element and emptied the element's slot as well, so the element itself was never released. The slot is emptied only where the callee takes the element itself (a `sink`, a consumer handed no copy), as for a field read.
+
+- **Verified TLS works on Windows** (Agora #504). The trust anchors came
+  from `SSL_CERT_FILE` or three Unix bundle paths, none of which exists
+  on Windows, so every `tls_connect`, `http_get` and `hub pull` to an
+  `https://` server failed with a TLS error there. Windows keeps no bundle,
+  and its certificate store holds only the roots the machine has needed
+  so far, so reading that store would still miss most of them. When no
+  bundle anchors the chain and `SSL_CERT_FILE` is unset, the anchor step
+  now asks the Windows chain engine (`CertGetCertificateChain` with the
+  SSL policy), which fetches a trusted root it has not seen yet. NURL's
+  own checks (hostname, validity, chain links, CA constraints) still run
+  first. crypt32 is loaded at run time, so no link line changes.
+  `SSL_CERT_FILE` still replaces the system's trust rather than extending
+  it. Elsewhere nothing changes.
+
+- **hub reads a Hugging Face web URL as the ref it names** (Agora #505,
+  packages/hub 0.2.5). `hub pull https://huggingface.co/org/repo` — the
+  address a browser shows — pulls the repository, `…/tree/<rev>` the
+  repository at that revision, and `…/blob/<rev>/<path>` (or `/resolve/`,
+  `/raw/`) that one file. Every `https://` ref used to be downloaded
+  as-is, so the repository page's HTML landed in the cache instead of the
+  model. `hf.co`, `www.huggingface.co`, the `$HF_ENDPOINT` host and the
+  URL without `https://` work the same; a dataset, a Space or a tree
+  subdirectory is an error rather than a page download.
+
+- **`term_read_line` edits UTF-8 text and counts terminal display columns**
+  (Agora #506, `stdlib/std/term.nu`). `__term_edit` filtered input through
+  `>= 32 && < 127`, so `nurllama chat`, `nurl repl` and the database/CLI
+  prompts silently dropped every non-ASCII byte (`ä`, `ö`, `€`, CJK, emoji),
+  stepped Left/Right and Backspace one byte at a time, walked the cursor back
+  by byte length instead of column width on repaint, and spun on stdin EOF.
+  The line editor now decodes 2–4-byte UTF-8 sequences (rejecting overlongs,
+  surrogates, C1 controls and out-of-range scalars while recovering cleanly
+  when a sequence is cut short), moves and deletes across UTF-8 character and
+  combining-mark boundaries, counts 0/1/2-column widths when positioning the
+  cursor, handles `Home`/`End`/`Delete` CSI/SS3 sequences without leaking
+  `~`, repaints once per completed key or character, and returns `None` on
+  stdin EOF.
+
+- **nurllama: a token-auth server checks the token on every data route**
+  (Agora #515) — ollama's `/api/*` routes answered without it.
+- **nurllama: sampling with top-k off no longer takes O(vocabulary²)**
+  a token, and generated text always reaches a client as valid UTF-8.
+
+- **nurllama ends a generation on the model's end-of-turn and
+  end-of-message ids** (`tokenizer.ggml.eot_token_id` / `eom_token_id`),
+  not only on eos — a GLM reply ran on into the next turn.
+
+- **tokenizer: a llama3 GGUF (`llama-bpe`) is split as llama3 splits**
+  (digits in threes, ignore_merges), not the gpt2 way.
+
+### Changed
+
+- **tokenizer 0.6.0**, **hub 0.2.5** and **nurllama 0.25.0** are published.
+  nurllama runs GLM-5.x (`glm-dsa`), serves an OpenAI-compatible API beside
+  the ollama one, returns a reasoning model's reasoning apart from its
+  answer, runs EXL3 weights and opens a Hugging Face checkpoint directory
+  directly; the tokenizer splits llama3 (`llama-bpe`) and GLM text as they
+  are split; hub reads a Hugging Face web URL as the ref it names. See each
+  package's CHANGELOG.
+
+### Known issues
+
+- **61 soundness holes are open, each with a fix in progress**: agora
+  #242 (a join or a value block bound by `:` and then handed on by name,
+  in nine remaining shapes), #280 (a field a `sink` took, used again by
+  a route the check does not see), #294 (a struct built from an owner
+  and a view of it views its own buffer), #345 (a view of an Rc's state
+  through one share, replaced through another), #348 (a nested field
+  store of a view), #349 (an element of a Vec handed out by a program
+  function or by nested calls, then grown), #350 (a change through a `~
+  e vv` loop's element, made by a callee), #357 (a field of a match
+  payload handed to a `sink`), #360 (a `?` / `??` join whose arms are
+  field paths), #364 (an enum binding given a new value inside its own
+  match arm), #366 (an owner's old value whose hand-over has no key:
+  kept back (a leak) on a lend path, freed under its borrower on an
+  owned one), #367 (a `??` used as a value whose arm hands out a view
+  payload), #373 (a `vec_get` binding kept across a call that moves the
+  elements), #378 (an option owner given a lend inside a closure, out of
+  a capture, through a forwarder defined above the closure), #381 (a
+  callee's local viewed by an `inout` holder, then moved into the
+  caller's `inout` field), #382 (a panic under `recover` between a
+  holder's store of a callee local's view and its repoint), #383 (a
+  callee that leaves one argument viewing another's elements), #384 (a
+  handle's own drop hook that reads a view), #387 (a second reader of a
+  field, after the field is replaced), #390 (a callee that views its
+  `inout String` into a holder, then grows that String), #391 (a Vec
+  element passed as a holder argument), #392 (a view-holding value
+  stored into an Rc's shared state), #393 (mutual recursion that swaps
+  its source arguments), #395 (a store through a borrow that #292 does
+  not follow to its owner), #396 (a view taken through a String field
+  reader, kept past a realloc of that field), #406 (a `\` whose tried
+  call changes an `inout` holder and then fails), #407 (a defer armed
+  inside a loop or an arm that stores a local's view into an `inout`
+  holder), #408 (a defer that reads a holder viewing a value bound after
+  the defer), #424 (a borrow of a `??` payload, and the scrutinee handed
+  to a callee that clears it), #427 (an option owner given what a call
+  may hand back of its own value, where nurlc has no lend fact for the
+  call at that line), #428 (a change made in place by a route that does
+  not reach the owner), #434 (a keyword-argument call records no borrow
+  rows), #445 (a closure called with a binding it replaces, by any route
+  but a direct call), #450 (an owner given a part of its own value, or a
+  value that shares part of it, while nurlc takes the result for another
+  value), #460 (two `??` payload bindings of one enum value, a change
+  through one), #461 (a parameter's element reached by a route #447 does
+  not follow, handed to a clearing callee), #462 (a function binding a
+  lent element of its parameter, or an enum payload of one, and handing
+  the binding back), #464 (a temporary argument freed right after the
+  call while the callee's result views it), #466 (an `inout` view
+  parameter kept in a second holder, an `s` global or a thread), #467 (a
+  returned closure that captured a holder given a view of a parameter),
+  #468 (a closure literal whose `( Vec s )` parameter is the holder of
+  `vec_extend`), #469 (a closure that captured an owner of views by
+  value, run on another thread), #472 (an iterator yields copies of what
+  it captured), #475 (the keep rule and the `inout` store for a `!i
+  String`, a `? ?String` or a `!( Rc String ) String`), #478 (a second
+  name of a fresh `s` binding's buffer handed back), #479 (a copied
+  closure that views a local, a closure body handing a `sink` a value
+  derived from its capture, and a statement-form match arm returning a
+  closure over a borrowed field), #481 (a `dyn` impl that calls its own
+  method through a dyn field), #482 (a `~ x b` loop over a borrow of a
+  container's element, the container changed in the body by its own
+  name), #483 (a closure literal capturing a `vec_at` binding's
+  element), #487 (a bare `s` view handed back through a `?` join, or
+  from a `??` payload inside an `if`, a loop or after another
+  statement), #488 (a field given a new value through a `~` loop's
+  struct element), #489 (an `unsafe` function handing back a view of its
+  `~` loop's element over a parameter), #490 (a `~` loop's element moved
+  out — handed to a sink, `string_free`, `vec_free`), #491 (a defer
+  armed in an inner block reading a borrow bound in that block), #492 (a
+  view-class `~` loop element read after what it views changes), #493 (a
+  `~ x t` loop going on after `t` grew through another name), #494 (a
+  container handed to a `sink` parameter together with a borrow of its
+  element), #496 (a parameter's element grown by a closure, a closure
+  parameter or through a `??` payload), #497 (an element bound through
+  one Rc handle and grown, viewed through another handle of the same
+  Rc), #498 (a `: ~` cursor bound to a `?` join whose arms are owners or
+  their fields) and #499 (a value block whose tail is an outer borrow).
+  `docs/LIMITATIONS.md` gives each one's shape and how to stay clear of
+  it. Closed in this release: agora #473, #484, #485. A release does not
+  say "no hole is known open" while one is.
+
 ## [0.89.0] — 2026-11-06
 
 ### Added

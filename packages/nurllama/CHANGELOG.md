@@ -2,7 +2,7 @@
 
 All notable changes to the `nurllama` package.
 
-## [0.25.0] — unreleased
+## [0.25.0] — 2026-11-07
 
 Requires NURL 0.89.0 and tokenizer 0.6.
 
