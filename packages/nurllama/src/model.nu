@@ -62,6 +62,8 @@ $ `stdlib/std/float.nu`
 $ `deps/gguf/src/gguf.nu`
 $ `deps/gguf/src/dequant.nu`
 $ `deps/safetensor/src/safetensor.nu`
+$ `hfmodel.nu`
+$ `exl3.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/std/time.nu`
 $ `deps/gpu/src/gpu.nu`
@@ -166,12 +168,14 @@ $ `stdlib/core/slice.nu`
     Gguf gg
     // A SECOND weight source: the same model, in the container Hugging Face
     // ships it in. The GGUF still supplies the hyperparameters and the
-    // tokenizer; the tensors come from here when there is one (T).
+    // tokenizer; the tensors come from here when there is one (T): the
+    // --weights file, or a checkpoint directory's shards (hfmodel.nu —
+    // its GGUF then holds only metadata).
     // This is how the safetensor reader is proven: run the same model from
     // both containers and require the logits to agree.
-    ? St st
+    ? StSet st
     b st_norm_add1
-    i st_embd
+    i st_embd  // the embedding's handle in `st` (stset_find), -1 = none
     i embd_idx
     ( Vec u ) embd_host
     i dev_bytes  // device memory the model holds (NURLLAMA_VERBOSE)
@@ -319,6 +323,12 @@ $ `stdlib/core/slice.nu`
     // llama.cpp's llama_vocab_is_eog reads them. GLM ends its turn with
     // `<|user|>` (its eot), not its eos.
     ( Vec i ) eog
+    // EXL3 linears (exl3.nu), whatever the architecture: the codebook
+    // tables and the scratch every EXL3 matvec rotates through, made with
+    // the first such weight
+    b exl3_on
+    Exl3Luts exl3
+    GkBuf exl3_aux
 }
 
 // What a loaded model is and never changes: read without waiting for an
@@ -354,7 +364,7 @@ $ `stdlib/core/slice.nu`
         F 0 0 0 0 0 0 0 0 0.0 F
         ( vec_new [LmW] ) ( vec_new [f] ) ( vec_new [LmW] ) ( vec_new [LmW] ) ( vec_new [LmW] ) ( vec_new [LmW] ) ( vec_new [LmW] ) ( vec_new [LmW] )
         ( gk_buf_none GK_F32 ) ( gpu_host_none ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_I64 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 )
-        ( gguf_empty ) @ ?St { F } F 0 0 ( vec_new [u] ) 0 F
+        ( gguf_empty ) @ ?StSet { F } F 0 0 ( vec_new [u] ) 0 F
         ( vec_new [GkBuf] ) ( vec_new [GkBuf] ) ( vec_new [GkBuf] ) ( vec_new [GkBuf] ) ( vec_new [GkBuf] ) ( vec_new [GkBuf] ) ( vec_new [GkBuf] ) ( vec_new [GkBuf] )
         ( vec_new [LmW] ) ( vec_new [LmW] ) ( vec_new [LmW] ) ( vec_new [LmW] ) ( vec_new [GkBuf] ) ( vec_new [LmW] ) ( vec_new [LmW] ) ( vec_new [LmW] )
         ( gk_buf_none GK_F32 ) ( __lm_w_none ) ( vec_new [GkBuf] ) ( vec_new [GkBuf] )
@@ -373,7 +383,8 @@ $ `stdlib/core/slice.nu`
         ( vec_new [LmW] ) ( vec_new [LmW] ) ( vec_new [GkBuf] ) ( vec_new [GkBuf] ) ( vec_new [LmW] ) ( vec_new [GkBuf] )
         ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 )
         ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_I64 )
-        ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) } )
+        ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
+        F @ Exl3Luts { ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) } ( gk_buf_none GK_F32 ) } )
 }
 
 @ __lm_handle sink LlmImpl m → Llm {
@@ -585,7 +596,8 @@ $ `stdlib/core/slice.nu`
 @ __lm_hf_name s name b gemma → String {
     ? ( nurl_str_eq name `token_embd.weight` ) { ^ ( string_from `model.embed_tokens.weight` ) } {}
     ? ( nurl_str_eq name `output_norm.weight` ) { ^ ( string_from `model.norm.weight` ) } {}
-    ? ( nurl_str_eq name `output.weight` ) { ^ ( string_new ) } {}
+    // (absent from a tied-embedding checkpoint: the caller falls back)
+    ? ( nurl_str_eq name `output.weight` ) { ^ ( string_from `lm_head.weight` ) } {}
     // blk.<L>.<suffix> → model.layers.<L>.<hf suffix>
     ? != 0 ( nurl_str_starts name `blk.` ) {} { ^ ( string_new ) }
     : i dot ( __lm_find_from name 4 46 )
@@ -619,6 +631,24 @@ $ `stdlib/core/slice.nu`
     ? ( nurl_str_eq suf `ffn_gate.weight` ) { = hf `mlp.gate_proj.weight` } {}
     ? ( nurl_str_eq suf `ffn_up.weight` ) { = hf `mlp.up_proj.weight` } {}
     ? ( nurl_str_eq suf `ffn_down.weight` ) { = hf `mlp.down_proj.weight` } {}
+    // MLA (DeepSeek-style low-rank attention) and its DSA indexer
+    ? ( nurl_str_eq suf `attn_q_a.weight` ) { = hf `self_attn.q_a_proj.weight` } {}
+    ? ( nurl_str_eq suf `attn_q_a_norm.weight` ) { = hf `self_attn.q_a_layernorm.weight` } {}
+    ? ( nurl_str_eq suf `attn_q_b.weight` ) { = hf `self_attn.q_b_proj.weight` } {}
+    ? ( nurl_str_eq suf `attn_kv_a_mqa.weight` ) { = hf `self_attn.kv_a_proj_with_mqa.weight` } {}
+    ? ( nurl_str_eq suf `attn_kv_a_norm.weight` ) { = hf `self_attn.kv_a_layernorm.weight` } {}
+    ? ( nurl_str_eq suf `indexer.attn_q_b.weight` ) { = hf `self_attn.indexer.wq_b.weight` } {}
+    ? ( nurl_str_eq suf `indexer.attn_k.weight` ) { = hf `self_attn.indexer.wk.weight` } {}
+    ? ( nurl_str_eq suf `indexer.k_norm.weight` ) { = hf `self_attn.indexer.k_norm.weight` } {}
+    ? ( nurl_str_eq suf `indexer.k_norm.bias` ) { = hf `self_attn.indexer.k_norm.bias` } {}
+    ? ( nurl_str_eq suf `indexer.proj.weight` ) { = hf `self_attn.indexer.weights_proj.weight` } {}
+    // a Mixture of Experts' router and shared expert (the routed experts'
+    // stacks are composed: __lm_st_f32)
+    ? ( nurl_str_eq suf `ffn_gate_inp.weight` ) { = hf `mlp.gate.weight` } {}
+    ? ( nurl_str_eq suf `exp_probs_b.bias` ) { = hf `mlp.gate.e_score_correction_bias` } {}
+    ? ( nurl_str_eq suf `ffn_gate_shexp.weight` ) { = hf `mlp.shared_experts.gate_proj.weight` } {}
+    ? ( nurl_str_eq suf `ffn_up_shexp.weight` ) { = hf `mlp.shared_experts.up_proj.weight` } {}
+    ? ( nurl_str_eq suf `ffn_down_shexp.weight` ) { = hf `mlp.shared_experts.down_proj.weight` } {}
     ? == 0 ( nurl_str_len hf ) { ^ ( string_new ) } {}
     : String out ( string_from `model.layers.` )
     ( string_push_str out num )
@@ -715,24 +745,204 @@ $ `stdlib/core/slice.nu`
 // model produces confident nonsense, which is exactly how it was found the
 // first time.)
 @ __lm_upload_st inout LlmImpl m s name → LkW {
-    : St sf ?? . m st { T s0 → s0 F → { ^ ( lk_w_none ) } }
+    : StSet ss ?? . m st { T s0 → s0 F → { ^ ( lk_w_none ) } }
+    // an EXL3 linear: the HF name's tensor group (trellis, suh, svh), for
+    // any architecture's linear
     : String hf ( __lm_hf_name name . m st_norm_add1 )
-    ? == 0 ( string_len hf ) {
-        ^ ( lk_w_none )
+    ? & > ( string_len hf ) 7 != 0 ( nurl_str_ends ( string_data hf ) `.weight` ) {
+        : String base ( string_substr hf 0 - ( string_len hf ) 7 )
+        : String tn ( string_clone base )
+        ( string_push_str tn `.trellis` )
+        : i th ( stset_find ss ( string_data tn ) )
+        ? >= th 0 {
+            ? . m exl3_on {} {
+                = . m exl3 ( exl3_luts . m kit )
+                : i span * LM_CHUNK ( stset_exl3_span ss )
+                = . m exl3_aux ( __lm_scratch m span )
+                = . m dev_bytes + . m dev_bytes * 3 * 65536 4
+                = . m exl3_on T
+            }
+            ?? ( exl3_upload . m kit ( stset_file ss th ) ( string_data base ) . m exl3 . m exl3_aux ) {
+                T w → { ^ w }
+                F e → { ( nurl_eprintln ( string_data e ) ) ^ ( lk_w_none ) }
+            }
+        } {}
     } {}
-    : i ti ( st_find_tensor sf ( string_data hf ) )
+    ?? ( __lm_st_f32 m name ) {
+        T raw → { ^ ( __lm_up_f32 m raw ) }
+        F → { ^ ( lk_w_none ) }
+    }
+}
+
+// Tensor `name` (a GGUF name) from the safetensors source as f32 bytes in
+// the GGUF's layout, or F when the source has none. Most are one HF tensor
+// (permuted for a NORM rotary, +1 for gemma's norms); two are composed:
+//   blk.L.ffn_{gate,up,down}_exps   the routed experts' stack, expert-major,
+//                                   from mlp.experts.E.<proj> (or
+//                                   transformers 5's fused gate_up_proj /
+//                                   down_proj)
+//   blk.L.attn_k_b / attn_v_b       MLA's per-head k_b ([kv_lora × nope],
+//                                   transposed) and v_b ([v × kv_lora]) out
+//                                   of kv_b_proj — llama.cpp's split
+@ __lm_st_f32 inout LlmImpl m s name → ?( Vec u ) {
+    : StSet ss ?? . m st { T s0 → s0 F → { ^ @ ?( Vec u ) { F } } }
+    ? != 0 ( nurl_str_starts name `blk.` ) {
+        : i dot ( __lm_find_from name 4 46 )
+        : s num ( nurl_str_slice name 4 - dot 4 )
+        : s suf ( nurl_str_slice name + dot 1 - ( nurl_str_len name ) + dot 1 )
+        : String pre ( string_from `model.layers.` )
+        ( string_push_str pre num )
+        ( string_push_char pre 46 )
+        ? | | ( nurl_str_eq suf `ffn_gate_exps.weight` ) ( nurl_str_eq suf `ffn_up_exps.weight` ) ( nurl_str_eq suf `ffn_down_exps.weight` ) {
+            : s proj ? ( nurl_str_eq suf `ffn_gate_exps.weight` ) `gate_proj` ? ( nurl_str_eq suf `ffn_up_exps.weight` ) `up_proj` `down_proj`
+            ^ ( __lm_st_experts m ss ( string_data pre ) proj )
+        } {}
+        ? | ( nurl_str_eq suf `attn_k_b.weight` ) ( nurl_str_eq suf `attn_v_b.weight` ) {
+            : String kvn ( string_clone pre )
+            ( string_push_str kvn `self_attn.kv_b_proj.weight` )
+            : i h ( stset_find ss ( string_data kvn ) )
+            ? < h 0 { ^ @ ?( Vec u ) { F } } {}
+            ?? ( stset_dequant ss h ) {
+                T kv → { ^ @ ?( Vec u ) { T ( __lm_kvb_split m kv != 0 ( nurl_str_eq suf `attn_k_b.weight` ) ) } }
+                F _ → { ^ @ ?( Vec u ) { F } }
+            }
+        } {}
+    } {}
+    : String hf ( __lm_hf_name name . m st_norm_add1 )
+    ? == 0 ( string_len hf ) { ^ @ ?( Vec u ) { F } } {}
+    : i h ( stset_find ss ( string_data hf ) )
+    ? < h 0 { ^ @ ?( Vec u ) { F } } {}
     : b is_norm != 0 ( nurl_str_ends ( string_data hf ) `norm.weight` )
-    ? < ti 0 { ^ ( lk_w_none ) } {}
-    ?? ( st_dequant sf ti ) {
+    ?? ( stset_dequant ss h ) {
         T raw → {
             ( __lm_st_rope_permute m name raw )
             ? & . m st_norm_add1 is_norm { ( __lm_add1 raw ) } {}
-            ^ ( __lm_up_f32 m raw )
+            ^ @ ?( Vec u ) { T raw }
         }
-        F e → {
-            ^ ( lk_w_none )
-        }
+        F _ → { ^ @ ?( Vec u ) { F } }
     }
+}
+
+// The routed experts' stack for projection `proj` of layer prefix `pre`
+// (`model.layers.L.`), expert-major f32: each expert's [rows × cols]
+// matrix after the previous one's.
+@ __lm_st_experts inout LlmImpl m StSet ss s pre s proj → ?( Vec u ) {
+    : ( Vec u ) out ( vec_new [u] )
+    : ~ i e 0
+    ~ < e . m n_expert {
+        : String nm ( string_from pre )
+        ( string_push_str nm `mlp.experts.` )
+        ( string_push_int nm e )
+        ( string_push_char nm 46 )
+        ( string_push_str nm proj )
+        ( string_push_str nm `.weight` )
+        : i h ( stset_find ss ( string_data nm ) )
+        ? < h 0 {
+            ? > e 0 { ^ @ ?( Vec u ) { F } } {}
+            ^ ( __lm_st_experts_fused m ss pre proj )
+        } {}
+        ?? ( stset_dequant ss h ) {
+            T raw → { ( vec_extend [u] out raw ) }
+            F _ → { ^ @ ?( Vec u ) { F } }
+        }
+        = e + e 1
+    }
+    ^ @ ?( Vec u ) { T out }
+}
+
+// transformers 5's fused experts: mlp.experts.gate_up_proj [E, 2·ff, n_embd]
+// (each expert's gate rows, then its up rows) and mlp.experts.down_proj
+// [E, n_embd, ff] — already expert-major.
+@ __lm_st_experts_fused inout LlmImpl m StSet ss s pre s proj → ?( Vec u ) {
+    : b down != 0 ( nurl_str_eq proj `down_proj` )
+    : String nm ( string_from pre )
+    ( string_push_str nm ? down `mlp.experts.down_proj` `mlp.experts.gate_up_proj` )
+    : i h ( stset_find ss ( string_data nm ) )
+    ? < h 0 { ^ @ ?( Vec u ) { F } } {}
+    : ( Vec u ) raw ?? ( stset_dequant ss h ) { T r → r F _ → { ^ @ ?( Vec u ) { F } } }
+    ? down { ^ @ ?( Vec u ) { T raw } } {}
+    // one projection's half of every expert's gate_up block
+    : i half * * . m moe_ff . m n_embd 4
+    : i first ? ( nurl_str_eq proj `gate_proj` ) 0 half
+    : ( Vec u ) out ( vec_with_cap [u] * half . m n_expert )
+    : ( Slice u ) rv ( slice_from_vec [u] raw )
+    : ~ i e 0
+    ~ < e . m n_expert {
+        : ( Slice u ) part ( slice_window [u] rv + * e * 2 half first half )
+        : ~ i j 0
+        ~ < j half { ( vec_push [u] out ( slice_at [u] part j ) ) = j + j 1 }
+        = e + e 1
+    }
+    ^ @ ?( Vec u ) { T out }
+}
+
+// MLA's kv_b_proj [n_head·(nope + v), kv_lora] (f32 bytes) split as
+// llama.cpp splits it: k_b, per head the [kv_lora × nope] transpose of the
+// head's first nope rows; v_b, per head its last v rows [v × kv_lora].
+@ __lm_kvb_split inout LlmImpl m ( Vec u ) kv b want_k → ( Vec u ) {
+    : i nh . m n_head
+    : i nope . m qk_nope
+    : i vm . m v_mla
+    : i kvl . m kv_lora
+    : i per + nope vm
+    : ( Slice u ) src ( slice_from_vec [u] kv )
+    : ( Vec u ) out ( vec_with_cap [u] * * * nh ? want_k nope vm kvl 4 )
+    : ~ i h 0
+    ~ < h nh {
+        : i r0 * h per
+        ? want_k {
+            : ~ i r 0
+            ~ < r kvl {
+                : ~ i c 0
+                ~ < c nope {
+                    ( bytes_push_u32_le out # u32 ( slice_u32_le src * 4 + * + r0 c kvl r ) )
+                    = c + c 1
+                }
+                = r + r 1
+            }
+        } {
+            : ~ i r 0
+            ~ < r vm {
+                : ~ i c 0
+                ~ < c kvl {
+                    ( bytes_push_u32_le out # u32 ( slice_u32_le src * 4 + * + + r0 nope r kvl c ) )
+                    = c + c 1
+                }
+                = r + r 1
+            }
+        }
+        = h + h 1
+    }
+    ^ out
+}
+
+// Tensor `name` as f32 bytes from either source — the safetensors one
+// first, as __lm_upload looks — or F.
+@ __lm_f32_of inout LlmImpl m Gguf gg s name → ?( Vec u ) {
+    ?? ( __lm_st_f32 m name ) { T raw → { ^ @ ?( Vec u ) { T raw } } F → {} }
+    : i ti ( gguf_find_tensor gg name )
+    ? < ti 0 { ^ @ ?( Vec u ) { F } } {}
+    ?? ( gguf_dequant gg ti ) {
+        T raw → { ^ @ ?( Vec u ) { T raw } }
+        F _ → { ^ @ ?( Vec u ) { F } }
+    }
+}
+
+// Whether the model has tensor `name` (a GGUF name), in either source.
+@ __lm_has inout LlmImpl m Gguf gg s name → b {
+    ?? . m st {
+        T ss → {
+            : String hf ( __lm_hf_name name . m st_norm_add1 )
+            ? > ( string_len hf ) 0 {
+                ? >= ( stset_find ss ( string_data hf ) ) 0 { ^ T } {}
+                : String tn ( string_substr hf 0 - ( string_len hf ) 7 )
+                ( string_push_str tn `.trellis` )
+                ? >= ( stset_find ss ( string_data tn ) ) 0 { ^ T } {}
+            } {}
+        }
+        F → {}
+    }
+    ^ >= ( gguf_find_tensor gg name ) 0
 }
 // x ← x + 1 over a buffer of f32 bytes, in place (see __lm_upload_st).
 @ __lm_add1 ( Vec u ) raw → v {
@@ -752,7 +962,7 @@ $ `stdlib/core/slice.nu`
 @ __lm_upload_opt inout LlmImpl m Gguf gg i layer s suffix → GkBuf {
     : String nm ( __lm_tname layer suffix )
     ?? . m st {
-        T sf → {
+        T ss → {
             : LkW d ( __lm_upload_st m ( string_data nm ) )
             ? ( lk_w_ok d ) { ^ . d f } {}
         }
@@ -868,6 +1078,8 @@ $ `stdlib/core/slice.nu`
 // layer — and a GGUF may carry them as f16 or bf16).
 @ __lm_upload_stack inout LlmImpl m Gguf gg i layer s suffix → LmW {
     : String nm ( __lm_tname layer suffix )
+    // from the safetensors source: f32, composed (__lm_st_f32)
+    ?? ( __lm_st_f32 m ( string_data nm ) ) { T raw → { ^ @ LmW { ( __lm_up_f32 m raw ) 0 } } F → {} }
     : i ti ( gguf_find_tensor gg ( string_data nm ) )
     ? < ti 0 { ^ ( __lm_w_none ) } {}
     : i gt ?? ( vec_get [GgufTensor] ( gguf_tensors gg ) ti ) { T t → . t gtype F → -1 }
@@ -897,7 +1109,7 @@ $ `stdlib/core/slice.nu`
     ? ( __lm_put ( __lm_upload_stack m gg L `attn_v_b.weight` ) . m wv_b ) {} { = ok F }
     ? ( __lm_put ( __lm_upload_layer m gg L `attn_output.weight` ) . m wo ) {} { = ok F }
     : String ikn ( __lm_tname L `indexer.attn_k.weight` )
-    ? >= ( gguf_find_tensor gg ( string_data ikn ) ) 0 {
+    ? ( __lm_has m gg ( string_data ikn ) ) {
         ? ( __lm_put ( __lm_upload_layer m gg L `indexer.attn_q_b.weight` ) . m idx_qb ) {} { = ok F }
         ? ( __lm_put ( __lm_upload_layer m gg L `indexer.attn_k.weight` ) . m idx_k ) {} { = ok F }
         ? ( __lm_putf ( __lm_upload_layer_f m gg L `indexer.k_norm.weight` ) . m idx_kn_w ) {} { = ok F }
@@ -963,9 +1175,24 @@ $ `stdlib/core/slice.nu`
 
 @ llm_open_st s path s weights i want_ctx → !Llm String {
     ( __lm_lp_start )
-    : Gguf gg ?? ( gguf_open path ) {
-        T g0 → g0
-        F e → { ^ @ !Llm String { F e } }
+    // a Hugging Face checkpoint directory: its metadata as a GGUF, its
+    // shards as the tensor source (hfmodel.nu)
+    : b hfdir ( hf_is_checkpoint path )
+    : ~ Gguf gg ( gguf_empty )
+    : ~ ? StSet hfst @ ?StSet { F }
+    ? hfdir {
+        ?? ( hf_open path ) {
+            T hm → {
+                = gg . hm meta
+                = hfst @ ?StSet { T . hm st }
+            }
+            F e → { ^ @ !Llm String { F e } }
+        }
+    } {
+        ?? ( gguf_open path ) {
+            T g0 → { = gg g0 }
+            F e → { ^ @ !Llm String { F e } }
+        }
     }
     ( __lm_lp `gguf_open` )
     : s arch ( gguf_kv_str_or gg `general.architecture` `` )
@@ -998,7 +1225,7 @@ $ `stdlib/core/slice.nu`
     = . m prof_dense_ns 0
     = . m prof_out_ns 0
     ?? ( env_get `NURLLAMA_PROF` ) { T v → { = . m prof_on T } F → {} }
-    = . m st @ ?St { F }
+    = . m st @ ?StSet { F }
     = . m st_embd -1
     = . m st_norm_add1 F
     = . m n_embd ( __lm_kv_i gg arch `embedding_length` 0 )
@@ -1189,19 +1416,24 @@ $ `stdlib/core/slice.nu`
     // on it (gemma's GGUF has the fold baked in, the checkpoint does not).
     ? > ( nurl_str_len weights ) 0 {
         ?? ( st_open weights ) {
-            T stp → {
-                = . m st_norm_add1 is_gemma3
-                = . m st_embd ( st_find_tensor stp `model.embed_tokens.weight` )
-                = . m st @ ?St { T stp }
-                ? < . m st_embd 0 {
-                    ^ ( __lm_err `nurllama: the safetensors file has no model.embed_tokens.weight` )
-                } {}
-            }
+            T stp → { = . m st @ ?StSet { T ( stset_one stp ) } }
             F e → {
                 ^ @ !Llm String { F e }
             }
         }
-    } {}
+    } {
+        = . m st hfst
+    }
+    ?? . m st {
+        T ss → {
+            = . m st_norm_add1 is_gemma3
+            = . m st_embd ( stset_find ss `model.embed_tokens.weight` )
+            ? < . m st_embd 0 {
+                ^ ( __lm_err `nurllama: the safetensors source has no model.embed_tokens.weight` )
+            } {}
+        }
+        F → {}
+    }
 
     // Embeddings are NOT expanded: the model keeps its GGUF mapping
     // open and dequantises exactly the token's row (n_embd values) per
@@ -1210,7 +1442,7 @@ $ `stdlib/core/slice.nu`
     : ~ b ok T
     = . m embd_host ( vec_new [u] )
     = . m embd_idx ( gguf_find_tensor gg `token_embd.weight` )
-    ? < . m embd_idx 0 { = ok F } {}
+    ? & < . m embd_idx 0 < . m st_embd 0 { = ok F } {}
 
     // weights
     : LkW onw ( __lm_upload m gg `output_norm.weight` )
@@ -1288,9 +1520,9 @@ $ `stdlib/core/slice.nu`
             // the router bias is HOST data here; it goes up whole below for
             // the on-device router, and the host router reads it from here
             : String bn ( __lm_tname L `exp_probs_b.bias` )
-            : i bi ( gguf_find_tensor gg ( string_data bn ) )
-            ? >= bi 0 {
-                ?? ( gguf_dequant gg bi ) {
+            : b has_bias ( __lm_has m gg ( string_data bn ) )
+            ? has_bias {
+                ?? ( __lm_f32_of m gg ( string_data bn ) ) {
                     T raw → {
                         : ~ i e 0
                         ~ < e . m n_expert {
@@ -1301,7 +1533,7 @@ $ `stdlib/core/slice.nu`
                             = e + e 1
                         }
                     }
-                    F e2 → {
+                    F → {
                         = ok F
                     }
                 }
@@ -2138,7 +2370,7 @@ $ `stdlib/core/slice.nu`
         : i at ( vec_len [u] rows )
         ?? . m st {
             T sf → {
-                ?? ( st_dequant_range sf . m st_embd * tok ne ne ) {
+                ?? ( stset_dequant_range sf . m st_embd * tok ne ne ) {
                     T row → { ( vec_extend [u] rows row ) }
                     F _e → {}
                 }

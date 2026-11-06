@@ -125,13 +125,15 @@ $ `deps/tokenizer/src/tokenizer.nu`
     // qwen35 (Qwen3.5, Qwen3.8) is qwen2's split with combining marks in the
     // word class: `[\p{L}\p{M}]+` where qwen2 reads `\p{L}+`.
     : b pre_q35 != 0 ( nurl_str_eq pre `qwen35` )
-    // glm4 / glm5 (GLM-4.x, GLM-5.x): qwen2's split with digits in threes,
-    // and whole-piece pre-tokens taken as they are (ignore_merges) — what
-    // llama.cpp reads these two names as, and what GLM's tokenizer.json says.
-    : b pre_glm | != 0 ( nurl_str_eq pre `glm4` ) != 0 ( nurl_str_eq pre `glm5` )
+    // llama3's split (llama.cpp `llama-bpe`), which GLM-4.x / 5.x share
+    // (`glm4`, `glm5`): qwen2's with digits in threes, and whole-piece
+    // pre-tokens taken as they are (ignore_merges) — what llama.cpp reads
+    // these names as, and what their tokenizer.json files say. (A llama3
+    // GGUF was split the gpt2 way before.)
+    : b pre_glm | | != 0 ( nurl_str_eq pre `glm4` ) != 0 ( nurl_str_eq pre `glm5` ) != 0 ( nurl_str_eq pre `llama-bpe` )
     : TokSpec spec @ TokSpec {
         mode
-        ? pre_glm PRE_GLM4 ? pre_q35 PRE_QWEN35 ? pre_q2 PRE_QWEN2 PRE_DEFAULT
+        ? pre_glm PRE_LLAMA3 ? pre_q35 PRE_QWEN35 ? pre_q2 PRE_QWEN2 PRE_DEFAULT
         ( gguf_kv_int_or g `tokenizer.ggml.bos_token_id` -1 )
         ( gguf_kv_int_or g `tokenizer.ggml.eos_token_id` -1 )
         ( gguf_kv_int_or g `tokenizer.ggml.unknown_token_id` -1 )

@@ -64,17 +64,32 @@ resident at a time.
 
 `<model>` is one of three things, tried in this order:
 
-1. a **path** to a `.gguf` file — `./qwen3-4b.gguf`
+1. a **path** to a `.gguf` file — `./qwen3-4b.gguf` — or to a **Hugging
+   Face checkpoint directory** (config.json, tokenizer.json and its
+   `.safetensors` shards), opened as it is: see below
 2. a **name** from the local store — `nurllama list`
 3. a **Hugging Face ref naming a `.gguf` file** —
    `Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q4_k_m.gguf`,
    fetched on demand into the shared `~/.nurl/models` cache
 
 A bare `org/repo` is **not** a model argument for run/chat/serve: that
-names a whole safetensors checkpoint repository, which these commands
-could not open anyway, so nurllama refuses it *before* downloading
-gigabytes and prints the working forms. To run an HF checkpoint that
-ships no GGUF, convert it first:
+names a whole safetensors checkpoint repository, so nurllama refuses it
+*before* downloading gigabytes and prints the working forms.
+
+A checkpoint **directory** on disk, though, runs directly — no GGUF copy
+of it is written (`src/hfmodel.nu`). Its config.json, tokenizer.json,
+tokenizer_config.json and chat template become, in memory, the GGUF
+metadata llama.cpp's converter would write, and its shards become the
+tensor source, read under their Hugging Face names; so the loader, the
+tokenizer and the chat styles take the one path a GGUF takes. A routed
+experts' stack is assembled from the per-expert tensors (or transformers
+5's fused ones), MLA's `kv_b_proj` is split into the per-head `k_b` /
+`v_b`, and any linear stored as an **EXL3** tensor group is run as EXL3.
+Architectures: `llama` / `mistral`, `qwen2`, `qwen3`, `glm_moe_dsa`, with
+a BPE `tokenizer.json`; `tests/hf_dir_test.sh` holds llama, qwen3 and
+glm_moe_dsa checkpoints — with and without EXL3 linears — to HF
+transformers' own logits and greedy text. Another model_type, or a
+checkpoint you would rather keep as one file, converts:
 
 ```sh
 $ nurllama convert org/repo model.gguf     # safetensors checkpoint → GGUF

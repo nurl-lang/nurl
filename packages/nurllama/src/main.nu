@@ -495,7 +495,7 @@ $ `stdlib/core/slice.nu`
 // to stdout as they decode. Ctrl-C / Ctrl-D (or /exit) ends it.
 @ __nl_chat s path ArgParser p → i {
     : ~ i style CHAT_PLAIN
-    ?? ( gguf_open path ) {
+    ?? ( model_meta path ) {
         T gg → {
             = style ( chat_style_of gg )
         }
@@ -708,9 +708,10 @@ $ `stdlib/core/slice.nu`
         ? ( nurl_str_eq which `phi3` ) { = style CHAT_PHI3 } {}
         ? ( nurl_str_eq which `glm5` ) { = style CHAT_GLM5 } {}
         ? ( nurl_str_eq which `glm53` ) { = style CHAT_GLM53 } {}
-        // a model file: the style its own template selects
-        ? != 0 ( nurl_str_ends which `.gguf` ) {
-            ?? ( gguf_open which ) {
+        // a model (a GGUF file or a checkpoint directory): the style its
+        // own template selects
+        ? | != 0 ( nurl_str_ends which `.gguf` ) ( hf_is_checkpoint which ) {
+            ?? ( model_meta which ) {
                 T gg → { = style ( chat_style_of gg ) }
                 F e → { ^ ( __nl_err e ) }
             }
@@ -1201,7 +1202,7 @@ $ `stdlib/core/slice.nu`
     }
     : s mpath ( string_data mres2 )
     : ~ i rc 0
-    ?? ( gguf_open mpath ) {
+    ?? ( model_meta mpath ) {
         T g → {
             ?? ( tok_new g ) {
                 T t → {

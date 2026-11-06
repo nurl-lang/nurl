@@ -176,7 +176,7 @@ $ `stdlib/std/utf8.nu`
         T path → {
             // the chat style comes from the model's own metadata
             : ~ i style CHAT_PLAIN
-            ?? ( gguf_open ( string_data path ) ) {
+            ?? ( model_meta ( string_data path ) ) {
                 T gg → {
                     = style ( chat_style_of gg )
                 }
@@ -1133,13 +1133,19 @@ $ `stdlib/std/utf8.nu`
                 T path → {
                     : Json o ( json_obj_new )
                     : b _1 ( json_obj_set o `model` ( json_str_lit ( string_data model ) ) )
-                    ?? ( gguf_open ( string_data path ) ) {
+                    ?? ( model_meta ( string_data path ) ) {
                         T gg → {
                             : Json d ( json_obj_new )
-                            : b _2 ( json_obj_set d `general.architecture` ( json_str_lit ( gguf_kv_str_or gg `general.architecture` `?` ) ) )
-                            : b _3 ( json_obj_set d `llama.block_count` ( json_int ( gguf_kv_int_or gg `llama.block_count` 0 ) ) )
-                            : b _4 ( json_obj_set d `llama.embedding_length` ( json_int ( gguf_kv_int_or gg `llama.embedding_length` 0 ) ) )
-                            : b _5 ( json_obj_set d `llama.context_length` ( json_int ( gguf_kv_int_or gg `llama.context_length` 0 ) ) )
+                            : s arch ( gguf_kv_str_or gg `general.architecture` `?` )
+                            : b _2 ( json_obj_set d `general.architecture` ( json_str_lit arch ) )
+                            // the architecture's own keys (they were read as llama.*,
+                            // which only a llama model has)
+                            : String kb ( string_from arch ) ( string_push_str kb `.block_count` )
+                            : String ke ( string_from arch ) ( string_push_str ke `.embedding_length` )
+                            : String kc ( string_from arch ) ( string_push_str kc `.context_length` )
+                            : b _3 ( json_obj_set d ( string_data kb ) ( json_int ( gguf_kv_int_or gg ( string_data kb ) 0 ) ) )
+                            : b _4 ( json_obj_set d ( string_data ke ) ( json_int ( gguf_kv_int_or gg ( string_data ke ) 0 ) ) )
+                            : b _5 ( json_obj_set d ( string_data kc ) ( json_int ( gguf_kv_int_or gg ( string_data kc ) 0 ) ) )
                             : b _6 ( json_obj_set d `tensors` ( json_int ( gguf_n_tensors gg ) ) )
                             : b _7 ( json_obj_set o `model_info` d )
                         }
