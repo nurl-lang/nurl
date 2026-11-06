@@ -95,6 +95,135 @@ long long nurl_http_perform_full(const char *url, const char *method,
                                      30000, 10000);
 }
 
+/* ── §14a  The operating system's TLS chain verifier (Windows) ── */
+/* Verified TLS (stdlib/std/tls_verify.nu) anchors a server's chain to a
+ * trusted root. Unix systems list their roots in a PEM bundle, which the
+ * NURL side reads itself. Windows has no such file, and its certificate
+ * store is no list either: it holds the roots this machine has needed so
+ * far, and the chain engine fetches any other root of the Microsoft
+ * Trusted Root Program on demand. So on Windows the anchor question goes
+ * to the chain engine, as every Windows TLS client's does.
+ *
+ * `chain` is the server's certificates as concatenated DER, leaf first.
+ * Returns 1 when the engine builds a chain from the leaf (with the other
+ * certificates as intermediates) to a root it trusts for TLS server
+ * authentication, with no error — trust, validity, signatures, usage,
+ * an explicitly distrusted certificate — anywhere on it, and the SSL
+ * policy (server authentication) accepts it; 0 when it does not; -1
+ * where the system has no such verifier (everywhere but Windows). The
+ * host name is not handed over: tls_verify.nu has checked it already.
+ *
+ * crypt32 is loaded on first use, not linked, so no link line (nurl.bat,
+ * nurl.sh's MinGW target, nurlapi, the cross scripts) has to name it. */
+#ifdef _WIN32
+#include <wincrypt.h>
+
+typedef HCERTSTORE (WINAPI *nurl__cs_open_fn)(LPCSTR, DWORD, HCRYPTPROV_LEGACY, DWORD, const void *);
+typedef BOOL (WINAPI *nurl__cs_close_fn)(HCERTSTORE, DWORD);
+typedef PCCERT_CONTEXT (WINAPI *nurl__cc_create_fn)(DWORD, const BYTE *, DWORD);
+typedef BOOL (WINAPI *nurl__cc_free_fn)(PCCERT_CONTEXT);
+typedef BOOL (WINAPI *nurl__cs_add_fn)(HCERTSTORE, DWORD, const BYTE *, DWORD, DWORD, PCCERT_CONTEXT *);
+typedef BOOL (WINAPI *nurl__chain_get_fn)(HCERTCHAINENGINE, PCCERT_CONTEXT, LPFILETIME, HCERTSTORE,
+                                          PCERT_CHAIN_PARA, DWORD, LPVOID, PCCERT_CHAIN_CONTEXT *);
+typedef BOOL (WINAPI *nurl__chain_policy_fn)(LPCSTR, PCCERT_CHAIN_CONTEXT, PCERT_CHAIN_POLICY_PARA,
+                                             PCERT_CHAIN_POLICY_STATUS);
+typedef void (WINAPI *nurl__chain_free_fn)(PCCERT_CHAIN_CONTEXT);
+
+/* Length of the DER element at p[0..avail), header included, or 0 when
+ * it is not one whole element. */
+static long long nurl__der_elem_len(const unsigned char *p, long long avail) {
+    if (avail < 2) return 0;
+    long long hdr = 2, len = p[1];
+    if (len & 0x80) {
+        int nb = (int)(len & 0x7f);
+        if (nb == 0 || nb > 4 || avail < 2 + nb) return 0;
+        len = 0;
+        for (int i = 0; i < nb; i++) len = (len << 8) | p[2 + i];
+        hdr += nb;
+    }
+    return hdr + len <= avail ? hdr + len : 0;
+}
+
+long long nurl_sys_chain_trusted(const void *chain, long long len) {
+    static HMODULE crypt32;
+    if (!crypt32) crypt32 = LoadLibraryA("crypt32.dll");
+    if (!crypt32) return 0;
+#define NURL__CRYPT(t, v, n) t v = (t)(void (*)(void))GetProcAddress(crypt32, #n)
+    NURL__CRYPT(nurl__cs_open_fn, open_store, CertOpenStore);
+    NURL__CRYPT(nurl__cs_close_fn, close_store, CertCloseStore);
+    NURL__CRYPT(nurl__cc_create_fn, cert_create, CertCreateCertificateContext);
+    NURL__CRYPT(nurl__cc_free_fn, cert_free, CertFreeCertificateContext);
+    NURL__CRYPT(nurl__cs_add_fn, store_add, CertAddEncodedCertificateToStore);
+    NURL__CRYPT(nurl__chain_get_fn, chain_get, CertGetCertificateChain);
+    NURL__CRYPT(nurl__chain_policy_fn, chain_policy, CertVerifyCertificateChainPolicy);
+    NURL__CRYPT(nurl__chain_free_fn, chain_free, CertFreeCertificateChain);
+#undef NURL__CRYPT
+    if (!open_store || !close_store || !cert_create ||
+        !cert_free || !store_add ||
+        !chain_get || !chain_policy ||
+        !chain_free || !chain || len <= 0 || len > 0x7fffffff)
+        return 0;
+
+    const unsigned char *p = (const unsigned char *)chain;
+    long long n0 = nurl__der_elem_len(p, len);
+    if (n0 == 0) return 0;
+    PCCERT_CONTEXT leaf = cert_create(X509_ASN_ENCODING, p, (DWORD)n0);
+    if (!leaf) return 0;
+    /* The server's other certificates: what the engine may use as
+     * intermediates. They grant no trust by being here. */
+    HCERTSTORE extra = open_store(CERT_STORE_PROV_MEMORY, 0, 0, 0, NULL);
+    if (!extra) { cert_free(leaf); return 0; }
+    long long off = n0;
+    int ok = 1;
+    while (ok && off < len) {
+        long long n = nurl__der_elem_len(p + off, len - off);
+        if (n == 0 || !store_add(extra, X509_ASN_ENCODING, p + off, (DWORD)n,
+                                                        CERT_STORE_ADD_ALWAYS, NULL))
+            ok = 0;
+        off += n;
+    }
+
+    long long trusted = 0;
+    if (ok) {
+        LPSTR server_auth[1] = { (LPSTR)szOID_PKIX_KP_SERVER_AUTH };
+        CERT_CHAIN_PARA para;
+        memset(&para, 0, sizeof para);
+        para.cbSize = sizeof para;
+        para.RequestedUsage.dwType = USAGE_MATCH_TYPE_AND;
+        para.RequestedUsage.Usage.cUsageIdentifier = 1;
+        para.RequestedUsage.Usage.rgpszUsageIdentifier = server_auth;
+        PCCERT_CHAIN_CONTEXT ch = NULL;
+        if (chain_get(NULL, leaf, NULL, extra, &para, 0, NULL, &ch) && ch) {
+            if (ch->TrustStatus.dwErrorStatus == CERT_TRUST_NO_ERROR) {
+                SSL_EXTRA_CERT_CHAIN_POLICY_PARA ssl;
+                memset(&ssl, 0, sizeof ssl);
+                ssl.cbSize = sizeof ssl;
+                ssl.dwAuthType = AUTHTYPE_SERVER;
+                CERT_CHAIN_POLICY_PARA pp;
+                memset(&pp, 0, sizeof pp);
+                pp.cbSize = sizeof pp;
+                pp.pvExtraPolicyPara = &ssl;
+                CERT_CHAIN_POLICY_STATUS ps;
+                memset(&ps, 0, sizeof ps);
+                ps.cbSize = sizeof ps;
+                if (chain_policy(CERT_CHAIN_POLICY_SSL, ch, &pp, &ps) &&
+                    ps.dwError == 0)
+                    trusted = 1;
+            }
+            chain_free(ch);
+        }
+    }
+    close_store(extra, 0);
+    cert_free(leaf);
+    return trusted;
+}
+#else
+long long nurl_sys_chain_trusted(const void *chain, long long len) {
+    (void)chain; (void)len;
+    return -1;
+}
+#endif
+
 /* ── §14b  HTTP streaming — inert stubs ───────────────────────── */
 /* The live streaming path is hp_stream_* in stdlib/ext/http_pure.nu
  * (incremental chunked decoding over the pure transport). These stubs

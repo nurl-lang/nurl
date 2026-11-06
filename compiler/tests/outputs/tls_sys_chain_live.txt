@@ -1,0 +1,6 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+example.com      ok
+huggingface.co   ok

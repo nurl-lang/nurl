@@ -3,8 +3,10 @@
 // Ties the pure-NURL X.509 parser and RSA/ECDSA verifiers into a real
 // "verify-full": it checks the server's CertificateVerify signature,
 // walks the presented chain (each cert signed by the next), anchors the
-// top to a certificate in the system trust store, enforces the validity
-// window, and matches the hostname against the leaf SANs. No OpenSSL.
+// top to a certificate in the system trust store (a PEM bundle; on
+// Windows, which keeps none, the system's chain engine), enforces the
+// validity window, and matches the hostname against the leaf SANs. No
+// OpenSSL.
 //
 //   ( tls_cert_verify cert_msg cv_scheme cv_sig th_cert hostname ) → i
 //     0 ok · 1 no certs · 2 parse · 3 CertVerify · 4 chain link
@@ -353,10 +355,40 @@ $ `stdlib/std/x509.nu`
         : i tl ?? ( vec_get [i] lens - count 1 ) { T x → x F _ → 0 }
         : ( Vec u ) tder ( bytes_slice cert_msg ts + ts tl )
         : X509 top ( x509_parse tder )
-        ? ! ( __v_anchor_ok top ) { = rc 5 } {}
+        ? ! ( __v_anchor_ok top ) {
+            ? ! ( __v_sys_trusts cert_msg starts lens count ) { = rc 5 } {}
+        } {}
     } {}
 
     ^ rc
+}
+
+// The operating system's own chain verifier (runtime_ffi.c §14a): 1
+// trusted, 0 not, -1 where the system has none (everywhere but Windows).
+& `c` @ nurl_sys_chain_trusted *u chain i len → i
+
+// Does the operating system trust the presented chain? The second source
+// of anchors, after the PEM bundle. Windows keeps no bundle: its
+// certificate store holds only the roots this machine has needed so far,
+// and its chain engine fetches any other trusted root on demand, so there
+// the anchor question can only be asked of that engine. Never consulted
+// when SSL_CERT_FILE is set — that file replaces the system's trust, it
+// does not extend it.
+@ __v_sys_trusts ( Vec u ) cert_msg ( Vec i ) starts ( Vec i ) lens i count → b {
+    : s ov ( getenv `SSL_CERT_FILE` )
+    ? != # i ov 0 {
+        ? > ( nurl_str_len ov ) 0 { ^ F } {}
+    } {}
+    : ( Vec u ) chain ( vec_new [u] )
+    : ~ i k 0
+    ~ < k count {
+        : i cs ?? ( vec_get [i] starts k ) { T x → x F _ → 0 }
+        : i cl ?? ( vec_get [i] lens k ) { T x → x F _ → 0 }
+        : ( Vec u ) der ( bytes_slice cert_msg cs + cs cl )
+        ( bytes_extend_bytes chain der )
+        = k + k 1
+    }
+    ^ == ( nurl_sys_chain_trusted # *u ( vec_data [u] chain ) ( vec_len [u] chain ) ) 1
 }
 
 // Leaf public key (parsed) from a Certificate message — for verifying the
