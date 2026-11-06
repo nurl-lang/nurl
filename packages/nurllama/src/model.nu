@@ -40,6 +40,10 @@
 // per-head norm gemma3 introduced). Nothing about it is special-cased
 // beyond the NEOX rotary style — a weight that is absent is simply not
 // applied.
+// `qwen35` (Qwen3.5, Qwen3.8) is a hybrid: Gated DeltaNet layers with a
+// recurrent state and a causal conv, and every fourth layer gated full
+// attention with a partial rotary (__lm_q35_mix, kernels.nu's lk_ssm_conv
+// / lk_deltanet / lk_gnorm).
 // Tied-embedding models (no output.weight) reuse token_embd as the
 // output projection.
 //
@@ -224,6 +228,40 @@ $ `stdlib/core/slice.nu`
     i prof_shexp_ns
     i prof_dense_ns
     i prof_out_ns
+    // ── qwen35 (Qwen3.5, Qwen3.8): Gated DeltaNet + gated attention ─────
+    // Three layers of every `full_every` are linear attention with a
+    // recurrent state; the last of each group is full attention whose query
+    // projection carries an output gate. The recurrent and conv states
+    // summarise every position seen so far and cannot be rewound: a call
+    // must start at 0 (they reset) or continue where the last one stopped.
+    b hybrid
+    i full_every
+    i ssm_kconv
+    i ssm_dk
+    i ssm_nk
+    i ssm_nv
+    i ssm_dv
+    i ssm_pos  // positions the states hold
+    ( Vec LmW ) ssm_qkv
+    ( Vec LmW ) ssm_z
+    ( Vec LmW ) ssm_beta
+    ( Vec LmW ) ssm_alpha
+    ( Vec LmW ) ssm_out
+    ( Vec GkBuf ) ssm_conv
+    ( Vec GkBuf ) ssm_dt
+    ( Vec GkBuf ) ssm_a
+    ( Vec GkBuf ) ssm_norm
+    ( Vec GkBuf ) conv_state
+    ( Vec GkBuf ) rec_state
+    GkBuf qkvd  // the qkv projection, per position [q | k | v]
+    GkBuf convd  // …after the conv
+    GkBuf zd  // the output gate's projection
+    GkBuf betad
+    GkBuf alphad
+    GkBuf dnd  // the delta rule's output
+    GkBuf dnn  // …normed and gated
+    GkBuf qgd  // a gated attention layer's [q | gate] projection
+    GkBuf gated  // …its gate
 }
 
 // What a loaded model is and never changes: read without waiting for an
@@ -266,7 +304,12 @@ $ `stdlib/core/slice.nu`
         ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gpu_host_none )
         ( gk_buf_none GK_I64 ) ( gk_buf_none GK_F32 ) ( vec_new [i] ) ( gpu_host_none )
         ( vec_new [LmPlan] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
-        F 0 0 0 0 0 } )
+        F 0 0 0 0 0
+        F 0 0 0 0 0 0 0
+        ( vec_new [LmW] ) ( vec_new [LmW] ) ( vec_new [LmW] ) ( vec_new [LmW] ) ( vec_new [LmW] )
+        ( vec_new [GkBuf] ) ( vec_new [GkBuf] ) ( vec_new [GkBuf] ) ( vec_new [GkBuf] ) ( vec_new [GkBuf] ) ( vec_new [GkBuf] )
+        ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 )
+        ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) } )
 }
 
 @ __lm_handle sink LlmImpl m → Llm {
@@ -691,6 +734,70 @@ $ `stdlib/core/slice.nu`
     ^ T
 }
 
+// One qwen35 layer's tensors. Every per-layer column gets an entry — the
+// kind of layer this is not gets none — so the columns stay index-aligned.
+//   full attention  attn_q ([q | gate] per head), attn_k, attn_v,
+//                   attn_output, attn_q_norm, attn_k_norm
+//   Gated DeltaNet  attn_qkv ([q | k | v]), attn_gate (z), ssm_beta,
+//                   ssm_alpha, ssm_out, ssm_conv1d, ssm_dt.bias, ssm_a,
+//                   ssm_norm
+// and in both, post_attention_norm — here the FFN's input norm, not
+// gemma3's norm of the attention OUTPUT that shares its name — and a dense
+// SwiGLU FFN.
+@ __lm_q35_layer inout LlmImpl m Gguf gg i L → b {
+    : ~ b ok T
+    ? == 0 % + L 1 . m full_every {
+        ? ( __lm_put ( __lm_upload_layer m gg L `attn_q.weight` ) . m wq ) {} { = ok F }
+        ? ( __lm_put ( __lm_upload_layer m gg L `attn_k.weight` ) . m wk ) {} { = ok F }
+        ? ( __lm_put ( __lm_upload_layer m gg L `attn_v.weight` ) . m wv ) {} { = ok F }
+        ? ( __lm_put ( __lm_upload_layer m gg L `attn_output.weight` ) . m wo ) {} { = ok F }
+        ? ( __lm_putf ( __lm_upload_layer_f m gg L `attn_q_norm.weight` ) . m q_norm ) {} { = ok F }
+        ? ( __lm_putf ( __lm_upload_layer_f m gg L `attn_k_norm.weight` ) . m k_norm ) {} { = ok F }
+        ( vec_push [LmW] . m ssm_qkv ( __lm_w_none ) )
+        ( vec_push [LmW] . m ssm_z ( __lm_w_none ) )
+        ( vec_push [LmW] . m ssm_beta ( __lm_w_none ) )
+        ( vec_push [LmW] . m ssm_alpha ( __lm_w_none ) )
+        ( vec_push [LmW] . m ssm_out ( __lm_w_none ) )
+        ( vec_push [GkBuf] . m ssm_conv ( gk_buf_none GK_F32 ) )
+        ( vec_push [GkBuf] . m ssm_dt ( gk_buf_none GK_F32 ) )
+        ( vec_push [GkBuf] . m ssm_a ( gk_buf_none GK_F32 ) )
+        ( vec_push [GkBuf] . m ssm_norm ( gk_buf_none GK_F32 ) )
+    } {
+        ( vec_push [LmW] . m wq ( __lm_w_none ) )
+        ( vec_push [LmW] . m wk ( __lm_w_none ) )
+        ( vec_push [LmW] . m wv ( __lm_w_none ) )
+        ( vec_push [LmW] . m wo ( __lm_w_none ) )
+        ( vec_push [GkBuf] . m q_norm ( gk_buf_none GK_F32 ) )
+        ( vec_push [GkBuf] . m k_norm ( gk_buf_none GK_F32 ) )
+        ? ( __lm_put ( __lm_upload_layer m gg L `attn_qkv.weight` ) . m ssm_qkv ) {} { = ok F }
+        ? ( __lm_put ( __lm_upload_layer m gg L `attn_gate.weight` ) . m ssm_z ) {} { = ok F }
+        ? ( __lm_put ( __lm_upload_layer m gg L `ssm_beta.weight` ) . m ssm_beta ) {} { = ok F }
+        ? ( __lm_put ( __lm_upload_layer m gg L `ssm_alpha.weight` ) . m ssm_alpha ) {} { = ok F }
+        ? ( __lm_put ( __lm_upload_layer m gg L `ssm_out.weight` ) . m ssm_out ) {} { = ok F }
+        ? ( __lm_putf ( __lm_upload_layer_f m gg L `ssm_conv1d.weight` ) . m ssm_conv ) {} { = ok F }
+        ? ( __lm_putf ( __lm_upload_layer_f m gg L `ssm_dt.bias` ) . m ssm_dt ) {} { = ok F }
+        ? ( __lm_putf ( __lm_upload_layer_f m gg L `ssm_a` ) . m ssm_a ) {} { = ok F }
+        ? ( __lm_putf ( __lm_upload_layer_f m gg L `ssm_norm.weight` ) . m ssm_norm ) {} { = ok F }
+    }
+    ( vec_push [GkBuf] . m bq ( gk_buf_none GK_F32 ) )
+    ( vec_push [GkBuf] . m bk ( gk_buf_none GK_F32 ) )
+    ( vec_push [GkBuf] . m bv ( gk_buf_none GK_F32 ) )
+    ( vec_push [GkBuf] . m post_attn_norm ( gk_buf_none GK_F32 ) )
+    ( vec_push [GkBuf] . m post_ffn_norm ( gk_buf_none GK_F32 ) )
+    ? ( __lm_putf ( __lm_upload_layer_f m gg L `post_attention_norm.weight` ) . m ffn_norm ) {} { = ok F }
+    ? ( __lm_put ( __lm_upload_layer m gg L `ffn_down.weight` ) . m w_down ) {} { = ok F }
+    ? ( __lm_put ( __lm_upload_layer m gg L `ffn_gate.weight` ) . m w_gate ) {} { = ok F }
+    ? ( __lm_put ( __lm_upload_layer m gg L `ffn_up.weight` ) . m w_up ) {} { = ok F }
+    ( vec_push [LmW] . m gate_inp ( __lm_w_none ) )
+    ( vec_push [LmW] . m gate_exps ( __lm_w_none ) )
+    ( vec_push [LmW] . m up_exps ( __lm_w_none ) )
+    ( vec_push [LmW] . m down_exps ( __lm_w_none ) )
+    ( vec_push [LmW] . m gate_shexp ( __lm_w_none ) )
+    ( vec_push [LmW] . m up_shexp ( __lm_w_none ) )
+    ( vec_push [LmW] . m down_shexp ( __lm_w_none ) )
+    ^ ok
+}
+
 @ llm_open s path i want_ctx → !Llm String {
     ^ ( llm_open_st path `` want_ctx )
 }
@@ -739,14 +846,15 @@ $ `stdlib/core/slice.nu`
     : b is_phi3 != 0 ( nurl_str_eq arch `phi3` )
     : b is_llada2 != 0 ( nurl_str_eq arch `llada2` )
     : b is_qwen3 != 0 ( nurl_str_eq arch `qwen3` )
-    ? | | | | | != 0 ( nurl_str_eq arch `llama` ) != 0 ( nurl_str_eq arch `qwen2` )
-    is_qwen3 is_gemma3 is_phi3 is_llada2 {} {
+    : b is_q35 != 0 ( nurl_str_eq arch `qwen35` )
+    ? | | | | | | != 0 ( nurl_str_eq arch `llama` ) != 0 ( nurl_str_eq arch `qwen2` )
+    is_qwen3 is_gemma3 is_phi3 is_llada2 is_q35 {} {
         // `arch` BORROWS the Gguf's kv string, so the message has to be
         // built while the file is still open — closing first left this
         // printing freed bytes.
         : String msg ( string_from `nurllama: unsupported architecture '` )
         ( string_push_str msg arch )
-        ( string_push_str msg `' (supported: llama, qwen2, qwen3, gemma3, phi3, llada2)` )
+        ( string_push_str msg `' (supported: llama, qwen2, qwen3, qwen35, gemma3, phi3, llada2)` )
         ^ @ !Llm String { F msg }
     }
 
@@ -787,7 +895,32 @@ $ `stdlib/core/slice.nu`
     // span (NEOX). llada2's rotation is PARTIAL on top: rope.dimension_count
     // (64) covers only half of head_dim (128), the rest passes through —
     // the rope kernel already takes rope_dim separately.
-    = . m rope_style ? | | | | != 0 ( nurl_str_eq arch `qwen2` ) is_qwen3 is_gemma3 is_phi3 is_llada2 1 0
+    = . m rope_style ? | | | | | != 0 ( nurl_str_eq arch `qwen2` ) is_qwen3 is_gemma3 is_phi3 is_llada2 is_q35 1 0
+
+    // ── the qwen35 shape ────────────────────────────────────────────────
+    // A hybrid: of every `full_attention_interval` layers, the last is full
+    // attention and the others are Gated DeltaNet. The full layers rotate the
+    // first rope.dimension_count dims of a 256-wide head (NEOX, a quarter of
+    // it) and gate their output; the norms carry the `1 + w` already folded
+    // in, as gemma's do. The file's last nextn_predict_layers blocks are the
+    // multi-token-prediction head: plain decoding does not run them.
+    = . m hybrid is_q35
+    ? is_q35 {
+        = . m n_layer - . m n_layer ( __lm_kv_i gg arch `nextn_predict_layers` 0 )
+        = . m full_every ( __lm_kv_i gg arch `full_attention_interval` 0 )
+        = . m ssm_kconv ( __lm_kv_i gg arch `ssm.conv_kernel` 0 )
+        = . m ssm_dk ( __lm_kv_i gg arch `ssm.state_size` 0 )
+        = . m ssm_nk ( __lm_kv_i gg arch `ssm.group_count` 0 )
+        = . m ssm_nv ( __lm_kv_i gg arch `ssm.time_step_rank` 0 )
+        : i inner ( __lm_kv_i gg arch `ssm.inner_size` 0 )
+        ? | | | | | < . m full_every 1 < . m ssm_kconv 2 < . m ssm_dk 1 < . m ssm_nk 1 < . m ssm_nv 1 < inner 1 {
+            ^ ( __lm_err `nurllama: qwen35 model is missing its ssm.* hyperparameters` )
+        } {}
+        = . m ssm_dv / inner . m ssm_nv
+        ? != 0 % . m ssm_nv . m ssm_nk {
+            ^ ( __lm_err `nurllama: qwen35 model has a value head count that is not a multiple of its key head count` )
+        } {}
+    } {}
 
     // ── the llada2 shape ────────────────────────────────────────────────
     // A block-diffusion MoE: bidirectional attention (no causal mask —
@@ -918,6 +1051,11 @@ $ `stdlib/core/slice.nu`
     : ~ i L 0
     ~ & ok < L . m n_layer {
         ? ( __lm_putf ( __lm_upload_layer_f m gg L `attn_norm.weight` ) . m attn_norm ) {} { = ok F }
+        ? . m hybrid {
+            ? ( __lm_q35_layer m gg L ) {} { = ok F }
+            = L + L 1
+            continue
+        } {}
         // phi3 ships Q, K and V as ONE tensor (`attn_qkv`, rows q|k|v) and the
         // FFN gate and up as one (`ffn_up`, rows gate|up). Nothing needs to be
         // split: a weight is a buffer plus where it starts, so the parts are
@@ -1044,12 +1182,41 @@ $ `stdlib/core/slice.nu`
     } {}
     // KV cache + activation scratch
     : i kvdim * . m n_kv . m head_dim
+    // qwen35: a KV cache only for the full-attention layers; a DeltaNet layer
+    // keeps its conv inputs and its recurrent state instead (a few hundred
+    // KB, whatever the context).
+    : i ssm_cdim + * * 2 . m ssm_nk . m ssm_dk * . m ssm_nv . m ssm_dv
     = L 0
     ~ < L . m n_layer {
-        ( vec_push [GkBuf] . m kcache ( __lm_scratch m * . m n_ctx kvdim ) )
-        ( vec_push [GkBuf] . m vcache ( __lm_scratch m * . m n_ctx kvdim ) )
+        : b lin & . m hybrid != 0 % + L 1 . m full_every
+        ? lin {
+            ( vec_push [GkBuf] . m kcache ( gk_buf_none GK_F32 ) )
+            ( vec_push [GkBuf] . m vcache ( gk_buf_none GK_F32 ) )
+            ( vec_push [GkBuf] . m conv_state ( __lm_scratch m * - . m ssm_kconv 1 ssm_cdim ) )
+            ( vec_push [GkBuf] . m rec_state ( __lm_scratch m * * . m ssm_nv . m ssm_dk . m ssm_dv ) )
+        } {
+            ( vec_push [GkBuf] . m kcache ( __lm_scratch m * . m n_ctx kvdim ) )
+            ( vec_push [GkBuf] . m vcache ( __lm_scratch m * . m n_ctx kvdim ) )
+            ? . m hybrid {
+                ( vec_push [GkBuf] . m conv_state ( gk_buf_none GK_F32 ) )
+                ( vec_push [GkBuf] . m rec_state ( gk_buf_none GK_F32 ) )
+            } {}
+        }
         = L + L 1
     }
+    ? . m hybrid {
+        : i vd_ * . m ssm_nv . m ssm_dv
+        = . m qkvd ( __lm_scratch m * LM_CHUNK ssm_cdim )
+        = . m convd ( __lm_scratch m * LM_CHUNK ssm_cdim )
+        = . m zd ( __lm_scratch m * LM_CHUNK vd_ )
+        = . m betad ( __lm_scratch m * LM_CHUNK . m ssm_nv )
+        = . m alphad ( __lm_scratch m * LM_CHUNK . m ssm_nv )
+        = . m dnd ( __lm_scratch m * LM_CHUNK vd_ )
+        = . m dnn ( __lm_scratch m * LM_CHUNK vd_ )
+        = . m qgd ( __lm_scratch m * * LM_CHUNK 2 . m q_dim )
+        = . m gated ( __lm_scratch m * LM_CHUNK . m q_dim )
+        = . m ssm_pos 0
+    } {}
     // Activation scratch is sized for a whole prefill chunk; decode uses
     // the first row of each.
     = . m xd ( __lm_scratch m * LM_CHUNK . m n_embd )
@@ -1369,6 +1536,66 @@ $ `stdlib/core/slice.nu`
 // Record (into `p`) every launch of one evaluation of `count` positions at
 // pos0 — the forward pass and the logits its mode asks for. `keep` is
 // cleared when the host had to step in on the way (see __lm_flush).
+// A qwen35 layer's token mixer over the batch, into tmpd (the caller adds it
+// to the residual):
+//   full attention  [q | gate] = attn_q·x̂; q, k RMSNormed per head; NEOX
+//                   rotary on the first rope_dim dims; causal GQA attention
+//                   over the KV cache; · sigmoid(gate); attn_output
+//   Gated DeltaNet  qkv = attn_qkv·x̂ through the causal conv (+ SiLU); the
+//                   delta rule over the layer's recurrent state; RMSNorm per
+//                   head gated by silu(attn_gate·x̂); ssm_out
+// x̂ is the layer's input norm of x. The rope / copy / attention launches go
+// on the same lists as a llama layer's, so a replay moves them to its
+// position; the DeltaNet ones have no position — their state carries it.
+@ __lm_q35_mix inout LlmImpl m inout ( Vec GkLaunch ) p i L i count i pos0 i kvlen b causal → b {
+    : GpuKit kit . m kit
+    : i ne . m n_embd
+    : i hd . m head_dim
+    : i nh . m n_head
+    : i nkv . m n_kv
+    : i kvdim * nkv hd
+    : i qd_ . m q_dim
+    : ~ b ok ( lk_rmsnorm kit . m xd ( vec_at [GkBuf] . m attn_norm L ) . m xnd ne . m eps count p )
+    ? == 0 % + L 1 . m full_every {
+        = ok & ok ( __lm_mv m ( vec_at [LmW] . m wq L ) 0 . m xnd 0 . m qgd * 2 qd_ ne count p )
+        = ok & ok ( lk_qgate_split kit . m qgd . m qd . m gated nh hd count p )
+        = ok & ok ( __lm_mv m ( vec_at [LmW] . m wk L ) 0 . m xnd 0 . m kd kvdim ne count p )
+        = ok & ok ( __lm_mv m ( vec_at [LmW] . m wv L ) 0 . m xnd 0 . m vd kvdim ne count p )
+        = ok & ok ( lk_rmsnorm kit . m qd ( vec_at [GkBuf] . m q_norm L ) . m qn2d hd . m eps * nh count p )
+        = ok & ok ( lk_rmsnorm kit . m kd ( vec_at [GkBuf] . m k_norm L ) . m kn2d hd . m eps * nkv count p )
+        ( vec_push [i] . m pl_rope ( vec_len [GkLaunch] p ) )
+        = ok & ok ( lk_rope kit . m qn2d nh hd . m rope_dim pos0 . m rope_base . m rope_style count p )
+        ( vec_push [i] . m pl_rope ( vec_len [GkLaunch] p ) )
+        = ok & ok ( lk_rope kit . m kn2d nkv hd . m rope_dim pos0 . m rope_base . m rope_style count p )
+        ( vec_push [i] . m pl_copy ( vec_len [GkLaunch] p ) )
+        = ok & ok ( lk_copyat kit ( vec_at [GkBuf] . m kcache L ) . m kn2d * pos0 kvdim * count kvdim p )
+        ( vec_push [i] . m pl_copy ( vec_len [GkLaunch] p ) )
+        = ok & ok ( lk_copyat kit ( vec_at [GkBuf] . m vcache L ) . m vd * pos0 kvdim * count kvdim p )
+        ( vec_push [i] . m pl_attn ( vec_len [GkLaunch] p ) )
+        = ok & ok ( lk_attn kit . m warp . m qn2d ( vec_at [GkBuf] . m kcache L ) ( vec_at [GkBuf] . m vcache L ) . m aod . m scored
+        nh nkv hd ? causal + pos0 1 kvlen count . m n_ctx . m attn_scale 0 ? causal 1 0 p )
+        = ok & ok ( lk_sigmul kit . m aod . m gated * qd_ count p )
+        = ok & ok ( __lm_mv m ( vec_at [LmW] . m wo L ) 0 . m aod 0 . m tmpd ne qd_ count p )
+        ^ ok
+    } {}
+    : i nk . m ssm_nk
+    : i nv . m ssm_nv
+    : i dk . m ssm_dk
+    : i dv . m ssm_dv
+    : i vd_ * nv dv
+    : i cdim + * * 2 nk dk vd_
+    = ok & ok ( __lm_mv m ( vec_at [LmW] . m ssm_qkv L ) 0 . m xnd 0 . m qkvd cdim ne count p )
+    = ok & ok ( __lm_mv m ( vec_at [LmW] . m ssm_z L ) 0 . m xnd 0 . m zd vd_ ne count p )
+    = ok & ok ( __lm_mv m ( vec_at [LmW] . m ssm_beta L ) 0 . m xnd 0 . m betad nv ne count p )
+    = ok & ok ( __lm_mv m ( vec_at [LmW] . m ssm_alpha L ) 0 . m xnd 0 . m alphad nv ne count p )
+    = ok & ok ( lk_ssm_conv kit . m qkvd ( vec_at [GkBuf] . m ssm_conv L ) ( vec_at [GkBuf] . m conv_state L ) . m convd cdim . m ssm_kconv count p )
+    = ok & ok ( lk_deltanet kit . m convd . m betad . m alphad ( vec_at [GkBuf] . m ssm_dt L ) ( vec_at [GkBuf] . m ssm_a L )
+    ( vec_at [GkBuf] . m rec_state L ) . m dnd nk nv dk dv count p )
+    = ok & ok ( lk_gnorm kit . m dnd . m zd ( vec_at [GkBuf] . m ssm_norm L ) . m dnn dv . m eps * count nv p )
+    = ok & ok ( __lm_mv m ( vec_at [LmW] . m ssm_out L ) 0 . m dnn 0 . m tmpd ne vd_ count p )
+    ^ ok
+}
+
 @ __lm_emit inout LlmImpl m inout ( Vec GkLaunch ) p i count i pos0 i kvlen b causal i logits_mode inout b keep → b {
     : GpuKit kit . m kit
     : b wp . m warp
@@ -1401,49 +1628,55 @@ $ `stdlib/core/slice.nu`
 
         // ── attention ──
         : i _pa ( __lm_prof_mark m p keep )
-        = ok & ok ( lk_rmsnorm kit . m xd ( vec_at [GkBuf] . m attn_norm L ) . m xnd ne . m eps count p )
-        = ok & ok ( __lm_mv m ( vec_at [LmW] . m wq L ) 0 . m xnd 0 . m qd qd_ ne count p )
-        = ok & ok ( __lm_mv m ( vec_at [LmW] . m wk L ) 0 . m xnd 0 . m kd kvdim ne count p )
-        = ok & ok ( __lm_mv m ( vec_at [LmW] . m wv L ) 0 . m xnd 0 . m vd kvdim ne count p )
-        // qwen2: Q/K/V biases, broadcast over the batch (llama has none)
-        ? ( gk_buf_ok ( vec_at [GkBuf] . m bq L ) ) { = ok & ok ( lk_addrow kit . m qd ( vec_at [GkBuf] . m bq L ) qd_ count p ) } {}
-        ? ( gk_buf_ok ( vec_at [GkBuf] . m bk L ) ) { = ok & ok ( lk_addrow kit . m kd ( vec_at [GkBuf] . m bk L ) kvdim count p ) } {}
-        ? ( gk_buf_ok ( vec_at [GkBuf] . m bv L ) ) { = ok & ok ( lk_addrow kit . m vd ( vec_at [GkBuf] . m bv L ) kvdim count p ) } {}
-        // gemma3 / qwen3: RMSNorm every head's Q and K vector before the
-        // rotation. The rows of q are head_dim wide and there are nh of them
-        // per position, so this is the ordinary rmsnorm over nh*count rows.
-        : ~ GkBuf qbuf . m qd
-        : ~ GkBuf kbuf . m kd
-        ? ( gk_buf_ok ( vec_at [GkBuf] . m q_norm L ) ) {
-            = ok & ok ( lk_rmsnorm kit . m qd ( vec_at [GkBuf] . m q_norm L ) . m qn2d hd . m eps * nh count p )
-            = qbuf . m qn2d
-        } {}
-        ? ( gk_buf_ok ( vec_at [GkBuf] . m k_norm L ) ) {
-            = ok & ok ( lk_rmsnorm kit . m kd ( vec_at [GkBuf] . m k_norm L ) . m kn2d hd . m eps * nkv count p )
-            = kbuf . m kn2d
-        } {}
-        ( vec_push [i] . m pl_rope ( vec_len [GkLaunch] p ) )
-        = ok & ok ( lk_rope kit qbuf nh hd . m rope_dim pos0 rbase . m rope_style count p )
-        ( vec_push [i] . m pl_rope ( vec_len [GkLaunch] p ) )
-        = ok & ok ( lk_rope kit kbuf nkv hd . m rope_dim pos0 rbase . m rope_style count p )
-        // the whole batch's K/V rows land in the cache before any position
-        // attends, so a position can see every earlier one in this chunk
-        ( vec_push [i] . m pl_copy ( vec_len [GkLaunch] p ) )
-        = ok & ok ( lk_copyat kit ( vec_at [GkBuf] . m kcache L ) kbuf * pos0 kvdim * count kvdim p )
-        ( vec_push [i] . m pl_copy ( vec_len [GkLaunch] p ) )
-        = ok & ok ( lk_copyat kit ( vec_at [GkBuf] . m vcache L ) . m vd * pos0 kvdim * count kvdim p )
-        ( vec_push [i] . m pl_attn ( vec_len [GkLaunch] p ) )
-        = ok & ok ( lk_attn kit wp qbuf ( vec_at [GkBuf] . m kcache L ) ( vec_at [GkBuf] . m vcache L ) . m aod . m scored
-        nh nkv hd ? causal + pos0 1 kvlen count . m n_ctx . m attn_scale window ? causal 1 0 p )
-        = ok & ok ( __lm_mv m ( vec_at [LmW] . m wo L ) 0 . m aod 0 . m tmpd ne qd_ count p )
-        // gemma3 norms the block's OUTPUT as well, before the residual add.
-        : ~ GkBuf abuf . m tmpd
-        ? ( gk_buf_ok ( vec_at [GkBuf] . m post_attn_norm L ) ) {
-            = ok & ok ( lk_rmsnorm kit . m tmpd ( vec_at [GkBuf] . m post_attn_norm L ) . m tn2d ne . m eps count p )
-            = abuf . m tn2d
-        } {}
-        = ok & ok ( lk_addv kit . m xd abuf * ne count p )
-        ? . m prof_on { = . m prof_attn_ns + . m prof_attn_ns - ( __lm_prof_mark m p keep ) _pa } {}
+        ? . m hybrid {
+            = ok & ok ( __lm_q35_mix m p L count pos0 kvlen causal )
+            = ok & ok ( lk_addv kit . m xd . m tmpd * ne count p )
+            ? . m prof_on { = . m prof_attn_ns + . m prof_attn_ns - ( __lm_prof_mark m p keep ) _pa } {}
+        } {
+            = ok & ok ( lk_rmsnorm kit . m xd ( vec_at [GkBuf] . m attn_norm L ) . m xnd ne . m eps count p )
+            = ok & ok ( __lm_mv m ( vec_at [LmW] . m wq L ) 0 . m xnd 0 . m qd qd_ ne count p )
+            = ok & ok ( __lm_mv m ( vec_at [LmW] . m wk L ) 0 . m xnd 0 . m kd kvdim ne count p )
+            = ok & ok ( __lm_mv m ( vec_at [LmW] . m wv L ) 0 . m xnd 0 . m vd kvdim ne count p )
+            // qwen2: Q/K/V biases, broadcast over the batch (llama has none)
+            ? ( gk_buf_ok ( vec_at [GkBuf] . m bq L ) ) { = ok & ok ( lk_addrow kit . m qd ( vec_at [GkBuf] . m bq L ) qd_ count p ) } {}
+            ? ( gk_buf_ok ( vec_at [GkBuf] . m bk L ) ) { = ok & ok ( lk_addrow kit . m kd ( vec_at [GkBuf] . m bk L ) kvdim count p ) } {}
+            ? ( gk_buf_ok ( vec_at [GkBuf] . m bv L ) ) { = ok & ok ( lk_addrow kit . m vd ( vec_at [GkBuf] . m bv L ) kvdim count p ) } {}
+            // gemma3 / qwen3: RMSNorm every head's Q and K vector before the
+            // rotation. The rows of q are head_dim wide and there are nh of them
+            // per position, so this is the ordinary rmsnorm over nh*count rows.
+            : ~ GkBuf qbuf . m qd
+            : ~ GkBuf kbuf . m kd
+            ? ( gk_buf_ok ( vec_at [GkBuf] . m q_norm L ) ) {
+                = ok & ok ( lk_rmsnorm kit . m qd ( vec_at [GkBuf] . m q_norm L ) . m qn2d hd . m eps * nh count p )
+                = qbuf . m qn2d
+            } {}
+            ? ( gk_buf_ok ( vec_at [GkBuf] . m k_norm L ) ) {
+                = ok & ok ( lk_rmsnorm kit . m kd ( vec_at [GkBuf] . m k_norm L ) . m kn2d hd . m eps * nkv count p )
+                = kbuf . m kn2d
+            } {}
+            ( vec_push [i] . m pl_rope ( vec_len [GkLaunch] p ) )
+            = ok & ok ( lk_rope kit qbuf nh hd . m rope_dim pos0 rbase . m rope_style count p )
+            ( vec_push [i] . m pl_rope ( vec_len [GkLaunch] p ) )
+            = ok & ok ( lk_rope kit kbuf nkv hd . m rope_dim pos0 rbase . m rope_style count p )
+            // the whole batch's K/V rows land in the cache before any position
+            // attends, so a position can see every earlier one in this chunk
+            ( vec_push [i] . m pl_copy ( vec_len [GkLaunch] p ) )
+            = ok & ok ( lk_copyat kit ( vec_at [GkBuf] . m kcache L ) kbuf * pos0 kvdim * count kvdim p )
+            ( vec_push [i] . m pl_copy ( vec_len [GkLaunch] p ) )
+            = ok & ok ( lk_copyat kit ( vec_at [GkBuf] . m vcache L ) . m vd * pos0 kvdim * count kvdim p )
+            ( vec_push [i] . m pl_attn ( vec_len [GkLaunch] p ) )
+            = ok & ok ( lk_attn kit wp qbuf ( vec_at [GkBuf] . m kcache L ) ( vec_at [GkBuf] . m vcache L ) . m aod . m scored
+            nh nkv hd ? causal + pos0 1 kvlen count . m n_ctx . m attn_scale window ? causal 1 0 p )
+            = ok & ok ( __lm_mv m ( vec_at [LmW] . m wo L ) 0 . m aod 0 . m tmpd ne qd_ count p )
+            // gemma3 norms the block's OUTPUT as well, before the residual add.
+            : ~ GkBuf abuf . m tmpd
+            ? ( gk_buf_ok ( vec_at [GkBuf] . m post_attn_norm L ) ) {
+                = ok & ok ( lk_rmsnorm kit . m tmpd ( vec_at [GkBuf] . m post_attn_norm L ) . m tn2d ne . m eps count p )
+                = abuf . m tn2d
+            } {}
+            = ok & ok ( lk_addv kit . m xd abuf * ne count p )
+            ? . m prof_on { = . m prof_attn_ns + . m prof_attn_ns - ( __lm_prof_mark m p keep ) _pa } {}
+        }
 
         // ── FFN ──
         : i _pf ( __lm_prof_mark m p keep )
@@ -1559,6 +1792,32 @@ $ `stdlib/core/slice.nu`
 @ __lm_eval_core inout LlmImpl m ( Vec i ) ids i first i count i pos0 i kvlen b causal i logits_mode → v {
     ? < count 1 { ^ } {}
     : i ne . m n_embd
+
+    // qwen35's DeltaNet states hold every position seen so far, and nothing
+    // can take one back out: a sequence starts at 0 (the states reset — a
+    // launch of its own, never part of a recorded plan, which a later call
+    // at another position would replay) or goes on exactly where the last
+    // call stopped.
+    ? . m hybrid {
+        ? == pos0 0 {
+            : ~ ( Vec GkLaunch ) zp ( vec_new [GkLaunch] )
+            : ~ b zok T
+            : ~ i zl 0
+            ~ < zl . m n_layer {
+                : GkBuf cs ( vec_at [GkBuf] . m conv_state zl )
+                : GkBuf rs ( vec_at [GkBuf] . m rec_state zl )
+                ? ( gk_buf_ok cs ) { = zok & zok ( lk_zero . m kit cs ( gk_buf_len cs ) zp ) } {}
+                ? ( gk_buf_ok rs ) { = zok & zok ( lk_zero . m kit rs ( gk_buf_len rs ) zp ) } {}
+                = zl + zl 1
+            }
+            : b _z ( lk_run zp )
+        } {
+            ? != pos0 . m ssm_pos {
+                ( nurl_panic `nurllama: a qwen35 model's recurrent state cannot go back to an earlier position — evaluate the sequence from position 0 again` )
+            } {}
+        }
+        = . m ssm_pos + pos0 count
+    } {}
 
     // x ← the batch's embedding rows, dequantised on demand out of the
     // still-open GGUF mapping (no full-table expansion). A safetensors row

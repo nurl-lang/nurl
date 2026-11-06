@@ -2,6 +2,56 @@
 
 All notable changes to the `nurllama` package.
 
+## [0.24.0] — 2026-11-06
+
+Requires NURL 0.89.0 and tokenizer 0.5.
+
+### Added
+
+- **The qwen35 architecture: Qwen3.5 and Qwen3.8** (`model_type
+  qwen3_5`, dense models). Three layers of every four are Gated
+  DeltaNet: the qkv projection goes through a causal depthwise conv
+  (kernel 4) and SiLU, q and k are L2-normalised, and each value head keeps
+  a dk×dv state that decays by `exp(A·softplus(α + dt))` and takes the
+  delta rule `S += k ⊗ β(v − Sᵀk)`; the output is RMSNormed per head and
+  gated by `silu(z)`. The fourth layer is full attention whose query
+  projection also carries an output gate, with per-head Q/K norms and NEOX
+  rotary on the first quarter of the head. New kernels: `lk_ssm_conv`,
+  `lk_deltanet`, `lk_gnorm`, `lk_qgate_split`, `lk_sigmul`, `lk_zero`.
+- Value head g reads key head g % n_k. The GGUF holds the value heads in
+  ggml's tiled order, not the checkpoint's: llama.cpp's converter moves
+  HF's head h to (h % r)·n_k + h / r (r = n_v/n_k) in every per-value-head
+  tensor. Checked tensor by tensor on Qwen3.5-4B (r = 2) — A, dt, beta,
+  alpha, z, the v rows and conv channels, the output projection's
+  columns — against the HF checkpoint. With r = 1 (Qwen3.5-0.8B) the two
+  orders agree, so a test on 0.8B alone cannot tell them apart; the 4B
+  model's greedy text matches the reference.
+- Only the full-attention layers keep a KV cache. A DeltaNet layer keeps
+  its last conv inputs and its recurrent state, which cannot be rewound:
+  a sequence starts at position 0, where the states reset, or continues
+  where the last call stopped; anything else is refused by name.
+- The file's multi-token-prediction block (`nextn_predict_layers`) is
+  not run.
+- The `qwen35` tokenizer split (tokenizer 0.5's `PRE_QWEN35`).
+- **`CHAT_CHATML_NT`**: a ChatML template that thinks only when
+  `enable_thinking` is true (Qwen3.5's) gets the empty
+  `<think>\n\n</think>\n\n` its own generation prompt adds by default,
+  so the model answers instead of reasoning aloud.
+- `tests/qwen35_test.sh`, against `tests/qwen35_ref.py`, an independent
+  numpy forward that `tests/qwen35_hf_check.py` holds against HF
+  transformers' Qwen3_5 model on the original checkpoint (same argmax and
+  top-5 on three prompts, correlation 0.9998 — the rest is Q8_0). On
+  Qwen3.5-0.8B Q8_0: logits match the reference to max|Δ| ≈ 2e-5 over a
+  span of ~27 with the same top-5, and greedy continuations are
+  text-identical, for a short prompt and a 110-token one whose states
+  cross a prefill chunk boundary into decoding — on CUDA (RTX A2000,
+  47 tokens/s) and on the CPU backend (12 tokens/s). Token ids equal HF's
+  on six texts in five scripts.
+
+### Not yet
+
+- The MoE variants (Qwen3.5-35B-A3B and up).
+
 ## [0.23.0] — 2026-11-05
 
 Requires NURL 0.88.0 and nurldb 0.3.

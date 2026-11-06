@@ -14,6 +14,11 @@
 //   CHAT_LLAMA2   [INST] <<SYS>>…<</SYS>> user [/INST] assistant </s>
 //   CHAT_LLAMA3   <|start_header_id|>role<|end_header_id|>…<|eot_id|>
 //   CHAT_CHATML   <|im_start|>role\n…<|im_end|>   (qwen, many finetunes)
+//   CHAT_CHATML_NT  ChatML whose template thinks only when asked
+//                 (Qwen3.5, Qwen3.8: `enable_thinking is defined and
+//                 enable_thinking is true`): by default its generation
+//                 prompt closes an empty <think></think> block, so the
+//                 model answers instead of reasoning aloud.
 //   CHAT_PHI3     <|user|>\n…<|end|>\n<|assistant|>\n  (phi-3/3.5/4)
 //   CHAT_GEMMA    <start_of_turn>user\n…<end_of_turn>  (gemma; the
 //                 assistant's role is spelled "model", and gemma has NO
@@ -36,6 +41,7 @@ $ `deps/gguf/src/gguf.nu`
 : i CHAT_GEMMA 4
 : i CHAT_PHI3 5
 : i CHAT_BAILING 6
+: i CHAT_CHATML_NT 7
 
 : ChatMsg {
     String role
@@ -52,7 +58,10 @@ $ `deps/gguf/src/gguf.nu`
 @ chat_style_of Gguf g → i {
     : s tpl ( gguf_kv_str_or g `tokenizer.chat_template` `` )
     ? > ( nurl_str_len tpl ) 0 {
-        ? >= ( nurl_str_find tpl `<|im_start|>` ) 0 { ^ CHAT_CHATML } {}
+        ? >= ( nurl_str_find tpl `<|im_start|>` ) 0 {
+            ? >= ( nurl_str_find tpl `enable_thinking is defined and enable_thinking is true` ) 0 { ^ CHAT_CHATML_NT } {}
+            ^ CHAT_CHATML
+        } {}
         ? >= ( nurl_str_find tpl `<|start_header_id|>` ) 0 { ^ CHAT_LLAMA3 } {}
         ? >= ( nurl_str_find tpl `[INST]` ) 0 { ^ CHAT_LLAMA2 } {}
         ? >= ( nurl_str_find tpl `<start_of_turn>` ) 0 { ^ CHAT_GEMMA } {}
@@ -133,7 +142,7 @@ $ `deps/gguf/src/gguf.nu`
     ^ out
 }
 
-@ __chat_chatml ( Vec ChatMsg ) msgs → String {
+@ __chat_chatml ( Vec ChatMsg ) msgs b nothink → String {
     : String out ( string_new )
     : ~ i k 0
     ~ < k ( vec_len [ChatMsg] msgs ) {
@@ -150,6 +159,7 @@ $ `deps/gguf/src/gguf.nu`
         = k + k 1
     }
     ( string_push_str out `<|im_start|>assistant\n` )
+    ? nothink { ( string_push_str out `<think>\n\n</think>\n\n` ) } {}
     ^ out
 }
 
@@ -295,7 +305,8 @@ $ `deps/gguf/src/gguf.nu`
 
 @ chat_render i style ( Vec ChatMsg ) msgs → String {
     ? == style CHAT_LLAMA3 { ^ ( __chat_llama3 msgs ) } {}
-    ? == style CHAT_CHATML { ^ ( __chat_chatml msgs ) } {}
+    ? == style CHAT_CHATML { ^ ( __chat_chatml msgs F ) } {}
+    ? == style CHAT_CHATML_NT { ^ ( __chat_chatml msgs T ) } {}
     ? == style CHAT_LLAMA2 { ^ ( __chat_llama2 msgs ) } {}
     ? == style CHAT_GEMMA { ^ ( __chat_gemma msgs ) } {}
     ? == style CHAT_PHI3 { ^ ( __chat_phi3 msgs ) } {}
@@ -307,7 +318,7 @@ $ `deps/gguf/src/gguf.nu`
 // than the EOS id (a finetune whose eos_token_id was left at the base
 // value). Treat the dialect's terminator as a stop sequence too.
 @ chat_stop_matches i style s piece → b {
-    ? == style CHAT_CHATML { ^ ? >= ( nurl_str_find piece `<|im_end|>` ) 0 T F } {}
+    ? | == style CHAT_CHATML == style CHAT_CHATML_NT { ^ ? >= ( nurl_str_find piece `<|im_end|>` ) 0 T F } {}
     ? == style CHAT_LLAMA3 { ^ ? >= ( nurl_str_find piece `<|eot_id|>` ) 0 T F } {}
     ? == style CHAT_LLAMA2 { ^ ? >= ( nurl_str_find piece `</s>` ) 0 T F } {}
     ? == style CHAT_GEMMA { ^ ? >= ( nurl_str_find piece `<end_of_turn>` ) 0 T F } {}

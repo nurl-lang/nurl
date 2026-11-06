@@ -122,9 +122,12 @@ $ `deps/tokenizer/src/tokenizer.nu`
     // quantifiers (`?+`, `++`) cannot change any match either — proven
     // against HF tokenizers by tests/bailing_tok_test.sh.
     : b pre_q2 | != 0 ( nurl_str_eq pre `qwen2` ) != 0 ( nurl_str_eq pre `bailingmoe2` )
+    // qwen35 (Qwen3.5, Qwen3.8) is qwen2's split with combining marks in the
+    // word class: `[\p{L}\p{M}]+` where qwen2 reads `\p{L}+`.
+    : b pre_q35 != 0 ( nurl_str_eq pre `qwen35` )
     : TokSpec spec @ TokSpec {
         mode
-        ? pre_q2 PRE_QWEN2 PRE_DEFAULT
+        ? pre_q35 PRE_QWEN35 ? pre_q2 PRE_QWEN2 PRE_DEFAULT
         ( gguf_kv_int_or g `tokenizer.ggml.bos_token_id` -1 )
         ( gguf_kv_int_or g `tokenizer.ggml.eos_token_id` -1 )
         ( gguf_kv_int_or g `tokenizer.ggml.unknown_token_id` -1 )

@@ -105,7 +105,7 @@ opens uses these weights — serve one model when using it.
 
 ## What it runs
 
-**Architectures:** `llama`, `qwen2`, `qwen3`, `gemma3` and `phi3`. Each model's own
+**Architectures:** `llama`, `qwen2`, `qwen3`, `qwen35`, `gemma3`, `phi3` and `llada2`. Each model's own
 metadata decides the details that actually change the output — get one
 wrong and the model still runs while quietly producing nonsense, so
 nurllama reads them from the file rather than guessing:
@@ -140,6 +140,25 @@ nurllama reads them from the file rather than guessing:
   parts are row *ranges* inside the uploaded tensor — and every range
   lands on a block boundary, because a row is a whole number of
   quantisation blocks.
+
+* **qwen35** — Qwen3.5 and Qwen3.8 (`model_type qwen3_5`), a **hybrid**.
+  Three layers of every four are **Gated DeltaNet** — linear attention
+  whose memory is a recurrent state, not a KV cache: a causal
+  convolution over the last four inputs, q and k L2-normalised, and per
+  value head a dk×dv state that decays by `exp(A·softplus(α + dt))` and
+  takes the delta rule `S += k ⊗ β(v − Sᵀk)`; its output is RMSNormed per
+  head and gated by `silu(z)`. The fourth layer is full attention whose
+  query projection also carries an **output gate** (`out · σ(gate)`),
+  with per-head Q/K norms and NEOX rotary on only the first quarter of a
+  256-wide head. The states hold every position seen so far, so a
+  sequence starts at position 0 or continues where it stopped; only the
+  full-attention layers keep a KV cache (a quarter of the layers). The
+  file's multi-token-prediction block is not run. The tokenizer is
+  qwen2's split with combining marks in the word class (`qwen35`), and a
+  chat template that thinks only when asked gets the empty
+  `<think></think>` its own generation prompt adds by default. Dense
+  models only for now (Qwen3.5-0.8B…27B, Qwen3.8-27B); the MoE
+  variants (35B-A3B and up) are not supported yet.
 
 * **llada2** — LLaDA2.x, a **diffusion** MoE, and a different *decode*,
   not just a different shape. Attention is bidirectional; generation
@@ -282,7 +301,9 @@ remembers it).
 ## Chat templates
 
 The template comes from the model's own metadata
-(`tokenizer.chat_template` → ChatML, llama3 or llama2). A model with no
+(`tokenizer.chat_template` → ChatML, llama3, llama2, gemma, phi3 or
+bailing; a ChatML template that thinks only when `enable_thinking` is
+true — Qwen3.5's — gets its default empty `<think></think>` block). A model with no
 template is a **base** model, and nurllama will not invent turns for it
 — it completes your text, which is what such a model was trained to do.
 
@@ -371,6 +392,19 @@ Not by trusting itself:
   a 16-case multilingual battery; and the block-denoise loop produces
   ids **identical** to a reference-faithful python loop that recomputes
   everything each step — proving the frozen-K/V cache changes nothing.
+- The qwen35 path is checked the same way, on Qwen3.5-0.8B: an
+  independent numpy forward (`tests/qwen35_ref.py`) — itself held
+  against HF transformers' own Qwen3_5 model on the original checkpoint
+  (`tests/qwen35_hf_check.py`) — gives the same argmax and top-5 with
+  max|Δ| ≈ 2e-5 against a logit span of ~27, and greedy continuations
+  are text-identical, for a short prompt and for a 110-token one whose
+  DeltaNet states cross a prefill chunk boundary into decoding — on the
+  CUDA backend and on the CPU backend. Token ids equal HF `tokenizers`
+  on English, accented, Devanagari, polytonic Greek, half-width and
+  Arabic-digit text. Qwen3.5-4B, whose value heads outnumber its key
+  heads two to one, is checked too: the GGUF's tiled head order was
+  matched tensor by tensor against the HF checkpoint, and its greedy text
+  matches the reference.
 - ASan/UBSan/LeakSanitizer-clean.
 
 ```sh
@@ -378,6 +412,7 @@ Not by trusting itself:
 ./tests/store_test.sh && ./tests/api_test.sh
 ./tests/convert_test.sh && ./tests/llada_infer_test.sh && ./tests/bailing_tok_test.sh
 ./tests/start_test.sh    # wizard, config, cookie sessions, history store and scoping, token auth
+./tests/qwen35_test.sh   # QWEN35_GGUF=… (or NURL_NET_TESTS=1); QWEN35_TOKENIZER=tokenizer.json adds the split
 ```
 
 ## Built on

@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.5.0] — 2026-11-06
+
+Requires NURL 0.89.0 (stdlib/std/unicat.nu's `uc_is_mark`).
+
+### Added
+
+- **`PRE_QWEN35`: the pre-tokenizer of Qwen3.5 and Qwen3.8**
+  (`tokenizer.ggml.pre = qwen35`). It is qwen2's split with combining
+  marks in the word class: `[\p{L}\p{M}]+` where qwen2 reads `\p{L}+`,
+  and a mark is not punctuation. Under qwen2's rules a word with a
+  combining vowel sign or accent (Devanagari, decomposed Latin) was cut at
+  every mark. Checked against HF `tokenizers` on English, accented,
+  Devanagari, polytonic Greek, half-width and Arabic-digit text.
+
+### Known issues
+
+- HF normalises the input to NFC before it splits (qwen2's and qwen35's
+  `tokenizer.json` both say `NFC`); this package does not. Text that
+  is already composed — nearly all text — tokenises the same; a
+  decomposed accent (`e` + U+0301) gives other ids than HF's.
+
 ## [0.4.7] — 2026-10-21
 
 ### Fixed
