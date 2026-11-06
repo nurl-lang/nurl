@@ -105,7 +105,7 @@ opens uses these weights — serve one model when using it.
 
 ## What it runs
 
-**Architectures:** `llama`, `qwen2`, `qwen3`, `qwen35`, `gemma3`, `phi3` and `llada2`. Each model's own
+**Architectures:** `llama`, `qwen2`, `qwen3`, `qwen35`, `gemma3`, `phi3`, `llada2` and `glm-dsa`. Each model's own
 metadata decides the details that actually change the output — get one
 wrong and the model still runs while quietly producing nonsense, so
 nurllama reads them from the file rather than guessing:
@@ -176,6 +176,32 @@ nurllama reads them from the file rather than guessing:
   GGUF (llama.cpp's `llada2` conventions); `run`/`chat`/the API detect
   the diffusion decode from the model's own metadata
   (`--block`, `--threshold`, `--edit-threshold`, `--post-steps`).
+
+* **glm-dsa** — GLM-5.x (`model_type glm_moe_dsa`), in llama.cpp's GGUF
+  layout. Three things set it apart, every one of them silent when wrong:
+  - **MLA attention.** The query comes through a low-rank `q_a` → norm →
+    `q_b`; K and V both come out of ONE compressed latent per position
+    (`kv_a` → norm), with a single shared rotary key beside it. nurllama
+    runs it in the *absorbed* form: each head's query is taken into the
+    latent space through that head's `k_b`, so every head attends the same
+    cache row `[latent | rope]` (multi-query attention) and the head's
+    output comes back through its `v_b`. The cache holds that one row —
+    576 floats a position for GLM-5 — not per-head keys and values.
+  - **DeepSeek sparse attention.** A lightning indexer (its own small
+    query and LayerNormed key, ReLU scores weighted per indexer head)
+    picks the `index_topk` keys each position attends; a "shared" layer
+    attends the selection its last "full" layer made. Up to `index_topk`
+    keys that is every key — the selection only starts to cut beyond it.
+  - **MoE** — the sigmoid router with a selection-only bias of llada2,
+    weights normalised and scaled, plus a shared expert, after
+    `leading_dense_block_count` dense layers.
+
+  Checked against HF transformers' own `GlmMoeDsaForCausalLM` on a tiny
+  random checkpoint converted by llama.cpp (`tests/glm_dsa_test.sh`): same
+  argmax and top-5 with a logit delta near 1e-5 of the span, and
+  text-identical greedy continuations, for prompts inside and past the
+  indexer's top-k and across a prefill chunk; the GLM tokenizer (`glm4` /
+  `glm5`: digits in threes, whole-piece pre-tokens kept) gives HF's ids.
 
 A chat template writes its turn markers (`<start_of_turn>`,
 `<|im_start|>`, …) into the prompt as *text*; nurllama emits each as its
