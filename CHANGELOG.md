@@ -10,6 +10,113 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Unreleased changes are fragments in [`changes/unreleased/`](changes/unreleased/) until a release folds them in here (`tools/changelog.py`).
 
+## [0.89.0] — 2026-11-06
+
+### Added
+
+- **`uc_is_mark`: Unicode general category M** (stdlib/std/unicat.nu):
+  combining marks, vowel signs and enclosing marks (Mn, Mc, Me). The
+  Qwen3.5 and Qwen3.8 pre-tokenizer reads `[\p{L}\p{M}]+` as a word, so a
+  tokenizer that knows only letters cuts a Devanagari or accented word at
+  every mark (the tokenizer package's `PRE_QWEN35`).
+
+### Changed
+
+- stdlib/std/unicat.nu's categories come from Unicode 15.0.0, not 14.0.0,
+  so letters and numbers assigned in 15.0 count as such.
+  `tools/gen_unicat.py` generates the mark table with the others.
+- **tokenizer 0.5.0** and **nurllama 0.24.0** are published, and both need
+  this toolchain (`uc_is_mark`). nurllama runs the `qwen35` architecture —
+  Qwen3.5 and Qwen3.8, a hybrid of Gated DeltaNet and gated full attention
+  — with the tokenizer's new `qwen35` split. See each package's CHANGELOG.
+
+### Known issues
+
+- **64 soundness holes are open, each with a fix in progress**: agora
+  #242 (a join or a value block bound by `:` and then handed on by name,
+  in nine remaining shapes), #280 (a field a `sink` took, used again by
+  a route the check does not see), #294 (a struct built from an owner
+  and a view of it views its own buffer), #345 (a view of an Rc's state
+  through one share, replaced through another), #348 (a nested field
+  store of a view), #349 (an element of a Vec handed out by a program
+  function or by nested calls, then grown), #350 (a change through a `~
+  e vv` loop's element, made by a callee), #357 (a field of a match
+  payload handed to a `sink`), #360 (a `?` / `??` join whose arms are
+  field paths), #364 (an enum binding given a new value inside its own
+  match arm), #366 (an owner's old value whose hand-over has no key:
+  kept back (a leak) on a lend path, freed under its borrower on an
+  owned one), #367 (a `??` used as a value whose arm hands out a view
+  payload), #373 (a `vec_get` binding kept across a call that moves the
+  elements), #378 (an option owner given a lend inside a closure, out of
+  a capture, through a forwarder defined above the closure), #381 (a
+  callee's local viewed by an `inout` holder, then moved into the
+  caller's `inout` field), #382 (a panic under `recover` between a
+  holder's store of a callee local's view and its repoint), #383 (a
+  callee that leaves one argument viewing another's elements), #384 (a
+  handle's own drop hook that reads a view), #387 (a second reader of a
+  field, after the field is replaced), #390 (a callee that views its
+  `inout String` into a holder, then grows that String), #391 (a Vec
+  element passed as a holder argument), #392 (a view-holding value
+  stored into an Rc's shared state), #393 (mutual recursion that swaps
+  its source arguments), #395 (a store through a borrow that #292 does
+  not follow to its owner), #396 (a view taken through a String field
+  reader, kept past a realloc of that field), #406 (a `\` whose tried
+  call changes an `inout` holder and then fails), #407 (a defer armed
+  inside a loop or an arm that stores a local's view into an `inout`
+  holder), #408 (a defer that reads a holder viewing a value bound after
+  the defer), #424 (a borrow of a `??` payload, and the scrutinee handed
+  to a callee that clears it), #427 (an option owner given what a call
+  may hand back of its own value, where nurlc has no lend fact for the
+  call at that line), #428 (a change made in place by a route that does
+  not reach the owner), #434 (a keyword-argument call records no borrow
+  rows), #445 (a closure called with a binding it replaces, by any route
+  but a direct call), #450 (an owner given a part of its own value, or a
+  value that shares part of it, while nurlc takes the result for another
+  value), #460 (two `??` payload bindings of one enum value, a change
+  through one), #461 (a parameter's element reached by a route #447 does
+  not follow, handed to a clearing callee), #462 (a function binding a
+  lent element of its parameter, or an enum payload of one, and handing
+  the binding back), #464 (a temporary argument freed right after the
+  call while the callee's result views it), #466 (an `inout` view
+  parameter kept in a second holder, an `s` global or a thread), #467 (a
+  returned closure that captured a holder given a view of a parameter),
+  #468 (a closure literal whose `( Vec s )` parameter is the holder of
+  `vec_extend`), #469 (a closure that captured an owner of views by
+  value, run on another thread), #472 (an iterator yields copies of what
+  it captured), #473 (a closure literal hands back a local holder of its
+  captures' views), #475 (the keep rule and the `inout` store for a `!i
+  String`, a `? ?String` or a `!( Rc String ) String`), #478 (a second
+  name of a fresh `s` binding's buffer handed back), #479 (a copied
+  closure that views a local, a closure body handing a `sink` a value
+  derived from its capture, and a statement-form match arm returning a
+  closure over a borrowed field), #481 (a `dyn` impl that calls its own
+  method through a dyn field), #482 (a `~ x b` loop over a borrow of a
+  container's element, the container changed in the body by its own
+  name), #483 (a closure literal capturing a `vec_at` binding's
+  element), #484 (a `~` loop's element moved into another Vec leaks),
+  #485 (an owned slice literal of Strings never drops its Strings), #487
+  (a bare `s` view handed back through a `?` join, or from a `??`
+  payload inside an `if`, a loop or after another statement), #488 (a
+  field given a new value through a `~` loop's struct element), #489 (an
+  `unsafe` function handing back a view of its `~` loop's element over a
+  parameter), #490 (a `~` loop's element moved out — handed to a sink,
+  `string_free`, `vec_free`), #491 (a defer armed in an inner block
+  reading a borrow bound in that block), #492 (a view-class `~` loop
+  element read after what it views changes), #493 (a `~ x t` loop going
+  on after `t` grew through another name), #494 (a container handed to a
+  `sink` parameter together with a borrow of its element), #496 (a
+  parameter's element grown by a closure, a closure parameter or through
+  a `??` payload), #497 (an element bound through one Rc handle and
+  grown, viewed through another handle of the same Rc), #498 (a `: ~`
+  cursor bound to a `?` join whose arms are owners or their fields) and
+  #499 (a value block whose tail is an outer borrow).
+  `docs/LIMITATIONS.md` gives each one's shape and how to stay clear of
+  it. A release does not say "no hole is known open" while one is.
+- **A rare late accept on macOS** (Agora #501), unchanged since 0.87.0:
+  in one of 11 450 `sched_accept_admission` runs beside the full corpus,
+  an acceptor ran 485 dispatches after its connection reached the
+  listener's queue. The cause is not known yet.
+
 ## [0.88.0] — 2026-11-05
 
 ### Added

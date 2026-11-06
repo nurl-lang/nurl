@@ -22,7 +22,8 @@ Hello there
   ties), `<0xNN>` byte fallback, UNK.
 * **byte-level BPE** for gpt2-family ones: the GPT-2 byte→unicode remap,
   the contraction/letter/digit/punct/whitespace pre-split (with the qwen2
-  variant), lowest-merge-rank pairing.
+  variant, and qwen35's, whose words take combining marks too),
+  lowest-merge-rank pairing.
 * **Unigram** for Hugging Face `tokenizer.json` models (XLM-RoBERTa /
   BGE / multilingual-e5 family, `src/unigram.nu`): the sentencepiece
   Precompiled charsmap normalizer (a darts-clone double-array trie of
