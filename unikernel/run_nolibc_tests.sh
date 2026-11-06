@@ -157,6 +157,11 @@ one() {
             cpu-vaes)    host_has_cpu_vaes    || { echo "SKIP $name (requires $tok)"; return 0; } ;;
             cpu-vaes512) host_has_cpu_vaes512 || { echo "SKIP $name (requires $tok)"; return 0; } ;;
             cpu-ifma)    host_has_cpu_ifma    || { echo "SKIP $name (requires $tok)"; return 0; } ;;
+            # The socket layer this build links (unikernel/net/sockets.nu)
+            # is loopback only: no frame leaves the process, so a test
+            # that needs a third party on the public network describes a
+            # run this is not, whatever NURL_HTTP_TESTS says.
+            internet)    echo "SKIP $name (requires internet: this build's network is loopback only)"; return 0 ;;
         esac
     done
 
