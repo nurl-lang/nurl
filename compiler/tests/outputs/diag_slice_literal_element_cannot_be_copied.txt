@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_slice_literal_element_cannot_be_copied.nu:11:18: error: element 1 of this slice literal is a 'D' it does not own, and one cannot be copied: a slice owns its elements, so it takes a fresh value or a copy. Build the element in place (a constructor call), or keep the values in a Vec and move them in with vec_push.
+    : [D sl [D | d]
+                 ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

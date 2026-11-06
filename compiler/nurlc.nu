@@ -5450,6 +5450,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
     ( nurl_sym_def syms `__last_call_ret_struct_fields__` `` )
     ( nurl_sym_def syms `__last_agg_param_idents__` `` )
     ( nurl_sym_def syms `__last_closure_param_idents__` `` )
+    ( nurl_sym_def syms `__last_slice_owned__` `` )
     // …and the deferred-call channels, so a `^ x` return can never read
     // a forward call left over from an earlier statement.
     ( nurl_sym_def syms `__last_call_forward__` `` )
@@ -6509,9 +6510,21 @@ unsafe @ gen_ret i lex i syms i cg → s {
     ? != 0 g_auto_drop_strings
     { = skip_struct_ptr ( mem_ret_struct_transfer syms lt xfer_ident ) }
     {}
-    ? != 0 ( nurl_str_len skip )
+    // A fresh slice handed back — a literal (`^ [ T | … ]`), a join of
+    // literals, or a call's owned slice — is the caller's to free, as an
+    // owned slice binding returned by name is. Read as nobody's, the
+    // caller never freed it (nor, now, the elements it owns).
+    // (The literal's flag is read only where the literal or a join made
+    // it last: a literal passed to a call inside the return set it too.)
+    : b ret_fresh_slice & ( mem_is_slice_ty lt ) | & | | == ret_first_tt TT_LBRACK == ret_first_tt TT_QUEST == ret_first_tt TT_QUESTQUEST
+    ( seq ( nurl_sym_get syms `__last_slice_owned__` ) `1` )
+    & ret_is_direct_call ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `1` )
+    ? | != 0 ( nurl_str_len skip ) ret_fresh_slice
     { ( nurl_sym_set_deep syms `__fn_ret_owned__` `1` ) }
-    {}
+    // An all-paths fact, as for a string (__fn_ret_str_mixed__): a slice
+    // returned on another path that is not this function's own (a
+    // parameter, a borrow) vetoes it.
+    { ? ( mem_is_slice_ty lt ) { ( nurl_sym_set_deep syms `__fn_ret_slice_mixed__` `1` ) } {} }
     // Borrow provenance: if the returned value is a borrow (derived from a
     // parameter), this function returns a borrow — callers must NOT
     // auto-drop a `:`-binding off it. (Unless it was copied on the way out.)
@@ -6911,8 +6924,14 @@ unsafe @ gen_ret i lex i syms i cg → s {
 
 @ gen_expr i lex i syms i cg → s {
     ( __nest_enter lex )
+    : i tt ( nurl_lex_type lex )
     : s v ( __gen_expr_level lex syms cg )
     = g_nest_depth - g_nest_depth 1
+    // A fresh slice is a literal, or a join or block of them: one a literal
+    // inside a call or an aggregate literal marked (an argument, a field)
+    // is not this value. Left set, `? c ( f p [i | 9] ) [i | 1]` read as a
+    // join of fresh slices and its owner freed the parameter f handed back.
+    ? & | == tt TT_LPAREN == tt TT_AT != 0 ( nurl_sym_len syms `__last_slice_owned__` ) { ( nurl_sym_def syms `__last_slice_owned__` `` ) } {}
     ^ v
 }
 
@@ -17289,8 +17308,26 @@ unsafe @ gen_call i lex i syms i cg → s {
             } { ? summary_callee {
                     : s zc ( nurl_cg_reg cg )
                     ( emit_sink_flag_load ( consume_flag call_name fname arg_idx ) zc )
+                    // A callee that keeps the element is handed a copy of it
+                    // (mem_emit_cloneif_k below, on the same flag): then the
+                    // slot keeps its value, as a field read's does (h299).
+                    // Emptied as well, the element left the container and
+                    // only its copy was kept: the element leaked (agora #484).
+                    : ~ s zf ( nurl_str_cat zc `` )
+                    ? != 0 ( nurl_str_len arg_lent ) {
+                        : b __zkbit ( __lent_by_bit syms ( mem_udrop_ptr_of syms bck_arg_val ) )
+                        : s zk ( nurl_cg_reg cg )
+                        ( emit_sink_flag_load ? __zkbit ( nurl_str_cat `@.__nurl_sink.` ( nurl_str_int ( sink_flag call_name fname arg_idx ) ) ) ( nurl_str_cat `@.__nurl_store.` ( nurl_str_int ( store_flag call_name fname arg_idx ) ) ) zk )
+                        : s zl ( mem_lent_reg cg arg_lent )
+                        : s zkl ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print zkl ) ( nurl_print ` = and i1 ` ) ( nurl_print zk ) ( nurl_print `, ` ) ( nurl_print ? ( seq zl `1` ) `true` zl ) ( nurl_print `\n` )
+                        : s zn ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print zn ) ( nurl_print ` = xor i1 ` ) ( nurl_print zkl ) ( nurl_print `, true\n` )
+                        = zf ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print zf ) ( nurl_print ` = and i1 ` ) ( nurl_print zc ) ( nurl_print `, ` ) ( nurl_print zn ) ( nurl_print `\n` )
+                    } {}
                     ( nurl_print `  call void @__nurl_zero_if.` ) ( nurl_print ( __zero_if_request fl ) )
-                    ( nurl_print `(i1 ` ) ( nurl_print zc ) ( nurl_print `, ptr ` ) ( nurl_print es ) ( nurl_print `)\n` )
+                    ( nurl_print `(i1 ` ) ( nurl_print zf ) ( nurl_print `, ptr ` ) ( nurl_print es ) ( nurl_print `)\n` )
                 } {} }
         } {}
         // A field of an owned struct handed to a consumer — `( string_free
@@ -23982,7 +24019,93 @@ unsafe @ __src_operand_end * u src i len i pos → i {
         ( nurl_print `  call void @nurl_closure_slice_drop(i8* ` ) ( nurl_print raw )
         ( nurl_print `, i64 ` ) ( nurl_print ln ) ( nurl_print `)\n` ) }
     {}
+    ( mem_emit_slice_elems_drop cg ( nurl_str_slice tptr 0 - ( nurl_str_len tptr ) 1 ) ( nurl_llty ty ) v raw )
     ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print raw ) ( nurl_print `)` ) ( emit_dbg_eol )
+}
+
+// Whether an owned slice owns its elements as well as its buffer: an
+// element that owns something (a String, a Vec, a struct or an enum that
+// holds one — what a Vec element owns, __elem_owns) is the slice's own. A
+// slice literal moves a fresh element in and copies any other in
+// (gen_slice_literal), an element store does the same (mem_elem_store_val),
+// and freeing the buffer drops them. A slice of closures owns its envs the
+// same way, through nurl_closure_slice_drop (docs/MEMORY.md §7.4).
+@ __slice_owns_elems s elem → b {
+    ? ( __is_closure_ty elem ) { ^ F } {}
+    ^ & != 0 g_auto_drop_strings ( __type_needs_drop elem g_root_syms )
+}
+
+// Drop the elements of an owned slice `sv` (LLVM type `sll`, data pointer
+// `raw`) before its buffer is freed, when it owns them.
+@ mem_emit_slice_elems_drop i cg s elem0 s sll s sv s raw → v {
+    : s elem ( nurl_llty elem0 )
+    ? ! ( __slice_owns_elems elem ) { ^ v } {}
+    : s ln ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print ln ) ( nurl_print ` = extractvalue ` ) ( nurl_print sll )
+    ( nurl_print ` ` ) ( nurl_print sv ) ( nurl_print `, 1\n` )
+    ( nurl_print `  call void @` ) ( nurl_print ( __slice_drop_request elem ) ) ( nurl_print `(i8* ` ) ( nurl_print raw )
+    ( nurl_print `, i64 ` ) ( nurl_print ln ) ( nurl_print `)` ) ( emit_dbg_eol )
+}
+
+// The value an element store (`= . sl k v`) puts into a slice that owns its
+// elements. gen_field_rhs has already made it one the store may hand over (a
+// fresh value as it is, a borrowed one copied); a binding is refused here
+// (`first_tt` / `first_val`: how the value was spelled; `line` / `col`:
+// where). A store into storage moves a binding (§7.6), and a binding moved
+// into a slice was read on after the slice dropped it, unchecked (a
+// maybe-move) — the program stores a copy or a fresh value instead.
+@ mem_slice_store_val i lex i syms i cg s elem s val i first_tt s first_val i line i col → s {
+    ? | ( __is_closure_ty elem ) ! ( __slice_owns_elems ( nurl_llty elem ) ) { ^ ( nurl_str_cat val `` ) } {}
+    : s ell ( nurl_llty elem )
+    ? ( is_ident_tok first_tt ) {
+        // (A bare variant of the element's enum is a value of its own.)
+        ? == ( nurl_str_get ell 0 ) 37 {
+            ? ( str_contains_word ( nurl_sym_get2 syms ( nurl_str_slice ell 1 - ( nurl_str_len ell ) 1 ) `__variants` ) first_val ) { ^ ( nurl_str_cat val `` ) } {}
+        } {}
+        ( die_pos lex line col ( nurl_str_cat4 `this element store puts the binding '` first_val
+        ( nurl_str_cat3 `' into a slice of '` ( llvm_to_nurl ell ) `', and a slice owns its elements: storing a binding there would leave two owners of one value. ` )
+        `Store a copy of it (( string_clone x ), ( vec_clone [T] x ), …) or a value made for the slice.` ) )
+    } {}
+    ^ ( nurl_str_cat val `` )
+}
+
+// Before an element store into a slice that owns its elements: drop the
+// element the store replaces (slot `gep`).
+@ mem_emit_slice_slot_drop i cg s elem s gep → v {
+    ? ! ( __slice_owns_elems ( nurl_llty elem ) ) { ^ v } {}
+    ( nurl_print `  call void @` ) ( nurl_print ( __slice_drop_request ( nurl_llty elem ) ) ) ( nurl_print `(i8* ` ) ( nurl_print gep )
+    ( nurl_print `, i64 1)` ) ( emit_dbg_eol )
+}
+
+// `@__slice_drop__<m>(i8* data, i64 len)`, which drops each element of type
+// `elem`; emitted once per type at module end (emit_pending_slice_drops).
+@ __slice_drop_request s elem → s {
+    : s m ( __drop_mangle elem )
+    : s key ( nurl_str_cat `slicedrop##` m )
+    ? == 0 ( nurl_sym_len g_impl_name_syms key ) {
+        ( nurl_sym_def g_impl_name_syms key `1` )
+        ( __park_append g_impl_name_syms `__pending_slicedrops__` ( __park_ty elem ) )
+    } {}
+    ^ ( nurl_str_cat `__slice_drop__` m )
+}
+
+@ emit_pending_slice_drops i syms → v {
+    : ~ s rest ( nurl_sym_get g_impl_name_syms `__pending_slicedrops__` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s elem ( __unpark_ty ( str_first_word rest ) ) = rest ( str_skip_word rest )
+        : s ll ( nurl_llty elem )
+        // The element's own drop first: its definition must not land inside
+        // this one.
+        ( gen_drop_for_type elem syms )
+        : ~ i ctr 0
+        ( nurl_print `define linkonce_odr void @__slice_drop__` ) ( nurl_print ( __drop_mangle elem ) )
+        ( nurl_print `(i8* %p, i64 %n) {\nentry:\n  %b = bitcast i8* %p to ` ) ( nurl_print ll )
+        ( nurl_print `*\n  br label %h\nh:\n  %i = phi i64 [ 0, %entry ], [ %i2, %l ]\n  %c = icmp slt i64 %i, %n\n  br i1 %c, label %l, label %x\nl:\n  %ep = getelementptr ` )
+        ( nurl_print ll ) ( nurl_print `, ` ) ( nurl_print ll ) ( nurl_print `* %b, i64 %i\n  %ev = load ` )
+        ( nurl_print ll ) ( nurl_print `, ` ) ( nurl_print ll ) ( nurl_print `* %ep\n` )
+        ( emit_drop_value elem `%ev` ctr syms )
+        ( nurl_print `  %i2 = add i64 %i, 1\n  br label %h\nx:\n  ret void\n}\n` )
+    }
 }
 
 // Emit `free` for every binding in the owned list, skipping `skip_name`.
@@ -24251,6 +24374,7 @@ unsafe @ mem_path_to_indices s path → s {
         ( nurl_print `  ` ) ( nurl_print raw )
         ( nurl_print ` = bitcast ` ) ( nurl_print ( nurl_llty tptr ) )
         ( nurl_print ` ` ) ( nurl_print dp ) ( nurl_print ` to i8*\n` )
+        ( mem_emit_slice_elems_drop cg ( nurl_str_slice tptr 0 - slen 10 ) ( nurl_llty slice_ty ) sv2 raw )
         ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print raw ) ( nurl_print `)` ) ( emit_dbg_eol )
     }
 }
@@ -43947,6 +44071,9 @@ unsafe @ __replaces_note i syms s name s field → v {
         { : i idx ( nurl_lex_inum lex )
             ( nurl_lex_advance lex )
             : i __es_tt ( nurl_lex_type lex )
+            : s __es_v ( nurl_str_cat ( nurl_lex_val lex ) `` )
+            : i __es_l ( nurl_lex_line lex )
+            : i __es_c ( nurl_lex_col lex )
             ( __clo_tmp_set `` )
             : s rhs ( gen_field_rhs lex syms cg )
             // Same store-time contract as the named-field path:
@@ -43960,13 +44087,14 @@ unsafe @ __replaces_note i syms s name s field → v {
             { ( die lex ( nurl_str_cat ( nurl_str_cat4 `cannot store a value of type '` ( llvm_to_nurl __fs_rt ) `' into an element of type '` ( llvm_to_nurl elem_ty ) ) `' — the element type differs and NURL has no implicit conversions. Convert the value explicitly, or declare the container with the type you mean to store in it.` ) ) }
             {}
             : s rhsc0 ( coerce_store_val lex rhs __fs_rt elem_ty syms cg )
-            : s rhsc ( mem_elem_store_val syms cg elem_ty rhsc0 __es_tt )
+            : s rhsc ( mem_slice_store_val lex syms cg elem_ty ( mem_elem_store_val syms cg elem_ty rhsc0 __es_tt ) __es_tt __es_v __es_l __es_c )
             : s gep ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print gep )
             ( nurl_print ` = getelementptr ` ) ( nurl_print ( nurl_llty elem_ty ) )
             ( nurl_print `, ` ) ( nurl_print ( nurl_llty ptr_ty ) )
             ( nurl_print ` ` ) ( nurl_print data_ptr )
             ( nurl_print `, i32 ` ) ( nurl_print ( nurl_str_int idx ) ) ( nurl_print `\n` )
+            ( mem_emit_slice_slot_drop cg elem_ty gep )
             ( mem_ff_putback syms cg gep elem_ty )
             ( nurl_print `  store ` ) ( nurl_print ( nurl_llty elem_ty ) )
             ( nurl_print ` ` ) ( nurl_print rhsc )
@@ -43987,6 +44115,9 @@ unsafe @ __replaces_note i syms s name s field → v {
             : s idx_type ( nurl_get_last_type )
             ( die_if_not_index lex idx_type `element` )
             : i __es_tt ( nurl_lex_type lex )
+            : s __es_v ( nurl_str_cat ( nurl_lex_val lex ) `` )
+            : i __es_l ( nurl_lex_line lex )
+            : i __es_c ( nurl_lex_col lex )
             ( __clo_tmp_set `` )
             : s rhs ( gen_field_rhs lex syms cg )
             // Same store-time contract as the named-field path:
@@ -44000,13 +44131,14 @@ unsafe @ __replaces_note i syms s name s field → v {
             { ( die lex ( nurl_str_cat ( nurl_str_cat4 `cannot store a value of type '` ( llvm_to_nurl __fs_rt ) `' into an element of type '` ( llvm_to_nurl elem_ty ) ) `' — the element type differs and NURL has no implicit conversions. Convert the value explicitly, or declare the container with the type you mean to store in it.` ) ) }
             {}
             : s rhsc0 ( coerce_store_val lex rhs __fs_rt elem_ty syms cg )
-            : s rhsc ( mem_elem_store_val syms cg elem_ty rhsc0 __es_tt )
+            : s rhsc ( mem_slice_store_val lex syms cg elem_ty ( mem_elem_store_val syms cg elem_ty rhsc0 __es_tt ) __es_tt __es_v __es_l __es_c )
             : s gep ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print gep )
             ( nurl_print ` = getelementptr ` ) ( nurl_print ( nurl_llty elem_ty ) )
             ( nurl_print `, ` ) ( nurl_print ( nurl_llty ptr_ty ) )
             ( nurl_print ` ` ) ( nurl_print data_ptr )
             ( nurl_print `, ` ) ( nurl_print ( nurl_llty idx_type ) ) ( nurl_print ` ` ) ( nurl_print idx_val ) ( nurl_print `\n` )
+            ( mem_emit_slice_slot_drop cg elem_ty gep )
             ( mem_ff_putback syms cg gep elem_ty )
             ( nurl_print `  store ` ) ( nurl_print ( nurl_llty elem_ty ) )
             ( nurl_print ` ` ) ( nurl_print rhsc )
@@ -47891,6 +48023,8 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         // A slice of closures owns its elements' envs (docs/MEMORY.md
         // §7.4): a borrowed element is cloned in.
         ? ( __is_closure_ty vt ) { = v ( mem_clo_into_store syms cg vt v __setok ) } {}
+        // (A bare variant, wrapped below, is a value of its own.)
+        : ~ b __se_bare F
         // ENUM element type (`[Color | Red Green]`): a bare variant
         // evaluates to its i64 tag, and the store below is emitted at
         // the declared `%Color` — `store %Color <i64>` was invalid IR
@@ -47914,13 +48048,32 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
                     ( nurl_print ` = insertvalue ` ) ( nurl_print ( nurl_llty elem_ty ) )
                     ( nurl_print ` undef, i64 ` ) ( nurl_print v ) ( nurl_print `, 0\n` )
                     = v __sew2
-                    = vt ( nurl_str_cat ( nurl_llty elem_ty ) `` ) }
+                    = vt ( nurl_str_cat ( nurl_llty elem_ty ) `` )
+                    = __se_bare T }
                 { ( die lex ( nurl_str_cat3
                     ( nurl_str_cat4 `element ` ( nurl_str_int + count 1 ) ` of this slice literal has numeric type '` ( llvm_to_nurl ( nurl_llty vt ) ) )
                     ( nurl_str_cat3 `' but the slice's declared element type is enum '` __setn `' — an enum is a closed set of named variants, and no number converts into one implicitly` )
                     `. Write the element as a variant by name.` ) ) } }
             {} }
         {}
+        // …and a slice of values that own something owns those values
+        // (__slice_owns_elems): a fresh one moves in, any other — a binding,
+        // a field, a borrowing call's result — is copied in. Left a view of
+        // the binding it named, the slice was a second name for its buffer
+        // that no rule saw (the binding handed on or freed, the slice read
+        // on); a fresh one was owned by nothing and leaked.
+        ? & & ! __se_bare ! ( __is_closure_ty vt ) ( __slice_owns_elems ( nurl_llty elem_ty ) ) {
+            : s __sll ? ( is_ident_tok __setok ) ( nurl_str_cat `1` `` ) ( mem_lent_cond syms cg vt ( __val_eff_tt __setok ) __sev0 )
+            ? != 0 ( nurl_str_len __sll ) {
+                ? ! ( __clone_supported vt syms ) {
+                    ( die_pos lex __sel __sec ( nurl_str_cat3
+                    ( nurl_str_cat4 `element ` ( nurl_str_int + count 1 ) ` of this slice literal is a '` ( llvm_to_nurl ( nurl_llty vt ) ) )
+                    `' it does not own, and one cannot be copied: a slice owns its elements, so it takes a fresh value or a copy.`
+                    ` Build the element in place (a constructor call), or keep the values in a Vec and move them in with vec_push.` ) )
+                } {}
+                = v ( mem_emit_cloneif cg vt v __sll )
+            } {}
+        } {}
         // Element ↔ declared-type agreement. The stores below are emitted
         // with the DECLARED element type, so a mismatched element used to
         // become `store i64 2.5, …` — invalid IR that nurlc accepted
@@ -50619,6 +50772,9 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     ( nurl_sym_def body_syms `__ret_hown_slot__` `` )
     ( nurl_sym_def body_syms `__fn_ret_str_owned__` `` )
     ( nurl_sym_def body_syms `__fn_ret_str_mixed__` `` )
+    // (…and its slice returns answer for it, not for the enclosing function.)
+    ( nurl_sym_def body_syms `__fn_ret_owned__` `` )
+    ( nurl_sym_def body_syms `__fn_ret_slice_mixed__` `` )
     ( nurl_sym_def body_syms `__fn_ret_proof_live__` `` )
 
     // Register closure parameters
@@ -58304,6 +58460,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     = g_fn_slice_decls 0
     ( nurl_sym_def syms `__last_ident_name__` `` )
     ( nurl_sym_def syms `__fn_ret_owned__` `` )
+    ( nurl_sym_def syms `__fn_ret_slice_mixed__` `` )
     // Borrow provenance: does THIS function return a borrow (a value that
     // aliases a parameter)? Set by gen_ret from __last_value_borrow__.
     ( nurl_sym_def syms `__fn_ret_borrow__` `` )
@@ -58604,6 +58761,12 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     // Exits a tail `?`/`??` handed up to the body: its value is the
     // fall-off return, used iff the function returns one.
     : b __fall_used & == 0 g_did_ret ! ( seq ret_ty `void` )
+    // A fresh slice the body falls off with (a literal, a join of them, a
+    // call's owned slice) is the caller's, as gen_ret's ret_fresh_slice.
+    : i __fall_tt ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) )
+    : b __fall_fresh_slice & & __fall_used ( mem_is_slice_ty ret_ty )
+    | & | | == __fall_tt TT_LBRACK == __fall_tt TT_QUEST == __fall_tt TT_QUESTQUEST ( seq ( nurl_sym_get syms `__last_slice_owned__` ) `1` )
+    & == __fall_tt TT_LPAREN ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `1` )
     ? __fall_used {
         ( bck_record_expr_return syms
         ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) )
@@ -58930,9 +59093,9 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     ? != 0 g_auto_drop_strings
     { = skip_struct_ptr ( mem_ret_struct_transfer syms ret_ty ret_ident ) }
     {}
-    ? != 0 ( nurl_str_len skip )
+    ? | != 0 ( nurl_str_len skip ) __fall_fresh_slice
     { ( nurl_sym_set_deep syms `__fn_ret_owned__` `1` ) }
-    {}
+    { ? & __fall_used ( mem_is_slice_ty ret_ty ) { ( nurl_sym_set_deep syms `__fn_ret_slice_mixed__` `1` ) } {} }
     // A `→ v` body discards its tail value.
     ? ( seq ret_ty `void` ) { ( mem_clo_drop_discarded syms cg last tail_tt ) } {}
     ? ( seq ret_ty `void` )
@@ -59058,7 +59221,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     ( lint_fn_end lex )
     // Snapshot owned-return flags BEFORE pop: nurl_sym_get returns a pointer
     // into the current scope's entry, which nurl_sym_pop then frees.
-    : i fn_ret_owned_flag ? != 0 ( nurl_sym_len syms `__fn_ret_owned__` ) 1 0
+    : i fn_ret_owned_flag ? & != 0 ( nurl_sym_len syms `__fn_ret_owned__` ) == 0 ( nurl_sym_len syms `__fn_ret_slice_mixed__` ) 1 0
     // Ownership is an ALL-paths property: one return site that proved a
     // fresh owned string must not speak for a sibling that returned a
     // parameter or a literal (seplist_first's `^ str` tail did exactly
@@ -62225,6 +62388,9 @@ unsafe @ __hmemo_close s key i mark b r → v {
         : s ty ( __unpark_ty ( str_first_word rest ) ) = rest ( str_skip_word rest )
         ( gen_drop_for_type ty syms )
     }
+    // (…the owned slices' element drops, whose element drops may ask for
+    // the option / glue drops below.)
+    ( emit_pending_slice_drops syms )
     // `%__opt.<T>` and its drop: the payload when there is one, and a
     // result's error when that owns something; an option / result held in
     // a struct field or a Vec element (gen_drop_for_type): the same drop
