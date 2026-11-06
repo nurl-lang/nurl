@@ -48,6 +48,9 @@ $ `stdlib/std/unicat.nu`
 // BPE pre-tokenizer variants (tokenizer.ggml.pre)
 : i PRE_DEFAULT 0
 : i PRE_QWEN2 1
+// qwen35 (Qwen3.5, Qwen3.8): qwen2's split with combining marks (\p{M}) in
+// the word class — rules 2 and 4 read `[\p{L}\p{M}]` where qwen2 reads `\p{L}`.
+: i PRE_QWEN35 2
 
 : TokImpl {
     i mode
@@ -162,7 +165,7 @@ $ `stdlib/std/unicat.nu`
 // Everything a vocabulary needs to say about itself, whatever file it came in.
 : TokSpec {
     i mode  // TOK_SPM | TOK_BPE
-    i pre  // PRE_DEFAULT | PRE_QWEN2
+    i pre  // PRE_DEFAULT | PRE_QWEN2 | PRE_QWEN35
     i bos
     i eos
     i unk
@@ -533,6 +536,16 @@ $ `stdlib/std/unicat.nu`
     ^ ( uc_is_letter ( __tk_cp_at t r n ) )
 }
 
+// A letter, or with `marks` a letter or a combining mark: the word class of
+// qwen2's split (\p{L}) or qwen35's ([\p{L}\p{M}]).
+@ __tk_word_at ( Slice u ) t i r i n b marks → b {
+    : i b ( slice_byte t r )
+    ? < b 128 { ^ ( __tk_is_ascii_letter b ) } {}
+    : i c ( __tk_cp_at t r n )
+    ? ( uc_is_letter c ) { ^ T } {}
+    ^ & marks ( uc_is_mark c )
+}
+
 @ __tk_digit_at ( Slice u ) t i r i n → b {
     : i b ( slice_byte t r )
     ? < b 128 { ^ ( __tk_is_ascii_digit b ) } {}
@@ -560,7 +573,11 @@ $ `stdlib/std/unicat.nu`
 //                                        before a word yields k−1 here and
 //                                        leaves the last space to rule 2
 //   7  \s+                                anything left
-@ __tk_pretoken_len_qwen2 ( Slice u ) text_v i p i n → i {
+//
+// With `marks` (qwen35) the word class of 2 and 4 is [\p{L}\p{M}]: a run of
+// letters goes on through a combining accent, and an accent is not
+// punctuation.
+@ __tk_pretoken_len_qwen2 ( Slice u ) text_v i p i n b marks → i {
     : i b0 ( slice_byte text_v p )
 
     // 1
@@ -571,15 +588,15 @@ $ `stdlib/std/unicat.nu`
 
     // 2 — the lead char must not be a letter, a digit or a newline
     ? & ! ( __tk_letter_at text_v p n ) & ! ( __tk_digit_at text_v p n ) & != b0 10 != b0 13 {
-        ? & < + p 1 n ( __tk_letter_at text_v + p 1 n ) {
+        ? & < + p 1 n ( __tk_word_at text_v + p 1 n marks ) {
             : ~ i r + p 1
-            ~ & < r n ( __tk_letter_at text_v r n ) { = r + r 1 }
+            ~ & < r n ( __tk_word_at text_v r n marks ) { = r + r 1 }
             ^ - r p
         } {}
     } {}
-    ? ( __tk_letter_at text_v p n ) {
+    ? ( __tk_word_at text_v p n marks ) {
         : ~ i r p
-        ~ & < r n ( __tk_letter_at text_v r n ) { = r + r 1 }
+        ~ & < r n ( __tk_word_at text_v r n marks ) { = r + r 1 }
         ^ - r p
     } {}
 
@@ -591,17 +608,17 @@ $ `stdlib/std/unicat.nu`
     : ~ i lead 0
     ? & == b0 32 < + p 1 n {
         : i b1 ( slice_byte text_v + p 1 )
-        ? & ! ( __tk_ws_at text_v + p 1 n ) & ! ( __tk_letter_at text_v + p 1 n ) ! ( __tk_digit_at text_v + p 1 n ) {
+        ? & ! ( __tk_ws_at text_v + p 1 n ) & ! ( __tk_word_at text_v + p 1 n marks ) ! ( __tk_digit_at text_v + p 1 n ) {
             = q + p 1
             = lead 1
         } {}
     } {}
-    ? | > lead 0 & ! ( __tk_ws_at text_v p n ) & ! ( __tk_letter_at text_v p n ) ! ( __tk_digit_at text_v p n ) {
+    ? | > lead 0 & ! ( __tk_ws_at text_v p n ) & ! ( __tk_word_at text_v p n marks ) ! ( __tk_digit_at text_v p n ) {
         : ~ i r q
         : ~ b more T
         ~ & more < r n {
             : i cc ( slice_byte text_v r )
-            ? | | ( __tk_ws_at text_v r n ) ( __tk_letter_at text_v r n ) ( __tk_digit_at text_v r n ) { = more F } { = r + r 1 }
+            ? | | ( __tk_ws_at text_v r n ) ( __tk_word_at text_v r n marks ) ( __tk_digit_at text_v r n ) { = more F } { = r + r 1 }
         }
         ? > r q {
             ~ & < r n | == ( slice_byte text_v r ) 10 == ( slice_byte text_v r ) 13 { = r + r 1 }
@@ -785,7 +802,7 @@ $ `stdlib/std/unicat.nu`
     : i n ( slice_len [u] text_v )
     : ~ i p 0
     ~ < p n {
-        : i len ? == . t pre PRE_QWEN2 ( __tk_pretoken_len_qwen2 text_v p n ) ( __tk_pretoken_len text_v p n )
+        : i len ? | == . t pre PRE_QWEN2 == . t pre PRE_QWEN35 ( __tk_pretoken_len_qwen2 text_v p n == . t pre PRE_QWEN35 ) ( __tk_pretoken_len text_v p n )
         ( __tk_bpe_word t text_v p ? < len 1 1 len out )
         = p + p ? < len 1 1 len
     }

@@ -9,6 +9,7 @@ def ranges(pred):
     return out
 L=ranges(lambda c: unicodedata.category(chr(c)).startswith('L'))
 N=ranges(lambda c: unicodedata.category(chr(c)).startswith('N'))
+M=ranges(lambda c: unicodedata.category(chr(c)).startswith('M'))
 S=ranges(lambda c: chr(c).isspace())
 def body(name,rs):
     lines=[f"@ __uc_{name}_make → ( Arc ( Vec i ) ) {{","    : ( Vec i ) v ( vec_with_cap [i] "+str(2*len(rs))+" )"]
@@ -22,8 +23,8 @@ def body(name,rs):
     lines.append("")
     return "\n".join(lines)
 print(f"""// stdlib/std/unicat.nu — Unicode general categories a tokenizer's
-// pre-tokenizer asks about: is a codepoint a letter (\\p{{L}}), a number
-// (\\p{{N}}), white space (\\s)? Generated from Unicode {unicodedata.unidata_version}
+// pre-tokenizer asks about: is a codepoint a letter (\\p{{L}}), a mark
+// (\\p{{M}}), a number (\\p{{N}}), white space (\\s)? Generated from Unicode {unicodedata.unidata_version}
 // (Python's unicodedata) by tools/gen_unicat.py: sorted [first, last]
 // ranges, built once at start and searched by halves.
 $ `stdlib/core/vec.nu`
@@ -46,12 +47,22 @@ $ `stdlib/core/slice.nu`
 }}
 
 {body('l',L)}
+{body('m',M)}
 {body('n',N)}
 {body('s',S)}
 // A letter: general category L (Lu Ll Lt Lm Lo).
 @ uc_is_letter i c → b {{
     ? < c 128 {{ ^ | & >= c 65 <= c 90 & >= c 97 <= c 122 }} {{}}
     ^ ( __uc_in ( arc_get [( Vec i )] g_uc_l ) c )
+}}
+
+// A mark: general category M (Mn Mc Me): a combining accent, a vowel
+// sign. A pre-tokenizer that reads `[\\p{{L}}\\p{{M}}]+` (qwen35's) keeps
+// "e" + U+0301 inside its word; one that knows only letters cuts the
+// word at the accent. ASCII has none.
+@ uc_is_mark i c → b {{
+    ? < c 128 {{ ^ F }} {{}}
+    ^ ( __uc_in ( arc_get [( Vec i )] g_uc_m ) c )
 }}
 
 // A number: general category N (Nd Nl No).
@@ -64,6 +75,5 @@ $ `stdlib/core/slice.nu`
 @ uc_is_space i c → b {{
     ? < c 128 {{ ^ | == c 32 & >= c 9 <= c 13 }} {{}}
     ^ ( __uc_in ( arc_get [( Vec i )] g_uc_s ) c )
-}}
-""")
-print(len(L),len(N),len(S),file=sys.stderr)
+}}""")
+print(len(L),len(M),len(N),len(S),file=sys.stderr)

@@ -412,7 +412,7 @@ $ `stdlib/core/slice.nu`
     // Writes a model file carrying tokenizer.chat_template and reads the
     // style back through the same path a downloaded model takes.
     : ~ i si 0
-    ~ < si 6 {
+    ~ < si 7 {
         : ~ s tpl ``
         : ~ i want CHAT_PLAIN
         ? == si 0 {
@@ -435,7 +435,11 @@ $ `stdlib/core/slice.nu`
             = tpl `{% for m in messages %}<|{{ m.role }}|>\n{{ m.content }}<|end|>\n{% endfor %}<|assistant|>\n`
             = want CHAT_PHI3
         } {}
-        // si == 5: no template at all → PLAIN
+        ? == si 5 {
+            = tpl `{% for m in messages %}<|im_start|>{{ m.role }}\n{{ m.content }}<|im_end|>{% endfor %}{%- if enable_thinking is defined and enable_thinking is true %}<think>{% endif %}`
+            = want CHAT_CHATML_NT
+        } {}
+        // si == 6: no template at all → PLAIN
         ?? ( gw_new 32 ) {
             T w → {
                 ( gw_kv_str w `general.architecture` `llama` )

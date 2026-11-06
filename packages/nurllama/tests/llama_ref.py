@@ -2,8 +2,39 @@
 import struct, sys
 import numpy as np
 
-def read_gguf(path):
-    d=open(path,'rb').read(); off=8
+def _deq(d, doff, dims, ty, rel):
+    ne=int(np.prod(dims))
+    if ty==0:
+        a=np.frombuffer(d,dtype='<f4',count=ne,offset=doff+rel)
+    else:
+        import kq_vec as kq
+        raw=bytes(d[doff+rel: doff+rel + ne*{6:22,8:34,12:144,13:176,14:210}[ty]//{6:32,8:32,12:256,13:256,14:256}[ty]])
+        a=kq.DEQ[ty](raw,ne)
+    # ggml ne0 fastest → numpy shape reversed
+    return a.reshape(list(reversed(dims)))
+
+class LazyTens:
+    """A GGUF's tensors, each dequantised when it is asked for: a model too
+    large to hold as f32 all at once. Names in `keep` stay cached."""
+    def __init__(self, d, doff, infos, keep=()):
+        self.d, self.doff = d, doff
+        self.info = {nm: (dims, ty, rel) for nm, dims, ty, rel in infos}
+        self.keep, self.cache = set(keep), {}
+    def __contains__(self, nm): return nm in self.info
+    def get(self, nm, default=None): return self[nm] if nm in self.info else default
+    def __getitem__(self, nm):
+        if nm in self.cache: return self.cache[nm]
+        a = _deq(self.d, self.doff, *self.info[nm])
+        if nm in self.keep: self.cache[nm] = a
+        return a
+
+def read_gguf(path, lazy=False, keep=()):
+    if lazy:
+        import mmap
+        f=open(path,'rb'); d=mmap.mmap(f.fileno(),0,access=mmap.ACCESS_READ)
+    else:
+        d=open(path,'rb').read()
+    off=8
     nt,nkv=struct.unpack_from('<QQ',d,off); off+=16
     kvs={}; tens={}
     def rs(off):
@@ -38,16 +69,10 @@ def read_gguf(path):
         infos.append((nm.decode(),dims,ty,rel))
     align=kvs.get('general.alignment',32)
     doff=(off+align-1)//align*align
+    if lazy:
+        return kvs, LazyTens(d, doff, infos, keep)
     for nm,dims,ty,rel in infos:
-        ne=int(np.prod(dims))
-        if ty==0:
-            a=np.frombuffer(d,dtype='<f4',count=ne,offset=doff+rel)
-        else:
-            import kq_vec as kq
-            raw=bytes(d[doff+rel: doff+rel + ne*{6:22,8:34,12:144,13:176,14:210}[ty]//{6:32,8:32,12:256,13:256,14:256}[ty]])
-            a=kq.DEQ[ty](raw,ne)
-        # ggml ne0 fastest → numpy shape reversed
-        tens[nm]=a.reshape(list(reversed(dims)))
+        tens[nm]=_deq(d, doff, dims, ty, rel)
     return kvs,tens
 
 # Script body under a main guard so the GGUF reader above can be imported

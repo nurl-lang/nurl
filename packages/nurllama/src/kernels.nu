@@ -1994,6 +1994,143 @@ ST(out, b * nh * hd + h * hd + tid, acc / sum);` * nh batch hd plan )
     ^ ( __lk_ew kit c `nl_copyat` `if (gid < n) { ST(dst, off + gid, LD(src, gid)); }` n plan )
 }
 
+// ── qwen35: Gated DeltaNet and gated attention ──────────────────────
+
+// Zero n elements (a recurrent state at the start of a sequence).
+@ lk_zero GpuKit kit GkBuf x i n inout ( Vec GkLaunch ) plan → b {
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev c `x` x ) ( gk_call_i64 c `n` n )
+    ^ ( __lk_ew kit c `nl_zero` `if (gid < n) { ST(x, gid, 0.0f); }` n plan )
+}
+
+// The causal depthwise convolution of a DeltaNet layer, then SiLU. `x` holds
+// `batch` positions of C channels; `w` the K taps of every channel, oldest
+// input first (w[c*K + j]); `st` the K−1 inputs before this batch, oldest
+// first (st[j*C + c]), carried from call to call. A thread per channel walks
+// the batch in order, so position t sees exactly the K−1 inputs before it —
+// across a chunk boundary and across calls alike.
+@ lk_ssm_conv GpuKit kit GkBuf x GkBuf w GkBuf st GkBuf y i C i K i batch inout ( Vec GkLaunch ) plan → b {
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev_in c `x` x ) ( gk_call_dev_in c `w` w ) ( gk_call_dev c `st` st ) ( gk_call_dev c `y` y )
+    ( gk_call_i64 c `C` C ) ( gk_call_i64 c `K` K ) ( gk_call_i64 c `batch` batch )
+    ^ ( __lk_ew kit c `nl_ssm_conv` `if (gid < C) {
+    long long ch = gid;
+    for (long long t = 0; t < batch; t++) {
+        float xin = LD(x, t * C + ch);
+        float acc = LD(w, ch * K + (K - 1)) * xin;
+        for (long long j = 0; j < K - 1; j++) { acc += LD(w, ch * K + j) * LD(st, j * C + ch); }
+        for (long long j = 0; j < K - 2; j++) { ST(st, j * C + ch, LD(st, (j + 1) * C + ch)); }
+        ST(st, (K - 2) * C + ch, xin);
+        ST(y, t * C + ch, acc / (1.0f + expf(-acc)));
+    }
+}` C plan )
+}
+
+// The gated delta rule over `batch` positions. `x` is the conv output, per
+// position [q (nk·dk) | k (nk·dk) | v (nv·dv)]; `bt` / `al` the beta and
+// alpha projections (nv per position); `dt` the time-step bias and `A` the
+// decay rate (stored as −exp(A_log)), nv each; `st` the recurrent state,
+// nv matrices of dk×dv (st[h*dk*dv + i*dv + j]), carried from call to call.
+// Value head h reads key head h % nk: the GGUF's value heads are in ggml's
+// tiled order. The HF checkpoint keeps the r = nv/nk value heads of one key
+// head together (h·r … h·r+r−1, repeat_interleave); llama.cpp's converter
+// moves HF head h to (h % r)·nk + h / r in every per-value-head tensor —
+// checked on Qwen3.5-4B (r = 2) for A, dt, beta, alpha, z, the v rows and
+// conv channels, and the output projection's columns. With r = 1
+// (Qwen3.5-0.8B) both orders are the same. Per position, with q and k
+// L2-normalised and q scaled by 1/sqrt(dk):
+//   S ← S·exp(A·softplus(al + dt));  S ← S + k ⊗ σ(bt)·(v − Sᵀk);  o = Sᵀq
+// A thread owns one column j of one head's S and walks the batch in order;
+// every column reads the same k and q, so each thread forms their norms.
+@ lk_deltanet GpuKit kit GkBuf x GkBuf bt GkBuf al GkBuf dt GkBuf A GkBuf st GkBuf o i nk i nv i dk i dv i batch inout ( Vec GkLaunch ) plan → b {
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev_in c `x` x ) ( gk_call_dev_in c `bt` bt ) ( gk_call_dev_in c `al` al )
+    ( gk_call_dev_in c `dt` dt ) ( gk_call_dev_in c `A` A ) ( gk_call_dev c `st` st ) ( gk_call_dev c `o` o )
+    ( gk_call_i64 c `nk` nk ) ( gk_call_i64 c `nv` nv ) ( gk_call_i64 c `dk` dk ) ( gk_call_i64 c `dv` dv )
+    ( gk_call_i64 c `batch` batch )
+    ^ ( __lk_ew kit c `nl_deltanet` `if (gid < nv * dv) {
+    long long h = gid / dv;
+    long long j = gid % dv;
+    long long kh = h % nk;
+    long long C = 2 * nk * dk + nv * dv;
+    long long so = h * dk * dv + j;
+    for (long long t = 0; t < batch; t++) {
+        long long qo = t * C + kh * dk;
+        long long ko = t * C + nk * dk + kh * dk;
+        float qq = 0.0f;
+        float kk = 0.0f;
+        for (long long i = 0; i < dk; i++) {
+            float qv = LD(x, qo + i);
+            float kv0 = LD(x, ko + i);
+            qq += qv * qv;
+            kk += kv0 * kv0;
+        }
+        float qs = rsqrtf(qq + 1e-6f) * rsqrtf((float)dk);
+        float ks = rsqrtf(kk + 1e-6f);
+        float beta = 1.0f / (1.0f + expf(-LD(bt, t * nv + h)));
+        float sp = LD(al, t * nv + h) + LD(dt, h);
+        sp = sp > 20.0f ? sp : log1pf(expf(sp));
+        float decay = expf(LD(A, h) * sp);
+        float kvm = 0.0f;
+        for (long long i = 0; i < dk; i++) {
+            float s = LD(st, so + i * dv) * decay;
+            ST(st, so + i * dv, s);
+            kvm += s * LD(x, ko + i) * ks;
+        }
+        float delta = (LD(x, t * C + 2 * nk * dk + h * dv + j) - kvm) * beta;
+        float acc = 0.0f;
+        for (long long i = 0; i < dk; i++) {
+            float s = LD(st, so + i * dv) + LD(x, ko + i) * ks * delta;
+            ST(st, so + i * dv, s);
+            acc += s * LD(x, qo + i) * qs;
+        }
+        ST(o, t * nv * dv + h * dv + j, acc);
+    }
+}` * nv dv plan )
+}
+
+// A DeltaNet head's output norm, gated: y = RMSNorm(x)·w · silu(z), per row
+// of n (rows = positions · value heads). A thread per row. `y` must not be `x`.
+@ lk_gnorm GpuKit kit GkBuf x GkBuf z GkBuf w GkBuf y i n f eps i rows inout ( Vec GkLaunch ) plan → b {
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev_in c `x` x ) ( gk_call_dev_in c `z` z ) ( gk_call_dev_in c `w` w ) ( gk_call_dev c `y` y )
+    ( gk_call_i64 c `n` n ) ( gk_call_f64 c `eps` eps ) ( gk_call_i64 c `rows` rows )
+    ^ ( __lk_ew kit c `nl_gnorm` `if (gid < rows) {
+    WIN(xr, x, gid * n, n);
+    WIN(zr, z, gid * n, n);
+    WIN(wr, w, 0, n);
+    WIN(yr, y, gid * n, n);
+    float ss = 0.0f;
+    for (int j = 0; j < LEN(xr); j++) { ss += LD(xr, j) * LD(xr, j); }
+    float inv = rsqrtf(ss / n + (float)eps);
+    for (int i = 0; i < LEN(xr) && i < LEN(zr) && i < LEN(wr) && i < LEN(yr); i++) {
+        float g = LD(zr, i);
+        ST(yr, i, LD(xr, i) * inv * LD(wr, i) * (g / (1.0f + expf(-g))));
+    }
+}` rows plan )
+}
+
+// A gated attention layer's query projection holds, per position and head,
+// [q (hd) | gate (hd)]: split it into q and the gate, each nh·hd per position.
+@ lk_qgate_split GpuKit kit GkBuf src GkBuf q GkBuf g i nh i hd i batch inout ( Vec GkLaunch ) plan → b {
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev_in c `src` src ) ( gk_call_dev c `q` q ) ( gk_call_dev c `g` g )
+    ( gk_call_i64 c `nh` nh ) ( gk_call_i64 c `hd` hd ) ( gk_call_i64 c `batch` batch )
+    ^ ( __lk_ew kit c `nl_qgate_split` `if (gid < batch * nh * hd) {
+    long long d = gid % hd;
+    long long th = gid / hd;
+    ST(q, gid, LD(src, th * 2 * hd + d));
+    ST(g, gid, LD(src, th * 2 * hd + hd + d));
+}` * * batch nh hd plan )
+}
+
+// a ← a · sigmoid(g): the attention output through its gate.
+@ lk_sigmul GpuKit kit GkBuf a GkBuf g i n inout ( Vec GkLaunch ) plan → b {
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev c `a` a ) ( gk_call_dev_in c `g` g ) ( gk_call_i64 c `n` n )
+    ^ ( __lk_ew kit c `nl_sigmul` `if (gid < n) { ST(a, gid, LD(a, gid) / (1.0f + expf(-LD(g, gid)))); }` n plan )
+}
+
 // Repack an uploaded q8_0 tensor from ggml's interleaved 34-byte blocks
 // ([d q0..q31] [d q0..q31] …) into the split per-row layout [d0 … d_{nb-1}]
 // [q-block0 … q-block_{nb-1}], same nb·34-byte row stride. With an even nb
