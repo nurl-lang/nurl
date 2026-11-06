@@ -87,6 +87,15 @@ $ `start.nu`
 $ `stdlib/std/term.nu`
 $ `stdlib/core/slice.nu`
 
+// A string field of a JSON object, or `def`.
+@ __nl_jstr Json j s key s def → String {
+    ?? ( json_obj_get j key ) {
+        T v → { ? ( json_is_str v ) { ^ ( string_from ( json_str_data v ) ) } {} }
+        F → {}
+    }
+    ^ ( string_from def )
+}
+
 @ __nl_err String e → i {
     ( nurl_eprintln ( string_data e ) )
     ^ 1
@@ -537,7 +546,7 @@ $ `stdlib/core/slice.nu`
                                     : ~ b stop F
                                     ~ & & < produced npredict < posn ( llm_n_ctx m ) ! stop {
                                         : i nt ( sample_next m rng temp topk topp )
-                                        ? == nt ( tok_eos t ) { = stop T } {
+                                        ? ( llm_is_eog m nt ) { = stop T } {
                                             : ( Vec u ) pb ( tok_piece t nt )
                                             : String piece ( bytes_to_str pb )
                                             ? ( chat_stop_matches style ( string_data piece ) ) { = stop T } {
@@ -651,7 +660,49 @@ $ `stdlib/core/slice.nu`
         ? ( nurl_str_eq which `llama2` ) { = style CHAT_LLAMA2 } {}
         ? ( nurl_str_eq which `gemma` ) { = style CHAT_GEMMA } {}
         ? ( nurl_str_eq which `phi3` ) { = style CHAT_PHI3 } {}
+        ? ( nurl_str_eq which `glm5` ) { = style CHAT_GLM5 } {}
+        ? ( nurl_str_eq which `glm53` ) { = style CHAT_GLM53 } {}
+        // a model file: the style its own template selects
+        ? != 0 ( nurl_str_ends which `.gguf` ) {
+            ?? ( gguf_open which ) {
+                T gg → { = style ( chat_style_of gg ) }
+                F e → { ^ ( __nl_err e ) }
+            }
+        } {}
         : ( Vec ChatMsg ) msgs ( vec_new [ChatMsg] )
+        // `chat-template STYLE|MODEL [MESSAGES.json]`: the messages of an
+        // OpenAI-style [{"role":…,"content":…}] file, or a fixed pair. The
+        // prompt is printed as it is, with no newline added.
+        ?? ( vec_get [String] pos 2 ) {
+            T mf → {
+                : ~ String txt ( string_new )
+                ?? ( read_file ( string_data mf ) ) {
+                    T t → { = txt t }
+                    F _ → { ^ ( __nl_err ( string_from `nurllama: cannot read the messages file` ) ) }
+                }
+                ?? ( json_parse ( string_data txt ) ) {
+                    T arr → {
+                        : ~ i k 0
+                        ~ < k ( json_arr_len arr ) {
+                            ?? ( json_arr_get arr k ) {
+                                T mo → {
+                                    : String role ( __nl_jstr mo `role` `user` )
+                                    : String content ( __nl_jstr mo `content` `` )
+                                    ( vec_push [ChatMsg] msgs ( chat_msg ( string_data role ) ( string_data content ) ) )
+                                }
+                                F → {}
+                            }
+                            = k + k 1
+                        }
+                    }
+                    F _ → { ^ ( __nl_err ( string_from `nurllama: the messages file is not JSON` ) ) }
+                }
+                : String out2 ( chat_render style msgs )
+                ( nurl_print ( string_data out2 ) )
+                ^ 0
+            }
+            F → {}
+        }
         ( vec_push [ChatMsg] msgs ( chat_msg `system` `be brief` ) )
         ( vec_push [ChatMsg] msgs ( chat_msg `user` `hi` ) )
         : String out ( chat_render style msgs )
@@ -1058,7 +1109,7 @@ $ `stdlib/core/slice.nu`
                             : ~ b stop F
                             ~ & & < produced npredict < pos ( llm_n_ctx m ) ! stop {
                                 : i nt2 ( sample_next m rng temp topk topp )
-                                ? == nt2 ( tok_eos t ) { = stop T } {
+                                ? ( llm_is_eog m nt2 ) { = stop T } {
                                     : ( Vec u ) pb ( tok_piece t nt2 )
                                     : i pn ( vec_len [u] pb )
                                     ? > pn 0 { : i _w ( fd_write_all 1 pb ) } {}

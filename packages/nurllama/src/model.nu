@@ -314,6 +314,11 @@ $ `stdlib/core/slice.nu`
     GkBuf headid  // i64, LM_CHUNK × n_head: the head of each (position, head)
     ( Vec i ) pl_copyw
     ( Vec i ) pl_npos
+    // The ids that end a generation: end-of-sequence, end-of-turn and
+    // end-of-message (tokenizer.ggml.eos / eot / eom_token_id), as
+    // llama.cpp's llama_vocab_is_eog reads them. GLM ends its turn with
+    // `<|user|>` (its eot), not its eos.
+    ( Vec i ) eog
 }
 
 // What a loaded model is and never changes: read without waiting for an
@@ -324,6 +329,7 @@ $ `stdlib/core/slice.nu`
     i n_ctx
     i mask_id
     b bidir
+    ( Vec i ) eog
 }
 
 // A Llm is a handle: the engine in a Locked — an evaluation takes it for
@@ -367,11 +373,11 @@ $ `stdlib/core/slice.nu`
         ( vec_new [LmW] ) ( vec_new [LmW] ) ( vec_new [GkBuf] ) ( vec_new [GkBuf] ) ( vec_new [LmW] ) ( vec_new [GkBuf] )
         ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 )
         ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_I64 )
-        ( vec_new [i] ) ( vec_new [i] ) } )
+        ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) } )
 }
 
 @ __lm_handle sink LlmImpl m → Llm {
-    : LlmInfo inf @ LlmInfo { ( Tok_share . m tok ) . m n_vocab . m n_ctx . m mask_id . m bidir }
+    : LlmInfo inf @ LlmInfo { ( Tok_share . m tok ) . m n_vocab . m n_ctx . m mask_id . m bidir ( vec_clone [i] . m eog ) }
     ^ @ Llm { ( locked_new [LlmImpl] m ) ( arc_new [LlmInfo] inf ) }
 }
 
@@ -1155,6 +1161,14 @@ $ `stdlib/core/slice.nu`
         }
     }
     = . m n_vocab ( tok_n_vocab . m tok )
+    // what ends a generation: eos, and the model's end-of-turn and
+    // end-of-message ids where it states them
+    = . m eog ( vec_new [i] )
+    ? >= ( tok_eos . m tok ) 0 { ( vec_push [i] . m eog ( tok_eos . m tok ) ) } {}
+    : i eot ( gguf_kv_int_or gg `tokenizer.ggml.eot_token_id` -1 )
+    : i eom ( gguf_kv_int_or gg `tokenizer.ggml.eom_token_id` -1 )
+    ? & >= eot 0 != eot ( tok_eos . m tok ) { ( vec_push [i] . m eog eot ) } {}
+    ? & & >= eom 0 != eom ( tok_eos . m tok ) != eom eot { ( vec_push [i] . m eog eom ) } {}
 
     // the device — the best GPU on the box, not merely the first one the
     // driver enumerates ($NURL_GPU_DEVICE overrides)
@@ -2237,6 +2251,17 @@ $ `stdlib/core/slice.nu`
 }
 
 @ llm_mask_id Llm h → i { ^ . ( arc_get [LlmInfo] . h info ) mask_id }
+
+// True when token `id` ends a generation (see LlmImpl.eog).
+@ llm_is_eog Llm h i id → b {
+    : LlmInfo inf ( arc_get [LlmInfo] . h info )
+    : ~ i k 0
+    ~ < k ( vec_len [i] . inf eog ) {
+        ? == ( vec_at [i] . inf eog k ) id { ^ T } {}
+        = k + k 1
+    }
+    ^ F
+}
 
 @ llm_is_diffusion Llm h → b { ^ . ( arc_get [LlmInfo] . h info ) bidir }
 

@@ -639,7 +639,7 @@ $ `stdlib/std/utf8.nu`
     : ~ i pos nprompt
     ~ & & ! ended ! broken ? diffusion < produced ( vec_len [i] gen ) < produced limit {
         : i nt ? diffusion ( vec_at [i] gen produced ) ( sample_next m rng . rq temp . rq topk . rq topp )
-        ? & ! diffusion == nt ( tok_eos t ) { = ended T } {
+        ? & ! diffusion ( llm_is_eog m nt ) { = ended T } {
             : String piece ( bytes_to_str ( tok_piece t nt ) )
             // a chat dialect's terminator may arrive as plain text
             ? & ! diffusion ( chat_stop_matches g_api_style ( string_data piece ) ) { = ended T } {
@@ -1137,7 +1137,7 @@ $ `stdlib/std/utf8.nu`
     : ~ b stop F
     ~ & & < produced npredict < pos ( llm_n_ctx m ) ! stop {
         : i nt ( sample_next m rng temp 40 0.95 )
-        ? == nt ( tok_eos t ) { = stop T } {
+        ? ( llm_is_eog m nt ) { = stop T } {
             : ( Vec u ) pb ( tok_piece t nt )
             : String piece ( bytes_to_str pb )
             ? ( chat_stop_matches g_api_style ( string_data piece ) ) { = stop T } {
