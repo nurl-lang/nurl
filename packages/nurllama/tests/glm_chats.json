@@ -8,5 +8,15 @@
   [{"role": "user", "content": "  spaced\n\nlines  "}, {"role": "assistant", "content": "\n\nanswer with ääkköset 中文\n"},
    {"role": "user", "content": "emoji 🦙 and <|user|> text"}],
   [{"role": "user", "content": "a"}, {"role": "assistant", "content": "<think>  \n </think>b"},
-   {"role": "assistant", "content": "no think here"}]
+   {"role": "assistant", "content": "no think here"}],
+  {"messages": [{"role": "user", "content": "Q1"},
+                {"role": "assistant", "content": "A1", "reasoning_content": "\nreasoning given apart\n"},
+                {"role": "user", "content": "Q2"},
+                {"role": "assistant", "content": "A2", "reasoning_content": "second"}],
+   "reasoning_effort": "low"},
+  {"messages": [{"role": "user", "content": "hi"}], "reasoning_effort": "high"},
+  {"messages": [{"role": "user", "content": "hi"}], "reasoning_effort": "medium"},
+  {"messages": [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "x", "reasoning_content": ""}],
+   "chat_template_kwargs": {"enable_thinking": false}},
+  {"messages": [{"role": "user", "content": "hi"}], "chat_template_kwargs": {"enable_thinking": true, "reasoning_effort": "low"}}
 ]

@@ -51,11 +51,12 @@ $ `stdlib/std/unicat.nu`
 // qwen35 (Qwen3.5, Qwen3.8): qwen2's split with combining marks (\p{M}) in
 // the word class — rules 2 and 4 read `[\p{L}\p{M}]` where qwen2 reads `\p{L}`.
 : i PRE_QWEN35 2
-// glm4 / glm5 (GLM-4.x, GLM-5.x): qwen2's split with digits grouped up to
-// three at a time — rule 3 reads `\p{N}{1,3}` where qwen2 reads `\p{N}` —
-// and the BPE's `ignore_merges`: a pre-token that is a whole vocabulary
-// piece is that piece, whatever the merges would have made of it.
-: i PRE_GLM4 3
+// llama3's (llama.cpp `llama-bpe`), which GLM-4.x / GLM-5.x share (`glm4`,
+// `glm5`): qwen2's split with digits grouped up to three at a time — rule
+// 3 reads `\p{N}{1,3}` where qwen2 reads `\p{N}` — and the BPE's
+// `ignore_merges`: a pre-token that is a whole vocabulary piece is that
+// piece, whatever the merges would have made of it.
+: i PRE_LLAMA3 3
 
 : TokImpl {
     i mode
@@ -170,7 +171,7 @@ $ `stdlib/std/unicat.nu`
 // Everything a vocabulary needs to say about itself, whatever file it came in.
 : TokSpec {
     i mode  // TOK_SPM | TOK_BPE
-    i pre  // PRE_DEFAULT | PRE_QWEN2 | PRE_QWEN35 | PRE_GLM4
+    i pre  // PRE_DEFAULT | PRE_QWEN2 | PRE_QWEN35 | PRE_LLAMA3
     i bos
     i eos
     i unk
@@ -571,7 +572,7 @@ $ `stdlib/std/unicat.nu`
 //                                        leading non-letter/digit char
 //                                        (a space, but also "(" in "(foo")
 //   3  \p{N}                              ONE digit (GPT-2 groups runs);
-//                                        with `maxdig` 3 (glm4) \p{N}{1,3}:
+//                                        with `maxdig` 3 (llama3) \p{N}{1,3}:
 //                                        up to three
 //   4   ?[^\s\p{L}\p{N}]+[\r\n]*         punctuation run + trailing newlines
 //   5  \s*[\r\n]+                        whitespace ending in newlines
@@ -748,8 +749,8 @@ $ `stdlib/std/unicat.nu`
         }
         = j + j 1
     }
-    // ignore_merges (glm4): a pre-token that is a whole piece is that piece
-    ? == . t pre PRE_GLM4 {
+    // ignore_merges (llama3, glm4): a pre-token that is a whole piece is that piece
+    ? == . t pre PRE_LLAMA3 {
         : String whole ( string_new )
         : ~ i w 0
         ~ < w ( vec_len [String] word ) {
@@ -833,8 +834,8 @@ $ `stdlib/std/unicat.nu`
     : i n ( slice_len [u] text_v )
     : ~ i p 0
     ~ < p n {
-        : i len ? | | == . t pre PRE_QWEN2 == . t pre PRE_QWEN35 == . t pre PRE_GLM4
-        ( __tk_pretoken_len_qwen2 text_v p n == . t pre PRE_QWEN35 ? == . t pre PRE_GLM4 3 1 ) ( __tk_pretoken_len text_v p n )
+        : i len ? | | == . t pre PRE_QWEN2 == . t pre PRE_QWEN35 == . t pre PRE_LLAMA3
+        ( __tk_pretoken_len_qwen2 text_v p n == . t pre PRE_QWEN35 ? == . t pre PRE_LLAMA3 3 1 ) ( __tk_pretoken_len text_v p n )
         ( __tk_bpe_word t text_v p ? < len 1 1 len out )
         = p + p ? < len 1 1 len
     }

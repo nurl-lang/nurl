@@ -4,8 +4,9 @@
 
 ### Added
 
-- **`PRE_GLM4`: the pre-tokenizer of GLM-4.x and GLM-5.x**
-  (`tokenizer.ggml.pre = glm4` / `glm5`). qwen2's split with digits
+- **`PRE_LLAMA3`: the pre-tokenizer of llama3 (llama.cpp `llama-bpe`),
+  GLM-4.x and GLM-5.x** (`tokenizer.ggml.pre = llama-bpe` / `glm4` /
+  `glm5`). qwen2's split with digits
   grouped up to three (`\p{N}{1,3}` where qwen2 reads `\p{N}`), and the
   BPE's `ignore_merges`: a pre-token that is a whole vocabulary piece is
   that piece, whatever the merges would make of it — what GLM's

@@ -64,17 +64,32 @@ resident at a time.
 
 `<model>` is one of three things, tried in this order:
 
-1. a **path** to a `.gguf` file — `./qwen3-4b.gguf`
+1. a **path** to a `.gguf` file — `./qwen3-4b.gguf` — or to a **Hugging
+   Face checkpoint directory** (config.json, tokenizer.json and its
+   `.safetensors` shards), opened as it is: see below
 2. a **name** from the local store — `nurllama list`
 3. a **Hugging Face ref naming a `.gguf` file** —
    `Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q4_k_m.gguf`,
    fetched on demand into the shared `~/.nurl/models` cache
 
 A bare `org/repo` is **not** a model argument for run/chat/serve: that
-names a whole safetensors checkpoint repository, which these commands
-could not open anyway, so nurllama refuses it *before* downloading
-gigabytes and prints the working forms. To run an HF checkpoint that
-ships no GGUF, convert it first:
+names a whole safetensors checkpoint repository, so nurllama refuses it
+*before* downloading gigabytes and prints the working forms.
+
+A checkpoint **directory** on disk, though, runs directly — no GGUF copy
+of it is written (`src/hfmodel.nu`). Its config.json, tokenizer.json,
+tokenizer_config.json and chat template become, in memory, the GGUF
+metadata llama.cpp's converter would write, and its shards become the
+tensor source, read under their Hugging Face names; so the loader, the
+tokenizer and the chat styles take the one path a GGUF takes. A routed
+experts' stack is assembled from the per-expert tensors (or transformers
+5's fused ones), MLA's `kv_b_proj` is split into the per-head `k_b` /
+`v_b`, and any linear stored as an **EXL3** tensor group is run as EXL3.
+Architectures: `llama` / `mistral`, `qwen2`, `qwen3`, `glm_moe_dsa`, with
+a BPE `tokenizer.json`; `tests/hf_dir_test.sh` holds llama, qwen3 and
+glm_moe_dsa checkpoints — with and without EXL3 linears — to HF
+transformers' own logits and greedy text. Another model_type, or a
+checkpoint you would rather keep as one file, converts:
 
 ```sh
 $ nurllama convert org/repo model.gguf     # safetensors checkpoint → GGUF
@@ -122,6 +137,22 @@ data: [DONE]
   character waits for the rest of it. Bytes a model emits that are not
   UTF-8 reach the client as U+FFFD — JSON is UTF-8 — the same streamed or
   not.
+* **A reasoning model's reasoning comes apart from its answer.** When the
+  chat template leaves the reply inside `<think>` (GLM's do), or the reply
+  opens one itself, everything up to `</think>` is the reasoning:
+  `message.reasoning_content` / `delta.reasoning_content` (the field
+  DeepSeek's API, vLLM and llama.cpp's server use) and ollama's
+  `message.thinking`; the rest is `content`. A stream holds back a
+  possible `</think>` like a stop sequence, and stop sequences end the
+  answer, never the reasoning. An assistant message in the history may
+  carry its own `reasoning_content` (ollama: `thinking`); the template
+  gets it as the model's template expects.
+* The template's own switches: `reasoning_effort` (GLM-5.2 / 5.3: `low`,
+  `high`; anything else is its default, Max) and vLLM's
+  `chat_template_kwargs` (`reasoning_effort`, `enable_thinking` — GLM-5's
+  `false` closes the think block in the prompt); ollama's `think` is
+  `enable_thinking`. They render exactly as the model's template renders
+  them.
 * What the server cannot do is refused with OpenAI's error shape rather
   than ignored: `n` > 1, `tools`, a `response_format` other than text,
   `logprobs`, image or audio content.
@@ -260,7 +291,21 @@ into a dozen pieces and the model answers a question you did not ask.
 
 **Quantisations:** F32, F16, BF16, Q4_0, Q4_1, Q5_0, Q5_1, Q8_0 and the
 K-quants **Q4_K / Q5_K / Q6_K** (the `Q4_K_M` files people actually
-download).
+download) — and **EXL3**, exllamav3's trellis quantisation, as a weight
+type the matvec runs directly (`src/exl3.nu`, kernels.nu "EXL3"): each
+16×16 tile a ring of 1–8 (or 1.5 / 2.5 / 3.5) bits a weight whose 16-bit
+windows index a procedural codebook (3INST, MCG or MUL1, decoded through
+a table computed exactly as the CUDA kernels round), between two
+128-block Hadamard rotations and sign vectors. The weight is never
+expanded: x is rotated, multiplied with the decoded trellis and rotated
+back, and widths exllamav3 padded to the 128-block (GLM's 576-wide
+kv_a_proj, stored as 640) are zero-extended and trimmed.
+`tests/exl3_test.sh` holds it against exllamav3's own reference
+(`tests/testlib/trellis.py`): every codebook at 1–8 and 2.5 bits and at
+GLM-5.3's shapes decodes to the reference's weight **bit for bit** and
+multiplies to its float64 x·W within 1e-6 relative, on CUDA and on the
+CPU backend — and so does a real tensor of fiore-lab's GLM-5.3 EXL3
+checkpoint, fetched by range request.
 
 Weights stay **quantised on the device**: the matvec kernels decode
 GGUF blocks inside the matmul, so a Q4_K_M model needs about a third of

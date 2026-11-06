@@ -96,6 +96,15 @@ $ `stdlib/core/slice.nu`
     ^ ( string_from def )
 }
 
+// One think-split event line, ["R"|"C", full[from, upto)], when non-empty.
+@ __nl_ts_event s kind String full i from i upto → v {
+    ? > upto from {} { ^ }
+    : Json e ( json_arr_new )
+    : b _1 ( json_arr_push e ( json_str_lit kind ) )
+    : b _2 ( json_arr_push e ( json_str_lit ( string_data ( string_substr full from - upto from ) ) ) )
+    ( nurl_println ( string_data ( json_stringify e ) ) )
+}
+
 @ __nl_err String e → i {
     ( nurl_eprintln ( string_data e ) )
     ^ 1
@@ -486,7 +495,7 @@ $ `stdlib/core/slice.nu`
 // to stdout as they decode. Ctrl-C / Ctrl-D (or /exit) ends it.
 @ __nl_chat s path ArgParser p → i {
     : ~ i style CHAT_PLAIN
-    ?? ( gguf_open path ) {
+    ?? ( model_meta path ) {
         T gg → {
             = style ( chat_style_of gg )
         }
@@ -648,6 +657,43 @@ $ `stdlib/core/slice.nu`
 
     // Debug tap: render the three-message fixture through one dialect —
     // gives the template renderers a unit test with no model needed.
+    // `think-split OPEN STOP PIECE…` (hidden, for the tests): feed the
+    // pieces, as tokens' text, through the APIs' reply parser — OPEN 1 when
+    // the prompt left the reply inside <think>, STOP one stop sequence (``
+    // for none) — and print, one JSON line each, what a stream sends
+    // (["R", reasoning piece] / ["C", answer piece]) and then what one
+    // non-streamed reply gives (["END", has reasoning, reasoning, answer,
+    // stopped]).
+    ? ( nurl_str_eq cmd `think-split` ) {
+        : b open ?? ( vec_get [String] pos 1 ) { T c → != 0 ( nurl_str_eq ( string_data c ) `1` ) F → F }
+        : ( Vec String ) stops ( vec_new [String] )
+        ?? ( vec_get [String] pos 2 ) { T c → { ? > ( string_len c ) 0 { ( vec_push [String] stops ( string_clone c ) ) } {} } F → {} }
+        : ~ String full ( string_new )
+        : ~ i rsent -1
+        : ~ i csent -1
+        : ~ b ended F
+        : ~ i k 3
+        ~ & ! ended < k ( vec_len [String] pos ) {
+            = ended ( _api_take full ( string_data ( vec_at [String] pos k ) ) T open stops )
+            : Ready r ( _api_ready full T open stops ended rsent csent )
+            ( __nl_ts_event `R` full . r rfrom . r rupto )
+            ( __nl_ts_event `C` full . r cfrom . r cupto )
+            = k + k 1
+        }
+        : Ready r2 ( _api_ready full T open stops T rsent csent )
+        ( __nl_ts_event `R` full . r2 rfrom . r2 rupto )
+        ( __nl_ts_event `C` full . r2 cfrom . r2 cupto )
+        : Parts pt ( _api_parts full T open )
+        : Json e ( json_arr_new )
+        : b _1 ( json_arr_push e ( json_str_lit `END` ) )
+        : b _2 ( json_arr_push e ( json_bool . pt has ) )
+        : b _3 ( json_arr_push e ( json_str_lit ( string_data . pt reasoning ) ) )
+        : b _4 ( json_arr_push e ( json_str_lit ( string_data . pt answer ) ) )
+        : b _5 ( json_arr_push e ( json_bool ended ) )
+        ( nurl_println ( string_data ( json_stringify e ) ) )
+        ^ 0
+    } {}
+
     ? ( nurl_str_eq cmd `chat-template` ) {
         : ~ s which `plain`
         ?? ( vec_get [String] pos 1 ) {
@@ -662,33 +708,42 @@ $ `stdlib/core/slice.nu`
         ? ( nurl_str_eq which `phi3` ) { = style CHAT_PHI3 } {}
         ? ( nurl_str_eq which `glm5` ) { = style CHAT_GLM5 } {}
         ? ( nurl_str_eq which `glm53` ) { = style CHAT_GLM53 } {}
-        // a model file: the style its own template selects
-        ? != 0 ( nurl_str_ends which `.gguf` ) {
-            ?? ( gguf_open which ) {
+        // a model (a GGUF file or a checkpoint directory): the style its
+        // own template selects
+        ? | != 0 ( nurl_str_ends which `.gguf` ) ( hf_is_checkpoint which ) {
+            ?? ( model_meta which ) {
                 T gg → { = style ( chat_style_of gg ) }
                 F e → { ^ ( __nl_err e ) }
             }
         } {}
         : ( Vec ChatMsg ) msgs ( vec_new [ChatMsg] )
         // `chat-template STYLE|MODEL [MESSAGES.json]`: the messages of an
-        // OpenAI-style [{"role":…,"content":…}] file, or a fixed pair. The
-        // prompt is printed as it is, with no newline added.
+        // OpenAI-style [{"role":…,"content":…}] file — or of a request body
+        // {"messages": […], "reasoning_effort": …, "chat_template_kwargs": …},
+        // whose template switches apply too — or a fixed pair. The prompt
+        // is printed as it is, with no newline added.
         ?? ( vec_get [String] pos 2 ) {
             T mf → {
+                : ~ ChatOpts opts ( chat_opts_none )
                 : ~ String txt ( string_new )
                 ?? ( read_file ( string_data mf ) ) {
                     T t → { = txt t }
                     F _ → { ^ ( __nl_err ( string_from `nurllama: cannot read the messages file` ) ) }
                 }
                 ?? ( json_parse ( string_data txt ) ) {
-                    T arr → {
+                    T body → {
+                        : ~ Json arr ( json_arr_new )
+                        ? ( json_is_arr body ) { = arr ( json_clone body ) } {
+                            ( _api_chat_opts body opts )
+                            ?? ( json_obj_get body `messages` ) { T ms → { = arr ( json_clone ms ) } F → {} }
+                        }
                         : ~ i k 0
                         ~ < k ( json_arr_len arr ) {
                             ?? ( json_arr_get arr k ) {
                                 T mo → {
                                     : String role ( __nl_jstr mo `role` `user` )
                                     : String content ( __nl_jstr mo `content` `` )
-                                    ( vec_push [ChatMsg] msgs ( chat_msg ( string_data role ) ( string_data content ) ) )
+                                    ( vec_push [ChatMsg] msgs ( _api_chat_msg ( string_data role ) content mo `reasoning_content` ) )
                                 }
                                 F → {}
                             }
@@ -697,7 +752,7 @@ $ `stdlib/core/slice.nu`
                     }
                     F _ → { ^ ( __nl_err ( string_from `nurllama: the messages file is not JSON` ) ) }
                 }
-                : String out2 ( chat_render style msgs )
+                : String out2 ( chat_render_opts style msgs opts )
                 ( nurl_print ( string_data out2 ) )
                 ^ 0
             }
@@ -1147,7 +1202,7 @@ $ `stdlib/core/slice.nu`
     }
     : s mpath ( string_data mres2 )
     : ~ i rc 0
-    ?? ( gguf_open mpath ) {
+    ?? ( model_meta mpath ) {
         T g → {
             ?? ( tok_new g ) {
                 T t → {

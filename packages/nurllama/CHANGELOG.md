@@ -72,8 +72,56 @@ Requires NURL 0.89.0 and tokenizer 0.6.
   `nurllama chat-template STYLE|MODEL [MESSAGES.json]` renders any
   conversation.
 
+- **Reasoning apart from the answer** (Agora #518): a chat reply inside a
+  `<think>` block — the template left it there, or the reply opened one —
+  comes back as `reasoning_content` (OpenAI, `message` and stream
+  `delta`) and `thinking` (ollama), its answer as `content`; a stream
+  holds back a possible `</think>`, stop sequences end only the answer,
+  and the web chat keeps the answer. An incoming assistant message's
+  `reasoning_content` / `thinking` reaches the template; the template's
+  switches — `reasoning_effort`, `chat_template_kwargs`
+  (`reasoning_effort`, `enable_thinking`), ollama's `think` — render as
+  the model's template renders them (checked against HF). The parser is
+  one pure function of the text, shared by the stream, the whole reply
+  and `nurllama think-split` (a hidden test command).
+
+- **EXL3 weights** (Agora #519): exllamav3's trellis quantisation as a
+  matvec weight type (`LkW.gt` ≥ `LK_EXL3`), loaded from a safetensors
+  tensor group (`exl3_upload`: trellis, suh, svh, the mcg / mul1 marker)
+  and never expanded — three launches: the input's 128-block Hadamard
+  rotation with suh (`lk_exl3_had`), the trellis matvec decoding each
+  weight once for the whole batch (`lk_exl3_mv`), the output rotation with
+  svh. Codebooks 3INST, MCG and MUL1 through 65536-entry tables computed
+  exactly as the CUDA kernels round (`exl3_luts`); integer and
+  half-integer bitrates; widths padded to the 128-block are zero-extended
+  and trimmed. `LkW` gains `aux` (the shared scratch). Checked by
+  `tests/exl3_test.sh` against exllamav3's own reference: bit-exact
+  dequantisation and x·W within 1e-6 relative for every codebook at 1–8
+  and 2.5 bits, at GLM-5.3's shapes and a padded one, on CUDA and the CPU
+  backend, and on a real tensor of fiore-lab's GLM-5.3 EXL3 checkpoint.
+
+- **A Hugging Face checkpoint directory runs directly** (Agora #520):
+  `run` / `chat` / `serve` / `logits` / `tokenize` take a directory with
+  config.json, tokenizer.json and `.safetensors` shards, with no GGUF
+  copy. `src/hfmodel.nu` builds the GGUF metadata llama.cpp's converter
+  would write (hyperparameters per model_type — llama, mistral, qwen2,
+  qwen3, glm_moe_dsa —, the BPE vocabulary, the pre-tokenizer read off
+  the split regex, the end ids, the chat template) in memory and reads
+  the tensors from the shards (`StSet`) under their HF names; the loader
+  composes the routed experts' stacks and MLA's `k_b` / `v_b`, and runs
+  any linear stored as an EXL3 group as EXL3, for every architecture.
+  Every reader of a model's metadata goes through `model_meta`.
+  `tests/hf_dir_test.sh`: tiny llama, qwen3 and glm_moe_dsa checkpoints,
+  with and without EXL3 linears, match HF transformers' logits and
+  greedy text.
+
 ### Fixed
 
+- **A llama3 GGUF (`tokenizer.ggml.pre = llama-bpe`) is split as llama3
+  splits** — digits in threes, whole-piece pre-tokens kept — not the
+  gpt2 way (the split GLM shares: `PRE_LLAMA3`).
+- **`/api/show` reports the model's own architecture keys**; it read
+  `llama.*`, which only a llama model has.
 - **A generation now ends on the model's end-of-turn and end-of-message
   ids, not only its eos** (Agora #517): `tokenizer.ggml.eot_token_id` /
   `eom_token_id`, as llama.cpp's `llama_vocab_is_eog` reads them. GLM ends

@@ -37,7 +37,15 @@
 //                 (non-chat) model gets its raw prompt, which is the
 //                 honest thing to do rather than inventing turns.
 //
-// A ChatMsg's role is one of `system` / `user` / `assistant`.
+// A ChatMsg's role is one of `system` / `user` / `assistant`. An assistant
+// message may carry its reasoning separately (OpenAI's `reasoning_content`,
+// ollama's `thinking`) — a template that reads m.reasoning_content gets it.
+//
+// ChatOpts are the template's own switches, rendered as the template
+// renders them: `effort` (GLM-5.3's reasoning_effort: low | high, any other
+// value Max, its default) and `thinking` (GLM-5's enable_thinking: 0 = off
+// — the generation prompt closes the think block at once —, 1 = on, -1 =
+// not given).
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -57,11 +65,25 @@ $ `deps/gguf/src/gguf.nu`
 : ChatMsg {
     String role
     String content
+    b has_reasoning
+    String reasoning
 }
 
 @ chat_msg s role s content → ChatMsg {
-    ^ @ ChatMsg { ( string_from role ) ( string_from content ) }
+    ^ @ ChatMsg { ( string_from role ) ( string_from content ) F ( string_new ) }
 }
+
+// An assistant message with its reasoning given apart from its text.
+@ chat_msg_r s role s content s reasoning → ChatMsg {
+    ^ @ ChatMsg { ( string_from role ) ( string_from content ) T ( string_from reasoning ) }
+}
+
+: ChatOpts {
+    String effort
+    i thinking
+}
+
+@ chat_opts_none → ChatOpts { ^ @ ChatOpts { ( string_new ) -1 } }
 
 // Pick the style from the model's own chat template (substring match on
 // the marker tokens each dialect must contain), falling back to PLAIN
@@ -326,9 +348,14 @@ $ `deps/gguf/src/gguf.nu`
 //          one writes `</think>`
 // The generation prompt is `<|assistant|><think>`: both templates reason
 // by default.
-@ __chat_glm ( Vec ChatMsg ) msgs b glm53 → String {
+@ __chat_glm ( Vec ChatMsg ) msgs b glm53 ChatOpts o → String {
     : String out ( string_from `[gMASK]<sop>` )
-    ? glm53 { ( string_push_str out `<|system|>Reasoning Effort: Max` ) } {}
+    ? glm53 {
+        // `reasoning_effort if … in ['low', 'high'] else 'max'`, capitalised
+        : s eff ( string_data . o effort )
+        ( string_push_str out `<|system|>Reasoning Effort: ` )
+        ( string_push_str out ? ( nurl_str_eq eff `low` ) `Low` ? ( nurl_str_eq eff `high` ) `High` `Max` )
+    } {}
     : i last_user ( __chat_last_user msgs )
     : ~ i k 0
     ~ < k ( vec_len [ChatMsg] msgs ) {
@@ -345,8 +372,12 @@ $ `deps/gguf/src/gguf.nu`
             ( string_push_str out `<|assistant|>` )
             : ~ String answer ( string_clone . m content )
             : ~ String reasoning ( string_new )
-            : b has_think >= ( nurl_str_find ( __chat_text m ) `</think>` ) 0
-            ? has_think {
+            // reasoning given apart (m.reasoning_content) is taken as it is,
+            // and the text is then all answer; otherwise it is cut out of
+            // the text at `</think>`
+            : b has_think | . m has_reasoning >= ( nurl_str_find ( __chat_text m ) `</think>` ) 0
+            ? . m has_reasoning { = reasoning ( string_clone . m reasoning ) } {}
+            ? & has_think ! . m has_reasoning {
                 : String head ( __chat_before_first . m content `</think>` )
                 ? glm53 {
                     = reasoning ( __chat_after_last head `<think>` )
@@ -374,7 +405,9 @@ $ `deps/gguf/src/gguf.nu`
         } {}
         = k + k 1
     }
-    ( string_push_str out `<|assistant|><think>` )
+    // GLM-5's `'</think>' if (enable_thinking is defined and not
+    // enable_thinking) else '<think>'` (GLM-5.3's template has no switch)
+    ? & ! glm53 == . o thinking 0 { ( string_push_str out `<|assistant|></think>` ) } { ( string_push_str out `<|assistant|><think>` ) }
     ^ out
 }
 
@@ -431,6 +464,12 @@ $ `deps/gguf/src/gguf.nu`
 }
 
 @ chat_render i style ( Vec ChatMsg ) msgs → String {
+    ^ ( chat_render_opts style msgs ( chat_opts_none ) )
+}
+
+// The same, with the template's switches (see ChatOpts); a style without
+// such a switch ignores it, as its template does.
+@ chat_render_opts i style ( Vec ChatMsg ) msgs ChatOpts o → String {
     ? == style CHAT_LLAMA3 { ^ ( __chat_llama3 msgs ) } {}
     ? == style CHAT_CHATML { ^ ( __chat_chatml msgs F ) } {}
     ? == style CHAT_CHATML_NT { ^ ( __chat_chatml msgs T ) } {}
@@ -438,8 +477,8 @@ $ `deps/gguf/src/gguf.nu`
     ? == style CHAT_GEMMA { ^ ( __chat_gemma msgs ) } {}
     ? == style CHAT_PHI3 { ^ ( __chat_phi3 msgs ) } {}
     ? == style CHAT_BAILING { ^ ( __chat_bailing msgs ) } {}
-    ? == style CHAT_GLM5 { ^ ( __chat_glm msgs F ) } {}
-    ? == style CHAT_GLM53 { ^ ( __chat_glm msgs T ) } {}
+    ? == style CHAT_GLM5 { ^ ( __chat_glm msgs F o ) } {}
+    ? == style CHAT_GLM53 { ^ ( __chat_glm msgs T o ) } {}
     ^ ( __chat_plain msgs )
 }
 
