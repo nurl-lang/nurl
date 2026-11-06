@@ -45,6 +45,33 @@ $ `src/hub.nu`
     ( __ref_ck `org/repo@dev/sub/x.bin` `org/repo` `dev` `sub/x.bin` `ref: @rev then subpath` )
     ( __ref_ck `hf.co/org/repo/f.gguf` `org/repo` `main` `f.gguf` `ref: hf.co/ prefix stripped` )
 
+    // a Hugging Face web URL, as the browser shows it, is a ref — not a
+    // web page to download
+    ( __ref_ck `https://huggingface.co/org/repo` `org/repo` `main` `` `url: repo page → whole repo` )
+    ( __ref_ck `https://huggingface.co/org/repo/` `org/repo` `main` `` `url: repo page, trailing / → whole repo` )
+    ( __ref_ck `https://huggingface.co/org/repo/tree/dev` `org/repo` `dev` `` `url: /tree/<rev> → whole repo at rev` )
+    ( __ref_ck `https://huggingface.co/org/repo/blob/main/sub/m.gguf` `org/repo` `main` `sub/m.gguf` `url: /blob/ → one file` )
+    ( __ref_ck `https://huggingface.co/org/repo/resolve/v2/m.gguf?download=true` `org/repo` `v2` `m.gguf` `url: /resolve/ with a query → one file at rev` )
+    ( __ref_ck `https://huggingface.co/org/repo/raw/main/config.json` `org/repo` `main` `config.json` `url: /raw/ → one file` )
+    ( __ref_ck `https://hf.co/org/repo/blob/main/m.gguf#L3` `org/repo` `main` `m.gguf` `url: hf.co host, fragment cut` )
+    ( __ref_ck `https://www.huggingface.co/org/repo` `org/repo` `main` `` `url: www. alias` )
+    ( __ref_ck `huggingface.co/org/repo/blob/main/m.gguf` `org/repo` `main` `m.gguf` `url: no scheme` )
+    // shapes hub cannot fetch: an empty repo the caller reports, never a page download
+    : HubRef rd ( hub_ref_parse `https://huggingface.co/datasets/org/data` )
+    ( check & ! . rd is_url == ( string_len . rd repo ) 0 `url: a dataset → empty repo (reported), not a download` )
+    : HubRef rt ( hub_ref_parse `https://huggingface.co/org/repo/tree/main/subdir` )
+    ( check & ! . rt is_url == ( string_len . rt repo ) 0 `url: a tree subdirectory → empty repo (reported)` )
+    : HubRef rx ( hub_ref_parse `https://huggingface.co/org/repo/discussions/4` )
+    ( check & ! . rx is_url == ( string_len . rx repo ) 0 `url: a discussion page → empty repo (reported)` )
+    : HubRef ro ( hub_ref_parse `https://huggingface.co/org` )
+    ( check & ! . ro is_url == ( string_len . ro repo ) 0 `url: an org page → empty repo (reported)` )
+    // the $HF_ENDPOINT mirror's own URLs are refs too
+    : !v IoErr es ( env_set `HF_ENDPOINT` `https://hf-mirror.example` )
+    ?? es { T _ → {} F _ → {} }
+    ( __ref_ck `https://hf-mirror.example/org/repo/blob/main/m.gguf` `org/repo` `main` `m.gguf` `url: $HF_ENDPOINT host → one file` )
+    : !v IoErr eu ( env_unset `HF_ENDPOINT` )
+    ?? eu { T _ → {} F _ → {} }
+
     : HubRef ru ( hub_ref_parse `https://example.com/x.bin` )
     ( check . ru is_url `ref: http(s):// → is_url` )
     : String uu ( hub_resolve_url ru )
