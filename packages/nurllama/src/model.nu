@@ -44,6 +44,9 @@
 // recurrent state and a causal conv, and every fourth layer gated full
 // attention with a partial rotary (__lm_q35_mix, kernels.nu's lk_ssm_conv
 // / lk_deltanet / lk_gnorm).
+// `glm-dsa` (GLM-5.x) is MLA attention, run absorbed (__lm_mla_mix: every
+// head attends one shared [latent | rope] cache row), DeepSeek sparse
+// attention (the lightning indexer's top-k selection) and the llada2 MoE.
 // Tied-embedding models (no output.weight) reuse token_embd as the
 // output projection.
 //
@@ -75,8 +78,10 @@ $ `stdlib/core/slice.nu`
 
 // One recorded evaluation: its launches, the call shape they were recorded
 // for (count positions, causal or not, logits mode), and the launches
-// whose scalars move with the position — every RoPE (pos0), every KV-cache
-// append (its offset) and every attention (npos0, two launches).
+// whose scalars move with the position — every RoPE (pos0), every cache
+// append (its offset: pos0 times that cache's row width, `copyw`), every
+// attention (npos0, two launches) and every other launch that reads npos0
+// (the DSA indexer's, one each).
 : LmPlan {
     ( Vec GkLaunch ) l
     i count
@@ -84,7 +89,9 @@ $ `stdlib/core/slice.nu`
     i mode
     ( Vec i ) rope
     ( Vec i ) copy
+    ( Vec i ) copyw
     ( Vec i ) attn
+    ( Vec i ) npos
 }
 
 // The plans kept: a prompt's chunk and remainder, decode, one more.
@@ -262,6 +269,51 @@ $ `stdlib/core/slice.nu`
     GkBuf dnn  // …normed and gated
     GkBuf qgd  // a gated attention layer's [q | gate] projection
     GkBuf gated  // …its gate
+    // ── glm-dsa (GLM-5.x): MLA attention + the DSA lightning indexer ────
+    // Attention runs in the ABSORBED form: each head's query nope part goes
+    // through that head's k_b into the latent space, so every head attends
+    // ONE shared cache row per position, [kv_lora latent | rope k] —
+    // multi-query attention with head_dim = kv_lora + rope — and the
+    // attention output (a latent per head) comes back through that head's
+    // v_b. head_dim / n_kv are those of the absorbed form (the GGUF's
+    // key_length and head_count_kv = 1); qk_nope and v_mla those of a head
+    // before absorption.
+    b mla
+    i q_lora
+    i kv_lora
+    i qk_nope
+    i v_mla
+    i idx_nh
+    i idx_hd
+    i idx_topk
+    f idx_eps
+    ( Vec LmW ) wq_a
+    ( Vec GkBuf ) q_a_norm
+    ( Vec LmW ) wkv_a
+    ( Vec GkBuf ) kv_a_norm
+    ( Vec LmW ) wk_b
+    ( Vec LmW ) wv_b
+    // the indexer, on a "full" layer only (none on a "shared" one, which
+    // attends the selection its last full layer made)
+    ( Vec LmW ) idx_qb
+    ( Vec LmW ) idx_k
+    ( Vec GkBuf ) idx_kn_w
+    ( Vec GkBuf ) idx_kn_b
+    ( Vec LmW ) idx_proj
+    ( Vec GkBuf ) idx_kcache  // n_ctx × idx_hd: the indexer's rotated keys
+    GkBuf qad  // count × q_lora: the q_a projection
+    GkBuf qrd  // …normed: q_b's input and the indexer's query input
+    GkBuf iqd  // count × idx_nh × idx_hd: indexer queries
+    GkBuf ikd  // count × idx_hd: indexer keys…
+    GkBuf ikn  // …normed
+    GkBuf iwd  // count × idx_nh: the indexer's per-head weights
+    GkBuf iscd  // count × n_ctx: index scores
+    // count × n_ctx: the keys each position attends (lk_dsa_select); one
+    // float, never read, where there is no indexer
+    GkBuf seld
+    GkBuf headid  // i64, LM_CHUNK × n_head: the head of each (position, head)
+    ( Vec i ) pl_copyw
+    ( Vec i ) pl_npos
 }
 
 // What a loaded model is and never changes: read without waiting for an
@@ -309,7 +361,13 @@ $ `stdlib/core/slice.nu`
         ( vec_new [LmW] ) ( vec_new [LmW] ) ( vec_new [LmW] ) ( vec_new [LmW] ) ( vec_new [LmW] )
         ( vec_new [GkBuf] ) ( vec_new [GkBuf] ) ( vec_new [GkBuf] ) ( vec_new [GkBuf] ) ( vec_new [GkBuf] ) ( vec_new [GkBuf] )
         ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 )
-        ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) } )
+        ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 )
+        F 0 0 0 0 0 0 0 0.0
+        ( vec_new [LmW] ) ( vec_new [GkBuf] ) ( vec_new [LmW] ) ( vec_new [GkBuf] ) ( vec_new [LmW] ) ( vec_new [LmW] )
+        ( vec_new [LmW] ) ( vec_new [LmW] ) ( vec_new [GkBuf] ) ( vec_new [GkBuf] ) ( vec_new [LmW] ) ( vec_new [GkBuf] )
+        ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 )
+        ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_I64 )
+        ( vec_new [i] ) ( vec_new [i] ) } )
 }
 
 @ __lm_handle sink LlmImpl m → Llm {
@@ -798,6 +856,69 @@ $ `stdlib/core/slice.nu`
     ^ ok
 }
 
+// A stack of per-head (or per-expert) matrices for lk_matvec_experts, which
+// reads f32 and q8_0: those types go up as they are, any other is
+// dequantised to f32 on the host (MLA's k_b / v_b are small — a few MB a
+// layer — and a GGUF may carry them as f16 or bf16).
+@ __lm_upload_stack inout LlmImpl m Gguf gg i layer s suffix → LmW {
+    : String nm ( __lm_tname layer suffix )
+    : i ti ( gguf_find_tensor gg ( string_data nm ) )
+    ? < ti 0 { ^ ( __lm_w_none ) } {}
+    : i gt ?? ( vec_get [GgufTensor] ( gguf_tensors gg ) ti ) { T t → . t gtype F → -1 }
+    ? & ( lk_experts_supported gt ) ( __lm_native gt ) { ^ @ LmW { ( __lm_upload m gg ( string_data nm ) ) 0 } } {}
+    ?? ( gguf_dequant gg ti ) {
+        T raw → { ^ @ LmW { ( __lm_up_f32 m raw ) 0 } }
+        F e → { ^ ( __lm_w_none ) }
+    }
+}
+
+// One glm-dsa layer's attention tensors (the FFN is the shared dense / MoE
+// code). Every per-layer column a llama layer fills gets an entry too — none
+// — so the columns stay index-aligned; attn_q_b goes in `wq`.
+//   MLA      attn_q_a, attn_q_a_norm, attn_q_b, attn_kv_a_mqa,
+//            attn_kv_a_norm, attn_k_b, attn_v_b, attn_output
+//   indexer  indexer.attn_q_b, indexer.attn_k, indexer.k_norm (weight and
+//            bias), indexer.proj — all of them on a "full" layer, none on a
+//            "shared" one
+@ __lm_mla_layer inout LlmImpl m Gguf gg i L → b {
+    : ~ b ok T
+    ? ( __lm_put ( __lm_upload_layer m gg L `attn_q_a.weight` ) . m wq_a ) {} { = ok F }
+    ? ( __lm_putf ( __lm_upload_layer_f m gg L `attn_q_a_norm.weight` ) . m q_a_norm ) {} { = ok F }
+    ? ( __lm_put ( __lm_upload_layer m gg L `attn_q_b.weight` ) . m wq ) {} { = ok F }
+    ? ( __lm_put ( __lm_upload_layer m gg L `attn_kv_a_mqa.weight` ) . m wkv_a ) {} { = ok F }
+    ? ( __lm_putf ( __lm_upload_layer_f m gg L `attn_kv_a_norm.weight` ) . m kv_a_norm ) {} { = ok F }
+    ? ( __lm_put ( __lm_upload_stack m gg L `attn_k_b.weight` ) . m wk_b ) {} { = ok F }
+    ? ( __lm_put ( __lm_upload_stack m gg L `attn_v_b.weight` ) . m wv_b ) {} { = ok F }
+    ? ( __lm_put ( __lm_upload_layer m gg L `attn_output.weight` ) . m wo ) {} { = ok F }
+    : String ikn ( __lm_tname L `indexer.attn_k.weight` )
+    ? >= ( gguf_find_tensor gg ( string_data ikn ) ) 0 {
+        ? ( __lm_put ( __lm_upload_layer m gg L `indexer.attn_q_b.weight` ) . m idx_qb ) {} { = ok F }
+        ? ( __lm_put ( __lm_upload_layer m gg L `indexer.attn_k.weight` ) . m idx_k ) {} { = ok F }
+        ? ( __lm_putf ( __lm_upload_layer_f m gg L `indexer.k_norm.weight` ) . m idx_kn_w ) {} { = ok F }
+        ? ( __lm_putf ( __lm_upload_layer_f m gg L `indexer.k_norm.bias` ) . m idx_kn_b ) {} { = ok F }
+        ? ( __lm_put ( __lm_upload_layer m gg L `indexer.proj.weight` ) . m idx_proj ) {} { = ok F }
+    } {
+        // a shared layer attends its last full layer's selection — there
+        // has to be one
+        ? == L 0 { = ok F } {}
+        ( vec_push [LmW] . m idx_qb ( __lm_w_none ) )
+        ( vec_push [LmW] . m idx_k ( __lm_w_none ) )
+        ( vec_push [GkBuf] . m idx_kn_w ( gk_buf_none GK_F32 ) )
+        ( vec_push [GkBuf] . m idx_kn_b ( gk_buf_none GK_F32 ) )
+        ( vec_push [LmW] . m idx_proj ( __lm_w_none ) )
+    }
+    ( vec_push [LmW] . m wk ( __lm_w_none ) )
+    ( vec_push [LmW] . m wv ( __lm_w_none ) )
+    ( vec_push [GkBuf] . m bq ( gk_buf_none GK_F32 ) )
+    ( vec_push [GkBuf] . m bk ( gk_buf_none GK_F32 ) )
+    ( vec_push [GkBuf] . m bv ( gk_buf_none GK_F32 ) )
+    ( vec_push [GkBuf] . m q_norm ( gk_buf_none GK_F32 ) )
+    ( vec_push [GkBuf] . m k_norm ( gk_buf_none GK_F32 ) )
+    ( vec_push [GkBuf] . m post_attn_norm ( gk_buf_none GK_F32 ) )
+    ( vec_push [GkBuf] . m post_ffn_norm ( gk_buf_none GK_F32 ) )
+    ^ ok
+}
+
 @ llm_open s path i want_ctx → !Llm String {
     ^ ( llm_open_st path `` want_ctx )
 }
@@ -847,14 +968,15 @@ $ `stdlib/core/slice.nu`
     : b is_llada2 != 0 ( nurl_str_eq arch `llada2` )
     : b is_qwen3 != 0 ( nurl_str_eq arch `qwen3` )
     : b is_q35 != 0 ( nurl_str_eq arch `qwen35` )
-    ? | | | | | | != 0 ( nurl_str_eq arch `llama` ) != 0 ( nurl_str_eq arch `qwen2` )
-    is_qwen3 is_gemma3 is_phi3 is_llada2 is_q35 {} {
+    : b is_glm != 0 ( nurl_str_eq arch `glm-dsa` )
+    ? | | | | | | | != 0 ( nurl_str_eq arch `llama` ) != 0 ( nurl_str_eq arch `qwen2` )
+    is_qwen3 is_gemma3 is_phi3 is_llada2 is_q35 is_glm {} {
         // `arch` BORROWS the Gguf's kv string, so the message has to be
         // built while the file is still open — closing first left this
         // printing freed bytes.
         : String msg ( string_from `nurllama: unsupported architecture '` )
         ( string_push_str msg arch )
-        ( string_push_str msg `' (supported: llama, qwen2, qwen3, qwen35, gemma3, phi3, llada2)` )
+        ( string_push_str msg `' (supported: llama, qwen2, qwen3, qwen35, gemma3, phi3, llada2, glm-dsa)` )
         ^ @ !Llm String { F msg }
     }
 
@@ -937,12 +1059,47 @@ $ `stdlib/core/slice.nu`
     = . m n_group ( __lm_kv_i gg arch `expert_group_count` 0 )
     = . m n_group_used ( __lm_kv_i gg arch `expert_group_used_count` 0 )
     = . m moe_ff ( __lm_kv_i gg arch `expert_feed_forward_length` 0 )
-    = . m shexp_ff ( __lm_kv_i gg arch `expert_shared_feed_forward_length` . m moe_ff )
+    // The shared expert's width: stated outright (llada2), or the count of
+    // shared experts side by side (llama.cpp's deepseek2 family: glm-dsa).
+    = . m shexp_ff ( __lm_kv_i gg arch `expert_shared_feed_forward_length`
+    * . m moe_ff ( __lm_kv_i gg arch `expert_shared_count` 1 ) )
     = . m route_scale ( __lm_kv_f gg arch `expert_weights_scale` 1.0 )
     = . m weights_norm ? != 0 ( __lm_kv_i gg arch `expert_weights_norm` 1 ) T F
     = . m first_dense ( __lm_kv_i gg arch `leading_dense_block_count` ? is_llada2 1 0 )
-    ? & is_llada2 | | < . m n_expert 1 < . m n_expert_used 1 < . m moe_ff 1 {
-        ^ ( __lm_err `nurllama: llada2 model is missing its MoE hyperparameters` )
+    ? & | is_llada2 is_glm | | < . m n_expert 1 < . m n_expert_used 1 < . m moe_ff 1 {
+        ^ ( __lm_err `nurllama: MoE model is missing its expert hyperparameters` )
+    } {}
+
+    // ── the glm-dsa shape (GLM-5.x) ─────────────────────────────────────
+    // MLA attention in its absorbed form (see LlmImpl), the DSA lightning
+    // indexer, the deepseek2 MoE above. The GGUF states the ABSORBED head:
+    // key_length = kv_lora + rope (the cache row), head_count_kv = 1; the
+    // per-head query/key width before absorption is key_length_mla, and its
+    // rope part rope.dimension_count — rotated NORM-style (adjacent pairs:
+    // GLM's interleaved rotary), with the scale of that width. The file's
+    // last nextn_predict_layers blocks are the multi-token-prediction head,
+    // which plain decoding does not run.
+    = . m mla is_glm
+    ? is_glm {
+        = . m n_layer - . m n_layer ( __lm_kv_i gg arch `nextn_predict_layers` 0 )
+        = . m q_lora ( __lm_kv_i gg arch `attention.q_lora_rank` 0 )
+        = . m kv_lora ( __lm_kv_i gg arch `attention.kv_lora_rank` 0 )
+        : i kmla ( __lm_kv_i gg arch `attention.key_length_mla` 0 )
+        = . m qk_nope - kmla . m rope_dim
+        = . m v_mla ( __lm_kv_i gg arch `attention.value_length_mla` 0 )
+        = . m idx_nh ( __lm_kv_i gg arch `attention.indexer.head_count` 0 )
+        = . m idx_hd ( __lm_kv_i gg arch `attention.indexer.key_length` 0 )
+        = . m idx_topk ( __lm_kv_i gg arch `attention.indexer.top_k` 0 )
+        // The indexer's key LayerNorm is HF's nn.LayerNorm(eps=1e-6); the
+        // GGUF does not state it.
+        = . m idx_eps 0.000001
+        ? | | | | | | | < . m q_lora 1 < . m kv_lora 1 < . m qk_nope 1 < . m v_mla 1 < . m idx_nh 1 < . m idx_hd . m rope_dim < . m idx_topk 1
+        != . m head_dim + . m kv_lora . m rope_dim {
+            ^ ( __lm_err `nurllama: glm-dsa model is missing its MLA / indexer hyperparameters (or they disagree)` )
+        } {}
+        ? != . m n_kv 1 {
+            ^ ( __lm_err `nurllama: glm-dsa model states more than one KV head — MLA attends one shared latent` )
+        } {}
     } {}
 
     // ── the gemma shape ──────────────────────────────────────────────────
@@ -963,6 +1120,9 @@ $ `stdlib/core/slice.nu`
     // gemma3 it equals head_dim, but reading it keeps the kernel honest.
     : i qpre ( __lm_kv_i gg arch `attention.query_pre_attn_scalar` . m head_dim )
     = . m attn_scale ? is_gemma3 / 1.0 ( sqrt # f qpre ) / 1.0 ( sqrt # f . m head_dim )
+    // MLA scores with the scale of a head BEFORE absorption (key_length_mla),
+    // not of the absorbed cache row
+    ? is_glm { = . m attn_scale / 1.0 ( sqrt # f + . m qk_nope . m rope_dim ) } {}
     // The window is whatever the model states (phi3-mini-4k: 2047; gemma3: 512).
     = . m swa_window ( __lm_kv_i gg arch `attention.sliding_window` 0 )
     // How often a FULL-attention layer comes around. gemma3: every sixth.
@@ -1056,42 +1216,48 @@ $ `stdlib/core/slice.nu`
             = L + L 1
             continue
         } {}
-        // phi3 ships Q, K and V as ONE tensor (`attn_qkv`, rows q|k|v) and the
-        // FFN gate and up as one (`ffn_up`, rows gate|up). Nothing needs to be
-        // split: a weight is a buffer plus where it starts, so the parts are
-        // row RANGES inside the uploaded tensor. The row stride comes from the
-        // quantisation type, and every split lands on a block boundary because
-        // a row is a whole number of blocks.
-        : String qkvn ( __lm_tname L `attn_qkv.weight` )
-        : i qkv_rows ( __lm_tensor_rows gg ( string_data qkvn ) )
-        ? >= qkv_rows 0 {
-            : LkW base ( __lm_upload m gg ( string_data qkvn ) )
-            ? ( lk_w_ok base ) {
-                : i rb ( __lm_row_bytes . base gt . m n_embd )
-                : i kvd * . m n_kv . m head_dim
-                ( vec_push [LmW] . m wq @ LmW { ( mem_dup base ) 0 } )
-                ( vec_push [LmW] . m wk @ LmW { ( mem_dup base ) * . m q_dim rb } )
-                ( vec_push [LmW] . m wv @ LmW { base * + . m q_dim kvd rb } )
-            } { = ok F }
+        ? . m mla {
+            ? ( __lm_mla_layer m gg L ) {} { = ok F }
         } {
-            ? ( __lm_put ( __lm_upload_layer m gg L `attn_q.weight` ) . m wq ) {} { = ok F }
-            ? ( __lm_put ( __lm_upload_layer m gg L `attn_k.weight` ) . m wk ) {} { = ok F }
-            ? ( __lm_put ( __lm_upload_layer m gg L `attn_v.weight` ) . m wv ) {} { = ok F }
+            // phi3 ships Q, K and V as ONE tensor (`attn_qkv`, rows q|k|v) and the
+            // FFN gate and up as one (`ffn_up`, rows gate|up). Nothing needs to be
+            // split: a weight is a buffer plus where it starts, so the parts are
+            // row RANGES inside the uploaded tensor. The row stride comes from the
+            // quantisation type, and every split lands on a block boundary because
+            // a row is a whole number of blocks.
+            : String qkvn ( __lm_tname L `attn_qkv.weight` )
+            : i qkv_rows ( __lm_tensor_rows gg ( string_data qkvn ) )
+            ? >= qkv_rows 0 {
+                : LkW base ( __lm_upload m gg ( string_data qkvn ) )
+                ? ( lk_w_ok base ) {
+                    : i rb ( __lm_row_bytes . base gt . m n_embd )
+                    : i kvd * . m n_kv . m head_dim
+                    ( vec_push [LmW] . m wq @ LmW { ( mem_dup base ) 0 } )
+                    ( vec_push [LmW] . m wk @ LmW { ( mem_dup base ) * . m q_dim rb } )
+                    ( vec_push [LmW] . m wv @ LmW { base * + . m q_dim kvd rb } )
+                } { = ok F }
+            } {
+                ? ( __lm_put ( __lm_upload_layer m gg L `attn_q.weight` ) . m wq ) {} { = ok F }
+                ? ( __lm_put ( __lm_upload_layer m gg L `attn_k.weight` ) . m wk ) {} { = ok F }
+                ? ( __lm_put ( __lm_upload_layer m gg L `attn_v.weight` ) . m wv ) {} { = ok F }
+            }
+            ? ( __lm_put ( __lm_upload_layer m gg L `attn_output.weight` ) . m wo ) {} { = ok F }
+            // qwen2 carries Q/K/V biases; llama does not. Absent = none = skip.
+            ( vec_push [GkBuf] . m bq ( __lm_upload_opt m gg L `attn_q.bias` ) )
+            ( vec_push [GkBuf] . m bk ( __lm_upload_opt m gg L `attn_k.bias` ) )
+            ( vec_push [GkBuf] . m bv ( __lm_upload_opt m gg L `attn_v.bias` ) )
+            // gemma3: per-head Q/K norms (applied before RoPE) and the post-block
+            // norms it puts on the attention and FFN outputs before each residual
+            // add. Absent on llama/qwen2 → none → skipped in the forward pass.
+            ( vec_push [GkBuf] . m q_norm ( __lm_upload_opt m gg L `attn_q_norm.weight` ) )
+            ( vec_push [GkBuf] . m k_norm ( __lm_upload_opt m gg L `attn_k_norm.weight` ) )
+            ( vec_push [GkBuf] . m post_attn_norm ( __lm_upload_opt m gg L `post_attention_norm.weight` ) )
+            ( vec_push [GkBuf] . m post_ffn_norm ( __lm_upload_opt m gg L `post_ffw_norm.weight` ) )
         }
-        ? ( __lm_put ( __lm_upload_layer m gg L `attn_output.weight` ) . m wo ) {} { = ok F }
-        // qwen2 carries Q/K/V biases; llama does not. Absent = none = skip.
-        ( vec_push [GkBuf] . m bq ( __lm_upload_opt m gg L `attn_q.bias` ) )
-        ( vec_push [GkBuf] . m bk ( __lm_upload_opt m gg L `attn_k.bias` ) )
-        ( vec_push [GkBuf] . m bv ( __lm_upload_opt m gg L `attn_v.bias` ) )
-        // gemma3: per-head Q/K norms (applied before RoPE) and the post-block
-        // norms it puts on the attention and FFN outputs before each residual
-        // add. Absent on llama/qwen2 → none → skipped in the forward pass.
-        ( vec_push [GkBuf] . m q_norm ( __lm_upload_opt m gg L `attn_q_norm.weight` ) )
-        ( vec_push [GkBuf] . m k_norm ( __lm_upload_opt m gg L `attn_k_norm.weight` ) )
-        ( vec_push [GkBuf] . m post_attn_norm ( __lm_upload_opt m gg L `post_attention_norm.weight` ) )
-        ( vec_push [GkBuf] . m post_ffn_norm ( __lm_upload_opt m gg L `post_ffw_norm.weight` ) )
         ? ( __lm_putf ( __lm_upload_layer_f m gg L `ffn_norm.weight` ) . m ffn_norm ) {} { = ok F }
-        : b moe_layer & . m bidir >= L . m first_dense
+        // Mixture-of-Experts layers: every layer from leading_dense_block_count
+        // on, in a model that has experts at all (llada2, glm-dsa)
+        : b moe_layer & > . m n_expert 0 >= L . m first_dense
         ? moe_layer {
             // MoE layer: no dense FFN tensors — placeholders keep the
             // per-layer vectors index-aligned.
@@ -1150,7 +1316,8 @@ $ `stdlib/core/slice.nu`
             ( vec_push [LmW] . m gate_shexp ( __lm_w_none ) )
             ( vec_push [LmW] . m up_shexp ( __lm_w_none ) )
             ( vec_push [LmW] . m down_shexp ( __lm_w_none ) )
-            ? . m bidir {
+            // a dense layer's row of the all-layers expert bias (bias_all)
+            ? > . m n_expert 0 {
                 : ~ i e 0
                 ~ < e . m n_expert {
                     ( vec_push [f] . m exp_bias 0.0 )
@@ -1196,13 +1363,44 @@ $ `stdlib/core/slice.nu`
             ( vec_push [GkBuf] . m rec_state ( __lm_scratch m * * . m ssm_nv . m ssm_dk . m ssm_dv ) )
         } {
             ( vec_push [GkBuf] . m kcache ( __lm_scratch m * . m n_ctx kvdim ) )
-            ( vec_push [GkBuf] . m vcache ( __lm_scratch m * . m n_ctx kvdim ) )
+            // MLA: the latent row is the key AND the value — one cache
+            ? . m mla {
+                ( vec_push [GkBuf] . m vcache ( gk_buf_none GK_F32 ) )
+                : b full ( lk_w_ok . ( vec_at [LmW] . m idx_k L ) w )
+                ( vec_push [GkBuf] . m idx_kcache ? full ( __lm_scratch m * . m n_ctx . m idx_hd ) ( gk_buf_none GK_F32 ) )
+            } {
+                ( vec_push [GkBuf] . m vcache ( __lm_scratch m * . m n_ctx kvdim ) )
+            }
             ? . m hybrid {
                 ( vec_push [GkBuf] . m conv_state ( gk_buf_none GK_F32 ) )
                 ( vec_push [GkBuf] . m rec_state ( gk_buf_none GK_F32 ) )
             } {}
         }
         = L + L 1
+    }
+    ? . m mla {
+        : i nh_ . m n_head
+        = . m qad ( __lm_scratch m * LM_CHUNK . m q_lora )
+        = . m qrd ( __lm_scratch m * LM_CHUNK . m q_lora )
+        = . m iqd ( __lm_scratch m * * LM_CHUNK . m idx_nh . m idx_hd )
+        = . m ikd ( __lm_scratch m * LM_CHUNK . m idx_hd )
+        = . m ikn ( __lm_scratch m * LM_CHUNK . m idx_hd )
+        = . m iwd ( __lm_scratch m * LM_CHUNK . m idx_nh )
+        = . m iscd ( __lm_scratch m * LM_CHUNK . m n_ctx )
+        = . m seld ( __lm_scratch m * LM_CHUNK . m n_ctx )
+        // the (position, head) → head table the per-head k_b / v_b matvecs
+        // index their weight stack by (i64, as lk_matvec_experts reads it)
+        : i nhid * LM_CHUNK nh_
+        : ( Vec u ) hb ( vec_with_cap [u] * nhid 8 )
+        : ~ i ha 0
+        ~ < ha nhid {
+            ( bytes_push_u32_le hb # u32 % ha nh_ )
+            ( bytes_push_u32_le hb # u32 0 )
+            = ha + ha 1
+        }
+        = . m headid ( gk_buf_view_as ( __lm_scratch_from m * nhid 2 hb ) 0 nhid GK_I64 )
+    } {
+        = . m seld ( __lm_scratch m 1 )
     }
     ? . m hybrid {
         : i vd_ * . m ssm_nv . m ssm_dv
@@ -1221,7 +1419,10 @@ $ `stdlib/core/slice.nu`
     // the first row of each.
     = . m xd ( __lm_scratch m * LM_CHUNK . m n_embd )
     = . m xnd ( __lm_scratch m * LM_CHUNK . m n_embd )
-    = . m qd ( __lm_scratch m * LM_CHUNK . m q_dim )
+    // (MLA's q is each head's [nope | rope] before absorption, and qd later
+    // holds every head's up-projected value — neither has to fit in q_dim)
+    : i mla_q ? . m mla * . m n_head ? > + . m qk_nope . m rope_dim . m v_mla + . m qk_nope . m rope_dim . m v_mla 0
+    = . m qd ( __lm_scratch m * LM_CHUNK ? > mla_q . m q_dim mla_q . m q_dim )
     = . m kd ( __lm_scratch m * LM_CHUNK kvdim )
     = . m vd ( __lm_scratch m * LM_CHUNK kvdim )
     = . m aod ( __lm_scratch m * LM_CHUNK . m q_dim )
@@ -1242,6 +1443,8 @@ $ `stdlib/core/slice.nu`
         = . m amprob_d ( __lm_scratch m LM_CHUNK )
         = . m amid_v ( vec_zeroed [i] LM_CHUNK )
         = . m amprob_h ( gpu_host_alloc * LM_CHUNK 4 )
+    } {}
+    ? > . m n_expert 0 {
         = . m rlogitsd ( __lm_scratch m * LM_CHUNK . m n_expert )
         = . m router_host ( gpu_host_alloc * * LM_CHUNK . m n_expert 4 )
         = . m moe_outd ( __lm_scratch m . m n_embd )
@@ -1564,15 +1767,17 @@ $ `stdlib/core/slice.nu`
         = ok & ok ( lk_rmsnorm kit . m qd ( vec_at [GkBuf] . m q_norm L ) . m qn2d hd . m eps * nh count p )
         = ok & ok ( lk_rmsnorm kit . m kd ( vec_at [GkBuf] . m k_norm L ) . m kn2d hd . m eps * nkv count p )
         ( vec_push [i] . m pl_rope ( vec_len [GkLaunch] p ) )
-        = ok & ok ( lk_rope kit . m qn2d nh hd . m rope_dim pos0 . m rope_base . m rope_style count p )
+        = ok & ok ( lk_rope kit . m qn2d nh hd 0 . m rope_dim pos0 . m rope_base . m rope_style count p )
         ( vec_push [i] . m pl_rope ( vec_len [GkLaunch] p ) )
-        = ok & ok ( lk_rope kit . m kn2d nkv hd . m rope_dim pos0 . m rope_base . m rope_style count p )
+        = ok & ok ( lk_rope kit . m kn2d nkv hd 0 . m rope_dim pos0 . m rope_base . m rope_style count p )
         ( vec_push [i] . m pl_copy ( vec_len [GkLaunch] p ) )
+        ( vec_push [i] . m pl_copyw kvdim )
         = ok & ok ( lk_copyat kit ( vec_at [GkBuf] . m kcache L ) . m kn2d * pos0 kvdim * count kvdim p )
         ( vec_push [i] . m pl_copy ( vec_len [GkLaunch] p ) )
+        ( vec_push [i] . m pl_copyw kvdim )
         = ok & ok ( lk_copyat kit ( vec_at [GkBuf] . m vcache L ) . m vd * pos0 kvdim * count kvdim p )
         ( vec_push [i] . m pl_attn ( vec_len [GkLaunch] p ) )
-        = ok & ok ( lk_attn kit . m warp . m qn2d ( vec_at [GkBuf] . m kcache L ) ( vec_at [GkBuf] . m vcache L ) . m aod . m scored
+        = ok & ok ( lk_attn kit . m warp . m qn2d ( vec_at [GkBuf] . m kcache L ) ( vec_at [GkBuf] . m vcache L ) . m aod . m scored . m seld 0
         nh nkv hd ? causal + pos0 1 kvlen count . m n_ctx . m attn_scale 0 ? causal 1 0 p )
         = ok & ok ( lk_sigmul kit . m aod . m gated * qd_ count p )
         = ok & ok ( __lm_mv m ( vec_at [LmW] . m wo L ) 0 . m aod 0 . m tmpd ne qd_ count p )
@@ -1596,6 +1801,87 @@ $ `stdlib/core/slice.nu`
     ^ ok
 }
 
+// A glm-dsa layer's attention over the batch, into tmpd (the caller adds it
+// to the residual). x̂ = the layer's input norm of x; per head the query and
+// key are [nope | rope] before absorption, kvl = kv_lora, hd = kvl + rope.
+//   q       q_b · RMSNorm(q_a · x̂)                    count × nh × (nope+rope)
+//   absorb  qfull[pos, h] = [k_b[h] · q_nope | q_rope]  (rope rotated)
+//   latent  [RMSNorm(c) | rotated k_rope] = kv_a · x̂ → the cache row
+//   DSA     a full layer's indexer selects the keys each position attends
+//           (seld); a shared layer attends the selection already there
+//   attend  every head over the ONE latent cache (MQA, head_dim hd), its
+//           first kvl outputs the head's latent value
+//   out     attn_output · [v_b[h] · latent_h for every head]
+// The rope / cache / attention / indexer launches go on the replay lists,
+// each with what it moves by.
+@ __lm_mla_mix inout LlmImpl m inout ( Vec GkLaunch ) p i L i count i pos0 i kvlen b causal → b {
+    : GpuKit kit . m kit
+    : i ne . m n_embd
+    : i nh . m n_head
+    : i hd . m head_dim
+    : i kvl . m kv_lora
+    : i rd . m rope_dim
+    : i nope . m qk_nope
+    : i qkh + nope rd
+    : i vm . m v_mla
+    : i nasn * count nh
+    : i npos0 ? causal + pos0 1 kvlen
+    : ~ b ok ( lk_rmsnorm kit . m xd ( vec_at [GkBuf] . m attn_norm L ) . m xnd ne . m eps count p )
+    // the query: low rank, normed, then up to every head's [nope | rope]
+    = ok & ok ( __lm_mv m ( vec_at [LmW] . m wq_a L ) 0 . m xnd 0 . m qad . m q_lora ne count p )
+    = ok & ok ( lk_rmsnorm kit . m qad ( vec_at [GkBuf] . m q_a_norm L ) . m qrd . m q_lora . m eps count p )
+    = ok & ok ( __lm_mv m ( vec_at [LmW] . m wq L ) 0 . m qrd 0 . m qd * nh qkh . m q_lora count p )
+    // absorbed: each head's nope part through its k_b into the latent space,
+    // its rope part beside it — qfull (qn2d) rows of hd per (position, head)
+    = ok & ok ( lk_matvec_experts kit . ( vec_at [LmW] . m wk_b L ) w . m qd qkh . m qn2d hd . m headid kvl nope 1 nasn p )
+    = ok & ok ( lk_copy2d kit . m qn2d kvl hd . m qd nope qkh rd nasn p )
+    ( vec_push [i] . m pl_rope ( vec_len [GkLaunch] p ) )
+    = ok & ok ( lk_rope kit . m qn2d nh hd kvl rd pos0 . m rope_base . m rope_style count p )
+    // the key/value latent: [c | k_rope] = kv_a·x̂, c normed, k_rope rotated
+    // — the cache row (kn2d), appended at pos0
+    = ok & ok ( __lm_mv m ( vec_at [LmW] . m wkv_a L ) 0 . m xnd 0 . m kd hd ne count p )
+    = ok & ok ( lk_rmsnorm_s kit . m kd hd ( vec_at [GkBuf] . m kv_a_norm L ) . m kn2d hd kvl . m eps count p )
+    = ok & ok ( lk_copy2d kit . m kn2d kvl hd . m kd kvl hd rd count p )
+    ( vec_push [i] . m pl_rope ( vec_len [GkLaunch] p ) )
+    = ok & ok ( lk_rope kit . m kn2d 1 hd kvl rd pos0 . m rope_base . m rope_style count p )
+    ( vec_push [i] . m pl_copy ( vec_len [GkLaunch] p ) )
+    ( vec_push [i] . m pl_copyw hd )
+    = ok & ok ( lk_copyat kit ( vec_at [GkBuf] . m kcache L ) . m kn2d * pos0 hd * count hd p )
+    // the lightning indexer (a full layer): its own query from the q_a
+    // latent and key from x̂, both rotated on their first rope dims, the key
+    // LayerNormed and cached; weights per indexer head; then the selection
+    : LmW wik ( vec_at [LmW] . m idx_k L )
+    ? ( __lm_w_ok wik ) {
+        : i nhi . m idx_nh
+        : i dhi . m idx_hd
+        : GkBuf ikc ( vec_at [GkBuf] . m idx_kcache L )
+        = ok & ok ( __lm_mv m ( vec_at [LmW] . m idx_qb L ) 0 . m qrd 0 . m iqd * nhi dhi . m q_lora count p )
+        ( vec_push [i] . m pl_rope ( vec_len [GkLaunch] p ) )
+        = ok & ok ( lk_rope kit . m iqd nhi dhi 0 rd pos0 . m rope_base . m rope_style count p )
+        = ok & ok ( __lm_mv m wik 0 . m xnd 0 . m ikd dhi ne count p )
+        = ok & ok ( lk_layernorm kit . m ikd ( vec_at [GkBuf] . m idx_kn_w L ) ( vec_at [GkBuf] . m idx_kn_b L ) . m ikn dhi . m idx_eps count p )
+        ( vec_push [i] . m pl_rope ( vec_len [GkLaunch] p ) )
+        = ok & ok ( lk_rope kit . m ikn 1 dhi 0 rd pos0 . m rope_base . m rope_style count p )
+        ( vec_push [i] . m pl_copy ( vec_len [GkLaunch] p ) )
+        ( vec_push [i] . m pl_copyw dhi )
+        = ok & ok ( lk_copyat kit ikc . m ikn * pos0 dhi * count dhi p )
+        = ok & ok ( __lm_mv m ( vec_at [LmW] . m idx_proj L ) 0 . m xnd 0 . m iwd nhi ne count p )
+        : f isc / 1.0 ( sqrt # f * dhi nhi )
+        ( vec_push [i] . m pl_npos ( vec_len [GkLaunch] p ) )
+        = ok & ok ( lk_dsa_score kit . m iqd ikc . m iwd . m iscd nhi dhi isc npos0 count . m n_ctx . m idx_topk p )
+        ( vec_push [i] . m pl_npos ( vec_len [GkLaunch] p ) )
+        = ok & ok ( lk_dsa_select kit . m iscd . m seld npos0 count . m n_ctx . m idx_topk p )
+    } {}
+    ( vec_push [i] . m pl_attn ( vec_len [GkLaunch] p ) )
+    = ok & ok ( lk_attn kit . m warp . m qn2d ( vec_at [GkBuf] . m kcache L ) ( vec_at [GkBuf] . m kcache L ) . m aod . m scored . m seld 1
+    nh 1 hd npos0 count . m n_ctx . m attn_scale 0 ? causal 1 0 p )
+    // each head's latent output (the first kvl of its hd) up through its v_b
+    // (into qd, free again), then attn_output
+    = ok & ok ( lk_matvec_experts kit . ( vec_at [LmW] . m wv_b L ) w . m aod hd . m qd vm . m headid vm kvl 1 nasn p )
+    = ok & ok ( __lm_mv m ( vec_at [LmW] . m wo L ) 0 . m qd 0 . m tmpd ne * nh vm count p )
+    ^ ok
+}
+
 @ __lm_emit inout LlmImpl m inout ( Vec GkLaunch ) p i count i pos0 i kvlen b causal i logits_mode inout b keep → b {
     : GpuKit kit . m kit
     : b wp . m warp
@@ -1608,7 +1894,9 @@ $ `stdlib/core/slice.nu`
     : GkBuf none ( gk_buf_none GK_F32 )
     ( vec_clear [i] . m pl_rope )
     ( vec_clear [i] . m pl_copy )
+    ( vec_clear [i] . m pl_copyw )
     ( vec_clear [i] . m pl_attn )
+    ( vec_clear [i] . m pl_npos )
     : ~ b ok T
 
     // gemma scales the embedding row by sqrt(n_embd) before the first block.
@@ -1628,8 +1916,10 @@ $ `stdlib/core/slice.nu`
 
         // ── attention ──
         : i _pa ( __lm_prof_mark m p keep )
-        ? . m hybrid {
-            = ok & ok ( __lm_q35_mix m p L count pos0 kvlen causal )
+        ? | . m hybrid . m mla {
+            ? . m hybrid
+            { = ok & ok ( __lm_q35_mix m p L count pos0 kvlen causal ) }
+            { = ok & ok ( __lm_mla_mix m p L count pos0 kvlen causal ) }
             = ok & ok ( lk_addv kit . m xd . m tmpd * ne count p )
             ? . m prof_on { = . m prof_attn_ns + . m prof_attn_ns - ( __lm_prof_mark m p keep ) _pa } {}
         } {
@@ -1655,17 +1945,19 @@ $ `stdlib/core/slice.nu`
                 = kbuf . m kn2d
             } {}
             ( vec_push [i] . m pl_rope ( vec_len [GkLaunch] p ) )
-            = ok & ok ( lk_rope kit qbuf nh hd . m rope_dim pos0 rbase . m rope_style count p )
+            = ok & ok ( lk_rope kit qbuf nh hd 0 . m rope_dim pos0 rbase . m rope_style count p )
             ( vec_push [i] . m pl_rope ( vec_len [GkLaunch] p ) )
-            = ok & ok ( lk_rope kit kbuf nkv hd . m rope_dim pos0 rbase . m rope_style count p )
+            = ok & ok ( lk_rope kit kbuf nkv hd 0 . m rope_dim pos0 rbase . m rope_style count p )
             // the whole batch's K/V rows land in the cache before any position
             // attends, so a position can see every earlier one in this chunk
             ( vec_push [i] . m pl_copy ( vec_len [GkLaunch] p ) )
+            ( vec_push [i] . m pl_copyw kvdim )
             = ok & ok ( lk_copyat kit ( vec_at [GkBuf] . m kcache L ) kbuf * pos0 kvdim * count kvdim p )
             ( vec_push [i] . m pl_copy ( vec_len [GkLaunch] p ) )
+            ( vec_push [i] . m pl_copyw kvdim )
             = ok & ok ( lk_copyat kit ( vec_at [GkBuf] . m vcache L ) . m vd * pos0 kvdim * count kvdim p )
             ( vec_push [i] . m pl_attn ( vec_len [GkLaunch] p ) )
-            = ok & ok ( lk_attn kit wp qbuf ( vec_at [GkBuf] . m kcache L ) ( vec_at [GkBuf] . m vcache L ) . m aod . m scored
+            = ok & ok ( lk_attn kit wp qbuf ( vec_at [GkBuf] . m kcache L ) ( vec_at [GkBuf] . m vcache L ) . m aod . m scored . m seld 0
             nh nkv hd ? causal + pos0 1 kvlen count . m n_ctx . m attn_scale window ? causal 1 0 p )
             = ok & ok ( __lm_mv m ( vec_at [LmW] . m wo L ) 0 . m aod 0 . m tmpd ne qd_ count p )
             // gemma3 norms the block's OUTPUT as well, before the residual add.
@@ -1714,10 +2006,10 @@ $ `stdlib/core/slice.nu`
                 . m n_expert . m n_group . m n_group_used K . m route_scale ? . m weights_norm 1 0 count p )
                 // gate/up read x by POSITION (xk = K); down reads the
                 // per-assignment hidden (xk = 1)
-                = ok & ok ( lk_matvec_experts kit . wg w . m xnd . m moe_gate . m moe_expid . m moe_ff ne K nasn p )
-                = ok & ok ( lk_matvec_experts kit . wu w . m xnd . m moe_up . m moe_expid . m moe_ff ne K nasn p )
+                = ok & ok ( lk_matvec_experts kit . wg w . m xnd ne . m moe_gate . m moe_ff . m moe_expid . m moe_ff ne K nasn p )
+                = ok & ok ( lk_matvec_experts kit . wu w . m xnd ne . m moe_up . m moe_ff . m moe_expid . m moe_ff ne K nasn p )
                 = ok & ok ( lk_silumul kit . m moe_gate . m moe_up * nasn . m moe_ff p )
-                = ok & ok ( lk_matvec_experts kit . wdn w . m moe_gate . m moe_downb . m moe_expid ne . m moe_ff 1 nasn p )
+                = ok & ok ( lk_matvec_experts kit . wdn w . m moe_gate . m moe_ff . m moe_downb ne . m moe_expid ne . m moe_ff 1 nasn p )
                 = ok & ok ( lk_moe_scatter kit . m moe_downb . m moe_wts . m xd K ne count p )
             } {
                 // ── fallback: host routing + per-(position, expert)
@@ -1854,7 +2146,6 @@ $ `stdlib/core/slice.nu`
     // The launches of this call shape were recorded by an earlier call:
     // give them this call's position and run them again. Otherwise record
     // them now (and keep them unless the host had to step in).
-    : i kvdim * . m n_kv . m head_dim
     : i npos0 ? causal + pos0 1 kvlen
     : ~ i pi -1
     : ~ i k 0
@@ -1869,7 +2160,7 @@ $ `stdlib/core/slice.nu`
             : ~ i j 0
             ~ < j ( vec_len [i] . q rope ) { = ok & ok ( lk_set . q l ( vec_at [i] . q rope j ) `pos0` pos0 ) = j + j 1 }
             = j 0
-            ~ < j ( vec_len [i] . q copy ) { = ok & ok ( lk_set . q l ( vec_at [i] . q copy j ) `off` * pos0 kvdim ) = j + j 1 }
+            ~ < j ( vec_len [i] . q copy ) { = ok & ok ( lk_set . q l ( vec_at [i] . q copy j ) `off` * pos0 ( vec_at [i] . q copyw j ) ) = j + j 1 }
             = j 0
             ~ < j ( vec_len [i] . q attn ) {
                 : i at ( vec_at [i] . q attn j )
@@ -1877,6 +2168,8 @@ $ `stdlib/core/slice.nu`
                 = ok & ok ( lk_set . q l + at 1 `npos0` npos0 )
                 = j + j 1
             }
+            = j 0
+            ~ < j ( vec_len [i] . q npos ) { = ok & ok ( lk_set . q l ( vec_at [i] . q npos j ) `npos0` npos0 ) = j + j 1 }
             ^ & ok ( lk_run . q l )
         } )
     } {
@@ -1887,7 +2180,9 @@ $ `stdlib/core/slice.nu`
         ? & ok keep {
             // the oldest shape makes room
             ? >= ( vec_len [LmPlan] . m plans ) LM_PLANS { : ?LmPlan _old ( vec_remove [LmPlan] . m plans 0 ) } {}
-            ( vec_push [LmPlan] . m plans @ LmPlan { p count causal logits_mode ( mem_replace [( Vec i )] . m pl_rope ( vec_new [i] ) ) ( mem_replace [( Vec i )] . m pl_copy ( vec_new [i] ) ) ( mem_replace [( Vec i )] . m pl_attn ( vec_new [i] ) ) } )
+            ( vec_push [LmPlan] . m plans @ LmPlan { p count causal logits_mode ( mem_replace [( Vec i )] . m pl_rope ( vec_new [i] ) )
+                ( mem_replace [( Vec i )] . m pl_copy ( vec_new [i] ) ) ( mem_replace [( Vec i )] . m pl_copyw ( vec_new [i] ) )
+                ( mem_replace [( Vec i )] . m pl_attn ( vec_new [i] ) ) ( mem_replace [( Vec i )] . m pl_npos ( vec_new [i] ) ) } )
         } {}
     }
 

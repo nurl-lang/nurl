@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.6.0] — unreleased
+
+### Added
+
+- **`PRE_GLM4`: the pre-tokenizer of GLM-4.x and GLM-5.x**
+  (`tokenizer.ggml.pre = glm4` / `glm5`). qwen2's split with digits
+  grouped up to three (`\p{N}{1,3}` where qwen2 reads `\p{N}`), and the
+  BPE's `ignore_merges`: a pre-token that is a whole vocabulary piece is
+  that piece, whatever the merges would make of it — what GLM's
+  `tokenizer.json` and llama.cpp both say. Checked against HF `tokenizers`
+  on the GLM-5.3 vocabulary (English, accents, CJK mixed with Latin,
+  runs of spaces, numbers and code). Agora #513.
+
 ## [0.5.0] — 2026-11-06
 
 Requires NURL 0.89.0 (stdlib/std/unicat.nu's `uc_is_mark`).

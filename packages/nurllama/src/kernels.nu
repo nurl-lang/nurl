@@ -1543,10 +1543,10 @@ if (gid < rows) {
     long long r = gid % rows;
     long long e = LD(expid, a);
     long long w0 = (e * rows + r) * cols;
-    long long x0 = (a / xk) * cols;
+    long long x0 = (a / xk) * xs;
     float acc = 0.0f;
     for (long long c = 0; c < cols; c++) { acc += LD(W, w0 + c) * LD(x, x0 + c); }
-    ST(y, a * rows + r, acc);
+    ST(y, a * ys + r, acc);
 }`
 }
 
@@ -1554,11 +1554,11 @@ if (gid < rows) {
     ^ ( __lk_cat3 `if (gid < rows * n_assign) {
     long long a = gid / rows;
     long long r = ( LD(expid, gid / rows) * rows ) + gid % rows;
-    long long x0 = (a / xk) * cols;
+    long long x0 = (a / xk) * xs;
     long long woff = 0;
     float acc = 0.0f;
 ` ( string_data ( __lk_q8_row `0` `1` ) ) `
-    ST(y, a * rows + gid % rows, acc);
+    ST(y, a * ys + gid % rows, acc);
 }` )
 }
 
@@ -1572,12 +1572,17 @@ if (gid < rows) {
 // SLOWER and stay deleted: warp-per-row — the shuffle beats the coalescing
 // at these short rows — and expert-grouped tiles; the phase is not
 // weight-bandwidth-bound.)
-@ lk_matvec_experts GpuKit kit LkW w GkBuf x GkBuf y GkBuf expid i rows i cols i xk i n_assign inout ( Vec GkLaunch ) plan → b {
+// `xs` / `ys` are the row strides of x and y: a MoE's activations are
+// packed (xs = cols, ys = rows), while MLA's per-head matrices read and
+// write rows of a wider per-head layout (the [nope | rope] query, the
+// [latent | rope] attention output) in place.
+@ lk_matvec_experts GpuKit kit LkW w GkBuf x i xs GkBuf y i ys GkBuf expid i rows i cols i xk i n_assign inout ( Vec GkLaunch ) plan → b {
     ? ( lk_experts_supported . w gt ) {} { ^ F }
     : ~ GkCall c ( gk_call_new )
     ? == . w gt 0 { ( gk_call_dev_in c `W` . w f ) } { ( gk_call_bytes_in c `W` . w q ) }
     ( gk_call_dev_in c `x` x ) ( gk_call_dev c `y` y ) ( gk_call_dev_in c `expid` expid )
     ( gk_call_i64 c `rows` rows ) ( gk_call_i64 c `cols` cols ) ( gk_call_i64 c `xk` xk ) ( gk_call_i64 c `n_assign` n_assign )
+    ( gk_call_i64 c `xs` xs ) ( gk_call_i64 c `ys` ys )
     : i grid ( gk_grid * rows n_assign 64 )
     ? == . w gt 0 { ^ ( __lk_rec kit c `nl_mv_exp_f32` ( __lk_mv_exp_f32 ) grid 64 plan ) } {}
     ^ ( __lk_rec kit c `nl_mv_exp_q8_0` ( string_data ( __lk_mv_exp_q8_0 ) ) grid 64 plan )
@@ -1744,14 +1749,21 @@ if (warp < count && lane == 0) {
 // stored weights, so this is the plain form for every architecture. `y`
 // must not be `x`: another thread would overwrite the row under the sum.
 @ lk_rmsnorm GpuKit kit GkBuf x GkBuf w GkBuf y i n f eps i batch inout ( Vec GkLaunch ) plan → b {
+    ^ ( lk_rmsnorm_s kit x n w y n n eps batch plan )
+}
+
+// The same over rows that sit `xs` floats apart in x and `ys` apart in y:
+// MLA norms the first kv_lora_rank values of each [latent | k_rope] row.
+@ lk_rmsnorm_s GpuKit kit GkBuf x i xs GkBuf w GkBuf y i ys i n f eps i batch inout ( Vec GkLaunch ) plan → b {
     : ~ GkCall c ( gk_call_new )
     ( gk_call_dev_in c `x` x ) ( gk_call_dev_in c `w` w ) ( gk_call_dev c `y` y )
     ( gk_call_i64 c `n` n ) ( gk_call_f64 c `eps` eps ) ( gk_call_i64 c `batch` batch )
+    ( gk_call_i64 c `xs` xs ) ( gk_call_i64 c `ys` ys )
     ? != 0 ( nurl_str_eq ( gk_backend kit ) `cpu` ) {
         ^ ( __lk_rec kit c `nl_rmsnorm_r` `if (gid < batch) {
-    WIN(xr, x, gid * n, n);
+    WIN(xr, x, gid * xs, n);
     WIN(wr, w, 0, n);
-    WIN(yr, y, gid * n, n);
+    WIN(yr, y, gid * ys, n);
     float ss = 0.0f;
     for (int j = 0; j < LEN(xr); j++) { ss += LD(xr, j) * LD(xr, j); }
     float inv = rsqrtf(ss / n + (float)eps);
@@ -1761,27 +1773,52 @@ if (warp < count && lane == 0) {
     ^ ( __lk_rec kit c `nl_rmsnorm` `if (gid < n * batch) {
     long long b = gid / n;
     long long i = gid % n;
-    WIN(xr, x, b * n, n);
+    WIN(xr, x, b * xs, n);
     float ss = 0.0f;
     for (int j = 0; j < LEN(xr); j++) { ss += LD(xr, j) * LD(xr, j); }
     float inv = rsqrtf(ss / n + (float)eps);
-    ST(y, b * n + i, LD(xr, i) * inv * LD(w, i));
+    ST(y, b * ys + i, LD(xr, i) * inv * LD(w, i));
 }` ( gk_grid * n batch 256 ) 256 plan )
 }
 
-// Rotary embedding of the first `rd` dims of every head, at position pos0+b
-// for batch element b. style 0 = ggml NORM (llama: adjacent pairs 2j, 2j+1),
-// 1 = NEOX (qwen2, phi, …: the halves j, j + rd/2). Feeding a model the
-// wrong one still runs and still produces fluent-looking garbage, which is
-// why the architecture selects it rather than a heuristic.
-@ lk_rope GpuKit kit GkBuf x i nh i hd i rd i pos0 f base i style i batch inout ( Vec GkLaunch ) plan → b {
+// LayerNorm with weight and bias, one row of n per batch element: the DSA
+// indexer's key norm. A thread per row (the rows are few and short).
+@ lk_layernorm GpuKit kit GkBuf x GkBuf w GkBuf bias GkBuf y i n f eps i batch inout ( Vec GkLaunch ) plan → b {
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev_in c `x` x ) ( gk_call_dev_in c `w` w ) ( gk_call_dev_in c `bias` bias ) ( gk_call_dev c `y` y )
+    ( gk_call_i64 c `n` n ) ( gk_call_f64 c `eps` eps ) ( gk_call_i64 c `batch` batch )
+    ^ ( __lk_rec kit c `nl_layernorm` `if (gid < batch) {
+    WIN(xr, x, gid * n, n);
+    WIN(wr, w, 0, n);
+    WIN(br, bias, 0, n);
+    WIN(yr, y, gid * n, n);
+    float mean = 0.0f;
+    for (int j = 0; j < LEN(xr); j++) { mean += LD(xr, j); }
+    mean = mean / n;
+    float var = 0.0f;
+    for (int j = 0; j < LEN(xr); j++) { float d = LD(xr, j) - mean; var += d * d; }
+    float inv = rsqrtf(var / n + (float)eps);
+    for (int i = 0; i < LEN(xr) && i < LEN(wr) && i < LEN(br) && i < LEN(yr); i++) {
+        ST(yr, i, (LD(xr, i) - mean) * inv * LD(wr, i) + LD(br, i));
+    }
+}` ( gk_grid batch 64 ) 64 plan )
+}
+
+// Rotary embedding of `rd` dims of every head, starting `roff` dims into
+// the head, at position pos0+b for batch element b. style 0 = ggml NORM
+// (llama: adjacent pairs 2j, 2j+1), 1 = NEOX (qwen2, phi, …: the halves j,
+// j + rd/2). Feeding a model the wrong one still runs and still produces
+// fluent-looking garbage, which is why the architecture selects it rather
+// than a heuristic. `roff` is 0 everywhere but MLA, whose rotary part sits
+// after the latent in a [latent | rope] head.
+@ lk_rope GpuKit kit GkBuf x i nh i hd i roff i rd i pos0 f base i style i batch inout ( Vec GkLaunch ) plan → b {
     : ~ GkCall c ( gk_call_new )
     ( gk_call_dev c `x` x )
     ( gk_call_i64 c `nh` nh ) ( gk_call_i64 c `hd` hd ) ( gk_call_i64 c `rd` rd ) ( gk_call_i64 c `pos0` pos0 )
-    ( gk_call_f64 c `base` base ) ( gk_call_i64 c `batch` batch )
+    ( gk_call_f64 c `base` base ) ( gk_call_i64 c `batch` batch ) ( gk_call_i64 c `roff` roff )
     : i total * * nh / rd 2 batch
-    : s pair ? == style 1 `long long v0 = base0 + h * hd + j;
-    long long v1 = v0 + pairs;` `long long v0 = base0 + h * hd + 2 * j;
+    : s pair ? == style 1 `long long v0 = base0 + h * hd + roff + j;
+    long long v1 = v0 + pairs;` `long long v0 = base0 + h * hd + roff + 2 * j;
     long long v1 = v0 + 1;`
     : ~ String body ( string_from `long long pairs = rd / 2;
 if (gid < nh * pairs * batch) {
@@ -1818,12 +1855,16 @@ if (gid < nh * pairs * batch) {
 // (autoregressive decode); 0: every element attends the same npos0 rows
 // (block diffusion). GQA: query head h reads kv head h/(nh/nkv). Appends two
 // launches; npos0 is a scalar of both (lk_set).
-@ lk_attn GpuKit kit b coop GkBuf q GkBuf kc GkBuf vc GkBuf out GkBuf sc i nh i nkv i hd i npos0 i batch i maxpos f qscale i window i causal inout ( Vec GkLaunch ) plan → b {
+// `use_sel` 1: a key is attended only where sel[b·maxpos + t] is nonzero —
+// DeepSeek sparse attention's top-k selection (lk_dsa_select), the same
+// rows for every head. An unselected key's score is -1e30, so its weight
+// is exactly 0. With use_sel 0, `sel` is never read.
+@ lk_attn GpuKit kit b coop GkBuf q GkBuf kc GkBuf vc GkBuf out GkBuf sc GkBuf sel i use_sel i nh i nkv i hd i npos0 i batch i maxpos f qscale i window i causal inout ( Vec GkLaunch ) plan → b {
     : ~ GkCall c ( gk_call_new )
-    ( gk_call_dev_in c `q` q ) ( gk_call_dev_in c `K` kc ) ( gk_call_dev c `scores` sc )
+    ( gk_call_dev_in c `q` q ) ( gk_call_dev_in c `K` kc ) ( gk_call_dev c `scores` sc ) ( gk_call_dev_in c `sel` sel )
     ( gk_call_i64 c `nh` nh ) ( gk_call_i64 c `nkv` nkv ) ( gk_call_i64 c `hd` hd ) ( gk_call_i64 c `npos0` npos0 )
     ( gk_call_i64 c `batch` batch ) ( gk_call_i64 c `maxpos` maxpos ) ( gk_call_f64 c `qscale` qscale )
-    ( gk_call_i64 c `window` window ) ( gk_call_i64 c `causal` causal )
+    ( gk_call_i64 c `window` window ) ( gk_call_i64 c `causal` causal ) ( gk_call_i64 c `use_sel` use_sel )
     // (the CPU backend: a thread per (position, head) walks its cache rows
     // — the same dots, without a thread and its index arithmetic per row)
     : b sc_ok ? coop T ( __lk_rec kit c `nl_attn_sc_r` `if (gid < nh * batch) {
@@ -1840,7 +1881,7 @@ if (gid < nh * pairs * batch) {
         WIN(kr, K, (lo + u) * kvdim + kh * hd, hd);
         float d = 0.0f;
         for (int j = 0; j < LEN(qr) && j < LEN(kr); j++) { d += LD(qr, j) * LD(kr, j); }
-        ST(sr, u, d * (float)qscale);
+        if (use_sel != 0 && LD(sel, b * maxpos + lo + u) == 0.0f) { ST(sr, u, -1e30f); } else { ST(sr, u, d * (float)qscale); }
     }
 }` ( gk_grid * nh batch 64 ) 64 plan )
     ? sc_ok {} { ^ F }
@@ -1859,7 +1900,8 @@ if (gid < total) {
         WIN(kr, K, t * kvdim + kh * hd, hd);
         float d = 0.0f;
         for (int j = 0; j < LEN(qr) && j < LEN(kr); j++) { d += LD(qr, j) * LD(kr, j); }
-        ST(scores, hb * maxpos + t, d * (float)qscale);
+        if (use_sel != 0 && LD(sel, b * maxpos + t) == 0.0f) { d = -1e30f; } else { d = d * (float)qscale; }
+        ST(scores, hb * maxpos + t, d);
     }
 }` ( gk_grid * * nh batch maxpos 256 ) 256 plan ) T
     ? sc2 {} { ^ F }
@@ -1992,6 +2034,87 @@ ST(out, b * nh * hd + h * hd + tid, acc / sum);` * nh batch hd plan )
     : ~ GkCall c ( gk_call_new )
     ( gk_call_dev c `dst` dst ) ( gk_call_dev_in c `src` src ) ( gk_call_i64 c `off` off ) ( gk_call_i64 c `n` n )
     ^ ( __lk_ew kit c `nl_copyat` `if (gid < n) { ST(dst, off + gid, LD(src, gid)); }` n plan )
+}
+
+// Strided block copy: `rows` rows of `width` floats, row r from
+// src[soff + r·ss …] to dst[doff + r·ds …] — moving one part of a per-head
+// layout into another (MLA's query rope part into the [latent | rope] query).
+@ lk_copy2d GpuKit kit GkBuf dst i doff i ds GkBuf src i soff i ss i width i rows inout ( Vec GkLaunch ) plan → b {
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev c `dst` dst ) ( gk_call_dev_in c `src` src )
+    ( gk_call_i64 c `doff` doff ) ( gk_call_i64 c `ds` ds ) ( gk_call_i64 c `soff` soff ) ( gk_call_i64 c `ss` ss )
+    ( gk_call_i64 c `width` width ) ( gk_call_i64 c `rows` rows )
+    ^ ( __lk_ew kit c `nl_copy2d` `if (gid < width * rows) {
+    long long r = gid / width;
+    long long j = gid % width;
+    ST(dst, doff + r * ds + j, LD(src, soff + r * ss + j));
+}` * width rows plan )
+}
+
+// ── DeepSeek sparse attention (DSA): the lightning indexer ──────────
+//
+// For batch element b, which attends npos = npos0 + b keys (npos0 is the
+// first element's count, pos0 + 1, as for lk_attn), and key t < npos, the
+// index score is
+//   Σ_h w[b, h] · relu(q[b, h] · k[t]) · scale
+// over the indexer's nhi heads of dhi dims (q, k already rotated; w the
+// per-head weights; scale = 1/sqrt(dhi·nhi) — relu commutes with a
+// positive scale). The selection keeps the `topk` best-scoring keys of each
+// position; while npos ≤ topk that is every key, so neither kernel does any
+// work then (the score is not even formed). Both take npos0 (lk_set).
+
+@ lk_dsa_score GpuKit kit GkBuf iq GkBuf ik GkBuf iw GkBuf isc i nhi i dhi f scale i npos0 i batch i maxpos i topk inout ( Vec GkLaunch ) plan → b {
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev_in c `iq` iq ) ( gk_call_dev_in c `ik` ik ) ( gk_call_dev_in c `iw` iw ) ( gk_call_dev c `isc` isc )
+    ( gk_call_i64 c `nhi` nhi ) ( gk_call_i64 c `dhi` dhi ) ( gk_call_f64 c `scale` scale ) ( gk_call_i64 c `npos0` npos0 )
+    ( gk_call_i64 c `batch` batch ) ( gk_call_i64 c `maxpos` maxpos ) ( gk_call_i64 c `topk` topk )
+    ^ ( __lk_ew kit c `nl_dsa_score` `if (gid < batch * maxpos) {
+    long long b = gid / maxpos;
+    long long t = gid % maxpos;
+    long long npos = npos0 + b;
+    if (npos > topk && t < npos) {
+        WIN(kr, ik, t * dhi, dhi);
+        float s = 0.0f;
+        for (long long h = 0; h < nhi; h++) {
+            WIN(qr, iq, (b * nhi + h) * dhi, dhi);
+            float d = 0.0f;
+            for (int j = 0; j < LEN(qr) && j < LEN(kr); j++) { d += LD(qr, j) * LD(kr, j); }
+            s += LD(iw, b * nhi + h) * (d > 0.0f ? d : 0.0f);
+        }
+        ST(isc, gid, s * (float)scale);
+    }
+}` * batch maxpos plan )
+}
+
+// sel[b·maxpos + t] = 1 for the keys position b attends, 0 otherwise: every
+// t < npos while npos ≤ topk, else the topk best scores — key t is in when
+// fewer than topk keys beat it (a higher score, or an equal one at a lower
+// index, so exactly topk are kept). A thread per (position, key).
+@ lk_dsa_select GpuKit kit GkBuf isc GkBuf sel i npos0 i batch i maxpos i topk inout ( Vec GkLaunch ) plan → b {
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev_in c `isc` isc ) ( gk_call_dev c `sel` sel )
+    ( gk_call_i64 c `npos0` npos0 ) ( gk_call_i64 c `batch` batch ) ( gk_call_i64 c `maxpos` maxpos ) ( gk_call_i64 c `topk` topk )
+    ^ ( __lk_ew kit c `nl_dsa_select` `if (gid < batch * maxpos) {
+    long long b = gid / maxpos;
+    long long t = gid % maxpos;
+    long long npos = npos0 + b;
+    float keep = 0.0f;
+    if (t < npos) {
+        if (npos <= topk) {
+            keep = 1.0f;
+        } else {
+            WIN(row, isc, b * maxpos, npos);
+            float st = LD(row, t);
+            long long beat = 0;
+            for (int u = 0; u < LEN(row); u++) {
+                float su = LD(row, u);
+                if (su > st || (su == st && u < t)) { beat++; }
+            }
+            keep = beat < topk ? 1.0f : 0.0f;
+        }
+    }
+    ST(sel, gid, keep);
+}` * batch maxpos plan )
 }
 
 // ── qwen35: Gated DeltaNet and gated attention ──────────────────────

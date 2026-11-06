@@ -2,6 +2,52 @@
 
 All notable changes to the `nurllama` package.
 
+## [0.25.0] — unreleased
+
+Requires NURL 0.89.0 and tokenizer 0.6.
+
+### Added
+
+- **The glm-dsa architecture: GLM-5.x** (`model_type glm_moe_dsa`, in
+  llama.cpp's `glm-dsa` GGUF layout). Agora #513.
+  - **MLA attention, absorbed.** The query comes through `q_a` → RMSNorm
+    → `q_b` as `[nope | rope]` per head; K and V come out of one latent
+    per position (`kv_a_mqa` → RMSNorm on the latent, the shared rope key
+    beside it). Each head's nope query goes through that head's `k_b` into
+    the latent space, so every head attends the same cache row
+    `[latent | rope]` — multi-query attention with head_dim
+    kv_lora + rope, scaled by the pre-absorption head width — and each
+    head's output comes back through its `v_b`. One cache row a position
+    (576 floats for GLM-5), no separate V cache. Rotary is NORM (GLM's
+    interleaved pairs).
+  - **DeepSeek sparse attention.** The lightning indexer (query from the
+    q_a latent, a LayerNormed key from x̂, both rotated on their first
+    rope dims; ReLU scores weighted per indexer head, scale
+    1/sqrt(dim·heads)) keeps the `index_topk` best keys of each position
+    (`lk_dsa_score`, `lk_dsa_select`); `lk_attn` attends only those. A
+    layer without indexer tensors is a "shared" layer and attends its last
+    full layer's selection. Up to index_topk keys nothing is computed —
+    every key is selected.
+  - **MoE**: the llada2 router (sigmoid, selection-only bias, normalised
+    and scaled weights) is no longer llada2's alone — any model with
+    experts runs it after `leading_dense_block_count` dense layers; the
+    shared expert's width may be given as `expert_shared_count`.
+  - Kernels: `lk_rope` takes the rotary span's offset in the head,
+    `lk_rmsnorm_s` row strides, `lk_matvec_experts` x / y row strides,
+    `lk_attn` an optional key selection; new `lk_layernorm`, `lk_copy2d`,
+    `lk_dsa_score`, `lk_dsa_select`. A recorded plan now moves every
+    cache append by its own row width and replays the indexer's position.
+  - The GLM tokenizer: `tokenizer.ggml.pre` `glm4` / `glm5`.
+
+  Checked by `tests/glm_dsa_test.sh` against HF transformers'
+  `GlmMoeDsaForCausalLM` (float32) on a tiny random checkpoint
+  (`tests/glm_dsa_ref.py`: six layers, dense and MoE, full and shared
+  indexer layers, index_topk 8) that llama.cpp's converter turns into the
+  GGUF: same argmax and top-5, max logit delta ~6e-5 against a span of
+  8.3, and text-identical greedy continuations, for a prompt within the
+  indexer's top-k, one past it and one past a prefill chunk; q8_0 keeps
+  the argmax; the tokenizer gives HF's ids.
+
 ## [0.24.0] — 2026-11-06
 
 Requires NURL 0.89.0 and tokenizer 0.5.
