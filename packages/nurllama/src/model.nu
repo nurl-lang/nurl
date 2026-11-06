@@ -460,9 +460,9 @@ $ `stdlib/core/slice.nu`
 // The weight in `blk` (its first `nb` bytes): as bytes, and for f32 / f16
 // as floats / halves too.
 @ __lm_w_of GkBuf blk i gt i nb → LkW {
-    ? == gt 0 { ^ @ LkW { gt ( gk_bbuf_of blk 0 nb ) ( gk_buf_view blk 0 / nb 4 ) ( gk_hbuf_none ) } } {}
-    ? == gt 1 { ^ @ LkW { gt ( gk_bbuf_of blk 0 nb ) ( gk_buf_none GK_F32 ) ( gk_hbuf_of blk 0 / nb 2 F ) } } {}
-    ^ @ LkW { gt ( gk_bbuf_of blk 0 nb ) ( gk_buf_none GK_F32 ) ( gk_hbuf_none ) }
+    ? == gt 0 { ^ @ LkW { gt ( gk_bbuf_of blk 0 nb ) ( gk_buf_view blk 0 / nb 4 ) ( gk_hbuf_none ) ( gk_buf_none GK_F32 ) } } {}
+    ? == gt 1 { ^ @ LkW { gt ( gk_bbuf_of blk 0 nb ) ( gk_buf_none GK_F32 ) ( gk_hbuf_of blk 0 / nb 2 F ) ( gk_buf_none GK_F32 ) } } {}
+    ^ @ LkW { gt ( gk_bbuf_of blk 0 nb ) ( gk_buf_none GK_F32 ) ( gk_hbuf_none ) ( gk_buf_none GK_F32 ) }
 }
 
 // `raw` (host f32 bytes) onto the device, as an f32 weight.

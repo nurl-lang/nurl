@@ -276,7 +276,21 @@ into a dozen pieces and the model answers a question you did not ask.
 
 **Quantisations:** F32, F16, BF16, Q4_0, Q4_1, Q5_0, Q5_1, Q8_0 and the
 K-quants **Q4_K / Q5_K / Q6_K** (the `Q4_K_M` files people actually
-download).
+download) — and **EXL3**, exllamav3's trellis quantisation, as a weight
+type the matvec runs directly (`src/exl3.nu`, kernels.nu "EXL3"): each
+16×16 tile a ring of 1–8 (or 1.5 / 2.5 / 3.5) bits a weight whose 16-bit
+windows index a procedural codebook (3INST, MCG or MUL1, decoded through
+a table computed exactly as the CUDA kernels round), between two
+128-block Hadamard rotations and sign vectors. The weight is never
+expanded: x is rotated, multiplied with the decoded trellis and rotated
+back, and widths exllamav3 padded to the 128-block (GLM's 576-wide
+kv_a_proj, stored as 640) are zero-extended and trimmed.
+`tests/exl3_test.sh` holds it against exllamav3's own reference
+(`tests/testlib/trellis.py`): every codebook at 1–8 and 2.5 bits and at
+GLM-5.3's shapes decodes to the reference's weight **bit for bit** and
+multiplies to its float64 x·W within 1e-6 relative, on CUDA and on the
+CPU backend — and so does a real tensor of fiore-lab's GLM-5.3 EXL3
+checkpoint, fetched by range request.
 
 Weights stay **quantised on the device**: the matvec kernels decode
 GGUF blocks inside the matmul, so a Q4_K_M model needs about a third of

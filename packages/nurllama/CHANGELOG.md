@@ -85,6 +85,21 @@ Requires NURL 0.89.0 and tokenizer 0.6.
   one pure function of the text, shared by the stream, the whole reply
   and `nurllama think-split` (a hidden test command).
 
+- **EXL3 weights** (Agora #519): exllamav3's trellis quantisation as a
+  matvec weight type (`LkW.gt` ≥ `LK_EXL3`), loaded from a safetensors
+  tensor group (`exl3_upload`: trellis, suh, svh, the mcg / mul1 marker)
+  and never expanded — three launches: the input's 128-block Hadamard
+  rotation with suh (`lk_exl3_had`), the trellis matvec decoding each
+  weight once for the whole batch (`lk_exl3_mv`), the output rotation with
+  svh. Codebooks 3INST, MCG and MUL1 through 65536-entry tables computed
+  exactly as the CUDA kernels round (`exl3_luts`); integer and
+  half-integer bitrates; widths padded to the 128-block are zero-extended
+  and trimmed. `LkW` gains `aux` (the shared scratch). Checked by
+  `tests/exl3_test.sh` against exllamav3's own reference: bit-exact
+  dequantisation and x·W within 1e-6 relative for every codebook at 1–8
+  and 2.5 bits, at GLM-5.3's shapes and a padded one, on CUDA and the CPU
+  backend, and on a real tensor of fiore-lab's GLM-5.3 EXL3 checkpoint.
+
 ### Fixed
 
 - **A generation now ends on the model's end-of-turn and end-of-message
