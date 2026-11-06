@@ -34,9 +34,13 @@ $ `deps/gpukit/src/dev.nu`
 // f16 elements' bytes), and for the float types the same memory as f32
 // (`f`, gt 0) or halves (`h`, gt 1). Q8_0 is held in the SPLIT row layout
 // lk_q8_repack produces.
-: LkW { i gt GkBBuf q GkBuf f GkHBuf h }
+// An EXL3 weight (gt ≥ LK_EXL3, see exl3.nu): `q` its trellis, `h` its
+// input then output sign vectors (suh | svh), `f` its codebook's value
+// table and `aux` the scratch its matvec rotates through — both shared by
+// every weight of the model that uses them.
+: LkW { i gt GkBBuf q GkBuf f GkHBuf h GkBuf aux }
 
-@ lk_w_none → LkW { ^ @ LkW { -1 ( gk_bbuf_none ) ( gk_buf_none GK_F32 ) ( gk_hbuf_none ) } }
+@ lk_w_none → LkW { ^ @ LkW { -1 ( gk_bbuf_none ) ( gk_buf_none GK_F32 ) ( gk_hbuf_none ) ( gk_buf_none GK_F32 ) } }
 
 @ lk_w_ok LkW w → b { ^ >= . w gt 0 }
 
@@ -769,11 +773,162 @@ if (gid < rows) {
     ^ ( __lk_warp ( string_data o ) )
 }
 
+// ── EXL3 (exllamav3's trellis quantisation) ─────────────────────────
+//
+// An EXL3 linear (in k, out n) is W = diag(suh) · H · Ŵ · H · diag(svh): Ŵ
+// the k×n trellis-coded weight, H the 128×128 Sylvester Hadamard / sqrt(128)
+// applied per 128-block, suh / svh sign-and-scale vectors. So
+//   y = H(x ⊙ suh) · Ŵ, then H(·) ⊙ svh
+// three launches: the input rotation, the trellis matvec, the output
+// rotation, through the weight's scratch (`aux`: batch·k rotated inputs,
+// then batch·n pre-rotation outputs).
+//
+// Ŵ is stored in 16×16 tiles, tile (tk, tn) at index tk·(n/16) + tn, each a
+// RING of 256 positions over 128·k2 bits (k2 = twice the bits per weight:
+// 2K, or 2K+1 for a half-integer rate, whose positions alternate K and K+1
+// bits). Position t's 16-bit state is the ring's bits
+// [S(t) − 16, S(t)), S(t) = ((t+1)·k2) >> 1, read MSB first and wrapping —
+// the ring as 32-bit little-endian words, bit 0 the MSB of word 0. A
+// state's value is its codebook's (the `f` table, 65536 entries: exl3.nu
+// computes them exactly). Position t holds tile element (r, c) in the
+// tensor-core fragment order: t = ((c mod 8)·4 + (r mod 8)/2)·8 + j,
+// j = (r & 1) | (r ≥ 8)·2 | (c ≥ 8)·4.
+// The format: exllamav3's tests/testlib/trellis.py, which
+// tests/exl3_test.sh checks these kernels against.
+
+// gt = LK_EXL3 + 100·codebook + k2 (codebook 0 3INST, 1 MCG, 2 MUL1)
+: i LK_EXL3 1000
+
+@ lk_exl3_k2 i gt → i { ^ % - gt LK_EXL3 100 }
+
+// The state of Ŵ's element (kk, nn): `w` its value from table `lut`.
+@ __lk_exl3_state → s {
+    ^ `long long words = 4 * k2;
+        long long pos = ((nn % 8) * 4 + (r % 8) / 2) * 8 + ((r & 1) | ((r >= 8) ? 2 : 0) | ((nn % 16 >= 8) ? 4 : 0));
+        long long b1 = (((pos + 1) * k2) >> 1) + 128 * k2;
+        long long i0 = ((b1 - 16) / 32) % words;
+        long long i1 = ((b1 - 1) / 32) % words;
+        long long sh = ((b1 - 1) / 32 + 1) * 32 - b1;
+        unsigned long long hiw = (unsigned long long) LD32(T, tb + i0 * 4);
+        unsigned long long low = (unsigned long long) LD32(T, tb + i1 * 4);
+        long long st = (long long) ((((hiw << 32) | low) >> sh) & 0xffffull);
+        float w = LD(lut, st);`
+}
+
+// The 128-block Sylvester Hadamard over rows of n (a multiple of 128),
+// H[a, b] = (−1)^popcount(a & b) / sqrt(128):
+//   y[yoff + b·ys + i] = (post ? s[soff + i] : 1) · Σj H[i mod 128, j] ·
+//                        (pre ? s[soff + blk·128 + j] : 1) · x[xoff + b·xs + blk·128 + j]
+// for i < ylim, blk = i / 128. x's rows are xs wide — an element at or past
+// xs reads as 0 (an input narrower than the weight's padded width); y's are
+// ys wide, and only the first ylim outputs are written (a padded output
+// dropped).
+@ lk_exl3_had GpuKit kit GkBuf x i xoff i xs GkBuf y i yoff i ys i ylim GkHBuf sgn i soff i pre i post i n i batch inout ( Vec GkLaunch ) plan → b {
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev_in c `x` x ) ( gk_call_dev c `y` y ) ( gk_call_half_in c `S` sgn )
+    ( gk_call_i64 c `xoff` xoff ) ( gk_call_i64 c `yoff` yoff ) ( gk_call_i64 c `soff` soff )
+    ( gk_call_i64 c `xs` xs ) ( gk_call_i64 c `ys` ys ) ( gk_call_i64 c `ylim` ylim )
+    ( gk_call_i64 c `pre` pre ) ( gk_call_i64 c `post` post ) ( gk_call_i64 c `n` n ) ( gk_call_i64 c `batch` batch )
+    ^ ( __lk_ew kit c `nl_exl3_had` `if (gid < ylim * batch) {
+    long long b = gid / ylim;
+    long long i = gid % ylim;
+    long long blk = i / 128;
+    long long r = i % 128;
+    long long x0 = xoff + b * xs;
+    float acc = 0.0f;
+    for (long long j = 0; j < 128; j++) {
+        long long p = r & j;
+        p ^= p >> 4;
+        p ^= p >> 2;
+        p ^= p >> 1;
+        long long xi = blk * 128 + j;
+        float v = xi < xs ? LD(x, x0 + xi) : 0.0f;
+        if (pre != 0) { v *= LD(S, soff + xi); }
+        acc += (p & 1) ? -v : v;
+    }
+    acc *= 0.08838834764831845f;
+    if (post != 0) { acc *= LD(S, soff + i); }
+    ST(y, yoff + b * ys + i, acc);
+}` * ylim batch plan )
+}
+
+// The trellis matvec: out[ooff + b·n + nn] = Σkk Ŵ[kk, nn] · xh[b·k + kk], a
+// thread per output column decoding each weight once for the whole batch
+// (≤ 64 positions).
+@ lk_exl3_mv GpuKit kit LkW w GkBuf xh GkBuf out i ooff i k i n i batch inout ( Vec GkLaunch ) plan → b {
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_bytes_in c `T` . w q ) ( gk_call_dev_in c `lut` . w f ) ( gk_call_dev_in c `xh` xh ) ( gk_call_dev c `out` out )
+    ( gk_call_i64 c `ooff` ooff ) ( gk_call_i64 c `k` k ) ( gk_call_i64 c `n` n ) ( gk_call_i64 c `batch` batch )
+    ( gk_call_i64 c `k2` ( lk_exl3_k2 . w gt ) )
+    : ~ String body ( string_from `LOCAL_F(acc, 64);
+if (gid < n) {
+    long long nn = gid;
+    long long tiles_n = n / 16;
+    for (long long b = 0; b < batch; b++) { ST(acc, b, 0.0f); }
+    for (long long tk = 0; tk < k / 16; tk++) {
+        long long tb = (tk * tiles_n + nn / 16) * 16 * k2;
+        for (long long r = 0; r < 16; r++) {
+        ` )
+    ( string_push_str body ( __lk_exl3_state ) )
+    ( string_push_str body `
+            long long kk = tk * 16 + r;
+            for (long long b = 0; b < batch; b++) { ST(acc, b, LD(acc, b) + w * LD(xh, b * k + kk)); }
+        }
+    }
+    for (long long b = 0; b < batch; b++) { ST(out, ooff + b * n + nn, LD(acc, b)); }
+}` )
+    ^ ( __lk_ew kit c `nl_exl3_mv` ( string_data body ) n plan )
+}
+
+// Ŵ itself, k×n row-major f32 — what the tests compare with exllamav3's
+// reference dequantisation, value for value.
+@ lk_exl3_dequant GpuKit kit LkW w GkBuf out i k i n inout ( Vec GkLaunch ) plan → b {
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_bytes_in c `T` . w q ) ( gk_call_dev_in c `lut` . w f ) ( gk_call_dev c `out` out )
+    ( gk_call_i64 c `k` k ) ( gk_call_i64 c `n` n ) ( gk_call_i64 c `k2` ( lk_exl3_k2 . w gt ) )
+    : ~ String body ( string_from `if (gid < k * n) {
+    long long kk = gid / n;
+    long long nn = gid % n;
+    long long r = kk % 16;
+    long long tb = ((kk / 16) * (n / 16) + nn / 16) * 16 * k2;
+    ` )
+    ( string_push_str body ( __lk_exl3_state ) )
+    ( string_push_str body `
+    ST(out, gid, w);
+}` )
+    ^ ( __lk_ew kit c `nl_exl3_dequant` ( string_data body ) * k n plan )
+}
+
+// The width an EXL3 linear stores a dimension at: exllamav3 pads both to
+// a multiple of the 128-wide Hadamard block (GLM's kv_a_proj: 576 outputs,
+// stored as 640). Its padded weight rows are zero.
+@ lk_exl3_pad i d → i { ^ * / + d 127 128 128 }
+
+// x (batch × cols) through an EXL3 weight into y (batch × rows): the three
+// launches above, over the weight's padded widths — the input zero-extended
+// to them, the padded outputs not written. A row range inside the weight
+// (woff) has no meaning for EXL3 — the output rotation mixes its rows — and
+// is refused.
+@ __lk_exl3_matvec GpuKit kit LkW w i woff GkBuf x i xoff GkBuf y i yoff i rows i cols i batch inout ( Vec GkLaunch ) plan → b {
+    ? | != woff 0 > batch 64 { ^ F } {}
+    : i kp ( lk_exl3_pad cols )
+    : i np ( lk_exl3_pad rows )
+    // the scratch as two disjoint views: the rotated inputs, the outputs
+    // before their rotation (a kernel may not read and write one buffer)
+    : GkBuf xh ( gk_buf_view . w aux 0 * batch kp )
+    : GkBuf yh ( gk_buf_view . w aux * batch kp * batch np )
+    : ~ b ok ( lk_exl3_had kit x xoff cols xh 0 kp kp . w h 0 1 0 kp batch plan )
+    = ok & ok ( lk_exl3_mv kit w xh yh 0 kp np batch plan )
+    = ok & ok ( lk_exl3_had kit yh 0 np y yoff rows rows . w h kp 0 1 np batch plan )
+    ^ ok
+}
+
 // The matvec dispatch: `w.gt` is the ggml type of W. F when the type has
 // no device kernel (the caller then falls back — correctness first).
 // `warp` = the CUDA warp shapes; without it, the portable kernels.
 @ lk_matvec GpuKit kit b warp LkW w i woff GkBuf x i xoff GkBuf y i yoff i rows i cols i batch inout ( Vec GkLaunch ) plan → b {
     : i gt . w gt
+    ? >= gt LK_EXL3 { ^ ( __lk_exl3_matvec kit w woff x xoff y yoff rows cols batch plan ) } {}
     : ~ i which -1
     ? == gt 0 { = which 0 } {}
     ? == gt 1 { = which 5 } {}
