@@ -77,6 +77,37 @@ T4=$("$NL" chat-template plain)
 
 hi' ] && ok "base model: no invented turns" || { bad "plain"; printf '%s\n' "$T4"; }
 
+# A reasoning reply's parser (src/api.nu: _api_take, _api_ready,
+# _api_parts), fed token texts by `nurllama think-split OPEN STOP PIECE…`:
+# what a stream sends — ["R", reasoning] / ["C", answer] pieces — and what
+# one whole reply gives, ["END", has, reasoning, answer, stopped].
+ts_case() {   # <label> <expected> <open> <stop> <piece…>
+    local label="$1" want="$2"; shift 2
+    local got; got=$("$NL" think-split "$@")
+    [ "$got" = "$want" ] && ok "think split: $label" || { bad "think split: $label"; printf '    got:\n%s\n    want:\n%s\n' "$got" "$want"; }
+}
+NLc=$'\n'
+ts_case "a </think> split across two tokens is held, then cut" '["R","Let me"]
+["R"," think"]
+["C","The ans"]
+["C","wer."]
+["END",true,"Let me think","The answer.",false]' 1 "" "Let me" " think</th" "ink>The ans" "wer."
+ts_case "a reply that opens <think> itself, after whitespace" '["R","r1"]
+["C","\n\nA"]
+["END",true,"r1","\n\nA",false]' 0 "" "$NLc" "<thi" "nk>r1" "</think>${NLc}${NLc}A"
+ts_case "a plain reply is all answer" '["C","Hello"]
+["C"," world"]
+["END",false,"","Hello world",false]' 0 "" "Hello" " world"
+ts_case "a reply that starts like <think> but is not" '["C","<b>bold"]
+["END",false,"","<b>bold",false]' 0 "" "<" "b>bold"
+ts_case "a stop sequence ends the answer, not the reasoning" '["R","a. b"]
+["C","c"]
+["END",true,"a. b","c",true]' 1 "." "a. b" "</think>c. d"
+ts_case "a reasoning block that never closes is all reasoning" '["R","only "]
+["R","reasoning "]
+["R","</thi"]
+["END",true,"only reasoning </thi","",false]' 1 "" "only " "reasoning </thi"
+
 echo "[3/4] ollama HTTP API (net-gated: needs a real model)"
 if [ "${NURL_NET_TESTS:-0}" != 1 ]; then
     echo "  SKIP (set NURL_NET_TESTS=1 to pull a model and exercise the API)"
