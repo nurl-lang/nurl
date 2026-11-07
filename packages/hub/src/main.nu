@@ -8,6 +8,9 @@
 //   hub verify <handle>       re-hash every blob against its sha256
 //   hub rm     <handle>       forget a model, GC unshared blobs
 //
+//   --jobs N    files fetched at once (pull/dir; default 2, $HUB_JOBS)
+//   --conns N   connections per file (default 8, $HUB_CONNS)
+//
 // A ref is org/repo, org/repo/path/file.gguf, org/repo@rev[/path],
 // hf.co/… , a Hugging Face web URL (https://huggingface.co/org/repo,
 // …/blob/<rev>/<path>), or any other http(s):// URL. The cache is $NURL_MODELS or
@@ -28,19 +31,19 @@ $ `hub.nu`
 }
 
 // pull auto-dispatch: a URL or a subpath ref is a file, else a repo.
-@ __hub_pull s ref → i {
+@ __hub_pull s ref HubOpts o → i {
     : HubRef r ( hub_ref_parse ref )
     : ~ b isfile F
     ? . r is_url { = isfile T } {}
     ? > ( string_len . r subpath ) 0 { = isfile T } {}
     ? isfile {
-        : !String String pr ( hub_file ref )
+        : !String String pr ( hub_file_opts ref o )
         ?? pr {
             T p → { ( nurl_print ( string_data p ) ) ( nurl_print `\n` ) ^ 0 }
             F e → { ^ ( __hub_cli_err e ) }
         }
     } {
-        : !String String pr ( hub_dir ref )
+        : !String String pr ( hub_dir_opts ref o )
         ?? pr {
             T p → { ( nurl_print ( string_data p ) ) ( nurl_print `\n` ) ^ 0 }
             F e → { ^ ( __hub_cli_err e ) }
@@ -52,6 +55,8 @@ $ `hub.nu`
     : ArgParser p ( args_new `hub` `Fetch models from Hugging Face into one shared, verified cache (~/.nurl/models).` )
     ( args_flag p `help` 104 `show this help` )
     ( args_flag p `version` 0 `print the version` )
+    ( args_opt p `jobs` 106 `N` `files fetched at once (default 2, $HUB_JOBS)` )
+    ( args_opt p `conns` 99 `N` `connections per file (default 8, $HUB_CONNS)` )
 
     ? ( args_parse_argv p ) {} {
         ( nurl_eprintln ( args_error p ) )
@@ -60,7 +65,7 @@ $ `hub.nu`
     ? ( args_present p `help` ) {
         : String u ( args_usage p )
         ( nurl_print ( string_data u ) )
-        ( nurl_print `\ncommands:\n  pull <ref>   fetch a file or a whole repo (auto)\n  file <ref>   fetch one file, print its path\n  dir <ref>    fetch a whole repo, print its directory\n  ls           list cached models\n  path <ref>   print the cached path without fetching\n  verify <h>   re-hash every blob against its sha256\n  rm <handle>  forget a model, GC unshared blobs\n\nrefs: org/repo · org/repo/file.gguf · org/repo@rev[/path] · hf.co/… · https://huggingface.co/org/repo[/blob/rev/file] · https://…\ncache: $NURL_MODELS or ~/.nurl/models\n` )
+        ( nurl_print `\ncommands:\n  pull <ref>   fetch a file or a whole repo (auto)\n  file <ref>   fetch one file, print its path\n  dir <ref>    fetch a whole repo, print its directory\n  ls           list cached models\n  path <ref>   print the cached path without fetching\n  verify <h>   re-hash every blob against its sha256\n  rm <handle>  forget a model, GC unshared blobs\n\nfetching: a large file comes over --conns connections at once, in ranges of $HUB_CHUNK\nbytes (32 MiB by default), --jobs files at a time; an interrupted fetch resumes with\nthe ranges it still lacks, and every LFS file is checked against its published sha256.\n\nrefs:org/repo · org/repo/file.gguf · org/repo@rev[/path] · hf.co/… · https://huggingface.co/org/repo[/blob/rev/file] · https://…\ncache: $NURL_MODELS or ~/.nurl/models\n` )
         ^ 0
     } {}
     ? ( args_present p `version` ) {
@@ -70,6 +75,20 @@ $ `hub.nu`
 
     ? < ( args_positional_count p ) 1 {
         ( nurl_eprintln `usage: hub <pull|file|dir|ls|path|verify|rm> … (hub --help)` )
+        ^ 2
+    } {}
+    : ~ HubOpts opts ( hub_opts_default )
+    : ~ b badopt F
+    ?? ( args_value p `jobs` ) {
+        T v → { ?? ( string_to_int v ) { T n → { ? & >= n 1 <= n 64 { = opts @ HubOpts { n . opts conns . opts chunk } } { = badopt T } } F _ → { = badopt T } } }
+        F → {}
+    }
+    ?? ( args_value p `conns` ) {
+        T v → { ?? ( string_to_int v ) { T n → { ? & >= n 1 <= n 64 { = opts @ HubOpts { . opts jobs n . opts chunk } } { = badopt T } } F _ → { = badopt T } } }
+        F → {}
+    }
+    ? badopt {
+        ( nurl_eprintln `hub: --jobs and --conns take a number from 1 to 64` )
         ^ 2
     } {}
     : ( Vec String ) pos ( args_positionals p )
@@ -85,14 +104,14 @@ $ `hub.nu`
         ( hub_ls )
     } {
         ? ( nurl_str_eq cmd `pull` ) {
-            = rc ( __hub_pull ( string_data a1 ) )
+            = rc ( __hub_pull ( string_data a1 ) opts )
         } {
             ? ( nurl_str_eq cmd `file` ) {
-                : !String String pr ( hub_file ( string_data a1 ) )
+                : !String String pr ( hub_file_opts ( string_data a1 ) opts )
                 ?? pr { T pp → { ( nurl_print ( string_data pp ) ) ( nurl_print `\n` ) } F e → { = rc ( __hub_cli_err e ) } }
             } {
                 ? ( nurl_str_eq cmd `dir` ) {
-                    : !String String pr ( hub_dir ( string_data a1 ) )
+                    : !String String pr ( hub_dir_opts ( string_data a1 ) opts )
                     ?? pr { T pp → { ( nurl_print ( string_data pp ) ) ( nurl_print `\n` ) } F e → { = rc ( __hub_cli_err e ) } }
                 } {
                     ? ( nurl_str_eq cmd `path` ) {

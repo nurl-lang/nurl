@@ -6,6 +6,10 @@
 //   ( hub_rm handle )  → !v String         forget a model, GC unshared blobs
 //   ( hub_verify handle ) → !v String      re-hash every blob against its sha
 //
+// hub_file_opts / hub_dir_opts / hub_get_opts take a HubOpts (pull.nu:
+// files at once, connections per file, chunk size); the plain calls use
+// hub_opts_default ($HUB_JOBS, $HUB_CONNS, $HUB_CHUNK, else 2 × 8, 32 MiB).
+//
 // hub_dir materialises a model directory the Hugging Face way: each file
 // is a symlink under models/<repo>/snapshots/<rev>/ pointing at its
 // content-addressed blob, so an existing loader opens a real directory
@@ -76,24 +80,51 @@ $ `pull.nu`
     }
 }
 
-// Download one file of a repo (or a direct URL when hf is a passthrough
-// ref), returning its blob sha256 hex. `expected` is the published
-// sha256 or "" .
-@ __hub_get_one String root HubRef r s subpath s expected → !String String {
+// The download of one file of a repo (or of a direct URL when `r` is a
+// passthrough ref). `expected` is the published sha256 or "", `size` the
+// listed size or 0.
+@ __hub_job String root HubRef r s subpath s expected i size → HubJob {
     : ~ HubRef fr @ HubRef { F ( string_new ) ( string_new ) ( string_new ) ( string_new ) }
+    : ~ String name ( string_new )
     ? . r is_url {
         = fr @ HubRef { T ( string_from ( string_data . r url ) ) ( string_new ) ( string_from `main` ) ( string_new ) }
+        = name ( path_basename ( string_data . r url ) )
     } {
         = fr @ HubRef { F ( string_new ) ( string_from ( string_data . r repo ) ) ( string_from ( string_data . r rev ) ) ( string_from subpath ) }
+        = name ( path_basename subpath )
     }
     : String url ( hub_resolve_url fr )
-    : ~ String staging ( path_basename subpath )
-    ? == ( string_len staging ) 0 { = staging ( string_from `download` ) } {}
-    : !String String hr ( hub_fetch_blob root ( string_data url ) ( string_data staging ) expected )
-    ^ hr
+    : String stage ( hub_stage_name ( string_data url ) ( string_data name ) expected )
+    // hub 0.2 staged a file as blobs/<basename>.part. Its bytes are taken
+    // over only where the published sha256 will check them.
+    : ~ String legacy ( string_new )
+    ? & == ( nurl_str_len expected ) 64 > ( string_len name ) 0 {
+        : String old ( _hub_safe_name ( string_data name ) )
+        = legacy ( _hub_part_path root ( string_data old ) )
+    } {}
+    ^ @ HubJob { url stage legacy ( string_from expected ) size }
 }
 
-@ hub_dir s ref → !String String {
+// Fetch one job alone; → its sha256 hex.
+@ __hub_get_one String root HubJob jb HubOpts o s label → !String String {
+    : ( Vec HubJob ) jobs ( vec_new [HubJob] )
+    ( vec_push [HubJob] jobs @ HubJob { ( string_from ( string_data . jb url ) ) ( string_from ( string_data . jb stage ) ) ( string_from ( string_data . jb legacy ) ) ( string_from ( string_data . jb expected ) ) . jb size } )
+    ?? ( hub_fetch_all root jobs o label ) {
+        T hexes → {
+            ?? ( vec_get [String] hexes 0 ) {
+                T h → { ^ @ !String String { T ( string_from ( string_data h ) ) } }
+                F → { ^ @ !String String { F ( string_from `hub: the download returned nothing` ) } }
+            }
+        }
+        F e → { ^ @ !String String { F e } }
+    }
+}
+
+@ hub_dir s ref → !String String { ^ ( hub_dir_opts ref ( hub_opts_default ) ) }
+
+// hub_dir with explicit transfer options: `. o jobs` files at once, each
+// over up to `. o conns` connections.
+@ hub_dir_opts s ref HubOpts o → !String String {
     : HubRef r ( hub_ref_parse ref )
     ? . r is_url {
         ^ @ !String String { F ( string_from `hub: a whole-directory fetch needs an org/repo, not a URL` ) }
@@ -122,42 +153,68 @@ $ `pull.nu`
             ^ @ !String String { F ( string_from `hub: cannot create the snapshot directory` ) }
         } }
 
-    : Json farr ( json_arr_new )
-    : ~ i total 0
-    : ~ b ok T
-    : ~ String err ( string_new )
+    // One download per staging name: two paths with one sha256 share it.
     : i nf ( vec_len [HubFile] files )
+    : ( Vec HubJob ) jobs ( vec_new [HubJob] )
+    : ( Vec i ) which ( vec_new [i] )
     : ~ i k 0
-    ~ & < k nf ok {
+    ~ < k nf {
         ?? ( vec_get [HubFile] files k ) {
             T hf → {
-                : !String String gr ( __hub_get_one root r ( string_data . hf path ) ( string_data . hf sha ) )
-                ?? gr {
-                    T hex → {
-                        : !v String lr ( __hub_link_blob root ( string_data snapdir ) ( string_data . hf path ) ( string_data hex ) )
-                        ?? lr {
-                            T _ → {
-                                : Json fe ( json_obj_new )
-                                : b _a ( json_obj_set fe `path` ( json_str_lit ( string_data . hf path ) ) )
-                                : b _b ( json_obj_set fe `sha` ( json_str_lit ( string_data hex ) ) )
-                                : b _c ( json_obj_set fe `size` ( json_int . hf size ) )
-                                : b _d ( json_obj_set fe `lfs` ( json_bool . hf lfs ) )
-                                : b _e ( json_arr_push farr fe )
-                                = total + total . hf size
-                            }
-                            F e → { = ok F = err e }
-                        }
+                : HubJob jb ( __hub_job root r ( string_data . hf path ) ( string_data . hf sha ) . hf size )
+                : ~ i at -1
+                : ~ i q 0
+                ~ & < q ( vec_len [HubJob] jobs ) < at 0 {
+                    ?? ( vec_get [HubJob] jobs q ) {
+                        T o2 → { ? ( string_eq . o2 stage . jb stage ) { = at q } {} }
+                        F → {}
                     }
-                    F e → { = ok F = err e }
+                    = q + q 1
+                }
+                ? < at 0 {
+                    = at ( vec_len [HubJob] jobs )
+                    ( vec_push [HubJob] jobs jb )
+                } {}
+                ( vec_push [i] which at )
+            }
+            F → { ( vec_push [i] which -1 ) }
+        }
+        = k + k 1
+    }
+
+    : !( Vec String ) String fr ( hub_fetch_all root jobs o ( string_data . r repo ) )
+    : ~ ( Vec String ) hexes ( vec_new [String] )
+    ?? fr {
+        T v → { = hexes v }
+        F e → { ^ @ !String String { F e } }
+    }
+
+    : Json farr ( json_arr_new )
+    : ~ i total 0
+    = k 0
+    ~ < k nf {
+        ?? ( vec_get [HubFile] files k ) {
+            T hf → {
+                : i at ( vec_at [i] which k )
+                : ~ String hex ( string_new )
+                ?? ( vec_get [String] hexes at ) { T h → { = hex ( string_from ( string_data h ) ) } F → {} }
+                : !v String lr ( __hub_link_blob root ( string_data snapdir ) ( string_data . hf path ) ( string_data hex ) )
+                ?? lr {
+                    T _ → {
+                        : Json fe ( json_obj_new )
+                        : b _a ( json_obj_set fe `path` ( json_str_lit ( string_data . hf path ) ) )
+                        : b _b ( json_obj_set fe `sha` ( json_str_lit ( string_data hex ) ) )
+                        : b _c ( json_obj_set fe `size` ( json_int . hf size ) )
+                        : b _d ( json_obj_set fe `lfs` ( json_bool . hf lfs ) )
+                        : b _e ( json_arr_push farr fe )
+                        = total + total . hf size
+                    }
+                    F e → { ^ @ !String String { F e } }
                 }
             }
             F → {}
         }
         = k + k 1
-    }
-
-    ? ok {} {
-        ^ @ !String String { F err }
     }
 
     : String handle ( __hub_handle r )
@@ -168,7 +225,10 @@ $ `pull.nu`
     }
 }
 
-@ hub_file s ref → !String String {
+@ hub_file s ref → !String String { ^ ( hub_file_opts ref ( hub_opts_default ) ) }
+
+// hub_file with explicit transfer options (`. o conns` connections).
+@ hub_file_opts s ref HubOpts o → !String String {
     : HubRef r ( hub_ref_parse ref )
     : !v String ir ( hub_store_init ( hub_store_root ) )
     ?? ir { T _ → {} F e → { ^ @ !String String { F e } } }
@@ -178,7 +238,8 @@ $ `pull.nu`
     ? . r is_url {
         : ~ String base ( path_basename ( string_data . r url ) )
         ? == ( string_len base ) 0 { = base ( string_from `download` ) } {}
-        : !String String gr ( __hub_get_one root r `` `` )
+        : HubJob jb ( __hub_job root r `` `` 0 )
+        : !String String gr ( __hub_get_one root jb o ( string_data base ) )
         ?? gr {
             T hex → {
                 : Json farr ( json_arr_new )
@@ -207,7 +268,7 @@ $ `pull.nu`
         ^ @ !String String { F ( string_from `hub: that ref names a whole repository — use hub_dir` ) }
     } {}
 
-    // look up the published sha256 for this one file (best effort)
+    // look up the published sha256 and size of this one file (best effort)
     : ~ String expected ( string_new )
     : ~ i fsize 0
     : ~ b lfs F
@@ -231,7 +292,9 @@ $ `pull.nu`
         F → {}
     }
 
-    : !String String gr ( __hub_get_one root r ( string_data . r subpath ) ( string_data expected ) )
+    : HubJob jb ( __hub_job root r ( string_data . r subpath ) ( string_data expected ) fsize )
+    : String label ( path_basename ( string_data . r subpath ) )
+    : !String String gr ( __hub_get_one root jb o ( string_data label ) )
     ?? gr {
         T hex → {
             : Json farr ( json_arr_new )
@@ -307,7 +370,10 @@ $ `pull.nu`
 // ref with a subpath) resolves through hub_file, a bare org/repo through
 // hub_dir. `embed serve BAAI/bge-m3` and `embed serve ./my-model` both just
 // work.
-@ hub_get s ref → !String String {
+@ hub_get s ref → !String String { ^ ( hub_get_opts ref ( hub_opts_default ) ) }
+
+// hub_get with explicit transfer options.
+@ hub_get_opts s ref HubOpts o → !String String {
     ? != ( nurl_path_type ref ) 0 {
         ^ @ !String String { T ( string_from ref ) }
     } {}
@@ -315,8 +381,8 @@ $ `pull.nu`
     : ~ b isfile F
     ? . r is_url { = isfile T } {}
     ? > ( string_len . r subpath ) 0 { = isfile T } {}
-    ? isfile { ^ ( hub_file ref ) } {}
-    ^ ( hub_dir ref )
+    ? isfile { ^ ( hub_file_opts ref o ) } {}
+    ^ ( hub_dir_opts ref o )
 }
 
 // Resolve a ref to its local path WITHOUT fetching — the blob path for a

@@ -15,6 +15,7 @@ hub ls                                 # what's cached
 hub path  org/repo                     # print the cached path (no fetch)
 hub verify org/repo                    # re-hash every blob against its sha256
 hub rm    org/repo                     # forget it, GC unshared blobs
+hub dir   org/repo --jobs 4 --conns 8  # 4 files at once, 8 connections each
 ```
 
 A **ref** is a Hugging Face shorthand or a URL:
@@ -83,12 +84,61 @@ drops a blob only once no handle still references it.
   file* or a clean error, never a silent substitution. (Small non-LFS files —
   `config.json`, `tokenizer.json` — carry only a git blob id, so they are
   content-addressed locally without an external anchor.)
-- **Resumable, constant-memory downloads.** Chunks stream straight to disk while
-  an incremental sha256 consumes the same bytes. An interrupted pull leaves a
-  `.part`; the next attempt sends `Range: bytes=<n>-`, re-hashes what's there and
-  appends. A multi-GB model costs no RAM to fetch.
+- **Parallel, resumable, constant-memory downloads** (next section). A multi-GB
+  model costs no RAM to fetch, and an interrupted pull picks up where it
+  stopped.
 - **Integrity on demand.** `hub verify` re-hashes every cached blob against its
   recorded sha256 and refuses drift — a flipped byte in the cache is an error.
+
+## Fast downloads
+
+Hugging Face's CDN holds one HTTP connection to a fraction of a megabyte a
+second, and the rate grows about linearly with connections. So hub never
+fetches a large file over one:
+
+- **A file in ranges.** A file of known size above one chunk (32 MiB) is cut
+  into chunks, and up to `--conns` connections (default 8) each take the next
+  chunk not yet on disk, ask for it with `Range: bytes=a-b` and write what
+  arrives straight into the staging file at its offset. Memory stays constant
+  whatever the size.
+- **Files side by side.** `hub dir` / `hub pull` fetch `--jobs` files at once
+  (default 2), each with its own connections — 16 in all by default. Small
+  files (one chunk or less) take one connection each.
+- **One progress line** (on a terminal) with the bytes and the total rate of
+  every transfer of the pull.
+
+Defaults come from `$HUB_JOBS`, `$HUB_CONNS` and `$HUB_CHUNK` (bytes); from
+NURL, `hub_dir_opts` / `hub_file_opts` / `hub_get_opts` take a `HubOpts`
+(`hub_opts_default` reads the environment).
+
+**Resume, at range granularity.** A chunk that has landed is flushed to the
+device and only then recorded in a sidecar next to the staging file:
+
+```
+blobs/sha256-<hex>.part          the file being assembled, at full length
+blobs/sha256-<hex>.part.ranges   hub-ranges 1 <size> <chunk>, then one finished chunk a line
+```
+
+An interrupted pull — killed, crashed, the network gone — resumes with exactly
+the chunks the record does not list; a recorded chunk is never fetched again
+(a record kept in another `$HUB_CHUNK` still counts). Within one run a dropped
+or stalled connection (60 s without a byte) is retried from the first byte not
+yet written, with back-off. Two hub processes never write one file: the
+staging file is locked while a transfer runs (the kernel drops the lock when a
+process dies), and the second is refused. A staging file is named by the
+sha256 the file will have (or, without one, by its name and a digest of its
+URL), so two files of a repository never share one. A partial download hub
+0.2 left (`blobs/<name>.part`) is taken over as the prefix it is, when the
+file has a published sha256 to check it against.
+
+**Integrity.** The ranges are written out of order, so when the last one lands
+the whole file is hashed in order, and the bytes must hash to the sha256
+Hugging Face publishes: a corrupted or substituted range is an INTEGRITY
+FAILURE, the staging file and its record are discarded, and the next pull
+starts clean.
+
+A file of unknown size (a plain URL) or one chunk or smaller streams over one
+connection with an incremental sha256 and resumes with `Range: bytes=<n>-`.
 
 ## Dependencies
 
@@ -98,8 +148,14 @@ Python, no `huggingface_hub`, no `git-lfs`.
 ## Tests
 
 - `tests/hub_test.nu` — offline gates: ref parsing, name safety, URL resolution,
-  manifest round-trip, the blob GC-sharing rule.
+  manifest round-trip, the blob GC-sharing rule, the chunk layout, staging
+  names, the range record (round trip, a torn line, another chunk size, another
+  file size) and the tuning variables.
 - `tests/hub_test.sh` — online, against a tiny real repo: the symlink farm, the
   **HF-oracle** (every LFS blob's address equals the API's `lfs.oid`), corruption
-  detection, single-file dedup, GC, and a resumed download. Skips cleanly when
+  detection, single-file dedup, GC, a resumed download; then in 64 KiB ranges:
+  a parallel repo fetch under the oracle, a resume from a partial range record,
+  a corrupted recorded range caught by the sha256 check, a hub 0.2 partial
+  taken over, and a real `kill -9` mid-transfer (with a second hub refused
+  meanwhile) resumed without refetching the recorded ranges. Skips cleanly when
   offline.

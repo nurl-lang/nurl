@@ -1,5 +1,46 @@
 # hub changelog
 
+## [0.3.0] — unreleased
+
+Requires NURL 0.90.0.
+
+### Added
+
+- **Parallel downloads** (Agora #523). Hugging Face's CDN holds one
+  connection to ~0.6 MB/s and scales about linearly with connections, and
+  hub fetched one file at a time over one: a 278 GB repository took days.
+  - A file of known size above one chunk (32 MiB, `$HUB_CHUNK`) is fetched
+    in ranges over up to `--conns` connections at once (default 8,
+    `$HUB_CONNS`): each takes the next chunk not yet on disk, asks for it
+    with `Range: bytes=a-b` (the answer must be exactly that range of a
+    file of the listed size) and writes it into the staging file at its
+    offset — positional writes on one shared descriptor, constant memory.
+  - `hub dir` / `hub pull` fetch `--jobs` files at once (default 2,
+    `$HUB_JOBS`), under one progress line with the total rate.
+  - From NURL: `hub_dir_opts`, `hub_file_opts`, `hub_get_opts` take a
+    `HubOpts`; `hub_opts_default` reads the environment.
+- **Resume at range granularity.** A finished chunk is flushed to the
+  device, then recorded in `<staging>.part.ranges`; an interrupted pull
+  fetches only the chunks the record lacks (a record kept in another chunk
+  size still counts). Within one run a dropped connection, or one stalled
+  for 60 s, is asked again from the first byte not yet written, with
+  back-off.
+- The staging file is locked while a transfer runs: a second hub on the same
+  file is refused instead of writing over it.
+
+### Changed
+
+- The whole file is hashed in order once its ranges are in and must match
+  Hugging Face's published sha256, as before; a mismatch now also discards
+  the range record, so a corrupted range is never kept.
+- A staging file is named by the sha256 the file will have
+  (`sha256-<hex>.part`), or by the file's name and a digest of its URL —
+  two files of one repository with the same basename used to share
+  `<basename>.part`. A hub 0.2 `<basename>.part` is taken over as a prefix
+  when the published sha256 will check it.
+- `hub_fetch_blob` takes the staging name, the listed size, a `HubOpts` and
+  the batch's byte counter and stop flag; `hub_fetch_all` fetches a batch.
+
 ## [0.2.5] — 2026-11-06
 
 ### Fixed

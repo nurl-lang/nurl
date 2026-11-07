@@ -119,18 +119,26 @@ $ `stdlib/core/slice.nu`
         T f → {
             : Sha256 h ( sha256_init )
             : ~ b more T
+            : ~ b bad F
             ~ more {
-                : !( Vec u ) IoErr cr ( file_read_chunk f 1048576 )
+                : !( Vec u ) IoErr cr ( file_read_chunk f 4194304 )
                 ?? cr {
                     T piece → {
                         ? == ( vec_len [u] piece ) 0 { = more F } {
                             ( sha256_update h piece )
                         }
                     }
-                    F _ → { = more F }
+                    F _ → { = more F = bad T }
                 }
             }
             ( file_close f )
+            // A read that fails part-way is an error, not the digest of a
+            // prefix (which a caller would take for corruption).
+            ? bad {
+                : String msg ( string_from `hub: cannot read ` )
+                ( string_push_str msg path )
+                ^ @ !String String { F msg }
+            } {}
             : ( Vec u ) dg ( sha256_final h )
             : String hex ( bytes_to_hex dg )
             ^ @ !String String { T hex }
