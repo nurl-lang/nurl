@@ -10,6 +10,16 @@
 #       bits in turn; widths padded to 128 as exllamav3 pads them), and the
 #       model the reference runs carries exactly the weights those groups
 #       decode to (exllamav3's tests/testlib/trellis.py)
+#   hf_ref.py make-experts <outdir> <tokenizer-dir> <exllamav3-dir> <R> [<bankdir>]
+#       a glm_moe_dsa (hidden 256, expert width 160 — padded to 256) whose
+#       ROUTED experts are EXL3 tensor groups (3 bits, MCG — the codebook of
+#       fiore-lab's expert banks), one per expert projection, stored whole
+#       (R = 1) or cut by whole tiles into R tensor-parallel shares as those
+#       banks cut them (`…gate_proj.rank<r>.trellis`: gate / up along their
+#       outputs, down along its inputs). The same seed makes the same
+#       experts for every R. With a bankdir, the experts go to
+#       <bankdir>/experts.safetensors and the rest stays in <outdir> — a
+#       bank kept apart, as fiore-lab ships GLM-5.3's.
 #   hf_ref.py logits <dir> "<id id …>"        final-position logits
 #   hf_ref.py greedy <dir> "<id id …>" <n>    n greedy ids (full recompute)
 import json
@@ -34,11 +44,15 @@ def tiny_config(arch):
         # head_dim stated, and not hidden / heads
         return Qwen3Config(num_hidden_layers=3, num_attention_heads=4, num_key_value_heads=2, head_dim=48,
                            rope_parameters={"rope_theta": 1000000.0, "rope_type": "default"}, **common)
-    if arch == "glm_moe_dsa":
+    if arch in ("glm_moe_dsa", "glm_moe_dsa_x"):
         from transformers import GlmMoeDsaConfig
         common.update(intermediate_size=224)
+        moe_ff = 32
+        if arch == "glm_moe_dsa_x":
+            common.update(hidden_size=256)
+            moe_ff = 160
         return GlmMoeDsaConfig(
-            num_hidden_layers=6, num_attention_heads=6, num_key_value_heads=6, moe_intermediate_size=32,
+            num_hidden_layers=6, num_attention_heads=6, num_key_value_heads=6, moe_intermediate_size=moe_ff,
             n_shared_experts=1, n_routed_experts=16, num_experts_per_tok=4, routed_scaling_factor=2.5,
             n_group=1, topk_group=1, norm_topk_prob=True, first_k_dense_replace=2, kv_lora_rank=96,
             q_lora_rank=160, qk_rope_head_dim=16, qk_nope_head_dim=64, v_head_dim=32, index_topk=8,
@@ -110,6 +124,71 @@ def make(arch, outdir, tokdir, exdir=None):
             shutil.copy(os.path.join(tokdir, f), os.path.join(outdir, f))
 
 
+def make_experts(outdir, tokdir, exdir, R, bank=None):
+    """The routed experts as EXL3 groups, whole or in R shares (see the
+    usage above); every other weight as transformers made it."""
+    import re
+    from transformers import AutoModelForCausalLM
+    from safetensors.torch import load_file, save_file
+    sys.path.insert(0, exdir + "/tests/testlib")
+    import trellis as ref
+    torch.manual_seed(521)
+    model = AutoModelForCausalLM.from_config(tiny_config("glm_moe_dsa_x")).float().eval()
+    with torch.no_grad():
+        for name, p in model.named_parameters():
+            if name.endswith("norm.weight") or name.endswith("layernorm.weight"):
+                p.copy_(1.0 + 0.1 * torch.randn_like(p))
+            elif name.endswith("norm.bias"):
+                p.copy_(0.1 * torch.randn_like(p))
+        for name, b in model.named_buffers():
+            if name.endswith("e_score_correction_bias"):
+                b.copy_(0.05 * torch.randn_like(b))
+    model.save_pretrained(outdir, safe_serialization=True)
+    path = os.path.join(outdir, "model.safetensors")
+    sd = load_file(path)
+    gen = np.random.default_rng(521)
+    K, cb, mult = 3, "mcg", 0xCBAC1FED
+    decoded = {}
+    banked = {}
+    pat = re.compile(r"model\.layers\.\d+\.mlp\.experts\.\d+\.(gate|up|down)_proj\.weight$")
+    for key in sorted(k for k in sd if pat.match(k)):
+        name = key[:-len(".weight")]
+        n, k = sd[key].shape                         # HF [out, in]
+        kp, np_ = (k + 127) // 128 * 128, (n + 127) // 128 * 128
+        trellis = ref.random_packed((kp // 16) * (np_ // 16), K, gen).reshape(kp // 16, np_ // 16, -1)
+        suh = (gen.choice([-1.0, 1.0], kp) * gen.uniform(0.15, 0.4, kp)).astype(np.float16)
+        svh = (gen.choice([-1.0, 1.0], np_) * gen.uniform(0.15, 0.4, np_)).astype(np.float16)
+        W = ref.dequant(trellis, torch.from_numpy(suh), torch.from_numpy(svh), K, cb)[:k, :n]
+        decoded[name] = W.t().float().contiguous()
+        del sd[key]
+        marker = torch.from_numpy(np.array([mult], dtype=np.uint32).view(np.int32))
+        down = name.endswith("down_proj")
+        for r in range(R):
+            pre = name if R == 1 else "%s.rank%d" % (name, r)
+            if R == 1:
+                t, u, v = trellis, suh, svh
+            elif down:                                # its inputs: k tiles
+                a = kp // 16 // R
+                t, u, v = trellis[r * a:(r + 1) * a], suh[r * a * 16:(r + 1) * a * 16], svh
+            else:                                     # its outputs: n tiles
+                a = np_ // 16 // R
+                t, u, v = trellis[:, r * a:(r + 1) * a], suh, svh[r * a * 16:(r + 1) * a * 16]
+            # (copies: safetensors refuses two names for one buffer)
+            dst = banked if bank else sd
+            dst[pre + ".trellis"] = torch.from_numpy(np.array(t))
+            dst[pre + ".suh"] = torch.from_numpy(np.array(u))
+            dst[pre + ".svh"] = torch.from_numpy(np.array(v))
+            dst[pre + "." + cb] = marker.clone()
+    save_file(sd, path)
+    if bank:
+        os.makedirs(bank, exist_ok=True)
+        save_file(banked, os.path.join(bank, "experts.safetensors"))
+    torch.save(decoded, os.path.join(outdir, "exl3_reference_weights.pt"))
+    for f in ("tokenizer.json", "tokenizer_config.json", "chat_template.jinja"):
+        if os.path.exists(os.path.join(tokdir, f)):
+            shutil.copy(os.path.join(tokdir, f), os.path.join(outdir, f))
+
+
 def load(d):
     from transformers import AutoConfig, AutoModelForCausalLM
     ex = os.path.join(d, "exl3_reference_weights.pt")
@@ -141,6 +220,9 @@ def main():
     cmd = sys.argv[1]
     if cmd == "make":
         make(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5] if len(sys.argv) > 5 else None)
+        return
+    if cmd == "make-experts":
+        make_experts(sys.argv[2], sys.argv[3], sys.argv[4], int(sys.argv[5]), sys.argv[6] if len(sys.argv) > 6 else None)
         return
     m = load(sys.argv[2])
     ids = [int(t) for t in sys.argv[3].split()]

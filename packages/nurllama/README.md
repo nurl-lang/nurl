@@ -340,6 +340,44 @@ position.
 OpenMP and produces byte-identical output — the CUDA-only variants are a
 dispatch choice, never a behaviour change.
 
+### A MoE larger than the device: experts streamed from the file
+
+A Mixture of Experts uses a few of its experts a token — GLM-5.3 8 of 256
+in each of 75 layers — so most of a 755B model is idle at any moment.
+When the routed experts do not fit the device beside everything else,
+nurllama does not refuse the model: it keeps as many of them on the device
+as fit — the **expert cache**, least recently used out first — and loads
+the ones a layer's router picks from the file when they are not there
+(`src/experts.nu`). The file is mapped, so the host's page cache sits in
+between: RAM holds the experts it has room for, the disk the rest. The
+attention, the shared experts and every other weight stay resident.
+
+A slot holds an expert exactly as the all-resident stack holds it, and
+the same kernels run over the slots — only the expert table changes,
+expert → slot — so the **logits are those of the all-resident run, byte
+for byte**, with any number of slots: a prefill chunk whose experts are
+more than the slots runs them in rounds. Every way experts are stored
+streams: a GGUF's stacks (f32 and q8_0 through the batched expert matvec,
+the other types one matvec per position and expert, a type without a
+device kernel as f32), a checkpoint's per-expert or fused tensors, and
+**EXL3** tensor groups — whole, or cut by whole tiles into tensor-parallel
+shares as fiore-lab's GLM-5.3 banks are (`…gate_proj.rank0.trellis` …;
+joined back, they are the matrix exllamav3 quantised). A bank kept in a
+directory of its own joins its checkpoint with `--weights`:
+
+```sh
+$ hub dir fiore-lab/GLM-5.3-EXL3-Base             # attention, shared experts, embeddings
+$ hub dir fiore-lab/GLM-5.3-EXL3-Experts-3bit     # the routed experts, 3 bits
+$ nurllama run <Base directory> "…" --weights <Experts directory>
+```
+
+The cache takes what is free once the rest is up (less a margin);
+`NURLLAMA_EXPERT_CACHE` (MiB) or `NURLLAMA_EXPERT_SLOTS` (experts) sets it,
+and `NURLLAMA_VERBOSE=1` / `NURLLAMA_PROF=1` report it — slots, loads,
+hits, and the bytes and time read. `tests/expert_stream_test.sh` holds every
+form to its all-resident run at 8, 3 and 1 slots, on CUDA and on the CPU
+backend, and the EXL3 experts to transformers.
+
 ## Configuration
 
 | | |
@@ -347,7 +385,9 @@ dispatch choice, never a behaviour change.
 | `NURLLAMA_HOME` | store location (default `~/.nurllama`) |
 | `--ctx N` | context length (default 4096, or the model's own if smaller) |
 | `NURL_GPU=cpu` | run on the CPU backend |
-| `NURLLAMA_VERBOSE=1` | report device memory at load |
+| `NURLLAMA_VERBOSE=1` | report device memory at load (and the expert cache) |
+| `NURLLAMA_EXPERT_CACHE=MiB` | stream a MoE's routed experts through a device cache of this size |
+| `NURLLAMA_EXPERT_SLOTS=N` | …or of N experts (by default: only when they do not fit) |
 | `NURLLAMA_DEQUANT=host` | force the f32 reference path (debugging) |
 | `NURL_GPU_CACHE=off` | disable the compiled-kernel cache |
 
