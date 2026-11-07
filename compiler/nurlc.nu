@@ -173,6 +173,7 @@
 : ~ b g_origin_arg_str F  // the argument origin_call_arg records is a raw string the compiler manages
 : ~ i g_use_ownstr 0  // a return went through __nurl_ownstr (gen_ret)
 : ~ s g_bck_own_params ``  // the parameters the function being walked owns (a safe `sink s`)
+: ~ i g_call_cp 0  // `res` / `own`: the call just emitted copied its result `res`, owned by bit `own` (mem_own_lendback); `bind`: a let binds that copy (__mem_udrop_bind_flag) — agora #477
 : ~ i g_bck_end_views 0  // 1 while bck_root_end ends a field path's borrows: only its views (agora #309)
 : ~ s g_bck_fn ``  // the function being walked, whose g_fn_vkeeps it decides (a closure body's: its literal's, `__closure_N`)
 : ~ i g_bck_quiet 0  // 1 while a walk only makes its answers: no diagnostic (__bck_walk_scc)
@@ -4323,6 +4324,13 @@ unsafe @ nurl_cg_lbl i h s hint → s {
 }
 
 // `c` and not `d` (i1 operands; `c` may be the literal `1`).
+// `c & d`, as an i1.
+@ __and_i1 i cg s c s d → s {
+    : s r ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ` = and i1 ` ) ( nurl_print c ) ( nurl_print `, ` ) ( nurl_print d ) ( nurl_print `\n` )
+    ^ r
+}
+
 @ __and_not i cg s c s d → s {
     : s nd ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print nd ) ( nurl_print ` = xor i1 ` ) ( nurl_print d ) ( nurl_print `, 1\n` )
@@ -5267,7 +5275,7 @@ unsafe @ nurl_cg_lbl i h s hint → s {
     = g_rawlit_pending 0
     ~ != 0 ( nurl_str_len ps ) {
         : s p ( str_first_word ps ) = ps ( str_skip_word ps )
-        ( mem_note_kept syms cg p T )
+        ( mem_note_kept syms cg p T `` )
     }
 }
 
@@ -5276,7 +5284,7 @@ unsafe @ nurl_cg_lbl i h s hint → s {
     : ~ s ps ( nurl_sym_get2 syms name `__rawlit` )
     ~ != 0 ( nurl_str_len ps ) {
         : s p ( str_first_word ps ) = ps ( str_skip_word ps )
-        ( mem_note_kept syms cg p T )
+        ( mem_note_kept syms cg p T `` )
     }
     ( nurl_sym_def syms ( nurl_str_cat name `__rawlit` ) `` )
 }
@@ -5357,6 +5365,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
     ( nurl_sym_set_deep syms `__agg_lends_call__` `` )
     ( nurl_sym_set_deep syms `__agg_lends_part__` `` )
     ( nurl_sym_set_deep syms `__agg_direct__` `` )
+    ( nurl_sym_set_deep syms `__agg_kept__` `` )
     ( nurl_sym_set_deep syms `__agg_take_own__` `` )
     ( nurl_sym_set_deep syms `__ret_path_lends__` `` )
     ( nurl_sym_set_deep syms `__ret_path_sink__` `` )
@@ -6492,7 +6501,13 @@ unsafe @ gen_ret i lex i syms i cg → s {
         ``
         // Returning a cursor returns the value it borrows — over a
         // parameter, that is the caller's own argument handed back.
-        ( mem_udrop_alias_lend syms cg skip_user_ptr )
+        // (…except where the return copied it, lent out of a local: that
+        // local keeps and drops its own, agora #476.)
+        // (A returned literal whose field IS this binding moved it in
+        // already, which handed over what was to go: `settled`. A field
+        // read out of it — `@ String { . buf ctl }` — moved nothing yet.)
+        : b __ret_kept & == ret_first_tt TT_AT ( nurl_sym_has_word syms `__agg_kept__` ret_ident )
+        ( mem_udrop_alias_lend syms cg skip_user_ptr ? __ret_kept `settled` ? ret_pl_slot ( nurl_str_cat ret_pl_own `` ) `` )
         : ~ s __ra_rest ( nurl_sym_get2 syms skip_user_ptr `__alias` )
         ~ != 0 ( nurl_str_len __ra_rest ) {
             : s __ra_src ( str_first_word __ra_rest ) = __ra_rest ( str_skip_word __ra_rest )
@@ -25303,8 +25318,21 @@ unsafe @ mem_path_to_indices s path → s {
 // goes with it, but a cursor over a PARAMETER (`: cur target … ^ @ R { T
 // cur }` in a tree walk) only lends the caller's value back —
 // `__agg_lends__` tells gen_ret the function returns a borrow.
-@ mem_udrop_alias_lend i syms i cg s ptr → v {
+// `copied`: an i1 register where the route moving the cursor on stored a
+// COPY of its value on the runs it holds (mem_lent_cond's dynamic answer):
+// nothing of a source left there, which keeps and drops its own — as a push
+// or a `sink` argument leaves it. Handed over as well, the source's value
+// was released by no one: the copy went on, the original stayed behind
+// (agora #476). `settled`: a returned literal's field moved this cursor in
+// already (mem_note_kept), which handed over what was to go; a second hand-
+// over here would release the source's value on the runs that copied. ``:
+// no copy was made.
+@ mem_udrop_alias_lend i syms i cg s ptr s copied → v {
     ? == 0 ( nurl_str_len ptr ) { ^ v } {}
+    : b __settled ( seq copied `settled` )
+    // (Only a run-time answer: a static lend — `1` — is no copy, and is
+    // handled where it is lent.)
+    : s __cp ? & != 0 ( nurl_str_len copied ) == ( nurl_str_get copied 0 ) 37 ( nurl_str_cat copied `` ) ``
     ( mem_udrop_optparam_kept syms ptr )
     // (A lend of a parameter its value is exactly where a call's own answer
     // says it lent — __call_owned_by: `__agg_lends_call__`, which leaves a
@@ -25324,7 +25352,7 @@ unsafe @ mem_path_to_indices s path → s {
         // (Not the whole the cursor's value is part of: __part_src.)
         // (…by the identity key when the cursor's flag is a call's answer, as
         // its return answers: __src_leaves_by_identity.)
-        ? ( __part_src syms ptr src ) {} { ? __pcall { ( __src_leaves_by_identity syms cg src ptr ) } { ( mem_alias_src_leaves syms cg src ptr ) } }
+        ? | __settled ( __part_src syms ptr src ) {} { ? __pcall { ( __src_leaves_by_identity syms cg src ptr __cp ) } { ( mem_alias_src_leaves syms cg src ptr __cp ) } }
     }
 }
 
@@ -25333,20 +25361,31 @@ unsafe @ mem_path_to_indices s path → s {
 // path (`: ~ V sk body … ? c { = sk ( mk ) } {} … ^ @ R { sk }`) holds
 // another one there, and `src` still drops its own (it leaked). Asked at
 // run time by the identity of the value's first buffer.
-@ mem_alias_src_leaves i syms i cg s src s ptr → v {
+// (`copied`, an i1 or ``: where the value went on as a copy, `src` keeps —
+// mem_udrop_alias_lend.)
+@ mem_alias_src_leaves i syms i cg s src s ptr s copied → v {
     : s st ( nurl_sym_get2 syms src `__udty` )
     : s pt ( nurl_sym_get2 syms ptr `__udty` )
-    ? | | == 0 ( nurl_str_len st ) ! ( seq st pt ) != 0 ( nurl_str_starts st `%__opt.` ) { ( mem_udrop_flag_set syms cg src `0` ) ^ v } {}
+    ? | | == 0 ( nurl_str_len st ) ! ( seq st pt ) != 0 ( nurl_str_starts st `%__opt.` ) {
+        ( mem_udrop_flag_set syms cg src ? == 0 ( nurl_str_len copied ) `0` ( __and_i1 cg ( mem_udrop_flag_get syms cg src ) copied ) )
+        ^ v } {}
     : s ll ( nurl_llty st )
     : s sv ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print sv ) ( nurl_print ` = load ` ) ( nurl_print ll ) ( nurl_print `, ptr ` ) ( nurl_print src ) ( nurl_print `\n` )
     : s sk ( mem_handle_key cg st sv )
-    ? == 0 ( nurl_str_len sk ) { ( mem_udrop_flag_set syms cg src `0` ) ^ v } {}
+    ? == 0 ( nurl_str_len sk ) {
+        ( mem_udrop_flag_set syms cg src ? == 0 ( nurl_str_len copied ) `0` ( __and_i1 cg ( mem_udrop_flag_get syms cg src ) copied ) )
+        ^ v } {}
     : s pv ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print pv ) ( nurl_print ` = load ` ) ( nurl_print ll ) ( nurl_print `, ptr ` ) ( nurl_print ptr ) ( nurl_print `\n` )
     : s pk ( mem_handle_key cg st pv )
-    : s ne ( nurl_cg_reg cg )
+    : ~ s ne ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print ne ) ( nurl_print ` = icmp ne i8* ` ) ( nurl_print sk ) ( nurl_print `, ` ) ( nurl_print pk ) ( nurl_print `\n` )
+    ? != 0 ( nurl_str_len copied ) {
+        : s ne2 ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print ne2 ) ( nurl_print ` = or i1 ` ) ( nurl_print ne ) ( nurl_print `, ` ) ( nurl_print copied ) ( nurl_print `\n` )
+        = ne ne2
+    } {}
     : s f ( mem_udrop_flag_get syms cg src )
     : s nf ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print nf ) ( nurl_print ` = and i1 ` ) ( nurl_print f ) ( nurl_print `, ` ) ( nurl_print ne ) ( nurl_print `\n` )
@@ -25461,22 +25500,38 @@ unsafe @ mem_path_to_indices s path → s {
 // agree. A type with no key at all keeps mem_alias_src_leaves' answer —
 // it goes, a leak at worst: kept where `ptr` does hold it, `src` would
 // release what is handed on (agora #459).
-@ __src_leaves_by_identity i syms i cg s src s ptr → v {
+// `copied` (an i1, or ``): where the route that moves `ptr` on stored a COPY
+// of its value instead (`mem_lent_cond` said lent), nothing of `src` left,
+// and `src` keeps and drops its own — as a push or a `sink` argument does.
+// Handed over there as well, `src`'s value was released by no one: the copy
+// went on and the original stayed behind, owned by nobody (agora #476).
+@ __src_leaves_by_identity i syms i cg s src s ptr s copied → v {
     : s st ( nurl_sym_get2 syms src `__udty` )
     : s pt ( nurl_sym_get2 syms ptr `__udty` )
-    ? | == 0 ( nurl_str_len st ) ! ( seq st pt ) { ( mem_udrop_flag_set syms cg src `0` ) ^ v } {}
+    ? | == 0 ( nurl_str_len st ) ! ( seq st pt ) {
+        ? == 0 ( nurl_str_len copied ) { ( mem_udrop_flag_set syms cg src `0` ) ^ v } {}
+        ( mem_udrop_flag_set syms cg src ( __and_i1 cg ( mem_udrop_flag_get syms cg src ) copied ) )
+        ^ v } {}
     : s vt ( __udty_val st )
     : s ll ( nurl_llty vt )
     : s sv ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print sv ) ( nurl_print ` = load ` ) ( nurl_print ll ) ( nurl_print `, ptr ` ) ( nurl_print src ) ( nurl_print `\n` )
     : s sk ( mem_ud_ident_key cg vt sv )
-    ? == 0 ( nurl_str_len sk ) { ( mem_udrop_flag_set syms cg src `0` ) ^ v } {}
+    ? == 0 ( nurl_str_len sk ) {
+        ? == 0 ( nurl_str_len copied ) { ( mem_udrop_flag_set syms cg src `0` ) ^ v } {}
+        ( mem_udrop_flag_set syms cg src ( __and_i1 cg ( mem_udrop_flag_get syms cg src ) copied ) )
+        ^ v } {}
     : s pv ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print pv ) ( nurl_print ` = load ` ) ( nurl_print ll ) ( nurl_print `, ptr ` ) ( nurl_print ptr ) ( nurl_print `\n` )
     : s pk ( mem_ud_ident_key cg vt pv )
     : s same ( __same_value cg vt sv sk pv pk )
-    : s ne ( nurl_cg_reg cg )
+    : ~ s ne ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print ne ) ( nurl_print ` = xor i1 ` ) ( nurl_print same ) ( nurl_print `, 1\n` )
+    ? != 0 ( nurl_str_len copied ) {
+        : s ne2 ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print ne2 ) ( nurl_print ` = or i1 ` ) ( nurl_print ne ) ( nurl_print `, ` ) ( nurl_print copied ) ( nurl_print `\n` )
+        = ne ne2
+    } {}
     : s f ( mem_udrop_flag_get syms cg src )
     : s nf ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print nf ) ( nurl_print ` = and i1 ` ) ( nurl_print f ) ( nurl_print `, ` ) ( nurl_print ne ) ( nurl_print `\n` )
@@ -26822,6 +26877,7 @@ unsafe @ __src_has_raw_ptr s text → b {
 // the result) or part of one (`part`, copied here — the temporary is dropped
 // after the call). The result is the caller's then. Returns the result.
 @ mem_own_lendback i syms i cg s cn s res s rlt s one s part s idxs → s {
+    ( nurl_sym_def g_call_cp `res` `` )
     // (Whether this call's result may be a temporary the caller made for
     // it, handed back: then it is the caller's own — h230 asks.)
     ( nurl_sym_def syms `__last_call_lendback__` ? | != 0 ( nurl_str_len one ) != 0 ( nurl_str_len part ) `1` `` )
@@ -26864,6 +26920,10 @@ unsafe @ __src_has_raw_ptr s text → b {
     : s own ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print own ) ( nurl_print ` = or i1 ` ) ( nurl_print own0 ) ( nurl_print `, ` ) ( nurl_print any ) ( nurl_print `\n` )
     ( nurl_sym_def syms `__last_call_own__` own )
+    // (Where it copied a part, the result is the caller's on those runs
+    // whatever the call's borrow channels say: `own` answers for it. A
+    // binding of it owns it by that bit — __call_copied_own, agora #477.)
+    ? != 0 ( nurl_str_len part ) { ( nurl_sym_def g_call_cp `res` out ) ( nurl_sym_def g_call_cp `own` own ) } {}
     // A compiled callee whose lent parameters are all among these
     // temporaries: its result borrows nothing this caller names — the
     // ownership bit decides (a lent result was copied, or is not the
@@ -26914,12 +26974,27 @@ unsafe @ __src_has_raw_ptr s text → b {
     ^ ( __hown_dyn syms ( nurl_sym_get syms `__last_call_name__` ) 0 )
 }
 
+// The own bit of the call whose result is `val` (an IR value), when that
+// call copied its result (mem_own_lendback's `part`): `` otherwise. Asked by
+// the result's register, so it answers for that one call only.
+@ __call_copied_own s val → s {
+    : s r ( nurl_sym_get g_call_cp `res` )
+    ? | == 0 ( nurl_str_len r ) ! ( seq r val ) { ^ ( nurl_str_cat `` `` ) } {}
+    ^ ( nurl_sym_get g_call_cp `own` )
+}
+
 // The binding `ptr` takes the ownership bit of the call just emitted
 // (mem_call_retown: the callee's per-call answer, or its module-end
 // constant). F when no call name was published.
 @ __mem_bind_call_bit i syms i cg s ptr → b {
     : s r ( mem_call_retown syms cg )
     ? == 0 ( nurl_str_len r ) { ^ F } {}
+    ^ ( __mem_bind_bit syms cg ptr r )
+}
+
+// …that bit given as `r` (mem_call_retown has published the call's
+// module-end constant, `__last_retown_const__`).
+@ __mem_bind_bit i syms i cg s ptr s r → b {
     ( mem_udrop_flag_set syms cg ptr r )
     // Borrowed exactly when the callee's result is not owned — a bit
     // kept in a slot of its own (`@<slot>`), since the binding's flag
@@ -27096,6 +27171,16 @@ unsafe @ __src_has_raw_ptr s text → b {
                 } {}
             }
         } } {}
+    // A call that copied its result where it lent part of a temporary
+    // (mem_own_lendback): that copy is this binding's on those runs, so the
+    // call's own bit decides — before the borrow and view readings below,
+    // which take the call for a lend throughout, and the copy was nobody's
+    // (agora #477).
+    : s __cbo ( nurl_sym_get g_call_cp `bind` )
+    ? & == rhs_tt TT_LPAREN != 0 ( nurl_str_len __cbo ) {
+        : s __cr ( mem_call_retown syms cg )
+        ? != 0 ( nurl_str_len __cr ) { ? ( __mem_bind_bit syms cg ptr __cbo ) { ^ v } {} } {}
+    } {}
     ? & != 0 ( nurl_str_len rhs_borrow ) == rhs_tt TT_LPAREN {
         ? != 0 ( nurl_sym_len2 syms ( nurl_sym_get syms `__last_call_name__` ) `__ret_borrow` ) {
             ? ( __mem_bind_call_bit syms cg ptr ) { ^ v } {}
@@ -41743,7 +41828,11 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         // and this binding owns it, so it is no borrow (agora #193).
         : ~ b __blk_lend F
         ? & | == bck_rhs_tt TT_LBRACE == bck_rhs_tt TT_BACKSLASH == g_blk_tail_eff TT_LPAREN { = __blk_lend != 0 ( nurl_str_len ( mem_blk_tail_deeper_args syms 1073741824 __rhs_r0 ) ) } {}
-        ? & & & != 0 g_auto_drop_strings ( __is_autodrop_enum vt syms ) != 0 ( nurl_str_len rhs_borrow ) ! __blk_lend
+        // (A call that copied its result is no borrow on the runs it copied:
+        // the binding owns that copy by the call's own bit, agora #477.)
+        : s __lcp ? == bck_rhs_tt TT_LPAREN ( __call_copied_own val ) ``
+        ( nurl_sym_def g_call_cp `bind` __lcp )
+        ? & & & & != 0 g_auto_drop_strings ( __is_autodrop_enum vt syms ) != 0 ( nurl_str_len rhs_borrow ) ! __blk_lend == 0 ( nurl_str_len __lcp )
         { ( nurl_sym_def syms ( nurl_str_cat name `__borrow` ) `1` ) }
         { ? != 0 g_auto_drop_strings
             { : s rvt ( __udrop_regty vt )
@@ -41762,6 +41851,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
                 {}
             }
             {} }
+        ( nurl_sym_def g_call_cp `bind` `` )
         // Mark as having new syntax only if mutability was checked
         // TEMPORARILY DISABLED: ? had_mutability_check
         //   { ( nurl_sym_def syms ( nurl_str_cat name `__newsyntax` ) `1` ) }
@@ -42123,7 +42213,12 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             // and this binding owns it, so it is no borrow (agora #193).
             : ~ b __blk_lend F
             ? & | == bck_rhs_tt TT_LBRACE == bck_rhs_tt TT_BACKSLASH == g_blk_tail_eff TT_LPAREN { = __blk_lend != 0 ( nurl_str_len ( mem_blk_tail_deeper_args syms 1073741824 __rhs_r0 ) ) } {}
-            ? & & & != 0 g_auto_drop_strings ( __is_autodrop_enum ptype syms ) != 0 ( nurl_str_len rhs_borrow ) ! __blk_lend
+            // (A call that copied its result is no borrow on the runs it
+            // copied: the binding owns that copy by the call's own bit, agora
+            // #477.)
+            : s __lcp ? == bck_rhs_tt TT_LPAREN ( __call_copied_own store_val ) ``
+            ( nurl_sym_def g_call_cp `bind` __lcp )
+            ? & & & & != 0 g_auto_drop_strings ( __is_autodrop_enum ptype syms ) != 0 ( nurl_str_len rhs_borrow ) ! __blk_lend == 0 ( nurl_str_len __lcp )
             { ( nurl_sym_def syms ( nurl_str_cat name `__borrow` ) `1` ) }
             { ? != 0 g_auto_drop_strings
                 { : s rpt ( __udrop_regty ptype )
@@ -42141,6 +42236,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
                     {}
                 }
                 {} }
+            ( nurl_sym_def g_call_cp `bind` `` )
             // Mark as having new syntax only if mutability was checked
             // TEMPORARILY DISABLED: ? had_mutability_check
             //   { ( nurl_sym_def syms ( nurl_str_cat name `__newsyntax` ) `1` ) }
@@ -43587,8 +43683,12 @@ unsafe @ gen_assign i lex i syms i cg → s {
         } {}
     } {}
     ? __fs_param_copy { = __fs_v ( mem_emit_cloneif cg __fs_ty __fs_v `1` ) } {}
+    // (Where it is copied, the binding's sources keep their own: mem_note_kept
+    // hands nothing of theirs over there, agora #476.)
+    : ~ s __fs_copied ``
     ? & & & ! manual ! __fs_wb ! __fs_moved ! __fs_param_copy
-    { = __fs_v ( mem_emit_cloneif cg __fs_ty __fs_v ( mem_lent_cond syms cg __fs_ty __fs_eff_tt __fs_val ) ) } {}
+    { = __fs_copied ( mem_lent_cond syms cg __fs_ty __fs_eff_tt __fs_val )
+        = __fs_v ( mem_emit_cloneif cg __fs_ty __fs_v __fs_copied ) } {}
     // `= . p f . am g` into memory managed by hand, from a local that still
     // owns (and will drop) its field: the hand-managed struct gets its own
     // copy — the local's field stays readable, as the legacy code reads it.
@@ -43667,7 +43767,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
             ( mem_udrop_flag_set syms cg __fsp __nf )
         } {}
     } {
-        ? & & ( is_ident_tok __fs_tt ) ! __fs_putback ! __fs_param_copy { ( mem_note_kept syms cg __fs_val ! manual ) } {}
+        ? & & ( is_ident_tok __fs_tt ) ! __fs_putback ! __fs_param_copy { ( mem_note_kept syms cg __fs_val ! manual __fs_copied ) } {}
     }
     // `= . s f a`: `a`'s handle lives in `s` from here (the borrow checker's
     // stored-in-owner relation, bck_kill_stored_in) — a struct binding's
@@ -46626,7 +46726,16 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
             ! ( str_contains_word ( nurl_sym_get g_fn_sink ( nurl_sym_get syms `__fn_self_name__` ) ) ( nurl_str_int __fpc_i ) )
         } {}
         ? & & & & ( is_ident_tok fld_first_tt ) ! fld_param_copy ! fld_param_lend | agg_returned == 0 ( nurl_str_len __argk ) ! __fk_rawparam
-        { ( mem_note_kept syms cg fld_first_val T ) } {}
+        // (Where it is copied — fld_lent, read before the move — its
+        // sources keep their own, agora #476. Not a returned option's or
+        // result's payload: one lent on some runs only is not copied there,
+        // the function answers "lent" per call and the value leaves as it is,
+        // its sources' with it.)
+        { ( mem_note_kept syms cg fld_first_val T ? & agg_returned agg_is_wrap `` fld_lent )
+            // (…which handed its sources over, or kept them where it was
+            // copied: gen_ret does not hand them over again — `settled`.)
+            : s __akp ( nurl_sym_get syms `__agg_kept__` )
+            ( nurl_sym_set_deep syms `__agg_kept__` ? == 0 ( nurl_str_len __akp ) ( nurl_str_cat fld_first_val `` ) ( nurl_str_cat3 __akp ` ` fld_first_val ) ) } {}
         // …it is kept once the literal's binding leaves whole (stored,
         // returned, handed on): parked until then (mem_note_rawlit).
         ? & & & & ( is_ident_tok fld_first_tt ) __fk_rawparam ! fld_param_copy ! fld_param_lend == 0 ( nurl_str_len __argk ) {
@@ -53400,7 +53509,7 @@ unsafe @ str_has_index s list i k → b {
 // auto-dropped binding's value moves there: its drop flag clears. A
 // parameter of this function is recorded as KEPT (g_fn_keeps), so a caller
 // hands its value over at the call.
-@ mem_note_kept i syms i cg s name b owned_store → v {
+@ mem_note_kept i syms i cg s name b owned_store s copied → v {
     ? == 0 ( nurl_str_len name ) { ^ v } {}
     // (A binding a call may have lent a value that cannot be copied:
     // judged as a store of that call's result, agora #200.)
@@ -53427,7 +53536,7 @@ unsafe @ str_has_index s list i k → b {
     { ( mem_udrop_flag_set syms cg eo `0` ) } {}
     : s uptr ( mem_udrop_ptr_of syms name )
     ? != 0 ( nurl_str_len uptr )
-    { ( mem_udrop_flag_set syms cg uptr `0` ) ( mem_udrop_alias_lend syms cg uptr ) } {}
+    { ( mem_udrop_flag_set syms cg uptr `0` ) ( mem_udrop_alias_lend syms cg uptr copied ) } {}
 }
 
 // …in a literal passed straight to a call: the value moves into the
@@ -53438,7 +53547,7 @@ unsafe @ str_has_index s list i k → b {
     // (A `sink` parameter is this function's own: as for a local.)
     : i pi ( nurl_sym_word_index syms `__fn_param_names__` name )
     ? & >= pi 0 ! ( str_contains_word ( nurl_sym_get g_fn_sink ( nurl_sym_get syms `__fn_self_name__` ) ) ( nurl_str_int pi ) )
-    { ( mem_note_kept syms cg name T ) ^ v } {}
+    { ( mem_note_kept syms cg name T `` ) ^ v } {}
     : s eo ( nurl_sym_get2 syms name `__enum_owner` )
     ? & != 0 ( nurl_str_len eo ) ( nurl_sym_has_word syms `__user_drops__` eo )
     { ( mem_udrop_flag_clear_if syms cg eo kflag ) } {}
@@ -53448,7 +53557,7 @@ unsafe @ str_has_index s list i k → b {
         : ~ s al ( nurl_sym_get2 syms uptr `__alias` )
         ~ != 0 ( nurl_str_len al ) {
             : s w ( str_first_word al ) = al ( str_skip_word al )
-            ? != 0 ( nurl_sym_len2 syms w `__pname` ) { ( mem_udrop_alias_lend syms cg uptr ) }
+            ? != 0 ( nurl_sym_len2 syms w `__pname` ) { ( mem_udrop_alias_lend syms cg uptr `` ) }
             // (Not the whole the cursor's value is part of: __part_src.)
             { ? ( __src_keeps syms uptr w ) {} { ( mem_udrop_flag_clear_if syms cg w kflag ) } }
         }
@@ -58575,6 +58684,9 @@ unsafe @ lazy_flush i syms i cg → v {
 unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     = g_vctl_seen 0
     ( nurl_cg_reset cg )
+    // (Registers restart here: a copied call result named in the last
+    // function is no result of this one's, agora #477.)
+    ( nurl_sym_def g_call_cp `res` `` )
     // Where this function starts, for a forward scan of its body
     // (__clo_detach_moves).
     : i __fn_hdr_pos ( nurl_lex_cur_start lex )
@@ -66704,7 +66816,7 @@ unsafe @ __jpb_note i cg s up → v {
                     } {}
                     ? ( __part_src syms up iw ) {} {
                         ? | | & == 0 ( nurl_sym_len2 syms iw `__pname` ) == 0 ( nurl_sym_len2 syms iw `__optparam` ) ( __param_owned_slot syms iw ) ( nurl_sym_has_word syms `__user_drops__` iw )
-                        { ( __src_leaves_by_identity syms cg iw up ) } { ( mem_udrop_flag_set syms cg iw `0` ) }
+                        { ( __src_leaves_by_identity syms cg iw up `` ) } { ( mem_udrop_flag_set syms cg iw `0` ) }
                         ( mem_udrop_param_moved syms iw )
                     }
                 }
@@ -73184,11 +73296,11 @@ unsafe @ dyn_method_decltrait s tname s m → s {
         ? vparam {
             // A parameter is the caller's: copy it; a type with no copy
             // is kept (g_fn_keeps), so its caller hands the value over.
-            ? vclone { = vlent ( nurl_str_cat `1` `` ) } { ( mem_note_kept syms cg vname T ) }
+            ? vclone { = vlent ( nurl_str_cat `1` `` ) } { ( mem_note_kept syms cg vname T vlent ) }
         } {
             ? ! vident { = vlent ( mem_lent_cond syms cg ct vtt val ) } {}
             ? vident {
-                ( mem_note_kept syms cg vname T )
+                ( mem_note_kept syms cg vname T vlent )
                 ? ( bck_is_heap_lty vlty ) { ( bck_stash_move vname vline ( nurl_str_cat3 `( dyn ` tname ` … )` ) ) } {}
             } {}
         }
@@ -78783,6 +78895,7 @@ unsafe @ main → i {
     = g_fn_unverified ( nurl_sym_new )
     = g_type_layouts ( nurl_sym_new )
     = g_fn_escapes ( nurl_sym_new )
+    = g_call_cp ( nurl_sym_new )
     = g_fn_ret_view ( nurl_sym_new )
     = g_fn_invoke_only ( nurl_sym_new )
     = g_pending_escape ( nurl_sym_new )
