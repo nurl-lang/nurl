@@ -45,6 +45,7 @@ $ `stdlib/std/floatbits.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/std/arc.nu`
 $ `stdlib/std/mmap.nu`
+$ `stdlib/std/hashmap.nu`
 
 // ── dtypes ──────────────────────────────────────────────────────────
 // Our own codes; the file spells them as strings.
@@ -124,6 +125,7 @@ $ `stdlib/std/mmap.nu`
     ( Vec StTensor ) tensors
     i data_off  // absolute offset of the tensor-data region
     i data_size
+    ( HashMap String i ) ix  // name → index into tensors
 }
 
 // An St is a handle on its state in an Arc (stdlib/std/arc.nu), frozen once
@@ -225,125 +227,103 @@ $ `stdlib/std/mmap.nu`
         ^ ( __st_errs `safetensor: header JSON is not an object` )
     }
 
+    // One pass over the entries. (A lookup per key scans the whole object
+    // per key — quadratic in the tensor count: an expert bank's shard of
+    // 24,576 tensors took seconds to open.)
     : ( Vec StTensor ) tensors ( vec_new [StTensor] )
-    : ( Vec String ) keys ( json_obj_keys root )
-    : ~ b ok T
-    : ~ String err ( string_new )
-    : ~ i ki 0
-    ~ & ok < ki ( vec_len [String] keys ) {
-        ?? ( vec_get [String] keys ki ) {
-            T kn → {
-                : s key ( string_data kn )
-                // `__metadata__` is free-form and carries no tensor.
-                ? ( nurl_str_eq key `__metadata__` ) {} {
-                    ?? ( json_obj_get root key ) {
-                        T e → {
-                            ? ( json_is_obj e ) {} {
-                                = ok F
-                                = err ( string_from `safetensor: tensor entry is not an object` )
-                            }
-                            ? ok {
-                                : ~ i dt -1
-                                ?? ( json_obj_get e `dtype` ) {
-                                    T d → { ? ( json_is_str d ) { = dt ( st_dtype_of ( json_as_str d ) ) } {} }
-                                    F → {}
-                                }
-                                ? < dt 0 {
-                                    = ok F
-                                    = err ( string_from `safetensor: unknown or missing dtype for tensor '` )
-                                    ( string_push_str err key )
-                                    ( string_push_str err `'` )
-                                } {}
-                                : ~ i nd 0
-                                : ~ i d0 1
-                                : ~ i d1 1
-                                : ~ i d2 1
-                                : ~ i d3 1
-                                ? ok {
-                                    ?? ( json_obj_get e `shape` ) {
-                                        T sh → {
-                                            ? ( json_is_arr sh ) {} {
-                                                = ok F
-                                                = err ( string_from `safetensor: shape is not an array` )
-                                            }
-                                            ? ok {
-                                                = nd ( json_arr_len sh )
-                                                ? > nd 4 {
-                                                    = ok F
-                                                    = err ( string_from `safetensor: more than 4 dimensions` )
-                                                } {}
-                                                ? ok {
-                                                    ? > nd 0 { = d0 ( __st_dim sh 0 ) } {}
-                                                    ? > nd 1 { = d1 ( __st_dim sh 1 ) } {}
-                                                    ? > nd 2 { = d2 ( __st_dim sh 2 ) } {}
-                                                    ? > nd 3 { = d3 ( __st_dim sh 3 ) } {}
-                                                    ? | | | < d0 0 < d1 0 < d2 0 < d3 0 {
-                                                        = ok F
-                                                        = err ( string_from `safetensor: shape dimension is not a non-negative integer` )
-                                                    } {}
-                                                } {}
-                                            } {}
-                                        }
-                                        F → {
-                                            = ok F
-                                            = err ( string_from `safetensor: tensor has no shape` )
-                                        }
-                                    }
-                                } {}
-                                : ~ i a -1
-                                : ~ i b -1
-                                ? ok {
-                                    ?? ( json_obj_get e `data_offsets` ) {
-                                        T off → {
-                                            ? & ( json_is_arr off ) == 2 ( json_arr_len off ) {
-                                                = a ( __st_dim off 0 )
-                                                = b ( __st_dim off 1 )
-                                            } {
-                                                = ok F
-                                                = err ( string_from `safetensor: data_offsets is not a 2-element array` )
-                                            }
-                                        }
-                                        F → {
-                                            = ok F
-                                            = err ( string_from `safetensor: tensor has no data_offsets` )
-                                        }
-                                    }
-                                } {}
-                                ? ok {
-                                    : i ne ( __st_nelems d0 d1 d2 d3 nd )
-                                    : i esz ( st_dtype_size dt )
-                                    // nbytes: overflow-checked, like the shape.
-                                    : ~ i nb -1
-                                    ? & >= ne 0 > esz 0 {
-                                        ? <= ne / 9223372036854775807 esz { = nb * ne esz } {}
-                                    } {}
-                                    // Every offset must land inside the DATA region — the
-                                    // region computed from the real file size, not from
-                                    // anything the header claims — and the extent must be
-                                    // exactly what the dtype and shape need. This is the
-                                    // check that turns a lying header into a clean error.
-                                    ? | | | | | < ne 0 < nb 0 < a 0 < b a > b data_size != - b a nb {
-                                        = ok F
-                                        = err ( string_from `safetensor: tensor '` )
-                                        ( string_push_str err key )
-                                        ( string_push_str err `' has data_offsets outside the file or the wrong extent for its dtype/shape` )
-                                    } {
-                                        ( vec_push [StTensor] tensors @ StTensor {
-                                            ( string_from key ) dt nd d0 d1 d2 d3 ne + data_off a nb } )
-                                    }
-                                } {}
-                            } {}
-                        }
-                        F → {}
-                    }
-                }
+    : ( Vec String ) errs ( vec_new [String] )
+    ( json_obj_each root \ s key Json e → v {
+        // `__metadata__` is free-form and carries no tensor.
+        ? ( nurl_str_eq key `__metadata__` ) {} {
+            ?? ( __st_entry key e data_off data_size ) {
+                T t → { ( vec_push [StTensor] tensors t ) }
+                F m → { ( vec_push [String] errs m ) }
             }
-            F → {}
         }
-        = ki + ki 1
+    } )
+    ?? ( vec_get [String] errs 0 ) {
+        T m → { ^ @ !St String { F ( string_from ( string_data m ) ) } }
+        F → {}
     }
-    ? ok {} { ^ @ !St String { F err } }
-    ^ @ !St String { T @ St { ( arc_new [StImpl] @ StImpl { file tensors data_off data_size } ) } }
+    // the name index: st_find_tensor is a hash lookup, not a scan
+    : ( HashMap String i ) ix ( map_with_cap [String i] * 2 ( vec_len [StTensor] tensors ) \ String x → i { ^ ( hash_string ( string_data x ) ) } )
+    : ~ i k 0
+    ~ < k ( vec_len [StTensor] tensors ) {
+        : String nm ( string_from ( string_data . ( vec_at [StTensor] tensors k ) name ) )
+        : ?i _o ( map_set [String i] ix nm k \ String x → i { ^ ( hash_string ( string_data x ) ) } \ String a String b → b { ^ ( eq_string ( string_data a ) ( string_data b ) ) } )
+        = k + k 1
+    }
+    ^ @ !St String { T @ St { ( arc_new [StImpl] @ StImpl { file tensors data_off data_size ix } ) } }
+}
+
+// One header entry `key` → `e` as a tensor, or why it is refused. Every
+// offset must land inside the DATA region (data_size, computed from the
+// real file size, not from anything the header claims), and the extent must
+// be exactly what the dtype and shape need: the check that turns a lying
+// header into a clean error.
+@ __st_entry s key Json e i data_off i data_size → !StTensor String {
+    ? ( json_is_obj e ) {} { ^ ( __st_terr `safetensor: tensor entry is not an object` `` ) }
+    : ~ i dt -1
+    ?? ( json_obj_get e `dtype` ) {
+        T d → { ? ( json_is_str d ) { = dt ( st_dtype_of ( json_as_str d ) ) } {} }
+        F → {}
+    }
+    ? < dt 0 { ^ ( __st_terr `safetensor: unknown or missing dtype for tensor '` key ) } {}
+    : ~ i nd 0
+    : ~ i d0 1
+    : ~ i d1 1
+    : ~ i d2 1
+    : ~ i d3 1
+    ?? ( json_obj_get e `shape` ) {
+        T sh → {
+            ? ( json_is_arr sh ) {} { ^ ( __st_terr `safetensor: shape is not an array` `` ) }
+            = nd ( json_arr_len sh )
+            ? > nd 4 { ^ ( __st_terr `safetensor: more than 4 dimensions` `` ) } {}
+            ? > nd 0 { = d0 ( __st_dim sh 0 ) } {}
+            ? > nd 1 { = d1 ( __st_dim sh 1 ) } {}
+            ? > nd 2 { = d2 ( __st_dim sh 2 ) } {}
+            ? > nd 3 { = d3 ( __st_dim sh 3 ) } {}
+            ? | | | < d0 0 < d1 0 < d2 0 < d3 0 {
+                ^ ( __st_terr `safetensor: shape dimension is not a non-negative integer` `` )
+            } {}
+        }
+        F → { ^ ( __st_terr `safetensor: tensor has no shape` `` ) }
+    }
+    : ~ i a -1
+    : ~ i b -1
+    ?? ( json_obj_get e `data_offsets` ) {
+        T off → {
+            ? & ( json_is_arr off ) == 2 ( json_arr_len off ) {
+                = a ( __st_dim off 0 )
+                = b ( __st_dim off 1 )
+            } { ^ ( __st_terr `safetensor: data_offsets is not a 2-element array` `` ) }
+        }
+        F → { ^ ( __st_terr `safetensor: tensor has no data_offsets` `` ) }
+    }
+    : i ne ( __st_nelems d0 d1 d2 d3 nd )
+    : i esz ( st_dtype_size dt )
+    // nbytes: overflow-checked, like the shape.
+    : ~ i nb -1
+    ? & >= ne 0 > esz 0 {
+        ? <= ne / 9223372036854775807 esz { = nb * ne esz } {}
+    } {}
+    ? | | | | | < ne 0 < nb 0 < a 0 < b a > b data_size != - b a nb {
+        : String m ( string_from `safetensor: tensor '` )
+        ( string_push_str m key )
+        ( string_push_str m `' has data_offsets outside the file or the wrong extent for its dtype/shape` )
+        ^ @ !StTensor String { F m }
+    } {}
+    ^ @ !StTensor String { T @ StTensor { ( string_from key ) dt nd d0 d1 d2 d3 ne + data_off a nb } }
+}
+
+// `msg`, then — when it is not empty — `key` and a closing quote.
+@ __st_terr s msg s key → !StTensor String {
+    : String m ( string_from msg )
+    ? > ( nurl_str_len key ) 0 {
+        ( string_push_str m key )
+        ( string_push_str m `'` )
+    } {}
+    ^ @ !StTensor String { F m }
 }
 
 // ── open / close ────────────────────────────────────────────────────
@@ -388,16 +368,7 @@ $ `stdlib/std/mmap.nu`
 
 @ st_find_tensor St h s name → i {
     : StImpl s ( arc_get [StImpl] . h a )
-    : ~ i k 0
-    : i n ( vec_len [StTensor] . s tensors )
-    ~ < k n {
-        ?? ( vec_get [StTensor] . s tensors k ) {
-            T t → { ? ( nurl_str_eq ( string_data . t name ) name ) { ^ k } {} }
-            F → {}
-        }
-        = k + k 1
-    }
-    ^ -1
+    ^ ?? ( map_get_with [String i s] . s ix name \ s x → i { ^ ( hash_string x ) } \ String a s b → b { ^ ( eq_string ( string_data a ) b ) } ) { T k → k F → -1 }
 }
 
 // The tensor's bytes, straight out of the mapping: a checked view that

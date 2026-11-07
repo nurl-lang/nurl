@@ -70,6 +70,7 @@ $ `deps/gpu/src/gpu.nu`
 $ `deps/gpukit/src/gpukit.nu`
 $ `deps/gpukit/src/dev.nu`
 $ `kernels.nu`
+$ `experts.nu`
 $ `tokenizer.nu`
 $ `stdlib/std/arc.nu`
 $ `stdlib/core/slice.nu`
@@ -329,6 +330,8 @@ $ `stdlib/core/slice.nu`
     b exl3_on
     Exl3Luts exl3
     GkBuf exl3_aux
+    // the routed experts' device cache when they are streamed (experts.nu)
+    LmExp xc
 }
 
 // What a loaded model is and never changes: read without waiting for an
@@ -384,7 +387,7 @@ $ `stdlib/core/slice.nu`
         ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 )
         ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_I64 )
         ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
-        F @ Exl3Luts { ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) } ( gk_buf_none GK_F32 ) } )
+        F @ Exl3Luts { ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) } ( gk_buf_none GK_F32 ) ( xc_none ) } )
 }
 
 @ __lm_handle sink LlmImpl m → Llm {
@@ -1414,9 +1417,17 @@ $ `stdlib/core/slice.nu`
     // The second weight source, when one was named. Opened AFTER the
     // architecture is known: whether the norm weights need the +1 fold depends
     // on it (gemma's GGUF has the fold baked in, the checkpoint does not).
+    // A file or a directory of shards: the tensors of a GGUF model, or —
+    // beside a checkpoint directory — more of its shards (an expert bank
+    // kept in a directory of its own, as fiore-lab ships GLM-5.3's).
     ? > ( nurl_str_len weights ) 0 {
-        ?? ( st_open weights ) {
-            T stp → { = . m st @ ?StSet { T ( stset_one stp ) } }
+        ?? ( stset_open weights ) {
+            T ws → {
+                ?? hfst {
+                    T hs → { = . m st @ ?StSet { T ( stset_join hs ws ) } }
+                    F → { = . m st @ ?StSet { T ws } }
+                }
+            }
             F e → {
                 ^ @ !Llm String { F e }
             }
@@ -1511,9 +1522,11 @@ $ `stdlib/core/slice.nu`
             ( vec_push [LmW] . m w_gate ( __lm_w_none ) )
             ( vec_push [LmW] . m w_up ( __lm_w_none ) )
             ? ( __lm_put ( __lm_upload_layer m gg L `ffn_gate_inp.weight` ) . m gate_inp ) {} { = ok F }
-            ? ( __lm_put ( __lm_upload_layer m gg L `ffn_gate_exps.weight` ) . m gate_exps ) {} { = ok F }
-            ? ( __lm_put ( __lm_upload_layer m gg L `ffn_up_exps.weight` ) . m up_exps ) {} { = ok F }
-            ? ( __lm_put ( __lm_upload_layer m gg L `ffn_down_exps.weight` ) . m down_exps ) {} { = ok F }
+            // the routed experts go up last (__lm_experts): whole when they
+            // fit beside everything else, else through the expert cache
+            ( vec_push [LmW] . m gate_exps ( __lm_w_none ) )
+            ( vec_push [LmW] . m up_exps ( __lm_w_none ) )
+            ( vec_push [LmW] . m down_exps ( __lm_w_none ) )
             ? ( __lm_put ( __lm_upload_layer m gg L `ffn_gate_shexp.weight` ) . m gate_shexp ) {} { = ok F }
             ? ( __lm_put ( __lm_upload_layer m gg L `ffn_up_shexp.weight` ) . m up_shexp ) {} { = ok F }
             ? ( __lm_put ( __lm_upload_layer m gg L `ffn_down_shexp.weight` ) . m down_shexp ) {} { = ok F }
@@ -1712,6 +1725,10 @@ $ `stdlib/core/slice.nu`
             = bi + bi 1
         }
         = . m bias_all ( __lm_scratch_from m nbias bb )
+        ?? ( __lm_experts m ) {
+            T _ → {}
+            F e → { ^ @ !Llm String { F e } }
+        }
     } {}
     ? . m alloc_failed {
         ^ ( __lm_err `nurllama: out of device memory while loading the model — free GPU memory (close other GPU programs) or use a smaller quantisation` )
@@ -1757,7 +1774,26 @@ $ `stdlib/core/slice.nu`
             ( string_push_str pm `ms` )
             ( nurl_eprintln ( string_data pm ) )
         } {}
+        : b loud | . m prof_on ( __lm_verbose )
+        ? & loud . . m xc on {
+            : String xm ( string_from `[experts] slots=` )
+            ( string_push_int xm . . m xc slots )
+            ( string_push_str xm ` loads=` )
+            ( string_push_int xm . . m xc loads )
+            ( string_push_str xm ` hits=` )
+            ( string_push_int xm . . m xc hits )
+            ( string_push_str xm ` read=` )
+            ( string_push_int xm / . . m xc load_bytes 1048576 )
+            ( string_push_str xm `MiB in ` )
+            ( string_push_int xm / . . m xc load_ns 1000000 )
+            ( string_push_str xm `ms` )
+            ( nurl_eprintln ( string_data xm ) )
+        } {}
     }
+}
+
+@ __lm_verbose → b {
+    ?? ( env_get `NURLLAMA_VERBOSE` ) { T v → { ^ T } F → { ^ F } }
 }
 
 // Early release (optional): the model's last owner gives everything back.
@@ -1956,6 +1992,484 @@ $ `stdlib/core/slice.nu`
         ( vec_push [f] wts w )
         = t2 + t2 1
     }
+}
+
+// ── routed experts streamed (experts.nu, Agora #521) ──────────────────
+//
+// A MoE layer's routed experts go up whole, as every other weight, when
+// they fit the device beside everything else. When they do not — or when
+// NURLLAMA_EXPERT_CACHE (MiB) / NURLLAMA_EXPERT_SLOTS (experts) says how
+// much to give them — they live in the expert cache: `slots` experts on the
+// device, loaded from the file when the router picks one that is not there.
+// EXL3 experts always go through it (sized to hold all of them when they
+// fit): their tensor groups are per expert, never one stack.
+
+// Is layer L a Mixture-of-Experts layer?
+@ __lm_is_moe inout LlmImpl m i L → b { ^ & > . m n_expert 0 >= L . m first_dense }
+
+// Projection p (0 gate, 1 up, 2 down) of an expert is [rows × cols].
+@ __lm_xp_rows inout LlmImpl m i p → i { ^ ? == p 2 . m n_embd . m moe_ff }
+
+@ __lm_xp_cols inout LlmImpl m i p → i { ^ ? == p 2 . m moe_ff . m n_embd }
+
+@ __lm_xp_gguf i p → s { ^ ? == p 0 `ffn_gate_exps.weight` ? == p 1 `ffn_up_exps.weight` `ffn_down_exps.weight` }
+
+// The checkpoint name of layer L's expert e's projection p, without a suffix.
+@ __lm_xp_prefix i L i e i p → String {
+    : String nm ( string_from `model.layers.` )
+    ( string_push_int nm L )
+    ( string_push_str nm `.mlp.experts.` )
+    ( string_push_int nm e )
+    ( string_push_str nm ? == p 0 `.gate_proj` ? == p 1 `.up_proj` `.down_proj` )
+    ^ nm
+}
+
+// A weight of type gt, nb bytes at byte `off` of `blk` (as bytes, and for
+// f32 / f16 as floats / halves too).
+@ __lm_w_at GkBuf blk i off i gt i nb → LkW {
+    ? == gt 0 { ^ @ LkW { gt ( gk_bbuf_of blk off nb ) ( gk_buf_view blk / off 4 / nb 4 ) ( gk_hbuf_none ) ( gk_buf_none GK_F32 ) } } {}
+    ? == gt 1 { ^ @ LkW { gt ( gk_bbuf_of blk off nb ) ( gk_buf_none GK_F32 ) ( gk_hbuf_of blk off / nb 2 F ) ( gk_buf_none GK_F32 ) } } {}
+    ^ @ LkW { gt ( gk_bbuf_of blk off nb ) ( gk_buf_none GK_F32 ) ( gk_hbuf_none ) ( gk_buf_none GK_F32 ) }
+}
+
+@ __lm_env_int s name i def → i {
+    ?? ( env_get name ) {
+        T v → {
+            ?? ( string_to_int v ) {
+                T x → { ? > x 0 { ^ x } {} }
+                F _ → {}
+            }
+        }
+        F → {}
+    }
+    ^ def
+}
+
+// The routed experts of every MoE layer: whole when they fit, else the
+// expert cache (see above). Runs once the rest of the model is up, so what
+// is free is what they can have.
+@ __lm_experts inout LlmImpl m → !v String {
+    : Gguf gg ( Gguf_share . m gg )
+    : i nl . m n_layer
+    : i ne . m n_expert
+    : i L0 . m first_dense
+    : i nmoe - nl L0
+    ? < nmoe 1 { ^ @ !v String { T 0 } } {}
+    // where they are: a checkpoint's EXL3 groups or tensors, else the GGUF
+    : ~ i src XC_GGUF
+    ?? . m st {
+        T ss → {
+            : String pre ( __lm_xp_prefix L0 0 0 )
+            ? | >= ( _exl3_part ss ( string_data pre ) -1 `trellis` ) 0 >= ( _exl3_part ss ( string_data pre ) 0 `trellis` ) 0 {
+                = src XC_EXL3
+            } {
+                // per expert, or transformers 5's fused stacks
+                : String w ( string_clone pre )
+                ( string_push_str w `.weight` )
+                : String fz ( string_from `model.layers.` )
+                ( string_push_int fz L0 )
+                ( string_push_str fz `.mlp.experts.gate_up_proj` )
+                ? | >= ( stset_find ss ( string_data w ) ) 0 >= ( stset_find ss ( string_data fz ) ) 0 { = src XC_ST } {}
+            }
+        }
+        F → {}
+    }
+    // device bytes an expert's projection takes (the largest of any layer),
+    // and whether every layer's has the one type the batched matvec reads
+    : ( Vec i ) stride ( vec_new [i] )
+    : ( Vec i ) sstride ( vec_new [i] )
+    : ~ b batched != src XC_EXL3
+    : ~ i p 0
+    ~ < p 3 {
+        : i rows ( __lm_xp_rows m p )
+        : i cols ( __lm_xp_cols m p )
+        : ~ i st_b * * rows cols 4
+        : ~ i sst 0
+        ? == src XC_EXL3 {
+            // a K-bit trellis: K/8 bytes a weight, K ≤ 8
+            = st_b * ( lk_exl3_pad rows ) ( lk_exl3_pad cols )
+            = sst + ( lk_exl3_pad rows ) ( lk_exl3_pad cols )
+        } {}
+        ? == src XC_GGUF {
+            = st_b 0
+            : ~ i gt0 -1
+            : ~ i L L0
+            ~ < L nl {
+                : i ti ( gguf_find_tensor gg ( string_data ( __lm_tname L ( __lm_xp_gguf p ) ) ) )
+                ? < ti 0 { ^ @ !v String { F ( string_from `nurllama: a MoE layer has no routed expert stack` ) } } {}
+                : GgufTensor t ( vec_at [GgufTensor] ( gguf_tensors gg ) ti )
+                : i gt ? ( __lm_native . t gtype ) . t gtype 0
+                : i nbe ? ( __lm_native . t gtype ) / . t nbytes ne * * rows cols 4
+                ? > nbe st_b { = st_b nbe } {}
+                ? < gt0 0 { = gt0 gt } {}
+                ? != gt gt0 { = batched F } {}
+                = L + L 1
+            }
+            ? ( lk_experts_supported gt0 ) {} { = batched F }
+        } {}
+        ( vec_push [i] stride st_b )
+        ( vec_push [i] sstride sst )
+        = p + p 1
+    }
+    : i per + + + ( vec_at [i] stride 0 ) ( vec_at [i] stride 1 ) ( vec_at [i] stride 2 ) * 2 + + ( vec_at [i] sstride 0 ) ( vec_at [i] sstride 1 ) ( vec_at [i] sstride 2 )
+    : i all * nmoe ne
+    : i free ( gk_mem_free . m kit )
+    : i margin ? > / free 10 536870912 / free 10 536870912
+    : ~ i budget - free margin
+    : i forced ( __lm_env_int `NURLLAMA_EXPERT_SLOTS` 0 )
+    : i mib ( __lm_env_int `NURLLAMA_EXPERT_CACHE` 0 )
+    ? > mib 0 { = budget * mib 1048576 } {}
+    : ~ i slots ? > per 0 / budget per 0
+    ? > forced 0 { = slots forced } {
+        // they all fit: up whole, as any weight (EXL3 still per expert)
+        ? & != src XC_EXL3 & == mib 0 <= * all per budget {
+            : ~ i L L0
+            ~ < L nl {
+                : b _g ( vec_set [LmW] . m gate_exps L ( __lm_upload_layer m gg L `ffn_gate_exps.weight` ) )
+                : b _u ( vec_set [LmW] . m up_exps L ( __lm_upload_layer m gg L `ffn_up_exps.weight` ) )
+                : b _d ( vec_set [LmW] . m down_exps L ( __lm_upload_layer m gg L `ffn_down_exps.weight` ) )
+                ? & & ( __lm_w_ok ( vec_at [LmW] . m gate_exps L ) ) ( __lm_w_ok ( vec_at [LmW] . m up_exps L ) ) ( __lm_w_ok ( vec_at [LmW] . m down_exps L ) ) {} {
+                    ^ @ !v String { F ( string_from ? . m alloc_failed `nurllama: out of device memory while loading the experts` `nurllama: a MoE layer's routed experts did not load` ) }
+                }
+                = L + L 1
+            }
+            ^ @ !v String { T 0 }
+        } {}
+        ? < slots . m n_expert_used {
+            : String msg ( string_from `nurllama: the device has room for ` )
+            ( string_push_int msg slots )
+            ( string_push_str msg ` routed experts beside the rest of the model; a token needs ` )
+            ( string_push_int msg . m n_expert_used )
+            ( string_push_str msg ` (one is ` )
+            ( string_push_int msg / per 1048576 )
+            ( string_push_str msg ` MiB) — free device memory or set NURLLAMA_EXPERT_CACHE (MiB)` )
+            ^ @ !v String { F msg }
+        } {}
+    }
+    ? > slots all { = slots all } {}
+    // the cache
+    : ~ LmExp c ( xc_none )
+    = . c on T
+    = . c src src
+    = . c batched batched
+    ( xc_tables c slots * nl ne )
+    = p 0
+    ~ < p 3 {
+        : i sb ( vec_at [i] stride p )
+        : GkBuf blk ( __lm_block m * slots sb )
+        ? ( gk_buf_ok blk ) {} { ^ @ !v String { F ( string_from `nurllama: out of device memory for the expert cache — lower NURLLAMA_EXPERT_CACHE` ) } }
+        ( vec_push [i] . c stride sb )
+        ( vec_push [i] . c sstride ( vec_at [i] sstride p ) )
+        : i ssb * 2 * slots ( vec_at [i] sstride p )
+        ? > ssb 0 {
+            : GkBuf sblk ( __lm_block m ssb )
+            ? ( gk_buf_ok sblk ) {} { ^ @ !v String { F ( string_from `nurllama: out of device memory for the expert cache — lower NURLLAMA_EXPERT_CACHE` ) } }
+            ( vec_push [GkBuf] . c spool sblk )
+        } { ( vec_push [GkBuf] . c spool ( gk_buf_none GK_F32 ) ) }
+        // batched: the slots as one stack of the layers' (one) type
+        : ~ i gtp 0
+        ? == src XC_GGUF {
+            : GgufTensor t ( vec_at [GgufTensor] ( gguf_tensors gg ) ( gguf_find_tensor gg ( string_data ( __lm_tname L0 ( __lm_xp_gguf p ) ) ) ) )
+            = gtp ? ( __lm_native . t gtype ) . t gtype 0
+        } {}
+        ( vec_push [LkW] . c poolw ( __lm_w_at blk 0 gtp * slots sb ) )
+        ( vec_push [GkBuf] . c pool blk )
+        = p + p 1
+    }
+    : i smax ? > ( vec_at [i] stride 0 ) ( vec_at [i] stride 2 ) ( vec_at [i] stride 0 ) ( vec_at [i] stride 2 )
+    = . c stage ( __lm_block m smax )
+    ? == src XC_EXL3 {
+        ? . m exl3_on {} {
+            = . m exl3 ( exl3_luts . m kit )
+            = . m exl3_on T
+        }
+        = . c aux ( __lm_scratch m + ( lk_exl3_pad . m n_embd ) ( lk_exl3_pad . m moe_ff ) )
+    } {}
+    ? . m alloc_failed { ^ @ !v String { F ( string_from `nurllama: out of device memory for the expert cache — lower NURLLAMA_EXPERT_CACHE` ) } } {}
+    = . m xc c
+    ?? ( env_get `NURLLAMA_VERBOSE` ) {
+        T v → {
+            : String msg ( string_from `[nurllama] routed experts: ` )
+            ( string_push_int msg slots )
+            ( string_push_str msg ` of ` )
+            ( string_push_int msg all )
+            ( string_push_str msg ` on the device (` )
+            ( string_push_int msg / * slots per 1048576 )
+            ( string_push_str msg ` MiB), the rest loaded on demand` )
+            ( nurl_eprintln ( string_data msg ) )
+        }
+        F → {}
+    }
+    ^ @ !v String { T 0 }
+}
+
+// Load layer L's expert e into slot s: its three projections, each in the
+// form the slot holds. F (and a word on stderr) when the file fails it.
+@ __lm_xp_load inout LlmImpl m i L i e i s → b {
+    : i t0 ( monotonic_ns )
+    : Gguf gg ( Gguf_share . m gg )
+    : ~ b ok T
+    : ~ i p 0
+    ~ & ok < p 3 {
+        = ok ( __lm_xp_load1 m gg L e p s )
+        = p + p 1
+    }
+    = . . m xc load_ns + . . m xc load_ns - ( monotonic_ns ) t0
+    ? ok {} {
+        : String msg ( string_from `nurllama: routed expert ` )
+        ( string_push_int msg e )
+        ( string_push_str msg ` of layer ` )
+        ( string_push_int msg L )
+        ( string_push_str msg ` did not load` )
+        ( nurl_eprintln ( string_data msg ) )
+    }
+    ^ ok
+}
+
+@ __lm_xp_load1 inout LlmImpl m Gguf gg i L i e i p i s → b {
+    : GpuKit kit . m kit
+    : i rows ( __lm_xp_rows m p )
+    : i cols ( __lm_xp_cols m p )
+    : i sb ( vec_at [i] . . m xc stride p )
+    : i off * s sb
+    : i src . . m xc src
+    ? == src XC_EXL3 {
+        : StSet ss ?? . m st { T s0 → s0 F → { ^ F } }
+        : String pre ( __lm_xp_prefix L e p )
+        // stored at its padded widths (lk_exl3_pad)
+        ?? ( exl3_host ss ( string_data pre ) ( lk_exl3_pad cols ) ( lk_exl3_pad rows ) ) {
+            T hx → {
+                : i nq ( vec_len [u] . hx q )
+                : i nh / ( vec_len [u] . hx h ) 2
+                ? | > nq sb > nh ( vec_at [i] . . m xc sstride p ) { ^ F } {}
+                : GkBBuf q ( gk_bbuf_of ( vec_at [GkBuf] . . m xc pool p ) off nq )
+                : GkHBuf h ( gk_hbuf_of ( vec_at [GkBuf] . . m xc spool p ) * * s ( vec_at [i] . . m xc sstride p ) 2 nh F )
+                ? & ( gk_bbuf_upload_bytes kit q ( slice_from_vec [u] . hx q ) ) ( gk_hbuf_upload_bytes kit h ( slice_from_vec [u] . hx h ) ) {} { ^ F }
+                = . . m xc load_bytes + . . m xc load_bytes + nq * 2 nh
+                : i cb / - . hx gt LK_EXL3 100
+                : GkBuf lut ? == cb 2 . . m exl3 cb2 ? == cb 1 . . m exl3 cb1 . . m exl3 cb0
+                : b _w ( vec_set [LkW] . . m xc slotw + * s 3 p @ LkW { . hx gt q lut h . . m xc aux } )
+                ^ T
+            }
+            F msg → {
+                ( nurl_eprintln ( string_data msg ) )
+                ^ F
+            }
+        }
+    } {}
+    : i nf * rows cols
+    ? == src XC_ST {
+        // a checkpoint's expert as f32: its own tensor, or its part of
+        // transformers 5's fused gate_up_proj / down_proj
+        : StSet ss ?? . m st { T s0 → s0 F → { ^ F } }
+        : String pre ( __lm_xp_prefix L e p )
+        ( string_push_str pre `.weight` )
+        : ~ i h ( stset_find ss ( string_data pre ) )
+        : ~ i first 0
+        ? < h 0 {
+            : String fn ( string_from `model.layers.` )
+            ( string_push_int fn L )
+            ( string_push_str fn ? == p 2 `.mlp.experts.down_proj` `.mlp.experts.gate_up_proj` )
+            = h ( stset_find ss ( string_data fn ) )
+            = first ? == p 2 * e nf + * * e 2 nf ? == p 1 nf 0
+        } {}
+        ? < h 0 { ^ F } {}
+        ?? ( stset_dequant_range ss h first nf ) {
+            T raw → { ^ ( __lm_xp_put m raw s p ) }
+            F _ → { ^ F }
+        }
+    } {}
+    // a GGUF stack: the expert's range of it
+    : i ti ( gguf_find_tensor gg ( string_data ( __lm_tname L ( __lm_xp_gguf p ) ) ) )
+    ? < ti 0 { ^ F } {}
+    : GgufTensor t ( vec_at [GgufTensor] ( gguf_tensors gg ) ti )
+    : i gt . t gtype
+    ? ( __lm_native gt ) {} {
+        ?? ( gguf_dequant_range gg ti * e nf nf ) {
+            T raw → { ^ ( __lm_xp_put m raw s p ) }
+            F _ → { ^ F }
+        }
+    }
+    : i nbe / . t nbytes . m n_expert
+    ? > nbe sb { ^ F } {}
+    : ( Slice u ) bytes ( slice_window [u] ( gguf_tensor_bytes gg t ) * e nbe nbe )
+    : GkBuf pool ( vec_at [GkBuf] . . m xc pool p )
+    = . . m xc load_bytes + . . m xc load_bytes nbe
+    ? & == gt 8 == % cols 32 0 {
+        // q8_0: up as it is stored, then repacked into the slot (the
+        // layout every q8_0 kernel reads — __lm_upload)
+        : GkBuf stg . . m xc stage
+        ? ( gk_hbuf_upload_bytes kit ( gk_hbuf_of stg 0 / nbe 2 F ) bytes ) {} { ^ F }
+        : ~ ( Vec GkLaunch ) rp ( vec_new [GkLaunch] )
+        : b ok & ( lk_q8_repack kit ( gk_bbuf_of stg 0 nbe ) ( gk_bbuf_of pool off nbe ) / cols 32 / nbe 34 rp ) ( lk_run rp )
+        : b _s ( gk_sync kit )
+        ? ok {} { ^ F }
+    } {
+        ? ( gk_hbuf_upload_bytes kit ( gk_hbuf_of pool off / nbe 2 F ) bytes ) {} { ^ F }
+    }
+    : b _w ( vec_set [LkW] . . m xc slotw + * s 3 p ( __lm_w_at pool off gt nbe ) )
+    ^ T
+}
+
+// f32 bytes `raw` into slot s's projection p.
+@ __lm_xp_put inout LlmImpl m ( Vec u ) raw i s i p → b {
+    : i nb ( vec_len [u] raw )
+    : i sb ( vec_at [i] . . m xc stride p )
+    ? > nb sb { ^ F } {}
+    : GkBuf pool ( vec_at [GkBuf] . . m xc pool p )
+    ? ( gk_dbuf_upload_bytes . m kit ( gk_buf_view pool / * s sb 4 / nb 4 ) ( slice_from_vec [u] raw ) ) {} { ^ F }
+    = . . m xc load_bytes + . . m xc load_bytes nb
+    : b _w ( vec_set [LkW] . . m xc slotw + * s 3 p ( __lm_w_at pool * s sb 0 nb ) )
+    ^ T
+}
+
+// The slot of layer L's expert e, loaded when it is not on the device; -1
+// when it cannot be (a load failed). A full cache whose slots the pass
+// being recorded reads runs that pass first (keep: see __lm_flush).
+@ __lm_xp_slot inout LlmImpl m inout ( Vec GkLaunch ) p inout b keep i L i e → i {
+    : i key + * L . m n_expert e
+    : i s0 ( xc_find . m xc key )
+    ? >= s0 0 { ^ s0 } {}
+    : ~ i v ( xc_victim . m xc )
+    ? < v 0 {
+        ( __lm_flush m p keep )
+        : b _s ( gk_sync . m kit )
+        ( xc_next_pass . m xc )
+        = v ( xc_victim . m xc )
+    } {}
+    ? < v 0 { ^ -1 } {}
+    // the slot may still be read by launches already run but not finished
+    : b _s2 ( gk_sync . m kit )
+    ? ( __lm_xp_load m L e v ) {} { ^ -1 }
+    ( xc_bind . m xc v key )
+    ^ v
+}
+
+// Layer L's routed experts through the cache, the router logits for the
+// count positions in rlogitsd: their weighted down-projections land on xd.
+@ __lm_moe_cached inout LlmImpl m inout ( Vec GkLaunch ) p i L i count inout b keep → b {
+    : GpuKit kit . m kit
+    : i ne . m n_embd
+    : i ff . m moe_ff
+    : i K . m n_expert_used
+    : i nasn * count K
+    : ~ b ok T
+    ? . . m xc batched {
+        // the device router writes the assignment table; the host reads its
+        // experts, puts them in slots — in rounds when they are more than
+        // the slots — and points the table at the slots. An assignment not
+        // in this round is -1 (skipped); the scatter runs once, after.
+        = ok & ok ( lk_moe_route kit . m rlogitsd . m bias_all * L . m n_expert . m moe_expid . m moe_wts
+        . m n_expert . m n_group . m n_group_used K . m route_scale ? . m weights_norm 1 0 count p )
+        ( __lm_flush m p keep )
+        : b _s ( gk_sync kit )
+        ( xc_next_pass . m xc )
+        : ( Vec i ) ids ( vec_zeroed [i] ( gk_buf_len . m moe_expid ) )
+        ? ( gk_dbuf_download_i kit . m moe_expid ids ) {} { ^ F }
+        // per expert of this layer: 0 not wanted, 1 wanted, 2 in this round
+        // (its slot in `slot`), 3 done
+        : ( Vec i ) state ( vec_zeroed [i] . m n_expert )
+        : ( Vec i ) slot ( vec_zeroed [i] . m n_expert )
+        : ~ i left 0
+        : ~ i a 0
+        ~ < a nasn {
+            : i e ( vec_at [i] ids a )
+            ? == ( vec_at [i] state e ) 0 {
+                : b _a ( vec_set [i] state e 1 )
+                = left + left 1
+            } {}
+            = a + a 1
+        }
+        ~ & ok > left 0 {
+            // the round: the wanted experts already on the device, then as
+            // many more as there are slots this pass has not used
+            : ~ i e 0
+            ~ < e . m n_expert {
+                ? == ( vec_at [i] state e ) 1 {
+                    : i s ( xc_find . m xc + * L . m n_expert e )
+                    ? >= s 0 {
+                        : b _a ( vec_set [i] state e 2 )
+                        : b _b ( vec_set [i] slot e s )
+                    } {}
+                } {}
+                = e + e 1
+            }
+            = e 0
+            ~ & ok < e . m n_expert {
+                ? == ( vec_at [i] state e ) 1 {
+                    : i v ( xc_victim . m xc )
+                    ? >= v 0 {
+                        ? ( __lm_xp_load m L e v ) {} { = ok F }
+                        ( xc_bind . m xc v + * L . m n_expert e )
+                        : b _a ( vec_set [i] state e 2 )
+                        : b _b ( vec_set [i] slot e v )
+                    } { = e . m n_expert }
+                } {}
+                = e + 1 e
+            }
+            : ( Vec i ) map ( vec_zeroed [i] ( vec_len [i] ids ) )
+            = a 0
+            ~ < a nasn {
+                : i e2 ( vec_at [i] ids a )
+                : b _m ( vec_set [i] map a ? == ( vec_at [i] state e2 ) 2 ( vec_at [i] slot e2 ) -1 )
+                = a + a 1
+            }
+            ? ( gk_dbuf_upload_i kit . m moe_expid map ) {} { = ok F }
+            : LkW wg ( vec_at [LkW] . . m xc poolw 0 )
+            : LkW wu ( vec_at [LkW] . . m xc poolw 1 )
+            : LkW wdn ( vec_at [LkW] . . m xc poolw 2 )
+            = ok & ok ( lk_matvec_experts kit wg . m xnd ne . m moe_gate ff . m moe_expid ff ne K nasn p )
+            = ok & ok ( lk_matvec_experts kit wu . m xnd ne . m moe_up ff . m moe_expid ff ne K nasn p )
+            = ok & ok ( lk_silumul kit . m moe_gate . m moe_up * nasn ff p )
+            = ok & ok ( lk_matvec_experts kit wdn . m moe_gate ff . m moe_downb ne . m moe_expid ne ff 1 nasn p )
+            = e 0
+            ~ < e . m n_expert {
+                ? == ( vec_at [i] state e ) 2 {
+                    : b _a ( vec_set [i] state e 3 )
+                    = left - left 1
+                } {}
+                = e + e 1
+            }
+            ? > left 0 {
+                // the next round rewrites the table and may reuse these slots
+                ( __lm_flush m p keep )
+                : b _s2 ( gk_sync kit )
+                ( xc_next_pass . m xc )
+            } {}
+        }
+        = ok & ok ( lk_moe_scatter kit . m moe_downb . m moe_wts . m xd K ne count p )
+        ^ ok
+    } {}
+    // one matvec per (position, expert), routed on the host — the
+    // all-resident fallback's arithmetic, over the slots' weights
+    ( __lm_flush m p keep )
+    : b _d1 ( gk_dbuf_download_host kit . m rlogitsd . m router_host )
+    ( xc_next_pass . m xc )
+    : ~ i b2 0
+    ~ & ok < b2 count {
+        : ( Vec i ) sel ( vec_new [i] )
+        : ( Vec f ) wts ( vec_new [f] )
+        ( __lm_moe_route m L b2 sel wts )
+        : ~ i j 0
+        ~ & ok < j ( vec_len [i] sel ) {
+            : i e2 ( vec_at [i] sel j )
+            : f w ( vec_at [f] wts j )
+            : i s ( __lm_xp_slot m p keep L e2 )
+            ? < s 0 { = ok F } {
+                : LmW wg @ LmW { ( mem_dup ( vec_at [LkW] . . m xc slotw * s 3 ) ) 0 }
+                : LmW wu @ LmW { ( mem_dup ( vec_at [LkW] . . m xc slotw + * s 3 1 ) ) 0 }
+                : LmW wdn @ LmW { ( mem_dup ( vec_at [LkW] . . m xc slotw + * s 3 2 ) ) 0 }
+                = ok & ok ( __lm_mv m wg 0 . m xnd * b2 ne . m gd ff ne 1 p )
+                = ok & ok ( __lm_mv m wu 0 . m xnd * b2 ne . m ud ff ne 1 p )
+                = ok & ok ( lk_silumul kit . m gd . m ud ff p )
+                = ok & ok ( __lm_mv m wdn 0 . m gd 0 . m moe_outd ne ff 1 p )
+                = ok & ok ( lk_axpy kit . m xd * b2 ne . m moe_outd 0 w ne p )
+            }
+            = j + j 1
+        }
+        = b2 + b2 1
+    }
+    ^ ok
 }
 
 // A matvec of weight `w` (its range starting `w.off` bytes in), the dispatch
@@ -2218,7 +2732,7 @@ $ `stdlib/core/slice.nu`
 
         // ── FFN ──
         : i _pf ( __lm_prof_mark m p keep )
-        ? ( __lm_w_ok ( vec_at [LmW] . m gate_exps L ) ) {
+        ? ( __lm_is_moe m L ) {
             // MoE (llada2): shared expert over the whole batch, then the
             // fp32-sigmoid router picks n_expert_used experts per position
             // out of the fused 3D expert tensors — each expert is a row
@@ -2240,7 +2754,10 @@ $ `stdlib/core/slice.nu`
             : LmW wu ( vec_at [LmW] . m up_exps L )
             : LmW wdn ( vec_at [LmW] . m down_exps L )
             : i K . m n_expert_used
-            ? & ( lk_experts_supported . . wg w gt ) & ( lk_experts_supported . . wu w gt ) ( lk_experts_supported . . wdn w gt ) {
+            ? . . m xc on {
+                // streamed: through the expert cache
+                = ok & ok ( __lm_moe_cached m p L count keep )
+            } ? & ( lk_experts_supported . . wg w gt ) & ( lk_experts_supported . . wu w gt ) ( lk_experts_supported . . wdn w gt ) {
                 // ── fully on-device path ──────────────────────────────
                 // The router runs on the GPU (one thread per position,
                 // writing the assignment table straight to device memory),
@@ -2303,7 +2820,7 @@ $ `stdlib/core/slice.nu`
             = ok & ok ( lk_addv kit . m xd fbuf * ne count p )
         }
         ? . m prof_on {
-            ? ( __lm_w_ok ( vec_at [LmW] . m gate_exps L ) )
+            ? ( __lm_is_moe m L )
             { = . m prof_moe_ns + . m prof_moe_ns - ( __lm_prof_mark m p keep ) _pf }
             { = . m prof_dense_ns + . m prof_dense_ns - ( __lm_prof_mark m p keep ) _pf }
         } {}

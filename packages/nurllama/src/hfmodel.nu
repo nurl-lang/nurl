@@ -66,6 +66,61 @@ $ `deps/safetensor/src/safetensor.nu`
     ^ ( st_dequant_range ( stset_file ss h ) & h 4294967295 first count )
 }
 
+// Every .safetensors shard in directory `dir`, or why not.
+@ stset_dir s dir → !StSet String {
+    : ( Vec St ) files ( vec_new [St] )
+    ?? ( dir_list dir ) {
+        T es → {
+            : ~ i k 0
+            ~ < k ( vec_len [String] es ) {
+                : s en ( string_data ( vec_at [String] es k ) )
+                ? != 0 ( nurl_str_ends en `.safetensors` ) {
+                    : String p ( __hf_path dir en )
+                    ?? ( st_open ( string_data p ) ) {
+                        T s0 → { ( vec_push [St] files s0 ) }
+                        F e → { ^ @ !StSet String { F e } }
+                    }
+                } {}
+                = k + k 1
+            }
+        }
+        F _ → {
+            : String m ( string_from `cannot list the directory ` )
+            ( string_push_str m dir )
+            ^ @ !StSet String { F m }
+        }
+    }
+    ^ @ !StSet String { T @ StSet { files } }
+}
+
+// The weights at `path`: a safetensors file, or a directory of shards.
+@ stset_open s path → !StSet String {
+    ?? ( dir_list path ) {
+        T _ → { ^ ( stset_dir path ) }
+        F _ → {}
+    }
+    ?? ( st_open path ) {
+        T s0 → { ^ @ !StSet String { T ( stset_one s0 ) } }
+        F e → { ^ @ !StSet String { F e } }
+    }
+}
+
+// `b`'s shards after `a`'s, as one set (a tensor in both is a's).
+@ stset_join sink StSet a sink StSet b → StSet {
+    : ( Vec St ) files ( vec_new [St] )
+    : ~ i k 0
+    ~ < k ( vec_len [St] . a files ) {
+        ( vec_push [St] files ( St_share ( vec_at [St] . a files k ) ) )
+        = k + k 1
+    }
+    = k 0
+    ~ < k ( vec_len [St] . b files ) {
+        ( vec_push [St] files ( St_share ( vec_at [St] . b files k ) ) )
+        = k + k 1
+    }
+    ^ @ StSet { files }
+}
+
 // The largest (k + n) of any EXL3 linear in the set — padded widths, from
 // its trellis shape — which sizes the scratch every EXL3 matvec shares.
 @ stset_exl3_span StSet ss → i {
@@ -384,24 +439,7 @@ $ `deps/safetensor/src/safetensor.nu`
 
     // the shards: every .safetensors in the directory (the index only says
     // what they say)
-    : ( Vec St ) files ( vec_new [St] )
-    ?? ( dir_list dir ) {
-        T es → {
-            : ~ i k 0
-            ~ < k ( vec_len [String] es ) {
-                : s en ( string_data ( vec_at [String] es k ) )
-                ? != 0 ( nurl_str_ends en `.safetensors` ) {
-                    : String p ( __hf_path dir en )
-                    ?? ( st_open ( string_data p ) ) {
-                        T s0 → { ( vec_push [St] files s0 ) }
-                        F e → { ^ @ !HfModel String { F e } }
-                    }
-                } {}
-                = k + k 1
-            }
-        }
-        F _ → { ^ ( __hf_err dir `cannot list the directory` ) }
-    }
+    : StSet shards ?? ( stset_dir dir ) { T s0 → s0 F e → { ^ @ !HfModel String { F e } } }
 
     : i n_layer ( __hf_i cfg `num_hidden_layers` 0 )
     : i n_embd ( __hf_i cfg `hidden_size` 0 )
@@ -487,7 +525,7 @@ $ `deps/safetensor/src/safetensor.nu`
 
     : ( Vec u ) bytes ( gw_finish w )
     : Gguf meta ?? ( gguf_parse_bytes bytes ) { T g → g F e → { ^ @ !HfModel String { F e } } }
-    ^ @ !HfModel String { T @ HfModel { meta @ StSet { files } } }
+    ^ @ !HfModel String { T @ HfModel { meta shards } }
 }
 
 // A model's GGUF metadata, whatever it is stored as: a GGUF file's own, or

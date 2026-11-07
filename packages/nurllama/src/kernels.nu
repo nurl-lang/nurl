@@ -1690,10 +1690,13 @@ if (gid < rows) {
 // x — xk = K for the gate/up projections (whose input is the per-POSITION
 // activation) and 1 for the down projection (the per-ASSIGNMENT hidden).
 // The 3D expert tensor is expert-major: expert e's row r is weight row
-// (e·rows + r). No atomics, no shared memory.
+// (e·rows + r). No atomics, no shared memory. An assignment whose expert
+// id is negative is skipped — its rows are left as they were — so a layer
+// can run its assignments in rounds, a round's experts in the streamed
+// expert cache's slots (model.nu, "routed experts streamed").
 
 @ __lk_mv_exp_f32 → s {
-    ^ `if (gid < rows * n_assign) {
+    ^ `if (gid < rows * n_assign && LD(expid, gid / rows) >= 0) {
     long long a = gid / rows;
     long long r = gid % rows;
     long long e = LD(expid, a);
@@ -1706,7 +1709,7 @@ if (gid < rows) {
 }
 
 @ __lk_mv_exp_q8_0 → String {
-    ^ ( __lk_cat3 `if (gid < rows * n_assign) {
+    ^ ( __lk_cat3 `if (gid < rows * n_assign && LD(expid, gid / rows) >= 0) {
     long long a = gid / rows;
     long long r = ( LD(expid, gid / rows) * rows ) + gid % rows;
     long long x0 = (a / xk) * xs;

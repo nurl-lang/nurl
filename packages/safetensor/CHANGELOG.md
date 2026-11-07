@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.2] — unreleased
+
+### Performance
+
+- A file is opened in one pass over its header: every entry used to be
+  looked up by name in the parsed JSON — a scan of the whole object per
+  entry, quadratic in the tensor count (an expert-bank shard of 24,576
+  tensors took seconds to open). The same checks, the same errors.
+- `st_find_tensor` hashes the name (a table built at open) instead of
+  scanning every tensor's: a model of 76 such shards looked a tensor up
+  among 1.8 million names.
+
 ## [0.6.1] — 2026-10-21
 
 ### Fixed

@@ -136,9 +136,9 @@ $ `stdlib/core/slice.nu`
         ^ @ ?String { F }
     } {}
     ? != 0 ( nurl_str_ends arg `.gguf` ) {} {
-        ( nurl_eprintln `nurllama: this ref names a whole repository, not a .gguf file — nurllama runs GGUF models` )
+        ( nurl_eprintln `nurllama: this ref names a whole repository, not a .gguf file — a repository is fetched on purpose, not on the way` )
         ( nurl_eprintln `  a GGUF in the repo       nurllama run org/repo/model.gguf "..."` )
-        ( nurl_eprintln `  a safetensors checkpoint nurllama convert org/repo model.gguf   (then run model.gguf)` )
+        ( nurl_eprintln `  a safetensors checkpoint hub dir org/repo   (then nurllama run <that directory> "...")` )
         ( nurl_eprintln `  merged finetune weights  nurllama run base.gguf "..." --weights merged.safetensors` )
         ^ @ ?String { F }
     }
@@ -587,7 +587,7 @@ $ `stdlib/core/slice.nu`
     ( args_flag p `yes` 121 `start: reuse the existing config without asking` )
     ( args_flag p `version` 0 `print the version` )
     ( args_flag p `no-special` 0 `tokenize: do not add BOS/EOS` )
-    ( args_opt p `weights` 0 `FILE` `run/serve: take the weights from this safetensors file instead of the GGUF's own tensors (the GGUF still supplies the hyperparameters and the tokenizer). Under serve, every model the server opens uses these weights — serve one model when using it` )
+    ( args_opt p `weights` 0 `PATH` `run/serve: a safetensors file or a directory of shards — for a GGUF, the weights used instead of its own tensors (the GGUF still supplies the hyperparameters and the tokenizer); for a checkpoint directory, more of its shards (an expert bank kept in a directory of its own). Under serve, every model the server opens uses these weights — serve one model when using it` )
     ( args_opt p `out` 0 `FILE` `finetune: adapter output (default adapters.safetensors)` )
     ( args_opt p `merged` 0 `FILE` `finetune: also write the merged full-model safetensors here` )
     ( args_opt p `steps` 0 `N` `finetune: Adam steps (default 200)` )

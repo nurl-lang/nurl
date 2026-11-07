@@ -2,6 +2,42 @@
 
 All notable changes to the `nurllama` package.
 
+## [0.26.0] — unreleased
+
+Requires NURL 0.89.0 and safetensor 0.6.2.
+
+### Added
+
+- **A Mixture of Experts larger than the device runs: its routed experts
+  are streamed from the file** (Agora #521, `src/experts.nu`). When they
+  do not fit beside everything else, a device cache holds as many as fit
+  (least recently used out first) and a layer's router's picks that are
+  not in it load from the mapped file — the host's page cache in between.
+  A slot holds an expert as the all-resident stack does and the same
+  kernels run over the slots, so the logits are the all-resident run's
+  byte for byte, with any number of slots (a prefill chunk whose experts
+  outnumber them runs in rounds; `lk_matvec_experts` skips an assignment
+  whose expert is -1). Every form streams: a GGUF's stacks of any type, a
+  checkpoint's per-expert or fused tensors, and EXL3 tensor groups —
+  whole, or in tensor-parallel shares cut by whole tiles (fiore-lab's
+  GLM-5.3 banks), joined back into the matrix exllamav3 quantised.
+  `NURLLAMA_EXPERT_CACHE` (MiB) and `NURLLAMA_EXPERT_SLOTS` size the cache;
+  `NURLLAMA_VERBOSE` / `NURLLAMA_PROF` report its loads and hits.
+- **EXL3 routed experts** load at all (as the cache's slots; before, only
+  EXL3 linears outside the experts did).
+- **`--weights` takes a directory of shards**, and beside a checkpoint
+  directory it adds them to the model's: an expert bank kept in a
+  directory of its own (`nurllama run <Base> … --weights <bank>`).
+- `tests/expert_stream_test.sh`; `tests/hf_ref.py make-experts` writes a
+  tiny GLM whose routed experts are EXL3 groups, whole or in shares, in
+  the checkpoint or in a bank of their own.
+
+### Changed
+
+- A bare `org/repo` argument points at `hub dir org/repo` and running the
+  directory, not at converting it (a checkpoint directory runs directly
+  since 0.25.0).
+
 ## [0.25.0] — 2026-11-07
 
 Requires NURL 0.89.0 and tokenizer 0.6.
