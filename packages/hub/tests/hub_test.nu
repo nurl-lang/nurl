@@ -136,6 +136,66 @@ $ `src/hub.nu`
 
     ( dir_remove_all ( string_data root ) )
 
+    // ---- ranged transfers: chunk layout, staging names, the range record ----
+    ( check & == ( _hub_nchunks 10 4 ) 3 == ( _hub_nchunks 8 4 ) 2 `chunks: 10 B in 4 B chunks → 3, 8 B → 2` )
+    ( check & == ( _hub_chunk_len 2 10 4 ) 2 == ( _hub_chunk_len 1 10 4 ) 4 `chunks: the last chunk is short, the others whole` )
+    ( check & ( _hub_is_ranged 100 10 ) ! ( _hub_is_ranged 10 10 ) `chunks: ranged only above one chunk` )
+
+    : s hexX `0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef`
+    : String stA ( hub_stage_name `https://h/o/r/resolve/main/a/config.json` `config.json` hexX )
+    ( check ( streq ( string_data stA ) `sha256-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef` ) `stage: a published sha256 is the staging name` )
+    : String st1 ( hub_stage_name `https://h/o/r/resolve/main/a/config.json` `config.json` `` )
+    : String st2 ( hub_stage_name `https://h/o/r/resolve/main/b/config.json` `config.json` `` )
+    ( check & ( string_starts_with st1 `config.json.` ) == ( string_len st1 ) 28 `stage: no sha → <name>.<16 hex of the URL>` )
+    ( check ! ( string_eq st1 st2 ) `stage: two files with one basename never share a staging file` )
+
+    : String mroot ( string_from `/tmp/hub-test-ranges` )
+    ( dir_remove_all ( string_data mroot ) )
+    ?? ( dir_create_all ( string_data mroot ) ) { T _ → {} F _ → {} }
+    : String mp ( path_join ( string_data mroot ) `x.part.ranges` )
+    : ( Vec i ) fl ( vec_new [i] )
+    ( vec_push [i] fl 1 ) ( vec_push [i] fl 1 ) ( vec_push [i] fl 0 )
+    : !v String mw ( _hub_map_write ( string_data mp ) 10 4 fl )
+    ( check ?? mw { T _ → T F _ → F } `range record: written` )
+    ?? ( _hub_map_read ( string_data mp ) 10 4 ) {
+        T d → { ( check & & == ( vec_at [i] d 0 ) 1 == ( vec_at [i] d 1 ) 1 == ( vec_at [i] d 2 ) 0 `range record: read back as written` ) }
+        F → { ( check F `range record: read back as written` ) }
+    }
+    // a torn last line (a crash mid-append) is skipped, a real one counts
+    ( append_file ( string_data mp ) `2x` )
+    ?? ( _hub_map_read ( string_data mp ) 10 4 ) {
+        T d → { ( check == ( vec_at [i] d 2 ) 0 `range record: a torn line counts for nothing` ) }
+        F → { ( check F `range record: a torn line counts for nothing` ) }
+    }
+    // another chunk size: a chunk is on disk when every recorded chunk it
+    // overlaps is (bytes 0..8 recorded, of 10)
+    ?? ( _hub_map_read ( string_data mp ) 10 2 ) {
+        T d → { ( check & & == ( vec_len [i] d ) 5 & == ( vec_at [i] d 3 ) 1 == ( vec_at [i] d 0 ) 1 == ( vec_at [i] d 4 ) 0 `range record: read in a smaller chunk size` ) }
+        F → { ( check F `range record: read in a smaller chunk size` ) }
+    }
+    ?? ( _hub_map_read ( string_data mp ) 10 8 ) {
+        T d → { ( check & == ( vec_at [i] d 0 ) 1 == ( vec_at [i] d 1 ) 0 `range record: read in a larger chunk size` ) }
+        F → { ( check F `range record: read in a larger chunk size` ) }
+    }
+    // a record of a file of another size vouches for nothing
+    ?? ( _hub_map_read ( string_data mp ) 11 4 ) {
+        T _ → { ( check F `range record: another file size → none` ) }
+        F → { ( check T `range record: another file size → none` ) }
+    }
+    ( dir_remove_all ( string_data mroot ) )
+
+    // tuning from the environment, out-of-range values ignored
+    : !v IoErr ec ( env_set `HUB_CONNS` `3` )
+    ?? ec { T _ → {} F _ → {} }
+    : !v IoErr ej ( env_set `HUB_JOBS` `0` )
+    ?? ej { T _ → {} F _ → {} }
+    : HubOpts ho ( hub_opts_default )
+    ( check & & == . ho conns 3 == . ho jobs HUB_JOBS_DEFAULT == . ho chunk HUB_CHUNK_DEFAULT `opts: $HUB_CONNS read, a bad $HUB_JOBS ignored` )
+    : !v IoErr uc ( env_unset `HUB_CONNS` )
+    ?? uc { T _ → {} F _ → {} }
+    : !v IoErr uj ( env_unset `HUB_JOBS` )
+    ?? uj { T _ → {} F _ → {} }
+
     : String sum ( string_from `\n` )
     ( string_push_int sum g_pass ) ( string_push_str sum ` passed, ` )
     ( string_push_int sum g_fail ) ( string_push_str sum ` failed\n` )
