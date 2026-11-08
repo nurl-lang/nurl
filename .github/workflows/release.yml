@@ -232,24 +232,29 @@ jobs:
         with:
           ref: ${{ env.BUILD_REF }}
 
-      - name: Install build deps (clang + FFI libs)
+      - name: Install build deps (FFI libs)
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            clang pkg-config \
+            pkg-config zstd \
             libcurl4-openssl-dev libssl-dev libsqlite3-dev \
             libpq-dev zlib1g-dev libzstd-dev
-          clang --version
 
-      - name: Build toolchain (nurlc + nurlpkg)
+      # The clang that builds the toolchain: LLVM's own release, the
+      # version and digests in tools/install-llvm.sh (the runner image's
+      # Ubuntu clang is 18). Linked into /usr/local/bin, ahead of it.
+      - name: Install clang (LLVM release, pinned)
         run: |
-          ./build.sh --no-tests
-          ./tools/nurlpkg/build.sh
+          sudo ./tools/install-llvm.sh --link /usr/local/bin
+          clang --version
 
       # Bundle a self-contained zig so the installed toolchain can build
       # programs (and `nurlpkg install`) with no system clang and immune to
-      # the box's LLVM version. zig 0.17 ships LLVM 22; keep it >= the clang
-      # used above so `zig cc -flto` can read the shipped runtime.o bitcode.
+      # the box's LLVM version. Fetched BEFORE the build: build.sh compiles
+      # stdlib/runtime.zig.o with the zig it finds in vendor/zig, and that
+      # is the runtime the bundled zig links — its own LLVM's bitcode, so
+      # the zig's LLVM need not be at least the clang's (zig 0.17 is LLVM
+      # 22; the clang above is 23).
       - name: Fetch bundled zig backend
         # Pinned by VERSION and by CONTENT. This archive is unpacked into the
         # published release, so whatever it contains is what users install:
@@ -275,6 +280,11 @@ jobs:
           tar -xf /tmp/zig.tar.xz -C vendor
           mv "vendor/zig-${ZA}-linux-${ZIG_VER}" vendor/zig
           vendor/zig/zig version
+
+      - name: Build toolchain (nurlc + nurlpkg)
+        run: |
+          ./build.sh --no-tests
+          ./tools/nurlpkg/build.sh
 
       # The CI runner's glibc (2.39) is newer than many target boxes (e.g.
       # Raspberry Pi OS bullseye = 2.31), and glibc is not forward-compatible
@@ -304,6 +314,10 @@ jobs:
           test -x dist/nurl/zig/zig || { echo "archive has no bundled zig" >&2; exit 1; }
           v="$(dist/nurl/zig/zig version)"
           [ "$v" = "$ZIG_VER" ] || { echo "bundled zig is $v, expected $ZIG_VER" >&2; exit 1; }
+          # …and the runtime that zig links, built by it (build.sh), not the
+          # clang bitcode in runtime.o, which an older LLVM cannot read.
+          test -f dist/nurl/stdlib/runtime.zig.o || { echo "archive has no stdlib/runtime.zig.o" >&2; exit 1; }
+          [ "$(cat dist/nurl/stdlib/runtime.zig.ver)" = "$ZIG_VER" ] || { echo "runtime.zig.o was built by another zig" >&2; exit 1; }
           printf '$ `stdlib/core/io.nu`\n@ main \xe2\x86\x92 i { ( nurl_print `ok\\n` ) ^ 0 }\n' > /tmp/s.nu
           CLANG=/nonexistent/clang ./dist/nurl/bin/nurl /tmp/s.nu /tmp/s
           [ "$(/tmp/s)" = "ok" ]

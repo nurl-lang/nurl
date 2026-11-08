@@ -383,6 +383,29 @@ printf '#define NURL_VERSION "%s"\n' "$(bash tools/version.sh 2>/dev/null || ech
 # A bootstrap/no_std profile compiles stdlib/runtime_core.c on its own.
 step "runtime"       bash -c "'$CLANG' -O2 $RT_LTO_FLAG $SAN_CFLAGS $CURL_CFLAGS $OPENSSL_CFLAGS $SQLITE3_CFLAGS $ZLIB_CFLAGS -c stdlib/runtime.c -o stdlib/runtime.o"
 
+# ── The zig path's own runtime ───────────────────────────────
+# A program built through a zig (the bundled one, or $NURL_ZIG) is
+# lowered by zig's LLVM, and runtime.o above is bitcode from $CLANG's.
+# Bitcode reads forward only: an LLVM 22 zig cannot load what a clang 23
+# wrote. So the zig path links its own runtime, compiled by that zig
+# from the same source with the same feature defines — the Linux twin
+# of build.bat's runtime.mingw.o — and the clang and the zig are free
+# to be any versions. The defines are written to runtime.cflags so
+# nurl.sh can rebuild runtime.zig.o itself when it meets a different
+# zig (runtime.zig.ver names the one that built it).
+printf '%s\n' "$CURL_CFLAGS $OPENSSL_CFLAGS $SQLITE3_CFLAGS $ZLIB_CFLAGS" > stdlib/runtime.cflags
+ZIG_RT=""
+if [ -n "${NURL_BUNDLE_ZIG:-}" ] && [ -x "$NURL_BUNDLE_ZIG/zig" ]; then ZIG_RT="$NURL_BUNDLE_ZIG/zig"
+elif [ -n "${NURL_ZIG:-}" ] && [ -x "$NURL_ZIG" ]; then ZIG_RT="$NURL_ZIG"
+elif [ -x vendor/zig/zig ]; then ZIG_RT="$PWD/vendor/zig/zig"
+fi
+rm -f stdlib/runtime.zig.o stdlib/runtime.zig.ver
+if [ -n "$ZIG_RT" ] && [ -z "$SAN_CFLAGS" ]; then
+    step "runtime-zig" bash -c "'$ZIG_RT' cc -O2 $RT_LTO_FLAG $CURL_CFLAGS $OPENSSL_CFLAGS $SQLITE3_CFLAGS $ZLIB_CFLAGS -c stdlib/runtime.c -o stdlib/runtime.zig.o"
+    "$ZIG_RT" version > stdlib/runtime.zig.ver
+    log "[info] zig runtime: stdlib/runtime.zig.o (via $ZIG_RT, zig $(cat stdlib/runtime.zig.ver))"
+fi
+
 # Under `-flto` the `runtime.o` above is LLVM bitcode, which a plain GNU
 # `ld` cannot link. The LTO consumers (this script, nurl.sh, the test
 # runner) pair it with `-flto` and are fine — but the playground's

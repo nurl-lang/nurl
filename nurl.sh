@@ -561,6 +561,7 @@ PROBE_CACHE=""
 PROBE_LOADED=0
 PROBED_FEATURE_LIBS=""
 LTO_PLUGIN_OPT=0
+PROBED_ZIG_VERSION=""
 probe_cache_init() {
     [ "${NURL_CACHE:-1}" = "0" ] && return 0
     _cc_path="$(command -v "$1" 2>/dev/null || echo "$1")"
@@ -570,11 +571,13 @@ probe_cache_init() {
         echo "${LIBRARY_PATH:-}|${LDFLAGS:-}"
         ls -l "$SCRIPT_DIR"/stdlib/runtime.sqlite3 "$SCRIPT_DIR"/stdlib/runtime.pq 2>/dev/null
     } | cksum | tr -s ' \t' '_')"
-    # `probes2.`: the file gained LTO_PLUGIN_OPT; a `probes.` file from
-    # before it would leave that answer empty, so it is not read.
-    PROBE_CACHE="${NURL_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/nurl}/probes2.$_key"
+    # `probes3.`: the file gained LTO_PLUGIN_OPT (gold / lld / 0); a file
+    # from before it would leave that answer empty or in an older form,
+    # so it is not read.
+    PROBE_CACHE="${NURL_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/nurl}/probes3.$_key"
     if [ -f "$PROBE_CACHE" ]; then
-        # The file assigns OPAQUE_FLAGS and PROBED_FEATURE_LIBS; it was
+        # The file assigns OPAQUE_FLAGS, PROBED_FEATURE_LIBS,
+        # LTO_PLUGIN_OPT and PROBED_ZIG_VERSION; it was
         # written by this script under a key only this toolchain hashes to.
         . "$PROBE_CACHE"
         PROBE_LOADED=1
@@ -759,21 +762,36 @@ else
     }
     add_feature_lib runtime.sqlite3 -lsqlite3
     add_feature_lib runtime.pq      -lpq
-    # Does this compiler's link take the LLVM plugin options the ThinLTO
-    # path below passes (`-Wl,-plugin-opt,…`)? A clang with GNU ld + the
-    # LLVMgold plugin, or with lld, does. A `zig cc` named as $CLANG does
-    # not — zig's linker driver stops on "unsupported linker arg:
+    # Which spelling of the ThinLTO link options does this compiler's
+    # linker take? The two linkers that run an LLVM LTO link spell the
+    # cache differently: GNU ld / gold through the LLVMgold plugin take
+    # `-plugin-opt,cache-dir=`, lld wants `--thinlto-cache-dir=` and
+    # refuses the plugin spelling ("unknown plugin option 'cache-dir=…'").
+    # Both take `-plugin-opt,O3`. LLVM's own release archive ships no
+    # LLVMgold.so, so a clang from it links through lld (see
+    # tools/install-llvm.sh); a distro clang usually links through GNU ld.
+    # A `zig cc` named as $CLANG takes neither — "unsupported linker arg:
     # -plugin-opt" — and `zig cc --version` says "clang version …", so
-    # nothing but the link itself can tell them apart. Asked only where
-    # that path can be taken (a clang on Linux); elsewhere the answer is
-    # never read. It is a property of the toolchain, cached with the rest.
+    # only the link itself can tell them apart. Asked only where that
+    # path can be taken (a clang on Linux); elsewhere the answer is never
+    # read. It is a property of the toolchain, cached with the rest:
+    # gold, lld, or 0 for neither.
     LTO_PLUGIN_OPT=0
     if [ "$USING_ZIG" != "1" ] && [ "$(uname -s)" = "Linux" ]; then
-        if cc_run -flto=thin -Wl,-plugin-opt,O3 "$__probe_c" -o "$__probe_o" >/dev/null 2>&1; then
-            LTO_PLUGIN_OPT=1
+        __probe_cd="$(mktemp -d "${TMPDIR:-/tmp}/nurl-probe-cache.XXXXXX")"
+        if cc_run -flto=thin -Wl,-plugin-opt,O3 -Wl,-plugin-opt,cache-dir="$__probe_cd" \
+                "$__probe_c" -o "$__probe_o" >/dev/null 2>&1; then
+            LTO_PLUGIN_OPT=gold
+        elif cc_run -flto=thin -Wl,-plugin-opt,O3 -Wl,--thinlto-cache-dir="$__probe_cd" \
+                "$__probe_c" -o "$__probe_o" >/dev/null 2>&1; then
+            LTO_PLUGIN_OPT=lld
         fi
+        rm -rf "$__probe_cd"
     fi
     rm -f "$__probe_c" "$__probe_o"
+    # The zig's version keys the zig path's runtime object (below). The
+    # cache key covers the zig binary, so a cached answer costs nothing.
+    [ "$USING_ZIG" = "1" ] && PROBED_ZIG_VERSION="$("$ZIG_BIN" version 2>/dev/null || true)"
     # Persist this run's probe answers for the next build. Written to a
     # temp name then renamed, so a concurrent build never sources a
     # half-written file.
@@ -783,6 +801,7 @@ else
                 printf 'OPAQUE_FLAGS=%s\n' "'$OPAQUE_FLAGS'"
                 printf 'PROBED_FEATURE_LIBS=%s\n' "'$PROBED_FEATURE_LIBS'"
                 printf 'LTO_PLUGIN_OPT=%s\n' "'$LTO_PLUGIN_OPT'"
+                printf 'PROBED_ZIG_VERSION=%s\n' "'$PROBED_ZIG_VERSION'"
             } > "$PROBE_CACHE.$$" 2>/dev/null \
                 && mv "$PROBE_CACHE.$$" "$PROBE_CACHE" 2>/dev/null \
                 || rm -f "$PROBE_CACHE.$$" 2>/dev/null || true
@@ -957,6 +976,35 @@ elif [ $DEBUG_INFO -eq 1 ]; then
         cc_run $CFLAGS_DBG -c "$SCRIPT_DIR/stdlib/runtime.c" -o "$DBG_RUNTIME"
     fi
     RUNTIME_TO_LINK="$DBG_RUNTIME"
+elif [ "$USING_ZIG" = "1" ] && [ -f "$SCRIPT_DIR/stdlib/runtime.cflags" ]; then
+    # The zig path links a runtime its own zig compiled. runtime.o is
+    # bitcode from the clang that built the toolchain, and bitcode reads
+    # forward only: an LLVM 22 zig cannot load what a clang 23 wrote. So
+    # build.sh compiles runtime.zig.o with the zig it finds (the release
+    # bundles both), and here it is rebuilt — same source, the same
+    # feature defines (runtime.cflags) — when it is missing or another
+    # zig built it (runtime.zig.ver; this zig's version comes from the
+    # probe cache, so the check spawns nothing). A toolchain from before
+    # runtime.cflags existed keeps linking runtime.o, as it always did.
+    ZIG_RUNTIME="$SCRIPT_DIR/stdlib/runtime.zig.o"
+    _zrt_ver=""
+    [ -f "$SCRIPT_DIR/stdlib/runtime.zig.ver" ] && _zrt_ver="$(cat "$SCRIPT_DIR/stdlib/runtime.zig.ver")"
+    [ -n "$PROBED_ZIG_VERSION" ] || PROBED_ZIG_VERSION="$("$ZIG_BIN" version 2>/dev/null || true)"
+    if [ ! -f "$ZIG_RUNTIME" ] || [ "$_zrt_ver" != "$PROBED_ZIG_VERSION" ]; then
+        echo "[runtime-zig] building stdlib/runtime.zig.o with zig $PROBED_ZIG_VERSION"
+        # The same bitcode flavour build.sh gives runtime.o on this OS.
+        _zrt_lto="-flto"; [ "$(uname -s)" = "Linux" ] && _zrt_lto="-flto=thin"
+        # shellcheck disable=SC2046
+        if ! cc_run -O2 $_zrt_lto $(cat "$SCRIPT_DIR/stdlib/runtime.cflags") \
+                -c "$SCRIPT_DIR/stdlib/runtime.c" -o "$ZIG_RUNTIME.$$"; then
+            rm -f "$ZIG_RUNTIME.$$"
+            echo "ERROR: $ZIG_BIN could not compile stdlib/runtime.c into stdlib/runtime.zig.o." >&2
+            exit 1
+        fi
+        mv "$ZIG_RUNTIME.$$" "$ZIG_RUNTIME"
+        printf '%s\n' "$PROBED_ZIG_VERSION" > "$SCRIPT_DIR/stdlib/runtime.zig.ver"
+    fi
+    RUNTIME_TO_LINK="$ZIG_RUNTIME"
 fi
 # ── ThinLTO by default, with a persistent codegen cache ─────────────
 #
@@ -987,8 +1035,9 @@ fi
 #     set (LLVM bakes its own version in too), so a clang upgrade or
 #     an -O change misses cleanly instead of linking stale code.
 #
-# Scope: native Linux builds (GNU ld/gold load LLVMgold.so, and lld
-# accepts the same `-plugin-opt` spellings). The zig-cc cross paths and
+# Scope: native Linux builds (GNU ld/gold load LLVMgold.so; lld takes
+# the same `-plugin-opt` codegen options but spells the cache
+# `--thinlto-cache-*`, so the probe above names the dialect). The zig-cc cross paths and
 # Darwin's ld64 spell these flags differently and keep the plain
 # `-flto` behaviour for now. `NURL_LTO=full` opts back into a full-LTO
 # link — slower here, not faster: runtime.o is thin bitcode, which a
@@ -999,7 +1048,7 @@ fi
 LTO_TUNE_FLAGS=""
 LTO_CACHED=""
 if [ -n "$LTO_FLAG" ] && [ "$USING_ZIG" != "1" ] && [ "$(uname -s)" = "Linux" ] \
-   && [ "$LTO_PLUGIN_OPT" = "1" ] && [ "${NURL_LTO:-thin}" != "full" ]; then
+   && [ "$LTO_PLUGIN_OPT" != "0" ] && [ "${NURL_LTO:-thin}" != "full" ]; then
     LTO_FLAG="-flto=thin"
     # Functions start on a 64-byte line. LLVM's default (16) lets an
     # edit anywhere move every later function by a few bytes, and a hot
@@ -1018,7 +1067,13 @@ if [ -n "$LTO_FLAG" ] && [ "$USING_ZIG" != "1" ] && [ "$(uname -s)" = "Linux" ] 
         # alignment above, so objects built without it live elsewhere.
         _lto_cache="${NURL_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/nurl}/thinlto-a64"
         if mkdir -p "$_lto_cache" 2>/dev/null; then
-            LTO_TUNE_FLAGS="$LTO_TUNE_FLAGS -Wl,-plugin-opt,cache-dir=$_lto_cache -Wl,-plugin-opt,cache-policy=cache_size_bytes=2g:prune_interval=20m"
+            # The linker's own spelling (the probe above): gold's plugin
+            # options, or lld's --thinlto-* flags.
+            if [ "$LTO_PLUGIN_OPT" = "lld" ]; then
+                LTO_TUNE_FLAGS="$LTO_TUNE_FLAGS -Wl,--thinlto-cache-dir=$_lto_cache -Wl,--thinlto-cache-policy=cache_size_bytes=2g:prune_interval=20m"
+            else
+                LTO_TUNE_FLAGS="$LTO_TUNE_FLAGS -Wl,-plugin-opt,cache-dir=$_lto_cache -Wl,-plugin-opt,cache-policy=cache_size_bytes=2g:prune_interval=20m"
+            fi
             LTO_CACHED=" cached"
         fi
     fi
