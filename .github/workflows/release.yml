@@ -51,6 +51,9 @@ env:
   # the event's own commit (the tag for a push or release event, the
   # dispatching branch for a dry run).
   BUILD_REF: ${{ (github.event_name == 'workflow_dispatch' && inputs.publish) && format('refs/tags/{0}', inputs.tag) || github.sha }}
+  # The zig every archive bundles. The Linux and Windows fetch steps pin
+  # each archive's sha256 next to their use of it; bump those with this.
+  ZIG_VER: "0.17.1"
 
 # A UI-made release can raise both `release` and a tag `push`: one run per
 # tag at a time, the second one re-uploads over the first.
@@ -255,7 +258,6 @@ jobs:
         # https://ziglang.org/download/index.json for 0.17.1. Bumping ZIG_VER
         # without bumping them fails the build, which is the point.
         run: |
-          ZIG_VER=0.17.1
           case "${{ matrix.target }}" in
             linux-x86_64-glibc)
               ZA=x86_64
@@ -293,9 +295,18 @@ jobs:
         run: NURL_HOME="$PWD/dist/nurl" NURL_BUNDLE_ZIG="$PWD/vendor/zig" ./tools/install-toolchain.sh
 
       - name: Smoke test the assembled toolchain
+        # Through the BUNDLED zig: the runner has clang, and nurl.sh falls
+        # back to it when the prefix has no zig, so a smoke that only
+        # builds a program would pass on an archive whose zig is missing
+        # or the wrong version. Assert both, and point CLANG nowhere so a
+        # fallback fails here instead of passing.
         run: |
+          test -x dist/nurl/zig/zig || { echo "archive has no bundled zig" >&2; exit 1; }
+          v="$(dist/nurl/zig/zig version)"
+          [ "$v" = "$ZIG_VER" ] || { echo "bundled zig is $v, expected $ZIG_VER" >&2; exit 1; }
           printf '$ `stdlib/core/io.nu`\n@ main \xe2\x86\x92 i { ( nurl_print `ok\\n` ) ^ 0 }\n' > /tmp/s.nu
-          ./dist/nurl/bin/nurl /tmp/s.nu /tmp/s && /tmp/s
+          CLANG=/nonexistent/clang ./dist/nurl/bin/nurl /tmp/s.nu /tmp/s
+          [ "$(/tmp/s)" = "ok" ]
 
       - name: Package
         run: |
@@ -428,9 +439,9 @@ jobs:
       - name: Fetch bundled zig backend
         shell: pwsh
         run: |
-          $zigVer = "0.17.1"
+          $zigVer = $env:ZIG_VER
           # Pinned by content too: ziglang.org's own digest for this archive,
-          # from https://ziglang.org/download/index.json. Bump it with $zigVer.
+          # from https://ziglang.org/download/index.json. Bump it with ZIG_VER.
           $zigSha = "b03f477a1943673e02aca0f570e8030dffd536ce1f45cbc4d3326ec31159562e"
           $url = "https://ziglang.org/download/$zigVer/zig-x86_64-windows-$zigVer.zip"
           Invoke-WebRequest $url -OutFile zig.zip
