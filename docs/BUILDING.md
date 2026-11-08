@@ -317,8 +317,10 @@ with ThinLTO by default and keeps three caches under `~/.cache/nurl`:
    didn't touch — is a file copy. Pruned after two weeks unused, and
    capped at `$NURL_OBJ_CACHE_MB` (default 2048), least recently used
    first, checked at most once an hour.
-3. **The toolchain probes** (`probes.*`): the opaque-pointer parse
-   probe and the feature-lib trial links (~190 ms, before every build,
+3. **The toolchain probes** (`probes2.*`): the opaque-pointer parse
+   probe, the feature-lib trial links and the trial link that asks
+   whether the linker takes `-Wl,-plugin-opt,…` (a `zig cc` named as
+   `$CLANG` does not, so it keeps plain `-flto`) (~190 ms, before every build,
    answering questions about the *toolchain*) are cached keyed by the
    compiler binary, the system library directories' mtimes, and the
    stdlib feature sentinels — so installing a library or swapping

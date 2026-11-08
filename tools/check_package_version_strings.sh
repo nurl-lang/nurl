@@ -90,7 +90,7 @@ for toml in packages/*/nurl.toml; do
         # level: collect the accessors that return a bare semver, then
         # accept only those NAMED ALONGSIDE THE PACKAGE'S OWN NAME at a
         # call site (`mcp_initialize_result \`swarm-mcp\` ( sm_version )`).
-        # That keying is what keeps wasmbuilder's `__wb_zig_version` — a
+        # That keying is what keeps wasmbuilder's `wb_zig_version` — a
         # genuine version, of something else — out of it.
         stripped=$(strip_comments "$src")
         while IFS='|' read -r fn lit; do

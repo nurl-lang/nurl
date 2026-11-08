@@ -2299,7 +2299,7 @@ sites were unpinned, including the zig the release job unpacks INTO the
 published archive — bytes that reach every user of the installer — and two
 benchmark jobs whose reference runtime was whatever `curl
 https://wasmtime.dev/install.sh | bash` installed that day, under numbers
-the repo publishes. Now: zig 0.16.0 by sha256 in `release.yml`, `fuzz.yml`
+the repo publishes. Now: zig (0.17.1 today) by sha256 in `release.yml`, `fuzz.yml`
 and `wasm-bench.yml` (digests from ziglang.org's own index); wasmtime
 v48.0.2 as a pinned release archive with a checksum in place of both
 `curl | bash` sites; cloud-hypervisor v46.0 by sha256; and `rustup-init`

@@ -2,6 +2,16 @@
 
 All notable changes to this package are documented here.
 
+## [0.3.9] — unreleased
+
+### Changed
+
+- **The zig wasmbuilder downloads when none is found is 0.17.1** (was
+  0.16.0), the version the NURL toolchain now bundles (LLVM 22). Its
+  archive is still checked against the sha256 in ziglang.org's release
+  index. Every message that names the version reads it from one
+  accessor, `wb_zig_version`, so the next bump is one line (Agora #528).
+
 ## [0.3.8] — 2026-11-04
 
 ### Fixed

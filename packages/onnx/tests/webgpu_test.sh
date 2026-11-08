@@ -14,7 +14,7 @@
 #
 #  Skips (exit 0) when zig, node, puppeteer / Chrome or a WebGPU adapter
 #  is missing. Env: NURL_ZIG, NURL_WASM_OPT (a binaryen new enough for
-#  zig 0.16's output), NURL_PUPPETEER, CHROME.
+#  the bundled zig's output), NURL_PUPPETEER, CHROME.
 #  Run from the package dir:  ./tests/webgpu_test.sh
 # ============================================================
 set -u

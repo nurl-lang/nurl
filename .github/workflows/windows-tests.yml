@@ -115,9 +115,14 @@ jobs:
         if: ${{ !inputs.update_goldens }}
         shell: pwsh
         run: |
-          $zigVer = "0.16.0"
+          $zigVer = "0.17.1"
+          # Pinned by content too: ziglang.org's own digest for this archive,
+          # from https://ziglang.org/download/index.json. Bump it with $zigVer.
+          $zigSha = "b03f477a1943673e02aca0f570e8030dffd536ce1f45cbc4d3326ec31159562e"
           $url = "https://ziglang.org/download/$zigVer/zig-x86_64-windows-$zigVer.zip"
           Invoke-WebRequest $url -OutFile zig.zip
+          $got = (Get-FileHash zig.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($got -ne $zigSha) { throw "zig.zip sha256 is $got, expected $zigSha" }
           Expand-Archive zig.zip -DestinationPath vendor
           Move-Item "vendor/zig-x86_64-windows-$zigVer" vendor/zig
 

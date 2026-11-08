@@ -109,7 +109,7 @@ OPAQUE_FLAGS=""
 _probe_ll="$WORKDIR/.opaque_probe.ll"
 mkdir -p "$WORKDIR"
 printf 'declare void @nurl_opaque_probe(i8*, ptr)\n' > "$_probe_ll"
-if ! "$CLANG" -c -x ir "$_probe_ll" -o /dev/null >/dev/null 2>&1; then
+if ! "$CLANG" -c "$_probe_ll" -o /dev/null >/dev/null 2>&1; then
     OPAQUE_FLAGS="-Xclang -opaque-pointers"
 fi
 rm -f "$_probe_ll"

@@ -11,7 +11,7 @@
 // pure-NURL one: `nurlpkg install nwasm && nwasm run program.wasm`.
 //
 // The first build on a machine without a bundled zig downloads a pinned,
-// sha256-verified zig 0.16.0 into $NURL_HOME/zig (set
+// sha256-verified zig (wb_zig_version) into $NURL_HOME/zig (set
 // NURL_WASM_NO_DOWNLOAD=1 to forbid that and fail instead).
 
 $ `stdlib/core/io.nu`
@@ -49,7 +49,8 @@ $ `build.nu`
             ( nurl_print ? . c is_zig ` (zig cc)\n` ` (wasi clang)\n` )
         }
         F e → {
-            ( nurl_print `  wasm cc:      not found — the first build will download zig 0.16.0 into $NURL_HOME/zig\n                (` )
+            ( nurl_print `  wasm cc:      not found — the first build will download zig ` ) ( nurl_print ( wb_zig_version ) )
+            ( nurl_print ` into $NURL_HOME/zig\n                (` )
             ( nurl_print ( string_data e ) ) ( nurl_print `)\n` )
         }
     }

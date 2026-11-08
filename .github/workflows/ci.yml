@@ -372,7 +372,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     container:
-      image: nurllang/ci:ubuntu24-20260821
+      image: nurllang/ci:ubuntu24-20261108
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -477,7 +477,7 @@ jobs:
       # apt mirror degraded repeatedly (2026-08-19) and every job whose
       # first step was `apt-get update` burned its whole timeout there.
       # Pin the DATED tag; :latest is never referenced from CI.
-      image: nurllang/ci:ubuntu24-20260821
+      image: nurllang/ci:ubuntu24-20261108
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -526,7 +526,7 @@ jobs:
       # apt mirror degraded repeatedly (2026-08-19) and every job whose
       # first step was `apt-get update` burned its whole timeout there.
       # Pin the DATED tag; :latest is never referenced from CI.
-      image: nurllang/ci:ubuntu24-20260821
+      image: nurllang/ci:ubuntu24-20261108
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -825,7 +825,7 @@ jobs:
       # apt mirror degraded repeatedly (2026-08-19) and every job whose
       # first step was `apt-get update` burned its whole timeout there.
       # Pin the DATED tag; :latest is never referenced from CI.
-      image: nurllang/ci:ubuntu24-20260821
+      image: nurllang/ci:ubuntu24-20261108
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -1125,7 +1125,7 @@ jobs:
         shard: [1, 2]
     timeout-minutes: 20
     container:
-      image: nurllang/ci:ubuntu24-20260821
+      image: nurllang/ci:ubuntu24-20261108
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -1198,7 +1198,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     container:
-      image: nurllang/ci:ubuntu24-20260821
+      image: nurllang/ci:ubuntu24-20261108
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -1277,7 +1277,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     container:
-      image: nurllang/ci:ubuntu24-20260821
+      image: nurllang/ci:ubuntu24-20261108
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -1385,7 +1385,7 @@ jobs:
     # build plus the targeted controls, ~8 min.
     timeout-minutes: 25
     container:
-      image: nurllang/ci:ubuntu24-20260821
+      image: nurllang/ci:ubuntu24-20261108
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -1558,7 +1558,7 @@ jobs:
       matrix:
         shard: [1, 2, 3]
     container:
-      image: nurllang/ci:ubuntu24-20260821
+      image: nurllang/ci:ubuntu24-20261108
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}

@@ -560,6 +560,7 @@ QUIET_FLAGS="-Wno-override-module"
 PROBE_CACHE=""
 PROBE_LOADED=0
 PROBED_FEATURE_LIBS=""
+LTO_PLUGIN_OPT=0
 probe_cache_init() {
     [ "${NURL_CACHE:-1}" = "0" ] && return 0
     _cc_path="$(command -v "$1" 2>/dev/null || echo "$1")"
@@ -569,7 +570,9 @@ probe_cache_init() {
         echo "${LIBRARY_PATH:-}|${LDFLAGS:-}"
         ls -l "$SCRIPT_DIR"/stdlib/runtime.sqlite3 "$SCRIPT_DIR"/stdlib/runtime.pq 2>/dev/null
     } | cksum | tr -s ' \t' '_')"
-    PROBE_CACHE="${NURL_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/nurl}/probes.$_key"
+    # `probes2.`: the file gained LTO_PLUGIN_OPT; a `probes.` file from
+    # before it would leave that answer empty, so it is not read.
+    PROBE_CACHE="${NURL_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/nurl}/probes2.$_key"
     if [ -f "$PROBE_CACHE" ]; then
         # The file assigns OPAQUE_FLAGS and PROBED_FEATURE_LIBS; it was
         # written by this script under a key only this toolchain hashes to.
@@ -617,8 +620,8 @@ else
     printf 'declare void @nurl_opaque_probe(i8*, ptr)\n' > "$_probe_ll"
     if [ "$PROBE_LOADED" = "1" ]; then
         : # cached answer already in OPAQUE_FLAGS
-    elif ! "$CLANG" -c -x ir "$_probe_ll" -o /dev/null >/dev/null 2>&1; then
-        if "$CLANG" -Xclang -opaque-pointers -c -x ir "$_probe_ll" -o /dev/null >/dev/null 2>&1; then
+    elif ! "$CLANG" -c "$_probe_ll" -o /dev/null >/dev/null 2>&1; then
+        if "$CLANG" -Xclang -opaque-pointers -c "$_probe_ll" -o /dev/null >/dev/null 2>&1; then
             OPAQUE_FLAGS="-Xclang -opaque-pointers"
         else
             rm -f "$_probe_ll"
@@ -756,6 +759,20 @@ else
     }
     add_feature_lib runtime.sqlite3 -lsqlite3
     add_feature_lib runtime.pq      -lpq
+    # Does this compiler's link take the LLVM plugin options the ThinLTO
+    # path below passes (`-Wl,-plugin-opt,…`)? A clang with GNU ld + the
+    # LLVMgold plugin, or with lld, does. A `zig cc` named as $CLANG does
+    # not — zig's linker driver stops on "unsupported linker arg:
+    # -plugin-opt" — and `zig cc --version` says "clang version …", so
+    # nothing but the link itself can tell them apart. Asked only where
+    # that path can be taken (a clang on Linux); elsewhere the answer is
+    # never read. It is a property of the toolchain, cached with the rest.
+    LTO_PLUGIN_OPT=0
+    if [ "$USING_ZIG" != "1" ] && [ "$(uname -s)" = "Linux" ]; then
+        if cc_run -flto=thin -Wl,-plugin-opt,O3 "$__probe_c" -o "$__probe_o" >/dev/null 2>&1; then
+            LTO_PLUGIN_OPT=1
+        fi
+    fi
     rm -f "$__probe_c" "$__probe_o"
     # Persist this run's probe answers for the next build. Written to a
     # temp name then renamed, so a concurrent build never sources a
@@ -765,6 +782,7 @@ else
             {
                 printf 'OPAQUE_FLAGS=%s\n' "'$OPAQUE_FLAGS'"
                 printf 'PROBED_FEATURE_LIBS=%s\n' "'$PROBED_FEATURE_LIBS'"
+                printf 'LTO_PLUGIN_OPT=%s\n' "'$LTO_PLUGIN_OPT'"
             } > "$PROBE_CACHE.$$" 2>/dev/null \
                 && mv "$PROBE_CACHE.$$" "$PROBE_CACHE" 2>/dev/null \
                 || rm -f "$PROBE_CACHE.$$" 2>/dev/null || true
@@ -981,7 +999,7 @@ fi
 LTO_TUNE_FLAGS=""
 LTO_CACHED=""
 if [ -n "$LTO_FLAG" ] && [ "$USING_ZIG" != "1" ] && [ "$(uname -s)" = "Linux" ] \
-   && [ "${NURL_LTO:-thin}" != "full" ]; then
+   && [ "$LTO_PLUGIN_OPT" = "1" ] && [ "${NURL_LTO:-thin}" != "full" ]; then
     LTO_FLAG="-flto=thin"
     # Functions start on a 64-byte line. LLVM's default (16) lets an
     # edit anywhere move every later function by a few bytes, and a hot
@@ -1039,7 +1057,7 @@ if [ -n "$LTO_CACHED" ] && [ -z "$COVERAGE_FLAGS" ] && [ -n "$PROBE_CACHE" ]; th
             find "$OBJ_CACHE_DIR" -type f -name '*.o' -printf '%T@ %s %p\n' 2>/dev/null | sort -rn |
                 awk -v cap="$_oc_cap" '{ t += $2; if (t > cap) { $1 = ""; $2 = ""; sub(/^  /, ""); print } }' |
                 while IFS= read -r _oc_f; do rm -f -- "$_oc_f"; done
-            find "$_oc_root" -maxdepth 1 -type f -name 'probes.*' -mtime +14 -exec rm -f {} + 2>/dev/null || true
+            find "$_oc_root" -maxdepth 1 -type f -name 'probes*.*' -mtime +14 -exec rm -f {} + 2>/dev/null || true
             [ -d "$_oc_root/thinlto" ] && rm -rf -- "$_oc_root/thinlto" 2>/dev/null || true
         fi
     fi

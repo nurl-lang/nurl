@@ -213,11 +213,16 @@ step "clang version" "$CLANG" --version
 # the bootstrap snapshot), so `i8*` pins the module to typed mode and the
 # `ptr` after it is a parse error. A probe that does not mix them reports
 # a capability the real IR does not get. Mirror what nurlc emits.
+#
+# The file's `.ll` suffix is what says "LLVM IR", not `-x ir`: zig cc
+# (0.17 and later) rejects `-x ir` with "language not recognized", so a
+# CLANG that is a `zig cc` wrapper failed this probe on IR it reads fine.
+# Every clang and zig cc infers IR from the suffix.
 OPAQUE_FLAGS=""
-_probe_ll="$(mktemp -t nurl_probe.XXXXXX)" || _probe_ll="build/.opaque_probe"
+_probe_ll="build/.opaque_probe.$$.ll"
 printf 'declare void @nurl_opaque_probe(i8*, ptr)\n' > "$_probe_ll"
-if ! "$CLANG" -c -x ir "$_probe_ll" -o /dev/null >/dev/null 2>&1; then
-    if "$CLANG" -Xclang -opaque-pointers -c -x ir "$_probe_ll" -o /dev/null >/dev/null 2>&1; then
+if ! "$CLANG" -c "$_probe_ll" -o /dev/null >/dev/null 2>&1; then
+    if "$CLANG" -Xclang -opaque-pointers -c "$_probe_ll" -o /dev/null >/dev/null 2>&1; then
         OPAQUE_FLAGS="-Xclang -opaque-pointers"
     else
         rm -f "$_probe_ll"
@@ -386,8 +391,15 @@ step "runtime"       bash -c "'$CLANG' -O2 $RT_LTO_FLAG $SAN_CFLAGS $CURL_CFLAGS
 # codegen over the already-built bitcode (cheap — no C front-end re-run)
 # so the feature defines stay identical to `runtime.o`. With LTO off
 # `runtime.o` is already an ELF object, so just copy it.
+#
+# The bitcode goes in under a `.bc` name: that suffix is how the driver
+# knows the input is LLVM IR. `-x ir stdlib/runtime.o` said the same to
+# clang, but zig cc 0.17 rejects `-x ir`, and without it a `.o` input is
+# an object to link, not IR to lower.
 if [ -n "$LTO_FLAG" ]; then
-    step "runtime-native" "$CLANG" -O2 $OPAQUE_FLAGS -c -x ir stdlib/runtime.o -o stdlib/runtime.native.o
+    step "runtime-bc"     cp stdlib/runtime.o build/runtime.lto.bc
+    step "runtime-native" "$CLANG" -O2 $OPAQUE_FLAGS -c build/runtime.lto.bc -o stdlib/runtime.native.o
+    rm -f build/runtime.lto.bc
 else
     step "runtime-native" cp stdlib/runtime.o stdlib/runtime.native.o
 fi
