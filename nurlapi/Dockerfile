@@ -1,4 +1,10 @@
 # syntax=docker/dockerfile:1.7
+# An empty stand-in for the LLVM release archive: `docker build
+# --build-context llvm=DIR` hands the builder a directory holding
+# LLVM-<version>-Linux-X64.tar.zst to install from (still sha256-checked)
+# instead of downloading it. See tools/install-llvm.sh.
+FROM scratch AS llvm
+
 # Stage 1: Build the NURL compiler and cross-target runtimes
 FROM debian:bookworm-slim AS builder
 
@@ -35,7 +41,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # /opt/llvm-rt is the slice the runtime stage below needs to compile and
 # link a user's program: the driver, lld, the config and the resource dir.
 COPY tools/install-llvm.sh /tmp/install-llvm.sh
-RUN sh /tmp/install-llvm.sh --link /usr/local/bin && rm /tmp/install-llvm.sh \
+RUN --mount=type=bind,from=llvm,target=/mnt/llvm     sh /tmp/install-llvm.sh --link /usr/local/bin --from /mnt/llvm && rm /tmp/install-llvm.sh \
     && mkdir -p /opt/llvm-rt/bin /opt/llvm-rt/lib \
     && cp -a /opt/llvm/bin/clang /opt/llvm/bin/clang-[0-9]* /opt/llvm/bin/clang.cfg \
              /opt/llvm/bin/lld /opt/llvm/bin/ld.lld /opt/llvm-rt/bin/ \
