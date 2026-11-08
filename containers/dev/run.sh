@@ -70,7 +70,10 @@ if [[ $DO_BUILD -eq 1 ]] || ! docker image inspect "$IMAGE" >/dev/null 2>&1; the
     echo ">> building $IMAGE (this takes a few minutes the first time)"
     build_args=(--build-arg "USER_UID=$(id -u)" --build-arg "USER_GID=$(id -g)")
     [[ $NO_CACHE -eq 1 ]] && build_args+=(--no-cache)
-    docker build "${build_args[@]}" -t "$IMAGE" "$REPO_ROOT/containers/dev"
+    # tools/ as a named context: the image installs clang through
+    # tools/install-llvm.sh, the repo's one pin of the LLVM release.
+    docker build "${build_args[@]}" --build-context tools="$REPO_ROOT/tools" \
+        -t "$IMAGE" "$REPO_ROOT/containers/dev"
 fi
 
 # The command to run inside. Default is a login shell.

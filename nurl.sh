@@ -473,7 +473,7 @@ resolve_clang() {
     if [ -n "${CLANG:-}" ] && command -v "$CLANG" >/dev/null 2>&1; then
         return 0
     fi
-    for c in clang clang-20 clang-19 clang-18 clang-17 clang-16 clang-15 clang-14 cc; do
+    for c in clang clang-23 clang-22 clang-21 clang-20 clang-19 clang-18 clang-17 clang-16 clang-15 clang-14 cc; do
         # `cc` is accepted only if it is actually clang (it can be gcc).
         if command -v "$c" >/dev/null 2>&1; then
             if [ "$c" = cc ] && ! "$c" --version 2>/dev/null | grep -qi clang; then
@@ -561,7 +561,8 @@ PROBE_CACHE=""
 PROBE_LOADED=0
 PROBED_FEATURE_LIBS=""
 LTO_PLUGIN_OPT=0
-PROBED_ZIG_VERSION=""
+PROBED_CC_ID=""
+PROBED_CC_KEY=""
 probe_cache_init() {
     [ "${NURL_CACHE:-1}" = "0" ] && return 0
     _cc_path="$(command -v "$1" 2>/dev/null || echo "$1")"
@@ -577,7 +578,7 @@ probe_cache_init() {
     PROBE_CACHE="${NURL_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/nurl}/probes3.$_key"
     if [ -f "$PROBE_CACHE" ]; then
         # The file assigns OPAQUE_FLAGS, PROBED_FEATURE_LIBS,
-        # LTO_PLUGIN_OPT and PROBED_ZIG_VERSION; it was
+        # LTO_PLUGIN_OPT, PROBED_CC_ID and PROBED_CC_KEY; it was
         # written by this script under a key only this toolchain hashes to.
         . "$PROBE_CACHE"
         PROBE_LOADED=1
@@ -789,9 +790,12 @@ else
         rm -rf "$__probe_cd"
     fi
     rm -f "$__probe_c" "$__probe_o"
-    # The zig's version keys the zig path's runtime object (below). The
-    # cache key covers the zig binary, so a cached answer costs nothing.
-    [ "$USING_ZIG" = "1" ] && PROBED_ZIG_VERSION="$("$ZIG_BIN" version 2>/dev/null || true)"
+    # Who this compiler is, by its `--version` line: the runtime it links
+    # must be bitcode its own LLVM can read (see "A runtime for the
+    # compiler that links" below). Cached with the rest, so a build with a
+    # warm probe cache spawns nothing for it.
+    PROBED_CC_ID="$(cc_run --version 2>/dev/null | head -1 || true)"
+    PROBED_CC_KEY="$(printf '%s' "$PROBED_CC_ID" | cksum | cut -d' ' -f1)"
     # Persist this run's probe answers for the next build. Written to a
     # temp name then renamed, so a concurrent build never sources a
     # half-written file.
@@ -801,7 +805,8 @@ else
                 printf 'OPAQUE_FLAGS=%s\n' "'$OPAQUE_FLAGS'"
                 printf 'PROBED_FEATURE_LIBS=%s\n' "'$PROBED_FEATURE_LIBS'"
                 printf 'LTO_PLUGIN_OPT=%s\n' "'$LTO_PLUGIN_OPT'"
-                printf 'PROBED_ZIG_VERSION=%s\n' "'$PROBED_ZIG_VERSION'"
+                printf 'PROBED_CC_ID=%s\n' "'$(printf '%s' "$PROBED_CC_ID" | tr -d "'")'"
+                printf 'PROBED_CC_KEY=%s\n' "'$PROBED_CC_KEY'"
             } > "$PROBE_CACHE.$$" 2>/dev/null \
                 && mv "$PROBE_CACHE.$$" "$PROBE_CACHE" 2>/dev/null \
                 || rm -f "$PROBE_CACHE.$$" 2>/dev/null || true
@@ -976,35 +981,37 @@ elif [ $DEBUG_INFO -eq 1 ]; then
         cc_run $CFLAGS_DBG -c "$SCRIPT_DIR/stdlib/runtime.c" -o "$DBG_RUNTIME"
     fi
     RUNTIME_TO_LINK="$DBG_RUNTIME"
-elif [ "$USING_ZIG" = "1" ] && [ -f "$SCRIPT_DIR/stdlib/runtime.cflags" ]; then
-    # The zig path links a runtime its own zig compiled. runtime.o is
-    # bitcode from the clang that built the toolchain, and bitcode reads
-    # forward only: an LLVM 22 zig cannot load what a clang 23 wrote. So
-    # build.sh compiles runtime.zig.o with the zig it finds (the release
-    # bundles both), and here it is rebuilt — same source, the same
-    # feature defines (runtime.cflags) — when it is missing or another
-    # zig built it (runtime.zig.ver; this zig's version comes from the
-    # probe cache, so the check spawns nothing). A toolchain from before
-    # runtime.cflags existed keeps linking runtime.o, as it always did.
-    ZIG_RUNTIME="$SCRIPT_DIR/stdlib/runtime.zig.o"
-    _zrt_ver=""
-    [ -f "$SCRIPT_DIR/stdlib/runtime.zig.ver" ] && _zrt_ver="$(cat "$SCRIPT_DIR/stdlib/runtime.zig.ver")"
-    [ -n "$PROBED_ZIG_VERSION" ] || PROBED_ZIG_VERSION="$("$ZIG_BIN" version 2>/dev/null || true)"
-    if [ ! -f "$ZIG_RUNTIME" ] || [ "$_zrt_ver" != "$PROBED_ZIG_VERSION" ]; then
-        echo "[runtime-zig] building stdlib/runtime.zig.o with zig $PROBED_ZIG_VERSION"
-        # The same bitcode flavour build.sh gives runtime.o on this OS.
-        _zrt_lto="-flto"; [ "$(uname -s)" = "Linux" ] && _zrt_lto="-flto=thin"
-        # shellcheck disable=SC2046
-        if ! cc_run -O2 $_zrt_lto $(cat "$SCRIPT_DIR/stdlib/runtime.cflags") \
-                -c "$SCRIPT_DIR/stdlib/runtime.c" -o "$ZIG_RUNTIME.$$"; then
-            rm -f "$ZIG_RUNTIME.$$"
-            echo "ERROR: $ZIG_BIN could not compile stdlib/runtime.c into stdlib/runtime.zig.o." >&2
-            exit 1
+elif [ -f "$SCRIPT_DIR/stdlib/runtime.cflags" ] && [ -f "$SCRIPT_DIR/stdlib/runtime.cc" ] \
+     && [ "$PROBED_CC_ID" != "$(cat "$SCRIPT_DIR/stdlib/runtime.cc")" ]; then
+    # ── A runtime for the compiler that links ──
+    # runtime.o is bitcode from the compiler that built the toolchain
+    # (runtime.cc names it), and bitcode reads forward only: an LLVM 22
+    # zig, or a distro clang 18, cannot load what a clang 23 wrote. This
+    # compiler is another one, so it links a runtime of its own: the same
+    # source, the same feature defines (runtime.cflags), its own LLVM.
+    # build.sh ships the bundled zig's next to runtime.o; any other is
+    # built once into the cache, and again when runtime.o is newer. (A
+    # toolchain from before runtime.cc existed keeps linking runtime.o.)
+    _rt_own="$SCRIPT_DIR/stdlib/runtime.$PROBED_CC_KEY.o"
+    if [ ! -f "$_rt_own" ] || [ "$RUNTIME" -nt "$_rt_own" ]; then
+        _rt_dir="${NURL_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/nurl}/runtime"
+        _rt_own="$_rt_dir/runtime.$PROBED_CC_KEY.o"
+        if [ ! -f "$_rt_own" ] || [ "$RUNTIME" -nt "$_rt_own" ]; then
+            echo "[runtime] building a runtime for $PROBED_CC_ID"
+            # The same bitcode flavour build.sh gives runtime.o on this OS.
+            _rt_lto="-flto"; [ "$(uname -s)" = "Linux" ] && _rt_lto="-flto=thin"
+            mkdir -p "$_rt_dir"
+            # shellcheck disable=SC2046
+            if ! cc_run -O2 $_rt_lto $(cat "$SCRIPT_DIR/stdlib/runtime.cflags") \
+                    -c "$SCRIPT_DIR/stdlib/runtime.c" -o "$_rt_own.$$"; then
+                rm -f "$_rt_own.$$"
+                echo "ERROR: could not compile stdlib/runtime.c for $PROBED_CC_ID" >&2
+                exit 1
+            fi
+            mv "$_rt_own.$$" "$_rt_own"
         fi
-        mv "$ZIG_RUNTIME.$$" "$ZIG_RUNTIME"
-        printf '%s\n' "$PROBED_ZIG_VERSION" > "$SCRIPT_DIR/stdlib/runtime.zig.ver"
     fi
-    RUNTIME_TO_LINK="$ZIG_RUNTIME"
+    RUNTIME_TO_LINK="$_rt_own"
 fi
 # ── ThinLTO by default, with a persistent codegen cache ─────────────
 #

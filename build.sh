@@ -383,21 +383,37 @@ printf '#define NURL_VERSION "%s"\n' "$(bash tools/version.sh 2>/dev/null || ech
 # A bootstrap/no_std profile compiles stdlib/runtime_core.c on its own.
 step "runtime"       bash -c "'$CLANG' -O2 $RT_LTO_FLAG $SAN_CFLAGS $CURL_CFLAGS $OPENSSL_CFLAGS $SQLITE3_CFLAGS $ZLIB_CFLAGS -c stdlib/runtime.c -o stdlib/runtime.o"
 
-# ── The zig path's own runtime ───────────────────────────────
-# A program built through a zig (the bundled one, or $NURL_ZIG) is
-# lowered by zig's LLVM, and runtime.o above is bitcode from $CLANG's.
-# Bitcode reads forward only: an LLVM 22 zig cannot load what a clang 23
-# wrote. So the zig path links its own runtime, compiled by that zig
-# from the same source with the same feature defines — the Linux twin
-# of build.bat's runtime.mingw.o — and the clang and the zig are free
-# to be any versions. The defines are written to runtime.cflags so
-# nurl.sh can rebuild runtime.zig.o itself when it meets a different
-# zig (runtime.zig.ver names the one that built it).
+# ── A runtime for the compiler that links ────────────────────
+# runtime.o above is LLVM bitcode from $CLANG, and bitcode reads forward
+# only: an older LLVM cannot load what a newer one wrote ("Unknown
+# attribute kind", "Invalid record"). The compiler that LINKS a program
+# need not be this one — the bundled zig (its own LLVM), or a user's
+# system clang older than the one that built the toolchain. So the
+# runtime records who built it (runtime.cc, that compiler's
+# `--version` line) and with which feature defines (runtime.cflags);
+# nurl.sh links runtime.o when its compiler is the same one and
+# otherwise a runtime that compiler built from the same source with the
+# same defines. The two versions no longer constrain each other.
+#
+# When a zig is around (the release fetches one into vendor/zig before
+# it builds), the runtime it needs is built here too and shipped, the
+# Linux twin of build.bat's runtime.mingw.o:
+# stdlib/runtime.<cksum of its --version line>.o.
 printf '%s\n' "$CURL_CFLAGS $OPENSSL_CFLAGS $SQLITE3_CFLAGS $ZLIB_CFLAGS" > stdlib/runtime.cflags
+"$CLANG" --version 2>/dev/null | head -1 > stdlib/runtime.cc
+rm -f stdlib/runtime.[0-9]*.o
 ZIG_RT=""
 if [ -n "${NURL_BUNDLE_ZIG:-}" ] && [ -x "$NURL_BUNDLE_ZIG/zig" ]; then ZIG_RT="$NURL_BUNDLE_ZIG/zig"
 elif [ -n "${NURL_ZIG:-}" ] && [ -x "$NURL_ZIG" ]; then ZIG_RT="$NURL_ZIG"
 elif [ -x vendor/zig/zig ]; then ZIG_RT="$PWD/vendor/zig/zig"
+fi
+if [ -n "$ZIG_RT" ] && [ -z "$SAN_CFLAGS" ]; then
+    _zig_cc_id="$("$ZIG_RT" cc --version 2>/dev/null | head -1)"
+    if [ "$_zig_cc_id" != "$(cat stdlib/runtime.cc)" ]; then
+        _zig_rt="stdlib/runtime.$(printf '%s' "$_zig_cc_id" | cksum | cut -d' ' -f1).o"
+        step "runtime-zig" bash -c "'$ZIG_RT' cc -O2 $RT_LTO_FLAG $CURL_CFLAGS $OPENSSL_CFLAGS $SQLITE3_CFLAGS $ZLIB_CFLAGS -c stdlib/runtime.c -o $_zig_rt"
+        log "[info] runtime for $ZIG_RT ($_zig_cc_id): $_zig_rt"
+    fi
 fi
 rm -f stdlib/runtime.zig.o stdlib/runtime.zig.ver
 if [ -n "$ZIG_RT" ] && [ -z "$SAN_CFLAGS" ]; then

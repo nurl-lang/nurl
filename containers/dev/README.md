@@ -29,7 +29,7 @@ Claude Code.
 
 | Area | Tools |
 |---|---|
-| Compiler | `clang` 18, `llvm`, `lld`, `libclang-rt-dev` (ASan/UBSan), `gdb`, `valgrind`, `strace`, `ltrace` |
+| Compiler | `clang` 23.1.5 with `lld`, compiler-rt (ASan/UBSan), `clang-format`, `clang-tidy` and the `llvm-*` tools — LLVM's own release via `tools/install-llvm.sh`, as in CI — plus `gdb`, `valgrind`, `strace`, `ltrace` |
 | Cross / freestanding | `zig` 0.17 at `/opt/zig`, `qemu-system-{x86,arm,misc}`, `cloud-hypervisor`, `grub-{pc,efi-amd64}-bin`, `xorriso`, `mtools`, `dosfstools`, `qemu-utils` |
 | FFI dev libs | `libssl`, `libcurl`, `libsqlite3`, `libpq`, `libzstd`, `zlib` |
 | Ecosystem web | Node 24, `pnpm` (corepack), `wrangler` |
@@ -62,7 +62,7 @@ The image lands around 4–5 GB. Three blocks are the bulk of the
 discretionary part and each is a build ARG:
 
 ```bash
-docker build \
+docker build --build-context tools=tools \
     --build-arg INCLUDE_RUST=0 \
     --build-arg INCLUDE_QEMU_CROSS=0 \
     --build-arg INCLUDE_WRANGLER=0 \
@@ -118,7 +118,7 @@ Sanitizer builds work out of the box (`./build.sh --san`), but leave
 `NURL_ZIG` unset for them. The image ships zig at `/opt/zig/zig` and
 deliberately does not export `NURL_ZIG`: `nurl.sh` prefers a bundled zig
 when it sees one, and zig's ASan runtime is a different LLVM generation
-from system clang 18's instrumentation — mixing them fails to link with
+from the system clang's instrumentation — mixing them fails to link with
 `undefined symbol: __asan_unregister_elf_globals`. Point `NURL_ZIG` at it
 per-command when you want the cross-compiler:
 

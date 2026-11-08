@@ -17,7 +17,8 @@
 #
 # Build and push (needs push rights to the nurllang org):
 #
-#   docker build -t nurllang/ci:ubuntu24-YYYYMMDD -t nurllang/ci:latest containers/ci
+#   docker build --build-context tools=tools \
+#       -t nurllang/ci:ubuntu24-YYYYMMDD -t nurllang/ci:latest containers/ci
 #   docker push nurllang/ci:ubuntu24-YYYYMMDD
 #   docker push nurllang/ci:latest
 #
@@ -38,17 +39,12 @@ ARG DEBIAN_FRONTEND=noninteractive
 # pre-installed those lines go away, but a stray sudo in a script must
 # not become the new mystery failure).
 #
-# libclang-rt-dev is the one GitHub's bare runner image hid: Ubuntu 24
-# splits the sanitizer runtimes out of `clang`, the runner image ships
-# them pre-installed, and the first containerized ASan job died with
-# "cannot find libclang_rt.asan-x86_64.a" 35 seconds in.
 # python3-xxhash replaces a per-run `pip install xxhash` in the zstd
 # gate — the same per-run network fetch this image exists to remove.
 RUN apt-get update -qq && apt-get install -y --no-install-recommends \
         bash \
         binutils \
         ca-certificates \
-        clang \
         curl \
         gdb \
         git \
@@ -56,13 +52,11 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
         grub-efi-amd64-bin \
         grub-pc-bin \
         jq \
-        libclang-rt-dev \
         libcurl4-openssl-dev \
         libpq-dev \
         libsqlite3-dev \
         libssl-dev \
         libzstd-dev \
-        llvm \
         mtools \
         openssl \
         pkg-config \
@@ -78,6 +72,14 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
         zlib1g-dev \
         zstd \
     && rm -rf /var/lib/apt/lists/*
+
+# clang/LLVM: LLVM's own release (Ubuntu 24.04's `clang` is 18), the
+# version and its digests in tools/install-llvm.sh — the one place every
+# image and workflow takes them from. lld becomes clang's default linker
+# there (the release ships no LLVMgold.so for GNU ld); compiler-rt, with
+# the sanitizer runtimes, comes inside the archive.
+COPY --from=tools install-llvm.sh /tmp/install-llvm.sh
+RUN sh /tmp/install-llvm.sh --link /usr/local/bin && rm /tmp/install-llvm.sh
 
 # The zig the ecosystem ships (install.sh, the playground image, the
 # aarch64 cross builds) — same version, same place the unikernel job

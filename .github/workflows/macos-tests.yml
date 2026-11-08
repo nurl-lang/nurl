@@ -181,6 +181,11 @@ jobs:
           brew install llvm coreutils pkg-config sqlite zstd
           echo "CLANG=$(brew --prefix llvm)/bin/clang" >> "$GITHUB_ENV"
           "$(brew --prefix llvm)/bin/clang" --version
+          # Homebrew's llvm tracks LLVM's latest stable release; it must be
+          # the major tools/install-llvm.sh pins for the other platforms.
+          want="$(sed -n 's/^LLVM_VERSION=//p' tools/install-llvm.sh)"
+          "$(brew --prefix llvm)/bin/clang" --version | grep -q "clang version ${want%%.*}\." \
+            || { echo "Homebrew llvm is not LLVM ${want%%.*} (tools/install-llvm.sh pins $want)" >&2; exit 1; }
           echo "gtimeout: $(command -v gtimeout || echo MISSING)"
 
       - name: ./build.sh (stage1 ≡ stage2 fixed point + run_tests.sh)

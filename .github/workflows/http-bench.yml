@@ -54,7 +54,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            clang \
+            zstd \
             pkg-config \
             openssl \
             libcurl4-openssl-dev \
@@ -63,6 +63,9 @@ jobs:
             libpq-dev \
             zlib1g-dev \
             libzstd-dev
+          # clang: LLVM's own release, pinned in tools/install-llvm.sh (the
+          # runner's Ubuntu clang is 18); /usr/local/bin is ahead of /usr/bin.
+          sudo ./tools/install-llvm.sh --link /usr/local/bin
 
       - name: Install Rust (stable, minimal profile)
         # The Rust peer's TLS path uses tokio-rustls, whose current

@@ -72,7 +72,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            clang \
+            zstd \
             pkg-config \
             libcurl4-openssl-dev \
             libssl-dev \
@@ -80,6 +80,9 @@ jobs:
             libpq-dev \
             zlib1g-dev \
             libzstd-dev
+          # clang: LLVM's own release, pinned in tools/install-llvm.sh (the
+          # runner's Ubuntu clang is 18); /usr/local/bin is ahead of /usr/bin.
+          sudo ./tools/install-llvm.sh --link /usr/local/bin
 
       - name: Install Rust (stable, minimal profile) + the wasm target
         # rustc ships wasm32-wasip1 as a rustup component, not by default;

@@ -10,7 +10,7 @@
 
   - **`nurlc`** — the self-hosted NURL compiler (bootstrapped `nurlc_lastgood.ll → nurlc_lastgood.bin → nurlc_self → nurlc_self2`; clang-only, no Python).
   - **Cross-compilation toolchains**, all preinstalled:
-    - **Linux** x86_64 ELF — `clang-16` + glibc, full FFI (HTTP / sqlite / canvas)
+    - **Linux** x86_64 ELF — `clang` 23.1.5 (LLVM release) + glibc, full FFI (HTTP / sqlite / canvas)
     - **Linux** cross — `zig cc`: `x86_64` / `aarch64` / `riscv64` musl (static),
       `aarch64` glibc. libc only; no HTTP/canvas/audio
     - **macOS** Mach-O — `zig cc`, Intel **and** Apple Silicon (libSystem only; no Cocoa/AudioToolbox)
@@ -76,6 +76,7 @@
   | **Liveness probe** | `GET /health` (no Docker `HEALTHCHECK` directive — wire one up in your orchestrator) |
   | **Supported arch** | `linux/amd64` |
   | **WASI SDK** | 24.0 |
+  | **clang** | 23.1.5 (LLVM release, `tools/install-llvm.sh`) |
   | **Zig** | 0.17.1 |
   | **libcurl (mingw)** | 8.10.1, static, Schannel |
 

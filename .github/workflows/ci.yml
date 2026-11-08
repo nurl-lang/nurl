@@ -498,10 +498,11 @@ jobs:
 
       - name: Named types defined before they are parameters (LLVM 23)
         # LLVM 18 resolves a forward reference to a named struct anywhere
-        # in a module; LLVM 23 (the macOS job's Homebrew clang) rejects one
-        # used as a parameter type before its `%T = type` line ("invalid
-        # type for function argument"). Checks every module the corpus
-        # just emitted, so this runner's older clang still catches it.
+        # in a module; LLVM 23 (the clang CI builds with) rejects one used
+        # as a parameter type before its `%T = type` line ("invalid type
+        # for function argument"). Checks every module the corpus just
+        # emitted and names the rule, rather than leaving the reader a
+        # parser error from whichever clang a user has.
         run: python3 tools/check_ir_type_order.py "$(ls -td build/tests/run.* | head -1)"/*.ll
 
       - name: Retain complete build logs
@@ -1361,9 +1362,20 @@ jobs:
           mem: 14336
           cpu: 3
           prepare: |
-            pkg install -y bash pkgconf sqlite3
+            # clang/LLVM 23 from ports' `latest` branch (the base system's
+            # clang is 18 and quarterly trails); lld from the same LLVM as
+            # clang's linker, since the base lld cannot read its bitcode.
+            mkdir -p /usr/local/etc/pkg/repos
+            echo 'FreeBSD: { url: "pkg+http://pkg.FreeBSD.org/${ABI}/latest" }' > /usr/local/etc/pkg/repos/FreeBSD.conf
+            pkg install -y bash pkgconf sqlite3 llvm23
+            echo '-fuse-ld=lld' > /usr/local/llvm23/bin/clang.cfg
+            echo '-fuse-ld=lld' > /usr/local/llvm23/bin/clang++.cfg
           run: |
-            clang --version
+            set -e
+            export CLANG=/usr/local/llvm23/bin/clang
+            want="$(sed -n 's/^LLVM_VERSION=//p' tools/install-llvm.sh)"
+            "$CLANG" --version | head -1
+            "$CLANG" --version | grep -q "clang version ${want%%.*}\." || { echo "llvm23 is not LLVM ${want%%.*}" >&2; exit 1; }
             ./build.sh
             ./tools/check_examples.sh
 

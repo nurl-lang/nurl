@@ -4,8 +4,7 @@ FROM debian:bookworm-slim AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        clang-16 \
-        llvm \
+        zstd \
         python3 \
         ca-certificates \
         bash \
@@ -26,8 +25,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         gcc-mingw-w64-x86-64 \
         binutils-mingw-w64-x86-64 \
         mingw-w64-tools \
-    && rm -rf /var/lib/apt/lists/* \
-    && ln -sf /usr/bin/clang-16 /usr/local/bin/clang
+    && rm -rf /var/lib/apt/lists/*
+
+# clang/LLVM: LLVM's own release, the version and digests in
+# tools/install-llvm.sh (the repo's one pin; Debian bookworm's clang is
+# 16). lld is its default linker (the release has no LLVMgold.so).
+# /opt/llvm-rt is the slice the runtime stage below needs to compile and
+# link a user's program: the driver, lld, the config and the resource dir.
+COPY tools/install-llvm.sh /tmp/install-llvm.sh
+RUN sh /tmp/install-llvm.sh --link /usr/local/bin && rm /tmp/install-llvm.sh \
+    && mkdir -p /opt/llvm-rt/bin /opt/llvm-rt/lib \
+    && cp -a /opt/llvm/bin/clang /opt/llvm/bin/clang-[0-9]* /opt/llvm/bin/clang.cfg \
+             /opt/llvm/bin/lld /opt/llvm/bin/ld.lld /opt/llvm-rt/bin/ \
+    && cp -a /opt/llvm/lib/clang /opt/llvm-rt/lib/
 
 RUN ln -sf /usr/bin/python3 /usr/local/bin/python
 
@@ -193,9 +203,8 @@ FROM debian:bookworm-slim
 # response then offered boot advice for a file it had not produced. The
 # stock `binutils` objcopy above is built for x86 only and cannot read a
 # foreign ELF, which is why the plain package is not enough. It is ~10 MB
-# against `llvm-16`'s ~100 MB for the same one command.
+# against the ~100 MB of a full LLVM's tools for the same one command.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        clang-16 \
         libcurl4-openssl-dev \
         libssl-dev \
         zlib1g-dev \
@@ -210,8 +219,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         qemu-system-arm \
         gcc-mingw-w64-x86-64 \
         binutils-mingw-w64-x86-64 \
-    && rm -rf /var/lib/apt/lists/* \
-    && ln -sf /usr/bin/clang-16 /usr/bin/clang
+    && rm -rf /var/lib/apt/lists/*
+
+# The builder's clang, the slice a build request needs (see stage 1).
+COPY --from=builder /opt/llvm-rt /opt/llvm
+RUN ln -sf /opt/llvm/bin/clang /usr/bin/clang && /usr/bin/clang --version | head -1
 
 ENV NURLC_PATH=/opt/nurl/build/nurlc \
     NURL_STDLIB_DIR=/opt/nurl/stdlib \

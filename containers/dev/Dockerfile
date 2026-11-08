@@ -28,14 +28,14 @@
 #
 # Build (from the repo root or anywhere; the build context is tiny):
 #
-#   docker build -t nurllang/dev:latest containers/dev
+#   docker build --build-context tools=tools -t nurllang/dev:latest containers/dev
 #
 # Run — see containers/dev/run.sh, which mounts the repo, forwards your
 # git/gh/Claude credentials and keeps agent state in named volumes.
 #
 # ubuntu:24.04 to match containers/ci and the ubuntu-latest runners, so
-# a failure reproduced here is a failure CI will also see. clang 18 and
-# glibc 2.39 are the versions the compiler's IR output is tuned against.
+# a failure reproduced here is a failure CI will also see: the same
+# glibc 2.39 and the same clang (tools/install-llvm.sh, as in containers/ci).
 FROM ubuntu:24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
@@ -83,17 +83,12 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # reproduces here. Two notes carried over from that file because they
 # cost real debugging time to learn:
 #
-#   libclang-rt-dev — Ubuntu 24 splits the sanitizer runtimes out of the
-#   `clang` package. Without it `build.sh --san` dies with "cannot find
-#   libclang_rt.asan-x86_64.a".
-#
 #   The grub/mtools/xorriso trio is what unikernel/build_bootable_image.sh
 #   shells out to; it checks for each by name and refuses early.
 RUN apt-get update -qq && apt-get install -y --no-install-recommends \
         bash \
         binutils \
         ca-certificates \
-        clang \
         curl \
         gdb \
         git \
@@ -101,13 +96,11 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
         grub-efi-amd64-bin \
         grub-pc-bin \
         jq \
-        libclang-rt-dev \
         libcurl4-openssl-dev \
         libpq-dev \
         libsqlite3-dev \
         libssl-dev \
         libzstd-dev \
-        llvm \
         mtools \
         openssl \
         pkg-config \
@@ -122,12 +115,19 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
         zstd \
     && rm -rf /var/lib/apt/lists/*
 
+# clang/LLVM: LLVM's own release (Ubuntu 24.04's `clang` is 18), the
+# version and its digests in tools/install-llvm.sh — the one place every
+# image and workflow takes them from. lld becomes clang's default linker
+# there (the release ships no LLVMgold.so for GNU ld); compiler-rt, with
+# the sanitizer runtimes, comes inside the archive.
+COPY --from=tools install-llvm.sh /tmp/install-llvm.sh
+RUN sh /tmp/install-llvm.sh --link /usr/local/bin --dev && rm /tmp/install-llvm.sh
+
 # ── 2. What a workbench adds on top ────────────────────────────────────
 # build-essential: gcc/make. The compiler itself needs clang (nurlc emits
 #   LLVM IR, which gcc cannot consume — nurl.sh says so explicitly), but
 #   bench/*.c, node-gyp and any pip source build want a working cc.
-# lld: the LTO link path, and the linker zig would otherwise shadow.
-# clang-format/clang-tidy: stdlib/*.c and unikernel/**.c hygiene.
+# (lld, clang-format and clang-tidy come with LLVM above, the same release.)
 # valgrind/strace/ltrace: the leak + syscall gates under tools/ reach for
 #   these when ASan is not the right instrument.
 # shellcheck: there are ~60 .sh files in this repo driving the gates.
@@ -150,8 +150,6 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
         bsdextrautils \
         build-essential \
         busybox-static \
-        clang-format \
-        clang-tidy \
         cmake \
         diffutils \
         dnsutils \
@@ -165,7 +163,6 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
         iputils-ping \
         less \
         libncurses-dev \
-        lld \
         locales \
         ltrace \
         make \

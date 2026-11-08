@@ -316,8 +316,9 @@ jobs:
           [ "$v" = "$ZIG_VER" ] || { echo "bundled zig is $v, expected $ZIG_VER" >&2; exit 1; }
           # …and the runtime that zig links, built by it (build.sh), not the
           # clang bitcode in runtime.o, which an older LLVM cannot read.
-          test -f dist/nurl/stdlib/runtime.zig.o || { echo "archive has no stdlib/runtime.zig.o" >&2; exit 1; }
-          [ "$(cat dist/nurl/stdlib/runtime.zig.ver)" = "$ZIG_VER" ] || { echo "runtime.zig.o was built by another zig" >&2; exit 1; }
+          id="$(dist/nurl/zig/zig cc --version | head -1)"
+          rt="dist/nurl/stdlib/runtime.$(printf '%s' "$id" | cksum | cut -d' ' -f1).o"
+          test -f "$rt" || { echo "archive has no runtime for its zig ($id): $rt" >&2; exit 1; }
           printf '$ `stdlib/core/io.nu`\n@ main \xe2\x86\x92 i { ( nurl_print `ok\\n` ) ^ 0 }\n' > /tmp/s.nu
           CLANG=/nonexistent/clang ./dist/nurl/bin/nurl /tmp/s.nu /tmp/s
           [ "$(/tmp/s)" = "ok" ]
@@ -379,16 +380,30 @@ jobs:
           # Forward the tag so the archive is named to match the others.
           envs: 'NURL_TAG'
           prepare: |
-            pkg install -y bash pkgconf sqlite3
+            # clang/LLVM 23 from ports' `latest` branch (the base system's
+            # clang is 18 and quarterly trails); lld from the same LLVM as
+            # clang's linker, since the base lld cannot read its bitcode.
+            mkdir -p /usr/local/etc/pkg/repos
+            echo 'FreeBSD: { url: "pkg+http://pkg.FreeBSD.org/${ABI}/latest" }' > /usr/local/etc/pkg/repos/FreeBSD.conf
+            pkg install -y bash pkgconf sqlite3 llvm23
+            echo '-fuse-ld=lld' > /usr/local/llvm23/bin/clang.cfg
+            echo '-fuse-ld=lld' > /usr/local/llvm23/bin/clang++.cfg
           run: |
             set -e
-            clang --version
+            export CLANG=/usr/local/llvm23/bin/clang
+            want="$(sed -n 's/^LLVM_VERSION=//p' tools/install-llvm.sh)"
+            "$CLANG" --version | head -1
+            "$CLANG" --version | grep -q "clang version ${want%%.*}\." || { echo "llvm23 is not LLVM ${want%%.*}" >&2; exit 1; }
             ./build.sh --no-tests
             ./tools/nurlpkg/build.sh
             NURL_HOME="$PWD/dist/nurl" ./tools/install-toolchain.sh
             # Smoke: the assembled toolchain must build + run a trivial program.
             printf '$ `stdlib/core/io.nu`\n@ main \xe2\x86\x92 i { ( nurl_print `ok\\n` ) ^ 0 }\n' > /tmp/s.nu
             ./dist/nurl/bin/nurl /tmp/s.nu /tmp/s && /tmp/s
+            # A user's base-system clang (18) cannot read the LLVM 23
+            # bitcode in runtime.o; nurl.sh builds that clang a runtime of
+            # its own. Prove it on the archive itself.
+            rm -f /tmp/s && CLANG=/usr/bin/clang ./dist/nurl/bin/nurl /tmp/s.nu /tmp/s && [ "$(/tmp/s)" = ok ]
             PKG="nurl-${NURL_TAG}-freebsd-x86_64.tar.gz"
             tar czf "$PKG" -C dist nurl
             # FreeBSD base has `sha256 -q` (no coreutils sha256sum). get-nurl.sh
@@ -426,8 +441,10 @@ jobs:
         with:
           ref: ${{ env.BUILD_REF }}
 
-      - name: Install LLVM/clang
-        run: choco install llvm -y --no-progress
+      - name: Install LLVM/clang (LLVM release, pinned)
+        # LLVM's own MSI, the version tools/install-llvm.sh pins, checked
+        # against its sha256 (Chocolatey's llvm trails the releases).
+        run: ./tools/install-llvm.ps1
         shell: pwsh
 
       - name: Install zlib + zstd (vcpkg, static)
