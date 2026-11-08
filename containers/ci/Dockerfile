@@ -27,6 +27,13 @@
 #
 # ubuntu:24.04 to match the ubuntu-latest runners the jobs ran on
 # bare, so the toolchain versions do not silently move in the switch.
+# An empty stand-in for the LLVM release archive. `docker build
+# --build-context llvm=DIR` replaces it with a directory that holds
+# LLVM-<version>-Linux-<arch>.tar.zst, and the image installs from that
+# file (still held to its sha256) instead of downloading 1.2 GB; without
+# it the archive is downloaded. See tools/install-llvm.sh.
+FROM scratch AS llvm
+
 FROM ubuntu:24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
@@ -85,7 +92,8 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
 # libgcc-13-dev (crtbeginS.o, libgcc_s) in the list above — what the
 # distro `clang` package used to pull in as its own dependencies.
 COPY --from=tools install-llvm.sh /tmp/install-llvm.sh
-RUN sh /tmp/install-llvm.sh --link /usr/local/bin && rm /tmp/install-llvm.sh
+RUN --mount=type=bind,from=llvm,target=/mnt/llvm \
+    sh /tmp/install-llvm.sh --link /usr/local/bin --from /mnt/llvm && rm /tmp/install-llvm.sh
 
 # The zig the ecosystem ships (install.sh, the playground image, the
 # aarch64 cross builds) — same version, same place the unikernel job

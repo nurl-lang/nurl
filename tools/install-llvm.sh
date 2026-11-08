@@ -6,13 +6,16 @@
 # runners all install LLVM through this script, so a bump is the three
 # lines below and nothing else.
 #
-#   tools/install-llvm.sh [--prefix DIR] [--link DIR] [--dev]
+#   tools/install-llvm.sh [--prefix DIR] [--link DIR] [--dev] [--from DIR]
 #
 #     --prefix DIR  where LLVM goes (default /opt/llvm)
 #     --link DIR    also symlink clang, clang++, ld.lld and the llvm-*
 #                   tools into DIR (e.g. /usr/local/bin), so `clang` on
 #                   PATH is this one
 #     --dev         also clang-format and clang-tidy (the dev container)
+#     --from DIR    take the release archive from DIR when it is there
+#                   (an offline box, a CI cache, a container build handed
+#                   it as a context); held to the same sha256 as a download
 #
 # Why the release archive and not a distro package: Ubuntu 24.04 ships
 # clang 18, and apt.llvm.org serves only a moving snapshot of the
@@ -45,13 +48,15 @@ LLVM_ASSET_ARM64=705827461
 PREFIX=/opt/llvm
 LINK_DIR=""
 DEV=0
+FROM_DIR=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --prefix) PREFIX="$2"; shift 2 ;;
         --link)   LINK_DIR="$2"; shift 2 ;;
         --dev)    DEV=1; shift ;;
+        --from)   FROM_DIR="$2"; shift 2 ;;
         --version) echo "$LLVM_VERSION"; exit 0 ;;
-        *) echo "usage: $0 [--prefix DIR] [--link DIR] [--dev] | --version" >&2; exit 2 ;;
+        *) echo "usage: $0 [--prefix DIR] [--link DIR] [--dev] [--from DIR] | --version" >&2; exit 2 ;;
     esac
 done
 
@@ -67,16 +72,22 @@ URL="https://github.com/llvm/llvm-project/releases/download/llvmorg-${LLVM_VERSI
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-echo "install-llvm.sh: $URL"
-# Two routes to the same bytes. github.com/…/releases/download is the
-# usual one, and it has answered 504 for this ~1.2 GB asset for an hour
-# at a time while the REST API's asset endpoint served it; the sha256
-# check below holds either way, so which route delivered is immaterial.
-if ! curl -fsSL --retry 4 --retry-delay 5 --retry-all-errors -o "$TMP/llvm.tar.zst" "$URL"; then
-    API="https://api.github.com/repos/llvm/llvm-project/releases/assets/$ASSET"
-    echo "install-llvm.sh: falling back to $API"
-    curl -fsSL --retry 8 --retry-delay 5 --retry-all-errors \
-        -H "Accept: application/octet-stream" -o "$TMP/llvm.tar.zst" "$API"
+if [ -n "$FROM_DIR" ] && [ -f "$FROM_DIR/$NAME.tar.zst" ]; then
+    echo "install-llvm.sh: $FROM_DIR/$NAME.tar.zst"
+    cp "$FROM_DIR/$NAME.tar.zst" "$TMP/llvm.tar.zst"
+else
+    echo "install-llvm.sh: $URL"
+    # Two routes to the same bytes. github.com/…/releases/download is the
+    # usual one, and it has answered 504 for this ~1.2 GB asset for an
+    # hour at a time while the REST API's asset endpoint served it; the
+    # sha256 check below holds either way, so which route delivered is
+    # immaterial.
+    if ! curl -fsSL --retry 4 --retry-delay 5 --retry-all-errors -o "$TMP/llvm.tar.zst" "$URL"; then
+        API="https://api.github.com/repos/llvm/llvm-project/releases/assets/$ASSET"
+        echo "install-llvm.sh: falling back to $API"
+        curl -fsSL --retry 8 --retry-delay 5 --retry-all-errors \
+            -H "Accept: application/octet-stream" -o "$TMP/llvm.tar.zst" "$API"
+    fi
 fi
 echo "$SHA  $TMP/llvm.tar.zst" | sha256sum -c -
 

@@ -36,6 +36,13 @@
 # ubuntu:24.04 to match containers/ci and the ubuntu-latest runners, so
 # a failure reproduced here is a failure CI will also see: the same
 # glibc 2.39 and the same clang (tools/install-llvm.sh, as in containers/ci).
+# An empty stand-in for the LLVM release archive. `docker build
+# --build-context llvm=DIR` replaces it with a directory that holds
+# LLVM-<version>-Linux-<arch>.tar.zst, and the image installs from that
+# file (still held to its sha256) instead of downloading 1.2 GB; without
+# it the archive is downloaded. See tools/install-llvm.sh.
+FROM scratch AS llvm
+
 FROM ubuntu:24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
@@ -127,7 +134,8 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
 # libgcc-13-dev (crtbeginS.o, libgcc_s) in the list above — what the
 # distro `clang` package used to pull in as its own dependencies.
 COPY --from=tools install-llvm.sh /tmp/install-llvm.sh
-RUN sh /tmp/install-llvm.sh --link /usr/local/bin --dev && rm /tmp/install-llvm.sh
+RUN --mount=type=bind,from=llvm,target=/mnt/llvm \
+    sh /tmp/install-llvm.sh --link /usr/local/bin --dev --from /mnt/llvm && rm /tmp/install-llvm.sh
 
 # ── 2. What a workbench adds on top ────────────────────────────────────
 # build-essential: gcc/make. The compiler itself needs clang (nurlc emits
