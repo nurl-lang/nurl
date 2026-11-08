@@ -111,7 +111,7 @@ def classify(rc, stderr):
 def lower(clang, ll, env):
     """rc and stderr of clang compiling the IR file `ll` at -O0."""
     try:
-        p = subprocess.run([clang, "-x", "ir", "-c", "-O0", "-w", ll, "-o", os.devnull],
+        p = subprocess.run([clang, "-c", "-O0", "-w", ll, "-o", os.devnull],
                            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                            text=True, errors="replace", timeout=900)
         return p.returncode, p.stderr

@@ -59,7 +59,11 @@ ARG INCLUDE_WRANGLER=1
 
 # Versions that are fetched rather than apt-installed. Pinned so a
 # rebuild is a reviewed diff, not a moving target.
-ARG ZIG_VERSION=0.16.0
+ARG ZIG_VERSION=0.17.1
+# ziglang.org's own digests for the two archives this image can unpack
+# (https://ziglang.org/download/index.json). Bump them with ZIG_VERSION.
+ARG ZIG_SHA256_X86_64=3581863e3cbcfd0fce0efc682ce7e9e93da96668a977791d356a26d2a7e9b17a
+ARG ZIG_SHA256_AARCH64=a1546d5646eb184437918d6635ca6b762a0e889eac09cef720ee7a1ed3fe7795
 ARG NODE_MAJOR=24
 ARG RUST_VERSION=1.97.1
 
@@ -287,12 +291,13 @@ RUN if [ "${INCLUDE_WRANGLER}" = "1" ]; then \
 # has no ASan runtime at all; nurl.sh picks clang for it, agora #126.)
 # Set NURL_ZIG per-command when you want zig; leave it unset otherwise.
 RUN case "${TARGETARCH}" in \
-        amd64) ZIG_ARCH=x86_64 ;; \
-        arm64) ZIG_ARCH=aarch64 ;; \
+        amd64) ZIG_ARCH=x86_64;  ZIG_SHA256="${ZIG_SHA256_X86_64}" ;; \
+        arm64) ZIG_ARCH=aarch64; ZIG_SHA256="${ZIG_SHA256_AARCH64}" ;; \
         *) echo "unsupported TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
     esac \
     && curl -fsSL --retry 5 -o /tmp/zig.tar.xz \
         "https://ziglang.org/download/${ZIG_VERSION}/zig-${ZIG_ARCH}-linux-${ZIG_VERSION}.tar.xz" \
+    && echo "${ZIG_SHA256}  /tmp/zig.tar.xz" | sha256sum -c - \
     && mkdir -p /opt/zig \
     && tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1 \
     && rm /tmp/zig.tar.xz \

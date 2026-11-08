@@ -30,7 +30,7 @@ Claude Code.
 | Area | Tools |
 |---|---|
 | Compiler | `clang` 18, `llvm`, `lld`, `libclang-rt-dev` (ASan/UBSan), `gdb`, `valgrind`, `strace`, `ltrace` |
-| Cross / freestanding | `zig` 0.16 at `/opt/zig`, `qemu-system-{x86,arm,misc}`, `cloud-hypervisor`, `grub-{pc,efi-amd64}-bin`, `xorriso`, `mtools`, `dosfstools`, `qemu-utils` |
+| Cross / freestanding | `zig` 0.17 at `/opt/zig`, `qemu-system-{x86,arm,misc}`, `cloud-hypervisor`, `grub-{pc,efi-amd64}-bin`, `xorriso`, `mtools`, `dosfstools`, `qemu-utils` |
 | FFI dev libs | `libssl`, `libcurl`, `libsqlite3`, `libpq`, `libzstd`, `zlib` |
 | Ecosystem web | Node 24, `pnpm` (corepack), `wrangler` |
 | Scripting / gates | Python 3.12 + `numpy` + `xxhash` + `venv`, `shellcheck`, `jq`, `openssl`, `minisign` |

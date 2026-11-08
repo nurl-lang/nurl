@@ -237,7 +237,7 @@ compiler at all** and is immune to the box's LLVM version. The release
 workflow downloads the per-arch zig (`Fetch bundled zig backend`) and
 `install-toolchain.sh` stages it at `<prefix>/zig/`, exactly where
 `nurl.sh` looks. Keep the bundled zig's LLVM ≥ the clang that built the
-release (zig 0.16 → LLVM 21), so `zig cc -flto` can read the shipped
+release (zig 0.17 → LLVM 22), so `zig cc -flto` can read the shipped
 `runtime.o` bitcode. (~45 MB compressed per arch — the size cost of "just
 works".)
 

@@ -11,7 +11,9 @@ whatever `curl … | bash` installs that day cannot be compared across runs.
 The rule this enforces, per `run:` block:
 
   * a download of an executable or an archive from the network must be
-    followed, in the same block, by `sha256sum -c` (or `shasum -a 256 -c`);
+    followed, in the same block, by `sha256sum -c` (or `shasum -a 256 -c`,
+    or in a PowerShell step `Get-FileHash -Algorithm SHA256` compared with
+    the pinned digest);
   * nothing may pipe a downloaded script into a shell.
 
 Downloads that are not tool installs — an API query whose output is parsed,
@@ -39,13 +41,16 @@ NOT_A_TOOL = re.compile(
         )""", re.X)
 
 # The verification that counts.
-VERIFIED = re.compile(r"sha256sum\s+-c|shasum\s+-a\s*256\s+-c|minisign\s+-V")
+VERIFIED = re.compile(r"sha256sum\s+-c|shasum\s+-a\s*256\s+-c|minisign\s+-V"
+                      r"|Get-FileHash\b[^\n]*-Algorithm\s+SHA256")
 
 # `curl … | bash`, `wget -O- … | sh`, and the same with the pipe on the next
 # line after a continuation.
 PIPED_TO_SHELL = re.compile(r"(curl|wget)[^\n|]*\|\s*(sudo\s+)?(ba)?sh\b")
 
-DOWNLOAD = re.compile(r"\b(curl|wget)\b")
+# PowerShell steps fetch with Invoke-WebRequest (alias iwr): the Windows
+# release leg unpacks a zig fetched that way into the published archive.
+DOWNLOAD = re.compile(r"\b(curl|wget|Invoke-WebRequest|iwr)\b", re.I)
 URL = re.compile(r"https?://[^\s\"'`)]+")
 # Downloading one of these is downloading a program.
 ARTIFACT = re.compile(
@@ -98,7 +103,7 @@ def check(path):
                  if ARTIFACT.search(u) and not NOT_A_TOOL.match(u)]
         # A URL assembled from shell variables never matches ARTIFACT on its
         # own; catch those by the extension of the file curl writes to.
-        if not tools and re.search(r"-[oO]\s*\"?[^\s\"]*\.(tar\.(gz|xz)|tgz|zip)", block):
+        if not tools and re.search(r"-([oO]|OutFile)\s*\"?[^\s\"]*\.(tar\.(gz|xz)|tgz|zip)", block):
             tools = ["(URL built from shell variables)"]
         if tools and not VERIFIED.search(block):
             problems.append((lineno, "downloads a tool with no checksum check",

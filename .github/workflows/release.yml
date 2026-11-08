@@ -245,24 +245,24 @@ jobs:
 
       # Bundle a self-contained zig so the installed toolchain can build
       # programs (and `nurlpkg install`) with no system clang and immune to
-      # the box's LLVM version. zig 0.16 ships LLVM 21; keep it >= the clang
+      # the box's LLVM version. zig 0.17 ships LLVM 22; keep it >= the clang
       # used above so `zig cc -flto` can read the shipped runtime.o bitcode.
       - name: Fetch bundled zig backend
         # Pinned by VERSION and by CONTENT. This archive is unpacked into the
         # published release, so whatever it contains is what users install:
         # a version-pinned URL alone trusts whatever those bytes are on the
         # day the release runs. The two digests are ziglang.org's own, from
-        # https://ziglang.org/download/index.json for 0.16.0. Bumping ZIG_VER
+        # https://ziglang.org/download/index.json for 0.17.1. Bumping ZIG_VER
         # without bumping them fails the build, which is the point.
         run: |
-          ZIG_VER=0.16.0
+          ZIG_VER=0.17.1
           case "${{ matrix.target }}" in
             linux-x86_64-glibc)
               ZA=x86_64
-              ZIG_SHA=70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00 ;;
+              ZIG_SHA=3581863e3cbcfd0fce0efc682ce7e9e93da96668a977791d356a26d2a7e9b17a ;;
             linux-arm64-glibc)
               ZA=aarch64
-              ZIG_SHA=ea4b09bfb22ec6f6c6ceac57ab63efb6b46e17ab08d21f69f3a48b38e1534f17 ;;
+              ZIG_SHA=a1546d5646eb184437918d6635ca6b762a0e889eac09cef720ee7a1ed3fe7795 ;;
             *) echo "no zig mapping for ${{ matrix.target }}" >&2; exit 1 ;;
           esac
           url="https://ziglang.org/download/${ZIG_VER}/zig-${ZA}-linux-${ZIG_VER}.tar.xz"
@@ -428,9 +428,14 @@ jobs:
       - name: Fetch bundled zig backend
         shell: pwsh
         run: |
-          $zigVer = "0.16.0"
+          $zigVer = "0.17.1"
+          # Pinned by content too: ziglang.org's own digest for this archive,
+          # from https://ziglang.org/download/index.json. Bump it with $zigVer.
+          $zigSha = "b03f477a1943673e02aca0f570e8030dffd536ce1f45cbc4d3326ec31159562e"
           $url = "https://ziglang.org/download/$zigVer/zig-x86_64-windows-$zigVer.zip"
           Invoke-WebRequest $url -OutFile zig.zip
+          $got = (Get-FileHash zig.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($got -ne $zigSha) { throw "zig.zip sha256 is $got, expected $zigSha" }
           Expand-Archive zig.zip -DestinationPath vendor
           Move-Item "vendor/zig-x86_64-windows-$zigVer" vendor/zig
           & vendor/zig/zig.exe version

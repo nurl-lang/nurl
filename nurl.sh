@@ -617,8 +617,8 @@ else
     printf 'declare void @nurl_opaque_probe(i8*, ptr)\n' > "$_probe_ll"
     if [ "$PROBE_LOADED" = "1" ]; then
         : # cached answer already in OPAQUE_FLAGS
-    elif ! "$CLANG" -c -x ir "$_probe_ll" -o /dev/null >/dev/null 2>&1; then
-        if "$CLANG" -Xclang -opaque-pointers -c -x ir "$_probe_ll" -o /dev/null >/dev/null 2>&1; then
+    elif ! "$CLANG" -c "$_probe_ll" -o /dev/null >/dev/null 2>&1; then
+        if "$CLANG" -Xclang -opaque-pointers -c "$_probe_ll" -o /dev/null >/dev/null 2>&1; then
             OPAQUE_FLAGS="-Xclang -opaque-pointers"
         else
             rm -f "$_probe_ll"
