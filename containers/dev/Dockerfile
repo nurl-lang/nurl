@@ -96,10 +96,13 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
         grub-efi-amd64-bin \
         grub-pc-bin \
         jq \
+        libc6-dev \
         libcurl4-openssl-dev \
+        libgcc-13-dev \
         libpq-dev \
         libsqlite3-dev \
         libssl-dev \
+        libstdc++-13-dev \
         libzstd-dev \
         mtools \
         openssl \
@@ -119,7 +122,10 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
 # version and its digests in tools/install-llvm.sh — the one place every
 # image and workflow takes them from. lld becomes clang's default linker
 # there (the release ships no LLVMgold.so for GNU ld); compiler-rt, with
-# the sanitizer runtimes, comes inside the archive.
+# the sanitizer runtimes, comes inside the archive. The C runtime it
+# links against is the system's, as for any clang: libc6-dev and
+# libgcc-13-dev (crtbeginS.o, libgcc_s) in the list above — what the
+# distro `clang` package used to pull in as its own dependencies.
 COPY --from=tools install-llvm.sh /tmp/install-llvm.sh
 RUN sh /tmp/install-llvm.sh --link /usr/local/bin --dev && rm /tmp/install-llvm.sh
 

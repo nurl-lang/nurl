@@ -5,6 +5,8 @@ FROM debian:bookworm-slim AS builder
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         zstd \
+        libc6-dev \
+        libgcc-12-dev \
         python3 \
         ca-certificates \
         bash \
@@ -205,6 +207,8 @@ FROM debian:bookworm-slim
 # foreign ELF, which is why the plain package is not enough. It is ~10 MB
 # against the ~100 MB of a full LLVM's tools for the same one command.
 RUN apt-get update && apt-get install -y --no-install-recommends \
+        libc6-dev \
+        libgcc-12-dev \
         libcurl4-openssl-dev \
         libssl-dev \
         zlib1g-dev \

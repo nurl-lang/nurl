@@ -25,6 +25,13 @@
 # It does carry lld, and lld reads LLVM bitcode itself: the prefix gets
 # a clang config file that makes lld clang's default linker, so every
 # `clang … -flto` link works with no flag at the call site.
+#
+# Like any clang, it links against the system's C runtime: the libc
+# headers and crt files (libc6-dev) and GCC's support objects and
+# libgcc_s (libgcc-N-dev — crtbeginS.o lives there). A distro `clang`
+# package pulls those in as dependencies; with this archive the image or
+# runner must have them (GitHub's Ubuntu runners do; the Dockerfiles
+# install them).
 set -eu
 
 LLVM_VERSION=23.1.5
