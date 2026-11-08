@@ -30,6 +30,10 @@ set -eu
 LLVM_VERSION=23.1.5
 LLVM_SHA256_X64=c3107384835f788768f614db610e87fba7077f125ca950eb02a78bab0a308065
 LLVM_SHA256_ARM64=830ceb70edf63849ce66e97bf85310a3bf2bdd04c860a9f2fa4ef1560e290cef
+# The same two archives by GitHub's asset id (immutable), for the second
+# route below.
+LLVM_ASSET_X64=705660944
+LLVM_ASSET_ARM64=705827461
 
 PREFIX=/opt/llvm
 LINK_DIR=""
@@ -45,8 +49,8 @@ while [ $# -gt 0 ]; do
 done
 
 case "$(uname -m)" in
-    x86_64|amd64)  ARCH=X64;   SHA="$LLVM_SHA256_X64" ;;
-    aarch64|arm64) ARCH=ARM64; SHA="$LLVM_SHA256_ARM64" ;;
+    x86_64|amd64)  ARCH=X64;   SHA="$LLVM_SHA256_X64";   ASSET="$LLVM_ASSET_X64" ;;
+    aarch64|arm64) ARCH=ARM64; SHA="$LLVM_SHA256_ARM64"; ASSET="$LLVM_ASSET_ARM64" ;;
     *) echo "install-llvm.sh: no LLVM $LLVM_VERSION archive for $(uname -m)" >&2; exit 1 ;;
 esac
 command -v zstd >/dev/null 2>&1 || { echo "install-llvm.sh: needs zstd" >&2; exit 1; }
@@ -57,7 +61,16 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 echo "install-llvm.sh: $URL"
-curl -fsSL --retry 8 --retry-delay 5 --retry-all-errors -o "$TMP/llvm.tar.zst" "$URL"
+# Two routes to the same bytes. github.com/…/releases/download is the
+# usual one, and it has answered 504 for this ~1.2 GB asset for an hour
+# at a time while the REST API's asset endpoint served it; the sha256
+# check below holds either way, so which route delivered is immaterial.
+if ! curl -fsSL --retry 4 --retry-delay 5 --retry-all-errors -o "$TMP/llvm.tar.zst" "$URL"; then
+    API="https://api.github.com/repos/llvm/llvm-project/releases/assets/$ASSET"
+    echo "install-llvm.sh: falling back to $API"
+    curl -fsSL --retry 8 --retry-delay 5 --retry-all-errors \
+        -H "Accept: application/octet-stream" -o "$TMP/llvm.tar.zst" "$API"
+fi
 echo "$SHA  $TMP/llvm.tar.zst" | sha256sum -c -
 
 # What the repository runs, and nothing else: the archive unpacks to

@@ -14,6 +14,7 @@
 $ErrorActionPreference = "Stop"
 
 $LlvmMsiSha256 = "288ab326377157a9e02e6fb9724914cc2b55963882d493a405f31dc66e837c12"
+$LlvmMsiAsset  = 705475757   # the same file by GitHub's (immutable) asset id
 
 $sh = Get-Content (Join-Path $PSScriptRoot "install-llvm.sh") -Raw
 if ($sh -notmatch '(?m)^LLVM_VERSION=([0-9.]+)\s*$') { throw "no LLVM_VERSION= line in tools/install-llvm.sh" }
@@ -22,7 +23,15 @@ $v = $Matches[1]
 $msi = Join-Path ([System.IO.Path]::GetTempPath()) "LLVM-$v-win64.msi"
 $url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-$v/LLVM-$v-win64.msi"
 Write-Host "install-llvm.ps1: $url"
-Invoke-WebRequest $url -OutFile $msi -MaximumRetryCount 8 -RetryIntervalSec 5
+# Two routes to the same bytes, as in install-llvm.sh: the release
+# download URL, then the REST API's asset endpoint. The sha256 decides.
+try {
+    Invoke-WebRequest $url -OutFile $msi -MaximumRetryCount 4 -RetryIntervalSec 5
+} catch {
+    $api = "https://api.github.com/repos/llvm/llvm-project/releases/assets/$LlvmMsiAsset"
+    Write-Host "install-llvm.ps1: falling back to $api"
+    Invoke-WebRequest $api -Headers @{ Accept = "application/octet-stream" } -OutFile $msi -MaximumRetryCount 8 -RetryIntervalSec 5
+}
 $got = (Get-FileHash $msi -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($got -ne $LlvmMsiSha256) { throw "LLVM-$v-win64.msi sha256 is $got, expected $LlvmMsiSha256" }
 
