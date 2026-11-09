@@ -1,6 +1,6 @@
 // closure_body_local_bound_to_a_value_block_grown_past_a_slice: agora #349 — inside a closure handed to a runner, a body local bound to a value block of a lend, then grown; a slice of the element kept
 // Closed: a closure body local read out of a lend no name carries reaches the captures its source expression names (agora #349, #449).
-// main cd8c0a6: accepted; AddressSanitizer: heap-use-after-free.
+// main 21a0fb5: accepted; AddressSanitizer: heap-use-after-free.
 // map: §2.11 | A2 | rejected | - | agora #349: a closure body local bound to a value block grown past a slice
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`

@@ -1,6 +1,6 @@
 // fresh_returning_helper_below_grown_inline_runs_clean: agora #349 — a fresh-returning helper defined below, written inline as the grown argument, past a view of `vs[0]`
 // The shape the fix must keep: a callee not compiled yet no longer stands for every argument (agora #349).
-// main cd8c0a6: refused (a false positive).
+// main 21a0fb5: refused (a false positive).
 // map: §2.10 | A2 | runs-clean | - | agora #349: a fresh-returning helper defined below, grown inline
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`

@@ -1,6 +1,6 @@
 // function_binds_a_value_block_of_its_parameters_element_and_clears_it: agora #461 — in `top`, `: r { : t ( vec_at p 0 ) t }`, then `( clr r )`
 // Closed: a local bound to a value block that may lend is read out of what its source expression names (agora #461).
-// main cd8c0a6: accepted; AddressSanitizer: heap-use-after-free.
+// main 21a0fb5: accepted; AddressSanitizer: heap-use-after-free.
 // map: §2.10 | A2 | rejected | - | agora #461: a function binds a value block of its parameter's element and clears it
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`

@@ -1,6 +1,6 @@
 // function_grows_a_payload_of_a_nested_lend_of_its_parameter: agora #461 — `top` grows the `??` payload of `( vec_get ( vec_at w 0 ) 0 )`; the caller keeps a slice across the call
 // Closed: a function's drop and irealloc summaries follow a lend its names miss, by edges conditioned on the source expression and decided at module end (agora #461).
-// main cd8c0a6: accepted; AddressSanitizer: heap-use-after-free.
+// main 21a0fb5: accepted; AddressSanitizer: heap-use-after-free.
 // map: §2.10 | A2 | rejected | - | agora #461: a function grows a payload of a nested lend of its parameter
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`

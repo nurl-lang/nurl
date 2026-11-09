@@ -1,6 +1,6 @@
 // function_clearing_a_nested_element_with_the_view_read_before_runs_clean: agora #461 — `a_g19_task`'s `top`, the view read only before `( top w )`
 // The shape the fix must keep: a view read before the call (agora #461).
-// main cd8c0a6: runs clean.
+// main 21a0fb5: runs clean.
 // map: §2.10 | A2 | runs-clean | - | agora #461: a function clearing a nested element, the view read before
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`

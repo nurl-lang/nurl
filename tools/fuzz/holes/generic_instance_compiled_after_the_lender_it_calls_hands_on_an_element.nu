@@ -1,6 +1,6 @@
 // generic_instance_compiled_after_the_lender_it_calls_hands_on_an_element: agora #461 — a generic `each0` whose instance is compiled after main's `vec_at` instance it calls
 // Closed: a function's drop and irealloc summaries follow a lend its names miss, by edges conditioned on the source expression and decided at module end (agora #461).
-// main cd8c0a6: accepted; AddressSanitizer: heap-use-after-free.
+// main 21a0fb5: accepted; AddressSanitizer: heap-use-after-free.
 // map: §2.10 | A2 | rejected | - | agora #461: a generic instance compiled after the lender it calls hands on an element
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`

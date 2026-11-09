@@ -1,6 +1,6 @@
 // function_clearing_a_value_block_with_a_fresh_tail_runs_clean: agora #461 — `top` clears a value block whose tail is a block-local fresh copy of `vv`'s data
 // The shape the fix must keep: a block whose tail lends nothing (agora #461).
-// main cd8c0a6: runs clean.
+// main 21a0fb5: runs clean.
 // map: §2.10 | A2 | runs-clean | - | agora #461: a function clearing a value block with a fresh tail
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`

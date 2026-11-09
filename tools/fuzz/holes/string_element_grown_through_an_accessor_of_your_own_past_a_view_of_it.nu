@@ -1,6 +1,6 @@
 // string_element_grown_through_an_accessor_of_your_own_past_a_view_of_it: agora #349 — `( string_push_str ( first_str vs ) … )`, `first_str` handing back `( vec_at vs 0 )`, with a view of that String kept
 // Closed: an argument that is no binding is named by its source expression (`@sx`), and the walk ends the views of the storage it reaches by the final summaries (agora #349).
-// main cd8c0a6: accepted; AddressSanitizer: heap-use-after-free.
+// main 21a0fb5: accepted; AddressSanitizer: heap-use-after-free.
 // map: §2.10 | A2 | rejected | - | agora #349: a String element grown through an accessor of your own past a view of it
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`

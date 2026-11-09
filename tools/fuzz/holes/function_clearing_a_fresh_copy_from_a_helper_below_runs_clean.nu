@@ -1,6 +1,6 @@
 // function_clearing_a_fresh_copy_from_a_helper_below_runs_clean: agora #461 — `top` hands `clr` a fresh Vec made from its parameter by `mkfresh`, defined below main
 // The shape the fix must keep: a callee not compiled yet no longer stands for every argument (agora #461).
-// main cd8c0a6: refused (a false positive).
+// main 21a0fb5: refused (a false positive).
 // map: §2.10 | A2 | runs-clean | - | agora #461: a function clearing a fresh copy from a helper defined below
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`

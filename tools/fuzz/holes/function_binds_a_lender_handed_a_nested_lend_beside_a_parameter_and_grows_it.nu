@@ -1,6 +1,6 @@
 // function_binds_a_lender_handed_a_nested_lend_beside_a_parameter_and_grows_it: agora #461 — in `top`, `: r ( either ( vec_at p 0 ) q k )`, then `( vec_reserve r n )`
 // Closed: a local bound to a lender handed a nested lend beside a named one is read out of both (agora #461).
-// main cd8c0a6: accepted; AddressSanitizer: heap-use-after-free.
+// main 21a0fb5: accepted; AddressSanitizer: heap-use-after-free.
 // map: §2.10 | A2 | rejected | - | agora #461: a function binds a lender handed a nested lend beside a parameter and grows it
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`

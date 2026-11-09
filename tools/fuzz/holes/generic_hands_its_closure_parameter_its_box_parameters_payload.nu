@@ -1,6 +1,6 @@
 // generic_hands_its_closure_parameter_its_box_parameters_payload: agora #461 — a generic hands its closure parameter `( box_get [A] b )`
 // Closed: a lender whose lend raw provenance makes counts as one whose answer is still owed (agora #461).
-// main cd8c0a6: accepted; AddressSanitizer: heap-use-after-free.
+// main 21a0fb5: accepted; AddressSanitizer: heap-use-after-free.
 // map: §2.10 | A2 | rejected | - | agora #461: a generic hands its closure parameter its box parameter's payload
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`

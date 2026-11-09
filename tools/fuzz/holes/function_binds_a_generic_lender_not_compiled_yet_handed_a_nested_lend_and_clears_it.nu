@@ -1,6 +1,6 @@
 // function_binds_a_generic_lender_not_compiled_yet_handed_a_nested_lend_and_clears_it: agora #461 — in `top`, `: r ( geither [String] ( vec_at p 0 ) q k )`, the generic's instance not compiled yet, then `( clr r )`
 // Closed: a lender whose lent positions are not known yet reads the local out of its lending arguments too, decided at module end (g_call_lend_unk, agora #461).
-// main cd8c0a6: accepted; AddressSanitizer: heap-use-after-free.
+// main 21a0fb5: accepted; AddressSanitizer: heap-use-after-free.
 // map: §2.10 | A2 | rejected | - | agora #461: a function binds a generic lender not compiled yet, handed a nested lend, and clears it
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`

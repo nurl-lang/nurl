@@ -1,6 +1,6 @@
 // string_element_grown_inline_in_a_closure_that_runs_past_a_view_of_it: agora #349 — `string_push_str ( vec_at vs 0 ) …` inside a closure that runs while a view of that String is kept
 // Closed: the closure's effect is marked lent on the captures its source expression names, and replays where the closure runs (agora #349).
-// main cd8c0a6: accepted; AddressSanitizer: heap-use-after-free.
+// main 21a0fb5: accepted; AddressSanitizer: heap-use-after-free.
 // map: §2.11 | A2 | rejected | - | agora #349: a String element grown inline in a closure that runs past a view of it
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`

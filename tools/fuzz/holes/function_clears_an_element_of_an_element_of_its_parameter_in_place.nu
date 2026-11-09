@@ -1,6 +1,6 @@
 // function_clears_an_element_of_an_element_of_its_parameter_in_place: agora #461 — `top` writes `( vec_clear ( vec_at ( vec_at vvv 0 ) 0 ) )` itself
 // Closed: a function's drop and irealloc summaries follow a lend its names miss, by edges conditioned on the source expression and decided at module end (agora #461).
-// main cd8c0a6: accepted; AddressSanitizer: heap-use-after-free.
+// main 21a0fb5: accepted; AddressSanitizer: heap-use-after-free.
 // map: §2.10 | A2 | rejected | - | agora #461: a function clears an element of an element of its parameter in place
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`

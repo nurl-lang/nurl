@@ -1,6 +1,6 @@
 // closure_growing_another_vecs_element_inline_runs_clean: agora #349 — a closure handed to a runner grows `( vec_at other 0 )` while a slice of `vv[0]` is kept
 // The shape the fix must keep: the effect names only the capture the expression is rooted at (agora #349).
-// main cd8c0a6: runs clean.
+// main 21a0fb5: runs clean.
 // map: §2.11 | A2 | runs-clean | - | agora #349: a closure growing another Vec's element inline
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`

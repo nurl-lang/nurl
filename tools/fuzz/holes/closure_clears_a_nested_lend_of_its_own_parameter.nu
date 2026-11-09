@@ -1,6 +1,6 @@
 // closure_clears_a_nested_lend_of_its_own_parameter: agora #461 — a closure clears `( vec_at ( vec_at p 0 ) 0 )` of its own parameter; a runner calls it with `w`
 // Closed: a closure body's argument named by its source expression adds its drop edges to the closure's summary as names do (agora #461).
-// main cd8c0a6: accepted; AddressSanitizer: heap-use-after-free.
+// main 21a0fb5: accepted; AddressSanitizer: heap-use-after-free.
 // map: §2.11 | A2 | rejected | - | agora #461: a closure clears a nested lend of its own parameter
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`

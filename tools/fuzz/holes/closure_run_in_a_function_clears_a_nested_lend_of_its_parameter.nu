@@ -1,6 +1,6 @@
 // closure_run_in_a_function_clears_a_nested_lend_of_its_parameter: agora #461 — inside `top`, a closure clears `( vec_at ( vec_at vvv 0 ) 0 )` of the captured parameter and is run there
 // Closed: a closure body's argument named by its source expression adds its drop edges to the enclosing function's summary as names do (agora #461).
-// main cd8c0a6: accepted; AddressSanitizer: heap-use-after-free.
+// main 21a0fb5: accepted; AddressSanitizer: heap-use-after-free.
 // map: §2.11 | A2 | rejected | - | agora #461: a closure run in a function clears a nested lend of its parameter
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`

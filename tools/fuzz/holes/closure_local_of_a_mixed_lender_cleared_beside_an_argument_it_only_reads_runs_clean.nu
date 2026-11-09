@@ -1,6 +1,6 @@
 // closure_local_of_a_mixed_lender_cleared_beside_an_argument_it_only_reads_runs_clean: agora #461 — in a closure, `: r ( either3 ( vec_at w 0 ) q z )`, `either3` handing back `a` or `b` and only reading `c`, then `( vec_clear r )`; a view inside `z` kept
 // The shape the fix must keep: the closure local is read out of the arguments that lend, not one the lender only reads (agora #461).
-// main cd8c0a6: runs clean.
+// main 21a0fb5: runs clean.
 // map: §2.11 | A2 | runs-clean | - | agora #461: a closure local of a mixed lender cleared beside an argument it only reads
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`

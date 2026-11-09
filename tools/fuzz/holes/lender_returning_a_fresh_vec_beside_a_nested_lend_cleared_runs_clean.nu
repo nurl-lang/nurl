@@ -1,6 +1,6 @@
 // lender_returning_a_fresh_vec_beside_a_nested_lend_cleared_runs_clean: agora #461 — `: r ( pick ( vec_at p 0 ) q k )`, `pick` returning a fresh Vec; `( clr r )` clears only that
 // The shape the fix must keep: a value that may not lend makes no edge (agora #461).
-// main cd8c0a6: runs clean.
+// main 21a0fb5: runs clean.
 // map: §2.10 | A2 | runs-clean | - | agora #461: a lender returning a fresh Vec beside a nested lend, cleared
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`

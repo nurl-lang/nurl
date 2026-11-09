@@ -1,6 +1,6 @@
 // closure_in_a_function_clearing_a_fresh_locals_nested_element_runs_clean: agora #461 — inside `top`, a closure clears a nested lend of a fresh local, not of the parameter
 // The shape the fix must keep: only the parameters the expression is rooted at get an edge (agora #461).
-// main cd8c0a6: runs clean.
+// main 21a0fb5: runs clean.
 // map: §2.11 | A2 | runs-clean | - | agora #461: a closure in a function clearing a fresh local's nested element
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`

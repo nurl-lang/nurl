@@ -1,6 +1,6 @@
 // generic_over_rows_hands_its_closure_a_row_of_its_parameter: agora #461 — a generic over `( Vec ( Vec T ) )` hands its closure `( @ v ( Vec T ) )` the parameter's element
 // Closed: a function's drop and irealloc summaries follow a lend its names miss, by edges conditioned on the source expression and decided at module end (agora #461).
-// main cd8c0a6: accepted; AddressSanitizer: heap-use-after-free.
+// main 21a0fb5: accepted; AddressSanitizer: heap-use-after-free.
 // map: §2.10 | A2 | rejected | - | agora #461: a generic over rows hands its closure a row of its parameter
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`

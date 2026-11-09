@@ -1,6 +1,6 @@
 // closure_local_bound_to_a_generic_lender_not_compiled_yet_grown_past_a_slice: agora #461 — in a closure handed to a runner, `: r ( geither [u] ( vec_at w 0 ) q 1 )`, then `( vec_reserve [u] r 4096 )`
 // Closed: a lender whose lent positions are not known yet reads the local out of its lending arguments too (g_call_lend_unk, agora #461).
-// main cd8c0a6: accepted; AddressSanitizer: heap-use-after-free.
+// main 21a0fb5: accepted; AddressSanitizer: heap-use-after-free.
 // map: §2.11 | A2 | rejected | - | agora #461: a closure local bound to a generic lender not compiled yet, grown past a slice
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`

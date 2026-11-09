@@ -1,6 +1,6 @@
 // forwarder_to_a_fresh_returning_helper_below_runs_clean: agora #349 — `mk` (above) forwards to `helper` (below) that returns a fresh String, grown past a view of `vs[0]`
 // The shape the fix must keep: a callee not compiled yet no longer stands for every argument (agora #349).
-// main cd8c0a6: runs clean.
+// main 21a0fb5: runs clean.
 // map: §2.10 | A2 | runs-clean | - | agora #349: a forwarder to a fresh-returning helper defined below
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`

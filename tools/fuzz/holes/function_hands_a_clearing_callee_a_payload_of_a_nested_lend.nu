@@ -1,6 +1,6 @@
 // function_hands_a_clearing_callee_a_payload_of_a_nested_lend: agora #461 — `top` matches the payload of `( vec_get ( vec_at vvv 0 ) 0 )` and hands it to `clr`
 // Closed: a `??` payload of a call whose lend no name carries is read out of the parameters its source expression names, under that condition (agora #461).
-// main cd8c0a6: accepted; AddressSanitizer: heap-use-after-free.
+// main 21a0fb5: accepted; AddressSanitizer: heap-use-after-free.
 // map: §2.10 | A2 | rejected | - | agora #461: a function hands a clearing callee a payload of a nested lend
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`

@@ -1,6 +1,6 @@
 // function_hands_a_clearing_callee_a_field_of_its_parameters_element: agora #461 — `( clr . ( vec_at [H] hs 0 ) rows )` in `top`
 // Closed: a function's drop and irealloc summaries follow a lend its names miss, by edges conditioned on the source expression and decided at module end (agora #461).
-// main cd8c0a6: accepted; AddressSanitizer: heap-use-after-free.
+// main 21a0fb5: accepted; AddressSanitizer: heap-use-after-free.
 // map: §2.10 | A2 | rejected | - | agora #461: a function hands a clearing callee a field of its parameter's element
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`

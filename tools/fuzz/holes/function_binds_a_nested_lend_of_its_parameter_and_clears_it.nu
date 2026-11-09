@@ -1,6 +1,6 @@
 // function_binds_a_nested_lend_of_its_parameter_and_clears_it: agora #461 — inside `top`, `: r ( vec_at ( vec_at vvv 0 ) 0 )`, then `( clr r )`
 // Closed: a local bound to a lend no name carries is read out of what its source expression names, under that condition (agora #461).
-// main cd8c0a6: accepted; AddressSanitizer: heap-use-after-free.
+// main 21a0fb5: accepted; AddressSanitizer: heap-use-after-free.
 // map: §2.10 | A2 | rejected | - | agora #461: a function binds a nested lend of its parameter and clears it
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`

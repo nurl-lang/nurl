@@ -1,6 +1,6 @@
 // field_accessor_over_a_lent_element_grown_past_a_slice_of_it: agora #349 — `( vec_reserve ( data_of ( vec_at rs 0 ) ) n )`, a field accessor over a lent element
 // Closed: an argument that is no binding is named by its source expression (`@sx`), and the walk ends the views of the storage it reaches by the final summaries (agora #349).
-// main cd8c0a6: accepted; AddressSanitizer: heap-use-after-free.
+// main 21a0fb5: accepted; AddressSanitizer: heap-use-after-free.
 // map: §2.10 | A2 | rejected | - | agora #349: a field accessor over a lent element grown past a slice of it
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`

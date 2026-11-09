@@ -1,6 +1,6 @@
 // element_lent_by_a_generic_accessor_as_a_holder_kept_past_its_source: agora #391 — `( f 1 ( first_of [( Vec s )] vv ) src )`, a generic accessor's lend as the holder
 // Closed: a holder argument lent out of a binding is named by its source expression (`@sx`), so the callee's store lands on the owners that expression is a part of (agora #391).
-// main cd8c0a6: accepted; AddressSanitizer: heap-use-after-free.
+// main 21a0fb5: accepted; AddressSanitizer: heap-use-after-free.
 // map: §2.10 | A2 | rejected | - | agora #391: an element lent by a generic accessor as a holder kept past its source
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
