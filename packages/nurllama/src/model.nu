@@ -2116,6 +2116,10 @@ $ `stdlib/core/slice.nu`
     : i free ( gk_mem_free . m kit )
     : i margin ? > / free 10 536870912 / free 10 536870912
     : ~ i budget - free margin
+    // 0 is a backend that cannot say how much it has (gpu_mem_free: wasm's
+    // CPU backend): not "no room" but "do not second-guess the allocator",
+    // so every expert goes up whole, as with any other weight.
+    ? <= free 0 { = budget 4611686018427387904 } {}
     : i forced ( __lm_env_int `NURLLAMA_EXPERT_SLOTS` 0 )
     : i mib ( __lm_env_int `NURLLAMA_EXPERT_CACHE` 0 )
     ? > mib 0 { = budget * mib 1048576 } {}

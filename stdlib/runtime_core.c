@@ -2550,6 +2550,116 @@ long long nurl_cpu_count(void) {
 #endif
 }
 
+/* The operating system this program was compiled for (stdlib/std/
+ * sysinfo.nu's SYS_OS_*): 1 Linux, 2 macOS, 3 Windows, 4 FreeBSD,
+ * 5 wasm, 6 a freestanding guest (the unikernel), 0 anything else.
+ * A link-time constant: a caller that builds a host command line or
+ * picks a file suffix asks this, not $OS. */
+long long nurl_host_os(void) {
+#if defined(__wasm__) || defined(__wasi__)
+    return 5;
+#elif defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 0
+    return 6;
+#elif defined(_WIN32)
+    return 3;
+#elif defined(__APPLE__)
+    return 2;
+#elif defined(__FreeBSD__)
+    return 4;
+#elif defined(__linux__)
+    return 1;
+#else
+    return 0;
+#endif
+}
+
+/* The host's physical memory in bytes: which 0 is what is available now
+ * (Linux MemAvailable; Windows ullAvailPhys; the free + inactive (+
+ * purgeable) pages on macOS and FreeBSD, the ones the kernel hands out
+ * without swapping), which 1 the total. -1 where the platform cannot say
+ * (wasm, a freestanding guest). Linux reads /proc/meminfo with open/read,
+ * which every Linux runtime this file is linked into supplies. */
+#if defined(__APPLE__)
+#  include <mach/mach_init.h>
+#  include <mach/mach_host.h>
+#  include <mach/host_info.h>
+#  include <mach/vm_statistics.h>
+#endif
+#if (defined(__APPLE__) || defined(__FreeBSD__)) && !(defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 0)
+#  include <sys/types.h>
+#  include <sys/sysctl.h>
+#endif
+long long nurl_host_mem(long long which) {
+    if (which != 0 && which != 1) return -1;
+#if defined(__wasm__) || defined(__wasi__) || (defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 0)
+    return -1;
+#elif defined(_WIN32)
+    MEMORYSTATUSEX ms;
+    ms.dwLength = sizeof ms;
+    if (!GlobalMemoryStatusEx(&ms)) return -1;
+    return (long long)(which == 0 ? ms.ullAvailPhys : ms.ullTotalPhys);
+#elif defined(__APPLE__)
+    if (which == 1) {
+        uint64_t total = 0;
+        size_t len = sizeof total;
+        if (sysctlbyname("hw.memsize", &total, &len, NULL, 0) != 0) return -1;
+        return (long long)total;
+    }
+    static mach_port_t host = MACH_PORT_NULL;
+    if (host == MACH_PORT_NULL) host = mach_host_self();
+    vm_statistics64_data_t vs;
+    mach_msg_type_number_t cnt = HOST_VM_INFO64_COUNT;
+    if (host_statistics64(host, HOST_VM_INFO64, (host_info64_t)&vs, &cnt) != KERN_SUCCESS)
+        return -1;
+    vm_size_t page = 0;
+    if (host_page_size(host, &page) != KERN_SUCCESS) return -1;
+    return ((long long)vs.free_count + (long long)vs.inactive_count +
+            (long long)vs.purgeable_count) * (long long)page;
+#elif defined(__FreeBSD__)
+    if (which == 1) {
+        unsigned long total = 0;
+        size_t len = sizeof total;
+        if (sysctlbyname("hw.physmem", &total, &len, NULL, 0) != 0) return -1;
+        return (long long)total;
+    }
+    unsigned int free_pages = 0, inactive = 0;
+    size_t len = sizeof free_pages;
+    if (sysctlbyname("vm.stats.vm.v_free_count", &free_pages, &len, NULL, 0) != 0) return -1;
+    len = sizeof inactive;
+    if (sysctlbyname("vm.stats.vm.v_inactive_count", &inactive, &len, NULL, 0) != 0) return -1;
+    return ((long long)free_pages + (long long)inactive) * (long long)getpagesize();
+#elif defined(__linux__)
+    int fd = open("/proc/meminfo", O_RDONLY);
+    if (fd < 0) return -1;
+    char buf[4096];
+    long long got = 0;
+    while (got < (long long)sizeof buf - 1) {
+        long long r = (long long)read(fd, buf + got, sizeof buf - 1 - (size_t)got);
+        if (r <= 0) break;
+        got += r;
+    }
+    close(fd);
+    buf[got] = 0;
+    const char *key = which == 0 ? "MemAvailable:" : "MemTotal:";
+    size_t kl = strlen(key);
+    for (const char *p = buf; *p; ) {
+        if (strncmp(p, key, kl) == 0) {
+            const char *q = p + kl;
+            while (*q == ' ' || *q == '\t') q++;
+            long long kb = 0;
+            int digits = 0;
+            while (*q >= '0' && *q <= '9') { kb = kb * 10 + (*q - '0'); q++; digits++; }
+            return digits ? kb * 1024 : -1;
+        }
+        while (*p && *p != '\n') p++;
+        if (*p) p++;
+    }
+    return -1;
+#else
+    return -1;
+#endif
+}
+
 #ifdef _WIN32
 #  include <bcrypt.h>
 #  ifndef __MINGW32__

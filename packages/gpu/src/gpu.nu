@@ -31,6 +31,7 @@ $ `stdlib/ext/env.nu`
 $ `stdlib/std/floatbits.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/std/arc.nu`
+$ `stdlib/std/sysinfo.nu`
 $ `cuda.nu`
 $ `cpu.nu`
 $ `stdlib/core/slice.nu`
@@ -304,40 +305,12 @@ unsafe @ gpu_name Gpu g → s {
 }
 
 // Device memory: free and total bytes as the driver reports them. On the
-// CPU backends "device memory" is host RAM: MemAvailable/MemTotal from
-// /proc/meminfo where that exists, 0/0 (= unknown) where it does not.
-// 0/0 is the honest answer everywhere the question has none: callers
-// treat unknown as "do not second-guess the allocator".
-@ __gpu_meminfo_line s tag → i {
-    ?? ( read_file `/proc/meminfo` ) {
-        F _e → { ^ 0 }
-        T t → {
-            : s d ( string_data t )
-            : ( Slice u ) d_b ( slice_of_str d )
-            : i n ( slice_len [u] d_b )
-            : ( Slice u ) tag_b ( slice_of_str tag )
-            : i tl ( slice_len [u] tag_b )
-            : ~ i k 0
-            : ~ i val 0
-            ~ & < k - n tl == val 0 {
-                : ~ i m 0
-                ~ & < m tl == ( slice_byte d_b + k m ) ( slice_byte tag_b m ) { = m + m 1 }
-                ? == m tl {
-                    // parse the digits after the tag; the unit is kB
-                    : ~ i j + k tl
-                    ~ & < j n | < ( slice_byte d_b j ) 48 > ( slice_byte d_b j ) 57 { = j + j 1 }
-                    ~ & < j n & >= ( slice_byte d_b j ) 48 <= ( slice_byte d_b j ) 57 {
-                        = val + * val 10 - ( slice_byte d_b j ) 48
-                        = j + j 1
-                    }
-                } {}
-                = k + k 1
-            }
-            ^ * val 1024
-        }
-    }
-}
-
+// CPU backends "device memory" is host RAM: what the host can hand out
+// without swapping, and its physical total (stdlib/std/sysinfo.nu —
+// MemAvailable on Linux, GlobalMemoryStatusEx on Windows, the VM page
+// counts on macOS and FreeBSD), 0/0 (= unknown) where the platform cannot
+// say (wasm). 0/0 is the honest answer everywhere the question has none:
+// callers treat unknown as "do not second-guess the allocator".
 unsafe @ gpu_mem_free Gpu g → i {
     ? == __gpu_backend 0 {
         : ~ i avail 0
@@ -345,7 +318,7 @@ unsafe @ gpu_mem_free Gpu g → i {
         ? != # i ( cuMemGetInfo_v2 avail total ) 0 { ^ 0 } {}
         ^ avail
     } {}
-    ^ ( __gpu_meminfo_line `MemAvailable:` )
+    ?? ( sys_mem_available ) { T n → { ^ n } F → { ^ 0 } }
 }
 
 unsafe @ gpu_mem_total Gpu g → i {
@@ -355,7 +328,7 @@ unsafe @ gpu_mem_total Gpu g → i {
         ? != # i ( cuMemGetInfo_v2 avail total ) 0 { ^ 0 } {}
         ^ total
     } {}
-    ^ ( __gpu_meminfo_line `MemTotal:` )
+    ?? ( sys_mem_total ) { T n → { ^ n } F → { ^ 0 } }
 }
 
 // Let go of `g` now rather than at the end of its owner's scope. The

@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.17.8] — unreleased
+
+Requires NURL 0.91.0 (stdlib/std/sysinfo.nu's `sys_os` and host memory).
+
+### Fixed
+
+- **The CPU backend runs on native Windows** (Agora #547). It could not
+  compile a single kernel there: `cpu_compile` handed system() a POSIX
+  shell line (`${CXX:-c++} … -fPIC -shared -o k.so`), which cmd.exe does
+  not understand, and a block with a `__syncthreads()` ran its threads as
+  ucontext fibers, which Windows does not have. The compiler is now
+  `$CXX`, else `c++`, or `clang++` on Windows. On Windows the line is
+  cmd.exe's (quoted paths, no `-fPIC`), the object is a DLL that exports
+  `__cpu_launch`, OpenMP is clang's libomp, and the cache lives in
+  `%LOCALAPPDATA%
+url-gpu`. A block's threads run as Win32 fibers, one per
+  thread slot, made once per host thread and reused by every block. The
+  barrier scheduling is now one `__nurl_run_block` in the kernel header
+  for both platforms, so the generated launcher is the same text
+  everywhere. Linux kernels and their speed are unchanged (nurllama's
+  tiny MoE logits are byte-identical to 0.17.7's; warm run median 28.0 →
+  28.2 ms, inside the noise).
+- **`gpu_mem_free` / `gpu_mem_total` know the host's memory on Windows and
+  macOS.** The CPU backends read `/proc/meminfo`, so they answered 0 on
+  every other system, and nurllama computed room for "-21845 routed
+  experts". They now ask `sys_mem_available` / `sys_mem_total`:
+  MemAvailable on Linux, GlobalMemoryStatusEx on Windows, the VM page
+  counts on macOS and FreeBSD. 0 still means "cannot say" (wasm).
+
 ## [0.17.7] — 2026-10-21
 
 ### Fixed

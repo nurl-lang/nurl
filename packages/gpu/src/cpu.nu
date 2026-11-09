@@ -11,7 +11,9 @@
 //
 // This makes an onnx/YOLOE model runnable with no GPU at all (see gpu.nu's
 // backend fallback). The only host requirement is a C++ compiler on PATH —
-// the CPU analogue of NVRTC.
+// the CPU analogue of NVRTC: $CXX, else `c++` (POSIX) or `clang++`
+// (Windows, where the object is a DLL that exports __cpu_launch and the
+// libomp.dll beside clang runs its OpenMP).
 
 $ `stdlib/core/io.nu`
 $ `stdlib/core/string.nu`
@@ -22,6 +24,7 @@ $ `stdlib/std/path.nu`
 $ `stdlib/std/hash.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/core/slice.nu`
+$ `stdlib/std/sysinfo.nu`
 
 // The C ABI's `int`s are i32: on x86-64 an i64 in their place happens to
 // work, but a wasm32 module that declares dlopen(…, i64) is INVALID — the
@@ -100,17 +103,74 @@ static inline float __fdiv_rn(float a, float b) { return a / b; }
 //
 // threadIdx is re-stamped on every resume — a fiber that reads threadIdx.x
 // after a barrier must see its OWN index, not the last one the scheduler set.
-#include <ucontext.h>
 #include <stdlib.h>
 #include <string.h>
 #define __shared__ static __thread
 #define __NURL_STK (64*1024)
+static __thread long long* __nurl_p = 0;
+static __thread void (*__nurl_fn)(void) = 0;
+static __thread unsigned char* __nurl_fin = 0;
+static __thread int __nurl_cap = 0, __nurl_cur = 0;
+// __nurl_run_block(n, fn): run fn as the n threads of the current block,
+// each to its end, switching at every __syncthreads(). POSIX switches with
+// ucontext; Windows, which has none, with its own fibers: one per thread
+// slot, made once per host thread and reused by every block it runs.
+#ifdef _WIN32
+#define __NURL_EXPORT extern "C" __declspec(dllexport)
+extern "C" {
+__declspec(dllimport) void* __stdcall ConvertThreadToFiber(void*);
+__declspec(dllimport) void* __stdcall CreateFiber(size_t, void (__stdcall*)(void*), void*);
+__declspec(dllimport) void __stdcall SwitchToFiber(void*);
+__declspec(dllimport) int __stdcall IsThreadAFiber(void);
+}
+#include <intrin.h>
+// The running fiber: winnt.h's GetCurrentFiber, the TEB's FiberData. Every
+// kernel is a DLL of its own with its own __nurl_sched, so the host thread
+// is often a fiber already — another kernel's DLL converted it.
+static inline void* __nurl_this_fiber(void) {
+#if defined(_M_ARM64) || defined(__aarch64__)
+    return (void*)__readx18qword(0x20);
+#else
+    return (void*)__readgsqword(0x20);
+#endif
+}
+static __thread void* __nurl_sched = 0;
+static __thread void** __nurl_ctx = 0;
+static inline void __syncthreads(void) { SwitchToFiber(__nurl_sched); }
+static void __stdcall __nurl_fiber(void* arg) {
+    (void)arg;
+    for (;;) {
+        __nurl_fn();
+        __nurl_fin[__nurl_cur] = 1;
+        SwitchToFiber(__nurl_sched);
+    }
+}
+static void __nurl_ensure(int n) {
+    if (!__nurl_sched) {
+        __nurl_sched = IsThreadAFiber() ? __nurl_this_fiber() : ConvertThreadToFiber(0);
+        if (!__nurl_sched) abort();
+    }
+    if (n > __nurl_cap) {
+        void** c = (void**)realloc(__nurl_ctx, (size_t)n * sizeof(void*));
+        unsigned char* f = (unsigned char*)realloc(__nurl_fin, (size_t)n);
+        if (!c || !f) abort();
+        __nurl_ctx = c; __nurl_fin = f;
+        for (int t = __nurl_cap; t < n; t++) {
+            __nurl_ctx[t] = CreateFiber(__NURL_STK, __nurl_fiber, 0);
+            if (!__nurl_ctx[t]) abort();
+        }
+        __nurl_cap = n;
+    }
+}
+static inline void __nurl_arm(int t) { (void)t; }
+static inline void __nurl_start(int t) { SwitchToFiber(__nurl_ctx[t]); }
+#else
+#define __NURL_EXPORT extern "C"
+#include <ucontext.h>
 static __thread ucontext_t __nurl_sched, __nurl_tmpl;
 static __thread ucontext_t* __nurl_ctx = 0;
 static __thread char* __nurl_stk = 0;
-static __thread unsigned char* __nurl_fin = 0;
-static __thread long long* __nurl_p = 0;
-static __thread int __nurl_cap = 0, __nurl_cur = 0, __nurl_ready = 0;
+static __thread int __nurl_ready = 0;
 static inline void __syncthreads(void) {
     swapcontext(&__nurl_ctx[__nurl_cur], &__nurl_sched);
 }
@@ -126,6 +186,30 @@ static void __nurl_ensure(int n) {
     // template per host thread and memcpy'ing it per fiber keeps it off the
     // per-block path.
     if (!__nurl_ready) { getcontext(&__nurl_tmpl); __nurl_ready = 1; }
+}
+static void __nurl_tramp(void) { __nurl_fn(); __nurl_fin[__nurl_cur] = 1; }
+static inline void __nurl_arm(int t) {
+    memcpy(&__nurl_ctx[t], &__nurl_tmpl, sizeof(ucontext_t));
+    __nurl_ctx[t].uc_stack.ss_sp = __nurl_stk + (size_t)t * __NURL_STK;
+    __nurl_ctx[t].uc_stack.ss_size = __NURL_STK;
+    __nurl_ctx[t].uc_link = &__nurl_sched;
+    makecontext(&__nurl_ctx[t], (void(*)(void))__nurl_tramp, 0);
+}
+static inline void __nurl_start(int t) { swapcontext(&__nurl_sched, &__nurl_ctx[t]); }
+#endif
+static void __nurl_run_block(int n, void (*fn)(void)) {
+    __nurl_ensure(n);
+    __nurl_fn = fn;
+    for (int t = 0; t < n; t++) { __nurl_arm(t); __nurl_fin[t] = 0; }
+    int left = n;
+    while (left > 0) {
+        for (int t = 0; t < n; t++) {
+            if (__nurl_fin[t]) continue;
+            __nurl_cur = t; threadIdx.x = t; threadIdx.y = 0; threadIdx.z = 0;
+            __nurl_start(t);
+            if (__nurl_fin[t]) left--;
+        }
+    }
 }
 `
 }
@@ -261,6 +345,15 @@ static void __nurl_ensure(int n) {
         }
         F → {}
     }
+    ? == ( sys_os ) SYS_OS_WINDOWS {
+        ?? ( env_get `LOCALAPPDATA` ) {
+            T v → {
+                : String p ( path_join ( string_data v ) `nurl-gpu` )
+                ^ p
+            }
+            F → {}
+        }
+    } {}
     : String home ( env_var_or `HOME` `.` )
     : String c ( path_join ( string_data home ) `.cache` )
     : String p ( path_join ( string_data c ) `nurl-gpu` )
@@ -277,6 +370,29 @@ static void __nurl_ensure(int n) {
     ^ `-O2`
 }
 
+// A host shared object's suffix: Windows loads a DLL.
+@ __cpu_so_suffix → s { ^ ? == ( sys_os ) SYS_OS_WINDOWS `.dll` `.so` }
+
+// The host C++ compiler: $CXX (it may carry words of its own, `ccache
+// g++`), else `c++` — on Windows `clang++`, which LLVM's installer puts on
+// PATH beside the libomp.dll its -fopenmp links.
+@ __cpu_cxx → String {
+    ?? ( env_get `CXX` ) {
+        T v → { ? > ( string_len v ) 0 { ^ v } {} }
+        F → {}
+    }
+    ^ ( string_from ? == ( sys_os ) SYS_OS_WINDOWS `clang++` `c++` )
+}
+
+// `p` quoted for the host shell: cmd.exe takes "…" (a Windows path has
+// no `"`), a POSIX sh '…' (a cache path has no `'`).
+@ __cpu_push_quoted String cmd s p b win → v {
+    : i q ? win 34 39
+    ( string_push_char cmd q )
+    ( string_push_str cmd p )
+    ( string_push_char cmd q )
+}
+
 @ __cpu_cache_path s src → String {
     : String dir ( __cpu_cache_dir )
     : !v IoErr _mk ( dir_create_all ( string_data dir ) )
@@ -290,7 +406,7 @@ static void __nurl_ensure(int n) {
     : String hex ( blake3_hex sb )
     : String nm ( string_from `cpu-` )
     ( string_push_str nm ( string_data hex ) )
-    ( string_push_str nm `.so` )
+    ( string_push_str nm ( __cpu_so_suffix ) )
     : String p ( path_join ( string_data dir ) ( string_data nm ) )
     ^ p
 }
@@ -312,7 +428,7 @@ raw @ cpu_compile s src s name → *u {
         ( string_push_str c name )
         ( string_push_char c 40 )
         ( string_push_str c ( string_data casts ) )
-        ( string_push_str c `);\n__nurl_fin[__nurl_cur]=1;\n}\nextern "C" void __cpu_launch(long long* p, long long grid, long long block){\n#pragma omp parallel for schedule(static)\nfor(long long __b=0;__b<grid;__b++){\nint n=(int)block;\n__nurl_ensure(n);\n__nurl_p=p;\nblockIdx.x=(int)__b;blockIdx.y=0;blockIdx.z=0;\nblockDim.x=n;blockDim.y=1;blockDim.z=1;\ngridDim.x=(int)grid;gridDim.y=1;gridDim.z=1;\nfor(int t=0;t<n;t++){\nmemcpy(&__nurl_ctx[t],&__nurl_tmpl,sizeof(ucontext_t));\n__nurl_ctx[t].uc_stack.ss_sp=__nurl_stk+(size_t)t*__NURL_STK;\n__nurl_ctx[t].uc_stack.ss_size=__NURL_STK;\n__nurl_ctx[t].uc_link=&__nurl_sched;\nmakecontext(&__nurl_ctx[t],(void(*)(void))__nurl_entry,0);\n__nurl_fin[t]=0;\n}\nint left=n;\nwhile(left>0){\nfor(int t=0;t<n;t++){\nif(__nurl_fin[t])continue;\n__nurl_cur=t;threadIdx.x=t;threadIdx.y=0;threadIdx.z=0;\nswapcontext(&__nurl_sched,&__nurl_ctx[t]);\nif(__nurl_fin[t])left--;\n}\n}\n}\n}\n` )
+        ( string_push_str c `);\n}\n__NURL_EXPORT void __cpu_launch(long long* p, long long grid, long long block){\n#pragma omp parallel for schedule(static)\nfor(long long __b=0;__b<grid;__b++){\nint n=(int)block;\n__nurl_p=p;\nblockIdx.x=(int)__b;blockIdx.y=0;blockIdx.z=0;\nblockDim.x=n;blockDim.y=1;blockDim.z=1;\ngridDim.x=(int)grid;gridDim.y=1;gridDim.z=1;\n__nurl_run_block(n,__nurl_entry);\n}\n}\n` )
     } {
         // The arguments are read out of `p` once, before the loop, and the
         // coordinates that do not change are set once per host thread: per
@@ -320,7 +436,7 @@ raw @ cpu_compile s src s name → *u {
         // come from a collapsed loop rather than a division. A kernel with
         // many arguments (a checked kernel passes each buffer's length)
         // pays nothing per element for them.
-        ( string_push_str c `\nextern "C" void __cpu_launch(long long* p, long long grid, long long block){\n(void)p;\n` )
+        ( string_push_str c `\n__NURL_EXPORT void __cpu_launch(long long* p, long long grid, long long block){\n(void)p;\n` )
         : String args ( __cpu_hoist_args ( string_data casts ) c )
         ( string_push_str c `#pragma omp parallel\n{\nblockIdx.y=0;blockIdx.z=0;threadIdx.y=0;threadIdx.z=0;blockDim.x=(int)block;blockDim.y=1;blockDim.z=1;gridDim.x=(int)grid;gridDim.y=1;gridDim.z=1;\n#pragma omp for collapse(2) schedule(static)\nfor(long long __b=0;__b<grid;__b++){\nfor(long long __t=0;__t<block;__t++){\nblockIdx.x=(int)__b;threadIdx.x=(int)__t;\n` )
         ( string_push_str c name )
@@ -354,7 +470,7 @@ raw @ cpu_compile s src s name → *u {
     // not the ones its caller lays out. The object reaches the cache by an
     // atomic rename (the build directory sits in the cache directory, on
     // the same filesystem), so no process dlopens a half-written one.
-    : String bdir_parent ? use_cache ( __cpu_cache_dir ) ( string_from `/tmp` )
+    : String bdir_parent ? use_cache ( __cpu_cache_dir ) ( env_temp_dir )
     : !v IoErr _mk ( dir_create_all ( string_data bdir_parent ) )
     : String bdir ?? ( fs_tempdir ( string_data bdir_parent ) `.nurlcpu-build-` ) {
         T d → d
@@ -364,7 +480,9 @@ raw @ cpu_compile s src s name → *u {
         }
     }
     : String cpath ( path_join ( string_data bdir ) `k.cc` )
-    : String opath ( path_join ( string_data bdir ) `k.so` )
+    : String oname ( string_from `k` )
+    ( string_push_str oname ( __cpu_so_suffix ) )
+    : String opath ( path_join ( string_data bdir ) ( string_data oname ) )
     : String lpath ( path_join ( string_data bdir ) `cc.log` )
     : i wr ( __write_file ( string_data cpath ) ( string_data c ) )
     ? != 0 wr {
@@ -381,25 +499,34 @@ raw @ cpu_compile s src s name → *u {
     // CPU-vs-GPU equality tests rest on. Candidates are tried in order and
     // the first that compiles wins, so a toolchain without -march=native
     // (or without OpenMP) still builds.
+    //
+    // The command line is the host shell's: system() hands it to sh on
+    // POSIX and to cmd.exe on Windows, which takes no -fPIC for a DLL and
+    // strips the outer pair of quotes of a line that holds several.
+    : b win == ( sys_os ) SYS_OS_WINDOWS
+    : String cxx ( __cpu_cxx )
     : ~ i rc -1
     : ~ i cand 0
     ~ & != rc 0 < cand 4 {
         : String cmd ( string_with_cap 256 )
-        ( string_push_str cmd `${CXX:-c++} ` )
-        ( string_push_str cmd ( __cpu_cc_flags cand ) )
-        ( string_push_str cmd ` -ffp-contract=off -fPIC -shared -o ` )
-        ( string_push_str cmd ( string_data opath ) )
+        ? win { ( string_push_char cmd 34 ) } {}
+        ( string_push_str cmd ( string_data cxx ) )
         ( string_push_char cmd 32 )
-        ( string_push_str cmd ( string_data cpath ) )
+        ( string_push_str cmd ( __cpu_cc_flags cand ) )
+        ( string_push_str cmd ? win ` -ffp-contract=off -shared -o ` ` -ffp-contract=off -fPIC -shared -o ` )
+        ( __cpu_push_quoted cmd ( string_data opath ) win )
+        ( string_push_char cmd 32 )
+        ( __cpu_push_quoted cmd ( string_data cpath ) win )
         ( string_push_str cmd ` 2>` )
-        ( string_push_str cmd ( string_data lpath ) )
+        ( __cpu_push_quoted cmd ( string_data lpath ) win )
+        ? win { ( string_push_char cmd 34 ) } {}
         = rc # i ( system ( string_data cmd ) )
         = cand + cand 1
     }
     ? != rc 0 {
-        // The shell's 127: no compiler at all. Anything else is the
-        // compiler refusing this kernel, and its own words say why.
-        ? == / rc 256 127 {
+        // No compiler at all — sh's exit status 127, cmd.exe's 9009 — or
+        // the compiler refusing this kernel, whose own words say why.
+        ? ? win == rc 9009 == / rc 256 127 {
             ( nurl_eprint `[gpu/cpu] no C++ compiler on PATH (set CXX) for ` ) ( nurl_eprint name ) ( nurl_eprint `\n` )
         } {
             ( nurl_eprint `[gpu/cpu] host compile failed for ` ) ( nurl_eprint name ) ( nurl_eprint `:\n` )
