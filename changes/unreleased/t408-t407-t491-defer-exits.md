@@ -18,6 +18,13 @@
     after the block went unchecked. It now lives, with what it borrows,
     up to the exit where the defer reads it.
 
+- **A `\` way out is checked after the tried call** (Agora #406). In
+  `: i x \ ( setw w ( string_data b ) k )` the tried call's own effects —
+  a view it stores into an `inout` holder, a field a `sink` takes — were
+  not seen by the checks of the failure path, which hands the holder back
+  viewing a released local, or a parameter with a field taken. They are
+  now: the `?? … { F e → { ^ … } }` spelling was refused already.
+
   Spec §5.3 now states the order. Programs that were safe stay accepted:
   a defer that only points a holder back, an owned block-local read by a
   defer, a borrow whose container stays unchanged.

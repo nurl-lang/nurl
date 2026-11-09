@@ -34799,6 +34799,30 @@ unsafe @ __sx_leaf_roots s sx → s {
 // `^`. The success path goes on from the state before the defers: what
 // their replay changed of the fact tables is logged and put back, as a
 // `?`'s arm's is (agora #379).
+// The `\` way out at row `p` (agora #406): when the tried call's own rows
+// follow on its line (up to `rq`), the exit is checked on the state after
+// them, walked quietly with the facts put back (and the dedupe set, so the
+// success path's walk of the same rows still reports what it finds).
+unsafe @ __bck_try_exit_after_call s st i p i rq i line → v {
+    ? <= rq + p 1 { ( __bck_try_exit_check st p line ) ^ v } {}
+    : s tj_outer ( nurl_str_cat g_cj_log `` )
+    : i tj_eo g_cj_entry
+    = g_cj_depth + g_cj_depth 1
+    = g_cj_log ``
+    = g_cj_entry ( __cj_addr st )
+    : s tws ( nurl_sym_get g_bck `warnset` )
+    : i tq g_bck_quiet
+    = g_bck_quiet 1
+    : s tst ( bck_walk_seq + p 1 rq st )
+    = g_bck_quiet tq
+    ( bck_put `warnset` tws )
+    ( __bck_try_exit_check tst rq line )
+    ? != 0 ( nurl_str_len g_cj_log ) { ( __cj_restore g_cj_log ) } {}
+    = g_cj_log tj_outer
+    = g_cj_entry tj_eo
+    = g_cj_depth - g_cj_depth 1
+}
+
 unsafe @ __bck_try_exit_check s st i p i line → v {
     ? ( seq st `!` ) { ^ v } {}
     ? != 0 g_bck_fmv_any { ( __bck_inout_exit_check st line F ) } {}
@@ -34898,7 +34922,16 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
             // checks of a way out run on it, and the walk goes on along the
             // success path (agora #379).
             ? & ! done == kc 39 {
-                ( __bck_try_exit_check st p ( bck_field_int rec 3 ) )
+                // (…on the state AFTER the tried call: its own rows — what it
+                // stores, keeps or takes — come after this row on its line, so
+                // a call that stores a view into an `inout` holder or takes a
+                // field and then fails hands that back. They are walked first,
+                // quietly and with the facts put back, then the success path
+                // walks them as before: agora #406.)
+                : i tln ( bck_field_int rec 3 )
+                : ~ i rq + p 1
+                ~ ? & < rq hi == ( bck_field_int ( bck_rec rq ) 3 ) tln != ( bck_kc rq ) 2 F { = rq + rq 1 }
+                ( __bck_try_exit_after_call st p rq tln )
                 = p + p 1
                 = done T
             } {}
