@@ -3099,6 +3099,9 @@ unsafe @ note_unsafe_item s pos s what → v {
 // …and once a binding was marked a copy of another's handle or a part of
 // one (`hr_`, __bck_hr_set): a `let` clears the mark only then.
 : ~ i g_bck_hr_any 0
+// A `??` arm's payload read in place out of a program enum's binding
+// (`epy_` + owner: the payloads, bck_handle_match): `= o …` releases them.
+: ~ i g_bck_epy_any 0
 // …and how many `~` loops are being walked: only inside one can a
 // borrow's end reach a loop's element (`feb_`, bck_borrow_end; agora
 // #482).
@@ -34776,6 +34779,27 @@ unsafe @ __sx_leaf_roots s sx → s {
 // a `??` arm's payload): a binding marked a part of its old value is no
 // part of the new one — the old value went to it, or was released — so
 // what is stored into that binding no longer lands in `x` (agora #414).
+// `= o …` on `line`: each `??` arm payload read in place out of o's old
+// value (`epy_`, still marked a part of it, `hr_`) points into what that
+// assignment released — a program enum's old value is dropped, not handed
+// to the payload as an option's is (bck_cursor_handover). Read after, it
+// is a read of freed memory (bck_diag_invalid, `!epy`): agora #364.
+@ __bck_epy_release s st i o i line → s {
+    : s os ( nurl_str_int o )
+    : ~ s rest ( nurl_sym_get g_bck ( bck_bkey `epy_` os ) )
+    ? == 0 ( nurl_str_len rest ) { ^ ( nurl_str_cat st `` ) } {}
+    : ~ s out ( nurl_str_cat st `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s xs ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i x ( nurl_str_to_int xs )
+        ? & == BCK_OWNED ( bck_st_get out x ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `hr_` xs ) ) os ) {
+            = out ( bck_st_set out x BCK_INVALID )
+            ( bck_put ( bck_bkey `bv_` xs ) ( nurl_str_cat4 ( nurl_str_int line ) ` ` os ` !epy` ) )
+        } {}
+    }
+    ^ out
+}
+
 @ __bck_hr_drop_owner i x → v {
     : s xs ( nurl_str_int x )
     : ~ s rest ( nurl_sym_get g_bck ( bck_bkey `hrd_` xs ) )
@@ -35215,6 +35239,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 // (…and what its new value's handle may be part of, instead of
                 // the old one's; what was a part of its old value is no part
                 // of this one — agora #414.)
+                ? != 0 g_bck_epy_any { = st ( __bck_epy_release st asid ( bck_field_int rec 3 ) ) } {}
                 ? != 0 g_bck_hr_any { ( __bck_hr_drop_owner asid ) } {}
                 ? | == amk 100 == amk0 110 { ( __bck_hr_set asid ( bck_sx_hroots ( bck_field rec 8 ) ) F ) } { ? != 0 g_bck_hr_any { ( __bck_hr_set asid `` F ) } {} }
                 // A holder whose drop reads views given a view of a younger
@@ -39986,6 +40011,15 @@ unsafe @ bck_note_rc_arg s name s ty → v {
     : s ln ( str_first_word info ) = info ( str_skip_word info )
     : s srcid ( str_first_word info ) = info ( str_skip_word info )
     : s sname ( bck_name_show ( nurl_sym_get2 g_bck `rv_` srcid ) )
+    // (A `??` arm's payload read in place out of a program enum's binding
+    // that was given a new value: __bck_epy_release.)
+    ? ( seq ( str_first_word info ) `!epy` ) {
+        : s e1 ( nurl_str_cat4 `'` name `' is the payload of '` sname )
+        : s e2 ( nurl_str_cat4 `' this '??' arm matched, and '` sname `' was given a new value at line ` ( nurl_str_cat ln `, which released the old one — the payload with it` ) )
+        : s e3 ( nurl_str_cat4 `: using '` name `' now would read freed memory. Use it before that line, or take a copy that owns its data first (string_from, mem_dup) and give '` sname )
+        ( bck_emit_error ( nurl_sym_get g_bck `file` ) useline ( nurl_str_cat4 e1 e2 e3 `' its new value after.` ) )
+        ^ v
+    } {}
     // (A `??` arm's payload, a cursor over the option it matched:
     // bck_cursor_end_one.)
     ? ( seq ( str_first_word info ) `!cur` ) {
@@ -40642,6 +40676,13 @@ unsafe @ __bck_body_defers s st i p i line → s {
                 ( bck_put ( bck_bkey `mcl_` ( nurl_str_int id ) ) ? & mcall lent `1` `` )
                 ? != 0 g_bck_hr_any { ( __bck_hr_drop_owner id ) } {}
                 ? | != 0 ( nurl_str_len part_of ) != 0 g_bck_hr_any { ( __bck_hr_set id part_of F ) } {}
+                // (…of a program enum's binding, not an option's cursor: `= o`
+                // releases the old value, the payload with it — no hand-over,
+                // as codegen keeps an option's old value back: agora #364.)
+                ? & != 0 ( nurl_str_len part_of ) == 0 ( nurl_str_len cursor_src ) {
+                    ( bck_add_word_once ( bck_bkey `epy_` part_of ) ( nurl_str_int id ) )
+                    = g_bck_epy_any 1
+                } {}
                 = ids ? == 0 ( nurl_str_len ids ) ( nurl_str_int id ) ( nurl_str_cat3 ids ` ` ( nurl_str_int id ) )
             }
             // (What a payload still holds is released at the arm's end.)
