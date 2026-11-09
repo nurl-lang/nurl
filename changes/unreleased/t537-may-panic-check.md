@@ -1,0 +1,3 @@
+### Changed
+
+- **A runtime entry that can panic cannot be left out of journal elision's list** (Agora #537). nurlc drops the panic journal's registration of a temporary when nothing up to its release can panic, and which runtime entries can is a list kept by hand. An entry missing from it would lose the registrations around its calls, so a panic from it under `recover` leaked those temporaries. `tools/check_may_panic.py`, run in CI, compiles the runtime to LLVM IR and collects every exported entry whose calls reach a panic: 15 today. It then asks nurlc about each (`nurlc --may-panic=name,…` prints what elision takes each for). An entry nurlc takes for safe fails the build.
