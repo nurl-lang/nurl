@@ -44,9 +44,16 @@ NOT_A_TOOL = re.compile(
 VERIFIED = re.compile(r"sha256sum\s+-c|shasum\s+-a\s*256\s+-c|minisign\s+-V"
                       r"|Get-FileHash\b[^\n]*-Algorithm\s+SHA256")
 
-# `curl … | bash`, `wget -O- … | sh`, and the same with the pipe on the next
-# line after a continuation.
+# `curl … | bash`, `wget -O- … | sh`. Matched on a block whose `\`
+# continuations are joined (`joined`), so the pipe on the line after a
+# continuation is the same command, and is caught (Agora #535).
 PIPED_TO_SHELL = re.compile(r"(curl|wget)[^\n|]*\|\s*(sudo\s+)?(ba)?sh\b")
+
+
+def joined(block):
+    """A block with each backslash-continued line joined to the next, as the
+    shell reads it."""
+    return re.sub(r"\\\n\s*", " ", block)
 
 # PowerShell steps fetch with Invoke-WebRequest (alias iwr): the Windows
 # release leg unpacks a zig fetched that way into the published archive.
@@ -54,7 +61,7 @@ DOWNLOAD = re.compile(r"\b(curl|wget|Invoke-WebRequest|iwr)\b", re.I)
 URL = re.compile(r"https?://[^\s\"'`)]+")
 # Downloading one of these is downloading a program.
 ARTIFACT = re.compile(
-    r"\.(tar\.(gz|xz|bz2)|tgz|txz|zip|exe|msi|deb|rpm|pkg|dmg|whl|jar)(\?|$)"
+    r"\.(tar\.(gz|xz|bz2|zst)|tgz|txz|tzst|zip|exe|msi|deb|rpm|pkg|dmg|whl|jar)(\?|$)"
     r"|/releases/download/|-static$|/install\.sh$|/rustup\.sh$|sh\.rustup\.rs")
 
 
@@ -88,12 +95,17 @@ def strip_comments(block):
 
 def check(path):
     with open(path) as fh:
-        text = fh.read()
+        return check_text(fh.read())
+
+
+def check_text(text):
+    """The problems of one workflow's text: (line, why, what) each."""
     problems = []
     for lineno, raw in run_blocks(text):
         block = strip_comments(raw)
-        piped = PIPED_TO_SHELL.search(block)
-        if piped and not NOT_A_TOOL.search(block[piped.start():piped.end() + 200]):
+        one = joined(block)
+        piped = PIPED_TO_SHELL.search(one)
+        if piped and not NOT_A_TOOL.search(one[piped.start():piped.end() + 200]):
             problems.append((lineno, "pipes a downloaded script straight into a shell",
                              piped.group(0)))
             continue
@@ -103,7 +115,7 @@ def check(path):
                  if ARTIFACT.search(u) and not NOT_A_TOOL.match(u)]
         # A URL assembled from shell variables never matches ARTIFACT on its
         # own; catch those by the extension of the file curl writes to.
-        if not tools and re.search(r"-([oO]|OutFile)\s*\"?[^\s\"]*\.(tar\.(gz|xz)|tgz|zip)", block):
+        if not tools and re.search(r"-([oO]|OutFile)\s*\"?[^\s\"]*\.(tar\.(gz|xz|zst)|tgz|zip)", block):
             tools = ["(URL built from shell variables)"]
         if tools and not VERIFIED.search(block):
             problems.append((lineno, "downloads a tool with no checksum check",
@@ -119,8 +131,7 @@ def check(path):
 def fetch_commands(block):
     """Each curl / Invoke-WebRequest command of a block, continuation lines
     joined, that is not a query of a server the job talks to."""
-    joined = re.sub(r"\\\n\s*", " ", block)
-    for line in joined.splitlines():
+    for line in joined(block).splitlines():
         if DOWNLOAD.search(line) and not NOT_A_TOOL.search(line):
             yield line
 

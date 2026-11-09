@@ -25,11 +25,29 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-      - name: Install elan (toolchain from formal/lean-toolchain)
+      - name: Install Lean (the release formal/lean-toolchain names, pinned by content)
+        # The proof is only as trusted as the Lean that checks it, so the
+        # toolchain is the release archive itself, checked against the digest
+        # its publisher lists (GitHub's asset digest), not whatever an
+        # installer script on a branch serves that day (Agora #535). No elan:
+        # the archive's bin/ has lean and lake. Bumping lean-toolchain means
+        # bumping LEAN_VERSION and LEAN_SHA256 here, and this step says so.
+        env:
+          LEAN_VERSION: "4.35.0"
+          LEAN_SHA256: "7289597a44543246c9227b8cae501767e095ce17f6d448b95fc4a8dc97268f6d"
         run: |
-          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
-            | sh -s -- -y --default-toolchain none
-          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+          want="leanprover/lean4:v${LEAN_VERSION}"
+          have="$(tr -d '[:space:]' < formal/lean-toolchain)"
+          if [ "$have" != "$want" ]; then
+            echo "formal/lean-toolchain says $have; this step pins $want: update LEAN_VERSION and LEAN_SHA256" >&2
+            exit 1
+          fi
+          curl -fsSL --retry 5 --retry-delay 5 -o /tmp/lean.tar.zst \
+            "https://github.com/leanprover/lean4/releases/download/v${LEAN_VERSION}/lean-${LEAN_VERSION}-linux.tar.zst"
+          echo "${LEAN_SHA256}  /tmp/lean.tar.zst" | sha256sum -c -
+          mkdir -p "$HOME/lean"
+          tar --zstd -xf /tmp/lean.tar.zst -C "$HOME/lean"
+          echo "$HOME/lean/lean-${LEAN_VERSION}-linux/bin" >> "$GITHUB_PATH"
       - name: Build and check
         working-directory: formal
         run: ./check.sh
