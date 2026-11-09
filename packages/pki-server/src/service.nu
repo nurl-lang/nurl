@@ -19,36 +19,47 @@ $ `stdlib/std/arc.nu`
 
 // ── Service state ─────────────────────────────────────────────────────
 
-: ~ s g_ca_cert_path `./certs/ca.crt`
-: ~ s g_ca_key_path `./certs/ca.key`
-: ~ s g_crl_file_path `./certs/ca.crl`
-: ~ s g_index_file_path `./certs/index.txt`
-: ~ s g_initial_certs_dir `./certs/initial`
-: ~ s g_device_certs_dir `./certs/certificates`
-: ~ s g_device_init_key ``
-: ~ s g_management_key ``
-: ~ s g_ca_cn `Private PKI CA`
-: ~ i g_ca_alg 0
-// The service's paths and keys, each the global's own copy: the caller's
-// strings may go before the service does. (`unsafe`: a string global that
-// owns its text is handed it only where nothing reads it meanwhile — once,
-// before serving.)
-unsafe @ __pki_config_set s ca_cert s ca_key s crl_file s index_file s initial_dir s device_dir s init_key s mgmt_key s ca_cn → v {
-    = g_ca_cert_path ( nurl_str_cat ca_cert `` )
-    = g_ca_key_path ( nurl_str_cat ca_key `` )
-    = g_crl_file_path ( nurl_str_cat crl_file `` )
-    = g_index_file_path ( nurl_str_cat index_file `` )
-    = g_initial_certs_dir ( nurl_str_cat initial_dir `` )
-    = g_device_certs_dir ( nurl_str_cat device_dir `` )
-    = g_device_init_key ( nurl_str_cat init_key `` )
-    = g_management_key ( nurl_str_cat mgmt_key `` )
-    = g_ca_cn ( nurl_str_cat ca_cn `` )
+// The service's paths and keys, and the algorithm of the CA in force. A
+// `Locked` made at start and set by pki_service_init before serving: each
+// string the configuration's own copy (the caller's may go before the
+// service does), read whole by any worker, with no `unsafe` (agora #470).
+// Read through __pki_cfg, which hands back a copy of one field.
+: PkiCfg {
+    String crl_file
+    String index_file
+    String initial_dir
+    String device_dir
+    String init_key
+    String mgmt_key
+    i alg
+}
+
+@ __pki_cfg_start → ( Locked PkiCfg ) {
+    ^ ( locked_new [PkiCfg] @ PkiCfg { ( string_from `./certs/ca.crl` ) ( string_from `./certs/index.txt` ) ( string_from `./certs/initial` ) ( string_from `./certs/certificates` ) ( string_new ) ( string_new ) 0 } )
+}
+
+: ( Locked PkiCfg ) g_pki_cfg ( __pki_cfg_start )
+
+@ __pki_config_set s crl_file s index_file s initial_dir s device_dir s init_key s mgmt_key → v {
+    ( locked_set [PkiCfg] g_pki_cfg @ PkiCfg { ( string_from crl_file ) ( string_from index_file ) ( string_from initial_dir ) ( string_from device_dir ) ( string_from init_key ) ( string_from mgmt_key ) 0 } )
+}
+
+// One field of the configuration, the caller's own copy: 0 crl_file,
+// 1 index_file, 2 initial_dir, 3 device_dir, 4 init_key, 5 mgmt_key.
+@ __pki_cfg i which → String {
+    : PkiCfg c ( locked_get [PkiCfg] g_pki_cfg )
+    ? == which 0 { ^ ( string_from ( string_data . c crl_file ) ) } {}
+    ? == which 1 { ^ ( string_from ( string_data . c index_file ) ) } {}
+    ? == which 2 { ^ ( string_from ( string_data . c initial_dir ) ) } {}
+    ? == which 3 { ^ ( string_from ( string_data . c device_dir ) ) } {}
+    ? == which 4 { ^ ( string_from ( string_data . c init_key ) ) } {}
+    ^ ( string_from ( string_data . c mgmt_key ) )
 }
 
 // The loaded (or newly minted) CA, F when it cannot be had. The app the
 // caller builds with it (pki_build_app) keeps it for the routes.
 @ pki_service_init s ca_cert s ca_key s crl_file s index_file s initial_dir s device_dir s init_key s mgmt_key s ca_cn i alg → ?PkiCa {
-    ( __pki_config_set ca_cert ca_key crl_file index_file initial_dir device_dir init_key mgmt_key ca_cn )
+    ( __pki_config_set crl_file index_file initial_dir device_dir init_key mgmt_key )
 
     // Ensure required directory structures exist
     : !v IoErr _d1 ( dir_create_all initial_dir )
@@ -62,14 +73,15 @@ unsafe @ __pki_config_set s ca_cert s ca_key s crl_file s index_file s initial_d
     // An existing CA keeps its own algorithm; --algorithm only decides
     // what a *new* CA is minted with, so report back what is actually
     // in force rather than what was asked for.
-    = g_ca_alg ( pki_ca_alg ca )
+    : i in_force ( pki_ca_alg ca )
+    ( locked_update [PkiCfg] g_pki_cfg \ inout PkiCfg c → v { = . c alg in_force } )
 
     // Ensure CRL exists
     : String _crl ( pki_load_crl crl_file ca index_file )
     ^ @ ?PkiCa { T ca }
 }
 
-@ pki_service_alg → i { ^ g_ca_alg }
+@ pki_service_alg → i { : PkiCfg c ( locked_get [PkiCfg] g_pki_cfg ) ^ . c alg }
 
 // ── Helper utilities ──────────────────────────────────────────────────
 
@@ -173,8 +185,8 @@ unsafe @ __pki_config_set s ca_cert s ca_key s crl_file s index_file s initial_d
     : Json o ( json_obj_new )
     ( json_obj_set o `status` ( json_str_lit `healthy` ) )
     ( json_obj_set o `timestamp` ( json_str_lit ( string_data ts ) ) )
-    ( json_obj_set o `algorithm` ( json_str_lit ( pki_alg_name g_ca_alg ) ) )
-    ( json_obj_set o `post_quantum` ( json_bool ( pki_alg_is_pq g_ca_alg ) ) )
+    ( json_obj_set o `algorithm` ( json_str_lit ( pki_alg_name ( pki_service_alg ) ) ) )
+    ( json_obj_set o `post_quantum` ( json_bool ( pki_alg_is_pq ( pki_service_alg ) ) ) )
     : String j ( json_stringify o )
     ^ ( _resp_json 200 j )
 }
@@ -191,11 +203,14 @@ unsafe @ __pki_config_set s ca_cert s ca_key s crl_file s index_file s initial_d
 
 // GET /crl
 @ handle_crl PkiCa ca HttpRequest req Params p → HttpResponse {
-    ? ! ( auth_check_api_key req g_management_key ) {
+    : String __pc1 ( __pki_cfg 5 )
+    ? ! ( auth_check_api_key req ( string_data __pc1 ) ) {
         ^ ( _resp_err_json 401 `Invalid or missing API key` )
     } {}
 
-    : String crl_pem ( pki_load_crl g_crl_file_path ca g_index_file_path )
+    : String __pc2 ( __pki_cfg 0 )
+    : String __pc3 ( __pki_cfg 1 )
+    : String crl_pem ( pki_load_crl ( string_data __pc2 ) ca ( string_data __pc3 ) )
     : HttpResponse r ( response_new 200 )
     ( response_set_header r `Content-Type` `application/pkix-crl` )
     ( response_set_header r `Content-Disposition` `attachment; filename=ca.crl` )
@@ -219,7 +234,8 @@ unsafe @ __pki_config_set s ca_cert s ca_key s crl_file s index_file s initial_d
                 ^ ( _resp_err_json 400 `Missing device_id or key` )
             } {}
 
-            ? ! ( auth_check_device_key ( string_data key_val ) g_device_init_key ) {
+            : String __pc4 ( __pki_cfg 4 )
+            ? ! ( auth_check_device_key ( string_data key_val ) ( string_data __pc4 ) ) {
                 ^ ( _resp_err_json 401 `Invalid initialization key` )
             } {}
 
@@ -229,7 +245,8 @@ unsafe @ __pki_config_set s ca_cert s ca_key s crl_file s index_file s initial_d
             } {}
 
             // Check if already initialized
-            : String dev_dir ( string_from g_initial_certs_dir )
+            : String __pc5 ( __pki_cfg 2 )
+            : String dev_dir ( string_from ( string_data __pc5 ) )
             ( string_push_char dev_dir 47 )
             ( string_push_str dev_dir ( string_data clean_dev_id ) )
             ? ( file_exists ( string_data dev_dir ) ) {
@@ -240,8 +257,10 @@ unsafe @ __pki_config_set s ca_cert s ca_key s crl_file s index_file s initial_d
 
             : PkiCert cert ( pki_issue_device_cert ca ( string_data clean_dev_id ) 365 )
 
-            : String crt_path ( _device_path g_initial_certs_dir ( string_data clean_dev_id ) `.crt` )
-            : String key_path ( _device_path g_initial_certs_dir ( string_data clean_dev_id ) `.key` )
+            : String __pc6 ( __pki_cfg 2 )
+            : String crt_path ( _device_path ( string_data __pc6 ) ( string_data clean_dev_id ) `.crt` )
+            : String __pc7 ( __pki_cfg 2 )
+            : String key_path ( _device_path ( string_data __pc7 ) ( string_data clean_dev_id ) `.key` )
             : !v IoErr _w1 ( write_file ( string_data crt_path ) ( string_data . cert cert_pem ) )
             : !v IoErr _w2 ( write_file ( string_data key_path ) ( string_data . cert key_pem ) )
             : !v IoErr _cm ( set_permissions ( string_data key_path ) 384 )
@@ -296,7 +315,8 @@ unsafe @ __pki_config_set s ca_cert s ca_key s crl_file s index_file s initial_d
         T stored → {
             : PkiCertInfo info ( pki_extract_cert_info ( string_data stored ) )
             ? . info ok {
-                = revoked ( pki_is_revoked g_index_file_path ( string_data . info serial_hex ) )
+                : String __pc8 ( __pki_cfg 1 )
+                = revoked ( pki_is_revoked ( string_data __pc8 ) ( string_data . info serial_hex ) )
             } {}
         }
         F _ → {}
@@ -319,7 +339,8 @@ unsafe @ __pki_config_set s ca_cert s ca_key s crl_file s index_file s initial_d
                 ^ ( _resp_err_json 400 `Missing device_id, key or initial_cert` )
             } {}
 
-            ? ! ( auth_check_device_key ( string_data key_val ) g_device_init_key ) {
+            : String __pc9 ( __pki_cfg 4 )
+            ? ! ( auth_check_device_key ( string_data key_val ) ( string_data __pc9 ) ) {
                 ^ ( _resp_err_json 401 `Invalid initialization key` )
             } {}
 
@@ -328,7 +349,8 @@ unsafe @ __pki_config_set s ca_cert s ca_key s crl_file s index_file s initial_d
                 ^ ( _resp_err_json 400 `Invalid device_id` )
             } {}
 
-            : String crt_path ( _device_path g_initial_certs_dir ( string_data clean_dev_id ) `.crt` )
+            : String __pc10 ( __pki_cfg 2 )
+            : String crt_path ( _device_path ( string_data __pc10 ) ( string_data clean_dev_id ) `.crt` )
             ? ! ( file_exists ( string_data crt_path ) ) {
                 ^ ( _resp_err_json 404 `Device is not initialized` )
             } {}
@@ -344,7 +366,8 @@ unsafe @ __pki_config_set s ca_cert s ca_key s crl_file s index_file s initial_d
 
             : PkiCert cert ( pki_issue_device_cert ca ( string_data clean_dev_id ) 365 )
 
-            : String key_path ( _device_path g_initial_certs_dir ( string_data clean_dev_id ) `.key` )
+            : String __pc11 ( __pki_cfg 2 )
+            : String key_path ( _device_path ( string_data __pc11 ) ( string_data clean_dev_id ) `.key` )
             : !v IoErr _w1 ( write_file ( string_data crt_path ) ( string_data . cert cert_pem ) )
             : !v IoErr _w2 ( write_file ( string_data key_path ) ( string_data . cert key_pem ) )
             : !v IoErr _cm ( set_permissions ( string_data key_path ) 384 )
@@ -418,7 +441,8 @@ unsafe @ __pki_config_set s ca_cert s ca_key s crl_file s index_file s initial_d
         ^ ( _cert_error is_json 400 `Invalid device ID` )
     } {}
 
-    : String initial_crt_path ( _device_path g_initial_certs_dir ( string_data clean_dev_id ) `.crt` )
+    : String __pc12 ( __pki_cfg 2 )
+    : String initial_crt_path ( _device_path ( string_data __pc12 ) ( string_data clean_dev_id ) `.crt` )
     ? ! ( file_exists ( string_data initial_crt_path ) ) {
         ^ ( _cert_error is_json 401 `Device not initialized` )
     } {}
@@ -442,13 +466,16 @@ unsafe @ __pki_config_set s ca_cert s ca_key s crl_file s index_file s initial_d
 
     : PkiCert op_cert ( pki_issue_device_cert ca ( string_data clean_dev_id ) validity_days )
 
-    : String dev_out_dir ( string_from g_device_certs_dir )
+    : String __pc13 ( __pki_cfg 3 )
+    : String dev_out_dir ( string_from ( string_data __pc13 ) )
     ( string_push_char dev_out_dir 47 )
     ( string_push_str dev_out_dir ( string_data clean_dev_id ) )
     : !v IoErr _md ( dir_create_all ( string_data dev_out_dir ) )
 
-    : String crt_file ( _device_path g_device_certs_dir ( string_data clean_dev_id ) `.crt` )
-    : String key_file ( _device_path g_device_certs_dir ( string_data clean_dev_id ) `.key` )
+    : String __pc14 ( __pki_cfg 3 )
+    : String crt_file ( _device_path ( string_data __pc14 ) ( string_data clean_dev_id ) `.crt` )
+    : String __pc15 ( __pki_cfg 3 )
+    : String key_file ( _device_path ( string_data __pc15 ) ( string_data clean_dev_id ) `.key` )
     : !v IoErr _w1 ( write_file ( string_data crt_file ) ( string_data . op_cert cert_pem ) )
     : !v IoErr _w2 ( write_file ( string_data key_file ) ( string_data . op_cert key_pem ) )
     : !v IoErr _cm ( set_permissions ( string_data key_file ) 384 )
@@ -476,7 +503,8 @@ unsafe @ __pki_config_set s ca_cert s ca_key s crl_file s index_file s initial_d
 // POST /request-csr — Issue certificate from a client-provided PKCS#10 CSR.
 // Client private key never crosses the wire (Zero Trust PKI).
 @ handle_request_csr_post PkiCa ca HttpRequest req Params p → HttpResponse {
-    ? ! ( auth_check_api_key req g_management_key ) {
+    : String __pc16 ( __pki_cfg 5 )
+    ? ! ( auth_check_api_key req ( string_data __pc16 ) ) {
         ^ ( _resp_err_json 401 `Unauthorized: valid management API key required` )
     } {}
 
@@ -569,9 +597,11 @@ unsafe @ __pki_config_set s ca_cert s ca_key s crl_file s index_file s initial_d
         }
     }
 
-    : ~ b auth_ok ( auth_check_api_key req g_management_key )
+    : String __pc17 ( __pki_cfg 5 )
+    : ~ b auth_ok ( auth_check_api_key req ( string_data __pc17 ) )
     ? ! auth_ok {
-        ? ( auth_check_api_key_value ( string_data form_api_key ) g_management_key ) { = auth_ok T } {}
+        : String __pc18 ( __pki_cfg 5 )
+        ? ( auth_check_api_key_value ( string_data form_api_key ) ( string_data __pc18 ) ) { = auth_ok T } {}
     } {}
 
     ? ! auth_ok {
@@ -614,10 +644,13 @@ unsafe @ __pki_config_set s ca_cert s ca_key s crl_file s index_file s initial_d
     } {}
 
     ? > ( string_len final_cn ) 0 {
-        : b _inv ( pki_invalidate_initial_cert g_initial_certs_dir ( string_data final_cn ) )
+        : String __pc19 ( __pki_cfg 2 )
+        : b _inv ( pki_invalidate_initial_cert ( string_data __pc19 ) ( string_data final_cn ) )
     } {}
 
-    : String updated_crl ( pki_record_revocation g_index_file_path g_crl_file_path ca ( string_data final_serial ) ( string_data final_cn ) )
+    : String __pc20 ( __pki_cfg 0 )
+    : String __pc21 ( __pki_cfg 1 )
+    : String updated_crl ( pki_record_revocation ( string_data __pc21 ) ( string_data __pc20 ) ca ( string_data final_serial ) ( string_data final_cn ) )
 
     : String now_iso ( pki_iso_timestamp ( now_seconds ) )
     : String msg ( string_from `Certificate with serial ` )
@@ -663,7 +696,7 @@ unsafe @ __pki_config_set s ca_cert s ca_key s crl_file s index_file s initial_d
 
 // GET /api
 @ handle_api_docs HttpRequest req Params p → HttpResponse {
-    ^ ( _resp_html 200 ( ui_render_api_docs ( pki_alg_display g_ca_alg ) ) )
+    ^ ( _resp_html 200 ( ui_render_api_docs ( pki_alg_display ( pki_service_alg ) ) ) )
 }
 
 // GET /css/style.css

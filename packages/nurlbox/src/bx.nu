@@ -28,23 +28,28 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/bufio.nu`
 $ `stdlib/core/slice.nu`
 
-// The name diagnostics carry. Set once by the dispatcher, so every
-// message reads `rm: cannot remove 'x'` and not `nurlbox: ...`.
-: ~ s g_bx_name `nurlbox`
+// The name diagnostics carry. Set by the dispatcher, so every message
+// reads `rm: cannot remove 'x'` and not `nurlbox: ...`. A `Locked` value
+// made at start and changed through its lock (agora #470): the name, from
+// argv, is the global's own copy, with no `unsafe` (a raw `s` global would
+// have to own a caller's text), and every thread that ever reads it sees a
+// whole one.
+@ __bx_name_start → ( Locked String ) { ^ ( locked_new [String] ( string_from `nurlbox` ) ) }
 
-@ bx_name → s { ^ g_bx_name }
+: ( Locked String ) g_bx_name ( __bx_name_start )
 
-// (The global keeps a copy of its own: the dispatcher's name may go
-// first. `unsafe`: a string global that owns its text is handed it only
-// where nothing reads it meanwhile — nurlbox starts no thread, and the
-// name changes only between applets: the shell's in-process dispatch sets
-// it back once the applet it ran has returned.)
-unsafe @ bx_set_name s n → v { = g_bx_name ( nurl_str_cat n `` ) }
+// The current name, the caller's own copy.
+@ bx_name → String { ^ ( locked_get [String] g_bx_name ) }
+
+@ bx_set_name s n → v { ( locked_set [String] g_bx_name ( string_from n ) ) }
+
+// The name onto stderr, read in place.
+@ _bx_eprint_name → v { ( locked_with [String] g_bx_name \ String n → v { ( nurl_eprint ( string_data n ) ) } ) }
 
 // ── Diagnostics ───────────────────────────────────────────────────
 
 @ bx_err s msg → v {
-    ( nurl_eprint g_bx_name )
+    ( _bx_eprint_name )
     ( nurl_eprint `: ` )
     ( nurl_eprint msg )
     ( nurl_eprint `\n` )
@@ -52,7 +57,7 @@ unsafe @ bx_set_name s n → v { = g_bx_name ( nurl_str_cat n `` ) }
 
 // `applet: subject: msg` — the shape every coreutils error takes.
 @ bx_err_at s subject s msg → v {
-    ( nurl_eprint g_bx_name )
+    ( _bx_eprint_name )
     ( nurl_eprint `: ` )
     ( nurl_eprint subject )
     ( nurl_eprint `: ` )
@@ -232,7 +237,7 @@ unsafe @ bx_set_name s n → v { = g_bx_name ( nurl_str_cat n `` ) }
                     : s nm ( nurl_str_slice tok 2 - eq 2 )
                     : i lc ( __bx_long_letter longs nm )
                     ? < lc 0 {
-                        ( nurl_eprint g_bx_name )
+                        ( _bx_eprint_name )
                         ( nurl_eprint `: unrecognized option '` )
                         ( nurl_eprint tok )
                         ( nurl_eprint `'\n` )
@@ -250,7 +255,7 @@ unsafe @ bx_set_name s n → v { = g_bx_name ( nurl_str_cat n `` ) }
                                     = i + i 1
                                     ( __bx_set_val vals allvals allords ord ( bx_at argv i ) )
                                 } {
-                                    ( nurl_eprint g_bx_name )
+                                    ( _bx_eprint_name )
                                     ( nurl_eprint `: option '` )
                                     ( nurl_eprint tok )
                                     ( nurl_eprint `' requires an argument\n` )
@@ -267,7 +272,7 @@ unsafe @ bx_set_name s n → v { = g_bx_name ( nurl_str_cat n `` ) }
                         : i c ( slice_byte tok_v k )
                         : i ord ( __bx_ord spec c )
                         ? < ord 0 {
-                            ( nurl_eprint g_bx_name )
+                            ( _bx_eprint_name )
                             ( nurl_eprint `: invalid option -- '` )
                             : s bad ( nurl_str_slice tok k 1 )
                             ( nurl_eprint bad )
@@ -286,7 +291,7 @@ unsafe @ bx_set_name s n → v { = g_bx_name ( nurl_str_cat n `` ) }
                                         = i + i 1
                                         ( __bx_set_val vals allvals allords ord ( bx_at argv i ) )
                                     } {
-                                        ( nurl_eprint g_bx_name )
+                                        ( _bx_eprint_name )
                                         ( nurl_eprint `: option requires an argument -- '` )
                                         : s bad2 ( nurl_str_slice tok k 1 )
                                         ( nurl_eprint bad2 )

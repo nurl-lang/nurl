@@ -41,24 +41,39 @@ $ `stdlib/core/slice.nu`
 
 // ── Configuration (set once, before serving) ──────────────────────────
 
-: ~ s g_reg_data `./data`  // data dir (tarballs under <data>/pkgs)
-: ~ s g_reg_dbpath `./data/registry.db`
-: ~ s g_reg_pepper ``  // token-hash pepper (deployment secret)
-: ~ s g_reg_base_url ``  // public base URL, for the OAuth redirect
-: ~ s g_reg_gh_id ``  // GitHub OAuth app (empty = OAuth disabled)
-: ~ s g_reg_gh_secret ``
+// A `Locked` made at start and set before serving: each string the
+// configuration's own copy (the caller's may go before the server does),
+// read whole by any worker, with no `unsafe` (agora #470). Read through
+// reg_cfg, which hands back a copy of one field.
+: RegCfg {
+    String data  // data dir (tarballs under <data>/pkgs)
+    String dbpath
+    String pepper  // token-hash pepper (deployment secret)
+    String base_url  // public base URL, for the OAuth redirect
+    String gh_id  // GitHub OAuth app (empty = OAuth disabled)
+    String gh_secret
+}
 
-// The globals keep copies of their own: the caller's strings may go
-// before the server does. (`unsafe`: a string global that owns its text
-// is handed it only where nothing reads it meanwhile — once, before
-// serving.)
-unsafe @ reg_service_config s data s dbpath s pepper s base_url s gh_id s gh_secret → v {
-    = g_reg_data ( nurl_str_cat data `` )
-    = g_reg_dbpath ( nurl_str_cat dbpath `` )
-    = g_reg_pepper ( nurl_str_cat pepper `` )
-    = g_reg_base_url ( nurl_str_cat base_url `` )
-    = g_reg_gh_id ( nurl_str_cat gh_id `` )
-    = g_reg_gh_secret ( nurl_str_cat gh_secret `` )
+@ __reg_cfg_start → ( Locked RegCfg ) {
+    ^ ( locked_new [RegCfg] @ RegCfg { ( string_from `./data` ) ( string_from `./data/registry.db` ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) } )
+}
+
+: ( Locked RegCfg ) g_reg_cfg ( __reg_cfg_start )
+
+@ reg_service_config s data s dbpath s pepper s base_url s gh_id s gh_secret → v {
+    ( locked_set [RegCfg] g_reg_cfg @ RegCfg { ( string_from data ) ( string_from dbpath ) ( string_from pepper ) ( string_from base_url ) ( string_from gh_id ) ( string_from gh_secret ) } )
+}
+
+// One field of the configuration, the caller's own copy: 0 data, 1 dbpath,
+// 2 pepper, 3 base_url, 4 gh_id, 5 gh_secret.
+@ reg_cfg i which → String {
+    : RegCfg c ( locked_get [RegCfg] g_reg_cfg )
+    ? == which 0 { ^ ( string_from ( string_data . c data ) ) } {}
+    ? == which 1 { ^ ( string_from ( string_data . c dbpath ) ) } {}
+    ? == which 2 { ^ ( string_from ( string_data . c pepper ) ) } {}
+    ? == which 3 { ^ ( string_from ( string_data . c base_url ) ) } {}
+    ? == which 4 { ^ ( string_from ( string_data . c gh_id ) ) } {}
+    ^ ( string_from ( string_data . c gh_secret ) )
 }
 
 @ __reg_now → i {
@@ -142,7 +157,8 @@ unsafe @ reg_service_config s data s dbpath s pepper s base_url s gh_id s gh_sec
     ? == ( string_len tok ) 0 {
         ^ -1
     } {}
-    : String hash ( reg_token_hash g_reg_pepper ( string_data tok ) )
+    : String __rc1 ( reg_cfg 2 )
+    : String hash ( reg_token_hash ( string_data __rc1 ) ( string_data tok ) )
     : i uid ( reg_db_auth db ( string_data hash ) ( __reg_now ) )
     ^ uid
 }
@@ -171,7 +187,8 @@ unsafe @ reg_service_config s data s dbpath s pepper s base_url s gh_id s gh_sec
     ? ! ( reg_name_valid ( string_data name ) ) {
         ^ ( __reg_err 400 `invalid_name` )
     } {}
-    ?? ( reg_db_open g_reg_dbpath ) {
+    : String __rc2 ( reg_cfg 1 )
+    ?? ( reg_db_open ( string_data __rc2 ) ) {
         F _ → {
             ^ ( __reg_err 500 `db_unavailable` )
         }
@@ -228,7 +245,8 @@ unsafe @ reg_service_config s data s dbpath s pepper s base_url s gh_id s gh_sec
         ^ ( __reg_err 400 `bad_path` )
     } {}
     ? is_minisig {
-        : String signature ( reg_minisig_read g_reg_data ( string_data name ) ( string_data version ) )
+        : String __rc3 ( reg_cfg 0 )
+        : String signature ( reg_minisig_read ( string_data __rc3 ) ( string_data name ) ( string_data version ) )
         ? == ( string_len signature ) 0 {
             ^ ( __reg_err 404 `not_found` )
         } {}
@@ -238,7 +256,8 @@ unsafe @ reg_service_config s data s dbpath s pepper s base_url s gh_id s gh_sec
         ( response_set_body_str r ( string_data signature ) )
         ^ r
     } {}
-    : ( Vec u ) bytes ( reg_tarball_read g_reg_data ( string_data name ) ( string_data version ) )
+    : String __rc4 ( reg_cfg 0 )
+    : ( Vec u ) bytes ( reg_tarball_read ( string_data __rc4 ) ( string_data name ) ( string_data version ) )
     ? == ( vec_len [u] bytes ) 0 {
         ^ ( __reg_err 404 `not_found` )
     } {}
@@ -294,7 +313,8 @@ unsafe @ reg_service_config s data s dbpath s pepper s base_url s gh_id s gh_sec
 
 // POST /api/v1/publish
 @ __reg_h_publish HttpRequest req Params p → HttpResponse {
-    ?? ( reg_db_open g_reg_dbpath ) {
+    : String __rc5 ( reg_cfg 1 )
+    ?? ( reg_db_open ( string_data __rc5 ) ) {
         F _ → ^ ( __reg_err 500 `db_unavailable` )
         T db → {
             : i uid ( __reg_auth_uid db req )
@@ -333,7 +353,8 @@ unsafe @ reg_service_config s data s dbpath s pepper s base_url s gh_id s gh_sec
             // failure between the two leaves an orphan file that the
             // (name, version) immutability makes harmless — the next
             // attempt overwrites the identical path.
-            ? ! ( reg_tarball_write g_reg_data ( string_data name ) ( string_data version ) . req body ) {
+            : String __rc6 ( reg_cfg 0 )
+            ? ! ( reg_tarball_write ( string_data __rc6 ) ( string_data name ) ( string_data version ) . req body ) {
                 ^ ( __reg_err 500 `store_failed` )
             } {}
 
@@ -380,7 +401,8 @@ unsafe @ reg_service_config s data s dbpath s pepper s base_url s gh_id s gh_sec
 
 // POST /api/v1/yank + /api/v1/unyank
 @ __reg_h_yank HttpRequest req Params p b yank → HttpResponse {
-    ?? ( reg_db_open g_reg_dbpath ) {
+    : String __rc7 ( reg_cfg 1 )
+    ?? ( reg_db_open ( string_data __rc7 ) ) {
         F _ → ^ ( __reg_err 500 `db_unavailable` )
         T db → {
             : i uid ( __reg_auth_uid db req )
@@ -433,12 +455,14 @@ unsafe @ reg_service_config s data s dbpath s pepper s base_url s gh_id s gh_sec
     ? == ( string_len tok ) 0 {
         ^ ( __reg_err 401 `unauthorized` )
     } {}
-    ?? ( reg_db_open g_reg_dbpath ) {
+    : String __rc8 ( reg_cfg 1 )
+    ?? ( reg_db_open ( string_data __rc8 ) ) {
         F _ → {
             ^ ( __reg_err 500 `db_unavailable` )
         }
         T db → {
-            : String hash ( reg_token_hash g_reg_pepper ( string_data tok ) )
+            : String __rc9 ( reg_cfg 2 )
+            : String hash ( reg_token_hash ( string_data __rc9 ) ( string_data tok ) )
             : b deleted ( reg_db_token_delete db ( string_data hash ) )
             ? ! deleted { ^ ( __reg_err 401 `unknown_token` ) } {}
             ^ ( __reg_json_resp 200 `{"ok":true,"revoked":true}` )
@@ -449,7 +473,8 @@ unsafe @ reg_service_config s data s dbpath s pepper s base_url s gh_id s gh_sec
 // ── JSON API: search + stats ──────────────────────────────────────────
 
 @ __reg_h_search HttpRequest req Params p → HttpResponse {
-    ?? ( reg_db_open g_reg_dbpath ) {
+    : String __rc10 ( reg_cfg 1 )
+    ?? ( reg_db_open ( string_data __rc10 ) ) {
         F _ → ^ ( __reg_err 500 `db_unavailable` )
         T db → {
             : String qraw ( __reg_q_get req `q` )
@@ -470,7 +495,8 @@ unsafe @ reg_service_config s data s dbpath s pepper s base_url s gh_id s gh_sec
 // nurl_api / nurl_grep keep it warm instead of asking /search per term
 // (stdlib ext/mcp_search.nu). The same SELECT as search, unlimited.
 @ __reg_h_catalog_json HttpRequest req Params p → HttpResponse {
-    ?? ( reg_db_open g_reg_dbpath ) {
+    : String __rc11 ( reg_cfg 1 )
+    ?? ( reg_db_open ( string_data __rc11 ) ) {
         F _ → ^ ( __reg_err 500 `db_unavailable` )
         T db → {
             : Json results ( reg_db_catalog_json db `` -1 )
@@ -485,7 +511,8 @@ unsafe @ reg_service_config s data s dbpath s pepper s base_url s gh_id s gh_sec
 }
 
 @ __reg_h_stats HttpRequest req Params p → HttpResponse {
-    ?? ( reg_db_open g_reg_dbpath ) {
+    : String __rc12 ( reg_cfg 1 )
+    ?? ( reg_db_open ( string_data __rc12 ) ) {
         F _ → ^ ( __reg_err 500 `db_unavailable` )
         T db → {
             : String body ( reg_db_stats_json db )
@@ -500,7 +527,8 @@ unsafe @ reg_service_config s data s dbpath s pepper s base_url s gh_id s gh_sec
 // ── HTML: catalog + package page + tarball assets ─────────────────────
 
 @ __reg_h_catalog HttpRequest req Params p → HttpResponse {
-    ?? ( reg_db_open g_reg_dbpath ) {
+    : String __rc13 ( reg_cfg 1 )
+    ?? ( reg_db_open ( string_data __rc13 ) ) {
         F _ → ^ ( __reg_err 500 `db_unavailable` )
         T db → {
             : String qraw ( __reg_q_get req `q` )
@@ -535,7 +563,8 @@ unsafe @ reg_service_config s data s dbpath s pepper s base_url s gh_id s gh_sec
         : HttpResponse r ( __reg_notfound_page ( string_data name ) )
         ^ r
     } {}
-    ?? ( reg_db_open g_reg_dbpath ) {
+    : String __rc14 ( reg_cfg 1 )
+    ?? ( reg_db_open ( string_data __rc14 ) ) {
         F _ → {
             ^ ( __reg_err 500 `db_unavailable` )
         }
@@ -567,7 +596,8 @@ unsafe @ reg_service_config s data s dbpath s pepper s base_url s gh_id s gh_sec
                 ( string_push_str reqs ( string_data latest ) )
                 : b _r ( json_obj_set ctx `req` ( json_str_lit ( string_data reqs ) ) )
                 : b _d ( json_obj_set ctx `deps` ( reg_db_deps_json db ( string_data name ) ( string_data latest ) ) )
-                : ( Vec u ) gz ( reg_tarball_read g_reg_data ( string_data name ) ( string_data latest ) )
+                : String __rc15 ( reg_cfg 0 )
+                : ( Vec u ) gz ( reg_tarball_read ( string_data __rc15 ) ( string_data name ) ( string_data latest ) )
                 ? > ( vec_len [u] gz ) 0 {
                     : String repo ( reg_targz_repository gz )
                     ? ( string_starts_with repo `http` ) {
@@ -627,7 +657,8 @@ unsafe @ reg_service_config s data s dbpath s pepper s base_url s gh_id s gh_sec
         : HttpResponse r ( __reg_notfound_page ( string_data name ) )
         ^ r
     } {}
-    ?? ( reg_db_open g_reg_dbpath ) {
+    : String __rc16 ( reg_cfg 1 )
+    ?? ( reg_db_open ( string_data __rc16 ) ) {
         F _ → {
             ^ ( __reg_err 500 `db_unavailable` )
         }
@@ -644,7 +675,8 @@ unsafe @ reg_service_config s data s dbpath s pepper s base_url s gh_id s gh_sec
 // The files page body, once the version is known to exist. Owns (and
 // frees) the validated name/version Strings.
 @ __reg_pkg_files_page String name String version → HttpResponse {
-    : ( Vec u ) gz ( reg_tarball_read g_reg_data ( string_data name ) ( string_data version ) )
+    : String __rc17 ( reg_cfg 0 )
+    : ( Vec u ) gz ( reg_tarball_read ( string_data __rc17 ) ( string_data name ) ( string_data version ) )
     ? == ( vec_len [u] gz ) 0 {
         : HttpResponse r ( __reg_notfound_page ( string_data name ) )
         ^ r
@@ -705,7 +737,8 @@ unsafe @ reg_service_config s data s dbpath s pepper s base_url s gh_id s gh_sec
         : HttpResponse r ( __reg_notfound_page ( string_data name ) )
         ^ r
     } {}
-    ?? ( reg_db_open g_reg_dbpath ) {
+    : String __rc18 ( reg_cfg 1 )
+    ?? ( reg_db_open ( string_data __rc18 ) ) {
         F _ → {
             ^ ( __reg_err 500 `db_unavailable` )
         }
@@ -722,7 +755,8 @@ unsafe @ reg_service_config s data s dbpath s pepper s base_url s gh_id s gh_sec
 // The API page body, once the version is known to exist. Owns (and frees)
 // the validated name/version Strings.
 @ __reg_pkg_api_page String name String version → HttpResponse {
-    : ( Vec u ) gz ( reg_tarball_read g_reg_data ( string_data name ) ( string_data version ) )
+    : String __rc19 ( reg_cfg 0 )
+    : ( Vec u ) gz ( reg_tarball_read ( string_data __rc19 ) ( string_data name ) ( string_data version ) )
     ? == ( vec_len [u] gz ) 0 {
         : HttpResponse r ( __reg_notfound_page ( string_data name ) )
         ^ r
@@ -794,7 +828,8 @@ unsafe @ reg_service_config s data s dbpath s pepper s base_url s gh_id s gh_sec
     ? == ( nurl_str_len mime ) 0 {
         ^ ( __reg_err 415 `unsupported_type` )
     } {}
-    : ( Vec u ) gz ( reg_tarball_read g_reg_data ( string_data name ) ( string_data version ) )
+    : String __rc20 ( reg_cfg 0 )
+    : ( Vec u ) gz ( reg_tarball_read ( string_data __rc20 ) ( string_data name ) ( string_data version ) )
     ? == ( vec_len [u] gz ) 0 {
         ^ ( __reg_err 404 `not_found` )
     } {}
@@ -815,7 +850,9 @@ unsafe @ reg_service_config s data s dbpath s pepper s base_url s gh_id s gh_sec
 // ── GitHub OAuth (token bootstrap; config-gated) ──────────────────────
 
 @ __reg_oauth_enabled → b {
-    ^ & > ( nurl_str_len g_reg_gh_id ) 0 > ( nurl_str_len g_reg_gh_secret ) 0
+    : String __rc21 ( reg_cfg 4 )
+    : String __rc22 ( reg_cfg 5 )
+    ^ & > ( nurl_str_len ( string_data __rc21 ) ) 0 > ( nurl_str_len ( string_data __rc22 ) ) 0
 }
 
 // GET /login
@@ -823,15 +860,18 @@ unsafe @ reg_service_config s data s dbpath s pepper s base_url s gh_id s gh_sec
     ? ! ( __reg_oauth_enabled ) {
         : Json ctx ( json_obj_new )
         : b _a ( json_obj_set ctx `title` ( json_str_lit `NURL registry — tokens` ) )
-        : b _b ( json_obj_set ctx `data` ( json_str_lit g_reg_data ) )
+        : String __rc23 ( reg_cfg 0 )
+        : b _b ( json_obj_set ctx `data` ( json_str_lit ( string_data __rc23 ) ) )
         : String html ( reg_page_login_help ctx )
         ^ ( __reg_html_resp 200 html )
     } {}
     : String state ( rand_hex_str 24 )
     : String loc ( string_from `https://github.com/login/oauth/authorize?client_id=` )
-    ( string_push_str loc g_reg_gh_id )
+    : String __rc24 ( reg_cfg 4 )
+    ( string_push_str loc ( string_data __rc24 ) )
     ( string_push_str loc `&scope=read%3Auser&redirect_uri=` )
-    : String cb ( string_from g_reg_base_url )
+    : String __rc25 ( reg_cfg 3 )
+    : String cb ( string_from ( string_data __rc25 ) )
     ( string_push_str cb `/auth/callback` )
     : String cbe ( percent_encode ( string_data cb ) )
     ( string_push_str loc ( string_data cbe ) )
@@ -848,7 +888,8 @@ unsafe @ reg_service_config s data s dbpath s pepper s base_url s gh_id s gh_sec
 }
 
 @ __reg_base_is_https → b {
-    : String b ( string_from g_reg_base_url )
+    : String __rc26 ( reg_cfg 3 )
+    : String b ( string_from ( string_data __rc26 ) )
     : b out ( string_starts_with b `https://` )
     ^ out
 }
@@ -894,10 +935,13 @@ unsafe @ reg_service_config s data s dbpath s pepper s base_url s gh_id s gh_sec
 // POST https://github.com/login/oauth/access_token → access token, "" on failure.
 @ __reg_gh_exchange s code → String {
     : Json body ( json_obj_new )
-    : b _a ( json_obj_set body `client_id` ( json_str_lit g_reg_gh_id ) )
-    : b _b ( json_obj_set body `client_secret` ( json_str_lit g_reg_gh_secret ) )
+    : String __rc27 ( reg_cfg 4 )
+    : b _a ( json_obj_set body `client_id` ( json_str_lit ( string_data __rc27 ) ) )
+    : String __rc28 ( reg_cfg 5 )
+    : b _b ( json_obj_set body `client_secret` ( json_str_lit ( string_data __rc28 ) ) )
     : b _c ( json_obj_set body `code` ( json_str_lit code ) )
-    : String cb ( string_from g_reg_base_url )
+    : String __rc29 ( reg_cfg 3 )
+    : String cb ( string_from ( string_data __rc29 ) )
     ( string_push_str cb `/auth/callback` )
     : b _d ( json_obj_set body `redirect_uri` ( json_str_lit ( string_data cb ) ) )
     : String bs ( json_stringify body )
@@ -979,7 +1023,8 @@ unsafe @ reg_service_config s data s dbpath s pepper s base_url s gh_id s gh_sec
     ? | < gh_id 0 == ( string_len login ) 0 {
         ^ ( __reg_err 502 `github_user_failed` )
     } {}
-    ?? ( reg_db_open g_reg_dbpath ) {
+    : String __rc30 ( reg_cfg 1 )
+    ?? ( reg_db_open ( string_data __rc30 ) ) {
         F _ → {
             ^ ( __reg_err 500 `db_unavailable` )
         }
@@ -990,7 +1035,8 @@ unsafe @ reg_service_config s data s dbpath s pepper s base_url s gh_id s gh_sec
                 ^ ( __reg_err 500 `db_write_failed` )
             } {}
             : String token ( reg_token_new )
-            : String hash ( reg_token_hash g_reg_pepper ( string_data token ) )
+            : String __rc31 ( reg_cfg 2 )
+            : String hash ( reg_token_hash ( string_data __rc31 ) ( string_data token ) )
             : b ins ( reg_db_token_insert db uid ( string_data hash ) `cli` now )
             ? ! ins {
                 ^ ( __reg_err 500 `db_write_failed` )

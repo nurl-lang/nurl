@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.36.8] — unreleased
+
+### Changed
+
+- No `unsafe` (Agora #470): the service's configuration setters (`analyze_set_exe`, `anomaly_authz_set_root`, `anomaly_service_set_root`, `anomaly_service_set_webroot`) kept the caller's strings as raw string globals, which takes an `unsafe` setter. The configuration is now a `Locked` value made at start and set before serving. Each string is the configuration's own copy, read whole by any worker, and a global set at start and changed only through its lock is what the proof's A3.6 and A3.2 cover. The public functions keep their names and arguments.
+
 ## [0.36.7] — 2026-11-03
 
 Requires NURL 0.86.0.

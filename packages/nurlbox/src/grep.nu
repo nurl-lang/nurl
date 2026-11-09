@@ -338,7 +338,8 @@ $ `stdlib/core/slice.nu`
 
 @ ap_grep ( Vec String ) argv → i {
     // egrep / fgrep are grep with a matcher preselected.
-    : s me ( bx_name )
+    : String me_s ( bx_name )
+    : s me ( string_data me_s )
     : BxOpts o ( bx_getopt argv 1 `EFivnce:lLqwxohHrRsm:f:` `extended-regexp=E,fixed-strings=F,ignore-case=i,invert-match=v,line-number=n,count=c,files-with-matches=l,files-without-match=L,quiet=q,silent=q,word-regexp=w,line-regexp=x,only-matching=o,no-filename=h,with-filename=H,recursive=r,regexp=e,file=f,max-count=m` )
     : ~ i rc 1
     ? ! ( bx_ok o ) { = rc 2 } {

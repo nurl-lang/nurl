@@ -481,7 +481,7 @@ $ `bx.nu`
                 ? & ! differ & != na nb < cap 0 {
                     = differ T
                     ? ! quiet {
-                        ( nurl_eprint ( bx_name ) )
+                        ( _bx_eprint_name )
                         ( nurl_eprint `: EOF on ` )
                         ( nurl_eprint ? < na nb p1 p2 )
                         ( nurl_eprint `\n` )

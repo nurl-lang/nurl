@@ -184,7 +184,7 @@ $ `stdlib/core/slice.nu`
     : ( Vec String ) t ( vec_new [String] )
     : ~ i last n
     // `[ ... ]` must close; `test ... ` must not.
-    ? ( bx_streq ( bx_name ) `[` ) {
+    ? ( bx_streq ( string_data ( bx_name ) ) `[` ) {
         ? | < n 2 ! ( bx_streq ( bx_at argv - n 1 ) `]` ) {
             ( bx_err `missing ]` )
             ^ 2

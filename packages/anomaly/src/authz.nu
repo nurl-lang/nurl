@@ -64,8 +64,6 @@ $ `stdlib/std/thread.nu`
 // the same way. Nothing here is patchable at runtime: an auth switch that
 // a request can flip is not an auth switch.
 
-: ~ s g_az_root `.`
-
 // Two modes, and they are different products.
 //
 //   simple  No authentication at all. Anyone who opens the page sees every
@@ -97,10 +95,11 @@ $ `stdlib/std/thread.nu`
     String s_last_err  // why the last token verification failed
     String s_owner  // the owner tenant: config-only, the trust anchor
     String s_iss_tmpl  // multi-tenant: the provider's issuer template
+    String s_root  // the store root (anomaly_authz_set_root), `.` until set
 }
 
 @ __az_blank → ( Locked AzStrings ) {
-    ^ ( locked_new [AzStrings] @ AzStrings { ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) } )
+    ^ ( locked_new [AzStrings] @ AzStrings { ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_from `.` ) } )
 }
 
 // Built at start; read and set under its lock.
@@ -115,6 +114,7 @@ $ `stdlib/std/thread.nu`
     ? == which 4 { ( string_clear . a s_last_err ) ( string_push_str . a s_last_err v ) } {}
     ? == which 5 { ( string_clear . a s_owner ) ( string_push_str . a s_owner v ) } {}
     ? == which 6 { ( string_clear . a s_iss_tmpl ) ( string_push_str . a s_iss_tmpl v ) } {}
+    ? == which 7 { ( string_clear . a s_root ) ( string_push_str . a s_root v ) } {}
     ( locked_restore [AzStrings] g_az_strs a )
 }
 
@@ -127,7 +127,8 @@ $ `stdlib/std/thread.nu`
     ? == which 3 { ^ ( string_from ( string_data . a s_allowed ) ) } {}
     ? == which 4 { ^ ( string_from ( string_data . a s_last_err ) ) } {}
     ? == which 5 { ^ ( string_from ( string_data . a s_owner ) ) } {}
-    ^ ( string_from ( string_data . a s_iss_tmpl ) )
+    ? == which 6 { ^ ( string_from ( string_data . a s_iss_tmpl ) ) } {}
+    ^ ( string_from ( string_data . a s_root ) )
 }
 
 @ g_az_issuer → String { ^ ( __az_get_str 0 ) }
@@ -203,12 +204,9 @@ $ `stdlib/std/thread.nu`
 // should be a deliberate answer rather than a default nobody saw.
 : ~ b g_az_multi F
 
-// (The global keeps a copy of its own: the caller's string may go first.
-// `unsafe`: a string global that owns its text is handed it only where
-// nothing reads it meanwhile — once, before serving.)
-unsafe @ anomaly_authz_set_root s root → v {
-    = g_az_root ( nurl_str_cat root `` )
-}
+// (Kept in g_az_strs, the authz state's lock: a copy of its own, set and
+// read whole from any thread, no `unsafe` — agora #470.)
+@ anomaly_authz_set_root s root → v { ( __az_set_str 7 root ) }
 
 // `on` gates the whole thing; `open_ingest` keeps /detect and /detect_only
 // reachable without credentials while a fleet of already-deployed data
@@ -522,7 +520,7 @@ unsafe @ anomaly_authz_set_root s root → v {
 }
 
 @ __az_orgs_dir → String {
-    : String p ( string_from g_az_root )
+    : String p ( __az_get_str 7 )
     ( string_push_str p `/orgs` )
     ^ p
 }

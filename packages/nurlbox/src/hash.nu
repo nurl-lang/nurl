@@ -109,7 +109,7 @@ $ `bx.nu`
                 } { = more F }
             }
             ? & > bad 0 ! status {
-                ( nurl_eprint ( bx_name ) )
+                ( _bx_eprint_name )
                 ( nurl_eprint `: WARNING: ` )
                 ( nurl_eprint ( nurl_str_int bad ) )
                 ( nurl_eprint ` of the computed checksums did NOT match\n` )

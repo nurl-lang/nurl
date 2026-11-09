@@ -533,7 +533,7 @@ $ `stdlib/core/slice.nu`
     ? ! ( bx_ok o ) { = rc 1 } {
         // -u forces unix endings, -d forces dos ones, whichever name
         // the binary was invoked under.
-        : ~ b to_dos ( bx_streq ( bx_name ) `unix2dos` )
+        : ~ b to_dos ( bx_streq ( string_data ( bx_name ) ) `unix2dos` )
         ? ( bx_has o `u` ) { = to_dos F } {}
         ? ( bx_has o `d` ) { = to_dos T } {}
         : i nops ( bx_operand_count o )

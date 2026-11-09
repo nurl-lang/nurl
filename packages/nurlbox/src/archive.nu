@@ -44,7 +44,8 @@ $ `bx.nu`
 }
 
 @ ap_gzip ( Vec String ) argv → i {
-    : s me ( bx_name )
+    : String me_s ( bx_name )
+    : s me ( string_data me_s )
     : BxOpts o ( bx_getopt argv 1 `cdfktnq123456789` `stdout=c,decompress=d,force=f,keep=k,test=t,quiet=q` )
     : ~ i rc 0
     ? ! ( bx_ok o ) { = rc 1 } {
