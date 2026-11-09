@@ -238,6 +238,23 @@ raw @ cuda_ctx_destroy i ctx → i { ^ # i ( cuCtxDestroy_v2 ctx ) }
 unsafe @ cuda_sync → i { ^ # i ( cuCtxSynchronize ) }
 
 // ── NVRTC: compile CUDA-C source → PTX text ───────────────────────
+// nvrtcVersion answers with the library's version; the fallback stubs
+// (stdlib/nvrtc_stubs.c, linked where there is no libnvrtc) answer with an
+// error. gpu_open asks it once, so a CUDA device with no compiler for its
+// kernels does not become the backend every gpu_compile then fails on.
+& `nvrtc` @ nvrtcVersion inout i32 major inout i32 minor → i32
+
+: ~ i __nvrtc_probe 0  // 0 not asked, 1 usable, 2 not
+
+unsafe @ cuda_nvrtc_ok → b {
+    ? == __nvrtc_probe 0 {
+        : ~ i32 major # i32 0
+        : ~ i32 minor # i32 0
+        = __nvrtc_probe ? == 0 # i ( nvrtcVersion major minor ) 1 2
+    } {}
+    ^ == __nvrtc_probe 1
+}
+
 // The PTX, NUL-terminated (hand `vec_data` of it to cuda_module_load), or
 // an empty Vec on a compile error after printing the NVRTC log to stderr.
 unsafe @ cuda_compile s src s name → ( Vec u ) {

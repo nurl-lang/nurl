@@ -32,6 +32,13 @@ unsafe @ test_args → v {
     ( check == ( gpu_grid 1000 256 ) 4 `grid(1000,256)=4` )
     ( check == ( gpu_grid 1024 256 ) 4 `grid(1024,256)=4` )
     ( check == ( gpu_grid 1025 256 ) 5 `grid(1025,256)=5` )
+    // gpu_open's choice: a device with NVRTC is CUDA; a device without it
+    // (a driver-only host) is the CPU backend unless NURL_GPU=cuda insists;
+    // no device is the CPU backend whatever is asked.
+    ( check == ( gpu_pick_backend T T F ) 0 `device + NVRTC: CUDA` )
+    ( check == ( gpu_pick_backend T F F ) 1 `device, no NVRTC: CPU backend` )
+    ( check == ( gpu_pick_backend T F T ) 0 `device, no NVRTC, NURL_GPU=cuda: CUDA` )
+    ( check == ( gpu_pick_backend F T T ) 1 `no device: CPU backend` )
 }
 
 // ── on-device: real vector add ───────────────────────────────────

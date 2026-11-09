@@ -2,9 +2,23 @@
 
 ## [0.17.8] — unreleased
 
-Requires NURL 0.91.0 (stdlib/std/sysinfo.nu's `sys_os` and host memory).
+Requires NURL 0.91.0 (stdlib/std/sysinfo.nu's `sys_os` and host memory;
+the NVRTC stubs' `nvrtcVersion`).
 
 ### Fixed
+
+- **A CUDA device with no NVRTC runs on the CPU backend** (Agora #549).
+  On a driver-only host (WSL, or a box with the NVIDIA driver and no CUDA
+  toolkit), nurl.sh links the NVRTC stubs, and `gpu_open` still took CUDA
+  because a device and a context were there. Every `gpu_compile` then
+  failed (`[gpu/cuda] nvrtcCreateProgram failed`), so the program had a
+  GPU it could not use where a working CPU backend was one choice away.
+  `gpu_open` now asks `nvrtcVersion` once (the stubs answer with an
+  error). A device with no compiler for its kernels opens the CPU backend
+  and says so in one line. `NURL_GPU=cuda` insists on CUDA, the old
+  behaviour. The choice is `gpu_pick_backend device nvrtc insist`, and
+  tests/gpu_test.nu covers it with no GPU. On WSL with an RTX A2000 and
+  no NVRTC, gpu_test went from 3 FAILED to ALL PASS.
 
 - **The CPU backend runs on native Windows** (Agora #547). It could not
   compile a single kernel there: `cpu_compile` handed system() a POSIX

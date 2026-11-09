@@ -4,6 +4,7 @@
  * CUDA toolkit. Every call returns a non-zero nvrtcResult; with no GPU the
  * CPU backend runs the kernels instead, so these are never reached. Never
  * linked alongside the real libnvrtc. */
+int nvrtcVersion(int *a, int *b) { if (a) *a = 0; if (b) *b = 0; return 1; }
 int nvrtcCreateProgram()      { return 1; }
 int nvrtcCompileProgram()     { return 1; }
 int nvrtcGetPTXSize(void *a, void *b) { if (b) *(long*)b = 0; return 1; }

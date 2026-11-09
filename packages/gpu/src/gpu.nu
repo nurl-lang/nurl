@@ -54,12 +54,32 @@ $ `stdlib/core/slice.nu`
 @ gpu_is_cpu → b { ^ != __gpu_backend 0 }
 
 // Force the CPU backend with NURL_GPU=cpu (so a model runs with no GPU, or to
-// compare backends). Any other value / unset → try CUDA first.
+// compare backends). NURL_GPU=cuda insists on CUDA. Any other value / unset →
+// try CUDA first.
 @ __force_cpu → b {
     : s v ( getenv `NURL_GPU` )
     ? == # i v 0 { ^ F } {}
     ^ != 0 ( nurl_str_eq v `cpu` )
 }
+
+@ __force_cuda → b {
+    : s v ( getenv `NURL_GPU` )
+    ? == # i v 0 { ^ F } {}
+    ^ != 0 ( nurl_str_eq v `cuda` )
+}
+
+// Which backend gpu_open takes once it has looked: CUDA (0) when there is a
+// device and kernels can be compiled for it, else the CPU backend (1). A
+// device with no NVRTC (a driver-only host: WSL, a box with the NVIDIA
+// driver and no CUDA toolkit) is the CPU backend, unless NURL_GPU=cuda
+// insists, which keeps the old behaviour of every compile failing loudly.
+@ gpu_pick_backend b device b nvrtc b insist_cuda → i {
+    ? ! device { ^ 1 } {}
+    ? | nvrtc insist_cuda { ^ 0 } {}
+    ^ 1
+}
+
+: ~ b __gpu_nvrtc_told F
 
 // Backend 2: STATIC — precompiled kernels linked into the binary (a
 // generated kernels_static.c provides the strong nurl_static_kernel;
@@ -278,6 +298,14 @@ unsafe @ gpu_open i ordinal → Gpu {
     ( cuda_init )
     : i dev ( cuda_device ordinal )
     ? < dev 0 { = __gpu_backend 1 ^ ( __gpu_noctx ordinal - 0 2 1 ) } {}
+    ? == 1 ( gpu_pick_backend T ( cuda_nvrtc_ok ) ( __force_cuda ) ) {
+        ? ! __gpu_nvrtc_told {
+            ( nurl_eprint `[gpu] a CUDA device is here, but NVRTC is not (install the CUDA toolkit's libnvrtc, or set NURL_GPU=cpu to silence this): using the CPU backend\n` )
+            = __gpu_nvrtc_told T
+        } {}
+        = __gpu_backend 1
+        ^ ( __gpu_noctx ordinal - 0 2 1 )
+    } {}
     : i ctx ( cuda_ctx_create dev )
     ? == ctx 0 { = __gpu_backend 1 ^ ( __gpu_noctx ordinal - 0 2 1 ) } {}
     = __gpu_backend 0
