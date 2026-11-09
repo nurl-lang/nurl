@@ -14,3 +14,7 @@
   - an inline holder's element cleared before the source ends, or another of its elements read;
   - a slice of the Vec read after an element grows through an inline lend;
   - a callee clearing another row of the element viewed, inline or in a generic.
+
+### Performance
+
+- **The compiler's accumulated lists grow by half, not word by word.** A list the compiler builds up in a symbol table was reallocated to its exact new length at every word, and wherever the allocator could not extend it in place the whole list was copied. It now takes half as much room again when it fills up. With the checks above included, dst_flagship compiles in 0.96 % fewer instructions and the compiler's own self-compile in 1.0 % fewer, with less peak memory on the self-compile. The output is byte for byte the same.

@@ -11108,7 +11108,8 @@ unsafe @ __sym_cw8 s base i bl s suffix i off i cnt → i {
 // asks the tables millions of times, and that copy and its release were
 // the larger part of a lookup. A value a table grows in place (an
 // accumulated list) keeps a buffer of its own (slot 13 of the table says
-// which), and a lookup of it interns what it holds right then.
+// which, and how many bytes it has room for), and a lookup of it interns
+// what it holds right then.
 : ~ i g_in_tab 0  // one word a slot: the string's address (0 = empty)
 : ~ i g_in_cap 0
 : ~ i g_in_n 0
@@ -11247,21 +11248,33 @@ unsafe @ __sym_put s t i idx s v i vl → v {
 }
 
 // Entry `idx`'s value as a buffer it may grow (`extra` more bytes): its
-// own, or — the first time — a copy of the interned value.
+// own, or — the first time — a copy of the interned value. The buffer's
+// size is its `owns` word. Grown, it takes half as much again as it had:
+// a list appended to word by word is copied a bounded number of times
+// over, not once per word wherever the allocator cannot extend it in
+// place, which made the cost of every accumulator depend on what else the
+// heap held (dst_flagship: 119M instructions of realloc copies at
+// 21a0fb5).
 unsafe @ __sym_buf s t i idx i extra → s {
     : *s types # *s # s ( nurl_peek t 4 )
     : *i owns # *i # s ( nurl_peek t 13 )
     : *i lens # *i # s ( nurl_peek t 11 )
     : i ol . lens idx
-    ? != 0 . owns idx {
-        : s grown # s ( nurl_realloc # *u . types idx + + ol extra 1 )
+    : i need + + ol extra 1
+    : i cap . owns idx
+    ? != 0 cap {
+        ? <= need cap { ^ . types idx } {}
+        : i half + cap / cap 2
+        : i nc ? > need half need half
+        : s grown # s ( nurl_realloc # *u . types idx nc )
         = . types idx grown
+        = . owns idx nc
         ^ grown
     } {}
-    : s nb # s ( nurl_alloc + + ol extra 1 )
+    : s nb # s ( nurl_alloc need )
     ( memcpy nb . types idx + ol 1 )
     = . types idx nb
-    = . owns idx 1
+    = . owns idx need
     ^ nb
 }
 
