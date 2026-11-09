@@ -1264,6 +1264,29 @@ raw : ProcChildImpl {
 // last owner shuts the child down.
 @ proc_free sink ProcChild p → v {}
 
+// ── Every process's command line ───────────────────────────────────
+// What a local user can see of the other processes' arguments, the text
+// `ps` and Task Manager show: one String per live process this one may
+// query, its arguments joined by blanks. Read natively, in milliseconds:
+// /proc/<pid>/cmdline on Linux, NtQueryInformationProcess on Windows.
+// None where the platform does not say (macOS, the BSDs, wasm, the
+// unikernel), so a caller falls back visibly.
+
+& `c` @ nurl_proc_cmdlines → sink s
+
+@ proc_command_lines → ?( Vec String ) {
+    : s raw ( nurl_proc_cmdlines )
+    ? == # i raw 0 { ^ @ ?( Vec String ) { F # ( Vec String ) 0 } } {}
+    : String all ( string_adopt raw )
+    : ( Vec String ) lines ( string_split all `\n` )
+    // the text ends in a newline: its last piece is empty
+    : i n ( vec_len [String] lines )
+    ? & > n 0 == ( string_len ( vec_at [String] lines - n 1 ) ) 0 {
+        : ?String _last ( vec_pop [String] lines )
+    } {}
+    ^ @ ?( Vec String ) { T lines }
+}
+
 // ── The process's own identity ──────────────────────────────────────
 // Its user and group ids, real and effective, and its supplementary
 // groups — 0 and none where the platform has no such notion (Windows,

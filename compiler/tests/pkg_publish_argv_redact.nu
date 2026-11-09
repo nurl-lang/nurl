@@ -132,25 +132,28 @@ $ `stdlib/core/vec.nu`
         F _ → {}
     }
 
-    // Windows has neither procfs nor `ps`: ask WMI for every live process's
-    // command line (the same text another local user can read).
+    // Windows has neither procfs nor `ps`: read every live process's command
+    // line natively (proc_command_lines: NtQueryInformationProcess, the text
+    // another local user sees). It used to ask PowerShell + WMI, whose cold
+    // start on a loaded runner outlasted curl's 30 s stall window while this
+    // handler held the exchange open (Agora #508).
     ? & ! found ( is_windows ) {
-        : ( Vec s ) pargs ( vec_new [s] )
-        ( vec_push [s] pargs `-NoProfile` )
-        ( vec_push [s] pargs `-NonInteractive` )
-        ( vec_push [s] pargs `-Command` )
-        ( vec_push [s] pargs `Get-CimInstance Win32_Process | ForEach-Object CommandLine` )
-        ?? ( process_run `powershell` pargs `` ) {
-            T out → {
-                : s txt ( output_stdout out )
-                ? >= ( nurl_str_find txt url_marker ) 0 {
-                    = found T
-                    ? | >= ( nurl_str_find txt secret_tok ) 0 >= ( nurl_str_find txt `Authorization` ) 0 {
-                        = leaked_argv T
+        ?? ( proc_command_lines ) {
+            T lines → {
+                : i nl ( vec_len [String] lines )
+                : ~ i li 0
+                ~ < li nl {
+                    : s txt ( string_data ( vec_at [String] lines li ) )
+                    ? & >= ( nurl_str_find txt `curl` ) 0 >= ( nurl_str_find txt url_marker ) 0 {
+                        = found T
+                        ? | >= ( nurl_str_find txt secret_tok ) 0 >= ( nurl_str_find txt `Authorization` ) 0 {
+                            = leaked_argv T
+                        } {}
                     } {}
-                } {}
+                    = li + li 1
+                }
             }
-            F _ → {}
+            F → {}
         }
     } {}
 
