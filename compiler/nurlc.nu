@@ -17526,84 +17526,105 @@ unsafe @ gen_call i lex i syms i cg → s {
                     } {}
                 } {}
             } {}
-            // (…and in an `inout` parameter, the caller's own struct.)
-            ? ? fr_h | | | ( nurl_sym_has_word syms `__user_drops__` fr_ptr ) ( __vget_live syms fr_ptr ) fr_glue ( __is_inout_ptr syms fr_ptr ) F {
-                : b fr_decl ( str_has_index callee_sink arg_idx )
-                : ~ s zc ( nurl_str_cat `1` `` )
-                ? ! fr_decl {
-                    // (consume_flag: a callee that keeps only a view in
-                    // memory it manages by hand leaves the field in place.)
-                    : s sk ( nurl_cg_reg cg )
-                    ( emit_sink_flag_load ( consume_flag call_name fname arg_idx ) sk )
-                    : s so ( nurl_cg_reg cg )
-                    ( emit_sink_flag_load ( nurl_str_cat `@.__nurl_store.` ( nurl_str_int ( store_flag call_name fname arg_idx ) ) ) so )
-                    : s nso ( nurl_cg_reg cg )
-                    ( nurl_print `  ` ) ( nurl_print nso ) ( nurl_print ` = xor i1 ` ) ( nurl_print so ) ( nurl_print `, 1\n` )
-                    = zc ( nurl_cg_reg cg )
-                    ( nurl_print `  ` ) ( nurl_print zc ) ( nurl_print ` = and i1 ` ) ( nurl_print sk ) ( nurl_print `, ` ) ( nurl_print nso ) ( nurl_print `\n` )
+            // A field of a payload a match lends — a `vec_get` payload (its
+            // slot is the element's), a user enum's (`__enum_pl`, kept in the
+            // enum's cell) — handed to a callee that takes it: the callee gets
+            // a copy, as for a `vec_at` element, and the element keeps its
+            // own. Emptied in place, the slot held a null handle a later
+            // `vec_get` of the element read (SEGV), and the enum kept the
+            // buffer the callee freed (agora #357).
+            : b fr_lcopy ? fr_h & & ! ( nurl_sym_has_word syms `__user_drops__` fr_ptr ) | | ( __vget_live syms fr_ptr ) != 0 ( nurl_sym_len2 syms ( nurl_sym_get2 syms fr_ptr `__bname` ) `__enum_pl` ) ( seq ( nurl_sym_get2 syms ( __path_root_name arg_froot ) `__enum_pl` ) `1` )
+            & ! fr_glue ( __clone_supported ( nurl_llty fr_fty ) syms ) F
+            // (Only where the callee takes it: a declared `sink`, or the
+            // module-end consume answer; one that changes it in place, a
+            // `vec_push`, changes the element's own.)
+            ? fr_lcopy {
+                : ~ s fr_cc ( nurl_str_cat `1` `` )
+                ? ! ( str_has_index callee_sink arg_idx ) {
+                    = fr_cc ( nurl_cg_reg cg )
+                    ( emit_sink_flag_load ( consume_flag call_name fname arg_idx ) fr_cc )
                 } {}
-                // (A binding read out of the field that a store replacing it
-                // has since handed the old value holds one of its own: the
-                // field's new value stays the struct's.)
-                ? & ( is_ident_tok bck_arg_tt ) ( __fview_may_own syms ( mem_udrop_ptr_of syms bck_arg_val ) ) { = zc ( __field_holds_cond cg fr_ptr fr_sty fr_idx fr_fty av zc ) } {}
-                ( mem_zero_field cg fr_ptr fr_sty fr_idx fr_fty zc )
-                // …and in each binding the struct was a cursor over (`: E b
-                // a`): that one still drops its own slot (h191). A parameter
-                // among them is consumed with it, as its own field would be.
-                : s fr_cown ( __cursor_owners syms fr_ptr fr_sty )
-                : s fr_ck ( mem_handle_key cg fr_fty av )
-                ? & != 0 ( nurl_str_len fr_cown ) != 0 ( nurl_str_len fr_ck ) {
-                    : s fr_took ( __cursor_owner_take syms cg fr_cown fr_sty fr_idx fr_fty fr_ck zc )
-                    : ~ s fr_cw ( nurl_str_cat fr_cown `` )
-                    ~ != 0 ( nurl_str_len fr_cw ) {
-                        : s fr_w ( str_first_word fr_cw ) = fr_cw ( str_skip_word fr_cw )
-                        : s fr_wpn ( nurl_sym_get2 syms fr_w `__pname` )
-                        : i fr_wpi ( nurl_sym_word_index syms `__fn_param_names__` fr_wpn )
-                        ? & != 0 ( nurl_str_len fr_wpn ) >= fr_wpi 0 { ( __param_field_taken syms fr_wpn fr_wpi fr_decl call_name fname arg_idx ) } {}
-                    }
-                } {}
-                // …and in the Vec slot it was read from (`?? ( vec_get v k ) {
-                // T p → ( string_free . p key ) }`), which still holds it.
-                ? ( __vget_live syms fr_ptr ) { ( mem_vget_field_consume syms cg fr_ptr fr_sty fr_idx fr_fty av zc ) } {}
-                // …and where a copy read through a pointer came from.
-                ? != 0 ( nurl_sym_len2 syms fr_ptr `__eaddr` ) {
-                    : s ea_fp ( nurl_cg_reg cg )
-                    ( nurl_print `  ` ) ( nurl_print ea_fp ) ( nurl_print ` = getelementptr ` ) ( nurl_print fr_sty )
-                    ( nurl_print `, ptr ` ) ( nurl_print ( nurl_sym_get2 syms fr_ptr `__eaddr` ) ) ( nurl_print `, i32 0` ) ( nurl_print ( __ff_gep_path fr_idx ) ) ( nurl_print `\n` )
-                    ( nurl_print `  call void @__nurl_zero_if.` ) ( nurl_print ( __zero_if_request ( nurl_llty fr_fty ) ) )
-                    ( nurl_print `(i1 ` ) ( nurl_print ? ( seq zc `1` ) `true` zc ) ( nurl_print `, ptr ` ) ( nurl_print ea_fp ) ( nurl_print `)\n` )
-                } {}
-                // Through a cursor (a payload of an option binding, `# T t`
-                // of one): the struct takes over its owner's value, since
-                // only its own copy has the field zeroed.
-                : ~ s fr_al ( nurl_sym_get2 syms fr_ptr `__alias` )
-                ~ != 0 ( nurl_str_len fr_al ) {
-                    : s fr_w ( str_first_word fr_al ) = fr_al ( str_skip_word fr_al )
-                    // Only an option / result binding's payload: a value a
-                    // call merely handed back from its argument is shared.
-                    ? != 0 ( nurl_str_starts ( nurl_sym_get2 syms fr_w `__udty` ) `%__opt.` ) {
-                        : s wf ( mem_udrop_flag_get syms cg fr_w )
-                        : s cf ( mem_udrop_flag_get syms cg fr_ptr )
-                        : s tk ( nurl_cg_reg cg )
-                        ( nurl_print `  ` ) ( nurl_print tk ) ( nurl_print ` = and i1 ` ) ( nurl_print wf ) ( nurl_print `, ` ) ( nurl_print zc ) ( nurl_print `\n` )
-                        : s nf ( nurl_cg_reg cg )
-                        ( nurl_print `  ` ) ( nurl_print nf ) ( nurl_print ` = or i1 ` ) ( nurl_print cf ) ( nurl_print `, ` ) ( nurl_print tk ) ( nurl_print `\n` )
-                        : s nw ( nurl_cg_reg cg )
-                        ( nurl_print `  ` ) ( nurl_print nw ) ( nurl_print ` = xor i1 ` ) ( nurl_print wf ) ( nurl_print `, ` ) ( nurl_print tk ) ( nurl_print `\n` )
-                        ( mem_udrop_flag_set syms cg fr_ptr nf )
-                        ( mem_udrop_flag_set syms cg fr_w nw )
-                        // Taken apart only when the callee consumes the field:
-                        // known now for a declared sink, else at
-                        // module end (the same pending row an argument gets).
-                        ? fr_decl { ( bck_note_payload_taken syms fr_w ( nurl_lex_line lex ) ) }
-                        { ( bck_note_payload_pending syms fr_w ( nurl_lex_line lex ) call_name arg_idx fname ) }
+                = av ( mem_emit_cloneif cg ( nurl_llty fr_fty ) av fr_cc )
+            } {
+                // (…and in an `inout` parameter, the caller's own struct.)
+                ? ? fr_h | | | ( nurl_sym_has_word syms `__user_drops__` fr_ptr ) ( __vget_live syms fr_ptr ) fr_glue ( __is_inout_ptr syms fr_ptr ) F {
+                    : b fr_decl ( str_has_index callee_sink arg_idx )
+                    : ~ s zc ( nurl_str_cat `1` `` )
+                    ? ! fr_decl {
+                        // (consume_flag: a callee that keeps only a view in
+                        // memory it manages by hand leaves the field in place.)
+                        : s sk ( nurl_cg_reg cg )
+                        ( emit_sink_flag_load ( consume_flag call_name fname arg_idx ) sk )
+                        : s so ( nurl_cg_reg cg )
+                        ( emit_sink_flag_load ( nurl_str_cat `@.__nurl_store.` ( nurl_str_int ( store_flag call_name fname arg_idx ) ) ) so )
+                        : s nso ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print nso ) ( nurl_print ` = xor i1 ` ) ( nurl_print so ) ( nurl_print `, 1\n` )
+                        = zc ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print zc ) ( nurl_print ` = and i1 ` ) ( nurl_print sk ) ( nurl_print `, ` ) ( nurl_print nso ) ( nurl_print `\n` )
                     } {}
-                }
-                // A parameter's field: the parameter is consumed with it.
-                : s fr_pn ( nurl_sym_get2 syms fr_ptr `__pname` )
-                : i fr_pi ( nurl_sym_word_index syms `__fn_param_names__` fr_pn )
-                ? & != 0 ( nurl_str_len fr_pn ) >= fr_pi 0 { ( __param_field_taken syms fr_pn fr_pi fr_decl call_name fname arg_idx ) } {}
-            } {}
+                    // (A binding read out of the field that a store replacing it
+                    // has since handed the old value holds one of its own: the
+                    // field's new value stays the struct's.)
+                    ? & ( is_ident_tok bck_arg_tt ) ( __fview_may_own syms ( mem_udrop_ptr_of syms bck_arg_val ) ) { = zc ( __field_holds_cond cg fr_ptr fr_sty fr_idx fr_fty av zc ) } {}
+                    ( mem_zero_field cg fr_ptr fr_sty fr_idx fr_fty zc )
+                    // …and in each binding the struct was a cursor over (`: E b
+                    // a`): that one still drops its own slot (h191). A parameter
+                    // among them is consumed with it, as its own field would be.
+                    : s fr_cown ( __cursor_owners syms fr_ptr fr_sty )
+                    : s fr_ck ( mem_handle_key cg fr_fty av )
+                    ? & != 0 ( nurl_str_len fr_cown ) != 0 ( nurl_str_len fr_ck ) {
+                        : s fr_took ( __cursor_owner_take syms cg fr_cown fr_sty fr_idx fr_fty fr_ck zc )
+                        : ~ s fr_cw ( nurl_str_cat fr_cown `` )
+                        ~ != 0 ( nurl_str_len fr_cw ) {
+                            : s fr_w ( str_first_word fr_cw ) = fr_cw ( str_skip_word fr_cw )
+                            : s fr_wpn ( nurl_sym_get2 syms fr_w `__pname` )
+                            : i fr_wpi ( nurl_sym_word_index syms `__fn_param_names__` fr_wpn )
+                            ? & != 0 ( nurl_str_len fr_wpn ) >= fr_wpi 0 { ( __param_field_taken syms fr_wpn fr_wpi fr_decl call_name fname arg_idx ) } {}
+                        }
+                    } {}
+                    // …and in the Vec slot it was read from (`?? ( vec_get v k ) {
+                    // T p → ( string_free . p key ) }`), which still holds it.
+                    ? ( __vget_live syms fr_ptr ) { ( mem_vget_field_consume syms cg fr_ptr fr_sty fr_idx fr_fty av zc ) } {}
+                    // …and where a copy read through a pointer came from.
+                    ? != 0 ( nurl_sym_len2 syms fr_ptr `__eaddr` ) {
+                        : s ea_fp ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print ea_fp ) ( nurl_print ` = getelementptr ` ) ( nurl_print fr_sty )
+                        ( nurl_print `, ptr ` ) ( nurl_print ( nurl_sym_get2 syms fr_ptr `__eaddr` ) ) ( nurl_print `, i32 0` ) ( nurl_print ( __ff_gep_path fr_idx ) ) ( nurl_print `\n` )
+                        ( nurl_print `  call void @__nurl_zero_if.` ) ( nurl_print ( __zero_if_request ( nurl_llty fr_fty ) ) )
+                        ( nurl_print `(i1 ` ) ( nurl_print ? ( seq zc `1` ) `true` zc ) ( nurl_print `, ptr ` ) ( nurl_print ea_fp ) ( nurl_print `)\n` )
+                    } {}
+                    // Through a cursor (a payload of an option binding, `# T t`
+                    // of one): the struct takes over its owner's value, since
+                    // only its own copy has the field zeroed.
+                    : ~ s fr_al ( nurl_sym_get2 syms fr_ptr `__alias` )
+                    ~ != 0 ( nurl_str_len fr_al ) {
+                        : s fr_w ( str_first_word fr_al ) = fr_al ( str_skip_word fr_al )
+                        // Only an option / result binding's payload: a value a
+                        // call merely handed back from its argument is shared.
+                        ? != 0 ( nurl_str_starts ( nurl_sym_get2 syms fr_w `__udty` ) `%__opt.` ) {
+                            : s wf ( mem_udrop_flag_get syms cg fr_w )
+                            : s cf ( mem_udrop_flag_get syms cg fr_ptr )
+                            : s tk ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print tk ) ( nurl_print ` = and i1 ` ) ( nurl_print wf ) ( nurl_print `, ` ) ( nurl_print zc ) ( nurl_print `\n` )
+                            : s nf ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print nf ) ( nurl_print ` = or i1 ` ) ( nurl_print cf ) ( nurl_print `, ` ) ( nurl_print tk ) ( nurl_print `\n` )
+                            : s nw ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print nw ) ( nurl_print ` = xor i1 ` ) ( nurl_print wf ) ( nurl_print `, ` ) ( nurl_print tk ) ( nurl_print `\n` )
+                            ( mem_udrop_flag_set syms cg fr_ptr nf )
+                            ( mem_udrop_flag_set syms cg fr_w nw )
+                            // Taken apart only when the callee consumes the field:
+                            // known now for a declared sink, else at
+                            // module end (the same pending row an argument gets).
+                            ? fr_decl { ( bck_note_payload_taken syms fr_w ( nurl_lex_line lex ) ) }
+                            { ( bck_note_payload_pending syms fr_w ( nurl_lex_line lex ) call_name arg_idx fname ) }
+                        } {}
+                    }
+                    // A parameter's field: the parameter is consumed with it.
+                    : s fr_pn ( nurl_sym_get2 syms fr_ptr `__pname` )
+                    : i fr_pi ( nurl_sym_word_index syms `__fn_param_names__` fr_pn )
+                    ? & != 0 ( nurl_str_len fr_pn ) >= fr_pi 0 { ( __param_field_taken syms fr_pn fr_pi fr_decl call_name fname arg_idx ) } {}
+                } {}
+            }
         } {}
         // A closure's parameter (its caller keeps what it passed) handed to
         // a declared `sink` — a release (`string_free`), or a callee that
