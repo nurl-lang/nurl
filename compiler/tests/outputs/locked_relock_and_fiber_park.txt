@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+nested: nurl: locked_with: this thread already holds the Locked (a nested locked_* call on it would wait for itself)
+after nested, len=2
+two_fibers_parked_in_place=10
+restored_by_another_thread=42
+await_woken_by_with=99

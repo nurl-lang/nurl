@@ -896,10 +896,11 @@ stated.
 - shares in a lock's payload (A3.2's second cut: `arc` and lock shares, not
   cell shares);
 - the probes h267 h358;
-- relocking a lock on the OS thread that holds it: the model's thread
-  waits (`Blocked`) or, since A3.3, panics (`Step.waitPanic`), but the
-  runtime's default pthread mutex leaves it undefined (Agora #455, phase
-  D).
+- that the runtime's lock word (`stdlib/runtime_locked.c`) is the lock
+  block's state (phase D). A relock by its holder, which the model's thread
+  waits for (`Blocked`) or, since A3.3, panics at (`Step.waitPanic`),
+  panics in the runtime since Agora #455; it was undefined while a default
+  pthread mutex was held across the closure.
 
 ## A3.3's mechanization (`RwLocked`, `% Frozen`)
 
@@ -3658,11 +3659,11 @@ run of the model.
     threads change its state (`CellInv.cellRaceFree`).
 - *Faithful, only adds runs.* `pthread_mutex_lock` waits while another
   thread holds the mutex, as the take waits while the integer is out.
-  - A `mutex_unlock` of a mutex the thread does not hold is undefined for a
-    default pthread mutex. The model's panics (the integer in,
+  - A `mutex_unlock` of a mutex the thread does not hold panics in the
+    runtime (an error-checking mutex, Agora #455; undefined before), and so
+    does a relock by the holder. The model's unlock panics (the integer in,
     `lockRestoreP`) or puts an integer back, which may let another thread
-    in. Neither touches memory, since the mutex guards none. This is beside
-    A3.2's relocking (Agora #455).
+    in. Neither touches memory, since the mutex guards none.
   - The runtime's `mutex_with` does not unlock on a panic. The model's
     releases (A3.3's `scopeLP`): more runs, as for `locked_with` (A3.2).
   - `Cond` and `Semaphore` have no rule, as in A3.6.

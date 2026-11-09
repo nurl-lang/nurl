@@ -76734,6 +76734,11 @@ unsafe @ __mp_runtime_panics s nm i p i le → b {
     ? & != 0 ( nurl_str_starts nm `nurl_cpu_` ) != 0 ( nurl_str_ends nm `_missing` ) { ^ T } {}
     // An RwLocked taken by a thread that already holds it for writing.
     ? != 0 ( nurl_str_starts nm `nurl_rwlock_` ) { ^ | ( seq nm `nurl_rwlock_rdlock` ) ( seq nm `nurl_rwlock_wrlock` ) } {}
+    // A Locked asked for by the holder that has it, or a Mutex's failed
+    // lock / unlock (stdlib/runtime_locked.c, agora #455); a Locked's
+    // wait parks a fiber, too.
+    ? != 0 ( nurl_str_starts nm `nurl_lk_` ) { ^ | | ( seq nm `nurl_lk_enter` ) ( seq nm `nurl_lk_take` ) ( seq nm `nurl_lk_await` ) } {}
+    ? | ( seq nm `nurl_mutex_lock` ) ( seq nm `nurl_mutex_unlock` ) { ^ T } {}
     // Drop / clone walks that call a thunk; with no thunk they cannot.
     ? | != 0 ( nurl_str_starts nm `nurl_vec_drop` ) != 0 ( nurl_str_starts nm `nurl_vec_clone` ) {
         ^ < ( nurl_memmem_range # s + g_dce_mod p - le p `, ptr null,` 11 ) 0

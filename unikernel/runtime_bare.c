@@ -1613,3 +1613,12 @@ long long nurl_sys_chain_trusted(const void *chain, long long len) {
     (void)chain; (void)len;
     return -1;
 }
+
+/* ── A Locked's lock (stdlib/std/thread.nu) ──────────────────────────
+ * The hosted runtime's, verbatim, over this file's mutex, condvar (which
+ * parks a coroutine) and RwLocked holder records (§9b). */
+#define NURL_LK_MUTEX_T  NbMutex
+#define NURL_LK_COND_T   NbCond
+#define NURL_LK_HOLDER_T NbRwHolder
+#define NURL_LK_ME()     nb_rw_me()
+#include "../stdlib/runtime_locked.c"
