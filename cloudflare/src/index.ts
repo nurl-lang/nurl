@@ -185,9 +185,7 @@ async function mirrorArtifacts(
         const res = await container.fetch(new Request(`${origin}/download/${token}`));
         if (res.status !== 200) return;
         await env.NURL_ARTIFACTS.put(token, await res.arrayBuffer(), {
-          httpMetadata: {
-            contentType: res.headers.get("Content-Type") ?? "application/octet-stream",
-          },
+          httpMetadata: { contentType: "application/octet-stream" },
         });
       } catch (e) {
         console.error(`[nurl-artifacts] mirroring ${token} failed:`, e);
@@ -218,7 +216,12 @@ export default {
       if (stored) {
         const headers = new Headers();
         stored.writeHttpMetadata(headers);
-        if (!headers.has("Content-Type")) headers.set("Content-Type", "application/octet-stream");
+        // Artifacts are opaque bytes. Older objects were mirrored with
+        // whatever Content-Type the container sent (a `.html` artifact
+        // was text/html), so force the download contract on read too.
+        headers.set("Content-Type", "application/octet-stream");
+        headers.set("Content-Disposition", "attachment");
+        headers.set("X-Content-Type-Options", "nosniff");
         return new Response(stored.body, { status: 200, headers });
       }
       const res = await container.fetch(request);
@@ -226,12 +229,15 @@ export default {
       const body = await res.arrayBuffer();
       ctx.waitUntil(
         env.NURL_ARTIFACTS.put(key, body, {
-          httpMetadata: {
-            contentType: res.headers.get("Content-Type") ?? "application/octet-stream",
-          },
+          httpMetadata: { contentType: "application/octet-stream" },
         }),
       );
-      return new Response(body, res);
+      // Same contract for a container that predates the fix.
+      const headers = new Headers(res.headers);
+      headers.set("Content-Type", "application/octet-stream");
+      headers.set("Content-Disposition", "attachment");
+      headers.set("X-Content-Type-Options", "nosniff");
+      return new Response(body, { status: res.status, headers });
     }
 
     const res = await container.fetch(request);

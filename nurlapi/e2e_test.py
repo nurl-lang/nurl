@@ -858,6 +858,38 @@ def t_tools_call_build(c: Client) -> None:
         bad("build artifact present", f"no token/url in {j}")
 
 
+def t_download_artifact_mime(c: Client) -> None:
+    # A build artifact's name is caller-chosen. Serving `.html`/`.svg`/`.js`
+    # with the extension's MIME type turned the download route into stored
+    # XSS on the playground origin. Every artifact is opaque bytes now:
+    # application/octet-stream, Content-Disposition: attachment, nosniff.
+    print("\n[REST] /download — artifacts are opaque downloads")
+    src = "@ main → i {\n    ( puts `<script>document.title='NURL_XSS_MARKER'</script>` )\n    ^ 0\n}\n"
+    status, _, raw = c.post("/build", {"source": src, "filename": "poc.html"}, timeout=120.0)
+    assert_eq("html-named build answers 200", status, 200)
+    try:
+        j = json.loads(raw)
+    except json.JSONDecodeError:
+        bad("html-named build result is JSON", f"got {raw[:200]!r}")
+        return
+    assert_eq("html-named build ok", j.get("status"), "ok")
+    art = j.get("binary_artifact") or {}
+    token = art.get("token")
+    assert_true("html-named artifact has a token", bool(token), str(art)[:200])
+    if not token:
+        return
+    status, hdrs, body = c.get(f"/download/{token}")
+    assert_eq("html-named artifact downloads", status, 200)
+    ctype = hdrs.get("Content-Type") or hdrs.get("content-type") or ""
+    disp = hdrs.get("Content-Disposition") or hdrs.get("content-disposition") or ""
+    nosniff = hdrs.get("X-Content-Type-Options") or hdrs.get("x-content-type-options") or ""
+    assert_true("artifact is application/octet-stream", ctype.lower().startswith("application/octet-stream"), ctype)
+    assert_true("artifact is an attachment", "attachment" in disp.lower(), disp)
+    assert_true("artifact is nosniff", nosniff.lower() == "nosniff", nosniff)
+    assert_true("artifact body is still the ELF", body[:4] == b"\x7fELF", repr(body[:4]))
+    assert_true("artifact still carries the marker", b"NURL_XSS_MARKER" in body, "marker missing")
+
+
 def t_diagnostics_contract(c: Client) -> None:
     # Every class of nurlc diagnostic lands in nurlc_errors — front-end,
     # borrow checker (anchored at its statement), lint warnings —
@@ -1493,12 +1525,14 @@ def main() -> int:
     t_tools_call_unknown(c)
     if args.native_only:
         t_tools_call_build(c)
+        t_download_artifact_mime(c)
         t_build_import_confinement(c)
         t_build_nesting_limit(c)
         t_diagnostics_contract(c)
         print("[REST/MCP] wasm + unikernel builds — skipped (--native-only)")
     elif not args.quick:
         t_tools_call_build(c)
+        t_download_artifact_mime(c)
         t_build_import_confinement(c)
         t_build_nesting_limit(c)
         t_diagnostics_contract(c)
@@ -1511,6 +1545,7 @@ def main() -> int:
         t_tools_call_build_unikernel(c)
     else:
         print("\n[MCP] tools/call nurl_build_native — skipped (--quick)")
+        print("[REST] /download artifact MIME — skipped (--quick)")
         print("[MCP] tools/call nurl_build_wasm — skipped (--quick)")
         print("[REST] /build_wasm libc shims — skipped (--quick)")
         print("[REST] /build_wasm caller ir — skipped (--quick)")

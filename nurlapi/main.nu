@@ -2294,10 +2294,16 @@ i clang_rc s build_stdout s build_stderr → v {
                     : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fpath ) )
                     ?? rd {
                         T body → {
-                            : String ext ( path_extension ( string_data fpath ) )
-                            : s mime ( mime_for_ext ( string_data ext ) )
+                            // A build artifact is opaque bytes, never a
+                            // document: the caller chooses `filename`, so a
+                            // `.html` / `.svg` / `.js` artifact served with
+                            // its extension's MIME type is stored XSS on
+                            // this origin. Force a download and never let
+                            // the browser sniff a type.
                             : HttpResponse r ( response_new 200 )
-                            ( response_set_header r `Content-Type` mime )
+                            ( response_set_header r `Content-Type` `application/octet-stream` )
+                            ( response_set_header r `Content-Disposition` `attachment` )
+                            ( response_set_header r `X-Content-Type-Options` `nosniff` )
                             ( response_set_body_bytes r body )
                             ^ r
                         }
@@ -2363,10 +2369,15 @@ i clang_rc s build_stdout s build_stderr → v {
     : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fpath ) )
     ?? rd {
         T body → {
-            : String ext ( path_extension ( string_data fpath ) )
-            : s mime ( mime_for_ext ( string_data ext ) )
+            // A build artifact is opaque bytes, never a document: the
+            // caller chooses `filename`, so a `.html` / `.svg` / `.js`
+            // artifact served with its extension's MIME type is stored
+            // XSS on this origin. Force a download and never let the
+            // browser sniff a type.
             : HttpResponse r ( response_new 200 )
-            ( response_set_header r `Content-Type` mime )
+            ( response_set_header r `Content-Type` `application/octet-stream` )
+            ( response_set_header r `Content-Disposition` `attachment` )
+            ( response_set_header r `X-Content-Type-Options` `nosniff` )
             ( response_set_body_bytes r body )
             ^ r
         }
