@@ -2,7 +2,7 @@
 
 ## Status
 
-**A3.0 is proven** (`A3.claim : A3.Claim`, `A3/Claim.lean`). `A3/Defs.lean`
+**A3 is proven** (`A3.claim : A3.Claim` in `A3/Claim.lean`, `A3.claim_made` in `A3/Make.lean`). `A3/Defs.lean`
 defines A3.0's configuration (`Thread`, `Cfg`, `Cfg.view`), its steps
 (`TStep`: a thread takes A2's own `Step`; `spawn`), what a step touches
 (`Touch`), a race (`Race`), and the claim (`Claim`: `MemorySafe ∧ RaceFree ∧
@@ -601,7 +601,7 @@ allocated once every thread has ended. `A2.memory_safe`, `A2.soundness`,
 - The count itself stays ghost: no stored `rc`, no theorem that it equals
   the number of shares (the sweep makes it unnecessary for the claim).
 - A view-holding or closure-holding payload; the probes (step 4 below:
-  h211 h212 h213 h288 h289 h338); `CLAIM.md` / `README.md`.
+  h211 h212 h213 h288 h289 h338).
 
 A3.0 settled that A3 imports A2 and runs A2's step on each thread's view,
 so a shared block has to live somewhere A2's step can read. For `Arc` the
@@ -909,7 +909,7 @@ A2 and A3, and `A2.memory_safe`, `A2.soundness`, `A2.no_leak_end`,
 them. An `RwLocked` is a lock block (A3.2's), and a reader reads it through
 a *view*, a third kind of block that its read guard shares. A panic now
 gives a lock scope's payload back, and a thread that waits may panic
-instead. `CLAIM.md` / `README.md` are not updated here.
+instead.
 
 The rest of A3.3 is mechanized too (*The rest*, below): `rw_try_read` and
 `rw_try_write` are right-hand sides that answer `none` where `rw_read` and
@@ -1219,7 +1219,6 @@ writer bit are the runtime's rwlock, trusted base).
   `DupFn`.)
 - a typed program over these rules (a probe's encoding, as
   `A2/DynCell.lean` types `pick`);
-- `CLAIM.md` / `README.md`.
 
 ## A3.4's mechanization (`Atomic`, channels)
 
@@ -1229,7 +1228,7 @@ their operations in A2 and A3, and `A2.memory_safe`, `A2.soundness`,
 `A3.claim` are re-proven with them. A channel is a lock block whose payload
 is its queue and its closed flag, and `chan_send`, `chan_recv`,
 `chan_try_recv` and `chan_close` are primitive rules on it (Channels,
-below). `CLAIM.md` / `README.md` are not updated here.
+below).
 
 **Where an `Atomic` lives: in an integer lock block.** The draft gave it a
 third block kind. The cut uses A3.2's lock block of type `int` instead.
@@ -1479,7 +1478,6 @@ the receiver's free.
 - channels whose elements hold shares or views, and `select`;
 - a typed program over the channel rules (a probe's encoding, as
   `A2/DynCell.lean` types `pick`);
-- `CLAIM.md` / `README.md`.
 
 ## A3.5's mechanization (library handles, the crossing check)
 
@@ -1490,7 +1488,6 @@ thread. `check.sh` is green with them in A2 and A3, and `A2.memory_safe`,
 theorems and `A3.claim` are re-proven. A3's race now includes two threads
 changing one handle's state, and the claim proves there is none. Closures
 in shared payloads are A3.5b's (below), and trait objects A3.5c's.
-`CLAIM.md` / `README.md` are not updated here.
 
 The runtime it models is docs/MEMORY.md §6.5. A library handle (`PNCounter
 { ( Shared PNCounterImpl ) ctl }`, a `TcpConn`, a `Cell`) is a counted
@@ -1754,7 +1751,6 @@ the spawned function, and its captures are `sink` arguments.
   NotSend` assertions. (A3.5's third cut, below, closes the first.)
 - The probes as typed programs (a probe's encoding, as `A2/DynCell.lean`
   types `pick`).
-- `CLAIM.md` / `README.md`.
 
 ## A3.5b's mechanization (closures across threads)
 
@@ -1765,7 +1761,7 @@ spawn takes a Send one; a call through a closure an `Arc` lends is typed.
 `check.sh` is green with them in A2 and A3, and `A2.memory_safe`,
 `A2.soundness`, `A2.no_leak_end`, `A2.no_leak_panic`, the `DynCell`
 theorems and `A3.claim` are re-proven. Trait objects' statements (h344)
-are A3.5c's (below). `CLAIM.md` / `README.md` are not updated here.
+are A3.5c's (below).
 
 The runtime it models is docs/MEMORY.md §6.5:
 - a closure's captures are not part of its type, so nurlc asks the Send
@@ -2026,7 +2022,6 @@ closure's environment is a tree inside its value (`Sub.pkg`, `Val.ids`).
 - The probes as whole typed programs: `StmtT.arcCall` types the call
   through the `Arc`, not a program that `memory_safe` is applied to (as
   `A2/DynCell.lean` types `pick`).
-- `CLAIM.md` / `README.md`.
 
 ## A3.5c's mechanization (trait objects)
 
@@ -2212,7 +2207,6 @@ A3.0's `spawn_args`.
   supertraits and generic bounds; `% Send` / `% Sync` assertions on an impl's
   type (decided in A3.5b's and A3.5c's rest, below).
 - The probes as typed programs (as `A2/DynCell.lean` types `pick`).
-- `CLAIM.md` / `README.md`.
 
 ## A3.6's mechanization (module globals)
 
@@ -2223,8 +2217,7 @@ theorems and `A3.claim` are re-proven. `A3.claim` now runs from a start
 that holds the globals (`Cfg.start G s nv`, under `GlobsOK G`; since
 A3.5b `GlobsOK P G`), and its
 leak clause leaves what they reach. With no global it is A3.0–A3.5's
-claim (`Cfg.init_start`, `A3.no_leak_init`). `CLAIM.md` / `README.md` are
-not updated here.
+claim (`Cfg.init_start`, `A3.no_leak_init`).
 
 The rest of A3.6 is mechanized too (*The rest*, below, `A3/Make.lean`): the
 `make`s run before `main` and leave a start `GlobsOK` holds of (`Made`,
@@ -2589,7 +2582,6 @@ globals reach (`Reached C0.globVals`). With no global, nothing is left
 - *`Cond` and `Semaphore` globals.*
 - *The probes as typed programs* (a probe's encoding, as `A2/DynCell.lean`
   types `pick`).
-- `CLAIM.md` / `README.md`.
 
 ## A3.2's second cut (shares in lock payloads, `locked_take` / `locked_restore`)
 
@@ -2602,7 +2594,6 @@ theorems and `A3.claim` are re-proven. The cut has two parts:
   (`Rhs.lockTake`, `Rhs.lockRestore`).
 
 h267 is part (B)'s probe, and it needs (A): its payload holds an `Arc`.
-`CLAIM.md` / `README.md` are not updated here.
 
 ### (A) Shares in a lock's payload and a channel's element
 
@@ -2887,7 +2878,6 @@ dropped the value being handed back. The next take read freed memory.
   guards, and a lock reached through a local borrow. (Closed by A3.2's and
   A3.3's rest, below.)
 - Deadlock freedom, and that a waiting take is ever let in.
-- `CLAIM.md` / `README.md`.
 
 ## A3.5's second cut (library handles in locks and channels)
 
@@ -2899,8 +2889,7 @@ closures and `: Send` trait objects. Every value going into a lock block
 faces the crossing check, as a spawn's arguments do, and a failed check
 panics. A3's confinement keeps a cell's shares in one place: one thread's
 slots, or one lock block's payload. This closes the gaps A3.2's second cut,
-A3.5b and A3.5c listed (*Not proven here*, there). `CLAIM.md` / `README.md`
-are not updated here.
+A3.5b and A3.5c listed (*Not proven here*, there).
 
 The runtime it models is docs/MEMORY.md §6.5, *The crossing check*:
 `mem_send_check` runs at `chan_send` and at every value going into a
@@ -3208,7 +3197,6 @@ Each is a restriction, and sound as stated.
 - The probes as whole typed programs (as `A2/DynCell.lean` types `pick`).
   `chanSend_kept`, `lockNew_kept`, `lockRestore_kept` and `scopeL_end`
   state their rules on one step each.
-- `CLAIM.md` / `README.md`.
 
 ## A3.5b's and A3.5c's rest (subsumption, bounds, what A2's closures leave out)
 
@@ -3223,7 +3211,7 @@ whose only parameter is the receiver. h364's rule holds. The markers are the
 classes' subsumption one way and the trusted base the other. `check.sh` is
 green, and `A2.memory_safe`, `A2.soundness`, `A2.no_leak_end`,
 `A2.no_leak_panic`, the `DynCell` theorems, `A3.claim` and `A3.claim_made` are
-re-proven. `CLAIM.md` / `README.md` are not updated here.
+re-proven.
 
 ### Subsumption between closure classes
 
@@ -3495,8 +3483,7 @@ them. This types every lock and `RwLocked` operation on A3.2's and A3.3's
 "not typed" lists. What those lists keep is deadlock freedom, which the
 claim excludes by design, and shares in a slice's elements, which is no
 lock operation (*Not proven here*, below; typed since shares in a slice,
-below). `CLAIM.md` / `README.md` are not
-updated here.
+below).
 
 For each form, *faithful* says whether the model has exactly the runtime's
 runs, or more. A form that only adds runs is fine: the claim covers every
@@ -3720,7 +3707,6 @@ the body runs on an owner of the share that nothing in it reaches.
   and is not lifted here. (Lifted by shares in a slice, below.)
 - Programs typed over these forms, as `A2/DynCell.lean` types `pick` (the
   probes' encodings).
-- `CLAIM.md` / `README.md`.
 
 ## A2-envhand: the environment handed over (`callcE`)
 
@@ -3900,10 +3886,7 @@ gaps the earlier sections list as not typed:
 - (C) shares in a slice's elements (A3.1's first cut, which A3.2's and
   A3.3's rest leaves out).
 
-`CLAIM.md` / `README.md` are not updated here. `CLAIM.md`'s A3.3 note "The
-model lets a guard cross a spawn, which nurlc refuses" and its A3.5 "Not
-typed yet: a handle changed or copied through a borrow" and A3.2 "shares in
-a slice's elements" no longer hold. A3.5's race (`CellOp`) asks, inside a
+A3.5's race (`CellOp`) asks, inside a
 check-out, an owner's share rather than any share (below).
 
 ### (A) A library handle used through a borrow
@@ -4164,7 +4147,6 @@ needed. No rule asks for it now; it stays as the bottom of the order.
   configurations. It is argued above from the check at every crossing, as
   A3.5's first cut argued `CellOp`'s second case.
 - The probes as whole typed programs (as `A2/DynCell.lean` types `pick`).
-- `CLAIM.md` / `README.md`.
 
 ## Open questions
 

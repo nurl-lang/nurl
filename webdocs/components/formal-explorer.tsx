@@ -28,21 +28,29 @@ import {
   type HoleProbe,
 } from '@/lib/formal-data.generated';
 
-type Lang = 'fi' | 'en';
+type PhaseKey = 'A3' | 'A2' | 'A1';
 type MainTab = 'visual' | 'blueprint' | 'browser' | 'holes';
-type GraphMode = 'theorems' | 'modules-a2' | 'modules-a1';
+type GraphMode = 'theorems' | 'modules-a3' | 'modules-a2' | 'modules-a1';
 
 const GITHUB_BASE = 'https://github.com/nurl-lang/nurl/blob/main';
 
-const TABS: { id: MainTab; icon: typeof Sparkles; fi: string; en: string }[] = [
-  { id: 'visual', icon: Sparkles, fi: '1. Visuaalinen selitys & Simulaattori', en: '1. Visual Story & Step Simulator' },
-  { id: 'blueprint', icon: GitBranch, fi: '2. Matemaatikon Blueprint-verkko (DAG)', en: '2. Mathematician’s Blueprint Graph' },
-  { id: 'browser', icon: Code2, fi: '3. Lean 4 -koodi & lauseselain (1 766)', en: '3. Lean 4 Proof & Code Browser (1,766)' },
+const TOTAL_DECLS =
+  formalData.stats.a1.totalDecls + formalData.stats.a2.totalDecls + formalData.stats.a3.totalDecls;
+const TOTAL_LINES =
+  formalData.stats.a1.lines + formalData.stats.a2.lines + formalData.stats.a3.lines;
+const TOTAL_THEOREMS =
+  formalData.stats.a1.theorems + formalData.stats.a2.theorems + formalData.stats.a3.theorems;
+const TOTAL_MODULES =
+  formalData.stats.a1.modules + formalData.stats.a2.modules + formalData.stats.a3.modules;
+
+const TABS: { id: MainTab; icon: typeof Sparkles; label: string }[] = [
+  { id: 'visual', icon: Sparkles, label: '1. Visual Story & Step Simulator' },
+  { id: 'blueprint', icon: GitBranch, label: '2. Mathematician’s Blueprint Graph' },
+  { id: 'browser', icon: Code2, label: `3. Lean 4 Proof & Code Browser (${TOTAL_DECLS.toLocaleString('en-US')})` },
   {
     id: 'holes',
     icon: ShieldAlert,
-    fi: `4. ${formalData.stats.holesCount} Reikäkoetta & Sääntömatriisi`,
-    en: `4. ${formalData.stats.holesCount} Soundness Holes & Rules`,
+    label: `4. ${formalData.stats.holesCount} Soundness Holes & Rules`,
   },
 ];
 
@@ -52,7 +60,6 @@ interface SimBinding {
   ty: string;
   live: boolean;
   deps: string[];
-  noteFi: string;
   noteEn: string;
 }
 
@@ -76,9 +83,7 @@ interface SimStep {
   stmtLean: string;
   ruleName: string;
   status: 'ok' | 'rejected' | 'panic-unwind';
-  titleFi: string;
   titleEn: string;
-  descFi: string;
   descEn: string;
   ctx: SimBinding[];
   slots: SimSlot[];
@@ -88,9 +93,7 @@ interface SimStep {
 interface SimScenario {
   id: string;
   badge: string;
-  titleFi: string;
   titleEn: string;
-  subtitleFi: string;
   subtitleEn: string;
   nurlCode: string[];
   steps: SimStep[];
@@ -100,9 +103,7 @@ const SIM_SCENARIOS: SimScenario[] = [
   {
     id: 'realloc-view',
     badge: '§2.10 · Eff.realloc',
-    titleFi: '1. Miksi vec_push mitätöi Slice-näkymän (mutta säilyttää alkiolainan)?',
     titleEn: '1. Why vec_push Kills a Slice View (While Preserving Element Borrows)',
-    subtitleFi: 'Havainnollistaa sääntöä StmtT.push, efektihilaa Eff.kills .realloc ja reikäkokeita h07 / h33.',
     subtitleEn: 'Illustrates StmtT.push, the Eff.kills .realloc lattice rule, and soundness probes h07 / h33.',
     nurlCode: [
       ': ( Vec i ) v ( vec_new [i] )',
@@ -117,10 +118,7 @@ const SIM_SCENARIOS: SimScenario[] = [
         stmtLean: 'Stmt.letv v (Rhs.new .int) …',
         ruleName: 'RhsT.new',
         status: 'ok',
-        titleFi: 'Vaihe 1: Luodaan omistettu Vec v',
         titleEn: 'Step 1: Allocate Owned Vec v',
-        descFi:
-          'Muuttuja v saa omistavan paikan Slot⟨own: true, some(node c=0 d=1 [])⟩. Kekoon varataan ohjaussolmu #0 ja datapuskuri #1.',
         descEn:
           'Binding v gets an owning slot Slot⟨own: true, some(node c=0 d=1 [])⟩. Heap node #0 and backing buffer #1 are allocated.',
         ctx: [
@@ -130,7 +128,6 @@ const SIM_SCENARIOS: SimScenario[] = [
             ty: ' Ty.vec .int',
             live: true,
             deps: [],
-            noteFi: 'Ainoa omistaja puulle (#0, #1)',
             noteEn: 'Single owner of tree (#0, #1)',
           },
         ],
@@ -145,10 +142,7 @@ const SIM_SCENARIOS: SimScenario[] = [
         stmtLean: 'Stmt.letv s (Rhs.view v) …',
         ruleName: 'RhsT.view',
         status: 'ok',
-        titleFi: 'Vaihe 2: Otetaan Slice-näkymä s puskuriin d=#1',
         titleEn: 'Step 2: Take Slice View s into Buffer d=#1',
-        descFi:
-          's on lainattu näkymä Val.view(d=#1, off=0, len=1). Konteksti Γ kirjaa riippuvuuden Dep(root: v, kind: .view).',
         descEn:
           's holds Val.view(d=#1, off=0, len=1). Context Γ records dependency Dep(root: v, kind: .view).',
         ctx: [
@@ -158,7 +152,6 @@ const SIM_SCENARIOS: SimScenario[] = [
             ty: 'Ty.vec .int',
             live: true,
             deps: [],
-            noteFi: 'Omistaa solmun #0 ja puskurin #1',
             noteEn: 'Owns header #0 and buffer #1',
           },
           {
@@ -167,7 +160,6 @@ const SIM_SCENARIOS: SimScenario[] = [
             ty: 'Ty.slice .int',
             live: true,
             deps: ['v (.view)'],
-            noteFi: 'Osoittaa suoraan puskuriin d=#1',
             noteEn: 'Points directly at buffer d=#1',
           },
         ],
@@ -185,10 +177,7 @@ const SIM_SCENARIOS: SimScenario[] = [
         stmtLean: 'Stmt.push v y  (runs kill Γ .realloc v)',
         ruleName: 'StmtT.push',
         status: 'ok',
-        titleFi: 'Vaihe 3: vec_push kasvattaa puskuria (d=#1 vapautuu, d=#2 varataan)',
         titleEn: 'Step 3: vec_push Reallocates Buffer (d=#1 Freed, d=#2 Allocated)',
-        descFi:
-          'Ajonaikaisesti Step.push varaa uuden puskurin d=#2 ja vapauttaa vanhan puskurin d=#1 (alloc #1 := false). Käännösaikana StmtT.push ajaa kill Γ .realloc v: koska Eff.kills .realloc false .view = true, näkymä s merkitään kuolleeksi (live := false)!',
         descEn:
           'At runtime, Step.push allocates fresh buffer d=#2 and frees old buffer d=#1 (alloc #1 := false). At compile time, StmtT.push runs kill Γ .realloc v: since Eff.kills .realloc false .view = true, view s becomes dead (live := false)!',
         ctx: [
@@ -198,7 +187,6 @@ const SIM_SCENARIOS: SimScenario[] = [
             ty: 'Ty.vec .int',
             live: true,
             deps: [],
-            noteFi: 'Päivitetty puskuriin d=#2',
             noteEn: 'Updated to buffer d=#2',
           },
           {
@@ -207,7 +195,6 @@ const SIM_SCENARIOS: SimScenario[] = [
             ty: 'Ty.slice .int',
             live: false,
             deps: ['v (.view) — KILLED by .realloc'],
-            noteFi: 'MITÄTÖITY (live = false): osoittaisi vapautettuun puskuriin #1!',
             noteEn: 'KILLED (live = false): points to freed buffer #1!',
           },
         ],
@@ -226,10 +213,7 @@ const SIM_SCENARIOS: SimScenario[] = [
         stmtLean: 'Rhs.sat s 0  (requires Γ(s).live = true)',
         ruleName: 'RhsT.sat',
         status: 'rejected',
-        titleFi: 'Vaihe 4: Kääntäjä estää vanhentuneen näkymän s lukemisen!',
         titleEn: 'Step 4: Typechecker Rejects Reading Stale View s!',
-        descFi:
-          'Jos ajo jatkuisi, Step.letvSat vaatisi m.alloc(#1) = true, mutta #1 on vapautettu — suoritus joutuisi Stuck-tilaan (Use-After-Free). Koska RhsT.sat vaatii Γ(s).live = true, kääntäjä hylkää ohjelman käännösaikana!',
         descEn:
           'At runtime, reading s would require m.alloc(#1) = true, which is false (Stuck / Use-After-Free). Because RhsT.sat requires Γ(s).live = true, the typechecker rejects this program before it can ever run!',
         ctx: [
@@ -239,7 +223,6 @@ const SIM_SCENARIOS: SimScenario[] = [
             ty: 'Ty.vec .int',
             live: true,
             deps: [],
-            noteFi: 'Elossa',
             noteEn: 'Live',
           },
           {
@@ -248,7 +231,6 @@ const SIM_SCENARIOS: SimScenario[] = [
             ty: 'Ty.slice .int',
             live: false,
             deps: ['v (.view)'],
-            noteFi: 'Estetty säännöllä RhsT.sat (vaatii live = true)',
             noteEn: 'Rejected by RhsT.sat (requires live = true)',
           },
         ],
@@ -267,9 +249,7 @@ const SIM_SCENARIOS: SimScenario[] = [
   {
     id: 'move-dropflag',
     badge: '§2.1 & §7.6 · DropSlot',
-    titleFi: '2. Siirto (Move) ja pudotusliput: miksi Double-Free on mahdoton?',
     titleEn: '2. Move Semantics & Drop Flags: Why Double-Free Is Impossible',
-    subtitleFi: 'Näyttää kuinka RhsT.moveOwn, TakeVal.own ja DropSlot.moved estävät sekä Use-After-Move- että Double-Free-virheet.',
     subtitleEn: 'Shows how RhsT.moveOwn, TakeVal.own, and DropSlot.moved prevent both Use-After-Move and Double-Free.',
     nurlCode: [
       ': ( Vec i ) a ( vec_new [i] )',
@@ -282,10 +262,7 @@ const SIM_SCENARIOS: SimScenario[] = [
         stmtLean: 'Stmt.letv a (Rhs.new .int) …',
         ruleName: 'RhsT.new',
         status: 'ok',
-        titleFi: 'Vaihe 1: a omistaa puun (#0, #1)',
         titleEn: 'Step 1: a Owns Tree (#0, #1)',
-        descFi:
-          'Muuttujan a paikka muistissa on Slot⟨own: true, val: some(T)⟩. HeapOK takaa, että mikään muu muuttuja ei omista osoitteita #0 ja #1.',
         descEn:
           'Slot a holds Slot⟨own: true, val: some(T)⟩. HeapOK guarantees no other binding owns addresses #0 and #1.',
         ctx: [
@@ -295,7 +272,6 @@ const SIM_SCENARIOS: SimScenario[] = [
             ty: 'Ty.vec .int',
             live: true,
             deps: [],
-            noteFi: 'Aktiivinen omistaja (live = true)',
             noteEn: 'Active owner (live = true)',
           },
         ],
@@ -310,10 +286,7 @@ const SIM_SCENARIOS: SimScenario[] = [
         stmtLean: 'Stmt.letv b (Rhs.var a) …  (TakeVal.own)',
         ruleName: 'RhsT.moveOwn',
         status: 'ok',
-        titleFi: 'Vaihe 2: Omistajuus siirtyy a → b (pudotuslippu nollataan)',
         titleEn: 'Step 2: Ownership Moves a → b (Drop Flag Cleared)',
-        descFi:
-          'Ajonaikaisesti TakeVal.own asettaa a:n paikaksi Slot⟨own: true, val: none⟩ (pudotuslippu tyhjä!) ja luo b:lle Slot⟨own: true, val: some(T)⟩. Käännösaikana kill Γ .replace a merkitsee a:n kuolleeksi.',
         descEn:
           'At runtime, TakeVal.own updates a to Slot⟨own: true, val: none⟩ (drop flag disarmed!) and binds b to Slot⟨own: true, val: some(T)⟩. In Γ, kill Γ .replace a marks a dead.',
         ctx: [
@@ -323,7 +296,6 @@ const SIM_SCENARIOS: SimScenario[] = [
             ty: 'Ty.vec .int',
             live: false,
             deps: [],
-            noteFi: 'Siirretty (live = false) — ei voi lukea eikä vapauttaa uudelleen',
             noteEn: 'Moved (live = false) — cannot be read or manually freed',
           },
           {
@@ -332,7 +304,6 @@ const SIM_SCENARIOS: SimScenario[] = [
             ty: 'Ty.vec .int',
             live: true,
             deps: [],
-            noteFi: 'Uusi ainoa omistaja puulle (#0, #1)',
             noteEn: 'New sole owner of tree (#0, #1)',
           },
         ],
@@ -350,10 +321,7 @@ const SIM_SCENARIOS: SimScenario[] = [
         stmtLean: 'Step.scopeSkip (DropSlot.owned b + DropSlot.moved a)',
         ruleName: 'DropSlot',
         status: 'ok',
-        titleFi: 'Vaihe 3: Lohkon loppu — b vapauttaa puun, a ohitetaan (0 vuotoa!)',
         titleEn: 'Step 3: Scope Exit — b Frees Tree, a Is a Safe No-Op (0 Leaks!)',
-        descFi:
-          'Sisempi lohko b poistuu säännöllä DropSlot.owned ja vapauttaa osoitteet #0 ja #1. Ulompi lohko a poistuu säännöllä DropSlot.moved (koska val = none), joten vapautusta ei yritetä toista kertaa. Lopputilassa ∀ i, m.alloc i = false (no_leak_end).',
         descEn:
           'Inner scope b exits via DropSlot.owned, freeing #0 and #1. Outer scope a exits via DropSlot.moved (val = none), avoiding double-free. At program end, ∀ i, m.alloc i = false (no_leak_end).',
         ctx: [],
@@ -368,9 +336,7 @@ const SIM_SCENARIOS: SimScenario[] = [
   {
     id: 'panic-unwind',
     badge: '§7.2 · no_leak_panic',
-    titleFi: '3. Paniikin purkaminen (Drop Journal): miksi paniikkikaan ei vuoda muistia?',
     titleEn: '3. Panic Unwinding (Drop Journal): Why Even Panics Never Leak Memory',
-    subtitleFi: 'Näyttää kuinka panic_unwind ja A2.no_leak_panic purkavat ajonaikaiset kehykset (s.spine) ja vapauttavat jokaisen omistetun puun.',
     subtitleEn: 'Demonstrates how panic_unwind and A2.no_leak_panic unwind active scopes (s.spine) and free every owned tree.',
     nurlCode: [
       ': ( Vec i ) outer ( vec_new [i] )',
@@ -384,10 +350,7 @@ const SIM_SCENARIOS: SimScenario[] = [
         stmtLean: 'Stmt.scope outer (Stmt.scope inner …)',
         ruleName: 'Covers',
         status: 'ok',
-        titleFi: 'Vaihe 1: Kaksi aktiivista kehystä suoritusrangassa (s.spine = [outer, inner])',
         titleEn: 'Step 1: Two Active Scopes on the Spine (s.spine = [outer, inner])',
-        descFi:
-          'Sekä outer (#0, #1) että inner (#2, #3) ovat aktiivisia omistajia. Invariantti Covers takaa, että jokainen varattu osoite (#0..#3) kuuluu jollekin s.spine-listan omistajalle.',
         descEn:
           'Both outer (#0, #1) and inner (#2, #3) are active owners on s.spine. The Covers invariant guarantees every allocated address (#0..#3) belongs to an owner in s.spine.',
         ctx: [
@@ -397,7 +360,6 @@ const SIM_SCENARIOS: SimScenario[] = [
             ty: 'Ty.vec .int',
             live: true,
             deps: [],
-            noteFi: 'Kehys 1 (omistaa #0, #1)',
             noteEn: 'Scope 1 (owns #0, #1)',
           },
           {
@@ -406,7 +368,6 @@ const SIM_SCENARIOS: SimScenario[] = [
             ty: 'Ty.vec .int',
             live: true,
             deps: [],
-            noteFi: 'Kehys 2 (omistaa #2, #3)',
             noteEn: 'Scope 2 (owns #2, #3)',
           },
         ],
@@ -426,10 +387,7 @@ const SIM_SCENARIOS: SimScenario[] = [
         stmtLean: 'Step.letvP (EvalRhsP.atOob : idx 99 ≥ len 0)',
         ruleName: 'panic_unwind',
         status: 'panic-unwind',
-        titleFi: 'Vaihe 2: Indeksitarkistus epäonnistuu → hallittu paniikki (.panic m)',
         titleEn: 'Step 2: Bounds Check Fails → Controlled Panic (.panic m)',
-        descFi:
-          'Sen sijaan että ohjelma lukisi puskurin ulkopuolelta (Undefined Behavior), EvalRhsP.atOob käynnistää paniikkiaskeleen. Step.scopeP purkaa s.spine-kehykset sisimmästä ulompaan.',
         descEn:
           'Instead of reading out-of-bounds memory (UB), EvalRhsP.atOob steps to a panic result. Step.scopeP unwinds s.spine from innermost to outermost.',
         ctx: [
@@ -439,7 +397,6 @@ const SIM_SCENARIOS: SimScenario[] = [
             ty: 'Ty.vec .int',
             live: true,
             deps: [],
-            noteFi: 'Odottaa purkua drop-lokissa',
             noteEn: 'Queued in drop journal',
           },
           {
@@ -448,7 +405,6 @@ const SIM_SCENARIOS: SimScenario[] = [
             ty: 'Ty.vec .int',
             live: false,
             deps: [],
-            noteFi: 'Puretaan ensimmäisenä (Step.scopeP)',
             noteEn: 'Unwound first (Step.scopeP)',
           },
         ],
@@ -465,10 +421,7 @@ const SIM_SCENARIOS: SimScenario[] = [
         stmtLean: 'A2.no_leak_panic : ∀ i, m\'.alloc i = false',
         ruleName: 'no_leak_panic',
         status: 'ok',
-        titleFi: 'Vaihe 3: Koko pino purettu — jokainen kekovaraus on vapautettu!',
         titleEn: 'Step 3: Spine Fully Unwound — Every Heap Allocation Is Freed!',
-        descFi:
-          'Lause panic_unwind todistaa, että jokainen s.spine-muuttuja poistetaan DropSlot-säännöllä ja Covers säilyy. Koska lopussa yhtään muuttujaa ei ole jäljellä (∀ v, m\'.st v = none), lause A2.no_leak_panic todistaa ∀ i, m\'.alloc i = false!',
         descEn:
           'Theorem panic_unwind proves every variable in s.spine is dropped via DropSlot while preserving Covers. With no bindings left (∀ v, m\'.st v = none), A2.no_leak_panic proves ∀ i, m\'.alloc i = false!',
         ctx: [],
@@ -488,7 +441,6 @@ const EFF_ROWS = [
   {
     eff: 'none',
     rank: 0,
-    opFi: 'Vain luku (vec_len, slice_len, in-parametri)',
     opEn: 'Read-only (vec_len, slice_len, in parameter)',
     nurlEx: '( vec_len [i] v )',
     killsView: false,
@@ -500,7 +452,6 @@ const EFF_ROWS = [
   {
     eff: 'realloc',
     rank: 1,
-    opFi: 'Puskurin kasvatus (vec_push / string_push_str)',
     opEn: 'Buffer growth / reallocation (vec_push / string_push_str)',
     nurlEx: '( vec_push [i] v x )',
     killsView: true,
@@ -512,7 +463,6 @@ const EFF_ROWS = [
   {
     eff: 'drop',
     rank: 2,
-    opFi: 'Alkion poisto (vec_pop)',
     opEn: 'Element removal / drop (vec_pop)',
     nurlEx: ': i last ( vec_pop [i] v )',
     killsView: true,
@@ -524,9 +474,8 @@ const EFF_ROWS = [
   {
     eff: 'replace',
     rank: 3,
-    opFi: 'Siirto (move), sijoitus (=), vec_free tai lohkon loppu',
     opEn: 'Move, reassignment (=), vec_free, or scope exit',
-    nurlEx: '( vec_free [i] v )  tai  = v other',
+    nurlEx: '( vec_free [i] v )  or  = v other',
     killsView: true,
     killsInner: true,
     killsSelfNoView: true,
@@ -575,8 +524,6 @@ const LAYER_COLORS: Record<number, { bg: string; border: string; text: string; b
 };
 
 export function FormalExplorer() {
-  const [lang, setLang] = useState<Lang>('fi');
-  const t = (fi: string, en: string) => (lang === 'fi' ? fi : en);
   const [activeTab, setActiveTab] = useState<MainTab>('visual');
 
   // Simulator state
@@ -592,11 +539,15 @@ export function FormalExplorer() {
   const [zoom, setZoom] = useState<number>(1);
 
   // Full declarations state (loaded from /formal-decls.json)
-  const [fullData, setFullData] = useState<{ A2: FormalModuleFull[]; A1: FormalModuleFull[] } | null>(null);
+  const [fullData, setFullData] = useState<{
+    A3: FormalModuleFull[];
+    A2: FormalModuleFull[];
+    A1: FormalModuleFull[];
+  } | null>(null);
   const [loadingDecls, setLoadingDecls] = useState(false);
 
   // Code browser state
-  const [browserPhase, setBrowserPhase] = useState<'A2' | 'A1'>('A2');
+  const [browserPhase, setBrowserPhase] = useState<PhaseKey>('A2');
   const [browserModule, setBrowserModule] = useState<string>('Soundness');
   const [browserKind, setBrowserKind] = useState<string>('all');
   const [browserSearch, setBrowserSearch] = useState<string>('');
@@ -642,17 +593,29 @@ export function FormalExplorer() {
     return map;
   }, [fullData, browserPhase]);
 
-  function openDeclInBrowser(name: string, phase: 'A2' | 'A1' = 'A2') {
-    const clean = name.replace(/^A[12]\./, '').split('.')[0];
+  function openDeclInBrowser(name: string, phase: PhaseKey = 'A2') {
+    const clean = name.replace(/^A[123]\./, '').split('.')[0];
     setBrowserPhase(phase);
-    const d = declLookup.get(name) ?? declLookup.get(clean);
-    if (d) {
+    const phaseMods = fullData ? fullData[phase] : [];
+    let found: FormalDecl | undefined;
+    for (const mod of phaseMods) {
+      for (const d of mod.decls) {
+        if (d.name === name || d.name === clean) {
+          found = d;
+          break;
+        }
+      }
+      if (found) break;
+    }
+    const d = found ?? declLookup.get(name) ?? declLookup.get(clean);
+    if (d && d.phase === phase) {
       setBrowserModule(d.module);
       setSelectedDeclName(d.name);
       setBrowserSearch('');
       setBrowserKind('all');
     } else {
       setBrowserModule('all');
+      setSelectedDeclName(clean);
       setBrowserSearch(clean);
     }
     setActiveTab('browser');
@@ -700,7 +663,8 @@ export function FormalExplorer() {
 
   // Module DAG layout calculation
   const moduleLayout = useMemo(() => {
-    const phaseKey: 'A1' | 'A2' = graphMode === 'modules-a1' ? 'A1' : 'A2';
+    const phaseKey: PhaseKey =
+      graphMode === 'modules-a1' ? 'A1' : graphMode === 'modules-a3' ? 'A3' : 'A2';
     const mods = formalData.modules[phaseKey];
     const layers: FormalModuleSummary[][] = [[], [], [], [], [], []];
     for (const m of mods) {
@@ -742,7 +706,7 @@ export function FormalExplorer() {
   const filteredDecls = useMemo(() => {
     const mods = fullData ? fullData[browserPhase] : [];
     if (mods.length === 0) {
-      return Object.values(formalData.initialDecls);
+      return Object.values(formalData.initialDecls).filter((d) => d.phase === browserPhase);
     }
     const q = browserSearch.trim().toLowerCase();
     const list: FormalDecl[] = [];
@@ -802,48 +766,23 @@ export function FormalExplorer() {
 
   return (
     <div className="my-6 flex flex-col gap-6 text-sm">
-      {/* Top Hero Banner with Stats & Language Switcher */}
+      {/* Top Hero Banner with Stats */}
       <div className="rounded-xl border bg-gradient-to-br from-fd-card via-fd-card to-emerald-500/5 p-5 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="max-w-3xl">
             <div className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs font-semibold text-emerald-700 dark:text-emerald-300">
               <ShieldCheck className="h-3.5 w-3.5" />
-              <span>
-                {t('Lean 4 -koneistettu todistus · A1 & A2 todistettu (0 sorrya)', 'Lean 4 Mechanized Proof · Phases A1 & A2 Proven (0 sorrys)')}
-              </span>
+              <span>Lean 4 Mechanized Proof · Phases A1, A2 &amp; A3 Proven (0 sorrys)</span>
             </div>
             <h2 className="mt-2.5 text-xl font-bold tracking-tight text-fd-foreground sm:text-2xl">
-              {t('NURLin muistimallin visuaalinen ja interaktiivinen todistusselain', 'Interactive Visual Explorer of NURL’s Mechanized Memory Proof')}
+              Interactive Visual Explorer of NURL’s Mechanized Memory Proof
             </h2>
             <p className="mt-1.5 text-sm text-fd-muted-foreground">
-              {t('Tutki sekä visuaalisesti ("tavalliselle ihmiselle") että matemaattisen tarkasti (Lean Blueprint -riippuvuusverkko ja kaikki 1 766 Lean 4 -määritelmää), miten NURL todistaa muistiturvallisuuden (A2.memory_safe) ja vuodottomuuden (A2.no_leak_end, A2.no_leak_panic).', 'Explore both visually (step-by-step memory & borrow simulator) and mathematically (Lean Blueprint dependency DAG + 1,766 Lean 4 declarations) how NURL proves memory safety (A2.memory_safe) and leak freedom (A2.no_leak_end, A2.no_leak_panic).')}
+              Explore both visually (step-by-step memory &amp; borrow simulator) and mathematically (Lean Blueprint
+              dependency DAG + {TOTAL_DECLS.toLocaleString('en-US')} Lean 4 declarations) how NURL proves memory safety
+              (A2.memory_safe), leak freedom (A2.no_leak_end, A2.no_leak_panic), and concurrent data-race freedom
+              (A3.claim, A3.claim_made).
             </p>
-          </div>
-
-          {/* Language Switcher */}
-          <div className="flex items-center gap-1 rounded-lg border bg-fd-muted/60 p-1">
-            <button
-              type="button"
-              onClick={() => setLang('fi')}
-              className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-                lang === 'fi'
-                  ? 'bg-fd-background text-fd-foreground shadow-sm'
-                  : 'text-fd-muted-foreground hover:text-fd-foreground'
-              }`}
-            >
-              🇫🇮 Suomi
-            </button>
-            <button
-              type="button"
-              onClick={() => setLang('en')}
-              className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-                lang === 'en'
-                  ? 'bg-fd-background text-fd-foreground shadow-sm'
-                  : 'text-fd-muted-foreground hover:text-fd-foreground'
-              }`}
-            >
-              🇬🇧 English
-            </button>
           </div>
         </div>
 
@@ -851,45 +790,33 @@ export function FormalExplorer() {
         <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-5">
           <div className="rounded-lg border bg-fd-background/70 px-3.5 py-2.5">
             <div className="text-lg font-bold text-fd-foreground">
-              {(formalData.stats.a1.lines + formalData.stats.a2.lines).toLocaleString('en-US')}
+              {TOTAL_LINES.toLocaleString('en-US')}
             </div>
-            <div className="text-xs text-fd-muted-foreground">
-              {t('riviä Lean 4 -todistusta', 'lines of Lean 4 proof')}
-            </div>
+            <div className="text-xs text-fd-muted-foreground">lines of Lean 4 proof</div>
           </div>
           <div className="rounded-lg border bg-fd-background/70 px-3.5 py-2.5">
             <div className="text-lg font-bold text-emerald-600 dark:text-emerald-400">
-              {(formalData.stats.a1.theorems + formalData.stats.a2.theorems).toLocaleString('en-US')}
+              {TOTAL_THEOREMS.toLocaleString('en-US')}
             </div>
-            <div className="text-xs text-fd-muted-foreground">
-              {t('todistettua lausetta (0 sorry)', 'proven theorems (0 sorry)')}
-            </div>
+            <div className="text-xs text-fd-muted-foreground">proven theorems (0 sorry)</div>
           </div>
           <div className="rounded-lg border bg-fd-background/70 px-3.5 py-2.5">
-            <div className="text-lg font-bold text-fd-foreground">
-              {formalData.stats.a1.modules + formalData.stats.a2.modules}
-            </div>
-            <div className="text-xs text-fd-muted-foreground">
-              {t('Lean-moduulia (A1 + A2)', 'Lean modules (A1 + A2)')}
-            </div>
+            <div className="text-lg font-bold text-fd-foreground">{TOTAL_MODULES}</div>
+            <div className="text-xs text-fd-muted-foreground">Lean modules (A1 + A2 + A3)</div>
           </div>
           <div className="rounded-lg border bg-fd-background/70 px-3.5 py-2.5">
             <div className="text-lg font-bold text-amber-600 dark:text-amber-400">{formalData.stats.holesCount}</div>
-            <div className="text-xs text-fd-muted-foreground">
-              {t('reikäkoetta', 'soundness hole probes')}
-            </div>
+            <div className="text-xs text-fd-muted-foreground">soundness hole probes</div>
           </div>
           <div className="col-span-2 rounded-lg border bg-fd-background/70 px-3.5 py-2.5 sm:col-span-1">
             <div className="font-mono text-sm font-bold text-fd-foreground">v4.35.0</div>
-            <div className="text-xs text-fd-muted-foreground">
-              {t('Vain standardiaksioomat', 'Standard axioms only')}
-            </div>
+            <div className="text-xs text-fd-muted-foreground">Standard axioms only</div>
           </div>
         </div>
 
         {/* Navigation Tabs */}
         <div className="mt-5 flex flex-wrap gap-2 border-t pt-4">
-          {TABS.map(({ id, icon: Icon, fi, en }) => (
+          {TABS.map(({ id, icon: Icon, label }) => (
             <button
               key={id}
               type="button"
@@ -901,7 +828,7 @@ export function FormalExplorer() {
               }`}
             >
               <Icon className="h-4 w-4" />
-              <span>{t(fi, en)}</span>
+              <span>{label}</span>
             </button>
           ))}
         </div>
@@ -915,14 +842,18 @@ export function FormalExplorer() {
           {/* Section 1A: Plain-Language Visual Overview of What Lean Proves */}
           <div className="rounded-xl border bg-fd-card p-5">
             <h3 className="text-base font-bold text-fd-foreground">
-              {t('Mitä Lean 4 -todistus oikeasti todistaa? (Kansantajuinen kokonaiskuva)', 'What Does the Lean 4 Proof Actually Prove? (Plain-Language Picture)')}
+              What Does the Lean 4 Proof Actually Prove? (Plain-Language Picture)
             </h3>
             <p className="mt-1.5 text-sm text-fd-muted-foreground">
-              {t('Ohjelmointikielissä, joissa ei ole roskienkerääjää (GC), on viisi klassista tapaa rikkoa muisti: (1) luku vapautuksen jälkeen (Use-After-Free), (2) saman muistin vapautus kahdesti (Double-Free), (3) luku vanhentuneen näkymän läpi kun puskuri kasvaa (Iterator/View Invalidation), (4) jaetun arvon muokkaus lainan aikana, ja (5) muistivuoto (Memory Leak) normaalin poistumisen tai paniikin yhteydessä. Lean-todistus rakentaa matemaattisen koneen, jossa jokainen näistä virheistä pysäyttäisi koneen Stuck-tilaan — ja todistaa sitten, ettei yksikään tyyppitarkistuksen läpäissyt ohjelma voi koskaan päätyä Stuck-tilaan tai jättää muistia vapauttamatta.', 'In languages without a garbage collector, there are five classic memory bugs: (1) Use-After-Free, (2) Double-Free, (3) Dangling View / Iterator Invalidation when a buffer grows, (4) Aliased Mutation while borrowed, and (5) Memory Leaks on exit or panic. The Lean proof defines a formal machine where any such bug makes the machine Stuck — and then proves that no well-typed program can ever get Stuck or leave memory allocated.')}
+              In languages without a garbage collector, there are five classic memory bugs: (1) Use-After-Free,
+              (2) Double-Free, (3) Dangling View / Iterator Invalidation when a buffer grows, (4) Aliased Mutation or
+              Data Races across threads, and (5) Memory Leaks on exit or panic. The Lean proof defines a formal machine
+              where any such bug makes the machine Stuck or triggers a Race — and then proves that no well-typed
+              program can ever get Stuck, race on shared memory, or leave owned memory allocated.
             </p>
 
-            {/* 3 Crown Guarantees */}
-            <div className="mt-4 grid gap-4 md:grid-cols-3">
+            {/* 4 Crown Guarantees */}
+            <div className="mt-4 grid gap-4 md:grid-cols-2 lg:grid-cols-4">
               <div className="flex flex-col justify-between rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-4">
                 <div>
                   <div className="flex items-center justify-between">
@@ -931,11 +862,11 @@ export function FormalExplorer() {
                     </span>
                     <ShieldCheck className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
                   </div>
-                  <h4 className="mt-2 font-semibold text-fd-foreground">
-                    {t('1. Ei koskaan muistivirhettä (¬ Stuck)', '1. Zero Memory Errors (¬ Stuck)')}
-                  </h4>
+                  <h4 className="mt-2 font-semibold text-fd-foreground">1. Zero Memory Errors (¬ Stuck)</h4>
                   <p className="mt-1 text-xs leading-relaxed text-fd-muted-foreground">
-                    {t('Jokainen muistiluku tarkistaa, että keko-osoite on varattu (m.alloc c = true) ja indeksit ovat rajoissa. Jos ohjelma yrittäisi lukea vapautettua muistia tai vanhentunutta Slice-näkymää, sääntöä ei ole (Stuck). Lause todistaa, että jokainen saavutettava tila on joko valmis (.skip), panikoi turvallisesti tai ottaa laillisen askeleen.', 'Every memory access requires the heap address to be live (m.alloc c = true). Any Use-After-Free, Double-Free, or dangling view access has no step rule (Stuck). The theorem proves no reachable configuration is ever Stuck.')}
+                    Every memory access requires the heap address to be live (m.alloc c = true). Any Use-After-Free,
+                    Double-Free, or dangling view access has no step rule (Stuck). The theorem proves no reachable
+                    configuration is ever Stuck.
                   </p>
                 </div>
                 <button
@@ -943,7 +874,7 @@ export function FormalExplorer() {
                   onClick={() => openDeclInBrowser('memory_safe', 'A2')}
                   className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-emerald-700 hover:underline dark:text-emerald-300"
                 >
-                  <span>{t('Avaa lause A2.memory_safe →', 'Inspect A2.memory_safe →')}</span>
+                  <span>Inspect A2.memory_safe →</span>
                 </button>
               </div>
 
@@ -955,11 +886,11 @@ export function FormalExplorer() {
                     </span>
                     <CheckCircle2 className="h-4 w-4 text-sky-600 dark:text-sky-400" />
                   </div>
-                  <h4 className="mt-2 font-semibold text-fd-foreground">
-                    {t('2. Ei muistivuotoja valmistuessa', '2. Zero Leaks on Normal Exit')}
-                  </h4>
+                  <h4 className="mt-2 font-semibold text-fd-foreground">2. Zero Leaks on Normal Exit</h4>
                   <p className="mt-1 text-xs leading-relaxed text-fd-muted-foreground">
-                    {t('Invariantti Covers m takaa jokaisella askeleella, että jokainen varattu osoite (m.alloc i = true) kuuluu täsmälleen yhdelle aktiivisen lohkon omistajalle. Kun ohjelma päättyy (.ok m\' .skip), kaikki lohkot ovat poistuneet, joten ∀ i, m\'.alloc i = false.', 'The Covers m invariant guarantees at every step that every live heap address belongs to an active owner on the scope spine. When the program reaches .skip, all scopes have exited, forcing ∀ i, m\'.alloc i = false.')}
+                    The Covers m invariant guarantees at every step that every live heap address belongs to an active
+                    owner on the scope spine. When the program reaches .skip, all scopes have exited, forcing ∀ i,
+                    m&apos;.alloc i = false.
                   </p>
                 </div>
                 <button
@@ -967,7 +898,7 @@ export function FormalExplorer() {
                   onClick={() => openDeclInBrowser('no_leak_end', 'A2')}
                   className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-sky-700 hover:underline dark:text-sky-300"
                 >
-                  <span>{t('Avaa lause A2.no_leak_end →', 'Inspect A2.no_leak_end →')}</span>
+                  <span>Inspect A2.no_leak_end →</span>
                 </button>
               </div>
 
@@ -979,11 +910,11 @@ export function FormalExplorer() {
                     </span>
                     <Lock className="h-4 w-4 text-amber-600 dark:text-amber-400" />
                   </div>
-                  <h4 className="mt-2 font-semibold text-fd-foreground">
-                    {t('3. Ei muistivuotoja edes paniikissa', '3. Zero Leaks on Uncaught Panic')}
-                  </h4>
+                  <h4 className="mt-2 font-semibold text-fd-foreground">3. Zero Leaks on Uncaught Panic</h4>
                   <p className="mt-1 text-xs leading-relaxed text-fd-muted-foreground">
-                    {t('Kun rajatarkistus tai panic laukeaa, ajonaikainen pino purkautuu (panic_unwind) sisimmästä kehyksestä ulompaan (drop journal). Jokainen poistuva kehys vapauttaa omistamansa puut (DropSlot), joten lopputilassa ∀ i, m\'.alloc i = false.', 'When a bounds check or explicit panic fires, panic_unwind walks the active scope spine from innermost to outermost (the drop journal), freeing every owned tree via DropSlot so that ∀ i, m\'.alloc i = false.')}
+                    When a bounds check or explicit panic fires, panic_unwind walks the active scope spine from
+                    innermost to outermost (the drop journal), freeing every owned tree via DropSlot so that ∀ i,
+                    m&apos;.alloc i = false.
                   </p>
                 </div>
                 <button
@@ -991,7 +922,30 @@ export function FormalExplorer() {
                   onClick={() => openDeclInBrowser('no_leak_panic', 'A2')}
                   className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-amber-700 hover:underline dark:text-amber-300"
                 >
-                  <span>{t('Avaa lause A2.no_leak_panic →', 'Inspect A2.no_leak_panic →')}</span>
+                  <span>Inspect A2.no_leak_panic →</span>
+                </button>
+              </div>
+
+              <div className="flex flex-col justify-between rounded-xl border border-violet-500/30 bg-violet-500/5 p-4">
+                <div>
+                  <div className="flex items-center justify-between">
+                    <span className="rounded bg-violet-500/20 px-2 py-0.5 font-mono text-xs font-bold text-violet-700 dark:text-violet-300">
+                      A3.claim / claim_made
+                    </span>
+                    <GitBranch className="h-4 w-4 text-violet-600 dark:text-violet-400" />
+                  </div>
+                  <h4 className="mt-2 font-semibold text-fd-foreground">4. Data-Race Freedom Across Threads</h4>
+                  <p className="mt-1 text-xs leading-relaxed text-fd-muted-foreground">
+                    In a well-typed program, every interleaving of threads sharing values via moves, Arc, Locked / Mutex, RwLocked, Atomic,
+                    channels, SendCheck handles, and module globals satisfies MemorySafe ∧ RaceFree ∧ NoLeak.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => openDeclInBrowser('claim', 'A3')}
+                  className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-violet-700 hover:underline dark:text-violet-300"
+                >
+                  <span>Inspect A3.claim →</span>
                 </button>
               </div>
             </div>
@@ -1003,12 +957,11 @@ export function FormalExplorer() {
               <div>
                 <h3 className="flex items-center gap-2 text-base font-bold text-fd-foreground">
                   <Play className="h-4 w-4 text-fd-primary" />
-                  <span>
-                    {t('Interaktiivinen muisti- ja lainantarkistussimulaattori', 'Interactive Memory & Borrow-Checker Step Simulator')}
-                  </span>
+                  <span>Interactive Memory &amp; Borrow-Checker Step Simulator</span>
                 </h3>
                 <p className="mt-0.5 text-xs text-fd-muted-foreground">
-                  {t('Valitse skenaario ja astu eteenpäin nähdäksesi rinnakkain käännösaikaisen kontekstin Γ (Typing.lean) ja ajonaikaisen muistin Mem (Semantics.lean).', 'Pick a scenario and step through to watch compile-time context Γ (Typing.lean) and runtime store Mem (Semantics.lean) side by side.')}
+                  Pick a scenario and step through to watch compile-time context Γ (Typing.lean) and runtime store Mem
+                  (Semantics.lean) side by side.
                 </p>
               </div>
 
@@ -1037,12 +990,8 @@ export function FormalExplorer() {
             {/* Scenario Header & Step Controls */}
             <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-fd-muted/40 p-3.5">
               <div>
-                <div className="font-semibold text-fd-foreground">
-                  {lang === 'fi' ? currentScenario.titleFi : currentScenario.titleEn}
-                </div>
-                <div className="text-xs text-fd-muted-foreground">
-                  {lang === 'fi' ? currentScenario.subtitleFi : currentScenario.subtitleEn}
-                </div>
+                <div className="font-semibold text-fd-foreground">{currentScenario.titleEn}</div>
+                <div className="text-xs text-fd-muted-foreground">{currentScenario.subtitleEn}</div>
               </div>
 
               <div className="flex items-center gap-2">
@@ -1062,7 +1011,7 @@ export function FormalExplorer() {
                   className="inline-flex items-center gap-1 rounded-md border bg-fd-background px-3 py-1.5 text-xs font-medium disabled:opacity-40"
                 >
                   <ChevronLeft className="h-3.5 w-3.5" />
-                  <span>{t('Edellinen', 'Prev')}</span>
+                  <span>Prev</span>
                 </button>
                 <span className="px-2 font-mono text-xs font-semibold">
                   {stepIdx + 1} / {currentScenario.steps.length}
@@ -1073,7 +1022,7 @@ export function FormalExplorer() {
                   disabled={stepIdx >= currentScenario.steps.length - 1}
                   className="inline-flex items-center gap-1 rounded-md bg-fd-primary px-3 py-1.5 text-xs font-medium text-fd-primary-foreground disabled:opacity-40"
                 >
-                  <span>{t('Seuraava askel', 'Next Step')}</span>
+                  <span>Next Step</span>
                   <ChevronRight className="h-3.5 w-3.5" />
                 </button>
               </div>
@@ -1096,15 +1045,13 @@ export function FormalExplorer() {
                       currentStep.status === 'rejected'
                         ? 'bg-rose-500/20 text-rose-700 dark:text-rose-300'
                         : currentStep.status === 'panic-unwind'
-                          ? 'bg-amber-500/20 text-amber-700 dark:text-amber-300'
+                           ? 'bg-amber-500/20 text-amber-700 dark:text-amber-300'
                           : 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-300'
                     }`}
                   >
                     {currentStep.stmtLean}
                   </span>
-                  <span className="font-semibold text-fd-foreground">
-                    {lang === 'fi' ? currentStep.titleFi : currentStep.titleEn}
-                  </span>
+                  <span className="font-semibold text-fd-foreground">{currentStep.titleEn}</span>
                 </div>
 
                 <button
@@ -1116,9 +1063,7 @@ export function FormalExplorer() {
                   <ExternalLink className="h-3 w-3" />
                 </button>
               </div>
-              <p className="mt-2 text-xs leading-relaxed text-fd-foreground/90">
-                {lang === 'fi' ? currentStep.descFi : currentStep.descEn}
-              </p>
+              <p className="mt-2 text-xs leading-relaxed text-fd-foreground/90">{currentStep.descEn}</p>
             </div>
 
             {/* 3-Column Visual State: NURL Code | Compile-time Context Γ | Runtime Store Mem */}
@@ -1158,13 +1103,13 @@ export function FormalExplorer() {
               <div className="rounded-lg border bg-fd-background p-3.5">
                 <div className="mb-2 flex items-center justify-between border-b pb-2">
                   <span className="text-xs font-bold uppercase tracking-wider text-fd-muted-foreground">
-                    {t('2. Käännösaikainen konteksti Γ', '2. Compile-Time Context Γ')}
+                    2. Compile-Time Context Γ
                   </span>
                   <span className="font-mono text-[11px] text-indigo-600 dark:text-indigo-400">A2/Typing.lean</span>
                 </div>
                 {currentStep.ctx.length === 0 ? (
                   <div className="py-6 text-center text-xs text-fd-muted-foreground">
-                    {t('Konteksti Γ on tyhjä (kaikki lohkot ovat päättyneet).', 'Context Γ is empty (all scopes have exited).')}
+                    Context Γ is empty (all scopes have exited).
                   </div>
                 ) : (
                   <div className="flex flex-col gap-2.5">
@@ -1207,9 +1152,7 @@ export function FormalExplorer() {
                             ))}
                           </div>
                         )}
-                        <div className="mt-1 text-[11px] text-fd-muted-foreground">
-                          {lang === 'fi' ? b.noteFi : b.noteEn}
-                        </div>
+                        <div className="mt-1 text-[11px] text-fd-muted-foreground">{b.noteEn}</div>
                       </div>
                     ))}
                   </div>
@@ -1220,13 +1163,13 @@ export function FormalExplorer() {
               <div className="rounded-lg border bg-fd-background p-3.5">
                 <div className="mb-2 flex items-center justify-between border-b pb-2">
                   <span className="text-xs font-bold uppercase tracking-wider text-fd-muted-foreground">
-                    {t('3. Ajonaikainen muisti Mem', '3. Runtime Store Mem')}
+                    3. Runtime Store Mem
                   </span>
                   <span className="font-mono text-[11px] text-sky-600 dark:text-sky-400">A2/Semantics.lean</span>
                 </div>
 
                 <div className="text-[11px] font-semibold text-fd-muted-foreground">
-                  {t('Pinopaikat (m.st : Var → Option Slot):', 'Variable Slots (m.st : Var → Option Slot):')}
+                  Variable Slots (m.st : Var → Option Slot):
                 </div>
                 <div className="mt-1.5 flex flex-col gap-1.5">
                   {currentStep.slots.length === 0 ? (
@@ -1260,7 +1203,7 @@ export function FormalExplorer() {
                 </div>
 
                 <div className="mt-3 text-[11px] font-semibold text-fd-muted-foreground">
-                  {t('Keko-osoitteet (m.alloc : Nat → Bool):', 'Heap Addresses (m.alloc : Nat → Bool):')}
+                  Heap Addresses (m.alloc : Nat → Bool):
                 </div>
                 <div className="mt-1.5 grid grid-cols-1 gap-1.5">
                   {currentStep.heap.map((hb) => (
@@ -1288,10 +1231,11 @@ export function FormalExplorer() {
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h3 className="text-base font-bold text-fd-foreground">
-                  {t('Interaktiivinen efektihila (Eff.kills): Mitkä lainat säilyvät ja mitkä kuolevat?', 'Interactive Effect & Invalidation Lattice (Eff.kills)')}
+                  Interactive Effect &amp; Invalidation Lattice (Eff.kills)
                 </h3>
                 <p className="mt-0.5 text-xs text-fd-muted-foreground">
-                  {t('Kokeile mitä tahansa operaatiota säiliölle v (A2/Syntax.lean: Eff.kills e hv k) ja katso mitkä v:stä riippuvat sidonnat pysyvät elossa.', 'Select an operation on root container v (A2/Syntax.lean: Eff.kills e hv k) to see which dependent bindings stay live vs get invalidated.')}
+                  Select an operation on root container v (A2/Syntax.lean: Eff.kills e hv k) to see which dependent
+                  bindings stay live vs get invalidated.
                 </p>
               </div>
               <button
@@ -1329,9 +1273,7 @@ export function FormalExplorer() {
                   onChange={(e) => setHoldsView(e.target.checked)}
                   className="rounded"
                 />
-                <span>
-                  {t('Säiliön alkiot sisältävät näkymiä (Ty.holdsView = true)', 'Container elements hold views (Ty.holdsView = true)')}
-                </span>
+                <span>Container elements hold views (Ty.holdsView = true)</span>
               </label>
             </div>
 
@@ -1342,41 +1284,27 @@ export function FormalExplorer() {
               const cards = [
                 {
                   kind: 'Kind.view',
-                  titleFi: 'Näkymä puskuriin (.view)',
                   titleEn: 'Buffer View (.view)',
                   example: ': ( Slice i ) s ( slice_from_vec [i] v )',
                   killed: row.killsView,
-                  whyFi: row.killsView
-                    ? 'Puskuri voi siirtyä uuteen osoitteeseen tai vapautua → näkymä osoittaisi vanhaan puskuriin.'
-                    : 'Vain luku ei siirrä eikä vapauta puskuria.',
                   whyEn: row.killsView
                     ? 'Buffer may reallocate or be freed → view would point to freed memory.'
                     : 'Read-only access never moves or frees the buffer.',
                 },
                 {
                   kind: 'Kind.inner',
-                  titleFi: 'Alkiolaina (.inner)',
                   titleEn: 'Element Borrow (.inner)',
                   example: ': ~ ( Vec i ) elem ( vec_at v 0 )',
                   killed: row.killsInner,
-                  whyFi: row.killsInner
-                    ? 'Alkio saatetaan pudottaa (vec_pop) tai koko säiliö korvata.'
-                    : 'Ulomman Vecin puskurin siirto (realloc) säilyttää alkioiden omat ohjaussolmut ehjinä!',
                   whyEn: row.killsInner
                     ? 'Element may be dropped (vec_pop) or whole container replaced.'
                     : 'Reallocating the outer Vec buffer leaves inner element heap nodes intact!',
                 },
                 {
                   kind: 'Kind.self',
-                  titleFi: 'Kahvalaina (.self)',
                   titleEn: 'Handle Borrow (.self)',
                   example: ': ~ ( Vec i ) cur v',
                   killed: killsSelf,
-                  whyFi: killsSelf
-                    ? holdsView && row.eff !== 'replace'
-                      ? 'Koska säiliö sisältää näkymiä (hv = true), alkion lisäys/poisto muuttaa mitä näkymiä kahvasta voi lukea (§2.10).'
-                      : 'Koko omistaja siirrettiin, korvattiin tai vapautettiin.'
-                    : 'Kahva osoittaa samaan ohjaussolmuun c, joka pysyy voimassa.',
                   whyEn: killsSelf
                     ? holdsView && row.eff !== 'replace'
                       ? 'Because the container holds views (hv = true), mutating elements changes which views can be read out (§2.10).'
@@ -1405,18 +1333,14 @@ export function FormalExplorer() {
                               : 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-300'
                           }`}
                         >
-                          {c.killed ? 'KILLED (live := false)' : t('SÄILYY (live = true)', 'SURVIVES (live = true)')}
+                          {c.killed ? 'KILLED (live := false)' : 'SURVIVES (live = true)'}
                         </span>
                       </div>
-                      <div className="mt-1.5 font-semibold text-fd-foreground">
-                        {lang === 'fi' ? c.titleFi : c.titleEn}
-                      </div>
+                      <div className="mt-1.5 font-semibold text-fd-foreground">{c.titleEn}</div>
                       <code className="mt-1 block rounded bg-fd-background/80 px-2 py-1 font-mono text-[11px]">
                         {c.example}
                       </code>
-                      <p className="mt-2 text-xs text-fd-muted-foreground">
-                        {lang === 'fi' ? c.whyFi : c.whyEn}
-                      </p>
+                      <p className="mt-2 text-xs text-fd-muted-foreground">{c.whyEn}</p>
                     </div>
                   ))}
                 </div>
@@ -1435,10 +1359,10 @@ export function FormalExplorer() {
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h3 className="text-base font-bold text-fd-foreground">
-                  {t('Lean Blueprint -riippuvuusverkko (Lauseet & Moduulit)', 'Interactive Lean Blueprint Dependency Graph (Theorems & Modules)')}
+                  Interactive Lean Blueprint Dependency Graph (Theorems & Modules)
                 </h3>
                 <p className="mt-0.5 text-xs text-fd-muted-foreground">
-                  {t('Klikkaa mitä tahansa solmua nähdäksesi sen välittömät riippuvuudet (oranssi), siitä riippuvat lauseet (vihreä) sekä täydellisen Lean 4 -määritelmän.', 'Click any node in the DAG to highlight its upstream dependencies (amber), downstream dependents (emerald), and inspect its formal Lean 4 statement.')}
+                  Click any node in the DAG to highlight its upstream dependencies (amber), downstream dependents (emerald), and inspect its formal Lean 4 statement.
                 </p>
               </div>
 
@@ -1453,7 +1377,18 @@ export function FormalExplorer() {
                         : 'text-fd-muted-foreground hover:text-fd-foreground'
                     }`}
                   >
-                    {t('Päälauseiden Blueprint (21)', 'Theorem Blueprint (21)')}
+                    Theorem Blueprint (21)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setGraphMode('modules-a3')}
+                    className={`rounded-md px-3 py-1 text-xs font-semibold ${
+                      graphMode === 'modules-a3'
+                        ? 'bg-fd-background text-fd-foreground shadow-sm'
+                        : 'text-fd-muted-foreground hover:text-fd-foreground'
+                    }`}
+                  >
+                    A3 Module DAG ({formalData.modules.A3.length})
                   </button>
                   <button
                     type="button"
@@ -1464,7 +1399,7 @@ export function FormalExplorer() {
                         : 'text-fd-muted-foreground hover:text-fd-foreground'
                     }`}
                   >
-                    {t('A2-modueliverkko (28)', 'A2 Module DAG (28)')}
+                    A2 Module DAG ({formalData.modules.A2.length})
                   </button>
                   <button
                     type="button"
@@ -1475,7 +1410,7 @@ export function FormalExplorer() {
                         : 'text-fd-muted-foreground hover:text-fd-foreground'
                     }`}
                   >
-                    {t('A1-modueliverkko (22)', 'A1 Module DAG (22)')}
+                    A1 Module DAG ({formalData.modules.A1.length})
                   </button>
                 </div>
 
@@ -1718,7 +1653,7 @@ export function FormalExplorer() {
                       </span>
                     </div>
                     <h4 className="mt-1.5 text-base font-bold text-fd-foreground">
-                      {lang === 'fi' ? selectedBpNode.titleFi : selectedBpNode.titleEn}
+                      {selectedBpNode.titleEn}
                     </h4>
                   </div>
 
@@ -1729,7 +1664,7 @@ export function FormalExplorer() {
                       className="inline-flex items-center gap-1.5 rounded-lg bg-fd-primary px-3 py-1.5 text-xs font-semibold text-fd-primary-foreground"
                     >
                       <Code2 className="h-3.5 w-3.5" />
-                      <span>{t('Avaa koodiselaimessa', 'Open in Proof Browser')}</span>
+                      <span>Open in Proof Browser</span>
                     </button>
                     <a
                       href={`${GITHUB_BASE}/formal/A2/${selectedBpNode.module}.lean${
@@ -1746,17 +1681,17 @@ export function FormalExplorer() {
                 </div>
 
                 <p className="mt-2 text-xs leading-relaxed text-fd-foreground/90">
-                  {lang === 'fi' ? selectedBpNode.explainFi : selectedBpNode.explainEn}
+                  {selectedBpNode.explainEn}
                 </p>
 
                 {/* Dependency pills */}
                 <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
                   <span className="font-semibold text-amber-600 dark:text-amber-400">
-                    {t('Käyttää (Uses):', 'Depends on (Uses):')}
+                    Depends on (Uses):
                   </span>
                   {selectedBpNode.deps.length === 0 ? (
                     <span className="text-fd-muted-foreground">
-                      {t('Perusmääritelmä (ei riippuvuuksia)', 'Foundational definition')}
+                      Foundational definition
                     </span>
                   ) : (
                     selectedBpNode.deps.map((depId) => (
@@ -1797,7 +1732,7 @@ export function FormalExplorer() {
                           </span>
                         </div>
                         <p className="mt-2 text-xs font-medium text-fd-foreground">
-                          {lang === 'fi' ? mod.summaryFi : mod.summaryEn}
+                          {mod.summaryEn}
                         </p>
                         {mod.doc && (
                           <p className="mt-1.5 whitespace-pre-line text-xs text-fd-muted-foreground">{mod.doc}</p>
@@ -1818,9 +1753,7 @@ export function FormalExplorer() {
                           className="inline-flex items-center gap-1.5 rounded-lg bg-fd-primary px-3 py-1.5 text-xs font-semibold text-fd-primary-foreground"
                         >
                           <FileCode className="h-3.5 w-3.5" />
-                          <span>
-                            {t(`Selaa moduulin ${mod.counts.total} määritelmää`, `Browse all ${mod.counts.total} declarations`)}
-                          </span>
+                          <span>Browse all {mod.counts.total} declarations</span>
                         </button>
                         <a
                           href={`${GITHUB_BASE}/${mod.path}`}
@@ -1836,7 +1769,7 @@ export function FormalExplorer() {
 
                     <div className="mt-3 flex flex-wrap items-center gap-1.5">
                       <span className="text-xs font-semibold text-fd-muted-foreground">
-                        {t('Tuonnit (Imports):', 'Imports:')}
+                        Imports:
                       </span>
                       {mod.imports.length === 0 ? (
                         <span className="text-xs text-fd-muted-foreground">none (root module)</span>
@@ -1862,14 +1795,28 @@ export function FormalExplorer() {
       )}
 
       {/* =====================================================================
-          TAB 3: FULL LEAN 4 CODE & PROOF BROWSER (1,766 DECLARATIONS)
+          TAB 3: FULL LEAN 4 CODE & PROOF BROWSER
          ===================================================================== */}
       {activeTab === 'browser' && (
         <div className="rounded-xl border bg-fd-card p-5">
           {/* Filter Bar */}
           <div className="flex flex-wrap items-center gap-2.5 border-b pb-4">
-            {/* Phase toggle A2 / A1 */}
+            {/* Phase toggle A3 / A2 / A1 */}
             <div className="flex rounded-lg border bg-fd-muted/50 p-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setBrowserPhase('A3');
+                  setBrowserModule('all');
+                }}
+                className={`rounded-md px-3 py-1 text-xs font-semibold ${
+                  browserPhase === 'A3'
+                    ? 'bg-fd-background text-fd-foreground shadow-sm'
+                    : 'text-fd-muted-foreground'
+                }`}
+              >
+                Phase A3 ({formalData.stats.a3.totalDecls})
+              </button>
               <button
                 type="button"
                 onClick={() => {
@@ -1907,7 +1854,7 @@ export function FormalExplorer() {
               className="rounded-lg border bg-fd-background px-3 py-1.5 text-xs font-medium"
             >
               <option value="all">
-                {t(`Kaikki moduulit (${formalData.modules[browserPhase].length})`, `All modules (${formalData.modules[browserPhase].length})`)}
+                All modules ({formalData.modules[browserPhase].length})
               </option>
               {formalData.modules[browserPhase].map((m) => (
                 <option key={m.name} value={m.name}>
@@ -1922,7 +1869,7 @@ export function FormalExplorer() {
               onChange={(e) => setBrowserKind(e.target.value)}
               className="rounded-lg border bg-fd-background px-3 py-1.5 text-xs font-medium"
             >
-              <option value="all">{t('Kaikki tyypit', 'All kinds')}</option>
+              <option value="all">All kinds</option>
               <option value="theorem">theorem / lemma</option>
               <option value="inductive">inductive</option>
               <option value="structure">structure</option>
@@ -1936,16 +1883,13 @@ export function FormalExplorer() {
                 type="text"
                 value={browserSearch}
                 onChange={(e) => setBrowserSearch(e.target.value)}
-                placeholder={t(
-                  'Hae lauseen nimellä, tyypillä tai selitteellä (esim. no_leak, panic_unwind, Eff.kills)…',
-                  'Search theorem name, signature, or docstring (e.g. no_leak, panic_unwind, Eff.kills)…',
-                )}
+                placeholder="Search theorem name, signature, or docstring (e.g. no_leak, panic_unwind, claim)…"
                 className="w-full rounded-lg border bg-fd-background py-1.5 pl-8 pr-3 text-xs"
               />
             </div>
 
             <span className="font-mono text-xs text-fd-muted-foreground">
-              {filteredDecls.length} {t('osumaa', 'results')}
+              {filteredDecls.length} results
             </span>
           </div>
 
@@ -1989,7 +1933,7 @@ export function FormalExplorer() {
               })}
               {filteredDecls.length > 250 && (
                 <div className="p-3 text-center text-xs text-fd-muted-foreground">
-                  {t(`Näytetään ensimmäiset 250 / ${filteredDecls.length}. Tarkenna hakua.`, `Showing first 250 of ${filteredDecls.length}. Refine search or module filter.`)}
+                  Showing first 250 of {filteredDecls.length}. Refine search or module filter.
                 </div>
               )}
             </div>
@@ -2020,7 +1964,7 @@ export function FormalExplorer() {
                       rel="noreferrer"
                       className="inline-flex items-center gap-1.5 rounded-lg border bg-fd-muted/40 px-3 py-1.5 text-xs font-medium hover:bg-fd-muted"
                     >
-                      <span>{t('Katso GitHubissa', 'View on GitHub')}</span>
+                      <span>View on GitHub</span>
                       <ExternalLink className="h-3.5 w-3.5" />
                     </a>
                   </div>
@@ -2036,7 +1980,7 @@ export function FormalExplorer() {
                   <div className="grid gap-2 sm:grid-cols-2">
                     <div className="rounded-lg border bg-fd-muted/20 p-2.5">
                       <div className="text-[11px] font-bold uppercase text-amber-600 dark:text-amber-400">
-                        {t(`Käyttää (${activeDecl.deps.length}):`, `Uses / Depends on (${activeDecl.deps.length}):`)}
+                        Uses / Depends on ({activeDecl.deps.length}):
                       </div>
                       <div className="mt-1.5 flex flex-wrap gap-1">
                         {activeDecl.deps.length === 0 ? (
@@ -2058,12 +2002,12 @@ export function FormalExplorer() {
 
                     <div className="rounded-lg border bg-fd-muted/20 p-2.5">
                       <div className="text-[11px] font-bold uppercase text-emerald-600 dark:text-emerald-400">
-                        {t(`Käytetään lauseissa (${activeDecl.usedBy.length}):`, `Used by (${activeDecl.usedBy.length}):`)}
+                        Used by ({activeDecl.usedBy.length}):
                       </div>
                       <div className="mt-1.5 flex flex-wrap gap-1">
                         {activeDecl.usedBy.length === 0 ? (
                           <span className="text-xs text-fd-muted-foreground">
-                            {t('Huippulause / päätelmä', 'Top-level theorem')}
+                            Top-level theorem
                           </span>
                         ) : (
                           activeDecl.usedBy.map((u) => (
@@ -2092,7 +2036,7 @@ export function FormalExplorer() {
                           rel="noreferrer"
                           className="text-fd-primary hover:underline"
                         >
-                          {t('Avaa koko todistus GitHubissa →', 'Open full proof on GitHub →')}
+                          Open full proof on GitHub →
                         </a>
                       )}
                     </div>
@@ -2123,10 +2067,7 @@ export function FormalExplorer() {
                     : 'text-fd-muted-foreground'
                 }`}
               >
-                {t(
-                  `${formalData.stats.holesCount} Reikäkoetta (tools/fuzz/holes/)`,
-                  `${formalData.stats.holesCount} Soundness Hole Probes`,
-                )}
+                {formalData.stats.holesCount} Soundness Hole Probes
               </button>
               <button
                 type="button"
@@ -2137,7 +2078,7 @@ export function FormalExplorer() {
                     : 'text-fd-muted-foreground'
                 }`}
               >
-                {t(`docs/MEMORY.md → Lean-sääntömatriisi (${formalData.rules.length})`, `docs/MEMORY.md → Formal Rules Matrix (${formalData.rules.length})`)}
+                docs/MEMORY.md → Formal Rules Matrix ({formalData.rules.length})
               </button>
             </div>
 
@@ -2155,7 +2096,7 @@ export function FormalExplorer() {
                     }`}
                   >
                     {ph === 'all'
-                      ? `${t('Kaikki', 'All')} (${formalData.stats.holesCount})`
+                      ? `All (${formalData.stats.holesCount})`
                       : `${ph} (${formalData.stats.holesByPhase[ph]})`}
                   </button>
                 ))}
@@ -2165,7 +2106,7 @@ export function FormalExplorer() {
                     type="text"
                     value={holeSearch}
                     onChange={(e) => setHoleSearch(e.target.value)}
-                    placeholder={t('Hae reikää (esim. slice, closure)…', 'Filter holes (e.g. slice, closure)…')}
+                    placeholder="Filter holes (e.g. slice, closure)…"
                     className="w-full rounded-lg border bg-fd-background py-1.5 pl-8 pr-3 text-xs"
                   />
                 </div>
@@ -2226,7 +2167,16 @@ export function FormalExplorer() {
                     {!selectedHole.rule.startsWith('§') && (
                       <button
                         type="button"
-                        onClick={() => openDeclInBrowser(selectedHole.rule.split('.')[0], 'A2')}
+                        onClick={() =>
+                          openDeclInBrowser(
+                            selectedHole.rule.split('.')[0],
+                            selectedHole.phase === 'A3'
+                              ? 'A3'
+                              : selectedHole.phase === 'A1'
+                                ? 'A1'
+                                : 'A2',
+                          )
+                        }
                         className="inline-flex items-center gap-1 rounded-lg bg-fd-primary px-3 py-1.5 text-xs font-semibold text-fd-primary-foreground"
                       >
                         <Code2 className="h-3.5 w-3.5" />
@@ -2247,7 +2197,7 @@ export function FormalExplorer() {
 
                 <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs">
                   <span className="font-bold text-fd-foreground">
-                    {t('Mitä reikäkoe yrittää tehdä: ', 'What this soundness probe attempts: ')}
+                    What this soundness probe attempts:{' '}
                   </span>
                   <span className="text-fd-foreground/90">{selectedHole.note}</span>
                 </div>
@@ -2268,10 +2218,10 @@ export function FormalExplorer() {
                 <thead>
                   <tr className="border-b bg-fd-muted/40">
                     <th className="p-2.5 font-semibold">docs/MEMORY.md</th>
-                    <th className="p-2.5 font-semibold">{t('Omistajuussääntö', 'Ownership Rule')}</th>
+                    <th className="p-2.5 font-semibold">Ownership Rule</th>
                     <th className="p-2.5 font-semibold">Phase</th>
                     <th className="p-2.5 font-semibold">
-                      {t('Formaali Lean-vastine', 'Formal Lean Counterpart')}
+                      Formal Lean Counterpart
                     </th>
                     <th className="p-2.5 font-semibold">Status</th>
                   </tr>

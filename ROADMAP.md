@@ -234,7 +234,7 @@ A high-level map of what exists. Dates and per-feature detail are in
   guarantee — every program accepted without an `unsafe` function of its
   own is memory-safe and leak-free (MEMORY.md §6.2; every hole found
   is closed and held by a probe, or listed in LIMITATIONS.md while open; the rules for
-  single-threaded code are proven sound in Lean 4, `formal/` phases A1–A2,
+  single-threaded and concurrent code are proven sound in Lean 4, `formal/` phases A1–A3,
   0.74.0) — `Rc` cycles
   are collected by a cycle
   collector, `Weak` and `ArcWeak` exist, and a cycle of thread-shared
@@ -663,16 +663,14 @@ new language features.
   handed on by name. The open ones are listed, each with a fix in progress, in
   [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md).
 - [ ] **Mechanized soundness proof** ([`formal/`](formal/README.md)) —
-  phases A1 (the core calculus) and A2 (structs, enums, closures and trait
-  objects, panics, the drop journal, leak freedom) are proven in Lean 4
-  as of 0.74.0 (`A2.memory_safe`, `A2.no_leak_end`); 0.82.0 adds per-call
-  ownership (an owner cell, `formal/A2/DynCell.lean`), `A2.no_leak_panic`
-  in the checked theorems, and A3's design with its claim stated in Lean
-  (`formal/A3/`); 0.83.0 proves A3.0 (threads that only move values are
-  memory-safe, race-free and leak-free), runs the destructors of
-  view-free types as code inside the calculus (A2-drop.1), and builds
-  without a warning on Lean 4.35. Open: the rest of A3 (threads that
-  share, data-race freedom), B (the standard library's `unsafe` base), C (nurlc
+  phases A1 (the core calculus), A2 (structs, enums, closures and trait
+  objects, panics, the drop journal, leak freedom) and A3 (threads, `Arc`,
+  `Locked` / `Mutex`, `RwLocked` and `% Frozen` / `% NotSend` guards,
+  `Atomic`, channels, `SendCheck` library handles, closures and trait
+  objects across threads, module globals, data-race freedom) are proven in
+  Lean 4 (`A1.memory_safe`, `A2.memory_safe`, `A2.no_leak_end`,
+  `A2.no_leak_panic`, `A3.claim`, `A3.claim_made`), building without a
+  warning on Lean 4.35. Open: B (the standard library's `unsafe` base), C (nurlc
   implements the rules, by certificate) and D (code generation).
 
 ### Evidence for the "LLM-native" thesis

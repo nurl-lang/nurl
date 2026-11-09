@@ -333,7 +333,11 @@ function summaries — is proven sound in Lean
 never touches freed or out-of-bounds memory. Phase A2 adds structs and
 enums, closures and trait objects with their captures, panics with
 unwinding and `recover`, the drop journal, and leak freedom
-(`A2.memory_safe`, `A2.no_leak_end`). [`formal/RULES.md`](../formal/RULES.md)
+(`A2.memory_safe`, `A2.no_leak_end`, `A2.no_leak_panic`). Phase A3 adds
+threads, `Arc`, `Locked` / `Mutex`, `RwLocked` and `% Frozen` / `% NotSend`
+guards, `Atomic`, channels, `SendCheck` library handles, closures and
+trait objects across threads, module globals, and data-race freedom
+(`A3.claim`, `A3.claim_made`). [`formal/RULES.md`](../formal/RULES.md)
 gives the formal rule for each rule below.
 
 ### 2.1 Moves — use after move
@@ -2037,16 +2041,19 @@ client's only user.
 The guarantee is a property of the rules. The compiler's implementation
 of them is tested continuously:
 
-- **Mechanized soundness proof (Lean 4).** The ownership calculus
-  (`formal/`, `./check.sh`) is mechanically proven sound in Lean 4 with
-  zero `sorry`, on Lean's standard axioms only: `A2.memory_safe` and
-  `A2.no_leak_end` in `formal/A2/Soundness.lean` — well-typed programs
+- **Mechanized soundness proof (Lean 4).** The ownership and concurrency
+  calculus (`formal/`, `./check.sh`) is mechanically proven sound in Lean 4
+  with zero `sorry`, on Lean's standard axioms only: `A2.memory_safe`,
+  `A2.no_leak_end` and `A2.no_leak_panic` in `formal/A2/Soundness.lean`,
+  and `A3.claim` and `A3.claim_made` in `formal/A3/` — well-typed programs
   never get stuck on a use after free, a double free, a dangling borrow or
-  view or an out-of-bounds access, and leak nothing at exit, on the panic
-  path too. The calculus covers owned values, moves and drop flags,
-  borrows and views, `inout` with its bounds, structs and enums, closures
-  and trait objects with their captures (§2.11), panics and the drop
-  journal; `formal/corpus/map.tsv` maps every regression probe
+  view or an out-of-bounds access, have no data race across threads, and
+  leak nothing at exit, on the panic path too. The calculus covers owned
+  values, moves and drop flags, borrows and views, `inout` with its bounds,
+  structs and enums, closures and trait objects with their captures (§2.11),
+  panics and the drop journal, and concurrent threads (`Arc`, `Locked`,
+  `RwLocked`, `Atomic`, channels, `SendCheck` handles, module globals,
+  §6.5); `formal/corpus/map.tsv` maps every regression probe
   to the rule that rejects it. See
   [`formal/README.md`](../formal/README.md).
 - **Hole probes.** Every way safe code has been shown to break the

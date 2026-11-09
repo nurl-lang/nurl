@@ -5,7 +5,7 @@
 // ownership rules (formal/RULES.md), and the soundness hole corpus
 // (the probe table of tools/fuzz/holes/map.sh + tools/fuzz/holes/*.nu) into:
 //   1. webdocs/lib/formal-data.generated.ts (compact typed metadata, module DAGs, blueprint, rules, holes)
-//   2. webdocs/public/formal-decls.json (all 1,766 declarations across A1 & A2 for the code browser)
+//   2. webdocs/public/formal-decls.json (all declarations across A1, A2 & A3 for the code browser)
 //   3. formal/BLUEPRINT.md's counts, A2 module DAG, A2 module index and crown
 //      theorem statements (the regions between its `BEGIN generated` markers)
 //
@@ -30,182 +30,295 @@ const MODULE_LAYERS = {
   Syntax: {
     layer: 0,
     category: 'Syntax & Store',
-    summaryFi: 'Tyypit, efektihila (Eff.kills), lausekkeet, lauseet ja muistipaikat (Mem, Slot, Val).',
     summaryEn: 'Types, effect & kill lattice (Eff.kills), expressions, statements, and store values (Mem, Slot, Val).',
   },
   Semantics: {
     layer: 0,
     category: 'Syntax & Store',
-    summaryFi: 'Pienaskelsemantiikka (Step, Steps), puumuistin vapautus (Frees, DropSlot), kutsun avaus ja jumiutuminen (Stuck).',
     summaryEn: 'Small-step operational semantics (Step, Steps), tree deallocation (Frees, DropSlot), call expansion, and Stuck.',
   },
   Typing: {
     layer: 1,
     category: 'Flow-Sensitive Typing',
-    summaryFi: 'Vuosensitiivinen tyyppikonteksti Γ, kill-operaatio, lauseiden ja kutsujen tyyppisäännöt (RhsT, StmtT, CallT, FnOK).',
     summaryEn: 'Flow-sensitive context Γ, kill operation, and typing rules for RHS, statements, calls, and functions (RhsT, StmtT, CallT, FnOK).',
   },
   Basic: {
     layer: 1,
     category: 'Flow-Sensitive Typing',
-    summaryFi: 'Perusapulemmat muistipäivityksille (upd), arvojen alipuille ja konteksteille.',
     summaryEn: 'Foundational lemmas for store updates (upd), value subtrees, and contexts.',
   },
   Ctx: {
     layer: 1,
     category: 'Flow-Sensitive Typing',
-    summaryFi: 'Kontekstin operaatioiden (kill, exitScope, derive) algebralliset ominaisuudet ja monotonisuus.',
     summaryEn: 'Algebraic properties and monotonicity of context operations (kill, exitScope, derive).',
   },
   TypingFacts: {
     layer: 1,
     category: 'Flow-Sensitive Typing',
-    summaryFi: 'Inversiolemmat ja rakenteelliset ominaisuudet hyvin tyypitetyille lauseille (StmtT).',
     summaryEn: 'Inversion lemmas and structural properties of well-typed statements (StmtT).',
   },
   Invariant: {
     layer: 2,
     category: 'Memory Invariant',
-    summaryFi: 'Konfiguraatioinvariantti (Inv, HeapOK, Covers, ValOK, ViewsOK): yksittäisomistajuus ja lainojen eheys.',
     summaryEn: 'Configuration invariant (Inv, HeapOK, Covers, ValOK, ViewsOK): single ownership and valid borrows/views.',
   },
   Stability: {
     layer: 2,
     category: 'Memory Invariant',
-    summaryFi: 'Lainojen ja näkymien säilyvyys, kun muistia tai kontekstia päivitetään muualta.',
     summaryEn: 'Stability of borrows and views under store and context updates.',
   },
   Heap: {
     layer: 2,
     category: 'Memory Invariant',
-    summaryFi: 'Kekoinvariantin (HeapOK: erilliset omistuspuut ja varatut osoitteet) säilyminen muistioperaatioissa.',
     summaryEn: 'Preservation of heap disjointness and allocation validity (HeapOK) across store operations.',
   },
   Values: {
     layer: 2,
     category: 'Memory Invariant',
-    summaryFi: 'Arvojen, tietueiden (pair), summien (inl/inr) ja näkymien hyvinmuodostuneisuuslemmat.',
     summaryEn: 'Well-formedness lemmas for values, structs (pair), enums (inl/inr), and views.',
   },
   Wf: {
     layer: 2,
     category: 'Memory Invariant',
-    summaryFi: 'Kontekstin sisäisen hyvinmuodostuneisuuden (WfCtx) säilyminen askeleissa.',
     summaryEn: 'Preservation of context well-formedness (WfCtx) across typing transitions.',
   },
   NameWf: {
     layer: 2,
     category: 'Memory Invariant',
-    summaryFi: 'Sulkeumien nimikaappausten (Kind.name) hyvinmuodostuneisuus ja invariantit.',
     summaryEn: 'Well-formedness and invariants for by-name closure captures (Kind.name).',
   },
   Frame: {
     layer: 3,
     category: 'Step & Unwinding Lemmas',
-    summaryFi: 'Ajonaikaisten kehysten (scope, rbind, frozen) vaikutus invarianttiin.',
     summaryEn: 'How runtime frames (scope, rbind, frozen) interact with the memory invariant.',
   },
   StepFrame: {
     layer: 3,
     category: 'Step & Unwinding Lemmas',
-    summaryFi: 'Invariantin säilyminen kehysten sisällä ja paniikin purkamisen aikana.',
     summaryEn: 'Invariant preservation across frame steps and panic unwinding frames.',
   },
   Rhs: {
     layer: 3,
     category: 'Step & Unwinding Lemmas',
-    summaryFi: 'Oikean puolen lausekkeiden (Rhs: move, borrow, vec_at, view, pop, pack) askeleet ja invariantit.',
     summaryEn: 'Stepping and invariant preservation for right-hand side evaluations (Rhs).',
   },
   Steps: {
     layer: 3,
     category: 'Step & Unwinding Lemmas',
-    summaryFi: 'Yksittäisten lauseaskeleiden (letv, assign, push, free, unpair) säilyvyyslemmat.',
     summaryEn: 'Preservation lemmas for individual statement steps (letv, assign, push, free, unpair).',
   },
   Leak: {
     layer: 3,
     category: 'Step & Unwinding Lemmas',
-    summaryFi: 'Muistivuodottomuusinvariantti (Covers): jokainen varattu osoite kuuluu jollekin elävälle omistajalle.',
     summaryEn: 'Leak-freedom invariant (Covers): every allocated address is owned by a live binding.',
   },
   Panic: {
     layer: 3,
     category: 'Step & Unwinding Lemmas',
-    summaryFi: 'Paniikin purkaminen (panic_unwind): jokainen poistuva lohko vapauttaa omistamansa puut (drop journal).',
     summaryEn: 'Panic unwinding (panic_unwind): every exited scope drops its owned trees via the drop journal.',
+  },
+  EditB: {
+    layer: 3,
+    category: 'Proof Infrastructure',
+    summaryEn: 'Element edits through borrows (StmtT.editB): push, truncate, and element set through borrowed paths.',
+  },
+  EditBV: {
+    layer: 3,
+    category: 'Proof Infrastructure',
+    summaryEn: 'A view stored through a borrow (StmtT.editBV): every view-holding root of the borrow\'s path holds what the stored value depends on.',
+  },
+  Elem: {
+    layer: 3,
+    category: 'Proof Infrastructure',
+    summaryEn: 'An element handed over (withElem, insert): the invariant does not see the order of an owned Vec\'s elements (MInv.perm).',
+  },
+  EnvHand: {
+    layer: 3,
+    category: 'Proof Infrastructure',
+    summaryEn: 'Closure and trait-object environment hand-over (StmtT.callcE) for inout receivers.',
+  },
+  Repl: {
+    layer: 3,
+    category: 'Proof Infrastructure',
+    summaryEn: 'One-hole replacement (Repl): a change through a borrowed handle rewrites one node of its owner\'s tree and leaves the rest.',
+  },
+  Sweep: {
+    layer: 3,
+    category: 'Proof Infrastructure',
+    summaryEn: 'The sweep (Mem.sweep): shared blocks (Arc, lock blocks) that nothing reaches are removed and their payloads freed, from every thread\'s roots.',
   },
   Rename: {
     layer: 4,
     category: 'Calls & Closures',
-    summaryFi: 'Funktion rungon muuttujien uudelleennimeäminen (alpha-renaming) kutsukohdan tuoreille muuttujille.',
     summaryEn: 'Alpha-renaming of function body variables to fresh variables at a call site.',
   },
   Call: {
     layer: 4,
     category: 'Calls & Closures',
-    summaryFi: 'Funktiokutsun avauksen (callStmt) tyyppisääntöjen johtaminen funktion tiivistelmästä (FnOK + CallT).',
     summaryEn: 'Typing of expanded function calls (callStmt) from function summaries (FnOK + CallT).',
   },
   Bind: {
     layer: 4,
     category: 'Calls & Closures',
-    summaryFi: 'Parametrien sitominen (in, inout, sink) kutsujan argumenteista kutsuttavan kontekstiin.',
     summaryEn: 'Binding call arguments (in, inout, sink) from caller context into callee frame.',
   },
   CallMem: {
     layer: 4,
     category: 'Calls & Closures',
-    summaryFi: 'Muistin tila ja omistuspuut parametrien sitomisen jälkeen funktiokutsussa.',
     summaryEn: 'Store state and owned trees immediately after binding parameters in a call.',
   },
   CallInv: {
     layer: 4,
     category: 'Calls & Closures',
-    summaryFi: 'Kokonaisinvariantin (callCase, recCase) säilyminen funktiokutsun ja recover-kehyksen avauksessa.',
     summaryEn: 'Full invariant preservation (callCase, recCase) across function call and recover expansion.',
   },
   Closure: {
     layer: 4,
     category: 'Calls & Closures',
-    summaryFi: 'Sulkeuma- ja piirreoliokutsujen (callc, cloCase, cloProgress) avaaminen ja nimikaappausten tarkistus.',
     summaryEn: 'Closure and trait-object package calls (callc, cloCase, cloProgress) and by-name capture soundness.',
   },
   SrcKeep: {
     layer: 2,
     category: 'Memory Invariant',
-    summaryFi: 'Lähdekoodin tyypitys säilyttää lainatun parametrin merkinnän (StmtT.ctxRel), joten destruktorin kehys saa rungoltaan KeepOut-, CtxWF- ja NameWF-tiedot ilman letd:n premissejä (srcCase).',
     summaryEn: 'Source typing keeps a borrowed parameter\'s entry (StmtT.ctxRel), so a destructor\'s frame gets KeepOut, CtxWF and NameWF of its body without premises on letd (srcCase).',
   },
   Codes: {
     layer: 4,
     category: 'Calls & Closures',
-    summaryFi: 'Sulkeumapakettien koodiosoittimien eheys (ProgCodes, MemCodes, codes_step) jokaisen askeleen yli.',
     summaryEn: 'Package code-pointer integrity (ProgCodes, MemCodes, codes_step) across execution steps.',
   },
   Preservation: {
     layer: 5,
     category: 'Soundness Theorems',
-    summaryFi: 'Preservation-lause (preserve): jokainen suoritusaskel säilyttää tyypityksen StmtT ja muisti-invariantin Inv.',
     summaryEn: 'Preservation theorem (preserve): every execution step preserves typing StmtT and memory invariant Inv.',
   },
   Progress: {
     layer: 5,
     category: 'Soundness Theorems',
-    summaryFi: 'Progress-lause (progress): hyvin tyypitetty lause on joko valmis (.skip) tai voi ottaa askeleen (ei koskaan Stuck).',
     summaryEn: 'Progress theorem (progress): a well-typed statement is either .skip or can step (never Stuck).',
   },
   Soundness: {
     layer: 5,
     category: 'Soundness Theorems',
-    summaryFi: 'Päälauseet: soundness, memory_safe, no_leak_end ja no_leak_panic.',
     summaryEn: 'Main theorems: soundness, memory_safe, no_leak_end, and no_leak_panic.',
   },
   DynCell: {
     layer: 5,
     category: 'Worked Examples',
-    summaryFi: 'Kutsukohtainen omistajuus omistajasolun kautta: esimerkki pick tyypitetään A2:n säännöillä, ja memory_safe sekä no_leak_end sovelletaan siihen (pick_ok, main_safe, main_no_leak).',
     summaryEn: 'Per-call ownership through an owner cell: the pick example typed with A2\'s rules, and memory_safe and no_leak_end applied to it (pick_ok, main_safe, main_no_leak).',
+  },
+};
+
+const A3_MODULE_LAYERS = {
+  Defs: {
+    layer: 0,
+    category: 'Configuration & Claims',
+    summaryEn: 'Concurrent configurations (Cfg, Thread), thread steps (TStep, spawn), memory touches (Touch), races (Race), and the A3 claims (MemorySafe, RaceFree, NoLeak, Claim).',
+  },
+  Frame: {
+    layer: 1,
+    category: 'Address-Space Partition',
+    summaryEn: 'Address-space partitions (Split, minus, union), owned addresses (OwnedId), and disjointness.',
+  },
+  Rel: {
+    layer: 1,
+    category: 'Address-Space Partition',
+    summaryEn: 'Ghost-store relation (GhostRel) equating stores up to snapshots remembered by recover frames.',
+  },
+  Fresh: {
+    layer: 1,
+    category: 'Address-Space Partition',
+    summaryEn: 'Fresh-allocation lemmas: every step allocates only addresses at or above nid.',
+  },
+  BorFree: {
+    layer: 1,
+    category: 'Address-Space Partition',
+    summaryEn: 'Borrowed slots hold no owned heap addresses; ownership resides exclusively in owning slots and shared blocks.',
+  },
+  Owned: {
+    layer: 1,
+    category: 'Address-Space Partition',
+    summaryEn: 'Every address in an owned tree after a step was either already owned by that thread or freshly allocated.',
+  },
+  Keep: {
+    layer: 1,
+    category: 'Address-Space Partition',
+    summaryEn: 'Frame preservation: a thread step leaves every other thread\'s address-space partition untouched.',
+  },
+  Nid: {
+    layer: 2,
+    category: 'Per-Thread Invariants & Touch',
+    summaryEn: 'Monotonicity of per-thread invariants under advances of the global fresh-address counter nid.',
+  },
+  Ghost: {
+    layer: 2,
+    category: 'Per-Thread Invariants & Touch',
+    summaryEn: 'Stability of per-thread invariants across GhostRel store updates.',
+  },
+  Thread: {
+    layer: 2,
+    category: 'Per-Thread Invariants & Touch',
+    summaryEn: 'Per-thread invariant bundle (ThreadOK) lifting A2\'s preservation, progress, and no-leak to a thread\'s view.',
+  },
+  Touch: {
+    layer: 2,
+    category: 'Per-Thread Invariants & Touch',
+    summaryEn: 'Footprint confinement (touch_owned): every address a thread\'s next step touches lies in its own partition or shared frozen blocks.',
+  },
+  Cell: {
+    layer: 2,
+    category: 'Per-Thread Invariants & Touch',
+    summaryEn: 'Confinement of Send-not-Sync library handles (CellInv) across steps and SendCheck crossings; CellRace freedom.',
+  },
+  Restrict: {
+    layer: 3,
+    category: 'Frame Lemmas',
+    summaryEn: 'Step restriction (Step.restrict): a step on the shared configuration store restricts to a step on the thread\'s own partition.',
+  },
+  Lift: {
+    layer: 3,
+    category: 'Frame Lemmas',
+    summaryEn: 'Step lifting (Step.lift): a step on a thread\'s partition lifts to the shared configuration store.',
+  },
+  Config: {
+    layer: 4,
+    category: 'Configuration & Spawn',
+    summaryEn: 'Global configuration invariant (CInv): pairwise disjoint thread partitions, shared block invariants, and ThreadOK on every thread.',
+  },
+  Pres: {
+    layer: 4,
+    category: 'Configuration & Spawn',
+    summaryEn: 'Preservation of the global configuration invariant (CInv) across normal and panic thread steps.',
+  },
+  SpawnOld: {
+    layer: 4,
+    category: 'Configuration & Spawn',
+    summaryEn: 'Spawner-side soundness: moving sink arguments to a newly spawned thread preserves the spawner\'s ThreadOK on its remaining partition.',
+  },
+  SpawnNew: {
+    layer: 4,
+    category: 'Configuration & Spawn',
+    summaryEn: 'Spawnee-side soundness: the newly spawned thread starts with ThreadOK on the partition of moved argument trees.',
+  },
+  SpawnPres: {
+    layer: 4,
+    category: 'Configuration & Spawn',
+    summaryEn: 'Preservation of CInv across thread spawn (TStep.spawn and TStep.spawnFail).',
+  },
+  Assemble: {
+    layer: 4,
+    category: 'Configuration & Spawn',
+    summaryEn: 'Assembling global MemorySafe, RaceFree, and NoLeak from CInv and the frame/spawn lemmas (claim_from).',
+  },
+  Claim: {
+    layer: 5,
+    category: 'Data-Race Freedom Theorems',
+    summaryEn: 'Crown theorem A3.claim: every well-typed concurrent program is memory-safe, data-race-free, and leak-free across all thread interleavings.',
+  },
+  Make: {
+    layer: 5,
+    category: 'Data-Race Freedom Theorems',
+    summaryEn: 'Module-global initialization phase (Made, made_safe, made_ok) and crown theorem A3.claim_made.',
   },
 };
 
@@ -230,7 +343,7 @@ function parseLeanFile(phase, modName, filePath) {
   }
 
   let moduleDoc = '';
-  const nsMatch = content.match(/\bnamespace\s+A[12]\b/);
+  const nsMatch = content.match(/\bnamespace\s+A[123]\b/);
   const headerSlice = nsMatch ? content.slice(0, nsMatch.index) : content.slice(0, 1200);
   const docMatches = [...headerSlice.matchAll(/\/-[-!]?([\s\S]*?)-\//g)];
   if (docMatches.length > 0) {
@@ -289,6 +402,9 @@ function parseLeanFile(phase, modName, filePath) {
       'Soundness',
       'Preservation',
       'Progress',
+      'Defs',
+      'Claim',
+      'Make',
     ]);
     const maxLines = keepFullModules.has(modName) ? 110 : 40;
     let displayCode = fullCode;
@@ -343,6 +459,7 @@ function parseLeanFile(phase, modName, filePath) {
       trimmed.startsWith('/-!') ||
       trimmed.startsWith('end A1') ||
       trimmed.startsWith('end A2') ||
+      trimmed.startsWith('end A3') ||
       trimmed === 'mutual' ||
       trimmed === 'end'
     ) {
@@ -370,10 +487,10 @@ function parseLeanFile(phase, modName, filePath) {
   }
   flushDecl(lines.length);
 
-  const layerInfo = MODULE_LAYERS[modName] ?? {
+  const layerTable = phase === 'A3' ? A3_MODULE_LAYERS : MODULE_LAYERS;
+  const layerInfo = layerTable[modName] ?? {
     layer: 3,
     category: 'Proof Infrastructure',
-    summaryFi: '',
     summaryEn: '',
   };
 
@@ -383,11 +500,10 @@ function parseLeanFile(phase, modName, filePath) {
     phase,
     path: `formal/${phase}/${modName}.lean`,
     lineCount: lines.length,
-    imports: imports.map((imp) => imp.replace(/^A[12]\./, '')),
+    imports: imports.filter((imp) => imp.startsWith(`${phase}.`)).map((imp) => imp.slice(phase.length + 1)),
     doc: moduleDoc,
     layer: layerInfo.layer,
     category: layerInfo.category,
-    summaryFi: layerInfo.summaryFi,
     summaryEn: layerInfo.summaryEn,
     counts: {
       theorem: decls.filter((d) => d.kind === 'theorem').length,
@@ -515,12 +631,9 @@ const BLUEPRINT_NODES = [
     module: 'Syntax',
     kind: 'inductive',
     tier: 0,
-    titleFi: 'Tyypit (Ty)',
     titleEn: 'Types (Ty)',
-    explainFi:
-      'Kuvaa NURLin muistirelevantit tyypit: kokonaisluvut (.int), omistetut dynaamiset puskurit (.vec t — kattaa myös Stringin), näkymät (.slice t), tietueet (.prod a b), summatyypit/Option (.sum a b) sekä sulkeuma/piirrepaketit (.fn ms).',
     explainEn:
-      'Models NURL memory-relevant types: scalars (.int), owned growable buffers (.vec t, including String), borrowed views (.slice t), inline structs (.prod a b), tagged enums/Option (.sum a b), and closure/trait packages (.fn ms).',
+      'Models NURL memory-relevant types: scalars (.int), owned growable buffers (.vec t, including String), borrowed views (.slice t), inline structs (.prod a b), tagged enums/Option (.sum a b), closure/trait packages (.fn ms q), and shared blocks (.arc t, .lk t, .cell t).',
     deps: [],
   },
   {
@@ -529,10 +642,7 @@ const BLUEPRINT_NODES = [
     module: 'Syntax',
     kind: 'inductive',
     tier: 0,
-    titleFi: 'Efektihila (Eff)',
     titleEn: 'Effect Lattice (Eff)',
-    explainFi:
-      'Järjestää säiliöoperaatiot sen mukaan, mitä lainoja ne mitätöivät: none (vain luku) < realloc (vec_push voi siirtää puskurin) < drop (vec_pop pudottaa alkion) < replace (siirto, vapautus tai lohkon loppu).',
     explainEn:
       'Orders container effects by what they invalidate: none (read) < realloc (vec_push may move buffer) < drop (vec_pop drops element) < replace (move, free, assignment, or scope exit).',
     deps: [],
@@ -543,12 +653,9 @@ const BLUEPRINT_NODES = [
     module: 'Syntax',
     kind: 'def',
     tier: 0,
-    titleFi: 'Mitätöintisääntö (Eff.kills)',
     titleEn: 'Invalidation Rule (Eff.kills)',
-    explainFi:
-      'Tarkka totuustaulu sille, milloin efekti e juurella r päättää riippuvuuden k (self, inner, view tai name). Esimerkiksi realloc tappaa näkymät (.view), mutta säilyttää alkiolainat (.inner).',
     explainEn:
-      'Exact truth table deciding when effect e on root r invalidates a dependency of kind k (self, inner, view, or name). For instance, realloc kills .view but preserves .inner.',
+      'Exact truth table deciding when effect e on root r invalidates a dependency of kind k (self, inner, view, share, or name). For instance, realloc kills .view but preserves .inner.',
     deps: ['Eff', 'Ty'],
   },
   {
@@ -557,12 +664,9 @@ const BLUEPRINT_NODES = [
     module: 'Syntax',
     kind: 'structure',
     tier: 0,
-    titleFi: 'Ajonaikainen muisti (Mem & Slot)',
     titleEn: 'Runtime Store (Mem & Slot)',
-    explainFi:
-      'Kuvaa ajonaikaisen muistin: varatut keko-osoitteet (alloc : Nat → Bool) ja muuttujien paikat (st : Var → Option Slot), joissa jokaisella paikalla on omistajuuslippu (own : Bool) ja pudotuslippu (val : Option Val).',
     explainEn:
-      'Models runtime memory: allocated heap addresses (alloc : Nat → Bool) and variable slots (st : Var → Option Slot) carrying ownership (own : Bool) and drop flag (val : Option Val).',
+      'Models runtime memory: allocated heap addresses (alloc : Nat → Bool), variable slots (st : Var → Option Slot) carrying ownership (own : Bool) and drop flag (val : Option Val), shared blocks (blk), and module globals (gl).',
     deps: ['Ty'],
   },
   {
@@ -571,10 +675,7 @@ const BLUEPRINT_NODES = [
     module: 'Semantics',
     kind: 'inductive',
     tier: 1,
-    titleFi: 'Automaattinen vapautus (DropSlot & Frees)',
     titleEn: 'Scope-Exit Drop (DropSlot & Frees)',
-    explainFi:
-      'Kun lohko päättyy (Step.scopeSkip) tai purkautuu paniikissa (Step.scopeP), omistava paikka ⟨true, some tree⟩ vapauttaa rekursiivisesti koko omistuspuunsa; jo siirretty ⟨true, none⟩ tai lainattu ⟨false, _⟩ ohitetaan turvallisesti.',
     explainEn:
       'When a scope exits normally (Step.scopeSkip) or unwinds on panic (Step.scopeP), an owning slot ⟨true, some tree⟩ recursively frees its entire tree; moved ⟨true, none⟩ or borrowed ⟨false, _⟩ slots are no-ops.',
     deps: ['Mem'],
@@ -585,10 +686,7 @@ const BLUEPRINT_NODES = [
     module: 'Semantics',
     kind: 'inductive',
     tier: 1,
-    titleFi: 'Suoritusaskel (Step & Stuck)',
     titleEn: 'Operational Step (Step & Stuck)',
-    explainFi:
-      'Määrittelee pienaskelsemantiikan. Jokainen muistia lukeva tai vapauttava askel tarkistaa, että osoite on varattu (m.alloc c = true) ja indeksit rajoissa. Jos ohjelma yrittäisi use-after-free- tai double-free-operaatiota, sääntöä ei ole — konfiguraatio olisi Stuck.',
     explainEn:
       'Small-step operational semantics. Every memory access or free checks that the address is allocated (m.alloc c = true). Any use-after-free, double-free, or dangling view access has no step rule and becomes Stuck.',
     deps: ['Mem', 'DropSlot'],
@@ -599,10 +697,7 @@ const BLUEPRINT_NODES = [
     module: 'Typing',
     kind: 'def',
     tier: 1,
-    titleFi: 'Kontekstin mitätöinti (kill & exitScope)',
     titleEn: 'Context Invalidation (kill & exitScope)',
-    explainFi:
-      'Päivittää tyyppikontekstin Γ: jokainen muuttuja, jonka polku (path) tai sisällön näkymät (held) riippuvat muutetusta juuresta r tavalla jonka Eff.kills lopettaa, merkitään kuolleeksi (live := false).',
     explainEn:
       'Updates typing context Γ: every binding whose borrow path or held views depend on root r with a kind killed by Eff.kills is marked dead (live := false).',
     deps: ['Eff.kills'],
@@ -613,10 +708,7 @@ const BLUEPRINT_NODES = [
     module: 'Typing',
     kind: 'structure',
     tier: 1,
-    titleFi: 'Kutsun ja tiivistelmän tarkistus (CallT & FnOK)',
     titleEn: 'Call & Summary Check (CallT & FnOK)',
-    explainFi:
-      'Varmistaa kutsukohdassa, että sink- ja inout-argumentit eivät aliasoidu keskenään eivätkä ole lainattuja (F), ja laskee funktion tiivistelmästä (lends, rholds, outHolds) paluuarvon riippuvuudet.',
     explainEn:
       'Enforces at call sites that sink and inout arguments are disjoint and not frozen (F), and computes return/argument dependencies from the callee summary (lends, rholds, outHolds).',
     deps: ['kill', 'Eff.kills'],
@@ -627,10 +719,7 @@ const BLUEPRINT_NODES = [
     module: 'Typing',
     kind: 'inductive',
     tier: 2,
-    titleFi: 'Vuosensitiivinen tyyppijärjestelmä (StmtT & RhsT)',
     titleEn: 'Flow-Sensitive Typing (StmtT & RhsT)',
-    explainFi:
-      'Tarkistaa lauseen s alkukontekstista Γ loppukontekstiin Δ (StmtT P Γ F s Δ). Jokainen luku vaatii elävän sidonnan (live = true), jokainen siirto tappaa lähteen, ja jokainen mutaatio ajaa kill-päivityksen.',
     explainEn:
       'Typechecks statement s from input context Γ to output context Δ (StmtT P Γ F s Δ). Every read requires live = true, every move kills its source, and every mutation applies kill.',
     deps: ['kill', 'CallT'],
@@ -641,10 +730,7 @@ const BLUEPRINT_NODES = [
     module: 'Invariant',
     kind: 'structure',
     tier: 2,
-    titleFi: 'Yksittäisomistajuus (HeapOK)',
     titleEn: 'Single-Owner Disjoint Trees (HeapOK)',
-    explainFi:
-      'Takaa, että jokaisen omistajan puussa jokainen solmuosoite on varattu (m.alloc = true), esiintyy puussa korkeintaan kerran (Nodup), eikä mikään kahden eri omistajan puu jaa yhtään osoitetta.',
     explainEn:
       'Guarantees that every node in an owned tree is allocated (m.alloc = true), appears at most once in the tree (Nodup), and no two owners share any address.',
     deps: ['Mem'],
@@ -655,12 +741,9 @@ const BLUEPRINT_NODES = [
     module: 'Invariant',
     kind: 'def',
     tier: 2,
-    titleFi: 'Vuodottomuusinvariantti (Covers)',
     titleEn: 'No-Orphan-Allocation Invariant (Covers)',
-    explainFi:
-      'Jokainen varattu keko-osoite (m.alloc i = true) kuuluu jonkin muistissa olevan omistajan o omistuspuuhun (i ∈ T.ids). Mikään varattu muisti ei koskaan jää orvoksi.',
     explainEn:
-      'Every allocated heap address (m.alloc i = true) belongs to the owned tree of some live owner binding o in the store (i ∈ T.ids). No allocation is ever orphaned.',
+      'Every allocated heap address (m.alloc i = true) belongs to the owned tree of some live owner binding o in the store (i ∈ T.ids) or a live shared block. No allocation is ever orphaned.',
     deps: ['Mem', 'HeapOK'],
   },
   {
@@ -669,10 +752,7 @@ const BLUEPRINT_NODES = [
     module: 'Invariant',
     kind: 'structure',
     tier: 3,
-    titleFi: 'Kokonaisinvariantti (Inv m Γ F s)',
     titleEn: 'Configuration Invariant (Inv m Γ F s)',
-    explainFi:
-      'Yhdistää käännösaikaisen kontekstin Γ ja ajonaikaisen muistin m: sisältää HeapOK:n, Coversin, ja todistaa että jokainen Γ:ssa elävä (live = true) laina ja näkymä osoittaa voimassa olevaan omistuspuuhun.',
     explainEn:
       'Bridges compile-time context Γ and runtime store m: bundles HeapOK, Covers, and guarantees every live borrow and view in Γ resolves to a valid, in-bounds node in an owner tree.',
     deps: ['HeapOK', 'Covers', 'StmtT'],
@@ -683,10 +763,7 @@ const BLUEPRINT_NODES = [
     module: 'Panic',
     kind: 'theorem',
     tier: 3,
-    titleFi: 'Paniikin purkaminen (panic_unwind)',
     titleEn: 'Panic Unwinding (panic_unwind)',
-    explainFi:
-      'Todistaa, että kun paniikki purkaa suorituspinoa (s.spine), jokaisen poistuvan lohkon omistamat puut vapautetaan (DropSlot) ja sekä HeapOK että Covers säilyvät.',
     explainEn:
       'Proves that when a panic unwinds the active scope spine (s.spine), every exited scope drops its owned trees while preserving both HeapOK and Covers.',
     deps: ['DropSlot', 'HeapOK', 'Covers'],
@@ -697,10 +774,7 @@ const BLUEPRINT_NODES = [
     module: 'CallInv',
     kind: 'theorem',
     tier: 3,
-    titleFi: 'Funktiokutsun säilyvyys (callCase & recCase)',
     titleEn: 'Function Call Soundness (callCase & recCase)',
-    explainFi:
-      'Todistaa, että kun funktiokutsu (tai recover-kehys) avataan ajonaikaiseksi lohkoksi ja sen runko nimetään uudelleen (Rename), sekä tyyppitarkistus StmtT että muisti-invariantti Inv säilyvät.',
     explainEn:
       'Proves that expanding a function call (or recover frame) with alpha-renamed body variables preserves both typing StmtT and the memory invariant Inv.',
     deps: ['Inv', 'CallT'],
@@ -711,10 +785,7 @@ const BLUEPRINT_NODES = [
     module: 'Closure',
     kind: 'theorem',
     tier: 3,
-    titleFi: 'Sulkeumakutsun säilyvyys (cloCase & cloProgress)',
     titleEn: 'Closure & Trait Call Soundness (cloCase & cloProgress)',
-    explainFi:
-      'Todistaa, että sulkeuman tai piirreolion (Val.pkg) kutsuminen rajapinnan läpi avautuu turvalliseksi kutsuksi, jossa sulkeuman ympäristö ja nimikaappaukset noudattavat efektirajojaan.',
     explainEn:
       'Proves that invoking a closure or trait-object package (Val.pkg) unpacks the owned environment and by-name captures safely within their effect bounds.',
     deps: ['Inv', 'CallT'],
@@ -725,10 +796,7 @@ const BLUEPRINT_NODES = [
     module: 'Preservation',
     kind: 'theorem',
     tier: 4,
-    titleFi: 'Preservation (Säilyvyyslause)',
     titleEn: 'Preservation Theorem (preserve)',
-    explainFi:
-      'Jos konfiguraatio on hyvin tyypitetty (StmtT) ja täyttää invariantin (Inv), niin minkä tahansa suoritusaskeleen (Step) jälkeen uusi tila on edelleen hyvin tyypitetty jossakin kontekstissa Γ\' ja täyttää invariantin Inv.',
     explainEn:
       'If a configuration is well-typed (StmtT) and satisfies Inv, then after any normal step (Step P m s (.ok m\' s\')), the new configuration is well-typed in some Γ\' and satisfies Inv.',
     deps: ['Inv', 'callCase', 'cloCase', 'Step'],
@@ -739,12 +807,9 @@ const BLUEPRINT_NODES = [
     module: 'Progress',
     kind: 'theorem',
     tier: 4,
-    titleFi: 'Progress (Etenemislause)',
     titleEn: 'Progress Theorem (progress)',
-    explainFi:
-      'Hyvin tyypitetty konfiguraatio, joka täyttää invariantin Inv, on joko valmis (s = .skip) tai pystyy ottamaan suorituksen askeleen (∃ r, Step P m s r). Se ei ole koskaan Stuck.',
     explainEn:
-      'Every well-typed configuration satisfying Inv is either finished (s = .skip) or can take a step (∃ r, Step P m s r). It is never Stuck.',
+      'Every well-typed configuration satisfying Inv is either finished (s = .skip), blocked on a lock/channel (Blocked), or can take a step (∃ r, Step P m s r). It is never Stuck.',
     deps: ['Inv', 'Step', 'cloCase'],
   },
   {
@@ -753,10 +818,7 @@ const BLUEPRINT_NODES = [
     module: 'Soundness',
     kind: 'theorem',
     tier: 4,
-    titleFi: 'Saavutettavien tilojen eheys (reach_ok & reach_panic)',
     titleEn: 'Reachable State Invariant (reach_ok & reach_panic)',
-    explainFi:
-      'Induktiolla yli moniaskelisen suorituksen (Steps): jokainen alkutilasta saavutettava tila säilyttää invariantin Inv, ja jokainen paniikkiin päättyvä suoritus purkaa koko pinon jättäen tyhjän muuttujavaraston.',
     explainEn:
       'By induction over multi-step execution (Steps): every reachable normal state preserves Inv, and every uncaught panic unwinds the entire spine leaving an empty variable store.',
     deps: ['preserve', 'panic_unwind'],
@@ -767,10 +829,7 @@ const BLUEPRINT_NODES = [
     module: 'Soundness',
     kind: 'theorem',
     tier: 5,
-    titleFi: 'Muistiturvallisuus (A2.memory_safe & A1.memory_safe)',
     titleEn: 'Memory Safety Theorem (A2.memory_safe & A1.memory_safe)',
-    explainFi:
-      'PÄÄLAUSE 1: Jokainen hyvin tyypitetty lähdekielinen ohjelma, joka käynnistetään tyhjästä muistista (emptyMem), ei koskaan saavuta jumiutunutta tilaa (¬ Stuck P m\' s\') — ei use-after-free-, double-free- tai roikkuvan näkymän virheitä.',
     explainEn:
       'MAIN THEOREM 1: Every well-typed source program run from the empty store (emptyMem) never reaches a stuck configuration (¬ Stuck P m\' s\') — zero use-after-free, double-free, or dangling view reads.',
     deps: ['reach_ok', 'progress'],
@@ -781,10 +840,7 @@ const BLUEPRINT_NODES = [
     module: 'Soundness',
     kind: 'theorem',
     tier: 5,
-    titleFi: 'Vuodottomuus valmistuessa (A2.no_leak_end)',
     titleEn: 'Zero Leaks on Normal Exit (A2.no_leak_end)',
-    explainFi:
-      'PÄÄLAUSE 2: Kun hyvin tyypitetty ohjelma suorittuu loppuun (.ok m\' .skip), jokainen sen suorituksen aikana varaama keko-osoite on vapautettu: ∀ i, m\'.alloc i = false.',
     explainEn:
       'MAIN THEOREM 2: When a well-typed program finishes (.ok m\' .skip), every heap allocation it ever made has been freed: ∀ i, m\'.alloc i = false.',
     deps: ['reach_ok', 'Covers'],
@@ -795,10 +851,7 @@ const BLUEPRINT_NODES = [
     module: 'Soundness',
     kind: 'theorem',
     tier: 5,
-    titleFi: 'Vuodottomuus paniikissa (A2.no_leak_panic)',
     titleEn: 'Zero Leaks on Uncaught Panic (A2.no_leak_panic)',
-    explainFi:
-      'PÄÄLAUSE 3: Kun hyvin tyypitetty ohjelma päättyy kaappaamattomaan paniikkiin (.panic m\'), pinon purkaminen (drop journal) on vapauttanut jokaisen varauksen: ∀ i, m\'.alloc i = false.',
     explainEn:
       'MAIN THEOREM 3: When a well-typed program terminates via an uncaught panic (.panic m\'), unwinding has freed every heap allocation: ∀ i, m\'.alloc i = false.',
     deps: ['reach_ok', 'panic_unwind', 'Covers'],
@@ -807,29 +860,28 @@ const BLUEPRINT_NODES = [
 
 const a1Modules = buildPhaseData('A1');
 const a2Modules = buildPhaseData('A2');
+const a3Modules = buildPhaseData('A3');
 const rules = parseRulesMd();
 const holes = parseHolesCorpus();
+
+function summarizePhase(mods) {
+  return {
+    modules: mods.length,
+    lines: mods.reduce((acc, m) => acc + m.lineCount, 0),
+    theorems: mods.reduce((acc, m) => acc + m.counts.theorem, 0),
+    defs: mods.reduce((acc, m) => acc + m.counts.def, 0),
+    inductives: mods.reduce((acc, m) => acc + m.counts.inductive + m.counts.structure, 0),
+    totalDecls: mods.reduce((acc, m) => acc + m.counts.total, 0),
+  };
+}
 
 const stats = {
   leanToolchain: readFileSync(join(FORMAL_DIR, 'lean-toolchain'), 'utf8').trim(),
   axioms: ['propext', 'Classical.choice', 'Quot.sound'],
   sorryCount: 0,
-  a1: {
-    modules: a1Modules.length,
-    lines: a1Modules.reduce((acc, m) => acc + m.lineCount, 0),
-    theorems: a1Modules.reduce((acc, m) => acc + m.counts.theorem, 0),
-    defs: a1Modules.reduce((acc, m) => acc + m.counts.def, 0),
-    inductives: a1Modules.reduce((acc, m) => acc + m.counts.inductive + m.counts.structure, 0),
-    totalDecls: a1Modules.reduce((acc, m) => acc + m.counts.total, 0),
-  },
-  a2: {
-    modules: a2Modules.length,
-    lines: a2Modules.reduce((acc, m) => acc + m.lineCount, 0),
-    theorems: a2Modules.reduce((acc, m) => acc + m.counts.theorem, 0),
-    defs: a2Modules.reduce((acc, m) => acc + m.counts.def, 0),
-    inductives: a2Modules.reduce((acc, m) => acc + m.counts.inductive + m.counts.structure, 0),
-    totalDecls: a2Modules.reduce((acc, m) => acc + m.counts.total, 0),
-  },
+  a1: summarizePhase(a1Modules),
+  a2: summarizePhase(a2Modules),
+  a3: summarizePhase(a3Modules),
   holesCount: holes.length,
   holesByPhase: {
     A1: holes.filter((h) => h.phase === 'A1').length,
@@ -846,12 +898,19 @@ function stripModuleDecls(modules) {
   }));
 }
 
-// Extract the landmark declarations from A2 for instant SSR rendering before formal-decls.json loads
+// Extract the landmark declarations from A2 and A3 for instant SSR rendering before formal-decls.json loads
 const blueprintIds = new Set(BLUEPRINT_NODES.map((n) => n.name));
 const initialDecls = {};
 for (const mod of a2Modules) {
   for (const d of mod.decls) {
     if (blueprintIds.has(d.name) || mod.name === 'Soundness') {
+      initialDecls[d.name] = d;
+    }
+  }
+}
+for (const mod of a3Modules) {
+  if (mod.name === 'Claim' || mod.name === 'Make') {
+    for (const d of mod.decls) {
       initialDecls[d.name] = d;
     }
   }
@@ -864,12 +923,14 @@ const tsPayload = {
   rules,
   holes,
   modules: {
+    A3: stripModuleDecls(a3Modules),
     A2: stripModuleDecls(a2Modules),
     A1: stripModuleDecls(a1Modules),
   },
 };
 
 const jsonPayload = {
+  A3: a3Modules,
   A2: a2Modules,
   A1: a1Modules,
 };
@@ -879,7 +940,7 @@ const typesHeader = `// Generated by webdocs/scripts/gen-formal-data.mjs — do 
 export interface FormalDecl {
   id: string;
   name: string;
-  phase: 'A1' | 'A2';
+  phase: 'A1' | 'A2' | 'A3';
   module: string;
   kind: 'theorem' | 'def' | 'abbrev' | 'inductive' | 'structure';
   startLine: number;
@@ -896,14 +957,13 @@ export interface FormalDecl {
 export interface FormalModuleSummary {
   id: string;
   name: string;
-  phase: 'A1' | 'A2';
+  phase: 'A1' | 'A2' | 'A3';
   path: string;
   lineCount: number;
   imports: string[];
   doc: string;
   layer: number;
   category: string;
-  summaryFi: string;
   summaryEn: string;
   counts: {
     theorem: number;
@@ -925,9 +985,7 @@ export interface BlueprintNode {
   module: string;
   kind: string;
   tier: number;
-  titleFi: string;
   titleEn: string;
-  explainFi: string;
   explainEn: string;
   deps: string[];
 }
@@ -957,6 +1015,7 @@ export interface FormalData {
     sorryCount: number;
     a1: { modules: number; lines: number; theorems: number; defs: number; inductives: number; totalDecls: number };
     a2: { modules: number; lines: number; theorems: number; defs: number; inductives: number; totalDecls: number };
+    a3: { modules: number; lines: number; theorems: number; defs: number; inductives: number; totalDecls: number };
     holesCount: number;
     holesByPhase: { A1: number; A2: number; A3: number; B: number };
   };
@@ -965,6 +1024,7 @@ export interface FormalData {
   rules: FormalRuleRow[];
   holes: HoleProbe[];
   modules: {
+    A3: FormalModuleSummary[];
     A2: FormalModuleSummary[];
     A1: FormalModuleSummary[];
   };
@@ -1046,6 +1106,7 @@ function bpCrown() {
 }
 
 let blueprint = readFileSync(BLUEPRINT_MD, 'utf8');
+blueprint = bpHeadline(blueprint, 'A3', stats.a3);
 blueprint = bpHeadline(blueprint, 'A2', stats.a2);
 blueprint = bpHeadline(blueprint, 'A1', stats.a1);
 blueprint = bpRegion(blueprint, 'A2 module DAG', bpDag(a2Modules));
@@ -1069,6 +1130,7 @@ writeFileSync(BLUEPRINT_MD, blueprint);
 
 console.log(
   `formal data → ${OUTPUT_TS}, ${OUTPUT_JSON} & ${BLUEPRINT_MD}\n` +
+    `  A3: ${stats.a3.modules} modules, ${stats.a3.lines.toLocaleString('en-US')} lines, ${stats.a3.theorems} theorems, ${stats.a3.totalDecls} total declarations\n` +
     `  A2: ${stats.a2.modules} modules, ${stats.a2.lines.toLocaleString('en-US')} lines, ${stats.a2.theorems} theorems, ${stats.a2.totalDecls} total declarations\n` +
     `  A1: ${stats.a1.modules} modules, ${stats.a1.lines.toLocaleString('en-US')} lines, ${stats.a1.theorems} theorems, ${stats.a1.totalDecls} total declarations\n` +
     `  Holes: ${stats.holesCount} soundness probes (A1=${stats.holesByPhase.A1}, A2=${stats.holesByPhase.A2}, A3=${stats.holesByPhase.A3}, B=${stats.holesByPhase.B})`

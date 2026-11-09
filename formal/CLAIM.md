@@ -1,25 +1,26 @@
 # The claim
 
-> **Status: A1, A2, A3.0, A3.1, A3.4, and the second cuts of A3.2, A3.3,
-> A3.5 and A3.6 are proven** (`A1.memory_safe`, `A2.memory_safe`,
-> `A2.no_leak_end`, `A3.claim`, [`README.md`](README.md)); the rest of
-> A3.2, A3.3, A3.5 and A3.6, and B–D, are the statement the proof is
-> working towards, not one it has reached.
+> **Status: A1, A2 and A3 are proven** (`A1.memory_safe`, `A2.memory_safe`,
+> `A2.no_leak_end`, `A2.no_leak_panic`, `A3.claim`, `A3.claim_made`;
+> [`README.md`](README.md)). Each phase's section below names what its
+> calculus leaves out. Phases B–D are the statement the proof is working
+> towards, not one it has reached.
 
 ## Statement
 
 **Every program the NURL compiler accepts, outside the bodies of `unsafe`
 functions and its `unsafe` assertions, is memory-safe and leak-free** —
-*proven so far (A1, A2) for the ownership rules of the single-threaded
-language as the calculus models them, (A3.0) for threads that share
-nothing but what they move, (A3.1) for threads that also share `Arc`
-payloads, (A3.2, first cut) `Locked` values, (A3.3, first cut)
-`RwLocked` values read through frozen guards, (A3.4) `Atomic` words
-and channels, and (A3.5, first cut) library handles whose copies are one
-state, which cross a thread only with all their owners, and (A3.6, first
-cut) module globals set at start; the data-race clause for the rest of
-what threads share is the rest of A3.2, A3.3, A3.5 and A3.6, and the link
-from the rules to nurlc and its code is B–D*
+*proven (A1, A2) for the ownership rules of the single-threaded language
+as the calculus models them, and (A3.0–A3.6) for programs whose threads
+share: threads that move values (A3.0), `Arc`'s frozen payloads (A3.1),
+`Locked` and `Mutex` values (A3.2), `RwLocked` values with their `% Frozen`
+read guards, which are `% NotSend` (A3.3), `Atomic` words and channels
+(A3.4), library handles whose copies are one state, under the crossing
+check, and closures and trait objects that cross threads (A3.5, A3.5b,
+A3.5c), and module globals set by their `make` before `main` (A3.6). What
+each milestone's calculus leaves out is listed in its section below
+(the phase-D obligations on the runtime among it; deadlock freedom is not
+claimed). The link from the rules to nurlc and its code is B–D*
 (below): no use after free, no double free, no read through a dangling
 view, no out-of-bounds access, no data race, and everything it allocated
 is released — on the panic path as much as the normal one.
@@ -93,11 +94,11 @@ the LLVM / C11 memory model rather than redefining it.
   and an owner given a lend that cannot come out of its old value
   (`rules/t375.md`); it does not cover the hand-over. Those programs are
   outside the claim until an A2 rule (or phase C/D) covers the hand-over.
-- **A3** — the theorem with threads: a well-typed program has no data
+- **A3** *(proven)* — the theorem with threads: a well-typed program has no data
   race. Proven under sequential consistency, where a race is two threads'
   next steps touching one address, one of them writing, not both atomic.
-  Carried to C11 / LLVM by the DRF-SC theorem (below). The statement is
-  `A3.Claim` in `A3/Defs.lean`, and `A3/DESIGN.md` gives the semantics
+  Carried to C11 / LLVM by the DRF-SC theorem (below). The statements are
+  `A3.claim` (`A3/Claim.lean`) and `A3.claim_made` (`A3/Make.lean`), and `A3/DESIGN.md` gives the semantics
   and the milestones.
   - **A3.0** *(proven)* — threads that only move. A function the program
     marks is called on a new thread; its parameters are `sink` and of
@@ -134,10 +135,11 @@ the LLVM / C11 memory model rather than redefining it.
       refcount 0, which may be earlier than the sweep. Phase D must show
       that refcount 0 means no live binding reaches the block. That
       follows from typing, since every borrow of a payload depends on a
-      share. An `Arc` of a value that holds views or closures is not
-      typed yet, and neither is an `Arc` of a library handle whose copies
-      are one state (A3.5).
-  - **A3.2, first cut** *(proven)* — `Locked`: a value one thread at a
+      share. An `Arc` of a value that holds views is not typed. An `Arc`
+      of a closure is A3.5b's (a `sync` one, below), and the typing refuses
+      an `Arc` of a library handle (`RhsT.arcNew` asks `t.hasCell = false`:
+      a cell share is not Sync, A3.5).
+  - **A3.2** *(proven)* — `Locked`: a value one thread at a
     time changes.
     - **The calculus.** A lock is a second kind of block. `locked_new`
       moves a value into a lock block, and `Locked_share` makes a new
@@ -249,7 +251,7 @@ the LLVM / C11 memory model rather than redefining it.
       typed since A3.2's and A3.5's second cuts), `chan_len`,
       `chan_is_closed` and `select`. Deadlock freedom, and that
       a waiting `chan_recv` is woken, are not claimed.
-  - **A3.3, second cut** *(proven)* — `RwLocked`: a value many threads
+  - **A3.3** *(proven)* — `RwLocked`: a value many threads
     read at once, through frozen read guards, and one changes.
     - **The calculus.** An `RwLocked` is A3.2's lock block. `rw_new`,
       `RwLocked_share` and the write side (`rw_write` / `wguard_update` /
@@ -300,7 +302,7 @@ the LLVM / C11 memory model rather than redefining it.
       it, which may be after the guard's drop, where the runtime unlocks.
       As for `Arc`'s refcount, phase D must show that no live binding
       reaches the payload through the guard once it is dropped.
-  - **A3.5, first cut** *(proven)* — a library handle whose copies are
+  - **A3.5** *(proven)* — a library handle whose copies are
     one state (`PNCounter`, a `TcpConn`, a `Cell`): Send, not Sync.
     - **The calculus.** A handle is a cell share (`Val.cell k`, type
       `Ty.cell t`) of an ordinary lock block. `Rhs.cellNew` makes one,
@@ -325,7 +327,7 @@ the LLVM / C11 memory model rather than redefining it.
       spawn through `SendCheck`.
     - **In Lean.** `A2.memory_safe`, `A2.no_leak_end`, `A2.no_leak_panic`
       and `A3.claim` hold with all of this, on the standard axioms only.
-    - **Closures that cross (A3.5b, first cut).** A closure's type says
+    - **Closures that cross (A3.5b).** A closure's type says
       where it may go: `Ty.fn ms q`, with `q` one of `any`, `send` (an
       owned environment that holds no view; a library handle in it is
       covered by the spawn's crossing check), `sync` (`send` and no
@@ -427,7 +429,7 @@ the LLVM / C11 memory model rather than redefining it.
       share of it is argued from typing, not a lemma, and phase D must
       show the runtime's reference count of a handle's block equals the
       model's owners.
-  - **A3.6, second cut** *(proven)* — module globals reached by several
+  - **A3.6** *(proven)* — module globals reached by several
     threads.
     - **The calculus.** A global set at start (`: ( Locked T ) g ( make )`)
       is a field of the configuration (`Cfg.gl`, `Mem.gl`) that every

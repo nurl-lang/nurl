@@ -592,8 +592,8 @@ way the standard library vouches for its own raw code. Calling an
 `unsafe` function needs no marking. The rest of the program is held to
 the ownership rules (docs/MEMORY.md §6), and **every program accepted
 without an `unsafe` function of its own is memory-safe and leak-free**
-(docs/MEMORY.md §6.2 — the ownership rules of the single-threaded
-language, `A2.memory_safe` and `A2.no_leak_end`, are mechanically proven
+(docs/MEMORY.md §6.2 — the ownership and concurrency rules,
+`A2.memory_safe`, `A2.no_leak_end` and `A3.claim`, are mechanically proven
 sound in Lean 4 under `formal/`, and every hole found so far
 is closed and held by a probe in `tools/fuzz/holes/`, or listed in
 `docs/LIMITATIONS.md` while it is open).
@@ -2938,8 +2938,8 @@ pointer casts, the raw-memory primitives and foreign calls are its author's
 (or, for `raw`, its `unsafe` caller's) to get right. Everything else is held
 to the rules above — every program accepted without an `unsafe` function of
 its own is memory-safe and leak-free ([`docs/MEMORY.md` §6.2](MEMORY.md)):
-the ownership rules of the single-threaded language (`A2.memory_safe`,
-`A2.no_leak_end`) are mechanically proven sound in Lean 4
+the ownership and concurrency rules (`A2.memory_safe`,
+`A2.no_leak_end`, `A3.claim`) are mechanically proven sound in Lean 4
 ([`formal/`](../formal/)), and every hole found so far is
 closed and held by a probe in `tools/fuzz/holes/` (or listed in
 [`LIMITATIONS.md`](LIMITATIONS.md) while it is open); a handle whose copies
