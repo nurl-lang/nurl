@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+file_map len=1048589 same=yes wrong=0 sum=133694025
+file_map_stream len=1048589 same=yes wrong=0 sum=133694025
+empty len=0 same=yes wrong=0 sum=0
+missing: not found
+deleted after unmap

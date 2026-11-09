@@ -459,8 +459,8 @@ raw @ pt_tensor_ptr Pt p__h i idx → *u {
     }
 }
 
-// mmap-backed where the platform has it (POSIX), a whole-file read where it
-// does not (wasm, win32).
+// Mapped where the platform maps files (POSIX, Windows, the unikernel), a
+// whole-file read where it does not (wasm).
 @ pt_open s path → !Pt String {
     ?? ( file_map path ) {
         T m → {

@@ -8,10 +8,11 @@
 //                                     for a zero-copy hand-off (a device
 //                                     upload) whose caller keeps `m` alive
 //
-// Where the platform maps files (POSIX) the bytes are mmap'd PROT_READ /
-// MAP_PRIVATE and paged in as they are read — opening a 10 GB model costs
-// nothing until its tensors are touched. Elsewhere (wasm, win32) the file
-// is read whole; the bytes are the same either way. The last owner of a
+// The bytes are mapped read-only — mmap PROT_READ / MAP_PRIVATE on POSIX
+// and the unikernel, CreateFileMappingW / MapViewOfFile on Windows — and
+// paged in as they are read: opening a 10 GB model costs nothing until its
+// tensors are touched. Only wasm, which maps no files, reads the file
+// whole; the bytes are the same either way. The last owner of a
 // MappedFile unmaps it. A mapping is read-only, so its copies may be
 // shared between threads.
 //
@@ -32,7 +33,7 @@ raw : MappedFileImpl { * u p i n b mapped ( Vec u ) owned }
 
 % Drop MappedFileImpl {
     unsafe @ drop MappedFileImpl x → v {
-        ? . x mapped { : i32 _u ( munmap . x p . x n ) } {}
+        ? . x mapped { ( nurl_file_unmap . x p . x n ) } {}
     }
 }
 
@@ -55,32 +56,27 @@ unsafe @ file_map s path → !MappedFile IoErr { ^ ( __file_map path F ) }
 
 // The same for a loader that reads the whole file once, front to back (a
 // model's weights onto a device): every page is mapped in one pass
-// (MAP_POPULATE, Linux), so copy threads do not each take a page fault at
-// a time, and the kernel reads ahead for the one sequential sweep
-// (MADV_SEQUENTIAL). Where a hint is unknown the mapping is file_map's.
+// (MAP_POPULATE on Linux, PrefetchVirtualMemory on Windows), so copy
+// threads do not each take a page fault at a time, and the kernel reads
+// ahead for the one sequential sweep (MADV_SEQUENTIAL, FILE_FLAG_SEQUENTIAL_SCAN).
+// Where a hint is unknown the mapping is file_map's.
 unsafe @ file_map_stream s path → !MappedFile IoErr { ^ ( __file_map path T ) }
+
+// The runtime maps the file (stdlib/runtime_core.c): the mapping, its
+// length in `len[0]` — -1 on failure with errno set, 0 for an empty file
+// (nothing to map), -2 where the platform maps no files (wasm).
+& `c` @ nurl_file_map in s path i stream *i len → *u
+
+& `c` @ nurl_file_unmap *u p i n → v
 
 unsafe @ __file_map s path b stream → !MappedFile IoErr {
     ? == # i path 0 { ^ @ !MappedFile IoErr { F @ IoErr { Other } } } {}
-    ? != ( posix_const `MAP_PRIVATE` ) -1 {
-        : i32 fd ( open path # i32 ( posix_const `O_RDONLY` ) # i32 0 )
-        ? < # i fd 0 { ^ @ !MappedFile IoErr { F ( _io_err_of_kind ( errno_kind ) ) } } {}
-        : i sz ( lseek fd 0 # i32 2 )
-        // an empty file has nothing to map (and mmap refuses length 0)
-        ? <= sz 0 {
-            : i32 _c ( close fd )
-            ^ @ !MappedFile IoErr { T ( __mf_of_vec ( vec_new [u] ) ) }
-        } {}
-        : ~ i flags ( posix_const `MAP_PRIVATE` )
-        : i pop ( posix_const `MAP_POPULATE` )
-        ? & stream != pop -1 { = flags | flags pop } {}
-        : *u m ( mmap # *u 0 sz # i32 ( posix_const `PROT_READ` ) # i32 flags fd 0 )
-        : i32 _c ( close fd )
-        ? == # i m -1 { ^ @ !MappedFile IoErr { F @ IoErr { ReadFailed } } } {}
-        : i adv ( posix_const `MADV_SEQUENTIAL` )
-        ? & stream != adv -1 { : i32 _a ( madvise m sz # i32 adv ) } {}
-        ^ @ !MappedFile IoErr { T @ MappedFile { ( arc_new [MappedFileImpl] @ MappedFileImpl { m sz T ( vec_new [u] ) } ) } }
-    } {}
+    : ( Vec i ) len ( vec_zeroed [i] 1 )
+    : *u m ( nurl_file_map path ? stream 1 0 ( vec_data [i] len ) )
+    : i n ( vec_at [i] len 0 )
+    ? > n 0 { ^ @ !MappedFile IoErr { T @ MappedFile { ( arc_new [MappedFileImpl] @ MappedFileImpl { m n T ( vec_new [u] ) } ) } } } {}
+    ? == n 0 { ^ @ !MappedFile IoErr { T ( __mf_of_vec ( vec_new [u] ) ) } } {}
+    ? == n -1 { ^ @ !MappedFile IoErr { F ( _io_err_of_kind ( errno_kind ) ) } } {}
     ?? ( read_file_bytes path ) {
         T data → { ^ @ !MappedFile IoErr { T ( __mf_of_vec data ) } }
         F e → { ^ @ !MappedFile IoErr { F e } }
