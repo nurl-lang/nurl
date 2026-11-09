@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_call_named_reorder_heap.nu:13:24: error: argument 'v' of 'clr2' holds heap storage, and this call names its arguments out of the order 'clr2' declares them: the borrow checker follows such an argument only in declaration order. Name them in the order 'clr2' declares them, or pass them positionally.
+    : i r ( clr2 v : v n : 0 )
+                       ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

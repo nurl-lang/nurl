@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_call_named_twice.nu:7:21: error: argument 'x' of 'add' is given twice: positionally, and here by name. Drop one of them.
+    : i r ( add 1 2 x : 3 )
+                    ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

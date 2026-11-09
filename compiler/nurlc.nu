@@ -13999,6 +13999,57 @@ unsafe @ nurl_lex_peek4_type i h → i {
     ^ found
 }
 
+// Does the call (lexer at its first argument) set its arguments in their
+// declared order — `( clr v: v )`, `( box x label: s width: 3 )`, `( f a
+// c: 3 )` with `b` defaulted: the `name:` labels at its top level name
+// parameters in increasing order, and every parameter past the last one
+// named has a default? Then nothing is reordered: gen_call takes it as a
+// positional call — skipping each label, splicing in the default of a
+// parameter a label skips over, refusing a positional argument after a
+// label — and every rule of the positional path applies to its arguments
+// (agora #434). Restores the lexer position.
+@ __kw_labels_in_order i lex i syms s fname → b {
+    : i n ( nurl_str_to_int ( nurl_sym_get2 syms fname `__kw_n` ) )
+    : i save ( nurl_lex_cur_start lex )
+    : ~ i depth 0
+    : ~ i last -1
+    : ~ b ok T
+    : ~ b done F
+    ~ ! done {
+        : i tt ( nurl_lex_type lex )
+        ? == tt TT_EOF { = done T } {
+            ? | | == tt TT_LPAREN == tt TT_LBRACK == tt TT_LBRACE
+            { = depth + depth 1 ( nurl_lex_advance lex ) } {
+                ? == tt TT_RPAREN
+                { ? == depth 0 { = done T } { = depth - depth 1 ( nurl_lex_advance lex ) } } {
+                    ? | == tt TT_RBRACK == tt TT_RBRACE
+                    { = depth - depth 1 ( nurl_lex_advance lex ) } {
+                        ? & & == depth 0 ( is_ident_tok tt ) == ( nurl_lex_peek_type lex ) TT_COLON {
+                            : i j ( __kw_param_index syms fname n ( nurl_lex_val lex ) )
+                            ? > j last { = last j } { = ok F = done T }
+                        } {}
+                        ( nurl_lex_advance lex ) } } } }
+    }
+    ( nurl_lex_set_pos lex save )
+    ? | ! ok < last 0 { ^ F } {}
+    : ~ i k + last 1
+    ~ < k n {
+        ? == 0 ( nurl_sym_len syms ( __kw_key fname `pd` k ) ) { ^ F } {}
+        = k + k 1
+    }
+    ^ T
+}
+
+// The position of `fname`'s parameter `name` (of its `n`), or -1.
+@ __kw_param_index i syms s fname i n s name → i {
+    : ~ i j 0
+    ~ < j n {
+        ? ( seq ( nurl_sym_get syms ( __kw_key fname `pn` j ) ) name ) { ^ j } {}
+        = j + j 1
+    }
+    ^ -1
+}
+
 // Per-call scratch key for the argstr piece chosen for parameter `i`.
 // `seq` is a unique per-call id (g_func_count) so nested kwargs calls
 // (an argument that is itself a kwargs call) never clobber each other.
@@ -14348,6 +14399,11 @@ unsafe @ __kw_trim s raw → s {
             { ( die lex ( nurl_str_cat3 `call to '` fname
                 ( nurl_str_cat3 `' has no parameter named '` aname `'. Named arguments must match the declared parameter names exactly — check the declaration, or pass them positionally in declaration order.` ) ) ) }
             {}
+            // (One given already — positionally, or by name before: the
+            // later value replaced the earlier one in silence.)
+            ? != 0 ( nurl_sym_len syms ( __kw_slot_key kwseq slot ) )
+            { ( die lex ( nurl_str_cat3 `argument '` aname ( nurl_str_cat3 `' of '` fname `' is given twice: here by name, and before it. Drop one of them.` ) ) ) }
+            {}
         }
         { ? seen_named
             { ( die lex `a positional argument cannot follow a named one — once you write 'name: value', every later argument must be named too. Either name them all from that point, or pass them all positionally in declaration order.` ) } {}
@@ -14360,6 +14416,15 @@ unsafe @ __kw_trim s raw → s {
         : s origin_value ( nurl_lex_val lex )
         : ~ s av ( gen_operand lex syms cg )
         : ~ s at ( nurl_get_last_type )
+        // (This path assembles the call in another order than it reads the
+        // arguments, and keeps none of the positional path's borrow rows:
+        // an owner or a borrow handed here — a binding or a field path of
+        // a type that holds heap storage — would go unchecked, a clearer
+        // ending no borrow of its elements (agora #434). Named in declared
+        // order, the call takes the positional path, rows and all.)
+        ? & & != 0 g_borrowck | ( is_ident_tok origin_tt ) == origin_tt TT_DOT ( bck_is_heap_lty ( nurl_llty at ) ) {
+            ( die lex ( nurl_str_cat4 `argument '` ( nurl_sym_get syms ( __kw_key fname `pn` slot ) ) ( nurl_str_cat3 `' of '` fname `' holds heap storage, and this call names its arguments out of the order '` ) ( nurl_str_cat3 fname `' declares them: the borrow checker follows such an argument only in declaration order. Name them in the order '` ( nurl_str_cat fname `' declares them, or pass them positionally.` ) ) ) )
+        } {}
         = g_origin_arg_str & ( seq ( nurl_llty at ) `i8*` ) ( __auto_str_ctx )
         ( origin_call_arg syms origin_result fname slot origin_tt origin_value )
         = g_origin_arg_str F
@@ -15897,13 +15962,17 @@ unsafe @ gen_call i lex i syms i cg → s {
     // shadowed by a local, and the call uses `name:` labels, route to the
     // reordering path. A `name:` label never appears at a positional call's
     // top level, so legacy calls never divert → byte-identical codegen.
-    ? & & & & != 0 ( nurl_sym_len2 syms fname `__kw_n` )
+    // (…unless it sets them in declared order, __kw_labels_in_order: then
+    // it is a positional call whose labels the argument loop below skips,
+    // agora #434.)
+    : b __kw_call & & & & != 0 ( nurl_sym_len2 syms fname `__kw_n` )
     == 0 ( nurl_str_len callee_inout )
     == 0 ( nurl_str_len callee_sink )
     ! __callee_shadowed
     ( __kw_has_named lex )
-    { ^ ( gen_call_kwargs lex syms cg fname ) }
-    {}
+    : b __kw_inorder ? __kw_call ( __kw_labels_in_order lex syms fname ) F
+    : ~ b __kw_seen F
+    ? & __kw_call ! __kw_inorder { ^ ( gen_call_kwargs lex syms cg fname ) } {}
     : ~ s owned_arg_temps ``
     // The impl a method call dispatches to statically, once the receiver's
     // type is known (__static_impl_name): `` for any other call.
@@ -15989,6 +16058,36 @@ unsafe @ gen_call i lex i syms i cg → s {
     : ~ s __dt_carry ``
     : ~ s __di_carry ``
     ~ != ( nurl_lex_type lex ) TT_RPAREN {
+        // (A keyword call in declared order, __kw_labels_in_order — agora
+        // #434: a `name:` label goes, and the argument is that parameter's.
+        // The parameters it skips over take their defaults first, spliced
+        // in as gen_call's trailing ones are; one given positionally already
+        // is given twice. After a label, every argument has one.)
+        ? __kw_inorder {
+            ? & ( is_ident_tok ( nurl_lex_type lex ) ) == ( nurl_lex_peek_type lex ) TT_COLON {
+                : s __kwl ( nurl_lex_val lex )
+                : i __kwj ( __kw_param_index syms fname ( nurl_str_to_int ( nurl_sym_get2 syms fname `__kw_n` ) ) __kwl )
+                ? < __kwj arg_idx { ( die lex ( nurl_str_cat3 `argument '` __kwl ( nurl_str_cat3 `' of '` fname `' is given twice: positionally, and here by name. Drop one of them.` ) ) ) } {}
+                ~ < arg_idx __kwj {
+                    : s __kwp ( __kw_default_or_die lex syms cg fname arg_idx )
+                    ? != first 0 {
+                        = argstr ( nurl_str_cat __kwp `` )
+                        = first 0
+                        = first_arg_type ( str_first_word __kwp )
+                        = first_arg_val ( str_skip_word __kwp )
+                    } {
+                        = argstr ( nurl_str_cat3 argstr `, ` __kwp )
+                        = rest_argstr ? == 0 ( nurl_str_len rest_argstr ) ( nurl_str_cat __kwp `` ) ( nurl_str_cat3 rest_argstr `, ` __kwp )
+                    }
+                    = arg_idx + arg_idx 1
+                }
+                ( nurl_lex_advance lex )
+                ( nurl_lex_advance lex )
+                = __kw_seen T
+            } {
+                ? __kw_seen { ( die lex `a positional argument cannot follow a named one — once you write 'name: value', every later argument must be named too. Either name them all from that point, or pass them all positionally in declaration order.` ) } {}
+            }
+        } {}
         ? & > arg_idx 0 != 0 ( nurl_sym_len syms `__deferred_temps__` ) {
             = __dt_carry ( __words_join __dt_carry ( nurl_sym_get syms `__deferred_temps__` ) )
             = __di_carry ( __words_join __di_carry ( nurl_sym_get syms `__deferred_ids__` ) )
