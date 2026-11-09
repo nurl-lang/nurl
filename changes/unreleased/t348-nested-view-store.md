@@ -7,3 +7,7 @@
   block-local struct's field. These are refused now, as the one-level
   store already was. A nested store of a view whose source outlives the
   holder stays accepted.
+  A nested store is now a store into the root binding in every respect.
+  A borrowed parameter stored there is copied, which fixes a use after
+  free. A view stored by a field store whose value is a block that stores
+  into another binding is tied to the right binding.
