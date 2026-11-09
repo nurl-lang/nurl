@@ -3065,6 +3065,9 @@ unsafe @ note_unsafe_item s pos s what → v {
 // arguments it may lend is no bare name but may lend (gen_assign's #412
 // refusal); and it may lend at all — for the call it is an argument of.
 : ~ b g_call_lend_unnamed F
+// …or, for a callee not compiled yet, whether any argument is such a one
+// (its lent positions are not known; agora #461).
+: ~ b g_call_lend_unk F
 : ~ b g_call_may_lend F
 // What each callee lends (mem_fn_lend_sources), once every summary is
 // final: the deferred walks' memo, 0 outside them.
@@ -15785,6 +15788,11 @@ unsafe @ gen_call i lex i syms i cg → s {
     // still lend what they read: a field, a join, a call that may lend —
     // not a literal or a fresh value (agora #412).
     : ~ s arg_lendy ``
+    // (…and, in a closure body, the bindings those name — what a body local
+    // bound to the call may be read out of besides the lent names, for
+    // __clo_deriv_note; `*` when one has no source expression here. Agora
+    // #461.)
+    : ~ s arg_lendy_nm ``
     // The arguments that synchronise themselves (`% Sync`: a Mutex, a
     // Channel, a Locked), noted once an Arc has been seen (§6.5).
     : ~ s __arc_sync ``
@@ -17173,6 +17181,9 @@ unsafe @ gen_call i lex i syms i cg → s {
         ? ( seq bck_arg_nm `-` ) {
             ? | | | | == arg_eff_tt TT_DOT == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST ( is_ident_tok arg_eff_tt ) & == arg_eff_tt TT_LPAREN g_call_may_lend {
                 = arg_lendy ( nurl_str_cat3 arg_lendy ` ` ( nurl_str_int arg_idx ) )
+                ? & != 0 g_bck_closure_depth ! ( seq arg_lendy_nm `*` ) {
+                    = arg_lendy_nm ? | | == 0 ( nurl_str_len arg_sx ) ( seq arg_sx `*` ) ( seq arg_sx `-` ) ( nurl_str_cat `*` `` ) ( __word_union arg_lendy_nm ( __sx_bind_names arg_sx ) )
+                } {}
             } {}
         } {}
         : s __acs ( __clo_cs_expr syms bck_arg_tt bck_arg_val at )
@@ -18499,6 +18510,14 @@ unsafe @ gen_call i lex i syms i cg → s {
     // #412) — and whether this call may lend at all, for the call it is an
     // argument of (arg_lendy).
     = g_call_lend_unnamed ? == 0 ( nurl_str_len arg_lendy ) F | ( __lend_pos_unnamed __lend_ix arg_lendy ) ( __lend_pos_unnamed __ra_lent arg_lendy )
+    // (…or, for a callee not compiled yet — a generic instance requested
+    // here — whose lent positions are not known, whether any argument is
+    // such a one: for the reads __pderiv_note and __clo_deriv_note note
+    // beside the lent names, agora #461. A flag of its own: gen_assign's
+    // #412 refusal reads g_call_lend_unnamed with the callee's known
+    // positions only.)
+    = g_call_lend_unk & != 0 ( nurl_str_len arg_lendy ) == 0 ( nurl_sym_len g_fn_compiled call_name )
+    ? != 0 g_bck_closure_depth { ( nurl_sym_def syms `__last_call_lendy_nm__` arg_lendy_nm ) } {}
     // (The callee not compiled yet: its summary is not known, so it may.)
     = g_call_may_lend ? | | g_call_lend_unnamed != 0 ( nurl_str_len __lend_ids ) != 0 ( nurl_str_len __ra_ids ) T == 0 ( nurl_sym_len g_fn_compiled call_name )
     // …and, for a decision that cannot wait for the callee's summaries (a
@@ -29226,8 +29245,15 @@ unsafe @ __clo_deriv_note i syms s name s vt i rhs_tt s rhs_val s lend s sx → 
     // out of what the sx names; and a call one of whose lent arguments has
     // no name beside those that do is read out of those as well
     // (g_call_lend_unnamed): the tests __pderiv_note makes, agora #461.)
-    ? & ( __lend_unnamed srcs ) | | | == rhs_tt TT_LPAREN == rhs_tt TT_QUEST == rhs_tt TT_QUESTQUEST & | == rhs_tt TT_LBRACE == rhs_tt TT_DOT ( __val_may_lend syms rhs_tt ) { = srcs ( __sx_bind_names sx ) } {
-        ? & == rhs_tt TT_LPAREN g_call_lend_unnamed { = srcs ( __word_union srcs ( __sx_bind_names sx ) ) } {}
+    // (Of a call, only what its arguments that are no bare name but may
+    // lend name — `__last_call_lendy_nm__`, gen_call: a bare name it lends
+    // is among its lent names already, and one it does not lend — `z` of
+    // `( either3 ( vec_at w 0 ) q z )` — is no source; a callee not
+    // compiled yet, g_call_lend_unk, may lend any of them.)
+    : s lnm ? == rhs_tt TT_LPAREN ( nurl_sym_get syms `__last_call_lendy_nm__` ) ( nurl_str_cat `*` `` )
+    : s lsx ? ( seq lnm `*` ) ( __sx_bind_names sx ) lnm
+    ? & ( __lend_unnamed srcs ) | | | == rhs_tt TT_LPAREN == rhs_tt TT_QUEST == rhs_tt TT_QUESTQUEST & | == rhs_tt TT_LBRACE == rhs_tt TT_DOT ( __val_may_lend syms rhs_tt ) { = srcs lsx } {
+        ? & == rhs_tt TT_LPAREN | g_call_lend_unnamed g_call_lend_unk { = srcs ( __word_union srcs lsx ) } {}
     }
     ( __clo_deriv_add name srcs )
 }
@@ -38238,7 +38264,7 @@ unsafe @ __pderiv_note i syms s name s vt i rhs_tt s rhs_val s lend s sx → v {
     // lends, so the value is read out of each parameter the sx leads to as
     // well, where it lends there, as a lend no name carries is; agora
     // #461.)
-    ? & & == rhs_tt TT_LPAREN g_call_lend_unnamed ( __sx_lendy sx ) { = cout ( __word_union cout ( __sx_param_reach syms sx F ) ) } {}
+    ? & & == rhs_tt TT_LPAREN | g_call_lend_unnamed g_call_lend_unk ( __sx_lendy sx ) { = cout ( __word_union cout ( __sx_param_reach syms sx F ) ) } {}
     ? & == 0 ( nurl_str_len out ) == 0 ( nurl_str_len cout ) { ^ v } {}
     : s ptr ( nurl_sym_get2 syms name `__ptr` )
     ? == 0 ( nurl_str_len ptr ) { ^ v } {}
