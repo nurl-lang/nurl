@@ -23920,10 +23920,17 @@ unsafe @ __blk_leave b val → v {
         : b blk_tail & blk_is_stmt == ( nurl_lex_type lex ) TT_RBRACE
         ? blk_tail {} { ( mem_exits_drain syms cg blk_is_stmt ) }
     }
+    // (A tail that is itself a block hands up that block's tail: `{ { v }
+    // }` ends in `v`.)
     ? any
     { ( bck_save_expr_carriers syms `__last_block_params__` __tail_tt __tail_tv )
-        ( nurl_sym_def syms `__tail_first_tt__` ( nurl_str_int __tail_tt ) )
-        ( nurl_sym_def syms `__tail_first_val__` __tail_tv )
+        ? != __tail_tt TT_LBRACE {
+            ( nurl_sym_def syms `__tail_first_tt__` ( nurl_str_int __tail_tt ) )
+            ( nurl_sym_def syms `__tail_first_val__` __tail_tv )
+            // (…and, a name, the storage it names here — a binding of the
+            // block's own shadowing an outer one is another.)
+            ( nurl_sym_def syms `__tail_first_ptr__` ? ( is_ident_tok __tail_tt ) ( nurl_sym_get2 syms __tail_tv `__ptr` ) `` )
+        } {}
         ( nurl_sym_def syms `__tail_callee__` __tail_callee )
         ( nurl_sym_def syms `__last_clo_members__` __tail_cm )
         ? == __tail_tt TT_DOT { ( nurl_sym_def syms `__tail_root_tt__` ( nurl_str_int __tail_root ) ) } {}
@@ -43936,7 +43943,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // and clear the side-channel a closure / aggregate literal
         // RHS would publish.
         : ~ i bck_rhs_tt ( nurl_lex_type lex )
-        : s bck_rhs_val ( nurl_lex_val lex )
+        : ~ s bck_rhs_val ( nurl_lex_val lex )
         // `= dst src` with a bare identifier on the right is the same
         // alias move `: T dst src` already is — `( string_free w ) = w c1`
         // is the canonical grow-a-String idiom, and `c1`'s handle lives
@@ -43980,6 +43987,16 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // (A try over a call binds the call's payload: what follows asks the
         // call, as mem_udrop_bind_flag does — agora #194.)
         ? & & == bck_rhs_tt TT_BACKSLASH == g_blk_tail_eff TT_LPAREN ( seq ( nurl_sym_get syms `__last_backslash_try__` ) `1` ) { = bck_rhs_tt TT_LPAREN } {}
+        // (A value block whose tail is the binding itself — `= v { v }`, `=
+        // v { : i t 1 v }`, `= v { { v } }` — is that binding given its own
+        // value, as `= v v` is: nothing dropped, nothing handed over. Read
+        // as a fresh value, the old one was released and the same buffer
+        // stored back; agora #554.)
+        : i __tl_tt ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) )
+        ? & & & == bck_rhs_tt TT_LBRACE ( is_ident_tok __tl_tt ) & ( seq ( nurl_sym_get syms `__tail_first_val__` ) name ) ( seq ( nurl_sym_get syms `__last_ident_name__` ) name ) & != 0 ( nurl_str_len ptr ) ( seq ( nurl_sym_get syms `__tail_first_ptr__` ) ptr ) {
+            = bck_rhs_tt __tl_tt
+            = bck_rhs_val ( nurl_str_cat name `` )
+        } {}
         ( __nc_bind_lend_note syms name bck_rhs_tt T )
         ( mem_note_assign_lend syms name vt bck_rhs_tt bck_rhs_val )
         = g_member_path_on __sxmp0
