@@ -5965,14 +5965,18 @@ unsafe @ gen_ret i lex i syms i cg → s {
         : s pf_idx ( str_first_word ( str_skip_word ( str_skip_word pfr ) ) )
         : s pf_fty ( str_first_word ( str_skip_word ( str_skip_word ( str_skip_word pfr ) ) ) )
         : s pf_rt ( nurl_get_last_type )
-        ? & & & != 0 ( nurl_str_len pf_ptr ) ( __is_handle_ty pf_fty ) == 0 g_bck_closure_depth == 0 g_defer_count {
+        ? & & != 0 ( nurl_str_len pf_ptr ) ( __is_handle_ty pf_fty ) == 0 g_bck_closure_depth {
             : ~ s pfl ( mem_payload_local_lend syms cg ret_first_root )
             ? != 0 ( nurl_str_len pfl ) {
                 // (Not where the binding the payload is read out of owns it
                 // on this path: its own drop answers then — agora #335.)
                 : s pfo ( __payload_owner_flag syms cg ret_first_root )
                 ? != 0 ( nurl_str_len pfo ) { = pfl ( __and_not cg pfl pfo ) } {}
-                : b pf_live ( __vget_live syms pf_ptr )
+                // (Copied under a `;` defer armed before this `^`: the chain
+                // runs while ps still holds its element and may read it —
+                // left lent there, ps's drop freed what the caller got;
+                // agora #561.)
+                : b pf_live & ( __vget_live syms pf_ptr ) == 0 ( nurl_sym_len g_fn_escapes `__defer_top_fn__` )
                 ? | pf_live ( __clone_supported pf_rt syms ) {
                     ? pf_live { ( mem_vget_field_consume syms cg pf_ptr pf_sty pf_idx pf_fty val pfl ) } { = val ( mem_emit_cloneif cg pf_rt val pfl ) }
                     = ret_pl_copied T
@@ -6063,7 +6067,15 @@ unsafe @ gen_ret i lex i syms i cg → s {
                     // (A `vec_get` element of a Vec this frame drops is taken
                     // out of its slot rather than copied: no allocation, and
                     // a value that cannot be copied leaves too.)
-                    : b __plv ( __vget_live syms ret_first_val )
+                    // (Not under a `;` defer armed before this `^`: the chain
+                    // runs after the take, while the Vec still holds its
+                    // element (spec §5.3), and a defer that reads the slot
+                    // read it emptied — a null-data String a C call faulted
+                    // on. Copied there instead, or refused where it cannot
+                    // be, as a lend is. A take replayed after the chain
+                    // would let a defer that clears the Vec free what the
+                    // caller holds: agora #561.)
+                    : b __plv & ( __vget_live syms ret_first_val ) == 0 ( nurl_sym_len g_fn_escapes `__defer_top_fn__` )
                     ? | __plv ( __clone_supported __plt syms ) {
                         ? __plv { ( mem_vget_consume syms cg ret_first_val __pll ) } { = val ( mem_emit_cloneif cg __plt val __pll ) }
                         : s __plo ( nurl_cg_reg cg )
