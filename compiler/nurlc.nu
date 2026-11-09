@@ -17539,11 +17539,21 @@ unsafe @ gen_call i lex i syms i cg → s {
             // module-end consume answer; one that changes it in place, a
             // `vec_push`, changes the element's own.)
             ? fr_lcopy {
+                // (…and does not store it: one that keeps it is handed its
+                // own copy below, as any borrowed handle a callee keeps is —
+                // copied here too, the first copy leaked.)
                 : ~ s fr_cc ( nurl_str_cat `1` `` )
                 ? ! ( str_has_index callee_sink arg_idx ) {
                     = fr_cc ( nurl_cg_reg cg )
                     ( emit_sink_flag_load ( consume_flag call_name fname arg_idx ) fr_cc )
                 } {}
+                : s fr_so ( nurl_cg_reg cg )
+                ( emit_sink_flag_load ( nurl_str_cat `@.__nurl_store.` ( nurl_str_int ( store_flag call_name fname arg_idx ) ) ) fr_so )
+                : s fr_nso ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print fr_nso ) ( nurl_print ` = xor i1 ` ) ( nurl_print fr_so ) ( nurl_print `, 1\n` )
+                : s fr_c2 ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print fr_c2 ) ( nurl_print ` = and i1 ` ) ( nurl_print fr_cc ) ( nurl_print `, ` ) ( nurl_print fr_nso ) ( nurl_print `\n` )
+                = fr_cc fr_c2
                 = av ( mem_emit_cloneif cg ( nurl_llty fr_fty ) av fr_cc )
             } {
                 // (…and in an `inout` parameter, the caller's own struct.)

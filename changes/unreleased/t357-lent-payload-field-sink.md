@@ -7,3 +7,7 @@
   the enum kept the buffer the callee freed (heap use after free). The
   callee now gets a copy where it takes the field, as for a `vec_at`
   element, and the element keeps its own.
+  A callee that stores the field keeps its own copy, as before, and
+  `string_free . p s` on such a payload frees a copy: the element keeps
+  its string, as with `vec_at`. Option-typed fields are still open
+  (Agora #559).
