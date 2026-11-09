@@ -847,6 +847,36 @@ fi
 # still LINKS and LOADS, every CUDA call returns an error, and packages/gpu
 # falls back to its CPU backend. NURL_GPU_STUBS=1 forces the stubs even on a
 # GPU host — to build a portable CPU-only binary. Never both (duplicate syms).
+#
+# Where such a library lives is the dynamic loader's to say, and it is not
+# always a directory the linker searches: WSL keeps the driver's libcuda in
+# /usr/lib/wsl/lib, listed only in /etc/ld.so.conf.d. A bare
+# `-l:libcuda.so.1` then fails to link a program that would run fine, with
+# either linker (Agora #503). So a library named by its soname is linked as
+# the file the loader's cache resolves it to, for this machine's ABI: the
+# executable records the soname (DT_NEEDED) all the same, and at run time
+# the loader finds it where it found it here.
+ld_cache_lib() {
+    _ldc=$(command -v ldconfig 2>/dev/null)
+    [ -z "$_ldc" ] && [ -x /sbin/ldconfig ] && _ldc=/sbin/ldconfig
+    [ -n "$_ldc" ] || return 0
+    case "$(uname -m)" in
+        x86_64|amd64)  _abi='x86-64' ;;
+        aarch64|arm64) _abi='AArch64' ;;
+        riscv64)       _abi='RISC-V' ;;
+        *)             _abi='' ;;
+    esac
+    "$_ldc" -p 2>/dev/null | awk -v n="$1" -v abi="$_abi" \
+        '$1 == n && (abi == "" || index($0, abi) > 0) && (i = index($0, " => ")) > 0 { print substr($0, i + 4); exit }'
+}
+# `-l:<soname>`, or the loader's file for it when its cache has one. (A
+# cache path never holds a blank: ld.so.conf separates its entries by
+# whitespace. The guard keeps a word-split $EXTRA_LIBS whole regardless.)
+soname_link() {
+    _f=$(ld_cache_lib "$1")
+    case "$_f" in *[[:space:]]*) _f='' ;; esac
+    if [ -n "$_f" ] && [ -e "$_f" ]; then printf '%s' "$_f"; else printf '%s' "-l:$1"; fi
+}
 CUDA_PRESENT=0
 if ldconfig -p 2>/dev/null | grep -q 'libcuda\.so' || [ -e /usr/lib/x86_64-linux-gnu/libcuda.so.1 ] || [ -e /usr/lib/x86_64-linux-gnu/libcuda.so ] || [ -e /usr/lib/libcuda.so ]; then
     CUDA_PRESENT=1
@@ -861,7 +891,7 @@ if grep -qE '@cu[A-Z][A-Za-z0-9_]*\b' "$LLFILE"; then
     elif [ -e /usr/lib/x86_64-linux-gnu/libcuda.so ] || [ -e /usr/lib/libcuda.so ]; then
         EXTRA_LIBS="$EXTRA_LIBS -lcuda"
     else
-        EXTRA_LIBS="$EXTRA_LIBS -l:libcuda.so.1"
+        EXTRA_LIBS="$EXTRA_LIBS $(soname_link libcuda.so.1)"
     fi
 fi
 if grep -qE '@nvrtc[A-Z][A-Za-z0-9_]*\b' "$LLFILE"; then
@@ -872,7 +902,7 @@ if grep -qE '@nvrtc[A-Z][A-Za-z0-9_]*\b' "$LLFILE"; then
     elif [ -e /usr/lib/x86_64-linux-gnu/libnvrtc.so ]; then
         EXTRA_LIBS="$EXTRA_LIBS -lnvrtc"
     else
-        EXTRA_LIBS="$EXTRA_LIBS -l:libnvrtc.so.12"
+        EXTRA_LIBS="$EXTRA_LIBS $(soname_link libnvrtc.so.12)"
     fi
 fi
 
@@ -885,7 +915,7 @@ if grep -qE '@XOpenDisplay\b' "$LLFILE"; then
     elif [ -e /usr/lib/x86_64-linux-gnu/libX11.so ] || [ -e /usr/lib/libX11.so ]; then
         EXTRA_LIBS="$EXTRA_LIBS -lX11"
     else
-        EXTRA_LIBS="$EXTRA_LIBS -l:libX11.so.6"
+        EXTRA_LIBS="$EXTRA_LIBS $(soname_link libX11.so.6)"
     fi
 fi
 
