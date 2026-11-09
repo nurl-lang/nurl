@@ -36405,6 +36405,25 @@ unsafe @ bck_ret_drop_check s st i line → v {
 // At a way out of the function: every view the caller's storage holds must
 // point into what the caller has, not into a binding released here.
 @ bck_param_view_check s st i line → v {
+    // (…nor into a buffer a move or a release inside this function left
+    // behind: an `inout` holder whose view `( string_push_str s … )` on the
+    // `inout String` it viewed ended goes back to the caller viewing the
+    // moved-out bytes, agora #390.)
+    ? != 0 g_bck_inp_any {
+        : ~ s ip ( nurl_sym_get g_bck `inp` )
+        ~ != 0 ( nurl_str_len ip ) {
+            : s ps ( str_first_word ip ) = ip ( str_skip_word ip )
+            : i pid ( nurl_str_to_int ps )
+            // (Only a view of the caller's own storage — another parameter —
+            // that a move here ended: a view of a local is the other checks'.)
+            ? == BCK_INVALID ( bck_st_get st pid ) {
+                : s pinfo ( nurl_sym_get g_bck ( bck_bkey `bv_` ps ) )
+                : s psrc ( str_first_word ( str_skip_word pinfo ) )
+                : i psr ? == 0 ( nurl_str_len psrc ) -1 ( bck_path_root ( nurl_str_to_int psrc ) )
+                ? & >= psr 0 != 0 ( nurl_sym_len g_bck ( bck_bkey `pp_` ( nurl_str_int psr ) ) ) { ( bck_diag_param_invalid pid line ) } {}
+            } {}
+        }
+    } {}
     : ~ s rest ( nurl_sym_get g_bck ( bck_bkey `bsrcs` `` ) )
     ~ != 0 ( nurl_str_len rest ) {
         : s c ( str_first_word rest ) = rest ( str_skip_word rest )
@@ -40028,6 +40047,27 @@ unsafe @ bck_note_rc_arg s name s ty → v {
     : s m1 ( nurl_str_cat4 `this '~' loop goes on to its next element, but its element '` name `' is a part of '` sname )
     : s m2 ( nurl_str_cat4 `', which ended at line ` ln ` — ` info )
     : s m3 ( nurl_str_cat3 `. The loop reads its next element from the storage that held '` name `', which may be freed or moved now. Make the change after the loop, or leave the loop ('break') right after it.` )
+    ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat3 m1 m2 m3 ) )
+}
+
+// `inout` parameter `id` handed back at a way out on `line` while what it
+// views was ended inside the function (bck_param_view_check).
+@ bck_diag_param_invalid i id i line → v {
+    : s ids ( nurl_str_int id )
+    : s tag ( nurl_str_cat3 ( nurl_str_cat `pi:` ( nurl_str_int line ) ) `:` ids )
+    : s ws ( nurl_sym_get g_bck `warnset` )
+    ? ( str_contains_word ws tag ) { ^ v } {}
+    ( bck_put `warnset` ? == 0 ( nurl_str_len ws ) ( nurl_str_cat tag `` ) ( nurl_str_cat3 ws ` ` tag ) )
+    : s name ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ids ) )
+    : ~ s info ( nurl_sym_get g_bck ( bck_bkey `bv_` ids ) )
+    : s ln ( str_first_word info ) = info ( str_skip_word info )
+    : s srcid ( str_first_word info ) = info ( str_skip_word info )
+    : s sname ( bck_name_show ( nurl_sym_get2 g_bck `rv_` srcid ) )
+    : s why0 ? != 0 ( nurl_str_starts info `!` ) ( str_skip_word info ) ( nurl_str_cat info `` )
+    : s at ? == 0 ( nurl_str_len ln ) ( nurl_str_cat `` `` ) ( nurl_str_cat3 `, which ended at line ` ln ? == 0 ( nurl_str_len why0 ) `` ( nurl_str_cat ` — ` why0 ) )
+    : s m1 ( nurl_str_cat4 `'` name `' is an 'inout' parameter, and it goes back to the caller here still holding a view of '` sname )
+    : s m2 ( nurl_str_cat4 `'` at `: the caller would read freed memory through it. Point '` name )
+    : s m3 ( nurl_str_cat3 `' at what '` sname `' holds now (after that line) before it goes back, or have it hold a copy that owns its data (string_from, slice_to_vec).` )
     ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat3 m1 m2 m3 ) )
 }
 
