@@ -9248,6 +9248,31 @@ void nurl_vec_slot_clear_if(int cond, void *ctl, long long idx, long long esize,
     memset((char*)(intptr_t)c[0] + idx * esize + off, 0, (size_t)n);
 }
 
+/* The same, for a value taken out whole by its payload binding (`^ e` out
+ * of a `vec_get`): empty the slot that holds THAT value, compared byte for
+ * byte over [off, off+n) with `val`, the binding's copy. Slot `idx`, where it
+ * was read, first; a call that moved the elements between slots since
+ * (vec_swap, vec_insert, vec_reverse, a sort) has put it in another, which is
+ * then found by the same compare. Emptied by index alone, the slot held
+ * another element after a swap: that one leaked, and the Vec still dropped
+ * the value handed on (agora #373). A handle's bytes name the buffer it
+ * owns, so two live slots never hold the same owning value. */
+void nurl_vec_slot_take_if(int cond, void *ctl, long long idx, long long esize,
+                           long long off, long long n, const void *val) {
+    if (!cond || !ctl || !val || esize <= 0 || off < 0 || n <= 0 || off + n > esize) return;
+    long long *c = (long long*)ctl;
+    char *base = (char*)(intptr_t)c[0];
+    long long len = c[1];
+    if (idx >= 0 && idx < len && memcmp(base + idx * esize + off, val, (size_t)n) == 0) {
+        memset(base + idx * esize + off, 0, (size_t)n);
+        return;
+    }
+    for (long long i = 0; i < len; i++) {
+        char *p = base + i * esize + off;
+        if (i != idx && memcmp(p, val, (size_t)n) == 0) { memset(p, 0, (size_t)n); return; }
+    }
+}
+
 /* Deep copy of a Vec / String control block (docs/MEMORY.md §7.6): the
  * compiler stores a COPY when a borrowed handle is put somewhere that owns
  * it (a struct field, a container element), so the new owner and the old
