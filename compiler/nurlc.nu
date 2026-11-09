@@ -1775,6 +1775,9 @@ unsafe @ agg_field_count i syms s ot → i {
 : ~ i g_clo_tk_body 0
 : ~ i g_use_argxfer 0
 : ~ i g_use_hown 0
+// A vec_get payload taken out by its own bytes (nurl_vec_slot_take_if): its
+// declaration, emitted at module end only where used.
+: ~ i g_use_slot_take 0
 // Set around a returned closure literal's env generation (1): its String /
 // Vec / owning-struct captures move into (are owned by) the env. 2 for a
 // closure whose body releases some captures itself: only those move in
@@ -17542,7 +17545,7 @@ unsafe @ gen_call i lex i syms i cg → s {
                 } {}
                 // …and in the Vec slot it was read from (`?? ( vec_get v k ) {
                 // T p → ( string_free . p key ) }`), which still holds it.
-                ? ( __vget_live syms fr_ptr ) { ( mem_vget_field_consume syms cg fr_ptr fr_sty fr_idx fr_fty zc ) } {}
+                ? ( __vget_live syms fr_ptr ) { ( mem_vget_field_consume syms cg fr_ptr fr_sty fr_idx fr_fty av zc ) } {}
                 // …and where a copy read through a pointer came from.
                 ? != 0 ( nurl_sym_len2 syms fr_ptr `__eaddr` ) {
                     : s ea_fp ( nurl_cg_reg cg )
@@ -25345,13 +25348,24 @@ unsafe @ mem_path_to_indices s path → s {
     ? ( nurl_str_starts cond `%` ) { = cv cond }
     { ? ! ( seq cond `1` ) { = cv ( nurl_cg_reg cg ) ( emit_sink_flag_load cond cv ) } {} }
     : s zs ( mem_llsize cg ety )
-    ( nurl_print `  call void @nurl_vec_slot_clear_if(i1 ` ) ( nurl_print cv ) ( nurl_print `, i8* ` ) ( nurl_print c )
-    ( nurl_print `, i64 ` ) ( nurl_print idx ) ( nurl_print `, i64 ` ) ( nurl_print zs ) ( nurl_print `, i64 0, i64 ` ) ( nurl_print zs ) ( nurl_print `)\n` )
+    // (The slot that holds this very value — where it was read, or where a
+    // swap, an insert or a reverse moved it since: nurl_vec_slot_take_if
+    // finds it by the binding's own bytes. Emptied by index, a reordered
+    // slot lost another element and the Vec dropped this one: agora #373.)
+    : s vp ( nurl_sym_get2 syms name `__ptr` )
+    ? == 0 ( nurl_str_len vp ) {
+        ( nurl_print `  call void @nurl_vec_slot_clear_if(i1 ` ) ( nurl_print cv ) ( nurl_print `, i8* ` ) ( nurl_print c )
+        ( nurl_print `, i64 ` ) ( nurl_print idx ) ( nurl_print `, i64 ` ) ( nurl_print zs ) ( nurl_print `, i64 0, i64 ` ) ( nurl_print zs ) ( nurl_print `)\n` )
+        ^ v
+    } {}
+    = g_use_slot_take 1
+    ( nurl_print `  call void @nurl_vec_slot_take_if(i1 ` ) ( nurl_print cv ) ( nurl_print `, i8* ` ) ( nurl_print c )
+    ( nurl_print `, i64 ` ) ( nurl_print idx ) ( nurl_print `, i64 ` ) ( nurl_print zs ) ( nurl_print `, i64 0, i64 ` ) ( nurl_print zs ) ( nurl_print `, ptr ` ) ( nurl_print vp ) ( nurl_print `)\n` )
 }
 
 // Field `fidx` (type `fty`) of struct `sty` in binding `ptr`, a vec_get
 // payload, was handed to a consumer: empty it in the Vec slot too.
-@ mem_vget_field_consume i syms i cg s ptr s sty s fidx s fty s cond → v {
+@ mem_vget_field_consume i syms i cg s ptr s sty s fidx s fty s fval s cond → v {
     : ~ s rest ( nurl_sym_get2 syms ptr `__vget` )
     : s c ( str_first_word rest ) = rest ( str_skip_word rest )
     : s idx ( str_first_word rest ) = rest ( str_skip_word rest )
@@ -25364,8 +25378,15 @@ unsafe @ mem_path_to_indices s path → s {
     : s fo ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print fo ) ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print fp ) ( nurl_print ` to i64\n` )
     : s fs ( mem_llsize cg ( nurl_llty fty ) )
-    ( nurl_print `  call void @nurl_vec_slot_clear_if(i1 ` ) ( nurl_print cv ) ( nurl_print `, i8* ` ) ( nurl_print c )
-    ( nurl_print `, i64 ` ) ( nurl_print idx ) ( nurl_print `, i64 ` ) ( nurl_print es ) ( nurl_print `, i64 ` ) ( nurl_print fo ) ( nurl_print `, i64 ` ) ( nurl_print fs ) ( nurl_print `)\n` )
+    // (By the field's own bytes, as mem_vget_consume finds a whole value:
+    // `fval`, the value handed on, read before the binding's field was
+    // emptied.)
+    : s vf ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print vf ) ( nurl_print ` = alloca ` ) ( nurl_print ( nurl_llty fty ) ) ( nurl_print `\n` )
+    ( nurl_print `  store ` ) ( nurl_print ( nurl_llty fty ) ) ( nurl_print ` ` ) ( nurl_print fval ) ( nurl_print `, ptr ` ) ( nurl_print vf ) ( nurl_print `\n` )
+    = g_use_slot_take 1
+    ( nurl_print `  call void @nurl_vec_slot_take_if(i1 ` ) ( nurl_print cv ) ( nurl_print `, i8* ` ) ( nurl_print c )
+    ( nurl_print `, i64 ` ) ( nurl_print idx ) ( nurl_print `, i64 ` ) ( nurl_print es ) ( nurl_print `, i64 ` ) ( nurl_print fo ) ( nurl_print `, i64 ` ) ( nurl_print fs ) ( nurl_print `, ptr ` ) ( nurl_print vf ) ( nurl_print `)\n` )
 }
 
 // `sizeof(ll)` as an i64 register.
@@ -64258,6 +64279,7 @@ unsafe @ __hmemo_close s key i mark b r → v {
     ( emit_pending_dropifs )
     ( emit_pending_zero_ifs )
     ( emit_pending_clones syms )
+    ? != 0 g_use_slot_take { ( nurl_print `declare void @nurl_vec_slot_take_if(i1, i8*, i64, i64, i64, i64, ptr)\n` ) } {}
     // Per-call result ownership (mem_capture_hown / mem_publish_hown).
     ? != 0 g_use_hown {
         ( nurl_print `define linkonce_odr i1 @__nurl_ret_own(ptr %d, ptr %o) alwaysinline {\nentry:\n  %dv = load i1, ptr %d\n  br i1 %dv, label %t, label %s\nt:\n  %g = call i64 @nurl_ret_hown_get()\n  %b = icmp ne i64 %g, 0\n  ret i1 %b\ns:\n  %ov = load i1, ptr %o\n  ret i1 %ov\n}\n` )
