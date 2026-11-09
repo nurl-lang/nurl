@@ -1,0 +1,16 @@
+# Probes known to leak where LSan's stack and register scan is off
+# (use_stacks=0:use_registers=0, check.sh's default since Agora #532).
+#
+# With the scan on, a pointer left in a dead frame or a register at exit
+# counts as a reference, so a real leak passes as "ran clean" whenever
+# codegen happens to leave the pointer there. check.sh checks every probe
+# with the scan off, except the ones below: each is a real leak with its
+# own task, and keeps the default scan until that task's fix lands. The
+# PR that fixes one deletes its line. No suppressions: the leak is fixed
+# in the compiler or the runtime, never hidden.
+#
+# probe                                                   task
+try_nc_error_bound_from_call.nu                           agora #539
+try_nc_error_call_lends_param.nu                          agora #539
+try_nc_error_param_field.nu                               agora #539
+slice_returned_owned_on_one_path_parameter_on_another.nu  agora #540

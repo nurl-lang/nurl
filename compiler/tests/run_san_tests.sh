@@ -160,16 +160,18 @@ JOBS="${NURL_SAN_JOBS:-$(nproc 2>/dev/null || echo 4)}"
 
 # Leak detection on by default — see file header.
 #
-# When it is on, drop stack roots. LSan scans the exiting thread's stack
+# When it is on, drop stack and register roots. LSan scans the exiting thread's stack
 # for pointers, and by the time it runs main has already returned — so a
 # dead frame that happens to still hold the pointer marks a real leak
 # "reachable". Whether it does is a property of the machine: a 12-core
 # dev box called async_chan clean and a 4-core CI runner called the same
 # binary leaky, and the leak was real. Without this the gate is a coin
-# flip that lands heads on the developer's machine. The whole corpus
-# passes with it, so nothing here relies on a stack root.
+# flip that lands heads on the developer's machine. A register still
+# holding the pointer does the same, so register roots go too (agora
+# #532; tools/fuzz/holes/check.sh checks its probes the same way). The
+# whole corpus passes with both off, so nothing here relies on either.
 if [[ "${LSAN_DETECT_LEAKS:-1}" == "1" ]]; then
-    export LSAN_OPTIONS="${LSAN_OPTIONS:+${LSAN_OPTIONS}:}use_stacks=0"
+    export LSAN_OPTIONS="${LSAN_OPTIONS:+${LSAN_OPTIONS}:}use_stacks=0:use_registers=0"
 fi
 export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=${LSAN_DETECT_LEAKS:-1}:abort_on_error=0:halt_on_error=0:print_stacktrace=1}"
 export UBSAN_OPTIONS="${UBSAN_OPTIONS:-print_stacktrace=1:halt_on_error=0}"

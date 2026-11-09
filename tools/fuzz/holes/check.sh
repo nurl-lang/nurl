@@ -74,7 +74,15 @@ check_one() {
     # (A frame handed out lives on ASan's fake stack: without
     # detect_stack_use_after_return a read through it after the return
     # "runs clean".)
-    r=$(ASAN_OPTIONS="${ASAN_OPTIONS:+$ASAN_OPTIONS:}detect_stack_use_after_return=1" timeout "$limit" "${b}_san" 2>&1 >/dev/null); rr=$?
+    # (Leaks are checked with LSan's stack and register scan off: at exit a
+    # dead frame or a register still holding a pointer made a real leak
+    # "reachable", so a probe passed on where codegen happened to leave it
+    # (agora #532), as run_san_tests.sh explains. The probes known to leak
+    # that way, each with its task, are in open/lsan_strict.txt and keep
+    # the default scan until it closes.)
+    local lsan="use_stacks=0:use_registers=0"
+    awk -v p="$(basename "$src")" '!/^#/ && $1 == p { f = 1 } END { exit !f }' "$DIR/open/lsan_strict.txt" 2>/dev/null && lsan=""
+    r=$(LSAN_OPTIONS="${LSAN_OPTIONS:+$LSAN_OPTIONS${lsan:+:}}$lsan" ASAN_OPTIONS="${ASAN_OPTIONS:+$ASAN_OPTIONS:}detect_stack_use_after_return=1" timeout "$limit" "${b}_san" 2>&1 >/dev/null); rr=$?
     k=$(grep -m1 -oE "heap-use-after-free|double-free|attempting free|heap-buffer-overflow|stack-use-after-return|stack-use-after-scope|detected memory leaks|SEGV|runtime error" <<<"$r")
     if [ -n "$k" ]; then echo "HOLE      $f: $k"
     elif [ $rr -eq 124 ]; then echo "UNCHECKED $f: still running under ASan after ${limit} s"
@@ -87,7 +95,8 @@ export ROOT DIR TMP limit
 # bound by `:` first, the consumer reading the binding — the calculus's
 # shape, and the path every consumer takes once producers are elaborated
 # (Agora #222). A twin that faults is a hole like any other (Agora #242);
-# the ones known open are listed in open/twins.txt and not run.
+# the ones known open are listed in open/twins.txt and not run. (A probe
+# listed in open/lsan_strict.txt keeps LSan's default scan, twin included.)
 srcs=(); labels=()
 for f in "${files[@]}"; do srcs+=("$DIR/$f"); labels+=("$f"); done
 elab_failed=0
