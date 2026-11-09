@@ -44,7 +44,7 @@ $ `stdlib/core/vec.nu`
                 ( vec_push [i] ports ( __port s ) )
                 ( vec_push [UdpSocket] socks s )
             }
-            F _ → { ( nurl_println `bind failed` ) ^ 1 }
+            F e → { ( nurl_print `bind failed: ` ) ( nurl_println ( net_err_name e ) ) ^ 1 }
         }
         = k + k 1
     }
@@ -66,25 +66,35 @@ $ `stdlib/core/vec.nu`
     // `: ~` local of this frame by pointer — it may outlive the frame.)
     : Atomic gotv ( atomic_new 0 )
     : Atomic gotw ( Atomic_share gotv )
+    // The sender's socket is bound here, before any fiber runs, and a bind
+    // that fails stops the test with its error named. The sender used to bind
+    // it inside its fiber and drop a failure silently: nothing was sent, and
+    // the test printed "0/45", which reads like a reactor that never woke
+    // anyone (agora #398; a loaded runner whose ephemeral ports run out is
+    // enough to fail that bind). A send that fails is counted and printed.
+    : UdpSocket tx ?? ( udp_bind `127.0.0.1` 0 ) {
+        T s → s
+        F e → { ( nurl_print `sender bind failed: ` ) ( nurl_println ( net_err_name e ) ) ^ 1 }
+    }
+    : Atomic sendfail ( atomic_new 0 )
+    : Atomic sendfail_w ( Atomic_share sendfail )
     ( spawn_owned \ → v {
         ( sleep_ms 100 )  // every waiter parked
-        ?? ( udp_bind `127.0.0.1` 0 ) {
-            T tx → {
-                : ~ i j 0
-                ~ < j early {
-                    : !i NetErr _s ( udp_send_str_to tx `x` `127.0.0.1` ( vec_at [i] ports j ) )
-                    = j + j 1
-                }
-                : ~ i waited 0
-                ~ & < ( atomic_load seen ) early < waited 2000 {
-                    ( sleep_ms 10 )
-                    = waited + waited 10
-                }
-                ( atomic_store gotw ( atomic_load seen ) )
-                ( udp_close tx )
+        : ~ i j 0
+        ~ < j early {
+            ?? ( udp_send_str_to tx `x` `127.0.0.1` ( vec_at [i] ports j ) ) {
+                T _n → {}
+                F _e → { : i _f ( atomic_add sendfail_w 1 ) }
             }
-            F _ → {}
+            = j + j 1
         }
+        : ~ i waited 0
+        ~ & < ( atomic_load seen ) early < waited 2000 {
+            ( sleep_ms 10 )
+            = waited + waited 10
+        }
+        ( atomic_store gotw ( atomic_load seen ) )
+        ( udp_close tx )
     } )
     ( runtime_run )
     ( runtime_shutdown )
@@ -94,6 +104,9 @@ $ `stdlib/core/vec.nu`
         = k + k 1
     }
     : i got ( atomic_load gotv )
+    ? > ( atomic_load sendfail ) 0 {
+        ( nurl_print `send failures: ` ) ( nurl_println_int ( atomic_load sendfail ) )
+    } {}
     ( nurl_print `oldest woken within 2 s: ` ) ( nurl_print_int got ) ( nurl_print `/` ) ( nurl_println_int early )
     ^ 0
 }
