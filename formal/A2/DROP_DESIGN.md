@@ -7,7 +7,7 @@ of every type a destructor can have, views included, on the normal path and
 the panic path. `formal/check.sh` passes, and `memory_safe`, `no_leak_end`
 and `no_leak_panic` cover `letd` / `scopeD` on the standard axioms, with
 the `DtorSafe` rule of Agora #224. A2-drop.3 (the destructor on the type,
-Agora #253) is the next step.
+Agora #253) is designed below (*A2-drop.3*), in four cuts.
 
 Before this, a user destructor was outside the calculus. A2's drops ran no
 program code: `DropSlot` frees a tree and cannot fail. This note fixes the
@@ -331,6 +331,123 @@ follows it. That needed three things A2 did not have:
 
 So `letd` types every body the other rules type (Agora #243): no premise
 on the body's typing restricts which programs the calculus covers.
+
+## A2-drop.3: the destructor on the type (Agora #253)
+
+**Status.** Designed here; not mechanized. Until it is, `CLAIM.md`'s
+*Destructors* section keeps its one exception: a value moved out of the
+binding `letd` made is released by `DropSlot`, which runs no code, where
+nurlc runs the destructor.
+
+### What nurlc does that A2 does not model yet
+
+A `% Drop` type's destructor runs wherever a value of it is dropped
+(MEMORY.md §7.6, *Drop glue*), not only at the end of the binding that
+made it:
+
+| Where the value ends | nurlc | A2 today |
+|---|---|---|
+| a binding's scope (a local, a `sink` parameter, a call's result, `unpair`'s fields) | the destructor, then the glue | only for `letd`'s binding (`scopeD`) |
+| `= x …` over an owned value, `vec_free x` | the destructor of the old value first | `DropSlot` / `Frees` |
+| a struct field, at the struct's drop | the field's destructor, inside the struct's glue | `Frees` of the tree |
+| a `Vec` element: `vec_pop` dropped, `truncate`, `clear`, `vec_set` over it, the Vec freed | each element's destructor | `Frees` |
+| an enum or option payload | the payload's destructor | `Frees` |
+| a closure's or a trait object's environment | the captures' destructors | `Frees` of the env tree |
+| a panic's unwind through any of these | the journal runs each, once | `scopeP` frees in one step, except at `scopeD` |
+| an `Arc` / lock block's payload when its last share goes (A3) | on the thread that drops the last share | the sweep, which runs no code |
+
+### Semantics
+
+- **The type carries it.** `Ty.dtor f t` becomes a type constructor:
+  values of `t` whose drop first runs the program's function `f` (`DtorOK
+  P f t`, as now). `letd` becomes a derived form: `letv` of a `Ty.dtor`
+  type. `Entry.dtor` / `Entry.dbind` are then read off the type (two
+  new functions, `Ty.hasDtor` and `Ty.dtorViews`), not set by the binding
+  form.
+- **Drop glue as code.** `dropCode t x : Stmt`, by recursion on `t`,
+  is the statement that drops the tree in `x`'s slot:
+  - `Ty.dtor f u`: the destructor's call on `x` lent (`callDrop f x`
+    below: the `letcall _ f [x] .skip` that `Step.scopeDEnd` runs now),
+    then `dropCode u x`;
+  - `prod a b` holding a destructor: `unpair y x z (seq (dropCode a y)
+    (dropCode b z))`: the fields move to bindings of their own, dropped
+    in field order, as nurlc's glue does;
+  - `sum a b` holding one: an `ite` on the tag, each arm taking the
+    payload out and dropping it;
+  - `vec u` with `u` holding one: `while (len x > 0) (pop-into y
+    (dropCode u y))`, then `free x` of the empty Vec;
+  - a type holding no destructor: `free x` (today's `Frees`), so nothing
+    changes for programs without `% Drop`, and the old proofs carry over
+    for them unchanged.
+
+  Every drop site becomes `dropCode` of the type it drops, where the
+  type holds a destructor: `scope x` at its end (with `scopeD`'s four
+  steps generalized from `letd`'s binding to any binding whose type holds
+  one), `assign` over an owned value (the old value moved to a fresh
+  binding first, then `dropCode`), `free`, and `edit`'s drops (`pop`,
+  `truncate`, `clear`, `set`: each dropped element taken out to a fresh
+  binding and dropped in index order).
+- **The unwind** stops at every frame whose binding's type holds a
+  destructor, not only `scopeD`: `Step.scopeDP` generalized. A panic
+  inside a destructor is not run again (the frame is gone), and the glue
+  after it still frees the fields: the journal's two rules, as now.
+
+### Typing
+
+- `DtorSafe` and `EntryWeaker`'s rule for `dtor` entries already ask
+  every entry whose binding may run a destructor; they now ask every
+  entry whose type holds one with views (`t.dtorViews`), wherever the
+  value came from. A move disarms the source, as now. What is new is
+  where a destructor value can land: a field, an element, a payload, an
+  environment. The holder then runs it, so the holder's entry inherits
+  the obligation (`held` keeps what the destructor reads).
+- `dropCode` is typed by a lemma, not a rule (as A3.2's derived lock
+  forms are): `dropCode_typed : DtorsOK P → Γ x = some E → E.ty = t →
+  StmtT P F Γ (dropCode t x) (Γ.kill x)`, by induction on `t`. Each drop
+  site's typing then reuses the existing rules for `callDrop`, `unpair`,
+  `ite`, `while`, `pop` and `free`.
+
+### What the proof has to show
+
+- **Preservation** of each drop site's step into `dropCode`: the derived
+  typing above, and that the invariant before the step gives the
+  `dropCode` statement's precondition (the value in `x`'s slot is the
+  tree `t` describes; the destructor's views are valid, by `DtorSafe`).
+- **Progress**: `dropCode` is built from forms that step; its `while`
+  terminates, since each round pops one element (a measure on the Vec's
+  length, which `dropCode u y` cannot grow: `y` is a fresh binding).
+- **`no_leak_end` / `no_leak_panic`**: `dropCode t x` frees every
+  address of `x`'s tree. By induction on `t`: each case frees what it
+  takes apart, and the last step is `free` of a destructor-free rest.
+- **The double panic**: a panic inside `dropCode` unwinds through the
+  frames `dropCode` opened (each `unpair` / pop binding's scope), so the
+  rest of the tree is still freed.
+
+### Staging
+
+Each cut is mechanized and checked by `check.sh` before the next, and
+each one shrinks `CLAIM.md`'s exception:
+
+1. **A2-drop.3a: bindings and fields.** `Ty.dtor` as a type; `letd` as
+   `letv`; `scopeD`'s steps for every binding of a destructor type (a
+   local, a `sink` parameter at its callee's end, a call's result,
+   `unpair`'s fields); `assign` and `free` of one; a struct holding one
+   (`prod`), its glue by `unpair`. Not yet: elements, payloads,
+   environments, blocks.
+2. **A2-drop.3b: containers.** A `Vec` of destructor values (`pop`,
+   `truncate`, `clear`, `set`, `free`: the `while` above, and `edit`
+   through a borrow running each dropped element's destructor), and enum
+   and option payloads (`sum`).
+3. **A2-drop.3c: environments.** A closure's or a trait object's
+   environment holding a destructor value: `Ty.fn ms q` gains what the
+   environment's drop runs (as `q` records where it may cross), and a
+   package's drop is `dropCode` of its environment's type.
+4. **A2-drop.3d: shared blocks (A3).** An `Arc`, lock or channel payload
+   with a destructor: the thread whose step drops the last share runs it
+   (the sweep becomes a step of that thread that runs `dropCode` on the
+   payload), and the race clause covers the destructor's reads.
+
+After 3d, `CLAIM.md` lists no destructor exception.
 
 ## Done when
 
