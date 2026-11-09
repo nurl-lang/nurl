@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.0] — unreleased
+
+### Changed
+
+- **An Engine keeps a graph's initializers on the device from run to run** (Agora #526). Each run uploaded every FLOAT initializer again (`rt_load_inits`). For YOLOE-v8s-seg that is 46 MB a frame, half of a warm run's time. The engine now keeps the device copies of the graph it last ran and reuses them when the same graph runs again; a run of another graph lets them go before uploading its own, and `rt_reset` lets them go too. A warm 640×640 frame of YOLOE-v8s-seg on an RTX 4090 went from 22.4 ms to 11.0 ms, with identical output and the same peak RSS. Nothing in onnx changes a graph's initializers once it is made, and no kernel writes into its inputs, so a kept copy is always the graph's.
+- **`OGraph` has an identity, `gid`** (breaking for code that builds an `OGraph` literal). Every graph made by `onnx_parse` or `onnx_empty_graph` gets a fresh number, shared by its copies, and the engine's reuse is keyed on it. A placeholder graph is `( onnx_empty_graph )`.
+
 ## [0.12.5] — 2026-11-02
 
 ### Fixed

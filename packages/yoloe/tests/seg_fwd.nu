@@ -33,7 +33,7 @@ $ `../src/image.nu`
     : String ip ?? ( vec_get [String] av 2 ) { T x → x F _ → ( string_new ) }
     : String pp ?? ( vec_get [String] av 3 ) { T x → x F _ → ( string_new ) }
 
-    : ~ OGraph g @ OGraph { ( vec_new [ONode] ) ( vec_new [OTensor] ) ( string_new ) ( string_new ) ( string_new ) }
+    : ~ OGraph g ( onnx_empty_graph )
     ?? ( read_file_bytes ( string_data mp ) ) { T mb → = g ( onnx_parse mb ) F _ → { ( nurl_print `model read fail\n` ) ^ 1 } }
     ( nurl_print `out0=` ) ( nurl_print ( string_data . g output_name ) )
     ( nurl_print ` out1=` ) ( nurl_print ( string_data . g output1_name ) ) ( nurl_print `\n` )

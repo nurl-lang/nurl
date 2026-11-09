@@ -536,7 +536,7 @@ $ `stdlib/core/slice.nu`
 
     // sky segmentation, when asked for: the LingBot demo's skyseg.onnx,
     // fetched through hub and run through the onnx package
-    : ~ Sky sky @ Sky { @ OGraph { ( vec_new [ONode] ) ( vec_new [OTensor] ) ( string_new ) ( string_new ) ( string_new ) } @ ?Engine { F } F }
+    : ~ Sky sky @ Sky { ( onnx_empty_graph ) @ ?Engine { F } F }
     ? != . o masksky 0 {
         ?? ( hub_get `https://huggingface.co/JianyuanWang/skyseg/resolve/main/skyseg.onnx` ) {
             F e → {

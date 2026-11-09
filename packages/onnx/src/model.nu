@@ -16,6 +16,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/std/floatbits.nu`
 $ `pb.nu`
+$ `stdlib/std/thread.nu`
 
 // ── in-memory graph ───────────────────────────────────────────────
 // One attribute. Captures the value forms used by the ops we run:
@@ -50,7 +51,19 @@ $ `pb.nu`
     String input_name
     String output_name
     String output1_name
+    // This graph's identity: a fresh number for each graph parsed or made
+    // (onnx_empty_graph), shared by its copies. An Engine that ran it keeps
+    // its initializers on the device and reuses them the next time it runs
+    // the same graph (runtime.nu, agora #526); nothing here changes a
+    // graph's initializers once it is made.
+    i gid
 }
+
+@ __graph_ids_start → ( Locked i ) { ^ ( locked_new [i] 0 ) }
+
+: ( Locked i ) g_graph_ids ( __graph_ids_start )
+
+@ __graph_id_new → i { ^ ( locked_apply [i i] g_graph_ids \ inout i n → i { = n + n 1 ^ n } ) }
 
 // String equality as a bool (nurl_str_eq returns i).
 @ streq s a s b → b { ^ != ( nurl_str_eq a b ) 0 }
@@ -309,7 +322,7 @@ $ `pb.nu`
         }
         { ( pb_skip r tag ) }
     }
-    ^ @ OGraph { nodes inits inp outp outp1 }
+    ^ @ OGraph { nodes inits inp outp outp1 ( __graph_id_new ) }
 }
 
 // ── ModelProto (top level) ────────────────────────────────────────
@@ -317,7 +330,7 @@ $ `pb.nu`
 // An empty graph — what a failed parse returns, and the value every
 // caller initialises its own `~ OGraph` binding with.
 @ onnx_empty_graph → OGraph {
-    ^ @ OGraph { ( vec_new [ONode] ) ( vec_new [OTensor] ) ( string_new ) ( string_new ) ( string_new ) }
+    ^ @ OGraph { ( vec_new [ONode] ) ( vec_new [OTensor] ) ( string_new ) ( string_new ) ( string_new ) ( __graph_id_new ) }
 }
 
 // Parse a ModelProto, reporting the first wire-format error instead of

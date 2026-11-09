@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.7.5] — unreleased
+
+### Changed
+
+- Requires onnx 0.13.0: a placeholder graph is `( onnx_empty_graph )` (Agora #526).
+
 ## [0.7.4] — 2026-10-21
 
 ### Fixed

@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.8.5] — unreleased
+
+### Changed
+
+- Requires onnx 0.13.0: a placeholder graph is `( onnx_empty_graph )`. A warm frame is about twice as fast, because the engine keeps the model's weights on the device (Agora #526).
+
 ## [0.8.4] — 2026-11-02
 
 ### Fixed

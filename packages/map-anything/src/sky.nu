@@ -39,7 +39,7 @@ $ `deps/onnx/src/runtime.nu`
 }
 
 @ sky_open s path → Sky {
-    : ~ OGraph g @ OGraph { ( vec_new [ONode] ) ( vec_new [OTensor] ) ( string_new ) ( string_new ) ( string_new ) }
+    : ~ OGraph g ( onnx_empty_graph )
     ?? ( read_file_bytes path ) {
         T mb → { = g ( onnx_parse mb ) }
         F _ → { ^ @ Sky { g @ ?Engine { F } F } }
