@@ -2325,6 +2325,122 @@ long long nurl_self_groups(long long *out, long long cap) {
 #endif
 }
 
+/* Every live process's command line that this process may read, one per
+ * line ('\n' inside a command line becomes a blank), as a heap string the
+ * caller frees; NULL where the platform does not say (stdlib/std/
+ * process.nu's proc_command_lines). Linux: /proc/<pid>/cmdline, its
+ * argument NULs read as blanks. Windows: a Toolhelp32 snapshot of the
+ * processes, each one's command line from NtQueryInformationProcess
+ * (ProcessCommandLineInformation, Windows 8.1+), which needs only
+ * PROCESS_QUERY_LIMITED_INFORMATION. That is the text another local user
+ * sees, read in milliseconds where a PowerShell/WMI query took seconds
+ * (Agora #508). */
+static void nurl__cmdlines_push(char **buf, size_t *len, size_t *cap,
+                                const char *s, size_t n) {
+    if (!*buf) return;
+    if (*len + n + 2 > *cap) {
+        size_t nc = (*cap ? *cap : 4096);
+        while (*len + n + 2 > nc) nc *= 2;
+        char *nb = (char *)realloc(*buf, nc);
+        if (!nb) { free(*buf); *buf = NULL; return; }
+        *buf = nb; *cap = nc;
+    }
+    for (size_t k = 0; k < n; k++)
+        (*buf)[(*len)++] = (s[k] == '\n' || s[k] == '\r' || s[k] == 0) ? ' ' : s[k];
+    (*buf)[(*len)++] = '\n';
+    (*buf)[*len] = 0;
+}
+#if defined(__linux__) && !(defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 0)
+#  include <dirent.h>
+#endif
+#if defined(_WIN32)
+#  include <tlhelp32.h>
+typedef LONG (NTAPI *nurl__ntqip_fn)(HANDLE, ULONG, PVOID, ULONG, PULONG);
+/* winternl.h's UNICODE_STRING, which windows.h does not bring in. */
+typedef struct { USHORT Length; USHORT MaximumLength; PWSTR Buffer; } nurl__ustr;
+#endif
+char *nurl_proc_cmdlines(void) {
+    size_t len = 0, cap = 4096;
+    char *buf = (char *)malloc(cap);
+    if (!buf) return NULL;
+    buf[0] = 0;
+#if defined(_WIN32)
+    static nurl__ntqip_fn ntqip = NULL;
+    if (!ntqip) {
+        HMODULE nt = GetModuleHandleW(L"ntdll.dll");
+        if (nt) ntqip = (nurl__ntqip_fn)(void (*)(void))
+                        GetProcAddress(nt, "NtQueryInformationProcess");
+    }
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (!ntqip || snap == INVALID_HANDLE_VALUE) { free(buf); return NULL; }
+    PROCESSENTRY32W pe;
+    pe.dwSize = sizeof pe;
+    ULONG room = 0;
+    unsigned char *info = NULL;
+    for (BOOL more = Process32FirstW(snap, &pe); more && buf; more = Process32NextW(snap, &pe)) {
+        HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pe.th32ProcessID);
+        if (!h) continue;
+        /* ProcessCommandLineInformation (60): a UNICODE_STRING whose
+         * buffer follows it in the same block. */
+        ULONG need = 0;
+        LONG st = ntqip(h, 60, info, room, &need);
+        if (st == (LONG)0xC0000004L || st == (LONG)0x80000005L || st == (LONG)0xC0000023L) {
+            unsigned char *ni = (unsigned char *)realloc(info, need);
+            if (ni) { info = ni; room = need; st = ntqip(h, 60, info, room, &need); }
+        }
+        CloseHandle(h);
+        if (st < 0 || !info) continue;
+        nurl__ustr *us = (nurl__ustr *)info;
+        int wn = (int)(us->Length / sizeof(WCHAR));
+        if (wn <= 0 || !us->Buffer) continue;
+        int un = WideCharToMultiByte(CP_UTF8, 0, us->Buffer, wn, NULL, 0, NULL, NULL);
+        if (un <= 0) continue;
+        char *u = (char *)malloc((size_t)un);
+        if (!u) continue;
+        WideCharToMultiByte(CP_UTF8, 0, us->Buffer, wn, u, un, NULL, NULL);
+        nurl__cmdlines_push(&buf, &len, &cap, u, (size_t)un);
+        free(u);
+    }
+    free(info);
+    CloseHandle(snap);
+    return buf;
+#elif defined(__linux__) && !(defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 0)
+    DIR *d = opendir("/proc");
+    if (!d) { free(buf); return NULL; }
+    char path[64];
+    char *line = (char *)malloc(65536);
+    if (!line) { closedir(d); free(buf); return NULL; }
+    for (struct dirent *de = readdir(d); de && buf; de = readdir(d)) {
+        const char *nm = de->d_name;
+        int digits = nm[0] != 0;
+        for (const char *p = nm; *p; p++) if (*p < '0' || *p > '9') { digits = 0; break; }
+        if (!digits || strlen(nm) > 20) continue;
+        size_t nl = strlen(nm);
+        memcpy(path, "/proc/", 6);
+        memcpy(path + 6, nm, nl);
+        memcpy(path + 6 + nl, "/cmdline", 9);
+        int fd = open(path, O_RDONLY);
+        if (fd < 0) continue;
+        size_t got = 0;
+        for (;;) {
+            long long r = (long long)read(fd, line + got, 65536 - got);
+            if (r <= 0) break;
+            got += (size_t)r;
+            if (got == 65536) break;
+        }
+        close(fd);
+        while (got > 0 && line[got - 1] == 0) got--;   /* the last argument's NUL */
+        if (got > 0) nurl__cmdlines_push(&buf, &len, &cap, line, got);
+    }
+    free(line);
+    closedir(d);
+    return buf;
+#else
+    free(buf);
+    return NULL;
+#endif
+}
+
 /* A hard link: 0 or -1 with errno, as link(2). Windows: CreateHardLinkA. */
 int nurl_hard_link(const char *target, const char *linkpath) {
     if (!target || !linkpath) { errno = EINVAL; return -1; }
