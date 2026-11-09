@@ -33712,6 +33712,23 @@ unsafe @ bck_emit_error s file i line s msg → v {
 
 // A binding consumed (or stored again) after its value was stored into
 // an owner: the owner drops that value, so this is its second release.
+// A value that holds a view of a value stored into it (`: S o @ S { sv b }`,
+// sv a view of b): it views its own field, which growing or replacing ends
+// under it — A2's SelfFree (`ViewsOK.dropSelf`). Refused where it is built,
+// at the store's line (agora #294).
+@ bck_diag_self_view s oids s svn → v {
+    : s tag ( nurl_str_cat4 `sv:` oids `:` svn )
+    : s ws ( nurl_sym_get g_bck `warnset` )
+    ? ( str_contains_word ws tag ) { ^ v } {}
+    ( bck_put `warnset` ? == 0 ( nurl_str_len ws ) ( nurl_str_cat tag `` ) ( nurl_str_cat3 ws ` ` tag ) )
+    : s on ( nurl_sym_get2 g_bck `rv_` oids )
+    : s vn ( nurl_sym_get2 g_bck `rv_` svn )
+    : i ln ( nurl_str_to_int ( nurl_sym_get2 g_bck `sl_` svn ) )
+    ( bck_emit_error ( nurl_sym_get g_bck `file` ) ln
+    ( nurl_str_cat4 ( nurl_str_cat3 `'` on `' would view its own field: it is given '` ) vn ( nurl_str_cat3 `' and holds a view of '` vn `'` )
+    ( nurl_str_cat3 ` at once, so growing or replacing that field (vec_reserve, a push, a new value) would leave the view dangling inside '` on `'. Keep the view and its owner in different values, or take the view again from the field when you need it.` ) ) )
+}
+
 @ bck_diag_stored i id i useline b again → v {
     : s ids ( nurl_str_int id )
     : s tag ( nurl_str_cat3 ( nurl_str_cat `st:` ( nurl_str_int useline ) ) `:` ids )
@@ -35457,6 +35474,9 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                         ? == ( nurl_str_get s_own 0 ) 61 {
                             : s oids ( nurl_str_slice s_own 1 - ( nurl_str_len s_own ) 1 )
                             ( bck_put ( bck_so_key svn ) oids )
+                            // (…by an owner that already holds a view of it: agora #294.)
+                            // (A closure's capture is no field of it: s_cap.)
+                            ? & ! s_cap ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vds_` oids ) ) svn ) { ( bck_diag_self_view oids svn ) } {}
                             = g_bck_sx_gen g_bck_gen
                             : s sxk ( bck_sx_key oids )
                             : s sx ( nurl_sym_get g_bck sxk )
@@ -37634,6 +37654,8 @@ unsafe @ bck_sx_is_id s e → b {
     ~ != 0 ( nurl_str_len rest ) {
         : s c ( str_first_word rest ) = rest ( str_skip_word rest )
         ? & ! ( seq c ws ) ! ( str_contains_word have c ) {
+            // (A view of a value stored into this very holder: agora #294.)
+            ? & ( seq ( nurl_sym_get g_bck ( bck_so_key c ) ) ws ) ! ( seq ( nurl_sym_get g_bck ( bck_bkey `cst_` c ) ) `1` ) { ( bck_diag_self_view ws c ) } {}
             = g_bck_has_borrow 1
             = have ? == 0 ( nurl_str_len have ) ( nurl_str_cat c `` ) ( nurl_str_cat3 have ` ` c )
             : s ck ( bck_bkey `vdd_` c )
