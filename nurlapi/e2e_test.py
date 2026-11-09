@@ -1127,6 +1127,10 @@ def t_tools_call_build_unikernel(c: Client) -> None:
         return
     assert_eq("unikernel tool build ok", j.get("status"), "ok")
     assert_true("tool result has elf artifact", bool((j.get("elf_artifact") or {}).get("download_url")), str(j)[:200])
+    env = _tool_call(c, "nurl_build_unikernel", {"source": src, "args": 'a"b', "boot": False})
+    text = _tool_text(env)
+    assert_true("MCP args with a double quote refused",
+                "double quotes" in text or "control characters" in text, text[:200])
     br = j.get("boot_result") or {}
     if br.get("ran") is False and "not available" in (br.get("error") or ""):
         print("  boot skipped: qemu not in this deployment")
@@ -1233,7 +1237,7 @@ def t_build_unikernel_rest(c: Client) -> None:
     src = "@ main → i {\n    ( nurl_println `uk-e2e` )\n    ^ 0\n}\n"
     status, _, raw = c.post(
         "/build_unikernel",
-        {"source": src, "args": "--demo yes"},
+        {"source": src, "args": "--demo $(echo NURL_ARGS_MARKER)"},
         timeout=180.0,
     )
     assert_eq("build_unikernel status 200", status, 200)
@@ -1249,12 +1253,25 @@ def t_build_unikernel_rest(c: Client) -> None:
     boot = j.get("boot") or {}
     assert_true("boot.qemu names the microvm machine", "-M microvm" in (boot.get("qemu") or ""), boot.get("qemu") or "")
     assert_true("boot command carries the argv", 'args=' in (boot.get("qemu") or ""), boot.get("qemu") or "")
+    assert_true("boot -append is one shell-quoted word", "-append '" in (boot.get("qemu") or ""), boot.get("qemu") or "")
+    assert_true("boot command leaves $() for the guest", "$(echo NURL_ARGS_MARKER)" in (boot.get("qemu") or ""), boot.get("qemu") or "")
+    assert_true("boot command has no shell substitution", "$(date +%s)" not in (boot.get("qemu") or ""), boot.get("qemu") or "")
     assert_true("qemu_net adds virtio-net", "virtio-net-device" in (boot.get("qemu_net") or ""), "")
     # The artifact must actually download and be an ELF.
     tok = art.get("token")
     dstat, _, dbody = c.get(f"/download/{tok}")
     assert_eq("elf downloads", dstat, 200)
     assert_true("downloaded file is an ELF", dbody[:4] == b"\x7fELF", repr(dbody[:4]))
+
+    # A guest argv is embedded in `args="…"`; the guest's reader has no
+    # escape syntax, and the returned command is a shell word. A quote is
+    # refused before a build directory is created.
+    status, _, _ = c.post(
+        "/build_unikernel",
+        {"source": src, "args": 'a"b'},
+        timeout=60.0,
+    )
+    assert_eq("args with a double quote rejected", status, 400)
 
     # 2. An initfs file rides inside the image; keys are path-checked.
     import base64 as _b64

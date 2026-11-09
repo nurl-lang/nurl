@@ -3868,6 +3868,26 @@ i clang_rc s build_stdout s build_stderr → v {
 
 @ __uk_is_arm s arch → b { ^ != 0 ( nurl_str_eq arch `aarch64` ) }
 
+// A guest argv is embedded in the kernel command line's `args="…"` token.
+// The guest's cmdline reader ends that token at the next '"' and has no
+// escape syntax, so a quote in `args` would silently truncate the
+// program's argv. A control byte would also break the displayed command
+// across lines. Refuse both at the request boundary, before a build
+// directory exists. `$`, backticks and `'` are fine: the returned
+// command single-quotes the whole -append value, so the shell never
+// expands them, and the guest copies them literally.
+@ __uk_args_ok s args → b {
+    : ( Slice u ) v ( slice_of_str args )
+    : i n ( nurl_str_len args )
+    : ~ i k 0
+    ~ < k n {
+        : i c ( slice_byte v k )
+        ? | | < c 32 == c 34 { ^ F } {}
+        = k + k 1
+    }
+    ^ T
+}
+
 @ get_unikernel_build_script s arch → String {
     ? ( __uk_is_arm arch ) {
         ^ ( env_var_or `NURL_UNIKERNEL_BUILD_ARM64`
@@ -3916,11 +3936,38 @@ i clang_rc s build_stdout s build_stderr → v {
     ^ ok
 }
 
+// POSIX shell single-quoting: '…' with every ' written as '\''. The
+// result is one shell word whose bytes the shell never expands.
+@ shell_single_quote s in → String {
+    : String out ( string_with_cap + ( nurl_str_len in ) 16 )
+    ( string_push_char out 39 )
+    : ( Slice u ) v ( slice_of_str in )
+    : i n ( nurl_str_len in )
+    : ~ i k 0
+    ~ < k n {
+        : i c ( slice_byte v k )
+        ? == c 39 {
+            ( string_push_char out 39 )
+            ( string_push_char out 92 )
+            ( string_push_char out 39 )
+            ( string_push_char out 39 )
+        } {
+            ( string_push_char out c )
+        }
+        = k + k 1
+    }
+    ( string_push_char out 39 )
+    ^ out
+}
+
 // The boot command, exactly as unikernel/run_qemu.sh runs it — the
-// flags the guest gate boots 20/20 with. `$(date +%s)` is left for the
-// user's shell to fill (X.509 validity in the guest is checked against
-// the told wallclock), and `args="…"` is the program's argv. The whole
-// string is DISPLAY TEXT — the server never executes it.
+// flags the guest gate boots 20/20 with. The whole -append value is ONE
+// single-quoted shell word: the caller's shell expands nothing inside
+// it, so `args` cannot inject a command. The wallclock is a concrete
+// second count from this server rather than `$(date +%s)`, because a
+// shell substitution there was exactly what made `args` an injection
+// point. `args` is still the guest's argv, and the guest's own
+// `args="…"` token is preserved inside the quoted word.
 @ __uk_boot_cmd s arch s elf_name s args b with_net → String {
     : b arm ( __uk_is_arm arch )
     : String c ( string_with_cap 512 )
@@ -3936,16 +3983,20 @@ i clang_rc s build_stdout s build_stderr → v {
         ( string_push_str c ` -netdev user,id=n0,hostfwd=tcp:127.0.0.1:8080-:8080 -device virtio-net-device,netdev=n0` )
     } {}
     ( string_push_str c ` -kernel ` )
-    ( string_push_str c elf_name )
-    ( string_push_str c ` -append "` )
-    ? arm {} { ( string_push_str c `tsc_khz=1000000 ` ) }
-    ( string_push_str c `wallclock=$(date +%s)` )
+    : String qelf ( shell_single_quote elf_name )
+    ( string_push_str c ( string_data qelf ) )
+    : String append ( string_with_cap 256 )
+    ? arm {} { ( string_push_str append `tsc_khz=1000000 ` ) }
+    ( string_push_str append `wallclock=` )
+    ( string_push_str append ( nurl_str_int / ( now_ms ) 1000 ) )
     ? > ( nurl_str_len args ) 0 {
-        ( string_push_str c ` args=\\"` )
-        ( string_push_str c args )
-        ( string_push_str c `\\"` )
+        ( string_push_str append ` args="` )
+        ( string_push_str append args )
+        ( string_push_char append 34 )
     } {}
-    ( string_push_str c `"` )
+    : String qappend ( shell_single_quote ( string_data append ) )
+    ( string_push_str c ` -append ` )
+    ( string_push_str c ( string_data qappend ) )
     ^ c
 }
 
@@ -4095,6 +4146,9 @@ unsafe @ __uk_exit_code s log → i {
             : s filename ( get_common_json root `filename` `main.nu` )
             ? ! ( build_filename_ok filename ) { ^ ( bad_filename_response ) } {}
             : s uargs ( get_common_json root `args` `` )
+            ? ! ( __uk_args_ok uargs ) {
+                ^ ( response_text 400 `{"error":"args must not contain double quotes or control characters: the guest's args token has no escape syntax, and the returned boot command is shell-quoted as one word"}\n` )
+            } {}
             // Which machine. x86_64 stays the default: it is what every
             // caller written before this field asked for, and a silent
             // change of architecture would be the worst kind of
