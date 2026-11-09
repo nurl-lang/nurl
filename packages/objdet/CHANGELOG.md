@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.4.7] — unreleased
+
+### Changed
+
+- Requires onnx 0.13.0 (Agora #526).
+
 ## [0.4.6] — 2026-10-21
 
 ### Fixed

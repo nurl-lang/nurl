@@ -45,6 +45,13 @@ $ `stdlib/std/floatbits.nu`
 : EngineImpl {
     GpuKit kit
     ( Vec RTensor ) vals
+    // The device copies of the initializers of graph `inits_gid` (0: none),
+    // kept from run to run: a video's every frame runs the same graph, and
+    // uploading its weights again was half of each run (46 MB a frame for
+    // YOLOE-v8s-seg, agora #526). A run of another graph lets them go before
+    // it uploads its own, so no two sets are on the device at once.
+    ( Vec RTensor ) inits
+    i inits_gid
     String input_name
     String output_name
     String output1_name
@@ -150,7 +157,7 @@ $ `stdlib/std/floatbits.nu`
     : GpuKit kit ( gk_open ordinal )
     : b ok ( gk_ok kit )
     : GpuKit k2 ( GpuKit_share kit )
-    ^ @ Engine { ( locked_new [EngineImpl] @ EngineImpl { kit ( vec_new [RTensor] )
+    ^ @ Engine { ( locked_new [EngineImpl] @ EngineImpl { kit ( vec_new [RTensor] ) ( vec_new [RTensor] ) 0
             ( string_new ) ( string_new ) ( string_new ) ok } ) k2 }
 }
 
@@ -170,6 +177,8 @@ $ `stdlib/std/floatbits.nu`
 @ rt_reset Engine h → v {
     : ~ EngineImpl e ( locked_take [EngineImpl] . h l )
     ( vec_clear [RTensor] . e vals )
+    ( vec_clear [RTensor] . e inits )
+    = . e inits_gid 0
     ( locked_restore [EngineImpl] . h l e )
 }
 
@@ -391,6 +400,18 @@ $ `stdlib/std/floatbits.nu`
 }
 
 @ rt_load_inits inout EngineImpl e OGraph g → v {
+    // The same graph as the last run: its weights are on the device.
+    ? & != . g gid 0 == . g gid . e inits_gid {
+        : ~ i j 0
+        ~ < j ( vec_len [RTensor] . e inits ) {
+            ?? ( vec_get [RTensor] . e inits j ) { T t → { ( vec_push [RTensor] . e vals t ) } F _ → {} }
+            = j + j 1
+        }
+        ^
+    } {}
+    // Another graph: the last one's weights go first.
+    ( vec_clear [RTensor] . e inits )
+    = . e inits_gid 0
     : ( Vec OTensor ) inits . g inits
     : ~ i k 0
     ~ < k ( vec_len [OTensor] inits ) {
@@ -402,11 +423,13 @@ $ `stdlib/std/floatbits.nu`
                     : GkBuf buf ( gk_dbuf_new . e kit . t nelem GK_F32 )
                     : b _up ( gk_dbuf_upload_bytes . e kit buf ( slice_from_vec [u] . t host ) )
                     ( rt_put e ( string_data . t name ) buf ( __shape_copy_rt . t dims ) )
+                    ?? ( vec_get [RTensor] . e vals - ( vec_len [RTensor] . e vals ) 1 ) { T rt → { ( vec_push [RTensor] . e inits rt ) } F _ → {} }
                 } {}
             } F _ → {}
         }
         = k + k 1
     }
+    = . e inits_gid . g gid
 }
 
 // Allocate a fresh f32 device tensor with `shape`, register it under

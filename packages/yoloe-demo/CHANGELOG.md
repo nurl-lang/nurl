@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.10] — unreleased
+
+### Changed
+
+- Requires onnx 0.13.0. A warm `/detect` frame no longer uploads the model's weights again (Agora #526).
+
 ## [0.3.9] — 2026-10-29
 
 ### Fixed
