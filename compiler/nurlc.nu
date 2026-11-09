@@ -22754,6 +22754,24 @@ unsafe @ gen_match i lex i syms i cg → s {
     } {}
 }
 
+// Where a closure that changes a container a `~` loop iterates was refused,
+// run inside that loop (__iter_closure_effs_check), keyed `<file>:<line>`.
+// The walk ends the loop's element at that call too, and its two messages
+// for it — the element read after, the loop going on — would only say the
+// same refusal again (bck_diag_fe_next, bck_diag_invalid; agora #482).
+: ~ i g_iter_refused 0
+
+@ __iter_refused_note s file i line → v {
+    ? == 0 g_iter_refused { = g_iter_refused ( nurl_sym_new ) } {}
+    ( nurl_sym_def g_iter_refused ( nurl_str_cat3 file `:` ( nurl_str_int line ) ) `1` )
+}
+
+// …and was the change at `line` of the function walked refused so?
+@ __iter_refused_at s line → b {
+    ? == 0 g_iter_refused { ^ F } {}
+    ^ != 0 ( nurl_sym_len g_iter_refused ( nurl_str_cat3 ( nurl_sym_get g_bck `file` ) `:` line ) )
+}
+
 // A closure that may run here, inside a `~` loop's body, giving one of the
 // loop's containers a new value or handing it to a callee that changes or
 // takes it (the captures it assigns, its effects): the value is released
@@ -22796,6 +22814,7 @@ unsafe @ gen_match i lex i syms i cg → s {
             : s cb ( bck_generic_base cal )
             ? | | | | & ( seq ax `0` ) ( bck_is_container_mutator cb ) ( nurl_sym_has_word g_fn_mutates cal ax ) ( nurl_sym_has_word g_fn_sink cal ax ) ( nurl_sym_has_word g_fn_mutates cb ax ) ( nurl_sym_has_word g_fn_sink cb ax ) {
                 ( bck_emit_error file line ( nurl_str_cat3 who ` hands '` ( nurl_str_cat3 ( bck_name_show nm ) `' to '` ( nurl_str_cat3 ( bck_fn_show cal ) `', which changes or takes it, when it runs — here inside a '~' loop over it, which holds a borrow of the container; run the closure outside the loop body` `` ) ) ) )
+                ( __iter_refused_note file line )
                 ^ v
             } {}
         } {}
@@ -22803,6 +22822,7 @@ unsafe @ gen_match i lex i syms i cg → s {
 }
 
 @ __iter_closure_assign_diag s who s path i line s file → v {
+    ( __iter_refused_note file line )
     ( bck_emit_error file line ( nurl_str_cat3 who ` gives '` ( nurl_str_cat3 ( bck_name_show path ) `' a new value when it runs, here inside a '~' loop over it — the loop holds a borrow of the container, and the value it held is released under the loop; run the closure outside the loop body` `` ) ) )
 }
 
@@ -39859,6 +39879,7 @@ unsafe @ bck_note_rc_arg s name s ty → v {
     : ~ s info ( nurl_sym_get g_bck ( bck_bkey `bv_` ids ) )
     : s ln ( str_first_word info ) = info ( str_skip_word info )
     : s srcid ( str_first_word info ) = info ( str_skip_word info )
+    ? ( __iter_refused_at ln ) { ^ v } {}
     ? ( seq ( str_first_word info ) `!fe` ) { = info ( str_skip_word info ) } {}
     : s sname ( bck_name_show ( nurl_sym_get2 g_bck `rv_` srcid ) )
     : s m1 ( nurl_str_cat4 `this '~' loop goes on to its next element, but its element '` name `' is a part of '` sname )
@@ -39901,6 +39922,7 @@ unsafe @ bck_note_rc_arg s name s ty → v {
     // (A `~` loop's element whose container's elements' views ended:
     // bck_borrow_end, agora #482.)
     ? ( seq ( str_first_word info ) `!fev` ) {
+        ? ( __iter_refused_at ln ) { ^ v } {}
         : s vwhy ( str_skip_word info )
         : s e1 ( nurl_str_cat4 `'` name `' is the element a '~' loop is at, a part of '` sname )
         : s e2 ( nurl_str_cat4 `', whose elements hold views that ended at line ` ln ` — ` vwhy )
@@ -39923,6 +39945,7 @@ unsafe @ bck_note_rc_arg s name s ty → v {
     // (A `~` loop's element, a part of what ended — bck_borrow_end, agora
     // #482.)
     ? ( seq ( str_first_word info ) `!fe` ) {
+        ? ( __iter_refused_at ln ) { ^ v } {}
         : s fwhy ( str_skip_word info )
         : s f1 ( nurl_str_cat4 `'` name `' is the element a '~' loop is at, a part of '` sname )
         : s f2 ( nurl_str_cat4 `', which ended at line ` ln ` — ` fwhy )
