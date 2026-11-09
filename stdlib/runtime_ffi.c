@@ -8604,9 +8604,14 @@ static void nurl__np_poke(void) {
 }
 #endif
 
+/* After queueing work: the poller sleeps through it unless poked. The
+ * fence orders the queue's store before this load of `sleeping`, as the
+ * poller's fence orders its store of `sleeping` before its look at the
+ * queues (nurl__np_poll_at, agora #538). */
 static void nurl__np_poke_if_sleeping(void) {
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
     if (nurl__np.started &&
-        __atomic_load_n(&nurl__np.sleeping, __ATOMIC_ACQUIRE))
+        __atomic_load_n(&nurl__np.sleeping, __ATOMIC_RELAXED))
         nurl__np_poke();
 }
 
@@ -9093,6 +9098,16 @@ static NurlFiber *nurl__np_poll_at(NurlWorker *w, int *held, int block) {
     batch = nurl__np_expire_locked(now, batch);
     long long next = (nurl__np.heap_len > 0)
                    ? nurl__np.heap[0]->deadline_ms : -1;
+    /* About to sleep: say so, and until when, under the lock a timer is
+     * pushed under. An activation then either came first (its deadline is
+     * `next`) or sees this poller asleep with this deadline and pokes it
+     * (nurl__reactor_activate). Said after the unlock, a timer pushed in
+     * between found the poller awake, poked nobody, and the poller slept
+     * in epoll_wait(-1) past it for good (agora #538). */
+    if (block && !batch) {
+        __atomic_store_n(&nurl__np.sleep_deadline, next, __ATOMIC_SEQ_CST);
+        __atomic_store_n(&nurl__np.sleeping, 1, __ATOMIC_SEQ_CST);
+    }
     pthread_mutex_unlock(&nurl__np.lock);
 
     if (!batch) {
@@ -9114,9 +9129,17 @@ static NurlFiber *nurl__np_poll_at(NurlWorker *w, int *held, int block) {
         struct epoll_event evs[128];
         int n = 0;
 #endif
-        __atomic_store_n(&nurl__np.sleep_deadline, next, __ATOMIC_RELEASE);
-        if (block)
-            __atomic_store_n(&nurl__np.sleeping, 1, __ATOMIC_RELEASE);
+        /* Work queued after this worker last looked, by a waker that
+         * found the poller not asleep yet (nurl__np_poke_if_sleeping):
+         * run it rather than sleep. The waker stores the queue, then
+         * reads `sleeping`; this stored `sleeping`, then reads the queues,
+         * each behind a full fence, so one of the two sees the other. */
+        if (block) {
+            __atomic_thread_fence(__ATOMIC_SEQ_CST);
+            if (__atomic_load_n(&nurl__sched.global_len, __ATOMIC_RELAXED) > 0 ||
+                __atomic_load_n(&w->rq_len, __ATOMIC_RELAXED) > 0)
+                timeout = 0;
+        }
         if (!nurl__np.shutdown && !nurl__sched.shutdown) {
 #if defined(_WIN32)
             if (!GetQueuedCompletionStatusEx(nurl__np.iocp, evs, 128, &n,
@@ -9257,7 +9280,18 @@ void nurl__reactor_activate(NurlReactorWait *wt) {
         if (wt->park_state == 2) verdict = 1;
         else wt->park_state = 1;
     }
-    if (verdict < 0 && dl >= 0) nurl__np_heap_push(wt);
+    /* A deadline earlier than the one the poller sleeps to (or one while
+     * it sleeps with none): poke it. Read under the lock the poller says
+     * it sleeps under (nurl__np_poll_at), so this push and that word
+     * cannot cross (agora #538). */
+    int poke = 0;
+    if (verdict < 0 && dl >= 0) {
+        nurl__np_heap_push(wt);
+        if (__atomic_load_n(&nurl__np.sleeping, __ATOMIC_RELAXED)) {
+            long long sd = __atomic_load_n(&nurl__np.sleep_deadline, __ATOMIC_RELAXED);
+            poke = sd < 0 || dl < sd;
+        }
+    }
     if (verdict >= 0) {
         wt->free_next = nurl__np.freelist;
         nurl__np.freelist = wt;
@@ -9282,12 +9316,7 @@ void nurl__reactor_activate(NurlReactorWait *wt) {
         nurl_fiber_unpark((long long)(uintptr_t)fb);
         return;
     }
-    if (dl >= 0 &&
-        __atomic_load_n(&nurl__np.sleeping, __ATOMIC_ACQUIRE)) {
-        long long sd =
-            __atomic_load_n(&nurl__np.sleep_deadline, __ATOMIC_ACQUIRE);
-        if (sd < 0 || dl < sd) nurl__np_poke();
-    }
+    if (poke) nurl__np_poke();
 }
 
 __attribute__((noinline))
