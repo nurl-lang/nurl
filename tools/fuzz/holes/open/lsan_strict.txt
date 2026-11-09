@@ -13,4 +13,3 @@
 try_nc_error_bound_from_call.nu                           agora #539
 try_nc_error_call_lends_param.nu                          agora #539
 try_nc_error_param_field.nu                               agora #539
-slice_returned_owned_on_one_path_parameter_on_another.nu  agora #540

@@ -2328,6 +2328,15 @@ goes:
 - A `sink` argument clears the caller's flag, and the callee drops the
   value unless it moves it on.
 - `= a ( make … )` drops the value `a` held first.
+- A slice binding has a flag where its owner can differ from run to run:
+  a mutable one, and one bound from a call whose answer is not known at
+  the call (a function handing back its own slice on one path and a
+  parameter on another answers per call; one not compiled yet answers at
+  module end). `= d p` over a lent slice frees `d`'s old buffer, unless
+  `p` points into it, and clears the flag. `= d a` over an owner that
+  lives as long as `d` makes `d` a view of it. Over an owner from a scope
+  inside `d`'s, `d` is its heir: where that owner would release the
+  buffer, `d` takes it if it still holds that very buffer.
 
 **Drop glue.** A `% Drop` impl releases what only it knows how to (a raw
 buffer, an OS resource). The fields the compiler manages (`String`,

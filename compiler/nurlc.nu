@@ -4134,7 +4134,9 @@ unsafe @ nurl_cg_lbl i h s hint → s {
 @ mem_init_return_proof i syms i cg s ty → v {
     ( nurl_sym_def syms `__ret_hown_slot__` `` )
     // A handle result: which paths hand over an owned value (mem_store_hown).
-    ? ( __is_hown_ty ty ) {
+    // (…and a slice: one handed back on one path and lent on another is
+    // answered per call, agora #540.)
+    ? || ( __is_hown_ty ty ) && != 0 g_auto_drop_strings ( mem_is_slice_ty ( nurl_llty ty ) ) {
         : s hs ( nurl_cg_reg cg )
         ( nurl_sym_def syms `__ret_hown_slot__` hs )
         ( nurl_print `  ` ) ( nurl_print hs ) ( nurl_print ` = alloca i1\n  store i1 true, ptr ` ) ( nurl_print hs ) ( nurl_print `\n` )
@@ -6581,12 +6583,25 @@ unsafe @ gen_ret i lex i syms i cg → s {
     : b ret_fresh_slice & ( mem_is_slice_ty lt ) | & | | == ret_first_tt TT_LBRACK == ret_first_tt TT_QUEST == ret_first_tt TT_QUESTQUEST
     ( seq ( nurl_sym_get syms `__last_slice_owned__` ) `1` )
     & ret_is_direct_call ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `1` )
+    // (This path's own answer, for a function that answers per call: set
+    // as the bit just before it is stored, past what follows.)
+    : ~ s __slc_hb ``
     ? | != 0 ( nurl_str_len skip ) ret_fresh_slice
-    { ( nurl_sym_set_deep syms `__fn_ret_owned__` `1` ) }
+    { ( nurl_sym_set_deep syms `__fn_ret_owned__` `1` )
+        ? ( mem_is_slice_ty lt ) { = __slc_hb ( __slc_ret_bit syms cg skip ) } {} }
     // An all-paths fact, as for a string (__fn_ret_str_mixed__): a slice
     // returned on another path that is not this function's own (a
     // parameter, a borrow) vetoes it.
-    { ? ( mem_is_slice_ty lt ) { ( nurl_sym_set_deep syms `__fn_ret_slice_mixed__` `1` ) } {} }
+    // (…and makes the function answer per call when another path hands
+    // back its own: taken for a lender throughout, the slice it handed
+    // back was never freed, agora #540. `^ ( f … )` over a callee whose
+    // answer is not known here hands back that answer.)
+    { ? ( mem_is_slice_ty lt ) {
+            ( nurl_sym_set_deep syms `__fn_ret_slice_mixed__` `1` )
+            ? & ret_call_bit ( __slc_uncertain syms ( nurl_sym_get syms `__last_call_name__` ) lt )
+            { = __slc_hb ( nurl_str_cat hbit `` ) ( mem_hown_mark_dyn syms ) }
+            { = __slc_hb ( nurl_str_cat `false` `` ) }
+        } {} }
     // Borrow provenance: if the returned value is a borrow (derived from a
     // parameter), this function returns a borrow — callers must NOT
     // auto-drop a `:`-binding off it. (Unless it was copied on the way out.)
@@ -6654,6 +6669,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
         ( nurl_print `  ` ) ( nurl_print __ato ) ( nurl_print ` = and i1 ` ) ( nurl_print hbit ) ( nurl_print `, ` ) ( nurl_print ( nurl_sym_get syms `__agg_take_own__` ) ) ( nurl_print `\n` )
         = hbit __ato
     } {}
+    ? != 0 ( nurl_str_len __slc_hb ) { = hbit __slc_hb } {}
     ( mem_store_hown syms hbit )
     ( mem_save_return_proof syms cg lt skip_str_ptr | ret_is_direct_call ret_is_det_join )
     ( gen_ret_term lex syms cg lt val skip skip_str_ptr skip_user_ptr skip_struct_ptr ret_ident )
@@ -10020,7 +10036,11 @@ unsafe @ __clo_tmp_set s v → v { = g_clo_tmp ( nurl_str_cat v `` ) }
         : i retownflags_e0 ( __word_end retownflags retownflags_n retownflags_p ) : s number ( __span_dup retownflags retownflags_p retownflags_e0 ) = retownflags_p + retownflags_e0 1
         : i retownflags_e1 ( __word_end retownflags retownflags_n retownflags_p ) : s callee ( __span_dup retownflags retownflags_p retownflags_e1 ) = retownflags_p + retownflags_e1 1
         : i retownflags_e2 ( __word_end retownflags retownflags_n retownflags_p ) : s generic ( __span_dup retownflags retownflags_p retownflags_e2 ) = retownflags_p + retownflags_e2 1
-        : b lent ( __callee_lent syms callee generic )
+        // (A slice is its caller's exactly when every path hands back the
+        // function's own — `__ret_owned`, which a path that lends vetoes:
+        // a slice read out of a global or a field lends nothing the
+        // summaries see, and taken for owned it was freed. Agora #540.)
+        : b lent ? ( mem_is_slice_ty ( nurl_sym_get syms callee ) ) ! ( seq ( __ret_owned_of syms callee ) `1` ) ( __callee_lent syms callee generic )
         ( nurl_print `@.__nurl_retown.` ) ( nurl_print number )
         ( nurl_print ` = private constant i1 ` ) ( nurl_print ? lent `false` `true` ) ( nurl_print `\n` )
         : b dyn | ( __hown_dyn syms callee 0 ) ( __hown_dyn syms generic 0 )
@@ -24323,17 +24343,229 @@ unsafe @ __bck_fall_ret_record i lex i syms i first_tt s first_val i sxn0 i line
 // free it. Symtab lookup is innermost-scope, so inside an arm this
 // resolves a shadowing declaration to the arm's own alloca.
 @ mem_emit_slice_free i syms i cg s name → v {
+    : s fl ( mem_slice_flag_of syms name )
+    : ~ s cond ``
+    ? != 0 ( nurl_str_len fl ) {
+        = cond ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print cond ) ( nurl_print ` = load i1, ptr ` ) ( nurl_print fl ) ( nurl_print `\n` )
+    } {}
+    : s ptr ( nurl_sym_get2 syms name `__ptr` )
+    : s heir ? == 0 ( nurl_str_len ptr ) ( nurl_str_cat `` `` ) ( nurl_sym_get2 syms ptr `__slheir` )
+    // (`-`: an owned slice nobody is heir to yet.)
+    ? & != 0 ( nurl_str_len heir ) ! ( seq heir `-` ) { = cond ( mem_slice_hand_over syms cg name ptr heir cond ) } {}
+    ( mem_emit_slice_free_if syms cg name cond )
+}
+
+// Binding `name` (slot `ptr`) was given to a binding that outlives it
+// (`= e a`, `heir` = e's flag slot and slot): e views the buffer while `a`
+// lives, and inherits it where `a` would release it — when e still holds
+// that very buffer and owns none. The condition for freeing it here
+// instead (`cond`: name's own flag, `` for always) comes back.
+@ mem_slice_hand_over i syms i cg s name s ptr s heir s cond → s {
+    : s hf ( str_first_word heir )
+    : s hp ( str_first_word ( str_skip_word heir ) )
+    : s ty ( nurl_llty ( nurl_sym_get syms name ) )
+    : s av ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print av ) ( nurl_print ` = load ` ) ( nurl_print ty ) ( nurl_print `, ptr ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+    : s ap ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print ap ) ( nurl_print ` = extractvalue ` ) ( nurl_print ty ) ( nurl_print ` ` ) ( nurl_print av ) ( nurl_print `, 0\n` )
+    : s hv ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print hv ) ( nurl_print ` = load ` ) ( nurl_print ty ) ( nurl_print `, ptr ` ) ( nurl_print hp ) ( nurl_print `\n` )
+    : s hq ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print hq ) ( nurl_print ` = extractvalue ` ) ( nurl_print ty ) ( nurl_print ` ` ) ( nurl_print hv ) ( nurl_print `, 0\n` )
+    : s same ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print same ) ( nurl_print ` = icmp eq ptr ` ) ( nurl_print hq ) ( nurl_print `, ` ) ( nurl_print ap ) ( nurl_print `\n` )
+    : s hfl ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print hfl ) ( nurl_print ` = load i1, ptr ` ) ( nurl_print hf ) ( nurl_print `\n` )
+    : s nh ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print nh ) ( nurl_print ` = xor i1 ` ) ( nurl_print hfl ) ( nurl_print `, true\n` )
+    : s h1 ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print h1 ) ( nurl_print ` = and i1 ` ) ( nurl_print same ) ( nurl_print `, ` ) ( nurl_print nh ) ( nurl_print `\n` )
+    : s own ? == 0 ( nurl_str_len cond ) ( nurl_str_cat `true` `` ) ( nurl_str_cat cond `` )
+    : s hand ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print hand ) ( nurl_print ` = and i1 ` ) ( nurl_print h1 ) ( nurl_print `, ` ) ( nurl_print own ) ( nurl_print `\n` )
+    : s nf ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print nf ) ( nurl_print ` = or i1 ` ) ( nurl_print hfl ) ( nurl_print `, ` ) ( nurl_print hand ) ( nurl_print `\n` )
+    ( nurl_print `  store i1 ` ) ( nurl_print nf ) ( nurl_print `, ptr ` ) ( nurl_print hf ) ( nurl_print `\n` )
+    : s nhand ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print nhand ) ( nurl_print ` = xor i1 ` ) ( nurl_print hand ) ( nurl_print `, true\n` )
+    : s fr ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print fr ) ( nurl_print ` = and i1 ` ) ( nurl_print own ) ( nurl_print `, ` ) ( nurl_print nhand ) ( nurl_print `\n` )
+    ^ fr
+}
+
+// ── Slice owner flags (agora #540) ──
+// A slice binding owns its buffer on every run, or on none — the owned
+// list says which — except where it is owned on some runs only: a binding
+// given the result of a call that answers per call (a function handing
+// back its own slice on one path and a parameter on another), or of one
+// not compiled yet (answered at module end); and a mutable binding, which
+// a later `= d p` may point at a buffer it does not own. Each of those has
+// an owner flag, an `i1` slot beside it (`<slot>__slflag`), and its drop
+// goes by that flag. Without one, `= d p` kept `d` owning and its drop freed
+// the caller's buffer, and the first kind was taken for a lend and leaked.
+
+// The flag slot of binding `name`, or ``.
+@ mem_slice_flag_of i syms s name → s {
+    : s ptr ( nurl_sym_get2 syms name `__ptr` )
+    ? == 0 ( nurl_str_len ptr ) { ^ ( nurl_str_cat `` `` ) } {}
+    ^ ( nurl_sym_get2 syms ptr `__slflag` )
+}
+
+// Give binding slot `ptr` an owner flag holding `bit` (`true`, `false` or
+// an i1 register). A bit not known to be `true` makes the flag one a
+// return must answer per call for (`__slfdyn__`).
+@ mem_slice_flag_new i syms i cg s ptr s bit → v {
+    : s fl ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print fl ) ( nurl_print ` = alloca i1\n` )
+    ( nurl_sym_def syms ( nurl_str_cat ptr `__slflag` ) fl )
+    ( mem_slice_flag_set syms fl bit )
+}
+
+@ mem_slice_flag_set i syms s fl s bit → v {
+    ( nurl_print `  store i1 ` ) ( nurl_print bit ) ( nurl_print `, ptr ` ) ( nurl_print fl ) ( nurl_print `\n` )
+    ? ! ( seq bit `true` ) {
+        : s cur ( nurl_sym_get syms `__slfdyn__` )
+        ? ! ( str_contains_word cur fl ) { ( nurl_sym_set_deep syms `__slfdyn__` ( nurl_str_cat3 cur ` ` fl ) ) } {}
+    } {}
+}
+
+// Does a call of `cn` returning `rlt` hand back a slice whose owner is not
+// known here? Its body not compiled yet (its answer is a module-end
+// constant), or one that answers per call.
+@ __slc_uncertain i syms s cn s rlt → b {
+    ? | | == 0 g_auto_drop_strings ! ( mem_is_slice_ty rlt ) == 0 ( nurl_str_len cn ) { ^ F } {}
+    ? == 0 ( nurl_sym_len2 syms cn `__nurlfn` ) { ^ F } {}
+    ? == 0 ( nurl_sym_len2 syms cn `__body_done` ) { ^ T } {}
+    ^ ( __hown_dyn syms cn 0 )
+}
+
+// The bit a return hands back with binding `name`'s own slice: its owner
+// flag, if it has one — a function whose returned flag is not always
+// `true` answers per call (decided at its end, mem_slice_ret_settle) —
+// otherwise `true`.
+@ __slc_ret_bit i syms i cg s name → s {
+    : s fl ( mem_slice_flag_of syms name )
+    ? == 0 ( nurl_str_len fl ) { ^ ( nurl_str_cat `true` `` ) } {}
+    : s b ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print b ) ( nurl_print ` = load i1, ptr ` ) ( nurl_print fl ) ( nurl_print `\n` )
+    // (A closure body is settled here, now: it has no end of its own that
+    // asks.)
+    ? | != 0 g_bck_closure_depth != 0 ( nurl_str_starts ( nurl_sym_get syms `__fn_self_name__` ) `__closure_` ) {
+        ( nurl_sym_set_deep syms `__fn_ret_slice_mixed__` `1` )
+        ( mem_hown_mark_dyn syms )
+        ^ b
+    } {}
+    : s cur ( nurl_sym_get syms `__ret_slflags__` )
+    ? ! ( str_contains_word cur fl ) { ( nurl_sym_set_deep syms `__ret_slflags__` ( nurl_str_cat3 cur ` ` fl ) ) } {}
+    ^ b
+}
+
+// At a function's end: a returned owner flag that is not always `true`
+// makes it answer per call, and its static answer is no longer "owned".
+@ mem_slice_ret_settle i syms → v {
+    : ~ s rest ( nurl_sym_get syms `__ret_slflags__` )
+    : s dyn ( nurl_sym_get syms `__slfdyn__` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ( str_contains_word dyn w ) {
+            ( nurl_sym_set_deep syms `__fn_ret_slice_mixed__` `1` )
+            ( mem_hown_mark_dyn syms )
+            ^ v
+        } {}
+    }
+}
+
+// `= name v` where v is not known to be name's own (lent, or a call's
+// answer `b`): free the old buffer unless v points into it, and give back
+// the new owner flag, `b | (old flag & v is the old buffer)`.
+@ mem_slice_reassign_lent i syms i cg s name s fl s val s b → s {
+    : s ty ( nurl_llty ( nurl_sym_get syms name ) )
+    : s ptr ( nurl_sym_get2 syms name `__ptr` )
+    : i tylen ( nurl_str_len ty )
+    : s ety ( nurl_str_slice ty 2 - tylen 10 )
+    : s ov ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print ov ) ( nurl_print ` = load ` ) ( nurl_print ty ) ( nurl_print `, ptr ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+    : s op ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print op ) ( nurl_print ` = extractvalue ` ) ( nurl_print ty ) ( nurl_print ` ` ) ( nurl_print ov ) ( nurl_print `, 0\n` )
+    : s ol ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print ol ) ( nurl_print ` = extractvalue ` ) ( nurl_print ty ) ( nurl_print ` ` ) ( nurl_print ov ) ( nurl_print `, 1\n` )
+    : s oe ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print oe ) ( nurl_print ` = getelementptr ` ) ( nurl_print ety ) ( nurl_print `, ptr ` ) ( nurl_print op ) ( nurl_print `, i64 ` ) ( nurl_print ol ) ( nurl_print `\n` )
+    : s np ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print np ) ( nurl_print ` = extractvalue ` ) ( nurl_print ty ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
+    : s same ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print same ) ( nurl_print ` = icmp eq ptr ` ) ( nurl_print np ) ( nurl_print `, ` ) ( nurl_print op ) ( nurl_print `\n` )
+    : s ge ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print ge ) ( nurl_print ` = icmp uge ptr ` ) ( nurl_print np ) ( nurl_print `, ` ) ( nurl_print op ) ( nurl_print `\n` )
+    : s le ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print le ) ( nurl_print ` = icmp ule ptr ` ) ( nurl_print np ) ( nurl_print `, ` ) ( nurl_print oe ) ( nurl_print `\n` )
+    : s inr ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print inr ) ( nurl_print ` = and i1 ` ) ( nurl_print ge ) ( nurl_print `, ` ) ( nurl_print le ) ( nurl_print `\n` )
+    : s of ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print of ) ( nurl_print ` = load i1, ptr ` ) ( nurl_print fl ) ( nurl_print `\n` )
+    : s out ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print out ) ( nurl_print ` = xor i1 ` ) ( nurl_print inr ) ( nurl_print `, true\n` )
+    : s fr ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print fr ) ( nurl_print ` = and i1 ` ) ( nurl_print of ) ( nurl_print `, ` ) ( nurl_print out ) ( nurl_print `\n` )
+    ( mem_emit_slice_free_if syms cg name fr )
+    : s keep ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print keep ) ( nurl_print ` = and i1 ` ) ( nurl_print of ) ( nurl_print `, ` ) ( nurl_print same ) ( nurl_print `\n` )
+    : s nf ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print nf ) ( nurl_print ` = or i1 ` ) ( nurl_print b ) ( nurl_print `, ` ) ( nurl_print keep ) ( nurl_print `\n` )
+    ^ nf
+}
+
+// The journal registration of a flagged slice binding: its buffer, or null
+// when the flag says the binding does not own it.
+@ mem_journal_push_slice_if i cg s ty s slot s cond → v {
+    ? == 0 ( nurl_str_len cond ) { ( mem_journal_push_slice cg ty slot ) ^ v } {}
+    ? ( seq cond `none` ) { ^ v } {}
+    : i tylen ( nurl_str_len ty )
+    : s tptr ( nurl_str_slice ty 2 - tylen 9 )
+    : s sv ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print sv ) ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty ty ) ) ( nurl_print `, ptr ` ) ( nurl_print slot ) ( nurl_print `\n` )
+    : s dp ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print dp ) ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty ty ) ) ( nurl_print ` ` ) ( nurl_print sv ) ( nurl_print `, 0\n` )
+    : s raw ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print raw ) ( nurl_print ` = select i1 ` ) ( nurl_print cond ) ( nurl_print `, ptr ` ) ( nurl_print dp ) ( nurl_print `, ptr null\n` )
+    ( nurl_print `  call void @nurl_journal_push(i8* ` ) ( nurl_print raw ) ( nurl_print `)\n` )
+}
+
+// Free binding `name`'s buffer (and the elements it owns) when `cond`
+// (an i1 register) holds; always, when `cond` is ``.
+@ mem_emit_slice_free_if i syms i cg s name s cond → v {
     : s ty ( nurl_sym_get syms name )
     : s ptr ( nurl_sym_get2 syms name `__ptr` )
     // Slice type is always "{ <T>*, i64 }" (suffix ", i64 }" = 7 chars).
     // Extract <T>* = chars [2 .. len-7).
     : i tylen ( nurl_str_len ty )
     : s tptr ( nurl_str_slice ty 2 - tylen 9 )
-    : s v ( nurl_cg_reg cg )
+    : ~ s v ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print v )
     ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty ty ) )
     ( nurl_print `, ` ) ( nurl_print ( nurl_llty ty ) )
     ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+    // (Not owned on this run: an empty slice at null, which frees nothing
+    // and has no elements to drop.)
+    // (Field by field: the writer's flag folding reads a `select` of a
+    // scalar.)
+    ? != 0 ( nurl_str_len cond ) {
+        : s lty ( nurl_llty ty )
+        : s d0 ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print d0 ) ( nurl_print ` = extractvalue ` ) ( nurl_print lty ) ( nurl_print ` ` ) ( nurl_print v ) ( nurl_print `, 0\n` )
+        : s l0 ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print l0 ) ( nurl_print ` = extractvalue ` ) ( nurl_print lty ) ( nurl_print ` ` ) ( nurl_print v ) ( nurl_print `, 1\n` )
+        : s d1 ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print d1 ) ( nurl_print ` = select i1 ` ) ( nurl_print cond ) ( nurl_print `, ptr ` ) ( nurl_print d0 ) ( nurl_print `, ptr null\n` )
+        : s l1 ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print l1 ) ( nurl_print ` = select i1 ` ) ( nurl_print cond ) ( nurl_print `, i64 ` ) ( nurl_print l0 ) ( nurl_print `, i64 0\n` )
+        : s v1 ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print v1 ) ( nurl_print ` = insertvalue ` ) ( nurl_print lty ) ( nurl_print ` undef, ptr ` ) ( nurl_print d1 ) ( nurl_print `, 0\n` )
+        : s v2 ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print v2 ) ( nurl_print ` = insertvalue ` ) ( nurl_print lty ) ( nurl_print ` ` ) ( nurl_print v1 ) ( nurl_print `, i64 ` ) ( nurl_print l1 ) ( nurl_print `, 1\n` )
+        = v v2
+    } {}
     : s dp ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print dp )
     ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty ty ) )
@@ -26422,7 +26654,9 @@ unsafe @ mem_path_to_indices s path → s {
 // static case back to that constant.
 @ mem_capture_hown i syms i cg s cn s gen s rlt → v {
     ( nurl_sym_def syms `__last_call_own__` `` )
-    ? ! ( __is_hown_ty rlt ) { ^ v } {}
+    // (…and a slice whose owner is not known here: a binding of it goes by
+    // this answer, agora #540.)
+    ? ! || ( __is_hown_ty rlt ) ( __slc_uncertain syms cn rlt ) { ^ v } {}
     : ~ s c ( nurl_sym_get syms `__last_call_name__` )
     : ~ s gn ``
     ? != 0 ( nurl_sym_len syms `__last_call_forward__` ) {
@@ -43177,10 +43411,21 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         ? is_mutable
         { ( nurl_sym_def syms ( nurl_str_cat name `__mutable` ) `1` ) }
         {}
-        ? | | rhs_is_slice_lit & rhs_slice_owned ( mem_is_slice_ty vt ) & rhs_is_owned_call ( mem_is_slice_ty vt )
+        // (A call whose slice is owned on some runs: the binding owns it
+        // by that call's answer, held in its owner flag — as a mutable
+        // one does, which a later `= name p` may point elsewhere.)
+        : b __slc_bind & & & ( mem_is_slice_ty vt ) ! rhs_is_owned_call == bck_rhs_tt TT_LPAREN ( __slc_uncertain syms ( nurl_sym_get syms `__last_call_name__` ) vt )
+        ? | | | rhs_is_slice_lit & rhs_slice_owned ( mem_is_slice_ty vt ) & rhs_is_owned_call ( mem_is_slice_ty vt ) __slc_bind
         { ( mem_own_add syms name )
             ( mem_slice_decl_add syms name )
-            ( mem_journal_push_slice cg vt ptr ) }
+            : ~ s __slj ``
+            ? | __slc_bind is_mutable {
+                : s __slb ? __slc_bind ( mem_call_retown syms cg ) ( nurl_str_cat `true` `` )
+                ( mem_slice_flag_new syms cg ptr ? == 0 ( nurl_str_len __slb ) ( nurl_str_cat `false` `` ) __slb )
+                ? __slc_bind { = __slj ? == 0 ( nurl_str_len __slb ) ( nurl_str_cat `none` `` ) __slb } {}
+            } {}
+            ( nurl_sym_def syms ( nurl_str_cat ptr `__slheir` ) `-` )
+            ( mem_journal_push_slice_if cg vt ptr __slj ) }
         {}
         // Dangling-borrow tracking (see the annotated path below).
         : s __bsrc2 ( nurl_sym_get syms `__last_borrow_src__` )
@@ -43564,10 +43809,20 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             ? is_mutable
             { ( nurl_sym_def syms ( nurl_str_cat name `__mutable` ) `1` ) }
             {}
-            ? | | rhs_is_slice_lit & rhs_slice_owned ( mem_is_slice_ty ptype ) & rhs_is_owned_call ( mem_is_slice_ty ptype )
+            // (A call whose slice is owned on some runs, or a mutable
+            // binding: an owner flag, as in the inference path.)
+            : b __slc_bind & & & ( mem_is_slice_ty ptype ) ! rhs_is_owned_call == bck_rhs_tt TT_LPAREN ( __slc_uncertain syms ( nurl_sym_get syms `__last_call_name__` ) ptype )
+            ? | | | rhs_is_slice_lit & rhs_slice_owned ( mem_is_slice_ty ptype ) & rhs_is_owned_call ( mem_is_slice_ty ptype ) __slc_bind
             { ( mem_own_add syms name )
                 ( mem_slice_decl_add syms name )
-                ( mem_journal_push_slice cg ptype ptr ) }
+                : ~ s __slj ``
+                ? | __slc_bind is_mutable {
+                    : s __slb ? __slc_bind ( mem_call_retown syms cg ) ( nurl_str_cat `true` `` )
+                    ( mem_slice_flag_new syms cg ptr ? == 0 ( nurl_str_len __slb ) ( nurl_str_cat `false` `` ) __slb )
+                    ? __slc_bind { = __slj ? == 0 ( nurl_str_len __slb ) ( nurl_str_cat `none` `` ) __slb } {}
+                } {}
+                ( nurl_sym_def syms ( nurl_str_cat ptr `__slheir` ) `-` )
+                ( mem_journal_push_slice_if cg ptype ptr __slj ) }
             {}
             // Dangling-borrow tracking: `: *T p ( vec_data … v )` binds a
             // pointer INTO v's buffer. Remember where it came from so a
@@ -44098,12 +44353,56 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // alias the old one either: that move frees it too.
         : b rhs_other_owner & & ( is_ident_tok bck_rhs_tt ) ! ( seq bck_rhs_val name )
         ( nurl_sym_has_word syms `__owned_slices__` bck_rhs_val )
-        ? & lhs_is_owned_slc
-        | | | == bck_rhs_tt TT_LBRACK
-        ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `1` )
-        rhs_slice_owned rhs_other_owner
+        // (…and stays the owner when it lives as long as `name` does —
+        // declared in the same scope or one around it: `name`, flagged,
+        // views it. Moved, it was still read where it stood, and the next
+        // `= name [ … ]` freed it under that read. Agora #540.)
+        : s __sld_r ? rhs_other_owner ( nurl_sym_get2 syms bck_rhs_val `__bdepth` ) ( nurl_str_cat `` `` )
+        : s __sld_l ? rhs_other_owner ( nurl_sym_get2 syms name `__bdepth` ) ( nurl_str_cat `` `` )
+        : b __sl_view & & & rhs_other_owner lhs_is_owned_slc != 0 ( nurl_str_len ( mem_slice_flag_of syms name ) )
+        & & != 0 ( nurl_str_len __sld_r ) != 0 ( nurl_str_len __sld_l ) <= ( nurl_str_to_int __sld_r ) ( nurl_str_to_int __sld_l )
+        // (…and from a scope inside `name`'s, the source stays the owner
+        // while it lives, `name` its heir: moved, it was still read in its
+        // own scope after `= name [ … ]` had freed it.)
+        : b __sl_heir & & & & rhs_other_owner lhs_is_owned_slc ! __sl_view != 0 ( nurl_str_len ( mem_slice_flag_of syms name ) )
+        & & != 0 ( nurl_str_len __sld_r ) != 0 ( nurl_str_len __sld_l ) != 0 ( nurl_sym_len2 syms ( nurl_sym_get2 syms bck_rhs_val `__ptr` ) `__slheir` )
+        : b __sl_fresh & lhs_is_owned_slc | | == bck_rhs_tt TT_LBRACK
+        ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `1` ) rhs_slice_owned
+        ? & lhs_is_owned_slc | __sl_fresh rhs_other_owner
         { ( mem_emit_slice_free syms cg name ) }
         {}
+        // The binding's owner flag (agora #540) takes the new value's
+        // owner: a fresh value's, `true`; a moved one's, its source's flag;
+        // a call whose answer is not known here, that answer; anything else
+        // (a parameter, a view) is lent — kept owned only if it is the very
+        // buffer the binding already owned (`= d ( id d )`). The old buffer
+        // is freed unless the new value points into it, and a lent value
+        // never was: kept owned, `= d p` freed the caller's buffer.
+        : s __slf ? lhs_is_owned_slc ( mem_slice_flag_of syms name ) ( nurl_str_cat `` `` )
+        : ~ s __sl_j ``
+        ? != 0 ( nurl_str_len __slf ) {
+            : ~ s __sl_nf ( nurl_str_cat `true` `` )
+            ? __sl_fresh {} {
+                ? | __sl_view __sl_heir {
+                    = __sl_nf ( nurl_str_cat `false` `` ) = __sl_j ( nurl_str_cat `none` `` )
+                    ? __sl_heir { ( nurl_sym_set_deep syms ( nurl_str_cat ( nurl_sym_get2 syms bck_rhs_val `__ptr` ) `__slheir` ) ( nurl_str_cat3 __slf ` ` ptr ) ) } {}
+                } {
+                    ? rhs_other_owner {
+                        : s __sf2 ( mem_slice_flag_of syms bck_rhs_val )
+                        ? != 0 ( nurl_str_len __sf2 ) {
+                            = __sl_nf ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print __sl_nf ) ( nurl_print ` = load i1, ptr ` ) ( nurl_print __sf2 ) ( nurl_print `\n` )
+                        } {}
+                    } {
+                        : s __slb ? & == bck_rhs_tt TT_LPAREN ( __slc_uncertain syms ( nurl_sym_get syms `__last_call_name__` ) vt ) ( mem_call_retown syms cg ) ( nurl_str_cat `` `` )
+                        : s __sb ? == 0 ( nurl_str_len __slb ) ( nurl_str_cat `false` `` ) __slb
+                        = __sl_nf ( mem_slice_reassign_lent syms cg name __slf val __sb )
+                        = __sl_j ? ( seq __sb `false` ) ( nurl_str_cat `none` `` ) ( nurl_str_cat __sb `` )
+                    }
+                }
+            }
+            ( mem_slice_flag_set syms __slf __sl_nf )
+        } {}
         // A binding declared from a call that answers ownership per call
         // (`: s acc ( f … )`) is owned through its guard: the proof slot
         // and the drop slot mem_bind_guard set up, not `__owned_strings__`.
@@ -44300,7 +44599,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // with a bare-identifier RHS copies src's { ptr, len } into dst. If
         // src owned its buffer, MOVE that ownership to dst — otherwise both
         // src and dst free the same buffer at scope exit (a double-free).
-        ? & & lhs_is_owned_slc ( is_ident_tok bck_rhs_tt )
+        ? & & & lhs_is_owned_slc ( is_ident_tok bck_rhs_tt ) ! | __sl_view __sl_heir
         ( nurl_sym_has_word syms `__owned_slices__` bck_rhs_val )
         { ( mem_own_slice_remove syms bck_rhs_val ) }
         {}
@@ -44868,7 +45167,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // Replacing a tracked binding releases its previous registration via
         // nurl_free. Register the new owner, including copied/branch results.
         ? lhs_is_owned_str { ( mem_journal_push_str syms cg ptr ) } {}
-        ? lhs_is_owned_slc { ( mem_journal_push_slice cg vt ptr ) } {}
+        ? lhs_is_owned_slc { ( mem_journal_push_slice_if cg vt ptr __sl_j ) } {}
         // Panic-unwind journal: assigning an owned struct into a by-ref
         // capture escapes it to the caller's frame. Forget its heap leaves
         // so a later panic's drain does not free what the caller now owns
@@ -52497,6 +52796,8 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     // (…and its slice returns answer for it, not for the enclosing function.)
     ( nurl_sym_def body_syms `__fn_ret_owned__` `` )
     ( nurl_sym_def body_syms `__fn_ret_slice_mixed__` `` )
+    ( nurl_sym_def body_syms `__slfdyn__` `` )
+    ( nurl_sym_def body_syms `__ret_slflags__` `` )
     ( nurl_sym_def body_syms `__fn_ret_proof_live__` `` )
 
     // Register closure parameters
@@ -60186,6 +60487,10 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     ( nurl_sym_def syms `__last_ident_name__` `` )
     ( nurl_sym_def syms `__fn_ret_owned__` `` )
     ( nurl_sym_def syms `__fn_ret_slice_mixed__` `` )
+    // Owner flags not always `true`, and those a return handed back
+    // (mem_slice_flag_set, gen_ret): together, whether it answers per call.
+    ( nurl_sym_def syms `__slfdyn__` `` )
+    ( nurl_sym_def syms `__ret_slflags__` `` )
     // Borrow provenance: does THIS function return a borrow (a value that
     // aliases a parameter)? Set by gen_ret from __last_value_borrow__.
     ( nurl_sym_def syms `__fn_ret_borrow__` `` )
@@ -60948,6 +61253,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     ( lint_fn_end lex )
     // Snapshot owned-return flags BEFORE pop: nurl_sym_get returns a pointer
     // into the current scope's entry, which nurl_sym_pop then frees.
+    ( mem_slice_ret_settle syms )
     : i fn_ret_owned_flag ? & != 0 ( nurl_sym_len syms `__fn_ret_owned__` ) == 0 ( nurl_sym_len syms `__fn_ret_slice_mixed__` ) 1 0
     // Ownership is an ALL-paths property: one return site that proved a
     // fresh owned string must not speak for a sibling that returned a
