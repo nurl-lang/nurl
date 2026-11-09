@@ -101,7 +101,7 @@ jobs:
         run: |
           RUSTUP_VER=1.29.1
           RUSTUP_SHA=dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71
-          curl --proto '=https' --tlsv1.2 -fsSL -o /tmp/rustup-init \
+          curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-delay 5 --retry-all-errors -o /tmp/rustup-init \
             "https://static.rust-lang.org/rustup/archive/${RUSTUP_VER}/x86_64-unknown-linux-gnu/rustup-init"
           echo "$RUSTUP_SHA  /tmp/rustup-init" | sha256sum -c -
           chmod +x /tmp/rustup-init

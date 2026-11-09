@@ -274,7 +274,7 @@ jobs:
           esac
           url="https://ziglang.org/download/${ZIG_VER}/zig-${ZA}-linux-${ZIG_VER}.tar.xz"
           echo "Downloading $url"
-          curl -fsSL "$url" -o /tmp/zig.tar.xz
+          curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors "$url" -o /tmp/zig.tar.xz
           echo "$ZIG_SHA  /tmp/zig.tar.xz" | sha256sum -c -
           mkdir -p vendor
           tar -xf /tmp/zig.tar.xz -C vendor
@@ -475,7 +475,7 @@ jobs:
           # from https://ziglang.org/download/index.json. Bump it with ZIG_VER.
           $zigSha = "b03f477a1943673e02aca0f570e8030dffd536ce1f45cbc4d3326ec31159562e"
           $url = "https://ziglang.org/download/$zigVer/zig-x86_64-windows-$zigVer.zip"
-          Invoke-WebRequest $url -OutFile zig.zip
+          Invoke-WebRequest $url -OutFile zig.zip -MaximumRetryCount 5 -RetryIntervalSec 5
           $got = (Get-FileHash zig.zip -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($got -ne $zigSha) { throw "zig.zip sha256 is $got, expected $zigSha" }
           Expand-Archive zig.zip -DestinationPath vendor
