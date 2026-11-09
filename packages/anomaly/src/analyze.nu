@@ -320,15 +320,17 @@ $ `orgfiles.nu`
 // The binary that runs jobs: this one, normally. A test binary is not
 // `anomaly` — re-spawning it would run the whole suite again, in the
 // same store — so tests point this at something harmless.
-: ~ s g_ana_exe ``
+// (A `Locked` made at start: the path is its own copy, set and read whole
+// from any thread, with no `unsafe` — agora #470.)
+@ __ana_exe_start → ( Locked String ) { ^ ( locked_new [String] ( string_new ) ) }
 
-// (The global keeps a copy of its own: the caller's string may go first.
-// `unsafe`: a string global that owns its text is handed it only where
-// nothing reads it meanwhile — once, before serving.)
-unsafe @ analyze_set_exe s exe → v { = g_ana_exe ( nurl_str_cat exe `` ) }
+: ( Locked String ) g_ana_exe ( __ana_exe_start )
+
+@ analyze_set_exe s exe → v { ( locked_set [String] g_ana_exe ( string_from exe ) ) }
 
 @ analyze_exe → String {
-    ? > ( nurl_str_len g_ana_exe ) 0 { ^ ( string_from g_ana_exe ) } {}
+    : String set ( locked_get [String] g_ana_exe )
+    ? > ( string_len set ) 0 { ^ set } {}
     ?? ( fs_readlink `/proc/self/exe` ) {
         T p → { ^ p }
         F _ → {}

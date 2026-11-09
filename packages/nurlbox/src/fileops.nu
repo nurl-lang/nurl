@@ -533,7 +533,7 @@ $ `stdlib/core/slice.nu`
                 ?? r {
                     T _ → {
                         ? ( bx_has o `v` ) {
-                            ( nurl_print ( bx_name ) )
+                            ( nurl_print ( string_data ( bx_name ) ) )
                             ( nurl_print `: created directory '` )
                             ( nurl_print p )
                             ( nurl_print `'\n` )

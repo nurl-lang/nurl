@@ -70,27 +70,32 @@ $ `mcp.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/core/slice.nu`
 
-// Store root used by every handler; set once before serving.
-: ~ s g_an_root `.`
+// The store root every handler uses, and the directory holding the
+// dashboard HTML (modelmanager.html, etc; empty = static serving disabled,
+// API-only). A `Locked` made at start, set before serving: each its own
+// copy, read whole from any worker, with no `unsafe` (agora #470).
+: AnPaths {
+    String root
+    String webroot
+}
 
-// (The global keeps a copy of its own: the caller's string may go first.
-// `unsafe`: a string global that owns its text is handed it only where
-// nothing reads it meanwhile — once, before serving.)
-unsafe @ anomaly_service_set_root s root → v {
-    = g_an_root ( nurl_str_cat root `` )
+@ __an_paths_start → ( Locked AnPaths ) { ^ ( locked_new [AnPaths] @ AnPaths { ( string_from `.` ) ( string_new ) } ) }
+
+: ( Locked AnPaths ) g_an_paths ( __an_paths_start )
+
+@ anomaly_service_set_root s root → v {
+    ( locked_update [AnPaths] g_an_paths \ inout AnPaths ps → v { ( string_clear . ps root ) ( string_push_str . ps root root ) } )
     ( orgfiles_set_root root )
 }
 
-// Directory holding the dashboard HTML (modelmanager.html, etc). Empty =
-// static serving disabled (API-only). Set once before serving.
-: ~ s g_an_webroot ``
-
-// (The global keeps a copy of its own: the caller's string may go first.
-// `unsafe`: a string global that owns its text is handed it only where
-// nothing reads it meanwhile — once, before serving.)
-unsafe @ anomaly_service_set_webroot s root → v {
-    = g_an_webroot ( nurl_str_cat root `` )
+@ anomaly_service_set_webroot s root → v {
+    ( locked_update [AnPaths] g_an_paths \ inout AnPaths ps → v { ( string_clear . ps webroot ) ( string_push_str . ps webroot root ) } )
 }
+
+// The store root, the caller's own copy.
+@ __an_root → String { : AnPaths ps ( locked_get [AnPaths] g_an_paths ) ^ ( string_from ( string_data . ps root ) ) }
+
+@ __an_webroot → String { : AnPaths ps ( locked_get [AnPaths] g_an_paths ) ^ ( string_from ( string_data . ps webroot ) ) }
 
 // ── Static dashboard serving ──────────────────────────────────────────
 
@@ -125,10 +130,11 @@ unsafe @ anomaly_service_set_webroot s root → v {
 // file is missing. `relfile` is a trusted constant (never request-derived),
 // so no path-traversal scrubbing is needed here.
 @ __an_serve_file s relfile → HttpResponse {
-    ? > ( nurl_str_len g_an_webroot ) 0 {} {
+    : String wr ( __an_webroot )
+    ? > ( string_len wr ) 0 {} {
         ^ ( __an_json_err 404 `Dashboard is not available (no web root configured)` )
     }
-    : String path ( path_join g_an_webroot relfile )
+    : String path ( path_join ( string_data wr ) relfile )
     : !String IoErr fr ( read_file ( string_data path ) )
     ?? fr {
         T text → {
@@ -365,7 +371,8 @@ unsafe @ anomaly_service_set_webroot s root → v {
 // file the handler reads: there is no shared store to reach past it, and a
 // name another tenant uses is simply not in this one.
 @ __an_store_of Principal p → Store {
-    ^ ( store_open_org g_an_root ( string_data . p org ) )
+    : String r ( __an_root )
+    ^ ( store_open_org ( string_data r ) ( string_data . p org ) )
 }
 
 // Ownership is checked exactly when there is something to own.
@@ -3436,7 +3443,8 @@ unsafe @ anomaly_service_set_webroot s root → v {
     : ~ b adopted F
     ? exists {} {
         ? ( az_is_home_org ( string_data . me org ) ) {
-            : Store waiting ( store_open g_an_root )
+            : String r ( __an_root )
+            : Store waiting ( store_open ( string_data r ) )
             ? ( store_exists waiting ( string_data mname ) ) {
                 = adopted ( store_move_model waiting st ( string_data mname ) ( now_seconds ) )
                 = exists adopted
@@ -4100,7 +4108,8 @@ unsafe @ anomaly_service_set_webroot s root → v {
     ( json_obj_set params `created` ( json_int ( now_seconds ) ) )
     ( json_obj_set params `by` ( json_str_lit ( string_data . me sub ) ) )
     // The job is another process: it learns where the store is from here.
-    ( json_obj_set params `root` ( json_str_lit g_an_root ) )
+    : String r ( __an_root )
+    ( json_obj_set params `root` ( json_str_lit ( string_data r ) ) )
     : String wq ( __an_query_str . req query `wait` )
     : ~ i wait AN_ANALYZE_WAIT_DEFAULT
     ? > ( string_len wq ) 0 { ?? ( string_to_int wq ) { T x → { = wait x } F _ → {} } } {}
@@ -4414,7 +4423,8 @@ unsafe @ anomaly_service_set_webroot s root → v {
         F _ → {}
         T db → {
             : ( Vec String ) ms ( az_org_model_names db )
-            : Store st ( store_open_org g_an_root org )
+            : String r ( __an_root )
+            : Store st ( store_open_org ( string_data r ) org )
             : i n ( vec_len [String] ms )
             : ~ i k 0
             ~ < k n {
