@@ -874,6 +874,17 @@ jobs:
         # every frame, which is the class of bug it exists to stop.
         run: ./tools/check_strict_arity.sh
 
+      - name: runtime entries that may panic are known to journal elision
+        # nurlc drops the panic journal's registration of a temporary when
+        # nothing up to its release can panic, and which runtime entries can
+        # is a list in nurlc kept by hand. An entry missing from it loses the
+        # registrations around its calls, and a panic from it under recover
+        # leaks them (agora #537). This compiles the runtime to IR, collects
+        # every entry whose calls reach a panic, and asks nurlc about each.
+        run: |
+          python3 tools/check_may_panic.py build/nurlc
+          python3 tools/tests/test_check_may_panic.py
+
       - name: diagnostic-coverage gate (does anything print this?)
         # Every `die` / `warn` site in the compiler against the corpus:
         # which messages does some test actually make it print? A message

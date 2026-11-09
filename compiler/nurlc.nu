@@ -76750,6 +76750,22 @@ unsafe @ __mp_runtime_panics s nm i p i le → b {
     ^ F
 }
 
+// `--may-panic=`'s answer, one line per name. (A drop / clone walk's answer
+// depends on the call's thunk argument, which no name alone has: `?`.)
+@ __mp_query s names → v {
+    : ~ s rest ( nurl_str_cat names `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : i c ( nurl_str_find rest `,` )
+        : s nm ? < c 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 c )
+        = rest ? < c 0 `` ( nurl_str_slice rest + c 1 - - ( nurl_str_len rest ) c 1 )
+        ? != 0 ( nurl_str_len nm ) {
+            : b thunked | != 0 ( nurl_str_starts nm `nurl_vec_drop` ) != 0 ( nurl_str_starts nm `nurl_vec_clone` )
+            : s v ? thunked `?` ? ( __mp_runtime_panics nm 0 0 ) `T` `F`
+            ( nurl_println ( nurl_str_cat3 nm ` ` v ) )
+        } {}
+    }
+}
+
 // The callee of the call whose `call ` ends at `cp`, on the line ending at
 // `le`: its function index (>= 0), -1 for an external function that cannot
 // panic, -2 for one that can or one not known (a call through a pointer).
@@ -80148,6 +80164,11 @@ unsafe @ main → i {
             = ai + ai 1 continue
         } {}
         ? ( seq a `--unsafe-report` ) { = g_unsafe_report 1 = ai + ai 1 continue } {}
+        // `--may-panic=a,b,…`: what journal elision takes each runtime entry
+        // for — `name T` (may start a panic: temporaries around a call keep
+        // their registrations) or `name F`. tools/check_may_panic.py holds
+        // it against the runtime's own call graph (agora #537).
+        ? != 0 ( nurl_str_starts a `--may-panic=` ) { ( __mp_query ( nurl_str_slice a 12 - ( nurl_str_len a ) 12 ) ) ^ 0 } {}
         ? ( seq a `--sanitize-address` ) { = g_sanitize_address 1 } {
             ? | ( seq a `--version` ) ( seq a `-v` )
             { ( nurl_print ( nurl_version ) ) ( nurl_print `\n` ) ^ 0 }
