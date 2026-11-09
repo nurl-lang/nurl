@@ -54628,6 +54628,14 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
             } {}
         } {
             ? __t_bind {
+                // (…a binding lent out of a local of this frame on some path —
+                // a join's arm over one: `: !i Res q ? c ( getr pb ) ( getr lb
+                // )` — is refused as `^ q` is, when it cannot be copied: the
+                // local releases it on the way out. Agora #546.)
+                : s __t_sll ? ( seq ( nurl_sym_get2 syms __t_up `__alias_part` ) `1` ) `` ( mem_payload_local_lend syms cg __try_inner_v )
+                ? & & != 0 ( nurl_str_len __t_sll ) ! ( __clone_supported vt syms ) ( __nc_held_ty vt ) {
+                    ( __park_nc_local_lend lex ( nurl_sym_get syms `__last_local_lend__` ) ( nurl_sym_get2 syms __try_inner_v `__pljr` ) vt )
+                } {}
                 // (…a binding of what a call may lend: as that call, agora
                 // #200.)
                 : s __t_nk ( nurl_sym_get2 syms __try_inner_v `__nclk` )

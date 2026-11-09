@@ -9,3 +9,7 @@
   `^ q` does. Taken for owned, the caller released the parameter's own
   error. The three `try_nc_error_*` probes now run clean under strict
   LSan and leave `lsan_strict.txt`.
+- **A try over a binding lent out of a local is refused as `^` of it is**
+  (Agora #546). `: !i Res q ? c ( getr pb ) ( getr lb )  \ q`, with lb a
+  local, handed the caller lb's error on that path, and lb released it on
+  the way out (heap use after free). `^ q` was already refused.
