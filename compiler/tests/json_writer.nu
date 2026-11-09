@@ -7,6 +7,7 @@
 $ `stdlib/core/io.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/ext/json.nu`
+$ `stdlib/std/utf8.nu`
 
 @ show s label ( Vec u ) out → v {
     ( nurl_print label )
@@ -127,26 +128,46 @@ $ `stdlib/ext/json.nu`
 }
 
 // The escaping rules spelled out one byte at a time — what the writer's
-// escaper must produce, byte for byte.
-@ ref_escape ( Vec u ) out ( Vec u ) text → v {
+// escaper must produce, byte for byte. A byte of 0x80 and up starts a
+// UTF-8 sequence, copied as it is when well formed; a byte that is not
+// part of one is U+FFFD (agora #516). `clean` gets the text the document
+// holds: `text` itself when it was UTF-8.
+@ ref_escape ( Vec u ) out ( Vec u ) clean ( Vec u ) text → v {
     ( vec_push [u] out # u 34 )
     : i n ( vec_len [u] text )
     : ~ i k 0
     ~ < k n {
         : i c # i ( vec_at [u] text k )
-        ? == c 34 { ( bytes_extend_str out `\\"` ) } {
-            ? == c 92 { ( bytes_extend_str out `\\\\` ) } {
-                ? == c 10 { ( bytes_extend_str out `\\n` ) } {
-                    ? == c 9 { ( bytes_extend_str out `\\t` ) } {
-                        ? == c 13 { ( bytes_extend_str out `\\r` ) } {
-                            ? == c 8 { ( bytes_extend_str out `\\b` ) } {
-                                ? == c 12 { ( bytes_extend_str out `\\f` ) } {
-                                    ? < c 32 {
-                                        ( bytes_extend_str out `\\u00` )
-                                        ( vec_push [u] out # u ? < >> c 4 10 + 48 >> c 4 + 87 >> c 4 )
-                                        ( vec_push [u] out # u ? < & c 15 10 + 48 & c 15 + 87 & c 15 )
-                                    } { ( vec_push [u] out # u c ) }
-                                } } } } } } }
+        ? >= c 128 {
+            : Utf8Dec d ( utf8_decode_at ( slice_from_vec [u] text ) k )
+            ? == . d ok 1 {
+                : ~ i j 0
+                ~ < j . d width {
+                    ( vec_push [u] out ( vec_at [u] text + k j ) )
+                    ( vec_push [u] clean ( vec_at [u] text + k j ) )
+                    = j + j 1
+                }
+                = k + - k 1 . d width
+            } {
+                ( vec_push [u] out # u 239 ) ( vec_push [u] out # u 191 ) ( vec_push [u] out # u 189 )
+                ( vec_push [u] clean # u 239 ) ( vec_push [u] clean # u 191 ) ( vec_push [u] clean # u 189 )
+            }
+        } {
+            ( vec_push [u] clean # u c )
+            ? == c 34 { ( bytes_extend_str out `\\"` ) } {
+                ? == c 92 { ( bytes_extend_str out `\\\\` ) } {
+                    ? == c 10 { ( bytes_extend_str out `\\n` ) } {
+                        ? == c 9 { ( bytes_extend_str out `\\t` ) } {
+                            ? == c 13 { ( bytes_extend_str out `\\r` ) } {
+                                ? == c 8 { ( bytes_extend_str out `\\b` ) } {
+                                    ? == c 12 { ( bytes_extend_str out `\\f` ) } {
+                                        ? < c 32 {
+                                            ( bytes_extend_str out `\\u00` )
+                                            ( vec_push [u] out # u ? < >> c 4 10 + 48 >> c 4 + 87 >> c 4 )
+                                            ( vec_push [u] out # u ? < & c 15 10 + 48 & c 15 + 87 & c 15 )
+                                        } { ( vec_push [u] out # u c ) }
+                                    } } } } } } }
+        }
         = k + k 1
     }
     ( vec_push [u] out # u 34 )
@@ -155,8 +176,9 @@ $ `stdlib/ext/json.nu`
 // Strings of every byte value and length 0..300, from a fixed LCG; one in
 // four mostly escapes (the escaper's room is re-reserved again and again),
 // written after a prefix of varying length so the buffer's own length and
-// capacity vary too. Each must be the reference's bytes and parse back
-// to the string it came from.
+// capacity vary too. Each must be the reference's bytes, be UTF-8, and
+// parse back to the text it holds: the string it came from where that was
+// UTF-8, with U+FFFD for each byte that was not.
 @ escape_stress → b {
     : ~ i seed 12345
     : ~ i round 0
@@ -174,17 +196,20 @@ $ `stdlib/ext/json.nu`
         }
         : ( Vec u ) got ( vec_with_cap [u] % round 7 )
         : ( Vec u ) want ( vec_new [u] )
+        : ( Vec u ) clean ( vec_new [u] )
         : ~ i p 0
         ~ < p % round 13 { ( vec_push [u] got # u 120 ) ( vec_push [u] want # u 120 ) = p + p 1 }
         : JsonWriter w ( json_writer )
         ( jw_str_slice w got ( slice_from_vec [u] text ) )
-        ( ref_escape want text )
+        ( ref_escape want clean text )
         ? ! ( slice_bytes_eq ( slice_from_vec [u] got ) ( slice_from_vec [u] want ) ) { ^ F } {}
+        : String gs ( bytes_to_str got )
+        ? ! ( utf8_valid ( string_data gs ) ) { ^ F } {}
         : ( Vec u ) doc ( bytes_slice got % round 13 ( vec_len [u] got ) )
         ?? ( json_parse_bytes doc ) {
             T j → {
                 ?? j {
-                    JStr back → { ? ! ( slice_bytes_eq ( string_bytes back ) ( slice_from_vec [u] text ) ) { ^ F } {} }
+                    JStr back → { ? ! ( slice_bytes_eq ( string_bytes back ) ( slice_from_vec [u] clean ) ) { ^ F } {} }
                     _ → { ^ F }
                 }
             }
