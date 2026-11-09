@@ -45035,17 +45035,26 @@ unsafe @ gen_assign i lex i syms i cg → s {
     : s __fs_val ( nurl_str_cat ( nurl_lex_val lex ) `` )
     : i __fs_line ( nurl_lex_line lex )
     ( nurl_sym_def syms `__last_expr_refdepth__` `` )
-    : b indirect != 0 ( nurl_sym_len syms `__field_store_indirect__` )
+    // (Read before the value is made: a store inside it — a value block —
+    // sets these again for its own, and the row below landed on that
+    // store's binding, agora #348's review.)
+    // A nested path (`= . . h w v x`) walks h's own storage by address: the
+    // store is a store into h, as `= . h v x` is, whatever pointer it went
+    // through (agora #348). Taken for memory managed by hand, it kept no
+    // view row, copied no borrowed argument, and moved nothing.
+    : b __fs_nested != 0 ( nurl_sym_len syms `__field_store_nested__` )
+    : b indirect & ! __fs_nested != 0 ( nurl_sym_len syms `__field_store_indirect__` )
     // A named field of a struct reached through a pointer: memory the
     // program manages by hand. A value stored there moves out of its
     // binding, but a borrowed one is stored as is (g_fn_stores).
-    : b manual != 0 ( nurl_sym_len syms `__field_store_manual__` )
+    : b manual & ! __fs_nested != 0 ( nurl_sym_len syms `__field_store_manual__` )
+    : s __fs_obj0 ( nurl_str_cat ( nurl_sym_get syms `__last_field_obj__` ) `` )
     : i __fs_sxn0 g_sx_n
     : i __fs_at ( nurl_lex_cur_start lex )
     : ~ s __fs_v ( gen_expr lex syms cg )
     : s __fs_ty ( nurl_get_last_type )
     // (An element copied out of a parameter's buffer: agora #347.)
-    ? indirect { ( __note_vcopy syms ( nurl_sym_get syms `__last_field_obj__` ) __fs_ty ( nurl_lex_src_slice lex __fs_at - ( nurl_lex_cur_start lex ) __fs_at ) ) } {}
+    ? indirect { ( __note_vcopy syms __fs_obj0 __fs_ty ( nurl_lex_src_slice lex __fs_at - ( nurl_lex_cur_start lex ) __fs_at ) ) } {}
     : i __fs_eff_tt ( __val_eff_tt __fs_tt )
     // A value that may hold views stored into a field of a binding's struct
     // (`= . r name x`): the struct holds those views from here on, so it
@@ -45054,7 +45063,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
     // an error; the caller's (an `inout` struct), an error where it ends.
     ? & & != 0 g_srcx_on ! manual ! indirect {
         : i __fs_c ( bck_walk_class __fs_ty )
-        : s __fs_obj ( nurl_sym_get syms `__last_field_obj__` )
+        : s __fs_obj __fs_obj0
         ? & >= __fs_c 2 != 0 ( nurl_str_len __fs_obj ) {
             : s __fs_sx ( __sx_operand_c syms __fs_tt __fs_val __fs_c ( __sx_froot syms __fs_tt __fs_ty ) __fs_sxn0 )
             ? ! ( seq __fs_sx `-` ) { ( bck_stash_vpass __fs_obj __fs_line `=.` 1 __fs_sx ) } {}
@@ -45127,7 +45136,6 @@ unsafe @ gen_assign i lex i syms i cg → s {
     // own (`= . a f v`, `a` a local): copied, as the literal `@ A { v }`
     // copies it. Taken over instead, the caller handed its value in and
     // `a` freed it at return while the caller still read it.
-    : s __fs_obj0 ( nurl_sym_get syms `__last_field_obj__` )
     : i __fs_pi ( nurl_sym_word_index syms `__fn_param_names__` __fs_val )
     : ~ b __fs_param_copy F
     ? & & & & ( is_ident_tok __fs_tt ) ! manual ! indirect ! __fs_putback >= __fs_pi 0 {
@@ -45196,7 +45204,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         ? & != 0 ( nurl_str_len __mbf ) ( nurl_sym_has_word syms `__user_drops__` ( str_first_word __mbf ) )
         { ( mem_udrop_field_move syms cg __mbp __mbf ) } {}
     } {}
-    : s __fs_obj ( nurl_str_cat ( nurl_sym_get syms `__last_field_obj__` ) `` )
+    : s __fs_obj ( nurl_str_cat __fs_obj0 `` )
     : b __fs_scratch & & & manual ( is_ident_tok __fs_tt ) != 0 ( nurl_str_len __fs_obj )
     & < ( nurl_sym_word_index syms `__fn_param_names__` __fs_obj ) 0
     >= ( nurl_sym_word_index syms `__fn_param_names__` __fs_val ) 0
@@ -45791,6 +45799,10 @@ unsafe @ __replaces_note i syms s name s field → v {
     } {}
     ( nurl_sym_def syms `__field_store_indirect__`
     ? | ( is_ptr_ty pt ) ( mem_is_slice_ty pt ) `1` `` )
+    // (A nested path, `= . . h w v x`, walks h's own storage by address:
+    // the store is into h, whatever the pointer it went through — agora
+    // #348. gen_field_rhs keeps the view it stores in h, as for `= . h v x`.)
+    ( nurl_sym_def syms `__field_store_nested__` ? nested `1` `` )
     : b __fs_named & & ( is_ptr_ty pt ) == ( nurl_str_get pt 0 ) 37 ( is_ident_tok ( nurl_lex_type lex ) )
     ( nurl_sym_def syms `__field_store_manual__`
     ? & __fs_named != 0 ( nurl_sym_len syms ( nurl_str_cat4 ( nurl_str_slice pt 1 - ( nurl_str_len pt ) 2 ) `__` ( nurl_lex_val lex ) `__idx` ) )
