@@ -27574,6 +27574,29 @@ unsafe @ __src_has_raw_ptr s text → b {
     ( mem_zero_field cg fp fsty fidx ffty c )
     ( mem_udrop_flag_set syms cg ptr c )
     ( __sb syms ptr `` )
+    // (…and a struct that holds the field only as a borrow — `: E x (
+    // vec_at [E] top 0 )` — gives it up to no one: on those paths the
+    // binding goes on borrowing it from what the struct borrows (`top`),
+    // past the struct's scope; agora #533.)
+    ? ! ( seq c `1` ) { ( bck_note_moved_field syms ptr ) } {}
+}
+
+// Binding `ptr` was just given a field of a struct that dies first
+// (mem_udrop_field_move): its borrow row (mode `t`, bck_brw_leaves) begins
+// from that field only where the struct is itself a borrow — then it owns
+// nothing and hands the field to no one; an owner hands it over.
+@ bck_note_moved_field i syms s ptr → v {
+    ? | | == g_borrowck 0 != g_bck_rec_off 0 ! ( bck_sound ) { ^ v } {}
+    : s name ( nurl_sym_get2 syms ptr `__bname` )
+    ? | | == 0 ( nurl_str_len name ) ! ( seq name ( nurl_sym_get g_bck `lastname` ) ) == 0 ( nurl_str_len g_bck_rhs_path ) { ^ v } {}
+    : s saved ( nurl_sym_get g_bck `reads` )
+    ( bck_put `reads` `` )
+    ( bck_put `brwsx` g_bck_rhs_path )
+    ( bck_put `brwmode` `t` )
+    = g_bck_brw_on 1
+    ( bck_record `borrow` name ( nurl_str_to_int ( nurl_sym_get g_bck `lastline` ) ) )
+    = g_bck_brw_on 0
+    ( bck_put `reads` saved )
 }
 
 // How a binding came by its value when it does not own it — `1`: it
@@ -34683,7 +34706,9 @@ unsafe @ bck_sx_ev s st s e b arg → s {
 // `:` join (`p`: a name arm is its alias rows', a borrow arm — a payload, a
 // copy of a borrow — its own rows', path-precise); a cursor's or an `=`'s
 // join's owner names too (`n`: it has no alias rows); a value block's tail
-// whatever it is (`b`: no other row names it). A leaf released or moved,
+// whatever it is (`b`: no other row names it); a field moved out of a
+// struct that dies first, only where that struct is itself a borrow (`t`,
+// bck_note_moved_field). A leaf released or moved,
 // or one of a scope inside the binding's, is none; the binding itself
 // stands for what it borrowed before its `=` (`obs_`).
 @ bck_brw_leaves s st s mode s sx i wid → s {
@@ -34702,7 +34727,7 @@ unsafe @ bck_sx_ev s st s e b arg → s {
         // (The binding itself, given a value of its own handle — `= j { j }`:
         // what it borrowed before its `=`, `obs_`; agora #554.)
         ? & == r wid == r id { = out ( __word_union out ( nurl_sym_get g_bck ( bck_bkey `obs_` ( nurl_str_int wid ) ) ) ) } {}
-        : b take ? | == r wid > ( bck_id_dser r ) ( bck_id_dser wid ) F ? ( bck_dead_state lv ) F ? == m 98 T ? lent F ? == m 110 T != r id
+        : b take ? == m 116 & lent != r wid ? | == r wid > ( bck_id_dser r ) ( bck_id_dser wid ) F ? ( bck_dead_state lv ) F ? == m 98 T ? lent F ? == m 110 T != r id
         ? take { = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat w `` ) ( nurl_str_cat3 out ` ` w ) } {}
     }
     ^ out
