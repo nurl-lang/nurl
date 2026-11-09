@@ -43977,7 +43977,8 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // parameter, given a value that may view something (`= w @ V { (
         // string_data b ) }`) — refused at the walk, as a field store into
         // one is (__clo_cap_marks, agora #312).
-        ? & & & != 0 g_bck_closure_depth >= ( bck_walk_class vt ) 2 ! ( seq g_bck_rhs_sx `-` ) | ( __is_clo_capture syms name ) ( seq ( nurl_sym_get2 syms name `__inout` ) `1` ) { ( bck_stash_vpass name bck_line `=.` 1 g_bck_rhs_sx ) } {}
+        : b __asn_vstash & & & != 0 g_bck_closure_depth >= ( bck_walk_class vt ) 2 ! ( seq g_bck_rhs_sx `-` ) | ( __is_clo_capture syms name ) ( seq ( nurl_sym_get2 syms name `__inout` ) `1` )
+        ? __asn_vstash { ( bck_stash_vpass name bck_line `=.` 1 g_bck_rhs_sx ) } {}
         // (A closure that does not own its env — `= g . s f` — borrows from
         // what it read, as the `:` spelling does, h283.)
         : i __acbc0 ( bck_walk_class vt )
@@ -44123,7 +44124,18 @@ unsafe @ gen_assign i lex i syms i cg → s {
         : b lhs_guarded & & & & != 0 g_auto_drop_strings ! lhs_is_owned_str
         ( seq ( nurl_llty vt ) `i8*` ) != 0 ( nurl_str_len __gsl )
         ! & ( is_ident_tok bck_rhs_tt ) ( seq bck_rhs_val name )
-        ? lhs_guarded
+        // Inside a closure body, a captured guarded `s`: its owner and the
+        // proof of it live in two slots of the ENCLOSING function, which
+        // the closure's code cannot reach — the update below named that
+        // function's registers and the build died in clang ("use of
+        // undefined value", agora #465). Refused, with what to write; a
+        // value that may view something is refused by the walk already
+        // (__asn_vstash, with its own words), so only the update is skipped.
+        : b __gcap & lhs_guarded ( __is_clo_capture syms name )
+        ? & __gcap ! __asn_vstash {
+            ( die lex ( nurl_str_cat3 `cannot give the captured string '` name ( nurl_str_cat3 `' a new value inside a closure: '` name `' was bound from a borrow or a join (string_data, a view into another string, a ? arm), so whether it owns its value is tracked by the enclosing function, out of the closure's reach. Bind it to a string it owns instead (the result of nurl_str_cat or nurl_str_slice, say), keep the text in a String the closure appends to, or have the closure return the new string and assign it outside.` ) ) )
+        } {}
+        ? & lhs_guarded ! __gcap
         { : ~ s gnew ( nurl_str_cat `null` `` )
             : s __gag ( nurl_sym_get syms `__last_call_guard__` )
             ? rhs_is_owned_call2 { = gnew ( nurl_str_cat val `` ) }

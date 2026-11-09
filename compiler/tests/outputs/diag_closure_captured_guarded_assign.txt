@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_closure_captured_guarded_assign.nu:14:65: error: cannot give the captured string 'cur' a new value inside a closure: 'cur' was bound from a borrow or a join (string_data, a view into another string, a ? arm), so whether it owns its value is tracked by the enclosing function, out of the closure's reach. Bind it to a string it owns instead (the result of nurl_str_cat or nurl_str_slice, say), keep the text in a String the closure appends to, or have the closure return the new string and assign it outside.
+    : ( @ v ) step \ → v { = cur ( nurl_str_slice `xyz` 0 1 ) }
+                                                                ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.
