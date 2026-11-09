@@ -137,6 +137,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 $ `stdlib/std/bytes.nu`
+$ `stdlib/std/utf8.nu`
 
 : | Json {
     JNull
@@ -564,6 +565,19 @@ $ `stdlib/std/bytes.nu`
     ^ | | q bs ( nurl_v128_ltmask8 blk ( nurl_v128_bcast8 32 ) )
 }
 
+// The writer's: those, and every byte of 0x80 and up. A high byte is
+// where a UTF-8 sequence starts, or where bytes that are not UTF-8 are:
+// the writer checks the sequence there and goes on sixteen bytes a step
+// (agora #516). ASCII text pays nothing for it: the signed compare that
+// finds both replaces the unsigned one that found the control bytes.
+@ __json_wspecial16 v128 blk → i {
+    : i q ( nurl_v128_eqmask8 blk ( nurl_v128_bcast8 34 ) )
+    : i bs ( nurl_v128_eqmask8 blk ( nurl_v128_bcast8 92 ) )
+    // (Signed, a byte of 0x80 and up is below 32 as well as a control byte
+    // is: one compare for both, cheaper than the parser's unsigned one.)
+    ^ | | q bs ( nurl_v128_sltmask8 blk ( nurl_v128_bcast8 32 ) )
+}
+
 // The offset of the first such byte in [span, span+n), or -1. Sixteen
 // bytes a step; the last 1..15 come in through nurl_v128_ldn, which reads
 // no byte past them and pads with zeros. A zero is itself a special byte,
@@ -904,7 +918,12 @@ $ `stdlib/std/bytes.nu`
 
 // `text` as a JSON string, quoted and escaped onto `out`: `"` and `\` and
 // the control bytes with a named escape as that, the other control bytes
-// as \u00XX, every other byte as it is (UTF-8 passes through).
+// as \u00XX, well-formed UTF-8 as it is, and each byte that is not part of
+// a well-formed sequence (a stray continuation, a truncated or overlong
+// sequence, an encoded surrogate, a byte no sequence starts with) as
+// U+FFFD, one per byte as std/utf8's decoder recovers. So the output is
+// UTF-8, as RFC 8259 §8.1 asks of a JSON text, whatever bytes the String
+// held (agora #516: a model's sampled bytes, a file, a socket).
 //
 // Emitted through a cursor, as core/string.nu's "Bulk emission cursor"
 // emits a String: the room for the quotes and every byte as it is is
@@ -947,7 +966,7 @@ $ `stdlib/std/bytes.nu`
         : i r - n k
         : i lim ? < r 16 r 16
         : v128 blk ( nurl_v128_ldn # s + # i src k lim )
-        : i m ( __json_special16 blk )
+        : i m ( __json_wspecial16 blk )
         : i first ? == m 0 16 # i ( nurl_ctz # u64 m )
         : i run ? < first lim first lim
         ( nurl_v128_stn # s + # i dst w run blk )
@@ -955,25 +974,47 @@ $ `stdlib/std/bytes.nu`
         = k + k run
         ? < first lim {
             : i c & # i . src k 255
-            : b _held ( vec_set_len [u] out w )
-            ( _vec_reserve_more [u] out + - n k 8 )
-            = dst ( vec_data [u] out )
-            = . dst w # u 92
-            : i named ? == c 34 34 ? == c 92 92 ? == c 10 110 ? == c 9 116 ? == c 13 114 ? == c 8 98 ? == c 12 102 0
-            ? > named 0 {
-                = . dst + w 1 # u named
-                = w + w 2
+            ? >= c 128 {
+                // A high byte: a well-formed sequence goes out as it came (its
+                // bytes are in the room already); a byte that is not one is
+                // U+FFFD, three bytes where one was reserved.
+                : Utf8Dec d ( utf8_decode_n src n k )
+                ? == . d ok 1 {
+                    : ~ i j 0
+                    ~ < j . d width { = . dst + w j . src + k j = j + j 1 }
+                    = w + w . d width
+                    = k + k . d width
+                } {
+                    : b _held2 ( vec_set_len [u] out w )
+                    ( _vec_reserve_more [u] out + - n k 8 )
+                    = dst ( vec_data [u] out )
+                    = . dst w # u 239
+                    = . dst + w 1 # u 191
+                    = . dst + w 2 # u 189
+                    = w + w 3
+                    = k + k 1
+                }
             } {
-                : i hi >> c 4
-                : i lo & c 15
-                = . dst + w 1 # u 117
-                = . dst + w 2 # u 48
-                = . dst + w 3 # u 48
-                = . dst + w 4 # u ? < hi 10 + 48 hi + 87 hi
-                = . dst + w 5 # u ? < lo 10 + 48 lo + 87 lo
-                = w + w 6
+                : b _held ( vec_set_len [u] out w )
+                ( _vec_reserve_more [u] out + - n k 8 )
+                = dst ( vec_data [u] out )
+                = . dst w # u 92
+                : i named ? == c 34 34 ? == c 92 92 ? == c 10 110 ? == c 9 116 ? == c 13 114 ? == c 8 98 ? == c 12 102 0
+                ? > named 0 {
+                    = . dst + w 1 # u named
+                    = w + w 2
+                } {
+                    : i hi >> c 4
+                    : i lo & c 15
+                    = . dst + w 1 # u 117
+                    = . dst + w 2 # u 48
+                    = . dst + w 3 # u 48
+                    = . dst + w 4 # u ? < hi 10 + 48 hi + 87 hi
+                    = . dst + w 5 # u ? < lo 10 + 48 lo + 87 lo
+                    = w + w 6
+                }
+                = k + k 1
             }
-            = k + k 1
         } {}
     }
     = . dst w # u 34

@@ -172,6 +172,7 @@
 : ~ i g_fn_strp 0  // fn → its raw string params no summary may make a `sink` (__own_sink_str_params)
 : ~ b g_origin_arg_str F  // the argument origin_call_arg records is a raw string the compiler manages
 : ~ i g_use_ownstr 0  // a return went through __nurl_ownstr (gen_ret)
+: ~ i g_use_sltmask8 0  // a call of nurl_v128_sltmask8 (defined at module end, only then)
 : ~ s g_bck_own_params ``  // the parameters the function being walked owns (a safe `sink s`)
 : ~ i g_call_cp 0  // `res` / `own`: the call just emitted copied its result `res`, owned by bit `own` (mem_own_lendback); `bind`: a let binds that copy (__mem_udrop_bind_flag) — agora #477
 : ~ i g_bck_end_views 0  // 1 while bck_root_end ends a field path's borrows: only its views (agora #309)
@@ -10489,6 +10490,7 @@ unsafe @ origin_guard_retained i root → b {
 }
 
 @ mem_propagate_call_ret_markers i syms s cn → v {
+    ? ( seq cn `nurl_v128_sltmask8` ) { = g_use_sltmask8 1 } {}
     ( nurl_sym_def syms `__last_vec_get__` `` )
     // Returned-closure ownership: cleared here, set by the call paths
     // that take the callee's published owner (mem_retclo_take).
@@ -64227,6 +64229,13 @@ unsafe @ __hmemo_close s key i mark b r → v {
     // A use of a capture an earlier run of its closure gave away stops
     // (__clo_taken_check); `@.__clotk_no`, the mark read where the closure
     // takes nothing.
+    // The SIGNED byte compare: one `pcmpgtb` where the unsigned one is two
+    // or three (SSE has no unsigned byte compare). `b < 32` signed is "a
+    // control byte, or 0x80 and up": the JSON writer's test for what it
+    // cannot copy blind (agora #516). Defined only in a module that calls
+    // it, so a module that does not (nurlc itself) emits what it did.
+    ? != 0 g_use_sltmask8
+    { ( nurl_print `define linkonce_odr i64 @nurl_v128_sltmask8(<4 x i32> %a, <4 x i32> %b) alwaysinline {\nentry:\n  %y3.a = bitcast <4 x i32> %a to <16 x i8>\n  %y3.b = bitcast <4 x i32> %b to <16 x i8>\n  %y3.c = icmp slt <16 x i8> %y3.a, %y3.b\n  %y3.m = bitcast <16 x i1> %y3.c to i16\n  %y3.r = zext i16 %y3.m to i64\n  ret i64 %y3.r\n}\n` ) } {}
     ? != 0 g_use_taken_check
     { ( nurl_print `@.__clotk_no = private unnamed_addr constant i1 false\ndefine linkonce_odr void @__nurl_taken_check(i1 %t, ptr %m) alwaysinline {\nentry:\n  br i1 %t, label %p, label %o\np:\n  call void @nurl_panic(ptr %m)\n  unreachable\no:\n  ret void\n}\n` ) } {}
 }
@@ -71448,6 +71457,7 @@ unsafe @ __ir_calls_level s ir i set → i {
     ( nurl_sym_def syms `nurl_v128_unpackhi64` `v128` )
     ( nurl_sym_def syms `nurl_v128_eqmask8` `u64` )
     ( nurl_sym_def syms `nurl_v128_ltmask8` `u64` )
+    ( nurl_sym_def syms `nurl_v128_sltmask8` `u64` )
     ( nurl_sym_def syms `nurl_v128_lower8` `v128` )
     ( nurl_sym_def syms `nurl_v128_bswap128` `v128` )
     ( nurl_sym_def syms `nurl_v128_bswap32` `v128` )

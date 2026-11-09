@@ -929,7 +929,7 @@ call site:
 | shift / rotate | `nurl_v128_rotl32(v, n)`, `_shl64(v, n)`, `_shr64(v, n)` |
 | lane permute | `nurl_v128_rotlanes1/2/3(v)`; `nurl_v128_alignr4(hi, lo)` = (lo₁, lo₂, lo₃, hi₀) — the pair shifted down one lane (`palignr` by 4) |
 | lane interleave | `nurl_v128_unpacklo32(a, b)`, `_unpackhi32`, `_unpacklo64`, `_unpackhi64` — zip the low or high halves of two vectors at 32- or 64-bit granularity; four of them transpose a 4×4 block of 32-bit words |
-| byte compare | `nurl_v128_eqmask8(a, b) → u64`, `_ltmask8(a, b) → u64` — 16-bit bitmask |
+| byte compare | `nurl_v128_eqmask8(a, b) → u64`, `_ltmask8(a, b) → u64` (unsigned), `_sltmask8(a, b) → u64` (signed: bytes 0x80 and up are negative) — 16-bit bitmask |
 | case folding | `nurl_v128_lower8(v)` — ASCII `A`–`Z` only |
 | byte order | `nurl_v128_bswap128(v)` — reverse the sixteen bytes (GHASH's and every big-endian counter's block order); `nurl_v128_bswap32(v)` — reverse each lane's four (SHA-2's big-endian words) |
 

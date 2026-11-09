@@ -1,0 +1,12 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+truncated: 41 EF BF BD 41 (utf8)
+overlong: EF BF BD EF BF BD (utf8)
+surrogate: EF BF BD EF BF BD EF BF BD (utf8)
+stray continuation: EF BF BD EF BF BD (utf8)
+truncated at end: EF BF BD EF BF BD EF BF BD (utf8)
+invalid leader: EF BF BD (utf8)
+well-formed: C3 A9 E2 82 AC F0 9F 98 80 (utf8)
+across blocks: 61 61 61 61 61 61 61 61 61 61 61 61 61 61 E2 82 AC EF BF BD 5C 22 62 62 62 62 62 62 62 62 62 62 62 62 62 62 62 62 62 62 (utf8)
