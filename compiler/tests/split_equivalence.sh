@@ -88,6 +88,7 @@ PROGRAMS=(
     examples/wordcount.nu
     compiler/tests/simd_dispatch.nu       # `simd` clones + an unmarked callee
     compiler/tests/chacha20_simd_agree.nu # the stdlib's wide kernels
+    compiler/tests/split_small_accessor.nu # small accessors, every part a copy
 )
 PARTS=${NURL_SPLIT_TEST_PARTS:-4}
 fails=0
@@ -363,6 +364,33 @@ if (( nparts > 0 )); then
     else
         echo "ok   the compiler's $nparts parts are balanced (mean $mean bytes, none over 1.25x)"
     fi
+fi
+
+# A small function a part calls is that part's to inline (Agora #527).
+# ThinLTO cannot inline one it imports (the IR mover remaps its struct
+# types, and a call whose type differs from its callee's is never
+# inlined), so a part that calls a small function and holds no copy of it
+# pays a call where the one-module build has none: a JPEG codec's IDCT made
+# 24 calls to `vec_get` a block, and decoded 1.6x slower split. The copy is
+# decided by the function's size, and that size was measured with the
+# padding and drop-flag bookkeeping the writer folds away: a 16-instruction
+# accessor came out "big". Here, every part of split_small_accessor.nu that
+# calls `vec_get` or `vec_put_loc` must define it.
+sa="$WORK/split_small_accessor.split"
+missing=""
+for p in $(parts_of "$sa" ll); do
+    for f in $(grep -o 'call [^@]*@__nurl_fn\.vec_\(get\|put_loc\)__[A-Za-z0-9_]*(' "$p" | sed 's/.*@//; s/($//' | sort -u); do
+        grep -q "^define [^@]*@$f(" "$p" || missing="$missing $(basename "$p"):$f"
+    done
+done
+if [[ ! -e "$sa.0.ll" ]]; then
+    echo "FAIL split_small_accessor.nu did not split (see $sa.cerr)"
+    fails=$((fails + 1))
+elif [[ -n "$missing" ]]; then
+    echo "FAIL a part calls a small accessor it holds no copy of:$missing"
+    fails=$((fails + 1))
+else
+    echo "ok   every part that calls a small accessor holds a copy of it"
 fi
 
 if (( fails )); then

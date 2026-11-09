@@ -76382,6 +76382,36 @@ unsafe @ llvm_linkage_init → v {
 // this one is owned by dce_emit_module's caller.
 : ~ i g_dce_mod 0
 : ~ i g_dce_mod_len 0  // its length: no probe reads past the end
+
+// How big a function is for SPLIT_REP_MAX: its bytes, its comment and
+// blank lines left out. The text the splitter reads still holds the slots
+// later passes write into (lines of blanks, padded `;` lines), which the
+// module is written without: counted, a 16-instruction `vec_get` measured 1833 bytes
+// where it is 1491, was taken for big, was never copied, and a JPEG IDCT
+// that calls it 24 times a block decoded 1.6x slower split than unsplit
+// (agora #527). It also still holds a by-value parameter's drop-flag
+// bookkeeping, which the writer folds away (__ir_fold_range): the lines
+// that read a flag or drop by one are left out too, so what is measured is
+// about what is written. Scanned once a function.
+unsafe @ __sp_code_bytes i st i en → i {
+    : *u mp # *u # s g_dce_mod
+    : ~ i n 0
+    : ~ i p st
+    ~ < p en {
+        // The line's first byte that is not a blank.
+        : ~ i q p
+        ~ & < q en == & # i . mp q 255 32 { = q + q 1 }
+        : ~ i e q
+        ~ & < e en != & # i . mp e 255 10 { = e + e 1 }
+        // (A comment line, or a line of blanks: a slot, not code. A line
+        // that reads a drop flag (`@.__nurl_…`) or drops by one
+        // (`@__dropif_…`): bookkeeping the writer folds away.)
+        ? | | >= q e == & # i . mp q 255 59 | >= ( nurl_memmem_range # s + # i mp q - e q `@.__nurl_` 9 ) 0 >= ( nurl_memmem_range # s + # i mp q - e q `@__dropif_` 10 ) 0 {} { = n + n - + e 1 p }
+        = p + e 1
+    }
+    ^ n
+}
+
 : ~ i g_dce_start 0  // i64[n]: byte offset of each `define`
 : ~ i g_dce_end 0  // i64[n]: byte offset just past its closing `}`
 : ~ i g_dce_live 0  // i64[n]: 1 once reached
@@ -79759,7 +79789,7 @@ unsafe @ split_emit_module i n i mlen → v {
                         = target ( __sp_target rem extra - run_parts cur )
                     } {}
                     ( nurl_poke # s g_split_part fi cur )
-                    ? <= sz SPLIT_REP_MAX { ( nurl_poke # s g_split_rep fi 1 ) } {}
+                    ? <= ( __sp_code_bytes st en ) SPLIT_REP_MAX { ( nurl_poke # s g_split_rep fi 1 ) } {}
                     = acc + acc sz
                     = rem - rem sz
                     ( nurl_poke # s g_split_fill cur + ( nurl_peek # s g_split_fill cur ) - en st )
