@@ -18180,10 +18180,15 @@ unsafe @ gen_call i lex i syms i cg → s {
             = first_arg_type ( nurl_str_cat at `` )
             = first_arg_val ( nurl_str_cat av `` )
         }
-        { = argstr ( nurl_str_cat argstr ( nurl_str_cat4 `, ` ( nurl_llty at ) ` ` av ) )
+        { : s __atl ( nurl_llty at )
+            = argstr ( nurl_str_cat argstr ( nurl_str_cat4 `, ` __atl ` ` av ) )
+            // Lowered like argstr: a dyn call emits these as they are, so
+            // an unlowered `u64 %r` reached clang ("expected type") — and,
+            // checked first against the method's lowered fn-ptr type, a
+            // dyn method's own `u64` parameter refused its `u64` argument.
             = rest_argstr ? == 0 ( nurl_str_len rest_argstr )
-            ( nurl_str_cat3 at ` ` av )
-            ( nurl_str_cat rest_argstr ( nurl_str_cat4 `, ` at ` ` av ) )
+            ( nurl_str_cat3 __atl ` ` av )
+            ( nurl_str_cat rest_argstr ( nurl_str_cat4 `, ` __atl ` ` av ) )
         }
         ? & < arg_idx 62 ( __mx_scalar_ty at ) { = __mx_sc | __mx_sc << 1 arg_idx } {}
         = arg_idx + arg_idx 1

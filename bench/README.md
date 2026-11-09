@@ -1,9 +1,11 @@
 # NURL benchmarks
 
-Twenty benchmarks. Fifteen of them in five languages — **NURL**, **C**,
-**Rust**, **Node** and **Python** — and five cryptographic kernels
-(`chacha20`, `poly1305`, `blake2b`, `sha512`, `x25519`) in NURL, C and
-Rust; one algorithm per benchmark, one runner, one report. A row is timed
+Twenty-five benchmarks. Fifteen of them in five languages — **NURL**,
+**C**, **Rust**, **Node** and **Python** — and ten in NURL, C and Rust:
+five language-feature rows (`safe_record_array`, `payload_state_machine`,
+`captured_closure_queue`, `dynamic_method_mix`, `csv_table_pipeline`) and
+five cryptographic kernels (`chacha20`, `poly1305`, `blake2b`, `sha512`,
+`x25519`); one algorithm per benchmark, one runner, one report. A row is timed
 only when all of its implementations print the same line, so no cell can
 be fast by computing something else.
 
@@ -112,6 +114,11 @@ and `perfstat.sh` read.
 | `matmul` | Triple-nested loop, flat indexing, column-strided reads |
 | `json_parse` | Allocator pressure, string handling, recursive descent |
 | `nbody` | IEEE-754 doubles: sqrt and divide throughput, the FPU rather than the ALU |
+| `safe_record_array` | By-value records in and out of a bounds-checked Vec: aggregate layout, pass/return, moves |
+| `payload_state_machine` | Payload-bearing enum, option and result matches; an owned String on the error exit |
+| `captured_closure_queue` | Indirect calls through closures of five capture shapes, the queue refilled as it runs |
+| `dynamic_method_mix` | Trait-object dispatch: a vtable load and two indirect calls per step |
+| `csv_table_pipeline` | The stdlib CSVTable hot path: quote-aware parse, cell index, zero-copy views |
 | `chacha20` | 32-bit add/rotate/xor rounds; NURL calls stdlib `chacha20_xor` (v128 / v256 lanes) |
 | `poly1305` | Serial 64x64→128 multiply/carry chain through the accumulator, radix 2^64 |
 | `blake2b` | 64-bit add/xor/rotate G mixes with SIGMA-permuted message gathers |
@@ -121,6 +128,118 @@ and `perfstat.sh` read.
 No two rows measure the same shape. That is a deliberate property, and
 the reason the previous `stream_lcg` kernel is gone: it was `lcg` with
 32-bit constants, so it made the table longer without making it say more.
+
+### The language-feature rows
+
+The fifteen five-language rows are kernels over integers and doubles;
+none of them holds a record, matches a sum type, calls through a pointer
+or parses text into a structure. The five rows after `nbody` each measure
+one of those mechanisms, in **safe** NURL — no `unsafe`, no raw pointer,
+where the kernels above use raw blocks — because that is the code a NURL
+program is mostly made of:
+
+| Row | Dimension it adds | Nearest existing row |
+|---|---|---|
+| `safe_record_array` | A `Vec` of 4096 four-field records: two records read **by value**, passed to a function that returns a two-field record by value, a record returned by value and stored back, half the steps an exchange of two whole records — all through the bounds-checked `vec_at` / `vec_put` | `nbody` (records, but an `unsafe` struct-of-arrays) |
+| `payload_state_machine` | Events decoded into a payload-bearing enum, matched by a step that returns `!St Fault` (an option lookup inside); on the error exit (1 event in 68) the fault carries an **owned String** the handler reads and drops | `collatz` (branchy control flow, but no data in the branches) |
+| `captured_closure_queue` | A queue of 16 `( @ u64 u64 )` closures made by five constructors whose environments differ (one, two or three u64s, a captured `Vec`, a record); an input-chosen one called per step, every 256th step a fresh closure replacing one | `fib` (a direct call; nothing else calls through a pointer) |
+| `dynamic_method_mix` | 64 `%Op` trait objects of four struct types (one owns a `Vec`), types and call order both input-chosen; a vtable load and two indirect calls (`apply`, `weight`) per step | `captured_closure_queue` (one pointer beside its environment, not a table of them) |
+| `csv_table_pipeline` | The stdlib's own `CSVTable` (stdlib/ext/csv.nu) end to end: a 100k-row, 4.29 MB RFC 4180 document with quoted fields, `""` escapes and an embedded line break, copied and parsed four times, then five columns read per row through zero-copy `csv_table_view`s and aggregated per city | `json_parse` (the other stdlib parser, and the other allocating row) |
+
+All five draw their input from the MMIX LCG `lcg` uses (`x >> 33` as the
+draw), so every index, callee and branch is data-dependent, and fold
+their state into a 64-bit FNV-style checksum. `BENCH_SCALE` multiplies
+the step count (the pass count for `csv_table_pipeline`). At x1 each
+runs 40–190 ms native, 30–150 times the process floor.
+
+C and Rust carry the same algorithm, sizes and semantics; where a
+language has no such construct, the peer spells out what the others
+lower to, and the header says so:
+
+* **C has no closures, sum types or trait objects.** Its closures are
+  `{ function pointer, malloc'd environment }` pairs, its trait objects
+  `{ data pointer, vtable pointer }` pairs over a static table of
+  function pointers, its enum, option and result tagged structs, and its
+  fault message a malloc'd buffer. Rust uses `Box<dyn Fn(u64) -> u64>`,
+  `Box<dyn Op>`, enums, `Option`, `Result` and `String`.
+* **C does not bounds-check.** `safe_record_array` is the row where that
+  shows: its C column is the unchecked floor the two checked languages
+  are measured against (Rust's checked indexing lands on it).
+* **Inlining is allowed everywhere.** No language is told not to inline
+  `mix` / `bump` or the step function, so after optimisation those rows
+  measure the record and payload traffic, not a call sequence. The
+  indirect calls in the closure and trait-object rows cannot be inlined
+  — that is their point.
+* **CSV: neither C nor Rust has a CSV reader in its standard library**
+  (and this suite builds with bare `rustc`, no crates), so both carry the
+  CSVTable layout by hand: one content buffer, an (offset, length) pair
+  per cell with a negative offset into a separate buffer for cells with
+  `""` escapes, a row-start / row-length index, the header row kept
+  apart, the same quote, separator and end-of-row rules as
+  `__csv_parse_content`, and a view accessor that bounds-checks
+  (row, column). The one difference of method: they scan an unquoted
+  cell byte by byte, the stdlib 16 bytes at a time (`nurl_scan_byte3`,
+  SSE2).
+
+What the rows showed when they landed (WSL2 on an i7-11850H, best of 7):
+
+| ms | NURL | C | Rust |
+|---|---:|---:|---:|
+| `safe_record_array` | 51.7 | 42.6 | 42.9 |
+| `payload_state_machine` | 66.1 | 53.0 | 54.5 |
+| `captured_closure_queue` | 179.0 | 60.4 | 72.9 |
+| `dynamic_method_mix` | 79.9 | 77.4 | 76.1 |
+| `csv_table_pipeline` | 71.7 | 59.7 | 62.0 |
+
+* `captured_closure_queue` is 3x C because NURL **copies the closure's
+  environment on every call**: `vec_at` of a closure element returns
+  `nurl_closure_clone` of the stored env (its body's `. data idx` is
+  returned as an owned copy), and the binding drops it after the call —
+  14.05M runtime allocations for 10M calls (one per call, three for the
+  closure that captured a Vec), `nurl_alloc` + `nurl_free` 32 % of the
+  profile, `__cenv_clone` of the Vec-capturing closure another 6 %. C and
+  Rust allocate only on the 39k refills. A trait object read the same
+  way is lent, not copied, which is why `dynamic_method_mix` is at par.
+* `payload_state_machine` makes two runtime allocations per fault (the
+  String and its buffer) where C and Rust make one.
+
+#### `csv_table_pipeline` — throughput, memory and the hot path
+
+Phases are separated by running the same binary with the row scan
+removed and with no passes at all (`perf stat -r 5`, user-mode cycles):
+
+| | NURL | C | Rust |
+|---|---:|---:|---:|
+| whole run, wall | 70.8 ms | 58.2 ms | 63.5 ms |
+| generate the document only | 6.8 ms | 6.2 ms | 5.5 ms |
+| copy + parse, per pass (wall) | 10.5 ms · 408 MB/s | 9.1 ms · 473 MB/s | 10.4 ms · 415 MB/s |
+| copy + parse + scan, per pass (wall) | 16.0 ms · 268 MB/s | 13.0 ms · 330 MB/s | 14.5 ms · 296 MB/s |
+| copy + parse, user cycles (4 passes) | 139.5M | 141.3M | 149.2M |
+| view + aggregate, user cycles (4 passes) | 95.6M | 71.0M | 85.1M |
+| kernel cycles (whole run) | 80.4M | 39.1M | 41.5M |
+| page faults | 25,516 | 11,136 | 11,549 |
+| peak RSS | 26.6 MB | 30.3 MB | 32.3 MB |
+| allocations | 128 (runtime count) | 42 malloc + 120 realloc | 56 malloc + 163 realloc |
+| bytes requested from libc | 331 MB | 177 MB | 181 MB |
+
+The parser itself is not the gap: in user mode NURL parses at C's cost
+and faster than Rust (the SSE2 cell scan pays for itself even on
+six-byte cells), with ten allocations a table as csv.nu documents. The
+gap is in two places. **The kernel**: twice C's page faults and kernel
+time, 56 % of the faults taken inside `realloc`'s copy as the cell index
+grows (22 % in C) — growth moves NURL's buffers to fresh pages where C's
+grow in place — and the cell index's `vec_reserve` is passed
+`len + 512` where the API takes the *additional* count, so it reserves
+twice what it needs and grows to 32 MB where 16 MB holds it (134 MB of
+the extra 154 MB requested; corrected alone, it changes neither the
+faults nor the wall time). **The accessor**: `csv_table_view` re-validates
+(row, column) in both `__csv_cell_off` and `__csv_view_len` and reads
+the table through the handle twice per call, 1.35x C's cycles over the
+same five views a row. The NURL profile: `_nurl_main` 53 % (LTO inlines
+the whole CSVTable path into it; its hottest instructions are the
+separator loop's `cmp $0xa` and the `nurl_scan_byte3` SSE2 compare),
+page-fault entry 8 %, `memmove` 6 % (the copy and realloc growth),
+other kernel memory management ~10 %, `memcmp` 3 % (the city match).
 
 ### The crypto rows
 

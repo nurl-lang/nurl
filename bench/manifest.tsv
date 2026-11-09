@@ -15,6 +15,10 @@
 # only: their NURL side calls the standard library's own implementation
 # (stdlib/std/*.nu), and a pure-JS/pure-Python port of a 64-bit cipher
 # would measure BigInt, not the language; Node and Python print `n/a`.
+# The five language-feature rows (safe_record_array … csv_table_pipeline)
+# are NURL/C/Rust too: each measures a compiled-language mechanism (record
+# layout, sum types, closure and vtable ABI, a zero-copy parser) that an
+# interpreter's object model would replace rather than exercise.
 #
 # Benchmarks that live in this directory but are NOT listed here are not
 # part of the timing suite: brackets, csv_sum, histogram, quicksort, rot13
@@ -36,6 +40,11 @@ collatz	Longest Collatz chain below 100k	Control-flow-heavy inner loop with no a
 matmul	256x256 integer matrix product	Triple-nested loop, flat indexing, column-strided reads
 json_parse	20 parses of a 64 KB document	Allocator pressure, string handling, recursive descent
 nbody	500k n-body integration steps	IEEE-754 doubles: sqrt and divide throughput, the FPU rather than the ALU
+safe_record_array	10M by-value record updates in a Vec	Aggregate layout, by-value pass/return and whole-record moves through the safe, bounds-checked Vec API	nurl c rust
+payload_state_machine	10M events through an enum/result state machine	Payload-bearing enum, option and result matches; an owned String on the error exit	nurl c rust
+captured_closure_queue	10M calls through a queue of 16 closures	Indirect calls through heap environments of five capture shapes, the queue refilled as it runs	nurl c rust
+dynamic_method_mix	10M two-method calls on 64 trait objects	Vtable dispatch on a receiver of input-chosen type: two indirect calls per step	nurl c rust
+csv_table_pipeline	4 parses + scans of a 100k-row RFC 4180 table	The stdlib CSVTable hot path: quote-aware parse, cell index, zero-copy views, allocation	nurl c rust
 chacha20	ChaCha20 over 16 MiB (RFC 8439)	32-bit add/rotate/xor rounds; NURL calls stdlib chacha20_xor (v128 lanes)	nurl c rust
 poly1305	Poly1305 MACs over 64 MiB (RFC 8439)	Serial 64x64->128 multiply/carry chain through the accumulator, radix 2^44	nurl c rust
 blake2b	BLAKE2b-512 over 32 MiB (RFC 7693)	64-bit add/xor/rotate G mixes with SIGMA-permuted message gathers	nurl c rust
