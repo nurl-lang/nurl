@@ -2854,6 +2854,126 @@ long long nurl_dir_sync(const char *path) {
 #endif
 }
 
+/* A whole file, mapped read-only (stdlib/std/mmap.nu's file_map).
+ *
+ * Returns the mapping and writes its length to *len. On failure it
+ * returns NULL with *len = -1 and errno set; an empty file is NULL with
+ * *len = 0 (there is nothing to map, and mmap refuses length 0); a
+ * platform that maps no files (wasm) is NULL with *len = -2, and the
+ * caller reads the file instead. `stream` asks for the whole file to be
+ * paged in ahead of one front-to-back sweep (a model's weights onto a
+ * device): MAP_POPULATE + MADV_SEQUENTIAL on Linux, PrefetchVirtualMemory
+ * on Windows; a hint the platform lacks is skipped.
+ *
+ * Windows maps with CreateFileMappingW / MapViewOfFile over a UTF-8 path
+ * widened to UTF-16: the view keeps its section and file open, so both
+ * handles close before returning and nurl_file_unmap needs only the
+ * address. Sizes are 64-bit everywhere — the CRT's lseek is 32-bit on
+ * Windows, which is why the open/lseek/mmap sequence lives here and not
+ * in NURL. */
+#if defined(_WIN32)
+typedef struct { void *addr; SIZE_T bytes; } nurl__win_range;
+typedef BOOL (WINAPI *nurl__prefetch_fn)(HANDLE, ULONG_PTR, nurl__win_range *, ULONG);
+#endif
+void *nurl_file_map(const char *path, long long stream, long long *len) {
+    if (!len) { errno = EINVAL; return NULL; }
+    *len = -1;
+    if (!path || !*path) { errno = EINVAL; return NULL; }
+#if defined(_WIN32)
+    int wn = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, NULL, 0);
+    if (wn <= 0) { errno = EINVAL; return NULL; }
+    wchar_t *wpath = (wchar_t *)malloc((size_t)wn * sizeof(wchar_t));
+    if (!wpath) { errno = ENOMEM; return NULL; }
+    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, wpath, wn);
+    HANDLE f = CreateFileW(wpath, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE,
+                           NULL, OPEN_EXISTING,
+                           FILE_ATTRIBUTE_NORMAL | (stream ? FILE_FLAG_SEQUENTIAL_SCAN : 0),
+                           NULL);
+    DWORD open_err = GetLastError();
+    free(wpath);
+    if (f == INVALID_HANDLE_VALUE) { nurl__fs_windows_error(open_err); return NULL; }
+    LARGE_INTEGER sz;
+    if (!GetFileSizeEx(f, &sz)) {
+        DWORD e = GetLastError();
+        CloseHandle(f);
+        nurl__fs_windows_error(e);
+        return NULL;
+    }
+    if (sz.QuadPart <= 0) { CloseHandle(f); *len = 0; return NULL; }
+    if ((unsigned long long)sz.QuadPart > (unsigned long long)SIZE_MAX) {
+        CloseHandle(f);
+        errno = EFBIG;
+        return NULL;
+    }
+    HANDLE sec = CreateFileMappingW(f, NULL, PAGE_READONLY, 0, 0, NULL);
+    DWORD sec_err = GetLastError();
+    CloseHandle(f);
+    if (!sec) { nurl__fs_windows_error(sec_err); return NULL; }
+    void *m = MapViewOfFile(sec, FILE_MAP_READ, 0, 0, 0);
+    DWORD map_err = GetLastError();
+    CloseHandle(sec);
+    if (!m) {
+        if (map_err == ERROR_NOT_ENOUGH_MEMORY) errno = ENOMEM;
+        else nurl__fs_windows_error(map_err);
+        return NULL;
+    }
+    if (stream) {
+        /* Windows 8+; looked up so the runtime still loads on older
+         * kernels, where the hint is simply skipped. */
+        static nurl__prefetch_fn prefetch = NULL;
+        static int looked = 0;
+        if (!looked) {
+            HMODULE k32 = GetModuleHandleW(L"kernel32.dll");
+            if (k32) prefetch = (nurl__prefetch_fn)(void (*)(void))
+                                GetProcAddress(k32, "PrefetchVirtualMemory");
+            looked = 1;
+        }
+        if (prefetch) {
+            nurl__win_range r = { m, (SIZE_T)sz.QuadPart };
+            (void)prefetch(GetCurrentProcess(), 1, &r, 0);
+        }
+    }
+    *len = (long long)sz.QuadPart;
+    return m;
+#elif defined(__wasm__) || defined(__wasi__)
+    (void)stream;
+    *len = -2;
+    return NULL;
+#else
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return NULL;
+    long long sz = (long long)lseek(fd, 0, SEEK_END);
+    if (sz < 0) { int e = errno; close(fd); errno = e; return NULL; }
+    if (sz == 0) { close(fd); *len = 0; return NULL; }
+    int flags = MAP_PRIVATE;
+#  ifdef MAP_POPULATE
+    if (stream) flags |= MAP_POPULATE;
+#  endif
+    void *m = mmap(NULL, (size_t)sz, PROT_READ, flags, fd, 0);
+    int e = errno;
+    close(fd);
+    if (m == MAP_FAILED) { errno = e; return NULL; }
+#  ifdef MADV_SEQUENTIAL
+    if (stream) (void)madvise(m, (size_t)sz, MADV_SEQUENTIAL);
+#  endif
+    *len = sz;
+    return m;
+#endif
+}
+
+/* Releases a mapping nurl_file_map made. */
+void nurl_file_unmap(void *p, long long n) {
+    if (!p) return;
+#if defined(_WIN32)
+    (void)n;
+    UnmapViewOfFile(p);
+#elif defined(__wasm__) || defined(__wasi__)
+    (void)n;
+#else
+    munmap(p, (size_t)n);
+#endif
+}
+
 /* ── §9  Memory allocation ─────────────────────────────────────── */
 
 /* Count of NURL-level allocations (every nurl_alloc / nurl_zalloc —

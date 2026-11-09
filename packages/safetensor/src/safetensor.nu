@@ -328,8 +328,9 @@ $ `stdlib/std/hashmap.nu`
 
 // ── open / close ────────────────────────────────────────────────────
 
-// mmap-backed where the platform has it (POSIX), a whole-file read where it
-// does not (wasm, win32) — correct everywhere, lazy where it matters.
+// Mapped where the platform maps files (POSIX, Windows, the unikernel), a
+// whole-file read where it does not (wasm) — correct everywhere, lazy where
+// it matters.
 @ st_open s path → !St String {
     ?? ( file_map path ) {
         T m → { ^ ( __st_parse m ) }

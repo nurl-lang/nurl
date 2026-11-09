@@ -628,9 +628,9 @@ $ `stdlib/core/slice.nu`
 
 // ── open / close ────────────────────────────────────────────────────
 
-// mmap-backed open where the platform maps files (POSIX); elsewhere (wasm,
-// win32) the whole file is read into a buffer the Gguf owns — correct
-// everywhere, mmap-lazy where it matters.
+// A mapped open (stdlib/std/mmap.nu: POSIX, Windows, the unikernel); on
+// wasm, which maps no files, the whole file is read into a buffer the Gguf
+// owns — correct everywhere, lazy where it matters.
 @ gguf_open s path → !Gguf String {
     ?? ( file_map path ) {
         T m → { ^ ( __gguf_parse m ) }

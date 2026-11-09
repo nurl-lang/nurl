@@ -62,7 +62,7 @@ before anything else noticed.
 
 | | |
 |---|---|
-| `st_open` | mmap-backed; a whole-file read where mmap does not exist (wasm, win32) |
+| `st_open` | mapped (POSIX, Windows); a whole-file read where files cannot be mapped (wasm) |
 | `st_parse_bytes` | an in-memory image; the `St` keeps the buffer |
 | `st_tensors` / `st_n_tensors` | the tensor table (name, dtype, shape, extent) |
 | `st_find_tensor` | by name, `-1` when absent |
