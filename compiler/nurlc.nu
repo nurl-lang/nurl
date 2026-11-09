@@ -4606,7 +4606,9 @@ unsafe @ nurl_cg_lbl i h s hint → s {
         : s nm ( str_first_word args ) = args ( str_skip_word args )
         ? ! ( seq nm `-` ) {
             : s up ( mem_udrop_ptr_of syms nm )
-            ? & != 0 ( nurl_str_len up ) | == 0 ( nurl_sym_len2 syms up `__pname` ) ( __param_owned_slot syms up ) {
+            // (…or a local struct that owns the field a call read from, a
+            // root __mem_payload_local_lend1 hands it: agora #550.)
+            ? | & != 0 ( nurl_str_len up ) | == 0 ( nurl_sym_len2 syms up `__pname` ) ( __param_owned_slot syms up ) & == 0 ( nurl_str_len up ) ( __local_owns_fields syms nm ) {
                 : s __tri ( nurl_str_cat4 cn ` ` gn ( nurl_str_cat ` ` ( nurl_str_int idx ) ) )
                 : s __tcur ( nurl_sym_get syms `__last_local_lend__` )
                 ( nurl_sym_def syms `__last_local_lend__` ? == 0 ( nurl_str_len __tcur ) ( nurl_str_cat __tri `` ) ( nurl_str_cat3 __tcur ` ` __tri ) )
@@ -4668,6 +4670,15 @@ unsafe @ nurl_cg_lbl i h s hint → s {
     ^ acc
 }
 
+// Does local binding `name` own the fields its literal gave it (a struct
+// held by value, not a parameter, a cursor or a view)?
+@ __local_owns_fields i syms s name → b {
+    ? >= ( nurl_sym_word_index syms `__fn_param_names__` name ) 0 { ^ F } {}
+    : s p ( nurl_sym_get2 syms name `__ptr` )
+    ? == 0 ( nurl_str_len p ) { ^ F } {}
+    ^ ( nurl_sym_has_word syms `__owned_struct_fields__` p )
+}
+
 // …one pair of them: the call `key` and its arguments' roots `roots0`.
 @ __mem_payload_local_lend1 i syms i cg s key s roots0 → s {
     ( nurl_sym_def syms `__last_local_lend__` `` )
@@ -4679,15 +4690,23 @@ unsafe @ nurl_cg_lbl i h s hint → s {
     : ~ i idx 0
     ~ != 0 ( nurl_str_len roots ) {
         : s r ( str_first_word roots ) = roots ( str_skip_word roots )
-        : s up ( mem_udrop_ptr_of syms r )
+        // (A field path, `h.items` for `( vec_get … . h items 0 )`, is judged
+        // by the binding it is a field of: taken for no root at all, an
+        // element of a local struct's Vec went to the caller as its own and
+        // the struct's drop freed it under them — agora #550. A local whose
+        // fields it owns counts as a root that owns its value.)
+        : i rdot ( nurl_str_find r `.` )
+        : s rb ? > rdot 0 ( nurl_str_slice r 0 rdot ) ( nurl_str_cat r `` )
+        : s up ( mem_udrop_ptr_of syms rb )
         : s sb ( nurl_sym_get2 syms up `__sborrow` )
         : b dynown & != 0 ( nurl_str_len sb ) == ( nurl_str_get sb 0 ) 64
-        ? & & != 0 ( nurl_str_len up ) == 0 ( nurl_sym_len2 syms up `__alias` ) | == 0 ( nurl_str_len sb ) dynown {
+        : b fown & & > rdot 0 == 0 ( nurl_str_len up ) ( __local_owns_fields syms rb )
+        ? | fown & & != 0 ( nurl_str_len up ) == 0 ( nurl_sym_len2 syms up `__alias` ) | == 0 ( nurl_str_len sb ) dynown {
             // This root alone, every other position `-`.
             : ~ s one ``
             : ~ i j 0
             ~ < j nroots {
-                = one ( nurl_str_cat3 one ? == j 0 `` ` ` ? == j idx r `-` )
+                = one ( nurl_str_cat3 one ? == j 0 `` ` ` ? == j idx rb `-` )
                 = j + j 1
             }
             : ~ s l ( mem_local_lend_of syms cg key one )
