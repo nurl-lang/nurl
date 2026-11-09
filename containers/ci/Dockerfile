@@ -92,8 +92,14 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
 # libgcc-13-dev (crtbeginS.o, libgcc_s) in the list above — what the
 # distro `clang` package used to pull in as its own dependencies.
 COPY --from=tools install-llvm.sh /tmp/install-llvm.sh
+# It is also this image's `cc` and `c++`, as the distro clang package made
+# itself through update-alternatives: the image has no gcc, and scripts
+# compile helpers with plain `cc` (nurlapi/e2e_local.sh's sandbox wrapper).
 RUN --mount=type=bind,from=llvm,target=/mnt/llvm \
-    sh /tmp/install-llvm.sh --link /usr/local/bin --from /mnt/llvm && rm /tmp/install-llvm.sh
+    sh /tmp/install-llvm.sh --link /usr/local/bin --from /mnt/llvm && rm /tmp/install-llvm.sh \
+    && update-alternatives --install /usr/bin/cc cc /opt/llvm/bin/clang 100 \
+    && update-alternatives --install /usr/bin/c++ c++ /opt/llvm/bin/clang++ 100 \
+    && cc --version | head -1
 
 # The zig the ecosystem ships (install.sh, the playground image, the
 # aarch64 cross builds) — same version, same place the unikernel job

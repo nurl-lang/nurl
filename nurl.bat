@@ -478,7 +478,13 @@ REM     runtime.winlibs (its vcpkg -L"<dir>" paths are valid locally).
 set "WINLIBS="
 if exist "!SCRIPTDIR!stdlib\winlib\winlibs.reloc" (
     set /p WINLIBS=<"!SCRIPTDIR!stdlib\winlib\winlibs.reloc"
-    set "WINLIBS=!WINLIBS:$NURL_LIB$=.\stdlib\winlib!"
+    REM The link runs inside its staging directory (below), so the libs'
+    REM directory reaches the linker through LIB, which lld-link and
+    REM link.exe both search: a plain assignment holds any character a
+    REM prefix may contain, where substituting it into the fragment with
+    REM !VAR:x=y! could not. The fragment's -L keeps a harmless ".".
+    set "LIB=!SCRIPTDIR!stdlib\winlib;!LIB!"
+    set "WINLIBS=!WINLIBS:$NURL_LIB$=.!"
 ) else if exist "!SCRIPTDIR!stdlib\runtime.winlibs" (
     set /p WINLIBS=<"!SCRIPTDIR!stdlib\runtime.winlibs"
 )
@@ -516,19 +522,27 @@ if !LINK_TRIES! gtr 16 (
 set "LINK_DIR=!OUTBASE!.link.!RANDOM!.!RANDOM!"
 mkdir "!LINK_DIR!" >nul 2>&1
 if errorlevel 1 goto allocate_link_dir
-set "LINK_OUTPUT=!LINK_DIR!\!OUTNAME!.exe"
-set "LINK_PDB=!LINK_DIR!\!OUTNAME!.pdb"
+REM The linker writes the staged files under fixed names, from INSIDE the
+REM staging directory, so the path it is handed is relative and holds
+REM none of the caller's characters. lld-link creates each output as a
+REM temporary named after the whole path it was given, with every `%`
+REM in it standing for a random character (LLVM's unique-file model):
+REM handed `C:\out %X%.link.1.2\out %X%.exe` it wrote into a directory
+REM that does not exist and failed "cannot open output file". The moves
+REM below give the files their real names.
+set "LINK_OUTPUT=!LINK_DIR!\nurl-link.exe"
+set "LINK_PDB=!LINK_DIR!\nurl-link.pdb"
 set "FINAL_PDB=!OUTBASE!.pdb"
 set "DEBUG_LINK_FLAGS="
-REM The binary records a stable adjacent PDB name, not the staging path.
-REM %%_PDB%% is expanded by the MSVC linker to its PDB filename.
-if "!DEBUG_INFO!"=="1" if "!MINGW_ABI!"=="0" set "DEBUG_LINK_FLAGS=-Xlinker /PDBALTPATH:%%_PDB%%"
-pushd "!SCRIPTDIR!"
+REM The binary records the stable adjacent PDB name, not the staging one:
+REM the final name, spelled out (it is the staged file's name no longer).
+if "!DEBUG_INFO!"=="1" if "!MINGW_ABI!"=="0" set DEBUG_LINK_FLAGS=-Xlinker "/PDBALTPATH:!OUTNAME!.pdb"
+pushd "!LINK_DIR!"
 if errorlevel 1 (
     rmdir /s /q "!LINK_DIR!"
     exit /b 1
 )
-!CC! !NURL_OPT! !CC_OPT_FIX! !DEBUG_FLAG! !DEBUG_LINK_FLAGS! "!LLFILE!" "!RUNTIME!" !EXTRA_OBJS! -o "!LINK_OUTPUT!" !EXTRA_LIBS! -lwinhttp -lws2_32 -lbcrypt -ladvapi32
+!CC! !NURL_OPT! !CC_OPT_FIX! !DEBUG_FLAG! !DEBUG_LINK_FLAGS! "!LLFILE!" "!RUNTIME!" !EXTRA_OBJS! -o nurl-link.exe !EXTRA_LIBS! -lwinhttp -lws2_32 -lbcrypt -ladvapi32
 set "LINK_RC=!errorlevel!"
 popd
 if not "!LINK_RC!"=="0" (
