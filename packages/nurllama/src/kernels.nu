@@ -2247,32 +2247,146 @@ ST(out, b * nh * hd + h * hd + tid, acc / sum);` * nh batch hd plan )
 // sel[b·maxpos + t] = 1 for the keys position b attends, 0 otherwise: every
 // t < npos while npos ≤ topk, else the topk best scores — key t is in when
 // fewer than topk keys beat it (a higher score, or an equal one at a lower
-// index, so exactly topk are kept). A thread per (position, key).
-@ lk_dsa_select GpuKit kit GkBuf isc GkBuf sel i npos0 i batch i maxpos i topk inout ( Vec GkLaunch ) plan → b {
+// index, so exactly topk are kept).
+//
+// Linear in the keys, not npos² (agora #522: a thread per (position, key)
+// counting every key that beats it was the whole of a long prefill's
+// indexer). `coop` (CUDA): a block per position. The block finds the topk-th best score exactly, by
+// halving the range of the scores' order-preserving keys (FKEY) 33 times,
+// each step one count of the keys above the midpoint, shared out over the
+// block's threads: 33·npos loads a position, in npos/256 a thread. Then a
+// thread per contiguous run of keys writes them: a score above that
+// threshold is in, and of the scores equal to it the first ones by index
+// (each run counts its equal ones, and the runs before it say how many of
+// the remaining places are taken). Otherwise (the CPU backend, where a
+// block's barriers cost more than its sharing saves) a thread per position
+// finds the threshold by quickselect in the position's own `sel` row, used
+// as scratch: a median-of-three pivot and a three-way partition, so equal
+// scores, however many, cost one pass; then one pass writes the row.
+@ lk_dsa_select GpuKit kit b coop GkBuf isc GkBuf sel i npos0 i batch i maxpos i topk inout ( Vec GkLaunch ) plan → b {
     : ~ GkCall c ( gk_call_new )
     ( gk_call_dev_in c `isc` isc ) ( gk_call_dev c `sel` sel )
     ( gk_call_i64 c `npos0` npos0 ) ( gk_call_i64 c `batch` batch ) ( gk_call_i64 c `maxpos` maxpos ) ( gk_call_i64 c `topk` topk )
-    ^ ( __lk_ew kit c `nl_dsa_select` `if (gid < batch * maxpos) {
-    long long b = gid / maxpos;
-    long long t = gid % maxpos;
-    long long npos = npos0 + b;
-    float keep = 0.0f;
-    if (t < npos) {
-        if (npos <= topk) {
-            keep = 1.0f;
-        } else {
-            WIN(row, isc, b * maxpos, npos);
-            float st = LD(row, t);
-            long long beat = 0;
-            for (int u = 0; u < LEN(row); u++) {
-                float su = LD(row, u);
-                if (su > st || (su == st && u < t)) { beat++; }
+    ? ! coop { ^ ( __lk_ew kit c `nl_dsa_select_q` `if (gid < batch) {
+    long long npos = npos0 + gid < maxpos ? npos0 + gid : maxpos;
+    WIN(sr, isc, gid * maxpos, npos);
+    WIN(out, sel, gid * maxpos, maxpos);
+    if (npos <= topk) {
+        for (int t = 0; t < LEN(out); t++) { ST(out, t, t < npos ? 1.0f : 0.0f); }
+    } else {
+        for (int t = 0; t < LEN(sr); t++) { ST(out, t, LD(sr, t)); }
+        long long lo = 0;
+        long long hi = npos - 1;
+        long long k = topk - 1;
+        float thr = 0.0f;
+        int found = 0;
+        while (found == 0) {
+            if (lo >= hi) {
+                thr = LD(out, lo);
+                found = 1;
+            } else {
+                float a = LD(out, lo);
+                float m = LD(out, lo + (hi - lo) / 2);
+                float z = LD(out, hi);
+                float p = a > m ? (m > z ? m : (a > z ? z : a)) : (a > z ? a : (m > z ? z : m));
+                long long lt = lo;
+                long long i = lo;
+                long long gt = hi;
+                while (i <= gt) {
+                    float v = LD(out, i);
+                    if (v > p) {
+                        ST(out, i, LD(out, lt));
+                        ST(out, lt, v);
+                        lt++;
+                        i++;
+                    } else if (v < p) {
+                        ST(out, i, LD(out, gt));
+                        ST(out, gt, v);
+                        gt--;
+                    } else {
+                        i++;
+                    }
+                }
+                if (k < lt) {
+                    hi = lt - 1;
+                } else if (k > gt) {
+                    lo = gt + 1;
+                } else {
+                    thr = p;
+                    found = 1;
+                }
             }
-            keep = beat < topk ? 1.0f : 0.0f;
+        }
+        long long more = 0;
+        for (int t = 0; t < LEN(sr); t++) { if (LD(sr, t) > thr) { more++; } }
+        long long left = topk - more;
+        for (int t = 0; t < LEN(out); t++) {
+            float keep = 0.0f;
+            if (t < npos) {
+                float st = LD(sr, t);
+                if (st > thr) {
+                    keep = 1.0f;
+                } else if (st == thr && left > 0) {
+                    keep = 1.0f;
+                    left--;
+                }
+            }
+            ST(out, t, keep);
         }
     }
-    ST(sel, gid, keep);
-}` * batch maxpos plan )
+}` batch plan ) } {}
+    ^ ( __lk_rec kit c `nl_dsa_select` `SHARED_L(red, 256);
+long long npos = npos0 + bid < maxpos ? npos0 + bid : maxpos;
+WIN(sr, isc, bid * maxpos, npos);
+WIN(out, sel, bid * maxpos, maxpos);
+if (npos <= topk) {
+    for (long long t = tid; t < LEN(out); t += bdim) { ST(out, t, t < npos ? 1.0f : 0.0f); }
+} else {
+    long long lo = -2147483649LL;
+    long long hi = 2147483647LL;
+    for (int it = 0; it < 33; it++) {
+        long long mid = lo + (hi - lo) / 2;
+        long long cnt = 0;
+        for (long long t = tid; t < LEN(sr); t += bdim) { if (FKEY(LD(sr, t)) > mid) { cnt++; } }
+        ST(red, tid, cnt);
+        SYNC();
+        long long tot = 0;
+        for (int u = 0; u < bdim; u++) { tot += LD(red, u); }
+        SYNC();
+        if (tot >= topk) { lo = mid; } else { hi = mid; }
+    }
+    long long chunk = (npos + bdim - 1) / bdim;
+    long long t0 = tid * chunk;
+    long long t1 = t0 + chunk < npos ? t0 + chunk : npos;
+    long long more = 0;
+    long long eq = 0;
+    for (long long t = t0; t < t1; t++) {
+        long long kt = FKEY(LD(sr, t));
+        if (kt > hi) { more++; } else if (kt == hi) { eq++; }
+    }
+    ST(red, tid, more);
+    SYNC();
+    long long above = 0;
+    for (int u = 0; u < bdim; u++) { above += LD(red, u); }
+    SYNC();
+    ST(red, tid, eq);
+    SYNC();
+    long long before = 0;
+    for (int u = 0; u < tid; u++) { before += LD(red, u); }
+    long long left = topk - above - before;
+    for (long long t = t0; t < t1; t++) {
+        long long kt = FKEY(LD(sr, t));
+        float keep = 0.0f;
+        if (kt > hi) {
+            keep = 1.0f;
+        } else if (kt == hi && left > 0) {
+            keep = 1.0f;
+            left--;
+        }
+        ST(out, t, keep);
+    }
+    for (long long t = npos + tid; t < LEN(out); t += bdim) { ST(out, t, 0.0f); }
+}` batch 256 plan )
 }
 
 // ── qwen35: Gated DeltaNet and gated attention ──────────────────────

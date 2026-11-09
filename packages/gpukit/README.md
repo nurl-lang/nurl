@@ -251,7 +251,10 @@ check once and then only launch) take device-resident bindings:
 `gk_call_bytes_in` / `gk_call_bytes` for `GkBBuf` byte buffers. On a byte
 buffer `LD(q, i)` is the byte, `LD16` / `LD32` the aligned 16- or 32-bit
 word holding byte `i`, and `F16(bits)` / `BF16(bits)` turn 16 bits into a
-float; `ST` stores the low byte. A quantised weight format is read this
+float; `ST` stores the low byte. `FKEY(x)` is a float's order-preserving
+32-bit key (a long long): `FKEY(a) < FKEY(b)` exactly when `a < b`, equal
+when `a == b` (−0 and +0 alike), for NaN-free values — an exact threshold
+search over it is 32 halvings, whatever the values' spread. A quantised weight format is read this
 way, without a pointer. `LD4(x, i, a, b, c, d)` loads the aligned group of
 four f32 holding element `i` in one instruction (the buffer must be
 16-byte aligned). Cooperative kernels have `SYNC()`, `SHARED_*` arrays

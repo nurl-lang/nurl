@@ -6,6 +6,28 @@ All notable changes to the `nurllama` package.
 
 Requires NURL 0.89.0 and safetensor 0.6.2.
 
+### Changed
+
+- **The DSA indexer's top-k is linear in the keys, not quadratic**
+  (Agora #522). `lk_dsa_select` gave every (position, key) a thread that
+  counted every key beating it: npos² work a position, the whole of a long
+  prefill's indexer. On CUDA a block per position now finds the topk-th
+  score exactly by 33 halvings of its order-preserving key range (gpukit
+  0.11.14's `FKEY`), each a block-wide count; on the CPU backend a thread
+  per position quickselects with a three-way partition. The same keys are
+  selected, ties to the lower index (tests/dsa_select_test.nu: 24 cases of
+  random scores down to a single distinct value, against the counting
+  rule, on both backends). A launch, before → after:
+
+  | npos × positions | CUDA (RTX 4090) | CPU backend |
+  |---|---|---|
+  | 4k × 1 | 116 → 52 µs | 2.7 → 0.10 ms |
+  | 4k × 64 | 525 → 55 µs | 67 → 2.0 ms |
+  | 32k × 1 | 915 → 288 µs | 64 → 2.0 ms |
+  | 32k × 64 | 25.5 → 0.31 ms | 3.70 s → 9.6 ms |
+
+Requires gpukit 0.11.14.
+
 ### Added
 
 - **A Mixture of Experts larger than the device runs: its routed experts

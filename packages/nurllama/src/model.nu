@@ -2630,7 +2630,7 @@ $ `stdlib/core/slice.nu`
         ( vec_push [i] . m pl_npos ( vec_len [GkLaunch] p ) )
         = ok & ok ( lk_dsa_score kit . m iqd ikc . m iwd . m iscd nhi dhi isc npos0 count . m n_ctx . m idx_topk p )
         ( vec_push [i] . m pl_npos ( vec_len [GkLaunch] p ) )
-        = ok & ok ( lk_dsa_select kit . m iscd . m seld npos0 count . m n_ctx . m idx_topk p )
+        = ok & ok ( lk_dsa_select kit . m warp . m iscd . m seld npos0 count . m n_ctx . m idx_topk p )
     } {}
     ( vec_push [i] . m pl_attn ( vec_len [GkLaunch] p ) )
     = ok & ok ( lk_attn kit . m warp . m qn2d ( vec_at [GkBuf] . m kcache L ) ( vec_at [GkBuf] . m kcache L ) . m aod . m scored . m seld 1
