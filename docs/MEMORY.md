@@ -657,7 +657,11 @@ view of its source and ends with it. Handed to a function that stores it
 into another of its arguments — the first, or one passed `inout`,
 wherever it sits (`( add h ( slice_from_vec [f] v ) )` with `add` pushing
 the slice into `. h fs`) — it makes that argument's value hold the view,
-as a `vec_push` written in place would. So does a function handed an
+as a `vec_push` written in place would. That argument may be a value lent
+out of a binding and written in place — `( add ( vec_at hs 0 ) (
+slice_from_vec [f] v ) )`, a field of one, a `??` payload, a join of them
+— and the element of `hs` it is then holds the view, as a binding of it
+would. So does a function handed an
 owner beside such an argument that leaves the argument viewing the
 owner's own storage (`= w @ W { ( string_data src ) }`, `src` a
 `String` parameter): the caller's argument then holds a view of what it
@@ -672,6 +676,18 @@ of its parameter through a handle it read out of it (`: ( Vec u ) e (
 vec_at p 0 )`, then `( vec_push [u] e 1 )`) ends, at the call, the
 caller's views into that element's buffer, as the same push written in
 place does; its handles of the elements stay.
+
+The same holds wherever the element comes from. A value lent out of a
+binding and handed straight to a callee that grows or clears it — an
+element of an element (`( vec_reserve [u] ( vec_at ( vec_at w 0 ) 0 ) n
+)`), a `?` join or a value block of lends, a field of a call's result, an
+accessor or a forwarder of your own, also one defined below — ends the
+views into that element as the same call on a binding of it does, also
+inside a closure. A function that hands its parameter's element on to a
+callee that drops or moves what it holds — through an element of an
+element, a `??` payload of a nested lend, a local bound to one, or a
+generic function's closure parameter — ends, at its own call, the
+caller's views into that element.
 
 A `~ x xs` loop's element is a part of `xs`, as an element `( vec_at xs k
 )` lends is. A view of its own storage (`( string_data x )`, a field of
