@@ -91,10 +91,14 @@ $ `stdlib/core/slice.nu`
     ( string_push_str out `Runs:` )
     ( string_push_int out ( gcov_runs o ) )
     ( string_push_char out 10 )
-    ( __gt_gutter out F 0 0 )
-    ( string_push_str out `Programs:` )
-    ( string_push_int out ? > ( gcov_runs o ) 0 1 0 )
-    ( string_push_char out 10 )
+    // A program summary only exists before GCC 9; gcov prints its count
+    // for those files alone.
+    ? < ( gcov_version o ) 90 {
+        ( __gt_gutter out F 0 0 )
+        ( string_push_str out `Programs:` )
+        ( string_push_int out ? > ( gcov_runs o ) 0 1 0 )
+        ( string_push_char out 10 )
+    } {}
 
     // Functions starting on a line, chained so the walk below is one pass.
     // Several can share a line: a generic monomorphised four ways, or a

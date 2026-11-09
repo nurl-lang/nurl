@@ -326,18 +326,21 @@ $ `stdlib/core/slice.nu`
     ( vec_push [u] v # u & >> x 24 255 )
 }
 
-// The four magic bytes, the version "408*" and a build stamp. Both files
-// spell the magic reversed, which is how a reader tells the endianness.
-@ put_header ( Vec u ) v s magic i stamp → v {
+// The four magic bytes, a version and a build stamp. Both files spell the
+// magic reversed, which is how a reader tells the endianness, and the
+// version too: "408*" is stored '*', '8', '0', '4'.
+@ put_header_v ( Vec u ) v s magic s ver i stamp → v {
     : ( Slice u ) magic_v ( slice_of_str magic )
     : ~ i k 0
     ~ < k 4 { ( vec_push [u] v # u ( slice_byte magic_v k ) ) = k + k 1 }
-    ( vec_push [u] v # u 42 )
-    ( vec_push [u] v # u 56 )
-    ( vec_push [u] v # u 48 )
-    ( vec_push [u] v # u 52 )
+    : ( Slice u ) ver_v ( slice_of_str ver )
+    = k 3
+    ~ >= k 0 { ( vec_push [u] v # u ( slice_byte ver_v k ) ) = k - k 1 }
     ( put_u32 v stamp )
 }
+
+// …in GCC 4.8's layout, the one clang wrote up to LLVM 22.
+@ put_header ( Vec u ) v s magic i stamp → v { ( put_header_v v magic `408*` stamp ) }
 
 // One word of NUL-padded name, the way the format stores a string.
 @ put_name1 ( Vec u ) v i ch → v {
@@ -374,6 +377,58 @@ $ `stdlib/core/slice.nu`
     ( put_u32 v line )
     ( put_u32 v 0 )
     ( put_u32 v 0 )  // end of the record
+    ^ v
+}
+
+// The same function in GCC 11's layout ("B11*"), which LLVM 23 writes for
+// any version it is asked for below it: the compile directory and
+// `has_unexecuted_blocks` in the header, an `artificial` word and the
+// function's columns and end line in its record, and BLOCKS as one word,
+// the count, `nblk`.
+@ build_notes_b11 i stamp i lcs i line i nblk → ( Vec u ) {
+    : ( Vec u ) v ( vec_new [u] )
+    ( put_header_v v `oncg` `B11*` stamp )
+    ( put_name1 v 46 )  // the compile directory, "."
+    ( put_u32 v 0 )  // has_unexecuted_blocks
+    ( put_u32 v 0x01000000 )
+    ( put_u32 v 12 )
+    ( put_u32 v 0 )  // ident
+    ( put_u32 v lcs )
+    ( put_u32 v 7 )  // cfg checksum
+    ( put_name1 v 102 )  // name "f"
+    ( put_u32 v 0 )  // not artificial
+    ( put_name1 v 97 )  // file "a"
+    ( put_u32 v 1 )  // start line
+    ( put_u32 v 0 )  // start column
+    ( put_u32 v 1 )  // end line
+    ( put_u32 v 0 )  // end column
+    ( put_u32 v 0x01410000 )
+    ( put_u32 v 1 )
+    ( put_u32 v nblk )
+    ( put_u32 v 0x01450000 )
+    ( put_u32 v 7 )
+    ( put_u32 v 2 )  // block 2
+    ( put_u32 v 0 )  // a file name follows
+    ( put_name1 v 97 )  // "a"
+    ( put_u32 v line )
+    ( put_u32 v 0 )
+    ( put_u32 v 0 )  // end of the record
+    ^ v
+}
+
+// …and its data, whose run count is in GCC 9's object summary.
+@ build_data_b11 i stamp i lcs i runs → ( Vec u ) {
+    : ( Vec u ) v ( vec_new [u] )
+    ( put_header_v v `adcg` `B11*` stamp )
+    ( put_u32 v 0x01000000 )
+    ( put_u32 v 3 )
+    ( put_u32 v 0 )  // ident
+    ( put_u32 v lcs )
+    ( put_u32 v 7 )
+    ( put_u32 v 0xa1000000 )
+    ( put_u32 v 2 )
+    ( put_u32 v runs )
+    ( put_u32 v 0 )  // sum_max
     ^ v
 }
 
@@ -489,6 +544,47 @@ $ `stdlib/core/slice.nu`
 
 }
 
+// The layouts LLVM writes: GCC 4.8's, read everywhere above, and GCC 11's,
+// which LLVM 23 writes whatever version it is asked for below it.
+@ check_layouts s work → v {
+    : String n1 ( string_from work )
+    ( string_push_str n1 `/l1.gcno` )
+    : String d1 ( string_from work )
+    ( string_push_str d1 `/l1.gcda` )
+
+    ( dump_bytes ( string_data n1 ) ( build_notes_b11 4660 1 7 3 ) )
+    ( dump_bytes ( string_data d1 ) ( build_data_b11 4660 1 3 ) )
+    ?? ( gcov_read ( string_data n1 ) ( string_data d1 ) ) {
+        T o → {
+            ( eq_i `a GCC 11 layout ("B11*") is read` ( gcov_fn_count o ) 1 )
+            ( eq_i `its version reads as 111` ( gcov_version o ) 111 )
+            ( eq_i `its run count comes from the object summary` ( gcov_runs o ) 3 )
+        }
+        F e → ( bad `a GCC 11 layout ("B11*") is read` ( gcov_err_name e ) )
+    }
+
+    // The block count is a word of its own now, not the record's length,
+    // and it sizes a table: a count the file could not hold is refused.
+    ( dump_bytes ( string_data n1 ) ( build_notes_b11 4660 1 7 1000000000 ) )
+    ( expect_err `a GCC 11 block count the file cannot hold is refused`
+    ( string_data n1 ) ( string_data d1 ) GcovBadBlock )
+
+    // Data in another layout than its notes would be read in the wrong shape.
+    ( dump_bytes ( string_data n1 ) ( build_notes_b11 4660 1 7 3 ) )
+    ( dump_bytes ( string_data d1 ) ( build_data 4660 1 ) )
+    ( expect_err `data in another layout than its notes is refused`
+    ( string_data n1 ) ( string_data d1 ) GcovStampMismatch )
+
+    // GCC 12 counts record lengths in bytes: refused, not read as words.
+    : ( Vec u ) g12 ( build_notes_b11 4660 1 7 3 )
+    ( vec_set [u] g12 5 # u 48 )
+    ( vec_set [u] g12 6 # u 48 )
+    ( vec_set [u] g12 7 # u 67 )  // "C00*"
+    ( dump_bytes ( string_data n1 ) g12 )
+    ( expect_err `a GCC 12 layout is refused, not misread`
+    ( string_data n1 ) ( string_data d1 ) GcovBadVersion )
+}
+
 @ main → i {
     : String work ?? ( fs_tempdir `` `nurl-cov-test-` ) {
         T d → d
@@ -517,6 +613,7 @@ $ `stdlib/core/slice.nu`
     ( check_missing_data ( string_data notes ) )
     ( check_rejects_junk ( string_data work ) )
     ( check_malformed ( string_data work ) )
+    ( check_layouts ( string_data work ) )
 
     ( nurl_print `nurl-cov: PASS ` )
     ( nurl_print ( nurl_str_int g_pass ) )

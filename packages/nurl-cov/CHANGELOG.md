@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.1] — 2026-11-09
+
+### Fixed
+
+- The coverage files LLVM 23 writes are read. LLVM 23 raises every GCOV
+  version below GCC 11.1 to `B11*`, and the reader took only GCC 4.8's
+  `408*`, so with clang 23 every report failed with "unsupported GCOV
+  version". It now reads both layouts and what lies between them: GCC 8's
+  `has_unexecuted_blocks` header word, the function's `artificial` word,
+  columns and end line, and BLOCKS as one count (bounded by the file's
+  size); GCC 9's compile directory and the run count in the object
+  summary. The gcov-style listing prints `Programs:` only for the layouts
+  that have a program summary, as `llvm-cov gcov` does. A data file in
+  another layout than its notes is refused, and so is GCC 12's, which
+  counts record lengths in bytes. `gcov_version` tells which layout a file
+  has.
+
 ## [0.3.0] — 2026-10-14
 
 ### Changed
