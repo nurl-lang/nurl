@@ -1,6 +1,6 @@
 // string_maybe_lend_of_a_local_returned_in_an_option_runs_clean: agora #457 guard — `: String x ( maybe o k )` returned as `^ @ ?String { T x }`: a returned wrap copies x where it lent o, a local, and answers owned
 // Guard: ran clean on main (base 8a2afbc3); a first cut of #457's fix that kept o without copying here read freed memory.
-// main: ran clean.
+// main: leaked on the runs maybe lent o, until agora #531 — the result answered "lent" while o's value left with it; LSan's conservative stack scan hid it under clang 18 (#532).
 // map: §7.2 | A2 | runs-clean | - | agora #457 guard: a maybe-lend of a local returned in an option
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`

@@ -47466,6 +47466,18 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         ? ( is_ident_tok fld_first_tt )
         { = fld_lent ( mem_lent_cond syms cg ( nurl_sym_get syms fld_first_val ) fld_first_tt fld_first_val ) }
         {}
+        // A returned wrap's bare payload whose flag is a call's own answer:
+        // whether the result owns it, by identity — its flag, or that of a
+        // local of this frame whose very value it holds (__own_by_identity).
+        // Read now, while those sources still have their flags; the field's
+        // kept note below hands them over (agora #531).
+        : ~ s fld_idown ``
+        ? & & agg_returned agg_is_wrap ( is_ident_tok fld_first_tt ) {
+            : s __iup ( mem_udrop_ptr_of syms fld_first_val )
+            // (Only one that may be a cursor over such a source, `__alias`:
+            // with none, by identity is by its flag, which fld_lent says.)
+            ? & & != 0 ( nurl_str_len __iup ) != 0 ( nurl_sym_len2 syms __iup `__alias` ) != 0 ( nurl_str_len ( __call_owned_by syms __iup ) ) { = fld_idown ( __own_by_identity syms cg __iup F ) } {}
+        } {}
         // A parameter in a literal this function keeps to itself (`: H2Frame
         // f @ H2Frame { … payload }`) is copied: its caller still owns the
         // value, and frees it after the call. Only a returned literal takes
@@ -47926,8 +47938,24 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
                 ( nurl_print `  ` ) ( nurl_print __dcc ) ( nurl_print ` = and i1 ` ) ( nurl_print __dkv ) ( nurl_print `, ` ) ( nurl_print fld_lent ) ( nurl_print `\n` )
                 ( mem_hown_mark_dyn syms )
                 = fval ( mem_emit_cloneif cg fty fval ( mem_hown_static syms cg __dcc ) )
-                : s __down ( nurl_cg_reg cg )
+                : ~ s __down ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print __down ) ( nurl_print ` = xor i1 ` ) ( nurl_print fld_lent ) ( nurl_print `, 1\n` )
+                // (A binding whose flag is a call's own answer holds, on the
+                // runs the call lent, the very value of a local of this frame
+                // it may be a cursor over (`: String x ( maybe o k )`); gen_ret
+                // hands that local's value over with the result by identity
+                // (mem_udrop_alias_lend), so the result owns it there too:
+                // __own_by_identity, as `^ x` answers. By x's flag alone the
+                // wrap said "lent" on those runs, the caller dropped nothing
+                // and the local's value leaked — agora #531.)
+                // (Read before the field's sources were handed over —
+                // fld_idown, at the top of the field — as their flags are
+                // cleared by then.)
+                ? != 0 ( nurl_str_len fld_idown ) {
+                    : s __dor ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __dor ) ( nurl_print ` = or i1 ` ) ( nurl_print __down ) ( nurl_print `, ` ) ( nurl_print fld_idown ) ( nurl_print `\n` )
+                    = __down __dor
+                } {}
                 ( nurl_sym_set_deep syms `__agg_take_own__` __down )
             } { = fval ( mem_emit_cloneif cg fty fval fld_lent ) } }
         // Whether this field holds an owning value lent from what it read
