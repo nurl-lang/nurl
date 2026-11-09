@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.11.14] — unreleased
+
+### Added
+
+- `FKEY(x)` in checked kernels: a float's order-preserving 32-bit key (a
+  long long; −0 is +0's), so `FKEY(a) < FKEY(b)` exactly when `a < b` and
+  equal when `a == b`, for NaN-free values. An exact threshold search over
+  the keys takes 32 halvings whatever the values' spread (nurllama's DSA
+  top-k, Agora #522). Pure, addresses nothing: inside the checked subset.
+
 ## [0.11.13] — 2026-10-21
 
 ### Fixed

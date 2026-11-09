@@ -367,7 +367,7 @@ $ `devbuf.nu`
 
 // The math a body may call.
 @ __gkc_callable s w → b {
-    ? ( __gkc_word_in `LD ST if for while switch return sizeof min max abs fabs fabsf sqrt sqrtf rsqrt rsqrtf exp expf exp2 exp2f expm1 log logf log2 log2f log1p log1pf log10 sin sinf cos cosf tan tanf tanh tanhf sinh cosh atan atanf atan2 atan2f asin acos pow powf fmin fminf fmax fmaxf floor floorf ceil ceilf round roundf trunc truncf fmod fmodf erf erff erfc erfcf isnan isinf isfinite copysign copysignf __dadd_rn __dsub_rn __dmul_rn __ddiv_rn __fadd_rn __fsub_rn __fmul_rn __fdiv_rn __fsqrt_rn __dsqrt_rn SYNC SHARED_D SHARED_F SHARED_L SHFL_DOWN SHFL_XOR LOCAL_D LOCAL_F LOCAL_L LD16 LD32 LD4 F16 BF16 WIN WINS LEN WIN2 LD2 ST2 ROWS COLS WIN3 LD3 ST3 PLANES` w ) { ^ T } {}
+    ? ( __gkc_word_in `LD ST if for while switch return sizeof min max abs fabs fabsf sqrt sqrtf rsqrt rsqrtf exp expf exp2 exp2f expm1 log logf log2 log2f log1p log1pf log10 sin sinf cos cosf tan tanf tanh tanhf sinh cosh atan atanf atan2 atan2f asin acos pow powf fmin fminf fmax fmaxf floor floorf ceil ceilf round roundf trunc truncf fmod fmodf erf erff erfc erfcf isnan isinf isfinite copysign copysignf __dadd_rn __dsub_rn __dmul_rn __ddiv_rn __fadd_rn __fsub_rn __fmul_rn __fdiv_rn __fsqrt_rn __dsqrt_rn SYNC SHARED_D SHARED_F SHARED_L SHFL_DOWN SHFL_XOR LOCAL_D LOCAL_F LOCAL_L LD16 LD32 LD4 F16 BF16 FKEY WIN WINS LEN WIN2 LD2 ST2 ROWS COLS WIN3 LD3 ST3 PLANES` w ) { ^ T } {}
     ^ ( __gkc_type w )
 }
 
@@ -620,6 +620,7 @@ static __device__ inline float __gk_ldf32(const float* p, long long n, long long
 static __device__ inline long long __gk_ldl32(const long long* p, long long n, long long i) { return p[min((unsigned)i, (unsigned)n - 1u)]; }
 static __device__ inline float __gk_h2f(unsigned short h) { float f; asm("cvt.f32.f16 %0, %1;" : "=f"(f) : "h"(h)); return f; }
 static __device__ inline float __gk_b2f(unsigned short h) { return __uint_as_float(((unsigned int)h) << 16); }
+static __device__ inline long long __gk_fkey(float x) { int b = __float_as_int(x); if (b == (int)0x80000000) { b = 0; } return b < 0 ? (long long)(b ^ 0x7fffffff) : (long long)b; }
 static __device__ inline float __gk_ldh(const unsigned short* p, long long n, long long i) { return __gk_h2f(p[(unsigned long long)i < (unsigned long long)n ? i : (n > 0 ? n - 1 : 0)]); }
 static __device__ inline float __gk_ldb(const unsigned short* p, long long n, long long i) { return __gk_b2f(p[(unsigned long long)i < (unsigned long long)n ? i : (n > 0 ? n - 1 : 0)]); }
 static __device__ inline float __gk_ldh32(const unsigned short* p, long long n, long long i) { return __gk_h2f(p[min((unsigned)i, (unsigned)n - 1u)]); }
@@ -648,6 +649,7 @@ static inline float __gk_h2f(unsigned int h) {
     union { unsigned int u; float f; } c; c.u = bits; return c.f;
 }
 static inline float __gk_b2f(unsigned short h) { union { unsigned int u; float f; } c; c.u = ((unsigned int)h) << 16; return c.f; }
+static inline long long __gk_fkey(float x) { union { float f; int i; } c; c.f = x; int b = c.i; if (b == (int)0x80000000) { b = 0; } return b < 0 ? (long long)(b ^ 0x7fffffff) : (long long)b; }
 __attribute__((noinline, cold)) static unsigned short __gk_ldu0(const unsigned short* p, long long n) { return p[n > 0 ? n - 1 : 0]; }
 static inline float __gk_ldh(const unsigned short* p, long long n, long long i) { if (__builtin_expect((unsigned long long)i >= (unsigned long long)n, 0)) return __gk_h2f(__gk_ldu0(p, n)); return __gk_h2f(p[i]); }
 static inline float __gk_ldb(const unsigned short* p, long long n, long long i) { if (__builtin_expect((unsigned long long)i >= (unsigned long long)n, 0)) return __gk_b2f(__gk_ldu0(p, n)); return __gk_b2f(p[i]); }
@@ -738,6 +740,10 @@ __attribute__((noinline, cold)) static const float* __gk_ld4_0(const float* p, l
 #define __GK_LD4N __GK_LD4W
 #endif
 #define BF16(h) __gk_b2f((unsigned short)(h))
+// A float's order-preserving key: FKEY(a) < FKEY(b) exactly when a < b, and
+// equal exactly when a == b (-0 is +0's key) — for NaN-free values. An exact
+// threshold search over the 2^32 keys takes 32 halvings (a top-k).
+#define FKEY(x) __gk_fkey((float)(x))
 #ifdef __CUDACC__
 static __device__ inline void __gk_std32(double* p, long long n, long long i, double v) { if ((unsigned)i < (unsigned)n) p[(unsigned)i] = v; }
 static __device__ inline void __gk_stf32(float* p, long long n, long long i, float v) { if ((unsigned)i < (unsigned)n) p[(unsigned)i] = v; }
