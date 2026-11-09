@@ -372,7 +372,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     container:
-      image: nurllang/ci:ubuntu24-20261108
+      image: nurllang/ci:ubuntu24-20261109
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -477,7 +477,7 @@ jobs:
       # apt mirror degraded repeatedly (2026-08-19) and every job whose
       # first step was `apt-get update` burned its whole timeout there.
       # Pin the DATED tag; :latest is never referenced from CI.
-      image: nurllang/ci:ubuntu24-20261108
+      image: nurllang/ci:ubuntu24-20261109
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -498,10 +498,11 @@ jobs:
 
       - name: Named types defined before they are parameters (LLVM 23)
         # LLVM 18 resolves a forward reference to a named struct anywhere
-        # in a module; LLVM 23 (the macOS job's Homebrew clang) rejects one
-        # used as a parameter type before its `%T = type` line ("invalid
-        # type for function argument"). Checks every module the corpus
-        # just emitted, so this runner's older clang still catches it.
+        # in a module; LLVM 23 (the clang CI builds with) rejects one used
+        # as a parameter type before its `%T = type` line ("invalid type
+        # for function argument"). Checks every module the corpus just
+        # emitted and names the rule, rather than leaving the reader a
+        # parser error from whichever clang a user has.
         run: python3 tools/check_ir_type_order.py "$(ls -td build/tests/run.* | head -1)"/*.ll
 
       - name: Retain complete build logs
@@ -526,7 +527,7 @@ jobs:
       # apt mirror degraded repeatedly (2026-08-19) and every job whose
       # first step was `apt-get update` burned its whole timeout there.
       # Pin the DATED tag; :latest is never referenced from CI.
-      image: nurllang/ci:ubuntu24-20261108
+      image: nurllang/ci:ubuntu24-20261109
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -825,7 +826,7 @@ jobs:
       # apt mirror degraded repeatedly (2026-08-19) and every job whose
       # first step was `apt-get update` burned its whole timeout there.
       # Pin the DATED tag; :latest is never referenced from CI.
-      image: nurllang/ci:ubuntu24-20261108
+      image: nurllang/ci:ubuntu24-20261109
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -1015,7 +1016,7 @@ jobs:
         # whose TLS client speaks TLS 1.2 unless GODEBUG=tls13=1 — the gate
         # script sets that for the TLS runs (the pure server is 1.3-only).
         run: |
-          curl -sSL -o /tmp/h2spec.tgz \
+          curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors -o /tmp/h2spec.tgz \
             https://github.com/summerwind/h2spec/releases/download/v2.6.0/h2spec_linux_amd64.tar.gz
           echo "157ee0de702e01ad40e752dbf074b366027e550c8e7504f9450da2809e279318  /tmp/h2spec.tgz" | sha256sum -c -
           mkdir -p "$HOME/.local/bin" && tar -xzf /tmp/h2spec.tgz -C "$HOME/.local/bin" h2spec
@@ -1034,7 +1035,7 @@ jobs:
       - name: Install h3spec 0.1.13 (QUIC + HTTP/3 conformance suite)
         # Pinned release binary (a static Haskell build), checksum-verified.
         run: |
-          curl -sSL -o "$HOME/.local/bin/h3spec" \
+          curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors -o "$HOME/.local/bin/h3spec" \
             https://github.com/kazu-yamamoto/h3spec/releases/download/v0.1.13/h3spec-linux-x86_64
           echo "b5f8eddd968cb195d1e3e7698d33fa141d6b2ad56153089d89928ac0fdee28bf  $HOME/.local/bin/h3spec" | sha256sum -c -
           chmod +x "$HOME/.local/bin/h3spec"
@@ -1125,7 +1126,7 @@ jobs:
         shard: [1, 2]
     timeout-minutes: 20
     container:
-      image: nurllang/ci:ubuntu24-20261108
+      image: nurllang/ci:ubuntu24-20261109
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -1198,7 +1199,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     container:
-      image: nurllang/ci:ubuntu24-20261108
+      image: nurllang/ci:ubuntu24-20261109
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -1277,7 +1278,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     container:
-      image: nurllang/ci:ubuntu24-20261108
+      image: nurllang/ci:ubuntu24-20261109
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -1361,9 +1362,20 @@ jobs:
           mem: 14336
           cpu: 3
           prepare: |
-            pkg install -y bash pkgconf sqlite3
+            # clang/LLVM 23 from ports' `latest` branch (the base system's
+            # clang is 18 and quarterly trails); lld from the same LLVM as
+            # clang's linker, since the base lld cannot read its bitcode.
+            mkdir -p /usr/local/etc/pkg/repos
+            echo 'FreeBSD: { url: "pkg+http://pkg.FreeBSD.org/${ABI}/latest" }' > /usr/local/etc/pkg/repos/FreeBSD.conf
+            pkg install -y bash pkgconf sqlite3 llvm23
+            echo '-fuse-ld=lld' > /usr/local/llvm23/bin/clang.cfg
+            echo '-fuse-ld=lld' > /usr/local/llvm23/bin/clang++.cfg
           run: |
-            clang --version
+            set -e
+            export CLANG=/usr/local/llvm23/bin/clang
+            want="$(sed -n 's/^LLVM_VERSION=//p' tools/install-llvm.sh)"
+            "$CLANG" --version | head -1
+            "$CLANG" --version | grep -q "clang version ${want%%.*}\." || { echo "llvm23 is not LLVM ${want%%.*}" >&2; exit 1; }
             ./build.sh
             ./tools/check_examples.sh
 
@@ -1385,7 +1397,7 @@ jobs:
     # build plus the targeted controls, ~8 min.
     timeout-minutes: 25
     container:
-      image: nurllang/ci:ubuntu24-20261108
+      image: nurllang/ci:ubuntu24-20261109
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -1558,7 +1570,7 @@ jobs:
       matrix:
         shard: [1, 2, 3]
     container:
-      image: nurllang/ci:ubuntu24-20261108
+      image: nurllang/ci:ubuntu24-20261109
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}

@@ -236,10 +236,20 @@ work), its own `lld` linker, and libc headers, so building needs **no system
 compiler at all** and is immune to the box's LLVM version. The release
 workflow downloads the per-arch zig (`Fetch bundled zig backend`) and
 `install-toolchain.sh` stages it at `<prefix>/zig/`, exactly where
-`nurl.sh` looks. Keep the bundled zig's LLVM ≥ the clang that built the
-release (zig 0.17 → LLVM 22), so `zig cc -flto` can read the shipped
-`runtime.o` bitcode. (~45 MB compressed per arch — the size cost of "just
+`nurl.sh` looks. (~45 MB compressed per arch — the size cost of "just
 works".)
+
+The zig's LLVM and the clang's need not match. `runtime.o` is bitcode from
+the clang that built the release (LLVM 23.1.5, `tools/install-llvm.sh`),
+and an older LLVM cannot read newer bitcode — the bundled zig 0.17 is LLVM
+22. So `build.sh` records who built `runtime.o` (`stdlib/runtime.cc`) and
+with which feature defines (`stdlib/runtime.cflags`), and, with the zig
+already in `vendor/zig` (the release fetches it before the build), also
+ships the runtime that zig links, `stdlib/runtime.<key>.o`. `nurl.sh`
+links `runtime.o` when the linking compiler is the one that built it and
+otherwise that compiler's own runtime — the shipped one, or one it builds
+once into `~/.cache/nurl/runtime/` (a user's distro clang older than the
+release's, say).
 
 `nurl.sh`'s compiler selection:
 

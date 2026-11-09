@@ -22,9 +22,17 @@
 // Turning that into per-line numbers is `model.nu`'s job; rendering it the
 // way `gcov` does is `gcovtext.nu`'s.
 //
-// Format: the version word is "408*" — GCC 4.8's layout, which is what
-// LLVM's GCOV pass emits and what this reader implements. A file that
-// announces a different version is rejected rather than guessed at.
+// Format: the version word names GCC's layout. This reader implements the
+// ones LLVM's GCOV pass writes, GCC 4.8's "408*" through GCC 11's "B11*":
+// clang up to 22 wrote "408*" unless asked otherwise, and LLVM 23 raises
+// every version below 11.1 to "B11*". Three things moved between them.
+// GCC 8 added `has_unexecuted_blocks` to the notes header, an `artificial`
+// word and the start column, end line and end column to a FUNCTION record,
+// and made BLOCKS one word, the count, instead of a word per block. GCC 9
+// added the compile directory to the header, and the data file's run
+// count moved from the program summary to the object summary. GCC 12
+// counts record lengths in bytes, not words: from "C00*" on, as for any
+// other version, the file is rejected rather than guessed at.
 //
 // Memory model: `gcov_read` returns a GcovObj handle — every copy is the
 // same object and the last owner releases it (`gcov_free` is an optional
@@ -44,6 +52,7 @@ $ `stdlib/std/arc.nu`
 : i GCOV_TAG_LINES 0x01450000
 : i GCOV_TAG_COUNTER 0x01a10000
 : i GCOV_TAG_PROGRAM 0xa3000000
+: i GCOV_TAG_OBJECT 0xa1000000  // GCC 9's object summary
 
 // Arc flags.
 : i GCOV_ARC_ON_TREE 1
@@ -91,6 +100,7 @@ $ `stdlib/std/arc.nu`
     String notes  // path of the .gcno that was read
     String data  // path of the .gcda, or empty when none was found
     i stamp
+    i ver  // the layout, as GCC numbers it: 48 for "408*", 111 for "B11*"
     i runs  // how many times the instrumented program has exited
     b has_data  // false → the program never ran; every counter is 0
     ( Vec String ) files  // source files this object mentions
@@ -135,7 +145,7 @@ $ `stdlib/std/arc.nu`
     ^ ?? e {
         GcovNoNotes → `notes file could not be read`
         GcovBadMagic → `not a GCOV file (bad magic)`
-        GcovBadVersion → `unsupported GCOV version (this reader implements "408*")`
+        GcovBadVersion → `unsupported GCOV version (this reader implements GCC 4.8 to 11, "408*" to "B11*")`
         GcovTruncated → `truncated record`
         GcovStampMismatch → `.gcda was produced by a different build than the .gcno`
         GcovChecksumMismatch → `a function's checksums differ between the .gcno and the .gcda`
@@ -203,10 +213,23 @@ $ `stdlib/std/arc.nu`
     ? ! & & == 111 # i ( slice_at [u] p 0 ) == 110 # i ( slice_at [u] p 1 )
     & == 99 # i ( slice_at [u] p 2 ) == 103 # i ( slice_at [u] p 3 )
     { ^ @ !v GcovErr { F GcovBadMagic } } {}
-    ? ! ( __g_version_ok p 4 ) { ^ @ !v GcovErr { F GcovBadVersion } } {}
+    = . o ver ( __g_version p 4 )
+    ? == . o ver 0 { ^ @ !v GcovErr { F GcovBadVersion } } {}
     = . o stamp ( __g_u32 p 8 )
 
     : ~ i off 12
+    // GCC 9: the directory the unit was compiled in, a string; GCC 8: the
+    // `has_unexecuted_blocks` word. Neither says anything a report uses.
+    ? >= . o ver 90 {
+        ? > + off 4 len { ^ @ !v GcovErr { F GcovTruncated } } {}
+        : i cwdw ( __g_u32 p off )
+        ? | < cwdw 0 > + + off 4 * cwdw 4 len { ^ @ !v GcovErr { F GcovTruncated } } {}
+        = off + off + 4 * cwdw 4
+    } {}
+    ? >= . o ver 80 {
+        ? > + off 4 len { ^ @ !v GcovErr { F GcovTruncated } } {}
+        = off + off 4
+    } {}
     : ~ i cur -1  // index of the function whose records we are inside
     : ~ i cursrc -1  // file index the current LINES record is naming
     ~ <= + off 8 len {
@@ -220,7 +243,11 @@ $ `stdlib/std/arc.nu`
             = cur ( __g_notes_function o p body end )
         } {
             ? == tag GCOV_TAG_BLOCKS {
-                ? >= cur 0 { ( __g_notes_blocks o cur words ) } {}
+                ? >= cur 0 {
+                    ? ! ( __g_notes_blocks o cur p body words len ) {
+                        ^ @ !v GcovErr { F GcovBadBlock }
+                    } {}
+                } {}
             } {
                 ? == tag GCOV_TAG_ARCS {
                     ? >= cur 0 {
@@ -265,11 +292,20 @@ $ `stdlib/std/arc.nu`
     ( vec_set [i] . o fns + * fi GFN_W GFN_ARC_N + 1 ( __g_fn o fi GFN_ARC_N ) )
 }
 
-// Only the layout this reader implements is accepted. Guessing at an
-// unknown one produces numbers that look plausible and are wrong.
-@ __g_version_ok ( Slice u ) p i off → b {
-    ^ & & == 42 # i ( slice_at [u] p off ) == 56 # i ( slice_at [u] p + off 1 )
-    & == 48 # i ( slice_at [u] p + off 2 ) == 52 # i ( slice_at [u] p + off 3 )
+// The layout a file announces, as GCC numbers it — "408*" is 48, "B11*" is
+// 111 — or 0 for one this reader does not implement. Only GCC 4.8 to 11 are
+// accepted: guessing at another produces numbers that look plausible and
+// are wrong. The word is stored reversed, as the magic is: '*' first.
+@ __g_version ( Slice u ) p i off → i {
+    ? != 42 # i ( slice_at [u] p off ) { ^ 0 } {}
+    : i c1 - # i ( slice_at [u] p + off 1 ) 48
+    : i c2 - # i ( slice_at [u] p + off 2 ) 48
+    : i c3 # i ( slice_at [u] p + off 3 )
+    ? | | < c1 0 > c1 9 | < c2 0 > c2 9 { ^ 0 } {}
+    // A letter in front counts hundreds, as LLVM reads it: "A93*" is 93
+    // (GCC 9.3), "B11*" 111 (GCC 11.1); "408*" is 48 (GCC 4.8).
+    : i v ? & >= c3 65 <= c3 90 + + * - c3 65 100 * c2 10 c1 ? & >= c3 48 <= c3 57 + * - c3 48 10 c1 0
+    ^ ? & >= v 48 < v 120 v 0
 }
 
 // A FUNCTION record opens a new function: identity, checksums, name,
@@ -284,6 +320,8 @@ $ `stdlib/std/arc.nu`
     : i namew ( __g_u32 p q )
     : String name ( __g_str p + q 4 namew end )
     = q + q + 4 * namew 4
+    // GCC 8: whether the function is artificial, before its file name.
+    ? >= . o ver 80 { = q + q 4 } {}
     ? > + q 4 end { ^ -1 } {}
     : i filew ( __g_u32 p q )
     : String file ( __g_str p + q 4 filew end )
@@ -310,12 +348,25 @@ $ `stdlib/std/arc.nu`
     ^ idx
 }
 
-// A BLOCKS record is one word of flags per basic block; the count of words
-// IS the number of blocks. Block 0 is the entry, block 1 the exit.
-@ __g_notes_blocks inout GcovObjImpl o i fi i words → v {
-    ( vec_set [i] . o fns + * fi GFN_W GFN_NBLOCK words )
+// A BLOCKS record is one word of flags per basic block, the count of words
+// being the number of blocks — or, from GCC 8 on, one word that is the
+// count. Block 0 is the entry, block 1 the exit.
+//
+// A count read out of the file sizes a table, so it is bounded by the
+// file: every block but the entry and the exit has a LINES record, at
+// least five words long, after this one. A count past that is a broken
+// record, not a function to allocate for.
+@ __g_notes_blocks inout GcovObjImpl o i fi ( Slice u ) p i body i words i len → b {
+    : ~ i n words
+    ? >= . o ver 80 {
+        ? < words 1 { ^ F } {}
+        = n ( __g_u32 p body )
+        ? | < n 0 > n + 2 / len 20 { ^ F } {}
+    } {}
+    ( vec_set [i] . o fns + * fi GFN_W GFN_NBLOCK n )
     : ~ i k 0
-    ~ < k words { ( vec_push [i] . o blk_count 0 ) = k + k 1 }
+    ~ < k n { ( vec_push [i] . o blk_count 0 ) = k + k 1 }
+    ^ T
 }
 
 // An ARCS record is a source block followed by (destination, flags) pairs.
@@ -396,7 +447,11 @@ $ `stdlib/std/arc.nu`
     ? ! & & == 97 # i ( slice_at [u] p 0 ) == 100 # i ( slice_at [u] p 1 )
     & == 99 # i ( slice_at [u] p 2 ) == 103 # i ( slice_at [u] p 3 )
     { ^ @ !v GcovErr { F GcovBadMagic } } {}
-    ? ! ( __g_version_ok p 4 ) { ^ @ !v GcovErr { F GcovBadVersion } } {}
+    : i dver ( __g_version p 4 )
+    ? == dver 0 { ^ @ !v GcovErr { F GcovBadVersion } } {}
+    // A data file in another layout than its notes was written by another
+    // build, and its records would be read in the wrong shape.
+    ? != dver . o ver { ^ @ !v GcovErr { F GcovStampMismatch } } {}
     // The stamp ties data to notes. A stale .gcda read against fresh notes
     // silently mis-attributes every counter, so it is an error, not a warning.
     ? != ( __g_u32 p 8 ) . o stamp { ^ @ !v GcovErr { F GcovStampMismatch } } {}
@@ -429,9 +484,14 @@ $ `stdlib/std/arc.nu`
                     // The program summary carries the run count: how many
                     // times the instrumented binary has exited into this
                     // file. Re-running accumulates, and the report says so.
+                    // From GCC 9 on it is the object summary's first word.
                     ? & == tag GCOV_TAG_PROGRAM >= words 3 {
                         = . o runs ( __g_u32 p + body 8 )
-                    } {}
+                    } {
+                        ? & == tag GCOV_TAG_OBJECT >= words 1 {
+                            = . o runs ( __g_u32 p body )
+                        } {}
+                    }
                 }
             }
             = off end
@@ -550,6 +610,13 @@ $ `stdlib/std/arc.nu`
 @ gcov_runs GcovObj o__h → i {
     : GcovObjImpl o ( arc_get [GcovObjImpl] . o__h a )
     ^ . o runs
+}
+
+// The layout the notes were written in, as GCC numbers it: 48 for "408*",
+// 111 for "B11*" (__g_version).
+@ gcov_version GcovObj o__h → i {
+    : GcovObjImpl o ( arc_get [GcovObjImpl] . o__h a )
+    ^ . o ver
 }
 
 @ gcov_notes_path GcovObj o__h → s {
@@ -909,6 +976,7 @@ $ `stdlib/std/arc.nu`
     ^ @ GcovObjImpl {
         ( string_new )
         ( string_new )
+        0
         0
         0
         F

@@ -20,6 +20,9 @@ nurlc.wasm
 # Stdlib runtime objects (rebuilt per platform)
 stdlib/runtime.o
 stdlib/runtime.native.o
+stdlib/runtime.[0-9]*.o
+stdlib/runtime.cc
+stdlib/runtime.cflags
 stdlib/runtime.curl
 stdlib/runtime.openssl
 stdlib/runtime.sqlite3

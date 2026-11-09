@@ -153,6 +153,22 @@ fi
 # same detection compiler/tests/run_tests.sh does, so the link line here
 # matches a normal `nurl.sh` build byte for byte.
 EXTRA_LIBS=""
+
+# The ThinLTO codegen cache in the linker's own spelling, asked the way
+# nurl.sh asks (its LTO_PLUGIN_OPT probe): GNU ld / gold through
+# LLVMgold take `-plugin-opt,cache-dir=`, lld takes `--thinlto-cache-dir=`
+# and refuses the plugin spelling. LLVM's release archive (the clang CI
+# installs, tools/install-llvm.sh) links through lld.
+LTO_CACHE_OPT="-plugin-opt,cache-dir="
+if [[ "$(uname -s)" == Linux ]]; then
+    _lp="$(mktemp -d)"
+    printf 'int main(void){return 0;}\n' > "$_lp/m.c"
+    if ! clang -flto=thin -Wl,-plugin-opt,O3 -Wl,-plugin-opt,cache-dir="$_lp/c" "$_lp/m.c" -o "$_lp/m" >/dev/null 2>&1 \
+       && clang -flto=thin -Wl,-plugin-opt,O3 -Wl,--thinlto-cache-dir="$_lp/c" "$_lp/m.c" -o "$_lp/m" >/dev/null 2>&1; then
+        LTO_CACHE_OPT="--thinlto-cache-dir="
+    fi
+    rm -rf "$_lp"
+fi
 for pair in "runtime.curl:libcurl" "runtime.openssl:openssl" "runtime.sqlite3:sqlite3" \
             "runtime.pq:libpq" "runtime.z:zlib" "runtime.zstd:libzstd"; do
     marker="${pair%%:*}"; pc="${pair##*:}"
@@ -259,12 +275,12 @@ compile_nurl() {           # <src.nu> <outbase> -> "<frontend_ms> <total_ms> <wa
             [[ "$c" == FAIL || "$c" == TIMEOUT ]] && { echo FAIL; return 1; }
             # shellcheck disable=SC2086
             l="$(cd "$ROOT" && time_ms clang $OPT -flto=thin -Wl,-plugin-opt,O3 \
-                     -Wl,-plugin-opt,cache-dir="$cachedir" -Wl,--as-needed "$obj" "$RUNTIME" \
+                     -Wl,"$LTO_CACHE_OPT$cachedir" -Wl,--as-needed "$obj" "$RUNTIME" \
                      -lm -lpthread $EXTRA_LIBS -o "$bin")"
             [[ "$l" == FAIL || "$l" == TIMEOUT ]] && { echo FAIL; return 1; }
             # shellcheck disable=SC2086
             w="$(cd "$ROOT" && time_ms clang $OPT -flto=thin -Wl,-plugin-opt,O3 \
-                     -Wl,-plugin-opt,cache-dir="$cachedir" -Wl,--as-needed "$obj" "$RUNTIME" \
+                     -Wl,"$LTO_CACHE_OPT$cachedir" -Wl,--as-needed "$obj" "$RUNTIME" \
                      -lm -lpthread $EXTRA_LIBS -o "$bin")"
             [[ "$w" == FAIL || "$w" == TIMEOUT ]] && { echo FAIL; return 1; }
             fe+=("$f")

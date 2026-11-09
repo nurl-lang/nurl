@@ -108,7 +108,44 @@ def check(path):
         if tools and not VERIFIED.search(block):
             problems.append((lineno, "downloads a tool with no checksum check",
                              tools[0]))
+        if tools:
+            for cmd in fetch_commands(block):
+                why = fetch_problem(cmd)
+                if why:
+                    problems.append((lineno, why, cmd.strip()[:90]))
     return problems
+
+
+def fetch_commands(block):
+    """Each curl / Invoke-WebRequest command of a block, continuation lines
+    joined, that is not a query of a server the job talks to."""
+    joined = re.sub(r"\\\n\s*", " ", block)
+    for line in joined.splitlines():
+        if DOWNLOAD.search(line) and not NOT_A_TOOL.search(line):
+            yield line
+
+
+def fetch_problem(cmd):
+    """Why a tool fetch is not robust, or None.
+
+    A fetch must FAIL on an HTTP error: without `-f` curl saves the 503
+    page GitHub's release CDN answers with, and the job dies one step later
+    on a checksum mismatch that names the wrong cause (h2spec and h3spec,
+    2026-11-08/09). And it must RETRY: those answers come and go within
+    minutes, and one of them ejected a green PR from the merge queue. The
+    checksum still decides what is accepted; the retry only decides how
+    often to ask."""
+    if re.search(r"\b(Invoke-WebRequest|iwr)\b", cmd, re.I):
+        if not re.search(r"-MaximumRetryCount\s+[1-9]", cmd, re.I):
+            return "fetches a tool without -MaximumRetryCount"
+        return None
+    if not re.search(r"\bcurl\b", cmd):
+        return None
+    if not (re.search(r"\s--fail\b", cmd) or re.search(r"\s-[a-zA-Z]*f[a-zA-Z]*\b", cmd)):
+        return "fetches a tool with curl but not -f (an HTTP error page would be saved as the tool)"
+    if not re.search(r"\s--retry\s+[1-9]", cmd):
+        return "fetches a tool with curl but no --retry"
+    return None
 
 
 def main():

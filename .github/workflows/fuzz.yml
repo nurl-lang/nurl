@@ -110,9 +110,12 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            clang pkg-config \
+            zstd pkg-config \
             libcurl4-openssl-dev libssl-dev libsqlite3-dev \
             libpq-dev zlib1g-dev libzstd-dev
+          # clang: LLVM's own release, pinned in tools/install-llvm.sh (the
+          # runner's Ubuntu clang is 18); /usr/local/bin is ahead of /usr/bin.
+          sudo ./tools/install-llvm.sh --link /usr/local/bin
           clang --version
 
       - name: Build toolchain
@@ -124,7 +127,7 @@ jobs:
         run: |
           ZIG_VER=0.17.1
           ZIG_SHA=3581863e3cbcfd0fce0efc682ce7e9e93da96668a977791d356a26d2a7e9b17a
-          curl -fsSL "https://ziglang.org/download/${ZIG_VER}/zig-x86_64-linux-${ZIG_VER}.tar.xz" -o /tmp/zig.tar.xz
+          curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors "https://ziglang.org/download/${ZIG_VER}/zig-x86_64-linux-${ZIG_VER}.tar.xz" -o /tmp/zig.tar.xz
           echo "$ZIG_SHA  /tmp/zig.tar.xz" | sha256sum -c -
           mkdir -p "$HOME/zig-toolchain"
           tar -xf /tmp/zig.tar.xz -C "$HOME/zig-toolchain" --strip-components=1

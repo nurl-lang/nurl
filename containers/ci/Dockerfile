@@ -17,7 +17,8 @@
 #
 # Build and push (needs push rights to the nurllang org):
 #
-#   docker build -t nurllang/ci:ubuntu24-YYYYMMDD -t nurllang/ci:latest containers/ci
+#   docker build --build-context tools=tools \
+#       -t nurllang/ci:ubuntu24-YYYYMMDD -t nurllang/ci:latest containers/ci
 #   docker push nurllang/ci:ubuntu24-YYYYMMDD
 #   docker push nurllang/ci:latest
 #
@@ -26,6 +27,13 @@
 #
 # ubuntu:24.04 to match the ubuntu-latest runners the jobs ran on
 # bare, so the toolchain versions do not silently move in the switch.
+# An empty stand-in for the LLVM release archive. `docker build
+# --build-context llvm=DIR` replaces it with a directory that holds
+# LLVM-<version>-Linux-<arch>.tar.zst, and the image installs from that
+# file (still held to its sha256) instead of downloading 1.2 GB; without
+# it the archive is downloaded. See tools/install-llvm.sh.
+FROM scratch AS llvm
+
 FROM ubuntu:24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
@@ -38,17 +46,12 @@ ARG DEBIAN_FRONTEND=noninteractive
 # pre-installed those lines go away, but a stray sudo in a script must
 # not become the new mystery failure).
 #
-# libclang-rt-dev is the one GitHub's bare runner image hid: Ubuntu 24
-# splits the sanitizer runtimes out of `clang`, the runner image ships
-# them pre-installed, and the first containerized ASan job died with
-# "cannot find libclang_rt.asan-x86_64.a" 35 seconds in.
 # python3-xxhash replaces a per-run `pip install xxhash` in the zstd
 # gate — the same per-run network fetch this image exists to remove.
 RUN apt-get update -qq && apt-get install -y --no-install-recommends \
         bash \
         binutils \
         ca-certificates \
-        clang \
         curl \
         gdb \
         git \
@@ -56,13 +59,14 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
         grub-efi-amd64-bin \
         grub-pc-bin \
         jq \
-        libclang-rt-dev \
+        libc6-dev \
         libcurl4-openssl-dev \
+        libgcc-13-dev \
         libpq-dev \
         libsqlite3-dev \
         libssl-dev \
+        libstdc++-13-dev \
         libzstd-dev \
-        llvm \
         mtools \
         openssl \
         pkg-config \
@@ -78,6 +82,24 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
         zlib1g-dev \
         zstd \
     && rm -rf /var/lib/apt/lists/*
+
+# clang/LLVM: LLVM's own release (Ubuntu 24.04's `clang` is 18), the
+# version and its digests in tools/install-llvm.sh — the one place every
+# image and workflow takes them from. lld becomes clang's default linker
+# there (the release ships no LLVMgold.so for GNU ld); compiler-rt, with
+# the sanitizer runtimes, comes inside the archive. The C runtime it
+# links against is the system's, as for any clang: libc6-dev and
+# libgcc-13-dev (crtbeginS.o, libgcc_s) in the list above — what the
+# distro `clang` package used to pull in as its own dependencies.
+COPY --from=tools install-llvm.sh /tmp/install-llvm.sh
+# It is also this image's `cc` and `c++`, as the distro clang package made
+# itself through update-alternatives: the image has no gcc, and scripts
+# compile helpers with plain `cc` (nurlapi/e2e_local.sh's sandbox wrapper).
+RUN --mount=type=bind,from=llvm,target=/mnt/llvm \
+    sh /tmp/install-llvm.sh --link /usr/local/bin --from /mnt/llvm && rm /tmp/install-llvm.sh \
+    && update-alternatives --install /usr/bin/cc cc /opt/llvm/bin/clang 100 \
+    && update-alternatives --install /usr/bin/c++ c++ /opt/llvm/bin/clang++ 100 \
+    && cc --version | head -1
 
 # The zig the ecosystem ships (install.sh, the playground image, the
 # aarch64 cross builds) — same version, same place the unikernel job

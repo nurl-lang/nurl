@@ -232,24 +232,29 @@ jobs:
         with:
           ref: ${{ env.BUILD_REF }}
 
-      - name: Install build deps (clang + FFI libs)
+      - name: Install build deps (FFI libs)
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            clang pkg-config \
+            pkg-config zstd \
             libcurl4-openssl-dev libssl-dev libsqlite3-dev \
             libpq-dev zlib1g-dev libzstd-dev
-          clang --version
 
-      - name: Build toolchain (nurlc + nurlpkg)
+      # The clang that builds the toolchain: LLVM's own release, the
+      # version and digests in tools/install-llvm.sh (the runner image's
+      # Ubuntu clang is 18). Linked into /usr/local/bin, ahead of it.
+      - name: Install clang (LLVM release, pinned)
         run: |
-          ./build.sh --no-tests
-          ./tools/nurlpkg/build.sh
+          sudo ./tools/install-llvm.sh --link /usr/local/bin
+          clang --version
 
       # Bundle a self-contained zig so the installed toolchain can build
       # programs (and `nurlpkg install`) with no system clang and immune to
-      # the box's LLVM version. zig 0.17 ships LLVM 22; keep it >= the clang
-      # used above so `zig cc -flto` can read the shipped runtime.o bitcode.
+      # the box's LLVM version. Fetched BEFORE the build: build.sh compiles
+      # stdlib/runtime.zig.o with the zig it finds in vendor/zig, and that
+      # is the runtime the bundled zig links — its own LLVM's bitcode, so
+      # the zig's LLVM need not be at least the clang's (zig 0.17 is LLVM
+      # 22; the clang above is 23).
       - name: Fetch bundled zig backend
         # Pinned by VERSION and by CONTENT. This archive is unpacked into the
         # published release, so whatever it contains is what users install:
@@ -269,12 +274,17 @@ jobs:
           esac
           url="https://ziglang.org/download/${ZIG_VER}/zig-${ZA}-linux-${ZIG_VER}.tar.xz"
           echo "Downloading $url"
-          curl -fsSL "$url" -o /tmp/zig.tar.xz
+          curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors "$url" -o /tmp/zig.tar.xz
           echo "$ZIG_SHA  /tmp/zig.tar.xz" | sha256sum -c -
           mkdir -p vendor
           tar -xf /tmp/zig.tar.xz -C vendor
           mv "vendor/zig-${ZA}-linux-${ZIG_VER}" vendor/zig
           vendor/zig/zig version
+
+      - name: Build toolchain (nurlc + nurlpkg)
+        run: |
+          ./build.sh --no-tests
+          ./tools/nurlpkg/build.sh
 
       # The CI runner's glibc (2.39) is newer than many target boxes (e.g.
       # Raspberry Pi OS bullseye = 2.31), and glibc is not forward-compatible
@@ -304,6 +314,11 @@ jobs:
           test -x dist/nurl/zig/zig || { echo "archive has no bundled zig" >&2; exit 1; }
           v="$(dist/nurl/zig/zig version)"
           [ "$v" = "$ZIG_VER" ] || { echo "bundled zig is $v, expected $ZIG_VER" >&2; exit 1; }
+          # …and the runtime that zig links, built by it (build.sh), not the
+          # clang bitcode in runtime.o, which an older LLVM cannot read.
+          id="$(dist/nurl/zig/zig cc --version | head -1)"
+          rt="dist/nurl/stdlib/runtime.$(printf '%s' "$id" | cksum | cut -d' ' -f1).o"
+          test -f "$rt" || { echo "archive has no runtime for its zig ($id): $rt" >&2; exit 1; }
           printf '$ `stdlib/core/io.nu`\n@ main \xe2\x86\x92 i { ( nurl_print `ok\\n` ) ^ 0 }\n' > /tmp/s.nu
           CLANG=/nonexistent/clang ./dist/nurl/bin/nurl /tmp/s.nu /tmp/s
           [ "$(/tmp/s)" = "ok" ]
@@ -365,16 +380,30 @@ jobs:
           # Forward the tag so the archive is named to match the others.
           envs: 'NURL_TAG'
           prepare: |
-            pkg install -y bash pkgconf sqlite3
+            # clang/LLVM 23 from ports' `latest` branch (the base system's
+            # clang is 18 and quarterly trails); lld from the same LLVM as
+            # clang's linker, since the base lld cannot read its bitcode.
+            mkdir -p /usr/local/etc/pkg/repos
+            echo 'FreeBSD: { url: "pkg+http://pkg.FreeBSD.org/${ABI}/latest" }' > /usr/local/etc/pkg/repos/FreeBSD.conf
+            pkg install -y bash pkgconf sqlite3 llvm23
+            echo '-fuse-ld=lld' > /usr/local/llvm23/bin/clang.cfg
+            echo '-fuse-ld=lld' > /usr/local/llvm23/bin/clang++.cfg
           run: |
             set -e
-            clang --version
+            export CLANG=/usr/local/llvm23/bin/clang
+            want="$(sed -n 's/^LLVM_VERSION=//p' tools/install-llvm.sh)"
+            "$CLANG" --version | head -1
+            "$CLANG" --version | grep -q "clang version ${want%%.*}\." || { echo "llvm23 is not LLVM ${want%%.*}" >&2; exit 1; }
             ./build.sh --no-tests
             ./tools/nurlpkg/build.sh
             NURL_HOME="$PWD/dist/nurl" ./tools/install-toolchain.sh
             # Smoke: the assembled toolchain must build + run a trivial program.
             printf '$ `stdlib/core/io.nu`\n@ main \xe2\x86\x92 i { ( nurl_print `ok\\n` ) ^ 0 }\n' > /tmp/s.nu
             ./dist/nurl/bin/nurl /tmp/s.nu /tmp/s && /tmp/s
+            # A user's base-system clang (18) cannot read the LLVM 23
+            # bitcode in runtime.o; nurl.sh builds that clang a runtime of
+            # its own. Prove it on the archive itself.
+            rm -f /tmp/s && CLANG=/usr/bin/clang ./dist/nurl/bin/nurl /tmp/s.nu /tmp/s && [ "$(/tmp/s)" = ok ]
             PKG="nurl-${NURL_TAG}-freebsd-x86_64.tar.gz"
             tar czf "$PKG" -C dist nurl
             # FreeBSD base has `sha256 -q` (no coreutils sha256sum). get-nurl.sh
@@ -412,8 +441,10 @@ jobs:
         with:
           ref: ${{ env.BUILD_REF }}
 
-      - name: Install LLVM/clang
-        run: choco install llvm -y --no-progress
+      - name: Install LLVM/clang (LLVM release, pinned)
+        # LLVM's own MSI, the version tools/install-llvm.sh pins, checked
+        # against its sha256 (Chocolatey's llvm trails the releases).
+        run: ./tools/install-llvm.ps1
         shell: pwsh
 
       - name: Install zlib + zstd (vcpkg, static)
@@ -444,7 +475,7 @@ jobs:
           # from https://ziglang.org/download/index.json. Bump it with ZIG_VER.
           $zigSha = "b03f477a1943673e02aca0f570e8030dffd536ce1f45cbc4d3326ec31159562e"
           $url = "https://ziglang.org/download/$zigVer/zig-x86_64-windows-$zigVer.zip"
-          Invoke-WebRequest $url -OutFile zig.zip
+          Invoke-WebRequest $url -OutFile zig.zip -MaximumRetryCount 5 -RetryIntervalSec 5
           $got = (Get-FileHash zig.zip -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($got -ne $zigSha) { throw "zig.zip sha256 is $got, expected $zigSha" }
           Expand-Archive zig.zip -DestinationPath vendor

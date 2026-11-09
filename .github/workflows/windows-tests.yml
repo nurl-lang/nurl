@@ -94,9 +94,10 @@ jobs:
 
       - name: Install LLVM/clang
         # windows-latest ships a clang via Visual Studio, but pin the
-        # LLVM one on PATH explicitly so build.bat's probe is stable.
-        run: choco install llvm --no-progress -y
-        shell: cmd
+        # LLVM one explicitly so build.bat's probe is stable: LLVM's own
+        # MSI, the version tools/install-llvm.sh pins, sha256-checked.
+        run: ./tools/install-llvm.ps1
+        shell: pwsh
 
       # ── The DRIVER, which nothing else on Windows exercises ────────
       # Fetched BEFORE build.bat on purpose: build.bat only emits the
@@ -120,7 +121,7 @@ jobs:
           # from https://ziglang.org/download/index.json. Bump it with $zigVer.
           $zigSha = "b03f477a1943673e02aca0f570e8030dffd536ce1f45cbc4d3326ec31159562e"
           $url = "https://ziglang.org/download/$zigVer/zig-x86_64-windows-$zigVer.zip"
-          Invoke-WebRequest $url -OutFile zig.zip
+          Invoke-WebRequest $url -OutFile zig.zip -MaximumRetryCount 5 -RetryIntervalSec 5
           $got = (Get-FileHash zig.zip -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($got -ne $zigSha) { throw "zig.zip sha256 is $got, expected $zigSha" }
           Expand-Archive zig.zip -DestinationPath vendor
