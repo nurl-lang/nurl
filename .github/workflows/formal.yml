@@ -20,7 +20,7 @@ on:
 
 jobs:
   proof:
-    name: A1 and A2 proofs build, sorry-free
+    name: A1, A2 and A3 proofs build, sorry-free
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:

@@ -306,8 +306,8 @@ whose copies are one state (a `PNCounter`, a `TcpConn`, a `Cell`)
 crossing to another thread while a copy of it stays behind panics at the
 crossing (`thread_spawn`, `spawn`, `chan_send`, a `Locked`), naming the
 handle ([`MEMORY.md` §6.5](MEMORY.md));
-the ownership rules of the single-threaded language (`A2.memory_safe`,
-`A2.no_leak_end`, phases A1–A2) are mechanically proven sound in Lean 4
+the ownership and concurrency rules (`A2.memory_safe`,
+`A2.no_leak_end`, `A3.claim`, phases A1–A3) are mechanically proven sound in Lean 4
 ([`formal/`](../formal/)).
 
 The fixed grammar quirks (binary `&` / `|` arity, ternary cascading, `^`

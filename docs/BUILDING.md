@@ -621,7 +621,7 @@ runners.
 |---|---|
 | build + bootstrap fixed point + test corpus | `build.sh` on Linux x86_64 — stage1 ≡ stage2 byte-identical IR, then the snapshot test suite |
 | soundness hole probes | `tools/fuzz/holes/check.sh` — every soundness probe is rejected or run clean under sanitizers |
-| formal soundness proof (Lean 4) | [`formal.yml`](../.github/workflows/formal.yml), when `formal/` changes: `formal/check.sh` builds the A1 and A2 proofs (`A1.memory_safe`, `A2.memory_safe`, `A2.no_leak_end`) and fails on a `sorry` or an axiom beyond Lean's standard ones |
+| formal soundness proof (Lean 4) | [`formal.yml`](../.github/workflows/formal.yml), when `formal/` changes: `formal/check.sh` builds the A1, A2 and A3 proofs (`A1.memory_safe`, `A2.memory_safe`, `A2.no_leak_end`, `A3.claim`, `A3.claim_made`) and fails on a `sorry` or an axiom beyond Lean's standard ones |
 | diagnostic coverage, anchor & type-spelling gates | `tools/check_diag_coverage.sh`, `tools/check_diag_anchor.sh` and `tools/check_diag_nurl_types.sh` — every compiler diagnostic is exercised by a test, points at the right token, and names types as NURL spells them (no lowered LLVM types in a golden) |
 | self-compile peak-RSS gate | `tools/memgate.sh` — compiling the compiler must stay under the memory budget |
 | self-compile leak gate | `tools/leakgate.sh` — `nurlc compiler/nurlc.nu` must leak nothing under LSan; runs when `compiler/nurlc.nu` changes |

@@ -3,6 +3,7 @@
 > **Interactive Explorer:** You can also explore this proof interactively (with a step-by-step memory & borrow-checker simulator, clickable theorem dependency graph, and searchable soundness-hole corpus) on **[nurl-lang.org/docs/formal-verification](https://nurl-lang.org/docs/formal-verification)**.
 
 * **Toolchain:** `leanprover/lean4:v4.35.0` (zero external dependencies; standard axioms `propext`, `Classical.choice`, `Quot.sound` only; `0` `sorry`s)
+* **Phase A3 (Threads & Data-Race Freedom):** **22 modules**, **10,139 lines of Lean 4**, **523 theorems**, **644 total declarations**
 * **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **36 modules**, **41,534 lines of Lean 4**, **1739 theorems**, **2141 total declarations**
 * **Phase A1 (Core Calculus):** **22 modules**, **9,571 lines of Lean 4**, **449 theorems**, **613 total declarations**
 * **Soundness Corpus (`corpus/map.tsv`):** every hole probe in [`tools/fuzz/holes/`](../tools/fuzz/holes/), with the rule and the proof phase (A1, A2, A3, B) that covers it. The table is generated from the probes' `// map:` lines by `tools/fuzz/holes/map.sh` (build.sh writes it; it is not committed); `tools/fuzz/holes/map.py --counts` gives the totals
@@ -11,7 +12,7 @@
 
 ## 1. For Everyone: What Does the Proof Actually Prove?
 
-In one sentence: **If a safe NURL program passes the ownership and borrow checker (`StmtT`), running it can never read freed memory, free the same memory twice, read through a view whose buffer reallocated, or leak a single heap allocation — whether the program finishes normally or unwinds from a panic.**
+In one sentence: **If a safe NURL program passes the ownership and borrow checker (`StmtT`), running it can never read freed memory, free the same memory twice, read through a view whose buffer reallocated, race on shared memory across threads, or leak a single heap allocation — whether the program finishes normally or unwinds from a panic (`A2.memory_safe`, `A2.no_leak_end`, `A2.no_leak_panic`, `A3.claim`, `A3.claim_made`).**
 
 ```mermaid
 flowchart TD
@@ -239,12 +240,12 @@ flowchart BT
 | 2. Memory Invariant | [`A2/Stability.lean`](A2/Stability.lean) | 1053 | 78 | 5 | Stability of borrows and views under store and context updates. |
 | 2. Memory Invariant | [`A2/Values.lean`](A2/Values.lean) | 203 | 14 | 0 | Well-formedness lemmas for values, structs (pair), enums (inl/inr), and views. |
 | 2. Memory Invariant | [`A2/Wf.lean`](A2/Wf.lean) | 1421 | 39 | 1 | Preservation of context well-formedness (WfCtx) across typing transitions. |
-| 3. Proof Infrastructure | [`A2/EditB.lean`](A2/EditB.lean) | 2117 | 61 | 0 |  |
-| 3. Proof Infrastructure | [`A2/EditBV.lean`](A2/EditBV.lean) | 1062 | 35 | 0 |  |
-| 3. Proof Infrastructure | [`A2/Elem.lean`](A2/Elem.lean) | 366 | 23 | 0 |  |
-| 3. Proof Infrastructure | [`A2/EnvHand.lean`](A2/EnvHand.lean) | 1512 | 52 | 5 |  |
-| 3. Proof Infrastructure | [`A2/Repl.lean`](A2/Repl.lean) | 371 | 21 | 0 |  |
-| 3. Proof Infrastructure | [`A2/Sweep.lean`](A2/Sweep.lean) | 586 | 65 | 3 |  |
+| 3. Proof Infrastructure | [`A2/EditB.lean`](A2/EditB.lean) | 2117 | 61 | 0 | Element edits through borrows (StmtT.editB): push, truncate, and element set through borrowed paths. |
+| 3. Proof Infrastructure | [`A2/EditBV.lean`](A2/EditBV.lean) | 1062 | 35 | 0 | A view stored through a borrow (StmtT.editBV): every view-holding root of the borrow's path holds what the stored value depends on. |
+| 3. Proof Infrastructure | [`A2/Elem.lean`](A2/Elem.lean) | 366 | 23 | 0 | An element handed over (withElem, insert): the invariant does not see the order of an owned Vec's elements (MInv.perm). |
+| 3. Proof Infrastructure | [`A2/EnvHand.lean`](A2/EnvHand.lean) | 1512 | 52 | 5 | Closure and trait-object environment hand-over (StmtT.callcE) for inout receivers. |
+| 3. Proof Infrastructure | [`A2/Repl.lean`](A2/Repl.lean) | 371 | 21 | 0 | One-hole replacement (Repl): a change through a borrowed handle rewrites one node of its owner's tree and leaves the rest. |
+| 3. Proof Infrastructure | [`A2/Sweep.lean`](A2/Sweep.lean) | 586 | 65 | 3 | The sweep (Mem.sweep): shared blocks (Arc, lock blocks) that nothing reaches are removed and their payloads freed, from every thread's roots. |
 | 3. Step & Unwinding Lemmas | [`A2/Frame.lean`](A2/Frame.lean) | 638 | 40 | 1 | How runtime frames (scope, rbind, frozen) interact with the memory invariant. |
 | 3. Step & Unwinding Lemmas | [`A2/Leak.lean`](A2/Leak.lean) | 622 | 25 | 1 | Leak-freedom invariant (Covers): every allocated address is owned by a live binding. |
 | 3. Step & Unwinding Lemmas | [`A2/Panic.lean`](A2/Panic.lean) | 380 | 23 | 1 | Panic unwinding (panic_unwind): every exited scope drops its owned trees via the drop journal. |

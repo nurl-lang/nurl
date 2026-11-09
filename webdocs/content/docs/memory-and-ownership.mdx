@@ -146,7 +146,7 @@ What it checks, briefly:
   same problem as a free-inside-a-loop double-free in C.
 
 <Callout type="info" title="Soundness boundary and mechanized Lean 4 proof">
-Together, auto-drop, the borrow checker, and the `unsafe` / `raw` boundary (`docs/spec.md` §3.3d–e) guarantee that every program the compiler accepts outside `unsafe` functions is memory-safe and leak-free (`docs/MEMORY.md` §6.2). Every soundness hole ever closed is locked down by a regression probe in `tools/fuzz/holes/` (an open one is listed in `docs/LIMITATIONS.md`), and the ownership and borrow rules of the single-threaded language have a mechanized **Lean 4 soundness proof** in [`formal/`](https://github.com/nurl-lang/nurl/tree/main/formal) (phases A1–A2: `A2.memory_safe`, `A2.no_leak_end`; no `sorry`). Raw `*T` pointers, pointer casts, raw struct fields (`raw :`), and foreign (FFI) calls are gated behind `unsafe @`.
+Together, auto-drop, the borrow checker, and the `unsafe` / `raw` boundary (`docs/spec.md` §3.3d–e) guarantee that every program the compiler accepts outside `unsafe` functions is memory-safe, leak-free, and data-race-free (`docs/MEMORY.md` §6.2, §6.5). Every soundness hole ever closed is locked down by a regression probe in `tools/fuzz/holes/` (an open one is listed in `docs/LIMITATIONS.md`), and the ownership, borrow, and concurrency rules have a mechanized **Lean 4 soundness proof** in [`formal/`](https://github.com/nurl-lang/nurl/tree/main/formal) (phases A1–A3: `A2.memory_safe`, `A2.no_leak_end`, `A3.claim`; no `sorry`). Raw `*T` pointers, pointer casts, raw struct fields (`raw :`), and foreign (FFI) calls are gated behind `unsafe @`.
 </Callout>
 
 ## Threads and shared state
@@ -168,7 +168,7 @@ diagnostics point at most often.
 
 ## Next
 
-- [Formal Verification (Lean 4)](./formal-verification) — interactive visual explorer, step-by-step memory & borrow simulator, Lean Blueprint dependency graph, and full Lean 4 proof browser for `A1` and `A2`.
+- [Formal Verification (Lean 4)](./formal-verification) — interactive visual explorer, step-by-step memory & borrow simulator, Lean Blueprint dependency graph, and full Lean 4 proof browser for `A1`, `A2`, and `A3`.
 - [Common pitfalls](./common-pitfalls) — the practical cases worth knowing up front.
 - [Concurrency](./concurrency) — threads, fibers, and channels.
 - For the exact rule-by-rule semantics, see [`docs/MEMORY.md`](https://github.com/nurl-lang/nurl/blob/main/docs/MEMORY.md) and the mechanized Lean 4 formalization in [`formal/README.md`](https://github.com/nurl-lang/nurl/blob/main/formal/README.md).
