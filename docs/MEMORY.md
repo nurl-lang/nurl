@@ -550,6 +550,36 @@ container a new value in the body (`= xs …`; for `~ x . r xs`, also `=
 that assigns it or hands it to such a function (h416–h420). A counter loop (`~ < k n { … }`)
 borrows nothing, so `vec_set xs k v` inside it is allowed.
 
+The element `x` is a part of `xs` (§2.10), so what ends `xs`'s elements
+ends `x`, by whatever route: a `vec_clear`, `vec_pop` or `vec_set`
+through an alias or a cursor of `xs`, a function or a closure that drops
+its elements, `xs` handed to a `sink` or given a new value — and, for a
+loop over a borrowed element or field, the same change to what that is
+in. Reading `x` after such a change is an error, and so is going on to the
+loop's next element, which the loop reads from that storage: leave the
+loop with `break` right after the change, or make the change after the
+loop. A change made through `x` itself — a borrow or a copy of it, or a
+borrow of its field — drops `x`'s own elements, not `x`. `xs` growing, or `x`'s own
+buffer growing, does not end `x`. A `~ cond` loop reads its condition
+again at every round: a borrow the condition reads that the body ended is
+refused there too.
+
+```nurl expect-error="'x' is the element a '~' loop is at" expect-error="this '~' loop goes on to its next element"
+$ `stdlib/core/string.nu`
+$ `stdlib/core/vec.nu`
+
+: ~ ( Vec String ) t ( vec_new [String] )
+( vec_push [String] t ( string_from `a heap string` ) )
+: ~ ( Vec String ) cur t
+~ x t {                                // error: this '~' loop goes on to its
+                                       //        next element, but its element 'x'
+                                       //        is a part of 't', which ended …
+    ( vec_clear [String] cur )         // drops t's elements, x among them
+    ( nurl_println ( string_data x ) )  // error: 'x' is the element a '~' loop
+                                       //        is at, a part of 't', which ended …
+}
+```
+
 ### 2.6 Loop-carried moves
 
 A loop body runs more than once. A binding that existed before the loop
@@ -713,8 +743,9 @@ holding it moves. The same holds:
 
 The loop's element is gone with its loop: a later binding of its name, or
 a later loop of the same name over another container, is another value
-and ends none of these views. A closure that captured the element is tied
-to the container as a view of it is.
+and ends none of these views. A closure that captured the element holds a
+copy of its handle: it is tied to the container's elements, as a closure
+over a `vec_at` binding is (§2.11).
 
 A change made through `x` is made to an element of `xs`: growing,
 clearing or replacing it ends the views of the elements' contents taken
@@ -826,6 +857,35 @@ closure it captured holds. Its copy stays the frame's handle, so the
 owner depends on that value: returned, or stored into storage the caller
 holds, it is rejected as a view of the value would be (h680–h688; share
 the value through an `Rc` instead, whose handle is copied).
+
+A value lent out of another — an element bound with `vec_at` or
+`vec_get`, a field borrowed out of a struct, a `??` payload read in
+place, a parameter's element, a `~` loop's element — is a copy of the
+handle in an element of what it was lent from. A closure that captures it
+by value, or one a call returns over it, holds that copy too, good exactly
+as long as the element is: the closure ends when the container is
+released, moved or given a new value, or when its elements are dropped or
+replaced (`vec_clear`, `vec_pop`, `vec_set`, …). The container growing,
+or the element's own buffer growing, does not end it. Kept past its
+container, run after the elements were cleared, or handed to another
+thread after that, it is refused. Stored into an owner that copies it in,
+or handed to another thread, the closure takes its own copy then, so only
+the one kept in the frame depends on the container.
+
+```nurl expect-error="holds a copy of the handle in an element of 't'"
+$ `stdlib/core/string.nu`
+$ `stdlib/core/vec.nu`
+
+: ~ ( @ i ) f \ → i { ^ 0 }
+{
+    : ( Vec String ) t ( vec_new [String] )
+    ( vec_push [String] t ( string_from `a heap string` ) )
+    : String e ( vec_at [String] t 0 )
+    = f \ → i { ^ ( string_len e ) }
+}
+( nurl_println_int ( f ) )   // error: 'f' holds a copy of the handle in an
+                             //        element of 't', which ended …
+```
 
 The mechanized proof (`formal/A2`, [`RULES.md`](../formal/RULES.md))
 covers this rule, with one difference on the conservative side: the
