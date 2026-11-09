@@ -3242,14 +3242,18 @@ unsafe @ note_unsafe_item s pos s what → v {
 // vec_at p 0 ) 0 )`, a join's, one a module-end note owes): `ptr=p#c`
 // words, `c` the `&`-joined `w>sx` that must hold, by the final summaries,
 // for the read to be one (__cond_holds; agora #461). They are g_cedges'
-// `#pdc`, no function's name: their writers assign no `s` global, so
-// they need no `unsafe`. g_pderiv_cn is 1 once the function compiling now
-// has one.
+// `#pdc:<ptr>`, one list per binding slot (no function's name has a `#`),
+// the slots noted under `#pdcs`: a binding's reads are one lookup, and
+// their writers assign no `s` global, so they need no `unsafe`.
+// g_pderiv_cn is 1 once the function compiling now has one.
 : ~ i g_pderiv_cn 0
 // The summary edges such a read conditions, per function (g_rpg_me_self):
 // `B:k:c` the elements of parameter k dropped, `D:k:callee:aix:c` a drop
 // edge, `R:k:callee:aix:c` an irealloc edge — kept at module end where `c`
-// holds (resolve_cond_edges); under `#fns` the functions with any.
+// holds (resolve_cond_edges); under `#fns` the functions with any. Each
+// edge's condition is a key of its own, `<f>^^<edge>` (`=` and the
+// condition), and `<f>` lists its edges: adding one is a lookup and an
+// append, not a copy of every edge the function has.
 : ~ i g_cedges 0
 // (The names each source expression lends out of, asked by
 // resolve_cond_edges: `:` and its words, per sx.)
@@ -37922,25 +37926,15 @@ unsafe @ __lend_unnamed s ws → b {
 }
 
 // …and those it was read out of only where a source expression lends out
-// of what it names (g_cedges' `#pdc`): `p#c` words (agora #461).
+// of what it names (g_cedges' `#pdc:<ptr>`): `p#c` words (agora #461).
 @ __pderiv_cparams i syms s name → s {
     ? == 0 g_pderiv_cn { ^ ( nurl_str_cat `` `` ) } {}
     : s ptr ( nurl_sym_get2 syms name `__ptr` )
     ? == 0 ( nurl_str_len ptr ) { ^ ( nurl_str_cat `` `` ) } {}
-    : s key ( nurl_str_cat ptr `=` )
-    : s all ( nurl_sym_get g_cedges `#pdc` )
-    // (Most bindings have none: one search decides.)
-    ? < ( nurl_str_find all key ) 0 { ^ ( nurl_str_cat `` `` ) } {}
-    : ~ s out ``
-    : ~ s rest ( nurl_str_cat all `` )
-    ~ != 0 ( nurl_str_len rest ) {
-        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
-        ? ( nurl_str_starts w key ) { = out ( __word_union out ( nurl_str_slice w ( nurl_str_len key ) - ( nurl_str_len w ) ( nurl_str_len key ) ) ) } {}
-    }
-    ^ out
+    ^ ( nurl_str_cat ( nurl_sym_get g_cedges ( nurl_str_cat `#pdc:` ptr ) ) `` )
 }
 
-// Binding slot `ptr` was read out of each `p#c` of `pcs` (`#pdc`).
+// Binding slot `ptr` was read out of each `p#c` of `pcs` (`#pdc:<ptr>`).
 // One condition per parameter: read out of it on several paths, the
 // conditions they share (__cond_list_put) — a binding given a value read
 // out of its own (`= a ( f ( g a ) )`) would otherwise double its
@@ -37948,16 +37942,20 @@ unsafe @ __lend_unnamed s ws → b {
 @ __pderiv_cnote s ptr s pcs → v {
     ? == 0 ( nurl_str_len pcs ) { ^ v } {}
     = g_pderiv_cn 1
+    : s sk ( nurl_str_cat `#pdc:` ptr )
+    ? == 0 ( nurl_sym_len g_cedges sk ) { ( nurl_sym_append_word g_cedges `#pdcs` ptr ) } {}
     : ~ s rest ( nurl_str_cat pcs `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest ) = rest ( str_skip_word rest )
         : i h ( nurl_str_find w `#` )
-        : s ck ( nurl_str_cat4 ptr `=` ( nurl_str_slice w 0 h ) `#` )
+        : s ck ( nurl_str_cat ( nurl_str_slice w 0 h ) `#` )
         : s cc ( nurl_str_slice w + h 1 - - ( nurl_str_len w ) h 1 )
-        // (A key not there yet — the usual case — is appended in place, as
-        // the compiler's accumulators are, nurl_sym_append_word; one there
-        // already keeps what both conditions share.)
-        ? < ( nurl_str_find ( nurl_sym_get g_cedges `#pdc` ) ck ) 0 { ( nurl_sym_append_word g_cedges `#pdc` ( nurl_str_cat ck cc ) ) } { ( nurl_sym_set g_cedges `#pdc` ( __cond_list_put ( nurl_sym_get g_cedges `#pdc` ) ck cc ) ) }
+        // (A parameter not there yet — the usual case — is appended in place,
+        // as the compiler's accumulators are, nurl_sym_append_word; one there
+        // already keeps what both conditions share. The slot's own list is a
+        // few words long.)
+        : s cur ( nurl_sym_get g_cedges sk )
+        ? | == 0 ( nurl_str_len cur ) < ( nurl_str_find cur ck ) 0 { ( nurl_sym_append_word g_cedges sk ( nurl_str_cat ck cc ) ) } { ( nurl_sym_set g_cedges sk ( __cond_list_put cur ck cc ) ) }
     }
 }
 
@@ -38028,7 +38026,7 @@ unsafe @ __lend_unnamed s ws → b {
 // now was read out of — through the handles it was read out of (g_pderiv),
 // a `??` payload's binding (`__plend` / `__plroot`), eight hops at most:
 // each `p`, or `p#c` where a source expression's lend leads there
-// (g_cedges' `#pdc`; agora #461).
+// (g_cedges' `#pdc:<ptr>`; agora #461).
 @ __pderiv_reach i syms s root → s {
     : ~ s srcs ( __pderiv_params syms root )
     = srcs ( __word_union srcs ( nurl_sym_get2 syms root `__plend` ) )
@@ -38146,9 +38144,28 @@ unsafe @ __sx_names_any s sx → b {
 // (g_clo_cur): `key` (`D:k:callee:aix:`, …) under condition `c`, one
 // condition per edge (__cond_list_put).
 @ __cedge_add s f s key s c → v {
-    : s cur ( nurl_sym_get g_cedges f )
-    ? == 0 ( nurl_str_len cur ) { ( nurl_sym_append_word g_cedges `#fns` f ) } {}
-    ( nurl_sym_set g_cedges f ( __cond_list_put cur key c ) )
+    : s kk ( nurl_str_cat3 f `^^` key )
+    : s cur ( nurl_sym_get g_cedges kk )
+    ? == 0 ( nurl_str_len cur ) {
+        ? == 0 ( nurl_sym_len g_cedges f ) { ( nurl_sym_append_word g_cedges `#fns` f ) } {}
+        ( nurl_sym_append_word g_cedges f key )
+        ( nurl_sym_set g_cedges kk ( nurl_str_cat `=` c ) )
+    } {
+        // (…noted again: the conjuncts both conditions share, which hold
+        // wherever either does — __cond_meet.)
+        ( nurl_sym_set g_cedges kk ( nurl_str_cat `=` ( __cond_meet ( nurl_str_slice cur 1 - ( nurl_str_len cur ) 1 ) c ) ) )
+    }
+}
+
+// The conditioned reads of the function compiled last are gone: each slot
+// `#pdcs` lists (__pderiv_cnote).
+@ __pdc_reset → v {
+    : ~ s rest ( nurl_str_cat ( nurl_sym_get g_cedges `#pdcs` ) `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ( nurl_sym_set g_cedges ( nurl_str_cat `#pdc:` w ) `` )
+    }
+    ( nurl_sym_set g_cedges `#pdcs` `` )
 }
 
 // __drop_note's edge of parameter `name` (or a field path of one) of
@@ -38224,7 +38241,7 @@ unsafe @ __sx_names_any s sx → b {
 // in a lend, a join's or a block's arms, a field of a call's result, or one
 // a module-end note still owes, `` or `-`s here — is read out of each
 // parameter the sx leads to, where the sx lends out of what it names by the
-// final summaries: g_cedges' `#pdc`, as __clo_deriv_note falls back to the
+// final summaries: g_cedges' `#pdc:<ptr>`, as __clo_deriv_note falls back to the
 // names (agora #449, #461).)
 unsafe @ __pderiv_note i syms s name s vt i rhs_tt s rhs_val s lend s sx → v {
     // (A number or a string view holds no handle: most bindings stop here.)
@@ -38576,9 +38593,11 @@ unsafe @ __sx_nroots s e b ns → s {
     : ~ s fr ( nurl_str_cat ( nurl_sym_get g_cedges `#fns` ) `` )
     ~ != 0 ( nurl_str_len fr ) {
         : s f ( str_first_word fr ) = fr ( str_skip_word fr )
-        : ~ s es ( nurl_sym_get g_cedges f )
+        : ~ s es ( nurl_str_cat ( nurl_sym_get g_cedges f ) `` )
         ~ != 0 ( nurl_str_len es ) {
-            : s e ( str_first_word es ) = es ( str_skip_word es )
+            : s ek ( str_first_word es ) = es ( str_skip_word es )
+            : s ec ( nurl_sym_get g_cedges ( nurl_str_cat3 f `^^` ek ) )
+            : s e ( nurl_str_cat ek ( nurl_str_slice ec 1 - ( nurl_str_len ec ) 1 ) )
             : i kd ( nurl_str_get e 0 )
             : s t1 ( nurl_str_slice e 2 - ( nurl_str_len e ) 2 )
             : i c1 ( nurl_str_find t1 `:` )
@@ -59715,7 +59734,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     = g_cur_params ? != 0 g_srcx_on ( nurl_sym_get syms `__fn_param_names__` ) ``
     = g_outer_params ( nurl_str_cat ( nurl_sym_get syms `__fn_param_names__` ) `` )
     = g_pderiv ``
-    ? != 0 g_pderiv_cn { ( nurl_sym_set g_cedges `#pdc` `` ) = g_pderiv_cn 0 } {}
+    ? != 0 g_pderiv_cn { ( __pdc_reset ) = g_pderiv_cn 0 } {}
     = g_mplx ``
     ? & != 0 g_srcx_on == 0 ( nurl_sym_len g_fn_safe fname ) {
         ( nurl_sym_def g_fn_safe fname `1` )
