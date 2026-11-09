@@ -54581,6 +54581,10 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
     // other operand. Returned bare, every other local leaked (agora #202).
     : s __t_up ? != 0 ( nurl_str_len __try_inner_v ) ( mem_udrop_ptr_of syms __try_inner_v ) ``
     : b __t_bind & != 0 ( nurl_str_len __try_inner_v ) | == 0 ( nurl_str_len __t_up ) == 0 ( nurl_sym_len2 syms __t_up `__alias` )
+    // (A cursor whose failure is answered for here — lent, or by the
+    // call's own answer — leaves with it as a binding does: not dropped on
+    // the way out, or the caller was handed what this frame released.)
+    : ~ b __t_askip F
     : s __t_et ? == ( agg_field_count syms vt ) 3 ( compound_field_type vt 2 ) ``
     : b __t_bare | == 0 ( nurl_str_len __t_et ) ! ( __type_needs_drop __t_et syms )
     // A failure that owns its error goes to the caller as the caller's own
@@ -54624,6 +54628,14 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
             } {}
         } {
             ? __t_bind {
+                // (…a binding lent out of a local of this frame on some path —
+                // a join's arm over one: `: !i Res q ? c ( getr pb ) ( getr lb
+                // )` — is refused as `^ q` is, when it cannot be copied: the
+                // local releases it on the way out. Agora #546.)
+                : s __t_sll ? ( seq ( nurl_sym_get2 syms __t_up `__alias_part` ) `1` ) `` ( mem_payload_local_lend syms cg __try_inner_v )
+                ? & & != 0 ( nurl_str_len __t_sll ) ! ( __clone_supported vt syms ) ( __nc_held_ty vt ) {
+                    ( __park_nc_local_lend lex ( nurl_sym_get syms `__last_local_lend__` ) ( nurl_sym_get2 syms __try_inner_v `__pljr` ) vt )
+                } {}
                 // (…a binding of what a call may lend: as that call, agora
                 // #200.)
                 : s __t_nk ( nurl_sym_get2 syms __try_inner_v `__nclk` )
@@ -54638,37 +54650,67 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
                     } {}
                 }
             } {
-                ? == __try_inner_tt TT_DOT {
-                    : s __t_root ( nurl_sym_get syms `__last_member_root__` )
-                    ? >= ( nurl_sym_word_index syms `__fn_param_names__` __t_root ) 0 {
-                        ( __record_param_idx syms `__fn_retlend__` __t_root )
-                        ( __record_param_idx syms `__fn_retpart__` __t_root )
-                        = __t_ob ( nurl_str_cat `false` `` )
+                // A cursor over another binding's value (`__alias`) hands on
+                // what it borrows, as `^ cur` does (mem_udrop_alias_lend): over
+                // a parameter, the caller's own value lent back; over a local,
+                // that local's value, which goes with it. Taken for owned, a
+                // cursor over a synth-drop parameter's field (`: !i Res q (
+                // getr b )`, `getr` handing back `. b r`) gave the caller b's
+                // own error to release (agora #539).
+                ? & != 0 ( nurl_str_len __t_up ) != 0 ( nurl_sym_len2 syms __t_up `__alias` ) {
+                    // (…of what a call may lend, as a binding is: agora #200.)
+                    : s __t_ank ( nurl_sym_get2 syms __try_inner_v `__nclk` )
+                    ? != 0 ( nurl_str_len __t_ank ) {
+                        ( __nc_lend_args_park syms lex __t_ank ( nurl_sym_get2 syms __try_inner_v `__ncla` ) vt )
+                        ( mem_ret_param_lend_via syms __t_ank ( nurl_sym_get2 syms __try_inner_v `__ncla` ) )
                     } {}
-                } {
-                    // A join picks a binding: owned by its arms' bits
-                    // (`__last_join_own__`), lending what its parameters hold.
-                    : s __t_jo ? | == __try_inner_tt TT_QUEST == __try_inner_tt TT_QUESTQUEST ( nurl_str_cat __try_hown `` ) ( nurl_str_cat __try_jown `` )
-                    : s __t_pn ( nurl_sym_get syms `__fn_param_names__` )
-                    : s __t_phs ( nurl_sym_get syms `__last_phi_idents__` )
-                    // (A join whose arms only pick parameters this function
-                    // does not own publishes no bit: it lends on every path.)
-                    : ~ b __t_allp & != 0 ( nurl_str_len __t_phs ) == 0 ( nurl_str_len __t_jo )
-                    : ~ s __t_pc ( nurl_str_cat __t_phs `` )
-                    ~ & __t_allp != 0 ( nurl_str_len __t_pc ) {
-                        : s w ( str_first_word __t_pc ) = __t_pc ( str_skip_word __t_pc )
-                        : s __t_wp ( mem_udrop_ptr_of syms w )
-                        = __t_allp & ( str_contains_word __t_pn w )
-                        | == 0 ( nurl_str_len __t_wp ) & != 0 ( nurl_sym_len2 syms __t_wp `__pname` ) ! ( __param_owned_slot syms __t_wp )
-                    }
-                    ? | != 0 ( nurl_str_len __t_jo ) __t_allp {
-                        = __t_ob ? __t_allp ( nurl_str_cat `false` `` ) ( nurl_str_cat __t_jo `` )
-                        : ~ s __t_ph ( nurl_str_cat __t_phs `` )
-                        ~ != 0 ( nurl_str_len __t_ph ) {
-                            : s w ( str_first_word __t_ph ) = __t_ph ( str_skip_word __t_ph )
-                            ? ( str_contains_word __t_pn w ) { ( __record_param_idx syms `__fn_retlend__` w ) } {}
+                    ( nurl_sym_set_deep syms `__agg_lends__` `` )
+                    ( nurl_sym_set_deep syms `__agg_lends_call__` `` )
+                    ( mem_udrop_alias_lend syms cg __t_up `` )
+                    ? != 0 ( nurl_sym_len syms `__agg_lends__` ) {
+                        ( nurl_sym_set_deep syms `__fn_ret_borrow__` `1` )
+                        : ~ s __t_ar ( nurl_sym_get2 syms __t_up `__alias` )
+                        ~ != 0 ( nurl_str_len __t_ar ) {
+                            : s __t_as ( str_first_word __t_ar ) = __t_ar ( str_skip_word __t_ar )
+                            : s __t_apn ( nurl_sym_get2 syms __t_as `__pname` )
+                            ? != 0 ( nurl_str_len __t_apn ) { ( __record_param_idx syms `__fn_retlend__` __t_apn ) } {}
                         }
-                    } {}
+                        = __t_ob ( nurl_str_cat `false` `` )
+                        = __t_askip T
+                    } { ? != 0 ( nurl_sym_len syms `__agg_lends_call__` ) { = __t_ob ( mem_udrop_flag_get syms cg __t_up ) = __t_askip T } {} }
+                } {
+                    ? == __try_inner_tt TT_DOT {
+                        : s __t_root ( nurl_sym_get syms `__last_member_root__` )
+                        ? >= ( nurl_sym_word_index syms `__fn_param_names__` __t_root ) 0 {
+                            ( __record_param_idx syms `__fn_retlend__` __t_root )
+                            ( __record_param_idx syms `__fn_retpart__` __t_root )
+                            = __t_ob ( nurl_str_cat `false` `` )
+                        } {}
+                    } {
+                        // A join picks a binding: owned by its arms' bits
+                        // (`__last_join_own__`), lending what its parameters hold.
+                        : s __t_jo ? | == __try_inner_tt TT_QUEST == __try_inner_tt TT_QUESTQUEST ( nurl_str_cat __try_hown `` ) ( nurl_str_cat __try_jown `` )
+                        : s __t_pn ( nurl_sym_get syms `__fn_param_names__` )
+                        : s __t_phs ( nurl_sym_get syms `__last_phi_idents__` )
+                        // (A join whose arms only pick parameters this function
+                        // does not own publishes no bit: it lends on every path.)
+                        : ~ b __t_allp & != 0 ( nurl_str_len __t_phs ) == 0 ( nurl_str_len __t_jo )
+                        : ~ s __t_pc ( nurl_str_cat __t_phs `` )
+                        ~ & __t_allp != 0 ( nurl_str_len __t_pc ) {
+                            : s w ( str_first_word __t_pc ) = __t_pc ( str_skip_word __t_pc )
+                            : s __t_wp ( mem_udrop_ptr_of syms w )
+                            = __t_allp & ( str_contains_word __t_pn w )
+                            | == 0 ( nurl_str_len __t_wp ) & != 0 ( nurl_sym_len2 syms __t_wp `__pname` ) ! ( __param_owned_slot syms __t_wp )
+                        }
+                        ? | != 0 ( nurl_str_len __t_jo ) __t_allp {
+                            = __t_ob ? __t_allp ( nurl_str_cat `false` `` ) ( nurl_str_cat __t_jo `` )
+                            : ~ s __t_ph ( nurl_str_cat __t_phs `` )
+                            ~ != 0 ( nurl_str_len __t_ph ) {
+                                : s w ( str_first_word __t_ph ) = __t_ph ( str_skip_word __t_ph )
+                                ? ( str_contains_word __t_pn w ) { ( __record_param_idx syms `__fn_retlend__` w ) } {}
+                            }
+                        } {}
+                    }
                 }
             }
         }
@@ -54679,7 +54721,7 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
         } {}
     } {}
     ? & != 0 g_auto_drop_strings | | | | == __try_inner_tt TT_LPAREN __t_bind __t_bare __t_need __t_ncok
-    { ( gen_ret_term lex syms cg fn_rt fail_val `` `` ? __t_bind __t_up `` `` ? __t_bind __try_inner_v `` ) }
+    { ( gen_ret_term lex syms cg fn_rt fail_val `` `` ? | __t_bind __t_askip __t_up `` `` ? | __t_bind __t_askip __try_inner_v `` ) }
     { ? != 0 ( nurl_str_len dtop )
         { ? ! ( seq fn_rt `void` )
             { : s rvp ( nurl_sym_get syms `__ret_val__` )
@@ -63384,7 +63426,9 @@ unsafe @ __hmemo_close s key i mark b r → v {
     ? | != 0 ( nurl_str_starts ty `%Vec__` ) != 0 ( nurl_str_starts ty `%Box__` ) {
         ^ ( __holds_user_drop ( __vec_elem_llvm ty ) + depth 1 )
     } {}
-    ? != 0 ( nurl_str_starts ty `{ i1, ` ) { ^ ( __holds_user_drop ( __opt_payload ty ) + depth 1 ) } {}
+    // (…a result's error too: `! i Res` with Res a `% Drop` held nobody's
+    // drop, its holder neither a handle nor a synth-drop struct — agora #539.)
+    ? != 0 ( nurl_str_starts ty `{ i1, ` ) { ^ || ( __holds_user_drop ( __opt_payload ty ) + depth 1 ) ( __holds_user_drop ( __wrap_part ty 1 ) + depth 1 ) } {}
     ? | == 0 g_root_syms != ( nurl_str_get ty 0 ) 37 { ^ F } {}
     : s sname ( nurl_str_slice ty 1 - ( nurl_str_len ty ) 1 )
     : s vlist ( nurl_sym_get2 g_root_syms sname `__variants` )
