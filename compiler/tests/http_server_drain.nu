@@ -12,9 +12,17 @@
 //     (NO_ERROR) and closed;
 //   * server_drain returns T (everything finished before the deadline),
 //     the run call returns, and a new connection is refused.
-// Then the deadline: a handler that sleeps 2.5 s outlives a 200 ms drain;
-// server_drain returns F well before the handler would have finished, and
-// that client sees the connection close with no response.
+// Then the deadline: a handler held past a 200 ms drain; server_drain
+// returns F without waiting for it, and that client sees the connection
+// close with no response.
+//
+// The order of events is made, not slept for (agora #534): each request
+// that must be in flight says so when its handler starts, and is held
+// until the controlling thread lets it go — /slow once the drain has
+// begun, /stuck once server_drain has returned. On a loaded machine the
+// old sleeps (150 ms to be in flight, 2.5 s to outlive a drain that
+// itself takes ~1.2 s) did not hold, and the deadline line came out
+// "returned-before-handler=F".
 // requires: live fibers
 
 $ `stdlib/std/async.nu`
@@ -28,10 +36,23 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/ext/http_server.nu`
 $ `stdlib/ext/http_response.nu`
 
-@ handler HttpRequest req → HttpResponse {
+// Wait until `a` is set (30 s at most: a bound for a broken run, never
+// reached by a working one).
+@ wait_set Atomic a → v {
+    : ~ i waited 0
+    ~ & == 0 ( atomic_load a ) < waited 30000 {
+        ( sleep_ms 2 )
+        = waited + waited 2
+    }
+}
+
+@ handler HttpRequest req Atomic started Atomic release Atomic finished → HttpResponse {
     : s path ( string_data . req path )
-    ? != 0 ( nurl_str_eq path `/slow` ) { ( sleep_ms 400 ) } {}
-    ? != 0 ( nurl_str_eq path `/stuck` ) { ( sleep_ms 2500 ) } {}
+    ? | != 0 ( nurl_str_eq path `/slow` ) != 0 ( nurl_str_eq path `/stuck` ) {
+        ( atomic_store started 1 )
+        ( wait_set release )
+        ( atomic_store finished 1 )
+    } {}
     ^ ( response_text 200 `done\n` )
 }
 
@@ -91,11 +112,11 @@ $ `stdlib/ext/http_response.nu`
 : ~ i idle_eof_ms -1
 : ~ b goaway F
 : ~ b drained F
-: ~ i drain_ms -1
 : ~ b refused F
 : ~ b stuck_no_response F
+: ~ b handler_done_at_return F
 
-@ check_drain HttpServer srv i port → v {
+@ check_drain HttpServer srv i port Atomic started Atomic release → v {
     ( sleep_ms 200 )
     // An idle keep-alive connection: answered once, then left open.
     ?? ( tcp_connect `127.0.0.1` port ) {
@@ -122,7 +143,7 @@ $ `stdlib/ext/http_response.nu`
                         }
                     }
                     : !Thread ThreadErr st ( thread_spawn slow )
-                    ( sleep_ms 150 )
+                    ( wait_set started )  // /slow is in its handler
                     : i t0 ( now_ms )
                     // The idle connections' EOFs, timed on threads of their own.
                     : ( @ v ) idle_watch \ → v {
@@ -136,8 +157,11 @@ $ `stdlib/ext/http_response.nu`
                     }
                     : !Thread ThreadErr it ( thread_spawn idle_watch )
                     : !Thread ThreadErr ht ( thread_spawn h2_watch )
+                    // The drain begins while /slow is in flight; then it may
+                    // answer, and its answer says Connection: close.
+                    ( server_drain_begin srv )
+                    ( atomic_store release 1 )
                     = drained ( server_drain srv 5000 )
-                    = drain_ms - ( now_ms ) t0
                     ?? st { T t → { ( thread_join t ) } F _ → {} }
                     ?? it { T t → { ( thread_join t ) } F _ → {} }
                     ?? ht { T t → { ( thread_join t ) } F _ → {} }
@@ -150,7 +174,7 @@ $ `stdlib/ext/http_response.nu`
     }
 }
 
-@ check_deadline HttpServer srv i port → v {
+@ check_deadline HttpServer srv i port Atomic started Atomic release Atomic finished → v {
     ( sleep_ms 200 )
     : ( @ v ) stuck \ → v {
         ?? ( tcp_connect `127.0.0.1` port ) {
@@ -163,10 +187,12 @@ $ `stdlib/ext/http_response.nu`
         }
     }
     : !Thread ThreadErr st ( thread_spawn stuck )
-    ( sleep_ms 150 )
-    : i t0 ( now_ms )
+    ( wait_set started )  // /stuck is in its handler
     = drained ( server_drain srv 200 )
-    = drain_ms - ( now_ms ) t0
+    // The handler is held until now: had server_drain waited for it, it
+    // would have returned only once the hold ran out, with this set.
+    = handler_done_at_return == 1 ( atomic_load finished )
+    ( atomic_store release 1 )
     ?? st { T t → { ( thread_join t ) } F _ → {} }
 }
 
@@ -175,9 +201,15 @@ $ `stdlib/ext/http_response.nu`
 @ run s name i port b fiber b deadline → v {
     ?? ( tcp_listen `127.0.0.1` port ) {
         T l → {
-            : ( @ HttpResponse HttpRequest ) h \ HttpRequest req → HttpResponse { ^ ( handler req ) }
+            : Atomic started ( atomic_new 0 )
+            : Atomic release ( atomic_new 0 )
+            : Atomic finished ( atomic_new 0 )
+            : Atomic h_started ( Atomic_share started )
+            : Atomic h_release ( Atomic_share release )
+            : Atomic h_finished ( Atomic_share finished )
+            : ( @ HttpResponse HttpRequest ) h \ HttpRequest req → HttpResponse { ^ ( handler req h_started h_release h_finished ) }
             : HttpServer srv ( server_new_with_timeout l h 20000 )
-            : ( @ v ) ctl \ → v { ? deadline { ( check_deadline srv port ) } { ( check_drain srv port ) } }
+            : ( @ v ) ctl \ → v { ? deadline { ( check_deadline srv port started release finished ) } { ( check_drain srv port started release ) } }
             : !Thread ThreadErr ct ( thread_spawn ctl )
             ? fiber {
                 ?? ( server_run_async srv ) { T _ → {} F _ → {} }
@@ -188,17 +220,18 @@ $ `stdlib/ext/http_response.nu`
             ( nurl_print name )
             ? deadline {
                 ( nurl_print ` drained-in-time=` ) ( nurl_print ( yn drained ) )
-                ( nurl_print ` returned-before-handler=` ) ( nurl_print ( yn < drain_ms 2000 ) )
+                ( nurl_print ` returned-before-handler=` ) ( nurl_print ( yn ! handler_done_at_return ) )
                 ( nurl_print ` stuck-client-no-response=` ) ( nurl_println ( yn stuck_no_response ) )
             } {
                 ( nurl_print ` drained-in-time=` ) ( nurl_print ( yn drained ) )
                 ( nurl_print ` in-flight-200=` ) ( nurl_print ( yn slow_ok ) )
                 ( nurl_print ` with-close=` ) ( nurl_print ( yn slow_close ) )
-                ( nurl_print ` idle-closed-promptly=` ) ( nurl_print ( yn & >= idle_eof_ms 0 < idle_eof_ms 1000 ) )
+                // by the drain, not by the 20 s idle timeout: well inside half of it
+                ( nurl_print ` idle-closed-promptly=` ) ( nurl_print ( yn & >= idle_eof_ms 0 < idle_eof_ms 10000 ) )
                 ( nurl_print ` h2-goaway=` ) ( nurl_print ( yn goaway ) )
                 ( nurl_print ` new-conn-refused=` ) ( nurl_println ( yn refused ) )
             }
-            = slow_ok F = slow_close F = idle_eof_ms -1 = goaway F = drained F = refused F = stuck_no_response F
+            = slow_ok F = slow_close F = idle_eof_ms -1 = goaway F = drained F = refused F = stuck_no_response F = handler_done_at_return F
         }
         F _ → { ( nurl_println `listen FAIL` ) }
     }
