@@ -142,6 +142,32 @@ $ `stdlib/core/rcbox.nu`
 
 & `c` @ nurl_fcond_broadcast sync *u cv → i32
 
+// A Mutex is an error-checking pthread mutex: a relock by its holder, or an
+// unlock by a thread that does not hold it, panics;
+// a Locked's lock is a check-out with a holder (stdlib/runtime_locked.c,
+// agora #455).
+& `c` @ nurl_mutex_init *u m → i32
+
+& `c` @ nurl_mutex_lock sync *u m → v
+
+& `c` @ nurl_mutex_unlock sync *u m → v
+
+& `c` @ nurl_lk_size → i
+
+& `c` @ nurl_lk_init *u l → v
+
+& `c` @ nurl_lk_destroy *u l → v
+
+& `c` @ nurl_lk_enter sync *u l s op → v
+
+& `c` @ nurl_lk_exit sync *u l i changed → v
+
+& `c` @ nurl_lk_take sync *u l s op → v
+
+& `c` @ nurl_lk_restore_begin sync *u l → i
+
+& `c` @ nurl_lk_await sync *u l i changed s op → v
+
 // pthread_create's start_routine signature is `void *(*)(void *)`.
 // NURL closures compile to `void(*)(void *env)` — same arg shape; the
 // return is discarded at the OS layer because the runtime trampolines
@@ -369,7 +395,7 @@ $ `stdlib/core/rcbox.nu`
 
 @ mutex_new → Mutex {
     : RawBlock b ( __sync_block `pthread_mutex_t` )
-    ( pthread_mutex_init ( raw_block_ptr b ) # *u 0 )
+    ( nurl_mutex_init ( raw_block_ptr b ) )
     ^ @ Mutex { ( shared_new [MutexImpl] @ MutexImpl { b } ) }
 }
 
@@ -377,9 +403,9 @@ $ `stdlib/core/rcbox.nu`
 // (`nurl_fiber_park_with_mutex`).
 @ mutex_raw Mutex m → *u { ^ ( __mutex_obj m ) }
 
-@ mutex_lock Mutex m → v { ( pthread_mutex_lock ( __mutex_obj m ) ) }
+@ mutex_lock Mutex m → v { ( nurl_mutex_lock ( __mutex_obj m ) ) }
 
-@ mutex_unlock Mutex m → v { ( pthread_mutex_unlock ( __mutex_obj m ) ) }
+@ mutex_unlock Mutex m → v { ( nurl_mutex_unlock ( __mutex_obj m ) ) }
 
 @ Mutex_share Mutex m → Mutex { ^ @ Mutex { ( shared_clone [MutexImpl] . m ctl ) } }
 
@@ -409,22 +435,36 @@ $ `stdlib/core/rcbox.nu`
 // releases it), so it is captured or sent to the threads that use it;
 // T must be Send, since it is reached from whichever thread holds the
 // lock.
+//
+// The lock (stdlib/runtime_locked.c) is a check-out, as the proof models
+// it (formal/A3/DESIGN.md, A3.2): each call below takes the value — in
+// place, or out for locked_take — and gives it back, and no OS mutex is
+// held while a closure runs on it. So a fiber that parks inside the
+// closure (on a channel, a socket) lets the other fibers of its worker
+// run, and one of them asking for the same Locked parks until it is let
+// go. A thread or fiber that asks for a Locked it already holds — a
+// locked_* call nested in another one's closure on the same Locked —
+// panics, naming the call: it would wait for itself (agora #455).
+: LkLatch { RawBlock blk }
+
+% Drop LkLatch { unsafe @ drop LkLatch x → v { ( nurl_lk_destroy ( raw_block_ptr . x blk ) ) } }
+
+@ __lk_latch → LkLatch {
+    : RawBlock b ( raw_block_zero ( nurl_lk_size ) )
+    ( nurl_lk_init ( raw_block_ptr b ) )
+    ^ @ LkLatch { b }
+}
+
 : LockedImpl [T] {
-    Mutex mu
+    LkLatch lk
     T val
-    // Checked out (locked_take): the value is with one thread, and every
-    // other operation waits on `cv` until it is restored.
-    b taken
-    Cond cv
-    // Threads and fibers waiting on `cv` (a fiber parks, its worker runs
-    // on): a restore with nobody waiting skips the broadcast (changed
-    // only with `mu` held).
-    i waiters
 }
 
 : Locked [T] { ( Shared ( LockedImpl T ) ) ctl }
 
 % Sync Locked {}
+
+@ __lk [T] * ( LockedImpl T ) p → *u { ^ ( raw_block_ptr . . p lk blk ) }
 
 @ locked_new [T] sink T x → ( Locked T ) {
     // The value goes where every thread holding the Locked reaches it: a
@@ -434,7 +474,7 @@ $ `stdlib/core/rcbox.nu`
     // it, or stored one of a handle kept outside: checked before the lock
     // is let go (a failure panics with it held, as a panic in `f` does).
     ( mem_send_check [T] x `locked_new` )
-    ^ @ ( Locked T ) { ( shared_new [( LockedImpl T )] @ ( LockedImpl T ) { ( mutex_new ) x F ( cond_new ) 0 } ) }
+    ^ @ ( Locked T ) { ( shared_new [( LockedImpl T )] @ ( LockedImpl T ) { ( __lk_latch ) x } ) }
 }
 
 // A Locked over the all-zero value of T. Outside `unsafe` only for a T
@@ -444,8 +484,7 @@ $ `stdlib/core/rcbox.nu`
 @ locked_zero [T] → ( Locked T ) {
     : ( Shared ( LockedImpl T ) ) sh ( shared_zero [( LockedImpl T )] )
     : *( LockedImpl T ) p ( shared_ptr [( LockedImpl T )] sh )
-    = . p mu ( mutex_new )
-    = . p cv ( cond_new )
+    = . p lk ( __lk_latch )
     ^ @ ( Locked T ) { sh }
 }
 
@@ -460,11 +499,11 @@ $ `stdlib/core/rcbox.nu`
 // scalar is replaced with locked_set).
 @ locked_with [T] ( Locked T ) l ( @ v T ) f → v {
     : *( LockedImpl T ) p ( shared_ptr [( LockedImpl T )] . l ctl )
-    ( mutex_lock . p mu )
-    ~ . p taken { = . p waiters + . p waiters 1 ( cond_wait . p cv . p mu ) = . p waiters - . p waiters 1 }
+    ( nurl_lk_enter ( __lk [T] p ) `locked_with` )
     ( f . p val )
     ( mem_send_check [T] . p val `locked_with` )
-    ( mutex_unlock . p mu )
+    // (What f did to a container changed the value: awaiters look again.)
+    ( nurl_lk_exit ( __lk [T] p ) 1 )
 }
 
 // Run `f` on the value IN PLACE while holding the lock: `f` takes it
@@ -473,62 +512,52 @@ $ `stdlib/core/rcbox.nu`
 // a record other code holds the address of needs). Nothing is copied.
 @ locked_update [T] ( Locked T ) l ( @ v inout T ) f → v {
     : ~ * ( LockedImpl T ) p ( shared_ptr [( LockedImpl T )] . l ctl )
-    ( mutex_lock . p mu )
-    ~ . p taken { = . p waiters + . p waiters 1 ( cond_wait . p cv . p mu ) = . p waiters - . p waiters 1 }
+    ( nurl_lk_enter ( __lk [T] p ) `locked_update` )
     ( f . p val )
     ( mem_send_check [T] . p val `locked_update` )
-    // (A thread in locked_await looks again at the changed value.)
-    ? > . p waiters 0 { ( cond_broadcast . p cv ) } {}
-    ( mutex_unlock . p mu )
+    ( nurl_lk_exit ( __lk [T] p ) 1 )
 }
 
 // locked_update with a result: `f`'s, returned once the lock is let go.
 @ locked_apply [T R] ( Locked T ) l ( @ R inout T ) f → R {
     : ~ * ( LockedImpl T ) p ( shared_ptr [( LockedImpl T )] . l ctl )
-    ( mutex_lock . p mu )
-    ~ . p taken { = . p waiters + . p waiters 1 ( cond_wait . p cv . p mu ) = . p waiters - . p waiters 1 }
+    ( nurl_lk_enter ( __lk [T] p ) `locked_apply` )
     : R r ( f . p val )
     ( mem_send_check [T] . p val `locked_apply` )
-    ? > . p waiters 0 { ( cond_broadcast . p cv ) } {}
-    ( mutex_unlock . p mu )
+    ( nurl_lk_exit ( __lk [T] p ) 1 )
     ^ r
 }
 
 // A monitor's wait: run `f` on the value IN PLACE with the lock held — and
-// again each time another thread changes the value (locked_update,
-// locked_apply, locked_set, locked_restore) — until it hands back a
-// result, which is returned once the lock is let go. Between two runs the
-// lock is not held, so the thread waits without stopping the ones that
-// will change what it is waiting for. `f` may change the value too (to
-// register itself, say); a run that changes it and hands back nothing
-// wakes the other waiters before this one sleeps.
+// again each time another thread changes the value (locked_with,
+// locked_update, locked_apply, locked_set, locked_restore) — until it
+// hands back a result, which is returned once the lock is let go. Between
+// two runs the lock is not held, so the thread waits without stopping the
+// ones that will change what it is waiting for. `f` may change the value
+// too (to register itself, say); a run that hands back nothing wakes the
+// other waiters before this one sleeps.
 //
 //   ( locked_await [Queue Job] q \ inout Queue x → ?Job { ^ ( queue_pop x ) } )
 @ locked_await [A R] ( Locked A ) l ( @ ?R inout A ) f → R {
     : ~ * ( LockedImpl A ) p ( shared_ptr [( LockedImpl A )] . l ctl )
-    ( mutex_lock . p mu )
+    ( nurl_lk_enter ( __lk [A] p ) `locked_await` )
     ~ T {
-        ~ . p taken { = . p waiters + . p waiters 1 ( cond_wait . p cv . p mu ) = . p waiters - . p waiters 1 }
         : ?R r ( f . p val )
         ( mem_send_check [A] . p val `locked_await` )
-        ? > . p waiters 0 { ( cond_broadcast . p cv ) } {}
         ? . r 0 {
-            ( mutex_unlock . p mu )
+            ( nurl_lk_exit ( __lk [A] p ) 1 )
             ^ . r 1
         } {}
-        = . p waiters + . p waiters 1
-        ( cond_wait . p cv . p mu )
-        = . p waiters - . p waiters 1
+        ( nurl_lk_await ( __lk [A] p ) 1 `locked_await` )
     }
 }
 
 // A copy of the value, taken under the lock.
 @ locked_get [T] ( Locked T ) l → T {
     : *( LockedImpl T ) p ( shared_ptr [( LockedImpl T )] . l ctl )
-    ( mutex_lock . p mu )
-    ~ . p taken { = . p waiters + . p waiters 1 ( cond_wait . p cv . p mu ) = . p waiters - . p waiters 1 }
+    ( nurl_lk_enter ( __lk [T] p ) `locked_get` )
     : T c ( mem_dup . p val )
-    ( mutex_unlock . p mu )
+    ( nurl_lk_exit ( __lk [T] p ) 0 )
     // A copy of a handle whose copies are one state is that state, which
     // the threads holding the Locked change: none is handed out.
     ( mem_send_check [T] c `locked_get` )
@@ -539,27 +568,22 @@ $ `stdlib/core/rcbox.nu`
 @ locked_set [T] ( Locked T ) l sink T x → v {
     ( mem_send_check [T] x `locked_set` )
     : *( LockedImpl T ) p ( shared_ptr [( LockedImpl T )] . l ctl )
-    ( mutex_lock . p mu )
-    ~ . p taken { = . p waiters + . p waiters 1 ( cond_wait . p cv . p mu ) = . p waiters - . p waiters 1 }
+    ( nurl_lk_enter ( __lk [T] p ) `locked_set` )
     = . p val x
-    ? > . p waiters 0 { ( cond_broadcast . p cv ) } {}
-    ( mutex_unlock . p mu )
+    ( nurl_lk_exit ( __lk [T] p ) 1 )
 }
 
 // Take the value out to change it, holding no lock while it is out:
 // every other operation on the Locked — from any thread — waits until
-// `locked_restore` puts it back. Nothing is copied. (Taken twice by one
-// thread without a restore in between, the second take waits forever, as
-// a mutex locked twice does.)
+// `locked_restore` puts it back, which any thread may do (the value may
+// be handed on to the one that restores it). Nothing is copied. (Taken
+// twice without a restore in between, the second take waits for one.)
 @ locked_take [T] ( Locked T ) l → T {
     : *( LockedImpl T ) p ( shared_ptr [( LockedImpl T )] . l ctl )
-    ( mutex_lock . p mu )
-    ~ . p taken { = . p waiters + . p waiters 1 ( cond_wait . p cv . p mu ) = . p waiters - . p waiters 1 }
+    ( nurl_lk_take ( __lk [T] p ) `locked_take` )
     // (Claimed out of its slot, it leaves zero bytes there.)
     : T x . p val
     ( mem_take x )
-    = . p taken ! F  // (`T` is the type parameter here)
-    ( mutex_unlock . p mu )
     ^ x
 }
 
@@ -568,16 +592,13 @@ $ `stdlib/core/rcbox.nu`
 @ locked_restore [T] ( Locked T ) l sink T x → v {
     ( mem_send_check [T] x `locked_restore` )
     : *( LockedImpl T ) p ( shared_ptr [( LockedImpl T )] . l ctl )
-    ( mutex_lock . p mu )
-    ? ! . p taken { ( mutex_unlock . p mu ) ( nurl_panic `locked_restore: the value was not taken` ) } {}
+    ? == 0 ( nurl_lk_restore_begin ( __lk [T] p ) ) { ( nurl_panic `locked_restore: the value was not taken` ) } {}
     // It replaces the zero bytes locked_take left: they own nothing, so
     // they are swapped out and forgotten rather than run through the
     // value's drop glue (which walks every field of a large record).
     : T zero ( mem_replace [T] . p val x )
     ( mem_forget zero )
-    = . p taken F
-    ? > . p waiters 0 { ( cond_broadcast . p cv ) } {}
-    ( mutex_unlock . p mu )
+    ( nurl_lk_exit ( __lk [T] p ) 1 )
 }
 
 // ── Condition variable ────────────────────────────────────────────

@@ -47,8 +47,9 @@
 // is the same lock and the same value, and the last one releases both.
 //
 // A thread that already holds a guard of one RwLocked and asks it for
-// another waits forever when either is a write guard (as a mutex locked
-// twice does): take one guard per lock per thread.
+// another panics when either is a write guard (it would wait for itself,
+// as a Locked or a Mutex asked for by its holder does): take one write
+// guard per lock per thread.
 
 $ `stdlib/core/marker.nu`
 $ `stdlib/core/mem.nu`

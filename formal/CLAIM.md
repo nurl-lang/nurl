@@ -148,8 +148,11 @@ the LLVM / C11 memory model rather than redefining it.
       body's end (`withLock`, `scopeL`). A thread whose lock is checked
       out waits (`Blocked`), which is not stuck. Deadlock freedom is not
       claimed.
-    - **Faithful to the in-place runtime.** The runtime runs `f` on the
-      value inside the lock, where the model checks it out and back. The
+    - **Faithful to the in-place runtime.** The runtime's lock is a
+      check-out too (`stdlib/runtime_locked.c`): a lock word that is free,
+      held in place by one holder, or taken out, and no OS mutex is held
+      while `f` runs. It runs `f` on the value where it lies, where the
+      model moves it out and back. The
       two agree because the typing keeps the lock alive through the body
       (the body does not name the share, which is an owner or a
       parameter of the function the body is in) and has the binding hold
@@ -159,11 +162,14 @@ the LLVM / C11 memory model rather than redefining it.
       journal. `locked_with` instead keeps the lock held, so its runs are
       among the model's: other threads wait. A thread that would wait may
       also panic (`Step.waitPanic`), which covers a runtime that detects
-      a self-deadlock and panics (`RwLocked` does).
+      a self-deadlock and panics: `RwLocked` does, and so do `Locked` (a
+      holder asking for the lock it holds in place) and `Mutex` (an
+      error-checking one: a relock, or an unlock by a thread that does not
+      hold it), since Agora #455.
     - **Threads.** A checked-out payload is in its holder's part, and a
       payload in its block is read by no one. Taking and giving back a
-      lock touch only the lock word, which the runtime's mutex changes
-      atomically (trusted base, beside DRF-SC).
+      lock touch only the lock word, which the runtime changes with one
+      atomic compare-and-swap (trusted base, beside DRF-SC).
     - **In Lean.** `A2.memory_safe`, `A2.no_leak_end`, `A2.no_leak_panic`
       and `A3.claim` hold with all of this, on the standard axioms only.
     - **Second cut: shares in payloads, `locked_take` / `locked_restore`.**
@@ -213,10 +219,12 @@ the LLVM / C11 memory model rather than redefining it.
       from `CellInv.one`); the closure the operations run called through
       a package (here a statement in place or a function of the
       program).
-    - **Not proven here (phase D):** relocking a lock on the OS thread
-      that holds it (a nested update, or another fiber on that thread).
-      The model's thread waits or panics, but the runtime's default
-      pthread mutex leaves it undefined (Agora #455).
+    - **Not proven here (phase D):** that the runtime's lock word is the
+      model's block state. (Relocking a lock its holder has, a nested
+      update, was undefined while the runtime held a default pthread mutex
+      across `f`; another fiber on that thread stopped its worker. Since
+      Agora #455 the first panics, as `Step.waitPanic` allows, and the
+      second parks.)
   - **A3.4, `Atomic` and channels** *(proven)* — an integer every thread
     reads and changes, and a queue values move through.
     - **The calculus.** An `Atomic` is a lock block of an integer that is

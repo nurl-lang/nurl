@@ -44,3 +44,27 @@
 #include "runtime_core.c"
 #include "runtime_ctx.c"
 #include "runtime_ffi.c"
+
+/* A Locked's lock (stdlib/std/thread.nu), on this runtime's mutex, its
+ * fiber-aware condition variable and the RwLocked holder records. The
+ * unikernel's runtime_bare.c includes the same file over its own. */
+#define NURL_LK_MUTEX_T  pthread_mutex_t
+#define NURL_LK_COND_T   NurlFCond
+#define NURL_LK_HOLDER_T NurlRwHolder
+#define NURL_LK_ME()     nurl__rw_me()
+#define NURL_LK_IN_FIBER() nurl__rw_in_fiber()
+#if defined(__GLIBC__) && (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 32))
+#  include <sys/single_threaded.h>
+#  define NURL_LK_SINGLE() (__libc_single_threaded)
+#endif
+#if defined(__linux__) && !defined(__wasi__)
+#  include <linux/futex.h>
+#  include <sys/syscall.h>
+#  define NURL_LK_FUTEX 1
+static inline void nurl__lk_futex_wait(int *a, int v) { syscall(SYS_futex, a, FUTEX_WAIT_PRIVATE, v, (void *)0, (void *)0, 0); }
+static inline void nurl__lk_futex_wake(int *a)        { syscall(SYS_futex, a, FUTEX_WAKE_PRIVATE, 1, (void *)0, (void *)0, 0); }
+#endif
+#if !(defined(_WIN32) && defined(NURL_WIN32_PTHREAD_SHIM)) && !defined(__wasi__)
+#  define NURL_LK_MUTEX_ERRORCHECK   /* the MSVC-target SRW shim has no mutex types; WASI has one thread */
+#endif
+#include "runtime_locked.c"
