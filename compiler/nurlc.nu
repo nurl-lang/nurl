@@ -1635,6 +1635,9 @@ unsafe @ agg_field_count i syms s ot → i {
 // Whether bck_note_borrow puts a source expression (g_bck's `brwsx`) on the
 // borrow row it records (field 8), for that row only.
 : ~ i g_bck_brw_on 0
+// Set while gen_assign records `= j j`, a binding given its own value: no
+// `assign` row (bck_record_binding; agora #554).
+: ~ b g_bck_self_asn F
 : ~ i g_match_ser 0  // matches compiled so far (keys a match's payload provenance, mem_note_plend)
 : ~ i g_loop_nest 0  // loops open around the statement being compiled (gen_while / gen_for)
 : ~ i g_ff_mark 0  // 1 while a drop point may precede (in a loop) a field-owner flag's first store
@@ -32066,7 +32069,7 @@ unsafe @ bck_record_binding s kind s name i line i cls s lty → v {
     // held first (bck_kill_stored_in).
     : s held ? == g_bck_ownerless 0 `` ( bck_take_owner_stores )
     ( bck_flush_moves )
-    ( bck_record kind name line )
+    ? ! g_bck_self_asn { ( bck_record kind name line ) } {}
     ? & != 0 g_borrowck == 0 g_bck_rec_off { ( bck_put `lastreads` rhs_reads ) } {}
     = g_bck_bind_scalar 0
     = g_bck_bind_sown 0
@@ -34681,7 +34684,8 @@ unsafe @ bck_sx_ev s st s e b arg → s {
 // copy of a borrow — its own rows', path-precise); a cursor's or an `=`'s
 // join's owner names too (`n`: it has no alias rows); a value block's tail
 // whatever it is (`b`: no other row names it). A leaf released or moved,
-// or one of a scope inside the binding's, is none.
+// or one of a scope inside the binding's, is none; the binding itself
+// stands for what it borrowed before its `=` (`obs_`).
 @ bck_brw_leaves s st s mode s sx i wid → s {
     : s all ( bck_sx_hpaths sx )
     : i m ? == 0 ( nurl_str_len mode ) 112 ( nurl_str_get mode 0 )
@@ -34695,6 +34699,9 @@ unsafe @ bck_sx_ev s st s e b arg → s {
         : b lent | == lv BCK_BORROWED_SHARED == lv BCK_MAYBE_OWNED
         // (One declared in a frame opened inside the binding's dies first:
         // the join or the block moved it out or copied it, agora #179.)
+        // (The binding itself, given a value of its own handle — `= j { j }`:
+        // what it borrowed before its `=`, `obs_`; agora #554.)
+        ? & == r wid == r id { = out ( __word_union out ( nurl_sym_get g_bck ( bck_bkey `obs_` ( nurl_str_int wid ) ) ) ) } {}
         : b take ? | == r wid > ( bck_id_dser r ) ( bck_id_dser wid ) F ? ( bck_dead_state lv ) F ? == m 98 T ? lent F ? == m 110 T != r id
         ? take { = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat w `` ) ( nurl_str_cat3 out ` ` w ) } {}
     }
@@ -35236,6 +35243,10 @@ unsafe @ __bck_try_exit_check s st i line → v {
                 // `= x ...` gives x a fresh value — Owned, reviving x. Its old
                 // value, if x owned it, is dropped with whatever was stored in it.
                 : i asid ( bck_field_int rec 1 )
+                // (What it borrowed before, kept for its new value's borrow row
+                // — a value block or a join of it, `= j { j }`, hands on that
+                // very handle: bck_brw_leaves; agora #554.)
+                ? != 0 g_bck_has_borrow { ( bck_put ( bck_bkey `obs_` ( bck_field rec 1 ) ) ? == BCK_BORROWED_SHARED ( bck_st_get st asid ) ( nurl_sym_get g_bck ( bck_bkey `bs_` ( bck_field rec 1 ) ) ) `` ) } {}
                 // (…or handed to the `??` payload a cursor over it, which owns
                 // it from here on: bck_cursor_handover.)
                 ? != 0 g_bck_has_cursor { ( bck_cursor_handover asid ) } {}
@@ -44137,7 +44148,11 @@ unsafe @ gen_assign i lex i syms i cg → s {
         : i __acbc0 ( bck_walk_class vt )
         : i __acbc ? & == __acbc0 4 ! __asn_clo_owned 5 __acbc0
         : s __acbr ? & == __acbc 5 != 0 g_borrowck ( nurl_sym_get g_bck `reads` ) ``
+        // (`= j j` gives j no new value: its walk rows read it and change
+        // nothing — an `assign` row ended what it borrowed, agora #554.)
+        = g_bck_self_asn & ( is_ident_tok bck_rhs_tt ) ( seq bck_rhs_val name )
         ( bck_record_binding `assign` name bck_line __acbc vt )
+        = g_bck_self_asn F
         ? == __acbc 5 { ( bck_note_clo_borrow syms name bck_line __acbr ) } {}
         = g_bck_rhs_callee ``
         = g_bck_let_sx_last ( nurl_str_cat g_bck_rhs_sx `` )
