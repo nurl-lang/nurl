@@ -45052,7 +45052,8 @@ unsafe @ gen_assign i lex i syms i cg → s {
     // depends on what they point into (bck_dep_add, through a `vpass` row
     // keeping it in the field's root binding) — read after that ends, it is
     // an error; the caller's (an `inout` struct), an error where it ends.
-    ? & & != 0 g_srcx_on ! manual ! indirect {
+    : b __fs_nested != 0 ( nurl_sym_len syms `__field_store_nested__` )
+    ? & != 0 g_srcx_on | __fs_nested & ! manual ! indirect {
         : i __fs_c ( bck_walk_class __fs_ty )
         : s __fs_obj ( nurl_sym_get syms `__last_field_obj__` )
         ? & >= __fs_c 2 != 0 ( nurl_str_len __fs_obj ) {
@@ -45791,6 +45792,10 @@ unsafe @ __replaces_note i syms s name s field → v {
     } {}
     ( nurl_sym_def syms `__field_store_indirect__`
     ? | ( is_ptr_ty pt ) ( mem_is_slice_ty pt ) `1` `` )
+    // (A nested path, `= . . h w v x`, walks h's own storage by address:
+    // the store is into h, whatever the pointer it went through — agora
+    // #348. gen_field_rhs keeps the view it stores in h, as for `= . h v x`.)
+    ( nurl_sym_def syms `__field_store_nested__` ? nested `1` `` )
     : b __fs_named & & ( is_ptr_ty pt ) == ( nurl_str_get pt 0 ) 37 ( is_ident_tok ( nurl_lex_type lex ) )
     ( nurl_sym_def syms `__field_store_manual__`
     ? & __fs_named != 0 ( nurl_sym_len syms ( nurl_str_cat4 ( nurl_str_slice pt 1 - ( nurl_str_len pt ) 2 ) `__` ( nurl_lex_val lex ) `__idx` ) )
