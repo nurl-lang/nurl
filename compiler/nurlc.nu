@@ -54581,6 +54581,10 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
     // other operand. Returned bare, every other local leaked (agora #202).
     : s __t_up ? != 0 ( nurl_str_len __try_inner_v ) ( mem_udrop_ptr_of syms __try_inner_v ) ``
     : b __t_bind & != 0 ( nurl_str_len __try_inner_v ) | == 0 ( nurl_str_len __t_up ) == 0 ( nurl_sym_len2 syms __t_up `__alias` )
+    // (A cursor whose failure is answered for here — lent, or by the
+    // call's own answer — leaves with it as a binding does: not dropped on
+    // the way out, or the caller was handed what this frame released.)
+    : ~ b __t_askip F
     : s __t_et ? == ( agg_field_count syms vt ) 3 ( compound_field_type vt 2 ) ``
     : b __t_bare | == 0 ( nurl_str_len __t_et ) ! ( __type_needs_drop __t_et syms )
     // A failure that owns its error goes to the caller as the caller's own
@@ -54646,6 +54650,12 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
                 // getr b )`, `getr` handing back `. b r`) gave the caller b's
                 // own error to release (agora #539).
                 ? & != 0 ( nurl_str_len __t_up ) != 0 ( nurl_sym_len2 syms __t_up `__alias` ) {
+                    // (…of what a call may lend, as a binding is: agora #200.)
+                    : s __t_ank ( nurl_sym_get2 syms __try_inner_v `__nclk` )
+                    ? != 0 ( nurl_str_len __t_ank ) {
+                        ( __nc_lend_args_park syms lex __t_ank ( nurl_sym_get2 syms __try_inner_v `__ncla` ) vt )
+                        ( mem_ret_param_lend_via syms __t_ank ( nurl_sym_get2 syms __try_inner_v `__ncla` ) )
+                    } {}
                     ( nurl_sym_set_deep syms `__agg_lends__` `` )
                     ( nurl_sym_set_deep syms `__agg_lends_call__` `` )
                     ( mem_udrop_alias_lend syms cg __t_up `` )
@@ -54658,7 +54668,8 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
                             ? != 0 ( nurl_str_len __t_apn ) { ( __record_param_idx syms `__fn_retlend__` __t_apn ) } {}
                         }
                         = __t_ob ( nurl_str_cat `false` `` )
-                    } { ? != 0 ( nurl_sym_len syms `__agg_lends_call__` ) { = __t_ob ( mem_udrop_flag_get syms cg __t_up ) } {} }
+                        = __t_askip T
+                    } { ? != 0 ( nurl_sym_len syms `__agg_lends_call__` ) { = __t_ob ( mem_udrop_flag_get syms cg __t_up ) = __t_askip T } {} }
                 } {
                     ? == __try_inner_tt TT_DOT {
                         : s __t_root ( nurl_sym_get syms `__last_member_root__` )
@@ -54702,7 +54713,7 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
         } {}
     } {}
     ? & != 0 g_auto_drop_strings | | | | == __try_inner_tt TT_LPAREN __t_bind __t_bare __t_need __t_ncok
-    { ( gen_ret_term lex syms cg fn_rt fail_val `` `` ? __t_bind __t_up `` `` ? __t_bind __try_inner_v `` ) }
+    { ( gen_ret_term lex syms cg fn_rt fail_val `` `` ? | __t_bind __t_askip __t_up `` `` ? | __t_bind __t_askip __try_inner_v `` ) }
     { ? != 0 ( nurl_str_len dtop )
         { ? ! ( seq fn_rt `void` )
             { : s rvp ( nurl_sym_get syms `__ret_val__` )
