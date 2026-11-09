@@ -63,3 +63,43 @@ $ `stdlib/core/string.nu`
     : i n ( nurl_available_parallelism )
     ^ ? > n 0 n 1
 }
+
+// ── the operating system, and the host's memory ────────────────────
+//
+//   ( sys_os )              → i    one of SYS_OS_*: what this program was
+//                                  compiled for (a link-time constant)
+//   ( sys_mem_available )   → ?i   bytes the host can hand out now without
+//                                  swapping
+//   ( sys_mem_total )       → ?i   bytes of physical memory
+//
+// A host command line, a file suffix or a cache directory that differs by
+// platform asks sys_os rather than reading $OS. Memory is None where the
+// platform cannot say (wasm, the unikernel); "available" is Linux's
+// MemAvailable, Windows' ullAvailPhys, and the free plus inactive pages on
+// macOS and FreeBSD.
+
+& `c` @ nurl_host_os → i
+
+& `c` @ nurl_host_mem i which → i
+
+: i SYS_OS_OTHER 0
+: i SYS_OS_LINUX 1
+: i SYS_OS_MACOS 2
+: i SYS_OS_WINDOWS 3
+: i SYS_OS_FREEBSD 4
+: i SYS_OS_WASM 5
+: i SYS_OS_UNIKERNEL 6
+
+@ sys_os → i { ^ ( nurl_host_os ) }
+
+@ sys_mem_available → ?i {
+    : i n ( nurl_host_mem 0 )
+    ? < n 0 { ^ @ ?i { F 0 } } {}
+    ^ @ ?i { T n }
+}
+
+@ sys_mem_total → ?i {
+    : i n ( nurl_host_mem 1 )
+    ? < n 0 { ^ @ ?i { F 0 } } {}
+    ^ @ ?i { T n }
+}

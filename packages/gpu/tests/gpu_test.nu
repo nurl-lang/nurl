@@ -145,6 +145,46 @@ unsafe @ test_coop → v {
         = b + b 1
     }
     ( check == bad 0 `a shared-memory block reduction sums every block correctly (16 blocks x 256 threads)` )
+
+    // A second cooperative kernel, then the first again, on the same host
+    // threads. On the CPU backend each kernel is a shared object of its
+    // own with its own fiber state, so a thread the first one made a fiber
+    // (Windows: ConvertThreadToFiber) is already one when the second runs.
+    : GpuKernel k2 ( gpu_compile g `extern "C" __global__ void blockmax(const float* x, float* out, int n){
+        __shared__ float s[256];
+        int t = threadIdx.x;
+        int i = blockIdx.x*blockDim.x + t;
+        s[t] = (i < n) ? x[i] : -1.f;
+        __syncthreads();
+        for (int off = blockDim.x >> 1; off > 0; off >>= 1) {
+            if (t < off && s[t + off] > s[t]) s[t] = s[t + off];
+            __syncthreads();
+        }
+        if (t == 0) out[blockIdx.x] = s[0];
+    }` `blockmax` )
+    ? ! ( gpu_kernel_ok k2 ) { ( check F `compile a second cooperative kernel` ) ^ {} } {}
+    : GpuBuffer dmax ( gpu_alloc g * nb 4 )
+    : ( Vec i ) args2 ( vec_new [i] )
+    ( vec_push [i] args2 ( gpu_arg_buffer dx ) )
+    ( vec_push [i] args2 ( gpu_arg_buffer dmax ) )
+    ( vec_push [i] args2 ( gpu_arg_i32 n ) )
+    ( gpu_launch k2 nb 256 args2 )
+    ( gpu_launch k nb 256 args )
+    ( gpu_sync g )
+    : GpuHost hm ( gpu_host_alloc * nb 4 )
+    ( gpu_download ( gpu_host_ptr hm ) dmax )
+    ( gpu_download ( gpu_host_ptr ho ) dout )
+    : ~ i bad2 0
+    = b 0
+    ~ < b nb {
+        : f want_max # f + * 256 b 255
+        : f want_sum + * 256.0 # f * 256 b 32640.0
+        : ~ f d - ( gpu_host_get_f32 ho b ) want_sum
+        ? < d 0.0 { = d - 0.0 d } {}
+        ? | > d 0.5 != ( gpu_host_get_f32 hm b ) want_max { = bad2 + bad2 1 } {}
+        = b + b 1
+    }
+    ( check == bad2 0 `two cooperative kernels take turns on the same host threads (max, then sum again)` )
 }
 
 // ── gpu_upload_batch: many tensors, one streamed pass ────────────

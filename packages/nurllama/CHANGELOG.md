@@ -4,7 +4,23 @@ All notable changes to the `nurllama` package.
 
 ## [0.26.0] — unreleased
 
-Requires NURL 0.89.0 and safetensor 0.6.2.
+Requires NURL 0.91.0, gpu 0.17.8 and safetensor 0.6.2.
+
+### Fixed
+
+- **A backend that cannot say how much memory it has no longer leaves no
+  room for the experts** (Agora #547). The expert budget was the free
+  device memory less a margin, so a free of 0 (the CPU backend on any host
+  without `/proc/meminfo` until gpu 0.17.8, and still on wasm) became a
+  negative budget and "the device has room for -21845 routed experts". 0 is
+  the backends' "unknown", and the budget now reads it that way: the
+  experts go up whole, like every other weight. With gpu 0.17.8, nurllama
+  runs on native Windows' CPU backend. Tiny llada2 (f32, q8) gives the
+  same logits as on Linux, byte for byte. A glm_moe_dsa checkpoint
+  differs from Linux by at most 2.4e-6, with the same argmax and the same
+  greedy text, because UCRT's expf/sinf/powf return other bits than
+  glibc's. In both, 8, 3 and 1 expert slots, and a 1 MiB expert cache,
+  give the all-resident run's bytes.
 
 ### Changed
 
