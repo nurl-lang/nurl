@@ -3118,6 +3118,12 @@ unsafe @ note_unsafe_item s pos s what → v {
 // A `??` arm's payload read in place out of a program enum's binding
 // (`epy_` + owner: the payloads, bck_handle_match): `= o …` releases them.
 : ~ i g_bck_epy_any 0
+// Some binding of this function is an `rc_clone` of another: their Rc is
+// one value, a family (`rcr_` the family's first binding, `rcm_` its
+// members) — a dependency stored into one share is every share's (agora
+// #392). g_bck_rcf_busy: bck_dep_add is spreading one now.
+: ~ i g_bck_rcf_any 0
+: ~ i g_bck_rcf_busy 0
 // …and how many `~` loops are being walked: only inside one can a
 // borrow's end reach a loop's element (`feb_`, bck_borrow_end; agora
 // #482).
@@ -35852,6 +35858,8 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 = done T
             } {}
             ? == kc 2 {
+                // (`: r2 ( rc_clone r )`: one Rc value with r — agora #392.)
+                ? ( seq ( bck_generic_base ( bck_field rec 6 ) ) `rc_clone` ) { ( __bck_rcf_link ( bck_field rec 1 ) ( bck_field rec 8 ) ) } {}
                 // A `let` (re)binds the name — Owned, reviving a Moved one,
                 // and sharing a buffer with nothing.
                 // (A view's sources, from its source expression: read before
@@ -38514,8 +38522,41 @@ unsafe @ bck_sx_is_id s e → b {
     ^ out
 }
 
+// `: nid ( rc_clone x )` (the let row's source expression `sx`,
+// `rc_clone__T(x)`): nid joins x's Rc family.
+@ __bck_rcf_link s nid s sx → v {
+    : i lp ( nurl_str_find sx `(` )
+    ? < lp 0 { ^ } {}
+    : i n ( nurl_str_len sx )
+    ? != ( nurl_str_get sx - n 1 ) 41 { ^ } {}
+    : s inner ( nurl_str_slice sx + lp 1 - - n lp 2 )
+    ? | ! ( __is_int_lit inner ) == 45 ( nurl_str_get inner 0 ) { ^ } {}
+    : s r0 ( nurl_sym_get g_bck ( bck_bkey `rcr_` inner ) )
+    : s root ? == 0 ( nurl_str_len r0 ) ( nurl_str_cat inner `` ) r0
+    ( bck_put ( bck_bkey `rcr_` nid ) root )
+    ( bck_add_word_once ( bck_bkey `rcm_` root ) root )
+    ( bck_add_word_once ( bck_bkey `rcm_` root ) nid )
+    = g_bck_rcf_any 1
+}
+
 @ bck_dep_add i wid s srcs0 → v {
     ? == 0 ( nurl_str_len srcs0 ) { ^ } {}
+    // (A share of an Rc family: every other share holds what it holds —
+    // the state is one; agora #392.)
+    ? & != 0 g_bck_rcf_any == 0 g_bck_rcf_busy {
+        : s wfs ( nurl_str_int wid )
+        : s fr0 ( nurl_sym_get g_bck ( bck_bkey `rcr_` wfs ) )
+        : s froot ? == 0 ( nurl_str_len fr0 ) ( nurl_str_cat wfs `` ) fr0
+        : ~ s fms ( nurl_sym_get g_bck ( bck_bkey `rcm_` froot ) )
+        ? != 0 ( nurl_str_len fms ) {
+            = g_bck_rcf_busy 1
+            ~ != 0 ( nurl_str_len fms ) {
+                : s fm ( str_first_word fms ) = fms ( str_skip_word fms )
+                ? ! ( seq fm wfs ) { ( bck_dep_add ( nurl_str_to_int fm ) srcs0 ) } {}
+            }
+            = g_bck_rcf_busy 0
+        } {}
+    } {}
     = g_bck_has_deps 1
     ( bck_dep_mark_ind wid srcs0 )
     // (Before the handle copies, whose old table it reads: agora #483.)
@@ -43244,6 +43285,7 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     = g_bck_jgb_any 0
     = g_bck_hr_any 0
     = g_bck_has_cv 0
+    = g_bck_rcf_any 0
     // The parameters are the outermost frame's bindings (bck_xl_declare_id).
     ( bck_xl_reset )
     : ~ s xps ( nurl_str_cat params `` )
