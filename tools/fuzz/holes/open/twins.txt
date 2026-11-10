@@ -24,3 +24,5 @@ owned_string_assigned_a_value_block_of_itself.nu          `: __el { s }  = s __e
 owned_struct_assigned_a_value_block_of_itself.nu          the same with an owned struct `p`
 owned_vec_assigned_a_block_with_statements_of_itself.nu   the same with `{ : i t 1 v }`
 owned_vec_assigned_a_value_block_of_itself.nu             the same with an owned Vec `v`
+string_assigned_a_value_block_whose_tail_shadows_it.nu    `: __el { : String s … s }  = s __el`: the block's local keeps its name past the block, so `= s __el` is the inner `s` given itself (agora #575)
+struct_assigned_a_value_block_whose_tail_shadows_it.nu    the same with a struct (agora #575)

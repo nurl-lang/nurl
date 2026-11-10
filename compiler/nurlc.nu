@@ -44661,6 +44661,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         : s mut_check ( nurl_sym_get2 syms name `__mutable` )
         : s vt ( nurl_sym_get syms name )
         : s ptr ( nurl_sym_get2 syms name `__ptr` )
+        : s __ud_ptr0 ( mem_udrop_ptr_of syms name )
         : s glb ( nurl_sym_get2 syms name `__global` )
         ( __ownglobal_gate lex syms name )
         ( __iter_assign_check lex bck_line name )
@@ -45314,7 +45315,11 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // the value it holds (if it still owns one), then take ownership of
         // the new one by the `:` binding's rule. A borrowed right-hand side
         // might alias the old value, so the old value is left alone then.
-        : s __ud_ptr ( mem_udrop_ptr_of syms name )
+        // (Resolved before the right-hand side: a value block's own locals
+        // stay visible to the end of the statement, so one of them
+        // shadowing `name` — `= v { : ~ ( Vec i ) v … v }` — was taken for
+        // the target, its value released as the old one; agora #562.)
+        : s __ud_ptr ( nurl_str_cat __ud_ptr0 `` )
         // (An `inout` parameter that owns something given a new value: h295.)
         ? ( seq ( nurl_sym_get2 syms name `__inout` ) `1` ) {
             ? | ( __is_handle_ty vt ) ( __type_needs_drop vt syms ) { ( __replaces_note syms name `` ) } {}
