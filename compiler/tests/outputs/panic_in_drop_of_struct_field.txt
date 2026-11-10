@@ -1,0 +1,41 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+siblings: built
+drop x
+drop y
+drop z
+siblings: recovered: panic in drop y
+plain_after: built
+drop h.x
+plain_after: recovered: panic in drop h.x
+nested: built
+drop 1a
+drop 1b
+drop 2a
+drop 2b
+nested: recovered: panic in drop 1a
+own_drop: built
+drop res R
+drop r.x
+drop r.y
+own_drop: recovered: panic in drop r.x
+payloads: built
+drop loud
+drop t1
+drop t3
+drop ba
+drop bb
+payloads: recovered: panic in drop loud
+drop q.t1
+drop q.t3
+drop q.x
+drop q.y
+drop q.z
+quiet: no panic
+drop q.t1
+drop q.t3
+drop q.x
+drop q.y
+drop q.z
