@@ -1,0 +1,20 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+wide
+  rows=3
+  cols=400
+  bytes=5670
+  right=1200
+  out_of_range=0
+ragged_row_cells=300
+ragged_last_len=5
+bare_cr
+  rows=49
+  cols=3
+  bytes=561
+  right=147
+  out_of_range=0
+typed_rows=49
+typed_floats=49

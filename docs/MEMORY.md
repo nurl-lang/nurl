@@ -398,7 +398,8 @@ is a `sink`, takes the field's value and leaves the field empty where it
 lives. Until the field is given a value again (`= . h buf …`), these are
 errors:
 
-- reading `. h buf`, or a field under it;
+- reading `. h buf`, or a field under it — handing it back (`^ . h buf`)
+  or building a literal of it (`@ Holder { . h buf }`) too;
 - binding it;
 - handing `h` on whole (to a call, into a store, or out of a `^`);
 - leaving the function while `h` is an `inout` parameter: every exit
@@ -406,12 +407,14 @@ errors:
 
 The struct's other fields stay usable, and its own drop at the end of its
 scope releases what is left. A field taken on only some paths is
-maybe-moved, as a binding is.
+maybe-moved, as a binding is, and so is one a loop's body took, at the
+head of the next round and after the loop (for a struct bound before the
+loop; one the body declares is fresh every round).
 
 Some routes to a taken field are not refused yet (agora #280's open part,
-listed with the known issues): a take inside a loop, the taken field
-handed back itself (`^ . h buf`), a path under or over the taken one, and
-a few others. Give the field a value right after the take to stay clear
+listed with the known issues): a path under or over the taken one, the
+struct handed on whole through a join or a value block, closures, and a
+few others. Give the field a value right after the take to stay clear
 of them.
 
 ```text

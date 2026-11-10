@@ -861,33 +861,36 @@ def t_tools_call_build(c: Client) -> None:
 def t_download_artifact_mime(c: Client) -> None:
     # A build artifact's name is caller-chosen. Serving `.html`/`.svg`/`.js`
     # with the extension's MIME type turned the download route into stored
-    # XSS on the playground origin. Every artifact is opaque bytes now:
-    # application/octet-stream, Content-Disposition: attachment, nosniff.
+    # XSS on the playground origin (Agora #579). Every artifact is opaque
+    # bytes now, whatever it is called: application/octet-stream,
+    # Content-Disposition: attachment, nosniff.
     print("\n[REST] /download — artifacts are opaque downloads")
     src = "@ main → i {\n    ( puts `<script>document.title='NURL_XSS_MARKER'</script>` )\n    ^ 0\n}\n"
-    status, _, raw = c.post("/build", {"source": src, "filename": "poc.html"}, timeout=120.0)
-    assert_eq("html-named build answers 200", status, 200)
-    try:
-        j = json.loads(raw)
-    except json.JSONDecodeError:
-        bad("html-named build result is JSON", f"got {raw[:200]!r}")
-        return
-    assert_eq("html-named build ok", j.get("status"), "ok")
-    art = j.get("binary_artifact") or {}
-    token = art.get("token")
-    assert_true("html-named artifact has a token", bool(token), str(art)[:200])
-    if not token:
-        return
-    status, hdrs, body = c.get(f"/download/{token}")
-    assert_eq("html-named artifact downloads", status, 200)
-    ctype = hdrs.get("Content-Type") or hdrs.get("content-type") or ""
-    disp = hdrs.get("Content-Disposition") or hdrs.get("content-disposition") or ""
-    nosniff = hdrs.get("X-Content-Type-Options") or hdrs.get("x-content-type-options") or ""
-    assert_true("artifact is application/octet-stream", ctype.lower().startswith("application/octet-stream"), ctype)
-    assert_true("artifact is an attachment", "attachment" in disp.lower(), disp)
-    assert_true("artifact is nosniff", nosniff.lower() == "nosniff", nosniff)
-    assert_true("artifact body is still the ELF", body[:4] == b"\x7fELF", repr(body[:4]))
-    assert_true("artifact still carries the marker", b"NURL_XSS_MARKER" in body, "marker missing")
+    for name in ("poc.html", "poc.svg", "poc.js"):
+        status, _, raw = c.post("/build", {"source": src, "filename": name}, timeout=120.0)
+        assert_eq(f"{name} build answers 200", status, 200)
+        try:
+            j = json.loads(raw)
+        except json.JSONDecodeError:
+            bad(f"{name} build result is JSON", f"got {raw[:200]!r}")
+            return
+        assert_eq(f"{name} build ok", j.get("status"), "ok")
+        art = j.get("binary_artifact") or {}
+        token = art.get("token")
+        assert_true(f"{name} artifact has a token", bool(token), str(art)[:200])
+        if not token:
+            return
+        status, hdrs, body = c.get(f"/download/{token}")
+        assert_eq(f"{name} artifact downloads", status, 200)
+        h = {k.lower(): v for k, v in (hdrs or {}).items()}
+        ctype = h.get("content-type", "")
+        disp = h.get("content-disposition", "")
+        nosniff = h.get("x-content-type-options", "")
+        assert_true(f"{name} is application/octet-stream", ctype.lower().startswith("application/octet-stream"), ctype)
+        assert_true(f"{name} is an attachment", disp.lower().startswith("attachment"), disp)
+        assert_true(f"{name} is nosniff", nosniff.lower() == "nosniff", nosniff)
+        assert_true(f"{name} body is still the ELF", body[:4] == b"\x7fELF", repr(body[:4]))
+        assert_true(f"{name} still carries the marker", b"NURL_XSS_MARKER" in body, "marker missing")
 
 
 def t_diagnostics_contract(c: Client) -> None:
@@ -1261,11 +1264,16 @@ def t_build_wasm_ignores_caller_ir(c: Client) -> None:
 
 def t_build_unikernel_rest(c: Client) -> None:
     print("\n[REST] /build_unikernel — image + initfs + guards")
-    # 1. A hello builds into a PVH ELF with boot commands attached.
+    # 1. A hello builds into a PVH ELF with boot commands attached. The
+    #    argv carries shell metacharacters on purpose: boot.qemu / qemu_net
+    #    are commands the caller pastes into a shell, so a value like
+    #    $(…) or `…` must be emitted inert (single-quoted), never where the
+    #    caller's shell would evaluate it (Valkohattu command-injection PoC).
+    inj = '$(touch /tmp/nurl_pwned) `id` ; rm -rf / # --demo yes'
     src = "@ main → i {\n    ( nurl_println `uk-e2e` )\n    ^ 0\n}\n"
     status, _, raw = c.post(
         "/build_unikernel",
-        {"source": src, "args": "--demo yes"},
+        {"source": src, "args": inj},
         timeout=180.0,
     )
     assert_eq("build_unikernel status 200", status, 200)
@@ -1279,9 +1287,26 @@ def t_build_unikernel_rest(c: Client) -> None:
     assert_true("elf artifact returned", bool(art.get("token")), f"keys={list(j)}")
     assert_true("image has a size", (j.get("image_bytes") or 0) > 50000, str(j.get("image_bytes")))
     boot = j.get("boot") or {}
-    assert_true("boot.qemu names the microvm machine", "-M microvm" in (boot.get("qemu") or ""), boot.get("qemu") or "")
-    assert_true("boot command carries the argv", 'args=' in (boot.get("qemu") or ""), boot.get("qemu") or "")
-    assert_true("qemu_net adds virtio-net", "virtio-net-device" in (boot.get("qemu_net") or ""), "")
+    bq = boot.get("qemu") or ""
+    bn = boot.get("qemu_net") or ""
+    assert_true("boot.qemu names the microvm machine", "-M microvm" in bq, bq)
+    assert_true("boot command carries the argv", 'args=' in bq, bq)
+    assert_true("qemu_net adds virtio-net", "virtio-net-device" in bn, "")
+    # The hostile argv must appear single-quoted, so no part of it can run
+    # when the command is pasted into a shell. $(date +%s) is the server's
+    # own, intended expansion and stays outside the quotes.
+    sq = "'" + inj + "'"
+    assert_true("boot.qemu single-quotes the argv (no shell injection)", sq in bq, bq)
+    assert_true("qemu_net single-quotes the argv (no shell injection)", sq in bn, bn)
+    assert_true("wallclock expansion is preserved", "wallclock=$(date +%s)" in bq, bq)
+    # The caller-controlled argv is the ONLY $(…) in the command; the
+    # server never emits a bare, unquoted command substitution of its own
+    # beyond wallclock.
+    assert_true(
+        "no caller command-substitution left outside single quotes",
+        bq.replace("wallclock=$(date +%s)", "").replace(sq, "").find("$(") == -1,
+        bq,
+    )
     # The artifact must actually download and be an ELF.
     tok = art.get("token")
     dstat, _, dbody = c.get(f"/download/{tok}")

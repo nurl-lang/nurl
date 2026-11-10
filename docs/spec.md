@@ -1765,7 +1765,15 @@ Semantics (v2.3, 2026-08-03):
   value (string, slice, `% Drop` value, closure) whose binding was
   registered *before* the `;` statement; those values stay alive
   through the defer chain and are auto-dropped after it runs. Values
-  bound *after* the last defer drop at their normal scope exit.
+  bound *after* the last defer drop at their normal scope exit — at a
+  way out (`^`, `\`, the body's end) that is first: they drop, then the
+  chain runs, then the values bound before a defer drop, in reverse order
+  of declaration. A defer that reads one of them through a holder that
+  views it is a compile error (agora #408). A defer armed on some paths
+  only (in an arm, in a loop body) is checked at each way out as if it
+  ran, as well as if it did not (agora #407), and a binding a defer reads
+  lives, with what it borrows, until the defer runs, even past the block
+  it was bound in (agora #491).
   Returning an owned value transfers it to the caller as usual. With
   several return paths, a pre-defer owned value is transferred on the
   paths that return it and dropped after the chain on the others. A
