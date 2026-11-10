@@ -9,3 +9,7 @@
   memory (heap use after free). The function's summary now names the
   field, and the caller's argument depends on that field of itself, as it
   does when the store is written in the caller.
+  The tie holds wherever the call is: in a `?` or a loop condition, in a
+  return, or beside another call in the same statement that grows the
+  field. A closure that has a function leave one of its captures viewing
+  its own field is refused, as a view stored into a capture is.
