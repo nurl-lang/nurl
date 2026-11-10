@@ -1,0 +1,52 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+bound: built
+drop E Three the string payload, on the heap
+drop a
+drop c
+bound: no panic
+element_and_field: built
+drop E Three the string payload, on the heap
+drop ha
+drop hc
+drop E Three the string payload, on the heap
+drop va
+drop vc
+drop E Zero
+element_and_field: no panic
+temporary: tatc
+temporary: after the match
+drop E Three the string payload, on the heap
+drop ta
+drop tc
+temporary: no panic
+drop E Three the string payload, on the heap
+drop ra
+drop rc
+third: the string payload, on the heap
+drop E Three the string payload, on the heap
+drop ja
+drop jc
+joined: the string payload, on the heap
+drop E Boxed the boxed field, on the heap
+drop bp
+boxed_field: the boxed field, on the heap
+handed_back: no panic
+payload_panics: built
+drop E Three the string payload, on the heap
+drop pa
+drop pc
+payload_panics: recovered: panic in drop pa
+impl_panics: built
+drop P
+drop ia
+drop ic
+impl_panics: recovered: panic in drop P
+drop E Three the string payload, on the heap
+drop old-a
+drop old-c
+replaced: new value in
+drop E Zero
+replaced: no panic
