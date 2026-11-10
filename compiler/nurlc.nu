@@ -17716,7 +17716,9 @@ unsafe @ gen_call i lex i syms i cg → s {
             : s fr_ptr ( str_first_word fr ) = fr ( str_skip_word fr )
             : s fr_sty ( str_first_word fr ) = fr ( str_skip_word fr )
             : s fr_idx ( str_first_word fr ) = fr ( str_skip_word fr )
-            : s fr_fty ( str_first_word fr )
+            // (The rest: an option's or a result's type has blanks of its
+            // own, `{ i1, %String }` — its first word was `{`, agora #559.)
+            : s fr_fty ( nurl_str_cat fr `` )
             // (A Vec element read with vec_get is not an owner of its own,
             // but its slot is: the field is emptied there.)
             // (…and in a `% Drop` impl's parameter, whose remaining fields
@@ -17761,7 +17763,10 @@ unsafe @ gen_call i lex i syms i cg → s {
             // own. Emptied in place, the slot held a null handle a later
             // `vec_get` of the element read (SEGV), and the enum kept the
             // buffer the callee freed (agora #357).
-            : b fr_lcopy ? fr_h & & ! ( nurl_sym_has_word syms `__user_drops__` fr_ptr ) | | ( __vget_live syms fr_ptr ) != 0 ( nurl_sym_len2 syms ( nurl_sym_get2 syms fr_ptr `__bname` ) `__enum_pl` ) ( seq ( nurl_sym_get2 syms ( __path_root_name arg_froot ) `__enum_pl` ) `1` )
+            // (…an option or a result field that owns something, `?String`,
+            // too: it takes neither the take below nor nothing — agora #559.)
+            : b fr_wown & != 0 ( nurl_str_starts ( nurl_llty fr_fty ) `{ i1, ` ) ( __type_needs_drop ( nurl_llty fr_fty ) syms )
+            : b fr_lcopy ? | fr_h fr_wown & & ! ( nurl_sym_has_word syms `__user_drops__` fr_ptr ) | | ( __vget_live syms fr_ptr ) != 0 ( nurl_sym_len2 syms ( nurl_sym_get2 syms fr_ptr `__bname` ) `__enum_pl` ) | ( seq ( nurl_sym_get2 syms ( __path_root_name arg_froot ) `__enum_pl` ) `1` ) ( seq ( nurl_sym_get2 syms fr_ptr `__enum_plp` ) `1` )
             & ! fr_glue ( __clone_supported ( nurl_llty fr_fty ) syms ) F
             // (Only where the callee takes it: a declared `sink`, or the
             // module-end consume answer; one that changes it in place, a
@@ -22030,6 +22035,9 @@ unsafe @ gen_match i lex i syms i cg → s {
                 } {}
                 // (An enum's payload: lent by the enum, h231.)
                 ( nurl_sym_def syms ( nurl_str_cat pv0 `__enum_pl` ) ? pt0_is_opt_bool `` `1` )
+                // (…and on its slot: a field read out of it is known by the
+                // slot, __fsrc, agora #559.)
+                ( nurl_sym_def syms ( nurl_str_cat vp0 `__enum_plp` ) ? pt0_is_opt_bool `` `1` )
                 ( mem_note_plend syms pv0 match_first_tt match_var_name __m_ser )
                 ( mem_note_plroot syms pv0 __m_proot )
                 // (…and, for a match over a binding, that binding: the slot the
@@ -22246,6 +22254,7 @@ unsafe @ gen_match i lex i syms i cg → s {
                 ? & != 0 ( nurl_str_len __m_scrut_psrc ) ! ( __ty_holds_no_addr pt1 syms ) { ( nurl_sym_def syms ( nurl_str_cat pv1 `__paramsrc` ) __m_scrut_psrc ) } {}
                 ( nurl_sym_def syms ( nurl_str_cat pv1 `__ptr` ) vp1 )
                 ( nurl_sym_def syms ( nurl_str_cat pv1 `__enum_pl` ) `1` )
+                ( nurl_sym_def syms ( nurl_str_cat vp1 `__enum_plp` ) `1` )
                 ( mem_note_plend syms pv1 match_first_tt match_var_name __m_ser )
                 ( mem_note_plroot syms pv1 __m_proot )
                 ? != 0 g_auto_drop_strings
@@ -22278,6 +22287,7 @@ unsafe @ gen_match i lex i syms i cg → s {
                 ? & != 0 ( nurl_str_len __m_scrut_psrc ) ! ( __ty_holds_no_addr pt2 syms ) { ( nurl_sym_def syms ( nurl_str_cat pv2 `__paramsrc` ) __m_scrut_psrc ) } {}
                 ( nurl_sym_def syms ( nurl_str_cat pv2 `__ptr` ) vp2 )
                 ( nurl_sym_def syms ( nurl_str_cat pv2 `__enum_pl` ) `1` )
+                ( nurl_sym_def syms ( nurl_str_cat vp2 `__enum_plp` ) `1` )
                 ( mem_note_plend syms pv2 match_first_tt match_var_name __m_ser )
                 ( mem_note_plroot syms pv2 __m_proot )
                 ? != 0 g_auto_drop_strings
@@ -47241,6 +47251,7 @@ unsafe @ __agg_shape_clash s vty s dty → b {
     ( nurl_sym_def syms ( nurl_str_cat pvi `__ptr` ) vpi )
     // (An enum's payload: lent by the enum, h231.)
     ( nurl_sym_def syms ( nurl_str_cat pvi `__enum_pl` ) `1` )
+    ( nurl_sym_def syms ( nurl_str_cat vpi `__enum_plp` ) `1` )
     ? != 0 g_auto_drop_strings
     { : s akey ( nurl_str_cat `drop##` pti )
         ? & != 0 ( nurl_sym_len g_impl_name_syms akey )
