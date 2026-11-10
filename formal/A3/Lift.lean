@@ -323,8 +323,10 @@ theorem Step.lifts {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
     exact ⟨_, GhostRel.refl _, Step.unpair (m := liftMem a2 m) hy hx hz hne⟩
   | callc hc hj hfn hx hb =>
     exact ⟨_, GhostRel.refl _, Step.callc (m := liftMem a2 m) hc hj hfn hx (BindParams.lift hb a2)⟩
-  | callcE hc hj hfn hx =>
-    exact ⟨_, GhostRel.refl _, Step.callcE (m := liftMem a2 m) hc hj hfn hx⟩
+  | callcE hc hj hfn hx hns =>
+    exact ⟨_, GhostRel.refl _, Step.callcE (m := liftMem a2 m) hc hj hfn hx hns⟩
+  | callcD hc hj hfn hx hsk =>
+    exact ⟨_, GhostRel.refl _, Step.callcD (m := liftMem a2 m) hc hj hfn hx hsk⟩
   | @catchP m1 _ _ _ _ hx ih =>
     exact ⟨_, GhostRel.refl _, Step.catchP (m1 := liftMem a2 m1) ih hx⟩
   | letd hx he =>

@@ -1497,15 +1497,17 @@ theorem dtorParamsOK_of {P : Prog} {fn : Fn} (h : ∀ pt ∈ fn.params, pt.2.hol
 /-! ### Packages name code of their signature -/
 
 /-- The mode an interface takes its receiver in: `inout` (A2-envhand: a call
-    of it hands the environment over, `StmtT.callcE`), or lent (any other
-    first parameter: `StmtT.callc` asks `inp`). -/
+    of it hands the environment over, `StmtT.callcE`), owned (Agora #609: a
+    dropping closure's drop method, the environment handed over for good), or
+    lent (any other first parameter: `StmtT.callc` asks `inp`). -/
 def Fn.recvMode (sig : Fn) : PMode :=
   match sig.params.head? with
   | some (.inout b, _) => .inout b
+  | some (.sink, _) => .sink   -- Agora #609: a drop method takes the environment owned
   | _ => .inp
 
 theorem Fn.recvMode_of_head {sig : Fn} {pm : PMode} {t : Ty} (h : sig.params.head? = some (pm, t))
-    (hs : pm ≠ .sink) : sig.recvMode = pm := by
+    (_hs : pm ≠ .sink := by simp) : sig.recvMode = pm := by
   unfold Fn.recvMode; rw [h]; cases pm <;> simp_all
 
 /-- Code `f`, on an environment of type `te`, implements the interface `σ`:
@@ -1516,7 +1518,9 @@ theorem Fn.recvMode_of_head {sig : Fn} {pm : PMode} {t : Ty} (h : sig.params.hea
     receiver holds), and the interface's other parameters as the interface
     does; it returns what the interface returns, and lends, holds and stores
     no more than the interface says.  A package with a method that changes
-    its environment captures nothing by name. -/
+    its environment captures nothing by name.  (Agora #609: an interface that
+    takes the receiver OWNED is implemented by code that takes the
+    environment owned, `Fn.recvMode`; no rule types a call of one yet.) -/
 def Implements (P : Prog) (f : Nat) (te : Ty) (cs : List (Var × PMode × Ty)) (σ : Nat) : Prop :=
   ∃ fn sig, P[f]? = some fn ∧ P[σ]? = some sig ∧
     fn.params = (sig.recvMode, te) :: sig.params.tail ++ cs.map (·.2) ∧

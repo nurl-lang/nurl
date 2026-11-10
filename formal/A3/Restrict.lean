@@ -387,7 +387,8 @@ theorem Step.restrict {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
     exact ⟨_, .catchIn h1, rfl, .catchR _ rfl rfl rfl rfl (fun _ hi => hi) hg⟩
   | catchSkip => exact ⟨_, .catchSkip, rfl, .refl _⟩
   | unpair hy hx hz hxz => exact ⟨_, .unpair hy hx hz hxz, rfl, .refl _⟩
-  | callcE hc hj hP hx => exact ⟨_, .callcE hc hj hP hx, rfl, .refl _⟩
+  | callcE hc hj hP hx hns => exact ⟨_, .callcE hc hj hP hx hns, rfl, .refl _⟩
+  | callcD hc hj hP hx hsk => exact ⟨_, .callcD hc hj hP hx hsk, rfl, .refl _⟩
   | callc hc hj hP hx hbp =>
     exact ⟨_, .callc hc hj hP hx (BindParams.restrict hbp a2), rfl, .refl _⟩
   | catchP _ hx ih =>

@@ -187,6 +187,8 @@ theorem Step.borFree {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r
     exact (((BindParams.borFree hbp (envMem_borFree hb _)).set _ (SlotFree.none _)).set _ (SlotFree.none _)).of_st rfl
   | callcE _ _ _ _ =>
     exact (((hb.set _ (SlotFree.own _)).set _ (SlotFree.own _)).set _ (SlotFree.none _)).of_st rfl
+  | callcD _ _ _ _ _ =>
+    exact (((hb.set _ (SlotFree.own _)).set _ (SlotFree.own _)).set _ (SlotFree.none _)).of_st rfl
   | catchP _ _ ih => exact ih.set _ (SlotFree.ids fun _ => rfl)
   | letd _ he =>
     have := EvalR.borFree he hb

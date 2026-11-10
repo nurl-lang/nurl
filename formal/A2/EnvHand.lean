@@ -172,7 +172,7 @@ def handCtx (Γ : Ctx) (c x : Var) (Ec : Entry) (te : Ty) (y : Var) (E0 : Entry)
 theorem hand_minv {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : RootbAnch Γ F)
     {c x : Var} {Ec : Entry} (hc : Γ c = some Ec) (hl : Ec.live = true) (hos : Ec.mode.ownSlot = true)
     (hcF : c ∉ F) (hny : NoPin Γ c) (hdc : DtorSafe Γ .replace false c)
-    {fs : List Nat} {te : Ty} {ms : List Nat} {q : Cross} {env : Val} (htc : Ec.ty = .fn ms q)
+    {fs : List Nat} {te : Ty} {ms : List Nat} {q : Cross} {env : Val} (htc : Ec.ty.undtor = .fn ms q)
     (hslot : m.st c = some ⟨true, some (.pkg fs te ms env [])⟩) (hown : te.owning = true)
     (htok : te.ok = true) (hx : Γ x = none) (hxn : x < m.nv) {E0 : Entry} (hl0 : E0.live = false)
     (hp0 : E0.path = []) (hh0 : E0.held = []) (htok0 : E0.ty.ok = true) (hm0 : E0.mode = .own ∨ E0.mode = .bor)
@@ -185,19 +185,19 @@ theorem hand_minv {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : 
     hi.of_st rfl ⟨hi.heap.nodup, hi.heap.disj, hi.heap.alloc, hi.heap.self, hi.heap.blk, hi.heap.views⟩
       (by show m.nv ≤ m.nv + 2; omega)
   obtain ⟨post, out⟩ := rhs_move' hi' hanch hc hl hos hcF hny hslot hdc
-  have hτ : Ec.ty ≠ .int := by rw [htc]; simp
-  have hwP : WFv Ec.ty (.pkg fs te ms env []) := (out.valOwn rfl).2.1
+  have hτ : Ec.ty ≠ .int := fun h => by rw [h] at htc; cases htc
+  have hwP : WFv Ec.ty.undtor (.pkg fs te ms env []) := ((out.valOwn rfl).2.1).undtor
   rw [htc] at hwP
   obtain ⟨hwe, hq⟩ : WFv te env ∧ q.Fits te [] := by cases hwP with | pkg h1 h2 => exact ⟨h1, h2⟩
   have hvin : ∀ s v, ViewIn te env s v → ViewIn Ec.ty (.pkg fs te ms env []) s v := by
     intro s v hv
-    rw [htc]
+    rw [← ViewIn.undtor_iff, htc]
     cases q with
     | any => exact ViewIn.pkg hv
     | _ => exact absurd hv.holdsView (by rw [(hq.1 rfl).1]; simp)
   have hain : ∀ u k p, ArcIn te env u k p → ArcIn Ec.ty (.pkg fs te ms env []) u k p := by
     intro u k p ha
-    rw [htc]
+    rw [← ArcIn.undtor_iff, htc]
     cases hqs : q.shares with
     | true => exact ArcIn.pkg ha hqs
     | false => exact absurd ha.hasArc (by rw [hq.2.2.1 hqs]; simp)
@@ -1333,10 +1333,10 @@ theorem handProgress {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {x c : Var} {j : N
     (hj : ms[j]? = some σ) (hσ : P[σ]? = some sig) (hsp : sig.params = [(.inout b, .fn ms q)])
     (hcT : CallT P (kill .replace false c Γ) F σ [c] E Γ1) (hcd : MemCodes P m)
     (hi : Inv m Γ F (.callcE x c j [] k)) : ∃ r, Step P m (.callcE x c j [] k) r := by
-  obtain ⟨_, _, _, _, _, _, _, hslot, hfs, hf, _⟩ := hand_found hi.toMInv hcd hc htc hcan hj hσ hsp hcT
+  obtain ⟨_, _, _, _, _, _, _, hslot, hfs, hf, hps, _⟩ := hand_found hi.toMInv hcd hc htc hcan hj hσ hsp hcT
   have hmx : m.st x = none := by
     have := hi.dom x; rw [hx] at this; cases h : m.st x <;> simp_all
-  exact ⟨_, Step.callcE hslot hfs hf hmx⟩
+  exact ⟨_, Step.callcE hslot hfs hf hmx (fun pt h => by rw [hps] at h; cases h)⟩
 
 /-- **Preservation of a hand-over** (A2-envhand): the store it leaves
     (`hand_minv`), the run-time form typed (`hand_typed`), and every binding
@@ -1347,6 +1347,17 @@ theorem handCase {P : Prog} (hP : ProgOK P) : HandCase P := by
   obtain ⟨hlc, hmo, fs0, te0, env0, f0, fn0, hslot0, hfs0, hf0, hps, hrt, hro, hl, hr, ho, hnt⟩ :=
     hand_found hi.toMInv hcd hc htc hcan hj hσ hsp hcT
   cases hst with
+  | callcD hslot hfs hf hmx hsk =>
+    -- (Agora #609: the code of an `inout` interface takes the environment `inout`)
+    have e1 := hslot0.symm.trans hslot
+    simp only [Option.some.injEq, Slot.mk.injEq, Val.pkg.injEq, true_and] at e1
+    obtain ⟨e1, e2, e3, e4, -⟩ := e1
+    subst e1 e2 e3 e4
+    have e5 := Option.some.inj (hfs0.symm.trans hfs)
+    subst e5
+    have e6 := Option.some.inj (hf0.symm.trans hf)
+    subst e6
+    rw [hps] at hsk; cases hsk
   | callcE hslot hfs hf hmx =>
     have e1 := hslot0.symm.trans hslot
     simp only [Option.some.injEq, Slot.mk.injEq, Val.pkg.injEq, true_and] at e1
@@ -1375,7 +1386,7 @@ theorem handCase {P : Prog} (hP : ProgOK P) : HandCase P := by
     have hto : te0.owning = true := hte.2.2 b rfl
     have hq : q.Fits te0 [] := pkg_fits hi.toMInv hc hlc htc hslot0
     -- the store
-    obtain ⟨hm1, _⟩ := hand_minv hi.toMInv hanch hc hlc hos hcF hny hdc htc hslot0 hto hte.1 hx hxn
+    obtain ⟨hm1, _⟩ := hand_minv hi.toMInv hanch hc hlc hos hcF hny hdc (by rw [htc]; rfl) hslot0 hto hte.1 hx hxn
       (E0 := callX fn0) rfl rfl rfl hrok (by simp only [callX, resMode]; split <;> simp)
       (fun h => hrown (by simpa [callX, resMode] using h)) rfl rfl
     have hmo' : (callX fn0).mode.ownSlot = fn0.resOwn := resMode_ownSlot fn0

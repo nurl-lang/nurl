@@ -1014,6 +1014,12 @@ def handStmt (x c : Var) (f : Nat) (zs : List Var) (fs : List Nat) (te : Ty) (ms
   .scope x (.seq (.scope y (.seq (.letcall (y + 1) f (y :: zs) (.assign x (.var (y + 1))))
     (.assign c (.pack fs te ms y [])))) k)
 
+/-- Agora #609: the hand-over to a method that takes the environment OWNED
+    (a package's drop method): as `handStmt`, with no way back: the
+    environment is the code's, and the package stays moved out. -/
+def handStmtD (x : Var) (f : Nat) (zs : List Var) (y : Var) (k : Stmt) : Stmt :=
+  .scope x (.seq (.scope y (.letcall (y + 1) f (y :: zs) (.assign x (.var (y + 1))))) k)
+
 /-- A step's outcome: a configuration, or a panic — with the store the
     unwinding left. -/
 inductive Res where
@@ -1240,7 +1246,17 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
       {ms : List Nat} {env : Val} {f : Nat} {fn : Fn} :
       m.st c = some ⟨true, some (.pkg fs te ms env [])⟩ → fs[j]? = some f → P[f]? = some fn →
       m.st x = none →
+      -- (Agora #609: the code takes the environment `inout`; a `sink` receiver is `callcD`'s)
+      (∀ pt, fn.params.head? ≠ some (.sink, pt)) →
       Step P m (.callcE x c j zs k) (.ok (handMem m c x env fn.resOwn) (handStmt x c f zs fs te ms m.nv k))
+  /-- Agora #609: ... and of a method whose code takes the environment owned
+      (the package's drop method): the environment moves out to the code for
+      good, the package stays moved out. -/
+  | callcD {m : Mem} {x c : Var} {j : Nat} {zs : List Var} {k : Stmt} {fs : List Nat} {te : Ty}
+      {ms : List Nat} {env : Val} {f : Nat} {fn : Fn} {pt : Ty} :
+      m.st c = some ⟨true, some (.pkg fs te ms env [])⟩ → fs[j]? = some f → P[f]? = some fn →
+      m.st x = none → fn.params.head? = some (.sink, pt) →
+      Step P m (.callcE x c j zs k) (.ok (handMem m c x env fn.resOwn) (handStmtD x f zs m.nv k))
   | catchP {m m1 : Mem} {x : Var} {m0 : Mem} {s : Stmt} :
       Step P m s (.panic m1) → (m1.st x).isSome →
       Step P m (.catchR x m0 s) (.ok (m1.set x ⟨false, some (.int 1)⟩) .skip)
