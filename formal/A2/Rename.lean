@@ -3095,6 +3095,17 @@ theorem allowed_replace (hab : S.AbsOK Γa) {x : Var} {Ex : Entry} (hx : Γa x =
 theorem src_rename (ρ : Var → Var) (s : Stmt) : (s.rename ρ).src = s.src := by
   induction s <;> simp_all [Stmt.rename, Stmt.src]
 
+/-- A2-drop.3a: renaming keeps what a statement moves first. -/
+theorem movedFirst_rename (ρ : Var → Var) (s : Stmt) : (s.rename ρ).movedFirst = s.movedFirst.map ρ := by
+  induction s with
+  | letd x f r s ih => cases r <;> simp [Stmt.rename, Rhs.rename, Stmt.movedFirst, ih]
+  | assign y r => cases r <;> simp [Stmt.rename, Rhs.rename, Stmt.movedFirst]
+  | _ => simp [Stmt.rename, Stmt.movedFirst]
+
+theorem mem_movedFirst_rename {ρ : Var → Var} {s : Stmt} {x : Var} (h : x ∈ s.movedFirst) :
+    ρ x ∈ (s.rename ρ).movedFirst := by
+  rw [movedFirst_rename]; exact List.mem_map_of_mem h
+
 /-- A context with the same bindings, modes and types, and the same
     borrowed parameters, as one the call set up. -/
 theorem AbsOK.of_same {Γa Δa : Ctx} (hab : S.AbsOK Γa) (hdom : ∀ v, (Γa v).isSome = (Δa v).isSome)
@@ -3705,7 +3716,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (h.Fcout x) hr' hm' (by first | (rw [← hl]; exact hty) | (rw [hl]; exact hty)) hstr hview hdtor hH'
       (StmtT.weakenIn ⟨PW.setE (PW.refl _) hEW, hwc, hnc⟩ tk)
       (EndOK.lift h abk hbx hpe)
-  | @callc Γ Γ1 Δ F x c j zs k Ec E ms q σ sig hks hx hxF hc htc hj hσ hhd hout hcT hnz hk hpe hnσ ih =>
+  | @callc Γ Γ1 Δ F x c j zs k Ec E ms q σ sig hks hx hxF hc htc hj hσ hhd hout hcT hnz hk hpe hnσ hdk ih =>
     intro _ hab hw hn hT
     obtain ⟨E', Γ', hc', hpw, hE'⟩ := callT_ren h hab hP hcT (fun ht => absurd ht hnσ)
     obtain ⟨hn1, hEn, _⟩ := hcT.names hP hn
@@ -3732,7 +3743,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (by rw [canon_ρ h, hc]; rfl) (by rw [liftE_ty' h hab hc]; exact htc) hj hσ hhd hout hc'
       (fun z hz d hd hb hdr => ?_)
       (StmtT.weakenIn ⟨PW.setE hpw (recvRes_lift h hab hc hmo hdb0 x (hE' x)), hwc, hnc⟩ tk)
-      (EndOK.lift h abk hbx hpe) hnσ
+      (EndOK.lift h abk hbx hpe) hnσ (fun ho hd => mem_movedFirst_rename (hdk ho hd))
     -- no argument is a binding the receiver may change: in the callee, nor
     -- where the call places it (what the arguments held names the frame; a
     -- symbolic name's image names an `inout` argument the receiver names)
@@ -3746,7 +3757,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       · exact hnz z0 hz0 d0 hd0 hb (h.inj _ _ hdr)
       · exact A_out h ha z0 hdr.symm
   | @callcE Γ Γ1 Δ F x c j k Ec E ms q σ sig b hks hx hxF hc htc hcan hq hj hσ hsp hsl hsr hso hny hdc hcT hk
-      hpe hnσ ih =>
+      hpe hnσ hdk ih =>
     intro _ hab hw hn hT
     -- the package may be replaced: what depends on it ends where it is placed
     have hal : Allowed S .replace false c := by
@@ -3785,7 +3796,8 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (by rw [liftE_mode c hrb]; exact canDo_lift hcan) hq hj hσ hsp hsl hsr hso
       (NoPin.lift h hab hbr) (DtorSafe.canon h hal hdc) (by simpa using hc')
       (StmtT.weakenIn ⟨(hpw.setE (hE' x)).kill _ _ _, hwc, hnc⟩ tk) (EndOK.lift h abk hbx hpe) hnσ
-  | @letcall Γ Γ1 Δ F x f args k E hks hx hxF hc hk hpe ih =>
+      (fun ho hd => mem_movedFirst_rename (hdk ho hd))
+  | @letcall Γ Γ1 Δ F x f args k E hks hx hxF hc hk hpe hdk ih =>
     intro _ hab hw hn hT
     obtain ⟨E', Γ', hc', hpw, hE'⟩ := callT_ren h hab hP hc (fun ht => hT (.inr ⟨f, by simp [Stmt.calls], ht⟩))
     obtain ⟨hn1, hEn, _⟩ := hc.names hP hn
@@ -3805,7 +3817,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     rw [canon_setE h] at hwc hnc tk
     exact StmtT.letcall (by rw [src_rename]; exact hks) (by rw [canon_ρ h, hx]; rfl) (h.Fcout x) hc'
       (StmtT.weakenIn ⟨PW.setE hpw (hE' x), hwc, hnc⟩ tk)
-      (EndOK.lift h abk hbx hpe)
+      (EndOK.lift h abk hbx hpe) (fun fn hf ho hd => mem_movedFirst_rename (hdk fn hf ho hd))
   | scope => intro hs; simp [Stmt.src] at hs
   | scopeD => intro hs; simp [Stmt.src] at hs
   | scopeL => intro hs; simp [Stmt.src] at hs
@@ -4001,7 +4013,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     exact StmtT.free (by rw [canon_ρ h, hx]; rfl) (by rw [liftE_live]; exact hl)
       (by rw [liftE_mode x hrb, hm]; rfl) (by rw [liftE_ty' h hab hx]; exact hty) (h.Fcout x)
       (EndOK.lift h hab hbx hpe)
-  | @unpair Γ Δ F y x z k E a b hks hy hl hm hty hyF hx hz hxz hxF hzF hk _ hdy hpze hpxe ih =>
+  | @unpair Γ Δ F y x z k E a b hks hy hl hm hty hyF hx hz hxz hxF hzF hk _ hdy hpze hpxe hdx hdz ih =>
     intro _ hab hw hn hT
     have hrep := canDo_replace_cases hm
     have hrb : E.mode ≠ .rootb := by rcases hrep with h1 | h1 <;> rw [h1] <;> simp
@@ -4043,6 +4055,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
           rcases hrep with h1 | h1
           · exact Or.inl h1
           · exact Or.inr (Or.inl h1)))) (DtorSafe.canon h hal hdy) hpz hpx
+      (fun ha => mem_movedFirst_rename (hdx ha)) (fun hb => mem_movedFirst_rename (hdz hb))
   | @editB Γ Γ1 F x op Ex Ex1 t D hx hmx hl hty hhv _ harg hyx hx1 hl1 hne hthru =>
     intro _ hab _ _ hT
     have hab1 : S.AbsOK Γ1 := EditArg.absOK harg hab

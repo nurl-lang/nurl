@@ -575,11 +575,20 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
 - `memory_safe`, `no_leak_end` and `no_leak_panic` cover all of this, on
   the standard axioms. That includes a *double panic*: a destructor that
   panics while a panic unwinds.
-- The calculus puts the destructor on the binding `letd` makes, not on
-  the type. A value moved out of that binding, into a `sink` parameter,
-  another binding or a field, is released by `DropSlot` where it ends,
-  which runs no code. nurlc runs the destructor there too. Putting the
-  destructor on the type is A2-drop.3 (Agora #253).
+- The destructor is on the type (`Ty.dtor f t`, of a struct or an enum,
+  since A2-drop.3a). Every owned binding of a destructor type is a `letd`
+  binding: `letv` refuses one, and a call's result, a field `unpair` moves
+  out and a `sink` parameter are handed to their `letd` before anything
+  else runs (`Stmt.movedFirst`), so the destructor runs where the binding
+  ends, as nurlc runs it. A field of a destructor value is lent through
+  the type, the destructor staying with the whole value.
+- Not yet in the calculus: a destructor value released by `assign` or
+  `free`, inside a struct dropped whole, as a `Vec` element, an enum or
+  option payload, in a closure's or trait object's environment, or in an
+  `Arc` / lock / channel payload. There `DropSlot` / `Frees` release it,
+  which runs no code; nurlc runs the destructor there too. These are
+  A2-drop.3a's rest (assign, free, the glue) and 3b–3d (Agora #541–#544,
+  `A2/DROP_DESIGN.md` *Staging*).
 
 The rules are stricter than nurlc's in two places, both for a binding of
 a type whose destructor may read a view:

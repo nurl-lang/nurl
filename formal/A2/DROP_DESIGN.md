@@ -15,17 +15,38 @@ semantics and the typing that bring `% Drop` bodies inside the calculus.
 It also fixes the rule the typing needs, which nurlc lacks today: the hole
 of Agora #224.
 
-The mechanization puts the destructor on the binding rather than on a type
-`Ty.dtor f t`: `letd x f r s` binds `x` with destructor `f`, and `DtorOK P
-f t` checks that `f` takes one `in` parameter of `x`'s type `t`, returns an
-integer, and lends, holds and stores nothing. What follows reads `Ty.dtor f
-t` as that binding.
+Until A2-drop.3a the mechanization put the destructor on the binding
+(`letd x f r s`) rather than on a type. Since A2-drop.3a it is on the type:
+`Ty.dtor f t`, of a struct or an enum `t` (`WFv.dtor` asks `t.isStruct`, as
+nurlc's `% Drop` is on a struct or an enum), whose values are `t`'s. `DtorOK
+P f (Ty.dtor f t)` checks that `f` takes one `in` parameter of that type,
+returns an integer, and lends, holds and stores nothing.
 
-So a destructor runs only at the end of the binding `letd` made. A value
-moved out of it (a `sink` argument, another binding, a field) is released
-by `DropSlot` where it ends, while nurlc runs the destructor there as
-well. A2-drop.3 (Agora #253) closes that, with the destructor on the
-type.
+What runs the destructor, since A2-drop.3a:
+- every owned binding of a destructor type is `letd`'s, whose scope
+  (`scopeD`) runs it at its end and on a panic's unwind: `letv` refuses one
+  (`StmtT.letv`'s `hnd`), and a binder that may receive one without
+  running `scopeD` itself hands it to its `letd` first thing
+  (`Stmt.movedFirst`): a call's result (`letcall`, `callc`, `callcE`, asked
+  of the callee's signature), a field `unpair` moves out (`hdx` / `hdz`),
+  and a `sink` parameter in its callee's body (`FnOK`). Nothing runs in
+  between, so nothing can panic or end the value first, and that `letd`'s
+  scope ends where the binder's does: the destructor runs where nurlc runs
+  it. (The head may end in a move into another binding of the same type,
+  `assign y (.var w)`, whose own binder answers for it: the package
+  hand-over's run-time form moves the code's result into the call's result
+  binding so.);
+- a field of a destructor value is read through its type (`fst` / `snd`
+  ask `E.ty.undtor = .prod a b`): it is lent, and the destructor stays
+  with the whole value.
+
+Not yet (DropSlot / `Frees` release the value, running no code; nurlc
+runs the destructor there): `assign` and `free` of a destructor value, a
+destructor value inside a struct dropped whole (its glue, `dropCode`),
+`unpair` of a destructor value itself, Vec elements and enum / option
+payloads (3b), closure and trait-object environments (3c), and `Arc` /
+lock / channel payloads (3d; a spawned function's parameters are of no
+destructor type, `SpawnOK`).
 
 ## What nurlc does
 

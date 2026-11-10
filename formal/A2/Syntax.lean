@@ -224,6 +224,11 @@ def Ty.dtorViews (t : Ty) : Bool := t.hasDtor && t.holdsView
 @[simp] theorem Ty.dtorViews_dtor (f : Nat) (t : Ty) : (Ty.dtor f t).dtorViews = t.holdsView := by
   simp [Ty.dtorViews, Ty.holdsView]
 
+/-- A module global's type (`Ty.sync`: a lock or an `Arc` share) is no
+    destructor type. -/
+theorem Ty.hasDtor_of_sync {t : Ty} (h : t.sync = true) : t.hasDtor = false := by
+  cases t <;> simp_all [Ty.sync, Ty.hasDtor]
+
 theorem Ty.hasDtor_of_isStruct {t : Ty} (h : t.isStruct = true) : t.hasDtor = false := by
   cases t <;> simp_all [Ty.isStruct, Ty.hasDtor]
 

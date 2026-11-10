@@ -457,7 +457,7 @@ theorem spawn_hole {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hS : Spawn
   intro Γt Ft Δt ht hi
   generalize hS' : Stmt.letcall x f args k = S at ht hi
   induction ht with
-  | @letcall Γ Γ1 Δ F x0 f0 args0 k0 E hsrc hx hxF hc hk hpin _ =>
+  | @letcall Γ Γ1 Δ F x0 f0 args0 k0 E hsrc hx hxF hc hk hpin _ _ =>
     cases hS'
     obtain ⟨fn', hf', hlen, hargs, hnf, hds, rfl, rfl, hg⟩ := hc
     rw [hf] at hf'; cases hf'
@@ -698,7 +698,7 @@ theorem letcall_call {P : Prog} {m : Mem} {Γ : Ctx} {F : List Var} {x f : Nat} 
     (hi : Inv m Γ F (.letcall x f args k)) : ∃ Γ0 E Γ1, CallT P Γ0 F f args E Γ1 ∧ MInv m Γ0 := by
   generalize hS : Stmt.letcall x f args k = S at ht hi
   induction ht with
-  | letcall _ _ _ hc _ _ _ => cases hS; exact ⟨_, _, _, hc, hi.toMInv⟩
+  | letcall _ _ _ hc _ _ _ _ => cases hS; exact ⟨_, _, _, hc, hi.toMInv⟩
   | sub hw _ _ ih0 => exact ih0 hS (hi.weaker hw)
   | _ => cases hS
 
