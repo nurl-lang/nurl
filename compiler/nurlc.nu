@@ -17551,9 +17551,12 @@ unsafe @ gen_call i lex i syms i cg → s {
         // The same roster with a field path's binding in its place (what a
         // borrow of the result is a borrow of: g_call_roots) — kept only
         // once a call has such an argument.
-        ? & != 0 ( nurl_str_len arg_froot ) ! arg_has_froot { = arg_roots ( nurl_str_cat arg_idents `` ) = arg_has_froot T } {}
+        // (…a view field's too, `arg_vfroot`: what is lent out of it is
+        // part of what its binding views — a parameter lends then, agora
+        // #590.)
+        ? & | != 0 ( nurl_str_len arg_froot ) != 0 ( nurl_str_len arg_vfroot ) ! arg_has_froot { = arg_roots ( nurl_str_cat arg_idents `` ) = arg_has_froot T } {}
         ? arg_has_froot {
-            : s __arg_rt ? != 0 ( nurl_str_len arg_froot ) arg_froot bck_arg_nm
+            : s __arg_rt ? != 0 ( nurl_str_len arg_froot ) arg_froot ? != 0 ( nurl_str_len arg_vfroot ) arg_vfroot bck_arg_nm
             = arg_roots ? == 0 ( nurl_str_len arg_roots ) ( nurl_str_cat __arg_rt `` ) ( nurl_str_cat3 arg_roots ` ` __arg_rt )
         } {}
         = arg_idents ? == 0 ( nurl_str_len arg_idents )
