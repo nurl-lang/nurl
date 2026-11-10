@@ -405,8 +405,11 @@ def CloCase (P : Prog) : Prop :=
 def HandCase (P : Prog) : Prop :=
   ∀ {Γ Γ1 : Ctx} {F : List Var} {x c : Var} {j : Nat} {k : Stmt} {Ec E : Entry}
     {ms : List Nat} {q : Cross} {σ : Nat} {sig : Fn} {b : Eff} {Δ : Ctx} {m m' : Mem} {s' : Stmt},
-    k.src = true → Γ x = none → x ∉ F → Γ c = some Ec → Ec.ty = .fn ms q → canDo Ec.mode .replace →
-    ms[j]? = some σ → P[σ]? = some sig → sig.params = [(.inout b, .fn ms q)] →
+    k.src = true → Γ x = none → x ∉ F → Γ c = some Ec → Ec.ty.undtor = .fn ms q → canDo Ec.mode .replace →
+    ms[j]? = some σ → P[σ]? = some sig →
+    ((sig.params = [(.inout b, .fn ms q)] ∧ Ec.ty = .fn ms q ∧ Cross.send.Le q) ∨
+      (sig.params = [(.sink, Ec.ty)] ∧ Ec.vdeps = [] ∧ Ec.mode = .own ∧ Ec.live = true ∧
+        q.drops = true ∧ sig.resOwn = false)) →
     sig.lends = [] → sig.rholds = [] → sig.outHolds = [] →
     NoPin Γ c → DtorSafe Γ .replace false c →
     CallT P (kill .replace false c Γ) F σ [c] E Γ1 →

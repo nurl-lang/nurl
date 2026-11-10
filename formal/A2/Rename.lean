@@ -3856,9 +3856,21 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       rcases canDo_replace_cases hcan with h0 | h0
       · exact Or.inl h0
       · exact Or.inr (Or.inl h0)
-    exact StmtT.callcE (by rw [src_rename]; exact hks) (by rw [canon_ρ h, hx]; rfl) (h.Fcout x)
+    have hsp' : (sig.params = [(.inout b, .fn ms q)] ∧ (S.liftE c Ec).ty = .fn ms q ∧ Cross.send.Le q) ∨
+        (sig.params = [(.sink, (S.liftE c Ec).ty)] ∧ (S.liftE c Ec).vdeps = [] ∧ (S.liftE c Ec).mode = .own ∧
+          (S.liftE c Ec).live = true ∧ q.drops = true ∧ sig.resOwn = false) := by
+      rcases hsp with ⟨h1, h2, h3⟩ | ⟨h1, hv, hm, hl, hd, hr⟩
+      · exact Or.inl ⟨h1, by rw [liftE_ty' h hab hc]; exact h2, h3⟩
+      · refine Or.inr ⟨by rw [liftE_ty' h hab hc]; exact h1, ?_, by rw [liftE_mode c hrb, hm]; rfl,
+          by rw [liftE_live]; exact hl, hd, hr⟩
+        have ho : Ec.mode.ownSlot = true := by rw [hm]; rfl
+        have hh : Ec.held = [] := by simpa [Entry.vdeps, ho] using hv
+        have hvw : Ec.ty.holdsView = false := by
+          rw [← Ty.holdsView_undtor, htc]; cases q <;> simp_all [Ty.holdsView]
+        simp [Entry.vdeps, liftE_mode c hrb, hm, liftMode, liftE_held_named hrb ho hh hvw, Mode.ownSlot]
+    exact StmtT.callcE (Ec := S.liftE c Ec) (by rw [src_rename]; exact hks) (by rw [canon_ρ h, hx]; rfl) (h.Fcout x)
       (by rw [canon_ρ h, hc]; rfl) (by rw [liftE_ty' h hab hc]; exact htc)
-      (by rw [liftE_mode c hrb]; exact canDo_lift hcan) hq hj hσ hsp hsl hsr hso
+      (by rw [liftE_mode c hrb]; exact canDo_lift hcan) hq hj hσ hsp' hsl hsr hso
       (NoPin.lift h hab hbr) (DtorSafe.canon h hal hdc) (by simpa using hc')
       (StmtT.weakenIn ⟨(hpw.setE (hE' x)).kill _ _ _, hwc, hnc⟩ tk) (EndOK.lift h abk hbx hpe) hnσ
       (fun ho hd => dtorHead_rename h.inj (hdk ho hd))

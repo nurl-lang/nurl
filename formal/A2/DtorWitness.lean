@@ -36,7 +36,8 @@ Two kinds of fact, both checked here (`check.sh` prints their axioms):
   one with a `% Drop` of its own has glue that rebinds it under the fields'
   glue and runs the impl on it lent (`ImplGlueOK`, `impl_glue_body`,
   `letd_retype`; the functions `impl` and `glue2`, `main8`).
-  A2-drop.3c and 3d: no closure's environment and no block's payload holds
+  A2-drop.3c and 3d: no block's payload and no environment of a closure
+  that does not drop (Agora #609: of a class other than `dropd`) holds
   a destructor value (`A2.Dtor.pkgs_env_dtor_free`, `blk_pkgs_env_dtor_free`,
   `blocks_dtor_free`).
 -/
@@ -142,10 +143,11 @@ theorem impl_glue_body {P : Prog} {f : Nat} {t : Ty} {h i : Nat} (hg : ImplGlueO
 theorem struct_dtor_is_glue {P : Prog} {f : Nat} {a b : Ty} (h : DropFnOK P f (.prod a b))
     (hd : (Ty.prod a b).holdsDtor = true) :
     GlueOK P f (.prod a b) ∨ ∃ h i, ImplGlueOK P f (.prod a b) h i := by
-  rcases h with ⟨_, h⟩ | h | h | ⟨_, _, _, _, _, _, ht, _⟩
+  rcases h with ⟨_, h⟩ | h | h | ⟨_, _, _, _, _, _, ht, _⟩ | ⟨_, _, _, _, _, _, _, _, ht, _⟩
   · rw [h] at hd; cases hd
   · exact Or.inl h
   · exact Or.inr h
+  · cases ht
   · cases ht
 
 /-- Agora #632: the destructor of an enum that holds a destructor value is
@@ -155,11 +157,12 @@ theorem struct_dtor_is_glue {P : Prog} {f : Nat} {a b : Ty} (h : DropFnOK P f (.
 theorem enum_dtor_is_glue {P : Prog} {f : Nat} {a b : Ty} (h : DropFnOK P f (.sum a b))
     (hd : (Ty.sum a b).holdsDtor = true) :
     EnumGlueOK P f (.sum a b) ∨ ∃ h i, ImplGlueOK P f (.sum a b) h i := by
-  rcases h with ⟨_, h⟩ | ⟨_, _, _, _, ht, _⟩ | h | h
+  rcases h with ⟨_, h⟩ | ⟨_, _, _, _, ht, _⟩ | h | h | ⟨_, _, _, _, _, _, _, _, ht, _⟩
   · rw [h] at hd; cases hd
   · cases ht
   · exact Or.inr h
   · exact Or.inl h
+  · cases ht
 
 /-- **Agora #632: an enum's glue takes the payload out to a frame of its
     own.**  The glue `f` of the enum `sum a b` takes one value of the
@@ -252,7 +255,8 @@ theorem letd_dtor {P : Prog} {Γ Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {r
     frame runs it on a panic in the callee, `result_frame_is_scopeD`). -/
 theorem fnOK_dtor_params {P : Prog} {fn : Fn} (h : FnOK P fn) :
     (∀ i (hi : i < fn.params.length), fn.params[i].1 = .sink → fn.params[i].2.holdsDtor = true →
-      (i ∈ fn.body.movedFirst ∨ ∃ f u, P[f]? = some fn ∧ EnumGlueOK P f u) ∧ i ∉ fn.body.assigns) ∧
+      (i ∈ fn.body.movedFirst ∨ ∃ f u, P[f]? = some fn ∧ (EnumGlueOK P f u ∨ ClosureGlueOK P f u)) ∧
+        i ∉ fn.body.assigns) ∧
     (∀ i (hi : i < fn.params.length) b, fn.params[i].1 = .inout b → fn.params[i].2.holdsDtor = true →
       i ∉ fn.body.assigns) ∧
     (fn.resOwn = true → fn.resTy.holdsDtor = true → fn.body.asgMax fn.params.length ≤ 1 ∧
@@ -582,8 +586,8 @@ theorem _root_.A2.WFv.pkg_env_dtor_free {τ : Ty} {v : Val} (hw : WFv τ v) (hdf
     a block's payload: `blk_pkgs_env_dtor_free`).  So the environment a
     closure's or a trait object's drop releases with no code holds no
     destructor value.  (Agora #609: a closure of the dropping class is a
-    destructor value itself, `Ty.holdsDtor`; no destructor is accepted for
-    its type yet, so no typed program binds one.) -/
+    destructor value itself, `Ty.holdsDtor`, bound by `letd` with its glue,
+    which calls its drop method: `closure_dtor_is_glue`.) -/
 theorem pkgs_env_dtor_free {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {E : Entry}
     (hx : Γ x = some E) (hm : E.mode.ownSlot = true) (hdf : E.ty.noDropd = true) {o : Bool} {T : Val}
     (hsl : m.st x = some ⟨o, some T⟩)
@@ -591,15 +595,40 @@ theorem pkgs_env_dtor_free {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {E : 
     (hs : Sub (.pkg fs te ms e cs) T) : te.holdsDtor = false :=
   (hi.own_wfv hx hm hsl).pkg_env_dtor_free hdf hs
 
-/-- Agora #609's preparation: no destructor is accepted for a closure of the
-    dropping class, so `letd` binds none and no function returns one. -/
-theorem dropd_no_dtor {P : Prog} {f : Nat} {ms : List Nat} : ¬ DropFnOK P f (.fn ms .dropd) := by
-  rintro (⟨_, h⟩ | ⟨_, _, _, _, ht, _⟩ | ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, hg, _⟩ |
-    ⟨_, _, _, _, _, _, ht, _⟩)
+/-- Agora #609: the destructor of a closure of the dropping class is its
+    glue, which hands the closure to its drop method (`ClosureGlueOK`); a
+    destructor that takes it lent is refused for it. -/
+theorem closure_dtor_is_glue {P : Prog} {f : Nat} {ms : List Nat} (h : DropFnOK P f (.fn ms .dropd)) :
+    ClosureGlueOK P f (.fn ms .dropd) := by
+  rcases h with ⟨_, h⟩ | ⟨_, _, _, _, ht, _⟩ | ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, hg, _⟩ |
+    ⟨_, _, _, _, _, _, ht, _⟩ | h
   · cases h
   · cases ht
   · rcases hg with ⟨_, _, _, _, ht, _⟩ | ⟨_, _, _, _, _, _, ht, _⟩ <;> cases ht
   · cases ht
+  · exact h
+
+/-- **Agora #609: what a drop method's code does with the environment.**
+    Code that implements an interface taking the receiver owned (a closure's
+    drop method, `ClosureGlueOK`) takes the environment as its own `sink`
+    parameter; if the environment holds a destructor value, the code hands
+    it on first thing (to a `letd`, or taken apart, `Stmt.movedFirst`) or is
+    itself the glue of the environment's type (an enum's, a closure's), and
+    assigns it nothing: each destructor value in it reaches a frame of its
+    own before anything else of the code runs. -/
+theorem drop_method_code {P : Prog} (hP : ProgOK P) {f σ : Nat} {te : Ty} {cs : List (Var × PMode × Ty)}
+    (hi : Implements P f te cs σ) {sig : Fn} (hσ : P[σ]? = some sig) {pt : Ty}
+    (hsp : sig.params.head? = some (.sink, pt)) (hd : te.holdsDtor = true) :
+    ∃ fn, P[f]? = some fn ∧ fn.params.head? = some (.sink, te) ∧
+      (0 ∈ fn.body.movedFirst ∨ ∃ g u, P[g]? = some fn ∧ (EnumGlueOK P g u ∨ ClosureGlueOK P g u)) ∧
+      0 ∉ fn.body.assigns := by
+  obtain ⟨fn, sig', hf, hσ', hps, _⟩ := hi
+  rw [hσ] at hσ'; cases hσ'
+  have hrm : sig.recvMode = .sink := by unfold Fn.recvMode; rw [hsp]
+  rw [hrm] at hps
+  have h0 := (fnOK_dtor_params (hP fn (List.mem_of_getElem? hf))).1 0 (by rw [hps]; simp)
+    (by simp [hps]) (by simp [hps, hd])
+  exact ⟨fn, hf, by rw [hps]; rfl, h0.1, h0.2⟩
 
 /-- The payload types of the shares (`Arc`, lock, cell) that occur in a
     type, at any depth: in fields, payloads and elements, under views and
@@ -700,8 +729,8 @@ theorem share_new_dtor_free {Γ Γ1 : Ctx} {F : List Var} {t : Ty} {y : Var} {E 
     may be, or (Agora #607) a struct's field or an enum's payload, which glue
     hands to a `letd` (`vecs_dtor_free`).  A `Vec` of the second kind is `letd`'s (`letv` refuses it), and
     its frame's end drains it (`scopeD_end_drains`); what any other `Vec`'s
-    drop releases holds no destructor value: no closure's environment does
-    (`pkgs_env_dtor_free`) and no block's payload (`blocks_dtor_free`). -/
+    drop releases holds no destructor value: no environment of a closure
+    that does not drop does (`pkgs_env_dtor_free`) and no block's payload (`blocks_dtor_free`). -/
 theorem vec_elems_dtor_free {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {E : Entry} {t : Ty}
     (hx : Γ x = some E) (ht : E.ty = .vec t) : t.dtorFree = true ∨ t.hasDtor = true := by
   have h := hi.tyok hx; rw [ht] at h; exact Ty.ok_vec_free h
@@ -1408,7 +1437,7 @@ theorem ofn_enumOK : EnumGlueOK P 2 OT :=
   ⟨ofn, DT, .int, _, _, rfl, rfl, by decide, rfl, rfl, rfl, rfl, rfl, rfl, ofn_not_thru, rfl, rfl, rfl,
     fun _ => ⟨2, 0, _, rfl⟩, fun h => absurd h (by decide)⟩
 
-theorem odrop_ok : DropFnOK P 2 OT := Or.inr (Or.inr (Or.inr ofn_enumOK))
+theorem odrop_ok : DropFnOK P 2 OT := Or.inr (Or.inr (Or.inr (Or.inl ofn_enumOK)))
 
 theorem ofn_body : ∃ Δ, StmtT P (sigCtx ofn) [] ofn.body Δ ∧
     (∀ v E, Δ v = some E → E.mode ≠ .rootb ∧ E.dtor = false ∧ E.dbind = false) ∧
@@ -1533,7 +1562,7 @@ theorem ofn_ok : FnOK P ofn := by
   · intro pt hpt; simp [ofn] at hpt; subst hpt; simp [ODT, OT, DT, T, Ty.ok, Ty.isStruct, Ty.owning, Ty.vecD]
   · refine ⟨fun i hi hs _ => ?_, fun i hi b hb _ => ?_, fun h => by simp [ofn] at h⟩
     · simp [ofn] at hi; subst hi
-      exact ⟨Or.inr ⟨2, OT, rfl, ofn_enumOK⟩, by simp [ofn, Stmt.assigns]⟩
+      exact ⟨Or.inr ⟨2, OT, rfl, Or.inl ofn_enumOK⟩, by simp [ofn, Stmt.assigns]⟩
     · simp [ofn] at hi; subst hi; simp [ofn] at hb
   · exact ⟨{ intE with mode := R0.mode }, by simpa [ofn] using hr, rfl, rfl, by simp [R0, resMode, ofn],
       by simp [intE], by simp [intE], by simp [ofn]⟩
@@ -1555,7 +1584,7 @@ theorem gfn_enumOK : EnumGlueOK P 3 ST :=
   ⟨gfn, AT, .int, _, _, rfl, rfl, by decide, rfl, rfl, rfl, rfl, rfl, rfl, gfn_not_thru, rfl, rfl, rfl,
     fun _ => ⟨2, 4, _, rfl⟩, fun h => absurd h (by decide)⟩
 
-theorem gdrop_ok : DropFnOK P 3 ST := Or.inr (Or.inr (Or.inr gfn_enumOK))
+theorem gdrop_ok : DropFnOK P 3 ST := Or.inr (Or.inr (Or.inr (Or.inl gfn_enumOK)))
 
 theorem gfn_body : ∃ Δ, StmtT P (sigCtx gfn) [] gfn.body Δ ∧
     (∀ v E, Δ v = some E → E.mode ≠ .rootb ∧ E.dtor = false ∧ E.dbind = false) ∧
@@ -1680,7 +1709,7 @@ theorem gfn_ok : FnOK P gfn := by
   · intro pt hpt; simp [gfn] at hpt; subst hpt; simp [SDT, ST, AT, GDT, GT, DT, T, Ty.ok, Ty.isStruct, Ty.owning, Ty.vecD]
   · refine ⟨fun i hi hs _ => ?_, fun i hi b hb _ => ?_, fun h => by simp [gfn] at h⟩
     · simp [gfn] at hi; subst hi
-      exact ⟨Or.inr ⟨3, ST, rfl, gfn_enumOK⟩, by simp [gfn, Stmt.assigns]⟩
+      exact ⟨Or.inr ⟨3, ST, rfl, Or.inl gfn_enumOK⟩, by simp [gfn, Stmt.assigns]⟩
     · simp [gfn] at hi; subst hi; simp [gfn] at hb
   · exact ⟨{ intE with mode := R0.mode }, by simpa [gfn] using hr, rfl, rfl, by simp [R0, resMode, gfn],
       by simp [intE], by simp [intE], by simp [gfn]⟩
@@ -1958,11 +1987,12 @@ theorem main7_safe {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem 5) main7 (.ok 
     destructor for that struct: one that holds a destructor value has glue. -/
 theorem main7_lent_refused : ¬ DropFnOK P 0 GT := by
   rintro (⟨_, h⟩ | ⟨fn, a, b, hfn, _, _, hps, _⟩ | ⟨_, _, fn, _, _, _, hfn, _, _, hps, _⟩ |
-    ⟨fn, _, _, _, _, hfn, _, _, hps, _⟩)
+    ⟨fn, _, _, _, _, hfn, _, _, hps, _⟩ | ⟨_, _, _, _, _, _, _, _, ht, _⟩)
   · exact absurd h (by decide)
   · simp [P] at hfn; subst hfn; simp [dfn] at hps
   · simp [P] at hfn; subst hfn; simp [dfn] at hps
   · simp [P] at hfn; subst hfn; simp [dfn] at hps
+  · cases ht
 
 /-! ### ... and with a `% Drop` of its own (Agora #616)
 

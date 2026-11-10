@@ -3820,7 +3820,8 @@ nothing by name (`cs = []`).
 ### Classes (A3)
 
 - `callcE_send`: a package whose environment is handed over is at most Send
-  (its class is `send` or `any`); `callcE_not_sync`: a `sync` or `bare` one
+  (its class is `send` or `any`), or (Agora #609, the consuming hand-over)
+  of the dropping class, which crosses nowhere; `callcE_not_sync`: a `sync` or `bare` one
   has no such call; `callcE_not_arc`: no `Arc` holds it at that type. Two
   threads never call it at once: h342's shape, with the state inside the
   closure, is refused by the type.

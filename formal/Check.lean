@@ -28,6 +28,12 @@ import A3
 #print axioms A2.Dtor.letd_retype
 #print axioms A2.Dtor.impl_glue_body
 #print axioms A2.DtorWitness.main8_safe
+-- Agora #609: a closure whose environment is a destructor value is dropped by its glue, which calls its drop method (A2/ClosureDropWitness.lean)
+#print axioms A2.ClosureDropWitness.glue_calls_drop
+#print axioms A2.ClosureDropWitness.prog_ok
+#print axioms A2.ClosureDropWitness.main_typed
+#print axioms A2.ClosureDropWitness.main_safe
+#print axioms A2.ClosureDropWitness.main_letv_refused
 -- Agora #632: an enum's drop glue takes the enum owned and the payload out
 #print axioms A2.Dtor.enum_dtor_is_glue
 #print axioms A2.Dtor.enum_glue_body
@@ -59,7 +65,8 @@ import A3
 #print axioms A2.Dtor.pack_env_dtor_free
 #print axioms A2.WFv.pkg_env_dtor_free
 #print axioms A2.Dtor.pkgs_env_dtor_free
-#print axioms A2.Dtor.dropd_no_dtor
+#print axioms A2.Dtor.closure_dtor_is_glue
+#print axioms A2.Dtor.drop_method_code
 -- A2-drop.3d: no share's payload owns a destructor value
 #print axioms A2.Dtor.ok_payloads_free
 #print axioms A2.Dtor.shares_dtor_free
