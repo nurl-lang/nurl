@@ -62237,7 +62237,11 @@ unsafe @ __alloca_struct_params i syms i cg → v {
         // views: what this function makes of it is tied to that argument by
         // its answers, g_fn_rviews and g_fn_vkeeps (`~name`, the walk's
         // `pv_`; agora #341, #346).
-        ? & & == 0 ( nurl_sym_len2 syms name `__inout` ) ! ( str_has_index sinks index ) == ( bck_walk_class ( nurl_llty __pty ) ) 2 {
+        // (An `inout` one too: what it points into at entry is the caller's,
+        // and a holder it is stored into views that — agora #466. Given a
+        // new value, a view's own sources take over; a literal leaves it
+        // standing for the caller's argument, which only refuses more.)
+        ? & ! ( str_has_index sinks index ) == ( bck_walk_class ( nurl_llty __pty ) ) 2 {
             ( nurl_sym_def syms `__fn_ownstr_params__` ( nurl_str_cat4 ( nurl_sym_get syms `__fn_ownstr_params__` ) ` ` `~` name ) )
         } {}
         // A parameter that holds views — an owner of them (a ( Vec s ), a
