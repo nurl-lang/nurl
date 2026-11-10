@@ -320,7 +320,7 @@ theorem RhsT.names {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : Rhs
     obtain ⟨hn1, hD, hk⟩ := hpa.names hy hly rfl hn
     exact ⟨hn1, fun _ _ => own_named hD, ⟨_, hk⟩⟩
   | @takel y E a b hy hl _ hty _ _ =>
-    have hH := moved_named hn hy hl (by rw [hty]; simp)
+    have hH := moved_named hn hy hl (take_ne_int hty)
     refine ⟨hn.moved hy, fun _ _ => ?_,
       ⟨_, Keeps.moved Γ hy⟩⟩
     cases a <;> first
@@ -329,7 +329,7 @@ theorem RhsT.names {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : Rhs
       | exact own_named (hH.sub (ownHeld_sub _ _ _))
       | (show DepsNamed _ (E.held ++ E.held); exact hH.append hH)
   | @taker y E a b hy hl _ hty _ _ =>
-    have hH := moved_named hn hy hl (by rw [hty]; simp)
+    have hH := moved_named hn hy hl (take_ne_int hty)
     refine ⟨hn.moved hy, fun _ _ => ?_,
       ⟨_, Keeps.moved Γ hy⟩⟩
     cases b <;> first

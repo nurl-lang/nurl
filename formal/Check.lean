@@ -28,6 +28,11 @@ import A3
 #print axioms A2.Dtor.letd_retype
 #print axioms A2.Dtor.impl_glue_body
 #print axioms A2.DtorWitness.main8_safe
+-- Agora #632: an enum's drop glue takes the enum owned and the payload out
+#print axioms A2.Dtor.enum_dtor_is_glue
+#print axioms A2.Dtor.enum_glue_body
+#print axioms A2.Dtor.take_is_glue
+#print axioms A2.Dtor.assign_take_is_glue
 #print axioms A2.Dtor.result_frame_is_scopeD
 #print axioms A2.Dtor.scopeD_end_runs_dtor
 #print axioms A2.Dtor.scopeD_panic_runs_dtor

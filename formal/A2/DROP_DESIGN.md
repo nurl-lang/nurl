@@ -742,12 +742,19 @@ each one shrinks `CLAIM.md`'s exception:
 
 With the result's frame (Agora #611) every value's own, outermost
 destructor runs where the value is dropped. A struct's fields run theirs
-in the struct's glue, a frame per field (Agora #616, above). What
-`CLAIM.md` still lists inside a value is an enum's payload: that an
-enum's glue (which takes it lent) runs the payload's destructor is the
-elaboration's part, unchecked, and a panic in it frees the payload with no
-destructor (the model that shows it: glue that takes the enum owned and
-the payload out, as the struct's). And the stricter-than-nurlc list (a spawned
+in the struct's glue, a frame per field (Agora #616, above), and an
+enum's payload in the enum's glue (Agora #632): `EnumGlueOK`, a function
+that takes the enum owned, `ite (isl 0) sa sb`, an arm of a variant whose
+payload holds a destructor value being `letd y g (takel 0) k`. `takel` /
+`taker` are right-hand sides and `RhsT` has no program, so the rule
+(`RhsT.takel`) takes a payload that holds a destructor value out of an
+enum under any destructor type, and the statements that can bind such
+an owned value ask the gate (`TakeOK`): `letd` (beside `LetdFn`) and
+`assign` (a function's result slot may be assigned such a value once);
+`letv` refuses an owned value that holds a destructor value. The gate:
+the enum's destructor is its glue. `ExprT.isl` reads the tag through the type. The
+arm that takes nothing leaves the parameter live; the two arms are joined
+by `StmtT.sub` (a moved entry is weaker than a live one). And the stricter-than-nurlc list (a spawned
 function's parameter that holds a destructor value among it, `SpawnOK`).
 
 

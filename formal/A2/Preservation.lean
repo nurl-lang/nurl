@@ -1715,7 +1715,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           (by show E2.ty.dtorViews = true; rw [hsd2.dtorViews]; exact hhv)
           (by rw [show E2.arm.mode = E2.mode from rfl, hmo2]; rfl) (by simp)
         rw [hE'] at h2; cases h2; exact hd2
-      refine ⟨setE Γ1 x E2.arm, StmtT.scopeD ⟨E2.arm, t, by simp [setE], hmo2, hsd2, hfn2, hdtor.1, hstr⟩ hxF hs hpx
+      refine ⟨setE Γ1 x E2.arm, StmtT.scopeD ⟨E2.arm, t, by simp [setE], hmo2, hsd2, hfn2, hdtor.1.1, hstr⟩ hxF hs hpx
         (by rw [hsp]; exact hKOd) hWd hNd hΔd, ?_, by simp [post.nv], ?_, fun v hv => ?_⟩
       · refine Inv.mk hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
           (by simp [Stmt.spine, hsp, setE]) (show CatchOK _ k from catchOK_src hsrc)
@@ -2720,7 +2720,8 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       have hlet := StmtT.letd (P := P) (F := F) (x := m.nv) (f := f) (r := .popFront x) (s := .skip)
         (t := tx) (H := (popE x (Ex.revive x) (.dtor f tx)).held) (τ := .dtor f tx)
         rfl hrΓ' hrF hpop rfl (Or.inl ⟨rfl, Or.inr ⟨f, rfl⟩⟩) hstr hfnt
-        (LetdFn.of hdtor (fun g hg => by simp [popE] at hg; exact hg.symm)) (HeldUp.refl _ _) StmtT.skip hEndN
+        ⟨LetdFn.of hdtor (fun g hg => by simp [popE] at hg; exact hg.symm),
+          TakeOK.triv (fun y => ⟨(by intro h; cases h), (by intro h; cases h)⟩)⟩ (HeldUp.refl _ _) StmtT.skip hEndN
       rw [exitScope_setE_fresh hwf1 hΓ1n] at hlet
       -- the frame goes on, over what the move left
       have hEnd1 : EndOK Γ1 x := by
