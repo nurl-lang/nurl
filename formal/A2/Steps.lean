@@ -1066,9 +1066,8 @@ theorem WFv.selfFree_noView {t : Ty} {v : Val} (hw : WFv t v) (hvf : t.holdsView
     cut: cell shares it may hold). -/
 theorem chan_tyok {s : Ty} (h : (Ty.lk (.prod (.vec s) .int)).ok = true) :
     s.ok = true ∧ s.holdsView = false := by
-  simp only [Ty.ok, Ty.holdsView, Bool.and_true, Bool.or_false, Bool.and_eq_true,
-    Bool.not_eq_eq_eq_not, Bool.not_true] at h
-  exact ⟨h.1, h.2⟩
+  simp [Ty.ok, Ty.holdsView] at h
+  exact ⟨by simp_all, by simp_all⟩
 
 /-- An owned value of a type that holds no view, whose shares name blocks
     (A3.2's second cut: a payload's part may hold shares), and whose
@@ -1250,7 +1249,7 @@ theorem chanRecv_pres {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {k : 
     (fun i hi' => Or.inl (by simpa using hsub.subset (by simpa using hi')))
     (SharesOK.mk_pair (hshp.fst.node_sub (fun e he => List.mem_cons_of_mem _ he) rfl) hshp.snd)
   refine ⟨hpost, ?_⟩
-  have hso : s.ok = true := by simpa [Ty.ok] using htok
+  have hso : s.ok = true := by simp [Ty.ok] at htok; simp_all
   have hsv : s.holdsView = false := by simpa [Ty.holdsView] using hvf
   have hdv : (v.ids ++ idsL es).Nodup := (List.nodup_cons.mp (List.nodup_cons.mp hnd0).2).2
   have hin0 : ∀ i ∈ v.ids, i ∈ c :: d :: (v.ids ++ idsL es) := fun i hi' => by simp [hi']

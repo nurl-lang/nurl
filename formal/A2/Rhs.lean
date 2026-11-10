@@ -1229,15 +1229,15 @@ theorem out_at {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t : 
     have := hi.tyok hy; rw [hty] at this
     cases t with
     | int => rfl
-    | vec s => exact this
-    | slice s => exact this
-    | prod a b => exact this
-    | sum a b => exact this
-    | fn ms => exact this
-    | arc a => exact this
-    | lk a => exact this
-    | cell a => exact this
-    | dtor f a => exact this
+    | vec s => exact Ty.ok_vec_elem this
+    | slice s => exact Ty.ok_vec_elem this
+    | prod a b => exact Ty.ok_vec_elem this
+    | sum a b => exact Ty.ok_vec_elem this
+    | fn ms => exact Ty.ok_vec_elem this
+    | arc a => exact Ty.ok_vec_elem this
+    | lk a => exact Ty.ok_vec_elem this
+    | cell a => exact Ty.ok_vec_elem this
+    | dtor f a => exact Ty.ok_vec_elem this
   wf hn' := by
     rw [bor_vdeps _ (elemE_mode ..)]
     have hnint : E.ty ≠ .int := by rw [hty]; simp
@@ -1342,7 +1342,7 @@ theorem out_view {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t 
   live := rfl
   tyok := by
     have := hi.tyok hy; rw [hty] at this
-    simpa [Ty.ok, hhv] using this
+    simpa [Ty.ok, hhv] using Ty.ok_vec_elem this
   wf hn' := by
     rw [bor_vdeps _ rfl]
     have hnint : E.ty ≠ .int := by rw [hty]; simp
@@ -1916,7 +1916,7 @@ theorem out_arcGet {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry} (
     rw [bor_vdeps _ rfl] at hr
     exact wf_append (wf_derive hi ha hl hnint _) (wf_held hi ha hl hnint) r hr
 
-theorem rhs_new {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {t : Ty} (ht : t.ok = true) :
+theorem rhs_new {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {t : Ty} (ht : (Ty.vec t).ok = true) :
     let m1 : Mem := { m with alloc := upd (upd m.alloc m.nid true) (m.nid + 1) true, nid := m.nid + 2 }
     RhsPost m m1 Γ Γ F ∧ RhsOut m1 Γ ⟨.vec t, .own, true, [], [], false, false⟩ (.node t m.nid (m.nid + 1) []) true := by
   intro m1
@@ -2275,7 +2275,7 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       cases hwe with
       | view =>
         rename_i dv ov lv
-        have hok := hi.tyok hy; rw [hty] at hok
+        have hok := Ty.ok_vec_elem (by have h := hi.tyok hy; rw [hty] at h; exact h)
         show RhsOut _ _ ⟨.slice s, .bor, true, E.held, E.held, false, false⟩ _ false
         have htok : (Ty.slice s).ok = true := by simpa [Ty.ok] using hok
         refine RhsOut.mk rfl (Or.inr rfl) rfl htok (fun _ => ?_) (fun h => nomatch h) (fun _ => ?_)
@@ -2296,7 +2296,7 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       cases hwe with
       | node hes =>
         rename_i c1 d1 es1
-        have hok := hi.tyok hy; rw [hty] at hok
+        have hok := Ty.ok_vec_elem (by have h := hi.tyok hy; rw [hty] at h; exact h)
         show RhsOut _ _ ⟨.vec s, .own, true, [], E.held, false, false⟩ _ true
         refine ⟨rfl, Or.inl rfl, rfl, hok, fun _ r hr => ?_, fun _ => ⟨rfl, WFv.node hes, ?_, ?_,
           ?_, ?_, hsfT.sub (Sub.child hemem (Sub.refl _)),
@@ -2313,7 +2313,7 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     | prod a b =>
       cases hwe with
       | pair hwa hwb =>
-        have hok := hi.tyok hy; rw [hty] at hok
+        have hok := Ty.ok_vec_elem (by have h := hi.tyok hy; rw [hty] at h; exact h)
         show RhsOut _ _ ⟨.prod a b, .own, true, [], E.held, false, false⟩ _ true
         refine ⟨rfl, Or.inl rfl, rfl, hok, fun _ r hr => ?_, fun _ => ⟨rfl, WFv.pair hwa hwb, ?_, ?_,
           ?_, ?_, hsfT.sub (Sub.child hemem (Sub.refl _)),
@@ -2331,7 +2331,7 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       have hsumwf := hwe
       cases hwe with
       | inl _ | inr _ =>
-        have hok := hi.tyok hy; rw [hty] at hok
+        have hok := Ty.ok_vec_elem (by have h := hi.tyok hy; rw [hty] at h; exact h)
         show RhsOut _ _ ⟨.sum a b, .own, true, [], E.held, false, false⟩ _ true
         refine ⟨rfl, Or.inl rfl, rfl, hok, fun _ r hr => ?_, fun _ => ⟨rfl, hsumwf, ?_, ?_,
           ?_, ?_, hsfT.sub (Sub.child hemem (Sub.refl _)),
@@ -2349,7 +2349,7 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       have hsumwf := hwe
       cases hwe with
       | pkg _ _ =>
-        have hok := hi.tyok hy; rw [hty] at hok
+        have hok := Ty.ok_vec_elem (by have h := hi.tyok hy; rw [hty] at h; exact h)
         show RhsOut _ _ ⟨.fn ms q, .own, true, [], E.held, false, false⟩ _ true
         refine ⟨rfl, Or.inl rfl, rfl, hok, fun _ r hr => ?_, fun _ => ⟨rfl, hsumwf, ?_, ?_,
           ?_, ?_, hsfT.sub (Sub.child hemem (Sub.refl _)),
@@ -2367,7 +2367,7 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       have hsumwf := hwe
       cases hwe with
       | arc =>
-        have hok := hi.tyok hy; rw [hty] at hok
+        have hok := Ty.ok_vec_elem (by have h := hi.tyok hy; rw [hty] at h; exact h)
         show RhsOut _ _ ⟨.arc a, .own, true, [], E.held, false, false⟩ _ true
         refine ⟨rfl, Or.inl rfl, rfl, hok, fun _ r hr => ?_, fun _ => ⟨rfl, hsumwf, ?_, ?_,
           ?_, ?_, hsfT.sub (Sub.child hemem (Sub.refl _)),
@@ -2382,7 +2382,7 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       have hsumwf := hwe
       cases hwe with
       | lk =>
-        have hok := hi.tyok hy; rw [hty] at hok
+        have hok := Ty.ok_vec_elem (by have h := hi.tyok hy; rw [hty] at h; exact h)
         show RhsOut _ _ ⟨.lk a, .own, true, [], E.held, false, false⟩ _ true
         refine ⟨rfl, Or.inl rfl, rfl, hok, fun _ r hr => ?_, fun _ => ⟨rfl, hsumwf, ?_, ?_,
           ?_, ?_, hsfT.sub (Sub.child hemem (Sub.refl _)),
@@ -2397,7 +2397,7 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       have hsumwf := hwe
       cases hwe with
       | cell =>
-        have hok := hi.tyok hy; rw [hty] at hok
+        have hok := Ty.ok_vec_elem (by have h := hi.tyok hy; rw [hty] at h; exact h)
         show RhsOut _ _ ⟨.cell a, .own, true, [], E.held, false, false⟩ _ true
         refine ⟨rfl, Or.inl rfl, rfl, hok, fun _ r hr => ?_, fun _ => ⟨rfl, hsumwf, ?_, ?_,
           ?_, ?_, hsfT.sub (Sub.child hemem (Sub.refl _)),
@@ -2412,7 +2412,7 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       cases hwe with
       | dtor ho hwi =>
         rw [WFv.owns hwi (Ty.owning_of_isStruct ho)]
-        have hok := hi.tyok hy; rw [hty] at hok
+        have hok := Ty.ok_vec_elem (by have h := hi.tyok hy; rw [hty] at h; exact h)
         show RhsOut _ _ ⟨.dtor f a, .own, true, [], E.held, false, false⟩ _ true
         refine ⟨rfl, Or.inl rfl, rfl, hok, fun _ r hr => ?_, fun _ => ⟨rfl, WFv.dtor ho hwi, ?_, ?_,
           ?_, ?_, hsfT.sub (Sub.child hemem (Sub.refl _)),

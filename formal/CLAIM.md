@@ -621,27 +621,32 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   Taking one out is refused: `unpair` of a destructor value, and `takel` /
   `taker` of a destructor enum (`A2.DtorWitness.enum_take_refused`), since
   the destructor would not run.
-- `free` takes only a `Vec`; a `Vec` of destructor values it releases runs
-  none of their destructors (3b).
+- A2-drop.3b: a `Vec` of destructor values is refused: a `Vec`'s element
+  type holds none (`Ty.ok`, `RhsT.new`). So in a running configuration no
+  binding holds one (`A2.Dtor.vec_elems_dtor_free`, `A2.Dtor.new_dtor_free`),
+  and `free`, a truncation, an element set, `pop` and `withElem` release or
+  check out no destructor value. This is stricter than nurlc, which drops a
+  `Vec`'s elements in index order, each running its destructor.
+- `Ty.holdsDtor` is deep (A2-drop.3b): a struct or an enum holding a
+  destructor value at any depth is bound by `letd` with its glue
+  (`A2.Dtor.holdsDtor_deep`), so no destructor value sits two levels down
+  in a `letv` binding.
 - Not yet in the calculus. In each of these places `DropSlot` / `Frees`
   release the value, which runs no code, while nurlc runs the destructor:
-  - a destructor value as a `Vec` element (pushed, popped, freed), or an
-    enum or option payload inside one (3b);
   - in a closure's or trait object's environment (3c);
   - in an `Arc`, lock, channel or cell payload (3d). `SpawnOK` refuses a
     spawned function's parameter of a type that holds a destructor value
-    one level down (`Ty.holdsDtor`), so a `( Vec D )` or a lock of one
-    still crosses;
-  - a **check-out binding** (`withLock`, `withCell`, `withElem`) of a
-    destructor type: it is owned and is no `letd`'s; its value goes back
-    to the lock, cell or `Vec` at its scope's end, but an `assign` to it
-    drops the old value with no destructor (`A2.DtorWitness.lock_checkout_assign`
-    types this) (3b, 3d);
+    (`Ty.holdsDtor`), but a lock or a channel of one still crosses;
+  - a **check-out binding** (`withLock`, `withCell`) of a destructor type:
+    it is owned and is no `letd`'s; its value goes back to the lock or cell
+    at its scope's end, but an `assign` to it drops the old value with no
+    destructor (`A2.DtorWitness.lock_checkout_assign` types this) (3d).
+    (`withElem` checks out no destructor value: a `Vec` holds none.)
   - a function's result holding one, set before a panic in that function
     (another binding's destructor included), which the unwind releases
-    with the call's result scope; and the same value moved from the result
-    slot into a local before the panic, where it sits more than one level
-    down (`pair res w`) and `Ty.holdsDtor` does not see it.
+    with the call's result scope. (Moved from the result slot into a local
+    before the panic, the value is in a `letd` binding: `Ty.holdsDtor` is
+    deep, so `letv` takes no `pair res w`.)
   See Agora #542–#544 and `A2/DROP_DESIGN.md` *Staging*.
 
 The rules are stricter than nurlc's in these places:

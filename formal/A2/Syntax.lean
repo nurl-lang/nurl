@@ -217,16 +217,19 @@ def Ty.hasDtor : Ty → Bool
   | _ => false
 
 /-- A2-drop.3a: a value of this type, dropped whole, owns a destructor
-    value: it is one (`hasDtor`), or a struct or an enum one field or
-    payload of which is one.  Such a struct runs its fields' destructors in
-    its drop glue, so it is bound as a destructor type itself, its glue its
+    value: it is one (`hasDtor`), or a struct or an enum holding one in a
+    field or a payload at any depth (A2-drop.3b: a destructor value two
+    levels down, in a struct that is no destructor type of its own, is one
+    too; and a `Vec` of them, which `Ty.ok` refuses until its drain is in
+    the calculus).  Such a struct runs its fields' destructors in its drop
+    glue, so it is bound as a destructor type itself, its glue its
     destructor (`letd`): `letv` and `assign` take no owned value of such a
-    type.  Deeper nesting needs no case: a struct holding one is a
-    destructor value itself, by the same rule. -/
+    type. -/
 def Ty.holdsDtor : Ty → Bool
   | .dtor _ _ => true
-  | .prod a b => a.hasDtor || b.hasDtor
-  | .sum a b => a.hasDtor || b.hasDtor
+  | .prod a b => a.holdsDtor || b.holdsDtor
+  | .sum a b => a.holdsDtor || b.holdsDtor
+  | .vec t => t.holdsDtor
   | _ => false
 
 theorem Ty.hasDtor_of_holdsDtor {t : Ty} (h : t.holdsDtor = false) : t.hasDtor = false := by
@@ -251,6 +254,17 @@ theorem Ty.holdsDtor_of_sync {t : Ty} (h : t.sync = true) : t.holdsDtor = false 
 theorem Ty.hasDtor_of_isStruct {t : Ty} (h : t.isStruct = true) : t.hasDtor = false := by
   cases t <;> simp_all [Ty.isStruct, Ty.hasDtor]
 
+/-- A2-drop.3b: a value of this type owns no destructor value in its
+    tree.  A view owns nothing; a share's payload lives in its block, not in
+    the tree of what holds the share (A2-drop.3d), and a closure's
+    environment is A2-drop.3c's. -/
+def Ty.dtorFree : Ty → Bool
+  | .dtor _ _ => false
+  | .vec t => t.dtorFree
+  | .prod a b => a.dtorFree && b.dtorFree
+  | .sum a b => a.dtorFree && b.dtorFree
+  | _ => true
+
 /-- A2 types: a view's element type holds no views of its own (a view of a
     container of views is left to A2, with the other aggregates that
     carry views).  (A3.1's first cut also asked it to hold no shares; A3.1's
@@ -258,7 +272,9 @@ theorem Ty.hasDtor_of_isStruct {t : Ty} (h : t.isStruct = true) : t.hasDtor = fa
     handles is typed, its elements lent as `vec_at` lends them.) -/
 def Ty.ok : Ty → Bool
   | .int => true
-  | .vec t => t.ok
+  -- (A2-drop.3b: a `Vec`'s elements hold no destructor value; dropping
+  -- the `Vec` releases them, which runs no code)
+  | .vec t => t.ok && t.dtorFree
   | .slice t => t.ok && !t.holdsView
   | .prod a b => a.ok && b.ok
   | .sum a b => a.ok && b.ok
@@ -270,6 +286,31 @@ def Ty.ok : Ty → Bool
   | .cell t => t.ok && !t.holdsView  -- A3.5: a cell's payload is a lock's (A3.5's second cut:
                                      -- shares in it too, each going in past the crossing check)
   | .dtor _ t => t.isStruct && t.ok  -- A2-drop.3: `% Drop` is on a struct or an enum
+
+@[simp] theorem Ty.dtorFree_int : Ty.int.dtorFree = true := rfl
+@[simp] theorem Ty.dtorFree_slice (t : Ty) : (Ty.slice t).dtorFree = true := rfl
+@[simp] theorem Ty.dtorFree_fn (ms : List Nat) (q : Cross) : (Ty.fn ms q).dtorFree = true := rfl
+@[simp] theorem Ty.dtorFree_arc (t : Ty) : (Ty.arc t).dtorFree = true := rfl
+@[simp] theorem Ty.dtorFree_lk (t : Ty) : (Ty.lk t).dtorFree = true := rfl
+@[simp] theorem Ty.dtorFree_cell (t : Ty) : (Ty.cell t).dtorFree = true := rfl
+@[simp] theorem Ty.dtorFree_dtor (f : Nat) (t : Ty) : (Ty.dtor f t).dtorFree = false := rfl
+@[simp] theorem Ty.dtorFree_vec (t : Ty) : (Ty.vec t).dtorFree = t.dtorFree := rfl
+@[simp] theorem Ty.dtorFree_prod (a b : Ty) : (Ty.prod a b).dtorFree = (a.dtorFree && b.dtorFree) := rfl
+@[simp] theorem Ty.dtorFree_sum (a b : Ty) : (Ty.sum a b).dtorFree = (a.dtorFree && b.dtorFree) := rfl
+/-- A type holds a destructor value exactly when it is not free of one. -/
+theorem Ty.holdsDtor_eq_not_free (t : Ty) : t.holdsDtor = !t.dtorFree := by
+  induction t with
+  | prod a b iha ihb => simp [Ty.holdsDtor, iha, ihb, Bool.not_and]
+  | sum a b iha ihb => simp [Ty.holdsDtor, iha, ihb, Bool.not_and]
+  | vec t ih => simp [Ty.holdsDtor, ih]
+  | _ => rfl
+
+theorem Ty.ok_vec_elem {t : Ty} (h : (Ty.vec t).ok = true) : t.ok = true := by
+  simp only [Ty.ok, Bool.and_eq_true] at h; exact h.1
+theorem Ty.ok_vec_free {t : Ty} (h : (Ty.vec t).ok = true) : t.dtorFree = true := by
+  simp only [Ty.ok, Bool.and_eq_true] at h; exact h.2
+theorem Ty.ok_vec_mk {t : Ty} (h : t.ok = true) (hf : t.dtorFree = true) : (Ty.vec t).ok = true := by
+  simp [Ty.ok, h, hf]
 
 /-- A2-drop.3a: the type under a destructor is well formed when the
     destructor type is. -/

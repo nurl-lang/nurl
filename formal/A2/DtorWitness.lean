@@ -124,6 +124,31 @@ theorem scopeD_panic_runs_dtor {P : Prog} {x : Var} {f : Nat} {m m1 : Mem} {s : 
       (.ok { m1 with nv := m1.nv + 1 } (.seq (.scope x (.letcall m1.nv f [x] .skip)) .panic)) :=
   Step.scopeDP hs hx
 
+/-- A2-drop.3b: in a running configuration, no binding holds a `Vec` of
+    destructor values (`Ty.ok` refuses one, and `MInv` keeps every binding's
+    type well formed).  So `free`, a truncation or an element set (through
+    the owner or a borrow), `pop` and `withElem` release or check out no
+    destructor value: whatever a `Vec`'s drop releases runs no code in nurlc
+    either. -/
+theorem vec_elems_dtor_free {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {E : Entry} {t : Ty}
+    (hx : Γ x = some E) (ht : E.ty = .vec t) : t.dtorFree = true := by
+  have h := hi.tyok hx; rw [ht] at h; exact Ty.ok_vec_free h
+
+/-- A2-drop.3b: `vec_new` of destructor values is refused. -/
+theorem new_dtor_free {Γ Γ1 : Ctx} {F : List Var} {t : Ty} {E : Entry}
+    (h : RhsT Γ F (.new t) E Γ1) : t.dtorFree = true := by
+  cases h with | new h => exact Ty.ok_vec_free h
+
+/-- A2-drop.3b: a struct or an enum holding a destructor value at any depth
+    holds one (`Ty.holdsDtor` is deep), so `letv` binds no owned value of it
+    (`letv_owned_no_dtor`): a destructor value two levels down, in a struct
+    of no destructor type of its own, is bound by `letd` as the struct
+    holding it is. -/
+theorem holdsDtor_deep {a b : Ty} (h : a.holdsDtor = true) :
+    (Ty.prod a b).holdsDtor = true ∧ (Ty.prod b a).holdsDtor = true ∧
+    (Ty.sum a b).holdsDtor = true ∧ (Ty.sum b a).holdsDtor = true := by
+  simp [Ty.holdsDtor, h]
+
 end A2.Dtor
 
 

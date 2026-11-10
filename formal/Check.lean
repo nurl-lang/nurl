@@ -21,6 +21,9 @@ import A3
 #print axioms A2.Dtor.fnOK_dtor_params
 #print axioms A2.Dtor.scopeD_end_runs_dtor
 #print axioms A2.Dtor.scopeD_panic_runs_dtor
+#print axioms A2.Dtor.vec_elems_dtor_free
+#print axioms A2.Dtor.new_dtor_free
+#print axioms A2.Dtor.holdsDtor_deep
 #print axioms A2.DtorWitness.main_safe
 #print axioms A2.DtorWitness.main2_safe
 #print axioms A2.DtorWitness.enum_lends
