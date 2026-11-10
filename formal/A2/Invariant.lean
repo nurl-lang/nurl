@@ -924,13 +924,27 @@ def DtorOK (P : Prog) (f : Nat) (t : Ty) : Prop :=
     -- a destructor changes no elements through a borrow (Agora #295)
     ¬ ThruFn P f
 
+/-- A2-drop.3a: `letv`'s side condition, that the value it binds owned is of
+    no destructor type, for an entry the rules build (none but `letd`'s is of
+    one): its type is no destructor type, or its mode no owner. -/
+syntax "no_dtor" : tactic
+macro_rules
+  | `(tactic| no_dtor) => `(tactic| first
+      | (intro _; rfl)
+      | (intro h; simp_all [Ty.hasDtor])
+      | (intro h; exfalso; revert h; simp_all))
+
 inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
   | skip {Γ : Ctx} {F : List Var} : StmtT P Γ F .skip Γ
   | seq {Γ Γ1 Δ : Ctx} {F : List Var} {a b : Stmt} :
       b.src = true → StmtT P Γ F a Γ1 → StmtT P Γ1 F b Δ → StmtT P Γ F (.seq a b) Δ
-  | letv {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {r : Rhs} {s : Stmt} {E : Entry} :
-      s.src = true → Γ x = none → x ∉ F → RhsT Γ F r E Γ1 → StmtT P (setE Γ1 x E) F s Δ →
-      EndOK Δ x → StmtT P Γ F (.letv x r s) (exitScope x Δ)
+  | letv {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {r : Rhs} {s : Stmt} {E : Entry}
+      (hs : s.src = true) (hx : Γ x = none) (hxF : x ∉ F) (hr : RhsT Γ F r E Γ1)
+      (hb : StmtT P (setE Γ1 x E) F s Δ) (he : EndOK Δ x)
+      -- A2-drop.3a: an owned value of a destructor type is bound by `letd`
+      -- (its scope runs the destructor), wherever it came from
+      (hnd : E.mode = .own → E.ty.hasDtor = false := by no_dtor) :
+      StmtT P Γ F (.letv x r s) (exitScope x Δ)
   | letcall {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {args : List Var} {s : Stmt}
       {E : Entry} :
       s.src = true → Γ x = none → x ∉ F → CallT P Γ F f args E Γ1 → StmtT P (setE Γ1 x E) F s Δ →
@@ -1024,11 +1038,15 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
   /-- A2-drop.1: a binding with a destructor, of a type that holds no views
       (its value is valid however the binding died). -/
   | letd {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {r : Rhs} {s : Stmt} {E : Entry}
-      {H : List Dep} :
+      {t : Ty} {H : List Dep} :
       s.src = true → Γ x = none → x ∉ F → RhsT Γ F r E Γ1 → E.mode = .own →
-      E.ty.hasFn = false → DtorOK P f E.ty →
+      -- A2-drop.3a: the binding is of the destructor type `Ty.dtor f t`, of a
+      -- struct or an enum `t`: the value is a `t` made here, or a value of that
+      -- destructor type moved in (whose old binding's scope then runs nothing)
+      (E.ty = t ∨ E.ty = .dtor f t) → t.isStruct = true →
+      t.hasFn = false → DtorOK P f (.dtor f t) →
       -- A2-drop.2: the binding, armed, views what the value does, or more
-      HeldUp Γ1 E H → StmtT P (setE Γ1 x (Entry.arm { E with held := H })) F s Δ →
+      HeldUp Γ1 E H → StmtT P (setE Γ1 x (Entry.arm { E with ty := .dtor f t, held := H })) F s Δ →
       EndOK Δ x → StmtT P Γ F (.letd x f r s) (exitScope x Δ)
   /-- A3.2: `locked_update a f`: the lock `a` (a live lock share) shares is
       taken, and its payload, a `t`, is checked out to `x` for the body:
@@ -1112,7 +1130,9 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       StmtT P (kill .replace false c (setE Γ1 x E)) F k Δ →
       EndOK Δ x → ¬ ThruFn P σ → StmtT P Γ F (.callcE x c j [] k) (exitScope x Δ)
   | scopeD {Γ Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {s : Stmt} :
-      (∃ E, Γ x = some E ∧ E.mode = .own ∧ E.ty.hasFn = false ∧ DtorOK P f E.ty) → x ∉ F →
+      -- (A2-drop.3a: of the destructor type `Ty.dtor f t`, whose destructor `f` is)
+      (∃ E t, Γ x = some E ∧ E.mode = .own ∧ E.ty = .dtor f t ∧ E.ty.hasFn = false ∧
+        DtorOK P f E.ty) → x ∉ F →
       StmtT P Γ F s Δ → EndOK Δ x →
       KeepOut Γ Δ s.spine → CtxWF Δ → NameWF Δ →
       -- A2-drop.2: the binding is `letd`'s when its type holds views (its

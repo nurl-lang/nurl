@@ -602,7 +602,7 @@ theorem progress {P : Prog}
         -- A3.3: on the way out too
         obtain ⟨m2, hrl⟩ := Release.exists (k := kk) (t := t) hsl1 hd
         exact Or.inr <| Or.inr ⟨_, Step.scopeLP hr hrl⟩
-  | @letd Γ Γ1 Δ F x f r k E _ _ hx _ hr _ _ _ _ _ _ =>
+  | @letd Γ Γ1 Δ F x f r k E _ _ _ hx _ hr _ _ _ _ _ _ _ _ =>
     intro m hcd hi
     have hmx : m.st x = none := by
       have := hi.dom x; rw [hx] at this; cases h : m.st x <;> simp_all
@@ -614,7 +614,7 @@ theorem progress {P : Prog}
     | panic => exact Or.inr <| Or.inr ⟨_, Step.letdP hres⟩
   | @scopeD Γ Δ1 F x f k hxE _ _ _ _ _ _ _ ih =>
     intro m hcd hi
-    obtain ⟨Ex, hx, hmo, _, _⟩ := hxE
+    obtain ⟨Ex, _, hx, hmo, _, _, _⟩ := hxE
     have hnrb : Ex.mode ≠ .rootb := by rw [hmo]; simp
     have hiS : Inv m Γ F (.scope x k) := Inv.scopeD_iff.mp hi
     have hi0 : Inv m Γ F k := hiS.scopeIn hx hnrb

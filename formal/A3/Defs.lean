@@ -123,7 +123,9 @@ inductive Redex : Stmt → (Stmt → Stmt) → Stmt → Prop
     views, and it returns an integer. -/
 def SpawnOK (P : Prog) (spawn : Nat → Bool) : Prop :=
   ∀ f, spawn f = true → ∃ fn, P[f]? = some fn ∧ fn.resTy = .int ∧
-    ∀ pt ∈ fn.params, pt.1 = .sink ∧ pt.2.holdsView = false
+    -- (A2-drop.3a: and of no destructor type: the thread that drops a
+    -- value moved to it runs its destructor, A2-drop.3d, not modelled yet)
+    ∀ pt ∈ fn.params, pt.1 = .sink ∧ pt.2.holdsView = false ∧ pt.2.hasDtor = false
 
 /-- A3.1, Send: a share crosses to a new thread when its payload holds no
     views — `SpawnOK`'s question asked of `Ty.arc t`, unchanged.  Every A2
@@ -1349,7 +1351,7 @@ theorem spawn_not_any {P : Prog} {spawn : Nat → Bool} (hS : SpawnOK P spawn) {
   intro hin
   obtain ⟨fn', hf', _, hpar⟩ := hS f hsp
   rw [hf] at hf'; cases hf'
-  have := (hpar _ hin).2
+  have := (hpar _ hin).2.1
   simp [Ty.holdsView] at this
 
 /-- A closure's code takes its environment where its interface takes the
@@ -1893,7 +1895,7 @@ theorem spawn_pkgs_send {P : Prog} {spawn : Nat → Bool} (hS : SpawnOK P spawn)
     {cs : List (Var × PMode × Ty)} (hs : Sub (.pkg fs te ms e cs) v) : Cross.send.Fits te cs := by
   obtain ⟨fn', hf', -, hpar⟩ := hS f hsp
   rw [hf] at hf'; cases hf'
-  exact hw.noView_fits (hpar pt hin).2 hs
+  exact hw.noView_fits (hpar pt hin).2.1 hs
 
 /-! A3.5c: h344 (`dyn_object_carries_an_rc_to_a_thread`), a `%Churn` of a trait
 with no bound boxing a struct with an `Rc`, moved into a thread's closure
