@@ -6559,7 +6559,11 @@ unsafe @ gen_ret i lex i syms i cg → s {
     // (A bare binding is the whole of it: an expression that starts with an
     // identifier is that identifier, prefix notation has nothing after it.)
     = g_bck_ret_whole ? ( is_ident_tok ret_first_tt ) ( nurl_str_cat ret_first_val `` ) ``
-    = g_bck_ret_dep ? __ret_dep 1 ? __ret_exp 2 ? __ret_bare 3 0
+    // (A view written as anything but its binding's name — `^ ( mem_dup a
+    // )`, `^ ( same a )`, `^ @ W { ( mem_dup a ) }` — is no binding handed
+    // over, even where its source expression names one: `n` for a bare
+    // `s`, `x` for another view; agora #478.)
+    = g_bck_ret_dep ? __ret_dep 1 ? __ret_exp 2 ? __ret_bare ? ( is_ident_tok ret_first_tt ) 3 4 ? & == __ret_cls 2 ! ( is_ident_tok ret_first_tt ) 5 0
     ( bck_flush_vpass )
     // With a `;` defer armed, the chain runs after the value is the
     // caller's: the owner this `^` hands back by name is lent to the
@@ -24430,7 +24434,7 @@ unsafe @ __bck_fall_ret_record i lex i syms i first_tt s first_val i sxn0 i line
     } {}
     = g_bck_ret_sx ( nurl_str_cat rsx `` )
     = g_bck_ret_whole ? ( is_ident_tok first_tt ) ( nurl_str_cat first_val `` ) ``
-    = g_bck_ret_dep ? dep 1 ? exp 2 ? bare 3 0
+    = g_bck_ret_dep ? dep 1 ? exp 2 ? bare ? ( is_ident_tok first_tt ) 3 4 ? & == cls 2 ! ( is_ident_tok first_tt ) 5 0
     ( bck_flush_vpass )
     ( bck_record `ret` g_bck_ret_whole line )
     = g_bck_ret_whole ``
@@ -29951,7 +29955,7 @@ unsafe @ __sx_nested s sx → b {
         // A match's: field 8, the call it matches (h214).
         ? & != 0 ( nurl_str_len g_bck_match_sx ) ? == __k0 109 ( seq kind `match` ) F { = rec ( nurl_str_cat3 rec `\t\t\t\t` g_bck_match_sx ) = g_bck_match_sx `` } {}
         // A return's: field 8 (field 5 `d`: an owner by name).
-        ? & ? == __k0 114 ( seq kind `ret` ) F != 0 ( nurl_str_len g_bck_ret_sx ) { = rec ( nurl_str_cat3 rec ? == g_bck_ret_dep 1 `\td\t\t\t` ? == g_bck_ret_dep 2 `\te\t\t\t` ? == g_bck_ret_dep 3 `\tb\t\t\t` `\t\t\t\t` g_bck_ret_sx ) } {}
+        ? & ? == __k0 114 ( seq kind `ret` ) F != 0 ( nurl_str_len g_bck_ret_sx ) { = rec ( nurl_str_cat3 rec ? == g_bck_ret_dep 1 `\td\t\t\t` ? == g_bck_ret_dep 2 `\te\t\t\t` ? == g_bck_ret_dep 3 `\tb\t\t\t` ? == g_bck_ret_dep 4 `\tn\t\t\t` ? == g_bck_ret_dep 5 `\tx\t\t\t` `\t\t\t\t` g_bck_ret_sx ) } {}
         ( bck_add `stmts`
         ? == 0 ( nurl_sym_len g_bck `stmts` ) rec ( nurl_str_cat `\n` rec ) )
         // What the right-hand side of a binding read: the sources a borrow
@@ -35245,7 +35249,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 // (…and every `inout` parameter goes back to the caller.)
                 ? != 0 g_bck_fmv_any { ( __bck_inout_exit_check st ( bck_field_int rec 3 ) F ) } {}
                 // A view handed back points into what the caller has.
-                ? >= ( __bck_field_off rec 8 ) 0 { ( bck_ret_view_check st ( bck_field rec 8 ) ( bck_field_int rec 3 ) ( seq ( bck_field rec 5 ) `d` ) ! ( seq ( bck_field rec 5 ) `e` ) ( seq ( bck_field rec 5 ) `b` ) ) } {}
+                ? >= ( __bck_field_off rec 8 ) 0 { ( bck_ret_view_check st ( bck_field rec 8 ) ( bck_field_int rec 3 ) ( seq ( bck_field rec 5 ) `d` ) ! | | ( seq ( bck_field rec 5 ) `e` ) ( seq ( bck_field rec 5 ) `n` ) ( seq ( bck_field rec 5 ) `x` ) | ( seq ( bck_field rec 5 ) `b` ) ( seq ( bck_field rec 5 ) `n` ) ) } {}
                 // A payload of what a call lends, handed in the returned
                 // expression to a callee that takes it (`^ ( eat s )` in `?? (
                 // rc_get r ) { T s → … }`): a borrow released as if owned,
