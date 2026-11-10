@@ -176,7 +176,7 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
       exact hny p Ep h0 hm d hd hb
     have h2 := CtxRel.kill ha hcF .replace false (hny1.kills .replace false)
     exact h2.trans (ih hks (ha.kill _ _ _) (hnx.kill _ _ _))
-  | @withElem Γ Γ1 Δ1 Δ F y x i k Ey E hks hx hxF _ _ _ hpy _ hr hk _ hpin _ ihs ihp =>
+  | @withElem Γ Γ1 Δ1 Δ F y x i k Ey E hks hx hxF _ _ _ hpy _ hr hk _ hpin _ _ ihs ihp =>
     intro _ hanch hn
     have hyF : y ∉ F := by cases hr; assumption
     have hk0 := CtxRel.kill hanch hyF .replace false (hpy.kills .replace false)

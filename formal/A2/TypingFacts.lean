@@ -795,7 +795,7 @@ theorem StmtT.dkeep {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (
     exact ⟨_, hx, hd0, hos0, hn0, fun d hdd hnm => hs0 d (by simpa [Entry.vdeps, ownHeld, ht] using hdd) hnm⟩
   | free hx => exact fun _ _ => DKeep.moveOut hx _ _
   | insert _ _ _ ih => exact ih
-  | withElem hs _ _ _ _ _ _ _ hr _ _ _ _ ihs ihp =>
+  | withElem hs _ _ _ _ _ _ _ hr _ _ _ _ _ ihs ihp =>
     exact fun _ _ => DKeep.bind (((DKeep.refl _ []).kill _ _ _).trans hr.dkeep fun _ h => h)
       ((DKeep.of_src hs ihs).trans (DKeep.of_src rfl ihp) fun _ h => h)
   | sub hw _ hw' ih =>
@@ -973,7 +973,7 @@ theorem StmtT.dstay {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (
     exact ⟨hd1, hos1⟩
   | free hx => exact DStay.moveOut hx _ _
   | insert _ _ _ ih => exact ih
-  | withElem hs hx _ _ _ _ _ _ hr _ _ _ _ ihs ihp =>
+  | withElem hs hx _ _ _ _ _ _ hr _ _ _ _ _ ihs ihp =>
     exact DStay.bind hx (((DStay.refl _ []).kill _ _ _).trans hr.dstay fun _ h => h)
       ((src0 hs ihs).trans (src0 rfl ihp) fun _ h => h)
   | sub hw _ hw' ih =>

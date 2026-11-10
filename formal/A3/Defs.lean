@@ -307,7 +307,7 @@ theorem wguard_get_path {Γ : Ctx} {F : List Var} {x : Var} {u : Ty} (hx : Γ x 
 theorem _root_.A2.StmtT.wguardGet {P : Prog} {Γ : Ctx} {F : List Var} {x y : Var} {u : Ty} {i : Expr}
     (hx : Γ x = some (lockE (.vec u))) (hy : Γ y = some ⟨.vec u, .bor, true, [⟨x, .self⟩], [], false, false⟩)
     (huv : u.holdsView = false) (hyF : y ∉ F) (hxF : x ∉ F) (hi : ExprT Γ i)
-    (hds : DtorSafe Γ .drop false x) :
+    (hds : DtorSafe Γ .drop false x) (hdf : u.dtorFree = true) :
     StmtT P Γ F (.edit true y (.trunc i))
       (setE (killThru (.trunc i) (.vec u) [⟨x, .self⟩] Γ) y ⟨.vec u, .bor, true, [⟨x, .self⟩], [], false, false⟩) := by
   have hl : lockE (.vec u) = ⟨.vec u, .own, true, [], [], false, false⟩ := by simp [lockE]
@@ -1024,7 +1024,7 @@ theorem _root_.A2.StmtT.withLockElem {P : Prog} {Γ Δs Δ : Ctx} {F : List Var}
   rw [hpe] at hpop
   have hex : A2.setE (A2.kill .drop t.holdsView v (A2.kill .replace false v Γ)) e (elemLockE t Ev) x = none := by
     simp [A2.setE, A2.kill, upd_ne _ _ hxe, hx]
-  refine StmtT.withElem (by simp [Stmt.src, hs]) he heF hv hmv hi hpin hds hpop ?_ hpush hende ?_
+  refine StmtT.withElem (by simp [Stmt.src, hs]) he heF hv hmv hi hpin hds hpop ?_ hpush hende ?_ (by simp [elemLockE, Ty.dtorFree])
   · exact StmtT.withLock hs hex hxF (upd_same _ _ _) rfl (Or.inl rfl) hb hend rfl hes hlive
   · simp [Stmt.vars, hvs, hvx, hve]
 

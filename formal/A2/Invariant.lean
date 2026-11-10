@@ -1008,6 +1008,10 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
         (setE (kill .realloc t.holdsView x Γ1) x { Ex1 with held := Ex1.held ++ ownHeld true t D })
   | free {Γ : Ctx} {F : List Var} {x : Var} {E : Entry} {t : Ty} :
       Γ x = some E → E.live = true → E.mode = .own → E.ty = .vec t → x ∉ F → EndOK Γ x →
+      -- A2-drop.3b: `free` releases the elements by `Frees`, which runs no
+      -- code, so not those of a destructor type (a drained `Vec`'s elements
+      -- go through their own `scopeD`, `Step.scopeDDrain`)
+      (hdf : t.dtorFree = true := by first | decide | assumption) →
       StmtT P Γ F (.free x) (setE (kill .replace false x Γ) x { E with live := false, dtor := false })
   | sub {Γ Γ0 Δ0 Δ : Ctx} {F : List Var} {s : Stmt} :
       Weaker Γ Γ0 → StmtT P Γ0 F s Δ0 → (Δ0 = Δ ∨ Weaker Δ0 Δ) → StmtT P Γ F s Δ
@@ -1136,6 +1140,10 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       NoPin Γ v → DtorSafe Γ .replace false v →
       RhsT (kill .replace false v Γ) F (.pop v) E Γ1 → StmtT P (setE Γ1 x E) F s Δ1 →
       StmtT P Δ1 F (.push v x) Δ → EndOK Δ x → v ∉ s.vars →
+      -- A2-drop.3b: the element checked out owns no destructor value: `x`
+      -- is no `letd`'s, and its body may give it a new value, whose old
+      -- one would be released running no destructor
+      (hdf : E.ty.dtorFree = true := by first | decide | assumption) →
       StmtT P Γ F (.withElem v i x s) (exitScope x Δ)
   /-- A2-envhand: a call through the package `c` of a method whose interface
       `σ` takes the receiver `inout` (at the bound `b`, and nothing else): the
@@ -1192,6 +1200,9 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       x ∉ F → EditArg Γ F op t D Γ1 → (∀ y, op.stored = some y → y ≠ x) →
       Γ1 x = some Ex1 → Ex1.live = true → memDeps Ex1.path ≠ [] →
       ThruOK Γ1 F op Ex.ty Ex1.path →
+      -- A2-drop.3b: a truncation or an element set releases elements by
+      -- `Frees`, running no code: not those of a destructor type
+      (hdf : t.dtorFree = true := by first | decide | assumption) →
       StmtT P Γ F (.edit true x op) (setE (killThru op Ex.ty Ex1.path Γ1) x Ex1)
   /-- Agora #295: the same change through a borrow `x`, of an element type
       that holds views (and no closure): a push or an element set may store
@@ -1212,6 +1223,8 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       t.hasFn = false → x ∉ F → EditArg Γ F op t D Γ1 → (∀ y, op.stored = some y → y ≠ x) →
       Γ1 x = some Ex1 → Ex1.live = true → memDeps Ex1.path ≠ [] →
       ThruOK Γ1 F op Ex.ty Ex1.path → ThruV Γ1 op Ex.ty Ex1.path (memDeps D) →
+      -- (A2-drop.3b: as `editB`'s)
+      (hdf : t.dtorFree = true := by first | decide | assumption) →
       StmtT P Γ F (.edit true x op)
         (setE (holdThru (memDeps D) Ex1.path (killThruV op Ex.ty Ex1.path Γ1)) x
           { Ex1 with held := Ex1.held ++ memDeps D })
