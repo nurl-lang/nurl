@@ -2191,6 +2191,17 @@ journal** instead:
   drop runs, the second panic releases what is still recorded, and the
   `recover` reports the first panic's message, the cause. With no
   `recover` frame, a panic ends the process before anything is released.
+- A function's result is its own until the `ret`. Where a local the
+  function drops on the way out may run a destructor, the result is
+  recorded for that window: a panic in the local's destructor runs the
+  result's destructor, once, and frees what the result owns. (A result
+  the caller lent, handed back as it is, is not the function's to drop
+  and is not recorded as one.)
+- A struct or an enum being dropped by the glue the compiler writes is
+  recorded part by part where a part may run a destructor: the fields (or
+  the payloads) after the one being dropped are still dropped, in order
+  and once each, if its destructor panics, and the box of a payload that
+  lives in one is freed.
 - A `Vec` releasing elements that may run a destructor is recorded too,
   as the elements still to go. An element's destructor that panics (in
   the `Vec`'s own drop, a `vec_truncate` or a `vec_clear`) does not end
