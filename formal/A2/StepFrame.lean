@@ -228,16 +228,14 @@ theorem step_new {P : Prog} {m m' : Mem} {s s' : Stmt} (hst : Step P m s (.ok m'
     by_cases hvx : v = x
     · subst hvx; simp [Stmt.spine]
     · simp [upd_ne _ _ hvx, evalR_none he h] at h'
-  | scopeDEnd _ => cases hr; intro v h h'; exact absurd h h'
+  | scopeDEnd _ _ | scopeDDrain _ | scopeDEmpty _ => cases hr; intro v h h'; exact absurd h h'
   | @scopeDMoved y _ _ =>
     cases hr; intro v h h'
     simp only [Mem.remove_st] at h'
     by_cases hvx : v = y
     · subst hvx; simp at h'
     · rw [upd_ne _ _ hvx] at h'; exact absurd h h'
-  | scopeDP hp _ => cases hr; intro v h h'; exact absurd (panic_none hp v h) h'
-  | scopeDDrain _ | scopeDEmpty _ => cases hr; intro v h h'; exact absurd h h'
-  | scopeDPDrain hp _ => cases hr; intro v h h'; exact absurd (panic_none hp v h) h'
+  | scopeDP hp _ _ | scopeDPDrain hp _ => cases hr; intro v h h'; exact absurd (panic_none hp v h) h'
   | @letv _ x _ _ _ _ _ he =>
     cases hr; intro v h h'
     by_cases hvx : v = x
@@ -367,19 +365,11 @@ theorem step_gone {P : Prog} {m m' : Mem} {s s' : Stmt} (hst : Step P m s (.ok m
     cases hr; intro v h _
     simp only [Stmt.spine, List.mem_cons, List.not_mem_nil, or_false] at h
     subst h; simp
-  | scopeDEnd _ =>
+  | scopeDEnd _ _ | scopeDDrain _ | scopeDEmpty _ =>
     cases hr; intro v h h'
     simp only [Stmt.spine, List.mem_cons, List.not_mem_nil, or_false] at h h'
     exact absurd h h'
-  | @scopeDP _ x _ _ _ hp _ _ =>
-    cases hr; intro v h h'
-    simp only [Stmt.spine, List.mem_cons, List.not_mem_nil, or_false] at h h'
-    exact panic_spine hp v (h.resolve_left h')
-  | scopeDDrain _ | scopeDEmpty _ =>
-    cases hr; intro v h h'
-    simp only [Stmt.spine, List.mem_cons, List.not_mem_nil, or_false] at h h'
-    exact absurd h h'
-  | @scopeDPDrain _ _ x _ _ _ _ _ hp _ =>
+  | scopeDP hp _ _ | scopeDPDrain hp _ =>
     cases hr; intro v h h'
     simp only [Stmt.spine, List.mem_cons, List.not_mem_nil, or_false] at h h'
     exact panic_spine hp v (h.resolve_left h')

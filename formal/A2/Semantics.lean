@@ -499,11 +499,6 @@ def namesL : List Val → List (Var × PMode × Ty)
   | e :: es => e.names ++ namesL es
 end
 
-/-- A2-drop.3b's drain: a `Vec`'s tree. -/
-def Val.isNode : Val → Bool
-  | .node .. => true
-  | _ => false
-
 /-- Does moving this value move an owned tree (a `Vec` or a struct)? -/
 def Val.owns : Val → Bool
   | .node .. => true
@@ -1241,27 +1236,30 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
       EvalR m r .panic → Step P m (.letd x f r s) (.panic m)
   | scopeDIn {m m' : Mem} {x : Var} {f : Nat} {s s' : Stmt} :
       Step P m s (.ok m' s') → Step P m (.scopeD x f s) (.ok m' (.scopeD x f s'))
-  /-- The scope's end with `x` owning its value: the destructor runs on `x`
-      lent (its result in a fresh variable), then `scope x` frees the tree —
-      the drop glue after the impl. -/
+  /-- The scope's end with `x` owning its value, a struct or an enum (no
+      `Vec`'s node): the destructor runs on `x` lent (its result in a fresh
+      variable), then `scope x` frees the tree, the drop glue after the impl. -/
   | scopeDEnd {m : Mem} {x : Var} {f : Nat} {v : Val} :
       m.st x = some ⟨true, some v⟩ → v.isNode = false →
       Step P m (.scopeD x f .skip) (.ok { m with nv := m.nv + 1 } (.scope x (.letcall m.nv f [x] .skip)))
-  /-- A2-drop.3b: the drain. A `Vec` of destructor values at its scope's end
-      gives its element 0 to a fresh `letd` binding of its own, whose scope
-      runs the element's destructor, and the frame goes on; nurlc drops a
-      `Vec`'s elements in index order (`nurl__vec_drop_elems`). -/
+  /-- A moved binding runs no destructor. -/
+  | scopeDMoved {m : Mem} {x : Var} {f : Nat} :
+      m.st x = some ⟨true, none⟩ → Step P m (.scopeD x f .skip) (.ok (m.remove x) .skip)
+  /-- A2-drop.3b, the drain: the scope's end with `x` owning a `Vec` of
+      destructor values that still has an element.  Element 0 moves out to a
+      fresh binding of its own (`vec_remove x 0`, in `letd`'s step), whose
+      scope runs its destructor and frees it; then the frame is at its end
+      again, one element shorter.  nurlc drops a `Vec`'s elements in index
+      order (`nurl__vec_drop_elems`). -/
   | scopeDDrain {m : Mem} {x : Var} {f : Nat} {t : Ty} {c d : Nat} {e : Val} {es : List Val} :
       m.st x = some ⟨true, some (.node t c d (e :: es))⟩ →
       Step P m (.scopeD x f .skip)
         (.ok { m with nv := m.nv + 1 } (.scopeD x f (.letd m.nv f (.popFront x) .skip)))
-  /-- ... and once it is empty, the frame frees it as a scope does. -/
+  /-- ... and with every element gone: the empty `Vec` is freed, as any
+      binding's value is at its scope's end. -/
   | scopeDEmpty {m : Mem} {x : Var} {f : Nat} {t : Ty} {c d : Nat} :
       m.st x = some ⟨true, some (.node t c d [])⟩ →
       Step P m (.scopeD x f .skip) (.ok m (.scope x .skip))
-  /-- A moved binding runs no destructor. -/
-  | scopeDMoved {m : Mem} {x : Var} {f : Nat} :
-      m.st x = some ⟨true, none⟩ → Step P m (.scopeD x f .skip) (.ok (m.remove x) .skip)
   /-- A panic stops at the frame: the destructor runs, `x` is freed, and the
       panic goes on. The frame is gone, so a panic in the destructor does not
       run it again, and `scope x` still frees the fields. -/
@@ -1269,8 +1267,13 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
       Step P m s (.panic m1) → m1.st x = some ⟨true, some v⟩ → v.isNode = false →
       Step P m (.scopeD x f s)
         (.ok { m1 with nv := m1.nv + 1 } (.seq (.scope x (.letcall m1.nv f [x] .skip)) .panic))
-  /-- A2-drop.3b: a panic with a `Vec` of destructor values still owned
-      drains it first (each element's destructor runs), then goes on. -/
+  /-- A2-drop.3b: a panic stops at the frame of a `Vec` of destructor values
+      too: the frame drains what the `Vec` still holds (each element's
+      destructor runs, in index order), then the panic goes on.  A panic in
+      an element's destructor comes back here through the drain's own frame,
+      which goes on with the elements after it: each destructor once, as the
+      journal runs bindings' (the runtime's element loop does not go on yet,
+      Agora #608; `CLAIM.md`). -/
   | scopeDPDrain {m m1 : Mem} {x : Var} {f : Nat} {s : Stmt} {t : Ty} {c d : Nat} {es : List Val} :
       Step P m s (.panic m1) → m1.st x = some ⟨true, some (.node t c d es)⟩ →
       Step P m (.scopeD x f s) (.ok m1 (.seq (.scopeD x f .skip) .panic))

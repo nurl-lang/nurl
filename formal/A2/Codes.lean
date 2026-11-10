@@ -622,18 +622,9 @@ theorem codes_step {P : Prog} (hPc : ProgCodes P) {m : Mem} {s : Stmt} {r : Res}
   | scopeDIn _ ih =>
     intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     obtain ⟨h1, h2⟩ := (ih hm hB hs).1 _ _ rfl; exact ⟨h1, h2⟩
-  | scopeDEnd _ =>
+  | scopeDEnd _ _ =>
     intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact ⟨hm.of_st rfl, trivial⟩
-  | scopeDMoved _ =>
-    intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
-    exact ⟨hm.remove _, trivial⟩
-  | scopeDP _ _ _ ih =>
-    intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
-    exact ⟨((ih hm hB hs).2 _ rfl).of_st rfl, trivial, trivial⟩
-  | scopeDPMoved _ _ ih =>
-    intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
-    exact ((ih hm hB hs).2 _ rfl).remove _
   | scopeDDrain _ =>
     intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact ⟨hm.of_st rfl, by simp [Stmt.codesOK, Rhs.codeOK]⟩
@@ -643,6 +634,15 @@ theorem codes_step {P : Prog} (hPc : ProgCodes P) {m : Mem} {s : Stmt} {r : Res}
   | scopeDPDrain _ _ ih =>
     intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact ⟨(ih hm hB hs).2 _ rfl, trivial, trivial⟩
+  | scopeDMoved _ =>
+    intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    exact ⟨hm.remove _, trivial⟩
+  | scopeDP _ _ _ ih =>
+    intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    exact ⟨((ih hm hB hs).2 _ rfl).of_st rfl, trivial, trivial⟩
+  | scopeDPMoved _ _ ih =>
+    intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    exact ((ih hm hB hs).2 _ rfl).remove _
   | callc hslot _ hf _ hb =>
     intro hm _ hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     have hT := hm.slot hslot
@@ -751,7 +751,6 @@ theorem globs_step {P : Prog} {GT : GTy} (hPG : ProgGlobs P GT) {m : Mem} {s : S
   | «while» => intro hs _ _ h; cases h; exact ⟨⟨hs, hs⟩, trivial⟩
   | withElem _ _ _ _ _ => intro hs _ _ h; cases h; exact ⟨hs, trivial⟩
   | callcE _ _ _ _ => intro hs _ _ h; cases h; exact ⟨⟨trivial, trivial⟩, hs⟩
-  | scopeDDrain _ | scopeDEmpty _ => intro hs _ _ h; cases h; simp [Stmt.globsAt, Rhs.globAt]
-  | _ => intro hs _ _ h; cases h <;> simp_all [Stmt.globsAt]
+  | _ => intro hs _ _ h; cases h <;> simp_all [Stmt.globsAt, Rhs.globAt]
 
 end A2

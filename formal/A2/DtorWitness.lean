@@ -19,7 +19,12 @@ Two kinds of fact, both checked here (`check.sh` prints their axioms):
   the cut adds are satisfiable.  A2-drop.3b adds two more: an option of a
   destructor value (`main3`, typed under 3a's rules too), and an enum
   holding a destructor value two levels down (`main4`, which only the deep
-  `Ty.holdsDtor` sends to `letd`).  `lock_checkout_assign` types the gap the
+  `Ty.holdsDtor` sends to `letd`), and a `Vec` of destructor values with a
+  destructor value pushed into it, bound by `letd` (`main5`: that the
+  binder's premises are satisfiable; the drain's steps are theorems about
+  any frame, `A2.Dtor.scopeD_frame_value`, `scopeD_end_drains`,
+  `scopeD_drain_binds`, `scopeD_end_empty`, `scopeD_panic_drains`).
+  `lock_checkout_assign` types the gap the
   docs list (a lock check-out binding of a destructor type is assigned, its
   old value dropped with no destructor: A2-drop.3d).
 -/
@@ -92,9 +97,11 @@ theorem fnOK_dtor_params {P : Prog} {fn : Fn} (h : FnOK P fn) :
   h.2.2.2.2.2.2.2.2.2.2.2.1
 
 /-- **The scope end of a destructor frame runs the destructor.** In a typed
-    `scopeD x f` frame, `f` is a destructor (`DtorOK`) of `x`'s type, a
-    destructor type `Ty.dtor f t`; when its body is done and `x` still owns its value, the frame's
-    one step runs `f` on `x` lent, then `scope x` frees the tree. -/
+    `scopeD x f` frame, `f` is a destructor (`DtorOK`) of a destructor type
+    `Ty.dtor f t` (which is `x`'s type when `x` owns a value that is no node,
+    `scopeD_frame_value`).  When its body is done and `x` still owns its
+    value, a struct or an enum (no `Vec`'s node), the frame's one step runs
+    `f` on `x` lent, then `scope x` frees the tree. -/
 theorem scopeD_end_runs_dtor {P : Prog} {Γ Δ : Ctx} {F : List Var} {x : Var} {f : Nat}
     {m : Mem} {v : Val} (ht : StmtT P Γ F (.scopeD x f .skip) Δ)
     (hx : m.st x = some ⟨true, some v⟩) (hv : v.isNode = false) :
@@ -107,7 +114,7 @@ theorem scopeD_end_runs_dtor {P : Prog} {Γ Δ : Ctx} {F : List Var} {x : Var} {
     induction ht with
     | scopeD hE _ _ _ _ _ _ _ =>
       cases hst
-      obtain ⟨E, t, _, _, h3, _, h5⟩ := hE
+      obtain ⟨E, t, _, _, _, _, h5, _⟩ := hE
       exact ⟨t, h5⟩
     | sub _ _ _ ih => exact ih hst
     | _ => cases hst
@@ -115,8 +122,8 @@ theorem scopeD_end_runs_dtor {P : Prog} {Γ Δ : Ctx} {F : List Var} {x : Var} {
     | scopeDIn hs => exact (skip_no_step hs).elim
     | scopeDEnd _ _ => rfl
     | scopeDMoved hm => rw [hx] at hm; cases hm
-    | scopeDDrain hm => rw [hx] at hm; cases hm; cases hv
-    | scopeDEmpty hm => rw [hx] at hm; cases hm; cases hv
+    | scopeDDrain h => rw [hx] at h; cases h; cases hv
+    | scopeDEmpty h => rw [hx] at h; cases h; cases hv
     | scopeDP hs _ _ => exact (skip_no_step hs).elim
     | scopeDPDrain hs _ => exact (skip_no_step hs).elim
     | scopeDPMoved hs _ => exact (skip_no_step hs).elim
@@ -130,15 +137,206 @@ theorem scopeD_panic_runs_dtor {P : Prog} {x : Var} {f : Nat} {m m1 : Mem} {s : 
       (.ok { m1 with nv := m1.nv + 1 } (.seq (.scope x (.letcall m1.nv f [x] .skip)) .panic)) :=
   Step.scopeDP hs hx hv
 
+/-- **A2-drop.3b: the scope end of a `Vec` of destructor values drains it.**
+    When the frame's body is done and `x` still owns a `Vec` with an element,
+    the frame's one step hands element 0 to a fresh destructor binding
+    (`vec_remove x 0`), under the same frame ... -/
+theorem scopeD_end_drains {P : Prog} {x : Var} {f : Nat} {m : Mem} {t : Ty} {c d : Nat} {e : Val}
+    {es : List Val} (hx : m.st x = some ⟨true, some (.node t c d (e :: es))⟩) :
+    Step P m (.scopeD x f .skip)
+        (.ok { m with nv := m.nv + 1 } (.scopeD x f (.letd m.nv f (.popFront x) .skip))) ∧
+      ∀ r, Step P m (.scopeD x f .skip) r →
+        r = .ok { m with nv := m.nv + 1 } (.scopeD x f (.letd m.nv f (.popFront x) .skip)) := by
+  refine ⟨Step.scopeDDrain hx, fun r h => ?_⟩
+  cases h with
+  | scopeDIn hs => exact (skip_no_step hs).elim
+  | scopeDEnd h hv => rw [hx] at h; cases h; cases hv
+  | scopeDMoved hm => rw [hx] at hm; cases hm
+  | scopeDDrain _ => rfl
+  | scopeDEmpty h => rw [hx] at h; cases h
+  | scopeDP hs _ _ => exact (skip_no_step hs).elim
+  | scopeDPDrain hs _ => exact (skip_no_step hs).elim
+  | scopeDPMoved hs _ => exact (skip_no_step hs).elim
+  | waitPanic hw => exact hw.elim
+
+/-- ... and the step after it (stated for any unbound `y`; the drain's is
+    the fresh `m.nv`): that binding's own frame is next, the element in it,
+    the `Vec` one element shorter (the elements after it, in their order).
+    One step, not the run: that the element's frame then runs its destructor
+    is `scopeD_end_runs_dtor` of a value that is no node, which a typed
+    `Vec`'s elements are (`scopeD_frame_value`). -/
+theorem scopeD_drain_binds {P : Prog} {x y : Var} {f : Nat} {m : Mem} {t : Ty} {c d : Nat} {e : Val}
+    {es : List Val} (hx : m.st x = some ⟨true, some (.node t c d (e :: es))⟩) (hy : m.st y = none)
+    (hc : m.alloc c = true) (hd : m.alloc d = true) :
+    Step P m (.scopeD x f (.letd y f (.popFront x) .skip))
+      (.ok ((m.set x ⟨true, some (.node t c d es)⟩).set y ⟨e.owns, some e⟩)
+        (.scopeD x f (.scopeD y f .skip))) :=
+  Step.scopeDIn (Step.letd hy (EvalR.popFront hx hc hd))
+
+/-- ... and with every element gone the empty `Vec` is freed as any binding's
+    value is: the frame's one step leaves `scope x`. -/
+theorem scopeD_end_empty {P : Prog} {x : Var} {f : Nat} {m : Mem} {t : Ty} {c d : Nat}
+    (hx : m.st x = some ⟨true, some (.node t c d [])⟩) :
+    Step P m (.scopeD x f .skip) (.ok m (.scope x .skip)) ∧
+      ∀ r, Step P m (.scopeD x f .skip) r → r = .ok m (.scope x .skip) := by
+  refine ⟨Step.scopeDEmpty hx, fun r h => ?_⟩
+  cases h with
+  | scopeDIn hs => exact (skip_no_step hs).elim
+  | scopeDEnd h hv => rw [hx] at h; cases h; cases hv
+  | scopeDMoved hm => rw [hx] at hm; cases hm
+  | scopeDDrain h => rw [hx] at h; cases h
+  | scopeDEmpty _ => rfl
+  | scopeDP hs _ _ => exact (skip_no_step hs).elim
+  | scopeDPDrain hs _ => exact (skip_no_step hs).elim
+  | scopeDPMoved hs _ => exact (skip_no_step hs).elim
+  | waitPanic hw => exact hw.elim
+
+/-- …and on the panic path, one step: a panic out of the body with `x`
+    still owning a `Vec` stops at the frame, and leaves the frame at its end
+    again (to drain what is left, `scopeD_end_drains`) followed by the panic.
+    The body may be the drain's own (an element's frame whose destructor
+    panicked), so the same step takes the drain on past that element. -/
+theorem scopeD_panic_drains {P : Prog} {x : Var} {f : Nat} {m m1 : Mem} {s : Stmt} {t : Ty}
+    {c d : Nat} {es : List Val} (hs : Step P m s (.panic m1))
+    (hx : m1.st x = some ⟨true, some (.node t c d es)⟩) :
+    Step P m (.scopeD x f s) (.ok m1 (.seq (.scopeD x f .skip) .panic)) :=
+  Step.scopeDPDrain hs hx
+
+/-- A2-drop.3b: what a typed `letd` binds: a destructor value (a struct or
+    an enum made here, or a value of that destructor type moved in), or a
+    `Vec` of destructor values, whose elements hold no views (`LetdTy`); its
+    scope is a destructor frame of that type (`scopeD_end_runs_dtor`,
+    `scopeD_end_drains`). -/
+theorem letd_binds {P : Prog} {Γ Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {r : Rhs} {s : Stmt}
+    (h : StmtT P Γ F (.letd x f r s) Δ) :
+    ∃ Γ0 E Γ1 t τ, RhsT Γ0 F r E Γ1 ∧ LetdTy f t E.ty τ ∧ t.isStruct = true ∧ DtorOK P f (.dtor f t) := by
+  generalize hst : Stmt.letd x f r s = st at h
+  induction h with
+  | letd _ _ _ hr _ hty hst' _ hok _ _ _ _ => cases hst; exact ⟨_, _, _, _, _, hr, hty, hst', hok⟩
+  | sub _ _ _ ih => exact ih hst
+  | _ => cases hst
+
+/-- A2-drop.3b: a typed `vec_free` releases elements that own no destructor
+    value: in the context it is typed in, its `Vec`'s element type is free
+    of one.  A `Vec` of destructor values is not freed, it is drained at its
+    binding's end. -/
+theorem free_dtor_free {P : Prog} {Γ Δ : Ctx} {F : List Var} {x : Var}
+    (h : StmtT P Γ F (.free x) Δ) :
+    ∃ (E : Entry) (t : Ty), Γ x = some E ∧ E.ty = .vec t ∧ t.dtorFree = true := by
+  generalize hst : Stmt.free x = st at h
+  induction h with
+  | free hx _ _ hty _ _ hdf => cases hst; exact ⟨_, _, hx, hty, hdf⟩
+  | @sub Γa _ _ _ _ _ hw _ _ ih =>
+    obtain ⟨E', t, hx', hty, hdf⟩ := ih hst
+    obtain ⟨hn, hE⟩ := hw.1 x
+    cases hg : Γa x with
+    | none => rw [hn.mp hg] at hx'; cases hx'
+    | some E => exact ⟨E, t, rfl, by rw [← (hE E E' hg hx').ty]; exact hty, hdf⟩
+  | _ => cases hst
+
+/-- A2-drop.3b: a typed change of a `Vec`'s elements that drops some
+    (`vec_truncate`, `vec_clear`, `vec_set`) drops no destructor value: in
+    the context it is typed in, the `Vec`'s element type is free of one. -/
+theorem edit_drops_dtor_free {P : Prog} {Γ Δ : Ctx} {F : List Var} {b : Bool} {x : Var} {op : Edit}
+    (h : StmtT P Γ F (.edit b x op) Δ) (hd : op.drops = true) :
+    ∃ (E : Entry) (t : Ty), Γ x = some E ∧ E.ty = .vec t ∧ t.dtorFree = true := by
+  generalize hst : Stmt.edit b x op = st at h
+  induction h with
+  | editB hx _ _ hty _ _ _ _ _ _ _ _ hdf => cases hst; exact ⟨_, _, hx, hty, hdf hd⟩
+  | editBV hx _ _ hty _ _ _ _ _ _ _ _ _ _ hdf => cases hst; exact ⟨_, _, hx, hty, hdf hd⟩
+  | @sub Γa _ _ _ _ _ hw _ _ ih =>
+    obtain ⟨E', t, hx', hty, hdf⟩ := ih hst
+    obtain ⟨hn, hE⟩ := hw.1 x
+    cases hg : Γa x with
+    | none => rw [hn.mp hg] at hx'; cases hx'
+    | some E => exact ⟨E, t, rfl, by rw [← (hE E E' hg hx').ty]; exact hty, hdf⟩
+  | _ => cases hst
+
+/-- A2-drop.3b: the element a typed `withElem` checks out owns no destructor
+    value (its binding is no `letd`'s): in the context it is typed in, the
+    `Vec`'s element type is free of one. -/
+theorem withElem_dtor_free {P : Prog} {Γ Δ : Ctx} {F : List Var} {v x : Var} {i : Expr} {s : Stmt}
+    (h : StmtT P Γ F (.withElem v i x s) Δ) :
+    ∃ (Ev : Entry) (t : Ty), Γ v = some Ev ∧ Ev.ty = .vec t ∧ t.dtorFree = true := by
+  generalize hst : Stmt.withElem v i x s = st at h
+  induction h with
+  | @withElem Γ _ _ _ _ _ _ _ _ Ev _ _ _ _ hv _ _ _ _ hr _ _ _ _ hdf _ _ =>
+    cases hst
+    cases hr with
+    | @pop _ E0 t hy _ hty _ _ _ =>
+      simp only [A2.kill, hv, Option.map_some, Option.some.injEq] at hy
+      subst hy
+      rw [killE_ty] at hty
+      refine ⟨Ev, t, hv, hty, ?_⟩
+      cases t <;> first | rfl | exact hdf
+  | @sub Γa _ _ _ _ _ hw _ _ ih =>
+    obtain ⟨E', t, hx', hty, hdf⟩ := ih hst
+    obtain ⟨hn, hE⟩ := hw.1 v
+    cases hg : Γa v with
+    | none => rw [hn.mp hg] at hx'; cases hx'
+    | some E => exact ⟨E, t, rfl, by rw [← (hE E E' hg hx').ty]; exact hty, hdf⟩
+  | _ => cases hst
+
+/-- A2-drop.3b: a typed destructor frame's binding, in the context the frame
+    is typed in: an owner of the destructor type `Ty.dtor f t`, or of a `Vec`
+    of such values whose elements hold no views; `f` is a `DtorOK` destructor
+    of `Ty.dtor f t`, a struct's or an enum's. -/
+theorem scopeD_typed {P : Prog} {Γ Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {s : Stmt}
+    (h : StmtT P Γ F (.scopeD x f s) Δ) :
+    ∃ (E : Entry) (t : Ty), Γ x = some E ∧ E.mode = .own ∧ ScopeDTy f t E.ty ∧
+      DtorOK P f (.dtor f t) ∧ t.isStruct = true := by
+  generalize hst : Stmt.scopeD x f s = st at h
+  induction h with
+  | scopeD hE _ _ _ _ _ _ _ =>
+    cases hst
+    obtain ⟨E, t, hx, hmo, hty, _, hok, hstr⟩ := hE
+    exact ⟨E, t, hx, hmo, hty, hok, hstr⟩
+  | @sub Γa _ _ _ _ _ hw _ _ ih =>
+    obtain ⟨E', t, hx', hmo, hty, hok, hstr⟩ := ih hst
+    obtain ⟨hn, hE⟩ := hw.1 x
+    cases hg : Γa x with
+    | none => rw [hn.mp hg] at hx'; cases hx'
+    | some E =>
+      have hw' := hE E E' hg hx'
+      exact ⟨E, t, rfl, by rw [← hw'.mode]; exact hmo, by rw [← hw'.ty]; exact hty, hok, hstr⟩
+  | _ => cases hst
+
+/-- **A2-drop.3b: what a typed destructor frame's binding owns says which
+    step its end takes.** In a state the invariant holds of, a value that is
+    no node is of the destructor type `Ty.dtor f t` (`scopeD_end_runs_dtor`'s
+    step runs `f`, a destructor of that type, on it), and a node is a `Vec`
+    of such values, whose elements are of that type (`scopeD_end_drains` /
+    `scopeD_end_empty`'s steps drain it). -/
+theorem scopeD_frame_value {P : Prog} {Γ Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {s : Stmt}
+    {m : Mem} {v : Val} (ht : StmtT P Γ F (.scopeD x f s) Δ) (hi : MInv m Γ)
+    (hx : m.st x = some ⟨true, some v⟩) :
+    ∃ (E : Entry) (t : Ty), Γ x = some E ∧ DtorOK P f (.dtor f t) ∧
+      ((v.isNode = false ∧ E.ty = .dtor f t) ∨
+        (∃ c d es, v = .node (.dtor f t) c d es ∧ E.ty = .vec (.dtor f t) ∧
+          ∀ e ∈ es, WFv (.dtor f t) e ∧ e.isNode = false)) := by
+  obtain ⟨E, t, hE, hmo, hty, hok, hstr⟩ := scopeD_typed ht
+  have hw := hi.own_wfv hE (by rw [hmo]; rfl) hx
+  refine ⟨E, t, hE, hok, ?_⟩
+  rcases hty.shape hstr hw with ⟨hn, he⟩ | ⟨c, d, es, hv, he, _⟩
+  · exact Or.inl ⟨hn, he⟩
+  · refine Or.inr ⟨c, d, es, hv, he, fun e hmem => ?_⟩
+    rw [he, hv] at hw
+    cases hw with
+    | node hes =>
+      have hwe := hes e hmem
+      refine ⟨hwe, ?_⟩
+      rcases (ScopeDTy.shape (f := f) (t := t) (Or.inl rfl) hstr hwe) with ⟨hn, _⟩ | ⟨_, _, _, _, h', _⟩
+      · exact hn
+      · cases h'
+
 /-- A2-drop.3b: in a running configuration, a binding whose type is a `Vec`
     has elements that own no destructor value, or are of a destructor type
     themselves: the drained `Vec` (`Ty.vecD`), which only a binding's own type
     may be (`vecs_dtor_free`: anywhere else in a type a `Vec`'s elements own
-    none).  No binder binds a `Vec` of the second kind yet (`letv` refuses
-    it, `letd` asks a struct or an enum: the drain's binder is A2-drop.3b's
-    milestone 2b), so no typed state has one; what a `Vec`'s drop
-    releases may still run a destructor in nurlc: the payload of a share whose
-    last share it drops, or a closure's environment, A2-drop.3c and 3d. -/
+    none).  A `Vec` of the second kind is `letd`'s (`letv` refuses it), and
+    its frame's end drains it (`scopeD_end_drains`); what any other `Vec`'s
+    drop releases may still run a destructor in nurlc: the payload of a share
+    whose last share it drops, or a closure's environment, A2-drop.3c and 3d. -/
 theorem vec_elems_dtor_free {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {E : Entry} {t : Ty}
     (hx : Γ x = some E) (ht : E.ty = .vec t) : t.dtorFree = true ∨ t.hasDtor = true := by
   have h := hi.tyok hx; rw [ht] at h; exact Ty.ok_vec_free h
@@ -335,7 +533,7 @@ theorem main_typed : ∃ Δ, StmtT P (fun _ => none) [] main Δ := by
       (by simp [K2, K1, A2.setE, upd]) rfl PushArg.int (by simp [intE, Mode.ownSlot]) rfl rfl
   have hd := StmtT.letd (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .pair 0 1)
     (s := .skip) (E := EP) (t := T) (H := []) rfl (by simp [K2, K1, A2.setE, upd]) (by simp) hpair rfl
-    DtorBind.made rfl rfl dtor_ok (HeldUp.refl _ _) StmtT.skip (hK3.endOK _)
+    (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl dtor_ok (HeldUp.refl _ _) StmtT.skip (hK3.endOK _)
   have h1 := StmtT.letv (P := P) (x := 1) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K1) (Γ1 := K1)
     rfl (by simp [K1, A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit) hd ((hK3.exitScope 2).endOK _)
   exact ⟨_, StmtT.letv (P := P) (x := 0) (r := .expr (.lit 1)) (E := intE) (F := []) (Γ := fun _ => none)
@@ -491,7 +689,7 @@ theorem mk_typed : ∃ Δ, StmtT P (sigCtx mk) [] mk.body Δ ∧ NoRootb Δ ∧
       (by simp [C2, A2.setE, upd]) rfl PushArg.int (by simp [intE, Mode.ownSlot]) rfl rfl
   have hd := StmtT.letd (P := P) (Γ := C2) (Γ1 := C2) (F := []) (x := 3) (f := 0) (r := .pair 1 2)
     (s := .assign 0 (.var 3)) (E := EP) (t := T) (H := []) rfl (by simp [C2, C1, S, A2.setE, upd]) (by simp)
-    hpair rfl DtorBind.made rfl rfl dtor_ok (HeldUp.refl _ _) ha (hDa.endOK _)
+    hpair rfl (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl dtor_ok (HeldUp.refl _ _) ha (hDa.endOK _)
   have h2 := StmtT.letv (P := P) (x := 2) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := C1) (Γ1 := C1)
     rfl (by simp [C1, S, A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit) hd ((hDa.exitScope 3).endOK _)
   have h1 := StmtT.letv (P := P) (x := 1) (r := .expr (.lit 1)) (E := intE) (F := []) (Γ := S) (Γ1 := S)
@@ -543,7 +741,7 @@ theorem main2_typed : ∃ Δ, StmtT P (fun _ => none) [] main2 Δ := by
     simp [ED2, Ecr, Entry.arm, DT, T, Ty.dtorViews, Ty.hasDtor, Ty.holdsView]
   have hK2 : NoRootb (A2.setE K1 1 ED2) := hK1.setE hED2
   have hd := StmtT.letd (P := P) (Γ := K) (Γ1 := K1) (F := []) (x := 1) (f := 0) (r := .var 0) (s := .skip)
-    (t := T) (H := Ecr.held) rfl (by simp [K, A2.setE, upd]) (by simp) hmv rfl DtorBind.moved rfl rfl dtor_ok
+    (t := T) (H := Ecr.held) rfl (by simp [K, A2.setE, upd]) (by simp) hmv rfl (Or.inl ⟨rfl, Or.inr rfl⟩) rfl rfl dtor_ok
     (HeldUp.refl _ _) StmtT.skip (hK2.endOK _)
   exact ⟨_, StmtT.letcall (P := P) (Γ := fun _ => none) (F := []) (x := 0) (f := 1) (args := [])
     (s := .letd 1 0 (.var 0) .skip) (E := Ecr) (Γ1 := fun _ => none) rfl rfl (by simp) hc hd
@@ -612,10 +810,10 @@ theorem main3_typed : ∃ Δ, StmtT P (fun _ => none) [] main3 Δ := by
   have hK5 : NoRootb (A2.setE K4 3 EOd) := hK4.setE hEOd
   have hdo := StmtT.letd (P := P) (Γ := K3) (Γ1 := K4) (F := []) (x := 3) (f := 2) (r := .inl 2 .int)
     (s := .skip) (E := EO) (t := OT) (H := []) rfl (by simp [K3, K2, K1, A2.setE, upd]) (by simp) hinl rfl
-    DtorBind.made rfl rfl odtor_ok (HeldUp.refl _ _) StmtT.skip (hK5.endOK _)
+    (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl odtor_ok (HeldUp.refl _ _) StmtT.skip (hK5.endOK _)
   have hd := StmtT.letd (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .pair 0 1)
     (s := .letd 3 2 (.inl 2 .int) .skip) (E := EP) (t := T) (H := []) rfl (by simp [K2, K1, A2.setE, upd])
-    (by simp) hpair rfl DtorBind.made rfl rfl dtor_ok (HeldUp.refl _ _) hdo ((hK5.exitScope 3).endOK _)
+    (by simp) hpair rfl (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl dtor_ok (HeldUp.refl _ _) hdo ((hK5.exitScope 3).endOK _)
   have h1 := StmtT.letv (P := P) (x := 1) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K1) (Γ1 := K1)
     rfl (by simp [K1, A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit) hd
     (((hK5.exitScope 3).exitScope 2).endOK _)
@@ -628,6 +826,82 @@ theorem main3_safe {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem 4) main3 (.ok 
     ¬ Stuck P m' s' := by
   obtain ⟨Δ, ht⟩ := main3_typed
   exact memory_safe prog_ok prog_codes ht rfl (by simp [main3, Stmt.codesOK, Rhs.codeOK]) (by decide) hr
+
+/-! ### A `Vec` of destructor values (A2-drop.3b, the drain)
+
+`: a 1  : b 2  :drop x ( pair a b )  :drop v ( vec_new DT )  ( vec_push v x )`:
+the destructor value moves into the `Vec`, whose binding is `letd`'s, at
+the type `vec DT`: its frame's end drains it (`A2.Dtor.scopeD_end_drains`),
+each element's destructor running in its own frame. -/
+
+def main5 : Stmt :=
+  .letv 0 (.expr (.lit 1)) (.letv 1 (.expr (.lit 2))
+    (.letd 2 0 (.pair 0 1) (.letd 3 0 (.new DT) (.push 3 2))))
+
+theorem main5_typed : ∃ Δ, StmtT P (fun _ => none) [] main5 Δ := by
+  let K1 : Ctx := A2.setE (fun _ => none) 0 intE
+  let K2 : Ctx := A2.setE K1 1 intE
+  have hK1 : NoRootb K1 := noRootb_empty.setE (by simp [intE])
+  have hK2 : NoRootb K2 := hK1.setE (by simp [intE])
+  let ED : Entry := Entry.arm { EP with ty := DT, held := [] }
+  have hEDe : ED = ⟨DT, .own, true, [], [], false, false⟩ := by
+    simp [ED, EP, Entry.arm, DT, T, Ty.dtorViews, Ty.hasDtor, Ty.holdsView]
+  let K3 : Ctx := A2.setE K2 2 ED
+  have hK3 : NoRootb K3 := hK2.setE (by rw [hEDe]; simp)
+  have hpair : RhsT K2 [] (.pair 0 1) EP K2 :=
+    RhsT.pair (Ey := intE) (Ez := intE) (by simp [K2, K1, A2.setE, upd]) rfl PushArg.int
+      (by simp [K2, K1, A2.setE, upd]) rfl PushArg.int (by simp [intE, Mode.ownSlot]) rfl rfl
+  -- the `Vec` of destructor values, bound by `letd` at its own type
+  let EN : Entry := ⟨.vec DT, .own, true, [], [], false, false⟩
+  have hnew : RhsT K3 [] (.new DT) EN K3 := RhsT.new (by decide)
+  let EV : Entry := Entry.arm { EN with ty := .vec DT, held := [] }
+  have hEVe : EV = ⟨.vec DT, .own, true, [], [], false, false⟩ := by
+    simp [EV, EN, Entry.arm, DT, T, Ty.dtorViews, Ty.hasDtor]
+  let K4 : Ctx := A2.setE K3 3 EV
+  have hK4 : NoRootb K4 := hK3.setE (by rw [hEVe]; simp)
+  -- the destructor value moves into it
+  let K5 : Ctx := A2.setE (kill .replace false 2 K4) 2 { ED with live := false, dtor := false }
+  have hK5 : NoRootb K5 := (hK4.kill _ _ _).setE (by rw [hEDe]; simp)
+  have hmove : PushArg K4 [] 2 ED DT ED.held K5 :=
+    PushArg.move (Γ := K4) (F := []) (y := 2) (E := ED) (t := DT) rfl (by rw [hEDe]) (by simp)
+      (hK4.noPin _) (DtorSafe.of_none (fun v E h => (hK4 v E h).2.1) _ _ _)
+  have hK53 : K5 3 = some EV := by
+    simp [K5, K4, A2.setE, upd, A2.kill, killE, hits, hEVe, Entry.vdeps, Mode.ownSlot]
+  have hpush := StmtT.push (P := P) (Γ := K4) (Γ1 := K5) (F := []) (x := 3) (y := 2) (Ex := EV) (Ey := ED)
+    (Ex1 := EV) (t := DT) (D := ED.held) (by simp [K4, A2.setE, upd]) (by rw [hEVe]) (by rw [hEVe])
+    (Or.inl (by rw [hEVe])) (by simp) (by simp [K4, K3, A2.setE, upd]) (by rw [hEDe]) (by rw [hEDe])
+    (by decide) hmove (by rw [hEDe]; simp [roots]) hK53 (by rw [hEVe])
+    (DtorSafe.of_none (fun v E h => (hK5 v E h).2.1) _ _ _) (by rw [hEVe]; simp)
+  have hK6 : NoRootb (A2.setE (kill .realloc DT.holdsView 3 K5) 3
+      { EV with held := EV.held ++ ownHeld true DT ED.held }) :=
+    (hK5.kill _ _ _).setE (by rw [hEVe]; simp)
+  have hdv := StmtT.letd (P := P) (Γ := K3) (Γ1 := K3) (F := []) (x := 3) (f := 0) (r := .new DT)
+    (s := .push 3 2) (E := EN) (t := T) (H := []) (τ := .vec DT) rfl (by simp [K3, K2, K1, A2.setE, upd])
+    (by simp) hnew rfl (Or.inr ⟨rfl, rfl, rfl⟩) rfl rfl dtor_ok (HeldUp.refl _ _) hpush (hK6.endOK _)
+  have hd := StmtT.letd (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .pair 0 1)
+    (s := .letd 3 0 (.new DT) (.push 3 2)) (E := EP) (t := T) (H := []) rfl (by simp [K2, K1, A2.setE, upd])
+    (by simp) hpair rfl (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl dtor_ok (HeldUp.refl _ _) hdv
+    ((hK6.exitScope 3).endOK _)
+  have h1 := StmtT.letv (P := P) (x := 1) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K1) (Γ1 := K1)
+    rfl (by simp [K1, A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit) hd
+    (((hK6.exitScope 3).exitScope 2).endOK _)
+  exact ⟨_, StmtT.letv (P := P) (x := 0) (r := .expr (.lit 1)) (E := intE) (F := []) (Γ := fun _ => none)
+    (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.expr ExprT.lit) h1
+    ((((hK6.exitScope 3).exitScope 2).exitScope 1).endOK _)⟩
+
+/-- The program with a `Vec` of destructor values is memory safe. -/
+theorem main5_safe {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem 4) main5 (.ok m' s')) :
+    ¬ Stuck P m' s' := by
+  obtain ⟨Δ, ht⟩ := main5_typed
+  exact memory_safe prog_ok prog_codes ht rfl (by simp [main5, Stmt.codesOK, Rhs.codeOK]) (by decide) hr
+
+/-- ... and `letv` refuses that `Vec`: it holds destructor values. -/
+theorem main5_letv_refused {Γ Δ : Ctx} {F : List Var} {x : Var} {s : Stmt} :
+    ¬ StmtT P Γ F (.letv x (.new DT) s) Δ := by
+  intro h
+  obtain ⟨Γ0, E, Γ1, hr, hnd⟩ := A2.Dtor.letv_owned_no_dtor h
+  cases hr with
+  | new _ => exact absurd (hnd rfl) (by decide)
 
 /-! ### A destructor value two levels down (A2-drop.3b)
 
@@ -656,7 +930,7 @@ theorem main4_typed : ∃ Δ, StmtT P (fun _ => none) [] main4 Δ := by
   have hK2 : NoRootb (A2.setE K1 1 ESd) := hK1.setE hESd
   have hd := StmtT.letd (P := P) (Γ := K1) (Γ1 := K1) (F := []) (x := 1) (f := 3) (r := .inr AT 0)
     (s := .skip) (E := ES) (t := ST) (H := []) rfl (by simp [K1, A2.setE]) (by simp) hinr rfl
-    DtorBind.made rfl rfl gdtor_ok (HeldUp.refl _ _) StmtT.skip (hK2.endOK _)
+    (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl gdtor_ok (HeldUp.refl _ _) StmtT.skip (hK2.endOK _)
   exact ⟨_, StmtT.letv (P := P) (x := 0) (r := .expr (.lit 3)) (E := intE) (F := []) (Γ := fun _ => none)
     (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.expr ExprT.lit) hd ((hK2.exitScope 1).endOK _)⟩
 

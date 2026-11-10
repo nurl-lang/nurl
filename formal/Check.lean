@@ -21,6 +21,18 @@ import A3
 #print axioms A2.Dtor.fnOK_dtor_params
 #print axioms A2.Dtor.scopeD_end_runs_dtor
 #print axioms A2.Dtor.scopeD_panic_runs_dtor
+-- A2-drop.3b, the drain: a `Vec` of destructor values, bound by `letd` and drained at its
+-- frame's end and on a panic; what drops elements with no code refuses one
+#print axioms A2.Dtor.letd_binds
+#print axioms A2.Dtor.scopeD_typed
+#print axioms A2.Dtor.scopeD_frame_value
+#print axioms A2.Dtor.scopeD_end_drains
+#print axioms A2.Dtor.scopeD_drain_binds
+#print axioms A2.Dtor.scopeD_end_empty
+#print axioms A2.Dtor.scopeD_panic_drains
+#print axioms A2.Dtor.free_dtor_free
+#print axioms A2.Dtor.edit_drops_dtor_free
+#print axioms A2.Dtor.withElem_dtor_free
 #print axioms A2.Dtor.vec_elems_dtor_free
 #print axioms A2.Dtor.new_dtor_free
 #print axioms A2.Dtor.vecs_dtor_free
@@ -32,6 +44,8 @@ import A3
 #print axioms A2.DtorWitness.main3_safe
 #print axioms A2.DtorWitness.main4_safe
 #print axioms A2.DtorWitness.main4_letv_refused
+#print axioms A2.DtorWitness.main5_safe
+#print axioms A2.DtorWitness.main5_letv_refused
 #print axioms A2.DtorWitness.enum_lends
 #print axioms A2.DtorWitness.enum_take_refused
 #print axioms A2.DtorWitness.lock_checkout_assign

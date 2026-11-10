@@ -660,7 +660,7 @@ theorem progress {P : Prog}
       cases val with
       | none => exact Or.inr <| Or.inr ⟨_, Step.scopeDMoved hsl⟩
       | some v =>
-        -- (A2-drop.3b: a drained `Vec`'s node, its elements one at a time)
+        -- (A2-drop.3b: a `Vec`'s node is drained, element by element)
         cases v with
         | node t c d es =>
           cases es with
@@ -747,7 +747,7 @@ theorem progress {P : Prog}
     obtain ⟨v, m1, htk, hst, hal⟩ := htake
     exact Or.inr <| Or.inr ⟨_, Step.push htk (by rw [hst]; exact hT) (by rw [hal]; exact hac)
       (by rw [hal]; exact had)⟩
-  | @withElem Γ Γ1 Δ1 Δ F y x i k Ey' E _ hx _ _ _ he _ _ hr _ _ _ _ _ _ =>
+  | @withElem Γ Γ1 Δ1 Δ F y x i k Ey' E _ hx _ _ _ he _ _ hr _ _ _ _ _ _ _ =>
     -- `y` owns a `Vec`: element `i` moves out, or the index is out of range
     intro m hcd hi
     have hmx : m.st x = none := by

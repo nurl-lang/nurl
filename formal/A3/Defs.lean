@@ -313,7 +313,7 @@ theorem _root_.A2.StmtT.wguardGet {P : Prog} {Γ : Ctx} {F : List Var} {x y : Va
   have hl : lockE (.vec u) = ⟨.vec u, .own, true, [], [], false, false⟩ := by simp [lockE]
   rw [hl] at hx
   refine StmtT.editB (t := u) hy rfl rfl rfl huv hyF (EditArg.trunc hi) (fun _ h => by cases h) hy rfl
-    (by simp [memDeps, Kind.isName]) ?_
+    (by simp [memDeps, Kind.isName]) ?_ (fun _ => hdf)
   intro d hd
   simp only [memDeps, Kind.isName, Bool.not_false, List.filter_cons_of_pos, List.filter_nil,
     List.mem_singleton] at hd
@@ -1024,7 +1024,7 @@ theorem _root_.A2.StmtT.withLockElem {P : Prog} {Γ Δs Δ : Ctx} {F : List Var}
   rw [hpe] at hpop
   have hex : A2.setE (A2.kill .drop t.holdsView v (A2.kill .replace false v Γ)) e (elemLockE t Ev) x = none := by
     simp [A2.setE, A2.kill, upd_ne _ _ hxe, hx]
-  refine StmtT.withElem (by simp [Stmt.src, hs]) he heF hv hmv hi hpin hds hpop ?_ hpush hende ?_ (by simp [elemLockE, Ty.dtorFree])
+  refine StmtT.withElem (by simp [Stmt.src, hs]) he heF hv hmv hi hpin hds hpop ?_ hpush hende ?_ rfl
   · exact StmtT.withLock hs hex hxF (upd_same _ _ _) rfl (Or.inl rfl) hb hend rfl hes hlive
   · simp [Stmt.vars, hvs, hvx, hve]
 

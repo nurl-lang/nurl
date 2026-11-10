@@ -725,14 +725,14 @@ theorem _root_.A2.Step.cellKeep {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : S
   | letd _ he => exact he.cellKeep _
   | letdP _ => exact CellKeep.refl _
   | scopeDIn _ ih => exact ih
-  | scopeDEnd _ => exact CellKeep.slots (Nat.le_refl _) (fun _ hc => .inl (CellAt.of_st rfl hc)) rfl
+  | scopeDEnd _ _ | scopeDDrain _ =>
+    exact CellKeep.slots (Nat.le_refl _) (fun _ hc => .inl (CellAt.of_st rfl hc)) rfl
+  | scopeDEmpty _ => exact CellKeep.refl _
   | scopeDMoved _ => exact CellKeep.slots (Nat.le_refl _) (fun _ hc => .inl (CellAt.remove hc)) rfl
+  | scopeDPDrain _ _ ih => exact ih
   | scopeDP _ _ _ ih =>
     exact ih.trans (CellKeep.slots (Nat.le_refl _) (fun _ hc => .inl (CellAt.of_st rfl hc)) rfl)
   | scopeDPMoved _ _ ih => exact ih.trans (CellKeep.slots (Nat.le_refl _) (fun _ hc => .inl (CellAt.remove hc)) rfl)
-  | scopeDDrain _ => exact CellKeep.slots (Nat.le_refl _) (fun _ hc => .inl (CellAt.of_st rfl hc)) rfl
-  | scopeDEmpty _ => exact CellKeep.refl _
-  | scopeDPDrain _ _ ih => exact ih
   | @withLock a x s0 k0 t v _ hk _ _ =>
     -- the payload is checked out, the block left empty
     refine CellKeep.moveOut k0 v (Nat.le_refl _) (fun k hc => ?_) (fun k' k hk' => ?_)
