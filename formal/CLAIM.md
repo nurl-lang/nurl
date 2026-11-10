@@ -595,7 +595,14 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   - a typed function's `sink` parameter of such a type is handed on first
     thing in its body and assigned nothing, an `inout` one is assigned
     nothing, and an owned result of such a type is set at most once on any
-    path (`A2.Dtor.fnOK_dtor_params`);
+    path, and is of a destructor type itself (no views, no closure), its
+    function a `DtorOK` destructor (`A2.Dtor.fnOK_dtor_params`);
+  - a call's owned result of a destructor type, or that is a `Vec` of
+    destructor values, has a destructor frame from the start: the call's
+    inside is `scopeD r g …` on the result slot, `g` the result type's
+    destructor (`A2.Dtor.result_frame_is_scopeD`: the shape of the call's
+    inside, no more). `memory_safe` and the leak theorems cover the frame
+    (its typing is `CallH.typedIn_of`'s);
   - a typed `letd` binds a value of a destructor type `Ty.dtor f t`, or
     (A2-drop.3b) a `Vec` of such values whose elements hold no views
     (`A2.Dtor.letd_binds`); `f` is a `DtorOK` destructor of `Ty.dtor f t`,
@@ -647,7 +654,16 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   What follows from **reading the rules**, not from a theorem: that these
   binders are all the places an owned destructor value comes to rest in a
   binding, so its destructor runs where the binding ends, as nurlc runs it
-  (a check-out binding holds none, A2-drop.3d below). And, for the drain, the run
+  (a check-out binding holds none, A2-drop.3d below). And what a call's
+  result frame does: a panic in the callee after it has set its result
+  (in nurlc, where `^ v` returns at once, the destructor of one of the
+  callee's own bindings) stops at the frame with the slot owning, and the
+  frame's panic step runs the result's destructor and frees it, or drains
+  a `Vec` result, before the panic goes on (`scopeD_panic_runs_dtor`,
+  `scopeD_panic_drains`); on the normal path the result has moved to the
+  caller's binding by the frame's end, which runs nothing
+  (`Step.scopeDMoved`). The runtime does not do this yet (Agora #612,
+  below). And, for the drain, the run
   the steps above compose to: each element's frame runs its destructor at
   its end (`scopeD_end_runs_dtor`, of a value that is no node) before the
   `Vec`'s frame is at its end again, so the elements go in index order,
@@ -734,14 +750,21 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   `assign` to it drops no destructor value. This is a refusal, not the
   model of nurlc's drop of a block's payload (the stricter-than-nurlc list
   below; `A2/DROP_DESIGN.md` staging item 4).
-- Not yet in the calculus. In one place `DropSlot` / `Frees` release the
-  value, which runs no code, while nurlc runs the destructor:
-  - a function's result holding one, set before a panic in that function
-    (another binding's destructor included), which the unwind releases
-    with the call's result scope. (Moved from the result slot into a local
-    before the panic, the value is in a `letd` binding: `Ty.holdsDtor` is
-    deep, so `letv` takes no `pair res w`.)
-  See Agora #542–#544 and `A2/DROP_DESIGN.md` *Staging*.
+- So a binding's end, a drained `Vec`'s, and a call's result frame run
+  the value's own, outermost destructor, and everywhere else that could
+  hold a destructor value is refused (the list below). That these are all
+  the places is read off the rules, not a single theorem (above). What the
+  calculus does not show is the destructors INSIDE a value (Agora #616):
+  - a struct or an enum that holds destructor values is a destructor type
+    whose destructor is its glue, and that the glue runs the fields'
+    destructors is the elaboration's part, not checked: a glue that calls
+    none types (the witnesses' `ofn` and `gfn` are such), and the frame
+    then frees the fields running nothing;
+  - a panic anywhere in the glue (in the struct's own `% Drop`, which runs
+    first, or in one field's destructor) ends it, and the frame frees the
+    remaining fields with no destructor, on a panic's unwind too.
+  The model that shows both is the glue as code with a frame per field
+  (`A2/DROP_DESIGN.md`, `dropCode`'s `unpair`). See Agora #542–#544, #611.
 
 The rules are stricter than nurlc's in these places:
 - for a binding of a type whose destructor may read a view:
@@ -756,7 +779,12 @@ The rules are stricter than nurlc's in these places:
   drops the old value without running code. A program moves the old value
   to a `letd`, whose scope runs the destructor at once, and binds the new
   one with `letd`. A function's owned result of such a type is set at
-  most once on any path.
+  most once on any path, and is of a destructor type itself that holds no
+  views and no closure (its frame runs the destructor on a panic in the
+  callee), or a `Vec` of such values: nurlc also returns a plain struct,
+  enum or option that holds a `% Drop` value, and a `% Drop` value that
+  holds views; here a struct or an enum holding one is its own destructor
+  type, with its glue.
 - for a `Vec` of destructor values (A2-drop.3b), which is typed as a
   binding's own type, drained at the binding's end (above). nurlc types the
   rest too, and drops a `Vec`'s elements wherever the `Vec` is dropped, in
@@ -828,6 +856,13 @@ is left by the panic: the elements after it run no destructor, and they,
 the buffer and the `Vec` leak. On the normal path, and for a panic
 anywhere but inside an element's destructor, the runtime drops the
 elements in index order, each once, as the calculus does.
+
+A second one (Agora #612): **a function's `% Drop` result, when one of
+the function's own bindings' destructors panics at its exit.** The
+calculus stops the panic at the result's frame, runs the result's
+destructor, frees it, and goes on (`Step.scopeDP` on the call's result
+frame). The runtime holds the result in no journal entry while the
+callee's bindings are dropped: its destructor does not run and it leaks.
 
 ## Trusted base
 

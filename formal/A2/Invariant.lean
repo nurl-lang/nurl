@@ -919,6 +919,41 @@ def KeepOut (Γ Δ : Ctx) (sp : List Var) : Prop :=
     ∃ E', Δ v = some E' ∧ E'.mode = E.mode ∧ E'.ty = E.ty ∧ (E.mode = .rootb → E' = E)) ∧
   (∀ v E', Δ v = some E' → v ∉ sp ∧ ∃ E, Γ v = some E)
 
+/-! ### The call's result frame (`resFrame`): a scope's, or a destructor frame's -/
+
+theorem resFrame_cases (fn : Fn) (r : Var) (s : Stmt) :
+    resFrame fn r s = .scope r s ∨
+      ∃ g t, fn.resOwn = true ∧ (fn.resTy = .dtor g t ∨ fn.resTy = .vec (.dtor g t)) ∧
+        resFrame fn r s = .scopeD r g s := by
+  unfold resFrame; split
+  · exact Or.inr ⟨_, _, by assumption, Or.inl (by assumption), rfl⟩
+  · exact Or.inr ⟨_, _, by assumption, Or.inr (by assumption), rfl⟩
+  · exact Or.inl rfl
+
+@[simp] theorem resFrame_spine (fn : Fn) (r : Var) (s : Stmt) : (resFrame fn r s).spine = r :: s.spine := by
+  unfold resFrame; split <;> rfl
+
+@[simp] theorem resFrame_vars (fn : Fn) (r : Var) (s : Stmt) : (resFrame fn r s).vars = r :: s.vars := by
+  unfold resFrame; split <;> rfl
+
+@[simp] theorem resFrame_hasThru (fn : Fn) (r : Var) (s : Stmt) : (resFrame fn r s).hasThru = s.hasThru := by
+  unfold resFrame; split <;> rfl
+
+@[simp] theorem resFrame_assigns (fn : Fn) (r : Var) (s : Stmt) : (resFrame fn r s).assigns = s.assigns := by
+  unfold resFrame; split <;> rfl
+
+@[simp] theorem resFrame_catchOK (m : Mem) (fn : Fn) (r : Var) (s : Stmt) :
+    CatchOK m (resFrame fn r s) = CatchOK m s := by
+  unfold resFrame; split <;> rfl
+
+@[simp] theorem resFrame_pinOK (Γ : Ctx) (fn : Fn) (r : Var) (s : Stmt) :
+    PinOK Γ (resFrame fn r s) = PinOK Γ s := by
+  unfold resFrame; split <;> rfl
+
+@[simp] theorem resFrame_dtorPinOK (Γ : Ctx) (fn : Fn) (r : Var) (s : Stmt) :
+    DtorPinOK Γ (resFrame fn r s) = (DtorIn Γ r s ∧ DtorPinOK Γ s) := by
+  unfold resFrame; split <;> rfl
+
 /-- A2-drop.3b: the type of a destructor frame's binding (`scopeD x f`):
     the destructor type `Ty.dtor f t` itself, or a `Vec` of such values,
     which the frame's end drains (`Step.scopeDDrain`).  In this cut the
@@ -1280,13 +1315,22 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
     ends; neither it nor an `inout` one (its caller's value) is given
     another value (`Stmt.assigns`), whose drop would run none; and an owned
     result is set at most once on any path (`Stmt.asgMax`), so no earlier
-    result is dropped. -/
-def DtorParamsOK (fn : Fn) : Prop :=
+    result is dropped.   A2-drop (Agora #611): an owned result of
+    such a type is of a destructor type itself, or a `Vec` of such values,
+    with no views and no closure: the call's result frame (`resFrame`) runs
+    its destructor, or drains it, on a panic in the callee. -/
+def DtorParamsOK (P : Prog) (fn : Fn) : Prop :=
   (∀ i (h : i < fn.params.length), fn.params[i].1 = .sink → fn.params[i].2.holdsDtor = true →
     i ∈ fn.body.movedFirst ∧ i ∉ fn.body.assigns) ∧
   (∀ i (h : i < fn.params.length) b, fn.params[i].1 = .inout b → fn.params[i].2.holdsDtor = true →
     i ∉ fn.body.assigns) ∧
-  (fn.resOwn = true → fn.resTy.holdsDtor = true → fn.body.asgMax fn.params.length ≤ 1)
+  (fn.resOwn = true → fn.resTy.holdsDtor = true → fn.body.asgMax fn.params.length ≤ 1 ∧
+    -- (the result's frame runs its destructor on a panic in the callee,
+    -- `resFrame`: the result is of a destructor type itself, a struct holding
+    -- one being one with its glue, or a `Vec` of such values, which the frame
+    -- drains; it holds no views and no closure, so the frame is never armed)
+    ∃ g t, (fn.resTy = .dtor g t ∨ fn.resTy = .vec (.dtor g t)) ∧ t.holdsView = false ∧
+      t.hasFn = false ∧ DtorOK P g (.dtor g t))
 
 /-- A function is well-typed when its body is, from its own view of the
     parameters, and ends as its summary says: the result is set and borrows
@@ -1303,7 +1347,7 @@ def FnOK (P : Prog) (fn : Fn) : Prop :=
   (∀ o ∈ fn.outHolds, lendable fn o.2.1 ∧ o.2.2.isName = false) ∧
   (∀ jk ∈ fn.lends ++ fn.rholds, kindFits fn jk.1 jk.2) ∧ (∀ o ∈ fn.outHolds, kindFits fn o.2.1 o.2.2) ∧
   -- A2-drop.3a: parameters and a result of a type holding a destructor
-  DtorParamsOK fn ∧
+  DtorParamsOK P fn ∧
   ∃ Δ, StmtT P (sigCtx fn) [] fn.body Δ ∧
     -- A2-drop.2: the body's own destructor bindings have ended, and no
     -- parameter or result runs a destructor
@@ -1321,8 +1365,8 @@ def ProgOK (P : Prog) : Prop := ∀ fn ∈ P, FnOK P fn
 
 /-- A2-drop.3a: `FnOK`'s clause for a signature none of whose `sink` or
     `inout` parameters, nor its owned result, holds a destructor value. -/
-theorem dtorParamsOK_of {fn : Fn} (h : ∀ pt ∈ fn.params, pt.2.holdsDtor = false)
-    (hr : fn.resOwn = true → fn.resTy.holdsDtor = false) : DtorParamsOK fn := by
+theorem dtorParamsOK_of {P : Prog} {fn : Fn} (h : ∀ pt ∈ fn.params, pt.2.holdsDtor = false)
+    (hr : fn.resOwn = true → fn.resTy.holdsDtor = false) : DtorParamsOK P fn := by
   refine ⟨fun i hi _ hd => ?_, fun i hi _ _ hd => ?_, fun ho hd => ?_⟩
   · rw [h _ (List.getElem_mem hi)] at hd; cases hd
   · rw [h _ (List.getElem_mem hi)] at hd; cases hd

@@ -416,6 +416,12 @@ def HandCase (P : Prog) : Prop :=
     ∃ Γ', StmtT P Γ' F s' (exitScope x Δ) ∧ Inv m' Γ' F s' ∧ m.nv ≤ m'.nv ∧
       Keep Γ Γ' (.callcE x c j [] k) s' ∧ Frz F m m'
 
+/-- What source typing keeps of a context (`StmtT.ctxRel`, `A2/SrcKeep.lean`),
+    as a hypothesis of the call's typing, which is stated before it. -/
+def SrcRel (P : Prog) : Prop :=
+  ∀ {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}, StmtT P Γ F s Δ → s.src = true →
+    RootbAnch Γ F → NameWF Γ → CtxRel Γ Δ
+
 /-- What a destructor's frame needs of its body's typing, proven separately
     (`SrcKeep.lean`): source typing keeps every binding with its mode and
     type, and a borrowed parameter whose sources are lent out with its entry,
