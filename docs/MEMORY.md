@@ -2457,7 +2457,10 @@ goes:
   panics: `a` — a binding, a field, a slice element, the caller's
   binding behind an `inout` parameter, a binding a closure captured —
   then holds the new value, which its owner drops once, inside the
-  `recover` extent or outside it.
+  `recover` extent or outside it. A closure binding is no exception: the
+  environment it owned is released after the new closure is stored, so a
+  capture's destructor that panics leaves the binding holding the new
+  closure and its environment.
 
 **Drop glue.** A `% Drop` impl releases what only it knows how to (a raw
 buffer, an OS resource). The fields the compiler manages (`String`,

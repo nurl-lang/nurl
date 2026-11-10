@@ -29637,6 +29637,37 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
     {}
 }
 
+// An assignment's form of mem_emit_closure_env_drop (Agora #621): the env
+// `name` owns is taken out — its owner slot cleared — and released at the
+// statement's end (mem_replaced_flush), after the new value and its owner
+// are stored. A capture's destructor that panics in that release then
+// finds the binding holding the new closure: before, the binding still
+// held the closure whose env was being freed, and the new env was
+// nobody's.
+@ mem_closure_env_drop_late i syms i cg s name → v {
+    : s slot ( nurl_sym_get2 syms name `__envown` )
+    ? != 0 ( nurl_str_len slot )
+    { : s ev ( mem_clo_slot_env syms cg name slot )
+        ( nurl_print `  store i8* null, i8** ` ) ( nurl_print slot ) ( nurl_print `\n` )
+        ( __asn_late_add ( nurl_str_cat3 `call void @nurl_closure_drop(i8* ` ev `)` ) )
+        ^ v }
+    {}
+    : s ty ( nurl_sym_get syms name )
+    : s ptr ( nurl_sym_get2 syms name `__ptr` )
+    ? & & != 0 ( nurl_str_len ty ) != 0 ( nurl_str_len ptr )
+    == ( nurl_str_get ty 0 ) 123
+    { : s cv ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print cv ) ( nurl_print ` = load ` )
+        ( nurl_print ( nurl_llty ty ) ) ( nurl_print `, ` ) ( nurl_print ( nurl_llty ty ) ) ( nurl_print `* ` )
+        ( nurl_print ptr ) ( nurl_print `\n` )
+        : s ev ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print ev ) ( nurl_print ` = extractvalue ` )
+        ( nurl_print ( nurl_llty ty ) ) ( nurl_print ` ` ) ( nurl_print cv ) ( nurl_print `, 1\n` )
+        ( __asn_late_add ( nurl_str_cat3 `call void @nurl_closure_drop(i8* ` ev `)` ) )
+    }
+    {}
+}
+
 // Release what one word of the owned-closure list stands for: a binding
 // by its owner slot (a `%` register, __cenv_key) — the env its value holds
 // where the slot says the binding owns it, as mem_clo_slot_env reads it —
@@ -48120,9 +48151,9 @@ unsafe @ gen_assign_store i lex i syms i cg → s {
         // only the heap handles the borrow checker tracks, so a closure
         // over a plain integer published an env and an empty list.
         //
-        // Free the env this binding already owns BEFORE the store
-        // overwrites the alloca, exactly as the string and slice
-        // reassignment drops below do, then register the new one. The
+        // Take the env this binding already owns out BEFORE the store
+        // overwrites the alloca — it is released once the store is done
+        // (mem_closure_env_drop_late) — then register the new one. The
         // membership test is what keeps that safe: a name leaves the
         // owned set the moment its closure escapes, so an aliased or
         // escaped env is never freed here.
@@ -48159,7 +48190,7 @@ unsafe @ gen_assign_store i lex i syms i cg → s {
         ? & __asn_place != 0 ( nurl_str_len ptr ) {
             = __asn_place_val ( mem_clo_into_store syms cg vt val bck_rhs_tt )
             ? != 0 ( nurl_str_len __asn_slot ) {
-                ( mem_emit_closure_env_drop syms cg name )
+                ( mem_closure_env_drop_late syms cg name )
                 : s __pl_e ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print __pl_e ) ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty vt ) )
                 ( nurl_print ` ` ) ( nurl_print __asn_place_val ) ( nurl_print `, 1\n` )
@@ -48171,7 +48202,7 @@ unsafe @ gen_assign_store i lex i syms i cg → s {
                 ( nurl_print `, ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
                 ( nurl_print `  ` ) ( nurl_print __pl_oe ) ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty vt ) )
                 ( nurl_print ` ` ) ( nurl_print __pl_ov ) ( nurl_print `, 1\n` )
-                ( nurl_print `  call void @nurl_closure_drop(i8* ` ) ( nurl_print __pl_oe ) ( nurl_print `)` ) ( emit_dbg_eol )
+                ( __asn_late_add ( nurl_str_cat3 `call void @nurl_closure_drop(i8* ` __pl_oe `)` ) )
             }
         } {}
         ? __asn_place {} {
@@ -48180,7 +48211,7 @@ unsafe @ gen_assign_store i lex i syms i cg → s {
                 ? __asn_call_env __asn_tmp
                 ? != 0 ( nurl_str_len __asn_slot ) ( mem_clo_owner_of syms cg bck_rhs_val ) ``
                 ? ( mem_clo_in_list syms name )
-                { ( mem_emit_closure_env_drop syms cg name ) }
+                { ( mem_closure_env_drop_late syms cg name ) }
                 {}
                 ? __asn_move_env { ( mem_clo_release_source syms bck_rhs_val ) } {}
                 ? != 0 ( nurl_str_len __asn_slot )
@@ -48200,7 +48231,7 @@ unsafe @ gen_assign_store i lex i syms i cg → s {
                 // release.)
                 ? & & != 0 ( nurl_str_len __asn_slot ) ( __is_closure_ty vt ) ! & ( is_ident_tok bck_rhs_tt ) ( seq bck_rhs_val name )
                 { ? ( mem_clo_in_list syms name )
-                    { ( mem_emit_closure_env_drop syms cg name ) }
+                    { ( mem_closure_env_drop_late syms cg name ) }
                     {}
                     ( mem_clo_mark_lent syms name T ) }
                 {} }
