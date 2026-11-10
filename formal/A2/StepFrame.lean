@@ -326,6 +326,15 @@ theorem step_new {P : Prog} {m m' : Mem} {s s' : Stmt} (hst : Step P m s (.ok m'
     · exact Or.inr (Or.inl hve)
     have hvc : v ≠ c := fun e => by subst e; rw [h] at hc; cases hc
     simp [handMem, Mem.set, upd_ne _ _ hvx, upd_ne _ _ hve, upd_ne _ _ hvc, h] at h'
+  | @callcD x c _ _ _ _ _ _ _ _ _ _ hc _ _ _ _ =>
+    cases hr; intro v h h'
+    simp only [handStmtD, Stmt.spine, List.mem_cons]
+    by_cases hvx : v = x
+    · exact Or.inl hvx
+    by_cases hve : v = m.nv
+    · exact Or.inr (Or.inl hve)
+    have hvc : v ≠ c := fun e => by subst e; rw [h] at hc; cases hc
+    simp [handMem, Mem.set, upd_ne _ _ hvx, upd_ne _ _ hve, upd_ne _ _ hvc, h] at h'
   | editPush ht hn _ | editPushRealloc ht hn _ =>
     cases hr; intro v h h'
     exact absurd (takeVal_none ht h) (Mem.set_bound_ne_none hn.2.2.1 h')

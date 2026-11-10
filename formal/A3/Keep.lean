@@ -138,6 +138,7 @@ theorem Step.keep {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) (
   | catchSkip => intro _ _; rfl
   | unpair _ _ _ _ => intro _ _; rfl
   | callcE _ _ _ _ => intro _ _; rfl
+  | callcD _ _ _ _ _ => intro _ _; rfl
   | callc _ _ _ _ hbp => intro i _; exact congrFun (BindParams.alloc_eq hbp) i
   | catchP _ _ ih => exact ih
   | letd _ he => exact EvalR.keep he hb hav hf

@@ -5425,7 +5425,7 @@ unsafe @ __arg_lend_root i syms → s {
 // for a bare void return). Keeps the void/non-void `ret` choice keyed on
 // the FUNCTION's return type, not just the value type — so a stray value
 // can never lower to `ret i64 …` out of a `void` function.
-@ gen_ret_term i lex i syms i cg s lt s val s skip s skip_str_ptr s skip_user_ptr s skip_struct_ptr s ret_ident s hbit → v {
+@ gen_ret_term i lex i syms i cg s lt s val s skip s skip_str_ptr s skip_user_ptr s skip_struct_ptr s ret_ident → v {
     : s dtop ( nurl_sym_get g_fn_escapes `__defer_top_fn__` )
     : s fn_rt ( nurl_sym_get syms `__fn_ret_ty__` )
     ? != 0 ( nurl_str_len dtop )
@@ -5458,12 +5458,6 @@ unsafe @ __arg_lend_root i syms → s {
         ( nurl_print `  br label %` ) ( nurl_print dtop ) ( emit_dbg_eol )
     }
     {  // no defers: drop owned slices then direct return
-        // (A result that is no binding of this function is journaled
-        // while the locals are dropped: mem_ret_guard_push.)
-        // (`ret_ident` is the last name the expression read, a binding
-        // handed back only where one of the skips says so.)
-        : s __rg ? & & & == 0 ( nurl_str_len skip ) == 0 ( nurl_str_len skip_str_ptr ) == 0 ( nurl_str_len skip_user_ptr ) == 0 ( nurl_str_len skip_struct_ptr )
-        ( mem_ret_guard_push syms cg lt val hbit ) ( nurl_str_cat `` `` )
         ( mem_drop_owned syms cg skip )
         ? != 0 g_auto_drop_strings
         { ( mem_drop_owned_strings syms cg skip_str_ptr )
@@ -5478,7 +5472,6 @@ unsafe @ __arg_lend_root i syms → s {
         {}
         ( mem_own_closure_ret_release syms ret_ident )
         ( mem_drop_closure_envs syms cg )
-        ( mem_ret_guard_pop __rg )
         ? | ( seq lt `void` ) ( seq fn_rt `void` )
         { ( emit_call_term `ret void` ) }
         { ( mem_publish_return_proof syms cg lt )
@@ -5879,7 +5872,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
     { : s __ret_frt ( nurl_sym_get syms `__fn_ret_ty__` )
         ? ( seq __ret_frt `void` )
         { ( bck_record `ret` `` bck_line )
-            ( gen_ret_term lex syms cg `void` `` `` `` `` `` `` `` )
+            ( gen_ret_term lex syms cg `void` `` `` `` `` `` `` )
             ( nurl_set_last_type `void` )
             = g_did_ret 1
             ^ ( nurl_str_cat `` `` ) }
@@ -7242,19 +7235,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
     } {}
     ( mem_store_hown syms hbit )
     ( mem_save_return_proof syms cg lt skip_str_ptr | ret_is_direct_call ret_is_det_join )
-    // The result's guard (mem_ret_guard_push) is for a value this function
-    // made: a literal, a call's value, a join. A NAME handed back is either
-    // a binding of the function, whose own registration stands (skip_user_ptr,
-    // mem_drop_user_drops), or something the function does not own — a
-    // parameter, a `~` loop's element of the caller's Vec, a field read —
-    // whose `hbit` is no proof of ownership: guarded, the caller's element
-    // was dropped here and again by the caller's Vec (a double drop the
-    // adversarial pass found). The same for a literal that reads such a
-    // name into itself (`^ @ ?Bomb { T x }`, x the loop's element).
-    : b __rg_named | | ( is_ident_tok ret_first_tt ) == ret_first_tt TT_DOT == ret_first_tt TT_HASH
-    : b __rg_lit_name & == ret_first_tt TT_AT ( __ret_reads_owner_name syms ret_ident )
-    : s __rg_hbit ? | __rg_named __rg_lit_name ( nurl_str_cat `` `` ) ( nurl_str_cat hbit `` )
-    ( gen_ret_term lex syms cg lt val skip skip_str_ptr skip_user_ptr skip_struct_ptr ret_ident __rg_hbit )
+    ( gen_ret_term lex syms cg lt val skip skip_str_ptr skip_user_ptr skip_struct_ptr ret_ident )
     ( nurl_set_last_type `void` )
     = g_did_ret 1
     val
@@ -23426,13 +23407,6 @@ unsafe @ gen_match i lex i syms i cg → s {
                     {} }
                 {}
             } {}
-            // (Where the enum keeps its payloads — held by a binding, a
-            // parameter, another name, a temporary given an owner, or lent
-            // by a call or a field — the later payloads are lent to the arm
-            // as the first is: mem_arm_payload_lend, agora #641.)
-            : b __m_pl_lent | | __m_call_lent ( __match_scrut_lent syms match_first_tt match_var_name match_scrut_field )
-            | m_tmp_enum & != 0 ( nurl_str_len match_var_name )
-            | | != 0 ( nurl_str_len ( mem_udrop_ptr_of syms match_var_name ) ) >= ( nurl_sym_word_index syms `__fn_param_names__` match_var_name ) 0 ( is_ident_tok match_first_tt )
             // Bind second payload variable (enum field 2)
             ? != 0 ( nurl_str_len pv1 ) {
                 : s pt1 ( nurl_sym_get2 syms pattern_name `__payload__1` )
@@ -23461,7 +23435,7 @@ unsafe @ gen_match i lex i syms i cg → s {
                 { : s a1_key ( nurl_str_cat `drop##` pt1 )
                     ? & != 0 ( nurl_sym_len g_impl_name_syms a1_key )
                     ! ( __drop_is_compiler_auto pt1 )
-                    { ( mem_own_add_user_drop syms cg vp1 pt1 ) ( mem_arm_payload_lend syms cg vp1 pt1 __m_pl_lent ) }
+                    { ( mem_own_add_user_drop syms cg vp1 pt1 ) }
                     {}
                 }
                 {}
@@ -23494,7 +23468,7 @@ unsafe @ gen_match i lex i syms i cg → s {
                 { : s a2_key ( nurl_str_cat `drop##` pt2 )
                     ? & != 0 ( nurl_sym_len g_impl_name_syms a2_key )
                     ! ( __drop_is_compiler_auto pt2 )
-                    { ( mem_own_add_user_drop syms cg vp2 pt2 ) ( mem_arm_payload_lend syms cg vp2 pt2 __m_pl_lent ) }
+                    { ( mem_own_add_user_drop syms cg vp2 pt2 ) }
                     {}
                 }
                 {}
@@ -23508,7 +23482,7 @@ unsafe @ gen_match i lex i syms i cg → s {
             ~ != 0 ( nurl_str_len pb_rest ) {
                 : s pb_tok ( str_first_word pb_rest )
                 = pb_rest ( str_skip_word pb_rest )
-                ? ! ( seq pb_tok `_` ) { ( emit_enum_payload_bind pb_tok pb_idx pattern_name match_type match_val __m_pl_lent syms cg ) } {}
+                ? ! ( seq pb_tok `_` ) { ( emit_enum_payload_bind pb_tok pb_idx pattern_name match_type match_val syms cg ) } {}
                 = pb_idx + pb_idx 1
             }
             // What an arm handing a payload out takes it out of (agora #175).
@@ -30761,16 +30735,6 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
 
 @ mem_drop_user_drops i syms i cg s skip_ptr → v {
     : s snap ( nurl_sym_get g_fn_escapes `__dsnap_udrop__` )
-    // The binding handed back (`skip_ptr`) is this function's until the
-    // `ret`: where one of the others runs code of the program's own when
-    // it is dropped, a panic in that destructor must still find the
-    // result in the journal, so its registration ends after their drops,
-    // not in list order (agora #612: `: Bomb loc …  : Bomb res …  ^ res`
-    // forgot res first, and loc's panicking destructor left it to
-    // nobody). Everywhere else the order is the one it was: the slot
-    // stack pops in the reverse of its pushes.
-    : b hold & != 0 ( nurl_str_len skip_ptr ) ( mem_exit_drops_run_code syms skip_ptr )
-    : ~ s held_vt ``
     : ~ s rest ( nurl_sym_get syms `__user_drops__` )
     ~ != 0 ( nurl_str_len rest ) {
         : s ptr ( str_first_word rest ) = rest ( str_skip_word rest )
@@ -30785,105 +30749,13 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
             // alloca-keyed entry is now stale.) Forgotten BEFORE the drop
             // runs: a destructor that panics is not run a second time by
             // the unwind (it reclaims its own receiver's fields, gen_fn).
-            ? & hold ( seq ptr skip_ptr ) { = held_vt ( nurl_str_cat vt `` ) } {
-                ( mem_journal_forget_userdrop cg ptr vt )
-                ? ( seq ptr skip_ptr )
-                {}
-                { ( mem_emit_gated_drop syms cg ptr vt ) }
-            }
+            ( mem_journal_forget_userdrop cg ptr vt )
+            ? ( seq ptr skip_ptr )
+            {}
+            { ( mem_emit_gated_drop syms cg ptr vt ) }
         }
     }
-    ? != 0 ( nurl_str_len held_vt ) { ( mem_journal_forget_userdrop cg skip_ptr held_vt ) } {}
     ( mem_emit_drop_glue syms cg )
-}
-
-// Is `name` (the last name a returned literal read) a binding that holds a
-// value with an owner — a struct, a handle, an option: anything but a
-// scalar or a raw pointer?
-@ __ret_reads_owner_name i syms s name → b {
-    ? == 0 ( nurl_str_len name ) { ^ F } {}
-    ? & == 0 ( nurl_sym_len2 syms name `__ptr` ) == 0 ( nurl_sym_len2 syms name `__param` ) { ^ F } {}
-    : s ll ( nurl_llty ( nurl_sym_get syms name ) )
-    ? == 0 ( nurl_str_len ll ) { ^ F } {}
-    : i c ( nurl_str_get ll 0 )
-    ^ & | == c 37 == c 123 != ( nurl_str_get ll - ( nurl_str_len ll ) 1 ) 42
-}
-
-// Does a binding this exit drops — any in `__user_drops__` but the one
-// handed back, `skip_ptr` — run code of the program's own when it is
-// dropped (__drop_runs_code)? Then a panic can start between the result's
-// evaluation and the `ret`.
-@ mem_exit_drops_run_code i syms s skip_ptr → b {
-    : s snap ( nurl_sym_get g_fn_escapes `__dsnap_udrop__` )
-    : ~ s rest ( nurl_sym_get syms `__user_drops__` )
-    ~ != 0 ( nurl_str_len rest ) {
-        : s ptr ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s vt ( str_first_word rest ) = rest ( str_skip_word rest )
-        ? & & ! ( seq ptr skip_ptr ) ! ( str_contains_word snap ptr ) ( __drop_runs_code vt ) { ^ T } {}
-    }
-    ^ F
-}
-
-// A result that is no binding of this function — a literal, a call's
-// value, a join of them — lives in a register from its evaluation to the
-// `ret`, and the locals are dropped in between. Where one of those drops
-// runs code of the program's own, a panic in it unwound past the result:
-// its destructor never ran and what it owned leaked (agora #612). So for
-// that window the result has a slot of its own in the journal, with the
-// ownership this return answers (`hbit`: a result lent by the caller is
-// not this function's to drop), and the registration ends before the
-// `ret`. Returns the slot ("" when nothing was registered).
-//
-// Nothing is emitted where no local's drop runs such code — every
-// function without a `% Drop` local, a library handle or a closure among
-// what it drops — or where the result owns nothing.
-@ mem_ret_guard_push i syms i cg s lt s val s hbit → s {
-    ? | | | == 0 g_auto_drop_strings ( seq lt `void` ) == 0 ( nurl_str_len hbit ) ( seq hbit `false` ) { ^ ( nurl_str_cat `` `` ) } {}
-    ? ! ( mem_exit_drops_run_code syms `` ) { ^ ( nurl_str_cat `` `` ) } {}
-    : ~ s fnv ``
-    // (A struct that cannot be copied gets its drop the first time one is
-    // owned, which may be here: `^ @ Holder { … }` with no binding of one.)
-    // (An option or a result is registered as its twin, as a binding of
-    // one is: __udrop_regty.)
-    : s vt ( __udrop_regty lt )
-    // (…and the drops of the library handles inside it are asked for now,
-    // while generic instances are still being collected: a result of
-    // `!( Pooled A E ) E` guarded here was the program's only drop of a
-    // Pooled, and its `Pooled_drop` instance was never written.)
-    ( __libh_walk lt g_root_syms )
-    ( __handle_drop_ensure vt )
-    ? ( __is_handle_ty vt ) { = fnv ( __hjdrop_fn vt ) } {
-        : s impl_mangle ( nurl_sym_get2 g_impl_name_syms `drop##` vt )
-        ? == 0 ( nurl_str_len impl_mangle ) { ^ ( nurl_str_cat `` `` ) } {}
-        // (A thunk not out yet is emitted at module end, as for a binding:
-        // mem_journal_push_userdrop.)
-        ? == 0 ( nurl_sym_len2 g_impl_name_syms `jdrop##` impl_mangle ) {
-            : s ukey ( nurl_str_cat `ujdrop##` impl_mangle )
-            ? == 0 ( nurl_sym_len g_impl_name_syms ukey ) {
-                ( nurl_sym_def g_impl_name_syms ukey `1` )
-                ( __park_append g_impl_name_syms `__pending_ujdrops__` vt )
-            } {}
-        } {}
-        = fnv ( nurl_str_cat `@__jdrop_` impl_mangle )
-    }
-    : s ll ( nurl_llty lt )
-    : s js ( nurl_cg_reg cg )
-    ( nurl_print `  ` ) ( nurl_print js ) ( nurl_print ` = alloca ` ) ( nurl_print ll ) ( nurl_print `\n` )
-    ( nurl_print `  store ` ) ( nurl_print ll ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, ptr ` ) ( nurl_print js ) ( nurl_print `\n` )
-    : ~ s jf ( nurl_str_cat `null` `` )
-    ? ! ( seq hbit `true` ) {
-        = jf ( nurl_cg_reg cg )
-        ( nurl_print `  ` ) ( nurl_print jf ) ( nurl_print ` = alloca i1\n` )
-        ( nurl_print `  store i1 ` ) ( nurl_print hbit ) ( nurl_print `, ptr ` ) ( nurl_print jf ) ( nurl_print `\n` )
-    } {}
-    ( nurl_print `  call void @nurl_journal_push_drop2(ptr ` ) ( nurl_print js ) ( nurl_print `, ptr ` )
-    ( nurl_print jf ) ( nurl_print `, ptr ` ) ( nurl_print fnv ) ( nurl_print `)\n` )
-    ^ js
-}
-
-@ mem_ret_guard_pop s slot → v {
-    ? == 0 ( nurl_str_len slot ) { ^ v } {}
-    ( nurl_print `  call void @nurl_journal_forget_slot(ptr ` ) ( nurl_print slot ) ( nurl_print `)\n` )
 }
 
 // A destructor (a `% Drop` impl, a library handle's drop hook) that panics
@@ -50722,19 +50594,7 @@ unsafe @ __agg_shape_clash s vty s dty → b {
 // user-`Drop`). One call per slot, driven by a loop in gen_match,
 // generalises the former hand-unrolled slot-1 / slot-2 blocks to N
 // payloads — lifting the 3-payload destructuring limit.
-// A second or later payload of an enum's variant, of a type with a `% Drop`
-// of the program's own, bound in an arm: lent to the arm wherever the enum
-// keeps it — the rule the first payload has (h231, gen_match). Registered
-// as the arm's own with nothing said, as it was, the arm dropped it at its
-// end and the enum's owner dropped it again (agora #641: a `??` over a
-// variant `Bomb String Bomb` was a heap-use-after-free with no panic).
-@ mem_arm_payload_lend i syms i cg s vp s pt b lent → v {
-    ? ! & lent ( __nc_drop_ty pt ) { ^ v } {}
-    ( mem_udrop_flag_set syms cg vp `0` )
-    ( nurl_sym_def syms ( nurl_str_cat vp `__sborrow` ) `1` )
-}
-
-@ emit_enum_payload_bind s pvi i pidx s pattern_name s match_type s match_val b lent i syms i cg → v {
+@ emit_enum_payload_bind s pvi i pidx s pattern_name s match_type s match_val i syms i cg → v {
     : s pkey ( nurl_str_cat3 pattern_name `__payload__` ( nurl_str_int pidx ) )
     : s pti ( nurl_sym_get syms pkey )
     : s pri ( nurl_cg_reg cg )
@@ -50760,7 +50620,7 @@ unsafe @ __agg_shape_clash s vty s dty → b {
     { : s akey ( nurl_str_cat `drop##` pti )
         ? & != 0 ( nurl_sym_len g_impl_name_syms akey )
         ! ( __drop_is_compiler_auto pti )
-        { ( mem_own_add_user_drop syms cg vpi pti ) ( mem_arm_payload_lend syms cg vpi pti lent ) }
+        { ( mem_own_add_user_drop syms cg vpi pti ) }
         {}
     }
     {}
@@ -58962,7 +58822,7 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
         } {}
     } {}
     ? & != 0 g_auto_drop_strings | | | | == __try_inner_tt TT_LPAREN __t_bind __t_bare __t_need __t_ncok
-    { ( gen_ret_term lex syms cg fn_rt fail_val `` `` ? | __t_bind __t_askip __t_up `` `` ? | __t_bind __t_askip __try_inner_v `` `` ) }
+    { ( gen_ret_term lex syms cg fn_rt fail_val `` `` ? | __t_bind __t_askip __t_up `` `` ? | __t_bind __t_askip __try_inner_v `` ) }
     { ? != 0 ( nurl_str_len dtop )
         { ? ! ( seq fn_rt `void` )
             { : s rvp ( nurl_sym_get syms `__ret_val__` )
@@ -68344,156 +68204,56 @@ unsafe @ __hmemo_close s key i mark b r → v {
 
 // `define void @<fname>(%<sname> %v)` dropping each field that owns
 // something — a struct's drop, or a `% Drop` impl's glue.
-//
-// The fields go in order, and one of them may run a destructor of the
-// program's own (__drop_runs_code), which may panic. The struct left the
-// journal before its drop began, so the fields after that one had no
-// owner on the unwind: their destructors never ran and what they owned
-// leaked (agora #617). So the glue journals its own continuation, as the
-// runtime's element release does (agora #608). Where a field that runs
-// code has an owning field after it, the value is spilled ONCE to a slot
-// and the fields are dropped out of it by `<fname>.from<k>(ptr slot)`, the
-// glue from field k on: before such a field is dropped the slot is
-// registered with the next stage (a function of the journal's own
-// signature), the registration ends when the field's drop returns, and
-// the rest is that stage, tail-called. One copy of the value, however many
-// stages: a value nested in itself (a tree's node) costs about the frame
-// the straight-line glue does. A struct with no such field — nearly every
-// struct — gets the one straight-line function it always had.
 @ emit_drop_fields_fn s fname s sname i syms → v {
-    ? ! ( __glue_needs_cont sname syms ) {
-        : ~ i ctr 0
-        ( nurl_print `define void @` ) ( nurl_print ( llvm_source_fn fname ) )
-        ( nurl_print `(%` ) ( nurl_print sname ) ( nurl_print ` %v) {\nentry:\n` )
-        : s fcs ( nurl_sym_get2 syms sname `__field_count` )
-        : i fc ? != 0 ( nurl_str_len fcs ) ( nurl_str_to_int fcs ) 0
-        : ~ i i 0
-        ~ < i fc {
-            ( __emit_drop_field sname i ( nurl_sym_get syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int i ) `__type` ) ) ) `%v` ctr syms )
-            = i + i 1
-        }
-        ( nurl_print `  ret void\n}\n` )
-        ^ v
-    } {}
+    : ~ i ctr 0
     ( nurl_print `define void @` ) ( nurl_print ( llvm_source_fn fname ) )
-    ( nurl_print `(%` ) ( nurl_print sname ) ( nurl_print ` %v) {\nentry:\n  %p = alloca %` ) ( nurl_print sname )
-    ( nurl_print `\n  store %` ) ( nurl_print sname ) ( nurl_print ` %v, ptr %p\n  call void @` ) ( nurl_print ( __glue_from_name fname 0 ) )
-    ( nurl_print `(i8* %p)\n  ret void\n}\n` )
-    ( __emit_drop_fields_from fname sname 0 syms )
-}
-
-// Does a field of type `ft` own something the glue releases?
-@ __glue_field_drops s ft i syms → b {
-    ^ | | ( __type_needs_drop ft syms ) != 0 ( nurl_str_len ( __nc_opt_payload ft ) ) ( __is_closure_llty ft )
-}
-
-// …and may releasing it run code of the program's own?
-@ __glue_field_runs s ft → b {
-    ? ( __drop_runs_code ft ) { ^ T } {}
-    : s ncp ( __nc_opt_payload ft )
-    ^ & != 0 ( nurl_str_len ncp ) ( __drop_runs_code ncp )
-}
-
-// Field `i` of `sname` runs code when dropped and a field after it owns
-// something: the glue must stand for those while `i` is dropped.
-@ __glue_field_needs_cont s sname i i i fc i syms → b {
-    ? ! ( __glue_field_runs ( nurl_sym_get syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int i ) `__type` ) ) ) ) { ^ F } {}
-    : ~ i j + i 1
-    ~ < j fc {
-        ? ( __glue_field_drops ( nurl_sym_get syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int j ) `__type` ) ) ) syms ) { ^ T } {}
-        = j + j 1
-    }
-    ^ F
-}
-
-@ __glue_needs_cont s sname i syms → b {
+    ( nurl_print `(%` ) ( nurl_print sname ) ( nurl_print ` %v) {\nentry:\n` )
     : s fcs ( nurl_sym_get2 syms sname `__field_count` )
     : i fc ? != 0 ( nurl_str_len fcs ) ( nurl_str_to_int fcs ) 0
     : ~ i i 0
     ~ < i fc {
-        ? ( __glue_field_needs_cont sname i fc syms ) { ^ T } {}
-        = i + i 1
-    }
-    ^ F
-}
-
-// The name of the glue's stage from field `k` on.
-@ __glue_from_name s fname i k → s {
-    ^ ( nurl_str_cat3 ( llvm_source_fn fname ) `.from` ( nurl_str_int k ) )
-}
-
-// `define void @<fname>.from<k>(i8* %p)`: the fields from `k` on, of the
-// value in the slot `%p`, up to and including the first one that needs a
-// continuation; the fields after that one are the next stage's.
-@ __emit_drop_fields_from s fname s sname i k i syms → v {
-    : ~ i ctr 0
-    ( nurl_print `define void @` ) ( nurl_print ( __glue_from_name fname k ) ) ( nurl_print `(i8* %p) {\nentry:\n` )
-    : s fcs ( nurl_sym_get2 syms sname `__field_count` )
-    : i fc ? != 0 ( nurl_str_len fcs ) ( nurl_str_to_int fcs ) 0
-    : ~ i i k
-    : ~ i cont -1
-    ~ & < i fc < cont 0 {
         : s ft ( nurl_sym_get syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int i ) `__type` ) ) )
-        ? ( __glue_field_drops ft syms ) {
-            : b later ( __glue_field_needs_cont sname i fc syms )
-            ? later {
-                ( nurl_print `  call void @nurl_journal_push_drop2(ptr %p, ptr null, ptr @` ) ( nurl_print ( __glue_from_name fname + i 1 ) ) ( nurl_print `)\n` )
-            } {}
-            : s fv ( __dr ctr )
-            ( nurl_print `  ` ) ( nurl_print fv ) ( nurl_print ` = load %` ) ( nurl_print sname ) ( nurl_print `, ptr %p\n` )
-            ( __emit_drop_field sname i ft fv ctr syms )
-            ? later {
-                ( nurl_print `  call void @nurl_journal_forget_slot(ptr %p)\n` )
-                ( nurl_print `  musttail call void @` ) ( nurl_print ( __glue_from_name fname + i 1 ) ) ( nurl_print `(i8* %p)\n` )
-                = cont + i 1
-            } {}
+        ? ( __type_needs_drop ft syms ) {
+            : s fr ( __dr ctr )
+            ( nurl_print `  ` ) ( nurl_print fr ) ( nurl_print ` = extractvalue %` ) ( nurl_print sname ) ( nurl_print ` %v, ` ) ( nurl_print ( nurl_str_int i ) ) ( nurl_print `\n` )
+            ( emit_drop_value ft fr ctr syms )
+        } {}
+        : s ncp ( __nc_opt_payload ft )
+        ? & != 0 ( nurl_str_len ncp ) ! ( __type_needs_drop ft syms ) {
+            : s of ( __dr ctr )
+            ( nurl_print `  ` ) ( nurl_print of ) ( nurl_print ` = extractvalue %` ) ( nurl_print sname ) ( nurl_print ` %v, ` ) ( nurl_print ( nurl_str_int i ) ) ( nurl_print `\n` )
+            : s tg ( __dr ctr )
+            ( nurl_print `  ` ) ( nurl_print tg ) ( nurl_print ` = extractvalue ` ) ( nurl_print ft ) ( nurl_print ` ` ) ( nurl_print of ) ( nurl_print `, 0\n` )
+            : s live ( nurl_str_cat `drop_live_` ( nurl_str_int ctr ) )
+            : s done ( nurl_str_cat `drop_done_` ( nurl_str_int ctr ) )
+            = ctr + ctr 1
+            ( nurl_print `  br i1 ` ) ( nurl_print tg ) ( nurl_print `, label %` ) ( nurl_print live ) ( nurl_print `, label %` ) ( nurl_print done ) ( nurl_print `\n` )
+            ( nurl_print live ) ( nurl_print `:\n` )
+            : s pv ( __dr ctr )
+            ( nurl_print `  ` ) ( nurl_print pv ) ( nurl_print ` = extractvalue ` ) ( nurl_print ft ) ( nurl_print ` ` ) ( nurl_print of ) ( nurl_print `, 1\n` )
+            ( emit_drop_value ncp pv ctr syms )
+            ( nurl_print `  br label %` ) ( nurl_print done ) ( nurl_print `\n` )
+            ( nurl_print done ) ( nurl_print `:\n` )
+        } {}
+        // A closure field: its env (null-safe; frees what the env owns).
+        ? ( __is_closure_llty ft ) {
+            : s cf ( __dr ctr )
+            ( nurl_print `  ` ) ( nurl_print cf ) ( nurl_print ` = extractvalue %` ) ( nurl_print sname ) ( nurl_print ` %v, ` ) ( nurl_print ( nurl_str_int i ) ) ( nurl_print `\n` )
+            : s ce ( __dr ctr )
+            ( nurl_print `  ` ) ( nurl_print ce ) ( nurl_print ` = extractvalue ` ) ( nurl_print ft ) ( nurl_print ` ` ) ( nurl_print cf ) ( nurl_print `, 1\n` )
+            ( nurl_print `  call void @nurl_closure_drop(i8* ` ) ( nurl_print ce ) ( nurl_print `)\n` )
         } {}
         = i + i 1
     }
     ( nurl_print `  ret void\n}\n` )
-    ? >= cont 0 { ( __emit_drop_fields_from fname sname cont syms ) } {}
-}
-
-// The drop of field `i` (type `ft`) of the struct value `src`.
-@ __emit_drop_field s sname i i s ft s src inout i ctr i syms → v {
-    ? ( __type_needs_drop ft syms ) {
-        : s fr ( __dr ctr )
-        ( nurl_print `  ` ) ( nurl_print fr ) ( nurl_print ` = extractvalue %` ) ( nurl_print sname ) ( nurl_print ` ` ) ( nurl_print src ) ( nurl_print `, ` ) ( nurl_print ( nurl_str_int i ) ) ( nurl_print `\n` )
-        ( emit_drop_value ft fr ctr syms )
-    } {}
-    : s ncp ( __nc_opt_payload ft )
-    ? & != 0 ( nurl_str_len ncp ) ! ( __type_needs_drop ft syms ) {
-        : s of ( __dr ctr )
-        ( nurl_print `  ` ) ( nurl_print of ) ( nurl_print ` = extractvalue %` ) ( nurl_print sname ) ( nurl_print ` ` ) ( nurl_print src ) ( nurl_print `, ` ) ( nurl_print ( nurl_str_int i ) ) ( nurl_print `\n` )
-        : s tg ( __dr ctr )
-        ( nurl_print `  ` ) ( nurl_print tg ) ( nurl_print ` = extractvalue ` ) ( nurl_print ft ) ( nurl_print ` ` ) ( nurl_print of ) ( nurl_print `, 0\n` )
-        : s live ( nurl_str_cat `drop_live_` ( nurl_str_int ctr ) )
-        : s done ( nurl_str_cat `drop_done_` ( nurl_str_int ctr ) )
-        = ctr + ctr 1
-        ( nurl_print `  br i1 ` ) ( nurl_print tg ) ( nurl_print `, label %` ) ( nurl_print live ) ( nurl_print `, label %` ) ( nurl_print done ) ( nurl_print `\n` )
-        ( nurl_print live ) ( nurl_print `:\n` )
-        : s pv ( __dr ctr )
-        ( nurl_print `  ` ) ( nurl_print pv ) ( nurl_print ` = extractvalue ` ) ( nurl_print ft ) ( nurl_print ` ` ) ( nurl_print of ) ( nurl_print `, 1\n` )
-        ( emit_drop_value ncp pv ctr syms )
-        ( nurl_print `  br label %` ) ( nurl_print done ) ( nurl_print `\n` )
-        ( nurl_print done ) ( nurl_print `:\n` )
-    } {}
-    // A closure field: its env (null-safe; frees what the env owns).
-    ? ( __is_closure_llty ft ) {
-        : s cf ( __dr ctr )
-        ( nurl_print `  ` ) ( nurl_print cf ) ( nurl_print ` = extractvalue %` ) ( nurl_print sname ) ( nurl_print ` ` ) ( nurl_print src ) ( nurl_print `, ` ) ( nurl_print ( nurl_str_int i ) ) ( nurl_print `\n` )
-        : s ce ( __dr ctr )
-        ( nurl_print `  ` ) ( nurl_print ce ) ( nurl_print ` = extractvalue ` ) ( nurl_print ft ) ( nurl_print ` ` ) ( nurl_print cf ) ( nurl_print `, 1\n` )
-        ( nurl_print `  call void @nurl_closure_drop(i8* ` ) ( nurl_print ce ) ( nurl_print `)\n` )
-    } {}
 }
 
 // Drop one payload slot (enum field index `fidx`) of a known payload
 // type. String / Vec slots hold the unwrapped handle (its f0); a boxed
 // struct / wide-enum slot holds a heap-box pointer (load → drop → free).
-@ emit_drop_enum_payload s ename s pt i fidx s src inout i ctr i syms → v {
+@ emit_drop_enum_payload s ename s pt i fidx inout i ctr i syms → v {
     : s slot ( __dr ctr )
-    ( nurl_print `  ` ) ( nurl_print slot ) ( nurl_print ` = extractvalue %` ) ( nurl_print ename ) ( nurl_print ` ` ) ( nurl_print src ) ( nurl_print `, ` ) ( nurl_print ( nurl_str_int fidx ) ) ( nurl_print `\n` )
+    ( nurl_print `  ` ) ( nurl_print slot ) ( nurl_print ` = extractvalue %` ) ( nurl_print ename ) ( nurl_print ` %v, ` ) ( nurl_print ( nurl_str_int fidx ) ) ( nurl_print `\n` )
     // The i64 slot holds a pointer (String/Vec f0, or a heap-box) —
     // materialise it once for every use below.
     : s sp ( __dr ctr )
@@ -68545,10 +68305,6 @@ unsafe @ __hmemo_close s key i mark b r → v {
     ( nurl_print `  ` ) ( nurl_print bp ) ( nurl_print ` = bitcast i8* ` ) ( nurl_print sp ) ( nurl_print ` to ` ) ( nurl_print ( nurl_llty pt ) ) ( nurl_print `*\n` )
     : s bv ( __dr ctr )
     ( nurl_print `  ` ) ( nurl_print bv ) ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty pt ) ) ( nurl_print `, ` ) ( nurl_print ( nurl_llty pt ) ) ( nurl_print `* ` ) ( nurl_print bp ) ( nurl_print `\n` )
-    // (The box is released after its value: while the value's destructor
-    // may run code of the program's own, and so panic, the box is in the
-    // journal, which nurl_free below takes it out of — agora #617.)
-    ? ( __drop_runs_code pt ) { ( nurl_print `  call void @nurl_journal_push(i8* ` ) ( nurl_print sp ) ( nurl_print `)\n` ) } {}
     ( emit_drop_value pt bv ctr syms )
     ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print sp ) ( nurl_print `)\n` )
     ( nurl_print `  br label %` ) ( nurl_print done ) ( nurl_print `\n` )
@@ -68559,14 +68315,7 @@ unsafe @ __hmemo_close s key i mark b r → v {
     : ~ i ctr 0
     ( nurl_print `define void @` ) ( nurl_print ( llvm_source_fn ( nurl_str_cat `drop__` ename ) ) )
     ( nurl_print `(%` ) ( nurl_print ename ) ( nurl_print ` %v) {\nentry:\n` )
-    // (A variant that needs a continuation drops its payloads out of one
-    // spilled copy of the value: __emit_enum_payloads_from.)
-    ? ( __enum_needs_cont variants syms ) {
-        ( nurl_print `  %es = alloca %` ) ( nurl_print ename ) ( nurl_print `\n  store %` ) ( nurl_print ename ) ( nurl_print ` %v, ptr %es\n` )
-    } {}
     ( nurl_print `  %dtag = extractvalue %` ) ( nurl_print ename ) ( nurl_print ` %v, 0\n` )
-    // (`vname vk from` triples: continuations to emit after this function.)
-    : ~ s conts ``
     : ~ i vk 0
     : ~ s rest ( nurl_str_cat variants `` )
     ~ != 0 ( nurl_str_len rest ) {
@@ -68588,107 +68337,20 @@ unsafe @ __hmemo_close s key i mark b r → v {
             ( nurl_print `  ` ) ( nurl_print cmpr ) ( nurl_print ` = icmp eq i64 %dtag, ` ) ( nurl_print ( nurl_str_int vk ) ) ( nurl_print `\n` )
             ( nurl_print `  br i1 ` ) ( nurl_print cmpr ) ( nurl_print `, label %` ) ( nurl_print ld ) ( nurl_print `, label %` ) ( nurl_print ln ) ( nurl_print `\n` )
             ( nurl_print ld ) ( nurl_print `:\n` )
-            : i vcont ( __emit_enum_payloads_from ename vname vk 0 pc `%es` F ctr syms )
-            ? >= vcont 0 { = conts ( nurl_str_cat4 conts vname ( nurl_str_cat4 ` ` ( nurl_str_int vk ) ` ` ( nurl_str_int vcont ) ) ` ` ) } {}
+            : ~ i pi 0
+            ~ < pi pc {
+                : s pt ( nurl_sym_get syms ( nurl_str_cat3 vname `__payload__` ( nurl_str_int pi ) ) )
+                ? ( __payload_needs_drop pt syms ) {
+                    ( emit_drop_enum_payload ename pt + pi 1 ctr syms )
+                } {}
+                = pi + pi 1
+            }
             ( nurl_print `  br label %` ) ( nurl_print ln ) ( nurl_print `\n` )
             ( nurl_print ln ) ( nurl_print `:\n` )
         } {}
         = vk + vk 1
     }
     ( nurl_print `  ret void\n}\n` )
-    // The continuations the variants asked for (__emit_enum_payloads_from).
-    ~ != 0 ( nurl_str_len conts ) {
-        : s cvn ( str_first_word conts ) = conts ( str_skip_word conts )
-        : s cvk ( str_first_word conts ) = conts ( str_skip_word conts )
-        : s cfr ( str_first_word conts ) = conts ( str_skip_word conts )
-        ( __emit_enum_cont_fn ename cvn ( nurl_str_to_int cvk ) ( nurl_str_to_int cfr ) syms )
-    }
-}
-
-// The name of an enum drop's continuation: the payloads of variant `vk`
-// from payload `k` on.
-@ __enum_cont_name s ename i vk i k → s {
-    ^ ( nurl_str_cat4 ( llvm_source_fn ( nurl_str_cat `drop__` ename ) ) ( nurl_str_cat `.v` ( nurl_str_int vk ) ) `.from` ( nurl_str_int k ) )
-}
-
-// Payload `pi` of variant `vname` runs code when dropped and a payload
-// after it owns something.
-@ __enum_payload_needs_cont s vname i pi i pc i syms → b {
-    : s pt ( nurl_sym_get syms ( nurl_str_cat3 vname `__payload__` ( nurl_str_int pi ) ) )
-    ? | ! ( __payload_needs_drop pt syms ) ! ( __drop_runs_code pt ) { ^ F } {}
-    : ~ i j + pi 1
-    ~ < j pc {
-        ? ( __payload_needs_drop ( nurl_sym_get syms ( nurl_str_cat3 vname `__payload__` ( nurl_str_int j ) ) ) syms ) { ^ T } {}
-        = j + j 1
-    }
-    ^ F
-}
-
-@ __enum_needs_cont s variants i syms → b {
-    : ~ s rest ( nurl_str_cat variants `` )
-    ~ != 0 ( nurl_str_len rest ) {
-        : s vname ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s pcs ( nurl_sym_get2 syms vname `__paycount` )
-        : i pc ? != 0 ( nurl_str_len pcs ) ( nurl_str_to_int pcs ) 0
-        : ~ i pi 0
-        ~ < pi pc {
-            ? ( __enum_payload_needs_cont vname pi pc syms ) { ^ T } {}
-            = pi + pi 1
-        }
-    }
-    ^ F
-}
-
-// The drops of variant `vname`'s payloads from payload `from` on. Where a
-// payload's drop may run code of the program's own and a later payload
-// owns something, the later ones would have no owner if it panicked
-// (agora #617): the slot holding the value (`slot`: the enum drop's one
-// spilled copy) is registered with the drop of the payloads after it, the
-// registration ends when the payload's drop returns, and the rest is that
-// continuation, called on the slot (`tail`: tail-called, from a
-// continuation, straight into its `ret`). Returns the payload the
-// continuation starts at (-1: none; every payload was dropped here).
-@ __emit_enum_payloads_from s ename s vname i vk i from i pc s slot b tail inout i ctr i syms → i {
-    : ~ i pi from
-    ~ < pi pc {
-        : s pt ( nurl_sym_get syms ( nurl_str_cat3 vname `__payload__` ( nurl_str_int pi ) ) )
-        ? ( __payload_needs_drop pt syms ) {
-            ? ( __enum_payload_needs_cont vname pi pc syms ) {
-                : s rest ( __enum_cont_name ename vk + pi 1 )
-                ( nurl_print `  call void @nurl_journal_push_drop2(ptr ` ) ( nurl_print slot ) ( nurl_print `, ptr null, ptr @` ) ( nurl_print rest ) ( nurl_print `)\n` )
-                : s v1 ( __dr ctr )
-                ( nurl_print `  ` ) ( nurl_print v1 ) ( nurl_print ` = load %` ) ( nurl_print ename ) ( nurl_print `, ptr ` ) ( nurl_print slot ) ( nurl_print `\n` )
-                ( emit_drop_enum_payload ename pt + pi 1 v1 ctr syms )
-                ( nurl_print `  call void @nurl_journal_forget_slot(ptr ` ) ( nurl_print slot ) ( nurl_print `)\n` )
-                ( nurl_print ? tail `  musttail call void @` `  call void @` ) ( nurl_print rest ) ( nurl_print `(i8* ` ) ( nurl_print slot ) ( nurl_print `)\n` )
-                ^ + pi 1
-            } {}
-            // (In the enum's own drop the value is at hand as `%v`; a
-            // continuation reads it out of the slot.)
-            ? tail {
-                : s v0 ( __dr ctr )
-                ( nurl_print `  ` ) ( nurl_print v0 ) ( nurl_print ` = load %` ) ( nurl_print ename ) ( nurl_print `, ptr ` ) ( nurl_print slot ) ( nurl_print `\n` )
-                ( emit_drop_enum_payload ename pt + pi 1 v0 ctr syms )
-            } {
-                ( emit_drop_enum_payload ename pt + pi 1 `%v` ctr syms )
-            }
-        } {}
-        = pi + pi 1
-    }
-    ^ -1
-}
-
-// `define void @<drop__E>.v<vk>.from<k>(i8* %p)`: a variant's payloads
-// from `k` on, of the value in the slot `%p`.
-@ __emit_enum_cont_fn s ename s vname i vk i k i syms → v {
-    : s self ( __enum_cont_name ename vk k )
-    : s pcs ( nurl_sym_get2 syms vname `__paycount` )
-    : i pc ? != 0 ( nurl_str_len pcs ) ( nurl_str_to_int pcs ) 0
-    : ~ i ctr 0
-    ( nurl_print `define void @` ) ( nurl_print self ) ( nurl_print `(i8* %p) {\nentry:\n` )
-    : i more ( __emit_enum_payloads_from ename vname vk k pc `%p` T ctr syms )
-    ( nurl_print `  ret void\n}\n` )
-    ? >= more 0 { ( __emit_enum_cont_fn ename vname vk more syms ) } {}
 }
 
 // A box destructor loads its payload by value, which requires a completed

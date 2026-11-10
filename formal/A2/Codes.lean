@@ -662,6 +662,12 @@ theorem codes_step {P : Prog} (hPc : ProgCodes P) {m : Mem} {s : Stmt} {r : Res}
     have hT := hm.slot hc
     exact ⟨(((hm.set (fun _ e => by cases e)).set (fun V e => by cases e; exact hT.child Child.pkg)).set
       (fun _ e => by cases e)).of_st rfl, ⟨trivial, hm.1 _ _ _ _ _ _ _ _ hc (Sub.refl _)⟩, hs⟩
+  | callcD hc _ _ _ _ =>
+    -- Agora #609: the environment moves to its binding, for good
+    intro hm _ hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    have hT := hm.slot hc
+    exact ⟨(((hm.set (fun _ e => by cases e)).set (fun V e => by cases e; exact hT.child Child.pkg)).set
+      (fun _ e => by cases e)).of_st rfl, trivial, hs⟩
 
 /-! ### A3.6: a program reads each module global at its declared type
 
@@ -759,6 +765,7 @@ theorem globs_step {P : Prog} {GT : GTy} (hPG : ProgGlobs P GT) {m : Mem} {s : S
   | «while» => intro hs _ _ h; cases h; exact ⟨⟨hs, hs⟩, trivial⟩
   | withElem _ _ _ _ _ => intro hs _ _ h; cases h; exact ⟨hs, trivial⟩
   | callcE _ _ _ _ => intro hs _ _ h; cases h; exact ⟨⟨trivial, trivial⟩, hs⟩
+  | callcD _ _ _ _ _ => intro hs _ _ h; cases h; exact ⟨trivial, hs⟩
   | _ => intro hs _ _ h; cases h <;> simp_all [Stmt.globsAt, Rhs.globAt]
 
 end A2

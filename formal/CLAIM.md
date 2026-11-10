@@ -665,8 +665,8 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   a `Vec` result, before the panic goes on (`scopeD_panic_runs_dtor`,
   `scopeD_panic_drains`); on the normal path the result has moved to the
   caller's binding by the frame's end, which runs nothing
-  (`Step.scopeDMoved`). The runtime does this since Agora #612 (below,
-  with the one difference, the order). And, for the drain, the run
+  (`Step.scopeDMoved`). The runtime does not do this yet (Agora #612,
+  below). And, for the drain, the run
   the steps above compose to: each element's frame runs its destructor at
   its end (`scopeD_end_runs_dtor`, of a value that is no node) before the
   `Vec`'s frame is at its end again, so the elements go in index order,
@@ -813,7 +813,11 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   class holds no views and no cell shares and crosses nowhere: no
   subsumption reaches it (`Cross.Le` asks the same `drops`), and what
   crosses asks a type that owns no destructor value. Its drop, a method
-  of the package, is the open part of #609.) A share an environment holds is of a block
+  of the package, is the open part of #609: the step is there
+  (`Step.callcD`: the hand-over of the environment to a method whose code
+  takes it owned, with no way back; which of the two hand-overs a call
+  takes is the code's first parameter's mode), and no rule types a call
+  of such a method yet, so no typed configuration takes it.) A share an environment holds is of a block
   whose payload owns none either (3d). This is a refusal, not the model
   of nurlc's environment drop glue (the stricter-than-nurlc list below;
   `A2/DROP_DESIGN.md` staging item 3 has the design that lifts it).
@@ -974,40 +978,20 @@ is stated here so the claim does not hide it:
   their elements through the same record (`nurl_vec_drop_range_dtor`).
   Which element types may run one is nurlc's answer (`__drop_runs_code`:
   a `% Drop` anywhere inside, a library handle, a closure, a trait
-  object); the others are released by a loop no panic can start in;
-- a function's result, when one of the function's own bindings'
-  destructors panics at its exit (the call's result frame, Agora #612):
-  the result is in the journal while the bindings are dropped — a
-  binding handed back keeps its registration until the others are
-  dropped, and a result that is no binding (a literal, a call's value, a
-  join) has a slot of its own for that window, with the ownership that
-  return answers (`mem_ret_guard_push`) — so the panic's drain runs the
-  result's destructor, once, and frees it. Registered only where a
-  binding the exit drops may run a destructor (`__drop_runs_code`). One
-  difference from the calculus, in order and not in what runs: the drain
-  goes newest first, so the result is dropped before the callee's
-  bindings still to go; the calculus's result frame is the outermost and
-  drops it after them.
+  object); the others are released by a loop no panic can start in.
 
-Tests: `compiler/tests/panic_in_drop_while_unwinding.nu`,
-`compiler/tests/panic_in_drop_of_vec_element.nu` and
-`compiler/tests/panic_in_drop_at_function_exit.nu` (clean under
+Tests: `compiler/tests/panic_in_drop_while_unwinding.nu` and
+`compiler/tests/panic_in_drop_of_vec_element.nu` (clean under
 AddressSanitizer and LeakSanitizer). That the journal's drain does what
 `Step.scopeDP` and `Step.scopeDPDrain` do is phase C / D.
 
-Places where the runtime does not yet do what the calculus says, each
-filed: a result when a `;` defer body panics after it is set, or of raw
-`s` or closure type (Agora #620).
-
-The later fields of a struct and payloads of an enum, when an earlier
-one's destructor panics, are dropped by the runtime (Agora #617): the
-drop glue nurlc writes registers the parts still to go before it drops a
-part that may run a destructor, so the panic's drain runs their
-destructors, in order and once each. That is the run Agora #616 gives the
-calculus for a struct (above: its glue takes it apart, each destructor
-field in a frame of its own) and Agora #632 for an enum (its glue takes
-the payload out to a frame of its own).
-Test: `compiler/tests/panic_in_drop_of_struct_field.nu`.
+One place where the runtime does not yet do what the calculus says
+(Agora #612): **a function's `% Drop` result, when one of the function's
+own bindings' destructors panics at its exit.** The
+calculus stops the panic at the result's frame, runs the result's
+destructor, frees it, and goes on (`Step.scopeDP` on the call's result
+frame). The runtime holds the result in no journal entry while the
+callee's bindings are dropped: its destructor does not run and it leaks.
 
 ## Trusted base
 
