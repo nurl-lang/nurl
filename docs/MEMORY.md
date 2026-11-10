@@ -587,6 +587,32 @@ $ `stdlib/core/vec.nu`
 }
 ```
 
+The loop reads each element through `xs`'s storage, so its borrow also
+covers a change that reaches `xs` by another route (agora #493): growing
+it through an alias or a cursor (`: ~ ( Vec T ) cur xs`, then `( vec_push
+[T] cur … )`), through a function handed one, or through a closure that
+grows it moves the buffer the loop walks. `x` stays readable — its handle
+survives the move — but going on to the next element is an error. Leave
+the loop with `break` right after the growth, grow after the loop, or walk
+by index (`~ < k ( vec_len [T] xs ) { … ( vec_at [T] xs k ) … }`). This
+covers a container the loop names as an owner, a field path of one, or a
+copy of its handle; one lent out of another container (a borrowed row) is
+agora #580.
+
+A view element — `~ v ws` over a `( Vec s )`, or over structs of views —
+is a copy of a view `ws` holds: it borrows what that view points into, as
+`: s v ( vec_at [s] ws k )` does. Reading it after that source grew, was
+released or was given a new value in the body is an error — in the same
+round, and in every later one, whose element is a copy of a view that
+ended (agora #492).
+
+Moving `x` out — `( string_free x )`, handing it to a `sink` parameter —
+takes that element out of `xs`: its slot is left empty, and `xs` does not
+release it again. That is allowed, and it ends the borrows of `xs`'s
+elements taken before, as `vec_remove` does (agora #490); the loop goes
+on. Storing `x` into another owner (`( vec_push [T] ys x )`, a struct
+literal) copies it and ends nothing.
+
 ### 2.6 Loop-carried moves
 
 A loop body runs more than once. A binding that existed before the loop

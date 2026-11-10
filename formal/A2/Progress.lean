@@ -22,6 +22,25 @@ theorem sum_slot {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (hy
     · exact ⟨_, Or.inl hv⟩
     · exact ⟨_, Or.inr hv⟩
 
+/-- …through a destructor type (A2-drop.3a: `getl` / `getr` lend a payload of
+    a destructor enum). -/
+theorem sum_slot_undtor {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (hy : Γ y = some E)
+    (hl : E.live = true) {a b : Ty} (ht : E.ty.undtor = .sum a b) :
+    ∃ v, (m.st y = some ⟨E.mode.ownSlot, some (.inl v)⟩) ∨ (m.st y = some ⟨E.mode.ownSlot, some (.inr v)⟩) := by
+  rcases hi.mode_cases hy with hm | hm | hm
+  · obtain ⟨T, hT, hw, _⟩ := hi.own_val hy hl (by rw [hm]; rfl)
+    have hw' := hw.undtor
+    rw [ht] at hw'; rw [hm]
+    cases hw' with
+    | inl _ => exact ⟨_, Or.inl hT⟩
+    | inr _ => exact ⟨_, Or.inr hT⟩
+  all_goals
+    obtain ⟨v, hv, hok⟩ := hi.bor_val hy hl (by rw [hm]; rfl)
+    rw [← valOK_undtor, ht] at hok; rw [hm]
+    rcases valOK_sum.mp hok with ⟨x, rfl, _⟩ | ⟨x, rfl, _⟩
+    · exact ⟨_, Or.inl hv⟩
+    · exact ⟨_, Or.inr hv⟩
+
 theorem eval_exists {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {e : Expr} (he : ExprT Γ e) :
     ∃ n, Eval m e n := by
   induction he with
@@ -103,15 +122,16 @@ theorem takeVal_exists {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entr
 
 /-- A live struct binding holds a struct. -/
 theorem pair_slot {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (hy : Γ y = some E)
-    (hl : E.live = true) {a b : Ty} (ht : E.ty = .prod a b) :
+    (hl : E.live = true) {a b : Ty} (ht : E.ty.undtor = .prod a b) :
     ∃ o v w, m.st y = some ⟨o, some (.pair v w)⟩ := by
   rcases hi.mode_cases hy with hm | hm | hm
   · obtain ⟨T, hT, hw, _⟩ := hi.own_val hy hl (by rw [hm]; rfl)
-    rw [ht] at hw; cases hw
+    have hw' := hw.undtor
+    rw [ht] at hw'; cases hw'
     exact ⟨_, _, _, hT⟩
   all_goals
     obtain ⟨v, hv, hok⟩ := hi.bor_val hy hl (by rw [hm]; rfl)
-    rw [ht] at hok; obtain ⟨x, z, rfl, _⟩ := valOK_prod.mp hok
+    rw [← valOK_undtor, ht] at hok; obtain ⟨x, z, rfl, _⟩ := valOK_prod.mp hok
     exact ⟨_, _, _, hv⟩
 
 theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hi : MInv m Γ)
@@ -189,11 +209,11 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
     obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly hpa hte
     exact ⟨_, EvalR.pack htk⟩
   | getl hy hl ht =>
-    obtain ⟨v, hv | hv⟩ := sum_slot hi hy hl ht
+    obtain ⟨v, hv | hv⟩ := sum_slot_undtor hi hy hl ht
     · exact ⟨_, EvalR.getl hv⟩
     · exact ⟨_, EvalR.getlP hv⟩
   | getr hy hl ht =>
-    obtain ⟨v, hv | hv⟩ := sum_slot hi hy hl ht
+    obtain ⟨v, hv | hv⟩ := sum_slot_undtor hi hy hl ht
     · exact ⟨_, EvalR.getrP hv⟩
     · exact ⟨_, EvalR.getr hv⟩
   | takel hy hl hm ht _ _ =>
@@ -524,7 +544,7 @@ theorem progress {P : Prog}
     cases res with
     | ok v o m1 => exact Or.inr <| Or.inr ⟨_, Step.letv hmx hres⟩
     | panic => exact Or.inr <| Or.inr ⟨_, Step.letvP hres⟩
-  | @letcall Γ Γ1 Δ F x f args k E _ hx _ hc _ _ _ =>
+  | @letcall Γ Γ1 Δ F x f args k E _ hx _ hc _ _ _ _ =>
     intro m hcd hi
     exact Or.inr <| Or.inr (hcall (k := k) hx hc hi.toMInv)
   | @scope Γ Δ1 F x k hxE _ _ _ ih =>
@@ -602,7 +622,7 @@ theorem progress {P : Prog}
         -- A3.3: on the way out too
         obtain ⟨m2, hrl⟩ := Release.exists (k := kk) (t := t) hsl1 hd
         exact Or.inr <| Or.inr ⟨_, Step.scopeLP hr hrl⟩
-  | @letd Γ Γ1 Δ F x f r k E _ _ hx _ hr _ _ _ _ _ _ =>
+  | @letd Γ Γ1 Δ F x f r k E _ _ _ hx _ hr _ _ _ _ _ _ _ _ =>
     intro m hcd hi
     have hmx : m.st x = none := by
       have := hi.dom x; rw [hx] at this; cases h : m.st x <;> simp_all
@@ -614,7 +634,7 @@ theorem progress {P : Prog}
     | panic => exact Or.inr <| Or.inr ⟨_, Step.letdP hres⟩
   | @scopeD Γ Δ1 F x f k hxE _ _ _ _ _ _ _ ih =>
     intro m hcd hi
-    obtain ⟨Ex, hx, hmo, _, _⟩ := hxE
+    obtain ⟨Ex, _, hx, hmo, _, _, _⟩ := hxE
     have hnrb : Ex.mode ≠ .rootb := by rw [hmo]; simp
     have hiS : Inv m Γ F (.scope x k) := Inv.scopeD_iff.mp hi
     have hi0 : Inv m Γ F k := hiS.scopeIn hx hnrb
@@ -773,7 +793,7 @@ theorem progress {P : Prog}
   | callc _ hx hxF hc htc hj hσ hhd _ hcT hnz _ _ _ =>
     intro m hcd hi
     exact Or.inr <| Or.inr (hclo hx hxF hc htc hj hσ hhd hcT hnz hcd hi)
-  | callcE _ hx _ hc htc hcan _ hj hσ hsp _ _ _ _ _ hcT _ _ _ _ =>
+  | callcE _ hx _ hc htc hcan _ hj hσ hsp _ _ _ _ _ hcT _ _ _ _ _ =>
     intro m hcd hi
     exact Or.inr <| Or.inr (hhand hx hc htc hcan hj hσ hsp hcT hcd hi)
   | @catchR Γ Δ F x m0 s _ _ hM _ hKO _ ih =>
@@ -791,9 +811,9 @@ theorem progress {P : Prog}
         obtain ⟨_, E0, h0⟩ := hKO.2 x Ex hEx
         exact Or.inr <| Or.inr ⟨_, Step.catchP hr (by rw [hout x hxs, ← hi.dom x, h0]; rfl)⟩
 
-  | @unpair Γ Δ F y x z k E a b _ hy hl hm hty _ hx hz hxz _ _ _ _ _ _ _ _ =>
+  | @unpair Γ Δ F y x z k E a b _ hy hl hm hty _ hx hz hxz _ _ _ _ _ _ _ _ _ _ =>
     intro m hcd hi
-    obtain ⟨o, v, w, hv⟩ := pair_slot hi.toMInv hy hl hty
+    obtain ⟨o, v, w, hv⟩ := pair_slot hi.toMInv hy hl (by rw [hty]; rfl)
     obtain ⟨T, hT, _⟩ := hi.own_val hy hl (by rcases hm with h | ⟨b, h, _⟩ <;> rw [h] <;> rfl)
     rw [hT] at hv; cases hv
     have hmx : m.st x = none := by

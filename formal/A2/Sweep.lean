@@ -299,6 +299,7 @@ theorem ArcIn.sub {τ : Ty} {T : Val} {u : Ty} {k : Nat} {p : Option Val} (h : A
   | inl _ ih => exact ih.imp (fun ⟨p, h⟩ => ⟨p, Sub.inl h⟩) Sub.inl
   | inr _ ih => exact ih.imp (fun ⟨p, h⟩ => ⟨p, Sub.inr h⟩) Sub.inr
   | pkg _ _ ih => exact ih.imp (fun ⟨p, h⟩ => ⟨p, Sub.pkg h⟩) Sub.pkg
+  | dtor _ ih => exact ih
 
 /-- A share a tree holds refers to its block. -/
 theorem Kept.shareIn {R : Val → Prop} {m : Mem} {v : Val} (h : Kept R m v) {k : Nat} (hs : ShareIn k v) :
@@ -407,6 +408,7 @@ theorem ValOK.sweep {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m τ v P H) 
     obtain ⟨o, ho⟩ := h
     obtain ⟨dep, hd, n0, hr, hlk⟩ := hl
     exact .cell ⟨o, Mem.sweepR_blk.mpr ⟨ho, hv.cell (Sub.refl _)⟩⟩ ⟨dep, hd, n0, hr.sweep hR, hlk⟩
+  | dtor _ ih => exact .dtor (ih hv)
 
 theorem SlotOK.sweep {E : Entry} {sl : Slot} (h : SlotOK m E sl)
     (hk : ∀ v, sl.val = some v → Kept R m v) : SlotOK (m.sweepR R) E sl := by

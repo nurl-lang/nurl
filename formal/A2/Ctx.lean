@@ -138,6 +138,7 @@ theorem ValOK.mono' {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m 
     intro P' H' hp _; obtain ⟨dep, hd, hla⟩ := hl; exact .arc h hw hv ⟨dep, hp hd, hla⟩
   | lk h => intro _ _ _ _; exact .lk h
   | cell h hl => intro P' H' hp _; obtain ⟨dep, hd, hla⟩ := hl; exact .cell h ⟨dep, hp hd, hla⟩
+  | dtor _ ih => intro P' H' hp hs; exact .dtor (ih hp hs)
 
 theorem ValOK.mono {m : Mem} {τ : Ty} {v : Val} {P P' H H' : List Dep} (hp : P ⊆ P')
     (hs : H ⊆ H') (h : ValOK m τ v P H) : ValOK m τ v P' H' := h.mono' hp hs
@@ -170,6 +171,7 @@ theorem ValOK.onlyReaders {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : Va
     intro P' hp; obtain ⟨dep, hd, hla⟩ := hl; exact .arc h hw hv ⟨dep, hp dep hd hla.bound, hla⟩
   | lk h => intro _ _; exact .lk h
   | cell h hl => intro P' hp; obtain ⟨dep, hd, hla⟩ := hl; exact .cell h ⟨dep, hp dep hd hla.bound, hla⟩
+  | dtor _ ih => intro P' hp; exact .dtor (ih hp)
 
 theorem SlotOK.weaker' {m : Mem} {E E' : Entry} {sl : Slot} (ht : E'.ty = E.ty) (hm : E'.mode = E.mode)
     (hl : E'.live = true → E.live = true ∧ (E.mode.ownSlot = false → E.path ⊆ E'.path) ∧ E.held ⊆ E'.held)

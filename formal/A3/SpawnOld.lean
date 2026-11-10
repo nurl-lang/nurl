@@ -244,7 +244,7 @@ theorem Redex.typed {s r : Stmt} {K : Stmt → Stmt} (hR : Redex s K r) {P : Pro
     induction ht with
     | scopeD hxE _ hs _ _ _ _ _ =>
       cases hS
-      obtain ⟨Ex, hx, hmo, _⟩ := hxE
+      obtain ⟨Ex, _, hx, hmo, _⟩ := hxE
       exact ih _ _ _ hs ((Inv.scopeD_iff.mp hi).scopeIn hx (by rw [hmo]; simp))
     | sub hw _ _ ih0 => exact ih0 hS (hi.weaker hw)
     | _ => cases hS
@@ -319,8 +319,8 @@ theorem Redex.plug {s r : Stmt} {K : Stmt → Stmt} (hR : Redex s K r) {P : Prog
     | scopeD hxE hxF hs hpx hKO hWd hNd hΔd _ =>
       cases hS
       have hsp' : (K r').spine = s.spine := by rw [Redex.spine_eq h hsp, ← Redex.eq h]
-      obtain ⟨Ex, hx, hmo, hrest⟩ := hxE
-      exact StmtT.scopeD ⟨Ex, hx, hmo, hrest⟩ hxF
+      obtain ⟨Ex, tx, hx, hmo, hrest⟩ := hxE
+      exact StmtT.scopeD ⟨Ex, tx, hx, hmo, hrest⟩ hxF
         (ih hsp hhole _ _ _ hs ((Inv.scopeD_iff.mp hi).scopeIn hx (by rw [hmo]; simp))) hpx
         (by rw [hsp']; exact hKO) hWd hNd hΔd
     | sub hw _ ho ih0 => exact StmtT.sub hw (ih0 hS (hi.weaker hw)) ho
@@ -376,7 +376,7 @@ theorem drops_typed {P : Prog} {Γ0 : Ctx} {F : List Var} {fn : Fn} {args : List
     ∀ (ps : List (PMode × Ty)) (as : List Var) (i : Nat) (Γc : Ctx),
       (∀ q ∈ ps, q.1 = .sink) → ps.length = as.length → as.Nodup →
       (∀ a ∈ as, Γc a = some (argE Γ0 a) ∧ (argE Γ0 a).live = true ∧ (argE Γ0 a).mode = .own ∧
-        a ∉ F ∧ NoPin Γc a) →
+        a ∉ F ∧ NoPin Γc a ∧ (argE Γ0 a).ty.holdsDtor = false) →
       (∀ a ∈ as, DtorSafe Γc .replace false a) →
       (∀ a ∈ as, ∀ a' ∈ as, a ≠ a' → ∀ d ∈ (argE Γ0 a').vdeps, d.root ≠ a) →
       Γc x = none → CtxWF Γc → NoPin Γc x →
@@ -396,7 +396,7 @@ theorem drops_typed {P : Prog} {Γ0 : Ctx} {F : List Var} {fn : Fn} {args : List
       obtain ⟨pm, t⟩ := q
       have hpm : pm = .sink := hsk (pm, t) List.mem_cons_self
       subst hpm
-      obtain ⟨hca, hl, hmo, haF, hpa⟩ := hargs a List.mem_cons_self
+      obtain ⟨hca, hl, hmo, haF, hpa, hnda⟩ := hargs a List.mem_cons_self
       have hax : a ≠ x := fun e => by rw [e, hx] at hca; cases hca
       have hnd' := List.nodup_cons.mp hnd
       -- the context after `a` moved out
@@ -414,8 +414,8 @@ theorem drops_typed {P : Prog} {Γ0 : Ctx} {F : List Var} {fn : Fn} {args : List
           (fun b hb b' hb' => hdep b (List.mem_cons_of_mem _ hb) b' (List.mem_cons_of_mem _ hb'))
           hx1 hwf1 (noPin_of_rbFrom hrb hnx) ht
         have ha'a : a' ≠ a := fun e => hnd'.1 (e ▸ ha')
-        obtain ⟨hca', hl', hmo', haF', hpa'⟩ := hargs a' (List.mem_cons_of_mem _ ha')
-        refine ⟨?_, hl', hmo', haF', noPin_of_rbFrom hrb hpa'⟩
+        obtain ⟨hca', hl', hmo', haF', hpa', hnda'⟩ := hargs a' (List.mem_cons_of_mem _ ha')
+        refine ⟨?_, hl', hmo', haF', noPin_of_rbFrom hrb hpa', hnda'⟩
         have hno := hdep a List.mem_cons_self a' (List.mem_cons_of_mem _ ha') (Ne.symm ha'a)
         simp [A2.setE, upd_ne _ _ ha'a, A2.kill, hca', killE_nohit hno]
       -- `a` moves into `x`, and `x`'s scope ends
@@ -425,6 +425,7 @@ theorem drops_typed {P : Prog} {Γ0 : Ctx} {F : List Var} {fn : Fn} {args : List
           (RhsT.moveOwn hca hl hmo haF hpa (hds0 a List.mem_cons_self))
           StmtT.skip ⟨noPin_of_rbFrom (hrb.trans (rbFrom_setE _ (by simp))) hnx,
             (DtorSafe.of_fresh hwf1 hx1 _ _).setE_off rfl, (DbindSafe.of_fresh hwf1 hx1).setE_off rfl⟩
+          (fun _ => hnda)
         rwa [exitScope_setE_fresh hwf1 hx1] at h
       exact StmtT.seq (dropSeq_src hL as) hlet ht1
 
@@ -432,7 +433,8 @@ theorem drops_typed {P : Prog} {Γ0 : Ctx} {F : List Var} {fn : Fn} {args : List
     parameters. -/
 theorem spawn_fn {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hS : SpawnOK P spawn) {f : Nat}
     {fn : Fn} (hsp : spawn f = true) (hf : P[f]? = some fn) :
-    fn.resTy = .int ∧ fn.resOwn = false ∧ ∀ pt ∈ fn.params, pt.1 = .sink ∧ pt.2.holdsView = false := by
+    fn.resTy = .int ∧ fn.resOwn = false ∧
+      ∀ pt ∈ fn.params, pt.1 = .sink ∧ pt.2.holdsView = false ∧ pt.2.holdsDtor = false := by
   obtain ⟨fn', hf', hres, hall⟩ := hS f hsp
   rw [hf] at hf'; cases hf'
   refine ⟨hres, ?_, hall⟩
@@ -455,7 +457,7 @@ theorem spawn_hole {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hS : Spawn
   intro Γt Ft Δt ht hi
   generalize hS' : Stmt.letcall x f args k = S at ht hi
   induction ht with
-  | @letcall Γ Γ1 Δ F x0 f0 args0 k0 E hsrc hx hxF hc hk hpin _ =>
+  | @letcall Γ Γ1 Δ F x0 f0 args0 k0 E hsrc hx hxF hc hk hpin _ _ =>
     cases hS'
     obtain ⟨fn', hf', hlen, hargs, hnf, hds, rfl, rfl, hg⟩ := hc
     rw [hf] at hf'; cases hf'
@@ -466,7 +468,7 @@ theorem spawn_hole {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hS : Spawn
       fun i hi => (hall _ (List.getElem_mem hi)).1
     -- the arguments, as the moves need them
     have hargs' : ∀ a ∈ args, Γ a = some (argE Γ a) ∧ (argE Γ a).live = true ∧
-        (argE Γ a).mode = .own ∧ a ∉ F ∧ NoPin Γ a := by
+        (argE Γ a).mode = .own ∧ a ∉ F ∧ NoPin Γ a ∧ (argE Γ a).ty.holdsDtor = false := by
       intro a ha
       obtain ⟨i, hi', rfl⟩ := mem_args ha
       have hip : i < fn.params.length := hlen ▸ hi'
@@ -474,9 +476,10 @@ theorem spawn_hole {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hS : Spawn
       have hae : argE Γ (args.getD i 0) = Ea := by unfold argE; rw [hEa]; rfl
       have hs := hsk i hip
       rw [hs] at hok
-      obtain ⟨_, hmo, _⟩ := hok
+      obtain ⟨hty, hmo, _⟩ := hok
       rw [hae]
-      exact ⟨hEa, hl, hmo, (hmv (by rw [hs]; rfl)).1, hpn (Or.inl hs)⟩
+      exact ⟨hEa, hl, hmo, (hmv (by rw [hs]; rfl)).1, hpn (Or.inl hs),
+        by rw [hty]; exact (hall _ (List.getElem_mem hip)).2.2⟩
     have hdsa : ∀ a ∈ args, DtorSafe Γ .replace false a := by
       intro a ha
       obtain ⟨i, hi', rfl⟩ := mem_args ha
@@ -695,7 +698,7 @@ theorem letcall_call {P : Prog} {m : Mem} {Γ : Ctx} {F : List Var} {x f : Nat} 
     (hi : Inv m Γ F (.letcall x f args k)) : ∃ Γ0 E Γ1, CallT P Γ0 F f args E Γ1 ∧ MInv m Γ0 := by
   generalize hS : Stmt.letcall x f args k = S at ht hi
   induction ht with
-  | letcall _ _ _ hc _ _ _ => cases hS; exact ⟨_, _, _, hc, hi.toMInv⟩
+  | letcall _ _ _ hc _ _ _ _ => cases hS; exact ⟨_, _, _, hc, hi.toMInv⟩
   | sub hw _ _ ih0 => exact ih0 hS (hi.weaker hw)
   | _ => cases hS
 

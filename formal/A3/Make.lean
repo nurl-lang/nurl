@@ -215,7 +215,8 @@ theorem makeStmt_typed {P : Prog} (hP : ProgOK P) {D : List Decl} (hD : DeclsOK 
       split at hE
       · contradiction
       · cases hE
-  exact ⟨_, StmtT.letcall rfl rfl (by simp) hcall hasg (hplain'.endOK 0)⟩
+  exact ⟨_, StmtT.letcall rfl rfl (by simp) hcall hasg (hplain'.endOK 0)
+    (fun fn' hf' _ hd => by rw [hf] at hf'; cases hf'; rw [hrt, Ty.holdsDtor_of_sync hsy] at hd; cases hd)⟩
 
 /-- At the hand-over point, variable 0 is an owner (or, in no context the
     invariant admits, an `inout` binding) of the declared type: the

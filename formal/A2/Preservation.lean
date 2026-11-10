@@ -1304,6 +1304,7 @@ theorem dtorCall_typed {P : Prog} {m : Mem} {Γ0 : Ctx} {F : List Var} {x : Var}
     ⟨hNoPinR, (DtorSafe.of_fresh hm.wf hrΓ _ _).setE_off rfl, (DbindSafe.of_fresh hm.wf hrΓ).setE_off rfl⟩
   have hlc := StmtT.letcall (P := P) (F := F) (x := m.nv) (f := f) (args := [x]) (s := .skip)
     rfl hrΓ hnF hcall StmtT.skip hEndR
+    (fun fn' hf' ho _ => by rw [hfn] at hf'; cases hf'; rw [hro] at ho; cases ho)
   rw [exitScope_setE_fresh hm.wf hrΓ] at hlc
   exact StmtT.scope ⟨E, hx, by simp [hmo]⟩ hxF hlc hpin
 
@@ -1468,7 +1469,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           exact ⟨by simp [Stmt.spine], E0, h0⟩
       · have hvx : v ≠ x := fun e => hxF (e ▸ hv)
         simp only [Mem.set_st, upd_ne _ _ hvx]
-  | @letd Γ Γ1 Δ F x f r k E H hsrc hx hxF hr hmo hfn hdtor hH hs hpx _ =>
+  | @letd Γ Γ1 Δ F x f r k E t H hsrc hx hxF hr hmo hty hstr hfn hdtor hH hs hpx _ =>
     intro m m' s' hcd hi hst
     cases hst with
     | letd hmx he =>
@@ -1476,17 +1477,19 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       have hanch := hi.leafAnch rfl
       obtain ⟨post, out⟩ := rhs_pres hi.toMInv hanch hr he
       -- the binding views what `letd` records it as viewing
-      have out2 := out.widen hmo hH
-      generalize hE2 : ({ E with held := H } : Entry) = E2 at out2 hs
+      -- (A2-drop.3a: of the destructor type)
+      have out2 := (out.widen hmo hH).retype hmo hty hstr
+      generalize hE2 : ({ E with ty := .dtor f t, held := H } : Entry) = E2 at out2 hs
       have hmo2 : E2.mode = .own := by rw [← hE2]; exact hmo
-      have hfn2 : E2.ty.hasFn = false := by rw [← hE2]; exact hfn
-      have hdtor2 : DtorOK P f E2.ty := by rw [← hE2]; exact hdtor
+      have hty2 : E2.ty = .dtor f t := by rw [← hE2]
+      have hfn2 : E2.ty.hasFn = false := by rw [hty2]; exact hfn
+      have hdtor2 : DtorOK P f E2.ty := by rw [hty2]; exact hdtor
       have hx1 : Γ1 x = none := by
         have := post.cdom x; rw [hx] at this; cases h : Γ1 x <;> simp_all
       have hxn : x < m1.nv := by rw [post.nv]; exact hi.nvS x (by simp [Stmt.vars])
       -- A2-drop.2: the binding enters armed when its type holds views
-      have hm := post.inv.add hx1 hxn (out2.setDtor E2.ty.holdsView E2.ty.holdsView) (fun h => h) (fun h => h)
-        (fun h => h)
+      have hm := post.inv.add hx1 hxn (out2.setDtor E2.ty.dtorViews E2.ty.dtorViews) (fun h => h)
+        (fun h => by simp only [Ty.dtorViews, Bool.and_eq_true] at h; exact h.2) (fun h => h)
       have hnrb : E2.mode ≠ .rootb := by rcases out2.mode with h | h <;> rw [h] <;> simp
       have hanch1 := post.rel.anch hanch
       have hanchx : RootbAnch (setE Γ1 x E2.arm) F := fun p Ep hp hmp => by
@@ -1504,10 +1507,11 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         have hhv : E2.ty.holdsView = true := by
           obtain ⟨Ek, hk, _, hk2, _⟩ := (hKOd.1 x E2.arm (by simp [setE]) (by simp))
           rw [hE'] at hk; cases hk; show E2.arm.ty.holdsView = true; rw [← hk2]; exact hv'
-        obtain ⟨E3, h2, hd2, _⟩ := hst x E2.arm (by simp [setE]) (by simp [Entry.arm, hhv])
+        obtain ⟨E3, h2, hd2, _⟩ := hst x E2.arm (by simp [setE])
+          (by rw [hty2] at hhv; show E2.ty.dtorViews = true; rw [hty2, Ty.dtorViews_dtor]; exact hhv)
           (by rw [show E2.arm.mode = E2.mode from rfl, hmo2]; rfl) (by simp)
         rw [hE'] at h2; cases h2; exact hd2
-      refine ⟨setE Γ1 x E2.arm, StmtT.scopeD ⟨E2.arm, by simp [setE], hmo2, hfn2, hdtor2⟩ hxF hs hpx
+      refine ⟨setE Γ1 x E2.arm, StmtT.scopeD ⟨E2.arm, t, by simp [setE], hmo2, hty2, hfn2, hdtor2⟩ hxF hs hpx
         (by rw [hsp]; exact hKOd) hWd hNd hΔd, ?_, by simp [post.nv], ?_, fun v hv => ?_⟩
       · refine Inv.mk hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
           (by simp [Stmt.spine, hsp, setE]) (show CatchOK _ k from catchOK_src hsrc)
@@ -1555,7 +1559,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           exact ⟨by simp [Stmt.spine], E0, h0⟩
       · have hvx : v ≠ x := fun e => hxF (e ▸ hv)
         simp only [Mem.set_st, upd_ne _ _ hvx]; exact post.frz v hv
-  | letcall hsrc hx hxF hc hs hpx _ =>
+  | letcall hsrc hx hxF hc hs hpx _ _ =>
     intro m m' s' hcd hi hst
     exact hcall hsrc hx hxF hc hs hpx hi hst
   | assign hx hxF hmodes hr hty hxd _ hpin hds =>
@@ -2078,7 +2082,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         exact ⟨by simp only [Stmt.spine, List.mem_cons, not_or]; exact ⟨hvs.1, hvs'⟩, rest⟩
   | @scopeD Γ Δ1 F x f k hxE hxF hs hpx hKO hWd hNd hΔd ihs =>
     intro m m' s' hcd hi hst
-    obtain ⟨Ex, hx, hmo, hhf, hdtor⟩ := hxE
+    obtain ⟨Ex, tx, hx, hmo, htx, hhf, hdtor⟩ := hxE
     have hnrb : Ex.mode ≠ .rootb := by rw [hmo]; simp
     have hiS : Inv m Γ F (.scope x k) := Inv.scopeD_iff.mp hi
     have hxsp : x ∉ k.spine := by
@@ -2099,7 +2103,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       have hi0 : Inv m Γ F k := hiS.scopeIn hx hnrb
       obtain ⟨Γ', ht', hi', hnv, hk, hfz⟩ := ihs hcd hi0 hst'
       obtain ⟨hxsp', Ex', hx', hm', ht'', _⟩ := hk.1 x Ex hx hxsp
-      refine ⟨Γ', StmtT.scopeD ⟨Ex', hx', by rw [hm', hmo], by rw [ht'', hhf],
+      refine ⟨Γ', StmtT.scopeD ⟨Ex', tx, hx', by rw [hm', hmo], by rw [ht'', htx], by rw [ht'', hhf],
           by rw [ht'']; exact hdtor⟩ hxF ht' hpx (hKO.step hk) hWd hNd hΔd, Inv.scopeD_iff.mpr ?_, hnv,
         ⟨?_, ?_, hk.2.2.mono fun v hv h => hv (List.mem_cons_of_mem _ h)⟩, hfz⟩
       · exact
@@ -2229,6 +2233,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           (DbindSafe.of_fresh hm1.wf hrΓ').setE_off rfl⟩
       have hlc := StmtT.letcall (P := P) (F := F) (x := m.nv) (f := f) (args := [x]) (s := .skip)
         rfl hrΓ' hrF hcall StmtT.skip hEndR
+        (fun fn' hf' ho _ => by rw [hfn] at hf'; cases hf'; rw [hro] at ho; cases ho)
       rw [exitScope_setE_fresh hm1.wf hrΓ'] at hlc
       have hsc := StmtT.scope (P := P) (F := F) (x := x) (s := .letcall m.nv f [x] .skip)
         ⟨(Ex.revive x), by simp [setE], by simp [Entry.revive, hmo]⟩ hxF hlc hNoPinΓ'
@@ -2734,7 +2739,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       have hvs : v ∉ s.spine := fun h => hs.spine_F v h (List.mem_append_left _ hv)
       simp only [Mem.set_st, upd_ne _ _ hvx]; exact hout v hvs
 
-  | unpair hsrc hy hl hm hty hyF hx hz hxz hxF hzF hs hny hdy hpz hpx _ =>
+  | unpair hsrc hy hl hm hty hyF hx hz hxz hxF hzF hs hny hdy hpz hpx _ _ _ =>
     intro m m' s' hcd hi hst
     exact pres_unpair hsrc hy hl hm hty hyF hx hz hxz hxF hzF hs hny hdy hpz hpx hi hst
 

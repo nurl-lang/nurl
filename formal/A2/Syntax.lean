@@ -85,6 +85,9 @@ inductive Ty where
   | cell (t : Ty)     -- A3.5: a share of a library handle's state (a `PNCounter`, a `TcpConn`, a
                       -- `Cell`): a lock block whose payload, a `t`, the library changes in place
                       -- through any share; Send, not Sync
+  | dtor (f : Nat) (t : Ty)  -- A2-drop.3: a `t` whose drop first runs the program's function `f`
+                             -- (its `% Drop`, DtorOK); the destructor is on the type, so every
+                             -- drop of such a value runs it, wherever the value went
 deriving DecidableEq, Repr
 
 /-- Does a value of this type hold views (so that storing one into a
@@ -100,6 +103,7 @@ def Ty.holdsView : Ty → Bool
   | .arc t => t.holdsView
   | .lk t => t.holdsView
   | .cell t => t.holdsView
+  | .dtor _ t => t.holdsView
 
 /-- May a value of this type hold a closure that holds bindings by name (or
     views)?  A3.5b: a Send closure (`fn ms q`, `q` not `any`) holds neither, so
@@ -114,6 +118,7 @@ def Ty.hasFn : Ty → Bool
   | .arc t => t.hasFn
   | .lk t => t.hasFn
   | .cell t => t.hasFn
+  | .dtor _ t => t.hasFn
 
 /-- A3.1: may a value of this type hold a share (an `Arc`)?  A closure's
     environment may, unless its type says it holds none (A3.5b: `bare`). -/
@@ -127,6 +132,7 @@ def Ty.hasArc : Ty → Bool
   | .arc _ => true
   | .lk _ => true
   | .cell _ => true
+  | .dtor _ t => t.hasArc
 
 /-- A3.5: may a value of this type hold a cell share (a library handle whose
     copies are one state)?  A closure's environment may, unless its type says
@@ -147,6 +153,25 @@ def Ty.hasCell : Ty → Bool
   | .arc t => t.hasCell
   | .lk _ => false
   | .cell _ => true
+  | .dtor _ t => t.hasCell
+
+/-- A2-drop.3: the type under every destructor wrapper; a destructor
+    type's values are those of the type it wraps. -/
+def Ty.undtor : Ty → Ty
+  | .dtor _ t => t.undtor
+  | t => t
+
+theorem Ty.undtor_ne (τ : Ty) (f : Nat) (t : Ty) : τ.undtor ≠ .dtor f t := by
+  induction τ with
+  | dtor _ _ ih => exact ih
+  | _ => intro h; cases h
+
+@[simp] theorem Ty.undtor_dtor (f : Nat) (t : Ty) : (Ty.dtor f t).undtor = t.undtor := rfl
+
+theorem Ty.holdsView_undtor (τ : Ty) : τ.undtor.holdsView = τ.holdsView := by
+  induction τ with
+  | dtor _ _ ih => exact ih
+  | _ => rfl
 
 /-- A type that holds no share holds no cell share. -/
 theorem Ty.hasCell_of_hasArc {t : Ty} (h : t.hasArc = false) : t.hasCell = false := by
@@ -164,6 +189,7 @@ theorem Ty.hasCell_of_hasArc {t : Ty} (h : t.hasArc = false) : t.hasCell = false
   | arc _ _ => cases h
   | lk _ _ => cases h
   | cell _ _ => cases h
+  | dtor _ t ih => exact ih h
 
 /-- A3.6: does a value of this type synchronise itself, so that a module
     global set at start may hold it and every thread reach it?  A lock share
@@ -175,6 +201,55 @@ def Ty.sync : Ty → Bool
   | .lk _ => true
   | .arc t => !t.hasCell
   | _ => false
+
+/-- A2-drop.3: a struct or an enum, what `% Drop` is on (a destructor type
+    wraps one of these). -/
+def Ty.isStruct : Ty → Bool
+  | .prod _ _ => true
+  | .sum _ _ => true
+  | _ => false
+
+/-- A2-drop.3a: a value of this type runs a destructor when it is dropped:
+    the type is, at its top, a destructor type.  (A struct holding one in a
+    field runs it inside its drop glue, `Ty.holdsDtor`.) -/
+def Ty.hasDtor : Ty → Bool
+  | .dtor _ _ => true
+  | _ => false
+
+/-- A2-drop.3a: a value of this type, dropped whole, owns a destructor
+    value: it is one (`hasDtor`), or a struct or an enum one field or
+    payload of which is one.  Such a struct runs its fields' destructors in
+    its drop glue, so it is bound as a destructor type itself, its glue its
+    destructor (`letd`): `letv` and `assign` take no owned value of such a
+    type.  Deeper nesting needs no case: a struct holding one is a
+    destructor value itself, by the same rule. -/
+def Ty.holdsDtor : Ty → Bool
+  | .dtor _ _ => true
+  | .prod a b => a.hasDtor || b.hasDtor
+  | .sum a b => a.hasDtor || b.hasDtor
+  | _ => false
+
+theorem Ty.hasDtor_of_holdsDtor {t : Ty} (h : t.holdsDtor = false) : t.hasDtor = false := by
+  cases t <;> simp_all [Ty.holdsDtor, Ty.hasDtor]
+
+/-- A2-drop.3a: the destructor such a value runs reads views: a binding of
+    this type must keep what its value views alive to its end (`Entry.arm`). -/
+def Ty.dtorViews (t : Ty) : Bool := t.hasDtor && t.holdsView
+
+@[simp] theorem Ty.hasDtor_dtor (f : Nat) (t : Ty) : (Ty.dtor f t).hasDtor = true := rfl
+@[simp] theorem Ty.dtorViews_dtor (f : Nat) (t : Ty) : (Ty.dtor f t).dtorViews = t.holdsView := by
+  simp [Ty.dtorViews, Ty.holdsView]
+
+/-- A module global's type (`Ty.sync`: a lock or an `Arc` share) is no
+    destructor type. -/
+theorem Ty.hasDtor_of_sync {t : Ty} (h : t.sync = true) : t.hasDtor = false := by
+  cases t <;> simp_all [Ty.sync, Ty.hasDtor]
+
+theorem Ty.holdsDtor_of_sync {t : Ty} (h : t.sync = true) : t.holdsDtor = false := by
+  cases t <;> simp_all [Ty.sync, Ty.holdsDtor]
+
+theorem Ty.hasDtor_of_isStruct {t : Ty} (h : t.isStruct = true) : t.hasDtor = false := by
+  cases t <;> simp_all [Ty.isStruct, Ty.hasDtor]
 
 /-- A2 types: a view's element type holds no views of its own (a view of a
     container of views is left to A2, with the other aggregates that
@@ -194,6 +269,20 @@ def Ty.ok : Ty → Bool
                                    -- shares, each value going in past the crossing check
   | .cell t => t.ok && !t.holdsView  -- A3.5: a cell's payload is a lock's (A3.5's second cut:
                                      -- shares in it too, each going in past the crossing check)
+  | .dtor _ t => t.isStruct && t.ok  -- A2-drop.3: `% Drop` is on a struct or an enum
+
+/-- A2-drop.3a: the type under a destructor is well formed when the
+    destructor type is. -/
+theorem Ty.ok_undtor {τ : Ty} (h : τ.ok = true) : τ.undtor.ok = true := by
+  induction τ with
+  | dtor _ _ ih => simp only [Ty.ok, Bool.and_eq_true] at h; exact ih h.2
+  | _ => exact h
+
+theorem Ty.undtor_ne_int_of {τ : Ty} {a b : Ty} (h : τ.undtor = .prod a b) : τ ≠ .int := by
+  rintro rfl; cases h
+
+theorem Ty.undtor_ne_int_of_sum {τ : Ty} {a b : Ty} (h : τ.undtor = .sum a b) : τ ≠ .int := by
+  rintro rfl; cases h
 
 /-- A type whose values own what they hold: a `Vec` or a struct.  Its
     binding is an owner (or borrows one). -/
@@ -205,7 +294,11 @@ def Ty.owning : Ty → Bool
   | .arc _ => true
   | .lk _ => true
   | .cell _ => true
+  | .dtor _ _ => true
   | _ => false
+
+theorem Ty.owning_of_isStruct {t : Ty} (h : t.isStruct = true) : t.owning = true := by
+  cases t <;> simp_all [Ty.isStruct, Ty.owning]
 
 /-- What an operation does to a container, ordered by what it ends.
 

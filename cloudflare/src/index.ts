@@ -1,6 +1,12 @@
 import { Container, getContainer } from "@cloudflare/containers";
 import { decideAction, stampAction } from "./recovery";
-import { downloadKey, extractArtifactTokens, shouldScanForArtifacts } from "./artifacts";
+import {
+  ARTIFACT_CONTENT_TYPE,
+  artifactResponseHeaders,
+  downloadKey,
+  extractArtifactTokens,
+  shouldScanForArtifacts,
+} from "./artifacts";
 
 // ── Why this file has a custom fetch override ─────────────────────────────
 //
@@ -185,9 +191,7 @@ async function mirrorArtifacts(
         const res = await container.fetch(new Request(`${origin}/download/${token}`));
         if (res.status !== 200) return;
         await env.NURL_ARTIFACTS.put(token, await res.arrayBuffer(), {
-          httpMetadata: {
-            contentType: res.headers.get("Content-Type") ?? "application/octet-stream",
-          },
+          httpMetadata: { contentType: ARTIFACT_CONTENT_TYPE },
         });
       } catch (e) {
         console.error(`[nurl-artifacts] mirroring ${token} failed:`, e);
@@ -216,22 +220,26 @@ export default {
     if (key) {
       const stored = await env.NURL_ARTIFACTS.get(key);
       if (stored) {
-        const headers = new Headers();
-        stored.writeHttpMetadata(headers);
-        if (!headers.has("Content-Type")) headers.set("Content-Type", "application/octet-stream");
-        return new Response(stored.body, { status: 200, headers });
+        // Artifacts are opaque bytes. Older objects were mirrored with
+        // whatever Content-Type the container sent (a `.html` artifact
+        // was text/html), so the download contract is forced on read too.
+        const meta = new Headers();
+        stored.writeHttpMetadata(meta);
+        return new Response(stored.body, { status: 200, headers: artifactResponseHeaders(meta) });
       }
       const res = await container.fetch(request);
       if (res.status !== 200) return res;
       const body = await res.arrayBuffer();
       ctx.waitUntil(
         env.NURL_ARTIFACTS.put(key, body, {
-          httpMetadata: {
-            contentType: res.headers.get("Content-Type") ?? "application/octet-stream",
-          },
+          httpMetadata: { contentType: ARTIFACT_CONTENT_TYPE },
         }),
       );
-      return new Response(body, res);
+      // Same contract for a container that predates the fix.
+      return new Response(body, {
+        status: res.status,
+        headers: artifactResponseHeaders(res.headers),
+      });
     }
 
     const res = await container.fetch(request);

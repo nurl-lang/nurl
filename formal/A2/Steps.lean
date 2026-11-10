@@ -680,6 +680,7 @@ theorem WFv.sub_view {τ : Ty} {T : Val} (hw : WFv τ T) {d o l : Nat} (hs : Sub
         cases q with
         | any => exact ⟨s, ViewIn.pkg h⟩
         | _ => have := h.holdsView; rw [(hq.send rfl).1] at this; cases this
+  | dtor _ _ ih => obtain ⟨s, h⟩ := ih hs; exact ⟨s, ViewIn.dtor h⟩
 
 /-- A valid view points into a buffer some owner holds, or (A3.1) into a
     live block's payload, one its holders read (A3.2). -/
@@ -896,6 +897,12 @@ theorem out_part {m : Mem} {Γ : Ctx} {E : Entry} {τ t : Ty} {T x : Val}
   | cell =>
     refine ⟨rfl, Or.inl rfl, rfl, htok, fun _ r hr => hwfH' r (by simpa [Entry.vdeps, Mode.ownSlot,
       compE] using hr), fun _ => ⟨rfl, WFv.cell, ViewsOK.ownHeld true (fun s v h => hvsT s v (hvin s v h)),
+      hnd.sublist hids, fun i hi => hal i (hids.subset hi), fun o U hU i hi => hdis o U hU i (hids.subset hi),
+      hsf.sub hsub, fun i hi => hnp i (hids.subset hi)⟩, (fun h => by cases h), fun _ => own_named hH', hnx',
+      hpx, fun _ => hshx⟩
+  | @dtor f a v ho hwa =>
+    refine ⟨by rw [hwa.owns (Ty.owning_of_isStruct ho)]; rfl, Or.inl rfl, rfl, htok, fun _ r hr => hwfH' r (by simpa [Entry.vdeps, Mode.ownSlot,
+      compE] using hr), fun _ => ⟨rfl, WFv.dtor ho hwa, ViewsOK.ownHeld true (fun s v h => hvsT s v (hvin s v h)),
       hnd.sublist hids, fun i hi => hal i (hids.subset hi), fun o U hU i hi => hdis o U hU i (hids.subset hi),
       hsf.sub hsub, fun i hi => hnp i (hids.subset hi)⟩, (fun h => by cases h), fun _ => own_named hH', hnx',
       hpx, fun _ => hshx⟩
@@ -1281,16 +1288,25 @@ theorem chanClose_pres {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {k :
   obtain ⟨hwp, hshp⟩ := hpay _ rfl
   obtain ⟨_, hnd, _⟩ := hi.heap.blk k _ hk
   have hw : WFv t (.pair q (.int 1)) := by
-    cases hwp with
-    | pair hq hfl => cases hfl; exact .pair hq .int
+    refine hwp.rewrap ?_
+    have hwu := hwp.undtor; have hnd := Ty.undtor_ne t
+    generalize t.undtor = t' at hwu hnd ⊢
+    cases hwu with
+    | pair hq hfl => cases hfl.int_inv; exact .pair hq .int
+    | dtor => exact absurd rfl (hnd _ _)
   have hnd' : (Val.pair q (.int 1)).ids.Nodup := by
     have : (Val.pair q (.int f)).ids.Nodup := hnd
     simpa using this
   -- the flag holds no share
   have hsh : SharesOK m t (.pair q (.int 1)) := fun u k' p ha => by
+    rw [← ArcIn.undtor_iff] at ha
+    have hshp' : SharesOK m t.undtor (.pair q (.int f)) := SharesOK.undtor_iff.mpr hshp
+    have hnd := Ty.undtor_ne t
+    generalize t.undtor = t' at ha hshp' hnd
     cases ha with
-    | fst ha => exact hshp u k' p (.fst ha)
-    | snd ha => cases ha
+    | fst ha => exact hshp' u k' p (.fst ha)
+    | snd ha => exact ha.not_int.elim
+    | dtor => exact absurd rfl (hnd _ _)
   exact ⟨setPay_pres hi hk hnv hw hnd' (fun i hi' => Or.inl (by simpa using hi')) hsh, intE_out _⟩
 
 /-- A3.2's second cut, **`locked_restore`**: the tree taken from `y`, of the
@@ -1309,12 +1325,12 @@ theorem lockRestore_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {k : Nat} {t
 /-! ### A3.2: taking a lock -/
 
 /-- A tree of a type that holds no view, other than an integer, is owned. -/
-theorem WFv.owns_of {t : Ty} {v : Val} (hw : WFv t v) (ht : t ≠ .int) (hvf : t.holdsView = false) :
-    v.owns = true := by
-  cases hw <;> simp_all [Val.owns, Ty.holdsView]
-
 theorem Ty.owning_of {t : Ty} (ht : t ≠ .int) (hvf : t.holdsView = false) : t.owning = true := by
   cases t <;> simp_all [Ty.owning, Ty.holdsView]
+
+theorem WFv.owns_of {t : Ty} {v : Val} (hw : WFv t v) (ht : t ≠ .int) (hvf : t.holdsView = false) :
+    v.owns = true :=
+  hw.owns (Ty.owning_of ht hvf)
 
 /-- **Taking a lock** (`withLock`): block `k`'s payload `v`, a `t`, is
     checked out.  The block keeps no payload (it stays a lock block of its
@@ -1544,28 +1560,10 @@ theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry
           | pkg => exact pu.pk _ _ _ _ _ hs'
   | getl hy hl hty =>
     cases he with
-    | getl hv =>
-      have hok := hi.tyok hy; rw [hty] at hok
-      simp only [Ty.ok, Bool.and_eq_true] at hok
-      refine ⟨RhsPost.same hi, out_comp hi hy hl (by rw [hty]; simp) hv Child.inl (Top.inl (Top.refl _)) hok.1
-        (fun hw hvs hsh => ?_) (fun h => ?_)⟩
-      · rw [hty] at hw hvs hsh; cases hw with
-        | inl ha => exact ⟨ha, fun s x hin => hvs s x (ViewIn.inl hin), hsh.inl⟩
-      · rw [hty] at h
-        rcases valOK_sum.mp h with ⟨x, hx, h⟩ | ⟨x, hx, _⟩ <;> cases hx
-        exact h
+    | getl hv => exact ⟨RhsPost.same hi, out_getl hi hy hl hty hv⟩
   | getr hy hl hty =>
     cases he with
-    | getr hv =>
-      have hok := hi.tyok hy; rw [hty] at hok
-      simp only [Ty.ok, Bool.and_eq_true] at hok
-      refine ⟨RhsPost.same hi, out_comp hi hy hl (by rw [hty]; simp) hv Child.inr (Top.inr (Top.refl _)) hok.2
-        (fun hw hvs hsh => ?_) (fun h => ?_)⟩
-      · rw [hty] at hw hvs hsh; cases hw with
-        | inr hb => exact ⟨hb, fun s x hin => hvs s x (ViewIn.inr hin), hsh.inr⟩
-      · rw [hty] at h
-        rcases valOK_sum.mp h with ⟨x, hx, _⟩ | ⟨x, hx, h⟩ <;> cases hx
-        exact h
+    | getr hv => exact ⟨RhsPost.same hi, out_getr hi hy hl hty hv⟩
   | takel hy hl hm hty hyF hpin hds =>
     cases he with
     | takel hv =>
@@ -2476,6 +2474,7 @@ theorem reroot_valOK_gen (hh : HeapOK m) (hp : m.st p = some ⟨false, some w⟩
         hsh.of_blk rfl⟩
     · exact .href ⟨dep, mem_reroot_of_ne hd hrp, d, es, hla.keep (rootKeep_rmbor hp hrp) (BlkLe.refl _),
         hw, hvs', hns', hsh.of_blk rfl⟩
+  | dtor _ ih => intro D hDs hDm hlt hH; exact .dtor (ih hDs hDm hlt hH)
 
 theorem reroot_valOK (hh : HeapOK m) (hp : m.st p = some ⟨false, some w⟩)
     (hok : ValOK m Ep.ty w Ep.path Ep.held) (hpc : ∀ c, ¬ InPay m (.cell c))

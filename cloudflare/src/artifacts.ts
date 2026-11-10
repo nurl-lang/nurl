@@ -32,6 +32,27 @@ export function downloadKey(pathname: string): string | null {
   return isSafeToken(token) ? token : null;
 }
 
+// The Content-Type every artifact is stored and served under. An artifact
+// is opaque bytes: its name is chosen by whoever asked for the build, so
+// the extension must never decide how a browser treats it.
+export const ARTIFACT_CONTENT_TYPE = "application/octet-stream";
+
+// Headers for an artifact download, whichever side the bytes come from.
+// `base` is what the source said about them — an R2 object's stored
+// metadata, or the container's response headers — and is kept except for
+// the three headers that make the answer a download and nothing else.
+// They are forced, not defaulted: objects mirrored before this contract
+// carry the Content-Type the container sent at the time (a `poc.html`
+// artifact was stored as text/html), and a container that predates the
+// fix still answers that way.
+export function artifactResponseHeaders(base?: Headers): Headers {
+  const headers = new Headers(base);
+  headers.set("Content-Type", ARTIFACT_CONTENT_TYPE);
+  headers.set("Content-Disposition", "attachment");
+  headers.set("X-Content-Type-Options", "nosniff");
+  return headers;
+}
+
 // Scan a build response body for the artifacts it references. Works on both
 // shapes that mention them: the REST /build* JSON (ll_artifact /
 // binary_artifact / wasm_artifact objects with download_url + token) and the

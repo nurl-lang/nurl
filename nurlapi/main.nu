@@ -2277,14 +2277,22 @@ i clang_rc s build_stdout s build_stderr → v {
 
 // A download served from /download/<id>/<file> is attacker-controlled
 // bytes (the build's source, its IR, the compiled artifact) under an
-// attacker-chosen filename, on the playground's own origin. Two things
-// keep a browser from executing it as content:
+// attacker-chosen filename, on the playground's own origin. An artifact
+// is opaque bytes, never a document, so every one is answered the same
+// way and the name decides nothing:
 //
+//   * Content-Type: application/octet-stream — the extension is the
+//     caller's choice (`poc.html`, `x.svg`, `x.js`) and says nothing
+//     about the bytes, so it is not asked.
 //   * Content-Disposition: attachment — the browser saves the file
 //     instead of rendering it inline, so an ELF a caller named `x.html`
 //     is downloaded, not parsed as HTML with its embedded <script> run.
 //   * X-Content-Type-Options: nosniff — the browser trusts the declared
 //     Content-Type and will not sniff the bytes into something active.
+//
+// The Cloudflare Worker in front of the playground serves these URLs
+// from R2 and forces the same three headers there
+// (cloudflare/src/artifacts.ts: artifactResponseHeaders).
 //
 // The filename hint is sanitised to [A-Za-z0-9._-] (every other byte
 // dropped) before it goes into the header, so no CR, LF or quote from a
@@ -2293,6 +2301,7 @@ i clang_rc s build_stdout s build_stderr → v {
 // a header line or break out of the quoted value. The disposition is
 // `attachment` regardless, so the name is only a convenience.
 @ __set_artifact_download_headers HttpResponse r s filename → v {
+    ( response_set_header r `Content-Type` `application/octet-stream` )
     ( response_set_header r `X-Content-Type-Options` `nosniff` )
     : ( Slice u ) f_v ( slice_of_str filename )
     : i fn ( nurl_str_len filename )
@@ -2307,20 +2316,6 @@ i clang_rc s build_stdout s build_stderr → v {
     }
     ( string_push_str cd `"` )
     ( response_set_header r `Content-Disposition` ( string_data cd ) )
-}
-
-// Content-Type for an artifact download: the extension is attacker-chosen
-// and need not reflect the bytes, so a type a browser would render as
-// active markup (HTML, SVG, XML) is downgraded to an inert
-// octet-stream. Defence in depth behind the attachment disposition — a
-// saved-then-opened file, or any future path that drops the header, must
-// still not be live markup. Genuinely inert types (wasm, png, pdf, the
-// octet-stream default for binaries) keep their accurate label.
-@ __artifact_download_mime s mime → s {
-    ? != 0 ( nurl_str_eq mime `text/html; charset=utf-8` ) { ^ `application/octet-stream` } {}
-    ? != 0 ( nurl_str_eq mime `image/svg+xml` ) { ^ `application/octet-stream` } {}
-    ? != 0 ( nurl_str_eq mime `application/xml; charset=utf-8` ) { ^ `application/octet-stream` } {}
-    ^ mime
 }
 
 // Reads <output_dir>/<build_id>/<filename> directly and returns it
@@ -2342,10 +2337,7 @@ i clang_rc s build_stdout s build_stderr → v {
                     : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fpath ) )
                     ?? rd {
                         T body → {
-                            : String ext ( path_extension ( string_data fpath ) )
-                            : s mime ( __artifact_download_mime ( mime_for_ext ( string_data ext ) ) )
                             : HttpResponse r ( response_new 200 )
-                            ( response_set_header r `Content-Type` mime )
                             ( __set_artifact_download_headers r ( string_data fname ) )
                             ( response_set_body_bytes r body )
                             ^ r
@@ -2412,10 +2404,7 @@ i clang_rc s build_stdout s build_stderr → v {
     : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fpath ) )
     ?? rd {
         T body → {
-            : String ext ( path_extension ( string_data fpath ) )
-            : s mime ( __artifact_download_mime ( mime_for_ext ( string_data ext ) ) )
             : HttpResponse r ( response_new 200 )
-            ( response_set_header r `Content-Type` mime )
             ( __set_artifact_download_headers r ( string_data filename ) )
             ( response_set_body_bytes r body )
             ^ r

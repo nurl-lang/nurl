@@ -51,8 +51,11 @@ and serves a public **MCP endpoint** at `/mcp`.
   ready-to-paste QEMU commands. The same build is exposed to agents as
   MCP tool `nurl_build_unikernel`.
 - `GET /download/{build_id}/{filename}` — stream a build artifact
-  produced by a `/build*` endpoint. Artifacts expire automatically
-  (TTL sweep, default 1 h).
+  produced by a `/build*` endpoint. Served as
+  `application/octet-stream` with `Content-Disposition: attachment` and
+  `X-Content-Type-Options: nosniff`: the caller chooses the artifact's
+  name, so the name never decides its MIME type. Artifacts expire
+  automatically (TTL sweep, default 1 h).
 - `GET /examples`, `GET /examples/{name}` — list / fetch bundled examples.
 - `GET /grammar` — current grammar rendered as HTML (from `spec/grammar.ebnf`).
 - `GET /readme` — this project's README rendered as HTML.
