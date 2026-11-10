@@ -105,7 +105,11 @@ $ `stdlib/core/string.nu`
 Because the block's binding lives on, it keeps its name to itself for the
 rest of the scope: where it has the name of an outer binding, that outer
 binding cannot be named after the block either. Give the block's binding
-a name of its own.
+a name of its own. (This second refusal is nurlc's, not the memory
+model's: the model has no shadowing at all — every binder there is fresh —
+so it has nothing to say about which of two same-named bindings a name
+means. Lexical resolution here, the outer binding being nameable again
+after the block, is agora #618.)
 
 ```nurl expect-error="Give the block's binding another name"
 $ `stdlib/core/string.nu`
