@@ -851,7 +851,10 @@ is stated here so the claim does not hide it:
   receiver has, as a binding's are), and the drain the panic starts finds
   the record and goes on from the cursor: the elements after it in index
   order, each destructor once, then the buffer and the `Vec`, and then
-  the jump (`nurl__vec_drain_go`). `vec_truncate` and `vec_clear` drop
+  the jump (`nurl__vec_drain_resume`; a later element's panic is caught
+  there, by a frame of its own, and the release goes on with the element
+  after it, so the stack is no deeper for it). `vec_truncate` and
+  `vec_clear` drop
   their elements through the same record (`nurl_vec_drop_range_dtor`).
   Which element types may run one is nurlc's answer (`__drop_runs_code`:
   a `% Drop` anywhere inside, a library handle, a closure, a trait

@@ -11,7 +11,11 @@
 //
 // `two_bombs`: the destructor of a LATER element panics too, inside the
 // first panic's drain. The release goes on again, and the first panic —
-// the cause — keeps its message.
+// the cause — keeps its message. `every_one`: all twenty thousand do;
+// each is caught where the release goes on, so the stack is no deeper
+// than for one. `chain`: no panic at all, a value owning a Vec of its own
+// type, forty thousand deep — the journaled release nests as deep inside
+// a recover extent as the plain one does outside.
 
 $ `stdlib/std/panic.nu`
 $ `stdlib/core/string.nu`
@@ -92,6 +96,44 @@ $ `stdlib/core/vec.nu`
     ( vec_push [Bomb] v ( bomb `late` 0 ) )
 }
 
+: ~ i g_ticks 0
+
+: Tick { i id }
+
+% Drop Tick {
+    @ drop Tick t → v {
+        = g_ticks + g_ticks 1
+        ( panic `tick` )
+    }
+}
+
+@ every_one → v {
+    : ~ ( Vec Tick ) v ( vec_new [Tick] )
+    : ~ i k 0
+    ~ < k 20000 {
+        ( vec_push [Tick] v @ Tick { k } )
+        = k + k 1
+    }
+}
+
+: ~ i g_links 0
+
+: Link { i id ( Vec Link ) next }
+
+% Drop Link { @ drop Link l → v { = g_links + g_links 1 } }
+
+@ chain i n → Link {
+    : ~ Link cur @ Link { 0 ( vec_new [Link] ) }
+    : ~ i k 1
+    ~ < k n {
+        : ~ ( Vec Link ) one ( vec_new [Link] )
+        ( vec_push [Link] one cur )
+        = cur @ Link { k one }
+        = k + k 1
+    }
+    ^ cur
+}
+
 @ run s name ( @ v ) f → v {
     : !v PanicInfo r ( recover f )
     ?? r {
@@ -107,6 +149,10 @@ $ `stdlib/core/vec.nu`
     ( run `cleared` \ → v { ( cleared ) } )
     ( run `nested` \ → v { ( nested ) } )
     ( survives )
+    ( run `every_one` \ → v { ( every_one ) } )
+    ( nurl_println ( nurl_str_cat `every_one: destructors run: ` ( nurl_str_int g_ticks ) ) )
+    ( run `chain` \ → v { : Link c ( chain 40000 ) } )
+    ( nurl_println ( nurl_str_cat `chain: links dropped: ` ( nurl_str_int g_links ) ) )
     // The thread's frees are ordinary again after all of that.
     : ~ i k 0
     : ~ i n 0

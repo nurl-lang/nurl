@@ -9,7 +9,9 @@
   lost both. The release is in the panic journal now, as the elements
   still to go: a panic's drain goes on from there, in index order and once
   each, frees the buffer and the `Vec`, and only then jumps to the
-  `recover`, which still reports the first panic's message. A panic that
+  `recover`, which still reports the first panic's message. However many
+  of the elements panic, each is caught where the release goes on, so the
+  stack is no deeper than for one. A panic that
   left the element loop also left the thread's cycle collector switched
   off for good; it is switched back on where the release ends. Outside a
   `recover` extent, where a panic ends the process, nothing is recorded,
