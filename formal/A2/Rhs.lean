@@ -336,6 +336,38 @@ theorem RhsOut.widen {m1 : Mem} {Γ1 : Ctx} {E : Entry} {v : Val} {o : Bool}
   · have hb' : E.mode = .bor := hb
     rw [hmo] at hb'; cases hb'
 
+/-- A2-drop.3a: ... nor on whether its type carries a destructor: an owned
+    struct or enum value, or one of that destructor type moved in, is a
+    value of the destructor type `Ty.dtor f t` (`StmtT.letd`). -/
+theorem RhsOut.retype {m1 : Mem} {Γ1 : Ctx} {E : Entry} {v : Val} {o : Bool}
+    (h : RhsOut m1 Γ1 E v o) (hmo : E.mode = .own) {f : Nat} {t : Ty}
+    (hty : E.ty = t ∨ E.ty = .dtor f t) (hst : t.isStruct = true) :
+    RhsOut m1 Γ1 { E with ty := .dtor f t } v o := by
+  have hok : t.ok = true := by
+    rcases hty with h' | h' <;> have := h.tyok <;> rw [h'] at this
+    · exact this
+    · simp only [Ty.ok, Bool.and_eq_true] at this; exact this.2
+  have hne : E.ty ≠ .int := by rcases hty with h' | h' <;> rw [h'] <;> cases t <;> simp_all [Ty.isStruct]
+  refine ⟨h.own, h.mode, h.live, by simp [Ty.ok, hst, hok], fun _ => h.wf hne, fun hm => ?_,
+    fun hb => ?_, fun _ => h.names (Or.inl hne), h.held, h.pkgs, fun ho => ?_⟩
+  · obtain ⟨_, hw, hv, d, e, f', g, i⟩ := h.valOwn hm
+    have hw' : WFv t v := by
+      rcases hty with h' | h' <;> rw [h'] at hw
+      · exact hw
+      · exact (WFv.dtor_iff.mp hw).2
+    have hv' : ViewsOK m1 t v E.held := by
+      rcases hty with h' | h' <;> rw [h'] at hv
+      · exact hv
+      · exact ViewsOK.dtor_iff.mp hv
+    exact ⟨rfl, WFv.dtor_iff.mpr ⟨hst, hw'⟩, ViewsOK.dtor_iff.mpr hv', d, e, f', g, i⟩
+  · have hb' : E.mode = .bor := hb
+    rw [hmo] at hb'; cases hb'
+  · have hs := h.shares ho
+    show SharesOK m1 (.dtor f t) v
+    rcases hty with h' | h' <;> rw [h'] at hs
+    · exact SharesOK.dtor_iff.mpr hs
+    · exact hs
+
 /-! #### A3.5b: subsumption between closure classes
 
 A closure taken at a class above its own (`RhsT.moveUp`, `RhsT.copyUp`) is the

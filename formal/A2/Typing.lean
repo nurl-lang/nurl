@@ -72,8 +72,10 @@ def Entry.vdeps (E : Entry) : List Dep := (if E.mode.ownSlot then [] else E.path
 /-- A2-drop.2: the binding `letd` makes. It is armed, and remembered as
     `letd`'s, when its type holds views: its destructor reads them. (A
     destructor of a type that holds no views reads only what its binding
-    owns, so such a binding needs no care.) -/
-def Entry.arm (E : Entry) : Entry := { E with dtor := E.ty.holdsView, dbind := E.ty.holdsView }
+    owns, so such a binding needs no care.)  A2-drop.3a: both flags are read
+    off the binding's type, a destructor type (`Ty.dtorViews`): `letd` binds
+    every owned value of one, wherever it came from (`StmtT.letd`). -/
+def Entry.arm (E : Entry) : Entry := { E with dtor := E.ty.dtorViews, dbind := E.ty.dtorViews }
 
 def roots (ds : List Dep) : List Var := ds.map (·.root)
 
@@ -425,6 +427,10 @@ def projDeps (y : Var) (E : Entry) : List Dep :=
 def projE (y : Var) (E : Entry) : Ty → Entry
   | .int => intE
   | t => ⟨t, .bor, true, projDeps y E ++ E.held, E.held, false, false⟩
+
+/-- A field read is lent (A2-drop.3a: so `letv` binds it, whatever its type). -/
+@[simp] theorem projE_mode (y : Var) (E : Entry) (t : Ty) : (projE y E t).mode = .bor := by
+  cases t <;> rfl
 
 /-- A3.1: `arc_get y`'s payload, lent: a borrow through a share
     (`Kind.share`) of `y`, which a borrowed share passes on (`derive`). It

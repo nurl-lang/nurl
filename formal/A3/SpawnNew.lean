@@ -324,9 +324,11 @@ theorem newThread_ok {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hPc : Pr
     ThreadOK P { alloc := union part (payPart B), nid := N, nv := fn.nvars, st := spawnSt fn vs, blk := B,
                  gl := G }
       (wrapParams fn.params 0 0 (.scope fn.params.length fn.body)) := by
-  obtain ⟨fn', hf', hres, hpar⟩ := hS f hsp
+  obtain ⟨fn', hf', hres, hpar0⟩ := hS f hsp
   have hfn : fn' = fn := Option.some.inj (hf'.symm.trans hf)
-  rw [hfn] at hres hpar
+  rw [hfn] at hres hpar0
+  have hpar : ∀ pt ∈ fn.params, pt.1 = .sink ∧ pt.2.holdsView = false :=
+    fun pt h => ⟨(hpar0 pt h).1, (hpar0 pt h).2.1⟩
   have hok := hP fn (List.mem_of_getElem? hf)
   have hsrc : fn.body.src = true := by obtain ⟨h, -⟩ := hok; exact h
   obtain ⟨Δ, ht⟩ := newThread_typed hok hpar
