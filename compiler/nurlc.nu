@@ -3090,6 +3090,9 @@ unsafe @ note_unsafe_item s pos s what → v {
 // Whether this function's walk has recorded any view dependency
 // (bck_dep_add), and statement `vpass` rows pending (bck_stash_vpass).
 : ~ i g_bck_has_deps 0
+// The line of the row the walk is at, for a check that only one row's own
+// events may make: bck_diag_self_view's.
+: ~ i g_bck_row_ln -1
 // …and whether it has bound a `??` arm's payload as a cursor over the
 // option binding it matched (bck_handle_match, `cu_` keys).
 : ~ i g_bck_has_cursor 0
@@ -33954,6 +33957,23 @@ unsafe @ bck_emit_error s file i line s msg → v {
 
 // A binding consumed (or stored again) after its value was stored into
 // an owner: the owner drops that value, so this is its second release.
+// A value that holds a view of a value stored into it (`: S o @ S { sv b }`,
+// sv a view of b): it views its own field, which growing or replacing ends
+// under it — A2's SelfFree (`ViewsOK.dropSelf`). Refused where it is built,
+// at the store's line (agora #294).
+@ bck_diag_self_view s oids s svn → v {
+    : s tag ( nurl_str_cat4 `sv:` oids `:` svn )
+    : s ws ( nurl_sym_get g_bck `warnset` )
+    ? ( str_contains_word ws tag ) { ^ v } {}
+    ( bck_put `warnset` ? == 0 ( nurl_str_len ws ) ( nurl_str_cat tag `` ) ( nurl_str_cat3 ws ` ` tag ) )
+    : s on ( nurl_sym_get2 g_bck `rv_` oids )
+    : s vn ( nurl_sym_get2 g_bck `rv_` svn )
+    : i ln ( nurl_str_to_int ( nurl_sym_get2 g_bck `sl_` svn ) )
+    ( bck_emit_error ( nurl_sym_get g_bck `file` ) ln
+    ( nurl_str_cat4 ( nurl_str_cat3 `'` on `' would view its own field: it is given '` ) vn ( nurl_str_cat3 `' and holds a view of '` vn `'` )
+    ( nurl_str_cat3 ` at once, so growing or replacing that field (vec_reserve, a push, a new value) would leave the view dangling inside '` on `'. Keep the view and its owner in different values, or take the view again from the field when you need it.` ) ) )
+}
+
 @ bck_diag_stored i id i useline b again → v {
     : s ids ( nurl_str_int id )
     : s tag ( nurl_str_cat3 ( nurl_str_cat `st:` ( nurl_str_int useline ) ) `:` ids )
@@ -35123,6 +35143,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
     : ~ i p lo
     ~ & < p hi ! ( seq st `!` ) {
         : s rec ( bck_rec p )
+        = g_bck_row_ln ( bck_field_int rec 3 )
         : i kc ( bck_kc p )
         : ~ b done F
         = g_sxe_arc -1
@@ -35705,6 +35726,11 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                         ? == ( nurl_str_get s_own 0 ) 61 {
                             : s oids ( nurl_str_slice s_own 1 - ( nurl_str_len s_own ) 1 )
                             ( bck_put ( bck_so_key svn ) oids )
+                            ( bck_put ( bck_bkey `sor_` svn ) ? s_cap `` ( nurl_str_cat ( bck_field rec 3 ) `` ) )
+                            // (…by an owner that holds a view of it made on this very row — the
+                            // literal that takes both, agora #294. A view from another row or
+                            // path, since replaced or on a sibling arm, is not this value's.)
+                            ? & & ! s_cap ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vds_` oids ) ) svn ) ( seq ( nurl_sym_get g_bck ( bck_bkey `vdl_` ( nurl_str_cat3 oids `_` svn ) ) ) ( bck_field rec 3 ) ) { ( bck_diag_self_view oids svn ) } {}
                             = g_bck_sx_gen g_bck_gen
                             : s sxk ( bck_sx_key oids )
                             : s sx ( nurl_sym_get g_bck sxk )
@@ -37901,8 +37927,15 @@ unsafe @ bck_sx_is_id s e → b {
     ~ != 0 ( nurl_str_len rest ) {
         : s c ( str_first_word rest ) = rest ( str_skip_word rest )
         ? & ! ( seq c ws ) ! ( str_contains_word have c ) {
+            // (A view of a value stored into this very holder: agora #294.)
+            // (…made on this very row — the literal that takes both: a store
+            // on another row or path is not the same value's, agora #294's
+            // review.)
+            ? & & ( seq ( nurl_sym_get g_bck ( bck_so_key c ) ) ws ) ! ( seq ( nurl_sym_get g_bck ( bck_bkey `cst_` c ) ) `1` ) ( seq ( nurl_sym_get g_bck ( bck_bkey `sor_` c ) ) ( nurl_str_int g_bck_row_ln ) ) { ( bck_diag_self_view ws c ) } {}
             = g_bck_has_borrow 1
             = have ? == 0 ( nurl_str_len have ) ( nurl_str_cat c `` ) ( nurl_str_cat3 have ` ` c )
+            // (Which row made it: bck_diag_self_view asks for the store's own.)
+            ( bck_put ( bck_bkey `vdl_` ( nurl_str_cat3 ws `_` c ) ) ( nurl_str_int g_bck_row_ln ) )
             : s ck ( bck_bkey `vdd_` c )
             : s cur ( nurl_sym_get g_bck ck )
             ? ! ( str_contains_word cur ws ) { ( bck_put_vd ck ( bck_path_root ( nurl_str_to_int c ) ) ? == 0 ( nurl_str_len cur ) ( nurl_str_cat ws `` ) ( nurl_str_cat3 cur ` ` ws ) ) } {}
