@@ -34568,6 +34568,12 @@ unsafe @ __sx_view_at s st s e → b {
             ( __rvsrc_add rva )
         } {}
         : s bsl ( nurl_sym_get g_bck ( bck_bkey `bs_` rs ) )
+        // (A field viewer, `: String f . t name`: its bytes are that field's
+        // own buffer, which a push into `. t name` moves — the field path
+        // itself, not an element of t, which a push into t's other fields
+        // leaves be; agora #396.)
+        : s fvp ? == 0 ( nurl_str_len vwm ) ( nurl_sym_get g_bck ( bck_bkey `fp_` rs ) ) ``
+        ? != 0 ( nurl_str_len fvp ) { ^ ( __word_union fvp deps ) } {}
         // A view points where it points; a borrowed element or field
         // handle into ITS value's own storage, which its owners hold.
         : s ind ? != 0 ( nurl_str_len vwm ) ( nurl_sym_get g_bck ( bck_bkey `vi_` rs ) ) ( nurl_str_cat bsl `` )
