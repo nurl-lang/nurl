@@ -4596,6 +4596,13 @@ unsafe @ nurl_cg_lbl i h s hint → s {
         ^ ( nurl_sym_get syms `__last_call_args__` )
     } {}
     ? ( is_ident_tok rhs_tt ) { ^ ( nurl_sym_get2 syms rhs_val ? roots `__pljr` `__pljk` ) } {}
+    // (…a field read's, that of the binding it is a field of: `: String t .
+    // p s` of a `??` payload p is a lend of what p's match lent, so `^ t`
+    // out of a local's element is copied as `^ . p s` is — agora #560.)
+    ? == rhs_tt TT_DOT {
+        : s mr ( nurl_sym_get syms `__last_member_root__` )
+        ? & != 0 ( nurl_str_len mr ) != 0 ( nurl_sym_len2 syms mr `__pljk` ) { ^ ( nurl_sym_get2 syms mr ? roots `__pljr` `__pljk` ) } {}
+    } {}
     // (…a value block's tail binding's: `{ : String e ( vec_at [String] vs
     // 0 ) e }` — a value block is no scope of its own, so e is still there.)
     ? & == rhs_tt TT_LBRACE ( is_ident_tok ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) ) ) {
@@ -4680,6 +4687,7 @@ unsafe @ nurl_cg_lbl i h s hint → s {
 
 // …the same question for the (call, roots) pairs `ks0` / `rs0`, one a line.
 @ __mem_pairs_local_lend i syms i cg s ks0 s rs0 → s {
+    ? == 0 g_pl_chain_depth { ( nurl_sym_def syms `__last_pl_dynlent__` `` ) } {}
     : ~ s ks ( nurl_str_cat ks0 `` )
     : ~ s rs ( nurl_str_cat rs0 `` )
     // (Several pairs — a join's arms, a `: ~` binding's assignments — answer
@@ -4759,6 +4767,20 @@ unsafe @ nurl_cg_lbl i h s hint → s {
                     ( nurl_print `  ` ) ( nurl_print ow ) ( nurl_print ` = xor i1 ` ) ( nurl_print bw ) ( nurl_print `, 1\n` )
                     : s la ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print la ) ( nurl_print ` = and i1 ` ) ( nurl_print l ) ( nurl_print `, ` ) ( nurl_print ow ) ( nurl_print `\n` )
+                    // (…and on the runs it did NOT own its value — a lend
+                    // out of a parameter's element, `: ( Vec String ) v (
+                    // vec_at pvv 0 )` — what the call lent out of it is that
+                    // one's: `__last_pl_dynlent__`, so `^` of the payload
+                    // answers it lent there, not owned. Answered owned, the
+                    // caller freed the parameter's element: agora #560.)
+                    : s dl ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print dl ) ( nurl_print ` = and i1 ` ) ( nurl_print l ) ( nurl_print `, ` ) ( nurl_print bw ) ( nurl_print `\n` )
+                    : s dl0 ( nurl_sym_get syms `__last_pl_dynlent__` )
+                    ? == 0 ( nurl_str_len dl0 ) { ( nurl_sym_def syms `__last_pl_dynlent__` dl ) } {
+                        : s dlo ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print dlo ) ( nurl_print ` = or i1 ` ) ( nurl_print dl0 ) ( nurl_print `, ` ) ( nurl_print dl ) ( nurl_print `\n` )
+                        ( nurl_sym_def syms `__last_pl_dynlent__` dlo )
+                    }
                     = l la
                 } {}
                 ? == 0 ( nurl_str_len acc ) { = acc ( nurl_str_cat l `` ) } {
@@ -6099,6 +6121,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
             // copied, #203 — flag 0: the Vec owns it until it is taken.)
             ? | == 0 ( nurl_str_len ( mem_udrop_ptr_of syms ret_first_val ) ) ( __vget_live syms ret_first_val ) {
                 : ~ s __pll ( mem_payload_local_lend syms cg ret_first_val )
+                : s __pdl ( nurl_sym_get syms `__last_pl_dynlent__` )
                 // (Not where it was taken out of its enum above: owned there.)
                 ? & != 0 ( nurl_str_len __pll ) != 0 ( nurl_str_len ret_pl_taken ) {
                     : s __ptn ( nurl_cg_reg cg )
@@ -6133,7 +6156,14 @@ unsafe @ gen_ret i lex i syms i cg → s {
                     ? | __plv ( __clone_supported __plt syms ) {
                         ? __plv { ( mem_vget_consume syms cg ret_first_val __pll ) } { = val ( mem_emit_cloneif cg __plt val __pll ) }
                         : s __plo ( nurl_cg_reg cg )
-                        ( nurl_print `  ` ) ( nurl_print __plo ) ( nurl_print ` = or i1 ` ) ( nurl_print hbit ) ( nurl_print `, ` ) ( nurl_print __pll ) ( nurl_print `\n` )
+                        // (…not owned where its call lent it out of a root
+                        // that owned nothing on this run, unless it was copied
+                        // or taken here — `__pll`: agora #560.)
+                        // (A payload taken out of its enum above, `ret_pl_taken`:
+                        // hbit is the take bit, owned exactly where taken — no
+                        // mask; masked, the taken value went unfreed.)
+                        : s __phb ? & != 0 ( nurl_str_len __pdl ) == 0 ( nurl_str_len ret_pl_taken ) ( __and_not cg hbit __pdl ) ( nurl_str_cat hbit `` )
+                        ( nurl_print `  ` ) ( nurl_print __plo ) ( nurl_print ` = or i1 ` ) ( nurl_print __phb ) ( nurl_print `, ` ) ( nurl_print __pll ) ( nurl_print `\n` )
                         = hbit __plo
                         = ret_pl_copied T
                         = ret_pl_own __pll
