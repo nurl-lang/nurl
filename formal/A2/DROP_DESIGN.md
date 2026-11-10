@@ -568,16 +568,16 @@ each one shrinks `CLAIM.md`'s exception:
      element 0 each round, not the last one.
    - **Left: the drain itself.** The plan, with the four open questions
      answered:
-     1. *Where a `Vec D` is ok.* Only as a binding's own type. A new
-        `Ty.okB t` (ok as a binding type) is `t.ok`, or `t = .vec D` with
-        `D.hasDtor`, `D.ok` and `D.undtor.dtorFree`. `MInv.tyok` and the
-        binder rules ask `okB`; every composite constructor keeps asking
-        `Ty.ok`, so a field, a payload, a channel, a lock, an `Arc`, a
-        cell or a `Vec` of a `Vec D` stays refused. A struct's glue lends
-        `self` and cannot pop a field, and a channel's queue is swept with
-        its block, running no code (3d). `Ty.okB.elim` turns a use of
-        `tyok` at a non-`Vec D` binding into `Ty.ok`, which is what most of
-        `tyok`'s 63 uses need.
+     1. *Where a `Vec D` is ok.* Only as a binding's own type. **Built
+        (milestone 2a):** rather than a separate `Ty.okB` threaded through
+        `tyok`'s 63 uses, `Ty.ok` itself admits `vec D` (`D.hasDtor`, `Ty.vecD`)
+        and every composite constructor asks `!vecD` of its parts, so a
+        field, a payload, a view's element, a channel, a lock, an `Arc`, a
+        cell or a `Vec` of a `Vec D` stays refused; `RhsT.pair` / `inl` /
+        `inr` / `arcNew` / `lockNew` / `cellNew` and `StmtT.lockedSet` ask it
+        of what moves in. A struct's glue lends `self` and cannot pop a
+        field, and a channel's queue is swept with its block, running no
+        code (3d). No binder binds a `Vec D` until item 3 lands.
      2. *`withElem` of a `Vec D`'s element.* Refused in this cut: the
         check-out is an owned binding of a destructor type that is no
         `letd`'s, so `withElem` asks its element type `dtorFree`. Lifting
@@ -603,12 +603,17 @@ each one shrinks `CLAIM.md`'s exception:
         lifting files (Lift, Fresh, BorFree, Keep, Restrict, Owned, Cell),
         where `scopeDEnd` has one.
      4. *A `Vec D` as a `sink` or `inout` parameter, or a result.*
-        Refused: `FnOK` asks parameter and result types `Ty.ok`, not
-        `okB`. So a `Vec D` lives and drains in one frame. Lifting it
-        needs `DtorParamsOK`-style clauses, as for destructor parameters.
-     `truncate`, `clear`, `set`, `free` and `edit` of a `Vec D` stay
-     refused: their element type must be `dtorFree`, and they drop
-     elements with no code. A program pops them into `letd`s (`pop` and
+        Since milestone 2a `Ty.ok` admits the type, so `FnOK` alone no
+        longer refuses it: a `sink` one or a result is still handed to a
+        `letd` (`movedFirst`, `DtorParamsOK`), which item 3 must keep
+        refusing at a `Vec D` type, and an `inout` one is reachable only
+        from a caller binding of that type. Item 3 must refuse `inout`
+        `Vec D` parameters explicitly (or give them the drain's
+        obligations), so a `Vec D` lives and drains in one frame.
+     `truncate`, `clear`, `set`, `free` and `edit` of a `Vec D` must stay
+     refused when item 3 lands: they need a `dtorFree` premise on their
+     element type then (today no binding of a `Vec D` exists, so none is
+     needed yet), since they drop elements with no code. A program pops them into `letd`s (`pop` and
      `popFront` give an owned `.dtor f u`, which `movedFirst` hands to a
      `letd`), or lets the binding end.
 3. **A2-drop.3c: environments.** A closure's or a trait object's

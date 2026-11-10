@@ -132,9 +132,8 @@ def SpawnOK (P : Prog) (spawn : Nat → Bool) : Prop :=
     type `arc t` meets it (`Ty.ok` asks it of the payload) ... (A3.3: a read
     guard, a share of a view, is of such a type too, and is `% NotSend`: the
     crossing check refuses it at run time, `NoGuard`, `spawn_guard`.) -/
-theorem arc_spawnOK {t : Ty} (h : (Ty.arc t).ok = true) : (Ty.arc t).holdsView = false := by
-  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true] at h
-  exact h.2
+theorem arc_spawnOK {t : Ty} (h : (Ty.arc t).ok = true) : (Ty.arc t).holdsView = false :=
+  (Ty.ok_arc h).2
 
 /-- ... and so does every share `arc_new` makes: its payload's type holds no
     views (`RhsT.arcNew`), whatever trees it owns. -/
@@ -143,17 +142,15 @@ theorem arc_spawnOK_viewFree {t : Ty} (h : t.holdsView = false) : (Ty.arc t).hol
 /-- A3.2, Send: a lock share crosses to a new thread when its payload holds
     no views, `SpawnOK`'s question again; every A2 type `lk t` meets it
     (`Ty.ok` asks it of the payload, `RhsT.lockNew` of what moves in). -/
-theorem lk_spawnOK {t : Ty} (h : (Ty.lk t).ok = true) : (Ty.lk t).holdsView = false := by
-  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true] at h
-  exact h.2
+theorem lk_spawnOK {t : Ty} (h : (Ty.lk t).ok = true) : (Ty.lk t).holdsView = false :=
+  (Ty.ok_lk h).2
 
 /-- A3.5, Send: a library handle (a cell share) crosses to a new thread as a
     lock share does, `SpawnOK`'s question unchanged; what it may not do is
     leave an owner behind, which the crossing check asks at run time
     (`SendCheck`). -/
-theorem cell_spawnOK {t : Ty} (h : (Ty.cell t).ok = true) : (Ty.cell t).holdsView = false := by
-  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true] at h
-  exact h.2
+theorem cell_spawnOK {t : Ty} (h : (Ty.cell t).ok = true) : (Ty.cell t).holdsView = false :=
+  (Ty.ok_cell h).2
 
 /-- A3.5, Sync: no payload several threads reach at once holds a library
     handle: an `Arc`'s (`RhsT.arcNew`'s own premise) and, A3.5's second cut,
@@ -169,21 +166,19 @@ theorem lk_sync {t : Ty} : (Ty.lk t).hasCell = false := rfl
     library handle is a `Locked`'s value (h358, h357: `Locked PNCounter`,
     `RwLocked PNCounter`). -/
 theorem lk_cell_ok {t : Ty} (h : (Ty.cell t).ok = true) : (Ty.lk (.cell t)).ok = true := by
-  show ((Ty.cell t).ok && !(Ty.cell t).holdsView) = true
-  rw [h, cell_spawnOK h]; rfl
+  simp [Ty.ok, (Ty.ok_cell h).1, (Ty.ok_cell h).2, Ty.ok_cell_vd h, Ty.holdsView]
 
 /-- ... and so may a cell's state, which is a lock's payload (a handle that
     keeps another handle in its state, A3.5's second cut). -/
 theorem cell_cell_ok {t : Ty} (h : (Ty.cell t).ok = true) : (Ty.cell (.cell t)).ok = true := by
-  show ((Ty.cell t).ok && !(Ty.cell t).holdsView) = true
-  rw [h, cell_spawnOK h]; rfl
+  simp [Ty.ok, (Ty.ok_cell h).1, (Ty.ok_cell h).2, Ty.ok_cell_vd h, Ty.holdsView]
 
 /-- ... which `locked_new` takes (a library handle is Send). -/
 theorem lockNew_cell {Γ Γ1 : Ctx} {F : List Var} {t : Ty} {y : Var} {Ey : Entry} {D : List Dep}
     (hy : Γ y = some Ey) (hl : Ey.live = true) (hty : Ey.ty = .cell t) (hvf : t.holdsView = false)
     (hfn : t.hasFn = false) (hpa : PushArg Γ F y Ey (.cell t) D Γ1) :
     RhsT Γ F (.lockNew (.cell t) y) ⟨.lk (.cell t), .own, true, [], [], false, false⟩ Γ1 :=
-  RhsT.lockNew hy hl hty ⟨hvf, hfn⟩ hpa
+  RhsT.lockNew hy hl hty rfl ⟨hvf, hfn⟩ hpa
 
 /-- ... but an `RwLocked`'s read guard asks the Sync question of its value
     (h357, `rwlocked_of_a_library_handle_on_two_threads`): readers would hold
@@ -831,6 +826,7 @@ theorem _root_.A2.StmtT.lockedSet {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {a b 
     (ha : Γ a = some Ea) (hla : Ea.live = true) (hta : Ea.lockOf t) (hroot : Ea.mode.isRoot = true)
     (hay : ∀ d ∈ Ea.vdeps, d.root ≠ y)
     (hy : Γ y = some Ey) (hly : Ey.live = true) (hty : Ey.ty = t) (htv : t.holdsView = false ∧ t.hasFn = false)
+    (hvd : t.vecD = false)
     (hpush : PushArg Γ F y Ey t D Γ1)
     (hb : Γ b = none) (hx : Γ x = none) (hbx : b ≠ x) (hbF : b ∉ F) (hxF : x ∉ F)
     (hub : Unnamed Γ b) (hux : Unnamed Γ x) :
@@ -873,7 +869,7 @@ theorem _root_.A2.StmtT.lockedSet {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {a b 
     (by simp [Stmt.vars, Rhs.vars, hax, hab]) ⟨lockE t, upd_same _ _ _, lockE_live t⟩
   rw [exitScope_setE hbx' hux'] at hwl
   have hlet := StmtT.letv (P := P) (x := b) (s := .withLock a x (.assign x (.lockTake b))) rfl hb hbF
-    (RhsT.lockNew hy hly hty htv hpush) hwl ((hu1b.setE_nil hEb).endOK)
+    (RhsT.lockNew hy hly hty hvd htv hpush) hwl ((hu1b.setE_nil hEb).endOK)
   rw [exitScope_setE h1b hu1b] at hlet
   exact hlet
 
@@ -953,7 +949,7 @@ theorem mutex_owns_nothing {o : Option Val} (ho : o = none ∨ ∃ n, o = some (
 theorem _root_.A2.RhsT.mutexNew {Γ : Ctx} {F : List Var} {y : Var} {Ey : Entry}
     (hy : Γ y = some Ey) (hly : Ey.live = true) (hty : Ey.ty = .int) :
     RhsT Γ F (Rhs.mutexNew y) ⟨.lk .int, .own, true, [], [], false, false⟩ Γ :=
-  RhsT.lockNew hy hly hty ⟨rfl, rfl⟩ PushArg.int
+  RhsT.lockNew hy hly hty rfl ⟨rfl, rfl⟩ PushArg.int
 
 /-- **`mutex_lock` is typed**: the integer taken out of the lock (`lockTake`),
     an integer binding for what follows; every other `mutex_lock` waits until
@@ -1295,8 +1291,9 @@ it views is in that thread's owned tree, or a frozen payload's, which holds
 no cell share (`MInv.noCellPay`). -/
 
 /-- A slice of shares is an A2 type ... -/
-theorem slice_share_ok {t : Ty} (h : t.ok = true) (hv : t.holdsView = false) : (Ty.slice t).ok = true := by
-  simp [Ty.ok, h, hv]
+theorem slice_share_ok {t : Ty} (h : t.ok = true) (hv : t.holdsView = false) (hvd : t.vecD = false) :
+    (Ty.slice t).ok = true := by
+  simp [Ty.ok, h, hv, hvd]
 
 /-- ... so a view of a `Vec` of `Arc`s (or of locks, or of library handles) is
     typed (`slice_from_vec`) ... -/
@@ -1343,7 +1340,7 @@ theorem pack_names_any {Γ Γ1 : Ctx} {F : List Var} {fs : List Nat} {te : Ty} {
     thread that reaches it) ... -/
 theorem arcNew_not_any {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {y : Var} {E : Entry} :
     ¬ RhsT Γ F (.arcNew (.fn ms .any) y) E Γ1 := fun h => by
-  cases h with | arcNew _ _ _ hp _ _ => exact absurd hp.1 (by simp [Ty.holdsView])
+  cases h with | arcNew _ _ _ _ hp _ _ => exact absurd hp.1 (by simp [Ty.holdsView])
 
 /-- ... and no spawn takes: a thread's body may run it only on the thread
     that captured the binding.  (A closure's own code is handed its
@@ -1416,7 +1413,7 @@ theorem lockNew_send {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {y : Var} {Ey
     (hy : Γ y = some Ey) (hl : Ey.live = true) (hty : Ey.ty = .fn ms .send)
     (hpa : PushArg Γ F y Ey (.fn ms .send) D Γ1) :
     RhsT Γ F (.lockNew (.fn ms .send) y) ⟨.lk (.fn ms .send), .own, true, [], [], false, false⟩ Γ1 :=
-  RhsT.lockNew hy hl hty ⟨rfl, rfl⟩ hpa
+  RhsT.lockNew hy hl hty rfl ⟨rfl, rfl⟩ hpa
 
 /-- ... and a channel's element: `chan_send` sends it. -/
 theorem chanSend_send {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {a y : Var} {Ea Ey : Entry} {D : List Dep}
@@ -1440,7 +1437,7 @@ theorem arcNew_sync {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {y : Var} {Ey 
     (hy : Γ y = some Ey) (hl : Ey.live = true) (hty : Ey.ty = .fn ms .sync)
     (hpa : PushArg Γ F y Ey (.fn ms .sync) D Γ1) :
     RhsT Γ F (.arcNew (.fn ms .sync) y) ⟨.arc (.fn ms .sync), .own, true, [], [], false, false⟩ Γ1 :=
-  RhsT.arcNew hy hl hty ⟨rfl, rfl⟩ rfl hpa
+  RhsT.arcNew hy hl hty rfl ⟨rfl, rfl⟩ rfl hpa
 
 /-- ... `arc_get` lends it, through a share of the `Arc` (`getE`): a borrow
     every change through which is refused (`ThruOK.noShare`, `canDo`) ... -/
@@ -2467,7 +2464,7 @@ theorem accCode_ok : FnOK accP accCode := by
   have hp4 : PlainCtx accCtx4 := hp3a.setE (x := 1) intE_plain
   have hpair : RhsT accCtx3 [] (.pair 4 3) ⟨.prod .int .int, .own, true, [], [], false, false⟩ accCtx3 :=
     RhsT.pair (Ey := intE) (Ez := intE) (by simp [accCtx3, setE]) rfl PushArg.int (by simp [accCtx3, setE]) rfl
-      PushArg.int (fun h => by simp [intE, Mode.ownSlot] at h)
+      PushArg.int (fun h => by simp [intE, Mode.ownSlot] at h) rfl rfl
   have hA0 : StmtT accP accCtx3 [] (.assign 0 (.pair 4 3)) (setE accCtx3 0 accEp) := by
     have h := StmtT.assign (P := accP) (F := []) (x := 0) (Ex := accEp)
       (E := ⟨.prod .int .int, .own, true, [], [], false, false⟩) (by simp [accCtx3, setE, hs0]) (by simp)
@@ -2648,7 +2645,7 @@ theorem accMain_typed : ∃ Δ, StmtT accP (fun _ => none) [] accMain Δ := by
       (A2.exitScope 2 (A2.exitScope 3 (A2.exitScope 4 (setE (setE accMainCtx 3 accCloE) 4 intE)))) :=
     StmtT.letv (E := accPairE) rfl (by simp [setE])
       (by simp) (RhsT.pair (Ey := intE) (Ez := intE) (by simp [setE]) rfl PushArg.int (by simp [setE]) rfl
-        PushArg.int (fun h => by simp [intE, Mode.ownSlot] at h)) h3
+        PushArg.int (fun h => by simp [intE, Mode.ownSlot] at h) rfl rfl) h3
       (by rw [hpc.exitScope, q4.exitScope]; exact q3.endOK 2)
   have h1 : StmtT accP (setE (fun _ => none) 0 intE) []
       (.letv 1 (.expr (.lit 0)) (.letv 2 (.pair 0 1) (.letv 3 (.pack [1] accEnv [0] 2 [])

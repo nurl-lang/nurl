@@ -265,6 +265,26 @@ def Ty.dtorFree : Ty → Bool
   | .sum a b => a.dtorFree && b.dtorFree
   | _ => true
 
+/-- A2-drop.3b's drain: a `Vec` of destructor values (`.vec (.dtor f u)`), the
+    one `Vec` whose elements hold one. It is a type only a binding's own
+    (`Ty.ok` refuses it as any part of another type: a struct's glue lends
+    `self` and cannot pop a field, a share's or a channel's payload is swept
+    with no code). -/
+def Ty.vecD : Ty → Bool
+  | .vec t => !t.dtorFree
+  | _ => false
+
+@[simp] theorem Ty.vecD_int : Ty.int.vecD = false := rfl
+@[simp] theorem Ty.vecD_vec (t : Ty) : (Ty.vec t).vecD = !t.dtorFree := rfl
+@[simp] theorem Ty.vecD_slice (t : Ty) : (Ty.slice t).vecD = false := rfl
+@[simp] theorem Ty.vecD_prod (a b : Ty) : (Ty.prod a b).vecD = false := rfl
+@[simp] theorem Ty.vecD_sum (a b : Ty) : (Ty.sum a b).vecD = false := rfl
+@[simp] theorem Ty.vecD_fn (ms : List Nat) (q : Cross) : (Ty.fn ms q).vecD = false := rfl
+@[simp] theorem Ty.vecD_arc (t : Ty) : (Ty.arc t).vecD = false := rfl
+@[simp] theorem Ty.vecD_lk (t : Ty) : (Ty.lk t).vecD = false := rfl
+@[simp] theorem Ty.vecD_cell (t : Ty) : (Ty.cell t).vecD = false := rfl
+@[simp] theorem Ty.vecD_dtor (f : Nat) (t : Ty) : (Ty.dtor f t).vecD = false := rfl
+
 /-- A2 types: a view's element type holds no views of its own (a view of a
     container of views is left to A2, with the other aggregates that
     carry views).  (A3.1's first cut also asked it to hold no shares; A3.1's
@@ -272,19 +292,22 @@ def Ty.dtorFree : Ty → Bool
     handles is typed, its elements lent as `vec_at` lends them.) -/
 def Ty.ok : Ty → Bool
   | .int => true
-  -- (A2-drop.3b: a `Vec`'s elements hold no destructor value; dropping
-  -- the `Vec` releases them, which runs no code, except a share's payload
-  -- or a closure's environment, A2-drop.3c and 3d)
-  | .vec t => t.ok && t.dtorFree
-  | .slice t => t.ok && !t.holdsView
-  | .prod a b => a.ok && b.ok
-  | .sum a b => a.ok && b.ok
+  -- (A2-drop.3b: a `Vec`'s elements hold no destructor value, or are of a
+  -- destructor type themselves, `Ty.vecD`, which only a binding's own type
+  -- may be: such a binding is drained at its end, element by element, each
+  -- running its destructor, `Step.scopeDDrain`; any other `Vec`'s drop
+  -- releases its elements, which runs no code, except a share's payload or
+  -- a closure's environment, A2-drop.3c and 3d)
+  | .vec t => t.ok && !t.vecD && (t.dtorFree || t.hasDtor)
+  | .slice t => t.ok && !t.holdsView && !t.vecD
+  | .prod a b => a.ok && b.ok && !a.vecD && !b.vecD
+  | .sum a b => a.ok && b.ok && !a.vecD && !b.vecD
   | .fn _ _ => true
-  | .arc t => t.ok && !t.holdsView   -- A3.1: a payload holds no views
-  | .lk t => t.ok && !t.holdsView  -- A3.2: nor does a lock's (it is Send); A3.2's second cut: it
+  | .arc t => t.ok && !t.holdsView && !t.vecD   -- A3.1: a payload holds no views
+  | .lk t => t.ok && !t.holdsView && !t.vecD  -- A3.2: nor does a lock's (it is Send); A3.2's second cut: it
                                    -- may hold `arc` and lock shares; A3.5's second cut: and cell
                                    -- shares, each value going in past the crossing check
-  | .cell t => t.ok && !t.holdsView  -- A3.5: a cell's payload is a lock's (A3.5's second cut:
+  | .cell t => t.ok && !t.holdsView && !t.vecD  -- A3.5: a cell's payload is a lock's (A3.5's second cut:
                                      -- shares in it too, each going in past the crossing check)
   | .dtor _ t => t.isStruct && t.ok  -- A2-drop.3: `% Drop` is on a struct or an enum
 
@@ -306,12 +329,45 @@ theorem Ty.holdsDtor_eq_not_free (t : Ty) : t.holdsDtor = !t.dtorFree := by
   | vec t ih => simp [Ty.holdsDtor, ih]
   | _ => rfl
 
+theorem Ty.ok_prod {a b : Ty} (h : (Ty.prod a b).ok = true) : a.ok = true ∧ b.ok = true := by
+  simp only [Ty.ok, Bool.and_eq_true] at h; exact h.1.1
+theorem Ty.ok_sum {a b : Ty} (h : (Ty.sum a b).ok = true) : a.ok = true ∧ b.ok = true := by
+  simp only [Ty.ok, Bool.and_eq_true] at h; exact h.1.1
+theorem Ty.ok_slice {t : Ty} (h : (Ty.slice t).ok = true) : t.ok = true ∧ t.holdsView = false := by
+  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1
+theorem Ty.ok_arc {t : Ty} (h : (Ty.arc t).ok = true) : t.ok = true ∧ t.holdsView = false := by
+  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1
+theorem Ty.ok_arc_vd {t : Ty} (h : (Ty.arc t).ok = true) : t.vecD = false := by
+  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.2
+theorem Ty.ok_lk {t : Ty} (h : (Ty.lk t).ok = true) : t.ok = true ∧ t.holdsView = false := by
+  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1
+theorem Ty.ok_lk_vd {t : Ty} (h : (Ty.lk t).ok = true) : t.vecD = false := by
+  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.2
+theorem Ty.ok_cell {t : Ty} (h : (Ty.cell t).ok = true) : t.ok = true ∧ t.holdsView = false := by
+  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1
+theorem Ty.ok_cell_vd {t : Ty} (h : (Ty.cell t).ok = true) : t.vecD = false := by
+  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.2
+
+/-- A type that owns no destructor value is no `Vec` of destructor values. -/
+theorem Ty.vecD_of_dtorFree {t : Ty} (h : t.dtorFree = true) : t.vecD = false := by
+  cases t <;> simp_all [Ty.vecD, Ty.dtorFree]
+
 theorem Ty.ok_vec_elem {t : Ty} (h : (Ty.vec t).ok = true) : t.ok = true := by
-  simp only [Ty.ok, Bool.and_eq_true] at h; exact h.1
-theorem Ty.ok_vec_free {t : Ty} (h : (Ty.vec t).ok = true) : t.dtorFree = true := by
-  simp only [Ty.ok, Bool.and_eq_true] at h; exact h.2
+  simp only [Ty.ok, Bool.and_eq_true] at h; exact h.1.1
+/-- A2-drop.3b's drain: a `Vec`'s elements own no destructor value, or are of
+    a destructor type (the drained `Vec`, `Ty.vecD`). -/
+theorem Ty.ok_vec_free {t : Ty} (h : (Ty.vec t).ok = true) : t.dtorFree = true ∨ t.hasDtor = true := by
+  simp only [Ty.ok, Bool.and_eq_true, Bool.or_eq_true] at h; exact h.2
+theorem Ty.ok_vec_notVecD {t : Ty} (h : (Ty.vec t).ok = true) : t.vecD = false := by
+  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1.2
+/-- A `Vec` whose element type is not a destructor type has elements that
+    own none (A2-drop.3b part 1's reading). -/
+theorem Ty.ok_vec_free_of {t : Ty} (h : (Ty.vec t).ok = true) (hd : t.hasDtor = false) : t.dtorFree = true := by
+  rcases Ty.ok_vec_free h with h' | h'
+  · exact h'
+  · rw [hd] at h'; cases h'
 theorem Ty.ok_vec_mk {t : Ty} (h : t.ok = true) (hf : t.dtorFree = true) : (Ty.vec t).ok = true := by
-  simp [Ty.ok, h, hf]
+  simp [Ty.ok, h, hf, Ty.vecD_of_dtorFree hf]
 
 /-- A2-drop.3a: the type under a destructor is well formed when the
     destructor type is. -/
