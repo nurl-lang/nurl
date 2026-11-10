@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+a long enough string to live on the heap, yes
+4
+5
+6

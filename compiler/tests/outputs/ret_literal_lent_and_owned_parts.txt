@@ -1,0 +1,59 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+a long enough string to be on the heap, one
+a long enough string to be on the heap, fresh
+a long enough string to be on the heap, fresh
+a long enough string to be on the heap, two!
+a long enough string to be on the heap, one
+a long enough string to be on the heap, two!
+a long enough string to be on the heap, two!
+a long enough string to be on the heap, loc
+a long enough string to be on the heap, loc
+a long enough string to be on the heap, two!
+a long enough string to be on the heap, fresh
+a long enough string to be on the heap, two!
+a long enough string to be on the heap, one
+a long enough string to be on the heap, fresh
+a long enough string to be on the heap, one
+a long enough string to be on the heap, fresh
+a long enough string to be on the heap, one
+a long enough string to be on the heap, two!
+a long enough string to be on the heap, one
+45
+5
+a long enough string to be on the heap, h3
+a long enough string to be on the heap, fresh
+2
+a long enough string to be on the heap, one
+a long enough string to be on the heap, fresh
+a long enough string to be on the heap, in
+a long enough string to be on the heap, fresh
+5
+a long enough string to be on the heap, in
+a long enough string to be on the heap, one
+a long enough string to be on the heap, fresh
+a long enough string to be on the heap, one
+a long enough string to be on the heap, two!
+a long enough string to be on the heap, fresh
+a long enough string to be on the heap, two!
+5
+5
+a long enough string to be on the heap, one
+a long enough string to be on the heap, fresh
+none
+a long enough string to be on the heap, two!
+a long enough string to be on the heap, one
+a long enough string to be on the heap, two!
+a long enough string to be on the heap, one
+a long enough string to be on the heap, fresh
+1
+a long enough string to be on the heap, pva long enough string to be on the heap, pv
+a long enough string to be on the heap, pv
+a long enough string to be on the heap, fresh
+a long enough string to be on the heap, one
+a long enough string to be on the heap, two!
+5
+a long enough string to be on the heap, h3
+a long enough string to be on the heap, pv

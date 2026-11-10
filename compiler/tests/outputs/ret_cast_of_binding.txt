@@ -1,0 +1,21 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+1
+2
+3
+a long enough string to be on the heap, one
+a long enough string to be on the heap, two!
+4
+5
+6
+4
+5
+6
+a long enough string to be on the heap, q
+a long enough string to be on the heap, q
+5
+4
+5
+6
