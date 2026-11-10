@@ -1,0 +1,12 @@
+### Fixed
+
+- **A slice is an owned value wherever it goes** (Agora #545). Which slice a function owned was a list of names kept while the function compiled, so a slice that left its name was freed twice or by the wrong owner: an owned binding stored into a struct or an enum payload (`@ Hold { q }`), bound a second time (`: [i r q`) or returned through another name was a double free; `= d p` over a parameter freed the caller's buffer; an `inout` slice given a parameter left both owners one buffer. A `[T` is now owned by its type, as a `String` or a `Vec` is: the binding, field or payload that holds it releases it once, a move empties the binding it leaves, and a slice that is only borrowed (a parameter, a field of a live value) is copied into whatever comes to own it.
+- **A function that returns its own slice on one path and a parameter on another frees nothing it was shown and leaks nothing** (Agora #540). `? c { ^ p } {} ^ [i | 1 2 3]` made the whole function's result unowned, so the literal leaked on every call that took that path. A returned parameter is a copy now, so the result is the caller's on every path.
+- **A slice is released whoever made it** (Agora #510). A slice returned by a function defined below its caller, or by a generic instance, was never freed, and a struct whose field is a slice owned nothing unless a literal in the same function gave it one. An option, a result or an enum payload of a slice, a slice in an argument list and a discarded slice result leaked the same way.
+- **A panic that unwinds over a slice releases its elements** (Agora #509). Under `recover` the unwind freed an owned slice's buffer and left the Strings, Vecs and closure environments in it; a slice temporary in the argument list of the call that panicked was not freed at all.
+
+### Changed
+
+- **A slice moves** (Agora #545). `: [i r q` over a local slice, `= e q`, a struct or enum literal built over `q`, and `q` handed to a `sink` parameter move the buffer, and reading `q` afterwards is refused as a use of a moved value — it read freed memory before. `: ~ [i c q` is a copy, and `q` stays its own. A struct with a slice field moves as any owning struct does.
+- **An owned slice, or a struct holding one, can be passed to a `sink` parameter** (Agora #545). The limit that sent such code to a `Vec` is gone.
+- **A slice built from raw parts is `unsafe`** (Agora #545). `@ [T { pointer length }` takes the buffer behind the pointer for its own and frees it, so safe code may not write it; an `unsafe` function that does hands the buffer over.

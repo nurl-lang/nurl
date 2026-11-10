@@ -181,10 +181,10 @@
 @ gen_two [T] T x T y → [T { ^ [T | x y] }
 @ run_gen → i { : [i a ( gen_two [i] 1 2 ) ~ x a { ( nurl_println ( nurl_str_int x ) ) } ^ 0 }
 
-// a struct built over a parameter (a copy)
+// a struct built over a parameter: the function keeps it, so the caller's slice moves in
 : WrappH { [i items i n }
 @ wrapp_wrap [i p → WrappH { ^ @ WrappH { p 1 } }
-@ run_wrapp → i { : [i a [i | 1 2] : WrappH h ( wrapp_wrap a ) ~ x . h items { ( nurl_println ( nurl_str_int x ) ) } ~ x a { ( nurl_println ( nurl_str_int x ) ) } ^ 0 }
+@ run_wrapp → i { : [i a [i | 1 2] : WrappH h ( wrapp_wrap a ) ~ x . h items { ( nurl_println ( nurl_str_int x ) ) } ^ 0 }
 
 // a parameter's field returned (a copy)
 : RetfH { [i items i n }

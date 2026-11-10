@@ -311,10 +311,6 @@ adopts or frees memory it was only shown, and nothing is released by
 hand. (`unsafe` code and the standard library manage a raw `sink s` by
 hand, and their consuming parameters are still inferred.)
 
-One implementation limit remains: an owned slice, or a struct whose
-literal gave it one, cannot be passed to an explicit `sink` parameter —
-wrap it in a `Vec`.
-
 ## 2. The ownership rules
 
 The rules below are checked on every compile. They are a static analysis
@@ -2423,15 +2419,36 @@ are dropped, moved and copied by the same rules:
   keeping parameter is deep-copied, so the new owner and the old never
   share a buffer. A literal returned as is lends instead, and so does a
   field written back where it was read.
-- **A slice owns its elements.** An owned slice (a slice literal, a
-  slice-returning call's result) whose element type owns something owns
-  its elements as a `Vec` does, and as a slice of closures owns their
-  environments (§7.5): freeing its buffer drops them. A slice literal
-  takes a fresh element as it is and copies any other in — a binding
-  too, which stays its own owner. An element store (`= . sl k v`) drops
-  the element it replaces, takes a fresh value as it is and copies a
-  borrowed one; a binding stored there is refused (store a copy). An
-  element that cannot be copied must be a fresh value.
+- **A slice is an owned value.** A `[T` owns its buffer the way a `Vec`
+  does, by its type and wherever it is held: a binding releases it once,
+  and a struct, an enum, an option or a result that holds one releases
+  it with itself. So it moves and is copied by the rules above. An
+  immutable binding of a local slice, an assignment, a `sink` argument,
+  a return, a struct or enum built over the binding all move it, and
+  reading the binding afterwards is a use after move (§2.1); a struct
+  with a slice field moves the same way. A slice that is only borrowed
+  — a parameter, a field of a live value, a payload a `??` arm reads —
+  is copied into whatever comes to own it (a binding assigned it, a
+  field, a literal, a return), and so is a slice bound to a mutable
+  binding (`: ~ [i c a` leaves `a` its own). A copy is a buffer of its
+  own with each element copied into it; a slice whose elements cannot
+  be copied can only be moved. Temporaries (a literal or a call's
+  result in an argument list, a discarded result) are released at the
+  end of their statement, and a panic that unwinds over a slice
+  releases it.
+- **A slice owns its elements.** A slice whose element type owns
+  something owns its elements as a `Vec` does, and as a slice of
+  closures owns their environments (§7.5): freeing its buffer drops
+  them. A slice literal takes a fresh element as it is and copies any
+  other in — a binding too, which stays its own owner. An element store
+  (`= . sl k v`) drops the element it replaces, takes a fresh value as
+  it is and copies a borrowed one; a binding stored there is refused
+  (store a copy). An element that cannot be copied must be a fresh
+  value.
+- **A slice from raw parts is `unsafe`.** `@ [T { p n }` makes a slice
+  out of a pointer and a length the compiler cannot vouch for, and the
+  slice will release that pointer as its own buffer. It is refused in
+  safe code; `unsafe` code that writes it hands the buffer over.
 - **A loop element kept by a callee is copied.** `~ x t { ( vec_push
   keep x ) }` hands `keep` a copy and the element stays `t`'s; only a
   callee that takes the element itself (a `sink`) empties its slot.
