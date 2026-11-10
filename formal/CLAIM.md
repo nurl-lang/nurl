@@ -817,8 +817,10 @@ The rules are stricter than nurlc's in these places:
     would see it short (none does here: the `Vec` is not lent while it
     drops); and a panic in an element's destructor leaves the loop with
     the elements not yet dropped still in the `Vec`, which its binding's
-    end drains, where nurlc, the length already cut, runs no destructor
-    for them (the family of Agora #608).)
+    end drains, where nurlc, the length already cut, goes on with them
+    through the journal before the panic goes on (Agora #608, #619;
+    below): each destructor runs once in both, the `Vec` already short
+    in nurlc's run.)
 - for a closure or a trait object whose environment would hold a
   destructor value (A2-drop.3c): a closure that captures a `% Drop` value
   by value (or a struct, an enum, an option or a `Vec` holding one), and a
