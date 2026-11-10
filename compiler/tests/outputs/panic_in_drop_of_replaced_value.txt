@@ -1,0 +1,93 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+drop old
+drop new
+local: recovered: panic in drop old
+drop old
+drop new
+both: recovered: panic in drop old
+drop a
+drop b
+drop c
+drop d
+drop e
+drop f
+vec: recovered: panic in drop b
+drop a
+drop b
+drop c
+drop d
+drop e
+slice: recovered: panic in drop b
+drop old
+drop new
+option: recovered: panic in drop old
+drop old
+drop new
+whole: recovered: panic in drop old
+drop old
+drop new
+field: recovered: panic in drop old
+drop old
+drop new
+nested: recovered: panic in drop old
+drop old
+drop new
+inout_param: recovered: panic in drop old
+drop old
+drop new
+inout_field: recovered: panic in drop old
+drop old
+drop new
+captured: recovered: panic in drop old
+drop old
+drop x
+drop new
+drop z
+element: recovered: panic in drop old
+drop a0
+drop a1
+drop a2
+drop a3
+looped: recovered: panic in drop a2
+drop old
+drop old+
+reads_old: recovered: panic in drop old
+drop a-old
+order: after a
+drop h-old
+order: after h
+drop s1
+order: after sl
+drop s0
+drop s1-new
+drop h-new
+drop a-new
+drop a-old
+order: after a
+drop h-old
+order: after h
+drop s1
+order: after sl
+drop s0
+drop s1-new
+drop h-new
+drop a-new
+order: no panic
+drop old
+outer: recovered: panic in drop old
+outer: a holds new
+drop new
+drop a
+drop b
+drop c
+outer_vec: recovered: panic in drop b
+outer_vec: a holds 3
+outer_vec: d
+outer_vec: e
+outer_vec: f
+drop d
+drop e
+drop f
