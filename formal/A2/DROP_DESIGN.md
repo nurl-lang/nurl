@@ -64,8 +64,9 @@ A2-drop.3b; A2-drop.3a's rule looked one level down only).
   what its drop does. Nesting the `letd`s as `letd z' (var z) (letd y'
   (var x) skip)` runs the fields' destructors in field order, nurlc's.
   In this cut the struct holds no views (the moved-in value must hold
-  nothing). **A struct with a `% Drop` of its own beside a destructor
-  field** (`ImplGlueOK P f t h i`) needs no new step either: its glue `f`
+  nothing). **A struct (or an enum, Agora #632) with a `% Drop` of its own
+  beside a destructor field or payload** (`ImplGlueOK P f t h i`, `h` the
+  struct's `GlueOK` or the enum's `EnumGlueOK` function) needs no new step either: its glue `f`
   takes it owned and its body is `letd w h (var 0) (letcall r i [w]
   (assign res …))`: the struct rebound under the fields' glue `h`, then
   the impl `i` (a `DtorOK` function on `Ty.dtor h t`) on it lent. The

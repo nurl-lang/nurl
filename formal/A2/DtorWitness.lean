@@ -116,22 +116,23 @@ theorem unpair_typed {P : Prog} {Γ Δ : Ctx} {F : List Var} {y x z : Var} {s : 
     with the value in `f`'s frame, and `f`'s frame drops the fields.) -/
 theorem letd_retype {P : Prog} {f : Nat} {t a : Ty} {x : Var} {s : Stmt} (h : LetdFn P f t a x s)
     {g : Nat} (ha : a = .dtor g t) (hne : g ≠ f) :
-    ∃ i r k, ImplGlueOK P g t f i ∧ s = .letcall r i [x] k ∧ GlueOK P f t ∧ DtorOK P i (.dtor f t) := by
+    ∃ i r k, ImplGlueOK P g t f i ∧ s = .letcall r i [x] k ∧ (GlueOK P f t ∨ EnumGlueOK P f t) ∧
+      DtorOK P i (.dtor f t) := by
   obtain ⟨i, r, k, hig, hs⟩ := h.2 g ha hne
   have hig' := hig
-  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, hgl, hdt, _⟩ := hig'
+  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, hgl, hdt, _⟩ := hig'
   exact ⟨i, r, k, hig, hs, hgl, hdt⟩
 
-/-- **Agora #616: the glue of a struct with a `% Drop` of its own.**  It
-    takes the struct owned, rebinds it under the fields' glue `h` first
+/-- **Agora #616, #632: the glue of a struct or an enum with a `% Drop` of
+    its own.**  It takes the value owned, rebinds it under the fields' glue `h` first
     thing (nothing can panic before: from there the struct is in `h`'s
     frame, which takes it apart with a frame per destructor field, at its
     end and on a panic), runs the impl `i` on it lent, and sets its result. -/
 theorem impl_glue_body {P : Prog} {f : Nat} {t : Ty} {h i : Nat} (hg : ImplGlueOK P f t h i) :
     ∃ fn w r e, P[f]? = some fn ∧ fn.params = [(.sink, .dtor f t)] ∧
       fn.body = .letd w h (.var 0) (.letcall r i [w] (.assign 1 (.expr e))) ∧
-      GlueOK P h t ∧ DtorOK P i (.dtor h t) := by
-  obtain ⟨fn, _, _, w, r, e, hfn, _, _, hps, _, _, _, _, _, _, hgl, hdt, hb⟩ := hg
+      (GlueOK P h t ∨ EnumGlueOK P h t) ∧ DtorOK P i (.dtor h t) := by
+  obtain ⟨fn, w, r, e, hfn, _, _, hps, _, _, _, _, _, _, hgl, hdt, hb⟩ := hg
   exact ⟨fn, w, r, e, hfn, hps, hb, hgl, hdt⟩
 
 /-- Agora #616: the destructor of a struct that holds a destructor value is
@@ -148,15 +149,17 @@ theorem struct_dtor_is_glue {P : Prog} {f : Nat} {a b : Ty} (h : DropFnOK P f (.
   · cases ht
 
 /-- Agora #632: the destructor of an enum that holds a destructor value is
-    its glue (`EnumGlueOK`), which takes the enum owned; a destructor that
-    takes it lent is refused for it. -/
+    its glue (`EnumGlueOK`), which takes the enum owned, after the enum's
+    own impl if it has one (`ImplGlueOK`); a destructor that takes it lent
+    is refused for it. -/
 theorem enum_dtor_is_glue {P : Prog} {f : Nat} {a b : Ty} (h : DropFnOK P f (.sum a b))
-    (hd : (Ty.sum a b).holdsDtor = true) : EnumGlueOK P f (.sum a b) := by
-  rcases h with ⟨_, h⟩ | ⟨_, _, _, _, ht, _⟩ | ⟨_, _, _, _, _, _, _, _, _, ht, _⟩ | h
+    (hd : (Ty.sum a b).holdsDtor = true) :
+    EnumGlueOK P f (.sum a b) ∨ ∃ h i, ImplGlueOK P f (.sum a b) h i := by
+  rcases h with ⟨_, h⟩ | ⟨_, _, _, _, ht, _⟩ | h | h
   · rw [h] at hd; cases hd
   · cases ht
-  · cases ht
-  · exact h
+  · exact Or.inr h
+  · exact Or.inl h
 
 /-- **Agora #632: an enum's glue takes the payload out to a frame of its
     own.**  The glue `f` of the enum `sum a b` takes one value of the
@@ -1269,8 +1272,8 @@ theorem glue2_not_thru : ¬ ThruFn P 6 := by
     · exact impl_not_thru ht
 
 theorem glue2_implOK : ImplGlueOK P 6 GT 4 5 :=
-  ⟨glue2, DT, .int, 2, 3, .lit 0, rfl, rfl, by decide, rfl, rfl, rfl, rfl, rfl, rfl, glue2_not_thru,
-    glue_glueOK, impl_dtorOK, rfl⟩
+  ⟨glue2, 2, 3, .lit 0, rfl, rfl, by decide, rfl, rfl, rfl, rfl, rfl, rfl, glue2_not_thru,
+    Or.inl glue_glueOK, impl_dtorOK, rfl⟩
 
 theorem impldrop_ok : DropFnOK P 6 GT := Or.inr (Or.inr (Or.inl ⟨4, 5, glue2_implOK⟩))
 
@@ -1916,7 +1919,7 @@ theorem main7_safe {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem 5) main7 (.ok 
 /-- ... and the destructor `dfn`, which takes its value lent, is no
     destructor for that struct: one that holds a destructor value has glue. -/
 theorem main7_lent_refused : ¬ DropFnOK P 0 GT := by
-  rintro (⟨_, h⟩ | ⟨fn, a, b, hfn, _, _, hps, _⟩ | ⟨_, _, fn, _, _, _, _, _, hfn, _, _, hps, _⟩ |
+  rintro (⟨_, h⟩ | ⟨fn, a, b, hfn, _, _, hps, _⟩ | ⟨_, _, fn, _, _, _, hfn, _, _, hps, _⟩ |
     ⟨fn, _, _, _, _, hfn, _, _, hps, _⟩)
   · exact absurd h (by decide)
   · simp [P] at hfn; subst hfn; simp [dfn] at hps
