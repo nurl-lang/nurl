@@ -76,7 +76,8 @@
 //                                                Vec[u]-backed crypto).
 //   ( vec_swap [A] v i j )         → b          swaps two slots
 //   ( vec_retain [A] v keep )      → v          keep : (@ b A) — drop the
-//                                                rest, in place
+//                                                rest, in place, once every
+//                                                element is judged
 //   ( vec_put_back [A] v i x )     → v          x, read out of slot i and
 //                                                updated, goes back
 //   ( vec_reverse [A] v )          → v          in-place reverse
@@ -1233,22 +1234,43 @@ raw @ vec_with_cap_packed [A] i n → ( Vec A ) {
 // Keep the elements `keep` answers T for, in order; the others are
 // dropped. In place: the same buffer and control block, so every copy of
 // the handle sees the result, and nothing is allocated.
+//
+// Every element is judged first, and only then are the others dropped: the
+// kept ones are swapped to the front, slot for slot, so that `v` holds
+// each of its elements exactly once whenever `keep` runs — one that
+// panics leaves a Vec the unwind can drop — and the others end up behind
+// them, in no order of their own. The length goes down to the kept ones
+// before the first destructor runs, as in vec_truncate: one that panics
+// leaves `v` with what was kept, and the others still to go are dropped
+// all the same (agora #624). Dropping them one by one inside the loop left
+// `v`, on a panic, with its old length over slots already given up.
 @ vec_retain [A] ( Vec A ) v ( @ b A ) keep → v {
-    : i n ( vec_len [A] v )
-    : *A data ( vec_data [A] v )
+    : s ctl . v ctl
+    : i n ( __vec_len_raw ctl )
+    : *A data # *A ( nurl_vctl_data ctl )
+    // The kept ones ahead of the first to go are where they belong.
     : ~ i w 0
-    : ~ i r 0
+    ~ < w n {
+        : A x . data w
+        ? ! ( keep x ) { break } {}
+        = w + w 1
+    }
+    ? == w n { ^ } {}
+    // Slot `w` holds one that goes, and so does every slot up to `r`.
+    : ~ i r + w 1
     ~ < r n {
         : A x . data r
         ? ( keep x ) {
-            ? != w r { = . data w x } {}
+            : A y . data w
+            = . data w x
+            = . data r y
             = w + w 1
-        } {
-            ( mem_take x )  // the slot gives it up: dropped here
-        }
+        } {}
         = r + r 1
     }
-    : b _l ( vec_set_len [A] v w )
+    // Length first, so a drop that reaches `v` sees it short.
+    ( nurl_vctl_set ctl 1 w )
+    ( mem_drop_range [A] data w n )
 }
 
 // Write `x` — the element of slot `idx`, read out (vec_at) and updated —

@@ -2700,7 +2700,7 @@ whichever way it leaves:
 - `( mem_drop_range [T] data from to )` (only inside an `unsafe`
   function) drops the elements `[from, to)` of the buffer at `data`, each
   a `T` its container has given up — for a container operation that
-  shortens itself (`vec_truncate`, `vec_clear`). The elements go in index
+  shortens itself (`vec_truncate`, `vec_clear`, `vec_retain`). The elements go in index
   order, and one whose destructor panics does not keep the ones after it
   from being dropped (docs/MEMORY.md §7.2).
 - `( mem_replace [T] place x )` (stdlib/core/mem.nu, `unsafe`) puts `x`
