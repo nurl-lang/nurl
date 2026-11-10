@@ -1,0 +1,9 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_slice_drop_holder_younger_view.nu:16:5: error: 'ws' is given a view of 'younger', which was declared after it, and 'ws''s type has a destructor (% Drop) that may read the view. Values are dropped newest first — where their scopes end, and by a panic's unwind — so 'younger' would be freed before 'ws''s destructor reads it. Give 'ws' views only of bindings declared before it, or have it hold a copy that owns its data (string_from, slice_to_vec).
+    = . ws k @ Shout { ( string_data younger ) }
+    ^
+compiler/tests/diag_slice_drop_holder_younger_view.nu:17:5: error: 'younger' ends here — the return drops it before 'ws', which was declared before it — while 'ws' still holds a view of it. 'ws' is dropped later, and its type has a destructor (% Drop) that may read that view: a drop is a use, so it would read freed memory. Let 'ws' end first — declare it after 'younger' (values are dropped newest first), or in a block that closes before this line — or have it hold a copy that owns its data (string_from, slice_to_vec).
+    ^ 0
+    ^
+error: compilation aborted — 2 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)
