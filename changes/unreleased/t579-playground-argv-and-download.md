@@ -1,7 +1,7 @@
 ### Security
 
 - **The unikernel boot command no longer lets a program's `argv` inject
-  shell code** (`nurlapi/main.nu`). `/build_unikernel` and the MCP tool
+  shell code** (Agora #579, `nurlapi/main.nu`). `/build_unikernel` and the MCP tool
   `nurl_build_unikernel` return ready-to-paste `qemu …` commands whose
   `-append` carries the guest's argv as `args="…"`. The caller-controlled
   `args` was interpolated into that command inside a double-quoted shell
@@ -12,7 +12,7 @@
   still receives the identical `args="…"`.
 
 - **Build artifacts are served as downloads, not renderable pages**
-  (`nurlapi/main.nu`). `/download/<build_id>/<file>` streams
+  (Agora #579, `nurlapi/main.nu`). `/download/<build_id>/<file>` streams
   attacker-controlled bytes under an attacker-chosen filename from the
   playground's own origin, and derived a `Content-Type` from the file
   extension — so an ELF a caller named `x.html` came back as `text/html`
