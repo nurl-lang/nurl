@@ -3154,6 +3154,9 @@ unsafe @ note_unsafe_item s pos s what → v {
 // them, to put them after the call's own checks (agora #558).
 : ~ i g_vp_tag 0
 : ~ i g_vp_seq 0
+// …and the call whose arguments are being compiled now (0: none): a call
+// nested in another's arguments keeps its own rows in the `vpass` list.
+: ~ i g_vp_active 0
 // The field path the last member read named (`. . s a h` → `s.a.h`; an
 // element read through a pointer is the pointer's own path), kept while a
 // call argument asks for it (g_member_path_on) — what a borrow of what the
@@ -15922,6 +15925,8 @@ unsafe @ gen_call i lex i syms i cg → s {
     // (…and this call's tag on its own rows, __vp_own_last.)
     = g_vp_seq + g_vp_seq 1
     : i __vp_me g_vp_seq
+    : i __vp_outer g_vp_active
+    = g_vp_active __vp_me
     : b __sx_need != 0 __sx_me
     // (How many arguments hold an address, and how many are an owner's
     // binding or field — what a callee could move or drop the storage of:
@@ -18927,7 +18932,8 @@ unsafe @ gen_call i lex i syms i cg → s {
         } {}
     } {}
     // (…and this call's own rows after its checks: agora #558.)
-    ? & != 0 g_borrowck > ( nurl_sym_len g_bck `pvpass` ) __sx_vp0 { ( __vp_own_last __sx_vp0 __vp_me ) } {}
+    = g_vp_active __vp_outer
+    ? & != 0 g_borrowck > ( nurl_sym_len g_bck `pvpass` ) __sx_vp0 { ( __vp_own_last __sx_vp0 __vp_me != 0 __vp_outer ) } {}
     // …and, when an argument was a field path, the same two with its
     // binding in its place (bck_call_lend_srcs, a match's payload lends).
     ? arg_has_froot {
@@ -31763,7 +31769,7 @@ unsafe @ bck_swap_char s str i from i to → s {
 // the check, a holder the callee points at another argument when it is
 // done was taken for one that already pointed there (agora #558). A nested
 // call's rows are the state the call is entered with: they stay before.
-@ __vp_own_last i from i sq → v {
+@ __vp_own_last i from i sq b nested → v {
     : s all ( nurl_sym_get g_bck `pvpass` )
     ? <= ( nurl_str_len all ) from { ^ } {}
     : s tag ( nurl_str_cat `.` ( nurl_str_int sq ) )
@@ -31792,8 +31798,13 @@ unsafe @ bck_swap_char s str i from i to → s {
     // a holder viewing is its exit's — read first, a view of a String the
     // callee grew and then pointed the holder at again was ended by the
     // growth. A `^`'s rows: the return walks none of its pending rows, and
-    // its `vpass` rows go before its own; they stay there, after the checks.)
-    ? < g_ret_vpos 0 {
+    // its `vpass` rows go before its own; they stay there, after the checks.
+    // Nor a call nested in another call's arguments: the enclosing call's
+    // checks, still to come in the `vpass` list, are asked of the state
+    // that inner call leaves — moved to the pending rows, after them, they
+    // missed what it makes (`( k ( f w s ) w s )`, f leaving w viewing s:
+    // claude-formal's counterexample on #558).)
+    ? & < g_ret_vpos 0 ! nested {
         ( bck_put `pvpass` ? == 0 ( nurl_str_len head ) ( nurl_str_cat other `` ) ? == 0 ( nurl_str_len other ) ( nurl_str_cat head `` ) ( nurl_str_cat head other ) )
         : ~ s orest ( nurl_str_cat own `` )
         ~ != 0 ( nurl_str_len orest ) {
