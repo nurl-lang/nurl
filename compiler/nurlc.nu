@@ -3446,6 +3446,10 @@ unsafe @ note_unsafe_item s pos s what → v {
 // Payload bindings of an enum the function being compiled owns
 // (mem_enum_take_note): while 0, nothing asks whether a value is one.
 : ~ i g_etake_n 0
+// Payload bindings of an enum (`__enum_pl`) in the function being compiled:
+// while 0, nothing asks whether a value handed back is one an arm was lent
+// (__payload_lent_of_frame).
+: ~ i g_epl_n 0
 // 1 while the code being compiled sits in a `~` loop over a container
 // (`iter_containers` in g_bck is not empty): what a call there hands a
 // closure is checked against the loop (__iter_closure_effs_check).
@@ -6320,7 +6324,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
     // (__payload_lent_of_frame): the caller gets its own copy of the field
     // and is told so — answered as a lend, the copy was freed by no one; a
     // field that cannot be copied has none to give (agora #641).
-    ? & == ret_eff_tt TT_DOT ! ret_field_copy {
+    ? & & != 0 g_epl_n == ret_eff_tt TT_DOT ! ret_field_copy {
         : s __pkr ? == 0 ( nurl_str_len ret_first_root ) ( nurl_sym_get syms `__last_member_root__` ) ( nurl_str_cat ret_first_root `` )
         : s __pkt ( nurl_get_last_type )
         ? & != 0 ( nurl_str_len __pkr ) ( __lent_payload_owns syms __pkr __pkt ) {
@@ -6474,7 +6478,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
     // keeps whole and releases on the way out (__payload_lent_of_frame): the
     // caller gets a copy; a value that cannot be copied has none to give
     // (agora #641).
-    ? & & ( is_ident_tok ret_first_tt ) ! ret_field_copy ! ret_bind_bit {
+    ? & & & != 0 g_epl_n ( is_ident_tok ret_first_tt ) ! ret_field_copy ! ret_bind_bit {
         : s __plk_ty ( nurl_get_last_type )
         ? ( __lent_payload_owns syms ret_first_val __plk_ty ) {
             ? ( __clone_supported __plk_ty syms ) {
@@ -23284,6 +23288,7 @@ unsafe @ gen_match i lex i syms i cg → s {
                 } {}
                 // (An enum's payload: lent by the enum, h231.)
                 ( nurl_sym_def syms ( nurl_str_cat pv0 `__enum_pl` ) ? pt0_is_opt_bool `` `1` )
+                ? ! pt0_is_opt_bool { = g_epl_n + g_epl_n 1 } {}
                 // (…and on its slot: a field read out of it is known by the
                 // slot, __fsrc, agora #559.)
                 ( nurl_sym_def syms ( nurl_str_cat vp0 `__enum_plp` ) ? pt0_is_opt_bool `` `1` )
@@ -23516,6 +23521,7 @@ unsafe @ gen_match i lex i syms i cg → s {
                 ? & != 0 ( nurl_str_len __m_scrut_psrc ) ! ( __ty_holds_no_addr pt1 syms ) { ( nurl_sym_def syms ( nurl_str_cat pv1 `__paramsrc` ) __m_scrut_psrc ) } {}
                 ( nurl_sym_def syms ( nurl_str_cat pv1 `__ptr` ) vp1 )
                 ( nurl_sym_def syms ( nurl_str_cat pv1 `__enum_pl` ) `1` )
+                = g_epl_n + g_epl_n 1
                 ( nurl_sym_def syms ( nurl_str_cat vp1 `__enum_plp` ) `1` )
                 ( mem_note_plend syms pv1 match_first_tt match_var_name __m_ser )
                 ( mem_note_plroot syms pv1 __m_proot )
@@ -23550,6 +23556,7 @@ unsafe @ gen_match i lex i syms i cg → s {
                 ? & != 0 ( nurl_str_len __m_scrut_psrc ) ! ( __ty_holds_no_addr pt2 syms ) { ( nurl_sym_def syms ( nurl_str_cat pv2 `__paramsrc` ) __m_scrut_psrc ) } {}
                 ( nurl_sym_def syms ( nurl_str_cat pv2 `__ptr` ) vp2 )
                 ( nurl_sym_def syms ( nurl_str_cat pv2 `__enum_pl` ) `1` )
+                = g_epl_n + g_epl_n 1
                 ( nurl_sym_def syms ( nurl_str_cat vp2 `__enum_plp` ) `1` )
                 ( mem_note_plend syms pv2 match_first_tt match_var_name __m_ser )
                 ( mem_note_plroot syms pv2 __m_proot )
@@ -30296,8 +30303,9 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
 // …and is its value of type `ty` one that owns something (a raw `s`, a
 // view or a scalar read out of the payload is no one's to copy)?
 @ __lent_payload_owns i syms s name s ty → b {
-    ? ! | ( __type_needs_drop ty syms ) ( __is_closure_ty ty ) { ^ F } {}
-    ^ ( __payload_lent_of_frame syms name )
+    ? == 0 g_epl_n { ^ F } {}
+    ? ! ( __payload_lent_of_frame syms name ) { ^ F } {}
+    ^ | ( __type_needs_drop ty syms ) ( __is_closure_ty ty )
 }
 
 // The binding the value of an arm that began with token `tt0` reads a
@@ -30316,8 +30324,8 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
     ? != 0 ( nurl_str_len froot ) { ^ ? ( __froot_lends_frame syms froot ) 1 0 } {}
     // (…or a payload of an enum this frame keeps whole, by name or as its
     // block's tail: __payload_lent_of_frame.)
-    ? ( is_ident_tok tt0 ) { ? ( __lent_payload_owns syms ( nurl_sym_get syms `__last_ident_name__` ) ( nurl_get_last_type ) ) { ^ 1 } {} } {}
-    ? & == tt0 TT_LBRACE ( is_ident_tok ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) ) ) {
+    ? & != 0 g_epl_n ( is_ident_tok tt0 ) { ? ( __lent_payload_owns syms ( nurl_sym_get syms `__last_ident_name__` ) ( nurl_get_last_type ) ) { ^ 1 } {} } {}
+    ? & & != 0 g_epl_n == tt0 TT_LBRACE ( is_ident_tok ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) ) ) {
         ? ( __lent_payload_owns syms ( nurl_sym_get syms `__tail_first_val__` ) ( nurl_get_last_type ) ) { ^ 1 } {}
     } {}
     // (…or a cursor over part of a local: `T x → x`, x a payload of `( getr
@@ -51029,6 +51037,7 @@ unsafe @ __agg_shape_clash s vty s dty → b {
     ( nurl_sym_def syms ( nurl_str_cat pvi `__ptr` ) vpi )
     // (An enum's payload: lent by the enum, h231.)
     ( nurl_sym_def syms ( nurl_str_cat pvi `__enum_pl` ) `1` )
+    = g_epl_n + g_epl_n 1
     ( nurl_sym_def syms ( nurl_str_cat vpi `__enum_plp` ) `1` )
     ? != 0 g_auto_drop_strings
     { : s akey ( nurl_str_cat `drop##` pti )
@@ -64741,6 +64750,8 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     = g_ptr_own_n 0
     // (A generic instance compiled inside another function keeps its own.)
     : i __etk_saved g_etake_n
+    : i __epl_saved g_epl_n
+    = g_epl_n 0
     = g_etake_n 0
     = g_ff_gen + g_ff_gen 1
     = g_ff_any 0
@@ -65625,6 +65636,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     ? __hook_glue { = g_drop_glue_ty `` } {}
     ? ( seq fname `main` ) ( emit_main_wrapper ret_ty ) {}
     = g_etake_n __etk_saved
+    = g_epl_n __epl_saved
 }
 
 // Is `fname` a library handle's drop hook — `X_drop` (or an instance of a
