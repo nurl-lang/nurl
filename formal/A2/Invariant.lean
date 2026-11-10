@@ -916,6 +916,49 @@ def KeepOut (Γ Δ : Ctx) (sp : List Var) : Prop :=
     ∃ E', Δ v = some E' ∧ E'.mode = E.mode ∧ E'.ty = E.ty ∧ (E.mode = .rootb → E' = E)) ∧
   (∀ v E', Δ v = some E' → v ∉ sp ∧ ∃ E, Γ v = some E)
 
+/-- A2-drop.3b: the type of a destructor frame's binding (`scopeD x f`):
+    the destructor type `Ty.dtor f t` itself, or a `Vec` of such values,
+    which the frame's end drains (`Step.scopeDDrain`).  In this cut the
+    drained `Vec`'s elements hold no views. -/
+def ScopeDTy (f : Nat) (t τ : Ty) : Prop :=
+  τ = .dtor f t ∨ (τ = .vec (.dtor f t) ∧ t.holdsView = false)
+
+/-- What `letd x f r s` binds, at the type `τ`, from a value of type `a`: a
+    destructor value (a `t` made here, or one of that destructor type moved
+    in), or a `Vec` of destructor values. -/
+def LetdTy (f : Nat) (t a τ : Ty) : Prop :=
+  (τ = .dtor f t ∧ (a = t ∨ a = .dtor f t)) ∨ (τ = .vec (.dtor f t) ∧ a = τ ∧ t.holdsView = false)
+
+theorem LetdTy.scopeD {f : Nat} {t a τ : Ty} (h : LetdTy f t a τ) : ScopeDTy f t τ := by
+  rcases h with ⟨h, _⟩ | ⟨h, _, hv⟩
+  · exact Or.inl h
+  · exact Or.inr ⟨h, hv⟩
+
+/-- What `letd` binds is no integer: a struct or an enum, or its destructor
+    type, or a `Vec`. -/
+theorem LetdTy.ne_int {f : Nat} {t a τ : Ty} (h : LetdTy f t a τ) (hst : t.isStruct = true) :
+    a ≠ .int := by
+  rcases h with ⟨_, h' | h'⟩ | ⟨h1, h', _⟩
+  · rw [h']; cases t <;> simp_all [Ty.isStruct]
+  · rw [h']; simp
+  · rw [h', h1]; simp
+
+theorem ScopeDTy.hasFn {f : Nat} {t τ : Ty} (h : ScopeDTy f t τ) (hf : t.hasFn = false) :
+    τ.hasFn = false := by
+  rcases h with rfl | ⟨rfl, _⟩ <;> simpa [Ty.hasFn] using hf
+
+theorem ScopeDTy.holdsView {f : Nat} {t τ : Ty} (h : ScopeDTy f t τ) : τ.holdsView = t.holdsView := by
+  rcases h with rfl | ⟨rfl, _⟩ <;> simp [Ty.holdsView]
+
+/-- The binding is armed exactly when its type holds views. -/
+theorem ScopeDTy.dtorViews {f : Nat} {t τ : Ty} (h : ScopeDTy f t τ) : τ.dtorViews = τ.holdsView := by
+  rcases h with rfl | ⟨rfl, hv⟩
+  · simp [Ty.dtorViews, Ty.holdsView]
+  · simp [Ty.dtorViews, Ty.hasDtor, Ty.holdsView, hv]
+
+theorem ScopeDTy.ne_int {f : Nat} {t τ : Ty} (h : ScopeDTy f t τ) : τ ≠ .int := by
+  rcases h with rfl | ⟨rfl, _⟩ <;> simp
+
 /-- `f` is a destructor for values of type `t`: it takes one borrowed `t`,
     returns an integer and lends, holds and stores nothing. -/
 def DtorOK (P : Prog) (f : Nat) (t : Ty) : Prop :=
@@ -946,39 +989,6 @@ macro_rules
       | (intro _ h; exfalso; revert h; simp_all [Ty.hasDtor, Ty.holdsDtor])
       | (intro _ _ _ h; simp_all [Ty.hasDtor, Ty.holdsDtor])
       | (intro fn hf ho; simp_all [Ty.hasDtor, Ty.holdsDtor]))
-
-/-- A2-drop.3b: the type `letd` binds its value at, for a destructor `f` of
-    the struct or enum `t`: a `t` made here, or a destructor value moved in,
-    at `Ty.dtor f t`.  (The drain's binder, a `Vec` of such values at its own
-    type drained at its scope's end by `Step.scopeDDrain`, is a third case
-    still to come: its frame must keep the `Vec` live to its end, and a panic
-    must unwind to it armed, `A2/DROP_DESIGN.md`.) -/
-inductive DtorBind (f : Nat) (t : Ty) : Ty → Ty → Prop
-  | made : DtorBind f t t (.dtor f t)
-  | moved : DtorBind f t (.dtor f t) (.dtor f t)
-
-theorem DtorBind.cases' {f : Nat} {t a T : Ty} (hb : DtorBind f t a T) :
-    T = .dtor f t := by
-  cases hb <;> rfl
-
-theorem DtorBind.hasFn {f : Nat} {t a T : Ty} (hb : DtorBind f t a T) :
-    T.hasFn = t.hasFn := by
-  rw [hb.cases']; simp [Ty.hasFn]
-
-theorem DtorBind.dtorViews {f : Nat} {t a T : Ty} (hb : DtorBind f t a T) :
-    T.dtorViews = T.holdsView := by
-  rw [hb.cases']; simp [Ty.dtorViews, Ty.hasDtor, Ty.vecD, Ty.dtorFree]
-
-theorem DtorBind.holdsView {f : Nat} {t a T : Ty} (hb : DtorBind f t a T) :
-    T.holdsView = a.holdsView := by
-  cases hb <;> rfl
-
-theorem DtorBind.ne_int {f : Nat} {t a T : Ty} (hb : DtorBind f t a T) (hst : t.isStruct = true) :
-    a ≠ .int := by
-  cases hb <;> (try cases t) <;> simp_all [Ty.isStruct]
-
-theorem DtorBind.T_ne_int {f : Nat} {t a T : Ty} (hb : DtorBind f t a T) : T ≠ .int := by
-  rw [hb.cases']; simp
 
 inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
   | skip {Γ : Ctx} {F : List Var} : StmtT P Γ F .skip Γ
@@ -1041,10 +1051,9 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
         (setE (kill .realloc t.holdsView x Γ1) x { Ex1 with held := Ex1.held ++ ownHeld true t D })
   | free {Γ : Ctx} {F : List Var} {x : Var} {E : Entry} {t : Ty} :
       Γ x = some E → E.live = true → E.mode = .own → E.ty = .vec t → x ∉ F → EndOK Γ x →
-      -- A2-drop.3b: `free` releases the elements by `Frees`, which runs no
-      -- code, so not those of a destructor type (a drained `Vec`'s elements
-      -- go through their own `scopeD`, `Step.scopeDDrain`)
-      (hdf : t.dtorFree = true := by first | decide | assumption) →
+      -- (A2-drop.3b: the elements it releases own no destructor value: a `Vec`
+      -- of destructor values is drained at its binding's end, not freed)
+      t.dtorFree = true →
       StmtT P Γ F (.free x) (setE (kill .replace false x Γ) x { E with live := false, dtor := false })
   | sub {Γ Γ0 Δ0 Δ : Ctx} {F : List Var} {s : Stmt} :
       Weaker Γ Γ0 → StmtT P Γ0 F s Δ0 → (Δ0 = Δ ∨ Weaker Δ0 Δ) → StmtT P Γ F s Δ
@@ -1102,20 +1111,20 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       (RootbAnch Δ F) →
       KeepOut Γ Δ s.spine → DStay Γ Δ s.spine →
       StmtT P Γ F (.catchR x m0 s) Δ
-  /-- A2-drop.1: a binding with a destructor, of a type that holds no views
-      (its value is valid however the binding died). -/
+  /-- A2-drop: a binding that runs a destructor at its end: of a destructor
+      type (armed when the type holds views, A2-drop.2), or of a `Vec` of
+      destructor values, drained there (A2-drop.3b). -/
   | letd {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {r : Rhs} {s : Stmt} {E : Entry}
-      {t T : Ty} {H : List Dep} :
+      {t : Ty} {H : List Dep} {τ : Ty} :
       s.src = true → Γ x = none → x ∉ F → RhsT Γ F r E Γ1 → E.mode = .own →
       -- A2-drop.3a: the binding is of the destructor type `Ty.dtor f t`, of a
       -- struct or an enum `t`: the value is a `t` made here, or a value of that
-      -- destructor type moved in (whose old binding's scope then runs nothing);
-      -- A2-drop.3b: or a `Vec` of such values, bound at its own type, whose
-      -- scope's end drains it (`Step.scopeDDrain`)
-      DtorBind f t E.ty T → t.isStruct = true →
+      -- destructor type moved in (whose old binding's scope then runs nothing).
+      -- A2-drop.3b: or it is a `Vec` of such values, drained at its end
+      LetdTy f t E.ty τ → t.isStruct = true →
       t.hasFn = false → DtorOK P f (.dtor f t) →
       -- A2-drop.2: the binding, armed, views what the value does, or more
-      HeldUp Γ1 E H → StmtT P (setE Γ1 x (Entry.arm { E with ty := T, held := H })) F s Δ →
+      HeldUp Γ1 E H → StmtT P (setE Γ1 x (Entry.arm { E with ty := τ, held := H })) F s Δ →
       EndOK Δ x →
       -- A2-drop.3a: and is given no other value in its scope (`Stmt.assigns`):
       -- the old value's drop would run no destructor
@@ -1175,10 +1184,9 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       NoPin Γ v → DtorSafe Γ .replace false v →
       RhsT (kill .replace false v Γ) F (.pop v) E Γ1 → StmtT P (setE Γ1 x E) F s Δ1 →
       StmtT P Δ1 F (.push v x) Δ → EndOK Δ x → v ∉ s.vars →
-      -- A2-drop.3b: the element checked out owns no destructor value: `x`
-      -- is no `letd`'s, and its body may give it a new value, whose old
-      -- one would be released running no destructor
-      (hdf : E.ty.dtorFree = true := by first | decide | assumption) →
+      -- (A2-drop.3b: the element checked out owns no destructor value: its
+      -- binding is no `letd`'s)
+      E.ty.dtorFree = true →
       StmtT P Γ F (.withElem v i x s) (exitScope x Δ)
   /-- A2-envhand: a call through the package `c` of a method whose interface
       `σ` takes the receiver `inout` (at the bound `b`, and nothing else): the
@@ -1212,8 +1220,9 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       StmtT P Γ F (.callcE x c j [] k) (exitScope x Δ)
   | scopeD {Γ Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {s : Stmt} :
       -- (A2-drop.3a: of the destructor type `Ty.dtor f t`, whose destructor `f` is)
-      (∃ E t, Γ x = some E ∧ E.mode = .own ∧ E.ty = .dtor f t ∧
-        E.ty.hasFn = false ∧ DtorOK P f (.dtor f t)) → x ∉ F →
+      -- (A2-drop.3b: or a `Vec` of such values, of a type that holds no views)
+      (∃ E t, Γ x = some E ∧ E.mode = .own ∧ ScopeDTy f t E.ty ∧ E.ty.hasFn = false ∧
+        DtorOK P f (.dtor f t) ∧ t.isStruct = true) → x ∉ F →
       StmtT P Γ F s Δ → EndOK Δ x →
       KeepOut Γ Δ s.spine → CtxWF Δ → NameWF Δ →
       -- A2-drop.2: the binding is `letd`'s when its type holds views (its
@@ -1235,9 +1244,8 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       x ∉ F → EditArg Γ F op t D Γ1 → (∀ y, op.stored = some y → y ≠ x) →
       Γ1 x = some Ex1 → Ex1.live = true → memDeps Ex1.path ≠ [] →
       ThruOK Γ1 F op Ex.ty Ex1.path →
-      -- A2-drop.3b: a truncation or an element set releases elements by
-      -- `Frees`, running no code: not those of a destructor type
-      (hdf : t.dtorFree = true := by first | decide | assumption) →
+      -- (A2-drop.3b: a change that drops elements drops no destructor value)
+      (op.drops = true → t.dtorFree = true) →
       StmtT P Γ F (.edit true x op) (setE (killThru op Ex.ty Ex1.path Γ1) x Ex1)
   /-- Agora #295: the same change through a borrow `x`, of an element type
       that holds views (and no closure): a push or an element set may store
@@ -1258,8 +1266,7 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       t.hasFn = false → x ∉ F → EditArg Γ F op t D Γ1 → (∀ y, op.stored = some y → y ≠ x) →
       Γ1 x = some Ex1 → Ex1.live = true → memDeps Ex1.path ≠ [] →
       ThruOK Γ1 F op Ex.ty Ex1.path → ThruV Γ1 op Ex.ty Ex1.path (memDeps D) →
-      -- (A2-drop.3b: as `editB`'s)
-      (hdf : t.dtorFree = true := by first | decide | assumption) →
+      (op.drops = true → t.dtorFree = true) →
       StmtT P Γ F (.edit true x op)
         (setE (holdThru (memDeps D) Ex1.path (killThruV op Ex.ty Ex1.path Γ1)) x
           { Ex1 with held := Ex1.held ++ memDeps D })

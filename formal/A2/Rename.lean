@@ -3202,7 +3202,7 @@ theorem editB_ren (h : S.OK) (hab : S.AbsOK Γa) (hR : S.R = [])
     (hty : Ex.ty = .vec t) (hhv : t.holdsView = false)
     (harg : EditArg Γa Fa op t D Γa1) (hyx : ∀ y, op.stored = some y → y ≠ x) (hx1 : Γa1 x = some Ex1)
     (hl1 : Ex1.live = true) (hne : memDeps Ex1.path ≠ []) (hthru : ThruOK Γa1 Fa op Ex.ty Ex1.path)
-    (hdf : t.dtorFree = true) :
+    (hdf : op.drops = true → t.dtorFree = true) :
     StmtT P (S.canon Γa) S.Fc ((Stmt.edit true x op).rename S.ρ)
       (S.canon (A2.setE (A2.killThru op Ex.ty Ex1.path Γa1) x Ex1)) := by
   have hab1 : S.AbsOK Γa1 := EditArg.absOK harg hab
@@ -3271,7 +3271,8 @@ theorem editB_ren (h : S.OK) (hab : S.AbsOK Γa) (hR : S.R = [])
   have hT := StmtT.editB (P := P) (x := S.ρ x) (Ex := S.liftE x Ex1) (Ex1 := S.liftE x Ex1)
     (by rw [canon_ρ h, hx]; rfl) (by rw [liftE_mode x hrb, hmx]; rfl) (by rw [liftE_live]; exact hl)
     (by rw [hty1]; exact hty) hhv (h.Fcout x) harg' hyx' (by rw [canon_ρ h, hx1]; rfl)
-    (by rw [liftE_live]; exact hl1) (by rw [hmem]; simpa [rds] using hne) hthru' hdf
+    (by rw [liftE_live]; exact hl1) (by rw [hmem]; simpa [rds] using hne) hthru'
+    (by rw [Edit.drops_rename]; exact hdf)
   -- the kills commute with the lift
   have heq : S.canon (A2.setE (A2.killThru op Ex1.ty Ex1.path Γa1) x Ex1) =
       A2.setE (A2.killThru (op.rename S.ρ) (S.liftE x Ex1).ty (S.liftE x Ex1).path (S.canon Γa1)) (S.ρ x)
@@ -3404,7 +3405,7 @@ theorem editBV_ren (h : S.OK) (hab : S.AbsOK Γa) (hR : S.R = []) {P : Prog} (hP
     (hty : Ex.ty = .vec t) (hhv : t.holdsView = true) (hfn : t.hasFn = false) (hxF : x ∉ Fa)
     (harg : EditArg Γa Fa op t D Γa1) (hyx : ∀ y, op.stored = some y → y ≠ x) (hx1 : Γa1 x = some Ex1)
     (hl1 : Ex1.live = true) (hne : memDeps Ex1.path ≠ []) (hthru : ThruOK Γa1 Fa op Ex.ty Ex1.path)
-    (hV : ThruV Γa1 op Ex.ty Ex1.path (memDeps D)) (hdf : t.dtorFree = true) :
+    (hV : ThruV Γa1 op Ex.ty Ex1.path (memDeps D)) (hdf : op.drops = true → t.dtorFree = true) :
     StmtT P (S.canon Γa) S.Fc ((Stmt.edit true x op).rename S.ρ)
       (S.canon (A2.setE (holdThru (memDeps D) Ex1.path (killThruV op Ex.ty Ex1.path Γa1)) x
         { Ex1 with held := Ex1.held ++ memDeps D })) ∧
@@ -3530,7 +3531,8 @@ theorem editBV_ren (h : S.OK) (hab : S.AbsOK Γa) (hR : S.R = []) {P : Prog} (hP
   have hT := StmtT.editBV (P := P) (x := S.ρ x) (Ex := S.liftE x Ex1) (Ex1 := S.liftE x Ex1)
     (by rw [canon_ρ h, hx]; rfl) (by rw [liftE_mode x hrb, hmx]; rfl) (by rw [liftE_live]; exact hl)
     (by rw [hty1]; exact hty) hhv hfn (h.Fcout x) harg' hyx' (by rw [canon_ρ h, hx1]; rfl)
-    (by rw [liftE_live]; exact hl1) (by rw [hmem]; simpa [rds] using hne) hthru' hV' hdf
+    (by rw [liftE_live]; exact hl1) (by rw [hmem]; simpa [rds] using hne) hthru' hV'
+    (by rw [Edit.drops_rename]; exact hdf)
   -- the roots are owners or `inout` parameters made by no `letd`
   have hrs : ∀ v ∈ roots (memDeps Ex1.path), ∀ E, killThruV op Ex1.ty Ex1.path Γa1 v = some E →
       E.mode ≠ .rootb ∧ E.dbind = false := by
@@ -3654,7 +3656,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (by
         obtain ⟨E, hE, hl⟩ := hxl
         exact ⟨S.liftE x E, by rw [canon_ρ h, hE]; rfl, by rw [liftE_live]; exact hl⟩)
-  | @letd Γ Γ1 Δ F x f r k E t T H hks hx hxF hr hown hty hstr hview hdtor hH hk hpe hna ih =>
+  | @letd Γ Γ1 Δ F x f r k E t H τ hks hx hxF hr hown hty hstr hview hdtor hH hk hpe hna ih =>
     intro _ hab hw hn hT
     obtain ⟨E', hr', hE'⟩ := RhsT.ren h hab hr
     obtain ⟨hn1, hEn, _⟩ := hr.names hn
@@ -3664,19 +3666,24 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     have hx1 : Γ1 x = none := by have := hdom x; rw [hx] at this; cases h' : Γ1 x <;> simp_all
     -- the armed binding, as `letd` records it
     have hos : E.mode.ownSlot = true := by rw [hown]; rfl
-    have hv1 : (Entry.arm { E with ty := T, held := H }).vdeps = H := by simp [Entry.vdeps, Entry.arm, hos]
+    have hv1 : (Entry.arm { E with ty := τ, held := H }).vdeps = H := by simp [Entry.vdeps, Entry.arm, hos]
     -- (A2-drop.3a: a struct or an enum, or its destructor type: no integer)
     have hne : E.ty ≠ .int := hty.ne_int hstr
-    have hov : T.holdsView = E.ty.holdsView := hty.holdsView
+    have hov : τ.holdsView = E.ty.holdsView := by
+      rcases hty with ⟨rfl, h' | h'⟩ | ⟨_, h', _⟩
+      · rw [h']; rfl
+      · rw [h']
+      · rw [h']
+    have hdv : τ.dtorViews = τ.holdsView := hty.scopeD.dtorViews
     have hroot := hH.root hown (hEr hlive (Or.inl hne))
-    have hwx := hw1.add hx1 (E := Entry.arm { E with ty := T, held := H })
+    have hwx := hw1.add hx1 (E := Entry.arm { E with ty := τ, held := H })
       (fun _ _ r hr0 => by
         rw [hv1] at hr0; obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hr0; exact hroot d hd)
       (fun _ _ _ d hd _ => by rw [hv1] at hd; exact hroot d hd) (fun h => h)
       (fun h => by simp only [Entry.arm, Ty.dtorViews, Bool.and_eq_true] at h; exact h.2)
-    have hnx := NameWF.setE hn1 (E := Entry.arm { E with ty := T, held := H }) (fun Ex h => by rw [hx1] at h; cases h)
+    have hnx := NameWF.setE hn1 (E := Entry.arm { E with ty := τ, held := H }) (fun Ex h => by rw [hx1] at h; cases h)
       (fun Ex h => by rw [hx1] at h; cases h) (fun hl _ => (hEn hl (Or.inl hne)).widen hown hH)
-    have habx := hab.add hab1 hx (E := Entry.arm { E with ty := T, held := H }) hmo
+    have habx := hab.add hab1 hx (E := Entry.arm { E with ty := τ, held := H }) hmo
     obtain ⟨tk, abk⟩ := ih hks habx hwx hnx (fun ht => hT ht.letd)
     have hbx := hab.fresh hx
     refine ⟨?_, abk.exitScope hbx⟩
@@ -3690,11 +3697,11 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     have hm' : E'.mode = .own := hm.symm
     -- where the call places the body, the binding is read as viewing what
     -- the arguments held as well: `letd` records that of memory there too
-    have hEq : S.liftE x (Entry.arm { E with ty := T, held := H }) =
-        ⟨T, .own, E.live, rds S.ρ E.path, rds S.ρ H ++ ownHeld true E.ty S.A, T.holdsView,
-          T.holdsView⟩ := by
-      have hoh : ownHeld true T S.A = ownHeld true E.ty S.A := by simp only [ownHeld, hov]
-      simp [liftE, hown, Entry.arm, liftMode, Mode.ownSlot, hoh, hty.dtorViews]
+    have hEq : S.liftE x (Entry.arm { E with ty := τ, held := H }) =
+        ⟨τ, .own, E.live, rds S.ρ E.path, rds S.ρ H ++ ownHeld true E.ty S.A, τ.dtorViews,
+          τ.dtorViews⟩ := by
+      have hoh : ownHeld true τ S.A = ownHeld true E.ty S.A := by simp only [ownHeld, hov]
+      simp [liftE, hown, Entry.arm, liftMode, Mode.ownSlot, hoh]
     have hlh0 : (S.liftE x E).held = rds S.ρ E.held ++ ownHeld true E.ty S.A := by
       simp [liftE, hown, Mode.ownSlot]
     have hsub0 : (S.liftE x E).held ⊆ rds S.ρ H ++ ownHeld true E.ty S.A := by
@@ -3727,15 +3734,14 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       rcases List.mem_append.mp hd with hd | hd
       · exact hsub0 (hE'h hd)
       · exact hX2 hd
-    have hEW : EntryWeaker (Entry.arm { E' with ty := T, held := E'.held ++ X })
-        (S.liftE x (Entry.arm { E with ty := T, held := H })) := by
+    have hEW : EntryWeaker (Entry.arm { E' with ty := τ, held := E'.held ++ X })
+        (S.liftE x (Entry.arm { E with ty := τ, held := H })) := by
       rw [hEq]
       refine ⟨rfl, hm, fun hf => ?_, fun _ => ⟨hE'l, fun ho => ?_, hsub⟩,
-        fun hd => ⟨by simpa [Entry.arm, hty.dtorViews] using hd, hsub⟩, by simp [Entry.arm, hty.dtorViews],
-        fun hd => Or.inl (by simpa [Entry.arm, hty.dtorViews] using hd),
+        fun hd => ⟨by simpa [Entry.arm] using hd, hsub⟩, by simp [Entry.arm],
+        fun hd => Or.inl (by simpa [Entry.arm] using hd),
         fun hdb _ _ d hnm => ⟨fun hd => List.mem_append_right _
-          (hX3 (by rw [← hov]; simpa [Entry.arm, Ty.holdsView, hty.dtorViews] using hdb) d hd hnm),
-          fun hd => hsub hd⟩⟩
+          (hX3 (by rw [← hov, ← hdv]; simpa [Entry.arm] using hdb) d hd hnm), fun hd => hsub hd⟩⟩
       · simp [Entry.fixed, Entry.arm, hm'] at hf
       · simp [Entry.arm, hm', Mode.ownSlot] at ho
     exact StmtT.letd (H := E'.held ++ X) (by rw [src_rename]; exact hks) (by rw [canon_ρ h, hx]; rfl)
@@ -4126,7 +4132,10 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
         rw [Stmt.vars_rename]; intro hm
         obtain ⟨w, hw', he'⟩ := List.mem_map.mp hm
         exact hyv (h.inj _ _ he' ▸ hw'))
-      (by rw [← (hE' x).ty, liftE_ty x (by rcases hmo with h' | h' <;> rw [h'] <;> simp)]; exact hdf)
+      (by
+        have hl := (hE' x).1
+        have hrb : E.mode ≠ .rootb := by rcases (RhsT.out hr).1 with h' | h' <;> rw [h'] <;> simp
+        rw [← hl, liftE_ty x hrb]; exact hdf)
   | @insert Γ Δ F x y i he _ _ ih =>
     intro _ hab hw hn hT
     obtain ⟨tp, abp⟩ := ih rfl hab hw hn hT

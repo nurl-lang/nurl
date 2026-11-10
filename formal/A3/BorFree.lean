@@ -193,13 +193,12 @@ theorem Step.borFree {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r
     exact this.1.set _ (SlotFree.ids this.2)
   | letdP _ => exact hb
   | scopeDIn _ ih => exact ih
-  | scopeDEnd _ => exact hb.of_st rfl
+  | scopeDEnd _ _ | scopeDDrain _ => exact hb.of_st rfl
+  | scopeDEmpty _ => exact hb
   | scopeDMoved _ => exact hb.remove _
   | scopeDP _ _ _ ih => exact ih.of_st rfl
-  | scopeDPMoved _ _ ih => exact ih.remove _
-  | scopeDDrain _ => exact hb.of_st rfl
-  | scopeDEmpty _ => exact hb
   | scopeDPDrain _ _ ih => exact ih
+  | scopeDPMoved _ _ ih => exact ih.remove _
   | withLock _ _ _ => exact (hb.of_st rfl).set _ (SlotFree.ids ids_nonNode)
   | scopeLIn _ ih => exact ih
   | scopeLSkip hrl => cases hrl <;> exact (hb.of_st rfl).remove _

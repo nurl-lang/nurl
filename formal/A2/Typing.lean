@@ -1150,6 +1150,9 @@ theorem Edit.effAt_realloc {op : Edit} {k : Kind} {s : Bool} (h : op.effAt k s =
   | set _ _ => simp [Edit.effAt] at h
 
 /-- A renamed change stores what it stored, renamed. -/
+@[simp] theorem Edit.drops_rename (ρ : Var → Var) (op : Edit) : (op.rename ρ).drops = op.drops := by
+  cases op <;> rfl
+
 @[simp] theorem Edit.stored_rename (ρ : Var → Var) (op : Edit) :
     (op.rename ρ).stored = op.stored.map ρ := by
   cases op <;> rfl

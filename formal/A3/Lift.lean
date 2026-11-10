@@ -339,7 +339,8 @@ theorem Step.lifts {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
   | scopeDMoved hx => exact ⟨_, GhostRel.refl _, Step.scopeDMoved (m := liftMem a2 m) hx⟩
   | @scopeDP m1 _ _ _ _ _ hx hv ih =>
     exact ⟨_, GhostRel.refl _, Step.scopeDP (m1 := liftMem a2 m1) ih hx hv⟩
-  | scopeDPDrain _ hx ih => exact ⟨_, GhostRel.refl _, Step.scopeDPDrain ih hx⟩
+  | @scopeDPDrain m1 _ _ _ _ _ _ _ _ hx ih =>
+    exact ⟨_, GhostRel.refl _, Step.scopeDPDrain (m1 := liftMem a2 m1) ih hx⟩
   | @scopeDPMoved m1 _ _ _ _ hx ih => exact Step.scopeDPMoved (m1 := liftMem a2 m1) ih hx
   -- A3.2: taking a lock and giving it back touch no address
   | withLock ha hk hx hnv => exact ⟨_, GhostRel.refl _, Step.withLock (m := liftMem a2 m) ha hk hx hnv⟩

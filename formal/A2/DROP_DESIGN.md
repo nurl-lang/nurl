@@ -33,7 +33,7 @@ A2-drop.3b; A2-drop.3a's rule looked one level down only).
 - Every owned binding of such a type is `letd`'s, whose scope (`scopeD`)
   runs the destructor at its end and on a panic's unwind, except the
   check-out bindings of `withLock` and `withCell` (not yet, below;
-  `withElem` checks out none, since a `Vec`'s element type holds no
+  `withElem` checks out none: it asks an element type that owns no
   destructor value, A2-drop.3b). `letv` refuses
   one (`StmtT.letv`'s `hnd`). A binder that may receive one without running
   `scopeD` itself hands it to its `letd` first thing (`Stmt.movedFirst`):
@@ -75,9 +75,17 @@ A2-drop.3b; A2-drop.3a's rule looked one level down only).
   destructor at once, and binds the new one with `letd`. This is stricter
   than nurlc, which assigns in place.
 - **`free` takes only a `Vec`** (`E.ty = .vec t`), and a destructor wraps
-  only a struct or an enum. Since A2-drop.3b a `Vec`'s element type holds
-  no destructor value (`Ty.ok`), so what `free` releases runs no
+  only a struct or an enum. Since A2-drop.3b `free` asks elements that own
+  no destructor value (`t.dtorFree`), so what it releases runs no
   destructor, except a share's payload or a closure's environment (3c, 3d).
+- **A `Vec` of destructor values is drained** (A2-drop.3b). `letd x f r s`
+  binds one too (`LetdTy`: `r`'s type is `vec (dtor f u)`, `u` holding no
+  views), and its `scopeD x f` frame's end takes the elements out in index
+  order, each to a `letd` binding of its own, whose frame runs its
+  destructor (`Step.scopeDDrain`, `scopeDEmpty`); a panic drains what is
+  left and goes on (`Step.scopeDPDrain`). `vec_truncate`, `vec_clear`,
+  `vec_set`, `vec_free` and `withElem` of one are refused (they drop or
+  check out elements with no code).
 - **Taking a destructor value apart is refused**: `unpair` asks `E.ty =
   .prod a b` exactly, and `takel` / `taker` `E.ty = .sum a b`; so is a field
   written in place (`unpair` and `assign`). Taking it apart would bypass the
@@ -105,14 +113,14 @@ the destructor there):
   nurlc's `^ v` returns at once, so only the destructors of the callee's
   own locals run after it.
 
-Refused rather than released since A2-drop.3b (`Ty.ok`; stricter than
-nurlc, which types them and drops a `Vec`'s elements in index order, each
-running its destructor): a `Vec` whose element type holds a destructor
-value, at any depth, so a `Vec D` and a `Vec` of an enum or an option
-holding one, and every type with one inside: a channel of `D` (its queue
-is a `Vec`), `Locked (Vec D)`, `Arc (Vec D)`, a cell of a `Vec D`, and a
-struct or an enum with a `Vec D` field or payload. So `withElem` checks
-out no destructor value, and the result moved from its slot into a local
+Refused rather than released since A2-drop.3b (stricter than nurlc, which
+types them and drops a `Vec`'s elements in index order, each running its
+destructor): a `Vec` of destructor values anywhere but as a binding's own
+type (`Ty.ok`): a `Vec (Vec D)`, a channel of `D` (its queue is a `Vec`),
+`Locked (Vec D)`, `Arc (Vec D)`, a cell of a `Vec D`, and a struct or an
+enum with a `Vec D` field or payload; one whose elements hold views
+(`LetdTy`); and dropping its elements in place (`free`, `truncate`,
+`clear`, `set`, `withElem`). The result moved from its slot into a local
 before a panic (`pair res w`, a destructor value two levels down) is a
 `letd`'s, since `Ty.holdsDtor` is deep: `letv` refuses it, and the
 `letd`'s scope runs its glue on the unwind.
@@ -426,8 +434,10 @@ on the body's typing restricts which programs the calculus covers.
 
 **Status.** A2-drop.3a is mechanized (Agora #541, *What runs the
 destructor* above), with the struct glue as the struct's own destructor
-and `assign` of a destructor value refused instead of `dropCode`. 3b–3d
-are designed here; not mechanized. Until they are, `CLAIM.md`'s
+and `assign` of a destructor value refused instead of `dropCode`. Of
+A2-drop.3b, a binding's own `Vec` of destructor values is mechanized (the
+drain, Agora #542; *Staging* below says what is left). 3c and 3d are
+designed here; not mechanized. Until they are, `CLAIM.md`'s
 *Destructors* section lists where the calculus releases a destructor value
 without running it.
 
@@ -442,7 +452,7 @@ made it:
 | a binding's scope (a local, a `sink` parameter, a call's result, `unpair`'s fields) | the destructor, then the glue | only for `letd`'s binding (`scopeD`) |
 | `= x …` over an owned value, `vec_free x` | the destructor of the old value first | `DropSlot` / `Frees` |
 | a struct field, at the struct's drop | the field's destructor, inside the struct's glue | `Frees` of the tree |
-| a `Vec` element: `vec_pop` dropped, `truncate`, `clear`, `vec_set` over it, the Vec freed | each element's destructor | `Frees` |
+| a `Vec` element: `vec_pop` dropped, `truncate`, `clear`, `vec_set` over it, the Vec freed | each element's destructor | the drain at the end of a binding's own `Vec` (A2-drop.3b); the in-place drops are refused; a popped element is a `letd`'s |
 | an enum or option payload | the payload's destructor | `Frees` |
 | a closure's or a trait object's environment | the captures' destructors | `Frees` of the env tree |
 | a panic's unwind through any of these | the journal runs each, once | `scopeP` frees in one step, except at `scopeD` |
@@ -534,7 +544,7 @@ each one shrinks `CLAIM.md`'s exception:
    `free` takes only a `Vec`. Not yet: elements, payloads inside
    containers, environments, blocks, check-out bindings, and a result set before a panic in
    its callee.
-2. **A2-drop.3b: containers** (first milestone done, Agora #542).
+2. **A2-drop.3b: containers** (done for a binding's own `Vec`, Agora #542).
    - Done: `Ty.holdsDtor` is deep, so a struct, an enum or an option
      holding a destructor value at any depth is bound by `letd` with its
      glue: a typed `letv`'s owned value is free of one
@@ -544,19 +554,13 @@ each one shrinks `CLAIM.md`'s exception:
      refused by `letv` (`A2.DtorWitness.main4_letv_refused`) and bound by
      `letd` with its glue (`A2.DtorWitness.main4_safe`). An option of a
      destructor value (`A2.DtorWitness.main3_safe`) is a further witness,
-     not a new capability: 3a's one-level rule sent it to `letd` too. A
-     `Vec` of destructor values is refused: `Ty.ok` asks a `Vec`'s element
-     type to hold none (`Ty.dtorFree`), and `RhsT.new` asks it. So no
-     binding holds one (`A2.Dtor.vec_elems_dtor_free` at a binding's top,
-     `A2.Dtor.vecs_dtor_free` anywhere in its type, through `Ty.ok`'s
-     recursion), and `pop`, `truncate`, `clear`, `set`, `free`, `withElem`
-     and `edit` through a borrow release or check out no destructor value,
-     except a share's payload or a closure's environment (3c, 3d). A
-     share's payload and a view are free of one by definition (3d; a view
-     owns nothing). The refusal reaches every type with such a `Vec`
-     inside: a channel of `D`, `Locked (Vec D)`, `Arc (Vec D)`, a cell of
-     one, a struct or an enum with a `Vec D` field or payload
-     (`CLAIM.md`'s list of where the rules are stricter than nurlc).
+     not a new capability: 3a's one-level rule sent it to `letd` too. In
+     that first milestone a `Vec` of destructor values was refused
+     outright (`Ty.ok` asked a `Vec`'s element type to hold none); since
+     milestones 2a and 2b it is a binding's own type, drained (below), and
+     every other `Vec` has destructor-free elements at any depth
+     (`A2.Dtor.vecs_dtor_free`). A share's payload and a view are free of
+     one by definition (3d; a view owns nothing).
    - **Built (Agora #542, part 2's first milestone): the drain's step.**
      `vec_remove y 0` is `Rhs.popFront`: element 0 moves out, typed as
      `vec_pop` (`RhsT.popFront`), `EvalR.popFront` / `popFrontEmpty`.
@@ -566,93 +570,76 @@ each one shrinks `CLAIM.md`'s exception:
      `rhs_pres` can use them). nurlc drops a `Vec`'s elements in index
      order (`nurl__vec_drop_elems`, `i = 0 .. len`), so the drain takes
      element 0 each round, not the last one.
-   - **Built (milestone 2b, part 1): the steps, the refusals and the
-     binder's shape.** `Step.scopeDDrain` / `scopeDEmpty` / `scopeDPDrain`
-     are in the semantics, and `scopeDEnd` / `scopeDP` take a value that is
-     no node (`Val.isNode`). Every case site has them (Progress, StepFrame,
-     Codes, Steps, and A3's Lift, Fresh, BorFree, Keep, Restrict, Owned,
-     Cell). `StmtT.free`, `editB`, `editBV` and `withElem` ask `dtorFree`
-     of the element type (an auto-param `decide` discharges for every
-     concrete type). `Ty.dtorViews` counts a `Vec D`, so `Entry.arm` arms
-     its binding when the elements hold views. `StmtT.letd` binds at a type
-     `T` given by `DtorBind f t E.ty T` (`made`, `moved`; `RhsOut.retypeB`).
-     Preservation of `scopeDEmpty` is proved; that of the two drain steps
-     is by contradiction, since no frame binds a `Vec D` yet.
-   - **Left: the drain's typing.** Add `DtorBind.vec : DtorBind f t (.vec
-     (.dtor f t)) (.vec (.dtor f t))` and let `StmtT.scopeD` take `E.ty =
-     .dtor f t ∨ E.ty = .vec (.dtor f t)`; then the two drain cases of
-     preservation are real proofs. Two obligations found while writing
-     them:
-     - *Live at its end.* `RhsT.popFront` asks `x` live, and a `Vec D`
-       binding killed by an ended source of what its elements view is
-       exactly what its destructors must not read (a drop is a use). So the
-       vec case of `StmtT.letd` and of `StmtT.scopeD` needs `∃ E, Δ x =
-       some E ∧ E.live = true` of the frame's output (as `withLock`'s
-       `hlive`); a weaker context at the end (`skip_inv`, `Weaker`) then
-       gives it at the drain step. Reviving `x` instead (`Entry.revive`,
-       as `scopeDEnd` does) drops `dbind`, which the frame's typing needs
-       to stay a `scopeD`.
-     - *Armed at a panic.* `unwindCtx` revives the frame's binding with
-       `dbind := false`; the panic drain types `.scopeD x f .skip` in the
-       unwound context, whose premise asks `dbind` when the elements hold
-       views. The unwind must keep the binding armed for a `Vec D` frame
-       (a variant of `unwindCtx_x` and `MInv.unwind`).
-     The drain step's preservation then: `Γ' = Γ`; the body `letd m.nv f
-     (.popFront x) .skip` typed by `StmtT.letd` (`DtorBind.moved`: `popE`
-     of a `.dtor f t` element has that type; `HeldUp.refl`); its output
-     `exitScope m.nv (setE Γ1 m.nv _)` is `Γ1 = kill .drop hv x Γ`
-     (`exitScope_setE_fresh`), and `exitScope x (kill .drop hv x Γ) =
-     exitScope x Γ` since `.replace` kills every kind `.drop` does; the
-     rest as `scopeDEnd`'s case.
-   - **The plan, with the four open questions answered:**
-     1. *Where a `Vec D` is ok.* Only as a binding's own type. **Built
-        (milestone 2a):** rather than a separate `Ty.okB` threaded through
-        `tyok`'s 63 uses, `Ty.ok` itself admits `vec D` (`D.hasDtor`, `Ty.vecD`)
-        and every composite constructor asks `!vecD` of its parts, so a
-        field, a payload, a view's element, a channel, a lock, an `Arc`, a
-        cell or a `Vec` of a `Vec D` stays refused; `RhsT.pair` / `inl` /
-        `inr` / `arcNew` / `lockNew` / `cellNew` and `StmtT.lockedSet` ask it
-        of what moves in. A struct's glue lends `self` and cannot pop a
-        field, and a channel's queue is swept with its block, running no
-        code (3d). No binder binds a `Vec D` until item 3 lands.
-     2. *`withElem` of a `Vec D`'s element.* Refused in this cut: the
-        check-out is an owned binding of a destructor type that is no
-        `letd`'s, so `withElem` asks its element type `dtorFree`. Lifting
-        it needs `x ∉ s.assigns` (as `letd`'s `hna`) and a `scopeD`-style
-        end for the check-out.
+   - **Built (milestone 2b): the drain itself.** How the four open
+     questions were settled:
+     1. *Where a `Vec D` is ok.* Only as a binding's own type (milestone
+        2a): rather than a separate `Ty.okB` threaded through `tyok`'s 63
+        uses, `Ty.ok` itself admits `vec D` (`D.hasDtor`, `Ty.vecD`) and
+        every composite constructor asks `!vecD` of its parts, so a field,
+        a payload, a view's element, a channel, a lock, an `Arc`, a cell or
+        a `Vec` of a `Vec D` stays refused; `RhsT.pair` / `inl` / `inr` /
+        `arcNew` / `lockNew` / `cellNew` and `StmtT.lockedSet` ask it of
+        what moves in. A struct's glue lends `self` and cannot pop a field,
+        and a channel's queue is swept with its block, running no code (3d).
+     2. *`withElem` of a `Vec D`'s element.* Refused: the check-out is an
+        owned binding of a destructor type that is no `letd`'s, so
+        `StmtT.withElem` asks its element type `dtorFree`
+        (`A2.Dtor.withElem_dtor_free`). Lifting it needs `x ∉ s.assigns`
+        (as `letd`'s `hna`) and a `scopeD`-style end for the check-out.
      3. *The binder and the frame.* `letd x f r s`, where `r`'s type is
-        `.vec (.dtor f u)` and `f` is the element's destructor.
-        `StmtT.letd` and `StmtT.scopeD` take `E.ty = .dtor f t ∨ E.ty =
-        .vec (.dtor f t)`. `scopeD x f .skip` steps by the value:
-        - a non-empty node becomes `scopeD x f (letd m.nv f (.popFront x)
-          .skip)`, with `nv + 1`. This is a statement rewrite: the memory
-          moves in `letd`'s step (`EvalR.popFront`, `rhs_popFront`), and
-          the element's own `scopeD` runs its destructor
-          (`scopeD_end_runs_dtor`);
-        - an empty node becomes `scope x .skip`;
+        `.vec (.dtor f u)` and `f` is the element's destructor: `StmtT.letd`
+        takes `LetdTy f u E.ty τ` (the destructor type as before, or the
+        `Vec`, its elements holding no views) and binds at `τ`;
+        `StmtT.scopeD` takes `ScopeDTy f u E.ty`. One run-time form serves
+        both: `scopeD x f .skip` steps by the value `x` owns (`Val.isNode`),
+        - a non-empty node: `Step.scopeDDrain`, to `scopeD x f (letd m.nv f
+          (.popFront x) .skip)` with `nv + 1`. This is a statement rewrite:
+          the memory moves in `letd`'s step (`EvalR.popFront`,
+          `rhs_popFront`), and the element's own `scopeD` runs its
+          destructor (`scopeD_end_runs_dtor`);
+        - an empty node: `Step.scopeDEmpty`, to `scope x .skip`;
         - `scopeDEnd` and `scopeDP` take only a value that is no node;
-        - a panic with `x` owning a node becomes `.ok m1 (.seq (.scopeD x f
-          .skip) .panic)`, which drains, then raises again.
-        Preservation of the drain step is a typing lemma: `StmtT` of the
-        rewritten body, from `MInv`, which gives `RhsT.popFront`'s
-        premises for `x`. The panic step's proof is `scopeDP`'s. Each of
-        the three new steps needs its case in Progress, StepFrame and A3's
-        lifting files (Lift, Fresh, BorFree, Keep, Restrict, Owned, Cell),
-        where `scopeDEnd` has one.
-     4. *A `Vec D` as a `sink` or `inout` parameter, or a result.*
-        Since milestone 2a `Ty.ok` admits the type, so `FnOK` alone no
-        longer refuses it: a `sink` one or a result is still handed to a
-        `letd` (`movedFirst`, `DtorParamsOK`), which item 3 must keep
-        refusing at a `Vec D` type, and an `inout` one is reachable only
-        from a caller binding of that type. Item 3 must refuse `inout`
-        `Vec D` parameters explicitly (or give them the drain's
-        obligations), so a `Vec D` lives and drains in one frame.
-     `truncate`, `clear`, `set`, `free` and `edit` of a `Vec D` must stay
-     refused when item 3 lands: they need a `dtorFree` premise on their
-     element type then (today no binding of a `Vec D` exists, so none is
-     needed yet), since they drop elements with no code. A program pops them into `letd`s (`pop` and
-     `popFront` give an owned `.dtor f u`, which `movedFirst` hands to a
-     `letd`), or lets the binding end.
+        - a panic with `x` owning a node: `Step.scopeDPDrain`, to `.ok m1
+          (.seq (.scopeD x f .skip) .panic)`, which drains, then raises
+          again. A panic inside an element's destructor reaches the same
+          step through the drain's own frame, so the rest still drains.
+          (nurlc's runtime does not do this yet: its element loop is left
+          by the panic, Agora #608.)
+        Preservation of the drain step is a typing lemma (`preserve`'s
+        `scopeDDrain` case): the binding is revived as at `scopeDEnd`
+        (`MInv.revive`), `RhsT.popFront`'s premises for `x` follow from the
+        frame's `EndOK`, and the frame's exit context is unchanged
+        (`exitScope_kill`). The panic step's proof is `scopeDP`'s, the
+        re-raised panic's typing shared by both (hoisted in `preserve`).
+        Which step a typed frame takes follows from its binding's type
+        (`ScopeDTy.shape`): a `dtor f u` value is a struct's or an enum's,
+        never a node. Each new step has its case in Progress, StepFrame,
+        Codes and A3's lifting files (Lift, Fresh, BorFree, Keep, Restrict,
+        Owned, Cell).
+     4. *A `Vec D` as a `sink` or `inout` parameter, or a result.* Typed
+        as a destructor value is: `Ty.holdsDtor` is true of it, so a `sink`
+        one or a result is handed to a `letd` first thing (`movedFirst`,
+        `DtorParamsOK`), which now binds it at its own type, and an `inout`
+        one is assigned nothing; its callee may push to it and pop from it
+        (each popped element to a `letd`), and may not drop elements in
+        place.
+     `truncate`, `clear`, `set`, `free` of a `Vec D` are refused
+     (`StmtT.free` and `StmtT.editB` / `editBV` ask `dtorFree` of the
+     elements they drop, `Edit.drops`; `A2.Dtor.free_dtor_free`,
+     `edit_drops_dtor_free`). A program pops the elements into `letd`s
+     (`pop` and `popFront` give an owned `.dtor f u`, which `movedFirst`
+     hands to a `letd`), or lets the binding end.
+   - **Left** (stricter than nurlc; `CLAIM.md` lists them):
+     - *elements that hold views.* A2-drop.2's rule (a binding that runs a
+       destructor gains no view) would let nothing be pushed into such a
+       `Vec`; it needs the age order nurlc's finer rule has.
+     - *a `Vec D` inside another type* (a field, a payload, a `Vec` of
+       them, a block's payload). A field needs glue as code that can take
+       the field apart (`dropCode`'s `unpair`, which 3a replaced by glue
+       that only lends `self`); a block's payload is 3d's.
+     - *dropping elements in place* (`truncate`, `clear`, `set`, `free`,
+       `withElem`): each dropped element taken out to a `letd` first, as
+       the drain does at the frame's end.
 3. **A2-drop.3c: environments.** A closure's or a trait object's
    environment holding a destructor value: `Ty.fn ms q` gains what the
    environment's drop runs (as `q` records where it may cross), and a

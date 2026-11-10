@@ -143,12 +143,10 @@ theorem Step.keep {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) (
   | letd _ he => exact EvalR.keep he hb hav hf
   | letdP _ => intro _ _; rfl
   | scopeDIn _ ih => exact ih
-  | scopeDEnd _ => intro _ _; rfl
+  | scopeDEnd _ _ | scopeDDrain _ | scopeDEmpty _ => intro _ _; rfl
   | scopeDMoved _ => intro _ _; rfl
-  | scopeDP _ _ _ ih => exact ih
+  | scopeDP _ _ _ ih | scopeDPDrain _ _ ih => exact ih
   | scopeDPMoved _ _ ih => exact ih
-  | scopeDDrain _ | scopeDEmpty _ => intro _ _; rfl
-  | scopeDPDrain _ _ ih => exact ih
   | withLock _ _ _ => intro _ _; rfl
   | scopeLIn _ ih => exact ih
   | scopeLSkip hrl =>

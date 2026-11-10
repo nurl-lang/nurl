@@ -220,11 +220,11 @@ def Ty.hasDtor : Ty → Bool
     value: it is one (`hasDtor`), or a struct or an enum holding one in a
     field or a payload at any depth (A2-drop.3b: a destructor value two
     levels down, in a struct that is no destructor type of its own, is one
-    too; and a `Vec` of them, which `Ty.ok` refuses until its drain is in
-    the calculus).  Such a struct runs its fields' destructors in its drop
-    glue, so it is bound as a destructor type itself, its glue its
-    destructor (`letd`): `letv` and `assign` take no owned value of such a
-    type. -/
+    too; and a `Vec` of them, which `Ty.ok` admits as a binding's own type
+    only, drained at its end, `Step.scopeDDrain`).  Such a struct runs its
+    fields' destructors in its drop glue, so it is bound as a destructor
+    type itself, its glue its destructor (`letd`, which binds the `Vec`
+    too): `letv` and `assign` take no owned value of such a type. -/
 def Ty.holdsDtor : Ty → Bool
   | .dtor _ _ => true
   | .prod a b => a.holdsDtor || b.holdsDtor
@@ -234,6 +234,14 @@ def Ty.holdsDtor : Ty → Bool
 
 theorem Ty.hasDtor_of_holdsDtor {t : Ty} (h : t.holdsDtor = false) : t.hasDtor = false := by
   cases t <;> simp_all [Ty.holdsDtor, Ty.hasDtor]
+
+/-- A2-drop.3a: the destructor such a value runs reads views: a binding of
+    this type must keep what its value views alive to its end (`Entry.arm`). -/
+def Ty.dtorViews (t : Ty) : Bool := t.hasDtor && t.holdsView
+
+@[simp] theorem Ty.hasDtor_dtor (f : Nat) (t : Ty) : (Ty.dtor f t).hasDtor = true := rfl
+@[simp] theorem Ty.dtorViews_dtor (f : Nat) (t : Ty) : (Ty.dtor f t).dtorViews = t.holdsView := by
+  simp [Ty.dtorViews, Ty.holdsView]
 
 /-- A module global's type (`Ty.sync`: a lock or an `Arc` share) is no
     destructor type. -/
@@ -275,14 +283,6 @@ def Ty.vecD : Ty → Bool
 @[simp] theorem Ty.vecD_arc (t : Ty) : (Ty.arc t).vecD = false := rfl
 @[simp] theorem Ty.vecD_lk (t : Ty) : (Ty.lk t).vecD = false := rfl
 @[simp] theorem Ty.vecD_cell (t : Ty) : (Ty.cell t).vecD = false := rfl
-
-/-- A2-drop.3a: the destructor such a value runs reads views: a binding of
-    this type must keep what its value views alive to its end (`Entry.arm`). -/
-def Ty.dtorViews (t : Ty) : Bool := (t.hasDtor || t.vecD) && t.holdsView
-
-@[simp] theorem Ty.hasDtor_dtor (f : Nat) (t : Ty) : (Ty.dtor f t).hasDtor = true := rfl
-@[simp] theorem Ty.dtorViews_dtor (f : Nat) (t : Ty) : (Ty.dtor f t).dtorViews = t.holdsView := by
-  simp [Ty.dtorViews, Ty.holdsView, Ty.vecD]
 @[simp] theorem Ty.vecD_dtor (f : Nat) (t : Ty) : (Ty.dtor f t).vecD = false := rfl
 
 /-- A2 types: a view's element type holds no views of its own (a view of a
@@ -694,6 +694,13 @@ inductive Val where
                                                -- state through (A3.5's third cut)
 deriving Repr, Inhabited
 
+/-- Is the value a `Vec`'s node?  (A2-drop.3b: a destructor frame's end
+    drains a node element by element; any other value runs the frame's
+    destructor on itself.) -/
+def Val.isNode : Val → Bool
+  | .node _ _ _ _ => true
+  | _ => false
+
 /-- A binding's storage: whether it owns its value (it is dropped at the end
     of the scope), and the value, if it holds one (the drop flag). -/
 structure Slot where
@@ -753,6 +760,13 @@ inductive Edit where
   | push (y : Var)
   | trunc (i : Expr)
   | set (i : Expr) (y : Var)
+
+/-- Does the change drop elements?  `vec_truncate` drops those past the new
+    length, `vec_set` the one it overwrites; `vec_push` drops none. -/
+def Edit.drops : Edit → Bool
+  | .push _ => false
+  | .trunc _ => true
+  | .set _ _ => true
 
 /-- Statements.  `scope`, `rbind`, `frozen` and `catchR` are run-time forms:
     they appear when a binding is made or a function is called, never in
