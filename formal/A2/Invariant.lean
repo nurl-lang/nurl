@@ -223,7 +223,7 @@ theorem SharesOK.pkg' {m : Mem} {fs : List Nat} {te : Ty} {ms : List Nat} {q : C
     {cs : List (Var × PMode × Ty)} (h : SharesOK m (.fn ms q) (.pkg fs te ms x cs)) (hq : q.Fits te cs) :
     SharesOK m te x := by
   cases hs : q.shares
-  · exact SharesOK.of_noArc (hq.2.2 hs)
+  · exact SharesOK.of_noArc (hq.2.2.1 hs)
   · exact h.pkg hs
 
 /-- A3.1's slices of shares: a part of a well-formed tree holds, at its own
@@ -268,7 +268,7 @@ theorem SharesIn.sub {B : Nat → Option Blk} {n T : Val} (hs : Sub n T) :
     cases hw with
     | @pkg _ _ _ q _ _ hwe hq =>
       cases hqs : q.shares
-      · exact ih hwe (fun _ _ _ ha => by have h := ha.hasArc; rw [hq.2.2 hqs] at h; cases h)
+      · exact ih hwe (fun _ _ _ ha => by have h := ha.hasArc; rw [hq.2.2.1 hqs] at h; cases h)
       · exact ih hwe (fun u k p h => hsh u k p (.pkg h hqs))
     | dtor => exact absurd rfl (hnd _ _)
 
@@ -880,7 +880,10 @@ structure MInv (m : Mem) (Γ : Ctx) : Prop where
       (a lent cell share being the share) brings no library handle. -/
   blocks    : ∀ k bl, m.blk k = some bl → bl.ty.ok = true ∧ bl.ty.holdsView = false ∧
                 (∀ p, bl.pay = some p → WFv bl.ty p ∧ SharesOK m bl.ty p) ∧
-                (bl.kind = .lock ∨ bl.ty.hasCell = false)
+                (bl.kind = .lock ∨ bl.ty.hasCell = false) ∧
+                -- A2-drop.3d: a block's payload owns no destructor value
+                -- (the sweep that frees a block runs no code)
+                bl.ty.dtorFree = true
 
 /-- The invariant of a configuration running `s` in context `Γ`, with `F`
     lent out. -/

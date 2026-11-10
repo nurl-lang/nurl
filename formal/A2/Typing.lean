@@ -657,8 +657,9 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       holds nothing (the payload views nothing). -/
   | arcNew {t : Ty} {y : Var} {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
       Γ y = some Ey → Ey.live = true → Ey.ty = t →
-      -- (A2-drop.3b: a drained `Vec` of destructor values is a binding's own type only)
-      t.vecD = false → t.holdsView = false ∧ t.hasFn = false →
+      -- (A2-drop.3d: a block's payload owns no destructor value: the sweep runs no
+      -- code; so it is no drained `Vec` either, A2-drop.3b)
+      t.dtorFree = true → t.holdsView = false ∧ t.hasFn = false →
       -- A3.5: an `Arc`'s payload is reached from every thread that holds a
       -- share, so it holds no library handle (a cell share is not Sync)
       t.hasCell = false →
@@ -683,7 +684,7 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       holds nothing. -/
   | lockNew {t : Ty} {y : Var} {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
       Γ y = some Ey → Ey.live = true → Ey.ty = t →
-      t.vecD = false → t.holdsView = false ∧ t.hasFn = false →
+      t.dtorFree = true → t.holdsView = false ∧ t.hasFn = false →
       PushArg Γ F y Ey t D Γ1 →
       RhsT Γ F (.lockNew t y) ⟨.lk t, .own, true, [], [], false, false⟩ Γ1
   /-- A3.2: `Locked_share`: a new share of the lock block `a` shares: owned,
@@ -747,7 +748,7 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       owned cell share, which holds nothing. -/
   | cellNew {t : Ty} {y : Var} {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
       Γ y = some Ey → Ey.live = true → Ey.ty = t →
-      t.vecD = false → t.holdsView = false ∧ t.hasFn = false →
+      t.dtorFree = true → t.holdsView = false ∧ t.hasFn = false →
       PushArg Γ F y Ey t D Γ1 →
       RhsT Γ F (.cellNew t y) ⟨.cell t, .own, true, [], [], false, false⟩ Γ1
   /-- A3.5: a copy of a library handle (`PNCounter_share`): a new owned cell

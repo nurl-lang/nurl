@@ -123,8 +123,9 @@ inductive Redex : Stmt → (Stmt → Stmt) → Stmt → Prop
     views, and it returns an integer. -/
 def SpawnOK (P : Prog) (spawn : Nat → Bool) : Prop :=
   ∀ f, spawn f = true → ∃ fn, P[f]? = some fn ∧ fn.resTy = .int ∧
-    -- (A2-drop.3a: and of no destructor type: the thread that drops a
-    -- value moved to it runs its destructor, A2-drop.3d, not modelled yet)
+    -- (A2-drop.3a: and of no type that holds a destructor value: a `letd`
+    -- of the spawned thread would run it there, which the race clause does
+    -- not cover yet; stricter than nurlc, `CLAIM.md`)
     ∀ pt ∈ fn.params, pt.1 = .sink ∧ pt.2.holdsView = false ∧ pt.2.holdsDtor = false
 
 /-- A3.1, Send: a share crosses to a new thread when its payload holds no
@@ -166,12 +167,12 @@ theorem lk_sync {t : Ty} : (Ty.lk t).hasCell = false := rfl
     library handle is a `Locked`'s value (h358, h357: `Locked PNCounter`,
     `RwLocked PNCounter`). -/
 theorem lk_cell_ok {t : Ty} (h : (Ty.cell t).ok = true) : (Ty.lk (.cell t)).ok = true := by
-  simp [Ty.ok, (Ty.ok_cell h).1, (Ty.ok_cell h).2, Ty.ok_cell_vd h, Ty.holdsView]
+  simp [Ty.ok, (Ty.ok_cell h).1, (Ty.ok_cell h).2, Ty.ok_cell_vd h, Ty.ok_cell_free h, Ty.holdsView]
 
 /-- ... and so may a cell's state, which is a lock's payload (a handle that
     keeps another handle in its state, A3.5's second cut). -/
 theorem cell_cell_ok {t : Ty} (h : (Ty.cell t).ok = true) : (Ty.cell (.cell t)).ok = true := by
-  simp [Ty.ok, (Ty.ok_cell h).1, (Ty.ok_cell h).2, Ty.ok_cell_vd h, Ty.holdsView]
+  simp [Ty.ok, (Ty.ok_cell h).1, (Ty.ok_cell h).2, Ty.ok_cell_vd h, Ty.ok_cell_free h, Ty.holdsView]
 
 /-- ... which `locked_new` takes (a library handle is Send). -/
 theorem lockNew_cell {Γ Γ1 : Ctx} {F : List Var} {t : Ty} {y : Var} {Ey : Entry} {D : List Dep}
@@ -826,7 +827,7 @@ theorem _root_.A2.StmtT.lockedSet {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {a b 
     (ha : Γ a = some Ea) (hla : Ea.live = true) (hta : Ea.lockOf t) (hroot : Ea.mode.isRoot = true)
     (hay : ∀ d ∈ Ea.vdeps, d.root ≠ y)
     (hy : Γ y = some Ey) (hly : Ey.live = true) (hty : Ey.ty = t) (htv : t.holdsView = false ∧ t.hasFn = false)
-    (hvd : t.vecD = false)
+    (hvd : t.dtorFree = true)
     (hpush : PushArg Γ F y Ey t D Γ1)
     (hb : Γ b = none) (hx : Γ x = none) (hbx : b ≠ x) (hbF : b ∉ F) (hxF : x ∉ F)
     (hub : Unnamed Γ b) (hux : Unnamed Γ x) :
@@ -1654,7 +1655,7 @@ holds, which synchronises itself: an `Atomic` (or a `Locked`) moved in. -/
     block), fits `sync`: a lock share is Sync, so an `Arc` keeps the closure
     and several threads call it ... -/
 theorem accum_sync : Cross.sync.Fits (.lk .int) [] :=
-  ⟨fun _ => ⟨rfl, rfl⟩, fun _ => rfl, fun h => absurd h (by decide)⟩
+  ⟨fun _ => ⟨rfl, rfl⟩, fun _ => rfl, fun h => absurd h (by decide), rfl⟩
 
 /-- ... and its code counts by one atomic step on the environment it is lent
     (any live `lk int`, a borrowed parameter's too): the change synchronises
@@ -1711,21 +1712,26 @@ def TraitAt (P : Prog) (ms : List Nat) (b : TraitBound) : Prop :=
     ∃ pm, pm ≠ .sink ∧ sig.params.head? = some (pm, .fn ms b.cross)
 
 /-- What a bound promises of each impl's type `te` (a box captures nothing by
-    name, `cs = []`): with no bound, nothing ... -/
-theorem TraitBound.fits_none (te : Ty) (cs : List (Var × PMode × Ty)) : TraitBound.none.cross.Fits te cs :=
-  Cross.fits_any te cs
+    name, `cs = []`): with no bound, only what every package's environment
+    is asked, to hold no destructor value (A2-drop.3c) ... -/
+theorem TraitBound.fits_none (te : Ty) (cs : List (Var × PMode × Ty)) (hd : te.holdsDtor = false) :
+    TraitBound.none.cross.Fits te cs :=
+  Cross.fits_any te cs hd
 
-/-- ... with `: Send`, that the box holds no view (nothing of the thread that
-    made it) and nothing is captured by name ... -/
+/-- ... with `: Send`, also that the box holds no view (nothing of the thread
+    that made it) and nothing is captured by name ... -/
 theorem TraitBound.fits_send {te : Ty} {cs : List (Var × PMode × Ty)} :
-    TraitBound.send.cross.Fits te cs ↔ te.holdsView = false ∧ cs = [] :=
-  ⟨fun h => h.1 rfl, fun h => ⟨fun _ => h, fun h' => absurd h' (by decide), fun h' => absurd h' (by decide)⟩⟩
+    TraitBound.send.cross.Fits te cs ↔ (te.holdsView = false ∧ cs = []) ∧ te.holdsDtor = false :=
+  ⟨fun h => ⟨h.1 rfl, h.2.2.2⟩,
+    fun h => ⟨fun _ => h.1, fun h' => absurd h' (by decide), fun h' => absurd h' (by decide), h.2⟩⟩
 
 /-- ... and with `: Send Sync`, also no library handle (a cell share, A3.5,
     is not Sync). -/
 theorem TraitBound.fits_sendSync {te : Ty} {cs : List (Var × PMode × Ty)} :
-    TraitBound.sendSync.cross.Fits te cs ↔ (te.holdsView = false ∧ cs = []) ∧ te.hasCell = false :=
-  ⟨fun h => ⟨h.1 rfl, h.2.1 rfl⟩, fun h => ⟨fun _ => h.1, fun _ => h.2, fun h' => absurd h' (by decide)⟩⟩
+    TraitBound.sendSync.cross.Fits te cs ↔
+      ((te.holdsView = false ∧ cs = []) ∧ te.hasCell = false) ∧ te.holdsDtor = false :=
+  ⟨fun h => ⟨⟨h.1 rfl, h.2.1 rfl⟩, h.2.2.2⟩,
+    fun h => ⟨fun _ => h.1.1, fun _ => h.1.2, fun h' => absurd h' (by decide), h.2⟩⟩
 
 /-- A call through a package asks its receiver to be a package, `fn ms q`,
     whose method `j` is an interface that takes it at `q`. -/
@@ -1883,7 +1889,7 @@ theorem _root_.A2.WFv.noView_fits {τ : Ty} {v : Val} (hw : WFv τ v) (hhv : τ.
   | pkg _ hq ih =>
     obtain ⟨hv, _, hcs⟩ := hq.send hhv
     cases hs with
-    | refl => exact TraitBound.fits_send.mpr ⟨hv, hcs⟩
+    | refl => exact TraitBound.fits_send.mpr ⟨⟨hv, hcs⟩, hq.2.2.2⟩
     | pkg h => exact ih hv h
   | arc _ _ => cases hs
   | lk => cases hs
@@ -2354,7 +2360,7 @@ theorem accum_codes : CodeOK accP [1] accEnv [0] [] := by
     method that changes the count is called only at `send` (a `sync` one is
     moved up first, `RhsT.moveUp`, and is then no `Arc`'s payload). -/
 theorem accum_fits (q : Cross) : q.Fits accEnv [] :=
-  ⟨fun _ => ⟨rfl, rfl⟩, fun _ => rfl, fun _ => rfl⟩
+  ⟨fun _ => ⟨rfl, rfl⟩, fun _ => rfl, fun _ => rfl, rfl⟩
 
 /-- **The accumulator, typed through `callcE` on the owned closure**: its owner
     calls it, the environment handed over to the code, which adds one to the
