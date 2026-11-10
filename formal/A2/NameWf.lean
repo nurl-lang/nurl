@@ -300,9 +300,9 @@ theorem RhsT.names {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : Rhs
       exact hzd hnm.2.2.1 (h ▸ List.mem_map_of_mem hd)
     exact ⟨hn2, fun _ _ => own_named ((hD1.keeps hk2 hX).append hD2), ⟨_, hk1.trans hk2⟩⟩
   | fst hy hl ht =>
-    exact ⟨hn, fun _ _ => projE_named (hn _ _ hy hl (Or.inl (by rw [ht]; simp))) _, ⟨[], Keeps.refl Γ []⟩⟩
+    exact ⟨hn, fun _ _ => projE_named (hn _ _ hy hl (Or.inl (Ty.undtor_ne_int_of ht))) _, ⟨[], Keeps.refl Γ []⟩⟩
   | snd hy hl ht =>
-    exact ⟨hn, fun _ _ => projE_named (hn _ _ hy hl (Or.inl (by rw [ht]; simp))) _, ⟨[], Keeps.refl Γ []⟩⟩
+    exact ⟨hn, fun _ _ => projE_named (hn _ _ hy hl (Or.inl (Ty.undtor_ne_int_of ht))) _, ⟨[], Keeps.refl Γ []⟩⟩
   | getl hy hl ht =>
     exact ⟨hn, fun _ _ => projE_named (hn _ _ hy hl (Or.inl (by rw [ht]; simp))) _, ⟨[], Keeps.refl Γ []⟩⟩
   | getr hy hl ht =>

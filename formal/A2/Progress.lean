@@ -103,15 +103,16 @@ theorem takeVal_exists {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entr
 
 /-- A live struct binding holds a struct. -/
 theorem pair_slot {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (hy : Γ y = some E)
-    (hl : E.live = true) {a b : Ty} (ht : E.ty = .prod a b) :
+    (hl : E.live = true) {a b : Ty} (ht : E.ty.undtor = .prod a b) :
     ∃ o v w, m.st y = some ⟨o, some (.pair v w)⟩ := by
   rcases hi.mode_cases hy with hm | hm | hm
   · obtain ⟨T, hT, hw, _⟩ := hi.own_val hy hl (by rw [hm]; rfl)
-    rw [ht] at hw; cases hw
+    have hw' := hw.undtor
+    rw [ht] at hw'; cases hw'
     exact ⟨_, _, _, hT⟩
   all_goals
     obtain ⟨v, hv, hok⟩ := hi.bor_val hy hl (by rw [hm]; rfl)
-    rw [ht] at hok; obtain ⟨x, z, rfl, _⟩ := valOK_prod.mp hok
+    rw [← valOK_undtor, ht] at hok; obtain ⟨x, z, rfl, _⟩ := valOK_prod.mp hok
     exact ⟨_, _, _, hv⟩
 
 theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hi : MInv m Γ)
@@ -793,7 +794,7 @@ theorem progress {P : Prog}
 
   | @unpair Γ Δ F y x z k E a b _ hy hl hm hty _ hx hz hxz _ _ _ _ _ _ _ _ =>
     intro m hcd hi
-    obtain ⟨o, v, w, hv⟩ := pair_slot hi.toMInv hy hl hty
+    obtain ⟨o, v, w, hv⟩ := pair_slot hi.toMInv hy hl (by rw [hty]; rfl)
     obtain ⟨T, hT, _⟩ := hi.own_val hy hl (by rcases hm with h | ⟨b, h, _⟩ <;> rw [h] <;> rfl)
     rw [hT] at hv; cases hv
     have hmx : m.st x = none := by

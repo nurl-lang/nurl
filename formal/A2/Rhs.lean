@@ -1555,24 +1555,30 @@ theorem out_comp {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (hy
       · rename_i hos _; exact wf_path hi hy hl hnint (by simpa using hos)
 
 theorem out_fst {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (hy : Γ y = some E)
-    (hl : E.live = true) {a b : Ty} (hty : E.ty = .prod a b) {o : Bool} {v w : Val}
+    (hl : E.live = true) {a b : Ty} (hty : E.ty.undtor = .prod a b) {o : Bool} {v w : Val}
     (hv : m.st y = some ⟨o, some (.pair v w)⟩) : RhsOut m Γ (projE y E a) (lendOf v) false := by
-  have hok := hi.tyok hy; rw [hty] at hok
+  -- (A2-drop.3a: a field of a destructor value is read as one of the struct
+  -- it wraps; the destructor stays with the whole value.)
+  have hok := Ty.ok_undtor (hi.tyok hy); rw [hty] at hok
   simp only [Ty.ok, Bool.and_eq_true] at hok
-  refine out_comp hi hy hl (by rw [hty]; simp) hv Child.fst (Top.fst (Top.refl _)) hok.1 (fun hw hvs hsh => ?_) (fun h => ?_)
-  · rw [hty] at hw hvs hsh; cases hw with
+  refine out_comp hi hy hl (Ty.undtor_ne_int_of hty) hv Child.fst (Top.fst (Top.refl _)) hok.1 (fun hw hvs hsh => ?_) (fun h => ?_)
+  · have hw' := hw.undtor; rw [← ViewsOK.undtor_iff] at hvs; rw [← SharesOK.undtor_iff] at hsh
+    rw [hty] at hw' hvs hsh; cases hw' with
     | pair ha _ => exact ⟨ha, fun s x hin => hvs s x (ViewIn.fst hin), hsh.fst⟩
-  · rw [hty] at h; obtain ⟨x, z, hxz, hx, _⟩ := valOK_prod.mp h; cases hxz; exact hx
+  · rw [← valOK_undtor, hty] at h; obtain ⟨x, z, hxz, hx, _⟩ := valOK_prod.mp h; cases hxz; exact hx
 
 theorem out_snd {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (hy : Γ y = some E)
-    (hl : E.live = true) {a b : Ty} (hty : E.ty = .prod a b) {o : Bool} {v w : Val}
+    (hl : E.live = true) {a b : Ty} (hty : E.ty.undtor = .prod a b) {o : Bool} {v w : Val}
     (hv : m.st y = some ⟨o, some (.pair v w)⟩) : RhsOut m Γ (projE y E b) (lendOf w) false := by
-  have hok := hi.tyok hy; rw [hty] at hok
+  -- (A2-drop.3a: a field of a destructor value is read as one of the struct
+  -- it wraps; the destructor stays with the whole value.)
+  have hok := Ty.ok_undtor (hi.tyok hy); rw [hty] at hok
   simp only [Ty.ok, Bool.and_eq_true] at hok
-  refine out_comp hi hy hl (by rw [hty]; simp) hv Child.snd (Top.snd (Top.refl _)) hok.2 (fun hw hvs hsh => ?_) (fun h => ?_)
-  · rw [hty] at hw hvs hsh; cases hw with
+  refine out_comp hi hy hl (Ty.undtor_ne_int_of hty) hv Child.snd (Top.snd (Top.refl _)) hok.2 (fun hw hvs hsh => ?_) (fun h => ?_)
+  · have hw' := hw.undtor; rw [← ViewsOK.undtor_iff] at hvs; rw [← SharesOK.undtor_iff] at hsh
+    rw [hty] at hw' hvs hsh; cases hw' with
     | pair _ hb => exact ⟨hb, fun s x hin => hvs s x (ViewIn.snd hin), hsh.snd⟩
-  · rw [hty] at h; obtain ⟨x, z, hxz, _, hz⟩ := valOK_prod.mp h; cases hxz; exact hz
+  · rw [← valOK_undtor, hty] at h; obtain ⟨x, z, hxz, _, hz⟩ := valOK_prod.mp h; cases hxz; exact hz
 
 /-! ### A3.1: shares
 

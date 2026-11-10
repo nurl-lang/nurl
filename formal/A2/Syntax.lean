@@ -247,6 +247,16 @@ def Ty.ok : Ty → Bool
                                      -- shares in it too, each going in past the crossing check)
   | .dtor _ t => t.isStruct && t.ok  -- A2-drop.3: `% Drop` is on a struct or an enum
 
+/-- A2-drop.3a: the type under a destructor is well formed when the
+    destructor type is. -/
+theorem Ty.ok_undtor {τ : Ty} (h : τ.ok = true) : τ.undtor.ok = true := by
+  induction τ with
+  | dtor _ _ ih => simp only [Ty.ok, Bool.and_eq_true] at h; exact ih h.2
+  | _ => exact h
+
+theorem Ty.undtor_ne_int_of {τ : Ty} {a b : Ty} (h : τ.undtor = .prod a b) : τ ≠ .int := by
+  rintro rfl; cases h
+
 /-- A type whose values own what they hold: a `Vec` or a struct.  Its
     binding is an owner (or borrows one). -/
 def Ty.owning : Ty → Bool
