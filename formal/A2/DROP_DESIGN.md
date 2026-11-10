@@ -64,9 +64,21 @@ A2-drop.3b; A2-drop.3a's rule looked one level down only).
   what its drop does. Nesting the `letd`s as `letd z' (var z) (letd y'
   (var x) skip)` runs the fields' destructors in field order, nurlc's.
   In this cut the struct holds no views (the moved-in value must hold
-  nothing), and a struct with a `% Drop` of its own beside a destructor
-  field is refused: its drop is the impl lent, THEN the glue, which needs
-  the frame's end to go on under a frame of the glue's type (next cut).
+  nothing). **A struct with a `% Drop` of its own beside a destructor
+  field** (`ImplGlueOK P f t h i`) needs no new step either: its glue `f`
+  takes it owned and its body is `letd w h (var 0) (letcall r i [w]
+  (assign res …))`: the struct rebound under the fields' glue `h`, then
+  the impl `i` (a `DtorOK` function on `Ty.dtor h t`) on it lent. The
+  impl's panic unwinds to `w`'s frame, which takes the struct apart; so
+  does the frame's end. `LetdTy` lets a `letd` bind a value of another
+  destructor type, and `LetdFn` (the `letd` rule's premise in `DropFnOK`'s
+  place) allows it only in this shape: from `Ty.dtor g t` to `Ty.dtor f t`
+  where `ImplGlueOK P g t f i` and the scope starts with `i`'s call on
+  the new binding. The shape is checked wherever it is written, so it
+  needs no knowledge of which function's body it is in, and it survives a
+  call's renaming (`StmtT.rename`'s `letd` case). `unpair` refuses such a
+  struct (read off its `h5`, which asks `GlueOK`; no witness of the
+  refusal): taking it apart by hand would skip the impl.
   Deeper nesting: a struct or an enum holding such a struct, with no
   destructor type of its own between them, holds a destructor value too,
   since `Ty.holdsDtor` is deep (A2-drop.3b), so it is bound by `letd` with

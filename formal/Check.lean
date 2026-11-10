@@ -25,6 +25,9 @@ import A3
 #print axioms A2.Dtor.glue_takes_apart
 #print axioms A2.DtorWitness.main7_safe
 #print axioms A2.DtorWitness.main7_lent_refused
+#print axioms A2.Dtor.letd_retype
+#print axioms A2.Dtor.impl_glue_body
+#print axioms A2.DtorWitness.main8_safe
 #print axioms A2.Dtor.result_frame_is_scopeD
 #print axioms A2.Dtor.scopeD_end_runs_dtor
 #print axioms A2.Dtor.scopeD_panic_runs_dtor

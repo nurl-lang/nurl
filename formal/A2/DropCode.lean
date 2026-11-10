@@ -80,7 +80,7 @@ theorem vecFreeD_typed {P : Prog} {Γ : Ctx} {F : List Var} {x y : Var} {f : Nat
   have hdv : (Ty.vec (.dtor f t)).dtorViews = false := by rw [hτ.scopeD.dtorViews, hτ.scopeD.holdsView, hv]
   have hlet := StmtT.letd (P := P) (Γ := Γ) (Γ1 := Γ1) (F := F) (x := y) (f := f) (r := .var x)
     (s := .skip) (E := ⟨E.ty, .own, true, [], E.held, false, false⟩) (t := t) (H := E.held)
-    (τ := .vec (.dtor f t)) rfl hy hyF hr rfl hτ hst hfn hok (HeldUp.refl _ _) StmtT.skip
+    (τ := .vec (.dtor f t)) rfl hy hyF hr rfl hτ hst hfn (letd_fn hok) (HeldUp.refl _ _) StmtT.skip
     (endOK_bind he1 hy1 (by simp [Entry.arm]) (by simp [Entry.arm, hdv]) (by simp [Entry.arm, hdv]))
   rw [exitScope_setE_fresh hw1 hy1] at hlet
   exact hlet
@@ -101,11 +101,11 @@ theorem vecTruncD_typed {P : Prog} {Γ : Ctx} {F : List Var} {x y : Var} {f : Na
     RhsT.pop hx hl hty hcd hxF (by simpa [Ty.holdsView, hv] using hds)
   have hhv : (Ty.dtor f t).holdsView = false := by simpa [Ty.holdsView] using hv
   rw [hhv, hfix] at hr
-  have hτ : LetdTy f t (popE x E (.dtor f t)).ty (.dtor f t) := Or.inl ⟨rfl, Or.inr rfl⟩
+  have hτ : LetdTy f t (popE x E (.dtor f t)).ty (.dtor f t) := Or.inl ⟨rfl, Or.inr ⟨f, rfl⟩⟩
   have hdv : (Ty.dtor f t).dtorViews = false := by rw [hτ.scopeD.dtorViews, hτ.scopeD.holdsView, hv]
   have hlet := StmtT.letd (P := P) (Γ := Γ) (Γ1 := Γ) (F := F) (x := y) (f := f) (r := .pop x)
     (s := .skip) (E := popE x E (.dtor f t)) (t := t) (H := (popE x E (.dtor f t)).held)
-    (τ := .dtor f t) rfl hy hyF hr rfl hτ hst hfn hok (HeldUp.refl _ _) StmtT.skip
+    (τ := .dtor f t) rfl hy hyF hr rfl hτ hst hfn (letd_fn hok) (HeldUp.refl _ _) StmtT.skip
     (endOK_bind he hy (by simp [Entry.arm, popE]) (by simp [Entry.arm, hdv]) (by simp [Entry.arm, hdv]))
   rw [exitScope_setE_fresh hw hy] at hlet
   exact StmtT.while rfl hc hlet
@@ -124,11 +124,11 @@ theorem vecClearD_typed {P : Prog} {Γ : Ctx} {F : List Var} {x y : Var} {f : Na
     RhsT.popFront hx hl hty hcd hxF (by simpa [Ty.holdsView, hv] using hds)
   have hhv : (Ty.dtor f t).holdsView = false := by simpa [Ty.holdsView] using hv
   rw [hhv, hfix] at hr
-  have hτ : LetdTy f t (popE x E (.dtor f t)).ty (.dtor f t) := Or.inl ⟨rfl, Or.inr rfl⟩
+  have hτ : LetdTy f t (popE x E (.dtor f t)).ty (.dtor f t) := Or.inl ⟨rfl, Or.inr ⟨f, rfl⟩⟩
   have hdv : (Ty.dtor f t).dtorViews = false := by rw [hτ.scopeD.dtorViews, hτ.scopeD.holdsView, hv]
   have hlet := StmtT.letd (P := P) (Γ := Γ) (Γ1 := Γ) (F := F) (x := y) (f := f) (r := .popFront x)
     (s := .skip) (E := popE x E (.dtor f t)) (t := t) (H := (popE x E (.dtor f t)).held)
-    (τ := .dtor f t) rfl hy hyF hr rfl hτ hst hfn hok (HeldUp.refl _ _) StmtT.skip
+    (τ := .dtor f t) rfl hy hyF hr rfl hτ hst hfn (letd_fn hok) (HeldUp.refl _ _) StmtT.skip
     (endOK_bind he hy (by simp [Entry.arm, popE]) (by simp [Entry.arm, hdv]) (by simp [Entry.arm, hdv]))
   rw [exitScope_setE_fresh hw hy] at hlet
   exact StmtT.while rfl (ExprT.lt ExprT.lit (ExprT.len hx hl hty)) hlet
@@ -262,11 +262,11 @@ theorem main6_typed : ∃ Δ, StmtT P (fun _ => none) [] main6 Δ := by
   have hbody := StmtT.seq (P := P) rfl hpush (StmtT.seq rfl htr (StmtT.seq rfl hcl hfr))
   have hdv := StmtT.letd (P := P) (Γ := K3) (Γ1 := K3) (F := []) (x := 3) (f := 0) (r := .new DT)
     (E := EN) (t := T) (H := []) (τ := .vec DT) rfl (by simp [K3, K2, K1, A2.setE, upd])
-    (by simp) hnew rfl (Or.inr ⟨rfl, rfl, rfl⟩) rfl rfl drop_ok (HeldUp.refl _ _) hbody (hK7.endOK _)
+    (by simp) hnew rfl (Or.inr ⟨rfl, rfl, rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hbody (hK7.endOK _)
     (by simp [Stmt.assigns, Stmt.vecTruncD, Stmt.vecClearD, Stmt.vecFreeD])
   have hd := StmtT.letd (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .pair 0 1)
     (E := EP) (t := T) (H := []) rfl (by simp [K2, K1, A2.setE, upd])
-    (by simp) hpair rfl (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl drop_ok (HeldUp.refl _ _) hdv
+    (by simp) hpair rfl (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hdv
     ((hK7.exitScope 3).endOK _) (by simp [Stmt.assigns, Stmt.vecTruncD, Stmt.vecClearD, Stmt.vecFreeD])
   have h1 := StmtT.letv (P := P) (x := 1) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K1) (Γ1 := K1)
     rfl (by simp [K1, A2.setE]) (by simp) (RhsT.expr ExprT.lit) hd

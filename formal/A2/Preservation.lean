@@ -1715,7 +1715,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           (by show E2.ty.dtorViews = true; rw [hsd2.dtorViews]; exact hhv)
           (by rw [show E2.arm.mode = E2.mode from rfl, hmo2]; rfl) (by simp)
         rw [hE'] at h2; cases h2; exact hd2
-      refine ⟨setE Γ1 x E2.arm, StmtT.scopeD ⟨E2.arm, t, by simp [setE], hmo2, hsd2, hfn2, hdtor, hstr⟩ hxF hs hpx
+      refine ⟨setE Γ1 x E2.arm, StmtT.scopeD ⟨E2.arm, t, by simp [setE], hmo2, hsd2, hfn2, hdtor.1, hstr⟩ hxF hs hpx
         (by rw [hsp]; exact hKOd) hWd hNd hΔd, ?_, by simp [post.nv], ?_, fun v hv => ?_⟩
       · refine Inv.mk hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
           (by simp [Stmt.spine, hsp, setE]) (show CatchOK _ k from catchOK_src hsrc)
@@ -2543,7 +2543,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
             · simp [exitScope, upd_ne _ _ hwx, A2.kill, setE]
           rw [hex] at hsc
           exact hsc
-        · obtain ⟨fn, a, b, hfn, htab, hvw, hps, _, hro, _, _, _, hnt, _⟩ := hg
+        · obtain ⟨fn, hfn, hvw, hps, hro, hnt⟩ := sinkOf hg
           have hdb : Ex.dbind = false := by
             cases h : Ex.dbind with
             | false => rfl
@@ -2719,7 +2719,8 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           intro h; rw [h] at hlt; exact absurd hpn (Nat.lt_asymm hlt)
       have hlet := StmtT.letd (P := P) (F := F) (x := m.nv) (f := f) (r := .popFront x) (s := .skip)
         (t := tx) (H := (popE x (Ex.revive x) (.dtor f tx)).held) (τ := .dtor f tx)
-        rfl hrΓ' hrF hpop rfl (Or.inl ⟨rfl, Or.inr rfl⟩) hstr hfnt hdtor (HeldUp.refl _ _) StmtT.skip hEndN
+        rfl hrΓ' hrF hpop rfl (Or.inl ⟨rfl, Or.inr ⟨f, rfl⟩⟩) hstr hfnt
+        (LetdFn.of hdtor (fun g hg => by simp [popE] at hg; exact hg.symm)) (HeldUp.refl _ _) StmtT.skip hEndN
       rw [exitScope_setE_fresh hwf1 hΓ1n] at hlet
       -- the frame goes on, over what the move left
       have hEnd1 : EndOK Γ1 x := by
@@ -2844,7 +2845,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         · obtain ⟨fn, hfn, hps, _, hro, _, _, _, hnt⟩ : DtorOK P f Ex.ty := by rw [htx']; exact hdt
           exact dtorCall_typed hMu hux (by simp [Entry.revive, hmo]) rfl
             (fun d hd => (revive_dep hos hd).2.2.1) hfn hps hro hxF hnF hpinU hnt
-        · obtain ⟨fn, a, b, hfn, htab, hvw, hps, _, hro, _, _, _, hnt, _⟩ := hg
+        · obtain ⟨fn, hfn, hvw, hps, hro, hnt⟩ := sinkOf hg
           have hdb : Ex.dbind = false := by
             cases h : Ex.dbind with
             | false => rfl

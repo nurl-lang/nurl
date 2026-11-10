@@ -1256,7 +1256,8 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
       `Vec`'s node): the destructor is called on `x` (its result in a fresh
       variable), then `x`'s scope ends.  A destructor that takes `x` lent leaves
       the tree for `scope x` to free; a struct's glue takes `x` owned, so the
-      call moves the value in and it takes it apart (Agora #616, `GlueOK`). -/
+      call moves the value in and it takes it apart (Agora #616, `GlueOK`; after
+      the struct's own impl, `ImplGlueOK`). -/
   | scopeDEnd {m : Mem} {x : Var} {f : Nat} {v : Val} :
       m.st x = some ⟨true, some v⟩ → v.isNode = false →
       Step P m (.scopeD x f .skip) (.ok { m with nv := m.nv + 1 } (.scope x (.letcall m.nv f [x] .skip)))

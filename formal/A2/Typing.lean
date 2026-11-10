@@ -1543,7 +1543,8 @@ def CallT (P : Prog) (Γ : Ctx) (F : List Var) (f : Nat) (args : List Var) (E : 
     result, `unpair`'s fields, a `sink` parameter) hands the value over this
     way. Nothing runs in between, so nothing can panic or end the value
     first. A `letd`'s scope ends where the binder's does, and runs the
-    destructor (`scopeD`) where the binder would; a binding the value is
+    destructor (`scopeD`) where the binder would (an `unpair` hands its
+    fields on in turn, Agora #616); a binding the value is
     assigned to is of the same type, whose own binder answers for it. -/
 def Stmt.movedFirst : Stmt → List Var
   | .letd _ _ (.var w) s => w :: s.movedFirst

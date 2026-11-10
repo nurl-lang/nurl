@@ -607,11 +607,12 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
     (its typing is `CallH.typedIn_of`'s);
   - a typed `letd` binds a value of a destructor type `Ty.dtor f t`, or
     (A2-drop.3b) a `Vec` of such values whose elements hold no views
-    (`A2.Dtor.letd_binds`); `f` is a `DtorOK` destructor of `Ty.dtor f t`,
+    (`A2.Dtor.letd_binds`); `f` is the destructor of `Ty.dtor f t`
+    (`DropFnOK`: one that takes it lent, or a struct's glue, Agora #616),
     and the binding is assigned nothing in its scope (`A2.Dtor.letd_dtor`);
   - at the end of a typed `scopeD x f` frame whose `x` still owns its
-    value, a struct or an enum, the frame's only step runs `f` on `x` lent
-    and then frees the tree (`A2.Dtor.scopeD_end_runs_dtor`); a panic out
+    value, a struct or an enum, the frame's only step calls `f` on `x` (lent,
+    the tree freed after; or moved into a struct's glue) (`A2.Dtor.scopeD_end_runs_dtor`); a panic out
     of its body with `x` owning runs it too
     (`A2.Dtor.scopeD_panic_runs_dtor`);
   - A2-drop.3b, the drain, step by step. In a state the invariant holds
@@ -697,6 +698,27 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   no single theorem about a run. Taking such a struct apart anywhere else
   (`unpair`) is typed too, and is what its drop does: the fields go to
   their `letd`s. In this cut a struct with glue holds no views.
+  A struct with a `% Drop` OF ITS OWN beside a field that holds a
+  destructor value has two functions: its impl `i`, which takes it lent,
+  and its glue, which takes it owned, rebinds it first thing under the
+  fields' glue `h` (a `letd` at `Ty.dtor h t`), runs `i` on it lent, and
+  sets its result (`ImplGlueOK`, `A2.Dtor.impl_glue_body`). Nothing can
+  panic before the rebinding, and from there the struct is in `h`'s
+  frame: the impl runs, then the frame's end takes the struct apart, a
+  frame per destructor field; a panic in the impl unwinds to that frame,
+  which does the same. That is nurlc's order, the impl and then the
+  fields, and the journal's on a panic. A value changes its destructor
+  type nowhere else: a `letd` that binds a value of another destructor
+  type is of that shape, its scope starting with the impl's call
+  (`A2.Dtor.letd_retype`, from `letd_binds`; that no other rule changes a
+  whole value's destructor type is read off the rules). Code that writes
+  it by hand runs the impl first, the value then in the fields' frame.
+  What is NOT shown is "the impl exactly once": the impl is a function of
+  the program, which code may call on a value of the fields' type as
+  often as it likes, and a struct taken apart and built again is a new
+  value of whichever destructor type it is bound at. `A2.DtorWitness.main8_safe` is a typed
+  program with such a struct, its impl and its glue functions of the
+  program checked by `FnOK`.
   An ENUM holding a destructor value is still a destructor type whose
   glue takes it lent: it matches on the tag and lends the payload to its
   destructor (`getl` / `getr` lend a payload through the type,
@@ -706,8 +728,9 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
 - A field of a destructor value, or a payload of a destructor enum, is
   lent through the type, the destructor staying with the whole value.
   Taking one out is refused: `unpair` of a destructor value whose
-  destructor takes it lent (one whose destructor is a struct's glue is
-  taken apart, above), and `takel` /
+  destructor takes it lent, or is the glue of a struct with a `% Drop` of
+  its own (one whose destructor only takes it apart is taken apart,
+  above), and `takel` /
   `taker` of a destructor enum (`A2.DtorWitness.enum_take_refused`), since
   the destructor would not run.
 - A2-drop.3b: a `Vec` of destructor values is drained. `Ty.ok` admits
@@ -809,18 +832,13 @@ The rules are stricter than nurlc's in these places:
   enum or option that holds a `% Drop` value, and a `% Drop` value that
   holds views; here a struct or an enum holding one is its own destructor
   type, with its glue.
-- for a struct that has a `% Drop` of its own AND a field that holds a
-  destructor value (Agora #616): refused. Its drop in nurlc is the impl
-  on the struct lent, then the fields' glue; here a struct holding a
-  destructor value has glue for its destructor, which takes it apart and
-  runs no impl on the whole. (The model that brings it back: the frame's
-  end runs the impl lent, under a frame of the glue's type.) A program
-  keeps the impl's work in a field of its own `% Drop` type. A glue does
-  nothing but hand its fields on (`Stmt.pureGlue`), so it carries no such
-  work either. And a struct with glue holds no views, so a struct with a
-  destructor field and a view field is refused altogether. A struct of
-  three or more fields is nested pairs here, each inner pair that holds a
-  destructor value with glue of its own.
+- for a struct whose drop takes it apart (Agora #616): its glue does
+  nothing but hand its fields on (`Stmt.pureGlue`); it holds no views, so
+  a struct with a destructor field and a view field is refused
+  altogether; and a struct of three or more fields is nested pairs here,
+  each inner pair that holds a destructor value with glue of its own. A
+  struct with a `% Drop` of its own beside a destructor field is not
+  taken apart by hand (`unpair`): that would skip its impl.
 - for a `Vec` of destructor values (A2-drop.3b), which is typed as a
   binding's own type, drained at the binding's end (above). nurlc types the
   rest too, and drops a `Vec`'s elements wherever the `Vec` is dropped, in
@@ -885,7 +903,8 @@ The rules are stricter than nurlc's in these places:
   taken apart in its callee (its fields and payloads are lent). A struct whose destructor is its glue is taken
   apart (Agora #616: `unpair`, its destructor fields going to their
   `letd`s), as Rust lets a program move out of a struct that has no
-  `Drop` impl of its own; one with a destructor that takes it lent is not.
+  `Drop` impl of its own; one with a destructor that takes it lent, or
+  with an impl beside its glue, is not.
 
 How the runtime carries this out (`stdlib/runtime_core.c`, `nurl_panic`)
 is stated here so the claim does not hide it:
