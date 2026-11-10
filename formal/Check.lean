@@ -12,6 +12,17 @@ import A3
 #print axioms A2.DynCell.pick_ok
 #print axioms A2.DynCell.main_safe
 #print axioms A2.DynCell.main_no_leak
+-- A2-drop.3a: the destructor on the type (A2/DtorWitness.lean): the typing's
+-- guarantee for each binder, the destructor frame's end and panic, a witness
+#print axioms A2.Dtor.letv_owned_no_dtor
+#print axioms A2.Dtor.letcall_hands_over
+#print axioms A2.Dtor.unpair_hands_over
+#print axioms A2.Dtor.letd_dtor
+#print axioms A2.Dtor.scopeD_end_runs_dtor
+#print axioms A2.Dtor.scopeD_panic_runs_dtor
+#print axioms A2.DtorWitness.main_safe
+#print axioms A2.DtorWitness.main2_safe
+#print axioms A2.DtorWitness.lock_checkout_assign
 -- threads: moves, Arc's frozen shared payloads, Locked, RwLocked, Atomic, channels, library
 -- handles and the crossing check, module globals (A3/Claim.lean)
 #print axioms A3.claim
