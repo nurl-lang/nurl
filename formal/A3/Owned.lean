@@ -82,6 +82,15 @@ theorem mem_ids_push {t : Ty} {c d : Nat} {es : List Val} {e : Val} {i : Nat}
 
 /-- A `Vec` holds the addresses of its last element and of what a pop
     leaves of it. -/
+theorem mem_ids_popFront {t : Ty} {c d : Nat} {es : List Val} {e : Val} {i : Nat} :
+    (i ∈ (Val.node t c d es).ids ∨ i ∈ e.ids) → i ∈ (Val.node t c d (e :: es)).ids := by
+  simp only [ids_node, idsL_cons, List.mem_cons, List.mem_append]
+  rintro ((h | h | h) | h)
+  · exact .inl h
+  · exact .inr (.inl h)
+  · exact .inr (.inr (.inr h))
+  · exact .inr (.inr (.inl h))
+
 theorem mem_ids_pop {t : Ty} {c d : Nat} {es : List Val} {e : Val} {i : Nat} :
     (i ∈ (Val.node t c d es).ids ∨ i ∈ e.ids) → i ∈ (Val.node t c d (es ++ [e])).ids := by
   simp only [ids_node, idsL_append, idsL_cons, idsL_nil, List.append_nil, List.mem_cons,
@@ -117,6 +126,11 @@ theorem EvalR.ownedId {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r
     refine ⟨fun _ i hi => .inl (OwnedId.of_slot hy (mem_ids_pop (.inr hi))), fun i hi => .inl ?_⟩
     rcases OwnedId.set_some hi with ⟨_, hi⟩ | hi
     · exact OwnedId.of_slot hy (mem_ids_pop (.inl hi))
+    · exact hi
+  | popFront hy _ _ =>
+    refine ⟨fun _ i hi => .inl (OwnedId.of_slot hy (mem_ids_popFront (.inr hi))), fun i hi => .inl ?_⟩
+    rcases OwnedId.set_some hi with ⟨_, hi⟩ | hi
+    · exact OwnedId.of_slot hy (mem_ids_popFront (.inl hi))
     · exact hi
   | pair h1 h2 =>
     obtain ⟨a1, b1⟩ := TakeVal.ownedId h1 hb

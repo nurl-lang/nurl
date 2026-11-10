@@ -288,6 +288,12 @@ theorem RhsT.names {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : Rhs
     refine ⟨hn.kill _ _ _, fun _ _ => ?_, ⟨_, hk⟩⟩
     have hH : DepsNamed (kill .drop t.holdsView y Γ) E.held := hN.held.keeps' hk
     exact popE_named hH t
+  | @popFront y E t hy hl ht _ _ =>
+    have hN := hn _ _ hy hl (Or.inl (by rw [ht]; simp))
+    have hk : Keeps Γ (kill .drop t.holdsView y Γ) [] := (Keeps.refl Γ []).kill _ _ _
+    refine ⟨hn.kill _ _ _, fun _ _ => ?_, ⟨_, hk⟩⟩
+    have hH : DepsNamed (kill .drop t.holdsView y Γ) E.held := hN.held.keeps' hk
+    exact popE_named hH t
   | @pair y z Ey Ez Γ1 Γ2 Dy Dz hy hly hpa1 hz hlz hpa2 hzd =>
     obtain ⟨hn1, hD1, hk1⟩ := hpa1.names hy hly rfl hn
     obtain ⟨hn2, hD2, hk2⟩ := hpa2.names hz hlz rfl hn1

@@ -1609,6 +1609,15 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
     exact ⟨_, RhsT.pop hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab hy]; exact ht)
       (by rw [liftE_mode y hrb]; exact canDo_lift hcan) (h.Fcout y)
       (DtorSafe.canon h (allowed_canDo hab hy ht hcan) hds), fun x => popE_lift h hab hy ht hrb hos x⟩
+  | @popFront y Ey t hy hl ht hcan hyF hds =>
+    have hc : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
+    have hrb : Ey.mode ≠ .rootb := by
+      rcases hcan with hm | ⟨b, hm, _⟩ <;> rw [hm] <;> simp
+    have hos : Ey.mode.ownSlot = true := by rcases hcan with hm | ⟨b, hm, _⟩ <;> rw [hm] <;> rfl
+    rw [canon_kill h hab (allowed_canDo hab hy ht hcan)]
+    exact ⟨_, RhsT.popFront hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab hy]; exact ht)
+      (by rw [liftE_mode y hrb]; exact canDo_lift hcan) (h.Fcout y)
+      (DtorSafe.canon h (allowed_canDo hab hy ht hcan) hds), fun x => popE_lift h hab hy ht hrb hos x⟩
   | @pair y z Ey Ez Γa1 Γa2 Dy Dz hy hly hpa1 hz hlz hpa2 hzd =>
     have hc1 : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
     obtain ⟨D1, hp1, hD1, hD1o⟩ := pushArg_ren h hab hy hpa1
@@ -3033,6 +3042,7 @@ theorem RhsT.absOK {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : Rhs
   | @moveUp y Ey _ _ _ hy _ hm =>
     exact (hab.kill _ _ _).setE' hab hy rfl rfl (by rw [hm]; simp) (fun hf => absurd hf (by simp [hm]))
   | pop => exact hab.kill _ _ _
+  | popFront => exact hab.kill _ _ _
   | pair hy _ hpa1 hz _ hpa2 _ => exact PushArg.absOK hz hpa2 (PushArg.absOK hy hpa1 hab)
   | inl hy _ hpa _ => exact PushArg.absOK hy hpa hab
   | inr hy _ hpa _ => exact PushArg.absOK hy hpa hab

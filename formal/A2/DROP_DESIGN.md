@@ -557,39 +557,60 @@ each one shrinks `CLAIM.md`'s exception:
      inside: a channel of `D`, `Locked (Vec D)`, `Arc (Vec D)`, a cell of
      one, a struct or an enum with a `Vec D` field or payload
      (`CLAIM.md`'s list of where the rules are stricter than nurlc).
-   - Left, the drain, which lifts the refusal: `Ty.ok` lets a `Vec`'s
-     elements be of a destructor type (`t.hasDtor || t.dtorFree`), and a
-     `Vec` of them is `letd`'s, at its own type with the element's
-     destructor `f`. Its `scopeD x f .skip` steps by the node: one more
-     element (`.node t c d (e :: es)`) moves out to a fresh binding `m.nv`
-     in a frame of its own, `scopeD x f (scopeD m.nv f .skip)`, front
-     first, the index order nurlc drops elements in; an empty node is
-     `scope x .skip`; `scopeDEnd` and `scopeDP` take only a value that is
-     no node; a panic in the body with `x` owning a node steps to
-     `.seq (.scopeD x f .skip) .panic`, which drains and raises again. The
-     preservation of the drain step is `withElem`'s element moving out
-     (`elem_pres` at index 0) plus the inner frame's `scopeD` premises;
-     the panic step's is `scopeDP`'s. `truncate`, `clear`, `set` and `free`
-     of such a `Vec` stay refused (they drop elements with no code): a
-     program pops them into `letd`s, or lets the binding end.
-   - Open questions for the drain (from the first milestone's review):
-     - `Ty.ok`'s `t.hasDtor || t.dtorFree` would make every type with a
-       `Vec DT` inside ok, not only a binding's own: `prod (vec DT) int`, a
-       channel of `DT` and `arc (vec DT)`. But a struct's glue takes
-       `self` as `inp`, so it cannot pop a `Vec` field into `letd`s; and a
-       channel's queue is swept with its block, running no code. So the
-       lift needs a narrower rule (a `Vec D` only where a drain reaches
-       it) or glue that drains a field, and 3d for a queue.
-     - A `withElem` check-out of a `Vec D` element is an owned binding of
-       a destructor type that is no `letd`'s: it would need
-       `x ∉ s.assigns`, as `letd`'s `hna`, so that no `assign` drops the
-       element with no code.
-     - `letd` asks `t.isStruct`, and `scopeD`'s typing asks the binding's
-       type to be `.dtor f t`: both need new forms for a `Vec` bound at
-       its own type with its element's destructor.
-     - A `Vec D` as a `sink` or `inout` parameter, or as a function's
-       result: what `DtorParamsOK` and `asgMax` ask of it, and how it
-       reaches a draining `letd`.
+   - **Built (Agora #542, part 2's first milestone): the drain's step.**
+     `vec_remove y 0` is `Rhs.popFront`: element 0 moves out, typed as
+     `vec_pop` (`RhsT.popFront`), `EvalR.popFront` / `popFrontEmpty`.
+     Its preservation is a `vec_pop` of element 0 moved to the end
+     (`A2.rhs_popFront`, from `MInv.perm` and `rhs_pop`; the permutation
+     lemmas moved from `A2/Elem.lean` into `A2/Rhs.lean` so that
+     `rhs_pres` can use them). nurlc drops a `Vec`'s elements in index
+     order (`nurl__vec_drop_elems`, `i = 0 .. len`), so the drain takes
+     element 0 each round, not the last one.
+   - **Left: the drain itself.** The plan, with the four open questions
+     answered:
+     1. *Where a `Vec D` is ok.* Only as a binding's own type. A new
+        `Ty.okB t` (ok as a binding type) is `t.ok`, or `t = .vec D` with
+        `D.hasDtor`, `D.ok` and `D.undtor.dtorFree`. `MInv.tyok` and the
+        binder rules ask `okB`; every composite constructor keeps asking
+        `Ty.ok`, so a field, a payload, a channel, a lock, an `Arc`, a
+        cell or a `Vec` of a `Vec D` stays refused. A struct's glue lends
+        `self` and cannot pop a field, and a channel's queue is swept with
+        its block, running no code (3d). `Ty.okB.elim` turns a use of
+        `tyok` at a non-`Vec D` binding into `Ty.ok`, which is what most of
+        `tyok`'s 63 uses need.
+     2. *`withElem` of a `Vec D`'s element.* Refused in this cut: the
+        check-out is an owned binding of a destructor type that is no
+        `letd`'s, so `withElem` asks its element type `dtorFree`. Lifting
+        it needs `x ∉ s.assigns` (as `letd`'s `hna`) and a `scopeD`-style
+        end for the check-out.
+     3. *The binder and the frame.* `letd x f r s`, where `r`'s type is
+        `.vec (.dtor f u)` and `f` is the element's destructor.
+        `StmtT.letd` and `StmtT.scopeD` take `E.ty = .dtor f t ∨ E.ty =
+        .vec (.dtor f t)`. `scopeD x f .skip` steps by the value:
+        - a non-empty node becomes `scopeD x f (letd m.nv f (.popFront x)
+          .skip)`, with `nv + 1`. This is a statement rewrite: the memory
+          moves in `letd`'s step (`EvalR.popFront`, `rhs_popFront`), and
+          the element's own `scopeD` runs its destructor
+          (`scopeD_end_runs_dtor`);
+        - an empty node becomes `scope x .skip`;
+        - `scopeDEnd` and `scopeDP` take only a value that is no node;
+        - a panic with `x` owning a node becomes `.ok m1 (.seq (.scopeD x f
+          .skip) .panic)`, which drains, then raises again.
+        Preservation of the drain step is a typing lemma: `StmtT` of the
+        rewritten body, from `MInv`, which gives `RhsT.popFront`'s
+        premises for `x`. The panic step's proof is `scopeDP`'s. Each of
+        the three new steps needs its case in Progress, StepFrame and A3's
+        lifting files (Lift, Fresh, BorFree, Keep, Restrict, Owned, Cell),
+        where `scopeDEnd` has one.
+     4. *A `Vec D` as a `sink` or `inout` parameter, or a result.*
+        Refused: `FnOK` asks parameter and result types `Ty.ok`, not
+        `okB`. So a `Vec D` lives and drains in one frame. Lifting it
+        needs `DtorParamsOK`-style clauses, as for destructor parameters.
+     `truncate`, `clear`, `set`, `free` and `edit` of a `Vec D` stay
+     refused: their element type must be `dtorFree`, and they drop
+     elements with no code. A program pops them into `letd`s (`pop` and
+     `popFront` give an owned `.dtor f u`, which `movedFirst` hands to a
+     `letd`), or lets the binding end.
 3. **A2-drop.3c: environments.** A closure's or a trait object's
    environment holding a destructor value: `Ty.fn ms q` gains what the
    environment's drop runs (as `q` records where it may cross), and a

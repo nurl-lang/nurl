@@ -543,6 +543,8 @@ inductive Rhs where
   | view (y : Var)             -- `slice_from_vec` / `string_data`
   | sat (y : Var) (i : Expr)   -- `slice_at`: bounds-checked
   | pop (y : Var)              -- `vec_pop`: the element moves out
+  | popFront (y : Var)         -- `vec_remove y 0`: element 0 moves out (A2-drop.3b: what a
+                               -- `Vec`'s drain takes, in index order)
   | pair (y z : Var)           -- a struct literal: owners move in, the rest is copied
   | fst (y : Var)              -- a field read: lends what the field holds
   | snd (y : Var)

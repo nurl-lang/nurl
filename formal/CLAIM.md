@@ -640,13 +640,26 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   So in a running configuration no binding's type has such a `Vec`
   anywhere in it (`A2.Dtor.vec_elems_dtor_free` for a `Vec` at the top,
   `A2.Dtor.vecs_dtor_free` at any depth; `A2.Dtor.new_dtor_free`), and
-  `free`, a truncation, an element set, `pop` and `withElem` release or
+  `free`, a truncation, an element set, `pop`, `popFront` and `withElem` release or
   check out no destructor value, except a share's payload or a closure's
   environment (3c, 3d): an element may be an `Arc` or a lock of a
   destructor value, or a closure whose environment holds one, and nurlc
   runs that destructor when the element's drop drops the last share or
   the closure. This is stricter than nurlc (the list below), which drops a
   `Vec`'s elements in index order, each running its destructor.
+  The drain that lifts this is designed (`A2/DROP_DESIGN.md`, staging
+  item 2) and its step is in the calculus: `vec_remove y 0`
+  (`Rhs.popFront`, element 0 moves out, typed as `vec_pop`) preserves the
+  invariant (`A2.rhs_popFront`), so the drain can take elements in nurlc's
+  index order. That is proved for today's element types only: no typed
+  state holds a `Vec` of destructor values yet, so the theorem's
+  destructor-element instance (and `rhs_pop` / `MInv.perm` under the drain's
+  `Ty.okB`) comes with the drain. The drain itself, a `Vec` of destructor
+  values bound by `letd` and drained at its end, is not yet in (Agora #542).
+  (On an empty `Vec`, `vec_pop` and `vec_remove` return `None` in nurlc; the
+  calculus's `pop` / `popFront` panic there instead, an unwrap: a program
+  that matches the option is the same program with the `None` arm taken
+  before the call.)
 - `Ty.holdsDtor` is deep (A2-drop.3b): a struct or an enum one field or
   payload of which holds a destructor value holds one
   (`A2.Dtor.holdsDtor_deep`, the definition unfolded). So a typed `letv`

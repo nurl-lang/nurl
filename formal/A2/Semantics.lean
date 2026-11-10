@@ -576,6 +576,12 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
       EvalR m (.pop y) (.ok e e.owns (m.set y ⟨true, some (.node t c d es)⟩))
   | popEmpty {y : Var} {t : Ty} {c d : Nat} :
       m.st y = some ⟨true, some (.node t c d [])⟩ → EvalR m (.pop y) .panic
+  /-- A2-drop.3b: element 0 moves out (the drain's step, in index order). -/
+  | popFront {y : Var} {t : Ty} {c d : Nat} {es : List Val} {e : Val} :
+      m.st y = some ⟨true, some (.node t c d (e :: es))⟩ → m.alloc c = true → m.alloc d = true →
+      EvalR m (.popFront y) (.ok e e.owns (m.set y ⟨true, some (.node t c d es)⟩))
+  | popFrontEmpty {y : Var} {t : Ty} {c d : Nat} :
+      m.st y = some ⟨true, some (.node t c d [])⟩ → EvalR m (.popFront y) .panic
   | pair {y z : Var} {v w : Val} {m1 m2 : Mem} :
       TakeVal m y v m1 → TakeVal m1 z w m2 → EvalR m (.pair y z) (.ok (.pair v w) true m2)
   | fst {y : Var} {o : Bool} {v w : Val} :
@@ -827,6 +833,7 @@ def Rhs.rename (ρ : Var → Var) : Rhs → Rhs
   | .view y => .view (ρ y)
   | .sat y i => .sat (ρ y) (i.rename ρ)
   | .pop y => .pop (ρ y)
+  | .popFront y => .popFront (ρ y)
   | .pair y z => .pair (ρ y) (ρ z)
   | .fst y => .fst (ρ y)
   | .snd y => .snd (ρ y)

@@ -192,6 +192,21 @@ theorem covers_evalR {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (hc : Covers m)
           · exact Or.inr ⟨rfl, h⟩
       · exact Or.inl (Or.inl ⟨o', U, ownedAt_set.mpr (Or.inr ⟨hoy, hU⟩), hiU⟩)
     · exact Or.inl (Or.inr hp)
+  | popFront hy ha hb =>
+    rename_i y t c d es
+    rcases hc i hi with ⟨o', U, hU, hiU⟩ | hp
+    · by_cases hoy : o' = y
+      · subst hoy; unfold OwnedAt at hU; rw [hy] at hU; cases hU
+        simp only [ids_node, List.mem_cons, idsL_cons, List.mem_append] at hiU
+        rcases hiU with h | h | h | h
+        · exact Or.inl (Or.inl ⟨o', _, ownedAt_set.mpr (Or.inl ⟨rfl, rfl⟩), by simp [h]⟩)
+        · exact Or.inl (Or.inl ⟨o', _, ownedAt_set.mpr (Or.inl ⟨rfl, rfl⟩), by simp [h]⟩)
+        · cases hn : v.owns
+          · rw [ids_nonNode hn] at h; cases h
+          · exact Or.inr ⟨rfl, h⟩
+        · exact Or.inl (Or.inl ⟨o', _, ownedAt_set.mpr (Or.inl ⟨rfl, rfl⟩), by simp [h]⟩)
+      · exact Or.inl (Or.inl ⟨o', U, ownedAt_set.mpr (Or.inr ⟨hoy, hU⟩), hiU⟩)
+    · exact Or.inl (Or.inr hp)
   | pair h1 h2 =>
     rw [h2.alloc, h1.alloc] at hi
     rcases hc i hi with ⟨o', U, hU, hiU⟩ | hp

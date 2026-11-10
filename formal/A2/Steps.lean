@@ -1406,6 +1406,34 @@ theorem guardTy_ok {t : Ty} (h : (Ty.lk t).ok = true) :
     Bool.or_eq_false_iff] at h ⊢
   exact ⟨⟨⟨h, h.1⟩, h.2, h.2⟩, h.2, h.2⟩
 
+/-- A2-drop.3b: `vec_remove y 0` (the drain's step) is a `vec_pop` of
+    element 0 moved to the end (`MInv.perm`). -/
+theorem rhs_popFront {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
+    (hanch : RootbAnch Γ F)
+    {y : Var} {E : Entry} {t : Ty} (hy : Γ y = some E) (hl : E.live = true) (hty : E.ty = .vec t)
+    (hcan : canDo E.mode .drop) (hyF : y ∉ F)
+    {t' : Ty} {c d : Nat} {es : List Val} {e : Val}
+    (hT : m.st y = some ⟨true, some (.node t' c d (e :: es))⟩) (hds : DtorSafe Γ .drop t.holdsView y) :
+    RhsPost m (m.set y ⟨true, some (.node t' c d es)⟩) Γ (kill .drop t.holdsView y Γ) F ∧
+    RhsOut (m.set y ⟨true, some (.node t' c d es)⟩) (kill .drop t.holdsView y Γ) (popE y E t) e
+      e.owns := by
+  have hp : (e :: es).Perm (es ++ [e]) := (List.perm_append_singleton e es).symm
+  let m1 := m.set y ⟨true, some (.node t' c d (es ++ [e]))⟩
+  have hT1 : m1.st y = some ⟨true, some (.node t' c d (es ++ [e]))⟩ := by simp [m1]
+  have hst1 : ∀ o, o ≠ y → m1.st o = m.st o := fun o ho => by simp [m1, upd_ne _ _ ho]
+  have hpm : RhsPost m m1 Γ Γ F :=
+    ⟨hi.perm hanch hyF hT hp, rfl, Nat.le_refl _,
+      fun o => by
+        by_cases ho : o = y
+        · subst ho; rw [hT1, hT]; rfl
+        · rw [hst1 o ho],
+      fun o ho => hst1 o (fun h => hyF (h ▸ ho)), fun _ _ h _ => h, fun _ => rfl,
+      fun _ E1 h => ⟨E1, h, rfl, rfl⟩, DKeep.refl _ [], BlkLe.refl _⟩
+  obtain ⟨post, out⟩ := rhs_pop hpm.inv hanch hy hl hty hcan hyF hT1 hds
+  have hm2 : m1.set y ⟨true, some (.node t' c d es)⟩ = m.set y ⟨true, some (.node t' c d es)⟩ :=
+    Mem.set_set _ _ _ _
+  exact ⟨hpm.trans (hm2 ▸ post), hm2 ▸ out⟩
+
 theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} {v : Val} {o : Bool}
     (hi : MInv m Γ) (hanch : RootbAnch Γ F)
     (hr : RhsT Γ F r E Γ1) (he : EvalR m r (.ok v o m1)) :
@@ -1490,6 +1518,9 @@ theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry
   | pop hy hl ht hcan hyF hds =>
     cases he with
     | pop hT _ _ => exact rhs_pop hi hanch hy hl ht hcan hyF hT hds
+  | popFront hy hl ht hcan hyF hds =>
+    cases he with
+    | popFront hT _ _ => exact rhs_popFront hi hanch hy hl ht hcan hyF hT hds
 
   | @pair y z Ey Ez Γ1 Γ2 Dy Dz hy hly hpa1 hz hlz hpa2 hzd =>
     cases he with
