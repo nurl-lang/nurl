@@ -721,7 +721,8 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   program checked by `FnOK`.
   An ENUM holding a destructor value (an option of a `% Drop` value) is a
   destructor type too, and its destructor is its glue (Agora #632,
-  `EnumGlueOK`; a destructor that takes it lent is refused for it,
+  `EnumGlueOK`, or after an impl of its own `ImplGlueOK`, below; a
+  destructor that takes it lent is refused for it,
   `A2.Dtor.enum_dtor_is_glue`): a function that takes the enum owned and
   matches on its tag; in the arm of a variant whose payload type holds a
   destructor value the payload moves out to a `letd` first thing
@@ -735,9 +736,11 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   Which arm runs is the tag's test at run time: the typing does not tie
   the arm to the variant (an `ite` on `isl`), so "the arm that takes is
   the arm of the variant that is there" is the step's, not a theorem.
-  In this cut an enum with glue holds no views, and an enum with a
-  `% Drop` of its own beside such a payload is refused (the struct's
-  second cut, not done for enums).
+  An enum with a `% Drop` of its own beside such a payload has the
+  struct's two functions (`ImplGlueOK` is over a struct or an enum): its
+  glue rebinds it under the payload's glue and runs the impl on it lent;
+  no witness program is mechanized for the enum case. In this cut an enum
+  with glue holds no views.
 - A field of a destructor value, or a payload of a destructor enum, is
   lent through the type, the destructor staying with the whole value.
   Taking one out is refused: `unpair` of a destructor value whose
@@ -923,9 +926,8 @@ The rules are stricter than nurlc's in these places:
   apart (Agora #616: `unpair`, its destructor fields going to their
   `letd`s), as Rust lets a program move out of a struct that has no
   `Drop` impl of its own; one with a destructor that takes it lent, or
-  with an impl beside its glue, is not. An enum with a `% Drop` of its
-  own beside a payload that holds a destructor value is refused (Agora
-  #632's cut has glue for an enum with no impl); an enum with glue holds
+  with an impl beside its glue, is not (nor is a payload taken out of an
+  enum with an impl beside its glue). An enum with glue holds
   no views; and a payload that holds no destructor value is not taken
   out of an enum of a destructor type by value (it is lent).
 
