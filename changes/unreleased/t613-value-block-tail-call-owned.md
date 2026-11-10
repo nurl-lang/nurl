@@ -1,0 +1,3 @@
+### Fixed
+
+- **A value block that ends in a call hands its taker the call's own result** (Agora #613). `: String e { : String s … ( string_concat s s ) }` — a tail call that takes one of the block's own bindings — never dropped the call's result, once per run of the statement (a leak in a loop body). `= e { … ( call ) }` leaked for every String or Vec target: the old value was released, the new one stored as if it were borrowed, and nobody released it. A block ending in a call is now that call for what the binding or the assignment's target owns: its own result is dropped by it, a lend of an outer binding stays a borrow, and a lend of one of the block's bindings is copied as before.
