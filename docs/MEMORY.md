@@ -141,6 +141,14 @@ $ `stdlib/core/string.nu`
 ( nurl_println ( string_data ( mk ) ) )    // the String is released after the println
 ```
 
+A value nothing names that is read through with `.` — a call's result, a
+literal, a field taken out of either — is a temporary too. A read that
+yields plain data (`. ( mk ) length`, a number out of a field or an
+element) releases it once the read is done; a read whose result is still
+inside it (a `~` loop over a field of a call's result, a field that
+cannot be taken out) gives it an owner for the rest of the scope
+(agora #545).
+
 ### Explicit early release
 
 A release call on an owned binding is allowed and moves the value: the
@@ -2506,7 +2514,16 @@ are dropped, moved and copied by the same rules:
   an arm that ends in a lending call lends what that call does — returned
   from a function, the function lends it (h311).
 - **Returns.** A returned binding that does not own what it holds is
-  copied on the way out, so the caller always owns the result.
+  copied on the way out, so the caller always owns the result. A cast of
+  a binding to the type it has (`^ # T a`) and a value block that ends in
+  one (`^ { a }`) return the binding itself.
+- **Returned literals.** A literal has one owner. Built only over fields
+  of a parameter (`^ @ P { . h a . h b }`) it is lent as `^ . h a` is and
+  nothing is copied. With a field of its own beside a lent one
+  (`^ @ P { . h a ( fresh ) }`) the caller owns it whole: the lent field
+  is copied — in a struct, a variant, an option, a result or a literal
+  nested in one — and a lent field that cannot be copied is refused where
+  it stands (agora #635).
 
 **Ownership primitives** for library code:
 

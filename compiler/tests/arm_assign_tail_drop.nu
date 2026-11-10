@@ -6,8 +6,9 @@
 // owned raw string or slice declared in the arm. The gate is now
 // mem_arm_drop_safe: void OR plain scalar (int/float/bool) arm values
 // cannot reference arm-local heap memory (the phi carries a copy), so
-// the drop fires. Pointer/slice/aggregate arm values stay conservative
-// (leak-not-UAF) — `{ : xs [i | …] xs }` must NOT free xs.
+// the drop fires. Pointer/aggregate arm values stay conservative
+// (leak-not-UAF). A slice is an owned value (agora #545): an arm that
+// ends in one — `{ : [i xs [i | …] xs }` — hands xs over, as a String's does.
 //
 // Values are asserted through acc so a premature free (UAF) shows as a
 // wrong sum or a crash; the leak side is pinned by the LSan CI set.
@@ -62,8 +63,8 @@ unsafe @ main → i {
         F → {}
     }
     // acc = 25 + 7 + 7 = 39
-    // (The conservative side — pointer/slice-valued arms must NOT drop —
-    // is pinned by ternary_slice_owned / match_slice_owned.)
+    // (A slice-valued arm hands its slice over rather than dropping it:
+    // pinned by ternary_slice_owned / match_slice_owned.)
 
     ? flag {} { = acc 0 }
     ( nurl_print ( nurl_str_int acc ) )

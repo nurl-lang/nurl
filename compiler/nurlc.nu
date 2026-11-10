@@ -1340,6 +1340,8 @@ unsafe @ agg_field_count i syms s ot → i {
 : ~ i g_did_ret 0  // set to 1 by gen_ret; checked/reset by gen_cond
 // 1 when the last cast cast a binding (gen_cast; gen_agg_lit reads it)
 : ~ i g_last_cast_direct 0
+// The token type of the binding `__last_cast_ident__` names (gen_ret).
+: ~ i g_cast_ident_tt 0
 // Names of the mutable string globals that own their buffer (each has a
 // compiler-emitted `<name>__nurlown` flag). `main` releases them on the
 // way out — nothing else can, since a global outlives every scope.
@@ -2118,6 +2120,25 @@ unsafe @ agg_field_count i syms s ot → i {
 // the outer literal sees `@ Two { t @ Holder { t } }` move `t` twice.
 : ~ s g_lm_calls ``
 : ~ s g_lm_inner ``
+// What a returned literal — the one a `^` names, with the literals nested
+// in it — is made of (gen_agg_lit): a value of its own (g_rl_own), a part
+// kept lent from where it was read (g_rl_lent: out of the parameters named
+// in g_rl_rp, or out of something else, g_rl_part). A result has one
+// owner, so a literal with a part of its own copies its lent parts and the
+// caller owns it whole; one that is lent throughout stays lent, nothing
+// copied. A lent part written before a field that may still own something
+// cannot know which it is: it is copied under `@.__nurl_rlown.<g_rl_flag>`,
+// a constant settled where the literal closes (g_rl_more: an enclosing
+// literal has such fields still to come; g_rl_nc: the first lent part that
+// cannot be copied, as `<file> <line> <col>|<type>`, refused there if the
+// literal turns out to own something).
+: ~ b g_rl_own F
+: ~ b g_rl_lent F
+: ~ b g_rl_more F
+: ~ b g_rl_part F
+: ~ i g_rl_flag 0
+: ~ s g_rl_rp ``
+: ~ s g_rl_nc ``
 : ~ i g_lm_depth 0
 : ~ i g_lm_pend 0
 // A sealed representation's field handed to a function of the program not
@@ -5977,6 +5998,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
     ? __jmove { = g_join_rdepth 0 } {}
     = g_blk_fall_value & __ret_imp == ret_first_tt TT_LBRACE
     = g_ret_vpos ( nurl_lex_cur_start lex ) = g_ret_vlex lex
+    ? == ret_first_tt TT_HASH { ( nurl_sym_def syms `__last_cast_ident__` `` ) } {}
     : ~ s val ( gen_operand lex syms cg )
     = g_ret_vpos __rvp0 = g_ret_vlex __rvl0
     = g_ret_lit_pos __rlp0 = g_ret_lit_lex __rll0
@@ -5995,6 +6017,16 @@ unsafe @ gen_ret i lex i syms i cg → s {
             = ret_first_tt g_blk_tail_eff
             = ret_first_val ( nurl_str_cat __rbn `` )
         } {}
+    } {}
+    // A cast of a binding to the type it already has is that binding
+    // (gen_cast), and `^ # T a` is `^ a` to everything below: a local is
+    // handed over, a parameter lent back or copied as it is by name. Judged
+    // as a read through a cast it was lent by nobody: the caller released
+    // nothing and the function kept nothing — the local's value leaked, a
+    // String's, a struct's and a slice's alike (agora #545).
+    ? & == ret_first_tt TT_HASH != 0 ( nurl_sym_len syms `__last_cast_ident__` ) {
+        = ret_first_val ( nurl_str_cat ( nurl_sym_get syms `__last_cast_ident__` ) `` )
+        = ret_first_tt g_cast_ident_tt
     } {}
     // (`^ . h buf` hands back what the field holds: a read of the path,
     // refused while a callee has taken it — agora #351.)
@@ -50476,6 +50508,7 @@ unsafe @ gen_cast i lex i syms i cg → s {
     ( bck_save_expr_carriers syms `__last_cast_params__` source_tt source_val )
     // `# T x` of a T binding is x itself (mem_udrop_bind_flag: a cursor).
     ( nurl_sym_def syms `__last_cast_ident__` ? & ( is_ident_tok source_tt ) ( seq st dt ) ( nurl_str_cat source_val `` ) `` )
+    = g_cast_ident_tt source_tt
     // …and, whatever the types, the binding cast (gen_assign: an owned
     // handle's address stored in a global).
     ( nurl_sym_def syms `__last_cast_src__` ? ( is_ident_tok source_tt ) ( nurl_str_cat source_val `` ) `` )
@@ -51574,6 +51607,18 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
     : b agg_returned & != 0 ( nurl_sym_len syms `__ret_agg__` ) ! agg_nested
     : b agg_moves_fields | agg_returned agg_nested
     ( nurl_sym_set_deep syms `__ret_agg__` `` )
+    // What the returned literal is made of (g_rl_own): started by the
+    // literal a `^` names, shared by the ones nested in it, and put back
+    // where that literal closes (a closure in a field has `^`s of its own).
+    : b __rl_own0 g_rl_own
+    : b __rl_lent0 g_rl_lent
+    : b __rl_more0 g_rl_more
+    : b __rl_part0 g_rl_part
+    : i __rl_flag0 g_rl_flag
+    : s __rl_rp0 ( nurl_str_cat g_rl_rp `` )
+    : s __rl_nc0 ( nurl_str_cat g_rl_nc `` )
+    ? agg_returned { = g_rl_own F = g_rl_lent F = g_rl_more F = g_rl_part F = g_rl_flag 0 = g_rl_rp `` = g_rl_nc `` } {}
+    : b __rl_more_in g_rl_more
     : s agg_ty ( parse_type lex )  // parse the aggregate type
     : i agg_ty_n ( nurl_str_len agg_ty )
     : *u agg_ty_p # *u agg_ty
@@ -51957,7 +52002,12 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         : i __fsxn0 g_sx_n
         : i __fmp0 g_member_path_on
         = g_member_path_on ? & != 0 __sx_me == fld_first_tt TT_DOT 1 g_member_path_on
+        // (Whether a field after this one may own something: asked by a
+        // lent field here, and by the fields of a literal nested here.)
+        : b __rl_after & agg_moves_fields ( __rl_more_after syms cur_sname enum_paycount idx agg_is_wrap )
+        ? agg_moves_fields { = g_rl_more | __rl_more_in __rl_after } {}
         : ~ s fval ( gen_expr lex syms cg )
+        ? agg_moves_fields { = g_rl_more __rl_more_in } {}
         = g_member_path_on __fmp0
         = g_dead_payload 0
         : s fty ( nurl_get_last_type )
@@ -52251,13 +52301,49 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
                 } {}
             }
         } {}
-        ? & & agg_moves_fields ( seq fld_lent `1` ) == g_bck_closure_depth 0
-        { ( nurl_sym_set_deep syms `__agg_lends__` `1` )
-            // A field of a parameter is part of the caller's value; what
-            // else a literal lends is unexplained.
-            ? & == fld_first_tt TT_DOT >= ( nurl_sym_word_index syms `__fn_param_names__` fld_dot_obj ) 0
-            { ( __record_param_idx syms `__fn_retpart__` fld_dot_obj ) }
-            { ? ! | fld_param_lend fld_rlent { ( nurl_sym_set_deep syms `__agg_lends_part__` `1` ) } {} } }
+        // A returned literal's field lent as it is (`^ @ Row { . p name 1 }`):
+        // the result is lent with it, and its caller releases nothing. That
+        // is right only for a literal lent throughout. Beside a field of
+        // the literal's own (`^ @ Row { . p name ( string_from … ) }`) the
+        // result has to be the caller's whole — a result has one owner — so
+        // the lent field is copied: at once where the literal already owns
+        // something, under the literal's late constant where a field still
+        // to come may (the copy folds away when none does). Lent with the
+        // rest, the literal's own field was released by nobody — it leaked,
+        // a String's, a Vec's and a slice's alike (agora #635, #545). A lent
+        // field that cannot be copied beside an owned one is refused.
+        // (A None's payload is never read, and a field whose type owns
+        // nothing has nothing to copy: as before.)
+        : b __rl_kept & & agg_moves_fields ( seq fld_lent `1` ) == g_bck_closure_depth 0
+        : b __rl_el & & __rl_kept ! & opt_is_none == idx 1 ( __elem_owns fty syms )
+        : b __rl_nc & __rl_el | ( __nc_held_ty fty ) & != 0 ( nurl_str_len ( __slc_elem fty ) ) ! ( __clone_supported fty syms )
+        ? __rl_kept
+        { ? ! __rl_el
+            { ( nurl_sym_set_deep syms `__agg_lends__` `1` )
+                // A field of a parameter is part of the caller's value; what
+                // else a literal lends is unexplained.
+                ? & == fld_first_tt TT_DOT >= ( nurl_sym_word_index syms `__fn_param_names__` fld_dot_obj ) 0
+                { ( __record_param_idx syms `__fn_retpart__` fld_dot_obj ) }
+                { ? ! | fld_param_lend fld_rlent { ( nurl_sym_set_deep syms `__agg_lends_part__` `1` ) } {} } }
+            { ? g_rl_own
+                { ? __rl_nc { ( __nc_copy_die ( nurl_sym_get syms `__fn_self_name__` ) fty ) } {}
+                    = fval ( mem_emit_cloneif cg fty fval `1` ) }
+                { ? | __rl_more_in __rl_after {
+                        ? __rl_nc {
+                            ? == 0 ( nurl_str_len g_rl_nc ) { = g_rl_nc ( nurl_str_cat3 ( __stmt_pos_rec ( nurl_sym_get syms `__fn_self_name__` ) ) `|` fty ) } {}
+                        } {
+                            ? == g_rl_flag 0 { = g_rl_flag ( rlown_flag ) } {}
+                            : s __rl_c ( nurl_cg_reg cg )
+                            ( emit_sink_flag_load ( nurl_str_cat `@.__nurl_rlown.` ( nurl_str_int g_rl_flag ) ) __rl_c )
+                            = fval ( mem_emit_cloneif cg fty fval __rl_c )
+                        }
+                    } {}
+                    = g_rl_lent T
+                    // A field of a parameter is part of the caller's value;
+                    // what else a literal lends is unexplained.
+                    ? & == fld_first_tt TT_DOT >= ( nurl_sym_word_index syms `__fn_param_names__` fld_dot_obj ) 0
+                    { ? ! ( str_contains_word g_rl_rp fld_dot_obj ) { = g_rl_rp ? == 0 ( nurl_str_len g_rl_rp ) ( nurl_str_cat fld_dot_obj `` ) ( nurl_str_cat3 g_rl_rp ` ` fld_dot_obj ) } {} }
+                    { ? ! | fld_param_lend fld_rlent { = g_rl_part T } {} } } } }
         {  // (A payload that is a `?` / `??`: lent per call only when what it
             // lent is the caller's — a local's lend is copied, as `^ ?` does;
             // agora #184.)
@@ -52312,6 +52398,12 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         // and kept as is — a moving literal's statically lent field, which
         // is not copied (above); every other lent field is (cloneif)
         // (bck_check_lit_moves).
+        // A field that is the returned literal's own: a value made here, a
+        // local moved in, a copy (g_rl_own). (A nested literal answers for
+        // its own fields.)
+        ? & & & & agg_moves_fields ! __rl_kept != fld_first_tt TT_AT ! & opt_is_none == idx 1 ( __elem_owns fty syms ) {
+            ? ! ( seq fval `zeroinitializer` ) { = g_rl_own T } {}
+        } {}
         : s __lm_l ? & & agg_moves_fields ( seq fld_lent `1` ) ( __type_needs_drop fty syms ) `1` `-`
         = __lm_lt ? == 0 ( nurl_str_len __lm_lt ) ( nurl_str_cat __lm_l `` ) ( nurl_str_cat3 __lm_lt ` ` __lm_l )
         // A literal built as a call's argument owns the fields it made or
@@ -53344,6 +53436,27 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
     }
     ( expect lex TT_RBRACE )  // consume '}'
     = g_lm_depth - g_lm_depth 1
+    // The returned literal closes: its late constant gets its answer, and
+    // a literal lent throughout is lent — by the parameters it read, or
+    // unexplained (gen_ret).
+    ? agg_returned {
+        ? != g_rl_flag 0 { ( __park_append g_pending_impl `rlownflags` ( nurl_str_cat3 ( nurl_str_int g_rl_flag ) ` ` ? g_rl_own `true` `false` ) ) } {}
+        ? g_rl_lent {
+            ? g_rl_own {
+                ? != 0 ( nurl_str_len g_rl_nc ) { ( __nc_copy_die_rec ( __bar_first g_rl_nc ) ( __bar_rest g_rl_nc ) ) } {}
+            } {
+                ( nurl_sym_set_deep syms `__agg_lends__` `1` )
+                : ~ s __rl_w ( nurl_str_cat g_rl_rp `` )
+                ~ != 0 ( nurl_str_len __rl_w ) {
+                    ( __record_param_idx syms `__fn_retpart__` ( str_first_word __rl_w ) )
+                    = __rl_w ( str_skip_word __rl_w )
+                }
+                ? g_rl_part { ( nurl_sym_set_deep syms `__agg_lends_part__` `1` ) } {}
+            }
+        } {}
+        = g_rl_own __rl_own0 = g_rl_lent __rl_lent0 = g_rl_more __rl_more0 = g_rl_part __rl_part0
+        = g_rl_flag __rl_flag0 = g_rl_rp __rl_rp0 = g_rl_nc __rl_nc0
+    } {}
     // One value moved into two owners, or released by one field and kept
     // by another, within this literal.
     ? & & & != 0 g_borrowck > __lm_n 1 ! ( bck_unsafe_ctx ) | | > ( bck_list_len 1 ) __lm_p0 ( __lm_any_moved __lm_mv ) != 0 ( nurl_str_len g_lm_inner ) {
@@ -53910,6 +54023,45 @@ unsafe @ __l2n_list s lst → s {
     }
     ( nurl_lex_set_pos lex here )
     ^ out
+}
+
+// Can a field after field `idx` of the literal being built own something?
+// A struct's declared field types say; an option's or a result's payload
+// is its last field; a variant's later payloads may.
+@ __rl_more_after i syms s sname i paycount i idx b is_wrap → b {
+    ? is_wrap { ^ F } {}
+    ? >= paycount 0 { ^ < idx paycount } {}
+    ? == 0 ( nurl_str_len sname ) { ^ T } {}
+    ? != 0 ( nurl_sym_len2 syms sname `__variants` ) { ^ T } {}
+    : s fc ( nurl_sym_get2 syms sname `__field_count` )
+    ? == 0 ( nurl_str_len fc ) { ^ T } {}
+    : i cnt ( nurl_str_to_int fc )
+    : ~ i k + idx 1
+    ~ < k cnt {
+        : s ft ( nurl_sym_get syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int k ) `__type` ) ) )
+        ? | == 0 ( nurl_str_len ft ) ( __elem_owns ft syms ) { ^ T } {}
+        = k + k 1
+    }
+    ^ F
+}
+
+// A new `@.__nurl_rlown.N`: does returned literal N hold a value of its own
+// (g_rl_own, known where the literal closes)?
+@ rlown_flag → i {
+    : i next + 1 ( nurl_str_to_int ( nurl_sym_get g_pending_impl `rlown_count` ) )
+    ( nurl_sym_def g_pending_impl `rlown_count` ( nurl_str_int next ) )
+    ^ next
+}
+
+@ mem_emit_rlown_flags → v {
+    : s rlf ( nurl_sym_get g_pending_impl `rlownflags` )
+    : i rlf_n ( nurl_str_len rlf )
+    : ~ i rlf_p 0
+    ~ < rlf_p rlf_n {
+        : i rlf_e0 ( __word_end rlf rlf_n rlf_p ) : s number ( __span_dup rlf rlf_p rlf_e0 ) = rlf_p + rlf_e0 1
+        : i rlf_e1 ( __word_end rlf rlf_n rlf_p ) : s val ( __span_dup rlf rlf_p rlf_e1 ) = rlf_p + rlf_e1 1
+        ( nurl_print `@.__nurl_rlown.` ) ( nurl_print number ) ( nurl_print ` = private constant i1 ` ) ( nurl_print val ) ( nurl_print `\n` )
+    }
 }
 
 // Is the token at `lex` where the value a `^` hands back starts
@@ -84161,6 +84313,7 @@ unsafe @ __compile_pipeline s src s path i syms i cg → v {
         ( mem_emit_env_flags )
         ( mem_emit_dtor_flags )
         ( mem_emit_scratch_flags )
+        ( mem_emit_rlown_flags )
         ( mem_emit_guard_flags )
         ( resolve_pending_escapes )
         = g_vk_assume_on 1
