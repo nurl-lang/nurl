@@ -1,9 +1,10 @@
-// map_set_of_an_owning_value_ends_a_view_of_the_value_it_replaces: agora #383 — `map_set` on a `( HashMap s String )` replacing the String a view was taken of: the replace rule below is for values that own nothing
+// map_set_of_an_owning_value_ends_a_view_of_the_value_it_replaces: agora #383 — `map_set` on a `( HashMap s String )` replacing the String a view was taken of: the replaced String is dropped
 // main 87895b72: rejected already.
-// map: §2.10 | A2 | rejected | - | agora #383: `map_set` on a `( HashMap s String )` replacing the String a view was taken of: the replace rule below is for values that own nothing
+// map: §2.10 | A2 | rejected | - | agora #383: `map_set` on a `( HashMap s String )` replacing the String a view was taken of: the replaced String is dropped
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/hashmap.nu`
+
 @ main → i {
     : ( HashMap s String ) m ( map_new [s String] )
     ( map_set [s String] m `k` ( string_from `a value long enough to live on the heap` ) \ s x → i { ^ ( hash_string x ) } \ s a s b → b { ^ ( eq_string a b ) } )
