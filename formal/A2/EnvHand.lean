@@ -154,8 +154,8 @@ theorem MInv.addUnset {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} (hx : Γ x
     exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.of_blk rfl⟩, h4⟩
 
 /-- A tree of an owning type is owned. -/
-theorem WFv.owns_owning {t : Ty} {v : Val} (hw : WFv t v) (ho : t.owning = true) : v.owns = true := by
-  cases hw <;> simp_all [Val.owns, Ty.owning]
+theorem WFv.owns_owning {t : Ty} {v : Val} (hw : WFv t v) (ho : t.owning = true) : v.owns = true :=
+  hw.owns ho
 
 /-- The context a hand-over leaves: what depended on the package `c` ended
     (`kill .replace`, as a move of it ends it), `c` moved out, the

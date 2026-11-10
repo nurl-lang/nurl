@@ -1882,6 +1882,7 @@ theorem _root_.A2.WFv.noView_fits {τ : Ty} {v : Val} (hw : WFv τ v) (hhv : τ.
   | arc _ _ => cases hs
   | lk => cases hs
   | cell => cases hs
+  | dtor _ _ ih => exact ih hhv hs
 
 /-- So what a spawned function takes holds no trait object but one whose box
     `: Send` admits: none whose box holds a view, none of a trait the spawn's

@@ -225,6 +225,9 @@ inductive WFv : Ty → Val → Prop
   | lk {t : Ty} {k : Nat} : WFv (.lk t) (.lk k)
   /-- A3.5: a cell share; its block is a lock block of its type too. -/
   | cell {t : Ty} {k : Nat} : WFv (.cell t) (.cell k)
+  /-- A2-drop.3: a destructor type's values are its inner type's, a struct's
+      or an enum's (`% Drop` is on one of these). -/
+  | dtor {f : Nat} {t : Ty} {v : Val} : t.isStruct = true → WFv t v → WFv (.dtor f t) v
 
 /-- A3.1: tree `T` of type `τ` holds a share of block `k`, whose payload is
     a `u`: the one it carries, `some p`, or (A3.2) none, for a lock share.
@@ -249,6 +252,9 @@ inductive ArcIn : Ty → Val → Ty → Nat → Option Val → Prop
   | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {x : Val} {cs : List (Var × PMode × Ty)} {u : Ty}
       {k : Nat} {p : Option Val} {q : Cross} :
       ArcIn te x u k p → q.shares = true → ArcIn (.fn ms q) (.pkg fs te ms x cs) u k p
+  /-- A2-drop.3: a destructor type's values are its inner type's. -/
+  | dtor {f : Nat} {t : Ty} {x : Val} {u : Ty} {k : Nat} {p : Option Val} :
+      ArcIn t x u k p → ArcIn (.dtor f t) x u k p
 
 /-- A3.3: a block an `arc` share names: an `arc` block holding `p`, or a
     view of a lock block (`rw_read`'s guard), whose payload `p` is a share of
@@ -270,6 +276,81 @@ def ShareFits (b : Option Blk) (u : Ty) : Option Val → Prop
     (A3.2) a lock block of its type. -/
 def SharesIn (B : Nat → Option Blk) (τ : Ty) (T : Val) : Prop :=
   ∀ u k p, ArcIn τ T u k p → ShareFits (B k) u p
+
+/-! A2-drop.3: a destructor type's values are its inner type's. -/
+theorem WFv.dtor_iff {f : Nat} {t : Ty} {v : Val} : WFv (.dtor f t) v ↔ t.isStruct = true ∧ WFv t v :=
+  ⟨fun h => by cases h; constructor <;> assumption, fun ⟨ho, h⟩ => .dtor ho h⟩
+theorem WFv.undtor {τ : Ty} {v : Val} (h : WFv τ v) : WFv τ.undtor v := by
+  induction τ with
+  | dtor _ _ ih => exact ih (WFv.dtor_iff.mp h).2
+  | _ => exact h
+/-- A tree of `τ` and one of the type under its wrappers: the second is a
+    tree of `τ` too (what a wrapper asks is of the type, not the value). -/
+theorem WFv.rewrap {τ : Ty} {v v' : Val} (h : WFv τ v) (h' : WFv τ.undtor v') : WFv τ v' := by
+  induction τ with
+  | dtor _ _ ih =>
+    obtain ⟨ho, hi⟩ := WFv.dtor_iff.mp h
+    exact .dtor ho (ih hi h')
+  | _ => exact h'
+/-- An integer is a tree of the integer type only. -/
+theorem WFv.int_inv {t : Ty} {n : Nat} (h : WFv t (.int n)) : t = .int := by
+  generalize hv : Val.int n = v at h
+  induction h with
+  | int => rfl
+  | dtor ho _ ih => cases ih hv; cases ho
+  | _ => cases hv
+
+/-- An integer holds no share. -/
+theorem ArcIn.not_int {t : Ty} {n : Nat} {u : Ty} {k : Nat} {p : Option Val} (h : ArcIn t (.int n) u k p) :
+    False := by
+  generalize hv : Val.int n = v at h
+  induction h with
+  | dtor _ ih => exact ih hv
+  | _ => cases hv
+
+/-- A node is a tree of a `Vec` of its own element type, under wrappers. -/
+theorem WFv.node_ty {σ t : Ty} {c d : Nat} {es : List Val} (h : WFv σ (.node t c d es)) :
+    σ.undtor = .vec t := by
+  have hu := h.undtor; have hnd := Ty.undtor_ne σ
+  generalize σ.undtor = σ' at hu hnd ⊢
+  cases hu with
+  | node => rfl
+  | dtor => exact absurd rfl (hnd _ _)
+
+/-- A node in the place of one of the same element type, at the type the
+    first is a tree of. -/
+theorem WFv.node_hole {σ t : Ty} {c d c' d' : Nat} {es es' : List Val} (h : WFv σ (.node t c d es))
+    (h' : WFv (.vec t) (.node t c' d' es')) : WFv σ (.node t c' d' es') :=
+  h.rewrap (by rw [h.node_ty]; exact h')
+
+theorem ArcIn.dtor_iff {f : Nat} {t : Ty} {x : Val} {u : Ty} {k : Nat} {p : Option Val} :
+    ArcIn (.dtor f t) x u k p ↔ ArcIn t x u k p :=
+  ⟨fun h => by cases h; assumption, .dtor⟩
+theorem ArcIn.undtor_iff {τ : Ty} {x : Val} {u : Ty} {k : Nat} {p : Option Val} :
+    ArcIn τ.undtor x u k p ↔ ArcIn τ x u k p := by
+  induction τ with
+  | dtor _ _ ih => rw [Ty.undtor_dtor, ih, ArcIn.dtor_iff]
+  | _ => exact Iff.rfl
+theorem SharesIn.dtor_iff {B : Nat → Option Blk} {f : Nat} {t : Ty} {T : Val} :
+    SharesIn B (.dtor f t) T ↔ SharesIn B t T := by
+  simp only [SharesIn, ArcIn.dtor_iff]
+theorem SharesIn.undtor_iff {B : Nat → Option Blk} {τ : Ty} {T : Val} :
+    SharesIn B τ.undtor T ↔ SharesIn B τ T := by
+  simp only [SharesIn, ArcIn.undtor_iff]
+
+/-- A2-drop.3: `peel_dtor τ σ hnd hw` peels the destructor wrappers off `τ`:
+    the tree's `hw : WFv τ v`, and every `ArcIn` and `SharesIn` at `τ` (and,
+    from `Invariant.lean` on, every `SharesOK`, `ViewIn`, `ViewsOK` and `ValOK`),
+    in the goal and the hypotheses, is restated at `σ`, its type under the wrappers, and `hnd : ∀ f t, σ ≠ .dtor
+    f t`.  A case split on `hw` then meets no `dtor` case but the absurd one. -/
+syntax "peel_dtor " ident ident ident ident : tactic
+macro_rules
+  | `(tactic| peel_dtor $τ $σ $hnd $hw) => `(tactic| (
+      have $hnd := Ty.undtor_ne $τ
+      replace $hw := WFv.undtor $hw
+      try simp only [← ArcIn.undtor_iff (τ := $τ)] at *
+      try simp only [← SharesIn.undtor_iff (τ := $τ)] at *
+      generalize ($τ).undtor = $σ at *))
 
 /-- A3.3, **read guards are `% NotSend`**: a read guard (a share of a view,
     what `rw_read` hands back) is released by the thread that took it — the
@@ -429,6 +510,14 @@ def Val.owns : Val → Bool
   | .lk _ => true      -- A3.2: so is a lock share
   | .cell _ => true    -- A3.5: and a cell share
   | _ => false
+
+/-- A tree of an owning type owns what it holds. -/
+theorem WFv.owns {t : Ty} {v : Val} (h : WFv t v) (ho : t.owning = true) : v.owns = true := by
+  induction h with
+  | int => cases ho
+  | view => cases ho
+  | dtor h1 _ ih => exact ih (Ty.owning_of_isStruct h1)
+  | _ => rfl
 
 /-- Handing a value on: an owner gives up its value, anything else is
     copied.  A3.5's third cut: a borrowed value handed on holds no library

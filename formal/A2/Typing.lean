@@ -117,7 +117,12 @@ def rootKind (t : Ty) (k : Kind) : Kind :=
   | .prod _ _, .self => .view
   | .sum _ _, .self => .view
   | .fn _ _, .self => .view
+  | .dtor _ _, .self => .view   -- A2-drop.3: a destructor value is lent as a struct is
   | _, k => k
+
+/-- A root lends in the way asked, or (a whole struct, view or closure) as a view. -/
+theorem rootKind_cases (t : Ty) (k : Kind) : rootKind t k = k ∨ (k = .self ∧ rootKind t k = .view) := by
+  cases t <;> cases k <;> simp [rootKind]
 
 /-- What a value borrowed from `y` (whose entry is `E`) in way `k` depends
     on: a root lends directly, a borrow passes on what it borrows from. -/
@@ -394,6 +399,7 @@ def elemE (y : Var) (E : Entry) : Ty → Entry
   | .arc t => ⟨.arc t, .bor, true, derive y E .inner, E.held, false, false⟩
   | .lk t => ⟨.lk t, .bor, true, derive y E .inner, E.held, false, false⟩
   | .cell t => ⟨.cell t, .bor, true, derive y E .inner, E.held, false, false⟩
+  | .dtor f t => ⟨.dtor f t, .bor, true, derive y E .inner, E.held, false, false⟩
 
 /-- An element moved out of `y` by `vec_pop`: an element `Vec` or struct is
     owned. -/
@@ -405,6 +411,7 @@ def popE (y : Var) (E : Entry) : Ty → Entry
   | .arc t => ⟨.arc t, .own, true, [], E.held, false, false⟩
   | .lk t => ⟨.lk t, .own, true, [], E.held, false, false⟩
   | .cell t => ⟨.cell t, .own, true, [], E.held, false, false⟩
+  | .dtor f t => ⟨.dtor f t, .own, true, [], E.held, false, false⟩
   | t => elemE y E t
 
 /-- What a field of the struct `y` (entry `E`) lends: what is inside an
@@ -1600,6 +1607,7 @@ theorem hasFn_holdsView {t : Ty} (h : t.hasFn = true) : t.holdsView = true := by
   | arc t ih => exact ih h
   | lk t ih => exact ih h
   | cell t ih => exact ih h
+  | dtor _ t ih => exact ih h
 
 /-- A3.5b: the environment of a Send closure (its type's `q` is not `any`)
     holds no view, so no closure that holds bindings by name, and the closure

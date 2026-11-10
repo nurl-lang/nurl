@@ -85,6 +85,9 @@ inductive Ty where
   | cell (t : Ty)     -- A3.5: a share of a library handle's state (a `PNCounter`, a `TcpConn`, a
                       -- `Cell`): a lock block whose payload, a `t`, the library changes in place
                       -- through any share; Send, not Sync
+  | dtor (f : Nat) (t : Ty)  -- A2-drop.3: a `t` whose drop first runs the program's function `f`
+                             -- (its `% Drop`, DtorOK); the destructor is on the type, so every
+                             -- drop of such a value runs it, wherever the value went
 deriving DecidableEq, Repr
 
 /-- Does a value of this type hold views (so that storing one into a
@@ -100,6 +103,7 @@ def Ty.holdsView : Ty → Bool
   | .arc t => t.holdsView
   | .lk t => t.holdsView
   | .cell t => t.holdsView
+  | .dtor _ t => t.holdsView
 
 /-- May a value of this type hold a closure that holds bindings by name (or
     views)?  A3.5b: a Send closure (`fn ms q`, `q` not `any`) holds neither, so
@@ -114,6 +118,7 @@ def Ty.hasFn : Ty → Bool
   | .arc t => t.hasFn
   | .lk t => t.hasFn
   | .cell t => t.hasFn
+  | .dtor _ t => t.hasFn
 
 /-- A3.1: may a value of this type hold a share (an `Arc`)?  A closure's
     environment may, unless its type says it holds none (A3.5b: `bare`). -/
@@ -127,6 +132,7 @@ def Ty.hasArc : Ty → Bool
   | .arc _ => true
   | .lk _ => true
   | .cell _ => true
+  | .dtor _ t => t.hasArc
 
 /-- A3.5: may a value of this type hold a cell share (a library handle whose
     copies are one state)?  A closure's environment may, unless its type says
@@ -147,6 +153,25 @@ def Ty.hasCell : Ty → Bool
   | .arc t => t.hasCell
   | .lk _ => false
   | .cell _ => true
+  | .dtor _ t => t.hasCell
+
+/-- A2-drop.3: the type under every destructor wrapper; a destructor
+    type's values are those of the type it wraps. -/
+def Ty.undtor : Ty → Ty
+  | .dtor _ t => t.undtor
+  | t => t
+
+theorem Ty.undtor_ne (τ : Ty) (f : Nat) (t : Ty) : τ.undtor ≠ .dtor f t := by
+  induction τ with
+  | dtor _ _ ih => exact ih
+  | _ => intro h; cases h
+
+@[simp] theorem Ty.undtor_dtor (f : Nat) (t : Ty) : (Ty.dtor f t).undtor = t.undtor := rfl
+
+theorem Ty.holdsView_undtor (τ : Ty) : τ.undtor.holdsView = τ.holdsView := by
+  induction τ with
+  | dtor _ _ ih => exact ih
+  | _ => rfl
 
 /-- A type that holds no share holds no cell share. -/
 theorem Ty.hasCell_of_hasArc {t : Ty} (h : t.hasArc = false) : t.hasCell = false := by
@@ -164,6 +189,7 @@ theorem Ty.hasCell_of_hasArc {t : Ty} (h : t.hasArc = false) : t.hasCell = false
   | arc _ _ => cases h
   | lk _ _ => cases h
   | cell _ _ => cases h
+  | dtor _ t ih => exact ih h
 
 /-- A3.6: does a value of this type synchronise itself, so that a module
     global set at start may hold it and every thread reach it?  A lock share
@@ -174,6 +200,13 @@ theorem Ty.hasCell_of_hasArc {t : Ty} (h : t.hasArc = false) : t.hasCell = false
 def Ty.sync : Ty → Bool
   | .lk _ => true
   | .arc t => !t.hasCell
+  | _ => false
+
+/-- A2-drop.3: a struct or an enum, what `% Drop` is on (a destructor type
+    wraps one of these). -/
+def Ty.isStruct : Ty → Bool
+  | .prod _ _ => true
+  | .sum _ _ => true
   | _ => false
 
 /-- A2 types: a view's element type holds no views of its own (a view of a
@@ -194,6 +227,7 @@ def Ty.ok : Ty → Bool
                                    -- shares, each value going in past the crossing check
   | .cell t => t.ok && !t.holdsView  -- A3.5: a cell's payload is a lock's (A3.5's second cut:
                                      -- shares in it too, each going in past the crossing check)
+  | .dtor _ t => t.isStruct && t.ok  -- A2-drop.3: `% Drop` is on a struct or an enum
 
 /-- A type whose values own what they hold: a `Vec` or a struct.  Its
     binding is an owner (or borrows one). -/
@@ -205,7 +239,11 @@ def Ty.owning : Ty → Bool
   | .arc _ => true
   | .lk _ => true
   | .cell _ => true
+  | .dtor _ _ => true
   | _ => false
+
+theorem Ty.owning_of_isStruct {t : Ty} (h : t.isStruct = true) : t.owning = true := by
+  cases t <;> simp_all [Ty.isStruct, Ty.owning]
 
 /-- What an operation does to a container, ordered by what it ends.
 

@@ -90,6 +90,7 @@ theorem frees_exists {τ : Ty} {T : Val} (hw : WFv τ T) :
     intro a hn ha
     obtain ⟨a1, h1⟩ := ih a (by simpa using hn) (fun i hi => ha i (by simpa using hi))
     exact ⟨a1, Frees.pkg h1⟩
+  | dtor _ _ ih => exact ih
 
 /-! ### Owned slots after an update -/
 
@@ -203,5 +204,6 @@ theorem ViewIn.sub {τ T s v} (h : ViewIn τ T s v) : Sub v T := by
   | inl _ ih => exact Sub.inl ih
   | inr _ ih => exact Sub.inr ih
   | pkg _ ih => exact Sub.pkg ih
+  | dtor _ ih => exact ih
 
 end A2

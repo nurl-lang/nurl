@@ -205,7 +205,7 @@ theorem Giveable.shares {B : Nat → Option Blk} {t : Ty} {o : Bool} {v : Val} (
   | true => exact h.2
   | false =>
     cases v with
-    | int n => exact fun _ _ _ ha => by cases ha
+    | int n => exact fun _ _ _ ha => ha.not_int.elim
     | _ => simp [Giveable] at h
 
 theorem Release.back {m m' : Mem} {k : Nat} {t : Ty} {x : Var} (h : Release m k t x m') :

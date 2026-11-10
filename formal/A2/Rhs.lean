@@ -179,6 +179,7 @@ theorem ValOK.grow {m m' : Mem} (hst : m'.st = m.st) (hb : BlkLe m.blk m'.blk) {
   | inl _ ih => exact .inl ih
   | inr _ ih => exact .inr ih
   | pkg _ hq ih => exact .pkg ih hq
+  | dtor _ ih => exact .dtor ih
 
 theorem SlotOK.grow {m m' : Mem} (hst : m'.st = m.st) (hb : BlkLe m.blk m'.blk) {E : Entry} {sl : Slot}
     (hs : SlotOK m E sl) : SlotOK m' E sl := by
@@ -548,7 +549,7 @@ theorem derive_named {Γ : Ctx} {y : Var} {E : Entry} (h : NameOK Γ E) {k : Kin
   · intro d hd b t hkd
     simp only [List.mem_singleton] at hd; subst hd
     exfalso
-    cases hty : E.ty <;> cases k <;> simp_all [rootKind, Kind.isName]
+    rcases rootKind_cases E.ty k with h' | ⟨rfl, h'⟩ <;> simp_all [Kind.isName]
   · rename_i hr
     have ho : E.mode.ownSlot = false := by cases hm : E.mode <;> simp_all [Mode.isRoot, Mode.ownSlot]
     intro d hd b t hkd
@@ -567,6 +568,7 @@ theorem elemE_named {Γ : Ctx} {y : Var} {E : Entry} (h : NameOK Γ E) (t : Ty) 
   | arc a => show DepsNamed Γ (derive y E .inner ++ E.held); exact (derive_named h rfl).append h.held
   | lk a => show DepsNamed Γ (derive y E .inner ++ E.held); exact (derive_named h rfl).append h.held
   | cell a => show DepsNamed Γ (derive y E .inner ++ E.held); exact (derive_named h rfl).append h.held
+  | dtor f a => show DepsNamed Γ (derive y E .inner ++ E.held); exact (derive_named h rfl).append h.held
 
 theorem projDeps_named {Γ : Ctx} {y : Var} {E : Entry} (h : NameOK Γ E) : DepsNamed Γ (projDeps y E) := by
   unfold projDeps
@@ -684,6 +686,7 @@ theorem WFv.noView_pkg {τ : Ty} {v : Val} (hw : WFv τ v) (hhv : τ.holdsView =
   | arc _ _ => cases hs
   | lk => cases hs
   | cell => cases hs
+  | dtor _ _ ih => exact ih hhv hs
 
 /-- ... so its packages are well formed (`PkgsOK`): none captures anything. -/
 theorem WFv.pkgsOK_noView {τ : Ty} {v : Val} (hw : WFv τ v) (hhv : τ.holdsView = false) : PkgsOK v := by
@@ -745,6 +748,7 @@ theorem valOK_cell_sub {m : Mem} {k : Nat} {τ : Ty} {w : Val} {P H : List Dep}
   | pkg _ _ ih =>
     cases hs with
     | pkg hs => obtain ⟨dep, hd, rest⟩ := ih hs; exact ⟨dep, append_envDeps_sub hd, rest⟩
+  | dtor _ ih => exact ih hs
 
 /-- One step back along a live borrow's dependencies: the cell share it holds
     is in an owned slot's tree, or at the top of a borrowed parameter it
@@ -1043,6 +1047,15 @@ theorem out_borrowWhole {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Ent
               Or.inr (Or.inr (Or.inr (Or.inr ⟨_, _, hw, Top.refl _, rfl⟩))), Or.inl ⟨rfl, rfl⟩⟩
         · rw [hv] at hw; cases hw
       · rw [ht] at hty; cases hty
+    | dtor f a =>
+      rcases hroot with h | ⟨_, t, ht⟩
+      · obtain ⟨w, hw, hok⟩ := hi.bor_val hy hl (by rw [h]; rfl)
+        rcases hv with hv | ⟨_, _, _, _, hv, _⟩
+        · rw [slot_val_eq hv hw]
+          have hd : derive y E .self = [⟨y, .view⟩] := by simp [derive, hisroot, hty, rootKind]
+          rw [hd, ← hty]; exact valOK_via hw hok (Top.refl _) (by simp)
+        · rw [hv] at hw; cases hw
+      · rw [ht] at hty; cases hty
   names hn := by
     have h := hi.names y E hy hl (hn.imp id fun h => by cases h)
     show DepsNamed Γ (derive y E .self ++ E.held); exact (derive_named h rfl).append h.held
@@ -1133,6 +1146,10 @@ theorem lend_valOK' {m : Mem} {H : List Dep} {τ : Ty} {e : Val} (hw : WFv τ e)
       (fun k q hs => upa (ha k q (Top.pkg hs))) (fun k hs => upc (hc k (Top.pkg hs))) hvr
       (fun c' hc' => mem_envDeps.mpr ⟨hnm c' (by simp only [Val.names]; exact List.mem_append_right _ hc'), hown c' hc'⟩)
       (hsh.pkg' hq) (fun s _ => ViewsOK.mono (List.subset_append_right _ _) hvr)) hq
+  | @dtor f t v ho _ ih =>
+    intro hpk P hn ha hc hvs hnm hsh _
+    exact .dtor (ih hpk hn ha hc (ViewsOK.dtor_iff.mp hvs) hnm (SharesOK.dtor_iff.mp hsh)
+      (fun s h => by subst h; simp [Ty.isStruct] at ho))
 
 theorem lend_valOK {m : Mem} {H : List Dep} {τ : Ty} {e : Val} (hw : WFv τ e) (hpk : PkgsOK e) {P : List Dep}
     (hn : ∀ n, Sub n e → ∃ dep ∈ P, Landed m dep n)
@@ -1145,7 +1162,9 @@ theorem lend_valOK {m : Mem} {H : List Dep} {τ : Ty} {e : Val} (hw : WFv τ e) 
     (fun k ht => let ⟨d, hd, h⟩ := hn _ ht.sub; ⟨d, hd, CellLanded.of_landed h (hpc k)⟩) hv hnm hsh hs
 
 theorem lands_rootKind_self (t : Ty) (n : Val) : Lands (rootKind t .self) n n := by
-  cases t <;> first | exact Or.inl ⟨rfl, rfl⟩ | exact Or.inr (Or.inl ⟨rfl, rfl⟩)
+  rcases rootKind_cases t .self with h | ⟨_, h⟩ <;> rw [h]
+  · exact Or.inl ⟨rfl, rfl⟩
+  · exact Or.inr (Or.inl ⟨rfl, rfl⟩)
 
 /-- What a borrowed struct holds is already lent: lending it again changes
     nothing. -/
@@ -1161,6 +1180,7 @@ theorem ValOK.lend {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m �
   | inl _ ih => simp [lendOf, ih]
   | inr _ ih => simp [lendOf, ih]
   | pkg _ _ ih => simp [lendOf, ih]
+  | dtor _ ih => exact ih
 
 theorem elemE_mode (y : Var) (E : Entry) (t : Ty) : (elemE y E t).mode = .bor := by
   cases t <;> rfl
@@ -1185,6 +1205,7 @@ theorem out_at {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t : 
     | arc a => exact this
     | lk a => exact this
     | cell a => exact this
+    | dtor f a => exact this
   wf hn' := by
     rw [bor_vdeps _ (elemE_mode ..)]
     have hnint : E.ty ≠ .int := by rw [hty]; simp
@@ -1198,6 +1219,7 @@ theorem out_at {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t : 
     | arc a => exact wf_append (wf_derive hi hy hl hnint _) (wf_held (E := E) hi hy hl hnint)
     | lk a => exact wf_append (wf_derive hi hy hl hnint _) (wf_held (E := E) hi hy hl hnint)
     | cell a => exact wf_append (wf_derive hi hy hl hnint _) (wf_held (E := E) hi hy hl hnint)
+    | dtor f a => exact wf_append (wf_derive hi hy hl hnint _) (wf_held (E := E) hi hy hl hnint)
   valOwn h := by rw [elemE_mode] at h; cases h
   valBor _ := by
     obtain ⟨c0, d0, es0, hvec0, hw, hvs, hroot, hbor, hns, hshv⟩ := hi.vec_node hy hl hty
@@ -1260,6 +1282,13 @@ theorem out_at {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t : 
           cases hm : E.mode <;> simp_all [Mode.isRoot])
         obtain ⟨d', hd', hla'⟩ := derive_lands (hroot ·) hbor' (Lands.elem hmem) (by rw [hty]; rfl)
         exact .cell (hshv.elem hmem).cell ⟨d', hd', CellLanded.of_landed hla' (hi.noCellPay _)⟩
+    | dtor f a =>
+      refine lend_valOK hwe hpke (fun n' hs => ?_) hi.noCellPay (hvs.elem hmem) (hns.sub (names_elem hmem))
+        (hshv.elem hmem) (fun s h => by cases h)
+      have hbor' : E.mode.isRoot = false → ∃ dep ∈ E.path, Landed m dep (.node (.dtor f a) c d es) := fun h => hbor (by
+        cases hm : E.mode <;> simp_all [Mode.isRoot])
+      exact derive_lands (hroot ·) hbor' (Or.inr (Or.inr ⟨rfl, _, Child.elem hmem, hs⟩))
+        (by rw [hty]; rfl)
   names hn := elemE_named (hi.names y E hy hl (Or.inl (by rw [hty]; simp))) t
   held := by
     obtain ⟨c0, d0, es0, hvec0, hw, _, _, _, hns, hshv⟩ := hi.vec_node hy hl hty
@@ -1351,6 +1380,7 @@ theorem out_sat {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t :
     | arc a => exact wf_append (wf_derive hi hy hl hnint _) (wf_held (E := E) hi hy hl hnint)
     | lk a => exact wf_append (wf_derive hi hy hl hnint _) (wf_held (E := E) hi hy hl hnint)
     | cell a => exact wf_append (wf_derive hi hy hl hnint _) (wf_held (E := E) hi hy hl hnint)
+    | dtor f a => exact wf_append (wf_derive hi hy hl hnint _) (wf_held (E := E) hi hy hl hnint)
   valOwn h := by rw [elemE_mode] at h; cases h
   valBor _ := by
     obtain ⟨d0, o0, l0, c0, es0, hs0, hda0, _, _, hw, hroot, hbor⟩ := hi.slice_node hy hl hty
@@ -1417,6 +1447,13 @@ theorem out_sat {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t :
       | cell =>
         obtain ⟨d', hd', hla'⟩ := derive_lands (hroot ·) hbor'' (Lands.elem hmem) (by rw [hty]; rfl)
         exact .cell (hshv.elem hmem).cell ⟨d', hd', CellLanded.of_landed hla' (hi.noCellPay _)⟩
+    | dtor f a =>
+      refine lend_valOK hwe hpke (fun n' hs => ?_) hi.noCellPay
+        (ViewsOK.none (by simpa [Ty.holdsView] using hok.2) _ _)
+        (NamesIn.nil _ (hwe.names_nil (by simpa [Ty.holdsView] using hok.2)))
+        (hshv.elem hmem) (fun s h => by cases h)
+      exact derive_lands (hroot ·) hbor'' (Or.inr (Or.inr ⟨rfl, _, Child.elem hmem, hs⟩))
+        (by rw [hty]; rfl)
   names hn := elemE_named (hi.names y E hy hl (Or.inl (by rw [hty]; simp))) t
   held := by
     obtain ⟨d0, o0, l0, c0, es0, hs0, hda0, _, _, hw, _, _⟩ := hi.slice_node hy hl hty
@@ -2302,4 +2339,22 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
         · exact List.nodup_nil
         · intro i hi'; nomatch hi'
         · intro x U hU i hi'; nomatch hi'
+    | dtor f a =>
+      cases hwe with
+      | dtor ho hwi =>
+        rw [WFv.owns hwi (Ty.owning_of_isStruct ho)]
+        have hok := hi.tyok hy; rw [hty] at hok
+        show RhsOut _ _ ⟨.dtor f a, .own, true, [], E.held, false, false⟩ _ true
+        refine ⟨rfl, Or.inl rfl, rfl, hok, fun _ r hr => ?_, fun _ => ⟨rfl, WFv.dtor ho hwi, ?_, ?_,
+          ?_, ?_, hsfT.sub (Sub.child hemem (Sub.refl _)),
+          fun i hi' => hi.heap.notPay hT (hsube.subset hi')⟩, (fun h => by cases h),
+          fun _ => hNk _ (hHeld _ (List.Subset.refl _)), hNi, hPk, fun _ => (hshT.elem hemem).of_blk rfl⟩
+        · exact hwfH r (by simpa [roots, Entry.vdeps, Mode.ownSlot] using hr)
+        · exact hvsT.keep_except hT hsfT (fun s' w h => ViewIn.child hemem h) hkeepF ⟨_, hm1y⟩
+        · exact hnT.sublist hsube
+        · exact fun i hi' => hi.heap.alloc y _ hT i (hsube.subset hi')
+        · intro x U hU i hi' hiU
+          rcases hown1 x U hU with ⟨_, rfl⟩ | ⟨hxy, h⟩
+          · exact hsep i hi' hiU
+          · exact hi.heap.disj y x _ U (Ne.symm hxy) hT h i (hsube.subset hi') hiU
 end A2
