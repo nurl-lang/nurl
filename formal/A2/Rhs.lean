@@ -195,7 +195,10 @@ theorem SlotOK.grow {m m' : Mem} (hst : m'.st = m.st) (hb : BlkLe m.blk m'.blk) 
 /-- What the invariant asks of the blocks. -/
 def BlocksIn (m : Mem) : Prop :=
   ∀ k bl, m.blk k = some bl → bl.ty.ok = true ∧ bl.ty.holdsView = false ∧
-    (∀ p, bl.pay = some p → WFv bl.ty p ∧ SharesOK m bl.ty p) ∧ (bl.kind = .lock ∨ bl.ty.hasCell = false)
+    (∀ p, bl.pay = some p → WFv bl.ty p ∧ SharesOK m bl.ty p) ∧ (bl.kind = .lock ∨ bl.ty.hasCell = false) ∧
+    -- A2-drop.3d: a block's payload owns no destructor value (the sweep that
+    -- frees a block runs no code)
+    bl.ty.dtorFree = true
 
 /-- **More blocks**: the invariant holds over a store with the same slots and
     more blocks, each as the invariant asks. -/
@@ -1701,13 +1704,13 @@ theorem MInv.share_lands {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : En
 
 /-- A share, owned: it holds nothing, and its block holds its payload. -/
 theorem out_share {m : Mem} {Γ : Ctx} {t : Ty} {k : Nat} {p : Val} (htok : t.ok = true)
-    (hvd : t.vecD = false)
+    (hvd : t.dtorFree = true)
     (hvf : t.holdsView = false) (hwp : WFv t p) (hk : ArcBlk (m.blk k) t p) :
     RhsOut m Γ ⟨.arc t, .own, true, [], [], false, false⟩ (.arc k p) true where
   own := rfl
   mode := Or.inl rfl
   live := rfl
-  tyok := by simp [Ty.ok, htok, hvf, hvd]
+  tyok := by simp [Ty.ok, htok, hvf, hvd, Ty.vecD_of_dtorFree hvd]
   wf _ r hr := by simp [roots, Entry.vdeps, Mode.ownSlot] at hr
   valOwn _ := ⟨rfl, .arc hwp hvf, ViewsOK.none (show (Ty.arc t).holdsView = false from hvf) _ _,
     List.nodup_nil, fun _ h => (nomatch h), fun _ _ _ _ h => (nomatch h), fun _ _ _ h => (by cases h),
@@ -1721,13 +1724,13 @@ theorem out_share {m : Mem} {Γ : Ctx} {t : Ty} {k : Nat} {p : Val} (htok : t.ok
 /-- A3.2: a lock share, owned: it holds nothing, and its block is a lock
     block of its type. -/
 theorem out_lkShare {m : Mem} {Γ : Ctx} {t : Ty} {k : Nat} (htok : t.ok = true)
-    (hvd : t.vecD = false)
+    (hvd : t.dtorFree = true)
     (hvf : t.holdsView = false) (hk : ∃ o, m.blk k = some ⟨t, .lock, o⟩) :
     RhsOut m Γ ⟨.lk t, .own, true, [], [], false, false⟩ (.lk k) true where
   own := rfl
   mode := Or.inl rfl
   live := rfl
-  tyok := by simp [Ty.ok, htok, hvf, hvd]
+  tyok := by simp [Ty.ok, htok, hvf, hvd, Ty.vecD_of_dtorFree hvd]
   wf _ r hr := by simp [roots, Entry.vdeps, Mode.ownSlot] at hr
   valOwn _ := ⟨rfl, .lk, ViewsOK.none (show (Ty.lk t).holdsView = false from hvf) _ _,
     List.nodup_nil, fun _ h => (nomatch h), fun _ _ _ _ h => (nomatch h), fun _ _ _ h => (by cases h),
@@ -1778,20 +1781,20 @@ theorem out_lockClone {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry
     RhsOut m Γ ⟨.lk t, .own, true, [], [], false, false⟩ (.lk k) true := by
   have hk := hi.lk_val ha hl hty hv
   have hok := hi.tyok ha; rw [hty] at hok
-  have hvd := Ty.ok_lk_vd hok
+  have hvd := Ty.ok_lk_free hok
   replace hok := Ty.ok_lk hok
   exact out_lkShare hok.1 hvd (by simpa using hok.2) hk
 
 /-- A3.5: a cell share, owned: it holds nothing, and names a lock block of
     its type. -/
 theorem out_cellShare {m : Mem} {Γ : Ctx} {t : Ty} {k : Nat} (htok : t.ok = true)
-    (hvd : t.vecD = false)
+    (hvd : t.dtorFree = true)
     (hvf : t.holdsView = false) (hk : ∃ o, m.blk k = some ⟨t, .lock, o⟩) :
     RhsOut m Γ ⟨.cell t, .own, true, [], [], false, false⟩ (.cell k) true where
   own := rfl
   mode := Or.inl rfl
   live := rfl
-  tyok := by simp [Ty.ok, htok, hvf, hvd]
+  tyok := by simp [Ty.ok, htok, hvf, hvd, Ty.vecD_of_dtorFree hvd]
   wf _ r hr := by simp [roots, Entry.vdeps, Mode.ownSlot] at hr
   valOwn _ := ⟨rfl, .cell, ViewsOK.none (show (Ty.cell t).holdsView = false from hvf) _ _,
     List.nodup_nil, fun _ h => (nomatch h), fun _ _ _ _ h => (nomatch h), fun _ _ _ h => (by cases h),
@@ -1844,7 +1847,7 @@ theorem out_cellClone {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry
     RhsOut m Γ ⟨.cell t, .own, true, [], [], false, false⟩ (.cell k) true := by
   have hk := hi.cell_val ha hl hty hv
   have hok := hi.tyok ha; rw [hty] at hok
-  have hvd := Ty.ok_cell_vd hok
+  have hvd := Ty.ok_cell_free hok
   replace hok := Ty.ok_cell hok
   exact out_cellShare hok.1 hvd (by simpa using hok.2) hk
 
@@ -1853,7 +1856,7 @@ theorem out_cellClone {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry
 theorem out_glob {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {t : Ty} (htok : t.ok = true) {v : Val}
     (hf : GlobFits m.blk t v) : RhsOut m Γ ⟨t, .own, true, [], [], false, false⟩ v true := by
   rcases hf with ⟨u, k, o, rfl, rfl, hk⟩ | ⟨u, k, p, rfl, rfl, hk⟩
-  · have hvd := Ty.ok_lk_vd htok
+  · have hvd := Ty.ok_lk_free htok
     replace htok := Ty.ok_lk htok
     exact out_lkShare htok.1 hvd (by simpa using htok.2) ⟨o, hk⟩
   · have hk' : ∃ kd, m.blk k = some ⟨u, kd, some p⟩ := by
@@ -1862,7 +1865,7 @@ theorem out_glob {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {t : Ty} (htok : t.ok = t
       · exact ⟨_, hk⟩
     obtain ⟨_, hk'⟩ := hk'
     obtain ⟨_, hvf, hpay, _⟩ := hi.blocks k _ hk'
-    have hvd := Ty.ok_arc_vd htok
+    have hvd := Ty.ok_arc_free htok
     replace htok := Ty.ok_arc htok
     exact out_share htok.1 hvd hvf (hpay p rfl).1 hk
 
@@ -1897,7 +1900,7 @@ theorem out_arcClone {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry}
     RhsOut m Γ ⟨.arc t, .own, true, [], [], false, false⟩ (.arc k p) true := by
   obtain ⟨hk, hwp, hvf⟩ := hi.arc_val ha hl hty hv
   have hok := hi.tyok ha; rw [hty] at hok
-  have hvd := Ty.ok_arc_vd hok
+  have hvd := Ty.ok_arc_free hok
   replace hok := Ty.ok_arc hok
   exact out_share hok.1 hvd hvf hwp hk
 
@@ -1911,7 +1914,7 @@ theorem out_arcGet {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry} (
   obtain ⟨hk, hwp, hvf⟩ := hi.arc_val ha hl hty hv
   have hsh : SharesOK m t p := hi.arcBlk_shares hk
   have hok := hi.tyok ha; rw [hty] at hok
-  have hvd := Ty.ok_arc_vd hok
+  have hvd := Ty.ok_arc_free hok
   replace hok := Ty.ok_arc hok
   have htok := hok.1
   have hnint : E.ty ≠ .int := by rw [hty]; simp

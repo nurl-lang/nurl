@@ -257,7 +257,7 @@ theorem Ty.hasDtor_of_isStruct {t : Ty} (h : t.isStruct = true) : t.hasDtor = fa
 /-- A2-drop.3b: a value of this type owns no destructor value in its
     tree.  A view owns nothing; a share's payload lives in its block, not in
     the tree of what holds the share (A2-drop.3d), and a closure's
-    environment is A2-drop.3c's. -/
+    environment holds none (A2-drop.3c, `Cross.Fits`). -/
 def Ty.dtorFree : Ty → Bool
   | .dtor _ _ => false
   | .vec t => t.dtorFree
@@ -296,19 +296,22 @@ def Ty.ok : Ty → Bool
   -- destructor type themselves, `Ty.vecD`, which only a binding's own type
   -- may be: such a binding is drained at its end, element by element, each
   -- running its destructor, `Step.scopeDDrain`; any other `Vec`'s drop
-  -- releases its elements, which runs no code, except a share's payload or
-  -- a closure's environment, A2-drop.3c and 3d)
+  -- releases its elements, which runs no code and releases no destructor
+  -- value: a share's payload and a closure's environment hold none, 3c, 3d)
   | .vec t => t.ok && !t.vecD && (t.dtorFree || t.hasDtor)
   | .slice t => t.ok && !t.holdsView && !t.vecD
   | .prod a b => a.ok && b.ok && !a.vecD && !b.vecD
   | .sum a b => a.ok && b.ok && !a.vecD && !b.vecD
   | .fn _ _ => true
-  | .arc t => t.ok && !t.holdsView && !t.vecD   -- A3.1: a payload holds no views
-  | .lk t => t.ok && !t.holdsView && !t.vecD  -- A3.2: nor does a lock's (it is Send); A3.2's second cut: it
-                                   -- may hold `arc` and lock shares; A3.5's second cut: and cell
-                                   -- shares, each value going in past the crossing check
-  | .cell t => t.ok && !t.holdsView && !t.vecD  -- A3.5: a cell's payload is a lock's (A3.5's second cut:
-                                     -- shares in it too, each going in past the crossing check)
+  -- (A2-drop.3d: a block's payload owns no destructor value: the sweep that
+  -- frees a block runs no code, and a check-out binding is no `letd`'s, so a
+  -- payload that would hold one is refused, stricter than nurlc)
+  | .arc t => t.ok && !t.holdsView && !t.vecD && t.dtorFree   -- A3.1: a payload holds no views
+  | .lk t => t.ok && !t.holdsView && !t.vecD && t.dtorFree  -- A3.2: nor does a lock's (it is Send); A3.2's
+                                   -- second cut: it may hold `arc` and lock shares; A3.5's second cut:
+                                   -- and cell shares, each value going in past the crossing check
+  | .cell t => t.ok && !t.holdsView && !t.vecD && t.dtorFree  -- A3.5: a cell's payload is a lock's (A3.5's
+                                     -- second cut: shares in it too, each going in past the crossing check)
   | .dtor _ t => t.isStruct && t.ok  -- A2-drop.3: `% Drop` is on a struct or an enum
 
 @[simp] theorem Ty.dtorFree_int : Ty.int.dtorFree = true := rfl
@@ -336,16 +339,25 @@ theorem Ty.ok_sum {a b : Ty} (h : (Ty.sum a b).ok = true) : a.ok = true ∧ b.ok
 theorem Ty.ok_slice {t : Ty} (h : (Ty.slice t).ok = true) : t.ok = true ∧ t.holdsView = false := by
   simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1
 theorem Ty.ok_arc {t : Ty} (h : (Ty.arc t).ok = true) : t.ok = true ∧ t.holdsView = false := by
-  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1
+  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1.1
 theorem Ty.ok_arc_vd {t : Ty} (h : (Ty.arc t).ok = true) : t.vecD = false := by
+  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1.2
+/-- A2-drop.3d: a block's payload owns no destructor value. -/
+theorem Ty.ok_arc_free {t : Ty} (h : (Ty.arc t).ok = true) : t.dtorFree = true := by
   simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.2
 theorem Ty.ok_lk {t : Ty} (h : (Ty.lk t).ok = true) : t.ok = true ∧ t.holdsView = false := by
-  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1
+  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1.1
 theorem Ty.ok_lk_vd {t : Ty} (h : (Ty.lk t).ok = true) : t.vecD = false := by
+  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1.2
+/-- A2-drop.3d: a block's payload owns no destructor value. -/
+theorem Ty.ok_lk_free {t : Ty} (h : (Ty.lk t).ok = true) : t.dtorFree = true := by
   simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.2
 theorem Ty.ok_cell {t : Ty} (h : (Ty.cell t).ok = true) : t.ok = true ∧ t.holdsView = false := by
-  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1
+  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1.1
 theorem Ty.ok_cell_vd {t : Ty} (h : (Ty.cell t).ok = true) : t.vecD = false := by
+  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1.2
+/-- A2-drop.3d: a block's payload owns no destructor value. -/
+theorem Ty.ok_cell_free {t : Ty} (h : (Ty.cell t).ok = true) : t.dtorFree = true := by
   simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.2
 
 /-- A type that owns no destructor value is no `Vec` of destructor values. -/
@@ -506,19 +518,24 @@ def PMode.bound : PMode → Eff
 /-- A3.5b: an environment of type `te`, with the bindings `cs` captured by
     name, holds no more than a closure's type says (`Cross`): a Send one holds
     no view and captures nothing by name, a Sync one also no cell share, a
-    bare one no share at all. -/
+    bare one no share at all.  A2-drop.3c: and, of any class, no destructor
+    value: a package's drop releases its environment running no code, so an
+    environment that holds one is refused (stricter than nurlc, whose
+    environment drop glue runs the captures' destructors). -/
 def Cross.Fits (q : Cross) (te : Ty) (cs : List (Var × PMode × Ty)) : Prop :=
   (q.views = false → te.holdsView = false ∧ cs = []) ∧
   (q.cells = false → te.hasCell = false) ∧
-  (q.shares = false → te.hasArc = false)
+  (q.shares = false → te.hasArc = false) ∧
+  te.holdsDtor = false
 
 /-- What fits reads of the captures is whether there are any, not their names. -/
 theorem Cross.Fits.map {q : Cross} {te : Ty} {cs : List (Var × PMode × Ty)} (h : q.Fits te cs)
     (f : Var × PMode × Ty → Var × PMode × Ty) : q.Fits te (cs.map f) :=
   ⟨fun hq => ⟨(h.1 hq).1, by rw [(h.1 hq).2]; rfl⟩, h.2⟩
 
-theorem Cross.fits_any (te : Ty) (cs : List (Var × PMode × Ty)) : Cross.any.Fits te cs :=
-  ⟨fun h => absurd h (by decide), fun h => absurd h (by decide), fun h => absurd h (by decide)⟩
+theorem Cross.fits_any (te : Ty) (cs : List (Var × PMode × Ty)) (hd : te.holdsDtor = false) :
+    Cross.any.Fits te cs :=
+  ⟨fun h => absurd h (by decide), fun h => absurd h (by decide), fun h => absurd h (by decide), hd⟩
 
 /-- A3.5b's order on classes, by what an environment may hold: `bare`, `sync`,
     `send`, `any`, each holding more than the one before. -/
@@ -562,7 +579,8 @@ theorem Cross.Le.shares {q q' : Cross} (h : q.Le q') (h' : q'.shares = false) : 
     a class fits every class above it. -/
 theorem Cross.Fits.mono {q q' : Cross} {te : Ty} {cs : List (Var × PMode × Ty)} (h : q.Fits te cs)
     (hle : q.Le q') : q'.Fits te cs :=
-  ⟨fun hv => h.1 (hle.views hv), fun hc => h.2.1 (hle.cells hc), fun hs => h.2.2 (hle.shares hs)⟩
+  ⟨fun hv => h.1 (hle.views hv), fun hc => h.2.1 (hle.cells hc), fun hs => h.2.2.1 (hle.shares hs),
+    h.2.2.2⟩
 
 /-- A3.4: an `Atomic`'s operations (`stdlib/std/atomic.nu`), each one
     `nurl_atomic_i64_*` (`__ATOMIC_SEQ_CST`) on the word. -/

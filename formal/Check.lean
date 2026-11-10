@@ -33,6 +33,16 @@ import A3
 #print axioms A2.Dtor.free_dtor_free
 #print axioms A2.Dtor.edit_drops_dtor_free
 #print axioms A2.Dtor.withElem_dtor_free
+-- A2-drop.3c: no closure or trait-object environment holds a destructor value
+#print axioms A2.Dtor.pack_env_dtor_free
+#print axioms A2.WFv.pkg_env_dtor_free
+#print axioms A2.Dtor.pkgs_env_dtor_free
+-- A2-drop.3d: no share's payload owns a destructor value
+#print axioms A2.Dtor.ok_payloads_free
+#print axioms A2.Dtor.shares_dtor_free
+#print axioms A2.Dtor.blocks_dtor_free
+#print axioms A2.Dtor.blk_pkgs_env_dtor_free
+#print axioms A2.Dtor.share_new_dtor_free
 #print axioms A2.Dtor.vec_elems_dtor_free
 #print axioms A2.Dtor.new_dtor_free
 #print axioms A2.Dtor.vecs_dtor_free
@@ -48,7 +58,6 @@ import A3
 #print axioms A2.DtorWitness.main5_letv_refused
 #print axioms A2.DtorWitness.enum_lends
 #print axioms A2.DtorWitness.enum_take_refused
-#print axioms A2.DtorWitness.lock_checkout_assign
 -- threads: moves, Arc's frozen shared payloads, Locked, RwLocked, Atomic, channels, library
 -- handles and the crossing check, module globals (A3/Claim.lean)
 #print axioms A3.claim

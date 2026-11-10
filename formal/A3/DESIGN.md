@@ -2091,8 +2091,9 @@ which it declares their receivers.
 
 **The statements** (`A3/Defs.lean`, after A3.5b's).
 - What each bound promises of an impl's type, with no capture by name:
-  - `TraitBound.fits_none`: nothing;
-  - `TraitBound.fits_send`: the box's type holds no view;
+  - `TraitBound.fits_none`: only that it holds no destructor value
+    (A2-drop.3c, asked of every package's environment);
+  - `TraitBound.fits_send`: also that the box's type holds no view;
   - `TraitBound.fits_sendSync`: it also holds no cell share.
 - The class is the bound: `StmtT.callc_recv_at` (a call's receiver is a
   `fn ms q` whose interface takes it at `q`, through `StmtT.sub` too),

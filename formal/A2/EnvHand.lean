@@ -200,7 +200,7 @@ theorem hand_minv {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : 
     rw [htc]
     cases hqs : q.shares with
     | true => exact ArcIn.pkg ha hqs
-    | false => exact absurd ha.hasArc (by rw [hq.2.2 hqs]; simp)
+    | false => exact absurd ha.hasArc (by rw [hq.2.2.1 hqs]; simp)
   have outy := out_part out hτ hwe (Sub.pkg (Sub.refl _)) hvin (by simp [Val.ids]) htok hain
   have hy0 : setE (kill .replace false c Γ) c { Ec with live := false, dtor := false } m.nv = none := by
     have hcn : c ≠ m.nv := fun e => by

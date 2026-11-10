@@ -102,7 +102,7 @@ the LLVM / C11 memory model rather than redefining it.
   and the milestones.
   - **A3.0** *(proven)* — threads that only move. A function the program
     marks is called on a new thread; its parameters are `sink` and of
-    types that hold no views (`SpawnOK`), so what crosses is trees the
+    types that hold no views and no destructor value (`SpawnOK`), so what crosses is trees the
     spawner gives up. Every thread runs A2's own step on the shared
     address space. In Lean: `A3.claim : A3.Claim` — no thread of a
     reachable configuration is stuck, no two threads race, and when every
@@ -258,8 +258,8 @@ the LLVM / C11 memory model rather than redefining it.
       library handles under the crossing check, and `send` closures are
       typed since A3.2's and A3.5's second cuts); a channel of destructor
       values, or of values holding one at any depth (its queue is a `Vec`,
-      whose element type `Ty.ok` asks to hold none since A2-drop.3b: see
-      *Destructors*); `chan_len`,
+      whose element type `Ty.ok` asks to hold none since A2-drop.3b, and a
+      lock's payload owns none since A2-drop.3d: see *Destructors*); `chan_len`,
       `chan_is_closed` and `select`. Deadlock freedom, and that
       a waiting `chan_recv` is woken, are not claimed.
   - **A3.3** *(proven)* — `RwLocked`: a value many threads
@@ -424,7 +424,8 @@ the LLVM / C11 memory model rather than redefining it.
       the bound at every pack (`ImplOK`), and the spawn's crossing check
       walks the box (`Sub.pkg`; `sendCheck_box_kept`: a library handle
       boxed and kept fails it, the runtime's vtable walk). h344: an
-      unbounded object crosses nothing, a `: Send Sync` one boxes no
+      unbounded object crosses nothing (and, as every package, boxes no
+      `% Drop` value: *Destructors*, A2-drop.3c), a `: Send Sync` one boxes no
       library handle (`dyn_cell_notSync`), and an `Arc` or a global's
       `Arc` takes only `: Send Sync` objects, and a lock or a channel a
       `: Send` one under the crossing check (A3.5's second cut). Not
@@ -646,7 +647,7 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   What follows from **reading the rules**, not from a theorem: that these
   binders are all the places an owned destructor value comes to rest in a
   binding, so its destructor runs where the binding ends, as nurlc runs it
-  — except for the check-out bindings below. And, for the drain, the run
+  (a check-out binding holds none, A2-drop.3d below). And, for the drain, the run
   the steps above compose to: each element's frame runs its destructor at
   its end (`scopeD_end_runs_dtor`, of a value that is no node) before the
   `Vec`'s frame is at its end again, so the elements go in index order,
@@ -674,8 +675,9 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   `vec (dtor f u)` (`Ty.vecD`) as a binding's own type only, and refuses it
   as any part of another type: a field, a payload, an element, a view's
   element, a share's, a lock's or a cell's payload (each composite asks
-  `!vecD` of its parts, and `RhsT.pair` / `inl` / `inr` / `arcNew` /
-  `lockNew` / `cellNew` of what moves in). Its binder is `letd x f r s`,
+  `!vecD` of its parts, and `RhsT.pair` / `inl` / `inr` of what moves in;
+  a share's payload owns no destructor value at all, 3d below). Its binder
+  is `letd x f r s`,
   with `f` the elements' destructor and `u` holding no views (`LetdTy`;
   `letv` refuses the type, it holds a destructor value), so a call's
   result and a `sink` parameter of that type are handed on first thing as
@@ -693,14 +695,22 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   or of a destructor type, `A2.Dtor.vec_elems_dtor_free`,
   `A2.Dtor.new_dtor_free`), so `free`, a truncation, an element set and
   `withElem` release or check out no destructor value, except a share's
-  payload or a closure's environment (3c, 3d): an element may be an `Arc`
-  or a lock of a destructor value, or a closure whose environment holds
-  one, and nurlc runs that destructor when the element's drop drops the
-  last share or the closure.
+  payload, which owns none either (3d, below).
   (On an empty `Vec`, `vec_pop` and `vec_remove` return `None` in nurlc; the
   calculus's `pop` / `popFront` panic there instead, an unwrap: a program
   that matches the option is the same program with the `None` arm taken
   before the call. The drain pops only a `Vec` that has an element.)
+- A2-drop.3c: no closure's or trait object's environment holds a
+  destructor value. A typed literal's environment type holds none
+  (`Cross.Fits`, of every class; `A2.Dtor.pack_env_dtor_free`), and in a
+  running configuration no package does, however deep it lies: in an
+  owner's tree (a field, an element, another package's environment:
+  `A2.Dtor.pkgs_env_dtor_free`) or in a block's payload
+  (`A2.Dtor.blk_pkgs_env_dtor_free`), both over
+  `A2.WFv.pkg_env_dtor_free`. A share an environment holds is of a block
+  whose payload owns none either (3d). This is a refusal, not the model
+  of nurlc's environment drop glue (the stricter-than-nurlc list below;
+  `A2/DROP_DESIGN.md` staging item 3 has the design that lifts it).
 - `Ty.holdsDtor` is deep (A2-drop.3b): a struct or an enum one field or
   payload of which holds a destructor value holds one
   (`A2.Dtor.holdsDtor_deep`, the definition unfolded). So a typed `letv`
@@ -708,24 +718,24 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   (`A2.Dtor.letv_owned_dtor_free`), and a struct or an enum holding one
   two levels down is bound by `letd` with its glue
   (`A2.DtorWitness.main4_safe`).
-- Not yet in the calculus. In each of these places `DropSlot` / `Frees`
-  release the value, which runs no code, while nurlc runs the destructor:
-  - in a closure's or trait object's environment (3c), an environment
-    that is a `Vec` of destructor values included (`RhsT.pack` takes any
-    environment type);
-  - in an `Arc`, lock or cell payload (3d). `SpawnOK` refuses a spawned
-    function's parameter of a type that holds a destructor value
-    (`Ty.holdsDtor`), but a lock of one (`lk DT`) still crosses, as does
-    an `Arc` or a cell of one. (A channel of one is refused: its queue is
-    a `Vec`, `Ty.ok`; so are `Locked (Vec D)`, `Arc (Vec D)` and a cell of
-    a `Vec D`, in the list below.)
-  - a **check-out binding** (`withLock`, `withCell`) of a destructor type:
-    it is owned and is no `letd`'s; its value goes back to the lock or cell
-    at its scope's end, but an `assign` to it drops the old value with no
-    destructor (`A2.DtorWitness.lock_checkout_assign` types this) (3d).
-    (`withElem` checks out no destructor value,
-    `A2.Dtor.withElem_dtor_free`, except a share's payload or a closure's
-    environment.)
+- A2-drop.3d: no block's payload owns a destructor value. The invariant
+  carries it for every block in memory, whatever holds its shares (a
+  binding, a closure's environment, another block's payload):
+  `A2.Dtor.blocks_dtor_free` (`MInv.blocks`; a start built by hand must
+  satisfy it too, `GlobsOK`). So the sweep that frees a block when its
+  last share goes, which runs no code, releases no destructor value. What
+  keeps it: `Ty.ok` asks it of an `Arc`'s, a lock's and a cell's payload
+  type (so of a channel's queue and a read guard's view), and `arc_new`, a
+  lock's and a library handle's constructor ask it of what moves in
+  (`A2.Dtor.share_new_dtor_free`). Of types: the payload type of every
+  share in a binding's type owns none (`A2.Dtor.shares_dtor_free`, over
+  `A2.Dtor.ok_payloads_free`), so a check-out binding (`withLock`,
+  `withCell`), whose type is the lock's payload's, holds none, and an
+  `assign` to it drops no destructor value. This is a refusal, not the
+  model of nurlc's drop of a block's payload (the stricter-than-nurlc list
+  below; `A2/DROP_DESIGN.md` staging item 4).
+- Not yet in the calculus. In one place `DropSlot` / `Frees` release the
+  value, which runs no code, while nurlc runs the destructor:
   - a function's result holding one, set before a panic in that function
     (another binding's destructor included), which the unwind releases
     with the call's result scope. (Moved from the result slot into a local
@@ -757,14 +767,32 @@ The rules are stricter than nurlc's in these places:
   - the `Vec` as a part of another type: a struct or an enum with a
     `Vec D` field or payload, a `Vec (Vec D)`, a channel of `D`
     (`Channel s` is a lock of its queue, a `Vec s`, and its closed flag),
-    `Locked (Vec D)`, `Arc (Vec D)`, a cell of a `Vec D`. (A lock, an
-    `Arc` or a cell of a `D` itself is typed: 3d's gap above.) A struct's
+    `Locked (Vec D)`, `Arc (Vec D)`, a cell of a `Vec D`. A struct's
     glue lends `self` and cannot pop a field, and a block's payload is
     swept with no code;
   - dropping its elements in place: `vec_truncate`, `vec_clear`, `vec_set`
     over an element, `vec_free`, and handing an element to a callee that
     changes it (`withElem`). A program pops the elements into `letd`
     bindings (`vec_pop`, `vec_remove v 0`), or lets the binding end.
+- for a closure or a trait object whose environment would hold a
+  destructor value (A2-drop.3c): a closure that captures a `% Drop` value
+  by value (or a struct, an enum, an option or a `Vec` holding one), and a
+  trait object boxing a value of a `% Drop` type, are refused
+  (`Cross.Fits`). nurlc types them, and its environment drop glue runs the
+  captures' destructors when the package is dropped. A program keeps the
+  `% Drop` value in a binding of its own and lets the closure borrow it
+  (a capture by name: the closure is then of class `any`, and crosses to
+  no thread and into no share); a trait object has no such route.
+- for a share whose payload would own a destructor value (A2-drop.3d): an
+  `Arc`, a `Locked` / `RwLocked` / `Mutex`, a channel or a library handle
+  of a `% Drop` type (or of a struct, an enum, an option or a `Vec` holding
+  one) is refused (`Ty.ok`). nurlc types them, and the thread that drops
+  the last share runs the payload's destructor. A program that shares a
+  resource keeps the `% Drop` value in one thread's binding and shares
+  what the others need of it.
+- for a spawned function's parameter of a type that holds a destructor
+  value (`SpawnOK`, since A2-drop.3a): refused. nurlc moves a `% Drop`
+  value to a new thread, which runs its destructor there.
 - for a destructor value (A2-drop.3a), taking it apart is refused: a
   field written in place (`= . x f v`, which the calculus has as `unpair`
   and `assign`), `unpair`, and taking a payload out of a destructor enum.

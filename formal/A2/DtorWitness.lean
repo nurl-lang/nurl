@@ -24,9 +24,9 @@ Two kinds of fact, both checked here (`check.sh` prints their axioms):
   binder's premises are satisfiable; the drain's steps are theorems about
   any frame, `A2.Dtor.scopeD_frame_value`, `scopeD_end_drains`,
   `scopeD_drain_binds`, `scopeD_end_empty`, `scopeD_panic_drains`).
-  `lock_checkout_assign` types the gap the
-  docs list (a lock check-out binding of a destructor type is assigned, its
-  old value dropped with no destructor: A2-drop.3d).
+  A2-drop.3c and 3d: no closure's environment and no block's payload holds
+  a destructor value (`A2.Dtor.pkgs_env_dtor_free`, `blk_pkgs_env_dtor_free`,
+  `blocks_dtor_free`).
 -/
 
 namespace A2.Dtor
@@ -329,14 +329,157 @@ theorem scopeD_frame_value {P : Prog} {Γ Δ : Ctx} {F : List Var} {x : Var} {f 
       · exact hn
       · cases h'
 
+/-- A2-drop.3c: a typed closure or trait-object literal's environment holds
+    no destructor value, at any depth: a package's drop releases its
+    environment running no code, so one that would hold a destructor value is
+    refused (`Cross.Fits`). -/
+theorem pack_env_dtor_free {Γ Γ1 : Ctx} {F : List Var} {fs : List Nat} {te : Ty} {ms : List Nat}
+    {y : Var} {cs : List (Var × PMode × Ty)} {E : Entry}
+    (h : RhsT Γ F (.pack fs te ms y cs) E Γ1) : te.holdsDtor = false ∧ te.dtorFree = true := by
+  cases h with
+  | pack _ _ _ _ _ hq =>
+    refine ⟨hq.2.2.2, ?_⟩
+    have := hq.2.2.2
+    rw [Ty.holdsDtor_eq_not_free] at this
+    simpa using this
+
+/-- ... and so does every package in a well-formed tree, however deep it
+    lies (a field, an element, another package's environment). -/
+theorem _root_.A2.WFv.pkg_env_dtor_free {τ : Ty} {v : Val} (hw : WFv τ v)
+    {fs : List Nat} {te : Ty} {ms : List Nat} {e : Val} {cs : List (Var × PMode × Ty)}
+    (hs : Sub (.pkg fs te ms e cs) v) : te.holdsDtor = false := by
+  induction hw with
+  | int => cases hs
+  | view => cases hs
+  | node _ ih =>
+    cases hs with
+    | child he h => exact ih _ he h
+  | pair _ _ iha ihb =>
+    cases hs with
+    | fst h => exact iha h
+    | snd h => exact ihb h
+  | inl _ ih => cases hs with | inl h => exact ih h
+  | inr _ ih => cases hs with | inr h => exact ih h
+  | pkg _ hq ih =>
+    cases hs with
+    | refl => exact hq.2.2.2
+    | pkg h => exact ih h
+  | arc _ _ => cases hs
+  | lk => cases hs
+  | cell => cases hs
+  | dtor _ _ ih => exact ih hs
+
+/-- **A2-drop.3c: in a running configuration no package an owner's slot
+    holds, at any depth of its tree, has an environment that holds a
+    destructor value** (one in a block's payload: `blk_pkgs_env_dtor_free`).
+    So the environment a closure's or a trait object's drop releases, where
+    an owner's tree is dropped (a binding's end, a `Vec`'s element, an
+    assignment's old value, a panic's unwind), holds no destructor value. -/
+theorem pkgs_env_dtor_free {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {E : Entry}
+    (hx : Γ x = some E) (hm : E.mode.ownSlot = true) {o : Bool} {T : Val}
+    (hsl : m.st x = some ⟨o, some T⟩)
+    {fs : List Nat} {te : Ty} {ms : List Nat} {e : Val} {cs : List (Var × PMode × Ty)}
+    (hs : Sub (.pkg fs te ms e cs) T) : te.holdsDtor = false :=
+  (hi.own_wfv hx hm hsl).pkg_env_dtor_free hs
+
+/-- The payload types of the shares (`Arc`, lock, cell) that occur in a
+    type, at any depth: in fields, payloads and elements, under views and
+    destructor types, and inside other payloads. -/
+def payloads : Ty → List Ty
+  | .arc t => t :: payloads t
+  | .lk t => t :: payloads t
+  | .cell t => t :: payloads t
+  | .vec t => payloads t
+  | .slice t => payloads t
+  | .dtor _ t => payloads t
+  | .prod a b => payloads a ++ payloads b
+  | .sum a b => payloads a ++ payloads b
+  | .int => []
+  | .fn _ _ => []
+
+/-- A2-drop.3d: a well-formed type's share payloads own no destructor value. -/
+theorem ok_payloads_free {t : Ty} (h : t.ok = true) : ∀ u ∈ payloads t, u.dtorFree = true := by
+  induction t with
+  | int => simp [payloads]
+  | fn _ _ => simp [payloads]
+  | vec t ih => simpa only [payloads] using ih (Ty.ok_vec_elem h)
+  | slice t ih => simpa only [payloads] using ih (Ty.ok_slice h).1
+  | arc t ih =>
+    simp only [payloads, List.mem_cons]
+    rintro u (rfl | hu)
+    · exact Ty.ok_arc_free h
+    · exact ih (Ty.ok_arc h).1 u hu
+  | lk t ih =>
+    simp only [payloads, List.mem_cons]
+    rintro u (rfl | hu)
+    · exact Ty.ok_lk_free h
+    · exact ih (Ty.ok_lk h).1 u hu
+  | cell t ih =>
+    simp only [payloads, List.mem_cons]
+    rintro u (rfl | hu)
+    · exact Ty.ok_cell_free h
+    · exact ih (Ty.ok_cell h).1 u hu
+  | dtor _ t ih =>
+    simp only [Ty.ok, Bool.and_eq_true] at h
+    simpa only [payloads] using ih h.2
+  | prod a b iha ihb =>
+    simp only [payloads, List.mem_append]
+    rintro u (hu | hu)
+    · exact iha (Ty.ok_prod h).1 u hu
+    · exact ihb (Ty.ok_prod h).2 u hu
+  | sum a b iha ihb =>
+    simp only [payloads, List.mem_append]
+    rintro u (hu | hu)
+    · exact iha (Ty.ok_sum h).1 u hu
+    · exact ihb (Ty.ok_sum h).2 u hu
+
+/-- A2-drop.3d, of types: in a running configuration, the payload type of
+    every share in a binding's type (an `Arc`'s, a lock's, a cell's, a
+    channel's queue; not those inside a closure type, whose environment the
+    type does not name) owns no destructor value.  So a check-out binding
+    (`withLock`, `withCell`: the lock's payload type) is of a type that
+    holds none.  The fact about the blocks themselves is `blocks_dtor_free`. -/
+theorem shares_dtor_free {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {E : Entry}
+    (hx : Γ x = some E) : ∀ u ∈ payloads E.ty, u.dtorFree = true :=
+  ok_payloads_free (hi.tyok hx)
+
+/-- **A2-drop.3d: in a running configuration no block's payload owns a
+    destructor value** (the invariant carries it, `MInv.blocks`): every
+    block, whatever holds its shares (a binding, a closure's environment,
+    another block's payload).  So the sweep that frees a block when its last
+    share goes, which runs no code, releases no destructor value. -/
+theorem blocks_dtor_free {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {k : Nat} {bl : Blk}
+    (hk : m.blk k = some bl) : bl.ty.dtorFree = true :=
+  (hi.blocks k bl hk).2.2.2.2
+
+/-- A2-drop.3c, in a block: a package in a block's payload (a channel of
+    closures, a `Locked` closure, an `Arc` of a `sync` one), however deep,
+    has an environment that holds no destructor value. -/
+theorem blk_pkgs_env_dtor_free {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {k : Nat} {bl : Blk}
+    (hk : m.blk k = some bl) {p : Val} (hp : bl.pay = some p)
+    {fs : List Nat} {te : Ty} {ms : List Nat} {e : Val} {cs : List (Var × PMode × Ty)}
+    (hs : Sub (.pkg fs te ms e cs) p) : te.holdsDtor = false :=
+  (((hi.blocks k bl hk).2.2.1 p hp).1).pkg_env_dtor_free hs
+
+/-- A2-drop.3d: `arc_new`, a lock's and a library handle's constructor take
+    a value that owns no destructor value. -/
+theorem share_new_dtor_free {Γ Γ1 : Ctx} {F : List Var} {t : Ty} {y : Var} {E : Entry} :
+    (RhsT Γ F (.arcNew t y) E Γ1 → t.dtorFree = true) ∧
+    (RhsT Γ F (.lockNew t y) E Γ1 → t.dtorFree = true) ∧
+    (RhsT Γ F (.cellNew t y) E Γ1 → t.dtorFree = true) := by
+  refine ⟨fun h => ?_, fun h => ?_, fun h => ?_⟩
+  · cases h with | arcNew _ _ _ hdf _ _ _ => exact hdf
+  · cases h with | lockNew _ _ _ hdf _ _ => exact hdf
+  · cases h with | cellNew _ _ _ hdf _ _ => exact hdf
+
 /-- A2-drop.3b: in a running configuration, a binding whose type is a `Vec`
     has elements that own no destructor value, or are of a destructor type
     themselves: the drained `Vec` (`Ty.vecD`), which only a binding's own type
     may be (`vecs_dtor_free`: anywhere else in a type a `Vec`'s elements own
     none).  A `Vec` of the second kind is `letd`'s (`letv` refuses it), and
     its frame's end drains it (`scopeD_end_drains`); what any other `Vec`'s
-    drop releases may still run a destructor in nurlc: the payload of a share
-    whose last share it drops, or a closure's environment, A2-drop.3c and 3d. -/
+    drop releases holds no destructor value: no closure's environment does
+    (`pkgs_env_dtor_free`) and no block's payload (`blocks_dtor_free`). -/
 theorem vec_elems_dtor_free {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {E : Entry} {t : Ty}
     (hx : Γ x = some E) (ht : E.ty = .vec t) : t.dtorFree = true ∨ t.hasDtor = true := by
   have h := hi.tyok hx; rw [ht] at h; exact Ty.ok_vec_free h
@@ -373,11 +516,11 @@ theorem ok_vecElems_free {t : Ty} (h : t.ok = true) (hd : t.vecD = false) :
   | slice t ih =>
     simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; simpa only [vecElems] using ih h.1.1 h.2
   | arc t ih =>
-    simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; simpa only [vecElems] using ih h.1.1 h.2
+    simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; simpa only [vecElems] using ih h.1.1.1 h.1.2
   | lk t ih =>
-    simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; simpa only [vecElems] using ih h.1.1 h.2
+    simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; simpa only [vecElems] using ih h.1.1.1 h.1.2
   | cell t ih =>
-    simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; simpa only [vecElems] using ih h.1.1 h.2
+    simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; simpa only [vecElems] using ih h.1.1.1 h.1.2
   | dtor _ t ih =>
     simp only [Ty.ok, Bool.and_eq_true] at h
     have hnd : t.vecD = false := by cases t <;> simp_all [Ty.isStruct]
@@ -967,23 +1110,5 @@ theorem enum_take_refused {Γ Γ' : Ctx} {F : List Var} {E E0 : Entry} {f : Nat}
     | takel hy _ _ hty _ _ _ => rw [h0] at hy; cases hy; rw [ht] at hty; cases hty
   · cases h with
     | taker hy _ _ hty _ _ _ => rw [h0] at hy; cases hy; rw [ht] at hty; cases hty
-
-/-- A lock payload checked out to `x` (`withLock`, `lockE`) of a destructor type is
-    an owned binding of that type that is no `letd`'s, and `assign` gives it a new
-    value: the old one is dropped by `DropSlot`, running no destructor. -/
-theorem lock_checkout_assign :
-    let Γ : Ctx := A2.setE (A2.setE (fun _ => none) 0 (lockE DT)) 1 Ecr
-    ∃ Δ, StmtT P Γ [] (.assign 0 (.var 1)) Δ := by
-  intro Γ
-  have hl : lockE DT = Ecr := by simp [lockE, DT, Ecr]
-  have hK : NoRootb Γ := (noRootb_empty.setE (by rw [hl]; simp [Ecr])).setE (by simp [Ecr])
-  have hmv := RhsT.moveOwn (Γ := Γ) (F := []) (y := 1) (E := Ecr) (by simp [Γ, A2.setE, upd]) rfl rfl (by simp)
-    (hK.noPin _) (DtorSafe.of_none (fun v E h => (hK v E h).2.1) _ _ _)
-  have hK1 : NoRootb (A2.setE (kill .replace false 1 Γ) 1 { Ecr with live := false, dtor := false }) :=
-    (hK.kill _ _ _).setE (by simp [Ecr])
-  exact ⟨_, StmtT.assign (Ex := lockE DT) (by simp [Γ, A2.setE, upd]) (by simp) (Or.inl ⟨by rw [hl]; rfl, rfl⟩)
-    hmv (by rw [hl]) (by simp [roots, Entry.vdeps, Mode.ownSlot, Ecr]) (by simp [A2.setE, upd, kill, Γ])
-    (hK.noPin _) (DtorSafe.of_none (fun v E h => (hK1 v E h).2.1) _ _ _) (by rw [hl]; rfl)⟩
-
 
 end A2.DtorWitness
