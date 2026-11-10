@@ -1629,6 +1629,12 @@ unsafe @ agg_field_count i syms s ot → i {
 // …and whether the right-hand side of the `=` being compiled is a literal
 // of literals only (__rp_literal_only), for __rp_note_assign.
 : ~ b g_rp_rhs_lit F
+// …and how many `&` / `|` right operands enclose the code being compiled
+// (__rp_apply), and how many statements of the body's top level have begun
+// (__rp_note_assign: the credited write must be the first, so nothing
+// before it — a `/`, a `%`, an index — may panic past it).
+: ~ i g_rp_sc 0
+: ~ i g_rp_nstmt 0
 : ~ s g_noaddr_visiting ``  // enum types __ty_no_address is examining (a recursive type qualifies provisionally)
 : ~ i g_ff_gen 0  // function counter keying the field-owner flags (mem_ff_slot)
 : ~ i g_ff_any 0  // 1 once this function made a field-owner flag
@@ -8206,7 +8212,11 @@ unsafe @ __agg_twin_hint i lex i syms s aty → s {
     // Right branch: evaluate right operand
     ( emit ( nurl_str_cat lright `:` ) )
     ( nurl_sym_def syms `__cur_lbl__` lright )
+    // (An operand that may not run: no repoint credit applies in it,
+    // __rp_apply — agora #386.)
+    = g_rp_sc + g_rp_sc 1
     : s rv ( gen_expr lex syms cg )
+    = g_rp_sc - g_rp_sc 1
     : s rt ( nurl_get_last_type )
     // Check type compatibility
     ? ! ( seq rt `i1` )
@@ -8239,7 +8249,11 @@ unsafe @ __agg_twin_hint i lex i syms s aty → s {
     // Right branch: evaluate right operand
     ( emit ( nurl_str_cat lright `:` ) )
     ( nurl_sym_def syms `__cur_lbl__` lright )
+    // (An operand that may not run: no repoint credit applies in it,
+    // __rp_apply — agora #386.)
+    = g_rp_sc + g_rp_sc 1
     : s rv ( gen_expr lex syms cg )
+    = g_rp_sc - g_rp_sc 1
     : s rt ( nurl_get_last_type )
     // Check type compatibility
     ? ! ( seq rt `i1` )
@@ -13930,52 +13944,33 @@ unsafe @ __rp_rhs_set b v → v { = g_rp_rhs_lit v }
 // read, join or nested literal? (agora #386: the repoint credited must
 // hold nothing.)
 @ __rp_literal_only s txt → b {
-    : ~ s rest ( nurl_str_cat txt `` )
-    : ~ i n 0
-    : ~ b in_tick F
-    : ~ s cur ``
-    : ~ s words ``
-    : i len ( nurl_str_len rest )
-    : ~ i k 0
-    ~ < k len {
-        : i c ( nurl_str_get rest k )
-        ? == c 96 { = in_tick ! in_tick ? ! in_tick { = cur `` = words ( nurl_str_cat words ` LIT` ) } {} } {
-            ? ! in_tick {
-                ? | | == c 32 == c 10 == c 9 { ? != 0 ( nurl_str_len cur ) { = words ( nurl_str_cat3 words ` ` cur ) = cur `` } {} } {
-                    = cur ( nurl_str_cat cur ( nurl_str_slice rest k 1 ) )
+    // (Asked of the lexer's own tokens, not the text: a comment, a CR, a
+    // backtick inside a comment are the lexer's to skip — formal's #1709
+    // review.)
+    : i lx ( nurl_lex_new txt `<repoint>` )
+    : ~ b ok F
+    ? == ( nurl_lex_type lx ) TT_AT {
+        ( nurl_lex_advance lx )
+        ? ( is_ident_tok ( nurl_lex_type lx ) ) {
+            ( nurl_lex_advance lx )
+            ? == ( nurl_lex_type lx ) TT_LBRACE {
+                ( nurl_lex_advance lx )
+                : ~ b more T
+                ~ more {
+                    : i t ( nurl_lex_type lx )
+                    ? == t TT_RBRACE {
+                        ( nurl_lex_advance lx )
+                        = ok == ( nurl_lex_type lx ) TT_EOF
+                        = more F
+                    } {
+                        ? | | | == t TT_STR == t TT_INT == t TT_FLOAT == t TT_BOOL { ( nurl_lex_advance lx ) } { = more F }
+                    }
                 }
             } {}
-        }
-        = k + k 1
-    }
-    ? in_tick { ^ F } {}
-    ? != 0 ( nurl_str_len cur ) { = words ( nurl_str_cat3 words ` ` cur ) } {}
-    // @ Name { lit* } (`words` starts with its separator.)
-    : ~ s w ( str_skip_word words )
-    ? ! ( seq ( str_first_word w ) `@` ) { ^ F } {}
-    = w ( str_skip_word w )
-    : s tn ( str_first_word w ) = w ( str_skip_word w )
-    ? | == 0 ( nurl_str_len tn ) | ( seq tn `(` ) ( seq tn `{` ) { ^ F } {}
-    ? ! ( seq ( str_first_word w ) `{` ) { ^ F } {}
-    = w ( str_skip_word w )
-    ~ != 0 ( nurl_str_len w ) {
-        : s t ( str_first_word w ) = w ( str_skip_word w )
-        ? ( seq t `}` ) { ^ == 0 ( nurl_str_len w ) } {}
-        ? ! | | | ( seq t `LIT` ) ( seq t `T` ) ( seq t `F` ) ( __rp_is_num t ) { ^ F } {}
-    }
-    ^ F
-}
-
-@ __rp_is_num s t → b {
-    : i len ( nurl_str_len t )
-    ? == len 0 { ^ F } {}
-    : ~ i k 0
-    ~ < k len {
-        : i c ( nurl_str_get t k )
-        ? ! | | & >= c 48 <= c 57 == c 45 == c 46 { ^ F } {}
-        = k + k 1
-    }
-    ^ T
+        } {}
+    } {}
+    ( nurl_lex_free lx )
+    ^ ok
 }
 
 // A later write to (or field store into) a credited parameter voids it.
@@ -13999,8 +13994,12 @@ unsafe @ __rp_rhs_set b v → v { = g_rp_rhs_lit v }
     // closure: the credit is the parameter's FINAL value, so any later
     // write, at any depth, voids it. formal's #1691 review.)
     ? ( str_contains_word ( nurl_sym_get syms `__fn_rp_done__` ) name ) { ( __rp_void syms name ) ^ v } {}
-    ? | | != 0 g_bck_closure_depth != g_cg_blk_depth g_rp_d0 != 0 g_rp_calls { ^ v } {}
+    ? | | | != 0 g_bck_closure_depth != g_cg_blk_depth g_rp_d0 != 0 g_rp_calls != 1 g_rp_nstmt { ^ v } {}
     ? ! ( seq ( nurl_sym_get2 syms name `__inout` ) `1` ) { ^ v } {}
+    // (The parameter itself, not a local of its name shadowing it — whose
+    // `__inout` lookup falls through to the parameter's: its slot is the
+    // incoming pointer, `%name`. formal's #1709 review.)
+    ? ! ( seq ( nurl_sym_get2 syms name `__ptr` ) ( nurl_str_cat `%` name ) ) { ^ v } {}
     ? < ( nurl_sym_word_index syms `__fn_param_names__` name ) 0 { ^ v } {}
     // (…to a value that reads nothing: a literal of literals and globals.
     // One that reads a binding — the parameter itself (`= w @ W { . w v }`
@@ -30670,7 +30669,9 @@ unsafe @ __callee_decl_name s cn → s {
 // what it leaves in its arguments (g_fn_vkeeps, g_fn_vholds) are final and
 // name nothing: the call's own rows for those would be cleared with them.
 unsafe @ __rp_apply i syms s cal i line → v {
-    ? | == g_borrowck 0 != 0 g_bck_rec_off { ^ v } {}
+    // (Only a call that surely runs: not the right operand of a `&` / `|`
+    // that may skip it — `& F ( reset w )`, formal's #1709 review.)
+    ? | | == g_borrowck 0 != 0 g_bck_rec_off != 0 g_rp_sc { ^ v } {}
     : s rp ( nurl_sym_get g_pending_impl ( nurl_str_cat `repoints##` cal ) )
     ? == 0 ( nurl_str_len rp ) { ^ v } {}
     ? != 0 ( nurl_sym_len g_fn_vkpend cal ) { ^ v } {}
@@ -43541,6 +43542,7 @@ unsafe @ borrowck_fn_end i lex i syms s fname → v {
 
 // Counted with gen_expr's levels (see the nesting limit above it).
 @ gen_stmt i lex i syms i cg → s {
+    ? == g_cg_blk_depth g_rp_d0 { = g_rp_nstmt + g_rp_nstmt 1 } {}
     ( __nest_enter lex )
     : s v ( __gen_stmt_level lex syms cg )
     = g_nest_depth - g_nest_depth 1
@@ -61843,8 +61845,10 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     ( __own_sink_str_params syms cg fname sink_acc )
     : i __rp_d00 g_rp_d0
     : i __rp_c00 g_rp_calls
+    : i __rp_n00 g_rp_nstmt
     = g_rp_d0 + g_cg_blk_depth 1
     = g_rp_calls 0
+    = g_rp_nstmt 0
     ( nurl_sym_def syms `__fn_rp_done__` `` )
     ( nurl_sym_def syms `__fn_rp_bad__` `` )
     ( nurl_sym_def syms `__fn_rp_defer__` `` )
@@ -61978,6 +61982,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     ( __rp_publish syms fname )
     = g_rp_d0 __rp_d00
     = g_rp_calls __rp_c00
+    = g_rp_nstmt __rp_n00
     ( nurl_sym_def g_fn_compiled fname `1` )
     ( mem_settle_scratch syms )
     : s __rl_set ( nurl_sym_get syms `__fn_retlend__` )
