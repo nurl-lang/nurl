@@ -34,6 +34,11 @@ import A3
 #print axioms A2.Dtor.free_dtor_free
 #print axioms A2.Dtor.edit_drops_dtor_free
 #print axioms A2.Dtor.withElem_dtor_free
+-- ... and `vec_free` / `vec_clear` / `vec_truncate` of one are typed code (A2/DropCode.lean)
+#print axioms A2.Dtor.vecFreeD_typed
+#print axioms A2.Dtor.vecClearD_typed
+#print axioms A2.Dtor.vecTruncD_typed
+#print axioms A2.DtorWitness.main6_safe
 -- A2-drop.3c: no closure or trait-object environment holds a destructor value
 #print axioms A2.Dtor.pack_env_dtor_free
 #print axioms A2.WFv.pkg_env_dtor_free

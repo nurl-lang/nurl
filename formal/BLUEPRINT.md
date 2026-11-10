@@ -4,7 +4,7 @@
 
 * **Toolchain:** `leanprover/lean4:v4.35.0` (zero external dependencies; standard axioms `propext`, `Classical.choice`, `Quot.sound` only; `0` `sorry`s)
 * **Phase A3 (Threads & Data-Race Freedom):** **22 modules**, **10,217 lines of Lean 4**, **524 theorems**, **645 total declarations**
-* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **37 modules**, **44,593 lines of Lean 4**, **1890 theorems**, **2336 total declarations**
+* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **38 modules**, **44,911 lines of Lean 4**, **1901 theorems**, **2352 total declarations**
 * **Phase A1 (Core Calculus):** **22 modules**, **9,571 lines of Lean 4**, **449 theorems**, **613 total declarations**
 * **Soundness Corpus (`corpus/map.tsv`):** every hole probe in [`tools/fuzz/holes/`](../tools/fuzz/holes/), with the rule and the proof phase (A1, A2, A3, B) that covers it. The table is generated from the probes' `// map:` lines by `tools/fuzz/holes/map.sh` (build.sh writes it; it is not committed); `tools/fuzz/holes/map.py --counts` gives the totals
 
@@ -135,7 +135,7 @@ flowchart BT
 ---
 
 <!-- BEGIN generated: A2 module DAG (webdocs/scripts/gen-formal-data.mjs) -->
-## 4. Phase A2 Module Dependency DAG (37 Modules)
+## 4. Phase A2 Module Dependency DAG (38 Modules)
 
 ```mermaid
 flowchart BT
@@ -147,6 +147,7 @@ flowchart BT
   Closure["Closure<br/>(2845L, 101 thms)"]
   Codes["Codes<br/>(765L, 39 thms)"]
   Ctx["Ctx<br/>(298L, 30 thms)"]
+  DropCode["DropCode<br/>(318L, 11 thms)"]
   DtorWitness["DtorWitness<br/>(1134L, 65 thms)"]
   DynCell["DynCell<br/>(480L, 33 thms)"]
   EditB["EditB<br/>(2207L, 61 thms)"]
@@ -187,6 +188,7 @@ flowchart BT
   Closure --> Codes
   Repl --> Codes
   Basic --> Ctx
+  DtorWitness --> DropCode
   DynCell --> DtorWitness
   Soundness --> DynCell
   TypingFacts --> EditB
@@ -243,6 +245,7 @@ flowchart BT
 | 2. Memory Invariant | [`A2/Stability.lean`](A2/Stability.lean) | 1064 | 78 | 5 | Stability of borrows and views under store and context updates. |
 | 2. Memory Invariant | [`A2/Values.lean`](A2/Values.lean) | 220 | 17 | 0 | Well-formedness lemmas for values, structs (pair), enums (inl/inr), and views. |
 | 2. Memory Invariant | [`A2/Wf.lean`](A2/Wf.lean) | 1451 | 39 | 1 | Preservation of context well-formedness (WfCtx) across typing transitions. |
+| 3. Proof Infrastructure | [`A2/DropCode.lean`](A2/DropCode.lean) | 318 | 11 | 5 |  |
 | 3. Proof Infrastructure | [`A2/DtorWitness.lean`](A2/DtorWitness.lean) | 1134 | 65 | 27 |  |
 | 3. Proof Infrastructure | [`A2/EditB.lean`](A2/EditB.lean) | 2207 | 61 | 0 | Element edits through borrows (StmtT.editB): push, truncate, and element set through borrowed paths. |
 | 3. Proof Infrastructure | [`A2/EditBV.lean`](A2/EditBV.lean) | 1077 | 35 | 0 | A view stored through a borrow (StmtT.editBV): every view-holding root of the borrow's path holds what the stored value depends on. |
