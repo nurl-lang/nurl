@@ -794,12 +794,26 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   before the call. The drain pops only a `Vec` that has an element.)
 - A2-drop.3c: no closure's or trait object's environment holds a
   destructor value. A typed literal's environment type holds none
-  (`Cross.Fits`, of every class; `A2.Dtor.pack_env_dtor_free`), and in a
-  running configuration no package does, however deep it lies: in an
-  owner's tree (a field, an element, another package's environment:
-  `A2.Dtor.pkgs_env_dtor_free`) or in a block's payload
-  (`A2.Dtor.blk_pkgs_env_dtor_free`), both over
-  `A2.WFv.pkg_env_dtor_free`. A share an environment holds is of a block
+  (`Cross.Fits`, of every class that crosses or views;
+  `A2.Dtor.pack_env_dtor_free`), and in a running configuration no
+  package does, however deep it lies in a tree whose type has no closure
+  of the dropping class in it (`Ty.noDropd`): in an owner's tree (a field, an element, another
+  package's environment: `A2.Dtor.pkgs_env_dtor_free`) or in a block's
+  payload (`A2.Dtor.blk_pkgs_env_dtor_free`), both over
+  `A2.WFv.pkg_env_dtor_free`. (Agora #609, a preparation: there is a
+  class `dropd` for a closure whose environment may hold destructor
+  values; a closure of it is a destructor value itself, `Ty.holdsDtor`,
+  so every rule that releases with no code refuses it, and no destructor
+  is accepted for its type (`A2.Dtor.dropd_no_dtor`), so `letv` and
+  `letd` bind none and no function returns one: no typed program holds an
+  owned one. Its TYPE is well-formed, alone and inside others (a struct,
+  an enum, a `Vec` of a destructor type over it), and a function may
+  name it in a parameter no caller can fill; such a struct or enum would
+  need glue that is `FnOK`, which needs a `letd` of the closure. The
+  class holds no views and no cell shares and crosses nowhere: no
+  subsumption reaches it (`Cross.Le` asks the same `drops`), and what
+  crosses asks a type that owns no destructor value. Its drop, a method
+  of the package, is the open part of #609.) A share an environment holds is of a block
   whose payload owns none either (3d). This is a refusal, not the model
   of nurlc's environment drop glue (the stricter-than-nurlc list below;
   `A2/DROP_DESIGN.md` staging item 3 has the design that lifts it).

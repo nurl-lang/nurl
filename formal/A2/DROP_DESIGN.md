@@ -691,7 +691,9 @@ each one shrinks `CLAIM.md`'s exception:
        (`vecTruncD_typed`; last first, where nurlc goes in index order).
 3. **A2-drop.3c: environments** (first cut done, Agora #543).
    - **Built: the refusal.** `Cross.Fits` asks an environment type to hold
-     no destructor value, of every class, so `RhsT.pack` types no such
+     no destructor value, of every class but `dropd` (Agora #609's
+     preparation: the class of a closure that is a destructor value
+     itself, which no rule binds yet), so `RhsT.pack` types no such
      literal (`A2.Dtor.pack_env_dtor_free`) and `WFv.pkg` carries it for
      every package in memory: in an owner's tree
      (`A2.Dtor.pkgs_env_dtor_free`) and in a block's payload
