@@ -39788,7 +39788,7 @@ unsafe @ bck_note_rc_arg s name s ty → v {
     : ~ s out st
     : i line ( bck_field_int rec 3 )
     // A program enum binding given a new value by a callee (an `inout`
-    // argument it may replace, or drop what it holds): the `??` arm payloads
+    // argument it may replace): the `??` arm payloads
     // read in place out of its old value go with it, as at `= o …`
     // (__bck_epy_release) — agora #565, #1678's rest. (Done here, on `out`,
     // not in a wrapper: every caller writes `= st ( bck_cursor_follow st …
@@ -39796,7 +39796,9 @@ unsafe @ bck_note_rc_arg s name s ty → v {
     ? & != 0 g_bck_epy_any | | | == kc 9 == kc 12 == kc 13 == kc 32 {
         : s ecal ( bck_field rec 5 )
         : s eaix ( bck_field rec 6 )
-        ? | != 0 ( nurl_str_len ( __repl_of ecal eaix ) ) ( bck_callee_drops_elems ecal eaix ) { = out ( __bck_epy_release out rid line ) } {}
+        // (Only one that replaces it: a callee that empties the payload in
+        // place — vec_clear, string_clear — leaves it where it is.)
+        ? != 0 ( nurl_str_len ( __repl_of ecal eaix ) ) { = out ( __bck_epy_release out rid line ) } {}
     } {}
     ? | == 0 g_bck_has_cursor ! ( bck_cursor_watched rid ) { ^ out } {}
     : ~ s rest ( nurl_str_cat ( nurl_sym_get g_bck ( bck_bkey `cul` `` ) ) `` )
