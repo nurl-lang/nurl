@@ -39152,15 +39152,20 @@ unsafe @ __bck_vself_srcs i vroot s sx s rels0 → s {
     : ~ s srcs ``
     : ~ s rels ( nurl_str_cat rels0 `` )
     ~ != 0 ( nurl_str_len rels ) {
-        : s r ( str_first_word rels ) = rels ( str_skip_word rels )
+        : s r1 ( str_first_word rels ) = rels ( str_skip_word rels )
+        // (`^rel`: through the field's elements — the source marked `^`,
+        // as a local view of an element is; agora #600.)
+        : b ind == 94 ( nurl_str_get r1 0 )
+        : s r ? ind ( nurl_str_slice r1 1 - ( nurl_str_len r1 ) 1 ) ( nurl_str_cat r1 `` )
+        : s mk ? ind `^` ``
         ? named {
-            = srcs ( __word_union srcs ( nurl_str_int ( bck_intern ( nurl_str_cat3 base `.` r ) ) ) )
+            = srcs ( __word_union srcs ( nurl_str_cat mk ( nurl_str_int ( bck_intern ( nurl_str_cat3 base `.` r ) ) ) ) )
         } {
             : s suf ( nurl_str_cat `.` r )
             : ~ i j 0
             ~ < j g_bck_inn {
                 ? & & != j vroot == ( bck_path_root j ) vroot != 0 ( nurl_peek # s g_bck_pn j ) {
-                    ? != 0 ( nurl_str_ends ( nurl_str_cat # s ( nurl_peek # s g_bck_pn j ) `` ) suf ) { = srcs ( __word_union srcs ( nurl_str_int j ) ) } {}
+                    ? != 0 ( nurl_str_ends ( nurl_str_cat # s ( nurl_peek # s g_bck_pn j ) `` ) suf ) { = srcs ( __word_union srcs ( nurl_str_cat mk ( nurl_str_int j ) ) ) } {}
                 } {}
                 = j + j 1
             }
@@ -39180,10 +39185,13 @@ unsafe @ __bck_vself_srcs i vroot s sx s rels0 → s {
     ? < h 0 { ^ } {}
     : ~ s rest ( nurl_str_cat srcs `` )
     ~ != 0 ( nurl_str_len rest ) {
-        : s x ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s x0 ( str_first_word rest ) = rest ( str_skip_word rest )
+        // (`^id`: through the field's elements, `h>.^rel`; agora #600.)
+        : b ind == 94 ( nurl_str_get x0 0 )
+        : s x ? ind ( nurl_str_slice x0 1 - ( nurl_str_len x0 ) 1 ) ( nurl_str_cat x0 `` )
         : s rel ( __bck_rel_path ( nurl_str_to_int x ) )
         ? != 0 ( nurl_str_len rel ) {
-            ( bck_put `vspanic` ( __word_union ( nurl_sym_get g_bck `vspanic` ) ( nurl_str_cat3 ( nurl_str_int h ) `>.` rel ) ) )
+            ( bck_put `vspanic` ( __word_union ( nurl_sym_get g_bck `vspanic` ) ( nurl_str_cat4 ( nurl_str_int h ) `>.` ? ind `^` `` rel ) ) )
             = g_bck_vs_any 1
         } {}
     }
