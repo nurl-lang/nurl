@@ -576,28 +576,47 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   the standard axioms. That includes a *double panic*: a destructor that
   panics while a panic unwinds.
 - The destructor is on the type (`Ty.dtor f t`, of a struct or an enum,
-  since A2-drop.3a). Every owned binding of a destructor type is a `letd`
-  binding: `letv` refuses one, and a call's result, a field `unpair` moves
-  out and a `sink` parameter are handed to their `letd` before anything
-  else runs (`Stmt.movedFirst`), so the destructor runs where the binding
-  ends, as nurlc runs it. A field of a destructor value is lent through
-  the type, the destructor staying with the whole value.
-- Not yet in the calculus: a destructor value released by `assign` or
-  `free`, inside a struct dropped whole, as a `Vec` element, an enum or
-  option payload, in a closure's or trait object's environment, or in an
-  `Arc` / lock / channel payload. There `DropSlot` / `Frees` release it,
-  which runs no code; nurlc runs the destructor there too. These are
-  A2-drop.3a's rest (assign, free, the glue) and 3b–3d (Agora #541–#544,
-  `A2/DROP_DESIGN.md` *Staging*).
+  since A2-drop.3a). Every owned binding of a type that holds a destructor
+  value (`Ty.holdsDtor`: a destructor type, or a struct or an enum one
+  field or payload of which is one) is a `letd` binding.
+  - `letv` refuses one.
+  - A call's result, a field `unpair` moves out and a `sink` parameter are
+    handed to their `letd` before anything else runs (`Stmt.movedFirst`).
+  - So the destructor runs where the binding ends, as nurlc runs it.
+- A struct holding a destructor value is itself of a destructor type, and
+  its destructor is its drop glue, which the elaboration generates to lend
+  each such field to its destructor. The calculus checks the glue as it
+  checks any destructor; that it calls the fields' destructors is the
+  elaboration's part.
+- A field of a destructor value is lent through the type, the destructor
+  staying with the whole value. `unpair` of one is refused, as Rust
+  refuses a move out of a type with a destructor.
+- `free` takes only a `Vec`, so it releases no destructor value.
+- Not yet in the calculus. In each of these places `DropSlot` / `Frees`
+  release the value, which runs no code, while nurlc runs the destructor:
+  - a destructor value as a `Vec` element, or an enum or option payload
+    inside one (3b);
+  - in a closure's or trait object's environment (3c);
+  - in an `Arc`, lock, channel or cell payload (3d);
+  - a function's result holding one, set before a panic in that function
+    (another binding's destructor included), which the unwind releases
+    with the call's result scope.
+  See Agora #542–#544 and `A2/DROP_DESIGN.md` *Staging*.
 
-The rules are stricter than nurlc's in two places, both for a binding of
-a type whose destructor may read a view:
-- nurlc lets it gain views of older bindings;
-- nurlc lets it be an `inout` argument, whose callee may give it views
-  only of what the caller passed in: a view of the callee's own local is
-  refused where it is given, even for a moment (#284). One shape is still
-  open there: a callee that keeps a view parameter in a holder other
-  than its first argument ties it to the first one (#370).
+The rules are stricter than nurlc's in these places:
+- for a binding of a type whose destructor may read a view:
+  - nurlc lets it gain views of older bindings;
+  - nurlc lets it be an `inout` argument, whose callee may give it views
+    only of what the caller passed in: a view of the callee's own local is
+    refused where it is given, even for a moment (#284). One shape is
+    still open there: a callee that keeps a view parameter in a holder
+    other than its first argument ties it to the first one (#370);
+- for any binding that may own a value holding a destructor (A2-drop.3a),
+  `= x v` is refused (`Stmt.assigns`), because the calculus's `assign`
+  drops the old value without running code. A program moves the old value
+  to a `letd`, whose scope runs the destructor at once, and binds the new
+  one with `letd`. A function's owned result of such a type is set at
+  most once on any path.
 
 How the runtime carries this out (`stdlib/runtime_core.c`, `nurl_panic`)
 is stated here so the claim does not hide it:

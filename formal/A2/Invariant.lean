@@ -931,8 +931,9 @@ syntax "no_dtor" : tactic
 macro_rules
   | `(tactic| no_dtor) => `(tactic| first
       | (intro _; rfl)
-      | (intro h; simp_all [Ty.hasDtor])
-      | (intro h; exfalso; revert h; simp_all))
+      | (intro h; simp_all [Ty.hasDtor, Ty.holdsDtor]; done)
+      | (intro h; exfalso; revert h; simp_all; done)
+      | (intro h; exfalso; revert h; simp_all [getE, projE, intE]; done))
 
 /-- ... and that an owned value of a destructor type is handed to its
     `letd` first thing (`Stmt.movedFirst`), where a type is concrete: it is no
@@ -940,11 +941,11 @@ macro_rules
 syntax "dtor_head" : tactic
 macro_rules
   | `(tactic| dtor_head) => `(tactic| first
-      | (intro _ h; simp_all [Ty.hasDtor])
+      | (intro _ h; simp_all [Ty.hasDtor, Ty.holdsDtor])
       | (intro h; exfalso; revert h; simp_all)
-      | (intro _ h; exfalso; revert h; simp_all [Ty.hasDtor])
-      | (intro _ _ _ h; simp_all [Ty.hasDtor])
-      | (intro fn hf ho; simp_all [Ty.hasDtor]))
+      | (intro _ h; exfalso; revert h; simp_all [Ty.hasDtor, Ty.holdsDtor])
+      | (intro _ _ _ h; simp_all [Ty.hasDtor, Ty.holdsDtor])
+      | (intro fn hf ho; simp_all [Ty.hasDtor, Ty.holdsDtor]))
 
 inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
   | skip {Γ : Ctx} {F : List Var} : StmtT P Γ F .skip Γ
@@ -953,9 +954,10 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
   | letv {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {r : Rhs} {s : Stmt} {E : Entry}
       (hs : s.src = true) (hx : Γ x = none) (hxF : x ∉ F) (hr : RhsT Γ F r E Γ1)
       (hb : StmtT P (setE Γ1 x E) F s Δ) (he : EndOK Δ x)
-      -- A2-drop.3a: an owned value of a destructor type is bound by `letd`
-      -- (its scope runs the destructor), wherever it came from
-      (hnd : E.mode = .own → E.ty.hasDtor = false := by no_dtor) :
+      -- A2-drop.3a: an owned value of a destructor type, or of a struct or
+      -- an enum holding one, is bound by `letd` (its scope runs the
+      -- destructor, a struct's glue), wherever it came from
+      (hnd : E.mode = .own → E.ty.holdsDtor = false := by no_dtor) :
       StmtT P Γ F (.letv x r s) (exitScope x Δ)
   | letcall {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {args : List Var} {s : Stmt}
       {E : Entry}
@@ -963,8 +965,9 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       (h5 : StmtT P (setE Γ1 x E) F s Δ) (h6 : EndOK Δ x)
       -- A2-drop.3a: an owned result of a destructor type goes to its `letd`
       -- first thing, whose scope runs the destructor where `x`'s ends
-      (hdk : ∀ fn, P[f]? = some fn → fn.resOwn = true → fn.resTy.hasDtor = true → x ∈ s.movedFirst :=
-        by dtor_head) :
+      -- (and is given no other value in it: its drop would run none, `Stmt.assigns`)
+      (hdk : ∀ fn, P[f]? = some fn → fn.resOwn = true → fn.resTy.holdsDtor = true →
+        x ∈ s.movedFirst ∧ x ∉ s.assigns := by dtor_head) :
       StmtT P Γ F (.letcall x f args s) (exitScope x Δ)
   | scope {Γ Δ : Ctx} {F : List Var} {x : Var} {s : Stmt} :
       (∃ E, Γ x = some E ∧ E.mode ≠ .rootb) → x ∉ F → StmtT P Γ F s Δ → EndOK Δ x →
@@ -1035,8 +1038,8 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       (h13 : NoPin Γ y) (h14 : DtorSafe Γ .replace false y) (h15 : EndOK Δ z) (h16 : EndOK (exitScope z Δ) x)
       -- A2-drop.3a: a field of a destructor type goes to its `letd` first
       -- thing, whose scope runs the destructor where the field's binding ends
-      (hdx : a.hasDtor = true → x ∈ s.movedFirst := by dtor_head)
-      (hdz : b.hasDtor = true → z ∈ s.movedFirst := by dtor_head) :
+      (hdx : a.holdsDtor = true → x ∈ s.movedFirst ∧ x ∉ s.assigns := by dtor_head)
+      (hdz : b.holdsDtor = true → z ∈ s.movedFirst ∧ z ∉ s.assigns := by dtor_head) :
       StmtT P Γ F (.unpair y x z s) (exitScope x (exitScope z Δ))
   | callc {Γ Γ1 Δ : Ctx} {F : List Var} {x c : Var} {j : Nat} {zs : List Var} {k : Stmt}
       {Ec E : Entry} {ms : List Nat} {q : Cross} {σ : Nat} {sig : Fn}
@@ -1053,7 +1056,8 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       -- (Agora #295; nor is the code that runs: `Implements`)
       (h14 : ¬ ThruFn P σ)
       -- (A2-drop.3a: as `letcall`'s)
-      (hdk : sig.resOwn = true → sig.resTy.hasDtor = true → x ∈ k.movedFirst := by dtor_head) :
+      (hdk : sig.resOwn = true → sig.resTy.holdsDtor = true → x ∈ k.movedFirst ∧ x ∉ k.assigns :=
+        by dtor_head) :
       StmtT P Γ F (.callc x c j zs k) (exitScope x Δ)
   | catchR {Γ Δ : Ctx} {F : List Var} {x : Var} {m0 : Mem} {s : Stmt} :
       x ∉ F → StmtT P Γ (F ++ (List.range m0.nv).filter (· ≠ x)) s Δ →
@@ -1073,7 +1077,11 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       t.hasFn = false → DtorOK P f (.dtor f t) →
       -- A2-drop.2: the binding, armed, views what the value does, or more
       HeldUp Γ1 E H → StmtT P (setE Γ1 x (Entry.arm { E with ty := .dtor f t, held := H })) F s Δ →
-      EndOK Δ x → StmtT P Γ F (.letd x f r s) (exitScope x Δ)
+      EndOK Δ x →
+      -- A2-drop.3a: and is given no other value in its scope (`Stmt.assigns`):
+      -- the old value's drop would run no destructor
+      (hna : x ∉ s.assigns := by simp [Stmt.assigns]) →
+      StmtT P Γ F (.letd x f r s) (exitScope x Δ)
   /-- A3.2: `locked_update a f`: the lock `a` (a live lock share) shares is
       taken, and its payload, a `t`, is checked out to `x` for the body:
       owned (an integer is a plain integer binding), holding nothing (the
@@ -1156,7 +1164,8 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       (h17 : StmtT P (kill .replace false c (setE Γ1 x E)) F k Δ)
       (h18 : EndOK Δ x) (h19 : ¬ ThruFn P σ)
       -- (A2-drop.3a: as `letcall`'s)
-      (hdk : sig.resOwn = true → sig.resTy.hasDtor = true → x ∈ k.movedFirst := by dtor_head) :
+      (hdk : sig.resOwn = true → sig.resTy.holdsDtor = true → x ∈ k.movedFirst ∧ x ∉ k.assigns :=
+        by dtor_head) :
       StmtT P Γ F (.callcE x c j [] k) (exitScope x Δ)
   | scopeD {Γ Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {s : Stmt} :
       -- (A2-drop.3a: of the destructor type `Ty.dtor f t`, whose destructor `f` is)
@@ -1207,6 +1216,20 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
         (setE (holdThru (memDeps D) Ex1.path (killThruV op Ex.ty Ex1.path Γ1)) x
           { Ex1 with held := Ex1.held ++ memDeps D })
 
+/-- A2-drop.3a: a function's parameters and result of a type that holds a
+    destructor value (`Ty.holdsDtor`).  A `sink` one goes to its `letd`
+    first thing, whose scope runs the destructor where the parameter's
+    ends; neither it nor an `inout` one (its caller's value) is given
+    another value (`Stmt.assigns`), whose drop would run none; and an owned
+    result is set at most once on any path (`Stmt.asgMax`), so no earlier
+    result is dropped. -/
+def DtorParamsOK (fn : Fn) : Prop :=
+  (∀ i (h : i < fn.params.length), fn.params[i].1 = .sink → fn.params[i].2.holdsDtor = true →
+    i ∈ fn.body.movedFirst ∧ i ∉ fn.body.assigns) ∧
+  (∀ i (h : i < fn.params.length) b, fn.params[i].1 = .inout b → fn.params[i].2.holdsDtor = true →
+    i ∉ fn.body.assigns) ∧
+  (fn.resOwn = true → fn.resTy.holdsDtor = true → fn.body.asgMax fn.params.length ≤ 1)
+
 /-- A function is well-typed when its body is, from its own view of the
     parameters, and ends as its summary says: the result is set and borrows
     and holds only what `lends` and `rholds` name, every `inout` parameter
@@ -1221,10 +1244,8 @@ def FnOK (P : Prog) (fn : Fn) : Prop :=
   (∀ jk ∈ fn.rholds, lendable fn jk.1 ∧ jk.2.isName = false) ∧
   (∀ o ∈ fn.outHolds, lendable fn o.2.1 ∧ o.2.2.isName = false) ∧
   (∀ jk ∈ fn.lends ++ fn.rholds, kindFits fn jk.1 jk.2) ∧ (∀ o ∈ fn.outHolds, kindFits fn o.2.1 o.2.2) ∧
-  -- A2-drop.3a: a `sink` parameter of a destructor type goes to its `letd`
-  -- first thing, whose scope runs the destructor where the parameter's ends
-  (∀ i (h : i < fn.params.length), fn.params[i].1 = .sink → fn.params[i].2.hasDtor = true →
-    i ∈ fn.body.movedFirst) ∧
+  -- A2-drop.3a: parameters and a result of a type holding a destructor
+  DtorParamsOK fn ∧
   ∃ Δ, StmtT P (sigCtx fn) [] fn.body Δ ∧
     -- A2-drop.2: the body's own destructor bindings have ended, and no
     -- parameter or result runs a destructor
@@ -1240,13 +1261,14 @@ def FnOK (P : Prog) (fn : Fn) : Prop :=
 
 def ProgOK (P : Prog) : Prop := ∀ fn ∈ P, FnOK P fn
 
-/-- A2-drop.3a: `FnOK`'s `sink` clause, for a signature none of whose `sink`
-    parameters is of a destructor type. -/
-theorem sinkMoved_of {fn : Fn} (h : ∀ pt ∈ fn.params, pt.1 = .sink → pt.2.hasDtor = false) :
-    ∀ i (hi : i < fn.params.length), fn.params[i].1 = .sink → fn.params[i].2.hasDtor = true →
-      i ∈ fn.body.movedFirst := by
-  intro i hi hs hd
-  rw [h _ (List.getElem_mem hi) hs] at hd; cases hd
+/-- A2-drop.3a: `FnOK`'s clause for a signature none of whose `sink` or
+    `inout` parameters, nor its owned result, holds a destructor value. -/
+theorem dtorParamsOK_of {fn : Fn} (h : ∀ pt ∈ fn.params, pt.2.holdsDtor = false)
+    (hr : fn.resOwn = true → fn.resTy.holdsDtor = false) : DtorParamsOK fn := by
+  refine ⟨fun i hi _ hd => ?_, fun i hi _ _ hd => ?_, fun ho hd => ?_⟩
+  · rw [h _ (List.getElem_mem hi)] at hd; cases hd
+  · rw [h _ (List.getElem_mem hi)] at hd; cases hd
+  · rw [hr ho] at hd; cases hd
 
 /-! ### Packages name code of their signature -/
 

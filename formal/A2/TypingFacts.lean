@@ -812,7 +812,7 @@ theorem StmtT.dkeep {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (
     exact fun _ _ => DKeep.bind (((DKeep.refl _ []).kill _ _ _).trans hc.dkeep fun _ h => h)
       (((DKeep.refl _ []).kill _ _ _).trans (DKeep.of_src hk ih) fun _ h => h)
   | catchR _ _ _ _ _ _ ih => exact ih
-  | letd hs _ _ hr _ _ _ _ _ _ _ _ ih => exact fun _ _ => DKeep.bind hr.dkeep (DKeep.of_src hs ih)
+  | letd hs _ _ hr _ _ _ _ _ _ _ _ _ ih => exact fun _ _ => DKeep.bind hr.dkeep (DKeep.of_src hs ih)
   | @scopeD Γ Δ F x f k _ _ _ _ _ _ _ _ ih =>
     intro ho hp
     exact ((ih (DtorOut.inner ho hp.1) hp.2).mono fun v hv h => hv (List.mem_cons_of_mem _ h)).exitScope x
@@ -991,7 +991,7 @@ theorem StmtT.dstay {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (
     exact DStay.bind hx (((DStay.refl _ []).kill _ _ _).trans hc.dstay fun _ h => h)
       (((DStay.refl _ []).kill _ _ _).trans (src0 hk ih) fun _ h => h)
   | catchR _ _ _ _ _ hst _ => exact hst
-  | letd hs hx _ hr _ _ _ _ _ _ _ _ ih => exact DStay.bind hx hr.dstay (src0 hs ih)
+  | letd hs hx _ hr _ _ _ _ _ _ _ _ _ ih => exact DStay.bind hx hr.dstay (src0 hs ih)
   | scopeD _ _ _ _ _ _ _ _ ih => exact ih.exitScope
   | editB hx hmx _ _ _ _ harg _ _ _ _ _ =>
     refine (harg.dstay.killNames _).setE fun E0 h0 _ hos _ => ?_

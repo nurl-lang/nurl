@@ -794,7 +794,7 @@ theorem StmtT.names {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : St
     intro _ hn
     exact (ih hks (NameWF.setE hn (fun Ex h => by rw [hx] at h; cases h) (fun Ex h => by rw [hx] at h; cases h)
       (fun _ _ => by unfold NameOK; rw [lockE_vdeps]; exact DepsNamed.nil _))).exitScope x
-  | @letd Γ Γ1 Δ F x f r k E t H hks hx _ hr hmo hty hstr _ _ hH _ _ ih =>
+  | @letd Γ Γ1 Δ F x f r k E t H hks hx _ hr hmo hty hstr _ _ hH _ _ _ ih =>
     intro _ hn
     obtain ⟨hn1, hE, _⟩ := hr.names hn
     have hx1 : Γ1 x = none := by

@@ -125,7 +125,7 @@ def SpawnOK (P : Prog) (spawn : Nat → Bool) : Prop :=
   ∀ f, spawn f = true → ∃ fn, P[f]? = some fn ∧ fn.resTy = .int ∧
     -- (A2-drop.3a: and of no destructor type: the thread that drops a
     -- value moved to it runs its destructor, A2-drop.3d, not modelled yet)
-    ∀ pt ∈ fn.params, pt.1 = .sink ∧ pt.2.holdsView = false ∧ pt.2.hasDtor = false
+    ∀ pt ∈ fn.params, pt.1 = .sink ∧ pt.2.holdsView = false ∧ pt.2.holdsDtor = false
 
 /-- A3.1, Send: a share crosses to a new thread when its payload holds no
     views — `SpawnOK`'s question asked of `Ty.arc t`, unchanged.  Every A2
@@ -515,7 +515,8 @@ theorem _root_.A2.StmtT.callOut {P : Prog} {Γ : Ctx} {F : List Var} {x c z : Va
       · exact exitScope_out (Ez := outE R Ez.mode) hc huc hzc.symm (by simp) _ _
   obtain ⟨Δ4, h4, hu, heq⟩ := key
   rw [← heq]
-  exact StmtT.letcall rfl hc hcF hcall h4 hu.endOK (fun _ _ _ _ => by simp [Stmt.movedFirst])
+  exact StmtT.letcall rfl hc hcF hcall h4 hu.endOK
+    (fun _ _ _ _ => ⟨by simp [Stmt.movedFirst], by simp [Stmt.assigns]; exact fun h => hzc h.symm⟩)
 
 /-- A3.3: what `arcGet` lends through a read guard: the pair of the lock's
     share and the payload, depending on the guard through a share. -/
@@ -1048,14 +1049,14 @@ theorem _root_.A2.StmtT.withLockField {P : Prog} {Γ Δs Δ : Ctx} {F : List Var
     (hend : EndOK Δs x) (hlive : ∃ E, Δs x = some E ∧ E.live = true) (hls : l ∉ s.vars) (_hys : y ∉ s.vars)
     (hput : StmtT P (exitScope x Δs) F (.assign y (.pair l w)) Δ)
     (hendw : EndOK Δ w) (hendl : EndOK (exitScope w Δ) l)
-    -- (A2-drop.3a: the struct's other field is of no destructor type: it is
+    -- (A2-drop.3a: the struct's other field holds no destructor value: it is
     -- put back only after the body, so a panic there would drop it)
-    (hbd : b.hasDtor = false) :
+    (hbd : b.holdsDtor = false) :
     StmtT P Γ F (Stmt.withLockField y l w x s) (exitScope l (exitScope w Δ)) := by
   have hcl : compE Ey (.lk t) = outE (.lk t) .own := by
     simp [compE, ownHeld, Ty.holdsView, htv, outE]
   refine StmtT.unpair (a := .lk t) (b := b) (by simp [Stmt.src, hs]) hy hly hcy hty hyF hl hw hlw hlF hwF ?_
-    hpin hds hendw hendl (fun h => by simp [Ty.hasDtor] at h) (fun h => by rw [hbd] at h; cases h)
+    hpin hds hendw hendl (fun h => by simp [Ty.holdsDtor] at h) (fun h => by rw [hbd] at h; cases h)
   rw [hcl]
   refine StmtT.seq rfl ?_ hput
   refine StmtT.withLock hs (by simp [A2.setE, A2.kill, upd_ne _ _ hxw, upd_ne _ _ hxl, upd_ne _ _ hxy, hx]) hxF
@@ -1487,7 +1488,7 @@ theorem _root_.A2.StmtT.callc_recv {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c 
     (hps : sig.params = [(.inp, .fn ms q)]) (hout : ∀ o ∈ sig.outHolds, o.2.1 ≠ 0) (hnt : ¬ ThruFn P σ)
     (hn : ∀ d ∈ Ec.vdeps, d.kind.isName = false)
     (hk : StmtT P (setE Γ x (recvRes c Ec (callRes Γ sig [c]))) F k Δ) (hend : EndOK Δ x)
-    (hdk : sig.resOwn = true → sig.resTy.hasDtor = true → x ∈ k.movedFirst) :
+    (hdk : sig.resOwn = true → sig.resTy.holdsDtor = true → x ∈ k.movedFirst ∧ x ∉ k.assigns) :
     StmtT P Γ F (.callc x c j [] k) (exitScope x Δ) := by
   have hcT := callT_recv (F := F) hσ (by rw [hps, hty]) hc hl hn hnt
   have hmut : mutNames Γ [c] = [] := by
@@ -1520,7 +1521,7 @@ theorem _root_.A2.StmtT.arcCall {P : Prog} {Γ Δ : Ctx} {F : List Var} {a g x :
         (callRes (setE Γ g (getE a ⟨.arc (.fn ms .sync), .own, true, [], [], false, false⟩ (.fn ms .sync)))
           sig [g]))) F k Δ)
     (hend : EndOK Δ x) (hendg : EndOK (exitScope x Δ) g)
-    (hdk : sig.resOwn = true → sig.resTy.hasDtor = true → x ∈ k.movedFirst) :
+    (hdk : sig.resOwn = true → sig.resTy.holdsDtor = true → x ∈ k.movedFirst ∧ x ∉ k.assigns) :
     StmtT P Γ F (.letv g (.arcGet a) (.callc x g j [] k)) (exitScope g (exitScope x Δ)) :=
   StmtT.letv hks hg hgF (arcGet_sync ha rfl rfl)
     (StmtT.callc_recv hks (by simp [setE, upd_ne _ _ hxg, hx]) hxF (upd_same _ _ _) rfl rfl hj hσ hps hout
@@ -1633,7 +1634,7 @@ theorem _root_.A2.StmtT.arcCallUp {P : Prog} {Γ Δ : Ctx} {F : List Var} {a g g
             g' { getE a ⟨.arc (.fn ms .sync), .own, true, [], [], false, false⟩ (.fn ms .sync) with
               ty := .fn ms q, dtor := false, dbind := false }) sig [g']))) F k Δ)
     (hend : EndOK Δ x) (hendg' : EndOK (exitScope x Δ) g') (hendg : EndOK (exitScope g' (exitScope x Δ)) g)
-    (hdk : sig.resOwn = true → sig.resTy.hasDtor = true → x ∈ k.movedFirst) :
+    (hdk : sig.resOwn = true → sig.resTy.holdsDtor = true → x ∈ k.movedFirst ∧ x ∉ k.assigns) :
     StmtT P Γ F (.letv g (.arcGet a) (.letv g' (.var g) (.callc x g' j [] k)))
       (exitScope g (exitScope g' (exitScope x Δ))) := by
   refine StmtT.letv hks hg hgF (arcGet_sync ha rfl rfl) ?_ hendg
@@ -2282,7 +2283,7 @@ theorem _root_.A2.StmtT.callcE_recv {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c
     (hny : NoPin Γ c) (hdc : DtorSafe Γ .replace false c)
     (hk : StmtT P (kill .replace false c (setE (callPost (kill .replace false c Γ) sig [c]) x
       (callRes (kill .replace false c Γ) sig [c]))) F k Δ) (hend : EndOK Δ x)
-    (hdk : sig.resOwn = true → sig.resTy.hasDtor = true → x ∈ k.movedFirst) :
+    (hdk : sig.resOwn = true → sig.resTy.holdsDtor = true → x ∈ k.movedFirst ∧ x ∉ k.assigns) :
     StmtT P Γ F (.callcE x c j [] k) (exitScope x Δ) :=
   StmtT.callcE hks hx hxF hc hty (Or.inl hm) hq hj hσ hps hsl hsr hso hny hdc
     (callT_recv_inout hσ (by rw [hty]; exact hps) hc hl hm (by rw [hty]; rfl) hcF hself hn hdb hny hdc hnt)
@@ -2505,7 +2506,7 @@ theorem accCode_ok : FnOK accP accCode := by
   have hp7 := hp6.upd_none 2
   refine ⟨rfl, by decide, by decide, rfl, by simp [accCode], ?_, by simp [accCode], by simp [accCode],
     by simp [accCode], by simp [accCode], by simp [accCode],
-    sinkMoved_of (by simp [accCode]), _, h2, ?_, ?_, ?_⟩
+    dtorParamsOK_of (by simp [accCode] <;> decide) (by simp [accCode] <;> decide), _, h2, ?_, ?_, ?_⟩
   · intro pt hpt
     simp only [accCode, List.mem_singleton] at hpt; subst hpt
     simp [accEnv, Ty.ok, Ty.owning]
@@ -2539,7 +2540,7 @@ theorem accSig_ok : FnOK accP accSig := by
   have hp := h0.setE (x := 1) intE_plain
   refine ⟨rfl, by decide, by decide, rfl, by simp [accSig], ?_, by simp [accSig], by simp [accSig],
     by simp [accSig], by simp [accSig], by simp [accSig],
-    sinkMoved_of (by simp [accSig]), _, hA, ?_, ?_, ?_⟩
+    dtorParamsOK_of (by simp [accSig] <;> decide) (by simp [accSig] <;> decide), _, hA, ?_, ?_, ?_⟩
   · intro pt hpt
     simp only [accSig, List.mem_singleton] at hpt; subst hpt
     simp [accTy, Ty.ok, Ty.owning]
