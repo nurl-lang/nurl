@@ -1,0 +1,37 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+drop lit.local
+drop lit.result
+lit: recovered: panic in drop lit.local
+drop call.local
+drop call.result
+call: recovered: panic in drop call.local
+drop after.local
+drop after.result
+bind_after: recovered: panic in drop after.local
+drop before.local
+drop before.result
+bind_before: recovered: panic in drop before.local
+drop join.local
+drop join.result-a
+join: recovered: panic in drop join.local
+drop falloff.local
+drop falloff.result
+falloff: recovered: panic in drop falloff.local
+drop holder.local
+drop holder.inner
+holder: recovered: panic in drop holder.local
+drop text.local
+text: recovered: panic in drop text.local
+drop list.local
+list: recovered: panic in drop list.local
+drop two.local-2
+drop two.result
+drop two.local-1
+two: recovered: panic in drop two.local-2
+drop quiet.local
+quiet: returned
+drop quiet.result
+quiet: no panic

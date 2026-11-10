@@ -5420,7 +5420,7 @@ unsafe @ __arg_lend_root i syms → s {
 // for a bare void return). Keeps the void/non-void `ret` choice keyed on
 // the FUNCTION's return type, not just the value type — so a stray value
 // can never lower to `ret i64 …` out of a `void` function.
-@ gen_ret_term i lex i syms i cg s lt s val s skip s skip_str_ptr s skip_user_ptr s skip_struct_ptr s ret_ident → v {
+@ gen_ret_term i lex i syms i cg s lt s val s skip s skip_str_ptr s skip_user_ptr s skip_struct_ptr s ret_ident s hbit → v {
     : s dtop ( nurl_sym_get g_fn_escapes `__defer_top_fn__` )
     : s fn_rt ( nurl_sym_get syms `__fn_ret_ty__` )
     ? != 0 ( nurl_str_len dtop )
@@ -5453,6 +5453,12 @@ unsafe @ __arg_lend_root i syms → s {
         ( nurl_print `  br label %` ) ( nurl_print dtop ) ( emit_dbg_eol )
     }
     {  // no defers: drop owned slices then direct return
+        // (A result that is no binding of this function is journaled
+        // while the locals are dropped: mem_ret_guard_push.)
+        // (`ret_ident` is the last name the expression read, a binding
+        // handed back only where one of the skips says so.)
+        : s __rg ? & & & == 0 ( nurl_str_len skip ) == 0 ( nurl_str_len skip_str_ptr ) == 0 ( nurl_str_len skip_user_ptr ) == 0 ( nurl_str_len skip_struct_ptr )
+        ( mem_ret_guard_push syms cg lt val hbit ) ( nurl_str_cat `` `` )
         ( mem_drop_owned syms cg skip )
         ? != 0 g_auto_drop_strings
         { ( mem_drop_owned_strings syms cg skip_str_ptr )
@@ -5467,6 +5473,7 @@ unsafe @ __arg_lend_root i syms → s {
         {}
         ( mem_own_closure_ret_release syms ret_ident )
         ( mem_drop_closure_envs syms cg )
+        ( mem_ret_guard_pop __rg )
         ? | ( seq lt `void` ) ( seq fn_rt `void` )
         { ( emit_call_term `ret void` ) }
         { ( mem_publish_return_proof syms cg lt )
@@ -5867,7 +5874,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
     { : s __ret_frt ( nurl_sym_get syms `__fn_ret_ty__` )
         ? ( seq __ret_frt `void` )
         { ( bck_record `ret` `` bck_line )
-            ( gen_ret_term lex syms cg `void` `` `` `` `` `` `` )
+            ( gen_ret_term lex syms cg `void` `` `` `` `` `` `` `` )
             ( nurl_set_last_type `void` )
             = g_did_ret 1
             ^ ( nurl_str_cat `` `` ) }
@@ -7230,7 +7237,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
     } {}
     ( mem_store_hown syms hbit )
     ( mem_save_return_proof syms cg lt skip_str_ptr | ret_is_direct_call ret_is_det_join )
-    ( gen_ret_term lex syms cg lt val skip skip_str_ptr skip_user_ptr skip_struct_ptr ret_ident )
+    ( gen_ret_term lex syms cg lt val skip skip_str_ptr skip_user_ptr skip_struct_ptr ret_ident hbit )
     ( nurl_set_last_type `void` )
     = g_did_ret 1
     val
@@ -30444,6 +30451,16 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
 
 @ mem_drop_user_drops i syms i cg s skip_ptr → v {
     : s snap ( nurl_sym_get g_fn_escapes `__dsnap_udrop__` )
+    // The binding handed back (`skip_ptr`) is this function's until the
+    // `ret`: where one of the others runs code of the program's own when
+    // it is dropped, a panic in that destructor must still find the
+    // result in the journal, so its registration ends after their drops,
+    // not in list order (agora #612: `: Bomb loc …  : Bomb res …  ^ res`
+    // forgot res first, and loc's panicking destructor left it to
+    // nobody). Everywhere else the order is the one it was: the slot
+    // stack pops in the reverse of its pushes.
+    : b hold & != 0 ( nurl_str_len skip_ptr ) ( mem_exit_drops_run_code syms skip_ptr )
+    : ~ s held_vt ``
     : ~ s rest ( nurl_sym_get syms `__user_drops__` )
     ~ != 0 ( nurl_str_len rest ) {
         : s ptr ( str_first_word rest ) = rest ( str_skip_word rest )
@@ -30458,13 +30475,88 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
             // alloca-keyed entry is now stale.) Forgotten BEFORE the drop
             // runs: a destructor that panics is not run a second time by
             // the unwind (it reclaims its own receiver's fields, gen_fn).
-            ( mem_journal_forget_userdrop cg ptr vt )
-            ? ( seq ptr skip_ptr )
-            {}
-            { ( mem_emit_gated_drop syms cg ptr vt ) }
+            ? & hold ( seq ptr skip_ptr ) { = held_vt ( nurl_str_cat vt `` ) } {
+                ( mem_journal_forget_userdrop cg ptr vt )
+                ? ( seq ptr skip_ptr )
+                {}
+                { ( mem_emit_gated_drop syms cg ptr vt ) }
+            }
         }
     }
+    ? != 0 ( nurl_str_len held_vt ) { ( mem_journal_forget_userdrop cg skip_ptr held_vt ) } {}
     ( mem_emit_drop_glue syms cg )
+}
+
+// Does a binding this exit drops — any in `__user_drops__` but the one
+// handed back, `skip_ptr` — run code of the program's own when it is
+// dropped (__drop_runs_code)? Then a panic can start between the result's
+// evaluation and the `ret`.
+@ mem_exit_drops_run_code i syms s skip_ptr → b {
+    : s snap ( nurl_sym_get g_fn_escapes `__dsnap_udrop__` )
+    : ~ s rest ( nurl_sym_get syms `__user_drops__` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s ptr ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s vt ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? & & ! ( seq ptr skip_ptr ) ! ( str_contains_word snap ptr ) ( __drop_runs_code vt ) { ^ T } {}
+    }
+    ^ F
+}
+
+// A result that is no binding of this function — a literal, a call's
+// value, a join of them — lives in a register from its evaluation to the
+// `ret`, and the locals are dropped in between. Where one of those drops
+// runs code of the program's own, a panic in it unwound past the result:
+// its destructor never ran and what it owned leaked (agora #612). So for
+// that window the result has a slot of its own in the journal, with the
+// ownership this return answers (`hbit`: a result lent by the caller is
+// not this function's to drop), and the registration ends before the
+// `ret`. Returns the slot ("" when nothing was registered).
+//
+// Nothing is emitted where no local's drop runs such code — every
+// function without a `% Drop` local, a library handle or a closure among
+// what it drops — or where the result owns nothing.
+@ mem_ret_guard_push i syms i cg s lt s val s hbit → s {
+    ? | | | == 0 g_auto_drop_strings ( seq lt `void` ) == 0 ( nurl_str_len hbit ) ( seq hbit `false` ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? ! ( mem_exit_drops_run_code syms `` ) { ^ ( nurl_str_cat `` `` ) } {}
+    : ~ s fnv ``
+    // (A struct that cannot be copied gets its drop the first time one is
+    // owned, which may be here: `^ @ Holder { … }` with no binding of one.)
+    // (An option or a result is registered as its twin, as a binding of
+    // one is: __udrop_regty.)
+    : s vt ( __udrop_regty lt )
+    ( __handle_drop_ensure vt )
+    ? ( __is_handle_ty vt ) { = fnv ( __hjdrop_fn vt ) } {
+        : s impl_mangle ( nurl_sym_get2 g_impl_name_syms `drop##` vt )
+        ? == 0 ( nurl_str_len impl_mangle ) { ^ ( nurl_str_cat `` `` ) } {}
+        // (A thunk not out yet is emitted at module end, as for a binding:
+        // mem_journal_push_userdrop.)
+        ? == 0 ( nurl_sym_len2 g_impl_name_syms `jdrop##` impl_mangle ) {
+            : s ukey ( nurl_str_cat `ujdrop##` impl_mangle )
+            ? == 0 ( nurl_sym_len g_impl_name_syms ukey ) {
+                ( nurl_sym_def g_impl_name_syms ukey `1` )
+                ( __park_append g_impl_name_syms `__pending_ujdrops__` vt )
+            } {}
+        } {}
+        = fnv ( nurl_str_cat `@__jdrop_` impl_mangle )
+    }
+    : s ll ( nurl_llty lt )
+    : s js ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print js ) ( nurl_print ` = alloca ` ) ( nurl_print ll ) ( nurl_print `\n` )
+    ( nurl_print `  store ` ) ( nurl_print ll ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, ptr ` ) ( nurl_print js ) ( nurl_print `\n` )
+    : ~ s jf ( nurl_str_cat `null` `` )
+    ? ! ( seq hbit `true` ) {
+        = jf ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print jf ) ( nurl_print ` = alloca i1\n` )
+        ( nurl_print `  store i1 ` ) ( nurl_print hbit ) ( nurl_print `, ptr ` ) ( nurl_print jf ) ( nurl_print `\n` )
+    } {}
+    ( nurl_print `  call void @nurl_journal_push_drop2(ptr ` ) ( nurl_print js ) ( nurl_print `, ptr ` )
+    ( nurl_print jf ) ( nurl_print `, ptr ` ) ( nurl_print fnv ) ( nurl_print `)\n` )
+    ^ js
+}
+
+@ mem_ret_guard_pop s slot → v {
+    ? == 0 ( nurl_str_len slot ) { ^ v } {}
+    ( nurl_print `  call void @nurl_journal_forget_slot(ptr ` ) ( nurl_print slot ) ( nurl_print `)\n` )
 }
 
 // A destructor (a `% Drop` impl, a library handle's drop hook) that panics
@@ -58483,7 +58575,7 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
         } {}
     } {}
     ? & != 0 g_auto_drop_strings | | | | == __try_inner_tt TT_LPAREN __t_bind __t_bare __t_need __t_ncok
-    { ( gen_ret_term lex syms cg fn_rt fail_val `` `` ? | __t_bind __t_askip __t_up `` `` ? | __t_bind __t_askip __try_inner_v `` ) }
+    { ( gen_ret_term lex syms cg fn_rt fail_val `` `` ? | __t_bind __t_askip __t_up `` `` ? | __t_bind __t_askip __try_inner_v `` `` ) }
     { ? != 0 ( nurl_str_len dtop )
         { ? ! ( seq fn_rt `void` )
             { : s rvp ( nurl_sym_get syms `__ret_val__` )
