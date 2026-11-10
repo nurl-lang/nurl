@@ -20,3 +20,7 @@ inner_view_through_a_cond_assigned_outward.nu             a view of an inner blo
 raw_view_block_tail.nu                                    a raw view of a block's own local as its tail, bound then handed back
 qq_value_arm_vec_field_of_a_block_local_after_another_holders_read.nu  a field arm of a block-local struct through a `??`, bound then assigned outward
 closure_returned_from_an_arm_over_a_payload.nu            a `??` whose arms are closures capturing a payload of a local `??String`, bound then handed back (the arm binding's source is `*`)
+owned_string_assigned_a_value_block_of_itself.nu          `: __el { s }  = s __el`: s given back, through a binding of the block, a lend of its own value: released, then the same buffer stored back
+owned_struct_assigned_a_value_block_of_itself.nu          the same with an owned struct `p`
+owned_vec_assigned_a_block_with_statements_of_itself.nu   the same with `{ : i t 1 v }`
+owned_vec_assigned_a_value_block_of_itself.nu             the same with an owned Vec `v`
