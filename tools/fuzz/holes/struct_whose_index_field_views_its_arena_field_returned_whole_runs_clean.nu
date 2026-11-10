@@ -1,6 +1,6 @@
-// struct_whose_index_field_views_its_arena_field_returned_whole_runs_clean: agora #383 — the same done in place: an owner handed back whole that views its own storage hands that storage on
+// struct_whose_index_field_views_its_arena_field_returned_whole_runs_clean: agora #383 — the same done in place: an owner handed back whole that views its own fields answers so (`.^arena` in g_fn_rviews, agora #600)
 // main 87895b72: refused (`returns a view of 't'`) — a self-view handed back whole was taken for a view of a released local.
-// map: §2.10 | A2 | runs-clean | - | agora #383: the same done in place: an owner handed back whole that views its own storage hands that storage on
+// map: §2.10 | A2 | runs-clean | - | agora #383: the same done in place: an owner handed back whole that views its own fields answers so (`.^arena` in g_fn_rviews, agora #600)
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 
