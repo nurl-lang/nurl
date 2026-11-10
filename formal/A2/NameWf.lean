@@ -741,12 +741,12 @@ theorem recvRes_named {Γ : Ctx} {c : Var} {Ec E : Entry}
 
 /-- What `unpair` binds holds by name only what the pair did. -/
 theorem NameWF.unpair {Γ : Ctx} (hn : NameWF Γ) {y x z : Var} {E : Entry} {a b : Ty}
-    (hy : Γ y = some E) (hl : E.live = true) (hty : E.ty = .prod a b) (hx : Γ x = none)
+    (hy : Γ y = some E) (hl : E.live = true) (hty : E.ty ≠ .int) (hx : Γ x = none)
     (hz : Γ z = none) (hxz : x ≠ z) :
     NameWF (A2.setE (A2.setE (A2.setE (A2.kill .replace false y Γ) y { E with live := false, dtor := false }) x
       (compE E a)) z (compE E b)) := by
     have hn1 := hn.moved hy
-    have hH := moved_named hn hy hl (by rw [hty]; simp)
+    have hH := moved_named hn hy hl hty
     have hxy : x ≠ y := fun e => by rw [e, hy] at hx; cases hx
     have hzy : z ≠ y := fun e => by rw [e, hy] at hz; cases hz
     have hcomp : ∀ (Γ' : Ctx) (t : Ty), DepsNamed Γ' E.held → NameOK Γ' (compE E t) := by
@@ -838,7 +838,7 @@ theorem StmtT.names {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : St
       (fun Ex h => by rw [hx1] at h; cases h) hE).kill _ _ _)).exitScope x
   | @unpair Γ Δ F y x z k E a b hks hy hl _ hty _ hx hz hxz _ _ _ _ _ _ _ _ _ ih =>
     intro _ hn
-    exact ((ih hks (hn.unpair hy hl hty hx hz hxz)).exitScope z).exitScope x
+    exact ((ih hks (hn.unpair hy hl (unpair_ne_int hty) hx hz hxz)).exitScope z).exitScope x
   | @assign Γ Γ1 F x r Ex E hx _ hmodes hr hty hxd _ _ =>
     intro _ hn
     obtain ⟨hn1, hE, X, hk⟩ := hr.names hn

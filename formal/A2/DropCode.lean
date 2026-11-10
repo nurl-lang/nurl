@@ -45,37 +45,6 @@ def _root_.A2.Stmt.vecTruncD (y : Var) (f : Nat) (x : Var) (c : Expr) : Stmt :=
 def _root_.A2.Stmt.vecClearD (y : Var) (f : Nat) (x : Var) : Stmt :=
   .while (.lt (.lit 0) (.len x)) (.letd y f (.popFront x) .skip)
 
-/-- `EndOK` reads an entry's type, mode, dependencies and whether it may run
-    a destructor: a context whose entries are another's in these has it too. -/
-theorem endOK_of_same {Γ Γ1 : Ctx} {y : Var}
-    (h : ∀ v E1, Γ1 v = some E1 → ∃ E0, Γ v = some E0 ∧ E1.ty = E0.ty ∧ E1.mode = E0.mode ∧
-      E1.vdeps = E0.vdeps ∧ (E1.dtor = true → E0.dtor = true) ∧ (E1.dbind = true → E0.dbind = true))
-    (he : EndOK Γ y) : EndOK Γ1 y := by
-  refine ⟨fun p E1 hp hm d hd hb => ?_, fun v E1 hv hdt hos => ?_, fun v E1 hv hdb hos hn d hd hnm => ?_⟩
-  · obtain ⟨E0, h0, _, hmo, hvd, _, _⟩ := h p E1 hp
-    exact he.1 p E0 h0 (hmo ▸ hm) d (hvd ▸ hd) hb
-  · obtain ⟨E0, h0, hty, hmo, hvd, hd', _⟩ := h v E1 hv
-    have := he.2.1 v E0 h0 (hd' hdt) (hmo ▸ hos)
-    unfold hitsMem at this ⊢
-    rw [hty, hmo, hvd]; exact this
-  · obtain ⟨E0, h0, hty, hmo, hvd, _, hb'⟩ := h v E1 hv
-    exact he.2.2 v E0 h0 (hb' hdb) (hmo ▸ hos) (by rw [← hty, ← hmo]; exact hn) d (hvd ▸ hd) hnm
-
-/-- A fresh binding that runs no armed destructor and is no borrowed
-    parameter may end where the context before it lets it. -/
-theorem endOK_bind {Γ : Ctx} {y : Var} {E : Entry} (he : EndOK Γ y) (hy : Γ y = none)
-    (hm : E.mode ≠ .rootb) (hd : E.dtor = false) (hb : E.dbind = false) : EndOK (setE Γ y E) y := by
-  refine ⟨fun p E1 hp hm1 d hdd hbd => ?_, fun v E1 hv hdt hos => ?_, fun v E1 hv hdb hos hn d hdd hnm => ?_⟩
-  · by_cases hpy : p = y
-    · subst hpy; simp [setE] at hp; subst hp; exact absurd hm1 hm
-    · rw [setE, upd_ne _ _ hpy] at hp; exact he.1 p E1 hp hm1 d hdd hbd
-  · by_cases hvy : v = y
-    · subst hvy; simp [setE] at hv; subst hv; rw [hd] at hdt; cases hdt
-    · rw [setE, upd_ne _ _ hvy] at hv; exact he.2.1 v E1 hv hdt hos
-  · by_cases hvy : v = y
-    · subst hvy; simp [setE] at hv; subst hv; rw [hb] at hdb; cases hdb
-    · rw [setE, upd_ne _ _ hvy] at hv; exact he.2.2 v E1 hv hdb hos hn d hdd hnm
-
 /-- **`vec_free` of a `Vec` of destructor values is typed code.**  Where
     `StmtT.free` would free an owned `Vec` `x` (live, not lent, not pinned,
     viewed by no binding that may run a destructor) but for its elements
@@ -86,7 +55,7 @@ theorem vecFreeD_typed {P : Prog} {Γ : Ctx} {F : List Var} {x y : Var} {f : Nat
     (hw : CtxWF Γ) (hx : Γ x = some E) (hl : E.live = true) (hm : E.mode = .own)
     (hty : E.ty = .vec (.dtor f t)) (hxF : x ∉ F) (hnp : NoPin Γ x) (hds : DtorSafe Γ .replace false x)
     (hv : t.holdsView = false) (hst : t.isStruct = true) (hfn : t.hasFn = false)
-    (hok : DtorOK P f (.dtor f t)) (hy : Γ y = none) (hyF : y ∉ F) (he : EndOK Γ y) :
+    (hok : DropFnOK P f t) (hy : Γ y = none) (hyF : y ∉ F) (he : EndOK Γ y) :
     StmtT P Γ F (Stmt.vecFreeD y f x)
       (setE (kill .replace false x Γ) x { E with live := false, dtor := false }) := by
   have hxy : y ≠ x := fun h => by rw [h, hx] at hy; cases hy
@@ -126,7 +95,7 @@ theorem vecTruncD_typed {P : Prog} {Γ : Ctx} {F : List Var} {x y : Var} {f : Na
     (hty : E.ty = .vec (.dtor f t)) (hxF : x ∉ F) (hds : DtorSafe Γ .drop false x)
     (hfix : kill .drop false x Γ = Γ) (hc : ExprT Γ c)
     (hv : t.holdsView = false) (hst : t.isStruct = true) (hfn : t.hasFn = false)
-    (hok : DtorOK P f (.dtor f t)) (hy : Γ y = none) (hyF : y ∉ F) (he : EndOK Γ y) :
+    (hok : DropFnOK P f t) (hy : Γ y = none) (hyF : y ∉ F) (he : EndOK Γ y) :
     StmtT P Γ F (Stmt.vecTruncD y f x c) Γ := by
   have hr : RhsT Γ F (.pop x) (popE x E (.dtor f t)) (kill .drop (Ty.dtor f t).holdsView x Γ) :=
     RhsT.pop hx hl hty hcd hxF (by simpa [Ty.holdsView, hv] using hds)
@@ -149,7 +118,7 @@ theorem vecClearD_typed {P : Prog} {Γ : Ctx} {F : List Var} {x y : Var} {f : Na
     (hty : E.ty = .vec (.dtor f t)) (hxF : x ∉ F) (hds : DtorSafe Γ .drop false x)
     (hfix : kill .drop false x Γ = Γ)
     (hv : t.holdsView = false) (hst : t.isStruct = true) (hfn : t.hasFn = false)
-    (hok : DtorOK P f (.dtor f t)) (hy : Γ y = none) (hyF : y ∉ F) (he : EndOK Γ y) :
+    (hok : DropFnOK P f t) (hy : Γ y = none) (hyF : y ∉ F) (he : EndOK Γ y) :
     StmtT P Γ F (Stmt.vecClearD y f x) Γ := by
   have hr : RhsT Γ F (.popFront x) (popE x E (.dtor f t)) (kill .drop (Ty.dtor f t).holdsView x Γ) :=
     RhsT.popFront hx hl hty hcd hxF (by simpa [Ty.holdsView, hv] using hds)
@@ -279,25 +248,25 @@ theorem main6_typed : ∃ Δ, StmtT P (fun _ => none) [] main6 Δ := by
     hw6 h63 (by rw [hEV6]) (Or.inl (by rw [hEV6])) (by rw [hEV6]; rfl) (by simp)
     (DtorSafe.of_none (fun v E h => (hK6 v E h).2.1) _ _ _) hfix
     (ExprT.lt ExprT.lit (ExprT.len h63 (by rw [hEV6]) (by rw [hEV6])))
-    rfl rfl rfl dtor_ok (by simp [K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill]) (by simp) (hK6.endOK _)
+    rfl rfl rfl drop_ok (by simp [K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill]) (by simp) (hK6.endOK _)
   have hcl := vecClearD_typed (P := P) (F := []) (y := 6) (f := 0) (t := T)
     hw6 h63 (by rw [hEV6]) (Or.inl (by rw [hEV6])) (by rw [hEV6]; rfl) (by simp)
     (DtorSafe.of_none (fun v E h => (hK6 v E h).2.1) _ _ _) hfix
-    rfl rfl rfl dtor_ok (by simp [K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill]) (by simp) (hK6.endOK _)
+    rfl rfl rfl drop_ok (by simp [K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill]) (by simp) (hK6.endOK _)
   have hfr := vecFreeD_typed (P := P) (F := []) (y := 5) (f := 0) (t := T)
     hw6 h63 (by rw [hEV6]) (by rw [hEV6]) (by rw [hEV6]; rfl) (by simp) (hK6.noPin _)
     (DtorSafe.of_none (fun v E h => (hK6 v E h).2.1) _ _ _)
-    rfl rfl rfl dtor_ok (by simp [K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill]) (by simp) (hK6.endOK _)
+    rfl rfl rfl drop_ok (by simp [K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill]) (by simp) (hK6.endOK _)
   have hK7 : NoRootb (A2.setE (kill .replace false 3 K6) 3 { EV6 with live := false, dtor := false }) :=
     (hK6.kill _ _ _).setE (by rw [hEV6]; simp)
   have hbody := StmtT.seq (P := P) rfl hpush (StmtT.seq rfl htr (StmtT.seq rfl hcl hfr))
   have hdv := StmtT.letd (P := P) (Γ := K3) (Γ1 := K3) (F := []) (x := 3) (f := 0) (r := .new DT)
     (E := EN) (t := T) (H := []) (τ := .vec DT) rfl (by simp [K3, K2, K1, A2.setE, upd])
-    (by simp) hnew rfl (Or.inr ⟨rfl, rfl, rfl⟩) rfl rfl dtor_ok (HeldUp.refl _ _) hbody (hK7.endOK _)
+    (by simp) hnew rfl (Or.inr ⟨rfl, rfl, rfl⟩) rfl rfl drop_ok (HeldUp.refl _ _) hbody (hK7.endOK _)
     (by simp [Stmt.assigns, Stmt.vecTruncD, Stmt.vecClearD, Stmt.vecFreeD])
   have hd := StmtT.letd (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .pair 0 1)
     (E := EP) (t := T) (H := []) rfl (by simp [K2, K1, A2.setE, upd])
-    (by simp) hpair rfl (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl dtor_ok (HeldUp.refl _ _) hdv
+    (by simp) hpair rfl (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl drop_ok (HeldUp.refl _ _) hdv
     ((hK7.exitScope 3).endOK _) (by simp [Stmt.assigns, Stmt.vecTruncD, Stmt.vecClearD, Stmt.vecFreeD])
   have h1 := StmtT.letv (P := P) (x := 1) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K1) (Γ1 := K1)
     rfl (by simp [K1, A2.setE]) (by simp) (RhsT.expr ExprT.lit) hd

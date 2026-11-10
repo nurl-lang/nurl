@@ -19,6 +19,12 @@ import A3
 #print axioms A2.Dtor.unpair_hands_over
 #print axioms A2.Dtor.letd_dtor
 #print axioms A2.Dtor.fnOK_dtor_params
+-- Agora #616: a struct's drop glue takes the struct apart, a frame per field
+#print axioms A2.Dtor.unpair_typed
+#print axioms A2.Dtor.struct_dtor_is_glue
+#print axioms A2.Dtor.glue_takes_apart
+#print axioms A2.DtorWitness.main7_safe
+#print axioms A2.DtorWitness.main7_lent_refused
 #print axioms A2.Dtor.result_frame_is_scopeD
 #print axioms A2.Dtor.scopeD_end_runs_dtor
 #print axioms A2.Dtor.scopeD_panic_runs_dtor

@@ -267,8 +267,8 @@ def Ty.dtorFree : Ty → Bool
 
 /-- A2-drop.3b's drain: a `Vec` of destructor values (`.vec (.dtor f u)`), the
     one `Vec` whose elements hold one. It is a type only a binding's own
-    (`Ty.ok` refuses it as any part of another type: a struct's glue lends
-    `self` and cannot pop a field, a share's or a channel's payload is swept
+    (`Ty.ok` refuses it as any part of another type: no rule builds a struct
+    with such a field yet, a share's or a channel's payload is swept
     with no code). -/
 def Ty.vecD : Ty → Bool
   | .vec t => !t.dtorFree

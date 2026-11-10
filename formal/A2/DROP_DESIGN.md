@@ -49,13 +49,25 @@ A2-drop.3b; A2-drop.3a's rule looked one level down only).
 - **A struct holding a destructor value is a destructor type itself, its
   drop glue its destructor.** `letv` refuses an owned `prod (dtor g s) b`,
   so such a struct is bound by `letd x f (pair y z)`, at `Ty.dtor f (prod
-  …)`, and `f` is its glue: the elaboration's function that lends each
-  destructor field to its destructor (`fst` / `snd` read a field through
-  the type, `E.ty.undtor = .prod a b`), after any `% Drop` of the
-  struct's own: nurlc runs the impl first, then the fields' glue. The calculus
-  checks `f` as it checks any destructor (`DtorOK`, `FnOK`); that it calls
-  the fields' destructors is the elaboration's part, as nurlc generates the
-  glue. Deeper nesting: a struct or an enum holding such a struct, with no
+  …)`, and `f` is its glue. **Agora #616: the glue is a function that
+  takes the struct owned and takes it apart** (`GlueOK`: one `sink`
+  parameter of the type `Ty.dtor f (prod a b)`, the body an `unpair` of
+  it), and no destructor that takes such a struct lent is accepted
+  (`DropFnOK`). No new step and no new run-time form: the frame's end
+  calls `f` on `x` as before (`Step.scopeDEnd` / `scopeDP`), and the call
+  moves `x` in because the parameter is `sink` (`glueCall_typed`); in the
+  glue, `unpair`'s own rule hands every field that holds a destructor
+  value to a `letd` first thing (`hdx` / `hdz`, `A2.Dtor.glue_takes_apart`),
+  so each has a frame of its own before anything can panic, and a panic
+  in one field's destructor unwinds through the others' frames. `unpair`
+  takes a value of such a type apart anywhere (its rule's `h5`): that is
+  what its drop does. Nesting the `letd`s as `letd z' (var z) (letd y'
+  (var x) skip)` runs the fields' destructors in field order, nurlc's.
+  In this cut the struct holds no views (the moved-in value must hold
+  nothing), and a struct with a `% Drop` of its own beside a destructor
+  field is refused: its drop is the impl lent, THEN the glue, which needs
+  the frame's end to go on under a frame of the glue's type (next cut).
+  Deeper nesting: a struct or an enum holding such a struct, with no
   destructor type of its own between them, holds a destructor value too,
   since `Ty.holdsDtor` is deep (A2-drop.3b), so it is bound by `letd` with
   its glue as well (`A2.DtorWitness.main4_safe`, a `sum (prod DT int)
@@ -89,15 +101,17 @@ A2-drop.3b; A2-drop.3a's rule looked one level down only).
   `vec_free`, `withElem`) refuse one; `vec_free`, `vec_clear` and
   `vec_truncate` of one are written as code the calculus types
   (`A2/DropCode.lean`).
-- **Taking a destructor value apart is refused**: `unpair` asks `E.ty =
-  .prod a b` exactly, and `takel` / `taker` `E.ty = .sum a b`; so is a field
+- **Taking a destructor value apart is refused**, unless its destructor is
+  a struct's glue (Agora #616): `unpair` asks `E.ty = .prod a b`, or
+  `.dtor f (.prod a b)` with `GlueOK P f`, and `takel` / `taker` `E.ty =
+  .sum a b`; so is a field
   written in place (`unpair` and `assign`). Taking it apart would bypass the
   destructor. Its fields and payloads are lent through the type instead,
   and an `inout` parameter of such a type is neither assigned nor taken
-  apart. This is stricter than Rust, which refuses a move out of a type
+  apart. As Rust, which refuses a move out of a type
   with a `Drop` impl of its own but lets a program take apart a struct
-  whose fields alone have one; here a struct whose destructor is only its
-  glue is a destructor type too.
+  whose fields alone have one: a struct whose destructor is its glue
+  (`GlueOK`, Agora #616) is taken apart by `unpair`.
 
 - **A call's owned result of a destructor type is a destructor frame's from
   the start** (Agora #611). The call's inside is `resFrame fn r …`:
@@ -586,7 +600,8 @@ each one shrinks `CLAIM.md`'s exception:
         a payload, a view's element, a channel, a lock, an `Arc`, a cell or
         a `Vec` of a `Vec D` stays refused; `RhsT.pair` / `inl` / `inr` /
         `arcNew` / `lockNew` / `cellNew` and `StmtT.lockedSet` ask it of
-        what moves in. A struct's glue lends `self` and cannot pop a field,
+        what moves in. A struct's glue hands a field to a `letd`, and no rule
+        yet builds a struct with a `Vec D` field (`RhsT.pair`),
         and a channel's queue is swept with its block, running no code (3d).
      2. *`withElem` of a `Vec D`'s element.* Refused: the check-out is an
         owned binding of a destructor type that is no `letd`'s, so
@@ -714,12 +729,13 @@ each one shrinks `CLAIM.md`'s exception:
      `A3.claim` and `A3.claim_made` are re-proven over the new step.
 
 With the result's frame (Agora #611) every value's own, outermost
-destructor runs where the value is dropped. What `CLAIM.md` still lists
-is inside a value (Agora #616): that a struct's glue runs its fields'
-destructors is the elaboration's part, unchecked, and a panic anywhere in
-the glue frees the remaining fields with no destructor (the model that
-shows both: the glue with a frame per field, *Semantics* above,
-`dropCode`'s `unpair`). And the stricter-than-nurlc list (a spawned
+destructor runs where the value is dropped. A struct's fields run theirs
+in the struct's glue, a frame per field (Agora #616, above). What
+`CLAIM.md` still lists inside a value is an enum's payload: that an
+enum's glue (which takes it lent) runs the payload's destructor is the
+elaboration's part, unchecked, and a panic in it frees the payload with no
+destructor (the model that shows it: glue that takes the enum owned and
+the payload out, as the struct's). And the stricter-than-nurlc list (a spawned
 function's parameter that holds a destructor value among it, `SpawnOK`).
 
 

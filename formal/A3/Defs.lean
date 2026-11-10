@@ -1052,7 +1052,7 @@ theorem _root_.A2.StmtT.withLockField {P : Prog} {Γ Δs Δ : Ctx} {F : List Var
     StmtT P Γ F (Stmt.withLockField y l w x s) (exitScope l (exitScope w Δ)) := by
   have hcl : compE Ey (.lk t) = outE (.lk t) .own := by
     simp [compE, ownHeld, Ty.holdsView, htv, outE]
-  refine StmtT.unpair (a := .lk t) (b := b) (by simp [Stmt.src, hs]) hy hly hcy hty hyF hl hw hlw hlF hwF ?_
+  refine StmtT.unpair (a := .lk t) (b := b) (by simp [Stmt.src, hs]) hy hly hcy (Or.inl hty) hyF hl hw hlw hlF hwF ?_
     hpin hds hendw hendl (fun h => by simp [Ty.holdsDtor] at h) (fun h => by rw [hbd] at h; cases h)
   rw [hcl]
   refine StmtT.seq rfl ?_ hput
