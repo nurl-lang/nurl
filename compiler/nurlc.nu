@@ -23364,6 +23364,13 @@ unsafe @ gen_match i lex i syms i cg → s {
                     {} }
                 {}
             } {}
+            // (Where the enum keeps its payloads — held by a binding, a
+            // parameter, another name, a temporary given an owner, or lent
+            // by a call or a field — the later payloads are lent to the arm
+            // as the first is: mem_arm_payload_lend, agora #641.)
+            : b __m_pl_lent | | __m_call_lent ( __match_scrut_lent syms match_first_tt match_var_name match_scrut_field )
+            | m_tmp_enum & != 0 ( nurl_str_len match_var_name )
+            | | != 0 ( nurl_str_len ( mem_udrop_ptr_of syms match_var_name ) ) >= ( nurl_sym_word_index syms `__fn_param_names__` match_var_name ) 0 ( is_ident_tok match_first_tt )
             // Bind second payload variable (enum field 2)
             ? != 0 ( nurl_str_len pv1 ) {
                 : s pt1 ( nurl_sym_get2 syms pattern_name `__payload__1` )
@@ -23392,7 +23399,7 @@ unsafe @ gen_match i lex i syms i cg → s {
                 { : s a1_key ( nurl_str_cat `drop##` pt1 )
                     ? & != 0 ( nurl_sym_len g_impl_name_syms a1_key )
                     ! ( __drop_is_compiler_auto pt1 )
-                    { ( mem_own_add_user_drop syms cg vp1 pt1 ) }
+                    { ( mem_own_add_user_drop syms cg vp1 pt1 ) ( mem_arm_payload_lend syms cg vp1 pt1 __m_pl_lent ) }
                     {}
                 }
                 {}
@@ -23425,7 +23432,7 @@ unsafe @ gen_match i lex i syms i cg → s {
                 { : s a2_key ( nurl_str_cat `drop##` pt2 )
                     ? & != 0 ( nurl_sym_len g_impl_name_syms a2_key )
                     ! ( __drop_is_compiler_auto pt2 )
-                    { ( mem_own_add_user_drop syms cg vp2 pt2 ) }
+                    { ( mem_own_add_user_drop syms cg vp2 pt2 ) ( mem_arm_payload_lend syms cg vp2 pt2 __m_pl_lent ) }
                     {}
                 }
                 {}
@@ -23439,7 +23446,7 @@ unsafe @ gen_match i lex i syms i cg → s {
             ~ != 0 ( nurl_str_len pb_rest ) {
                 : s pb_tok ( str_first_word pb_rest )
                 = pb_rest ( str_skip_word pb_rest )
-                ? ! ( seq pb_tok `_` ) { ( emit_enum_payload_bind pb_tok pb_idx pattern_name match_type match_val syms cg ) } {}
+                ? ! ( seq pb_tok `_` ) { ( emit_enum_payload_bind pb_tok pb_idx pattern_name match_type match_val __m_pl_lent syms cg ) } {}
                 = pb_idx + pb_idx 1
             }
             // What an arm handing a payload out takes it out of (agora #175).
@@ -50554,7 +50561,19 @@ unsafe @ __agg_shape_clash s vty s dty → b {
 // user-`Drop`). One call per slot, driven by a loop in gen_match,
 // generalises the former hand-unrolled slot-1 / slot-2 blocks to N
 // payloads — lifting the 3-payload destructuring limit.
-@ emit_enum_payload_bind s pvi i pidx s pattern_name s match_type s match_val i syms i cg → v {
+// A second or later payload of an enum's variant, of a type with a `% Drop`
+// of the program's own, bound in an arm: lent to the arm wherever the enum
+// keeps it — the rule the first payload has (h231, gen_match). Registered
+// as the arm's own with nothing said, as it was, the arm dropped it at its
+// end and the enum's owner dropped it again (agora #641: a `??` over a
+// variant `Bomb String Bomb` was a heap-use-after-free with no panic).
+@ mem_arm_payload_lend i syms i cg s vp s pt b lent → v {
+    ? ! & lent ( __nc_drop_ty pt ) { ^ v } {}
+    ( mem_udrop_flag_set syms cg vp `0` )
+    ( nurl_sym_def syms ( nurl_str_cat vp `__sborrow` ) `1` )
+}
+
+@ emit_enum_payload_bind s pvi i pidx s pattern_name s match_type s match_val b lent i syms i cg → v {
     : s pkey ( nurl_str_cat3 pattern_name `__payload__` ( nurl_str_int pidx ) )
     : s pti ( nurl_sym_get syms pkey )
     : s pri ( nurl_cg_reg cg )
@@ -50580,7 +50599,7 @@ unsafe @ __agg_shape_clash s vty s dty → b {
     { : s akey ( nurl_str_cat `drop##` pti )
         ? & != 0 ( nurl_sym_len g_impl_name_syms akey )
         ! ( __drop_is_compiler_auto pti )
-        { ( mem_own_add_user_drop syms cg vpi pti ) }
+        { ( mem_own_add_user_drop syms cg vpi pti ) ( mem_arm_payload_lend syms cg vpi pti lent ) }
         {}
     }
     {}
