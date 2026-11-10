@@ -958,9 +958,15 @@ AddressSanitizer and LeakSanitizer). That the journal's drain does what
 
 Places where the runtime does not yet do what the calculus says, each
 filed: a result when a `;` defer body panics after it is set, or of raw
-`s` or closure type (Agora #620); the later fields of a struct and
-payloads of an enum when an earlier one's destructor panics (Agora #617;
-the calculus's side is #616).
+`s` or closure type (Agora #620).
+
+The later fields of a struct and payloads of an enum, when an earlier
+one's destructor panics, are dropped by the runtime (Agora #617): the
+drop glue nurlc writes registers the parts still to go before it drops a
+part that may run a destructor, so the panic's drain runs their
+destructors, in order and once each. That is the run Agora #616 gives the
+calculus; until it lands the calculus frees those parts with no code.
+Test: `compiler/tests/panic_in_drop_of_struct_field.nu`.
 
 ## Trusted base
 

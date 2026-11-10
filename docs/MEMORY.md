@@ -2162,6 +2162,11 @@ journal** instead:
   result's destructor, once, and frees what the result owns. (A result
   the caller lent, handed back as it is, is not the function's to drop
   and is not recorded as one.)
+- A struct or an enum being dropped by the glue the compiler writes is
+  recorded part by part where a part may run a destructor: the fields (or
+  the payloads) after the one being dropped are still dropped, in order
+  and once each, if its destructor panics, and the box of a payload that
+  lives in one is freed.
 - A `Vec` releasing elements that may run a destructor is recorded too,
   as the elements still to go. An element's destructor that panics (in
   the `Vec`'s own drop, a `vec_truncate` or a `vec_clear`) does not end
