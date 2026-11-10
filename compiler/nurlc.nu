@@ -30548,6 +30548,11 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
     // (An option or a result is registered as its twin, as a binding of
     // one is: __udrop_regty.)
     : s vt ( __udrop_regty lt )
+    // (…and the drops of the library handles inside it are asked for now,
+    // while generic instances are still being collected: a result of
+    // `!( Pooled A E ) E` guarded here was the program's only drop of a
+    // Pooled, and its `Pooled_drop` instance was never written.)
+    ( __libh_walk lt g_root_syms )
     ( __handle_drop_ensure vt )
     ? ( __is_handle_ty vt ) { = fnv ( __hjdrop_fn vt ) } {
         : s impl_mangle ( nurl_sym_get2 g_impl_name_syms `drop##` vt )
