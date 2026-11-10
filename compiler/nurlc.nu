@@ -17893,7 +17893,11 @@ unsafe @ gen_call i lex i syms i cg → s {
         // (An Rc handed to a call: the walk asks which handles may be the
         // same value.)
         ? ( is_ident_tok bck_arg_tt ) { ( bck_note_rc_arg bck_arg_val at ) } {
-            ? != 0 ( nurl_str_len arg_froot ) { ( bck_note_rc_arg arg_froot at ) } {}
+            ? != 0 ( nurl_str_len arg_froot ) { ( bck_note_rc_arg arg_froot at ) } {
+                // (…and a value block whose tail is a binding or a field path,
+                // `{ . h a }`: named by it, agora #499 — formal's #1679 review.)
+                ? & & & == bck_arg_tt TT_LBRACE != 0 ( nurl_str_len arg_sx ) ! ( __sx_lends_any arg_sx ) & ! ( seq arg_sx `-` ) ! ( seq arg_sx `*` ) { ( bck_note_rc_arg arg_sx at ) } {}
+            }
         }
         // (A value that holds nothing — a number, a struct of numbers — is
         // a copy: there is no move to decide and nothing to lend.)
@@ -39300,7 +39304,10 @@ unsafe @ bck_note_rc_arg s name s ty → v {
         // value: what the call drops through it is what this borrows from.
         ? & & & == 0 ( nurl_str_len why ) ! hit >= wid 0 | | | == kc 9 == kc 12 == kc 13 == kc 32 {
             : s wty ( bck_rc_type_of ( nurl_sym_get2 g_bck `rv_` wn ) )
-            ? & & != 0 ( nurl_str_len wty ) != rid wroot ( seq wty ( bck_rc_type_of ( nurl_sym_get2 g_bck `rv_` srcs ) ) ) {
+            // (…of another binding, or another field of the same one that a
+            // path-precise row did not reach: two shares of one Rc may sit
+            // in sibling fields, `. h a` and `. h z` — formal's #1679 review.)
+            ? & & != 0 ( nurl_str_len wty ) | != rid wroot wfield ( seq wty ( bck_rc_type_of ( nurl_sym_get2 g_bck `rv_` srcs ) ) ) {
                 ? ( bck_callee_drops_elems ( bck_field rec 5 ) ( bck_field rec 6 ) ) {
                     = why ( nurl_str_cat4 `'` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` wn ) ) `', which may be another handle on the same Rc value, was passed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) `', which may drop or replace what it holds` ) )
                     = eonly T
