@@ -40455,7 +40455,11 @@ unsafe @ bck_note_rc_arg s name s ty → v {
             // loop over a container lent out of those owners reads a buffer
             // at the borrow's level, which stays: g_bck_end_elem 2. Agora
             // #493.)
-            : b deep & == kc 32 | g_bck_sx_part ( seq ( bck_field rec 0 ) `pendlend` )
+            // (Swept for a storage its source expression names,
+            // g_bck_sx_wid: a part only where that root is one, `^` — a
+            // callee that hands the borrow back WHOLE, `( grow ( pickv cur
+            // other ) )`, moves the borrow's own buffer.)
+            : b deep & == kc 32 ? >= g_bck_sx_wid 0 g_bck_sx_part ( seq ( bck_field rec 0 ) `pendlend` )
             // (…and through a `~` loop's own element — `( string_push_str x
             // … )` in `~ x . ( vec_at bs 0 ) items`: the element's buffer, a
             // level below the container that loop walks. Its cursor, `fcx_`,
