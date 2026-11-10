@@ -176,7 +176,7 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
       exact hny p Ep h0 hm d hd hb
     have h2 := CtxRel.kill ha hcF .replace false (hny1.kills .replace false)
     exact h2.trans (ih hks (ha.kill _ _ _) (hnx.kill _ _ _))
-  | @withElem Γ Γ1 Δ1 Δ F y x i k Ey E hks hx hxF _ _ _ hpy _ hr hk _ hpin _ ihs ihp =>
+  | @withElem Γ Γ1 Δ1 Δ F y x i k Ey E hks hx hxF _ _ _ hpy _ hr hk _ hpin _ _ ihs ihp =>
     intro _ hanch hn
     have hyF : y ∉ F := by cases hr; assumption
     have hk0 := CtxRel.kill hanch hyF .replace false (hpy.kills .replace false)
@@ -197,16 +197,16 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
       (fun Ex h => by rw [hx] at h; cases h) (fun _ _ => by unfold NameOK; rw [lockE_vdeps]; exact DepsNamed.nil _)
     have hnrb : (lockE t).mode ≠ .rootb := by unfold lockE; split <;> simp [intE]
     exact CtxRel.bind hanch hx hxF (CtxRel.refl _) hnrb (fun ha => ih hks ha hnx) hpin.1
-  | @letd Γ Γ1 Δ F x f r k E t H hks hx hxF hr hmo hty hstr _ _ hH _ hpin _ ih =>
+  | @letd Γ Γ1 Δ F x f r k E t T H hks hx hxF hr hmo hty hstr _ _ hH _ hpin _ ih =>
     intro _ hanch hn
     obtain ⟨hn1, hE, _⟩ := hr.names hn
     have hx1 : Γ1 x = none := by
       have := (hr.domMode).1 x; rw [hx] at this; cases h : Γ1 x <;> simp_all
-    have hne : E.ty ≠ .int := by rcases hty with h' | h' <;> rw [h'] <;> cases t <;> simp_all [Ty.isStruct]
-    have hnx := NameWF.setE hn1 (E := Entry.arm { E with ty := .dtor f t, held := H })
+    have hne : E.ty ≠ .int := hty.ne_int hstr
+    have hnx := NameWF.setE hn1 (E := Entry.arm { E with ty := T, held := H })
       (fun Ex h => by rw [hx1] at h; cases h)
       (fun Ex h => by rw [hx1] at h; cases h) (fun hl _ => (hE hl (Or.inl hne)).widen hmo hH)
-    exact CtxRel.bind (E := Entry.arm { E with ty := .dtor f t, held := H }) hanch hx hxF (hr.ctxRel hanch)
+    exact CtxRel.bind (E := Entry.arm { E with ty := T, held := H }) hanch hx hxF (hr.ctxRel hanch)
       (show E.mode ≠ .rootb by rw [hmo]; simp) (fun ha => ih hks ha hnx) hpin.1
   | @letcall Γ Γ1 Δ F x f args k E hks hx hxF hc _ hpin _ ih =>
     intro _ hanch hn

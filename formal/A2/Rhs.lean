@@ -368,6 +368,17 @@ theorem RhsOut.retype {m1 : Mem} {Γ1 : Ctx} {E : Entry} {v : Val} {o : Bool}
     · exact SharesOK.dtor_iff.mpr hs
     · exact hs
 
+/-- A2-drop.3b: the value `letd` binds, at the type it binds it at
+    (`DtorBind`): retyped to `Ty.dtor f t`. -/
+theorem RhsOut.retypeB {m1 : Mem} {Γ1 : Ctx} {E : Entry} {v : Val} {o : Bool}
+    (h : RhsOut m1 Γ1 E v o) (hmo : E.mode = .own) {f : Nat} {t T : Ty}
+    (hb : DtorBind f t E.ty T) (hst : t.isStruct = true) :
+    RhsOut m1 Γ1 { E with ty := T } v o := by
+  generalize hET : E.ty = ET at hb
+  cases hb with
+  | made => exact h.retype hmo (.inl hET) hst
+  | moved => exact h.retype hmo (.inr hET) hst
+
 /-! #### A3.5b: subsumption between closure classes
 
 A closure taken at a class above its own (`RhsT.moveUp`, `RhsT.copyUp`) is the

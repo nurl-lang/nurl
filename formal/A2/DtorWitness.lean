@@ -97,35 +97,38 @@ theorem fnOK_dtor_params {P : Prog} {fn : Fn} (h : FnOK P fn) :
     one step runs `f` on `x` lent, then `scope x` frees the tree. -/
 theorem scopeD_end_runs_dtor {P : Prog} {Γ Δ : Ctx} {F : List Var} {x : Var} {f : Nat}
     {m : Mem} {v : Val} (ht : StmtT P Γ F (.scopeD x f .skip) Δ)
-    (hx : m.st x = some ⟨true, some v⟩) :
+    (hx : m.st x = some ⟨true, some v⟩) (hv : v.isNode = false) :
     (∃ t, DtorOK P f (.dtor f t)) ∧
       Step P m (.scopeD x f .skip) (.ok { m with nv := m.nv + 1 } (.scope x (.letcall m.nv f [x] .skip))) ∧
       ∀ r, Step P m (.scopeD x f .skip) r →
         r = .ok { m with nv := m.nv + 1 } (.scope x (.letcall m.nv f [x] .skip)) := by
-  refine ⟨?_, Step.scopeDEnd hx, fun r h => ?_⟩
+  refine ⟨?_, Step.scopeDEnd hx hv, fun r h => ?_⟩
   · generalize hst : Stmt.scopeD x f .skip = st at ht
     induction ht with
     | scopeD hE _ _ _ _ _ _ _ =>
       cases hst
       obtain ⟨E, t, _, _, h3, _, h5⟩ := hE
-      exact ⟨t, h3 ▸ h5⟩
+      exact ⟨t, h5⟩
     | sub _ _ _ ih => exact ih hst
     | _ => cases hst
   · cases h with
     | scopeDIn hs => exact (skip_no_step hs).elim
-    | scopeDEnd _ => rfl
+    | scopeDEnd _ _ => rfl
     | scopeDMoved hm => rw [hx] at hm; cases hm
-    | scopeDP hs _ => exact (skip_no_step hs).elim
+    | scopeDDrain hm => rw [hx] at hm; cases hm; cases hv
+    | scopeDEmpty hm => rw [hx] at hm; cases hm; cases hv
+    | scopeDP hs _ _ => exact (skip_no_step hs).elim
+    | scopeDPDrain hs _ => exact (skip_no_step hs).elim
     | scopeDPMoved hs _ => exact (skip_no_step hs).elim
     | waitPanic hw => exact hw.elim
 
 /-- …and on the panic path: a panic out of the body with `x` still owning
     its value stops at the frame, runs `f` on `x`, frees it, and raises again. -/
 theorem scopeD_panic_runs_dtor {P : Prog} {x : Var} {f : Nat} {m m1 : Mem} {s : Stmt} {v : Val}
-    (hs : Step P m s (.panic m1)) (hx : m1.st x = some ⟨true, some v⟩) :
+    (hs : Step P m s (.panic m1)) (hx : m1.st x = some ⟨true, some v⟩) (hv : v.isNode = false) :
     Step P m (.scopeD x f s)
       (.ok { m1 with nv := m1.nv + 1 } (.seq (.scope x (.letcall m1.nv f [x] .skip)) .panic)) :=
-  Step.scopeDP hs hx
+  Step.scopeDP hs hx hv
 
 /-- A2-drop.3b: in a running configuration, a binding whose type is a `Vec`
     has elements that own no destructor value, or are of a destructor type
@@ -332,7 +335,7 @@ theorem main_typed : ∃ Δ, StmtT P (fun _ => none) [] main Δ := by
       (by simp [K2, K1, A2.setE, upd]) rfl PushArg.int (by simp [intE, Mode.ownSlot]) rfl rfl
   have hd := StmtT.letd (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .pair 0 1)
     (s := .skip) (E := EP) (t := T) (H := []) rfl (by simp [K2, K1, A2.setE, upd]) (by simp) hpair rfl
-    (Or.inl rfl) rfl rfl dtor_ok (HeldUp.refl _ _) StmtT.skip (hK3.endOK _)
+    DtorBind.made rfl rfl dtor_ok (HeldUp.refl _ _) StmtT.skip (hK3.endOK _)
   have h1 := StmtT.letv (P := P) (x := 1) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K1) (Γ1 := K1)
     rfl (by simp [K1, A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit) hd ((hK3.exitScope 2).endOK _)
   exact ⟨_, StmtT.letv (P := P) (x := 0) (r := .expr (.lit 1)) (E := intE) (F := []) (Γ := fun _ => none)
@@ -488,7 +491,7 @@ theorem mk_typed : ∃ Δ, StmtT P (sigCtx mk) [] mk.body Δ ∧ NoRootb Δ ∧
       (by simp [C2, A2.setE, upd]) rfl PushArg.int (by simp [intE, Mode.ownSlot]) rfl rfl
   have hd := StmtT.letd (P := P) (Γ := C2) (Γ1 := C2) (F := []) (x := 3) (f := 0) (r := .pair 1 2)
     (s := .assign 0 (.var 3)) (E := EP) (t := T) (H := []) rfl (by simp [C2, C1, S, A2.setE, upd]) (by simp)
-    hpair rfl (Or.inl rfl) rfl rfl dtor_ok (HeldUp.refl _ _) ha (hDa.endOK _)
+    hpair rfl DtorBind.made rfl rfl dtor_ok (HeldUp.refl _ _) ha (hDa.endOK _)
   have h2 := StmtT.letv (P := P) (x := 2) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := C1) (Γ1 := C1)
     rfl (by simp [C1, S, A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit) hd ((hDa.exitScope 3).endOK _)
   have h1 := StmtT.letv (P := P) (x := 1) (r := .expr (.lit 1)) (E := intE) (F := []) (Γ := S) (Γ1 := S)
@@ -540,7 +543,7 @@ theorem main2_typed : ∃ Δ, StmtT P (fun _ => none) [] main2 Δ := by
     simp [ED2, Ecr, Entry.arm, DT, T, Ty.dtorViews, Ty.hasDtor, Ty.holdsView]
   have hK2 : NoRootb (A2.setE K1 1 ED2) := hK1.setE hED2
   have hd := StmtT.letd (P := P) (Γ := K) (Γ1 := K1) (F := []) (x := 1) (f := 0) (r := .var 0) (s := .skip)
-    (t := T) (H := Ecr.held) rfl (by simp [K, A2.setE, upd]) (by simp) hmv rfl (Or.inr rfl) rfl rfl dtor_ok
+    (t := T) (H := Ecr.held) rfl (by simp [K, A2.setE, upd]) (by simp) hmv rfl DtorBind.moved rfl rfl dtor_ok
     (HeldUp.refl _ _) StmtT.skip (hK2.endOK _)
   exact ⟨_, StmtT.letcall (P := P) (Γ := fun _ => none) (F := []) (x := 0) (f := 1) (args := [])
     (s := .letd 1 0 (.var 0) .skip) (E := Ecr) (Γ1 := fun _ => none) rfl rfl (by simp) hc hd
@@ -609,10 +612,10 @@ theorem main3_typed : ∃ Δ, StmtT P (fun _ => none) [] main3 Δ := by
   have hK5 : NoRootb (A2.setE K4 3 EOd) := hK4.setE hEOd
   have hdo := StmtT.letd (P := P) (Γ := K3) (Γ1 := K4) (F := []) (x := 3) (f := 2) (r := .inl 2 .int)
     (s := .skip) (E := EO) (t := OT) (H := []) rfl (by simp [K3, K2, K1, A2.setE, upd]) (by simp) hinl rfl
-    (Or.inl rfl) rfl rfl odtor_ok (HeldUp.refl _ _) StmtT.skip (hK5.endOK _)
+    DtorBind.made rfl rfl odtor_ok (HeldUp.refl _ _) StmtT.skip (hK5.endOK _)
   have hd := StmtT.letd (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .pair 0 1)
     (s := .letd 3 2 (.inl 2 .int) .skip) (E := EP) (t := T) (H := []) rfl (by simp [K2, K1, A2.setE, upd])
-    (by simp) hpair rfl (Or.inl rfl) rfl rfl dtor_ok (HeldUp.refl _ _) hdo ((hK5.exitScope 3).endOK _)
+    (by simp) hpair rfl DtorBind.made rfl rfl dtor_ok (HeldUp.refl _ _) hdo ((hK5.exitScope 3).endOK _)
   have h1 := StmtT.letv (P := P) (x := 1) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K1) (Γ1 := K1)
     rfl (by simp [K1, A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit) hd
     (((hK5.exitScope 3).exitScope 2).endOK _)
@@ -653,7 +656,7 @@ theorem main4_typed : ∃ Δ, StmtT P (fun _ => none) [] main4 Δ := by
   have hK2 : NoRootb (A2.setE K1 1 ESd) := hK1.setE hESd
   have hd := StmtT.letd (P := P) (Γ := K1) (Γ1 := K1) (F := []) (x := 1) (f := 3) (r := .inr AT 0)
     (s := .skip) (E := ES) (t := ST) (H := []) rfl (by simp [K1, A2.setE]) (by simp) hinr rfl
-    (Or.inl rfl) rfl rfl gdtor_ok (HeldUp.refl _ _) StmtT.skip (hK2.endOK _)
+    DtorBind.made rfl rfl gdtor_ok (HeldUp.refl _ _) StmtT.skip (hK2.endOK _)
   exact ⟨_, StmtT.letv (P := P) (x := 0) (r := .expr (.lit 3)) (E := intE) (F := []) (Γ := fun _ => none)
     (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.expr ExprT.lit) hd ((hK2.exitScope 1).endOK _)⟩
 

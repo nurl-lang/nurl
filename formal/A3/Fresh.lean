@@ -159,8 +159,11 @@ theorem Step.grows {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
   | scopeDIn _ ih => exact ih
   | scopeDEnd _ => exact Grows.of_eq rfl rfl
   | scopeDMoved _ => exact Grows.of_eq rfl rfl
-  | scopeDP _ _ ih => exact ih.trans (Grows.of_eq rfl rfl)
+  | scopeDP _ _ _ ih => exact ih.trans (Grows.of_eq rfl rfl)
   | scopeDPMoved _ _ ih => exact ih.trans (Grows.of_eq rfl rfl)
+  | scopeDDrain _ => exact Grows.of_eq rfl rfl
+  | scopeDEmpty _ => exact Grows.refl _
+  | scopeDPDrain _ _ ih => exact ih
   | withLock _ hk _ =>
     exact ⟨Nat.le_refl _, fun _ h => .inl h, (BlkLe.setLock hk none).trans (BlkLe.refl _)⟩
   | scopeLIn _ ih => exact ih
@@ -226,8 +229,9 @@ theorem Step.gl {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) : r
   | catchP _ _ ih => exact ih
   | letd _ he => have h := EvalR.gl he; exact h
   | scopeDIn _ ih => exact ih
-  | scopeDP _ _ ih => exact ih
+  | scopeDP _ _ _ ih => exact ih
   | scopeDPMoved _ _ ih => exact ih
+  | scopeDPDrain _ _ ih => exact ih
   | scopeLIn _ ih => exact ih
   | scopeLSkip hrl => have h := Release.gl hrl; exact h
   | scopeLP _ hrl ih => have h := (Release.gl hrl).trans ih; exact h

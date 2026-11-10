@@ -2794,7 +2794,7 @@ theorem Step.blk {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) : 
   | withLock _ hk _ => exact BlkLe.setLock hk _
   | scopeLSkip hr => exact hr.blk
   | scopeLP _ hr ih => exact ih.trans hr.blk
-  | scopeP _ _ _ ih | rbindP _ _ ih | catchP _ _ ih | scopeDP _ _ ih | scopeDPMoved _ _ ih => exact ih
+  | scopeP _ _ _ ih | rbindP _ _ ih | catchP _ _ ih | scopeDP _ _ _ ih | scopeDPMoved _ _ ih | scopeDPDrain _ _ ih => exact ih
   | letv _ he | letd _ he | assign _ he _ _ => have := EvalR.blk he; exact this
   | letcall _ _ hb => have := BlkLe.of_eq (BindParams.blk hb); exact this
   | callc _ _ _ _ hb => have := BlkLe.of_eq (BindParams.blk hb); exact this
@@ -2965,7 +2965,8 @@ theorem Step.leafKeep {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
   induction h with
   | seqL _ ih | seqP _ ih | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | frozenP _ ih | catchIn _ ih
     | scopeDIn _ ih | scopeLIn _ ih => exact ih
-  | scopeP _ _ _ ih | rbindP _ _ ih | scopeDPMoved _ _ ih | catchP _ _ ih | scopeDP _ _ ih =>
+  | scopeP _ _ _ ih | rbindP _ _ ih | scopeDPMoved _ _ ih | catchP _ _ ih | scopeDP _ _ _ ih
+    | scopeDPDrain _ _ ih =>
     intro k bl hk w hw hs
     rcases ih hk hw hs with h | h
     · exact .inl h
