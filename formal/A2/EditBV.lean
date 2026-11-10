@@ -247,6 +247,7 @@ theorem WFv.node_holdsView {τ : Ty} {T : Val} (hw : WFv τ T) {u : Ty} {c d : N
         cases q with
         | any => rfl
         | _ => have := ih hsx; rw [(hq.send rfl).1] at this; cases this
+  | dtor _ _ ih => exact ih hs
 
 /-- A3.5b: a value of a type that holds no closure holding bindings by name
     holds only Send packages, each capturing nothing by name. -/
@@ -288,6 +289,7 @@ theorem WFv.no_pkg {τ : Ty} {v : Val} (hw : WFv τ v) (hf : τ.hasFn = false) {
     · cases h; exact hcs
     · cases hc with
       | pkg => exact ih hf' hsx
+  | dtor _ _ ih => exact ih hf hs
 
 /-- A view the rewritten tree stores is one the old tree stored, or one that
     the replacement stores and the hole did not (`Q`). -/
@@ -299,6 +301,7 @@ theorem NSE_viewIn' {n n' T T' : Val} (hr : Repl n n' T T') {Q : Ty → Val → 
   | here => intro τ s v hw h hin; exact h τ hw s v hin
   | @elem t c d pre post e e' _ ih =>
     intro τ s v hw h hin
+    peel_dtor τ τ' hnd hw
     cases hw with
     | node hes =>
       cases hin with
@@ -310,32 +313,43 @@ theorem NSE_viewIn' {n n' T T' : Val} (hr : Repl n n' T T') {Q : Ty → Val → 
             · exact Or.inl (ViewIn.child (List.mem_append_right _ (List.mem_cons_self ..)) h1)
             · exact Or.inr h1
           · exact Or.inl (ViewIn.child (List.mem_append_right _ (List.mem_cons_of_mem _ hx)) hin')
+    | dtor => exact absurd rfl (hnd _ _)
   | fst _ ih =>
     intro τ s v hw h hin
+    peel_dtor τ τ' hnd hw
     cases hw with
     | pair ha hb =>
       cases hin with
       | fst hin' => exact (ih ha h hin').imp ViewIn.fst id
       | snd hin' => exact Or.inl (ViewIn.snd hin')
+    | dtor => exact absurd rfl (hnd _ _)
   | snd _ ih =>
     intro τ s v hw h hin
+    peel_dtor τ τ' hnd hw
     cases hw with
     | pair ha hb =>
       cases hin with
       | fst hin' => exact Or.inl (ViewIn.fst hin')
       | snd hin' => exact (ih hb h hin').imp ViewIn.snd id
+    | dtor => exact absurd rfl (hnd _ _)
   | inl _ ih =>
     intro τ s v hw h hin
+    peel_dtor τ τ' hnd hw
     cases hw with
     | inl ha => cases hin with | inl hin' => exact (ih ha h hin').imp ViewIn.inl id
+    | dtor => exact absurd rfl (hnd _ _)
   | inr _ ih =>
     intro τ s v hw h hin
+    peel_dtor τ τ' hnd hw
     cases hw with
     | inr ha => cases hin with | inr hin' => exact (ih ha h hin').imp ViewIn.inr id
+    | dtor => exact absurd rfl (hnd _ _)
   | pkg _ ih =>
     intro τ s v hw h hin
+    peel_dtor τ τ' hnd hw
     cases hw with
     | pkg ha => cases hin with | pkg hin' => exact (ih ha h hin').imp ViewIn.pkg id
+    | dtor => exact absurd rfl (hnd _ _)
 
 /-- A view lying in an owned tree is not valid through that tree's owner
     but through a share of it (`viewAt_not_self`, of a part). -/
@@ -407,10 +421,11 @@ theorem NewSlot.editV {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1
   have hvd : Eo.vdeps = Eo.held := by simp [Entry.vdeps, hos]
   have hoh : ownHeld true Eo.ty D = D := ownHeld_views true hEv D
   -- the rewritten tree: well-formed, and its views are the old tree's or the stored values'
-  have hwT' : WFv Eo.ty T' := NSE_wf hr hwT (fun τ0 h0 => by cases h0; exact hw')
+  have hwT' : WFv Eo.ty T' := NSE_wf hr hwT (fun τ0 h0 => h0.node_hole hw')
   have hvin : ∀ s w, ViewIn Eo.ty T' s w → ViewIn Eo.ty T s w ∨
       ∃ d0 o0 l0, w = .view d0 o0 l0 ∧ ∃ dep ∈ D, ViewAt m1 dep d0 o0 l0 s := fun s w hin =>
-    NSE_viewIn' hr hwT (fun τ0 h0 s w hin => by cases h0; exact hnew s w hin) hin
+    NSE_viewIn' hr hwT (fun τ0 h0 s w hin => by
+      rw [← ViewIn.undtor_iff, h0.node_ty] at hin; rw [← ViewIn.undtor_iff, h0.node_ty]; exact hnew s w hin) hin
   have hn' : (Val.node t c d' es').names = [] := hw'.names_nil_fn (by simpa [Ty.hasFn] using hfn)
   have hlive : (killE .drop true o Eo).live = true → Eo.live = true := fun h => by
     rw [killE_live] at h; simp only [Bool.and_eq_true] at h; exact h.1

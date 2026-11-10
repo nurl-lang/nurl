@@ -154,8 +154,8 @@ theorem MInv.addUnset {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} (hx : Γ x
     exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.of_blk rfl⟩, h4⟩
 
 /-- A tree of an owning type is owned. -/
-theorem WFv.owns_owning {t : Ty} {v : Val} (hw : WFv t v) (ho : t.owning = true) : v.owns = true := by
-  cases hw <;> simp_all [Val.owns, Ty.owning]
+theorem WFv.owns_owning {t : Ty} {v : Val} (hw : WFv t v) (ho : t.owning = true) : v.owns = true :=
+  hw.owns ho
 
 /-- The context a hand-over leaves: what depended on the package `c` ended
     (`kill .replace`, as a move of it ends it), `c` moved out, the
@@ -1053,6 +1053,9 @@ theorem hand_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Var
   have hTcall : StmtT P Γh F (.letcall (m.nv + 1) f [m.nv] (.assign x (.var (m.nv + 1))))
       (exitScope (m.nv + 1) (setE (kill .replace false x Γ2) x Ex1)) :=
     StmtT.letcall rfl hhr hrF hcT' hTasg (hfrΔ.endOK_fresh hi hΓr)
+      -- (A2-drop.3a: the code's result moves into `x` at once, whose
+      -- binder, the call through the package, answers for it)
+      (fun _ _ _ _ => by simp [Stmt.movedFirst, Stmt.assigns]; exact hrx)
   -- the environment goes back into the package
   have hrootΔ : AllRooted Γ (setE Γ2 x Ex1) := hroot2.setE hEx1R
   have hΓ3 : exitScope (m.nv + 1) (setE (kill .replace false x Γ2) x Ex1) = upd (setE Γ2 x Ex1) (m.nv + 1) none := by

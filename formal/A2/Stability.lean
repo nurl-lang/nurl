@@ -147,6 +147,7 @@ theorem ValOK.keep {m m' : Mem} {τ : Ty} {v : Val} {P H : List Dep}
       · exact hp dep hd
       · exact hr dep hd
     exact .pkg (ih hph hr) hq
+  | dtor _ ih => exact .dtor (ih hp hh)
 
 /-! ### Borrowed parameters reach only frozen owners -/
 
@@ -159,6 +160,7 @@ theorem ViewIn.holdsView {τ T s v} (h : ViewIn τ T s v) : τ.holdsView = true 
   | inl _ ih => simp [Ty.holdsView, ih]
   | inr _ ih => simp [Ty.holdsView, ih]
   | pkg _ ih => rfl
+  | dtor _ ih => exact ih
 
 theorem no_views {t : Ty} (ht : t.holdsView = false) (m : Mem) (T : Val) (H : List Dep) :
     ViewsOK m (.vec t) T H := by
@@ -388,6 +390,7 @@ theorem valOK_href {m : Mem} (hh : HeapOK m) {c : Nat} {n : Val} (hn : NodeAt m 
   | pkg _ _ ih =>
     cases ht with
     | pkg ht => obtain ⟨dep, hd, rest⟩ := ih ht; exact ⟨dep, append_envDeps_sub hd, rest⟩
+  | dtor _ ih => exact ih ht
 
 /-- A view inside a borrowed value reaches its buffer through one of the
     value's dependencies, of a kind that ends views. -/
@@ -419,6 +422,7 @@ theorem valOK_view {m : Mem} (hh : HeapOK m) {d o l : Nat} {n : Val} (hn : DataA
   | pkg _ _ ih =>
     cases ht with
     | pkg ht => obtain ⟨dep, hd, rest⟩ := ih ht; exact ⟨dep, append_envDeps_sub hd, rest⟩
+  | dtor _ ih => exact ih ht
 
 /-- A value held at the top of a borrowed slot `y` is valid through `y`
     itself: every handle in it is one `y` holds. -/
@@ -458,6 +462,7 @@ theorem valOK_via {m : Mem} {y : Var} {T : Val} (hy : m.st y = some ⟨false, so
   | pkg _ hfq ih =>
     intro Q ht hq
     exact .pkg (ih (Top.trans (Top.pkg (Top.refl _)) ht) (List.mem_append_left _ hq)) hfq
+  | dtor _ ih => intro Q ht hq; exact .dtor (ih ht hq)
 
 /-- A3.1: a share at the top of a borrowed value lands through one of the
     value's dependencies. -/
@@ -486,6 +491,7 @@ theorem valOK_arc {m : Mem} {k : Nat} {q : Val} {τ : Ty} {w : Val} {P H : List 
   | pkg _ _ ih =>
     cases ht with
     | pkg ht => obtain ⟨dep, hd, rest⟩ := ih ht; exact ⟨dep, append_envDeps_sub hd, rest⟩
+  | dtor _ ih => exact ih ht
 
 /-- A3.5's third cut: a cell share at the top of a borrowed value lands
     through one of the value's dependencies. -/
@@ -514,6 +520,7 @@ theorem valOK_cell {m : Mem} {k : Nat} {τ : Ty} {w : Val} {P H : List Dep}
   | pkg _ _ ih =>
     cases ht with
     | pkg ht => obtain ⟨dep, hd, rest⟩ := ih ht; exact ⟨dep, append_envDeps_sub hd, rest⟩
+  | dtor _ ih => exact ih ht
 
 /-- What a borrowed slot reaches, it reaches through the dependencies of the
     value it holds (a node; a share it holds lands as a share does,
@@ -807,6 +814,7 @@ theorem WFv.names_nil_fn {τ : Ty} {v : Val} (h : WFv τ v) (ht : τ.hasFn = fal
     -- holds no closure that does
     obtain ⟨_, hf, hcs⟩ := hq.send ht
     simp [Val.names, hcs, ih hf]
+  | dtor _ _ ih => exact ih ht
 
 /-- A value of a type that holds no closure is valid through its
     dependencies on memory alone: it holds nothing by name, and its handles
@@ -851,6 +859,7 @@ theorem ValOK.memDeps {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK 
     simp only [envDeps_nil] at hx ⊢
     rw [app] at hx
     exact .pkg (by simpa using hx) hq
+  | dtor _ ih => exact .dtor (ih hf)
 
 /-- A borrowed value of a type that holds no closure holds nothing by name. -/
 theorem ValOK.names_nil_fn {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m τ v P H)
@@ -870,6 +879,7 @@ theorem ValOK.names_nil_fn {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : V
   | pkg _ hq ih =>
     obtain ⟨_, hf', hcs⟩ := hq.send hf
     simp [Val.names, hcs, ih hf']
+  | dtor _ ih => exact ih hf
 
 /-- A value whose type holds no views holds no closure, so captures nothing
     by name. -/
@@ -889,6 +899,7 @@ theorem WFv.names_nil {τ : Ty} {v : Val} (h : WFv τ v) (ht : τ.holdsView = fa
   | pkg _ hq ih =>
     obtain ⟨hv, _, hcs⟩ := hq.send ht
     simp [Val.names, hcs, ih hv]
+  | dtor _ _ ih => exact ih ht
 
 theorem no_names {t : Ty} {T : Val} (hw : WFv (.vec t) T) (ht : t.holdsView = false) (H : List Dep) :
     NamesIn T H := by

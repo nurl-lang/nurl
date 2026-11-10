@@ -306,6 +306,7 @@ theorem SharesIn.repl {B : Nat → Option Blk} {n n' : Val}
   | here => exact fun h hs => hn _ h hs
   | @elem t c d pre post e e' _ ih =>
     intro τ h hs
+    peel_dtor τ τ' hnd h
     cases h with
     | node hes =>
       intro u k p ha
@@ -318,47 +319,62 @@ theorem SharesIn.repl {B : Nat → Option Blk} {n n' : Val}
               (fun u k p ha => hs u k p (.child (List.mem_append_right _ (List.mem_cons_self ..)) ha))
               u k p ha'
           · exact hs u k p (.child (List.mem_append_right _ (List.mem_cons_of_mem _ hx)) ha')
+    | dtor => exact absurd rfl (hnd _ _)
   | fst _ ih =>
     intro τ h hs
+    peel_dtor τ τ' hnd h
     cases h with
     | pair ha _ =>
       intro u k p hA
       cases hA with
       | fst h' => exact ih ha (fun u k p h => hs u k p (.fst h)) u k p h'
       | snd h' => exact hs u k p (.snd h')
+    | dtor => exact absurd rfl (hnd _ _)
   | snd _ ih =>
     intro τ h hs
+    peel_dtor τ τ' hnd h
     cases h with
     | pair _ hb =>
       intro u k p hA
       cases hA with
       | fst h' => exact hs u k p (.fst h')
       | snd h' => exact ih hb (fun u k p h => hs u k p (.snd h)) u k p h'
+    | dtor => exact absurd rfl (hnd _ _)
   | inl _ ih =>
     intro τ h hs
+    peel_dtor τ τ' hnd h
     cases h with
     | inl ha =>
       intro u k p hA
       cases hA with | inl h' => exact ih ha (fun u k p h => hs u k p (.inl h)) u k p h'
+    | dtor => exact absurd rfl (hnd _ _)
   | inr _ ih =>
     intro τ h hs
+    peel_dtor τ τ' hnd h
     cases h with
     | inr ha =>
       intro u k p hA
       cases hA with | inr h' => exact ih ha (fun u k p h => hs u k p (.inr h)) u k p h'
+    | dtor => exact absurd rfl (hnd _ _)
   | pkg _ ih =>
     intro τ h hs
+    peel_dtor τ τ' hnd h
     cases h with
     | pkg ha =>
       intro u k p hA
       cases hA with | pkg h' hsh => exact ih ha (fun u k p h => hs u k p (.pkg h hsh)) u k p h'
+    | dtor => exact absurd rfl (hnd _ _)
 
 /-- ... over a memory's blocks, for a node rewritten to one of its own type. -/
 theorem SharesOK.repl {m : Mem} {t : Ty} {c d d' : Nat} {es es' : List Val}
     (hn : SharesOK m (.vec t) (.node t c d' es')) {T T' : Val}
     (hr : Repl (.node t c d es) (.node t c d' es') T T') {τ : Ty} (hw : WFv τ T)
     (hs : SharesOK m τ T) : SharesOK m τ T' :=
-  SharesIn.repl (fun σ h _ => by cases h; exact hn) hr hw hs
+  SharesIn.repl (fun σ h _ => by
+    peel_dtor σ σ' hnd h
+    cases h
+    · exact hn
+    · exact absurd rfl (hnd _ _)) hr hw hs
 
 /-- The node a `NodeOf` finds lies in its owner's tree. -/
 theorem NodeOf.sub {m : Mem} {x o : Var} {T : Val} {t : Ty} {c d : Nat} {es : List Val}

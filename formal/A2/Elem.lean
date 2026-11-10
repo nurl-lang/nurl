@@ -44,7 +44,11 @@ theorem Sub.perm {t : Ty} {c d : Nat} {es es' : List Val} (h : es.Perm es') {w :
 
 theorem ViewIn.perm {τ t : Ty} {c d : Nat} {es es' : List Val} (h : es.Perm es') {s : Ty} {v : Val}
     (hv : ViewIn τ (.node t c d es') s v) : ViewIn τ (.node t c d es) s v := by
-  cases hv with | child he hin => exact ViewIn.child (h.symm.subset he) hin
+  generalize hn : Val.node t c d es' = n at hv
+  induction hv with
+  | child he hin => cases hn; exact ViewIn.child (h.symm.subset he) hin
+  | dtor _ ih => exact .dtor (ih hn)
+  | _ => cases hn
 
 theorem ViewsOK.perm {m : Mem} {τ t : Ty} {c d : Nat} {es es' : List Val} {H : List Dep}
     (h : es.Perm es') (hv : ViewsOK m τ (.node t c d es) H) : ViewsOK m τ (.node t c d es') H :=
@@ -69,7 +73,9 @@ theorem SharesOK.perm {m m' : Mem} {τ t : Ty} {c d : Nat} {es es' : List Val} (
 
 theorem WFv.perm {τ t : Ty} {c d : Nat} {es es' : List Val} (h : es.Perm es')
     (hw : WFv τ (.node t c d es)) : WFv τ (.node t c d es') := by
-  cases hw with | node hes => exact WFv.node fun e he => hes e (h.symm.subset he)
+  cases hw with
+  | node hes => exact WFv.node fun e he => hes e (h.symm.subset he)
+  | dtor hs hw' => cases hw' <;> cases hs
 
 theorem SelfFree.perm {t : Ty} {c d : Nat} {es es' : List Val} (h : es.Perm es')
     (hs : SelfFree (.node t c d es)) : SelfFree (.node t c d es') := by
@@ -239,7 +245,9 @@ theorem MInv.perm {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : 
   obtain ⟨_, hwf, hlv⟩ := hownF hos
   have hwT := hwf _ rfl
   obtain ⟨t0, hty⟩ : ∃ t0, Ex.ty = .vec t0 := by
-    cases h : Ex.ty <;> rw [h] at hwT <;> cases hwT; exact ⟨_, rfl⟩
+    cases h : Ex.ty <;> rw [h] at hwT <;> cases hwT
+    · exact ⟨_, rfl⟩
+    · rename_i hs hw'; cases hw' <;> cases hs
   rw [hty] at hwT
   have htt : t = t0 := by cases hwT; rfl
   subst htt

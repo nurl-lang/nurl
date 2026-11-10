@@ -1019,6 +1019,8 @@ theorem DSH_repl_wf {n n' : Val} (hn : ∀ σ, WFv σ n → WFv σ n') {T T' : V
   | here => exact fun h => hn _ h
   | @elem t c d pre post e e' _ ih =>
     intro τ h
+    refine WFv.rewrap h ?_
+    peel_dtor τ τ' hnd h
     cases h with
     | node hes =>
       refine WFv.node fun x hx => ?_
@@ -1027,11 +1029,42 @@ theorem DSH_repl_wf {n n' : Val} (hn : ∀ σ, WFv σ n → WFv σ n') {T T' : V
       · rcases List.mem_cons.mp hx with rfl | hx
         · exact ih (hes e (List.mem_append_right _ (List.mem_cons_self ..)))
         · exact hes x (List.mem_append_right _ (List.mem_cons_of_mem _ hx))
-  | fst _ ih => intro τ h; cases h with | pair ha hb => exact WFv.pair (ih ha) hb
-  | snd _ ih => intro τ h; cases h with | pair ha hb => exact WFv.pair ha (ih hb)
-  | inl _ ih => intro τ h; cases h with | inl ha => exact WFv.inl (ih ha)
-  | inr _ ih => intro τ h; cases h with | inr ha => exact WFv.inr (ih ha)
-  | pkg _ ih => intro τ h; cases h with | pkg ha hq => exact WFv.pkg (ih ha) hq
+    | dtor => exact absurd rfl (hnd _ _)
+  | fst _ ih =>
+    intro τ h
+    refine WFv.rewrap h ?_
+    peel_dtor τ τ' hnd h
+    cases h with
+    | pair ha hb => exact WFv.pair (ih ha) hb
+    | dtor => exact absurd rfl (hnd _ _)
+  | snd _ ih =>
+    intro τ h
+    refine WFv.rewrap h ?_
+    peel_dtor τ τ' hnd h
+    cases h with
+    | pair ha hb => exact WFv.pair ha (ih hb)
+    | dtor => exact absurd rfl (hnd _ _)
+  | inl _ ih =>
+    intro τ h
+    refine WFv.rewrap h ?_
+    peel_dtor τ τ' hnd h
+    cases h with
+    | inl ha => exact WFv.inl (ih ha)
+    | dtor => exact absurd rfl (hnd _ _)
+  | inr _ ih =>
+    intro τ h
+    refine WFv.rewrap h ?_
+    peel_dtor τ τ' hnd h
+    cases h with
+    | inr ha => exact WFv.inr (ih ha)
+    | dtor => exact absurd rfl (hnd _ _)
+  | pkg _ ih =>
+    intro τ h
+    refine WFv.rewrap h ?_
+    peel_dtor τ τ' hnd h
+    cases h with
+    | pkg ha hq => exact WFv.pkg (ih ha) hq
+    | dtor => exact absurd rfl (hnd _ _)
 
 /-- A view stored in the new tree is stored in the old one, when the
     replacement stores it at no type the hole is well-formed at. -/
@@ -1041,6 +1074,7 @@ theorem DSH_viewIn {n n' : Val} {s : Ty} {v : Val} (hn : ∀ σ, WFv σ n → ¬
   | here => exact fun hw hv => (hn _ hw hv).elim
   | @elem t c d pre post e e' _ ih =>
     intro τ hw hv
+    peel_dtor τ τ' hnd hw
     cases hw with
     | node hes =>
       cases hv with
@@ -1051,32 +1085,43 @@ theorem DSH_viewIn {n n' : Val} {s : Ty} {v : Val} (hn : ∀ σ, WFv σ n → ¬
           · exact ViewIn.child (List.mem_append_right _ (List.mem_cons_self ..))
               (ih (hes e (List.mem_append_right _ (List.mem_cons_self ..))) hv')
           · exact ViewIn.child (List.mem_append_right _ (List.mem_cons_of_mem _ hx)) hv'
+    | dtor => exact absurd rfl (hnd _ _)
   | fst _ ih =>
     intro τ hw hv
+    peel_dtor τ τ' hnd hw
     cases hw with
     | pair ha _ =>
       cases hv with
       | fst hv' => exact ViewIn.fst (ih ha hv')
       | snd hv' => exact ViewIn.snd hv'
+    | dtor => exact absurd rfl (hnd _ _)
   | snd _ ih =>
     intro τ hw hv
+    peel_dtor τ τ' hnd hw
     cases hw with
     | pair _ hb =>
       cases hv with
       | fst hv' => exact ViewIn.fst hv'
       | snd hv' => exact ViewIn.snd (ih hb hv')
+    | dtor => exact absurd rfl (hnd _ _)
   | inl _ ih =>
     intro τ hw hv
+    peel_dtor τ τ' hnd hw
     cases hw with
     | inl ha => cases hv with | inl hv' => exact ViewIn.inl (ih ha hv')
+    | dtor => exact absurd rfl (hnd _ _)
   | inr _ ih =>
     intro τ hw hv
+    peel_dtor τ τ' hnd hw
     cases hw with
     | inr ha => cases hv with | inr hv' => exact ViewIn.inr (ih ha hv')
+    | dtor => exact absurd rfl (hnd _ _)
   | pkg _ ih =>
     intro τ hw hv
+    peel_dtor τ τ' hnd hw
     cases hw with
     | pkg ha => cases hv with | pkg hv' => exact ViewIn.pkg (ih ha hv')
+    | dtor => exact absurd rfl (hnd _ _)
 
 /-- A replacement that captures nothing by name adds nothing to what the
     tree captures by name (`Repl.names_split`). -/
@@ -1141,11 +1186,11 @@ theorem deep_self_hkeep {m m' : Mem} {o : Var} {T T' : Val} {t : Ty} {c d d' : N
       exact hself ht'
     · -- holding the hole: same type and cell, the hole's views gone
       refine ⟨d2, es2', Or.inl ⟨_, Or.inl ⟨T', hT', ht'⟩, Or.inl ⟨rfl, rfl⟩⟩, ?_, ?_, ?_, ?_⟩
-      · exact DSH_repl_wf (fun σ h => by cases h; exact hw') hr' hw
+      · exact DSH_repl_wf (fun σ h => h.node_hole hw') hr' hw
       · intro s v hin
         have hin0 := DSH_viewIn (fun σ h hin' => by
-          cases h
           have := hin'.holdsView
+          rw [← Ty.holdsView_undtor, h.node_ty] at this
           simp [Ty.holdsView, hhv] at this) hr' hw hin
         obtain ⟨d0, o0, l0, rfl, dep, hd, ha⟩ := hv s v hin0
         exact ⟨d0, o0, l0, rfl, dep, hd, hH dep hd _ _ _ _ ha⟩
@@ -1289,6 +1334,8 @@ theorem NSE_wf {n n' T T' : Val} (hr : Repl n n' T T') :
   | here => intro τ hw h; exact h τ hw
   | @elem t c d pre post e e' _ ih =>
     intro τ hw h
+    refine WFv.rewrap hw ?_
+    peel_dtor τ τ' hnd hw
     cases hw with
     | node hes =>
       refine WFv.node fun x hx => ?_
@@ -1297,11 +1344,42 @@ theorem NSE_wf {n n' T T' : Val} (hr : Repl n n' T T') :
       · rcases List.mem_cons.mp hx with rfl | hx
         · exact ih (hes e (List.mem_append_right _ (List.mem_cons_self ..))) h
         · exact hes x (List.mem_append_right _ (List.mem_cons_of_mem _ hx))
-  | fst _ ih => intro τ hw h; cases hw with | pair ha hb => exact WFv.pair (ih ha h) hb
-  | snd _ ih => intro τ hw h; cases hw with | pair ha hb => exact WFv.pair ha (ih hb h)
-  | inl _ ih => intro τ hw h; cases hw with | inl ha => exact WFv.inl (ih ha h)
-  | inr _ ih => intro τ hw h; cases hw with | inr ha => exact WFv.inr (ih ha h)
-  | pkg _ ih => intro τ hw h; cases hw with | pkg ha hq => exact WFv.pkg (ih ha h) hq
+    | dtor => exact absurd rfl (hnd _ _)
+  | fst _ ih =>
+    intro τ hw h
+    refine WFv.rewrap hw ?_
+    peel_dtor τ τ' hnd hw
+    cases hw with
+    | pair ha hb => exact WFv.pair (ih ha h) hb
+    | dtor => exact absurd rfl (hnd _ _)
+  | snd _ ih =>
+    intro τ hw h
+    refine WFv.rewrap hw ?_
+    peel_dtor τ τ' hnd hw
+    cases hw with
+    | pair ha hb => exact WFv.pair ha (ih hb h)
+    | dtor => exact absurd rfl (hnd _ _)
+  | inl _ ih =>
+    intro τ hw h
+    refine WFv.rewrap hw ?_
+    peel_dtor τ τ' hnd hw
+    cases hw with
+    | inl ha => exact WFv.inl (ih ha h)
+    | dtor => exact absurd rfl (hnd _ _)
+  | inr _ ih =>
+    intro τ hw h
+    refine WFv.rewrap hw ?_
+    peel_dtor τ τ' hnd hw
+    cases hw with
+    | inr ha => exact WFv.inr (ih ha h)
+    | dtor => exact absurd rfl (hnd _ _)
+  | pkg _ ih =>
+    intro τ hw h
+    refine WFv.rewrap hw ?_
+    peel_dtor τ τ' hnd hw
+    cases hw with
+    | pkg ha hq => exact WFv.pkg (ih ha h) hq
+    | dtor => exact absurd rfl (hnd _ _)
 
 /-- A view the rewritten tree stores is one the old tree stored, when the
     replacement stores none at the hole's type. -/
@@ -1312,6 +1390,7 @@ theorem NSE_viewIn {n n' T T' : Val} (hr : Repl n n' T T') :
   | here => intro τ s v hw h hin; exact absurd hin (h τ hw s v)
   | @elem t c d pre post e e' _ ih =>
     intro τ s v hw h hin
+    peel_dtor τ τ' hnd hw
     cases hw with
     | node hes =>
       cases hin with
@@ -1322,32 +1401,43 @@ theorem NSE_viewIn {n n' T T' : Val} (hr : Repl n n' T T') :
           · exact ViewIn.child (List.mem_append_right _ (List.mem_cons_self ..))
               (ih (hes e (List.mem_append_right _ (List.mem_cons_self ..))) h hin')
           · exact ViewIn.child (List.mem_append_right _ (List.mem_cons_of_mem _ hx)) hin'
+    | dtor => exact absurd rfl (hnd _ _)
   | fst _ ih =>
     intro τ s v hw h hin
+    peel_dtor τ τ' hnd hw
     cases hw with
     | pair ha hb =>
       cases hin with
       | fst hin' => exact ViewIn.fst (ih ha h hin')
       | snd hin' => exact ViewIn.snd hin'
+    | dtor => exact absurd rfl (hnd _ _)
   | snd _ ih =>
     intro τ s v hw h hin
+    peel_dtor τ τ' hnd hw
     cases hw with
     | pair ha hb =>
       cases hin with
       | fst hin' => exact ViewIn.fst hin'
       | snd hin' => exact ViewIn.snd (ih hb h hin')
+    | dtor => exact absurd rfl (hnd _ _)
   | inl _ ih =>
     intro τ s v hw h hin
+    peel_dtor τ τ' hnd hw
     cases hw with
     | inl ha => cases hin with | inl hin' => exact ViewIn.inl (ih ha h hin')
+    | dtor => exact absurd rfl (hnd _ _)
   | inr _ ih =>
     intro τ s v hw h hin
+    peel_dtor τ τ' hnd hw
     cases hw with
     | inr ha => cases hin with | inr hin' => exact ViewIn.inr (ih ha h hin')
+    | dtor => exact absurd rfl (hnd _ _)
   | pkg _ ih =>
     intro τ s v hw h hin
+    peel_dtor τ τ' hnd hw
     cases hw with
     | pkg ha => cases hin with | pkg hin' => exact ViewIn.pkg (ih ha h hin')
+    | dtor => exact absurd rfl (hnd _ _)
 
 /-- A part of the rewritten tree lies in the replacement, or is a part of
     the old tree, or is the counterpart of a part of the old tree with the
@@ -1449,11 +1539,11 @@ theorem NewSlot.edit {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
   have hsf : SelfFree T := hi.heap.self o T hT
   have hvd : Eo.vdeps = Eo.held := by simp [Entry.vdeps, hos]
   -- the rewritten tree: well-formed, and its views are the old tree's
-  have hwT' : WFv Eo.ty T' := NSE_wf hr hwT (fun τ0 h0 => by cases h0; exact hw')
+  have hwT' : WFv Eo.ty T' := NSE_wf hr hwT (fun τ0 h0 => h0.node_hole hw')
   have hvin : ∀ s v, ViewIn Eo.ty T' s v → ViewIn Eo.ty T s v := fun s v hin =>
     NSE_viewIn hr hwT (fun τ0 h0 s v hin => by
-      cases h0
       have := hin.holdsView
+      rw [← Ty.holdsView_undtor, h0.node_ty] at this
       simp [Ty.holdsView, hhv] at this) hin
   have hn' : (Val.node t c d' es').names = [] := hw'.names_nil (by simpa [Ty.holdsView] using hhv)
   -- a view valid through a bound root other than `o` stays valid (`keep_notx`)

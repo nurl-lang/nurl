@@ -72,8 +72,10 @@ def Entry.vdeps (E : Entry) : List Dep := (if E.mode.ownSlot then [] else E.path
 /-- A2-drop.2: the binding `letd` makes. It is armed, and remembered as
     `letd`'s, when its type holds views: its destructor reads them. (A
     destructor of a type that holds no views reads only what its binding
-    owns, so such a binding needs no care.) -/
-def Entry.arm (E : Entry) : Entry := { E with dtor := E.ty.holdsView, dbind := E.ty.holdsView }
+    owns, so such a binding needs no care.)  A2-drop.3a: both flags are read
+    off the binding's type, a destructor type (`Ty.dtorViews`): `letd` binds
+    every owned value of one, wherever it came from (`StmtT.letd`). -/
+def Entry.arm (E : Entry) : Entry := { E with dtor := E.ty.dtorViews, dbind := E.ty.dtorViews }
 
 def roots (ds : List Dep) : List Var := ds.map (·.root)
 
@@ -117,7 +119,12 @@ def rootKind (t : Ty) (k : Kind) : Kind :=
   | .prod _ _, .self => .view
   | .sum _ _, .self => .view
   | .fn _ _, .self => .view
+  | .dtor _ _, .self => .view   -- A2-drop.3: a destructor value is lent as a struct is
   | _, k => k
+
+/-- A root lends in the way asked, or (a whole struct, view or closure) as a view. -/
+theorem rootKind_cases (t : Ty) (k : Kind) : rootKind t k = k ∨ (k = .self ∧ rootKind t k = .view) := by
+  cases t <;> cases k <;> simp [rootKind]
 
 /-- What a value borrowed from `y` (whose entry is `E`) in way `k` depends
     on: a root lends directly, a borrow passes on what it borrows from. -/
@@ -394,6 +401,7 @@ def elemE (y : Var) (E : Entry) : Ty → Entry
   | .arc t => ⟨.arc t, .bor, true, derive y E .inner, E.held, false, false⟩
   | .lk t => ⟨.lk t, .bor, true, derive y E .inner, E.held, false, false⟩
   | .cell t => ⟨.cell t, .bor, true, derive y E .inner, E.held, false, false⟩
+  | .dtor f t => ⟨.dtor f t, .bor, true, derive y E .inner, E.held, false, false⟩
 
 /-- An element moved out of `y` by `vec_pop`: an element `Vec` or struct is
     owned. -/
@@ -405,6 +413,7 @@ def popE (y : Var) (E : Entry) : Ty → Entry
   | .arc t => ⟨.arc t, .own, true, [], E.held, false, false⟩
   | .lk t => ⟨.lk t, .own, true, [], E.held, false, false⟩
   | .cell t => ⟨.cell t, .own, true, [], E.held, false, false⟩
+  | .dtor f t => ⟨.dtor f t, .own, true, [], E.held, false, false⟩
   | t => elemE y E t
 
 /-- What a field of the struct `y` (entry `E`) lends: what is inside an
@@ -418,6 +427,10 @@ def projDeps (y : Var) (E : Entry) : List Dep :=
 def projE (y : Var) (E : Entry) : Ty → Entry
   | .int => intE
   | t => ⟨t, .bor, true, projDeps y E ++ E.held, E.held, false, false⟩
+
+/-- A field read is lent (A2-drop.3a: so `letv` binds it, whatever its type). -/
+@[simp] theorem projE_mode (y : Var) (E : Entry) (t : Ty) : (projE y E t).mode = .bor := by
+  cases t <;> rfl
 
 /-- A3.1: `arc_get y`'s payload, lent: a borrow through a share
     (`Kind.share`) of `y`, which a borrowed share passes on (`derive`). It
@@ -588,19 +601,23 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       (Ez.mode.ownSlot = true → z ∉ roots Dy) →
       RhsT Γ F (.pair y z) ⟨.prod Ey.ty Ez.ty, .own, true, [], Dy ++ Dz, false, false⟩ Γ2
   | fst {y : Var} {E : Entry} {a b : Ty} :
-      Γ y = some E → E.live = true → E.ty = .prod a b → RhsT Γ F (.fst y) (projE y E a) Γ
+      Γ y = some E → E.live = true → E.ty.undtor = .prod a b → RhsT Γ F (.fst y) (projE y E a) Γ
   | snd {y : Var} {E : Entry} {a b : Ty} :
-      Γ y = some E → E.live = true → E.ty = .prod a b → RhsT Γ F (.snd y) (projE y E b) Γ
+      Γ y = some E → E.live = true → E.ty.undtor = .prod a b → RhsT Γ F (.snd y) (projE y E b) Γ
   | inl {y : Var} {b : Ty} {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
       Γ y = some Ey → Ey.live = true → PushArg Γ F y Ey Ey.ty D Γ1 → b.ok = true →
       RhsT Γ F (.inl y b) ⟨.sum Ey.ty b, .own, true, [], D, false, false⟩ Γ1
   | inr {a : Ty} {y : Var} {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
       Γ y = some Ey → Ey.live = true → PushArg Γ F y Ey Ey.ty D Γ1 → a.ok = true →
       RhsT Γ F (.inr a y) ⟨.sum a Ey.ty, .own, true, [], D, false, false⟩ Γ1
+  -- (A2-drop.3a: a payload of a destructor enum is lent through the type,
+  -- as a field of a destructor struct is; the destructor stays with the
+  -- whole value.  Taking one out, `takel` / `taker`, stays refused there:
+  -- the enum's destructor would never run.)
   | getl {y : Var} {E : Entry} {a b : Ty} :
-      Γ y = some E → E.live = true → E.ty = .sum a b → RhsT Γ F (.getl y) (projE y E a) Γ
+      Γ y = some E → E.live = true → E.ty.undtor = .sum a b → RhsT Γ F (.getl y) (projE y E a) Γ
   | getr {y : Var} {E : Entry} {a b : Ty} :
-      Γ y = some E → E.live = true → E.ty = .sum a b → RhsT Γ F (.getr y) (projE y E b) Γ
+      Γ y = some E → E.live = true → E.ty.undtor = .sum a b → RhsT Γ F (.getr y) (projE y E b) Γ
   | takel {y : Var} {E : Entry} {a b : Ty} :
       Γ y = some E → E.live = true → E.mode = .own → E.ty = .sum a b → y ∉ F → NoPin Γ y →
       DtorSafe Γ .replace false y →
@@ -1500,6 +1517,75 @@ def CallT (P : Prog) (Γ : Ctx) (F : List Var) (f : Nat) (args : List Var) (E : 
 
 /-! ### Statements -/
 
+/-- A2-drop.3a: the bindings a statement moves before anything else of it
+    runs: a head of `letd y f (.var w)`s, which may end in a move into
+    another binding, `assign y (.var w)`. A binder that may hold an owned
+    value of a destructor type but runs no destructor itself (a call's
+    result, `unpair`'s fields, a `sink` parameter) hands the value over this
+    way. Nothing runs in between, so nothing can panic or end the value
+    first. A `letd`'s scope ends where the binder's does, and runs the
+    destructor (`scopeD`) where the binder would; a binding the value is
+    assigned to is of the same type, whose own binder answers for it. -/
+def Stmt.movedFirst : Stmt → List Var
+  | .letd _ _ (.var w) s => w :: s.movedFirst
+  | .assign _ (.var w) => [w]
+  | _ => []
+
+/-- A2-drop.3a: the bindings a statement may give a new value (`assign`),
+    anywhere in it.  A binding that may own a value of a destructor type
+    (or of a struct or an enum holding one) is given none: the old value's
+    drop would run no destructor (`DropSlot`).  Its binder says so of its
+    scope (`letd`, a call's result, `unpair`'s fields, a `sink` or `inout`
+    parameter: `FnOK`); a program replaces such a value by moving it to a
+    `letd`, whose scope runs the destructor, and binding the new one. -/
+def Stmt.assigns : Stmt → List Var
+  | .assign y _ => [y]
+  | .seq a b => a.assigns ++ b.assigns
+  | .ite _ a b => a.assigns ++ b.assigns
+  | .while _ s => s.assigns
+  | .letv _ _ s => s.assigns
+  | .letcall _ _ _ s => s.assigns
+  | .scope _ s => s.assigns
+  | .rbind _ s => s.assigns
+  | .frozen _ s => s.assigns
+  | .letrec _ _ s => s.assigns
+  | .catchR _ _ s => s.assigns
+  | .unpair _ _ _ s => s.assigns
+  | .callc _ _ _ _ s => s.assigns
+  | .letd _ _ _ s => s.assigns
+  | .scopeD _ _ s => s.assigns
+  | .withLock _ _ s => s.assigns
+  | .scopeL _ _ _ s => s.assigns
+  | .withElem _ _ _ s => s.assigns
+  | .callcE _ _ _ _ s => s.assigns
+  | _ => []
+
+/-- A2-drop.3a: how many times a statement may give `x` a new value on one
+    path: a sequence adds, a branch takes the larger, a loop may repeat.  A
+    function's result of a destructor type is set at most once (`FnOK`), so
+    no value of it is dropped by a second assignment. -/
+def Stmt.asgMax (x : Var) : Stmt → Nat
+  | .assign y _ => if y = x then 1 else 0
+  | .seq a b => a.asgMax x + b.asgMax x
+  | .ite _ a b => max (a.asgMax x) (b.asgMax x)
+  | .while _ s => 2 * s.asgMax x
+  | .letv _ _ s => s.asgMax x
+  | .letcall _ _ _ s => s.asgMax x
+  | .scope _ s => s.asgMax x
+  | .rbind _ s => s.asgMax x
+  | .frozen _ s => s.asgMax x
+  | .letrec _ _ s => s.asgMax x
+  | .catchR _ _ s => s.asgMax x
+  | .unpair _ _ _ s => s.asgMax x
+  | .callc _ _ _ _ s => s.asgMax x
+  | .letd _ _ _ s => s.asgMax x
+  | .scopeD _ _ s => s.asgMax x
+  | .withLock _ _ s => s.asgMax x
+  | .scopeL _ _ _ s => s.asgMax x
+  | .withElem _ _ _ s => s.asgMax x
+  | .callcE _ _ _ _ s => s.asgMax x
+  | _ => 0
+
 /-- Source code: no run-time forms.  What has not started running yet (a
     binding's body, the rest of a sequence, a branch, a loop body) is
     source; run-time forms appear only where execution is. -/
@@ -1600,6 +1686,7 @@ theorem hasFn_holdsView {t : Ty} (h : t.hasFn = true) : t.holdsView = true := by
   | arc t ih => exact ih h
   | lk t ih => exact ih h
   | cell t ih => exact ih h
+  | dtor _ t ih => exact ih h
 
 /-- A3.5b: the environment of a Send closure (its type's `q` is not `any`)
     holds no view, so no closure that holds bindings by name, and the closure
