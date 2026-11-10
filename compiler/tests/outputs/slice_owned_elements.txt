@@ -1,0 +1,47 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+sfield
+1
+strs
+a long enough string to be on the heap, one
+a long enough string to be on the heap, two
+vec
+1
+2
+3
+4
+estore
+a long enough string to be on the heap, three
+a long enough string to be on the heap, two
+selem
+a long enough string to be on the heap, one
+a long enough string to be on the heap, two
+fromb
+a long enough string to be on the heap, one
+two two two two two two two two two two
+a long enough string to be on the heap, one
+inouts
+a long enough string to be on the heap, new
+ress
+1
+2
+an error string long enough for the heap
+opts
+a long enough string to be on the heap, one
+enump
+a long enough string to be on the heap, one
+args
+43
+88
+43
+43
+another long enough string for the heap, two
+mixr
+12
+10
+10
+vecs
+124
+130
