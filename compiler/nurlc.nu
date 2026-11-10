@@ -39342,11 +39342,35 @@ unsafe @ __sx_nroots s e b ns → s {
     ^ ( str_contains_word `vec_push vec_insert vec_extend vec_extend_range vec_append vec_reserve vec_shrink_to_fit vec_resize_zeroed vec_swap vec_reverse vec_sort vec_sort_by deque_push_back deque_push_front string_reserve string_reserve_at string_commit string_insert string_append rc_clone rc_downgrade arc_clone` base )
 }
 
+// The `( Rc T )` type a struct type `ty` holds in a field of its own (the
+// first one), or `` — what makes it a handle over a shared value.
+@ __rc_field_type s ty → s {
+    : i n ( nurl_str_len ty )
+    ? | | < n 2 != ( nurl_str_get ty 0 ) 37 == ( nurl_str_get ty - n 1 ) 42 { ^ ( nurl_str_cat `` `` ) } {}
+    : s sname ( nurl_str_slice ty 1 - n 1 )
+    : s fcs ( nurl_sym_get2 g_root_syms sname `__field_count` )
+    ? == 0 ( nurl_str_len fcs ) { ^ ( nurl_str_cat `` `` ) } {}
+    : i fc ( nurl_str_to_int fcs )
+    : ~ i i 0
+    ~ < i fc {
+        : s ft ( nurl_llty ( nurl_sym_get g_root_syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int i ) `__type` ) ) ) )
+        ? != 0 ( nurl_str_starts ft `%Rc__` ) { ^ ft } {}
+        = i + i 1
+    }
+    ^ ( nurl_str_cat `` `` )
+}
+
 // `name` (a binding or a field path) holds an `( Rc T )` of type `ty`.
 unsafe @ bck_note_rc_arg s name s ty → v {
     ? | == g_borrowck 0 != g_bck_rec_off 0 { ^ } {}
-    ? == 0 ( nurl_str_starts ( nurl_llty ty ) `%Rc__` ) { ^ } {}
-    : s w ( nurl_str_cat3 name `=` ( nurl_llty ty ) )
+    // (…or a program's own handle over one, `: X { ( Rc Impl ) ctl }` with
+    // `X_share` an rc_clone: two X values may share one Rc value as two Rc
+    // bindings may, so the same-value rule reads it as its Rc field's type.
+    // A view taken through one share's accessor (`rc_get` of `. x ctl`)
+    // outlived an `rc_set` made through another: agora #345.)
+    : s rt ? != 0 ( nurl_str_starts ( nurl_llty ty ) `%Rc__` ) ( nurl_llty ty ) ( __rc_field_type ( nurl_llty ty ) )
+    ? == 0 ( nurl_str_len rt ) { ^ } {}
+    : s w ( nurl_str_cat3 name `=` rt )
     ? ! ( str_contains_word g_bck_rcty w ) { = g_bck_rcty ? == 0 ( nurl_str_len g_bck_rcty ) w ( nurl_str_cat3 g_bck_rcty ` ` w ) } {}
 }
 
