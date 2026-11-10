@@ -663,8 +663,25 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   drain can take elements in nurlc's index order. That is proved for every
   element type `Ty.ok` admits, a destructor type included, but no typed
   state reaches the destructor-element instance until the binder lands.
-  The drain itself, a `Vec` of destructor values bound by `letd` and
-  drained at its end, is not yet in (Agora #542).
+  The drain's steps are in the semantics too (A2-drop.3b milestone 2b,
+  part 1): a `scopeD` frame whose binding owns a `Vec` gives element 0 to
+  a fresh `letd` binding of its own and goes on (`Step.scopeDDrain`), frees
+  the node once it is empty (`Step.scopeDEmpty`), and on a panic drains
+  before raising again (`Step.scopeDPDrain`); `scopeDEnd` / `scopeDP` run
+  the destructor on a binding that owns no `Vec` (`Val.isNode = false`).
+  `free`, a truncation or an element set through a borrow, and `withElem`
+  ask the element type to own no destructor value (`Ty.dtorFree`), so a
+  drained `Vec`'s elements leave only through their own `scopeD`, and
+  `Ty.dtorViews` counts such a `Vec`, so a binding of one is armed when its
+  elements hold views. The typing that lets a frame bind a `Vec` of
+  destructor values is not in yet (`DtorBind` has the struct and enum
+  cases only, `StmtT.scopeD` asks `Ty.dtor f t`), so preservation proves
+  the drain steps unreachable (a destructor value's tree is no node), and
+  the drain itself is not yet in (Agora #542). Two obligations stand in
+  its way (`A2/DROP_DESIGN.md`): such a binding must be live at its
+  frame's end (what its elements view outlives it, a drop being a use),
+  and a panic must unwind to its frame with the binding still armed
+  (`unwindCtx` revives it unarmed today).
   (On an empty `Vec`, `vec_pop` and `vec_remove` return `None` in nurlc; the
   calculus's `pop` / `popFront` panic there instead, an unwrap: a program
   that matches the option is the same program with the `None` arm taken

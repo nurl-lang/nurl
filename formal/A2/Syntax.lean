@@ -235,14 +235,6 @@ def Ty.holdsDtor : Ty → Bool
 theorem Ty.hasDtor_of_holdsDtor {t : Ty} (h : t.holdsDtor = false) : t.hasDtor = false := by
   cases t <;> simp_all [Ty.holdsDtor, Ty.hasDtor]
 
-/-- A2-drop.3a: the destructor such a value runs reads views: a binding of
-    this type must keep what its value views alive to its end (`Entry.arm`). -/
-def Ty.dtorViews (t : Ty) : Bool := t.hasDtor && t.holdsView
-
-@[simp] theorem Ty.hasDtor_dtor (f : Nat) (t : Ty) : (Ty.dtor f t).hasDtor = true := rfl
-@[simp] theorem Ty.dtorViews_dtor (f : Nat) (t : Ty) : (Ty.dtor f t).dtorViews = t.holdsView := by
-  simp [Ty.dtorViews, Ty.holdsView]
-
 /-- A module global's type (`Ty.sync`: a lock or an `Arc` share) is no
     destructor type. -/
 theorem Ty.hasDtor_of_sync {t : Ty} (h : t.sync = true) : t.hasDtor = false := by
@@ -283,6 +275,14 @@ def Ty.vecD : Ty → Bool
 @[simp] theorem Ty.vecD_arc (t : Ty) : (Ty.arc t).vecD = false := rfl
 @[simp] theorem Ty.vecD_lk (t : Ty) : (Ty.lk t).vecD = false := rfl
 @[simp] theorem Ty.vecD_cell (t : Ty) : (Ty.cell t).vecD = false := rfl
+
+/-- A2-drop.3a: the destructor such a value runs reads views: a binding of
+    this type must keep what its value views alive to its end (`Entry.arm`). -/
+def Ty.dtorViews (t : Ty) : Bool := (t.hasDtor || t.vecD) && t.holdsView
+
+@[simp] theorem Ty.hasDtor_dtor (f : Nat) (t : Ty) : (Ty.dtor f t).hasDtor = true := rfl
+@[simp] theorem Ty.dtorViews_dtor (f : Nat) (t : Ty) : (Ty.dtor f t).dtorViews = t.holdsView := by
+  simp [Ty.dtorViews, Ty.holdsView, Ty.vecD]
 @[simp] theorem Ty.vecD_dtor (f : Nat) (t : Ty) : (Ty.dtor f t).vecD = false := rfl
 
 /-- A2 types: a view's element type holds no views of its own (a view of a

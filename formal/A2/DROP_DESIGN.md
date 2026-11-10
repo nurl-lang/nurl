@@ -566,8 +566,45 @@ each one shrinks `CLAIM.md`'s exception:
      `rhs_pres` can use them). nurlc drops a `Vec`'s elements in index
      order (`nurl__vec_drop_elems`, `i = 0 .. len`), so the drain takes
      element 0 each round, not the last one.
-   - **Left: the drain itself.** The plan, with the four open questions
-     answered:
+   - **Built (milestone 2b, part 1): the steps, the refusals and the
+     binder's shape.** `Step.scopeDDrain` / `scopeDEmpty` / `scopeDPDrain`
+     are in the semantics, and `scopeDEnd` / `scopeDP` take a value that is
+     no node (`Val.isNode`). Every case site has them (Progress, StepFrame,
+     Codes, Steps, and A3's Lift, Fresh, BorFree, Keep, Restrict, Owned,
+     Cell). `StmtT.free`, `editB`, `editBV` and `withElem` ask `dtorFree`
+     of the element type (an auto-param `decide` discharges for every
+     concrete type). `Ty.dtorViews` counts a `Vec D`, so `Entry.arm` arms
+     its binding when the elements hold views. `StmtT.letd` binds at a type
+     `T` given by `DtorBind f t E.ty T` (`made`, `moved`; `RhsOut.retypeB`).
+     Preservation of `scopeDEmpty` is proved; that of the two drain steps
+     is by contradiction, since no frame binds a `Vec D` yet.
+   - **Left: the drain's typing.** Add `DtorBind.vec : DtorBind f t (.vec
+     (.dtor f t)) (.vec (.dtor f t))` and let `StmtT.scopeD` take `E.ty =
+     .dtor f t ∨ E.ty = .vec (.dtor f t)`; then the two drain cases of
+     preservation are real proofs. Two obligations found while writing
+     them:
+     - *Live at its end.* `RhsT.popFront` asks `x` live, and a `Vec D`
+       binding killed by an ended source of what its elements view is
+       exactly what its destructors must not read (a drop is a use). So the
+       vec case of `StmtT.letd` and of `StmtT.scopeD` needs `∃ E, Δ x =
+       some E ∧ E.live = true` of the frame's output (as `withLock`'s
+       `hlive`); a weaker context at the end (`skip_inv`, `Weaker`) then
+       gives it at the drain step. Reviving `x` instead (`Entry.revive`,
+       as `scopeDEnd` does) drops `dbind`, which the frame's typing needs
+       to stay a `scopeD`.
+     - *Armed at a panic.* `unwindCtx` revives the frame's binding with
+       `dbind := false`; the panic drain types `.scopeD x f .skip` in the
+       unwound context, whose premise asks `dbind` when the elements hold
+       views. The unwind must keep the binding armed for a `Vec D` frame
+       (a variant of `unwindCtx_x` and `MInv.unwind`).
+     The drain step's preservation then: `Γ' = Γ`; the body `letd m.nv f
+     (.popFront x) .skip` typed by `StmtT.letd` (`DtorBind.moved`: `popE`
+     of a `.dtor f t` element has that type; `HeldUp.refl`); its output
+     `exitScope m.nv (setE Γ1 m.nv _)` is `Γ1 = kill .drop hv x Γ`
+     (`exitScope_setE_fresh`), and `exitScope x (kill .drop hv x Γ) =
+     exitScope x Γ` since `.replace` kills every kind `.drop` does; the
+     rest as `scopeDEnd`'s case.
+   - **The plan, with the four open questions answered:**
      1. *Where a `Vec D` is ok.* Only as a binding's own type. **Built
         (milestone 2a):** rather than a separate `Ty.okB` threaded through
         `tyok`'s 63 uses, `Ty.ok` itself admits `vec D` (`D.hasDtor`, `Ty.vecD`)

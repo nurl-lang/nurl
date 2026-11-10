@@ -6,6 +6,23 @@ import A2.Sweep
 
 namespace A2
 
+/-- A2-drop.3b: an owner's slot holds a tree of its type, live or not. -/
+theorem MInv.own_wfv {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (hy : Γ y = some E)
+    (hm : E.mode.ownSlot = true) {o : Bool} {T : Val} (hsl : m.st y = some ⟨o, some T⟩) :
+    WFv E.ty T := by
+  obtain ⟨sl, hsl', _, hso, hown, _⟩ := hi.slot y E hy
+  obtain ⟨_, hwf, _⟩ := hown hm
+  rw [hsl] at hsl'; cases hsl'
+  exact hwf T rfl
+
+/-- ... so a `Vec`'s is a node, and a destructor value's is not. -/
+theorem WFv.vec_isNode {t : Ty} {T : Val} (h : WFv (.vec t) T) : T.isNode = true := by
+  cases h; rfl
+
+theorem WFv.dtor_isNode {f : Nat} {t : Ty} {T : Val} (h : WFv (.dtor f t) T) : T.isNode = false := by
+  obtain ⟨hst, hw⟩ := WFv.dtor_iff.mp h
+  cases t <;> simp [Ty.isStruct] at hst <;> cases hw <;> rfl
+
 theorem MInv.own_val {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (hy : Γ y = some E)
     (hl : E.live = true) (hm : E.mode.ownSlot = true) :
     ∃ T, m.st y = some ⟨true, some T⟩ ∧ WFv E.ty T ∧ ViewsOK m E.ty T E.held := by

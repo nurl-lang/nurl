@@ -634,7 +634,7 @@ theorem progress {P : Prog}
         -- A3.3: on the way out too
         obtain ⟨m2, hrl⟩ := Release.exists (k := kk) (t := t) hsl1 hd
         exact Or.inr <| Or.inr ⟨_, Step.scopeLP hr hrl⟩
-  | @letd Γ Γ1 Δ F x f r k E _ _ _ hx _ hr _ _ _ _ _ _ _ _ =>
+  | @letd Γ Γ1 Δ F x f r k E _ _ _ _ hx _ hr _ _ _ _ _ _ _ _ =>
     intro m hcd hi
     have hmx : m.st x = none := by
       have := hi.dom x; rw [hx] at this; cases h : m.st x <;> simp_all
@@ -659,7 +659,14 @@ theorem progress {P : Prog}
     · obtain ⟨val, hsl⟩ := hown m rfl
       cases val with
       | none => exact Or.inr <| Or.inr ⟨_, Step.scopeDMoved hsl⟩
-      | some v => exact Or.inr <| Or.inr ⟨_, Step.scopeDEnd hsl⟩
+      | some v =>
+        -- (A2-drop.3b: a drained `Vec`'s node, its elements one at a time)
+        cases v with
+        | node t c d es =>
+          cases es with
+          | nil => exact Or.inr <| Or.inr ⟨_, Step.scopeDEmpty hsl⟩
+          | cons e es => exact Or.inr <| Or.inr ⟨_, Step.scopeDDrain hsl⟩
+        | _ => exact Or.inr <| Or.inr ⟨_, Step.scopeDEnd hsl rfl⟩
     · exact Or.inr (Or.inl hbl)
     · cases r with
       | ok m' k' => exact Or.inr <| Or.inr ⟨_, Step.scopeDIn hr⟩
@@ -670,7 +677,10 @@ theorem progress {P : Prog}
         obtain ⟨val, hsl⟩ := hown m1 (hout x hxs)
         cases val with
         | none => exact Or.inr <| Or.inr ⟨_, Step.scopeDPMoved hr hsl⟩
-        | some v => exact Or.inr <| Or.inr ⟨_, Step.scopeDP hr hsl⟩
+        | some v =>
+          cases v with
+          | node t c d es => exact Or.inr <| Or.inr ⟨_, Step.scopeDPDrain hr hsl⟩
+          | _ => exact Or.inr <| Or.inr ⟨_, Step.scopeDP hr hsl rfl⟩
   | @rbind Γ Δ1 F p k Ep hp hm hl hroots _ _ _ ih =>
     intro m hcd hi
     have hi0 : Inv m Γ F k := hi.rbindIn hp hroots

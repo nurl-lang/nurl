@@ -400,12 +400,18 @@ theorem Step.restrict {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
     obtain ⟨r1, h1, hd⟩ := ih
     obtain ⟨s1, rfl, hg⟩ := ResDown.ok_inv hd
     exact ⟨_, .scopeDIn h1, rfl, .scopeD _ _ hg⟩
-  | scopeDEnd hx => exact ⟨_, .scopeDEnd hx, rfl, .refl _⟩
+  | scopeDEnd hx hv => exact ⟨_, .scopeDEnd hx hv, rfl, .refl _⟩
+  | scopeDDrain hx => exact ⟨_, .scopeDDrain hx, rfl, .refl _⟩
+  | scopeDEmpty hx => exact ⟨_, .scopeDEmpty hx, rfl, .refl _⟩
   | scopeDMoved hx => exact ⟨_, .scopeDMoved hx, rfl, .refl _⟩
-  | scopeDP _ hx ih =>
+  | scopeDP _ hx hv ih =>
     obtain ⟨r1, h1, hd⟩ := ih
     obtain rfl := ResDown.panic_inv hd
-    exact ⟨_, .scopeDP h1 hx, rfl, .refl _⟩
+    exact ⟨_, .scopeDP h1 hx hv, rfl, .refl _⟩
+  | scopeDPDrain _ hx ih =>
+    obtain ⟨r1, h1, hd⟩ := ih
+    obtain rfl := ResDown.panic_inv hd
+    exact ⟨_, .scopeDPDrain h1 hx, rfl, .refl _⟩
   | scopeDPMoved _ hx ih =>
     obtain ⟨r1, h1, hd⟩ := ih
     obtain rfl := ResDown.panic_inv hd
