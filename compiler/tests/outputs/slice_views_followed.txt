@@ -1,0 +1,45 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+first
+second
+221
+x
+first
+firstmore
+1
+0
+2
+1
+3
+1
+2
+3
+4
+5
+9
+2
+3
+first
+lit
+first and more
+kept
+other
+kept
+lit
+c
+b
+new
+c
+fresh
+cmore
+cell
+b
+1
+drop lit
+holders: built
+drop an older source
+drop an older source
+one
+two

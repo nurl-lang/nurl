@@ -761,7 +761,15 @@ Fetch the view again after the mutation. A view stays a view wherever it
 goes: held in a `Slice` (`slice_from_vec`, `slice_of_str`, a CSV cell
 from `csv_table_view`), a struct, an Option or a container, captured by a
 closure, stored in a global or returned from a function, it is still a
-view of its source and ends with it. Handed to a function that stores it
+view of its source and ends with it. A native slice is such a value: a
+literal with a view among its elements (`[s | ( string_data t ) … ]`, or
+`[V | @ V { ( string_data t ) }]` over a struct that holds one), a view
+stored into an element (`= . ws k ( string_data t )`, by the function or
+by one it hands the slice to) and a slice a function builds over its
+parameters' views and returns all make the slice hold the view, and the
+slice — and a `~ x ws` loop's element — is read only while the source
+is unchanged. A slice whose elements own what they hold (`[String | a b]`
+copies `a` and `b` in) holds no view and depends on nothing. Handed to a function that stores it
 into another of its arguments — the first, or one passed `inout`,
 wherever it sits (`( add h ( slice_from_vec [f] v ) )` with `add` pushing
 the slice into `. h fs`) — it makes that argument's value hold the view,
@@ -2221,6 +2229,14 @@ journal** instead:
   `Vec` whose elements run no code of the program's own when dropped (a
   `String`, plain data) records nothing: no panic can start in its
   release.
+- An owned slice (`[T`) releases its elements the same way: an element's
+  destructor that panics does not end the release, the elements after it
+  are dropped in index order and once each, then the buffer, and then the
+  panic goes on — for a slice in a binding, a field, a payload, a `Vec`
+  or another slice.
+- The value an assignment replaces is out of its target before its
+  destructor runs (§7.6): a panic there finds the target holding the new
+  value, and drops that once.
 
 The journal belongs to the thread outside fibers and to the fiber inside
 one. The scheduler switches it with the fiber, so fibers sharing a worker,
@@ -2434,7 +2450,14 @@ goes:
   parameter holds) is borrowed; a constructor's result is owned.
 - A `sink` argument clears the caller's flag, and the callee drops the
   value unless it moves it on.
-- `= a ( make … )` drops the value `a` held first.
+- `= a ( make … )` gives `a` the new value and then drops the one it
+  held. The right side is evaluated first and may read the old value; the
+  new value is stored; the old one, taken out, is dropped last. Nothing
+  else is observable from that order unless the old value's destructor
+  panics: `a` — a binding, a field, a slice element, the caller's
+  binding behind an `inout` parameter, a binding a closure captured —
+  then holds the new value, which its owner drops once, inside the
+  `recover` extent or outside it.
 
 **Drop glue.** A `% Drop` impl releases what only it knows how to (a raw
 buffer, an OS resource). The fields the compiler manages (`String`,

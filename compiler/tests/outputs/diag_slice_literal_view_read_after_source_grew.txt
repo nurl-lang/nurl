@@ -1,0 +1,9 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_slice_literal_view_read_after_source_grew.nu:12:5: error: 'ws' holds a view of 'text' (one stored into it, or captured by it), and 'text' ended at line 11 — it was passed to 'string_push_str', which may move or free its buffer. Using 'ws' now would read freed memory. End 'text' only after 'ws' is done, or have 'ws' hold a copy that owns its data (string_from, slice_to_vec).
+    ~ x ws { ( nurl_println x ) }
+    ^
+compiler/tests/diag_slice_literal_view_read_after_source_grew.nu:12:5: error: 'x' holds a view of 'text' (one stored into it, or captured by it), and 'text' ended at line 11 — it was passed to 'string_push_str', which may move or free its buffer. Using 'x' now would read freed memory. End 'text' only after 'x' is done, or have 'x' hold a copy that owns its data (string_from, slice_to_vec).
+    ~ x ws { ( nurl_println x ) }
+    ^
+error: compilation aborted — 2 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)
