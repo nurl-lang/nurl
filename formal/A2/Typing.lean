@@ -606,6 +606,9 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       Γ y = some Ey → Ey.live = true → PushArg Γ F y Ey Ey.ty Dy Γ1 →
       Γ1 z = some Ez → Ez.live = true → PushArg Γ1 F z Ez Ez.ty Dz Γ2 →
       (Ez.mode.ownSlot = true → z ∉ roots Dy) →
+      -- (A2-drop.3b: a drained `Vec` of destructor values is a binding's own type
+      -- only: no field holds one, the struct's glue could not drain it)
+      Ey.ty.vecD = false → Ez.ty.vecD = false →
       RhsT Γ F (.pair y z) ⟨.prod Ey.ty Ez.ty, .own, true, [], Dy ++ Dz, false, false⟩ Γ2
   | fst {y : Var} {E : Entry} {a b : Ty} :
       Γ y = some E → E.live = true → E.ty.undtor = .prod a b → RhsT Γ F (.fst y) (projE y E a) Γ
@@ -613,9 +616,11 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       Γ y = some E → E.live = true → E.ty.undtor = .prod a b → RhsT Γ F (.snd y) (projE y E b) Γ
   | inl {y : Var} {b : Ty} {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
       Γ y = some Ey → Ey.live = true → PushArg Γ F y Ey Ey.ty D Γ1 → b.ok = true →
+      Ey.ty.vecD = false → b.vecD = false →  -- (A2-drop.3b: nor a payload)
       RhsT Γ F (.inl y b) ⟨.sum Ey.ty b, .own, true, [], D, false, false⟩ Γ1
   | inr {a : Ty} {y : Var} {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
       Γ y = some Ey → Ey.live = true → PushArg Γ F y Ey Ey.ty D Γ1 → a.ok = true →
+      a.vecD = false → Ey.ty.vecD = false →
       RhsT Γ F (.inr a y) ⟨.sum a Ey.ty, .own, true, [], D, false, false⟩ Γ1
   -- (A2-drop.3a: a payload of a destructor enum is lent through the type,
   -- as a field of a destructor struct is; the destructor stays with the
@@ -651,7 +656,9 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       payload; an integer is copied); the result is an owned share, which
       holds nothing (the payload views nothing). -/
   | arcNew {t : Ty} {y : Var} {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
-      Γ y = some Ey → Ey.live = true → Ey.ty = t → t.holdsView = false ∧ t.hasFn = false →
+      Γ y = some Ey → Ey.live = true → Ey.ty = t →
+      -- (A2-drop.3b: a drained `Vec` of destructor values is a binding's own type only)
+      t.vecD = false → t.holdsView = false ∧ t.hasFn = false →
       -- A3.5: an `Arc`'s payload is reached from every thread that holds a
       -- share, so it holds no library handle (a cell share is not Sync)
       t.hasCell = false →
@@ -676,7 +683,7 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       holds nothing. -/
   | lockNew {t : Ty} {y : Var} {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
       Γ y = some Ey → Ey.live = true → Ey.ty = t →
-      t.holdsView = false ∧ t.hasFn = false →
+      t.vecD = false → t.holdsView = false ∧ t.hasFn = false →
       PushArg Γ F y Ey t D Γ1 →
       RhsT Γ F (.lockNew t y) ⟨.lk t, .own, true, [], [], false, false⟩ Γ1
   /-- A3.2: `Locked_share`: a new share of the lock block `a` shares: owned,
@@ -740,7 +747,7 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       owned cell share, which holds nothing. -/
   | cellNew {t : Ty} {y : Var} {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
       Γ y = some Ey → Ey.live = true → Ey.ty = t →
-      t.holdsView = false ∧ t.hasFn = false →
+      t.vecD = false → t.holdsView = false ∧ t.hasFn = false →
       PushArg Γ F y Ey t D Γ1 →
       RhsT Γ F (.cellNew t y) ⟨.cell t, .own, true, [], [], false, false⟩ Γ1
   /-- A3.5: a copy of a library handle (`PNCounter_share`): a new owned cell

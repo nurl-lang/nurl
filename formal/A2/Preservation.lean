@@ -546,8 +546,7 @@ theorem pres_unpair {P : Prog} {Γ Δ : Ctx} {F : List Var} {y x z : Var} {s : S
     rw [hty] at hwT
     cases hwT with
     | pair hwa hwb =>
-    have hok := hi.tyok hy; rw [hty] at hok
-    simp only [Ty.ok, Bool.and_eq_true] at hok
+    have hok := Ty.ok_prod (hty ▸ hi.tyok hy)
     have outx := out_part out hτ hwa (Sub.fst (Sub.refl _)) (fun s u h => by rw [hty]; exact ViewIn.fst h)
       (by simp only [ids_pair]; exact List.sublist_append_left _ _) hok.1 (fun u k p h => by rw [hty]; exact ArcIn.fst h)
     have outz := out_part out hτ hwb (Sub.snd (Sub.refl _)) (fun s u h => by rw [hty]; exact ViewIn.snd h)

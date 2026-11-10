@@ -236,7 +236,7 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
     obtain ⟨v, hv | hv⟩ := sum_slot hi hy hl ht <;> rw [hm] at hv
     · exact ⟨_, EvalR.takerP hv⟩
     · exact ⟨_, EvalR.taker hv⟩
-  | arcNew hy hly hty _ _ hpa =>
+  | arcNew hy hly hty _ _ _ hpa =>
     obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly hpa hty
     -- the key `nid` is fresh: every block's key is below it
     have hfr : m1.blk m1.nid = none := by
@@ -247,7 +247,7 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
       | none => rfl
       | some bl => exact absurd (hi.heap.bkey _ bl h) (Nat.lt_irrefl _)
     exact ⟨_, EvalR.arcNew htk hfr⟩
-  | lockNew hy hly hty _ hpa =>
+  | lockNew hy hly hty _ _ hpa =>
     obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly hpa hty
     -- the key `nid` is fresh: every block's key is below it
     have hfr : m1.blk m1.nid = none := by
@@ -266,7 +266,7 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
   | lockClone ha hl hty =>
     obtain ⟨o, k, hv⟩ := hi.lk_slot ha hl hty
     exact ⟨_, EvalR.lockClone hv⟩
-  | cellNew hy hly hty _ hpa =>
+  | cellNew hy hly hty _ _ hpa =>
     obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly hpa hty
     -- the key `nid` is fresh: every block's key is below it
     have hfr : m1.blk m1.nid = none := by

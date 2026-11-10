@@ -538,17 +538,17 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
       · subst hry; exact ⟨{ Ey with live := false, dtor := false }, by simp [A2.setE], by rw [hm]; rfl⟩
       · obtain ⟨E', h', hro'⟩ := kill_root (e := .replace) (hv := false) (y := y) hEr hro
         exact ⟨E', by simp only [A2.setE, upd_ne _ _ hry]; exact h', hro'⟩
-  | @arcNew t y Ey Γ1 D hy hly hty _ _ hpa =>
+  | @arcNew t y Ey Γ1 D hy hly hty _ _ _ hpa =>
     obtain ⟨hw1, hd1, hm1, _⟩ := hpa.wf h hy hly hty
     exact ⟨hw1, hd1, hm1, fun _ _ r hr => by simp [roots, Entry.vdeps, Mode.ownSlot] at hr⟩
-  | @lockNew t y Ey Γ1 D hy hly hty _ hpa =>
+  | @lockNew t y Ey Γ1 D hy hly hty _ _ hpa =>
     obtain ⟨hw1, hd1, hm1, _⟩ := hpa.wf h hy hly hty
     exact ⟨hw1, hd1, hm1, fun _ _ r hr => by simp [roots, Entry.vdeps, Mode.ownSlot] at hr⟩
   | arcClone _ _ _ =>
     exact ⟨h, fun _ => rfl, same, fun _ _ r hr => by simp [roots, Entry.vdeps, Mode.ownSlot] at hr⟩
   | lockClone _ _ _ =>
     exact ⟨h, fun _ => rfl, same, fun _ _ r hr => by simp [roots, Entry.vdeps, Mode.ownSlot] at hr⟩
-  | @cellNew t y Ey Γ1 D hy hly hty _ hpa =>
+  | @cellNew t y Ey Γ1 D hy hly hty _ _ hpa =>
     obtain ⟨hw1, hd1, hm1, _⟩ := hpa.wf h hy hly hty
     exact ⟨hw1, hd1, hm1, fun _ _ r hr => by simp [roots, Entry.vdeps, Mode.ownSlot] at hr⟩
   | cellClone _ _ _ =>
@@ -924,9 +924,9 @@ theorem RhsT.domMode {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : R
   | inl hy _ hpa _ => exact PushArg.domMode hy hpa
   | inr hy _ hpa _ => exact PushArg.domMode hy hpa
   | pack hy _ _ hpa => exact PushArg.domMode hy hpa
-  | arcNew hy _ _ _ _ hpa => exact PushArg.domMode hy hpa
-  | lockNew hy _ _ _ hpa => exact PushArg.domMode hy hpa
-  | cellNew hy _ _ _ hpa => exact PushArg.domMode hy hpa
+  | arcNew hy _ _ _ _ _ hpa => exact PushArg.domMode hy hpa
+  | lockNew hy _ _ _ _ hpa => exact PushArg.domMode hy hpa
+  | cellNew hy _ _ _ _ hpa => exact PushArg.domMode hy hpa
   | chanSend _ _ _ hy _ _ hpa => exact PushArg.domMode hy hpa
   | lockRestore _ _ _ hy _ _ hpa => exact PushArg.domMode hy hpa
   | @takel y Ey _ _ hy _ _ _ _ _ => exact (DomMode.refl Γ |>.kill .replace false y).setE ⟨Ey, hy, rfl⟩
