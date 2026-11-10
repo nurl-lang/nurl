@@ -17809,6 +17809,11 @@ unsafe @ gen_call i lex i syms i cg → s {
             : s fl ( nurl_llty at )
             ? ( str_has_index callee_sink arg_idx ) {
                 ( nurl_print `  store ` ) ( nurl_print fl ) ( nurl_print ` zeroinitializer, ptr ` ) ( nurl_print es ) ( nurl_print `\n` )
+                // (…an element of what the loop iterates gone: where that
+                // is a parameter of this function, or reached out of one,
+                // the function drops an element of it, and says so to its
+                // callers as for a field replaced; agora #588.)
+                ( __fe_moved_drop_note syms bck_arg_val )
             } { ? summary_callee {
                     : s zc ( nurl_cg_reg cg )
                     ( emit_sink_flag_load ( consume_flag call_name fname arg_idx ) zc )
@@ -23522,7 +23527,10 @@ unsafe @ gen_match i lex i syms i cg → s {
     // The loop's own: restored at its exit, so a later binding of the name
     // (a `??` arm's `T h`) does not empty this loop's last slot.
     : s fe_eslot_saved ( nurl_str_cat ( nurl_sym_get2 syms var_name `__eslot` ) `` )
+    : s fe_econt_saved ( nurl_str_cat ( nurl_sym_get2 syms var_name `__econt` ) `` )
     ( nurl_sym_def syms ( nurl_str_cat var_name `__eslot` ) gep )
+    // (…and what it is an element of, by name or path: __fe_moved_drop_note.)
+    ( nurl_sym_def syms ( nurl_str_cat var_name `__econt` ) fe_cont )
     // Scope foreach body (see gen_cond / gen_loop).
     : ~ s old_strs_fe ``
     : ~ s old_structs_fe ( nurl_str_cat `` `` )
@@ -23624,6 +23632,7 @@ unsafe @ gen_match i lex i syms i cg → s {
     ( nurl_sym_pop syms )
     ( nurl_sym_def syms `__cur_lbl__` le )
     ( nurl_sym_def syms ( nurl_str_cat var_name `__eslot` ) fe_eslot_saved )
+    ( nurl_sym_def syms ( nurl_str_cat var_name `__econt` ) fe_econt_saved )
     ( nurl_set_last_type `void` )
     // The exit path is LIVE, whatever the body did. gen_loop says so at
     // its own exit label — "a loop that CAN exit resets did_ret: its
@@ -39107,6 +39116,7 @@ unsafe @ bck_sx_is_id s e → b {
 // instance by its generic (`vec_set__String` → vec_set), a file-private one
 // without its file tag (`__put__fp50` → __put).
 @ bck_fn_show s callee → s {
+    ? ( seq callee `@moveelem` ) { ^ ( nurl_str_cat `a '~' loop that moves its elements out` `` ) } {}
     : i fp ( nurl_str_find callee `__fp` )
     ? > fp 0 { ^ ( bck_generic_base ( nurl_str_slice callee 0 fp ) ) } {}
     ^ ( bck_generic_base callee )
@@ -39148,6 +39158,9 @@ unsafe @ bck_sx_is_id s e → b {
 }
 
 @ bck_callee_drops_elems s callee s aix → b {
+    // (A closure's effect on a capture its `~` loop moves the elements out
+    // of, `@moveelem`: __fe_moved_drop_note, agora #588.)
+    ? ( seq callee `@moveelem` ) { ^ T } {}
     : s base ( bck_generic_base callee )
     // Replacing one element of plain numbers drops nothing: a view of the
     // container, or of another element, still reads what it did.
@@ -39767,6 +39780,29 @@ unsafe @ resolve_irealloc_summaries → v {
         : i m ( __rpg_fget f 13 )
         ? != 0 m { ( nurl_sym_set g_fn_ireallocs ( __rpg_fname f ) ( __rpg_mask_add f `` m ) ) = g_irealloc_any 1 } {}
         = f + f 1
+    }
+}
+
+// A `~` loop's element `x` is moved out of what its loop iterates
+// (`__econt`: the container's name or field path, gen_foreach — an
+// enclosing loop's element, followed to what that one iterates): the
+// function drops an element of that container (agora #588).
+@ __fe_moved_drop_note i syms s x → v {
+    : ~ s c ( nurl_str_cat ( nurl_sym_get2 syms x `__econt` ) `` )
+    : ~ i hops 0
+    ~ & != 0 ( nurl_str_len c ) < hops 8 {
+        : i dot ( nurl_str_find c `.` )
+        : s root ? > dot 0 ( nurl_str_slice c 0 dot ) ( nurl_str_cat c `` )
+        : s up ( nurl_sym_get2 syms root `__econt` )
+        ? == 0 ( nurl_str_len up ) {
+            ( __drop_note_fieldset c )
+            // (…and in a closure body, of a capture: an effect of running
+            // the closure, as a `( vec_clear t )` there is.)
+            ? != 0 g_bck_closure_depth { ( __clo_effect_note c `@moveelem` 0 ) } {}
+            ^ v
+        } {}
+        = c ( nurl_str_cat up `` )
+        = hops + hops 1
     }
 }
 
