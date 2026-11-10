@@ -8,6 +8,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  ARTIFACT_CONTENT_TYPE,
+  artifactResponseHeaders,
   isSafeToken,
   downloadKey,
   extractArtifactTokens,
@@ -92,4 +94,45 @@ test("shouldScanForArtifacts: build + mcp POSTs only", () => {
   assert.equal(shouldScanForArtifacts("GET", "/mcp"), false);
   assert.equal(shouldScanForArtifacts("POST", "/authorize"), false);
   assert.equal(shouldScanForArtifacts("POST", "/"), false);
+});
+
+// An artifact's name is chosen by whoever asked for the build. Objects
+// mirrored before the download contract kept the Content-Type the container
+// derived from that name, so the contract has to hold on read, whatever the
+// stored metadata or the container says.
+test("artifactResponseHeaders: an object stored as text/html is served as a download", () => {
+  const stored = new Headers({ "Content-Type": "text/html; charset=utf-8" });
+  const h = artifactResponseHeaders(stored);
+  assert.equal(h.get("Content-Type"), ARTIFACT_CONTENT_TYPE);
+  assert.equal(h.get("Content-Type"), "application/octet-stream");
+  assert.equal(h.get("Content-Disposition"), "attachment");
+  assert.equal(h.get("X-Content-Type-Options"), "nosniff");
+  // The source's headers are not modified.
+  assert.equal(stored.get("Content-Type"), "text/html; charset=utf-8");
+});
+
+test("artifactResponseHeaders: no metadata at all still yields the full contract", () => {
+  for (const h of [artifactResponseHeaders(), artifactResponseHeaders(new Headers())]) {
+    assert.equal(h.get("Content-Type"), "application/octet-stream");
+    assert.equal(h.get("Content-Disposition"), "attachment");
+    assert.equal(h.get("X-Content-Type-Options"), "nosniff");
+  }
+});
+
+test("artifactResponseHeaders: an inline disposition or a sniffable type from the source is overridden", () => {
+  const h = artifactResponseHeaders(
+    new Headers({
+      "Content-Type": "image/svg+xml",
+      "Content-Disposition": 'inline; filename="x.svg"',
+      "X-Content-Type-Options": "",
+      "Content-Length": "42",
+      "Cache-Control": "max-age=60",
+    }),
+  );
+  assert.equal(h.get("Content-Type"), "application/octet-stream");
+  assert.equal(h.get("Content-Disposition"), "attachment");
+  assert.equal(h.get("X-Content-Type-Options"), "nosniff");
+  // Everything else the source said is passed through.
+  assert.equal(h.get("Content-Length"), "42");
+  assert.equal(h.get("Cache-Control"), "max-age=60");
 });

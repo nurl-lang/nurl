@@ -858,6 +858,41 @@ def t_tools_call_build(c: Client) -> None:
         bad("build artifact present", f"no token/url in {j}")
 
 
+def t_download_artifact_mime(c: Client) -> None:
+    # A build artifact's name is caller-chosen. Serving `.html`/`.svg`/`.js`
+    # with the extension's MIME type turned the download route into stored
+    # XSS on the playground origin (Agora #579). Every artifact is opaque
+    # bytes now, whatever it is called: application/octet-stream,
+    # Content-Disposition: attachment, nosniff.
+    print("\n[REST] /download — artifacts are opaque downloads")
+    src = "@ main → i {\n    ( puts `<script>document.title='NURL_XSS_MARKER'</script>` )\n    ^ 0\n}\n"
+    for name in ("poc.html", "poc.svg", "poc.js"):
+        status, _, raw = c.post("/build", {"source": src, "filename": name}, timeout=120.0)
+        assert_eq(f"{name} build answers 200", status, 200)
+        try:
+            j = json.loads(raw)
+        except json.JSONDecodeError:
+            bad(f"{name} build result is JSON", f"got {raw[:200]!r}")
+            return
+        assert_eq(f"{name} build ok", j.get("status"), "ok")
+        art = j.get("binary_artifact") or {}
+        token = art.get("token")
+        assert_true(f"{name} artifact has a token", bool(token), str(art)[:200])
+        if not token:
+            return
+        status, hdrs, body = c.get(f"/download/{token}")
+        assert_eq(f"{name} artifact downloads", status, 200)
+        h = {k.lower(): v for k, v in (hdrs or {}).items()}
+        ctype = h.get("content-type", "")
+        disp = h.get("content-disposition", "")
+        nosniff = h.get("x-content-type-options", "")
+        assert_true(f"{name} is application/octet-stream", ctype.lower().startswith("application/octet-stream"), ctype)
+        assert_true(f"{name} is an attachment", disp.lower().startswith("attachment"), disp)
+        assert_true(f"{name} is nosniff", nosniff.lower() == "nosniff", nosniff)
+        assert_true(f"{name} body is still the ELF", body[:4] == b"\x7fELF", repr(body[:4]))
+        assert_true(f"{name} still carries the marker", b"NURL_XSS_MARKER" in body, "marker missing")
+
+
 def t_diagnostics_contract(c: Client) -> None:
     # Every class of nurlc diagnostic lands in nurlc_errors — front-end,
     # borrow checker (anchored at its statement), lint warnings —
@@ -1499,39 +1534,6 @@ def wait_ready(c: Client, attempts: int = 20, delay: float = 0.5) -> None:
     sys.exit(2)
 
 
-def t_artifact_download_hardening(c: Client) -> None:
-    # A build artifact is attacker-controlled bytes under an
-    # attacker-chosen filename, served from the playground's own origin.
-    # An ELF a caller names `*.html` must download, never render as a page
-    # that runs its embedded markup (Valkohattu stored-XSS PoC). The
-    # download must carry Content-Disposition: attachment and
-    # X-Content-Type-Options: nosniff, and must not be labelled text/html.
-    print("\n[REST] /download — artifact serving is XSS-hardened")
-    src = "@ main → i {\n    ( nurl_println `<script>dt=1</script>` )\n    ^ 0\n}\n"
-    status, _, raw = c.post("/build", {"source": src, "filename": "xss.html"}, timeout=180.0)
-    assert_eq("build (xss.html) status 200", status, 200)
-    try:
-        j = json.loads(raw)
-    except json.JSONDecodeError:
-        bad("build result is JSON", f"got {raw[:200]!r}")
-        return
-    art = j.get("binary_artifact") or j.get("binary") or {}
-    token = art.get("token") if isinstance(art, dict) else None
-    if not token:
-        bad("xss.html build artifact present", f"no token in {list(j)}")
-        return
-    dstat, dhdrs, dbody = c.get(f"/download/{token}")
-    assert_eq("xss.html download → 200", dstat, 200)
-    assert_true("download body is the ELF artifact", dbody[:4] == b"\x7fELF", repr(dbody[:4]))
-    h = {k.lower(): v for k, v in (dhdrs or {}).items()}
-    cd = h.get("content-disposition", "")
-    cto = h.get("x-content-type-options", "")
-    ct = h.get("content-type", "")
-    assert_true("download is Content-Disposition: attachment", cd.lower().startswith("attachment"), f"cd={cd!r}")
-    assert_true("download sets X-Content-Type-Options: nosniff", cto.lower() == "nosniff", f"cto={cto!r}")
-    assert_true("download is NOT served as text/html", "text/html" not in ct.lower(), f"ct={ct!r}")
-
-
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default="http://127.0.0.1:8000")
@@ -1563,17 +1565,17 @@ def main() -> int:
     t_tools_call_unknown(c)
     if args.native_only:
         t_tools_call_build(c)
+        t_download_artifact_mime(c)
         t_build_import_confinement(c)
         t_build_nesting_limit(c)
         t_diagnostics_contract(c)
-        t_artifact_download_hardening(c)
         print("[REST/MCP] wasm + unikernel builds — skipped (--native-only)")
     elif not args.quick:
         t_tools_call_build(c)
+        t_download_artifact_mime(c)
         t_build_import_confinement(c)
         t_build_nesting_limit(c)
         t_diagnostics_contract(c)
-        t_artifact_download_hardening(c)
         t_tools_call_build_wasm(c)
         t_build_wasm_libc_shims(c)
         t_build_wasm_vararg_libc(c)
@@ -1583,6 +1585,7 @@ def main() -> int:
         t_tools_call_build_unikernel(c)
     else:
         print("\n[MCP] tools/call nurl_build_native — skipped (--quick)")
+        print("[REST] /download artifact MIME — skipped (--quick)")
         print("[MCP] tools/call nurl_build_wasm — skipped (--quick)")
         print("[REST] /build_wasm libc shims — skipped (--quick)")
         print("[REST] /build_wasm caller ir — skipped (--quick)")
