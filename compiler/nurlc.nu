@@ -14882,6 +14882,18 @@ unsafe @ __sx_publish i me s sx → v {
     ^ ( nurl_str_cat `*` `` )
 }
 
+// Does the value block just made as an argument only lend: its tail a
+// binding of a scope outside it (the storage it named inside is the one
+// its name names here), or a field of one — not a block-local the block
+// hands out, which is the argument's own (agora #555)?
+@ __blk_arg_lends i syms → b {
+    : s tp ( nurl_sym_get syms `__tail_ptr__` )
+    ? != 0 ( nurl_str_len tp ) { ^ ( seq tp ( nurl_sym_get2 syms ( nurl_sym_get syms `__tail_name__` ) `__ptr` ) ) } {}
+    : s rp ( nurl_sym_get syms `__tail_root_ptr__` )
+    ? != 0 ( nurl_str_len rp ) { ^ ( seq rp ( nurl_sym_get2 syms g_blk_froot `__ptr` ) ) } {}
+    ^ F
+}
+
 // The scope depth a loop body's bindings are made at, published as
 // `__loop_sdepth__` for the body (__strget_loop_warn); returns the outer
 // loop's value to restore. Without auto-drop the body opens no scope of
@@ -17677,6 +17689,15 @@ unsafe @ gen_call i lex i syms i cg → s {
                     ( nurl_print `  ` ) ( nurl_print __sjl ) ( nurl_print ` = xor i1 ` ) ( nurl_print arg_join_own ) ( nurl_print `, 1\n` )
                     = av ( mem_emit_cloneif cg at av __sjl )
                 } { ? ( __nc_drop_ty at ) { ( __nc_copy_die ( nurl_sym_get syms `__fn_self_name__` ) at ) } {} }
+            } {}
+            // (…and one whose arms only lend — fields, views — on every path,
+            // no ownership published and no binding selected: `( eat ? c . h
+            // a . h b )`; or a value block whose tail is a binding of an outer
+            // scope or a field of one, `( eat { . h a } )`, `( eat { w } )`:
+            // the callee released what the owner still drops — agora #555.)
+            : b __sj_lends | & & | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST == 0 ( nurl_str_len arg_join_own ) == 0 ( nurl_str_len arg_join_ids ) & == arg_eff_tt TT_LBRACE ( __blk_arg_lends syms )
+            ? __sj_lends {
+                ? ( __clone_supported at syms ) { = av ( mem_emit_cloneif cg at av `1` ) } { ? ( __nc_drop_ty at ) { ( __nc_copy_die ( nurl_sym_get syms `__fn_self_name__` ) at ) } {} }
             } {}
             // (…and one whose arms lend bindings on every path — `( eat ? c
             // u t )`, u and t owners: no ownership of its own is published,
@@ -23925,7 +23946,13 @@ unsafe @ __blk_leave b val → v {
     // a tail that is itself a block hands up that block's: `{ { v } }` ends
     // in `v`. Asked by an `=` whose value is the binding itself, agora
     // #554.)
-    ? any { ? != __tail_tt TT_LBRACE { ( nurl_sym_def syms `__tail_ptr__` ? ( is_ident_tok __tail_tt ) ( nurl_sym_get2 syms __tail_tv `__ptr` ) `` ) } {} } { ( nurl_sym_def syms `__tail_ptr__` `` ) }
+    // (…and, a field read, the storage of the binding it is a field of —
+    // `__tail_root_ptr__`, asked by a `sink` argument: agora #555.)
+    ? any { ? != __tail_tt TT_LBRACE {
+            ( nurl_sym_def syms `__tail_ptr__` ? ( is_ident_tok __tail_tt ) ( nurl_sym_get2 syms __tail_tv `__ptr` ) `` )
+            ( nurl_sym_def syms `__tail_name__` ? ( is_ident_tok __tail_tt ) __tail_tv `` )
+            ( nurl_sym_def syms `__tail_root_ptr__` ? & == __tail_tt TT_DOT != 0 ( nurl_str_len g_blk_froot ) ( nurl_sym_get2 syms g_blk_froot `__ptr` ) `` )
+        } {} } { ( nurl_sym_def syms `__tail_ptr__` `` ) ( nurl_sym_def syms `__tail_root_ptr__` `` ) }
     ? any
     { ( bck_save_expr_carriers syms `__last_block_params__` __tail_tt __tail_tv )
         ( nurl_sym_def syms `__tail_first_tt__` ( nurl_str_int __tail_tt ) )
