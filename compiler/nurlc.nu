@@ -67297,7 +67297,19 @@ unsafe @ __hmemo_close s key i mark b r → v {
 
 // Copyable when the module supplies `S_share`, or `S_clone` and every
 // type argument that owns something copies too.
-@ __libh_clone_ok s ty i syms → b {
+//
+// Asked through __clone_supported's memo, never worked out on the spot. A
+// handle's type argument is behind a pointer, so a type reaches itself
+// here: `: N { ?( Box N ) next }` — whether N owns anything asks what the
+// option's payload is, that asks whether the Box copies, and that asks
+// whether N owns anything. Every caller but __clone_supported worked the
+// answer out afresh, and the walk went round until the stack ran out: a
+// segmentation fault, no diagnostic (agora #640). The memo's in-progress
+// mark (__hmemo_open) ends it at the second visit, and the type arguments
+// are parsed once per handle type, not once per question.
+@ __libh_clone_ok s ty i syms → b { ^ ( __clone_supported ty syms ) }
+
+@ __libh_clone_calc s ty i syms → b {
     : s sn ( __libh_base ty )
     ? ( __libh_has_op sn `share` ) { ^ T } {}
     ? ! ( __libh_has_op sn `clone` ) { ^ F } {}
@@ -71305,7 +71317,7 @@ u` ) ( nurl_print q ) ( nurl_print `:
 }
 
 @ __clone_supported_calc s ty i syms → b {
-    ? ( __is_libh ty ) { ^ ( __libh_clone_ok ty syms ) } {}
+    ? ( __is_libh ty ) { ^ ( __libh_clone_calc ty syms ) } {}
     // An option / result: its payload and its error copy.
     ? != 0 ( nurl_str_starts ty `{ i1, ` ) {
         : s tw ( __wrap_twin ty )
