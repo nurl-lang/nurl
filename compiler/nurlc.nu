@@ -42775,9 +42775,15 @@ unsafe @ __bck_walk_one s ix → v {
 // growing (g_bck_ans_union), until a round grows none. Then each is
 // walked once more, on those answers, for its diagnostics. Asked "may"
 // instead, a function that passes a view down a recursion it only reads
-// was refused as keeping it (agora #422's review). (A component that does
-// not settle in the bound — it cannot: the answers only grow, over
-// finitely many words — is asked "may" again.)
+// was refused as keeping it (agora #422's review).
+// Every round that does not settle adds at least one word to some member's
+// answers, and the answers only grow, over finitely many words: each a
+// member's parameter in one of a few kinds (`k`, `^k`, `%k`, …) or a pair
+// of them (`h>k`). So the rounds are bounded by that lattice's height,
+// __bck_scc_height — not by a constant, which a recursion rotating 17
+// parameters (one more word a round) outran and was refused as "may"
+// (agora #480). A component past the cost guard is asked "may" again,
+// which is sound.
 unsafe @ __bck_walk_scc s mem → v {
     : ~ s r0 ( nurl_str_cat mem `` )
     ~ != 0 ( nurl_str_len r0 ) {
@@ -42794,7 +42800,8 @@ unsafe @ __bck_walk_scc s mem → v {
     = g_bck_quiet 1
     : ~ b changed T
     : ~ i round 0
-    ~ & changed < round 16 {
+    : i rounds ( __bck_scc_height mem )
+    ~ & changed < round rounds {
         = changed F
         : ~ s r1 ( nurl_str_cat mem `` )
         ~ != 0 ( nurl_str_len r1 ) {
@@ -42827,6 +42834,23 @@ unsafe @ __bck_walk_scc s mem → v {
         ( __bck_walk_one m )
     }
     = g_bck_ans_union 0
+}
+
+// How many rounds __bck_walk_scc may need to settle component `mem`: one
+// more than the words its members' answers can hold — per member with P
+// parameters (and the result), P+1 single words in each of the answer
+// kinds and (P+1)² pairs — capped at 64 rounds, a cost guard for a
+// component no program needs (it is then asked "may", which is sound).
+@ __bck_scc_height s mem → i {
+    : ~ i h 2
+    : ~ s r ( nurl_str_cat mem `` )
+    ~ != 0 ( nurl_str_len r ) {
+        : s m ( str_first_word r ) = r ( str_skip_word r )
+        : i p + ( count_words ( nurl_sym_get g_deferred_bck ( nurl_str_cat `p` m ) ) ) 1
+        = h + h * p + p 8
+        ? > h 64 { ^ 64 } {}
+    }
+    ^ h
 }
 
 // What function `fn` answers (g_fn_vkeeps, g_fn_rviews, g_fn_vholds), as
