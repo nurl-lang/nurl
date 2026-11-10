@@ -3,11 +3,13 @@
 // map: §2.10 | A2 | rejected | - | agora #383: `put arena idx key` pushes key into arena, binds `: String e ( vec_at arena n )` and pushes `string_data e` into idx; the caller clears arena and reads idx (the PO's arena_clear_bound)
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+
 @ put ( Vec String ) arena ( Vec s ) idx String key → v {
     ( vec_push [String] arena key )
     : String e ( vec_at [String] arena - ( vec_len [String] arena ) 1 )
     ( vec_push [s] idx ( string_data e ) )
 }
+
 @ main → i {
     : ( Vec String ) arena ( vec_new [String] )
     : ( Vec s ) idx ( vec_new [s] )

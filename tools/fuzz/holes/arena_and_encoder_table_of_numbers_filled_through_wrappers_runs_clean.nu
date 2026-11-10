@@ -4,18 +4,23 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/hashmap.nu`
+
 : Tab { ( Vec String ) arena ( HashMap s i ) enc }
+
 @ tab_set ( HashMap s i ) m s key i val → v {
     ( map_set [s i] m key val \ s x → i { ^ ( hash_string x ) } \ s a s b → b { ^ ( eq_string a b ) } )
 }
+
 @ tab_get ( HashMap s i ) m s key → i {
     ^ ?? ( map_get [s i] m key \ s x → i { ^ ( hash_string x ) } \ s a s b → b { ^ ( eq_string a b ) } ) { T v → v F _ → -1 }
 }
+
 @ tab_put ( Vec String ) arena ( HashMap s i ) enc String key i id → v {
     ( vec_push [String] arena key )
     : String k ( vec_at [String] arena - ( vec_len [String] arena ) 1 )
     ( tab_set enc ( string_data k ) id )
 }
+
 @ tab_fill Tab t → v {
     : ~ i j 0
     ~ < j 40 {
@@ -25,12 +30,14 @@ $ `stdlib/std/hashmap.nu`
         = j + j 1
     }
 }
+
 @ tab_make → Tab {
     : Tab t @ Tab { ( vec_new [String] ) ( map_new [s i] ) }
     ( tab_put . t arena . t enc ( string_from `the first key, long enough for the heap` ) 100 )
     ( tab_fill t )
     ^ t
 }
+
 @ main → i {
     : Tab t ( tab_make )
     : String out ( string_new )

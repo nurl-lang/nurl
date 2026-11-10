@@ -3,11 +3,13 @@
 // map: §2.10 | A2 | rejected | - | agora #383: the same, then the viewed element grown in place through a `vec_at` binding (its own buffer moves)
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+
 @ put ( Vec String ) arena ( Vec s ) idx String key → v {
     ( vec_push [String] arena key )
     : String e ( vec_at [String] arena - ( vec_len [String] arena ) 1 )
     ( vec_push [s] idx ( string_data e ) )
 }
+
 @ main → i {
     : ( Vec String ) arena ( vec_new [String] )
     : ( Vec s ) idx ( vec_new [s] )

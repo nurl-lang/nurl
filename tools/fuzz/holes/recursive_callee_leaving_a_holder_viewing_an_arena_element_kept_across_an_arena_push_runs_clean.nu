@@ -3,6 +3,7 @@
 // map: §2.10 | A2 | runs-clean | - | agora #383: the recursive twin, the arena only grown
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+
 @ put_n ( Vec String ) arena ( Vec s ) idx i n → v {
     ? <= n 0 { ^ } {}
     ( vec_push [String] arena ( string_from `a key long enough to live on the heap` ) )
@@ -11,6 +12,7 @@ $ `stdlib/core/vec.nu`
         ( vec_push [s] idx ( string_data e ) )
     } { ( put_n arena idx - n 1 ) }
 }
+
 @ main → i {
     : ( Vec String ) arena ( vec_new [String] )
     : ( Vec s ) idx ( vec_new [s] )

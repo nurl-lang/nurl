@@ -4,6 +4,7 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/hashmap.nu`
+
 @ main → i {
     : ( HashMap s String ) m ( map_new [s String] )
     ( map_set [s String] m `k` ( string_from `a value long enough to live on the heap` ) \ s x → i { ^ ( hash_string x ) } \ s a s b → b { ^ ( eq_string a b ) } )
