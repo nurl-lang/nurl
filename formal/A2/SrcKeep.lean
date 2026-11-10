@@ -48,9 +48,9 @@ theorem RhsT.ctxRel {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry}
   | takel hy _ hm _ hyF hpin => exact CtxRel.moved hanch hy (by rw [hm]; simp) hyF hpin
   | taker hy _ hm _ hyF hpin => exact CtxRel.moved hanch hy (by rw [hm]; simp) hyF hpin
   | pack hy _ _ hp _ => exact hp.ctxRel hy hanch
-  | arcNew hy _ _ _ _ hp => exact hp.ctxRel hy hanch
-  | lockNew hy _ _ _ hp => exact hp.ctxRel hy hanch
-  | cellNew hy _ _ _ hp => exact hp.ctxRel hy hanch
+  | arcNew hy _ _ _ _ _ hp => exact hp.ctxRel hy hanch
+  | lockNew hy _ _ _ _ hp => exact hp.ctxRel hy hanch
+  | cellNew hy _ _ _ _ hp => exact hp.ctxRel hy hanch
   | chanSend _ _ _ hy _ _ hp => exact hp.ctxRel hy hanch
   | lockRestore _ _ _ hy _ _ hp => exact hp.ctxRel hy hanch
   | lockTake _ _ _ => exact CtxRel.refl _
