@@ -2057,6 +2057,12 @@ unsafe @ agg_field_count i syms s ot → i {
 : ~ s g_clolend_cur ``
 // Calls completed since the walk last recorded a statement's effects.
 : ~ i g_win_done 0
+// …and every call completed so far, never reset: a call completed while a
+// lent binding's own arguments were compiled — in a value block, an arm or
+// a match whose statements flush (and so reset g_win_done, and drop the
+// walk's pending read of the binding) — makes it copy (formal's #1726
+// review).
+: ~ i g_calls_total 0
 // …and the Vecs each lend of this function was read out of (`name k`
 // pairs): one moved away or handed to a consuming call — `( rc_new fs )`,
 // where the walk no longer follows a change through the new handle — ends
@@ -16141,13 +16147,15 @@ unsafe @ gen_call i lex i syms i cg → s {
     // its own copy: agora #552, g_clolk_n.)
     : s __clc0 ( nurl_str_cat g_clolend_cur `` )
     = g_clolend_cur ``
+    : i __gct0 g_calls_total
     : s __gcr ( gen_call_body lex syms cg )
     // (…or a call in a defer body, which runs at a scope's exit, not here;
     // or one after the Vec it was read out of moved, __clolend_moved.)
-    ? & != 0 ( nurl_str_len g_clolend_cur ) | | != 0 g_win_done != 0 g_defer_body_depth != 0 ( nurl_sym_len g_pending_impl ( nurl_str_cat `clolendmv##` g_clolend_cur ) ) { ( nurl_sym_def g_pending_impl ( nurl_str_cat `clolendbad##` g_clolend_cur ) `1` ) } {}
+    ? & != 0 ( nurl_str_len g_clolend_cur ) | | | != 0 g_win_done != g_calls_total __gct0 != 0 g_defer_body_depth != 0 ( nurl_sym_len g_pending_impl ( nurl_str_cat `clolendmv##` g_clolend_cur ) ) { ( nurl_sym_def g_pending_impl ( nurl_str_cat `clolendbad##` g_clolend_cur ) `1` ) } {}
     ? != 0 ( nurl_str_len g_clolend_cur ) { ( __clolend_event g_clolend_cur `C` ) } {}
     = g_clolend_cur __clc0
     = g_win_done + g_win_done 1
+    = g_calls_total + g_calls_total 1
     ^ __gcr
 }
 
@@ -33102,6 +33110,10 @@ unsafe @ __vk_union_of s fns s seen b dyn → s {
 // or a `pendstore` one decided at the walk by whether `callee` keeps
 // argument `argidx`). Rides the pending-call list: same row shape.
 @ bck_stash_store s name i line s callee s argidx s kind → v {
+    // (A Vec stored into an owner — a literal's field, an element — goes
+    // with it wherever that owner goes, `( rc_new h )` included: formal's
+    // #1726 review.)
+    ? != 0 g_clolk_n { ( __clolend_moved name ) } {}
     ? & != g_borrowck 0 == g_bck_rec_off 0 {
         ? & ( seq kind `store` ) ( seq callee `-` ) { = g_bck_ownerless + g_bck_ownerless 1 } {}
         : s add ( nurl_str_cat3

@@ -17,7 +17,7 @@
 
 - **A closure bound from `vec_at` of a local Vec borrows that Vec**
   (Agora #552), as docs/spec.md §8.4 says. Calling it after the Vec is cleared, freed or
-  given a new element at that slot is now a compile error. (Growing the Vec
+  given a new element (`vec_put` / `vec_set`, at any slot, as for a String read out of it) is now a compile error. (Growing the Vec
   is fine: the closure's environment does not move.) To keep it
   past such a change, bind a copy that owns its environment:
   `( mem_dup ( vec_at … ) )`. Returning such a closure, storing it into an
