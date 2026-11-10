@@ -38625,12 +38625,11 @@ unsafe @ bck_sx_is_id s e → b {
         } {}
         ? ! ( bck_dead_state v ) {
             : ~ s add ? == v BCK_BORROWED_SHARED ( nurl_sym_get g_bck ( bck_bkey `bs_` ( nurl_str_int wr ) ) ) ( nurl_str_cat w `` )
-            // (…the sources the binding's views depend on, and, when it
-            // views its own storage, the binding itself: `vsv_`.)
+            // (…and the sources the binding's views depend on — a sibling
+            // field it views among them, `. h a`, which is no self-dependency
+            // to end the binding by, bck_dep_add.)
             ? & wvf == v BCK_OWNED {
-                : s wrs ( nurl_str_int wr )
-                = add ( __word_union add ( __src_plain ( nurl_sym_get g_bck ( bck_bkey `vds_` wrs ) ) ) )
-                ? != 0 ( nurl_sym_len g_bck ( bck_bkey `vsv_` wrs ) ) { = add ( __word_union add wrs ) } {}
+                = add ( __word_union add ( __src_plain ( nurl_sym_get g_bck ( bck_bkey `vds_` ( nurl_str_int wr ) ) ) ) )
             } {}
             = srcs ? == 0 ( nurl_str_len srcs ) ( nurl_str_cat add `` ) ( nurl_str_cat3 srcs ` ` add )
         } {}
