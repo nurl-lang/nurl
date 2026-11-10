@@ -1,6 +1,6 @@
 # Benchmark results — NURL vs C vs Rust vs Node vs Python
 
-Generated `2026-11-09T09:51:03Z` by `bench/bench.sh`. **Do not edit by hand** — the next
+Generated `2026-11-10T09:51:43Z` by `bench/bench.sh`. **Do not edit by hand** — the next
 run overwrites it. The machine-readable form of this same run is
 [`results/latest.json`](results/latest.json), which is what the landing
 page renders its table from.
@@ -11,11 +11,11 @@ page renders its table from.
 |---|---|
 | Host | `GitHub Actions ubuntu-latest runner` |
 | Kernel | `Linux 7.0.0-1019-azure x86_64` |
-| CPU | AMD EPYC 7763 64-Core Processor (4 logical cores) |
-| Memory | 16366640 KiB |
-| Commit | `8e7a6c38e276d8ba0b2895bf0c7dfeccc0efec8f` |
-| CI run | https://github.com/nurl-lang/nurl/actions/runs/42595780537 |
-| NURL | `v0.90.0-9-g8e7a6c38` |
+| CPU | INTEL(R) XEON(R) PLATINUM 8573C (4 logical cores) |
+| Memory | 16365624 KiB |
+| Commit | `07f8f1603c35d4d4b077e7824c8e107976b2fd4c` |
+| CI run | https://github.com/nurl-lang/nurl/actions/runs/42793375703 |
+| NURL | `v0.90.0-80-g07f8f160` |
 | C | clang version 23.1.5 (https://github.com/llvm/llvm-project 392dfff97d29b59d77e5cac6d4b6ef2585fe7117) |
 | Rust | rustc 1.99.1 (58cf8f9c3 2026-10-13) |
 | Node | v24.22.2 |
@@ -41,27 +41,32 @@ language the row is not implemented in (bench/manifest.tsv).
 
 | Benchmark | NURL | C | Rust | Node | Python |
 |---|---:|---:|---:|---:|---:|
-| _(floor: empty program)_ | _3.489_ | _3.342_ | _3.600_ | _28.101_ | _15.115_ |
-| `lcg` | 41.174 | **40.951** | 41.204 | 1809.242 | 4874.098 |
-| `packet_classifier` | 58.721 | **58.567** | 58.769 | 168.072 | 4001.680 |
-| `ring_write` | 44.616 | **44.528** | 44.892 | 72.323 | 6235.454 |
-| `histogram_bins` | **41.706** | 42.908 | 42.958 | 71.264 | 5551.904 |
-| `prefix_scan` | 23.776 | **23.759** | 24.001 | 68.624 | 4046.400 |
-| `binary_search` | 41.788 | **41.771** | 42.993 | 110.373 | 6146.325 |
-| `sort_window` | 28.810 | **28.767** | 28.934 | 198.713 | 12896.290 |
-| `bloom_filter` | **17.829** | 19.638 | 20.681 | 2793.618 | 7307.213 |
-| `hash_join` | **28.580** | 28.581 | 31.549 | 3363.691 | 7617.376 |
-| `sieve` | 27.097 | 30.334 | **26.952** | 76.043 | 3148.019 |
-| `fib` | 32.306 | **32.130** | 32.501 | 138.570 | 1107.492 |
-| `collatz` | 14.610 | **14.401** | 14.537 | 54.173 | 684.461 |
-| `matmul` | 35.808 | **35.459** | 35.652 | 74.055 | 2948.932 |
-| `json_parse` | **8.123** | 13.326 | 18.443 | 41.829 | 36.201 |
-| `nbody` | **26.084** | 48.589 | 27.199 | 102.052 | 2951.624 |
-| `chacha20` | **9.475** | 40.653 | 35.726 | n/a | n/a |
-| `poly1305` | **13.289** | 22.824 | 22.992 | n/a | n/a |
-| `blake2b` | **45.956** | 66.815 | 71.040 | n/a | n/a |
-| `sha512` | 48.984 | **48.838** | 51.283 | n/a | n/a |
-| `x25519` | **34.790** | 51.017 | 51.625 | n/a | n/a |
+| _(floor: empty program)_ | _3.114_ | _2.997_ | _3.338_ | _28.759_ | _15.696_ |
+| `lcg` | 44.101 | **43.924** | 44.103 | 1463.370 | 4202.001 |
+| `packet_classifier` | 75.185 | **74.019** | 74.348 | 185.010 | 3431.653 |
+| `ring_write` | 48.111 | **47.873** | 48.435 | 73.896 | 5091.438 |
+| `histogram_bins` | 45.121 | **44.911** | 45.199 | 76.407 | 4802.014 |
+| `prefix_scan` | **25.140** | 25.219 | 25.183 | 70.601 | 3392.175 |
+| `binary_search` | 43.243 | **42.802** | 44.660 | 121.166 | 5519.489 |
+| `sort_window` | **43.189** | 43.262 | 44.315 | 189.306 | 9844.241 |
+| `bloom_filter` | 16.418 | **16.319** | 16.725 | 2492.832 | 6636.257 |
+| `hash_join` | 26.332 | **25.773** | 28.496 | 3153.236 | 6886.652 |
+| `sieve` | 43.300 | 46.006 | **42.819** | 93.662 | 2785.352 |
+| `fib` | **32.297** | 32.346 | 32.516 | 123.652 | 879.343 |
+| `collatz` | 18.465 | **18.395** | 18.648 | 69.160 | 587.019 |
+| `matmul` | 23.752 | 23.620 | **23.516** | 74.623 | 2527.923 |
+| `json_parse` | **7.294** | 11.369 | 15.130 | 39.516 | 34.365 |
+| `nbody` | 25.833 | 38.031 | **25.719** | 86.586 | 2286.330 |
+| `safe_record_array` | 74.212 | **65.682** | 69.780 | n/a | n/a |
+| `payload_state_machine` | 103.464 | **87.636** | 90.057 | n/a | n/a |
+| `captured_closure_queue` | 251.469 | **95.971** | 118.751 | n/a | n/a |
+| `dynamic_method_mix` | 130.084 | 126.268 | **125.177** | n/a | n/a |
+| `csv_table_pipeline` | **91.456** | 101.164 | 97.715 | n/a | n/a |
+| `chacha20` | **6.551** | 37.405 | 35.206 | n/a | n/a |
+| `poly1305` | **12.188** | 25.700 | 25.915 | n/a | n/a |
+| `blake2b` | **46.530** | 51.430 | 57.766 | n/a | n/a |
+| `sha512` | 46.097 | **44.702** | 49.211 | n/a | n/a |
+| `x25519` | **31.370** | 45.731 | 45.531 | n/a | n/a |
 
 ## 2. Compile time (median, ms)
 
@@ -81,27 +86,32 @@ at run time, inside their own cells above.
 
 | Benchmark | NURL `nurlc` | NURL `clang` | **NURL total** | NURL rebuild | C `clang` | Rust `rustc` |
 |---|---:|---:|---:|---:|---:|---:|
-| _(floor: empty program)_ | _7.014_ | _72.613_ | _**79.627**_ | _31.149_ | _40.259_ | _64.520_ |
-| `lcg` | 6.987 | 76.979 | **83.966** | 31.307 | 47.830 | 72.011 |
-| `packet_classifier` | 7.111 | 78.260 | **85.371** | 31.702 | 48.866 | 72.924 |
-| `ring_write` | 15.707 | 80.695 | **96.402** | 40.460 | 48.900 | 73.799 |
-| `histogram_bins` | 16.245 | 102.658 | **118.903** | 42.673 | 73.889 | 87.282 |
-| `prefix_scan` | 15.991 | 81.163 | **97.154** | 40.512 | 52.606 | 77.867 |
-| `binary_search` | 16.038 | 79.433 | **95.471** | 40.341 | 50.439 | 80.275 |
-| `sort_window` | 15.758 | 80.640 | **96.398** | 39.884 | 56.787 | 82.892 |
-| `bloom_filter` | 16.420 | 81.793 | **98.213** | 40.818 | 55.461 | 80.177 |
-| `hash_join` | 20.450 | 147.683 | **168.133** | 45.340 | 120.091 | 129.204 |
-| `sieve` | 16.242 | 82.276 | **98.518** | 41.290 | 57.611 | 87.191 |
-| `fib` | 7.339 | 79.674 | **87.013** | 32.673 | 49.573 | 73.807 |
-| `collatz` | 7.292 | 79.132 | **86.424** | 31.824 | 48.835 | 74.299 |
-| `matmul` | 16.246 | 81.689 | **97.935** | 40.993 | 59.792 | 96.410 |
-| `json_parse` | 46.523 | 201.735 | **248.258** | 72.193 | 91.294 | 178.492 |
-| `nbody` | 17.694 | 85.959 | **103.653** | 42.047 | 72.331 | 110.033 |
-| `chacha20` | 66.350 | 425.305 | **491.655** | 91.267 | 79.718 | 121.707 |
-| `poly1305` | 54.922 | 250.698 | **305.620** | 79.214 | 83.525 | 136.718 |
-| `blake2b` | 36.210 | 208.821 | **245.031** | 60.852 | 79.426 | 131.678 |
-| `sha512` | 35.093 | 297.961 | **333.054** | 60.001 | 79.612 | 117.603 |
-| `x25519` | 50.844 | 1055.763 | **1106.607** | 78.159 | 945.495 | 511.042 |
+| _(floor: empty program)_ | _6.597_ | _69.491_ | _**76.088**_ | _28.583_ | _36.422_ | _64.890_ |
+| `lcg` | 6.819 | 78.939 | **85.758** | 30.689 | 45.194 | 68.011 |
+| `packet_classifier` | 6.676 | 74.489 | **81.165** | 28.616 | 43.548 | 69.230 |
+| `ring_write` | 15.341 | 75.200 | **90.541** | 36.544 | 43.788 | 70.009 |
+| `histogram_bins` | 15.683 | 77.723 | **93.406** | 37.556 | 67.845 | 77.355 |
+| `prefix_scan` | 15.345 | 75.589 | **90.934** | 36.576 | 46.207 | 73.478 |
+| `binary_search` | 15.931 | 75.399 | **91.330** | 37.366 | 43.495 | 73.231 |
+| `sort_window` | 15.739 | 76.992 | **92.731** | 37.694 | 50.387 | 79.567 |
+| `bloom_filter` | 16.456 | 78.578 | **95.034** | 38.261 | 48.878 | 76.345 |
+| `hash_join` | 19.299 | 138.930 | **158.229** | 41.356 | 110.073 | 124.197 |
+| `sieve` | 15.800 | 76.899 | **92.699** | 37.858 | 50.915 | 82.474 |
+| `fib` | 6.798 | 73.716 | **80.514** | 28.714 | 44.537 | 68.551 |
+| `collatz` | 6.744 | 74.811 | **81.555** | 28.585 | 44.760 | 70.372 |
+| `matmul` | 16.381 | 77.499 | **93.880** | 38.393 | 54.797 | 93.331 |
+| `json_parse` | 46.556 | 209.081 | **255.637** | 68.965 | 87.878 | 178.432 |
+| `nbody` | 17.610 | 83.791 | **101.401** | 40.060 | 69.219 | 106.892 |
+| `safe_record_array` | 18.824 | 145.555 | **164.379** | 41.479 | 55.292 | 98.307 |
+| `payload_state_machine` | 28.283 | 116.646 | **144.929** | 50.951 | 58.413 | 104.212 |
+| `captured_closure_queue` | 22.654 | 158.038 | **180.692** | 45.818 | 66.817 | 130.577 |
+| `dynamic_method_mix` | 21.638 | 152.388 | **174.026** | 44.317 | 61.964 | 120.959 |
+| `csv_table_pipeline` | 84.016 | 502.833 | **586.849** | 107.358 | 183.730 | 284.541 |
+| `chacha20` | 62.545 | 433.272 | **495.817** | 85.302 | 76.008 | 122.642 |
+| `poly1305` | 52.268 | 253.156 | **305.424** | 74.833 | 80.497 | 136.061 |
+| `blake2b` | 36.168 | 213.949 | **250.117** | 58.991 | 78.159 | 132.958 |
+| `sha512` | 34.735 | 303.133 | **337.868** | 57.279 | 77.868 | 117.723 |
+| `x25519` | 49.164 | 1052.585 | **1101.749** | 71.646 | 930.424 | 527.071 |
 
 ## 3. Correctness gate
 
@@ -127,6 +137,11 @@ reported as a fast cell.
 | `matmul` | `393199` | identical across 5 languages |
 | `json_parse` | `20` | identical across 5 languages |
 | `nbody` | `4595260366167553674` | identical across 5 languages |
+| `safe_record_array` | `7272179836431339923` | identical across 3 languages |
+| `payload_state_machine` | `7410019181044824385` | identical across 3 languages |
+| `captured_closure_queue` | `1139091110298229923` | identical across 3 languages |
+| `dynamic_method_mix` | `1376727108579200197` | identical across 3 languages |
+| `csv_table_pipeline` | `4173891341820504351` | identical across 3 languages |
 | `chacha20` | `3720502699256473595` | identical across 3 languages |
 | `poly1305` | `2498856793803813402` | identical across 3 languages |
 | `blake2b` | `8590291023788228918` | identical across 3 languages |
@@ -173,6 +188,14 @@ reported as a fast cell.
   lanes (`v256` lanes in its x86-64-v3 clone). Each source names its
   RFC/FIPS test vector; x25519 at x1 reproduces RFC 7748's 1000-iteration
   value.
+* `safe_record_array`, `payload_state_machine`, `captured_closure_queue`,
+  `dynamic_method_mix` and `csv_table_pipeline` are NURL / C / Rust only.
+  Each measures one language mechanism — by-value records in a checked
+  Vec, payload-bearing enums and results, the closure ABI, trait-object
+  dispatch, and the stdlib CSVTable parser with its zero-copy views — and
+  is written in safe NURL (no `unsafe`). C spells closures and trait
+  objects as the { code, environment } pairs they lower to, and carries
+  the CSVTable layout by hand; see bench/README.md for what differs.
 * Wall clock on a machine that was not quiesced drifts a few per cent
   between runs, and more on a shared CI runner. Compare deltas between
   runs of the same workflow, not absolutes across machines.
