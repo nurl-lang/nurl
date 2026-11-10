@@ -1,0 +1,12 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_cursor_stored_root_read.nu:19:5: error: 'q' is read here, but its value was moved into 'g' at line 16. A heap value has one owner; once it is stored into an aggregate, an Option or a container (vec_push), the old name is gone, because the owner may release or replace the value while the name still points at it. Read it through 'g' (a field read, or vec_get on it), or store a copy and keep the original: ( mem_dup q ).
+    ( nurl_println ( string_data q ) )
+    ^
+compiler/tests/diag_cursor_stored_root_read.nu:31:5: error: 'q' is read here, but its value was moved into 'w' at line 28. A heap value has one owner; once it is stored into an aggregate, an Option or a container (vec_push), the old name is gone, because the owner may release or replace the value while the name still points at it. Read it through 'w' (a field read, or vec_get on it), or store a copy and keep the original: ( mem_dup q ).
+    ( nurl_println ( string_data q ) )
+    ^
+compiler/tests/diag_cursor_stored_root_read.nu:42:5: error: 'q' is read here, but its value was moved into 'g' at line 39. A heap value has one owner; once it is stored into an aggregate, an Option or a container (vec_push), the old name is gone, because the owner may release or replace the value while the name still points at it. Read it through 'g' (a field read, or vec_get on it), or store a copy and keep the original: ( mem_dup q ).
+    ~ x q { ( nurl_println ( nurl_str_int x ) ) }
+    ^
+error: compilation aborted — 3 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)
