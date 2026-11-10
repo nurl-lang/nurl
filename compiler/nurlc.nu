@@ -5687,6 +5687,10 @@ unsafe @ gen_ret i lex i syms i cg → s {
     ? & == ret_first_tt TT_BACKSLASH == g_blk_tail_eff TT_LPAREN { = ret_eff_tt TT_LPAREN = ret_is_direct_call T } {}
     ? == ret_first_tt TT_LBRACE { ? != 0 ( nurl_str_len g_blk_froot ) { = ret_eff_tt TT_DOT } {
             ? == g_blk_tail_eff TT_LPAREN { = ret_eff_tt TT_LPAREN = ret_is_direct_call T } {}
+            // (…and a field read of a call's result, `{ . ( vec_at [S] . h a
+            // 0 ) name }`, as `^ . ( vec_at … ) name` is: its per-call answer
+            // that it lends — agora #566.)
+            ? == g_blk_tail_eff TT_DOT { = ret_eff_tt TT_DOT } {}
             // (…and one whose tail is a `?` / `??` as that join is; its
             // arms' locals were not moved out — g_join_rdepth is for a join
             // `^` itself hands back — so what they lend is copied, or
@@ -17515,7 +17519,10 @@ unsafe @ gen_call i lex i syms i cg → s {
         // (A call: one that may lend what it was handed — as the argument's
         // own call left g_call_may_lend — or one not compiled yet.)
         ? ( seq bck_arg_nm `-` ) {
-            ? | | | | == arg_eff_tt TT_DOT == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST ( is_ident_tok arg_eff_tt ) & == arg_eff_tt TT_LPAREN g_call_may_lend {
+            // (…and a value block whose tail is a binding or a field read
+            // of one: it hands that on as it is — agora #566.)
+            : b __blk_lendy & == arg_eff_tt TT_LBRACE | != 0 ( nurl_sym_len syms `__tail_ptr__` ) != 0 ( nurl_sym_len syms `__tail_root_ptr__` )
+            ? | | | | | == arg_eff_tt TT_DOT == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST ( is_ident_tok arg_eff_tt ) & == arg_eff_tt TT_LPAREN g_call_may_lend __blk_lendy {
                 = arg_lendy ( nurl_str_cat3 arg_lendy ` ` ( nurl_str_int arg_idx ) )
                 ? & != 0 g_bck_closure_depth ! ( seq arg_lendy_nm `*` ) {
                     = arg_lendy_nm ? | | == 0 ( nurl_str_len arg_sx ) ( seq arg_sx `*` ) ( seq arg_sx `-` ) ( nurl_str_cat `*` `` ) ( __word_union arg_lendy_nm ( __sx_bind_names arg_sx ) )
