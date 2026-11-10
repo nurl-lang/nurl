@@ -59,6 +59,7 @@ import A3
 #print axioms A2.Dtor.pack_env_dtor_free
 #print axioms A2.WFv.pkg_env_dtor_free
 #print axioms A2.Dtor.pkgs_env_dtor_free
+#print axioms A2.Dtor.dropd_no_dtor
 -- A2-drop.3d: no share's payload owns a destructor value
 #print axioms A2.Dtor.ok_payloads_free
 #print axioms A2.Dtor.shares_dtor_free

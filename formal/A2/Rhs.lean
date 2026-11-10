@@ -91,6 +91,7 @@ theorem ViewsOK.pkg {m : Mem} {fs : List Nat} {te : Ty} {ms : List Nat} {q : Cro
   | send => exact ViewsOK.none (hq.send rfl).1 _ _
   | sync => exact ViewsOK.none (hq.send rfl).1 _ _
   | bare => exact ViewsOK.none (hq.send rfl).1 _ _
+  | dropd => exact ViewsOK.none (hq.1 rfl).1 _ _
 
 theorem rootNode_st {m m' : Mem} (h : m'.st = m.st) {r : Var} {n : Val} (hn : RootNode m r n)
     (hb : BlkLe m.blk m'.blk := by exact BlkLe.of_le fun _ _ h => h) : RootNode m' r n := by

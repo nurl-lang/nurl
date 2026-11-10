@@ -513,23 +513,40 @@ theorem scopeD_frame_value {P : Prog} {Γ Δ : Ctx} {F : List Var} {x : Var} {f 
       · exact hn
       · cases h'
 
-/-- A2-drop.3c: a typed closure or trait-object literal's environment holds
-    no destructor value, at any depth: a package's drop releases its
-    environment running no code, so one that would hold a destructor value is
-    refused (`Cross.Fits`). -/
+/-- A2-drop.3c: a typed closure or trait-object literal of a class that does
+    not drop (Agora #609: every class but `dropd`) has an environment that
+    holds no destructor value, at any depth: such a package's drop releases
+    its environment running no code (`Cross.Fits`). -/
 theorem pack_env_dtor_free {Γ Γ1 : Ctx} {F : List Var} {fs : List Nat} {te : Ty} {ms : List Nat}
     {y : Var} {cs : List (Var × PMode × Ty)} {E : Entry}
-    (h : RhsT Γ F (.pack fs te ms y cs) E Γ1) : te.holdsDtor = false ∧ te.dtorFree = true := by
+    (h : RhsT Γ F (.pack fs te ms y cs) E Γ1) (hE : E.ty.holdsDtor = false) :
+    te.holdsDtor = false ∧ te.dtorFree = true := by
   cases h with
   | pack _ _ _ _ _ hq =>
-    refine ⟨hq.2.2.2, ?_⟩
-    have := hq.2.2.2
+    have := hq.2.2.2 (by simpa [Ty.holdsDtor] using hE)
+    refine ⟨this, ?_⟩
     rw [Ty.holdsDtor_eq_not_free] at this
     simpa using this
 
-/-- ... and so does every package in a well-formed tree, however deep it
-    lies (a field, an element, another package's environment). -/
-theorem _root_.A2.WFv.pkg_env_dtor_free {τ : Ty} {v : Val} (hw : WFv τ v)
+/-- Agora #609: no closure of the dropping class occurs in the type, in a
+    field, a payload, an element or under a destructor type (a share's
+    payload and a view's element hold none: `Ty.ok`). -/
+def _root_.A2.Ty.noDropd : Ty → Bool
+  | .vec t => t.noDropd
+  | .prod a b => a.noDropd && b.noDropd
+  | .sum a b => a.noDropd && b.noDropd
+  | .fn _ q => !q.drops
+  | .dtor _ t => t.noDropd
+  | _ => true
+
+theorem _root_.A2.Ty.noDropd_of_free {t : Ty} (h : t.holdsDtor = false) : t.noDropd = true := by
+  induction t <;> simp_all [Ty.holdsDtor, Ty.noDropd]
+
+/-- ... and so does every package in a well-formed tree of a type with no
+    closure of the dropping class in it, however deep the package lies (a
+    field, an element, another package's environment, under a destructor
+    type). -/
+theorem _root_.A2.WFv.pkg_env_dtor_free {τ : Ty} {v : Val} (hw : WFv τ v) (hdf : τ.noDropd = true)
     {fs : List Nat} {te : Ty} {ms : List Nat} {e : Val} {cs : List (Var × PMode × Ty)}
     (hs : Sub (.pkg fs te ms e cs) v) : te.holdsDtor = false := by
   induction hw with
@@ -537,34 +554,52 @@ theorem _root_.A2.WFv.pkg_env_dtor_free {τ : Ty} {v : Val} (hw : WFv τ v)
   | view => cases hs
   | node _ ih =>
     cases hs with
-    | child he h => exact ih _ he h
+    | child he h => exact ih _ he (by simpa [Ty.noDropd] using hdf) h
   | pair _ _ iha ihb =>
+    simp only [Ty.noDropd, Bool.and_eq_true] at hdf
     cases hs with
-    | fst h => exact iha h
-    | snd h => exact ihb h
-  | inl _ ih => cases hs with | inl h => exact ih h
-  | inr _ ih => cases hs with | inr h => exact ih h
+    | fst h => exact iha hdf.1 h
+    | snd h => exact ihb hdf.2 h
+  | inl _ ih =>
+    simp only [Ty.noDropd, Bool.and_eq_true] at hdf
+    cases hs with | inl h => exact ih hdf.1 h
+  | inr _ ih =>
+    simp only [Ty.noDropd, Bool.and_eq_true] at hdf
+    cases hs with | inr h => exact ih hdf.2 h
   | pkg _ hq ih =>
+    have hte := hq.2.2.2 (by simpa [Ty.noDropd] using hdf)
     cases hs with
-    | refl => exact hq.2.2.2
-    | pkg h => exact ih h
+    | refl => exact hte
+    | pkg h => exact ih (Ty.noDropd_of_free hte) h
   | arc _ _ => cases hs
   | lk => cases hs
   | cell => cases hs
-  | dtor _ _ ih => exact ih hs
+  | dtor _ _ ih => exact ih (by simpa [Ty.noDropd] using hdf) hs
 
 /-- **A2-drop.3c: in a running configuration no package an owner's slot
-    holds, at any depth of its tree, has an environment that holds a
-    destructor value** (one in a block's payload: `blk_pkgs_env_dtor_free`).
-    So the environment a closure's or a trait object's drop releases, where
-    an owner's tree is dropped (a binding's end, a `Vec`'s element, an
-    assignment's old value, a panic's unwind), holds no destructor value. -/
+    holds, at any depth of a tree whose type has no closure of the dropping
+    class in it, has an environment that holds a destructor value** (one in
+    a block's payload: `blk_pkgs_env_dtor_free`).  So the environment a
+    closure's or a trait object's drop releases with no code holds no
+    destructor value.  (Agora #609: a closure of the dropping class is a
+    destructor value itself, `Ty.holdsDtor`; no destructor is accepted for
+    its type yet, so no typed program binds one.) -/
 theorem pkgs_env_dtor_free {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {E : Entry}
-    (hx : Γ x = some E) (hm : E.mode.ownSlot = true) {o : Bool} {T : Val}
+    (hx : Γ x = some E) (hm : E.mode.ownSlot = true) (hdf : E.ty.noDropd = true) {o : Bool} {T : Val}
     (hsl : m.st x = some ⟨o, some T⟩)
     {fs : List Nat} {te : Ty} {ms : List Nat} {e : Val} {cs : List (Var × PMode × Ty)}
     (hs : Sub (.pkg fs te ms e cs) T) : te.holdsDtor = false :=
-  (hi.own_wfv hx hm hsl).pkg_env_dtor_free hs
+  (hi.own_wfv hx hm hsl).pkg_env_dtor_free hdf hs
+
+/-- Agora #609's preparation: no destructor is accepted for a closure of the
+    dropping class, so `letd` binds none and no function returns one. -/
+theorem dropd_no_dtor {P : Prog} {f : Nat} {ms : List Nat} : ¬ DropFnOK P f (.fn ms .dropd) := by
+  rintro (⟨_, h⟩ | ⟨_, _, _, _, ht, _⟩ | ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, hg, _⟩ |
+    ⟨_, _, _, _, _, _, ht, _⟩)
+  · cases h
+  · cases ht
+  · rcases hg with ⟨_, _, _, _, ht, _⟩ | ⟨_, _, _, _, _, _, ht, _⟩ <;> cases ht
+  · cases ht
 
 /-- The payload types of the shares (`Arc`, lock, cell) that occur in a
     type, at any depth: in fields, payloads and elements, under views and
@@ -643,7 +678,10 @@ theorem blk_pkgs_env_dtor_free {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {k : Nat} {
     (hk : m.blk k = some bl) {p : Val} (hp : bl.pay = some p)
     {fs : List Nat} {te : Ty} {ms : List Nat} {e : Val} {cs : List (Var × PMode × Ty)}
     (hs : Sub (.pkg fs te ms e cs) p) : te.holdsDtor = false :=
-  (((hi.blocks k bl hk).2.2.1 p hp).1).pkg_env_dtor_free hs
+  (((hi.blocks k bl hk).2.2.1 p hp).1).pkg_env_dtor_free
+    (Ty.noDropd_of_free (by
+      have := (hi.blocks k bl hk).2.2.2.2
+      rw [Ty.holdsDtor_eq_not_free]; simpa using this)) hs
 
 /-- A2-drop.3d: `arc_new`, a lock's and a library handle's constructor take
     a value that owns no destructor value. -/

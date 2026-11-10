@@ -47,6 +47,9 @@ inductive Cross where
   | send
   | sync
   | bare
+  | dropd  -- Agora #609: the environment may hold destructor values; it holds no views and no
+           -- cell shares (as `sync`'s), and crosses nowhere: no subsumption reaches it
+           -- (`Cross.Le`), and what crosses owns no destructor value
 deriving DecidableEq, Repr
 
 /-- The environment may hold views and bindings by name. -/
@@ -64,6 +67,12 @@ deriving DecidableEq, Repr
 @[simp] def Cross.shares : Cross → Bool
   | .bare => false
   | _ => true
+
+/-- Agora #609: the environment may hold destructor values: the closure's
+    drop runs code (its drop method), so it is a destructor value itself. -/
+@[simp] def Cross.drops : Cross → Bool
+  | .dropd => true
+  | _ => false
 
 /-- Types.  `vec t` is an owned, growable buffer of `t` (a `Vec`, or a
     `String` when `t` is a byte).  `slice t` is a view of such a buffer
@@ -207,6 +216,7 @@ def Ty.sync : Ty → Bool
 def Ty.isStruct : Ty → Bool
   | .prod _ _ => true
   | .sum _ _ => true
+  | .fn _ q => q.drops   -- Agora #609: a closure whose drop runs code (its drop method)
   | _ => false
 
 /-- A2-drop.3a: a value of this type runs a destructor when it is dropped:
@@ -231,6 +241,7 @@ def Ty.holdsDtor : Ty → Bool
   | .prod a b => a.holdsDtor || b.holdsDtor
   | .sum a b => a.holdsDtor || b.holdsDtor
   | .vec t => t.holdsDtor
+  | .fn _ q => q.drops   -- Agora #609: a closure whose environment may hold one
   | _ => false
 
 theorem Ty.hasDtor_of_holdsDtor {t : Ty} (h : t.holdsDtor = false) : t.hasDtor = false := by
@@ -264,6 +275,7 @@ def Ty.dtorFree : Ty → Bool
   | .vec t => t.dtorFree
   | .prod a b => a.dtorFree && b.dtorFree
   | .sum a b => a.dtorFree && b.dtorFree
+  | .fn _ q => !q.drops
   | _ => true
 
 /-- A2-drop.3b's drain: a `Vec` of destructor values (`.vec (.dtor f u)`), the
@@ -319,7 +331,7 @@ def Ty.ok : Ty → Bool
 
 @[simp] theorem Ty.dtorFree_int : Ty.int.dtorFree = true := rfl
 @[simp] theorem Ty.dtorFree_slice (t : Ty) : (Ty.slice t).dtorFree = true := rfl
-@[simp] theorem Ty.dtorFree_fn (ms : List Nat) (q : Cross) : (Ty.fn ms q).dtorFree = true := rfl
+@[simp] theorem Ty.dtorFree_fn (ms : List Nat) (q : Cross) : (Ty.fn ms q).dtorFree = !q.drops := rfl
 @[simp] theorem Ty.dtorFree_arc (t : Ty) : (Ty.arc t).dtorFree = true := rfl
 @[simp] theorem Ty.dtorFree_lk (t : Ty) : (Ty.lk t).dtorFree = true := rfl
 @[simp] theorem Ty.dtorFree_cell (t : Ty) : (Ty.cell t).dtorFree = true := rfl
@@ -333,6 +345,7 @@ theorem Ty.holdsDtor_eq_not_free (t : Ty) : t.holdsDtor = !t.dtorFree := by
   | prod a b iha ihb => simp [Ty.holdsDtor, iha, ihb, Bool.not_and]
   | sum a b iha ihb => simp [Ty.holdsDtor, iha, ihb, Bool.not_and]
   | vec t ih => simp [Ty.holdsDtor, ih]
+  | fn _ q => simp [Ty.holdsDtor, Ty.dtorFree]
   | _ => rfl
 
 theorem Ty.ok_prod {a b : Ty} (h : (Ty.prod a b).ok = true) : a.ok = true ∧ b.ok = true := by
@@ -529,7 +542,7 @@ def Cross.Fits (q : Cross) (te : Ty) (cs : List (Var × PMode × Ty)) : Prop :=
   (q.views = false → te.holdsView = false ∧ cs = []) ∧
   (q.cells = false → te.hasCell = false) ∧
   (q.shares = false → te.hasArc = false) ∧
-  te.holdsDtor = false
+  (q.drops = false → te.holdsDtor = false)
 
 /-- What fits reads of the captures is whether there are any, not their names. -/
 theorem Cross.Fits.map {q : Cross} {te : Ty} {cs : List (Var × PMode × Ty)} (h : q.Fits te cs)
@@ -538,30 +551,34 @@ theorem Cross.Fits.map {q : Cross} {te : Ty} {cs : List (Var × PMode × Ty)} (h
 
 theorem Cross.fits_any (te : Ty) (cs : List (Var × PMode × Ty)) (hd : te.holdsDtor = false) :
     Cross.any.Fits te cs :=
-  ⟨fun h => absurd h (by decide), fun h => absurd h (by decide), fun h => absurd h (by decide), hd⟩
+  ⟨fun h => absurd h (by decide), fun h => absurd h (by decide), fun h => absurd h (by decide), fun _ => hd⟩
 
 /-- A3.5b's order on classes, by what an environment may hold: `bare`, `sync`,
-    `send`, `any`, each holding more than the one before. -/
+    `send`, `any`, each holding more than the one before.  (`dropd`'s rank is
+    not used: `Cross.Le` relates it to itself only.) -/
 def Cross.rank : Cross → Nat
   | .bare => 0
   | .sync => 1
   | .send => 2
   | .any => 3
+  | .dropd => 4
 
 /-- A3.5b, subsumption: a closure of class `q` may be taken as one of class `q'`
-    (`bare ≤ sync ≤ send ≤ any`).  Its environment then holds no more than `q'`
+    (`bare ≤ sync ≤ send ≤ any`; Agora #609: and of the same `drops`, so `dropd`
+    is comparable to itself only).  Its environment then holds no more than `q'`
     says (`Cross.Fits.mono`), so the class only forgets where it may cross. -/
-def Cross.Le (q q' : Cross) : Prop := q.rank ≤ q'.rank
+def Cross.Le (q q' : Cross) : Prop := q.rank ≤ q'.rank ∧ q.drops = q'.drops
 
-instance (q q' : Cross) : Decidable (Cross.Le q q') := inferInstanceAs (Decidable (_ ≤ _))
+instance (q q' : Cross) : Decidable (Cross.Le q q') := inferInstanceAs (Decidable (_ ∧ _))
 
-theorem Cross.Le.refl (q : Cross) : q.Le q := Nat.le_refl _
+theorem Cross.Le.refl (q : Cross) : q.Le q := ⟨Nat.le_refl _, rfl⟩
 
-theorem Cross.Le.trans {q q' q'' : Cross} (h : q.Le q') (h' : q'.Le q'') : q.Le q'' := Nat.le_trans h h'
+theorem Cross.Le.trans {q q' q'' : Cross} (h : q.Le q') (h' : q'.Le q'') : q.Le q'' :=
+  ⟨Nat.le_trans h.1 h'.1, h.2.trans h'.2⟩
 
-theorem Cross.le_any (q : Cross) : q.Le .any := by cases q <;> decide
+theorem Cross.le_any (q : Cross) (hd : q.drops = false) : q.Le .any := by cases q <;> first | decide | cases hd
 
-theorem Cross.bare_le (q : Cross) : Cross.bare.Le q := Nat.zero_le _
+theorem Cross.bare_le (q : Cross) (hd : q.drops = false) : Cross.bare.Le q := by cases q <;> first | decide | cases hd
 
 /-- Only `any` is above `any`. -/
 theorem Cross.Le.any_eq {q : Cross} (h : Cross.any.Le q) : q = .any := by
@@ -583,7 +600,7 @@ theorem Cross.Le.shares {q q' : Cross} (h : q.Le q') (h' : q'.shares = false) : 
 theorem Cross.Fits.mono {q q' : Cross} {te : Ty} {cs : List (Var × PMode × Ty)} (h : q.Fits te cs)
     (hle : q.Le q') : q'.Fits te cs :=
   ⟨fun hv => h.1 (hle.views hv), fun hc => h.2.1 (hle.cells hc), fun hs => h.2.2.1 (hle.shares hs),
-    h.2.2.2⟩
+    fun hd => h.2.2.2 (by rw [hle.2]; exact hd)⟩
 
 /-- A3.4: an `Atomic`'s operations (`stdlib/std/atomic.nu`), each one
     `nurl_atomic_i64_*` (`__ATOMIC_SEQ_CST`) on the word. -/

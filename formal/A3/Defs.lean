@@ -1391,7 +1391,7 @@ theorem pack_sync_noCell {Γ Γ1 : Ctx} {F : List Var} {fs : List Nat} {te : Ty}
 theorem arcNew_fn {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {q : Cross} {y : Var} {E : Entry}
     (h : RhsT Γ F (.arcNew (.fn ms q) y) E Γ1) : q = .sync ∨ q = .bare := by
   cases h with
-  | arcNew _ _ _ _ hc _ => cases q <;> simp_all [Ty.hasCell]
+  | arcNew _ _ _ _ hc _ => cases q <;> simp_all [Ty.hasCell, Ty.dtorFree]
 
 /-- h340 (`closure_sent_on_a_channel_captures_a_kept_handle`): a channel's
     element may hold a library handle (A3.5's second cut), so a closure sent on
@@ -1400,13 +1400,13 @@ theorem arcNew_fn {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {q : Cross} {y :
     panics if an owner of it is left behind (`chanSend_kept`) ... -/
 theorem chan_fn {ms : List Nat} {q : Cross} :
     (Ty.lk (.prod (.vec (.fn ms q)) .int)).ok = true ↔ q = .send ∨ q = .sync ∨ q = .bare := by
-  cases q <;> simp [Ty.ok, Ty.holdsView]
+  cases q <;> simp [Ty.ok, Ty.holdsView, Ty.dtorFree, Ty.hasDtor]
 
 /-- ... and so is one a lock keeps (A3.2), which one thread at a time runs. -/
 theorem lockNew_fn {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {q : Cross} {y : Var} {E : Entry}
     (h : RhsT Γ F (.lockNew (.fn ms q) y) E Γ1) : q = .send ∨ q = .sync ∨ q = .bare := by
   cases h with
-  | lockNew _ _ _ hp _ => cases q <;> simp_all [Ty.holdsView, Ty.hasFn]
+  | lockNew _ _ _ hp _ => cases q <;> simp_all [Ty.holdsView, Ty.hasFn, Ty.dtorFree]
 
 /-- A Send closure, which may capture a library handle, is a lock's value:
     `locked_new` takes it (A3.5's second cut; A3.5b's gap) ... -/
@@ -1593,10 +1593,10 @@ theorem moveUp_send {Γ : Ctx} {F : List Var} {y : Var} {Ey : Entry} {ms : List 
     reaches, so the marker only removes typings. -/
 theorem moveUp_any {Γ : Ctx} {F : List Var} {y : Var} {Ey : Entry} {ms : List Nat} {q : Cross}
     (hy : Γ y = some Ey) (hl : Ey.live = true) (hm : Ey.mode = .own) (hyF : y ∉ F) (hp : NoPin Γ y)
-    (hds : DtorSafe Γ .replace false y) (hty : Ey.ty = .fn ms q) :
+    (hds : DtorSafe Γ .replace false y) (hty : Ey.ty = .fn ms q) (hqd : q.drops = false) :
     RhsT Γ F (.var y) ⟨.fn ms .any, .own, true, [], Ey.held, false, false⟩
       (setE (kill .replace false y Γ) y { Ey with live := false, dtor := false }) :=
-  RhsT.moveUp hy hl hm hyF hp hds hty (Cross.le_any q)
+  RhsT.moveUp hy hl hm hyF hp hds hty (Cross.le_any q hqd)
 
 /-- **A call through the weaker type**: a borrowed closure of class `q`, copied
     as one of class `q'` above it, is called through an interface declared at
@@ -1655,7 +1655,7 @@ holds, which synchronises itself: an `Atomic` (or a `Locked`) moved in. -/
     block), fits `sync`: a lock share is Sync, so an `Arc` keeps the closure
     and several threads call it ... -/
 theorem accum_sync : Cross.sync.Fits (.lk .int) [] :=
-  ⟨fun _ => ⟨rfl, rfl⟩, fun _ => rfl, fun h => absurd h (by decide), rfl⟩
+  ⟨fun _ => ⟨rfl, rfl⟩, fun _ => rfl, fun h => absurd h (by decide), fun _ => rfl⟩
 
 /-- ... and its code counts by one atomic step on the environment it is lent
     (any live `lk int`, a borrowed parameter's too): the change synchronises
@@ -1722,16 +1722,16 @@ theorem TraitBound.fits_none (te : Ty) (cs : List (Var × PMode × Ty)) (hd : te
     that made it) and nothing is captured by name ... -/
 theorem TraitBound.fits_send {te : Ty} {cs : List (Var × PMode × Ty)} :
     TraitBound.send.cross.Fits te cs ↔ (te.holdsView = false ∧ cs = []) ∧ te.holdsDtor = false :=
-  ⟨fun h => ⟨h.1 rfl, h.2.2.2⟩,
-    fun h => ⟨fun _ => h.1, fun h' => absurd h' (by decide), fun h' => absurd h' (by decide), h.2⟩⟩
+  ⟨fun h => ⟨h.1 rfl, h.2.2.2 rfl⟩,
+    fun h => ⟨fun _ => h.1, fun h' => absurd h' (by decide), fun h' => absurd h' (by decide), fun _ => h.2⟩⟩
 
 /-- ... and with `: Send Sync`, also no library handle (a cell share, A3.5,
     is not Sync). -/
 theorem TraitBound.fits_sendSync {te : Ty} {cs : List (Var × PMode × Ty)} :
     TraitBound.sendSync.cross.Fits te cs ↔
       ((te.holdsView = false ∧ cs = []) ∧ te.hasCell = false) ∧ te.holdsDtor = false :=
-  ⟨fun h => ⟨⟨h.1 rfl, h.2.1 rfl⟩, h.2.2.2⟩,
-    fun h => ⟨fun _ => h.1.1, fun _ => h.1.2, fun h' => absurd h' (by decide), h.2⟩⟩
+  ⟨fun h => ⟨⟨h.1 rfl, h.2.1 rfl⟩, h.2.2.2 rfl⟩,
+    fun h => ⟨fun _ => h.1.1, fun _ => h.1.2, fun h' => absurd h' (by decide), fun _ => h.2⟩⟩
 
 /-- A call through a package asks its receiver to be a package, `fn ms q`,
     whose method `j` is an interface that takes it at `q`. -/
@@ -1871,6 +1871,7 @@ theorem sendSync_box_noCell {ms : List Nat} {v : Val} (hw : WFv (.fn ms TraitBou
     however deep they lie (a field, an element, another package's box): each
     box holds no view, and nothing is captured by name. -/
 theorem _root_.A2.WFv.noView_fits {τ : Ty} {v : Val} (hw : WFv τ v) (hhv : τ.holdsView = false)
+    (hdf : τ.dtorFree = true)
     {fs : List Nat} {te : Ty} {ms : List Nat} {e : Val} {cs : List (Var × PMode × Ty)}
     (hs : Sub (.pkg fs te ms e cs) v) : Cross.send.Fits te cs := by
   induction hw with
@@ -1878,23 +1879,31 @@ theorem _root_.A2.WFv.noView_fits {τ : Ty} {v : Val} (hw : WFv τ v) (hhv : τ.
   | view => cases hs
   | node _ ih =>
     cases hs with
-    | child he h => exact ih _ he (by simpa [Ty.holdsView] using hhv) h
+    | child he h => exact ih _ he (by simpa [Ty.holdsView] using hhv) (by simpa using hdf) h
   | pair _ _ iha ihb =>
     simp only [Ty.holdsView, Bool.or_eq_false_iff] at hhv
+    simp only [Ty.dtorFree_prod, Bool.and_eq_true] at hdf
     cases hs with
-    | fst h => exact iha hhv.1 h
-    | snd h => exact ihb hhv.2 h
-  | inl _ ih => simp only [Ty.holdsView, Bool.or_eq_false_iff] at hhv; cases hs with | inl h => exact ih hhv.1 h
-  | inr _ ih => simp only [Ty.holdsView, Bool.or_eq_false_iff] at hhv; cases hs with | inr h => exact ih hhv.2 h
+    | fst h => exact iha hhv.1 hdf.1 h
+    | snd h => exact ihb hhv.2 hdf.2 h
+  | inl _ ih =>
+    simp only [Ty.holdsView, Bool.or_eq_false_iff] at hhv
+    simp only [Ty.dtorFree_sum, Bool.and_eq_true] at hdf
+    cases hs with | inl h => exact ih hhv.1 hdf.1 h
+  | inr _ ih =>
+    simp only [Ty.holdsView, Bool.or_eq_false_iff] at hhv
+    simp only [Ty.dtorFree_sum, Bool.and_eq_true] at hdf
+    cases hs with | inr h => exact ih hhv.2 hdf.2 h
   | pkg _ hq ih =>
     obtain ⟨hv, _, hcs⟩ := hq.send hhv
+    have hte := hq.2.2.2 (by simpa using hdf)
     cases hs with
-    | refl => exact TraitBound.fits_send.mpr ⟨⟨hv, hcs⟩, hq.2.2.2⟩
-    | pkg h => exact ih hv h
+    | refl => exact TraitBound.fits_send.mpr ⟨⟨hv, hcs⟩, hte⟩
+    | pkg h => exact ih hv (by rw [Ty.holdsDtor_eq_not_free] at hte; simpa using hte) h
   | arc _ _ => cases hs
   | lk => cases hs
   | cell => cases hs
-  | dtor _ _ ih => exact ih hhv hs
+  | dtor _ _ ih => simp [Ty.dtorFree] at hdf
 
 /-- So what a spawned function takes holds no trait object but one whose box
     `: Send` admits: none whose box holds a view, none of a trait the spawn's
@@ -1905,7 +1914,8 @@ theorem spawn_pkgs_send {P : Prog} {spawn : Nat → Bool} (hS : SpawnOK P spawn)
     {cs : List (Var × PMode × Ty)} (hs : Sub (.pkg fs te ms e cs) v) : Cross.send.Fits te cs := by
   obtain ⟨fn', hf', -, hpar⟩ := hS f hsp
   rw [hf] at hf'; cases hf'
-  exact hw.noView_fits (hpar pt hin).2.1 hs
+  exact hw.noView_fits (hpar pt hin).2.1
+    (by have := (hpar pt hin).2.2; rw [Ty.holdsDtor_eq_not_free] at this; simpa using this) hs
 
 /-! A3.5c: h344 (`dyn_object_carries_an_rc_to_a_thread`), a `%Churn` of a trait
 with no bound boxing a struct with an `Rc`, moved into a thread's closure
@@ -2026,9 +2036,9 @@ def TraitBound.Holds : TraitBound → Ty → Prop
 
 /-- **A bound is answered by the class**: a closure or a trait object meets a
     bound exactly when its class is at most the bound's. -/
-theorem TraitBound.holds_fn {b : TraitBound} {ms : List Nat} {q : Cross} :
-    b.Holds (.fn ms q) ↔ q.Le b.cross := by
-  cases b <;> cases q <;> simp [TraitBound.Holds, TraitBound.cross, Ty.holdsView, Ty.hasCell, Cross.Le,
+theorem TraitBound.holds_fn {b : TraitBound} {ms : List Nat} {q : Cross}
+    (hqd : q.drops = false) : b.Holds (.fn ms q) ↔ q.Le b.cross := by
+  cases b <;> cases q <;> simp_all [TraitBound.Holds, TraitBound.cross, Ty.holdsView, Ty.hasCell, Cross.Le,
     Cross.rank]
 
 /-- A supertrait's bound is kept: what meets a bound meets every weaker one (a
@@ -2360,7 +2370,7 @@ theorem accum_codes : CodeOK accP [1] accEnv [0] [] := by
     method that changes the count is called only at `send` (a `sync` one is
     moved up first, `RhsT.moveUp`, and is then no `Arc`'s payload). -/
 theorem accum_fits (q : Cross) : q.Fits accEnv [] :=
-  ⟨fun _ => ⟨rfl, rfl⟩, fun _ => rfl, fun _ => rfl, rfl⟩
+  ⟨fun _ => ⟨rfl, rfl⟩, fun _ => rfl, fun _ => rfl, fun _ => rfl⟩
 
 /-- **The accumulator, typed through `callcE` on the owned closure**: its owner
     calls it, the environment handed over to the code, which adds one to the
