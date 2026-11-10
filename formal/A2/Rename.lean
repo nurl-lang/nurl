@@ -3670,9 +3670,9 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     -- (A2-drop.3a: a struct or an enum, or its destructor type: no integer)
     have hne : E.ty ≠ .int := hty.ne_int hstr
     have hov : τ.holdsView = E.ty.holdsView := by
-      rcases hty with ⟨rfl, h' | h'⟩ | ⟨_, h', _⟩
+      rcases hty with ⟨rfl, h' | ⟨g, h'⟩⟩ | ⟨_, h', _⟩
       · rw [h']; rfl
-      · rw [h']
+      · rw [h']; rfl
       · rw [h']
     have hdv : τ.dtorViews = τ.holdsView := hty.scopeD.dtorViews
     have hroot := hH.root hown (hEr hlive (Or.inl hne))
@@ -3745,7 +3745,11 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       · simp [Entry.fixed, Entry.arm, hm'] at hf
       · simp [Entry.arm, hm', Mode.ownSlot] at ho
     exact StmtT.letd (H := E'.held ++ X) (by rw [src_rename]; exact hks) (by rw [canon_ρ h, hx]; rfl)
-      (h.Fcout x) hr' hm' (by first | (rw [← hl]; exact hty) | (rw [hl]; exact hty)) hstr hview hdtor hH'
+      (h.Fcout x) hr' hm' (by first | (rw [← hl]; exact hty) | (rw [hl]; exact hty)) hstr hview
+      (by
+        refine ⟨hdtor.1, fun g hg hne => ?_⟩
+        obtain ⟨i, r0, k0, hig, hk0⟩ := hdtor.2 g (by first | (rw [← hl]; exact hg) | (rw [hl]; exact hg)) hne
+        exact ⟨i, S.ρ r0, k0.rename S.ρ, hig, by rw [hk0]; simp [Stmt.rename]⟩) hH'
       (StmtT.weakenIn ⟨PW.setE (PW.refl _) hEW, hwc, hnc⟩ tk)
       (EndOK.lift h abk hbx hpe) (not_mem_assigns_rename h.inj hna)
   | @callc Γ Γ1 Δ F x c j zs k Ec E ms q σ sig hks hx hxF hc htc hj hσ hhd hout hcT hnz hk hpe hnσ hdk ih =>

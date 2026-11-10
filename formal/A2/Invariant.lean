@@ -962,10 +962,11 @@ def ScopeDTy (f : Nat) (t τ : Ty) : Prop :=
   τ = .dtor f t ∨ (τ = .vec (.dtor f t) ∧ t.holdsView = false)
 
 /-- What `letd x f r s` binds, at the type `τ`, from a value of type `a`: a
-    destructor value (a `t` made here, or one of that destructor type moved
-    in), or a `Vec` of destructor values. -/
+    destructor value (a `t` made here, or one of a destructor type over `t`
+    moved in: that type, or another where `LetdFn` allows), or a `Vec` of
+    destructor values. -/
 def LetdTy (f : Nat) (t a τ : Ty) : Prop :=
-  (τ = .dtor f t ∧ (a = t ∨ a = .dtor f t)) ∨ (τ = .vec (.dtor f t) ∧ a = τ ∧ t.holdsView = false)
+  (τ = .dtor f t ∧ (a = t ∨ ∃ g, a = .dtor g t)) ∨ (τ = .vec (.dtor f t) ∧ a = τ ∧ t.holdsView = false)
 
 theorem LetdTy.scopeD {f : Nat} {t a τ : Ty} (h : LetdTy f t a τ) : ScopeDTy f t τ := by
   rcases h with ⟨h, _⟩ | ⟨h, _, hv⟩
@@ -976,7 +977,7 @@ theorem LetdTy.scopeD {f : Nat} {t a τ : Ty} (h : LetdTy f t a τ) : ScopeDTy f
     type, or a `Vec`. -/
 theorem LetdTy.ne_int {f : Nat} {t a τ : Ty} (h : LetdTy f t a τ) (hst : t.isStruct = true) :
     a ≠ .int := by
-  rcases h with ⟨_, h' | h'⟩ | ⟨h1, h', _⟩
+  rcases h with ⟨_, h' | ⟨g, h'⟩⟩ | ⟨h1, h', _⟩
   · rw [h']; cases t <;> simp_all [Ty.isStruct]
   · rw [h']; simp
   · rw [h', h1]; simp
@@ -1018,6 +1019,19 @@ def GlueOK (P : Prog) (f : Nat) (t : Ty) : Prop :=
     fn.resOwn = false ∧ fn.lends = [] ∧ fn.rholds = [] ∧ fn.outHolds = [] ∧ ¬ ThruFn P f ∧
     ∃ x z s, fn.body = .unpair 0 x z s ∧ s.pureGlue = true
 
+/-- Agora #616: `f` is the drop glue of a struct `t` that has a `% Drop` of
+    its own (`i`, which takes the struct lent) beside fields that hold
+    destructor values: `f` takes the struct owned, rebinds it under the
+    fields' glue `h` (a `letd` at `Ty.dtor h t`: from there on a panic takes
+    it apart, a frame per field), runs the impl on it lent, and sets its
+    result.  nurlc's order: the impl, then the fields. -/
+def ImplGlueOK (P : Prog) (f : Nat) (t : Ty) (h i : Nat) : Prop :=
+  ∃ fn a b w r e, P[f]? = some fn ∧ t = .prod a b ∧ t.holdsView = false ∧
+    fn.params = [(.sink, .dtor f t)] ∧ fn.resTy = .int ∧
+    fn.resOwn = false ∧ fn.lends = [] ∧ fn.rholds = [] ∧ fn.outHolds = [] ∧ ¬ ThruFn P f ∧
+    GlueOK P h t ∧ DtorOK P i (.dtor h t) ∧
+    fn.body = .letd w h (.var 0) (.letcall r i [w] (.assign 1 (.expr e)))
+
 /-- What `unpair` takes apart is a struct under its destructor type, if any. -/
 theorem unpair_undtor {τ a b : Ty} {G : Nat → Prop} (h : τ = .prod a b ∨ ∃ f, τ = .dtor f (.prod a b) ∧ G f) :
     τ.undtor = .prod a b := by
@@ -1030,9 +1044,43 @@ theorem unpair_ne_int {τ a b : Ty} {G : Nat → Prop} (h : τ = .prod a b ∨ �
 /-- What runs when a value of the destructor type `Ty.dtor f t` is dropped:
     a destructor that takes it lent (`DtorOK`; then the tree is freed with
     no code, so a struct `t` holds no destructor value), or a struct's
-    glue, which takes it apart (`GlueOK`). -/
+    glue, which takes it apart (`GlueOK`), or first runs the struct's own
+    impl on it (`ImplGlueOK`). -/
 def DropFnOK (P : Prog) (f : Nat) (t : Ty) : Prop :=
-  (DtorOK P f (.dtor f t) ∧ (∀ a b, t = .prod a b → t.holdsDtor = false)) ∨ GlueOK P f t
+  (DtorOK P f (.dtor f t) ∧ (∀ a b, t = .prod a b → t.holdsDtor = false)) ∨ GlueOK P f t ∨
+    ∃ h i, ImplGlueOK P f t h i
+
+/-- A glue of either kind takes its struct owned. -/
+theorem sinkOf {P : Prog} {f : Nat} {t : Ty} (hg : GlueOK P f t ∨ ∃ h i, ImplGlueOK P f t h i) :
+    ∃ fn, P[f]? = some fn ∧ t.holdsView = false ∧ fn.params = [(.sink, .dtor f t)] ∧
+      fn.resOwn = false ∧ ¬ ThruFn P f := by
+  rcases hg with ⟨fn, _, _, hfn, _, hv, hps, _, hro, _, _, _, hnt, _⟩ |
+    ⟨_, _, fn, _, _, _, _, _, hfn, _, hv, hps, _, hro, _, _, _, hnt, _⟩
+  · exact ⟨fn, hfn, hv, hps, hro, hnt⟩
+  · exact ⟨fn, hfn, hv, hps, hro, hnt⟩
+
+/-- What `letd x f r s` asks of `f`, binding a value of type `a`: `f` is the
+    destructor of `Ty.dtor f t` (`DropFnOK`); and a value of ANOTHER
+    destructor type `Ty.dtor g t` moves in only where that is `g`'s drop
+    (Agora #616): `g` is a struct's glue with an impl, `f` its fields' glue,
+    and the scope starts with the impl's call on the new binding. -/
+def LetdFn (P : Prog) (f : Nat) (t a : Ty) (x : Var) (s : Stmt) : Prop :=
+  DropFnOK P f t ∧ ∀ g, a = .dtor g t → g ≠ f → ∃ i r k, ImplGlueOK P g t f i ∧ s = .letcall r i [x] k
+
+theorem LetdFn.of {P : Prog} {f : Nat} {t a : Ty} {x : Var} {s : Stmt} (h : DropFnOK P f t)
+    (hn : ∀ g, a = .dtor g t → g = f) : LetdFn P f t a x s :=
+  ⟨h, fun g hg hne => absurd (hn g hg) hne⟩
+
+/-- `LetdFn` where the value bound is of no other destructor type. -/
+macro "letd_fn" h:term : term =>
+  `(LetdFn.of $h (fun g hg => by
+      first
+        | exact (Ty.dtor.inj hg).1.symm
+        | exact Ty.noConfusion hg
+        | (cases hg; rfl)
+        | (injection hg with h1 _; exact h1.symm)
+        | (simp_all; done)
+        | (exfalso; revert hg; simp_all [popE, compE]; done)))
 
 /-- A2-drop.3a: `letv`'s side condition, that the value it binds owned is of
     no destructor type, for an entry the rules build (none but `letd`'s is of
@@ -1188,10 +1236,12 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       s.src = true → Γ x = none → x ∉ F → RhsT Γ F r E Γ1 → E.mode = .own →
       -- A2-drop.3a: the binding is of the destructor type `Ty.dtor f t`, of a
       -- struct or an enum `t`: the value is a `t` made here, or a value of that
-      -- destructor type moved in (whose old binding's scope then runs nothing).
+      -- destructor type moved in (whose old binding's scope then runs nothing),
+      -- or (Agora #616, `LetdFn`) of the type of a struct's glue with an impl,
+      -- rebound under its fields' glue with the impl's call next.
       -- A2-drop.3b: or it is a `Vec` of such values, drained at its end
       LetdTy f t E.ty τ → t.isStruct = true →
-      t.hasFn = false → DropFnOK P f t →
+      t.hasFn = false → LetdFn P f t E.ty x s →
       -- A2-drop.2: the binding, armed, views what the value does, or more
       HeldUp Γ1 E H → StmtT P (setE Γ1 x (Entry.arm { E with ty := τ, held := H })) F s Δ →
       EndOK Δ x →
