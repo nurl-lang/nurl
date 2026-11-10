@@ -16701,6 +16701,8 @@ unsafe @ gen_call i lex i syms i cg → s {
                 // (A field that holds storage: one a borrow can be taken from.)
                 : s __io_fty ? ( is_ptr_ty at ) ( nurl_str_slice at 0 - ( nurl_str_len at ) 1 ) ``
                 ? & != 0 g_borrowck | ( __is_handle_ty __io_fty ) ( __type_needs_drop __io_fty syms ) { = arg_froot __io_path } {}
+                // (…and a view field by its path too: agora #590.)
+                ? & & & != 0 g_borrowck == 0 ( nurl_str_len arg_froot ) != 0 ( nurl_str_len __io_path ) == ( bck_walk_class __io_fty ) 2 { = arg_vfroot __io_path } {}
             }
             { ? ! ( is_ident_tok bck_arg_tt )
                 { ( die lex ( nurl_str_cat3 `inout argument to '` fname `' must be a mutable ': ~' binding or a '. binding field' field target, not an expression` ) ) }
@@ -16890,7 +16892,8 @@ unsafe @ gen_call i lex i syms i cg → s {
             // (…and a view field — a Slice, an `s`, a struct of views: no
             // storage of its own, but what a callee lends out of it points
             // into what it views, the binding's view sources. Its row is
-            // the call's `pendvf`, below; agora #566.)
+            // the call's `pendvf`, below; agora #566. One passed `inout`
+            // is set above, by its path.)
             ? & & & == bck_arg_tt TT_DOT != 0 g_borrowck == 0 ( nurl_str_len arg_froot ) == ( bck_walk_class at ) 2 { = arg_vfroot ( nurl_str_cat g_member_path `` ) } {}
             ? == arg_idx 0 { = __arg0_path ( nurl_str_cat arg_froot `` ) } {}
             // A binding that borrowed a struct field (`: d . p data`) consumed
@@ -17720,9 +17723,12 @@ unsafe @ gen_call i lex i syms i cg → s {
         // The same roster with a field path's binding in its place (what a
         // borrow of the result is a borrow of: g_call_roots) — kept only
         // once a call has such an argument.
-        ? & != 0 ( nurl_str_len arg_froot ) ! arg_has_froot { = arg_roots ( nurl_str_cat arg_idents `` ) = arg_has_froot T } {}
+        // (…a view field's too, `arg_vfroot`: what is lent out of it is
+        // part of what its binding views — a parameter lends then, agora
+        // #590.)
+        ? & | != 0 ( nurl_str_len arg_froot ) != 0 ( nurl_str_len arg_vfroot ) ! arg_has_froot { = arg_roots ( nurl_str_cat arg_idents `` ) = arg_has_froot T } {}
         ? arg_has_froot {
-            : s __arg_rt ? != 0 ( nurl_str_len arg_froot ) arg_froot bck_arg_nm
+            : s __arg_rt ? != 0 ( nurl_str_len arg_froot ) arg_froot ? != 0 ( nurl_str_len arg_vfroot ) arg_vfroot bck_arg_nm
             = arg_roots ? == 0 ( nurl_str_len arg_roots ) ( nurl_str_cat __arg_rt `` ) ( nurl_str_cat3 arg_roots ` ` __arg_rt )
         } {}
         = arg_idents ? == 0 ( nurl_str_len arg_idents )
@@ -17951,11 +17957,24 @@ unsafe @ gen_call i lex i syms i cg → s {
                     ( nurl_print `(i1 ` ) ( nurl_print fa_z ) ( nurl_print `, ptr ` ) ( nurl_print fa_p ) ( nurl_print `)\n` )
                 } {} }
         } {}
+        // A FIELD of a foreach element handed to a parameter that takes it
+        // (`~ x t { ( gone . x name ) }`) leaves the container too: the
+        // field is emptied in the element's slot — the loop's element is a
+        // copy of it — so the container does not release it again; and the
+        // function drops an element of the container, as for the whole
+        // element (agora #587).
+        ? & & & == bck_arg_tt TT_DOT != 0 ( nurl_str_len arg_froot ) ( str_has_index callee_sink arg_idx ) | ( __is_handle_ty at ) ( __type_needs_drop at g_root_syms ) {
+            : s ffs ( __fe_field_slot_now syms cg arg_froot )
+            ? != 0 ( nurl_str_len ffs ) {
+                ( nurl_print `  store ` ) ( nurl_print ( nurl_llty at ) ) ( nurl_print ` zeroinitializer, ptr ` ) ( nurl_print ffs ) ( nurl_print `\n` )
+                ( __fe_moved_drop_note syms ( nurl_str_slice arg_froot 0 ( nurl_str_find arg_froot `.` ) ) )
+            } {}
+        } {}
         // A foreach element handed to a consumer (`~ x v { ( string_free x ) }`)
         // leaves the container: its slot is emptied, so dropping or freeing
         // the container afterwards skips it (docs/MEMORY.md §7.6).
         ? & & ( is_ident_tok bck_arg_tt ) != 0 ( nurl_sym_len2 syms bck_arg_val `__eslot` ) ( __is_handle_ty at ) {
-            : s es ( nurl_sym_get2 syms bck_arg_val `__eslot` )
+            : s es ( __fe_slot_now syms cg bck_arg_val )
             : s fl ( nurl_llty at )
             ? ( str_has_index callee_sink arg_idx ) {
                 ( nurl_print `  store ` ) ( nurl_print fl ) ( nurl_print ` zeroinitializer, ptr ` ) ( nurl_print es ) ( nurl_print `\n` )
@@ -23579,6 +23598,9 @@ unsafe @ gen_match i lex i syms i cg → s {
     : ~ s elem_ty ( nurl_str_cat `` `` )
     : ~ s ptr_val ``
     : ~ s len_val ``
+    // (A Vec's control block: its data pointer is read again where the
+    // element's slot is emptied, __fe_slot_now.)
+    : ~ s fe_ctl ``
     ? is_vec {
         : i sty_len ( nurl_str_len slice_ty )
         : s suffix ( nurl_str_slice slice_ty 6 - sty_len 6 )
@@ -23586,6 +23608,7 @@ unsafe @ gen_match i lex i syms i cg → s {
         = ptr_ty ( nurl_str_cat elem_ty `*` )
         // ctl = extractvalue %Vec__T %v, 0
         : s ctl ( nurl_cg_reg cg )
+        = fe_ctl ( nurl_str_cat ctl `` )
         ( nurl_print `  ` ) ( nurl_print ctl )
         ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty slice_ty ) )
         ( nurl_print ` ` ) ( nurl_print slice_val ) ( nurl_print `, 0\n` )
@@ -23685,6 +23708,11 @@ unsafe @ gen_match i lex i syms i cg → s {
     ( nurl_sym_def syms ( nurl_str_cat var_name `__eslot` ) gep )
     // (…and what it is an element of, by name or path: __fe_moved_drop_note.)
     ( nurl_sym_def syms ( nurl_str_cat var_name `__econt` ) fe_cont )
+    // (…and, for a Vec, where its slot is NOW: the control block and the
+    // index — the buffer may have moved since the round began, through
+    // another name of the container; __fe_slot_now, agora #587.)
+    : s fe_eat_saved ( nurl_str_cat ( nurl_sym_get2 syms var_name `__eslot_at` ) `` )
+    ( nurl_sym_def syms ( nurl_str_cat var_name `__eslot_at` ) ? == 0 ( nurl_str_len fe_ctl ) `` ( nurl_str_cat4 fe_ctl ` ` idx_cur ( nurl_str_cat4 ` ` ( nurl_llty elem_ty ) ` ` ( nurl_llty ptr_ty ) ) ) )
     // Scope foreach body (see gen_cond / gen_loop).
     : ~ s old_strs_fe ``
     : ~ s old_structs_fe ( nurl_str_cat `` `` )
@@ -23787,6 +23815,7 @@ unsafe @ gen_match i lex i syms i cg → s {
     ( nurl_sym_def syms `__cur_lbl__` le )
     ( nurl_sym_def syms ( nurl_str_cat var_name `__eslot` ) fe_eslot_saved )
     ( nurl_sym_def syms ( nurl_str_cat var_name `__econt` ) fe_econt_saved )
+    ( nurl_sym_def syms ( nurl_str_cat var_name `__eslot_at` ) fe_eat_saved )
     ( nurl_set_last_type `void` )
     // The exit path is LIVE, whatever the body did. gen_loop says so at
     // its own exit label — "a loop that CAN exit resets did_ret: its
@@ -40036,6 +40065,70 @@ unsafe @ resolve_irealloc_summaries → v {
     }
 }
 
+// The address of `~` loop element `x`'s slot in its container as it is
+// now: a Vec's buffer may have moved since the round began — grown through
+// another name, the loop then left by `break` — so the slot is found again
+// through the control block and the index (`__eslot_at`); a slice's stays
+// where the round found it (`__eslot`). `` for a binding that is no loop
+// element here (agora #587).
+@ __fe_slot_now i syms i cg s x → s {
+    : s es ( nurl_sym_get2 syms x `__eslot` )
+    ? == 0 ( nurl_str_len es ) { ^ ( nurl_str_cat `` `` ) } {}
+    : ~ s at ( nurl_str_cat ( nurl_sym_get2 syms x `__eslot_at` ) `` )
+    ? == 0 ( nurl_str_len at ) { ^ ( nurl_str_cat es `` ) } {}
+    : s ctl ( str_first_word at ) = at ( str_skip_word at )
+    : s idx ( str_first_word at ) = at ( str_skip_word at )
+    // (The element and pointer types may hold spaces: split at the last
+    // word, the pointer type's `*` suffix form `<elem>*`.)
+    : i sp ( str_last_space at )
+    : s ety ( nurl_str_slice at 0 sp )
+    : s pty ( nurl_str_slice at + sp 1 - - ( nurl_str_len at ) sp 1 )
+    : s d ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print d ) ( nurl_print ` = call i64 @nurl_peek(i8* ` ) ( nurl_print ctl ) ( nurl_print `, i64 0)\n` )
+    : s p ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print p ) ( nurl_print ` = inttoptr i64 ` ) ( nurl_print d ) ( nurl_print ` to ` ) ( nurl_print pty ) ( nurl_print `\n` )
+    : s g ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print g ) ( nurl_print ` = getelementptr ` ) ( nurl_print ety ) ( nurl_print `, ` ) ( nurl_print pty ) ( nurl_print ` ` ) ( nurl_print p ) ( nurl_print `, i64 ` ) ( nurl_print idx ) ( nurl_print `\n` )
+    ^ g
+}
+
+// …and of the field at `path` (`x.a.b`) of that element in its slot: ``
+// when `x` is no loop element here, or the path leaves plain struct fields.
+@ __fe_field_slot_now i syms i cg s path → s {
+    : i dot ( nurl_str_find path `.` )
+    ? <= dot 0 { ^ ( nurl_str_cat `` `` ) } {}
+    : s root ( nurl_str_slice path 0 dot )
+    ? == 0 ( nurl_sym_len2 syms root `__eslot` ) { ^ ( nurl_str_cat `` `` ) } {}
+    // (Resolved before anything is emitted: a path that cannot be followed
+    // emits nothing.)
+    : ~ s cur ( nurl_str_cat ( nurl_sym_get syms root ) `` )
+    : ~ s rest ( nurl_str_slice path + dot 1 - - ( nurl_str_len path ) dot 1 )
+    : ~ s steps ``
+    ~ != 0 ( nurl_str_len rest ) {
+        : i d ( nurl_str_find rest `.` )
+        : s f ? < d 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 d )
+        = rest ? < d 0 `` ( nurl_str_slice rest + d 1 - - ( nurl_str_len rest ) d 1 )
+        ? != ( nurl_str_get cur 0 ) 37 { ^ ( nurl_str_cat `` `` ) } {}
+        : s sn ( nurl_str_slice cur 1 - ( nurl_str_len cur ) 1 )
+        : s ix ( nurl_sym_get2 syms sn ( nurl_str_cat3 `__` f `__idx` ) )
+        : s ft ( nurl_sym_get2 syms sn ( nurl_str_cat3 `__` f `__type` ) )
+        ? | == 0 ( nurl_str_len ix ) == 0 ( nurl_str_len ft ) { ^ ( nurl_str_cat `` `` ) } {}
+        = steps ( nurl_str_cat4 steps ( nurl_llty cur ) `\t` ( nurl_str_cat ix `\n` ) )
+        = cur ( nurl_str_cat ft `` )
+    }
+    : ~ s ptr ( __fe_slot_now syms cg root )
+    ~ != 0 ( nurl_str_len steps ) {
+        : i nl ( nurl_str_find steps `\n` )
+        : s st ( nurl_str_slice steps 0 nl )
+        = steps ( nurl_str_slice steps + nl 1 - - ( nurl_str_len steps ) nl 1 )
+        : i tb ( nurl_str_find st `\t` )
+        : s g ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print g ) ( nurl_print ` = getelementptr ` ) ( nurl_print ( nurl_str_slice st 0 tb ) ) ( nurl_print `, ptr ` ) ( nurl_print ptr ) ( nurl_print `, i32 0, i32 ` ) ( nurl_print ( nurl_str_slice st + tb 1 - - ( nurl_str_len st ) tb 1 ) ) ( nurl_print `\n` )
+        = ptr ( nurl_str_cat g `` )
+    }
+    ^ ptr
+}
+
 // A `~` loop's element `x` is moved out of what its loop iterates
 // (`__econt`: the container's name or field path, gen_foreach — an
 // enclosing loop's element, followed to what that one iterates): the
@@ -40539,6 +40632,14 @@ unsafe @ bck_note_rc_arg s name s ty → v {
         } {}
         ? | | | == kc 9 == kc 12 == kc 13 == kc 32 {
             ? ( bck_callee_drops_elems ( bck_field rec 5 ) ( bck_field rec 6 ) ) { = bwhy ( nurl_str_cat4 `'` ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int wroot ) ) `', which borrows from it, was passed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) `', which may drop or replace what it holds` ) ) = g_bck_end_eonly 1 } {}
+        } {}
+        // (A field of a `~` loop's element handed to a parameter that takes
+        // it — `~ x t { ( gone . x name ) }`: codegen empties that field in
+        // the element's slot, so a part of an element of those owners is
+        // gone, as at elements dropped; agora #587.)
+        ? & & & == 0 ( nurl_str_len bwhy ) w13sink == BCK_UNINIT ( bck_st_raw st wroot ) != 0 ( nurl_sym_len g_bck ( bck_bkey `feo_` ( nurl_str_int wroot ) ) ) {
+            = bwhy ( nurl_str_cat4 `a field of its element '` ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int wroot ) ) `', the one a '~' loop over it is at, was handed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) `', which takes it` ) )
+            = g_bck_end_eonly 1
         } {}
         // An element's own buffer moving through a borrow of it (`(
         // string_push_str e … )`, e a vec_get result): what points into
@@ -54524,6 +54625,7 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
             // the body consumes is its own snapshot (by value) or the
             // caller's binding (by pointer), never the slot behind it.
             ( nurl_sym_def body_syms ( nurl_str_cat cap_name `__eslot` ) `` )
+            ( nurl_sym_def body_syms ( nurl_str_cat cap_name `__eslot_at` ) `` )
             ? cap_byref
             {  // The loaded value IS the caller's alloca pointer.
                 ( nurl_sym_def body_syms cap_name cap_type )
