@@ -304,9 +304,9 @@ theorem RhsT.names {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : Rhs
   | snd hy hl ht =>
     exact ⟨hn, fun _ _ => projE_named (hn _ _ hy hl (Or.inl (Ty.undtor_ne_int_of ht))) _, ⟨[], Keeps.refl Γ []⟩⟩
   | getl hy hl ht =>
-    exact ⟨hn, fun _ _ => projE_named (hn _ _ hy hl (Or.inl (by rw [ht]; simp))) _, ⟨[], Keeps.refl Γ []⟩⟩
+    exact ⟨hn, fun _ _ => projE_named (hn _ _ hy hl (Or.inl (Ty.undtor_ne_int_of_sum ht))) _, ⟨[], Keeps.refl Γ []⟩⟩
   | getr hy hl ht =>
-    exact ⟨hn, fun _ _ => projE_named (hn _ _ hy hl (Or.inl (by rw [ht]; simp))) _, ⟨[], Keeps.refl Γ []⟩⟩
+    exact ⟨hn, fun _ _ => projE_named (hn _ _ hy hl (Or.inl (Ty.undtor_ne_int_of_sum ht))) _, ⟨[], Keeps.refl Γ []⟩⟩
   | inl hy hly hpa _ =>
     obtain ⟨hn1, hD, hk⟩ := hpa.names hy hly rfl hn
     exact ⟨hn1, fun _ _ => own_named hD, ⟨_, hk⟩⟩

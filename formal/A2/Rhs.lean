@@ -1580,6 +1580,37 @@ theorem out_snd {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (hy 
     | pair _ hb => exact ⟨hb, fun s x hin => hvs s x (ViewIn.snd hin), hsh.snd⟩
   · rw [← valOK_undtor, hty] at h; obtain ⟨x, z, hxz, _, hz⟩ := valOK_prod.mp h; cases hxz; exact hz
 
+/-- A payload read out of the enum `y` (`getl`), lent; through a destructor
+    type, as a field is (A2-drop.3a). -/
+theorem out_getl {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (hy : Γ y = some E)
+    (hl : E.live = true) {a b : Ty} (hty : E.ty.undtor = .sum a b) {o : Bool} {v : Val}
+    (hv : m.st y = some ⟨o, some (.inl v)⟩) : RhsOut m Γ (projE y E a) (lendOf v) false := by
+  have hok := Ty.ok_undtor (hi.tyok hy); rw [hty] at hok
+  simp only [Ty.ok, Bool.and_eq_true] at hok
+  refine out_comp hi hy hl (Ty.undtor_ne_int_of_sum hty) hv Child.inl (Top.inl (Top.refl _)) hok.1
+    (fun hw hvs hsh => ?_) (fun h => ?_)
+  · have hw' := hw.undtor; rw [← ViewsOK.undtor_iff] at hvs; rw [← SharesOK.undtor_iff] at hsh
+    rw [hty] at hw' hvs hsh; cases hw' with
+    | inl ha => exact ⟨ha, fun s x hin => hvs s x (ViewIn.inl hin), hsh.inl⟩
+  · rw [← valOK_undtor, hty] at h
+    rcases valOK_sum.mp h with ⟨x, hx, h⟩ | ⟨x, hx, _⟩ <;> cases hx
+    exact h
+
+/-- …and `getr`. -/
+theorem out_getr {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (hy : Γ y = some E)
+    (hl : E.live = true) {a b : Ty} (hty : E.ty.undtor = .sum a b) {o : Bool} {v : Val}
+    (hv : m.st y = some ⟨o, some (.inr v)⟩) : RhsOut m Γ (projE y E b) (lendOf v) false := by
+  have hok := Ty.ok_undtor (hi.tyok hy); rw [hty] at hok
+  simp only [Ty.ok, Bool.and_eq_true] at hok
+  refine out_comp hi hy hl (Ty.undtor_ne_int_of_sum hty) hv Child.inr (Top.inr (Top.refl _)) hok.2
+    (fun hw hvs hsh => ?_) (fun h => ?_)
+  · have hw' := hw.undtor; rw [← ViewsOK.undtor_iff] at hvs; rw [← SharesOK.undtor_iff] at hsh
+    rw [hty] at hw' hvs hsh; cases hw' with
+    | inr hb => exact ⟨hb, fun s x hin => hvs s x (ViewIn.inr hin), hsh.inr⟩
+  · rw [← valOK_undtor, hty] at h
+    rcases valOK_sum.mp h with ⟨x, hx, _⟩ | ⟨x, hx, h⟩ <;> cases hx
+    exact h
+
 /-! ### A3.1: shares
 
 A share owns nothing: its payload is the block's, which owns its addresses

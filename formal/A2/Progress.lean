@@ -22,6 +22,25 @@ theorem sum_slot {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (hy
     · exact ⟨_, Or.inl hv⟩
     · exact ⟨_, Or.inr hv⟩
 
+/-- …through a destructor type (A2-drop.3a: `getl` / `getr` lend a payload of
+    a destructor enum). -/
+theorem sum_slot_undtor {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (hy : Γ y = some E)
+    (hl : E.live = true) {a b : Ty} (ht : E.ty.undtor = .sum a b) :
+    ∃ v, (m.st y = some ⟨E.mode.ownSlot, some (.inl v)⟩) ∨ (m.st y = some ⟨E.mode.ownSlot, some (.inr v)⟩) := by
+  rcases hi.mode_cases hy with hm | hm | hm
+  · obtain ⟨T, hT, hw, _⟩ := hi.own_val hy hl (by rw [hm]; rfl)
+    have hw' := hw.undtor
+    rw [ht] at hw'; rw [hm]
+    cases hw' with
+    | inl _ => exact ⟨_, Or.inl hT⟩
+    | inr _ => exact ⟨_, Or.inr hT⟩
+  all_goals
+    obtain ⟨v, hv, hok⟩ := hi.bor_val hy hl (by rw [hm]; rfl)
+    rw [← valOK_undtor, ht] at hok; rw [hm]
+    rcases valOK_sum.mp hok with ⟨x, rfl, _⟩ | ⟨x, rfl, _⟩
+    · exact ⟨_, Or.inl hv⟩
+    · exact ⟨_, Or.inr hv⟩
+
 theorem eval_exists {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {e : Expr} (he : ExprT Γ e) :
     ∃ n, Eval m e n := by
   induction he with
@@ -190,11 +209,11 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
     obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly hpa hte
     exact ⟨_, EvalR.pack htk⟩
   | getl hy hl ht =>
-    obtain ⟨v, hv | hv⟩ := sum_slot hi hy hl ht
+    obtain ⟨v, hv | hv⟩ := sum_slot_undtor hi hy hl ht
     · exact ⟨_, EvalR.getl hv⟩
     · exact ⟨_, EvalR.getlP hv⟩
   | getr hy hl ht =>
-    obtain ⟨v, hv | hv⟩ := sum_slot hi hy hl ht
+    obtain ⟨v, hv | hv⟩ := sum_slot_undtor hi hy hl ht
     · exact ⟨_, EvalR.getrP hv⟩
     · exact ⟨_, EvalR.getr hv⟩
   | takel hy hl hm ht _ _ =>

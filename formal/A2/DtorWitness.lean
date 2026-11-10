@@ -329,6 +329,24 @@ theorem main_safe {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem 3) main (.ok m'
 
 
 
+/-- An enum of a destructor type lends its payloads (`getl` / `getr`, through
+    the type), the destructor staying with the whole value… -/
+theorem enum_lends {Γ : Ctx} {F : List Var} {E0 : Entry} {f : Nat} {a b : Ty}
+    (h0 : Γ 0 = some E0) (hl : E0.live = true) (ht : E0.ty = .dtor f (.sum a b)) :
+    RhsT Γ F (.getl 0) (projE 0 E0 a) Γ ∧ RhsT Γ F (.getr 0) (projE 0 E0 b) Γ :=
+  ⟨RhsT.getl h0 hl (by rw [ht]; rfl), RhsT.getr h0 hl (by rw [ht]; rfl)⟩
+
+/-- …but no payload is taken out of it (`takel` / `taker`): the enum's
+    destructor would never run. -/
+theorem enum_take_refused {Γ Γ' : Ctx} {F : List Var} {E E0 : Entry} {f : Nat} {a b : Ty}
+    (h0 : Γ 0 = some E0) (ht : E0.ty = .dtor f (.sum a b)) :
+    ¬ RhsT Γ F (.takel 0) E Γ' ∧ ¬ RhsT Γ F (.taker 0) E Γ' := by
+  refine ⟨fun h => ?_, fun h => ?_⟩
+  · cases h with
+    | takel hy _ _ hty _ _ _ => rw [h0] at hy; cases hy; rw [ht] at hty; cases hty
+  · cases h with
+    | taker hy _ _ hty _ _ _ => rw [h0] at hy; cases hy; rw [ht] at hty; cases hty
+
 /-- A lock payload checked out to `x` (`withLock`, `lockE`) of a destructor type is
     an owned binding of that type that is no `letd`'s, and `assign` gives it a new
     value: the old one is dropped by `DropSlot`, running no destructor. -/

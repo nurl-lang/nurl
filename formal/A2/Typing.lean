@@ -610,10 +610,14 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
   | inr {a : Ty} {y : Var} {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
       Γ y = some Ey → Ey.live = true → PushArg Γ F y Ey Ey.ty D Γ1 → a.ok = true →
       RhsT Γ F (.inr a y) ⟨.sum a Ey.ty, .own, true, [], D, false, false⟩ Γ1
+  -- (A2-drop.3a: a payload of a destructor enum is lent through the type,
+  -- as a field of a destructor struct is; the destructor stays with the
+  -- whole value.  Taking one out, `takel` / `taker`, stays refused there:
+  -- the enum's destructor would never run.)
   | getl {y : Var} {E : Entry} {a b : Ty} :
-      Γ y = some E → E.live = true → E.ty = .sum a b → RhsT Γ F (.getl y) (projE y E a) Γ
+      Γ y = some E → E.live = true → E.ty.undtor = .sum a b → RhsT Γ F (.getl y) (projE y E a) Γ
   | getr {y : Var} {E : Entry} {a b : Ty} :
-      Γ y = some E → E.live = true → E.ty = .sum a b → RhsT Γ F (.getr y) (projE y E b) Γ
+      Γ y = some E → E.live = true → E.ty.undtor = .sum a b → RhsT Γ F (.getr y) (projE y E b) Γ
   | takel {y : Var} {E : Entry} {a b : Ty} :
       Γ y = some E → E.live = true → E.mode = .own → E.ty = .sum a b → y ∉ F → NoPin Γ y →
       DtorSafe Γ .replace false y →

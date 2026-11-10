@@ -1560,28 +1560,10 @@ theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry
           | pkg => exact pu.pk _ _ _ _ _ hs'
   | getl hy hl hty =>
     cases he with
-    | getl hv =>
-      have hok := hi.tyok hy; rw [hty] at hok
-      simp only [Ty.ok, Bool.and_eq_true] at hok
-      refine ⟨RhsPost.same hi, out_comp hi hy hl (by rw [hty]; simp) hv Child.inl (Top.inl (Top.refl _)) hok.1
-        (fun hw hvs hsh => ?_) (fun h => ?_)⟩
-      · rw [hty] at hw hvs hsh; cases hw with
-        | inl ha => exact ⟨ha, fun s x hin => hvs s x (ViewIn.inl hin), hsh.inl⟩
-      · rw [hty] at h
-        rcases valOK_sum.mp h with ⟨x, hx, h⟩ | ⟨x, hx, _⟩ <;> cases hx
-        exact h
+    | getl hv => exact ⟨RhsPost.same hi, out_getl hi hy hl hty hv⟩
   | getr hy hl hty =>
     cases he with
-    | getr hv =>
-      have hok := hi.tyok hy; rw [hty] at hok
-      simp only [Ty.ok, Bool.and_eq_true] at hok
-      refine ⟨RhsPost.same hi, out_comp hi hy hl (by rw [hty]; simp) hv Child.inr (Top.inr (Top.refl _)) hok.2
-        (fun hw hvs hsh => ?_) (fun h => ?_)⟩
-      · rw [hty] at hw hvs hsh; cases hw with
-        | inr hb => exact ⟨hb, fun s x hin => hvs s x (ViewIn.inr hin), hsh.inr⟩
-      · rw [hty] at h
-        rcases valOK_sum.mp h with ⟨x, hx, _⟩ | ⟨x, hx, h⟩ <;> cases hx
-        exact h
+    | getr hv => exact ⟨RhsPost.same hi, out_getr hi hy hl hty hv⟩
   | takel hy hl hm hty hyF hpin hds =>
     cases he with
     | takel hv =>

@@ -281,6 +281,9 @@ theorem Ty.ok_undtor {τ : Ty} (h : τ.ok = true) : τ.undtor.ok = true := by
 theorem Ty.undtor_ne_int_of {τ : Ty} {a b : Ty} (h : τ.undtor = .prod a b) : τ ≠ .int := by
   rintro rfl; cases h
 
+theorem Ty.undtor_ne_int_of_sum {τ : Ty} {a b : Ty} (h : τ.undtor = .sum a b) : τ ≠ .int := by
+  rintro rfl; cases h
+
 /-- A type whose values own what they hold: a `Vec` or a struct.  Its
     binding is an owner (or borrows one). -/
 def Ty.owning : Ty → Bool

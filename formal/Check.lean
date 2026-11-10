@@ -22,6 +22,8 @@ import A3
 #print axioms A2.Dtor.scopeD_panic_runs_dtor
 #print axioms A2.DtorWitness.main_safe
 #print axioms A2.DtorWitness.main2_safe
+#print axioms A2.DtorWitness.enum_lends
+#print axioms A2.DtorWitness.enum_take_refused
 #print axioms A2.DtorWitness.lock_checkout_assign
 -- threads: moves, Arc's frozen shared payloads, Locked, RwLocked, Atomic, channels, library
 -- handles and the crossing check, module globals (A3/Claim.lean)
