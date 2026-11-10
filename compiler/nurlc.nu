@@ -3194,6 +3194,9 @@ unsafe @ note_unsafe_item s pos s what → v {
 // element's own moving: a cursor over a container lent out of the owner
 // stays too (agora #493).
 : ~ i g_bck_end_elem 0
+// 1 once a call's row of the function walked ended a binding (`bvr_`,
+// __bck_enders_note): only then is there another call's end to ask for.
+: ~ i g_bck_bvr_any 0
 // 1 while bck_borrow_end ends the borrows of an owner for a change made
 // THROUGH a borrow of one of its elements (bck_borrow_sweep's `wsrc`): the
 // owner's own buffer is where it was, so a `~` loop's cursor that views it
@@ -7485,6 +7488,17 @@ unsafe @ gen_ret i lex i syms i cg → s {
     ^ v
 }
 
+// A call, with the list of open calls put back when it returns (`copen`,
+// __bck_call_open): gen_call has many ways out, and the list is the
+// borrow checker's, not codegen's.
+@ __gen_call_nested i lex i syms i cg → s {
+    ? == g_borrowck 0 { ^ ( gen_call lex syms cg ) } {}
+    : s open ( nurl_str_cat ( nurl_sym_get g_bck `copen` ) `` )
+    : s r ( gen_call lex syms cg )
+    ? ! ( seq open ( nurl_sym_get g_bck `copen` ) ) { ( bck_put `copen` open ) } {}
+    ^ r
+}
+
 @ __gen_expr_level i lex i syms i cg → s {
     // Value-ownership provenance is consume-latest state, just like the
     // existing call / join side channels. Clear it for EVERY expression so a
@@ -7503,7 +7517,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
     ? == tt TT_QUEST ( gen_cond lex syms cg )
     ? == tt TT_QUESTQUEST ( gen_match lex syms cg )
     ? == tt TT_LBRACE ( gen_block_expr lex syms cg )
-    ? == tt TT_LPAREN ( gen_call lex syms cg )
+    ? == tt TT_LPAREN ( __gen_call_nested lex syms cg )
     ? == tt TT_HASH ( gen_cast lex syms cg )
     ? == tt TT_DOT ( gen_member lex syms cg )
     ? == tt TT_AT ( gen_agg_lit lex syms cg )
@@ -16353,6 +16367,10 @@ unsafe @ gen_call i lex i syms i cg → s {
     ( seq fname `vec_set` )
     ( __thr_is_detach fname )
     ( seq fname `signal_install` )
+    // (This call is open while its arguments are evaluated: a call among
+    // them runs before it, whatever order their rows come in — `cna_`,
+    // __bck_call_open; agora #577.)
+    ( __bck_call_open call_name )
     : ~ i arg_idx 0
     // The arguments' source expressions, `|`-separated (__sx_operand), and
     // the binding the first argument is.
@@ -33153,6 +33171,27 @@ unsafe @ __vk_union_of s fns s seen b dyn → s {
     } {}
 }
 
+// The calls open now — being evaluated, their arguments not all done —
+// innermost last (`copen` in g_bck): gen_call adds its callee before its
+// arguments, and the dispatch that entered it puts the list back when it
+// returns (__gen_call_nested). A call that begins while others are open
+// runs before each of them does: filed per callee, `cna_<callee>`, the
+// callees it was nested in anywhere in this function. The walk's rows come
+// in the order arguments are parsed, an enclosing call's first argument
+// before a nested call's — so a row of an enclosing call that ends a
+// binding has not happened yet when the nested call reads it (agora #577).
+@ __bck_call_open s callee → v {
+    ? | == g_borrowck 0 != 0 g_bck_rec_off { ^ v } {}
+    : s open ( nurl_sym_get g_bck `copen` )
+    ? != 0 ( nurl_str_len open ) {
+        : s k ( nurl_str_cat `cna_` callee )
+        : s cur ( nurl_sym_get g_bck k )
+        : s nw ( __word_union cur open )
+        ? ! ( seq nw cur ) { ( bck_put k nw ) } {}
+    } {}
+    ( bck_put `copen` ? == 0 ( nurl_str_len open ) ( nurl_str_cat callee `` ) ( nurl_str_cat3 open ` ` callee ) )
+}
+
 @ bck_stash_pending_call s name i line s callee i argidx s cause b retains → v {
     ( bck_stash_pending_kind name line callee argidx cause ? retains `pendretain` `pendcall` )
 }
@@ -37050,6 +37089,29 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 //   neither                            → nothing happened.
                 : s pvn ( bck_field rec 1 )
                 : i pvid ( nurl_str_to_int pvn )
+                // (The call reads its argument where it runs: a borrow, or a
+                // holder of views, that an EARLIER call of this statement
+                // ended — `+ ( cz fs ) ( string_len s )`, `( f s ( cz fs ) )`,
+                // rows in the order the calls run — is read after its end.
+                // The statement's own reads were checked before any of its
+                // calls ran; agora #577.)
+                // (…by ANOTHER call: a call's own rows come before its
+                // effect on its other arguments — `( vec_set rs 0 r )` ends r
+                // at the row of `rs`, after r was read for it. What a call
+                // row ended is filed under that call, `bvr_`: its callee and
+                // line, __bck_enders_note.)
+                ? & & & == kc 9 ( bck_sound ) != 0 g_bck_bvr_any & >= ( nurl_str_get pvn 0 ) 48 <= ( nurl_str_get pvn 0 ) 57 {
+                    : i pvr ( bck_path_root pvid )
+                    ? == BCK_INVALID ( bck_st_get st pvr ) {
+                        : s pvb ( nurl_sym_get g_bck ( bck_bkey `bvr_` ( nurl_str_int pvr ) ) )
+                        : i pvt ( nurl_str_find pvb `\t` )
+                        // (…one that ran already: not a call this one is
+                        // nested in, `cna_` — that one's rows come first,
+                        // but it runs after its arguments.)
+                        : s pve ? > pvt 0 ( nurl_str_slice pvb + pvt 1 - - ( nurl_str_len pvb ) pvt 1 ) ``
+                        ? & & & > pvt 0 ( seq ( nurl_str_slice pvb 0 pvt ) ( bck_field rec 3 ) ) ! ( seq pve ( bck_field rec 5 ) ) ! ( nurl_sym_has_word g_bck ( nurl_str_cat `cna_` ( bck_field rec 5 ) ) pve ) { ( bck_diag_invalid pvr ( bck_field_int rec 3 ) ) } {}
+                    } {}
+                } {}
                 : s pcal ( bck_field rec 5 )
                 : s paix ( bck_field rec 6 )
                 ? == kc 9 { = st ( bck_inout_borrow_check st rec ) } {}
@@ -37692,7 +37754,13 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
         // storage it is, bck_sx_row_sweep — agora #349. Inside a `~` loop's
         // walk, a row handing a call a value lent out of what a loop element
         // is a part of runs it too, felr — agora #482.)
-        ? & | != 0 g_bck_has_borrow felr ! ( seq st `!` ) { = st ? & == kc 32 ( __bck_row_sx rec ) ( bck_sx_row_sweep ist st rec kc ) ( bck_borrow_sweep ist st rec kc ) } {}
+        ? & | != 0 g_bck_has_borrow felr ! ( seq st `!` ) {
+            = st ? & == kc 32 ( __bck_row_sx rec ) ( bck_sx_row_sweep ist st rec kc ) ( bck_borrow_sweep ist st rec kc )
+            // (What a call's row ended, filed under that call: a later call
+            // of the same statement handed it reads it after its end;
+            // agora #577.)
+            ? & | | | == kc 9 == kc 12 == kc 13 == kc 32 ! ( seq st ist ) { ( __bck_enders_note ist st ( bck_field rec 3 ) ( bck_field rec 5 ) p ) } {}
+        } {}
     }
     st
 }
@@ -41776,6 +41844,43 @@ unsafe @ bck_note_rc_arg s name s ty → v {
     ^ out
 }
 
+// The bindings a call's row took from live, `ist`, to ended, `st`
+// (INVALID): each is filed under that call, `bvr_` — its line, a tab, its
+// callee — for a later call of the same statement to tell its own effect
+// on its arguments from another call's (agora #577).
+@ __bck_enders_note s ist s st s line s callee i p → v {
+    : i n ( nurl_str_len st )
+    : i m ( nurl_str_len ist )
+    // (The calls this one is nested in — still open, their rows before it.)
+    : s outer ( nurl_sym_get g_bck ( nurl_str_cat `cna_` callee ) )
+    : ~ i k 0
+    ~ < k n {
+        ? & == BCK_INVALID ( bck_st_raw st k ) | >= k m != BCK_INVALID ( bck_st_raw ist k ) {
+            ( bck_put ( bck_bkey `bvr_` ( nurl_str_int k ) ) ( nurl_str_cat3 line `\t` callee ) )
+            = g_bck_bvr_any 1
+            // (…and it was read for an argument of an enclosing call before
+            // this one ran — `( two v ( grow line ) )`: that call runs
+            // after, with a view that ended. Its row is one of this
+            // statement's, behind this one.)
+            ? != 0 ( nurl_str_len outer ) {
+                : ~ i j - p 1
+                : ~ b more T
+                ~ & more >= j 0 {
+                    : s jr ( bck_rec j )
+                    ? | ! ( seq ( bck_field jr 3 ) line ) > - p j 64 { = more F } {
+                        ? & & != 0 ( nurl_str_starts jr `pendcall\t` ) == ( bck_path_root ( bck_field_id jr 1 ) ) k ( str_contains_word outer ( bck_field jr 5 ) ) {
+                            ( bck_diag_invalid k ( nurl_str_to_int line ) )
+                            = more F
+                        } {}
+                    }
+                    = j - j 1
+                }
+            } {}
+        } {}
+        = k + k 1
+    }
+}
+
 // Is each of `srcs` (a `: ~` copy's) an owner, or a copy of an owner's
 // handle itself (`hc_`)?
 @ __bck_hc_srcs s st s srcs → b {
@@ -44578,6 +44683,7 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     = g_bck_has_deps 0
     = g_bck_has_cursor 0
     = g_bck_hc_any 0
+    = g_bck_bvr_any 0
     = g_bck_jgb_any 0
     = g_bck_hr_any 0
     = g_bck_has_cv 0
