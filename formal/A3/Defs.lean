@@ -515,7 +515,7 @@ theorem _root_.A2.StmtT.callOut {P : Prog} {Γ : Ctx} {F : List Var} {x c z : Va
       · exact exitScope_out (Ez := outE R Ez.mode) hc huc hzc.symm (by simp) _ _
   obtain ⟨Δ4, h4, hu, heq⟩ := key
   rw [← heq]
-  exact StmtT.letcall rfl hc hcF hcall h4 hu.endOK
+  exact StmtT.letcall rfl hc hcF hcall h4 hu.endOK (fun _ _ _ _ => by simp [Stmt.movedFirst])
 
 /-- A3.3: what `arcGet` lends through a read guard: the pair of the lock's
     share and the payload, depending on the guard through a share. -/
@@ -1047,12 +1047,15 @@ theorem _root_.A2.StmtT.withLockField {P : Prog} {Γ Δs Δ : Ctx} {F : List Var
         { Ey with live := false, dtor := false }) l (outE (.lk t) .own)) w (compE Ey b)) x (lockE t)) F s Δs)
     (hend : EndOK Δs x) (hlive : ∃ E, Δs x = some E ∧ E.live = true) (hls : l ∉ s.vars) (_hys : y ∉ s.vars)
     (hput : StmtT P (exitScope x Δs) F (.assign y (.pair l w)) Δ)
-    (hendw : EndOK Δ w) (hendl : EndOK (exitScope w Δ) l) :
+    (hendw : EndOK Δ w) (hendl : EndOK (exitScope w Δ) l)
+    -- (A2-drop.3a: the struct's other field is of no destructor type: it is
+    -- put back only after the body, so a panic there would drop it)
+    (hbd : b.hasDtor = false) :
     StmtT P Γ F (Stmt.withLockField y l w x s) (exitScope l (exitScope w Δ)) := by
   have hcl : compE Ey (.lk t) = outE (.lk t) .own := by
     simp [compE, ownHeld, Ty.holdsView, htv, outE]
   refine StmtT.unpair (a := .lk t) (b := b) (by simp [Stmt.src, hs]) hy hly hcy hty hyF hl hw hlw hlF hwF ?_
-    hpin hds hendw hendl
+    hpin hds hendw hendl (fun h => by simp [Ty.hasDtor] at h) (fun h => by rw [hbd] at h; cases h)
   rw [hcl]
   refine StmtT.seq rfl ?_ hput
   refine StmtT.withLock hs (by simp [A2.setE, A2.kill, upd_ne _ _ hxw, upd_ne _ _ hxl, upd_ne _ _ hxy, hx]) hxF
@@ -1483,7 +1486,8 @@ theorem _root_.A2.StmtT.callc_recv {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c 
     (hty : Ec.ty = .fn ms q) (hj : ms[j]? = some σ) (hσ : P[σ]? = some sig)
     (hps : sig.params = [(.inp, .fn ms q)]) (hout : ∀ o ∈ sig.outHolds, o.2.1 ≠ 0) (hnt : ¬ ThruFn P σ)
     (hn : ∀ d ∈ Ec.vdeps, d.kind.isName = false)
-    (hk : StmtT P (setE Γ x (recvRes c Ec (callRes Γ sig [c]))) F k Δ) (hend : EndOK Δ x) :
+    (hk : StmtT P (setE Γ x (recvRes c Ec (callRes Γ sig [c]))) F k Δ) (hend : EndOK Δ x)
+    (hdk : sig.resOwn = true → sig.resTy.hasDtor = true → x ∈ k.movedFirst) :
     StmtT P Γ F (.callc x c j [] k) (exitScope x Δ) := by
   have hcT := callT_recv (F := F) hσ (by rw [hps, hty]) hc hl hn hnt
   have hmut : mutNames Γ [c] = [] := by
@@ -1493,7 +1497,7 @@ theorem _root_.A2.StmtT.callc_recv {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c 
     simp [mutNames, argNames, this]
   have hpost := callPost_recv (Γ := Γ) (c := c) hps hmut
   rw [hpost] at hcT
-  exact StmtT.callc hks hx hxF hc hty hj hσ (by rw [hps]; rfl) hout hcT (fun _ h => by cases h) hk hend hnt
+  exact StmtT.callc hks hx hxF hc hty hj hσ (by rw [hps]; rfl) hout hcT (fun _ h => by cases h) hk hend hnt hdk
 
 /-- What `arc_get` lends of an owned share names nothing by name: a call
     through it is `callc_recv`'s. -/
@@ -1515,11 +1519,12 @@ theorem _root_.A2.StmtT.arcCall {P : Prog} {Γ Δ : Ctx} {F : List Var} {a g x :
       (recvRes g (getE a ⟨.arc (.fn ms .sync), .own, true, [], [], false, false⟩ (.fn ms .sync))
         (callRes (setE Γ g (getE a ⟨.arc (.fn ms .sync), .own, true, [], [], false, false⟩ (.fn ms .sync)))
           sig [g]))) F k Δ)
-    (hend : EndOK Δ x) (hendg : EndOK (exitScope x Δ) g) :
+    (hend : EndOK Δ x) (hendg : EndOK (exitScope x Δ) g)
+    (hdk : sig.resOwn = true → sig.resTy.hasDtor = true → x ∈ k.movedFirst) :
     StmtT P Γ F (.letv g (.arcGet a) (.callc x g j [] k)) (exitScope g (exitScope x Δ)) :=
   StmtT.letv hks hg hgF (arcGet_sync ha rfl rfl)
     (StmtT.callc_recv hks (by simp [setE, upd_ne _ _ hxg, hx]) hxF (upd_same _ _ _) rfl rfl hj hσ hps hout
-      hnt getE_own_noName hk hend) hendg
+      hnt getE_own_noName hk hend hdk) hendg
 
 /-! ### A3.5b: subsumption between closure classes
 
@@ -1627,14 +1632,15 @@ theorem _root_.A2.StmtT.arcCallUp {P : Prog} {Γ Δ : Ctx} {F : List Var} {a g g
           (callRes (setE (setE Γ g (getE a ⟨.arc (.fn ms .sync), .own, true, [], [], false, false⟩ (.fn ms .sync)))
             g' { getE a ⟨.arc (.fn ms .sync), .own, true, [], [], false, false⟩ (.fn ms .sync) with
               ty := .fn ms q, dtor := false, dbind := false }) sig [g']))) F k Δ)
-    (hend : EndOK Δ x) (hendg' : EndOK (exitScope x Δ) g') (hendg : EndOK (exitScope g' (exitScope x Δ)) g) :
+    (hend : EndOK Δ x) (hendg' : EndOK (exitScope x Δ) g') (hendg : EndOK (exitScope g' (exitScope x Δ)) g)
+    (hdk : sig.resOwn = true → sig.resTy.hasDtor = true → x ∈ k.movedFirst) :
     StmtT P Γ F (.letv g (.arcGet a) (.letv g' (.var g) (.callc x g' j [] k)))
       (exitScope g (exitScope g' (exitScope x Δ))) := by
   refine StmtT.letv hks hg hgF (arcGet_sync ha rfl rfl) ?_ hendg
   refine StmtT.callcUp (upd_same _ _ _) rfl rfl rfl hle hks (by simp [setE, upd_ne _ _ hgg, hg'])
     hg'F ?_ hendg'
   refine StmtT.callc_recv hks (by simp [setE, upd_ne _ _ hxg', upd_ne _ _ hxg, hx]) hxF (upd_same _ _ _) rfl rfl
-    hj hσ hps hout hnt ?_ hk hend
+    hj hσ hps hout hnt ?_ hk hend hdk
   exact getE_own_noName
 
 /-! A3.5b: a closure that changes a capture it moved in (an accumulator).  The
@@ -2275,11 +2281,12 @@ theorem _root_.A2.StmtT.callcE_recv {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c
     (hself : ∀ d ∈ Ec.vdeps, d.root ≠ c) (hn : ∀ d ∈ Ec.vdeps, d.kind.isName = false) (hdb : Ec.dbind = false)
     (hny : NoPin Γ c) (hdc : DtorSafe Γ .replace false c)
     (hk : StmtT P (kill .replace false c (setE (callPost (kill .replace false c Γ) sig [c]) x
-      (callRes (kill .replace false c Γ) sig [c]))) F k Δ) (hend : EndOK Δ x) :
+      (callRes (kill .replace false c Γ) sig [c]))) F k Δ) (hend : EndOK Δ x)
+    (hdk : sig.resOwn = true → sig.resTy.hasDtor = true → x ∈ k.movedFirst) :
     StmtT P Γ F (.callcE x c j [] k) (exitScope x Δ) :=
   StmtT.callcE hks hx hxF hc hty (Or.inl hm) hq hj hσ hps hsl hsr hso hny hdc
     (callT_recv_inout hσ (by rw [hty]; exact hps) hc hl hm (by rw [hty]; rfl) hcF hself hn hdb hny hdc hnt)
-    hk hend hnt
+    hk hend hnt hdk
 
 /-! A3.5b: the accumulator `\ → i { = n + n 1 ^ n }`, with `n` moved in, as a
 `send` closure whose one method changes its environment. -/
@@ -2362,6 +2369,7 @@ theorem accum_hand {Γ Δ : Ctx} {F : List Var} {x acc : Var} {k : Stmt} (hks : 
     StmtT accP Γ F (.callcE x acc 0 [] k) (exitScope x Δ) :=
   StmtT.callcE_recv (sig := accSig) (ms := [0]) (q := .send) hks hx hxF hacc rfl rfl rfl (by decide) rfl rfl rfl
     rfl rfl rfl (accP_noThru 0) haccF (fun _ h => by cases h) (fun _ h => by cases h) rfl hny hdc hk hend
+    (fun ho _ => by simp [accSig] at ho)
 
 /-- ... and a `sync` one has no such call: its count is changed by no thread
     while several may hold it. -/
@@ -2496,7 +2504,8 @@ theorem accCode_ok : FnOK accP accCode := by
     rw [hp4.exitScope, hp5.exitScope, hp6.exitScope]
   have hp7 := hp6.upd_none 2
   refine ⟨rfl, by decide, by decide, rfl, by simp [accCode], ?_, by simp [accCode], by simp [accCode],
-    by simp [accCode], by simp [accCode], by simp [accCode], _, h2, ?_, ?_, ?_⟩
+    by simp [accCode], by simp [accCode], by simp [accCode],
+    sinkMoved_of (by simp [accCode]), _, h2, ?_, ?_, ?_⟩
   · intro pt hpt
     simp only [accCode, List.mem_singleton] at hpt; subst hpt
     simp [accEnv, Ty.ok, Ty.owning]
@@ -2529,7 +2538,8 @@ theorem accSig_ok : FnOK accP accSig := by
     rw [h0.kill] at h; exact h
   have hp := h0.setE (x := 1) intE_plain
   refine ⟨rfl, by decide, by decide, rfl, by simp [accSig], ?_, by simp [accSig], by simp [accSig],
-    by simp [accSig], by simp [accSig], by simp [accSig], _, hA, ?_, ?_, ?_⟩
+    by simp [accSig], by simp [accSig], by simp [accSig],
+    sinkMoved_of (by simp [accSig]), _, hA, ?_, ?_, ?_⟩
   · intro pt hpt
     simp only [accSig, List.mem_singleton] at hpt; subst hpt
     simp [accTy, Ty.ok, Ty.owning]

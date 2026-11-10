@@ -115,7 +115,7 @@ theorem spawnSt_val {fn : Fn} {vs : List Val} {v : Nat} {sl : Slot} {T : Val}
 theorem newThread_typed {P : Prog} {fn : Fn} (hok : FnOK P fn)
     (hpar : ∀ pt ∈ fn.params, pt.1 = .sink ∧ pt.2.holdsView = false) :
     ∃ Δ, StmtT P (sigCtx fn) [] (wrapParams fn.params 0 0 (.scope fn.params.length fn.body)) Δ := by
-  obtain ⟨hsrc, -, -, -, -, -, -, -, -, -, -, Δb, hbody, hfl, -⟩ := hok
+  obtain ⟨hsrc, -, -, -, -, -, -, -, -, -, -, -, Δb, hbody, hfl, -⟩ := hok
   have hrb : ∀ p E, sigCtx fn p = some E → E.mode ≠ .rootb := fun p E h =>
     (sigCtx_spawn_mode hpar h).1
   -- the body binds nothing new, so its end has no borrowed parameter either

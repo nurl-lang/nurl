@@ -1513,6 +1513,20 @@ def CallT (P : Prog) (Γ : Ctx) (F : List Var) (f : Nat) (args : List Var) (E : 
 
 /-! ### Statements -/
 
+/-- A2-drop.3a: the bindings a statement moves before anything else of it
+    runs: a head of `letd y f (.var w)`s, which may end in a move into
+    another binding, `assign y (.var w)`. A binder that may hold an owned
+    value of a destructor type but runs no destructor itself (a call's
+    result, `unpair`'s fields, a `sink` parameter) hands the value over this
+    way. Nothing runs in between, so nothing can panic or end the value
+    first. A `letd`'s scope ends where the binder's does, and runs the
+    destructor (`scopeD`) where the binder would; a binding the value is
+    assigned to is of the same type, whose own binder answers for it. -/
+def Stmt.movedFirst : Stmt → List Var
+  | .letd _ _ (.var w) s => w :: s.movedFirst
+  | .assign _ (.var w) => [w]
+  | _ => []
+
 /-- Source code: no run-time forms.  What has not started running yet (a
     binding's body, the rest of a sequence, a branch, a loop body) is
     source; run-time forms appear only where execution is. -/

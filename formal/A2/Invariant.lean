@@ -934,6 +934,18 @@ macro_rules
       | (intro h; simp_all [Ty.hasDtor])
       | (intro h; exfalso; revert h; simp_all))
 
+/-- ... and that an owned value of a destructor type is handed to its
+    `letd` first thing (`Stmt.movedFirst`), where a type is concrete: it is no
+    destructor type, or the value is not owned. -/
+syntax "dtor_head" : tactic
+macro_rules
+  | `(tactic| dtor_head) => `(tactic| first
+      | (intro _ h; simp_all [Ty.hasDtor])
+      | (intro h; exfalso; revert h; simp_all)
+      | (intro _ h; exfalso; revert h; simp_all [Ty.hasDtor])
+      | (intro _ _ _ h; simp_all [Ty.hasDtor])
+      | (intro fn hf ho; simp_all [Ty.hasDtor]))
+
 inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
   | skip {Γ : Ctx} {F : List Var} : StmtT P Γ F .skip Γ
   | seq {Γ Γ1 Δ : Ctx} {F : List Var} {a b : Stmt} :
@@ -946,9 +958,14 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       (hnd : E.mode = .own → E.ty.hasDtor = false := by no_dtor) :
       StmtT P Γ F (.letv x r s) (exitScope x Δ)
   | letcall {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {args : List Var} {s : Stmt}
-      {E : Entry} :
-      s.src = true → Γ x = none → x ∉ F → CallT P Γ F f args E Γ1 → StmtT P (setE Γ1 x E) F s Δ →
-      EndOK Δ x → StmtT P Γ F (.letcall x f args s) (exitScope x Δ)
+      {E : Entry}
+      (h1 : s.src = true) (h2 : Γ x = none) (h3 : x ∉ F) (h4 : CallT P Γ F f args E Γ1)
+      (h5 : StmtT P (setE Γ1 x E) F s Δ) (h6 : EndOK Δ x)
+      -- A2-drop.3a: an owned result of a destructor type goes to its `letd`
+      -- first thing, whose scope runs the destructor where `x`'s ends
+      (hdk : ∀ fn, P[f]? = some fn → fn.resOwn = true → fn.resTy.hasDtor = true → x ∈ s.movedFirst :=
+        by dtor_head) :
+      StmtT P Γ F (.letcall x f args s) (exitScope x Δ)
   | scope {Γ Δ : Ctx} {F : List Var} {x : Var} {s : Stmt} :
       (∃ E, Γ x = some E ∧ E.mode ≠ .rootb) → x ∉ F → StmtT P Γ F s Δ → EndOK Δ x →
       StmtT P Γ F (.scope x s) (exitScope x Δ)
@@ -1005,30 +1022,39 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       s.src = true → Γ x = none → x ∉ F → P[f]? = some fn → fn.params = [] → fn.resTy = .int →
       fn.resOwn = false → CallT P Γ F f [] E Γ1 → StmtT P (setE Γ1 x E) F s Δ →
       EndOK Δ x → StmtT P Γ F (.letrec x f s) (exitScope x Δ)
-  | unpair {Γ Δ : Ctx} {F : List Var} {y x z : Var} {s : Stmt} {E : Entry} {a b : Ty} :
+  | unpair {Γ Δ : Ctx} {F : List Var} {y x z : Var} {s : Stmt} {E : Entry} {a b : Ty}
       -- (an `inout` struct that may be replaced is taken apart too: a field
       -- replaced in place is the struct taken apart and assigned again)
-      s.src = true → Γ y = some E → E.live = true → canDo E.mode .replace → E.ty = .prod a b → y ∉ F →
-      Γ x = none → Γ z = none → x ≠ z → x ∉ F → z ∉ F →
-      StmtT P (setE (setE (setE (kill .replace false y Γ) y { E with live := false, dtor := false }) x (compE E a)) z
-        (compE E b)) F s Δ →
+      (h1 : s.src = true) (h2 : Γ y = some E) (h3 : E.live = true) (h4 : canDo E.mode .replace)
+      (h5 : E.ty = .prod a b) (h6 : y ∉ F)
+      (h7 : Γ x = none) (h8 : Γ z = none) (h9 : x ≠ z) (h10 : x ∉ F) (h11 : z ∉ F)
+      (h12 : StmtT P (setE (setE (setE (kill .replace false y Γ) y { E with live := false, dtor := false }) x (compE E a)) z
+        (compE E b)) F s Δ)
       -- `y` is replaced, not ended: what borrows it by name, and a destructor
       -- that views it, are what replacing it ends
-      NoPin Γ y → DtorSafe Γ .replace false y → EndOK Δ z → EndOK (exitScope z Δ) x →
+      (h13 : NoPin Γ y) (h14 : DtorSafe Γ .replace false y) (h15 : EndOK Δ z) (h16 : EndOK (exitScope z Δ) x)
+      -- A2-drop.3a: a field of a destructor type goes to its `letd` first
+      -- thing, whose scope runs the destructor where the field's binding ends
+      (hdx : a.hasDtor = true → x ∈ s.movedFirst := by dtor_head)
+      (hdz : b.hasDtor = true → z ∈ s.movedFirst := by dtor_head) :
       StmtT P Γ F (.unpair y x z s) (exitScope x (exitScope z Δ))
   | callc {Γ Γ1 Δ : Ctx} {F : List Var} {x c : Var} {j : Nat} {zs : List Var} {k : Stmt}
-      {Ec E : Entry} {ms : List Nat} {q : Cross} {σ : Nat} {sig : Fn} :
-      k.src = true → Γ x = none → x ∉ F → Γ c = some Ec → Ec.ty = .fn ms q → ms[j]? = some σ →
-      P[σ]? = some sig → sig.params.head? = some (.inp, .fn ms q) → (∀ o ∈ sig.outHolds, o.2.1 ≠ 0) →
-      CallT P Γ F σ (c :: zs) E Γ1 →
+      {Ec E : Entry} {ms : List Nat} {q : Cross} {σ : Nat} {sig : Fn}
+      (h1 : k.src = true) (h2 : Γ x = none) (h3 : x ∉ F) (h4 : Γ c = some Ec) (h5 : Ec.ty = .fn ms q)
+      (h6 : ms[j]? = some σ) (h7 : P[σ]? = some sig) (h8 : sig.params.head? = some (.inp, .fn ms q))
+      (h9 : ∀ o ∈ sig.outHolds, o.2.1 ≠ 0)
+      (h10 : CallT P Γ F σ (c :: zs) E Γ1)
       -- no argument is a binding the package may change by name (it is
       -- handed to the code as an `inout` argument of its own)
-      (∀ z ∈ zs, ∀ d ∈ Ec.vdeps, d.kind.bound ≠ .none → d.root ≠ z) →
-      StmtT P (setE Γ1 x (recvRes c Ec E)) F k Δ →
-      EndOK Δ x →
+      (h11 : ∀ z ∈ zs, ∀ d ∈ Ec.vdeps, d.kind.bound ≠ .none → d.root ≠ z)
+      (h12 : StmtT P (setE Γ1 x (recvRes c Ec E)) F k Δ)
+      (h13 : EndOK Δ x)
       -- the interface is not code that changes elements through a borrow
       -- (Agora #295; nor is the code that runs: `Implements`)
-      ¬ ThruFn P σ → StmtT P Γ F (.callc x c j zs k) (exitScope x Δ)
+      (h14 : ¬ ThruFn P σ)
+      -- (A2-drop.3a: as `letcall`'s)
+      (hdk : sig.resOwn = true → sig.resTy.hasDtor = true → x ∈ k.movedFirst := by dtor_head) :
+      StmtT P Γ F (.callc x c j zs k) (exitScope x Δ)
   | catchR {Γ Δ : Ctx} {F : List Var} {x : Var} {m0 : Mem} {s : Stmt} :
       x ∉ F → StmtT P Γ (F ++ (List.range m0.nv).filter (· ≠ x)) s Δ →
       MInv (m0.set x ⟨false, some (.int 1)⟩) Δ →
@@ -1121,14 +1147,17 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       the interface takes only the receiver, and its result borrows and holds
       nothing of it. -/
   | callcE {Γ Γ1 Δ : Ctx} {F : List Var} {x c : Var} {j : Nat} {k : Stmt}
-      {Ec E : Entry} {ms : List Nat} {q : Cross} {σ : Nat} {sig : Fn} {b : Eff} :
-      k.src = true → Γ x = none → x ∉ F → Γ c = some Ec → Ec.ty = .fn ms q → canDo Ec.mode .replace →
-      Cross.send.Le q → ms[j]? = some σ → P[σ]? = some sig → sig.params = [(.inout b, .fn ms q)] →
-      sig.lends = [] → sig.rholds = [] → sig.outHolds = [] →
-      NoPin Γ c → DtorSafe Γ .replace false c →
-      CallT P (kill .replace false c Γ) F σ [c] E Γ1 →
-      StmtT P (kill .replace false c (setE Γ1 x E)) F k Δ →
-      EndOK Δ x → ¬ ThruFn P σ → StmtT P Γ F (.callcE x c j [] k) (exitScope x Δ)
+      {Ec E : Entry} {ms : List Nat} {q : Cross} {σ : Nat} {sig : Fn} {b : Eff}
+      (h1 : k.src = true) (h2 : Γ x = none) (h3 : x ∉ F) (h4 : Γ c = some Ec) (h5 : Ec.ty = .fn ms q)
+      (h6 : canDo Ec.mode .replace) (h7 : Cross.send.Le q) (h8 : ms[j]? = some σ) (h9 : P[σ]? = some sig)
+      (h10 : sig.params = [(.inout b, .fn ms q)]) (h11 : sig.lends = []) (h12 : sig.rholds = [])
+      (h13 : sig.outHolds = []) (h14 : NoPin Γ c) (h15 : DtorSafe Γ .replace false c)
+      (h16 : CallT P (kill .replace false c Γ) F σ [c] E Γ1)
+      (h17 : StmtT P (kill .replace false c (setE Γ1 x E)) F k Δ)
+      (h18 : EndOK Δ x) (h19 : ¬ ThruFn P σ)
+      -- (A2-drop.3a: as `letcall`'s)
+      (hdk : sig.resOwn = true → sig.resTy.hasDtor = true → x ∈ k.movedFirst := by dtor_head) :
+      StmtT P Γ F (.callcE x c j [] k) (exitScope x Δ)
   | scopeD {Γ Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {s : Stmt} :
       -- (A2-drop.3a: of the destructor type `Ty.dtor f t`, whose destructor `f` is)
       (∃ E t, Γ x = some E ∧ E.mode = .own ∧ E.ty = .dtor f t ∧ E.ty.hasFn = false ∧
@@ -1192,6 +1221,10 @@ def FnOK (P : Prog) (fn : Fn) : Prop :=
   (∀ jk ∈ fn.rholds, lendable fn jk.1 ∧ jk.2.isName = false) ∧
   (∀ o ∈ fn.outHolds, lendable fn o.2.1 ∧ o.2.2.isName = false) ∧
   (∀ jk ∈ fn.lends ++ fn.rholds, kindFits fn jk.1 jk.2) ∧ (∀ o ∈ fn.outHolds, kindFits fn o.2.1 o.2.2) ∧
+  -- A2-drop.3a: a `sink` parameter of a destructor type goes to its `letd`
+  -- first thing, whose scope runs the destructor where the parameter's ends
+  (∀ i (h : i < fn.params.length), fn.params[i].1 = .sink → fn.params[i].2.hasDtor = true →
+    i ∈ fn.body.movedFirst) ∧
   ∃ Δ, StmtT P (sigCtx fn) [] fn.body Δ ∧
     -- A2-drop.2: the body's own destructor bindings have ended, and no
     -- parameter or result runs a destructor
@@ -1206,6 +1239,14 @@ def FnOK (P : Prog) (fn : Fn) : Prop :=
         (fn.params[i].2.holdsView = false → Ei.held = []))
 
 def ProgOK (P : Prog) : Prop := ∀ fn ∈ P, FnOK P fn
+
+/-- A2-drop.3a: `FnOK`'s `sink` clause, for a signature none of whose `sink`
+    parameters is of a destructor type. -/
+theorem sinkMoved_of {fn : Fn} (h : ∀ pt ∈ fn.params, pt.1 = .sink → pt.2.hasDtor = false) :
+    ∀ i (hi : i < fn.params.length), fn.params[i].1 = .sink → fn.params[i].2.hasDtor = true →
+      i ∈ fn.body.movedFirst := by
+  intro i hi hs hd
+  rw [h _ (List.getElem_mem hi) hs] at hd; cases hd
 
 /-! ### Packages name code of their signature -/
 

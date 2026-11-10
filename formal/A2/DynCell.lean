@@ -271,7 +271,7 @@ theorem body_typed : StmtT P (sigCtx pick) [] pick.body (ctx ErJ) := by
 /-- `pick` meets its summary: it lends `p` and the cell, nothing else. -/
 theorem pick_ok : FnOK P pick := by
   refine ⟨rfl, by decide, by decide, rfl, by simp [pick], ?_, ?_, by simp [pick], by simp [pick], ?_,
-    by simp [pick], ctx ErJ, body_typed, ctx_flags ⟨rfl, rfl⟩, ⟨ErJ, by simp [ctx, pick], rfl, rfl, rfl, ?_, by simp [ErJ],
+    by simp [pick], sinkMoved_of (by simp [pick]), ctx ErJ, body_typed, ctx_flags ⟨rfl, rfl⟩, ⟨ErJ, by simp [ctx, pick], rfl, rfl, rfl, ?_, by simp [ErJ],
       by simp [pick]⟩, ?_⟩
   · intro pt hpt
     simp only [pick, List.mem_cons, List.mem_nil_iff, or_false] at hpt
@@ -439,6 +439,7 @@ theorem main_typed : ∃ Δ, StmtT P (fun _ => none) [] main Δ := by
   have hc := StmtT.letcall (P := P) (Γ := K4) (F := []) (x := 4) (f := 0) (args := [1, 2, 3])
     (s := .letv 5 (.expr (.len 4)) .skip) (E := Ex) (Γ1 := K4) rfl (by simp [K4, A2.setE, upd])
     (by simp) call_ok hn ((hK6.exitScope 5).endOK _)
+    (fun fn hf ho _ => by simp [P] at hf; subst hf; simp [pick] at ho)
   have h3 := StmtT.letv (P := P) (x := 3) (r := .expr (.lit 1)) (E := intE) (F := [])
     (Γ := A2.setE (A2.setE (A2.setE (fun _ => none) 0 intE) 1 Ecl) 2 Enew)
     (Γ1 := A2.setE (A2.setE (A2.setE (fun _ => none) 0 intE) 1 Ecl) 2 Enew)

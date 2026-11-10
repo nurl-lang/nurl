@@ -525,7 +525,7 @@ theorem progress {P : Prog}
     cases res with
     | ok v o m1 => exact Or.inr <| Or.inr ⟨_, Step.letv hmx hres⟩
     | panic => exact Or.inr <| Or.inr ⟨_, Step.letvP hres⟩
-  | @letcall Γ Γ1 Δ F x f args k E _ hx _ hc _ _ _ =>
+  | @letcall Γ Γ1 Δ F x f args k E _ hx _ hc _ _ _ _ =>
     intro m hcd hi
     exact Or.inr <| Or.inr (hcall (k := k) hx hc hi.toMInv)
   | @scope Γ Δ1 F x k hxE _ _ _ ih =>
@@ -774,7 +774,7 @@ theorem progress {P : Prog}
   | callc _ hx hxF hc htc hj hσ hhd _ hcT hnz _ _ _ =>
     intro m hcd hi
     exact Or.inr <| Or.inr (hclo hx hxF hc htc hj hσ hhd hcT hnz hcd hi)
-  | callcE _ hx _ hc htc hcan _ hj hσ hsp _ _ _ _ _ hcT _ _ _ _ =>
+  | callcE _ hx _ hc htc hcan _ hj hσ hsp _ _ _ _ _ hcT _ _ _ _ _ =>
     intro m hcd hi
     exact Or.inr <| Or.inr (hhand hx hc htc hcan hj hσ hsp hcT hcd hi)
   | @catchR Γ Δ F x m0 s _ _ hM _ hKO _ ih =>
@@ -792,7 +792,7 @@ theorem progress {P : Prog}
         obtain ⟨_, E0, h0⟩ := hKO.2 x Ex hEx
         exact Or.inr <| Or.inr ⟨_, Step.catchP hr (by rw [hout x hxs, ← hi.dom x, h0]; rfl)⟩
 
-  | @unpair Γ Δ F y x z k E a b _ hy hl hm hty _ hx hz hxz _ _ _ _ _ _ _ _ =>
+  | @unpair Γ Δ F y x z k E a b _ hy hl hm hty _ hx hz hxz _ _ _ _ _ _ _ _ _ _ =>
     intro m hcd hi
     obtain ⟨o, v, w, hv⟩ := pair_slot hi.toMInv hy hl (by rw [hty]; rfl)
     obtain ⟨T, hT, _⟩ := hi.own_val hy hl (by rcases hm with h | ⟨b, h, _⟩ <;> rw [h] <;> rfl)

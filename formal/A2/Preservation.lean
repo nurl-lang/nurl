@@ -1304,6 +1304,7 @@ theorem dtorCall_typed {P : Prog} {m : Mem} {Γ0 : Ctx} {F : List Var} {x : Var}
     ⟨hNoPinR, (DtorSafe.of_fresh hm.wf hrΓ _ _).setE_off rfl, (DbindSafe.of_fresh hm.wf hrΓ).setE_off rfl⟩
   have hlc := StmtT.letcall (P := P) (F := F) (x := m.nv) (f := f) (args := [x]) (s := .skip)
     rfl hrΓ hnF hcall StmtT.skip hEndR
+    (fun fn' hf' ho _ => by rw [hfn] at hf'; cases hf'; rw [hro] at ho; cases ho)
   rw [exitScope_setE_fresh hm.wf hrΓ] at hlc
   exact StmtT.scope ⟨E, hx, by simp [hmo]⟩ hxF hlc hpin
 
@@ -1558,7 +1559,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           exact ⟨by simp [Stmt.spine], E0, h0⟩
       · have hvx : v ≠ x := fun e => hxF (e ▸ hv)
         simp only [Mem.set_st, upd_ne _ _ hvx]; exact post.frz v hv
-  | letcall hsrc hx hxF hc hs hpx _ =>
+  | letcall hsrc hx hxF hc hs hpx _ _ =>
     intro m m' s' hcd hi hst
     exact hcall hsrc hx hxF hc hs hpx hi hst
   | assign hx hxF hmodes hr hty hxd _ hpin hds =>
@@ -2232,6 +2233,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           (DbindSafe.of_fresh hm1.wf hrΓ').setE_off rfl⟩
       have hlc := StmtT.letcall (P := P) (F := F) (x := m.nv) (f := f) (args := [x]) (s := .skip)
         rfl hrΓ' hrF hcall StmtT.skip hEndR
+        (fun fn' hf' ho _ => by rw [hfn] at hf'; cases hf'; rw [hro] at ho; cases ho)
       rw [exitScope_setE_fresh hm1.wf hrΓ'] at hlc
       have hsc := StmtT.scope (P := P) (F := F) (x := x) (s := .letcall m.nv f [x] .skip)
         ⟨(Ex.revive x), by simp [setE], by simp [Entry.revive, hmo]⟩ hxF hlc hNoPinΓ'
@@ -2737,7 +2739,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       have hvs : v ∉ s.spine := fun h => hs.spine_F v h (List.mem_append_left _ hv)
       simp only [Mem.set_st, upd_ne _ _ hvx]; exact hout v hvs
 
-  | unpair hsrc hy hl hm hty hyF hx hz hxz hxF hzF hs hny hdy hpz hpx _ =>
+  | unpair hsrc hy hl hm hty hyF hx hz hxz hxF hzF hs hny hdy hpz hpx _ _ _ =>
     intro m m' s' hcd hi hst
     exact pres_unpair hsrc hy hl hm hty hyF hx hz hxz hxF hzF hs hny hdy hpz hpx hi hst
 
