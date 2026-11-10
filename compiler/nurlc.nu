@@ -36128,6 +36128,19 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 // What a closure that may run here does to its captures: the
                 // sweep below ends what that ends (bck_borrow_sweep).
                 ? | != 0 g_bck_has_cursor != 0 g_bck_epy_any { = st ( bck_cursor_follow st rec kc ) } {}
+                // (An argument named by its source expression — a join, a
+                // value block — handed to a callee that lends it back: the
+                // result borrows from each binding or field path the join or
+                // the block hands on, as for a binding passed by name
+                // (bck_plend_add; agora #556).)
+                ? & ( __bck_row_sx rec ) ( mem_fn_lends_arg ( bck_field rec 5 ) ( bck_field rec 6 ) ) {
+                    : s w1 ( bck_field rec 1 )
+                    : ~ s lrest ( bck_sx_hpaths ( nurl_str_slice w1 1 - ( nurl_str_len w1 ) 1 ) )
+                    ~ != 0 ( nurl_str_len lrest ) {
+                        : s lw ( str_first_word lrest ) = lrest ( str_skip_word lrest )
+                        ( bck_plend_add lw ( bck_field rec 5 ) `` ( bck_field rec 3 ) )
+                    }
+                } {}
                 // (A closure that runs here and gives a borrowing binding a
                 // new value, `@assign`: from here on it may hold the closure's
                 // value, its own on that path — BCK_MAYBE_OWNED.)
@@ -39241,7 +39254,11 @@ unsafe @ __pderiv_note i syms s name s vt i rhs_tt s rhs_val s lend s sx → v {
     // (Only a value read through a parameter, or through a handle read out
     // of one, can be one.)
     ? == 0 ( nurl_str_len g_pderiv ) { ? == 0 ( nurl_sym_len syms `__fn_storage_params__` ) { ^ v } {} } {}
-    : s srcs ? == rhs_tt TT_LPAREN lend ? == rhs_tt TT_DOT ( nurl_sym_get syms `__last_member_root__` ) ? ( is_ident_tok rhs_tt ) rhs_val ``
+    // (…a value block or a join whose value is one binding or field path —
+    // `{ v }`, `{ . h a }`, `? c v v`: that name, as the bare spelling's;
+    // agora #556.)
+    : b __sx_one & | | == rhs_tt TT_LBRACE == rhs_tt TT_QUEST == rhs_tt TT_QUESTQUEST & & != 0 ( nurl_str_len sx ) ! ( __sx_lends_any sx ) & < ( nurl_str_find sx `*` ) 0 ( __sx_names_any sx )
+    : s srcs ? == rhs_tt TT_LPAREN lend ? == rhs_tt TT_DOT ( nurl_sym_get syms `__last_member_root__` ) ? ( is_ident_tok rhs_tt ) rhs_val ? __sx_one ( __path_root_name sx ) ``
     ? ( __lend_unnamed srcs ) {
         // (__sx_lendy's cheap tests first — most values here lend nothing
         // — then the type, whose LLVM spelling nurl_llty builds, and the

@@ -1,0 +1,3 @@
+### Fixed
+
+- **A function's summaries see through a join or a value block of a parameter** (Agora #556). A callee that cleared its parameter through `: j { v }`, `: j { . h a }` or `: j ? c v v` did not end its caller's borrows of that argument. An identity function given a join or a block, `( idv ? c . h a . h b )` or `( idv { . h a } )`, returned a result tied to nothing. Either way the caller read freed memory (a heap-use-after-free). Both are now refused, as they are when the parameter or the field is used by its own name. Still open: a bound block handed back (`: j { . h a } ^ j`), and a closure parameter (Agora #570).
