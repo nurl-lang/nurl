@@ -211,8 +211,8 @@ def Ty.sync : Ty → Bool
   | .arc t => !t.hasCell
   | _ => false
 
-/-- A2-drop.3: a struct or an enum, what `% Drop` is on (a destructor type
-    wraps one of these). -/
+/-- A2-drop.3: a struct or an enum, what `% Drop` is on, or (Agora #609) a
+    closure of the dropping class (a destructor type wraps one of these). -/
 def Ty.isStruct : Ty → Bool
   | .prod _ _ => true
   | .sum _ _ => true
@@ -269,7 +269,8 @@ theorem Ty.hasDtor_of_isStruct {t : Ty} (h : t.isStruct = true) : t.hasDtor = fa
 /-- A2-drop.3b: a value of this type owns no destructor value in its
     tree.  A view owns nothing; a share's payload lives in its block, not in
     the tree of what holds the share (A2-drop.3d), and a closure's
-    environment holds none (A2-drop.3c, `Cross.Fits`). -/
+    environment holds none (A2-drop.3c, `Cross.Fits`) unless the closure is
+    of the dropping class, which is a destructor value itself (Agora #609). -/
 def Ty.dtorFree : Ty → Bool
   | .dtor _ _ => false
   | .vec t => t.dtorFree
@@ -312,7 +313,8 @@ def Ty.ok : Ty → Bool
   -- hands to such a binding: it is drained at its end, element by element, each
   -- running its destructor, `Step.scopeDDrain`; any other `Vec`'s drop
   -- releases its elements, which runs no code and releases no destructor
-  -- value: a share's payload and a closure's environment hold none, 3c, 3d)
+  -- value: a share's payload and the environment of a closure that does not
+  -- drop hold none, 3c, 3d)
   | .vec t => t.ok && !t.vecD && (t.dtorFree || t.hasDtor)
   | .slice t => t.ok && !t.holdsView && !t.vecD
   | .prod a b => a.ok && b.ok
@@ -534,10 +536,10 @@ def PMode.bound : PMode → Eff
 /-- A3.5b: an environment of type `te`, with the bindings `cs` captured by
     name, holds no more than a closure's type says (`Cross`): a Send one holds
     no view and captures nothing by name, a Sync one also no cell share, a
-    bare one no share at all.  A2-drop.3c: and, of any class, no destructor
-    value: a package's drop releases its environment running no code, so an
-    environment that holds one is refused (stricter than nurlc, whose
-    environment drop glue runs the captures' destructors). -/
+    bare one no share at all.  A2-drop.3c: and, of any class but the
+    dropping one (Agora #609), no destructor value: such a package's drop
+    releases its environment running no code.  A package of the dropping
+    class is a destructor value itself, dropped by its glue. -/
 def Cross.Fits (q : Cross) (te : Ty) (cs : List (Var × PMode × Ty)) : Prop :=
   (q.views = false → te.holdsView = false ∧ cs = []) ∧
   (q.cells = false → te.hasCell = false) ∧

@@ -35,3 +35,4 @@ import A2.Soundness
 import A2.DynCell
 import A2.DtorWitness
 import A2.DropCode
+import A2.ClosureDropWitness
