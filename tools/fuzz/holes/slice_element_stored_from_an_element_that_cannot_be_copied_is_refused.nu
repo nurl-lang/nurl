@@ -5,6 +5,7 @@
 $ `stdlib/core/string.nu`
 
 : R { String name }
+
 % Drop R { @ drop R r → v { ( nurl_println `drop R` ) } }
 
 @ main → i {

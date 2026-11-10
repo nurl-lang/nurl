@@ -7,6 +7,7 @@ $ `stdlib/core/string.nu`
 : Rec { String name i n }
 
 @ id_str String p → String { ^ { p } }
+
 @ id_slice [i p → [i { ^ { p } }
 @ field_of Rec p → String { : String w . p name ^ { w } }
 @ first_of [String nn → String { ~ r nn { ^ { r } } ^ ( string_from `none of them, in a string long enough for the heap` ) }

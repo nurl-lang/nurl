@@ -4,9 +4,10 @@
 // map: §7.6 | A2 | runs-clean | - | agora #545: a payload returned out of a match on a binding a call filled was released by the binding too (UAF)
 $ `stdlib/core/string.nu`
 
-: | Msg { Both String  Nil }
+: | Msg { Both String Nil }
 
 @ mk → Msg { ^ @ Msg { Both ( string_from `a long enough string to live on the heap, yes` ) } }
+
 @ second → String {
     : Msg m ( mk )
     ?? m {

@@ -6,6 +6,7 @@ $ `stdlib/core/string.nu`
 : Rec { String name i n }
 
 @ id_str String p → String { ^ { p } }
+
 @ id_slice [i p → [i { ^ { p } }
 @ id_nested String p → String { ^ { { p } } }
 @ field_of Rec p → String { : String w . p name ^ { w } }

@@ -14,7 +14,7 @@ $ `stdlib/core/vec.nu`
 : In { String a i n }
 : Mid { In inner i n }
 : Out { Mid mid String extra }
-: Q2 { ?String a String b }
+: Q2 { ? String a String b }
 : PV { ( Vec String ) a String b }
 : Bx { In x String b }
 : | E { V String String W i }

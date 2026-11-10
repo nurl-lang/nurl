@@ -3,7 +3,7 @@
 // main (before this PR): AddressSanitizer, heap-use-after-free in each shape (and a double free once the holder drops).
 // map: §7.6 | A2 | runs-clean | - | agora #545: an owned slice binding stored into a struct or an enum payload was freed by its name and read through the holder (UAF)
 : Holder { [i items i n }
-: | Box { Full [i  Empty }
+: | Box { Full [i Empty }
 
 @ mk → [i { ^ [i | 1 2] }
 

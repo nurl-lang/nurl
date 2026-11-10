@@ -74,7 +74,7 @@ $ `stdlib/core/vec.nu`
 }
 
 @ option → v {
-    : ~ ?Bomb a @ ?Bomb { T ( bomb `old` 1 ) }
+    : ~ ? Bomb a @ ?Bomb { T ( bomb `old` 1 ) }
     = a @ ?Bomb { T ( bomb `new` 0 ) }
     ( nurl_println `option: not reached` )
 }

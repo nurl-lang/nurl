@@ -1,6 +1,6 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_ret_literal_lent_uncopyable_beside_owned.nu:12:19: error: a borrowed 'R' would have to be copied here, and it cannot be copied — pass or return the value its owner gives up (a 'sink' parameter, or the owner itself), not a borrow of it
+compiler/tests/diag_ret_literal_lent_uncopyable_beside_owned.nu:13:19: error: a borrowed 'R' would have to be copied here, and it cannot be copied — pass or return the value its owner gives up (a 'sink' parameter, or the owner itself), not a borrow of it
 @ mix P h → P { ^ @ P { . h r [i | 9 9] } }
                   ^
 error: aborting due to 1 previous error

@@ -5,8 +5,8 @@
 // the payload the caller had been handed, and the caller read freed memory).
 $ `stdlib/core/string.nu`
 
-: | Msg { Both String  Nil }
-: | Rows { Some [i  None }
+: | Msg { Both String Nil }
+: | Rows { Some [i None }
 
 @ mk → Msg { ^ @ Msg { Both ( string_from `a long enough string to live on the heap, yes` ) } }
 @ second → String {

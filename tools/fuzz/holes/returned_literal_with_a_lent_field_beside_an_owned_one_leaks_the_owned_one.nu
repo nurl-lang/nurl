@@ -12,10 +12,15 @@ $ `stdlib/core/string.nu`
 @ fresh → String { ^ ( string_from `a long enough string to be on the heap, fresh` ) }
 
 @ lent_first P2 h → P2 { ^ @ P2 { . h a ( fresh ) } }
+
 @ own_first P2 h → P2 { ^ @ P2 { ( fresh ) . h b } }
+
 @ all_lent P2 h → P2 { ^ @ P2 { . h a . h b } }
+
 @ variant P2 h → E { ^ @ E { V . h a ( fresh ) } }
+
 @ nested P2 h → Out { ^ @ Out { @ In { . h a 1 } ( fresh ) } }
+
 @ opt P2 h → ?P2 { ^ @ ?P2 { T @ P2 { . h a ( fresh ) } } }
 
 @ show P2 g → v { ( nurl_println ( string_data . g a ) ) ( nurl_println ( string_data . g b ) ) }

@@ -9,7 +9,7 @@ $ `stdlib/core/vec.nu`
 
 : Holder { String name }
 : Rows { [i items }
-: | Msg { One String  Two }
+: | Msg { One String Two }
 
 @ in_literal inout String p → Holder { ^ @ Holder { p } }
 @ in_enum inout String p → Msg { ^ @ Msg { One p } }

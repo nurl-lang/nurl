@@ -16,7 +16,7 @@ $ `stdlib/core/vec.nu`
 @ keep H h → H { ^ h }
 @ keep_v HV h → HV { ^ h }
 @ keep_i HI h → HI { ^ h }
-@ keep_o ?[i h → ?[i { ^ h }
+@ keep_o ? [i h → ?[i { ^ h }
 @ mk → [i { ^ [i | 4 5 6] }
 
 @ main → i {
