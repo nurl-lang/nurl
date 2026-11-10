@@ -53,6 +53,8 @@ import A3
 #print axioms A2.Dtor.vecClearD_typed
 #print axioms A2.Dtor.vecTruncD_typed
 #print axioms A2.DtorWitness.main6_safe
+-- Agora #607: a `Vec` of destructor values as a struct's field, drained through the struct's glue
+#print axioms A2.DtorWitness.main9_safe
 -- A2-drop.3c: no closure or trait-object environment holds a destructor value
 #print axioms A2.Dtor.pack_env_dtor_free
 #print axioms A2.WFv.pkg_env_dtor_free

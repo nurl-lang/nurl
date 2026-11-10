@@ -567,7 +567,7 @@ theorem pres_unpair {P : Prog} {Γ Δ : Ctx} {F : List Var} {y x z : Var} {s : S
       have h0 := hi.tyok hy
       rcases hty with h | ⟨f, h⟩ <;> rw [h] at h0
       · exact Ty.ok_prod h0
-      · simp [Ty.ok, Ty.isStruct] at h0; exact h0.1.1
+      · simp [Ty.ok, Ty.isStruct] at h0; exact h0
     have outx := out_part out hτ hwa (Sub.fst (Sub.refl _)) (fun s u h => hvin s u (ViewIn.fst h))
       (by simp only [ids_pair]; exact List.sublist_append_left _ _) hok.1 (fun u k p h => hain u k p (ArcIn.fst h))
     have outz := out_part out hτ hwb (Sub.snd (Sub.refl _)) (fun s u h => hvin s u (ViewIn.snd h))

@@ -1618,7 +1618,7 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
     exact ⟨_, RhsT.popFront hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab hy]; exact ht)
       (by rw [liftE_mode y hrb]; exact canDo_lift hcan) (h.Fcout y)
       (DtorSafe.canon h (allowed_canDo hab hy ht hcan) hds), fun x => popE_lift h hab hy ht hrb hos x⟩
-  | @pair y z Ey Ez Γa1 Γa2 Dy Dz hy hly hpa1 hz hlz hpa2 hzd hvy hvz =>
+  | @pair y z Ey Ez Γa1 Γa2 Dy Dz hy hly hpa1 hz hlz hpa2 hzd =>
     have hc1 : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
     obtain ⟨D1, hp1, hD1, hD1o⟩ := pushArg_ren h hab hy hpa1
     have hab1 := PushArg.absOK (S := S) hy hpa1 hab
@@ -1640,8 +1640,7 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
         have : d0.root = z := h.inj _ _ hdr
         exact hzd hos' (this ▸ List.mem_map_of_mem hd0)
       · exact A_out h h1 z hdr.symm
-    refine ⟨_, RhsT.pair hc1 (by rw [liftE_live]; exact hly) hp1 hc2 (by rw [liftE_live]; exact hlz) hp2 hzd'
-      (by rw [hty1]; exact hvy) (by rw [hty2]; exact hvz),
+    refine ⟨_, RhsT.pair hc1 (by rw [liftE_live]; exact hly) hp1 hc2 (by rw [liftE_live]; exact hlz) hp2 hzd',
       fun x => ?_⟩
     refine EntryWeaker.mk' (by rw [liftE_ty x (by simp)]; simp [hty1, hty2]) (by simp [liftE, liftMode]) (by simp)
       (by simp [liftE]) (fun h' => by simp [Mode.ownSlot] at h') ?_
@@ -1660,23 +1659,23 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
     have hc : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
     exact ⟨_, RhsT.snd hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab hy]; exact ht),
       fun x => projE_lift h hab hy b x⟩
-  | @inl y b Ey Γa1 D hy hly hpa hb hvy hvb =>
+  | @inl y b Ey Γa1 D hy hly hpa hb =>
     have hc1 : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
     obtain ⟨D1, hp1, hD1, hD1o⟩ := pushArg_ren h hab hy hpa
     have hty1 := liftE_ty' h hab hy
     rw [← hty1] at hp1
-    refine ⟨_, RhsT.inl hc1 (by rw [liftE_live]; exact hly) hp1 hb (by rw [hty1]; exact hvy) hvb, fun x => ?_⟩
+    refine ⟨_, RhsT.inl hc1 (by rw [liftE_live]; exact hly) hp1 hb, fun x => ?_⟩
     refine EntryWeaker.mk' (by rw [liftE_ty x (by simp)]; simp [hty1]) (by simp [liftE, liftMode]) (by simp)
       (by simp [liftE]) (fun h' => by simp [Mode.ownSlot] at h') ?_
     simp only [liftE, reduceCtorEq, ↓reduceIte]
     exact fun d hd => append_sub (List.Subset.refl _)
       (ownHeld_mono (fun h => by simp [Ty.holdsView, h]) _) (hD1o rfl hd)
-  | @inr a y Ey Γa1 D hy hly hpa ha hva hvy =>
+  | @inr a y Ey Γa1 D hy hly hpa ha =>
     have hc1 : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
     obtain ⟨D1, hp1, hD1, hD1o⟩ := pushArg_ren h hab hy hpa
     have hty1 := liftE_ty' h hab hy
     rw [← hty1] at hp1
-    refine ⟨_, RhsT.inr hc1 (by rw [liftE_live]; exact hly) hp1 ha hva (by rw [hty1]; exact hvy), fun x => ?_⟩
+    refine ⟨_, RhsT.inr hc1 (by rw [liftE_live]; exact hly) hp1 ha, fun x => ?_⟩
     refine EntryWeaker.mk' (by rw [liftE_ty x (by simp)]; simp [hty1]) (by simp [liftE, liftMode]) (by simp)
       (by simp [liftE]) (fun h' => by simp [Mode.ownSlot] at h') ?_
     simp only [liftE, reduceCtorEq, ↓reduceIte]
