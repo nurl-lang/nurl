@@ -2275,6 +2275,54 @@ i clang_rc s build_stdout s build_stderr → v {
     ^ r
 }
 
+// A download served from /download/<id>/<file> is attacker-controlled
+// bytes (the build's source, its IR, the compiled artifact) under an
+// attacker-chosen filename, on the playground's own origin. Two things
+// keep a browser from executing it as content:
+//
+//   * Content-Disposition: attachment — the browser saves the file
+//     instead of rendering it inline, so an ELF a caller named `x.html`
+//     is downloaded, not parsed as HTML with its embedded <script> run.
+//   * X-Content-Type-Options: nosniff — the browser trusts the declared
+//     Content-Type and will not sniff the bytes into something active.
+//
+// The filename hint is sanitised to [A-Za-z0-9._-] (every other byte
+// dropped) before it goes into the header, so no CR, LF or quote from a
+// caller-chosen name — an initfs key under __initfs_path_ok permits a
+// quote, and the download routes gate only on __user_rel_ok — can inject
+// a header line or break out of the quoted value. The disposition is
+// `attachment` regardless, so the name is only a convenience.
+@ __set_artifact_download_headers HttpResponse r s filename → v {
+    ( response_set_header r `X-Content-Type-Options` `nosniff` )
+    : ( Slice u ) f_v ( slice_of_str filename )
+    : i fn ( nurl_str_len filename )
+    : String cd ( string_with_cap + 32 fn )
+    ( string_push_str cd `attachment; filename="` )
+    : ~ i k 0
+    ~ < k fn {
+        : i c ( slice_byte f_v k )
+        : b safe | | | | & >= c 97 <= c 122 & >= c 65 <= c 90 & >= c 48 <= c 57 == c 46 | == c 95 == c 45
+        ? safe { ( string_push_char cd c ) } {}
+        = k + k 1
+    }
+    ( string_push_str cd `"` )
+    ( response_set_header r `Content-Disposition` ( string_data cd ) )
+}
+
+// Content-Type for an artifact download: the extension is attacker-chosen
+// and need not reflect the bytes, so a type a browser would render as
+// active markup (HTML, SVG, XML) is downgraded to an inert
+// octet-stream. Defence in depth behind the attachment disposition — a
+// saved-then-opened file, or any future path that drops the header, must
+// still not be live markup. Genuinely inert types (wasm, png, pdf, the
+// octet-stream default for binaries) keep their accurate label.
+@ __artifact_download_mime s mime → s {
+    ? != 0 ( nurl_str_eq mime `text/html; charset=utf-8` ) { ^ `application/octet-stream` } {}
+    ? != 0 ( nurl_str_eq mime `image/svg+xml` ) { ^ `application/octet-stream` } {}
+    ? != 0 ( nurl_str_eq mime `application/xml; charset=utf-8` ) { ^ `application/octet-stream` } {}
+    ^ mime
+}
+
 // Reads <output_dir>/<build_id>/<filename> directly and returns it
 // with the right Content-Type. Replaces an earlier serve_static call
 // whose request-path-based resolution double-prefixed the build dir
@@ -2295,9 +2343,10 @@ i clang_rc s build_stdout s build_stderr → v {
                     ?? rd {
                         T body → {
                             : String ext ( path_extension ( string_data fpath ) )
-                            : s mime ( mime_for_ext ( string_data ext ) )
+                            : s mime ( __artifact_download_mime ( mime_for_ext ( string_data ext ) ) )
                             : HttpResponse r ( response_new 200 )
                             ( response_set_header r `Content-Type` mime )
+                            ( __set_artifact_download_headers r ( string_data fname ) )
                             ( response_set_body_bytes r body )
                             ^ r
                         }
@@ -2364,9 +2413,10 @@ i clang_rc s build_stdout s build_stderr → v {
     ?? rd {
         T body → {
             : String ext ( path_extension ( string_data fpath ) )
-            : s mime ( mime_for_ext ( string_data ext ) )
+            : s mime ( __artifact_download_mime ( mime_for_ext ( string_data ext ) ) )
             : HttpResponse r ( response_new 200 )
             ( response_set_header r `Content-Type` mime )
+            ( __set_artifact_download_headers r ( string_data filename ) )
             ( response_set_body_bytes r body )
             ^ r
         }
@@ -3916,11 +3966,41 @@ i clang_rc s build_stdout s build_stderr → v {
     ^ ok
 }
 
+// Append `val` to `out` as a single POSIX-shell token in single quotes,
+// so it is safe to paste into a shell: nothing inside single quotes is
+// special, so a value like $(…) or `…` cannot start a command
+// substitution and a " cannot break out of its quoting. An embedded
+// single quote is emitted with the classic '\'' idiom (close-quote,
+// backslash-escaped quote, reopen-quote).
+@ __sh_push_sq String out s val → v {
+    : ( Slice u ) v_v ( slice_of_str val )
+    : i n ( nurl_str_len val )
+    ( string_push_char out 39 )
+    : ~ i k 0
+    ~ < k n {
+        : i c ( slice_byte v_v k )
+        ? == c 39 {
+            ( string_push_char out 39 )
+            ( string_push_char out 92 )
+            ( string_push_char out 39 )
+            ( string_push_char out 39 )
+        } {
+            ( string_push_char out c )
+        }
+        = k + k 1
+    }
+    ( string_push_char out 39 )
+}
+
 // The boot command, exactly as unikernel/run_qemu.sh runs it — the
 // flags the guest gate boots 20/20 with. `$(date +%s)` is left for the
 // user's shell to fill (X.509 validity in the guest is checked against
 // the told wallclock), and `args="…"` is the program's argv. The whole
-// string is DISPLAY TEXT — the server never executes it.
+// string is DISPLAY TEXT — the server never executes it, but the caller
+// does: it is handed to them to paste into a shell, so the guest's argv
+// (`args`), which the caller controls, is emitted as a single-quoted
+// token (__sh_push_sq). Without that a value like $(touch /tmp/pwned)
+// would run on the caller's machine the moment they ran the command.
 @ __uk_boot_cmd s arch s elf_name s args b with_net → String {
     : b arm ( __uk_is_arm arch )
     : String c ( string_with_cap 512 )
@@ -3941,11 +4021,17 @@ i clang_rc s build_stdout s build_stderr → v {
     ? arm {} { ( string_push_str c `tsc_khz=1000000 ` ) }
     ( string_push_str c `wallclock=$(date +%s)` )
     ? > ( nurl_str_len args ) 0 {
-        ( string_push_str c ` args=\\"` )
-        ( string_push_str c args )
+        // Close the double-quoted run (so $(date +%s) above still
+        // expands), emit the caller's argv as an inert single-quoted
+        // token, then reattach a literal `"` on each side so the guest
+        // still receives args="…". Concatenated with no spaces, the
+        // three pieces are one shell word.
+        ( string_push_str c ` args=\\""` )
+        ( __sh_push_sq c args )
         ( string_push_str c `\\"` )
-    } {}
-    ( string_push_str c `"` )
+    } {
+        ( string_push_str c `"` )
+    }
     ^ c
 }
 
