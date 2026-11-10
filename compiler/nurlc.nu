@@ -35307,6 +35307,36 @@ unsafe @ __sx_leaf_roots s sx → s {
     ^ out
 }
 
+// …and a call that may drop what o holds in place (`( clr o )`, clr's
+// `?? b { Fullbag xs → ( vec_clear xs ) }`): each payload of o's old value
+// read in place out of it stays, but every borrow taken from it — an
+// element of its Vec, `: String s0 ( vec_at [String] inner 0 )` — points
+// into what the call may drop (agora #424, #569 item 6).
+@ __bck_epy_elems_end s st i o i line s cal → s {
+    : s os ( nurl_str_int o )
+    : ~ s rest ( nurl_sym_get g_bck ( bck_bkey `epy_` os ) )
+    ? == 0 ( nurl_str_len rest ) { ^ ( nurl_str_cat st `` ) } {}
+    : ~ s out ( nurl_str_cat st `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s xs ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i x ( nurl_str_to_int xs )
+        ? & ! ( bck_dead_state ( bck_st_get out x ) ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `hr_` xs ) ) os ) {
+            : s why ( nurl_str_cat4 ( nurl_str_cat3 `it is a payload of '` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` os ) ) `' this '??' arm matched, and '` ) ( bck_name_show ( nurl_sym_get2 g_bck `rv_` os ) ) ( nurl_str_cat3 `' was passed to '` ( bck_fn_show cal ) `'` ) `, which may drop or replace what it holds` )
+            : ~ s brest ( nurl_sym_get g_bck ( bck_bkey `bb_` xs ) )
+            ~ != 0 ( nurl_str_len brest ) {
+                : s bs ( str_first_word brest ) = brest ( str_skip_word brest )
+                : i b ( nurl_str_to_int bs )
+                ? == BCK_BORROWED_SHARED ( bck_st_get out b ) {
+                    = out ( bck_st_set out b BCK_INVALID )
+                    ( bck_put ( bck_bkey `bv_` bs ) ( nurl_str_cat4 ( nurl_str_int line ) ` ` xs ( nurl_str_cat ` ` why ) ) )
+                    = out ( bck_borrow_end out b line ( nurl_str_cat3 `what it borrows from ended (` why `)` ) 1 )
+                } {}
+            }
+        } {}
+    }
+    ^ out
+}
+
 @ __bck_hr_drop_owner i x → v {
     : s xs ( nurl_str_int x )
     : ~ s rest ( nurl_sym_get g_bck ( bck_bkey `hrd_` xs ) )
@@ -40070,8 +40100,13 @@ unsafe @ bck_note_rc_arg s name s ty → v {
         : s ecal ( bck_field rec 5 )
         : s eaix ( bck_field rec 6 )
         // (Only one that replaces it: a callee that empties the payload in
-        // place — vec_clear, string_clear — leaves it where it is.)
-        ? != 0 ( nurl_str_len ( __repl_of ecal eaix ) ) { = out ( __bck_epy_release out rid line ) } {}
+        // place — vec_clear, string_clear — leaves it where it is…)
+        ? != 0 ( nurl_str_len ( __repl_of ecal eaix ) ) { = out ( __bck_epy_release out rid line ) } {
+            // (…but drops what it holds: a borrow taken from the payload, an
+            // element of its Vec, ends with what it borrowed — agora #424,
+            // #569.)
+            ? ( bck_callee_drops_elems ecal eaix ) { = out ( __bck_epy_elems_end out rid line ecal ) } {}
+        }
     } {}
     ? | == 0 g_bck_has_cursor ! ( bck_cursor_watched rid ) { ^ out } {}
     : ~ s rest ( nurl_str_cat ( nurl_sym_get g_bck ( bck_bkey `cul` `` ) ) `` )
