@@ -37,5 +37,5 @@ drop late
 every_one: recovered: tick
 every_one: destructors run: 20000
 chain: no panic
-chain: links dropped: 40000
+chain: links dropped: 4000
 bytes: 1600000

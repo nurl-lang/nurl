@@ -14,8 +14,9 @@
 // the cause — keeps its message. `every_one`: all twenty thousand do;
 // each is caught where the release goes on, so the stack is no deeper
 // than for one. `chain`: no panic at all, a value owning a Vec of its own
-// type, forty thousand deep — the journaled release nests as deep inside
-// a recover extent as the plain one does outside.
+// type, four thousand deep (what a 1 MB stack holds with room to spare) —
+// the journaled release nests as deep inside a recover extent as the
+// plain one does outside.
 
 $ `stdlib/std/panic.nu`
 $ `stdlib/core/string.nu`
@@ -151,7 +152,7 @@ $ `stdlib/core/vec.nu`
     ( survives )
     ( run `every_one` \ → v { ( every_one ) } )
     ( nurl_println ( nurl_str_cat `every_one: destructors run: ` ( nurl_str_int g_ticks ) ) )
-    ( run `chain` \ → v { : Link c ( chain 40000 ) } )
+    ( run `chain` \ → v { : Link c ( chain 4000 ) } )
     ( nurl_println ( nurl_str_cat `chain: links dropped: ` ( nurl_str_int g_links ) ) )
     // The thread's frees are ordinary again after all of that.
     : ~ i k 0
