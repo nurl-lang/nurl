@@ -1,0 +1,19 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+10
+b: the newer defer's own string, long enough for the heap
+4
+8
+5
+103
+1
+45
+44
+40
+46
+5
+99
+30
+4

@@ -453,6 +453,9 @@ set_stmt = '=' IDENT expr
 (* ; { body }
    Executes body when the enclosing function returns.
    Multiple defers run in LIFO order.
+   The body's names are its own: it reads the bindings in scope at the
+   ';', and a name it binds is visible inside the body only (what it
+   binds is released after the last defer has run).
    Example:  ; { ( nurl_sym_pop syms ) } *)
 defer_stmt = ';' block ;
 

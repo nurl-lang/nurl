@@ -1,0 +1,28 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+92
+above: first defer
+47
+above: first defer
+46
+92
+between: first defer
+47
+between: first defer
+92
+outer string long enough for a heap buffer
+1
+inner string long enough for a heap buffer
+outer string long enough for a heap buffer
+0
+1
+46
+2
+37
+39
+many: first defer
+3
+many: first defer
+3
