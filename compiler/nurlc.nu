@@ -36181,7 +36181,13 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 // (Only of an owner's handle, or of such a copy: a copy of an
                 // element borrow, `: ~ H c e` with e a `vec_at`, is the
                 // element's.)
-                ? & | | != 0 ( nurl_str_starts rec `cborrow\t` ) != 0 ( nurl_str_starts rec `tborrow\t` ) != 0 ( nurl_str_starts rec `vcborrow\t` ) ( __bck_hc_srcs st bsrcs ) { ( bck_put ( bck_bkey `hc_` bws ) `1` ) = g_bck_hc_any 1 } {}
+                // (…or a binding of a join or a value block whose arms and
+                // tails are all names, each an owner or such a copy — `: c ?
+                // k cur other`, `? k { cur } { other }`: a copy of the handle
+                // of whichever ran; agora #599.)
+                : s bjsx ? != 0 ( nurl_str_starts rec `borrow\t` ) ( bck_field rec 8 ) ``
+                : b bjoin & & == ( nurl_str_get bjsx 0 ) 123 < ( nurl_str_find bjsx `(` ) 0 < ( nurl_str_find bjsx `*` ) 0
+                ? & | | | bjoin != 0 ( nurl_str_starts rec `cborrow\t` ) != 0 ( nurl_str_starts rec `tborrow\t` ) != 0 ( nurl_str_starts rec `vcborrow\t` ) ( __bck_hc_srcs st ? bjoin ( bck_sx_hpaths bjsx ) bsrcs ) { ( bck_put ( bck_bkey `hc_` bws ) `1` ) = g_bck_hc_any 1 } {}
                 = p + p 1
                 = done T
             } {}
@@ -36218,7 +36224,11 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 ( bck_put ( bck_bkey `oos_` ( bck_field rec 1 ) ) `` )
                 // (A new binding: no copy of an owner's handle until its
                 // borrow row says so — `hc_`, kept through every `=` after.)
-                ? != 0 g_bck_hc_any { ( bck_put ( bck_bkey `hc_` ( bck_field rec 1 ) ) `` ) } {}
+                ? != 0 g_bck_hc_any {
+                    ( bck_put ( bck_bkey `hc_` ( bck_field rec 1 ) ) `` )
+                    : s lhn ( bck_bkey `hcn_` ( bck_field rec 1 ) )
+                    ? != 0 ( nurl_sym_len g_bck lhn ) { ( bck_put lhn `` ) } {}
+                } {}
                 = st ( bck_st_set st ( bck_field_int rec 1 ) BCK_OWNED )
                 // (…and its fields, if a callee took one of the name's before.)
                 ? != 0 g_bck_fmv_any { = st ( __bck_fmv_revive st ( bck_field_int rec 1 ) ) } {}
@@ -36384,6 +36394,23 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                             = g_bck_br_next ? & & == 0 ( nurl_str_len prior ) ! ( seq ( bck_field rec 6 ) `c` ) == BCK_BORROWED_SHARED ( bck_st_get st avid ) ( bck_br_get avn ) -1
                             = st ( bck_borrow_begin st apid ? == 0 ( nurl_str_len prior ) asrc ( nurl_str_cat3 prior ` ` asrc ) )
                             = g_bck_br_next -1
+                            // (An arm of a `:` join, `g`, that is a copy of an
+                            // owner's handle — `: c ? k cur other`: the
+                            // binding is one too, `hc_`, while every borrow
+                            // arm it takes is; an arm that is an element
+                            // borrow makes it no such copy, `hcn_`, whatever
+                            // the other arms are. Agora #599.)
+                            ? ( seq ( bck_field rec 6 ) `g` ) {
+                                : b ahc & != 0 g_bck_hc_any != 0 ( nurl_sym_len g_bck ( bck_bkey `hc_` avn ) )
+                                : s phk ( bck_bkey `hc_` ( nurl_str_int apid ) )
+                                : s pnk ( bck_bkey `hcn_` ( nurl_str_int apid ) )
+                                ? ahc {
+                                    ? == 0 ( nurl_sym_len g_bck pnk ) { ( bck_put phk `1` ) } {}
+                                } {
+                                    ( bck_put pnk `1` )
+                                    ? != 0 ( nurl_sym_len g_bck phk ) { ( bck_put phk `` ) } {}
+                                }
+                            } {}
                         } {
                             // An owner's handle: an assignment moved it
                             // (definitely); one of several a `?` / `??` may
