@@ -32438,16 +32438,18 @@ unsafe @ __vk_union_of s fns s seen b dyn → s {
 // The holders an answer `vk` (`:h>k h>k …`, g_fn_vkeeps) names for source
 // argument `k`: the arguments the callee may leave viewing argument k's
 // own storage, as A2's outHolds names a holder for each source (agora
-// #337).
+// #337) — or only its elements' (`h>^k`, agora #383).
 @ __vk_holders_of s vk i k → s {
     : s suf ( nurl_str_cat `>` ( nurl_str_int k ) )
+    : s sue ( nurl_str_cat `>^` ( nurl_str_int k ) )
     : ~ s out ``
     : ~ s rest ( nurl_str_slice vk 1 - ( nurl_str_len vk ) 1 )
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest ) = rest ( str_skip_word rest )
-        ? != 0 ( nurl_str_ends w suf ) {
-            : s h ( nurl_str_slice w 0 - ( nurl_str_len w ) ( nurl_str_len suf ) )
-            = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat h `` ) ( nurl_str_cat3 out ` ` h )
+        : i sl ? != 0 ( nurl_str_ends w suf ) ( nurl_str_len suf ) ? != 0 ( nurl_str_ends w sue ) ( nurl_str_len sue ) 0
+        ? != sl 0 {
+            : s h ( nurl_str_slice w 0 - ( nurl_str_len w ) sl )
+            ? ! ( str_contains_word out h ) { = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat h `` ) ( nurl_str_cat3 out ` ` h ) } {}
         } {}
     }
     ^ out
@@ -36725,7 +36727,11 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                     // (A `dyn` method one of whose impls is the function walked:
                     // the other impls answer, as for `h>k`.)
                     : b vbh & & == vb0 98 ! vkept0 | & ! vself ( bck_callee_vheld vcal vk ( __vk_row_h vaix ) ) & vvirt ( __vk_others_held vcal vk ( __vk_row_h vaix ) )
-                    : b vkept | vkept0 vbh
+                    // (…or names it only as viewing K's elements' buffers,
+                    // `h>^k`: the holder depends on those — `^`, as a local
+                    // view of an element does; agora #383.)
+                    : b vbe & & vbuf ! vkept0 | & ! vself ( bck_callee_vkeeps_el vcal vk ( __vk_row_h vaix ) ) & vvirt ( __vk_others_keep_el vcal vk ( __vk_row_h vaix ) )
+                    : b vkept | | vkept0 vbh vbe
                     : b vhs | vheld vbh
                     // (…an answer that assumed an impl not walked yet leaves
                     // no view: checked once every walk has run.)
@@ -36737,7 +36743,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                     // a part of — bck_sx_hroots, as a store into it lands;
                     // agora #391.)
                     : s vlr ? & vcx vpair ( __bck_store_roots st ( bck_sx_hroots ( nurl_str_slice vc0 1 - ( nurl_str_len vc0 ) 1 ) ) `` ) ``
-                    ? & & & & vbuf | ! ( seq vc `-` ) != 0 ( nurl_str_len vlr ) vkept0 == vb0 66 ! ( bck_callee_keeps vcal vk ) {
+                    ? & & & & vbuf | ! ( seq vc `-` ) != 0 ( nurl_str_len vlr ) | vkept0 vbe == vb0 66 ! ( bck_callee_keeps vcal vk ) {
                         ( bck_diag_vbuf_temp ? vcx ( nurl_str_to_int ( str_first_word vlr ) ) ( bck_path_root ( nurl_str_to_int vc ) ) vcal ( nurl_str_to_int vk ) ( bck_field_int rec 3 ) )
                     } {}
                     // (…one lent out of a binding only by a callee that changes
@@ -36752,7 +36758,9 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                         // (Into a closure's capture or `inout` parameter: refused.)
                         : s vcc ? vcx ( nurl_str_cat `` `` ) ( nurl_sym_get g_bck ( bck_bkey `cc_` ( nurl_str_int ( bck_path_root ( nurl_str_to_int vc ) ) ) ) )
                         = g_bck_cv_leaf ? | == 0 ( nurl_str_len vcc ) ( seq vcc `v` ) 0 1
-                        : s vs ? vhs ( __src_drop_handles ( bck_sx_arg_held st ( bck_field rec 8 ) vcal vk vheld ) ) ? vbuf ( bck_sx_arg_sources st ( bck_field rec 8 ) ) ( __src_drop_handles ( bck_sx_sources st ( bck_field rec 8 ) -1 ) )
+                        : s vs0 ? vhs ( __src_drop_handles ( bck_sx_arg_held st ( bck_field rec 8 ) vcal vk vheld ) ) ? vbuf ( bck_sx_arg_sources st ( bck_field rec 8 ) ) ( __src_drop_handles ( bck_sx_sources st ( bck_field rec 8 ) -1 ) )
+                        // (An element pair's: the argument's elements, `^`.)
+                        : s vs ? & vbe ! ( seq vs0 `*` ) ? vbh ( __word_union vs0 ( __src_as_elems ( bck_sx_arg_sources st ( bck_field rec 8 ) ) ) ) ( __src_as_elems vs0 ) ( nurl_str_cat vs0 `` )
                         = g_bck_cv_leaf 0
                         // (…a plain parameter's: a capture's view, stored whole
                         // or not — the leaves a capture or its local stands
@@ -37643,6 +37651,19 @@ unsafe @ bck_ret_drop_check s st i line → v {
                     ? & >= k 0 >= h 0 { ( __vk_acc_add h k ) } {}
                 } {}
             }
+            // (…and a view of another parameter's ELEMENTS' buffers, `vdi_`
+            // — `: String e ( vec_at arena n )  ( vec_push idx ( string_data
+            // e ) )` — or a copy of the handle in one, `vdn_`: `h>^k`. The
+            // caller's holder then depends on the argument's elements, ended
+            // as a local view of them is — the elements dropped or replaced,
+            // or one's own buffer moving — and not by the argument's own
+            // buffer moving (agora #383).)
+            : i hh1 ( str_word_index pl cn )
+            ? >= hh1 0 {
+                : ~ s esrcs ( __word_drop_all ( nurl_sym_get g_bck ( bck_bkey `vdi_` cis ) ) ( nurl_sym_get g_bck ( bck_bkey `vdh_` cis ) ) )
+                ? != 0 g_bck_hn_any { = esrcs ( __word_union esrcs ( nurl_sym_get g_bck ( bck_bkey `vdn_` cis ) ) ) } {}
+                ( __vk_note_el hh1 cis esrcs )
+            } {}
         }
     }
 }
@@ -37657,6 +37678,34 @@ unsafe @ bck_ret_drop_check s st i line → v {
         : s xr ( nurl_str_int ( bck_path_root ( nurl_str_to_int x ) ) )
         ? | == 0 ( nurl_sym_len g_bck ( bck_bkey `pp_` xr ) ) != 0 ( nurl_sym_len g_bck ( bck_bkey `po_` xr ) ) { ^ F } {}
     }
+    ^ T
+}
+
+// The `h>^k` pairs of this function's answer for parameter `h` (`hs` its
+// id) given the sources `esrcs` (plain ids) it holds only through an
+// element: each one rooted at another parameter the caller passed.
+@ __vk_note_el i h s hs s esrcs → v {
+    : s pl ( nurl_sym_get g_bck `vkparams` )
+    : ~ s rest ( nurl_str_cat esrcs `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s x ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s rs ( nurl_str_int ( bck_path_root ( nurl_str_to_int x ) ) )
+        ? & & ! ( seq rs hs ) != 0 ( nurl_sym_len g_bck ( bck_bkey `pp_` rs ) ) == 0 ( nurl_sym_len g_bck ( bck_bkey `po_` rs ) ) {
+            : i k ( str_word_index pl ( nurl_sym_get2 g_bck `rv_` rs ) )
+            ? >= k 0 { ( __vk_acc_add_el h ( nurl_str_int k ) ) } {}
+        } {}
+    }
+}
+
+// One `h>^k` pair (parameter h views parameter k's elements' buffers);
+// whether it was new. (Not where `h>k` is: that one is stronger.)
+@ __vk_acc_add_el i h s k → b {
+    : s acc ( nurl_sym_get g_bck `vkacc` )
+    : s hs ( nurl_str_int h )
+    ? ( str_contains_word acc ( nurl_str_cat3 hs `>` k ) ) { ^ F } {}
+    : s ks ( nurl_str_cat4 hs `>` `^` k )
+    ? ( str_contains_word acc ks ) { ^ F } {}
+    ( bck_put `vkacc` ? == 0 ( nurl_str_len acc ) ( nurl_str_cat ks `` ) ( nurl_str_cat3 acc ` ` ks ) )
     ^ T
 }
 
@@ -37696,7 +37745,10 @@ unsafe @ bck_ret_drop_check s st i line → v {
             : i h3 ( nurl_str_find t2 `#` )
             : i line ( nurl_str_to_int ( nurl_str_slice t2 0 h3 ) )
             : s srcs ( bck_swap_char ( nurl_str_slice t2 + h3 1 - - ( nurl_str_len t2 ) h3 1 ) 44 32 )
-            ? ( str_contains_word ( nurl_sym_get g_bck `vkacc` ) ( nurl_str_cat3 ( nurl_str_int hh ) `>` k ) ) {
+            // (…or only its elements', `h>^k`: carried on as that, agora #383.)
+            : b kown ( str_contains_word ( nurl_sym_get g_bck `vkacc` ) ( nurl_str_cat3 ( nurl_str_int hh ) `>` k ) )
+            : b kel & ! kown & != 37 ( nurl_str_get k 0 ) ( str_contains_word ( nurl_sym_get g_bck `vkacc` ) ( nurl_str_cat4 ( nurl_str_int hh ) `>` `^` k ) )
+            ? | kown kel {
                 : b cpar != 0 ( nurl_sym_len g_bck ( bck_bkey `pp_` cr ) )
                 : i ci ( str_word_index pl ( nurl_sym_get2 g_bck `rv_` cr ) )
                 ? ( seq srcs `!` ) { ( bck_diag_vbuf_temp ( nurl_str_to_int cr ) g_bck_fn ( nurl_str_to_int k ) line ) } {
@@ -37713,7 +37765,7 @@ unsafe @ bck_ret_drop_check s st i line → v {
                                 ? & & cpar >= ci 0 ! ( seq xph ( nurl_str_int ci ) ) { ? ( __vk_acc_add_held ci xph ) { = changed T } {} } {}
                             } {
                                 : i xi ( str_word_index pl ( nurl_sym_get2 g_bck `rv_` xr ) )
-                                ? & & cpar >= xi 0 >= ci 0 { ? ( __vk_acc_add ci xi ) { = changed T } {} } {}
+                                ? & & cpar >= xi 0 >= ci 0 { ? ? kel ( __vk_acc_add_el ci ( nurl_str_int xi ) ) ( __vk_acc_add ci xi ) { = changed T } {} } {}
                             }
                         } { ? ! ( bck_id_is_global ( nurl_str_to_int xr ) ) { ( bck_diag_vbuf_self ( nurl_str_to_int cr ) ( nurl_str_to_int xr ) ( nurl_str_to_int k ) line ) } {} }
                     }
@@ -37779,7 +37831,9 @@ unsafe @ __vk_assumptions_check → v {
         // of what argument k holds.)
         : s vws ? == 0 ( nurl_str_len vk ) `` ( nurl_str_slice vk 1 - ( nurl_str_len vk ) 1 )
         : b hpair & != 37 ( nurl_str_get k 0 ) ( str_contains_word vws ( nurl_str_cat4 h `>` `%` k ) )
-        ? | | == 0 ( nurl_str_len vk ) ( str_contains_word vws ( nurl_str_cat3 h `>` k ) ) hpair {
+        // (…or viewing its elements' buffers, `h>^k`: agora #383.)
+        : b epair & != 37 ( nurl_str_get k 0 ) ( str_contains_word vws ( nurl_str_cat4 h `>` `^` k ) )
+        ? | | | == 0 ( nurl_str_len vk ) ( str_contains_word vws ( nurl_str_cat3 h `>` k ) ) hpair epair {
             : s cn ( bck_fn_show cal )
             // (`%k`: a copy of what argument k holds, not its storage.)
             : b kh | == 37 ( nurl_str_get k 0 ) & hpair ! ( str_contains_word vws ( nurl_str_cat3 h `>` k ) )
@@ -37805,6 +37859,33 @@ unsafe @ __vk_assumptions_check → v {
     : s vk ( __vk_of_d cal ( nurl_str_cat g_bck_fn `` ) )
     ? == 0 ( nurl_str_len vk ) { ^ T } {}
     ^ ( str_contains_word ( nurl_str_slice vk 1 - ( nurl_str_len vk ) 1 ) ( nurl_str_cat3 ( nurl_str_int h ) `>` aix ) )
+}
+
+// …a view of its elements' buffers only (`h>^aix`, agora #383)? Asked
+// where bck_callee_vkeeps says not: one not answered yet is taken to keep
+// the argument's own storage, which is stronger.
+@ bck_callee_vkeeps_el s cal s aix i h → b {
+    : s vk ( __vk_of cal )
+    ? == 0 ( nurl_str_len vk ) { ^ F } {}
+    ^ ( str_contains_word ( nurl_str_slice vk 1 - ( nurl_str_len vk ) 1 ) ( nurl_str_cat4 ( nurl_str_int h ) `>` `^` aix ) )
+}
+
+// …and for a `dyn` method one of whose impls is the function walked: the
+// other impls' answers (__vk_others_keep; not known yet: they keep the
+// storage itself, which that answers).
+@ __vk_others_keep_el s cal s aix i h → b {
+    : s vk ( __vk_of_d cal ( nurl_str_cat g_bck_fn `` ) )
+    ? == 0 ( nurl_str_len vk ) { ^ F } {}
+    ^ ( str_contains_word ( nurl_str_slice vk 1 - ( nurl_str_len vk ) 1 ) ( nurl_str_cat4 ( nurl_str_int h ) `>` `^` aix ) )
+}
+
+// The sources `srcs` of an argument (bck_sx_arg_sources), each as reached
+// only through an element (`^id`): what a holder left viewing the
+// argument's elements' buffers depends on.
+@ __src_as_elems s srcs → s {
+    ? ( seq srcs `*` ) { ^ ( nurl_str_cat srcs `` ) } {}
+    : s pl ( __src_plain srcs )
+    ^ ( __src_mark pl pl )
 }
 
 // May `cal` leave a view of its argument `aix`'s own storage in another
@@ -38918,6 +38999,11 @@ unsafe @ bck_sx_is_id s e → b {
     ? != 0 g_bck_held_any { ( __vk_note_held h ( __word_drop_all ( __src_plain srcs0 ) ( __src_handle srcs0 ) ) ) } {}
     // (…and a field of the parameter itself, `h>.rel`: agora #584.)
     ? != 0 g_bck_has_paths { ( __vk_note_self h hr srcs0 ) } {}
+    // (…and another parameter's elements' buffers, `^k` (or a copy of the
+    // handle in one, `~^k`): `h>^k`, agora #383.)
+    : ~ s er ( __src_indirect srcs0 )
+    ? != 0 g_bck_hn_any { = er ( __word_union er ( __src_hind srcs0 ) ) } {}
+    ? != 0 ( nurl_str_len er ) { ( __vk_note_el h hr er ) } {}
 }
 
 // Parameter `h` (root id `hr`) given sources `srcs0` that are fields of its
