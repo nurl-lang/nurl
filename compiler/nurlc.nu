@@ -16519,6 +16519,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         // `. . b x items` → `b.x.items`): a call may lend part of it or drop
         // what the field holds (the `pendfield` row below).
         : ~ s arg_froot ``
+        : ~ s arg_vfroot ``
         ? is_inout_arg
         { ? == bck_arg_tt TT_DOT
             {  // `inout` field target — `. obj field`.
@@ -16717,6 +16718,11 @@ unsafe @ gen_call i lex i syms i cg → s {
             = arg_faddr ? == bck_arg_tt TT_DOT ( nurl_sym_get syms `__last_field_addr__` ) ``
             // (A field that holds storage: one a borrow can be taken from.)
             ? & & == bck_arg_tt TT_DOT != 0 g_borrowck | ( __is_handle_ty at ) ( __type_needs_drop at syms ) { = arg_froot ( nurl_str_cat g_member_path `` ) } {}
+            // (…and a view field — a Slice, an `s`, a struct of views: no
+            // storage of its own, but what a callee lends out of it points
+            // into what it views, the binding's view sources. Its row is
+            // the call's `pendvf`, below; agora #566.)
+            ? & & & == bck_arg_tt TT_DOT != 0 g_borrowck == 0 ( nurl_str_len arg_froot ) == ( bck_walk_class at ) 2 { = arg_vfroot ( nurl_str_cat g_member_path `` ) } {}
             ? == arg_idx 0 { = __arg0_path ( nurl_str_cat arg_froot `` ) } {}
             // A binding that borrowed a struct field (`: d . p data`) consumed
             // here takes that field over too.
@@ -18178,6 +18184,9 @@ unsafe @ gen_call i lex i syms i cg → s {
             ( bck_stash_store arg_froot ( nurl_lex_line lex ) __rc ( nurl_str_int arg_idx ) `pendfield` )
             ( __clo_effect_note arg_froot __rc arg_idx )
             ( __drop_note_via syms arg_froot __rc arg_idx at )
+        } {}
+        ? & & != 0 ( nurl_str_len arg_vfroot ) __row_callee ( bck_sound ) {
+            ( bck_stash_store arg_vfroot ( nurl_lex_line lex ) __rc ( nurl_str_int arg_idx ) `pendvf` )
         } {}
         // A call made as this argument that lends from a binding — `( vec_push
         // [i] ( rc_get [( Vec i )] r ) x )`, an Rc's payload: what this call
@@ -33121,7 +33130,7 @@ unsafe @ bck_kc i idx → i {
     ? == c 98 { ^ ? ( seq k `borrow` ) 7 ? ( seq k `brk` ) 21 ? ( seq k `block` ) 23 0 } {}
     ? == c 102 { ^ ? ( seq k `fieldset` ) 8 ? ( seq k `fevar` ) 35 ? ( seq k `fborrow` ) 7 ? ( seq k `fborrowh` ) 7 0 } {}
     ? == c 116 { ^ ? ( seq k `take` ) 37 ? ( seq k `tborrow` ) 7 ? ( seq k `tryret` ) 39 0 } {}
-    ? == c 112 { ^ ? ( seq k `pendcall` ) 9 ? ( seq k `pendretain` ) 10 ? ( seq k `pendtake` ) 11 ? ( seq k `pendkeep` ) 12 ? ( seq k `pendfield` ) 13 ? ( seq k `pendstore` ) 15 ? ( seq k `pendeff` ) 32 ? ( seq k `pendlend` ) 32 ? ( seq k `pendjoin` ) 32 ? ( seq k `pendfx` ) 38 ? ( seq k `pendfc` ) 38 ? ( seq k `pendread` ) 40 0 } {}
+    ? == c 112 { ^ ? ( seq k `pendcall` ) 9 ? ( seq k `pendretain` ) 10 ? ( seq k `pendtake` ) 11 ? ( seq k `pendkeep` ) 12 ? ( seq k `pendfield` ) 13 ? ( seq k `pendstore` ) 15 ? ( seq k `pendeff` ) 32 ? ( seq k `pendlend` ) 32 ? ( seq k `pendjoin` ) 32 ? ( seq k `pendfx` ) 38 ? ( seq k `pendfc` ) 38 ? ( seq k `pendread` ) 40 ? ( seq k `pendvf` ) 41 0 } {}
     ? == c 115 { ^ ? ( seq k `store` ) 14 0 } {}
     ? == c 120 { ^ ? ( seq k `xfer` ) 16 0 } {}
     ? == c 99 { ^ ? ( seq k `cdep` ) 17 ? ( seq k `cmove` ) 18 ? ( seq k `cnt` ) 22 ? ( seq k `cond` ) 25 ? ( seq k `callx` ) 31 ? ( seq k `clox` ) 34 ? ( seq k `cborrow` ) 7 0 } {}
@@ -36439,6 +36448,17 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 = p + p 1
                 = done T
             } {}
+            ? & ! done == kc 41 {
+                // A view field of a binding handed to a call that lends it
+                // (`( slice_at [S] . h z 0 )`): the binding this line binds
+                // borrows what the field views (`:v`, bck_take_plend). The
+                // field holds no storage, so nothing else of a `pendfield`
+                // row's applies (agora #566).
+                : s vfc ( bck_field rec 5 )
+                ? ( mem_fn_lends_arg vfc ( bck_field rec 6 ) ) { ( bck_plend_add ( bck_field rec 1 ) vfc `:v` ( bck_field rec 3 ) ) } {}
+                = p + p 1
+                = done T
+            } {}
             ? & ! done == kc 13 {
                 // A field of a binding handed to a call (`( vec_at . b items
                 // 0 )`): when the callee lends that argument, the binding
@@ -38575,7 +38595,10 @@ unsafe @ bck_sx_is_id s e → b {
         // (`:p`: the call's pointer result points into it — a view's only.)
         : i wpc ( nurl_str_find wc0 `:` )
         : s wc ? < wpc 0 ( nurl_str_cat wc0 `` ) ( nurl_str_slice wc0 0 wpc )
-        ? & >= wpc 0 == 0 ( nurl_sym_len g_bck ( bck_bkey `vw_` ( nurl_str_int wid ) ) ) { continue } {}
+        // (`:v`: lent out of a view field, `pendvf` — it points into what
+        // the field views, agora #566.)
+        : b wvf & >= wpc 0 ( seq ( nurl_str_slice wc0 + wpc 1 - - ( nurl_str_len wc0 ) wpc 1 ) `v` )
+        ? & & >= wpc 0 ! wvf == 0 ( nurl_sym_len g_bck ( bck_bkey `vw_` ( nurl_str_int wid ) ) ) { continue } {}
         ? & & != 0 ( nurl_str_len callee ) != 0 ( nurl_str_len wc ) ! ( seq wc callee ) { continue } {}
         // A number holds nothing to borrow from.
         ? ( bck_holds_nothing w ) { continue } {}
@@ -38601,7 +38624,14 @@ unsafe @ bck_sx_is_id s e → b {
             ? != 0 ( nurl_str_len ab ) { = g_sxe_arc ( nurl_str_to_int ab ) } {}
         } {}
         ? ! ( bck_dead_state v ) {
-            : s add ? == v BCK_BORROWED_SHARED ( nurl_sym_get g_bck ( bck_bkey `bs_` ( nurl_str_int wr ) ) ) ( nurl_str_cat w `` )
+            : ~ s add ? == v BCK_BORROWED_SHARED ( nurl_sym_get g_bck ( bck_bkey `bs_` ( nurl_str_int wr ) ) ) ( nurl_str_cat w `` )
+            // (…the sources the binding's views depend on, and, when it
+            // views its own storage, the binding itself: `vsv_`.)
+            ? & wvf == v BCK_OWNED {
+                : s wrs ( nurl_str_int wr )
+                = add ( __word_union add ( __src_plain ( nurl_sym_get g_bck ( bck_bkey `vds_` wrs ) ) ) )
+                ? != 0 ( nurl_sym_len g_bck ( bck_bkey `vsv_` wrs ) ) { = add ( __word_union add wrs ) } {}
+            } {}
             = srcs ? == 0 ( nurl_str_len srcs ) ( nurl_str_cat add `` ) ( nurl_str_cat3 srcs ` ` add )
         } {}
     }
@@ -39717,6 +39747,36 @@ unsafe @ bck_note_rc_arg s name s ty → v {
     ? ! ( str_contains_word g_bck_rcty w ) { = g_bck_rcty ? == 0 ( nurl_str_len g_bck_rcty ) w ( nurl_str_cat3 g_bck_rcty ` ` w ) } {}
 }
 
+// The Rc type the call's argument `wn` (root `wroot`) reaches: its own,
+// or, for a borrow — a payload lent out of a share, `: ( Vec S ) va (
+// rc_get . h a )`, a join or a value block of such — the type of a share
+// it borrows from. What the call drops through it is that Rc's payload,
+// which another share of the type may reach (agora #566).
+@ __bck_rc_type_via s st s wn i wroot → s {
+    : s own ( bck_rc_type_of ( nurl_sym_get2 g_bck `rv_` wn ) )
+    ? | != 0 ( nurl_str_len own ) < wroot 0 { ^ own } {}
+    ? != BCK_BORROWED_SHARED ( bck_st_get st wroot ) { ^ own } {}
+    : ~ s rest ( __src_plain ( nurl_sym_get g_bck ( bck_bkey `bs_` ( nurl_str_int wroot ) ) ) )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s t ( bck_rc_type_of ( nurl_sym_get2 g_bck `rv_` w ) )
+        ? != 0 ( nurl_str_len t ) { ^ t } {}
+    }
+    ^ own
+}
+
+// …and how a diagnostic names it: itself, or `'va', lent out of '. h a'`.
+@ __bck_rc_arg_show s st s wn i wroot → s {
+    : s me ( nurl_str_cat3 `'` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` wn ) ) `'` )
+    ? | != 0 ( nurl_str_len ( bck_rc_type_of ( nurl_sym_get2 g_bck `rv_` wn ) ) ) < wroot 0 { ^ ( nurl_str_cat me `,` ) } {}
+    : ~ s rest ( __src_plain ( nurl_sym_get g_bck ( bck_bkey `bs_` ( nurl_str_int wroot ) ) ) )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? != 0 ( nurl_str_len ( bck_rc_type_of ( nurl_sym_get2 g_bck `rv_` w ) ) ) { ^ ( nurl_str_cat4 me `, lent out of '` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` w ) ) `',` ) } {}
+    }
+    ^ ( nurl_str_cat me `,` )
+}
+
 // The Rc type `name` was seen holding in this function, or ``.
 @ bck_rc_type_of s name → s {
     ? == 0 ( nurl_str_len g_bck_rcty ) { ^ `` } {}
@@ -39871,13 +39931,18 @@ unsafe @ bck_note_rc_arg s name s ty → v {
         // Another handle of the same `( Rc T )` type, which may be the same
         // value: what the call drops through it is what this borrows from.
         ? & & & == 0 ( nurl_str_len why ) ! hit >= wid 0 | | | == kc 9 == kc 12 == kc 13 == kc 32 {
-            : s wty ( bck_rc_type_of ( nurl_sym_get2 g_bck `rv_` wn ) )
+            : s wty ( __bck_rc_type_via out wn wroot )
             // (…of another binding, or another field of the same one that a
             // path-precise row did not reach: two shares of one Rc may sit
             // in sibling fields, `. h a` and `. h z` — formal's #1679 review.)
-            ? & & != 0 ( nurl_str_len wty ) | != rid wroot wfield ( seq wty ( bck_rc_type_of ( nurl_sym_get2 g_bck `rv_` srcs ) ) ) {
+            // (A borrow lent out of a share, reaching this source through
+            // that very share: no other handle, its own rows reach it —
+            // `: GrpcClientImpl cl ( rc_get . . call client a )` handing
+            // `. cl transport` on does not end cl, agora #566.)
+            : b wsame & & | != rid wroot wfield != 0 ( nurl_str_len wty ) & == 0 ( nurl_str_len ( bck_rc_type_of ( nurl_sym_get2 g_bck `rv_` wn ) ) ) & >= wroot 0 ( str_contains_word ( __src_plain ( nurl_sym_get g_bck ( bck_bkey `bs_` ( nurl_str_int wroot ) ) ) ) srcs )
+            ? & & & != 0 ( nurl_str_len wty ) | != rid wroot wfield ! wsame ( seq wty ( bck_rc_type_of ( nurl_sym_get2 g_bck `rv_` srcs ) ) ) {
                 ? ( bck_callee_drops_elems ( bck_field rec 5 ) ( bck_field rec 6 ) ) {
-                    = why ( nurl_str_cat4 `'` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` wn ) ) `', which may be another handle on the same Rc value, was passed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) `', which may drop or replace what it holds` ) )
+                    = why ( nurl_str_cat4 ( __bck_rc_arg_show out wn wroot ) ` which may be another handle on the same Rc value, was passed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) `', which may drop or replace what it holds` ) `` )
                     = eonly T
                 } {
                     // …or move its buffer: the views of it end (agora #169),
@@ -39886,7 +39951,7 @@ unsafe @ bck_note_rc_arg s name s ty → v {
                     // `: ( Vec i ) p ( rc_get r )` then `( slice_from_vec p )`
                     // points into the buffer the call moves.
                     ? ( nurl_sym_has_word g_fn_reallocs ( bck_field rec 5 ) ( bck_field rec 6 ) ) {
-                        : s rcw ( nurl_str_cat4 `'` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` wn ) ) `', which may be another handle on the same Rc value, was passed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) `', which may move or free its buffer` ) )
+                        : s rcw ( nurl_str_cat4 ( __bck_rc_arg_show out wn wroot ) ` which may be another handle on the same Rc value, was passed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) `', which may move or free its buffer` ) `` )
                         = out ( bck_view_end_ind ( bck_view_end out sid ( bck_field_int rec 3 ) rcw ) sid ( bck_field_int rec 3 ) rcw )
                     } {}
                 }
