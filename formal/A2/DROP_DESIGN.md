@@ -100,10 +100,10 @@ A2-drop.3b; A2-drop.3a's rule looked one level down only).
   destructor at once, and binds the new one with `letd`. This is stricter
   than nurlc, which assigns in place.
 - **`free` takes only a `Vec`** (`E.ty = .vec t`), and a destructor wraps
-  only a struct or an enum. Since A2-drop.3b `free` asks elements that own
+  only a struct, an enum or (Agora #609) a closure of the dropping class. Since A2-drop.3b `free` asks elements that own
   no destructor value (`t.dtorFree`), so what it releases runs no
-  destructor (no share's payload and no environment holds a destructor
-  value since A2-drop.3c and 3d).
+  destructor (no share's payload and no environment of a closure that
+  does not drop holds a destructor value since A2-drop.3c and 3d).
 - **A `Vec` of destructor values is drained** (A2-drop.3b). `letd x f r s`
   binds one too (`LetdTy`: `r`'s type is `vec (dtor f u)`, `u` holding no
   views), and its `scopeD x f` frame's end takes the elements out in index
@@ -151,9 +151,9 @@ destructor): a `Vec` of destructor values as an element or a shared payload
 an enum's payload is typed since Agora #607: glue hands it to a `letd`,
 which drains it); one whose elements hold views
 (`LetdTy`); and `vec_set` over an element and `withElem` (`vec_free`,
-`vec_clear` and `vec_truncate` are typed code, `A2/DropCode.lean`). And, since A2-drop.3c and 3d: a closure's or
-trait object's environment that holds a destructor value (`Cross.Fits`),
-and a share whose payload owns one (`Ty.ok`). The result moved from its slot into a local
+`vec_clear` and `vec_truncate` are typed code, `A2/DropCode.lean`). And, since A2-drop.3c and 3d: a share whose payload owns a destructor
+value (`Ty.ok`), and a trait object whose box holds one (a closure whose
+environment holds one is of the class `dropd`, dropped by its glue, Agora #609). The result moved from its slot into a local
 before a panic (`pair res w`, a destructor value two levels down) is a
 `letd`'s, since `Ty.holdsDtor` is deep: `letv` refuses it, and the
 `letd`'s scope runs its glue on the unwind.
@@ -470,8 +470,8 @@ destructor* above), with the struct glue as the struct's own destructor
 and `assign` of a destructor value refused instead of `dropCode`. Of
 A2-drop.3b, a `Vec` of destructor values is mechanized as a binding's own
 type and as a field or a payload (the drain, Agora #542, #607; *Staging* below says what is left). Of 3c, the refusal
-is mechanized (no environment holds a destructor value, Agora #543); the
-environment's and a block's payload's drop as code are designed here; not mechanized. Until they are, `CLAIM.md`'s
+(Agora #543) and the environment's drop as code (Agora #609) are
+mechanized; a block's payload's drop as code is designed here; not mechanized. Until they are, `CLAIM.md`'s
 *Destructors* section lists where the calculus releases a destructor value
 without running it.
 
@@ -488,7 +488,7 @@ made it:
 | a struct field, at the struct's drop | the field's destructor, inside the struct's glue | the glue takes the struct apart, the field in a `letd` frame (Agora #616) |
 | a `Vec` element: `vec_pop` dropped, `truncate`, `clear`, `vec_set` over it, the Vec freed | each element's destructor | the drain at the end of a binding's own `Vec` (A2-drop.3b); free, clear and truncate as code (`A2/DropCode.lean`), `vec_set` refused; a popped element is a `letd`'s |
 | an enum or option payload | the payload's destructor | the enum's glue moves the payload out to a `letd` frame (Agora #632) |
-| a closure's or a trait object's environment | the captures' destructors | refused: no environment holds a destructor value (A2-drop.3c, `Cross.Fits`) |
+| a closure's or a trait object's environment | the captures' destructors | the closure's glue calls its drop method, whose code takes the environment owned and binds it under `letd`s (Agora #609, `ClosureGlueOK`, `Step.callcD`); it is called lent, through its binding or a borrow of the destructor type (Agora #651); a method that changes the environment is refused for the class |
 | a panic's unwind through any of these | the journal runs each, once | `scopeP` frees in one step, except at `scopeD` |
 | an `Arc` / lock block's payload when its last share goes (A3) | on the thread that drops the last share | refused: no payload owns a destructor value (A2-drop.3d, `Ty.ok`) |
 
@@ -689,11 +689,11 @@ each one shrinks `CLAIM.md`'s exception:
        once (`vecFreeD_typed`), `vec_clear` a loop of `popFront`s into a
        `letd` (`vecClearD_typed`), `vec_truncate` a loop of `pop`s
        (`vecTruncD_typed`; last first, where nurlc goes in index order).
-3. **A2-drop.3c: environments** (first cut done, Agora #543).
+3. **A2-drop.3c: environments** (the refusal, Agora #543; the drop as code, Agora #609).
    - **Built: the refusal.** `Cross.Fits` asks an environment type to hold
-     no destructor value, of every class but `dropd` (Agora #609's
-     preparation: the class of a closure that is a destructor value
-     itself, which no rule binds yet), so `RhsT.pack` types no such
+     no destructor value, of every class but `dropd` (Agora #609: the
+     class of a closure that is a destructor value itself), so
+     `RhsT.pack` types no such
      literal (`A2.Dtor.pack_env_dtor_free`) and `WFv.pkg` carries it for
      every package in memory: in an owner's tree
      (`A2.Dtor.pkgs_env_dtor_free`) and in a block's payload
@@ -701,36 +701,38 @@ each one shrinks `CLAIM.md`'s exception:
      milestone refused a `Vec` of destructor values before the drain was
      built, this closes the gap (a destructor silently not run) at the
      price of an item in `CLAIM.md`'s stricter-than-nurlc list.
-   - **Left: the environment's drop as code.** The plan, settled against
-     the calculus as it is now:
-     - *The type.* `Ty.fn ms q` does not name its environment's type (the
-       value does: `.pkg fs te ms env cs`). So a package whose environment
-       is a destructor value is typed at `Ty.dtor g (.fn ms q)`: a
-       destructor type over a closure type (`Ty.ok` / `WFv.dtor` ask a
-       struct, an enum **or a closure type** then), which `letv` refuses
-       and `letd` binds (`LetdTy`'s moved-in case), as it binds a struct
-       holding a destructor value. `RhsT.pack` gives that type when
-       `te = .dtor g u`, with `q.views = false` (`letd`'s `hasFn = false`);
-       calls go through the type (`Ec.ty.undtor = .fn ms q`, as `fst` /
-       `snd` read a destructor struct's fields).
-     - *The step.* At the frame's end `scopeD x g .skip`, `x` owning
-       `.pkg fs te ms env []`: the package is unwrapped, `x`'s slot takes
-       `env` and the frame is at its end again, now a destructor value's
-       (`scopeDEnd` runs `g` on it lent, then frees it). A third shape
-       beside "no node" and "node" (`Val.isNode`): a statement rewrite, as
-       the drain's is. A panic with `x` owning a package unwraps the same
-       way before the destructor runs.
-     - *The link the proof needs.* The frame's typing knows `g`; that the
-       value's `te` is `g`'s parameter type `.dtor g u` must come from the
-       invariant. `WFv` has no program, so it is a code fact: `Rhs.codeOK`
-       of a `pack` whose `te` is `.dtor g u` asks `P[g]`'s parameter to be
-       `te` (`ProgCodes`, `MemCodes`, which `preserve` already carries), and
-       `WFv (.dtor g (.fn ms q)) (.pkg … te …)` asks `te = .dtor g u`.
-     - *Not in that cut:* an environment that holds a destructor value
-       deeper (a struct of one: it is its own destructor type with glue, so
-       it is the case above once the capture is that struct), a `Vec` of
-       them as an environment, an `any`-class closure (`hasFn`), and a
-       package inside a container.
+   - **Built: the environment's drop as code** (Agora #609). Not the plan
+     this section had (a package unwrapped at the frame's end: `Ty.fn`
+     does not name its environment's type, so the frame cannot type what
+     it unwraps); the drop is a METHOD of the package:
+     - *The type.* A closure whose environment holds destructor values is
+       of the class `dropd` (`Cross.Fits`), a destructor value itself
+       (`Ty.holdsDtor`), bound by `letd` at `Ty.dtor f (.fn ms dropd)`.
+     - *The glue.* `f` (`ClosureGlueOK`) takes the closure owned and calls
+       its drop method, `callcE r 0 j []`, whose interface takes the
+       receiver owned (`StmtT.callcE`'s second case: a consuming call,
+       typed for any owned, live closure of the class that holds nothing;
+       the glue's parameter is one).
+     - *The step.* `Step.callcD`: the environment moves out of the package
+       into a fresh binding, which the method's code takes as its `sink`
+       receiver in an ordinary call (`handStmtD`); nothing goes back. The
+       code hands what it took on first thing, to a `letd` or taken apart,
+       or is the glue of the environment's type (`A2.Dtor.drop_method_code`,
+       from `DtorParamsOK`): a frame per destructor value.
+     - *The proof.* `handD_typed`, `handCaseD` (`A2/EnvHand.lean`); the
+       frame's end is `glueCall_typed` unchanged. Witness:
+       `A2/ClosureDropWitness.lean`.
+     - *Calling it* (Agora #651): `StmtT.callc` reads the closure type
+       through the binding's destructor type and the interface takes the
+       receiver at the binding's type; nothing else changes (the code is
+       lent the environment). Witness `main2`.
+     - *Left:* a method that changes the environment (an `inout`
+       receiver: the package rebuilt after the hand-over would be assigned
+       over a destructor binding), a trait object of the class
+       (`TraitAt` refuses a `sink` receiver), a run theorem for the witness, a
+       closure of the class that holds views or captures by name, one that
+       crosses to a thread, and a witness with such a package inside a
+       container and a method that reads or lends its environment.
 4. **A2-drop.3d: shared blocks (A3)** (first cut done, Agora #544).
    - **Built: the refusal.** `Ty.ok` asks an `Arc`'s, a lock's and a
      cell's payload type to own no destructor value (`dtorFree`), and

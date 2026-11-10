@@ -1047,6 +1047,21 @@ def ImplGlueOK (P : Prog) (f : Nat) (t : Ty) (h i : Nat) : Prop :=
     (GlueOK P h t ∨ EnumGlueOK P h t) ∧ DtorOK P i (.dtor h t) ∧
     fn.body = .letd w h (.var 0) (.letcall r i [w] (.assign 1 (.expr e)))
 
+/-- Agora #609: `f` is the drop glue of the closure type `t` (class
+    `dropd`: its environment holds destructor values): `f` takes the closure
+    owned and calls its drop method `j` first thing, whose interface takes
+    the receiver owned too (`StmtT.callcE`'s second case): the environment
+    is handed to the method's code for good (`Step.callcD`), which binds what
+    it holds under `letd`s (`DtorParamsOK`), so each destructor runs, on a
+    panic in another's too.  Then the integer result is set and nothing else
+    runs. -/
+def ClosureGlueOK (P : Prog) (f : Nat) (t : Ty) : Prop :=
+  ∃ fn ms j σ sig r e, P[f]? = some fn ∧ t = .fn ms .dropd ∧
+    fn.params = [(.sink, .dtor f t)] ∧ fn.resTy = .int ∧
+    fn.resOwn = false ∧ fn.lends = [] ∧ fn.rholds = [] ∧ fn.outHolds = [] ∧ ¬ ThruFn P f ∧
+    ms[j]? = some σ ∧ P[σ]? = some sig ∧ sig.params = [(.sink, .dtor f t)] ∧
+    fn.body = .callcE r 0 j [] (.assign 1 (.expr e))
+
 /-- What `unpair` takes apart is a struct under its destructor type, if any. -/
 theorem unpair_undtor {τ a b : Ty} {G : Nat → Prop} (h : τ = .prod a b ∨ ∃ f, τ = .dtor f (.prod a b) ∧ G f) :
     τ.undtor = .prod a b := by
@@ -1060,22 +1075,25 @@ theorem unpair_ne_int {τ a b : Ty} {G : Nat → Prop} (h : τ = .prod a b ∨ �
     a destructor that takes it lent (`DtorOK`; then the tree is freed with
     no code, so a struct `t` holds no destructor value), or a struct's
     glue, which takes it apart (`GlueOK`), or first runs the value's own
-    impl on it (`ImplGlueOK`), or an enum's glue (`EnumGlueOK`). -/
+    impl on it (`ImplGlueOK`), or an enum's glue (`EnumGlueOK`), or (Agora
+    #609) a closure's, which calls its drop method (`ClosureGlueOK`). -/
 def DropFnOK (P : Prog) (f : Nat) (t : Ty) : Prop :=
   (DtorOK P f (.dtor f t) ∧ t.holdsDtor = false) ∨ GlueOK P f t ∨
-    (∃ h i, ImplGlueOK P f t h i) ∨ EnumGlueOK P f t
+    (∃ h i, ImplGlueOK P f t h i) ∨ EnumGlueOK P f t ∨ ClosureGlueOK P f t
 
-/-- A glue of either kind takes its struct owned. -/
+/-- A glue of any kind takes its value owned. -/
 theorem sinkOf {P : Prog} {f : Nat} {t : Ty}
-    (hg : GlueOK P f t ∨ (∃ h i, ImplGlueOK P f t h i) ∨ EnumGlueOK P f t) :
+    (hg : GlueOK P f t ∨ (∃ h i, ImplGlueOK P f t h i) ∨ EnumGlueOK P f t ∨ ClosureGlueOK P f t) :
     ∃ fn, P[f]? = some fn ∧ t.holdsView = false ∧ fn.params = [(.sink, .dtor f t)] ∧
       fn.resOwn = false ∧ ¬ ThruFn P f := by
   rcases hg with ⟨fn, _, _, hfn, _, hv, hps, _, hro, _, _, _, hnt, _⟩ |
     ⟨_, _, fn, _, _, _, hfn, _, hv, hps, _, hro, _, _, _, hnt, _⟩ |
-    ⟨fn, _, _, _, _, hfn, _, hv, hps, _, hro, _, _, _, hnt, _⟩
+    ⟨fn, _, _, _, _, hfn, _, hv, hps, _, hro, _, _, _, hnt, _⟩ |
+    ⟨fn, _, _, _, _, _, _, hfn, ht, hps, _, hro, _, _, _, hnt, _⟩
   · exact ⟨fn, hfn, hv, hps, hro, hnt⟩
   · exact ⟨fn, hfn, hv, hps, hro, hnt⟩
   · exact ⟨fn, hfn, hv, hps, hro, hnt⟩
+  · exact ⟨fn, hfn, by rw [ht]; rfl, hps, hro, hnt⟩
 
 /-- What `letd x f r s` asks of `f`, binding a value of type `a`: `f` is the
     destructor of `Ty.dtor f t` (`DropFnOK`); and a value of ANOTHER
@@ -1246,8 +1264,13 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       StmtT P Γ F (.unpair y x z s) (exitScope x (exitScope z Δ))
   | callc {Γ Γ1 Δ : Ctx} {F : List Var} {x c : Var} {j : Nat} {zs : List Var} {k : Stmt}
       {Ec E : Entry} {ms : List Nat} {q : Cross} {σ : Nat} {sig : Fn}
-      (h1 : k.src = true) (h2 : Γ x = none) (h3 : x ∉ F) (h4 : Γ c = some Ec) (h5 : Ec.ty = .fn ms q)
-      (h6 : ms[j]? = some σ) (h7 : P[σ]? = some sig) (h8 : sig.params.head? = some (.inp, .fn ms q))
+      (h1 : k.src = true) (h2 : Γ x = none) (h3 : x ∉ F) (h4 : Γ c = some Ec)
+      -- (Agora #651: the receiver may be of a destructor type over the
+      -- closure type; a well-formed such type is over a closure of the
+      -- dropping class, `ok_undtor_fn`; the interface takes the receiver at
+      -- the binding's type)
+      (h5 : Ec.ty.undtor = .fn ms q)
+      (h6 : ms[j]? = some σ) (h7 : P[σ]? = some sig) (h8 : sig.params.head? = some (.inp, Ec.ty))
       (h9 : ∀ o ∈ sig.outHolds, o.2.1 ≠ 0)
       (h10 : CallT P Γ F σ (c :: zs) E Γ1)
       -- no argument is a binding the package may change by name (it is
@@ -1363,12 +1386,31 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       code changes its environment is not Sync, so no `Arc` holds one
       (`RhsT.arcNew`), and the one thread that owns it calls it.  First cut:
       the interface takes only the receiver, and its result borrows and holds
-      nothing of it. -/
+      nothing of it.
+      Agora #609, the second case (`h10`): the interface takes the receiver
+      OWNED, and the environment is handed over for good (`Step.callcD`): a
+      consuming call, on an owned, live closure of the dropping class
+      (`q.drops`; so of no class a share or a thread takes, which keeps
+      `callcE_not_sync`) that holds nothing (`Ec.vdeps = []`).  It is what a
+      closure's glue runs on its parameter (`ClosureGlueOK`), and any owner of
+      such a closure may: the binding is moved out after (`CallT`'s `sink`
+      argument), so its frame runs nothing.  The method returns no owned value
+      (a choice of this cut, not a need of the proof). -/
   | callcE {Γ Γ1 Δ : Ctx} {F : List Var} {x c : Var} {j : Nat} {k : Stmt}
       {Ec E : Entry} {ms : List Nat} {q : Cross} {σ : Nat} {sig : Fn} {b : Eff}
-      (h1 : k.src = true) (h2 : Γ x = none) (h3 : x ∉ F) (h4 : Γ c = some Ec) (h5 : Ec.ty = .fn ms q)
-      (h6 : canDo Ec.mode .replace) (h7 : Cross.send.Le q) (h8 : ms[j]? = some σ) (h9 : P[σ]? = some sig)
-      (h10 : sig.params = [(.inout b, .fn ms q)]) (h11 : sig.lends = []) (h12 : sig.rholds = [])
+      (h1 : k.src = true) (h2 : Γ x = none) (h3 : x ∉ F) (h4 : Γ c = some Ec)
+      (h5 : Ec.ty.undtor = .fn ms q)
+      (h6 : canDo Ec.mode .replace) (h7 : Cross.send.Le q ∨ q.drops = true) (h8 : ms[j]? = some σ)
+      (h9 : P[σ]? = some sig)
+      -- the interface takes the receiver `inout` (A2-envhand: the environment
+      -- is handed over, and back), or (Agora #609) OWNED: the drop method of a
+      -- closure whose environment holds destructor values, called on a closure
+      -- that holds nothing the code cannot see (its glue's own parameter); the
+      -- environment goes to the code for good
+      (h10 : (sig.params = [(.inout b, .fn ms q)] ∧ Ec.ty = .fn ms q ∧ Cross.send.Le q) ∨
+        (sig.params = [(.sink, Ec.ty)] ∧ Ec.vdeps = [] ∧ Ec.mode = .own ∧ Ec.live = true ∧
+          q.drops = true ∧ sig.resOwn = false))
+      (h11 : sig.lends = []) (h12 : sig.rholds = [])
       (h13 : sig.outHolds = []) (h14 : NoPin Γ c) (h15 : DtorSafe Γ .replace false c)
       (h16 : CallT P (kill .replace false c Γ) F σ [c] E Γ1)
       (h17 : StmtT P (kill .replace false c (setE Γ1 x E)) F k Δ)
@@ -1443,7 +1485,9 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
 def DtorParamsOK (P : Prog) (fn : Fn) : Prop :=
   (∀ i (h : i < fn.params.length), fn.params[i].1 = .sink → fn.params[i].2.holdsDtor = true →
     -- (Agora #632: or the function is an enum's glue, which matches on it)
-    (i ∈ fn.body.movedFirst ∨ ∃ f u, P[f]? = some fn ∧ EnumGlueOK P f u) ∧ i ∉ fn.body.assigns) ∧
+    -- (Agora #609: or a closure's, which hands it to its drop method)
+    (i ∈ fn.body.movedFirst ∨ ∃ f u, P[f]? = some fn ∧ (EnumGlueOK P f u ∨ ClosureGlueOK P f u)) ∧
+      i ∉ fn.body.assigns) ∧
   (∀ i (h : i < fn.params.length) b, fn.params[i].1 = .inout b → fn.params[i].2.holdsDtor = true →
     i ∉ fn.body.assigns) ∧
   (fn.resOwn = true → fn.resTy.holdsDtor = true → fn.body.asgMax fn.params.length ≤ 1 ∧
@@ -1497,15 +1541,17 @@ theorem dtorParamsOK_of {P : Prog} {fn : Fn} (h : ∀ pt ∈ fn.params, pt.2.hol
 /-! ### Packages name code of their signature -/
 
 /-- The mode an interface takes its receiver in: `inout` (A2-envhand: a call
-    of it hands the environment over, `StmtT.callcE`), or lent (any other
-    first parameter: `StmtT.callc` asks `inp`). -/
+    of it hands the environment over, `StmtT.callcE`), owned (Agora #609: a
+    dropping closure's drop method, the environment handed over for good), or
+    lent (any other first parameter: `StmtT.callc` asks `inp`). -/
 def Fn.recvMode (sig : Fn) : PMode :=
   match sig.params.head? with
   | some (.inout b, _) => .inout b
+  | some (.sink, _) => .sink   -- Agora #609: a drop method takes the environment owned
   | _ => .inp
 
 theorem Fn.recvMode_of_head {sig : Fn} {pm : PMode} {t : Ty} (h : sig.params.head? = some (pm, t))
-    (hs : pm ≠ .sink) : sig.recvMode = pm := by
+    (_hs : pm ≠ .sink := by simp) : sig.recvMode = pm := by
   unfold Fn.recvMode; rw [h]; cases pm <;> simp_all
 
 /-- Code `f`, on an environment of type `te`, implements the interface `σ`:
@@ -1516,7 +1562,10 @@ theorem Fn.recvMode_of_head {sig : Fn} {pm : PMode} {t : Ty} (h : sig.params.hea
     receiver holds), and the interface's other parameters as the interface
     does; it returns what the interface returns, and lends, holds and stores
     no more than the interface says.  A package with a method that changes
-    its environment captures nothing by name. -/
+    its environment captures nothing by name.  (Agora #609: an interface that
+    takes the receiver OWNED is implemented by code that takes the
+    environment owned, `Fn.recvMode`; `StmtT.callcE`'s second case types a
+    call of one, in the closure's glue.) -/
 def Implements (P : Prog) (f : Nat) (te : Ty) (cs : List (Var × PMode × Ty)) (σ : Nat) : Prop :=
   ∃ fn sig, P[f]? = some fn ∧ P[σ]? = some sig ∧
     fn.params = (sig.recvMode, te) :: sig.params.tail ++ cs.map (·.2) ∧

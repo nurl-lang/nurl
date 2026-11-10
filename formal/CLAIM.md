@@ -406,7 +406,8 @@ the LLVM / C11 memory model rather than redefining it.
       `inout` (`Implements` with an `inout` receiver), and the package is
       rebuilt after (`StmtT.callcE`, A2/EnvHand.lean). A panic drops the
       environment, as the drop journal does with the closure's binding.
-      Such a package is at most `send` (`callcE_not_sync`,
+      Such a package is at most `send`, or of the dropping class, which
+      crosses nowhere (Agora #609) (`callcE_not_sync`,
       `callcE_not_arc`), so threads sharing a closure never change its
       environment, and a borrow never hands it over (`callcE_not_bor`:
       what an `Arc` or a read guard lends is never an `inout` argument,
@@ -806,7 +807,8 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   calculus's `pop` / `popFront` panic there instead, an unwrap: a program
   that matches the option is the same program with the `None` arm taken
   before the call. The drain pops only a `Vec` that has an element.)
-- A2-drop.3c: no closure's or trait object's environment holds a
+- A2-drop.3c: the environment of a closure or a trait object of a class
+  that does not drop (every class but `dropd`, next item) holds no
   destructor value. A typed literal's environment type holds none
   (`Cross.Fits`, of every class that crosses or views;
   `A2.Dtor.pack_env_dtor_free`), and in a running configuration no
@@ -814,23 +816,52 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   of the dropping class in it (`Ty.noDropd`): in an owner's tree (a field, an element, another
   package's environment: `A2.Dtor.pkgs_env_dtor_free`) or in a block's
   payload (`A2.Dtor.blk_pkgs_env_dtor_free`), both over
-  `A2.WFv.pkg_env_dtor_free`. (Agora #609, a preparation: there is a
-  class `dropd` for a closure whose environment may hold destructor
-  values; a closure of it is a destructor value itself, `Ty.holdsDtor`,
-  so every rule that releases with no code refuses it, and no destructor
-  is accepted for its type (`A2.Dtor.dropd_no_dtor`), so `letv` and
-  `letd` bind none and no function returns one: no typed program holds an
-  owned one. Its TYPE is well-formed, alone and inside others (a struct,
-  an enum, a `Vec` of a destructor type over it), and a function may
-  name it in a parameter no caller can fill; such a struct or enum would
-  need glue that is `FnOK`, which needs a `letd` of the closure. The
-  class holds no views and no cell shares and crosses nowhere: no
-  subsumption reaches it (`Cross.Le` asks the same `drops`), and what
-  crosses asks a type that owns no destructor value. Its drop, a method
-  of the package, is the open part of #609.) A share an environment holds is of a block
-  whose payload owns none either (3d). This is a refusal, not the model
-  of nurlc's environment drop glue (the stricter-than-nurlc list below;
-  `A2/DROP_DESIGN.md` staging item 3 has the design that lifts it).
+  `A2.WFv.pkg_env_dtor_free`. A share an environment holds is of a block
+  whose payload owns none either (3d).
+- Agora #609: a closure whose environment holds destructor values is of
+  the class `dropd`, and is a destructor value itself (`Ty.holdsDtor`): no
+  rule that releases with no code takes it, `letv` binds none, and `letd`
+  binds it at `Ty.dtor f (fn ms dropd)` where `f` is its glue
+  (`ClosureGlueOK`; a destructor that takes it lent is refused,
+  `A2.Dtor.closure_dtor_is_glue`). The glue takes the closure owned and
+  calls its drop method first thing, a method whose interface takes the
+  receiver owned (`StmtT.callcE`'s second case). That call hands the
+  environment to the method's code for good (`Step.callcD`; which of the
+  two hand-overs a call takes is the code's first parameter's mode, so a
+  typed configuration takes the one its rule typed: `handCaseD`). The
+  code takes the environment as its own `sink` parameter, and where the
+  environment holds a destructor value it hands it on first thing (to a
+  `letd`, or taken apart) or is itself the glue of the environment's
+  type (`A2.Dtor.drop_method_code`, from `FnOK`'s `DtorParamsOK`). As
+  for a struct's and an enum's glue this is a shape the typing forces
+  plus the frames' steps, not a theorem about a run. (Between the
+  hand-over's step and the code's first statement the environment sits
+  in a plain binding and then in the code's parameter; no step there
+  can panic: a call's entry has no panic rule and the code moves it
+  first.) A whole program with such a closure, made and bound, is typed
+  and safe (`A2.ClosureDropWitness.main_safe`; there the drop method's
+  interface is the glue's own signature); `letv` of the literal is
+  refused (`main_letv_refused`). The rule's second case is not the
+  glue's alone: any owner of a live closure of this class that holds
+  nothing may call such a method, a consuming call, after which the
+  binding is moved out and its frame runs nothing. Limits of this cut:
+  the class holds no views and no cell shares and crosses nowhere (no
+  subsumption reaches it, `Cross.Le` asks the same `drops`; what crosses
+  asks a type that owns no destructor value); no trait's object is of it
+  (`TraitAt` asks receivers that are not `sink`, at a bound's class).
+  Such a closure is CALLED by the lending rule (Agora #651), through its
+  `letd` binding or any borrow of the destructor type: `StmtT.callc`
+  reads the closure type through the receiver's destructor type
+  (`Ec.ty.undtor = .fn ms q`; well-formed, that is one destructor type
+  over a closure of this class, `A2.ok_undtor_fn`), and the
+  method's interface takes the receiver at the binding's type; the code
+  is lent the environment as any closure's is, and the binding's frame
+  drops it after. A program that makes, calls and drops one is typed
+  and safe (`A2.ClosureDropWitness.main2_typed`, `main2_safe`; its
+  method reads nothing, and there is no run theorem). No trait's method
+  is called through such a receiver (`StmtT.callc_bound`). A method that CHANGES the environment (an `inout` receiver,
+  the hand-over and back) is not typed for this class yet: the package
+  rebuilt after the call would be assigned over a destructor binding.
 - `Ty.holdsDtor` is deep (A2-drop.3b): a struct or an enum one field or
   payload of which holds a destructor value holds one
   (`A2.Dtor.holdsDtor_deep`, the definition unfolded). So a typed `letv`
@@ -858,10 +889,11 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   the value's own, outermost destructor, and everywhere else that could
   hold a destructor value is refused (the list below). That these are all
   the places is read off the rules, not a single theorem (above). The
-  destructors INSIDE a value are shown for a struct's fields (Agora #616)
-  and an enum's payload (Agora #632), above, as shapes of the glue the
-  typing forces plus the frames' steps; not as one theorem about a run.
-  See Agora #542–#544, #611, #616, #632.
+  destructors INSIDE a value are shown for a struct's fields (Agora #616),
+  an enum's payload (Agora #632) and a closure's environment (Agora
+  #609), above, as shapes of the glue the typing forces plus the frames'
+  steps; not as one theorem about a run.
+  See Agora #542–#544, #609, #611, #616, #632.
 
 The rules are stricter than nurlc's in these places:
 - for a binding of a type whose destructor may read a view:
@@ -926,15 +958,19 @@ The rules are stricter than nurlc's in these places:
     through the journal before the panic goes on (Agora #608, #619;
     below): each destructor runs once in both, the `Vec` already short
     in nurlc's run.)
-- for a closure or a trait object whose environment would hold a
-  destructor value (A2-drop.3c): a closure that captures a `% Drop` value
-  by value (or a struct, an enum, an option or a `Vec` holding one), and a
-  trait object boxing a value of a `% Drop` type, are refused
-  (`Cross.Fits`). nurlc types them, and its environment drop glue runs the
-  captures' destructors when the package is dropped. A program keeps the
-  `% Drop` value in a binding of its own and lets the closure borrow it
-  (a capture by name: the closure is then of class `any`, and crosses to
-  no thread and into no share); a trait object has no such route.
+- for a closure or a trait object whose environment holds a destructor
+  value (A2-drop.3c, Agora #609): a closure that captures a `% Drop` value
+  by value (or a struct, an enum, an option or a `Vec` holding one) is
+  typed only at the class `dropd`, bound by `letd` with its glue, whose
+  drop method takes the captures to their frames (nurlc's environment
+  drop glue). It crosses to no thread and into no share, holds no views,
+  and its methods read the environment (a method that changes it is
+  refused for this class); a trait
+  object boxing a value of a `% Drop` type is refused as a trait object
+  (no bound's class drops). A program whose closure changes what it
+  captured keeps the `% Drop` value in a binding of its own and lets the
+  closure borrow it (a capture by name: the closure is then of class
+  `any`).
 - for a share whose payload would own a destructor value (A2-drop.3d): an
   `Arc`, a `Locked` / `RwLocked` / `Mutex`, a channel or a library handle
   of a `% Drop` type (or of a struct, an enum, an option or a `Vec` holding

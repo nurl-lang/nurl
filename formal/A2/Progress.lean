@@ -524,14 +524,17 @@ theorem progress {P : Prog}
       ∃ r, Step P m (.letcall x f args k) r)
     (hclo : ∀ {Γ Γ1 : Ctx} {F : List Var} {x c : Var} {j : Nat} {zs : List Var} {k : Stmt}
       {Ec E : Entry} {ms : List Nat} {q : Cross} {σ : Nat} {sig : Fn} {m : Mem},
-      Γ x = none → x ∉ F → Γ c = some Ec → Ec.ty = .fn ms q → ms[j]? = some σ → P[σ]? = some sig →
-      sig.params.head? = some (.inp, .fn ms q) → CallT P Γ F σ (c :: zs) E Γ1 →
+      Γ x = none → x ∉ F → Γ c = some Ec → Ec.ty.undtor = .fn ms q → ms[j]? = some σ → P[σ]? = some sig →
+      sig.params.head? = some (.inp, Ec.ty) → CallT P Γ F σ (c :: zs) E Γ1 →
       (∀ z ∈ zs, ∀ d ∈ Ec.vdeps, d.kind.bound ≠ .none → d.root ≠ z) →
       MemCodes P m → Inv m Γ F (.callc x c j zs k) → ∃ r, Step P m (.callc x c j zs k) r)
     (hhand : ∀ {Γ Γ1 : Ctx} {F : List Var} {x c : Var} {j : Nat} {k : Stmt} {Ec E : Entry}
       {ms : List Nat} {q : Cross} {σ : Nat} {sig : Fn} {b : Eff} {m : Mem},
-      Γ x = none → Γ c = some Ec → Ec.ty = .fn ms q → canDo Ec.mode .replace → ms[j]? = some σ →
-      P[σ]? = some sig → sig.params = [(.inout b, .fn ms q)] → CallT P (kill .replace false c Γ) F σ [c] E Γ1 →
+      Γ x = none → Γ c = some Ec → Ec.ty.undtor = .fn ms q → canDo Ec.mode .replace → ms[j]? = some σ →
+      P[σ]? = some sig →
+      ((sig.params = [(.inout b, .fn ms q)] ∧ Ec.ty = .fn ms q ∧ Cross.send.Le q) ∨
+      (sig.params = [(.sink, Ec.ty)] ∧ Ec.vdeps = [] ∧ Ec.mode = .own ∧ Ec.live = true ∧
+        q.drops = true ∧ sig.resOwn = false)) → CallT P (kill .replace false c Γ) F σ [c] E Γ1 →
       MemCodes P m → Inv m Γ F (.callcE x c j [] k) → ∃ r, Step P m (.callcE x c j [] k) r)
     {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (ht : StmtT P Γ F s Δ) :
     ∀ {m : Mem}, MemCodes P m → Inv m Γ F s → s = .skip ∨ Blocked m s ∨ ∃ r, Step P m s r := by

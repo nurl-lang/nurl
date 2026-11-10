@@ -364,6 +364,12 @@ theorem Step.ownedId {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r
     rcases OwnedId.set_some (OwnedId.set_none (OwnedId.of_nv hi)) with ⟨_, hiv⟩ | hi
     · exact OwnedId.of_slot hc (by simp [Val.ids, hiv])
     · exact OwnedId.set_none hi
+  | callcD hc _ _ _ _ =>
+    intro i hi
+    refine .inl ?_
+    rcases OwnedId.set_some (OwnedId.set_none (OwnedId.of_nv hi)) with ⟨_, hiv⟩ | hi
+    · exact OwnedId.of_slot hc (by simp [Val.ids, hiv])
+    · exact OwnedId.set_none hi
   | catchP _ _ ih => exact fun i hi => ih i (OwnedId.set_bor hi)
   | letd _ he =>
     intro i hi

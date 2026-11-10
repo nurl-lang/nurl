@@ -1496,7 +1496,8 @@ theorem _root_.A2.StmtT.callc_recv {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c 
     simp [mutNames, argNames, this]
   have hpost := callPost_recv (Γ := Γ) (c := c) hps hmut
   rw [hpost] at hcT
-  exact StmtT.callc hks hx hxF hc hty hj hσ (by rw [hps]; rfl) hout hcT (fun _ h => by cases h) hk hend hnt hdk
+  exact StmtT.callc hks hx hxF hc (by rw [hty]; rfl) hj hσ (by rw [hps, hty]; rfl) hout hcT (fun _ h => by cases h) hk hend
+    hnt hdk
 
 /-- What `arc_get` lends of an owned share names nothing by name: a call
     through it is `callc_recv`'s. -/
@@ -1705,15 +1706,18 @@ def _root_.A2.Rhs.dyn (fs : List Nat) (te : Ty) (ms : List Nat) (y : Var) : Rhs 
 /-- A3.5c: `ms` are the methods of a trait declared with the bound `b`: each
     is an interface, a function of the program, whose receiver is the trait's
     object at the bound, `fn ms b.cross`, taken lent (`inp`: the receiver
-    `StmtT.callc` asks of a call through a `fn ms q` is `(inp, fn ms q)`) or,
+    `StmtT.callc` asks of a call through a `fn ms q` is `(inp, fn ms q)`; of
+    one through a destructor type over it, Agora #651, that type, so no
+    trait's method is called through one: `callc_bound`) or,
     A2-envhand, `inout` (a method that changes the box, `StmtT.callcE`). -/
 def TraitAt (P : Prog) (ms : List Nat) (b : TraitBound) : Prop :=
   ∀ (j σ : Nat), ms[j]? = some σ → ∃ sig : Fn, P[σ]? = some sig ∧
     ∃ pm, pm ≠ .sink ∧ sig.params.head? = some (pm, .fn ms b.cross)
 
 /-- What a bound promises of each impl's type `te` (a box captures nothing by
-    name, `cs = []`): with no bound, only what every package's environment
-    is asked, to hold no destructor value (A2-drop.3c) ... -/
+    name, `cs = []`): with no bound, only what the environment of every
+    package of a class that does not drop is asked, to hold no destructor
+    value (A2-drop.3c; no trait's object is of the dropping class) ... -/
 theorem TraitBound.fits_none (te : Ty) (cs : List (Var × PMode × Ty)) (hd : te.holdsDtor = false) :
     TraitBound.none.cross.Fits te cs :=
   Cross.fits_any te cs hd
@@ -1733,12 +1737,13 @@ theorem TraitBound.fits_sendSync {te : Ty} {cs : List (Var × PMode × Ty)} :
   ⟨fun h => ⟨⟨h.1 rfl, h.2.1 rfl⟩, h.2.2.2 rfl⟩,
     fun h => ⟨fun _ => h.1.1, fun _ => h.1.2, fun h' => absurd h' (by decide), fun _ => h.2⟩⟩
 
-/-- A call through a package asks its receiver to be a package, `fn ms q`,
-    whose method `j` is an interface that takes it at `q`. -/
+/-- A call through a package asks its receiver to be a package, `fn ms q`
+    (or, Agora #651, a destructor type over one: a closure of the dropping
+    class), whose method `j` is an interface that takes it at its type. -/
 theorem _root_.A2.StmtT.callc_recv_at {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c : Var} {j : Nat}
     {zs : List Var} {k : Stmt} {Ec : Entry} (h : StmtT P Γ F (.callc x c j zs k) Δ) (hc : Γ c = some Ec) :
-    ∃ ms q σ sig, Ec.ty = .fn ms q ∧ ms[j]? = some σ ∧ P[σ]? = some sig ∧
-      sig.params.head? = some (.inp, .fn ms q) := by
+    ∃ ms q σ sig, Ec.ty.undtor = .fn ms q ∧ ms[j]? = some σ ∧ P[σ]? = some sig ∧
+      sig.params.head? = some (.inp, Ec.ty) := by
   generalize hs : Stmt.callc x c j zs k = s at h
   induction h generalizing Ec with
   | callc _ _ _ hc' hty hj hσ hhd =>
@@ -1758,22 +1763,29 @@ theorem _root_.A2.StmtT.callc_recv_at {P : Prog} {Γ Δ : Ctx} {F : List Var} {x
     is `b.cross`. -/
 theorem _root_.A2.StmtT.callc_bound {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c : Var} {j : Nat}
     {zs : List Var} {k : Stmt} {Ec : Entry} {ms : List Nat} {q : Cross} {b : TraitBound}
-    (h : StmtT P Γ F (.callc x c j zs k) Δ) (hc : Γ c = some Ec) (hty : Ec.ty = .fn ms q)
-    (hb : TraitAt P ms b) : q = b.cross := by
+    (h : StmtT P Γ F (.callc x c j zs k) Δ) (hc : Γ c = some Ec) (hty : Ec.ty.undtor = .fn ms q)
+    (hb : TraitAt P ms b) : Ec.ty = .fn ms q ∧ q = b.cross := by
+  -- (Agora #651: a receiver bound at a destructor type over the trait's
+  -- object type is no receiver of the trait's methods: the interface takes
+  -- the object's type itself)
   obtain ⟨ms', q', σ, sig, hty', hj, hσ, hhd⟩ := h.callc_recv_at hc
   rw [hty] at hty'; cases hty'
   obtain ⟨sig', hσ', pm, _, hhd'⟩ := hb j σ hj
   rw [hσ] at hσ'; cases hσ'
   rw [hhd] at hhd'
-  simp only [Option.some.injEq, Prod.mk.injEq, Ty.fn.injEq, true_and] at hhd'
-  exact hhd'.2
+  simp only [Option.some.injEq, Prod.mk.injEq] at hhd'
+  have he : Ec.ty = .fn ms b.cross := hhd'.2
+  rw [he] at hty
+  have hq : b.cross = q := by cases hty; rfl
+  exact ⟨by rw [he, hq], hq.symm⟩
 
 /-- So a trait object packed at another class than its trait's bound is inert:
     no method of it is called. -/
 theorem callc_not_at {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c : Var} {j : Nat} {zs : List Var}
     {k : Stmt} {Ec : Entry} {ms : List Nat} {q : Cross} {b : TraitBound} (hb : TraitAt P ms b)
-    (hc : Γ c = some Ec) (hty : Ec.ty = .fn ms q) (hq : q ≠ b.cross) : ¬ StmtT P Γ F (.callc x c j zs k) Δ :=
-  fun h => hq (h.callc_bound hc hty hb)
+    (hc : Γ c = some Ec) (hty : Ec.ty.undtor = .fn ms q) (hq : q ≠ b.cross) :
+    ¬ StmtT P Γ F (.callc x c j zs k) Δ :=
+  fun h => hq (h.callc_bound hc hty hb).2
 
 /-- Every method's code of a package takes the environment as its receiver,
     and changes nothing through a borrow (`Implements.env_recv`, method by
@@ -1956,7 +1968,7 @@ theorem dyn_cell_notSync {Γ Γ1 : Ctx} {F : List Var} {fs : List Nat} {te : Ty}
 theorem spawn_dyn_none {P : Prog} {spawn : Nat → Bool} (hS : SpawnOK P spawn) {f : Nat}
     (hsp : spawn f = true) {fn : Fn} (hf : P[f]? = some fn) {ms : List Nat} (hb : TraitAt P ms .none)
     {pm : PMode} {q : Cross} (hin : (pm, Ty.fn ms q) ∈ fn.params) {Γ Δ : Ctx} {F : List Var} {x c : Var}
-    {j : Nat} {zs : List Var} {k : Stmt} {Ec : Entry} (hc : Γ c = some Ec) (hty : Ec.ty = .fn ms q) :
+    {j : Nat} {zs : List Var} {k : Stmt} {Ec : Entry} (hc : Γ c = some Ec) (hty : Ec.ty.undtor = .fn ms q) :
     ¬ StmtT P Γ F (.callc x c j zs k) Δ := by
   refine callc_not_at hb hc hty fun hq => ?_
   rw [hq] at hin
@@ -2073,7 +2085,7 @@ theorem TraitBound.Holds.arc {t : Ty} (h : TraitBound.sendSync.Holds t) :
     `inp` ... -/
 theorem _root_.A2.StmtT.callc_inp {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c : Var} {j : Nat}
     {zs : List Var} {k : Stmt} {Ec : Entry} (h : StmtT P Γ F (.callc x c j zs k) Δ) (hc : Γ c = some Ec) :
-    ∃ ms q σ sig, Ec.ty = .fn ms q ∧ ms[j]? = some σ ∧ P[σ]? = some sig ∧
+    ∃ ms q σ sig, Ec.ty.undtor = .fn ms q ∧ ms[j]? = some σ ∧ P[σ]? = some sig ∧
       ∃ t, sig.params.head? = some (.inp, t) := by
   obtain ⟨ms, q, σ, sig, hty, hj, hσ, hhd⟩ := h.callc_recv_at hc
   exact ⟨ms, q, σ, sig, hty, hj, hσ, _, hhd⟩
@@ -2084,7 +2096,7 @@ theorem _root_.A2.StmtT.callc_inp {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c :
     with the box handed over (A2-envhand, `StmtT.callcE`). -/
 theorem callc_not_inout {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c : Var} {j : Nat} {zs : List Var}
     {k : Stmt} {Ec : Entry} {ms : List Nat} {q : Cross} {σ : Nat} {sig : Fn} (hc : Γ c = some Ec)
-    (hty : Ec.ty = .fn ms q) (hj : ms[j]? = some σ) (hσ : P[σ]? = some sig) {b : Eff} {t : Ty}
+    (hty : Ec.ty.undtor = .fn ms q) (hj : ms[j]? = some σ) (hσ : P[σ]? = some sig) {b : Eff} {t : Ty}
     (hio : sig.params.head? = some (.inout b, t)) : ¬ StmtT P Γ F (.callc x c j zs k) Δ := by
   intro h
   obtain ⟨ms', q', σ', sig', hty', hj', hσ', t', hhd⟩ := h.callc_inp hc
@@ -2117,7 +2129,8 @@ package:
 * *an owner*: the package is an owner that may be replaced (`canDo .replace`),
   never a borrow, so never what an `Arc` or a read guard lends, nor a copy of
   that (h364's rule stays: `callcE_not_bor`);
-* *the class*: the package's class is at least `send` (`callcE_send`): a
+* *the class*: the package's class is at least `send`, or (Agora #609, the
+  consuming hand-over) the dropping class, which crosses nowhere (`callcE_send`): a
   `sync` or `bare` one has no such call (`callcE_not_sync`), so a package
   whose environment is handed over is no `Arc`'s payload (`callcE_not_arc`)
   and no object of a `: Send Sync` trait (`callcE_not_sendSync`).  Two threads
@@ -2125,17 +2138,22 @@ package:
   refused by the type. -/
 
 /-- A hand-over takes the package as an owner, at a class at least `send`,
-    through an interface that takes it `inout` and nothing else. -/
+    through an interface that takes it `inout` and nothing else; or (Agora
+    #609) owned, a package of the dropping class that holds nothing, through
+    an interface that takes it `sink` and nothing else. -/
 theorem _root_.A2.StmtT.callcE_recv_at {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c : Var} {j : Nat}
     {zs : List Var} {k : Stmt} {Ec : Entry} (h : StmtT P Γ F (.callcE x c j zs k) Δ) (hc : Γ c = some Ec) :
-    ∃ ms q σ sig b, Ec.ty = .fn ms q ∧ canDo Ec.mode .replace ∧ Cross.send.Le q ∧ ms[j]? = some σ ∧
-      P[σ]? = some sig ∧ sig.params = [(.inout b, .fn ms q)] := by
+    ∃ ms q σ sig, Ec.ty.undtor = .fn ms q ∧ canDo Ec.mode .replace ∧ ms[j]? = some σ ∧
+      P[σ]? = some sig ∧
+      ((∃ b, sig.params = [(.inout b, .fn ms q)] ∧ Ec.ty = .fn ms q ∧ Cross.send.Le q) ∨
+        (sig.params = [(.sink, Ec.ty)] ∧ q.drops = true)) := by
   generalize hs : Stmt.callcE x c j zs k = s at h
   induction h generalizing Ec with
   | callcE _ _ _ hc' hty hcan hq hj hσ hsp =>
     cases hs
     rw [hc] at hc'; cases hc'
-    exact ⟨_, _, _, _, _, hty, hcan, hq, hj, hσ, hsp⟩
+    exact ⟨_, _, _, _, hty, hcan, hj, hσ,
+      hsp.imp (fun h => ⟨_, h⟩) (fun h => ⟨h.1, h.2.2.2.2.1⟩)⟩
   | sub hw _ _ ih =>
     obtain ⟨hn, hwe⟩ := hw.1 c
     obtain ⟨E0, hE0⟩ : ∃ E0, _ = some E0 :=
@@ -2146,12 +2164,16 @@ theorem _root_.A2.StmtT.callcE_recv_at {P : Prog} {Γ Δ : Ctx} {F : List Var} {
   | _ => cases hs
 
 /-- **A package whose environment is handed over is at most Send** (Send, not
-    Sync): the class of a hand-over's receiver is `send` or `any`. -/
+    Sync): the class of a hand-over's receiver is `send` or `any`, or (Agora
+    #609) the dropping class, which is below neither and crosses nowhere. -/
 theorem callcE_send {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c : Var} {j : Nat} {zs : List Var}
     {k : Stmt} {Ec : Entry} {ms : List Nat} {q : Cross} (h : StmtT P Γ F (.callcE x c j zs k) Δ)
-    (hc : Γ c = some Ec) (hty : Ec.ty = .fn ms q) : Cross.send.Le q := by
-  obtain ⟨ms', q', _, _, _, hty', _, hq, _⟩ := h.callcE_recv_at hc
-  rw [hty] at hty'; cases hty'; exact hq
+    (hc : Γ c = some Ec) (hty : Ec.ty = .fn ms q) : Cross.send.Le q ∨ q.drops = true := by
+  obtain ⟨ms', q', _, _, hty', _, _, _, hbr⟩ := h.callcE_recv_at hc
+  rw [hty] at hty'; cases hty'
+  rcases hbr with ⟨_, _, _, hq⟩ | ⟨_, hd⟩
+  · exact Or.inl hq
+  · exact Or.inr hd
 
 /-- ... so a `sync` or `bare` package's environment is never handed over: what
     several threads may hold at once is changed by no call through it. -/
@@ -2159,7 +2181,7 @@ theorem callcE_not_sync {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c : Var} {j :
     {k : Stmt} {Ec : Entry} {ms : List Nat} {q : Cross} (hc : Γ c = some Ec) (hty : Ec.ty = .fn ms q)
     (hq : q = .sync ∨ q = .bare) : ¬ StmtT P Γ F (.callcE x c j zs k) Δ := fun h => by
   have := callcE_send h hc hty
-  rcases hq with rfl | rfl <;> exact absurd this (by decide)
+  rcases hq with rfl | rfl <;> rcases this with h' | h' <;> exact absurd h' (by decide)
 
 /-- ... nor an `Arc`'s payload: an `Arc` holds only a `sync` or `bare` closure
     (`arcNew_fn`). -/
@@ -2174,7 +2196,7 @@ theorem callcE_not_arc {P : Prog} {Γ Δ Γ' Γ1 : Ctx} {F F' : List Var} {x c y
 theorem callcE_not_bor {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c : Var} {j : Nat} {zs : List Var}
     {k : Stmt} {Ec : Entry} (hc : Γ c = some Ec) (hm : Ec.mode = .bor ∨ Ec.mode = .rootb) :
     ¬ StmtT P Γ F (.callcE x c j zs k) Δ := fun h => by
-  obtain ⟨_, _, _, _, _, _, hcan, _⟩ := h.callcE_recv_at hc
+  obtain ⟨_, _, _, _, _, hcan, _⟩ := h.callcE_recv_at hc
   rcases hcan with h' | ⟨_, h', _⟩ <;> rcases hm with hm | hm <;> rw [hm] at h' <;> cases h'
 
 /-- A3.5c: a hand-over through a trait object types only where the object's
@@ -2183,13 +2205,17 @@ theorem _root_.A2.StmtT.callcE_bound {P : Prog} {Γ Δ : Ctx} {F : List Var} {x 
     {zs : List Var} {k : Stmt} {Ec : Entry} {ms : List Nat} {q : Cross} {b : TraitBound}
     (h : StmtT P Γ F (.callcE x c j zs k) Δ) (hc : Γ c = some Ec) (hty : Ec.ty = .fn ms q)
     (hb : TraitAt P ms b) : q = b.cross := by
-  obtain ⟨ms', q', σ, sig, e, hty', _, _, hj, hσ, hsp⟩ := h.callcE_recv_at hc
+  obtain ⟨ms', q', σ, sig, hty', _, hj, hσ, hbr⟩ := h.callcE_recv_at hc
   rw [hty] at hty'; cases hty'
-  obtain ⟨sig', hσ', pm, _, hhd'⟩ := hb j σ hj
+  obtain ⟨sig', hσ', pm, hpm, hhd'⟩ := hb j σ hj
   rw [hσ] at hσ'; cases hσ'
-  rw [hsp] at hhd'
-  simp only [List.head?_cons, Option.some.injEq, Prod.mk.injEq, Ty.fn.injEq, true_and] at hhd'
-  exact hhd'.2
+  rcases hbr with ⟨e, hsp, _, _⟩ | ⟨hsp, _⟩
+  · rw [hsp] at hhd'
+    simp only [List.head?_cons, Option.some.injEq, Prod.mk.injEq, Ty.fn.injEq, true_and] at hhd'
+    exact hhd'.2
+  · rw [hsp] at hhd'
+    simp only [List.head?_cons, Option.some.injEq, Prod.mk.injEq] at hhd'
+    exact absurd hhd'.1.symm hpm
 
 /-- ... so the `inout` methods of a `: Send Sync` trait are called through no
     object: every reader of an `Arc` of one may call its other methods at once. -/
@@ -2298,7 +2324,7 @@ theorem _root_.A2.StmtT.callcE_recv {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c
       (callRes (kill .replace false c Γ) sig [c]))) F k Δ) (hend : EndOK Δ x)
     (hdk : sig.resOwn = true → sig.resTy.holdsDtor = true → x ∈ k.movedFirst ∧ x ∉ k.assigns) :
     StmtT P Γ F (.callcE x c j [] k) (exitScope x Δ) :=
-  StmtT.callcE hks hx hxF hc hty (Or.inl hm) hq hj hσ hps hsl hsr hso hny hdc
+  StmtT.callcE hks hx hxF hc (by rw [hty]; rfl) (Or.inl hm) (Or.inl hq) hj hσ (Or.inl ⟨hps, hty, hq⟩) hsl hsr hso hny hdc
     (callT_recv_inout hσ (by rw [hty]; exact hps) hc hl hm (by rw [hty]; rfl) hcF hself hn hdb hny hdc hnt)
     hk hend hnt hdk
 
