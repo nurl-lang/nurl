@@ -540,76 +540,48 @@ $ `stdlib/core/rcbox.nu`
 // state (not through a bare pointer), so the borrow checker holds it to
 // `t__h` — it ends when the table is released, as a Vec's view does.
 @ csv_table_view CSVTable t__h i row i col → ( Slice u ) {
-    : *CSVTableImpl tp ( __CSVTable_ptr t__h )
-    : i off ( __csv_cell_off tp row col )
-    ? == off ( __csv_no_cell ) { ^ ( slice_empty [u] ) } {}
-    : i len ( __csv_view_len tp row col )
+    : i pi ( __csv_pair_idx ( __CSVTable_ptr t__h ) row col )
+    ? < pi 0 { ^ ( slice_empty [u] ) } {}
     // (read straight out of the handle: a pointer bound first would not
     // carry the borrow)
     : CSVTableImpl t . ( __CSVTable_ptr t__h ) 0
+    : *i fcp ( vec_data [i] . t flat_cells )
+    : i off . fcp pi
+    : i len . fcp + pi 1
     ? >= off 0 { ^ ( slice_from_raw [u] # *u + # i ( string_data . t content ) off len ) } {}
     ^ ( slice_from_raw [u] # *u + # i ( vec_data [u] . t escape_buf ) - 0 + off 1 len )
 }
 
-// What __csv_cell_off answers for a (row, col) out of range.
-@ __csv_no_cell → i { ^ -9223372036854775807 }
+inline @ __csv_min i a i b → i { ? < a b { ^ a } {} ^ b }
 
-// The flat_cells offset of (row, col) (see the layout above), or
-// __csv_no_cell when out of range.
-@ __csv_cell_off * CSVTableImpl t i row i col → i {
-    : i nr ( __csv_n_rows t )
-    ? | < row 0 >= row nr { ^ ( __csv_no_cell ) } {}
-    : *i rsp ( vec_data [i] . t row_starts )
-    : *i rlp ( vec_data [i] . t row_lens )
-    : i row_count . rlp row
-    ? | < col 0 >= col row_count { ^ ( __csv_no_cell ) } {}
-    : *i fcp ( vec_data [i] . t flat_cells )
-    ^ . fcp * + . rsp row col 2
-}
-
-@ __csv_view * CSVTableImpl t i row i col → s {
-    : i nr ( __csv_n_rows t )
-    ? | < row 0 >= row nr { ^ # s 0 } {}
-    : *i rsp ( vec_data [i] . t row_starts )
-    : *i rlp ( vec_data [i] . t row_lens )
-    : i row_first . rsp row
-    : i row_count . rlp row
-    ? | < col 0 >= col row_count { ^ # s 0 } {}
-    : i cell_idx + row_first col
-    : *i fcp ( vec_data [i] . t flat_cells )
-    : i off . fcp * cell_idx 2
-    ? >= off 0 {
-        : *u cd # *u ( string_data . t content )
-        ^ # s + # i cd off
-    } {}
-    : i esc_off - 0 + off 1
-    : *u eb ( vec_data [u] . t escape_buf )
-    ^ # s + # i eb esc_off
+// Where (row, col)'s (offset, length) pair starts in flat_cells (see the
+// layout above), or -1 when (row, col) is out of range: the one bounds
+// check every cell accessor makes.
+inline @ __csv_pair_idx * CSVTableImpl t i row i col → i {
+    ? | < row 0 >= row ( vec_len [i] . t row_starts ) { ^ -1 } {}
+    ? | < col 0 >= col . ( vec_data [i] . t row_lens ) row { ^ -1 } {}
+    ^ * + . ( vec_data [i] . t row_starts ) row col 2
 }
 
 @ csv_table_view_len CSVTable t__h i row i col → i { ^ ( __csv_view_len ( __CSVTable_ptr t__h ) row col ) }
 
 @ __csv_view_len * CSVTableImpl t i row i col → i {
-    : i nr ( __csv_n_rows t )
-    ? | < row 0 >= row nr { ^ 0 } {}
-    : *i rsp ( vec_data [i] . t row_starts )
-    : *i rlp ( vec_data [i] . t row_lens )
-    : i row_first . rsp row
-    : i row_count . rlp row
-    ? | < col 0 >= col row_count { ^ 0 } {}
-    : i cell_idx + row_first col
-    : *i fcp ( vec_data [i] . t flat_cells )
-    ^ . fcp + * cell_idx 2 1
+    : i pi ( __csv_pair_idx t row col )
+    ? < pi 0 { ^ 0 } {}
+    ^ . ( vec_data [i] . t flat_cells ) + pi 1
 }
 
 // Owned String copy of (row, col), one per call (the caller's).
 @ csv_table_get CSVTable t__h i row i col → ?String { ^ ( __csv_get ( __CSVTable_ptr t__h ) row col ) }
 
 @ __csv_get * CSVTableImpl t i row i col → ?String {
-    : s view ( __csv_view t row col )
-    ? == # i view 0 { ^ @ ?String { F # String 0 } } {}
-    : i len ( __csv_view_len t row col )
-    ^ @ ?String { T ( string_from_bytes # *u view len ) }
+    : i pi ( __csv_pair_idx t row col )
+    ? < pi 0 { ^ @ ?String { F # String 0 } } {}
+    : *i fcp ( vec_data [i] . t flat_cells )
+    : i off . fcp pi
+    : ~ * u src # *u + # i ( string_data . t content ) off
+    ? < off 0 { = src # *u + # i ( vec_data [u] . t escape_buf ) - 0 + off 1 } {}
+    ^ @ ?String { T ( string_from_bytes src . fcp + pi 1 ) }
 }
 
 // Index of a column by header name (case-sensitive). None if absent.
@@ -764,17 +736,33 @@ $ `stdlib/core/rcbox.nu`
     : i delim . dia delimiter
     : i quote . dia quote_char
 
-    // Worst-case slack per row, so the row's writes never overrun
-    // the buffer between reserve calls. 256 cells/row is far above
-    // any realistic CSV.
-    : i max_row_i64 * 256 2
+    // The index is sized once, from the newline count: every row but
+    // the last ends in a '\n', so a file has at most nl_n + 1 rows (a
+    // quoted line break only makes that an over-estimate, whose unused
+    // tail is never touched). row_starts / row_lens get one slot per
+    // row now; flat_cells gets room for the header row here and for
+    // the body once the header's column count is known. A file the
+    // estimate misses (bare-CR line ends, ragged rows wider than the
+    // header) grows past it: every cell and row store checks the
+    // capacity first, a compare of two locals.
+    : i nl_n ( nurl_count_byte # s cd clen 10 )
+    ( vec_reserve [i] . t row_starts + nl_n 1 )
+    ( vec_reserve [i] . t row_lens + nl_n 1 )
+    ( vec_reserve [i] . t flat_cells 64 )
+    ? >= . t typed_float_col 0 {
+        // One value per body row (+2 for the headerless edge cases).
+        ( vec_reserve [f] . t typed_floats + nl_n 2 )
+    } {}
+    : ~ * i fcp ( vec_data [i] . t flat_cells )
+    : ~ i fc_cap ( vec_cap [i] . t flat_cells )
+    : ~ * i rsp_w ( vec_data [i] . t row_starts )
+    : ~ * i rlp_w ( vec_data [i] . t row_lens )
+    : ~ i rs_cap ( __csv_min ( vec_cap [i] . t row_starts ) ( vec_cap [i] . t row_lens ) )
 
-    // Pre-size the row index vectors. One pair (start, len) per row.
-    : ~ i row_est / clen 100
-    ? < row_est 16 { = row_est 16 } {}
-    ( vec_reserve [i] . t row_starts row_est )
-    ( vec_reserve [i] . t row_lens row_est )
-
+    // flat_cells' length is committed at the end (and before a growth,
+    // so the realloc keeps the row being written); until then wi and
+    // fc_len are the truth.
+    : ~ i fc_len 0  // committed flat_cells length (i64 slots)
     : ~ i row_w 0  // committed body-row count
 
     : ~ i pos 0
@@ -786,19 +774,8 @@ $ `stdlib/core/rcbox.nu`
     // NURL loop.
 
     ~ < pos clen {
-        : i row_first_i64 ( vec_len [i] . t flat_cells )
+        : i row_first_i64 fc_len
         : i row_first_cell / row_first_i64 2
-
-        // Reserve once per row; if cap already suffices vec_reserve
-        // is a fast no-op (one ctl read). We re-arm row_starts /
-        // row_lens too so a single grow per ~2× row budget keeps
-        // their pointers stable for the inner body of this row.
-        ( vec_reserve [i] . t flat_cells + row_first_i64 max_row_i64 )
-        ( vec_reserve [i] . t row_starts + row_w 1 )
-        ( vec_reserve [i] . t row_lens + row_w 1 )
-        : *i fcp ( vec_data [i] . t flat_cells )
-        : *i rsp_w ( vec_data [i] . t row_starts )
-        : *i rlp_w ( vec_data [i] . t row_lens )
 
         // Per-cell scanner. Each iteration produces ONE cell pair
         // (cell_off, cell_len) and advances past one trailing
@@ -887,6 +864,14 @@ $ `stdlib/core/rcbox.nu`
                 = cell_len - p field_start
             }
 
+            ? > + wi 2 fc_cap {
+                // Doubles (amortised O(1)); the length covers the
+                // row's cells so far, so the move keeps them.
+                : b _gl ( vec_set_len [i] . t flat_cells wi )
+                ( vec_reserve [i] . t flat_cells 2 )
+                = fcp ( vec_data [i] . t flat_cells )
+                = fc_cap ( vec_cap [i] . t flat_cells )
+            } {}
             = . fcp wi cell_off
             = . fcp + wi 1 cell_len
             = wi + wi 2
@@ -945,11 +930,33 @@ $ `stdlib/core/rcbox.nu`
                     ( vec_push [String] . t headers ( string_from_bytes src len ) )
                     = k + k 1
                 }
-                // header slots stay unused; row_first_i64 was the
-                // pre-write len, so flat_cells len has not advanced.
+                // The header's slots stay uncommitted (fc_len has not
+                // advanced). Now its column count sizes the body: one
+                // pair per column on each of the at most nl_n rows left,
+                // and never more cells than the bytes left can hold
+                // (each cell but the last ends in a separator byte).
+                : i room + - clen p 1
+                : ~ i body_cells room
+                ? > n_cells 0 {
+                    ? <= nl_n / room n_cells { = body_cells * nl_n n_cells } {}
+                } {}
+                : b _hl ( vec_set_len [i] . t flat_cells fc_len )
+                ( vec_reserve [i] . t flat_cells * body_cells 2 )
+                = fcp ( vec_data [i] . t flat_cells )
+                = fc_cap ( vec_cap [i] . t flat_cells )
                 = first_row F
             } {
-                : b _r ( vec_set_len [i] . t flat_cells wi )
+                = fc_len wi
+                ? >= row_w rs_cap {
+                    // Past the newline estimate (bare-CR line ends).
+                    : b _sl ( vec_set_len [i] . t row_starts row_w )
+                    : b _ll ( vec_set_len [i] . t row_lens row_w )
+                    ( vec_reserve [i] . t row_starts 1 )
+                    ( vec_reserve [i] . t row_lens 1 )
+                    = rsp_w ( vec_data [i] . t row_starts )
+                    = rlp_w ( vec_data [i] . t row_lens )
+                    = rs_cap ( __csv_min ( vec_cap [i] . t row_starts ) ( vec_cap [i] . t row_lens ) )
+                } {}
                 = . rsp_w row_w row_first_cell
                 = . rlp_w row_w n_cells
                 // P3b: if a typed-float column is configured, parse
@@ -982,7 +989,8 @@ $ `stdlib/core/rcbox.nu`
         }
     }
 
-    // Commit raw row counters into the underlying Vec[i]'s len field.
+    // Commit the raw counters into the Vecs' len fields.
+    : b _r0 ( vec_set_len [i] . t flat_cells fc_len )
     : b _r1 ( vec_set_len [i] . t row_starts row_w )
     : b _r2 ( vec_set_len [i] . t row_lens row_w )
 }
@@ -1002,13 +1010,6 @@ $ `stdlib/core/rcbox.nu`
             ( vec_new [u] ) ( vec_new [f] ) typed_float_col F
         } ) }
     : *CSVTableImpl t ( __CSVTable_ptr h )
-    ? >= typed_float_col 0 {
-        // Pre-reserve typed_floats to a generous estimate (newline count
-        // gives an upper bound for body rows; +2 padding for the
-        // headerless edge cases the parser handles).
-        : i nl_n ( nurl_count_byte # s ( string_data . t content ) ( string_len . t content ) 10 )
-        ( vec_reserve [f] . t typed_floats + nl_n 2 )
-    } {}
     ( __csv_parse_content t dia )
     ^ h
 }

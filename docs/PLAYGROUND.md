@@ -44,7 +44,7 @@ and serves a public **MCP endpoint** at `/mcp`.
   an ELF + flat `Image` for QEMU `virt`. Optional `"args"` (the guest's
   argv — returned inside the boot command, never executed server-side;
   it may not contain `"` or control characters, and the returned command
-  single-quotes the whole `-append` value so the caller's shell expands
+  carries it as a single-quoted shell token so the caller's shell expands
   nothing in it), `"files"` (`{relative/path: base64}` baked in as a read-only
   filesystem) and `"boot": true` (boot the image server-side and return
   the guest console + exit status). The reply carries the artifact plus

@@ -44,6 +44,319 @@ $ `stdlib/std/sysinfo.nu`
 
 & `c` @ nurl_cpu_launch *u fn *u params i grid i block → v
 
+// The float transcendentals every kernel calls, the same bits on every
+// host (agora #548): pushed after the shim and before the kernels, in the
+// JIT backend (with __cpu_detmath_cxx) and the static one.
+@ cpu_detmath → s {
+    ^ `// ── Deterministic float transcendentals (agora #548) ───────────────
+// A kernel's expf / logf / powf / sinf / cosf / tanhf / erff / log1pf
+// come from here, not the host libm: glibc, UCRT and macOS's libm round
+// them differently, so the same kernel gave other bits on another OS.
+// Each is computed in double with IEEE + - * / only (no fma: the backend
+// builds with -ffp-contract=off, and no libm call), to a relative error
+// near 1e-16, and rounded once to float: the same bits on every host, and
+// the correctly rounded float in all but the rarest midpoint cases.
+#include <stdint.h>
+#include <string.h>
+static inline uint64_t __nm_bits(double d) { uint64_t u; memcpy(&u, &d, 8); return u; }
+static inline double __nm_from(uint64_t u) { double d; memcpy(&d, &u, 8); return d; }
+static inline uint32_t __nm_fbits(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
+static inline float __nm_ffrom(uint32_t u) { float f; memcpy(&f, &u, 4); return f; }
+// 2^k for k in [-1022, 1023], exact.
+static inline double __nm_pow2(int k) { return __nm_from((uint64_t)(k + 1023) << 52); }
+// Nearest integer of |t| < 2^51 (ties to even), by the 1.5*2^52 shift.
+static inline double __nm_rint(double t) { const double s = 0x1.8p52; return (t + s) - s; }
+
+// e^x for |x| <= 104 (k = round(x/ln2) fits [-151, 151]).
+static inline double __nm_exp(double x) {
+    const double ln2hi = 0x1.62e42fee00000p-1, ln2lo = 0x1.a39ef35793c76p-33;
+    double kd = __nm_rint(x * 0x1.71547652b82fep0);
+    double r = (x - kd * ln2hi) - kd * ln2lo;
+    double p = 0x1.6124613a86d09p-33;
+    p = p * r + 0x1.1eed8eff8d898p-29;
+    p = p * r + 0x1.ae64567f544e4p-26;
+    p = p * r + 0x1.27e4fb7789f5cp-22;
+    p = p * r + 0x1.71de3a556c734p-19;
+    p = p * r + 0x1.a01a01a01a01ap-16;
+    p = p * r + 0x1.a01a01a01a01ap-13;
+    p = p * r + 0x1.6c16c16c16c17p-10;
+    p = p * r + 0x1.1111111111111p-7;
+    p = p * r + 0x1.5555555555555p-5;
+    p = p * r + 0x1.5555555555555p-3;
+    p = p * r + 0.5;
+    p = p * r + 1.0;
+    p = p * r + 1.0;
+    return p * __nm_pow2((int)kd);
+}
+// e^t - 1, accurate near 0, for |t| <= 104.
+static inline double __nm_expm1(double t) {
+    if (t > 0.34 || t < -0.34) return __nm_exp(t) - 1.0;
+    // t + t^2 (1/2! + t/3! + ... + t^15/17!): |t| <= 0.34 leaves 1e-24.
+    double p = 0x1.952c77030ad4ap-49;
+    p = p * t + 0x1.ae7f3e733b81fp-45;
+    p = p * t + 0x1.ae7f3e733b81fp-41;
+    p = p * t + 0x1.93974a8c07c9dp-37;
+    p = p * t + 0x1.6124613a86d09p-33;
+    p = p * t + 0x1.1eed8eff8d898p-29;
+    p = p * t + 0x1.ae64567f544e4p-26;
+    p = p * t + 0x1.27e4fb7789f5cp-22;
+    p = p * t + 0x1.71de3a556c734p-19;
+    p = p * t + 0x1.a01a01a01a01ap-16;
+    p = p * t + 0x1.a01a01a01a01ap-13;
+    p = p * t + 0x1.6c16c16c16c17p-10;
+    p = p * t + 0x1.1111111111111p-7;
+    p = p * t + 0x1.5555555555555p-5;
+    p = p * t + 0x1.5555555555555p-3;
+    p = p * t + 0.5;
+    return t + (t * t) * p;
+}
+// log(x) for a positive, finite, normal double x.
+static inline double __nm_log(double x) {
+    uint64_t u = __nm_bits(x);
+    int e = (int)(u >> 52) - 1023;
+    double m = __nm_from((u & 0x000fffffffffffffULL) | 0x3ff0000000000000ULL);
+    if (m > 0x1.6a09e667f3bcdp0) { m = m * 0.5; e = e + 1; }
+    double f = m - 1.0;
+    double s = f / (2.0 + f);
+    double z = s * s;
+    double p = 1.0 / 25.0;
+    p = p * z + 1.0 / 23.0;
+    p = p * z + 1.0 / 21.0;
+    p = p * z + 1.0 / 19.0;
+    p = p * z + 1.0 / 17.0;
+    p = p * z + 1.0 / 15.0;
+    p = p * z + 1.0 / 13.0;
+    p = p * z + 1.0 / 11.0;
+    p = p * z + 1.0 / 9.0;
+    p = p * z + 1.0 / 7.0;
+    p = p * z + 1.0 / 5.0;
+    p = p * z + 1.0 / 3.0;
+    // log m = 2 atanh s = 2 s (1 + z/3 + z^2/5 + ...), f - s f = 2 s.
+    double lm = (s + s) + (s + s) * (z * p);
+    return (double)e * 0x1.62e42fefa39efp-1 + lm;
+}
+
+static inline float __nurl_expf(float x) {
+    if (x != x) return x;
+    if (x > 0x1.62e42ep6f) return __nm_ffrom(0x7f800000u);
+    if (x < -0x1.9fe368p6f) return 0.0f;
+    return (float)__nm_exp((double)x);
+}
+static inline float __nurl_logf(float x) {
+    if (x != x) return x;
+    if (x < 0.0f) return __nm_ffrom(0x7fc00000u);
+    if (x == 0.0f) return -__nm_ffrom(0x7f800000u);
+    if (x == __nm_ffrom(0x7f800000u)) return x;
+    return (float)__nm_log((double)x);
+}
+static inline float __nurl_log1pf(float x) {
+    if (x != x) return x;
+    if (x < -1.0f) return __nm_ffrom(0x7fc00000u);
+    if (x == -1.0f) return -__nm_ffrom(0x7f800000u);
+    if (x == __nm_ffrom(0x7f800000u)) return x;
+    double d = (double)x;
+    // 1 + x is exact in double for |x| >= 2^-29; below, log1p x = x - x^2/2.
+    if (d < 0x1p-29 && d > -0x1p-29) return (float)(d - d * d * 0.5);
+    return (float)__nm_log(1.0 + d);
+}
+static inline float __nurl_tanhf(float x) {
+    if (x != x) return x;
+    if (x > 10.0f) return 1.0f;
+    if (x < -10.0f) return -1.0f;
+    double d = (double)x;
+    double e = __nm_expm1(d + d);
+    return (float)(e / (e + 2.0));
+}
+static inline float __nurl_erff(float x) {
+    if (x != x) return x;
+    if (x >= 4.0f) return 1.0f;
+    if (x <= -4.0f) return -1.0f;
+    // erf x = 2/sqrt(pi) sum (-1)^n x^(2n+1) / (n! (2n+1)): the largest
+    // term below |x| = 4 is ~1e5, so the sum keeps ~1e-11 absolute.
+    double d = (double)x, z = d * d, term = d, sum = d;
+    for (int n = 1; n < 80; n++) {
+        term = -term * z / (double)n;
+        double add = term / (double)(2 * n + 1);
+        sum = sum + add;
+        if (add < 1e-19 && add > -1e-19) break;
+    }
+    return (float)(sum * 0x1.20dd750429b6dp0);
+}
+
+// 64 bits of 2/pi from bit index k0 on (bit k weighs 2^-k; k <= 0 is 0),
+// out of its 24-bit chunks.
+static inline uint64_t __nm_2opi64(int k0) {
+    static const uint32_t c[] = {
+        0xA2F983, 0x6E4E44, 0x1529FC, 0x2757D1, 0xF534DD, 0xC0DB62,
+        0x95993C, 0x439041, 0xFE5163, 0xABDEBB, 0xC561B7, 0x246E3A,
+        0x424DD2, 0xE00649, 0x2EEA09, 0xD1921C };
+    int b = k0 - 1;
+    int ci = b >= 0 ? b / 24 : -((-b + 23) / 24);
+    int off = b - 24 * ci;
+    uint64_t w[4];
+    for (int j = 0; j < 4; j++) { int i = ci + j; w[j] = i >= 0 ? c[i] : 0u; }
+    // The 96 bits w0 w1 w2 w3 as hi (bits 95..32) and lo (31..0); the 64
+    // wanted start off bits below the top: the window shifted right by
+    // 32 - off.
+    uint64_t hi = (w[0] << 40) | (w[1] << 16) | (w[2] >> 8);
+    uint64_t lo = ((w[2] & 0xff) << 24) | w[3];
+    int s = 32 - off;
+    return (hi << (32 - s)) | (lo >> s);
+}
+// x reduced by pi/2: r in [-pi/4, pi/4] and the quadrant q (mod 4), for a
+// finite float x.
+static inline double __nm_rem_pio2f(float x, int* q) {
+    uint32_t u = __nm_fbits(x) & 0x7fffffffu;
+    // |x| < 2^19: Cody-Waite in three parts. k pio2_1 and k pio2_2 are
+    // exact (k < 2^19, the parts have 33 and 32 bits), and so are the two
+    // subtractions (their bits span under 53); only k pio2_2t rounds.
+    if (u < 0x49000000u) {
+        double xd = (double)x;
+        double kd = __nm_rint(xd * 0x1.45f306dc9c883p-1);
+        double r = ((xd - kd * 0x1.921fb54400000p0) - kd * 0x1.0b4611a600000p-34) - kd * 0x1.3198a2e037073p-69;
+        *q = (int)kd & 3;
+        return r;
+    }
+    // Larger: Payne-Hanek with integers. x = M 2^E, and x 2/pi mod 4 is M
+    // times the bits of 2/pi from 2^-(E-1) on, mod 4 (the bits above make a
+    // multiple of 4, and M times one stays one); 128 of them are kept.
+    uint64_t M = (uint64_t)((u & 0x7fffff) | 0x800000);
+    int E = (int)(u >> 23) - 150;
+    uint64_t t1 = __nm_2opi64(E - 1), t0 = __nm_2opi64(E + 63);
+    // V = (t1, t0) M mod 2^128, a Q2.126 fixed-point number, by 32-bit limbs.
+    uint64_t p0 = (t0 & 0xffffffffu) * M, p1 = (t0 >> 32) * M;
+    uint64_t v0 = p0 + (p1 << 32);
+    uint64_t carry = (p1 >> 32) + (v0 < p0 ? 1 : 0);
+    uint64_t v1 = t1 * M + carry;
+    int qq = (int)(v1 >> 62);
+    // The fraction, Q0.128, read signed: f - 1 when f >= 1/2, the nearest
+    // quadrant being the next one then.
+    uint64_t fh = (v1 << 2) | (v0 >> 62), fl = v0 << 2;
+    int neg = (int)(fh >> 63);
+    if (neg) { qq = qq + 1; fl = ~fl + 1; fh = ~fh + (fl == 0 ? 1 : 0); }
+    // (To double: its top 64 bits, rounded once. All 128 go in, so r keeps
+    // its precision near a multiple of pi/2.)
+    double m;
+    if (fh) {
+        int lz = __builtin_clzll(fh);
+        uint64_t top = lz ? ((fh << lz) | (fl >> (64 - lz))) : fh;
+        m = (double)top * __nm_pow2(-64 - lz);
+    } else m = (double)fl * 0x1p-128;
+    double r = (neg ? -m : m) * 0x1.921fb54442d18p0;
+    if (__nm_fbits(x) >> 31) { r = -r; qq = -qq; }
+    *q = qq & 3;
+    return r;
+}
+static inline double __nm_sin_k(double r) {
+    double z = r * r, p;
+    // (Taylor, r^15/15! down; |r| <= pi/4 leaves r^17/17! ~ 5e-17 r.)
+    p = -0x1.ae7f3e733b81fp-41;            // -1/15!
+    p = p * z + 0x1.6124613a86d09p-33;     //  1/13!
+    p = p * z - 0x1.ae64567f544e4p-26;     // -1/11!
+    p = p * z + 0x1.71de3a556c734p-19;     //  1/9!
+    p = p * z - 0x1.a01a01a01a01ap-13;     // -1/7!
+    p = p * z + 0x1.1111111111111p-7;      //  1/5!
+    p = p * z - 0x1.5555555555555p-3;      // -1/3!
+    return r + r * (z * p);
+}
+static inline double __nm_cos_k(double r) {
+    double z = r * r;
+    double p = 0x1.ae7f3e733b81fp-45;      //  1/16!
+    p = p * z - 0x1.93974a8c07c9dp-37;     // -1/14!
+    p = p * z + 0x1.1eed8eff8d898p-29;     //  1/12!
+    p = p * z - 0x1.27e4fb7789f5cp-22;     // -1/10!
+    p = p * z + 0x1.a01a01a01a01ap-16;     //  1/8!
+    p = p * z - 0x1.6c16c16c16c17p-10;     // -1/6!
+    p = p * z + 0x1.5555555555555p-5;      //  1/4!
+    p = p * z - 0.5;
+    return 1.0 + z * p;
+}
+static inline float __nurl_sinf(float x) {
+    if (x != x) return x;
+    uint32_t a = __nm_fbits(x) & 0x7fffffffu;
+    if (a >= 0x7f800000u) return __nm_ffrom(0x7fc00000u);
+    if (a <= 0x3f490fdau) return (float)__nm_sin_k((double)x);
+    int q; double r = __nm_rem_pio2f(x, &q);
+    double v = (q & 1) ? __nm_cos_k(r) : __nm_sin_k(r);
+    return (float)((q & 2) ? -v : v);
+}
+static inline float __nurl_cosf(float x) {
+    if (x != x) return x;
+    uint32_t a = __nm_fbits(x) & 0x7fffffffu;
+    if (a >= 0x7f800000u) return __nm_ffrom(0x7fc00000u);
+    if (a <= 0x3f490fdau) return (float)__nm_cos_k((double)x);
+    int q; double r = __nm_rem_pio2f(x, &q);
+    double v = (q & 1) ? __nm_sin_k(r) : __nm_cos_k(r);
+    return (float)(((q + 1) & 2) ? -v : v);
+}
+// Is the float y an integer, and an odd one?
+static inline int __nm_fint(float y) {
+    uint32_t a = __nm_fbits(y) & 0x7fffffffu;
+    int ex = (int)(a >> 23) - 127;
+    if (ex >= 24) return 2;                       // even integer
+    if (ex < 0) return a == 0 ? 2 : 0;
+    uint32_t frac = (a & 0x7fffff) | 0x800000;
+    int sh = 23 - ex;
+    if (frac & ((1u << sh) - 1)) return 0;        // not an integer
+    return ((frac >> sh) & 1) ? 1 : 2;            // 1 odd, 2 even
+}
+static inline float __nurl_powf(float x, float y) {
+    const float inf = __nm_ffrom(0x7f800000u);
+    if (y == 0.0f || x == 1.0f) return 1.0f;
+    if (x != x || y != y) return __nm_ffrom(0x7fc00000u);
+    int yi = __nm_fint(y);
+    float ax = x < 0.0f ? -x : x;
+    if (y == inf || y == -inf) {
+        if (ax == 1.0f) return 1.0f;
+        return ((ax > 1.0f) == (y > 0.0f)) ? inf : 0.0f;
+    }
+    int neg = (x < 0.0f || (x == 0.0f && (__nm_fbits(x) >> 31))) && yi == 1;
+    if (x == 0.0f) { float v = y < 0.0f ? inf : 0.0f; return neg ? -v : v; }
+    if (ax == inf) { float v = y < 0.0f ? 0.0f : inf; return neg ? -v : v; }
+    if (x < 0.0f && yi == 0) return __nm_ffrom(0x7fc00000u);
+    double t = (double)y * __nm_log((double)ax);
+    float v;
+    if (t > 89.0) v = inf;
+    else if (t < -104.0) v = 0.0f;
+    else v = (float)__nm_exp(t);
+    return neg ? -v : v;
+}
+// A kernel's call of one of them is this one's.
+#define expf(x) __nurl_expf(x)
+#define logf(x) __nurl_logf(x)
+#define log1pf(x) __nurl_log1pf(x)
+#define tanhf(x) __nurl_tanhf(x)
+#define erff(x) __nurl_erff(x)
+#define sinf(x) __nurl_sinf(x)
+#define cosf(x) __nurl_cosf(x)
+#define powf(x, y) __nurl_powf(x, y)
+`
+}
+
+@ __cpu_detmath_cxx → s {
+    ^ `// C++ (the JIT backend): exp, log, … of a float are the float functions,
+// as in CUDA; of anything else, the double ones as before.
+#define __NURL_DM1(N) static inline float __nurl_##N(float x) { return __nurl_##N##f(x); } template <class T> static inline double __nurl_##N(T x) { return (N)((double)x); }
+__NURL_DM1(exp)
+__NURL_DM1(log)
+__NURL_DM1(log1p)
+__NURL_DM1(tanh)
+__NURL_DM1(erf)
+__NURL_DM1(sin)
+__NURL_DM1(cos)
+static inline float __nurl_pow(float x, float y) { return __nurl_powf(x, y); }
+template <class A, class B> static inline double __nurl_pow(A x, B y) { return (pow)((double)x, (double)y); }
+#define exp(x) __nurl_exp(x)
+#define log(x) __nurl_log(x)
+#define log1p(x) __nurl_log1p(x)
+#define tanh(x) __nurl_tanh(x)
+#define erf(x) __nurl_erf(x)
+#define sin(x) __nurl_sin(x)
+#define cos(x) __nurl_cos(x)
+#define pow(x, y) __nurl_pow(x, y)
+`
+}
+
 // ── CUDA-C → host source generation ───────────────────────────────
 @ __cpu_header → s {
     ^ `#include <math.h>
@@ -417,6 +730,8 @@ raw @ cpu_compile s src s name → *u {
     : String casts ( __parse_casts src name )
     : String c ( string_with_cap + 2048 ( nurl_str_len src ) )
     ( string_push_str c ( __cpu_header ) )
+    ( string_push_str c ( cpu_detmath ) )
+    ( string_push_str c ( __cpu_detmath_cxx ) )
     ( string_push_str c src )
     // A kernel with a barrier in it needs its block's threads to be able to
     // WAIT for each other, so its block runs as fibers on one host thread. A

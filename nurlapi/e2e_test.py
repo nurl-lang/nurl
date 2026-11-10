@@ -1233,11 +1233,16 @@ def t_build_wasm_ignores_caller_ir(c: Client) -> None:
 
 def t_build_unikernel_rest(c: Client) -> None:
     print("\n[REST] /build_unikernel — image + initfs + guards")
-    # 1. A hello builds into a PVH ELF with boot commands attached.
+    # 1. A hello builds into a PVH ELF with boot commands attached. The
+    #    argv carries shell metacharacters on purpose: boot.qemu / qemu_net
+    #    are commands the caller pastes into a shell, so a value like
+    #    $(…) or `…` must be emitted inert (single-quoted), never where the
+    #    caller's shell would evaluate it (Valkohattu command-injection PoC).
+    inj = '$(touch /tmp/nurl_pwned) `id` ; rm -rf / # --demo yes'
     src = "@ main → i {\n    ( nurl_println `uk-e2e` )\n    ^ 0\n}\n"
     status, _, raw = c.post(
         "/build_unikernel",
-        {"source": src, "args": "--demo $(echo NURL_ARGS_MARKER)"},
+        {"source": src, "args": inj},
         timeout=180.0,
     )
     assert_eq("build_unikernel status 200", status, 200)
@@ -1251,27 +1256,42 @@ def t_build_unikernel_rest(c: Client) -> None:
     assert_true("elf artifact returned", bool(art.get("token")), f"keys={list(j)}")
     assert_true("image has a size", (j.get("image_bytes") or 0) > 50000, str(j.get("image_bytes")))
     boot = j.get("boot") or {}
-    assert_true("boot.qemu names the microvm machine", "-M microvm" in (boot.get("qemu") or ""), boot.get("qemu") or "")
-    assert_true("boot command carries the argv", 'args=' in (boot.get("qemu") or ""), boot.get("qemu") or "")
-    assert_true("boot -append is one shell-quoted word", "-append '" in (boot.get("qemu") or ""), boot.get("qemu") or "")
-    assert_true("boot command leaves $() for the guest", "$(echo NURL_ARGS_MARKER)" in (boot.get("qemu") or ""), boot.get("qemu") or "")
-    assert_true("boot command has no shell substitution", "$(date +%s)" not in (boot.get("qemu") or ""), boot.get("qemu") or "")
-    assert_true("qemu_net adds virtio-net", "virtio-net-device" in (boot.get("qemu_net") or ""), "")
+    bq = boot.get("qemu") or ""
+    bn = boot.get("qemu_net") or ""
+    assert_true("boot.qemu names the microvm machine", "-M microvm" in bq, bq)
+    assert_true("boot command carries the argv", 'args=' in bq, bq)
+    assert_true("qemu_net adds virtio-net", "virtio-net-device" in bn, "")
+    # The hostile argv must appear single-quoted, so no part of it can run
+    # when the command is pasted into a shell. $(date +%s) is the server's
+    # own, intended expansion and stays outside the quotes.
+    sq = "'" + inj + "'"
+    assert_true("boot.qemu single-quotes the argv (no shell injection)", sq in bq, bq)
+    assert_true("qemu_net single-quotes the argv (no shell injection)", sq in bn, bn)
+    assert_true("wallclock expansion is preserved", "wallclock=$(date +%s)" in bq, bq)
+    # The caller-controlled argv is the ONLY $(…) in the command; the
+    # server never emits a bare, unquoted command substitution of its own
+    # beyond wallclock.
+    assert_true(
+        "no caller command-substitution left outside single quotes",
+        bq.replace("wallclock=$(date +%s)", "").replace(sq, "").find("$(") == -1,
+        bq,
+    )
     # The artifact must actually download and be an ELF.
     tok = art.get("token")
     dstat, _, dbody = c.get(f"/download/{tok}")
     assert_eq("elf downloads", dstat, 200)
     assert_true("downloaded file is an ELF", dbody[:4] == b"\x7fELF", repr(dbody[:4]))
 
-    # A guest argv is embedded in `args="…"`; the guest's reader has no
-    # escape syntax, and the returned command is a shell word. A quote is
-    # refused before a build directory is created.
-    status, _, _ = c.post(
-        "/build_unikernel",
-        {"source": src, "args": 'a"b'},
-        timeout=60.0,
-    )
-    assert_eq("args with a double quote rejected", status, 400)
+    # A guest argv is embedded in `args="…"`; the guest's reader ends it
+    # at the next double quote and has no escape syntax. A quote or a
+    # control byte is refused before a build directory is created.
+    for bad_args, why in (('a"b', "double quote"), ("a\nb", "newline")):
+        status, _, _ = c.post(
+            "/build_unikernel",
+            {"source": src, "args": bad_args},
+            timeout=60.0,
+        )
+        assert_eq(f"args with a {why} rejected", status, 400)
 
     # 2. An initfs file rides inside the image; keys are path-checked.
     import base64 as _b64
@@ -1479,6 +1499,39 @@ def wait_ready(c: Client, attempts: int = 20, delay: float = 0.5) -> None:
     sys.exit(2)
 
 
+def t_artifact_download_hardening(c: Client) -> None:
+    # A build artifact is attacker-controlled bytes under an
+    # attacker-chosen filename, served from the playground's own origin.
+    # An ELF a caller names `*.html` must download, never render as a page
+    # that runs its embedded markup (Valkohattu stored-XSS PoC). The
+    # download must carry Content-Disposition: attachment and
+    # X-Content-Type-Options: nosniff, and must not be labelled text/html.
+    print("\n[REST] /download — artifact serving is XSS-hardened")
+    src = "@ main → i {\n    ( nurl_println `<script>dt=1</script>` )\n    ^ 0\n}\n"
+    status, _, raw = c.post("/build", {"source": src, "filename": "xss.html"}, timeout=180.0)
+    assert_eq("build (xss.html) status 200", status, 200)
+    try:
+        j = json.loads(raw)
+    except json.JSONDecodeError:
+        bad("build result is JSON", f"got {raw[:200]!r}")
+        return
+    art = j.get("binary_artifact") or j.get("binary") or {}
+    token = art.get("token") if isinstance(art, dict) else None
+    if not token:
+        bad("xss.html build artifact present", f"no token in {list(j)}")
+        return
+    dstat, dhdrs, dbody = c.get(f"/download/{token}")
+    assert_eq("xss.html download → 200", dstat, 200)
+    assert_true("download body is the ELF artifact", dbody[:4] == b"\x7fELF", repr(dbody[:4]))
+    h = {k.lower(): v for k, v in (dhdrs or {}).items()}
+    cd = h.get("content-disposition", "")
+    cto = h.get("x-content-type-options", "")
+    ct = h.get("content-type", "")
+    assert_true("download is Content-Disposition: attachment", cd.lower().startswith("attachment"), f"cd={cd!r}")
+    assert_true("download sets X-Content-Type-Options: nosniff", cto.lower() == "nosniff", f"cto={cto!r}")
+    assert_true("download is NOT served as text/html", "text/html" not in ct.lower(), f"ct={ct!r}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default="http://127.0.0.1:8000")
@@ -1513,12 +1566,14 @@ def main() -> int:
         t_build_import_confinement(c)
         t_build_nesting_limit(c)
         t_diagnostics_contract(c)
+        t_artifact_download_hardening(c)
         print("[REST/MCP] wasm + unikernel builds — skipped (--native-only)")
     elif not args.quick:
         t_tools_call_build(c)
         t_build_import_confinement(c)
         t_build_nesting_limit(c)
         t_diagnostics_contract(c)
+        t_artifact_download_hardening(c)
         t_tools_call_build_wasm(c)
         t_build_wasm_libc_shims(c)
         t_build_wasm_vararg_libc(c)
