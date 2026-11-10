@@ -1619,6 +1619,22 @@ unsafe @ agg_field_count i syms s ot → i {
 // records (bck_block_enter / exit): an `=` at the depth its binding was bound
 // at is not inside an arm or a loop body of its own (mem_note_assign_lend).
 : ~ i g_cg_blk_depth 0
+// For the function being compiled (agora #386): the block depth of its
+// body's top-level statements (-1: none), and how many calls it has
+// made so far. An `inout` parameter given a whole new value at that depth,
+// before any call (none can panic before it) and before any exit, is
+// replaced on every path to every exit: `repoints##fn`.
+: ~ i g_rp_d0 -1
+: ~ i g_rp_calls 0
+// …and whether the right-hand side of the `=` being compiled is a literal
+// of literals only (__rp_literal_only), for __rp_note_assign.
+: ~ b g_rp_rhs_lit F
+// …and how many `&` / `|` right operands enclose the code being compiled
+// (__rp_apply), and how many statements of the body's top level have begun
+// (__rp_note_assign: the credited write must be the first, so nothing
+// before it — a `/`, a `%`, an index — may panic past it).
+: ~ i g_rp_sc 0
+: ~ i g_rp_nstmt 0
 : ~ s g_noaddr_visiting ``  // enum types __ty_no_address is examining (a recursive type qualifies provisionally)
 : ~ i g_ff_gen 0  // function counter keying the field-owner flags (mem_ff_slot)
 : ~ i g_ff_any 0  // 1 once this function made a field-owner flag
@@ -5551,6 +5567,7 @@ unsafe @ nurl_cg_lbl i h s hint → s {
 }
 
 unsafe @ gen_ret i lex i syms i cg → s {
+    ( __rp_exit syms )
     // A fall-off value has no `^` token to step over (gen_block_ret).
     : b __ret_imp g_ret_implicit
     = g_ret_implicit F
@@ -8226,7 +8243,11 @@ unsafe @ __agg_twin_hint i lex i syms s aty → s {
     // Right branch: evaluate right operand
     ( emit ( nurl_str_cat lright `:` ) )
     ( nurl_sym_def syms `__cur_lbl__` lright )
+    // (An operand that may not run: no repoint credit applies in it,
+    // __rp_apply — agora #386.)
+    = g_rp_sc + g_rp_sc 1
     : s rv ( gen_expr lex syms cg )
+    = g_rp_sc - g_rp_sc 1
     : s rt ( nurl_get_last_type )
     // Check type compatibility
     ? ! ( seq rt `i1` )
@@ -8259,7 +8280,11 @@ unsafe @ __agg_twin_hint i lex i syms s aty → s {
     // Right branch: evaluate right operand
     ( emit ( nurl_str_cat lright `:` ) )
     ( nurl_sym_def syms `__cur_lbl__` lright )
+    // (An operand that may not run: no repoint credit applies in it,
+    // __rp_apply — agora #386.)
+    = g_rp_sc + g_rp_sc 1
     : s rv ( gen_expr lex syms cg )
+    = g_rp_sc - g_rp_sc 1
     : s rt ( nurl_get_last_type )
     // Check type compatibility
     ? ! ( seq rt `i1` )
@@ -13943,6 +13968,124 @@ unsafe @ nurl_lex_peek4_type i h → i {
     ^ ( nurl_str_cat `*` `` )
 }
 
+unsafe @ __rp_rhs_set b v → v { = g_rp_rhs_lit v }
+
+// Is `txt` (an `=`'s right-hand side as written) a struct literal of
+// literals only — `@ Name { `text` 12 T … }`: no binding, call, field
+// read, join or nested literal? (agora #386: the repoint credited must
+// hold nothing.)
+@ __rp_literal_only s txt → b {
+    // (Asked of the lexer's own tokens, not the text: a comment, a CR, a
+    // backtick inside a comment are the lexer's to skip — formal's #1709
+    // review.)
+    : i lx ( nurl_lex_new txt `<repoint>` )
+    : ~ b ok F
+    ? == ( nurl_lex_type lx ) TT_AT {
+        ( nurl_lex_advance lx )
+        ? ( is_ident_tok ( nurl_lex_type lx ) ) {
+            ( nurl_lex_advance lx )
+            ? == ( nurl_lex_type lx ) TT_LBRACE {
+                ( nurl_lex_advance lx )
+                : ~ b more T
+                ~ more {
+                    : i t ( nurl_lex_type lx )
+                    ? == t TT_RBRACE {
+                        ( nurl_lex_advance lx )
+                        = ok == ( nurl_lex_type lx ) TT_EOF
+                        = more F
+                    } {
+                        ? | | | == t TT_STR == t TT_INT == t TT_FLOAT == t TT_BOOL { ( nurl_lex_advance lx ) } { = more F }
+                    }
+                }
+            } {}
+        } {}
+    } {}
+    ( nurl_lex_free lx )
+    ^ ok
+}
+
+// A later write to (or field store into) a credited parameter voids it.
+@ __rp_void i syms s name → v {
+    : s bad ( nurl_sym_get syms `__fn_rp_bad__` )
+    ? ( str_contains_word bad name ) { ^ v } {}
+    ( nurl_sym_set_deep syms `__fn_rp_bad__` ? == 0 ( nurl_str_len bad ) ( nurl_str_cat name `` ) ( nurl_str_cat3 bad ` ` name ) )
+}
+
+@ __rp_note_write i syms s name → v {
+    ? | == 0 ( nurl_str_len name ) < g_rp_d0 0 { ^ v } {}
+    ? ( str_contains_word ( nurl_sym_get syms `__fn_rp_done__` ) name ) { ( __rp_void syms name ) } {}
+}
+
+// `= name …` at the body's top level of the function being compiled,
+// before any call and any exit, of one of its `inout` parameters: that
+// parameter is replaced whole on every path from here (agora #386).
+@ __rp_note_assign i syms s name → v {
+    // (A second write after the credited one may put a view back — `: s keep
+    // . w v  = w @ W { `fresh` }  = w @ W { keep }`, or one in an arm or a
+    // closure: the credit is the parameter's FINAL value, so any later
+    // write, at any depth, voids it. formal's #1691 review.)
+    ? ( str_contains_word ( nurl_sym_get syms `__fn_rp_done__` ) name ) { ( __rp_void syms name ) ^ v } {}
+    ? | | | != 0 g_bck_closure_depth != g_cg_blk_depth g_rp_d0 != 0 g_rp_calls != 1 g_rp_nstmt { ^ v } {}
+    ? ! ( seq ( nurl_sym_get2 syms name `__inout` ) `1` ) { ^ v } {}
+    // (The parameter itself, not a local of its name shadowing it — whose
+    // `__inout` lookup falls through to the parameter's: its slot is the
+    // incoming pointer, `%name`. formal's #1709 review.)
+    ? ! ( seq ( nurl_sym_get2 syms name `__ptr` ) ( nurl_str_cat `%` name ) ) { ^ v } {}
+    ? < ( nurl_sym_word_index syms `__fn_param_names__` name ) 0 { ^ v } {}
+    // (…to a value that reads nothing: a literal of literals and globals.
+    // One that reads a binding — the parameter itself (`= w @ W { . w v }`
+    // keeps its old view, which no answer names), a local, another
+    // parameter — is no fresh value.)
+    ? | == 0 g_borrowck != 0 ( nurl_str_len ( nurl_sym_get g_bck `lastreads` ) ) { ^ v } {}
+    : s done ( nurl_sym_get syms `__fn_rp_done__` )
+    // (…and only a value written as literals: `@ W { `lit` 0 }`. A join
+    // operand that reads the parameter, `@ W { ? F `x` . w v }`, records
+    // no read the check above sees.)
+    ? ! g_rp_rhs_lit { ^ v } {}
+    ? ( str_contains_word ( nurl_sym_get syms `__fn_rp_bad__` ) name ) { ^ v } {}
+    ( nurl_sym_set_deep syms `__fn_rp_done__` ? == 0 ( nurl_str_len done ) ( nurl_str_cat name `` ) ( nurl_str_cat3 done ` ` name ) )
+}
+
+// An exit of the function being compiled (`^`, a try's way out, the body's
+// end): every `inout` parameter not repointed by now is not repointed on
+// every path.
+@ __rp_exit i syms → v {
+    ? | != 0 g_bck_closure_depth < g_rp_d0 0 { ^ v } {}
+    : s done ( nurl_sym_get syms `__fn_rp_done__` )
+    : ~ s bad ( nurl_sym_get syms `__fn_rp_bad__` )
+    : ~ s ps ( nurl_sym_get syms `__fn_param_names__` )
+    ~ != 0 ( nurl_str_len ps ) {
+        : s w ( str_first_word ps ) = ps ( str_skip_word ps )
+        ? & & ( seq ( nurl_sym_get2 syms w `__inout` ) `1` ) ! ( str_contains_word done w ) ! ( str_contains_word bad w ) {
+            = bad ? == 0 ( nurl_str_len bad ) ( nurl_str_cat w `` ) ( nurl_str_cat3 bad ` ` w )
+        } {}
+    }
+    // (Into the function's own scope: an exit in an arm is in a nested one.)
+    ( nurl_sym_set_deep syms `__fn_rp_bad__` bad )
+}
+
+// …and at the function's end: `repoints##fn`, the indices of the `inout`
+// parameters it replaces whole on every path to every exit.
+@ __rp_publish i syms s fname → v {
+    : s done ( nurl_sym_get syms `__fn_rp_done__` )
+    ? == 0 ( nurl_str_len done ) { ^ v } {}
+    // (A function that makes a call or arms a defer anywhere is not
+    // credited: either may hand the parameter on or put a view back after
+    // the repoint — formal's #1691 review.)
+    ? | != 0 g_rp_calls != 0 ( nurl_sym_len syms `__fn_rp_defer__` ) { ^ v } {}
+    : ~ s out ``
+    : ~ s ps ( nurl_sym_get syms `__fn_param_names__` )
+    : ~ i k 0
+    ~ != 0 ( nurl_str_len ps ) {
+        : s w ( str_first_word ps ) = ps ( str_skip_word ps )
+        ? & ( str_contains_word done w ) ! ( str_contains_word ( nurl_sym_get syms `__fn_rp_bad__` ) w ) {
+            = out ? == 0 ( nurl_str_len out ) ( nurl_str_int k ) ( nurl_str_cat3 out ` ` ( nurl_str_int k ) )
+        } {}
+        = k + k 1
+    }
+    ? != 0 ( nurl_str_len out ) { ( nurl_sym_def g_pending_impl ( nurl_str_cat `repoints##` fname ) out ) } {}
+}
+
 // `( mem_dup x )` — an owned copy of x's value: a deep copy of a String,
 // a Vec, a library handle or an owning struct / enum, the value itself for
 // anything that owns nothing. How a generic container copies its elements
@@ -15651,6 +15794,7 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
 }
 
 unsafe @ gen_call i lex i syms i cg → s {
+    = g_rp_calls + g_rp_calls 1
     // The call's own line — the lexer has moved past `)` by the time a
     // use of a closure binding is noted (bck_note_closure_caps).
     : i __call_line ( nurl_lex_line lex )
@@ -19544,6 +19688,10 @@ unsafe @ gen_call i lex i syms i cg → s {
                 // publish its env for the consuming binding / argument /
                 // return to own.
                 ? ( __is_closure_ty rlt ) { ( mem_retclo_take syms cg res rlt ) } {}
+                // An `inout` argument the callee always replaces whole
+                // (`repoints##`) holds the callee's new value from here, as
+                // after `= w …` (agora #386).
+                ( __rp_apply syms call_name __call_line )
                 // A struct result carrying owned fields: remember which value
                 // it is, so a statement that throws it away drops them.
                 = g_struct_tmp ? & == ( nurl_str_get rlt 0 ) 37
@@ -24005,6 +24153,7 @@ unsafe @ gen_match i lex i syms i cg → s {
     // flag, not scope shape, decides at run time whether the body runs.
     ( nurl_sym_set g_fn_escapes `__defer_top_fn__` ldefer )
     = g_defer_count + g_defer_count 1
+    ( nurl_sym_set_deep syms `__fn_rp_defer__` `1` )
     // Skip over the defer block during normal execution
     ( nurl_print `  br label %` ) ( nurl_print lafter ) ( emit_dbg_eol )
     // Defer entry: run the body only if the registration point was
@@ -30670,6 +30819,69 @@ unsafe @ __callee_decl_name s cn → s {
 // …or whether it is a binding's name: a copy of that binding's own value
 // (`= cur nxt`, a cursor pair swapped — bck_note_borrow's `vborrow`).
 : ~ b g_bck_rhs_ident F
+
+// After a call to `cal`: each `inout` argument the callee replaces whole on
+// every path to every exit (`repoints##cal`, __rp_publish) holds its new
+// value, as after `= w …`: an assign row of a value that holds nothing, so
+// its old borrows and dependencies end. Only where the callee's answers of
+// what it leaves in its arguments (g_fn_vkeeps, g_fn_vholds) are final and
+// name nothing: the call's own rows for those would be cleared with them.
+// How many times `w` is a word of `list`.
+@ __word_count s list s w → i {
+    : ~ i n 0
+    : ~ s rest ( nurl_str_cat list `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        ? ( seq ( str_first_word rest ) w ) { = n + n 1 } {}
+        = rest ( str_skip_word rest )
+    }
+    ^ n
+}
+
+unsafe @ __rp_apply i syms s cal i line → v {
+    // (Only a call that surely runs: not the right operand of a `&` / `|`
+    // that may skip it — `& F ( reset w )`, formal's #1709 review.)
+    ? | | == g_borrowck 0 != 0 g_bck_rec_off != 0 g_rp_sc { ^ v } {}
+    : s rp ( nurl_sym_get g_pending_impl ( nurl_str_cat `repoints##` cal ) )
+    ? == 0 ( nurl_str_len rp ) { ^ v } {}
+    ? != 0 ( nurl_sym_len g_fn_vkpend cal ) { ^ v } {}
+    : s vk ( nurl_sym_get g_fn_vkeeps cal )
+    : s vh ( nurl_sym_get g_fn_vholds cal )
+    ? | ! | == 0 ( nurl_str_len vk ) ( seq vk `:` ) ! | == 0 ( nurl_str_len vh ) ( seq vh `:` ) { ^ v } {}
+    : s args ( nurl_sym_get syms `__last_call_args__` )
+    : ~ s rest ( nurl_str_cat rp `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s ks ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s nm ( __nth_word args ( nurl_str_to_int ks ) )
+        // (…and only where this call's own argument is the statement's one
+        // read of the holder so far: the walk checks a statement's reads
+        // after the rows its calls record, so a read before the call —
+        // `( g . w v ( reset w ) )` — would be taken as one of the new
+        // value. formal's #1709 review.)
+        ? & & & != 0 ( nurl_str_len nm ) ! ( seq nm `-` ) != 0 ( nurl_sym_len syms nm ) == 1 ( __word_count ( nurl_sym_get g_bck `reads` ) nm ) {
+            : s vt ( nurl_sym_get syms nm )
+            : s rd0 ( nurl_sym_get g_bck `reads` )
+            ( bck_put `reads` `` )
+            : s l0 g_bck_rhs_lend
+            : s x0 g_bck_rhs_sx
+            : s c0 g_bck_rhs_callee
+            : b w0 g_bck_rhs_whole
+            : b i0 g_bck_rhs_ident
+            = g_bck_rhs_lend `-`
+            = g_bck_rhs_sx `-`
+            = g_bck_rhs_callee ``
+            = g_bck_rhs_whole F
+            = g_bck_rhs_ident F
+            = g_bck_bind_owns 1
+            ( bck_record_binding `assign` nm line ( bck_walk_class vt ) vt )
+            = g_bck_rhs_lend l0
+            = g_bck_rhs_sx x0
+            = g_bck_rhs_callee c0
+            = g_bck_rhs_whole w0
+            = g_bck_rhs_ident i0
+            ( bck_put `reads` rd0 )
+        } {}
+    }
+}
 
 // The names in `reads` whose values own something (a String, a Vec, an
 // owning struct or option): what a borrow can borrow from. An index or a
@@ -44038,6 +44250,7 @@ unsafe @ borrowck_fn_end i lex i syms s fname → v {
 
 // Counted with gen_expr's levels (see the nesting limit above it).
 @ gen_stmt i lex i syms i cg → s {
+    ? == g_cg_blk_depth g_rp_d0 { = g_rp_nstmt + g_rp_nstmt 1 } {}
     ( __nest_enter lex )
     : s v ( __gen_stmt_level lex syms cg )
     = g_nest_depth - g_nest_depth 1
@@ -45539,7 +45752,9 @@ unsafe @ gen_assign i lex i syms i cg → s {
                 ? | ( seq ( nurl_sym_get2 syms name `__inout` ) `1` ) ( seq ( nurl_sym_get2 syms name `__captured_byref` ) `1` ) { = g_join_rdepth 0 } {}
             }
         } {}
+        : i __rp_at ( nurl_lex_cur_start lex )
         : ~ s val ( gen_operand lex syms cg )
+        ( __rp_rhs_set & ( seq ( nurl_sym_get2 syms name `__inout` ) `1` ) ( __rp_literal_only ( nurl_lex_src_slice lex __rp_at - ( nurl_lex_cur_start lex ) __rp_at ) ) )
         : i rhs_eff_tt ( __val_eff_tt bck_rhs_tt )
         // (A try over a call binds the call's payload: what follows asks the
         // call, as mem_udrop_bind_flag does — agora #194.)
@@ -45760,6 +45975,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         = g_bck_self_asn & ( is_ident_tok bck_rhs_tt ) ( seq bck_rhs_val name )
         ( bck_record_binding `assign` name bck_line __acbc vt )
         = g_bck_self_asn F
+        ( __rp_note_assign syms name )
         ? == __acbc 5 { ( bck_note_clo_borrow syms name bck_line __acbr ) } {}
         = g_bck_rhs_callee ``
         = g_bck_let_sx_last ( nurl_str_cat g_bck_rhs_sx `` )
@@ -47471,6 +47687,7 @@ unsafe @ __replaces_note i syms s name s field → v {
     : b nested & == ( nurl_lex_type lex ) TT_DOT ( __nested_lvalue_ok lex syms )
     // Save object name before gen_expr consumes the token (needed for struct-by-value alloca lookup)
     : s obj_name ? ( is_ident_tok ( nurl_lex_type lex ) ) ( nurl_lex_val lex ) ``
+    ( __rp_note_write syms obj_name )
     // …and publish it for gen_field_rhs's escape hook (§2.3), which sees
     // only the RHS. Every branch below routes its RHS through that one
     // function, so the target binding has to travel on a side-channel.
@@ -56244,6 +56461,7 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
 //   T8: error type of \ expression doesn't match enclosing function's error type
 
 @ gen_try_expr i lex i syms i cg i try_line i try_col → s {
+    ( __rp_exit syms )
     // '\' is already consumed by gen_backslash_expr
     ? ( seq ( nurl_sym_get g_fn_escapes `__in_defer_body__` ) `1` )
     { ( die_pos lex try_line try_col `the try operator cannot return from a ';' defer block — cleanup already runs DURING return. Handle the failure inside the cleanup with '??'.` ) }
@@ -62360,6 +62578,15 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     ( nurl_sym_def syms `__origin_sink__` ( nurl_str_int ( origin_summary g_fn_sink fname ) ) )
     ( nurl_sym_def syms `__origin_escape__` ( nurl_str_int ( origin_summary g_fn_escapes fname ) ) )
     ( __own_sink_str_params syms cg fname sink_acc )
+    : i __rp_d00 g_rp_d0
+    : i __rp_c00 g_rp_calls
+    : i __rp_n00 g_rp_nstmt
+    = g_rp_d0 + g_cg_blk_depth 1
+    = g_rp_calls 0
+    = g_rp_nstmt 0
+    ( nurl_sym_def syms `__fn_rp_done__` `` )
+    ( nurl_sym_def syms `__fn_rp_bad__` `` )
+    ( nurl_sym_def syms `__fn_rp_defer__` `` )
     : ~ s last ( gen_block_ret lex syms cg )
     // Raw pointer parameters a literal took in the body's last statement
     // (`= w @ V { v }`, w an `inout` parameter) that no `:` binding claimed:
@@ -62484,6 +62711,13 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     ( __merge_impls syms `__fn_pending_keep_impl__` fname `k` )
     ( __merge_impls syms `__fn_pending_esc_impl__` fname `e` )
     ( __merge_impls syms `__fn_pending_rp_impl__` fname `r` )
+    // (The body's end is an exit too: what was not repointed by then is
+    // not repointed on every path. agora #386.)
+    ( __rp_exit syms )
+    ( __rp_publish syms fname )
+    = g_rp_d0 __rp_d00
+    = g_rp_calls __rp_c00
+    = g_rp_nstmt __rp_n00
     ( nurl_sym_def g_fn_compiled fname `1` )
     ( mem_settle_scratch syms )
     : s __rl_set ( nurl_sym_get syms `__fn_retlend__` )
