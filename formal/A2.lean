@@ -34,3 +34,4 @@ import A2.EnvHand
 import A2.Soundness
 import A2.DynCell
 import A2.DtorWitness
+import A2.DropCode
