@@ -1258,7 +1258,7 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
       obtain ⟨fn, _, hlen, hargs, _⟩ := hcT
       obtain ⟨Ea, hEa, hl, _⟩ := hargs 0 (by rw [← hlen]; simp)
       simp only [List.getD_cons_zero] at hEa; rw [hc] at hEa; cases hEa; exact hl
-    exact (ih (hw1.add hx1 (fun _ _ => recvRes_roots h hdm hc hlc (by rw [htc]; simp) hE)
+    exact (ih (hw1.add hx1 (fun _ _ => recvRes_roots h hdm hc hlc (fun h => by rw [h] at htc; cases htc) hE)
       (fun hd => absurd hd (by simp [hcT.dtor_false.2]))
       (fun ha => absurd ha (by simp [hcT.dtor_false.1])) (fun hd => absurd hd (by simp [hcT.dtor_false.2])))).exitScope
       x hpx.2.2

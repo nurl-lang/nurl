@@ -18,32 +18,56 @@ package depended on. -/
 
 namespace A2
 
+/-- A closure, bound at its own type or (Agora #651) at a destructor type
+    over it, is lent as a view of its binding. -/
+theorem rootKind_self_fn {τ : Ty} {ms : List Nat} {q : Cross} (h : τ.undtor = .fn ms q) :
+    rootKind τ .self = .view := by
+  cases τ <;> first | rfl | cases h
+
+/-- Agora #651: a well-formed type that is a closure type under destructor
+    types is the closure type itself, or one destructor type over a closure
+    type of the dropping class: what `StmtT.callc`'s receiver is, in a
+    configuration (`MInv.slot` carries `Ty.ok`). -/
+theorem ok_undtor_fn {τ : Ty} {ms : List Nat} {q : Cross} (hok : τ.ok = true) (h : τ.undtor = .fn ms q) :
+    τ = .fn ms q ∨ ∃ f, τ = .dtor f (.fn ms q) ∧ q = .dropd := by
+  cases τ with
+  | fn ms' q' => exact Or.inl h
+  | dtor f t =>
+    cases t with
+    | fn ms' q' =>
+      simp only [Ty.undtor] at h; cases h
+      refine Or.inr ⟨f, rfl, ?_⟩
+      cases q <;> simp [Ty.ok, Ty.isStruct, Cross.drops] at hok ⊢
+    | dtor g u => simp [Ty.ok, Ty.isStruct] at hok
+    | _ => simp [Ty.undtor] at h
+  | _ => simp [Ty.undtor] at h
+
 /-- A live package binding holds a package of its interfaces. -/
 theorem pkg_slot {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {c : Var} {E : Entry} (hc : Γ c = some E)
-    (hl : E.live = true) {ms : List Nat} {q : Cross} (ht : E.ty = .fn ms q) :
+    (hl : E.live = true) {ms : List Nat} {q : Cross} (ht : E.ty.undtor = .fn ms q) :
     ∃ o fs te env cs, m.st c = some ⟨o, some (.pkg fs te ms env cs)⟩ := by
   rcases hi.mode_cases hc with hm | hm | hm
   · obtain ⟨T, hT, hw, _⟩ := hi.own_val hc hl (by rw [hm]; rfl)
-    rw [ht] at hw; cases hw
+    have hw := hw.undtor; rw [ht] at hw; cases hw
     exact ⟨_, _, _, _, _, hT⟩
   all_goals
     obtain ⟨v, hv, hok⟩ := hi.bor_val hc hl (by rw [hm]; rfl)
-    rw [ht] at hok; obtain ⟨fs, te, x, cs, rfl, _⟩ := valOK_fn.mp hok
+    rw [← valOK_undtor, ht] at hok; obtain ⟨fs, te, x, cs, rfl, _⟩ := valOK_fn.mp hok
     exact ⟨_, _, _, _, _, hv⟩
 
 /-- A3.5b: a live package binding holds a package that fits its type. -/
 theorem pkg_fits {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {c : Var} {E : Entry} (hc : Γ c = some E)
-    (hl : E.live = true) {ms : List Nat} {q : Cross} (ht : E.ty = .fn ms q) {o : Bool} {fs : List Nat}
+    (hl : E.live = true) {ms : List Nat} {q : Cross} (ht : E.ty.undtor = .fn ms q) {o : Bool} {fs : List Nat}
     {te : Ty} {env : Val} {cs : List (Var × PMode × Ty)} (hslot : m.st c = some ⟨o, some (.pkg fs te ms env cs)⟩) :
     q.Fits te cs := by
   rcases hi.mode_cases hc with hm | hm | hm
   · obtain ⟨T, hT, hw, _⟩ := hi.own_val hc hl (by rw [hm]; rfl)
     rw [hslot] at hT; cases hT
-    rw [ht] at hw; cases hw with | pkg _ hq => exact hq
+    have hw := hw.undtor; rw [ht] at hw; cases hw with | pkg _ hq => exact hq
   all_goals
     obtain ⟨v, hv, hok⟩ := hi.bor_val hc hl (by rw [hm]; rfl)
     rw [hslot] at hv; cases hv
-    rw [ht] at hok; obtain ⟨_, _, _, _, he, _, hq⟩ := valOK_fn.mp hok
+    rw [← valOK_undtor, ht] at hok; obtain ⟨_, _, _, _, he, _, hq⟩ := valOK_fn.mp hok
     cases he; exact hq
 
 /-- The captures a live package names are live, owning, view-free bindings of
@@ -51,7 +75,7 @@ theorem pkg_fits {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {c : Var} {E : Entry} (hc
     capture it may change is reached from nothing else the package holds, by
     `PkgsOK`, but that is used where the call is set up.) -/
 theorem pkg_caps {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {c : Var} {Ec : Entry} (hc : Γ c = some Ec)
-    (hl : Ec.live = true) {ms : List Nat} {q : Cross} (ht : Ec.ty = .fn ms q) {o : Bool} {fs : List Nat} {te : Ty}
+    (hl : Ec.live = true) {ms : List Nat} {q : Cross} (ht : Ec.ty.undtor = .fn ms q) {o : Bool} {fs : List Nat} {te : Ty}
     {env : Val} {cs : List (Var × PMode × Ty)} (hslot : m.st c = some ⟨o, some (.pkg fs te ms env cs)⟩) :
     (cs.map (·.1)).Nodup ∧
     (∀ ci ∈ cs, ∀ ci' ∈ env.names, ci.1 = ci'.1 → ci.2.1 = .inp ∧ ci'.2.1 = .inp) ∧
@@ -61,7 +85,7 @@ theorem pkg_caps {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {c : Var} {Ec : Entry} (h
   have hpk := hi.pkgs c _ _ hslot rfl
   obtain ⟨hnd, _, hcap⟩ := hpk fs te ms env cs (Sub.refl _)
   have hnames := hi.held c Ec _ _ hc hl hslot rfl
-  have hN := (hi.names c Ec hc hl (Or.inl (by rw [ht]; simp))).held
+  have hN := (hi.names c Ec hc hl (Or.inl (fun h => by rw [h] at ht; cases ht))).held
   refine ⟨hnd, fun ci hci ci' hci' hcc => (hpk fs te ms env cs (Sub.refl _)).2.2 ci hci ci' hci' hcc,
     fun ci hci => ?_⟩
   have hin : (⟨ci.1, .name ci.2.1.bound ci.2.2⟩ : Dep) ∈ Ec.held :=
@@ -1542,7 +1566,7 @@ theorem weaker_open {Γ : Ctx} {e c x : Var} {Ec : Entry} {te t0 : Ty} {zs : Lis
 /-- A capture of a live package: a live owned binding, holding nothing, of the
     recorded type, read, or changed within its bound as recorded. -/
 theorem pkg_cap {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {c : Var} {Ec : Entry} (hc : Γ c = some Ec)
-    (hl : Ec.live = true) {ms : List Nat} {q : Cross} (ht : Ec.ty = .fn ms q) {o : Bool} {fs : List Nat} {te : Ty}
+    (hl : Ec.live = true) {ms : List Nat} {q : Cross} (ht : Ec.ty.undtor = .fn ms q) {o : Bool} {fs : List Nat} {te : Ty}
     {env : Val} {cs : List (Var × PMode × Ty)} (hslot : m.st c = some ⟨o, some (.pkg fs te ms env cs)⟩)
     {ci : Var × PMode × Ty} (hci : ci ∈ cs) :
     ∃ Ev, Γ ci.1 = some Ev ∧ Ev.live = true ∧ Ev.held = [] ∧ Ev.ty = ci.2.2 ∧ Ev.mode = .own ∧
@@ -1576,7 +1600,7 @@ theorem pkg_cap_root {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {c : Var} {Ec : Entry
 /-- A capture the package may change is a name the call through it may
     change. -/
 theorem pkg_cap_mutName {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {c : Var} {Ec : Entry} (hc : Γ c = some Ec)
-    (hl : Ec.live = true) {ms : List Nat} {q : Cross} (ht : Ec.ty = .fn ms q) {o : Bool} {fs : List Nat} {te : Ty}
+    (hl : Ec.live = true) {ms : List Nat} {q : Cross} (ht : Ec.ty.undtor = .fn ms q) {o : Bool} {fs : List Nat} {te : Ty}
     {env : Val} {cs : List (Var × PMode × Ty)} (hslot : m.st c = some ⟨o, some (.pkg fs te ms env cs)⟩)
     {ci : Var × PMode × Ty} (hci : ci ∈ cs) {b : Eff} (hb : ci.2.1 = .inout b) (hbn : b ≠ .none)
     (zs : List Var) : (⟨ci.1, .name b ci.2.2⟩ : Dep) ∈ mutNames Γ (c :: zs) := by
@@ -1585,7 +1609,7 @@ theorem pkg_cap_mutName {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {c : Var} {Ec : En
   unfold mutNames argNames
   refine List.mem_filter.mpr ⟨List.mem_flatMap.mpr ⟨c, List.mem_cons_self, ?_⟩, ?_⟩
   · have hae : argE Γ c = Ec := by unfold argE; rw [hc]; rfl
-    rw [hae, ite_eq_right (by rw [ht]; simp)]
+    rw [hae, ite_eq_right (fun h => by rw [h] at ht; cases ht)]
     exact List.mem_filter.mpr ⟨by unfold Entry.vdeps; exact List.mem_append_right _ hin, rfl⟩
   · simp [Kind.bound, hbn]
 
@@ -1595,7 +1619,7 @@ theorem pkg_cap_mutName {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {c : Var} {Ec : En
 theorem pkg_cap_mut {P : Prog} {m : Mem} {Γ Γ1 : Ctx} (hi : MInv m Γ) {F : List Var} {σ : Nat}
     {c : Var} {zs : List Var} {E Ec : Entry} (hcT : CallT P Γ F σ (c :: zs) E Γ1)
     (hnz : ∀ z ∈ zs, ∀ d ∈ Ec.vdeps, d.kind.bound ≠ .none → d.root ≠ z) (hc : Γ c = some Ec)
-    (hl : Ec.live = true) {ms : List Nat} {q : Cross} (ht : Ec.ty = .fn ms q) {o : Bool} {fs : List Nat} {te : Ty}
+    (hl : Ec.live = true) {ms : List Nat} {q : Cross} (ht : Ec.ty.undtor = .fn ms q) {o : Bool} {fs : List Nat} {te : Ty}
     {env : Val} {cs : List (Var × PMode × Ty)} (hslot : m.st c = some ⟨o, some (.pkg fs te ms env cs)⟩)
     {ci : Var × PMode × Ty} (hci : ci ∈ cs) {b : Eff} (hb : ci.2.1 = .inout b) (hbn : b ≠ .none) :
     ci.1 ∉ F ∧ ci.1 ∉ c :: zs ∧
@@ -1611,16 +1635,16 @@ theorem pkg_cap_mut {P : Prog} {m : Mem} {Γ Γ1 : Ctx} (hi : MInv m Γ) {F : Li
   · -- the receiver is a closure, the capture a `Vec`
     obtain ⟨Ev, hEv, _, _, htv, _⟩ := (pkg_caps hi hc hl ht hslot).2.2 ci hci
     rw [hm, hc] at hEv; cases hEv
-    rw [ht] at htv
     obtain ⟨_, hmd, _⟩ := hi.pkgs c _ _ hslot rfl fs te ms env cs (Sub.refl _)
     rcases hmd ci hci with h' | ⟨b', hb', _⟩
     · rw [h'] at hb; cases hb
     · -- (a closure holds views; what is held by name holds none)
-      have := hi.names c Ec hc hl (Or.inl (by rw [ht]; simp)) ⟨ci.1, .name b ci.2.2⟩
+      have := hi.names c Ec hc hl (Or.inl (fun h => by rw [h] at ht; cases ht)) ⟨ci.1, .name b ci.2.2⟩
         (by unfold Entry.vdeps; exact List.mem_append_right _ hin) b ci.2.2 rfl
       obtain ⟨_, _, _, _, _, _, _, hhv⟩ := this
       -- (A3.5b: one that holds no view captures nothing)
       rw [← htv] at hhv
+      rw [← Ty.holdsView_undtor, ht] at hhv
       have hcs := ((pkg_fits hi hc hl ht hslot).send hhv).2.2
       rw [hcs] at hci; cases hci
   · exact hnz _ hm ⟨ci.1, .name b ci.2.2⟩ (by unfold Entry.vdeps; exact List.mem_append_right _ hin)
@@ -1631,12 +1655,12 @@ theorem pkg_cap_mut {P : Prog} {m : Mem} {Γ Γ1 : Ctx} (hi : MInv m Γ) {F : Li
 theorem envE_cap_out {P : Prog} {m : Mem} {Γ Γ1 : Ctx} (hi : MInv m Γ) {F : List Var} {σ : Nat}
     {c : Var} {zs : List Var} {E Ec : Entry} (hcT : CallT P Γ F σ (c :: zs) E Γ1)
     (hnz : ∀ z ∈ zs, ∀ d ∈ Ec.vdeps, d.kind.bound ≠ .none → d.root ≠ z) (hc : Γ c = some Ec)
-    (hl : Ec.live = true) {ms : List Nat} {q : Cross} (ht : Ec.ty = .fn ms q) {o : Bool} {fs : List Nat} {te : Ty}
+    (hl : Ec.live = true) {ms : List Nat} {q : Cross} (ht : Ec.ty.undtor = .fn ms q) {o : Bool} {fs : List Nat} {te : Ty}
     {env : Val} {cs : List (Var × PMode × Ty)} (hslot : m.st c = some ⟨o, some (.pkg fs te ms env cs)⟩)
     {ci : Var × PMode × Ty} (hci : ci ∈ cs) {b : Eff} (hb : ci.2.1 = .inout b) (hbn : b ≠ .none) :
     ci.1 ∉ roots (envE c Ec te cs).vdeps := by
   obtain ⟨_, hA, hx⟩ := pkg_cap_mut hi hcT hnz hc hl ht hslot hci hb hbn
-  have hnint : Ec.ty ≠ .int := by rw [ht]; simp
+  have hnint : Ec.ty ≠ .int := fun h => by rw [h] at ht; cases ht
   have hae : argE Γ c = Ec := by unfold argE; rw [hc]; rfl
   intro hr
   obtain ⟨d, hd, hdr⟩ := List.mem_map.mp hr
@@ -1801,8 +1825,8 @@ theorem mutNames_open {Γ : Ctx} {e c : Var} {Ec : Entry} {te : Ty} {zs : List V
     well-typed. -/
 theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c : Var} {j : Nat}
     {zs : List Var} {k : Stmt} {Ec E : Entry} {ms : List Nat} {q : Cross} {σ : Nat} {sig : Fn} {m : Mem}
-    (hx : Γ x = none) (hc : Γ c = some Ec) (htc : Ec.ty = .fn ms q)
-    (hσ : P[σ]? = some sig) (hhd : sig.params.head? = some (.inp, .fn ms q))
+    (hx : Γ x = none) (hc : Γ c = some Ec) (htc : Ec.ty.undtor = .fn ms q)
+    (hσ : P[σ]? = some sig) (hhd : sig.params.head? = some (.inp, Ec.ty))
     (hcT : CallT P Γ F σ (c :: zs) E Γ1)
     (hnz : ∀ z ∈ zs, ∀ d ∈ Ec.vdeps, d.kind.bound ≠ .none → d.root ≠ z)
     (hi : Inv m Γ F (.callc x c j zs k))
@@ -1823,7 +1847,7 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
   have hcT0 := hcT
   obtain ⟨sig', hσ', hlen, hargs, hnf, hds, _, _⟩ := hcT
   rw [hσ] at hσ'; cases hσ'
-  obtain ⟨rest, hsp⟩ : ∃ rest, sig.params = (.inp, .fn ms q) :: rest := by
+  obtain ⟨rest, hsp⟩ : ∃ rest, sig.params = (.inp, Ec.ty) :: rest := by
     cases h : sig.params with
     | nil => rw [h] at hhd; cases hhd
     | cons p0 rest => rw [h] at hhd; simp at hhd; exact ⟨rest, by rw [hhd]⟩
@@ -1839,7 +1863,7 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
     | some E0 => exact absurd (hlt _ _ h) (Nat.lt_irrefl _)
   have hxlt : x < m.nv := hi.nvS x (by simp [Stmt.vars])
   have hxe : x ≠ m.nv := fun e => by have := vlt hxlt; have := veq e; omega
-  have hnint : Ec.ty ≠ .int := by rw [htc]; simp
+  have hnint : Ec.ty ≠ .int := fun h => by rw [h] at htc; cases htc
   have hzlt : ∀ a ∈ zs, a < m.nv := fun a ha => hi.nvS a (by simp [Stmt.vars, ha])
   have hze : ∀ a ∈ zs, a ≠ m.nv := fun a ha e => by have := vlt (hzlt a ha); have := veq e; omega
   have hΓe : ∀ a, a ≠ m.nv → setE Γ m.nv (envE c Ec te cs) a = Γ a := fun a ha => by
@@ -1916,10 +1940,11 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
     rcases hi.mode_cases hc with hm | hm | hm
     · obtain ⟨T, hT, hw, hvs⟩ := hi.own_val hc hlc (by rw [hm]; rfl)
       rw [hslot] at hT; cases hT
-      rw [htc] at hw hvs
+      have hw := hw.undtor; rw [← ViewsOK.undtor_iff] at hvs; rw [htc] at hw hvs
       cases hw with
       | pkg hwe hq =>
-        have hd : derive c Ec .self = [⟨c, .view⟩] := by simp [derive, hm, Mode.isRoot, htc, rootKind]
+        have hd : derive c Ec .self = [⟨c, .view⟩] := by
+          simp only [derive, hm, Mode.isRoot, if_true, rootKind_self_fn htc]
         have hvr : ViewsOK m te env (envDeps cs Ec.held) :=
           ViewsOK.mono (readers_sub_envDeps _ _) (ViewsOK.readers (hvs.pkg hq))
         have hsub : envDeps cs Ec.held ⊆ (envE c Ec te cs).path :=
@@ -1928,20 +1953,21 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
           Or.inl ⟨_, Or.inl ⟨_, hslot, Top.pkg ht⟩, Or.inr (Or.inl ⟨rfl, rfl⟩)⟩⟩) (fun k q ht => ⟨⟨c, .view⟩, ?_,
           Or.inl ⟨_, Or.inl ⟨_, hslot, Top.pkg ht⟩, Or.inr (Or.inl ⟨rfl, rfl⟩)⟩⟩) (fun k ht => ⟨⟨c, .view⟩, ?_,
           _, Or.inl ⟨_, hslot, Top.pkg ht⟩, Or.inr (Or.inl ⟨rfl, rfl⟩)⟩) hvr hnmE
-          (by have := hi.shares c Ec _ _ hc hslot rfl rfl; rw [htc] at this; exact this.pkg' hq)
+          (by have := hi.shares c Ec _ _ hc hslot rfl rfl; rw [← SharesOK.undtor_iff, htc] at this; exact this.pkg' hq)
           (fun s _ => ViewsOK.mono hsub hvr)
         all_goals simp [envE, hd, mem_envDeps, ownWriter, Kind.bound]
     · obtain ⟨v, hv, hok⟩ := hi.bor_val hc hlc (by rw [hm]; rfl)
       rw [hslot] at hv; cases hv
-      rw [htc] at hok
+      rw [← valOK_undtor, htc] at hok
       cases hok with
       | pkg hokE _ =>
-        have hd : derive c Ec .self = [⟨c, .view⟩] := by simp [derive, hm, Mode.isRoot, htc, rootKind]
+        have hd : derive c Ec .self = [⟨c, .view⟩] := by
+          simp only [derive, hm, Mode.isRoot, if_true, rootKind_self_fn htc]
         rw [hokE.lend]
         exact valOK_via hslot hokE (Top.pkg (Top.refl _)) (by simp [envE, hd, mem_envDeps, ownWriter, Kind.bound])
     · obtain ⟨v, hv, hok⟩ := hi.bor_val hc hlc (by rw [hm]; rfl)
       rw [hslot] at hv; cases hv
-      rw [htc] at hok
+      rw [← valOK_undtor, htc] at hok
       cases hok with
       | pkg hokE _ =>
         rw [hokE.lend]
@@ -2030,7 +2056,7 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
       · -- the package itself: a closure, not a `Vec` a closure changes
         obtain ⟨_, ⟨s, hts, _⟩, _⟩ := hnf dm hdm'
         have hdc : dm.root = c := hdr
-        rw [hdc, hae, htc] at hts; cases hts
+        rw [hdc, hae] at hts; rw [hts] at htc; cases htc
       · have := hoth c List.mem_cons_self (by rw [hae]; exact Or.inl hnint) d (by rw [hae]; exact hdv) hdr.symm
         exact hbd (this ▸ hb)
   refine ⟨hie, hZ, fn, hf, ?_, fun i hil => ?_, ?_, ?_, rfl, rfl, fun ht => absurd ht hnt⟩
@@ -2092,14 +2118,14 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
         · -- an `inout` argument of the call through the package: of the
           -- opened call too, by the same parameter
           cases i with
-          | zero => simp at hai; rw [← hai, hae, htc] at hvec; obtain ⟨_, h, _⟩ := hvec; cases h
+          | zero => simp at hai; rw [← hai, hae] at hvec; obtain ⟨_, h, _⟩ := hvec; rw [h] at htc; cases htc
           | succ i =>
             have hil' : i + 1 < sig.params.length := (List.getElem?_eq_some_iff.mp hpi).1
             have hiz : i < zs.length := by rw [hsp] at hil'; simp at hil'; omega
             refine Or.inr ⟨i + 1, t, ?_, ?_⟩
             · simp only [List.cons_append, List.getElem?_cons_succ] at hai ⊢
               rw [List.getElem?_append_left hiz]; exact hai
-            · rw [hps, openParams_z (by omega), ← openParams_z (p0 := (.inp, .fn ms q)) (cps := []) (by omega),
+            · rw [hps, openParams_z (by omega), ← openParams_z (p0 := (.inp, Ec.ty)) (cps := []) (by omega),
                 List.append_nil, ← hsp]; exact hpi
     · -- every argument reaches it only by names of the change
       simp only [List.cons_append, List.mem_cons, List.mem_append, List.mem_map] at ha
@@ -2107,7 +2133,7 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
       · rw [hEe] at hd''
         rcases envE_dep_vdeps hd'' with ⟨rfl, _⟩ | hdv
         · obtain ⟨s, hts, _⟩ := hvec
-          rw [← hdr, hae, htc] at hts; cases hts
+          rw [← hdr, hae] at hts; rw [hts] at htc; cases htc
         · exact hoth c List.mem_cons_self (by rw [hae]; exact Or.inl hnint) d' (by rw [hae]; exact hdv) hdr
       · rw [hargE a (hze a ha)] at hty hd''
         exact hoth a (List.mem_cons_of_mem _ ha) hty d' hd'' hdr
@@ -2364,8 +2390,8 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
 
 theorem cloProgress {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c : Var} {j : Nat}
     {zs : List Var} {k : Stmt} {Ec E : Entry} {ms : List Nat} {q : Cross} {σ : Nat} {sig : Fn} {m : Mem}
-    (hx : Γ x = none) (hc : Γ c = some Ec) (htc : Ec.ty = .fn ms q) (hj : ms[j]? = some σ)
-    (hσ : P[σ]? = some sig) (hhd : sig.params.head? = some (.inp, .fn ms q))
+    (hx : Γ x = none) (hc : Γ c = some Ec) (htc : Ec.ty.undtor = .fn ms q) (hj : ms[j]? = some σ)
+    (hσ : P[σ]? = some sig) (hhd : sig.params.head? = some (.inp, Ec.ty))
     (hcT : CallT P Γ F σ (c :: zs) E Γ1)
     (hnz : ∀ z ∈ zs, ∀ d ∈ Ec.vdeps, d.kind.bound ≠ .none → d.root ≠ z) (hcd : MemCodes P m)
     (hi : Inv m Γ F (.callc x c j zs k)) :
@@ -2373,7 +2399,7 @@ theorem cloProgress {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x 
   have hlc := callT_recv_live hcT hc
   obtain ⟨o, fs, te, env, cs, hslot⟩ := pkg_slot hi.toMInv hc hlc htc
   obtain ⟨f, fn, hfs, hf, hps, _, _, _, _, _, hnt⟩ := pkg_code hcd hslot hj hσ hhd
-  have hnint : Ec.ty ≠ .int := by rw [htc]; simp
+  have hnint : Ec.ty ≠ .int := fun h => by rw [h] at htc; cases htc
   have hcc : cleanC Γ c = some Ec := by rw [cleanC_of hc, clean_id (Or.inl hnint) hlc]
   obtain ⟨hie, _, hcT'⟩ := open_pkg hP (cleanC_none.mpr hx) hcc htc hσ hhd (hcT.clean hσ) hnz
     hi.clean cleanC_clean hslot hf hps hnt
@@ -2399,13 +2425,13 @@ theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
     -- the code, implementing the method's interface
     obtain ⟨f', fn', hfs', hf', hps0, hty, hown, hl, hr, ho, hnt⟩ := pkg_code hcd hslot hj hσ hhd
     rw [hfs] at hfs'; cases hfs'; rw [hf] at hf'; cases hf'
-    obtain ⟨rest, hsp⟩ : ∃ rest, sig.params = (.inp, .fn ms q) :: rest := by
+    obtain ⟨rest, hsp⟩ : ∃ rest, sig.params = (.inp, Ec.ty) :: rest := by
       cases h : sig.params with
       | nil => rw [h] at hhd; cases hhd
       | cons p0 rest => rw [h] at hhd; simp at hhd; exact ⟨rest, by rw [hhd]⟩
     have hps : fn.params = (.inp, te) :: rest ++ cs.map (·.2) := by rw [hps0, hsp]; rfl
     have hlc := callT_recv_live hcT hc
-    have hnint : Ec.ty ≠ .int := by rw [htc]; simp
+    have hnint : Ec.ty ≠ .int := fun h => by rw [h] at htc; cases htc
     obtain ⟨_, _, _, _, _, _, hlends, hrholds, _, _⟩ := hP fn (List.mem_of_getElem? hf)
     obtain ⟨_, _, _, _, _, _, hslends, hsrholds, hsouts, _⟩ := hP sig (List.mem_of_getElem? hσ)
     -- where things are

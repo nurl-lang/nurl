@@ -1264,8 +1264,13 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       StmtT P Γ F (.unpair y x z s) (exitScope x (exitScope z Δ))
   | callc {Γ Γ1 Δ : Ctx} {F : List Var} {x c : Var} {j : Nat} {zs : List Var} {k : Stmt}
       {Ec E : Entry} {ms : List Nat} {q : Cross} {σ : Nat} {sig : Fn}
-      (h1 : k.src = true) (h2 : Γ x = none) (h3 : x ∉ F) (h4 : Γ c = some Ec) (h5 : Ec.ty = .fn ms q)
-      (h6 : ms[j]? = some σ) (h7 : P[σ]? = some sig) (h8 : sig.params.head? = some (.inp, .fn ms q))
+      (h1 : k.src = true) (h2 : Γ x = none) (h3 : x ∉ F) (h4 : Γ c = some Ec)
+      -- (Agora #651: the receiver may be of a destructor type over the
+      -- closure type; a well-formed such type is over a closure of the
+      -- dropping class, `ok_undtor_fn`; the interface takes the receiver at
+      -- the binding's type)
+      (h5 : Ec.ty.undtor = .fn ms q)
+      (h6 : ms[j]? = some σ) (h7 : P[σ]? = some sig) (h8 : sig.params.head? = some (.inp, Ec.ty))
       (h9 : ∀ o ∈ sig.outHolds, o.2.1 ≠ 0)
       (h10 : CallT P Γ F σ (c :: zs) E Γ1)
       -- no argument is a binding the package may change by name (it is

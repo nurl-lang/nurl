@@ -34,6 +34,9 @@ import A3
 #print axioms A2.ClosureDropWitness.main_typed
 #print axioms A2.ClosureDropWitness.main_safe
 #print axioms A2.ClosureDropWitness.main_letv_refused
+-- Agora #651: ... and such a closure is called through its `letd` binding, lent, then dropped by its glue
+#print axioms A2.ClosureDropWitness.main2_typed
+#print axioms A2.ClosureDropWitness.main2_safe
 -- Agora #632: an enum's drop glue takes the enum owned and the payload out
 #print axioms A2.Dtor.enum_dtor_is_glue
 #print axioms A2.Dtor.enum_glue_body
