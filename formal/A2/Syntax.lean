@@ -220,8 +220,9 @@ def Ty.hasDtor : Ty → Bool
     value: it is one (`hasDtor`), or a struct or an enum holding one in a
     field or a payload at any depth (A2-drop.3b: a destructor value two
     levels down, in a struct that is no destructor type of its own, is one
-    too; and a `Vec` of them, which `Ty.ok` admits as a binding's own type
-    only, drained at its end, `Step.scopeDDrain`).  Such a struct runs its
+    too; and a `Vec` of them, which `Ty.ok` admits as a binding's own type,
+    drained at its end, `Step.scopeDDrain`, or as a field or a payload,
+    Agora #607).  Such a struct runs its
     fields' destructors in its drop glue, so it is bound as a destructor
     type itself, its glue its destructor (`letd`, which binds the `Vec`
     too): `letv` and `assign` take no owned value of such a type. -/
@@ -266,9 +267,10 @@ def Ty.dtorFree : Ty → Bool
   | _ => true
 
 /-- A2-drop.3b's drain: a `Vec` of destructor values (`.vec (.dtor f u)`), the
-    one `Vec` whose elements hold one. It is a type only a binding's own
-    (`Ty.ok` refuses it as any part of another type: no rule builds a struct
-    with such a field yet, a share's or a channel's payload is swept
+    one `Vec` whose elements hold one. It is a binding's own type, or
+    (`Ty.ok` admits it too as a struct's field or an enum's payload, which the
+    struct's or the enum's glue hands to a `letd`, Agora #607; it refuses it as
+    an element, a view's element, and a share's or a channel's payload, swept
     with no code). -/
 def Ty.vecD : Ty → Bool
   | .vec t => !t.dtorFree
@@ -293,15 +295,16 @@ def Ty.vecD : Ty → Bool
 def Ty.ok : Ty → Bool
   | .int => true
   -- (A2-drop.3b: a `Vec`'s elements hold no destructor value, or are of a
-  -- destructor type themselves, `Ty.vecD`, which only a binding's own type
-  -- may be: such a binding is drained at its end, element by element, each
+  -- destructor type themselves, `Ty.vecD`, which a binding's own type may
+  -- be, or (Agora #607) a struct's field or an enum's payload, which glue
+  -- hands to such a binding: it is drained at its end, element by element, each
   -- running its destructor, `Step.scopeDDrain`; any other `Vec`'s drop
   -- releases its elements, which runs no code and releases no destructor
   -- value: a share's payload and a closure's environment hold none, 3c, 3d)
   | .vec t => t.ok && !t.vecD && (t.dtorFree || t.hasDtor)
   | .slice t => t.ok && !t.holdsView && !t.vecD
-  | .prod a b => a.ok && b.ok && !a.vecD && !b.vecD
-  | .sum a b => a.ok && b.ok && !a.vecD && !b.vecD
+  | .prod a b => a.ok && b.ok
+  | .sum a b => a.ok && b.ok
   | .fn _ _ => true
   -- (A2-drop.3d: a block's payload owns no destructor value: the sweep that
   -- frees a block runs no code, and a check-out binding is no `letd`'s, so a
@@ -333,9 +336,9 @@ theorem Ty.holdsDtor_eq_not_free (t : Ty) : t.holdsDtor = !t.dtorFree := by
   | _ => rfl
 
 theorem Ty.ok_prod {a b : Ty} (h : (Ty.prod a b).ok = true) : a.ok = true ∧ b.ok = true := by
-  simp only [Ty.ok, Bool.and_eq_true] at h; exact h.1.1
+  simp only [Ty.ok, Bool.and_eq_true] at h; exact h
 theorem Ty.ok_sum {a b : Ty} (h : (Ty.sum a b).ok = true) : a.ok = true ∧ b.ok = true := by
-  simp only [Ty.ok, Bool.and_eq_true] at h; exact h.1.1
+  simp only [Ty.ok, Bool.and_eq_true] at h; exact h
 theorem Ty.ok_slice {t : Ty} (h : (Ty.slice t).ok = true) : t.ok = true ∧ t.holdsView = false := by
   simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1
 theorem Ty.ok_arc {t : Ty} (h : (Ty.arc t).ok = true) : t.ok = true ∧ t.holdsView = false := by

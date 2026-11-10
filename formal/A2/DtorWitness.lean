@@ -655,9 +655,9 @@ theorem share_new_dtor_free {Γ Γ1 : Ctx} {F : List Var} {t : Ty} {y : Var} {E 
 
 /-- A2-drop.3b: in a running configuration, a binding whose type is a `Vec`
     has elements that own no destructor value, or are of a destructor type
-    themselves: the drained `Vec` (`Ty.vecD`), which only a binding's own type
-    may be (`vecs_dtor_free`: anywhere else in a type a `Vec`'s elements own
-    none).  A `Vec` of the second kind is `letd`'s (`letv` refuses it), and
+    themselves: the drained `Vec` (`Ty.vecD`), which a binding's own type
+    may be, or (Agora #607) a struct's field or an enum's payload, which glue
+    hands to a `letd` (`vecs_dtor_free`).  A `Vec` of the second kind is `letd`'s (`letv` refuses it), and
     its frame's end drains it (`scopeD_end_drains`); what any other `Vec`'s
     drop releases holds no destructor value: no closure's environment does
     (`pkgs_env_dtor_free`) and no block's payload (`blocks_dtor_free`). -/
@@ -679,57 +679,53 @@ def vecElems : Ty → List Ty
   | .int => []
   | .fn _ _ => []
 
-/-- A well-formed type that is not itself a drained `Vec` has no `Vec` of
-    destructor values anywhere in it. -/
-theorem ok_vecElems_free {t : Ty} (h : t.ok = true) (hd : t.vecD = false) :
-    ∀ u ∈ vecElems t, u.dtorFree = true := by
+/-- Every `Vec` in a well-formed type has elements that own no destructor
+    value, or are of a destructor type themselves (a drained `Vec`). -/
+theorem ok_vecElems {t : Ty} (h : t.ok = true) :
+    ∀ u ∈ vecElems t, u.dtorFree = true ∨ u.hasDtor = true := by
   induction t with
   | int => simp [vecElems]
   | fn _ _ => simp [vecElems]
   | vec t ih =>
-    have he := Ty.ok_vec_elem h
-    have hnd := Ty.ok_vec_notVecD h
-    simp only [Ty.vecD_vec, Bool.not_eq_false'] at hd
     simp only [vecElems, List.mem_cons]
     rintro u (rfl | hu)
-    · exact hd
-    · exact ih he hnd u hu
+    · exact Ty.ok_vec_free h
+    · exact ih (Ty.ok_vec_elem h) u hu
   | slice t ih =>
-    simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; simpa only [vecElems] using ih h.1.1 h.2
+    simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; simpa only [vecElems] using ih h.1.1
   | arc t ih =>
-    simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; simpa only [vecElems] using ih h.1.1.1 h.1.2
+    simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; simpa only [vecElems] using ih h.1.1.1
   | lk t ih =>
-    simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; simpa only [vecElems] using ih h.1.1.1 h.1.2
+    simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; simpa only [vecElems] using ih h.1.1.1
   | cell t ih =>
-    simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; simpa only [vecElems] using ih h.1.1.1 h.1.2
+    simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; simpa only [vecElems] using ih h.1.1.1
   | dtor _ t ih =>
     simp only [Ty.ok, Bool.and_eq_true] at h
-    have hnd : t.vecD = false := by cases t <;> simp_all [Ty.isStruct]
-    simpa only [vecElems] using ih h.2 hnd
+    simpa only [vecElems] using ih h.2
   | prod a b iha ihb =>
-    simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h
+    have h' := Ty.ok_prod h
     simp only [vecElems, List.mem_append]
     rintro u (hu | hu)
-    · exact iha h.1.1.1 h.1.2 u hu
-    · exact ihb h.1.1.2 h.2 u hu
+    · exact iha h'.1 u hu
+    · exact ihb h'.2 u hu
   | sum a b iha ihb =>
-    simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h
+    have h' := Ty.ok_sum h
     simp only [vecElems, List.mem_append]
     rintro u (hu | hu)
-    · exact iha h.1.1.1 h.1.2 u hu
-    · exact ihb h.1.1.2 h.2 u hu
+    · exact iha h'.1 u hu
+    · exact ihb h'.2 u hu
 
 /-- A2-drop.3b, the deep form: in a running configuration, every `Vec`
-    occurring anywhere in a binding's type but at its top (a field's, a
-    payload's, a share's payload's, an element's, …) has elements free of
-    destructor values: the drained `Vec` is a binding's own type only. -/
+    occurring anywhere in a binding's type has elements free of destructor
+    values, or of a destructor type: a drained `Vec`.  (Agora #607: a
+    drained `Vec` is a binding's own type, a struct's field or an enum's
+    payload, which the struct's or the enum's glue hands to a `letd`, or an
+    element type's field in turn; a share's, a lock's or a cell's payload
+    holds none: `Ty.ok` asks `dtorFree` there, `ok_payloads_free`.  A view's
+    element type may name one inside a struct; a view owns nothing.) -/
 theorem vecs_dtor_free {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {E : Entry}
-    (hx : Γ x = some E) : (E.ty.vecD = false → ∀ u ∈ vecElems E.ty, u.dtorFree = true) ∧
-      (∀ t, E.ty = .vec t → ∀ u ∈ vecElems t, u.dtorFree = true) := by
-  have hok := hi.tyok hx
-  refine ⟨fun hd => ok_vecElems_free hok hd, fun t ht => ?_⟩
-  rw [ht] at hok
-  exact ok_vecElems_free (Ty.ok_vec_elem hok) (Ty.ok_vec_notVecD hok)
+    (hx : Γ x = some E) : ∀ u ∈ vecElems E.ty, u.dtorFree = true ∨ u.hasDtor = true :=
+  ok_vecElems (hi.tyok hx)
 
 /-- A2-drop.3b: `vec_new` makes a `Vec` whose elements own no destructor
     value, or a drained one, of a destructor type's elements. -/
@@ -916,7 +912,23 @@ def glue2 : Fn where
   body := .letd 2 4 (.var 0) (.letcall 3 5 [2] (.assign 1 (.expr (.lit 0))))
   nvars := 4
 
-def P : Prog := [dfn, mk, ofn, gfn, glue, impl, glue2]
+/-- Agora #607: a struct whose field is a `Vec` of destructor values, and
+    its glue: `@ glueV sink self → i { unpair self x z  :drop y x  = r 0 }`,
+    the `letd` at the `Vec`'s own type, which drains it. -/
+def GV : Ty := .prod (.vec DT) .int
+def GVD : Ty := .dtor 7 GV
+
+def glueV : Fn where
+  params := [(.sink, GVD)]
+  resTy := .int
+  resOwn := false
+  lends := []
+  rholds := []
+  outHolds := []
+  body := .unpair 0 2 3 (.letd 4 0 (.var 2) (.assign 1 (.expr (.lit 0))))
+  nvars := 5
+
+def P : Prog := [dfn, mk, ofn, gfn, glue, impl, glue2, glueV]
 
 theorem dfn_not_thru : ¬ ThruFn P 0 := by
   intro h
@@ -945,7 +957,7 @@ theorem main_typed : ∃ Δ, StmtT P (fun _ => none) [] main Δ := by
   have hK3 : NoRootb (A2.setE K2 2 ED) := hK2.setE hED
   have hpair : RhsT K2 [] (.pair 0 1) EP K2 :=
     RhsT.pair (Ey := intE) (Ez := intE) (by simp [K2, K1, A2.setE, upd]) rfl PushArg.int
-      (by simp [K2, K1, A2.setE, upd]) rfl PushArg.int (by simp [intE, Mode.ownSlot]) rfl rfl
+      (by simp [K2, K1, A2.setE, upd]) rfl PushArg.int (by simp [intE, Mode.ownSlot])
   have hd := StmtT.letd (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .pair 0 1)
     (s := .skip) (E := EP) (t := T) (H := []) rfl (by simp [K2, K1, A2.setE, upd]) (by simp) hpair rfl
     (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) StmtT.skip (hK3.endOK _)
@@ -1027,7 +1039,7 @@ theorem mk_typed : ∃ Δ, StmtT P (sigCtx mk) [] mk.body Δ ∧ NoRootb Δ ∧
   have hDa : NoRootb Da := (hG1.kill _ _ _).setE (by simp [Rr])
   have hpair : RhsT C2 [] (.pair 1 2) EP C2 :=
     RhsT.pair (Ey := intE) (Ez := intE) (by simp [C2, C1, A2.setE, upd]) rfl PushArg.int
-      (by simp [C2, A2.setE, upd]) rfl PushArg.int (by simp [intE, Mode.ownSlot]) rfl rfl
+      (by simp [C2, A2.setE, upd]) rfl PushArg.int (by simp [intE, Mode.ownSlot])
   have hd := StmtT.letd (P := P) (Γ := C2) (Γ1 := C2) (F := []) (x := 3) (f := 0) (r := .pair 1 2)
     (s := .assign 0 (.var 3)) (E := EP) (t := T) (H := []) rfl (by simp [C2, C1, S, A2.setE, upd]) (by simp)
     hpair rfl (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) ha (hDa.endOK _)
@@ -1124,6 +1136,88 @@ theorem glue_ok : FnOK P glue := by
   · exact ⟨{ intE with mode := R0.mode }, by simpa [glue] using hr, rfl, rfl, by simp [R0, resMode, glue],
       by simp [intE], by simp [intE], by simp [glue]⟩
   · intro i hi b hb; simp [glue] at hi; subst hi; simp [glue] at hb
+
+/-! ### A struct with a `Vec` of destructor values for a field (Agora #607)
+
+`prod (vec DT) int`: its glue takes it apart and hands the `Vec` to a
+`letd` at its own type, whose frame drains it, each element's destructor
+running in its own frame. -/
+
+theorem glueV_not_thru : ¬ ThruFn P 7 := by
+  intro h
+  cases h with
+  | here hf hb => simp [P] at hf; subst hf; simp [glueV, Stmt.hasThru] at hb
+  | call hf hg ht => simp [P] at hf; subst hf; simp [glueV, Stmt.calls] at hg; subst hg; exact dfn_not_thru ht
+
+theorem glueV_glueOK : GlueOK P 7 GV :=
+  ⟨glueV, .vec DT, .int, rfl, rfl, by decide, rfl, rfl, rfl, rfl, rfl, rfl, glueV_not_thru, 2, 3, _, rfl, rfl⟩
+
+theorem gvdrop_ok : DropFnOK P 7 GV := Or.inr (Or.inl glueV_glueOK)
+
+def EGV : Entry := ⟨GVD, .own, true, [], [], false, false⟩
+
+theorem glueV_body : ∃ Δ, StmtT P (sigCtx glueV) [] glueV.body Δ ∧
+    (∀ v E, Δ v = some E → E.mode ≠ .rootb ∧ E.dtor = false ∧ E.dbind = false) ∧
+    Δ 1 = some { intE with mode := R0.mode } := by
+  have h0 : sigCtx glueV 0 = some EGV := by simp [sigCtx, glueV, paramE, EGV, GVD, GV, DT, T, Ty.hasFn]
+  have h1 : sigCtx glueV 1 = some R0 := by simp [sigCtx, glueV, R0, resMode]
+  have hS : NoRootb (sigCtx glueV) := by
+    intro v E h
+    rcases v with _ | _ | v
+    · rw [h0] at h; cases h; simp [EGV]
+    · rw [h1] at h; cases h; simp [R0]
+    · simp [sigCtx, glueV] at h
+  let Ka : Ctx := A2.setE (A2.setE (A2.setE (kill .replace false 0 (sigCtx glueV)) 0
+    { EGV with live := false, dtor := false }) 2 (compE EGV (.vec DT))) 3 (compE EGV .int)
+  have hKa : NoRootb Ka :=
+    (((hS.kill _ _ _).setE (by simp [EGV])).setE (by simp [compE, DT])).setE (by simp [compE, intE])
+  have hEx : compE EGV (.vec DT) = ⟨.vec DT, .own, true, [], [], false, false⟩ := by
+    simp [compE, DT, EGV, ownHeld]
+  let Kb : Ctx := A2.setE (kill .replace false 2 Ka) 2 { compE EGV (.vec DT) with live := false, dtor := false }
+  have hKb : NoRootb Kb := (hKa.kill _ _ _).setE (by rw [hEx]; simp)
+  have hmv : RhsT Ka [] (.var 2) ⟨(compE EGV (.vec DT)).ty, .own, true, [], (compE EGV (.vec DT)).held, false, false⟩ Kb :=
+    RhsT.moveOwn (by simp [Ka, A2.setE, upd]) (by rw [hEx]) (by rw [hEx]) (by simp) (hKa.noPin _)
+      (DtorSafe.of_none (fun v E h => (hKa v E h).2.1) _ _ _)
+  let ED : Entry := Entry.arm { (⟨(compE EGV (.vec DT)).ty, .own, true, [], (compE EGV (.vec DT)).held, false, false⟩ : Entry)
+    with ty := .vec DT, held := (compE EGV (.vec DT)).held }
+  have hED : ED = ⟨.vec DT, .own, true, [], [], false, false⟩ := by
+    simp only [ED]; rw [hEx]; simp [Entry.arm, DT, T, Ty.dtorViews, Ty.hasDtor, Ty.holdsView]
+  let Kc : Ctx := A2.setE Kb 4 ED
+  have hKc : NoRootb Kc := hKb.setE (by rw [hED]; simp)
+  have hc1 : Kc 1 = some R0 := by
+    simp [Kc, Kb, Ka, A2.setE, upd, A2.kill, h1, killE, hits, R0, Entry.vdeps]
+  let Kd : Ctx := A2.setE (kill .replace false 1 Kc) 1 { intE with mode := R0.mode }
+  have hKd : NoRootb Kd := (hKc.kill _ _ _).setE (by simp [intE, R0])
+  have hasg : StmtT P Kc [] (.assign 1 (.expr (.lit 0))) Kd :=
+    StmtT.assign (Ex := R0) (E := intE) hc1 (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
+      (RhsT.expr ExprT.lit) rfl (by simp [intE, roots, Entry.vdeps, Mode.ownSlot]) (by simp [hc1])
+      (hKc.noPin _) (DtorSafe.of_none (fun v E h => (hKc v E h).2.1) _ _ _) rfl
+  have hlet := StmtT.letd (P := P) (Γ := Ka) (Γ1 := Kb) (F := []) (x := 4) (f := 0) (r := .var 2)
+    (s := .assign 1 (.expr (.lit 0))) (t := T) (H := (compE EGV (.vec DT)).held) (τ := .vec DT) rfl
+    (by simp [Ka, A2.setE, upd, A2.kill, sigCtx, glueV]) (by simp) hmv rfl
+    (Or.inr ⟨rfl, by rw [hEx], rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hasg (hKd.endOK _)
+    (by simp [Stmt.assigns])
+  have hun := StmtT.unpair (P := P) (Γ := sigCtx glueV) (F := []) (y := 0) (x := 2) (z := 3)
+    (s := .letd 4 0 (.var 2) (.assign 1 (.expr (.lit 0)))) (E := EGV) (a := .vec DT) (b := .int)
+    rfl h0 rfl (Or.inl rfl) (Or.inr ⟨7, rfl, glueV_glueOK⟩) (by simp)
+    (by simp [sigCtx, glueV]) (by simp [sigCtx, glueV]) (by decide) (by simp) (by simp) hlet
+    (hS.noPin _) (DtorSafe.of_none (fun v E h => (hS v E h).2.1) _ _ _)
+    ((hKd.exitScope 4).endOK _) (((hKd.exitScope 4).exitScope 3).endOK _)
+    (fun _ => by simp [Stmt.movedFirst, Stmt.assigns]) (fun h => by simp [Ty.holdsDtor] at h)
+  refine ⟨_, hun, (((hKd.exitScope 4).exitScope 3).exitScope 2), ?_⟩
+  simp [exitScope, upd, A2.kill, Kd, A2.setE, killE, hits, intE, Entry.vdeps, R0]
+
+theorem glueV_ok : FnOK P glueV := by
+  obtain ⟨Δ, hb, hfl, hr⟩ := glueV_body
+  refine ⟨rfl, by decide, by decide, rfl, by simp [glueV], ?_, by simp [glueV], by simp [glueV], by simp [glueV],
+    by simp [glueV], by simp [glueV], ?_, Δ, hb, fun v E h => (hfl v E h).2, ?_, ?_⟩
+  · intro pt hpt; simp [glueV] at hpt; subst hpt; simp [GVD, GV, DT, T, Ty.ok, Ty.isStruct, Ty.owning, Ty.vecD]
+  · refine ⟨fun i hi hs _ => ?_, fun i hi b hb _ => ?_, fun h => by simp [glueV] at h⟩
+    · simp [glueV] at hi; subst hi; simp [glueV, Stmt.movedFirst, Stmt.assigns]
+    · simp [glueV] at hi; subst hi; simp [glueV] at hb
+  · exact ⟨{ intE with mode := R0.mode }, by simpa [glueV] using hr, rfl, rfl, by simp [R0, resMode, glueV],
+      by simp [intE], by simp [intE], by simp [glueV]⟩
+  · intro i hi b hb; simp [glueV] at hi; subst hi; simp [glueV] at hb
 
 /-! ### A struct with its own `% Drop` beside a destructor field (Agora #616) -/
 
@@ -1554,7 +1648,7 @@ theorem gfn_ok : FnOK P gfn := by
 theorem prog_ok : ProgOK P := by
   intro fn hfn
   simp only [P, List.mem_cons, List.mem_nil_iff, or_false] at hfn
-  rcases hfn with rfl | rfl | rfl | rfl | rfl | rfl | rfl
+  rcases hfn with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl
   · exact dfn_ok
   · exact mk_ok
   · exact ofn_ok
@@ -1562,6 +1656,7 @@ theorem prog_ok : ProgOK P := by
   · exact glue_ok
   · exact impl_ok
   · exact glue2_ok
+  · exact glueV_ok
 
 /-! ### The caller: `: DT y ( mk )  :drop z y` -/
 
@@ -1599,8 +1694,8 @@ theorem main2_typed : ∃ Δ, StmtT P (fun _ => none) [] main2 Δ := by
 theorem prog_codes : ProgCodes P := by
   intro fn hfn
   simp only [P, List.mem_cons, List.mem_nil_iff, or_false] at hfn
-  rcases hfn with rfl | rfl | rfl | rfl | rfl | rfl | rfl <;>
-    simp [dfn, mk, ofn, gfn, glue, impl, glue2, Stmt.codesOK, Rhs.codeOK]
+  rcases hfn with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;>
+    simp [dfn, mk, ofn, gfn, glue, impl, glue2, glueV, Stmt.codesOK, Rhs.codeOK]
 
 theorem main2_safe {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem 2) main2 (.ok m' s')) :
     ¬ Stuck P m' s' := by
@@ -1640,7 +1735,7 @@ theorem main3_typed : ∃ Δ, StmtT P (fun _ => none) [] main3 Δ := by
   have hK3 : NoRootb K3 := hK2.setE (by rw [hEDe]; simp)
   have hpair : RhsT K2 [] (.pair 0 1) EP K2 :=
     RhsT.pair (Ey := intE) (Ez := intE) (by simp [K2, K1, A2.setE, upd]) rfl PushArg.int
-      (by simp [K2, K1, A2.setE, upd]) rfl PushArg.int (by simp [intE, Mode.ownSlot]) rfl rfl
+      (by simp [K2, K1, A2.setE, upd]) rfl PushArg.int (by simp [intE, Mode.ownSlot])
   -- the destructor value moves into the option
   let K4 : Ctx := A2.setE (kill .replace false 2 K3) 2 { ED with live := false, dtor := false }
   have hK4 : NoRootb K4 := (hK3.kill _ _ _).setE (by rw [hEDe]; simp)
@@ -1651,7 +1746,7 @@ theorem main3_typed : ∃ Δ, StmtT P (fun _ => none) [] main3 Δ := by
     exact this
   have hinl : RhsT K3 [] (.inl 2 .int) EO K4 := by
     have := RhsT.inl (Γ := K3) (F := []) (y := 2) (b := .int) (Ey := ED) (Γ1 := K4) (D := ED.held)
-      (by simp [K3, A2.setE, upd]) (by rw [hEDe]) hpush rfl (by rw [hEDe]; rfl) rfl
+      (by simp [K3, A2.setE, upd]) (by rw [hEDe]) hpush rfl
     rw [hEDe] at this; exact this
   let EOd : Entry := Entry.arm { EO with ty := ODT, held := [] }
   have hEOd : EOd.mode ≠ .rootb ∧ EOd.dtor = false ∧ EOd.dbind = false := by
@@ -1699,7 +1794,7 @@ theorem main5_typed : ∃ Δ, StmtT P (fun _ => none) [] main5 Δ := by
   have hK3 : NoRootb K3 := hK2.setE (by rw [hEDe]; simp)
   have hpair : RhsT K2 [] (.pair 0 1) EP K2 :=
     RhsT.pair (Ey := intE) (Ez := intE) (by simp [K2, K1, A2.setE, upd]) rfl PushArg.int
-      (by simp [K2, K1, A2.setE, upd]) rfl PushArg.int (by simp [intE, Mode.ownSlot]) rfl rfl
+      (by simp [K2, K1, A2.setE, upd]) rfl PushArg.int (by simp [intE, Mode.ownSlot])
   -- the `Vec` of destructor values, bound by `letd` at its own type
   let EN : Entry := ⟨.vec DT, .own, true, [], [], false, false⟩
   have hnew : RhsT K3 [] (.new DT) EN K3 := RhsT.new (by decide)
@@ -1776,7 +1871,7 @@ theorem main7_typed : ∃ Δ, StmtT P (fun _ => none) [] main7 Δ := by
   have hK3 : NoRootb K3 := hK2.setE (by rw [hEDe]; simp)
   have hpair : RhsT K2 [] (.pair 0 1) EP K2 :=
     RhsT.pair (Ey := intE) (Ez := intE) (by simp [K2, K1, A2.setE, upd]) rfl PushArg.int
-      (by simp [K2, K1, A2.setE, upd]) rfl PushArg.int (by simp [intE, Mode.ownSlot]) rfl rfl
+      (by simp [K2, K1, A2.setE, upd]) rfl PushArg.int (by simp [intE, Mode.ownSlot])
   let K4 : Ctx := A2.setE K3 3 intE
   have hK4 : NoRootb K4 := hK3.setE (by simp [intE])
   let K5 : Ctx := A2.setE (kill .replace false 2 K4) 2 { ED with live := false, dtor := false }
@@ -1789,7 +1884,7 @@ theorem main7_typed : ∃ Δ, StmtT P (fun _ => none) [] main7 Δ := by
   let EG0 : Entry := ⟨.prod ED.ty intE.ty, .own, true, [], ED.held ++ [], false, false⟩
   have hgp : RhsT K4 [] (.pair 2 3) EG0 K5 :=
     RhsT.pair (Ey := ED) (Ez := intE) (by simp [K4, K3, A2.setE, upd]) (by rw [hEDe]) hmove
-      hK53 rfl PushArg.int (by simp [intE, Mode.ownSlot]) (by rw [hEDe]; rfl) rfl
+      hK53 rfl PushArg.int (by simp [intE, Mode.ownSlot])
   let EGa : Entry := Entry.arm { EG0 with ty := GDT, held := EG0.held }
   have hEGa : EGa.mode ≠ .rootb ∧ EGa.dtor = false ∧ EGa.dbind = false := by
     simp [EGa, EG0, Entry.arm, GDT, GT, DT, T, Ty.dtorViews, Ty.hasDtor, Ty.holdsView]
@@ -1849,7 +1944,7 @@ theorem main8_typed : ∃ Δ, StmtT P (fun _ => none) [] main8 Δ := by
   have hK3 : NoRootb K3 := hK2.setE (by rw [hEDe]; simp)
   have hpair : RhsT K2 [] (.pair 0 1) EP K2 :=
     RhsT.pair (Ey := intE) (Ez := intE) (by simp [K2, K1, A2.setE, upd]) rfl PushArg.int
-      (by simp [K2, K1, A2.setE, upd]) rfl PushArg.int (by simp [intE, Mode.ownSlot]) rfl rfl
+      (by simp [K2, K1, A2.setE, upd]) rfl PushArg.int (by simp [intE, Mode.ownSlot])
   let K4 : Ctx := A2.setE K3 3 intE
   have hK4 : NoRootb K4 := hK3.setE (by simp [intE])
   let K5 : Ctx := A2.setE (kill .replace false 2 K4) 2 { ED with live := false, dtor := false }
@@ -1862,7 +1957,7 @@ theorem main8_typed : ∃ Δ, StmtT P (fun _ => none) [] main8 Δ := by
   let EG0 : Entry := ⟨.prod ED.ty intE.ty, .own, true, [], ED.held ++ [], false, false⟩
   have hgp : RhsT K4 [] (.pair 2 3) EG0 K5 :=
     RhsT.pair (Ey := ED) (Ez := intE) (by simp [K4, K3, A2.setE, upd]) (by rw [hEDe]) hmove
-      hK53 rfl PushArg.int (by simp [intE, Mode.ownSlot]) (by rw [hEDe]; rfl) rfl
+      hK53 rfl PushArg.int (by simp [intE, Mode.ownSlot])
   let EGa : Entry := Entry.arm { EG0 with ty := SDT2, held := EG0.held }
   have hEGa : EGa.mode ≠ .rootb ∧ EGa.dtor = false ∧ EGa.dbind = false := by
     simp [EGa, EG0, Entry.arm, SDT2, GT, DT, T, Ty.dtorViews, Ty.hasDtor, Ty.holdsView]
@@ -1912,7 +2007,7 @@ theorem main4_typed : ∃ Δ, StmtT P (fun _ => none) [] main4 Δ := by
   have hK1 : NoRootb K1 := noRootb_empty.setE (by simp [intE])
   have hinr : RhsT K1 [] (.inr AT 0) ES K1 :=
     RhsT.inr (Ey := intE) (by simp [K1, A2.setE]) rfl PushArg.int
-      (by simp [AT, DT, T, Ty.ok, Ty.isStruct]) rfl rfl
+      (by simp [AT, DT, T, Ty.ok, Ty.isStruct])
   let ESd : Entry := Entry.arm { ES with ty := SDT, held := [] }
   have hESd : ESd.mode ≠ .rootb ∧ ESd.dtor = false ∧ ESd.dbind = false := by
     simp [ESd, ES, Entry.arm, SDT, ST, AT, DT, T, Ty.dtorViews, Ty.hasDtor, Ty.holdsView]

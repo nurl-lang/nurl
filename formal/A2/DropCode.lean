@@ -170,7 +170,7 @@ theorem main6_typed : ∃ Δ, StmtT P (fun _ => none) [] main6 Δ := by
   have hK3 : NoRootb K3 := hK2.setE (by rw [hEDe]; simp)
   have hpair : RhsT K2 [] (.pair 0 1) EP K2 :=
     RhsT.pair (Ey := intE) (Ez := intE) (by simp [K2, K1, A2.setE, upd]) rfl PushArg.int
-      (by simp [K2, K1, A2.setE]) rfl PushArg.int (by simp [intE, Mode.ownSlot]) rfl rfl
+      (by simp [K2, K1, A2.setE]) rfl PushArg.int (by simp [intE, Mode.ownSlot])
   let EN : Entry := ⟨.vec DT, .own, true, [], [], false, false⟩
   have hnew : RhsT K3 [] (.new DT) EN K3 := RhsT.new (by decide)
   let EV : Entry := Entry.arm { EN with ty := .vec DT, held := [] }
@@ -250,5 +250,121 @@ theorem main6_safe {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem 7) main6 (.ok 
   obtain ⟨Δ, ht⟩ := main6_typed
   exact memory_safe prog_ok prog_codes ht rfl
     (by simp [main6, Stmt.vecTruncD, Stmt.vecClearD, Stmt.vecFreeD, Stmt.codesOK, Rhs.codeOK]) (by decide) hr
+
+/-! ### A struct with a `Vec` of destructor values for a field (Agora #607)
+
+`main5`'s program, and then `: c 3  :drop g ( pair v c )`: the `Vec` moves
+into a struct, which is bound by `letd` at `GVD`, the destructor type whose
+destructor is its glue (`glueV`): the glue takes the struct apart and hands
+the `Vec` to a `letd` at its own type, whose frame drains it. -/
+
+def main9 : Stmt :=
+  .letv 0 (.expr (.lit 1)) (.letv 1 (.expr (.lit 2))
+    (.letd 2 0 (.pair 0 1) (.letd 3 0 (.new DT)
+      (.seq (.push 3 2) (.letv 4 (.expr (.lit 3)) (.letd 5 7 (.pair 3 4) .skip))))))
+
+theorem main9_typed : ∃ Δ, StmtT P (fun _ => none) [] main9 Δ := by
+  let K1 : Ctx := A2.setE (fun _ => none) 0 intE
+  let K2 : Ctx := A2.setE K1 1 intE
+  have hK1 : NoRootb K1 := noRootb_empty.setE (by simp [intE])
+  have hK2 : NoRootb K2 := hK1.setE (by simp [intE])
+  let ED : Entry := Entry.arm { EP with ty := DT, held := [] }
+  have hEDe : ED = ⟨DT, .own, true, [], [], false, false⟩ := by
+    simp [ED, EP, Entry.arm, DT, T, Ty.dtorViews, Ty.hasDtor, Ty.holdsView]
+  let K3 : Ctx := A2.setE K2 2 ED
+  have hK3 : NoRootb K3 := hK2.setE (by rw [hEDe]; simp)
+  have hpair : RhsT K2 [] (.pair 0 1) EP K2 :=
+    RhsT.pair (Ey := intE) (Ez := intE) (by simp [K2, K1, A2.setE, upd]) rfl PushArg.int
+      (by simp [K2, K1, A2.setE]) rfl PushArg.int (by simp [intE, Mode.ownSlot])
+  let EN : Entry := ⟨.vec DT, .own, true, [], [], false, false⟩
+  have hnew : RhsT K3 [] (.new DT) EN K3 := RhsT.new (by decide)
+  let EV : Entry := Entry.arm { EN with ty := .vec DT, held := [] }
+  have hEVe : EV = ⟨.vec DT, .own, true, [], [], false, false⟩ := by
+    simp [EV, EN, Entry.arm, DT, T, Ty.dtorViews, Ty.hasDtor]
+  let K4 : Ctx := A2.setE K3 3 EV
+  have hK4 : NoRootb K4 := hK3.setE (by rw [hEVe]; simp)
+  let K5 : Ctx := A2.setE (kill .replace false 2 K4) 2 { ED with live := false, dtor := false }
+  have hK5 : NoRootb K5 := (hK4.kill _ _ _).setE (by rw [hEDe]; simp)
+  have hmove : PushArg K4 [] 2 ED DT ED.held K5 :=
+    PushArg.move (Γ := K4) (F := []) (y := 2) (E := ED) (t := DT) rfl (by rw [hEDe]) (by simp)
+      (hK4.noPin _) (DtorSafe.of_none (fun v E h => (hK4 v E h).2.1) _ _ _)
+  have hK53 : K5 3 = some EV := by
+    simp [K5, K4, A2.setE, upd, A2.kill, killE, hits, hEVe, Entry.vdeps, Mode.ownSlot]
+  have hpush := StmtT.push (P := P) (Γ := K4) (Γ1 := K5) (F := []) (x := 3) (y := 2) (Ex := EV) (Ey := ED)
+    (Ex1 := EV) (t := DT) (D := ED.held) (by simp [K4, A2.setE]) (by rw [hEVe]) (by rw [hEVe])
+    (Or.inl (by rw [hEVe])) (by simp) (by simp [K4, K3, A2.setE, upd]) (by rw [hEDe]) (by rw [hEDe])
+    (by decide) hmove (by rw [hEDe]; simp [roots]) hK53 (by rw [hEVe])
+    (DtorSafe.of_none (fun v E h => (hK5 v E h).2.1) _ _ _) (by rw [hEVe]; simp)
+  -- the context after the push: every entry holds nothing
+  let EV6 : Entry := { EV with held := EV.held ++ ownHeld true DT ED.held }
+  let K6 : Ctx := A2.setE (kill .realloc DT.holdsView 3 K5) 3 EV6
+  have hK6 : NoRootb K6 := (hK5.kill _ _ _).setE (by simp [EV6, hEVe])
+  have hwE : CtxWF (fun _ => none) :=
+    ⟨fun _ _ h => (by cases h), fun _ _ h => (by cases h), fun _ _ h => (by cases h), fun _ _ h => (by cases h)⟩
+  have hw4 : CtxWF K4 :=
+    wfAdd (wfAdd (wfAdd (wfAdd hwE rfl (by simp [intE, Entry.vdeps, Mode.ownSlot]) rfl rfl)
+      (by simp [A2.setE, upd]) (by simp [intE, Entry.vdeps, Mode.ownSlot]) rfl rfl)
+      (by simp [A2.setE, upd]) (by rw [hEDe]; rfl) (by rw [hEDe]) (by rw [hEDe]))
+      (by simp [A2.setE, upd]) (by rw [hEVe]; rfl) (by rw [hEVe]) (by rw [hEVe])
+  have hw6 : CtxWF K6 := StmtT.wf prog_ok hpush hw4
+  have h63 : K6 3 = some EV6 := by simp [K6, A2.setE]
+  have hEV6 : EV6 = ⟨.vec DT, .own, true, [], [], false, false⟩ := by
+    simp [EV6, hEVe, ownHeld, DT, T, Ty.holdsView]
+  have hnd0 : NoDeps (fun _ => none) := fun _ _ h => by cases h
+  have hnd : NoDeps K6 :=
+    (((((((hnd0.setE (by simp [intE, Entry.vdeps, Mode.ownSlot])).setE
+      (by simp [intE, Entry.vdeps, Mode.ownSlot])).setE (by rw [hEDe]; rfl)).setE
+      (by rw [hEVe]; rfl)).kill _ _ _).setE (by rw [hEDe]; rfl)).kill _ _ _).setE
+      (by rw [hEV6]; rfl)
+  have hfix : kill .drop false 3 K6 = K6 := hnd.kill_eq _ _ _
+  -- a struct literal takes the `Vec` for a field
+  let K7 : Ctx := A2.setE K6 4 intE
+  have hK7' : NoRootb K7 := hK6.setE (by simp [intE])
+  let K8 : Ctx := A2.setE (kill .replace false 3 K7) 3 { EV6 with live := false, dtor := false }
+  have hK8 : NoRootb K8 := (hK7'.kill _ _ _).setE (by rw [hEV6]; simp)
+  have h73 : K7 3 = some EV6 := by simp [K7, K6, A2.setE, upd]
+  have hmv3 : PushArg K7 [] 3 EV6 EV6.ty EV6.held K8 :=
+    PushArg.move (Γ := K7) (F := []) (y := 3) (E := EV6) (t := EV6.ty) rfl (by rw [hEV6]) (by simp)
+      (hK7'.noPin _) (DtorSafe.of_none (fun v E h => (hK7' v E h).2.1) _ _ _)
+  have h84 : K8 4 = some intE := by
+    simp [K8, K7, A2.setE, upd, A2.kill, killE, hits, intE, Entry.vdeps, Mode.ownSlot]
+  let EG0 : Entry := ⟨.prod EV6.ty intE.ty, .own, true, [], EV6.held ++ [], false, false⟩
+  have hgp : RhsT K7 [] (.pair 3 4) EG0 K8 :=
+    RhsT.pair (Ey := EV6) (Ez := intE) h73 (by rw [hEV6]) hmv3 h84 rfl PushArg.int
+      (by simp [intE, Mode.ownSlot])
+  let EGa : Entry := Entry.arm { EG0 with ty := GVD, held := EG0.held }
+  have hEGa : EGa.mode ≠ .rootb ∧ EGa.dtor = false ∧ EGa.dbind = false := by
+    simp [EGa, EG0, Entry.arm, GVD, GV, DT, T, Ty.dtorViews, Ty.hasDtor, Ty.holdsView]
+  have hK9 : NoRootb (A2.setE K8 5 EGa) := hK8.setE hEGa
+  have hg := StmtT.letd (P := P) (Γ := K7) (Γ1 := K8) (F := []) (x := 5) (f := 7) (r := .pair 3 4)
+    (s := .skip) (E := EG0) (t := GV) (H := EG0.held) (τ := GVD) rfl
+    (by simp [K7, K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill]) (by simp) hgp rfl
+    (Or.inl ⟨rfl, Or.inl (by simp [EG0, hEV6, intE, GV])⟩) rfl rfl (letd_fn gvdrop_ok) (HeldUp.refl _ _)
+    StmtT.skip (hK9.endOK _)
+  have h4 := StmtT.letv (P := P) (x := 4) (r := .expr (.lit 3)) (E := intE) (F := []) (Γ := K6) (Γ1 := K6)
+    rfl (by simp [K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill]) (by simp) (RhsT.expr ExprT.lit) hg
+    ((hK9.exitScope 5).endOK _)
+  have hK7 := (hK9.exitScope 5).exitScope 4
+  have hbody := StmtT.seq (P := P) rfl hpush h4
+  have hdv := StmtT.letd (P := P) (Γ := K3) (Γ1 := K3) (F := []) (x := 3) (f := 0) (r := .new DT)
+    (E := EN) (t := T) (H := []) (τ := .vec DT) rfl (by simp [K3, K2, K1, A2.setE, upd])
+    (by simp) hnew rfl (Or.inr ⟨rfl, rfl, rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hbody (hK7.endOK _)
+    (by simp [Stmt.assigns, Stmt.vecTruncD, Stmt.vecClearD, Stmt.vecFreeD])
+  have hd := StmtT.letd (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .pair 0 1)
+    (E := EP) (t := T) (H := []) rfl (by simp [K2, K1, A2.setE, upd])
+    (by simp) hpair rfl (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hdv
+    ((hK7.exitScope 3).endOK _) (by simp [Stmt.assigns, Stmt.vecTruncD, Stmt.vecClearD, Stmt.vecFreeD])
+  have h1 := StmtT.letv (P := P) (x := 1) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K1) (Γ1 := K1)
+    rfl (by simp [K1, A2.setE]) (by simp) (RhsT.expr ExprT.lit) hd
+    (((hK7.exitScope 3).exitScope 2).endOK _)
+  exact ⟨_, StmtT.letv (P := P) (x := 0) (r := .expr (.lit 1)) (E := intE) (F := []) (Γ := fun _ => none)
+    (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.expr ExprT.lit) h1
+    ((((hK7.exitScope 3).exitScope 2).exitScope 1).endOK _)⟩
+
+/-- The program with a `Vec` of destructor values inside a struct is memory safe. -/
+theorem main9_safe {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem 6) main9 (.ok m' s')) :
+    ¬ Stuck P m' s' := by
+  obtain ⟨Δ, ht⟩ := main9_typed
+  exact memory_safe prog_ok prog_codes ht rfl (by simp [main9, Stmt.codesOK, Rhs.codeOK]) (by decide) hr
 
 end A2.DtorWitness

@@ -617,9 +617,6 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       Γ y = some Ey → Ey.live = true → PushArg Γ F y Ey Ey.ty Dy Γ1 →
       Γ1 z = some Ez → Ez.live = true → PushArg Γ1 F z Ez Ez.ty Dz Γ2 →
       (Ez.mode.ownSlot = true → z ∉ roots Dy) →
-      -- (A2-drop.3b: a drained `Vec` of destructor values is a binding's own type
-      -- only: no field holds one yet)
-      Ey.ty.vecD = false → Ez.ty.vecD = false →
       RhsT Γ F (.pair y z) ⟨.prod Ey.ty Ez.ty, .own, true, [], Dy ++ Dz, false, false⟩ Γ2
   | fst {y : Var} {E : Entry} {a b : Ty} :
       Γ y = some E → E.live = true → E.ty.undtor = .prod a b → RhsT Γ F (.fst y) (projE y E a) Γ
@@ -627,11 +624,9 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       Γ y = some E → E.live = true → E.ty.undtor = .prod a b → RhsT Γ F (.snd y) (projE y E b) Γ
   | inl {y : Var} {b : Ty} {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
       Γ y = some Ey → Ey.live = true → PushArg Γ F y Ey Ey.ty D Γ1 → b.ok = true →
-      Ey.ty.vecD = false → b.vecD = false →  -- (A2-drop.3b: nor a payload)
       RhsT Γ F (.inl y b) ⟨.sum Ey.ty b, .own, true, [], D, false, false⟩ Γ1
   | inr {a : Ty} {y : Var} {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
       Γ y = some Ey → Ey.live = true → PushArg Γ F y Ey Ey.ty D Γ1 → a.ok = true →
-      a.vecD = false → Ey.ty.vecD = false →
       RhsT Γ F (.inr a y) ⟨.sum a Ey.ty, .own, true, [], D, false, false⟩ Γ1
   -- (A2-drop.3a: a payload of a destructor enum is lent through the type,
   -- as a field of a destructor struct is; the destructor stays with the

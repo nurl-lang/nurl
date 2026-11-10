@@ -213,7 +213,7 @@ theorem else_arm : StmtT P (ctx ⟨str, .bor, false, [], [], false, false⟩) []
   rw [h1] at hpush
   have hinr : RhsT (ctxL R0 Enew) [] (.inr .int 4) ⟨.sum .int Enew.ty, .own, true, [], Enew.held, false, false⟩
       (ctxL R0 EnewD) :=
-    RhsT.inr (by simp [ctxL, setE, upd]) rfl hpush rfl rfl rfl
+    RhsT.inr (by simp [ctxL, setE, upd]) rfl hpush rfl
   have ha := StmtT.assign (P := P) (Γ := ctxL R0 Enew) (F := []) (x := 0) (r := .inr .int 4)
     (Ex := Ecell) (E := ⟨.sum .int Enew.ty, .own, true, [], Enew.held, false, false⟩) (Γ1 := ctxL R0 EnewD)
     (by simp [ctxL, ctx, setE, upd]) (by simp) (Or.inr (Or.inl ⟨rfl, rfl⟩)) hinr
@@ -454,7 +454,7 @@ theorem main_typed : ∃ Δ, StmtT P (fun _ => none) [] main Δ := by
     PushArg.int
   have h1 := StmtT.letv (P := P) (x := 1) (r := .inl 0 str) (E := Ecl) (F := [])
     (Γ := A2.setE (fun _ => none) 0 intE) (Γ1 := A2.setE (fun _ => none) 0 intE)
-    rfl (by simp [A2.setE, upd]) (by simp) (RhsT.inl (by simp [A2.setE, upd]) rfl hpush rfl rfl rfl) h2
+    rfl (by simp [A2.setE, upd]) (by simp) (RhsT.inl (by simp [A2.setE, upd]) rfl hpush rfl) h2
     (((((hK6.exitScope 5).exitScope 4).exitScope 3).exitScope 2).endOK _)
   exact ⟨_, StmtT.letv (P := P) (x := 0) (r := .expr (.lit 0)) (E := intE) (F := []) (Γ := fun _ => none)
     (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.expr ExprT.lit) h1
