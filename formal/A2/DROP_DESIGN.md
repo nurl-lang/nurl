@@ -97,13 +97,22 @@ A2-drop.3b; A2-drop.3a's rule looked one level down only).
   whose fields alone have one; here a struct whose destructor is only its
   glue is a destructor type too.
 
-Not yet (DropSlot / `Frees` release the value, running no code; nurlc runs
-the destructor there):
-- A function's result that holds a destructor value, set before a panic
-  in that function (another binding's destructor included): the unwind
-  releases it with the call's result scope, without its destructor.
-  nurlc's `^ v` returns at once, so only the destructors of the callee's
-  own locals run after it.
+- **A call's owned result of a destructor type is a destructor frame's from
+  the start** (Agora #611). The call's inside is `resFrame fn r …`:
+  `scopeD r g …` when the function's owned result type is `dtor g t` or
+  `vec (dtor g t)` (drained on a panic, `Step.scopeDPDrain`), a plain
+  `scope r …` otherwise. The frame is never armed: such a result holds no
+  views, so the frame's `dbind` premise is vacuous. A panic in the callee after it has set its
+  result stops at the frame, which runs `g` on it (`Step.scopeDP`); on the
+  normal path the result has moved to the caller's binding
+  (`Step.scopeDMoved`). `FnOK` asks an owned result that holds a destructor
+  value to be of a destructor type itself, or a `Vec` of such values, with
+  no views and no closure, whose function is a `DtorOK` destructor. The frame's typing
+  (`CallH.typedIn_of`) types the call's inside against the call's final
+  context with the moved-out result slot added, whose well-formedness is
+  the final context's, and gets what the frame keeps of the bindings
+  outside it (`KeepOut`) from source typing for the body (`SrcRel`) and
+  from the parameters' frames (`exitsP_keepOut`).
 
 Refused rather than released since A2-drop.3b (stricter than nurlc, which
 types them and drops a `Vec`'s elements in index order, each running its
@@ -538,7 +547,8 @@ each one shrinks `CLAIM.md`'s exception:
      enum (its payloads are lent through the type, `getl` / `getr`).
    `free` takes only a `Vec`. Not yet then: elements, payloads inside
    containers, environments, blocks, check-out bindings (each settled by
-   the cuts below), and a result set before a panic in its callee.
+   the cuts below), and a result set before a panic in its callee (the
+   result's frame, Agora #611).
 2. **A2-drop.3b: containers** (done for a binding's own `Vec`, Agora #542).
    - Done: `Ty.holdsDtor` is deep, so a struct, an enum or an option
      holding a destructor value at any depth is bound by `letd` with its
@@ -694,10 +704,14 @@ each one shrinks `CLAIM.md`'s exception:
      `scopeD`-style end that hands the value back instead of dropping it.
      `A3.claim` and `A3.claim_made` are re-proven over the new step.
 
-After that, and the result-before-panic gap, `CLAIM.md` lists no
-destructor exception; what stays is the stricter-than-nurlc list (a
-spawned function's parameter that holds a destructor value among it,
-`SpawnOK`).
+With the result's frame (Agora #611) every value's own, outermost
+destructor runs where the value is dropped. What `CLAIM.md` still lists
+is inside a value (Agora #616): that a struct's glue runs its fields'
+destructors is the elaboration's part, unchecked, and a panic anywhere in
+the glue frees the remaining fields with no destructor (the model that
+shows both: the glue with a frame per field, *Semantics* above,
+`dropCode`'s `unpair`). And the stricter-than-nurlc list (a spawned
+function's parameter that holds a destructor value among it, `SpawnOK`).
 
 
 ## Done when

@@ -1,4 +1,5 @@
 import A2.CallMem
+import A2.SrcKeep
 
 /-! A2 — the call step preserves the invariant and is typed: the call case
 of preservation, and the call case of progress. -/
@@ -157,8 +158,10 @@ theorem covers (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) (hc : Covers m
 
 theorem catchOK (h : CallH P Γ F x fn args m.nv) (m' : Mem) (k : Stmt) :
     CatchOK m' (callStmt fn args m.nv x k) := by
-  show CatchOK m' (wrapParams fn.params m.nv 0 (fn.body.rename (callRen fn.params args m.nv)))
-  rw [catchOK_wrap]
+  have he : CatchOK m' (callStmt fn args m.nv x k) =
+      CatchOK m' (wrapParams fn.params m.nv 0 (fn.body.rename (callRen fn.params args m.nv))) :=
+    resFrame_catchOK m' fn _ _
+  rw [he, catchOK_wrap]
   exact catchOK_src (by rw [RSetup.src_rename]; exact h.fnok.1)
 
 theorem frz (h : CallH P Γ F x fn args m.nv) (_hi : MInv m Γ) {m1 : Mem}
@@ -177,7 +180,11 @@ theorem inv (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} (hi : Inv m �
   catchOK := h.catchOK _ k
   cover := h.covers hi.toMInv hi.cover hb
   pinIn := by
-    show PinOK _ (wrapParams fn.params m.nv 0 (fn.body.rename (callRen fn.params args m.nv)))
+    have he : PinOK ((callS Γ F fn args m.nv x).canon (sigCtx fn)) (callStmt fn args m.nv x k) =
+        PinOK ((callS Γ F fn args m.nv x).canon (sigCtx fn))
+          (wrapParams fn.params m.nv 0 (fn.body.rename (callRen fn.params args m.nv))) :=
+      resFrame_pinOK _ fn _ _
+    rw [he]
     exact pinOK_wrap (h.minv hi.toMInv hb).rootbLt (PinOK.of_spine_nil h.body_spine) h.body_spine _ _ _
   dtorIn := DtorPinOK.of_spine_dbind h.spine_dbind
   dtorOut v E hv hd hos hn _ d hdd hnm := by
@@ -510,7 +517,7 @@ theorem callCase {P : Prog} (hP : ProgOK P) : CallCase P := by
     have hc' : CallT P Γ F f args (callRes Γ fn args) (callPost Γ fn args) :=
       ⟨fn, hf, hlen, hargs, hnf, hds, rfl, rfl, hg⟩
     have h := callH_of hP hf hx hxF hc' hi
-    exact ⟨_, h.typed hk hkT hpx, h.inv hi hb, Nat.le_add_right _ _, h.keep, h.frz hi.toMInv hb⟩
+    exact ⟨_, h.typed (StmtT.ctxRel hP) hk hkT hpx, h.inv hi hb, Nat.le_add_right _ _, h.keep, h.frz hi.toMInv hb⟩
 
 
 /-! ### `recover`: a call of a function without parameters, in a `recover` frame -/
@@ -554,7 +561,7 @@ theorem recCase {P : Prog} (hP : ProgOK P) : RecCase P := by
     let G := (List.range m0.nv).filter (· ≠ x)
     have h' := h.widen hp G (fun v hv => (List.mem_range.mp (List.mem_filter.mp hv).1))
       (fun hm => by simp [G] at hm)
-    have hIn := h'.typedIn
+    have hIn := h'.typedIn (StmtT.ctxRel hP)
     rw [hpost] at hIn hkT
     have hxlt : x < m.nv := h.xlt
     have hrne : x ≠ m.nv + fn.params.length := fun e => by have := vlt hxlt; have := veq e; omega

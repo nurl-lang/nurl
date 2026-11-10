@@ -421,6 +421,10 @@ theorem callIn_codes {P : Prog} (hPc : ProgCodes P) {f : Nat} {fn : Fn} (hf : P[
     (args : List Var) (base : Nat) (x : Var) : (callIn fn args base x).codesOK P := by
   have hb : (fn.body.rename (callRen fn.params args base)).codesOK P :=
     (Stmt.codesOK_rename _ _).mpr (hPc fn (List.mem_of_getElem? hf))
+  have he : ∀ r s, (resFrame fn r s).codesOK P = s.codesOK P := fun r s => by
+    unfold resFrame; split <;> rfl
+  show (resFrame fn _ _).codesOK P
+  rw [he]
   exact ⟨wrapParams_codes hb _ _ _, trivial⟩
 
 /-- A3.2: a lock scope's end gives `x`'s value, with its packages, back to the
@@ -735,6 +739,10 @@ theorem callIn_globs {P : Prog} {GT : GTy} (hPG : ProgGlobs P GT) {f : Nat} {fn 
     (args : List Var) (base : Nat) (x : Var) : (callIn fn args base x).globsAt GT := by
   have hb : (fn.body.rename (callRen fn.params args base)).globsAt GT :=
     (Stmt.globsAt_rename _ _).mpr (hPG fn (List.mem_of_getElem? hf))
+  have he : ∀ r s, (resFrame fn r s).globsAt GT = s.globsAt GT := fun r s => by
+    unfold resFrame; split <;> rfl
+  show (resFrame fn _ _).globsAt GT
+  rw [he]
   exact ⟨wrapParams_globs hb _ _ _, trivial⟩
 
 /-- **A3.6: a step reads globals only at their declared types**: what it

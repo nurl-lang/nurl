@@ -19,6 +19,7 @@ import A3
 #print axioms A2.Dtor.unpair_hands_over
 #print axioms A2.Dtor.letd_dtor
 #print axioms A2.Dtor.fnOK_dtor_params
+#print axioms A2.Dtor.result_frame_is_scopeD
 #print axioms A2.Dtor.scopeD_end_runs_dtor
 #print axioms A2.Dtor.scopeD_panic_runs_dtor
 -- A2-drop.3b, the drain: a `Vec` of destructor values, bound by `letd` and drained at its

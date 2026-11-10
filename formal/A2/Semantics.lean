@@ -939,7 +939,23 @@ def wrapParams : List (PMode × Ty) → Nat → Nat → Stmt → Stmt
   | (.sink, _) :: ps, base, i, s => .scope (base + i) (wrapParams ps base (i + 1) s)
   | (.inout _, _) :: ps, base, i, s => wrapParams ps base (i + 1) s
 
-/-- The inside of a call: the result slot `r = base + n` is bound, the body
+/-- The frame of a call's result slot `r` around the call's inside.  An
+    owned result of a destructor type is a destructor frame's from the start
+    (`scopeD`): once the callee has set it, a panic in the callee (a later
+    statement, one of its own bindings' destructors) stops at the frame,
+    which runs the result's destructor before the panic goes on; on the
+    normal path the result has moved to the caller's binding by the frame's
+    end, which then runs nothing (`Step.scopeDMoved`).  An owned result that
+    is a `Vec` of destructor values is one too: its frame drains it on such a
+    panic (`Step.scopeDPDrain`).  Any other result's is a plain scope. -/
+def resFrame (fn : Fn) (r : Var) (s : Stmt) : Stmt :=
+  match fn.resOwn, fn.resTy with
+  | true, .dtor g _ => .scopeD r g s
+  | true, .vec (.dtor g _) => .scopeD r g s
+  | _, _ => .scope r s
+
+/-- The inside of a call: the result slot `r = base + n` is bound (in its
+    frame, `resFrame`: a destructor frame's for a destructor result), the body
     runs with every caller binding but the `inout` arguments lent out
     (`frozen`: a bound, which typing may narrow — the bindings the closures
     handed to the call may change are not lent), and the result moves to
@@ -949,7 +965,7 @@ def callIn (fn : Fn) (args : List Var) (base : Nat) (x : Var) : Stmt :=
   let r := base + n
   let ρ := callRen fn.params args base
   let z := (List.range base).filter (fun v => !(inoutArgs fn.params args).contains v)
-  .scope r (.seq (.frozen z (wrapParams fn.params base 0 (fn.body.rename ρ))) (.assign x (.var r)))
+  resFrame fn r (.seq (.frozen z (wrapParams fn.params base 0 (fn.body.rename ρ))) (.assign x (.var r)))
 
 /-- What a call becomes: `x` is bound for the continuation `k`, after the
     call's inside. -/

@@ -2635,7 +2635,7 @@ theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
       hnint hxe hps hsp hzr hty hown hl hr ho (fun jk h' => (hlends jk h').2) (fun jk h' => (hrholds jk h').2)
       hnz hbl hbr hbo hrb hio hcapW hMr hMc hse hwf hnf'
     -- the residual, typed
-    have hIn := h.typedIn
+    have hIn := h.typedIn (StmtT.ctxRel hP)
     have hrbT := StmtT.rbind (P := P) hΓ'e rfl rfl
       (fun d hd hb => List.mem_append_right _ (hZ d hd hb)) hFe' hIn
       (fun d hd hb => by

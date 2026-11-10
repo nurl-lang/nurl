@@ -24,6 +24,8 @@ Two kinds of fact, both checked here (`check.sh` prints their axioms):
   binder's premises are satisfiable; the drain's steps are theorems about
   any frame, `A2.Dtor.scopeD_frame_value`, `scopeD_end_drains`,
   `scopeD_drain_binds`, `scopeD_end_empty`, `scopeD_panic_drains`).
+  A call's owned destructor result has a destructor frame from the start
+  (`result_frame_is_scopeD`, Agora #611).
   A2-drop.3c and 3d: no closure's environment and no block's payload holds
   a destructor value (`A2.Dtor.pkgs_env_dtor_free`, `blk_pkgs_env_dtor_free`,
   `blocks_dtor_free`).
@@ -87,14 +89,31 @@ theorem letd_dtor {P : Prog} {Γ Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {r
 /-- A typed function's `sink` parameter of a type holding a destructor value
     is handed to its `letd` first thing in its body, and assigned nothing; an
     `inout` one is assigned nothing; an owned result of such a type is set at
-    most once on any path. -/
+    most once on any path, and is of a destructor type itself, with no views
+    and no closure, whose function is a `DtorOK` destructor (the result's
+    frame runs it on a panic in the callee, `result_frame_is_scopeD`). -/
 theorem fnOK_dtor_params {P : Prog} {fn : Fn} (h : FnOK P fn) :
     (∀ i (hi : i < fn.params.length), fn.params[i].1 = .sink → fn.params[i].2.holdsDtor = true →
       i ∈ fn.body.movedFirst ∧ i ∉ fn.body.assigns) ∧
     (∀ i (hi : i < fn.params.length) b, fn.params[i].1 = .inout b → fn.params[i].2.holdsDtor = true →
       i ∉ fn.body.assigns) ∧
-    (fn.resOwn = true → fn.resTy.holdsDtor = true → fn.body.asgMax fn.params.length ≤ 1) :=
+    (fn.resOwn = true → fn.resTy.holdsDtor = true → fn.body.asgMax fn.params.length ≤ 1 ∧
+      ∃ g t, (fn.resTy = .dtor g t ∨ fn.resTy = .vec (.dtor g t)) ∧ t.holdsView = false ∧
+        t.hasFn = false ∧ DtorOK P g (.dtor g t)) :=
   h.2.2.2.2.2.2.2.2.2.2.2.1
+
+/-- A call's owned result of a destructor type, or that is a `Vec` of
+    destructor values, has a destructor frame from the start: the call's
+    inside is `scopeD r g …` on the result slot `r`, with `g` the result
+    type's destructor (the shape of `callIn`; what the frame then does is
+    `scopeD_panic_runs_dtor` / `scopeD_panic_drains` for a slot that owns,
+    and `Step.scopeDMoved` once the result has moved to the caller). -/
+theorem result_frame_is_scopeD (fn : Fn) (args : List Var) (base : Nat) (x : Var) {g : Nat} {t : Ty}
+    (ho : fn.resOwn = true) (hty : fn.resTy = .dtor g t ∨ fn.resTy = .vec (.dtor g t)) :
+    ∃ s, callIn fn args base x = .scopeD (base + fn.params.length) g s := by
+  have hf : ∀ r s, resFrame fn r s = .scopeD r g s := fun r s => by
+    unfold resFrame; rcases hty with h | h <;> rw [ho, h]
+  exact ⟨_, hf _ _⟩
 
 /-- **The scope end of a destructor frame runs the destructor.** In a typed
     `scopeD x f` frame, `f` is a destructor (`DtorOK`) of a destructor type
@@ -846,8 +865,8 @@ theorem mk_ok : FnOK P mk := by
     by simp [mk], by simp [mk], by simp [mk], by simp [mk], by simp [mk], ?_, Δ, ht,
     fun v E h => ⟨(hn v E h).2.1, (hn v E h).2.2⟩, ⟨_, h0, rfl, rfl, rfl, by simp, by simp, fun _ _ => rfl⟩,
     fun i hi => by simp [mk] at hi⟩
-  refine ⟨fun i hi => by simp [mk] at hi, fun i hi => by simp [mk] at hi, fun _ _ => ?_⟩
-  decide
+  refine ⟨fun i hi => by simp [mk] at hi, fun i hi => by simp [mk] at hi, fun _ _ => ⟨by decide, ?_⟩⟩
+  exact ⟨0, T, Or.inl rfl, rfl, rfl, dtor_ok⟩
 
 theorem prog_ok : ProgOK P := by
   intro fn hfn
