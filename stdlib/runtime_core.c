@@ -10976,7 +10976,10 @@ NURL_TLS_FN void nurl_panic(const char *msg) {
 #ifndef __wasi__
 typedef struct {
     void *ctl;                    /* freed with its buffer at the end; NULL:
-                                   * a range of a Vec that lives on */
+                                   * a range of a Vec that lives on; the
+                                   * buffer itself (== base): an owned
+                                   * slice, which is its buffer and no
+                                   * control block */
     char *base;
     void (*elem_drop)(void*);
     long long elem_size;
@@ -10989,6 +10992,7 @@ typedef struct {
  * no cycle was ever collected on the thread again. */
 NURL_TLS_FN static void nurl__vec_drain_end(NurlVecDrain *d) {
     if (!d->ctl) return;
+    if (d->ctl == (void*)d->base) { nurl_free(d->base); return; }
     if (--nurl__cc_batch == 0) nurl__cc_batch_end();
     if (d->base != (char*)d->ctl + 24) nurl_free(d->base);
     nurl_free(d->ctl);
@@ -11089,9 +11093,51 @@ NURL_TLS_WRAP void nurl_vec_drop_range_dtor(void *data, long long from, long lon
     }
     nurl_vec_drop_range(data, from, to, elem_drop, elem_size);
 }
+
+/* The release of an owned slice `[T` whose elements may run a destructor
+ * of the program's own: its `n` elements, then its buffer (a slice is its
+ * buffer and a length; there is no control block). Journaled as a Vec's is,
+ * with the same record and the same continuation — a panic in one
+ * element's destructor goes on with the elements after it, each once, and
+ * frees the buffer (nurl__vec_drain_end) before the jump. The frame is the
+ * record, for the reason nurl__vec_drain_run gives. */
+#if defined(__has_attribute) && __has_attribute(no_sanitize)
+__attribute__((no_sanitize("address", "undefined")))
+#endif
+NURL_TLS_FN static void nurl__slice_drain_run(char *base, long long n,
+                                              void (*elem_drop)(void*), long long elem_size) {
+    NurlVecDrain d = { base, base, elem_drop, elem_size, 0, n };
+    nurl__jslot_push_slow(&d, nurl__vec_drain_resume, NULL);
+    while (d.next < d.end) {
+        char *e = d.base + d.next * d.elem_size;
+        d.next++;
+        d.elem_drop(e);
+    }
+    nurl_journal_forget_slot(&d);
+    nurl_free(d.base);
+}
+
+NURL_TLS_WRAP void nurl_slice_drop_dtor(void *data, long long n,
+                                        void (*elem_drop)(void*), long long elem_size) {
+    if (!data) return;
+    if (elem_drop && elem_size > 0 && n > 0) {
+        if (__builtin_expect(NURL_TLS_LD(long long, nurl__jrnl_active) != 0, 0)) {
+            nurl__slice_drain_run((char*)data, n, elem_drop, elem_size);
+            return;
+        }
+        nurl_vec_drop_range(data, 0, n, elem_drop, elem_size);
+    }
+    nurl_free(data);
+}
 #else  /* __wasi__: a panic ends the process (no recover), so nothing is journaled. */
 void nurl_vec_drop_dtor(void *ctl, void (*elem_drop)(void*), long long elem_size) {
     nurl_vec_drop(ctl, elem_drop, elem_size);
+}
+void nurl_slice_drop_dtor(void *data, long long n,
+                          void (*elem_drop)(void*), long long elem_size) {
+    if (!data) return;
+    nurl_vec_drop_range(data, 0, n, elem_drop, elem_size);
+    nurl_free(data);
 }
 void nurl_vec_drop_range_dtor(void *data, long long from, long long to,
                               void (*elem_drop)(void*), long long elem_size) {
