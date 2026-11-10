@@ -6019,6 +6019,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
     = g_blk_fall_value & __ret_imp == ret_first_tt TT_LBRACE
     = g_ret_vpos ( nurl_lex_cur_start lex ) = g_ret_vlex lex
     ? == ret_first_tt TT_HASH { ( nurl_sym_def syms `__last_cast_ident__` `` ) } {}
+    : i __ret_r0 ( nurl_peek # s cg 0 )
     : ~ s val ( gen_operand lex syms cg )
     = g_ret_vpos __rvp0 = g_ret_vlex __rvl0
     = g_ret_lit_pos __rlp0 = g_ret_lit_lex __rll0
@@ -6030,10 +6031,15 @@ unsafe @ gen_ret i lex i syms i cg → s {
     // block it was nobody's: a parameter, or a field's owner, left as it
     // was and the caller released the buffer its argument still held —
     // `@ id String p → String { ^ { p } }` (agora #545, #630).
+    // (A binding the block itself made, `^ { : W w … w }`, ended with the
+    // block: its value is the block's, handed up by the block's exits and
+    // judged by what the block's rows say it views — the walk has closed
+    // the binding by now and `^ w` would ask it of a name that is gone.)
     ? & == ret_first_tt TT_LBRACE ( is_ident_tok g_blk_tail_eff ) {
         : s __rbn ( nurl_sym_get syms `__tail_name__` )
         : s __rbp ( nurl_sym_get syms `__tail_ptr__` )
-        ? & & != 0 ( nurl_str_len __rbn ) != 0 ( nurl_str_len __rbp ) ( seq __rbp ( nurl_sym_get2 syms __rbn `__ptr` ) ) {
+        : b __rb_own & != 0 ( nurl_str_starts __rbp `%r` ) >= ( nurl_str_to_int ( nurl_str_slice __rbp 2 ( nurl_str_len __rbp ) ) ) __ret_r0
+        ? & & & ! __rb_own != 0 ( nurl_str_len __rbn ) != 0 ( nurl_str_len __rbp ) ( seq __rbp ( nurl_sym_get2 syms __rbn `__ptr` ) ) {
             = ret_first_tt g_blk_tail_eff
             = ret_first_val ( nurl_str_cat __rbn `` )
         } {}
@@ -36254,6 +36260,12 @@ unsafe @ bck_check_moved_reads s reads i line s state → v {
 // leaving out what a call lends (bck_sx_hpaths): the handles a join or a
 // value block may hand on as they are.
 : ~ b g_sxe_hpaths F
+// (The names of the source expression being read are handed on as they
+// are — the binding its row gives a value is a borrow of them, its own
+// borrow row next: a cursor among them is named for its handle, a copy of
+// which the binding becomes, not for the value it is over; bck_sx_name's
+// `curv`.)
+: ~ b g_sxe_hcopy F
 // …and the sources a callee's walk answered its result views only through
 // their elements (`2`, __rv_ask) in the evaluation in progress — or a view
 // read there was bound to such an answer (`rva_`): a bare view handed back
@@ -36732,7 +36744,10 @@ unsafe @ __sx_view_at s st s e → b {
         // (A copy of an owner's handle named for its value — `@ G { c }`, c
         // a `: ~ T c q`: the value is q's own, which the holder takes whole
         // (§7.6), so it holds what q holds and is no address into q.)
-        : b curv & & & ! arg == id r == 0 ( nurl_str_len vwm ) & != 0 g_bck_hc_any != 0 ( nurl_sym_len g_bck ( bck_bkey `hc_` rs ) )
+        // (Not where the row binds a borrow of it — `: d ? k { c } { o }`,
+        // `: ~ d ? k c o`: d is a second copy of q's handle, an address into
+        // q as c is, and what is done through d is done to q. g_sxe_hcopy.)
+        : b curv & & & & ! arg ! g_sxe_hcopy == id r == 0 ( nurl_str_len vwm ) & != 0 g_bck_hc_any != 0 ( nurl_sym_len g_bck ( bck_bkey `hc_` rs ) )
         : s bv ( __word_union ? curv ( __bck_sx_cursor_val st rs bsl ) ( __src_mark bsl ind ) deps )
         // (A guarded `s` lent this time may own what it holds next; one
         // that may own what it holds now, BCK_MAYBE_OWNED, points into its
@@ -37443,6 +37458,15 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
     ( bck_exit_maybe_defers st p -1 line T )
 }
 
+// Is the binding row `p` gives a value (a `let`, an `=`) a borrow of what
+// that value names — its own borrow row the next one (bck_note_borrow)?
+// Asked only where a cursor is live: nothing else reads the answer.
+@ __bck_row_binds_borrow i p i hi → b {
+    ? | == 0 g_bck_hc_any >= + p 1 hi { ^ F } {}
+    ? != 7 ( bck_kc + p 1 ) { ^ F } {}
+    ^ ( seq ( bck_field ( bck_rec + p 1 ) 1 ) ( bck_field ( bck_rec p ) 1 ) )
+}
+
 @ bck_walk_seq i lo i hi s state → s {
     : ~ s st ( nurl_str_cat state `` )
     : ~ i p lo
@@ -37743,9 +37767,11 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 : i lmk ? == lmk0 110 0 lmk0
                 : s lsx ? != 0 lmk ( bck_field rec 8 ) ``
                 = g_sxe_rvn 0
+                = g_sxe_hcopy ( __bck_row_binds_borrow p hi )
                 : s lsrcs ? != 0 ( nurl_str_len lsx ) ( bck_sx_sources st lsx ( bck_field_int rec 1 ) ) ( nurl_str_cat `*` `` )
                 ? | != 0 g_sxe_rvn != 0 g_bck_rva_any { ( __bck_rva_set ( bck_field rec 1 ) ) } {}
                 : s lnest ? == lmk0 110 ( bck_sx_sources st ( bck_field rec 8 ) ( bck_field_int rec 1 ) ) ``
+                = g_sxe_hcopy F
                 ( bck_partner_unlink ( bck_field_int rec 1 ) )
                 ( bck_put ( bck_bkey `oos_` ( bck_field rec 1 ) ) `` )
                 // (A new binding: no copy of an owner's handle until its
@@ -37809,9 +37835,11 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 : i amk ? == amk0 110 0 amk0
                 : s asx ? != 0 amk ( bck_field rec 8 ) ``
                 = g_sxe_rvn 0
+                = g_sxe_hcopy ( __bck_row_binds_borrow p hi )
                 : s asrcs ? != 0 ( nurl_str_len asx ) ( bck_sx_sources st asx asid ) ( nurl_str_cat `*` `` )
                 ? | != 0 g_sxe_rvn != 0 g_bck_rva_any { ( __bck_rva_set ( nurl_str_int asid ) ) } {}
                 : s anest ? == amk0 110 ( bck_sx_sources st ( bck_field rec 8 ) asid ) ``
+                = g_sxe_hcopy F
                 // (…or may own on some path only, BCK_MAYBE_OWNED: there it
                 // goes the same way.)
                 ? & | == BCK_OWNED ( bck_st_get st asid ) ( bck_st_may_own st asid ) ( bck_has_stored_in asid )
@@ -48664,10 +48692,16 @@ unsafe @ gen_assign_store i lex i syms i cg → s {
         // is copied in, the caller's binding owning what it holds, and the
         // old value goes. Stored as is, the caller's binding shared the
         // other owner's buffer and its own old value leaked; agora #438.)
+        // (A slice literal is as new as a struct literal: `= p [i | 3 4]`
+        // over an `inout [i` left the caller's old buffer nobody's — and so
+        // is a value block that ends in either, `= p { … [i | z 4] }`;
+        // agora #545.)
         : ~ b __io_keyed F
+        : i __io_lt ? == bck_rhs_tt TT_LBRACE g_blk_tail_eff bck_rhs_tt
+        : b __io_lit | == __io_lt TT_AT == __io_lt TT_LBRACK
         ? & & & & != 0 g_auto_drop_strings != 0 ( nurl_str_len ptr ) ( seq ( nurl_sym_get2 syms name `__inout` ) `1` ) ( __is_handle_ty vt )
-        | == bck_rhs_tt TT_AT & == bck_rhs_tt TT_LPAREN == 0 ( nurl_sym_len syms `__last_value_borrow__` ) {
-            : s __io_ro ? == bck_rhs_tt TT_AT ( nurl_str_cat `true` `` ) ( mem_call_retown syms cg )
+        | __io_lit & == bck_rhs_tt TT_LPAREN == 0 ( nurl_sym_len syms `__last_value_borrow__` ) {
+            : s __io_ro ? __io_lit ( nurl_str_cat `true` `` ) ( mem_call_retown syms cg )
             ? != 0 ( nurl_str_len __io_ro ) {
                 : s __io_old ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print __io_old ) ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty vt ) )
@@ -48810,9 +48844,9 @@ unsafe @ gen_assign_store i lex i syms i cg → s {
             } {}
         } {}
         ? & & & & & != 0 g_auto_drop_strings != 0 ( nurl_str_len ptr ) ( seq ( nurl_sym_get2 syms name `__inout` ) `1` ) __io_oty ! __io_keyed
-        | | == bck_rhs_tt TT_AT == bck_rhs_tt TT_LBRACK & == rhs_eff_tt TT_LPAREN == 0 ( nurl_sym_len syms `__last_value_borrow__` ) {
+        | __io_lit & == rhs_eff_tt TT_LPAREN == 0 ( nurl_sym_len syms `__last_value_borrow__` ) {
             // (A slice literal is a buffer of its own, as an `@` literal is.)
-            : s __io_ro3 ? | == bck_rhs_tt TT_AT == bck_rhs_tt TT_LBRACK ( nurl_str_cat `true` `` ) ( mem_call_retown syms cg )
+            : s __io_ro3 ? __io_lit ( nurl_str_cat `true` `` ) ( mem_call_retown syms cg )
             ? != 0 ( nurl_str_len __io_ro3 ) {
                 ( mem_replaced_drop_at cg vt __io_ro3 ptr )
             } {}
