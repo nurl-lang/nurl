@@ -32,6 +32,8 @@ inductive ViewIn : Ty → Val → Ty → Val → Prop
       environment; another's holds none, `WFv.pkg`.) -/
   | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {x : Val} {cs : List (Var × PMode × Ty)} {s : Ty}
       {v : Val} : ViewIn te x s v → ViewIn (.fn ms .any) (.pkg fs te ms x cs) s v
+  /-- A2-drop.3: a destructor type's values are its inner type's. -/
+  | dtor {f : Nat} {t : Ty} {x : Val} {s : Ty} {v : Val} : ViewIn t x s v → ViewIn (.dtor f t) x s v
 
 -- `ArcIn`, `ArcBlk`, `ShareFits` and `SharesIn` are in `Semantics.lean` (A3.2's
 -- second cut: a lock scope gives back only a payload whose shares fit, `Giveable`).
@@ -175,6 +177,7 @@ theorem ArcIn.hasArc {τ : Ty} {T : Val} {u : Ty} {k : Nat} {p : Option Val} (h 
   | inl _ ih => simp [Ty.hasArc, ih]
   | inr _ ih => simp [Ty.hasArc, ih]
   | pkg _ hq _ => exact hq
+  | dtor _ ih => exact ih
 
 /-- A node whose elements are among another's, where the blocks are as
     they were (a `Vec` that shrank, or that was copied). -/
@@ -231,31 +234,43 @@ theorem SharesIn.sub {B : Nat → Option Blk} {n T : Val} (hs : Sub n T) :
   | refl => exact fun hw hsh => ⟨_, hw, hsh⟩
   | child he _ ih =>
     intro τ hw hsh
+    peel_dtor τ τ' hnd hw
     cases hw with
     | node hes => exact ih (hes _ he) (fun u k p ha => hsh u k p (.child he ha))
+    | dtor => exact absurd rfl (hnd _ _)
   | fst _ ih =>
     intro τ hw hsh
+    peel_dtor τ τ' hnd hw
     cases hw with
     | pair ha _ => exact ih ha (fun u k p h => hsh u k p (.fst h))
+    | dtor => exact absurd rfl (hnd _ _)
   | snd _ ih =>
     intro τ hw hsh
+    peel_dtor τ τ' hnd hw
     cases hw with
     | pair _ hb => exact ih hb (fun u k p h => hsh u k p (.snd h))
+    | dtor => exact absurd rfl (hnd _ _)
   | inl _ ih =>
     intro τ hw hsh
+    peel_dtor τ τ' hnd hw
     cases hw with
     | inl ha => exact ih ha (fun u k p h => hsh u k p (.inl h))
+    | dtor => exact absurd rfl (hnd _ _)
   | inr _ ih =>
     intro τ hw hsh
+    peel_dtor τ τ' hnd hw
     cases hw with
     | inr hb => exact ih hb (fun u k p h => hsh u k p (.inr h))
+    | dtor => exact absurd rfl (hnd _ _)
   | pkg _ ih =>
     intro τ hw hsh
+    peel_dtor τ τ' hnd hw
     cases hw with
     | @pkg _ _ _ q _ _ hwe hq =>
       cases hqs : q.shares
       · exact ih hwe (fun _ _ _ ha => by have h := ha.hasArc; rw [hq.2.2 hqs] at h; cases h)
       · exact ih hwe (fun u k p h => hsh u k p (.pkg h hqs))
+    | dtor => exact absurd rfl (hnd _ _)
 
 /-- A tree of a type that holds no cell share holds none. -/
 theorem WFv.noCell_hasCell {τ : Ty} {v : Val} (hw : WFv τ v) (hnc : τ.hasCell = false) {k : Nat} :
@@ -283,6 +298,7 @@ theorem WFv.noCell_hasCell {τ : Ty} {v : Val} (hw : WFv τ v) (hnc : τ.hasCell
   | inr _ ih =>
     simp only [Ty.hasCell, Bool.or_eq_false_iff] at hnc
     intro h; cases h with | inr h => exact ih hnc.2 h
+  | dtor _ _ ih => exact ih hnc
 
 /-- ... so a node found in a well-formed tree holds the shares the tree's type
     says, at its own type `vec t`. -/
@@ -290,7 +306,10 @@ theorem SharesOK.sub_node {m : Mem} {τ : Ty} {T : Val} (hw : WFv τ T) (hsh : S
     {t : Ty} {c d : Nat} {es : List Val} (hs : Sub (.node t c d es) T) :
     SharesOK m (.vec t) (.node t c d es) := by
   obtain ⟨σ, hwσ, hshσ⟩ := SharesIn.sub hs hw hsh
-  cases hwσ; exact hshσ
+  peel_dtor σ σ' hnd hwσ
+  cases hwσ
+  · exact hshσ
+  · exact absurd rfl (hnd _ _)
 
 /-- A3.1 (with #295): a node whose elements are the old node's or hold
     shares that name blocks, where the blocks are as they were. -/
@@ -486,9 +505,36 @@ inductive ValOK (m : Mem) : Ty → Val → List Dep → List Dep → Prop
   | cell {t : Ty} {k : Nat} {P H : List Dep} :
       (∃ o, m.blk k = some ⟨t, .lock, o⟩) → (∃ dep ∈ P, CellLanded m dep k) →
       ValOK m (.cell t) (.cell k) P H
+  /-- A2-drop.3: a destructor type's values are its inner type's. -/
+  | dtor {f : Nat} {t : Ty} {v : Val} {P H : List Dep} : ValOK m t v P H → ValOK m (.dtor f t) v P H
 
 section ValOK
 variable {m : Mem} {v : Val} {P H : List Dep}
+
+/-! A2-drop.3: a destructor type's values are its inner type's. -/
+theorem ViewIn.dtor_iff {f : Nat} {t : Ty} {x : Val} {s : Ty} {w : Val} :
+    ViewIn (.dtor f t) x s w ↔ ViewIn t x s w :=
+  ⟨fun h => by cases h; assumption, .dtor⟩
+theorem ViewIn.undtor_iff {τ : Ty} {x : Val} {s : Ty} {w : Val} :
+    ViewIn τ.undtor x s w ↔ ViewIn τ x s w := by
+  induction τ with
+  | dtor _ _ ih => rw [Ty.undtor_dtor, ih, ViewIn.dtor_iff]
+  | _ => exact Iff.rfl
+theorem ViewsOK.dtor_iff {f : Nat} {t : Ty} {T : Val} :
+    ViewsOK m (.dtor f t) T H ↔ ViewsOK m t T H := by
+  simp only [ViewsOK, ViewIn.dtor_iff]
+theorem ViewsOK.undtor_iff {τ : Ty} {T : Val} : ViewsOK m τ.undtor T H ↔ ViewsOK m τ T H := by
+  simp only [ViewsOK, ViewIn.undtor_iff]
+theorem SharesOK.dtor_iff {f : Nat} {t : Ty} {T : Val} : SharesOK m (.dtor f t) T ↔ SharesOK m t T :=
+  SharesIn.dtor_iff
+theorem SharesOK.undtor_iff {τ : Ty} {T : Val} : SharesOK m τ.undtor T ↔ SharesOK m τ T :=
+  SharesIn.undtor_iff
+theorem valOK_dtor {f : Nat} {t : Ty} : ValOK m (.dtor f t) v P H ↔ ValOK m t v P H :=
+  ⟨fun h => by cases h; assumption, .dtor⟩
+theorem valOK_undtor {τ : Ty} : ValOK m τ.undtor v P H ↔ ValOK m τ v P H := by
+  induction τ with
+  | dtor _ _ ih => rw [Ty.undtor_dtor, ih, valOK_dtor]
+  | _ => exact Iff.rfl
 
 theorem valOK_int : ValOK m .int v P H ↔ ∃ n, v = .int n := by
   constructor
@@ -537,6 +583,21 @@ theorem ValOK.int_any {m' : Mem} {P' H' : List Dep} (h : ValOK m .int v P H) : V
   cases h; exact .int
 
 end ValOK
+
+/-- A2-drop.3: `peel_dtor` (`Semantics.lean`), now over the validity
+    predicates too.  (Its names resolve where the rule is written.) -/
+macro_rules
+  | `(tactic| peel_dtor $τ $σ $hnd $hw) => `(tactic| (
+      have $hnd := Ty.undtor_ne $τ
+      replace $hw := WFv.undtor $hw
+      try simp only [← ArcIn.undtor_iff (τ := $τ)] at *
+      try simp only [← SharesIn.undtor_iff (τ := $τ)] at *
+      try simp only [← SharesOK.undtor_iff (τ := $τ)] at *
+      try simp only [← ViewIn.undtor_iff (τ := $τ)] at *
+      try simp only [← ViewsOK.undtor_iff (τ := $τ)] at *
+      try simp only [← valOK_undtor (τ := $τ)] at *
+      generalize ($τ).undtor = $σ at *))
+
 
 def OwnedAt (m : Mem) (x : Var) (t : Val) : Prop := m.st x = some ⟨true, some t⟩
 
