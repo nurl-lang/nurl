@@ -14883,14 +14883,23 @@ unsafe @ __sx_publish i me s sx → v {
 }
 
 // Does the value block just made as an argument only lend: its tail a
-// binding of a scope outside it (the storage it named inside is the one
-// its name names here), or a field of one — not a block-local the block
-// hands out, which is the argument's own (agora #555)?
+// binding or a field of one? A value block opens no scope — its own
+// locals live to the end of the enclosing one, which drops them (agora
+// #193) — so its tail is lent whatever binding it is; but a whole `inout`
+// parameter a `sink` takes over, as the bare name does (agora #555).
 @ __blk_arg_lends i syms → b {
     : s tp ( nurl_sym_get syms `__tail_ptr__` )
-    ? != 0 ( nurl_str_len tp ) { ^ ( seq tp ( nurl_sym_get2 syms ( nurl_sym_get syms `__tail_name__` ) `__ptr` ) ) } {}
-    : s rp ( nurl_sym_get syms `__tail_root_ptr__` )
-    ? != 0 ( nurl_str_len rp ) { ^ ( seq rp ( nurl_sym_get2 syms g_blk_froot `__ptr` ) ) } {}
+    ? != 0 ( nurl_str_len tp ) { ^ ! ( seq ( nurl_sym_get2 syms ( nurl_sym_get syms `__tail_name__` ) `__inout` ) `1` ) } {}
+    ^ != 0 ( nurl_str_len ( nurl_sym_get syms `__tail_root_ptr__` ) )
+}
+
+// Is a word of `names` a whole `inout` parameter?
+@ __any_inout i syms s names → b {
+    : ~ s rest ( nurl_str_cat names `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ( seq ( nurl_sym_get2 syms w `__inout` ) `1` ) { ^ T } {}
+    }
     ^ F
 }
 
@@ -17695,7 +17704,9 @@ unsafe @ gen_call i lex i syms i cg → s {
             // a . h b )`; or a value block whose tail is a binding of an outer
             // scope or a field of one, `( eat { . h a } )`, `( eat { w } )`:
             // the callee released what the owner still drops — agora #555.)
-            : b __sj_lends | & & | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST == 0 ( nurl_str_len arg_join_own ) == 0 ( nurl_str_len arg_join_ids ) & == arg_eff_tt TT_LBRACE ( __blk_arg_lends syms )
+            // (A whole `inout` parameter an arm's block hands on is taken
+            // over, as `( eat p )` takes it.)
+            : b __sj_lends | & & & | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST == 0 ( nurl_str_len arg_join_own ) == 0 ( nurl_str_len arg_join_ids ) ! ( __any_inout syms ( nurl_sym_get syms `__last_join_tails__` ) ) & == arg_eff_tt TT_LBRACE ( __blk_arg_lends syms )
             ? __sj_lends {
                 ? ( __clone_supported at syms ) { = av ( mem_emit_cloneif cg at av `1` ) } { ? ( __nc_drop_ty at ) { ( __nc_copy_die ( nurl_sym_get syms `__fn_self_name__` ) at ) } {} }
             } {}

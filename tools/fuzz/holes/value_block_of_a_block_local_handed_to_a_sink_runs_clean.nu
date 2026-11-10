@@ -1,5 +1,5 @@
-// value_block_of_a_block_local_handed_to_a_sink_runs_clean: agora #555 guard — `( eat { : ~ ( Vec S ) t … t } )`: the block's own binding goes to the callee, not a copy of it (no leak under LSan).
-// Guard: a block-local tail is the argument's own; only a lent tail is copied.
+// value_block_of_a_block_local_handed_to_a_sink_runs_clean: agora #555 guard — `( eat { : ~ ( Vec S ) t … t } )`: a value block opens no scope, so its local lives on to the enclosing scope's end, which drops it; the block lends it, and the callee is handed a copy (no leak, no double free under ASan + LSan).
+// Guard: a block's own local as its tail is lent like any other binding (agora #193); only a whole `inout` parameter is taken over, as the bare name is.
 // main b997834: accepted; AddressSanitizer: heap-use-after-free.
 // map: §2.12 | A2 | runs-clean | - | agora #555 guard: a value block of a block-local handed to a sink
 $ `stdlib/core/string.nu`
