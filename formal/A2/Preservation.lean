@@ -391,8 +391,8 @@ def RecCase (P : Prog) : Prop :=
 def CloCase (P : Prog) : Prop :=
   ∀ {Γ Γ1 : Ctx} {F : List Var} {x c : Var} {j : Nat} {zs : List Var} {k : Stmt} {Ec E : Entry}
     {ms : List Nat} {q : Cross} {σ : Nat} {sig : Fn} {Δ : Ctx} {m m' : Mem} {s' : Stmt},
-    k.src = true → Γ x = none → x ∉ F → Γ c = some Ec → Ec.ty = .fn ms q → ms[j]? = some σ →
-    P[σ]? = some sig → sig.params.head? = some (.inp, .fn ms q) → (∀ o ∈ sig.outHolds, o.2.1 ≠ 0) →
+    k.src = true → Γ x = none → x ∉ F → Γ c = some Ec → Ec.ty.undtor = .fn ms q → ms[j]? = some σ →
+    P[σ]? = some sig → sig.params.head? = some (.inp, Ec.ty) → (∀ o ∈ sig.outHolds, o.2.1 ≠ 0) →
     CallT P Γ F σ (c :: zs) E Γ1 → (∀ z ∈ zs, ∀ d ∈ Ec.vdeps, d.kind.bound ≠ .none → d.root ≠ z) →
     StmtT P (setE Γ1 x (recvRes c Ec E)) F k Δ →
     EndOK Δ x → MemCodes P m → Inv m Γ F (.callc x c j zs k) →

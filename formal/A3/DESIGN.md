@@ -1830,7 +1830,8 @@ the packed value that typing tracks. The flag is taken:
   holds a view), and `ArcIn.pkg` only where `q.shares` (a bare one holds no
   share).
 - `StmtT.callc` reads `q` only to match the interface: the receiver is a
-  `fn ms q`, and the interface's first parameter is `(inp, fn ms q)`. A
+  `fn ms q` (or, Agora #651, a destructor type over one, of the dropping
+  class), and the interface's first parameter is `inp` at the receiver's type. A
   call through a closure is otherwise unchanged.
 - The crossing rules are unchanged. Their premises read the flag through
   the functions on types:
@@ -1995,7 +1996,8 @@ closure's environment is a tree inside its value (`Sub.pkg`, `Val.ids`).
   declares the class of each closure it takes. Forgetting a class would be
   sound (it only weakens the type) but is not a rule. (Closed: `RhsT.moveUp`
   and `RhsT.copyUp`, A3.5b's and A3.5c's rest, below.)
-- *One class per interface.* An interface's receiver is `(inp, fn ms q)`,
+- *One class per interface.* An interface's receiver is `(inp, fn ms q)`
+  (the receiver's own type: Agora #651),
   so an interface is declared at one class, and a method's code is checked
   once for it. (Kept: a borrowed receiver is copied up to the interface's
   class, `StmtT.callcUp`, below.)
@@ -2065,7 +2067,8 @@ rule, and nothing in it tells them apart. Nothing has to:
   closure's one method is the case `ms = [σ]`. `MemCodes` holds it of
   every package in memory, blocks included.
 - *A call reads the class only to match the interface.* `StmtT.callc` asks
-  method `j`'s interface to take the receiver as `(inp, fn ms q)`.
+  method `j`'s interface to take the receiver as `inp` at its own type
+  (`fn ms q`, or a destructor type over it: Agora #651).
 - *The crossing check enters packages.* `SendCheck` and `CellInv` ask
   `Sub (.cell k) v`, and `Sub.pkg` enters a package's environment
   (`sendCheck_env`). So no `Sub` or `SendCheck` case is new.
@@ -2096,7 +2099,8 @@ which it declares their receivers.
   - `TraitBound.fits_send`: also that the box's type holds no view;
   - `TraitBound.fits_sendSync`: it also holds no cell share.
 - The class is the bound: `StmtT.callc_recv_at` (a call's receiver is a
-  `fn ms q` whose interface takes it at `q`, through `StmtT.sub` too),
+  `fn ms q`, or a destructor type over one, whose interface takes it at
+  its type, through `StmtT.sub` too),
   `StmtT.callc_bound` and `callc_not_at`.
 - The per-impl check:
   - `ImplOK P b fs te ms`: `CodeOK P fs te ms []` and `b.cross.Fits te []`;

@@ -1625,7 +1625,7 @@ theorem hand_found {P : Prog} {m : Mem} {Γ Γ1 : Ctx} {F : List Var} (hi : MInv
     rcases canDo_replace_cases hcan with h | h
     · exact h
     · exact absurd h (hi.noInout c Ec _ hc)
-  obtain ⟨o, fs, te, env, cs, hslot⟩ := pkg_slot hi hc hlc htc
+  obtain ⟨o, fs, te, env, cs, hslot⟩ := pkg_slot hi hc hlc (by rw [htc]; rfl)
   obtain ⟨sl, hsl, _, hso, _⟩ := hi.slot c Ec hc
   rw [hslot] at hsl; cases hsl
   rw [hmo] at hso; simp only [Mode.ownSlot] at hso; subst hso
@@ -1928,7 +1928,7 @@ theorem handCase {P : Prog} (hP : ProgOK P) : HandCase P := by
     obtain ⟨_, _, _, hrok, hrown, hpar, _⟩ := hfn
     have hte := hpar (.inout b, te0) (by rw [hps]; simp)
     have hto : te0.owning = true := hte.2.2 b rfl
-    have hq : q.Fits te0 [] := pkg_fits hi.toMInv hc hlc htc hslot0
+    have hq : q.Fits te0 [] := pkg_fits hi.toMInv hc hlc (by rw [htc]; rfl) hslot0
     -- the store
     obtain ⟨hm1, _⟩ := hand_minv hi.toMInv hanch hc hlc hos hcF hny hdc (by rw [htc]; rfl) hslot0 hto hte.1 hx hxn
       (E0 := callX fn0) rfl rfl rfl hrok (by simp only [callX, resMode]; split <;> simp)

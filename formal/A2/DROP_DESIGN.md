@@ -488,7 +488,7 @@ made it:
 | a struct field, at the struct's drop | the field's destructor, inside the struct's glue | the glue takes the struct apart, the field in a `letd` frame (Agora #616) |
 | a `Vec` element: `vec_pop` dropped, `truncate`, `clear`, `vec_set` over it, the Vec freed | each element's destructor | the drain at the end of a binding's own `Vec` (A2-drop.3b); free, clear and truncate as code (`A2/DropCode.lean`), `vec_set` refused; a popped element is a `letd`'s |
 | an enum or option payload | the payload's destructor | the enum's glue moves the payload out to a `letd` frame (Agora #632) |
-| a closure's or a trait object's environment | the captures' destructors | the closure's glue calls its drop method, whose code takes the environment owned and binds it under `letd`s (Agora #609, `ClosureGlueOK`, `Step.callcD`); such a closure is not called through its own binding yet (Agora #651) |
+| a closure's or a trait object's environment | the captures' destructors | the closure's glue calls its drop method, whose code takes the environment owned and binds it under `letd`s (Agora #609, `ClosureGlueOK`, `Step.callcD`); it is called lent, through its binding or a borrow of the destructor type (Agora #651); a method that changes the environment is refused for the class |
 | a panic's unwind through any of these | the journal runs each, once | `scopeP` frees in one step, except at `scopeD` |
 | an `Arc` / lock block's payload when its last share goes (A3) | on the thread that drops the last share | refused: no payload owns a destructor value (A2-drop.3d, `Ty.ok`) |
 
@@ -722,12 +722,17 @@ each one shrinks `CLAIM.md`'s exception:
      - *The proof.* `handD_typed`, `handCaseD` (`A2/EnvHand.lean`); the
        frame's end is `glueCall_typed` unchanged. Witness:
        `A2/ClosureDropWitness.lean`.
-     - *Left:* calling such a closure through its `letd` binding (Agora
-       #651: the lending rule asks a receiver of the closure type itself;
-       the binding is of the destructor type), a trait object of the class
+     - *Calling it* (Agora #651): `StmtT.callc` reads the closure type
+       through the binding's destructor type and the interface takes the
+       receiver at the binding's type; nothing else changes (the code is
+       lent the environment). Witness `main2`.
+     - *Left:* a method that changes the environment (an `inout`
+       receiver: the package rebuilt after the hand-over would be assigned
+       over a destructor binding), a trait object of the class
        (`TraitAt` refuses a `sink` receiver), a run theorem for the witness, a
        closure of the class that holds views or captures by name, one that
-       crosses to a thread, and a package inside a container.
+       crosses to a thread, and a witness with such a package inside a
+       container and a method that reads or lends its environment.
 4. **A2-drop.3d: shared blocks (A3)** (first cut done, Agora #544).
    - **Built: the refusal.** `Ty.ok` asks an `Arc`'s, a lock's and a
      cell's payload type to own no destructor value (`dtorFree`), and
