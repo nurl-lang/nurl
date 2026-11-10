@@ -31,6 +31,10 @@ drop two.local-2
 drop two.result
 drop two.local-1
 two: recovered: panic in drop two.local-2
+drop lent.local
+drop lent.e0
+drop lent.e1
+lent_elem: recovered: panic in drop lent.local
 drop quiet.local
 quiet: returned
 drop quiet.result

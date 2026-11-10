@@ -7237,7 +7237,19 @@ unsafe @ gen_ret i lex i syms i cg → s {
     } {}
     ( mem_store_hown syms hbit )
     ( mem_save_return_proof syms cg lt skip_str_ptr | ret_is_direct_call ret_is_det_join )
-    ( gen_ret_term lex syms cg lt val skip skip_str_ptr skip_user_ptr skip_struct_ptr ret_ident hbit )
+    // The result's guard (mem_ret_guard_push) is for a value this function
+    // made: a literal, a call's value, a join. A NAME handed back is either
+    // a binding of the function, whose own registration stands (skip_user_ptr,
+    // mem_drop_user_drops), or something the function does not own — a
+    // parameter, a `~` loop's element of the caller's Vec, a field read —
+    // whose `hbit` is no proof of ownership: guarded, the caller's element
+    // was dropped here and again by the caller's Vec (a double drop the
+    // adversarial pass found). The same for a literal that reads such a
+    // name into itself (`^ @ ?Bomb { T x }`, x the loop's element).
+    : b __rg_named | | ( is_ident_tok ret_first_tt ) == ret_first_tt TT_DOT == ret_first_tt TT_HASH
+    : b __rg_lit_name & == ret_first_tt TT_AT ( __ret_reads_owner_name syms ret_ident )
+    : s __rg_hbit ? | __rg_named __rg_lit_name ( nurl_str_cat `` `` ) ( nurl_str_cat hbit `` )
+    ( gen_ret_term lex syms cg lt val skip skip_str_ptr skip_user_ptr skip_struct_ptr ret_ident __rg_hbit )
     ( nurl_set_last_type `void` )
     = g_did_ret 1
     val
@@ -30485,6 +30497,18 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
     }
     ? != 0 ( nurl_str_len held_vt ) { ( mem_journal_forget_userdrop cg skip_ptr held_vt ) } {}
     ( mem_emit_drop_glue syms cg )
+}
+
+// Is `name` (the last name a returned literal read) a binding that holds a
+// value with an owner — a struct, a handle, an option: anything but a
+// scalar or a raw pointer?
+@ __ret_reads_owner_name i syms s name → b {
+    ? == 0 ( nurl_str_len name ) { ^ F } {}
+    ? & == 0 ( nurl_sym_len2 syms name `__ptr` ) == 0 ( nurl_sym_len2 syms name `__param` ) { ^ F } {}
+    : s ll ( nurl_llty ( nurl_sym_get syms name ) )
+    ? == 0 ( nurl_str_len ll ) { ^ F } {}
+    : i c ( nurl_str_get ll 0 )
+    ^ & | == c 37 == c 123 != ( nurl_str_get ll - ( nurl_str_len ll ) 1 ) 42
 }
 
 // Does a binding this exit drops — any in `__user_drops__` but the one

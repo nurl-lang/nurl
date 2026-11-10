@@ -92,6 +92,23 @@ $ `stdlib/core/vec.nu`
     ^ ( bomb `two.result` 0 )
 }
 
+// A value the caller LENT, handed back as it is — the element a `~` loop
+// is at, in the caller's Vec — is not the function's to drop: the panic
+// leaves it where it lives, and the caller's Vec drops it, once.
+@ lent_elem ( Vec Bomb ) v → Bomb {
+    : Bomb loc ( bomb `lent.local` 1 )
+    ~ x v { ? == . x boom 0 { ^ x } {} }
+    ^ ( vec_at [Bomb] v 0 )
+}
+
+@ lent_caller → v {
+    : ~ ( Vec Bomb ) v ( vec_new [Bomb] )
+    ( vec_push [Bomb] v ( bomb `lent.e0` 0 ) )
+    ( vec_push [Bomb] v ( bomb `lent.e1` 0 ) )
+    : Bomb r ( lent_elem v )
+    ( nurl_println `not reached` )
+}
+
 // No panic: the result reaches the caller, and is dropped there, once.
 @ quiet → Bomb {
     : Bomb loc ( bomb `quiet.local` 0 )
@@ -117,6 +134,7 @@ $ `stdlib/core/vec.nu`
     ( run `text` \ → v { : String r ( text ) ( nurl_println `not reached` ) } )
     ( run `list` \ → v { : ( Vec String ) r ( list ) ( nurl_println `not reached` ) } )
     ( run `two` \ → v { : Bomb r ( two ) ( nurl_println `not reached` ) } )
+    ( run `lent_elem` \ → v { ( lent_caller ) } )
     ( run `quiet` \ → v { : Bomb r ( quiet ) ( nurl_println `quiet: returned` ) } )
     ^ 0
 }
