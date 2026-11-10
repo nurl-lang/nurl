@@ -44751,14 +44751,23 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // (A try over a call binds the call's payload: what follows asks the
         // call, as mem_udrop_bind_flag does — agora #194.)
         ? & & == bck_rhs_tt TT_BACKSLASH == g_blk_tail_eff TT_LPAREN ( seq ( nurl_sym_get syms `__last_backslash_try__` ) `1` ) { = bck_rhs_tt TT_LPAREN } {}
-        // (A value block whose tail is the binding itself — `= v { v }`, `=
-        // v { : i t 1 v }`, `= v { { v } }` — is that binding given its own
-        // value, as `= v v` is: nothing dropped, nothing handed over. Read
-        // as a fresh value, the old one was released and the same buffer
-        // stored back; agora #554.)
-        ? & & & == bck_rhs_tt TT_LBRACE != 0 ( nurl_str_len ptr ) ( seq ( nurl_sym_get syms `__last_ident_name__` ) name ) ( seq ( nurl_sym_get syms `__tail_ptr__` ) ptr ) {
+        // (A value block whose tail is a binding is that binding: `= v { v }`
+        // gives v its own value, as `= v v` does — nothing dropped, nothing
+        // handed over (agora #554); `= w { : ~ ( Vec i ) u … u }` hands u
+        // over as `= w u` does — u, of a scope inside w's (a loop body) or
+        // of a function w is an `inout` parameter of, dies first, so its
+        // value moves (agora #574). Read as a fresh value, the old one was
+        // released and the same buffer stored back, or w kept a borrow of
+        // u past u's end. The tail's storage, read inside the block, must
+        // be what its name names here: a binding of the same name made
+        // after it is another — and a tail of the target's own name, the
+        // target itself, not a block-local shadowing it (agora #562,
+        // #575). Not a closure, whose env the bare spelling
+        // takes over before the value is made.)
+        : s __tl_nm ( nurl_sym_get syms `__tail_name__` )
+        ? & & & == bck_rhs_tt TT_LBRACE != 0 ( nurl_str_len __tl_nm ) ( seq ( nurl_sym_get syms `__last_ident_name__` ) __tl_nm ) & & ( seq ( nurl_sym_get syms `__tail_ptr__` ) ( nurl_sym_get2 syms __tl_nm `__ptr` ) ) | ! ( seq __tl_nm name ) ( seq ( nurl_sym_get syms `__tail_ptr__` ) ptr ) ! ( __is_closure_ty vt ) {
             = bck_rhs_tt TT_IDENT
-            = bck_rhs_val ( nurl_str_cat name `` )
+            = bck_rhs_val ( nurl_str_cat __tl_nm `` )
         } {}
         ( __nc_bind_lend_note syms name bck_rhs_tt T )
         ( mem_note_assign_lend syms name vt bck_rhs_tt bck_rhs_val )
