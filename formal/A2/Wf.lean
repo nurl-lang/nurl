@@ -964,7 +964,7 @@ theorem DomMode.exitScope {Γ0 Γ : Ctx} (h : DomMode Γ0 Γ) {x : Var} {r : Var
 
 /-- Taking a struct apart keeps the context well-formed. -/
 theorem CtxWF.unpair {Γ : Ctx} (h : CtxWF Γ) {y x z : Var} {E : Entry} {a b : Ty} (hy : Γ y = some E)
-    (hl : E.live = true) (hm : E.mode.ownSlot = true) (hty : E.ty = .prod a b) (hx : Γ x = none) (hz : Γ z = none)
+    (hl : E.live = true) (hm : E.mode.ownSlot = true) (hty : E.ty ≠ .int) (hx : Γ x = none) (hz : Γ z = none)
     (hxz : x ≠ z) :
     CtxWF (A2.setE (A2.setE (A2.setE (A2.kill .replace false y Γ) y { E with live := false, dtor := false }) x (compE E a))
       z (compE E b)) := by
@@ -975,7 +975,7 @@ theorem CtxWF.unpair {Γ : Ctx} (h : CtxWF Γ) {y x z : Var} {E : Entry} {a b : 
   have hheld : ∀ r ∈ roots E.held, ∃ Er, A2.setE (A2.kill .replace false y Γ) y
       { E with live := false, dtor := false } r = some Er ∧ Er.mode.isRoot = true := by
     intro r hr
-    have hn : E.ty ≠ .int ∨ E.mode = .rootb := Or.inl (by rw [hty]; simp)
+    have hn : E.ty ≠ .int ∨ E.mode = .rootb := Or.inl hty
     obtain ⟨Er, hEr, hro⟩ := h y E hy hl hn r (by
       simpa [roots, Entry.vdeps, hm] using hr)
     by_cases hry : r = y
@@ -1385,7 +1385,7 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
       x hpx.2.2
   | catchR _ _ hM _ _ _ => exact fun _ => hM.wf
   | @unpair Γ Δ F y x z k E a b _ hy hl hm hty _ hx hz hxz _ _ _ _ _ hpz hpx _ _ ih =>
-    exact fun h => ((ih (h.unpair hy hl hm.ownSlot hty hx hz hxz)).exitScope z hpz.2.2).exitScope x hpx.2.2
+    exact fun h => ((ih (h.unpair hy hl hm.ownSlot (unpair_ne_int hty) hx hz hxz)).exitScope z hpz.2.2).exitScope x hpx.2.2
   | sub hw _ ho _ =>
     intro _
     rcases ho with rfl | ho

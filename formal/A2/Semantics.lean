@@ -1253,8 +1253,10 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
   | scopeDIn {m m' : Mem} {x : Var} {f : Nat} {s s' : Stmt} :
       Step P m s (.ok m' s') → Step P m (.scopeD x f s) (.ok m' (.scopeD x f s'))
   /-- The scope's end with `x` owning its value, a struct or an enum (no
-      `Vec`'s node): the destructor runs on `x` lent (its result in a fresh
-      variable), then `scope x` frees the tree, the drop glue after the impl. -/
+      `Vec`'s node): the destructor is called on `x` (its result in a fresh
+      variable), then `x`'s scope ends.  A destructor that takes `x` lent leaves
+      the tree for `scope x` to free; a struct's glue takes `x` owned, so the
+      call moves the value in and it takes it apart (Agora #616, `GlueOK`). -/
   | scopeDEnd {m : Mem} {x : Var} {f : Nat} {v : Val} :
       m.st x = some ⟨true, some v⟩ → v.isNode = false →
       Step P m (.scopeD x f .skip) (.ok { m with nv := m.nv + 1 } (.scope x (.letcall m.nv f [x] .skip)))
@@ -1278,7 +1280,8 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
       Step P m (.scopeD x f .skip) (.ok m (.scope x .skip))
   /-- A panic stops at the frame: the destructor runs, `x` is freed, and the
       panic goes on. The frame is gone, so a panic in the destructor does not
-      run it again, and `scope x` still frees the fields. -/
+      run it again, and `scope x` still frees the fields (of a value its
+      destructor took lent; a glue has them in frames of their own). -/
   | scopeDP {m m1 : Mem} {x : Var} {f : Nat} {s : Stmt} {v : Val} :
       Step P m s (.panic m1) → m1.st x = some ⟨true, some v⟩ → v.isNode = false →
       Step P m (.scopeD x f s)

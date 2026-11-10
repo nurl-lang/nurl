@@ -607,7 +607,7 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       Γ1 z = some Ez → Ez.live = true → PushArg Γ1 F z Ez Ez.ty Dz Γ2 →
       (Ez.mode.ownSlot = true → z ∉ roots Dy) →
       -- (A2-drop.3b: a drained `Vec` of destructor values is a binding's own type
-      -- only: no field holds one, the struct's glue could not drain it)
+      -- only: no field holds one yet)
       Ey.ty.vecD = false → Ez.ty.vecD = false →
       RhsT Γ F (.pair y z) ⟨.prod Ey.ty Ez.ty, .own, true, [], Dy ++ Dz, false, false⟩ Γ2
   | fst {y : Var} {E : Entry} {a b : Ty} :
@@ -1548,7 +1548,19 @@ def CallT (P : Prog) (Γ : Ctx) (F : List Var) (f : Nat) (args : List Var) (E : 
 def Stmt.movedFirst : Stmt → List Var
   | .letd _ _ (.var w) s => w :: s.movedFirst
   | .assign _ (.var w) => [w]
+  | .unpair y _ _ _ => [y]   -- (Agora #616: taken apart, its fields handed on in turn)
   | _ => []
+
+/-- Agora #616: a drop glue's tail does nothing but hand values on: each
+    to a `letd` (whose frame runs its destructor), or taken apart in turn,
+    and at the end the integer result is set.  So taking a struct apart by
+    hand (`unpair`) skips no work its glue would do. -/
+def Stmt.pureGlue : Stmt → Bool
+  | .letd _ _ (.var _) s => s.pureGlue
+  | .unpair _ _ _ s => s.pureGlue
+  | .assign _ (.expr _) => true
+  | .skip => true
+  | _ => false
 
 /-- A2-drop.3a: the bindings a statement may give a new value (`assign`),
     anywhere in it.  A binding that may own a value of a destructor type
