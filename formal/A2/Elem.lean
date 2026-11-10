@@ -7,7 +7,8 @@ An owner's tree is read by membership: what a borrow, a view, a share or a
 name finds in a node it finds among its elements, whatever their order, and
 a view of the node's own buffer asks only for its length (`ViewAt`). So the
 invariant does not see the order of an owned node's elements: permuting
-them keeps `HeapOK`, `Covers` and `MInv` (`MInv.perm`). An element moved out
+them keeps `HeapOK`, `Covers` and `MInv` (`MInv.perm`, in `A2/Rhs.lean` since
+A2-drop.3b: `rhs_popFront` needs it there). An element moved out
 of the middle of a `Vec` is then a `vec_pop` of the element moved to the
 end, and one put back at index `n` a `vec_push` whose element is then moved
 to `n` (`withElem`, `insert`). -/
