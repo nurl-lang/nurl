@@ -164,13 +164,17 @@ for pd in packages/*/; do
     pd="${pd%/}"; pd="${pd#packages/}"
     [[ -f "packages/$pd/nurl.toml" ]] || continue
     name="$(sed -n 's/^name[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "packages/$pd/nurl.toml" | head -1)"
-    [[ -n "$name" && ! -e "$PKGROOT/deps/$name" ]] && ln -s "$ROOT_DIR/packages/$pd" "$PKGROOT/deps/$name"
+    # (`-n`: where NURL_SWEEP_OUT is a directory an earlier run filled, the
+    # link is already there — and `ln -s` onto a link to a directory makes
+    # the new one INSIDE that directory: `packages/<p>/src/src` in the
+    # repository itself, an untracked file per entry of every package.)
+    [[ -n "$name" && ! -e "$PKGROOT/deps/$name" ]] && ln -sfn "$ROOT_DIR/packages/$pd" "$PKGROOT/deps/$name"
     mkdir -p "$PKGROOT/$pd"
     for e in "packages/$pd"/*; do
         [[ "$(basename "$e")" == deps ]] && continue
-        ln -s "$ROOT_DIR/$e" "$PKGROOT/$pd/$(basename "$e")"
+        ln -sfn "$ROOT_DIR/$e" "$PKGROOT/$pd/$(basename "$e")"
     done
-    ln -s "$PKGROOT/deps" "$PKGROOT/$pd/deps"
+    ln -sfn "$PKGROOT/deps" "$PKGROOT/$pd/deps"
 done
 
 # One transcript per file per compiler: the exit code, then stderr,
