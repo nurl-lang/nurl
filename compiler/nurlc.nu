@@ -69237,6 +69237,10 @@ unsafe @ __clo_take_capture i syms i cg s name → v {
 // copied in place instead (`blk_lend`, mem_blk_tail_copy_slot, #193).
 @ __blk_bind_tt i tt b blk_lend → i {
     ? & & == tt TT_LBRACE == g_blk_tail_eff TT_LPAREN ! blk_lend { ^ TT_LPAREN } {}
+    // (…and one whose tail is a field read is that read: `: j { . h a }`
+    // is `: j . h a` — its field source, its viewer of the field; agora
+    // #570.)
+    ? & == tt TT_LBRACE == g_blk_tail_eff TT_DOT { ^ TT_DOT } {}
     ^ tt
 }
 
