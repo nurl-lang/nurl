@@ -841,24 +841,30 @@ is stated here so the claim does not hide it:
   so later frees are ordinary;
 - with no `recover` frame, any panic ends the process (`abort`) before a
   drain starts, so nothing is released twice and the process's memory goes
-  with it.
+  with it;
+- a `Vec` element's destructor that panics (`Step.scopeDPDrain`, Agora
+  #608): inside a `recover` extent the release of a `Vec` whose elements
+  may run a destructor is itself in the journal, as a record of the
+  elements still to go (`nurl_vec_drop_dtor`). The record's cursor moves
+  past an element before its destructor runs, so that element is the
+  destructor's (its fields are freed by the entry the destructor's
+  receiver has, as a binding's are), and the drain the panic starts finds
+  the record and goes on from the cursor: the elements after it in index
+  order, each destructor once, then the buffer and the `Vec`, and then
+  the jump (`nurl__vec_drain_go`). `vec_truncate` and `vec_clear` drop
+  their elements through the same record (`nurl_vec_drop_range_dtor`).
+  Which element types may run one is nurlc's answer (`__drop_runs_code`:
+  a `% Drop` anywhere inside, a library handle, a closure, a trait
+  object); the others are released by a loop no panic can start in.
 
-Test: `compiler/tests/panic_in_drop_while_unwinding.nu` (clean under
+Tests: `compiler/tests/panic_in_drop_while_unwinding.nu` and
+`compiler/tests/panic_in_drop_of_vec_element.nu` (clean under
 AddressSanitizer and LeakSanitizer). That the journal's drain does what
-`Step.scopeDP` does is phase C / D.
+`Step.scopeDP` and `Step.scopeDPDrain` do is phase C / D.
 
 One place where the runtime does not yet do what the calculus says
-(Agora #608): **a `Vec` element's destructor that panics.** The calculus
-frees that element and goes on with the elements after it, each running
-its destructor, then frees the `Vec` and raises again
-(`Step.scopeDPDrain`). The runtime's element loop (`nurl__vec_drop_elems`)
-is left by the panic: the elements after it run no destructor, and they,
-the buffer and the `Vec` leak. On the normal path, and for a panic
-anywhere but inside an element's destructor, the runtime drops the
-elements in index order, each once, as the calculus does.
-
-A second one (Agora #612): **a function's `% Drop` result, when one of
-the function's own bindings' destructors panics at its exit.** The
+(Agora #612): **a function's `% Drop` result, when one of the function's
+own bindings' destructors panics at its exit.** The
 calculus stops the panic at the result's frame, runs the result's
 destructor, frees it, and goes on (`Step.scopeDP` on the call's result
 frame). The runtime holds the result in no journal entry while the

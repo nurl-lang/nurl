@@ -2156,6 +2156,15 @@ journal** instead:
   drop runs, the second panic releases what is still recorded, and the
   `recover` reports the first panic's message, the cause. With no
   `recover` frame, a panic ends the process before anything is released.
+- A `Vec` releasing elements that may run a destructor is recorded too,
+  as the elements still to go. An element's destructor that panics (in
+  the `Vec`'s own drop, a `vec_truncate` or a `vec_clear`) does not end
+  the release: the elements after it are dropped, in index order and once
+  each, then the buffer and the `Vec`, and only then does the panic go
+  on. The same holds for a `Vec` inside a `Vec`, a field or a payload. A
+  `Vec` whose elements run no code of the program's own when dropped (a
+  `String`, plain data) records nothing: no panic can start in its
+  release.
 
 The journal belongs to the thread outside fibers and to the fiber inside
 one. The scheduler switches it with the fiber, so fibers sharing a worker,
@@ -2487,6 +2496,7 @@ are dropped, moved and copied by the same rules:
 | `( mem_put_back x )` | the next store of `x` through a pointer writes back a value read from that slot; the container keeps owning it; `unsafe` only |
 | `( mem_dup x )` | an owned copy: deep for an owning value, the value itself otherwise; it holds the views `x` holds (§2.13) |
 | `( mem_forget x )` | gives up `x`'s value without releasing it; `unsafe` only |
+| `( mem_drop_range [T] data from to )` | drops the elements `[from, to)` of the buffer at `data`, which their container has given up, in index order (`vec_truncate`, `vec_clear`); one whose destructor panics does not end it (§7.2); no code at all for a `T` that owns nothing; `unsafe` only |
 | `( mem_replace [T] place x )` | `x` goes into `place` (a mutable binding, a field of one, or a field through a pointer) and what `place` held comes back, owned; nothing is dropped or copied (stdlib/core/mem.nu, `unsafe`) |
 | `( vec_retain [A] v keep )` | the elements `keep` answers T for stay, in order; the rest are dropped, in place (stdlib/core/vec.nu) |
 | `( vec_put_back [A] v i x )` | `x`, read out of slot `i` and updated, goes back: the check-in of a table that lends its records by value; a function handing its parameter on to it writes it back too, for its own callers. Nothing checks that `i` is the slot `x` was read from, so it is `unsafe` only, as `mem_put_back` is (h248) |

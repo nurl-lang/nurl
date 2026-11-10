@@ -523,7 +523,7 @@ A function or method declaration may carry a leading `unsafe` prefix
 - call a raw-memory primitive (`nurl_alloc`, `nurl_free`, `nurl_realloc`,
   `nurl_peek*` / `nurl_poke*`, `nurl_memcpy`, …), an ownership primitive
   that gives a value up or claims it by hand (`mem_forget`, `mem_take`,
-  `mem_put_back`, `vec_put_back`), an `rcbox` primitive (`rcbox_new`, `rcbox_zero`,
+  `mem_put_back`, `vec_put_back`, `mem_drop_range`), an `rcbox` primitive (`rcbox_new`, `rcbox_zero`,
   `rcbox_share`, `rcbox_release`, `rcbox_ptr`), an `Arc` held as a
   plain word (`arc_into_word`, `arc_from_word`, `arc_word_share`), an
   `Arc`'s payload replaced in place (`arc_set`: the payload is frozen
@@ -2697,6 +2697,12 @@ whichever way it leaves:
 - `( mem_put_back x )` (only inside an `unsafe` function) stores `x` back
   into the slot it was read from without copying it or taking it over —
   for an element setter.
+- `( mem_drop_range [T] data from to )` (only inside an `unsafe`
+  function) drops the elements `[from, to)` of the buffer at `data`, each
+  a `T` its container has given up — for a container operation that
+  shortens itself (`vec_truncate`, `vec_clear`). The elements go in index
+  order, and one whose destructor panics does not keep the ones after it
+  from being dropped (docs/MEMORY.md §7.2).
 - `( mem_replace [T] place x )` (stdlib/core/mem.nu, `unsafe`) puts `x`
   into the `inout` place and returns what the place held, owned — for
   taking a value out of a field (through a pointer too) and leaving

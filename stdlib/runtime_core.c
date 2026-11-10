@@ -9581,6 +9581,117 @@ void nurl_vec_drop(void *ctl, void (*elem_drop)(void*), long long elem_size) {
     nurl_free(ctl);
 }
 
+/* ── A release of elements a panic can go on with (Agora #608) ──────────
+ *
+ * An element's destructor may panic, when dropping the element runs code
+ * of the program's own (a `% Drop`; the compiler knows which element
+ * types can, and calls the `_dtor` entries below for those alone). The
+ * panic drains the journal and jumps to its `recover` frame, past the
+ * loop that was releasing the elements: the ones after it ran no
+ * destructor, and they, the buffer and the control block leaked. The
+ * value being dropped had left the journal before its drop began (so that
+ * a panic inside the drop does not run it again), and nothing stood for
+ * what was left of it.
+ *
+ * So, inside a recover extent, the release itself is journaled: a record
+ * of the elements still to go, on the slot stack. The cursor moves past an
+ * element BEFORE its destructor runs — that element is the destructor's
+ * from there on, as a binding's value is (docs/MEMORY.md §7.6) — and a
+ * panic's drain finds the record and goes on from the cursor: the elements
+ * after it in index order, each destructor once, then the buffer and the
+ * control block, and only then the jump. A destructor that panics during
+ * THAT is a panic inside the drain: nurl_panic drains again, finds the
+ * record registered anew, and goes on once more.
+ *
+ * Outside a recover extent a panic ends the process, nothing is journaled,
+ * and the loop is the plain one. Elements that run no code of the
+ * program's own (a String, a Vec of them, a struct of those) never come
+ * here: nurl_vec_drop above is what it was. */
+typedef struct {
+    void *ctl;                    /* freed with its buffer at the end; NULL:
+                                   * a range of a Vec that lives on */
+    char *base;
+    void (*elem_drop)(void*);
+    long long elem_size;
+    long long next, end;          /* [next, end): the elements still to drop */
+} NurlVecDrain;
+
+/* The thread-locals the release touches are read out of line, or through
+ * NURL_TLS_LD: an element's destructor may park its fiber, which may
+ * resume on another worker thread (see NURL_TLS_FN). */
+NURL_TLS_FN static void nurl__vec_drain_unbatch(void) {
+    if (--nurl__cc_batch == 0) nurl__cc_batch_end();
+}
+/* Run the release `rec` describes — or, called by a panic's drain (which
+ * took the record off the stack), go on with it. Only the cursor is
+ * written per element: nothing else changes the record while this runs
+ * (a drain that goes on with it never comes back here). */
+static void nurl__vec_drain_go(void *rec) {
+    NurlVecDrain *d = (NurlVecDrain *)rec;
+    nurl__jslot_push_slow(d, nurl__vec_drain_go, NULL);
+    void (*elem_drop)(void*) = d->elem_drop;
+    const long long size = d->elem_size, end = d->end;
+    long long i = d->next;
+    for (char *e = d->base + i * size; i < end; e += size) {
+        d->next = ++i;
+        elem_drop(e);
+    }
+    nurl_journal_forget_slot(d);
+    if (d->ctl) {
+        /* A whole Vec's release raised the collector's batch
+         * (nurl__cc_batch) once, where it began; it is lowered here, where
+         * the release ends, whichever call of this function that is. Left
+         * raised by a panic, no cycle was ever collected on the thread
+         * again. */
+        nurl__vec_drain_unbatch();
+        if (d->base != (char*)d->ctl + 24) nurl_free(d->base);
+        nurl_free(d->ctl);
+    }
+}
+NURL_TLS_FN static void nurl__vec_drain_begin(void *ctl, char *base, long long from, long long to,
+                                              void (*elem_drop)(void*), long long elem_size) {
+    NurlVecDrain d = { ctl, base, elem_drop, elem_size, from, to };
+    if (ctl) nurl__cc_batch++;
+    nurl__vec_drain_go(&d);
+}
+
+/* nurl_vec_drop for a Vec whose elements may run a destructor of the
+ * program's own when they are dropped (`elem_drop` is never NULL here). */
+NURL_TLS_WRAP void nurl_vec_drop_dtor(void *ctl, void (*elem_drop)(void*), long long elem_size) {
+    if (!ctl) return;
+    if (__builtin_expect(NURL_TLS_LD(long long, nurl__jrnl_active) != 0, 0) && elem_drop) {
+        long long *c = (long long*)ctl;
+        void *data = (void*)(intptr_t)c[0];
+        if (c[2] >= 0 && data && elem_size > 0) {
+            nurl__vec_drain_begin(ctl, (char*)data, 0, c[1], elem_drop, elem_size);
+            return;
+        }
+    }
+    nurl_vec_drop(ctl, elem_drop, elem_size);
+}
+
+/* `( mem_drop_range [A] data from to )`: drop the elements [from, to) of
+ * the buffer at `data`, which their Vec has given up (vec_truncate,
+ * vec_clear: the length is already short). The Vec lives on, so only the
+ * elements go. The compiler emits no call for elements that own nothing,
+ * and calls the `_dtor` entry for elements that may run a destructor of
+ * the program's own: a panic in one goes on with the rest, as above. */
+void nurl_vec_drop_range(void *data, long long from, long long to,
+                         void (*elem_drop)(void*), long long elem_size) {
+    if (!data || !elem_drop || elem_size <= 0) return;
+    char *base = (char*)data;
+    for (long long i = from; i < to; i++) elem_drop(base + i*elem_size);
+}
+NURL_TLS_WRAP void nurl_vec_drop_range_dtor(void *data, long long from, long long to,
+                                            void (*elem_drop)(void*), long long elem_size) {
+    if (!data || !elem_drop || elem_size <= 0 || from >= to) return;
+    if (__builtin_expect(NURL_TLS_LD(long long, nurl__jrnl_active) != 0, 0)) {
+        nurl__vec_drain_begin(NULL, (char*)data, from, to, elem_drop, elem_size);
+        return;
+    }
+    nurl_vec_drop_range(data, from, to, elem_drop, elem_size);
+}
+
 /* Empty slot `idx` of a Vec whose element was handed to a consumer while
  * the Vec still held it (a `vec_get` payload freed by hand): the Vec's own
  * drop then skips it. Looked up through the control block at this moment,
