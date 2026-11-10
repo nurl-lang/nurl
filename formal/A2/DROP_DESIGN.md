@@ -84,9 +84,11 @@ A2-drop.3b; A2-drop.3a's rule looked one level down only).
   views), and its `scopeD x f` frame's end takes the elements out in index
   order, each to a `letd` binding of its own, whose frame runs its
   destructor (`Step.scopeDDrain`, `scopeDEmpty`); a panic drains what is
-  left and goes on (`Step.scopeDPDrain`). `vec_truncate`, `vec_clear`,
-  `vec_set`, `vec_free` and `withElem` of one are refused (they drop or
-  check out elements with no code).
+  left and goes on (`Step.scopeDPDrain`). The rules that drop or check out
+  elements with no code (`vec_truncate`, `vec_clear`, `vec_set`,
+  `vec_free`, `withElem`) refuse one; `vec_free`, `vec_clear` and
+  `vec_truncate` of one are written as code the calculus types
+  (`A2/DropCode.lean`).
 - **Taking a destructor value apart is refused**: `unpair` asks `E.ty =
   .prod a b` exactly, and `takel` / `taker` `E.ty = .sum a b`; so is a field
   written in place (`unpair` and `assign`). Taking it apart would bypass the
@@ -120,8 +122,8 @@ destructor): a `Vec` of destructor values anywhere but as a binding's own
 type (`Ty.ok`): a `Vec (Vec D)`, a channel of `D` (its queue is a `Vec`),
 `Locked (Vec D)`, `Arc (Vec D)`, a cell of a `Vec D`, and a struct or an
 enum with a `Vec D` field or payload; one whose elements hold views
-(`LetdTy`); and dropping its elements in place (`free`, `truncate`,
-`clear`, `set`, `withElem`). And, since A2-drop.3c and 3d: a closure's or
+(`LetdTy`); and `vec_set` over an element and `withElem` (`vec_free`,
+`vec_clear` and `vec_truncate` are typed code, `A2/DropCode.lean`). And, since A2-drop.3c and 3d: a closure's or
 trait object's environment that holds a destructor value (`Cross.Fits`),
 and a share whose payload owns one (`Ty.ok`). The result moved from its slot into a local
 before a panic (`pair res w`, a destructor value two levels down) is a
@@ -456,7 +458,7 @@ made it:
 | a binding's scope (a local, a `sink` parameter, a call's result, `unpair`'s fields) | the destructor, then the glue | only for `letd`'s binding (`scopeD`) |
 | `= x …` over an owned value, `vec_free x` | the destructor of the old value first | `DropSlot` / `Frees` |
 | a struct field, at the struct's drop | the field's destructor, inside the struct's glue | `Frees` of the tree |
-| a `Vec` element: `vec_pop` dropped, `truncate`, `clear`, `vec_set` over it, the Vec freed | each element's destructor | the drain at the end of a binding's own `Vec` (A2-drop.3b); the in-place drops are refused; a popped element is a `letd`'s |
+| a `Vec` element: `vec_pop` dropped, `truncate`, `clear`, `vec_set` over it, the Vec freed | each element's destructor | the drain at the end of a binding's own `Vec` (A2-drop.3b); free, clear and truncate as code (`A2/DropCode.lean`), `vec_set` refused; a popped element is a `letd`'s |
 | an enum or option payload | the payload's destructor | `Frees` |
 | a closure's or a trait object's environment | the captures' destructors | refused: no environment holds a destructor value (A2-drop.3c, `Cross.Fits`) |
 | a panic's unwind through any of these | the journal runs each, once | `scopeP` frees in one step, except at `scopeD` |
@@ -628,12 +630,13 @@ each one shrinks `CLAIM.md`'s exception:
         one is assigned nothing; its callee may push to it and pop from it
         (each popped element to a `letd`), and may not drop elements in
         place.
-     `truncate`, `clear`, `set`, `free` of a `Vec D` are refused
+     The rules for `truncate`, `clear`, `set`, `free` refuse a `Vec D`
      (`StmtT.free` and `StmtT.editB` / `editBV` ask `dtorFree` of the
      elements they drop, `Edit.drops`; `A2.Dtor.free_dtor_free`,
      `edit_drops_dtor_free`). A program pops the elements into `letd`s
      (`pop` and `popFront` give an owned `.dtor f u`, which `movedFirst`
-     hands to a `letd`), or lets the binding end.
+     hands to a `letd`), or lets the binding end; `vec_free`,
+     `vec_clear` and `vec_truncate` are such code (`A2/DropCode.lean`).
    - **Left** (stricter than nurlc; `CLAIM.md` lists them):
      - *elements that hold views.* A2-drop.2's rule (a binding that runs a
        destructor gains no view) would let nothing be pushed into such a
@@ -642,9 +645,15 @@ each one shrinks `CLAIM.md`'s exception:
        them, a block's payload). A field needs glue as code that can take
        the field apart (`dropCode`'s `unpair`, which 3a replaced by glue
        that only lends `self`); a block's payload is 3d's.
-     - *dropping elements in place* (`truncate`, `clear`, `set`, `free`,
-       `withElem`): each dropped element taken out to a `letd` first, as
-       the drain does at the frame's end.
+     - *`vec_set` over an element and `withElem`*: the element taken out
+       needs a destructor frame of its own while it is out (`withElem`'s
+       hand-over binding is a plain `scope`), and `set` an Rhs that takes
+       element `i` out. **Built** (Agora #607, `A2/DropCode.lean`): the
+       other in-place drops need no new step, they are code the calculus
+       types: `vec_free` is the `Vec` moved into a `letd` that ends at
+       once (`vecFreeD_typed`), `vec_clear` a loop of `popFront`s into a
+       `letd` (`vecClearD_typed`), `vec_truncate` a loop of `pop`s
+       (`vecTruncD_typed`; last first, where nurlc goes in index order).
 3. **A2-drop.3c: environments** (first cut done, Agora #543).
    - **Built: the refusal.** `Cross.Fits` asks an environment type to hold
      no destructor value, of every class, so `RhsT.pack` types no such
