@@ -2290,6 +2290,19 @@ Two rules make this sound without reference counting:
 - **A move clears the source on its own path only.** `: h g`, `= h g` and
   `^ g` hand `g`'s environment on; a path that did not move `g` still
   drops it.
+- **A move goes only to a binding that lives as long.** `: h g` in a scope
+  inside `g`'s (a block, an arm, a loop body), or after a `;` defer that
+  may still call `g`, moves nothing: `h` is a second name of a closure
+  `g` still owns, so `g` can be called after that scope, and by the defer.
+  A value block whose tail is a closure it bound (`: h { : g \ … g }`)
+  hands the environment to what takes the block's value, as `: h g` does.
+
+Which binding owns an environment is told per binding, not per name: a
+closure bound in an inner scope under the name of an outer closure, or
+bound again under the same name, is released on its own. A `: ~` binding
+assigned a closure that is not its own (`= f . h cb`, `= f param`)
+releases what it owned and borrows from then on, until it is given its
+own again: in an arm, that holds on the paths through the arm only.
 
 Every environment starts with a pointer to a compiler-emitted descriptor
 `{ size, drop, clone, … }` (below). `nurl_closure_drop` (null-safe) is what every
