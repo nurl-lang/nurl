@@ -36896,13 +36896,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
 @ __bck_fe_cursor_srcs s st s fesx → s {
     : s ms ( bck_sx_mut_storage st fesx )
     ? | == 0 ( nurl_str_len ms ) ( seq ms `*` ) { ^ ( nurl_str_cat `` `` ) } {}
-    ? ( __fe_cont_expr fesx ) { ^ ms } {}
-    : s rs ( nurl_str_int ( bck_path_root ( nurl_str_to_int fesx ) ) )
-    ? != BCK_BORROWED_SHARED ( bck_st_get st ( nurl_str_to_int rs ) ) { ^ ms } {}
-    : i br ( bck_br_get rs )
-    ? ! | & >= br 0 == 1 & br 1 & != 0 g_bck_hc_any != 0 ( nurl_sym_len g_bck ( bck_bkey `hc_` rs ) ) { ^ ms } {}
-    : s fp ( nurl_sym_get g_bck ( bck_bkey `fp_` rs ) )
-    ^ ? != 0 ( nurl_str_len fp ) ( nurl_str_cat fp `` ) ( __src_plain ms )
+    ^ ms
 }
 
 // `srcs` without the words reached through an element (`^id`, `~…`).
@@ -38060,6 +38054,18 @@ unsafe @ __sx_mut_roots s st s e b named → s {
     ? ( bck_dead_state v ) { ^ ( nurl_str_cat `` `` ) } {}
     ? == v BCK_BORROWED_SHARED {
         : s bsl ( nurl_sym_get g_bck ( bck_bkey `bs_` rs ) )
+        // (A borrow that is a copy of an owner's handle — `: ~ ( Vec T ) cur
+        // t`, `hc_`, bck_byte_root's odd code — IS that owner's storage, or
+        // the field it views, `fp_`: a callee that moves its buffer moves the
+        // owner's own, not an element's. Marked `^`, the same Vec handed to a
+        // callee as `t` and as `cur` was two unrelated arguments; agora #589.)
+        ? == 0 ( nurl_sym_len g_bck ( bck_bkey `vw_` rs ) ) {
+            : i br ( bck_br_get rs )
+            ? | & >= br 0 == 1 & br 1 & != 0 g_bck_hc_any != 0 ( nurl_sym_len g_bck ( bck_bkey `hc_` rs ) ) {
+                : s fp ( nurl_sym_get g_bck ( bck_bkey `fp_` rs ) )
+                ^ ? != 0 ( nurl_str_len fp ) ( nurl_str_cat fp `` ) ( __src_plain bsl )
+            } {}
+        } {}
         : s ind ? != 0 ( nurl_sym_len g_bck ( bck_bkey `vw_` rs ) ) ( nurl_sym_get g_bck ( bck_bkey `vi_` rs ) ) ( nurl_str_cat bsl `` )
         ^ ( __src_mark bsl ind )
     } {}
