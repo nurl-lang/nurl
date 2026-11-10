@@ -1,0 +1,35 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+7
+5
+6
+7
+5
+6
+7
+a long enough string to be on the heap, two
+a long enough string to be on the heap, three
+a long enough string to be on the heap, three
+a long enough string to be on the heap, rec two
+2
+a long enough string to be on the heap, rec two
+2
+3
+4
+5
+9
+9
+3
+4
+5
+8
+9
+9
+a long enough string to be on the heap, in three
+a long enough string to be on the heap, in two
+a long enough string to be on the heap, in three
+2
+2
+3
