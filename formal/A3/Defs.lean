@@ -2470,7 +2470,7 @@ theorem accCode_ok : FnOK accP accCode := by
   have hp4 : PlainCtx accCtx4 := hp3a.setE (x := 1) intE_plain
   have hpair : RhsT accCtx3 [] (.pair 4 3) ⟨.prod .int .int, .own, true, [], [], false, false⟩ accCtx3 :=
     RhsT.pair (Ey := intE) (Ez := intE) (by simp [accCtx3, setE]) rfl PushArg.int (by simp [accCtx3, setE]) rfl
-      PushArg.int (fun h => by simp [intE, Mode.ownSlot] at h) rfl rfl
+      PushArg.int (fun h => by simp [intE, Mode.ownSlot] at h)
   have hA0 : StmtT accP accCtx3 [] (.assign 0 (.pair 4 3)) (setE accCtx3 0 accEp) := by
     have h := StmtT.assign (P := accP) (F := []) (x := 0) (Ex := accEp)
       (E := ⟨.prod .int .int, .own, true, [], [], false, false⟩) (by simp [accCtx3, setE, hs0]) (by simp)
@@ -2651,7 +2651,7 @@ theorem accMain_typed : ∃ Δ, StmtT accP (fun _ => none) [] accMain Δ := by
       (A2.exitScope 2 (A2.exitScope 3 (A2.exitScope 4 (setE (setE accMainCtx 3 accCloE) 4 intE)))) :=
     StmtT.letv (E := accPairE) rfl (by simp [setE])
       (by simp) (RhsT.pair (Ey := intE) (Ez := intE) (by simp [setE]) rfl PushArg.int (by simp [setE]) rfl
-        PushArg.int (fun h => by simp [intE, Mode.ownSlot] at h) rfl rfl) h3
+        PushArg.int (fun h => by simp [intE, Mode.ownSlot] at h)) h3
       (by rw [hpc.exitScope, q4.exitScope]; exact q3.endOK 2)
   have h1 : StmtT accP (setE (fun _ => none) 0 intE) []
       (.letv 1 (.expr (.lit 0)) (.letv 2 (.pair 0 1) (.letv 3 (.pack [1] accEnv [0] 2 [])

@@ -64,8 +64,9 @@ A2-drop.3b; A2-drop.3a's rule looked one level down only).
   what its drop does. Nesting the `letd`s as `letd z' (var z) (letd y'
   (var x) skip)` runs the fields' destructors in field order, nurlc's.
   In this cut the struct holds no views (the moved-in value must hold
-  nothing). **A struct with a `% Drop` of its own beside a destructor
-  field** (`ImplGlueOK P f t h i`) needs no new step either: its glue `f`
+  nothing). **A struct (or an enum, Agora #632) with a `% Drop` of its own
+  beside a destructor field or payload** (`ImplGlueOK P f t h i`, `h` the
+  struct's `GlueOK` or the enum's `EnumGlueOK` function) needs no new step either: its glue `f`
   takes it owned and its body is `letd w h (var 0) (letcall r i [w]
   (assign res …))`: the struct rebound under the fields' glue `h`, then
   the impl `i` (a `DtorOK` function on `Ty.dtor h t`) on it lent. The
@@ -144,10 +145,11 @@ A2-drop.3b; A2-drop.3a's rule looked one level down only).
 
 Refused rather than released since A2-drop.3b (stricter than nurlc, which
 types them and drops a `Vec`'s elements in index order, each running its
-destructor): a `Vec` of destructor values anywhere but as a binding's own
-type (`Ty.ok`): a `Vec (Vec D)`, a channel of `D` (its queue is a `Vec`),
-`Locked (Vec D)`, `Arc (Vec D)`, a cell of a `Vec D`, and a struct or an
-enum with a `Vec D` field or payload; one whose elements hold views
+destructor): a `Vec` of destructor values as an element or a shared payload
+(`Ty.ok`): a `Vec (Vec D)`, a channel of `D` (its queue is a `Vec`),
+`Locked (Vec D)`, `Arc (Vec D)`, a cell of a `Vec D` (a struct's field or
+an enum's payload is typed since Agora #607: glue hands it to a `letd`,
+which drains it); one whose elements hold views
 (`LetdTy`); and `vec_set` over an element and `withElem` (`vec_free`,
 `vec_clear` and `vec_truncate` are typed code, `A2/DropCode.lean`). And, since A2-drop.3c and 3d: a closure's or
 trait object's environment that holds a destructor value (`Cross.Fits`),
@@ -466,8 +468,8 @@ on the body's typing restricts which programs the calculus covers.
 **Status.** A2-drop.3a is mechanized (Agora #541, *What runs the
 destructor* above), with the struct glue as the struct's own destructor
 and `assign` of a destructor value refused instead of `dropCode`. Of
-A2-drop.3b, a binding's own `Vec` of destructor values is mechanized (the
-drain, Agora #542; *Staging* below says what is left). Of 3c, the refusal
+A2-drop.3b, a `Vec` of destructor values is mechanized as a binding's own
+type and as a field or a payload (the drain, Agora #542, #607; *Staging* below says what is left). Of 3c, the refusal
 is mechanized (no environment holds a destructor value, Agora #543); the
 environment's and a block's payload's drop as code are designed here; not mechanized. Until they are, `CLAIM.md`'s
 *Destructors* section lists where the calculus releases a destructor value
@@ -483,9 +485,9 @@ made it:
 |---|---|---|
 | a binding's scope (a local, a `sink` parameter, a call's result, `unpair`'s fields) | the destructor, then the glue | only for `letd`'s binding (`scopeD`) |
 | `= x …` over an owned value, `vec_free x` | the destructor of the old value first | `DropSlot` / `Frees` |
-| a struct field, at the struct's drop | the field's destructor, inside the struct's glue | `Frees` of the tree |
+| a struct field, at the struct's drop | the field's destructor, inside the struct's glue | the glue takes the struct apart, the field in a `letd` frame (Agora #616) |
 | a `Vec` element: `vec_pop` dropped, `truncate`, `clear`, `vec_set` over it, the Vec freed | each element's destructor | the drain at the end of a binding's own `Vec` (A2-drop.3b); free, clear and truncate as code (`A2/DropCode.lean`), `vec_set` refused; a popped element is a `letd`'s |
-| an enum or option payload | the payload's destructor | `Frees` |
+| an enum or option payload | the payload's destructor | the enum's glue moves the payload out to a `letd` frame (Agora #632) |
 | a closure's or a trait object's environment | the captures' destructors | refused: no environment holds a destructor value (A2-drop.3c, `Cross.Fits`) |
 | a panic's unwind through any of these | the journal runs each, once | `scopeP` frees in one step, except at `scopeD` |
 | an `Arc` / lock block's payload when its last share goes (A3) | on the thread that drops the last share | refused: no payload owns a destructor value (A2-drop.3d, `Ty.ok`) |
@@ -577,7 +579,8 @@ each one shrinks `CLAIM.md`'s exception:
    containers, environments, blocks, check-out bindings (each settled by
    the cuts below), and a result set before a panic in its callee (the
    result's frame, Agora #611).
-2. **A2-drop.3b: containers** (done for a binding's own `Vec`, Agora #542).
+2. **A2-drop.3b: containers** (done for a binding's own `Vec`, Agora #542,
+   and for one in a struct's field or an enum's payload, Agora #607).
    - Done: `Ty.holdsDtor` is deep, so a struct, an enum or an option
      holding a destructor value at any depth is bound by `letd` with its
      glue: a typed `letv`'s owned value is free of one
@@ -590,9 +593,10 @@ each one shrinks `CLAIM.md`'s exception:
      not a new capability: 3a's one-level rule sent it to `letd` too. In
      that first milestone a `Vec` of destructor values was refused
      outright (`Ty.ok` asked a `Vec`'s element type to hold none); since
-     milestones 2a and 2b it is a binding's own type, drained (below), and
-     every other `Vec` has destructor-free elements at any depth
-     (`A2.Dtor.vecs_dtor_free`). A share's payload and a view are free of
+     milestones 2a and 2b it is a binding's own type, drained (below), since
+     Agora #607 also a struct's field or an enum's payload (handed to a
+     `letd` by the glue), and the rules that release elements with no code
+     ask `dtorFree` of their own `Vec`. A share's payload and a view are free of
      one by definition (3d; a view owns nothing).
    - **Built (Agora #542, part 2's first milestone): the drain's step.**
      `vec_remove y 0` is `Rhs.popFront`: element 0 moves out, typed as
@@ -605,15 +609,19 @@ each one shrinks `CLAIM.md`'s exception:
      element 0 each round, not the last one.
    - **Built (milestone 2b): the drain itself.** How the four open
      questions were settled:
-     1. *Where a `Vec D` is ok.* Only as a binding's own type (milestone
-        2a): rather than a separate `Ty.okB` threaded through `tyok`'s 63
+     1. *Where a `Vec D` is ok.* At first only as a binding's own type
+        (milestone 2a; a field and a payload since Agora #607, below): rather than a separate `Ty.okB` threaded through `tyok`'s 63
         uses, `Ty.ok` itself admits `vec D` (`D.hasDtor`, `Ty.vecD`) and
         every composite constructor asks `!vecD` of its parts, so a field,
         a payload, a view's element, a channel, a lock, an `Arc`, a cell or
         a `Vec` of a `Vec D` stays refused; `RhsT.pair` / `inl` / `inr` /
         `arcNew` / `lockNew` / `cellNew` and `StmtT.lockedSet` ask it of
-        what moves in. A struct's glue hands a field to a `letd`, and no rule
-        yet builds a struct with a `Vec D` field (`RhsT.pair`),
+        what moves in. **Agora #607:** a struct's field and an enum's
+        payload are lifted (`Ty.ok`'s `prod` / `sum` cases and `RhsT.pair`
+        / `inl` / `inr` no longer ask `!vecD`): the struct holds a
+        destructor value, so its destructor is its glue (#616, #632),
+        which hands the field to a `letd` at the `Vec`'s own type
+        (`LetdTy`'s second case), and that frame drains it;
         and a channel's queue is swept with its block, running no code (3d).
      2. *`withElem` of a `Vec D`'s element.* Refused: the check-out is an
         owned binding of a destructor type that is no `letd`'s, so
@@ -668,10 +676,10 @@ each one shrinks `CLAIM.md`'s exception:
      - *elements that hold views.* A2-drop.2's rule (a binding that runs a
        destructor gains no view) would let nothing be pushed into such a
        `Vec`; it needs the age order nurlc's finer rule has.
-     - *a `Vec D` inside another type* (a field, a payload, a `Vec` of
-       them, a block's payload). A field needs glue as code that can take
-       the field apart (`dropCode`'s `unpair`, which 3a replaced by glue
-       that only lends `self`); a block's payload is 3d's.
+     - *a `Vec D` as an element or a block's payload* (a `Vec` of them, a
+       channel, a lock, an `Arc`, a cell). A field or a payload is built
+       (Agora #607, above); a `Vec` of `Vec D`s needs the drain to bind an
+       element at a `Vec` type; a block's payload is 3d's.
      - *`vec_set` over an element and `withElem`*: the element taken out
        needs a destructor frame of its own while it is out (`withElem`'s
        hand-over binding is a plain `scope`), and `set` an Rhs that takes

@@ -1019,19 +1019,6 @@ def GlueOK (P : Prog) (f : Nat) (t : Ty) : Prop :=
     fn.resOwn = false ∧ fn.lends = [] ∧ fn.rholds = [] ∧ fn.outHolds = [] ∧ ¬ ThruFn P f ∧
     ∃ x z s, fn.body = .unpair 0 x z s ∧ s.pureGlue = true
 
-/-- Agora #616: `f` is the drop glue of a struct `t` that has a `% Drop` of
-    its own (`i`, which takes the struct lent) beside fields that hold
-    destructor values: `f` takes the struct owned, rebinds it under the
-    fields' glue `h` (a `letd` at `Ty.dtor h t`: from there on a panic takes
-    it apart, a frame per field), runs the impl on it lent, and sets its
-    result.  nurlc's order: the impl, then the fields. -/
-def ImplGlueOK (P : Prog) (f : Nat) (t : Ty) (h i : Nat) : Prop :=
-  ∃ fn a b w r e, P[f]? = some fn ∧ t = .prod a b ∧ t.holdsView = false ∧
-    fn.params = [(.sink, .dtor f t)] ∧ fn.resTy = .int ∧
-    fn.resOwn = false ∧ fn.lends = [] ∧ fn.rholds = [] ∧ fn.outHolds = [] ∧ ¬ ThruFn P f ∧
-    GlueOK P h t ∧ DtorOK P i (.dtor h t) ∧
-    fn.body = .letd w h (.var 0) (.letcall r i [w] (.assign 1 (.expr e)))
-
 /-- Agora #632: `f` is the drop glue of the enum `t`: a function that takes
     one value of the destructor type `Ty.dtor f t` owned and matches on its
     tag; in the arm of a variant whose payload holds a destructor value the
@@ -1046,6 +1033,20 @@ def EnumGlueOK (P : Prog) (f : Nat) (t : Ty) : Prop :=
     (a.holdsDtor = true → ∃ y g k, sa = .letd y g (.takel 0) k) ∧
     (b.holdsDtor = true → ∃ z g k, sb = .letd z g (.taker 0) k)
 
+/-- Agora #616, #632: `f` is the drop glue of a struct or an enum `t` that
+    has a `% Drop` of its own (`i`, which takes the value lent) beside fields
+    or a payload that hold destructor values: `f` takes the value owned,
+    rebinds it under the fields' (or the payload's) glue `h` (a `letd` at
+    `Ty.dtor h t`: from there on a panic takes it apart, a frame per part),
+    runs the impl on it lent, and sets its result.  nurlc's order: the impl,
+    then the parts. -/
+def ImplGlueOK (P : Prog) (f : Nat) (t : Ty) (h i : Nat) : Prop :=
+  ∃ fn w r e, P[f]? = some fn ∧ t.isStruct = true ∧ t.holdsView = false ∧
+    fn.params = [(.sink, .dtor f t)] ∧ fn.resTy = .int ∧
+    fn.resOwn = false ∧ fn.lends = [] ∧ fn.rholds = [] ∧ fn.outHolds = [] ∧ ¬ ThruFn P f ∧
+    (GlueOK P h t ∨ EnumGlueOK P h t) ∧ DtorOK P i (.dtor h t) ∧
+    fn.body = .letd w h (.var 0) (.letcall r i [w] (.assign 1 (.expr e)))
+
 /-- What `unpair` takes apart is a struct under its destructor type, if any. -/
 theorem unpair_undtor {τ a b : Ty} {G : Nat → Prop} (h : τ = .prod a b ∨ ∃ f, τ = .dtor f (.prod a b) ∧ G f) :
     τ.undtor = .prod a b := by
@@ -1058,8 +1059,8 @@ theorem unpair_ne_int {τ a b : Ty} {G : Nat → Prop} (h : τ = .prod a b ∨ �
 /-- What runs when a value of the destructor type `Ty.dtor f t` is dropped:
     a destructor that takes it lent (`DtorOK`; then the tree is freed with
     no code, so a struct `t` holds no destructor value), or a struct's
-    glue, which takes it apart (`GlueOK`), or first runs the struct's own
-    impl on it (`ImplGlueOK`). -/
+    glue, which takes it apart (`GlueOK`), or first runs the value's own
+    impl on it (`ImplGlueOK`), or an enum's glue (`EnumGlueOK`). -/
 def DropFnOK (P : Prog) (f : Nat) (t : Ty) : Prop :=
   (DtorOK P f (.dtor f t) ∧ t.holdsDtor = false) ∨ GlueOK P f t ∨
     (∃ h i, ImplGlueOK P f t h i) ∨ EnumGlueOK P f t
@@ -1070,7 +1071,7 @@ theorem sinkOf {P : Prog} {f : Nat} {t : Ty}
     ∃ fn, P[f]? = some fn ∧ t.holdsView = false ∧ fn.params = [(.sink, .dtor f t)] ∧
       fn.resOwn = false ∧ ¬ ThruFn P f := by
   rcases hg with ⟨fn, _, _, hfn, _, hv, hps, _, hro, _, _, _, hnt, _⟩ |
-    ⟨_, _, fn, _, _, _, _, _, hfn, _, hv, hps, _, hro, _, _, _, hnt, _⟩ |
+    ⟨_, _, fn, _, _, _, hfn, _, hv, hps, _, hro, _, _, _, hnt, _⟩ |
     ⟨fn, _, _, _, _, hfn, _, hv, hps, _, hro, _, _, _, hnt, _⟩
   · exact ⟨fn, hfn, hv, hps, hro, hnt⟩
   · exact ⟨fn, hfn, hv, hps, hro, hnt⟩

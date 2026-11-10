@@ -672,7 +672,12 @@ sizeof_expr = 'Z' type ;
    Example:  ? > x 0  { ( nurl_print `+` ) }  {} *)
 cond_expr = '?' expr expr expr ;
 
-(* { stmt* }  — block used as expression, yields last value *)
+(* { stmt* }  — block used as expression, yields last value.
+   A binding made in a block cannot be named after the block's `}`. What
+   a block whose value is used has bound is still released only where the
+   enclosing scope ends, since the value may view it; until then its name
+   is taken: an outer binding of the same name cannot be named after the
+   block either (docs/MEMORY.md §1, "Where values are dropped"). *)
 block_expr = '{' stmt* '}' ;
 
 (* ( fn [generic_arg+]? arg* )  — function call; optional [generic_arg+]

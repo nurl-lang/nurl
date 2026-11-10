@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_value_block_name_shadowing_an_outer_one.nu:12:34: error: 's' was bound inside the value block that ends on line 11, and a value block's names end at its '}' (what the block bound lives on to the end of the enclosing scope, since the block's value may view it). An outer 's' cannot be named here either: the block's binding has taken its name for the rest of this scope. Give the block's binding another name
+    ( nurl_println ( string_data s ) )
+                                 ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

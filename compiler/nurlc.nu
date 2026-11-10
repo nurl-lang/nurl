@@ -2214,6 +2214,11 @@ unsafe @ agg_field_count i syms s ot → i {
 : ~ s g_blk_lets ``
 : ~ i g_blk_depth 0
 : ~ i g_blk_val_depth 0
+// A value block's names end at its `}` (agora #575; the helpers and the
+// account are above gen_block_expr).
+: ~ i g_vb_on 0
+: ~ i g_vb_sd 0
+: ~ i g_vb_marks 0
 // Whether the arm about to be generated hands its value on (gen_cond /
 // gen_match set it before each arm; the arm's block reads it on entry).
 : ~ b g_arm_val F
@@ -7768,6 +7773,23 @@ unsafe @ gen_ret i lex i syms i cg → s {
     ( nurl_print ` monotonic, align ` ) ( nurl_print ( nurl_str_int ( glob_atomic_align ll ) ) )
 }
 
+// A name spelled after the `}` of the value block that bound it (agora
+// #575, above gen_block_expr): the name ended with the block, but the
+// binding lives on to the end of the enclosing scope, and the name still
+// reaches it — refused rather than read as that.
+@ __vb_gone_check i lex i syms s name i line i col → v {
+    : s gl ( nurl_sym_get2 syms name `__vbgone` )
+    ? == 0 ( nurl_str_len gl ) { ^ v } {}
+    // (A binding of that name made since — a payload or a loop variable,
+    // a `:` in an inner scope — is what the name means now.)
+    ? < ( nurl_sym_index_of syms ( nurl_str_cat name `__vbgone` ) ) ( nurl_sym_index_of syms name ) { ^ v } {}
+    : s bl ( str_first_word gl )
+    : b shadow != 0 ( nurl_str_len ( str_skip_word gl ) )
+    ( die_pos lex line col ( nurl_str_cat ( nurl_str_cat4 `'` name `' was bound inside the value block that ends on line ` bl )
+    ( nurl_str_cat3 `, and a value block's names end at its '}' (what the block bound lives on to the end of the enclosing scope, since the block's value may view it). ` ? shadow ( nurl_str_cat3 `An outer '` name `' cannot be named here either: the block's binding has taken its name for the rest of this scope. Give the block's binding another name` ) `Bind what you need outside the block, or make it the block's value`
+    `` ) ) )
+}
+
 unsafe @ gen_ident i lex i syms i cg → s {
     ? ( is_ident_tok ( nurl_lex_type lex ) )
     { : s name ( nurl_lex_val lex )
@@ -7777,6 +7799,7 @@ unsafe @ gen_ident i lex i syms i cg → s {
         : i __id_line ( nurl_lex_line lex )
         : i __id_col ( nurl_lex_col lex )
         ( nurl_lex_advance lex )
+        ? != 0 g_vb_marks { ( __vb_gone_check lex syms name __id_line __id_col ) } {}
         // Borrow checker: every value-position identifier is a read.
         ( bck_note_read name )
         ? != 0 g_clolk_n { ( __clolend_use syms name ) } {}
@@ -12660,6 +12683,27 @@ unsafe @ nurl_sym_depth_of i h s name → i {
     ^ -1
 }
 
+// The index of the newest entry for `name`, in any scope, or -1: of two
+// names, the one with the higher index was defined last.
+unsafe @ nurl_sym_index_of i h s name → i {
+    : s t # s h
+    : i count ( nurl_peek t 0 )
+    : *s names # *s # s ( nurl_peek t 3 )
+    : *i buckets # *i # s ( nurl_peek t 7 )
+    : *i prev # *i # s ( nurl_peek t 8 )
+    : i hn ( __sym_hash name )
+    : i bh & hn - ( nurl_peek t 6 ) 1
+    : *i hashes # *i # s ( nurl_peek t 12 )
+    : ~ i cur . buckets bh
+    ~ != cur 0 {
+        : i idx - cur 1
+        ? >= idx count { ^ -1 } {}
+        ? && == hn . hashes idx == 0 # i ( strcmp name . names idx ) { ^ idx } {}
+        = cur . prev idx
+    }
+    ^ -1
+}
+
 // The length of value `idx` of table `t`: every writer maintains slot 11,
 // and zero is the valid cached length of an empty value.
 unsafe @ __sym_vlen s t * s types i idx → i {
@@ -12887,6 +12931,19 @@ unsafe @ nurl_sym_word_index i h s name s word → i {
 unsafe @ nurl_sym_push i h → v {
     : s t # s h
     ( nurl_poke t 1 + ( nurl_peek t 1 ) 1 )
+}
+
+// The table's current scope depth.
+unsafe @ nurl_sym_depth i h → i {
+    ^ ( nurl_peek # s h 1 )
+}
+
+// The value of `name` where its newest entry is in the CURRENT scope,
+// else `` (absent, or only an enclosing scope's).
+unsafe @ nurl_sym_get_here i h s name → s {
+    : i idx ( __sym_find_here h name )
+    ? < idx 0 { ^ `` } {}
+    ^ ( __sym_view # s h idx )
 }
 
 unsafe @ nurl_sym_pop i h → v {
@@ -16440,6 +16497,11 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     // reassignment-drop rule) — an alias here dangled and misspelled
     // every private callee's diagnostics.
     : s fname_bare ( nurl_str_cat fname `` )
+    // (A closure a value block bound, called after the block: agora #575.
+    // …and one of this call's own arguments may be such a block, whose
+    // binding the callee's name then reaches: asked again after them.)
+    ? != 0 g_vb_marks { ( __vb_gone_check lex syms fname_bare __call_line __call_col ) } {}
+    : i __vbm0 g_vb_marks
     ? ( seq fname `nurl_vctl_data` ) { = g_vctl_seen 1 } {}
     ? ( priv_is_private fname ) {
         = fname ( priv_resolve lex syms fname )
@@ -17067,6 +17129,9 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // the binding the loaded ident names.
         : i bck_arg_tt ( nurl_lex_type lex )
         : s bck_arg_val ( nurl_lex_val lex )
+        // (An argument that is a name a value block bound — an `inout`
+        // one is handed over without a read of it: agora #575.)
+        ? != 0 g_vb_marks { ? ( is_ident_tok bck_arg_tt ) { ( __vb_gone_check lex syms bck_arg_val ( nurl_lex_line lex ) ( nurl_lex_col lex ) ) } {} } {}
         // Where this argument's reads start in the statement's read list:
         // in raw code they say which parameters it reaches (the mutation
         // summaries below).
@@ -19514,6 +19579,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         ? & < arg_idx 62 ( __mx_scalar_ty at ) { = __mx_sc | __mx_sc << 1 arg_idx } {}
         = arg_idx + arg_idx 1
     }
+    ? != __vbm0 g_vb_marks { ( __vb_gone_check lex syms fname_bare __call_line __call_col ) } {}
     ? != 0 ( nurl_str_len __dt_carry ) {
         ( nurl_sym_def syms `__deferred_temps__` ( __words_join __dt_carry ( nurl_sym_get syms `__deferred_temps__` ) ) )
         ( nurl_sym_def syms `__deferred_ids__` ( __words_join __di_carry ( nurl_sym_get syms `__deferred_ids__` ) ) )
@@ -25162,6 +25228,62 @@ unsafe @ __blk_leave b val → v {
     ? val { = g_blk_val_depth - g_blk_val_depth 1 } {}
 }
 
+// ── A value block's names end at its `}` (agora #575) ───────────────
+//
+// A block in value position that is no scope of its own (`: String e
+// { : String s … }`, `( f { … } )`, `= x { … }`) binds its locals in the
+// enclosing scope: its value may view them, so their storage — and what
+// drops it — lives to that scope's end (docs/MEMORY.md §1). Their names
+// lived that long too: after the block, `s` was the block's `s`, in
+// place of an outer one it shadowed or where there was none, while the
+// walk ends a block's names at its `endblock` row and judged every later
+// read against another binding.
+//
+// The bindings stay where they are: what the statement that takes the
+// block's value decides about ownership asks them by name (a tail that
+// is a binding moves, a tail call that lends one is copied), and so does
+// every later question about a value that came out of the block ("is
+// this lent out of a local of this frame?" at a `^`). Giving them another
+// name afterwards hid them from exactly those questions. What ends at
+// the `}` is the right to SPELL the name: each binding the block made
+// leaves a mark, `<name>__vbgone` (the block's last line, and `s` where
+// an older binding of that name was in scope), in the scope it lives in,
+// and a name spelled while its mark is newer than the binding it reaches
+// is refused (__vb_gone_check). A `:` of that name made later takes the
+// mark away; a payload, a loop variable or a binding of an inner scope is
+// newer than the mark.
+//
+// g_vb_on / g_vb_sd: the innermost open block is such a block, and the
+// table depth its bindings are made at; g_fn_escapes' `__vb_lets__` is
+// what it has bound so far (`name shadow-bit` pairs). g_vb_marks counts
+// the marks made in this function: the gate of every check.
+
+// gen_let, its initialiser generated and nothing of `name` defined yet:
+// a mark an earlier block left on the name goes (this binding is what
+// the name means from here on), and a binding made directly in a value
+// block is noted for the block's `}`.
+@ __vb_note_let i syms s name → v {
+    // (Only a mark of this very scope: one an enclosing scope holds is
+    // older than the binding about to be made here.)
+    ? != 0 g_vb_marks { : s mk ( nurl_str_cat name `__vbgone` ) ? != 0 ( nurl_str_len ( nurl_sym_get_here syms mk ) ) { ( nurl_sym_def syms mk `` ) } {} } {}
+    ? | == 0 g_vb_on != g_vb_sd ( nurl_sym_depth syms ) { ^ v } {}
+    ( nurl_sym_append_word g_fn_escapes `__vb_lets__` ( nurl_str_cat3 name ` ` ? != 0 ( nurl_sym_len syms name ) `s` `-` ) )
+}
+
+// The block that bound `__vb_lets__` closed on `line`.
+@ __vb_close i syms i line → v {
+    : s lets ( nurl_sym_get g_fn_escapes `__vb_lets__` )
+    ? == 0 ( nurl_str_len lets ) { ^ v } {}
+    : s ln ( nurl_str_int line )
+    : ~ s rest ( nurl_str_cat lets `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s nm ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s sh ( str_first_word rest ) = rest ( str_skip_word rest )
+        ( nurl_sym_def syms ( nurl_str_cat nm `__vbgone` ) ? ( seq sh `s` ) ( nurl_str_cat ln ` s` ) ln )
+        = g_vb_marks + g_vb_marks 1
+    }
+}
+
 @ gen_block_expr i lex i syms i cg → s {
     : i bck_line ( nurl_lex_line lex )
     // A `?`/`??` arm body (mem_arm_body_mark) leaves the exits its tail
@@ -25196,6 +25318,17 @@ unsafe @ __blk_leave b val → v {
     : b __blk_scalar_val & & blk_val ! blk_is_arm != 0 g_blk_scalar_let
     = g_blk_scalar_let 0
     : b __blk_scope | & & ! blk_is_arm blk_is_stmt ! blk_val __blk_scalar_val
+    // (Any other block that is not an arm's or a closure's body binds in
+    // the enclosing scope: its names end here, at its `}` — agora #575,
+    // above.)
+    : b __vb_mine & & ! blk_is_arm ! __blk_scope ! __blk_ret_val
+    : i __vb_on0 g_vb_on
+    : i __vb_sd0 g_vb_sd
+    // (The list is the innermost such block's: empty while none is open.)
+    : s __vb_lets0 ? != 0 __vb_on0 ( nurl_sym_get g_fn_escapes `__vb_lets__` ) ``
+    ? != 0 ( nurl_str_len __vb_lets0 ) { ( nurl_sym_set g_fn_escapes `__vb_lets__` `` ) } {}
+    = g_vb_on ? __vb_mine 1 0
+    ? __vb_mine { = g_vb_sd ( nurl_sym_depth syms ) } {}
     : ~ s old_strs_bb ``
     : ~ s old_structs_bb ( nurl_str_cat `` `` )
     : ~ s old_user_bb ( nurl_str_cat `` `` )
@@ -25371,6 +25504,10 @@ unsafe @ __blk_leave b val → v {
         ( nurl_sym_def syms `__last_block_params__` `` )
         ( origin_set syms `__last_block_params__` 0 )
     } {}
+    ? __vb_mine { ( __vb_close syms __rb_line ) ( nurl_sym_set g_fn_escapes `__vb_lets__` __vb_lets0 ) }
+    { ? != 0 ( nurl_str_len __vb_lets0 ) { ( nurl_sym_set g_fn_escapes `__vb_lets__` __vb_lets0 ) } {} }
+    = g_vb_on __vb_on0
+    = g_vb_sd __vb_sd0
     last
 }
 
@@ -29944,6 +30081,25 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
     // per path, as a join's that phis its arms — handed to an `inout`
     // parameter as a borrow, it was stored as is and released here; agora
     // #242.)
+    ? ( seq ( nurl_sym_get2 syms up `__sborrow` ) `1` ) { ( __sb syms up `dyn` ) } {}
+}
+
+// The `:` binding `up` of a value block whose tail call takes one of the
+// block's own bindings (`: String e { : String s … ( string_concat s s )
+// }`): on the runs the call did not lend its result, the result is the
+// call's own and this binding's to drop — the call's answer
+// (mem_call_retown), as for the call bound directly. Bound as a block the
+// binding took every result for a borrow, and a fresh one was never
+// dropped (agora #613). The runs it did lend one of the block's bindings
+// are mem_blk_tail_copy_slot's, next.
+@ mem_blk_tail_call_own i syms i cg s up → v {
+    ? == 0 ( nurl_str_len up ) { ^ v } {}
+    : s ro ( mem_call_retown syms cg )
+    ? == 0 ( nurl_str_len ro ) { ^ v } {}
+    : s f ( mem_udrop_flag_get syms cg up )
+    : s nf ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print nf ) ( nurl_print ` = or i1 ` ) ( nurl_print f ) ( nurl_print `, ` ) ( nurl_print ro ) ( nurl_print `\n` )
+    ( mem_udrop_flag_set syms cg up nf )
     ? ( seq ( nurl_sym_get2 syms up `__sborrow` ) `1` ) { ( __sb syms up `dyn` ) } {}
 }
 
@@ -46777,6 +46933,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         = g_clo_rhs_at ? & ! is_mutable == bck_rhs_tt TT_LPAREN __rs_at -1
         : ~ s val ( gen_expr lex syms cg )
         = g_clo_rhs_at __cra0
+        ? | != 0 g_vb_on != 0 g_vb_marks { ( __vb_note_let syms name ) } {}
         ( __note_rawsrc syms name ( nurl_get_last_type ) ( nurl_lex_src_slice lex __rs_at - ( nurl_lex_cur_start lex ) __rs_at ) )
         : s __jpb_mine ( nurl_str_cat g_jpb_list `` )
         = g_jpb_last ( nurl_str_cat __jpb_mine `` )
@@ -47041,7 +47198,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
                     ( mem_note_bound_lend syms name bck_rhs_tt bck_rhs_val )
                     ( mem_own_add_user_drop syms cg ptr rvt )
                     ( mem_udrop_bind_flag syms cg ptr rvt ( __blk_bind_tt bck_rhs_tt __blk_lend ) bck_rhs_val rhs_borrow )
-                    ? __blk_lend { ( mem_blk_tail_copy_slot syms cg ptr rvt ptr __rhs_r0 ) } {}
+                    ? __blk_lend { ( mem_blk_tail_call_own syms cg ptr ) ( mem_blk_tail_copy_slot syms cg ptr rvt ptr __rhs_r0 ) } {}
                     ( mem_journal_push_userdrop syms cg ptr rvt )
                     ( __jpb_attach syms ptr __jpb_mine ) }
                 {}
@@ -47172,6 +47329,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             = g_clo_rhs_at ? & ! is_mutable == bck_rhs_tt TT_LPAREN __rs_at -1
             : ~ s val ( gen_expr lex syms cg )
             = g_clo_rhs_at __cra0
+            ? | != 0 g_vb_on != 0 g_vb_marks { ( __vb_note_let syms name ) } {}
             ( __note_rawsrc syms name ( nurl_llty ptype ) ( nurl_lex_src_slice lex __rs_at - ( nurl_lex_cur_start lex ) __rs_at ) )
             : s __jpb_mine ( nurl_str_cat g_jpb_list `` )
             = g_jpb_last ( nurl_str_cat __jpb_mine `` )
@@ -47431,7 +47589,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
                         ( mem_note_bound_lend syms name bck_rhs_tt bck_rhs_val )
                         ( mem_own_add_user_drop syms cg ptr rpt )
                         ( mem_udrop_bind_flag syms cg ptr rpt ( __blk_bind_tt bck_rhs_tt __blk_lend ) bck_rhs_val rhs_borrow )
-                        ? __blk_lend { ( mem_blk_tail_copy_slot syms cg ptr rpt ptr __rhs_r0 ) } {}
+                        ? __blk_lend { ( mem_blk_tail_call_own syms cg ptr ) ( mem_blk_tail_copy_slot syms cg ptr rpt ptr __rhs_r0 ) } {}
                         ( mem_journal_push_userdrop syms cg ptr rpt )
                         ( __jpb_attach syms ptr __jpb_mine ) }
                     {}
@@ -47493,6 +47651,8 @@ unsafe @ gen_assign i lex i syms i cg → s {
     {}
     ? ( is_ident_tok ( nurl_lex_type lex ) )
     { : s name ( nurl_lex_val lex )
+        // (A binding a value block made, named after the block: agora #575.)
+        ? != 0 g_vb_marks { ( __vb_gone_check lex syms name ( nurl_lex_line lex ) ( nurl_lex_col lex ) ) } {}
         ( nurl_lex_advance lex )
         // Mutability enforcement. A binding introduced with `:` (and no
         // `~`) is immutable; `= name expr` targeting it is a compile
@@ -48665,6 +48825,13 @@ unsafe @ gen_assign i lex i syms i cg → s {
                 `assignment to undefined identifier '` name
                 `' — no binding, parameter, or global with this name is in scope; declare it first (': T name value')` ) ) }
         }
+        // (A value block whose tail is a call: on the runs the call hands
+        // over a value of its own, the target owns it — the call's answer,
+        // mem_blk_tail_call_own, as for a `:` binding. Read as a block
+        // only, a handle took every result for a borrow and a fresh one
+        // was never dropped. On the runs the call lends, the target stays
+        // the borrow it was. Agora #613.)
+        : b __as_blk & != 0 ( nurl_str_len __ud_ptr ) & == bck_rhs_tt TT_LBRACE == g_blk_tail_eff TT_LPAREN
         // Owned result: owned; the caller's own value handed back: as before.
         ? != 0 ( nurl_str_len __ud_ro_new ) {
             ( mem_udrop_flag_set syms cg __ud_ptr __ud_ro_new )
@@ -48704,7 +48871,8 @@ unsafe @ gen_assign i lex i syms i cg → s {
                     ( __sb syms __ud_ptr ( nurl_str_cat `@` __ud_ls ) )
                 } }
             { ? & & != 0 ( nurl_str_len __ud_ptr ) ! ( seq bck_rhs_val name ) ! __ud_same
-                { ( mem_udrop_bind_flag syms cg __ud_ptr vt bck_rhs_tt bck_rhs_val __ud_borrow ) } {} }
+                { ( mem_udrop_bind_flag syms cg __ud_ptr vt bck_rhs_tt bck_rhs_val __ud_borrow )
+                    ? __as_blk { ( mem_blk_tail_call_own syms cg __ud_ptr ) } {} } {} }
         }
         // (…and owns it again past whatever the call's answer said.)
         ? != 0 ( nurl_str_len __ud_kept ) { ( mem_udrop_keep_settle syms cg __ud_ptr __ud_kept ) } {}
@@ -49525,6 +49693,8 @@ unsafe @ __replaces_note i syms s name s field → v {
     : b nested & == ( nurl_lex_type lex ) TT_DOT ( __nested_lvalue_ok lex syms )
     // Save object name before gen_expr consumes the token (needed for struct-by-value alloca lookup)
     : s obj_name ? ( is_ident_tok ( nurl_lex_type lex ) ) ( nurl_lex_val lex ) ``
+    // (A binding a value block made, named after the block: agora #575.)
+    ? != 0 g_vb_marks { ? != 0 ( nurl_str_len obj_name ) { ( __vb_gone_check lex syms obj_name ( nurl_lex_line lex ) ( nurl_lex_col lex ) ) } {} } {}
     ( __rp_note_write syms obj_name )
     // …and publish it for gen_field_rhs's escape hook (§2.3), which sees
     // only the RHS. Every branch below routes its RHS through that one
@@ -56102,6 +56272,14 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     // syms is the OUTER scope; param_names is a space-separated list of closure params.
     // Only outer locals (those with __ptr in syms) are captured, not globals/functions.
     : s captured_vars ( simple_capture_analysis lex syms param_names )
+    // (A capture named after the value block that bound it: agora #575.)
+    ? != 0 g_vb_marks {
+        : ~ s __vbc ( nurl_str_cat captured_vars `` )
+        ~ != 0 ( nurl_str_len __vbc ) {
+            : s __vbw ( str_first_word __vbc ) = __vbc ( str_skip_word __vbc )
+            ( __vb_gone_check lex syms __vbw ( nurl_lex_line lex ) ( nurl_lex_col lex ) )
+        }
+    } {}
     = g_clo_assigned ( nurl_str_cat g_clo_scan_assigned `` )
     = g_clo_read ( nurl_str_cat g_clo_scan_read `` )
     = g_clo_fld_roots ( nurl_str_cat g_clo_scan_fld_roots `` )
@@ -64134,6 +64312,8 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     ( nurl_sym_def syms `__owned_slices__` `` )
     ( nurl_sym_def syms `__slice_decls__` `` )
     = g_fn_slice_decls 0
+    // (No name of this function has ended with a value block yet.)
+    = g_vb_marks 0
     ( nurl_sym_def syms `__last_ident_name__` `` )
     ( nurl_sym_def syms `__fn_ret_owned__` `` )
     ( nurl_sym_def syms `__fn_ret_slice_mixed__` `` )

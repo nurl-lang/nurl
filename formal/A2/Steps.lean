@@ -720,8 +720,7 @@ theorem out_pair {m1 m2 : Mem} {Γ1 Γ2 : Ctx} {F : List Var} (hi1 : MInv m1 Γ1
     (pu1 : Pushed m1 Γ1 a v Dy) (post2 : RhsPost m1 m2 Γ1 Γ2 F) (pu2 : Pushed m2 Γ2 b w Dz)
     (hz : Γ1 z = some Ez) (hlz : Ez.live = true) (hbz : Ez.ty = b)
     (hpa2 : PushArg Γ1 F z Ez b Dz Γ2) (htk2 : TakeVal m1 z w m2)
-    (hzd : Ez.mode.ownSlot = true → z ∉ roots Dy) (hok : a.ok = true ∧ b.ok = true)
-    (hvd : a.vecD = false ∧ b.vecD = false) :
+    (hzd : Ez.mode.ownSlot = true → z ∉ roots Dy) (hok : a.ok = true ∧ b.ok = true) :
     RhsOut m2 Γ2 ⟨.prod a b, .own, true, [], Dy ++ Dz, false, false⟩ (.pair v w) true := by
   -- an owned slot holds a value of an owning type
   have own_ty : ∀ {x : Val}, m1.st z = some ⟨true, some x⟩ → b.owning = true := by
@@ -767,7 +766,7 @@ theorem out_pair {m1 m2 : Mem} {Γ1 Γ2 : Ctx} {F : List Var} (hi1 : MInv m1 Γ1
     intro s x hin
     obtain ⟨d, o, l, rfl, dep, hd, ha⟩ := pu1.vs s x hin
     exact ⟨d, o, l, rfl, dep, hd, hvkeep dep hd d o l s ha⟩
-  refine ⟨rfl, Or.inl rfl, rfl, by simp [Ty.ok, hok.1, hok.2, hvd.1, hvd.2], fun _ r hr => ?_, fun _ => ⟨rfl,
+  refine ⟨rfl, Or.inl rfl, rfl, by simp [Ty.ok, hok.1, hok.2], fun _ r hr => ?_, fun _ => ⟨rfl,
     WFv.pair pu1.wf pu2.wf, ?_, ?_, ?_, ?_, ?_, ?_⟩, (fun h => by cases h),
     fun _ => own_named ((pu1.nok.pushArg hpa2 hzd).append pu2.nok), ?_, ?_,
     fun _ => SharesOK.mk_pair (pu1.sh.grow post2.blk) pu2.sh⟩
@@ -950,7 +949,6 @@ theorem out_inj {m1 : Mem} {Γ1 : Ctx} {a t : Ty} {D : List Dep} {v : Val} (pu :
     (ht : t.ok = true) {w : Val} (hwv : w = .inl v ∨ w = .inr v) {τ : Ty} (hτ : τ = .sum a t ∨ τ = .sum t a)
     (hwτ : WFv τ w) (hvin : ∀ s x, ViewIn a v s x → ViewIn τ w s x)
     (hvin' : ∀ s x, ViewIn τ w s x → ViewIn a v s x) (hok : a.ok = true)
-    (hvd : a.vecD = false ∧ t.vecD = false)
     (hain' : ∀ u k p, ArcIn τ w u k p → ArcIn a v u k p) :
     RhsOut m1 Γ1 ⟨τ, .own, true, [], D, false, false⟩ w true := by
   have hsub : ∀ {n : Val}, Sub n w → n = w ∨ Sub n v := by
@@ -959,7 +957,7 @@ theorem out_inj {m1 : Mem} {Γ1 : Ctx} {a t : Ty} {D : List Dep} {v : Val} (pu :
     · exact Or.inl h
     · rcases hwv with rfl | rfl <;> cases hc <;> exact Or.inr hs
   have hids : w.ids = v.ids := by rcases hwv with rfl | rfl <;> simp
-  refine ⟨rfl, Or.inl rfl, rfl, by rcases hτ with rfl | rfl <;> simp [Ty.ok, hok, ht, hvd.1, hvd.2], fun _ r hr => ?_,
+  refine ⟨rfl, Or.inl rfl, rfl, by rcases hτ with rfl | rfl <;> simp [Ty.ok, hok, ht], fun _ r hr => ?_,
     fun _ => ⟨by rcases hτ with rfl | rfl <;> rfl, hwτ, fun s x hin => pu.vs s x (hvin' s x hin), by
       rw [hids]; exact pu.nd, fun i hi => pu.al i (hids ▸ hi), fun o U hU i hi => pu.dis o U hU i (hids ▸ hi),
       fun d o l hv u c es hn => ?_, fun i hi => pu.np i (hids ▸ hi)⟩, (fun h => by cases h),
@@ -1543,32 +1541,32 @@ theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry
     cases he with
     | popFront hT _ _ => exact rhs_popFront hi hanch hy hl ht hcan hyF hT hds
 
-  | @pair y z Ey Ez Γ1 Γ2 Dy Dz hy hly hpa1 hz hlz hpa2 hzd hvy hvz =>
+  | @pair y z Ey Ez Γ1 Γ2 Dy Dz hy hly hpa1 hz hlz hpa2 hzd =>
     cases he with
     | pair htk1 htk2 =>
       obtain ⟨post1, pu1⟩ := push_take hi hanch hy hly rfl hpa1 htk1
       have hanch1 := hanch_of hanch post1.cmode post1.rootb
       obtain ⟨post2, pu2⟩ := push_take post1.inv hanch1 hz hlz rfl hpa2 htk2
       exact ⟨post1.trans post2, out_pair post1.inv hanch1 pu1 post2 pu2 hz hlz rfl hpa2 htk2 hzd
-        ⟨hi.tyok hy, post1.inv.tyok hz⟩ ⟨hvy, hvz⟩⟩
+        ⟨hi.tyok hy, post1.inv.tyok hz⟩⟩
   | fst hy hl hty =>
     cases he with
     | fst hv => exact ⟨RhsPost.same hi, out_fst hi hy hl hty hv⟩
   | snd hy hl hty =>
     cases he with
     | snd hv => exact ⟨RhsPost.same hi, out_snd hi hy hl hty hv⟩
-  | @inl y b Ey Γ1 D hy hly hpa hb hvy hvb =>
+  | @inl y b Ey Γ1 D hy hly hpa hb =>
     cases he with
     | inl htk =>
       obtain ⟨post, pu⟩ := push_take hi hanch hy hly rfl hpa htk 
       exact ⟨post, out_inj pu hb (Or.inl rfl) (Or.inl rfl) (WFv.inl pu.wf) (fun s x h => ViewIn.inl h)
-        (fun s x h => ViewIn.inl_inv h) (hi.tyok hy) ⟨hvy, hvb⟩ (fun u k p h => by cases h with | inl h => exact h)⟩
-  | @inr a y Ey Γ1 D hy hly hpa ha hva hvy =>
+        (fun s x h => ViewIn.inl_inv h) (hi.tyok hy) (fun u k p h => by cases h with | inl h => exact h)⟩
+  | @inr a y Ey Γ1 D hy hly hpa ha =>
     cases he with
     | inr htk =>
       obtain ⟨post, pu⟩ := push_take hi hanch hy hly rfl hpa htk 
       exact ⟨post, out_inj pu ha (Or.inr rfl) (Or.inr rfl) (WFv.inr pu.wf) (fun s x h => ViewIn.inr h)
-        (fun s x h => ViewIn.inr_inv h) (hi.tyok hy) ⟨hvy, hva⟩ (fun u k p h => by cases h with | inr h => exact h)⟩
+        (fun s x h => ViewIn.inr_inv h) (hi.tyok hy) (fun u k p h => by cases h with | inr h => exact h)⟩
   | @pack fs te ms q y cs Ey Γ1 D hy hly hte hpa hcaps hq =>
     cases he with
     | pack htk =>
