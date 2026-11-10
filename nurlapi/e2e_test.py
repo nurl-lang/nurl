@@ -1127,6 +1127,10 @@ def t_tools_call_build_unikernel(c: Client) -> None:
         return
     assert_eq("unikernel tool build ok", j.get("status"), "ok")
     assert_true("tool result has elf artifact", bool((j.get("elf_artifact") or {}).get("download_url")), str(j)[:200])
+    env = _tool_call(c, "nurl_build_unikernel", {"source": src, "args": 'a"b', "boot": False})
+    text = _tool_text(env)
+    assert_true("MCP args with a double quote refused",
+                "double quotes" in text or "control characters" in text, text[:200])
     br = j.get("boot_result") or {}
     if br.get("ran") is False and "not available" in (br.get("error") or ""):
         print("  boot skipped: qemu not in this deployment")
@@ -1277,6 +1281,17 @@ def t_build_unikernel_rest(c: Client) -> None:
     dstat, _, dbody = c.get(f"/download/{tok}")
     assert_eq("elf downloads", dstat, 200)
     assert_true("downloaded file is an ELF", dbody[:4] == b"\x7fELF", repr(dbody[:4]))
+
+    # A guest argv is embedded in `args="…"`; the guest's reader ends it
+    # at the next double quote and has no escape syntax. A quote or a
+    # control byte is refused before a build directory is created.
+    for bad_args, why in (('a"b', "double quote"), ("a\nb", "newline")):
+        status, _, _ = c.post(
+            "/build_unikernel",
+            {"source": src, "args": bad_args},
+            timeout=60.0,
+        )
+        assert_eq(f"args with a {why} rejected", status, 400)
 
     # 2. An initfs file rides inside the image; keys are path-checked.
     import base64 as _b64

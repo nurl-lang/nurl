@@ -3918,6 +3918,27 @@ i clang_rc s build_stdout s build_stderr → v {
 
 @ __uk_is_arm s arch → b { ^ != 0 ( nurl_str_eq arch `aarch64` ) }
 
+// A guest argv is embedded in the kernel command line's `args="…"` token.
+// The guest's cmdline reader ends that token at the next '"' and has no
+// escape syntax (unikernel/boot: build_argv), so a quote in `args` would
+// silently truncate the program's argv and hand the rest of it to the
+// guest as command-line keys of its own. A control byte would break the
+// displayed command across lines. Refuse both at the request boundary,
+// before a build directory exists. `$`, backticks and `'` are fine: the
+// returned command carries the argv as a single-quoted shell token
+// (__sh_push_sq), and the guest copies them literally.
+@ __uk_args_ok s args → b {
+    : ( Slice u ) v ( slice_of_str args )
+    : i n ( nurl_str_len args )
+    : ~ i k 0
+    ~ < k n {
+        : i c ( slice_byte v k )
+        ? | < c 32 == c 34 { ^ F } {}
+        = k + k 1
+    }
+    ^ T
+}
+
 @ get_unikernel_build_script s arch → String {
     ? ( __uk_is_arm arch ) {
         ^ ( env_var_or `NURL_UNIKERNEL_BUILD_ARM64`
@@ -4181,6 +4202,9 @@ unsafe @ __uk_exit_code s log → i {
             : s filename ( get_common_json root `filename` `main.nu` )
             ? ! ( build_filename_ok filename ) { ^ ( bad_filename_response ) } {}
             : s uargs ( get_common_json root `args` `` )
+            ? ! ( __uk_args_ok uargs ) {
+                ^ ( response_text 400 `{"error":"args must not contain double quotes or control characters: the guest reads args=\"…\" up to the next double quote and has no escape syntax, so the rest of the argv would be lost"}\n` )
+            } {}
             // Which machine. x86_64 stays the default: it is what every
             // caller written before this field asked for, and a silent
             // change of architecture would be the worst kind of
