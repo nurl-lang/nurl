@@ -35166,6 +35166,34 @@ unsafe @ __sx_leaf_roots s sx → s {
     ^ out
 }
 
+// …the same when what the call was handed is `via`, another payload of o
+// read in place (agora #460): the message names it.
+@ __bck_epy_elems_via s st i o i via i line s cal → s {
+    : s os ( nurl_str_int o )
+    : s vs ( nurl_str_int via )
+    : ~ s rest ( nurl_sym_get g_bck ( bck_bkey `epy_` os ) )
+    : ~ s out ( nurl_str_cat st `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s xs ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i x ( nurl_str_to_int xs )
+        ? & & != x via ! ( bck_dead_state ( bck_st_get out x ) ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `hr_` xs ) ) os ) {
+            : s on ( bck_name_show ( nurl_sym_get2 g_bck `rv_` os ) )
+            : s why ( nurl_str_cat4 ( nurl_str_cat3 `it is a payload of '` on `', and '` ) ( bck_name_show ( nurl_sym_get2 g_bck `rv_` vs ) ) ( nurl_str_cat3 `', another payload of '` on `' — the same storage — was passed to '` ) ( nurl_str_cat ( bck_fn_show cal ) `', which may drop or replace what it holds` ) )
+            : ~ s brest ( nurl_sym_get g_bck ( bck_bkey `bb_` xs ) )
+            ~ != 0 ( nurl_str_len brest ) {
+                : s bs ( str_first_word brest ) = brest ( str_skip_word brest )
+                : i b ( nurl_str_to_int bs )
+                ? == BCK_BORROWED_SHARED ( bck_st_get out b ) {
+                    = out ( bck_st_set out b BCK_INVALID )
+                    ( bck_put ( bck_bkey `bv_` bs ) ( nurl_str_cat4 ( nurl_str_int line ) ` ` xs ( nurl_str_cat ` ` why ) ) )
+                    = out ( bck_borrow_end out b line ( nurl_str_cat3 `what it borrows from ended (` why `)` ) 1 )
+                } {}
+            }
+        } {}
+    }
+    ^ out
+}
+
 @ __bck_hr_drop_owner i x → v {
     : s xs ( nurl_str_int x )
     : ~ s rest ( nurl_sym_get g_bck ( bck_bkey `hrd_` xs ) )
@@ -39912,7 +39940,19 @@ unsafe @ bck_note_rc_arg s name s ty → v {
             // (…but drops what it holds: a borrow taken from the payload, an
             // element of its Vec, ends with what it borrowed — agora #424,
             // #569.)
-            ? ( bck_callee_drops_elems ecal eaix ) { = out ( __bck_epy_elems_end out rid line ecal ) } {}
+            ? ( bck_callee_drops_elems ecal eaix ) {
+                = out ( __bck_epy_elems_end out rid line ecal )
+                // (…and when what the call is handed is itself such a payload
+                // of another binding — `?? e { Some ys → ( vec_clear ys ) }`
+                // inside an arm of `?? e { Some xs → … }` — the owner's other
+                // payloads are the same storage: their borrows end too,
+                // agora #460.)
+                : ~ s hro ( nurl_sym_get g_bck ( bck_bkey `hr_` ( nurl_str_int rid ) ) )
+                ~ != 0 ( nurl_str_len hro ) {
+                    : s ow ( str_first_word hro ) = hro ( str_skip_word hro )
+                    = out ( __bck_epy_elems_via out ( nurl_str_to_int ow ) rid line ecal )
+                }
+            } {}
         }
     } {}
     ? | == 0 g_bck_has_cursor ! ( bck_cursor_watched rid ) { ^ out } {}
