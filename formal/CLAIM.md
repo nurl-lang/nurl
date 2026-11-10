@@ -634,28 +634,37 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   Taking one out is refused: `unpair` of a destructor value, and `takel` /
   `taker` of a destructor enum (`A2.DtorWitness.enum_take_refused`), since
   the destructor would not run.
-- A2-drop.3b: a `Vec` of destructor values is refused, at any depth: a
-  `Vec`'s element type holds none (`Ty.ok`, `RhsT.new`), and `Ty.ok`
-  recurses through fields, payloads, views, shares and destructor types.
-  So in a running configuration no binding's type has such a `Vec`
-  anywhere in it (`A2.Dtor.vec_elems_dtor_free` for a `Vec` at the top,
-  `A2.Dtor.vecs_dtor_free` at any depth; `A2.Dtor.new_dtor_free`), and
-  `free`, a truncation, an element set, `pop`, `popFront` and `withElem` release or
-  check out no destructor value, except a share's payload or a closure's
-  environment (3c, 3d): an element may be an `Arc` or a lock of a
-  destructor value, or a closure whose environment holds one, and nurlc
-  runs that destructor when the element's drop drops the last share or
-  the closure. This is stricter than nurlc (the list below), which drops a
-  `Vec`'s elements in index order, each running its destructor.
+- A2-drop.3b: a `Vec` of destructor values is not yet in a running
+  configuration. `Ty.ok` admits one, `vec (dtor f u)` (`Ty.vecD`), as a
+  binding's own type only, the drained `Vec`, and refuses it as any part of
+  another type: a field, a payload, an element, a view's element, a share's,
+  a lock's or a cell's payload (each composite asks `!vecD` of its parts,
+  and `RhsT.pair` / `inl` / `inr` / `arcNew` / `lockNew` / `cellNew` of what
+  moves in). No binder binds one yet: `letv` refuses it (it holds a
+  destructor value) and `letd` asks a struct or an enum, so a call's
+  result, a `sink` parameter or an `unpair` field of that type cannot reach
+  a binding either (`movedFirst` asks a `letd`). So every `Vec` but a
+  binding's top one has destructor-free elements at any depth
+  (`A2.Dtor.vecs_dtor_free`), a top one's elements are destructor-free or
+  of a destructor type (`A2.Dtor.vec_elems_dtor_free`,
+  `A2.Dtor.new_dtor_free`), and no typed state has a binding of the second
+  kind. Hence `free`, a truncation, an element set, `pop`, `popFront` and
+  `withElem` release or check out no destructor value, except a share's
+  payload or a closure's environment (3c, 3d): an element may be an `Arc`
+  or a lock of a destructor value, or a closure whose environment holds
+  one, and nurlc runs that destructor when the element's drop drops the
+  last share or the closure. This is stricter than nurlc (the list below),
+  which drops a `Vec`'s elements in index order, each running its
+  destructor.
   The drain that lifts this is designed (`A2/DROP_DESIGN.md`, staging
-  item 2) and its step is in the calculus: `vec_remove y 0`
-  (`Rhs.popFront`, element 0 moves out, typed as `vec_pop`) preserves the
-  invariant (`A2.rhs_popFront`), so the drain can take elements in nurlc's
-  index order. That is proved for today's element types only: no typed
-  state holds a `Vec` of destructor values yet, so the theorem's
-  destructor-element instance (and `rhs_pop` / `MInv.perm` under the drain's
-  `Ty.okB`) comes with the drain. The drain itself, a `Vec` of destructor
-  values bound by `letd` and drained at its end, is not yet in (Agora #542).
+  item 2), and two of its parts are in the calculus: the type (above) and
+  its step, `vec_remove y 0` (`Rhs.popFront`, element 0 moves out, typed as
+  `vec_pop`), which preserves the invariant (`A2.rhs_popFront`), so the
+  drain can take elements in nurlc's index order. That is proved for every
+  element type `Ty.ok` admits, a destructor type included, but no typed
+  state reaches the destructor-element instance until the binder lands.
+  The drain itself, a `Vec` of destructor values bound by `letd` and
+  drained at its end, is not yet in (Agora #542).
   (On an empty `Vec`, `vec_pop` and `vec_remove` return `None` in nurlc; the
   calculus's `pop` / `popFront` panic there instead, an unwrap: a program
   that matches the option is the same program with the `None` arm taken

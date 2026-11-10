@@ -131,9 +131,9 @@ theorem scopeD_panic_runs_dtor {P : Prog} {x : Var} {f : Nat} {m m1 : Mem} {s : 
     has elements that own no destructor value, or are of a destructor type
     themselves: the drained `Vec` (`Ty.vecD`), which only a binding's own type
     may be (`vecs_dtor_free`: anywhere else in a type a `Vec`'s elements own
-    none).  So `free`, a truncation or an element set, which release elements
-    with no code, are typed only for a `Vec` whose elements own none
-    (`RhsT.free`, `StmtT.edit`'s `dtorFree` premises); what a `Vec`'s drop
+    none).  No binder binds a `Vec` of the second kind yet (`letv` refuses
+    it, `letd` asks a struct or an enum: the drain's binder is A2-drop.3b's
+    milestone 2b), so no typed state has one; what a `Vec`'s drop
     releases may still run a destructor in nurlc: the payload of a share whose
     last share it drops, or a closure's environment, A2-drop.3c and 3d. -/
 theorem vec_elems_dtor_free {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {E : Entry} {t : Ty}
