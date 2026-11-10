@@ -3093,6 +3093,13 @@ unsafe @ note_unsafe_item s pos s what → v {
 // (`. b items`): its arguments with that field's binding in its place, and
 // those its result may borrow from (bck_call_lend_srcs). `` otherwise.
 : ~ s g_call_roots ``
+// …and the same roster for the lend chain (__mem_payload_local_lend1): an
+// argument that is itself a call that may lend out of a local of this frame
+// (`( slice_at [String] ( slice_from_vec [String] vs ) 0 )`) stands there as
+// a name of its own, `__alr#N`, whose pairs (`__vljk` / `__vljr`, kept in
+// g_pending_impl) are that call's — agora #560. `` when no argument is one.
+: ~ s g_call_lroots ``
+: ~ i g_alr_n 0
 : ~ s g_call_lend_roots ``
 // What the call last generated said of itself (gen_call): one of the
 // arguments it may lend is no bare name but may lend (gen_assign's #412
@@ -4535,7 +4542,15 @@ unsafe @ nurl_cg_lbl i h s hint → s {
 // payload): __mem_payload_local_lend1 follows it to the local it views
 // (agora #553).
 @ __note_view_lend i syms s name s llty i rhs_tt s rhs_val → v {
-    ? | != rhs_tt TT_LPAREN == 0 ( nurl_str_starts llty `%Slice__` ) { ^ v } {}
+    ? == 0 ( nurl_str_starts llty `%Slice__` ) { ^ v } {}
+    // (A slice bound from another, `: ( Slice String ) s2 sl`, views what
+    // that one views: its pairs — agora #560.)
+    ? & ( is_ident_tok rhs_tt ) != 0 ( nurl_sym_len2 syms rhs_val `__vljk` ) {
+        ( nurl_sym_def syms ( nurl_str_cat name `__vljk` ) ( nurl_sym_get2 syms rhs_val `__vljk` ) )
+        ( nurl_sym_def syms ( nurl_str_cat name `__vljr` ) ( nurl_sym_get2 syms rhs_val `__vljr` ) )
+        ^ v
+    } {}
+    ? != rhs_tt TT_LPAREN { ^ v } {}
     ( nurl_sym_def syms ( nurl_str_cat name `__vljk` ) ( __lend_pairs_of syms rhs_tt rhs_val F ) )
     ( nurl_sym_def syms ( nurl_str_cat name `__vljr` ) ( __lend_pairs_of syms rhs_tt rhs_val T ) )
 }
@@ -4639,6 +4654,7 @@ unsafe @ nurl_cg_lbl i h s hint → s {
     ? == et TT_LPAREN {
         ? == 0 ( nurl_sym_len syms `__last_call_lend_key__` ) { ^ ( nurl_str_cat `` `` ) } {}
         ? ! roots { ^ ( nurl_sym_get syms `__last_call_lend_key__` ) } {}
+        ? != 0 ( nurl_str_len g_call_lroots ) { ^ ( nurl_str_cat g_call_lroots `` ) } {}
         ? != 0 ( nurl_str_len g_call_roots ) { ^ ( nurl_str_cat g_call_roots `` ) } {}
         ^ ( nurl_sym_get syms `__last_call_args__` )
     } {}
@@ -4676,7 +4692,87 @@ unsafe @ nurl_cg_lbl i h s hint → s {
 @ mem_ret_local_lend i syms i cg → s {
     : s key ( nurl_sym_get syms `__last_call_lend_key__` )
     : s args ( nurl_sym_get syms `__last_call_args__` )
-    ^ ( mem_local_lend_of syms cg key args )
+    // (An argument that is itself a lend — a view bound from a call, `sl`
+    // of `: ( Slice String ) sl ( slice_from_vec vs )`, or a `??` payload —
+    // is followed to the local it is lent out of, as `^ e` of a binding of
+    // the same call is: `^ ( slice_at [String] sl 0 )` went to the caller
+    // as its own while vs's drop freed it — agora #560.)
+    : s roots ? != 0 ( nurl_str_len g_call_lroots ) ( nurl_str_cat g_call_lroots `` ) ? != 0 ( nurl_str_len g_call_roots ) ( nurl_str_cat g_call_roots `` ) ( nurl_str_cat args `` )
+    : s l0 ( mem_local_lend_of syms cg key args )
+    ? ! ( __roots_have_lend_chain syms roots ) { ^ l0 } {}
+    // (…on top of what the arguments by name answer: the chain adds, it
+    // takes nothing away.)
+    : s t0 ( nurl_sym_get syms `__last_local_lend__` )
+    : s l1 ( __mem_payload_local_lend1 syms cg key roots )
+    : s t1 ( nurl_sym_get syms `__last_local_lend__` )
+    ( nurl_sym_def syms `__last_local_lend__` ? == 0 ( nurl_str_len t0 ) ( nurl_str_cat t1 `` ) ? == 0 ( nurl_str_len t1 ) ( nurl_str_cat t0 `` ) ( nurl_str_cat3 t0 ` ` t1 ) )
+    ^ ( __or_i1 cg l0 l1 )
+}
+
+// `a | b` of two i1 operands, either `` for none.
+@ __or_i1 i cg s a s b → s {
+    ? == 0 ( nurl_str_len a ) { ^ ( nurl_str_cat b `` ) } {}
+    ? == 0 ( nurl_str_len b ) { ^ ( nurl_str_cat a `` ) } {}
+    : s o ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print o ) ( nurl_print ` = or i1 ` ) ( nurl_print a ) ( nurl_print `, ` ) ( nurl_print b ) ( nurl_print `\n` )
+    ^ o
+}
+
+// Is one of `roots0` (a call's argument roots) a binding that is itself a
+// lend of something — `__pljk` (a `??` payload, a binding of a lending
+// call) or `__vljk` (a view bound from a call) — with no owner slot of its
+// own, the shape __mem_payload_local_lend1 follows down the chain?
+@ __roots_have_lend_chain i syms s roots0 → b {
+    : ~ s roots ( nurl_str_cat roots0 `` )
+    ~ != 0 ( nurl_str_len roots ) {
+        : s r ( str_first_word roots ) = roots ( str_skip_word roots )
+        ? & ! ( seq r `-` ) < ( nurl_str_find r `.` ) 0 {
+            : s up ( mem_udrop_ptr_of syms r )
+            ? & | | == 0 ( nurl_str_len up ) & != 0 ( nurl_str_len up ) != 0 ( nurl_sym_len2 syms up `__alias` ) != 0 ( nurl_sym_len2 syms r `__plbind` ) | != 0 ( nurl_sym_len2 syms r `__pljk` ) != 0 ( nurl_str_len ( __vlj_get syms r `__vljk` ) ) { ^ T } {}
+        } {}
+    }
+    ^ F
+}
+
+// A view's pairs (`__vljk` / `__vljr`): a binding's, or a call argument's
+// stand-in `__alr#N` (g_call_lroots), kept in g_pending_impl.
+@ __vlj_get i syms s r s suffix → s {
+    ? != 0 ( nurl_str_starts r `__alr#` ) { ^ ( nurl_sym_get2 g_pending_impl r suffix ) } {}
+    ^ ( nurl_sym_get2 syms r suffix )
+}
+
+// May a call whose arguments' roots are `roots0` lend out of a local of
+// this frame — one of them a local that owns its value, a local struct
+// owning the field read, or a lend of one (__roots_have_lend_chain)?
+@ __roots_may_lend_local i syms s roots0 → b {
+    : ~ s roots ( nurl_str_cat roots0 `` )
+    ~ != 0 ( nurl_str_len roots ) {
+        : s r ( str_first_word roots ) = roots ( str_skip_word roots )
+        ? ! ( seq r `-` ) {
+            : i rdot ( nurl_str_find r `.` )
+            : s rb ? > rdot 0 ( nurl_str_slice r 0 rdot ) ( nurl_str_cat r `` )
+            : s up ( mem_udrop_ptr_of syms rb )
+            ? & != 0 ( nurl_str_len up ) | == 0 ( nurl_sym_len2 syms up `__pname` ) ( __param_owned_slot syms up ) { ^ T } {}
+            ? & > rdot 0 ( __local_owns_fields syms rb ) { ^ T } {}
+        } {}
+    }
+    ^ ( __roots_have_lend_chain syms roots0 )
+}
+
+// The stand-in for a call argument that is itself a call (the one just
+// generated) that may lend out of a local of this frame: `__alr#N`, its
+// pairs that call's — `` when it cannot.
+unsafe @ __arg_lend_root i syms → s {
+    : s key ( nurl_sym_get syms `__last_call_lend_key__` )
+    ? == 0 ( nurl_str_len key ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s roots ? != 0 ( nurl_str_len g_call_lroots ) ( nurl_str_cat g_call_lroots `` ) ? != 0 ( nurl_str_len g_call_roots ) ( nurl_str_cat g_call_roots `` ) ( nurl_sym_get syms `__last_call_args__` )
+    ? ! ( __roots_may_lend_local syms roots ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s nm ( nurl_str_cat `__alr#` ( nurl_str_int g_alr_n ) )
+    = g_alr_n + g_alr_n 1
+    ( nurl_sym_set g_pending_impl ( nurl_str_cat nm `__vljk` ) key )
+    ( nurl_sym_set g_pending_impl ( nurl_str_cat nm `__vljr` ) roots )
+    ( nurl_sym_set g_pending_impl ( nurl_str_cat nm `__show` ) ( nurl_str_cat3 `( ` ( bck_fn_show ( str_first_word key ) ) ` … )` ) )
+    ^ nm
 }
 
 // …the same question for the call `key` (`callee generic`) with the
@@ -4795,6 +4891,79 @@ unsafe @ nurl_cg_lbl i h s hint → s {
         : s sb ( nurl_sym_get2 syms up `__sborrow` )
         : b dynown & != 0 ( nurl_str_len sb ) == ( nurl_str_get sb 0 ) 64
         : b fown & & > rdot 0 == 0 ( nurl_str_len up ) ( __local_owns_fields syms rb )
+        // (A root that is a cursor over a binding's value — a `??` payload
+        // of a match over a local, `inner` of `: ?( Vec String ) ov (
+        // vec_pop vv )  ?? ov { T inner → … }`: what is lent out of it is
+        // lent out of that binding, one of this frame wherever its drop is
+        // still due at the `^`. Taken for none, `^ e` of `?? ( vec_get inner
+        // 0 )` went to the caller as its own while ov's drop freed it: agora
+        // #560.)
+        : s rpb ( nurl_sym_get2 syms r `__plbind` )
+        ? & & & < rdot 0 != 0 ( nurl_str_len up ) != 0 ( nurl_sym_len2 syms up `__alias` ) & != 0 ( nurl_str_len rpb ) == 0 ( nurl_str_len ( str_skip_word rpb ) ) {
+            : s bup ( mem_udrop_ptr_of syms rpb )
+            ? & & != 0 ( nurl_str_len bup ) == 0 ( nurl_sym_len2 syms bup `__pname` ) == 0 ( nurl_sym_len2 syms bup `__alias` ) {
+                : ~ s bone ``
+                : ~ i bj 0
+                ~ < bj nroots {
+                    = bone ( nurl_str_cat3 bone ? == bj 0 `` ` ` ? == bj idx rpb `-` )
+                    = bj + bj 1
+                }
+                : s bl0 ( mem_local_lend_of syms cg key bone )
+                : s btri ( nurl_sym_get syms `__last_local_lend__` )
+                ? != 0 ( nurl_str_len bl0 ) {
+                    : s bfl ( mem_udrop_flag_get syms cg bup )
+                    : s bl ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print bl ) ( nurl_print ` = and i1 ` ) ( nurl_print bl0 ) ( nurl_print `, ` ) ( nurl_print bfl ) ( nurl_print `\n` )
+                    = lends ( nurl_str_cat3 lends ? == 0 ( nurl_str_len lends ) `` ` ` btri )
+                    ? == 0 ( nurl_str_len acc ) { = acc ( nurl_str_cat bl `` ) } {
+                        : s bacc ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print bacc ) ( nurl_print ` = or i1 ` ) ( nurl_print acc ) ( nurl_print `, ` ) ( nurl_print bl ) ( nurl_print `\n` )
+                        = acc bacc
+                    }
+                } {}
+            } {}
+        } {}
+        // (A root whose value it owns on some runs only — `__sborrow` `dyn`,
+        // the payload of a call handing back its own or a lend, `inner` of
+        // `?? ( vec_pop [( Vec String )] vv ) { T inner → … }`: dropped on
+        // the way out on the runs its flag says it owns, so a lend out of it
+        // is one of this frame there, and a lend of what it was lent out of
+        // on the others. Taken for neither, `^ e` of `?? ( vec_get inner 0 )`
+        // went to the caller as its own while inner's drop freed it: agora
+        // #560.)
+        ? & & & & < rdot 0 != 0 ( nurl_str_len up ) ( seq sb `dyn` ) == 0 ( nurl_sym_len2 syms up `__alias` ) == 0 ( nurl_sym_len2 syms r `__plbind` ) {
+            : ~ s done ``
+            : ~ i j 0
+            ~ < j nroots {
+                = done ( nurl_str_cat3 done ? == j 0 `` ` ` ? == j idx rb `-` )
+                = j + j 1
+            }
+            : s dl0 ( mem_local_lend_of syms cg key done )
+            : s dtri ( nurl_sym_get syms `__last_local_lend__` )
+            ? != 0 ( nurl_str_len dl0 ) {
+                : ~ s dfl ( mem_udrop_flag_get syms cg up )
+                ? & != 0 ( nurl_sym_len2 syms r `__pljk` ) < g_pl_chain_depth 8 {
+                    = g_pl_chain_depth + g_pl_chain_depth 1
+                    : s dsub ( mem_payload_local_lend syms cg r )
+                    = g_pl_chain_depth - g_pl_chain_depth 1
+                    : s dsubtri ( nurl_sym_get syms `__last_local_lend__` )
+                    ? != 0 ( nurl_str_len dsub ) {
+                        : s dor ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print dor ) ( nurl_print ` = or i1 ` ) ( nurl_print dfl ) ( nurl_print `, ` ) ( nurl_print dsub ) ( nurl_print `\n` )
+                        = dfl dor
+                        ? != 0 ( nurl_str_len dsubtri ) { = lends ( nurl_str_cat3 lends ? == 0 ( nurl_str_len lends ) `` ` ` dsubtri ) } {}
+                    } {}
+                } {}
+                : s dl ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print dl ) ( nurl_print ` = and i1 ` ) ( nurl_print dl0 ) ( nurl_print `, ` ) ( nurl_print dfl ) ( nurl_print `\n` )
+                = lends ( nurl_str_cat3 lends ? == 0 ( nurl_str_len lends ) `` ` ` dtri )
+                ? == 0 ( nurl_str_len acc ) { = acc ( nurl_str_cat dl `` ) } {
+                    : s dacc ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print dacc ) ( nurl_print ` = or i1 ` ) ( nurl_print acc ) ( nurl_print `, ` ) ( nurl_print dl ) ( nurl_print `\n` )
+                    = acc dacc
+                }
+            } {}
+        } {}
         ? | fown & & != 0 ( nurl_str_len up ) == 0 ( nurl_sym_len2 syms up `__alias` ) | == 0 ( nurl_str_len sb ) dynown {
             // This root alone, every other position `-`.
             : ~ s one ``
@@ -4849,12 +5018,25 @@ unsafe @ nurl_cg_lbl i h s hint → s {
             // (Only a root with no owner slot of its own, or a `??` payload
             // that is a cursor over its match's binding, `__plbind` /
             // `__alias`: one that owns answers by its own flags, above.)
-            ? & & & & < rdot 0 | == 0 ( nurl_str_len up ) & != 0 ( nurl_sym_len2 syms up `__alias` ) != 0 ( nurl_sym_len2 syms r `__plbind` ) | rpl != 0 ( nurl_sym_len2 syms r `__vljk` ) ! ( seq key `__field__` ) < g_pl_chain_depth 8 {
+            ? & & & < rdot 0 | == 0 ( nurl_str_len up ) & != 0 ( nurl_sym_len2 syms up `__alias` ) != 0 ( nurl_sym_len2 syms r `__plbind` ) | rpl != 0 ( nurl_str_len ( __vlj_get syms r `__vljk` ) ) < g_pl_chain_depth 8 {
                 = g_pl_chain_depth + g_pl_chain_depth 1
-                : s sub ? rpl ( mem_payload_local_lend syms cg r ) ( __mem_pairs_local_lend syms cg ( nurl_sym_get2 syms r `__vljk` ) ( nurl_sym_get2 syms r `__vljr` ) )
+                : s sub ? rpl ( mem_payload_local_lend syms cg r ) ( __mem_pairs_local_lend syms cg ( __vlj_get syms r `__vljk` ) ( __vlj_get syms r `__vljr` ) )
                 = g_pl_chain_depth - g_pl_chain_depth 1
                 : s subtri ( nurl_sym_get syms `__last_local_lend__` )
-                ? != 0 ( nurl_str_len sub ) {
+                // (A payload matched out of a field of r, `?? . r o { T e → …
+                // }` with r a `??` payload: part of r, so lent out of a local
+                // wherever r was — no callee to ask. Taken for none, `^ e`
+                // went to the caller as its own while the local's drop freed
+                // it: agora #560.)
+                ? & ( seq key `__field__` ) != 0 ( nurl_str_len sub ) {
+                    ? != 0 ( nurl_str_len subtri ) { = lends ( nurl_str_cat3 lends ? == 0 ( nurl_str_len lends ) `` ` ` subtri ) } {}
+                    ? == 0 ( nurl_str_len acc ) { = acc ( nurl_str_cat sub `` ) } {
+                        : s fo ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print fo ) ( nurl_print ` = or i1 ` ) ( nurl_print acc ) ( nurl_print `, ` ) ( nurl_print sub ) ( nurl_print `\n` )
+                        = acc fo
+                    }
+                } {}
+                ? & ! ( seq key `__field__` ) != 0 ( nurl_str_len sub ) {
                     : s cn ( str_first_word key )
                     : s gn ( str_first_word ( str_skip_word key ) )
                     : s lo ( nurl_cg_reg cg )
@@ -5946,7 +6128,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
         // (…an option of a Vec of values that cannot be copied as much as
         // an option of one: neither copies, agora #459.)
         ? & ! ret_call_copied != 0 ( nurl_str_len __rll ) { ? | ( __nc_held_ty __crt ) & ( __type_needs_drop __crt syms ) ! ( __clone_supported __crt syms ) {
-                ( __park_nc_local_lend lex ( nurl_sym_get syms `__last_local_lend__` ) ( nurl_sym_get syms `__last_call_args__` ) __crt )
+                ( __park_nc_local_lend syms lex ( nurl_sym_get syms `__last_local_lend__` ) ? != 0 ( nurl_str_len g_call_lroots ) ( nurl_str_cat g_call_lroots `` ) ? != 0 ( nurl_str_len g_call_roots ) ( nurl_str_cat g_call_roots `` ) ( nurl_sym_get syms `__last_call_args__` ) __crt )
             } {} } {}
     } {}
     // `^ ( g x )` where x is a raw string this frame owns and drops on the
@@ -6082,32 +6264,48 @@ unsafe @ gen_ret i lex i syms i cg → s {
     // (no allocation), else copied, else refused at module end, as `^ p`
     // itself is. Lent elsewhere (out of a parameter), the lend answers as
     // before (agora #553).
-    ? & & == ret_eff_tt TT_DOT ! ret_field_copy != 0 ( nurl_sym_len2 syms ret_first_root `__pljk` ) {
+    // (…and of a nested field, `^ . . p q s`: the binding the path starts
+    // at is the one the field read recorded, __last_member_root__ — agora
+    // #560.)
+    : s ret_pl_root ? & == ret_eff_tt TT_DOT == 0 ( nurl_str_len ret_first_root ) ( nurl_sym_get syms `__last_member_root__` ) ret_first_root
+    ? & & == ret_eff_tt TT_DOT ! ret_field_copy != 0 ( nurl_sym_len2 syms ret_pl_root `__pljk` ) {
         : s pfr ( nurl_sym_get syms `__last_field_read__` )
         : s pf_ptr ( str_first_word pfr )
         : s pf_sty ( str_first_word ( str_skip_word pfr ) )
         : s pf_idx ( str_first_word ( str_skip_word ( str_skip_word pfr ) ) )
         : s pf_fty ( str_first_word ( str_skip_word ( str_skip_word ( str_skip_word pfr ) ) ) )
         : s pf_rt ( nurl_get_last_type )
-        ? & & != 0 ( nurl_str_len pf_ptr ) ( __is_handle_ty pf_fty ) == 0 g_bck_closure_depth {
-            : ~ s pfl ( mem_payload_local_lend syms cg ret_first_root )
+        // (A field that owns heap data but is no handle — an option of one,
+        // `^ . r o` of `: R { ?String o }`, a struct — is copied: agora #560.)
+        : b pf_hnd ( __is_handle_ty pf_fty )
+        // (In a closure's body a lend handed back is copied whatever it was
+        // lent out of — a local, a capture or a parameter: its callers take
+        // every result as their own (__phi_lends_params_only). Left lent,
+        // `^ . p s` of a `??` payload of `( vec_get [P] qs 0 )` was freed by
+        // the caller and again by the Vec's owner: agora #560.)
+        ? & & & != 0 g_bck_closure_depth != 0 ( nurl_str_len pf_ptr ) | pf_hnd ( __type_needs_drop pf_rt syms ) ( __clone_supported pf_rt syms ) {
+            = val ( mem_emit_cloneif cg pf_rt val `1` )
+            = ret_field_copy T
+        } {}
+        ? & & & ! ret_field_copy != 0 ( nurl_str_len pf_ptr ) | pf_hnd ( __type_needs_drop pf_rt syms ) == 0 g_bck_closure_depth {
+            : ~ s pfl ( mem_payload_local_lend syms cg ret_pl_root )
             ? != 0 ( nurl_str_len pfl ) {
                 // (Not where the binding the payload is read out of owns it
                 // on this path: its own drop answers then — agora #335.)
-                : s pfo ( __payload_owner_flag syms cg ret_first_root )
+                : s pfo ( __payload_owner_flag syms cg ret_pl_root )
                 ? != 0 ( nurl_str_len pfo ) { = pfl ( __and_not cg pfl pfo ) } {}
                 // (Copied under a `;` defer armed before this `^`: the chain
                 // runs while ps still holds its element and may read it —
                 // left lent there, ps's drop freed what the caller got;
                 // agora #561.)
-                : b pf_live & ( __vget_live syms pf_ptr ) == 0 ( nurl_sym_len g_fn_escapes `__defer_top_fn__` )
+                : b pf_live & & pf_hnd ( __vget_live syms pf_ptr ) == 0 ( nurl_sym_len g_fn_escapes `__defer_top_fn__` )
                 ? | pf_live ( __clone_supported pf_rt syms ) {
                     ? pf_live { ( mem_vget_field_consume syms cg pf_ptr pf_sty pf_idx pf_fty val pfl ) } { = val ( mem_emit_cloneif cg pf_rt val pfl ) }
                     = ret_pl_copied T
                     = ret_pl_own pfl
                     ( mem_hown_dyn_lend syms ( nurl_sym_get syms `__last_local_lend__` ) )
                 } { ? ( __nc_held_ty pf_rt ) {
-                        ( __park_nc_local_lend lex ( nurl_sym_get syms `__last_local_lend__` ) ( nurl_sym_get2 syms ret_first_root `__pljr` ) pf_rt )
+                        ( __park_nc_local_lend syms lex ( nurl_sym_get syms `__last_local_lend__` ) ( nurl_sym_get2 syms ret_pl_root `__pljr` ) pf_rt )
                     } {} }
             } {}
         } {}
@@ -6217,7 +6415,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
                         = ret_pl_own __pll
                         ( mem_hown_dyn_lend syms ( nurl_sym_get syms `__last_local_lend__` ) )
                     } { ? ( __nc_held_ty __plt ) {
-                            ( __park_nc_local_lend lex ( nurl_sym_get syms `__last_local_lend__` ) ( nurl_sym_get2 syms ret_first_val `__pljr` ) __plt )
+                            ( __park_nc_local_lend syms lex ( nurl_sym_get syms `__last_local_lend__` ) ( nurl_sym_get2 syms ret_first_val `__pljr` ) __plt )
                         } {} }
                 } {}
             } {
@@ -6250,7 +6448,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
                         = ret_pl_slot T
                         ( mem_hown_dyn_lend syms ( nurl_sym_get syms `__last_local_lend__` ) )
                     } { ? ( __nc_held_ty __slt ) {
-                            ( __park_nc_local_lend lex ( nurl_sym_get syms `__last_local_lend__` ) ( nurl_sym_get2 syms ret_first_val `__pljr` ) __slt )
+                            ( __park_nc_local_lend syms lex ( nurl_sym_get syms `__last_local_lend__` ) ( nurl_sym_get2 syms ret_first_val `__pljr` ) __slt )
                         } {} }
                 } {}
             }
@@ -16305,6 +16503,10 @@ unsafe @ gen_call i lex i syms i cg → s {
     // still lend what they read: a field, a join, a call that may lend —
     // not a literal or a fresh value (agora #412).
     : ~ s arg_lendy ``
+    // …and the roster for the lend chain, kept once an argument is a call
+    // that may lend out of a local (g_call_lroots).
+    : ~ s arg_lroots ``
+    : ~ b arg_has_lroot F
     // (…and, in a closure body, the bindings those name — what a body local
     // bound to the call may be read out of besides the lent names, for
     // __clo_deriv_note; `*` when one has no source expression here. Agora
@@ -17753,6 +17955,19 @@ unsafe @ gen_call i lex i syms i cg → s {
         = arg_idents ? == 0 ( nurl_str_len arg_idents )
         ( nurl_str_cat bck_arg_nm `` )
         ( nurl_str_cat3 arg_idents ` ` bck_arg_nm )
+        // (…and for the lend chain: an argument that is a call that may lend
+        // out of a local of this frame stands as `__alr#N` — agora #560.)
+        : s __alr ? & & ( seq bck_arg_nm `-` ) == arg_eff_tt TT_LPAREN g_call_may_lend ( __arg_lend_root syms ) ``
+        ? | arg_has_lroot != 0 ( nurl_str_len __alr ) {
+            ? ! arg_has_lroot {
+                : s __lrb ? arg_has_froot ( nurl_str_cat arg_roots `` ) ( nurl_str_cat arg_idents `` )
+                : i __lrs ( str_last_space __lrb )
+                = arg_lroots ? < __lrs 0 `` ( nurl_str_slice __lrb 0 __lrs )
+                = arg_has_lroot T
+            } {}
+            : s __lrw ? != 0 ( nurl_str_len __alr ) __alr ? != 0 ( nurl_str_len arg_froot ) arg_froot bck_arg_nm
+            = arg_lroots ? == 0 ( nurl_str_len arg_lroots ) ( nurl_str_cat __lrw `` ) ( nurl_str_cat3 arg_lroots ` ` __lrw )
+        } {}
         // (A call: one that may lend what it was handed — as the argument's
         // own call left g_call_may_lend — or one not compiled yet.)
         ? ( seq bck_arg_nm `-` ) {
@@ -19236,6 +19451,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         = g_call_roots ( nurl_str_cat arg_roots `` )
         = g_call_lend_roots ( __word_union ( bck_ret_alias_idents __lend_ix arg_roots ) ( bck_ret_alias_idents __ra_lent arg_roots ) )
     } { ? != 0 ( nurl_str_len g_call_roots ) { = g_call_roots `` = g_call_lend_roots `` } {} }
+    ? arg_has_lroot { = g_call_lroots ( nurl_str_cat arg_lroots `` ) } { ? != 0 ( nurl_str_len g_call_lroots ) { = g_call_lroots `` } {} }
     ? != 0 g_rpg_on { ( nurl_sym_set syms `__last_call_argreads__` __cargreads ) } {}
     ( __cc_note_call syms call_name fname cc_arg_cs cc_arg_tys arg_idents ( nurl_sym_get syms call_name ) __call_line ( nurl_lex_filename lex ) __callee_shadowed )
     : s __lend_key ? __callee_shadowed `` ( nurl_str_cat3 call_name ` ` fname )
@@ -21562,6 +21778,9 @@ unsafe @ gen_match i lex i syms i cg → s {
     // (The field read is kept now — the arms overwrite it — and judged
     // only where such a payload is registered: __match_scrut_lent.)
     : s match_scrut_field ? == match_first_tt TT_DOT ( nurl_sym_get syms `__last_field_read__` ) ``
+    // (…and the binding the field path starts at, for a struct that has no
+    // name on its slot — a `??` payload's, agora #560.)
+    : s match_scrut_root ? == match_first_tt TT_DOT ( nurl_sym_get syms `__last_member_root__` ) ``
 
     // A `?? ( f … )` whose scrutinee is a direct call has no binding
     // name, so the payload metadata below (keyed on `<name>__res_nurl_T`
@@ -22415,7 +22634,12 @@ unsafe @ gen_match i lex i syms i cg → s {
                         // unless it is copied: the `__field__` pair,
                         // mem_local_lend_of; agora #300.)
                         ? & == match_first_tt TT_DOT != 0 ( nurl_str_len match_scrut_field ) {
-                            : s __mfb ( nurl_sym_get2 syms ( str_first_word match_scrut_field ) `__bname` )
+                            : s __mfb0 ( nurl_sym_get2 syms ( str_first_word match_scrut_field ) `__bname` )
+                            // (A payload's struct, `?? . r o` of `T r →`,
+                            // has no name on its slot: the path's root —
+                            // its own pairs follow what r was lent out of,
+                            // agora #560.)
+                            : s __mfb ? & == 0 ( nurl_str_len __mfb0 ) != 0 ( nurl_sym_len2 syms match_scrut_root `__pljk` ) match_scrut_root __mfb0
                             ? != 0 ( nurl_str_len __mfb ) {
                                 : s __mff ( nurl_str_cat3 `__field__` `\t` __mfb )
                                 : s __mfo ( __pairs_zip ( nurl_sym_get2 syms __mfb `__pljk` ) ( nurl_sym_get2 syms __mfb `__pljr` ) )
@@ -46475,7 +46699,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
                             ( nurl_print `, ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print ` ` ) ( nurl_print __io_lo ) ( nurl_print `)` ) ( emit_dbg_eol )
                         } {}
                     } { ? & ( __nc_held_ty vt ) == 0 g_bck_closure_depth {
-                            ( __park_nc_local_lend lex ( nurl_sym_get syms `__last_local_lend__` ) ( nurl_sym_get syms `__last_call_args__` ) vt )
+                            ( __park_nc_local_lend syms lex ( nurl_sym_get syms `__last_local_lend__` ) ( nurl_sym_get syms `__last_call_args__` ) vt )
                         } {} }
                 } {}
             } {}
@@ -56670,7 +56894,7 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
                 // local releases it on the way out. Agora #546.)
                 : s __t_sll ? ( seq ( nurl_sym_get2 syms __t_up `__alias_part` ) `1` ) `` ( mem_payload_local_lend syms cg __try_inner_v )
                 ? & & != 0 ( nurl_str_len __t_sll ) ! ( __clone_supported vt syms ) ( __nc_held_ty vt ) {
-                    ( __park_nc_local_lend lex ( nurl_sym_get syms `__last_local_lend__` ) ( nurl_sym_get2 syms __try_inner_v `__pljr` ) vt )
+                    ( __park_nc_local_lend syms lex ( nurl_sym_get syms `__last_local_lend__` ) ( nurl_sym_get2 syms __try_inner_v `__pljr` ) vt )
                 } {}
                 // (…a binding of what a call may lend: as that call, agora
                 // #200.)
@@ -69521,7 +69745,37 @@ unsafe @ __sx_names_capture i syms s sx → b {
 // (mem_local_lend_of's `__last_local_lend__`), the call's argument names
 // (`-` for anything else), judged at module end on the callee's final
 // summary (resolve_nc_local_lends; agora #187).
-@ __park_nc_local_lend i lex s triples s args s ty → v {
+// The name a diagnostic gives root `r` of a lend: r itself, or — for a view
+// bound from a call, a `??` payload with no owner slot, or a call
+// argument's stand-in `__alr#N` — the first root down its chain that has
+// one (`ds` for `( slice_at [D] ( slice_from_vec [D] ds ) 0 )`).
+@ __lend_root_show i syms s root0 → s {
+    : ~ s r ( nurl_str_cat root0 `` )
+    : ~ i hops 0
+    ~ < hops 8 {
+        ? | ( seq r `-` ) == 0 ( nurl_str_len r ) { ^ ( nurl_str_cat root0 `` ) } {}
+        : b alr != 0 ( nurl_str_starts r `__alr#` )
+        : s up ? alr `` ( mem_udrop_ptr_of syms r )
+        ? != 0 ( nurl_str_len up ) { ^ r } {}
+        : s vr ( __vlj_get syms r `__vljr` )
+        : s nx0 ? != 0 ( nurl_str_len vr ) vr ? alr `` ( nurl_sym_get2 syms r `__pljr` )
+        ? == 0 ( nurl_str_len nx0 ) { ^ ? alr ( nurl_sym_get2 g_pending_impl r `__show` ) r } {}
+        // (The first named root of its first pair.)
+        : i nl ( nurl_str_find nx0 `\n` )
+        : ~ s ws ? < nl 0 ( nurl_str_cat nx0 `` ) ( nurl_str_slice nx0 0 nl )
+        : ~ s nx ``
+        ~ & == 0 ( nurl_str_len nx ) != 0 ( nurl_str_len ws ) {
+            : s w ( str_first_word ws ) = ws ( str_skip_word ws )
+            ? ! ( seq w `-` ) { = nx w } {}
+        }
+        ? == 0 ( nurl_str_len nx ) { ^ ? alr ( nurl_sym_get2 g_pending_impl r `__show` ) r } {}
+        = r nx
+        = hops + hops 1
+    }
+    ^ r
+}
+
+@ __park_nc_local_lend i syms i lex s triples s args s ty → v {
     // (A trait object's holdings have their own rule: agora #156.)
     ? != 0 ( nurl_str_starts ty `%dyn.` ) { ^ v } {}
     // (A closure's result is judged whole, every lend refused:
@@ -69546,6 +69800,9 @@ unsafe @ __sx_names_capture i syms s sx → b {
         : ~ s an ( nurl_str_cat args `` )
         : ~ i k ( nurl_str_to_int ix )
         ~ > k 0 { = an ( str_skip_word an ) = k - k 1 }
+        // (Named by the local the lend comes out of: a view or a call
+        // argument's stand-in is followed to it — agora #560.)
+        = an ( __lend_root_show syms ( str_first_word an ) )
         : i n ( nurl_str_to_int ( nurl_sym_get g_pending_impl `nclocal_n` ) )
         ( nurl_sym_def g_pending_impl `nclocal_n` ( nurl_str_int + n 1 ) )
         ( nurl_sym_def g_pending_impl ( nurl_str_cat `nclocal#` ( nurl_str_int n ) )
@@ -69592,7 +69849,7 @@ unsafe @ __sx_names_capture i syms s sx → b {
         } {}
         = idx + idx 1
     }
-    ? != 0 ( nurl_str_len acc ) { ( __park_nc_local_lend lex acc args ty ) } {}
+    ? != 0 ( nurl_str_len acc ) { ( __park_nc_local_lend syms lex acc args ty ) } {}
 }
 
 @ resolve_nc_local_lends i syms → v {
@@ -69603,13 +69860,15 @@ unsafe @ __sx_names_capture i syms s sx → b {
         : s cn ( str_first_word r ) = r ( str_skip_word r )
         : s gn ( str_first_word r ) = r ( str_skip_word r )
         : s ix ( str_first_word r ) = r ( str_skip_word r )
-        : s an ( str_first_word r ) = r ( str_skip_word r )
+        : ~ s an ( str_first_word r ) = r ( str_skip_word r )
         : s line ( str_first_word r ) = r ( str_skip_word r )
         // (The type comes last, after a tab: `!D E` is two words.)
         : i tb ( nurl_str_find r `\t` )
         : s tshow ? < tb 0 `` ( nurl_str_slice r + tb 1 - - ( nurl_str_len r ) tb 1 )
         = r ? < tb 0 r ( nurl_str_slice r 0 tb )
         : s who ? != 0 ( nurl_sym_len2 syms cn `__body_done` ) cn gn
+        // (A call argument's stand-in, `__alr#N`, is shown as its call.)
+        = an ? != 0 ( nurl_str_starts an `__alr#` ) ( nurl_sym_get2 g_pending_impl an `__show` ) an
         ? != 0 ( mem_fn_lend_kind syms who ( nurl_str_to_int ix ) ) {
             ( bck_emit_error r ( nurl_str_to_int line ) ( nurl_str_cat4
             ( nurl_str_cat3 `this hands back what '` ( bck_fn_show cn ) `' may lend out of '` ) an
@@ -70098,7 +70357,7 @@ unsafe @ __clo_take_capture i syms i cg s name → v {
     ? != ht TT_LPAREN { ^ ( nurl_str_cat `` `` ) } {}
     : s key ( nurl_sym_get syms `__last_call_lend_key__` )
     ? == 0 ( nurl_str_len key ) { ^ ( nurl_str_cat `` `` ) } {}
-    : s roots ? != 0 ( nurl_str_len g_call_roots ) ( nurl_str_cat g_call_roots `` ) ( nurl_sym_get syms `__last_call_args__` )
+    : s roots ? != 0 ( nurl_str_len g_call_lroots ) ( nurl_str_cat g_call_lroots `` ) ? != 0 ( nurl_str_len g_call_roots ) ( nurl_str_cat g_call_roots `` ) ( nurl_sym_get syms `__last_call_args__` )
     ^ ( nurl_str_cat3 key `\t` roots )
 }
 
@@ -70127,7 +70386,13 @@ unsafe @ __clo_take_capture i syms i cg s name → v {
         : s ent ? < nl 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 nl )
         = rest ? < nl 0 `` ( nurl_str_slice rest + nl 1 - - ( nurl_str_len rest ) nl 1 )
         : i tb ( nurl_str_find ent `\t` )
-        : s lp ? > tb 0 ( mem_local_lend_of syms cg ( nurl_str_slice ent 0 tb ) ( nurl_str_slice ent + tb 1 - - ( nurl_str_len ent ) tb 1 ) ) ``
+        // (An arm's call whose argument is itself a lend — a view, a call
+        // argument's stand-in — is followed down the chain, as `^ ( call )`
+        // is: agora #560.)
+        : s jr ? > tb 0 ( nurl_str_slice ent + tb 1 - - ( nurl_str_len ent ) tb 1 ) ``
+        : s jk ? > tb 0 ( nurl_str_slice ent 0 tb ) ``
+        : s lp0 ? > tb 0 ( mem_local_lend_of syms cg jk jr ) ``
+        : s lp ? & > tb 0 ( __roots_have_lend_chain syms jr ) ( __or_i1 cg lp0 ( __mem_payload_local_lend1 syms cg jk jr ) ) lp0
         ? != 0 ( nurl_str_len lp ) {
             ? == 0 ( nurl_str_len acc ) { = acc ( nurl_str_cat lp `` ) } {
                 : s o ( nurl_cg_reg cg )

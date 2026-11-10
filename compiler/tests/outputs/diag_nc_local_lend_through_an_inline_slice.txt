@@ -1,0 +1,9 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_nc_local_lend_through_an_inline_slice.nu:27:1: error: this hands back what 'slice_at' may lend out of 'ds', which this function drops on the way out; a 'D' cannot be copied, so the caller would hold it after it is released. Take the value out of 'ds' (vec_remove, vec_pop, or a function that hands it over) and hand that back, or hand back the owner itself.
+@ first → D { : ( Vec D ) ds ( vec_new [D] ) ( vec_push [D] ds @ D { ( string_from `a d long enough for the heap buffer` ) } ) ^ ( slice_at [D] ( slice_from_vec [D] ds ) 0 ) }
+^
+compiler/tests/diag_nc_local_lend_through_an_inline_slice.nu:27:1: error: this hands back what 'slice_from_vec' may lend out of 'ds', which this function drops on the way out; a 'D' cannot be copied, so the caller would hold it after it is released. Take the value out of 'ds' (vec_remove, vec_pop, or a function that hands it over) and hand that back, or hand back the owner itself.
+@ first → D { : ( Vec D ) ds ( vec_new [D] ) ( vec_push [D] ds @ D { ( string_from `a d long enough for the heap buffer` ) } ) ^ ( slice_at [D] ( slice_from_vec [D] ds ) 0 ) }
+^
+error: compilation aborted — 2 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)
