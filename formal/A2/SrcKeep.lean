@@ -250,7 +250,7 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
       simp [A2.setE, upd_ne _ _ hxy, A2.kill, hx]
     have hz1 : (A2.setE (A2.setE (A2.kill .replace false y Γ) y { E with live := false, dtor := false }) x (compE E a)) z = none := by
       simp [A2.setE, upd_ne _ _ (Ne.symm hxz), upd_ne _ _ hzy, A2.kill, hz]
-    have hn2 := hn.unpair hy hl hty hx hz hxz
+    have hn2 := hn.unpair (a := a) (b := b) hy hl (unpair_ne_int hty) hx hz hxz
     exact h0.trans (CtxRel.bind (h0.anch hanch) hx0 hxF (CtxRel.refl _) (compE_mode_ne E a)
       (fun ha1 => CtxRel.bind ha1 hz1 hzF (CtxRel.refl _) (compE_mode_ne E b)
         (fun ha2 => ih hks ha2 hn2) hpz.1) hpx.1)

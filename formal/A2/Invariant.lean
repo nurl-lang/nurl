@@ -1005,6 +1005,35 @@ def DtorOK (P : Prog) (f : Nat) (t : Ty) : Prop :=
     -- a destructor changes no elements through a borrow (Agora #295)
     ¬ ThruFn P f
 
+/-- Agora #616: `f` is the drop glue of the struct `t`: a function that
+    takes one value of the destructor type `Ty.dtor f t` *owned* (`sink`)
+    and takes it apart first thing (`unpair`), so each field is a binding of
+    its own: a field that holds a destructor value goes to its `letd`
+    (`StmtT.unpair`'s `hdx` / `hdz`), whose frame runs its destructor, on a
+    panic in another field's too.  Its tail does nothing else (`Stmt.pureGlue`),
+    so `unpair` of such a struct anywhere does what its drop does.  (In this
+    cut the struct holds no views.) -/
+def GlueOK (P : Prog) (f : Nat) (t : Ty) : Prop :=
+  ∃ fn a b, P[f]? = some fn ∧ t = .prod a b ∧ t.holdsView = false ∧ fn.params = [(.sink, .dtor f t)] ∧ fn.resTy = .int ∧
+    fn.resOwn = false ∧ fn.lends = [] ∧ fn.rholds = [] ∧ fn.outHolds = [] ∧ ¬ ThruFn P f ∧
+    ∃ x z s, fn.body = .unpair 0 x z s ∧ s.pureGlue = true
+
+/-- What `unpair` takes apart is a struct under its destructor type, if any. -/
+theorem unpair_undtor {τ a b : Ty} {G : Nat → Prop} (h : τ = .prod a b ∨ ∃ f, τ = .dtor f (.prod a b) ∧ G f) :
+    τ.undtor = .prod a b := by
+  rcases h with h | ⟨f, h, _⟩ <;> subst h <;> rfl
+
+theorem unpair_ne_int {τ a b : Ty} {G : Nat → Prop} (h : τ = .prod a b ∨ ∃ f, τ = .dtor f (.prod a b) ∧ G f) :
+    τ ≠ .int := by
+  rcases h with h | ⟨f, h, _⟩ <;> subst h <;> simp
+
+/-- What runs when a value of the destructor type `Ty.dtor f t` is dropped:
+    a destructor that takes it lent (`DtorOK`; then the tree is freed with
+    no code, so a struct `t` holds no destructor value), or a struct's
+    glue, which takes it apart (`GlueOK`). -/
+def DropFnOK (P : Prog) (f : Nat) (t : Ty) : Prop :=
+  (DtorOK P f (.dtor f t) ∧ (∀ a b, t = .prod a b → t.holdsDtor = false)) ∨ GlueOK P f t
+
 /-- A2-drop.3a: `letv`'s side condition, that the value it binds owned is of
     no destructor type, for an entry the rules build (none but `letd`'s is of
     one): its type is no destructor type, or its mode no owner. -/
@@ -1113,7 +1142,9 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       -- (an `inout` struct that may be replaced is taken apart too: a field
       -- replaced in place is the struct taken apart and assigned again)
       (h1 : s.src = true) (h2 : Γ y = some E) (h3 : E.live = true) (h4 : canDo E.mode .replace)
-      (h5 : E.ty = .prod a b) (h6 : y ∉ F)
+      -- (Agora #616: a struct, or a destructor type whose destructor is the
+      -- struct's glue: taking it apart is what its drop does)
+      (h5 : E.ty = .prod a b ∨ ∃ f, E.ty = .dtor f (.prod a b) ∧ GlueOK P f (.prod a b)) (h6 : y ∉ F)
       (h7 : Γ x = none) (h8 : Γ z = none) (h9 : x ≠ z) (h10 : x ∉ F) (h11 : z ∉ F)
       (h12 : StmtT P (setE (setE (setE (kill .replace false y Γ) y { E with live := false, dtor := false }) x (compE E a)) z
         (compE E b)) F s Δ)
@@ -1160,7 +1191,7 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       -- destructor type moved in (whose old binding's scope then runs nothing).
       -- A2-drop.3b: or it is a `Vec` of such values, drained at its end
       LetdTy f t E.ty τ → t.isStruct = true →
-      t.hasFn = false → DtorOK P f (.dtor f t) →
+      t.hasFn = false → DropFnOK P f t →
       -- A2-drop.2: the binding, armed, views what the value does, or more
       HeldUp Γ1 E H → StmtT P (setE Γ1 x (Entry.arm { E with ty := τ, held := H })) F s Δ →
       EndOK Δ x →
@@ -1260,7 +1291,7 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       -- (A2-drop.3a: of the destructor type `Ty.dtor f t`, whose destructor `f` is)
       -- (A2-drop.3b: or a `Vec` of such values, of a type that holds no views)
       (∃ E t, Γ x = some E ∧ E.mode = .own ∧ ScopeDTy f t E.ty ∧ E.ty.hasFn = false ∧
-        DtorOK P f (.dtor f t) ∧ t.isStruct = true) → x ∉ F →
+        DropFnOK P f t ∧ t.isStruct = true) → x ∉ F →
       StmtT P Γ F s Δ → EndOK Δ x →
       KeepOut Γ Δ s.spine → CtxWF Δ → NameWF Δ →
       -- A2-drop.2: the binding is `letd`'s when its type holds views (its
@@ -1330,7 +1361,7 @@ def DtorParamsOK (P : Prog) (fn : Fn) : Prop :=
     -- one being one with its glue, or a `Vec` of such values, which the frame
     -- drains; it holds no views and no closure, so the frame is never armed)
     ∃ g t, (fn.resTy = .dtor g t ∨ fn.resTy = .vec (.dtor g t)) ∧ t.holdsView = false ∧
-      t.hasFn = false ∧ DtorOK P g (.dtor g t))
+      t.hasFn = false ∧ DropFnOK P g t)
 
 /-- A function is well-typed when its body is, from its own view of the
     parameters, and ends as its summary says: the result is set and borrows

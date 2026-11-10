@@ -565,8 +565,9 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
 (A2-drop.1 and A2-drop.2, `A2/DROP_DESIGN.md`).
 - A binding with a destructor (`StmtT.letd`) is scoped by `scopeD`.
 - At its end, while it still owns its value, the destructor runs as a call
-  of the program's function, on the binding lent (`Step.scopeDEnd`). Then
-  the scope frees the tree: the drop glue after the impl.
+  of the program's function on the binding (`Step.scopeDEnd`): lent to a
+  destructor that takes it lent, after which the scope frees the tree; or
+  moved into a struct's glue, which takes it apart (Agora #616, below).
 - A panic that unwinds to the frame stops there. It runs the destructor,
   frees the binding, and raises again (`Step.scopeDP`). The frame is gone,
   so a panic inside the destructor does not run it again, and `scope x`
@@ -588,9 +589,10 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
     (`A2.Dtor.letv_owned_no_dtor`): its owned value's type is free of
     destructor values at any depth (`A2.Dtor.letv_owned_dtor_free`);
   - a typed call's owned result of such a type, and an `unpair` field of
-    one, is handed on first thing (`Stmt.movedFirst`: into a `letd`, or by
+    one, is handed on first thing (`Stmt.movedFirst`: into a `letd`, by
     `assign y (.var w)` into another binding of the same type, whose own
-    binder answers for it) and assigned nothing
+    binder answers for it, or taken apart by `unpair`, whose fields are
+    handed on in turn) and assigned nothing
     (`A2.Dtor.letcall_hands_over`, `A2.Dtor.unpair_hands_over`);
   - a typed function's `sink` parameter of such a type is handed on first
     thing in its body and assigned nothing, an `inout` one is assigned
@@ -674,17 +676,38 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   leak theorems cover every such run; that it is this run is read off the
   steps, not a theorem of its own.
 - A struct holding a destructor value is itself of a destructor type, and
-  its destructor is its drop glue, which the elaboration generates: the
-  struct's own `% Drop`, if it has one, then each destructor field lent to
-  its destructor, the order nurlc runs them in. The calculus checks the
-  glue as it checks any destructor; that it calls the fields' destructors
-  is the elaboration's part. An enum's glue matches on the tag and lends
-  the payload to its destructor (`getl` / `getr` lend a payload through
-  the type, `A2.DtorWitness.enum_lends`); no such glue is mechanized as an
-  example.
+  its destructor is its drop glue (Agora #616): a function of the program
+  that takes the struct OWNED (`sink`) and takes it apart first thing, so
+  each field is a binding of its own (`GlueOK`). A destructor that takes
+  such a struct lent is refused for it (`A2.Dtor.struct_dtor_is_glue`):
+  it could only free the fields with no code. In a typed program the
+  glue's body is an `unpair` of its parameter whose every field of a type
+  that holds a destructor value is handed to a `letd` first thing and
+  assigned nothing (`A2.Dtor.glue_takes_apart`, from `unpair_typed`); the
+  hand-overs come before anything that can panic, so each such field is
+  in a destructor frame of its own, whose end runs its destructor and
+  whose unwind runs it too (`scopeD_end_runs_dtor`,
+  `scopeD_panic_runs_dtor`): a field's destructor that panics does not
+  skip another field's. At the struct's frame's end the frame's step calls
+  the glue, and the call moves the struct into it (the same step as for a
+  lent destructor: the callee's parameter mode decides);
+  `A2.DtorWitness.main7_safe` is a typed program with such a struct, its
+  glue a function of the program checked by `FnOK`. That the fields'
+  destructors run, each once, is read off these steps and theorems; it is
+  no single theorem about a run. Taking such a struct apart anywhere else
+  (`unpair`) is typed too, and is what its drop does: the fields go to
+  their `letd`s. In this cut a struct with glue holds no views.
+  An ENUM holding a destructor value is still a destructor type whose
+  glue takes it lent: it matches on the tag and lends the payload to its
+  destructor (`getl` / `getr` lend a payload through the type,
+  `A2.DtorWitness.enum_lends`); the calculus checks it as it checks any
+  destructor, and that it calls the payload's destructor is the
+  elaboration's part (the open half of Agora #616).
 - A field of a destructor value, or a payload of a destructor enum, is
   lent through the type, the destructor staying with the whole value.
-  Taking one out is refused: `unpair` of a destructor value, and `takel` /
+  Taking one out is refused: `unpair` of a destructor value whose
+  destructor takes it lent (one whose destructor is a struct's glue is
+  taken apart, above), and `takel` /
   `taker` of a destructor enum (`A2.DtorWitness.enum_take_refused`), since
   the destructor would not run.
 - A2-drop.3b: a `Vec` of destructor values is drained. `Ty.ok` admits
@@ -697,9 +720,9 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   with `f` the elements' destructor and `u` holding no views (`LetdTy`;
   `letv` refuses the type, it holds a destructor value), so a call's
   result and a `sink` parameter of that type are handed on first thing as
-  a destructor value is (`movedFirst`: into a `letd`, or by `assign y
+  a destructor value is (`movedFirst`: into a `letd`, by `assign y
   (.var w)` into another binding of the same type, whose own binder
-  answers for it), and an `inout` parameter of it is assigned nothing. (No
+  answers for it, or by `unpair`), and an `inout` parameter of it is assigned nothing. (No
   struct has a field of that type, so `unpair` yields none.) Its frame is `scopeD x f`, the same
   run-time form: what `x` owns at the frame's end says which frame it is,
   a struct or an enum (the destructor runs on it) or a `Vec`'s node (the
@@ -754,17 +777,18 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   the value's own, outermost destructor, and everywhere else that could
   hold a destructor value is refused (the list below). That these are all
   the places is read off the rules, not a single theorem (above). What the
-  calculus does not show is the destructors INSIDE a value (Agora #616):
-  - a struct or an enum that holds destructor values is a destructor type
-    whose destructor is its glue, and that the glue runs the fields'
-    destructors is the elaboration's part, not checked: a glue that calls
-    none types (the witnesses' `ofn` and `gfn` are such), and the frame
-    then frees the fields running nothing;
-  - a panic anywhere in the glue (in the struct's own `% Drop`, which runs
-    first, or in one field's destructor) ends it, and the frame frees the
-    remaining fields with no destructor, on a panic's unwind too.
-  The model that shows both is the glue as code with a frame per field
-  (`A2/DROP_DESIGN.md`, `dropCode`'s `unpair`). See Agora #542–#544, #611.
+  calculus does not show is the destructors inside an ENUM (Agora #616's
+  open half; a struct's fields are shown, above):
+  - an enum that holds destructor values is a destructor type whose
+    destructor is its glue, which takes it lent, and that the glue runs
+    the payload's destructor is the elaboration's part, not checked: a
+    glue that calls none types (the witnesses' `ofn` and `gfn` are such),
+    and the frame then frees the payload running nothing;
+  - a panic in that glue ends it, and the frame frees the payload with no
+    destructor.
+  The model that shows it is the struct's: glue that takes the enum owned
+  and takes the payload out (`takel` / `taker`, to a `letd`). See Agora
+  #542–#544, #611, #616.
 
 The rules are stricter than nurlc's in these places:
 - for a binding of a type whose destructor may read a view:
@@ -785,6 +809,18 @@ The rules are stricter than nurlc's in these places:
   enum or option that holds a `% Drop` value, and a `% Drop` value that
   holds views; here a struct or an enum holding one is its own destructor
   type, with its glue.
+- for a struct that has a `% Drop` of its own AND a field that holds a
+  destructor value (Agora #616): refused. Its drop in nurlc is the impl
+  on the struct lent, then the fields' glue; here a struct holding a
+  destructor value has glue for its destructor, which takes it apart and
+  runs no impl on the whole. (The model that brings it back: the frame's
+  end runs the impl lent, under a frame of the glue's type.) A program
+  keeps the impl's work in a field of its own `% Drop` type. A glue does
+  nothing but hand its fields on (`Stmt.pureGlue`), so it carries no such
+  work either. And a struct with glue holds no views, so a struct with a
+  destructor field and a view field is refused altogether. A struct of
+  three or more fields is nested pairs here, each inner pair that holds a
+  destructor value with glue of its own.
 - for a `Vec` of destructor values (A2-drop.3b), which is typed as a
   binding's own type, drained at the binding's end (above). nurlc types the
   rest too, and drops a `Vec`'s elements wherever the `Vec` is dropped, in
@@ -796,7 +832,8 @@ The rules are stricter than nurlc's in these places:
     `Vec D` field or payload, a `Vec (Vec D)`, a channel of `D`
     (`Channel s` is a lock of its queue, a `Vec s`, and its closed flag),
     `Locked (Vec D)`, `Arc (Vec D)`, a cell of a `Vec D`. A struct's
-    glue lends `self` and cannot pop a field, and a block's payload is
+    glue hands a field to a `letd`, which binds no `Vec` inside a struct
+    yet (`RhsT.pair` refuses the field), and a block's payload is
     swept with no code;
   - `vec_set` over an element, and handing an element to a callee that
     changes it (`withElem`). (`vec_free`, `vec_clear` and `vec_truncate`
@@ -838,13 +875,15 @@ The rules are stricter than nurlc's in these places:
 - for a spawned function's parameter of a type that holds a destructor
   value (`SpawnOK`, since A2-drop.3a): refused. nurlc moves a `% Drop`
   value to a new thread, which runs its destructor there.
-- for a destructor value (A2-drop.3a), taking it apart is refused: a
+- for a destructor value whose destructor takes it lent (A2-drop.3a),
+  taking it apart is refused: a
   field written in place (`= . x f v`, which the calculus has as `unpair`
   and `assign`), `unpair`, and taking a payload out of a destructor enum.
   So an `inout` parameter of a destructor type is neither assigned nor
-  taken apart in its callee (its fields and payloads are lent). Rust lets a program move out of a struct that has no
-  `Drop` impl of its own even when its fields have one; here a struct
-  whose destructor is only its glue cannot be taken apart either.
+  taken apart in its callee (its fields and payloads are lent). A struct whose destructor is its glue is taken
+  apart (Agora #616: `unpair`, its destructor fields going to their
+  `letd`s), as Rust lets a program move out of a struct that has no
+  `Drop` impl of its own; one with a destructor that takes it lent is not.
 
 How the runtime carries this out (`stdlib/runtime_core.c`, `nurl_panic`)
 is stated here so the claim does not hide it:

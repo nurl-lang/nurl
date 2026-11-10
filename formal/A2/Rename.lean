@@ -4058,8 +4058,8 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       intro t; cases t <;> simp [compE, intE]
     have habx := AbsOK.add hab hab1 hx (hcm a)
     have habz := AbsOK.add hab habx hz (hcm b)
-    have hw3 := hw.unpair hy hl hm.ownSlot hty hx hz hxz
-    have hn3 := hn.unpair hy hl hty hx hz hxz
+    have hw3 := hw.unpair (a := a) (b := b) hy hl hm.ownSlot (unpair_ne_int hty) hx hz hxz
+    have hn3 := hn.unpair (a := a) (b := b) hy hl (unpair_ne_int hty) hx hz hxz
     obtain ⟨tk, abk⟩ := ih hks habz hw3 hn3 (fun ht => hT ht.unpair)
     have hbx := hab.fresh hx
     have hbz := hab.fresh hz
