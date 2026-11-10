@@ -2215,6 +2215,11 @@ journal** instead:
   `Vec` whose elements run no code of the program's own when dropped (a
   `String`, plain data) records nothing: no panic can start in its
   release.
+- What a destructor allocates and frees while the journal is drained is
+  freed like anything else. The drain keeps the buffers it frees until it
+  ends, so an address it has freed is not handed out again while it runs:
+  a second release of the same buffer through another registration is
+  passed over, and the release of a new buffer never is.
 
 The journal belongs to the thread outside fibers and to the fiber inside
 one. The scheduler switches it with the fiber, so fibers sharing a worker,

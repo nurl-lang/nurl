@@ -4127,7 +4127,19 @@ static void nurl__jrnl_pop_nulls(void) {
  * also reaches (a value placed in a struct the drain also drops): the
  * pointer journal removes every alias of an address in one step, a slot
  * cannot — the drain's own record does it instead. The drain marks the
- * journal live for its duration so every nurl_free reaches the check. */
+ * journal live for its duration so every nurl_free reaches the check.
+ *
+ * An address stands for one block only while that block cannot be handed
+ * out again, so the record KEEPS what it holds: a buffer freed during a
+ * drain goes back to the allocator when the drain ends
+ * (nurl__drain_release), not before. Released at once, its address came
+ * back from malloc for the next allocation a destructor made — the
+ * message a `% Drop` builds — and that allocation's own free found the
+ * address in the record and was skipped: a leak for each destructor that
+ * allocated after the first, ninety-nine for a Vec of a hundred (agora
+ * #622). By the address alone the two cannot be told apart: the stale
+ * second free of a block the drain released, and the first free of the
+ * block that took its place. */
 static __thread int     nurl__draining = 0;
 /* Drains running on this thread, nested (a drop inside one panics again,
  * or enters a recover of its own that panics). A panic raised by a drop
@@ -4159,6 +4171,17 @@ static int nurl__drain_seen(void *p) {
     nurl__dseen[h] = p;
     nurl__dseen_n++;
     return 0;
+}
+/* The last drain on the thread is over: what it freed, each block once
+ * (counted where it was recorded), goes back to the allocator. */
+__attribute__((noinline, cold))
+static void nurl__drain_release(void) {
+    void **t = nurl__dseen;
+    size_t cap = nurl__dseen_cap;
+    nurl__dseen = NULL; nurl__dseen_n = nurl__dseen_cap = 0;
+    for (size_t i = 0; i < cap; i++)
+        if (t[i] && !nurl__sc_push(t[i])) free(t[i]);
+    free(t);
 }
 
 /* Remove all aliases; normal frees and explicit ownership transfers share
@@ -4326,10 +4349,7 @@ static void nurl__jrnl_drain(uint64_t mark) {
     --nurl__jrnl_live;
     --nurl__drain_depth;
     nurl__draining = outer;
-    if (!outer) {
-        free(nurl__dseen);
-        nurl__dseen = NULL; nurl__dseen_n = nurl__dseen_cap = 0;
-    }
+    if (!outer) nurl__drain_release();
 }
 /* A recover frame entered with `depth` drains running catches a panic:
  * the drains begun since were left by the longjmp, mid-loop (a drop that
@@ -4343,8 +4363,7 @@ static void nurl__drain_unwind(int depth) {
     while (nurl__drain_depth > depth) { --nurl__drain_depth; --nurl__jrnl_live; }
     if (nurl__drain_depth == 0 && nurl__draining) {
         nurl__draining = 0;
-        free(nurl__dseen);
-        nurl__dseen = NULL; nurl__dseen_n = nurl__dseen_cap = 0;
+        nurl__drain_release();
     }
 }
 static void nurl__jrnl_drain_body(uint64_t mark) {
@@ -4366,11 +4385,10 @@ static void nurl__jrnl_drain_body(uint64_t mark) {
         } else {
             /* A raw buffer nurl_alloc handed out: count its release as
              * nurl_free would, so nurl_alloc_count − nurl_free_count stays
-             * the live total across a panic. */
-            if (!nurl__drain_seen(entry.ptr)) {
+             * the live total across a panic. The block itself goes when
+             * the drain ends (nurl__drain_release). */
+            if (!nurl__drain_seen(entry.ptr))
                 nurl__actr_bump(&nurl__actr_slot()->freed);
-                free(entry.ptr);
-            }
         }
     }
 }
@@ -4383,10 +4401,13 @@ static void nurl__jrnl_drain_body(uint64_t mark) {
  * (free to inline under LTO) and tail-calls the body. The shared empty
  * string (§9a) is tested there too: it is never journaled and never
  * counted, so releasing it is the test alone. */
+/* A free during a drain: recorded and counted, once per block; the block
+ * is kept until the drain ends, so that its address names it throughout
+ * (see nurl__draining). */
 __attribute__((noinline, cold))
-static int nurl__free_draining(void *ptr) {
+static void nurl__free_draining(void *ptr) {
     if (nurl__jrnl_cap) nurl__jrnl_forget_body(ptr);
-    return nurl__drain_seen(ptr);
+    if (!nurl__drain_seen(ptr)) nurl__actr_bump(&nurl__actr_slot()->freed);
 }
 /* The general free: the first of a thread, the cache off or not yet
  * probed, a chunk header the probe did not vouch for. Out of line, so the
@@ -4431,8 +4452,8 @@ static inline int nurl__free_fast(void *ptr) { (void)ptr; return 0; }
  * nothing journaled — every free of a program that never recovers — keeps
  * the bucket walk, and the registers it needs, off its path. */
 NURL_TLS_FN static void nurl__free_journaled(void *ptr) {
-    if (__builtin_expect(nurl__draining, 0)) { if (nurl__free_draining(ptr)) return; }
-    else nurl__jrnl_forget_body(ptr);
+    if (__builtin_expect(nurl__draining, 0)) { nurl__free_draining(ptr); return; }
+    nurl__jrnl_forget_body(ptr);
     if (!nurl__free_fast(ptr)) nurl__free_general(ptr);
 }
 NURL_TLS_FN static void nurl__free_nonnull(void *ptr) {
