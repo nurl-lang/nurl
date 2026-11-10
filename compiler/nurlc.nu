@@ -3152,6 +3152,9 @@ unsafe @ note_unsafe_item s pos s what → v {
 // call hands back is a borrow of.
 : ~ i g_member_path_on 0
 : ~ s g_member_path ``
+// …and 1 when that path stopped at a raw pointer (gen_member): the fields
+// of an element read through it are the pointer's too.
+: ~ i g_member_path_raw 0
 // Whether a lending arm of the last `?` / `??` lent a field of this
 // frame's own value (`? c . p s ( mk )`, p a local: __froot_lends_frame),
 // which the frame drops — besides the bindings the join selected
@@ -5654,6 +5657,11 @@ unsafe @ gen_ret i lex i syms i cg → s {
     = g_ret_vpos __rvp0 = g_ret_vlex __rvl0
     = g_ret_lit_pos __rlp0 = g_ret_lit_lex __rll0
     = g_member_path_on __rsxmp
+    // (`^ . h buf` hands back what the field holds: a read of the path,
+    // refused while a callee has taken it — agora #351.)
+    ? & & != 0 g_srcx_on == ret_first_tt TT_DOT | ( __is_handle_ty ( nurl_get_last_type ) ) ( __type_needs_drop ( nurl_get_last_type ) syms ) {
+        ? != 0 ( nurl_str_len g_member_path ) { ( bck_stash_store g_member_path bck_line `-` `0` `pendread` ) } {}
+    } {}
     // A block whose tail is a field read hands back that field as `^ . x f`
     // does: its own locals are this frame's, dropped on the way out
     // (agora #180). …and one whose tail is a call hands back its result as
@@ -32889,7 +32897,7 @@ unsafe @ bck_kc i idx → i {
     ? == c 98 { ^ ? ( seq k `borrow` ) 7 ? ( seq k `brk` ) 21 ? ( seq k `block` ) 23 0 } {}
     ? == c 102 { ^ ? ( seq k `fieldset` ) 8 ? ( seq k `fevar` ) 35 ? ( seq k `fborrow` ) 7 ? ( seq k `fborrowh` ) 7 0 } {}
     ? == c 116 { ^ ? ( seq k `take` ) 37 ? ( seq k `tborrow` ) 7 ? ( seq k `tryret` ) 39 0 } {}
-    ? == c 112 { ^ ? ( seq k `pendcall` ) 9 ? ( seq k `pendretain` ) 10 ? ( seq k `pendtake` ) 11 ? ( seq k `pendkeep` ) 12 ? ( seq k `pendfield` ) 13 ? ( seq k `pendstore` ) 15 ? ( seq k `pendeff` ) 32 ? ( seq k `pendlend` ) 32 ? ( seq k `pendjoin` ) 32 ? ( seq k `pendfx` ) 38 ? ( seq k `pendfc` ) 38 0 } {}
+    ? == c 112 { ^ ? ( seq k `pendcall` ) 9 ? ( seq k `pendretain` ) 10 ? ( seq k `pendtake` ) 11 ? ( seq k `pendkeep` ) 12 ? ( seq k `pendfield` ) 13 ? ( seq k `pendstore` ) 15 ? ( seq k `pendeff` ) 32 ? ( seq k `pendlend` ) 32 ? ( seq k `pendjoin` ) 32 ? ( seq k `pendfx` ) 38 ? ( seq k `pendfc` ) 38 ? ( seq k `pendread` ) 40 0 } {}
     ? == c 115 { ^ ? ( seq k `store` ) 14 0 } {}
     ? == c 120 { ^ ? ( seq k `xfer` ) 16 0 } {}
     ? == c 99 { ^ ? ( seq k `cdep` ) 17 ? ( seq k `cmove` ) 18 ? ( seq k `cnt` ) 22 ? ( seq k `cond` ) 25 ? ( seq k `callx` ) 31 ? ( seq k `clox` ) 34 ? ( seq k `cborrow` ) 7 0 } {}
@@ -33907,11 +33915,21 @@ unsafe @ bck_emit_error s file i line s msg → v {
         // one to keep for the same site (bck_emit_maybe_reads).
         : s key ( nurl_str_cat3 ( nurl_str_int useline ) `:` ids )
         : s shown ? isf ( __bck_path_src name ) ( nurl_str_cat name `` )
-        ( bck_put ( nurl_str_cat `pm_` key )
-        ( nurl_str_cat4 ? isf `use of possibly-moved field '` `use of possibly-moved value '` shown
-        ( nurl_str_cat `'` by ) ( nurl_str_cat ml
-        ? isf ( nurl_str_cat4 fby `; on that path the field is empty. Take it on every path, or give it a value again (= ` shown ` …) on the path that took it` )
-        ( nurl_str_cat3 `; on that path this reads a freed buffer. Consume it on every path, or rebind it (= ` name ` …) on the path that consumed it` ) ) ) )
+        // (A field a loop's body took, read again in its next round: agora
+        // #351, __bck_fmv_carry.)
+        : b floop & isf != 0 ( nurl_sym_len g_bck ( bck_bkey `fml_` ids ) )
+        ? floop {
+            ( bck_put ( nurl_str_cat `pm_` key )
+            ( nurl_str_cat4 ( nurl_str_cat3 `use of possibly-moved field '` shown `' — it was taken at line ` ) ( nurl_str_cat ml fby )
+            ( nurl_str_cat3 ` in an earlier round of the loop, which left the field empty for this one. Give it a value again (= ` shown ` …) after the take, in the same round, ` )
+            ( nurl_str_cat3 `or take it once, outside the loop, or hand the callee a copy, ( mem_dup ` shown ` ), and keep the field.` ) ) )
+        } {
+            ( bck_put ( nurl_str_cat `pm_` key )
+            ( nurl_str_cat4 ? isf `use of possibly-moved field '` `use of possibly-moved value '` shown
+            ( nurl_str_cat `'` by ) ( nurl_str_cat ml
+            ? isf ( nurl_str_cat4 fby `; on that path the field is empty. Take it on every path, or give it a value again (= ` shown ` …) on the path that took it` )
+            ( nurl_str_cat3 `; on that path this reads a freed buffer. Consume it on every path, or rebind it (= ` name ` …) on the path that consumed it` ) ) ) )
+        }
         : s pl ( nurl_sym_get g_bck `pml` )
         ( bck_put `pml` ? == 0 ( nurl_str_len pl ) ( nurl_str_cat key `` ) ( nurl_str_cat3 pl ` ` key ) )
     }
@@ -35133,11 +35151,15 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
         ? != 0 g_bck_fmv_any {
             ? | | | | | | == kc 4 == kc 5 == kc 9 == kc 11 == kc 12 == kc 14 == kc 16 { ( __bck_partly_moved_check ( bck_field_int rec 1 ) ( bck_field_int rec 3 ) st ) } {}
             ? & == kc 7 ( seq ( bck_field rec 0 ) `fborrow` ) { ( __bck_fmv_check ( bck_field_int rec 2 ) ( bck_field_int rec 3 ) st ) } {}
+            // (…and a field path whose value the statement reads whole: a
+            // literal's field, `@ Holder { . h buf }` — a `pendread` row.)
+            ? == kc 40 { ( __bck_fmv_check ( bck_field_int rec 1 ) ( bck_field_int rec 3 ) st ) } {}
             ? == kc 3 { = st ( __bck_fmv_revive st ( bck_field_int rec 1 ) ) } {}
         } {}
         // Most rows are plain statements: past their reads, nothing to do —
-        // and no dozen kind compares to find that out.
-        ? == kc 1 { = p + p 1 } {
+        // and no dozen kind compares to find that out. (A `pendread` row
+        // is asked above, and is nothing else.)
+        ? | == kc 1 == kc 40 { = p + p 1 } {
             ? | == kc 21 == kc 22 {
                 // Into the innermost loop's exit / back-edge accumulator —
                 // leaving every block up to its body, whose bindings go here.
@@ -35203,13 +35225,15 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 : ~ i rp + p 1
                 ~ < rp hi {
                     : i rkc ( bck_kc rp )
-                    ? | == rkc 9 == rkc 13 {
+                    ? | | == rkc 9 == rkc 13 == rkc 40 {
                         : s rrec ( bck_rec rp )
                         ? == ( bck_field_int rrec 3 ) ( bck_field_int rec 3 ) {
-                            = st ( bck_inout_borrow_check st rrec )
+                            ? != rkc 40 { = st ( bck_inout_borrow_check st rrec ) } {}
                             // (…and a field the returned expression reads
-                            // that a callee took: agora #280.)
-                            ? & == rkc 13 != 0 g_bck_fmv_any { ( __bck_fmv_check ( bck_field_int rrec 1 ) ( bck_field_int rec 3 ) st ) } {}
+                            // that a callee took: an argument, agora #280, or
+                            // the value itself — `^ . h buf`, a literal's
+                            // field — agora #351.)
+                            ? & != rkc 9 != 0 g_bck_fmv_any { ( __bck_fmv_check ( bck_field_int rrec 1 ) ( bck_field_int rec 3 ) st ) } {}
                         } {}
                     } {}
                     = rp + rp 1
@@ -41543,6 +41567,28 @@ unsafe @ bck_loop_mask s pre s post → s {
     ^ out
 }
 
+// `masked` — bck_loop_mask's `post` — with each field path a callee took
+// in the body (`fmv`) kept taken, when its binding was bound before the
+// loop. The path has no state before its take — UNINIT in `pre`, as a
+// binding the body declares — so the mask dropped it, and the next round
+// read, or took again, the field the last one emptied (agora #351). One of
+// a binding the body declares goes with its round, as the binding does.
+@ __bck_fmv_carry s masked s pre s post → s {
+    : ~ s out masked
+    : ~ s rest ( nurl_sym_get g_bck `fmv` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : i pid ( nurl_str_to_int ( str_first_word rest ) ) = rest ( str_skip_word rest )
+        : i r ( bck_path_root pid )
+        : i fs ( bck_st_raw post pid )
+        ? & & & != r pid == BCK_UNINIT ( bck_st_raw out pid ) != BCK_UNINIT ( bck_st_raw pre r ) | == fs BCK_MOVED == fs BCK_MAYBE_MOVED {
+            = out ( bck_st_set out pid fs )
+            // (…and its report says so: an earlier round took it.)
+            ( bck_put ( bck_bkey `fml_` ( nurl_str_int pid ) ) `1` )
+        } {}
+    }
+    ^ out
+}
+
 // ── The walk's facts (agora #210) ─────────────────────────────────
 // A walk is not a function of its state string alone. It also reads
 // the facts it and earlier walks wrote into g_bck (a borrow's source,
@@ -42177,6 +42223,7 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
         // not released as a call temporary.)
         : ~ s carried ( bck_loop_mask pre post )
         ? > g_bck_fe_live fe_self { = carried ( __bck_fe_carry carried post fe_own ) } {}
+        ? != 0 g_bck_fmv_any { = carried ( __bck_fmv_carry carried pre post ) } {}
         : s merged ( bck_join_state head carried )
         // Converged when the next walk would repeat one already made: the
         // state is where this walk started, and the facts are where this
@@ -42258,6 +42305,7 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     ? == 0 ( nurl_str_len brk ) { ^ head } {}
     : ~ s left ( bck_loop_mask pre brk )
     ? > g_bck_fe_live fe_self { = left ( __bck_fe_carry left brk fe_own ) } {}
+    ? != 0 g_bck_fmv_any { = left ( __bck_fmv_carry left pre brk ) } {}
     ? __lbrk_only { ^ left } {}
     ^ ( bck_join_state head left )
 }
@@ -47905,10 +47953,16 @@ unsafe @ gen_member i lex i syms i cg → s {
     // …and the field path it reads, when a call argument asks: a field of a
     // struct value extends its object's path; anything read through a
     // pointer is the pointer's (an element is not told apart from the rest).
+    // (…and stays the pointer's through the fields of an element read
+    // through it, `. . p k f`: every element's `f` is one path `p.f`
+    // otherwise, and a take of one round's element read as the next
+    // round's, agora #351.)
     ? != 0 g_member_path_on {
         : s __mb_pbase ? ( is_ident_tok __mb_tt ) ( nurl_str_cat __mb_val `` ) ? == __mb_tt TT_DOT ( nurl_str_cat g_member_path `` ) ``
-        : b __mb_fld & & != 0 ( nurl_str_len __mb_pbase ) ( is_ident_tok ( nurl_lex_type lex ) ) & == ( nurl_str_get ot 0 ) 37 ! ( is_ptr_ty ot )
+        : b __mb_braw & == __mb_tt TT_DOT != 0 g_member_path_raw
+        : b __mb_fld & & & != 0 ( nurl_str_len __mb_pbase ) ( is_ident_tok ( nurl_lex_type lex ) ) & == ( nurl_str_get ot 0 ) 37 ! ( is_ptr_ty ot ) ! __mb_braw
         = g_member_path ? __mb_fld ( nurl_str_cat3 __mb_pbase `.` ( nurl_lex_val lex ) ) ( nurl_str_cat __mb_pbase `` )
+        = g_member_path_raw ? | __mb_braw ( is_ptr_ty ot ) 1 0
     } {}
     // `. x f` on a struct binding: which field of whose storage was read
     // (`<alloca> <struct type> <index> <field type>`), for a consumer that
@@ -48774,6 +48828,12 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         = g_member_path_on __fmp0
         = g_dead_payload 0
         : s fty ( nurl_get_last_type )
+        // (A field path of storage, `@ Holder { . h buf }`: the literal
+        // copies or takes what the field holds — a read of the path,
+        // refused while a callee has taken it; agora #351.)
+        ? & & & != 0 __sx_me == fld_first_tt TT_DOT != 0 ( nurl_str_len g_member_path ) | ( __is_handle_ty fty ) ( __type_needs_drop fty syms ) {
+            ( bck_stash_store g_member_path ( nurl_lex_line lex ) `-` `0` `pendread` )
+        } {}
         // (A block whose tail is a call, or a join, hands on that one's
         // value: __val_eff_tt.)
         : i fld_eff_tt ( __val_eff_tt fld_first_tt )
