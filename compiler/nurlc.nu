@@ -16914,7 +16914,14 @@ unsafe @ gen_call i lex i syms i cg → s {
                 // no `s`.)
                 : i __vkh0 ? & | == __sx_c0 2 == __sx_c0 3 ! ( seq ( nurl_llty at ) `i8*` ) ( __vkheld_ask __vkc arg_idx ) 0
                 ? | > __vk 0 > __vkh0 0 {
-                    : s __vk_sx ( __sx_operand_c syms bck_arg_tt bck_arg_val __sx_c0 ( __sx_froot syms bck_arg_tt at ) __sx_n0 )
+                    // (A field by the path it read, `arg_froot`: g_member_path is the
+                    // last field generated, a later one's by now. One with no
+                    // storage of its own passed `inout` by its binding, read
+                    // off its path: gen_inout_field_addr publishes no member
+                    // root, so `__last_member_root__` is another field's —
+                    // agora #571.)
+                    : s __vk_fr ? | != 0 ( nurl_str_len arg_froot ) | ! is_inout_arg != bck_arg_tt TT_DOT ( nurl_str_cat arg_froot `` ) ? < ( nurl_str_find arg_sx `.` ) 1 `` ( nurl_str_slice arg_sx 0 ( nurl_str_find arg_sx `.` ) )
+                    : s __vk_sx ( __sx_operand_c syms bck_arg_tt bck_arg_val __sx_c0 __vk_fr __sx_n0 )
                     // (The containers: each argument the callee's answer
                     // names as a holder of this one — any, while that answer
                     // is not final — given at the call's end, __vbuf_holders.)
