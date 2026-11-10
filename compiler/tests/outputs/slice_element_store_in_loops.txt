@@ -1,0 +1,17 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+2
+4
+6
+a long enough string to be on the heap, new
+a long enough string to be on the heap, new
+a long enough string to be on the heap, other
+a long enough string to be on the heap, other
+a long enough string to be on the heap, other
+a long enough string to be on the heap, c0
+a long enough string to be on the heap, a0
+a long enough string to be on the heap, a1
+a long enough string to be on the heap, after
+a long enough string to be on the heap, a1

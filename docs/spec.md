@@ -520,6 +520,8 @@ A function or method declaration may carry a leading `unsafe` prefix
   may change it in place — a container mutator, or a function whose
   summary changes or takes that argument (for one defined later, its
   final summary) — is a write to that field;
+- build a slice from raw parts (`@ [T { p n }`): the slice takes the
+  buffer behind the pointer for its own and releases it (§4.4);
 - call a raw-memory primitive (`nurl_alloc`, `nurl_free`, `nurl_realloc`,
   `nurl_peek*` / `nurl_poke*`, `nurl_memcpy`, …), an ownership primitive
   that gives a value up or claims it by hand (`mem_forget`, `mem_take`,
@@ -1314,13 +1316,17 @@ Destructure with `??` match (§6.1) or `\` propagate (§6.4).
 
 ### 4.4 Slice `[T`
 
-`[T` lowers to `{ T*, i64 }` — a borrowed view of a contiguous run of T
-elements. The first field is the data pointer; the second is the
-length.
+`[T` lowers to `{ T*, i64 }` — a contiguous run of T elements. The
+first field is the data pointer; the second is the length.
 
-A slice may own its backing buffer (a slice literal `[ T | ... ]`, or
-the return value of an allocating call). Owned slices are subject to
-auto-drop (§8).
+A slice is an owned value: it owns its buffer and its elements, a slice
+literal `[ T | ... ]` allocates one, and the binding, field or payload
+that holds it releases it (§8). A `[T` parameter borrows its argument;
+what a function stores or returns from one is a copy.
+
+`@ [T { p n }` builds a slice from a raw pointer and a length, and the
+slice releases that pointer as its buffer. It is accepted in `unsafe`
+code only (§3.3d).
 
 ### 4.5 Result `!T E`
 

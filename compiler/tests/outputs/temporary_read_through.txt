@@ -1,0 +1,57 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+a long enough string to be on the heap, two!
+a long enough string to be on the heap, two!
+2
+3
+2
+7
+8
+3
+1
+a long enough string to be on the heap, made
+1
+8
+8
+41
+3
+a long enough string to be on the heap, made
+4
+5
+6
+5
+8
+a long enough string to be on the heap, p
+3
+7
+3
+2
+a long enough string to be on the heap, one
+a long enough string to be on the heap, one
+2
+3
+a long enough string to be on the heap, one
+a long enough string to be on the heap, two!
+long
+a long enough string to be on the heap, r
+drop R
+a long enough string to be on the heap, r
+drop R
+3
+6
+301
+a long enough string to be on the heap, one
+a long enough string to be on the heap, v1
+bye
+a long enough string to be on the heap, one
+a long enough string to be on the heap, c2!
+none
+a long enough string to be on the heap, c3!!
+nothing found here, so a fresh one is made
+172
+recovered
+recovered
+48
+7

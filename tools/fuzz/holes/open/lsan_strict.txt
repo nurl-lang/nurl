@@ -10,4 +10,3 @@
 # in the compiler or the runtime, never hidden.
 #
 # probe                                                   task
-slice_returned_owned_on_one_path_parameter_on_another.nu  agora #540

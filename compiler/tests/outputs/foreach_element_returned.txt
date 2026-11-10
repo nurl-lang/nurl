@@ -1,0 +1,22 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+2
+3
+0
+a long enough string to be on the heap, two
+none of them, in a string long enough for the heap
+a long enough string to be on the heap, rec two
+no such record, in a string long enough for the heap
+a long enough string to be on the heap, block one
+a long enough string to be on the heap, inner c
+a long enough string to be on the heap, inner a
+8
+9
+1
+2
+3
+1
+a long enough string to be on the heap, kept
+a long enough string to be on the heap, kept

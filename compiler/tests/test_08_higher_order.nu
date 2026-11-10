@@ -15,6 +15,18 @@
     ^ acc
 }
 
+// 1b. FOLD over the first `n` elements only: `filter_in_place` fills a
+// prefix of its output slice, and the rest of it is not part of the answer.
+@ fold_n [A B] [A xs i n B init ( @ B B A ) f → B {
+    : ~ B acc init
+    : ~ i k 0
+    ~ x xs {
+        ? < k n { = acc ( f acc x ) } {}
+        = k + k 1
+    }
+    ^ acc
+}
+
 // 2. MAP (in-place): Muuntaa alkioita ja tallentaa ne valmiiksi varattuun sliceen.
 // Palauttaa käsiteltyjen alkioiden määrän.
 @ map_in_place [A B] [A in_xs [B out_xs ( @ B A ) f → i {
@@ -58,6 +70,22 @@
     ^ 0
 }
 
+// …and the first `n` elements of one.
+@ print_prefix_i [i xs i n → i {
+    ( nurl_print `[` )
+    : ~ i k 0
+    ~ x xs {
+        ? < k n {
+            ( nurl_print ` ` )
+            ( nurl_print ( nurl_str_int x ) )
+        } {}
+        = k + k 1
+    }
+    ( nurl_print ` ]
+` )
+    ^ 0
+}
+
 // --- PÄÄOHJELMA ---
 @ main → i {
     ( nurl_print `== Higher-Order Functions Test ==\n` )
@@ -84,17 +112,16 @@
 
     : i match_count ( filter_in_place [i] mapped_data filtered_data is_large )
 
-    // HUOMAA TÄMÄ TEMPPU: Koska filtered_data on pre-allokoitu 5 paikkaan,
-    // luomme siitä uuden "aliviipaleen" (slice-näkymän), joka on vain match_count pituinen.
-    // NURL-slicen rakenne on { T*, i64 length }. Haetaan alkuperäinen osoitin (. 0).
-    : [i final_slice @ [i { . filtered_data 0 match_count }
-
+    // filtered_data has room for 5; its first match_count elements are the
+    // answer. (A slice owns its buffer, so a second slice over the same
+    // buffer — `@ [i { pointer length }` — is refused in safe code: the
+    // prefix is walked by count instead.)
     ( nurl_print `Filtered (x>5):  ` )
-    ( print_slice_i final_slice )
+    ( print_prefix_i filtered_data match_count )
 
     // --- FOLD: summa ---
     : ( @ i i i ) summer \ i acc i x → i { ^ + acc x }
-    : i total_sum ( fold [i i] final_slice 0 summer )
+    : i total_sum ( fold_n [i i] filtered_data match_count 0 summer )
 
     ( nurl_print `Folded (sum):    ` )
     ( nurl_print ( nurl_str_int total_sum ) )

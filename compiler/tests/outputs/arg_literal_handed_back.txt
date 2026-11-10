@@ -1,0 +1,14 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+a string long enough to be on the heap for sure
+1
+2
+3
+3
+3
+1
+1
+a string long enough to be on the heap, in
+3

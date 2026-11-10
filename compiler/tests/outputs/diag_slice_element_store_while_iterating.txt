@@ -1,0 +1,12 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_slice_element_store_while_iterating.nu:14:9: error: cannot store into an element of 'a' while iterating over it — the '~' loop holds a borrow of the slice, and the element the store replaces is released under the loop; move the store out of the loop body, or loop over the indices instead
+        = . a 0 ( string_from `a long enough string to be on the heap, new` )
+        ^
+compiler/tests/diag_slice_element_store_while_iterating.nu:23:9: error: cannot store into an element of '. g rows' while iterating over it — the '~' loop holds a borrow of the slice, and the element the store replaces is released under the loop; move the store out of the loop body, or loop over the indices instead
+        = . . g rows 1 ( string_from `a long enough string to be on the heap, new` )
+        ^
+compiler/tests/diag_slice_element_store_while_iterating.nu:33:9: error: cannot store into an element of 'a' while iterating over it — the '~' loop holds a borrow of the slice, and the element the store replaces is released under the loop; move the store out of the loop body, or loop over the indices instead
+        = . a k ( string_from `a long enough string to be on the heap, new` )
+        ^
+error: compilation aborted — 3 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

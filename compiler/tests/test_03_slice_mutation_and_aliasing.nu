@@ -149,7 +149,7 @@ unsafe @ main → i {
     ( puts `doubled: ` )
     ( print_slice dbl )  // 0 2 4 6 8 10 12 14 16 18
 
-    // Built over raw malloc buffers: released by hand.
-    ( nurl_free # s . built 0 ) ( nurl_free # s . dbl 0 )
+    // (`built` and `dbl` own the buffers their slices were built over:
+    // released here, with the literals.)
     ^ 0
 }

@@ -1,0 +1,18 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_inout_kept_argument_read_after.nu:30:5: error: 'q' is read here, but its value was moved into an owner at line 27. A heap value has one owner; once it is stored into an aggregate, an Option or a container (vec_push), the old name is gone, because the owner may release or replace the value while the name still points at it. Read it through that owner, or store a copy and keep the original: ( mem_dup q ).
+    ( nurl_println ( string_data q ) )
+    ^
+compiler/tests/diag_inout_kept_argument_read_after.nu:40:5: error: 'q' is read here, but its value was moved into an owner at line 37. A heap value has one owner; once it is stored into an aggregate, an Option or a container (vec_push), the old name is gone, because the owner may release or replace the value while the name still points at it. Read it through that owner, or store a copy and keep the original: ( mem_dup q ).
+    ( nurl_println ( string_data q ) )
+    ^
+compiler/tests/diag_inout_kept_argument_read_after.nu:50:5: error: 'q' is read here, but its value was moved into an owner at line 47. A heap value has one owner; once it is stored into an aggregate, an Option or a container (vec_push), the old name is gone, because the owner may release or replace the value while the name still points at it. Read it through that owner, or store a copy and keep the original: ( mem_dup q ).
+    ( nurl_println ( string_data q ) )
+    ^
+compiler/tests/diag_inout_kept_argument_read_after.nu:58:5: error: 'q' is read here, but its value was moved into an owner at line 57. A heap value has one owner; once it is stored into an aggregate, an Option or a container (vec_push), the old name is gone, because the owner may release or replace the value while the name still points at it. Read it through that owner, or store a copy and keep the original: ( mem_dup q ).
+    ( nurl_println ( string_data q ) )
+    ^
+compiler/tests/diag_inout_kept_argument_read_after.nu:69:5: error: 'q' is read here, but its value was moved into an owner at line 66. A heap value has one owner; once it is stored into an aggregate, an Option or a container (vec_push), the old name is gone, because the owner may release or replace the value while the name still points at it. Read it through that owner, or store a copy and keep the original: ( mem_dup q ).
+    ~ x q { ( nurl_println ( nurl_str_int x ) ) }
+    ^
+error: compilation aborted — 5 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

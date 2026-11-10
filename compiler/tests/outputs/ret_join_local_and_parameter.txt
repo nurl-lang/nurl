@@ -1,0 +1,30 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+1
+2
+100
+200
+100
+200
+100
+200
+a long enough string to be on the heap, q
+a long enough string to be on the heap, loc
+a long enough string to be on the heap, q
+1
+2
+3
+100
+200
+4
+7
+8
+100
+200
+1
+2
+3
+100
+200
