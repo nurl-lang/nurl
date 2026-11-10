@@ -38264,24 +38264,13 @@ unsafe @ bck_sx_is_id s e → b {
     : i n ( nurl_str_len sx )
     ? != ( nurl_str_get sx - n 1 ) 41 { ^ } {}
     : s inner ( nurl_str_slice sx + lp 1 - - n lp 2 )
-    ? | == 0 ( nurl_str_len inner ) ! ( __all_digits inner ) { ^ } {}
+    ? | ! ( __is_int_lit inner ) == 45 ( nurl_str_get inner 0 ) { ^ } {}
     : s r0 ( nurl_sym_get g_bck ( bck_bkey `rcr_` inner ) )
     : s root ? == 0 ( nurl_str_len r0 ) ( nurl_str_cat inner `` ) r0
     ( bck_put ( bck_bkey `rcr_` nid ) root )
     ( bck_add_word_once ( bck_bkey `rcm_` root ) root )
     ( bck_add_word_once ( bck_bkey `rcm_` root ) nid )
     = g_bck_rcf_any 1
-}
-
-@ __all_digits s w → b {
-    : i n ( nurl_str_len w )
-    : ~ i k 0
-    ~ < k n {
-        : i c ( nurl_str_get w k )
-        ? | < c 48 > c 57 { ^ F } {}
-        = k + k 1
-    }
-    ^ T
 }
 
 @ bck_dep_add i wid s srcs0 → v {
