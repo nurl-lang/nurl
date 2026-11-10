@@ -273,7 +273,8 @@ def Ty.dtorFree : Ty → Bool
 def Ty.ok : Ty → Bool
   | .int => true
   -- (A2-drop.3b: a `Vec`'s elements hold no destructor value; dropping
-  -- the `Vec` releases them, which runs no code)
+  -- the `Vec` releases them, which runs no code, except a share's payload
+  -- or a closure's environment, A2-drop.3c and 3d)
   | .vec t => t.ok && t.dtorFree
   | .slice t => t.ok && !t.holdsView
   | .prod a b => a.ok && b.ok
