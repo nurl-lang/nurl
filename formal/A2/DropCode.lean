@@ -140,38 +140,6 @@ namespace A2.DtorWitness
 open A2.Dtor
 open A2.DynCell (NoRootb noRootb_empty)
 
-/-- No entry views anything. -/
-def NoDeps (Γ : Ctx) : Prop := ∀ v E, Γ v = some E → E.vdeps = []
-
-theorem NoDeps.setE {Γ : Ctx} (h : NoDeps Γ) {x : Var} {E : Entry} (hE : E.vdeps = []) :
-    NoDeps (A2.setE Γ x E) := fun v E' hv => by
-  by_cases hvx : v = x
-  · subst hvx; simp [A2.setE] at hv; subst hv; exact hE
-  · rw [A2.setE, upd_ne _ _ hvx] at hv; exact h v E' hv
-
-theorem NoDeps.kill {Γ : Ctx} (h : NoDeps Γ) (e : Eff) (hv : Bool) (x : Var) :
-    NoDeps (A2.kill e hv x Γ) := fun v E' hv' => by
-  simp only [A2.kill] at hv'
-  cases h0 : Γ v with
-  | none => rw [h0] at hv'; cases hv'
-  | some E0 =>
-    rw [h0] at hv'; simp only [Option.map_some, Option.some.injEq] at hv'; subst hv'
-    have := h v E0 h0
-    unfold killE; split
-    · simpa [Entry.vdeps] using this
-    · exact this
-
-theorem NoDeps.kill_eq {Γ : Ctx} (h : NoDeps Γ) (e : Eff) (hv : Bool) (x : Var) :
-    A2.kill e hv x Γ = Γ := by
-  funext v
-  cases h0 : Γ v with
-  | none => simp [A2.kill, h0]
-  | some E =>
-    simp only [A2.kill, h0, Option.map_some, Option.some.injEq]
-    unfold killE
-    have : hits e hv x E = false := by simp [hits, h v E h0]
-    rw [this]; rfl
-
 theorem wfAdd {Γ : Ctx} (h : CtxWF Γ) {x : Var} (hx : Γ x = none) {E : Entry} (hE : E.vdeps = [])
     (hb : E.dbind = false) (hd : E.dtor = false) : CtxWF (A2.setE Γ x E) :=
   h.add hx (fun _ _ r hr => by simp [hE, roots] at hr) (fun h' => by rw [hb] at h'; cases h')

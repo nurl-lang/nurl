@@ -242,7 +242,7 @@ theorem tryRead_some {Γ : Ctx} {F : List Var} {o : Var} {t : Ty} (ho : Γ o = s
     (hoF : o ∉ F) (hpin : NoPin Γ o) (hds : DtorSafe Γ .replace false o) :
     RhsT Γ F (.taker o) (guardE t)
       (setE (kill .replace false o Γ) o { tryReadE t with live := false, dtor := false }) := by
-  have h := RhsT.taker (F := F) (a := .int) (b := .arc (.prod (.lk t) t)) ho rfl rfl rfl hoF hpin hds
+  have h := RhsT.taker (F := F) (a := .int) (b := .arc (.prod (.lk t) t)) ho rfl rfl (Or.inl rfl) hoF hpin hds
   have he : compE (tryReadE t) (.arc (.prod (.lk t) t)) = guardE t := by
     simp [compE, ownHeld, tryReadE, guardE]
   rw [he] at h

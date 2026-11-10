@@ -386,7 +386,8 @@ inductive ExprT (Γ : Ctx) : Expr → Prop
   | slen {x : Var} {E : Entry} {t : Ty} :
       Γ x = some E → E.live = true → E.ty = .slice t → ExprT Γ (.slen x)
   | isl {x : Var} {E : Entry} {a b : Ty} :
-      Γ x = some E → E.live = true → E.ty = .sum a b → ExprT Γ (.isl x)
+      -- (Agora #632: through a destructor type too, as `getl` / `getr` lend)
+      Γ x = some E → E.live = true → E.ty.undtor = .sum a b → ExprT Γ (.isl x)
 
 /-- An element read out of `y` (entry `E`), of type `t`: an integer is
     copied, a stored view is copied with what it depends on, an element
@@ -482,6 +483,16 @@ def compE (E : Entry) : Ty → Entry
   | .int => intE
   | .slice s => ⟨.slice s, .bor, true, E.held, E.held, false, false⟩
   | t => ⟨t, .own, true, [], ownHeld true t E.held, false, false⟩
+
+/-- What `takel` / `taker` take a payload out of is an enum under its
+    destructor type, if any. -/
+theorem take_undtor {τ a b : Ty} {G : Nat → Prop} (h : τ = .sum a b ∨ ∃ f, τ = .dtor f (.sum a b) ∧ G f) :
+    τ.undtor = .sum a b := by
+  rcases h with h | ⟨f, h, _⟩ <;> subst h <;> rfl
+
+theorem take_ne_int {τ a b : Ty} {G : Nat → Prop} (h : τ = .sum a b ∨ ∃ f, τ = .dtor f (.sum a b) ∧ G f) :
+    τ ≠ .int := by
+  rcases h with h | ⟨f, h, _⟩ <;> subst h <;> simp
 
 /-! The entries the rules build run no destructor (A2-drop.2: only `letd`
     makes one that does). -/
@@ -631,11 +642,16 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
   | getr {y : Var} {E : Entry} {a b : Ty} :
       Γ y = some E → E.live = true → E.ty.undtor = .sum a b → RhsT Γ F (.getr y) (projE y E b) Γ
   | takel {y : Var} {E : Entry} {a b : Ty} :
-      Γ y = some E → E.live = true → E.mode = .own → E.ty = .sum a b → y ∉ F → NoPin Γ y →
+      Γ y = some E → E.live = true → E.mode = .own →
+      -- (Agora #632: or an enum under its destructor type, the payload one
+      -- that holds a destructor value: the statement that binds it, `letd` or
+      -- `assign`, asks that the enum's destructor is its glue, `TakeOK`)
+      (E.ty = .sum a b ∨ ∃ f, E.ty = .dtor f (.sum a b) ∧ a.holdsDtor = true) → y ∉ F → NoPin Γ y →
       DtorSafe Γ .replace false y →
       RhsT Γ F (.takel y) (compE E a) (setE (kill .replace false y Γ) y { E with live := false, dtor := false })
   | taker {y : Var} {E : Entry} {a b : Ty} :
-      Γ y = some E → E.live = true → E.mode = .own → E.ty = .sum a b → y ∉ F → NoPin Γ y →
+      Γ y = some E → E.live = true → E.mode = .own →
+      (E.ty = .sum a b ∨ ∃ f, E.ty = .dtor f (.sum a b) ∧ b.holdsDtor = true) → y ∉ F → NoPin Γ y →
       DtorSafe Γ .replace false y →
       RhsT Γ F (.taker y) (compE E b) (setE (kill .replace false y Γ) y { E with live := false, dtor := false })
   /-- A closure literal.  A3.5b: its type says what its environment may hold
@@ -1558,6 +1574,8 @@ def Stmt.movedFirst : Stmt → List Var
     hand (`unpair`) skips no work its glue would do. -/
 def Stmt.pureGlue : Stmt → Bool
   | .letd _ _ (.var _) s => s.pureGlue
+  | .letd _ _ (.takel _) s => s.pureGlue
+  | .letd _ _ (.taker _) s => s.pureGlue
   | .unpair _ _ _ s => s.pureGlue
   | .assign _ (.expr _) => true
   | .skip => true

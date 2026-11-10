@@ -719,20 +719,39 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   value of whichever destructor type it is bound at. `A2.DtorWitness.main8_safe` is a typed
   program with such a struct, its impl and its glue functions of the
   program checked by `FnOK`.
-  An ENUM holding a destructor value is still a destructor type whose
-  glue takes it lent: it matches on the tag and lends the payload to its
-  destructor (`getl` / `getr` lend a payload through the type,
-  `A2.DtorWitness.enum_lends`); the calculus checks it as it checks any
-  destructor, and that it calls the payload's destructor is the
-  elaboration's part (the open half of Agora #616).
+  An ENUM holding a destructor value (an option of a `% Drop` value) is a
+  destructor type too, and its destructor is its glue (Agora #632,
+  `EnumGlueOK`; a destructor that takes it lent is refused for it,
+  `A2.Dtor.enum_dtor_is_glue`): a function that takes the enum owned and
+  matches on its tag; in the arm of a variant whose payload type holds a
+  destructor value the payload moves out to a `letd` first thing
+  (`takel` / `taker`), whose frame runs its destructor at its end and on
+  a panic, and the arms do nothing else (`A2.Dtor.enum_glue_body`). The
+  other variant's payload holds no destructor value; its arm takes
+  nothing and the enum is freed where the glue's parameter ends. The
+  witnesses' options (`main3_safe`, `main4_safe`) are dropped by such
+  glue, functions of the program checked by `FnOK`. As for a struct, that
+  the payload's destructor runs is read off these steps and theorems.
+  Which arm runs is the tag's test at run time: the typing does not tie
+  the arm to the variant (an `ite` on `isl`), so "the arm that takes is
+  the arm of the variant that is there" is the step's, not a theorem.
+  In this cut an enum with glue holds no views, and an enum with a
+  `% Drop` of its own beside such a payload is refused (the struct's
+  second cut, not done for enums).
 - A field of a destructor value, or a payload of a destructor enum, is
   lent through the type, the destructor staying with the whole value.
   Taking one out is refused: `unpair` of a destructor value whose
   destructor takes it lent, or is the glue of a struct with a `% Drop` of
   its own (one whose destructor only takes it apart is taken apart,
   above), and `takel` /
-  `taker` of a destructor enum (`A2.DtorWitness.enum_take_refused`), since
-  the destructor would not run.
+  `taker` of a payload that holds no destructor value out of a destructor
+  enum (`A2.DtorWitness.enum_take_refused`), since the destructor would
+  not run. A payload that holds one is taken out only where the enum's
+  destructor is its glue: the statements that can bind it, `letd` and
+  `assign` (`letv` refuses an owned value that holds a destructor value),
+  ask it of the enum in the context they are typed in
+  (`A2.Dtor.take_is_glue`, `assign_take_is_glue`). That is then what the
+  enum's drop does.
 - A2-drop.3b: a `Vec` of destructor values is drained. `Ty.ok` admits
   `vec (dtor f u)` (`Ty.vecD`) as a binding's own type only, and refuses it
   as any part of another type: a field, a payload, an element, a view's
@@ -799,19 +818,11 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
 - So a binding's end, a drained `Vec`'s, and a call's result frame run
   the value's own, outermost destructor, and everywhere else that could
   hold a destructor value is refused (the list below). That these are all
-  the places is read off the rules, not a single theorem (above). What the
-  calculus does not show is the destructors inside an ENUM (Agora #616's
-  open half; a struct's fields are shown, above):
-  - an enum that holds destructor values is a destructor type whose
-    destructor is its glue, which takes it lent, and that the glue runs
-    the payload's destructor is the elaboration's part, not checked: a
-    glue that calls none types (the witnesses' `ofn` and `gfn` are such),
-    and the frame then frees the payload running nothing;
-  - a panic in that glue ends it, and the frame frees the payload with no
-    destructor.
-  The model that shows it is the struct's: glue that takes the enum owned
-  and takes the payload out (`takel` / `taker`, to a `letd`). See Agora
-  #542–#544, #611, #616.
+  the places is read off the rules, not a single theorem (above). The
+  destructors INSIDE a value are shown for a struct's fields (Agora #616)
+  and an enum's payload (Agora #632), above, as shapes of the glue the
+  typing forces plus the frames' steps; not as one theorem about a run.
+  See Agora #542–#544, #611, #616, #632.
 
 The rules are stricter than nurlc's in these places:
 - for a binding of a type whose destructor may read a view:
@@ -904,7 +915,11 @@ The rules are stricter than nurlc's in these places:
   apart (Agora #616: `unpair`, its destructor fields going to their
   `letd`s), as Rust lets a program move out of a struct that has no
   `Drop` impl of its own; one with a destructor that takes it lent, or
-  with an impl beside its glue, is not.
+  with an impl beside its glue, is not. An enum with a `% Drop` of its
+  own beside a payload that holds a destructor value is refused (Agora
+  #632's cut has glue for an enum with no impl); an enum with glue holds
+  no views; and a payload that holds no destructor value is not taken
+  out of an enum of a destructor type by value (it is lent).
 
 How the runtime carries this out (`stdlib/runtime_core.c`, `nurl_panic`)
 is stated here so the claim does not hide it:
