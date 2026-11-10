@@ -552,7 +552,8 @@ def CapsOK (Γ : Ctx) (F : List Var) (D : List Dep) (cs : List (Var × PMode × 
 
 inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
   | expr {e : Expr} : ExprT Γ e → RhsT Γ F (.expr e) intE Γ
-  | new {t : Ty} : t.ok = true → RhsT Γ F (.new t) ⟨.vec t, .own, true, [], [], false, false⟩ Γ
+  | new {t : Ty} : (Ty.vec t).ok = true →  -- (A2-drop.3b: its elements hold no destructor value)
+      RhsT Γ F (.new t) ⟨.vec t, .own, true, [], [], false, false⟩ Γ
   | moveOwn {y : Var} {E : Entry} :
       Γ y = some E → E.live = true → E.mode = .own → y ∉ F → NoPin Γ y → DtorSafe Γ .replace false y →
       RhsT Γ F (.var y) ⟨E.ty, .own, true, [], E.held, false, false⟩

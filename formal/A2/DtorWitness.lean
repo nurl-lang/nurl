@@ -16,7 +16,10 @@ Two kinds of fact, both checked here (`check.sh` prints their axioms):
   destructor, a function handing back an owned value of that type, and two
   callers (`main`: a `letd` of a struct literal; `main2`: a call's result
   handed to its `letd`), all typed, with `memory_safe` applied: the premises
-  the cut adds are satisfiable.  `lock_checkout_assign` types the gap the
+  the cut adds are satisfiable.  A2-drop.3b adds two more: an option of a
+  destructor value (`main3`, typed under 3a's rules too), and an enum
+  holding a destructor value two levels down (`main4`, which only the deep
+  `Ty.holdsDtor` sends to `letd`).  `lock_checkout_assign` types the gap the
   docs list (a lock check-out binding of a destructor type is assigned, its
   old value dropped with no destructor: A2-drop.3d).
 -/
@@ -124,6 +127,99 @@ theorem scopeD_panic_runs_dtor {P : Prog} {x : Var} {f : Nat} {m m1 : Mem} {s : 
       (.ok { m1 with nv := m1.nv + 1 } (.seq (.scope x (.letcall m1.nv f [x] .skip)) .panic)) :=
   Step.scopeDP hs hx
 
+/-- A2-drop.3b: in a running configuration, no binding holds a `Vec` of
+    destructor values (`Ty.ok` refuses one, and `MInv` keeps every binding's
+    type well formed).  This is stated for a binding whose type is a `Vec`
+    at its top; a `Vec` nested in a field, a payload, a view, a share or a
+    destructor type is covered by `Ty.ok`'s recursion
+    (`vecs_dtor_free`).  So `free`, a truncation or an element set (through
+    the owner or a borrow), `pop` and `withElem` release or check out no
+    destructor value of the element type itself.  (What a `Vec`'s drop
+    releases may still run a destructor in nurlc: the payload of a share
+    whose last share it drops, or a closure's environment, A2-drop.3c and
+    3d.) -/
+theorem vec_elems_dtor_free {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {E : Entry} {t : Ty}
+    (hx : Γ x = some E) (ht : E.ty = .vec t) : t.dtorFree = true := by
+  have h := hi.tyok hx; rw [ht] at h; exact Ty.ok_vec_free h
+
+/-- The element types of the `Vec`s that occur in a type, at any depth:
+    in fields and payloads, under views, shares and destructor types. -/
+def vecElems : Ty → List Ty
+  | .vec t => t :: vecElems t
+  | .slice t => vecElems t
+  | .arc t => vecElems t
+  | .lk t => vecElems t
+  | .cell t => vecElems t
+  | .dtor _ t => vecElems t
+  | .prod a b => vecElems a ++ vecElems b
+  | .sum a b => vecElems a ++ vecElems b
+  | .int => []
+  | .fn _ _ => []
+
+/-- A well-formed type has no `Vec` of destructor values anywhere in it. -/
+theorem ok_vecElems_free {t : Ty} (h : t.ok = true) : ∀ u ∈ vecElems t, u.dtorFree = true := by
+  induction t with
+  | int => simp [vecElems]
+  | fn _ _ => simp [vecElems]
+  | vec t ih =>
+    simp only [Ty.ok, Bool.and_eq_true] at h
+    simp only [vecElems, List.mem_cons]
+    rintro u (rfl | hu)
+    · exact h.2
+    · exact ih h.1 u hu
+  | slice t ih => simp only [Ty.ok, Bool.and_eq_true] at h; simpa only [vecElems] using ih h.1
+  | arc t ih => simp only [Ty.ok, Bool.and_eq_true] at h; simpa only [vecElems] using ih h.1
+  | lk t ih => simp only [Ty.ok, Bool.and_eq_true] at h; simpa only [vecElems] using ih h.1
+  | cell t ih => simp only [Ty.ok, Bool.and_eq_true] at h; simpa only [vecElems] using ih h.1
+  | dtor _ t ih => simp only [Ty.ok, Bool.and_eq_true] at h; simpa only [vecElems] using ih h.2
+  | prod a b iha ihb =>
+    simp only [Ty.ok, Bool.and_eq_true] at h
+    simp only [vecElems, List.mem_append]
+    rintro u (hu | hu)
+    · exact iha h.1 u hu
+    · exact ihb h.2 u hu
+  | sum a b iha ihb =>
+    simp only [Ty.ok, Bool.and_eq_true] at h
+    simp only [vecElems, List.mem_append]
+    rintro u (hu | hu)
+    · exact iha h.1 u hu
+    · exact ihb h.2 u hu
+
+/-- A2-drop.3b, the deep form of `vec_elems_dtor_free`: in a running
+    configuration, every `Vec` occurring anywhere in a binding's type (a
+    field's, a payload's, a share's payload's, …) has elements free of
+    destructor values. -/
+theorem vecs_dtor_free {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {E : Entry}
+    (hx : Γ x = some E) : ∀ u ∈ vecElems E.ty, u.dtorFree = true :=
+  ok_vecElems_free (hi.tyok hx)
+
+/-- A2-drop.3b: `vec_new` of destructor values is refused. -/
+theorem new_dtor_free {Γ Γ1 : Ctx} {F : List Var} {t : Ty} {E : Entry}
+    (h : RhsT Γ F (.new t) E Γ1) : t.dtorFree = true := by
+  cases h with | new h => exact Ty.ok_vec_free h
+
+/-- A2-drop.3b: `Ty.holdsDtor` is deep, unfolded: a struct or an enum one
+    field or payload of which holds a destructor value holds one.  (A fact
+    about the definition; what it gives programs is `letv_owned_dtor_free`.) -/
+theorem holdsDtor_deep {a b : Ty} (h : a.holdsDtor = true) :
+    (Ty.prod a b).holdsDtor = true ∧ (Ty.prod b a).holdsDtor = true ∧
+    (Ty.sum a b).holdsDtor = true ∧ (Ty.sum b a).holdsDtor = true := by
+  simp [Ty.holdsDtor, h]
+
+/-- A2-drop.3b: a typed `letv`'s owned value is of a type free of
+    destructor values at any depth (`letv_owned_no_dtor`, with
+    `Ty.holdsDtor_eq_not_free`): a destructor value two levels down, in a
+    struct or an enum of no destructor type of its own, is bound by `letd`
+    as what holds it is (`A2.DtorWitness.main4_safe`). -/
+theorem letv_owned_dtor_free {P : Prog} {Γ Δ : Ctx} {F : List Var} {x : Var} {r : Rhs} {s : Stmt}
+    (h : StmtT P Γ F (.letv x r s) Δ) :
+    ∃ Γ0 E Γ1, RhsT Γ0 F r E Γ1 ∧ (E.mode = .own → E.ty.dtorFree = true) := by
+  obtain ⟨Γ0, E, Γ1, hr, hnd⟩ := letv_owned_no_dtor h
+  refine ⟨Γ0, E, Γ1, hr, fun hm => ?_⟩
+  have h1 := hnd hm
+  rw [Ty.holdsDtor_eq_not_free] at h1
+  simpa using h1
+
 end A2.Dtor
 
 
@@ -155,7 +251,44 @@ def mk : Fn where
   body := .letv 1 (.expr (.lit 1)) (.letv 2 (.expr (.lit 2)) (.letd 3 0 (.pair 1 2) (.assign 0 (.var 3))))
   nvars := 4
 
-def P : Prog := [dfn, mk]
+/-- A2-drop.3b: an option of a destructor value, `sum DT int`, holds one,
+    so it is bound by `letd` at a destructor type of its own whose
+    destructor is its glue: `@ drop in self → i { = r 0 }` here (the
+    elaboration's glue also lends the payload to `dfn`; the calculus checks
+    a glue as it checks any destructor). -/
+def OT : Ty := .sum DT .int
+def ODT : Ty := .dtor 2 OT
+
+def ofn : Fn where
+  params := [(.inp, ODT)]
+  resTy := .int
+  resOwn := false
+  lends := []
+  rholds := []
+  outHolds := []
+  body := .assign 1 (.expr (.lit 0))
+  nvars := 2
+
+/-- A2-drop.3b: an enum one variant of which holds a struct holding a
+    destructor value, `sum (prod DT int) int`: the destructor value is two
+    levels down, under a struct of no destructor type of its own.  Its glue,
+    `@ drop in self → i { = r 0 }` (the calculus checks a glue as it checks
+    any destructor). -/
+def AT : Ty := .prod DT .int
+def ST : Ty := .sum AT .int
+def SDT : Ty := .dtor 3 ST
+
+def gfn : Fn where
+  params := [(.inp, SDT)]
+  resTy := .int
+  resOwn := false
+  lends := []
+  rholds := []
+  outHolds := []
+  body := .assign 1 (.expr (.lit 0))
+  nvars := 2
+
+def P : Prog := [dfn, mk, ofn, gfn]
 
 theorem dfn_not_thru : ¬ ThruFn P 0 := by
   intro h
@@ -227,6 +360,80 @@ theorem dfn_ok : FnOK P dfn := by
   · intro i hi b hb; simp [dfn] at hi; subst hi; simp [dfn] at hb
 
 
+theorem ofn_not_thru : ¬ ThruFn P 2 := by
+  intro h
+  cases h with
+  | here hf hb => simp [P] at hf; subst hf; simp [ofn, Stmt.hasThru] at hb
+  | call hf hg _ => simp [P] at hf; subst hf; simp [ofn, Stmt.calls] at hg
+
+theorem odtor_ok : DtorOK P 2 ODT :=
+  ⟨ofn, rfl, rfl, rfl, rfl, rfl, rfl, rfl, ofn_not_thru⟩
+
+theorem ofn_body : StmtT P (sigCtx ofn) [] ofn.body
+    (setE (kill .replace false 1 (sigCtx ofn)) 1 { intE with mode := R0.mode }) := by
+  have hc : sigCtx ofn 1 = some R0 := by simp [sigCtx, ofn, R0, resMode]
+  have hflags : ∀ v E, sigCtx ofn v = some E → E.dtor = false ∧ E.dbind = false := by
+    intro v E h
+    rcases v with _ | _ | v <;> simp [sigCtx, ofn, paramE, resMode] at h <;> subst h <;> exact ⟨rfl, rfl⟩
+  exact StmtT.assign (Ex := R0) (E := intE) hc (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
+    (RhsT.expr ExprT.lit) rfl (by simp [intE, roots, Entry.vdeps, Mode.ownSlot]) (by simp [hc])
+    (by
+      intro p E hp hm d hd _
+      rcases p with _ | _ | p <;> simp [sigCtx, ofn, paramE, resMode, ODT, OT, DT, T, Ty.hasFn] at hp <;>
+        subst hp <;> simp [Entry.vdeps, Mode.ownSlot] at hd <;> simp at hm)
+    (DtorSafe.of_none (fun v E h => (hflags v E h).1) _ _ _) rfl
+
+theorem ofn_ok : FnOK P ofn := by
+  refine ⟨rfl, by decide, by decide, rfl, by simp [ofn], ?_, by simp [ofn], by simp [ofn], by simp [ofn],
+    by simp [ofn], by simp [ofn], ?_, _, ofn_body, ?_, ?_, ?_⟩
+  · intro pt hpt; simp [ofn] at hpt; subst hpt; simp [ODT, OT, DT, T, Ty.ok, Ty.isStruct]
+  · refine ⟨fun i hi hs _ => ?_, fun i hi b hb _ => ?_, fun h => by simp [ofn] at h⟩
+    · simp [ofn] at hi; subst hi; simp [ofn] at hs
+    · simp [ofn] at hi; subst hi; simp [ofn] at hb
+  · intro v E h
+    rcases v with _ | _ | v <;> simp [setE, upd, kill, killE, sigCtx, ofn, paramE, resMode, intE] at h <;>
+      subst h <;> exact ⟨rfl, rfl⟩
+  · exact ⟨{ intE with mode := R0.mode }, by simp [setE, upd, ofn], rfl, rfl, by simp [R0, resMode, ofn], by simp [intE], by simp [intE],
+      by simp [ofn]⟩
+  · intro i hi b hb; simp [ofn] at hi; subst hi; simp [ofn] at hb
+
+theorem gfn_not_thru : ¬ ThruFn P 3 := by
+  intro h
+  cases h with
+  | here hf hb => simp [P] at hf; subst hf; simp [gfn, Stmt.hasThru] at hb
+  | call hf hg _ => simp [P] at hf; subst hf; simp [gfn, Stmt.calls] at hg
+
+theorem gdtor_ok : DtorOK P 3 SDT :=
+  ⟨gfn, rfl, rfl, rfl, rfl, rfl, rfl, rfl, gfn_not_thru⟩
+
+theorem gfn_body : StmtT P (sigCtx gfn) [] gfn.body
+    (setE (kill .replace false 1 (sigCtx gfn)) 1 { intE with mode := R0.mode }) := by
+  have hc : sigCtx gfn 1 = some R0 := by simp [sigCtx, gfn, R0, resMode]
+  have hflags : ∀ v E, sigCtx gfn v = some E → E.dtor = false ∧ E.dbind = false := by
+    intro v E h
+    rcases v with _ | _ | v <;> simp [sigCtx, gfn, paramE, resMode] at h <;> subst h <;> exact ⟨rfl, rfl⟩
+  exact StmtT.assign (Ex := R0) (E := intE) hc (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
+    (RhsT.expr ExprT.lit) rfl (by simp [intE, roots, Entry.vdeps, Mode.ownSlot]) (by simp [hc])
+    (by
+      intro p E hp hm d hd _
+      rcases p with _ | _ | p <;> simp [sigCtx, gfn, paramE, resMode, SDT, ST, AT, DT, T, Ty.hasFn] at hp <;>
+        subst hp <;> simp [Entry.vdeps, Mode.ownSlot] at hd <;> simp at hm)
+    (DtorSafe.of_none (fun v E h => (hflags v E h).1) _ _ _) rfl
+
+theorem gfn_ok : FnOK P gfn := by
+  refine ⟨rfl, by decide, by decide, rfl, by simp [gfn], ?_, by simp [gfn], by simp [gfn], by simp [gfn],
+    by simp [gfn], by simp [gfn], ?_, _, gfn_body, ?_, ?_, ?_⟩
+  · intro pt hpt; simp [gfn] at hpt; subst hpt; simp [SDT, ST, AT, DT, T, Ty.ok, Ty.isStruct]
+  · refine ⟨fun i hi hs _ => ?_, fun i hi b hb _ => ?_, fun h => by simp [gfn] at h⟩
+    · simp [gfn] at hi; subst hi; simp [gfn] at hs
+    · simp [gfn] at hi; subst hi; simp [gfn] at hb
+  · intro v E h
+    rcases v with _ | _ | v <;> simp [setE, upd, kill, killE, sigCtx, gfn, paramE, resMode, intE] at h <;>
+      subst h <;> exact ⟨rfl, rfl⟩
+  · exact ⟨{ intE with mode := R0.mode }, by simp [setE, upd, gfn], rfl, rfl, by simp [R0, resMode, gfn], by simp [intE], by simp [intE],
+      by simp [gfn]⟩
+  · intro i hi b hb; simp [gfn] at hi; subst hi; simp [gfn] at hb
+
 /-! ### The maker: a function whose owned result is a destructor value -/
 
 def Rr : Entry := ⟨DT, .own, false, [], [], false, false⟩
@@ -287,9 +494,11 @@ theorem mk_ok : FnOK P mk := by
 theorem prog_ok : ProgOK P := by
   intro fn hfn
   simp only [P, List.mem_cons, List.mem_nil_iff, or_false] at hfn
-  rcases hfn with rfl | rfl
+  rcases hfn with rfl | rfl | rfl | rfl
   · exact dfn_ok
   · exact mk_ok
+  · exact ofn_ok
+  · exact gfn_ok
 
 /-! ### The caller: `: DT y ( mk )  :drop z y` -/
 
@@ -327,7 +536,7 @@ theorem main2_typed : ∃ Δ, StmtT P (fun _ => none) [] main2 Δ := by
 theorem prog_codes : ProgCodes P := by
   intro fn hfn
   simp only [P, List.mem_cons, List.mem_nil_iff, or_false] at hfn
-  rcases hfn with rfl | rfl <;> simp [dfn, mk, Stmt.codesOK, Rhs.codeOK]
+  rcases hfn with rfl | rfl | rfl | rfl <;> simp [dfn, mk, ofn, gfn, Stmt.codesOK, Rhs.codeOK]
 
 theorem main2_safe {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem 2) main2 (.ok m' s')) :
     ¬ Stuck P m' s' := by
@@ -340,6 +549,115 @@ theorem main_safe {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem 3) main (.ok m'
   exact memory_safe prog_ok prog_codes ht rfl (by simp [main, Stmt.codesOK, Rhs.codeOK]) (by decide) hr
 
 
+
+/-! ### An option of a destructor value (A2-drop.3b)
+
+`: a 1  : b 2  :drop x ( pair a b )  :drop o ( Some x )`: the destructor
+value moves into the option, and the option, which holds it, is bound by
+`letd` at its own destructor type, its glue `ofn`.  A witness, not a new
+capability: the destructor value is one level down, so 3a's one-level
+`Ty.holdsDtor` sent the option to `letd` already. -/
+
+def main3 : Stmt :=
+  .letv 0 (.expr (.lit 1)) (.letv 1 (.expr (.lit 2))
+    (.letd 2 0 (.pair 0 1) (.letd 3 2 (.inl 2 .int) .skip)))
+
+def EO : Entry := ⟨OT, .own, true, [], [], false, false⟩
+
+theorem main3_typed : ∃ Δ, StmtT P (fun _ => none) [] main3 Δ := by
+  let K1 : Ctx := A2.setE (fun _ => none) 0 intE
+  let K2 : Ctx := A2.setE K1 1 intE
+  have hK1 : NoRootb K1 := noRootb_empty.setE (by simp [intE])
+  have hK2 : NoRootb K2 := hK1.setE (by simp [intE])
+  let ED : Entry := Entry.arm { EP with ty := DT, held := [] }
+  have hEDe : ED = ⟨DT, .own, true, [], [], false, false⟩ := by
+    simp [ED, EP, Entry.arm, DT, T, Ty.dtorViews, Ty.hasDtor, Ty.holdsView]
+  let K3 : Ctx := A2.setE K2 2 ED
+  have hK3 : NoRootb K3 := hK2.setE (by rw [hEDe]; simp)
+  have hpair : RhsT K2 [] (.pair 0 1) EP K2 :=
+    RhsT.pair (Ey := intE) (Ez := intE) (by simp [K2, K1, A2.setE, upd]) rfl PushArg.int
+      (by simp [K2, K1, A2.setE, upd]) rfl PushArg.int (by simp [intE, Mode.ownSlot])
+  -- the destructor value moves into the option
+  let K4 : Ctx := A2.setE (kill .replace false 2 K3) 2 { ED with live := false, dtor := false }
+  have hK4 : NoRootb K4 := (hK3.kill _ _ _).setE (by rw [hEDe]; simp)
+  have hpush : PushArg K3 [] 2 ED ED.ty ED.held K4 := by
+    rw [hEDe]
+    have := PushArg.move (Γ := K3) (F := []) (y := 2) (E := ⟨DT, .own, true, [], [], false, false⟩) (t := DT)
+      rfl rfl (by simp) (hK3.noPin _) (DtorSafe.of_none (fun v E h => (hK3 v E h).2.1) _ _ _)
+    exact this
+  have hinl : RhsT K3 [] (.inl 2 .int) EO K4 := by
+    have := RhsT.inl (Γ := K3) (F := []) (y := 2) (b := .int) (Ey := ED) (Γ1 := K4) (D := ED.held)
+      (by simp [K3, A2.setE, upd]) (by rw [hEDe]) hpush rfl
+    rw [hEDe] at this; exact this
+  let EOd : Entry := Entry.arm { EO with ty := ODT, held := [] }
+  have hEOd : EOd.mode ≠ .rootb ∧ EOd.dtor = false ∧ EOd.dbind = false := by
+    simp [EOd, EO, Entry.arm, ODT, OT, DT, T, Ty.dtorViews, Ty.hasDtor, Ty.holdsView]
+  have hK5 : NoRootb (A2.setE K4 3 EOd) := hK4.setE hEOd
+  have hdo := StmtT.letd (P := P) (Γ := K3) (Γ1 := K4) (F := []) (x := 3) (f := 2) (r := .inl 2 .int)
+    (s := .skip) (E := EO) (t := OT) (H := []) rfl (by simp [K3, K2, K1, A2.setE, upd]) (by simp) hinl rfl
+    (Or.inl rfl) rfl rfl odtor_ok (HeldUp.refl _ _) StmtT.skip (hK5.endOK _)
+  have hd := StmtT.letd (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .pair 0 1)
+    (s := .letd 3 2 (.inl 2 .int) .skip) (E := EP) (t := T) (H := []) rfl (by simp [K2, K1, A2.setE, upd])
+    (by simp) hpair rfl (Or.inl rfl) rfl rfl dtor_ok (HeldUp.refl _ _) hdo ((hK5.exitScope 3).endOK _)
+  have h1 := StmtT.letv (P := P) (x := 1) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K1) (Γ1 := K1)
+    rfl (by simp [K1, A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit) hd
+    (((hK5.exitScope 3).exitScope 2).endOK _)
+  exact ⟨_, StmtT.letv (P := P) (x := 0) (r := .expr (.lit 1)) (E := intE) (F := []) (Γ := fun _ => none)
+    (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.expr ExprT.lit) h1
+    ((((hK5.exitScope 3).exitScope 2).exitScope 1).endOK _)⟩
+
+/-- The option program is memory safe. -/
+theorem main3_safe {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem 4) main3 (.ok m' s')) :
+    ¬ Stuck P m' s' := by
+  obtain ⟨Δ, ht⟩ := main3_typed
+  exact memory_safe prog_ok prog_codes ht rfl (by simp [main3, Stmt.codesOK, Rhs.codeOK]) (by decide) hr
+
+/-! ### A destructor value two levels down (A2-drop.3b)
+
+`: c 3  :drop o ( inr ( prod DT int ) c )`: an enum of type
+`sum (prod DT int) int`, its second variant made here.  Its first variant's
+payload is a struct, of no destructor type of its own, holding a destructor
+value.  A2-drop.3a's one-level `Ty.holdsDtor` asked only whether a field or
+payload was itself a destructor type, so it did not see this one, and `letv`
+bound such an enum with no glue.  Deep, the enum holds a destructor value:
+`letv` refuses it (`main4_letv_refused`), and `letd` binds it at its own
+destructor type, its glue `gfn` (`main4_safe`). -/
+
+def main4 : Stmt := .letv 0 (.expr (.lit 3)) (.letd 1 3 (.inr AT 0) .skip)
+
+def ES : Entry := ⟨ST, .own, true, [], [], false, false⟩
+
+theorem main4_typed : ∃ Δ, StmtT P (fun _ => none) [] main4 Δ := by
+  let K1 : Ctx := A2.setE (fun _ => none) 0 intE
+  have hK1 : NoRootb K1 := noRootb_empty.setE (by simp [intE])
+  have hinr : RhsT K1 [] (.inr AT 0) ES K1 :=
+    RhsT.inr (Ey := intE) (by simp [K1, A2.setE]) rfl PushArg.int
+      (by simp [AT, DT, T, Ty.ok, Ty.isStruct])
+  let ESd : Entry := Entry.arm { ES with ty := SDT, held := [] }
+  have hESd : ESd.mode ≠ .rootb ∧ ESd.dtor = false ∧ ESd.dbind = false := by
+    simp [ESd, ES, Entry.arm, SDT, ST, AT, DT, T, Ty.dtorViews, Ty.hasDtor, Ty.holdsView]
+  have hK2 : NoRootb (A2.setE K1 1 ESd) := hK1.setE hESd
+  have hd := StmtT.letd (P := P) (Γ := K1) (Γ1 := K1) (F := []) (x := 1) (f := 3) (r := .inr AT 0)
+    (s := .skip) (E := ES) (t := ST) (H := []) rfl (by simp [K1, A2.setE]) (by simp) hinr rfl
+    (Or.inl rfl) rfl rfl gdtor_ok (HeldUp.refl _ _) StmtT.skip (hK2.endOK _)
+  exact ⟨_, StmtT.letv (P := P) (x := 0) (r := .expr (.lit 3)) (E := intE) (F := []) (Γ := fun _ => none)
+    (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.expr ExprT.lit) hd ((hK2.exitScope 1).endOK _)⟩
+
+/-- A2-drop.3b: the program binding a destructor value two levels down is
+    memory safe. -/
+theorem main4_safe {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem 2) main4 (.ok m' s')) :
+    ¬ Stuck P m' s' := by
+  obtain ⟨Δ, ht⟩ := main4_typed
+  exact memory_safe prog_ok prog_codes ht rfl (by simp [main4, Stmt.codesOK, Rhs.codeOK]) (by decide) hr
+
+/-- …and `letv` refuses that enum, in any context: deep, `Ty.holdsDtor`
+    sees the destructor value under the struct. -/
+theorem main4_letv_refused {Γ Δ : Ctx} {F : List Var} {x : Var} {s : Stmt} :
+    ¬ StmtT P Γ F (.letv x (.inr AT 0) s) Δ := by
+  intro h
+  obtain ⟨_, E, _, hr, hnd⟩ := A2.Dtor.letv_owned_no_dtor h
+  cases hr
+  simp [AT, DT, Ty.holdsDtor] at hnd
 
 /-- An enum of a destructor type lends its payloads (`getl` / `getr`, through
     the type), the destructor staying with the whole value… -/

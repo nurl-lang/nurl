@@ -256,7 +256,10 @@ the LLVM / C11 memory model rather than redefining it.
       the sweep frees what is left in a queue with its block (`no_leak`).
     - **Not typed yet:** a channel of values that hold a view (shares,
       library handles under the crossing check, and `send` closures are
-      typed since A3.2's and A3.5's second cuts), `chan_len`,
+      typed since A3.2's and A3.5's second cuts); a channel of destructor
+      values, or of values holding one at any depth (its queue is a `Vec`,
+      whose element type `Ty.ok` asks to hold none since A2-drop.3b: see
+      *Destructors*); `chan_len`,
       `chan_is_closed` and `select`. Deadlock freedom, and that
       a waiting `chan_recv` is woken, are not claimed.
   - **A3.3** *(proven)* — `RwLocked`: a value many threads
@@ -579,9 +582,10 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   since A2-drop.3a). What is a **theorem** (`A2/DtorWitness.lean`, axioms
   printed by `check.sh`), for a type that holds a destructor value
   (`Ty.holdsDtor`: a destructor type, or a struct or an enum one field or
-  payload of which is one):
+  payload of which holds one, at any depth since A2-drop.3b):
   - a typed `letv` binds no owned value of such a type
-    (`A2.Dtor.letv_owned_no_dtor`);
+    (`A2.Dtor.letv_owned_no_dtor`): its owned value's type is free of
+    destructor values at any depth (`A2.Dtor.letv_owned_dtor_free`);
   - a typed call's owned result of such a type, and an `unpair` field of
     one, is handed on first thing (`Stmt.movedFirst`: into a `letd`, or by
     `assign y (.var w)` into another binding of the same type, whose own
@@ -601,7 +605,16 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   - the premises are satisfiable: a typed program with a destructor type,
     its destructor, a function returning an owned value of it, a `letd` of
     a struct literal and of a call's result, with `memory_safe` applied
-    (`A2.DtorWitness.main_safe`, `main2_safe`).
+    (`A2.DtorWitness.main_safe`, `main2_safe`); an option of a destructor
+    value: the value moved into `Some`, the option bound by `letd` at its
+    own destructor type, its glue (`A2.DtorWitness.main3_safe`; a further
+    witness, not a new capability: A2-drop.3a's rules typed it too); and
+    what the deep `Ty.holdsDtor` adds (A2-drop.3b), an enum of type
+    `sum (prod DT int) int`, whose destructor value is two levels down
+    under a struct of no destructor type: `letv` refuses it
+    (`A2.DtorWitness.main4_letv_refused`; A2-drop.3a's one-level rule did
+    not see it), and `letd` binds it at its own destructor type with its
+    glue (`A2.DtorWitness.main4_safe`).
 
   What follows from **reading the rules**, not from a theorem: that these
   binders are all the places an owned destructor value comes to rest in a
@@ -621,27 +634,46 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   Taking one out is refused: `unpair` of a destructor value, and `takel` /
   `taker` of a destructor enum (`A2.DtorWitness.enum_take_refused`), since
   the destructor would not run.
-- `free` takes only a `Vec`; a `Vec` of destructor values it releases runs
-  none of their destructors (3b).
+- A2-drop.3b: a `Vec` of destructor values is refused, at any depth: a
+  `Vec`'s element type holds none (`Ty.ok`, `RhsT.new`), and `Ty.ok`
+  recurses through fields, payloads, views, shares and destructor types.
+  So in a running configuration no binding's type has such a `Vec`
+  anywhere in it (`A2.Dtor.vec_elems_dtor_free` for a `Vec` at the top,
+  `A2.Dtor.vecs_dtor_free` at any depth; `A2.Dtor.new_dtor_free`), and
+  `free`, a truncation, an element set, `pop` and `withElem` release or
+  check out no destructor value, except a share's payload or a closure's
+  environment (3c, 3d): an element may be an `Arc` or a lock of a
+  destructor value, or a closure whose environment holds one, and nurlc
+  runs that destructor when the element's drop drops the last share or
+  the closure. This is stricter than nurlc (the list below), which drops a
+  `Vec`'s elements in index order, each running its destructor.
+- `Ty.holdsDtor` is deep (A2-drop.3b): a struct or an enum one field or
+  payload of which holds a destructor value holds one
+  (`A2.Dtor.holdsDtor_deep`, the definition unfolded). So a typed `letv`
+  binds no owned value whose type holds one at any depth
+  (`A2.Dtor.letv_owned_dtor_free`), and a struct or an enum holding one
+  two levels down is bound by `letd` with its glue
+  (`A2.DtorWitness.main4_safe`).
 - Not yet in the calculus. In each of these places `DropSlot` / `Frees`
   release the value, which runs no code, while nurlc runs the destructor:
-  - a destructor value as a `Vec` element (pushed, popped, freed), or an
-    enum or option payload inside one (3b);
   - in a closure's or trait object's environment (3c);
-  - in an `Arc`, lock, channel or cell payload (3d). `SpawnOK` refuses a
-    spawned function's parameter of a type that holds a destructor value
-    one level down (`Ty.holdsDtor`), so a `( Vec D )` or a lock of one
-    still crosses;
-  - a **check-out binding** (`withLock`, `withCell`, `withElem`) of a
-    destructor type: it is owned and is no `letd`'s; its value goes back
-    to the lock, cell or `Vec` at its scope's end, but an `assign` to it
-    drops the old value with no destructor (`A2.DtorWitness.lock_checkout_assign`
-    types this) (3b, 3d);
+  - in an `Arc`, lock or cell payload (3d). `SpawnOK` refuses a spawned
+    function's parameter of a type that holds a destructor value
+    (`Ty.holdsDtor`), but a lock of one (`lk DT`) still crosses, as does
+    an `Arc` or a cell of one. (A channel of one is refused: its queue is
+    a `Vec`, `Ty.ok`; so are `Locked (Vec D)`, `Arc (Vec D)` and a cell of
+    a `Vec D`, in the list below.)
+  - a **check-out binding** (`withLock`, `withCell`) of a destructor type:
+    it is owned and is no `letd`'s; its value goes back to the lock or cell
+    at its scope's end, but an `assign` to it drops the old value with no
+    destructor (`A2.DtorWitness.lock_checkout_assign` types this) (3d).
+    (`withElem` checks out no destructor value: a `Vec`'s element type is
+    free of one, except a share's payload or a closure's environment.)
   - a function's result holding one, set before a panic in that function
     (another binding's destructor included), which the unwind releases
-    with the call's result scope; and the same value moved from the result
-    slot into a local before the panic, where it sits more than one level
-    down (`pair res w`) and `Ty.holdsDtor` does not see it.
+    with the call's result scope. (Moved from the result slot into a local
+    before the panic, the value is in a `letd` binding: `Ty.holdsDtor` is
+    deep, so `letv` takes no `pair res w`.)
   See Agora #542–#544 and `A2/DROP_DESIGN.md` *Staging*.
 
 The rules are stricter than nurlc's in these places:
@@ -658,6 +690,15 @@ The rules are stricter than nurlc's in these places:
   to a `letd`, whose scope runs the destructor at once, and binds the new
   one with `letd`. A function's owned result of such a type is set at
   most once on any path.
+- for a `Vec` whose elements hold a destructor value (A2-drop.3b), which
+  `Ty.ok` refuses at any depth until the drain is in the calculus (*Staging*
+  in `A2/DROP_DESIGN.md`): a `Vec D` (or a `Vec` of a struct, an enum or an
+  option holding a `D`), a `Vec (Vec D)`, a channel of `D` (`Channel s` is
+  a lock of its queue, a `Vec s`, and its closed flag), `Locked (Vec D)`,
+  `Arc (Vec D)`, a cell of a `Vec D`, and a struct or an enum with a
+  `Vec D` field or payload. nurlc types all of these, and drops a `Vec`'s
+  elements in index order, each running its destructor. (A lock, an `Arc`
+  or a cell of a `D` itself is typed: 3d's gap above.)
 - for a destructor value (A2-drop.3a), taking it apart is refused: a
   field written in place (`= . x f v`, which the calculus has as `unpair`
   and `assign`), `unpair`, and taking a payload out of a destructor enum.
