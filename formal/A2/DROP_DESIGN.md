@@ -22,31 +22,63 @@ nurlc's `% Drop` is on a struct or an enum), whose values are `t`'s. `DtorOK
 P f (Ty.dtor f t)` checks that `f` takes one `in` parameter of that type,
 returns an integer, and lends, holds and stores nothing.
 
-What runs the destructor, since A2-drop.3a:
-- every owned binding of a destructor type is `letd`'s, whose scope
-  (`scopeD`) runs it at its end and on a panic's unwind: `letv` refuses one
-  (`StmtT.letv`'s `hnd`), and a binder that may receive one without
-  running `scopeD` itself hands it to its `letd` first thing
-  (`Stmt.movedFirst`): a call's result (`letcall`, `callc`, `callcE`, asked
-  of the callee's signature), a field `unpair` moves out (`hdx` / `hdz`),
-  and a `sink` parameter in its callee's body (`FnOK`). Nothing runs in
+What runs the destructor, since A2-drop.3a. Below, a type *holds a
+destructor* (`Ty.holdsDtor`) when it is a destructor type, or a struct or
+an enum one field or payload of which is one.
+- Every owned binding of such a type is `letd`'s, whose scope (`scopeD`)
+  runs the destructor at its end and on a panic's unwind. `letv` refuses
+  one (`StmtT.letv`'s `hnd`). A binder that may receive one without running
+  `scopeD` itself hands it to its `letd` first thing (`Stmt.movedFirst`):
+  a call's result (`letcall`, `callc`, `callcE`, asked of the callee's
+  signature), a field `unpair` moves out (`hdx` / `hdz`), and a `sink`
+  parameter in its callee's body (`FnOK`'s `DtorParamsOK`). Nothing runs in
   between, so nothing can panic or end the value first, and that `letd`'s
   scope ends where the binder's does: the destructor runs where nurlc runs
   it. (The head may end in a move into another binding of the same type,
-  `assign y (.var w)`, whose own binder answers for it: the package
-  hand-over's run-time form moves the code's result into the call's result
-  binding so.);
-- a field of a destructor value is read through its type (`fst` / `snd`
-  ask `E.ty.undtor = .prod a b`): it is lent, and the destructor stays
-  with the whole value.
+  `assign y (.var w)`, whose own binder answers for it: a function's
+  result, or the call's result binding the package hand-over's run-time
+  form moves the code's result into.)
+- **A struct holding a destructor value is a destructor type itself, its
+  drop glue its destructor.** `letv` refuses an owned `prod (dtor g s) b`,
+  so such a struct is bound by `letd x f (pair y z)`, at `Ty.dtor f (prod
+  …)`, and `f` is its glue: the elaboration's function that lends each
+  destructor field to its destructor (`fst` / `snd` read a field through
+  the type, `E.ty.undtor = .prod a b`), then any `% Drop` of the struct's
+  own (nurlc runs the impl first, then the fields' glue). The calculus
+  checks `f` as it checks any destructor (`DtorOK`, `FnOK`); that it calls
+  the fields' destructors is the elaboration's part, as nurlc generates the
+  glue. Deeper nesting needs no case: a struct holding one is a destructor
+  value itself, by the same rule. The same holds for an enum holding one in
+  a payload.
+- **`assign` replaces no owned value that holds a destructor.** Its drop
+  of the old value is `DropSlot`, which runs no code. So the bindings that
+  may own one say so of their scope (`Stmt.assigns`): `letd` (`hna`), a
+  call's result and `unpair`'s fields (with `movedFirst`), and a `sink` or
+  `inout` parameter (`DtorParamsOK`; an `inout` one holds the caller's
+  value). A function's owned result of such a type is set at most once on
+  any path (`Stmt.asgMax ≤ 1`), so no earlier result is dropped. A program
+  replaces such a value as nurlc's `= x v` does in effect: it moves the old
+  value to a `letd` (`letd y f (.var x) .skip`), whose scope runs the
+  destructor at once, and binds the new one with `letd`. This is stricter
+  than nurlc, which assigns in place.
+- **`free` releases no destructor value**: it takes a `Vec` (`E.ty = .vec
+  t`), and a destructor wraps only a struct or an enum.
+- **`unpair` of a destructor value is refused** (it asks `E.ty = .prod a
+  b` exactly), as Rust refuses moving out of a type with a destructor:
+  taking it apart would bypass the destructor. Its fields are lent through
+  the type instead.
 
-Not yet (DropSlot / `Frees` release the value, running no code; nurlc
-runs the destructor there): `assign` and `free` of a destructor value, a
-destructor value inside a struct dropped whole (its glue, `dropCode`),
-`unpair` of a destructor value itself, Vec elements and enum / option
-payloads (3b), closure and trait-object environments (3c), and `Arc` /
-lock / channel payloads (3d; a spawned function's parameters are of no
-destructor type, `SpawnOK`).
+Not yet (DropSlot / `Frees` release the value, running no code; nurlc runs
+the destructor there):
+- Vec elements, and enum or option payloads inside one (3b);
+- closure and trait-object environments (3c);
+- `Arc`, lock, channel and cell payloads (3d). A spawned function's
+  parameters hold no destructor value (`SpawnOK`).
+- A function's result that holds a destructor value, set before a panic
+  in that function (another binding's destructor included): the unwind
+  releases it with the call's result scope, without its destructor.
+  nurlc's `^ v` returns at once, so only the destructors of the callee's
+  own locals run after it.
 
 ## What nurlc does
 
@@ -355,10 +387,12 @@ on the body's typing restricts which programs the calculus covers.
 
 ## A2-drop.3: the destructor on the type (Agora #253)
 
-**Status.** Designed here; not mechanized. Until it is, `CLAIM.md`'s
-*Destructors* section keeps its one exception: a value moved out of the
-binding `letd` made is released by `DropSlot`, which runs no code, where
-nurlc runs the destructor.
+**Status.** A2-drop.3a is mechanized (Agora #541, *What runs the
+destructor* above), with the struct glue as the struct's own destructor
+and `assign` of a destructor value refused instead of `dropCode`. 3b–3d
+are designed here; not mechanized. Until they are, `CLAIM.md`'s
+*Destructors* section lists where the calculus releases a destructor value
+without running it.
 
 ### What nurlc does that A2 does not model yet
 
@@ -449,12 +483,19 @@ made it:
 Each cut is mechanized and checked by `check.sh` before the next, and
 each one shrinks `CLAIM.md`'s exception:
 
-1. **A2-drop.3a: bindings and fields.** `Ty.dtor` as a type; `letd` as
-   `letv`; `scopeD`'s steps for every binding of a destructor type (a
-   local, a `sink` parameter at its callee's end, a call's result,
-   `unpair`'s fields); `assign` and `free` of one; a struct holding one
-   (`prod`), its glue by `unpair`. Not yet: elements, payloads,
-   environments, blocks.
+1. **A2-drop.3a: bindings and fields** (done, Agora #541). `Ty.dtor` as a
+   type, and every owned binding of a type holding one is `letd`'s or
+   handed to one first thing (a local, a `sink` parameter, a call's
+   result, `unpair`'s fields). The cut was mechanized differently from the
+   plan above in three places:
+   - a struct holding a destructor value is a destructor type, its glue
+     its destructor; there is no `dropCode` statement;
+   - `assign` of a destructor value is refused, and the program moves the
+     old value to a `letd`;
+   - `unpair` of one is refused.
+   `free` takes only a `Vec`. Not yet: elements, payloads inside
+   containers, environments, blocks, and a result set before a panic in
+   its callee.
 2. **A2-drop.3b: containers.** A `Vec` of destructor values (`pop`,
    `truncate`, `clear`, `set`, `free`: the `while` above, and `edit`
    through a borrow running each dropped element's destructor), and enum

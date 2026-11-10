@@ -376,7 +376,7 @@ theorem drops_typed {P : Prog} {Γ0 : Ctx} {F : List Var} {fn : Fn} {args : List
     ∀ (ps : List (PMode × Ty)) (as : List Var) (i : Nat) (Γc : Ctx),
       (∀ q ∈ ps, q.1 = .sink) → ps.length = as.length → as.Nodup →
       (∀ a ∈ as, Γc a = some (argE Γ0 a) ∧ (argE Γ0 a).live = true ∧ (argE Γ0 a).mode = .own ∧
-        a ∉ F ∧ NoPin Γc a ∧ (argE Γ0 a).ty.hasDtor = false) →
+        a ∉ F ∧ NoPin Γc a ∧ (argE Γ0 a).ty.holdsDtor = false) →
       (∀ a ∈ as, DtorSafe Γc .replace false a) →
       (∀ a ∈ as, ∀ a' ∈ as, a ≠ a' → ∀ d ∈ (argE Γ0 a').vdeps, d.root ≠ a) →
       Γc x = none → CtxWF Γc → NoPin Γc x →
@@ -434,7 +434,7 @@ theorem drops_typed {P : Prog} {Γ0 : Ctx} {F : List Var} {fn : Fn} {args : List
 theorem spawn_fn {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hS : SpawnOK P spawn) {f : Nat}
     {fn : Fn} (hsp : spawn f = true) (hf : P[f]? = some fn) :
     fn.resTy = .int ∧ fn.resOwn = false ∧
-      ∀ pt ∈ fn.params, pt.1 = .sink ∧ pt.2.holdsView = false ∧ pt.2.hasDtor = false := by
+      ∀ pt ∈ fn.params, pt.1 = .sink ∧ pt.2.holdsView = false ∧ pt.2.holdsDtor = false := by
   obtain ⟨fn', hf', hres, hall⟩ := hS f hsp
   rw [hf] at hf'; cases hf'
   refine ⟨hres, ?_, hall⟩
@@ -468,7 +468,7 @@ theorem spawn_hole {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hS : Spawn
       fun i hi => (hall _ (List.getElem_mem hi)).1
     -- the arguments, as the moves need them
     have hargs' : ∀ a ∈ args, Γ a = some (argE Γ a) ∧ (argE Γ a).live = true ∧
-        (argE Γ a).mode = .own ∧ a ∉ F ∧ NoPin Γ a ∧ (argE Γ a).ty.hasDtor = false := by
+        (argE Γ a).mode = .own ∧ a ∉ F ∧ NoPin Γ a ∧ (argE Γ a).ty.holdsDtor = false := by
       intro a ha
       obtain ⟨i, hi', rfl⟩ := mem_args ha
       have hip : i < fn.params.length := hlen ▸ hi'

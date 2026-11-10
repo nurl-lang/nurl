@@ -1527,6 +1527,61 @@ def Stmt.movedFirst : Stmt → List Var
   | .assign _ (.var w) => [w]
   | _ => []
 
+/-- A2-drop.3a: the bindings a statement may give a new value (`assign`),
+    anywhere in it.  A binding that may own a value of a destructor type
+    (or of a struct or an enum holding one) is given none: the old value's
+    drop would run no destructor (`DropSlot`).  Its binder says so of its
+    scope (`letd`, a call's result, `unpair`'s fields, a `sink` or `inout`
+    parameter: `FnOK`); a program replaces such a value by moving it to a
+    `letd`, whose scope runs the destructor, and binding the new one. -/
+def Stmt.assigns : Stmt → List Var
+  | .assign y _ => [y]
+  | .seq a b => a.assigns ++ b.assigns
+  | .ite _ a b => a.assigns ++ b.assigns
+  | .while _ s => s.assigns
+  | .letv _ _ s => s.assigns
+  | .letcall _ _ _ s => s.assigns
+  | .scope _ s => s.assigns
+  | .rbind _ s => s.assigns
+  | .frozen _ s => s.assigns
+  | .letrec _ _ s => s.assigns
+  | .catchR _ _ s => s.assigns
+  | .unpair _ _ _ s => s.assigns
+  | .callc _ _ _ _ s => s.assigns
+  | .letd _ _ _ s => s.assigns
+  | .scopeD _ _ s => s.assigns
+  | .withLock _ _ s => s.assigns
+  | .scopeL _ _ _ s => s.assigns
+  | .withElem _ _ _ s => s.assigns
+  | .callcE _ _ _ _ s => s.assigns
+  | _ => []
+
+/-- A2-drop.3a: how many times a statement may give `x` a new value on one
+    path: a sequence adds, a branch takes the larger, a loop may repeat.  A
+    function's result of a destructor type is set at most once (`FnOK`), so
+    no value of it is dropped by a second assignment. -/
+def Stmt.asgMax (x : Var) : Stmt → Nat
+  | .assign y _ => if y = x then 1 else 0
+  | .seq a b => a.asgMax x + b.asgMax x
+  | .ite _ a b => max (a.asgMax x) (b.asgMax x)
+  | .while _ s => 2 * s.asgMax x
+  | .letv _ _ s => s.asgMax x
+  | .letcall _ _ _ s => s.asgMax x
+  | .scope _ s => s.asgMax x
+  | .rbind _ s => s.asgMax x
+  | .frozen _ s => s.asgMax x
+  | .letrec _ _ s => s.asgMax x
+  | .catchR _ _ s => s.asgMax x
+  | .unpair _ _ _ s => s.asgMax x
+  | .callc _ _ _ _ s => s.asgMax x
+  | .letd _ _ _ s => s.asgMax x
+  | .scopeD _ _ s => s.asgMax x
+  | .withLock _ _ s => s.asgMax x
+  | .scopeL _ _ _ s => s.asgMax x
+  | .withElem _ _ _ s => s.asgMax x
+  | .callcE _ _ _ _ s => s.asgMax x
+  | _ => 0
+
 /-- Source code: no run-time forms.  What has not started running yet (a
     binding's body, the rest of a sequence, a branch, a loop body) is
     source; run-time forms appear only where execution is. -/

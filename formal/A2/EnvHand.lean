@@ -1055,7 +1055,7 @@ theorem hand_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Var
     StmtT.letcall rfl hhr hrF hcT' hTasg (hfrΔ.endOK_fresh hi hΓr)
       -- (A2-drop.3a: the code's result moves into `x` at once, whose
       -- binder, the call through the package, answers for it)
-      (fun _ _ _ _ => by simp [Stmt.movedFirst])
+      (fun _ _ _ _ => by simp [Stmt.movedFirst, Stmt.assigns]; exact hrx)
   -- the environment goes back into the package
   have hrootΔ : AllRooted Γ (setE Γ2 x Ex1) := hroot2.setE hEx1R
   have hΓ3 : exitScope (m.nv + 1) (setE (kill .replace false x Γ2) x Ex1) = upd (setE Γ2 x Ex1) (m.nv + 1) none := by

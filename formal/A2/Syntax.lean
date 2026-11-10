@@ -211,10 +211,26 @@ def Ty.isStruct : Ty → Bool
 
 /-- A2-drop.3a: a value of this type runs a destructor when it is dropped:
     the type is, at its top, a destructor type.  (A struct holding one in a
-    field runs it inside its drop glue: A2-drop.3a's prod glue, later.) -/
+    field runs it inside its drop glue, `Ty.holdsDtor`.) -/
 def Ty.hasDtor : Ty → Bool
   | .dtor _ _ => true
   | _ => false
+
+/-- A2-drop.3a: a value of this type, dropped whole, owns a destructor
+    value: it is one (`hasDtor`), or a struct or an enum one field or
+    payload of which is one.  Such a struct runs its fields' destructors in
+    its drop glue, so it is bound as a destructor type itself, its glue its
+    destructor (`letd`): `letv` and `assign` take no owned value of such a
+    type.  Deeper nesting needs no case: a struct holding one is a
+    destructor value itself, by the same rule. -/
+def Ty.holdsDtor : Ty → Bool
+  | .dtor _ _ => true
+  | .prod a b => a.hasDtor || b.hasDtor
+  | .sum a b => a.hasDtor || b.hasDtor
+  | _ => false
+
+theorem Ty.hasDtor_of_holdsDtor {t : Ty} (h : t.holdsDtor = false) : t.hasDtor = false := by
+  cases t <;> simp_all [Ty.holdsDtor, Ty.hasDtor]
 
 /-- A2-drop.3a: the destructor such a value runs reads views: a binding of
     this type must keep what its value views alive to its end (`Entry.arm`). -/
@@ -228,6 +244,9 @@ def Ty.dtorViews (t : Ty) : Bool := t.hasDtor && t.holdsView
     destructor type. -/
 theorem Ty.hasDtor_of_sync {t : Ty} (h : t.sync = true) : t.hasDtor = false := by
   cases t <;> simp_all [Ty.sync, Ty.hasDtor]
+
+theorem Ty.holdsDtor_of_sync {t : Ty} (h : t.sync = true) : t.holdsDtor = false := by
+  cases t <;> simp_all [Ty.sync, Ty.holdsDtor]
 
 theorem Ty.hasDtor_of_isStruct {t : Ty} (h : t.isStruct = true) : t.hasDtor = false := by
   cases t <;> simp_all [Ty.isStruct, Ty.hasDtor]

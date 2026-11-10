@@ -271,7 +271,7 @@ theorem body_typed : StmtT P (sigCtx pick) [] pick.body (ctx ErJ) := by
 /-- `pick` meets its summary: it lends `p` and the cell, nothing else. -/
 theorem pick_ok : FnOK P pick := by
   refine ⟨rfl, by decide, by decide, rfl, by simp [pick], ?_, ?_, by simp [pick], by simp [pick], ?_,
-    by simp [pick], sinkMoved_of (by simp [pick]), ctx ErJ, body_typed, ctx_flags ⟨rfl, rfl⟩, ⟨ErJ, by simp [ctx, pick], rfl, rfl, rfl, ?_, by simp [ErJ],
+    by simp [pick], dtorParamsOK_of (by simp [pick] <;> decide) (by simp [pick] <;> decide), ctx ErJ, body_typed, ctx_flags ⟨rfl, rfl⟩, ⟨ErJ, by simp [ctx, pick], rfl, rfl, rfl, ?_, by simp [ErJ],
       by simp [pick]⟩, ?_⟩
   · intro pt hpt
     simp only [pick, List.mem_cons, List.mem_nil_iff, or_false] at hpt
