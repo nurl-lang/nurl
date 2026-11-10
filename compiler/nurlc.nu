@@ -5771,18 +5771,43 @@ unsafe @ gen_ret i lex i syms i cg → s {
     // g x )` the call's bit; agora #200.)
     // (…and a borrow when that call is summarised as lending, as `^ ( g x
     // )` is: below.)
-    ? & != 0 g_ncl_n ( is_ident_tok ret_first_tt ) {
-        : s __nck2 ( nurl_sym_get2 syms ret_first_val `__nclk` )
-        ? != 0 ( nurl_str_len __nck2 ) {
-            : s __ncp ( mem_udrop_ptr_of syms ret_first_val )
-            ? != 0 ( nurl_str_len __ncp ) { = hbit ( mem_udrop_flag_get syms cg __ncp ) } {}
-            ? != 0 ( nurl_sym_len2 syms ( str_first_word __nck2 ) `__ret_borrow` ) { ( nurl_sym_def syms `__last_value_borrow__` `1` ) } {}
-        } {}
-    } {}
     // (The call's own per-call answer, when hbit is it: below.)
     : ~ b ret_call_bit F
     // (…and a binding's flag that is a call's own answer: below.)
     : ~ b ret_bind_bit F
+    ? & != 0 g_ncl_n ( is_ident_tok ret_first_tt ) {
+        : s __nck2 ( nurl_sym_get2 syms ret_first_val `__nclk` )
+        ? != 0 ( nurl_str_len __nck2 ) {
+            : s __ncp ( mem_udrop_ptr_of syms ret_first_val )
+            // (Its flag IS the answer, and differs per call: the function
+            // answers per call, as for the value block's tail binding below.
+            // Read as the static "owned", a lent element went to the caller
+            // as its own, and both dropped it — agora #462.)
+            ? != 0 ( nurl_str_len __ncp ) {
+                = hbit ( mem_udrop_flag_get syms cg __ncp )
+                = ret_bind_bit T
+                ( mem_hown_mark_dyn syms )
+            } {}
+            ? != 0 ( nurl_sym_len2 syms ( str_first_word __nck2 ) `__ret_borrow` ) { ( nurl_sym_def syms `__last_value_borrow__` `1` ) } {}
+        } {}
+    } {}
+    // `^ c` of a `??` payload matched out of a parameter this function does
+    // not take (`?? e { Has c → { ^ c } }`), a value that cannot be copied:
+    // the caller's own, lent back as part of that parameter — handed over
+    // as this function's, both the caller's binding and the enum it came
+    // out of dropped it (agora #462).
+    ? & & ( is_ident_tok ret_first_tt ) ! ret_bind_bit != 0 ( nurl_sym_len2 syms ret_first_val `__plroot` ) {
+        : s __prr ( __payload_root_binding syms ret_first_val )
+        : i __prk ( nurl_sym_word_index syms `__fn_param_names__` __prr )
+        ? & & >= __prk 0 ( __nc_held_ty ( nurl_get_last_type ) ) ! ( str_contains_word ( nurl_sym_get g_fn_sink ( nurl_sym_get syms `__fn_self_name__` ) ) ( nurl_str_int __prk ) ) {
+            ( __record_param_idx syms `__fn_retpart__` __prr )
+            ( __record_param_idx syms `__fn_retlend__` __prr )
+            = hbit ( nurl_str_cat `false` `` )
+            = ret_bind_bit T
+            ( mem_hown_mark_dyn syms )
+            ( nurl_sym_def syms `__last_value_borrow__` `1` )
+        } {}
+    } {}
     // A value block whose tail is such a binding (`^ { : A x ( ug [A] o d )
     // x }`) hands it back as `^ x` does: the block is no scope of its own,
     // so the binding is still here, and its flag — with what it may be a
@@ -68094,7 +68119,20 @@ unsafe @ __sx_names_capture i syms s sx → b {
 @ __nc_bind_lend_note i syms s name i tt b deep → v {
     : s ty ( nurl_get_last_type )
     : b on & == tt TT_LPAREN ( __nc_held_ty ty )
-    ? & ! on ! deep { ^ v } {}
+    ? & ! on ! deep {
+        // (A binding of another such binding, `: Conn d c`, is what c is a
+        // lend of: handed back, it answers as c does — agora #462.)
+        ? & ( is_ident_tok tt ) ( __nc_held_ty ty ) {
+            : s src ( nurl_sym_get syms `__last_ident_name__` )
+            : s sk ( nurl_sym_get2 syms src `__nclk` )
+            ? & != 0 ( nurl_str_len sk ) ! ( seq src name ) {
+                ( nurl_sym_def syms ( nurl_str_cat name `__nclk` ) sk )
+                ( nurl_sym_def syms ( nurl_str_cat name `__ncla` ) ( nurl_sym_get2 syms src `__ncla` ) )
+                = g_ncl_n + g_ncl_n 1
+            } {}
+        } {}
+        ^ v
+    } {}
     : s k ? & on ! ( seq ( nurl_sym_get syms `__last_call_lendback__` ) `1` ) ( nurl_sym_get syms `__last_call_lend_key__` ) ``
     ? deep {
         ? | != 0 ( nurl_str_len k ) != 0 ( nurl_sym_len2 syms name `__nclk` ) {
