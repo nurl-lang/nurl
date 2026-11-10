@@ -244,6 +244,8 @@ theorem rTouch_seen {m m1 : Mem} {r : Rhs} {i : Nat} {w : Bool} (h : RTouch m r 
   | satI he => exact .inr ⟨rfl, eReads_seen he⟩
   | popC hy => exact .inl ⟨_, _, hy, by simp [Val.ids]⟩
   | popD hy => exact .inl ⟨_, _, hy, by simp [Val.ids]⟩
+  | popFrontC hy => exact .inl ⟨_, _, hy, by simp [Val.ids]⟩
+  | popFrontD hy => exact .inl ⟨_, _, hy, by simp [Val.ids]⟩
   | arcGet ha hk hi => exact .inr ⟨rfl, .inr ⟨_, _, hk, hi, .root ⟨_, _, ha⟩ (Or.inl (Or.inl ⟨some _, Sub.refl _⟩))⟩⟩
   | chanSend hy hi => exact .inl ⟨_, _, hy, hi⟩
 

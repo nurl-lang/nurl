@@ -185,6 +185,9 @@ theorem evalR_none {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (he : EvalR m r (
   | @pop y _ _ _ _ _ hy _ _ =>
     have : x ≠ y := fun e => by subst e; rw [hx] at hy; cases hy
     simp [Mem.set, upd_ne _ _ this, hx]
+  | @popFront y _ _ _ _ _ hy _ _ =>
+    have : x ≠ y := fun e => by subst e; rw [hx] at hy; cases hy
+    simp [Mem.set, upd_ne _ _ this, hx]
   | pair h1 h2 => exact takeVal_none h2 (takeVal_none h1 hx)
   | inl h1 | inr h1 | pack h1 => exact takeVal_none h1 hx
   | arcNew h1 _ => exact takeVal_none h1 hx

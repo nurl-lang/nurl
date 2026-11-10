@@ -2939,6 +2939,10 @@ inductive RTouch (m : Mem) : Rhs → Nat → Bool → Prop
       m.st y = some ⟨true, some (.node t c d es)⟩ → RTouch m (.pop y) c true
   | popD {y : Var} {t : Ty} {c d : Nat} {es : List Val} :
       m.st y = some ⟨true, some (.node t c d es)⟩ → RTouch m (.pop y) d true
+  | popFrontC {y : Var} {t : Ty} {c d : Nat} {es : List Val} :
+      m.st y = some ⟨true, some (.node t c d es)⟩ → RTouch m (.popFront y) c true
+  | popFrontD {y : Var} {t : Ty} {c d : Nat} {es : List Val} :
+      m.st y = some ⟨true, some (.node t c d es)⟩ → RTouch m (.popFront y) d true
   /-- A3.1: `arc_get` reads the payload of the block its share names (every
       address of it: an over-approximation). -/
   | arcGet {a : Var} {o : Bool} {k : Nat} {p : Val} {bl : Blk} {i : Nat} :

@@ -647,6 +647,12 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   runs that destructor when the element's drop drops the last share or
   the closure. This is stricter than nurlc (the list below), which drops a
   `Vec`'s elements in index order, each running its destructor.
+  The drain that lifts this is designed (`A2/DROP_DESIGN.md`, staging
+  item 2) and its step is in the calculus: `vec_remove y 0`
+  (`Rhs.popFront`, element 0 moves out, typed as `vec_pop`) preserves the
+  invariant (`A2.rhs_popFront`), so the drain can take elements in nurlc's
+  index order. The drain itself, a `Vec` of destructor values bound by
+  `letd` and drained at its end, is not yet in (Agora #542).
 - `Ty.holdsDtor` is deep (A2-drop.3b): a struct or an enum one field or
   payload of which holds a destructor value holds one
   (`A2.Dtor.holdsDtor_deep`, the definition unfolded). So a typed `letv`

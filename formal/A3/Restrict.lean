@@ -159,7 +159,11 @@ theorem EvalR.restrict {m : Mem} {r : Rhs} {res : RRes} (h : EvalR m r res) {a2 
   | pop hy hc hd =>
     exact ⟨_, .pop hy (minus_true hc (hav _ (OwnedId.of_slot hy (by simp))))
       (minus_true hd (hav _ (OwnedId.of_slot hy (by simp)))), rfl, rfl, rfl⟩
+  | popFront hy hc hd =>
+    exact ⟨_, .popFront hy (minus_true hc (hav _ (OwnedId.of_slot hy (by simp))))
+      (minus_true hd (hav _ (OwnedId.of_slot hy (by simp)))), rfl, rfl, rfl⟩
   | popEmpty hy => exact ⟨_, .popEmpty hy, trivial⟩
+  | popFrontEmpty hy => exact ⟨_, .popFrontEmpty hy, trivial⟩
   | pair h1 h2 => exact ⟨_, .pair (TakeVal.restrict h1 a2) (TakeVal.restrict h2 a2), rfl, rfl, rfl⟩
   | fst hy => exact ⟨_, .fst hy, rfl, rfl, rfl⟩
   | snd hy => exact ⟨_, .snd hy, rfl, rfl, rfl⟩

@@ -228,6 +228,12 @@ theorem EvalR.codes {P : Prog} {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (he :
     cases e
     refine pkgOK_of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
     cases hc with | elem he => exact pkgOK_elem hT (by simp [he])
+  | popFront hv _ _ =>
+    have hT := h.slot hv
+    refine ⟨pkgOK_elem hT (by simp), h.set (fun V e => ?_)⟩
+    cases e
+    refine pkgOK_of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
+    cases hc with | elem he => exact pkgOK_elem hT (by simp [he])
   | pair h1 h2 =>
     obtain ⟨hv, hm1⟩ := h1.codes h
     obtain ⟨hw, hm2⟩ := h2.codes hm1
