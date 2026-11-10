@@ -16557,6 +16557,8 @@ unsafe @ gen_call i lex i syms i cg → s {
                 // (A field that holds storage: one a borrow can be taken from.)
                 : s __io_fty ? ( is_ptr_ty at ) ( nurl_str_slice at 0 - ( nurl_str_len at ) 1 ) ``
                 ? & != 0 g_borrowck | ( __is_handle_ty __io_fty ) ( __type_needs_drop __io_fty syms ) { = arg_froot __io_path } {}
+                // (…and a view field by its path too: agora #590.)
+                ? & & & != 0 g_borrowck == 0 ( nurl_str_len arg_froot ) != 0 ( nurl_str_len __io_path ) == ( bck_walk_class __io_fty ) 2 { = arg_vfroot __io_path } {}
             }
             { ? ! ( is_ident_tok bck_arg_tt )
                 { ( die lex ( nurl_str_cat3 `inout argument to '` fname `' must be a mutable ': ~' binding or a '. binding field' field target, not an expression` ) ) }
@@ -16746,7 +16748,8 @@ unsafe @ gen_call i lex i syms i cg → s {
             // (…and a view field — a Slice, an `s`, a struct of views: no
             // storage of its own, but what a callee lends out of it points
             // into what it views, the binding's view sources. Its row is
-            // the call's `pendvf`, below; agora #566.)
+            // the call's `pendvf`, below; agora #566. One passed `inout`
+            // is set above, by its path.)
             ? & & & == bck_arg_tt TT_DOT != 0 g_borrowck == 0 ( nurl_str_len arg_froot ) == ( bck_walk_class at ) 2 { = arg_vfroot ( nurl_str_cat g_member_path `` ) } {}
             ? == arg_idx 0 { = __arg0_path ( nurl_str_cat arg_froot `` ) } {}
             // A binding that borrowed a struct field (`: d . p data`) consumed
@@ -17576,9 +17579,12 @@ unsafe @ gen_call i lex i syms i cg → s {
         // The same roster with a field path's binding in its place (what a
         // borrow of the result is a borrow of: g_call_roots) — kept only
         // once a call has such an argument.
-        ? & != 0 ( nurl_str_len arg_froot ) ! arg_has_froot { = arg_roots ( nurl_str_cat arg_idents `` ) = arg_has_froot T } {}
+        // (…a view field's too, `arg_vfroot`: what is lent out of it is
+        // part of what its binding views — a parameter lends then, agora
+        // #590.)
+        ? & | != 0 ( nurl_str_len arg_froot ) != 0 ( nurl_str_len arg_vfroot ) ! arg_has_froot { = arg_roots ( nurl_str_cat arg_idents `` ) = arg_has_froot T } {}
         ? arg_has_froot {
-            : s __arg_rt ? != 0 ( nurl_str_len arg_froot ) arg_froot bck_arg_nm
+            : s __arg_rt ? != 0 ( nurl_str_len arg_froot ) arg_froot ? != 0 ( nurl_str_len arg_vfroot ) arg_vfroot bck_arg_nm
             = arg_roots ? == 0 ( nurl_str_len arg_roots ) ( nurl_str_cat __arg_rt `` ) ( nurl_str_cat3 arg_roots ` ` __arg_rt )
         } {}
         = arg_idents ? == 0 ( nurl_str_len arg_idents )
