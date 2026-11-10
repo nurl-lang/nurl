@@ -3149,6 +3149,11 @@ unsafe @ note_unsafe_item s pos s what → v {
 // (-2: not read yet — read at the event's first mark, bck_br_set.)
 : ~ i g_bck_brev_prev -1
 : ~ i g_bck_pvpass_n 0
+// The call whose own `vpass` rows are being stashed (0: none). Their line
+// field is `LINE.SEQ` then: atoll reads the line, and __vp_own_last finds
+// them, to put them after the call's own checks (agora #558).
+: ~ i g_vp_tag 0
+: ~ i g_vp_seq 0
 // The field path the last member read named (`. . s a h` → `s.a.h`; an
 // element read through a pointer is the pointer's own path), kept while a
 // call argument asks for it (g_member_path_on) — what a borrow of what the
@@ -15914,6 +15919,9 @@ unsafe @ gen_call i lex i syms i cg → s {
     : ~ i __sx_arg0_c 1
     : ~ i __sx_iown_c 1
     : i __sx_vp0 ? == g_borrowck 0 0 ( nurl_sym_len g_bck `pvpass` )
+    // (…and this call's tag on its own rows, __vp_own_last.)
+    = g_vp_seq + g_vp_seq 1
+    : i __vp_me g_vp_seq
     : b __sx_need != 0 __sx_me
     // (How many arguments hold an address, and how many are an owner's
     // binding or field — what a callee could move or drop the storage of:
@@ -16817,7 +16825,9 @@ unsafe @ gen_call i lex i syms i cg → s {
             // struct's field) or send it to another thread: a closure
             // always, anything else to a container or a spawner (`vpass`).
             ? & & & & __sx_cand ! __callee_shadowed >= __sx_c0 2 ! ( seq arg_sx `-` ) ( __summarised_callee syms fname call_name ) {
+                = g_vp_tag __vp_me
                 ( bck_stash_vpass ? & > arg_idx 0 != 0 ( nurl_str_len __sx_arg0 ) __sx_arg0 `-` ( nurl_lex_line lex ) call_name arg_idx arg_sx )
+                = g_vp_tag 0
             } {}
             // An owner handed beside a container, to a callee that may leave
             // the container viewing the owner's own storage (`= w @ W { (
@@ -16855,7 +16865,9 @@ unsafe @ gen_call i lex i syms i cg → s {
                         : ~ s __vh ? | ( seq __vh0 `*` ) ( seq __vh1 `*` ) ( nurl_str_cat `*` `` ) ( __word_union __vh0 __vh1 )
                         ~ != 0 ( nurl_str_len __vh ) {
                             : s __h ( str_first_word __vh ) = __vh ( str_skip_word __vh )
+                            = g_vp_tag __vp_me
                             ( bck_stash_vbuf_h ( nurl_str_cat `-h` __h ) ( nurl_lex_line lex ) __vkc arg_idx __h __vk_sx )
+                            = g_vp_tag 0
                         }
                         ? | == __vk 2 == __vkh0 2 { ( bck_put `deferred` `1` ) } {}
                     } {}
@@ -16881,7 +16893,9 @@ unsafe @ gen_call i lex i syms i cg → s {
                         : ~ s __hh ( __vkheld_holders __vkc arg_idx )
                         ~ != 0 ( nurl_str_len __hh ) {
                             : s __h2 ( str_first_word __hh ) = __hh ( str_skip_word __hh )
+                            = g_vp_tag __vp_me
                             ( bck_stash_vheld_h ( nurl_str_cat `-h` __h2 ) ( nurl_lex_line lex ) __vkc arg_idx __h2 __vkh_sx )
+                            = g_vp_tag 0
                         }
                         ? == __vkh 2 { ( bck_put `deferred` `1` ) } {}
                     } {}
@@ -18457,7 +18471,9 @@ unsafe @ gen_call i lex i syms i cg → s {
                 : ~ s __vth ( __vkeep_holders call_name arg_idx )
                 ~ != 0 ( nurl_str_len __vth ) {
                     : s __th ( str_first_word __vth ) = __vth ( str_skip_word __vth )
+                    = g_vp_tag __vp_me
                     ( bck_stash_vbuf_h ( nurl_str_cat `-h` __th ) ( nurl_lex_line lex ) call_name arg_idx __th `!` )
+                    = g_vp_tag 0
                 }
                 ? == __vkt 2 { ( bck_put `deferred` `1` ) } {}
             } {}
@@ -18910,6 +18926,8 @@ unsafe @ gen_call i lex i syms i cg → s {
             ( bck_stash_arcx __call_line call_name __arc_sync ( nurl_str_cat4 call_name `(` call_sx `)` ) )
         } {}
     } {}
+    // (…and this call's own rows after its checks: agora #558.)
+    ? & != 0 g_borrowck > ( nurl_sym_len g_bck `pvpass` ) __sx_vp0 { ( __vp_own_last __sx_vp0 __vp_me ) } {}
     // …and, when an argument was a field path, the same two with its
     // binding in its place (bck_call_lend_srcs, a match's payload lends).
     ? arg_has_froot {
@@ -31732,6 +31750,66 @@ unsafe @ bck_swap_char s str i from i to → s {
     = g_bck_pvpass_n ? == 0 ( nurl_sym_len g_bck `pvpass` ) 0 1
 }
 
+@ __vp_line i line → s {
+    ? == 0 g_vp_tag { ^ ( nurl_str_int line ) } {}
+    ^ ( nurl_str_cat3 ( nurl_str_int line ) `.` ( nurl_str_int g_vp_tag ) )
+}
+
+// A call's own `vpass` rows (`.SEQ` on their line, from byte `from` of the
+// list) moved after everything else stashed since: the call's `callx`,
+// `clox` and `arcx` checks, and the rows of the calls inside its arguments.
+// Those checks ask about the arguments as the call is entered; its own
+// rows say what the callee leaves them holding at its exit — read before
+// the check, a holder the callee points at another argument when it is
+// done was taken for one that already pointed there (agora #558). A nested
+// call's rows are the state the call is entered with: they stay before.
+@ __vp_own_last i from i sq → v {
+    : s all ( nurl_sym_get g_bck `pvpass` )
+    ? <= ( nurl_str_len all ) from { ^ } {}
+    : s tag ( nurl_str_cat `.` ( nurl_str_int sq ) )
+    : ~ s rest ( nurl_str_slice all from - ( nurl_str_len all ) from )
+    : ~ s other ``
+    : ~ s own ``
+    ~ != 0 ( nurl_str_len rest ) {
+        ? == ( nurl_str_get rest 0 ) 32 { = rest ( nurl_str_slice rest 1 - ( nurl_str_len rest ) 1 ) continue } {}
+        : s c ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s l ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s cal ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s ix ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s sx ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s e ( nurl_str_cat4 c ` ` l ( nurl_str_cat4 ` ` cal ` ` ( nurl_str_cat3 ix ` ` sx ) ) )
+        : i ln ( nurl_str_len l )
+        : i tn ( nurl_str_len tag )
+        : b mine & > ln tn ( seq ( nurl_str_slice l - ln tn tn ) tag )
+        ? mine { = own ? == 0 ( nurl_str_len own ) ( nurl_str_cat e `` ) ( nurl_str_cat3 own ` ` e ) } {
+            = other ? == 0 ( nurl_str_len other ) ( nurl_str_cat e `` ) ( nurl_str_cat3 other ` ` e )
+        }
+    }
+    ? == 0 ( nurl_str_len own ) { ^ } {}
+    : s head ( nurl_str_slice all 0 from )
+    // (In a statement they go to the pending rows, after the call's own:
+    // what the callee moves or frees happens inside it, and what it leaves
+    // a holder viewing is its exit's — read first, a view of a String the
+    // callee grew and then pointed the holder at again was ended by the
+    // growth. A `^`'s rows: the return walks none of its pending rows, and
+    // its `vpass` rows go before its own; they stay there, after the checks.)
+    ? < g_ret_vpos 0 {
+        ( bck_put `pvpass` ? == 0 ( nurl_str_len head ) ( nurl_str_cat other `` ) ? == 0 ( nurl_str_len other ) ( nurl_str_cat head `` ) ( nurl_str_cat head other ) )
+        : ~ s orest ( nurl_str_cat own `` )
+        ~ != 0 ( nurl_str_len orest ) {
+            : s c ( str_first_word orest ) = orest ( str_skip_word orest )
+            : s l ( str_first_word orest ) = orest ( str_skip_word orest )
+            : s cal ( str_first_word orest ) = orest ( str_skip_word orest )
+            : s ix ( str_first_word orest ) = orest ( str_skip_word orest )
+            : s sx ( str_first_word orest ) = orest ( str_skip_word orest )
+            ( bck_add_word `ppends` ( nurl_str_cat4 ( nurl_str_cat4 c ` ` l ` ` ) cal ` ` ( nurl_str_cat4 ix `\t\t` sx ` vpass` ) ) )
+        }
+        ^
+    } {}
+    : s body ? == 0 ( nurl_str_len other ) ( nurl_str_cat own `` ) ( nurl_str_cat3 other ` ` own )
+    ( bck_put `pvpass` ? == 0 ( nurl_str_len head ) ( nurl_str_cat body `` ) ( nurl_str_cat head body ) )
+}
+
 // The `vpass` rows of the statement. (A return records them before its own
 // row: they move nothing, and the walk stops at the return.)
 @ bck_flush_vpass → v {
@@ -31765,7 +31843,7 @@ unsafe @ bck_swap_char s str i from i to → s {
 // whether the callee keeps or sends it is decided at the walk (`vpass`).
 @ bck_stash_vpass s cont i line s callee i aix s sx → v {
     ? & != g_borrowck 0 == g_bck_rec_off 0 {
-        : s add ( nurl_str_cat4 cont ` ` ( nurl_str_int line ) ( nurl_str_cat4 ` ` callee ` ` ( nurl_str_cat3 ( nurl_str_int aix ) ` ` sx ) ) )
+        : s add ( nurl_str_cat4 cont ` ` ( __vp_line line ) ( nurl_str_cat4 ` ` callee ` ` ( nurl_str_cat3 ( nurl_str_int aix ) ` ` sx ) ) )
         ( bck_add_word `pvpass` add )
         = g_bck_pvpass_n + g_bck_pvpass_n 1
     } {}
@@ -31791,7 +31869,7 @@ unsafe @ bck_swap_char s str i from i to → s {
 @ bck_stash_vbuf_h s cont i line s callee i aix s h s sx → v {
     ? & != g_borrowck 0 == g_bck_rec_off 0 {
         : b tmp ( seq sx `!` )
-        : s add ( nurl_str_cat4 cont ` ` ( nurl_str_int line ) ( nurl_str_cat4 ` ` callee ? tmp ` B` ` b` ( nurl_str_cat4 ( nurl_str_int aix ) `.` h ( nurl_str_cat ` ` ? tmp `-` sx ) ) ) )
+        : s add ( nurl_str_cat4 cont ` ` ( __vp_line line ) ( nurl_str_cat4 ` ` callee ? tmp ` B` ` b` ( nurl_str_cat4 ( nurl_str_int aix ) `.` h ( nurl_str_cat ` ` ? tmp `-` sx ) ) ) )
         ( bck_add_word `pvpass` add )
         = g_bck_pvpass_n + g_bck_pvpass_n 1
     } {}
@@ -31801,7 +31879,7 @@ unsafe @ bck_swap_char s str i from i to → s {
 // `aix` holds (`h>%k`). A temporary's views outlive it: no `B` here.
 @ bck_stash_vheld_h s cont i line s callee i aix s h s sx → v {
     ? & != g_borrowck 0 == g_bck_rec_off 0 {
-        : s add ( nurl_str_cat4 cont ` ` ( nurl_str_int line ) ( nurl_str_cat4 ` ` callee ` %` ( nurl_str_cat4 ( nurl_str_int aix ) `.` h ( nurl_str_cat ` ` sx ) ) ) )
+        : s add ( nurl_str_cat4 cont ` ` ( __vp_line line ) ( nurl_str_cat4 ` ` callee ` %` ( nurl_str_cat4 ( nurl_str_int aix ) `.` h ( nurl_str_cat ` ` sx ) ) ) )
         ( bck_add_word `pvpass` add )
         = g_bck_pvpass_n + g_bck_pvpass_n 1
     } {}

@@ -1,7 +1,7 @@
 // callee_growing_its_inout_vec_hands_back_a_holder_viewing_an_element: a callee views an element of its inout Vec into an inout holder, then pushes into the Vec until its buffer moves.
-// Twin of the String form (agora #390); the caller's call is refused too (an argument the callee may move, beside one that will view it).
-// main 2c20c888: rejected at the caller.
-// map: §2.10 | A2 | rejected | - | agora #390: a callee views an element of its inout Vec into an inout holder, then pushes into the Vec until its buffer moves
+// Safe: the holder views the element String's own buffer, and growing the Vec moves its slots, not what each String holds. Refused at the caller on main 2c20c888 by the exclusive-call check, which read the callee's exit pair as an alias going in (agora #558); accepted since, and runs clean.
+// Twin of the String form (agora #390), which stays refused: there the growth moves the very buffer the holder views.
+// map: §2.10 | A2 | runs-clean | - | agora #558: a callee views an element of its inout Vec into an inout holder, then pushes into the Vec until its buffer moves (the element's own buffer stays)
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 
