@@ -13,6 +13,8 @@ $ `src/gpu.nu`
 & `c` @ nurl_bits_to_f32 i b → f32
 
 : ~ i g_fail 0
+// test_detmath's checksum, the same on every host.
+: i DETMATH_SUM 37490245958358
 
 @ check b cond s name → v {
     ? cond { ( nurl_print `  ok  ` ) } { ( nurl_print `  FAIL ` ) = g_fail + g_fail 1 }
@@ -316,10 +318,53 @@ unsafe @ test_release → v {
     ( check == ( gpu_upload o ( gpu_host_ptr ho ) ) 0 `…and its context is still there to upload into` )
 }
 
+// ── the CPU backend's float transcendentals: the same bits everywhere ──
+//
+// A kernel's expf / logf / powf / sinf / cosf / tanhf / erff / log1pf are
+// cpu_detmath's (agora #548), computed with IEEE + - * / alone. The host's
+// libm gave other bits on Linux, Windows and macOS. A checksum of each one's
+// bits over 4096 inputs, sin and cos of large arguments too, is pinned: the
+// same number on every host the suite runs on.
+unsafe @ test_detmath → v {
+    ( nurl_print `[detmath]\n` )
+    : Gpu g ( gpu_open ( gpu_best_device ) )
+    ? ! ( gpu_ok g ) { ( check F `open a device (any backend)` ) ^ {} } {}
+    ? ! ( gpu_is_cpu ) { ( nurl_print `  skip (CUDA: NVRTC's own functions)\n` ) ^ {} } {}
+    : i n 4096
+    : GpuKernel k ( gpu_compile g `extern "C" __global__ void detmath(unsigned int* o, int n){
+    int i = blockIdx.x*blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    float x = (float)(i - n/2) * 0.01373f;
+    float big = (float)i * 977.13f;
+    float v[10] = { expf(x*0.08f), logf(fabsf(x) + 0.5f), log1pf(fabsf(x)), tanhf(x*0.3f), erff(x*0.1f),
+                    sinf(x), cosf(x), sinf(big*1000.0f), powf(fabsf(x) + 0.01f, x*0.05f), cosf(big) };
+    for (int k = 0; k < 10; k++) { unsigned int u; memcpy(&u, &v[k], 4); o[i*10 + k] = u; }
+}` `detmath` )
+    ? ! ( gpu_kernel_ok k ) { ( check F `compile detmath` ) ^ {} } {}
+    : i words * n 10
+    : GpuBuffer d ( gpu_alloc g * words 4 )
+    : GpuHost h ( gpu_host_alloc * words 4 )
+    : ( Vec i ) args ( vec_new [i] )
+    ( vec_push [i] args ( gpu_arg_buffer d ) )
+    ( vec_push [i] args ( gpu_arg_i32 n ) )
+    ( gpu_launch k ( gpu_grid n 256 ) 256 args )
+    ( gpu_sync g )
+    ( gpu_download ( gpu_host_ptr h ) d )
+    : ~ i sum 0
+    : ~ i j 0
+    ~ < j words {
+        = sum & + * sum 31 & ( gpu_host_get_i32 h j ) 4294967295 140737488355327
+        = j + j 1
+    }
+    ( nurl_print `  checksum ` ) ( nurl_print ( nurl_str_int sum ) ) ( nurl_print `\n` )
+    ( check == sum DETMATH_SUM `the float transcendentals' bits are the pinned ones` )
+}
+
 @ main → i {
     ( test_args )
     ( test_device )
     ( test_coop )
+    ( test_detmath )
     ( test_batch )
     ( test_release )
     ? == g_fail 0 { ( nurl_print `\nALL PASS\n` ) ^ 0 }

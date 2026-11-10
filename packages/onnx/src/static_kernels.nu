@@ -41,6 +41,7 @@ $ `runtime.nu`
 @ onnx_static_c_from GpuKit kit String out ( Vec String ) names → i {
     : ~ i bad 0
     ( string_push_str out ( cpu_static_header ) )
+    ( string_push_str out ( cpu_detmath ) )
     : i n ( gk_kernel_count kit )
     : ~ i k 0
     ~ < k n {
