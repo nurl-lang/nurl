@@ -18,6 +18,7 @@ import A3
 #print axioms A2.Dtor.letcall_hands_over
 #print axioms A2.Dtor.unpair_hands_over
 #print axioms A2.Dtor.letd_dtor
+#print axioms A2.Dtor.fnOK_dtor_params
 #print axioms A2.Dtor.scopeD_end_runs_dtor
 #print axioms A2.Dtor.scopeD_panic_runs_dtor
 #print axioms A2.DtorWitness.main_safe

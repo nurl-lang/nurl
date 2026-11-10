@@ -576,31 +576,72 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   the standard axioms. That includes a *double panic*: a destructor that
   panics while a panic unwinds.
 - The destructor is on the type (`Ty.dtor f t`, of a struct or an enum,
-  since A2-drop.3a). Every owned binding of a type that holds a destructor
-  value (`Ty.holdsDtor`: a destructor type, or a struct or an enum one
-  field or payload of which is one) is a `letd` binding.
-  - `letv` refuses one.
-  - A call's result, a field `unpair` moves out and a `sink` parameter are
-    handed to their `letd` before anything else runs (`Stmt.movedFirst`).
-  - So the destructor runs where the binding ends, as nurlc runs it.
+  since A2-drop.3a). What is a **theorem** (`A2/DtorWitness.lean`, axioms
+  printed by `check.sh`), for a type that holds a destructor value
+  (`Ty.holdsDtor`: a destructor type, or a struct or an enum one field or
+  payload of which is one):
+  - a typed `letv` binds no owned value of such a type
+    (`A2.Dtor.letv_owned_no_dtor`);
+  - a typed call's owned result of such a type, and an `unpair` field of
+    one, is handed on first thing (`Stmt.movedFirst`: into a `letd`, or by
+    `assign y (.var w)` into another binding of the same type, whose own
+    binder answers for it) and assigned nothing
+    (`A2.Dtor.letcall_hands_over`, `A2.Dtor.unpair_hands_over`);
+  - a typed function's `sink` parameter of such a type is handed on first
+    thing in its body and assigned nothing, an `inout` one is assigned
+    nothing, and an owned result of such a type is set at most once on any
+    path (`A2.Dtor.fnOK_dtor_params`);
+  - a typed `letd`'s value is of a destructor type `Ty.dtor f t`, `f` is a
+    `DtorOK` destructor of it, and the binding is assigned nothing in its
+    scope (`A2.Dtor.letd_dtor`);
+  - at the end of a typed `scopeD x f` frame whose `x` still owns its
+    value, the frame's only step runs `f` on `x` lent and then frees the
+    tree (`A2.Dtor.scopeD_end_runs_dtor`); a panic out of its body with `x`
+    owning runs it too (`A2.Dtor.scopeD_panic_runs_dtor`);
+  - the premises are satisfiable: a typed program with a destructor type,
+    its destructor, a function returning an owned value of it, a `letd` of
+    a struct literal and of a call's result, with `memory_safe` applied
+    (`A2.DtorWitness.main_safe`, `main2_safe`).
+
+  What follows from **reading the rules**, not from a theorem: that these
+  binders are all the places an owned destructor value comes to rest in a
+  binding, so its destructor runs where the binding ends, as nurlc runs it
+  — except for the check-out bindings below.
 - A struct holding a destructor value is itself of a destructor type, and
-  its destructor is its drop glue, which the elaboration generates to lend
-  each such field to its destructor. The calculus checks the glue as it
-  checks any destructor; that it calls the fields' destructors is the
-  elaboration's part.
-- A field of a destructor value is lent through the type, the destructor
-  staying with the whole value. `unpair` of one is refused, as Rust
-  refuses a move out of a type with a destructor.
-- `free` takes only a `Vec`, so it releases no destructor value.
+  its destructor is its drop glue, which the elaboration generates: the
+  struct's own `% Drop`, if it has one, then each destructor field lent to
+  its destructor, the order nurlc runs them in. The calculus checks the
+  glue as it checks any destructor; that it calls the fields' destructors
+  is the elaboration's part. An enum's glue matches on the tag and lends
+  the payload to its destructor (`getl` / `getr` lend a payload through
+  the type, `A2.DtorWitness.enum_lends`); no such glue is mechanized as an
+  example.
+- A field of a destructor value, or a payload of a destructor enum, is
+  lent through the type, the destructor staying with the whole value.
+  Taking one out is refused: `unpair` of a destructor value, and `takel` /
+  `taker` of a destructor enum (`A2.DtorWitness.enum_take_refused`), since
+  the destructor would not run.
+- `free` takes only a `Vec`; a `Vec` of destructor values it releases runs
+  none of their destructors (3b).
 - Not yet in the calculus. In each of these places `DropSlot` / `Frees`
   release the value, which runs no code, while nurlc runs the destructor:
-  - a destructor value as a `Vec` element, or an enum or option payload
-    inside one (3b);
+  - a destructor value as a `Vec` element (pushed, popped, freed), or an
+    enum or option payload inside one (3b);
   - in a closure's or trait object's environment (3c);
-  - in an `Arc`, lock, channel or cell payload (3d);
+  - in an `Arc`, lock, channel or cell payload (3d). `SpawnOK` refuses a
+    spawned function's parameter of a type that holds a destructor value
+    one level down (`Ty.holdsDtor`), so a `( Vec D )` or a lock of one
+    still crosses;
+  - a **check-out binding** (`withLock`, `withCell`, `withElem`) of a
+    destructor type: it is owned and is no `letd`'s; its value goes back
+    to the lock, cell or `Vec` at its scope's end, but an `assign` to it
+    drops the old value with no destructor (`A2.DtorWitness.lock_checkout_assign`
+    types this) (3b, 3d);
   - a function's result holding one, set before a panic in that function
     (another binding's destructor included), which the unwind releases
-    with the call's result scope.
+    with the call's result scope; and the same value moved from the result
+    slot into a local before the panic, where it sits more than one level
+    down (`pair res w`) and `Ty.holdsDtor` does not see it.
   See Agora #542–#544 and `A2/DROP_DESIGN.md` *Staging*.
 
 The rules are stricter than nurlc's in these places:
@@ -617,6 +658,13 @@ The rules are stricter than nurlc's in these places:
   to a `letd`, whose scope runs the destructor at once, and binds the new
   one with `letd`. A function's owned result of such a type is set at
   most once on any path.
+- for a destructor value (A2-drop.3a), taking it apart is refused: a
+  field written in place (`= . x f v`, which the calculus has as `unpair`
+  and `assign`), `unpair`, and taking a payload out of a destructor enum.
+  So an `inout` parameter of a destructor type is neither assigned nor
+  taken apart in its callee (its fields and payloads are lent). Rust lets a program move out of a struct that has no
+  `Drop` impl of its own even when its fields have one; here a struct
+  whose destructor is only its glue cannot be taken apart either.
 
 How the runtime carries this out (`stdlib/runtime_core.c`, `nurl_panic`)
 is stated here so the claim does not hide it:

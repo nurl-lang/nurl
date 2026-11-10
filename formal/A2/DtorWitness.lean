@@ -76,6 +76,18 @@ theorem letd_dtor {P : Prog} {Γ Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {r
   | sub _ _ _ ih => exact ih hst
   | _ => cases hst
 
+/-- A typed function's `sink` parameter of a type holding a destructor value
+    is handed to its `letd` first thing in its body, and assigned nothing; an
+    `inout` one is assigned nothing; an owned result of such a type is set at
+    most once on any path. -/
+theorem fnOK_dtor_params {P : Prog} {fn : Fn} (h : FnOK P fn) :
+    (∀ i (hi : i < fn.params.length), fn.params[i].1 = .sink → fn.params[i].2.holdsDtor = true →
+      i ∈ fn.body.movedFirst ∧ i ∉ fn.body.assigns) ∧
+    (∀ i (hi : i < fn.params.length) b, fn.params[i].1 = .inout b → fn.params[i].2.holdsDtor = true →
+      i ∉ fn.body.assigns) ∧
+    (fn.resOwn = true → fn.resTy.holdsDtor = true → fn.body.asgMax fn.params.length ≤ 1) :=
+  h.2.2.2.2.2.2.2.2.2.2.2.1
+
 /-- **The scope end of a destructor frame runs the destructor.** In a typed
     `scopeD x f` frame, `f` is a destructor (`DtorOK`) of `x`'s type, a
     destructor type `Ty.dtor f t`; when its body is done and `x` still owns its value, the frame's
