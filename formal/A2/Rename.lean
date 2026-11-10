@@ -3580,6 +3580,24 @@ theorem editBV_ren (h : S.OK) (hab : S.AbsOK Γa) (hR : S.R = []) {P : Prog} (hP
       · obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp (hD' hd)
         exact Or.inl (Or.inr (List.mem_map_of_mem hd0))
 
+/-- Agora #632: the gate on a payload taken out of an enum of a destructor
+    type reads the enum's type, which a call's renaming keeps. -/
+theorem TakeOK.canon (h : S.OK) {P : Prog} {Γ : Ctx} (hab : S.AbsOK Γ) {r : Rhs} (ht : TakeOK P Γ r) :
+    TakeOK P (S.canon Γ) (r.rename S.ρ) := by
+  intro y Ey g u hry hy hgy
+  have key : ∀ y0, S.ρ y0 = y → (r = .takel y0 ∨ r = .taker y0) → EnumGlueOK P g u := by
+    intro y0 hy0 hr0
+    rw [← hy0, canon_ρ h] at hy
+    cases h0 : Γ y0 with
+    | none => rw [h0] at hy; cases hy
+    | some E0 =>
+      rw [h0] at hy; simp only [Option.map_some, Option.some.injEq] at hy
+      refine ht y0 E0 g u hr0 h0 ?_
+      rw [← liftE_ty' h hab h0, hy]; exact hgy
+  cases r <;> simp [Rhs.rename] at hry
+  · exact key _ hry (Or.inl rfl)
+  · exact key _ hry (Or.inr rfl)
+
 /-- The renaming lemma: a callee's source statement, typed in its own
     contexts, is typed where the call places it, in the caller's view of
     those contexts. A statement that may change elements through a borrow
@@ -3747,9 +3765,21 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     exact StmtT.letd (H := E'.held ++ X) (by rw [src_rename]; exact hks) (by rw [canon_ρ h, hx]; rfl)
       (h.Fcout x) hr' hm' (by first | (rw [← hl]; exact hty) | (rw [hl]; exact hty)) hstr hview
       (by
-        refine ⟨hdtor.1, fun g hg hne => ?_⟩
-        obtain ⟨i, r0, k0, hig, hk0⟩ := hdtor.2 g (by first | (rw [← hl]; exact hg) | (rw [hl]; exact hg)) hne
-        exact ⟨i, S.ρ r0, k0.rename S.ρ, hig, by rw [hk0]; simp [Stmt.rename]⟩) hH'
+        refine ⟨⟨hdtor.1.1, fun g hg hne => ?_⟩, fun y Ey g u hry hy hgy => ?_⟩
+        · obtain ⟨i, r0, k0, hig, hk0⟩ := hdtor.1.2 g (by first | (rw [← hl]; exact hg) | (rw [hl]; exact hg)) hne
+          exact ⟨i, S.ρ r0, k0.rename S.ρ, hig, by rw [hk0]; simp [Stmt.rename]⟩
+        · have key : ∀ y0, S.ρ y0 = y → (r = .takel y0 ∨ r = .taker y0) → EnumGlueOK P g u := by
+            intro y0 hy0 hr0
+            rw [← hy0, canon_ρ h] at hy
+            cases h0 : Γ y0 with
+            | none => rw [h0] at hy; cases hy
+            | some E0 =>
+              rw [h0] at hy; simp only [Option.map_some, Option.some.injEq] at hy
+              refine hdtor.2 y0 E0 g u hr0 h0 ?_
+              rw [← liftE_ty' h hab h0, hy]; exact hgy
+          cases r <;> simp [Rhs.rename] at hry
+          · exact key _ hry (Or.inl rfl)
+          · exact key _ hry (Or.inr rfl)) hH'
       (StmtT.weakenIn ⟨PW.setE (PW.refl _) hEW, hwc, hnc⟩ tk)
       (EndOK.lift h abk hbx hpe) (not_mem_assigns_rename h.inj hna)
   | @callc Γ Γ1 Δ F x c j zs k Ec E ms q σ sig hks hx hxF hc htc hj hσ hhd hout hcT hnz hk hpe hnσ hdk ih =>
@@ -3887,7 +3917,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       hty ho hc' (StmtT.weakenIn ⟨PW.setE hpw (hE' x), hwc, hnc⟩ tk)
       (EndOK.lift h abk hbx hpe)
   | catchR => intro hs; simp [Stmt.src] at hs
-  | @assign Γ Γ1 F x r Ex E hx hxF hmodes hr hty hxd hsome hpin hds hxdb =>
+  | @assign Γ Γ1 F x r Ex E hx hxF hmodes hr hty hxd hsome hpin hds hxdb htk =>
     intro _ hab hw hn hT
     obtain ⟨E', hr', hE'⟩ := RhsT.ren h hab hr
     have hab1 := RhsT.absOK (S := S) hr hab
@@ -3906,7 +3936,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       · exact Or.inl h1
       · exact Or.inr (Or.inr h1)
       · exact Or.inr (Or.inl h1)) false
-    have hT := StmtT.assign (P := P) hx hxF hmodes hr hty hxd hsome hpin hds hxdb
+    have hT := StmtT.assign (P := P) hx hxF hmodes hr hty hxd hsome hpin hds hxdb htk
     have hwo := hT.wf hP hw
     have hno := hT.names hP rfl hn
     have habo : S.AbsOK (setE (A2.kill .replace false x Γ1) x { E with mode := Ex.mode }) :=
@@ -3934,6 +3964,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
         · exact Or.inr (Or.inl h1)
         · exact Or.inr (Or.inr h1))))
       (DtorSafe.canon h hal hds) (by rw [liftE_dbind h, ite_eq_right hrbx]; exact hxdb)
+      (TakeOK.canon h hab htk)
     refine StmtT.weakenOut (canon_wf h hab hw) (canon_names h hab hn) hT'
       (Or.inr ⟨PW.setE (PW.refl _) ?_, hwc, hnc⟩)
     have hf : S.liftE x { E with mode := Ex.mode } =

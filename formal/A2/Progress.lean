@@ -69,7 +69,7 @@ theorem eval_exists {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {e : Expr} (he : ExprT
     obtain ⟨d, o, l, _, _, hs, _⟩ := hi.slice_node hx hl ht
     exact ⟨_, Eval.slen hs⟩
   | isl hx hl ht =>
-    obtain ⟨v, hv | hv⟩ := sum_slot hi hx hl ht
+    obtain ⟨v, hv | hv⟩ := sum_slot_undtor hi hx hl ht
     · exact ⟨_, Eval.isl hv⟩
     · exact ⟨_, Eval.isr hv⟩
 
@@ -229,11 +229,11 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
     · exact ⟨_, EvalR.getrP hv⟩
     · exact ⟨_, EvalR.getr hv⟩
   | takel hy hl hm ht _ _ =>
-    obtain ⟨v, hv | hv⟩ := sum_slot hi hy hl ht <;> rw [hm] at hv
+    obtain ⟨v, hv | hv⟩ := sum_slot_undtor hi hy hl (take_undtor ht) <;> rw [hm] at hv
     · exact ⟨_, EvalR.takel hv⟩
     · exact ⟨_, EvalR.takelP hv⟩
   | taker hy hl hm ht _ _ =>
-    obtain ⟨v, hv | hv⟩ := sum_slot hi hy hl ht <;> rw [hm] at hv
+    obtain ⟨v, hv | hv⟩ := sum_slot_undtor hi hy hl (take_undtor ht) <;> rw [hm] at hv
     · exact ⟨_, EvalR.takerP hv⟩
     · exact ⟨_, EvalR.taker hv⟩
   | arcNew hy hly hty _ _ _ hpa =>

@@ -1414,6 +1414,19 @@ theorem guardTy_ok {t : Ty} (h : (Ty.lk t).ok = true) :
   refine ⟨?_, by simp [Ty.holdsView, h2]⟩
   simp [Ty.ok, Ty.holdsView, h1, h2, h3, h4]
 
+/-- Agora #632: what `takel` / `taker` take a payload out of: an enum, or
+    one under its destructor type; the value's facts at its type are the
+    enum's. -/
+theorem take_facts {E : Entry} {a b : Ty} {G : Nat → Prop}
+    (hty : E.ty = .sum a b ∨ ∃ f, E.ty = .dtor f (.sum a b) ∧ G f) (hok : E.ty.ok = true) :
+    (a.ok = true ∧ b.ok = true) ∧ E.ty ≠ .int ∧ (∀ v, WFv E.ty v → WFv (.sum a b) v) ∧
+      (∀ v s x, ViewIn (.sum a b) v s x → ViewIn E.ty v s x) ∧
+      (∀ v u k p, ArcIn (.sum a b) v u k p → ArcIn E.ty v u k p) := by
+  rcases hty with h | ⟨f, h, _⟩ <;> rw [h] at hok ⊢
+  · exact ⟨Ty.ok_sum hok, by simp, fun _ h => h, fun _ _ _ h => h, fun _ _ _ _ h => h⟩
+  · refine ⟨Ty.ok_sum (by simp [Ty.ok, Ty.isStruct] at hok; simpa [Ty.ok] using hok), by simp,
+      fun _ h => (WFv.dtor_iff.mp h).2, fun _ _ _ h => ViewIn.dtor h, fun _ _ _ _ h => ArcIn.dtor h⟩
+
 /-- A2-drop.3b: `vec_remove y 0` (the drain's step) is a `vec_pop` of
     element 0 moved to the end (`MInv.perm`). -/
 theorem rhs_popFront {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
@@ -1606,26 +1619,26 @@ theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry
     cases he with
     | takel hv =>
       obtain ⟨post, out⟩ := rhs_move hi hanch hy hl hm hyF hpin hv hds
-      have hok := Ty.ok_sum (hty ▸ hi.tyok hy)
+      obtain ⟨hok, hne, hwf, hvi, hai⟩ := take_facts hty (hi.tyok hy)
       obtain ⟨_, hw, _⟩ := out.valOwn rfl
-      rw [hty] at hw
+      have hw := hwf _ hw
       cases hw with
       | inl hwa =>
-        exact ⟨post, out_part out (by rw [hty]; simp) hwa (Sub.inl (Sub.refl _))
-          (fun s x h => by rw [hty]; exact ViewIn.inl h) (by simp) hok.1
-          (fun u k p h => by rw [hty]; exact ArcIn.inl h)⟩
+        exact ⟨post, out_part out hne hwa (Sub.inl (Sub.refl _))
+          (fun s x h => hvi _ s x (ViewIn.inl h)) (by simp) hok.1
+          (fun u k p h => hai _ u k p (ArcIn.inl h))⟩
   | taker hy hl hm hty hyF hpin hds =>
     cases he with
     | taker hv =>
       obtain ⟨post, out⟩ := rhs_move hi hanch hy hl hm hyF hpin hv hds
-      have hok := Ty.ok_sum (hty ▸ hi.tyok hy)
+      obtain ⟨hok, hne, hwf, hvi, hai⟩ := take_facts hty (hi.tyok hy)
       obtain ⟨_, hw, _⟩ := out.valOwn rfl
-      rw [hty] at hw
+      have hw := hwf _ hw
       cases hw with
       | inr hwb =>
-        exact ⟨post, out_part out (by rw [hty]; simp) hwb (Sub.inr (Sub.refl _))
-          (fun s x h => by rw [hty]; exact ViewIn.inr h) (by simp) hok.2
-          (fun u k p h => by rw [hty]; exact ArcIn.inr h)⟩
+        exact ⟨post, out_part out hne hwb (Sub.inr (Sub.refl _))
+          (fun s x h => hvi _ s x (ViewIn.inr h)) (by simp) hok.2
+          (fun u k p h => hai _ u k p (ArcIn.inr h))⟩
   | arcNew hy hly hty hvd hpl hnc hpa =>
     cases he with
     | arcNew htk hfr =>

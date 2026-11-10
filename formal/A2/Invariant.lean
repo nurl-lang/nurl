@@ -1032,6 +1032,20 @@ def ImplGlueOK (P : Prog) (f : Nat) (t : Ty) (h i : Nat) : Prop :=
     GlueOK P h t ∧ DtorOK P i (.dtor h t) ∧
     fn.body = .letd w h (.var 0) (.letcall r i [w] (.assign 1 (.expr e)))
 
+/-- Agora #632: `f` is the drop glue of the enum `t`: a function that takes
+    one value of the destructor type `Ty.dtor f t` owned and matches on its
+    tag; in the arm of a variant whose payload holds a destructor value the
+    payload moves out to a `letd` first thing (`takel` / `taker`), whose
+    frame runs its destructor; the arms do nothing else (`Stmt.pureGlue`).
+    (In this cut the enum holds no views.) -/
+def EnumGlueOK (P : Prog) (f : Nat) (t : Ty) : Prop :=
+  ∃ fn a b sa sb, P[f]? = some fn ∧ t = .sum a b ∧ t.holdsView = false ∧
+    fn.params = [(.sink, .dtor f t)] ∧ fn.resTy = .int ∧
+    fn.resOwn = false ∧ fn.lends = [] ∧ fn.rholds = [] ∧ fn.outHolds = [] ∧ ¬ ThruFn P f ∧
+    fn.body = .ite (.isl 0) sa sb ∧ sa.pureGlue = true ∧ sb.pureGlue = true ∧
+    (a.holdsDtor = true → ∃ y g k, sa = .letd y g (.takel 0) k) ∧
+    (b.holdsDtor = true → ∃ z g k, sb = .letd z g (.taker 0) k)
+
 /-- What `unpair` takes apart is a struct under its destructor type, if any. -/
 theorem unpair_undtor {τ a b : Ty} {G : Nat → Prop} (h : τ = .prod a b ∨ ∃ f, τ = .dtor f (.prod a b) ∧ G f) :
     τ.undtor = .prod a b := by
@@ -1047,15 +1061,18 @@ theorem unpair_ne_int {τ a b : Ty} {G : Nat → Prop} (h : τ = .prod a b ∨ �
     glue, which takes it apart (`GlueOK`), or first runs the struct's own
     impl on it (`ImplGlueOK`). -/
 def DropFnOK (P : Prog) (f : Nat) (t : Ty) : Prop :=
-  (DtorOK P f (.dtor f t) ∧ (∀ a b, t = .prod a b → t.holdsDtor = false)) ∨ GlueOK P f t ∨
-    ∃ h i, ImplGlueOK P f t h i
+  (DtorOK P f (.dtor f t) ∧ t.holdsDtor = false) ∨ GlueOK P f t ∨
+    (∃ h i, ImplGlueOK P f t h i) ∨ EnumGlueOK P f t
 
 /-- A glue of either kind takes its struct owned. -/
-theorem sinkOf {P : Prog} {f : Nat} {t : Ty} (hg : GlueOK P f t ∨ ∃ h i, ImplGlueOK P f t h i) :
+theorem sinkOf {P : Prog} {f : Nat} {t : Ty}
+    (hg : GlueOK P f t ∨ (∃ h i, ImplGlueOK P f t h i) ∨ EnumGlueOK P f t) :
     ∃ fn, P[f]? = some fn ∧ t.holdsView = false ∧ fn.params = [(.sink, .dtor f t)] ∧
       fn.resOwn = false ∧ ¬ ThruFn P f := by
   rcases hg with ⟨fn, _, _, hfn, _, hv, hps, _, hro, _, _, _, hnt, _⟩ |
-    ⟨_, _, fn, _, _, _, _, _, hfn, _, hv, hps, _, hro, _, _, _, hnt, _⟩
+    ⟨_, _, fn, _, _, _, _, _, hfn, _, hv, hps, _, hro, _, _, _, hnt, _⟩ |
+    ⟨fn, _, _, _, _, hfn, _, hv, hps, _, hro, _, _, _, hnt, _⟩
+  · exact ⟨fn, hfn, hv, hps, hro, hnt⟩
   · exact ⟨fn, hfn, hv, hps, hro, hnt⟩
   · exact ⟨fn, hfn, hv, hps, hro, hnt⟩
 
@@ -1071,9 +1088,28 @@ theorem LetdFn.of {P : Prog} {f : Nat} {t a : Ty} {x : Var} {s : Stmt} (h : Drop
     (hn : ∀ g, a = .dtor g t → g = f) : LetdFn P f t a x s :=
   ⟨h, fun g hg hne => absurd (hn g hg) hne⟩
 
-/-- `LetdFn` where the value bound is of no other destructor type. -/
+/-- Agora #632: a payload is taken out of an enum under a destructor type
+    (`RhsT.takel` / `taker`) only where the enum's destructor is its glue:
+    taking the payload out is then what its drop does. -/
+def TakeOK (P : Prog) (Γ : Ctx) (r : Rhs) : Prop :=
+  ∀ y Ey g u, (r = .takel y ∨ r = .taker y) → Γ y = some Ey → Ey.ty = .dtor g u → EnumGlueOK P g u
+
+theorem TakeOK.triv {P : Prog} {Γ : Ctx} {r : Rhs} (h : ∀ y, r ≠ .takel y ∧ r ≠ .taker y) : TakeOK P Γ r :=
+  fun y _ _ _ hr _ _ => by
+    rcases hr with hr | hr
+    · exact absurd hr (h y).1
+    · exact absurd hr (h y).2
+
+/-- `TakeOK` for a right-hand side that is no `takel` / `taker`. -/
+syntax "take_triv" : tactic
+macro_rules
+  | `(tactic| take_triv) =>
+    `(tactic| exact TakeOK.triv (fun y => ⟨(by intro h; cases h), (by intro h; cases h)⟩))
+
+/-- `LetdFn` where the value bound is of no other destructor type, and is
+    no payload taken out. -/
 macro "letd_fn" h:term : term =>
-  `(LetdFn.of $h (fun g hg => by
+  `(And.intro (LetdFn.of $h (fun g hg => by
       first
         | exact (Ty.dtor.inj hg).1.symm
         | exact Ty.noConfusion hg
@@ -1081,6 +1117,7 @@ macro "letd_fn" h:term : term =>
         | (injection hg with h1 _; exact h1.symm)
         | (simp_all; done)
         | (exfalso; revert hg; simp_all [popE, compE]; done)))
+      (TakeOK.triv (fun y => ⟨(by intro h; cases h), (by intro h; cases h)⟩)))
 
 /-- A2-drop.3a: `letv`'s side condition, that the value it binds owned is of
     no destructor type, for an entry the rules build (none but `letd`'s is of
@@ -1149,6 +1186,8 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       -- A2-drop.2: a binding `letd` made gains no view (nurlc #254; its rule,
       -- views of older bindings only, needs an age the calculus lacks)
       Ex.dbind = false →
+      -- (Agora #632: a payload taken out of an enum of a destructor type, as `letd`'s)
+      (htk : TakeOK P Γ r := by take_triv) →
       StmtT P Γ F (.assign x r) (setE (kill .replace false x Γ1) x { E with mode := Ex.mode })
   | ite {Γ Δ : Ctx} {F : List Var} {c : Expr} {a b : Stmt} :
       a.src = true → b.src = true → ExprT Γ c → StmtT P Γ F a Δ → StmtT P Γ F b Δ →
@@ -1241,7 +1280,7 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       -- rebound under its fields' glue with the impl's call next.
       -- A2-drop.3b: or it is a `Vec` of such values, drained at its end
       LetdTy f t E.ty τ → t.isStruct = true →
-      t.hasFn = false → LetdFn P f t E.ty x s →
+      t.hasFn = false → LetdFn P f t E.ty x s ∧ TakeOK P Γ r →
       -- A2-drop.2: the binding, armed, views what the value does, or more
       HeldUp Γ1 E H → StmtT P (setE Γ1 x (Entry.arm { E with ty := τ, held := H })) F s Δ →
       EndOK Δ x →
@@ -1402,7 +1441,8 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
     its destructor, or drains it, on a panic in the callee. -/
 def DtorParamsOK (P : Prog) (fn : Fn) : Prop :=
   (∀ i (h : i < fn.params.length), fn.params[i].1 = .sink → fn.params[i].2.holdsDtor = true →
-    i ∈ fn.body.movedFirst ∧ i ∉ fn.body.assigns) ∧
+    -- (Agora #632: or the function is an enum's glue, which matches on it)
+    (i ∈ fn.body.movedFirst ∨ ∃ f u, P[f]? = some fn ∧ EnumGlueOK P f u) ∧ i ∉ fn.body.assigns) ∧
   (∀ i (h : i < fn.params.length) b, fn.params[i].1 = .inout b → fn.params[i].2.holdsDtor = true →
     i ∉ fn.body.assigns) ∧
   (fn.resOwn = true → fn.resTy.holdsDtor = true → fn.body.asgMax fn.params.length ≤ 1 ∧
