@@ -981,8 +981,8 @@ drop glue nurlc writes registers the parts still to go before it drops a
 part that may run a destructor, so the panic's drain runs their
 destructors, in order and once each. That is the run Agora #616 gives the
 calculus for a struct (above: its glue takes it apart, each destructor
-field in a frame of its own); an enum's payloads are #616's open half,
-where the calculus still frees them with no code.
+field in a frame of its own) and Agora #632 for an enum (its glue takes
+the payload out to a frame of its own).
 Test: `compiler/tests/panic_in_drop_of_struct_field.nu`.
 
 ## Trusted base
