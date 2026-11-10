@@ -1,6 +1,6 @@
-// struct_whose_index_field_a_callee_left_viewing_its_arena_field_returned_whole_runs_clean: agora #383 — `put . t arena . t idx key` in the function that builds `t`, then `^ t`: a move takes the arena's element buffers with it (the struct views its own storage)
-// Control for agora #383.
-// map: §2.10 | A2 | runs-clean | - | agora #383: `put . t arena . t idx key` in the function that builds `t`, then `^ t`: a move takes the arena's element buffers with it (the struct views its own storage)
+// struct_whose_index_field_a_callee_left_viewing_its_arena_field_returned_whole_runs_clean: agora #383 — `put . t arena . t idx key` in the function that builds `t`, then `^ t`: the function's answer says its result views its own arena (`.^arena`), and the caller's binding is tied to that field of itself
+// Control for agora #383 / #600.
+// map: §2.10 | A2 | runs-clean | - | agora #383: `put . t arena . t idx key` in the function that builds `t`, then `^ t`: the function's answer says its result views its own arena (`.^arena`), and the caller's binding is tied to that field of itself
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 

@@ -1,5 +1,5 @@
 // arena_and_encoder_table_of_numbers_filled_through_wrappers_runs_clean: agora #383 — yoloe's tokenizer shape: a struct of an arena and a `( HashMap s i )` keyed by views of its elements, filled through a `map_set` wrapper by a helper handed the struct, then returned
-// Control for agora #383 (map_set replacing a number drops nothing).
+// Control for agora #383 / #600 (the helper drops elements of `. t enc` only, not of `. t arena`: per-field drop summaries).
 // map: §2.10 | A2 | runs-clean | - | agora #383: yoloe's tokenizer shape: a struct of an arena and a `( HashMap s i )` keyed by views of its elements, filled through a `map_set` wrapper by a helper handed the struct, then returned
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
