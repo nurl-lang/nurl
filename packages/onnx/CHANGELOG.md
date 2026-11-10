@@ -2,6 +2,12 @@
 
 ## [0.13.0] — unreleased
 
+Requires gpu 0.17.8.
+
+### Fixed
+
+- **The static kernels compute the gpu CPU backend's bits** (Agora #548). `onnx_static_c_from` pushes gpu's `cpu_detmath` after the static header, so a kernel's float transcendentals there are the host-independent ones the JIT backend now uses, not the host libm's.
+
 ### Changed
 
 - **An Engine keeps a graph's initializers on the device from run to run** (Agora #526). Each run uploaded every FLOAT initializer again (`rt_load_inits`). For YOLOE-v8s-seg that is 46 MB a frame, half of a warm run's time. The engine now keeps the device copies of the graph it last ran and reuses them when the same graph runs again; a run of another graph lets them go before uploading its own, and `rt_reset` lets them go too. A warm 640×640 frame of YOLOE-v8s-seg on an RTX 4090 went from 22.4 ms to 11.0 ms, with identical output and the same peak RSS. Nothing in onnx changes a graph's initializers once it is made, and no kernel writes into its inputs, so a kept copy is always the graph's.
