@@ -62,16 +62,19 @@
     ^ 0
 }
 
-// #545: three owners rotated in a loop
+// #545: two owners swapped through a third, once and in a loop
 @ run_swap → i {
     : ~ [i a [i | 1 2]
     : ~ [i b [i | 3 4 5]
     : ~ [i t [i | 0]
+    = t a
+    = a b
+    = b t
     : ~ i k 0
-    ~ < k 3 {
-        = t a
+    ~ < k 2 {
+        : [i u a
         = a b
-        = b t
+        = b u
         = k + k 1
     }
     ~ x a { ( nurl_println ( nurl_str_int x ) ) }

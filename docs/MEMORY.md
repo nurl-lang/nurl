@@ -241,7 +241,10 @@ caller's: a local the callee owns moves over (its own drop no longer runs,
 h200), and a parameter the callee only borrows is copied in, since its
 caller still owns it (h201). A field the callee hands to a consumer, or
 takes with `mem_take`, is emptied in the caller's struct, so nothing is
-released twice. Reassigning an `inout` raw string (`s`) is an error, because the
+released twice. The whole parameter handed to a consumer — returned in a
+literal, pushed into a container, stored into a field — is taken over
+the same way: the caller's binding is consumed by the call, and reading
+it afterwards is a use after move (§2.1). Reassigning an `inout` raw string (`s`) is an error, because the
 callee cannot know whether the caller's old string is owned.
 
 ```nurl
@@ -550,7 +553,10 @@ container, and any function that mutates the container passed to it or
 takes it (`sink`), wherever that function is defined. Giving the
 container a new value in the body (`= xs …`; for `~ x . r xs`, also `=
 . r xs …` or `= r …`) is an error too, and so is running a closure there
-that assigns it or hands it to such a function (h416–h420). A counter loop (`~ < k n { … }`)
+that assigns it or hands it to such a function (h416–h420). An element
+store into a slice the loop walks (`~ x sl { = . sl k v }`) releases the
+element it replaces, which may be the one the loop is at: it is an error
+when the slice owns its elements, and allowed over plain data. A counter loop (`~ < k n { … }`)
 borrows nothing, so `vec_set xs k v` inside it is allowed.
 
 The element `x` is a part of `xs` (§2.10), so what ends `xs`'s elements
@@ -2401,7 +2407,10 @@ are dropped, moved and copied by the same rules:
   h345, h346). A cursor over it, or what a call lent back of it, is its
   own value and is stored as is.
 - **Cursors.** `: ~ cur root` borrows `root`. Consuming the cursor
-  consumes `root`'s value; reassigning the cursor releases nothing it
+  consumes `root`'s value — handed to a `sink`, or stored into a
+  literal, a field or a container, it leaves `root` stored there, and
+  reading `root` afterwards is an error as it is after storing `root`
+  by name; reassigning the cursor releases nothing it
   borrows. A cursor given a value of its own (`= rest ( nurl_str_slice
   rest … )`) owns that value on the paths that gave it one, and where
   those paths meet the ones on which it still borrows, it may own its
@@ -2429,8 +2438,10 @@ are dropped, moved and copied by the same rules:
   with a slice field moves the same way. A slice that is only borrowed
   — a parameter, a field of a live value, a payload a `??` arm reads —
   is copied into whatever comes to own it (a binding assigned it, a
-  field, a literal, a return), and so is a slice bound to a mutable
-  binding (`: ~ [i c a` leaves `a` its own). A copy is a buffer of its
+  field, a literal the function keeps to itself, a return); a parameter
+  in a literal the function returns is handed over by its caller, as
+  any stored parameter is. A mutable binding of another slice (`: ~ [i
+  c a`) is a cursor over it (§2.2). A copy is a buffer of its
   own with each element copied into it; a slice whose elements cannot
   be copied can only be moved. Temporaries (a literal or a call's
   result in an argument list, a discarded result) are released at the
@@ -2444,7 +2455,8 @@ are dropped, moved and copied by the same rules:
   (`= . sl k v`) drops the element it replaces, takes a fresh value as
   it is and copies a borrowed one; a binding stored there is refused
   (store a copy). An element that cannot be copied must be a fresh
-  value.
+  value. A store into an element of the slice a `~` loop is walking is
+  refused when the slice owns its elements (§2.5).
 - **A slice from raw parts is `unsafe`.** `@ [T { p n }` makes a slice
   out of a pointer and a length the compiler cannot vouch for, and the
   slice will release that pointer as its own buffer. It is refused in
