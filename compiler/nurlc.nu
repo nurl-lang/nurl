@@ -30773,6 +30773,17 @@ unsafe @ __callee_decl_name s cn → s {
 // its old borrows and dependencies end. Only where the callee's answers of
 // what it leaves in its arguments (g_fn_vkeeps, g_fn_vholds) are final and
 // name nothing: the call's own rows for those would be cleared with them.
+// How many times `w` is a word of `list`.
+@ __word_count s list s w → i {
+    : ~ i n 0
+    : ~ s rest ( nurl_str_cat list `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        ? ( seq ( str_first_word rest ) w ) { = n + n 1 } {}
+        = rest ( str_skip_word rest )
+    }
+    ^ n
+}
+
 unsafe @ __rp_apply i syms s cal i line → v {
     // (Only a call that surely runs: not the right operand of a `&` / `|`
     // that may skip it — `& F ( reset w )`, formal's #1709 review.)
@@ -30788,7 +30799,12 @@ unsafe @ __rp_apply i syms s cal i line → v {
     ~ != 0 ( nurl_str_len rest ) {
         : s ks ( str_first_word rest ) = rest ( str_skip_word rest )
         : s nm ( __nth_word args ( nurl_str_to_int ks ) )
-        ? & & != 0 ( nurl_str_len nm ) ! ( seq nm `-` ) != 0 ( nurl_sym_len syms nm ) {
+        // (…and only where this call's own argument is the statement's one
+        // read of the holder so far: the walk checks a statement's reads
+        // after the rows its calls record, so a read before the call —
+        // `( g . w v ( reset w ) )` — would be taken as one of the new
+        // value. formal's #1709 review.)
+        ? & & & != 0 ( nurl_str_len nm ) ! ( seq nm `-` ) != 0 ( nurl_sym_len syms nm ) == 1 ( __word_count ( nurl_sym_get g_bck `reads` ) nm ) {
             : s vt ( nurl_sym_get syms nm )
             : s rd0 ( nurl_sym_get g_bck `reads` )
             ( bck_put `reads` `` )
