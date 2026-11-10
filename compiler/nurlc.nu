@@ -35545,7 +35545,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 // by a row of a kind that can — this one, and the alias,
                 // pending-call, store and effect rows — takes the option's
                 // value with it: bck_cursor_follow.)
-                ? != 0 g_bck_has_cursor { = st ( bck_cursor_follow st rec kc ) } {}
+                ? | != 0 g_bck_has_cursor != 0 g_bck_epy_any { = st ( bck_cursor_follow st rec kc ) } {}
                 = p + p 1
                 = done T
             } {}
@@ -35615,7 +35615,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                     } {}
                 }
                 ( bck_put ( nurl_str_cat `ml_` avn ) ( bck_field rec 3 ) )
-                ? != 0 g_bck_has_cursor { = st ( bck_cursor_follow st rec kc ) } {}
+                ? | != 0 g_bck_has_cursor != 0 g_bck_epy_any { = st ( bck_cursor_follow st rec kc ) } {}
                 = p + p 1
                 = done T
             } {}
@@ -35637,7 +35637,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 ( bck_join ( bck_st_get st qvid ) BCK_MOVED ) )
                 ( bck_put ( nurl_str_cat `ml_` qvn )
                 ( bck_field rec 3 ) )
-                ? != 0 g_bck_has_cursor { = st ( bck_cursor_follow st rec kc ) } {}
+                ? | != 0 g_bck_has_cursor != 0 g_bck_epy_any { = st ( bck_cursor_follow st rec kc ) } {}
                 = p + p 1
                 = done T
             } {}
@@ -35739,7 +35739,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                         } {}
                     } {}
                 } {}
-                ? != 0 g_bck_has_cursor { = st ( bck_cursor_follow st rec kc ) } {}
+                ? | != 0 g_bck_has_cursor != 0 g_bck_epy_any { = st ( bck_cursor_follow st rec kc ) } {}
                 = p + p 1
                 = done T
             } {}
@@ -35829,14 +35829,14 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                         // a view the statement binds borrows it (`:p`).
                         ? & & ( bck_sound ) ! ptake ( mem_fn_retptr_arg pcal paix ) { ( bck_plend_add pvn pcal `:p` ( bck_field rec 3 ) ) } {}
                     } }
-                ? != 0 g_bck_has_cursor { = st ( bck_cursor_follow st rec kc ) } {}
+                ? | != 0 g_bck_has_cursor != 0 g_bck_epy_any { = st ( bck_cursor_follow st rec kc ) } {}
                 = p + p 1
                 = done T
             } {}
             ? & ! done == kc 32 {
                 // What a closure that may run here does to its captures: the
                 // sweep below ends what that ends (bck_borrow_sweep).
-                ? != 0 g_bck_has_cursor { = st ( bck_cursor_follow st rec kc ) } {}
+                ? | != 0 g_bck_has_cursor != 0 g_bck_epy_any { = st ( bck_cursor_follow st rec kc ) } {}
                 // (A closure that runs here and gives a borrowing binding a
                 // new value, `@assign`: from here on it may hold the closure's
                 // value, its own on that path — BCK_MAYBE_OWNED.)
@@ -36115,7 +36115,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                     // generic, `take_any`, not `take_any__Vec__String`.)
                     ( bck_put ( nurl_str_cat3 `mc_` ( nurl_sym_get2 g_bck `rv_` fpid ) ( bck_field rec 3 ) ) ( bck_generic_base fcal ) )
                 } {}
-                ? != 0 g_bck_has_cursor { = st ( bck_cursor_follow st rec kc ) } {}
+                ? | != 0 g_bck_has_cursor != 0 g_bck_epy_any { = st ( bck_cursor_follow st rec kc ) } {}
                 = p + p 1
                 = done T
             } {}
@@ -36146,7 +36146,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                         }
                     }
                 } {}
-                ? != 0 g_bck_has_cursor { = st ( bck_cursor_follow st rec kc ) } {}
+                ? | != 0 g_bck_has_cursor != 0 g_bck_epy_any { = st ( bck_cursor_follow st rec kc ) } {}
                 = p + p 1
                 = done T
             } {}
@@ -39785,9 +39785,20 @@ unsafe @ bck_note_rc_arg s name s ty → v {
     : i rid0 ? >= g_bck_sx_wid 0 g_bck_sx_wid ( bck_field_id rec 1 )
     ? < rid0 0 { ^ st } {}
     : i rid ( bck_path_root rid0 )
-    ? ! ( bck_cursor_watched rid ) { ^ st } {}
     : ~ s out st
     : i line ( bck_field_int rec 3 )
+    // A program enum binding given a new value by a callee (an `inout`
+    // argument it may replace, or drop what it holds): the `??` arm payloads
+    // read in place out of its old value go with it, as at `= o …`
+    // (__bck_epy_release) — agora #565, #1678's rest. (Done here, on `out`,
+    // not in a wrapper: every caller writes `= st ( bck_cursor_follow st …
+    // )`, and a wrapper handing its argument back is agora #427's shape.)
+    ? & != 0 g_bck_epy_any | | | == kc 9 == kc 12 == kc 13 == kc 32 {
+        : s ecal ( bck_field rec 5 )
+        : s eaix ( bck_field rec 6 )
+        ? | != 0 ( nurl_str_len ( __repl_of ecal eaix ) ) ( bck_callee_drops_elems ecal eaix ) { = out ( __bck_epy_release out rid line ) } {}
+    } {}
+    ? | == 0 g_bck_has_cursor ! ( bck_cursor_watched rid ) { ^ out } {}
     : ~ s rest ( nurl_str_cat ( nurl_sym_get g_bck ( bck_bkey `cul` `` ) ) `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest ) = rest ( str_skip_word rest )
@@ -39870,7 +39881,7 @@ unsafe @ bck_note_rc_arg s name s ty → v {
         : s r0 ( str_first_word rest ) = rest ( str_skip_word rest )
         = g_bck_sx_part == ( nurl_str_get r0 0 ) 94
         = g_bck_sx_wid ( nurl_str_to_int ? g_bck_sx_part ( nurl_str_slice r0 1 - ( nurl_str_len r0 ) 1 ) r0 )
-        ? != 0 g_bck_has_cursor { = out ( bck_cursor_follow out rec kc ) } {}
+        ? | != 0 g_bck_has_cursor != 0 g_bck_epy_any { = out ( bck_cursor_follow out rec kc ) } {}
         = out ( bck_borrow_sweep ist out rec kc )
     }
     = g_bck_sx_wid -1
