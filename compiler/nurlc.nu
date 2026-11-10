@@ -38754,7 +38754,8 @@ unsafe @ __lend_unnamed s ws → b {
         : s r ( __path_root_name w )
         ? ! ( str_contains_word seen r ) {
             = seen ( nurl_str_cat3 seen ` ` r )
-            ? ( str_contains_word g_cur_params r ) { = out ( __word_union out r ) } {
+            // (…or the closure literal compiling now's own parameter.)
+            ? | ( str_contains_word g_cur_params r ) & & != 0 g_bck_closure_depth != 0 ( nurl_str_len g_clo_cur ) ( str_contains_word g_clo_params r ) { = out ( __word_union out r ) } {
                 = srcs ( __word_union srcs ( __pderiv_params syms r ) )
                 = srcs ( __word_union srcs ( nurl_sym_get2 syms r `__plend` ) )
                 = srcs ( __word_union srcs ( nurl_sym_get2 syms r `__plroot` ) )
@@ -39043,13 +39044,18 @@ unsafe @ __pderiv_note i syms s name s vt i rhs_tt s rhs_val s lend s sx → v {
 // one field would end every borrow of the parameter (agora #461).
 @ __drop_note_via i syms s name s callee i aix s at → v {
     ( __drop_note name callee aix )
-    ? | == 0 g_srcx_on == 0 ( nurl_str_len g_cur_params ) { ^ v } {}
+    // (In a closure body its own parameters count too: a payload matched
+    // out of one, `?? b { T xs → ( vec_clear xs ) }`, drops what the
+    // literal's caller handed it — in a function with no parameters of its
+    // own as much as in any other; agora #424.)
+    : b inclo & != 0 g_bck_closure_depth != 0 ( nurl_str_len g_clo_cur )
+    ? | == 0 g_srcx_on & == 0 ( nurl_str_len g_cur_params ) ! inclo { ^ v } {}
     ? ! ( seq at `%String` ) {
         ? == 0 ( nurl_str_starts at `%Vec__` ) { ^ v } {}
         ? ! ( __elem_owns ( __vec_elem_llvm at ) syms ) { ^ v } {}
     } {}
     : s root ( __path_root_name name )
-    ? ( str_contains_word g_cur_params root ) { ^ v } {}
+    ? | ( str_contains_word g_cur_params root ) & inclo ( str_contains_word g_clo_params root ) { ^ v } {}
     // (…and through a read a source expression's lend may make, under the
     // condition that it does: __drop_note_c, agora #461.)
     : ~ s ps ( __pderiv_reach syms root )
