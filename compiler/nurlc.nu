@@ -1634,6 +1634,11 @@ unsafe @ agg_field_count i syms s ot → i {
 // (__rp_note_assign: the credited write must be the first, so nothing
 // before it — a `/`, a `%`, an index — may panic past it).
 : ~ i g_rp_sc 0
+// …and how many reads the top-level statement being compiled has made so
+// far, nested blocks, arms and joins included (bck_note_read; reset where a
+// statement of the body's top level begins, gen_stmt): a repoint is
+// credited only where its holder argument is the one read so far.
+: ~ i g_rp_rd 0
 : ~ i g_rp_nstmt 0
 : ~ s g_noaddr_visiting ``  // enum types __ty_no_address is examining (a recursive type qualifies provisionally)
 : ~ i g_ff_gen 0  // function counter keying the field-owner flags (mem_ff_slot)
@@ -29910,6 +29915,7 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
 // Note that the current statement reads identifier `name`. Hooked
 // into gen_ident, so it fires for every value-position identifier.
 @ bck_note_read s name → v {
+    = g_rp_rd + g_rp_rd 1
     ? & != g_borrowck 0 == g_bck_rec_off 0 {
         // In place: the list only grows within a statement (it was copied
         // whole for every identifier read).
@@ -30852,12 +30858,13 @@ unsafe @ __rp_apply i syms s cal i line → v {
     ~ != 0 ( nurl_str_len rest ) {
         : s ks ( str_first_word rest ) = rest ( str_skip_word rest )
         : s nm ( __nth_word args ( nurl_str_to_int ks ) )
-        // (…and only where this call's own argument is the statement's one
-        // read of the holder so far: the walk checks a statement's reads
-        // after the rows its calls record, so a read before the call —
-        // `( g . w v ( reset w ) )` — would be taken as one of the new
-        // value. formal's #1709 review.)
-        ? & & & != 0 ( nurl_str_len nm ) ! ( seq nm `-` ) != 0 ( nurl_sym_len syms nm ) == 1 ( __word_count ( nurl_sym_get g_bck `reads` ) nm ) {
+        // (…and only where this call's own argument is the one read the
+        // body's top-level statement has made so far, g_rp_rd: the walk
+        // checks a statement's reads after the rows its calls record, so a
+        // read before the call — `( g . w v ( reset w ) )`, a block's tail
+        // `( g { . w v } ( reset w ) )`, a `??` arm — would be taken as one
+        // of the new value. formal's #1709 review.)
+        ? & & & & != 0 ( nurl_str_len nm ) ! ( seq nm `-` ) != 0 ( nurl_sym_len syms nm ) == 1 ( __word_count ( nurl_sym_get g_bck `reads` ) nm ) == 1 g_rp_rd {
             : s vt ( nurl_sym_get syms nm )
             : s rd0 ( nurl_sym_get g_bck `reads` )
             ( bck_put `reads` `` )
@@ -44386,7 +44393,7 @@ unsafe @ borrowck_fn_end i lex i syms s fname → v {
 
 // Counted with gen_expr's levels (see the nesting limit above it).
 @ gen_stmt i lex i syms i cg → s {
-    ? == g_cg_blk_depth g_rp_d0 { = g_rp_nstmt + g_rp_nstmt 1 } {}
+    ? == g_cg_blk_depth g_rp_d0 { = g_rp_nstmt + g_rp_nstmt 1 = g_rp_rd 0 } {}
     ( __nest_enter lex )
     : s v ( __gen_stmt_level lex syms cg )
     = g_nest_depth - g_nest_depth 1
@@ -55152,6 +55159,7 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     // runs is checked against them after its body, __iter_closure_effs_check.)
     : ~ s __cl_bck_iterc ( nurl_str_cat `` `` )
     : i __cl_iter_live g_bck_iter_live
+    : i __cl_rp_rd g_rp_rd
     ? != g_borrowck 0 {
         = __cl_bck_stmts ( nurl_sym_get g_bck `stmts` )
         = __cl_bck_reads ( nurl_sym_get g_bck `reads` )
@@ -55277,6 +55285,7 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
         { ( bck_defer_fn ( nurl_sym_get body_syms `__fn_param_names__` ) ) }
         { ( bck_analyze ( nurl_sym_get body_syms `__fn_param_names__` ) ) }
     } {}
+    = g_rp_rd __cl_rp_rd
     ? != g_borrowck 0 {
         ( bck_put `stmts` __cl_bck_stmts )
         ( bck_put `reads` __cl_bck_reads )
@@ -62717,6 +62726,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     : i __rp_d00 g_rp_d0
     : i __rp_c00 g_rp_calls
     : i __rp_n00 g_rp_nstmt
+    : i __rp_r00 g_rp_rd
     = g_rp_d0 + g_cg_blk_depth 1
     = g_rp_calls 0
     = g_rp_nstmt 0
@@ -62854,6 +62864,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     = g_rp_d0 __rp_d00
     = g_rp_calls __rp_c00
     = g_rp_nstmt __rp_n00
+    = g_rp_rd __rp_r00
     ( nurl_sym_def g_fn_compiled fname `1` )
     ( mem_settle_scratch syms )
     : s __rl_set ( nurl_sym_get syms `__fn_retlend__` )
