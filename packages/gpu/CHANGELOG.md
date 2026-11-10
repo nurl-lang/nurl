@@ -7,6 +7,25 @@ the NVRTC stubs' `nvrtcVersion`).
 
 ### Fixed
 
+- **The CPU backend gives the same bits on every host** (Agora #548). A
+  kernel's `expf`, `logf`, `powf`, `sinf`, `cosf`, `tanhf`, `erff` and
+  `log1pf` came from the host's libm, and glibc, UCRT and macOS round them
+  differently: nurllama's tiny glm_moe_dsa checkpoint gave logits up to
+  2.4e-6 apart on Linux and Windows. They now come from `cpu_detmath`,
+  pushed after the shim and before every kernel (and into the static
+  header's output). Each is computed in double with IEEE + − × ÷ only
+  and rounded once to float. sin and cos reduce by an exact three-part
+  Cody–Waite below 2^19 and by an integer Payne–Hanek above. The results
+  are the correctly rounded float in all but a few of 8 million sampled
+  inputs (against the host's double functions). In C++, `exp`, `log`, …
+  of a float are the float functions, as in CUDA. The checkpoint's
+  154 880 logits are now byte-identical on Linux and Windows, as are a
+  2-million-input hash of every function across clang++, g++, -O0 and
+  -O3. Warm `logits` time is unchanged: Linux 804 → 779 ms (interleaved
+  best of 8), Windows 1531 → 1495 ms (best of 5). expf, logf, powf,
+  tanhf and log1pf are faster than glibc's; sinf and cosf are 1.4–2×
+  slower in isolation.
+
 - **A CUDA device with no NVRTC runs on the CPU backend** (Agora #549).
   On a driver-only host (WSL, or a box with the NVIDIA driver and no CUDA
   toolkit), nurl.sh links the NVRTC stubs, and `gpu_open` still took CUDA
