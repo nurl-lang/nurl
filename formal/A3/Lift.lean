@@ -132,6 +132,7 @@ theorem EvalR.lift {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.
   | view hv => exact EvalR.view (VecOf.lift hv a2)
   | sat hn hy he hl hd hda => exact EvalR.sat hn hy (Eval.lift he a2) hl (union_true a2 hd) hda
   | pop hy hc hd => exact EvalR.pop hy (union_true a2 hc) (union_true a2 hd)
+  | popFront hy hc hd => exact EvalR.popFront hy (union_true a2 hc) (union_true a2 hd)
   | pair h1 h2 => exact EvalR.pair (TakeVal.lift h1 a2) (TakeVal.lift h2 a2)
   | fst hy => exact EvalR.fst hy
   | snd hy => exact EvalR.snd hy
@@ -177,6 +178,7 @@ theorem EvalR.liftP {m : Mem} {r : Rhs} (h : EvalR m r .panic) (a2 : Nat → Boo
   | atOOB hv he hl => exact EvalR.atOOB (VecOf.lift hv a2) (Eval.lift he a2) hl
   | satOOB hy he hl => exact EvalR.satOOB hy (Eval.lift he a2) hl
   | popEmpty hy => exact EvalR.popEmpty hy
+  | popFrontEmpty hy => exact EvalR.popFrontEmpty hy
   | getlP hy => exact EvalR.getlP hy
   | getrP hy => exact EvalR.getrP hy
   | takelP hy => exact EvalR.takelP hy
