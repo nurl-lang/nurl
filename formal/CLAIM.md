@@ -601,7 +601,10 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   - the premises are satisfiable: a typed program with a destructor type,
     its destructor, a function returning an owned value of it, a `letd` of
     a struct literal and of a call's result, with `memory_safe` applied
-    (`A2.DtorWitness.main_safe`, `main2_safe`).
+    (`A2.DtorWitness.main_safe`, `main2_safe`); and an option of a
+    destructor value (A2-drop.3b): the value moved into `Some`, the option
+    bound by `letd` at its own destructor type, its glue
+    (`A2.DtorWitness.main3_safe`).
 
   What follows from **reading the rules**, not from a theorem: that these
   binders are all the places an owned destructor value comes to rest in a

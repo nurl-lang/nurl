@@ -26,6 +26,7 @@ import A3
 #print axioms A2.Dtor.holdsDtor_deep
 #print axioms A2.DtorWitness.main_safe
 #print axioms A2.DtorWitness.main2_safe
+#print axioms A2.DtorWitness.main3_safe
 #print axioms A2.DtorWitness.enum_lends
 #print axioms A2.DtorWitness.enum_take_refused
 #print axioms A2.DtorWitness.lock_checkout_assign

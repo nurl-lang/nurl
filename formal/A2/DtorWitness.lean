@@ -180,7 +180,25 @@ def mk : Fn where
   body := .letv 1 (.expr (.lit 1)) (.letv 2 (.expr (.lit 2)) (.letd 3 0 (.pair 1 2) (.assign 0 (.var 3))))
   nvars := 4
 
-def P : Prog := [dfn, mk]
+/-- A2-drop.3b: an option of a destructor value, `sum DT int`, holds one,
+    so it is bound by `letd` at a destructor type of its own whose
+    destructor is its glue: `@ drop in self → i { = r 0 }` here (the
+    elaboration's glue also lends the payload to `dfn`; the calculus checks
+    a glue as it checks any destructor). -/
+def OT : Ty := .sum DT .int
+def ODT : Ty := .dtor 2 OT
+
+def ofn : Fn where
+  params := [(.inp, ODT)]
+  resTy := .int
+  resOwn := false
+  lends := []
+  rholds := []
+  outHolds := []
+  body := .assign 1 (.expr (.lit 0))
+  nvars := 2
+
+def P : Prog := [dfn, mk, ofn]
 
 theorem dfn_not_thru : ¬ ThruFn P 0 := by
   intro h
@@ -252,6 +270,43 @@ theorem dfn_ok : FnOK P dfn := by
   · intro i hi b hb; simp [dfn] at hi; subst hi; simp [dfn] at hb
 
 
+theorem ofn_not_thru : ¬ ThruFn P 2 := by
+  intro h
+  cases h with
+  | here hf hb => simp [P] at hf; subst hf; simp [ofn, Stmt.hasThru] at hb
+  | call hf hg _ => simp [P] at hf; subst hf; simp [ofn, Stmt.calls] at hg
+
+theorem odtor_ok : DtorOK P 2 ODT :=
+  ⟨ofn, rfl, rfl, rfl, rfl, rfl, rfl, rfl, ofn_not_thru⟩
+
+theorem ofn_body : StmtT P (sigCtx ofn) [] ofn.body
+    (setE (kill .replace false 1 (sigCtx ofn)) 1 { intE with mode := R0.mode }) := by
+  have hc : sigCtx ofn 1 = some R0 := by simp [sigCtx, ofn, R0, resMode]
+  have hflags : ∀ v E, sigCtx ofn v = some E → E.dtor = false ∧ E.dbind = false := by
+    intro v E h
+    rcases v with _ | _ | v <;> simp [sigCtx, ofn, paramE, resMode] at h <;> subst h <;> exact ⟨rfl, rfl⟩
+  exact StmtT.assign (Ex := R0) (E := intE) hc (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
+    (RhsT.expr ExprT.lit) rfl (by simp [intE, roots, Entry.vdeps, Mode.ownSlot]) (by simp [hc])
+    (by
+      intro p E hp hm d hd _
+      rcases p with _ | _ | p <;> simp [sigCtx, ofn, paramE, resMode, ODT, OT, DT, T, Ty.hasFn] at hp <;>
+        subst hp <;> simp [Entry.vdeps, Mode.ownSlot] at hd <;> simp at hm)
+    (DtorSafe.of_none (fun v E h => (hflags v E h).1) _ _ _) rfl
+
+theorem ofn_ok : FnOK P ofn := by
+  refine ⟨rfl, by decide, by decide, rfl, by simp [ofn], ?_, by simp [ofn], by simp [ofn], by simp [ofn],
+    by simp [ofn], by simp [ofn], ?_, _, ofn_body, ?_, ?_, ?_⟩
+  · intro pt hpt; simp [ofn] at hpt; subst hpt; simp [ODT, OT, DT, T, Ty.ok, Ty.isStruct]
+  · refine ⟨fun i hi hs _ => ?_, fun i hi b hb _ => ?_, fun h => by simp [ofn] at h⟩
+    · simp [ofn] at hi; subst hi; simp [ofn] at hs
+    · simp [ofn] at hi; subst hi; simp [ofn] at hb
+  · intro v E h
+    rcases v with _ | _ | v <;> simp [setE, upd, kill, killE, sigCtx, ofn, paramE, resMode, intE] at h <;>
+      subst h <;> exact ⟨rfl, rfl⟩
+  · exact ⟨{ intE with mode := R0.mode }, by simp [setE, upd, ofn], rfl, rfl, by simp [R0, resMode, ofn], by simp [intE], by simp [intE],
+      by simp [ofn]⟩
+  · intro i hi b hb; simp [ofn] at hi; subst hi; simp [ofn] at hb
+
 /-! ### The maker: a function whose owned result is a destructor value -/
 
 def Rr : Entry := ⟨DT, .own, false, [], [], false, false⟩
@@ -312,9 +367,10 @@ theorem mk_ok : FnOK P mk := by
 theorem prog_ok : ProgOK P := by
   intro fn hfn
   simp only [P, List.mem_cons, List.mem_nil_iff, or_false] at hfn
-  rcases hfn with rfl | rfl
+  rcases hfn with rfl | rfl | rfl
   · exact dfn_ok
   · exact mk_ok
+  · exact ofn_ok
 
 /-! ### The caller: `: DT y ( mk )  :drop z y` -/
 
@@ -352,7 +408,7 @@ theorem main2_typed : ∃ Δ, StmtT P (fun _ => none) [] main2 Δ := by
 theorem prog_codes : ProgCodes P := by
   intro fn hfn
   simp only [P, List.mem_cons, List.mem_nil_iff, or_false] at hfn
-  rcases hfn with rfl | rfl <;> simp [dfn, mk, Stmt.codesOK, Rhs.codeOK]
+  rcases hfn with rfl | rfl | rfl <;> simp [dfn, mk, ofn, Stmt.codesOK, Rhs.codeOK]
 
 theorem main2_safe {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem 2) main2 (.ok m' s')) :
     ¬ Stuck P m' s' := by
@@ -365,6 +421,66 @@ theorem main_safe {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem 3) main (.ok m'
   exact memory_safe prog_ok prog_codes ht rfl (by simp [main, Stmt.codesOK, Rhs.codeOK]) (by decide) hr
 
 
+
+/-! ### An option of a destructor value (A2-drop.3b)
+
+`: a 1  : b 2  :drop x ( pair a b )  :drop o ( Some x )`: the destructor
+value moves into the option, and the option, which holds it, is bound by
+`letd` at its own destructor type, its glue `ofn`. -/
+
+def main3 : Stmt :=
+  .letv 0 (.expr (.lit 1)) (.letv 1 (.expr (.lit 2))
+    (.letd 2 0 (.pair 0 1) (.letd 3 2 (.inl 2 .int) .skip)))
+
+def EO : Entry := ⟨OT, .own, true, [], [], false, false⟩
+
+theorem main3_typed : ∃ Δ, StmtT P (fun _ => none) [] main3 Δ := by
+  let K1 : Ctx := A2.setE (fun _ => none) 0 intE
+  let K2 : Ctx := A2.setE K1 1 intE
+  have hK1 : NoRootb K1 := noRootb_empty.setE (by simp [intE])
+  have hK2 : NoRootb K2 := hK1.setE (by simp [intE])
+  let ED : Entry := Entry.arm { EP with ty := DT, held := [] }
+  have hEDe : ED = ⟨DT, .own, true, [], [], false, false⟩ := by
+    simp [ED, EP, Entry.arm, DT, T, Ty.dtorViews, Ty.hasDtor, Ty.holdsView]
+  let K3 : Ctx := A2.setE K2 2 ED
+  have hK3 : NoRootb K3 := hK2.setE (by rw [hEDe]; simp)
+  have hpair : RhsT K2 [] (.pair 0 1) EP K2 :=
+    RhsT.pair (Ey := intE) (Ez := intE) (by simp [K2, K1, A2.setE, upd]) rfl PushArg.int
+      (by simp [K2, K1, A2.setE, upd]) rfl PushArg.int (by simp [intE, Mode.ownSlot])
+  -- the destructor value moves into the option
+  let K4 : Ctx := A2.setE (kill .replace false 2 K3) 2 { ED with live := false, dtor := false }
+  have hK4 : NoRootb K4 := (hK3.kill _ _ _).setE (by rw [hEDe]; simp)
+  have hpush : PushArg K3 [] 2 ED ED.ty ED.held K4 := by
+    rw [hEDe]
+    have := PushArg.move (Γ := K3) (F := []) (y := 2) (E := ⟨DT, .own, true, [], [], false, false⟩) (t := DT)
+      rfl rfl (by simp) (hK3.noPin _) (DtorSafe.of_none (fun v E h => (hK3 v E h).2.1) _ _ _)
+    exact this
+  have hinl : RhsT K3 [] (.inl 2 .int) EO K4 := by
+    have := RhsT.inl (Γ := K3) (F := []) (y := 2) (b := .int) (Ey := ED) (Γ1 := K4) (D := ED.held)
+      (by simp [K3, A2.setE, upd]) (by rw [hEDe]) hpush rfl
+    rw [hEDe] at this; exact this
+  let EOd : Entry := Entry.arm { EO with ty := ODT, held := [] }
+  have hEOd : EOd.mode ≠ .rootb ∧ EOd.dtor = false ∧ EOd.dbind = false := by
+    simp [EOd, EO, Entry.arm, ODT, OT, DT, T, Ty.dtorViews, Ty.hasDtor, Ty.holdsView]
+  have hK5 : NoRootb (A2.setE K4 3 EOd) := hK4.setE hEOd
+  have hdo := StmtT.letd (P := P) (Γ := K3) (Γ1 := K4) (F := []) (x := 3) (f := 2) (r := .inl 2 .int)
+    (s := .skip) (E := EO) (t := OT) (H := []) rfl (by simp [K3, K2, K1, A2.setE, upd]) (by simp) hinl rfl
+    (Or.inl rfl) rfl rfl odtor_ok (HeldUp.refl _ _) StmtT.skip (hK5.endOK _)
+  have hd := StmtT.letd (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .pair 0 1)
+    (s := .letd 3 2 (.inl 2 .int) .skip) (E := EP) (t := T) (H := []) rfl (by simp [K2, K1, A2.setE, upd])
+    (by simp) hpair rfl (Or.inl rfl) rfl rfl dtor_ok (HeldUp.refl _ _) hdo ((hK5.exitScope 3).endOK _)
+  have h1 := StmtT.letv (P := P) (x := 1) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K1) (Γ1 := K1)
+    rfl (by simp [K1, A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit) hd
+    (((hK5.exitScope 3).exitScope 2).endOK _)
+  exact ⟨_, StmtT.letv (P := P) (x := 0) (r := .expr (.lit 1)) (E := intE) (F := []) (Γ := fun _ => none)
+    (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.expr ExprT.lit) h1
+    ((((hK5.exitScope 3).exitScope 2).exitScope 1).endOK _)⟩
+
+/-- A2-drop.3b: the option program is memory safe. -/
+theorem main3_safe {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem 4) main3 (.ok m' s')) :
+    ¬ Stuck P m' s' := by
+  obtain ⟨Δ, ht⟩ := main3_typed
+  exact memory_safe prog_ok prog_codes ht rfl (by simp [main3, Stmt.codesOK, Rhs.codeOK]) (by decide) hr
 
 /-- An enum of a destructor type lends its payloads (`getl` / `getr`, through
     the type), the destructor staying with the whole value… -/

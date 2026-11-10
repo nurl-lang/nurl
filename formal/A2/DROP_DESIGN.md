@@ -520,10 +520,32 @@ each one shrinks `CLAIM.md`'s exception:
    `free` takes only a `Vec`. Not yet: elements, payloads inside
    containers, environments, blocks, check-out bindings, and a result set before a panic in
    its callee.
-2. **A2-drop.3b: containers.** A `Vec` of destructor values (`pop`,
-   `truncate`, `clear`, `set`, `free`: the `while` above, and `edit`
-   through a borrow running each dropped element's destructor), and enum
-   and option payloads (`sum`).
+2. **A2-drop.3b: containers** (first milestone done, Agora #542).
+   - Done: `Ty.holdsDtor` is deep, so a struct, an enum or an option
+     holding a destructor value at any depth is bound by `letd` with its
+     glue (`A2.Dtor.holdsDtor_deep`; an option of one,
+     `A2.DtorWitness.main3_safe`). A `Vec` of destructor values is refused:
+     `Ty.ok` asks a `Vec`'s element type to hold none (`Ty.dtorFree`), and
+     `RhsT.new` asks it. So no binding holds one
+     (`A2.Dtor.vec_elems_dtor_free`), and `pop`, `truncate`, `clear`, `set`,
+     `free`, `withElem` and `edit` through a borrow release or check out no
+     destructor value. A share's payload and a view are free of one by
+     definition (3d; a view owns nothing).
+   - Left, the drain, which lifts the refusal: `Ty.ok` lets a `Vec`'s
+     elements be of a destructor type (`t.hasDtor || t.dtorFree`), and a
+     `Vec` of them is `letd`'s, at its own type with the element's
+     destructor `f`. Its `scopeD x f .skip` steps by the node: one more
+     element (`.node t c d (e :: es)`) moves out to a fresh binding `m.nv`
+     in a frame of its own, `scopeD x f (scopeD m.nv f .skip)`, front
+     first, the index order nurlc drops elements in; an empty node is
+     `scope x .skip`; `scopeDEnd` and `scopeDP` take only a value that is
+     no node; a panic in the body with `x` owning a node steps to
+     `.seq (.scopeD x f .skip) .panic`, which drains and raises again. The
+     preservation of the drain step is `withElem`'s element moving out
+     (`elem_pres` at index 0) plus the inner frame's `scopeD` premises;
+     the panic step's is `scopeDP`'s. `truncate`, `clear`, `set` and `free`
+     of such a `Vec` stay refused (they drop elements with no code): a
+     program pops them into `letd`s, or lets the binding end.
 3. **A2-drop.3c: environments.** A closure's or a trait object's
    environment holding a destructor value: `Ty.fn ms q` gains what the
    environment's drop runs (as `q` records where it may cross), and a
