@@ -1,0 +1,41 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+whole: built
+drop a
+drop b
+drop c
+whole: recovered: panic in drop b
+drop a
+drop b
+drop c
+drop d
+two_bombs: recovered: panic in drop b
+drop a
+drop b
+drop c
+drop keep
+truncated: recovered: panic in drop b
+drop a
+drop b
+drop c
+cleared: recovered: panic in drop b
+drop a
+drop b
+drop c
+drop d
+drop e
+drop f
+nested: recovered: panic in drop b
+drop a
+drop b
+survives: recovered: panic in drop a
+survives: len 1
+drop keep
+drop late
+every_one: recovered: tick
+every_one: destructors run: 20000
+chain: no panic
+chain: links dropped: 40000
+bytes: 1600000

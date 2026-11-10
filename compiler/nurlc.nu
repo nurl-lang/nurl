@@ -1810,6 +1810,12 @@ unsafe @ agg_field_count i syms s ot → i {
 // A vec_get payload taken out by its own bytes (nurl_vec_slot_take_if): its
 // declaration, emitted at module end only where used.
 : ~ i g_use_slot_take 0
+// A module that drops a range of elements (`mem_drop_range`), or a Vec
+// whose elements may run a destructor of the program's own (__vec_drop_fn),
+// declares the runtime's release at its end; no other module's IR changes.
+// (g_use_drop_range: 1 the plain release, 2 the `_dtor` one, 3 both.)
+: ~ i g_use_drop_range 0
+: ~ i g_use_vec_drop_dtor 0
 // How deep __mem_payload_local_lend1 follows a root that is itself a lend.
 : ~ i g_pl_chain_depth 0
 // Set around a returned closure literal's env generation (1): its String /
@@ -16493,7 +16499,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     {}
     // The ownership primitives give up or claim a value by hand: raw
     // memory, which only an `unsafe` function may vouch for (spec §3.3d).
-    ? | | | ( seq fname `mem_forget` ) ( seq fname `mem_take` ) ( seq fname `mem_put_back` ) ( seq fname `mem_addr` ) {
+    ? | | | | ( seq fname `mem_forget` ) ( seq fname `mem_take` ) ( seq fname `mem_put_back` ) ( seq fname `mem_addr` ) ( seq fname `mem_drop_range` ) {
         ? ! __callee_shadowed { ( bck_check_raw_call lex syms fname ) } {}
     } {}
     ? & ( seq fname `mem_addr` ) ! __callee_shadowed
@@ -16510,6 +16516,9 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     {}
     ? ( seq fname `mem_dup` )
     { ^ ( gen_mem_dup lex syms cg __sx_me ) }
+    {}
+    ? & ( seq fname `mem_drop_range` ) ! __callee_shadowed
+    { ^ ( gen_mem_drop_range lex syms cg ) }
     {}
     // Reference-count cycle collection (docs/MEMORY.md §7.7).
     ? ( seq fname `mem_cyclic` )
@@ -25864,6 +25873,66 @@ unsafe @ __bck_fall_ret_record i lex i syms i first_tt s first_val i sxn0 i line
     ^ ( nurl_str_cat `__slice_drop__` m )
 }
 
+// `@__elem_drop__<m>(i8* p)`, which drops the one element of type `elem` at
+// `p`: what the runtime's element release calls per element
+// (nurl_vec_drop_range). Emitted once per type at module end
+// (emit_pending_elem_drops).
+@ __elem_drop_request s elem → s {
+    : s m ( __drop_mangle elem )
+    : s key ( nurl_str_cat `elemdrop##` m )
+    ? == 0 ( nurl_sym_len g_impl_name_syms key ) {
+        ( nurl_sym_def g_impl_name_syms key `1` )
+        ( __park_append g_impl_name_syms `__pending_elemdrops__` ( __park_ty elem ) )
+    } {}
+    ^ ( nurl_str_cat `__elem_drop__` m )
+}
+
+@ emit_pending_elem_drops i syms → v {
+    : ~ s rest ( nurl_sym_get g_impl_name_syms `__pending_elemdrops__` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s elem ( __unpark_ty ( str_first_word rest ) ) = rest ( str_skip_word rest )
+        : s ll ( nurl_llty elem )
+        // The element's own drop first: its definition must not land inside
+        // this one.
+        ( gen_drop_for_type elem syms )
+        : ~ i ctr 0
+        ( nurl_print `define linkonce_odr void @__elem_drop__` ) ( nurl_print ( __drop_mangle elem ) )
+        ( nurl_print `(i8* %p) {\nentry:\n  %ev = load ` ) ( nurl_print ll ) ( nurl_print `, ptr %p\n` )
+        ( emit_drop_value elem `%ev` ctr syms )
+        ( nurl_print `  ret void\n}\n` )
+    }
+}
+
+// `( mem_drop_range [T] data from to )` — drop the elements [from, to) of
+// the buffer at `data`, each a T its container has given up (vec_truncate
+// and vec_clear, after the length is short): raw, as mem_take is. The
+// runtime releases them in index order, and where dropping a T may run a
+// destructor of the program's own (__drop_runs_code), a panic in one goes
+// on with the rest (nurl_vec_drop_range_dtor, Agora #608) — a loop of
+// `mem_take` bindings left the elements after the panicking one to nobody.
+// For a T that owns nothing there is nothing to do, and no call.
+@ gen_mem_drop_range i lex i syms i cg → s {
+    : s ty ( __cc_parse_targ lex )
+    : s data ( gen_operand lex syms cg )
+    : s from ( gen_operand lex syms cg )
+    : s to ( gen_operand lex syms cg )
+    ( expect lex TT_RPAREN )
+    : s ll ( nurl_llty ty )
+    ? ( __elem_owns ty syms ) {
+        : b dtor ( __drop_runs_code ty )
+        = g_use_drop_range | g_use_drop_range ? dtor 2 1
+        : s szp ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print szp ) ( nurl_print ` = getelementptr ` ) ( nurl_print ll ) ( nurl_print `, ptr null, i32 1\n` )
+        : s szi ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print szi ) ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print szp ) ( nurl_print ` to i64\n` )
+        ( nurl_print `  call void @nurl_vec_drop_range` ) ( nurl_print ? dtor `_dtor` `` ) ( nurl_print `(ptr ` ) ( nurl_print data ) ( nurl_print `, i64 ` ) ( nurl_print from )
+        ( nurl_print `, i64 ` ) ( nurl_print to ) ( nurl_print `, ptr @` ) ( nurl_print ( __elem_drop_request ty ) )
+        ( nurl_print `, i64 ` ) ( nurl_print szi ) ( nurl_print `)` ) ( emit_dbg_eol )
+    } {}
+    ( nurl_set_last_type `void` )
+    ^ ( nurl_str_cat `undef` `` )
+}
+
 @ emit_pending_slice_drops i syms → v {
     : ~ s rest ( nurl_sym_get g_impl_name_syms `__pending_slicedrops__` )
     ~ != 0 ( nurl_str_len rest ) {
@@ -31271,7 +31340,7 @@ unsafe @ bck_trusted_file s path → b {
 @ bck_raw_call s base → b {
     // (`vec_set_len` declares raw writes initialised: the elements it
     // exposes are whatever the memory held.)
-    ^ ( str_contains_word `nurl_alloc nurl_zalloc nurl_free nurl_realloc alloc zalloc mem_forget nurl_peek nurl_poke nurl_vctl_get nurl_vctl_set nurl_vctl_data nurl_memcpy nurl_memmove nurl_memset nurl_mac_row nurl_p256_mulm nurl_p256_sqrm nurl_x25519_mulm nurl_x25519_sqrm malloc calloc realloc free memcpy memmove memset nurl_closure_drop nurl_closure_clone rcbox_ptr rcbox_new rcbox_zero rcbox_share rcbox_release shared_new shared_zero shared_null shared_ptr shared_addr shared_publish_once shared_into_word shared_from_word vec_publish_once arc_into_word arc_from_word arc_word_share mem_take mem_put_back vec_put_back mem_addr vec_set_len` base )
+    ^ ( str_contains_word `nurl_alloc nurl_zalloc nurl_free nurl_realloc alloc zalloc mem_forget nurl_peek nurl_poke nurl_vctl_get nurl_vctl_set nurl_vctl_data nurl_memcpy nurl_memmove nurl_memset nurl_mac_row nurl_p256_mulm nurl_p256_sqrm nurl_x25519_mulm nurl_x25519_sqrm malloc calloc realloc free memcpy memmove memset nurl_closure_drop nurl_closure_clone rcbox_ptr rcbox_new rcbox_zero rcbox_share rcbox_release shared_new shared_zero shared_null shared_ptr shared_addr shared_publish_once shared_into_word shared_from_word vec_publish_once arc_into_word arc_from_word arc_word_share mem_take mem_put_back vec_put_back mem_addr mem_drop_range vec_set_len` base )
 }
 
 // A function that takes a raw pointer (`*T` in a parameter's type, outside
@@ -67160,6 +67229,90 @@ unsafe @ __hmemo_close s key i mark b r → v {
     ^ F
 }
 
+// May dropping a value of `ty` run code of the program's own — and so
+// panic? A `% Drop` impl anywhere inside it; a library handle, whose
+// S_drop is a function (and whose payload's drop it runs); a closure, whose
+// env may own any of these; a trait object, which boxes a value of a type
+// this question cannot see. A String, a Vec, an option, a struct or an
+// enum of plain data runs the runtime's frees and nothing else: no.
+//
+// What asks: a release of several parts in a row (a Vec's elements, Agora
+// #608), which a panic in one part's destructor would leave half done. It
+// is journaled only where this says yes, so the common release — elements
+// that own buffers and nothing else — is the plain loop it always was.
+//
+// A reachability search like __drop_may_read_view's, with a table of its
+// own per question: a type is entered as in progress (2) before its walk
+// and answers F to itself while it is.
+: ~ i g_drc_memo 0
+
+@ __drop_runs_code s ty → b {
+    : b top == g_drc_memo 0
+    ? top { = g_drc_memo ( nurl_sym_new ) } {}
+    : i known ( nurl_sym_int g_drc_memo ty )
+    : ~ b r F
+    ? >= known 0 { = r == known 1 } {
+        ( nurl_sym_def g_drc_memo ty `2` )
+        = r ( __drc_walk ty )
+        ( nurl_sym_set g_drc_memo ty ? r `1` `0` )
+    }
+    ? top { ( nurl_sym_free g_drc_memo ) = g_drc_memo 0 } {}
+    ^ r
+}
+
+@ __drc_walk s ty → b {
+    ? == 0 ( nurl_str_len ty ) { ^ F } {}
+    // (A pointer owns nothing it points at.)
+    ? == ( nurl_str_get ty - ( nurl_str_len ty ) 1 ) 42 { ^ F } {}
+    ? | ( __is_closure_llty ty ) != 0 ( nurl_str_starts ty `%dyn.` ) { ^ T } {}
+    ? ( seq ty `%String` ) { ^ F } {}
+    ? | != 0 ( nurl_str_starts ty `%Vec__` ) != 0 ( nurl_str_starts ty `%Box__` ) {
+        ^ ( __drop_runs_code ( __vec_elem_llvm ty ) )
+    } {}
+    // An option's payload, a result's error (as __holds_user_drop reads
+    // them), and a closure either holds.
+    ? != 0 ( nurl_str_starts ty `{ i1, ` ) {
+        ? != 0 ( nurl_str_len ( __opt_clo_payload ty ) ) { ^ T } {}
+        ^ || ( __drop_runs_code ( __opt_payload ty ) ) ( __drop_runs_code ( __wrap_part ty 1 ) )
+    } {}
+    ? | ( __is_libh ty ) ( __has_user_drop ty ) { ^ T } {}
+    ? | == 0 g_root_syms != ( nurl_str_get ty 0 ) 37 { ^ F } {}
+    : s sname ( nurl_str_slice ty 1 - ( nurl_str_len ty ) 1 )
+    : s vlist ( nurl_sym_get2 g_root_syms sname `__variants` )
+    ? != 0 ( nurl_str_len vlist ) {
+        : ~ s scan ( nurl_str_cat vlist `` )
+        ~ != 0 ( nurl_str_len scan ) {
+            : s vname ( str_first_word scan ) = scan ( str_skip_word scan )
+            : s pcs ( nurl_sym_get2 g_root_syms vname `__paycount` )
+            : i pc ? != 0 ( nurl_str_len pcs ) ( nurl_str_to_int pcs ) 0
+            : ~ i k 0
+            ~ < k pc {
+                ? ( __drop_runs_code ( nurl_sym_get g_root_syms ( nurl_str_cat3 vname `__payload__` ( nurl_str_int k ) ) ) ) { ^ T } {}
+                = k + k 1
+            }
+        }
+        ^ F
+    } {}
+    : s fcs ( nurl_sym_get2 g_root_syms sname `__field_count` )
+    : i fc ? != 0 ( nurl_str_len fcs ) ( nurl_str_to_int fcs ) 0
+    : ~ i j 0
+    ~ < j fc {
+        ? ( __drop_runs_code ( nurl_sym_get g_root_syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int j ) `__type` ) ) ) ) { ^ T } {}
+        = j + j 1
+    }
+    ^ F
+}
+
+// The runtime's release of a Vec whose elements are of type `elem`:
+// `nurl_vec_drop_dtor`, which a panic in an element's destructor can go on
+// with, where dropping one may run code of the program's own; the plain
+// `nurl_vec_drop` everywhere else.
+@ __vec_drop_fn s elem → s {
+    ? ! ( __drop_runs_code elem ) { ^ ( nurl_str_cat `nurl_vec_drop` `` ) } {}
+    = g_use_vec_drop_dtor 1
+    ^ ( nurl_str_cat `nurl_vec_drop_dtor` `` )
+}
+
 // Does a value of `ty` hold, anywhere inside it — through a Vec's or a
 // Box's elements, an option's or an enum's payloads, a struct's fields —
 // a value with a `% Drop` of the program's own?
@@ -67660,7 +67813,7 @@ unsafe @ __hmemo_close s key i mark b r → v {
             ( nurl_print `  ` ) ( nurl_print szp ) ( nurl_print ` = getelementptr ` ) ( nurl_print ( nurl_llty elem ) ) ( nurl_print `, ` ) ( nurl_print ( nurl_llty elem ) ) ( nurl_print `* null, i32 1\n` )
             : s szi ( __dr ctr )
             ( nurl_print `  ` ) ( nurl_print szi ) ( nurl_print ` = ptrtoint ` ) ( nurl_print ( nurl_llty elem ) ) ( nurl_print `* ` ) ( nurl_print szp ) ( nurl_print ` to i64\n` )
-            ( nurl_print `  call void @nurl_vec_drop(i8* ` ) ( nurl_print c ) ( nurl_print `, ptr @` ) ( nurl_print ( llvm_source_fn ( nurl_str_cat `drop_ptr__` ( __drop_mangle elem ) ) ) ) ( nurl_print `, i64 ` ) ( nurl_print szi ) ( nurl_print `)\n` )
+            ( nurl_print `  call void @` ) ( nurl_print ( __vec_drop_fn elem ) ) ( nurl_print `(i8* ` ) ( nurl_print c ) ( nurl_print `, ptr @` ) ( nurl_print ( llvm_source_fn ( nurl_str_cat `drop_ptr__` ( __drop_mangle elem ) ) ) ) ( nurl_print `, i64 ` ) ( nurl_print szi ) ( nurl_print `)\n` )
         } {
             ( nurl_print `  call void @nurl_vec_drop(i8* ` ) ( nurl_print c ) ( nurl_print `, ptr null, i64 1)\n` )
         }
@@ -67793,7 +67946,7 @@ unsafe @ __hmemo_close s key i mark b r → v {
             ( nurl_print `  ` ) ( nurl_print szp ) ( nurl_print ` = getelementptr ` ) ( nurl_print ( nurl_llty elem ) ) ( nurl_print `, ` ) ( nurl_print ( nurl_llty elem ) ) ( nurl_print `* null, i32 1\n` )
             : s szi ( __dr ctr )
             ( nurl_print `  ` ) ( nurl_print szi ) ( nurl_print ` = ptrtoint ` ) ( nurl_print ( nurl_llty elem ) ) ( nurl_print `* ` ) ( nurl_print szp ) ( nurl_print ` to i64\n` )
-            ( nurl_print `  call void @nurl_vec_drop(i8* ` ) ( nurl_print sp ) ( nurl_print `, ptr @` ) ( nurl_print ( llvm_source_fn ( nurl_str_cat `drop_ptr__` ( __drop_mangle elem ) ) ) ) ( nurl_print `, i64 ` ) ( nurl_print szi ) ( nurl_print `)\n` )
+            ( nurl_print `  call void @` ) ( nurl_print ( __vec_drop_fn elem ) ) ( nurl_print `(i8* ` ) ( nurl_print sp ) ( nurl_print `, ptr @` ) ( nurl_print ( llvm_source_fn ( nurl_str_cat `drop_ptr__` ( __drop_mangle elem ) ) ) ) ( nurl_print `, i64 ` ) ( nurl_print szi ) ( nurl_print `)\n` )
         } {
             ( nurl_print `  call void @nurl_vec_drop(i8* ` ) ( nurl_print sp ) ( nurl_print `, ptr null, i64 1)\n` )
         }
@@ -67906,6 +68059,7 @@ unsafe @ __hmemo_close s key i mark b r → v {
     // (…the owned slices' element drops, whose element drops may ask for
     // the option / glue drops below.)
     ( emit_pending_slice_drops syms )
+    ( emit_pending_elem_drops syms )
     // `%__opt.<T>` and its drop: the payload when there is one, and a
     // result's error when that owns something; an option / result held in
     // a struct field or a Vec element (gen_drop_for_type): the same drop
@@ -67991,6 +68145,9 @@ unsafe @ __hmemo_close s key i mark b r → v {
     ( emit_pending_zero_ifs )
     ( emit_pending_clones syms )
     ? != 0 g_use_slot_take { ( nurl_print `declare void @nurl_vec_slot_take_if(i1, i8*, i64, i64, i64, i64, ptr)\n` ) } {}
+    ? != 0 & g_use_drop_range 1 { ( nurl_print `declare void @nurl_vec_drop_range(i8*, i64, i64, ptr, i64)\n` ) } {}
+    ? != 0 & g_use_drop_range 2 { ( nurl_print `declare void @nurl_vec_drop_range_dtor(i8*, i64, i64, ptr, i64)\n` ) } {}
+    ? != 0 g_use_vec_drop_dtor { ( nurl_print `declare void @nurl_vec_drop_dtor(i8*, ptr, i64)\n` ) } {}
     // Per-call result ownership (mem_capture_hown / mem_publish_hown).
     ? != 0 g_use_hown {
         ( nurl_print `define linkonce_odr i1 @__nurl_ret_own(ptr %d, ptr %o) alwaysinline {\nentry:\n  %dv = load i1, ptr %d\n  br i1 %dv, label %t, label %s\nt:\n  %g = call i64 @nurl_ret_hown_get()\n  %b = icmp ne i64 %g, 0\n  ret i1 %b\ns:\n  %ov = load i1, ptr %o\n  ret i1 %ov\n}\n` )

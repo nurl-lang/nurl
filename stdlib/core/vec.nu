@@ -683,14 +683,10 @@ raw @ vec_stash [A] i kind sink ( Vec A ) v i max → v {
     : *A data # *A ( nurl_vctl_data ctl )
     // Length first, so a drop that reaches `v` sees it empty.
     ( nurl_vctl_set ctl 1 0 )
-    // The elements leave with the length: each is dropped (a no-op, and no
-    // loop, for elements that own nothing).
-    : ~ i k 0
-    ~ < k len {
-        : A e . data k
-        ( mem_take e )
-        = k + k 1
-    }
+    // The elements leave with the length: each is dropped, in index order
+    // (nothing at all for elements that own nothing). One whose destructor
+    // panics does not end it: the ones after it are still dropped.
+    ( mem_drop_range [A] data 0 len )
 }
 
 // Shorten `v` to its first `n` elements; the ones past `n` are dropped
@@ -702,12 +698,7 @@ raw @ vec_stash [A] i kind sink ( Vec A ) v i max → v {
     : *A data # *A ( nurl_vctl_data ctl )
     // Length first, so a drop that reaches `v` sees it short.
     ( nurl_vctl_set ctl 1 n )
-    : ~ i k n
-    ~ < k len {
-        : A e . data k
-        ( mem_take e )
-        = k + k 1
-    }
+    ( mem_drop_range [A] data n len )
     ^ T
 }
 
