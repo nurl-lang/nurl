@@ -87,6 +87,37 @@ produced is dropped.
 A closure body is its own scope. It drops the values it creates and never
 the enclosing frame's.
 
+A **value block** — a `{ … }` whose value something takes: a `:` binding,
+an `=`, a call argument, a `^` — is the exception on one side only. Its
+value may view what the block bound (`{ : String s … ( string_data s ) }`),
+so what it bound is dropped where the enclosing scope ends, not at the
+block's `}`. (A block bound to a number or a flag, `: i n { … }`, cannot
+hand out a view: it is a scope of its own and drops at its `}`.) The
+block's *names* do end at its `}`: a binding the block made cannot be
+named after it.
+
+```nurl expect-error="was bound inside the value block"
+$ `stdlib/core/string.nu`
+: String e { : String t ( string_from `inner` ) ( string_from `copy` ) }
+( nurl_println ( string_data t ) )   // t was the block's own
+```
+
+Because the block's binding lives on, it keeps its name to itself for the
+rest of the scope: where it has the name of an outer binding, that outer
+binding cannot be named after the block either. Give the block's binding
+a name of its own.
+
+```nurl expect-error="Give the block's binding another name"
+$ `stdlib/core/string.nu`
+: ~ String s ( string_from `outer` )
+: String e { : String s ( string_from `inner` ) ( string_from `copy` ) }
+( nurl_println ( string_data s ) )   // not the outer s, and not allowed to be the block's
+```
+
+A `:` of that name made after the block is a binding of its own and is
+what the name means from there on (`: String s { : String s … s }` binds
+the block's value to a new `s`).
+
 A scope drops its values newest first, in the reverse of the order they
 were bound in, as Rust and C++ do. A value made from a view of another —
 a struct holding `( string_data s )`, a `Slice` of a Vec — is bound after

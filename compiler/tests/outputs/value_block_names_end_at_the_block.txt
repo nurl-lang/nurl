@@ -1,0 +1,13 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+a view of the block's own String
+moved out of the block
+2
+after the block
+in the blockin the block
+12
+7
+element
+24
