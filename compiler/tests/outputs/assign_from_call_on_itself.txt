@@ -1,0 +1,22 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+a long enough string to be on the heap, name
+1
+1
+1
+1
+2
+3
+3
+7
+8
+7
+8
+7
+8
+1
+2
+3
+1

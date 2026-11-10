@@ -100,8 +100,10 @@ unsafe @ main → i {
         - a e
     }
 
-    // Fold over the slice with the closure
-    = k + k ( alg::r s cl q )
+    // Fold over the slice with the closure — through `p`, which owns it
+    // since the literal above took it (a slice moves into a struct as a
+    // String does)
+    = k + k ( alg::r . p ____ cl q )
     = k + k tx
 
     ( nurl_print `ENIGMA RESULT: ` )
