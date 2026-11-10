@@ -32428,7 +32428,7 @@ unsafe @ bck_record_binding s kind s name i line i cls s lty → v {
     = g_bck_bind_scalar cls
     // (An Rc binding: another handle of its type may be the same value —
     // a clone a closure captured, bck_clo_route_check.)
-    ? != 0 ( nurl_str_starts lty `%Rc__` ) { ( bck_note_rc_arg name lty ) } {}
+    ? | != 0 ( nurl_str_starts lty `%Rc__` ) ( __rc_handle_ty lty ) { ( bck_note_rc_arg name lty ) } {}
     // (A view that owns nothing — a struct of views, a Slice — is marked
     // `w`: no storage of its own for a result to point into.)
     = g_bck_bind_wview ? & == cls 2 ! ( __view_may_own lty ) 1 0
@@ -39628,9 +39628,28 @@ unsafe @ __sx_nroots s e b ns → s {
 }
 
 // `name` (a binding or a field path) holds an `( Rc T )` of type `ty`.
+// Is `lty` a program's own handle over an Rc — a struct with an `( Rc T )`
+// field (`: X { ( Rc Impl ) ctl }`, shared by an `X_share` that
+// rc_clones it)? Two values of it may be one Rc value, as two `( Rc T )`
+// may: the same-Rc rule is asked of them by their type (agora #345).
+@ __rc_handle_ty s lty → b {
+    ? | == 0 ( nurl_str_len lty ) != ( nurl_str_get lty 0 ) 37 { ^ F } {}
+    : s nm ( nurl_str_slice lty 1 - ( nurl_str_len lty ) 1 )
+    : s fcs ( nurl_sym_get2 g_root_syms nm `__field_count` )
+    ? == 0 ( nurl_str_len fcs ) { ^ F } {}
+    : i fc ( nurl_str_to_int fcs )
+    : ~ i k 0
+    ~ < k fc {
+        : s ft ( nurl_sym_get g_root_syms ( nurl_str_cat3 nm `__idx_` ( nurl_str_cat ( nurl_str_int k ) `__type` ) ) )
+        ? != 0 ( nurl_str_starts ( nurl_llty ft ) `%Rc__` ) { ^ T } {}
+        = k + k 1
+    }
+    ^ F
+}
+
 unsafe @ bck_note_rc_arg s name s ty → v {
     ? | == g_borrowck 0 != g_bck_rec_off 0 { ^ } {}
-    ? == 0 ( nurl_str_starts ( nurl_llty ty ) `%Rc__` ) { ^ } {}
+    ? & == 0 ( nurl_str_starts ( nurl_llty ty ) `%Rc__` ) ! ( __rc_handle_ty ( nurl_llty ty ) ) { ^ } {}
     : s w ( nurl_str_cat3 name `=` ( nurl_llty ty ) )
     ? ! ( str_contains_word g_bck_rcty w ) { = g_bck_rcty ? == 0 ( nurl_str_len g_bck_rcty ) w ( nurl_str_cat3 g_bck_rcty ` ` w ) } {}
 }
