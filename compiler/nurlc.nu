@@ -31528,6 +31528,36 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
     ( __park_append g_impl_name_syms `__pending_dkparks__` ( nurl_str_cat3 ( __park_ty vt ) ` ` mangle ) )
 }
 
+// A slice type's parking helpers, by the type's one-word name (`sl_i64`);
+// the name. The element's drop, where its elements own something, is asked
+// for here, while the module can still be given one.
+@ __dkpark_sl_request s ty → s {
+    : s m ( mangle_type ( nurl_llty ty ) )
+    : s key ( nurl_str_cat `dkparksl##` m )
+    ? != 0 ( nurl_sym_len g_impl_name_syms key ) { ^ m } {}
+    ( nurl_sym_def g_impl_name_syms key ty )
+    ( __park_append g_impl_name_syms `__pending_dkparks_sl__` m )
+    : i tylen ( nurl_str_len ty )
+    : s elem ( nurl_llty ( nurl_str_slice ty 2 - tylen 10 ) )
+    ? ( __slice_owns_elems elem ) { : s rq ( __slice_drop_request elem ) } {}
+    ^ m
+}
+
+// `__dkpark_<name>(c, list, slot)`: when `c` holds, the value of type `ll`
+// in the slot goes into a new node at the list's head, with `thunk` to
+// release it by.
+@ __dkpark_emit s name s ll s thunk → v {
+    : s nt ( nurl_str_cat3 `{ ptr, ptr, ptr, ` ll ` }` )
+    ( nurl_print `define linkonce_odr void @__dkpark_` ) ( nurl_print name ) ( nurl_print `(i1 %c, ptr %h, ptr %s) {\nentry:\n  br i1 %c, label %d, label %x\nd:\n` )
+    ( nurl_print `  %n = call i8* @malloc(i64 ptrtoint (ptr getelementptr (` ) ( nurl_print nt ) ( nurl_print `, ptr null, i32 1) to i64))\n` )
+    ( nurl_print `  %pv = getelementptr ` ) ( nurl_print nt ) ( nurl_print `, ptr %n, i32 0, i32 3\n` )
+    ( nurl_print `  %v = load ` ) ( nurl_print ll ) ( nurl_print `, ptr %s\n  store ` ) ( nurl_print ll ) ( nurl_print ` %v, ptr %pv\n` )
+    ( nurl_print `  %o = load ptr, ptr %h\n  store ptr %o, ptr %n\n` )
+    ( nurl_print `  %pf = getelementptr ` ) ( nurl_print nt ) ( nurl_print `, ptr %n, i32 0, i32 1\n  store ptr @` ) ( nurl_print thunk ) ( nurl_print `, ptr %pf\n` )
+    ( nurl_print `  %pa = getelementptr ` ) ( nurl_print nt ) ( nurl_print `, ptr %n, i32 0, i32 2\n  store ptr %pv, ptr %pa\n` )
+    ( nurl_print `  store ptr %n, ptr %h\n  br label %x\nx:\n  ret void\n}\n` )
+}
+
 // Module end: what a defer loop's list of parked values needs (agora
 // #655). A node is `{ next, drop, value's address, value }`, pushed at the
 // list's head, so the list is newest first — the order values are
@@ -31542,18 +31572,31 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
         : s vt ( __unpark_ty ( str_first_word rest ) ) = rest ( str_skip_word rest )
         : s mangle ( str_first_word rest ) = rest ( str_skip_word rest )
         : s ll ( nurl_llty vt )
-        : s nt ( nurl_str_cat3 `{ ptr, ptr, ptr, ` ll ` }` )
         ( nurl_print `define linkonce_odr void @__dkdrop_` ) ( nurl_print mangle ) ( nurl_print `(ptr %p) {\nentry:\n  %v = load ` )
         ( nurl_print ll ) ( nurl_print `, ptr %p\n  call void @` ) ( nurl_print ( llvm_source_fn ( nurl_str_cat `drop__` mangle ) ) )
         ( nurl_print `(` ) ( nurl_print ll ) ( nurl_print ` %v)\n  ret void\n}\n` )
-        ( nurl_print `define linkonce_odr void @__dkpark_` ) ( nurl_print mangle ) ( nurl_print `(i1 %c, ptr %h, ptr %s) {\nentry:\n  br i1 %c, label %d, label %x\nd:\n` )
-        ( nurl_print `  %n = call i8* @malloc(i64 ptrtoint (ptr getelementptr (` ) ( nurl_print nt ) ( nurl_print `, ptr null, i32 1) to i64))\n` )
-        ( nurl_print `  %pv = getelementptr ` ) ( nurl_print nt ) ( nurl_print `, ptr %n, i32 0, i32 3\n` )
-        ( nurl_print `  %v = load ` ) ( nurl_print ll ) ( nurl_print `, ptr %s\n  store ` ) ( nurl_print ll ) ( nurl_print ` %v, ptr %pv\n` )
-        ( nurl_print `  %o = load ptr, ptr %h\n  store ptr %o, ptr %n\n` )
-        ( nurl_print `  %pf = getelementptr ` ) ( nurl_print nt ) ( nurl_print `, ptr %n, i32 0, i32 1\n  store ptr @__dkdrop_` ) ( nurl_print mangle ) ( nurl_print `, ptr %pf\n` )
-        ( nurl_print `  %pa = getelementptr ` ) ( nurl_print nt ) ( nurl_print `, ptr %n, i32 0, i32 2\n  store ptr %pv, ptr %pa\n` )
-        ( nurl_print `  store ptr %n, ptr %h\n  br label %x\nx:\n  ret void\n}\n` )
+        ( __dkpark_emit mangle ll ( nurl_str_cat `__dkdrop_` mangle ) )
+    }
+    // (A parked slice: its elements where they own something — a closure's
+    // env, a String — then its buffer, as mem_emit_slice_free_at does.)
+    : ~ s srest ( nurl_sym_get g_impl_name_syms `__pending_dkparks_sl__` )
+    ~ != 0 ( nurl_str_len srest ) {
+        : s m ( str_first_word srest ) = srest ( str_skip_word srest )
+        : s ty ( nurl_sym_get2 g_impl_name_syms `dkparksl##` m )
+        : s ll ( nurl_llty ty )
+        : i tylen ( nurl_str_len ty )
+        : s tptr ( nurl_str_slice ty 2 - tylen 9 )
+        : s elem0 ( nurl_str_slice tptr 0 - ( nurl_str_len tptr ) 1 )
+        : s elem ( nurl_llty elem0 )
+        ( nurl_print `define linkonce_odr void @__dkdrop_sl_` ) ( nurl_print m ) ( nurl_print `(ptr %p) {\nentry:\n  %v = load ` )
+        ( nurl_print ll ) ( nurl_print `, ptr %p\n  %d = extractvalue ` ) ( nurl_print ll ) ( nurl_print ` %v, 0\n  %r = bitcast ` )
+        ( nurl_print ( nurl_llty tptr ) ) ( nurl_print ` %d to i8*\n  %n = extractvalue ` ) ( nurl_print ll ) ( nurl_print ` %v, 1\n` )
+        ? ( __is_closure_ty elem0 ) { ( nurl_print `  call void @nurl_closure_slice_drop(i8* %r, i64 %n)\n` ) } {}
+        ? ( __slice_owns_elems elem ) {
+            ( nurl_print `  call void @` ) ( nurl_print ( __slice_drop_request elem ) ) ( nurl_print `(i8* %r, i64 %n)\n` )
+        } {}
+        ( nurl_print `  call void @nurl_free(i8* %r)\n  ret void\n}\n` )
+        ( __dkpark_emit ( nurl_str_cat `sl_` m ) ll ( nurl_str_cat `__dkdrop_sl_` m ) )
     }
     ? == 0 ( nurl_sym_len g_impl_name_syms `dkpark##any` ) { ^ v } {}
     ( nurl_print `define linkonce_odr void @__dkpark_env(ptr %h, ptr %e) {\nentry:\n  %z = icmp eq ptr %e, null\n  br i1 %z, label %x, label %d\nd:\n` )
@@ -64315,6 +64358,24 @@ unsafe @ __ha_is_dkr s line → b {
     }
 }
 
+// …an owned slice stored at `ptr` (listed by its storage, #653): where an
+// earlier round left it to the cleanup — its "left to the cleanup" flag,
+// which a drain sets only while the slice is still owned; a slice has no
+// drop flag of its own — the `{ data, length }` goes onto the list at `hd`,
+// and its buffer is released with the rest after the defer chain (agora
+// #676). It was written over where the next round bound the name.
+@ __dkr_expand_slice s ptr s k s hd → v {
+    : s ty ( nurl_sym_get2 g_fn_escapes ptr `__slt` )
+    ? == 0 ( nurl_str_len ty ) { ^ v } {}
+    : s m ( __dkpark_sl_request ty )
+    = g_dkr_n + g_dkr_n 1
+    : s n ( nurl_str_int g_dkr_n )
+    ( nurl_print `  %dkra` ) ( nurl_print n ) ( nurl_print ` = load i1, ptr ` ) ( nurl_print k ) ( nurl_print `\n` )
+    ( nurl_print `  call void @__dkpark_sl_` ) ( nurl_print m ) ( nurl_print `(i1 %dkra` ) ( nurl_print n )
+    ( nurl_print `, ptr ` ) ( nurl_print hd ) ( nurl_print `, ptr ` ) ( nurl_print ptr ) ( nurl_print `)\n` )
+    ( nurl_print `  store i1 false, ptr ` ) ( nurl_print k ) ( nurl_print `\n` )
+}
+
 // `  ;dkr <ptr> <kept flag> <drop flag> <list>`: before a kept loop
 // binding's store, park what its slot holds from an earlier round on the
 // loop's list (mem_dkeep_rebind) — nothing when the binding did not become
@@ -64339,6 +64400,7 @@ unsafe @ __ha_is_dkr s line → b {
         : s pt ( str_first_word pairs ) = pairs ( str_skip_word pairs )
         ? ( seq pp ptr ) { = vt ( nurl_str_cat pt `` ) = pairs `` } {}
     }
+    ? & == 0 ( nurl_str_len vt ) ( str_contains_word ( nurl_sym_get g_fn_escapes `__dsnap_slice__` ) ptr ) { ( __dkr_expand_slice ptr k hd ) ^ v } {}
     ? == 0 ( nurl_str_len vt ) { ( __dkr_expand_closure ptr hd ) ^ v } {}
     : s mangle ( nurl_sym_get g_impl_name_syms ( nurl_str_cat `drop##` vt ) )
     ? == 0 ( nurl_str_len mangle ) { ^ v } {}
