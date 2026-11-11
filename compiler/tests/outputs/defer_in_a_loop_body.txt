@@ -29,6 +29,13 @@ views: a payload long enough for a heap buffer 0
 53
 views: a loop string long enough for a heap buffer 0
 3
+wrapped: an option's string, long enough for the heap 2
+wrapped: a result's value, long enough for the heap 2
+32
+drop 32
+drop 31
+drop 30
+2
 3
 3
 44

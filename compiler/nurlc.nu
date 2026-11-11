@@ -27406,7 +27406,7 @@ unsafe @ mem_path_to_indices s path → s {
     ( nurl_sym_set g_fn_escapes `__dkeep_pre__` ( nurl_str_cat3 ptr ` ` lf ) )
     ( nurl_print `  ;dkr ` ) ( nurl_print ptr ) ( nurl_print ` ` ) ( nurl_print ( __dkeep_of ptr ) )
     ( nurl_print ` ` ) ( nurl_print lf ) ( nurl_print ` ` ) ( nurl_print ( nurl_sym_get g_fn_escapes `__dkhead__` ) )
-    ( nurl_print ` ` ) ( nurl_print ( __park_ty vt ) ) ( nurl_print `\n` )
+    ( nurl_print `\n` )
     = g_dkr_any 1
 }
 
@@ -64153,7 +64153,7 @@ unsafe @ __ha_is_dkr s line → b {
     }
 }
 
-// `  ;dkr <ptr> <kept flag> <drop flag> <list> <type>`: before a kept loop
+// `  ;dkr <ptr> <kept flag> <drop flag> <list>`: before a kept loop
 // binding's store, park what its slot holds from an earlier round on the
 // loop's list (mem_dkeep_rebind) — nothing when the binding did not become
 // an owner a defer keeps. One call and no new block, as at any drop point
@@ -64167,8 +64167,17 @@ unsafe @ __ha_is_dkr s line → b {
     : s lf ( str_first_word r2 )
     : s r3 ( str_skip_word r2 )
     : s hd ( str_first_word r3 )
-    : s vt ( __unpark_ty ( str_first_word ( str_skip_word r3 ) ) )
-    ? ! ( str_contains_word ( nurl_sym_get g_fn_escapes `__dsnap_udrop__` ) ptr ) { ( __dkr_expand_closure ptr hd ) ^ v } {}
+    // (The type the binding was REGISTERED with, out of the snapshot's
+    // `<slot> <type>` pairs: an option or a result is registered under
+    // its named twin, `%__opt.String`, not as the slot's `{ i1, %String }`.)
+    : ~ s vt ``
+    : ~ s pairs ( nurl_sym_get g_fn_escapes `__dsnap_udrop__` )
+    ~ != 0 ( nurl_str_len pairs ) {
+        : s pp ( str_first_word pairs ) = pairs ( str_skip_word pairs )
+        : s pt ( str_first_word pairs ) = pairs ( str_skip_word pairs )
+        ? ( seq pp ptr ) { = vt ( nurl_str_cat pt `` ) = pairs `` } {}
+    }
+    ? == 0 ( nurl_str_len vt ) { ( __dkr_expand_closure ptr hd ) ^ v } {}
     : s mangle ( nurl_sym_get g_impl_name_syms ( nurl_str_cat `drop##` vt ) )
     ? == 0 ( nurl_str_len mangle ) { ^ v } {}
     = g_dkr_n + g_dkr_n 1

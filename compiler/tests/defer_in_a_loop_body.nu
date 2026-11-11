@@ -10,6 +10,9 @@
 //            once, after the defer chain, newest first: a String, a Vec, a
 //            struct with a destructor of its own, a closure's environment;
 //   order    …in the reverse of the order they were bound in;
+//   wrapped  …and so is an option's or a result's payload (agora #671):
+//            a `?String`, a `!String String`, a `?R` whose `R` has a
+//            destructor, which runs once per round;
 //   moved    …unless that round handed it on;
 //   views    a view of an earlier round's binding (a closure over it, a
 //            `string_data`, a payload) that the defer still reads is good:
@@ -125,6 +128,23 @@ $ `stdlib/core/vec.nu`
     ^ k
 }
 
+@ wrapped i n → i {
+    : ~ i k 0
+    ~ < k n {
+        : ?String o @ ?String { T ( mk `wrapped: an option's string, long enough for the heap ` k ) }
+        : !String String r ? == % k 2 0 @ !String String { T ( mk `wrapped: a result's value, long enough for the heap ` k ) } @ !String String { F ( mk `wrapped: a result's error, long enough for the heap ` k ) }
+        : ?R q @ ?R { T @ R { ( string_from `wrapped: a name long enough for a heap buffer` ) + 30 k } }
+        ? == k 2 { break } {}
+        ; {
+            ?? o { T t → ( nurl_println ( string_data t ) ) F → ( nurl_println `wrapped: none` ) }
+            ?? r { T t → ( nurl_println ( string_data t ) ) F e → ( nurl_println ( string_data e ) ) }
+            ?? q { T x → ( nurl_println_int . x id ) F → ( nurl_println `wrapped: no R` ) }
+        }
+        = k + k 1
+    }
+    ^ k
+}
+
 @ moved i n → i {
     : ~ ( Vec String ) keep ( vec_new [String] )
     : ~ i k 0
@@ -200,6 +220,7 @@ $ `stdlib/core/vec.nu`
     ( nurl_println_int ( rounds 2 ) )
     ( nurl_println_int ( order 2 ) )
     ( nurl_println_int ( views 3 ) )
+    ( nurl_println_int ( wrapped 4 ) )
     ( nurl_println_int ( moved 5 ) )
     : ~ ( Vec i ) v ( vec_new [i] )
     ( vec_push [i] v 1 ) ( vec_push [i] v 2 ) ( vec_push [i] v 3 ) ( vec_push [i] v 4 ) ( vec_push [i] v 5 )
