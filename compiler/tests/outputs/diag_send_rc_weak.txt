@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_send_rc_weak.nu:16:7: error: thread_spawn closure captures 'w', which is not Send: it reaches a 'Weak', an Rc's weak handle: upgraded on the other thread it is an 'Rc' there, on the same count as the ones left behind — a count that is NOT atomic, so two threads cloning or dropping race on it, which is UB. Use 'Arc' with 'ArcWeak' (stdlib/std/arc.nu: arc_downgrade, arc_weak_upgrade) for a handle that crosses a thread boundary; it is the same API with a SEQ_CST count.
+    } ) {
+      ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

@@ -18937,7 +18937,8 @@ unsafe @ gen_call_body i lex i syms i cg → s {
                 }
             }
             ? & != 0 g_fn_arcseen != __sx_c0 1 {
-                ? ( __thr_marked `Sync##` ( nurl_llty at ) ( __lty_base_name ( nurl_llty at ) ) ) {
+                // (…asserted `% Sync` and not `% NotSync`: __thr_syncs.)
+                ? ( __thr_syncs ( nurl_llty at ) ( __lty_base_name ( nurl_llty at ) ) ) {
                     = __arc_sync ? == 0 ( nurl_str_len __arc_sync ) ( nurl_str_int arg_idx ) ( nurl_str_cat3 __arc_sync `,` ( nurl_str_int arg_idx ) )
                 } {}
             } {}
@@ -35377,24 +35378,30 @@ unsafe @ __ty_lend_frozen_walk i syms s lty i depth → i {
     : s bn ( __lty_base_name lty )
     ? ( seq bn `Arc` ) { ^ 1 } {}
     ? & != 0 g_frozen_impls ( __thr_marked `Frozen##` lty bn ) { ^ 2 } {}
-    ? ( __thr_marked `Sync##` lty bn ) { ^ 0 } {}
-    : s args ( __thr_peel lty )
-    ? != 0 ( nurl_str_len args ) {
-        : i ra ( __ty_lend_frozen syms args + depth 1 )
+    ? ( __thr_syncs lty bn ) { ^ 0 } {}
+    // (Each type argument as the instance was written with it, and the
+    // instance's own fields: __inst_targ, __lty_layout_name.)
+    : ~ i ak 0
+    : ~ s arg ( __inst_targ lty 0 )
+    ~ != 0 ( nurl_str_len arg ) {
+        : i ra ( __ty_lend_frozen syms ( nurl_llty arg ) + depth 1 )
         ? > ra 0 { ^ ra } {}
-    } {}
-    : s fc ( nurl_sym_get2 syms bn `__field_count` )
+        = ak + ak 1
+        = arg ( __inst_targ lty ak )
+    }
+    : s ln ( __lty_layout_name lty )
+    : s fc ( nurl_sym_get2 syms ln `__field_count` )
     ? != 0 ( nurl_str_len fc ) {
         : i nf ( nurl_str_to_int fc )
         : ~ i fi 0
         ~ < fi nf {
-            : s ft ( nurl_sym_get syms ( nurl_str_cat3 bn `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) )
+            : s ft ( nurl_sym_get syms ( nurl_str_cat3 ln `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) )
             : i rf ( __ty_lend_frozen syms ( nurl_llty ft ) + depth 1 )
             ? > rf 0 { ^ rf } {}
             = fi + fi 1
         }
     } {}
-    : s vl ( nurl_sym_get2 syms bn `__variants` )
+    : s vl ( nurl_sym_get2 syms ln `__variants` )
     ? != 0 ( nurl_str_len vl ) {
         : ~ s rest ( nurl_str_cat vl `` )
         ~ != 0 ( nurl_str_len rest ) {
@@ -35549,7 +35556,7 @@ unsafe @ __pay_walk i syms s lty0 b inp i depth → v {
         ^
     } {}
     : b isarc | ( seq bn `Arc` ) & != 0 g_frozen_impls ( __thr_marked `Frozen##` lty bn )
-    : b sync & ! isarc ( __thr_marked `Sync##` lty bn )
+    : b sync & ! isarc ( __thr_syncs lty bn )
     // (Beside the Arcs, a handle that synchronises what it holds holds no
     // Arc's payload for this rule: __ty_lend_frozen.)
     ? & ! inp sync { ^ } {}
@@ -36525,16 +36532,17 @@ unsafe @ bck_stash_move s name i line s cause → v {
 // FsWatch, a DosState): checked code reaches an rcbox's payload nowhere.
 @ __libh_arc_backed i syms s ty i depth → b {
     ? | > depth 4 ! ( __ty_sealed ty ) { ^ F } {}
-    : s bn ( __lty_base_name ty )
-    : s fc ( nurl_sym_get2 syms bn `__field_count` )
+    // (A generic handle's instance has its own fields: __lty_layout_name.)
+    : s ln ( __lty_layout_name ty )
+    : s fc ( nurl_sym_get2 syms ln `__field_count` )
     ? == 0 ( nurl_str_len fc ) { ^ F } {}
     : i fn_ ( nurl_str_to_int fc )
     : ~ i fi 0
     ~ < fi fn_ {
-        : s ft ( nurl_sym_get syms ( nurl_str_cat3 bn `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) )
+        : s ft ( nurl_sym_get syms ( nurl_str_cat3 ln `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) )
         : s fb ( __lty_base_name ft )
         ? ( seq fb `Arc` ) { ^ T } {}
-        ? & & ( __is_libh ft ) ( seq ( __libh_copy_op ft ) `share` ) ! ( __thr_marked `Sync##` ft fb ) {
+        ? & & ( __is_libh ft ) ( seq ( __libh_copy_op ft ) `share` ) ! ( __thr_syncs ft fb ) {
             ? ( __libh_arc_backed syms ft + depth 1 ) { ^ T } {}
         } {}
         = fi + fi 1
@@ -36665,7 +36673,7 @@ unsafe @ bck_stash_move s name i line s cause → v {
         : s ft ( nurl_sym_get syms ( nurl_str_cat3 bn `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) )
         : s fb ( __lty_base_name ft )
         ? ( seq fb `Shared` ) { ^ T } {}
-        ? & & & ( __is_libh ft ) ( seq ( __libh_copy_op ft ) `share` ) ! ( __ty_std_arc ft ) ! ( __thr_marked `Sync##` ft fb ) {
+        ? & & & ( __is_libh ft ) ( seq ( __libh_copy_op ft ) `share` ) ! ( __ty_std_arc ft ) ! ( __thr_syncs ft fb ) {
             ? ( __libh_rc_backed syms ft + depth 1 ) { ^ T } {}
         } {}
         = fi + fi 1
@@ -59738,7 +59746,8 @@ unsafe @ __lty_base_is s lty s want → b {
 //
 // The reason travels as the RETURN VALUE, not a global: "" when the
 // type satisfies `want`, else "<TypeName> <kind>" naming the offending
-// node and how it was decided (`rc`, `cell`, `notsend`, `notsync`).
+// node and how it was decided (`rc`, `rcweak`, `cell`, `notsend`,
+// `notsync`, …: __thr_explain has the list and the words for each).
 // One owned string per frame, consumed by the caller — the witness
 // globals the shared-mutation check needs exist only because ITS flag
 // is set in a scope that gets popped before the reader runs, and this
@@ -59759,6 +59768,17 @@ unsafe @ __lty_base_is s lty s want → b {
     ^ hit
 }
 
+// __thr_syncs: is this type asserted `% Sync` — and not `% NotSync`? The
+// two are asked together wherever a rule excuses a handle "that
+// synchronises itself": `unsafe % Sync W { }` promises it of every W, and
+// `% NotSync ( W i ) { }` takes the promise back for one instance — a
+// rule that asked the first alone excused the very instance that opted
+// out (agora #693). As everywhere, the negative mark outranks the positive.
+@ __thr_syncs s lty s bn → b {
+    ? ( __thr_marked `NotSync##` lty bn ) { ^ F } {}
+    ^ ( __thr_marked `Sync##` lty bn )
+}
+
 // __thr_peel: a mangled type name's generic ARGUMENTS, re-read as a
 // type. Every generic container in NURL lowers to a one-pointer handle
 // (`: Vec [A] { s ctl }`), so the element type is gone from the LLVM
@@ -59776,6 +59796,44 @@ unsafe @ __thr_peel s lty → s {
     : i at ( __lty_base_end lty )
     ? >= at n { ^ ( nurl_str_cat `` `` ) } {}
     ^ ( nurl_str_cat `%` ( nurl_str_slice lty + at 2 - n + at 2 ) )
+}
+
+// __inst_targ: type argument `k` of the generic instance `lty`, as a type;
+// "" past the last one. An instance is written with its arguments
+// (`libhta##`, recorded where it is made: ensure_struct_instantiated), and
+// those are what it holds — read back off the mangled name instead, an
+// argument with no one-word spelling was a name of its own: an option is
+// the slug `opt_Rc__i64`, whose base `opt_Rc` is no type, so the `Rc` in a
+// `( Vec ?( Rc i ) )` was never asked about, nor one in a result or a
+// slice (agora #683). The word is read as the instance's own name was made
+// from it (mangle_src_word). A name with no record — nothing the program
+// instantiated — is still peeled, argument 0 only: that can refuse, never
+// admit.
+@ __inst_targ s lty i k → s {
+    : s tas ( nurl_sym_get2 g_impl_name_syms `libhta##` lty )
+    ? == 0 ( nurl_str_len tas ) {
+        ? != k 0 { ^ ( nurl_str_cat `` `` ) } {}
+        ^ ( __thr_peel lty )
+    } {}
+    : ~ s rest ( nurl_str_cat tas `` )
+    : ~ i j 0
+    ~ < j k { = rest ( str_skip_word rest ) = j + j 1 }
+    : s w ( str_first_word rest )
+    ? == 0 ( nurl_str_len w ) { ^ w } {}
+    ^ ( nurl_src_to_llvm w )
+}
+
+// __lty_layout_name: the name a named type's layout is recorded under —
+// its fields (`<name>__field_count`), an enum's variants — which is the
+// type's whole name past its `%`. A generic struct's instance has a layout
+// of its own (`Wrap__i64`); its base (`Wrap`) names the template, which has
+// none, so a walk that asked by the base found no field in any instance of
+// a program's own generic struct: `: Wrap [T] { ( Rc T ) r }` crossed to a
+// thread with its Rc (agora #675).
+@ __lty_layout_name s lty → s {
+    : i n ( nurl_str_len lty )
+    ? & > n 1 == ( nurl_str_get lty 0 ) 37 { ^ ( nurl_str_slice lty 1 - n 1 ) } {}
+    ^ ( nurl_str_cat lty `` )
 }
 
 // __dyn_trait_of: the trait a trait-object base name spells — `dyn.Peek`
@@ -59840,10 +59898,15 @@ unsafe @ __thr_peel s lty → s {
     // container, never for its payload: `( Arc ( Locked ( Rc i ) ) )`
     // carried the Rc to every thread (#121).
     ? & == want 1 ( __thr_marked `Sync##` lty bn )
-    { : s sargs ( __thr_peel lty )
-        ? != 0 ( nurl_str_len sargs ) {
-            ^ ( __thr_check syms sargs ? ( seq bn `RwLocked` ) 1 0 + depth 1 )
-        } {}
+    { : i swant ? ( seq bn `RwLocked` ) 1 0
+        : ~ i sk 0
+        : ~ s sarg ( __inst_targ lty 0 )
+        ~ != 0 ( nurl_str_len sarg ) {
+            : s rs ( __thr_check syms sarg swant + depth 1 )
+            ? != 0 ( nurl_str_len rs ) { ^ rs } {}
+            = sk + sk 1
+            = sarg ( __inst_targ lty sk )
+        }
         ^ ( nurl_str_cat `` `` ) } {}
 
     // A trait object. Its box holds whichever type implements the trait,
@@ -59860,8 +59923,10 @@ unsafe @ __thr_peel s lty → s {
         ? & == want 1 ! ( __trait_has_super dtr `Sync` ) { ^ ( nurl_str_cat dtr ` dynsync` ) } {}
     } {}
 
-    // The two built-in leaves.
+    // The two built-in leaves. (An Rc's `Weak` is the same count: upgraded
+    // on the other thread it is an Rc there.)
     ? ( seq bn `Rc` ) { ^ ( nurl_str_cat `Rc` ` rc` ) } {}
+    ? & ( seq bn `Weak` ) ( __ty_std_named lty `Weak` ) { ^ ( nurl_str_cat `Weak` ` rcweak` ) } {}
     ? & == want 1 ( seq bn `Cell` ) { ^ ( nurl_str_cat `Cell` ` cell` ) } {}
 
     // A share handle not made to be reached from two threads at once: its
@@ -59873,21 +59938,27 @@ unsafe @ __thr_peel s lty → s {
     // from here down the question becomes the harder one — `( Arc ( Rc i ) )`,
     // `( Arc Cell )` and `( RwLocked PNCounter )` die here, and a
     // `( Vec Cell )` correctly does not.
-    : i sub_want ? | ( seq bn `Arc` ) ( seq bn `RwLocked` ) 1 want
-    : s args ( __thr_peel lty )
-    ? != 0 ( nurl_str_len args )
-    { : s ra ( __thr_check syms args sub_want + depth 1 )
-        ? != 0 ( nurl_str_len ra ) { ^ ra } {} }
-    {}
+    // (An `ArcWeak` as its `Arc`: upgraded on the other thread it is an
+    // Arc on the same payload, agora #690.)
+    : i sub_want ? | | ( seq bn `Arc` ) ( seq bn `ArcWeak` ) ( seq bn `RwLocked` ) 1 want
+    : ~ i ak 0
+    : ~ s arg ( __inst_targ lty 0 )
+    ~ != 0 ( nurl_str_len arg ) {
+        : s ra ( __thr_check syms arg sub_want + depth 1 )
+        ? != 0 ( nurl_str_len ra ) { ^ ra } {}
+        = ak + ak 1
+        = arg ( __inst_targ lty ak )
+    }
 
-    // Named struct fields.
-    : s fc ( nurl_sym_get2 syms bn `__field_count` )
+    // Named struct fields — the instance's own (__lty_layout_name).
+    : s ln ( __lty_layout_name lty )
+    : s fc ( nurl_sym_get2 syms ln `__field_count` )
     ? != 0 ( nurl_str_len fc )
     { : i fn_ ( nurl_str_to_int fc )
         : ~ i fi 0
         ~ < fi fn_ {
             : s ft ( nurl_sym_get syms
-            ( nurl_str_cat3 bn `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) )
+            ( nurl_str_cat3 ln `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) )
             : s rf ( __thr_check syms ft want + depth 1 )
             ? != 0 ( nurl_str_len rf ) { ^ rf } {}
             = fi + fi 1
@@ -59898,7 +59969,7 @@ unsafe @ __thr_peel s lty → s {
     // — every payload slot is bit-complete and type-free (§4.7) — so
     // the declared payload types are the only place the Rc is still
     // visible.
-    : s vl ( nurl_sym_get2 syms bn `__variants` )
+    : s vl ( nurl_sym_get2 syms ln `__variants` )
     ? != 0 ( nurl_str_len vl )
     { : ~ s rest ( nurl_str_cat vl `` )
         ~ != 0 ( nurl_str_len rest ) {
@@ -59954,6 +60025,10 @@ unsafe @ __thr_peel s lty → s {
     { ^ ( nurl_str_cat
         `it reaches an 'Rc', whose refcount is NOT atomic — two threads cloning or dropping the same Rc race on its control-block count, which is UB. `
         `Use 'Arc' (stdlib/std/arc.nu) for any handle that crosses a thread boundary; it is the same API with a SEQ_CST count. If the type holding it IS safe to send and the compiler cannot see why, assert that with an 'unsafe % Send <Type> { }' marker impl (stdlib/core/marker.nu) — a promise the compiler takes on trust.` ) } {}
+    ? ( seq kind `rcweak` )
+    { ^ ( nurl_str_cat
+        `it reaches a 'Weak', an Rc's weak handle: upgraded on the other thread it is an 'Rc' there, on the same count as the ones left behind — a count that is NOT atomic, so two threads cloning or dropping race on it, which is UB. `
+        `Use 'Arc' with 'ArcWeak' (stdlib/std/arc.nu: arc_downgrade, arc_weak_upgrade) for a handle that crosses a thread boundary; it is the same API with a SEQ_CST count.` ) } {}
     ? ( seq kind `cell` )
     { ^ ( nurl_str_cat
         `it reaches a 'Cell' — a raw byte buffer whose reads and writes are unsynchronised, so sharing one between threads is a data race on its bytes. `
@@ -59965,7 +60040,7 @@ unsafe @ __thr_peel s lty → s {
     ? ( seq kind `sharenosync` )
     { ^ ( nurl_str_cat4
         `it reaches '` nm
-        `', a handle whose copies are one state, changed in place with no lock: reached from two threads at once (an Arc's payload, an RwLocked's value, a closure several threads run, a Sync bound), they would change it together. Move it to the other thread instead (a thread's closure takes it along, a Channel hands it over), or keep the state behind a 'Locked' and share that. If it IS safe to reach from two threads and the compiler cannot see why, assert it with an 'unsafe % Sync ` ( nurl_str_cat nm ` { }' marker impl (stdlib/core/marker.nu) — a promise the compiler takes on trust.` ) ) } {}
+        `', a handle whose copies are one state, changed in place with no lock: reached from two threads at once (the payload of an Arc, or of an ArcWeak that upgrades to one; an RwLocked's value; a closure several threads run; a Sync bound), they would change it together. Move it to the other thread instead (a thread's closure takes it along, a Channel hands it over), or keep the state behind a 'Locked' and share that. If it IS safe to reach from two threads and the compiler cannot see why, assert it with an 'unsafe % Sync ` ( nurl_str_cat nm ` { }' marker impl (stdlib/core/marker.nu) — a promise the compiler takes on trust.` ) ) } {}
     ? ( seq kind `dynsend` )
     { ^ ( nurl_str_cat4
         `it reaches a '%` nm

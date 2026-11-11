@@ -1589,7 +1589,8 @@ Unlike every other trait, `Send` and `Sync` are **derived, not implemented**.
 The compiler answers both questions by walking a type's whole graph — struct
 fields, enum variant payloads, generic arguments, aggregate members, closure
 captures — from four built-in cases: `Rc` is neither Send nor Sync (its
-refcount is not atomic); `Cell` is Send but not Sync (a raw byte buffer
+refcount is not atomic), and neither is its `Weak`, which upgrades to an `Rc`
+on the same count; `Cell` is Send but not Sync (a raw byte buffer
 with unsynchronised writes); a library handle is Send, and Sync only where
 asserted (its copies are one state, changed in place); and a trait object
 `%Trait` is Send only when its trait declares `: Send`, and Sync only with
@@ -1598,7 +1599,8 @@ Everything else inherits from what it contains.
 
 The derivation is enforced where a value crosses a thread boundary —
 `thread_spawn`, `spawn`, `chan_send`, and `Arc T` (whose payload must be Send
-**and** Sync, because an Arc exists to be shared) — and it answers `[T: Send]`
+**and** Sync, because an Arc exists to be shared; an `ArcWeak T` is held to the
+same, since it upgrades to that Arc) — and it answers `[T: Send]`
 and `[T: Sync]` bounds, which therefore need no impl block for `i`, `s`, or any
 struct of them.
 
@@ -1607,7 +1609,9 @@ walk there. `% Send T { }` / `% Sync T { }` assert safety the compiler cannot
 see (`Mutex` is a handle over raw pthread memory and is nonetheless what makes
 contents shareable — `stdlib/std/thread.nu` marks it); `% NotSend T { }` / `% NotSync T { }` assert
 danger it cannot see (an FFI handle is an `s`, and `s` is Send). A negative
-marker outranks a positive one on the same type. A positive impl is NURL's
+marker outranks a positive one on the same type, and one on an instance
+(`% NotSync ( W i ) { }`) outranks a positive one on its generic
+(`unsafe % Sync W { }`). A positive impl is NURL's
 spelling of Rust's `unsafe impl` — an assertion, not a proof — and outside
 the standard library it is written so: `unsafe % Send T { }` (§3.3d). A
 negative one only adds checks and needs no prefix. See
