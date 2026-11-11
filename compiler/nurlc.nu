@@ -57758,7 +57758,13 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     ~ != 0 ( nurl_str_len __crv ) {
         : s __cv ( str_first_word __crv ) = __crv ( str_skip_word __crv )
         ? ( nurl_sym_has_word syms `__clo_consumed__` __cv )
-        { = clo_released ( nurl_str_cat3 clo_released ` ` __cv ) } {}
+        { = clo_released ( nurl_str_cat3 clo_released ` ` __cv )
+            // …and to the rule for a closure several threads run at once
+            // that is a change of the capture, the strongest there is: the
+            // value ends on whichever thread runs the body first, and the
+            // env's taken mark is a plain flag (`&name@line@>@0`,
+            // __sync_verdict; agora #648).
+            = g_last_closure_cs ( __bar_add g_last_closure_cs ( nurl_str_cat4 ( nurl_str_cat3 `&` __cv `@` ) ( nurl_str_int clo_line ) `@>` `@0` ) ) } {}
     }
     : s __cfa ( nurl_sym_get syms `__clo_fassigned__` )
     ( nurl_sym_pop syms )
@@ -70875,7 +70881,14 @@ unsafe @ __cc_note_call i syms s call_name s fname s arg_cs s arg_tys s arg_ids 
             : i p3 ( __str_rfind_char a3 64 )
             : s cal ( nurl_str_slice a3 0 p3 )
             : s k ( nurl_str_slice a3 + p3 1 - - ( nurl_str_len a3 ) p3 1 )
-            ? ( __cc_callee_changes cal k ) {
+            // (`>`: a capture the body takes over, gen_closure_expr's
+            // clo_released — given away on the run that gets there first.)
+            ? ( seq cal `>` ) {
+                ( die_file_pos file ( nurl_str_to_int line ) 0 ( nurl_str_cat3 ( nurl_str_cat3 how `, where several threads may run the closure at once, but the closure built on line ` bl )
+                ( nurl_str_cat3 ` gives '` nm `' away when it runs (its body hands it over to a callee, a container or a value that takes it): ` )
+                `the closure can run once, and two threads running it at once would both take the one value, which is then released twice. Give each thread a value of its own (a closure built for each thread, over its own copy), or keep the value outside the shared closure and let the closure read it.` ) )
+            } {}
+            ? & ! ( seq cal `>` ) ( __cc_callee_changes cal k ) {
                 : s act ? ( seq cal `=` ) ( nurl_str_cat `gives it a new value` `` ) ( nurl_str_cat3 `hands it to '` ( bck_fn_show cal ) `', which changes it` )
                 ( die_file_pos file ( nurl_str_to_int line ) 0 ( nurl_str_cat3 ( nurl_str_cat3 how `, where several threads may run the closure at once, but the closure built on line ` bl )
                 ( nurl_str_cat4 ` changes '` nm `' when it runs (it ` act )
