@@ -483,7 +483,14 @@ the same way: an owner moves, a borrow is copied.
   then dead.
 - `: ~ ( Vec i ) cur a` is a *cursor*: a mutable working binding that
   borrows `a` (§7.6).
-- `= b a` moves an owner and copies a borrow, like `:`.
+- `= b a` moves an owner and copies a borrow, like `:`. The move is made
+  where the line runs — `b` takes the value and `a` holds nothing until
+  it is given a new one — so it holds on every path and in every round
+  of a loop: `= t a  = a b  = b t` rotates three owners however often it
+  runs. An owned slice moves the same way (`= ys zs` leaves `zs` empty).
+  A binding that owns its value on some paths only (a fresh value on
+  one, a borrow on another) cannot be handed over by name: give it a
+  value of its own on every path, or hand over a copy.
 - A `?` / `??` that selects one of several bindings
   (`: ( Vec i ) chosen ? flag a ( make )`) moves the selected owner on the
   paths that select it. The other paths keep their own owners.
@@ -2500,6 +2507,13 @@ are dropped, moved and copied by the same rules:
   (`( string_from nm )`). A field given a value through the cursor (`= .
   cur name …`) is the cursor's own in the same way: reassigning the cursor
   releases it, so a view of it taken before ends there.
+- **Handovers by name move.** `= b a` and an immutable `: T b a` out of a
+  binding that owns its value — a String, a Vec, a struct, an option, an
+  owned slice — move it where they run (§2.2): `b` takes `a`'s drop flag
+  (a slice's buffer, `a`'s slot left empty), and `a` drops nothing until
+  it is given a new value. Nothing is handed over later, so the order of
+  the lines in a loop body does not matter. A handover out of a borrow
+  copies the borrow, and a `: ~` binding of a name is a cursor.
 - **Stores move.** A value stored into a literal, a field or a container
   element leaves its binding. A parameter stored that way makes the
   function keep its argument, which the caller hands over like a `sink`.
