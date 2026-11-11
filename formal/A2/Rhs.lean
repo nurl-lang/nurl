@@ -198,8 +198,17 @@ def BlocksIn (m : Mem) : Prop :=
   ∀ k bl, m.blk k = some bl → bl.ty.ok = true ∧ bl.ty.holdsView = false ∧
     (∀ p, bl.pay = some p → WFv bl.ty p ∧ SharesOK m bl.ty p) ∧ (bl.kind = .lock ∨ bl.ty.hasCell = false) ∧
     -- A2-drop.3d: a block's payload owns no destructor value (the sweep that
-    -- frees a block runs no code)
-    bl.ty.dtorFree = true
+    -- frees a block runs no code), unless the block is `dead` (Agora #610)
+    (bl.kind ≠ .dead → bl.ty.dtorFree = true) ∧
+    -- Agora #610: a `dead` block is of a destructor type that holds no closure
+    (bl.kind = .dead → ∃ f u, bl.ty = .dtor f u ∧ u.hasFn = false)
+
+/-- A block that is not `dead`, of a type that owns no destructor value:
+    what the invariant's last two clauses ask of it. -/
+theorem noDead {bl : Blk} (hk : bl.kind ≠ .dead := by simp) (hd : bl.ty.dtorFree = true) :
+    (bl.kind ≠ .dead → bl.ty.dtorFree = true) ∧
+      (bl.kind = .dead → ∃ f u, bl.ty = .dtor f u ∧ u.hasFn = false) :=
+  ⟨fun _ => hd, fun h => absurd h hk⟩
 
 /-- **More blocks**: the invariant holds over a store with the same slots and
     more blocks, each as the invariant asks. -/
@@ -245,12 +254,13 @@ theorem MInv.regrow {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) 
     obtain ⟨bl', h1, h2⟩ := hb k bl0 hk0 hr
     refine ⟨bl', h1, ?_⟩
     obtain ⟨hty, hkd, ha⟩ := h2
-    refine ⟨by rw [hty, Blk.rdOnly_ty], by rw [hkd, Blk.rdOnly_kind], fun hl => ?_⟩
-    rw [Blk.rdOnly_kind] at hl
-    rw [ha hl]
+    refine ⟨by rw [hty, Blk.rdOnly_ty], by rw [hkd, Blk.rdOnly_kind], fun hl hd => ?_⟩
+    rw [Blk.rdOnly_kind] at hl hd
+    rw [ha hl hd]
     obtain ⟨t, kd, p⟩ := bl0
     cases kd with
     | lock => exact absurd rfl hl
+    | dead => exact absurd rfl hd
     | arc => rfl
     | view => rfl
   have hR : ∀ v, mb.vals v → mb.vals v := fun _ h => h

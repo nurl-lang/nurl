@@ -738,6 +738,15 @@ theorem _root_.A2.Step.cellKeep {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : S
   | scopeDP _ _ _ ih =>
     exact ih.trans (CellKeep.slots (Nat.le_refl _) (fun _ hc => .inl (CellAt.of_st rfl hc)) rfl)
   | scopeDPMoved _ _ ih => exact ih.trans (CellKeep.slots (Nat.le_refl _) (fun _ hc => .inl (CellAt.remove hc)) rfl)
+  | @reap r0 k0 f u p _ hk hnc =>
+    -- Agora #610: an orphan's payload, which holds no cell share, moves to a slot
+    refine CellKeep.shrink (Nat.le_refl _) (fun k hc => ?_) (fun k' k hk' => ?_)
+    · rcases CellAt.set (m := m) (x := m.nv) (sl := ⟨true, some p⟩) hc with ⟨w, hw, hs⟩ | hc
+      · cases hw; exact absurd hs (hnc k)
+      · exact .inl hc
+    · rcases LockHolds.upd hk' with ⟨hne, hk'⟩ | ⟨rfl, _, _, hb, _⟩
+      · exact hk'
+      · cases hb
   | @withLock a x s0 k0 t v _ hk _ _ =>
     -- the payload is checked out, the block left empty
     refine CellKeep.moveOut k0 v (Nat.le_refl _) (fun k hc => ?_) (fun k' k hk' => ?_)

@@ -149,6 +149,7 @@ theorem Step.keep {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) (
   | scopeDP _ _ _ ih | scopeDPDrain _ _ ih => exact ih
   | scopeDPMoved _ _ ih => exact ih
   | withLock _ _ _ => intro _ _; rfl
+  | reap _ _ _ => intro _ _; rfl
   | scopeLIn _ ih => exact ih
   | scopeLSkip hrl =>
     cases hrl with
