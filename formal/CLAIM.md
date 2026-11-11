@@ -763,12 +763,12 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   enum's drop does.
   nurlc (Agora #641): a `??` arm takes a payload out of an enum the
   function owns only where the enum's destructor is its glue
-  (`mem_enum_take`: a binding that always owns, or one bound from a call
-  that owns where the call's own answer says so, a `sink` parameter, the
-  match's temporary). An enum with a `% Drop` of its own, and any enum
-  held in a field of a local struct, keeps its payloads: the arm is lent
-  them, and one handed back out of the function that drops the enum is a
-  copy the caller owns where its type can be copied, and refused where it
+  (`mem_enum_take`: a binding that owns on every path, a `sink`
+  parameter, the match's temporary). An enum with a `% Drop` of its own,
+  any enum held in a field of a local struct, and an enum bound from a
+  call that answers per call keep their payloads: the arm is lent them,
+  and one handed back out of the function that drops the enum is a copy
+  the caller owns where its type can be copied, and refused where it
   cannot (`__payload_lent_of_frame`).
 - A2-drop.3b: a `Vec` of destructor values is drained. `Ty.ok` admits
   `vec (dtor f u)` (`Ty.vecD`) as a binding's own type, and (Agora #607)

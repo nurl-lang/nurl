@@ -2462,11 +2462,13 @@ then the payloads of the variant that is there, as a binding, a `Vec`
 element, a struct field or a temporary a `??` matches. It stays whole for
 its destructor: a `??` arm is lent its payloads and takes none out of it.
 A payload handed back (`^ s`, a join's value, a field of a boxed payload)
-out of such an enum, or out of any enum held in a field of a local
-struct, by the function that drops it is the caller's own copy; a payload
-that cannot be copied (a `% Drop` value) is refused there. An enum with
-no `% Drop` of its own that a binding owns gives the payload up instead:
-it moves out, and the enum drops the rest.
+out of such an enum, out of any enum held in a field of a local struct,
+or out of one bound from a call that answers per call (`: E e ( mk )`,
+`E` holding a `% Drop` value), by the function that drops it is the
+caller's own copy; a payload that cannot be copied (a `% Drop` value) is
+refused there. An enum with no `% Drop` of its own that a binding owns
+on every path gives the payload up instead: it moves out, and the enum
+drops the rest.
 
 A destructor that panics is not run again by the unwind: a value leaves
 the panic journal before its destructor runs, and while the destructor

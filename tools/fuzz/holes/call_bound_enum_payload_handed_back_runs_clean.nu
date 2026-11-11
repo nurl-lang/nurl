@@ -1,7 +1,7 @@
-// call_bound_enum_payload_handed_back_runs_clean: a payload of an enum that holds a `% Drop` value, bound from a call (`: E e ( mk )`), handed back out of a `??` arm by name and as a join's value — a String and a `% Drop` payload.
-// Guard for agora #641: such a binding owns its value where the call's own answer says so (`@<slot>`), and gives a payload up there as a binding that always owns does (mem_enum_take): the payload moves out, the enum drops the rest. Before, no take was made through such a binding, the arm was lent the payload, and the caller got what the enum's drop then freed (a String) or dropped as well (a `% Drop` value).
-// main 37334be: accepted, heap-use-after-free (in the caller for the String; in drop__Bomb for the Bomb).
-// map: §7.6 | A2 | runs-clean | - | agora #641 guard: a payload handed back out of an enum bound from a call that answers per call is taken out of it where the binding owns (String and % Drop payloads, by name and as a join)
+// call_bound_enum_payload_handed_back_runs_clean: a String payload of an enum that holds a `% Drop` value, bound from a call (`: E e ( mk )`), handed back out of a `??` arm by name and as a join's value.
+// Guard for agora #641: such a binding owns its value where the call's own answer says so (`@<slot>`), no take moves a payload out of it, and the arm is lent the payload: handed back, the caller gets its own copy where the binding owns the enum (__payload_keeper_flag). Before, the caller got the String the enum's drop then freed.
+// main 37334be: accepted, heap-use-after-free in the caller.
+// map: §7.6 | A2 | runs-clean | - | agora #641 guard: a String payload handed back out of an enum bound from a call that answers per call is the caller's own copy (by name and as a join)
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 
@@ -32,21 +32,10 @@ $ `stdlib/core/vec.nu`
     }
 }
 
-@ the_bomb → Bomb {
-    : E e ( mk )
-    ?? e {
-        Zero n → {}
-        Three x s y → { ^ x }
-    }
-    ^ ( bomb `none` )
-}
-
 @ main → i {
     : String a ( the_string )
     ( nurl_println ( string_data a ) )
     : String b ( the_string_joined )
     ( nurl_println ( string_data b ) )
-    : Bomb c ( the_bomb )
-    ( nurl_println ( string_data . c tag ) )
     ^ 0
 }

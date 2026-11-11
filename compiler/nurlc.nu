@@ -19090,9 +19090,14 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // (Only a binding whose lending is that call's answer: a payload or
         // an element read out of a container is taken over instead — its
         // slot is emptied, mem_vget_consume.)
+        // (…and one a join bound that lends on some of its paths with
+        // nothing of its own to give up — `: String t ?? e { One s → { … s }
+        // … }`, the arm a block whose tail is a payload the enum keeps:
+        // handed over as it was, the callee released what the enum's owner
+        // released again; agora #641.)
         ? & & & & & summary_callee != 0 ( nurl_str_len arg_lent ) ! ( seq arg_lent `1` )
         ( str_has_index callee_sink arg_idx ) ( __clone_supported at syms )
-        ( __lent_by_call syms bck_arg_tt bck_arg_val ) {
+        | ( __lent_by_call syms bck_arg_tt bck_arg_val ) ( __lent_by_join syms bck_arg_tt bck_arg_val ) {
             = av ( mem_emit_cloneif cg at av arg_lent )
         } {}
         // A call's result it only lends (`( vec_at v 0 )`) handed to a
@@ -23644,7 +23649,10 @@ unsafe @ gen_match i lex i syms i cg → s {
                     : b __abcl ( __is_closure_ty __abt )
                     // (A closure's out of an option binding: it is that
                     // binding's — giving the option a new value drops it.)
-                    : b __lent & | | | != 0 ( nurl_str_len match_scrut_borrow ) != 0 ( nurl_str_len match_scrut_field ) __scrut_param & __abcl != 0 ( nurl_str_len match_var_name ) | | | ( __is_handle_ty __abt ) ( __is_hown_ty __abt ) __abv __abcl
+                    // (…or out of an enum with a `% Drop` of its own, which
+                    // stays whole for its destructor: no payload moves out of
+                    // it, whoever holds it — agora #641.)
+                    : b __lent & | | | | != 0 ( nurl_str_len match_scrut_borrow ) != 0 ( nurl_str_len match_scrut_field ) __scrut_param __m_udrop_enum & __abcl != 0 ( nurl_str_len match_var_name ) | | | ( __is_handle_ty __abt ) ( __is_hown_ty __abt ) __abv __abcl
                     // (Out of a parameter: that parameter is what it is lent from,
                     // whatever its type spells — `?? String` included.)
                     : s __abown ( bck_owning_reads syms bck_mreads `+` )
@@ -30036,12 +30044,12 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
     // forward call or an option's payload — gives it up on the paths where
     // it does: mem_enum_take. Refused, a payload handed out of it was lent
     // while the enum was dropped under it, agora #264.)
-    // (…and one bound straight from a call that answers per call, `@<slot>`
-    // — every binding of an enum that holds a `% Drop` value: `: E e ( mk )
-    // ?? e { V x s → { ^ s } }` handed the caller the String e's drop then
-    // freed, agora #641.)
+    // (One bound straight from a call that answers per call, `@<slot>`,
+    // lends its payloads instead: a binding of one is a borrow, and one
+    // handed back is copied where the binding owns —
+    // __payload_lent_of_frame, agora #641.)
     : s usb ( nurl_sym_get2 syms u `__sborrow` )
-    ? | | == 0 ( nurl_str_len u ) & != 0 ( nurl_str_len usb ) ! ( __sb_by_flag usb ) != 0 ( nurl_sym_len2 syms u `__outer_owned` ) { ^ 0 } {}
+    ? | | == 0 ( nurl_str_len u ) & != 0 ( nurl_str_len usb ) ! ( seq usb `dyn` ) != 0 ( nurl_sym_len2 syms u `__outer_owned` ) { ^ 0 } {}
     ? & != 0 ( nurl_sym_len2 syms u `__pname` ) ! ( __param_owned_slot syms u ) { ^ 0 } {}
     ? ! | ( __is_autodrop_enum ty syms ) ( __is_handle_enum ty ) { ^ 0 } {}
     ? | ( str_contains_word g_clo_caps_now name ) ! ( nurl_sym_has_word syms `__user_drops__` u ) { ^ 0 } {}
@@ -30119,7 +30127,7 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
     : s r2 ( str_skip_word r1 )
     : s storage ( str_first_word r2 )
     : s ety ( str_skip_word r2 )
-    : ~ s c ? ( __sb_by_flag ( nurl_sym_get2 syms slot `__sborrow` ) ) ( mem_udrop_flag_get syms cg slot ) ( nurl_str_cat `true` `` )
+    : ~ s c ? ( seq ( nurl_sym_get2 syms slot `__sborrow` ) `dyn` ) ( mem_udrop_flag_get syms cg slot ) ( nurl_str_cat `true` `` )
     : s gp ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print gp ) ( nurl_print ` = getelementptr ` ) ( nurl_print ( nurl_llty ety ) )
     ( nurl_print `, ptr ` ) ( nurl_print slot ) ( nurl_print `, i32 0, i32 ` ) ( nurl_print fidx ) ( nurl_print `\n` )
@@ -71930,6 +71938,23 @@ unsafe @ __die_at_fn s fname s what s msg → v {
     : s rfp ( str_first_word ( nurl_sym_get syms `__last_field_read__` ) )
     ? == 0 ( nurl_str_len rfp ) { ^ T } {}
     ^ != 0 ( nurl_sym_len2 syms rfp `__pname` )
+}
+
+// Is identifier `val` a binding a join gave its value, which owns it only
+// where its flag says (`dyn`) and is no cursor over anything that could be
+// emptied in its place (no `__alias`, no `vec_get` slot)? Where it owns
+// nothing, the value is whoever lent it's.
+@ __lent_by_join i syms i tt s val → b {
+    ? ! ( is_ident_tok tt ) { ^ F } {}
+    : s up ( mem_udrop_ptr_of syms val )
+    ? == 0 ( nurl_str_len up ) { ^ F } {}
+    // (…or a copy of such a binding, `: String u t`: a cursor over it
+    // alone, lent wherever that one is.)
+    : s al ( nurl_sym_get2 syms up `__alias` )
+    : s jp ? == 0 ( nurl_str_len al ) ( nurl_str_cat up `` ) ? == 0 ( nurl_str_len ( str_skip_word al ) ) ( str_first_word al ) ( nurl_str_cat `` `` )
+    ? == 0 ( nurl_str_len jp ) { ^ F } {}
+    ? | | != 0 ( nurl_sym_len2 syms up `__vget` ) != 0 ( nurl_sym_len2 syms jp `__vget` ) & != 0 ( nurl_str_len al ) != 0 ( nurl_str_len ( nurl_sym_get2 syms jp `__alias` ) ) { ^ F } {}
+    ^ ( seq ( nurl_sym_get2 syms jp `__sborrow` ) `dyn` )
 }
 
 // Is identifier `val` a binding whose ownership is the per-call answer of
