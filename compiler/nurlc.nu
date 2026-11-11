@@ -25234,6 +25234,106 @@ unsafe @ gen_match i lex i syms i cg → s {
     ^ ( nurl_str_cat `` `` )
 }
 
+// A loop's condition runs once per round, and what it binds is the
+// round's. A value block in it (`~ < { : String s ( mk k ) ( string_len s )
+// } n {`) is no scope of its own — a value block binds in the scope around
+// it, and its names end at its `}` — and the scope around a loop's
+// condition is the function's: its owners were released once, at the
+// function's exit, and every round wrote over the slot of the round before
+// (a String, a closure's environment: agora #674, #628). They are released
+// here, where the round's condition has its value — an i1, which cannot
+// point into them — and before the branch on it; the lists go back to what
+// they held before the condition, as at a scope's end. The walk already
+// ends such a binding at its block's `}` (a view of it stored outside is
+// refused). Nothing is emitted for a condition that binds no owner.
+//   Only what a `:` bound. A call's temporary owner in a condition is on
+// the same lists and has a release of its own, before the next round
+// builds one (mem_journal_forget_tmpown, `__tmpclr`): it stays.
+
+// Is the list word `w` a `:` binding's? Its slot has the binding's name
+// (gen_let_or_struct); a closure's owner slot names its binding too.
+@ __lc_is_binding i syms s w → b {
+    ? != 37 ( nurl_str_get w 0 ) { ^ T } {}
+    ^ | != 0 ( nurl_sym_len2 syms w `__bname` ) != 0 ( nurl_sym_len2 g_fn_escapes w `__cvn` )
+}
+
+// The records of `cur` (`recsz` words each, keyed by the first) that `old`
+// does not hold: the `:` bindings' (`binds`), or the others'.
+@ __lc_new i syms s cur s old i recsz b binds → s {
+    : ~ s out ``
+    : ~ s rest ( nurl_str_cat cur `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s key ( str_first_word rest )
+        : ~ s rec ( nurl_str_cat key `` )
+        = rest ( str_skip_word rest )
+        : ~ i k 1
+        ~ < k recsz {
+            = rec ( nurl_str_cat3 rec ` ` ( str_first_word rest ) )
+            = rest ( str_skip_word rest )
+            = k + k 1
+        }
+        ? & ! ( str_contains_word old key ) == binds ( __lc_is_binding syms key ) {
+            = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat rec `` ) ( nurl_str_cat3 out ` ` rec )
+        } {}
+    }
+    ^ out
+}
+
+@ __lc_join s a s b → s {
+    ? == 0 ( nurl_str_len a ) { ^ ( nurl_str_cat b `` ) } {}
+    ? == 0 ( nurl_str_len b ) { ^ ( nurl_str_cat a `` ) } {}
+    ^ ( nurl_str_cat3 a ` ` b )
+}
+
+@ __loop_cond_release i syms i cg s strs s structs s user s slices s cenv → v {
+    ? != 0 g_auto_drop_strings {
+        : s cs ( nurl_sym_get syms `__owned_strings__` )
+        ? ! ( seq strs cs ) {
+            : s nb ( __lc_new syms cs strs 1 T )
+            ? != 0 ( nurl_str_len nb ) {
+                : s nt ( __lc_new syms cs strs 1 F )
+                ( nurl_sym_set_deep syms `__owned_strings__` ( __lc_join nb strs ) )
+                ( mem_drop_new_strings syms cg strs )
+                ( nurl_sym_set_deep syms `__owned_strings__` ( __lc_join nt strs ) )
+            } {}
+        } {}
+        : s cf ( nurl_sym_get syms `__owned_struct_fields__` )
+        ? ! ( seq structs cf ) {
+            : s nb ( __lc_new syms cf structs 6 T )
+            ? != 0 ( nurl_str_len nb ) {
+                : s nt ( __lc_new syms cf structs 6 F )
+                ( nurl_sym_set_deep syms `__owned_struct_fields__` ( __lc_join nb structs ) )
+                ( mem_drop_new_struct_fields syms cg structs )
+                ( nurl_sym_set_deep syms `__owned_struct_fields__` ( __lc_join nt structs ) )
+            } {}
+        } {}
+        : s cu ( nurl_sym_get syms `__user_drops__` )
+        ? ! ( seq user cu ) {
+            : s nb ( __lc_new syms cu user 2 T )
+            ? != 0 ( nurl_str_len nb ) {
+                : s nt ( __lc_new syms cu user 2 F )
+                ( nurl_sym_set_deep syms `__user_drops__` ( __lc_join nb user ) )
+                ( mem_drop_new_user_drops syms cg user )
+                ( nurl_sym_set_deep syms `__user_drops__` ( __lc_join nt user ) )
+            } {}
+        } {}
+        ? & != 0 g_fn_slice_decls ! ( seq slices ( nurl_sym_get syms `__slice_decls__` ) ) {
+            ( mem_drop_new_slices syms cg slices )
+            ( nurl_sym_set_deep syms `__slice_decls__` slices )
+        } {}
+    } {}
+    : s cc ( nurl_sym_get syms `__owned_closure_envs__` )
+    ? ! ( seq cenv cc ) {
+        : s nb ( __lc_new syms cc cenv 1 T )
+        ? != 0 ( nurl_str_len nb ) {
+            : s nt ( __lc_new syms cc cenv 1 F )
+            ( nurl_sym_set_deep syms `__owned_closure_envs__` ( __lc_join nb cenv ) )
+            ( mem_drop_new_closure_envs syms cg cenv )
+            ( nurl_sym_set_deep syms `__owned_closure_envs__` ( __lc_join nt ( nurl_sym_get syms `__owned_closure_envs__` ) ) )
+        } {}
+    } {}
+}
+
 @ gen_loop i lex i syms i cg → s {
     ( nurl_lex_advance lex )
     // For-each: ~ IDENT(var) IDENT(slice) { body }, or a field the
@@ -25277,6 +25377,14 @@ unsafe @ gen_match i lex i syms i cg → s {
     // The condition runs once per pass too, and every name it can see is
     // bound outside the loop: `~ & < p n ( pred ( nurl_str_get src p ) )`
     // is a scan (__strget_loop_warn).
+    // (What the condition binds — in a value block: `~ < { : String s …
+    // ( string_len s ) } n {` — is the round's, not the function's: see
+    // __loop_cond_release.)
+    : s __lc_strs ( nurl_sym_get syms `__owned_strings__` )
+    : s __lc_structs ( nurl_sym_get syms `__owned_struct_fields__` )
+    : s __lc_user ( nurl_sym_get syms `__user_drops__` )
+    : s __lc_slices ( nurl_sym_get syms `__slice_decls__` )
+    : s __lc_cenv ( nurl_sym_get syms `__owned_closure_envs__` )
     : s old_cond_sdepth ( __loop_cond_sdepth_enter syms )
     : ~ s cv ( gen_expr lex syms cg )
     ( nurl_sym_def syms `__loop_sdepth__` old_cond_sdepth )
@@ -25291,6 +25399,7 @@ unsafe @ gen_match i lex i syms i cg → s {
         // It's a loop.
         // Narrow non-i1 integer loop conditions (see gen_cond).
         = cv ( coerce_to_i1 lex syms cv cvt cg )
+        ( __loop_cond_release syms cg __lc_strs __lc_structs __lc_user __lc_slices __lc_cenv )
         ( nurl_print `  br i1 ` ) ( nurl_print cv )
         ( nurl_print `, label %` ) ( nurl_print lb )
         ( nurl_print `, label %` ) ( nurl_print le ) ( emit_dbg_eol )
