@@ -23654,10 +23654,7 @@ unsafe @ gen_match i lex i syms i cg → s {
                     : b __abcl ( __is_closure_ty __abt )
                     // (A closure's out of an option binding: it is that
                     // binding's — giving the option a new value drops it.)
-                    // (…or out of an enum with a `% Drop` of its own, which
-                    // stays whole for its destructor: no payload moves out of
-                    // it, whoever holds it — agora #641.)
-                    : b __lent & | | | | != 0 ( nurl_str_len match_scrut_borrow ) != 0 ( nurl_str_len match_scrut_field ) __scrut_param __m_udrop_enum & __abcl != 0 ( nurl_str_len match_var_name ) | | | ( __is_handle_ty __abt ) ( __is_hown_ty __abt ) __abv __abcl
+                    : b __lent & | | | != 0 ( nurl_str_len match_scrut_borrow ) != 0 ( nurl_str_len match_scrut_field ) __scrut_param & __abcl != 0 ( nurl_str_len match_var_name ) | | | ( __is_handle_ty __abt ) ( __is_hown_ty __abt ) __abv __abcl
                     // (Out of a parameter: that parameter is what it is lent from,
                     // whatever its type spells — `?? String` included.)
                     : s __abown ( bck_owning_reads syms bck_mreads `+` )
