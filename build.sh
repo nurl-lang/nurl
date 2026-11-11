@@ -656,7 +656,32 @@ step "stage1 link"   link_stage build/nurlc_self build/nurlc_self "$BOOT_OPT"
 # retired instructions (see "Partitioned emission" in compiler/nurlc.nu).
 # The rule is the same one nurl.sh applies to your program, pointed the
 # other way: split what you rebuild constantly, not what you ship once.
-step "stage2 ir"     bash -c './build/nurlc_self "$@" compiler/nurlc.nu > build/nurlc_self2.ll' _ $SAN_NURL_FLAGS
+# Stage 2's stderr is kept: this is the compiler the tree builds compiling
+# its own source, the compile CI's tools/tests/test_lsp_toolchain.py does
+# with --check and requires to print nothing. nurlc's lints fire on new
+# compiler code like on any other (a string re-measured in a loop, …), and
+# a warning here was only a line in the build log: the build passed, and
+# the pull request failed in CI a quarter of an hour later (Agora #695).
+# A warning fails the build here, at no extra compile.
+stage2_ir() {
+    # shellcheck disable=SC2086
+    ./build/nurlc_self $SAN_NURL_FLAGS compiler/nurlc.nu > build/nurlc_self2.ll 2> build/nurlc_self2.err
+    local rc=$?
+    cat build/nurlc_self2.err
+    return $rc
+}
+step "stage2 ir"     stage2_ir
+if grep -q ': warning: ' build/nurlc_self2.err; then
+    echo "BUILD FAILED: compiler/nurlc.nu compiles with warnings"
+    echo "===================================================="
+    cat build/nurlc_self2.err
+    echo "===================================================="
+    echo "The compiler this tree builds warns about its own source. CI requires"
+    echo "that compile to be silent (tools/tests/test_lsp_toolchain.py runs"
+    echo "'nurlc --check' over compiler/nurlc.nu): change the code each warning"
+    echo "points at, as it says."
+    exit 1
+fi
 if (( SAN == 1 )); then
     step "stage2 sanitizer coverage" check_san_ir build/nurlc_self2.ll
 fi

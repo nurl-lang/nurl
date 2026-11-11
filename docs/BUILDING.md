@@ -637,7 +637,7 @@ request body, one entry per undone commit.
 
 | Job / step | What it checks |
 |---|---|
-| build + bootstrap fixed point + test corpus | `build.sh` on Linux x86_64 — stage1 ≡ stage2 byte-identical IR, then the snapshot test suite |
+| build + bootstrap fixed point + test corpus | `build.sh` on Linux x86_64 — stage1 ≡ stage2 byte-identical IR, then the snapshot test suite. Stage 2 — the compiler the tree builds compiling `compiler/nurlc.nu` — must print no warning: nurlc's own lints apply to its source, and the build fails there with the warning shown (the same compile `tools/tests/test_lsp_toolchain.py` requires to be silent) |
 | the change undoes no commit already on main | `tools/check_pr_reverts.py`, on a pull request — no commit among `main`'s last 200 is undone with nothing of it kept (a file it added gone again, a file it changed byte-identical to an older `main` version) unless the pull request body says `reverts:`; part of the required check above |
 | soundness hole probes | `tools/fuzz/holes/check.sh` — every soundness probe is rejected or run clean under sanitizers |
 | formal soundness proof (Lean 4) | [`formal.yml`](../.github/workflows/formal.yml), when `formal/` changes: `formal/check.sh` builds the A1, A2 and A3 proofs (`A1.memory_safe`, `A2.memory_safe`, `A2.no_leak_end`, `A3.claim`, `A3.claim_made`) and fails on a `sorry` or an axiom beyond Lean's standard ones |

@@ -296,8 +296,15 @@ REM ── stage2 ir ───────────────────�
 set "LABEL=stage2 ir"
 >>"%LOG%" echo.
 >>"%LOG%" echo [%LABEL%] build\nurlc_self.exe compiler\nurlc.nu ^> build\nurlc_self2.ll
-build\nurlc_self.exe compiler\nurlc.nu > build\nurlc_self2.ll 2>>"%LOG%"
-if errorlevel 1 goto :failed
+REM Stage 2's stderr is kept: the compiler this tree builds compiling its
+REM own source is the compile CI requires to be silent, and a warning there
+REM used to be a line in the log of a build that passed (Agora #695).
+build\nurlc_self.exe compiler\nurlc.nu > build\nurlc_self2.ll 2> build\nurlc_self2.err
+set "STAGE2_RC=%errorlevel%"
+type build\nurlc_self2.err >>"%LOG%"
+if not "%STAGE2_RC%"=="0" goto :failed
+findstr /C:": warning: " build\nurlc_self2.err >nul
+if not errorlevel 1 goto :selfwarn
 
 REM ── stage2 link ──────────────────────────────────────────────
 set "LABEL=stage2 link"
@@ -382,6 +389,19 @@ echo BUILD DIDN'T FAIL but TESTS FAILED
 echo ====================================================
 type "%TESTOUT%"
 del "%TESTOUT%" 2>nul
+call :cleanup
+popd >nul
+exit /b 1
+
+:selfwarn
+echo BUILD FAILED: compiler\nurlc.nu compiles with warnings
+echo ====================================================
+type build\nurlc_self2.err
+echo ====================================================
+echo The compiler this tree builds warns about its own source. CI requires
+echo that compile to be silent ^(tools/tests/test_lsp_toolchain.py runs
+echo 'nurlc --check' over compiler/nurlc.nu^): change the code each warning
+echo points at, as it says.
 call :cleanup
 popd >nul
 exit /b 1
