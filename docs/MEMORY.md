@@ -1564,7 +1564,12 @@ lending call's final summary at module end (h230); nor can such a field
 leave a struct that still drops it (h229).
 
 An enum lends its payload to a match's arms (h231): read in place, handed
-to a `sink` as a copy, never released by the arm. An enum a call handed
+to a `sink` as a copy, never released by the arm. The payload ends with
+the enum it is read out of: when the binding is given a new value, and
+when it is handed over whole — to a `sink` callee, or one whose summary
+says it takes the argument — which drops it on its way out (Agora #641;
+an integer payload is no part of the enum's storage and stays readable).
+An enum a call handed
 over and nothing binds is given an owner for the rest of the scope
 (h233), and any other temporary — discarded, or read for a field that
 owns nothing — is dropped where it is left, when the call handed it over
@@ -2508,6 +2513,17 @@ caller's own copy; a payload that cannot be copied (a `% Drop` value) is
 refused there. An enum with no `% Drop` of its own that a binding owns
 on every path gives the payload up instead: it moves out, and the enum
 drops the rest.
+
+A payload of an enum with a `% Drop` of its own is a view of the enum
+wherever it goes, not only by name: a `:` binding of it, a literal or an
+option holding it, a value block and a call that lends its argument back
+hand the caller a copy too where the function drops the enum, and are
+refused there for a payload that cannot be copied (Agora #641; they went
+out as they were, and the caller read what the glue had released). A
+function that hands such a payload back out of a by-value parameter and
+hands that parameter to a `sink` on another path takes the parameter over
+(an inferred sink) and would drop what it lent: it is refused at module
+end; declare the parameter `sink`.
 
 A destructor that panics is not run again by the unwind: a value leaves
 the panic journal before its destructor runs, and while the destructor

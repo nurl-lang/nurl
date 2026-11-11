@@ -1,0 +1,15 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_enum_payload_read_after_handover.nu:42:13: error: 's' is the payload of 'e' this '??' arm matched, and 'e' was handed over at line 41: whoever holds it now releases it, the payload with it, so using 's' now may read freed memory. Use it before that line, or take a copy that owns its data first (string_from, mem_dup) and hand 'e' over after.
+            ( nurl_println ( string_data s ) )
+            ^
+compiler/tests/diag_enum_payload_read_after_handover.nu:53:13: error: 'y' is the payload of 'e' this '??' arm matched, and 'e' was handed over at line 52: whoever holds it now releases it, the payload with it, so using 'y' now may read freed memory. Use it before that line, or take a copy that owns its data first (string_from, mem_dup) and hand 'e' over after.
+            ( nurl_println ( string_data . y tag ) )
+            ^
+compiler/tests/diag_enum_payload_read_after_handover.nu:64:13: error: 's' is the payload of 'd' this '??' arm matched, and 'd' was handed over at line 63: whoever holds it now releases it, the payload with it, so using 's' now may read freed memory. Use it before that line, or take a copy that owns its data first (string_from, mem_dup) and hand 'd' over after.
+            ( nurl_println ( string_data s ) )
+            ^
+compiler/tests/diag_enum_payload_read_after_handover.nu:76:13: error: 's' is the payload of 'e' this '??' arm matched, and 'e' was handed over at line 75: whoever holds it now releases it, the payload with it, so using 's' now may read freed memory. Use it before that line, or take a copy that owns its data first (string_from, mem_dup) and hand 'e' over after.
+            ( nurl_println ( string_data s ) )
+            ^
+error: compilation aborted — 4 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)
