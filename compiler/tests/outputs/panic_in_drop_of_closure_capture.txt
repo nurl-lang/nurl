@@ -1,0 +1,24 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+fields_after: built
+drop cap
+fields_after: recovered: panic in drop cap
+alive_across: 43
+drop old
+alive_across: recovered: panic in drop old
+two_captures: 41
+drop first
+drop second
+two_captures: recovered: panic in drop first
+nested: 6
+drop inner
+nested: recovered: panic in drop inner
+boxed: 29
+drop dog
+boxed: recovered: panic in drop dog
+quiet: 6
+drop cap
+drop quiet
+quiet: no panic

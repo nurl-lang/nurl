@@ -2243,6 +2243,15 @@ journal** instead:
   the payloads) after the one being dropped are still dropped, in order
   and once each, if its destructor panics, and the box of a payload that
   lives in one is freed.
+- A closure's environment being released is recorded the same way: the
+  captures after the one being dropped, and the environment's block, are
+  still released if a capture's destructor panics; so is the box of a
+  trait object whose value's destructor panics. Whether releasing an
+  environment can start a panic at all is read off the program — it can
+  exactly when the drop method of one of the program's environments can
+  — so a binding or a field alive only across such a release keeps its
+  record where one may, and a program whose closures capture nothing
+  with a destructor of its own records nothing more than before.
 - A `Vec` releasing elements that may run a destructor is recorded too,
   as the elements still to go. An element's destructor that panics (in
   the `Vec`'s own drop, a `vec_truncate`, a `vec_clear` or a

@@ -1068,6 +1068,16 @@ field in a frame of its own) and Agora #632 for an enum (its glue takes
 the payload out to a frame of its own).
 Test: `compiler/tests/panic_in_drop_of_struct_field.nu`.
 
+A closure's environment is released the same way (Agora #645): its drop
+method registers the captures still to go, and the environment's block,
+before it releases a capture that may run a destructor, and a trait
+object's drop registers its box while the boxed value's destructor runs;
+the journal's elision takes the release of an environment for a call
+that may panic exactly when one of the module's drop methods may (Agora
+#650). That is the run Agora #609 gives the calculus: the closure's
+glue calls its drop method, each destructor capture in a frame of its
+own. Test: `compiler/tests/panic_in_drop_of_closure_capture.nu`.
+
 ## Trusted base
 
 Even when every phase is done, these remain trusted rather than proven
