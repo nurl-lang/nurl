@@ -5521,7 +5521,15 @@ unsafe @ __arg_lend_root i syms → s {
         {}
         ( mem_own_closure_ret_release syms ret_ident )
         ( mem_drop_closure_envs syms cg )
-        ( __dret_skip_add skip )
+        // (A slice handed back is the caller's on this path only: its
+        // storage's transferred flag, as for a string. Skipped by name —
+        // and the name is whatever the expression read last — the slice
+        // was released on no path at all once any `^` had read it: `^ (
+        // sum xs )` above the defer that keeps `xs`, agora #653.)
+        ? != 0 ( nurl_str_len skip ) {
+            : s __sk ( __slice_key syms skip )
+            ? == 37 ( nurl_str_get __sk 0 ) { ( __dret_xfer cg __sk ) } { ( __dret_skip_add skip ) }
+        } {}
         ( __dret_xfer cg skip_str_ptr )
         ( __dret_xfer cg skip_user_ptr )
         ( __dret_xfer cg skip_struct_ptr )
@@ -7238,7 +7246,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
     // caller gets its own value, and t is this frame's to drop.)
     : b ret_arg_alias | & ! ret_is_direct_call ! ret_is_det_join
     & != 0 ( nurl_sym_len syms `__last_value_borrow__` ) ! ret_call_copied
-    : s skip ? & & ( mem_is_slice_ty lt ) ( nurl_sym_has_word syms `__owned_slices__` ret_ident )
+    : s skip ? & & ( mem_is_slice_ty lt ) ( mem_slice_owned syms ret_ident )
     ret_arg_alias
     ret_ident
     ``
@@ -18606,7 +18614,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             { : s nf_ptr ( nurl_sym_get2 syms nf_id `__ptr` )
                 ? & != 0 ( nurl_str_len nf_ptr )
                 | | ( nurl_sym_has_word syms `__owned_strings__` nf_ptr )
-                ( nurl_sym_has_word syms `__owned_slices__` nf_id )
+                ( mem_slice_owned syms nf_id )
                 | & ( nurl_sym_has_word syms `__user_drops__` nf_ptr )
                 // A by-value parameter's drop is decided at module end (it
                 // may be a disposer that frees by hand — docs/MEMORY.md §7.6).
@@ -18899,7 +18907,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         : b __sink_bare & & ( str_has_index callee_sink arg_idx ) ( is_ident_tok bck_arg_tt ) ! __sink_plain_wrap
         ? & __sink_bare ! ? __sink_bare ( __plain_scalar_lty at ) F
         { : s sink_ptr ( nurl_sym_get2 syms bck_arg_val `__ptr` )
-            ? & ! ( __is_autodrop_enum at syms ) | ( nurl_sym_has_word syms `__owned_slices__` bck_arg_val )
+            ? & ! ( __is_autodrop_enum at syms ) | ( mem_slice_owned syms bck_arg_val )
             ( nurl_sym_has_word syms `__owned_struct_fields__` sink_ptr )
             { ( die lex ( nurl_str_cat3
                 `'` bck_arg_val
@@ -21002,7 +21010,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             = k + k 1
         }
         ? | ( str_contains_word old_structs ptr ) ( str_contains_word ssnap ptr )
-        {}
+        { ? ( str_contains_word old_structs ptr ) {} { ( mem_dkeep_mark ptr ) } }
         { = sdelta ? == 0 ( nurl_str_len sdelta ) ( nurl_str_cat rec `` ) ( nurl_str_cat3 sdelta ` ` rec ) }
     }
     ? & == 0 ( nurl_str_len udelta ) == 0 ( nurl_str_len sdelta )
@@ -25340,6 +25348,8 @@ unsafe @ gen_match i lex i syms i cg → s {
     // later `a` read the body's storage, written only when the defer runs:
     // uninitialised memory, a call through an unset closure (agora #636).
     // (What it binds still lives to the function's cleanup, below.)
+    : s __db_strs ( nurl_sym_get syms `__owned_strings__` )
+    : s __db_structs ( nurl_sym_get syms `__owned_struct_fields__` )
     : s __db_user ( nurl_sym_get syms `__user_drops__` )
     : s __db_slices ? != 0 g_fn_slice_decls ( nurl_sym_get syms `__slice_decls__` ) ``
     ( nurl_sym_push syms )
@@ -25381,8 +25391,10 @@ unsafe @ gen_match i lex i syms i cg → s {
     // releases nothing).
     ( __defer_snap_take syms cg )
     ? & == g_did_ret 0 != 0 g_auto_drop_strings {
+        ( mem_drop_new_strings syms cg __db_strs )
+        ( mem_drop_new_struct_fields syms cg __db_structs )
         ( mem_drop_new_user_drops syms cg __db_user )
-        ? != 0 g_fn_slice_decls { ( mem_dkeep_slices syms cg __db_slices ) } {}
+        ? != 0 g_fn_slice_decls { ( mem_drop_new_slices syms cg __db_slices ) } {}
     } {}
     ( nurl_sym_pop syms )
     ( nurl_sym_set g_fn_escapes `__in_defer_body__` old_df_body )
@@ -26271,13 +26283,38 @@ unsafe @ __bck_fall_ret_record i lex i syms i first_tt s first_val i sxn0 i line
 //   __last_ident_name__  — name of the last identifier load (set by gen_ident)
 // Lifecycle: init empty at fn entry; drop at each return path.
 
-// Append `name` to the current scope's owned-slices list.
+// The owned-slice lists' word for the binding `name`: its storage (the
+// alloca register), else its name. A register is one per binding, so an
+// inner scope's slice named like an outer one is an entry of its own, and
+// a drain needs no name to release it — by name the inner one was taken
+// for the outer and released by nobody, and a slice a `;` defer kept back
+// in a scope that had ended was not found at all (agora #653; closures
+// went the same way in #614).
+@ __slice_key i syms s name → s {
+    : s p ( nurl_sym_get2 syms name `__ptr` )
+    ? & != 0 ( nurl_str_len p ) == 37 ( nurl_str_get p 0 ) { ^ ( nurl_str_cat p `` ) } {}
+    ^ ( nurl_str_cat name `` )
+}
+
+// Does the binding `name` own a slice buffer here?
+@ mem_slice_owned i syms s name → b {
+    ? == 0 ( nurl_sym_len syms `__owned_slices__` ) { ^ F } {}
+    ^ ( nurl_sym_has_word syms `__owned_slices__` ( __slice_key syms name ) )
+}
+
+// Append `name` to the current scope's owned-slices list (with what a
+// drain needs to release it by its storage alone: its type, its name).
 @ mem_own_add i syms s name → v {
+    : s key ( __slice_key syms name )
+    ( nurl_sym_def g_fn_escapes ( nurl_str_cat key `__slt` ) ( nurl_sym_get syms name ) )
+    ( nurl_sym_def g_fn_escapes ( nurl_str_cat key `__sln` ) name )
     : s cur ( nurl_sym_get syms `__owned_slices__` )
-    : s new ? == 0 ( nurl_str_len cur )
-    ( nurl_str_cat name `` )
-    ( nurl_str_cat3 cur ` ` name )
-    ( nurl_sym_def syms `__owned_slices__` new )
+    ? ( str_contains_word cur key ) { ^ v } {}
+    ? == 0 ( nurl_str_len cur ) {
+        ( nurl_sym_def syms `__owned_slices__` key )
+    } {
+        ( nurl_sym_def syms `__owned_slices__` ( nurl_str_cat3 cur ` ` key ) )
+    }
 }
 
 // True if `t` looks like a slice struct "{ T*, i64 }".
@@ -26294,17 +26331,22 @@ unsafe @ __bck_fall_ret_record i lex i syms i first_tt s first_val i sxn0 i line
 // during the arm itself may be dropped there.
 @ mem_slice_decl_add i syms s name → v {
     = g_fn_slice_decls 1
+    : s key ( __slice_key syms name )
     : s cur ( nurl_sym_get syms `__slice_decls__` )
-    ( nurl_sym_def syms `__slice_decls__`
-    ? == 0 ( nurl_str_len cur ) ( nurl_str_cat name `` ) ( nurl_str_cat3 cur ` ` name ) )
+    ? == 0 ( nurl_str_len cur ) {
+        ( nurl_sym_def syms `__slice_decls__` key )
+    } {
+        ( nurl_sym_def syms `__slice_decls__` ( nurl_str_cat3 cur ` ` key ) )
+    }
 }
 
 // Un-register `name` as an owned slice (both sidebands mem_own_add /
 // mem_slice_decl_add populate). Used when `= dst src` MOVES src's slice into
 // dst: src must no longer free the buffer, or dst and src would both free it
 // (a double-free). Mirrors mem_own_closure_remove for the closure-env list.
-@ mem_own_slice_remove i syms s name → v {
-    ? == 0 ( nurl_str_len name ) { ^ } {}
+@ mem_own_slice_remove i syms s bname → v {
+    ? == 0 ( nurl_str_len bname ) { ^ } {}
+    : s name ( __slice_key syms bname )
     : ~ i li 0
     ~ < li 2 {
         : s key ? == li 0 `__owned_slices__` `__slice_decls__`
@@ -26332,7 +26374,7 @@ unsafe @ __bck_fall_ret_record i lex i syms i first_tt s first_val i sxn0 i line
 // body ended, and both names freed the buffer (agora #634).
 @ __slice_asn_moves i syms i rhs_tt s src s dest s vt → b {
     ? | | ! ( is_ident_tok rhs_tt ) ! ( mem_is_slice_ty vt ) ( seq src dest ) { ^ F } {}
-    ? | ! ( nurl_sym_has_word syms `__owned_slices__` dest ) ! ( nurl_sym_has_word syms `__owned_slices__` src ) { ^ F } {}
+    ? | ! ( mem_slice_owned syms dest ) ! ( mem_slice_owned syms src ) { ^ F } {}
     ^ != 0 ( nurl_sym_len2 syms src `__ptr` )
 }
 
@@ -26342,6 +26384,12 @@ unsafe @ __bck_fall_ret_record i lex i syms i first_tt s first_val i sxn0 i line
 // resolves a shadowing declaration to the arm's own alloca.
 @ mem_emit_slice_free i syms i cg s name → v {
     ( mem_emit_slice_free_at cg ( nurl_sym_get syms name ) ( nurl_sym_get2 syms name `__ptr` ) )
+}
+
+// …of what one word of the owned-slice lists stands for (__slice_key).
+@ mem_emit_slice_free_key i syms i cg s key → v {
+    ? == 37 ( nurl_str_get key 0 ) { ( mem_emit_slice_free_at cg ( nurl_sym_get2 g_fn_escapes key `__slt` ) key ) }
+    { ( mem_emit_slice_free syms cg key ) }
 }
 
 // …of the slice of type `ty` stored at `ptr`.
@@ -26373,6 +26421,14 @@ unsafe @ __bck_fall_ret_record i lex i syms i first_tt s first_val i sxn0 i line
     {}
     ( mem_emit_slice_elems_drop cg ( nurl_str_slice tptr 0 - ( nurl_str_len tptr ) 1 ) ( nurl_llty ty ) v raw )
     ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print raw ) ( nurl_print `)` ) ( emit_dbg_eol )
+    // (Inside a loop the slot is emptied: a `break` or `continue` written
+    // above a `;` defer of the body releases the round's slice itself, and
+    // fn_cleanup — to which an earlier round's end left the slot — releases
+    // the slot again. An empty slice is released as nothing. Agora #653.)
+    ? != 0 g_loop_nest {
+        ( nurl_print `  store ` ) ( nurl_print ( nurl_llty ty ) ) ( nurl_print ` zeroinitializer, ` ) ( nurl_print ( nurl_llty ty ) )
+        ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+    } {}
 }
 
 // Whether an owned slice owns its elements as well as its buffer: an
@@ -26526,13 +26582,17 @@ unsafe @ __bck_fall_ret_record i lex i syms i first_tt s first_val i sxn0 i line
 // mutually exclusive at runtime.
 @ mem_drop_owned i syms i cg s skip_name → v {
     : s snap ( nurl_sym_get g_fn_escapes `__dsnap_slice__` )
+    : ~ s skipk ``
+    ? != 0 ( nurl_str_len skip_name ) { = skipk ( __slice_key syms skip_name ) } {}
     : ~ s rest ( nurl_sym_get syms `__owned_slices__` )
     ~ != 0 ( nurl_str_len rest ) {
-        : s name ( str_first_word rest )
+        : s key ( str_first_word rest )
         = rest ( str_skip_word rest )
-        ? | ( seq name skip_name ) ( str_contains_word snap name )
-        {}
-        { ( mem_emit_slice_free syms cg name ) }
+        ? ( seq key skipk ) {} {
+            // (Kept back by a defer: the cleanup's, from here — mem_dkeep_mark.)
+            ? ( str_contains_word snap key ) { ( mem_dkeep_mark key ) }
+            { ( mem_emit_slice_free_key syms cg key ) }
+        }
     }
 }
 
@@ -26596,7 +26656,7 @@ unsafe @ __bck_fall_ret_record i lex i syms i first_tt s first_val i sxn0 i line
             ( nurl_print ` = load i8*, i8** ` ) ( nurl_print ( mem_guard_drop_slot syms ptr ) ) ( nurl_print `\n` )
             ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print v ) ( nurl_print `)` ) ( emit_dbg_eol )
         }
-        {}
+        { ? ( seq ptr skip_ptr ) {} { ( mem_dkeep_mark ptr ) } }
     }
 }
 
@@ -26927,7 +26987,7 @@ unsafe @ mem_path_to_indices s path → s {
         // returned copy's field pointers (use-after-free).
         ? | & != 0 ( nurl_str_len skip_ptr ) ( seq ptr skip_ptr )
         ( str_contains_word snap ptr )
-        {}
+        { ? & != 0 ( nurl_str_len skip_ptr ) ( seq ptr skip_ptr ) {} { ( mem_dkeep_mark ptr ) } }
         { ( mem_emit_struct_field_drop syms cg ptr sname path kind leaf_sname leaf_idx ) }
     }
 }
@@ -27122,34 +27182,6 @@ unsafe @ mem_path_to_indices s path → s {
     ^ lskip
 }
 
-// The slices a defer body declared and still owns at its end (`old_decls`:
-// the declarations before the body), kept for fn_cleanup by their storage:
-// the owned-slice list is by name, and the body's names end with it, so
-// the cleanup's by-name walk no longer finds them. Each gets the "left to
-// the cleanup" flag, set here — where the body has run.
-@ mem_dkeep_slices i syms i cg s old_decls → v {
-    : s owned ( nurl_sym_get syms `__owned_slices__` )
-    : ~ s rest ( nurl_sym_get syms `__slice_decls__` )
-    ~ != 0 ( nurl_str_len rest ) {
-        : s name ( str_first_word rest )
-        = rest ( str_skip_word rest )
-        : s ptr ( nurl_sym_get2 syms name `__ptr` )
-        ? | | ( str_contains_word old_decls name ) ! ( str_contains_word owned name ) == 0 ( nurl_str_len ptr ) {} {
-            : s cur ( nurl_sym_get g_fn_escapes `__dsnap_slice_kept__` )
-            ? ( str_contains_word cur ptr ) {} {
-                ( nurl_sym_def g_fn_escapes ( nurl_str_cat ptr `__slt` ) ( nurl_sym_get syms name ) )
-                ? == 0 ( nurl_str_len cur ) {
-                    ( nurl_sym_set g_fn_escapes `__dsnap_slice_kept__` ptr )
-                } {
-                    ( nurl_sym_set g_fn_escapes `__dsnap_slice_kept__` ( nurl_str_cat3 cur ` ` ptr ) )
-                }
-                ( __dkeep_new cg ptr )
-            }
-            ( mem_dkeep_mark ptr )
-        }
-    }
-}
-
 // Union `src_key`'s records (recsz words each, keyed by word 0) into
 // the fn-lifetime snapshot list `dst_key`.
 @ __dsnap_union i syms s src_key s dst_key i recsz → v {
@@ -27165,7 +27197,16 @@ unsafe @ mem_path_to_indices s path → s {
             = k + k 1
         }
         : s cur ( nurl_sym_get g_fn_escapes dst_key )
-        ? ( str_contains_word cur key )
+        // (A struct's owned fields are one record each under one storage:
+        // told apart by the whole record, where the storage alone kept the
+        // first field's and the cleanup released no other — agora #653.)
+        : ~ b __seen ( str_contains_word cur key )
+        ? > recsz 2 {
+            : s __hay ( nurl_str_cat3 ` ` cur ` ` )
+            : s __ndl ( nurl_str_cat3 ` ` rec ` ` )
+            = __seen >= ( nurl_str_find __hay __ndl ) 0
+        } {}
+        ? __seen
         {}
         { ( nurl_sym_set g_fn_escapes dst_key
             ? == 0 ( nurl_str_len cur ) rec ( nurl_str_cat3 cur ` ` rec ) ) }
@@ -27187,11 +27228,26 @@ unsafe @ mem_path_to_indices s path → s {
     ( __dsnap_union syms `__owned_strings__` `__dsnap_str__` 1 )
     ( __dsnap_union syms `__owned_struct_fields__` `__dsnap_sfield__` 6 )
     ( __dsnap_union syms `__user_drops__` `__dsnap_udrop__` 2 )
-    // (…each with its "left to the cleanup" flag, above.)
+    // (…each with its "left to the cleanup" flag, above: a value with a
+    // destructor, a raw string, a struct's owned fields — and a slice,
+    // below. Without one, a raw string or a struct of slices released at a
+    // `^` between its binding and the `;` was released again by the
+    // cleanup: agora #653.)
     : ~ s __dk_rest ( nurl_sym_get syms `__user_drops__` )
     ~ != 0 ( nurl_str_len __dk_rest ) {
         ( __dkeep_new cg ( str_first_word __dk_rest ) )
         = __dk_rest ( str_skip_word ( str_skip_word __dk_rest ) )
+    }
+    = __dk_rest ( nurl_sym_get syms `__owned_strings__` )
+    ~ != 0 ( nurl_str_len __dk_rest ) {
+        ( __dkeep_new cg ( str_first_word __dk_rest ) )
+        = __dk_rest ( str_skip_word __dk_rest )
+    }
+    = __dk_rest ( nurl_sym_get syms `__owned_struct_fields__` )
+    ~ != 0 ( nurl_str_len __dk_rest ) {
+        ( __dkeep_new cg ( str_first_word __dk_rest ) )
+        : ~ i __dk_k 0
+        ~ < __dk_k 6 { = __dk_rest ( str_skip_word __dk_rest ) = __dk_k + __dk_k 1 }
     }
     // (…with each owner's drop flag, by name: fn_cleanup reclaims it where
     // the scope that named the flag — an arm the defer sat in — is gone,
@@ -27209,6 +27265,12 @@ unsafe @ mem_path_to_indices s path → s {
     ( nurl_sym_set g_fn_escapes `__dsnap_live__` __dl_acc )
     ( __dsnap_union syms `__owned_closure_envs__` `__dsnap_cenv__` 1 )
     ( __dsnap_union syms `__owned_slices__` `__dsnap_slice__` 1 )
+    = __dk_rest ( nurl_sym_get syms `__owned_slices__` )
+    ~ != 0 ( nurl_str_len __dk_rest ) {
+        : s __dk_w ( str_first_word __dk_rest )
+        = __dk_rest ( str_skip_word __dk_rest )
+        ? == 37 ( nurl_str_get __dk_w 0 ) { ( __dkeep_new cg __dk_w ) } {}
+    }
 }
 
 // Record a returned binding/alloca so fn_cleanup does not reclaim what
@@ -27288,12 +27350,12 @@ unsafe @ mem_path_to_indices s path → s {
 }
 
 // fn_cleanup: reclaim every snapshot entry the defer chain may have
-// referenced, minus return-transferred ones. Alloca-keyed kinds
-// (strings / struct fields / user drops) are safe for inner-scope
-// registrations too (allocas are function-scoped); name-keyed kinds
-// (closure envs / slices) are dropped only while still visible in the
-// top-level ownership list — an inner-scope one leaks rather than
-// resolving the name to the wrong binding.
+// referenced, minus return-transferred ones — each under its "left to the
+// cleanup" flag (mem_dkeep_mark). Every kind is keyed by storage (an
+// alloca, a closure's owner slot: function-scoped), so an inner-scope
+// registration is reclaimed too; a closure or a slice with no storage of
+// its own is still listed by name, and dropped only while that name is in
+// the top-level ownership list.
 @ mem_cleanup_snap_drops i syms i cg → v {
     : s skips ( nurl_sym_get g_fn_escapes `__dret_skips__` )
     : ~ s rest ( nurl_sym_get g_fn_escapes `__dsnap_str__` )
@@ -27303,11 +27365,13 @@ unsafe @ mem_path_to_indices s path → s {
         ? ( str_contains_word skips ptr )
         {}
         { : s gk ( __dret_guard_open cg ptr )
+            : s kk ( __dkeep_guard_open cg ptr )
             : s v ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print v )
             ( nurl_print ` = load i8*, i8** ` ) ( nurl_print ( mem_guard_drop_slot syms ptr ) ) ( nurl_print `\n` )
             ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print v ) ( nurl_print `)` ) ( emit_dbg_eol )
             ( nurl_print `  store i8* null, i8** ` ) ( nurl_print ( mem_guard_drop_slot syms ptr ) ) ( emit_dbg_eol )
+            ( __dret_guard_close kk )
             ( __dret_guard_close gk )
         }
     }
@@ -27322,7 +27386,9 @@ unsafe @ mem_path_to_indices s path → s {
         ? ( str_contains_word skips ptr )
         {}
         { : s gk ( __dret_guard_open cg ptr )
+            : s kk ( __dkeep_guard_open cg ptr )
             ( mem_emit_struct_field_drop syms cg ptr sname path kind leaf_sname leaf_idx )
+            ( __dret_guard_close kk )
             ( __dret_guard_close gk ) }
     }
     = rest ( nurl_sym_get g_fn_escapes `__dsnap_udrop__` )
@@ -27354,21 +27420,23 @@ unsafe @ mem_path_to_indices s path → s {
         {}
         { ( mem_emit_cenv_drop_key syms cg name T ) }
     }
+    // (A slice is listed by its storage and released under its "left to
+    // the cleanup" flag, which a drain sets while the slice is still owned
+    // — so neither its name nor its scope has to be here still. One listed
+    // by name, with no storage of its own, as before.)
     = rest ( nurl_sym_get g_fn_escapes `__dsnap_slice__` )
     : s slcs ( nurl_sym_get syms `__owned_slices__` )
     ~ != 0 ( nurl_str_len rest ) {
-        : s name ( str_first_word rest ) = rest ( str_skip_word rest )
-        ? | ( str_contains_word skips name ) ! ( str_contains_word slcs name )
-        {}
-        { ( mem_emit_slice_free syms cg name ) }
-    }
-    // (…and a defer body's own slices, by their storage: mem_dkeep_slices.)
-    = rest ( nurl_sym_get g_fn_escapes `__dsnap_slice_kept__` )
-    ~ != 0 ( nurl_str_len rest ) {
-        : s ptr ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s kk ( __dkeep_guard_open cg ptr )
-        ( mem_emit_slice_free_at cg ( nurl_sym_get2 g_fn_escapes ptr `__slt` ) ptr )
-        ( __dret_guard_close kk )
+        : s key ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? == 37 ( nurl_str_get key 0 ) {
+            : s gk ( __dret_guard_open cg key )
+            : s kk ( __dkeep_guard_open cg key )
+            ( mem_emit_slice_free_at cg ( nurl_sym_get2 g_fn_escapes key `__slt` ) key )
+            ( __dret_guard_close kk )
+            ( __dret_guard_close gk )
+        } {
+            ? | ( str_contains_word skips key ) ! ( str_contains_word slcs key ) {} { ( mem_emit_slice_free syms cg key ) }
+        }
     }
 }
 
@@ -27378,17 +27446,20 @@ unsafe @ mem_path_to_indices s path → s {
     ~ != 0 ( nurl_str_len rest ) {
         : s ptr ( str_first_word rest )
         = rest ( str_skip_word rest )
-        ? | ( str_contains_word old_list ptr ) ( str_contains_word snap ptr )
-        {}
-        { : s v ( nurl_cg_reg cg )
-            ( nurl_print `  ` ) ( nurl_print v )
-            ( nurl_print ` = load i8*, i8** ` ) ( nurl_print ( mem_guard_drop_slot syms ptr ) ) ( nurl_print `\n` )
-            ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print v ) ( nurl_print `)` ) ( emit_dbg_eol )
-            // Null the slot after freeing: a loop-body re-entry
-            // re-executes the binding's registration-time free-old
-            // (gen_let), which must see NULL, not this dangling
-            // pointer.
-            ( nurl_print `  store i8* null, i8** ` ) ( nurl_print ( mem_guard_drop_slot syms ptr ) ) ( emit_dbg_eol )
+        // (One walk of each list per entry: what the scope did not bind is
+        // not looked up in the snapshot at all.)
+        ? ( str_contains_word old_list ptr ) {} {
+            ? ( str_contains_word snap ptr ) { ( mem_dkeep_mark ptr ) }
+            { : s v ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print v )
+                ( nurl_print ` = load i8*, i8** ` ) ( nurl_print ( mem_guard_drop_slot syms ptr ) ) ( nurl_print `\n` )
+                ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print v ) ( nurl_print `)` ) ( emit_dbg_eol )
+                // Null the slot after freeing: a loop-body re-entry
+                // re-executes the binding's registration-time free-old
+                // (gen_let), which must see NULL, not this dangling
+                // pointer.
+                ( nurl_print `  store i8* null, i8** ` ) ( nurl_print ( mem_guard_drop_slot syms ptr ) ) ( emit_dbg_eol )
+            }
         }
     }
 }
@@ -27406,9 +27477,10 @@ unsafe @ mem_path_to_indices s path → s {
         // A binding's several owned fields share one alloca ptr and
         // are registered together, so ptr-membership decides for
         // the whole group consistently.
-        ? | ( str_contains_word old_list ptr ) ( str_contains_word snap ptr )
-        {}
-        { ( mem_emit_struct_field_drop syms cg ptr sname path kind leaf_sname leaf_idx ) }
+        ? ( str_contains_word old_list ptr ) {} {
+            ? ( str_contains_word snap ptr ) { ( mem_dkeep_mark ptr ) }
+            { ( mem_emit_struct_field_drop syms cg ptr sname path kind leaf_sname leaf_idx ) }
+        }
     }
 }
 
@@ -27419,21 +27491,21 @@ unsafe @ mem_path_to_indices s path → s {
 // Driven by the `__slice_decls__` delta, NOT the ownership list: an
 // `= outer [ … ]` inside the arm registers an OUTER binding in the
 // arm's ownership shadow, and freeing that here would be a UAF — only
-// arm-DECLARED names are candidates, and each must still be word-in
-// the current ownership list. Names (unlike alloca registers) are not
-// unique, so an arm-local shadow of an outer slice-declaring name is
-// skipped (a leak, never a double free).
+// arm-DECLARED bindings are candidates, and each must still be word-in
+// the current ownership list. (The lists hold each binding's storage,
+// __slice_key: an arm's slice named like an outer one is its own entry.)
+// One a `;` defer keeps back is left to the function's cleanup.
 @ mem_drop_new_slices i syms i cg s old_decls → v {
     : s snap ( nurl_sym_get g_fn_escapes `__dsnap_slice__` )
     : s owned ( nurl_sym_get syms `__owned_slices__` )
     : ~ s rest ( nurl_sym_get syms `__slice_decls__` )
     ~ != 0 ( nurl_str_len rest ) {
-        : s name ( str_first_word rest )
+        : s key ( str_first_word rest )
         = rest ( str_skip_word rest )
-        ? | | ( str_contains_word old_decls name ) ( str_contains_word snap name )
-        ! ( str_contains_word owned name )
-        {}
-        { ( mem_emit_slice_free syms cg name ) }
+        ? | ( str_contains_word old_decls key ) ! ( str_contains_word owned key ) {} {
+            ? ( str_contains_word snap key ) { ( mem_dkeep_mark key ) }
+            { ( mem_emit_slice_free_key syms cg key ) }
+        }
     }
 }
 
@@ -31439,17 +31511,17 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
     ~ != 0 ( nurl_str_len rest ) {
         : s ptr ( str_first_word rest ) = rest ( str_skip_word rest )
         : s vt ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s impl_key ( nurl_str_cat `drop##` vt )
-        : s impl_mangle_key ( nurl_sym_get g_impl_name_syms impl_key )
-        ? | | ( str_contains_word old_list ptr ) ( str_contains_word snap ptr )
-        == 0 ( nurl_str_len impl_mangle_key )
-        { ? ( str_contains_word old_list ptr ) {} { ( mem_dkeep_mark ptr ) } }
-        {  // Forget the value's journal entry before its destructor runs,
-            // so neither a later panic in this function nor one inside the
-            // destructor itself replays it.
-            ( __jpb_putback syms cg ptr old_list )
-            ( mem_journal_forget_userdrop cg ptr vt )
-            ( mem_emit_gated_drop syms cg ptr vt )
+        ? ( str_contains_word old_list ptr ) {} {
+            ? ( str_contains_word snap ptr ) { ( mem_dkeep_mark ptr ) } {
+                ? == 0 ( nurl_sym_len2 g_impl_name_syms `drop##` vt ) {} {
+                    // Forget the value's journal entry before its destructor
+                    // runs, so neither a later panic in this function nor one
+                    // inside the destructor itself replays it.
+                    ( __jpb_putback syms cg ptr old_list )
+                    ( mem_journal_forget_userdrop cg ptr vt )
+                    ( mem_emit_gated_drop syms cg ptr vt )
+                }
+            }
         }
     }
 }
@@ -47851,6 +47923,18 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             ( mem_slice_decl_add syms name )
             ( mem_journal_push_slice cg vt ptr ) }
         {}
+        // (A value block whose tail is a slice the block bound: the new
+        // binding takes the buffer over from it, as `= dst src` does. Both
+        // listed, the block's binding released the buffer the new one was
+        // handed back with — agora #653, #664.)
+        ? & & == bck_rhs_tt TT_LBRACE ( mem_is_slice_ty vt ) != 0 ( nurl_sym_len syms `__tail_name__` ) {
+            : s __stn ( nurl_sym_get syms `__tail_name__` )
+            ? & & ! ( seq __stn name ) ( seq ( nurl_sym_get syms `__tail_ptr__` ) ( nurl_sym_get2 syms __stn `__ptr` ) ) ( mem_slice_owned syms __stn ) {
+                ( mem_own_slice_remove syms __stn )
+                ( mem_own_add syms name )
+                ( mem_slice_decl_add syms name )
+            } {}
+        } {}
         // Dangling-borrow tracking (see the annotated path below).
         : s __bsrc2 ( nurl_sym_get syms `__last_borrow_src__` )
         ? & & == bck_rhs_tt TT_LPAREN != 0 ( nurl_str_len __bsrc2 ) ( is_ptr_ty vt ) {
@@ -48255,6 +48339,16 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
                 ( mem_slice_decl_add syms name )
                 ( mem_journal_push_slice cg ptype ptr ) }
             {}
+            // (…and a value block whose tail is a slice the block bound:
+            // the new binding takes the buffer over, as above.)
+            ? & & == bck_rhs_tt TT_LBRACE ( mem_is_slice_ty ptype ) != 0 ( nurl_sym_len syms `__tail_name__` ) {
+                : s __stn ( nurl_sym_get syms `__tail_name__` )
+                ? & & ! ( seq __stn name ) ( seq ( nurl_sym_get syms `__tail_ptr__` ) ( nurl_sym_get2 syms __stn `__ptr` ) ) ( mem_slice_owned syms __stn ) {
+                    ( mem_own_slice_remove syms __stn )
+                    ( mem_own_add syms name )
+                    ( mem_slice_decl_add syms name )
+                } {}
+            } {}
             // Dangling-borrow tracking: `: *T p ( vec_data … v )` binds a
             // pointer INTO v's buffer. Remember where it came from so a
             // later push on v can invalidate it.
@@ -48431,7 +48525,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // Slice dual: LHS is a tracked owned-slice binding (keyed by
         // NAME — Phase 1 protocol) being overwritten.
         : b lhs_is_owned_slc & ( mem_is_slice_ty vt )
-        ( nurl_sym_has_word syms `__owned_slices__` name )
+        ( mem_slice_owned syms name )
         ? | lhs_is_owned_str lhs_is_owned_slc { ( nurl_sym_def syms `__last_call_ret_owned__` `` ) ( nurl_sym_def syms `__last_slice_owned__` `` ) } {}
         // Escape analysis: snapshot the RHS's
         // first token (a bare identifier may copy a stack reference)
@@ -48832,7 +48926,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // A different binding that owns its own buffer (`= ys zs`) cannot
         // alias the old one either: that move frees it too.
         : b rhs_other_owner & & ( is_ident_tok bck_rhs_tt ) ! ( seq bck_rhs_val name )
-        ( nurl_sym_has_word syms `__owned_slices__` bck_rhs_val )
+        ( mem_slice_owned syms bck_rhs_val )
         ? & lhs_is_owned_slc
         | | | == bck_rhs_tt TT_LBRACK
         ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `1` )
@@ -49055,7 +49149,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         { ( nurl_print `  store ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print ` zeroinitializer, ` ) ( nurl_print ( nurl_llty vt ) )
             ( nurl_print `* ` ) ( nurl_print ( nurl_sym_get2 syms bck_rhs_val `__ptr` ) ) ( nurl_print `\n` ) }
         { ? & & lhs_is_owned_slc ( is_ident_tok bck_rhs_tt )
-            ( nurl_sym_has_word syms `__owned_slices__` bck_rhs_val )
+            ( mem_slice_owned syms bck_rhs_val )
             { ( mem_own_slice_remove syms bck_rhs_val ) }
             {} }
         // Widen i1 short-circuit / comparison results to the LHS's
@@ -51644,7 +51738,7 @@ unsafe @ gen_cast i lex i syms i cg → s {
             //     ( string_from "..." )` style.
             : s src_ptr ( nurl_sym_get2 syms src_id `__ptr` )
             : b owned_slc
-            ( nurl_sym_has_word syms `__owned_slices__` src_id )
+            ( mem_slice_owned syms src_id )
             : b owned_str & != 0 ( nurl_str_len src_ptr )
             ( nurl_sym_has_word syms `__owned_strings__` src_ptr )
             : b owned_sf & != 0 ( nurl_str_len src_ptr )
@@ -57182,7 +57276,7 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
             // binding itself when the binding owns that memory (a string it
             // releases).
             ? & != 0 __sx_me | == ( bck_bind_class __cap_ll ) 2 ( __is_closure_ty __cap_ll ) {
-                : b __cap_own | ( nurl_sym_has_word syms `__owned_strings__` ( nurl_sym_get2 syms __cap_w `__ptr` ) ) ( nurl_sym_has_word syms `__owned_slices__` __cap_w )
+                : b __cap_own | ( nurl_sym_has_word syms `__owned_strings__` ( nurl_sym_get2 syms __cap_w `__ptr` ) ) ( mem_slice_owned syms __cap_w )
                 = __cap_sx ( __sx_join __cap_sx ? __cap_own ( nurl_str_cat3 `\\(` __cap_w `)` ) ( nurl_str_cat __cap_w `` ) )
             } {}
             // (One the env owns is no longer the frame's: running the
@@ -65128,7 +65222,6 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     ( nurl_sym_set g_fn_escapes `__dsnap_udrop__` `` )
     ( nurl_sym_set g_fn_escapes `__dsnap_live__` `` )
     ( nurl_sym_set g_fn_escapes `__dsnap_keep__` `` )
-    ( nurl_sym_set g_fn_escapes `__dsnap_slice_kept__` `` )
     ( nurl_sym_set g_fn_escapes `__dsnap_cenv__` `` )
     ( nurl_sym_set g_fn_escapes `__dsnap_slice__` `` )
     ( nurl_sym_set g_fn_escapes `__dret_flags__` `` )
@@ -65762,7 +65855,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
             ? != 0 ( nurl_str_len tro ) { ( mem_store_hown syms tro ) } {}
         } {}
     } {}
-    : s skip ? & ( mem_is_slice_ty ret_ty ) ( nurl_sym_has_word syms `__owned_slices__` ret_ident )
+    : s skip ? & ( mem_is_slice_ty ret_ty ) ( mem_slice_owned syms ret_ident )
     ret_ident
     ``
     // Phase 2B: compute skip_str_ptr — the alloca ptr of the owned string
