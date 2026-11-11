@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_type_named_as_import_alias.nu:7:5: error: an enum's name 'geo' is also the alias of an import ('$ <path> geo'), and the two cannot share it: behind the alias the module's 'Point' is spelled 'geo__Point', which is how the compiler spells a type made from one named 'geo' — so that module's types would be read as this one's. Rename the type, or import the module under another alias.
+: | geo {
+    ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

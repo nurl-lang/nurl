@@ -224,6 +224,16 @@ FFI declarations (`& "lib" @ name …`) and trait/impl methods are
 intentionally **not** renamed — FFI symbols resolve at the linker by
 literal C-ABI name, and trait dispatch is mangled by impl-target type.
 
+The alias stands before each of the module's names with `__` between, and
+ends where that `__` starts, so it is held to what keeps the spelling
+readable one way: an alias holds no `__` and does not end in `_`
+(`geo` and `my_geo` are fine; `my__geo` and `geo_` are refused where they
+are written), and it is not the name of a type or trait the program
+declares — behind `` $ `bag.nu` Arc `` the module's `Bag` would be
+`Arc__Bag`, the spelling of the generic instance `( Arc Bag )` (§4.8). A
+type declared after the import may not take the alias's name either; the
+pair is reported once, at whichever comes second.
+
 For an executable, NURL source functions have LLVM linkage names in the
 reserved `__nurl_fn.` namespace. This prevents a source function such as
 `open` from replacing libc's `open`; source lookup, visibility and debug
@@ -718,10 +728,14 @@ unsafe @ model_drop → v { = g_model @ ?Model { F } }
 A global **set at start** holds program-wide state that safe code reads
 from any thread. Its initialiser is a function of no arguments in
 parentheses, run once before `main` (and before any thread exists); its
-type must synchronise itself — `( Locked T )`, `( Arc T )`,
-`( Channel T )`, `Mutex`, `Cond` or `Semaphore` — and nothing assigns it
-afterwards. A read borrows the handle; binding it, storing it or returning
-it clones the handle, so the global itself is never moved or dropped.
+type must synchronise itself — the standard library's `( Locked T )`,
+`( Arc T )`, `( Channel T )`, `Mutex`, `Cond` or `Semaphore` — and nothing
+assigns it afterwards. Every thread reads the one value, so what it holds
+is held to what a thread may share: the value of a `Locked` or a `Channel`
+is Send, the payload of an `Arc` is Sync (`( Locked ( Rc i ) )` is
+refused, with what the type reaches). A read borrows the handle; binding
+it, storing it or returning it clones the handle, so the global itself is
+never moved or dropped.
 
 <!-- doctest-prelude
 $ `stdlib/core/vec.nu`
@@ -1384,6 +1398,21 @@ copy:
 ( id [i] 42 )       // → @id__i64
 ( id [s] `hi` )     // → @id__i8ptr
 ```
+
+**A declared type's name holds no `__` past its leading underscores, and
+does not end in `_`.** An instance of a generic type is spelled with its
+type arguments after `__` — `( Arc Bag )` is `Arc__Bag`, `( Vec i )` is
+`Vec__i64` — and every rule that asks what a type is (which generic it was
+made from, which library handle it is, what its fields are) reads the
+declared name, whole, up to that separator. The spelling is the
+compiler's: a struct, enum or trait declared as `Arc__Bag` is refused
+where it stands, with the rename (`Arc_Bag`, `ArcBag`), and so is one
+declared as `Holder_`, whose last `_` would run into the separator
+(`( Holder_ i )` would be spelled `Holder___i64`, a `Holder` of `_i64`).
+`_private`
+and `__internal` are names of a program's own — the leading underscores
+are part of the name — and a module's declarations imported under an
+alias (`geo__Point`, §3.2) are judged by the part after the alias.
 
 **Do not name a type parameter `T` or `F` if its body uses that boolean
 literal.** Monomorphisation substitutes the parameter through the body by

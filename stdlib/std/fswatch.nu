@@ -31,7 +31,7 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/posix.nu`  // read / close
 $ `stdlib/core/vec.nu`
-$ `stdlib/std/arc.nu`
+$ `stdlib/core/rcbox.nu`
 
 & `c` @ inotify_init1 i32 flags → i32
 
@@ -79,7 +79,10 @@ $ `stdlib/std/arc.nu`
 //   pos — read cursor into buf
 // The inotify descriptor, the event buffer and the read cursor. A watcher
 // is a handle: every copy is the same watcher, and the last owner closes
-// the descriptor (if fswatch_close has not) and releases the buffer.
+// the descriptor (if fswatch_close has not) and releases the buffer. The
+// state sits in an rcbox (stdlib/core/rcbox.nu), reached by the functions
+// here alone: a read refills the buffer in place, which an `Arc`'s
+// payload — lent to any caller by `arc_get` — is not to be.
 : FsWatchImpl { i fd ( Vec u ) buf i lim i pos }
 
 % Drop FsWatchImpl {
@@ -88,16 +91,16 @@ $ `stdlib/std/arc.nu`
     }
 }
 
-: FsWatch { ( Arc FsWatchImpl ) a }
+: FsWatch { ( Shared FsWatchImpl ) ctl }
 
 // Its drop closes something the outside world sees.
 % Resource FsWatch {}
 
-@ FsWatch_share FsWatch w → FsWatch { ^ @ FsWatch { ( arc_clone [FsWatchImpl] . w a ) } }
+@ FsWatch_share FsWatch w → FsWatch { ^ @ FsWatch { ( shared_clone [FsWatchImpl] . w ctl ) } }
 
 @ FsWatch_drop sink FsWatch w → v {}
 
-@ __fsw FsWatch w → *FsWatchImpl { ^ ( arc_ptr [FsWatchImpl] . w a ) }
+@ __fsw FsWatch w → *FsWatchImpl { ^ ( shared_ptr [FsWatchImpl] . w ctl ) }
 
 : FsWatchEvent { i wd i mask String name }
 
@@ -119,7 +122,7 @@ $ `stdlib/std/arc.nu`
 @ fswatch_new → !FsWatch FsWatchErr {
     : i32 fd0 ( inotify_init1 # i32 0 )
     ? < # i fd0 0 { ^ @ !FsWatch FsWatchErr { F FwInit } } {}
-    : FsWatch w @ FsWatch { ( arc_new [FsWatchImpl] @ FsWatchImpl { # i fd0 ( vec_zeroed [u] FSW_BUF_CAP ) 0 0 } ) }
+    : FsWatch w @ FsWatch { ( shared_new [FsWatchImpl] @ FsWatchImpl { # i fd0 ( vec_zeroed [u] FSW_BUF_CAP ) 0 0 } ) }
     ^ @ !FsWatch FsWatchErr { T w }
 }
 

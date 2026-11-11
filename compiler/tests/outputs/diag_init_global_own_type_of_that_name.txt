@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_init_global_own_type_of_that_name.nu:13:13: error: the global 'g_one' is set at start, so every thread reads it: its type must synchronise itself — ( Locked T ), ( Arc T ), ( Channel T ), Mutex, Cond or Semaphore, the standard library's — and '( Arc i )' is this program's own type of that name. Keep changing state in a Locked.
+: ( Arc i ) g_one ( make )
+            ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

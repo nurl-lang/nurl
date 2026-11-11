@@ -31,7 +31,7 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/thread.nu`
-$ `stdlib/std/arc.nu`
+$ `stdlib/core/rcbox.nu`
 
 : DosImpl {
     i max_concurrent  // 0 = unlimited
@@ -42,13 +42,21 @@ $ `stdlib/std/arc.nu`
     Mutex mu  // guards everything above
 }
 
-: DosState { ( Arc DosImpl ) a }
+// The counters sit in an rcbox (stdlib/core/rcbox.nu), as a Channel's
+// queue does: only the functions here reach them, each under `mu`. Behind
+// an `Arc` they were one `arc_get` away from any caller, who could read
+// `counts` while a worker grew it.
+: DosState { ( Shared DosImpl ) ctl }
 
-@ DosState_share DosState g → DosState { ^ @ DosState { ( arc_clone [DosImpl] . g a ) } }
+@ DosState_share DosState g → DosState { ^ @ DosState { ( shared_clone [DosImpl] . g ctl ) } }
 
 @ DosState_drop sink DosState g → v {}
 
-@ __dos DosState g → *DosImpl { ^ ( arc_ptr [DosImpl] . g a ) }
+// Every copy is the same counters, and every function here takes `mu`
+// around what it reads and writes of them: workers share one.
+% Sync DosState {}
+
+@ __dos DosState g → *DosImpl { ^ ( shared_ptr [DosImpl] . g ctl ) }
 
 // Find the IP entry index, or -1 if absent. Caller MUST hold the lock.
 @ __dos_find_ip * DosImpl d s ip → i {
@@ -64,7 +72,7 @@ $ `stdlib/std/arc.nu`
 // ── Public API ────────────────────────────────────────────────────
 
 @ dos_state_new i max_concurrent i max_per_ip → DosState {
-    ^ @ DosState { ( arc_new [DosImpl] @ DosImpl {
+    ^ @ DosState { ( shared_new [DosImpl] @ DosImpl {
             max_concurrent max_per_ip 0 ( vec_new [String] ) ( vec_new [i] ) ( mutex_new )
         } ) }
 }

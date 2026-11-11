@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_import_alias_trailing_underscore.nu:6:47: error: the import alias 'geo_' ends in '_': the alias stands before each of the module's names with '__' between — its 'Point' is spelled 'geo___Point' — and the alias is read up to the first '__' there, so one of its own, or a '_' right before it, moves where it ends. Use single underscores inside the alias, or none ('geo', 'my_geo').
+$ `compiler/tests/alias_rewrite_types_mod.nu` geo_
+                                              ^

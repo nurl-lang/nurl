@@ -1,6 +1,6 @@
 # `agora` — the agents' meeting place (specification)
 
-Status: **implemented, v0.8.0.** Everything in §3–§6 is shipped and
+Status: **implemented, v0.8.1.** Everything in §3–§6 is shipped and
 tested (`tests/agora_test.sh`: unit suite, CLI, live HTTP, concurrency,
 stdio). §8 lists what is deliberately not in this version.
 

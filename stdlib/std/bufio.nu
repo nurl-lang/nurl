@@ -73,7 +73,7 @@ $ `stdlib/core/errors.nu`
 $ `stdlib/core/posix.nu`  // errno_kind
 $ `stdlib/std/fs.nu`  // nurl_file_open / nurl_file_close
 $ `stdlib/core/vec.nu`
-$ `stdlib/std/arc.nu`
+$ `stdlib/core/rcbox.nu`
 
 // ── libc bridges (pure-NURL FFI) ────────────────────────────────────
 // fread is declared globally in nurlc's preamble (Phase 7, 2026-05-23);
@@ -92,10 +92,13 @@ $ `stdlib/std/arc.nu`
 // the current buffer; never shrinks.
 : i BUFIO_CAP 65536
 
-// BufReader is a one-word handle on its state in an Arc, so it
-// round-trips through `! T E`; every copy is the same reader, and the last
-// owner releases the buffer and closes a file the reader opened
-// (BufReaderImpl's drop).
+// BufReader is a one-word handle on its state in an rcbox
+// (stdlib/core/rcbox.nu), so it round-trips through `! T E`; every copy is
+// the same reader, and the last owner releases the buffer and closes a
+// file the reader opened (BufReaderImpl's drop). Only the functions here
+// reach that state: a read refills and may grow the buffer, so no caller
+// is lent a view of it — behind an `Arc` it was one `arc_get` away from
+// any of them, and an Arc's payload is not to change once made.
 //
 //   h       — file handle (FILE* as i64; 0 ⇒ no stream / degrade to EOF)
 //   buf     — the read buffer; its length is the capacity in use
@@ -115,17 +118,17 @@ raw : BufReaderImpl { i h ( Vec u ) buf i start i end i eof i owns i scratch }
     }
 }
 
-: BufReader { ( Arc BufReaderImpl ) a }
+: BufReader { ( Shared BufReaderImpl ) ctl }
 
 // Its drop closes something the outside world sees (stdlib/core/marker.nu).
 % Resource BufReader {}
 
-@ BufReader_share BufReader h → BufReader { ^ @ BufReader { ( arc_clone [BufReaderImpl] . h a ) } }
+@ BufReader_share BufReader h → BufReader { ^ @ BufReader { ( shared_clone [BufReaderImpl] . h ctl ) } }
 
 @ BufReader_drop sink BufReader h → v {}
 
 // The reader's state in place.
-@ __br BufReader h → *BufReaderImpl { ^ ( arc_ptr [BufReaderImpl] . h a ) }
+@ __br BufReader h → *BufReaderImpl { ^ ( shared_ptr [BufReaderImpl] . h ctl ) }
 
 // ── Internal ────────────────────────────────────────────────────────
 
@@ -142,7 +145,7 @@ raw : BufReaderImpl { i h ( Vec u ) buf i start i end i eof i owns i scratch }
 }
 
 @ __bufreader_make * v h i owns → BufReader {
-    ^ @ BufReader { ( arc_new [BufReaderImpl] @ BufReaderImpl { # i h ( vec_zeroed [u] BUFIO_CAP ) 0 0 0 owns 0 } ) }
+    ^ @ BufReader { ( shared_new [BufReaderImpl] @ BufReaderImpl { # i h ( vec_zeroed [u] BUFIO_CAP ) 0 0 0 owns 0 } ) }
 }
 
 // Make room and pull one more chunk from the stream into [end, cap).
@@ -307,8 +310,7 @@ raw : BufReaderImpl { i h ( Vec u ) buf i start i end i eof i owns i scratch }
 // Release the buffer and close the file now (optional: the last owner
 // does it). Every copy of `br` sees an exhausted reader afterwards.
 @ bufreader_close BufReader br → v {
-    : ( Arc BufReaderImpl ) a . br a
-    ? == 0 # i . a ctl { ^ } {}
+    ? == 0 ( shared_addr [BufReaderImpl] . br ctl ) { ^ } {}
     : *BufReaderImpl r ( __br br )
     = . r buf ( vec_new [u] )
     ? && != 0 . r owns != 0 . r h { ( nurl_file_close # *v . r h ) } {}

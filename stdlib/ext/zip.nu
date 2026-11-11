@@ -269,6 +269,10 @@ $ `stdlib/std/mmap.nu`
 
 @ ZipArchive_drop sink ZipArchive h → v {}
 
+// An opened archive is its directory and the bytes it reads, neither
+// written again: its copies are read from any number of threads.
+% Sync ZipArchive {}
+
 @ zip_count ZipArchive h → i { ^ . ( arc_get [ZipArchiveImpl] . h a ) count }
 
 @ __zip_entry ZipArchive h i idx i field → i {

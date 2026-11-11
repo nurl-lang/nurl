@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_frozen_lend_own_struct_named_arc.nu:23:5: error: this call hands 'grow' what 'g' lends to change, but it is frozen: its type is marked '% Frozen' (a read guard is), so other threads may be reading the same value at the same time without a lock, and changing it races them. Change it through a handle that holds the value exclusively — take a write guard (rw_write in stdlib/std/rwlock.nu) or use locked_update on a Locked — or copy what you need with mem_dup and change the copy.
+    ( grow . ( rguard_get [App] g ) bag 3 )
+    ^
+error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

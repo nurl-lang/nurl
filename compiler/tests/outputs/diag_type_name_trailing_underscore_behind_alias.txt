@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/alias_trailing_underscore_mod.nu:4:3: error: a struct's name 'Cell_' ends in '_', and the compiler writes '__' after a type's name where its type arguments start — '( Vec i )' is 'Vec__i64' — so this name's last '_' would be read as part of that separator: '( Pair Cell_ i )' and '( Pair Cell _i )' would be spelled alike, and this type taken for another. End the name in a letter or a digit.
+: cells__Cell_ { i n }
+  ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

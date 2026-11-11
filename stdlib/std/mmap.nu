@@ -43,6 +43,10 @@ raw : MappedFileImpl { * u p i n b mapped ( Vec u ) owned }
 
 @ MappedFile_drop sink MappedFile h → v {}
 
+// Nothing writes a mapping once it is made: its copies are read from any
+// number of threads.
+% Sync MappedFile {}
+
 // A file read whole: the MappedFile owns the bytes.
 unsafe @ __mf_of_vec sink ( Vec u ) v → MappedFile {
     : *u p ( vec_data [u] v )
