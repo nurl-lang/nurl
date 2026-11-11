@@ -1,0 +1,36 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+drop Ev
+drop binding.1
+drop binding.3
+binding: the middle payload, on the heap
+drop Ev
+drop literal.1
+drop literal.3
+literal: the middle payload, on the heap
+drop Ev
+drop option.1
+drop option.3
+option: the middle payload, on the heap
+drop Ev
+drop block.1
+drop block.3
+block: the middle payload, on the heap
+drop Ev
+drop call.1
+drop call.3
+call: the middle payload, on the heap
+param: the middle payload, on the heap
+drop Ev
+drop param.1
+drop param.3
+handover: the middle payload, on the heap / handover.3
+eat
+drop Ev
+drop handover.1
+drop handover.3
+eat
+drop Ev
+7

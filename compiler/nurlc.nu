@@ -6652,8 +6652,8 @@ unsafe @ gen_ret i lex i syms i cg → s {
             } {}
         } {}
         ? & ! __lvp __lvn {
-            ( die_pos lex bck_line __ret_col ( nurl_str_cat4 ( nurl_str_cat4 `this hands back '` __lvnm `', which is part of '` __lvr )
-            `', and that is not a parameter the caller of this function keeps: it is released on the way out, or stays with what holds it, while the caller would hold this result as well; a '` ( llvm_to_nurl __lvt )
+            ( die_pos lex bck_line __ret_col ( nurl_str_cat4 ( nurl_str_cat4 `this hands back '` __lvnm `', which is part of ` ( __lv_show __lvr ) )
+            `, and that is not a parameter the caller of this function keeps: it is released on the way out, or stays with what holds it, while the caller would hold this result as well; a '` ( llvm_to_nurl __lvt )
             `' cannot be copied — the value would be released twice. Take it out of what holds it (vec_remove, vec_pop) so that this function owns it, or pass what holds it as a parameter: a part of a borrowed parameter is lent back to the caller.` ) )
         } {}
         ? & & ! __lvp ! __lvn ( __type_needs_drop __lvt syms ) {
@@ -22790,6 +22790,9 @@ unsafe @ gen_match i lex i syms i cg → s {
             ( mem_journal_push_tmpown syms cg mte_p match_type )
             = m_tmp_enum T
             ( nurl_sym_def syms `__m_tmp_slot__` mte_p )
+            // (A name for it, where its payloads are views of it:
+            // mem_udrop_enum_payload_views.)
+            ? __m_udrop_enum { ( nurl_sym_def syms ( nurl_str_cat3 `__mtmp` ( nurl_str_int __m_ser ) `__ptr` ) mte_p ) } {}
         } {}
     } {}
     // The slot of an enum this function owns — a local owner, a `sink`
@@ -23940,6 +23943,12 @@ unsafe @ gen_match i lex i syms i cg → s {
             }
             // What an arm handing a payload out takes it out of (agora #175).
             ( mem_enum_take_arm syms pattern_name pv0 pv1 pv2 pv_over m_tmp_enum match_first_tt match_var_name match_type )
+            // (…and of an enum with a `% Drop` of its own nothing is taken:
+            // its payloads are views of it, wherever they go.)
+            ? __m_udrop_enum {
+                ( mem_udrop_enum_payload_views syms pattern_name pv0 pv1 pv2 pv_over ? m_tmp_enum ( nurl_str_cat `__mtmp` ( nurl_str_int __m_ser ) ) __m_proot )
+                ? & ! m_tmp_enum ( is_ident_tok match_first_tt ) { ( __park_udrop_param_match syms lex match_var_name bck_mline ) } {}
+            } {}
 
             // Guard test (after payload binding so it sees the bound
             // payloads): replay the recorded guard expression, branch to
@@ -30680,6 +30689,89 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
     ? ! | ( __is_autodrop_enum ty syms ) ( __is_handle_enum ty ) { ^ 0 } {}
     ? | ( str_contains_word g_clo_caps_now name ) ! ( nurl_sym_has_word syms `__user_drops__` u ) { ^ 0 } {}
     ^ ( __reg_num u )
+}
+
+// The payloads a match arm binds out of an enum with a `% Drop` of the
+// program's own (held by `root`: a binding, a parameter, the match's
+// temporary). That enum is dropped whole and no payload is taken out of it
+// (__m_take_slot), so each payload that owns something is a view of it
+// (mem_note_lview) and a lend out of `root` (the `__field__` pair,
+// mem_local_lend_of). `^ x` by name, a join's value and a field of it are
+// answered by __payload_lent_of_frame already; the view carries the same
+// answer wherever else the payload goes — a `:` binding of it, a literal
+// that is handed on, a value block, a call that lends its argument back:
+// lent where the enum is a parameter the caller keeps, copied where this
+// function drops the enum, refused there when it cannot be copied. Handed
+// on as it was, the caller held what the enum's glue had released (agora
+// #641).
+@ mem_udrop_enum_payload_views i syms s pattern s p0 s p1 s p2 s pover s root → v {
+    ? == 0 ( nurl_str_len root ) { ^ v } {}
+    : s names ( nurl_str_cat4 ? == 0 ( nurl_str_len p0 ) `_` p0 ` ` ? == 0 ( nurl_str_len p1 ) `_` p1 ( nurl_str_cat3 ` ` ? == 0 ( nurl_str_len p2 ) `_` p2 ( nurl_str_cat ` ` pover ) ) )
+    : ~ s rest ( nurl_str_cat names `` )
+    : ~ i k 0
+    ~ != 0 ( nurl_str_len rest ) {
+        : s pv ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ! ( seq pv `_` ) {
+            : s pt ( nurl_sym_get syms ( nurl_str_cat3 pattern `__payload__` ( nurl_str_int k ) ) )
+            ? & ! ( __is_closure_ty pt ) | ( __is_handle_ty pt ) ( __type_needs_drop pt syms ) {
+                ( mem_note_lview syms pv root )
+                : s ff ( nurl_str_cat3 `__field__` `\t` root )
+                : s fz ( __lines_union ff ( __pairs_zip ( nurl_sym_get2 syms pv `__pljk` ) ( nurl_sym_get2 syms pv `__pljr` ) ) )
+                ( nurl_sym_def syms ( nurl_str_cat pv `__pljk` ) ( __pairs_unzip fz F ) )
+                ( nurl_sym_def syms ( nurl_str_cat pv `__pljr` ) ( __pairs_unzip fz T ) )
+            } {}
+        } {}
+        = k + k 1
+    }
+}
+
+// A `??` over a parameter `name` this function only borrows, an enum with
+// a `% Drop` of its own, whose arm binds a payload: the payload is lent
+// back where the function hands it back, which holds only while the caller
+// keeps the enum. A function that turns out to take the parameter over on
+// another path (handed to a `sink`, kept: an inferred sink, known at
+// module end) drops it on every way out — and nothing can be taken out of
+// such an enum, so the caller would hold a payload already released.
+// Parked for module end: resolve_udrop_param_lends (agora #641).
+@ __park_udrop_param_match i syms i lex s name i line → v {
+    ? | != 0 g_bck_closure_depth ! ( __borrowed_param_name syms name ) { ^ v } {}
+    : s fn ( nurl_sym_get syms `__fn_self_name__` )
+    : i pi ( nurl_sym_word_index syms `__fn_param_names__` name )
+    // (One per function and parameter: the first match names the place.)
+    : s seen ( nurl_str_cat4 `udplm##` fn `#` ( nurl_str_int pi ) )
+    ? != 0 ( nurl_sym_len g_pending_impl seen ) { ^ v } {}
+    ( nurl_sym_def g_pending_impl seen `1` )
+    : s rec ( nurl_str_cat4 ( nurl_str_cat4 fn ` ` ( nurl_str_int pi ) ` ` ) ( nurl_str_cat3 name ` ` ( nurl_str_int line ) ) ` ` ( nurl_lex_filename lex ) )
+    : i n ( nurl_str_to_int ( nurl_sym_get g_pending_impl `udplm_n` ) )
+    ( nurl_sym_def g_pending_impl `udplm_n` ( nurl_str_int + n 1 ) )
+    ( nurl_sym_def g_pending_impl ( nurl_str_cat `udplm#` ( nurl_str_int n ) ) rec )
+}
+
+@ resolve_udrop_param_lends i syms → v {
+    : i n ( nurl_str_to_int ( nurl_sym_get g_pending_impl `udplm_n` ) )
+    : ~ i j 0
+    ~ < j n {
+        : ~ s r ( nurl_str_cat ( nurl_sym_get g_pending_impl ( nurl_str_cat `udplm#` ( nurl_str_int j ) ) ) `` )
+        : s fn ( str_first_word r ) = r ( str_skip_word r )
+        : s ix ( str_first_word r ) = r ( str_skip_word r )
+        : s pn ( str_first_word r ) = r ( str_skip_word r )
+        : s line ( str_first_word r ) = r ( str_skip_word r )
+        ? & | ( nurl_sym_has_word g_fn_sink fn ix ) ( nurl_sym_has_word g_fn_keeps fn ix ) ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `retpart##` fn ) ix ) {
+            ( bck_emit_error r ( nurl_str_to_int line ) ( nurl_str_cat4
+            ( nurl_str_cat4 `'` ( bck_fn_show fn ) `' hands back a payload of its parameter '` pn )
+            ( nurl_str_cat3 `', matched here, and takes '` pn `' over on another path (it hands it to a 'sink', or keeps it): the parameter is then this function's, dropped on every way out, and the caller would hold a payload already released. ` )
+            `An enum with a '% Drop' of its own is dropped whole, so nothing is taken out of it. `
+            ( nurl_str_cat3 `Declare the parameter 'sink' (a payload handed back is then copied where it can be), or do not hand '` pn `' on in this function.` ) ) )
+        } {}
+        = j + j 1
+    }
+}
+
+// What a diagnostic calls the binding a view is part of: a matched
+// temporary has no name of its own.
+@ __lv_show s root → s {
+    ? != 0 ( nurl_str_starts root `__mtmp` ) { ^ ( nurl_str_cat `the matched value` `` ) } {}
+    ^ ( nurl_str_cat3 `'` root `'` )
 }
 
 // Does a binding's `__sborrow` say "owned exactly where its drop flag is
@@ -38208,7 +38300,10 @@ unsafe @ __sx_leaf_roots s sx → s {
 // assignment released — a program enum's old value is dropped, not handed
 // to the payload as an option's is (bck_cursor_handover). Read after, it
 // is a read of freed memory (bck_diag_invalid, `!epy`): agora #364.
-@ __bck_epy_release s st i o i line → s {
+// (`how`: `!epy`, given a new value; `!epym`, handed over whole — a `sink`
+// callee, or one whose final summary takes the argument — where whoever
+// holds it now drops it, the payload with it, when it likes: agora #641.)
+@ __bck_epy_release s st i o i line s how → s {
     : s os ( nurl_str_int o )
     : ~ s rest ( nurl_sym_get g_bck ( bck_bkey `epy_` os ) )
     ? == 0 ( nurl_str_len rest ) { ^ ( nurl_str_cat st `` ) } {}
@@ -38218,7 +38313,7 @@ unsafe @ __sx_leaf_roots s sx → s {
         : i x ( nurl_str_to_int xs )
         ? & == BCK_OWNED ( bck_st_get out x ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `hr_` xs ) ) os ) {
             = out ( bck_st_set out x BCK_INVALID )
-            ( bck_put ( bck_bkey `bv_` xs ) ( nurl_str_cat4 ( nurl_str_int line ) ` ` os ` !epy` ) )
+            ( bck_put ( bck_bkey `bv_` xs ) ( nurl_str_cat4 ( nurl_str_int line ) ` ` os how ) )
         } {}
     }
     ^ out
@@ -38761,7 +38856,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 // (…and what its new value's handle may be part of, instead of
                 // the old one's; what was a part of its old value is no part
                 // of this one — agora #414.)
-                ? != 0 g_bck_epy_any { = st ( __bck_epy_release st asid ( bck_field_int rec 3 ) ) } {}
+                ? != 0 g_bck_epy_any { = st ( __bck_epy_release st asid ( bck_field_int rec 3 ) ` !epy` ) } {}
                 ? != 0 g_bck_hr_any { ( __bck_hr_drop_owner asid ) } {}
                 ? | == amk 100 == amk0 110 { ( __bck_hr_set asid ( bck_sx_hroots ( bck_field rec 8 ) ) F ) } { ? != 0 g_bck_hr_any { ( __bck_hr_set asid `` F ) } {} }
                 // A holder whose drop reads views given a view of a younger
@@ -44239,7 +44334,7 @@ unsafe @ bck_note_rc_arg s name s ty → v {
         : s eaix ( bck_field rec 6 )
         // (Only one that replaces it: a callee that empties the payload in
         // place — vec_clear, string_clear — leaves it where it is…)
-        ? != 0 ( nurl_str_len ( __repl_of ecal eaix ) ) { = out ( __bck_epy_release out rid line ) } {
+        ? != 0 ( nurl_str_len ( __repl_of ecal eaix ) ) { = out ( __bck_epy_release out rid line ` !epy` ) } {
             // (…but drops what it holds: a borrow taken from the payload, an
             // element of its Vec, ends with what it borrowed — agora #424,
             // #569.)
@@ -44257,6 +44352,19 @@ unsafe @ bck_note_rc_arg s name s ty → v {
                 }
             } {}
         }
+    } {}
+    // A program enum binding handed over whole — a `sink` argument's row,
+    // or a call's whose callee's final summary says it takes or keeps the
+    // argument: the payloads read in place out of it are whoever holds it
+    // now's to drop, the callee's on its way out. Read after, a payload was
+    // read out of an enum already dropped: a heap-use-after-free (agora
+    // #641). (Not one taken apart through a payload — a payload handed out
+    // of it, bck_note_payload_taken, `pendtake`: that payload owns what it
+    // took.)
+    ? & & != 0 g_bck_epy_any == rid rid0 | == kc 4 & | == kc 9 == kc 10 == BCK_MOVED ( bck_st_get out rid ) {
+        ? ! & == kc 4 ( seq ( nurl_sym_get g_bck ( nurl_str_cat3 `mc_` ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int rid ) ) ( nurl_str_int line ) ) ) `taking its payload apart` ) {
+            = out ( __bck_epy_release out rid line ` !epym` )
+        } {}
     } {}
     ? | == 0 g_bck_has_cursor ! ( bck_cursor_watched rid ) { ^ out } {}
     : ~ s rest ( nurl_str_cat ( nurl_sym_get g_bck ( bck_bkey `cul` `` ) ) `` )
@@ -44826,6 +44934,14 @@ unsafe @ bck_note_rc_arg s name s ty → v {
         : s e2 ( nurl_str_cat4 `' this '??' arm matched, and '` sname `' was given a new value at line ` ( nurl_str_cat ln `, which released the old one — the payload with it` ) )
         : s e3 ( nurl_str_cat4 `: using '` name `' now would read freed memory. Use it before that line, or take a copy that owns its data first (string_from, mem_dup) and give '` sname )
         ( bck_emit_error ( nurl_sym_get g_bck `file` ) useline ( nurl_str_cat4 e1 e2 e3 `' its new value after.` ) )
+        ^ v
+    } {}
+    // (…or that was handed over whole: bck_cursor_follow.)
+    ? ( seq ( str_first_word info ) `!epym` ) {
+        : s m1 ( nurl_str_cat4 `'` name `' is the payload of '` sname )
+        : s m2 ( nurl_str_cat4 `' this '??' arm matched, and '` sname `' was handed over at line ` ( nurl_str_cat ln `: whoever holds it now releases it, the payload with it` ) )
+        : s m3 ( nurl_str_cat4 `, so using '` name `' now may read freed memory. Use it before that line, or take a copy that owns its data first (string_from, mem_dup) and hand '` sname )
+        ( bck_emit_error ( nurl_sym_get g_bck `file` ) useline ( nurl_str_cat4 m1 m2 m3 `' over after.` ) )
         ^ v
     } {}
     // (A `??` arm's payload, a cursor over the option it matched:
@@ -53844,8 +53960,8 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
                     = fld_view_lend T
                 } {
                     ? ( __nc_held_ty fty ) {
-                        ( die_pos lex agg_line agg_col ( nurl_str_cat4 ( nurl_str_cat4 `this literal is handed on holding '` fld_first_val `', which is part of '` __fvr )
-                        `', and that is not a parameter the caller of this function keeps: it is released on the way out, or stays with what holds it, while the literal would hold the value as well; a '` ( llvm_to_nurl fty )
+                        ( die_pos lex agg_line agg_col ( nurl_str_cat4 ( nurl_str_cat4 `this literal is handed on holding '` fld_first_val `', which is part of ` ( __lv_show __fvr ) )
+                        `, and that is not a parameter the caller of this function keeps: it is released on the way out, or stays with what holds it, while the literal would hold the value as well; a '` ( llvm_to_nurl fty )
                         `' cannot be copied — the value would be released twice. Take it out of what holds it (vec_remove, vec_pop) so that this function owns it, or pass what holds it as a parameter: a part of a borrowed parameter is lent back to the caller.` ) )
                     } {}
                     ? & ( __type_needs_drop fty syms ) ( __clone_supported fty syms ) {
@@ -73571,6 +73687,13 @@ unsafe @ __sx_names_capture i syms s sx → b {
                 : s fr ( __path_root_name ( nurl_sym_get syms `__last_member_root__` ) )
                 ? & != 0 ( nurl_sym_len2 syms fr `__lview` ) ( __type_needs_drop ty syms ) { ( mem_note_lview syms name fr ) } {}
             } {}
+            // (…and a binding of a view itself, `: String t s` of a payload
+            // of an enum with a `% Drop` of its own: part of what s is —
+            // agora #641.)
+            ? & ( is_ident_tok tt ) != 0 g_lview_n {
+                : s vn ( nurl_sym_get syms `__last_ident_name__` )
+                ? & != 0 ( nurl_sym_len2 syms vn `__lview` ) ( __type_needs_drop ty syms ) { ( mem_note_lview syms name vn ) } {}
+            } {}
         }
     } {}
     ? & ! on ! deep {
@@ -86435,6 +86558,7 @@ unsafe @ __compile_pipeline s src s path i syms i cg → v {
         ( resolve_clo_nc_rets syms )
         ( resolve_nc_lent_stores syms )
         ( resolve_nc_local_lends syms )
+        ( resolve_udrop_param_lends syms )
         ( resolve_owned_strings_kept syms )
         ( lint_free_resolve )
         ( mem_emit_env_flags )
