@@ -15,6 +15,9 @@
 //            destructor, which runs once per round;
 //   slices   …and an owned slice's buffer, with its elements where they
 //            own something (agora #676);
+//   payloads …and a payload a match's arm binds as its own, out of a
+//            call's option, where a defer of the arm reads it; a `break`
+//            in the arm above that `;` leaves it for the defer (#698);
 //   moved    …unless that round handed it on;
 //   views    a view of an earlier round's binding (a closure over it, a
 //            `string_data`, a payload) that the defer still reads is good:
@@ -165,6 +168,29 @@ $ `stdlib/core/vec.nu`
     ^ k
 }
 
+@ fresh i k → ?String {
+    ^ @ ?String { T ( mk `payloads: a fresh option's string, long enough ` k ) }
+}
+
+@ payloads i n → i {
+    : ~ i k 0
+    ~ < k 4 {
+        ?? ( fresh k ) {
+            T t → {
+                ? == k 0 {
+                    : ( @ i i ) len \ i j → i { ^ + j ( string_len t ) }
+                    ; { ( nurl_println_int ( len 0 ) ) }
+                } {}
+                ? == k n { break } {}
+                ; { ( nurl_println ( string_data t ) ) }
+            }
+            F → {}
+        }
+        = k + k 1
+    }
+    ^ k
+}
+
 @ moved i n → i {
     : ~ ( Vec String ) keep ( vec_new [String] )
     : ~ i k 0
@@ -242,6 +268,7 @@ $ `stdlib/core/vec.nu`
     ( nurl_println_int ( views 3 ) )
     ( nurl_println_int ( wrapped 4 ) )
     ( nurl_println_int ( slices 4 ) )
+    ( nurl_println_int ( payloads 2 ) )
     ( nurl_println_int ( moved 5 ) )
     : ~ ( Vec i ) v ( vec_new [i] )
     ( vec_push [i] v 1 ) ( vec_push [i] v 2 ) ( vec_push [i] v 3 ) ( vec_push [i] v 4 ) ( vec_push [i] v 5 )
