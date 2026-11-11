@@ -2,7 +2,7 @@
 
 All notable changes to the `nurllama` package.
 
-## [0.26.0] — unreleased
+## [0.26.0] — 2026-11-11
 
 Requires NURL 0.91.0, gpu 0.17.8 and safetensor 0.6.2.
 

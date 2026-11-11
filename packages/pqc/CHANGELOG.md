@@ -5,6 +5,15 @@ All notable changes to `pqc` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.8] — 2026-11-11
+
+### Changed
+
+- README: the TLS example imports `stdlib/std/tls.nu` and matches a
+  `!TlsConn TlsErr` — `tls_connect` hands back the connection, not a
+  pointer to one — so it compiles as written. No code changed; the
+  registry's 0.2.7 carried the older README.
+
 ## [0.2.7] — 2026-10-14
 
 Requires NURL 0.73.0.

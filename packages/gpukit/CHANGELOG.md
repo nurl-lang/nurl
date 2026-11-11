@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.11.14] — unreleased
+## [0.11.14] — 2026-11-11
 
 ### Added
 

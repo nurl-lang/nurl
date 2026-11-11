@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.1] — 2026-11-11
+
+### Fixed
+
+- `tests/fixtures/server.nu` and `tests/fixtures/client.nu` compile on the
+  current NURL. The server taken out of `grpc_server_new`'s result and
+  the call taken out of the vector are bound as the function's own; a
+  binding of the match payload only borrowed it, and the checker refuses
+  an `inout` argument that does not own its value where the callee
+  replaces it. The library is unchanged; the registry's 0.3.0 carried
+  the fixtures that are refused.
+
 ## [0.3.0] — 2026-10-14
 
 Requires NURL 0.73.0 (`slice_at`, `slice_put`, `rc_take`, `locked_take`).

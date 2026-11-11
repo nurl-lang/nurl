@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.7] — 2026-11-11
+
+### Changed
+
+- README: the examples compile as written. The import of
+  `deps/oauth/src/oauth.nu` is shown, each example names what it is
+  given, an arm that held only a comment is an empty block with the
+  comment beside it, and the login-route example imports
+  `stdlib/ext/http_server.nu`. No code changed; the registry's 0.2.6
+  carried the older README.
+
 ## [0.2.6] — 2026-10-15
 
 ### Fixed

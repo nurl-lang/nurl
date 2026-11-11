@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.13.4] — 2026-11-11
+
+### Changed
+
+- README: the on-device training example compiles as written. `pg` and
+  `go` are mutable bindings, the module is imported by the path a
+  consumer has (`deps/grad/src/gput.nu`) and the example names what it is
+  given. No code changed; the registry's 0.13.3 carried the older README.
+
 ## [0.13.3] — 2026-10-15
 
 ### Changed

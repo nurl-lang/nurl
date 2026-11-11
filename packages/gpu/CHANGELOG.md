@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.17.8] — unreleased
+## [0.17.8] — 2026-11-11
 
 Requires NURL 0.91.0 (stdlib/std/sysinfo.nu's `sys_os` and host memory;
 the NVRTC stubs' `nvrtcVersion`).
