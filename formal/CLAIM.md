@@ -874,7 +874,15 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   binding, a closure's environment, another block's payload):
   `A2.Dtor.blocks_dtor_free` (`MInv.blocks`; a start built by hand must
   satisfy it too, `GlobsOK`). So the sweep that frees a block when its
-  last share goes, which runs no code, releases no destructor value. What
+  last share goes, which runs no code, releases no destructor value.
+  (Agora #610, a preparation: the model now has a block kind `dead`, an
+  orphan whose payload awaits its destructor, and a step `Step.reap` that
+  moves such a payload to a destructor frame of the thread that takes it,
+  with its case of preservation, `A2.pres_reap`; nothing marks a block
+  `dead` yet, so no run from the empty store has one or takes the step,
+  `A2.no_orphan`, and the theorems above are stated with that in view:
+  `blocks_dtor_free` of a block that is not `dead`, the destructor
+  frame's only-step theorems of a store with no orphan.) What
   keeps it: `Ty.ok` asks it of an `Arc`'s, a lock's and a cell's payload
   type (so of a channel's queue and a read guard's view), and `arc_new`, a
   lock's and a library handle's constructor ask it of what moves in

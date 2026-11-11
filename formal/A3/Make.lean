@@ -388,7 +388,7 @@ theorem make_ok {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hPc : ProgCod
       cases h' : st x with
       | none => rfl
       | some _ => rw [h'] at this; cases this
-  refine ⟨⟨fun g w hg => ?_, ?_, fun j hj => ?_, fun k bl hk => ?_, hcd.blk,
+  refine ⟨⟨fun g w hg => ?_, ?_, fun j hj => ?_, fun k bl hk => ?_, hcd.blk.1,
     -- A3.5: each cell's shares are in one block, below `nid`: the cells' homes
     fun k k1 k2 h1 h2 => ⟨hcell.one k k1 k2 h1 h2, hcell.blkBelow k1 k h1⟩⟩, hfit, hgl⟩
   · -- each global holds a share of a block of a type that synchronises itself

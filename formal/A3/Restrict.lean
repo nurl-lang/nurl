@@ -419,6 +419,8 @@ theorem Step.restrict {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
     exact ⟨_, .scopeDPMoved h1 hx, rfl⟩
   -- A3.2: taking a lock and giving it back touch no address
   | withLock ha hk hx hnv => exact ⟨_, .withLock ha hk hx hnv, rfl, .refl _⟩
+  -- Agora #610: so does reaping an orphan
+  | reap hs hk hnc => exact ⟨_, .reap hs hk hnc, rfl, .refl _⟩
   | scopeLIn _ ih =>
     obtain ⟨r1, h1, hd⟩ := ih
     obtain ⟨s1, rfl, hg⟩ := ResDown.ok_inv hd

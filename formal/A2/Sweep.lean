@@ -135,15 +135,19 @@ theorem BlkKeep.rdOnly {bl bl' : Blk} (h : BlkKeep bl bl') : bl'.rdOnly = bl.rdO
   by_cases hl : bl.kind = .lock
   · obtain ⟨t, kd, p⟩ := bl; obtain ⟨t', kd', p'⟩ := bl'
     simp only at hty hk hl; subst hty hk hl; rfl
-  · rw [ha hl]
+  · by_cases hd : bl.kind = .dead
+    · obtain ⟨t, kd, p⟩ := bl; obtain ⟨t', kd', p'⟩ := bl'
+      simp only at hty hk hd; subst hty hk hd; rfl
+    · rw [ha hl hd]
 
 /-- The blocks as their holders see them keep the blocks. -/
 theorem BlkLe.rdBlk (B : Nat → Option Blk) : BlkLe B (rdBlk B) := by
   intro k bl hk
-  refine ⟨bl.rdOnly, rdBlk_some.mpr ⟨bl, hk, rfl⟩, Blk.rdOnly_ty bl, Blk.rdOnly_kind bl, fun h => ?_⟩
+  refine ⟨bl.rdOnly, rdBlk_some.mpr ⟨bl, hk, rfl⟩, Blk.rdOnly_ty bl, Blk.rdOnly_kind bl, fun h h' => ?_⟩
   obtain ⟨t, kd, p⟩ := bl
   cases kd with
   | lock => exact absurd rfl h
+  | dead => exact absurd rfl h'
   | arc => rfl
   | view => rfl
 
@@ -580,7 +584,8 @@ theorem Inv.sweep {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ 
 /-- The packages in memory are the slots' and the blocks', which the sweep
     keeps (A3.5b: it only removes blocks). -/
 theorem MemCodes.sweepR {P : Prog} {R : Val → Prop} {m : Mem} (h : MemCodes P m) : MemCodes P (m.sweepR R) :=
-  ⟨h.1, fun k bl fs te ms e cs hk hs => h.2 k bl fs te ms e cs (Mem.sweepR_blk.mp hk).1 hs⟩
+  ⟨h.1, fun k bl fs te ms e cs hk hs => h.2.1 k bl fs te ms e cs (Mem.sweepR_blk.mp hk).1 hs,
+    fun k f u o hk => h.2.2 k f u o (Mem.sweepR_blk.mp hk).1⟩
 
 theorem MemCodes.sweep {P : Prog} {m : Mem} (h : MemCodes P m) : MemCodes P m.sweep := h.sweepR
 

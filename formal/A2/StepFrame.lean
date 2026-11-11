@@ -201,6 +201,12 @@ theorem evalR_none {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (he : EvalR m r (
     simp [Mem.set, upd_ne _ _ this, hx]
   | _ => exact hx
 
+/-- Source code is inside no run-time scope. -/
+theorem src_spine {s : Stmt} (h : s.src = true) : s.spine = [] := by
+  induction s with
+  | seq a b iha _ => simp only [Stmt.src, Bool.and_eq_true] at h; simp [Stmt.spine, iha h.1]
+  | _ => simp_all [Stmt.src, Stmt.spine]
+
 /-- A step binds only what the scopes it opens bind. -/
 theorem step_new {P : Prog} {m m' : Mem} {s s' : Stmt} (hst : Step P m s (.ok m' s')) :
     ∀ v, m.st v = none → m'.st v ≠ none → v ∈ s'.spine := by
@@ -229,6 +235,12 @@ theorem step_new {P : Prog} {m m' : Mem} {s s' : Stmt} (hst : Step P m s (.ok m'
     · subst hvx; simp [Stmt.spine]
     · simp [upd_ne _ _ hvx, evalR_none he h] at h'
   | scopeDEnd _ _ | scopeDDrain _ | scopeDEmpty _ => cases hr; intro v h h'; exact absurd h h'
+  | reap _ _ _ =>
+    -- Agora #610: the fresh binding is the new frame's
+    cases hr; intro v h h'
+    by_cases hvx : v = m.nv
+    · subst hvx; simp [Stmt.spine]
+    · simp [upd_ne _ _ hvx, h] at h'
   | @scopeDMoved y _ _ =>
     cases hr; intro v h h'
     simp only [Mem.remove_st] at h'
@@ -386,6 +398,7 @@ theorem step_gone {P : Prog} {m m' : Mem} {s s' : Stmt} (hst : Step P m s (.ok m
     cases hr; intro v h _
     have hvx : v ≠ x := fun e => hck.2.1 (e ▸ h)
     simp [upd_ne _ _ hvx, panic_spine hp v h]
+  | reap hsrc _ _ => cases hr; intro v h _; rw [src_spine hsrc] at h; cases h
   | _ => cases hr <;> (intro v h _; simp [Stmt.spine] at h)
 
 end A2

@@ -8,6 +8,9 @@ import A3
 #print axioms A2.soundness
 #print axioms A2.no_leak_end
 #print axioms A2.no_leak_panic
+-- Agora #610 (preparation): reaping an orphan keeps typing and invariant; nothing makes one yet
+#print axioms A2.pres_reap
+#print axioms A2.no_orphan
 -- per-call ownership, as the calculus has it (A2/DynCell.lean)
 #print axioms A2.DynCell.pick_ok
 #print axioms A2.DynCell.main_safe

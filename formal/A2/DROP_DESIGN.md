@@ -742,6 +742,25 @@ each one shrinks `CLAIM.md`'s exception:
      destructor value, and a check-out binding (`withLock`, `withCell`) is
      of a type that holds none (`A2.Dtor.shares_dtor_free`): 3a's
      check-out gap is closed with it. Stricter than nurlc (`CLAIM.md`).
+   - **Built: the step, with nothing to fire it yet** (Agora #610, a
+     preparation that changes no typed run). A block kind `dead` (`BKind`:
+     an orphan whose payload awaits its destructor; no one reads it, it
+     owns its payload and keeps what the payload reaches, as a lock block
+     does) and the step `Step.reap`: from any source statement `r` (the
+     thread's redex, under any frames by the congruence rules), a `dead`
+     block's payload moves to a fresh binding in a destructor frame put
+     before `r`, `seq (scopeD z f skip) r`, and the block stays, empty,
+     for the sweep to remove. The invariant says what the step needs of
+     a `dead` block (`MInv.blocks`: of a destructor type that holds no
+     closure, the payload a well-formed value of it that holds no views;
+     `MemCodes`' `DeadCodes`: the destructor is one the program checked,
+     `DropFnOK`), and nothing refers to one (`Refers.not_dead`, read off
+     the shares' typing: a share names an `arc` block, a view or a lock
+     block). Its case of preservation is `pres_reap` (the payload is
+     handed over as a lock's is checked out, `reap_pres`; the frame is
+     typed as a `letd`'s at its end). **Nothing makes a block `dead`
+     yet** (`Step.noDead`, `A2.no_orphan`): the sweep still removes an
+     orphan, whose payload owns no destructor value (`Ty.ok`).
    - **Left: the payload's drop as code.** The thread whose step drops
      the last share runs the payload's destructor: the sweep becomes a
      step of that thread that moves the payload out to a `letd` binding
