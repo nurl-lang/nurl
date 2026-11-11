@@ -189,6 +189,35 @@ jobs:
             if (-not (($err -join "`n") -match "bad\.nu:1:")) { throw "$mode : --stdin diagnostics do not name bad.nu: $err" }
             Write-Host "$mode OK"
           }
+          # The REGRESSION of v0.91.0: a shipped toolchain carries its FFI
+          # libs in stdlib\winlib with a link fragment, winlibs.reloc, and
+          # nurl.bat handed that directory to the linker through the LIB
+          # variable. clang adds the Windows SDK's library directories
+          # itself only while LIB is unset, so every clang link of the
+          # shipped toolchain failed on winhttp.lib; nothing here noticed,
+          # because this job has no vcpkg libs and so no fragment (only the
+          # release workflow's smoke test did, after the tag). Put an empty
+          # fragment there and link with clang again.
+          $had = Test-Path "stdlib\winlib"
+          if (-not $had) { New-Item -ItemType Directory -Path "stdlib\winlib" | Out-Null }
+          if (-not (Test-Path "stdlib\winlib\winlibs.reloc")) {
+            Set-Content -Path "stdlib\winlib\winlibs.reloc" -Value ' -L"$NURL_LIB$"' -Encoding ascii
+            $made = $true
+          } else { $made = $false }
+          try {
+            $env:NURL_ZIG = "$PWD\does-not-exist.exe"
+            $saved = $env:LIB; $env:LIB = $null
+            Remove-Item "$dir\s.exe" -ErrorAction SilentlyContinue
+            & cmd /c "call nurl.bat `"$dir\s.nu`" `"$dir\s`""
+            if ($LASTEXITCODE -ne 0) { throw "clang with a bundled-libs fragment : nurl.bat failed" }
+            $out = & "$dir\s.exe"
+            if ($out -ne "ok") { throw "clang with a bundled-libs fragment : unexpected output: $out" }
+            Write-Host "clang with a bundled-libs fragment OK"
+          } finally {
+            $env:LIB = $saved
+            if ($made) { Remove-Item "stdlib\winlib\winlibs.reloc" }
+            if (-not $had) { Remove-Item "stdlib\winlib" -Recurse -Force }
+          }
           # The bad.nu build above fails on purpose; its exit code must not
           # become the step's.
           exit 0
