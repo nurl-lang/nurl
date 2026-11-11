@@ -1,5 +1,14 @@
 # Changelog
 
+## [3.4.3] — 2026-11-11
+
+### Fixed
+
+- The manifest requires tokenizer `^0.6`, the series whisper is built and
+  tested against. It still said `^0.4`, so an install from the registry
+  resolved a tokenizer two series older than the one in the repository,
+  and the publish gate refused the package. No code changed.
+
 ## [3.4.2] — 2026-10-21
 
 ### Fixed

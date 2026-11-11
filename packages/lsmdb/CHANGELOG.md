@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.1] — 2026-11-11
+
+### Changed
+
+- README: the example imports `deps/lsmdb/src/lsmdb.nu`, the path a
+  consumer has. No code changed; the registry's 0.3.0 carried the older
+  README.
+
 ## [0.3.0] — 2026-10-14
 
 ### Changed

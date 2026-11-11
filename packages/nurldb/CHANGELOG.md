@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.1] — 2026-11-11
+
+### Fixed
+
+- `nurl.toml`, `CHANGELOG.md` and `README.md` have LF line ends in the
+  tarball. 0.3.0 was packed from a checkout that held them with CRLF, so
+  the registry's files differed from the repository's. No code changed.
+
 ## [0.3.0] — 2026-11-05
 
 Requires NURL 0.88.0 (std/pfile.nu's `pfile_try_lock`).

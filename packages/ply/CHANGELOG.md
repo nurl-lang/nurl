@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.6] — 2026-11-11
+
+### Changed
+
+- README: `vw_serve` is shown with all six arguments (the last one
+  selects https), and the writer example compiles as written. No code
+  changed; the registry's 0.3.5 carried the older README.
+
 ## [0.3.5] — 2026-10-14
 
 Requires NURL 0.73.0 (grammar v2.9 `raw`, `slice_window`, `file_is_open`).

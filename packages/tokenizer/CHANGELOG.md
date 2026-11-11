@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.6.1] — 2026-11-11
+
+### Fixed
+
+- `README.md` and the test data `tests/data/unigram_corpus.txt` and
+  `tests/data/unigram_golden.txt` have LF line ends in the tarball. 0.6.0
+  was packed from a checkout that held them with CRLF, so the registry's
+  files differed from the repository's. No code changed.
+
 ## [0.6.0] — 2026-11-07
 
 ### Added

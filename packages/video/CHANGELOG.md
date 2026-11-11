@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.6] — 2026-11-11
+
+### Changed
+
+- README: the table of library functions is marked as text; it is a
+  summary of signatures, not a NURL program. No code changed; the
+  registry's 0.2.5 carried the older README.
+
 ## [0.2.5] — 2026-10-14
 
 Requires NURL 0.73.0 (grammar v2.9 `raw`, `slice_window`, `file_is_open`).

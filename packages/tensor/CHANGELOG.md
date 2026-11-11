@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.6.7] — 2026-11-11
+
+### Changed
+
+- README: the examples compile as written. Each names what it is given
+  and shows the import it needs (`stdlib/core/vec.nu`,
+  `deps/tensor/src/dev.nu`). No code changed; the registry's 0.6.6
+  carried the older README.
+
 ## [0.6.6] — 2026-10-14
 
 ### Changed

@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.7] — 2026-11-11
+
+### Changed
+
+- README: the snapshot example compiles as written. It names what it is
+  given and its error arm prints the message. No code changed; the
+  registry's 0.1.6 carried the older README.
+
 ## [0.1.6] — 2026-10-14
 
 Requires NURL 0.73.0.

@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.14] — 2026-11-11
+
+### Changed
+
+- README: both examples import `deps/mlp/src/mlp.nu`, the path a consumer
+  has, and name what they are given, so they compile as written. No code
+  changed; the registry's 0.3.13 carried the older README.
+
 ## [0.3.13] — 2026-10-14
 
 ### Changed

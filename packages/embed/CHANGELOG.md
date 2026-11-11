@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.6.4] — 2026-11-11
+
+### Fixed
+
+- The manifest requires tokenizer `^0.6`, the series embed is built and
+  tested against. It still said `^0.4`, so an install from the registry
+  resolved a tokenizer two series older than the one in the repository,
+  and the publish gate refused the package. No code changed.
+
 ## [0.6.3] — 2026-10-15
 
 - **Fixed: every forward leaked a share of each weight chunk.** Each layer was handed to the block as `( mem_dup lay )`, a copy of its sixteen weight views, and the compiler never dropped such a copy (fixed in the compiler: a `mem_dup` copy handed straight to a call is now dropped after it). The chunks were never freed. An idle `serve --unload-after` process therefore kept its device memory, and the ASan check reported the chunks as leaks. The block now borrows the layer in place, with no copy (16 fewer reference-count round trips per layer). The suite passes 5/5, including the unload and ASan checks that failed.
