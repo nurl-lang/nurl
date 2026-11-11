@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_generic_struct_holds_itself_by_value.nu:8:18: error: '( Cell i )' holds itself by value, so it has no finite size: '( Cell i ).next' has the type '?( Cell i )'. A value cannot contain a value of its own type. Put the inner one behind an owner: '( Box ( Cell i ) )' for one owner, '( Rc … )' when it is shared, '( Vec … )' for several — and '?( Box … )' where there may be none.
+    : ( Cell i ) c @ ( Cell i ) { 1 @ ?( Cell i ) { F } }
+                 ^
