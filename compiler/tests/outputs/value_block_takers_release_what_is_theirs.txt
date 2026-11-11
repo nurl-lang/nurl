@@ -1,0 +1,19 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+1
+2
+47
+39
+47
+53
+48
+88
+137
+48
+45
+0
+an element long enough for a heap buffer
+90
+46
