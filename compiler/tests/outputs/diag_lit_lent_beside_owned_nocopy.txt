@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_lit_lent_beside_owned_nocopy.nu:21:25: error: this 'SE' is handed on with a field of its own beside a field it only borrows, a 'Bomb', which cannot be copied: lent whole, the literal's own field is released by no one, and owned whole, the borrowed one is released twice. Give the literal a value its owner gives up (a 'sink' parameter, a value taken out of what holds it), or hand back the borrowed part on its own.
+@ f Holder h → SE { ^ @ SE { ( string_from `a fresh name long enough for the heap` ) . h inner } }
+                        ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.
