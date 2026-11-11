@@ -7831,7 +7831,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
 }
 
 // The owned-closure list's word for the binding `name` (docs/MEMORY.md
-// §7.4): its owner slot (`<name>__envown`, mem_clo_slot_new) where it has
+// §7.5): its owner slot (`<name>__envown`, mem_clo_slot_new) where it has
 // one, else its name. A slot is a register, one per binding, so two
 // closures of one name — an inner scope's beside an outer one, or a
 // rebinding — are two entries: by name they were one, and the inner
@@ -20742,7 +20742,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         : s vt ( str_first_word urest ) = urest ( str_skip_word urest )
         ? | | ( str_contains_word old_user ptr ) ( str_contains_word usnap ptr )
         == 0 ( nurl_sym_len2 g_impl_name_syms `drop##` vt )
-        {}
+        { ? ( str_contains_word old_user ptr ) {} { ( mem_dkeep_mark ptr ) } }
         {  // The drop flags ride along: the exit block is emitted after
             // this scope has closed.
             : s sf0 ( nurl_sym_get2 syms ptr `__sinkflag` )
@@ -25070,7 +25070,7 @@ unsafe @ gen_match i lex i syms i cg → s {
     // Ownership snapshot: everything registered so far may be referenced
     // by this defer body — protect it from scope-exit / return-site
     // drops; fn_cleanup reclaims it after the chain has run.
-    ( __defer_snap_take syms )
+    ( __defer_snap_take syms cg )
     // Push this defer onto the chain (LIFO: new top). The slot lives in
     // g_fn_escapes (function lifetime): a defer registered inside an
     // arm/loop stays on the chain after that scope closes — the armed
@@ -25090,6 +25090,15 @@ unsafe @ gen_match i lex i syms i cg → s {
     ( nurl_print `  br i1 ` ) ( nurl_print fcnd ) ( nurl_print `, label %` ) ( nurl_print lbody )
     ( nurl_print `, label %` ) ( nurl_print lskip ) ( emit_dbg_eol )
     ( emit ( nurl_str_cat lbody `:` ) )
+    // The body's names are its own, as an arm's are: what it binds is
+    // named inside it only. Bound in the enclosing scope instead, a body's
+    // `: i a …` took the name `a` over for the rest of the function, and a
+    // later `a` read the body's storage, written only when the defer runs:
+    // uninitialised memory, a call through an unset closure (agora #636).
+    // (What it binds still lives to the function's cleanup, below.)
+    : s __db_user ( nurl_sym_get syms `__user_drops__` )
+    : s __db_slices ? != 0 g_fn_slice_decls ( nurl_sym_get syms `__slice_decls__` ) ``
+    ( nurl_sym_push syms )
     ( nurl_sym_def syms `__cur_lbl__` lbody )
     = g_did_ret 0
     : s old_df_body ( nurl_sym_get g_fn_escapes `__in_defer_body__` )
@@ -25117,15 +25126,21 @@ unsafe @ gen_match i lex i syms i cg → s {
     ( gen_block_stmts lex syms cg )
     = g_defer_body_depth - g_defer_body_depth 1
     // What the body bound of its own is the chain's too: its child defers
-    // read it after the body, and the main flow, where the body has not
-    // run, holds nothing in its slot. Snapshot it, as what came before
-    // the `;` is (__defer_snap_take): every return site skips it and
-    // fn_cleanup reclaims it after the chain. Left out, a defer-local
-    // Vec was dropped at every `^` before the body had run (SEGV), and
-    // never after it had (agora #405).
-    ( __defer_snap_take syms )
-    ( nurl_sym_def syms `__loop_exit__` old_df_exit )
-    ( nurl_sym_def syms `__loop_check__` old_df_check )
+    // read it after the body, an older defer may read a holder the body
+    // pointed at one of its locals, and the main flow, where the body has
+    // not run, holds nothing in its slot. Snapshot it, as what came before
+    // the `;` is (__defer_snap_take): fn_cleanup reclaims it after the
+    // chain (agora #405: a defer-local Vec was dropped at every later `^`,
+    // before the body had run). Its names end here; and where the body ran
+    // to its end, what it bound is left to the cleanup (mem_dkeep_mark —
+    // every owner of the body's is in the snapshot now, so this drain
+    // releases nothing).
+    ( __defer_snap_take syms cg )
+    ? & == g_did_ret 0 != 0 g_auto_drop_strings {
+        ( mem_drop_new_user_drops syms cg __db_user )
+        ? != 0 g_fn_slice_decls { ( mem_dkeep_slices syms cg __db_slices ) } {}
+    } {}
+    ( nurl_sym_pop syms )
     ( nurl_sym_set g_fn_escapes `__in_defer_body__` old_df_body )
     : s child_top ( nurl_sym_get g_fn_escapes `__defer_top_fn__` )
     ( nurl_sym_set g_fn_escapes `__defer_top_fn__` ldefer )
@@ -26069,8 +26084,11 @@ unsafe @ __bck_fall_ret_record i lex i syms i first_tt s first_val i sxn0 i line
 // free it. Symtab lookup is innermost-scope, so inside an arm this
 // resolves a shadowing declaration to the arm's own alloca.
 @ mem_emit_slice_free i syms i cg s name → v {
-    : s ty ( nurl_sym_get syms name )
-    : s ptr ( nurl_sym_get2 syms name `__ptr` )
+    ( mem_emit_slice_free_at cg ( nurl_sym_get syms name ) ( nurl_sym_get2 syms name `__ptr` ) )
+}
+
+// …of the slice of type `ty` stored at `ptr`.
+@ mem_emit_slice_free_at i cg s ty s ptr → v {
     // Slice type is always "{ <T>*, i64 }" (suffix ", i64 }" = 7 chars).
     // Extract <T>* = chars [2 .. len-7).
     : i tylen ( nurl_str_len ty )
@@ -26786,6 +26804,95 @@ unsafe @ mem_path_to_indices s path → s {
 // function with no defers every snapshot is empty and every helper
 // emits exactly what it always did.
 
+// ── What the function's cleanup has to release ─────────────────────
+// fn_cleanup releases what a defer kept back, and every exit of the
+// function runs it — also the exits that have nothing of that owner's to
+// release: a `^` above the owner's binding, which never ran; an arm that
+// was not taken, the owner and its defer both inside it; a `^` between
+// the binding and the `;`, compiled before the defer kept anything back,
+// which released the owner itself. Released there all the same, the first
+// two freed an uninitialised value and the third freed one twice (agora
+// #630). So each kept owner with a destructor has a flag, clear at entry
+// (`align 1`, emit_hoisted), that says "left to the cleanup", and it is set
+// exactly where an exit or a scope's end skips the owner because a defer
+// keeps it (mem_dkeep_mark). fn_cleanup releases the owner under it.
+
+// The flag of kept owner `key`, or ``.
+@ __dkeep_of s key → s {
+    : s k ( nurl_str_cat key `=` )
+    : ~ s rest ( nurl_sym_get g_fn_escapes `__dsnap_keep__` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? != 0 ( nurl_str_starts w k ) { ^ ( nurl_str_slice w ( nurl_str_len k ) - ( nurl_str_len w ) ( nurl_str_len k ) ) } {}
+    }
+    ^ ( nurl_str_cat `` `` )
+}
+
+@ __dkeep_new i cg s key → v {
+    ? != 0 ( nurl_str_len ( __dkeep_of key ) ) { ^ v } {}
+    : s k ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print k ) ( nurl_print ` = alloca i1, align 1\n` )
+    : s cur ( nurl_sym_get g_fn_escapes `__dsnap_keep__` )
+    : s w ( nurl_str_cat3 key `=` k )
+    ? == 0 ( nurl_str_len cur ) {
+        ( nurl_sym_set g_fn_escapes `__dsnap_keep__` w )
+    } {
+        ( nurl_sym_set g_fn_escapes `__dsnap_keep__` ( nurl_str_cat3 cur ` ` w ) )
+    }
+}
+
+// An exit, or a scope's end, has just skipped `key` because a defer keeps
+// it: it is the cleanup's to release from here.
+@ mem_dkeep_mark s key → v {
+    ? == 0 ( nurl_sym_len g_fn_escapes `__dsnap_keep__` ) { ^ v } {}
+    : s k ( __dkeep_of key )
+    ? == 0 ( nurl_str_len k ) { ^ v } {}
+    ( nurl_print `  store i1 true, i1* ` ) ( nurl_print k ) ( nurl_print `\n` )
+}
+
+// Open the "left to the cleanup" guard of `key` in fn_cleanup; returns the
+// label to close it with (__dret_guard_close), or `` when it has no flag.
+@ __dkeep_guard_open i cg s key → s {
+    : s k ( __dkeep_of key )
+    ? == 0 ( nurl_str_len k ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s fv ( nurl_cg_reg cg )
+    : s n ( nurl_str_slice fv 1 - ( nurl_str_len fv ) 1 )
+    : s ldrop ( nurl_str_cat `dkeep.drop.` n )
+    : s lskip ( nurl_str_cat `dkeep.skip.` n )
+    ( nurl_print `  ` ) ( nurl_print fv ) ( nurl_print ` = load i1, i1* ` ) ( nurl_print k ) ( nurl_print `\n` )
+    ( nurl_print `  br i1 ` ) ( nurl_print fv ) ( nurl_print `, label %` ) ( nurl_print ldrop ) ( nurl_print `, label %` ) ( nurl_print lskip ) ( nurl_print `\n` )
+    ( nurl_print ldrop ) ( nurl_print `:\n` )
+    ^ lskip
+}
+
+// The slices a defer body declared and still owns at its end (`old_decls`:
+// the declarations before the body), kept for fn_cleanup by their storage:
+// the owned-slice list is by name, and the body's names end with it, so
+// the cleanup's by-name walk no longer finds them. Each gets the "left to
+// the cleanup" flag, set here — where the body has run.
+@ mem_dkeep_slices i syms i cg s old_decls → v {
+    : s owned ( nurl_sym_get syms `__owned_slices__` )
+    : ~ s rest ( nurl_sym_get syms `__slice_decls__` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s name ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        : s ptr ( nurl_sym_get2 syms name `__ptr` )
+        ? | | ( str_contains_word old_decls name ) ! ( str_contains_word owned name ) == 0 ( nurl_str_len ptr ) {} {
+            : s cur ( nurl_sym_get g_fn_escapes `__dsnap_slice_kept__` )
+            ? ( str_contains_word cur ptr ) {} {
+                ( nurl_sym_def g_fn_escapes ( nurl_str_cat ptr `__slt` ) ( nurl_sym_get syms name ) )
+                ? == 0 ( nurl_str_len cur ) {
+                    ( nurl_sym_set g_fn_escapes `__dsnap_slice_kept__` ptr )
+                } {
+                    ( nurl_sym_set g_fn_escapes `__dsnap_slice_kept__` ( nurl_str_cat3 cur ` ` ptr ) )
+                }
+                ( __dkeep_new cg ptr )
+            }
+            ( mem_dkeep_mark ptr )
+        }
+    }
+}
+
 // Union `src_key`'s records (recsz words each, keyed by word 0) into
 // the fn-lifetime snapshot list `dst_key`.
 @ __dsnap_union i syms s src_key s dst_key i recsz → v {
@@ -26819,10 +26926,16 @@ unsafe @ mem_path_to_indices s path → s {
     ^ ( nurl_str_cat `` `` )
 }
 
-@ __defer_snap_take i syms → v {
+@ __defer_snap_take i syms i cg → v {
     ( __dsnap_union syms `__owned_strings__` `__dsnap_str__` 1 )
     ( __dsnap_union syms `__owned_struct_fields__` `__dsnap_sfield__` 6 )
     ( __dsnap_union syms `__user_drops__` `__dsnap_udrop__` 2 )
+    // (…each with its "left to the cleanup" flag, above.)
+    : ~ s __dk_rest ( nurl_sym_get syms `__user_drops__` )
+    ~ != 0 ( nurl_str_len __dk_rest ) {
+        ( __dkeep_new cg ( str_first_word __dk_rest ) )
+        = __dk_rest ( str_skip_word ( str_skip_word __dk_rest ) )
+    }
     // (…with each owner's drop flag, by name: fn_cleanup reclaims it where
     // the scope that named the flag — an arm the defer sat in — is gone,
     // and a defer body's owner that never ran keeps its flag clear, agora
@@ -26963,6 +27076,7 @@ unsafe @ mem_path_to_indices s path → s {
         ? | ( str_contains_word skips ptr ) == 0 ( nurl_str_len impl_mangle_key )
         {}
         { : s gk ( __dret_guard_open cg ptr )
+            : s kk ( __dkeep_guard_open cg ptr )
             ( mem_journal_forget_userdrop cg ptr vt )
             // (Its drop flag, where the scope that named it is gone.)
             ? == 0 ( nurl_sym_len2 syms ptr `__live` ) {
@@ -26970,6 +27084,7 @@ unsafe @ mem_path_to_indices s path → s {
                 ? != 0 ( nurl_str_len lf ) { ( nurl_sym_def syms ( nurl_str_cat ptr `__live` ) lf ) } {}
             } {}
             ( mem_emit_gated_drop syms cg ptr vt )
+            ( __dret_guard_close kk )
             ( __dret_guard_close gk )
         }
     }
@@ -26989,6 +27104,14 @@ unsafe @ mem_path_to_indices s path → s {
         ? | ( str_contains_word skips name ) ! ( str_contains_word slcs name )
         {}
         { ( mem_emit_slice_free syms cg name ) }
+    }
+    // (…and a defer body's own slices, by their storage: mem_dkeep_slices.)
+    = rest ( nurl_sym_get g_fn_escapes `__dsnap_slice_kept__` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s ptr ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s kk ( __dkeep_guard_open cg ptr )
+        ( mem_emit_slice_free_at cg ( nurl_sym_get2 g_fn_escapes ptr `__slt` ) ptr )
+        ( __dret_guard_close kk )
     }
 }
 
@@ -30906,9 +31029,10 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
         : s ptr ( str_first_word rest ) = rest ( str_skip_word rest )
         : s vt ( str_first_word rest ) = rest ( str_skip_word rest )
         // A snapshot entry is dropped (and journal-forgotten) by
-        // fn_cleanup after the defer chain runs — skip it entirely here.
+        // fn_cleanup after the defer chain runs — skip it entirely here,
+        // and say so (mem_dkeep_mark; the returned binding is the caller's).
         ? ( str_contains_word snap ptr )
-        {}
+        { ? ( seq ptr skip_ptr ) {} { ( mem_dkeep_mark ptr ) } }
         {  // Forget the journal entry regardless of branch: this scope's
             // alloca dies at exit, so a later panic must not drain it.
             // (Whether the value was dropped here or escaped up, its
@@ -31112,7 +31236,7 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
         : s impl_mangle_key ( nurl_sym_get g_impl_name_syms impl_key )
         ? | | ( str_contains_word old_list ptr ) ( str_contains_word snap ptr )
         == 0 ( nurl_str_len impl_mangle_key )
-        {}
+        { ? ( str_contains_word old_list ptr ) {} { ( mem_dkeep_mark ptr ) } }
         {  // Forget the value's journal entry before its destructor runs,
             // so neither a later panic in this function nor one inside the
             // destructor itself replays it.
@@ -64604,6 +64728,8 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     ( nurl_sym_set g_fn_escapes `__dsnap_sfield__` `` )
     ( nurl_sym_set g_fn_escapes `__dsnap_udrop__` `` )
     ( nurl_sym_set g_fn_escapes `__dsnap_live__` `` )
+    ( nurl_sym_set g_fn_escapes `__dsnap_keep__` `` )
+    ( nurl_sym_set g_fn_escapes `__dsnap_slice_kept__` `` )
     ( nurl_sym_set g_fn_escapes `__dsnap_cenv__` `` )
     ( nurl_sym_set g_fn_escapes `__dsnap_slice__` `` )
     ( nurl_sym_set g_fn_escapes `__dret_flags__` `` )

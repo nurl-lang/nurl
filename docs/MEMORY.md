@@ -2151,6 +2151,17 @@ registered after it at their normal scope exits. An owned value returned
 on one path and not on another is released on the path that does not
 return it (spec §5.3).
 
+A defer body's names are its own, as an arm's are. It reads the bindings
+in scope at its `;`, and a name it binds is visible inside the body only.
+What it binds is released after the whole defer chain has run, with the
+values registered before the defer: a defer registered inside the body,
+or an older defer reading a holder the body pointed at one of its
+locals, still finds it. A path that leaves the function without having
+run a binding (an early `^` above it, an arm that was not taken, a defer
+body that did not run) releases nothing of that binding, whether or not
+a defer reads it; a path that released a value at an early `^` does not
+release it again after the defer chain.
+
 ### 7.2 Panics
 
 A panic jumps to the nearest `recover` frame without unwinding through
