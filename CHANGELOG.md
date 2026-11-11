@@ -10,6 +10,163 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Unreleased changes are fragments in [`changes/unreleased/`](changes/unreleased/) until a release folds them in here (`tools/changelog.py`).
 
+## [0.91.1] — 2026-11-11
+
+### Changed
+
+- **A type's name holds no `__` past its leading underscores and does not end in `_`, and an import alias is no type's name** (Agora #639). Breaking, before v1.0. `__` is the compiler's own separator — `( Arc Bag )` is spelled `Arc__Bag`, `( Vec i )` `Vec__i64`, and a module's `Point` imported as `geo` is `geo__Point` — and every rule that asks what a type is reads the declared name up to that separator, so a struct of a program's own named `Arc__Bag` was read as an `Arc`, and `( Holder_ i )` (`Holder___i64`) as a `Holder` of `_i64`. A struct, enum or trait declared with such a name is refused where it stands, with the rename (`Arc_Bag`, `ArcBag`; a name that ends in a letter or a digit). An import alias that holds `__`, ends in `_`, or is the name of a type the program declares is refused where it is written — and a type declared after the import that takes the alias's name, where the type is. `_private`, `__internal` and `my_geo` are names of a program's own, as before.
+- **A standard-library handle is used by two threads at once only where it says `% Sync`** (Agora #639). Whether an unmarked share handle may be was derived from its fields — right for a handle written in checked code (nurldb's `Store`: `Arc`s over locks and `Atomic`s), wrong for one whose API is raw code that reaches its state by address: a `BufReader`'s copies are one buffer and one position its functions refill in place, and the spawner of a thread reading through one kept reading through it. Such a handle — every standard-library one, a program's own with an `unsafe` drop hook — answers by its mark alone. `DosState`, `MappedFile` and `ZipArchive` say `% Sync`, each with the reason beside the mark; a `BufReader` moves into the thread's closure as a `Vec` does, an `Arc` whose payload holds one does not cross to another thread, and the crossing check counts its shares. Two threads that read one stream keep the reader in a `Locked`. The library's handles that write — `BufReader`, `FsWatch`, `DosState` — now keep their state in a counted block only their own code reaches, not behind an `Arc` whose payload a program could read (a `DosState`'s counters, beside a locked write on another thread).
+
+- **`./build.sh` and `build.bat` fail when the compiler they build warns
+  about its own source** (Agora #695). Stage 2 is the new compiler
+  compiling `compiler/nurlc.nu`, the compile CI's
+  `tools/tests/test_lsp_toolchain.py` requires to print nothing. nurlc's
+  lints apply to new compiler code like to any other, and a warning there
+  was a line in the build log of a build that passed; the pull request
+  then failed three CI jobs a quarter of an hour later. The build now
+  keeps stage 2's stderr and fails on a `warning:` in it, showing the
+  warning and why — no extra compile, the same build time. A control in
+  `tools/tests/test_build_failures.py` builds a copy of the tree whose
+  `nurlc.nu` has such a warning and requires the build to fail with it.
+
+### Fixed
+
+- **Windows: a program links with a system clang again from an installed toolchain.** `nurl.bat` handed the directory of the toolchain's bundled FFI libs (`stdlib\winlib`) to the linker through the `LIB` environment variable. clang adds the Windows SDK and MSVC library directories it finds itself only while `LIB` is unset, so outside a developer prompt every clang link from an installed toolchain failed (`lld-link: error: could not open 'winhttp.lib'`); the bundled zig was not affected. The directory is now an argument of its own (`-L`), and `LIB` is left alone. v0.91.0's Windows archive was never published for this reason (the release workflow's smoke test caught it); `windows-tests` now links once with a bundled-libs fragment in place, so a pull request sees it.
+
+- **A handle that synchronises itself is the same handle wherever it was read out of** (Agora #639). A closure several threads run may send on a `Channel` it captured — but one that captured a struct holding the `Channel` and handed it to a function (`( note app k )`, which sends on `. a jobs`) was refused as "the closure changes 'app'", and the same call on an `Arc`'s payload as "hands 'note' the contents of Arc 'held' to change": the change summary charged whatever the handle was read out of. For the thread rules, a change made through a parameter borrowed by value whose type synchronises itself — an `Arc`, a type asserted `% Sync` (`Channel`, `Mutex`, `Locked`, `Atomic`, a server's handles, a program's own `unsafe % Sync T`), a program's own share handle made of nothing but those, judged by the type the function was compiled with — is now that value's own, through any number of calls, out of a field, an element of a `Vec` of handles or an `Arc`'s payload. What it does not excuse stays refused: a change of the plain field beside the handle, an `inout` parameter (the holder's storage) and a `sink` one (the value's end). The borrow rules ask what they asked; two summaries they read became exact on the way — a function that hands a callee two differently built values from two places (an error reported with `( panic_with ( string_concat … ) )` twice) is no longer summarised as handing its parameter on, and a copy made by a helper defined below its caller is no longer taken to hold the parameter's storage: a function defined below its caller, and a generic first used there, are judged by the summary they end with, in a function and in a closure several threads run alike (`: ( Vec i ) c ( vec_clone [i] . app v ) ( vec_push [i] c k )` in a shared closure was refused as a change of `app`). A closure body that gives such a local another value further down — `= c …`, an `inout` argument, an inner closure that assigns it — is judged as before, as if every call handed back what it was given. A program's own `unsafe % Sync T` now also promises that every change reachable through a by-value copy of a `T` is synchronised by `T` (docs/MEMORY.md §3).
+- **The thread rules see a change made through a handle read out of a parameter** (Agora #646). A closure several threads run, or the reader of an `Arc`'s payload, could hand what it shares to a function that grew an element it read with `vec_at`, a field it bound to a name, what an accessor lent it or a `??` payload — `@ grow_first ( Vec ( Vec String ) ) vv → v { ( vec_push [String] ( vec_at [( Vec String )] vv 0 ) … ) }` — and every thread grew one buffer with no lock (a double free). Such a function changes its parameter for both rules now, as the same change written at the closure or at the `arc_get` always did; a shared closure's body that binds the element first, and a reader that matches the payload, are followed too — through a Vec bound out of the payload of a `??` over an option field (`?? . a slot { T r → { : ( Vec i ) c . r log ( vec_push [i] c k ) } … }`), and through a function defined below its caller that hands its argument back (`: ( Vec i ) c ( same p )`, `@ same ( Vec i ) x → ( Vec i ) { ^ x }` further down), which was read as handing back nothing.
+- **One handle with a plain part, changed by a closure several threads run** (Agora #639). A program's own share handle made of `Arc`s and a plain `Vec` beside them — `Reg { ( Arc Atomic ) hits ( Vec i ) mine }`, whose `Reg_share` builds a new `Vec` — may be used on both sides of a spawn: each share has a `Vec` of its own. The Sync-closure rule read "may be shared" as "synchronises itself" and skipped such a capture altogether, so a closure kept in an `Arc` that pushed to `. reg mine`, or handed `reg` to a function that did, grew one `Vec` from every thread (a double free). A change through a capture is the capture's own only where every part of it orders its own changes.
+- **An `Arc` is the standard library's, not a name** (Agora #639). The thread rules took any type whose name read `Arc` for the library's handle — a generic `Arc` a program with no `std/arc` declared itself, a struct named `Arc__Bag`. They ask what the instance was made from, and so do the crossing check — a program's own handle named `Arc` that keeps its state in a counted block crossed to a thread with a share left behind, unchecked — and the rule for a global set at start, which took a program's own generic `Arc` or `Channel` for the library's (one holding an `Rc`: a double free).
+- **A global set at start holds only what threads may share** (Agora #639). `: ( Locked ( Rc i ) ) g ( make )` was accepted: the rule asked that the global's type be a `Locked`, an `Arc` or a `Channel`, and not what it holds, so two threads copying the `Rc` out raced on its count (a use-after-free). The global is shared as a handle captured by a thread's closure is: a `Locked`'s or a `Channel`'s value must be Send, an `Arc`'s payload Sync, and the refusal says what the type reaches.
+- **A type named with leading underscores, or reached through an import alias, is the type it is** (Agora #639). The rules that walk a type by its name cut the name at its first `__`, so `: __Holder { ( Rc i ) r }`, and a module's `Holder` used as `hm::Holder`, were looked up under a name no struct has — and found to hold nothing: one keeping an `Rc` was captured by a thread's closure while the spawner kept a clone (a use-after-free). The name is read whole.
+- **A `BufReader` kept in a `Vec`, a struct or an option can be read** (Agora #639). Reading a line through `( vec_at [BufReader] rs 0 )` was refused as a change of an `Arc`'s frozen payload — the one the reader kept its buffer behind. A reader's handle is a share of its one buffer and position, wherever it was read out of.
+
+- **What a loop's condition binds is released every round** (Agora #674,
+  #628, `compiler/nurlc.nu`). A value block in a loop's condition —
+  `~ < { : String s ( mk k ) ( string_len s ) } n { … }` — binds in the
+  scope around it, which for a loop's condition is the function's: its
+  String, Vec, struct with a destructor or closure environment was
+  released once, at the function's exit, and every round's value but the
+  last was never released (a destructor ran once instead of once per
+  evaluation). They are released now where the round's condition has its
+  value, before the branch on it. A condition that binds no owner compiles
+  to the IR it did before.
+
+- **An owned slice that a loop body's `;` defer keeps is released every
+  round** (Agora #676, `compiler/nurlc.nu`). `: [i xs [i | …]` above a
+  `;` inside a loop left every round's buffer but the last unreleased
+  (and the elements of a slice of Strings with it), though a String or a
+  Vec beside it was parked and released since Agora #655. A slice is
+  listed by its storage, not as a value with a destructor, so the parking
+  wrote nothing for it; it now parks the slice under its "left to the
+  cleanup" flag and releases its elements and its buffer after the defer
+  chain.
+
+### Known issues
+
+- v0.91.0 was tagged and never published: its release run stopped at the Windows archive's smoke test (the `nurl.bat` fix under Fixed). 0.91.1 is 0.91.0 plus the changes listed here.
+- **73 soundness holes are open, each with a fix in progress**: agora
+  #242 (a join or a value block bound by `:` and then handed on by name,
+  in nine remaining shapes), #280 (a field a `sink` took, used again by
+  a route the check does not see), #366 (an owner's old value whose
+  hand-over has no key: kept back (a leak) on a lend path, freed under
+  its borrower on an owned one), #378 (an option owner given a lend
+  inside a closure, out of a capture, through a forwarder defined above
+  the closure), #382 (a panic under `recover` between a holder's store
+  of a callee local's view and its repoint), #384 (a handle's own drop
+  hook that reads a view), #387 (a second reader of a field, after the
+  field is replaced), #395 (a store through a borrow that #292 does not
+  follow to its owner), #424 (a borrow of a `??` payload, and the
+  scrutinee handed to a callee that clears it), #427 (an option owner
+  given what a call may hand back of its own value, where nurlc has no
+  lend fact for the call at that line), #428 (a change made in place by
+  a route that does not reach the owner), #445 (a closure called with a
+  binding it replaces, by any route but a direct call), #450 (an owner
+  given a part of its own value, or a value that shares part of it,
+  while nurlc takes the result for another value), #460 (two `??`
+  payload bindings of one enum value, a change through one), #462 (a
+  function binding a lent element of its parameter, or an enum payload
+  of one, and handing the binding back), #464 (a temporary argument
+  freed right after the call while the callee's result views it), #466
+  (an `inout` view parameter kept in a second holder, an `s` global or a
+  thread), #467 (a returned closure that captured a holder given a view
+  of a parameter), #469 (a closure that captured an owner of views by
+  value, run on another thread or stored into an owner that adopts it),
+  #472 (an iterator yields copies of what it captured), #475 (the keep
+  rule and the `inout` store for a `!i String`, a `? ?String` or a `!(
+  Rc String ) String`), #479 (a copied closure that views a local, a
+  closure body handing a `sink` a value derived from its capture, and a
+  statement-form match arm returning a closure over a borrowed field),
+  #481 (a `dyn` impl that calls its own method through a dyn field),
+  #487 (a bare `s` view handed back through a `??` value join), #488 (a
+  field given a new value through a `~` loop's struct element), #489 (an
+  `unsafe` function handing back a view of its `~` loop's element over a
+  parameter), #494 (a container handed to a `sink` parameter together
+  with a borrow of its element), #495 (a struct element of a parameter,
+  bound and handed to a callee that clears a field of it), #496 (a
+  parameter's element grown by a closure, a closure parameter or through
+  a `??` payload), #497 (an element bound through one Rc handle and
+  grown, viewed through another handle of the same Rc), #530 (a closure
+  body local bound to a captured parameter's element, handed to a
+  dropper), #545 (an owned slice moved on, given a parameter, or read
+  after a move), #557 (a borrow through one `??` and a change of the
+  payload's field in another), #560 (`^` of a lend of a local reached
+  through a direct slice call, another slice maker or a re-pointed /
+  aliased slice, a payload field bound first, an option field of a
+  payload, a vec_pop payload, or a closure), #567 (an `inout` parameter
+  handed to a `sink`), #570 (a closure parameter cleared through a
+  binding), #575 (a heap-valued value block's locals keep their names
+  after the block), #580 (a `~` loop over a container lent out of
+  another, grown through another borrow of it), #601 (a cursor of a
+  container that reaches a growth through a struct literal, or an Rc
+  clone handed to a helper), #604 (within one statement, a call's result
+  that views a binding, or a view read with no call, used after a later
+  call ended what it views), #626 (`= s { : String s … s }` into an
+  `inout` parameter, or in a loop body), #628 (a value block ending in a
+  call, where its result is not a `:` binding's or a local
+  assignment's), #629 (a value block's tail binding consumed inside the
+  block, beside an outer binding of its name), #631 (a mutable second
+  name of an owner, changed, then handed on), #637 (a closure a `;`
+  defer calls, bound where the binding is made more than once), #638
+  (closures through value blocks, the rest of #627), #643 (a field given
+  a new value through a by-value struct parameter, or through a struct a
+  closure captured), #647 (a view of a struct's field across a call that
+  grows that field through a handle read out of its parameter), #656 (a
+  closure that changes a by-value parameter it captured), #657 (an Arc's
+  payload changed through a closure), #663 (a returned value block, the
+  rest of #649), #664 (an owned slice has no drop flag), #665 (a struct
+  holding a closure, pushed into a `Vec` kept in an `Arc`, and the
+  closure run by several threads), #667 (`= b x` where `x` owns its
+  value on some paths only (`: ~ String x ? c ( string_from … ) lent`),
+  and the panic journal after a handover by name), #668 (a `: ~` binding
+  of a value block whose tail is the block's own binding, handed to a
+  `sink`; a cursor `: ~ w u` given a new value and then handed to a
+  `sink`; a tail named like the binding; a raw `s` tail handed back),
+  #669 (a borrowed `% Drop` value still taken for owned through a nested
+  generic identity, an `=` into an owning binding, a stored binding of a
+  parameter, or a loop element handed to a `sink`), #670 (a `^` or a `\`
+  above a loop body's `;` skips the defer an earlier round armed), #675
+  (a generic struct of the program's own that holds an `Rc`, handed to a
+  thread), #677 (a part of a parameter handed back on one path while
+  another path hands the parameter to a `sink`; a payload of a local
+  plain enum handed back through a binding, a generic call or a struct's
+  field; a `% Drop` literal handed straight to a function that only
+  reads it), #678 (a wrapped lending call binds no borrow), #679 (a view
+  of a per-call-owned option's payload handed back), #680 (a sink call
+  in a returned expression), #681 (an enum payload matched in place out
+  of an Arc), #682 (a payload view kept in a local Vec), #683 (the
+  Send/Sync walk and an option in a generic argument), #686 (a growing
+  closure run under another name), #688 (a `( mem_dup x )` as an arm of
+  a `?` value join), #689 (the crossing check and a sealed handle over
+  an Arc), #690 (an ArcWeak crosses a thread where its Arc may not),
+  #692 (a `% Drop` value from a lending call, handed to a changer), #693
+  (`% NotSync ( W i )` is not asked by the frozen-Arc rule), #696 (a
+  handle local changed in a loop before it is given a captured field)
+  and #697 (an `inout` parameter assigned a field of a borrowed
+  parameter). `docs/LIMITATIONS.md` gives each one's shape and how to
+  stay clear of it. Closed in this release: agora #639, #646, #674,
+  #676. A release does not say "no hole is known open" while one is.
+
 ## [0.91.0] — 2026-11-11
 
 ### Added
