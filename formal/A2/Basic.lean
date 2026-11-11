@@ -123,10 +123,13 @@ theorem Sub.trans {a b c : Val} (h1 : Sub a b) (h2 : Sub b c) : Sub a c := by
 @[simp] theorem Blk.rd_arc (t : Ty) (p : Option Val) : (Blk.mk t .arc p).rd = p.getD (.int 0) := rfl
 @[simp] theorem Blk.rd_lock (t : Ty) (p : Option Val) : (Blk.mk t .lock p).rd = .int 0 := rfl
 @[simp] theorem Blk.rd_view (t : Ty) (p : Option Val) : (Blk.mk t .view p).rd = p.getD (.int 0) := rfl
+@[simp] theorem Blk.rd_dead (t : Ty) (p : Option Val) : (Blk.mk t .dead p).rd = .int 0 := rfl
+@[simp] theorem Blk.tree_dead (t : Ty) (p : Option Val) : (Blk.mk t .dead p).tree = p.getD (.int 0) := rfl
 @[simp] theorem Blk.keeps_mk (t : Ty) (k : BKind) (p : Option Val) : (Blk.mk t k p).keeps = p.getD (.int 0) := rfl
 @[simp] theorem Blk.rdOnly_arc (t : Ty) (p : Option Val) : (Blk.mk t .arc p).rdOnly = ⟨t, .arc, p⟩ := rfl
 @[simp] theorem Blk.rdOnly_lock (t : Ty) (p : Option Val) : (Blk.mk t .lock p).rdOnly = ⟨t, .lock, none⟩ := rfl
 @[simp] theorem Blk.rdOnly_view (t : Ty) (p : Option Val) : (Blk.mk t .view p).rdOnly = ⟨t, .view, p⟩ := rfl
+@[simp] theorem Blk.rdOnly_dead (t : Ty) (p : Option Val) : (Blk.mk t .dead p).rdOnly = ⟨t, .dead, none⟩ := rfl
 
 /-- A3.2's second cut: what a block's holders read it keeps alive (a lock
     block's holders read nothing). -/
@@ -136,6 +139,7 @@ theorem Blk.rd_keeps (bl : Blk) : bl.rd = bl.keeps ∨ bl.rd = .int 0 := by
   | arc => exact Or.inl rfl
   | lock => exact Or.inr rfl
   | view => exact Or.inl rfl
+  | dead => exact Or.inr rfl
 
 /-- ... and what a block as its holders see it keeps alive is what they read. -/
 theorem Blk.rdOnly_keeps (bl : Blk) : bl.rdOnly.keeps = bl.rd := by
@@ -179,6 +183,7 @@ theorem Blk.sub_tree {bl : Blk} {n : Val} (h : Sub n bl.tree) :
     | view => exact Or.inr h.int_eq
     | arc => exact Or.inl ⟨p, rfl, h⟩
     | lock => exact Or.inl ⟨p, rfl, h⟩
+    | dead => exact Or.inl ⟨p, rfl, h⟩
 
 /-- What a block's holders read lies in an `arc` block's or (A3.3) a view's
     payload, or is nothing. -/
@@ -187,6 +192,7 @@ theorem Blk.sub_rd {bl : Blk} {n : Val} (h : Sub n bl.rd) :
   obtain ⟨t, k, p⟩ := bl
   cases k with
   | lock => exact Or.inr h.int_eq
+  | dead => exact Or.inr h.int_eq
   | arc =>
     cases p with
     | none => exact Or.inr h.int_eq
@@ -252,6 +258,7 @@ theorem ViewsAt.rd_ids {B : Nat → Option Blk} (hv : ViewsAt B) {k : Nat} {bl :
   cases kd with
   | arc => exact ⟨k, _, hk, h⟩
   | lock => simp [Blk.rd] at h
+  | dead => simp [Blk.rd] at h
   | view =>
     obtain ⟨k0, t0, q, rfl, rfl, hk0⟩ := hv.view hk
     refine ⟨k0, _, hk0, ?_⟩
@@ -272,6 +279,7 @@ theorem ViewsAt.rd_reached {B : Nat → Option Blk} (hv : ViewsAt B) {R : Val �
   cases kd with
   | arc => exact ⟨k, _, hk, h, hr⟩
   | lock => simp [Blk.rd] at h
+  | dead => simp [Blk.rd] at h
   | view =>
     obtain ⟨k0, t0, q, rfl, rfl, hk0⟩ := hv.view hk
     refine ⟨k0, _, hk0, ?_, .pay hr hk (Or.inl (Or.inl ⟨none, Sub.fst (Sub.refl _)⟩))⟩
@@ -430,6 +438,7 @@ theorem HeapOK.rd_sub {m : Mem} (hh : HeapOK m) {k : Nat} {bl : Blk} (hk : m.blk
   cases kd with
   | arc => exact ⟨k, _, hk, h⟩
   | lock => rw [Blk.rd_lock] at h; rw [h.int_eq] at hi; simp [Val.head] at hi
+  | dead => rw [Blk.rd_dead] at h; rw [h.int_eq] at hi; simp [Val.head] at hi
   | view =>
     obtain ⟨k0, t0, q, rfl, rfl, hk0⟩ := hh.view hk
     refine ⟨k0, _, hk0, ?_⟩

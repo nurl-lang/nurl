@@ -4,10 +4,6 @@ import A2.StepFrame
 
 namespace A2
 
-theorem src_spine {s : Stmt} (h : s.src = true) : s.spine = [] := by
-  induction s with
-  | seq a b iha _ => simp only [Stmt.src, Bool.and_eq_true] at h; simp [Stmt.spine, iha h.1]
-  | _ => simp_all [Stmt.src, Stmt.spine]
 
 theorem StmtT.weakenIn {P : Prog} {Γ Γ0 Δ : Ctx} {F : List Var} {s : Stmt} (hw : Weaker Γ Γ0)
     (h : StmtT P Γ0 F s Δ) : StmtT P Γ F s Δ := StmtT.sub hw h (Or.inl rfl)

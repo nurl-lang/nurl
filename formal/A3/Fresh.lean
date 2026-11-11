@@ -165,6 +165,7 @@ theorem Step.grows {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
   | scopeDPMoved _ _ ih => exact ih.trans (Grows.of_eq rfl rfl)
   | withLock _ hk _ =>
     exact ⟨Nat.le_refl _, fun _ h => .inl h, (BlkLe.setLock hk none).trans (BlkLe.refl _)⟩
+  | reap _ hk _ => exact ⟨Nat.le_refl _, fun _ h => .inl h, BlkLe.setDead hk none⟩
   | scopeLIn _ ih => exact ih
   | scopeLSkip hrl => exact Release.grows hrl
   | scopeLFail _ _ => exact Grows.refl _
