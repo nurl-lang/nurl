@@ -664,7 +664,8 @@ new language features.
   [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md).
 - [ ] **Mechanized soundness proof** ([`formal/`](formal/README.md)) —
   phases A1 (the core calculus), A2 (structs, enums, closures and trait
-  objects, panics, the drop journal, leak freedom) and A3 (threads, `Arc`,
+  objects, panics, the drop journal, leak freedom, `% Drop` destructors on
+  the type with drop glue as checked code) and A3 (threads, `Arc`,
   `Locked` / `Mutex`, `RwLocked` and `% Frozen` / `% NotSend` guards,
   `Atomic`, channels, `SendCheck` library handles, closures and trait
   objects across threads, module globals, data-race freedom) are proven in
