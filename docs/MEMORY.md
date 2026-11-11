@@ -2245,13 +2245,22 @@ journal** instead:
   lives in one is freed.
 - A `Vec` releasing elements that may run a destructor is recorded too,
   as the elements still to go. An element's destructor that panics (in
-  the `Vec`'s own drop, a `vec_truncate` or a `vec_clear`) does not end
-  the release: the elements after it are dropped, in index order and once
-  each, then the buffer and the `Vec`, and only then does the panic go
-  on. The same holds for a `Vec` inside a `Vec`, a field or a payload. A
+  the `Vec`'s own drop, a `vec_truncate`, a `vec_clear` or a
+  `vec_retain`) does not end the release: the elements after it are
+  dropped, in index order and once each, then the buffer and the `Vec`,
+  and only then does the panic go on. (`vec_retain` judges every element
+  before it drops one, so the `Vec` holds each of its elements once
+  whenever its predicate or a destructor runs: a panic in either leaves a
+  `Vec` to drop, or to go on with.) The same holds for a `Vec` inside a
+  `Vec`, a field or a payload. A
   `Vec` whose elements run no code of the program's own when dropped (a
   `String`, plain data) records nothing: no panic can start in its
   release.
+- What a destructor allocates and frees while the journal is drained is
+  freed like anything else. The drain keeps the buffers it frees until it
+  ends, so an address it has freed is not handed out again while it runs:
+  a second release of the same buffer through another registration is
+  passed over, and the release of a new buffer never is.
 
 The journal belongs to the thread outside fibers and to the fiber inside
 one. The scheduler switches it with the fiber, so fibers sharing a worker,
@@ -2478,6 +2487,19 @@ parameter by its drop glue — the fields, never the impl again — whether
 the value reached it from the impl or straight from its owner. A closure
 defined inside an impl is its own function, with no receiver to drop.
 
+An enum with a `% Drop` of its own is dropped the same way: its impl,
+then the payloads of the variant that is there, as a binding, a `Vec`
+element, a struct field or a temporary a `??` matches. It stays whole for
+its destructor: a `??` arm is lent its payloads and takes none out of it.
+A payload handed back (`^ s`, a join's value, a field of a boxed payload)
+out of such an enum, out of any enum held in a field of a local struct,
+or out of one bound from a call that answers per call (`: E e ( mk )`,
+`E` holding a `% Drop` value), by the function that drops it is the
+caller's own copy; a payload that cannot be copied (a `% Drop` value) is
+refused there. An enum with no `% Drop` of its own that a binding owns
+on every path gives the payload up instead: it moves out, and the enum
+drops the rest.
+
 A destructor that panics is not run again by the unwind: a value leaves
 the panic journal before its destructor runs, and while the destructor
 runs its receiver's slot is journaled for the drop glue, so a panic inside
@@ -2620,9 +2642,9 @@ are dropped, moved and copied by the same rules:
 | `( mem_put_back x )` | the next store of `x` through a pointer writes back a value read from that slot; the container keeps owning it; `unsafe` only |
 | `( mem_dup x )` | an owned copy: deep for an owning value, the value itself otherwise; it holds the views `x` holds (§2.13) |
 | `( mem_forget x )` | gives up `x`'s value without releasing it; `unsafe` only |
-| `( mem_drop_range [T] data from to )` | drops the elements `[from, to)` of the buffer at `data`, which their container has given up, in index order (`vec_truncate`, `vec_clear`); one whose destructor panics does not end it (§7.2); no code at all for a `T` that owns nothing; `unsafe` only |
+| `( mem_drop_range [T] data from to )` | drops the elements `[from, to)` of the buffer at `data`, which their container has given up, in index order (`vec_truncate`, `vec_clear`, `vec_retain`); one whose destructor panics does not end it (§7.2); no code at all for a `T` that owns nothing; `unsafe` only |
 | `( mem_replace [T] place x )` | `x` goes into `place` (a mutable binding, a field of one, or a field through a pointer) and what `place` held comes back, owned; nothing is dropped or copied (stdlib/core/mem.nu, `unsafe`) |
-| `( vec_retain [A] v keep )` | the elements `keep` answers T for stay, in order; the rest are dropped, in place (stdlib/core/vec.nu) |
+| `( vec_retain [A] v keep )` | the elements `keep` answers T for stay, in order; the rest are dropped, in place, once every element has been judged (in no order of their own); a `keep` or a destructor that panics leaves `v` holding each of its elements once (§7.2) (stdlib/core/vec.nu) |
 | `( vec_put_back [A] v i x )` | `x`, read out of slot `i` and updated, goes back: the check-in of a table that lends its records by value; a function handing its parameter on to it writes it back too, for its own callers. Nothing checks that `i` is the slot `x` was read from, so it is `unsafe` only, as `mem_put_back` is (h248) |
 
 **Foreign results a caller owns.** A C function returning a string it

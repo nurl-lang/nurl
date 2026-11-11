@@ -1,0 +1,50 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+drop r0
+drop r1
+drop r2
+drop r3
+whole: recovered: panic in drop r2
+drop r2
+drop r3
+drop r4
+drop k0
+drop k1
+two_bombs: recovered: panic in drop r2
+drop k0
+drop k1
+drop r2
+drop p3
+drop k4
+judged: recovered: panic judging p3
+drop r1
+drop r4
+survives: recovered: panic in drop r1
+survives: kept [k0 k2 k3]
+drop k0
+survives: then [k2 k3 late]
+drop k2
+drop k3
+drop late
+judged_survives: recovered: panic judging p3
+judged_survives: holds [k0 k2 r1 p3 k4 r5]
+drop k0
+drop k2
+drop r1
+drop p3
+drop k4
+drop r5
+quiet: dropped 4 ids 11
+quiet: kept [k1 k4 k5]
+drop k1
+drop k4
+drop k5
+plain: [1 2 4 5 7 8]
+plain: all stay, len 6
+plain: [8]
+plain: none stay, len 0
+plain: empty, len 0
+plain: four five
+plain: strings, len 2

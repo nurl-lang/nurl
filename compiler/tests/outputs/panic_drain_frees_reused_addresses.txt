@@ -1,0 +1,16 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+first: recovered: the thread's first panic
+plain: recovered: the cause
+plain: live delta 0
+first_panics: recovered: panic in drop bomb
+first_panics: live delta 0
+nested: recovered: the cause
+nested: live delta 0
+quiet: no panic
+quiet: live delta 0
+message bytes: 5400
+bytes: 1600000
+after: live delta 0

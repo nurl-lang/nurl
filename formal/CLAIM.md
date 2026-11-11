@@ -742,6 +742,11 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   glue rebinds it under the payload's glue and runs the impl on it lent;
   no witness program is mechanized for the enum case. In this cut an enum
   with glue holds no views.
+  nurlc writes that glue since Agora #641: `drop__<E>` is the impl and
+  `drop_glue__<E>` the payloads of the variant that is there, run after
+  it, wherever the enum lives. Before, a binding of such an enum ran the
+  impl and never dropped the payloads, and a `Vec` element, a struct
+  field or a temporary a `??` matched never ran the impl.
 - A field of a destructor value, or a payload of a destructor enum, is
   lent through the type, the destructor staying with the whole value.
   Taking one out is refused: `unpair` of a destructor value whose
@@ -756,6 +761,15 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   ask it of the enum in the context they are typed in
   (`A2.Dtor.take_is_glue`, `assign_take_is_glue`). That is then what the
   enum's drop does.
+  nurlc (Agora #641): a `??` arm takes a payload out of an enum the
+  function owns only where the enum's destructor is its glue
+  (`mem_enum_take`: a binding that owns on every path, a `sink`
+  parameter, the match's temporary). An enum with a `% Drop` of its own,
+  any enum held in a field of a local struct, and an enum bound from a
+  call that answers per call keep their payloads: the arm is lent them,
+  and one handed back out of the function that drops the enum is a copy
+  the caller owns where its type can be copied, and refused where it
+  cannot (`__payload_lent_of_frame`).
 - A2-drop.3b: a `Vec` of destructor values is drained. `Ty.ok` admits
   `vec (dtor f u)` (`Ty.vecD`) as a binding's own type, and (Agora #607)
   as a struct's field or an enum's payload: the struct's or the enum's
@@ -1013,8 +1027,9 @@ is stated here so the claim does not hide it:
   order, each destructor once, then the buffer and the `Vec`, and then
   the jump (`nurl__vec_drain_resume`; a later element's panic is caught
   there, by a frame of its own, and the release goes on with the element
-  after it, so the stack is no deeper for it). `vec_truncate` and
-  `vec_clear` drop
+  after it, so the stack is no deeper for it). `vec_truncate`,
+  `vec_clear` and `vec_retain` (Agora #624: once it has judged every
+  element and shortened the `Vec` to the kept ones) drop
   their elements through the same record (`nurl_vec_drop_range_dtor`).
   Which element types may run one is nurlc's answer (`__drop_runs_code`:
   a `% Drop` anywhere inside, a library handle, a closure, a trait

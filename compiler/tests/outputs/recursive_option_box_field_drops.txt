@@ -1,0 +1,13 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+nodes 3
+chars 12
+end of main
+drop a.b
+drop b.b
+drop c.b
+drop c.e
+drop b.e
+drop a.e

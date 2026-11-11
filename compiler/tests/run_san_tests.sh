@@ -59,6 +59,11 @@
 #  leaks the corpus did show were compiler bugs. LSAN_DETECT_LEAKS=0
 #  turns it off for a quick memory-safety-only pass.
 #
+#  The panic tests (panic_*) run a second time with ASan's quarantine
+#  off (quarantine_size_mb=0), so that an address freed during a panic's
+#  drain is handed out again while the drain runs, as in a release build
+#  (agora #622; see run_one_san).
+#
 #  Which tests run here is decided by test_skips.sh, shared verbatim
 #  with run_tests.sh — see that file for why it is shared.
 #
@@ -226,80 +231,94 @@ run_one_san() {
         echo "$name LINK_FAIL"; return
     fi
 
-    # Each test runs in its OWN scratch dir, as in run_tests.sh: relative-path
-    # file side effects (a test writing `out.txt`, creating `pkg/`, …) would
-    # otherwise collide with a sibling running concurrently — every worker
-    # shared one CWD here. The binary is hard-linked in and invoked as
-    # `./$name` so argv[0] stays exactly `./$name` (some tests print it).
-    local rundir="$WORKDIR/run/$name"
-    rm -rf "$rundir"; mkdir -p "$rundir"
-    ln "$bin" "$rundir/$name" 2>/dev/null || cp "$bin" "$rundir/$name"
-    local rc=0
-    # Run under our own watchdog rather than `timeout`, for one reason:
-    # `timeout` kills the process and leaves nothing to look at, and a
-    # hang reported with no evidence is only marginally better than a
-    # hang scored PASS. The next reader still cannot tell a deadlock in
-    # the program from one in the sanitizer's own at-exit leak check —
-    # and stdout cannot settle it either, because it is a file here, so
-    # a killed process loses its buffer whether or not main finished.
-    # /proc answers it without gdb: "anon_pipe_read" in the main thread
-    # is LeakSanitizer's stop-the-world tracer, "futex_wait" across
-    # several threads is our own join. Dump that, THEN kill.
-    #
-    # SIGKILL, not SIGTERM: a test spinning in a tight loop with no
-    # handler ignores SIGTERM for as long as the machine is up — four
-    # such processes, mutation-test leftovers spinning inside
-    # tcpseg_parse's option loop, were found burning a core each 12
-    # hours after the run that started them. Declaring a hang is not the
-    # same as ending it.
-    ( cd "$rundir" && exec "./$name" >"$stdout_log" 2>"$stderr_log" ) &
-    local pid=$!
-    (   sleep "$TIMEOUT"
-        kill -0 "$pid" 2>/dev/null || exit 0
-        {   echo "hung after ${TIMEOUT}s (pid $pid) — thread states at the kill:"
-            for t in /proc/"$pid"/task/*; do
-                [[ -d "$t" ]] || continue
-                printf '  tid %-8s state=%-2s wchan=%-24s comm=%s\n' \
-                    "${t##*/}" \
-                    "$(awk '{print $3}' "$t/stat" 2>/dev/null)" \
-                    "$(cat "$t/wchan" 2>/dev/null)" \
-                    "$(cat "$t/comm" 2>/dev/null)"
-            done
-        } >"$LOGDIR/$name.hang" 2>/dev/null
-        kill -KILL "$pid" 2>/dev/null
-    ) & local watchdog=$!
-    wait "$pid" 2>/dev/null || rc=$?
-    kill "$watchdog" 2>/dev/null; wait "$watchdog" 2>/dev/null
-    # The watchdog, not the exit status, is what decides "hung": a test
-    # killed for hanging exits 137, and 137 is also a legal exit status
-    # for a test that killed itself on purpose.
-    [[ -f "$LOGDIR/$name.hang" ]] && rc=124
-    rm -rf "$rundir"
+    # The panic tests run twice: as every test does, and again with ASan's
+    # quarantine off. The quarantine keeps a freed block out of malloc's
+    # hands for a long while, so an address a panic's drain has freed never
+    # comes back while the drain runs — and what the drain does with a
+    # reused address is never seen: its record of freed addresses skipped
+    # the free of a block malloc had placed at one of them, a leak in every
+    # release build that this run called clean (agora #622). With the
+    # quarantine off malloc hands the address straight back, as it does in
+    # a release build, and LeakSanitizer sees the block.
+    local pass passes=("")
+    [[ "$name" == panic_* ]] && passes+=("quarantine_size_mb=0")
+    for pass in "${passes[@]}"; do
+        # Each test runs in its OWN scratch dir, as in run_tests.sh: relative-path
+        # file side effects (a test writing `out.txt`, creating `pkg/`, …) would
+        # otherwise collide with a sibling running concurrently — every worker
+        # shared one CWD here. The binary is hard-linked in and invoked as
+        # `./$name` so argv[0] stays exactly `./$name` (some tests print it).
+        local rundir="$WORKDIR/run/$name"
+        rm -rf "$rundir"; mkdir -p "$rundir"
+        ln "$bin" "$rundir/$name" 2>/dev/null || cp "$bin" "$rundir/$name"
+        local rc=0
+        # Run under our own watchdog rather than `timeout`, for one reason:
+        # `timeout` kills the process and leaves nothing to look at, and a
+        # hang reported with no evidence is only marginally better than a
+        # hang scored PASS. The next reader still cannot tell a deadlock in
+        # the program from one in the sanitizer's own at-exit leak check —
+        # and stdout cannot settle it either, because it is a file here, so
+        # a killed process loses its buffer whether or not main finished.
+        # /proc answers it without gdb: "anon_pipe_read" in the main thread
+        # is LeakSanitizer's stop-the-world tracer, "futex_wait" across
+        # several threads is our own join. Dump that, THEN kill.
+        #
+        # SIGKILL, not SIGTERM: a test spinning in a tight loop with no
+        # handler ignores SIGTERM for as long as the machine is up — four
+        # such processes, mutation-test leftovers spinning inside
+        # tcpseg_parse's option loop, were found burning a core each 12
+        # hours after the run that started them. Declaring a hang is not the
+        # same as ending it.
+        ( cd "$rundir" && ASAN_OPTIONS="${ASAN_OPTIONS}${pass:+:$pass}" exec "./$name" >"$stdout_log" 2>"$stderr_log" ) &
+        local pid=$!
+        (   sleep "$TIMEOUT"
+            kill -0 "$pid" 2>/dev/null || exit 0
+            {   echo "hung after ${TIMEOUT}s (pid $pid) — thread states at the kill:"
+                for t in /proc/"$pid"/task/*; do
+                    [[ -d "$t" ]] || continue
+                    printf '  tid %-8s state=%-2s wchan=%-24s comm=%s\n' \
+                        "${t##*/}" \
+                        "$(awk '{print $3}' "$t/stat" 2>/dev/null)" \
+                        "$(cat "$t/wchan" 2>/dev/null)" \
+                        "$(cat "$t/comm" 2>/dev/null)"
+                done
+            } >"$LOGDIR/$name.hang" 2>/dev/null
+            kill -KILL "$pid" 2>/dev/null
+        ) & local watchdog=$!
+        wait "$pid" 2>/dev/null || rc=$?
+        kill "$watchdog" 2>/dev/null; wait "$watchdog" 2>/dev/null
+        # The watchdog, not the exit status, is what decides "hung": a test
+        # killed for hanging exits 137, and 137 is also a legal exit status
+        # for a test that killed itself on purpose.
+        [[ -f "$LOGDIR/$name.hang" ]] && rc=124
+        rm -rf "$rundir"
 
-    # Sanitizer-marker scan: ASan "AddressSanitizer:", UBSan
-    # "runtime error:" / "UndefinedBehaviorSanitizer:", LSan "LeakSanitizer:".
-    #
-    # Checked before the timeout so the verdict names the root cause: with
-    # halt_on_error=0 a reported error does not stop the program, so a test
-    # can report AND then hang, and the report is the actionable half. The
-    # hang is not lost — the watchdog's .hang dump makes the report section
-    # say so, which matters when the memory bug is fixed and the hang is
-    # still there.
-    if grep -qE "$SAN_MARKERS" "$stderr_log"; then
-        echo "$name SAN_FAIL"; return
-    fi
-    if (( rc == 124 )); then
-        echo "$name TIMEOUT"; return
-    fi
+        # Sanitizer-marker scan: ASan "AddressSanitizer:", UBSan
+        # "runtime error:" / "UndefinedBehaviorSanitizer:", LSan "LeakSanitizer:".
+        #
+        # Checked before the timeout so the verdict names the root cause: with
+        # halt_on_error=0 a reported error does not stop the program, so a test
+        # can report AND then hang, and the report is the actionable half. The
+        # hang is not lost — the watchdog's .hang dump makes the report section
+        # say so, which matters when the memory bug is fixed and the hang is
+        # still there.
+        if grep -qE "$SAN_MARKERS" "$stderr_log"; then
+            [[ -n "$pass" ]] && printf '(the pass with ASAN_OPTIONS+=%s)\n' "$pass" >> "$stderr_log"
+            echo "$name SAN_FAIL"; return
+        fi
+        if (( rc == 124 )); then
+            echo "$name TIMEOUT"; return
+        fi
 
-    # Deliberate nonzero exits have a baseline; an unreported crash or
-    # new failure is not evidence of a clean sanitizer run.
-    local expected_exit
-    expected_exit=$(awk '/^EXIT / { sub(/\r$/, ""); print $2; exit }' "$OUTDIR/$name.txt")
-    if [[ "$rc" != "$expected_exit" ]]; then
-        printf 'Runtime exit %s; expected %s\n' "$rc" "$expected_exit" >> "$stderr_log"
-        echo "$name RUN_FAIL"; return
-    fi
+        # Deliberate nonzero exits have a baseline; an unreported crash or
+        # new failure is not evidence of a clean sanitizer run.
+        local expected_exit
+        expected_exit=$(awk '/^EXIT / { sub(/\r$/, ""); print $2; exit }' "$OUTDIR/$name.txt")
+        if [[ "$rc" != "$expected_exit" ]]; then
+            printf 'Runtime exit %s; expected %s%s\n' "$rc" "$expected_exit" "${pass:+ (the pass with ASAN_OPTIONS+=$pass)}" >> "$stderr_log"
+            echo "$name RUN_FAIL"; return
+        fi
+    done
     echo "$name PASS"
 }
 export -f run_one_san
