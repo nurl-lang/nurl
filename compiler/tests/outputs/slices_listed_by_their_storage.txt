@@ -1,0 +1,31 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+14
+10
+a raw string bound in a defer body, long enough
+4
+a raw string made on the heap, long enough
+raw: first defer
+3
+raw: first defer
+3
+field: first defer
+1
+6
+field: first defer
+0
+8
+2
+1
+7
+above: first defer
+3
+above: first defer
+8
+7
+13
+32
+147
+117
