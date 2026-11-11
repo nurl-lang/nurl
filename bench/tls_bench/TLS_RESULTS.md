@@ -8,7 +8,7 @@ A perf task whose DONE WHEN says *on the runner* is done when it holds on **ever
 
 | Family | CPU | Run | Commit | NURL kernels (RSA · P-256 · X25519 · AES-GCM · ChaCha20-Poly1305 · SHA-256 · ML-KEM) | Report |
 |---|---|---|---|---|---|
-| `amd-avx2-vaes-sha-adx` | AMD EPYC 7763 64-Core Processor | [2026-11-02T08:25:02Z](https://github.com/nurl-lang/nurl/actions/runs/41412304507) (full) | `38c8f6c8bc1c` | adx · adx · adx · vaes · avx2 · sha-ni · avx2 | [TLS_RESULTS.amd-avx2-vaes-sha-adx.md](TLS_RESULTS.amd-avx2-vaes-sha-adx.md) |
+| `amd-avx2-vaes-sha-adx` | AMD EPYC 7763 64-Core Processor | [2026-11-11T18:11:10Z](https://github.com/nurl-lang/nurl/actions/runs/43074559209) (full) | `a013bfae93c3` | adx · adx · adx · vaes · avx2 · sha-ni · avx2 | [TLS_RESULTS.amd-avx2-vaes-sha-adx.md](TLS_RESULTS.amd-avx2-vaes-sha-adx.md) |
 | `amd-avx512ifma-vaes-sha-adx` | AMD EPYC 9V74 80-Core Processor | [2026-11-06T17:25:21Z](https://github.com/nurl-lang/nurl/actions/runs/42260807419) (full) | `a3be3e7c7302` | ifma · adx · adx · vaes512 · avx512 · sha-ni · avx2 | [TLS_RESULTS.amd-avx512ifma-vaes-sha-adx.md](TLS_RESULTS.amd-avx512ifma-vaes-sha-adx.md) |
 | `intel-avx512ifma-vaes-sha-adx` | Intel(R) Xeon(R) 6973P-C | [2026-11-10T20:43:43Z](https://github.com/nurl-lang/nurl/actions/runs/42897413140) (full) | `94ee1161a2fc` | ifma · adx · adx · vaes512 · avx512 · sha-ni · avx2 | [TLS_RESULTS.intel-avx512ifma-vaes-sha-adx.md](TLS_RESULTS.intel-avx512ifma-vaes-sha-adx.md) |
 
@@ -18,34 +18,34 @@ NURL's result as a share of Rust's per family (100 % = parity; for latencies and
 
 | # | Area | Metric | `amd-avx2-vaes-sha-adx` | `amd-avx512ifma-vaes-sha-adx` | `intel-avx512ifma-vaes-sha-adx` | Across families |
 |--:|---|---|--:|--:|--:|---|
-| 1 | primitive | P-256 ECDH keygen — µs/op | 69 % | 74 % | 76 % | **differs** |
-| 2 | primitive | ML-KEM-768 encaps — µs/op | 71 % | 84 % | 82 % | **differs** |
-| 3 | primitive | RSA-2048 PSS sign — µs/op | 87 % | 79 % | 91 % | behind |
+| 1 | primitive | P-256 ECDH keygen — µs/op | 68 % | 74 % | 76 % | **differs** |
+| 2 | primitive | ML-KEM-768 encaps — µs/op | 72 % | 84 % | 82 % | **differs** |
+| 3 | primitive | RSA-2048 PSS sign — µs/op | 86 % | 79 % | 91 % | behind |
 | 4 | primitive | P-256 ECDH shared — µs/op | 82 % | 87 % | 84 % | behind |
-| 5 | primitive | ChaCha20-Poly1305 seal 16 KB — µs/op | 83 % | 113 % | 143 % | **differs** |
-| 6 | server handshake | Full · RSA-2048 · X25519 — handshakes/s | 87 % | 86 % | 100 % | **differs** |
-| 7 | bulk | 1 MB bodies, one connection, ChaCha20-Poly1305 — MB/s | 102 % | 107 % | 86 % | **differs** |
-| 8 | primitive | ECDSA P-256 verify — µs/op | 87 % | 89 % | 103 % | **differs** |
-| 9 | server handshake | Full · RSA-2048 · X25519 — unloaded latency p50 | 88 % | 88 % | 97 % | **differs** |
-| 10 | primitive | ECDSA P-256 sign — µs/op | 89 % | 95 % | 93 % | behind |
-| 11 | primitive | X25519 keygen — µs/op | 92 % | 95 % | 97 % | **differs** |
-| 12 | server handshake | Full · ECDSA P-256 · X25519MLKEM768 — unloaded latency p50 | 93 % | 102 % | 93 % | **differs** |
-| 13 | primitive | X25519 shared — µs/op | 93 % | 93 % | 93 % | behind |
-| 14 | server handshake | Full · ECDSA P-256 · P-256 — handshakes/s | 95 % | 100 % | 98 % | parity |
-| 15 | server handshake | Full · ECDSA P-256 · X25519MLKEM768 — handshakes/s | 97 % | 101 % | 97 % | parity |
-| 16 | server handshake | Full · ECDSA P-256 · X25519 — unloaded latency p50 | 97 % | 102 % | 106 % | **differs** |
-| 17 | record layer | Keep-alive 1 KB plaintext — req/s (baseline) | 100 % | 97 % | 98 % | parity |
-| 18 | primitive | AES-128-GCM seal 16 KB — µs/op | 179 % | 99 % | 103 % | **differs** |
-| 19 | primitive | SHA-256 16 KB — µs/op | 100 % | 99 % | 100 % | parity |
-| 20 | server handshake | Full · ECDSA P-256 · X25519 — handshakes/s | 100 % | 102 % | 102 % | parity |
-| 21 | bulk | 1 MB bodies, one connection, AES-128-GCM — MB/s | 161 % | 100 % | 114 % | **differs** |
-| 22 | record layer | Keep-alive 1 KB over TLS — req/s | 118 % | 103 % | 102 % | **differs** |
-| 23 | server handshake | Resumed · X25519 (psk_dhe_ke) — handshakes/s | 109 % | 110 % | 102 % | **differs** |
-| 24 | server handshake | Full · ECDSA P-256 · P-256 — unloaded latency p50 | 107 % | 102 % | 106 % | **differs** |
-| 25 | server handshake | Resumed · X25519 (psk_dhe_ke) — unloaded latency p50 | 106 % | 108 % | 105 % | **differs** |
-| 26 | client (http-client vs reqwest) | Keep-alive 1 MB bodies — MB/s | 110 % | 136 % | 115 % | ahead |
+| 5 | primitive | ChaCha20-Poly1305 seal 16 KB — µs/op | 84 % | 113 % | 143 % | **differs** |
+| 6 | server handshake | Full · RSA-2048 · X25519 — handshakes/s | 88 % | 86 % | 100 % | **differs** |
+| 7 | bulk | 1 MB bodies, one connection, ChaCha20-Poly1305 — MB/s | 119 % | 107 % | 86 % | **differs** |
+| 8 | primitive | ECDSA P-256 verify — µs/op | 86 % | 89 % | 103 % | **differs** |
+| 9 | primitive | ECDSA P-256 sign — µs/op | 88 % | 95 % | 93 % | behind |
+| 10 | server handshake | Full · RSA-2048 · X25519 — unloaded latency p50 | 90 % | 88 % | 97 % | **differs** |
+| 11 | server handshake | Full · ECDSA P-256 · X25519MLKEM768 — unloaded latency p50 | 102 % | 102 % | 93 % | **differs** |
+| 12 | primitive | X25519 shared — µs/op | 94 % | 93 % | 93 % | behind |
+| 13 | primitive | X25519 keygen — µs/op | 94 % | 95 % | 97 % | **differs** |
+| 14 | server handshake | Full · ECDSA P-256 · X25519 — unloaded latency p50 | 95 % | 102 % | 106 % | **differs** |
+| 15 | server handshake | Full · ECDSA P-256 · X25519MLKEM768 — handshakes/s | 98 % | 101 % | 97 % | parity |
+| 16 | record layer | Keep-alive 1 KB plaintext — req/s (baseline) | 103 % | 97 % | 98 % | parity |
+| 17 | server handshake | Full · ECDSA P-256 · P-256 — handshakes/s | 100 % | 100 % | 98 % | parity |
+| 18 | server handshake | Full · ECDSA P-256 · P-256 — unloaded latency p50 | 99 % | 102 % | 106 % | **differs** |
+| 19 | primitive | AES-128-GCM seal 16 KB — µs/op | 183 % | 99 % | 103 % | **differs** |
+| 20 | primitive | SHA-256 16 KB — µs/op | 100 % | 99 % | 100 % | parity |
+| 21 | bulk | 1 MB bodies, one connection, AES-128-GCM — MB/s | 146 % | 100 % | 114 % | **differs** |
+| 22 | record layer | Keep-alive 1 KB over TLS — req/s | 119 % | 103 % | 102 % | **differs** |
+| 23 | server handshake | Full · ECDSA P-256 · X25519 — handshakes/s | 102 % | 102 % | 102 % | parity |
+| 24 | server handshake | Resumed · X25519 (psk_dhe_ke) — handshakes/s | 112 % | 110 % | 102 % | **differs** |
+| 25 | server handshake | Resumed · X25519 (psk_dhe_ke) — unloaded latency p50 | 107 % | 108 % | 105 % | **differs** |
+| 26 | client (http-client vs reqwest) | Keep-alive 1 MB bodies — MB/s | 114 % | 136 % | 115 % | ahead |
 | 27 | client (http-client vs reqwest) | Keep-alive 1 KB — req/s | 135 % | 135 % | 121 % | ahead |
 | 28 | client (http-client vs reqwest) | New connection per request, resumed — req/s | 123 % | 125 % | 136 % | ahead |
-| 29 | client (http-client vs reqwest) | New connection per request, full handshake — req/s | 132 % | 135 % | 143 % | ahead |
-| 30 | primitive | HKDF-Expand-Label — µs/op | 216 % | 207 % | 192 % | ahead |
+| 29 | client (http-client vs reqwest) | New connection per request, full handshake — req/s | 131 % | 135 % | 143 % | ahead |
+| 30 | primitive | HKDF-Expand-Label — µs/op | 215 % | 207 % | 192 % | ahead |
 
