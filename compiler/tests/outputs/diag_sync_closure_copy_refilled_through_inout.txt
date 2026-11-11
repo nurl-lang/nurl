@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_sync_closure_copy_refilled_through_inout.nu:28:5: error: 'arc_new' keeps this value inside the '( Arc ( @ v i ) )' it returns, a handle shared across threads, where several threads may run the closure at once, but the closure built on line 19 changes 'app' when it runs (it hands it to 'vec_push', which changes it): two threads running it at once would change it together, with no lock. Keep what it changes behind a 'Locked' or an 'Atomic' and capture that, or give each thread a closure of its own.
+    : ( Arc ( @ v i ) ) shared ( arc_new [( @ v i )] work )
+    ^

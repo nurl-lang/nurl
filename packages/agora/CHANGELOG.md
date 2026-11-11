@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.1] — unreleased
+
+### Fixed
+
+- **The state every worker reads is plain data.** The process-wide state
+  kept the store as an `AgStore`, a type that can hold an open SQLite
+  connection — it never did there, but a connection belongs to one
+  thread (`% NotSend Database`), and the compiler now refuses a global
+  set at start whose type can carry one to every thread. The state
+  keeps the store's path and whether it opened; `ag_store` makes each
+  operation's own handle from that, as before. No behaviour change.
+
 ## [0.8.0] — 2026-10-29
 
 ### Added

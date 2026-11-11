@@ -253,12 +253,17 @@ owning one (h272).
 State that every thread shares and safe code reaches lives in a global
 **set at start** instead: `: ( Locked T ) g ( make )` calls `make`, a
 function of no arguments, once before `main`, and nothing writes `g`
-afterwards. Its type must synchronise itself (`( Locked T )`,
-`( Arc T )`, `( Channel T )`, `Mutex`, `Cond`, `Semaphore`) — a
-`( Vec T )` pushed from two threads through it would race, so it is
-rejected (h263). A read borrows the handle; `: ( Locked T ) h g`, a
-struct field or a `^ g` clone it, so the global is never moved or
-dropped.
+afterwards. Its type must synchronise itself — the standard library's
+`( Locked T )`, `( Arc T )`, `( Channel T )`, `Mutex`, `Cond` or
+`Semaphore`, not a type of the program's own that took one of those
+names — a `( Vec T )` pushed from two threads through it would race, so
+it is rejected (h263). And every thread reads the one value, so it is
+shared as a handle a thread's closure captured is (§6.5): what a
+`Locked` or a `Channel` holds must be Send, an `Arc`'s payload Sync.
+`: ( Locked ( Rc i ) ) g ( make )` is refused — two threads copying the
+`Rc` out would race on its count (agora #639). A read borrows the
+handle; `: ( Locked T ) h g`, a struct field or a `^ g` clone it, so the
+global is never moved or dropped.
 
 ### Parameter passing conventions
 
@@ -1104,8 +1109,14 @@ boundary:
   raw-memory primitives and foreign calls are allowed only there, and the
   function's author vouches for it (spec §3.3d).
 - **Positive thread-safety assertions.** `% Send T { }` and `% Sync T { }`
-  stop the derivation at `T`: nothing inside is examined, and what a
-  `Sync` type holds is not frozen through it (§6.5). Asserted wrongly,
+  stop the derivation at `T`: nothing inside is examined, what a
+  `Sync` type holds is not frozen through it, and a change made through
+  a `Sync` value borrowed by value is taken to be synchronised by it
+  (§6.5). So `% Sync T` says: every change reachable through a by-value
+  copy of a `T` is synchronised by `T` itself. A copy of a struct is a
+  copy of its handles — a copied `Vec` or `String` handle reaches the
+  one buffer — so the mark on a struct with a plain `Vec` field vouches
+  for that `Vec` too. Asserted wrongly,
   they let two threads race an `Rc`'s count or a `Cell`'s bytes, so
   outside the standard library they are written `unsafe % Send T { }` /
   `unsafe % Sync T { }` — an unchecked promise, spelled like an unchecked
@@ -2029,19 +2040,62 @@ handle is not (h338, h339). A closure several threads run may not change
 what it captured, either, unless that synchronises itself: a handler
 that pushes to a `Vec` it captured grows one environment from every
 worker at once (h342); it counts in an `Atomic` or keeps the list in a
-`Locked`. Giving a capture away is such a change, whatever the capture's
-type: a body that hands a value it captured to a `sink`, or to a callee
-that takes it over, can run once, and its environment marks the value
-taken with a plain flag that two threads would read together, so the
-closure is refused where several threads may run it (agora #648). A
-thread's own closure, which one thread runs once, may give its captures
-away. Share handles used on both sides are the ones asserted
+`Locked`. A change made through a value that synchronises itself is that
+value's own, wherever the closure got it from: a handle it captured, one
+read out of a struct it captured (`. app jobs`), an element of a captured
+`Vec` of them, and any of those handed on by value, through any number
+of functions (`( note app k )`, which sends on `. a jobs`). The pass must
+be by value: an `inout` parameter is the holder's own storage, where a
+new handle would land in memory every thread reads, and a `sink` one
+ends the handle for everyone who holds it — and a function that changes
+anything beside the handle (a plain `Vec` field of the same struct)
+changes the capture as before (agora #639). A change counts through a
+handle read out of the value as well: a function that grows an element
+it read with `vec_at`, a field it bound to a name, what an accessor
+lent it or the payload of a `??` over its parameter changes that
+parameter, here and for an `Arc`'s payload (agora #646). A copy is the
+code's own to change: a `vec_clone` of a captured field, what a helper
+handed back where the helper lends nothing of what it was handed. A
+function defined below its caller, and a generic first used there, have
+no summary when the call is read; both are judged by the summary they
+end with, so `: ( Vec i ) c ( copy_of app )` may be grown and
+`: ( Vec i ) c ( same p )`, `same` handing its parameter back, may not
+— whichever side of the caller they stand on. One thing is not waited
+for: a closure body that gives such a local another value further down
+(`= c …`, an `inout` argument, an inner closure assigning it) is judged
+as if every call it made handed back what it was given, for the handle
+the local holds at a change is then no longer the one it was bound to
+(agora #639). Giving a
+capture away is a change too, whatever the capture's type: a body that
+hands a value it captured to a `sink`, or to a callee that takes it
+over, can run once, and its environment marks the value taken with a
+plain flag that two threads would read together, so the closure is
+refused where several threads may run it (agora #648). A thread's own
+closure, which one thread runs once, may give its captures away. Share
+handles used on both sides are the ones asserted
 `% Sync` — `Channel`, `Mutex`, `Arc`, `Locked`, `RwLocked`, `Atomic`,
 `PFile`, `Pool`, and the handles servers share (`TcpListener`,
 `HttpServer`, `QuicServer`, `H3Server`, a router's `Route`, a cluster's
 `RpcEntry`, an MCP `McpTaskStore` and its `McpTask`s), each with the reason beside its
 marker — and a handle made only of `Arc`s and such handles (nurldb's
-`Store`), whose fields answer.
+`Store`), whose fields answer. They answer for a handle written in
+checked code. One whose API is raw code — every standard-library handle,
+a program's own with an `unsafe` drop hook — keeps its state where its
+fields do not say (a `BufReader`'s copies are one buffer and one position
+in a counted block its functions refill in place), so it answers by its
+mark alone: unmarked, it moves into a thread's closure as a `Vec` does,
+an `Arc` whose payload holds one does not cross, and the crossing check
+below counts its shares; two threads that read one stream keep the reader
+in a `Locked`. And sharing a handle is not changing through one value of
+it: a handle of the program's own with a plain `Vec` beside its `Arc`s
+may be used on both sides of a spawn — each share has a `Vec` of its own
+— but the one a closure several threads run captured is one `Vec`, and a
+change through it is a change of the capture unless every part of the
+handle orders its own changes. What these rules grant an `Arc` they grant
+the standard library's: a type of the program's own with that name is a
+struct like any other — to the crossing check below as well, which
+counts the shares of a handle of that name as it counts any other's
+(agora #639).
 
 **The crossing check.** Moving a handle whose copies are one state is
 sound only if no other owner of that state stays behind, and a copy is
@@ -2097,7 +2151,10 @@ raw pointers) are waited for, and the verdict is reached on the final
 ones (h212). `arc_set`, which replaces the payload, is for `unsafe` code
 only. A payload whose type synchronises itself (asserted
 `% Sync`: `Mutex`, `Channel`, `Locked`) is changed through its own
-operations.
+operations, and so is such a value the payload holds — a `Channel` field
+of the struct in the `Arc`, used where it is read or by a function the
+payload is handed to by value (agora #639); the fields beside it stay
+frozen.
 
 *State threads share and change is a `Locked [T]`* (stdlib/std/thread.nu):
 a shared handle of its own over a mutex and the value, reached only

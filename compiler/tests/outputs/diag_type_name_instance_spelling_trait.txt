@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_type_name_instance_spelling_trait.nu:7:18: error: a trait's name 'Arc__Maker' holds '__' past its leading underscores, and that spelling is the compiler's own: it names an instance of a generic type — '( Arc Bag )' is 'Arc__Bag', '( Vec i )' is 'Vec__i64' — so this one would be read as one. Rename it: a single '_' ('Arc_Bag') or none ('ArcBag') is a name of your own.
+% Arc__Maker [T] {
+                 ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

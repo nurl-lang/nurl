@@ -68,27 +68,33 @@ Skills: skills lists playbooks kept for every agent here; skill name=X reads one
 // Shared by every worker thread and read-only after start: the store's
 // path (each operation opens its own connection) and the local identity
 // a stdio server acts as. In a global that owns it, so all workers see it,
-// for the rest of the process.
+// for the rest of the process. Plain data only: a SQLite connection
+// belongs to one thread (`% NotSend Database`), so no type that can hold
+// one is kept here — ag_store makes the operation's own.
 
 : AgState {
-    AgStore store
+    String path  // the store's file; a connection is an operation's own, never kept here
+    b ok  // the store opened and its schema is in place
     String local  // the stdio/CLI identity; empty over HTTP
     String local_origin  // the directory it was resolved from (@cwd); '' otherwise
 }
 
 // The state before ag_state_init: no store open, no local identity.
 @ __ag_state_blank → ( Locked AgState ) {
-    ^ ( locked_new [AgState] @ AgState { @ AgStore { ( string_new ) F @ ?Database { F } } ( string_new ) ( string_new ) } )
+    ^ ( locked_new [AgState] @ AgState { ( string_new ) F ( string_new ) ( string_new ) } )
 }
 
 : ( Locked AgState ) g_ag_state ( __ag_state_blank )
 
-// Open the store at `db_path` and install the state (a store opened
-// before is released by the assignment).
+// Open the store at `db_path` (its schema brought up to date) and install
+// where it is and whether that worked.
 @ ag_state_init s db_path → b {
+    : AgStore opened ( ag_store_open db_path )
+    : b ok . opened ok
     : ~ AgState st ( locked_take [AgState] g_ag_state )
-    = . st store ( ag_store_open db_path )
-    : b ok . . st store ok
+    ( string_clear . st path )
+    ( string_push_str . st path ( string_data . opened path ) )
+    = . st ok ok
     ( locked_restore [AgState] g_ag_state st )
     ^ ok
 }
@@ -119,7 +125,7 @@ Skills: skills lists playbooks kept for every agent here; skill name=X reads one
 // The store handle: its own copy of the path, no connection.
 @ ag_store → AgStore {
     : AgState st ( locked_take [AgState] g_ag_state )
-    : AgStore r @ AgStore { ( string_from ( string_data . . st store path ) ) . . st store ok @ ?Database { F } }
+    : AgStore r @ AgStore { ( string_from ( string_data . st path ) ) . st ok @ ?Database { F } }
     ( locked_restore [AgState] g_ag_state st )
     ^ r
 }

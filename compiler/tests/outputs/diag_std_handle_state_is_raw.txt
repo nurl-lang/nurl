@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_std_handle_state_is_raw.nu:10:41: error: 'shared_ptr' handles raw memory, which only an 'unsafe' function may do: what it returns or takes is memory the compiler cannot follow, so a mistake there is a use-after-free, a double free or a leak no check can see. Use the owning types instead (String, Vec, HashMap, Box/Rc, a struct of them — they release themselves), or, if this function genuinely needs raw memory and you vouch for its memory safety, declare it 'unsafe @ name …'.
+    : *DosImpl d ( shared_ptr [DosImpl] . g ctl )
+                                        ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.
