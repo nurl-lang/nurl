@@ -1994,11 +1994,15 @@ body), by the unwind of a panic, or when the struct holding it is.
 be reached from two threads at once") are marker traits
 (`stdlib/core/marker.nu`) that the compiler derives structurally over a
 type's whole graph: struct fields, enum payloads, generic arguments,
-aggregate members and closure captures. Four cases are built in:
+aggregate members and closure captures. A generic struct is asked through
+the fields its instance has (`( Wrap i )` of `: Wrap [T] { ( Rc T ) held }`
+reaches an `Rc`), and every type argument is asked as the type that was
+written, an option no less than a named type (`( Vec ?( Rc i ) )`).
+Four cases are built in:
 
 | | Send | Sync | why |
 |---|---|---|---|
-| `Rc` | ✗ | ✗ | the reference count is not atomic |
+| `Rc`, and its `Weak` | ✗ | ✗ | the reference count is not atomic, and a `Weak` upgrades to an `Rc` on the same count |
 | `Cell` | ✓ | ✗ | a raw byte buffer with unsynchronised writes |
 | a library handle (§7.6) | ✓ | ✗ unless asserted | its copies are one state, changed in place |
 | a trait object `%Trait` | ✗ unless `: Send` | ✗ unless `: Send Sync` | its box holds any type implementing the trait |
@@ -2011,8 +2015,9 @@ and a `%Job` may then move; `: Send Sync` makes it Sync as well (h344).
 
 They are checked where a value crosses: `thread_spawn` and `spawn` (every
 capture must be Send), `chan_send` (the value must be Send), and `Arc T`
-(T must be Send and Sync). `[T: Send]` bounds are answered by the same
-derivation. A marker asserting a container Sync vouches for the container,
+(T must be Send and Sync; an `ArcWeak T` upgrades to that `Arc` on another
+thread, so it is held to the same). `[T: Send]` bounds are answered by the
+same derivation. A marker asserting a container Sync vouches for the container,
 never for what it holds: where the Sync question reaches a `Locked`, a
 `Channel` or a `Pool`, its value must be Send (one thread at a time has
 it), and an `RwLocked`'s must be Send and Sync, wherever it crosses, since
@@ -2033,10 +2038,14 @@ The derivation can be wrong in two directions, and each has a marker:
 `% Send T { }` / `% Sync T { }` assert safety the compiler cannot see
 (`Mutex` is what makes its contents shareable), `% NotSend T { }` /
 `% NotSync T { }` assert danger it cannot see (a foreign connection
-handle). A negative marker outranks a positive one on the same type. A
-positive marker is taken on trust, so a program writes it
-`unsafe % Send T { }` (§3, §6.4); a negative one, like `% Frozen`, only
-adds checks and is safe code.
+handle). A negative marker outranks a positive one on the same type, and
+one on an instance outranks a positive one on its generic: with
+`unsafe % Sync W { }`, `% NotSync ( W i ) { }` takes the promise back for
+`( W i )` in every rule that asks whether a type synchronises itself (the
+crossing checks, an `Arc`'s frozen payload, a change made through a value
+borrowed by value). A positive marker is taken on trust, so a program
+writes it `unsafe % Send T { }` (§3, §6.4); a negative one, like
+`% Frozen`, only adds checks and is safe code.
 
 **Shared mutation.** A closure run on another thread moves its captures,
 so the spawner cannot keep using a plain `Vec` a worker was handed — nor

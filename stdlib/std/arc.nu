@@ -66,7 +66,8 @@
 //   T must be `Sync`, not merely `Send` (stdlib/core/marker.nu). That
 //   is why `( Arc ( Rc i ) )` and `( Arc Cell )` are rejected at the
 //   thread boundary while a bare `Cell` capture — moved, not shared —
-//   is fine.
+//   is fine. An `ArcWeak` upgrades to an Arc on the same payload, so it
+//   crosses a thread only where that Arc may.
 
 // TRAP — owned-T copy semantics:
 //
