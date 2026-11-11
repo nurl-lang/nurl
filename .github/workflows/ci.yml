@@ -283,6 +283,49 @@ jobs:
       - name: formal/BLUEPRINT.md's counts, module DAG and index are the sources'
         run: node webdocs/scripts/gen-formal-data.mjs --check
 
+  # A pull request must not undo a commit that is already on main without
+  # saying so (Agora #652). github#1746, a proof-only change, reverted
+  # github#1741 in full: it was squashed with `git reset --soft origin/main
+  # && git commit` on a branch not rebased onto that origin/main, so its
+  # tree was older than its parent. Every check was green, since the tests
+  # that would have failed were deleted with the code. This job places each
+  # path the pull request changes on main's history of that path, by blob
+  # id, and fails when a commit of main is undone and nothing of it is kept
+  # (tools/check_pr_reverts.py says exactly what that means). An intended
+  # revert carries a `reverts: <sha or #PR>` line in the pull request body.
+  #
+  # It runs on the pull request, where the head and its merge-base are: the
+  # queue only replays a diff this job has already read. `build-test`, the
+  # required check, needs it, so a pull request it fails cannot be queued.
+  # No toolchain; history without blobs (the trees are all it reads).
+  pr-reverts:
+    name: the change undoes no commit already on main
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          filter: blob:none
+      - name: controls (a stale squash is refused; a rebase, a fix, a fold and a named revert pass)
+        run: python3 tools/tests/test_check_pr_reverts.py
+      # HEAD is the merge of the pull request into main as it is now: its
+      # first parent is that main, its second the pull request's head. The
+      # title and body are read as they are now, not as the event had them,
+      # so a re-run of this job sees a `reverts:` line added after the push.
+      - name: no commit of main is undone
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          gh api "repos/$REPO/pulls/$PR" --jq '.title + "\n\n" + (.body // "")' > "$RUNNER_TEMP/pr.txt" || : > "$RUNNER_TEMP/pr.txt"
+          python3 tools/check_pr_reverts.py --base HEAD^1 --head HEAD^2 --body-file "$RUNNER_TEMP/pr.txt"
+
   runner-controls:
     name: compiler runner fault-injection controls
     needs: changes
@@ -1104,12 +1147,14 @@ jobs:
 
   build-test:
     name: build + bootstrap fixed point + test corpus
-    needs: [changes, build-corpus, build-gates, build-gates-2]
+    needs: [changes, build-corpus, build-gates, build-gates-2, pr-reverts]
     # Skipped exactly when its parts are (a docs-only change), so the
     # required check reads as satisfied then, as before. Otherwise it waits
     # for all three and fails unless every one succeeded. A Markdown-only
     # change runs the two gate jobs and no corpus: both gates must pass.
-    if: ${{ always() && (needs.changes.outputs.code == 'true' || needs.changes.outputs.md == 'true') }}
+    # A pull request that undoes a commit of main (pr-reverts) fails here
+    # whatever its paths: this is the check the queue requires.
+    if: ${{ always() && (needs.changes.outputs.code == 'true' || needs.changes.outputs.md == 'true' || needs.pr-reverts.result == 'failure') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -1118,9 +1163,12 @@ jobs:
           CORPUS: ${{ needs.build-corpus.result }}
           GATES: ${{ needs.build-gates.result }}
           GATES2: ${{ needs.build-gates-2.result }}
+          REVERTS: ${{ needs.pr-reverts.result }}
           CODE: ${{ needs.changes.outputs.code }}
         run: |
-          echo "build-corpus=$CORPUS build-gates=$GATES build-gates-2=$GATES2 code=$CODE"
+          echo "build-corpus=$CORPUS build-gates=$GATES build-gates-2=$GATES2 pr-reverts=$REVERTS code=$CODE"
+          # pr-reverts runs on a pull request only; anywhere else it is skipped.
+          [ "$REVERTS" = success ] || [ "$REVERTS" = skipped ] || exit 1
           [ "$GATES" = success ] && [ "$GATES2" = success ] || exit 1
           if [ "$CODE" = true ]; then [ "$CORPUS" = success ]; else [ "$CORPUS" = skipped ]; fi
 

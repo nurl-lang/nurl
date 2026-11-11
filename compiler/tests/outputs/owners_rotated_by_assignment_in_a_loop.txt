@@ -1,0 +1,19 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+the second string, long enough for the heap
+the first string, long enough for the heap
+four: the third string, long enough for the heap
+four: the first string, long enough for the heap
+four: the second string, long enough for the heap
+nested: the second string, long enough for the heap
+nested: the first string, long enough for the heap
+3
+3
+struct: the second string, long enough for the heap
+struct: the first string, long enough for the heap
+42
+15
+closure: the second string, long enough for the heap
+closure: the first string, long enough for the heap

@@ -122,6 +122,11 @@ A `:` of that name made after the block is a binding of its own and is
 what the name means from there on (`: String s { : String s … s }` binds
 the block's value to a new `s`).
 
+A `:` binding (not a `: ~` one) of a block that ends in a binding the
+block made (`: String e { : String s … s }`) holds that binding's value as
+`: e s` would: handed to a `sink` or handed back by `^ e`, the value goes
+with it and is released once, by whoever holds it last.
+
 A scope drops its values newest first, in the reverse of the order they
 were bound in, as Rust and C++ do. A value made from a view of another —
 a struct holding `( string_data s )`, a `Slice` of a Vec — is bound after
@@ -483,7 +488,14 @@ the same way: an owner moves, a borrow is copied.
   then dead.
 - `: ~ ( Vec i ) cur a` is a *cursor*: a mutable working binding that
   borrows `a` (§7.6).
-- `= b a` moves an owner and copies a borrow, like `:`.
+- `= b a` moves an owner and copies a borrow, like `:`. The move is made
+  where the line runs — `b` takes the value and `a` holds nothing until
+  it is given a new one — so it holds on every path and in every round
+  of a loop: `= t a  = a b  = b t` rotates three owners however often it
+  runs. An owned slice moves the same way (`= ys zs` leaves `zs` empty).
+  A binding that owns its value on some paths only (a fresh value on
+  one, a borrow on another) cannot be handed over by name: give it a
+  value of its own on every path, or hand over a copy.
 - A `?` / `??` that selects one of several bindings
   (`: ( Vec i ) chosen ? flag a ( make )`) moves the selected owner on the
   paths that select it. The other paths keep their own owners.
@@ -2012,7 +2024,13 @@ handle is not (h338, h339). A closure several threads run may not change
 what it captured, either, unless that synchronises itself: a handler
 that pushes to a `Vec` it captured grows one environment from every
 worker at once (h342); it counts in an `Atomic` or keeps the list in a
-`Locked`. Share handles used on both sides are the ones asserted
+`Locked`. Giving a capture away is such a change, whatever the capture's
+type: a body that hands a value it captured to a `sink`, or to a callee
+that takes it over, can run once, and its environment marks the value
+taken with a plain flag that two threads would read together, so the
+closure is refused where several threads may run it (agora #648). A
+thread's own closure, which one thread runs once, may give its captures
+away. Share handles used on both sides are the ones asserted
 `% Sync` — `Channel`, `Mutex`, `Arc`, `Locked`, `RwLocked`, `Atomic`,
 `PFile`, `Pool`, and the handles servers share (`TcpListener`,
 `HttpServer`, `QuicServer`, `H3Server`, a router's `Route`, a cluster's
@@ -2516,6 +2534,13 @@ are dropped, moved and copied by the same rules:
   (`( string_from nm )`). A field given a value through the cursor (`= .
   cur name …`) is the cursor's own in the same way: reassigning the cursor
   releases it, so a view of it taken before ends there.
+- **Handovers by name move.** `= b a` and an immutable `: T b a` out of a
+  binding that owns its value — a String, a Vec, a struct, an option, an
+  owned slice — move it where they run (§2.2): `b` takes `a`'s drop flag
+  (a slice's buffer, `a`'s slot left empty), and `a` drops nothing until
+  it is given a new value. Nothing is handed over later, so the order of
+  the lines in a loop body does not matter. A handover out of a borrow
+  copies the borrow, and a `: ~` binding of a name is a cursor.
 - **Stores move.** A value stored into a literal, a field or a container
   element leaves its binding. A parameter stored that way makes the
   function keep its argument, which the caller hands over like a `sink`.
@@ -2566,6 +2591,23 @@ are dropped, moved and copied by the same rules:
   literal hands one back only lent by a parameter, as `^ . p f` does, and
   a binding may not borrow one past the block its struct is dropped in
   (h328).
+- **Views.** A `~` loop's element, a binding of a field read
+  (`: D e . h inner`), a binding of a binding that owns nothing
+  (`: D e p`) and a `??` payload of any of them are views: the value
+  stays where it is, with the owner that drops it. A view is never the
+  function's to hand over. Handed back (`^ x`, `^ @ ?D { T x }`) out of a
+  parameter the caller keeps, it is lent, as `^ p` and `^ . p f` are: the
+  call answers "lent" on that path, and the function's return summary
+  names the parameter, so the caller's binding borrows from its own
+  argument. Out of anything else (a local or a `sink` parameter, released
+  on the way out) the caller gets a copy, and for a value that cannot be
+  copied the `^` is an error. Stored into another owner, a view that
+  cannot be copied is an error too (agora #635).
+- **A literal handed back with a borrowed field beside a field of its
+  own** (`^ @ P { . h name ( string_from … ) }`) copies the borrowed
+  field, so the literal owns every field; with every field borrowed it
+  stays a lend and nothing is copied. A borrowed field that cannot be
+  copied beside a field of the literal's own is an error (agora #635).
 - **A call's result read for a field it cannot give up** — the struct has
   a `% Drop` of its own, or the field cannot be copied — gets an owner of
   its own for the rest of the scope, which drops it, and the field is lent
