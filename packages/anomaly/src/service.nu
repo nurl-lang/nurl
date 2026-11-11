@@ -4897,8 +4897,8 @@ $ `stdlib/core/slice.nu`
             // an unkept value counts as new: the tally is a lower bound.
             ? seen {} {
                 : i nd ?? ( json_obj_get c `distinct` ) { T dv → ( json_as_int dv ) F _ → 0 }
-                ( json_obj_set c `distinct` ( json_int + nd 1 ) )
                 ? < nv 8 { ( json_arr_push vals ( json_str_lit txt ) ) } {}
+                ( json_obj_set c `distinct` ( json_int + nd 1 ) )
             }
         }
         F _ → {}

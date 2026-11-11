@@ -1,5 +1,6 @@
-// bare_view_forwarded_beside_a_payload_view_kept_while_a_sibling_field_is_cleared_runs_clean: agora #471 — a helper hands back either a view of a `vec_get` payload of `. r items` or `( first d )`, a forwarded loop-element view; the caller clears `. r name`, then reads the answer (the shape the fix must keep)
+// bare_view_forwarded_beside_a_payload_view_kept_while_a_sibling_field_is_cleared_runs_clean: agora #471 — a helper reads a view of a `vec_get` payload of `. r items` and hands back `( first d )`, a forwarded loop-element view; the caller clears `. r name`, then reads the answer (the shape the fix must keep)
 // Closed: the forwarded answer marks only the sources its callee answered `2` for (`d`), not the payload view beside it, so a sibling field cleared ends nothing the answer depends on (agora #471).
+// The helper used to hand the payload view itself back on one path. That was a lend of `r` the summary missed (agora #594: clear `. r items` instead and the answer dangled); with the lend recorded the caller is refused, a call's lends being told apart by parameter and not by field (agora #700). The payload view here is read, not returned — what #471 is about.
 // main 9d2e7cd: runs clean.
 // map: §2.10 | A2 | runs-clean | - | agora #471: a forwarded bare view beside a payload view, kept while a sibling field is cleared
 $ `stdlib/core/string.nu`
@@ -13,7 +14,13 @@ $ `stdlib/core/vec.nu`
 }
 
 @ pick R r ( Vec String ) d → s {
-    ?? ( vec_get [String] . r items 0 ) { T e → { ^ ? > ( string_len e ) 0 ( string_data e ) ( first d ) } F _ → {} }
+    ?? ( vec_get [String] . r items 0 ) {
+        T e → {
+            : s pv ( string_data e )
+            ? > ( nurl_str_len pv ) 0 { ^ ( first d ) } {}
+        }
+        F _ → {}
+    }
     ^ ( first d )
 }
 

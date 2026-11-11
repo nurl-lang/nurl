@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+41
+67
+an owned value long enough for a heap buffer
+3
+31

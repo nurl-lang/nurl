@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_view_of_may_owned_result_pushed.nu:21:5: error: 'outv' is storage the caller holds (a parameter, or what one points into), and this stores into it a view of '. r name', which is released when this function returns (or its scope ends): the caller would read freed memory through 'outv'. Store a value that owns its data — a String (string_from) in a ( Vec String ) or a String field — or take '. r name' as a parameter so the caller owns what is viewed.
+    ( vec_push [s] outv ( string_data . r name ) )
+    ^
+error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

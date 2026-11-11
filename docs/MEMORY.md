@@ -804,6 +804,19 @@ element, a `??` payload of a nested lend, a local bound to one, or a
 generic function's closure parameter — ends, at its own call, the
 caller's views into that element.
 
+A function of your own that hands back a value it read out of its
+parameter lends it, however the value was reached on the way out: an
+element read through a `Slice` the function built over its `Vec`
+parameter (`: ( Slice S ) sl ( slice_from_vec [S] va )`, then `^ (
+slice_at [S] sl 0 )`), one read through the view field of a struct of
+views or through a local struct holding such a view, a field of a call's
+result (`^ . ( vec_at [S] va 0 ) name`), a bare `s` view of a `??`
+payload that a value join yields (`^ ?? ( vec_get [String] p 0 ) { T e →
+( string_data e ) … }`), or a binding of any of them. The caller's
+result borrows the argument behind the view — clearing the `Vec` and
+then reading the result is refused — wherever the function is defined
+(agora #594, #590, #596, #578).
+
 A `~ x xs` loop's element is a part of `xs`, as an element `( vec_at xs k
 )` lends is. A view of its own storage (`( string_data x )`, a field of
 it, a Slice of a Vec element, an element read out of it), or a borrow of
@@ -2676,7 +2689,21 @@ are dropped, moved and copied by the same rules:
 - **Call results.** Whether a call returns an owned value or a borrow of
   an argument is taken from the callee's summary. A function that lends
   on some paths and returns a fresh value on others answers per call, at
-  run time.
+  run time. A binding bound to such a call, and a `??` payload matched
+  straight out of one, borrows the argument and may own its value
+  besides: on the calls that handed the value over it is released with
+  the binding (or at the end of the `??`), so a view of it may not be
+  handed back or stored where it outlives the binding, and the payload
+  may not be wrapped in a returned literal (`^ @ ?S { T e }`) — hand the
+  call's result back as it is. What a function hands over counts every
+  value a `: ~` binding it returns was ever given: a fresh value assigned
+  over a lend, one filled in through an `inout` parameter or by a
+  closure, or one given in an earlier round of a loop makes the function
+  answer per call, and a binding whose every value is a lend, or holds
+  nothing, still lends. A borrowed binding handed back by name (`: S e (
+  vec_at [S] va 0 )`, then `^ e`) goes out as it is only from a function
+  whose own returns answer per call; from any other the caller gets a
+  copy (agora #594, #679).
 - **Values that cannot be copied.** A `% Drop` value with no clone (a
   sqlite `Database`, a `Statement`) read out of a parameter is lent, and
   so is one read out of any field — of a local, or of the value a

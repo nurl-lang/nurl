@@ -2,6 +2,10 @@
 
 ## [0.36.8] — unreleased
 
+### Fixed
+
+- **Builds with NURL 0.91.1**, which knows that what `json_obj_get` and `json_arr_get` answer is read in place out of the value they were given (Agora #594). Two places wrote a JSON value while they still read a part of it, which the compiler now refuses: a source column's summary counted a distinct value before it kept the value's text (the two are swapped), and the forecast backtest walked the answer's `features` while it wrote each one (each round reads its entry out of the answer). No behaviour change.
+
 ### Changed
 
 - No `unsafe` (Agora #470): the service's configuration setters (`analyze_set_exe`, `anomaly_authz_set_root`, `anomaly_service_set_root`, `anomaly_service_set_webroot`) kept the caller's strings as raw string globals, which takes an `unsafe` setter. The configuration is now a `Locked` value made at start and set before serving. Each string is the configuration's own copy, read whole by any worker, and a global set at start and changed only through its lock is what the proof's A3.6 and A3.2 cover. The public functions keep their names and arguments.

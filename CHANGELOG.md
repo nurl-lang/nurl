@@ -62,6 +62,23 @@ Unreleased changes are fragments in [`changes/unreleased/`](changes/unreleased/)
   cleanup" flag and releases its elements and its buffer after the defer
   chain.
 
+- **A value read through a view of a parameter and handed back is lent** (Agora #594, #590, #596, #578). A function that hands back what it read out of its parameter lends it, and its caller may not end the argument while it still reads the result — but the function's summary missed the lend wherever the value passed through a view on its way out: an element read through a `Slice` the function built over its `Vec` parameter (`: ( Slice String ) sl ( slice_from_vec [String] vs )  ^ ( slice_at [String] sl 0 )`, the element bound first, or the slice built inline), one read through the view field of a struct of views (`: ( Slice S ) z . q z  ^ ( slice_at [S] z 0 )`) or through a local struct holding such a view, a field of a call's result (`^ . ( vec_at [S] va 0 ) name`), and a bare `s` view of a `??` payload that a value join yields (`^ ?? ( vec_get [String] p 0 ) { T e → ( string_data e ) F → … }`, also bound first). Each compiled, and a caller that cleared the `Vec` and then read the result read freed memory. What a returned value reaches is recorded where the value is built — the binding it names, the call it is (through that callee's own summary), each arm of a join, a block's tail, a literal's fields, and the view it was read through — so the function lends the parameter behind the view, also when it is defined below its caller. Reading the result before the argument ends, or keeping a copy (`mem_dup`), compiles as before.
+- **A result that is fresh on one call and lent on another is released with the binding that holds it** (Agora #679). `@ pick ( Vec S ) v b own → ?S { ? own { ^ @ ?S { T ( mks … ) } } {}  ^ ( vec_get [S] v 0 ) }` answers per call whether its result is the caller's own or a borrow of `v`. A caller that bound the result, or matched on the call directly, and handed back a view of the payload (`T e → { ^ ( string_data . e name ) }`) — or pushed one into its caller's `Vec` — was accepted as lending `v`; on the fresh call the option was released at that return and the view read freed memory. A binding bound to such a call, and a payload matched straight out of one, borrows the argument and may own its value besides: a view of it may not be handed back, or stored where it outlives the binding, and the payload may not be wrapped in a returned literal (`^ @ ?S { T e }`) — hand the call's result back as it is (`^ ( pick v own )`). The function's answer counts every value a `: ~` binding it hands back was ever given — a fresh value assigned over a lend, one filled in through an `inout` parameter or by a closure, one from an earlier round of a loop, another binding that may own its value — so such a function answers per call too; a binding whose every value is a lend, or holds nothing (`: ~ ?S found @ ?S { F }` then `= found ( vec_get [S] v k )` in a loop), still lends. A borrowed binding handed back by name (`: S e ( vec_at [S] va 0 )  ^ e`, a `??` payload) goes out uncopied only from a function whose own returns answer per call; from any other the caller gets a copy.
+- **What `json_obj_get` and `json_arr_get` answer is a borrow of the value they were given** (Agora #594). Both read a part in place out of the `Json` argument and hand it back through a `??` payload, which is one of the shapes above: the summary said they lent nothing, so `: Json part ?? ( json_obj_get doc `k` ) { T v → v … }` followed by a write of `doc` and a read of `part` compiled and read freed memory when the write moved or released the part. The same holds for a program's own accessor of that shape. Such a program is refused now: read the part before the write, keep a copy (`json_clone`, `string_from ( json_str_data v )`), or read it again after the write. Four packages in this repository wrote a value while they read a part of it and are adapted — template 0.2.7 (a `{% for %}` loop walks its own copy of the sequence: one copy a loop instead of one an element), swarm-mcp 0.32.1, mermaid-server 0.4.1 and anomaly 0.36.8; their earlier versions do not build with this compiler. Three places where the rule that refuses is coarser than it could be are on the board: a call's lends are told apart by parameter, not by field (Agora #700); a change through a part read out of a borrow ends the borrow (Agora #701); and `^ ?? ( lending call p ) { T v → ( copy of v ) … }` in expression form counts as lending `p` — the statement form does not (Agora #702).
+- **An owned `??` payload is not taken for an earlier borrowed payload of the same name** (Agora #703). `: s b64 ?? ( json_obj_get args `data` ) { T v → ( json_str_data v ) F → `` }` followed by `?? ( b64_decode_vec b64 ) { T v → { = bytes v } F e → {} }` made `bytes` a borrow, and handing it to a `sink` parameter was refused ("'bytes' is a borrow … released or handed over here as if it owned the value"); renaming either `v` made the program compile. The compiler tells bindings apart by name, and the second payload inherited what the first one borrowed. A payload begins each run of its arm borrowing nothing; one that is read in place out of the matched value borrows it as before.
+
+- **A payload that a match arm binds as its own is kept for, and released
+  after, a `;` defer of that arm inside a loop** (Agora #698,
+  `compiler/nurlc.nu`). `?? ( make k ) { T t → { ; { … t … } } … }` in a
+  loop body left every round's payload but the last unreleased, and a
+  `break` in the arm above the `;` released the round's payload before
+  the defer, armed in an earlier round, read it (heap-use-after-free). An
+  arm's block that holds a `;` now keeps what is in sight at its head, as
+  a loop with a defer does at its own; the payload an earlier round left
+  to the cleanup is parked where the arm binds it again; and a match's
+  temporary enum that a defer keeps is parked instead of released before
+  the next round builds one.
+
 ### Known issues
 
 - v0.91.0 was tagged and never published: its release run stopped at the Windows archive's smoke test (the `nurl.bat` fix under Fixed). 0.91.1 is 0.91.0 plus the changes listed here.
@@ -151,21 +168,22 @@ Unreleased changes are fragments in [`changes/unreleased/`](changes/unreleased/)
   another path hands the parameter to a `sink`; a payload of a local
   plain enum handed back through a binding, a generic call or a struct's
   field; a `% Drop` literal handed straight to a function that only
-  reads it), #678 (a wrapped lending call binds no borrow), #679 (a view
-  of a per-call-owned option's payload handed back), #680 (a sink call
-  in a returned expression), #681 (an enum payload matched in place out
-  of an Arc), #682 (a payload view kept in a local Vec), #683 (the
+  reads it), #678 (a wrapped lending call binds no borrow), #680 (a sink
+  call in a returned expression), #681 (an enum payload matched in place
+  out of an Arc), #682 (a payload view kept in a local Vec), #683 (the
   Send/Sync walk and an option in a generic argument), #686 (a growing
   closure run under another name), #688 (a `( mem_dup x )` as an arm of
   a `?` value join), #689 (the crossing check and a sealed handle over
   an Arc), #690 (an ArcWeak crosses a thread where its Arc may not),
   #692 (a `% Drop` value from a lending call, handed to a changer), #693
   (`% NotSync ( W i )` is not asked by the frozen-Arc rule), #696 (a
-  handle local changed in a loop before it is given a captured field)
-  and #697 (an `inout` parameter assigned a field of a borrowed
-  parameter). `docs/LIMITATIONS.md` gives each one's shape and how to
-  stay clear of it. Closed in this release: agora #639, #646, #674,
-  #676. A release does not say "no hole is known open" while one is.
+  handle local changed in a loop before it is given a captured field),
+  #697 (an `inout` parameter assigned a field of a borrowed parameter)
+  and #699 (a function handing back a dyn method's result).
+  `docs/LIMITATIONS.md` gives each one's shape and how to stay clear of
+  it. Closed in this release: agora #578, #590, #594, #596, #639, #646,
+  #674, #676, #679, #698. A release does not say "no hole is known open"
+  while one is.
 
 ## [0.91.0] — 2026-11-11
 
