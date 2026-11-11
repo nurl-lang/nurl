@@ -56367,6 +56367,52 @@ unsafe @ __bck_made_from s name → s {
     ( __handle_drop_ensure ty )
 }
 
+// The mark an env's drop method carries before the release of one capture
+// (a comment line of its own): `R` where releasing it may run code of the
+// program's own (__drop_runs_code), `P` where it cannot.
+@ __cenv_part_mark s vty → s {
+    // (A String, the capture most envs own: no question to ask.)
+    ? ( seq vty `%String` ) { ^ ( nurl_str_cat `;!P\n` `` ) } {}
+    ^ ? ( __drop_runs_code vty ) ( nurl_str_cat `;!R\n` `` ) ( nurl_str_cat `;!P\n` `` )
+}
+
+// An env's drop method `name` (`head`: its signature and the cast of the
+// env), from the marked releases of its captures (`parts`).
+//
+// The captures go in order, and one's release may run a destructor of the
+// program's own, which may panic. The env left its owner before its drop
+// began, so the captures after that one had no owner on the unwind, and
+// neither had the env's block, which the runtime frees once the method
+// returns (nurl_closure_drop): they leaked (agora #645). So the method
+// journals what is still to go, as a struct's drop glue does (agora #617):
+// the block is in the pointer journal from the start — the runtime's free
+// takes it out — and before a capture that may run code is released the
+// env is registered with `<name>.from<k>`, the method from the next capture
+// on; the registration ends when the release returns, and the rest is that
+// stage, tail-called. An env none of whose captures runs code keeps the one
+// straight-line method it had, byte for byte.
+@ __cenv_drop_fns s name s head s parts → s {
+    : b runs >= ( nurl_str_find parts `;!R\n` ) 0
+    : ~ s out ( nurl_str_cat4 `\ndefine void @` name head ? runs `  call void @nurl_journal_push(i8* %env)\n` `` )
+    : ~ s rest ( nurl_str_cat parts `` )
+    : ~ i k 0
+    ~ != 0 ( nurl_str_len rest ) {
+        // One part: its mark, then its lines up to the next mark.
+        : b r ( seq ( nurl_str_slice rest 0 4 ) `;!R\n` )
+        : s tail ( nurl_str_slice rest 4 - ( nurl_str_len rest ) 4 )
+        : i nx ( nurl_str_find tail `;!` )
+        : s body ? < nx 0 ( nurl_str_cat tail `` ) ( nurl_str_slice tail 0 nx )
+        = rest ? < nx 0 `` ( nurl_str_slice tail nx - ( nurl_str_len tail ) nx )
+        = k + k 1
+        ? & r != 0 ( nurl_str_len rest ) {
+            : s next ( nurl_str_cat3 name `.from` ( nurl_str_int k ) )
+            = out ( nurl_str_cat4 out ( nurl_str_cat3 `  call void @nurl_journal_push_drop2(ptr %env, ptr null, ptr @` next `)\n` ) body
+            ( nurl_str_cat4 `  call void @nurl_journal_forget_slot(ptr %env)\n  musttail call void @` next `(i8* %env)\n  ret void\n}\n` ( nurl_str_cat4 `\ndefine void @` next head `` ) ) )
+        } { = out ( nurl_str_cat out body ) }
+    }
+    ^ ( nurl_str_cat out `  ret void\n}\n` )
+}
+
 @ gen_env_vtable s fname s struct_name s captured_vars i syms → s {
     : s ll_desc `{ i64, void (i8*)*, void (i8*)*, void (i8*, i8*)*, i8*, void (i8*)*, void (i8*, i8*)* }`
     : ~ s drop_body ``
@@ -56408,7 +56454,7 @@ unsafe @ __bck_made_from s name → s {
             : s ld ( nurl_str_cat4 `  %v` k ` = load ` ( nurl_str_cat4 ct `, ` ct ( nurl_str_cat3 `* %p` k `\n` ) ) )
             : s ex ( nurl_str_cat4 `  %e` k ` = extractvalue ` ( nurl_str_cat4 ct ` %v` k `, 1\n` ) )
             : s head ( nurl_str_cat4 gep k `\n` ( nurl_str_cat ld ex ) )
-            = drop_body ( nurl_str_cat4 drop_body head `  call void @nurl_closure_drop(i8* %e` ( nurl_str_cat k `)\n` ) )
+            = drop_body ( nurl_str_cat4 ( nurl_str_cat drop_body `;!R\n` ) head `  call void @nurl_closure_drop(i8* %e` ( nurl_str_cat k `)\n` ) )
             = trace_body ( nurl_str_cat4 trace_body head `  call void @nurl_closure_cc_trace(i8* %e` ( nurl_str_cat k `, i8* %vis)\n` ) )
             = clone_body ( nurl_str_cat4 clone_body head
             ( nurl_str_cat3 `  %n` k ` = call i8* @nurl_closure_clone(i8* %e` )
@@ -56443,7 +56489,7 @@ unsafe @ __bck_made_from s name → s {
             ( nurl_str_cat4 ht ` %v` k ( nurl_str_cat4 `)\n  store ` ht ` %n` ( nurl_str_cat4 k `, ` ht ( nurl_str_cat3 `* %p` k `\n` ) ) ) ) )
             = adopt_body ( nurl_str_cat adopt_body cl )
             = oclone_extra ( nurl_str_cat oclone_extra cl )
-            = odrop_extra ( nurl_str_cat4 odrop_extra head ( nurl_str_cat4 `  call void @` ( llvm_source_fn ( nurl_str_cat `drop__` hm ) ) `(` ht )
+            = odrop_extra ( nurl_str_cat4 ( nurl_str_cat odrop_extra ( __cenv_part_mark vty ) ) head ( nurl_str_cat4 `  call void @` ( llvm_source_fn ( nurl_str_cat `drop__` hm ) ) `(` ht )
             ( nurl_str_cat3 ` %v` k `)\n` ) )
             ? ( __cc_traces vty syms ) {
                 ( __cc_request_trace vty syms )
@@ -56465,7 +56511,7 @@ unsafe @ __bck_made_from s name → s {
             : s tkl ? tkg ( nurl_str_cat4 ( nurl_str_cat4 `  %tkp` k ` = getelementptr ` struct_name ) ( nurl_str_cat4 `, ptr %t, i32 0, i32 ` ( nurl_str_int g_env_tk_p ) `, i32 ` ( nurl_str_int - field_idx 1 ) ) ( nurl_str_cat4 `\n  %tk` k ` = load i1, ptr %tkp` k ) `\n` ) ``
             : s dgo ? tkg ( nurl_str_cat4 tkl ( nurl_str_cat4 `  br i1 %tk` k `, label %tkz` k ) ( nurl_str_cat4 `, label %tky` k `\ntky` k ) `:\n` ) ``
             : s dend ? tkg ( nurl_str_cat4 `  br label %tkz` k `\ntkz` ( nurl_str_cat k `:\n` ) ) ``
-            = drop_body ( nurl_str_cat4 drop_body dgo head ( nurl_str_cat3 ( nurl_str_cat4 `  call void @` ( llvm_source_fn ( nurl_str_cat `drop__` hm ) ) `(` ht )
+            = drop_body ( nurl_str_cat4 ( nurl_str_cat drop_body ( __cenv_part_mark vty ) ) dgo head ( nurl_str_cat3 ( nurl_str_cat4 `  call void @` ( llvm_source_fn ( nurl_str_cat `drop__` hm ) ) `(` ht )
             ( nurl_str_cat3 ` %v` k `)\n` ) dend ) )
             ? ( __cc_traces vty syms ) {
                 ( __cc_request_trace vty syms )
@@ -56504,7 +56550,7 @@ unsafe @ __bck_made_from s name → s {
             : s vg ( nurl_str_cat4 `  %q` k ` = getelementptr ` ( nurl_str_cat4 struct_name `, ` struct_name ( nurl_str_cat3 `* %t, i32 0, i32 ` vfi `\n` ) ) )
             : s vl ( nurl_str_cat4 `  %v` k ( nurl_str_cat3 ` = load ` ht `, ` ) ( nurl_str_cat4 ht `* %q` k `\n` ) )
             : s dc ( nurl_str_cat4 `  call void @` ( llvm_source_fn ( nurl_str_cat `drop__` hm ) ) ( nurl_str_cat3 `(` ht ` %v` ) ( nurl_str_cat3 k `)\n  br label %z` ( nurl_str_cat3 k `\nz` ( nurl_str_cat k `:\n` ) ) ) )
-            = drop_body ( nurl_str_cat4 drop_body ( nurl_str_cat3 fg fl br ) ( nurl_str_cat vg vl ) dc )
+            = drop_body ( nurl_str_cat4 ( nurl_str_cat drop_body ( __cenv_part_mark ovt ) ) ( nurl_str_cat3 fg fl br ) ( nurl_str_cat vg vl ) dc )
             = ofi + ofi 1
         }
         // A copy takes the captures over (h240): the env it was copied
@@ -56547,7 +56593,7 @@ unsafe @ __bck_made_from s name → s {
         = out ( nurl_str_cat4 out `, void (i8*, i8*)* ` otr ( nurl_str_cat3 `, i8* null, void (i8*)* null, void (i8*, i8*)* ` sendck_ref ` }\n` ) )
         : s oentry ( nurl_str_cat4 `(i8* %env) {\nentry:\n  %t = bitcast i8* %env to ` struct_name `*\n` `` )
         = out ( nurl_str_cat4 out `\ndefine void @__cenv_adopt.` fname ( nurl_str_cat4 oentry adopt_body `  ret void\n}\n` `` ) )
-        = out ( nurl_str_cat4 out `\ndefine void @__cenv_odrop.` fname ( nurl_str_cat4 oentry ( nurl_str_cat drop_body odrop_extra ) `  ret void\n}\n` `` ) )
+        = out ( nurl_str_cat out ( __cenv_drop_fns ( nurl_str_cat `__cenv_odrop.` fname ) oentry ( nurl_str_cat drop_body odrop_extra ) ) )
         = out ( nurl_str_cat4 out `\ndefine void @__cenv_oclone.` fname ( nurl_str_cat4 oentry ( nurl_str_cat clone_body oclone_extra ) `  ret void\n}\n` `` ) )
         ? | traced != 0 ( nurl_str_len otrace_extra ) {
             : s otentry ( nurl_str_cat4 `(i8* %env, i8* %vis) {\nentry:\n  %t = bitcast i8* %env to ` struct_name `*\n` `` )
@@ -56556,7 +56602,7 @@ unsafe @ __bck_made_from s name → s {
     } {}
     ? nested
     { : s entry ( nurl_str_cat4 `(i8* %env) {\nentry:\n  %t = bitcast i8* %env to ` struct_name `*\n` `` )
-        = out ( nurl_str_cat4 out `\ndefine void @__cenv_drop.` fname ( nurl_str_cat4 entry drop_body `  ret void\n}\n` `` ) )
+        = out ( nurl_str_cat out ( __cenv_drop_fns ( nurl_str_cat `__cenv_drop.` fname ) entry drop_body ) )
         = out ( nurl_str_cat4 out `\ndefine void @__cenv_clone.` fname ( nurl_str_cat4 entry clone_body `  ret void\n}\n` `` ) ) }
     {}
     ? traced
@@ -69271,6 +69317,8 @@ unsafe @ __hmemo_close s key i mark b r → v {
 // own per question: a type is entered as in progress (2) before its walk
 // and answers F to itself while it is.
 : ~ i g_drc_memo 0
+// …and __holds_user_drop's, the same way.
+: ~ i g_hud_memo 0
 
 @ __drop_runs_code s ty → b {
     : b top == g_drc_memo 0
@@ -69342,9 +69390,31 @@ unsafe @ __hmemo_close s key i mark b r → v {
 // Does a value of `ty` hold, anywhere inside it — through a Vec's or a
 // Box's elements, an option's or an enum's payloads, a struct's fields —
 // a value with a `% Drop` of the program's own?
+//
+// The first eight levels are walked as they are; below that the walk
+// becomes a search with an in-progress mark per type (g_hud_memo), so that
+// it ends on a type that reaches itself (a list's node) however deep it
+// has to go. It used to give up there and answer "none": a `% Drop` value
+// nine Vecs deep was never dropped (agora #660). Nearly every type is
+// answered in the first levels, at the cost it always had.
 @ __holds_user_drop s ty i depth → b {
-    ? | > depth 8 == 0 ( nurl_str_len ty ) { ^ F } {}
+    ? == 0 ( nurl_str_len ty ) { ^ F } {}
     ? == ( nurl_str_get ty - ( nurl_str_len ty ) 1 ) 42 { ^ F } {}
+    ? <= depth 8 { ^ ( __hud_walk ty depth ) } {}
+    : b top == g_hud_memo 0
+    ? top { = g_hud_memo ( nurl_sym_new ) } {}
+    : i known ( nurl_sym_int g_hud_memo ty )
+    : ~ b r F
+    ? >= known 0 { = r == known 1 } {
+        ( nurl_sym_def g_hud_memo ty `2` )
+        = r ( __hud_walk ty depth )
+        ( nurl_sym_set g_hud_memo ty ? r `1` `0` )
+    }
+    ? top { ( nurl_sym_free g_hud_memo ) = g_hud_memo 0 } {}
+    ^ r
+}
+
+@ __hud_walk s ty i depth → b {
     ? | | ( __has_user_drop ty ) != 0 ( nurl_sym_len2 g_impl_name_syms `synthdrop##` ty ) ( __is_moveonly_libh ty ) { ^ T } {}
     ? | != 0 ( nurl_str_starts ty `%Vec__` ) != 0 ( nurl_str_starts ty `%Box__` ) {
         ^ ( __holds_user_drop ( __vec_elem_llvm ty ) + depth 1 )
@@ -80959,6 +81029,10 @@ unsafe @ dyn_method_decltrait s tname s m → s {
     ( nurl_print `  %dnull = icmp eq i8* %dropfn, null\n` )
     ( nurl_print `  br i1 %dnull, label %freebox, label %rundrop\nrundrop:\n` )
     ( nurl_print `  %f = bitcast i8* %dropfn to void(i8*)*\n` )
+    // (The box is in the journal while the boxed value's destructor runs:
+    // one that panicked left it to no one — nurl_free below takes it out;
+    // agora #645.)
+    ( nurl_print `  call void @nurl_journal_push(i8* %data)\n` )
     ( nurl_print `  call void %f(i8* %data)\n  br label %freebox\nfreebox:\n` )
     ( nurl_print `  call void @nurl_free(i8* %data)\n  br label %done\ndone:\n  ret void\n}\n` )
     // Register so `: %T x ( dyn … )` bindings auto-drop + journal like any Drop.
@@ -83130,6 +83204,18 @@ unsafe @ __fold_byte i p → i {
 // handed to a concatenation and freed after it.
 : ~ i g_mp 0  // i64[n]: 1 when function n may panic
 : ~ i g_mp_rt 0  // symtab: a runtime callee's name → 2 when it may panic, else 1
+// The runtime's closure-environment entries run a method of the env they
+// are handed — its drop, its copy, its crossing check: functions of this
+// module (`__cenv_drop.<fn>`, …), reached through the env's descriptor. So
+// what such an entry may do is no matter of its name: it may panic exactly
+// when one of the module's methods of that kind may, the fixpoint's own
+// answer (__mp_compute). Answered F by name, a binding alive only across an
+// env's release lost its journal registration, and a capture's destructor
+// that panicked there leaked it (agora #650). 1 when a method of the kind
+// may panic.
+: ~ i g_mp_cdrop 0
+: ~ i g_mp_cclone 0
+: ~ i g_mp_csend 0
 
 // A runtime / external function that can start a panic on this thread.
 unsafe @ __mp_runtime_panics s nm i p i le → b {
@@ -83156,8 +83242,46 @@ unsafe @ __mp_runtime_panics s nm i p i le → b {
     ^ F
 }
 
+// The kind of env method a runtime entry runs, as __mp_callee answers it:
+// -3 the drop, -4 the copy (and `adopt`, which copies in what the env only
+// viewed), -5 the crossing check; 0 for any other name.
+@ __mp_clo_family s nm → i {
+    ? == 0 ( nurl_str_starts nm `nurl_closure_` ) { ^ 0 } {}
+    ? | ( seq nm `nurl_closure_drop` ) ( seq nm `nurl_closure_slice_drop` ) { ^ -3 } {}
+    ? | | | ( seq nm `nurl_closure_clone` ) ( seq nm `nurl_closure_adopt` ) ( seq nm `nurl_closure_own_copy` ) ( seq nm `nurl_closure_own` ) { ^ -4 } {}
+    ? ( seq nm `nurl_closure_send_check` ) { ^ -5 } {}
+    ^ 0
+}
+
+// Can the call __mp_callee classified as `c` start a panic?
+unsafe @ __mp_call_panics i c → b {
+    ? == c -2 { ^ T } {}
+    ? >= c 0 { ^ != 0 ( nurl_peek # s g_mp c ) } {}
+    ? == c -3 { ^ != 0 g_mp_cdrop } {}
+    ? == c -4 { ^ != 0 g_mp_cclone } {}
+    ? == c -5 { ^ != 0 g_mp_csend } {}
+    ^ F
+}
+
+// Which kind of env method function `fi` is, by its name: 3 a drop
+// (`__cenv_drop.` / `__cenv_odrop.`), 4 a copy (`__cenv_clone.` /
+// `__cenv_oclone.` / `__cenv_adopt.`), 5 a crossing check
+// (`__cenv_sendck.`); 0 any other function.
+unsafe @ __mp_fn_clo_kind i fi → i {
+    : i st ( nurl_peek # s g_dce_start fi )
+    : i le ( __mp_eol st ( nurl_peek # s g_dce_end fi ) )
+    : i at ( nurl_memmem_range # s + g_dce_mod st - le st ` @__cenv_` 9 )
+    ? < at 0 { ^ 0 } {}
+    : i a + + st at 9
+    ? | ( __fold_at a `drop.` 5 ) ( __fold_at a `odrop.` 6 ) { ^ 3 } {}
+    ? | | ( __fold_at a `clone.` 6 ) ( __fold_at a `oclone.` 7 ) ( __fold_at a `adopt.` 6 ) { ^ 4 } {}
+    ? ( __fold_at a `sendck.` 7 ) { ^ 5 } {}
+    ^ 0
+}
+
 // `--may-panic=`'s answer, one line per name. (A drop / clone walk's answer
-// depends on the call's thunk argument, which no name alone has: `?`.)
+// depends on the call's thunk argument, and a closure-env entry's on the
+// module's env methods, which no name alone has: `?`.)
 @ __mp_query s names → v {
     : ~ s rest ( nurl_str_cat names `` )
     ~ != 0 ( nurl_str_len rest ) {
@@ -83165,7 +83289,7 @@ unsafe @ __mp_runtime_panics s nm i p i le → b {
         : s nm ? < c 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 c )
         = rest ? < c 0 `` ( nurl_str_slice rest + c 1 - - ( nurl_str_len rest ) c 1 )
         ? != 0 ( nurl_str_len nm ) {
-            : b thunked | != 0 ( nurl_str_starts nm `nurl_vec_drop` ) != 0 ( nurl_str_starts nm `nurl_vec_clone` )
+            : b thunked | | != 0 ( nurl_str_starts nm `nurl_vec_drop` ) != 0 ( nurl_str_starts nm `nurl_vec_clone` ) != 0 ( __mp_clo_family nm )
             : s v ? thunked `?` ? ( __mp_runtime_panics nm 0 0 ) `T` `F`
             ( nurl_println ( nurl_str_cat3 nm ` ` v ) )
         } {}
@@ -83174,7 +83298,9 @@ unsafe @ __mp_runtime_panics s nm i p i le → b {
 
 // The callee of the call whose `call ` ends at `cp`, on the line ending at
 // `le`: its function index (>= 0), -1 for an external function that cannot
-// panic, -2 for one that can or one not known (a call through a pointer).
+// panic, -2 for one that can or one not known (a call through a pointer),
+// -3 / -4 / -5 for a closure-env entry (__mp_clo_family; __mp_call_panics
+// has the answer once __mp_compute is done).
 unsafe @ __mp_callee i cp i le → i {
     : *u mp # *u # s g_dce_mod
     // (The name's bytes: __dce_scan's table, alive for the whole module
@@ -83210,9 +83336,12 @@ unsafe @ __mp_callee i cp i le → i {
             = . mp p # u 0
             // What a runtime function may do is a matter of its name alone
             // (the walks above are the one exception): classify each once.
+            // (A closure-env entry is remembered by its kind, 3 / 4 / 5: its
+            // answer is the module's env methods'.)
             : ~ i rk ( nurl_sym_int g_mp_rt # s + g_dce_mod ts )
             ? < rk 0 {
-                = rk ? ( __mp_runtime_panics # s + g_dce_mod ts p le ) 2 1
+                : i cf ( __mp_clo_family # s + g_dce_mod ts )
+                = rk ? != 0 cf - 0 cf ? ( __mp_runtime_panics # s + g_dce_mod ts p le ) 2 1
                 ( nurl_sym_def g_mp_rt # s + g_dce_mod ts ( nurl_str_int rk ) )
             } {}
             = . mp p sv
@@ -83240,6 +83369,12 @@ unsafe @ __mp_compute i n → v {
     : ~ i ne 0
     : Buf eb_own @ Buf { # i ( nurl_zalloc * + n 1 8 ) }
     : s eb # s . eb_own p
+    // (Per function: which kinds of closure-env entry it calls.)
+    : Buf ck_own @ Buf { # i ( nurl_zalloc * + n 1 8 ) }
+    : s ck # s . ck_own p
+    = g_mp_cdrop 0
+    = g_mp_cclone 0
+    = g_mp_csend 0
     : ~ i fi 0
     ~ < fi n {
         ( nurl_poke eb fi ne )
@@ -83252,6 +83387,9 @@ unsafe @ __mp_compute i n → v {
                     : i cp + + p rel 6
                     : i le ( __mp_eol cp en )
                     : i c ( __mp_callee cp le )
+                    // (A call of a closure-env entry: remembered by its kind,
+                    // bits 1 / 2 / 4, for the env methods' answer below.)
+                    ? <= c -3 { ( nurl_poke ck fi | ( nurl_peek ck fi ) ? == c -3 1 ? == c -4 2 4 ) } {}
                     ? == c -2 { ( nurl_poke # s g_mp fi 1 ) } {
                         ? >= c 0 {
                             ? >= ne ecap {
@@ -83270,24 +83408,53 @@ unsafe @ __mp_compute i n → v {
         = fi + fi 1
     }
     ( nurl_poke eb n ne )
-    : ~ b changed T
-    ~ changed {
-        = changed F
+    // The call graph to a fixpoint; then the closure-env entries: one whose
+    // kind of env method may panic may panic itself, and so may every
+    // function that calls it — which may be another env method, so round
+    // again until no kind changes.
+    : ~ b again T
+    ~ again {
+        = again F
+        : ~ b changed T
+        ~ changed {
+            = changed F
+            = fi 0
+            ~ < fi n {
+                ? == 0 ( nurl_peek # s g_mp fi ) {
+                    : ~ i e ( nurl_peek eb fi )
+                    : i ee ( nurl_peek eb + fi 1 )
+                    ~ < e ee {
+                        ? != 0 ( nurl_peek # s g_mp ( nurl_peek edges e ) ) {
+                            ( nurl_poke # s g_mp fi 1 )
+                            = changed T
+                            = e ee
+                        } { = e + e 1 }
+                    }
+                } {}
+                = fi + fi 1
+            }
+        }
+        : ~ i newk 0
         = fi 0
         ~ < fi n {
-            ? == 0 ( nurl_peek # s g_mp fi ) {
-                : ~ i e ( nurl_peek eb fi )
-                : i ee ( nurl_peek eb + fi 1 )
-                ~ < e ee {
-                    ? != 0 ( nurl_peek # s g_mp ( nurl_peek edges e ) ) {
-                        ( nurl_poke # s g_mp fi 1 )
-                        = changed T
-                        = e ee
-                    } { = e + e 1 }
-                }
+            ? & != 0 ( nurl_peek # s g_dce_live fi ) != 0 ( nurl_peek # s g_mp fi ) {
+                : i k ( __mp_fn_clo_kind fi )
+                ? & == k 3 == 0 g_mp_cdrop { = g_mp_cdrop 1 = newk | newk 1 } {}
+                ? & == k 4 == 0 g_mp_cclone { = g_mp_cclone 1 = newk | newk 2 } {}
+                ? & == k 5 == 0 g_mp_csend { = g_mp_csend 1 = newk | newk 4 } {}
             } {}
             = fi + fi 1
         }
+        ? != 0 newk {
+            = fi 0
+            ~ < fi n {
+                ? & == 0 ( nurl_peek # s g_mp fi ) != 0 & ( nurl_peek ck fi ) newk {
+                    ( nurl_poke # s g_mp fi 1 )
+                    = again T
+                } {}
+                = fi + fi 1
+            }
+        } {}
     }
 }
 
@@ -83314,6 +83481,7 @@ unsafe @ __jrnl_push_elidable i le i en i rs i re → b {
             : i c ( __mp_callee + + p cr 6 e )
             ? == c -2 { ^ F } {}
             ? & >= c 0 != 0 ( nurl_peek # s g_mp c ) { ^ F } {}
+            ? & <= c -3 ( __mp_call_panics c ) { ^ F } {}
         } {}
         = p + e 1
         = lines + lines 1
@@ -83835,6 +84003,7 @@ unsafe @ __jrnl_line_kind i p i e → i {
     ? >= cr 0 {
         : i c ( __mp_callee + + p cr 6 e )
         ? | == c -2 & >= c 0 != 0 ( nurl_peek # s g_mp c ) { ^ 5 } {}
+        ? & <= c -3 ( __mp_call_panics c ) { ^ 5 } {}
     } {}
     ? | ( __fold_at p `  br ` 5 ) ( __fold_at p `  switch ` 9 ) { ^ 3 } {}
     ? | ( __fold_at p `  ret` 5 ) ( __fold_at p `  unreachable` 13 ) { ^ 4 } {}
@@ -84098,6 +84267,9 @@ unsafe @ __jrnl_elide i n b lib → v {
         ? & != 0 ( nurl_peek # s g_dce_live fi ) == 0 ( nurl_peek # s g_mp fi ) {
             ( __jrnl_blank_calls fi `  call void @nurl_journal_push_drop2(` 37 )
             ( __jrnl_blank_calls fi `  call void @nurl_journal_forget_slot(` 38 )
+            // (…nor, an env's drop method, the env's block: the runtime
+            // frees it as soon as the method returns — __cenv_drop_fns.)
+            ? == ( __mp_fn_clo_kind fi ) 3 { ( __jrnl_blank_calls fi `  call void @nurl_journal_push(i8* %env)` 40 ) } {}
         } {}
         // …and one that may panic journals only the bindings a panic can
         // meet.
