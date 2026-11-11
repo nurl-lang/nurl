@@ -148,21 +148,44 @@ $ `stdlib/core/box.nu`
 
 // ── Clear / free ──────────────────────────────────────────────────────
 
-// Drop every live element (no work, and no loop, for elements that own
-// nothing); the length goes to zero first.
-@ __dq_drop_elems [A] * DqCtl c → v {
+// Release every live element: the run from `head` and, where the ring
+// wraps, the run from slot 0. Each run leaves the deque — the count goes
+// down past it — before one of its elements is dropped, so whenever a
+// destructor runs the deque holds exactly the elements of the run still to
+// go, and calling this again releases those (stdlib/core/mem.nu, "A
+// release a panic can go on with"). Within a run the elements go in index
+// order and one that panics does not end it (mem_drop_range). No work, and
+// no loop, for elements that own nothing.
+@ __dq_release [A] * DqCtl c → v {
     : i len . c len
-    : i cap . c cap
     : i head . c head
     : *A data # *A ( raw_block_ptr . c buf )
+    // the run from `head`: all of them, or as many as fit before the end
+    : i first ? > + head len . c cap - . c cap head len
     = . c head 0
+    = . c len - len first
+    ( mem_drop_range [A] data head + head first )
     = . c len 0
-    : ~ i i 0
-    ~ < i len {
-        : A e . data % + head i cap
-        ( mem_take e )
-        = i + i 1
-    }
+    ( mem_drop_range [A] data 0 - len first )
+}
+
+// A deque whose release is under way: what a panic out of an element's
+// destructor finds in the journal, to go on with the run after it.
+: DqRelease [A] { * DqCtl c }
+
+@ DqRelease_drop [A] sink ( DqRelease A ) r → v {
+    : *DqCtl c . r c
+    ( mem_release_rest \ → v { ( __dq_release [A] c ) } )
+}
+
+// Drop every live element; the deque is empty when this returns, and when
+// a destructor's panic leaves it.
+@ __dq_drop_elems [A] * DqCtl c → v {
+    ? ( mem_drop_runs_code [A] ) {
+        : ( DqRelease A ) rest @ ( DqRelease A ) { c }
+        ( __dq_release [A] c )
+        ( mem_forget rest )
+    } { ( __dq_release [A] c ) }
 }
 
 // The elements are dropped; the buffer stays for reuse.

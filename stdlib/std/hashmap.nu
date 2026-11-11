@@ -350,9 +350,13 @@ $ `stdlib/core/box.nu`
     : *u states # *u ( raw_block_ptr . c states )
     ? >= slot 0
     { : V prev . vals slot
-        // The old value leaves the map: the caller owns it.
+        // The old value leaves the map: the caller owns it. The stored
+        // key stays; the passed one is dropped here (the block's end), with
+        // the old value still this frame's own — a key whose destructor
+        // panics leaves it to the unwind (agora #659).
         ( mem_take prev )
         = . vals slot val
+        { : K passed key }
         ^ @ ?V { T prev }
     }
     { : i ins - -1 slot
@@ -380,41 +384,93 @@ $ `stdlib/core/box.nu`
     : *V vals # *V ( raw_block_ptr . c vals )
     : *u states # *u ( raw_block_ptr . c states )
     : *K keys # *K ( raw_block_ptr . c keys )
-    // The stored key leaves with its entry (dropped here); the value is
-    // handed to the caller.
-    : K gone . keys slot
-    ( mem_take gone )
+    // The entry leaves the map first; then the stored key is dropped (the
+    // block's end), with the value still this frame's own — a key whose
+    // destructor panics finds a map that no longer counts the entry and a
+    // value the unwind releases (agora #659) — and the value is handed to
+    // the caller.
     : V prev . vals slot
     ( mem_take prev )
     = . states slot # u 1
     = . c len - . c len 1
     = . c tomb + . c tomb 1
+    {
+        : K gone . keys slot
+        ( mem_take gone )
+    }
     ^ @ ?V { T prev }
 }
 
 // ── Cleanup ─────────────────────────────────────────────────────────
 
+// Release every entry from slot `next` on; the map is empty when this
+// returns. An entry leaves the map — its slot a tombstone, the count down
+// — before its key and value are dropped, and `next` is moved past it: so
+// whenever a destructor runs the map holds exactly the entries still to
+// go, and calling this again with the same `next` releases those
+// (stdlib/core/mem.nu, "A release a panic can go on with").
+@ __map_release [K V] * MapCtl c inout i next → v {
+    : i cap . c cap
+    : *K keys # *K ( raw_block_ptr . c keys )
+    : *V vals # *V ( raw_block_ptr . c vals )
+    : *u states # *u ( raw_block_ptr . c states )
+    : ~ i i next
+    ~ < i cap {
+        ? ( __map_occupied # i . states i ) {
+            = . states i # u 1
+            = . c len - . c len 1
+            = . c tomb + . c tomb 1
+            = next + i 1
+            : K k . keys i
+            ( mem_take k )
+            : V v . vals i
+            ( mem_take v )
+        } {}
+        = i + i 1
+    }
+    = next cap
+}
+
+// A map whose release is under way, and the slot it has come to: what a
+// panic out of a key's or a value's destructor finds in the journal, to go
+// on with the entries after it.
+: MapRelease [K V] { * MapCtl c i next }
+
+@ MapRelease_drop [K V] sink ( MapRelease K V ) r → v {
+    : *MapCtl c . r c
+    : ~ i next . r next
+    ( mem_release_rest \ → v { ( __map_release [K V] c next ) } )
+}
+
 // What dropping a map does (its owner does it at scope exit — docs/
 // MEMORY.md §7.6): every entry's key and value are dropped (no work, and
 // no loop, for ones that own nothing); the record and its buffers go with
-// the handle's field.
+// the handle's field. Where dropping a key or a value may run code of the
+// program's own, a destructor that panics does not end it: the entries
+// after it are still dropped, each once (agora #659).
 @ HashMap_drop [K V] sink ( HashMap K V ) m → v {
     ? ( box_is_null [MapCtl] . m ctl ) { ^ } {}
     : *MapCtl c ( box_ptr [MapCtl] . m ctl )
     : i cap . c cap
     ? > cap 0 {
-        : *K keys # *K ( raw_block_ptr . c keys )
-        : *V vals # *V ( raw_block_ptr . c vals )
-        : *u states # *u ( raw_block_ptr . c states )
-        : ~ i i 0
-        ~ < i cap {
-            ? ( __map_occupied # i . states i ) {
-                : K k . keys i
-                ( mem_take k )
-                : V v . vals i
-                ( mem_take v )
-            } {}
-            = i + i 1
+        ? ( mem_drop_runs_code [K V] ) {
+            : ~ ( MapRelease K V ) rest @ ( MapRelease K V ) { c 0 }
+            ( __map_release [K V] c . rest next )
+            ( mem_forget rest )
+        } {
+            : *K keys # *K ( raw_block_ptr . c keys )
+            : *V vals # *V ( raw_block_ptr . c vals )
+            : *u states # *u ( raw_block_ptr . c states )
+            : ~ i i 0
+            ~ < i cap {
+                ? ( __map_occupied # i . states i ) {
+                    : K k . keys i
+                    ( mem_take k )
+                    : V v . vals i
+                    ( mem_take v )
+                } {}
+                = i + i 1
+            }
         }
     } {}
 }

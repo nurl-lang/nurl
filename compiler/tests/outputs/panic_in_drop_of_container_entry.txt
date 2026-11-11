@@ -1,0 +1,145 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+map_values: built
+drop a
+drop b
+drop c
+drop d
+map_values: recovered: panic in drop b
+map_two: built
+drop a
+drop b
+drop c
+drop d
+map_two: recovered: panic in drop b
+map_keys: built
+drop a
+drop b
+drop c
+drop d
+map_keys: recovered: panic in drop b
+drop b
+drop which
+map_removes: recovered: panic in drop b
+map_removes: len 3
+map_removes: still has b: no
+drop probe
+drop a
+drop c
+drop d
+drop b2
+map_replaces: recovered: panic in drop b2
+map_replaces: b is the new value of b, on the heap
+drop probe
+drop a
+drop b
+drop c
+drop d
+set: built
+drop a
+drop b
+drop c
+drop d
+set: recovered: panic in drop b
+set: built
+drop a
+drop b
+drop c
+drop d
+set_two: recovered: panic in drop b
+drop q
+drop p
+deque_first_run: built
+drop y
+drop z
+drop a
+drop b
+deque_first_run: recovered: panic in drop z
+drop q
+drop p
+deque_both_runs: built
+drop y
+drop z
+drop a
+drop b
+deque_both_runs: recovered: panic in drop z
+drop q
+drop p
+drop y
+drop z
+drop a
+drop b
+deque_clears: recovered: panic in drop a
+deque_clears: len 0
+drop late
+tree_values: built
+drop d
+drop c
+drop b
+drop a
+tree_values: recovered: panic in drop b
+tree_keys: built
+drop d
+drop c
+drop b
+drop a
+tree_keys: recovered: panic in drop b
+drop b
+drop which
+tree_removes: recovered: panic in drop b
+tree_removes: holds a c d, len 3
+tree_removes: holds a c d e, len 4
+drop e
+drop d
+drop c
+drop a
+drop b
+drop probe
+drop d
+drop c
+drop a
+tree_removes_unwound: recovered: panic in drop b
+drop b2
+tree_replaces: recovered: panic in drop b2
+tree_replaces: b is the new value of b, on the heap
+drop probe
+drop d
+drop c
+drop b
+drop a
+nested: built
+drop a
+drop b
+drop c
+drop d
+drop a
+drop b
+drop c
+drop d
+nested: recovered: panic in drop b
+some_map: recovered: tick
+some_map: destructors run 20000, values left 0
+every_map: recovered: tick
+every_map: destructors run 20000, values left 0
+some_set: recovered: tick
+some_set: destructors run 20000, values left 0
+every_set: recovered: tick
+every_set: destructors run 20000, values left 0
+some_deque: recovered: tick
+some_deque: destructors run 20000, values left 0
+every_deque: recovered: tick
+every_deque: destructors run 20000, values left 0
+some_tree: recovered: tick
+some_tree: destructors run 40000, values left 0
+every_tree: recovered: tick
+every_tree: destructors run 40000, values left 0
+tree_churn: panics caught 215
+tree_churn: removed without a panic 1285
+tree_churn: len 1500
+tree_churn: walked 1500
+tree_churn: ordered yes
+tree_churn: recovered: tick
+tree_churn: destructors run 4500, values left 0
+bytes: 1600000

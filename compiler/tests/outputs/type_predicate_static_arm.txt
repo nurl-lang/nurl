@@ -1,0 +1,14 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+i: -1
+String: -1
+Bomb: 4
+either i: 41
+i, String: 0
+i, Bomb: 1
+Vec of Bomb: 1
+Rc of i: 1
+closure: 1
+drop tick

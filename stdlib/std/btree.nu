@@ -240,10 +240,14 @@ $ `stdlib/core/box.nu`
     : *V vp # *V ( nurl_peek n 2 )
     : i nk ( __bt_nkeys n )
     ? & < pos nk == ( cmp . kp pos k ) 0 {
-        // The old value leaves the tree: the caller owns it.
+        // The old value leaves the tree: the caller owns it. The stored
+        // key stays; the passed one is dropped here (the block's end), with
+        // the old value still this frame's own — a key whose destructor
+        // panics leaves it to the unwind (agora #659).
         : V prev . vp pos
         ( mem_take prev )
         = . vp pos v
+        { : K passed k }
         ^ @ ?V { T prev }
     } {}
     ? ( __bt_leaf n ) {
@@ -271,6 +275,7 @@ $ `stdlib/core/box.nu`
             : V prev . vp2 ci
             ( mem_take prev )
             = . vp2 ci v
+            { : K passed k }
             ^ @ ?V { T prev }
         } {}
         ? < cr 0 { = ci + ci 1 } {}
@@ -526,13 +531,24 @@ $ `stdlib/core/box.nu`
     ^ ci
 }
 
+// The stored key in slot `pos` leaves the tree (__bt_remove_rec's `kout`).
+@ __bt_key_out [K] * K kp i pos * K kout → v {
+    : K gone . kp pos
+    ( mem_take gone )
+    ? ( mem_drop_runs_code [K] ) { = . kout 0 gone } {}
+}
+
 // Remove k from the subtree at `n` (which has ≥ t keys unless root).
 // Returns Some(removed value).
-// `own` — the entry being removed is the caller's key's (its key is
-// dropped here, its value handed back owned); F — a predecessor /
-// successor already copied up into an inner node, whose slot is only
-// vacated: nothing is dropped, and the caller forgets the value.
-@ __bt_remove_rec [K V] s n K k ( @ i K K ) cmp b own → ?V {
+// `kout` — non-null: the entry being removed is the caller's key's. Its
+// value is handed back owned and its stored key leaves the tree: moved to
+// `. kout 0` where dropping a K may run code of the program's own — a
+// destructor that may panic, so btree_remove runs it once every node and
+// count is final (agora #658) — and dropped on the spot otherwise (`kout`
+// is then only asked whether it is null). Null — a predecessor / successor
+// already copied up into an inner node, whose slot is only vacated:
+// nothing is dropped, and the caller forgets the value.
+@ __bt_remove_rec [K V] s n K k ( @ i K K ) cmp * K kout → ?V {
     : i pos ( __bt_lower [K V] n k cmp )
     : *K kp # *K ( nurl_peek n 0 )
     : *V vp # *V ( nurl_peek n 2 )
@@ -542,10 +558,7 @@ $ `stdlib/core/box.nu`
         ? here {} { ^ @ ?V { F } }
         : V out . vp pos
         ( mem_take out )
-        ? own {
-            : K gone . kp pos
-            ( mem_take gone )
-        } {}
+        ? != 0 # i kout { ( __bt_key_out [K] kp pos kout ) } {}
         : ~ i j pos
         ~ < j - nk 1 {
             = . kp j . kp + j 1
@@ -574,12 +587,12 @@ $ `stdlib/core/box.nu`
             : K predk . pk - ( __bt_nkeys pn ) 1
             : V predv . pv - ( __bt_nkeys pn ) 1
             ( mem_take predv )
-            ? own { : K gone . kp pos ( mem_take gone ) } {}
+            ? != 0 # i kout { ( __bt_key_out [K] kp pos kout ) } {}
             = . kp pos predk
             = . vp pos predv
             // Its value now lives in this node; the removal below returns
             // the emptied slot, which drops as nothing.
-            : ?V sub ( __bt_remove_rec [K V] lc predk cmp F )
+            : ?V sub ( __bt_remove_rec [K V] lc predk cmp # *K 0 )
             ( nurl_poke n 8 - ( __bt_size n ) 1 )
             ^ @ ?V { T out }
         } {}
@@ -595,17 +608,17 @@ $ `stdlib/core/box.nu`
             : K succk . sk 0
             : V succv . sv 0
             ( mem_take succv )
-            ? own { : K gone . kp pos ( mem_take gone ) } {}
+            ? != 0 # i kout { ( __bt_key_out [K] kp pos kout ) } {}
             = . kp pos succk
             = . vp pos succv
-            : ?V sub ( __bt_remove_rec [K V] rc succk cmp F )
+            : ?V sub ( __bt_remove_rec [K V] rc succk cmp # *K 0 )
             ( nurl_poke n 8 - ( __bt_size n ) 1 )
             ^ @ ?V { T out }
         } {}
         // both kids minimal: merge them around the key, recurse into merge
         // (the entry moves down whole)
         ( __bt_merge [K V] n pos )
-        : ?V sub ( __bt_remove_rec [K V] ( __bt_kid n pos ) k cmp own )
+        : ?V sub ( __bt_remove_rec [K V] ( __bt_kid n pos ) k cmp kout )
         ?? sub {
             T got → {
                 ( nurl_poke n 8 - ( __bt_size n ) 1 )
@@ -616,7 +629,7 @@ $ `stdlib/core/box.nu`
     } {}
     // not in this node: descend (fix the child up first)
     : i ci ( __bt_fixup [K V] n pos )
-    : ?V sub ( __bt_remove_rec [K V] ( __bt_kid n ci ) k cmp own )
+    : ?V sub ( __bt_remove_rec [K V] ( __bt_kid n ci ) k cmp kout )
     ?? sub {
         T got → {
             ( nurl_poke n 8 - ( __bt_size n ) 1 )
@@ -626,25 +639,56 @@ $ `stdlib/core/box.nu`
     }
 }
 
+// The removal whose stored key comes up into the caller's `gone`.
+@ __bt_remove_into [K V] s root K k ( @ i K K ) cmp inout K gone → ?V {
+    ^ ( __bt_remove_rec [K V] root k cmp ( mem_addr gone ) )
+}
+
+// An entry left the tree: the count, and a root left without keys — an
+// inner one gives way to its only kid (replacing the root block drops the
+// old one), an empty leaf goes.
+@ __bt_removed * BtCtl c → v {
+    = . c len - . c len 1
+    : s root # s ( box_ptr [BtNode] . c root )
+    ? & == ( __bt_nkeys root ) 0 ! ( __bt_leaf root ) {
+        = . c root ( __bt_take_kid root 0 )
+    } {
+        ? & == ( __bt_nkeys root ) 0 ( __bt_leaf root ) {
+            : ( Box BtNode ) gone . c root
+            ( mem_take gone )
+        } {}
+    }
+}
+
 @ btree_remove [K V] ( BTree K V ) m K k ( @ i K K ) cmp → ?V {
     : *BtCtl c ( box_ptr [BtCtl] . m ctl )
     : s root # s ( box_ptr [BtNode] . c root )
     ? == 0 # i root { ^ @ ?V { F } } {}
-    : ?V r ( __bt_remove_rec [K V] root k cmp T )
+    ? ( mem_drop_runs_code [K] ) {
+        // The stored key comes up into this frame (empty until then: it
+        // owns nothing to drop) and is dropped last — every node, every
+        // count and the root are final, and the value is still this
+        // frame's own. A destructor that panics there leaves a tree
+        // without the entry and a value the unwind releases (agora #658).
+        : ~ K gone # K 0
+        ( mem_forget gone )
+        : ?V r ( __bt_remove_into [K V] root k cmp gone )
+        ?? r {
+            T got → {
+                ( mem_take gone )
+                ( __bt_removed c )
+                { : K last gone }
+                ^ @ ?V { T got }
+            }
+            F _ → { ^ @ ?V { F } }
+        }
+    } {}
+    // (A key whose drop runs no code of the program's own is dropped where
+    // it is found: any non-null `kout` says so, and none is written.)
+    : ?V r ( __bt_remove_rec [K V] root k cmp # *K root )
     ?? r {
         T got → {
-            = . c len - . c len 1
-            // shrink the root: empty internal root → its sole child
-            // (replacing the root block drops the old one)
-            : s root2 # s ( box_ptr [BtNode] . c root )
-            ? & == ( __bt_nkeys root2 ) 0 ! ( __bt_leaf root2 ) {
-                = . c root ( __bt_take_kid root2 0 )
-            } {
-                ? & == ( __bt_nkeys root2 ) 0 ( __bt_leaf root2 ) {
-                    : ( Box BtNode ) gone . c root
-                    ( mem_take gone )
-                } {}
-            }
+            ( __bt_removed c )
             ^ @ ?V { T got }
         }
         F _ → { ^ @ ?V { F } }
@@ -677,13 +721,79 @@ $ `stdlib/core/box.nu`
     }
 }
 
+// Release everything in and below `n`, from the far end: the last kid, then
+// the entry before it, and so on down to kid 0; a leaf's entries last
+// first. Each leaves the node before it is dropped — a kid's node out of
+// its slot once the kid is empty, an entry by the node's count going down
+// past it (an inner node of k keys holds kids 0..k throughout; with its
+// last kid gone it is an empty leaf) — so whenever a destructor runs the
+// subtree holds exactly what is still to go, and calling this again
+// releases that (stdlib/core/mem.nu, "A release a panic can go on with").
+// The subtree sizes are not kept up: __bt_release_all empties the tree's
+// count first.
+@ __bt_release [K V] s n → v {
+    : *K kp # *K ( nurl_peek n 0 )
+    : *V vp # *V ( nurl_peek n 2 )
+    ? ( __bt_leaf n ) {} {
+        ~ > ( __bt_nkeys n ) 0 {
+            : i k - ( __bt_nkeys n ) 1
+            ( __bt_release [K V] ( __bt_kid n + k 1 ) )
+            : ( Box BtNode ) gone ( __bt_take_kid n + k 1 )
+            ( nurl_poke n 6 k )
+            : K key . kp k
+            ( mem_take key )
+            : V val . vp k
+            ( mem_take val )
+        }
+        ( __bt_release [K V] ( __bt_kid n 0 ) )
+        ( nurl_poke n 7 1 )
+        : ( Box BtNode ) last ( __bt_take_kid n 0 )
+    }
+    ~ > ( __bt_nkeys n ) 0 {
+        : i k - ( __bt_nkeys n ) 1
+        ( nurl_poke n 6 k )
+        : K key . kp k
+        ( mem_take key )
+        : V val . vp k
+        ( mem_take val )
+    }
+}
+
+// The whole tree: no entry is counted from here on (the order statistics
+// answer "none" before they would read a subtree size), then every node
+// below the root and the root's own entries.
+@ __bt_release_all [K V] * BtCtl c → v {
+    = . c len 0
+    : s root # s ( box_ptr [BtNode] . c root )
+    ? == 0 # i root {} { ( __bt_release [K V] root ) }
+}
+
+// A tree whose release is under way: what a panic out of a key's or a
+// value's destructor finds in the journal, to go on with what is left.
+: BtRelease [K V] { * BtCtl c }
+
+@ BtRelease_drop [K V] sink ( BtRelease K V ) r → v {
+    : *BtCtl c . r c
+    ( mem_release_rest \ → v { ( __bt_release_all [K V] c ) } )
+}
+
 // What dropping a tree does (its owner does it at scope exit — docs/
 // MEMORY.md §7.6): every key and value and every node below the root;
-// the root block and the record go with the handle's field.
+// the root block and the record go with the handle's field. Where
+// dropping a key or a value may run code of the program's own, a
+// destructor that panics does not end it: what is left is still dropped,
+// each once (agora #659).
 @ BTree_drop [K V] sink ( BTree K V ) m → v {
     ? ( box_is_null [BtCtl] . m ctl ) { ^ } {}
-    : s root # s ( box_ptr [BtNode] . ( box_ptr [BtCtl] . m ctl ) root )
-    ? == 0 # i root {} { ( __bt_drop_rec [K V] root ) }
+    : *BtCtl c ( box_ptr [BtCtl] . m ctl )
+    : s root # s ( box_ptr [BtNode] . c root )
+    ? == 0 # i root {} {
+        ? ( mem_drop_runs_code [K V] ) {
+            : ( BtRelease K V ) rest @ ( BtRelease K V ) { c }
+            ( __bt_release_all [K V] c )
+            ( mem_forget rest )
+        } { ( __bt_drop_rec [K V] root ) }
+    }
 }
 
 // What the reference-count cycle collector sees in a tree (docs/MEMORY.md
