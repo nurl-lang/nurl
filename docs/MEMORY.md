@@ -122,6 +122,11 @@ A `:` of that name made after the block is a binding of its own and is
 what the name means from there on (`: String s { : String s … s }` binds
 the block's value to a new `s`).
 
+A `:` binding (not a `: ~` one) of a block that ends in a binding the
+block made (`: String e { : String s … s }`) holds that binding's value as
+`: e s` would: handed to a `sink` or handed back by `^ e`, the value goes
+with it and is released once, by whoever holds it last.
+
 A scope drops its values newest first, in the reverse of the order they
 were bound in, as Rust and C++ do. A value made from a view of another —
 a struct holding `( string_data s )`, a `Slice` of a Vec — is bound after
