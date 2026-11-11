@@ -26160,6 +26160,19 @@ unsafe @ __bck_fall_ret_record i lex i syms i first_tt s first_val i sxn0 i line
     }
 }
 
+// Does `= dest src` move an owned slice's buffer from binding `src` to
+// binding `dest`: both own a slice buffer (`__owned_slices__`), and `src`
+// has a slot of its own to leave empty? The move is done where it runs
+// (gen_assign: `dest`'s old buffer is freed, `src`'s slot is emptied), so it
+// holds on every path — in an arm, in a loop round after the first. Taking
+// `src` off the owned list instead was undone where the arm or the loop
+// body ended, and both names freed the buffer (agora #634).
+@ __slice_asn_moves i syms i rhs_tt s src s dest s vt → b {
+    ? | | ! ( is_ident_tok rhs_tt ) ! ( mem_is_slice_ty vt ) ( seq src dest ) { ^ F } {}
+    ? | ! ( mem_slice_owned syms dest ) ! ( mem_slice_owned syms src ) { ^ F } {}
+    ^ != 0 ( nurl_sym_len2 syms src `__ptr` )
+}
+
 // Emit the free of one owned-slice binding's backing buffer: load the
 // slice struct from the binding's alloca, extract the data pointer,
 // free it. Symtab lookup is innermost-scope, so inside an arm this
@@ -29268,7 +29281,10 @@ unsafe @ __src_has_raw_ptr s text → b {
         // struct, out through `^`, into a sink) moves root's value. Only a
         // source that outlives the target stays the owner: one from an
         // inner scope (`= m mp` in a loop body) dies first, so it moves.
-        ? & & & ( __is_handle_ty ty ) != 0 ( nurl_str_len src ) ! ( seq src ptr )
+        // (…and not one handed over by name that owns its value outright: that
+        // one moves, below, as a value of any other type does — amv_open,
+        // agora #634.)
+        ? & & & & ( __is_handle_ty ty ) != 0 ( nurl_str_len src ) ! ( seq src ptr ) ! ( amv_moves rhs_val )
         <= ( nurl_str_to_int ( nurl_sym_get2 syms src `__depth` ) ) ( nurl_str_to_int ( nurl_sym_get2 syms ptr `__depth` ) )
         { ( mem_udrop_link_alias syms ptr src )
             ( mem_udrop_flag_set syms cg ptr `0` )
@@ -33380,7 +33396,52 @@ unsafe @ __ty_holds_view s ty i depth → b {
 // borrow, not a move. Distinguishing borrow from move in the general
 // case is the job of a later reference-surface phase; until then the
 // immutability of the destination is the heuristic.
+// A handover by name (`: T b a`, `= b a`) out of a binding that owns its
+// value, as the generated code knows it — a String, a Vec or a struct with
+// a drop slot of its own that was bound as no borrow (a fresh value, or a
+// call's result by that call's own answer) and is no cursor over another
+// binding — is a move in the generated code: the target
+// takes the source's drop flag where the handover runs
+// (__mem_udrop_bind_flag), and the source drops nothing until it is given a
+// new value. It used to make the target a cursor over the source: the owner
+// stayed the source, and the target came to own the value at a later `=` of
+// the source that found it among the source's cursors — the ones made
+// lexically before that `=`. In a loop a cursor made after it, in the round
+// before, was not among them, and the value was dropped under the name the
+// walk had made its owner (agora #634: `= t a  = a b  = b t`). A move leaves
+// nothing to hand over later, on any path.
+// The walk is told (`:m`, its row's field 6 `am`): it leaves the source
+// moved on every visit, also one that finds it no owner — a borrow on some
+// path the generated code's record of it does not show — so a read of it
+// before it is given a new value is refused wherever the flag may have gone.
+// (Safe code only: what the walk does not check keeps the cursor.)
+: ~ i g_amv_cur 0
+: ~ s g_amv_src ``
+
+// Is the handover of `src` (a value of type `vt`) the statement being
+// compiled records such a move? `m` or `a`, the mark of its row.
+unsafe @ amv_open i syms s src s vt → s {
+    = g_amv_cur 0
+    ? | | | == g_borrowck 0 != 0 g_bck_rec_off ! ( bck_sound ) ( bck_unsafe_ctx ) { ^ ( nurl_str_cat `a` `` ) } {}
+    ? ! ( __is_handle_ty vt ) { ^ ( nurl_str_cat `a` `` ) } {}
+    : s sp ( mem_udrop_ptr_of syms src )
+    ? | | == 0 ( nurl_str_len sp ) != 0 ( nurl_sym_len2 syms sp `__alias` ) != 0 ( nurl_sym_len2 syms sp `__pname` ) { ^ ( nurl_str_cat `a` `` ) } {}
+    // (Bound as no borrow, or from a call whose answer is in its slot —
+    // `@slot`, __mem_bind_bit: its flag is that answer.)
+    : s sb ( nurl_sym_get2 syms sp `__sborrow` )
+    ? & != 0 ( nurl_str_len sb ) != ( nurl_str_get sb 0 ) 64 { ^ ( nurl_str_cat `a` `` ) } {}
+    = g_amv_cur 1
+    = g_amv_src ( nurl_str_cat src `` )
+    ^ ( nurl_str_cat `m` `` )
+}
+
+unsafe @ amv_close → v { = g_amv_cur 0 }
+
+// Does the statement being compiled move `src` (amv_open)?
+@ amv_moves s src → b { ^ & != 0 g_amv_cur ( seq g_amv_src src ) }
+
 @ bck_let_alias i syms b is_mut i rhs_tt s rhs_val s vt i line s dest → v {
+    ( amv_close )
     // A `sink` parameter is the function's own: copying it hands it on
     // like any owner, it is not a borrow of the caller's value.
     : b is_param & ( nurl_sym_has_word syms `__fn_param_names__` rhs_val ) == 0 ( nurl_sym_len2 syms rhs_val `__sinkp` )
@@ -33388,7 +33449,7 @@ unsafe @ __ty_holds_view s ty i depth → b {
     {  // Under the sound rules the walk decides (`:a`): an owner's value
         // moves to `b`, a borrow is copied (b borrows from its sources).
         ? ( bck_sound )
-        { ( bck_stash_maybe_alias rhs_val line `an alias copy` ( nurl_str_cat dest `:a` ) ) }
+        { ( bck_stash_maybe_alias rhs_val line `an alias copy` ( nurl_str_cat3 dest `:` ( amv_open syms rhs_val vt ) ) ) }
         { ( bck_stash_move rhs_val line `an alias copy` ) }
         // What was stored in `a`'s value is in `b`'s now.
         ( bck_stash_xfer rhs_val dest line ) }
@@ -33556,6 +33617,16 @@ unsafe @ __ty_holds_view s ty i depth → b {
 // (`= cur ( next cur )`) is a call, not an alias. A parameter source is
 // borrowed, and `= a a` is a no-op, so both are skipped.
 @ bck_assign_alias i syms i rhs_tt s rhs_val s dest s vt i line → v {
+    ( amv_close )
+    // An owned slice assigned to another (`= ys zs`, both slice literals'
+    // or calls' buffers): the buffer moves and `zs` is left empty
+    // (gen_assign), so `zs` is moved here, on this path — a read of it
+    // before it is given a new value is refused (agora #634).
+    ? ( __slice_asn_moves syms rhs_tt rhs_val dest vt ) {
+        : s swhy ( nurl_str_cat3 `the assignment that moved its buffer to '` dest `'` )
+        ( bck_stash_move rhs_val line swhy )
+        ^ v
+    } {}
     ? & & & ( is_ident_tok rhs_tt ) ( bck_is_heap_lty vt )
     ! ( seq rhs_val dest )
     ! ( nurl_sym_has_word syms `__fn_param_names__` rhs_val )
@@ -33565,7 +33636,7 @@ unsafe @ __ty_holds_view s ty i depth → b {
         // Under the sound rules the walk decides (`:a`): an owner's handle
         // moves (`= prev t` leaves `t` dead until it is given a new value),
         // a borrow's is copied (the destination borrows from its sources).
-        ( bck_stash_maybe_alias rhs_val line why ? ( bck_sound ) ( nurl_str_cat dest `:a` ) dest ) }
+        ( bck_stash_maybe_alias rhs_val line why ? ( bck_sound ) ( nurl_str_cat3 dest `:` ( amv_open syms rhs_val vt ) ) dest ) }
     {}
 }
 
@@ -34535,10 +34606,13 @@ unsafe @ __vk_union_of s fns s seen b dyn → s {
             = arest ( str_skip_word arest )
             : b acall & > ( nurl_str_len apt ) 2 != 0 ( nurl_str_ends apt `:c` )
             : b aasg & > ( nurl_str_len apt ) 2 != 0 ( nurl_str_ends apt `:a` )
+            // (`:m`: a handover by name the generated code makes a move,
+            // amv_open — the row's field 6 is `am`.)
+            : b amov & > ( nurl_str_len apt ) 2 != 0 ( nurl_str_ends apt `:m` )
             : b agiv & > ( nurl_str_len apt ) 2 != 0 ( nurl_str_ends apt `:g` )
-            : s apn ? | | acall aasg agiv ( nurl_str_slice apt 0 - ( nurl_str_len apt ) 2 ) apt
+            : s apn ? | | | acall aasg amov agiv ( nurl_str_slice apt 0 - ( nurl_str_len apt ) 2 ) apt
             : s apf ? ( seq apn `-` ) `-` ( nurl_str_cat `=` apn )
-            ( bck_record2 `maybealias` anm ( nurl_str_to_int aln ) apf ? acall `c` ? aasg `a` ? agiv `g` `0` )
+            ( bck_record2 `maybealias` anm ( nurl_str_to_int aln ) apf ? acall `c` ? aasg `a` ? amov `am` ? agiv `g` `0` )
         }
         ~ != 0 ( nurl_str_len frest ) {
             : s fnm ( str_first_word frest )
@@ -38095,6 +38169,13 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 : i avid ( nurl_str_to_int avn )
                 : s apf ( bck_field rec 5 )
                 : b apart & > ( nurl_str_len apf ) 1 == ( nurl_str_get apf 0 ) 61
+                // (`a`, a handover by name; `am`, one the generated code makes a
+                // move — amv_open: the source is left moved below whatever
+                // this visit finds it to be.)
+                : s amk ( bck_field rec 6 )
+                : b a_asn == ( nurl_str_get amk 0 ) 97
+                : b a_mv ( seq amk `am` )
+                : ~ b a_moved F
                 ? & ( bck_sound ) apart {
                     // Another name took this one's handle: it is a borrow of
                     // it — of its sources when this name is a borrow itself.
@@ -38139,7 +38220,8 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                             // An owner's handle: an assignment moved it
                             // (definitely); one of several a `?` / `??` may
                             // have selected moved on the paths that selected it.
-                            = st ( bck_st_set st avid ? ( seq ( bck_field rec 6 ) `a` ) BCK_MOVED ( bck_join ( bck_st_get st avid ) BCK_MOVED ) )
+                            = a_moved a_asn
+                            = st ( bck_st_set st avid ? a_asn BCK_MOVED ( bck_join ( bck_st_get st avid ) BCK_MOVED ) )
                             // (A `:` binding of the join gives it back where it
                             // dies still holding it: bck_join_giveback. What is
                             // stored into that binding meanwhile lands in this
@@ -38163,6 +38245,25 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                         ( bck_partner_link avid ( nurl_str_to_int ( nurl_str_slice apf 1 - ( nurl_str_len apf ) 1 ) ) )
                     } {}
                 }
+                // (A move the generated code makes where this visit did not
+                // leave the source moved — a source with a borrow relation, or
+                // one that may own its value on some path only: the flag went
+                // with the value wherever the source owned it. An owner is
+                // moved; one that may own is maybe-moved, the target taking
+                // what it may own; a borrow that owns nothing loses nothing.
+                // A read of a moved source is refused until it has a new
+                // value.)
+                ? & & & a_mv ! a_moved apart ( bck_sound ) {
+                    : i a_raw ( bck_st_raw st avid )
+                    ? | == a_raw BCK_OWNED == a_raw BCK_MAYBE_OWNED {
+                        = st ( bck_st_set st avid ? == a_raw BCK_OWNED BCK_MOVED BCK_MAYBE_MOVED )
+                        ? == a_raw BCK_MAYBE_OWNED {
+                            : i a_pid ( nurl_str_to_int ( nurl_str_slice apf 1 - ( nurl_str_len apf ) 1 ) )
+                            ? == BCK_BORROWED_SHARED ( bck_st_raw st a_pid ) { ( bck_note_may_own a_pid ) = st ( bck_st_set st a_pid BCK_MAYBE_OWNED ) } {}
+                        } {}
+                        ( bck_put ( nurl_str_cat3 `mc_` ( nurl_sym_get2 g_bck `rv_` avn ) ( bck_field rec 3 ) ) ( nurl_sym_get g_bck ( nurl_str_cat3 `qc_` ( nurl_sym_get2 g_bck `rv_` avn ) ( bck_field rec 3 ) ) ) )
+                    } {}
+                } {}
                 ( bck_put ( nurl_str_cat `ml_` avn ) ( bck_field rec 3 ) )
                 ? | != 0 g_bck_has_cursor != 0 g_bck_epy_any { = st ( bck_cursor_follow st rec kc ) } {}
                 = p + p 1
@@ -48795,10 +48896,18 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // with a bare-identifier RHS copies src's { ptr, len } into dst. If
         // src owned its buffer, MOVE that ownership to dst — otherwise both
         // src and dst free the same buffer at scope exit (a double-free).
-        ? & & lhs_is_owned_slc ( is_ident_tok bck_rhs_tt )
-        ( mem_slice_owned syms bck_rhs_val )
-        { ( mem_own_slice_remove syms bck_rhs_val ) }
-        {}
+        // The move is made where it runs: the source's slot is left empty
+        // (its value is `val` already), and it stays an owner — of nothing,
+        // until it is given a buffer again. (Taken off the owned list
+        // instead, it was back on it where the enclosing arm or loop body
+        // ended: both names freed the buffer, agora #634.)
+        ? ( __slice_asn_moves syms bck_rhs_tt bck_rhs_val name vt )
+        { ( nurl_print `  store ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print ` zeroinitializer, ` ) ( nurl_print ( nurl_llty vt ) )
+            ( nurl_print `* ` ) ( nurl_print ( nurl_sym_get2 syms bck_rhs_val `__ptr` ) ) ( nurl_print `\n` ) }
+        { ? & & lhs_is_owned_slc ( is_ident_tok bck_rhs_tt )
+            ( mem_slice_owned syms bck_rhs_val )
+            { ( mem_own_slice_remove syms bck_rhs_val ) }
+            {} }
         // Widen i1 short-circuit / comparison results to the LHS's
         // declared integer width, so `= myi64 & a b` stores cleanly.
         : s rhs_ty ( nurl_get_last_type )

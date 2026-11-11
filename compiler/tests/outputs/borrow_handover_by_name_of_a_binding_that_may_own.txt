@@ -1,0 +1,9 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/borrow_handover_by_name_of_a_binding_that_may_own.nu:12:5: error: 'a' is a borrow (a vec_get result, a field read, a view of something another binding owns) and is released or handed over here as if it owned the value. The owner still holds and releases it. Take a copy that is yours where it is bound: ( mem_dup a ), or release the value through its owner — when that owner is a parameter of this function, declare the parameter 'sink' so the function owns it.
+    = t a
+    ^
+compiler/tests/borrow_handover_by_name_of_a_binding_that_may_own.nu:15:5: error: 'a' is used here, but on a path that reaches this line — an earlier round of a loop around it, or one branch of a '?' or '??' — it was consumed, stored or its source ended, while on another it still borrows: here it may hold nothing. Use 'a' only where it surely still holds its value (inside the branch, or before the loop hands it on), give it a fresh value before this line, or take a copy that lives on its own where it is bound: ( mem_dup a ).
+    ( nurl_println ( string_data a ) )
+    ^
+error: compilation aborted — 2 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)
