@@ -1774,6 +1774,16 @@ Semantics (v2.3, 2026-08-03):
   ran, as well as if it did not (agora #407), and a binding a defer reads
   lives, with what it borrows, until the defer runs, even past the block
   it was bound in (agora #491).
+- **In a loop body** — a defer registered in an earlier round is armed
+  for the rest of the loop, also for what stands above its `;`: a `^` or
+  a `\` there runs it, and it reads the value each name it uses was
+  *last* bound to. So a binding of the loop body that a `;` further down
+  its block may read is kept from its binding on (as are the values in
+  sight at the head of the loop): a `break`, a `^` or a `\` above the
+  `;` leaves it for the defer, and the next round's binding of that name
+  releases the value the round before left (agora #655). A defer that
+  releases what a `^` above it in the loop hands back is a compile
+  error, like one above the `^`.
   Returning an owned value transfers it to the caller as usual. With
   several return paths, a pre-defer owned value is transferred on the
   paths that return it and dropped after the chain on the others. A

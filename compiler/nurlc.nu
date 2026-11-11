@@ -1661,6 +1661,12 @@ unsafe @ agg_field_count i syms s ot → i {
 : ~ b g_bck_self_asn F
 : ~ i g_match_ser 0  // matches compiled so far (keys a match's payload provenance, mem_note_plend)
 : ~ i g_loop_nest 0  // loops open around the statement being compiled (gen_while / gen_for)
+// A `;` defer inside a loop body (agora #655): see __dloop_open.
+: ~ i g_fn_semi 0  // the function being compiled has a `;` byte in its body: its loops are scanned for a defer
+: ~ i g_dloop 0  // 1 inside the outermost loop whose body registers a `;` defer (a "defer loop")
+: ~ i g_dkeep_bind 0  // 1 while a `:` statement of a defer loop is compiled that a `;` further down its block keeps
+: ~ i g_dkr_any 0  // 1 once this function left a `;dkr` marker (mem_dkeep_rebind)
+: ~ i g_dkr_n 0  // registers the late releases of kept loop bindings (`;dkr` markers) take
 : ~ i g_ff_mark 0  // 1 while a drop point may precede (in a loop) a field-owner flag's first store
 : ~ i g_ffx_n 0  // registers the late field-owner drops (`;ffx` markers) take
 : ~ i g_ptr_own_n 0  // 1 once this function recorded a pointer's owner (the pointer-owner scope check)
@@ -5418,6 +5424,16 @@ unsafe @ __arg_lend_root i syms → s {
     ( nurl_print `  call void @nurl_ret_owned_set(i64 ` ) ( nurl_print proof ) ( nurl_print `)\n` )
 }
 
+// Where an exit of the function enters the defer chain: the chain's top —
+// or, inside a defer loop, the loop's own label, which branches to the top
+// as it is when the loop closes (__dloop_close; agora #655). `` when no
+// defer is in sight.
+@ __dexit_top → s {
+    : s lt ( nurl_sym_get g_fn_escapes `__dloop_top__` )
+    ? != 0 ( nurl_str_len lt ) { ^ ( nurl_str_cat lt `` ) } {}
+    ^ ( nurl_str_cat ( nurl_sym_get g_fn_escapes `__defer_top_fn__` ) `` )
+}
+
 // Emit the `ret` terminator (or branch to the defer chain) after owned-
 // resource drops. Shared by the normal return path and the bare-`^`
 // void early-return. A function declared `→ v` ALWAYS emits `ret void`;
@@ -5426,7 +5442,7 @@ unsafe @ __arg_lend_root i syms → s {
 // the FUNCTION's return type, not just the value type — so a stray value
 // can never lower to `ret i64 …` out of a `void` function.
 @ gen_ret_term i lex i syms i cg s lt s val s skip s skip_str_ptr s skip_user_ptr s skip_struct_ptr s ret_ident s hbit → v {
-    : s dtop ( nurl_sym_get g_fn_escapes `__defer_top_fn__` )
+    : s dtop ( __dexit_top )
     : s fn_rt ( nurl_sym_get syms `__fn_ret_ty__` )
     ? != 0 ( nurl_str_len dtop )
     {  // defers active: drop what no defer body can reference (the
@@ -5918,7 +5934,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
     ( seq ( nurl_sym_get syms `__owned_slices__` ) `` )
     ( seq ( nurl_sym_get syms `__owned_struct_fields__` ) `` )
     & ( seq ( nurl_sym_get syms `__user_drops__` ) `` )
-    ( seq ( nurl_sym_get g_fn_escapes `__defer_top_fn__` ) `` )
+    & ( seq ( nurl_sym_get g_fn_escapes `__defer_top_fn__` ) `` ) == 0 g_dloop
     { ( nurl_sym_def syms `__tail_call_pending__` `1` ) }
     {}
     // Snapshot whether the return expression is a direct parenthesised
@@ -6404,7 +6420,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
                 // runs while ps still holds its element and may read it —
                 // left lent there, ps's drop freed what the caller got;
                 // agora #561.)
-                : b pf_live & & pf_hnd ( __vget_live syms pf_ptr ) == 0 ( nurl_sym_len g_fn_escapes `__defer_top_fn__` )
+                : b pf_live & & pf_hnd ( __vget_live syms pf_ptr ) & == 0 ( nurl_sym_len g_fn_escapes `__defer_top_fn__` ) == 0 g_dloop
                 ? | pf_live ( __clone_supported pf_rt syms ) {
                     ? pf_live { ( mem_vget_field_consume syms cg pf_ptr pf_sty pf_idx pf_fty val pfl ) } { = val ( mem_emit_cloneif cg pf_rt val pfl ) }
                     = ret_pl_copied T
@@ -6504,7 +6520,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
                     // be, as a lend is. A take replayed after the chain
                     // would let a defer that clears the Vec free what the
                     // caller holds: agora #561.)
-                    : b __plv & ( __vget_live syms ret_first_val ) == 0 ( nurl_sym_len g_fn_escapes `__defer_top_fn__` )
+                    : b __plv & ( __vget_live syms ret_first_val ) & == 0 ( nurl_sym_len g_fn_escapes `__defer_top_fn__` ) == 0 g_dloop
                     ? | __plv ( __clone_supported __plt syms ) {
                         ? __plv { ( mem_vget_consume syms cg ret_first_val __pll ) } { = val ( mem_emit_cloneif cg __plt val __pll ) }
                         : s __plo ( nurl_cg_reg cg )
@@ -7025,7 +7041,9 @@ unsafe @ gen_ret i lex i syms i cg → s {
     // With a `;` defer armed, the chain runs after the value is the
     // caller's: the owner this `^` hands back by name is lent to the
     // defers — read, not released (the walk's ret row, bck_apply_defers).
-    ? & & & != 0 g_defer_count != g_borrowck 0 == 0 g_bck_closure_depth != 0 ( nurl_sym_len g_fn_escapes `__defer_top_fn__` ) {
+    // (…or with one further down the loop this `^` stands in, which an
+    // earlier round armed: agora #655.)
+    ? & & | != 0 g_dloop & != 0 g_defer_count != 0 ( nurl_sym_len g_fn_escapes `__defer_top_fn__` ) != g_borrowck 0 == 0 g_bck_closure_depth {
         // (…a block whose tail names it hands it back too: agora #197.)
         : s __rto ? ( is_ident_tok ret_src_tt ) ret_src_val ? & == ret_src_tt TT_LBRACE ( is_ident_tok ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) ) ) ( nurl_sym_get syms `__tail_first_val__` ) ``
         ? & != 0 ( nurl_str_len __rto ) | ( __is_handle_ty ( nurl_get_last_type ) ) ( __type_needs_drop ( nurl_get_last_type ) syms ) {
@@ -14311,6 +14329,19 @@ unsafe @ nurl_lex_src_slice i h i start i n → s {
     ? < k 0 { = k 0 } {}
     ? > k avail { = k avail } {}
     ^ # s ( nurl_strdup_n # s + # i # *u # s ( nurl_peek p LX_SRC ) st k )
+}
+
+// Does the source hold the one byte `needle` in [from, to)? (`to` < 0: to
+// its end.) For a scan that would otherwise have to lex the range.
+unsafe @ nurl_lex_src_has i h i from i to s needle → b {
+    : s p # s h
+    : i len ( nurl_peek p LX_LEN )
+    : ~ i st from
+    : ~ i en to
+    ? < st 0 { = st 0 } {}
+    ? | < en 0 > en len { = en len } {}
+    ? >= st en { ^ F } {}
+    ^ >= ( nurl_memmem_range # s + # i # *u # s ( nurl_peek p LX_SRC ) st - en st needle 1 ) 0
 }
 
 unsafe @ nurl_lex_set_pos i h i new_pos → v {
@@ -24751,6 +24782,7 @@ unsafe @ gen_match i lex i syms i cg → s {
         ( bck_put `pending_fecls` ( __fe_cls_mark ( nurl_llty elem_ty ) ) )
         = g_bck_fevar 1
     } {}
+    : b __fe_dl ( __dloop_open lex syms cg )
     : s fe_iter_saved ( bck_iter_enter fe_cont )
     ( gen_block_stmts lex syms cg )
     ( bck_iter_exit fe_iter_saved )
@@ -24792,6 +24824,7 @@ unsafe @ gen_match i lex i syms i cg → s {
     ( nurl_print `  store i64 ` ) ( nurl_print next_idx )
     ( nurl_print `, i64* ` ) ( nurl_print idx_ptr ) ( nurl_print `\n` )
     ( nurl_print `  br label %` ) ( nurl_print lc ) ( emit_dbg_eol )
+    ? __fe_dl { ( __dloop_close syms cg ) } {}
     ( emit ( nurl_str_cat le `:` ) )
     ( nurl_sym_pop syms )
     ( nurl_sym_def syms `__cur_lbl__` le )
@@ -25009,6 +25042,7 @@ unsafe @ gen_match i lex i syms i cg → s {
         // Borrow checker (Phase 0c): a `~` while-body is a back-edge —
         // the analyze walk must iterate it to a fixpoint. (A literal-true
         // condition's loop, `loopt`, is left only by a `break`: agora #453.)
+        : b __lp_dl ( __dloop_open lex syms cg )
         ( bck_set_block_kind ? __lp_true `loopt` `loop` )
         ( gen_block_stmts lex syms cg )
         ? != 0 ( nurl_str_len __lp_vs ) { ( __vself_record __lp_vs ) } {}
@@ -25034,6 +25068,7 @@ unsafe @ gen_match i lex i syms i cg → s {
             ( nurl_print `  br label %` ) ( nurl_print lc ) ( emit_dbg_eol )
         } {}
         ? != 0 g_auto_drop_strings { ( nurl_sym_pop syms ) } {}
+        ? __lp_dl { ( __dloop_close syms cg ) } {}
         ( emit ( nurl_str_cat le `:` ) )
         ( nurl_sym_def syms `__cur_lbl__` le )
         ( nurl_set_last_type `void` )
@@ -25076,6 +25111,86 @@ unsafe @ gen_match i lex i syms i cg → s {
         ( nurl_set_last_type cvt )
         ^ res_c
     }
+}
+
+// ── A `;` defer inside a loop body (agora #655) ───────────────────
+// A defer runs once, at the function's exit, if its `;` was reached in ANY
+// round of the loop. The compiler is one pass, so what stands above the
+// `;` in the loop body is compiled before the defer is known — and from
+// the second round on it runs with the defer armed:
+//   * an exit (`^`, a `\` try) above the `;` entered the chain at the top
+//     it knew, below this defer, which then did not run;
+//   * an exit or a `break` above the `;` released the owners the defer
+//     reads, because nothing had kept them back yet;
+//   * a round's end left a kept owner in its slot for the defer, and the
+//     next round's `:` wrote over it: every round's value but the last
+//     leaked.
+// So the loop is looked at before its body is compiled. A loop whose body
+// holds a `;` (at any depth) is a DEFER LOOP, and inside the outermost one:
+//   1. the owners in sight at its head are kept from there on, as if the
+//      `;` stood at the head (__dloop_open);
+//   2. a `:` binding with a `;` further down its own block is kept from its
+//      binding on, and first releases what its slot still holds from an
+//      earlier round (gen_stmt, mem_dkeep_rebind);
+//   3. an exit enters the chain through the loop's label, which branches
+//      to the chain's top as it is when the loop closes (__dexit_top,
+//      __dloop_close): the armed flags decide at run time what runs.
+// Nothing is scanned in a function whose body holds no `;` byte, and a
+// loop with no defer compiles as it always did.
+
+// From `lex`, inside a block: is there a `;` before the `}` that closes it?
+// Leaves `lex` wherever it stopped.
+@ __dloop_scan i lex → b {
+    : ~ i depth 1
+    ~ & != depth 0 != ( nurl_lex_type lex ) TT_EOF {
+        : i tt ( nurl_lex_type lex )
+        ? == tt TT_SEMICOL { ^ T } {}
+        ? == tt TT_LBRACE { = depth + depth 1 } {}
+        ? == tt TT_RBRACE { = depth - depth 1 } {}
+        ( nurl_lex_advance lex )
+    }
+    ^ F
+}
+
+// A `;` further down the block the statement at `lex` stands in (its own
+// nested blocks included). Lexer position restored.
+@ __dloop_defer_ahead i lex → b {
+    : i here ( nurl_lex_cur_start lex )
+    : b found ( __dloop_scan lex )
+    ( nurl_lex_set_pos lex here )
+    ^ found
+}
+
+// `lex` is at a loop body's `{`. When this is the outermost loop whose
+// body registers a defer, open a defer loop (1 and 3 above) and say so.
+@ __dloop_open i lex i syms i cg → b {
+    ? | | == 0 g_fn_semi != 0 g_dloop != 0 g_bck_closure_depth { ^ F } {}
+    ? != ( nurl_lex_type lex ) TT_LBRACE { ^ F } {}
+    : i here ( nurl_lex_cur_start lex )
+    ( nurl_lex_advance lex )
+    : b found ( __dloop_scan lex )
+    ( nurl_lex_set_pos lex here )
+    ? ! found { ^ F } {}
+    = g_dloop 1
+    ( nurl_sym_set g_fn_escapes `__dloop_top__` ( nurl_cg_lbl cg `dloop_top` ) )
+    ( __defer_snap_take syms cg )
+    ^ T
+}
+
+// The defer loop closes: its label, for the exits inside it, branches to
+// the chain's top as it is now. (The block before it has its terminator:
+// the loop's back-edge, or the exit that ended its body.) A `;` the scan
+// saw is always compiled; were it not, the exits still have to reach the
+// cleanup for what was kept back, so the chain's top becomes the cleanup.
+@ __dloop_close i syms i cg → v {
+    : s lt ( nurl_sym_get g_fn_escapes `__dloop_top__` )
+    : s top ( nurl_sym_get g_fn_escapes `__defer_top_fn__` )
+    : s to ? != 0 ( nurl_str_len top ) top ( nurl_sym_get syms `__fn_cleanup__` )
+    ? == 0 ( nurl_str_len top ) { ( nurl_sym_set g_fn_escapes `__defer_top_fn__` to ) } {}
+    ( emit ( nurl_str_cat lt `:` ) )
+    ( nurl_print `  br label %` ) ( nurl_print to ) ( emit_dbg_eol )
+    ( nurl_sym_set g_fn_escapes `__dloop_top__` `` )
+    = g_dloop 0
 }
 
 // ── Defer ; { block } ─────────────────────────────────────────────
@@ -26889,6 +27004,34 @@ unsafe @ mem_path_to_indices s path → s {
     ( nurl_print `  store i1 true, i1* ` ) ( nurl_print k ) ( nurl_print `\n` )
 }
 
+// The slot `ptr` (type `vt`) of a `:` binding in a defer loop that a `;`
+// further down its block keeps (__dloop_open, 2), just before the store of
+// this round's value. A round that ended with the owner left to the cleanup
+// left its value in the slot, for the defer; this round's value replaces
+// it, so it is released here — if the binding still owned it (its drop
+// flag) — and its registration for a panic ends, since the binding is
+// registered again below. The first round finds both flags clear.
+//   Whether the binding owns anything is known only once it is registered,
+// after the store, and its type's drop may be written only then: so this
+// leaves a marker, and the function's end writes the release where the
+// binding did become an owner the defer keeps (emit_hoisted, __dkr_expand).
+//   The drop flag is made here, cleared at entry, and the registration
+// takes it over (mem_own_add_user_drop, `__dkeep_pre__`): the slot's value
+// and its flag are an earlier round's until the store.
+@ mem_dkeep_rebind i syms i cg s ptr s vt → v {
+    ? == 0 g_auto_drop_strings { ^ v } {}
+    // (Only a struct, an enum or a handle can have a destructor.)
+    : i c0 ( nurl_str_get ( nurl_llty vt ) 0 )
+    ? & != c0 37 != c0 123 { ^ v } {}
+    ( __dkeep_new cg ptr )
+    : s lf ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print lf ) ( nurl_print ` = alloca i1, align 1\n` )
+    ( nurl_sym_set g_fn_escapes `__dkeep_pre__` ( nurl_str_cat3 ptr ` ` lf ) )
+    ( nurl_print `  ;dkr ` ) ( nurl_print ptr ) ( nurl_print ` ` ) ( nurl_print ( __dkeep_of ptr ) )
+    ( nurl_print ` ` ) ( nurl_print lf ) ( nurl_print ` ` ) ( nurl_print ( __park_ty vt ) ) ( nurl_print `\n` )
+    = g_dkr_any 1
+}
+
 // Open the "left to the cleanup" guard of `key` in fn_cleanup; returns the
 // label to close it with (__dret_guard_close), or `` when it has no flag.
 @ __dkeep_guard_open i cg s key → s {
@@ -27129,6 +27272,9 @@ unsafe @ mem_path_to_indices s path → s {
     }
     = rest ( nurl_sym_get g_fn_escapes `__dsnap_cenv__` )
     : s cenvs ( nurl_sym_get syms `__owned_closure_envs__` )
+    // (What is still owned at the function's end never escaped: for the
+    // late release of a kept loop binding's env, __dkr_expand.)
+    ? != 0 g_dkr_any { ( nurl_sym_set g_fn_escapes `__cenvs_final__` cenvs ) } {}
     ~ != 0 ( nurl_str_len rest ) {
         : s name ( str_first_word rest ) = rest ( str_skip_word rest )
         // (`skips` names bindings: a slot word is skipped by its binding's.)
@@ -29536,10 +29682,16 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
     // (mem_udrop_bind_flag), so its registration only creates it.
     // (`2`: a flag the alloca hoister clears at entry, for an owner made
     // where not every path runs — a call's temporary, mid-expression.)
+    // (A binding a defer loop's `;` keeps has its flag already: the one an
+    // earlier round's value is released under, mem_dkeep_rebind.)
+    : s __dk_pre ? != 0 g_dkeep_bind ( nurl_sym_get g_fn_escapes `__dkeep_pre__` ) ``
+    : b __dk_hit ? != 0 ( nurl_str_len __dk_pre ) ( seq ( str_first_word __dk_pre ) ptr ) F
+    ? __dk_hit { ( nurl_sym_def syms ( nurl_str_cat ptr `__live` ) ( str_first_word ( str_skip_word __dk_pre ) ) ) } {}
     ? != 0 g_udrop_noinit
-    { : s nf ( nurl_cg_reg cg )
-        ( nurl_print `  ` ) ( nurl_print nf ) ( nurl_print ? == g_udrop_noinit 2 ` = alloca i1, align 1\n` ` = alloca i1\n` )
-        ( nurl_sym_def syms ( nurl_str_cat ptr `__live` ) nf )
+    { ? __dk_hit {} {
+            : s nf ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print nf ) ( nurl_print ? == g_udrop_noinit 2 ` = alloca i1, align 1\n` ` = alloca i1\n` )
+            ( nurl_sym_def syms ( nurl_str_cat ptr `__live` ) nf ) }
         = g_udrop_noinit 0 }
     { ( mem_udrop_flag_set syms cg ptr `1` ) }
     ( nurl_sym_def syms ( nurl_str_cat ptr `__alias` ) `` )
@@ -44099,16 +44251,58 @@ unsafe @ bck_note_rc_arg s name s ty → v {
     ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat4 m1 m2 `', the field stays in '` ( nurl_str_cat3 src `', which releases it again. Hand that field over from its owner, or take '` ( nurl_str_cat name `' over whole.` ) ) ) )
 }
 
+// Do rows `a` and `b` stand in the body of one `~` loop? A defer further
+// down a loop body than a way out of it runs at that way out from the
+// second round on: an earlier round armed it (agora #655).
+@ __bck_rows_share_loop i a i b → b {
+    : i lo ? < a b a b
+    : i hi ? < a b b a
+    : ~ i j 0
+    ~ < j lo {
+        : s r ( bck_rec j )
+        ? != 0 ( nurl_str_starts r `block\t` ) {
+            : s k ( bck_field r 1 )
+            ? | | ( seq k `loop` ) ( seq k `loopt` ) ( seq k `foreach` ) { ? > ( bck_match_close j `block` `endblock` ) hi { ^ T } {} } {}
+        } {}
+        = j + j 1
+    }
+    ^ F
+}
+
+// A defer at row `d`, further down than the way out at row `p` and in a
+// loop around both, keeps what it can see: the bindings in scope at `p`
+// that are declared in a block the defer stands in too (codegen keeps
+// them from the loop's head, or from their binding: __dloop_open). Those
+// are the ones declared above the first block, cond or match around `p`
+// that closes before `d` — its row, or `p` when every one of them
+// reaches `d`.
+@ __bck_kept_bound i d i p → i {
+    : ~ i j 0
+    ~ < j p {
+        : s rec ( bck_rec j )
+        : ~ i nx + j 1
+        : i cl ? != 0 ( nurl_str_starts rec `cond\t` ) ( bck_match_close j `cond` `endcond` )
+        ? != 0 ( nurl_str_starts rec `match\t` ) ( bck_match_close j `match` `endmatch` )
+        ? != 0 ( nurl_str_starts rec `block\t` ) ( bck_match_close j `block` `endblock` ) -1
+        ? >= cl 0 {
+            ? < cl p { = nx + cl 1 } { ? < cl d { ^ j } {} }
+        } {}
+        = j nx
+    }
+    ^ p
+}
+
 // The defer sites a return at row `p` may run (state `st`): armed for
 // certain, on some path (a `?` arm), or registered inside a loop (which
-// keeps no flag for it). Does one of them release `id`, give it a new
-// value, or give away, replace or store a field of it?
+// keeps no flag for it) — above the return, or further down a loop around
+// both. Does one of them release `id`, give it a new value, or give away,
+// replace or store a field of it?
 @ bck_defers_release_ret s st i p i id → b {
     : ~ s rest ( nurl_sym_get g_bck `defer_blocks` )
     ~ != 0 ( nurl_str_len rest ) {
         : s row ( str_first_word rest ) = rest ( str_skip_word rest )
         : i start ( nurl_str_to_int row )
-        ? < start p {
+        ? | < start p ( __bck_rows_share_loop start p ) {
             : i fs ( bck_st_get st ( nurl_str_to_int ( nurl_sym_get g_bck ( nurl_str_cat `df_` row ) ) ) )
             ? | | == fs BCK_MOVED == fs BCK_MAYBE_MOVED ( __bck_row_in_loop start ) {
                 ? ( __bck_defer_body_releases start id ) { ^ T } {}
@@ -44926,7 +45120,8 @@ unsafe @ bck_exit_maybe_defers s st i p i keep i line b retchk → v {
     ~ != 0 ( nurl_str_len rest ) {
         : s row ( str_first_word rest ) = rest ( str_skip_word rest )
         : i start ( nurl_str_to_int row )
-        ? < start p {
+        // (…or further down a loop around both: agora #655.)
+        ? | < start p ( __bck_rows_share_loop start p ) {
             : i flag ( nurl_str_to_int ( nurl_sym_get g_bck ( nurl_str_cat `df_` row ) ) )
             : i fs ( bck_st_get st2 flag )
             ? & != fs BCK_MOVED | == fs BCK_MAYBE_MOVED ( __bck_row_in_loop start ) {
@@ -44969,18 +45164,23 @@ unsafe @ bck_exit_maybe_defers s st i p i keep i line b retchk → v {
 unsafe @ bck_end_post_defer s st i p i keep i line → s {
     ? | ( seq st `!` ) == 0 g_bck_has_borrow { ^ st } {}
     : ~ i last -1
+    // (A defer further down a loop around `p` keeps what it can see too:
+    // the bindings declared above row `kb`, __bck_kept_bound.)
+    : ~ i kb -1
     : ~ s rest ( nurl_sym_get g_bck `defer_blocks` )
     ~ != 0 ( nurl_str_len rest ) {
         : i d0 ( nurl_str_to_int ( str_first_word rest ) )
         = rest ( str_skip_word rest )
         ? & < d0 p > d0 last { = last d0 } {}
+        ? > d0 p { ? ( __bck_rows_share_loop d0 p ) { : i b0 ( __bck_kept_bound d0 p ) ? > b0 kb { = kb b0 } {} } {} } {}
     }
-    ? < last 0 { ^ st } {}
+    ? & < last 0 < kb 0 { ^ st } {}
     // The `let`s from the last defer's end up to `p` that are in scope at
     // `p`: a nested cond / match / block that closes before `p` scoped its
     // own (they ended there); one that encloses `p` is stepped into.
     : ~ s lets ``
-    : ~ i j + ( bck_match_close last `block` `endblock` ) 1
+    : ~ i j ? >= last 0 + ( bck_match_close last `block` `endblock` ) 1 0
+    ? < j kb { = j kb } {}
     ~ < j p {
         : s rec ( bck_rec j )
         : ~ i nx + j 1
@@ -46662,6 +46862,11 @@ unsafe @ borrowck_fn_end i lex i syms s fname → v {
     // guard inherited from an enclosing expression (e.g. a `?`/`??` arm
     // that descends back into statements).
     = g_ret_forbidden 0
+    // (A `:` of a defer loop with a `;` further down its block binds an
+    // owner that defer keeps — __dloop_open, 2.)
+    : i __gs_dk g_dkeep_bind
+    = g_dkeep_bind 0
+    ? & != 0 g_dloop == tt TT_COLON { ? ( __dloop_defer_ahead lex ) { = g_dkeep_bind 1 } {} } {}
     : s gs_rv ? == tt TT_COLON ( gen_let_or_struct lex syms cg )
     ? == tt TT_EQ ( gen_assign lex syms cg )
     ? == tt TT_TILDE ( gen_loop lex syms cg )
@@ -46712,6 +46917,9 @@ unsafe @ borrowck_fn_end i lex i syms s fname → v {
     // reset here: gen_assign publishes the LHS type deliberately (its
     // store_val legitimately feeds `?? r { F e → { = rc e } }`-shaped
     // arm phis; see gen_assign's tail comment).
+    // (…kept from here on: what is in sight now is what that `;` will see.)
+    ? != 0 g_dkeep_bind { ( __defer_snap_take syms cg ) ( nurl_sym_set g_fn_escapes `__dkeep_pre__` `` ) } {}
+    = g_dkeep_bind __gs_dk
     ? == tt TT_COLON { ( nurl_set_last_type `void` ) } {}
     // Borrow checker (Phase 1): drain this statement's move stash into
     // `move` rows — placed AFTER the statement's own record so the
@@ -47478,6 +47686,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         : s ptr ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print ptr )
         ( nurl_print ` = alloca ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print `\n` )
+        ? != 0 g_dkeep_bind { ( mem_dkeep_rebind syms cg ptr vt ) } {}
         // Loop re-entry: a to-be-registered binding's hoisted slot may
         // still hold the PREVIOUS iteration's buffer — same-scope drops
         // null the slot after freeing, but an arm-DEFERRED slot cannot
@@ -47882,6 +48091,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             : s ptr ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print ptr )
             ( nurl_print ` = alloca ` ) ( nurl_print ( nurl_llty ptype ) ) ( nurl_print `\n` )
+            ? != 0 g_dkeep_bind { ( mem_dkeep_rebind syms cg ptr ptype ) } {}
             // Loop re-entry free of the previous iteration's value —
             // see the type-inference path's twin above.
             ? & & != 0 g_auto_drop_strings ( seq ( nurl_llty ptype ) `i8*` )
@@ -57377,6 +57587,13 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     // itself rejects `;` inside a closure; these clears keep the
     // closure's return/drop paths on the plain no-defer shape.
     : s __cl_dtop_saved ( nurl_sym_get g_fn_escapes `__defer_top_fn__` )
+    // (…nor its defer loop's label, nor that loop's keeping: agora #655.)
+    : s __cl_dltop_saved ( nurl_sym_get g_fn_escapes `__dloop_top__` )
+    : i __cl_dloop_saved g_dloop
+    : i __cl_dkb_saved g_dkeep_bind
+    ( nurl_sym_set g_fn_escapes `__dloop_top__` `` )
+    = g_dloop 0
+    = g_dkeep_bind 0
     : s __cl_dfbody_saved ( nurl_sym_get g_fn_escapes `__in_defer_body__` )
     : s __cl_snapstr_saved ( nurl_sym_get g_fn_escapes `__dsnap_str__` )
     : s __cl_snapsf_saved ( nurl_sym_get g_fn_escapes `__dsnap_sfield__` )
@@ -57707,6 +57924,9 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     {}
     ( nurl_sym_set g_fn_escapes `__deferred_drops__` __cl_defer_saved )
     ( nurl_sym_set g_fn_escapes `__defer_top_fn__` __cl_dtop_saved )
+    ( nurl_sym_set g_fn_escapes `__dloop_top__` __cl_dltop_saved )
+    = g_dloop __cl_dloop_saved
+    = g_dkeep_bind __cl_dkb_saved
     ( nurl_sym_set g_fn_escapes `__in_defer_body__` __cl_dfbody_saved )
     ( nurl_sym_set g_fn_escapes `__dsnap_str__` __cl_snapstr_saved )
     ( nurl_sym_set g_fn_escapes `__dsnap_sfield__` __cl_snapsf_saved )
@@ -59025,7 +59245,7 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
     // For opt_type: return zeroinitializer (None = { false, 0 }).
     ( emit ( nurl_str_cat lfail `:` ) )
     : s fn_rt ( nurl_sym_get syms `__fn_ret_ty__` )
-    : s dtop ( nurl_sym_get g_fn_escapes `__defer_top_fn__` )
+    : s dtop ( __dexit_top )
     // Use the original val if types match (res propagation), else zeroinitializer
     : ~ s fail_val ? ( seq fn_rt vt ) val `zeroinitializer`
     // Result propagation where the caller's Ok type T differs from the callee's
@@ -63141,6 +63361,71 @@ unsafe @ __ha_is_ffx s line → b {
     }
 }
 
+unsafe @ __ha_is_dkr s line → b {
+    ? < ( strlen line ) 7 { ^ F } {}
+    : *u p # *u line
+    ^ & & == & # i . p 2 255 59 == & # i . p 3 255 100 == & # i . p 4 255 107
+}
+
+// …a closure binding whose value slot is `ptr`: its env, where its owner
+// slot says the binding still owns it (mem_emit_cenv_drop_key's sequence;
+// the slot is null at entry and after every release). Only a binding the
+// defer keeps and that escapes nowhere: an escape takes it off the owned
+// list for good, and that list at the function's end is `__cenvs_final__`.
+@ __dkr_expand_closure s ptr → v {
+    : s owned ( nurl_sym_get g_fn_escapes `__cenvs_final__` )
+    : ~ s rest ( nurl_sym_get g_fn_escapes `__dsnap_cenv__` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s key ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? & & == 37 ( nurl_str_get key 0 ) ( seq ( nurl_sym_get2 g_fn_escapes key `__cvp` ) ptr ) ( str_contains_word owned key ) {
+            : s ty ( nurl_sym_get2 g_fn_escapes key `__cty` )
+            = g_dkr_n + g_dkr_n 1
+            : s n ( nurl_str_int g_dkr_n )
+            ( nurl_print `  %dkra` ) ( nurl_print n ) ( nurl_print ` = load i8*, i8** ` ) ( nurl_print key ) ( nurl_print `\n` )
+            ( nurl_print `  %dkrb` ) ( nurl_print n ) ( nurl_print ` = load ` ) ( nurl_print ty ) ( nurl_print `, ` ) ( nurl_print ty ) ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+            ( nurl_print `  %dkrc` ) ( nurl_print n ) ( nurl_print ` = extractvalue ` ) ( nurl_print ty ) ( nurl_print ` %dkrb` ) ( nurl_print n ) ( nurl_print `, 1\n` )
+            ( nurl_print `  %dkrd` ) ( nurl_print n ) ( nurl_print ` = icmp ne i8* %dkra` ) ( nurl_print n ) ( nurl_print `, null\n` )
+            ( nurl_print `  %dkre` ) ( nurl_print n ) ( nurl_print ` = select i1 %dkrd` ) ( nurl_print n ) ( nurl_print `, i8* %dkrc` ) ( nurl_print n ) ( nurl_print `, i8* null\n` )
+            ( nurl_print `  store i8* null, i8** ` ) ( nurl_print key ) ( nurl_print `\n` )
+            ( nurl_print `  call void @nurl_closure_drop(i8* %dkre` ) ( nurl_print n ) ( nurl_print `)\n` )
+            ^ v
+        } {}
+    }
+}
+
+// `  ;dkr <ptr> <kept flag> <drop flag> <type>`: before a kept loop
+// binding's store, release what its slot holds from an earlier round
+// (mem_dkeep_rebind) — nothing when the binding did not become an owner a
+// defer keeps. One `__dropif_` call and no new block, as at any drop point
+// (mem_emit_gated_drop). A field the binding owned on its own while it
+// borrowed the rest goes where the whole does not: kept and not owned
+// (__ffx_expand drops under `not <cond>`).
+@ __dkr_expand s line → v {
+    : s body ( nurl_str_slice line 7 - ( strlen line ) 7 )
+    : s ptr ( str_first_word body )
+    : s k ( str_first_word ( str_skip_word body ) )
+    : s lf ( str_first_word ( str_skip_word ( str_skip_word body ) ) )
+    : s vt ( __unpark_ty ( str_first_word ( str_skip_word ( str_skip_word ( str_skip_word body ) ) ) ) )
+    ? ! ( str_contains_word ( nurl_sym_get g_fn_escapes `__dsnap_udrop__` ) ptr ) { ( __dkr_expand_closure ptr ) ^ v } {}
+    : s mangle ( nurl_sym_get g_impl_name_syms ( nurl_str_cat `drop##` vt ) )
+    ? == 0 ( nurl_str_len mangle ) { ^ v } {}
+    = g_dkr_n + g_dkr_n 1
+    : s n ( nurl_str_int g_dkr_n )
+    ( nurl_print `  %dkra` ) ( nurl_print n ) ( nurl_print ` = load i1, ptr ` ) ( nurl_print k ) ( nurl_print `\n` )
+    ( nurl_print `  %dkrb` ) ( nurl_print n ) ( nurl_print ` = load i1, ptr ` ) ( nurl_print lf ) ( nurl_print `\n` )
+    ( nurl_print `  %dkrc` ) ( nurl_print n ) ( nurl_print ` = and i1 %dkra` ) ( nurl_print n ) ( nurl_print `, %dkrb` ) ( nurl_print n ) ( nurl_print `\n` )
+    ? != 0 g_ff_any {
+        ( nurl_print `  %dkrd` ) ( nurl_print n ) ( nurl_print ` = xor i1 %dkra` ) ( nurl_print n ) ( nurl_print `, 1\n` )
+        ( nurl_print `  %dkre` ) ( nurl_print n ) ( nurl_print ` = or i1 %dkrb` ) ( nurl_print n ) ( nurl_print `, %dkrd` ) ( nurl_print n ) ( nurl_print `\n` )
+        ( __ffx_expand ( nurl_str_cat4 `  ;ffx ` ptr ` %dkre` n ) )
+    } {}
+    ? ! ( __is_handle_enum vt ) { ( nurl_print `  call void @nurl_journal_forget_slot(ptr ` ) ( nurl_print ptr ) ( nurl_print `)\n` ) } {}
+    ( __dropif_request vt mangle )
+    ( nurl_print `  call void @__dropif_` ) ( nurl_print mangle ) ( nurl_print `(i1 %dkrc` ) ( nurl_print n )
+    ( nurl_print `, ptr ` ) ( nurl_print ptr ) ( nurl_print `)\n` )
+    ( nurl_print `  store i1 false, ptr ` ) ( nurl_print k ) ( nurl_print `\n` )
+}
+
 unsafe @ __ha_is_alloca s line → b {
     ? < ( strlen line ) 3 { ^ F } {}
     : *u p # *u line
@@ -63243,6 +63528,7 @@ unsafe @ __emit_hoisted_body s funcdef → v {
             } {}
         } {}
         ? & != 0 g_ff_any != 0 ( nurl_str_starts tail `ff` ) { = by_line T } {}
+        ? & != 0 g_dkr_any != 0 ( nurl_str_starts tail `dkr ` ) { = by_line T } {}
         : i nr ( nurl_str_find tail `;` )
         = sq ? < nr 0 -1 + + sq 1 nr
     }
@@ -63344,7 +63630,9 @@ unsafe @ __emit_hoisted_body s funcdef → v {
                     ? & > jc_n 0 ( __ha_is_ret line ) {
                         ( nurl_print `  call void @nurl_journal_forget_slot(ptr %__jc)\n` )
                     } {}
-                    ? & != 0 g_ff_any ( __ha_is_ffx line ) { ( __ffx_expand line ) } { ( nurl_print line ) ( nurl_print `\n` ) }
+                    ? & != 0 g_dkr_any ( __ha_is_dkr line ) { ( __dkr_expand line ) } {
+                        ? & != 0 g_ff_any ( __ha_is_ffx line ) { ( __ffx_expand line ) } { ( nurl_print line ) ( nurl_print `\n` ) }
+                    }
                 }
             } {}
             = . fp le sv2
@@ -64707,6 +64995,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     = g_etake_n 0
     = g_ff_gen + g_ff_gen 1
     = g_ff_any 0
+    = g_dkr_any 0
     ( nurl_sym_def g_ptrtab `__ptr_dead__` `` )
     ( lint_fn_begin )
     // Snapshot the lex position for DWARF DISubprogram.line / scopeLine
@@ -65036,7 +65325,19 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     ( nurl_sym_def syms `__fn_rp_done__` `` )
     ( nurl_sym_def syms `__fn_rp_bad__` `` )
     ( nurl_sym_def syms `__fn_rp_defer__` `` )
+    // A loop of this body is looked at for a `;` defer only when the body
+    // holds a `;` byte at all (__dloop_open): one memchr over its text, and
+    // in a comment or a string it costs a scan of that function's loops.
+    : i __fs_at ( nurl_lex_cur_start lex )
+    : i __fs_end ( __body_end_known lex __fs_at )
+    = g_fn_semi ? ( nurl_lex_src_has lex __fs_at __fs_end `;` ) 1 0
+    = g_dloop 0
+    = g_dkeep_bind 0
+    ( nurl_sym_set g_fn_escapes `__dloop_top__` `` )
+    ( nurl_sym_set g_fn_escapes `__dkeep_pre__` `` )
+    ( nurl_sym_set g_fn_escapes `__cenvs_final__` `` )
     : ~ s last ( gen_block_ret lex syms cg )
+    = g_fn_semi 0
     // Raw pointer parameters a literal took in the body's last statement
     // (`= w @ V { v }`, w an `inout` parameter) that no `:` binding claimed:
     // kept, as the next statement would have decided (__gen_stmt_level) —
