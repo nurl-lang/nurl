@@ -29894,6 +29894,35 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
     ^ ( nurl_str_cat nm `` )
 }
 
+// A `:` binding's value block (`tt` a `{`, just generated, of type `ty`)
+// whose tail is a binding the block made itself (bound at register
+// `%r<rmin>` or later): that binding's name, else ``. To the new binding's
+// drop flag the `:` then is `: e s` (mem_udrop_bind_flag's rule for a
+// binding bound by name): a handle e is a cursor over s — s keeps the
+// value, and a `sink` or a `^` handed e takes it from s — and a struct or
+// an enum e takes s's flag. Read as a block, e was a borrow of nothing —
+// flag 0, no owner link — while the block's binding kept a constant drop,
+// and the walk takes e for the owner of what s held: handed to a `sink`
+// or handed back, the value was freed twice (agora #615). Only the flag
+// is told so: what the walk knows of the block's value (its views, its
+// lends) it keeps asking the block. A binding from outside the block is
+// lent as before. The tail's storage, read inside the block, must be what
+// its name names here; not a tail of the `:`'s own name `name` (`: s { :
+// s … s }`, which names the binding being made by the time its flag is
+// set), not a closure (__blk_tail_closure's), and not a raw string, which
+// has no drop flag. Not a `: ~` binding (`is_mut`) either: a cursor's
+// owner link is fixed where it is bound, and one assigned a value of its
+// own later would still hand its first owner's away.
+@ __let_blk_tail_name i syms i tt s ty i rmin s name b is_mut → s {
+    ? | | | is_mut != tt TT_LBRACE ( __is_closure_ty ty ) ( seq ty `i8*` ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s nm ( nurl_sym_get syms `__tail_name__` )
+    : s tp ( nurl_sym_get syms `__tail_ptr__` )
+    ? | | | == 0 ( nurl_str_len nm ) == 0 ( nurl_str_len tp ) ( seq nm name ) ! ( seq tp ( nurl_sym_get2 syms nm `__ptr` ) ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? | == 0 ( nurl_str_starts tp `%r` ) < ( nurl_str_to_int ( nurl_str_slice tp 2 ( nurl_str_len tp ) ) ) rmin { ^ ( nurl_str_cat `` `` ) } {}
+    ? ! ( seq ( nurl_sym_get syms `__last_ident_name__` ) nm ) { ^ ( nurl_str_cat `` `` ) } {}
+    ^ ( nurl_str_cat nm `` )
+}
+
 // A return site releasing the returned binding's env to the caller. A
 // binding with an owner slot was already settled by mem_retclo_own_result (its
 // slot cleared on this path only), so it stays owned for the paths that do
@@ -47417,6 +47446,11 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         // (A try over a call binds the call's payload: what follows asks the
         // call, as mem_udrop_bind_flag does — agora #194.)
         ? & & == bck_rhs_tt TT_BACKSLASH == g_blk_tail_eff TT_LPAREN ( seq ( nurl_sym_get syms `__last_backslash_try__` ) `1` ) { = bck_rhs_tt TT_LPAREN } {}
+        // (A value block whose tail is a binding the block made is that
+        // binding to this one's drop flag, as `: e s` is: agora #615.)
+        : s __lbt ( __let_blk_tail_name syms bck_rhs_tt ( nurl_get_last_type ) __rhs_r0 name is_mutable )
+        : i __own_tt ? != 0 ( nurl_str_len __lbt ) TT_IDENT bck_rhs_tt
+        : s __own_val ? != 0 ( nurl_str_len __lbt ) __lbt bck_rhs_val
         ( __nc_bind_lend_note syms name bck_rhs_tt F )
         // A handle bound from a sealed representation's field, or from a
         // binding that views one, views it too (gen_call, agora #159).
@@ -47675,9 +47709,9 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
                 ? != 0 ( nurl_str_len impl_mangle_key )
                 { = g_udrop_noinit ? > g_defer_body_depth 0 2 1
                     ( mem_note_vget_binding syms name bck_rhs_tt )
-                    ( mem_note_bound_lend syms name bck_rhs_tt bck_rhs_val )
+                    ( mem_note_bound_lend syms name __own_tt __own_val )
                     ( mem_own_add_user_drop syms cg ptr rvt )
-                    ( mem_udrop_bind_flag syms cg ptr rvt ( __blk_bind_tt bck_rhs_tt __blk_lend ) bck_rhs_val rhs_borrow )
+                    ( mem_udrop_bind_flag syms cg ptr rvt ( __blk_bind_tt __own_tt __blk_lend ) __own_val rhs_borrow )
                     ? __blk_lend { ( mem_blk_tail_call_own syms cg ptr ) ( mem_blk_tail_copy_slot syms cg ptr rvt ptr __rhs_r0 ) } {}
                     ( mem_journal_push_userdrop syms cg ptr rvt )
                     ( __jpb_attach syms ptr __jpb_mine ) }
@@ -47819,6 +47853,11 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             // (A try over a call binds the call's payload: what follows asks the
             // call, as mem_udrop_bind_flag does — agora #194.)
             ? & & == bck_rhs_tt TT_BACKSLASH == g_blk_tail_eff TT_LPAREN ( seq ( nurl_sym_get syms `__last_backslash_try__` ) `1` ) { = bck_rhs_tt TT_LPAREN } {}
+            // (A value block whose tail is a binding the block made is that
+            // binding to this one's drop flag, as `: e s` is: agora #615.)
+            : s __lbt ( __let_blk_tail_name syms bck_rhs_tt ( nurl_get_last_type ) __rhs_r0 name is_mutable )
+            : i __own_tt ? != 0 ( nurl_str_len __lbt ) TT_IDENT bck_rhs_tt
+            : s __own_val ? != 0 ( nurl_str_len __lbt ) __lbt bck_rhs_val
             ( __nc_bind_lend_note syms name bck_rhs_tt F )
             // A handle bound from a sealed representation's field, or from a
             // binding that views one, views it too (gen_call, agora #159).
@@ -48069,9 +48108,9 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
                     : s impl_mangle_key ( nurl_sym_get g_impl_name_syms impl_key )
                     ? != 0 ( nurl_str_len impl_mangle_key )
                     { = g_udrop_noinit ? > g_defer_body_depth 0 2 1
-                        ( mem_note_bound_lend syms name bck_rhs_tt bck_rhs_val )
+                        ( mem_note_bound_lend syms name __own_tt __own_val )
                         ( mem_own_add_user_drop syms cg ptr rpt )
-                        ( mem_udrop_bind_flag syms cg ptr rpt ( __blk_bind_tt bck_rhs_tt __blk_lend ) bck_rhs_val rhs_borrow )
+                        ( mem_udrop_bind_flag syms cg ptr rpt ( __blk_bind_tt __own_tt __blk_lend ) __own_val rhs_borrow )
                         ? __blk_lend { ( mem_blk_tail_call_own syms cg ptr ) ( mem_blk_tail_copy_slot syms cg ptr rpt ptr __rhs_r0 ) } {}
                         ( mem_journal_push_userdrop syms cg ptr rpt )
                         ( __jpb_attach syms ptr __jpb_mine ) }
