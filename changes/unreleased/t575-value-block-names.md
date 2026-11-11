@@ -1,7 +1,0 @@
-### Fixed
-
-- **A value block's names end at its `}`** (Agora #575). After `: String e { : String s … }` the name `s` was the block's own binding for the rest of the enclosing scope, in place of an outer `s` or where there was none, while the borrow checker had ended it at the block: a later `s` was checked as one binding and compiled as another. `: el { : String s … s }` followed by `= s el` gave the block's binding its own value back after releasing it (a heap-use-after-free, also for a struct), a block-local Vec moved into the block's binding and consumed there was read through the same name as freed memory, and `( f { : String s … s } s )` passed the block's `s` twice. A name spelled after the value block that bound it is now refused, in an operand, a callee, an assignment or field-store target, or a closure capture.
-
-### Changed
-
-- **A name bound in a value block cannot be used after the block** (Agora #575). What a value block binds still lives to the end of the enclosing scope, because the block's value may view it, but it has no name there: `: String e { : String s … }` then `s` is an error that says where the name was bound. Where the block's binding has the name of an outer binding, the outer one cannot be named after the block either, since the name would reach the block's binding: give the block's binding another name. A `:` of the name made after the block is a new binding and is unaffected, as are `: String s { : String s … s }`, payloads, loop variables and bindings of inner scopes.

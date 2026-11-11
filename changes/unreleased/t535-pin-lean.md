@@ -1,3 +1,0 @@
-### Security
-
-- **The Lean that checks the proof is pinned by content** (Agora #535). `formal.yml` installed elan by piping `elan-init.sh` from elan's master branch into `sh`, so the proof was checked by whatever that branch served that day. It now downloads the Lean release archive `formal/lean-toolchain` names, verifies it against the publisher's sha256 digest, and puts its `bin/` (`lean`, `lake`) on the path, with no installer script and no elan. The step fails when `lean-toolchain` and the pin disagree. `tools/check_pinned_downloads.py` missed that shape: its pipe-into-a-shell rule stopped at a line end, so a pipe on the line after a `\` continuation passed. It now joins continuations first, and `tools/tests/test_check_pinned_downloads.py` covers both shapes.

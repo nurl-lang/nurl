@@ -1,3 +1,0 @@
-### Changed
-
-- **anomaly, registry, pki-server and nurlbox have no `unsafe` left** (Agora #470; anomaly 0.36.8, registry 0.4.10, pki-server 0.5.4, nurlbox 0.5.2). Their configuration setters kept the caller's strings as raw string globals, which needed `unsafe @` setters since github#1603 refused a view of a caller's string in a global. Each configuration is now a `Locked` value made at start and set before serving, the shape anomaly's authz state and orgfiles already had. Each string is the configuration's own copy, and a global set at start and changed only through its lock is what the formal proof covers (A3.6, A3.2). The public setters keep their names and arguments. Hot readers read in place (`locked_with`), and the rest take a copy.
