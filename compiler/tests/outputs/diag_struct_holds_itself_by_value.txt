@@ -1,0 +1,22 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_struct_holds_itself_by_value.nu:11:18: error: 'Opt' holds itself by value, so it has no finite size: 'Opt.next' has the type '?Opt'. A value cannot contain a value of its own type. Put the inner one behind an owner: '( Box Opt )' for one owner, '( Rc Opt )' when it is shared, '( Vec Opt )' for several — and '?( Box Opt )' where there may be none.
+: Opt { String s ? Opt next }
+                 ^
+compiler/tests/diag_struct_holds_itself_by_value.nu:17:13: error: 'Res' holds itself by value, so it has no finite size: 'Res.r' has the type '!Res i'. A value cannot contain a value of its own type. Put the inner one behind an owner: '( Box Res )' for one owner, '( Rc Res )' when it is shared, '( Vec Res )' for several — and '?( Box Res )' where there may be none.
+: Res { i v ! Res i r }
+            ^
+compiler/tests/diag_struct_holds_itself_by_value.nu:21:16: error: 'Direct' holds itself by value, so it has no finite size: 'Direct.next' has the type 'Direct'. A value cannot contain a value of its own type. Put the inner one behind an owner: '( Box Direct )' for one owner, '( Rc Direct )' when it is shared, '( Vec Direct )' for several — and '?( Box Direct )' where there may be none.
+: Direct { i v Direct next }
+               ^
+compiler/tests/diag_struct_holds_itself_by_value.nu:25:16: error: 'A' holds itself by value, so it has no finite size: 'A.b' has the type 'B', 'B.a' has the type 'A'. A value cannot contain a value of its own type. Put the inner one behind an owner: '( Box A )' for one owner, '( Rc A )' when it is shared, '( Vec A )' for several — and '?( Box A )' where there may be none.
+: A { String s B b }
+               ^
+compiler/tests/diag_struct_holds_itself_by_value.nu:29:11: error: 'P' holds itself by value, so it has no finite size: 'P.q' has the type 'Q', 'Q.r' has the type '?R', 'R.back' has the type '!P i'. A value cannot contain a value of its own type. Put the inner one behind an owner: '( Box P )' for one owner, '( Rc P )' when it is shared, '( Vec P )' for several — and '?( Box P )' where there may be none.
+: P { i x Q q }
+          ^
+compiler/tests/diag_struct_holds_itself_by_value.nu:37:14: error: 'Loop' holds itself by value, so it has no finite size: 'Loop.w' has the type '( Wrap Loop )', '( Wrap Loop ).inner' has the type 'Loop'. A value cannot contain a value of its own type. Put the inner one behind an owner: '( Box Loop )' for one owner, '( Rc Loop )' when it is shared, '( Vec Loop )' for several — and '?( Box Loop )' where there may be none.
+: Loop { i k ( Wrap Loop ) w }
+             ^
+error: aborting due to 6 previous errors
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

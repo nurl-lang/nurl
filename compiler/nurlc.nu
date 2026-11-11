@@ -63599,6 +63599,7 @@ unsafe @ __ret_struct_identity i lex i syms → s {
             ( __ty_memo_forget ( nurl_str_cat `%` mangled ) )
         } {}
         ( ensure_struct_instantiated syms sname ta_list )
+        ( __byval_inst_die lex syms mangled )
     } {}
     ^ mangled
 }
@@ -63974,6 +63975,19 @@ unsafe @ ensure_struct_instantiated i syms s sname s ta_list → v {
                 ( nurl_sym_def_module syms mangled ( nurl_str_cat `%` mangled ) )
                 ( nurl_sym_def_module syms ( nurl_str_cat mangled `__is_type` ) `1` )
                 ( nurl_sym_def_module syms ( nurl_str_cat mangled `__field_count` ) ( nurl_str_int fidx ) )
+                // (An instance that holds itself by value: noted, and
+                // refused where a type names it — __byval_inst_die.)
+                ( nurl_sym_set g_fn_pos_syms `__bv_seen__` `` )
+                : ~ i __bv_k 0
+                ~ < __bv_k fidx {
+                    : s __bv_fty ( nurl_sym_get syms ( nurl_str_cat3 mangled `__idx_` ( nurl_str_cat ( nurl_str_int __bv_k ) `__type` ) ) )
+                    : s __bv_sub ( __byval_path syms mangled __bv_fty )
+                    ? != 0 ( nurl_str_len __bv_sub ) {
+                        ( nurl_sym_def_module syms ( nurl_str_cat mangled `__byval` ) ( __byval_hop syms mangled __bv_k __bv_fty __bv_sub ) )
+                        ( nurl_sym_set g_fn_pos_syms `__bv_last_inst__` mangled )
+                        = __bv_k fidx
+                    } { = __bv_k + __bv_k 1 }
+                }
             } {}
         } {}
     } {}
@@ -67472,6 +67486,198 @@ unsafe @ __check_value_type_defined i lex i syms s llvm_ty s ctx i tline i tcol 
     }
 }
 
+// ── A struct that holds itself by value (agora #661) ─────────────
+// `: N { i v ?N next }`, or `: A { B b }` beside `: B { A a }`: a value
+// that contains a value of its own type has no finite size. Only the field
+// whose type is the struct itself was refused; an option, a result, an
+// array or a second struct in between got through, to clang's "Cannot
+// allocate unsized type" at the first `alloca`, or to a type walk that
+// never ended (__type_needs_drop, 105 000 frames deep).
+//   A cycle is seen where its last struct is declared: the fields of the
+// others are known by then. So each declaration asks whether one of its
+// fields reaches the struct again BY VALUE — through struct fields, the
+// parts of an option, a result or a tuple, an array's elements. A pointer
+// ends the search, and so does a type with no registered fields: an enum
+// (its payloads live in i64 slots, boxed when wide) and a library handle's
+// type argument (behind the handle's pointer).
+//   Few structs can be in a cycle, and the question is asked only of one
+// with a field that names, by value, the struct itself, a struct not
+// declared yet, or a generic's instance (which may hold it as a type
+// argument), and of one an earlier struct named before it was declared
+// (`bvf##`): every other declaration pays one lookup. A generic's instance
+// is asked where it is made (ensure_struct_instantiated), and the type
+// that made it says so (__byval_inst_die).
+
+// How often `sub` stands in `t`.
+@ __byval_count s t s sub → i {
+    : ~ i n 0
+    : ~ s rest ( nurl_str_cat t `` )
+    : ~ i at ( nurl_str_find rest sub )
+    ~ >= at 0 {
+        = n + n 1
+        = rest ( nurl_str_slice rest + at 1 - - ( nurl_str_len rest ) at 1 )
+        = at ( nurl_str_find rest sub )
+    }
+    ^ n
+}
+
+// Where the type name `t` begins with ends: at the first character a name
+// cannot hold in a type's spelling, or at `t`'s end.
+@ __byval_name_len s t → i {
+    : ~ i e ( nurl_str_len t )
+    : ~ s stops ( nurl_str_cat `, } * ) ] {` `` )
+    ~ != 0 ( nurl_str_len stops ) {
+        : s w ( str_first_word stops )
+        = stops ( str_skip_word stops )
+        : i at ( nurl_str_find t w )
+        ? & >= at 0 < at e { = e at } {}
+    }
+    : i sp ( nurl_str_find t ` ` )
+    ? & >= sp 0 < sp e { = e sp } {}
+    ^ e
+}
+
+// The structs `ty` holds by value, as words: each `%Name` that is not
+// behind a pointer and not inside a function type's parentheses. (From one
+// `%` to the next: a type's spelling is short and holds few of them.)
+@ __byval_names s ty → s {
+    : ~ s out ``
+    : ~ s rest ( nurl_str_cat ty `` )
+    : ~ i depth 0
+    : ~ i at ( nurl_str_find rest `%` )
+    ~ >= at 0 {
+        : s before ( nurl_str_slice rest 0 at )
+        = depth - + depth ( __byval_count before `(` ) ( __byval_count before `)` )
+        : s tail ( nurl_str_slice rest + at 1 - - ( nurl_str_len rest ) at 1 )
+        : i e ( __byval_name_len tail )
+        : s nm ( nurl_str_slice tail 0 e )
+        : s after ( nurl_str_slice tail e - ( nurl_str_len tail ) e )
+        ? & & == depth 0 != 0 ( nurl_str_len nm ) == 0 ( nurl_str_starts after `*` ) {
+            ? ! ( str_contains_word out nm ) { = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat nm `` ) ( nurl_str_cat3 out ` ` nm ) } {}
+        } {}
+        = rest ( nurl_str_cat after `` )
+        = at ( nurl_str_find rest `%` )
+    }
+    ^ out
+}
+
+// Does `ty` hold a `start` by value? `` when not; else the fields the way
+// there goes through, as text (`-` when `ty` names `start` itself). A
+// struct already looked through (`__bv_seen__`) is not looked through
+// again: it did not lead back, or it is on the way being followed.
+@ __byval_path i syms s start s ty → s {
+    : ~ s rest ( __byval_names ty )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s nm ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        ? ( seq nm start ) { ^ ( nurl_str_cat `-` `` ) } {}
+        : s seen ( nurl_sym_get g_fn_pos_syms `__bv_seen__` )
+        ? ! ( str_contains_word seen nm ) {
+            ( nurl_sym_set g_fn_pos_syms `__bv_seen__` ? == 0 ( nurl_str_len seen ) ( nurl_str_cat nm `` ) ( nurl_str_cat3 seen ` ` nm ) )
+            : s fc ( nurl_sym_get2 syms nm `__field_count` )
+            : i nf ? == 0 ( nurl_str_len fc ) 0 ( nurl_str_to_int fc )
+            : ~ i k 0
+            ~ < k nf {
+                : s fty ( nurl_sym_get syms ( nurl_str_cat3 nm `__idx_` ( nurl_str_cat ( nurl_str_int k ) `__type` ) ) )
+                : s sub ( __byval_path syms start fty )
+                ? != 0 ( nurl_str_len sub ) {
+                    ^ ( __byval_hop syms nm k fty sub )
+                } {}
+                = k + k 1
+            }
+        } {}
+    }
+    ^ ( nurl_str_cat `` `` )
+}
+
+// The name of field `k` of the struct `owner`: registered with the field
+// once the struct is declared; of one declared further down, read out of
+// its body as the layout pre-scan kept it (the diagnostic's path only —
+// the pre-scan registers types, not names).
+@ __byval_field_name i syms s owner i k → s {
+    : s known ( nurl_sym_get syms ( nurl_str_cat3 owner `__idx_` ( nurl_str_cat ( nurl_str_int k ) `__name` ) ) )
+    ? != 0 ( nurl_str_len known ) { ^ ( nurl_str_cat known `` ) } {}
+    ? | == g_type_layouts 0 == 0 ( nurl_sym_len2 g_type_layouts owner `__body` ) { ^ ( nurl_str_cat3 `#` ( nurl_str_int k ) `` ) } {}
+    : i lex ( nurl_lex_new ( nurl_sym_get2 g_type_layouts owner `__body` ) ( nurl_sym_get2 g_type_layouts owner `__file` ) )
+    : ~ s out ( nurl_str_cat3 `#` ( nurl_str_int k ) `` )
+    ? == ( nurl_lex_type lex ) TT_LBRACE {
+        ( nurl_lex_advance lex )
+        : ~ i n 0
+        ~ & & <= n k != ( nurl_lex_type lex ) TT_RBRACE != ( nurl_lex_type lex ) TT_EOF {
+            : s ty ( parse_type lex )
+            ? ( is_ident_tok ( nurl_lex_type lex ) ) {
+                ? == n k { = out ( nurl_str_cat ( nurl_lex_val lex ) `` ) } {}
+                ( nurl_lex_advance lex )
+            } {}
+            = n + n 1
+        }
+    } {}
+    ( nurl_lex_free lex )
+    ^ out
+}
+
+// "`Owner.field` has the type `T`", then the rest of the way (`sub`).
+@ __byval_hop i syms s owner i k s fty s sub → s {
+    : s fname ( __byval_field_name syms owner k )
+    : s hop ( nurl_str_cat4 ( nurl_str_cat3 `'` ( __ty_show ( nurl_str_cat `%` owner ) ) `.` ) fname `' has the type '` ( nurl_str_cat ( __ty_show fty ) `'` ) )
+    ? ( seq sub `-` ) { ^ hop } {}
+    ^ ( nurl_str_cat3 hop `, ` sub )
+}
+
+// Where field `k` stands, out of `pos` (words `<index>=<line>:<col>`).
+@ __byval_field_at s pos i k → s {
+    : s want ( nurl_str_cat ( nurl_str_int k ) `=` )
+    : ~ s rest ( nurl_str_cat pos `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        ? != 0 ( nurl_str_starts w want ) { ^ ( nurl_str_slice w ( nurl_str_len want ) - ( nurl_str_len w ) ( nurl_str_len want ) ) } {}
+    }
+    ^ ( nurl_str_cat `0:0` `` )
+}
+
+// The generic's instance `mangled`, just named by a type at `lex`, holds
+// itself by value (noted where it was made): say so there.
+@ __byval_inst_die i lex i syms s mangled → v {
+    : s way ( nurl_sym_get2 syms mangled `__byval` )
+    ? == 0 ( nurl_str_len way ) { ^ v } {}
+    : s shown ( __ty_show ( nurl_str_cat `%` mangled ) )
+    : s m1 ( nurl_str_cat3 `'` shown `' holds itself by value, so it has no finite size: ` )
+    : s m2 ( nurl_str_cat3 way `. A value cannot contain a value of its own type. Put the inner one behind an owner: '( Box ` shown )
+    ( die lex ( nurl_str_cat4 m1 m2 ` )' for one owner, '( Rc … )' when it is shared, '( Vec … )' for several — and '?( Box … )` `' where there may be none.` ) )
+}
+
+// …where the instance's name is not at hand (the generic-struct scan):
+// the instance of `gname` made last, if it was noted.
+@ __byval_inst_die_any i lex i syms s gname → v {
+    : s last ( nurl_sym_get g_fn_pos_syms `__bv_last_inst__` )
+    ? & != 0 ( nurl_str_len last ) != 0 ( nurl_str_starts last ( nurl_str_cat gname `__` ) ) { ( __byval_inst_die lex syms last ) } {}
+}
+
+// The struct `sname`, its fields registered, holds itself by value: say
+// so at the field the way starts at.
+@ __byval_cycle_check i lex i syms s sname i nf s pos → v {
+    ( nurl_sym_set g_fn_pos_syms `__bv_seen__` `` )
+    : ~ i k 0
+    ~ < k nf {
+        : s at ( __byval_field_at pos k )
+        : s fty ( nurl_sym_get syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int k ) `__type` ) ) )
+        : s sub ( __byval_path syms sname fty )
+        ? != 0 ( nurl_str_len sub ) {
+            : s way ( __byval_hop syms sname k fty sub )
+            : i colon ( nurl_str_find at `:` )
+            : i line ( nurl_str_to_int ( nurl_str_slice at 0 colon ) )
+            : i col ( nurl_str_to_int ( nurl_str_slice at + colon 1 - - ( nurl_str_len at ) colon 1 ) )
+            : s m1 ( nurl_str_cat3 `'` sname `' holds itself by value, so it has no finite size: ` )
+            : s m2 ( nurl_str_cat3 way `. A value cannot contain a value of its own type. Put the inner one behind an owner: '( Box ` sname )
+            : s m3 ( nurl_str_cat3 ` )' for one owner, '( Rc ` sname ` )' when it is shared, '( Vec ` )
+            : s m4 ( nurl_str_cat3 sname ` )' for several — and '?( Box ` sname )
+            ( die_pos lex line col ( nurl_str_cat4 m1 m2 m3 ( nurl_str_cat m4 ` )' where there may be none.` ) ) )
+        } {}
+        = k + k 1
+    }
+}
+
 @ gen_struct_decl s sname i lex i syms → v {
     ( nurl_lex_advance lex )
     // Same flat-namespace guard as `@` functions (g_fn_pos_syms): a second
@@ -67496,22 +67702,40 @@ unsafe @ __check_value_type_defined i lex i syms s llvm_ty s ctx i tline i tcol 
     ( nurl_print `%` ) ( nurl_print sname ) ( nurl_print ` = type { ` )
     : ~ i first 1
     : ~ i fidx 0
+    // (May this struct be in a by-value cycle — named by an earlier struct
+    // before it was declared, or by a field of its own? Then where each
+    // field stands, for the diagnostic: __byval_cycle_check.)
+    : ~ b __bv_ask != 0 ( nurl_sym_len g_fn_pos_syms ( nurl_str_cat `bvf##` sname ) )
+    : ~ s __bv_pos ``
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
         : i __ft_line ( nurl_lex_line lex )
         : i __ft_col ( nurl_lex_col lex )
         : i __ft_star g_pt_star
         : s flt ( parse_type lex )
         ? != g_pt_star __ft_star { ( nurl_sym_def syms ( nurl_str_cat sname `__rawrep` ) `1` ) } {}
-        // A field whose type is the struct itself BY VALUE makes the struct
-        // infinitely sized (`: Node { i v  Node next }`). LLVM only rejects the
-        // recursive value type later, at an `insertvalue` / `store` use site,
-        // with a cryptic "operand and field disagree in type". Catch it at the
-        // declaration with the canonical cure: box the field as a pointer.
-        ? ( seq flt ( nurl_str_cat `%` sname ) )
-        { ( die lex ( nurl_str_cat ( nurl_str_cat3
-            `recursive struct '` sname `' has infinite size — a field holds the struct itself by value. Box it as a pointer: '* ` )
-            ( nurl_str_cat sname `'` ) ) ) }
-        {}
+        // A field that holds the struct itself BY VALUE — as its type, or
+        // inside an option, a result, an array or another struct — makes
+        // the struct infinitely sized: refused once the fields are known
+        // (__byval_cycle_check). A struct this field names by value before
+        // its declaration is asked the same when it is declared.
+        ? >= ( nurl_str_find flt `%` ) 0 {
+            : ~ s __bv_ns ( __byval_names flt )
+            ~ != 0 ( nurl_str_len __bv_ns ) {
+                : s __bv_n ( str_first_word __bv_ns )
+                = __bv_ns ( str_skip_word __bv_ns )
+                ? ( seq __bv_n sname ) { = __bv_ask T } {
+                    // (One not declared yet, or a generic's instance — it
+                    // may hold this struct as its type argument: ask now,
+                    // with the fields the layout pre-scan knows, and again
+                    // where that struct is declared.)
+                    ? == 0 ( nurl_sym_len g_fn_pos_syms ( nurl_str_cat `ty##` __bv_n ) ) {
+                        = __bv_ask T
+                        ( nurl_sym_def g_fn_pos_syms ( nurl_str_cat `bvf##` __bv_n ) `1` )
+                    } {}
+                }
+            }
+        } {}
+        ? __bv_ask { = __bv_pos ( nurl_str_cat4 __bv_pos ` ` ( nurl_str_int fidx ) ( nurl_str_cat4 `=` ( nurl_str_int __ft_line ) `:` ( nurl_str_int __ft_col ) ) ) } {}
         ( check_type_known lex syms flt `a struct field type` __ft_line __ft_col )
         ( __check_fnty_types_defined lex syms flt )
         ? ( is_ident_tok ( nurl_lex_type lex ) )
@@ -67554,6 +67778,7 @@ unsafe @ __check_value_type_defined i lex i syms s llvm_ty s ctx i tline i tcol 
     ( nurl_sym_def syms sname ( nurl_str_cat `%` sname ) )
     ( nurl_sym_def syms ( nurl_str_cat sname `__is_type` ) `1` )
     ( nurl_sym_def syms ( nurl_str_cat sname `__field_count` ) ( nurl_str_int fidx ) )
+    ? __bv_ask { ( __byval_cycle_check lex syms sname fidx __bv_pos ) } {}
     // The stdlib String — one `ctl` handle — is compiler-dropped (docs/
     // MEMORY.md §7.6); a program's own type that happens to be called
     // String is not.
@@ -81178,6 +81403,7 @@ unsafe @ gen_trait_or_impl i lex i syms i cg → v {
     : s tparams ( nurl_sym_get2 g_generic_struct_syms sname `__stparams` )
     ? != 0 ( nurl_str_len tparams ) {
         ( ensure_struct_instantiated syms sname ta_list )
+        ( __byval_inst_die lex syms ( nurl_str_cat sname mangle_sfx ) )
     } {}
     ^ ( nurl_str_cat sname mangle_sfx )
 }
@@ -81265,6 +81491,7 @@ unsafe @ gen_trait_or_impl i lex i syms i cg → v {
                     }
                     ? == ( nurl_lex_type lex ) TT_RPAREN { ( nurl_lex_advance lex ) } {}
                     ( ensure_struct_instantiated syms cand ta_list )
+                    ( __byval_inst_die_any lex syms cand )
                     = handled T
                 } {}
             } {}
