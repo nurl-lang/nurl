@@ -476,14 +476,20 @@ REM     resolved against THIS prefix — self-contained, no vcpkg on the box.
 REM   - An in-repo build with no winlib\ falls back to the build-time
 REM     runtime.winlibs (its vcpkg -L"<dir>" paths are valid locally).
 set "WINLIBS="
+set "WINLIBDIR="
 if exist "!SCRIPTDIR!stdlib\winlib\winlibs.reloc" (
     set /p WINLIBS=<"!SCRIPTDIR!stdlib\winlib\winlibs.reloc"
     REM The link runs inside its staging directory (below), so the libs'
-    REM directory reaches the linker through LIB, which lld-link and
-    REM link.exe both search: a plain assignment holds any character a
+    REM directory is given to the compiler as an argument of its own, -L
+    REM with the prefix quoted: a delayed expansion holds any character a
     REM prefix may contain, where substituting it into the fragment with
     REM !VAR:x=y! could not. The fragment's -L keeps a harmless ".".
-    set "LIB=!SCRIPTDIR!stdlib\winlib;!LIB!"
+    REM NOT through the LIB variable: clang adds the Windows SDK and MSVC
+    REM library directories it finds itself only while LIB is unset, so
+    REM setting it here on a machine outside a developer prompt, the usual
+    REM one, left winhttp.lib, ws2_32.lib, bcrypt.lib and advapi32.lib
+    REM unfound and every clang link of the shipped toolchain failed.
+    set "WINLIBDIR=-L"!SCRIPTDIR!stdlib\winlib""
     set "WINLIBS=!WINLIBS:$NURL_LIB$=.!"
 ) else if exist "!SCRIPTDIR!stdlib\runtime.winlibs" (
     set /p WINLIBS=<"!SCRIPTDIR!stdlib\runtime.winlibs"
@@ -495,7 +501,7 @@ REM stdlib\std\zstd.nu), so dropping them leaves no dangling symbol here.
 REM A program that declares some OTHER vcpkg FFI itself still needs the
 REM import lib, and so still needs clang.
 if "!MINGW_ABI!"=="1" set "WINLIBS="
-if defined WINLIBS set "EXTRA_LIBS=!EXTRA_LIBS! !WINLIBS!"
+if defined WINLIBS set "EXTRA_LIBS=!EXTRA_LIBS! !WINLIBDIR! !WINLIBS!"
 
 REM System import libs. The whole of runtime.o is linked in, so every
 REM program needs the libraries behind every OS bridge it contains, even
