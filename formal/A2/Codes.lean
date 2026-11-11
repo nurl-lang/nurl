@@ -17,19 +17,16 @@ def PkgOK (P : Prog) (v : Val) : Prop :=
 /-- A3.5b: every package a block holds, in what it owns and in what its
     holders read, names code of its signature. -/
 def BlkCodes (P : Prog) (B : Nat → Option Blk) : Prop :=
-  (∀ k bl, B k = some bl → PkgOK P bl.tree ∧ PkgOK P bl.rd) ∧
-  -- Agora #610: and the destructor of a `dead` block's type is one the
-  -- program checked
-  DeadCodes P B
+  ∀ k bl, B k = some bl → PkgOK P bl.tree ∧ PkgOK P bl.rd
 
 theorem memCodes_iff {P : Prog} {m : Mem} :
     MemCodes P m ↔ (∀ x o V, m.st x = some ⟨o, some V⟩ → PkgOK P V) ∧ BlkCodes P m.blk :=
   ⟨fun h => ⟨fun x o V hx fs te ms e cs hs => h.1 x o V fs te ms e cs hx hs,
-     fun k bl hk => ⟨fun fs te ms e cs hs => h.2.1 k bl fs te ms e cs hk (.inl hs),
-       fun fs te ms e cs hs => h.2.1 k bl fs te ms e cs hk (.inr hs)⟩, h.2.2⟩,
+     fun k bl hk => ⟨fun fs te ms e cs hs => h.2 k bl fs te ms e cs hk (.inl hs),
+       fun fs te ms e cs hs => h.2 k bl fs te ms e cs hk (.inr hs)⟩⟩,
    fun h => ⟨fun x o V fs te ms e cs hx hs => h.1 x o V hx fs te ms e cs hs,
-     fun k bl fs te ms e cs hk hs => hs.elim (fun hs => (h.2.1 k bl hk).1 fs te ms e cs hs)
-       (fun hs => (h.2.1 k bl hk).2 fs te ms e cs hs), h.2.2⟩⟩
+     fun k bl fs te ms e cs hk hs => hs.elim (fun hs => (h.2 k bl hk).1 fs te ms e cs hs)
+       (fun hs => (h.2 k bl hk).2 fs te ms e cs hs)⟩⟩
 
 /-- The blocks' packages name code of their signature. -/
 theorem MemCodes.blk {P : Prog} {m : Mem} (h : MemCodes P m) : BlkCodes P m.blk := (memCodes_iff.mp h).2
@@ -118,25 +115,11 @@ theorem MemCodes.of_st {P : Prog} {m m' : Mem} (h : MemCodes P m) (hst : m'.st =
 
 /-- A3.5b: a block whose payload's packages name code of their signature. -/
 theorem BlkCodes.upd {P : Prog} {B : Nat → Option Blk} (h : BlkCodes P B) {k : Nat} {bl : Blk}
-    (hbl : PkgOK P bl.tree ∧ PkgOK P bl.rd)
-    -- (Agora #610: a block that is not `dead` has nothing more to check)
-    (hd : ∀ f u o, bl = ⟨.dtor f u, .dead, o⟩ → DropFnOK P f u := by intro _ _ _ h; cases h) :
-    BlkCodes P (upd B k (some bl)) := by
-  refine ⟨fun k' bl' hk' => ?_, fun k' f u o hk' => ?_⟩
-  · by_cases hkk : k' = k
-    · subst hkk; rw [upd_same] at hk'; cases hk'; exact hbl
-    · rw [upd_ne _ _ hkk] at hk'; exact h.1 k' bl' hk'
-  · by_cases hkk : k' = k
-    · subst hkk; rw [upd_same] at hk'; cases hk'; exact hd f u o rfl
-    · rw [upd_ne _ _ hkk] at hk'; exact h.2 k' f u o hk'
-
-/-- Agora #610: ... a `dead` block's: it owns its payload, and no one reads it. -/
-theorem blkCodes_dead {P : Prog} {t : Ty} {p : Option Val} (hp : ∀ v, p = some v → PkgOK P v) :
-    PkgOK P (Blk.tree ⟨t, .dead, p⟩) ∧ PkgOK P (Blk.rd ⟨t, .dead, p⟩) := by
-  refine ⟨?_, pkgOK_int P 0⟩
-  cases p with
-  | none => exact pkgOK_int P 0
-  | some v => exact hp v rfl
+    (hbl : PkgOK P bl.tree ∧ PkgOK P bl.rd) : BlkCodes P (upd B k (some bl)) := by
+  intro k' bl' hk'
+  by_cases hkk : k' = k
+  · subst hkk; rw [upd_same] at hk'; cases hk'; exact hbl
+  · rw [upd_ne _ _ hkk] at hk'; exact h k' bl' hk'
 
 /-- ... a lock block's: it owns its payload, and its holders read nothing. -/
 theorem blkCodes_lock {P : Prog} {t : Ty} {p : Option Val} (hp : ∀ v, p = some v → PkgOK P v) :
@@ -329,7 +312,7 @@ theorem EvalR.codes {P : Prog} {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (he :
   | @chanSend _ _ _ k _ u c d es _ _ _ h1 hk _ _ _ =>
     -- A3.4: the queue's elements, and the value sent
     obtain ⟨hv, hm1⟩ := h1.codes h
-    have hp : PkgOK P (.pair (.node u c d es) (.int 0)) := (hm1.blk.1 _ _ hk).1
+    have hp : PkgOK P (.pair (.node u c d es) (.int 0)) := (hm1.blk _ _ hk).1
     refine ⟨pkgOK_int P _, hm1.withBlk rfl (hm1.blk.upd (blkCodes_lock fun _ e => ?_))⟩
     cases e
     refine pkgOK_of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
@@ -496,14 +479,6 @@ theorem codes_step {P : Prog} (hPc : ProgCodes P) {m : Mem} {s : Stmt} {r : Res}
     intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     refine ⟨MemCodes.set ?_ (fun V e => by cases e; exact (hB _ _ hk).1), hs⟩
     exact hm.withBlk rfl (hm.blk.upd (blkCodes_lock fun _ e => by cases e))
-  | @reap r0 k0 f u p _ hk _ =>
-    -- Agora #610: the payload moved out, with its packages, goes to the fresh
-    -- binding; the block stays a `dead` block of its type
-    intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
-    refine ⟨MemCodes.withBlk (m := m.set m.nv ⟨true, some p⟩)
-      (MemCodes.set hm (fun V e => by cases e; exact (hB _ _ hk).1)) rfl
-      (hm.blk.upd (blkCodes_dead fun _ e => by cases e)
-        (fun f' u' o e => by cases e; exact hm.dead k0 f u _ hk)), trivial, hs⟩
   | scopeLSkip hrl _ =>
     intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact ⟨hrl.codes hm, trivial⟩

@@ -346,8 +346,6 @@ theorem Step.lifts {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
   | @scopeDPMoved m1 _ _ _ _ hx ih => exact Step.scopeDPMoved (m1 := liftMem a2 m1) ih hx
   -- A3.2: taking a lock and giving it back touch no address
   | withLock ha hk hx hnv => exact ⟨_, GhostRel.refl _, Step.withLock (m := liftMem a2 m) ha hk hx hnv⟩
-  -- Agora #610: so does reaping an orphan
-  | reap hs hk hnc => exact ⟨_, GhostRel.refl _, Step.reap (m := liftMem a2 m) hs hk hnc⟩
   | scopeLIn _ ih =>
     obtain ⟨s'', hg, hs⟩ := ih
     exact ⟨_, GhostRel.scopeL _ _ _ hg, Step.scopeLIn hs⟩

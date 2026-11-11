@@ -61,32 +61,6 @@ theorem GlobsOK.blocksAt {P : Prog} {G : Globs} (hG : GlobsOK P G) : BlocksAt G.
   exact ⟨hG.inv.blocks k bl hk, hkey, hnd, fun i h => (hall i h).2.1, fun i h => (hall i h).2.2.2,
     fun hv => hG.inv.heap.views k bl hk hv⟩
 
-/-- Agora #610: no block the globals' `make`s left is `dead`: each is reached
-    from a global (`GlobsOK.reach`), and nothing reaches an orphan
-    (`Reached.not_dead`). -/
-theorem GlobsOK.noDead {P : Prog} {G : Globs} (hG : GlobsOK P G) {k : Nat} {bl : Blk}
-    (hk : G.blk k = some bl) : bl.kind ≠ .dead := by
-  have hB : ∀ k bl p, G.blk k = some bl → bl.pay = some p → WFv bl.ty p ∧ SharesIn G.blk bl.ty p :=
-    fun k bl p hk hp => (hG.inv.blocks k bl hk).2.2.1 p hp
-  refine Reached.not_dead (fun v ⟨g, hg⟩ => ?_) hB (hG.reach k bl hk) hk
-  obtain ⟨t, _, _, hfit⟩ := hG.sync g v hg
-  rcases hfit with ⟨u, k', o, rfl, rfl, hk'⟩ | ⟨u, k', p, rfl, rfl, hk'⟩
-  · refine ⟨.lk u, WFv.lk, fun u' k'' p' ha => ?_⟩
-    cases ha
-    exact ⟨o, hk'⟩
-  · have hwp : WFv u p ∧ u.holdsView = false := by
-      rcases hk' with h | h
-      · exact ⟨((hB k' _ p h rfl).1), (hG.inv.blocks k' _ h).2.1⟩
-      · exact ⟨((hB k' _ p h rfl).1), (hG.inv.blocks k' _ h).2.1⟩
-    refine ⟨.arc u, WFv.arc hwp.1 hwp.2, fun u' k'' p' ha => ?_⟩
-    cases ha
-    exact hk'
-
-/-- ... so the blocks' packages name code of their signature, and there is
-    no orphan's destructor to check (`BlkCodes`). -/
-theorem GlobsOK.blkCodes {P : Prog} {G : Globs} (hG : GlobsOK P G) : BlkCodes P G.blk :=
-  ⟨hG.codes, DeadCodes.of_none fun _ _ hk => hG.noDead hk⟩
-
 /-- ... and every address they left live is a payload's. -/
 theorem GlobsOK.alloc {P : Prog} {G : Globs} (hG : GlobsOK P G) (i : Nat) : G.alloc i = true ↔ PayIn G.blk i := by
   constructor
@@ -107,11 +81,10 @@ theorem ThreadOK.start {P : Prog} {s : Stmt} {Δ : Ctx} {nv : Nat}
                  st := fun _ => none, blk := G.blk, gl := G.gl } s := by
   have h0 : ThreadOK P { emptyMem nv with gl := G.gl } s :=
     ⟨fun _ => none, [], Δ, ht, inv_emptyGl G.gl hs hv,
-      ⟨fun _ _ _ _ _ _ _ _ h => (by cases h), fun _ _ _ _ _ _ _ h => (by cases h),
-        fun _ _ _ _ h => (by cases h)⟩, hsc, closed_empty s⟩
+      ⟨fun _ _ _ _ _ _ _ _ h => (by cases h), fun _ _ _ _ _ _ _ h => (by cases h)⟩, hsc, closed_empty s⟩
   exact h0.move (fun _ _ h => by cases h) (fun i hi => .inr (by simpa [union, payPart_iff] using hi))
     (fun i hi => by simp [union, payPart_iff, hi]) (Nat.zero_le _) (fun _ _ h => by cases h) hG.blocksAt
-    hG.blkCodes (fun _ _ _ _ h => by cases h)
+    hG.codes (fun _ _ _ _ h => by cases h)
 
 /-- A2's preservation, one step. -/
 theorem ThreadOK.step {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {m : Mem} {s : Stmt}

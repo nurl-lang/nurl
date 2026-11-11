@@ -1685,14 +1685,13 @@ theorem handCaseD {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c 
     (hcT : CallT P (kill .replace false c Γ) F σ [c] E Γ1)
     (hkT : StmtT P (kill .replace false c (setE Γ1 x E)) F k Δ) (hpx : EndOK Δ x)
     (hcd : MemCodes P m) (hi : Inv m Γ F (.callcE x c j [] k))
-    (hst : Step P m (.callcE x c j [] k) (.ok m' s')) (hnr : ¬ IsReap m (.callcE x c j [] k) m' s') :
+    (hst : Step P m (.callcE x c j [] k) (.ok m' s')) :
     ∃ Γ', StmtT P Γ' F s' (exitScope x Δ) ∧ Inv m' Γ' F s' ∧ m.nv ≤ m'.nv ∧
       Keep Γ Γ' (.callcE x c j [] k) s' ∧ Frz F m m':= by
   obtain ⟨hsp, hvd, hmo, hlc, _, _⟩ := hD
   obtain ⟨fs0, te0, env0, f0, fn0, hslot0, hfs0, hf0, hps, hrt, hro, hl, hr, ho, hnt, hq⟩ :=
     hand_foundD hi.toMInv hcd hc htu hlc hmo hj hσ hsp
   cases hst with
-  | reap hrs hrk _ => exact absurd ⟨_, _, _, _, hrs, hrk, rfl, rfl⟩ hnr
   | callcE hslot hfs hf hmx hns =>
     have e1 := hslot0.symm.trans hslot
     simp only [Option.some.injEq, Slot.mk.injEq, Val.pkg.injEq, true_and] at e1
@@ -1885,14 +1884,13 @@ theorem handProgress {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {x c : Var} {j : N
     outside its new scopes kept. -/
 theorem handCase {P : Prog} (hP : ProgOK P) : HandCase P := by
   intro Γ Γ1 F x c j k Ec E ms q σ sig b Δ m m' s' hk hx hxF hc htu hcan hj hσ hsp0 hsl hsr hso hny hdc hcT hkT
-    hpx hcd hi hst hnr
+    hpx hcd hi hst
   rcases hsp0 with ⟨hsp, htc, _⟩ | hD
   rotate_left
-  · exact handCaseD hP hk hx hxF hc htu hj hσ hD hsl hsr hso hny hdc hcT hkT hpx hcd hi hst hnr
+  · exact handCaseD hP hk hx hxF hc htu hj hσ hD hsl hsr hso hny hdc hcT hkT hpx hcd hi hst
   obtain ⟨hlc, hmo, fs0, te0, env0, f0, fn0, hslot0, hfs0, hf0, hps, hrt, hro, hl, hr, ho, hnt⟩ :=
     hand_found hi.toMInv hcd hc htc hcan hj hσ hsp hcT
   cases hst with
-  | reap hrs hrk _ => exact absurd ⟨_, _, _, _, hrs, hrk, rfl, rfl⟩ hnr
   | callcD hslot hfs hf hmx hsk =>
     -- (Agora #609: the code of an `inout` interface takes the environment `inout`)
     have e1 := hslot0.symm.trans hslot

@@ -617,9 +617,28 @@ deletes the old group branches. The first job of each new group's run
 cancels the queue runs whose branch is gone, so they stop holding
 runners.
 
+**Squashing a branch** (Agora #652). Squash onto the branch's merge-base
+with `main`, never onto `main`'s tip:
+
+```bash
+git fetch origin && git rebase origin/main          # only if you want main's commits under yours
+git reset --soft "$(git merge-base HEAD origin/main)" && git commit
+```
+
+`git reset --soft origin/main && git commit` on a branch that was not
+rebased onto that `origin/main` makes a commit whose tree is older than
+its parent: it takes back every commit `main` gained since the branch
+started, tests included, so every check stays green (github#1746
+reverted github#1741 that way). The job *the change undoes no commit
+already on main* fails such a pull request and lists the commits;
+`python3 tools/check_pr_reverts.py` is the same check before you push. A
+revert you intend carries a line `reverts: <sha or #PR>` in the pull
+request body, one entry per undone commit.
+
 | Job / step | What it checks |
 |---|---|
 | build + bootstrap fixed point + test corpus | `build.sh` on Linux x86_64 — stage1 ≡ stage2 byte-identical IR, then the snapshot test suite |
+| the change undoes no commit already on main | `tools/check_pr_reverts.py`, on a pull request — no commit among `main`'s last 200 is undone with nothing of it kept (a file it added gone again, a file it changed byte-identical to an older `main` version) unless the pull request body says `reverts:`; part of the required check above |
 | soundness hole probes | `tools/fuzz/holes/check.sh` — every soundness probe is rejected or run clean under sanitizers |
 | formal soundness proof (Lean 4) | [`formal.yml`](../.github/workflows/formal.yml), when `formal/` changes: `formal/check.sh` builds the A1, A2 and A3 proofs (`A1.memory_safe`, `A2.memory_safe`, `A2.no_leak_end`, `A3.claim`, `A3.claim_made`) and fails on a `sorry` or an axiom beyond Lean's standard ones |
 | diagnostic coverage, anchor & type-spelling gates | `tools/check_diag_coverage.sh`, `tools/check_diag_anchor.sh` and `tools/check_diag_nurl_types.sh` — every compiler diagnostic is exercised by a test, points at the right token, and names types as NURL spells them (no lowered LLVM types in a golden) |

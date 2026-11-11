@@ -797,7 +797,6 @@ theorem progress {P : Prog}
       | push htk hT hc hd => exact Or.inr <| Or.inr ⟨_, Step.insert hn htk hT hc hd⟩
       | pushRealloc htk hT hc hd => exact Or.inr <| Or.inr ⟨_, Step.insert hn htk hT hc hd⟩
       | waitPanic hw => exact absurd hw (by simp [Waits])
-      | reap _ hk hnc => exact Or.inr <| Or.inr ⟨_, Step.reap rfl hk hnc⟩
   | @free Γ F x E t hx hl hm hty _ _ =>
     intro m hcd hi
     obtain ⟨T, hT, hwf, _⟩ := hi.own_val hx hl (by rw [hm]; rfl)

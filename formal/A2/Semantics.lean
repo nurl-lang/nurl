@@ -68,7 +68,6 @@ def Blk.rd (bl : Blk) : Val :=
   | .arc => bl.tree
   | .lock => .int 0
   | .view => bl.pay.getD (.int 0)
-  | .dead => .int 0   -- Agora #610: no one reads an orphan's payload
 
 /-- A3.3: a view of lock block `k` lives (a read guard of an `RwLocked`): its
     payload is read, so whatever would change it waits (a writer's
@@ -173,11 +172,8 @@ inductive Reached (R : Val → Prop) (B : Nat → Option Blk) : Nat → Prop
     payload left out (no one reads it while it is in).  What `R` reaches
     through these (`Reached R (rdBlk B)`) it reaches through payloads that
     are read, which no step changes; a `recover` frame's store keeps that
-    (`CatchOK`), where a lock's payload may change under it.  Agora #610:
-    so with a `dead` block's, which no one reads either and which
-    `Step.reap` moves out. -/
-def Blk.rdOnly (bl : Blk) : Blk :=
-  if bl.kind = .lock ∨ bl.kind = .dead then { bl with pay := none } else bl
+    (`CatchOK`), where a lock's payload may change under it. -/
+def Blk.rdOnly (bl : Blk) : Blk := if bl.kind = .lock then { bl with pay := none } else bl
 
 def rdBlk (B : Nat → Option Blk) : Nat → Option Blk := fun k => (B k).map Blk.rdOnly
 
@@ -1081,36 +1077,6 @@ def Waits (m : Mem) : Stmt → Prop
   | .letd _ _ r _ => RBlocked m r
   | _ => False
 
-/-- Source code: no run-time forms.  What has not started running yet (a
-    binding's body, the rest of a sequence, a branch, a loop body) is
-    source; run-time forms appear only where execution is. -/
-def Stmt.src : Stmt → Bool
-  | .skip => true
-  | .seq a b => a.src && b.src
-  | .letv _ _ s => s.src
-  | .letcall _ _ _ s => s.src
-  | .assign _ _ => true
-  | .ite _ a b => a.src && b.src
-  | .while _ s => s.src
-  | .push _ _ => true
-  | .free _ => true
-  | .scope _ _ => false
-  | .rbind _ _ => false
-  | .frozen _ _ => false
-  | .panic => true
-  | .letrec _ _ s => s.src
-  | .catchR _ _ _ => false
-  | .unpair _ _ _ s => s.src
-  | .callc _ _ _ _ s => s.src
-  | .letd _ _ _ s => s.src
-  | .scopeD _ _ _ => false
-  | .edit _ _ _ => true
-  | .withLock _ _ s => s.src
-  | .scopeL _ _ _ _ => false
-  | .insert _ _ _ => true
-  | .withElem _ _ _ s => s.src
-  | .callcE _ _ _ _ s => s.src
-
 inductive Step (P : Prog) : Mem → Stmt → Res → Prop
   | seqSkip {m : Mem} {b : Stmt} : Step P m (.seq .skip b) (.ok m b)
   | seqL {m m' : Mem} {a a' b : Stmt} :
@@ -1385,34 +1351,6 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
       wait.) -/
   | scopeLP {m m1 m2 : Mem} {k : Nat} {t : Ty} {x : Var} {s : Stmt} :
       Step P m s (.panic m1) → Release m1 k t x m2 → Step P m (.scopeL k t x s) (.panic m2)
-  /-- Agora #610, the sweep as a step: **reaping an orphan.**  A `dead`
-      block is a block no share is left of whose payload, a destructor
-      value, is still in it.  The payload moves out to a fresh binding of
-      the thread that takes the step, in a destructor frame put before what
-      the thread was about to run (`r`, source code: a redex); the frame's
-      end runs the destructor, as a `letd` binding's does.  The block stays,
-      empty, for the sweep to remove.  The rule's own position is any source
-      statement, so it fires under every frame through the congruence rules
-      (`seqL`, `scopeIn`, …), wherever the thread's next step would.
-      **In this cut nothing makes a block `dead`** (the sweep's marking of
-      the orphans is the next step of Agora #610): no typed run takes this
-      step yet. -/
-  | reap {m : Mem} {r : Stmt} {k f : Nat} {u : Ty} {p : Val} :
-      r.src = true → m.blk k = some ⟨.dtor f u, .dead, some p⟩ →
-      -- (the payload holds no cell share: a typed program meets it, the type
-      -- of a block that is no lock block holds none, `MInv.blocks`; A3's
-      -- confinement of the cells, read off the steps alone, counts the
-      -- slots' shares and the lock blocks')
-      (∀ c, ¬ Sub (.cell c) p) →
-      Step P m r
-        (.ok { (m.set m.nv ⟨true, some p⟩) with
-                nv := m.nv + 1, blk := upd m.blk k (some ⟨.dtor f u, .dead, none⟩) }
-          (.seq (.scopeD m.nv f .skip) r))
-
-/-- Agora #610: an orphan awaits its destructor: some `dead` block still holds
-    its payload, which `Step.reap` may move out.  (In this cut nothing makes a
-    block `dead`, so no typed run has one.) -/
-def Orphan (m : Mem) : Prop := ∃ k f u p, m.blk k = some ⟨.dtor f u, .dead, some p⟩
 
 /-- Reachability: A3.1, every step ends with the sweep, which frees the
     blocks no slot reaches (`Mem.sweep`). -/

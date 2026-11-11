@@ -1631,6 +1631,36 @@ def Stmt.asgMax (x : Var) : Stmt → Nat
   | .callcE _ _ _ _ s => s.asgMax x
   | _ => 0
 
+/-- Source code: no run-time forms.  What has not started running yet (a
+    binding's body, the rest of a sequence, a branch, a loop body) is
+    source; run-time forms appear only where execution is. -/
+def Stmt.src : Stmt → Bool
+  | .skip => true
+  | .seq a b => a.src && b.src
+  | .letv _ _ s => s.src
+  | .letcall _ _ _ s => s.src
+  | .assign _ _ => true
+  | .ite _ a b => a.src && b.src
+  | .while _ s => s.src
+  | .push _ _ => true
+  | .free _ => true
+  | .scope _ _ => false
+  | .rbind _ _ => false
+  | .frozen _ _ => false
+  | .panic => true
+  | .letrec _ _ s => s.src
+  | .catchR _ _ _ => false
+  | .unpair _ _ _ s => s.src
+  | .callc _ _ _ _ s => s.src
+  | .letd _ _ _ s => s.src
+  | .scopeD _ _ _ => false
+  | .edit _ _ _ => true
+  | .withLock _ _ s => s.src
+  | .scopeL _ _ _ _ => false
+  | .insert _ _ _ => true
+  | .withElem _ _ _ s => s.src
+  | .callcE _ _ _ _ s => s.src
+
 /-! ### Functions -/
 
 /-- What a closure a function is handed may change by name, as far as the

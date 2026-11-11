@@ -451,7 +451,7 @@ theorem rhs_arcNew {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {t : Ty} {v : Val}
   have hheap : HeapOK m2 := HeapOK.mono post.inv.heap rfl (fun _ h => h) (Nat.le_succ _) hbo (post.inv.heap.views.fresh hfr (by simp))
   have hB : BlocksIn m2 := fun k bl hk => by
     rcases hcases k bl hk with ⟨rfl, rfl⟩ | ⟨_, h⟩
-    · refine ⟨htok, hvf, fun p hp => ?_, Or.inr hnc, noDead (by simp) hvd⟩
+    · refine ⟨htok, hvf, fun p hp => ?_, Or.inr hnc, hvd⟩
       obtain rfl : v = p := Option.some.inj hp
       exact ⟨pu.wf, pu.sh.grow hb⟩
     · obtain ⟨h1, h2, h3, h4⟩ := post.inv.blocks k bl h
@@ -505,7 +505,7 @@ theorem rhs_lockNew_post {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {t : Ty} {v 
   have hheap : HeapOK m2 := HeapOK.mono post.inv.heap rfl (fun _ h => h) (Nat.le_succ _) hbo (post.inv.heap.views.fresh hfr (by simp))
   have hB : BlocksIn m2 := fun k bl hk => by
     rcases hcases k bl hk with ⟨rfl, rfl⟩ | ⟨_, h⟩
-    · refine ⟨htok, hvf, fun p hp => ?_, Or.inl rfl, noDead (by simp) hvd⟩
+    · refine ⟨htok, hvf, fun p hp => ?_, Or.inl rfl, hvd⟩
       obtain rfl : v = p := Option.some.inj hp
       exact ⟨pu.wf, pu.sh.grow hb⟩
     · obtain ⟨h1, h2, h3, h4⟩ := post.inv.blocks k bl h
@@ -682,118 +682,6 @@ theorem WFv.sub_view {τ : Ty} {T : Val} (hw : WFv τ T) {d o l : Nat} (hs : Sub
         | any => exact ⟨s, ViewIn.pkg h⟩
         | _ => have := h.holdsView; rw [(hq.send rfl).1] at this; cases this
   | dtor _ _ ih => obtain ⟨s, h⟩ := ih hs; exact ⟨s, ViewIn.dtor h⟩
-
-/-- A share a well-formed tree holds is an `ArcIn` of it (a closure's
-    environment holds one only when its class may, `Cross.Fits`). -/
-theorem WFv.sub_share {τ : Ty} {T : Val} (hw : WFv τ T) {k : Nat} {s : Val}
-    (hsh : (∃ p, s = Val.share k p) ∨ s = .cell k) (hs : Sub s T) : ∃ u p, ArcIn τ T u k p := by
-  have hne : ∀ {v : Val}, s = v → (∀ k' p', v ≠ .arc k' p') → (∀ k', v ≠ .lk k') → (∀ k', v ≠ .cell k') →
-      False := by
-    intro v hv h1 h2 h3
-    rcases hsh with ⟨p, h⟩ | h
-    · cases p with
-      | some p => exact h1 k p (hv ▸ h)
-      | none => exact h2 k (hv ▸ h)
-    · exact h3 k (hv ▸ h)
-  induction hw with
-  | int => cases hs; exact (hne rfl (by simp) (by simp) (by simp)).elim
-  | view => cases hs; exact (hne rfl (by simp) (by simp) (by simp)).elim
-  | @arc t k' p' _ _ _ =>
-    cases hs
-    rcases hsh with ⟨p, h⟩ | h
-    · cases p with
-      | some p => cases h; exact ⟨_, _, ArcIn.here⟩
-      | none => cases h
-    · cases h
-  | @lk t k' =>
-    cases hs
-    rcases hsh with ⟨p, h⟩ | h
-    · cases p with
-      | some p => cases h
-      | none => cases h; exact ⟨_, _, ArcIn.lk⟩
-    · cases h
-  | @cell t k' =>
-    cases hs
-    rcases hsh with ⟨p, h⟩ | h
-    · cases p with
-      | some p => cases h
-      | none => cases h
-    · cases h; exact ⟨_, _, ArcIn.cell⟩
-  | node hes ih =>
-    rcases hs.cases' with h | ⟨e, hc, hs'⟩
-    · exact (hne h (by simp) (by simp) (by simp)).elim
-    · cases hc with
-      | elem he => obtain ⟨u, p, h⟩ := ih e he hs'; exact ⟨u, p, ArcIn.child he h⟩
-  | pair _ _ iha ihb =>
-    rcases hs.cases' with h | ⟨e, hc, hs'⟩
-    · exact (hne h (by simp) (by simp) (by simp)).elim
-    · cases hc with
-      | fst => obtain ⟨u, p, h⟩ := iha hs'; exact ⟨u, p, ArcIn.fst h⟩
-      | snd => obtain ⟨u, p, h⟩ := ihb hs'; exact ⟨u, p, ArcIn.snd h⟩
-  | inl _ ih =>
-    rcases hs.cases' with h | ⟨e, hc, hs'⟩
-    · exact (hne h (by simp) (by simp) (by simp)).elim
-    · cases hc with
-      | inl => obtain ⟨u, p, h⟩ := ih hs'; exact ⟨u, p, ArcIn.inl h⟩
-  | inr _ ih =>
-    rcases hs.cases' with h | ⟨e, hc, hs'⟩
-    · exact (hne h (by simp) (by simp) (by simp)).elim
-    · cases hc with
-      | inr => obtain ⟨u, p, h⟩ := ih hs'; exact ⟨u, p, ArcIn.inr h⟩
-  | @pkg fs te ms q _ cs _ hq ih =>
-    rcases hs.cases' with h | ⟨e, hc, hs'⟩
-    · exact (hne h (by simp) (by simp) (by simp)).elim
-    · cases hc with
-      | pkg =>
-        obtain ⟨u, p, h⟩ := ih hs'
-        cases hqs : q.shares with
-        | true => exact ⟨u, p, ArcIn.pkg h hqs⟩
-        | false => have := h.hasArc; rw [hq.2.2.1 hqs] at this; cases this
-  | dtor _ _ ih => obtain ⟨u, p, h⟩ := ih hs; exact ⟨u, p, ArcIn.dtor h⟩
-
-/-- Agora #610: **nothing refers to a `dead` block**: a share a well-formed
-    tree holds names an `arc` block, a view or a lock block (`SharesIn`), and
-    no handle points into a payload no one reads (`Blk.rd`). -/
-theorem Refers.not_dead {B : Nat → Option Blk} {τ : Ty} {v : Val} (hw : WFv τ v) (hsh : SharesIn B τ v)
-    {k : Nat} (hr : Refers B v k) {bl : Blk} (hk : B k = some bl) : bl.kind ≠ .dead := by
-  intro hd
-  rcases hr with hs | ⟨bl', hk', hh⟩
-  · obtain ⟨u, p, ha⟩ : ∃ u p, ArcIn τ v u k p := by
-      rcases hs with ⟨p, hs⟩ | hs
-      · exact hw.sub_share (Or.inl ⟨p, rfl⟩) hs
-      · exact hw.sub_share (Or.inr rfl) hs
-    have hf := hsh u k p ha
-    rw [hk] at hf
-    cases p with
-    | some p => rcases hf with h | h <;> (cases h; cases hd)
-    | none => obtain ⟨o, h⟩ := hf; cases h; cases hd
-  · rw [hk] at hk'; cases hk'
-    obtain ⟨t, kd, p⟩ := bl
-    simp only at hd; subst hd
-    rcases hh with ⟨c, _, hc⟩ | ⟨d, o, l, _, hc⟩ <;> simp [Val.ids] at hc
-
-/-- Agora #610: ... so **no block the roots reach is `dead`**, when the roots
-    and the payloads are well-formed trees whose shares name blocks: an
-    orphan is reached by nothing. -/
-theorem Reached.not_dead {R : Val → Prop} {B : Nat → Option Blk}
-    (hR : ∀ v, R v → ∃ τ, WFv τ v ∧ SharesIn B τ v)
-    (hB : ∀ k bl p, B k = some bl → bl.pay = some p → WFv bl.ty p ∧ SharesIn B bl.ty p)
-    {k : Nat} (h : Reached R B k) {bl : Blk} (hk : B k = some bl) : bl.kind ≠ .dead := by
-  cases h with
-  | root hv hr =>
-    obtain ⟨τ, hw, hsh⟩ := hR _ hv
-    exact Refers.not_dead hw hsh hr hk
-  | @pay _ k' bl' _ hk' hr =>
-    cases hp : bl'.pay with
-    | none =>
-      have hkp : bl'.keeps = .int 0 := by simp [Blk.keeps, hp]
-      rw [hkp] at hr
-      exact Refers.not_dead (τ := .int) WFv.int (fun u k p ha => (ArcIn.not_int ha).elim) hr hk
-    | some p =>
-      have hkp : bl'.keeps = p := by simp [Blk.keeps, hp]
-      rw [hkp] at hr
-      obtain ⟨hw, hsh⟩ := hB k' bl' p hk' hp
-      exact Refers.not_dead hw hsh hr hk
 
 /-- A valid view points into a buffer some owner holds, or (A3.1) into a
     live block's payload, one its holders read (A3.2). -/
@@ -1124,16 +1012,6 @@ theorem BlkLe.setLock {B : Nat → Option Blk} {k : Nat} {t : Ty} {o : Option Va
     exact ⟨⟨t, .lock, o'⟩, by simp [upd], rfl, rfl, fun h => nomatch h⟩
   · exact ⟨bl, by simp [upd, he, hk'], BlkKeep.refl _⟩
 
-/-- Agora #610: a `dead` block is kept when its payload changes (it is moved
-    out to its destructor's frame, `Step.reap`): no one reads it. -/
-theorem BlkLe.setDead {B : Nat → Option Blk} {k : Nat} {t : Ty} {o : Option Val} (h : B k = some ⟨t, .dead, o⟩)
-    (o' : Option Val) : BlkLe B (upd B k (some ⟨t, .dead, o'⟩)) := by
-  intro k' bl hk'
-  by_cases he : k' = k
-  · subst he; rw [h] at hk'; cases hk'
-    exact ⟨⟨t, .dead, o'⟩, by simp [upd], rfl, rfl, fun _ h => nomatch h⟩
-  · exact ⟨bl, by simp [upd, he, hk'], BlkKeep.refl _⟩
-
 /-- A3.4: **an atomic operation**: the word of the integer lock block `k`
     changes, an integer that owns no address before or after; the answer
     is a plain integer. -/
@@ -1165,7 +1043,7 @@ theorem atomic_pres {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {k n n'
     HeapOK.mono hi.heap rfl (fun _ h => h) (Nat.le_refl _) hbo (hi.heap.views.setLock hk hnv _)
   have hB : BlocksIn { m with blk := upd m.blk k (some ⟨.int, .lock, some (.int n')⟩) } := fun k' bl hk' => by
     rcases hcases k' bl hk' with ⟨rfl, rfl⟩ | ⟨_, h⟩
-    · exact ⟨htok, hvf, fun p hp => (by cases hp; exact ⟨.int, SharesOK.of_noArc rfl⟩), Or.inl rfl, noDead (by simp) rfl⟩
+    · exact ⟨htok, hvf, fun p hp => (by cases hp; exact ⟨.int, SharesOK.of_noArc rfl⟩), Or.inl rfl, rfl⟩
     · obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k' bl h
       exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.grow hb⟩, h4⟩
   have hinv : MInv { m with blk := upd m.blk k (some ⟨.int, .lock, some (.int n')⟩) } Γ :=
@@ -1523,81 +1401,6 @@ theorem acquire_pres {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {k : N
       held := NamesIn.nil _ (hwv.names_nil hvf)
       pkgs := hwv.pkgsOK_noView hvf
       shares := fun _ => hshv.grow hb }
-
-/-- Agora #610: a `dead` block's payload may be moved out: no view reads it
-    (a view reads a lock block's). -/
-theorem ViewsAt.setDead {B : Nat → Option Blk} (h : ViewsAt B) {k : Nat} {t : Ty} {o : Option Val}
-    (hk : B k = some ⟨t, .dead, o⟩) (o' : Option Val) :
-    ViewsAt (upd B k (some ⟨t, .dead, o'⟩)) := by
-  intro k' b hk' hv
-  by_cases he : k' = k
-  · subst he; simp at hk'; subst hk'; cases hv
-  · rw [upd_ne _ _ he] at hk'
-    obtain ⟨k0, t0, p, rfl, hk0⟩ := h k' _ hk' hv
-    have hkn : k0 ≠ k := fun e => by subst e; rw [hk] at hk0; cases hk0
-    exact ⟨k0, t0, p, rfl, by rw [upd_ne _ _ hkn]; exact hk0⟩
-
-/-- Agora #610, **reaping an orphan** (`Step.reap`): the `dead` block `k`'s
-    payload `v`, of the destructor type `Ty.dtor f u`, is moved out.  The
-    block keeps no payload (it stays a `dead` block of its type), and `v` is
-    handed over as an owned value of that type that holds nothing (it views
-    nothing), its addresses in no owned tree and in no payload any more
-    (`BlkOwn`): as a lock's payload is checked out (`acquire_pres`). -/
-theorem reap_pres {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {k f : Nat} {u : Ty} {v : Val}
-    (hk : m.blk k = some ⟨.dtor f u, .dead, some v⟩) :
-    RhsPost m { m with blk := upd m.blk k (some ⟨.dtor f u, .dead, none⟩) } Γ Γ F ∧
-    RhsOut { m with blk := upd m.blk k (some ⟨.dtor f u, .dead, none⟩) } Γ
-      ⟨.dtor f u, .own, true, [], [], false, false⟩ v true := by
-  obtain ⟨htok, hvf, hpay, hcell, hdfk⟩ := hi.blocks k _ hk
-  obtain ⟨hwv, hshv⟩ := hpay v rfl
-  have hb : BlkLe m.blk (upd m.blk k (some ⟨.dtor f u, .dead, none⟩)) := BlkLe.setDead hk none
-  obtain ⟨hkey, hnd, hall⟩ := hi.heap.blk k _ hk
-  have hcases : ∀ k' bl, upd m.blk k (some ⟨.dtor f u, .dead, none⟩) k' = some bl →
-      (k' = k ∧ bl = ⟨.dtor f u, .dead, none⟩) ∨ (k' ≠ k ∧ m.blk k' = some bl) := by
-    intro k' bl h
-    by_cases he : k' = k
-    · subst he; simp [upd] at h; exact Or.inl ⟨rfl, h.symm⟩
-    · exact Or.inr ⟨he, by simpa [upd, he] using h⟩
-  have hbo : BlkOwn { m with blk := upd m.blk k (some ⟨.dtor f u, .dead, none⟩) } := by
-    intro k' bl hk'
-    rcases hcases k' bl hk' with ⟨rfl, rfl⟩ | ⟨hne, h⟩
-    · exact ⟨hkey, List.nodup_nil, fun i hi => by simp [Blk.tree] at hi⟩
-    · obtain ⟨hkey', hnd', hall'⟩ := hi.heap.blk k' bl h
-      refine ⟨hkey', hnd', fun i hi' => ?_⟩
-      obtain ⟨ha, hlt, hsl, hoth⟩ := hall' i hi'
-      refine ⟨ha, hlt, hsl, fun k'' bl'' hk'' h'' => ?_⟩
-      rcases hcases k'' bl'' h'' with ⟨rfl, rfl⟩ | ⟨_, h2⟩
-      · simp [Blk.tree]
-      · exact hoth k'' bl'' hk'' h2
-  have hheap : HeapOK { m with blk := upd m.blk k (some ⟨.dtor f u, .dead, none⟩) } :=
-    HeapOK.mono hi.heap rfl (fun _ h => h) (Nat.le_refl _) hbo (hi.heap.views.setDead hk _)
-  have hB : BlocksIn { m with blk := upd m.blk k (some ⟨.dtor f u, .dead, none⟩) } := fun k' bl hk' => by
-    rcases hcases k' bl hk' with ⟨rfl, rfl⟩ | ⟨_, h⟩
-    · exact ⟨htok, hvf, fun p hp => (by cases hp), hcell, hdfk⟩
-    · obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k' bl h
-      exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.grow hb⟩, h4⟩
-  have hinv : MInv { m with blk := upd m.blk k (some ⟨.dtor f u, .dead, none⟩) } Γ :=
-    hi.grow rfl hheap (Nat.le_refl _) hb hB
-  refine ⟨⟨hinv, rfl, Nat.le_refl _, fun _ => rfl, fun _ _ => rfl, fun _ _ h _ => h, fun _ => rfl,
-    fun _ E1 h => ⟨E1, h, rfl, rfl⟩, DKeep.refl _ _, hb⟩, ?_⟩
-  have hti : Ty.dtor f u ≠ .int := by simp
-  exact {
-    own := rfl
-    mode := Or.inl rfl
-    live := rfl
-    tyok := htok
-    wf := fun _ r hr => by simp [roots, Entry.vdeps, Mode.ownSlot] at hr
-    valOwn := fun _ => ⟨Ty.owning_of hti hvf, hwv, ViewsOK.none hvf _ _, hnd,
-      fun i hi => ⟨(hall i hi).1, (hall i hi).2.1⟩, fun x U hU i hi => (hall i hi).2.2.1 x U hU,
-      hwv.selfFree_noView hvf, fun i hi ⟨k', bl, hk', hik⟩ => by
-        rcases hcases k' bl hk' with ⟨rfl, rfl⟩ | ⟨hne, h⟩
-        · simp [Blk.tree] at hik
-        · exact (hall i hi).2.2.2 k' bl hne h hik⟩
-    valBor := fun h => nomatch h
-    names := fun _ => DepsNamed.nil _
-    held := NamesIn.nil _ (hwv.names_nil hvf)
-    pkgs := hwv.pkgsOK_noView hvf
-    shares := fun _ => hshv.grow hb }
 
 /-- A3.3: a read guard's type, `arc (prod (lk t) t)`, is an A2 type that holds
     no view when its lock's is one. -/
@@ -3001,7 +2804,6 @@ theorem Step.blk {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) : 
   | seqL _ ih | seqP _ ih | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | frozenP _ ih | catchIn _ ih
     | scopeDIn _ ih | scopeLIn _ ih => exact ih
   | withLock _ hk _ => exact BlkLe.setLock hk _
-  | reap _ hk _ => exact BlkLe.setDead hk _
   | scopeLSkip hr => exact hr.blk
   | scopeLP _ hr ih => exact ih.trans hr.blk
   | scopeP _ _ _ ih | rbindP _ _ ih | catchP _ _ ih | scopeDP _ _ _ ih | scopeDPDrain _ _ ih
@@ -3209,13 +3011,6 @@ theorem Step.leafKeep {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
     · subst he; rw [hk0] at hk; cases hk
       exact .inr ⟨v, ⟨x, v.owns, by simp [Mem.set, upd]⟩, by simpa using hs⟩
     · exact .inl ⟨bl, by show upd m.blk k0 _ k = some bl; rw [upd_ne _ _ he]; exact hk, hs⟩
-  | @reap r0 k0 f u p _ hk0 _ =>
-    -- Agora #610: the reaped payload is in the fresh binding
-    intro k bl hk w hw hs
-    by_cases he : k = k0
-    · subst he; rw [hk0] at hk; cases hk
-      exact .inr ⟨p, ⟨m.nv, true, by simp [Mem.set, upd]⟩, by simpa using hs⟩
-    · exact .inl ⟨bl, by show upd m.blk k0 _ k = some bl; rw [upd_ne _ _ he]; exact hk, hs⟩
   | letcall _ _ hb =>
     intro k bl hk w hw hs
     exact .inl ⟨bl, by rw [← BindParams.blk hb] at hk; exact hk, hs⟩
@@ -3227,92 +3022,5 @@ theorem Step.leafKeep {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
     intro k bl hk w hw hs
     exact .inl ⟨bl, by rw [← TakeVal.blk ht] at hk; exact hk, hs⟩
   | _ => intro k bl hk w hw hs; exact .inl ⟨bl, hk, hs⟩
-
-/-! ### Agora #610: in this cut nothing makes a block `dead`
-
-No rule makes a `dead` block: a right-hand side adds `arc`, lock and view
-blocks, a step changes a lock block's payload (or, `Step.reap`, a `dead`
-block's), and the sweep only removes blocks.  So a store with no `dead`
-block steps to stores with none, and `Step.reap`, which needs one, is not
-taken.  (The sweep's marking of the orphans is the next step of Agora #610;
-this section goes with it.) -/
-
-/-- No block of the store is `dead`. -/
-def NoDead (m : Mem) : Prop := ∀ k bl, m.blk k = some bl → bl.kind ≠ .dead
-
-theorem NoDead.of_blk {m m' : Mem} (h : NoDead m) (hb : m'.blk = m.blk) : NoDead m' :=
-  fun k bl hk => h k bl (by rw [← hb]; exact hk)
-
-theorem NoDead.upd {m : Mem} (h : NoDead m) {B : Nat → Option Blk} {k0 : Nat} {b : Blk} (hb : b.kind ≠ .dead)
-    (hB : B = upd m.blk k0 (some b)) {m' : Mem} (hm : m'.blk = B) : NoDead m' := by
-  intro k bl hk
-  rw [hm, hB] at hk
-  by_cases he : k = k0
-  · subst he; simp at hk; subst hk; exact hb
-  · rw [upd_ne _ _ he] at hk; exact h k bl hk
-
-/-- With no `dead` block no orphan awaits its destructor. -/
-theorem NoDead.noOrphan {m : Mem} (h : NoDead m) : ¬ Orphan m :=
-  fun ⟨k, _, _, _, hk⟩ => h k _ hk rfl
-
-theorem EvalR.noDead {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.ok v o m'))
-    (hn : NoDead m) : NoDead m' := by
-  cases h
-  case pair h1 h2 => exact hn.of_blk ((TakeVal.blk h2).trans (TakeVal.blk h1))
-  case chanSendClosed h1 _ _ _ => exact (hn.of_blk (TakeVal.blk h1)).of_blk rfl
-  all_goals first
-    | exact hn
-    | exact hn.of_blk rfl
-    | exact hn.upd (by simp) rfl rfl
-    | (rename_i h1; exact hn.of_blk (TakeVal.blk h1))
-    | (rename_i h1 _; exact hn.of_blk (TakeVal.blk h1))
-    | (rename_i h1 _ _; exact hn.of_blk (TakeVal.blk h1))
-    | (rename_i h1 _ _ _; exact hn.of_blk (TakeVal.blk h1))
-    | (rename_i m1 _ _ _ _ _ _ _; exact (hn.of_blk (m' := m1) (TakeVal.blk (by assumption))).upd (by simp) rfl rfl)
-    | (rename_i m1 _ _ _ _ _ _ ; exact (hn.of_blk (m' := m1) (TakeVal.blk (by assumption))).upd (by simp) rfl rfl)
-    | (rename_i m1 _ _ _ _ _ ; exact (hn.of_blk (m' := m1) (TakeVal.blk (by assumption))).upd (by simp) rfl rfl)
-    | (rename_i m1 _ _ _ _ ; exact (hn.of_blk (m' := m1) (TakeVal.blk (by assumption))).upd (by simp) rfl rfl)
-    | (rename_i m1 _ _ _ ; exact (hn.of_blk (m' := m1) (TakeVal.blk (by assumption))).upd (by simp) rfl rfl)
-    | (rename_i m1 _ _ ; exact (hn.of_blk (m' := m1) (TakeVal.blk (by assumption))).upd (by simp) rfl rfl)
-    | (rename_i m1 _ ; exact (hn.of_blk (m' := m1) (TakeVal.blk (by assumption))).upd (by simp) rfl rfl)
-
-theorem Release.noDead {m m' : Mem} {k : Nat} {t : Ty} {x : Var} (h : Release m k t x m') (hn : NoDead m) :
-    NoDead m' := by
-  cases h with
-  | put _ _ _ => exact hn.upd (b := ⟨t, .lock, _⟩) (by simp) rfl rfl
-  | drop _ _ _ => exact hn.of_blk rfl
-
-/-- **No step makes a block `dead`.** -/
-theorem Step.noDead {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) :
-    NoDead m → NoDead r.mem := by
-  induction h with
-  | seqL _ ih | seqP _ ih | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | frozenP _ ih | catchIn _ ih
-    | scopeDIn _ ih | scopeLIn _ ih => exact ih
-  | scopeP _ _ _ ih | rbindP _ _ ih | catchP _ _ ih | scopeDP _ _ _ ih | scopeDPDrain _ _ ih
-    | scopeDPMoved _ _ ih => exact fun hn => (ih hn).of_blk rfl
-  | scopeLP _ hr ih => exact fun hn => hr.noDead (ih hn)
-  | scopeLSkip hr => exact fun hn => hr.noDead hn
-  | withLock _ _ _ => exact fun hn => hn.upd (b := ⟨_, .lock, none⟩) (by simp) rfl rfl
-  | reap _ hk _ => exact fun hn => absurd rfl (hn _ _ hk)
-  | letv _ he | letd _ he | assign _ he _ _ => exact fun hn => (he.noDead hn).of_blk rfl
-  | letcall _ _ hb => exact fun hn => (hn.of_blk (BindParams.blk hb)).of_blk rfl
-  | @callc m1 _ _ _ _ _ _ _ _ _ env _ _ _ _ _ _ _ hb =>
-    exact fun hn => ((hn.of_blk (m' := envMem m env) rfl).of_blk (BindParams.blk hb)).of_blk rfl
-  | push ht _ _ _ | pushRealloc ht _ _ _ | insert _ ht _ _ _ | editPush ht _ _ | editPushRealloc ht _ _
-    | editSet _ _ ht _ _ _ | editSetOOB _ ht _ _ _ => exact fun hn => (hn.of_blk (TakeVal.blk ht)).of_blk rfl
-  | _ => exact fun hn => hn.of_blk rfl
-
-/-- The sweep makes none either: it only removes blocks. -/
-theorem NoDead.sweep {m : Mem} (h : NoDead m) : NoDead m.sweep :=
-  fun k bl hk => h k bl (Mem.sweep_blk.mp hk).1
-
-/-- **A run from a store with no `dead` block has none**, at its every
-    store: so (in this cut) no step of it is `Step.reap`'s. -/
-theorem Steps.noDead {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Steps P m s r) (hn : NoDead m) :
-    NoDead r.mem := by
-  induction h with
-  | refl => exact hn
-  | step hst _ ih => exact ih (hst.noDead hn).sweep
-  | panic hst => exact (hst.noDead hn).sweep
 
 end A2

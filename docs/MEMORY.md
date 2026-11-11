@@ -2012,13 +2012,7 @@ handle is not (h338, h339). A closure several threads run may not change
 what it captured, either, unless that synchronises itself: a handler
 that pushes to a `Vec` it captured grows one environment from every
 worker at once (h342); it counts in an `Atomic` or keeps the list in a
-`Locked`. Giving a capture away is such a change, whatever the capture's
-type: a body that hands a value it captured to a `sink`, or to a callee
-that takes it over, can run once, and its environment marks the value
-taken with a plain flag that two threads would read together, so the
-closure is refused where several threads may run it (agora #648). A
-thread's own closure, which one thread runs once, may give its captures
-away. Share handles used on both sides are the ones asserted
+`Locked`. Share handles used on both sides are the ones asserted
 `% Sync` — `Channel`, `Mutex`, `Arc`, `Locked`, `RwLocked`, `Atomic`,
 `PFile`, `Pool`, and the handles servers share (`TcpListener`,
 `HttpServer`, `QuicServer`, `H3Server`, a router's `Route`, a cluster's

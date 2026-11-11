@@ -43,30 +43,21 @@ def SharesOK (m : Mem) (τ : Ty) (T : Val) : Prop := SharesIn m.blk τ T
 
 /-- A3.2: what a later store keeps of a block, as its holders see it: an
     `arc` block as it was, a `lock` block as a lock block of the same type
-    (its payload, which no one reads, may have been checked out or back in).
-    Agora #610: a `dead` block as a dead block of the same type (its
-    payload, which no one reads either, may have been moved out to its
-    destructor's frame, `Step.reap`). -/
-def BlkKeep (bl bl' : Blk) : Prop :=
-  bl'.ty = bl.ty ∧ bl'.kind = bl.kind ∧ (bl.kind ≠ .lock → bl.kind ≠ .dead → bl' = bl)
+    (its payload, which no one reads, may have been checked out or back in). -/
+def BlkKeep (bl bl' : Blk) : Prop := bl'.ty = bl.ty ∧ bl'.kind = bl.kind ∧ (bl.kind ≠ .lock → bl' = bl)
 
-theorem BlkKeep.refl (bl : Blk) : BlkKeep bl bl := ⟨rfl, rfl, fun _ _ => rfl⟩
+theorem BlkKeep.refl (bl : Blk) : BlkKeep bl bl := ⟨rfl, rfl, fun _ => rfl⟩
 
 theorem BlkKeep.trans {b1 b2 b3 : Blk} (h1 : BlkKeep b1 b2) (h2 : BlkKeep b2 b3) : BlkKeep b1 b3 :=
-  ⟨h2.1.trans h1.1, h2.2.1.trans h1.2.1, fun h h' =>
-    (h2.2.2 (by rw [h1.2.1]; exact h) (by rw [h1.2.1]; exact h')).trans (h1.2.2 h h')⟩
+  ⟨h2.1.trans h1.1, h2.2.1.trans h1.2.1, fun h => (h2.2.2 (by rw [h1.2.1]; exact h)).trans (h1.2.2 h)⟩
 
 /-- What a kept block's holders read is what they read before. -/
 theorem BlkKeep.rd {bl bl' : Blk} (h : BlkKeep bl bl') : bl'.rd = bl.rd := by
   obtain ⟨_, hk, ha⟩ := h
   cases hkd : bl.kind with
-  | arc => rw [ha (by rw [hkd]; simp) (by rw [hkd]; simp)]
-  | view => rw [ha (by rw [hkd]; simp) (by rw [hkd]; simp)]
+  | arc => rw [ha (by rw [hkd]; simp)]
+  | view => rw [ha (by rw [hkd]; simp)]
   | lock =>
-    rw [hkd] at hk
-    obtain ⟨t, k, p⟩ := bl; obtain ⟨t', k', p'⟩ := bl'
-    simp only at hk hkd; subst hk; subst hkd; rfl
-  | dead =>
     rw [hkd] at hk
     obtain ⟨t, k, p⟩ := bl; obtain ⟨t', k', p'⟩ := bl'
     simp only at hk hkd; subst hk; subst hkd; rfl
@@ -102,13 +93,13 @@ theorem BlkLe.fresh {B : Nat → Option Blk} {n : Nat} (h : B n = none) (b : Blk
 theorem BlkLe.arc {B B' : Nat → Option Blk} (hb : BlkLe B B') {k : Nat} {t : Ty} {p : Option Val}
     (h : B k = some ⟨t, .arc, p⟩) : B' k = some ⟨t, .arc, p⟩ := by
   obtain ⟨bl', h', hk⟩ := hb k _ h
-  rw [h', hk.2.2 (by simp) (by simp)]
+  rw [h', hk.2.2 (by simp)]
 
 /-- ... (A3.3) and so is a view ... -/
 theorem BlkLe.view {B B' : Nat → Option Blk} (hb : BlkLe B B') {k : Nat} {t : Ty} {p : Option Val}
     (h : B k = some ⟨t, .view, p⟩) : B' k = some ⟨t, .view, p⟩ := by
   obtain ⟨bl', h', hk⟩ := hb k _ h
-  rw [h', hk.2.2 (by simp) (by simp)]
+  rw [h', hk.2.2 (by simp)]
 
 theorem ArcBlk.grow {B B' : Nat → Option Blk} (hb : BlkLe B B') {k : Nat} {t : Ty} {p : Val}
     (h : ArcBlk (B k) t p) : ArcBlk (B' k) t p := by
@@ -891,21 +882,8 @@ structure MInv (m : Mem) (Γ : Ctx) : Prop where
                 (∀ p, bl.pay = some p → WFv bl.ty p ∧ SharesOK m bl.ty p) ∧
                 (bl.kind = .lock ∨ bl.ty.hasCell = false) ∧
                 -- A2-drop.3d: a block's payload owns no destructor value
-                -- (the sweep that frees a block runs no code), unless the
-                -- block is `dead` (Agora #610)
-                (bl.kind ≠ .dead → bl.ty.dtorFree = true) ∧
-                -- Agora #610: a `dead` block (an orphan whose payload awaits
-                -- its destructor) is of a destructor type that holds no
-                -- closure: what a destructor frame's binding may be
-                -- (`StmtT.scopeD`), so `Step.reap` can hand its payload to
-                -- one.  With the clauses above: the payload is a well-formed
-                -- value of that type, holds no views, and its shares name
-                -- live blocks.  (That its destructor is one the program
-                -- checked is `MemCodes`'s, which knows the program.)  In this
-                -- cut nothing makes a block `dead` (the sweep's marking is
-                -- the next step of Agora #610), so the clause is vacuous on
-                -- every typed run.
-                (bl.kind = .dead → ∃ f u, bl.ty = .dtor f u ∧ u.hasFn = false)
+                -- (the sweep that frees a block runs no code)
+                bl.ty.dtorFree = true
 
 /-- The invariant of a configuration running `s` in context `Γ`, with `F`
     lent out. -/
@@ -1601,38 +1579,14 @@ def Implements (P : Prog) (f : Nat) (te : Ty) (cs : List (Var × PMode × Ty)) (
 def CodeOK (P : Prog) (fs : List Nat) (te : Ty) (ms : List Nat) (cs : List (Var × PMode × Ty)) : Prop :=
   fs.length = ms.length ∧ ∀ (j f σ : Nat), fs[j]? = some f → ms[j]? = some σ → Implements P f te cs σ
 
-/-- Agora #610: the destructor of a `dead` block's type is one the program
-    checked: a destructor that takes the value lent, or a glue (`DropFnOK`). -/
-def DeadCodes (P : Prog) (B : Nat → Option Blk) : Prop :=
-  ∀ k f u o, B k = some ⟨.dtor f u, .dead, o⟩ → DropFnOK P f u
-
-/-- No block is `dead`: nothing to check. -/
-theorem DeadCodes.of_none {P : Prog} {B : Nat → Option Blk} (h : ∀ k bl, B k = some bl → bl.kind ≠ .dead) :
-    DeadCodes P B := fun k _ _ _ hk => absurd rfl (h k _ hk)
-
-/-- The check reads the blocks' kinds and types only. -/
-theorem DeadCodes.of_kinds {P : Prog} {B B' : Nat → Option Blk} (h : DeadCodes P B)
-    (hb : ∀ k bl', B' k = some bl' → bl'.kind = .dead → ∃ bl, B k = some bl ∧ bl.ty = bl'.ty ∧ bl.kind = .dead) :
-    DeadCodes P B' := fun k f u o hk => by
-  obtain ⟨⟨t, kd, o'⟩, h1, h2, h3⟩ := hb k _ hk rfl
-  simp only at h2 h3; subst h2 h3
-  exact h k f u o' h1
-
 /-- Every package in memory names code that implements its interfaces: the
     ones the slots hold, and (A3.5b) the ones the blocks hold, which may be
     closures (a Sync one in an `Arc`'s payload, a Send one in a lock's or a
     channel's), in what a block owns and in what its holders read. -/
 def MemCodes (P : Prog) (m : Mem) : Prop :=
   (∀ x o V fs te ms e cs, m.st x = some ⟨o, some V⟩ → Sub (.pkg fs te ms e cs) V → CodeOK P fs te ms cs) ∧
-  (∀ k bl fs te ms e cs, m.blk k = some bl →
-    (Sub (.pkg fs te ms e cs) bl.tree ∨ Sub (.pkg fs te ms e cs) bl.rd) → CodeOK P fs te ms cs) ∧
-  -- Agora #610: and the destructor of every `dead` block's type is one the
-  -- program checked (`DropFnOK`, what `StmtT.scopeD` asks of a destructor
-  -- frame's): `Step.reap` hands the payload to a frame that runs it.  (In
-  -- this cut nothing makes a block `dead`.)
-  DeadCodes P m.blk
-
-theorem MemCodes.dead {P : Prog} {m : Mem} (h : MemCodes P m) : DeadCodes P m.blk := h.2.2
+  ∀ k bl fs te ms e cs, m.blk k = some bl →
+    (Sub (.pkg fs te ms e cs) bl.tree ∨ Sub (.pkg fs te ms e cs) bl.rd) → CodeOK P fs te ms cs
 
 def Rhs.codeOK (P : Prog) : Rhs → Prop
   | .pack fs te ms _ cs => CodeOK P fs te ms cs

@@ -508,9 +508,8 @@ theorem callH_of {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {x : Var} 
 
 /-- The call case of preservation. -/
 theorem callCase {P : Prog} (hP : ProgOK P) : CallCase P := by
-  intro Γ F x f args k E Γ1 Δ m m' s' hk hx hxF hc hkT hpx hi hst hnr
+  intro Γ F x f args k E Γ1 Δ m m' s' hk hx hxF hc hkT hpx hi hst
   cases hst with
-  | reap hrs hrk _ => exact absurd ⟨_, _, _, _, hrs, hrk, rfl, rfl⟩ hnr
   | letcall hf hmx hb =>
     rename_i m1 fn
     obtain ⟨fn', hf', hlen, hargs, hnf, hds, rfl, rfl, hg⟩ := hc
@@ -541,9 +540,8 @@ theorem CallH.widen {P : Prog} {Γ : Ctx} {F : List Var} {x : Var} {fn : Fn} {ba
 
 /-- The `recover` case of preservation. -/
 theorem recCase {P : Prog} (hP : ProgOK P) : RecCase P := by
-  intro Γ F x f k E fn Γ1 Δ m m' s' hk hx hxF hf hp hty ho hc hkT hpx hi hst hnr
+  intro Γ F x f k E fn Γ1 Δ m m' s' hk hx hxF hf hp hty ho hc hkT hpx hi hst
   cases hst with
-  | reap hrs hrk _ => exact absurd ⟨_, _, _, _, hrs, hrk, rfl, rfl⟩ hnr
   | letrec hf' _ hmx =>
     rename_i fn'
     rw [hf] at hf'; cases hf'

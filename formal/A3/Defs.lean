@@ -2811,16 +2811,13 @@ theorem lockRestore_kept {m m1 : Mem} {a y : Var} {v : Val} (ht : TakeVal m y v 
     kept outside, the end is a panic in the scope, the store as it was (the
     unwinding then drops `x`, the lock left held). -/
 theorem scopeL_end {P : Prog} {m : Mem} {k : Nat} {t : Ty} {x : Var} {r : Res}
-    (h : Step P m (.scopeL k t x .skip) r)
-    -- (Agora #610: with no orphan to reap first; no typed run has one in this cut)
-    (hno : ¬ Orphan m) :
+    (h : Step P m (.scopeL k t x .skip) r) :
     (∃ m', r = .ok m' .skip ∧ Release m k t x m' ∧ ∀ sl, m.st x = some sl → GiveCheck m x sl) ∨
       (r = .ok m (.scopeL k t x .panic) ∧ ∃ sl, m.st x = some sl ∧ ¬ GiveCheck m x sl) := by
   cases h with
-  | reap hrs _ _ => cases hrs
   | scopeLSkip hrl hck => exact .inl ⟨_, rfl, hrl, hck⟩
   | scopeLFail hx hck => exact .inr ⟨rfl, _, hx, hck⟩
-  | scopeLIn hs => cases hs with | reap _ hk _ => exact absurd ⟨_, _, _, _, hk⟩ hno
+  | scopeLIn hs => cases hs
   | scopeLP hs _ => cases hs with | waitPanic hw => cases hw
   | waitPanic hw => cases hw
 
@@ -3211,7 +3208,7 @@ structure GlobsOK (P : Prog) (G : Globs) : Prop where
   inv   : MInv (G.mem 0) (fun _ => none)
   cover : Covers (G.mem 0)
   reach : ∀ k bl, G.blk k = some bl → Reached (fun v => ∃ g, G.gl g = some v) G.blk k
-  codes : ∀ k bl, G.blk k = some bl → PkgOK P bl.tree ∧ PkgOK P bl.rd
+  codes : BlkCodes P G.blk
   cells : ∀ k k1 k2, LockHolds G.blk k1 k → LockHolds G.blk k2 k → k1 = k2 ∧ k < G.nid
 
 /-- **The A3.0 claim**, for A2 plus `spawn`: a program A2 types, whose

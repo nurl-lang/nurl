@@ -759,23 +759,13 @@ inductive BKind where
       which it owns none of; its holders read it, frozen, while the view
       lives.  A writer waits until no view of the block is left. -/
   | view
-  /-- Agora #610: an orphan whose payload awaits its destructor.  The block
-      has no share left; its payload, a destructor value, is still in it
-      (the block owns it, `Blk.tree`, and it keeps the blocks it reaches,
-      `Blk.keeps`), and no one reads it (`Blk.rd`), as no one reads a lock
-      block's.  `Step.reap` moves the payload out to a destructor frame of
-      the thread that takes the step, and leaves the block empty.  **In
-      this cut nothing makes a block `dead`** (marking the orphans is the
-      sweep's, the next step of Agora #610), so no typed run has one. -/
-  | dead
 deriving DecidableEq, Repr
 
 /-- A shared block: its kind, and its payload, a tree of type `ty`.  How
     many shares it has is the number of leaves naming it (ghost, so nothing
     stores it).  The payload's addresses are the block's (`BlkOwn`).  An
     `arc` block's payload is always there and never changes; a `lock`
-    block's is `none` while a thread has it checked out; a `dead` block's
-    (Agora #610) is there until `Step.reap` moves it out.  No step removes a
+    block's is `none` while a thread has it checked out.  No step removes a
     block (`arcNew` adds one, `BlkLe`); the sweep at a step's end removes
     those nothing reaches and frees their payloads (`Mem.sweep`). -/
 structure Blk where

@@ -1,5 +1,0 @@
-COMPILE FAIL
-ERRORS
-compiler/tests/diag_sync_closure_gives_capture_away.nu:32:5: error: 'arc_new' keeps this value inside the '( Arc Holder )' it returns, a handle shared across threads, where several threads may run the closure at once, but the closure built on line 27 gives 'a' away when it runs (its body hands it over to a callee, a container or a value that takes it): the closure can run once, and two threads running it at once would both take the one value, which is then released twice. Give each thread a value of its own (a closure built for each thread, over its own copy), or keep the value outside the shared closure and let the closure read it.
-    : ( Arc Holder ) shared ( arc_new [Holder] hd )
-    ^

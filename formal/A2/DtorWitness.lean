@@ -44,13 +44,10 @@ Two kinds of fact, both checked here (`check.sh` prints their axioms):
 
 namespace A2.Dtor
 
-/-- `skip` has no step, when no orphan awaits its destructor (Agora #610:
-    `Step.reap` fires from any source statement, `skip` too; in this cut
-    nothing makes a block `dead`, so no typed run has an orphan). -/
-theorem skip_no_step {P : Prog} {m : Mem} {r : Res} (hno : ¬ Orphan m) (h : Step P m .skip r) : False := by
+/-- `skip` has no step. -/
+theorem skip_no_step {P : Prog} {m : Mem} {r : Res} (h : Step P m .skip r) : False := by
   cases h with
   | waitPanic hw => exact hw
-  | reap _ hk _ => exact hno ⟨_, _, _, _, hk⟩
 
 /-- A typed `letv` binds no owned value of a destructor type (nor of a struct
     or an enum holding one). (In the context its rule was applied in, under
@@ -291,9 +288,7 @@ theorem result_frame_is_scopeD (fn : Fn) (args : List Var) (base : Nat) (x : Var
     and `scope x` ends a binding that is moved out. -/
 theorem scopeD_end_runs_dtor {P : Prog} {Γ Δ : Ctx} {F : List Var} {x : Var} {f : Nat}
     {m : Mem} {v : Val} (ht : StmtT P Γ F (.scopeD x f .skip) Δ)
-    (hx : m.st x = some ⟨true, some v⟩) (hv : v.isNode = false)
-    -- (Agora #610: with no orphan to reap first; no typed run has one in this cut)
-    (hno : ¬ Orphan m) :
+    (hx : m.st x = some ⟨true, some v⟩) (hv : v.isNode = false) :
     (∃ t, DropFnOK P f t) ∧
       Step P m (.scopeD x f .skip) (.ok { m with nv := m.nv + 1 } (.scope x (.letcall m.nv f [x] .skip))) ∧
       ∀ r, Step P m (.scopeD x f .skip) r →
@@ -308,15 +303,14 @@ theorem scopeD_end_runs_dtor {P : Prog} {Γ Δ : Ctx} {F : List Var} {x : Var} {
     | sub _ _ _ ih => exact ih hst
     | _ => cases hst
   · cases h with
-    | reap hrs _ _ => cases hrs
-    | scopeDIn hs => exact (skip_no_step hno hs).elim
+    | scopeDIn hs => exact (skip_no_step hs).elim
     | scopeDEnd _ _ => rfl
     | scopeDMoved hm => rw [hx] at hm; cases hm
     | scopeDDrain h => rw [hx] at h; cases h; cases hv
     | scopeDEmpty h => rw [hx] at h; cases h; cases hv
-    | scopeDP hs _ _ => exact (skip_no_step hno hs).elim
-    | scopeDPDrain hs _ => exact (skip_no_step hno hs).elim
-    | scopeDPMoved hs _ => exact (skip_no_step hno hs).elim
+    | scopeDP hs _ _ => exact (skip_no_step hs).elim
+    | scopeDPDrain hs _ => exact (skip_no_step hs).elim
+    | scopeDPMoved hs _ => exact (skip_no_step hs).elim
     | waitPanic hw => exact hw.elim
 
 /-- …and on the panic path: a panic out of the body with `x` still owning
@@ -332,24 +326,21 @@ theorem scopeD_panic_runs_dtor {P : Prog} {x : Var} {f : Nat} {m m1 : Mem} {s : 
     the frame's one step hands element 0 to a fresh destructor binding
     (`vec_remove x 0`), under the same frame ... -/
 theorem scopeD_end_drains {P : Prog} {x : Var} {f : Nat} {m : Mem} {t : Ty} {c d : Nat} {e : Val}
-    {es : List Val} (hx : m.st x = some ⟨true, some (.node t c d (e :: es))⟩)
-    -- (Agora #610: with no orphan to reap first; no typed run has one in this cut)
-    (hno : ¬ Orphan m) :
+    {es : List Val} (hx : m.st x = some ⟨true, some (.node t c d (e :: es))⟩) :
     Step P m (.scopeD x f .skip)
         (.ok { m with nv := m.nv + 1 } (.scopeD x f (.letd m.nv f (.popFront x) .skip))) ∧
       ∀ r, Step P m (.scopeD x f .skip) r →
         r = .ok { m with nv := m.nv + 1 } (.scopeD x f (.letd m.nv f (.popFront x) .skip)) := by
   refine ⟨Step.scopeDDrain hx, fun r h => ?_⟩
   cases h with
-  | reap hrs _ _ => cases hrs
-  | scopeDIn hs => exact (skip_no_step hno hs).elim
+  | scopeDIn hs => exact (skip_no_step hs).elim
   | scopeDEnd h hv => rw [hx] at h; cases h; cases hv
   | scopeDMoved hm => rw [hx] at hm; cases hm
   | scopeDDrain _ => rfl
   | scopeDEmpty h => rw [hx] at h; cases h
-  | scopeDP hs _ _ => exact (skip_no_step hno hs).elim
-  | scopeDPDrain hs _ => exact (skip_no_step hno hs).elim
-  | scopeDPMoved hs _ => exact (skip_no_step hno hs).elim
+  | scopeDP hs _ _ => exact (skip_no_step hs).elim
+  | scopeDPDrain hs _ => exact (skip_no_step hs).elim
+  | scopeDPMoved hs _ => exact (skip_no_step hs).elim
   | waitPanic hw => exact hw.elim
 
 /-- ... and the step after it (stated for any unbound `y`; the drain's is
@@ -369,22 +360,19 @@ theorem scopeD_drain_binds {P : Prog} {x y : Var} {f : Nat} {m : Mem} {t : Ty} {
 /-- ... and with every element gone the empty `Vec` is freed as any binding's
     value is: the frame's one step leaves `scope x`. -/
 theorem scopeD_end_empty {P : Prog} {x : Var} {f : Nat} {m : Mem} {t : Ty} {c d : Nat}
-    (hx : m.st x = some ⟨true, some (.node t c d [])⟩)
-    -- (Agora #610: with no orphan to reap first; no typed run has one in this cut)
-    (hno : ¬ Orphan m) :
+    (hx : m.st x = some ⟨true, some (.node t c d [])⟩) :
     Step P m (.scopeD x f .skip) (.ok m (.scope x .skip)) ∧
       ∀ r, Step P m (.scopeD x f .skip) r → r = .ok m (.scope x .skip) := by
   refine ⟨Step.scopeDEmpty hx, fun r h => ?_⟩
   cases h with
-  | reap hrs _ _ => cases hrs
-  | scopeDIn hs => exact (skip_no_step hno hs).elim
+  | scopeDIn hs => exact (skip_no_step hs).elim
   | scopeDEnd h hv => rw [hx] at h; cases h; cases hv
   | scopeDMoved hm => rw [hx] at hm; cases hm
   | scopeDDrain h => rw [hx] at h; cases h
   | scopeDEmpty _ => rfl
-  | scopeDP hs _ _ => exact (skip_no_step hno hs).elim
-  | scopeDPDrain hs _ => exact (skip_no_step hno hs).elim
-  | scopeDPMoved hs _ => exact (skip_no_step hno hs).elim
+  | scopeDP hs _ _ => exact (skip_no_step hs).elim
+  | scopeDPDrain hs _ => exact (skip_no_step hs).elim
+  | scopeDPMoved hs _ => exact (skip_no_step hs).elim
   | waitPanic hw => exact hw.elim
 
 /-- …and on the panic path, one step: a panic out of the body with `x`
@@ -707,24 +695,21 @@ theorem shares_dtor_free {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {E : En
     destructor value** (the invariant carries it, `MInv.blocks`): every
     block, whatever holds its shares (a binding, a closure's environment,
     another block's payload).  So the sweep that frees a block when its last
-    share goes, which runs no code, releases no destructor value.  (Agora
-    #610: but for a `dead` block, an orphan whose payload awaits its
-    destructor, which the sweep is not to free; in this cut nothing makes a
-    block `dead`.) -/
+    share goes, which runs no code, releases no destructor value. -/
 theorem blocks_dtor_free {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {k : Nat} {bl : Blk}
-    (hk : m.blk k = some bl) (hnd : bl.kind ≠ .dead) : bl.ty.dtorFree = true :=
-  (hi.blocks k bl hk).2.2.2.2.1 hnd
+    (hk : m.blk k = some bl) : bl.ty.dtorFree = true :=
+  (hi.blocks k bl hk).2.2.2.2
 
 /-- A2-drop.3c, in a block: a package in a block's payload (a channel of
     closures, a `Locked` closure, an `Arc` of a `sync` one), however deep,
     has an environment that holds no destructor value. -/
 theorem blk_pkgs_env_dtor_free {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {k : Nat} {bl : Blk}
-    (hk : m.blk k = some bl) (hnd : bl.kind ≠ .dead) {p : Val} (hp : bl.pay = some p)
+    (hk : m.blk k = some bl) {p : Val} (hp : bl.pay = some p)
     {fs : List Nat} {te : Ty} {ms : List Nat} {e : Val} {cs : List (Var × PMode × Ty)}
     (hs : Sub (.pkg fs te ms e cs) p) : te.holdsDtor = false :=
   (((hi.blocks k bl hk).2.2.1 p hp).1).pkg_env_dtor_free
     (Ty.noDropd_of_free (by
-      have := (hi.blocks k bl hk).2.2.2.2.1 hnd
+      have := (hi.blocks k bl hk).2.2.2.2
       rw [Ty.holdsDtor_eq_not_free]; simpa using this)) hs
 
 /-- A2-drop.3d: `arc_new`, a lock's and a library handle's constructor take
