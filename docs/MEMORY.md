@@ -2180,6 +2180,18 @@ body that did not run) releases nothing of that binding, whether or not
 a defer reads it; a path that released a value at an early `^` does not
 release it again after the defer chain.
 
+A defer inside a loop body runs once, at the function's exit, if its `;`
+was reached in any round, and a binding it reads lives until it runs:
+every round's. A binding of the loop body that a `;` further down its
+block may read is therefore kept from its binding on, not from the `;`:
+a way out above the `;` in a later round (a `break`, a `^`, a `\`)
+leaves it for the defer. When the next round binds the name again, the
+value the round before left in the slot is not released there — a view
+of it that the defer still reads, bound in a round that has not bound it
+again, would dangle — but parked, and released after the defer chain
+with the rest, newest first. The values in sight at the head of such a
+loop are kept from the loop's head. Each is released once (agora #655).
+
 ### 7.2 Panics
 
 A panic jumps to the nearest `recover` frame without unwinding through

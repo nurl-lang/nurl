@@ -1,0 +1,42 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+brk: a loop string long enough for a heap buffer 1
+1
+0
+102
+try: an error long enough for a heap buffer
+101
+outer: a string bound before the loop, long enough
+3
+drop 2
+drop 1
+drop 0
+22
+rounds: the defer sees 1
+54
+drop 1
+drop 0
+2
+order: the defer sees 32
+drop 21
+drop 11
+drop 20
+drop 10
+2
+views: a payload long enough for a heap buffer 0
+53
+views: a loop string long enough for a heap buffer 0
+3
+3
+3
+44
+102
+nested: an outer-loop string long enough for a heap 2
+nested: an inner-loop string long enough for a heap 1
+3
+103
+handed: a loop string long enough for a heap buffer 1
+53
+handed: fell off
