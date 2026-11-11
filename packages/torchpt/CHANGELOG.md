@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.4.2] — 2026-11-11
+
+### Changed
+
+- The note on `pt_open` says where a checkpoint is mapped as
+  `stdlib/std/mmap.nu` has it since NURL 0.91.0: POSIX, Windows and the
+  unikernel; on wasm the whole file is read. No code changed: the
+  registry's 0.4.1 carried the older note, and a package that depends on
+  torchpt by path is published only against sources that are the
+  registry's byte for byte.
+
 ## [0.4.1] — 2026-10-15
 
 ### Fixed

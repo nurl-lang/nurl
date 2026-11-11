@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.13.0] — unreleased
+## [0.13.0] — 2026-11-11
 
 Requires gpu 0.17.8.
 

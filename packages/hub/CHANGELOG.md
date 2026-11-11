@@ -1,6 +1,6 @@
 # hub changelog
 
-## [0.3.0] — unreleased
+## [0.3.0] — 2026-11-11
 
 Requires NURL 0.90.0.
 
