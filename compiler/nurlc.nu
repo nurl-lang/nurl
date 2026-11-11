@@ -22782,6 +22782,10 @@ unsafe @ gen_match i lex i syms i cg → s {
             // a loop's body ends its scope every round, and the next round's
             // release of the round before freed it again.)
             ( nurl_sym_def syms ( nurl_str_cat mte_p `__tmpclr` ) `1` )
+            // (In a defer loop, where a defer of an arm kept the round
+            // before's enum — it reads a payload lent out of it — that one
+            // is parked, not released below: agora #698.)
+            ( mem_dkeep_rebind_known syms cg mte_p )
             ( mem_journal_forget_tmpown cg mte_p )
             ( mem_emit_gated_drop_of cg mte_p match_type `` ( nurl_sym_get2 syms mte_p `__live` ) )
             ( nurl_print `  store ` ) ( nurl_print ( nurl_llty match_type ) ) ( nurl_print ` ` ) ( nurl_print match_val )
@@ -23611,6 +23615,11 @@ unsafe @ gen_match i lex i syms i cg → s {
                 : s vp0 ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print vp0 )
                 ( nurl_print ` = alloca ` ) ( nurl_print ( nurl_llty pt0_eff ) ) ( nurl_print `\n` )
+                // (A payload this arm binds as its own, in a defer loop:
+                // what its slot holds from an earlier round, where a defer
+                // of the arm kept it, is parked before the store — as a
+                // `:` binding's is, mem_dkeep_rebind. Agora #698.)
+                ? != 0 g_dloop { ( mem_dkeep_rebind syms cg vp0 pt0_eff ) } {}
                 ( nurl_print `  store ` ) ( nurl_print ( nurl_llty pt0_eff ) )
                 ( nurl_print ` ` ) ( nurl_print cv0 )
                 ( nurl_print `, ` ) ( nurl_print ( nurl_llty pt0_eff ) )
@@ -23867,6 +23876,7 @@ unsafe @ gen_match i lex i syms i cg → s {
                 : s vp1 ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print vp1 )
                 ( nurl_print ` = alloca ` ) ( nurl_print ( nurl_llty pt1 ) ) ( nurl_print `\n` )
+                ? != 0 g_dloop { ( mem_dkeep_rebind syms cg vp1 pt1 ) } {}
                 ( nurl_print `  store ` ) ( nurl_print ( nurl_llty pt1 ) )
                 ( nurl_print ` ` ) ( nurl_print cv1 )
                 ( nurl_print `, ` ) ( nurl_print ( nurl_llty pt1 ) )
@@ -23902,6 +23912,7 @@ unsafe @ gen_match i lex i syms i cg → s {
                 : s vp2 ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print vp2 )
                 ( nurl_print ` = alloca ` ) ( nurl_print ( nurl_llty pt2 ) ) ( nurl_print `\n` )
+                ? != 0 g_dloop { ( mem_dkeep_rebind syms cg vp2 pt2 ) } {}
                 ( nurl_print `  store ` ) ( nurl_print ( nurl_llty pt2 ) )
                 ( nurl_print ` ` ) ( nurl_print cv2 )
                 ( nurl_print `, ` ) ( nurl_print ( nurl_llty pt2 ) )
@@ -24086,6 +24097,11 @@ unsafe @ gen_match i lex i syms i cg → s {
             // there hands its arms' closures out through the match's copy,
             // after the arm released them.)
             ? & m_retv == arm_tt0 TT_BACKSLASH { = g_ret_vpos ( nurl_lex_cur_start lex ) } {}
+            // (An arm's block with a `;` in it, in a defer loop: what is in
+            // sight at its head — the payloads it just bound — is kept from
+            // here, so a way out above the `;` leaves it for the defer, as
+            // at a defer loop's own head. __dloop_open, 1.)
+            ? & != 0 g_dloop == arm_tt0 TT_LBRACE { ? ( __dloop_block_has_defer lex ) { ( __defer_snap_take syms cg ) } {} } {}
             : ~ s arm_result ( gen_stmt lex syms cg )
             ? & & m_val != 0 g_borrowck ( __is_closure_ty ( nurl_get_last_type ) ) { = m_cm ( __words_join m_cm ( __clo_val_members syms arm_tt0 arm_v0 ) ) } {}
             = g_member_path_on arm_mp0
@@ -25572,6 +25588,16 @@ unsafe @ gen_match i lex i syms i cg → s {
 // nested blocks included). Lexer position restored.
 @ __dloop_defer_ahead i lex → b {
     : i here ( nurl_lex_cur_start lex )
+    : b found ( __dloop_scan lex )
+    ( nurl_lex_set_pos lex here )
+    ^ found
+}
+
+// Does the block that opens at `lex` (`{`) hold a `;`? Position restored.
+@ __dloop_block_has_defer i lex → b {
+    ? != ( nurl_lex_type lex ) TT_LBRACE { ^ F } {}
+    : i here ( nurl_lex_cur_start lex )
+    ( nurl_lex_advance lex )
     : b found ( __dloop_scan lex )
     ( nurl_lex_set_pos lex here )
     ^ found
@@ -27522,6 +27548,21 @@ unsafe @ mem_path_to_indices s path → s {
     : s lf ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print lf ) ( nurl_print ` = alloca i1, align 1\n` )
     ( nurl_sym_set g_fn_escapes `__dkeep_pre__` ( nurl_str_cat3 ptr ` ` lf ) )
+    ( nurl_print `  ;dkr ` ) ( nurl_print ptr ) ( nurl_print ` ` ) ( nurl_print ( __dkeep_of ptr ) )
+    ( nurl_print ` ` ) ( nurl_print lf ) ( nurl_print ` ` ) ( nurl_print ( nurl_sym_get g_fn_escapes `__dkhead__` ) )
+    ( nurl_print `\n` )
+    = g_dkr_any 1
+}
+
+// …for a slot that is registered already (a match's temporary enum: its
+// registration comes before its store): the marker with the drop flag it
+// has. In a defer loop only; it expands to nothing where no defer keeps
+// the slot (agora #698).
+@ mem_dkeep_rebind_known i syms i cg s ptr → v {
+    ? | == 0 g_auto_drop_strings == 0 g_dloop { ^ v } {}
+    : s lf ( nurl_sym_get2 syms ptr `__live` )
+    ? == 0 ( nurl_str_len lf ) { ^ v } {}
+    ( __dkeep_new cg ptr )
     ( nurl_print `  ;dkr ` ) ( nurl_print ptr ) ( nurl_print ` ` ) ( nurl_print ( __dkeep_of ptr ) )
     ( nurl_print ` ` ) ( nurl_print lf ) ( nurl_print ` ` ) ( nurl_print ( nurl_sym_get g_fn_escapes `__dkhead__` ) )
     ( nurl_print `\n` )
@@ -30223,7 +30264,7 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
     // where not every path runs — a call's temporary, mid-expression.)
     // (A binding a defer loop's `;` keeps has its flag already: the one an
     // earlier round's value is released under, mem_dkeep_rebind.)
-    : s __dk_pre ? != 0 g_dkeep_bind ( nurl_sym_get g_fn_escapes `__dkeep_pre__` ) ``
+    : s __dk_pre ? != 0 g_dloop ( nurl_sym_get g_fn_escapes `__dkeep_pre__` ) ``
     : b __dk_hit ? != 0 ( nurl_str_len __dk_pre ) ( seq ( str_first_word __dk_pre ) ptr ) F
     ? __dk_hit { ( nurl_sym_def syms ( nurl_str_cat ptr `__live` ) ( str_first_word ( str_skip_word __dk_pre ) ) ) } {}
     ? != 0 g_udrop_noinit
@@ -64523,6 +64564,12 @@ unsafe @ __ha_is_dkr s line → b {
     ( nurl_print `  call void @__dkpark_` ) ( nurl_print mangle ) ( nurl_print `(i1 %dkrc` ) ( nurl_print n )
     ( nurl_print `, ptr ` ) ( nurl_print hd ) ( nurl_print `, ptr ` ) ( nurl_print ptr ) ( nurl_print `)\n` )
     ( nurl_print `  store i1 false, ptr ` ) ( nurl_print k ) ( nurl_print `\n` )
+    // (What was parked is the list's: the slot's drop flag goes down with
+    // it. A `:` binding sets it again right after; a match's temporary has
+    // a release of its own before the store, which must find it down.)
+    ( nurl_print `  %dkrf` ) ( nurl_print n ) ( nurl_print ` = xor i1 %dkrc` ) ( nurl_print n ) ( nurl_print `, 1\n` )
+    ( nurl_print `  %dkrg` ) ( nurl_print n ) ( nurl_print ` = and i1 %dkrb` ) ( nurl_print n ) ( nurl_print `, %dkrf` ) ( nurl_print n ) ( nurl_print `\n` )
+    ( nurl_print `  store i1 %dkrg` ) ( nurl_print n ) ( nurl_print `, ptr ` ) ( nurl_print lf ) ( nurl_print `\n` )
 }
 
 unsafe @ __ha_is_alloca s line → b {

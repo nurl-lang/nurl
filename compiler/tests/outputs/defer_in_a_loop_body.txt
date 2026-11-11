@@ -40,6 +40,9 @@ drop 30
 slices: a second element, long enough too 2
 100
 2
+payloads: a fresh option's string, long enough 2
+48
+2
 3
 3
 44
