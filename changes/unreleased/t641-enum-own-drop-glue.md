@@ -27,7 +27,3 @@
 - **The fourth and later payloads of a variant, handed back out of a
   parameter's enum, are lent back** as the first three are (Agora #641):
   the caller's binding and the enum dropped them twice.
-- **A join-bound payload handed to a `sink` is copied where it was only
-  lent** (Agora #641). `: String t ?? e { One s → { … s } … }  ( eat t )`
-  over an enum someone else keeps had the callee release the enum's own
-  `String`, which its owner released again.

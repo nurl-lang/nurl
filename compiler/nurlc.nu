@@ -3450,6 +3450,10 @@ unsafe @ note_unsafe_item s pos s what → v {
 // while 0, nothing asks whether a value handed back is one an arm was lent
 // (__payload_lent_of_frame).
 : ~ i g_epl_n 0
+// 1 once an arm of the join being compiled yielded such a payload
+// (__arm_flends): the `:` binding the join's value goes to remembers it
+// (`__jpkept`, __lent_by_join) and clears it.
+: ~ i g_join_pkept 0
 // 1 while the code being compiled sits in a `~` loop over a container
 // (`iter_containers` in g_bck is not empty): what a call there hands a
 // closure is checked against the loop (__iter_closure_effs_check).
@@ -5964,6 +5968,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
     // did not own it (`:` and `=` already clear these before their RHS).
     ( nurl_sym_def syms `__last_phi_idents__` `` )
     = g_join_flends 0
+    = g_join_pkept 0
     = g_join_deep 0
     ( nurl_sym_def syms `__last_phi_cause__` `` )
     ( nurl_sym_def syms `__last_phi_definite__` `` )
@@ -29264,6 +29269,9 @@ unsafe @ __src_has_raw_ptr s text → b {
             // Owned on some paths, lent on others (`{ ( string_from d ) } { h0 }`):
             // whether it owns is its flag, which a store or return consults.
             ( __sb syms ptr `dyn` )
+            // (…and, one of whose arms yielded a payload of an enum this
+            // frame keeps, a `sink` it is handed to: __lent_by_join.)
+            ? != 0 g_join_pkept { ( nurl_sym_def syms ( nurl_str_cat ptr `__jpkept` ) `1` ) = g_join_pkept 0 } {}
             // (…and whether what it may lend is this frame's own — a local
             // an arm picked, part of one, a call's lend of one: a returned
             // literal copies it there, agora #195.)
@@ -30332,9 +30340,9 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
     ? != 0 ( nurl_str_len froot ) { ^ ? ( __froot_lends_frame syms froot ) 1 0 } {}
     // (…or a payload of an enum this frame keeps whole, by name or as its
     // block's tail: __payload_lent_of_frame.)
-    ? & != 0 g_epl_n ( is_ident_tok tt0 ) { ? ( __lent_payload_owns syms ( nurl_sym_get syms `__last_ident_name__` ) ( nurl_get_last_type ) ) { ^ 1 } {} } {}
+    ? & != 0 g_epl_n ( is_ident_tok tt0 ) { ? ( __lent_payload_owns syms ( nurl_sym_get syms `__last_ident_name__` ) ( nurl_get_last_type ) ) { = g_join_pkept 1 ^ 1 } {} } {}
     ? & & != 0 g_epl_n == tt0 TT_LBRACE ( is_ident_tok ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) ) ) {
-        ? ( __lent_payload_owns syms ( nurl_sym_get syms `__tail_first_val__` ) ( nurl_get_last_type ) ) { ^ 1 } {}
+        ? ( __lent_payload_owns syms ( nurl_sym_get syms `__tail_first_val__` ) ( nurl_get_last_type ) ) { = g_join_pkept 1 ^ 1 } {}
     } {}
     // (…or a cursor over part of a local: `T x → x`, x a payload of `( getr
     // w )`'s result, agora #195.)
@@ -64760,6 +64768,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     : i __etk_saved g_etake_n
     : i __epl_saved g_epl_n
     = g_epl_n 0
+    = g_join_pkept 0
     = g_etake_n 0
     = g_ff_gen + g_ff_gen 1
     = g_ff_any 0
@@ -71940,10 +71949,11 @@ unsafe @ __die_at_fn s fname s what s msg → v {
     ^ != 0 ( nurl_sym_len2 syms rfp `__pname` )
 }
 
-// Is identifier `val` a binding a join gave its value, which owns it only
-// where its flag says (`dyn`) and is no cursor over anything that could be
-// emptied in its place (no `__alias`, no `vec_get` slot)? Where it owns
-// nothing, the value is whoever lent it's.
+// Is identifier `val` a binding a `?` / `??` join gave its value, one of
+// whose arms yielded a payload of an enum this frame keeps (`__jpkept`):
+// one that owns its value only where its flag says and is no cursor over
+// anything that could be emptied in its place (no `__alias`, no `vec_get`
+// slot)? Where it owns nothing, the value is the enum's.
 @ __lent_by_join i syms i tt s val → b {
     ? ! ( is_ident_tok tt ) { ^ F } {}
     : s up ( mem_udrop_ptr_of syms val )
@@ -71954,7 +71964,10 @@ unsafe @ __die_at_fn s fname s what s msg → v {
     : s jp ? == 0 ( nurl_str_len al ) ( nurl_str_cat up `` ) ? == 0 ( nurl_str_len ( str_skip_word al ) ) ( str_first_word al ) ( nurl_str_cat `` `` )
     ? == 0 ( nurl_str_len jp ) { ^ F } {}
     ? | | != 0 ( nurl_sym_len2 syms up `__vget` ) != 0 ( nurl_sym_len2 syms jp `__vget` ) & != 0 ( nurl_str_len al ) != 0 ( nurl_str_len ( nurl_sym_get2 syms jp `__alias` ) ) { ^ F } {}
-    ^ ( seq ( nurl_sym_get2 syms jp `__sborrow` ) `dyn` )
+    // (A copy of the whole value, not a payload read out of it: a payload
+    // of a join-bound option moves the option, as before.)
+    ? & != 0 ( nurl_str_len al ) ! ( seq ( nurl_sym_get2 syms up `__udty` ) ( nurl_sym_get2 syms jp `__udty` ) ) { ^ F } {}
+    ^ & ( seq ( nurl_sym_get2 syms jp `__sborrow` ) `dyn` ) ( seq ( nurl_sym_get2 syms jp `__jpkept` ) `1` )
 }
 
 // Is identifier `val` a binding whose ownership is the per-call answer of
