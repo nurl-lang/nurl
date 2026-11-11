@@ -1774,6 +1774,18 @@ Semantics (v2.3, 2026-08-03):
   ran, as well as if it did not (agora #407), and a binding a defer reads
   lives, with what it borrows, until the defer runs, even past the block
   it was bound in (agora #491).
+- **In a loop body** — a defer registered in an earlier round stays
+  armed for the rest of the loop, and it reads each name's value as it
+  was last bound. A binding of the loop body that a `;` further down its
+  block may read is kept from its binding on, as are the values in sight
+  at the head of the loop: a `break`, a `^` or a `\` above the `;`
+  leaves them for the defer. Every round's value of such a binding lives
+  until the function returns — a view of an earlier round's value that
+  the defer still reads stays good — and is released after the defer
+  chain, newest first (agora #655). So a long loop whose defer keeps a
+  value per round holds them all: register that defer outside the loop.
+  A `^` or a `\` above the `;` does not yet run the defer an earlier
+  round armed (agora #670).
   Returning an owned value transfers it to the caller as usual. With
   several return paths, a pre-defer owned value is transferred on the
   paths that return it and dropped after the chain on the others. A
