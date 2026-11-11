@@ -62264,11 +62264,15 @@ unsafe @ resolve_replaces → v {
 // inside a template is a binding of that type only when the word is a
 // type in scope — gen_let_or_struct reads an unknown first word as the
 // NAME of an inferred binding.
+// (At the module's scope, where a struct's instance name is: noted in
+// the scope of the function whose body made the instance, the word was
+// gone with that scope before the instance — compiled after the body — was
+// read, and `: T w v` at a closure type bound a name `fn1_…`: agora #637.)
 @ __note_slug_type s w s lty → v {
     ? == 0 g_root_syms { ^ v } {}
     ? != 0 ( nurl_sym_len g_root_syms w ) { ^ v } {}
-    ( nurl_sym_def g_root_syms w lty )
-    ( nurl_sym_def g_root_syms ( nurl_str_cat w `__is_type` ) `1` )
+    ( nurl_sym_def_module g_root_syms w lty )
+    ( nurl_sym_def_module g_root_syms ( nurl_str_cat w `__is_type` ) `1` )
 }
 
 // `fn` and a digit: the shape of a closure slug.
