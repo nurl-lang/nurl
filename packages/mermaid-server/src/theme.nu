@@ -228,12 +228,15 @@ $ `stdlib/std/sort.nu`
     ?? ( toml_parse src ) {
         T root → {
             ( __mmdt_flatten t `` root )
-            : s nm ( mmd_theme_str t `name` `` )
-            ? > ( nurl_str_len nm ) 0 {
+            // (Both are read out of the theme's own table, so each is a
+            // copy before the theme is written.)
+            : String nm ( string_from ( mmd_theme_str t `name` `` ) )
+            ? > ( string_len nm ) 0 {
                 ( string_clear . t name )
-                ( string_push_str . t name nm )
+                ( string_push_str . t name ( string_data nm ) )
             } {}
-            ( string_push_str . t desc ( mmd_theme_str t `description` `` ) )
+            : String ds ( string_from ( mmd_theme_str t `description` `` ) )
+            ( string_push_str . t desc ( string_data ds ) )
             ^ @ MmdThemeRes { T t ( string_new ) }
         }
         F e → {

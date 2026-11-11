@@ -145,8 +145,8 @@ $ `stdlib/core/slice.nu`
     String key  // scratch: NUL-terminated path segment / include name
     ( Vec Json ) ctxv  // [0] = root context (the render's own copy)
     ( Vec String ) sc_names  // loop-variable scope stack (owned names)
-    ( Vec Json ) sc_vals  // parallel values (borrows)
-    ( Vec i ) lp_idx  // loop frames, innermost last
+    ( Vec Json ) sc_vals  // parallel: the sequence each loop walks (the loop's own copy)
+    ( Vec i ) lp_idx  // loop frames, innermost last; the loop variable is element lp_idx[k] of sc_vals[k]
     ( Vec i ) lp_len
     i va_kind
     b va_bool
@@ -334,8 +334,14 @@ $ `stdlib/core/slice.nu`
                     ?? ( vec_get [String] . r sc_names si ) {
                         T nm → {
                             ? ( __tpl_seg_eq r t sv sp slen nm ) {
+                                : i li ?? ( vec_get [i] . r lp_idx si ) { T x → x F _ → 0 }
                                 ?? ( vec_get [Json] . r sc_vals si ) {
-                                    T jv → { = cur jv = have T }
+                                    T sq → {
+                                        ?? ( json_arr_get sq li ) {
+                                            T jv → { = cur jv = have T }
+                                            F _ → {}
+                                        }
+                                    }
                                     F _ → {}
                                 }
                             } {}
@@ -715,14 +721,24 @@ $ `stdlib/core/slice.nu`
             : i pa ( __tpl_ws r t sv ke eb )
             : ~ i pb eb
             ~ & > pb pa ( __tpl_is_ws ( __tpl_at sv - pb 1 ) ) { = pb - pb 1 }
+            // The loop walks its own copy of the sequence: the body may
+            // write anything the renderer holds, the resolved node is a
+            // borrow of it, and the copy is what the loop variable is read
+            // out of — one copy a loop, where each round used to copy its
+            // element into the scope slot.
             : ~ Json seq ( json_null )
-            ?? ( __tpl_resolve r t sv pa pb ) { T node → { = seq node } F _ → {} }
             : ~ i n 0
-            ? ( json_is_arr seq ) { = n ( json_arr_len seq ) } {
-                ? ( json_is_null seq ) {} {
-                    ( __tpl_fail r t sv pa `'{% for %}' over a non-array value` )
+            : ~ b notarr F
+            ?? ( __tpl_resolve r t sv pa pb ) {
+                T node → {
+                    ? ( json_is_arr node ) {
+                        = n ( json_arr_len node )
+                        ? > n 0 { = seq ( json_clone node ) } {}
+                    } { = notarr ! ( json_is_null node ) }
                 }
+                F _ → {}
             }
+            ? notarr { ( __tpl_fail r t sv pa `'{% for %}' over a non-array value` ) } {}
             ? . r failed {} {
                 ? == n 0 {
                     : i t2 ( __tpl_run r t sv F )
@@ -733,19 +749,13 @@ $ `stdlib/core/slice.nu`
                     : i body . r pos
                     ( __tpl_key_set . r key sv va - ve va )
                     ( vec_push [String] . r sc_names ( string_clone . r key ) )
-                    : Json seed ( json_null )
-                    ( vec_push [Json] . r sc_vals seed )
+                    ( vec_push [Json] . r sc_vals seq )
                     ( vec_push [i] . r lp_idx 0 )
                     ( vec_push [i] . r lp_len n )
-                    : i vslot - ( vec_len [Json] . r sc_vals ) 1
                     : i lslot - ( vec_len [i] . r lp_idx ) 1
                     : ~ i it 0
                     ~ & < it n == . r failed F {
                         = . r pos body
-                        ?? ( json_arr_get seq it ) {
-                            T item → { : b _s1 ( vec_set [Json] . r sc_vals vslot item ) }
-                            F _ → {}
-                        }
                         : b _s2 ( vec_set [i] . r lp_idx lslot it )
                         : i t3 ( __tpl_run r t sv T )
                         ? & != t3 1 == . r failed F {

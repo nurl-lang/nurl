@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.1] — unreleased
+
+### Fixed
+
+- **Builds with NURL 0.91.1**, which knows that a theme's string read
+  with `mmd_theme_str` is a view into the theme's own table
+  (Agora #594): the theme's name and description are copied before the
+  theme is written. No behaviour change.
+
 ## [0.4.0] — 2026-10-14
 
 Requires NURL 0.73.0 with globals set at start (`: ( Locked T ) g ( make )`).

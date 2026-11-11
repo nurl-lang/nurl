@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.2.7] — unreleased
+
+### Fixed
+
+- **Builds with NURL 0.91.1**, which knows that what `json_obj_get` and
+  `json_arr_get` answer is read in place out of the value they were given
+  (Agora #594): a node the renderer resolved is a borrow of the renderer's
+  data and of its scopes, and the compiler refuses a write of either while
+  the node is read.
+
+### Changed
+
+- A `{% for %}` loop walks its own copy of the sequence — one copy a
+  loop, where each round used to copy its element into the scope slot —
+  and the loop variable is read out of that copy by index. Rendering is
+  unchanged; a loop over a large array of large elements copies less.
+
 ## [0.2.6] — 2026-10-21
 
 ### Fixed

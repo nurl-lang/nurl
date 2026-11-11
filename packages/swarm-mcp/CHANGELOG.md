@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.32.1] — unreleased
+
+### Fixed
+
+- **Builds with NURL 0.91.1**, which knows that what `json_obj_get`
+  answers is read in place out of the object it was given (Agora #594):
+  the build API's answer is read field by field in a statement-form
+  match, each field copied where it is read. No behaviour change.
+
 ## [0.32.0] — 2026-10-26
 
 Requires NURL 0.79.0.

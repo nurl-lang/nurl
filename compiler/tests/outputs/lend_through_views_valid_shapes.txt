@@ -1,0 +1,16 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+second element, long enough for a heap buffer
+first element, long enough for a heap buffer
+first element, long enough for a heap buffer
+first element, long enough for a heap buffer
+57
+44
+second element, long enough for a heap buffer
+(none)
+second element, long enough for a heap buffer
+(empty)
+made here, long enough for a heap buffer
+(nothing made)

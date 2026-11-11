@@ -2384,6 +2384,14 @@ $ `stdlib/std/thread.nu`
     ^ ? > n 0 / sum # f n -1.0
 }
 
+// The k-th entry of a backtest's `features`, read out of the answer
+// each round: a round writes its entry, and what was read before a
+// write is not what is read after it.
+@ __mcp_backtest_feature Json out i k → ?Json {
+    ?? ( json_obj_get out `features` ) { T fs → { ^ ( json_arr_get fs k ) } F _ → {} }
+    ^ @ ?Json { F @ Json { JNull } }
+}
+
 // A backtest that measures a forecast worse than carrying the last value
 // forward, or a 95 % band that covers three readings in four, is telling
 // a reader something about the version they are about to trust as a
@@ -2406,49 +2414,44 @@ $ `stdlib/std/thread.nu`
     : ~ i n_feat 0
     : ~ i n_useless 0
     : ~ i n_narrow 0
-    ?? ( json_obj_get out `features` ) {
-        T fs → {
-            : i nf ( json_arr_len fs )
-            : ~ i k 0
-            ~ < k nf {
-                ?? ( json_arr_get fs k ) {
-                    T fo → {
-                        = n_feat + n_feat 1
-                        : f cov ( __mcp_arr_mean fo `coverage95` )
-                        ? >= cov 0.0 { ( json_obj_set fo `coverage95_mean` ( __mcp_round_f cov 3 ) ) } {}
-                        : ~ b useless F
-                        ?? ( json_obj_get fo `skill_vs_naive` ) {
-                            T sv → { ?? ( json_num_as_f sv ) { T x → { = useless <= x 0.0 } F → {} } }
-                            F _ → {}
-                        }
-                        : b narrow & >= cov 0.0 < cov 0.9
-                        ? useless { = n_useless + n_useless 1 } {}
-                        ? narrow { = n_narrow + n_narrow 1 } {}
-                        : ~ String rd ( string_new )
-                        ? useless {
-                            ( string_push_str rd `no skill: the fitted model forecasts this feature no better than carrying the last value forward, so a reading judged against it is judged against persistence with extra machinery. ` )
-                        } {}
-                        ? narrow {
-                            ( string_push_str rd `the 95 % band covers only ` )
-                            ( string_push_int rd # i ( float_round * cov 100.0 ) )
-                            ( string_push_str rd ` % of what followed: the standard errors are optimistic, so a margin read as a plain sigma count would over-flag. The version's margin is calibrated from the stream's own z-scores at train_forecast for exactly this reason — leave it to calibration rather than setting a sigma by hand. ` )
-                        } {}
-                        ? & ! useless ! narrow {
-                            ( string_push_str rd `the model beats persistence and its band covers about what it claims.` )
-                        } {}
-                        ( json_obj_set fo `reading` ( json_str_lit ( string_data rd ) ) )
-                        // skill_vs_seasonal_naive flatters when the
-                        // seasonal naive is bad; the two baselines'
-                        // errors are already here, and naming that is
-                        // cheaper than a reader noticing it.
-                        ( json_obj_set fo `baseline_note` ( json_str_lit `skill is 1 - MAE/MAE_baseline. Compare naive_mae and seasonal_naive_mae before reading either skill: a high skill against a baseline that is itself far off says little.` ) )
-                    }
+    : i nf ?? ( json_obj_get out `features` ) { T fs → ( json_arr_len fs ) F _ → 0 }
+    : ~ i k 0
+    ~ < k nf {
+        ?? ( __mcp_backtest_feature out k ) {
+            T fo → {
+                = n_feat + n_feat 1
+                : f cov ( __mcp_arr_mean fo `coverage95` )
+                ? >= cov 0.0 { ( json_obj_set fo `coverage95_mean` ( __mcp_round_f cov 3 ) ) } {}
+                : ~ b useless F
+                ?? ( json_obj_get fo `skill_vs_naive` ) {
+                    T sv → { ?? ( json_num_as_f sv ) { T x → { = useless <= x 0.0 } F → {} } }
                     F _ → {}
                 }
-                = k + k 1
+                : b narrow & >= cov 0.0 < cov 0.9
+                ? useless { = n_useless + n_useless 1 } {}
+                ? narrow { = n_narrow + n_narrow 1 } {}
+                : ~ String rd ( string_new )
+                ? useless {
+                    ( string_push_str rd `no skill: the fitted model forecasts this feature no better than carrying the last value forward, so a reading judged against it is judged against persistence with extra machinery. ` )
+                } {}
+                ? narrow {
+                    ( string_push_str rd `the 95 % band covers only ` )
+                    ( string_push_int rd # i ( float_round * cov 100.0 ) )
+                    ( string_push_str rd ` % of what followed: the standard errors are optimistic, so a margin read as a plain sigma count would over-flag. The version's margin is calibrated from the stream's own z-scores at train_forecast for exactly this reason — leave it to calibration rather than setting a sigma by hand. ` )
+                } {}
+                ? & ! useless ! narrow {
+                    ( string_push_str rd `the model beats persistence and its band covers about what it claims.` )
+                } {}
+                ( json_obj_set fo `reading` ( json_str_lit ( string_data rd ) ) )
+                // skill_vs_seasonal_naive flatters when the
+                // seasonal naive is bad; the two baselines'
+                // errors are already here, and naming that is
+                // cheaper than a reader noticing it.
+                ( json_obj_set fo `baseline_note` ( json_str_lit `skill is 1 - MAE/MAE_baseline. Compare naive_mae and seasonal_naive_mae before reading either skill: a high skill against a baseline that is itself far off says little.` ) )
             }
+            F _ → {}
         }
-        F _ → {}
+        = k + k 1
     }
     ? > n_feat 0 {
         : String v ( string_new )

@@ -170,7 +170,8 @@ $ `deps/wasmbuilder/src/build.nu`
 
 // A string field of a parsed JSON object (empty String if absent / not a string).
 @ __json_field Json o s key → String {
-    ^ ?? ( json_obj_get o key ) { T v → ( string_from ( json_str_data v ) ) F → ( string_new ) }
+    ?? ( json_obj_get o key ) { T v → { ^ ( string_from ( json_str_data v ) ) } F → {} }
+    ^ ( string_new )
 }
 
 // Build a human-readable compile error from the build API's JSON body.
