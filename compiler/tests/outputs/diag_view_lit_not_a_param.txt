@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_view_lit_not_a_param.nu:23:17: error: this literal is handed on holding 'x', which is part of 'loc', and that is not a parameter the caller of this function keeps: it is released on the way out, or stays with what holds it, while the literal would hold the value as well; a 'Bomb' cannot be copied — the value would be released twice. Take it out of what holds it (vec_remove, vec_pop) so that this function owns it, or pass what holds it as a parameter: a part of a borrowed parameter is lent back to the caller.
+    ~ x loc { ^ @ W { x 1 } }
+                ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

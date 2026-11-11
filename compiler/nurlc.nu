@@ -3314,6 +3314,10 @@ unsafe @ note_unsafe_item s pos s what → v {
 // cannot be copied which a call may lend (`__nclk`, __nc_bind_lend_note):
 // none, and no store or return need ask (agora #200).
 : ~ i g_ncl_n 0
+// How many bindings of the function being compiled view a value held
+// elsewhere (`__lview`, mem_note_lview): none, and no store need ask
+// (agora #635).
+: ~ i g_lview_n 0
 // How many function exits have emitted the deferred-drop list
 // (mem_drain_deferred) so far: a slot parked after one of them, inside a
 // loop, is emptied at the loop's back-edge (agora #201).
@@ -4494,7 +4498,11 @@ unsafe @ nurl_cg_lbl i h s hint → s {
         : s r0 ( str_first_word rest ) = rest ( str_skip_word rest )
         // (A field path's binding: `tp.vals` is part of tp.)
         : i dot ( nurl_str_find r0 `.` )
-        : s r ? > dot 0 ( nurl_str_slice r0 0 dot ) ( nurl_str_cat r0 `` )
+        : s r1 ? > dot 0 ( nurl_str_slice r0 0 dot ) ( nurl_str_cat r0 `` )
+        // (A view's root is the parameter it is part of — a `~` loop's
+        // element handed to the callee, `^ ( gid [D] x )`: agora #635.)
+        : s rv ? != 0 g_lview_n ( __lent_view_root syms r1 T ) ``
+        : s r ? & != 0 ( nurl_str_len rv ) ( __borrowed_param_name syms rv ) rv r1
         : i pi ( str_word_index pnames r )
         : s up ( mem_udrop_ptr_of syms r )
         : b is_param & >= pi 0 | == 0 ( nurl_str_len up ) & != 0 ( nurl_sym_len2 syms up `__pname` ) ! ( __param_owned_slot syms up )
@@ -4519,6 +4527,76 @@ unsafe @ nurl_cg_lbl i h s hint → s {
         = hops + hops 1
     }
     ^ cur
+}
+
+// A binding that views a value held elsewhere — a `~` loop's element, a
+// `:` binding of a field read or of another binding, of a type that cannot
+// be copied (`__lview`, with what it was read out of as its `__lvroot`).
+// It has no owner slot, or one that only borrows: nothing here drops it,
+// so it is not this function's to hand over or to store.
+@ mem_note_lview i syms s name s root → v {
+    ? | == 0 ( nurl_str_len root ) ( seq root name ) { ^ v } {}
+    // (Only out of a binding: a unit variant, a constant, is no place.)
+    ? & == 0 ( nurl_sym_len2 syms root `__ptr` ) < ( nurl_sym_word_index syms `__fn_param_names__` root ) 0 { ^ v } {}
+    // (Read through a pointer, or in raw code: its owner's, lent, which raw
+    // code vouches for — as __nc_ret_check has it.)
+    ? | ( bck_unsafe_ctx ) ( is_ptr_ty ( nurl_sym_get syms root ) ) { ^ v } {}
+    ( nurl_sym_def syms ( nurl_str_cat name `__lview` ) `1` )
+    // (Its own link, `__lvroot`: a `??` payload's `__plroot` feeds the walk
+    // and the provenance graph, which follow a `~` element by its own row.)
+    ( nurl_sym_def syms ( nurl_str_cat name `__lvroot` ) root )
+    = g_lview_n + g_lview_n 1
+}
+
+// The binding the value of `name` is part of, when `name` holds a value
+// that is not this function's: `name` has no owner slot and is no
+// parameter, and what it was read out of (`__lvroot`, a payload's
+// `__plroot`, through payloads of payloads, elements and bindings of them)
+// is a parameter this function
+// only borrows, or — on the way there — a view (`__lview`: a `~` loop's
+// element, a binding of a field or of a binding). `marked`: only by a
+// view; a bare `??` payload of a parameter is the parameter's, which a
+// store keeps with it. `` otherwise: the rules for a value the function
+// may own answer. (Agora #635.)
+@ __lent_view_root i syms s name b marked → s {
+    ? == 0 g_lview_n { ? marked { ^ ( nurl_str_cat `` `` ) } {} } {}
+    ? & == 0 ( nurl_sym_len2 syms name `__plroot` ) | == 0 g_lview_n == 0 ( nurl_sym_len2 syms name `__lvroot` ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? >= ( nurl_sym_word_index syms `__fn_param_names__` name ) 0 { ^ ( nurl_str_cat `` `` ) } {}
+    // (An owner slot's flag answers — unless the slot is one that only
+    // borrows, a field read's: `: D e . h inner`, h a local.)
+    : s up0 ( mem_udrop_ptr_of syms name )
+    ? != 0 ( nurl_str_len up0 ) {
+        : s sb0 ( nurl_sym_get2 syms up0 `__sborrow` )
+        // (…or one given the slot of a parameter this function only
+        // borrows, `: D e p`: it holds what the caller keeps.)
+        ? ! | | ( seq sb0 `1` ) ( seq sb0 `local` ) ( seq sb0 `elem` ) {
+            ? | == 0 g_lview_n ! ( __borrowed_param_name syms ( nurl_sym_get2 syms name `__lvroot` ) ) { ^ ( nurl_str_cat `` `` ) } {}
+        } {}
+    } {}
+    : ~ s cur ( nurl_str_cat name `` )
+    : ~ b view F
+    : ~ i hops 0
+    ~ < hops 8 {
+        : s lv ? != 0 g_lview_n ( nurl_sym_get2 syms cur `__lvroot` ) ``
+        ? != 0 ( nurl_str_len lv ) { = view T } {}
+        : s up ? != 0 ( nurl_str_len lv ) lv ( nurl_sym_get2 syms cur `__plroot` )
+        ? | | == 0 ( nurl_str_len up ) != 0 ( nurl_str_len ( str_skip_word up ) ) ( seq up cur ) { = hops 8 } {
+            = cur ( nurl_str_cat up `` )
+            = hops + hops 1
+        }
+    }
+    ? ( seq cur name ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? view { ^ cur } {}
+    ? marked { ^ ( nurl_str_cat `` `` ) } {}
+    ? ( __borrowed_param_name syms cur ) { ^ cur } {}
+    ^ ( nurl_str_cat `` `` )
+}
+
+// Is `name` a parameter this function only borrows (not a `sink` one)?
+@ __borrowed_param_name i syms s name → b {
+    : i pi ( nurl_sym_word_index syms `__fn_param_names__` name )
+    ? < pi 0 { ^ F } {}
+    ^ ! ( str_contains_word ( nurl_sym_get g_fn_sink ( nurl_sym_get syms `__fn_self_name__` ) ) ( nurl_str_int pi ) )
 }
 
 // `c` and not `d` (i1 operands; `c` may be the literal `1`).
@@ -6457,6 +6535,63 @@ unsafe @ gen_ret i lex i syms i cg → s {
             ? ( seq hbit `true` ) { = ret_field_copy T } { = ret_pl_taken ( nurl_str_cat hbit `` ) }
         } {}
     } {}
+    // `^ x` of a view — a `~` loop's element, a binding of a field read or
+    // of another binding, a `??` payload of one (__lent_view_root): a value
+    // with no owner slot, which nothing here drops, so it is not this
+    // function's to hand over. Part of a parameter the caller keeps, it is
+    // lent back as `^ p` and `^ . p f` are: this path answers "lent", and
+    // the return summary names the parameter, so the caller's binding is a
+    // borrow of its own argument. Part of anything else — a local dropped
+    // on the way out, a parameter this function takes over, a global — it
+    // is copied, or refused when it cannot be. Answered "owned", the caller
+    // dropped the element its own Vec still held (agora #635).
+    // (…and a value block whose tail is one, `^ { : D e . h inner  e }`: the
+    // block is no scope of its own, so the binding is still here.)
+    : s __lvnm ? ( is_ident_tok ret_first_tt ) ret_first_val ? & == ret_first_tt TT_LBRACE ( is_ident_tok ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) ) ) ( nurl_sym_get syms `__tail_first_val__` ) ``
+    : s __lvr ? & & & & != 0 ( nurl_str_len __lvnm ) ! ret_bind_bit ! ret_field_copy == 0 ( nurl_str_len ret_pl_taken ) == 0 g_bck_closure_depth ( __lent_view_root syms __lvnm F ) ``
+    ? & != 0 ( nurl_str_len __lvr ) ! ( __is_closure_ty ( nurl_get_last_type ) ) {
+        : s __lvt ( nurl_get_last_type )
+        : b __lvp ( __borrowed_param_name syms __lvr )
+        : b __lvn ( __nc_held_ty __lvt )
+        ? & __lvp | | __lvn ( __is_handle_ty __lvt ) ( __type_needs_drop __lvt syms ) {
+            ( __record_param_idx syms `__fn_retpart__` __lvr )
+            ( __record_param_idx syms `__fn_retlend__` __lvr )
+            ( nurl_sym_set_deep syms `__ret_path_lends__` `1` )
+            ? __lvn {
+                = hbit ( nurl_str_cat `false` `` )
+                = ret_bind_bit T
+                ( mem_hown_mark_dyn syms )
+            } {}
+        } {}
+        ? & ! __lvp __lvn {
+            ( die_pos lex bck_line __ret_col ( nurl_str_cat4 ( nurl_str_cat4 `this hands back '` __lvnm `', which is part of '` __lvr )
+            `', and that is not a parameter the caller of this function keeps: it is released on the way out, or stays with what holds it, while the caller would hold this result as well; a '` ( llvm_to_nurl __lvt )
+            `' cannot be copied — the value would be released twice. Take it out of what holds it (vec_remove, vec_pop) so that this function owns it, or pass what holds it as a parameter: a part of a borrowed parameter is lent back to the caller.` ) )
+        } {}
+        ? & & ! __lvp ! __lvn ( __type_needs_drop __lvt syms ) {
+            ? ( __clone_supported __lvt syms ) {
+                = val ( mem_emit_cloneif cg __lvt val `1` )
+                = ret_field_copy T
+            } {}
+        } {}
+    } {}
+    // (…and a field read out of a view, `~ x hs { ^ . x name }`: part of
+    // the parameter x is part of — lent back, in the summary — or copied
+    // out of anything else.)
+    ? & & & != 0 g_lview_n == ret_eff_tt TT_DOT != 0 ( nurl_str_len ret_pl_root ) == 0 g_bck_closure_depth {
+        : s __frv ( __lent_view_root syms ret_pl_root T )
+        // (An owning value: a view the element holds — `^ . x tag`, a raw
+        // `s` — is followed by the walk, to what it views: agora #471.)
+        ? & != 0 ( nurl_str_len __frv ) | ( __is_handle_ty ( nurl_get_last_type ) ) ( __type_needs_drop ( nurl_get_last_type ) syms ) {
+            : s __frt ( nurl_get_last_type )
+            ? ( __borrowed_param_name syms __frv ) { ( __record_param_idx syms `__fn_retpart__` __frv ) } {
+                ? & & ! ret_field_copy ( __type_needs_drop __frt syms ) ( __clone_supported __frt syms ) {
+                    = val ( mem_emit_cloneif cg __frt val `1` )
+                    = ret_field_copy T
+                } {}
+            }
+        } {}
+    } {}
     // `^ x` of a `??` payload: what its matched call lent (h270).
     // (…and when that call lends out of a local of this frame, dropped on
     // the way out — `?? ( vec_get [String] xs 0 ) { T e → ^ e }`, xs a
@@ -6523,6 +6658,22 @@ unsafe @ gen_ret i lex i syms i cg → s {
                     } { ? ( __nc_held_ty __plt ) {
                             ( __park_nc_local_lend syms lex ( nurl_sym_get syms `__last_local_lend__` ) ( nurl_sym_get2 syms ret_first_val `__pljr` ) __plt )
                         } {} }
+                } {}
+                // (A payload that cannot be copied is this function's only
+                // where its owner slot says so, and with no slot it is what
+                // its matched call lent — `?? ( vec_get [D] v 0 ) { T x → {
+                // ^ x } … }`, v a parameter, whose element's slot holds flag
+                // 0 while the Vec owns it: nothing here drops it, so this
+                // path answers "lent"; what it is lent out of is in the
+                // return summary, above. Answered "owned" beside a path
+                // that hands over a fresh value, the caller dropped the
+                // element its Vec still held: agora #635.)
+                ? & & & & ! ret_pl_copied ! ret_bind_bit == 0 ( nurl_str_len ret_pl_taken ) == 0 g_bck_closure_depth ( __nc_held_ty ( nurl_get_last_type ) ) {
+                    : s __pnu ( mem_udrop_ptr_of syms ret_first_val )
+                    = hbit ? == 0 ( nurl_str_len __pnu ) ( nurl_str_cat `false` `` ) ( mem_udrop_flag_get syms cg __pnu )
+                    = ret_bind_bit T
+                    ( nurl_sym_set_deep syms `__ret_path_lends__` `1` )
+                    ( mem_hown_mark_dyn syms )
                 } {}
             } {
                 // A binding with an owner slot (`: String e ( vec_at [String]
@@ -10656,8 +10807,9 @@ unsafe @ __clol_srcs_set s v → v { = g_clol_srcs ( nurl_str_cat v `` ) }
     ? & == depth 0 != 0 ( nurl_sym_len g_fn_ret_view fname ) { ^ T } {}
     // Handing back a parameter lends it unless the function keeps that
     // parameter (its caller handed it over: `^ x` out of a `! T E` param).
+    : s own0 ? == depth 0 ( nurl_str_cat3 ( nurl_sym_get g_fn_sink fname ) ` ` ( nurl_sym_get g_fn_keeps fname ) ) ``
     ? == depth 0 {
-        : s own ( nurl_str_cat3 ( nurl_sym_get g_fn_sink fname ) ` ` ( nurl_sym_get g_fn_keeps fname ) )
+        : s own ( nurl_str_cat own0 `` )
         : ~ s ra ( nurl_sym_get g_fn_ret_alias fname )
         ~ != 0 ( nurl_str_len ra ) {
             : s w ( str_first_word ra ) = ra ( str_skip_word ra )
@@ -10665,9 +10817,57 @@ unsafe @ __clol_srcs_set s v → v { = g_clol_srcs ( nurl_str_cat v `` ) }
         }
     } {}
     : ~ s via ( nurl_sym_get g_pending_impl ( nurl_str_cat `retvia##` fname ) )
+    // …and so does handing back, as is, the result of a callee that lends
+    // the argument at which this function passed a parameter of its own
+    // (`^ ( gid [T] p )`, `callee:position:parameter` — __retfwd_note): the
+    // callee's alias summary is not read past this function (above), and
+    // for a callee compiled after it — a generic instance — none was there
+    // to read at the `^`. Taken for owned, the caller dropped its own
+    // argument through the result (agora #635). (An argument the callee
+    // hands back as a handle — __fn_lends_arg: not a number it returns by
+    // value, which the part summaries name as well.)
+    ? & == depth 0 != 0 ( nurl_str_len via ) {
+        : ~ s fw ( nurl_sym_get g_pending_impl ( nurl_str_cat `retfwd##` fname ) )
+        ~ != 0 ( nurl_str_len fw ) {
+            : s e ( str_first_word fw ) = fw ( str_skip_word fw )
+            : i c1 ( nurl_str_find e `:` )
+            : s cn ( nurl_str_slice e 0 c1 )
+            : s tail ( nurl_str_slice e + c1 1 - - ( nurl_str_len e ) c1 1 )
+            : i c2 ( nurl_str_find tail `:` )
+            : s ai ( nurl_str_slice tail 0 c2 )
+            : s pi ( nurl_str_slice tail + c2 1 - - ( nurl_str_len tail ) c2 1 )
+            ? & & ( str_contains_word via cn ) ! ( str_contains_word own0 pi ) ( __fn_lends_arg cn ai 0 ) { ^ T } {}
+        }
+    } {}
     ~ != 0 ( nurl_str_len via ) {
         : s c ( str_first_word via ) = via ( str_skip_word via )
         ? ( mem_fn_lends syms c + depth 1 ) { ^ T } {}
+    }
+    ^ F
+}
+
+// Does `fname` hand its argument `ai` back as the handle it is — `^ p`,
+// `^ @ ?T { T p }`, a field of it (its alias and lend summaries, less the
+// parameters it takes over) — or by handing back, as is, the result of a
+// callee it passed that parameter to which does (`^ ( g p )`, the
+// `callee:position:parameter` notes)?
+@ __fn_lends_arg s fname s ai i depth → b {
+    ? | == 0 ( nurl_str_len fname ) > depth 8 { ^ F } {}
+    : s own ( nurl_str_cat3 ( nurl_sym_get g_fn_sink fname ) ` ` ( nurl_sym_get g_fn_keeps fname ) )
+    ? ( str_contains_word own ai ) { ^ F } {}
+    ? | ( str_contains_word ( nurl_sym_get g_fn_ret_alias fname ) ai ) ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `retlend##` fname ) ai ) { ^ T } {}
+    : s via ( nurl_sym_get g_pending_impl ( nurl_str_cat `retvia##` fname ) )
+    ? == 0 ( nurl_str_len via ) { ^ F } {}
+    : ~ s fw ( nurl_sym_get g_pending_impl ( nurl_str_cat `retfwd##` fname ) )
+    ~ != 0 ( nurl_str_len fw ) {
+        : s e ( str_first_word fw ) = fw ( str_skip_word fw )
+        : i c1 ( nurl_str_find e `:` )
+        : s cn ( nurl_str_slice e 0 c1 )
+        : s tail ( nurl_str_slice e + c1 1 - - ( nurl_str_len e ) c1 1 )
+        : i c2 ( nurl_str_find tail `:` )
+        : s a2 ( nurl_str_slice tail 0 c2 )
+        : s pi ( nurl_str_slice tail + c2 1 - - ( nurl_str_len tail ) c2 1 )
+        ? & & ( seq pi ai ) ( str_contains_word via cn ) ( __fn_lends_arg cn a2 + depth 1 ) { ^ T } {}
     }
     ^ F
 }
@@ -24638,6 +24838,11 @@ unsafe @ gen_match i lex i syms i cg → s {
     ( nurl_sym_push syms )
     ( nurl_sym_def syms var_name elem_ty )
     ( nurl_sym_def syms ( nurl_str_cat var_name `__ptr` ) elem_ptr )
+    // …and it is the container's: a view of the element where it is, with
+    // no owner slot of its own. Handed back or stored, it says whose it is
+    // — the binding iterated, or the one whose field was (agora #635).
+    // (Not a closure, whose environment has its own rules: agora #552.)
+    ? & & != 0 ( nurl_str_len fe_cont ) ! ( __is_closure_ty elem_ty ) | ( __is_handle_ty elem_ty ) ( __type_needs_drop elem_ty syms ) { ( mem_note_lview syms var_name ( __path_root_name fe_cont ) ) } {}
     // Labels
     : s lc ( nurl_cg_lbl cg `foreach_check` )
     : s lb ( nurl_cg_lbl cg `foreach_body` )
@@ -52599,8 +52804,18 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
     : ~ s __lm_it ``
     : ~ i __lm_sc 0
     : ~ i __lm_n 0
+    // A struct literal handed on with a field lent as is beside a field it
+    // owns (`^ @ P { . h name ( string_from … ) }`): the fields lent, as
+    // `index\ttype\tvalue` lines, whether another field is its own, and
+    // whether anything but those fields made it a lend (agora #635).
+    : ~ s __mx_lent ``
+    : ~ b __mx_own F
+    : ~ b __mx_foreign F
+    : i __mx_al0 ? agg_moves_fields ( nurl_sym_len syms `__agg_lends__` ) 0
+    : i __mx_alp0 ? agg_moves_fields ( nurl_sym_len syms `__agg_lends_part__` ) 0
     = g_lm_depth + g_lm_depth 1
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
+        : i __mx_f0 ? agg_moves_fields ( nurl_sym_len syms `__agg_lends__` ) 0
         ? != 0 g_borrowck {
             = __lm_tab ( nurl_str_cat4 __lm_tab ( nurl_str_int ( bck_list_len 0 ) ) ` ` ( nurl_str_cat ( nurl_str_int ( bck_list_len 1 ) ) ` ` ) )
             = __lm_ct ( nurl_str_cat3 __lm_ct ( nurl_str_int ( nurl_str_len g_lm_calls ) ) ` ` )
@@ -52646,7 +52861,14 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         // reads the flag).
         : ~ s fld_lent ``
         ? ( is_ident_tok fld_first_tt )
-        { = fld_lent ( mem_lent_cond syms cg ( nurl_sym_get syms fld_first_val ) fld_first_tt fld_first_val ) }
+        { = fld_lent ( mem_lent_cond syms cg ( nurl_sym_get syms fld_first_val ) fld_first_tt fld_first_val )
+            // (A view that cannot be copied, in a literal built as a call's
+            // argument, is shown to the callee with the literal, as the
+            // bare argument is: nothing of it is the literal's to drop
+            // after the call.)
+            ? & & & & ( seq fld_lent `1` ) != 0 g_lview_n ! agg_moves_fields != 0 ( nurl_sym_len syms `__agg_arg_sink__` ) ( __nc_drop_ty ( nurl_sym_get syms fld_first_val ) ) {
+                ? & == 0 ( nurl_str_len ( mem_udrop_ptr_of syms fld_first_val ) ) != 0 ( nurl_str_len ( __lent_view_root syms fld_first_val T ) ) { = fld_lent `` } {}
+            } {} }
         {}
         // A returned wrap's bare payload whose flag is a call's own answer:
         // whether the result owns it, by identity — its flag, or that of a
@@ -53089,13 +53311,39 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
                 } {}
             }
         } {}
+        // …and a view's (a `~` loop's element, a binding of a field read
+        // or of a binding that owns nothing, a `??` payload of one —
+        // __lent_view_root): part of a parameter the caller keeps, it is
+        // lent as that parameter's field is, and the return summary says
+        // so; part of anything else — a local dropped on the way out — it
+        // is copied, or refused when it cannot be, as `^ x` is (agora #635).
+        : ~ b fld_view_lend F
+        ? & & & agg_moves_fields ( seq fld_lent `1` ) ( is_ident_tok fld_first_tt ) == g_bck_closure_depth 0 {
+            : s __fvr ( __lent_view_root syms fld_first_val F )
+            ? != 0 ( nurl_str_len __fvr ) {
+                ? ( __borrowed_param_name syms __fvr ) {
+                    ( __record_param_idx syms `__fn_retpart__` __fvr )
+                    = fld_view_lend T
+                } {
+                    ? ( __nc_held_ty fty ) {
+                        ( die_pos lex agg_line agg_col ( nurl_str_cat4 ( nurl_str_cat4 `this literal is handed on holding '` fld_first_val `', which is part of '` __fvr )
+                        `', and that is not a parameter the caller of this function keeps: it is released on the way out, or stays with what holds it, while the literal would hold the value as well; a '` ( llvm_to_nurl fty )
+                        `' cannot be copied — the value would be released twice. Take it out of what holds it (vec_remove, vec_pop) so that this function owns it, or pass what holds it as a parameter: a part of a borrowed parameter is lent back to the caller.` ) )
+                    } {}
+                    ? & ( __type_needs_drop fty syms ) ( __clone_supported fty syms ) {
+                        = fval ( mem_emit_cloneif cg fty fval `1` )
+                        = fld_lent ``
+                    } {}
+                }
+            } {}
+        } {}
         ? & & agg_moves_fields ( seq fld_lent `1` ) == g_bck_closure_depth 0
         { ( nurl_sym_set_deep syms `__agg_lends__` `1` )
             // A field of a parameter is part of the caller's value; what
             // else a literal lends is unexplained.
             ? & == fld_first_tt TT_DOT >= ( nurl_sym_word_index syms `__fn_param_names__` fld_dot_obj ) 0
             { ( __record_param_idx syms `__fn_retpart__` fld_dot_obj ) }
-            { ? ! | fld_param_lend fld_rlent { ( nurl_sym_set_deep syms `__agg_lends_part__` `1` ) } {} } }
+            { ? ! | | fld_param_lend fld_rlent fld_view_lend { ( nurl_sym_set_deep syms `__agg_lends_part__` `1` ) } {} } }
         {  // (A payload that is a `?` / `??`: lent per call only when what it
             // lent is the caller's — a local's lend is copied, as `^ ?` does;
             // agora #184.)
@@ -54182,10 +54430,50 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         ( nurl_print `, ` ) ( nurl_print ( nurl_str_int ins_idx ) ) ( nurl_print `\n` )
         = result r
         ? & < - __lm_n 1 62 ( __mx_scalar_ty actual_fty ) { = __lm_sc | __lm_sc << 1 - __lm_n 1 } {}
+        ? & agg_moves_fields == g_bck_closure_depth 0 {
+            ? ( seq __lm_l `1` ) {
+                = __mx_lent ( nurl_str_cat4 __mx_lent ( nurl_str_int ins_idx ) `\t` ( nurl_str_cat4 actual_fty `\t` actual_fval `\n` ) )
+            } {
+                ? & ( __type_needs_drop actual_fty syms ) ! ( seq actual_fval `zeroinitializer` ) { = __mx_own T } {}
+                ? & == __mx_f0 0 != 0 ( nurl_sym_len syms `__agg_lends__` ) { = __mx_foreign T } {}
+            }
+        } {}
         = idx + idx 1
     }
     ( expect lex TT_RBRACE )  // consume '}'
     = g_lm_depth - g_lm_depth 1
+    // A plain struct handed on whole is its taker's to drop, or lent whole:
+    // with a field of its own beside a lent one, lent whole leaked the own
+    // field and owned whole released the lent one twice. The lent fields
+    // are copied — the literal then owns every field, as a borrowed value
+    // stored into an owner is copied (§7.6) — or it is refused where one
+    // cannot be (agora #635).
+    ? & & & & != 0 ( nurl_str_len __mx_lent ) __mx_own ! __mx_foreign != 0 ( nurl_str_len cur_sname ) & == enum_paycount -1 ! agg_is_wrap {
+        : ~ s __mx_rest ( nurl_str_cat __mx_lent `` )
+        ~ != 0 ( nurl_str_len __mx_rest ) {
+            : i __mx_nl ( nurl_str_find __mx_rest `\n` )
+            : s __mx_e ( nurl_str_slice __mx_rest 0 __mx_nl )
+            = __mx_rest ( nurl_str_slice __mx_rest + __mx_nl 1 - - ( nurl_str_len __mx_rest ) __mx_nl 1 )
+            : i __mx_t1 ( nurl_str_find __mx_e `\t` )
+            : s __mx_ix ( nurl_str_slice __mx_e 0 __mx_t1 )
+            : s __mx_tv ( nurl_str_slice __mx_e + __mx_t1 1 - - ( nurl_str_len __mx_e ) __mx_t1 1 )
+            : i __mx_t2 ( nurl_str_find __mx_tv `\t` )
+            : s __mx_ty ( nurl_str_slice __mx_tv 0 __mx_t2 )
+            : s __mx_v ( nurl_str_slice __mx_tv + __mx_t2 1 - - ( nurl_str_len __mx_tv ) __mx_t2 1 )
+            ? ! ( __clone_supported __mx_ty syms ) {
+                ( die_pos lex agg_line agg_col ( nurl_str_cat4 `this '` cur_sname `' is handed on with a field of its own beside a field it only borrows, a '` ( nurl_str_cat ( llvm_to_nurl __mx_ty )
+                `', which cannot be copied: lent whole, the literal's own field is released by no one, and owned whole, the borrowed one is released twice. Give the literal a value its owner gives up (a 'sink' parameter, a value taken out of what holds it), or hand back the borrowed part on its own.` ) ) )
+            } {}
+            : s __mx_c ( mem_emit_cloneif cg __mx_ty __mx_v `1` )
+            : s __mx_r ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print __mx_r ) ( nurl_print ` = insertvalue ` ) ( nurl_print ( nurl_llty agg_ty ) )
+            ( nurl_print ` ` ) ( nurl_print result ) ( nurl_print `, ` ) ( nurl_print ( nurl_llty __mx_ty ) )
+            ( nurl_print ` ` ) ( nurl_print __mx_c ) ( nurl_print `, ` ) ( nurl_print __mx_ix ) ( nurl_print `\n` )
+            = result __mx_r
+        }
+        ? == __mx_al0 0 { ( nurl_sym_set_deep syms `__agg_lends__` `` ) } {}
+        ? == __mx_alp0 0 { ( nurl_sym_set_deep syms `__agg_lends_part__` `` ) } {}
+    } {}
     // One value moved into two owners, or released by one field and kept
     // by another, within this literal.
     ? & & & != 0 g_borrowck > __lm_n 1 ! ( bck_unsafe_ctx ) | | > ( bck_list_len 1 ) __lm_p0 ( __lm_any_moved __lm_mv ) != 0 ( nurl_str_len g_lm_inner ) {
@@ -65169,6 +65457,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     = g_fn_arcseen 0
     = g_part_n 0
     = g_ncl_n 0
+    = g_lview_n 0
     = g_fn_ret_count 0
     ( nurl_sym_def syms `__origin_return__` ( nurl_str_int ( origin_function fname ) ) )
     ( nurl_sym_def syms `__origin_sink__` ( nurl_str_int ( origin_summary g_fn_sink fname ) ) )
@@ -72122,6 +72411,8 @@ unsafe @ __die_at_fn s fname s what s msg → v {
     = work ( __words_join work ( nurl_sym_get2 syms name `__ncsx` ) )
     = work ( __words_join work ( nurl_sym_get2 syms name `__plend` ) )
     = work ( __words_join work ( nurl_sym_get2 syms name `__plroot` ) )
+    // (…a view's root: a `~` loop's element, agora #635.)
+    = work ( __words_join work ( nurl_sym_get2 syms name `__lvroot` ) )
     : ~ s seen ( nurl_str_cat name `` )
     : ~ i hops 0
     ~ & != 0 ( nurl_str_len work ) < hops 16 {
@@ -72134,6 +72425,7 @@ unsafe @ __die_at_fn s fname s what s msg → v {
             = work ( __words_join work ( nurl_sym_get2 syms r `__ncsx` ) )
             = work ( __words_join work ( nurl_sym_get2 syms r `__plend` ) )
             = work ( __words_join work ( nurl_sym_get2 syms r `__plroot` ) )
+            = work ( __words_join work ( nurl_sym_get2 syms r `__lvroot` ) )
         } {}
     }
     ^ ( nurl_str_cat `` `` )
@@ -72364,6 +72656,22 @@ unsafe @ __sx_names_capture i syms s sx → b {
 @ __nc_bind_lend_note i syms s name i tt b deep → v {
     : s ty ( nurl_get_last_type )
     : b on & == tt TT_LPAREN ( __nc_held_ty ty )
+    // (A binding of a field read, or of another binding, that was given no
+    // owner slot views the value where it is: what it was read out of —
+    // mem_note_lview, agora #635.)
+    ? & & & ! deep == 0 g_bck_closure_depth | ( is_ident_tok tt ) == tt TT_DOT ! ( __is_closure_ty ty ) {
+        ? ( __nc_held_ty ty ) {
+            ? ( is_ident_tok tt ) { ( mem_note_lview syms name ( nurl_sym_get syms `__last_ident_name__` ) ) } {
+                ( mem_note_lview syms name ( __path_root_name ( nurl_sym_get syms `__last_member_root__` ) ) ) }
+        } {
+            // (…and a field of a view, of any type that owns something: `~
+            // x hs { : String n . x name … ^ n }` is part of what x is.)
+            ? & == tt TT_DOT != 0 g_lview_n {
+                : s fr ( __path_root_name ( nurl_sym_get syms `__last_member_root__` ) )
+                ? & != 0 ( nurl_sym_len2 syms fr `__lview` ) ( __type_needs_drop ty syms ) { ( mem_note_lview syms name fr ) } {}
+            } {}
+        }
+    } {}
     ? & ! on ! deep {
         // (A binding of another such binding, `: Conn d c`, is what c is a
         // lend of: handed back, it answers as c does — agora #462.)
@@ -72846,6 +73154,10 @@ unsafe @ __clo_take_capture i syms i cg s name → v {
             ? ( is_ident_tok tt ) {
                 : s up ( mem_udrop_ptr_of syms val )
                 ? & == 0 ( nurl_str_len up ) ( __is_clo_param syms val ) { ^ ( nurl_str_cat `1` `` ) } {}
+                // (A view — a `~` loop's element, a binding of a field read
+                // or of a binding that owns nothing — is the value where it
+                // is, which its holder still drops: agora #635.)
+                ? & & == 0 ( nurl_str_len up ) != 0 g_lview_n != 0 ( nurl_str_len ( __lent_view_root syms val T ) ) { ^ ( nurl_str_cat `1` `` ) } {}
                 ? == 0 ( nurl_str_len up ) { ^ ( nurl_str_cat `` `` ) } {}
                 : s sb ( nurl_sym_get2 syms up `__sborrow` )
                 ? | | ( seq sb `1` ) ( seq sb `local` ) ( seq sb `elem` ) { ^ ( nurl_str_cat `1` `` ) } {}

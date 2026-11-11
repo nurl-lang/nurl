@@ -1,0 +1,31 @@
+// loop_element_of_a_local_vec_in_a_handed_back_literal: agora #635 — `~ x loc { ^ @ W { x 1 } }`, loc a local Vec of values that cannot be copied.
+// Closed: a value read out of somewhere else with no owner slot of its own — a `~` loop's element, a binding of a field read or of another binding, a `??` payload of one — is not the function's to hand over: part of a parameter the caller keeps, it is lent back and the return summary names the parameter; part of anything else, it is copied, or refused when it cannot be (`__lent_view_root`, gen_ret, gen_agg_lit).
+// main: accepted; AddressSanitizer reported heap-use-after-free.
+// map: §7.6 | A2 | rejected | - | agora #635: `~ x loc { ^ @ W { x 1 } }`, loc a local Vec of values that cannot be copied
+$ `stdlib/core/string.nu`
+$ `stdlib/core/vec.nu`
+
+: Bomb { String tag i boom }
+
+% Drop Bomb { @ drop Bomb b → v { ( nurl_println ( nurl_str_cat `drop ` ( string_data . b tag ) ) ) } }
+
+@ bomb s tag i boom → Bomb { ^ @ Bomb { ( string_from tag ) boom } }
+
+: Holder { String name Bomb inner }
+
+@ see s what Bomb b → v { ( nurl_println ( nurl_str_cat3 what ` sees ` ( string_data . b tag ) ) ) }
+
+: W { Bomb b i n }
+
+@ f → W {
+    : ~ ( Vec Bomb ) loc ( vec_new [Bomb] )
+    ( vec_push [Bomb] loc ( bomb `l0` 0 ) )
+    ~ x loc { ^ @ W { x 1 } }
+    ^ @ W { ( bomb `none` 0 ) 2 }
+}
+
+@ main → i {
+    : W r ( f )
+    ( see `main` . r b )
+    ^ 0
+}

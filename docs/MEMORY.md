@@ -2569,6 +2569,23 @@ are dropped, moved and copied by the same rules:
   literal hands one back only lent by a parameter, as `^ . p f` does, and
   a binding may not borrow one past the block its struct is dropped in
   (h328).
+- **Views.** A `~` loop's element, a binding of a field read
+  (`: D e . h inner`), a binding of a binding that owns nothing
+  (`: D e p`) and a `??` payload of any of them are views: the value
+  stays where it is, with the owner that drops it. A view is never the
+  function's to hand over. Handed back (`^ x`, `^ @ ?D { T x }`) out of a
+  parameter the caller keeps, it is lent, as `^ p` and `^ . p f` are: the
+  call answers "lent" on that path, and the function's return summary
+  names the parameter, so the caller's binding borrows from its own
+  argument. Out of anything else (a local or a `sink` parameter, released
+  on the way out) the caller gets a copy, and for a value that cannot be
+  copied the `^` is an error. Stored into another owner, a view that
+  cannot be copied is an error too (agora #635).
+- **A literal handed back with a borrowed field beside a field of its
+  own** (`^ @ P { . h name ( string_from … ) }`) copies the borrowed
+  field, so the literal owns every field; with every field borrowed it
+  stays a lend and nothing is copied. A borrowed field that cannot be
+  copied beside a field of the literal's own is an error (agora #635).
 - **A call's result read for a field it cannot give up** — the struct has
   a `% Drop` of its own, or the field cannot be copied — gets an owner of
   its own for the rest of the scope, which drops it, and the field is lent
