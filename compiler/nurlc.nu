@@ -6327,8 +6327,9 @@ unsafe @ gen_ret i lex i syms i cg → s {
     // `^ . p f` of a payload the arm was only lent, out of an enum this
     // function keeps whole and releases on the way out
     // (__payload_lent_of_frame): the caller gets its own copy of the field
-    // and is told so — answered as a lend, the copy was freed by no one; a
-    // field that cannot be copied has none to give (agora #641).
+    // and is told so — answered as a lend, the copy was freed by no one
+    // (agora #641). (A field that cannot be copied was refused above:
+    // __nc_ret_check, "this hands back a field of 'p'".)
     ? & & != 0 g_epl_n == ret_eff_tt TT_DOT ! ret_field_copy {
         : s __pkr ? == 0 ( nurl_str_len ret_first_root ) ( nurl_sym_get syms `__last_member_root__` ) ( nurl_str_cat ret_first_root `` )
         : s __pkt ( nurl_get_last_type )
@@ -6348,10 +6349,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
                     = ret_pl_copied T
                     = ret_pl_own __pkf
                 }
-            } {
-                ( die_pos lex bck_line __ret_col ( nurl_str_cat3 `this hands back a field of a payload of an enum this function keeps and releases, payloads and all, on the way out; a '` ( llvm_to_nurl __pkt )
-                `' cannot be copied out of it — the field would be released with the enum under the caller. Hand back the whole enum, or a value built on its own.` ) )
-            }
+            } {}
         } {}
     } {}
     ? & == ret_eff_tt TT_DOT ! ret_field_copy {
