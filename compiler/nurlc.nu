@@ -57422,6 +57422,10 @@ unsafe @ gen_cast i lex i syms i cg → s {
 // one took out of such a result, owned exactly when that read's flag holds
 // (`. . ( f ) v b`, agora #474).
 @ __mb_tmp_flag i syms i cg i mb_tt s inner_tfo → s {
+    // (`. ( mem_dup x ) f`: the copy is the read's own temporary — a builtin
+    // has no callee answer to read; agora #771. Made one call below this
+    // read, as __arm_is_mem_dup asks it of an arm.)
+    ? & == mb_tt TT_LPAREN == g_dup_nest + g_call_nest 1 { ^ ( nurl_str_cat `true` `` ) } {}
     ? == mb_tt TT_LPAREN { ^ ( mem_call_retown syms cg ) } {}
     ^ ( nurl_str_cat inner_tfo `` )
 }
@@ -81182,6 +81186,13 @@ unsafe @ __jpb_note i cg s up → v {
     // promotion and arrive here with their published lattice element intact.
     // `( mem_dup x )` (__arm_is_mem_dup): a copy the arm owns.
     ? ( __arm_is_mem_dup syms tt0 ) { ^ ( nurl_str_cat `true` `` ) } {}
+    // `. ( f ) name` (or a block arm ending in it): a field taken out of a
+    // call's temporary is the arm's own where the call handed its result over — by its bit, as a return
+    // of it reads it (gen_member, h266). Taken for a lend, it leaked (agora
+    // #771).
+    ? == ht TT_DOT {
+        ? != 0 ( nurl_sym_len syms `__last_tmp_field_own__` ) { ^ ( nurl_str_cat ( nurl_sym_get syms `__last_tmp_field_own__` ) `` ) } {}
+    } {}
     : s explicit ( nurl_sym_get syms `__last_value_hown__` )
     ? != 0 ( nurl_str_len explicit ) { ^ ( mem_own_lattice explicit ) } {}
     // `{ … ( f ) }`: a block arm hands over what its tail call does — also
