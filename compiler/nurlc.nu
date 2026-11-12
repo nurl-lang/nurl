@@ -20201,6 +20201,26 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             : s __iz_w ( nurl_str_cat4 `z|` __iz_c ( nurl_str_cat3 `|` ( __zero_if_request ( nurl_llty __iz_t ) ) `|` ) __iz_p )
             = owned_arg_temps ? == 0 ( nurl_str_len owned_arg_temps ) __iz_w ( nurl_str_cat3 owned_arg_temps ` ` __iz_w )
         } {}
+        // This function's own `inout` parameter handed by name to a callee
+        // that takes it (`( eat p )`): its value is loaded already, and the
+        // caller's slot is emptied now, on the same answer, as a field
+        // handed to a `sink` is emptied before the call. The caller then
+        // finds nothing to release on any path — a panic's unwind included,
+        // which ran before a post-call step could (agora #778). (A handle
+        // type only: its zero is the empty value. The caller's drop flag is
+        // cleared as before.)
+        ? & & & != 0 g_auto_drop_strings ( is_ident_tok bck_arg_tt ) ( seq ( nurl_sym_get2 syms bck_arg_val `__inout` ) `1` ) | summary_callee ( str_has_index callee_sink arg_idx ) {
+            : s __ie_p ( nurl_sym_get2 syms bck_arg_val `__ptr` )
+            ? & != 0 ( nurl_str_len __ie_p ) ( __is_handle_ty at ) {
+                : ~ s __ie_c ( nurl_str_cat `true` `` )
+                ? ! ( str_has_index callee_sink arg_idx ) {
+                    = __ie_c ( nurl_cg_reg cg )
+                    ( emit_sink_flag_load ( nurl_str_cat `@.__nurl_sink.` ( nurl_str_int ( sink_flag call_name fname arg_idx ) ) ) __ie_c )
+                } {}
+                ( nurl_print `  call void @__nurl_zero_if.` ) ( nurl_print ( __zero_if_request ( nurl_llty at ) ) )
+                ( nurl_print `(i1 ` ) ( nurl_print __ie_c ) ( nurl_print `, ptr ` ) ( nurl_print __ie_p ) ( nurl_print `)\n` )
+            } {}
+        } {}
         // A capture of a closure returned right here — its env keeps it for
         // the next call — or a payload or a part read out of one, handed
         // to a declared `sink`: the callee is handed a copy, as `^ x` in
