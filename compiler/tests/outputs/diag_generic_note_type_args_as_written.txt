@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+stdlib/std/par.nu:44:87: error: chan_send would move this value to whatever thread or fiber receives it, but its type is not Send: it reaches an 'Rc', whose refcount is NOT atomic — two threads cloning or dropping the same Rc race on its control-block count, which is UB. Use 'Arc' (stdlib/std/arc.nu) for any handle that crosses a thread boundary; it is the same API with a SEQ_CST count. If the type holding it IS safe to send and the compiler cannot see why, assert that with an 'unsafe % Send <Type> { }' marker impl (stdlib/core/marker.nu) — a promise the compiler takes on trust. A channel can carry the DATA instead of the handle — read the value out on this side and send that.
+                    : b _s ( chan_send [( ParOut B )] cl @ ( ParOut B ) { j ( f j ) } )
+                                                                                      ^
+compiler/tests/diag_generic_note_type_args_as_written.nu:15:26: note: in 'par_map_index [B = ( Rc i )]', instantiated here — the error may depend on these type arguments

@@ -3107,10 +3107,23 @@ foo.nu:6:3: error: bare identifier 'nurl_print' as a statement has no
 
 **Re-parsed contexts.** A diagnostic raised inside a generic
 instantiation's body is anchored at the **template's own** `file:line:col`
-(the re-lex buffer preserves the template's line structure), and the
-message carries a bracketed context suffix naming the instantiation and
-its first call site — `[while instantiating 'f__i64' — the error may
-depend on the concrete type arguments; first call site: main.nu:12]`.
+(the column is the file's, not the re-parsed body's), with the template
+file's own line echoed; a `note:` line
+follows for each instantiation the error is in, innermost first, naming
+the instance with its type arguments as the program writes them and
+anchored at the call that asked for it:
+
+```text
+stdlib/std/par.nu:44:87: error: chan_send would move this value …
+                    : b _s ( chan_send [( ParOut B )] cl @ ( ParOut B ) { j ( f j ) } )
+                                                                                      ^
+main.nu:5:7: note: in 'par_map_index [B = ( Rc i )]', instantiated here — the error may depend on these type arguments
+main.nu:8:26: note: in 'outer [A = ( Rc i )]', instantiated here — the error may depend on these type arguments
+```
+
+An instance no call asked for (a library handle's drop, copy or trace)
+says what made it instead: `note: in 'Rc_drop [A = Node]', made for the
+drop of '( Rc Node )', needed here`.
 Trait-method signature and default-body re-parses carry the analogous
 suffix naming the method, the trait, and the Self/impl type.
 
