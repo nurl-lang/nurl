@@ -24724,7 +24724,16 @@ unsafe @ gen_match i lex i syms i cg → s {
                                     } {}
                                 }
                             }
-                        } {} }
+                        } {}
+                        // The payload is the arm's own from here, as a `:`
+                        // binding's value is from its statement: journaled
+                        // with its flag (a lent payload's says "not owned",
+                        // and the drain passes it by). Only registered, a
+                        // panic in the arm found nothing standing for a
+                        // call's fresh option or result: its payload leaked
+                        // (Agora #745). A String / Vec payload is journaled
+                        // as a handle already.
+                        ( mem_journal_push_userdrop syms cg vp0 pt0_eff ) }
                     {}
                     // A String / Vec payload of a fresh option or result.
                     // (An option payload — `??T`'s inner option — counts as its
