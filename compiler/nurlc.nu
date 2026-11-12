@@ -37356,7 +37356,14 @@ unsafe @ bck_stash_move s name i line s cause → v {
     : ~ s t ( nurl_str_cat ty `` )
     ~ != 0 ( nurl_str_ends t `*` ) { = t ( nurl_str_slice t 0 - ( nurl_str_len t ) 1 ) }
     ? < ( nurl_str_len t ) 2 { ^ F } {}
-    ? ( seq ( nurl_str_slice t 1 - ( nurl_str_len t ) 1 ) name ) { ^ ( bck_trusted_file ( nurl_sym_get2 g_vis_syms name `__src_file` ) ) } {}
+    // (The declaring file the name scan saw, before codegen records the
+    // struct's own origin: verify_super_obligations asks between the two —
+    // a `: Sync` trait's impl for a struct holding the library's Cell,
+    // agora #714.)
+    ? ( seq ( nurl_str_slice t 1 - ( nurl_str_len t ) 1 ) name ) {
+        : s sf ( nurl_sym_get2 g_vis_syms name `__src_file` )
+        ^ ( bck_trusted_file ? != 0 ( nurl_str_len sf ) sf ( nurl_sym_get2 g_type_layouts name `__file` ) )
+    } {}
     ? ! ( seq ( nurl_sym_get2 g_impl_name_syms `libhs##` t ) name ) { ^ F } {}
     ^ ( bck_trusted_file ( nurl_sym_get2 g_generic_struct_syms name `__sfile` ) )
 }
@@ -61898,7 +61905,7 @@ unsafe @ __thr_peel s lty → s {
     // through the capture sets recorded where closures are put into it,
     // __clo_cs_ident.)
     ? & == want 1 ( __thr_marked `Sync##` lty bn )
-    { : i swant ? ( seq bn `RwLocked` ) 1 0
+    { : i swant ? & ( seq bn `RwLocked` ) ( __ty_std_named lty `RwLocked` ) 1 0
         : ~ i sk 0
         : ~ s sarg ( __inst_targ lty 0 )
         ~ != 0 ( nurl_str_len sarg ) {
@@ -61928,10 +61935,12 @@ unsafe @ __thr_peel s lty → s {
     } {}
 
     // The two built-in leaves. (An Rc's `Weak` is the same count: upgraded
-    // on the other thread it is an Rc there.)
-    ? ( seq bn `Rc` ) { ^ ( nurl_str_cat `!Rc` ` rc` ) } {}
+    // on the other thread it is an Rc there.) By what the type is: a
+    // program's own `Rc` or `Cell` is whatever its fields make it (agora
+    // #714).
+    ? & ( seq bn `Rc` ) ( __ty_std_named lty `Rc` ) { ^ ( nurl_str_cat `!Rc` ` rc` ) } {}
     ? & ( seq bn `Weak` ) ( __ty_std_named lty `Weak` ) { ^ ( nurl_str_cat `!Weak` ` rcweak` ) } {}
-    ? & == want 1 ( seq bn `Cell` ) { ^ ( nurl_str_cat `!Cell` ` cell` ) } {}
+    ? & & == want 1 ( seq bn `Cell` ) ( __ty_std_named lty `Cell` ) { ^ ( nurl_str_cat `!Cell` ` cell` ) } {}
 
     // The library's `ArcWeak` is its `Arc` to both questions: upgraded on
     // the other thread it is an Arc on the same payload (agora #690), every
@@ -61956,7 +61965,9 @@ unsafe @ __thr_peel s lty → s {
     // Sync implies Send, but a type asserted `% Sync` stops the Sync walk
     // without answering Send — `: S { ( Rc i ) r }` with `unsafe % Sync S`
     // in an Arc crossed, and its Rc was released on the worker.
-    : b shared | | ( seq bn `Arc` ) aweak ( seq bn `RwLocked` )
+    // (By what the type is, as the leaves are: a program's own generic
+    // named `Arc` moves its arguments like any struct, agora #714.)
+    : b shared | | & ( seq bn `Arc` ) ( __ty_std_named lty `Arc` ) aweak & ( seq bn `RwLocked` ) ( __ty_std_named lty `RwLocked` )
     : i sub_want ? shared 1 want
     : ~ i ak 0
     : ~ s arg ( __inst_targ lty 0 )
@@ -78571,10 +78582,12 @@ unsafe @ __sk_walk_calc s ty i syms → b {
     : s bn ( __lty_base_name ty )
     // A counted block on its own is a handle's insides (a guard's, a
     // pool's), checked only through the handle (emit_sendck_fn).
-    ? ( seq bn `Shared` ) { ^ F } {}
+    ? & ( seq bn `Shared` ) ( __ty_std_named ty `Shared` ) { ^ F } {}
     ? ( __thr_unsafe_share syms ty ) { ^ T } {}
-    // An Rc never crosses (it is not Send); a Weak owns nothing.
-    ? | ( seq bn `Rc` ) ( seq bn `Weak` ) { ^ F } {}
+    // An Rc never crosses (it is not Send); a Weak owns nothing. (The
+    // library's: a program's own struct named `Weak` is walked by its
+    // fields — one holding a share crossed uncounted, agora #714.)
+    ? & | ( seq bn `Rc` ) ( seq bn `Weak` ) ( __ty_std_named ty bn ) { ^ F } {}
     ? != 0 ( nurl_str_starts ty `%Vec__` ) { ^ ( __sk_walk ( __vec_elem_llvm ty ) syms F ) } {}
     ? ( __is_libh ty ) {
         : i na ( count_words ( nurl_sym_get2 g_impl_name_syms `libhta##` ty ) )
