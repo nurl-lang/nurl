@@ -224,6 +224,24 @@ unsafe @ scratch → v {
 FFI declarations (`& "lib" @ name …`) and trait/impl methods are
 intentionally **not** renamed — FFI symbols resolve at the linker by
 literal C-ABI name, and trait dispatch is mangled by impl-target type.
+Neither are struct **field** names: a field is part of its struct's
+layout, not a name of the module, so the importer reads it with its own
+spelling (`. p x`) even where the module also declares a function `x`.
+
+A module has one set of names per compilation: it is compiled once, under
+the spelling of its first import. A later import of the same file under
+another alias — in the same file or in another one — is a second spelling
+of that one module: in the importing file, `n::name` is read as the first
+spelling's name (`m::name`, or the bare `name` when the first import was
+plain), so a library that imports a module as `m` and a program that
+imports it plainly share its types and functions. Its names cannot be
+bare a second time, though: a plain import of a file already imported
+under an alias is refused at the import, naming the earlier spelling —
+import it under that alias there too, or put the plain import first.
+
+Functions and types share one namespace at file scope: a function and a
+struct, generic struct or enum of the same name are refused at the later
+of the two declarations (a call `( Pt 4 )` would read as the type).
 
 The alias stands before each of the module's names with `__` between, and
 ends where that `__` starts, so it is held to what keeps the spelling

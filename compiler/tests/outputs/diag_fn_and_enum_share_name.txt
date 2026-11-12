@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_fn_and_enum_share_name.nu:6:5: error: duplicate name 'Shade' — a function '@ Shade' is already declared at compiler/tests/diag_fn_and_enum_share_name.nu:4. Functions and types share one namespace at file scope, and a call '( Shade … )' reads as the type, so the function could never be called: rename one (a type is usually capitalised, a function not). If the two are in different files, both are visible to the importer, so the names must still differ.
+: | Shade { Light Dark }
+    ^

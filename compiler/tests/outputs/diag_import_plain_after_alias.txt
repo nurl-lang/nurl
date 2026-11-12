@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_import_plain_after_alias.nu:8:1: error: 'compiler/tests/alias_rewrite_types_mod.nu' is already imported under the alias 'm' (at compiler/tests/import_second_alias_mod.nu:5), so its names are spelled 'm::name' in this compilation and cannot be bare here as well — a file is compiled once, with one set of names. Import it as 'm' here too and write 'm::name', or move this plain import above the one that aliases it.
+$ `compiler/tests/alias_rewrite_types_mod.nu`
+^

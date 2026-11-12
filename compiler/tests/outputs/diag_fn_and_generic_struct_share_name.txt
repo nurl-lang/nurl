@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_fn_and_generic_struct_share_name.nu:12:3: error: duplicate name 'Pt' — a type ': Pt' is already declared at compiler/tests/diag_fn_and_generic_struct_share_name.nu:5. Functions and types share one namespace at file scope, and a call '( Pt … )' reads as the type, so the function could never be called: rename one (a type is usually capitalised, a function not). If the two are in different files, both are visible to the importer, so the names must still differ.
+@ Pt i x → i { ^ * x 3 }
+  ^
