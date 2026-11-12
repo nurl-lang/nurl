@@ -14,5 +14,7 @@ $ `compiler/tests/alias_field_names_mod.nu`
     : Pt q ( moved p )
     ( nurl_println_int . q x )
     ( nurl_println_int ( stretch @ Line { p q } ) )
+    ( nurl_println_int ( scale x : 3 ) )
+    ( nurl_println_int ( scale k : 5 x : 2 ) )
     ^ 0
 }

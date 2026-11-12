@@ -80998,6 +80998,21 @@ unsafe @ __alias_field_tok i lex i syms s sname → v {
     ( nurl_lex_set_cur_text lex orig )
 }
 
+// The word `w` of the file `lex` reads as that file's own text spelled it:
+// `fl__x` is `x` when the alias rewrite made it (a parameter's name, which
+// a caller writes as a keyword argument's label, is no name of the module
+// but was renamed with one).
+@ __alias_orig_name i lex s w → s {
+    ? == 0 g_alias_tab { ^ ( nurl_str_cat w `` ) } {}
+    : s pre ( __alias_prefix_of lex )
+    : i pl ( nurl_str_len pre )
+    : i wl ( nurl_str_len w )
+    ? | | == 0 pl <= wl pl == 0 ( nurl_str_starts w pre ) { ^ ( nurl_str_cat w `` ) } {}
+    : s orig ( nurl_str_slice w pl - wl pl )
+    ? == 0 ( nurl_sym_len g_alias_tab ( nurl_str_cat4 `nm##` ( nurl_lex_filename lex ) `|` orig ) ) { ^ ( nurl_str_cat w `` ) } {}
+    ^ orig
+}
+
 // …after a slice's `.`: its `ptr` / `length`, or an index binding.
 unsafe @ __alias_slice_tok i lex → v {
     ? | == 0 g_alias_tab != ( nurl_lex_type lex ) TT_IDENT { ^ } {}
@@ -87422,7 +87437,10 @@ unsafe @ priv_resolve i lex i syms s fname → s {
                                         ? ( is_ident_tok ( nurl_lex_type lex ) )
                                         { : s pnm ( nurl_lex_val lex )
                                             ( nurl_lex_advance lex )
-                                            ( nurl_sym_def syms ( __kw_key fname `pn` pcount ) pnm )
+                                            // (Named as a caller names it: a parameter the alias
+                                            // rewrite renamed with the module's names is still
+                                            // `width:` at the call — __alias_orig_name.)
+                                            ( nurl_sym_def syms ( __kw_key fname `pn` pcount ) ( __alias_orig_name lex pnm ) )
                                             // Optional default value: `= <single-token>`.
                                             // Only fires when `=` is present, so existing
                                             // param regions scan byte-identically.

@@ -8,6 +8,9 @@
   a nested path or an `inout` field argument — and where the word after a
   `.` is an index instead (`. buf n`, `n` a name of the module), the
   compiler reads it as the module's name, as the module's own text meant.
+  A parameter named like one of the module's functions keeps its name for
+  a caller's keyword argument too (`( fl::scale x: 3 )`, which was "has no
+  parameter named 'x'").
 - **A module imported under a second alias is the same module** (Agora
   #694). `$ … m` then `$ … n` (in one file or a library and its user)
   skipped the second import without a word, and its first use failed as

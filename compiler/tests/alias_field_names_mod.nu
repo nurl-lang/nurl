@@ -32,3 +32,6 @@
     = . . m b x 7
     ^ + . . m a x . . m b x
 }
+
+// A parameter named like a module function: a caller labels it `x:`.
+@ scale i x i k = 2 → i { ^ * x k }
