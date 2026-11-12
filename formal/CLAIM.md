@@ -943,10 +943,10 @@ The rules are stricter than nurlc's in these places:
     `Vec`'s drain binds each element at a destructor type, which a `Vec`
     is not, and a block's payload is swept with no code. (A struct or an
     enum with a `Vec D` field or payload is typed, Agora #607.)
-  - handing an element to a callee that changes it (`withElem`): the
-    element checked out needs a destructor frame of its own while it is
-    out. (`vec_free`, `vec_clear`, `vec_truncate` and `vec_set` of such a
-    `Vec` are code the calculus types, each element's destructor running:
+  Not refused: the in-place drops. (`vec_free`, `vec_clear`,
+    `vec_truncate` and `vec_set` of such a `Vec`, and handing an element to
+    a callee that changes it (`withElem`), are code the calculus types,
+    each element's destructor running:
     `x` moved into a destructor binding that ends at once, whose frame
     drains it (`A2.Dtor.vecFreeD_typed`, leaving the context `vec_free`'s
     rule leaves); a loop moving element 0 out to a destructor binding
@@ -962,7 +962,14 @@ The rules are stricter than nurlc's in these places:
     either way. The loops are typed in a context with no live borrow of
     the `Vec`'s elements, which is what a truncation leaves;
     `A2.DtorWitness.main6_typed` types a program with the three loops and
-    `mainSet_typed` one with a `vec_set`. That each element's destructor
+    `mainSet_typed` one with a `vec_set`. An element handed over is moved
+    out to a destructor binding for the body and inserted back after it
+    (`withElemD_typed`, witness `mainElem_typed`): a panic in the body
+    reaches that binding's frame, which runs the element's destructor,
+    where nurlc's element stays in the `Vec` in place and is dropped with
+    it; each destructor runs once in both. The body names neither the
+    `Vec` nor what the index reads, as `StmtT.withElem` asks, so the
+    element goes back where nurlc's never left. That each element's destructor
     runs is read off the steps of `letd`'s frame, as for the drain; it is
     no theorem about these forms. Two differences from nurlc's run: nurlc
     cuts the length before it drops, so a destructor that reached the
