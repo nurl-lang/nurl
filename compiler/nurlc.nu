@@ -1640,7 +1640,18 @@ unsafe @ agg_field_count i syms s ot → i {
 // credited only where its holder argument is the one read so far.
 : ~ i g_rp_rd 0
 : ~ i g_rp_nstmt 0
-: ~ s g_noaddr_visiting ``  // enum types __ty_no_address is examining (a recursive type qualifies provisionally)
+// __holds_user_drop's answers across questions, `<generation>:<0|1>` per
+// type: a `% Drop` impl registered later, or a layout registered again by
+// its declaration (a refused enum's variants: g_drop_gen), makes them
+// stale — as it does __type_needs_drop's.
+: ~ i g_hud_pmemo 0
+: ~ i g_drop_gen 0
+// 1 once every named layout is read (read_type_layouts): an answer about a
+// type's fields may be kept from then on (__type_needs_drop).
+: ~ i g_layouts_final 0
+: ~ i g_noaddr_depth 0  // how deep __ty_no_address is in the named types of one question
+: ~ s g_noaddr_stamp ``  // that question's visited set (__seen_begin)
+: ~ s g_noaddr_vis ``  // the named types it met, kept as yes when its answer is yes
 : ~ i g_ff_gen 0  // function counter keying the field-owner flags (mem_ff_slot)
 : ~ i g_ff_any 0  // 1 once this function made a field-owner flag
 : ~ i g_summaries_final 0  // 1 once the module's functions are all compiled (mem_emit_arg_flags): __hown_dyn may memoize
@@ -17034,8 +17045,13 @@ unsafe @ __has_nonzero_word s list → b {
 
 // Is `ty` built of numbers alone — scalars, and options / results /
 // plain structs of them?
-@ __ty_numbers_only s ty0 i depth → b {
-    ? > depth 6 { ^ F } {}
+// (No depth budget: a value's by-value parts are a finite tree. Six levels
+// answered no below them — the arm locals of a value-bearing arm over
+// numbers seven structs deep leaked — and walked every path again: thirty
+// fields six deep took minutes, agora #740. Each struct's answer is kept
+// once the layouts are final; it is marked while its fields are read, so a
+// type that holds itself — an error its declaration reports — ends.)
+unsafe @ __ty_numbers_only s ty0 i depth → b {
     : s ty ( nurl_llty ty0 )
     : i n ( nurl_str_len ty )
     ? == 0 n { ^ F } {}
@@ -17045,8 +17061,8 @@ unsafe @ __has_nonzero_word s list → b {
         : s a ( __wrap_part ty 0 )
         : s b ( __wrap_part ty 1 )
         ? == 0 ( nurl_str_len a ) { ^ F } {}
-        ? ! ( __ty_numbers_only a + depth 1 ) { ^ F } {}
-        ^ | == 0 ( nurl_str_len b ) ( __ty_numbers_only b + depth 1 )
+        ? ! ( __ty_numbers_only a depth ) { ^ F } {}
+        ^ | == 0 ( nurl_str_len b ) ( __ty_numbers_only b depth )
     } {}
     ? | | | != ( nurl_str_get ty 0 ) 37 ( seq ty `%String` ) != 0 ( nurl_str_starts ty `%Vec__` ) ( __is_libh ty ) { ^ F } {}
     ? == 0 g_root_syms { ^ F } {}
@@ -17058,14 +17074,21 @@ unsafe @ __has_nonzero_word s list → b {
     } {}
     ? == 0 ( nurl_sym_len2 g_root_syms sname `__field_count` ) { ^ F } {}
     ? != 0 ( nurl_sym_len2 g_impl_name_syms `drop##` ty ) { ^ F } {}
+    : s mkey ( nurl_str_cat `numonly##` ty )
+    : s gen ( nurl_str_cat ( nurl_str_int g_drop_gen ) `:` )
+    : s pm ( nurl_sym_get g_impl_name_syms mkey )
+    ? & != 0 ( nurl_str_len pm ) != 0 ( nurl_str_starts pm gen ) { ^ == ( nurl_str_get pm - ( nurl_str_len pm ) 1 ) 49 } {}
+    ( nurl_sym_set g_impl_name_syms mkey ( nurl_str_cat gen `-` ) )
     : i fc ( nurl_str_to_int ( nurl_sym_get2 g_root_syms sname `__field_count` ) )
     : ~ i fi 0
-    ~ < fi fc {
+    : ~ b r T
+    ~ & r < fi fc {
         : s ft ( nurl_sym_get g_root_syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) )
-        ? ! ( __ty_numbers_only ft + depth 1 ) { ^ F } {}
+        ? ! ( __ty_numbers_only ft depth ) { = r F } {}
         = fi + fi 1
     }
-    ^ T
+    ( nurl_sym_set g_impl_name_syms mkey ? != 0 g_layouts_final ( nurl_str_cat gen ? r `1` `0` ) `` )
+    ^ r
 }
 
 @ bck_esc_check_call_arg i lex i syms i line s ident s fname → v {
@@ -22127,44 +22150,71 @@ unsafe @ gen_call_body i lex i syms i cg → s {
 // such, options / results and plain structs of them. A view, a raw
 // pointer, an enum, a library handle or a trait object can.
 unsafe @ __ty_no_address s ty0 i depth → b {
-    ? > depth 6 { ^ F } {}
     : s ty ( nurl_llty ty0 )
     : i n ( nurl_str_len ty )
     ? == 0 n { ^ F } {}
     ? == ( nurl_str_get ty - n 1 ) 42 { ^ F } {}
     ? | | | > ( int_width ty ) 0 ( seq ty `double` ) ( seq ty `float` ) ( __is_vec_num_ty ty ) { ^ T } {}
     ? ( seq ty `%String` ) { ^ T } {}
-    ? != 0 ( nurl_str_starts ty `%Vec__` ) { ^ ( __ty_no_address ( __vec_elem_llvm ty ) + depth 1 ) } {}
+    ? != 0 ( nurl_str_starts ty `%Vec__` ) { ^ ( __ty_no_address ( __vec_elem_llvm ty ) depth ) } {}
     ? != 0 ( nurl_str_starts ty `{ i1, ` ) {
         : s a ( __wrap_part ty 0 )
         : s b ( __wrap_part ty 1 )
         ? == 0 ( nurl_str_len a ) { ^ F } {}
-        ? ! ( __ty_no_address a + depth 1 ) { ^ F } {}
-        ^ | == 0 ( nurl_str_len b ) ( __ty_no_address b + depth 1 )
+        ? ! ( __ty_no_address a depth ) { ^ F } {}
+        ^ | == 0 ( nurl_str_len b ) ( __ty_no_address b depth )
     } {}
     ? | | != ( nurl_str_get ty 0 ) 37 ( __is_libh ty ) != 0 ( nurl_str_starts ty `%dyn.` ) { ^ F } {}
     : s sname ( nurl_str_slice ty 1 - n 1 )
-    // An enum whose every payload is such a value (`Json`: strings, Vecs
-    // of Json, numbers) — an owned one is whole on its own.
-    ? != 0 ( nurl_sym_len2 g_root_syms sname `__variants` ) {
-        // A type reached again through its own payloads (`Json` in `( Vec
-        // Json )`) is assumed to qualify while it is being examined.
-        ? ( str_contains_word g_noaddr_visiting ty ) { ^ T } {}
-        : s __nav_saved ( nurl_str_cat g_noaddr_visiting `` )
-        = g_noaddr_visiting ( nurl_str_cat3 g_noaddr_visiting ` ` ty )
-        : b __nav_r ( __ty_no_address_enum sname + depth 1 )
-        = g_noaddr_visiting ( nurl_str_cat __nav_saved `` )
-        ^ __nav_r
+    : b isenum != 0 ( nurl_sym_len2 g_root_syms sname `__variants` )
+    ? & ! isenum == 0 ( nurl_sym_len2 g_root_syms sname `__field_count` ) { ^ F } {}
+    // (Kept once the layouts are final: a no always — it comes from a part
+    // that holds one — and a yes read without a provisional answer.)
+    : s mkey ( nurl_str_cat `noaddr##` ty )
+    : s gen ( nurl_str_cat ( nurl_str_int g_drop_gen ) `:` )
+    ? != 0 g_layouts_final {
+        : s pm ( nurl_sym_get g_impl_name_syms mkey )
+        ? & != 0 ( nurl_str_len pm ) != 0 ( nurl_str_starts pm gen ) { ^ == ( nurl_str_get pm - ( nurl_str_len pm ) 1 ) 49 } {}
     } {}
-    ? == 0 ( nurl_sym_len2 g_root_syms sname `__field_count` ) { ^ F } {}
-    : i fc ( nurl_str_to_int ( nurl_sym_get2 g_root_syms sname `__field_count` ) )
-    : ~ i fi 0
-    ~ < fi fc {
-        : s ft ( nurl_sym_get g_root_syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) )
-        ? ! ( __ty_no_address ft + depth 1 ) { ^ F } {}
-        = fi + fi 1
+    // A type met again in the same question — reached through its own parts
+    // (`Json` in `( Vec Json )`, `: Node { ( Vec Node ) kids }`), or through
+    // another path to it — is taken to qualify: it adds no part the walk has
+    // not seen, or has seen already (the greatest fixed point), and any part
+    // that does not qualify ends the whole question with a no. Only enums had
+    // the mark; a struct recursed until a budget of six levels answered no,
+    // and the arm locals of every value-bearing arm over a tree leaked
+    // (agora #740). Marked on the path alone, a graph of types that hold each
+    // other through Vecs was walked once per path to each type — exponential.
+    : b __nav_top == 0 g_noaddr_depth
+    ? __nav_top { = g_noaddr_stamp ( __seen_begin ) = g_noaddr_vis `` } {}
+    ? ! ( __seen_add g_noaddr_stamp ( nurl_str_cat `na|` ty ) ) { ^ T } {}
+    ? != 0 g_layouts_final { = g_noaddr_vis ( nurl_str_cat3 g_noaddr_vis ` ` ty ) } {}
+    = g_noaddr_depth + g_noaddr_depth 1
+    : ~ b r T
+    ? isenum { = r ( __ty_no_address_enum sname depth ) } {
+        : i fc ( nurl_str_to_int ( nurl_sym_get2 g_root_syms sname `__field_count` ) )
+        : ~ i fi 0
+        ~ & r < fi fc {
+            : s ft ( nurl_sym_get g_root_syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) )
+            ? ! ( __ty_no_address ft depth ) { = r F } {}
+            = fi + fi 1
+        }
     }
-    ^ T
+    = g_noaddr_depth - g_noaddr_depth 1
+    // (Kept: a no wherever it is found — it comes from a part that does not
+    // qualify, never from a type taken to; a yes for every type the question
+    // met, once its own answer is yes.)
+    ? != 0 g_layouts_final {
+        ? ! r { ( nurl_sym_set g_impl_name_syms mkey ( nurl_str_cat gen `0` ) ) } {}
+        ? & r __nav_top {
+            : ~ s vis ( nurl_str_cat g_noaddr_vis `` )
+            ~ != 0 ( nurl_str_len vis ) {
+                : s w ( str_first_word vis ) = vis ( str_skip_word vis )
+                ( nurl_sym_set g_impl_name_syms ( nurl_str_cat `noaddr##` w ) ( nurl_str_cat gen `1` ) )
+            }
+        } {}
+    } {}
+    ^ r
 }
 
 // Emit parked exit blocks: each runs its drops when `drop` (the value
@@ -73722,15 +73772,6 @@ unsafe @ __hmemo_close s key i mark b r → v {
 : ~ i g_drc_memo 0
 // …and __holds_user_drop's, the same way.
 : ~ i g_hud_memo 0
-// __holds_user_drop's answers across questions, `<generation>:<0|1>` per
-// type: a `% Drop` impl registered later, or a layout registered again by
-// its declaration (a refused enum's variants: g_drop_gen), makes them
-// stale — as it does __type_needs_drop's.
-: ~ i g_hud_pmemo 0
-: ~ i g_drop_gen 0
-// 1 once every named layout is read (read_type_layouts): an answer about a
-// type's fields may be kept from then on (__type_needs_drop).
-: ~ i g_layouts_final 0
 // A visited set per question without a table per question: each walk takes
 // a fresh stamp (__seen_begin), and a key is in its set when g_seen_tab
 // holds that stamp for it. Keys carry the walk's own prefix, so a walk run
@@ -87215,6 +87256,26 @@ unsafe @ priv_resolve i lex i syms s fname → s {
         ( expect lex TT_RBRACE )
         ( nurl_lex_free lex )
     }
+    // An enum the declaration pass gives a compiler drop (emit_auto_drop: a
+    // variant whose payload owns something) is one from here on — every
+    // layout is read. Known only when gen_enum_decl reached it, a struct
+    // holding `?E` compiled above E's declaration was kept as owning
+    // nothing, and a value of it below leaked its payload (agora #744).
+    ? != 0 g_auto_drop_strings {
+        : ~ s er ( nurl_sym_get g_type_layouts `names` )
+        ~ != 0 ( nurl_str_len er ) {
+            : s en ( str_first_word er ) = er ( str_skip_word er )
+            ? & ( seq ( nurl_sym_get2 g_type_layouts en `__kind` ) `enum` ) == 0 ( nurl_sym_len g_impl_name_syms ( nurl_str_cat `drop##%` en ) ) {
+                : ~ s vs ( nurl_sym_get2 syms en `__variants` )
+                : ~ b box F
+                ~ & ! box != 0 ( nurl_str_len vs ) {
+                    : s vn ( str_first_word vs ) = vs ( str_skip_word vs )
+                    ? ( __drop_variant_has_box vn syms ) { = box T } {}
+                }
+                ? box { ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `autodrop##%` en ) `1` ) } {}
+            } {}
+        }
+    } {}
 }
 
 // scan_type_names: linear pre-pass that registers every top-level type
