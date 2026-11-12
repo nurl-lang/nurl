@@ -7575,6 +7575,14 @@ unsafe @ __gen_ret i lex i syms i cg → s {
             }
         } {}
     } {}
+    // `^ r` of a binding whose value may be a lend out of a parameter this
+    // function takes over on another path — `: String r ( f0 p )  ^ r`, a
+    // `??` payload or a `vec_at` element of p, a field of it — is judged as
+    // `^ ( f0 p )` is (agora #743): parked, refused at module end where the
+    // function does take p over (agora #765).
+    // (…and a `~` loop's element, part of the container it walks: `~ x p {
+    // ^ x }`, agora #677.)
+    ? & ( is_ident_tok ret_first_tt ) | != 0 ( nurl_sym_len2 syms ret_first_val `__pljk` ) != 0 ( nurl_sym_len2 syms ret_first_val `__econt` ) { ( __pfo_bind_lends syms ret_first_val ) } {}
     // `^ x` of a `??` payload: what its matched call lent (h270).
     // (…and when that call lends out of a local of this frame, dropped on
     // the way out — `?? ( vec_get [String] xs 0 ) { T e → ^ e }`, xs a
@@ -7833,8 +7841,14 @@ unsafe @ __gen_ret i lex i syms i cg → s {
         // (A binding that may hold another local's value is copied by the
         // rule above; this one is a cursor, or bound to a borrow.)
         : b cother & == 0 ( nurl_sym_len2 syms cup `__alias` ) | | == 0 ( nurl_str_len csb ) ( seq csb `local` ) ( seq csb `dyn` )
+        // (…and one that cannot be copied — a struct with a `% Drop` of its
+        // own: it answers per call, always, with no copy to fall back on.
+        // Left out, `= best x` of a loop element then `^ best` answered
+        // "owned" on the runs best held the element, and the caller
+        // released what the Vec still held, agora #669.)
+        : b __c_cp ( __clone_supported cty syms )
         ? & & & & != 0 ( nurl_str_len cup ) ! cother == 0 ( nurl_sym_len2 syms cup `__optparam` )
-        == 0 ( nurl_sym_len2 syms cup `__pname` ) ( __clone_supported cty syms ) {
+        == 0 ( nurl_sym_len2 syms cup `__pname` ) | __c_cp ( __nc_drop_ty cty ) {
             : s self ( nurl_sym_get syms `__fn_self_name__` )
             : s kv ( nurl_cg_reg cg )
             ( emit_sink_flag_load ( nurl_str_cat `@.__nurl_retown.` ( nurl_str_int ( retown_flag self self ) ) ) kv )
@@ -7880,8 +7894,8 @@ unsafe @ __gen_ret i lex i syms i cg → s {
             // path owns answers statically.)
             : s __cpair ? & == 0 ( nurl_sym_len2 syms cup `__alias` ) == ( nurl_str_get csb 0 ) 64
             ( __retown_pair ( nurl_sym_get2 syms ( nurl_str_slice csb 1 - ( nurl_str_len csb ) 1 ) `__sbcn` ) ) ``
-            ? != 0 ( nurl_str_len __cpair ) { ( mem_hown_dyn_if syms __cpair ) } { ( mem_hown_mark_dyn syms ) }
-            = val ( mem_emit_cloneif cg cty val ( mem_hown_static syms cg c ) )
+            ? & __c_cp != 0 ( nurl_str_len __cpair ) { ( mem_hown_dyn_if syms __cpair ) } { ( mem_hown_mark_dyn syms ) }
+            ? __c_cp { = val ( mem_emit_cloneif cg cty val ( mem_hown_static syms cg c ) ) } {}
             = hbit acc
             = __rost_reg ( nurl_str_cat hbit `` )
             = __rost ? ret_pl_copied ( nurl_str_cat `!` `` ) ( __ost_of_ident syms ret_first_val )
@@ -20569,6 +20583,20 @@ unsafe @ gen_call_body i lex i syms i cg → s {
                     ( nurl_print `(i1 ` ) ( nurl_print zf ) ( nurl_print `, ptr ` ) ( nurl_print es ) ( nurl_print `)\n` )
                 } {} }
         } {}
+        // …and one that is no handle — a struct with a `% Drop` of its own:
+        // its slot cannot be emptied (the container would run the
+        // destructor on the emptied value, agora #759's fault), so the
+        // `sink` is handed a copy where one can be made, and one that
+        // cannot is refused. Handed over as it was, the callee released the
+        // element the container still drops (agora #669).
+        ? & & & & ( is_ident_tok bck_arg_tt ) != 0 ( nurl_sym_len2 syms bck_arg_val `__eslot` ) ! ( __is_handle_ty at ) ( str_has_index callee_sink arg_idx ) ( __type_needs_drop at g_root_syms ) {
+            ? ( __clone_supported at syms ) { = av ( mem_emit_cloneif cg at av `1` ) } {
+                ( die lex ( nurl_str_cat4 ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+                ( nurl_str_cat4 `' is '` bck_arg_val `', this loop's element: it is still in the container the loop walks, which drops it, and '` ( llvm_to_nurl at ) )
+                ( nurl_str_cat3 `' cannot be copied, so '` fname `' (a 'sink') would release it a second time. ` )
+                `Take the elements out of the container instead (vec_pop, vec_remove, or move the whole container to a function that drains it), or have the callee borrow the element (drop 'sink').` ) )
+            }
+        } {}
         // A field of an owned struct handed to a consumer — `( string_free
         // . kr key )`, a helper that frees it — leaves the struct: the
         // field is zeroed so the struct's own drop skips it. A copy made
@@ -30041,6 +30069,57 @@ unsafe @ __pfo_links_set s v → v {
     ( nurl_sym_def g_pending_impl `pfoq` ? == 0 ( nurl_str_len cur ) ( nurl_str_cat rec `` ) ( nurl_str_cat3 cur `\n` rec ) )
 }
 
+// The lends a binding `name` may hold (its `__pljk` / `__pljr` pairs, one
+// call a line) out of a parameter this function owns by its drop flag,
+// noted for the return compiling now as __pfo_lend_note notes a returned
+// call's — marked `@b`: a callee that answers per call hands its source
+// over by identity there (agora #459), and resolve_pfo_lends leaves those.
+// A `: ~` binding is left as it was: what it is assigned later is a copy.
+unsafe @ __pfo_bind_lends i syms s name → v {
+    ? | == 0 g_ret_lq != 0 ( nurl_sym_len2 syms name `__mutable` ) { ^ v } {}
+    : ~ s ks ( nurl_str_cat ( nurl_sym_get2 syms name `__pljk` ) `` )
+    : ~ s rs ( nurl_str_cat ( nurl_sym_get2 syms name `__pljr` ) `` )
+    // (A loop's element lends what its container is, as a field read does.)
+    : s __ec ( nurl_sym_get2 syms name `__econt` )
+    ? & == 0 ( nurl_str_len ks ) != 0 ( nurl_str_len __ec ) { = ks `__field__` = rs ( nurl_str_cat __ec `` ) } {}
+    : s pn ( nurl_sym_get syms `__fn_param_names__` )
+    : s saved_links ( nurl_str_cat g_pfo_links `` )
+    : i saved_via g_pfo_via
+    = g_pfo_via 0
+    // (`@bn`: a value that cannot be copied — lent back whole, the binding
+    // holds the parameter's value by identity and hands it over as it is.)
+    = g_pfo_links ? ( __clone_supported ( nurl_sym_get syms name ) syms ) `@b` `@bn`
+    ~ != 0 ( nurl_str_len ks ) {
+        : i kn ( nurl_str_find ks `\n` )
+        : i rn ( nurl_str_find rs `\n` )
+        : s k ? < kn 0 ( nurl_str_cat ks `` ) ( nurl_str_slice ks 0 kn )
+        : ~ s r ? < rn 0 ( nurl_str_cat rs `` ) ( nurl_str_slice rs 0 rn )
+        = ks ? < kn 0 `` ( nurl_str_slice ks + kn 1 - - ( nurl_str_len ks ) kn 1 )
+        = rs ? < rn 0 `` ( nurl_str_slice rs + rn 1 - - ( nurl_str_len rs ) rn 1 )
+        : s cn ( str_first_word k )
+        : s gn ( __key_gn k )
+        : ~ i idx 0
+        ~ != 0 ( nurl_str_len r ) {
+            : s w0 ( str_first_word r ) = r ( str_skip_word r )
+            // (A field path's root is the binding it is a field of.)
+            : i dot ( nurl_str_find w0 `.` )
+            : s w ? > dot 0 ( nurl_str_slice w0 0 dot ) ( nurl_str_cat w0 `` )
+            // (Not a payload of an enum with a `% Drop` of its own: its own
+            // rule says so, naming the enum, agora #641 —
+            // __park_udrop_param_match.)
+            ? & ! ( seq w `-` ) ! & ( seq cn `__field__` ) ( __has_user_drop ( nurl_sym_get syms w ) ) {
+                : s up ( mem_udrop_ptr_of syms w )
+                ? ( __param_flag_owned syms up ) {
+                    ( __pfo_lend_note syms cn gn idx w ( str_word_index pn ( nurl_sym_get2 syms up `__pname` ) ) )
+                } {}
+            } {}
+            = idx + idx 1
+        }
+    }
+    = g_pfo_links saved_links
+    = g_pfo_via saved_via
+}
+
 // …the return's queue, parked with the file it is in (resolve_pfo_lends).
 @ __pfo_lends_park i lex → v {
     : ~ s rest ( nurl_sym_get g_pending_impl `pfoq` )
@@ -30076,7 +30155,18 @@ unsafe @ __pfo_links_set s v → v {
         : s nm ( str_first_word r ) = r ( str_skip_word r )
         : s line ( str_first_word r ) = r ( str_skip_word r )
         : s who ? != 0 ( nurl_sym_len2 syms cn `__body_done` ) cn gn
-        : i lk ( mem_fn_lend_kind syms who ( nurl_str_to_int ix ) )
+        // (A lend a binding holds, `@b` (__pfo_bind_lends): a field read
+        // lends what it is a field of; a call that answers per call and may
+        // hand the argument back WHOLE hands its source over by identity
+        // there (agora #459) — not one lending a part of it, `vec_get`'s
+        // element, which is a lend on every run.)
+        // (…and a value that cannot be copied lent back whole, `@bn`: the
+        // binding holds it by identity, so it is handed over as it is.)
+        : b __via_nc ( seq ( str_first_word r ) `@bn` )
+        : b __via_b | __via_nc ( seq ( str_first_word r ) `@b` )
+        ? __via_b { = r ( str_skip_word r ) } {}
+        : i lk0 ? ( seq cn `__field__` ) 2 ( mem_fn_lend_kind syms who ( nurl_str_to_int ix ) )
+        : i lk ? & __via_b == lk0 1 ? | __via_nc ( __hown_dyn syms who ) 0 lk0 lk0
         // (…and, for a call nested in the returned one, each call it went
         // through lends that argument on: `^ ( string_len ( f0 p ) )` hands
         // back a number.)
@@ -30090,7 +30180,7 @@ unsafe @ __pfo_links_set s v → v {
         }
         ? & & ( __param_consumed fn pidx ) != 0 lk __links_lend {
             ( bck_emit_error file ( nurl_str_to_int line ) ( nurl_str_cat4
-            ( nurl_str_cat3 `this hands back what '` ( bck_fn_show cn ) `' may lend out of '` ) nm
+            ? ( seq cn `__field__` ) ( nurl_str_cat `this hands back a part of '` `` ) ( nurl_str_cat3 `this hands back what '` ( bck_fn_show cn ) `' may lend out of '` ) nm
             ( nurl_str_cat3 `', and this function takes '` nm `' over on another path (it keeps it there), so '` )
             ( nurl_str_cat3 nm `' is released when the function returns and the caller would hold freed memory. Hand back a copy of the result (string_clone, vec_clone, mem_dup …) or '` ( nurl_str_cat nm `' itself.` ) ) ) )
         } {}

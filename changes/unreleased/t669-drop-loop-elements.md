@@ -1,0 +1,4 @@
+### Fixed
+
+- **A `% Drop` value a loop handed to an owner and then back out is the caller's lend, not its own** (Agora #669). `: ~ Bomb best ( bomb … )  ~ x v { ? … { = best x } {} }  ^ best` (Bomb with its own `% Drop`, v a borrowed Vec) answered "owned" on the runs best held the element, and the caller released what the Vec still held. A returned binding that cannot be copied now answers per call whether it lends.
+- **A `% Drop` loop element handed to a `sink` is refused** (Agora #669). `~ x v { ( eat x ) }`, eat a `sink` of a type that cannot be copied, handed over the element the Vec still drops (heap-use-after-free). The message names the cure: take the elements out (vec_pop, vec_remove, a draining callee) or have the callee borrow. A String element is still taken out of its slot, as before.
