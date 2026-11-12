@@ -1,5 +1,6 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_nc_dtor_receiver_field.nu:28:5: error: a borrowed 'Conn' would have to be copied here, and it cannot be copied — pass or return the value its owner gives up (a 'sink' parameter, or the owner itself), not a borrow of it [while instantiating 'Guard_drop__Conn' — the error may depend on the concrete type arguments; made for the drop of '( Guard Conn )', first needed at compiler/tests/diag_nc_dtor_receiver_field.nu:32]
+compiler/tests/diag_nc_dtor_receiver_field.nu:28:5: error: a borrowed 'Conn' would have to be copied here, and it cannot be copied — pass or return the value its owner gives up (a 'sink' parameter, or the owner itself), not a borrow of it
     : ( Slot A ) s @ ( Slot A ) { . g val 1 }
     ^
+compiler/tests/diag_nc_dtor_receiver_field.nu:32:5: note: in 'Guard_drop [A = Conn]', made for the drop of '( Guard Conn )', needed here — the error may depend on these type arguments

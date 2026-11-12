@@ -155,6 +155,14 @@
 // instantiation, called from where — since a mono error can depend on
 // the concrete type arguments.
 : ~ s g_diag_ctx ``
+// …and what an instantiation adds after the diagnostic itself (agora
+// #751): `g_diag_notes` holds its note lines, innermost instantiation
+// first (`file:line:col: note: in 'f [T]', instantiated here`), and
+// `g_diag_inst_args` the mangled type-argument words its re-parsed source
+// spells (`Rc__i64`), which the echoed source line and the notes show as
+// the program writes them (`( Rc i )`: __diag_src).
+: ~ s g_diag_notes ``
+: ~ s g_diag_inst_args ``
 
 // LLVM return type of the function whose body is currently being
 // generated. Diagnostics-only: gen_field_store consults it to tell the
@@ -267,14 +275,97 @@
     // different kinds of output and a consumer classifying them had to
     // know which pass had spoken. Four messages hand-rolled the prefix
     // to compensate; they no longer need to.
-    : i col ( nurl_lex_col lex )
-    : s loc ( nurl_str_cat ( nurl_lex_filename lex )
-    ( nurl_str_cat `:` ( nurl_str_cat ( nurl_str_int ( nurl_lex_line lex ) )
-    ( nurl_str_cat `:` ( nurl_str_int col ) ) ) ) )
-    ( nurl_eprintln ( nurl_str_cat3 loc `: error: ` ( nurl_str_cat msg g_diag_ctx ) ) )
-    ( nurl_eprintln ( nurl_lex_line_text lex ) )
-    ( nurl_eprintln ( nurl_diag_caret col ) )
+    ( __diag_pos_emit `error` ( nurl_lex_filename lex ) ( nurl_lex_line lex ) ( nurl_lex_col lex ) ( nurl_lex_line_text lex ) msg )
     ( __diag_abort )
+}
+
+// `file:line:col: <sev>: msg`, the source line, the caret, then the notes
+// of the instantiation the diagnostic is in (g_diag_notes). Inside one the
+// lexer reads the template's body as re-parsed — every token re-spaced,
+// each type parameter replaced by the instance's mangled word — so its
+// column is not one of the file's, and its line is not what the file
+// says: both are taken from the template file itself, the same token
+// counted from the line's start (agora #751: `par.nu:44:101` on an 87-byte
+// line, `( ParOut Rc__i64 )` in the echo).
+@ __diag_pos_emit s sev s file i line i col0 s text s msg → v {
+    : s orig ( __diag_tmpl_line file line )
+    : i col ? == 0 ( nurl_str_len orig ) ( __diag_col text col0 ) ( __diag_tmpl_col text col0 orig )
+    : s shown ? == 0 ( nurl_str_len orig ) ( __diag_src text ) orig
+    : s loc ( nurl_str_cat4 file `:` ( nurl_str_int line ) ( nurl_str_cat `:` ( nurl_str_int col ) ) )
+    ( nurl_eprintln ( nurl_str_cat4 loc `: ` sev ( nurl_str_cat3 `: ` msg g_diag_ctx ) ) )
+    ( __diag_echo shown col )
+}
+
+// Inside an instantiation, line `line` of the template's own file; ``
+// outside one, or when no file holds it (a template read from no file).
+@ __diag_tmpl_line s file i line → s {
+    ? | == 0 ( nurl_str_len g_diag_inst_args ) <= line 0 { ^ ( nurl_str_cat `` `` ) } {}
+    : s src ( compiler_read_source file )
+    ? == 0 ( nurl_str_len src ) { ^ ( nurl_str_cat `` `` ) } {}
+    ^ ( __src_line_text src ( nurl_str_len src ) line )
+}
+
+// Column `col` of the re-parsed line `text` as a column of the template's
+// own line `orig`: the token it falls on, counted from the line's start —
+// a type parameter is one token in both (`T`, `Rc__i64`).
+@ __diag_tmpl_col s text i col s orig → i {
+    : i lt ( nurl_lex_new text `<diag>` )
+    : ~ i k 0
+    ~ & != ( nurl_lex_type lt ) TT_EOF < ( nurl_lex_col lt ) col { ( nurl_lex_advance lt ) = k + k 1 }
+    ( nurl_lex_free lt )
+    : i lo ( nurl_lex_new orig `<diag>` )
+    : ~ i j 0
+    ~ & != ( nurl_lex_type lo ) TT_EOF < j k { ( nurl_lex_advance lo ) = j + j 1 }
+    : i c ? == ( nurl_lex_type lo ) TT_EOF + ( nurl_str_len orig ) 1 ( nurl_lex_col lo )
+    ( nurl_lex_free lo )
+    ^ c
+}
+
+// A generic type argument's mangled word (`Rc__i64`, `opt_String`, `i64`)
+// as the program spells the type (`( Rc i )`, `?String`, `i`).
+@ __diag_show_word s w → s {
+    : s t ( llvm_to_nurl ( demangle_type w ) )
+    ? == 0 ( nurl_str_len t ) { ^ ( nurl_str_cat w `` ) } {}
+    ^ t
+}
+
+// Source text re-parsed for an instantiation, its type arguments spelled
+// as the program writes them (g_diag_inst_args); unchanged outside one.
+// (For a template no file holds: __diag_pos_emit shows the file's own
+// line where there is one.)
+@ __diag_src s text → s {
+    : ~ s out ( nurl_str_cat text `` )
+    ? == 0 ( nurl_str_len g_diag_inst_args ) { ^ out } {}
+    : ~ s rest ( nurl_str_cat g_diag_inst_args `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s sh ( __diag_show_word w )
+        ? ! ( seq sh w ) { = out ( subst_source out w sh ) } {}
+    }
+    ^ out
+}
+
+// The caret column `col` of `text` once __diag_src has respelled it.
+@ __diag_col s text i col → i {
+    ? | == 0 ( nurl_str_len g_diag_inst_args ) <= col 1 { ^ col } {}
+    : i n ? > - col 1 ( nurl_str_len text ) ( nurl_str_len text ) - col 1
+    : s pre ( nurl_str_slice text 0 n )
+    : s np ( __diag_src pre )
+    // (subst_source ends what it writes in a space.)
+    : i adj ? & > n 0 != ( nurl_str_get pre - n 1 ) 32 1 0
+    ^ + - ( nurl_str_len np ) adj 1
+}
+
+// A diagnostic's source line and caret, then the notes saying which
+// instantiation it is in.
+@ __diag_echo s text i col → v {
+    ( nurl_eprintln text )
+    ( nurl_eprintln ( nurl_diag_caret col ) )
+    ( __diag_notes_print )
+}
+
+@ __diag_notes_print → v {
+    ? != 0 ( nurl_str_len g_diag_notes ) { ( nurl_eprintln g_diag_notes ) } {}
 }
 
 // __diag_lit: `text` wrapped in the backticks a NURL string literal is
@@ -415,6 +506,7 @@ unsafe @ __import_hint s name b is_type → s {
 // can keep the position it is about uses die_file_pos instead.
 @ die_at s loc s msg → v {
     ( nurl_eprintln ( nurl_str_cat3 loc `: error: ` ( nurl_str_cat msg g_diag_ctx ) ) )
+    ( __diag_notes_print )
     ( __diag_abort )
 }
 
@@ -443,10 +535,7 @@ unsafe @ die_file_pos s file i line i col s msg → v {
     } {}
     : s loc ( nurl_str_cat4 file `:` ( nurl_str_int line ) ( nurl_str_cat `:` ( nurl_str_int c ) ) )
     ( nurl_eprintln ( nurl_str_cat3 loc `: error: ` ( nurl_str_cat msg g_diag_ctx ) ) )
-    ? != 0 ( nurl_str_len lt ) {
-        ( nurl_eprintln lt )
-        ( nurl_eprintln ( nurl_diag_caret c ) )
-    } {}
+    ? != 0 ( nurl_str_len lt ) { ( __diag_echo lt c ) } { ( __diag_notes_print ) }
     ( __diag_abort )
 }
 
@@ -461,13 +550,7 @@ unsafe @ die_file_pos s file i line i col s msg → v {
 // closure captures) so the user sees the gotcha during compile rather
 // than at debugger-attached runtime.
 @ warn i lex s msg → v {
-    : i col ( nurl_lex_col lex )
-    : s loc ( nurl_str_cat ( nurl_lex_filename lex )
-    ( nurl_str_cat `:` ( nurl_str_cat ( nurl_str_int ( nurl_lex_line lex ) )
-    ( nurl_str_cat `:` ( nurl_str_int col ) ) ) ) )
-    ( nurl_eprintln ( nurl_str_cat3 loc `: warning: ` ( nurl_str_cat msg g_diag_ctx ) ) )
-    ( nurl_eprintln ( nurl_lex_line_text lex ) )
-    ( nurl_eprintln ( nurl_diag_caret col ) )
+    ( __diag_pos_emit `warning` ( nurl_lex_filename lex ) ( nurl_lex_line lex ) ( nurl_lex_col lex ) ( nurl_lex_line_text lex ) msg )
 }
 
 // die_if_void: the void/unit literal — produced ONLY by a bare type keyword
@@ -3411,6 +3494,10 @@ unsafe @ note_unsafe_item s pos s what → v {
 // of a value (`__alias_part`) or may hold a join's lend of a local
 // (`__llocal`): none, and nothing need ask (__part_src, agora #195).
 : ~ i g_part_n 0
+// How many bindings of the function being compiled took over a `% Drop`
+// parameter's own value (`: R q p`, `__pmove`): none, and the summary
+// recorders need not ask whose value a name holds (agora #759).
+: ~ i g_pmove_n 0
 
 // The token a value is judged by: its own, or — for a block, or a try over
 // a call — what its tail or tried expression began with (g_blk_tail_eff):
@@ -7150,7 +7237,9 @@ unsafe @ gen_ret i lex i syms i cg → s {
         ? & & != 0 ( nurl_str_len rpf_pn ) >= rpf_pi 0 ( __is_handle_ty rpf_fty ) {
             : s own ( nurl_cg_reg cg )
             ( emit_sink_flag_load ( nurl_str_cat `@.__nurl_sink.` ( nurl_str_int ( sink_flag ( nurl_sym_get syms `__fn_self_name__` ) ( nurl_sym_get syms `__fn_self_name__` ) rpf_pi ) ) ) own )
-            ( mem_zero_field cg rpf_ptr rpf_sty rpf_idx rpf_fty own )
+            // (A struct whose own drop may read the field keeps a copy of
+            // it: emptied, R's destructor read a zeroed String — agora #759.)
+            ? ( __has_user_drop rpf_sty ) { ( mem_field_copy_back cg rpf_ptr rpf_sty rpf_idx rpf_fty own ) } { ( mem_zero_field cg rpf_ptr rpf_sty rpf_idx rpf_fty own ) }
             ( __record_param_idx syms `__fn_retlend__` rpf_pn )
             ( __record_param_idx syms `__fn_retpart__` rpf_pn )
             = ret_field_copy T
@@ -8317,6 +8406,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
     ( nurl_str_cat `:` ( nurl_str_cat ( nurl_str_int g_stmt_line )
     ( nurl_str_cat `:` ( nurl_str_int g_stmt_col ) ) ) ) )
     ( nurl_eprintln ( nurl_str_cat3 loc `: error: ` ( nurl_str_cat msg g_diag_ctx ) ) )
+    ( __diag_notes_print )
     ( __diag_abort )
 }
 
@@ -8333,21 +8423,11 @@ unsafe @ gen_ret i lex i syms i cg → s {
 // after the conditional has been reached, which for a multi-line body
 // is far from the `?` the user has to fix.
 @ warn_pos i lex i line i col s msg → v {
-    : s loc ( nurl_str_cat ( nurl_lex_filename lex )
-    ( nurl_str_cat `:` ( nurl_str_cat ( nurl_str_int line )
-    ( nurl_str_cat `:` ( nurl_str_int col ) ) ) ) )
-    ( nurl_eprintln ( nurl_str_cat3 loc `: warning: ` ( nurl_str_cat msg g_diag_ctx ) ) )
-    ( nurl_eprintln ( nurl_lex_line_text_at lex line ) )
-    ( nurl_eprintln ( nurl_diag_caret col ) )
+    ( __diag_pos_emit `warning` ( nurl_lex_filename lex ) line col ( nurl_lex_line_text_at lex line ) msg )
 }
 
 @ die_pos i lex i line i col s msg → v {
-    : s loc ( nurl_str_cat ( nurl_lex_filename lex )
-    ( nurl_str_cat `:` ( nurl_str_cat ( nurl_str_int line )
-    ( nurl_str_cat `:` ( nurl_str_int col ) ) ) ) )
-    ( nurl_eprintln ( nurl_str_cat3 loc `: error: ` ( nurl_str_cat msg g_diag_ctx ) ) )
-    ( nurl_eprintln ( nurl_lex_line_text_at lex line ) )
-    ( nurl_eprintln ( nurl_diag_caret col ) )
+    ( __diag_pos_emit `error` ( nurl_lex_filename lex ) line col ( nurl_lex_line_text_at lex line ) msg )
     ( __diag_abort )
 }
 
@@ -8359,12 +8439,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
 // 'v'", "undefined identifier 'Light'") under the one that matters. Outside
 // a recovery frame it ends the run, as die does.
 @ err_pos i lex i line i col s msg → v {
-    : s loc ( nurl_str_cat ( nurl_lex_filename lex )
-    ( nurl_str_cat `:` ( nurl_str_cat ( nurl_str_int line )
-    ( nurl_str_cat `:` ( nurl_str_int col ) ) ) ) )
-    ( nurl_eprintln ( nurl_str_cat3 loc `: error: ` ( nurl_str_cat msg g_diag_ctx ) ) )
-    ( nurl_eprintln ( nurl_lex_line_text_at lex line ) )
-    ( nurl_eprintln ( nurl_diag_caret col ) )
+    ( __diag_pos_emit `error` ( nurl_lex_filename lex ) line col ( nurl_lex_line_text_at lex line ) msg )
     ? | == 0 g_diag_recover_active >= + g_err_count 1 NURLC_MAX_ERRORS { ( __diag_abort ) } {}
     = g_err_count + g_err_count 1
 }
@@ -17632,7 +17707,8 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
 // copy, and its sources go with it as before.)
 @ mem_arg_consumption i syms i cg s call_name s fname i arg_idx i bck_arg_tt s bck_arg_val s at s callee_sink b summary_callee b positional → v {
     ? & & summary_callee ( is_ident_tok bck_arg_tt ) ! ( __safe_str_param syms bck_arg_val ) {
-        : i param ( nurl_sym_word_index syms `__fn_param_names__` bck_arg_val )
+        // (…or the parameter whose own value this binding holds: __pmove_param.)
+        : i param ( nurl_sym_word_index syms `__fn_param_names__` ( __pmove_param syms bck_arg_val ) )
         ? >= param 0 {
             : s implication ( nurl_str_cat4 ( nurl_str_int param ) ` ` call_name
             ( nurl_str_cat4 ` ` fname ` ` ( nurl_str_int arg_idx ) ) )
@@ -17993,7 +18069,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // the value recorded on this instance's first call in scope.
         ( nurl_sym_def g_res_type_syms `__last_opt_nurl_t__` `` )
         ? == 0 ( nurl_str_len g_already )
-        { ( defer_instantiation lex fname mangled type_args syms )
+        { ( defer_instantiation_at fname mangled type_args syms ( nurl_lex_filename lex ) __call_line __call_col `` )
             ( nurl_sym_def g_generic_syms gkey `1` ) }
         { : s already ( nurl_sym_get syms mangled )
             ? == 0 ( nurl_str_len already )
@@ -18024,7 +18100,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             : s __twm ( nurl_str_cat __tw mangle_sfx )
             : s __twk ( nurl_str_cat `__inst_` __twm )
             ? == 0 ( nurl_str_len ( nurl_sym_get g_generic_syms __twk ) )
-            { ( defer_instantiation lex __tw __twm type_args syms )
+            { ( defer_instantiation_at __tw __twm type_args syms ( nurl_lex_filename lex ) __call_line __call_col `` )
                 ( nurl_sym_def g_generic_syms __twk `1` ) }
             { ? == 0 ( nurl_str_len ( nurl_sym_get syms __twm ) )
                 { ( nurl_sym_def syms __twm ( compute_generic_ret_ty __tw type_args syms ) ) }
@@ -31153,6 +31229,15 @@ unsafe @ __src_has_raw_ptr s text → b {
             ? != 0 g_most_n { ( nurl_sym_def g_ost `fl` ( nurl_str_cat3 f ` ` src ) ) } {}
             ( mem_udrop_flag_set syms cg ptr f )
             ( mem_udrop_flag_set syms cg src `0` )
+            // A parameter's own value taken over (`: R q p`, p a `% Drop`
+            // parameter, its flag "this function consumes p"): this
+            // binding holds p under another name, so what it is handed to
+            // is what p is handed to — kept, stored, sunk or handed back
+            // (__pmove_param). Recorded under `q`, which names no
+            // parameter, the summary missed it: the flag stayed "not
+            // consumed", the caller freed what a Vec held (agora #759).
+            : s __pmv ? != 0 ( nurl_sym_len2 syms src `__pname` ) ( nurl_sym_get2 syms src `__pname` ) ( nurl_sym_get2 syms src `__pmove` )
+            ? != 0 ( nurl_str_len __pmv ) { ( nurl_sym_def syms ( nurl_str_cat ptr `__pmove` ) __pmv ) = g_pmove_n + g_pmove_n 1 } {}
             // The source's provenance slot (`@<slot>`) lives in its scope and
             // is written only where the source was bound: past a loop that
             // never ran it holds nothing. A binding with a slot of its own
@@ -39381,10 +39466,7 @@ unsafe @ bck_emit_error s file i line s msg → v {
     = g_bck_err_note ``
     ( nurl_eprintln ( nurl_str_cat4 ? > col 0 ( nurl_str_cat3 loc `:` ( nurl_str_int col ) ) loc
     `: error: ` msg note ) )
-    ? > col 0 {
-        ( nurl_eprintln lt )
-        ( nurl_eprintln ( nurl_diag_caret col ) )
-    } {}
+    ? > col 0 { ( __diag_echo lt col ) } { ( __diag_notes_print ) }
     = g_bck_errors + g_bck_errors 1
 }
 
@@ -64230,7 +64312,8 @@ unsafe @ str_has_index s list i k → b {
 // body) becomes a borrow-checker error like the direct form already
 // is. Duplicates are skipped so an explicit `sink` declaration on
 // the same param is not double-listed.
-@ bck_record_inferred_sink i syms s arg_name → v {
+@ bck_record_inferred_sink i syms s arg_name0 → v {
+    : s arg_name ( __pmove_param syms arg_name0 )
     : s pn ( nurl_sym_get syms `__fn_param_names__` )
     : i idx ( str_word_index pn arg_name )
     // (In safe code a raw string parameter is a `sink` only when declared
@@ -64416,10 +64499,23 @@ unsafe @ str_has_index s list i k → b {
     ^ out
 }
 
+// The parameter whose own value binding `name` took over (`: R q p`,
+// __mem_udrop_bind_flag), or `name` itself.
+@ __pmove_param i syms s name → s {
+    ? == 0 g_pmove_n { ^ name } {}
+    : s up ( mem_udrop_ptr_of syms name )
+    ? == 0 ( nurl_str_len up ) { ^ name } {}
+    : s pm ( nurl_sym_get2 syms up `__pmove` )
+    ? == 0 ( nurl_str_len pm ) { ^ name } {}
+    ^ pm
+}
+
 // Add parameter `name`'s index to the per-function index list `key`.
+// (A binding holding a parameter's own value counts as that parameter:
+// __pmove_param.)
 @ __record_param_idx i syms s key s name → v {
     : s pn ( nurl_sym_get syms `__fn_param_names__` )
-    : i idx ( str_word_index pn name )
+    : i idx ( str_word_index pn ( __pmove_param syms name ) )
     ? >= idx 0
     { : s cur ( nurl_sym_get syms key )
         : s new ( nurl_str_int idx )
@@ -68367,6 +68463,13 @@ unsafe @ ensure_struct_instantiated i syms s sname s ta_list → v {
     ( nurl_sym_def g_generic_syms ( nurl_str_cat base `_cl` ) ( nurl_str_int caller_line ) )
     ( nurl_sym_def g_generic_syms ( nurl_str_cat base `_cc` ) ( nurl_str_int caller_col ) )
     ( nurl_sym_def g_generic_syms ( nurl_str_cat base `_why` ) why )
+    // (…and, asked for inside another instantiation, that one's notes: an
+    // instance is emitted after the one that queued it has finished, and its
+    // diagnostics still say how the program got there — agora #751.)
+    ? != 0 ( nurl_str_len g_diag_notes ) {
+        ( nurl_sym_def g_generic_syms ( nurl_str_cat base `_nt` ) g_diag_notes )
+        ( nurl_sym_def g_generic_syms ( nurl_str_cat base `_ia` ) g_diag_inst_args )
+    } {}
 }
 
 // emit_str_globals: emit global constants for string literals [base..top).
@@ -70475,6 +70578,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     = g_fn_replaces_witness ``
     = g_fn_arcseen 0
     = g_part_n 0
+    = g_pmove_n 0
     = g_ncl_n 0
     = g_lview_n 0
     = g_fn_ret_count 0
@@ -80449,7 +80553,7 @@ unsafe @ __jpb_note i cg s up → v {
     // void match-arm auto-drop fires it — unless the user wrote their own.
     ? != 0 g_auto_drop_strings {
         : s dkey ( nurl_str_cat `drop##%` ename )
-        ? == 0 ( nurl_sym_len g_impl_name_syms dkey ) {
+        ? | == 0 ( nurl_sym_len g_impl_name_syms dkey ) != 0 ( nurl_sym_len g_impl_name_syms ( nurl_str_cat `autodroppre##%` ename ) ) {
             ? ( emit_auto_drop ename variants_str syms )
             { ( nurl_sym_def g_impl_name_syms dkey ename )
                 // Mark this as a COMPILER-auto drop (vs a user `% Drop`).
@@ -80820,7 +80924,9 @@ unsafe @ __import_allowed s path → b {
 // fields), then again to actually emit the function. The two passes
 // share `syms` so the rescan's emitted instantiations are visible to
 // the body-parsing pass.
-unsafe @ emit_one_instantiation s fname s mangled s type_args s caller_file s caller_line s caller_col s why i syms i cg → v {
+// (`outer_nt` / `outer_ia`: the notes and type-argument words of the
+// instantiation that queued this one, when one did — defer_instantiation_at.)
+unsafe @ emit_one_instantiation s fname s mangled s type_args s caller_file s caller_line s caller_col s why s outer_nt s outer_ia i syms i cg → v {
     : s tparams ( nurl_sym_get2 g_generic_syms fname `__tparams` )
     : s gsrc ( nurl_sym_get2 g_generic_syms fname `__gsrc` )
     // No stored template for this name: the call site referenced a
@@ -80881,17 +80987,35 @@ unsafe @ emit_one_instantiation s fname s mangled s type_args s caller_file s ca
     : i lex2 ( nurl_lex_new full_src synth_name )
     // Context suffix for every diagnostic raised inside this re-parse.
     // Saved/restored — instantiations nest.
+    // (A note line after the diagnostic, the instance spelled as the
+    // program writes it — `par_map_index [( Rc i )]`, not
+    // `par_map_index__Rc__i64` — at the place that asked for it: agora
+    // #751. Nested instantiations chain, innermost first, as C++'s "in
+    // instantiation of … requested here".)
     : s saved_diag_ctx ( nurl_str_cat g_diag_ctx `` )
+    : s saved_diag_notes ( nurl_str_cat g_diag_notes `` )
+    : s saved_inst_args ( nurl_str_cat g_diag_inst_args `` )
+    // (`[T = ( Rc i )]`: the echoed line is the template's own, which
+    // spells the parameter.)
+    : ~ s __ctx_shown ``
+    : ~ s __ctx_tas ( nurl_str_cat type_args `` )
+    : ~ s __ctx_tps ( nurl_str_cat tparams `` )
+    ~ != 0 ( nurl_str_len __ctx_tas ) {
+        : s __ctx_w ( str_first_word __ctx_tas ) = __ctx_tas ( str_skip_word __ctx_tas )
+        : s __ctx_p ( str_first_word __ctx_tps ) = __ctx_tps ( str_skip_word __ctx_tps )
+        : s __ctx_one ? == 0 ( nurl_str_len __ctx_p ) ( __diag_show_word __ctx_w ) ( nurl_str_cat3 __ctx_p ` = ` ( __diag_show_word __ctx_w ) )
+        = __ctx_shown ( nurl_str_cat3 __ctx_shown ? == 0 ( nurl_str_len __ctx_shown ) `` `, ` __ctx_one )
+    }
     : s __ctx_at ? & != 0 ( nurl_str_len caller_file ) != 0 ( nurl_str_len caller_line )
-    ( nurl_str_cat3 caller_file `:` caller_line )
+    ( nurl_str_cat4 caller_file `:` caller_line ? != 0 ( nurl_str_len caller_col ) ( nurl_str_cat3 `:` caller_col `: ` ) `: ` )
     ``
-    : s __ctx_from ? != 0 ( nurl_str_len why )
-    ( nurl_str_cat3 `; made for ` why
-    ? != 0 ( nurl_str_len __ctx_at ) ( nurl_str_cat `, first needed at ` __ctx_at ) `` )
-    ? != 0 ( nurl_str_len __ctx_at ) ( nurl_str_cat `; first call site: ` __ctx_at ) ``
-    = g_diag_ctx ( nurl_str_cat3
-    ` [while instantiating '` mangled
-    ( nurl_str_cat3 `' — the error may depend on the concrete type arguments` __ctx_from `]` ) )
+    : s __ctx_what ( nurl_str_cat4 `note: in '` fname ( nurl_str_cat3 ` [` __ctx_shown `]'` )
+    ? != 0 ( nurl_str_len why ) ( nurl_str_cat3 `, made for ` why ? != 0 ( nurl_str_len __ctx_at ) `, needed here` `` )
+    ? != 0 ( nurl_str_len __ctx_at ) `, instantiated here` `` )
+    : s __ctx_note ( nurl_str_cat3 __ctx_at __ctx_what ` — the error may depend on these type arguments` )
+    : s __ctx_outer ? != 0 ( nurl_str_len outer_nt ) outer_nt saved_diag_notes
+    = g_diag_notes ? == 0 ( nurl_str_len __ctx_outer ) ( nurl_str_cat __ctx_note `` ) ( nurl_str_cat3 __ctx_note `\n` __ctx_outer )
+    = g_diag_inst_args ( nurl_str_cat3 type_args ` ` ? != 0 ( nurl_str_len outer_nt ) outer_ia saved_inst_args )
     // `T` and `F` are the boolean literals, and the lexer is context-free:
     // a bare `T` is TT_BOOL wherever it appears. Monomorphisation rewrites
     // the type parameter through the body by whole word, so a template
@@ -80915,9 +81039,10 @@ unsafe @ emit_one_instantiation s fname s mangled s type_args s caller_file s ca
         { = __tp_bool ( nurl_str_cat __tp1 `` ) } {}
     }
     ? != 0 ( nurl_str_len __tp_bool )
-    { = g_diag_ctx ( nurl_str_cat g_diag_ctx ( nurl_str_cat3
-        ` [note: this generic's type parameter is named '` __tp_bool
-        `', which is also a boolean literal. Monomorphisation rewrites the parameter through the body by whole word, so a value-position use of it — '? T { … }' — is rewritten into the type argument too. Rename the parameter; the stdlib uses '[A]', '[K V]', '[E]'.]` ) ) }
+    { = g_diag_notes ( nurl_str_cat4 ( nurl_str_cat __ctx_note `\n` )
+        `note: this generic's type parameter is named '` __tp_bool
+        ( nurl_str_cat `', which is also a boolean literal. Monomorphisation rewrites the parameter through the body by whole word, so a value-position use of it — '? T { … }' — is rewritten into the type argument too. Rename the parameter; the stdlib uses '[A]', '[K V]', '[E]'.`
+        ? == 0 ( nurl_str_len __ctx_outer ) `` ( nurl_str_cat `\n` __ctx_outer ) ) ) }
     {}
     // DWARF Phase 7: stash the original generic-decl line so
     // gen_fn_decl_concrete points this mono's !DISubprogram at the
@@ -80974,6 +81099,8 @@ unsafe @ emit_one_instantiation s fname s mangled s type_args s caller_file s ca
     ( nurl_lex_free lex2 )
     ( vis_set_current_src_file saved_vis_sf )
     = g_diag_ctx saved_diag_ctx
+    = g_diag_notes saved_diag_notes
+    = g_diag_inst_args saved_inst_args
     = g_dbg_override_line saved_override
     = g_dbg_override_file saved_override_file
     = g_mono_tparam_tys saved_mono_tys
@@ -80996,7 +81123,8 @@ unsafe @ emit_one_instantiation s fname s mangled s type_args s caller_file s ca
         : s caller_line ( nurl_sym_get2 g_generic_syms base `_cl` )
         : s caller_col ( nurl_sym_get2 g_generic_syms base `_cc` )
         : s why ( nurl_sym_get2 g_generic_syms base `_why` )
-        ( emit_one_instantiation fname mangled type_args caller_file caller_line caller_col why syms cg )
+        ( emit_one_instantiation fname mangled type_args caller_file caller_line caller_col why
+        ( nurl_sym_get2 g_generic_syms base `_nt` ) ( nurl_sym_get2 g_generic_syms base `_ia` ) syms cg )
         = k + k 1
     }
     = g_inst_done k
@@ -87349,7 +87477,17 @@ unsafe @ priv_resolve i lex i syms s fname → s {
                     : s vn ( str_first_word vs ) = vs ( str_skip_word vs )
                     ? ( __drop_variant_has_box vn syms ) { = box T } {}
                 }
-                ? box { ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `autodrop##%` en ) `1` ) } {}
+                // (…and its drop impl itself: a binding, a `sink` argument
+                // of one in a function above the declaration asks for it
+                // there — known only at gen_enum_decl, an enum whose payload
+                // cannot be copied was never dropped above it, agora #752.
+                // `autodroppre##` tells gen_enum_decl to emit it still; a
+                // program's own `% Drop E` was registered by scan_fn_sigs.)
+                ? box {
+                    ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `autodrop##%` en ) `1` )
+                    ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `drop##%` en ) en )
+                    ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `autodroppre##%` en ) `1` )
+                } {}
             } {}
         }
     } {}
