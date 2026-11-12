@@ -50475,9 +50475,24 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         : s name ( nurl_lex_val lex )
         : i __ob_line g_stmt_line
         : i __ob_col g_stmt_col
+        : i __nm_line ( nurl_lex_line lex )
+        : i __nm_col ( nurl_lex_col lex )
         ( __warn_if_shadows_param lex syms name )
         ( lint_note_bind lex name )
         ( nurl_lex_advance lex )
+        // `: Ptt p @ Pt { 2 3 }` — a word named like a type that names none,
+        // then a word that names nothing in scope: a typo in the TYPE of
+        // `: type name value`, read as the inferred binding `Ptt` of the
+        // value `p`. Left alone it reached gen_ident as "use of undefined
+        // identifier 'p'", calling the binding the user meant to declare the
+        // missing thing; the parameter spelling says "unknown type" (agora
+        // #725).
+        ? & & == ( nurl_lex_type lex ) TT_IDENT ( __type_shaped_word name ) ( __word_unbound syms ( nurl_lex_val lex ) ) {
+            : s __hint ( __import_hint name T )
+            : s __tail ( nurl_str_cat3 ` A binding is ': type name value'; '` ( nurl_lex_val lex ) `' after it names nothing in scope either, so the statement does not read as the inferred ': name value'.` )
+            : s __why ? != 0 ( nurl_str_len __hint ) ( nurl_str_cat ` here.` __hint ) ( nurl_str_cat ` (a typo, or a missing '$' import?).` `` )
+            ( die_pos lex __nm_line __nm_col ( nurl_str_cat4 `unknown type '` ( __ty_src_show ( nurl_str_cat `%` name ) ) `' in a binding type — no struct or enum with this name is declared` ( nurl_str_cat __why __tail ) ) )
+        } {}
         // `: n i 0` — the name first and the type second, which is how
         // Go and Rust spell it. NURL puts the TYPE first. Reaching this
         // branch already means the first token was NOT a known type, so
@@ -66675,6 +66690,25 @@ unsafe @ __lty_abstract i syms s lty → b {
         } { = k + k 1 }
     }
     ^ F
+}
+
+// __type_shaped_word: is `w` spelled as a type is — a capital first
+// letter, or, behind an import alias (`geo__Pt`), after the alias?
+@ __type_shaped_word s w → b {
+    : i n ( nurl_str_len w )
+    ? == n 0 { ^ F } {}
+    : i k ( nurl_str_find w `__` )
+    : i at ? > k 0 + k 2 0
+    ? >= at n { ^ F } {}
+    : i c ( nurl_str_get w at )
+    ^ & >= c 65 <= c 90
+}
+
+// __word_unbound: does the word `w` name nothing a value may be read from —
+// no binding, parameter, constant or enum variant (gen_ident's test)?
+@ __word_unbound i syms s w → b {
+    ? | ( seq w `v` ) == 0 ( nurl_str_len w ) { ^ F } {}
+    ^ & & == 0 ( nurl_str_len ( nurl_sym_get2 syms w `__ptr` ) ) == 0 ( nurl_str_len ( nurl_sym_get2 syms w `__global` ) ) == 0 ( nurl_sym_len2 syms w `__param` )
 }
 
 // __has_dunder: true if `str` contains "__" — the mark of a compiler-mangled
