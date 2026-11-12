@@ -1993,8 +1993,8 @@ body), by the unwind of a panic, or when the struct holding it is.
 **Send and Sync.** `Send` ("may move to another thread") and `Sync` ("may
 be reached from two threads at once") are marker traits
 (`stdlib/core/marker.nu`) that the compiler derives structurally over a
-type's whole graph: struct fields, enum payloads, generic arguments,
-aggregate members and closure captures. A generic struct is asked through
+type's whole graph, however deep it goes: struct fields, enum payloads,
+generic arguments, aggregate members and closure captures. A generic struct is asked through
 the fields its instance has (`( Wrap i )` of `: Wrap [T] { ( Rc T ) held }`
 reaches an `Rc`), and every type argument is asked as the type that was
 written, an option no less than a named type (`( Vec ?( Rc i ) )`).
@@ -2016,7 +2016,8 @@ and a `%Job` may then move; `: Send Sync` makes it Sync as well (h344).
 They are checked where a value crosses: `thread_spawn` and `spawn` (every
 capture must be Send), `chan_send` (the value must be Send), and `Arc T`
 (T must be Send and Sync; an `ArcWeak T` upgrades to that `Arc` on another
-thread, so it is held to the same). `[T: Send]` bounds are answered by the
+thread, so it is held to the same, and is as Sync as that `Arc` — a node's
+`?( ArcWeak Node )` back-edge may sit in a shared tree). `[T: Send]` bounds are answered by the
 same derivation. A marker asserting a container Sync vouches for the container,
 never for what it holds: where the Sync question reaches a `Locked`, a
 `Channel` or a `Pool`, its value must be Send (one thread at a time has
@@ -2032,7 +2033,14 @@ that spawn or keep it. The error is reported where the value leaves,
 naming the capture and the line the closure was built on. A closure
 whose origin cannot be followed (a `Vec` element, a call through a
 closure value) is rejected where it crosses; build it at the hand-over
-or take it as a parameter.
+or take it as a parameter. Two stores this following does not reach yet
+are listed in docs/LIMITATIONS.md: a helper that fills its caller's
+container (agora #717), and a struct or an option holding the closure
+where it is put into a container or has the field assigned later (agora
+#718). Until it reaches them, a closure type that is a struct's field or
+an aggregate's member is read by the types its signature names as well:
+`: P { ( @ ( Rc i ) ) mk }` does not cross, though a closure that makes
+its `Rc` on the thread that runs it captured none.
 
 The derivation can be wrong in two directions, and each has a marker:
 `% Send T { }` / `% Sync T { }` assert safety the compiler cannot see

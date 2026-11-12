@@ -15554,7 +15554,7 @@ unsafe @ nurl_lex_peek4_type i h → i {
                         // reason a thread boundary would give (an Rc, a
                         // Cell, a trait object whose trait promises nothing).
                         ? inverted { ( die lex ( nurl_str_cat q2 advice ) ) }
-                        { ( die lex ( nurl_str_cat3 q2 advice ( __thr_explain ( __thr_check syms ta_llvm want 0 ) ) ) ) } }
+                        { ( die lex ( nurl_str_cat3 q2 advice ( __thr_explain ( __thr_check syms ta_llvm want ) ) ) ) } }
                     {} }
                 { ? == 0 ( nurl_sym_len g_trait_syms ( nurl_str_cat3 bt `##` ta_llvm ) )
                     { : s m1 ( nurl_str_cat4 `type '` ta `' does not implement trait '` bt )
@@ -18926,7 +18926,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
                     // (Only a named type or an aggregate can hold one: a
                     // number, a flag or a string answers at its first byte.)
                     : i __fk0 ( nurl_str_get at 0 )
-                    : i __fk ? | == __fk0 37 == __fk0 123 ( __ty_lend_frozen syms ( nurl_llty at ) 0 ) 0
+                    : i __fk ? | == __fk0 37 == __fk0 123 ( __ty_lend_frozen syms ( nurl_llty at ) ) 0
                     ? > __fk 0 {
                         = g_fn_arcseen 1
                         ( __arcp_note call_name arg_idx == __fk 2 T )
@@ -35360,32 +35360,68 @@ unsafe @ __rpg_rget i r i k → i { ^ ( nurl_peek # s g_rpg_rec + * r 6 k ) }
 // a generic argument (a Vec of them) — but not through a handle that
 // synchronises what it holds (`% Sync`: a Locked, an RwLocked, a Mutex,
 // a Channel), whose contents are changed through its own operations.
-// Memoised per type: gen_call asks for every argument.
-unsafe @ __ty_lend_frozen i syms s lty i depth → i {
-    : i n ( nurl_str_len lty )
-    ? | > depth 10 == n 0 { ^ 0 } {}
+// The type is walked whole, depth first, each type it reaches once: a
+// type graph is finite, so the set of types already asked is all that
+// ends the walk on a type that holds itself (a list's node), and no depth
+// is too deep to be read (a budget of ten levels answered "neither" for
+// an Arc eleven structs down — agora #711).
+// Memoised per type: gen_call asks for every argument. A walk that found
+// nothing has answered for every type it met; one that found a holder has
+// answered for the type it was asked about only — the types on the way
+// were left half read. (A provisional "neither" for a type still being
+// walked used to be read as final by a type that holds it back: asked
+// about `A` first, `: A { ( Vec B ) bs C c }` / `: B { ( Vec A ) parts }`
+// / `: C { ( Arc Page ) a }` left `B` holding no Arc.)
+unsafe @ __ty_lend_frozen i syms s lty → i {
+    ? == 0 ( nurl_str_len lty ) { ^ 0 } {}
     ? == 0 g_frz_memo { = g_frz_memo ( nurl_sym_new ) } {}
     : s memo ( nurl_sym_get g_frz_memo lty )
     ? != 0 ( nurl_str_len memo ) { ^ - ( nurl_str_get memo 0 ) 48 } {}
-    // (A provisional `0` stops a type that holds itself.)
-    ( nurl_sym_def g_frz_memo lty `0` )
-    : i r ( __ty_lend_frozen_walk syms lty depth )
-    ( nurl_sym_def g_frz_memo lty ? == r 0 `0` ? == r 1 `1` `2` )
-    ^ r
+    : ~ s work ( nurl_str_cat lty `` )
+    : ~ s seen ( nurl_str_cat `|` `` )
+    : ~ i r 0
+    ~ & == r 0 != 0 ( nurl_str_len work ) {
+        : s item ( __bar_first work ) = work ( __bar_rest work )
+        ? & != 0 ( nurl_str_len item ) < ( nurl_str_find seen ( nurl_str_cat3 `|` item `|` ) ) 0 {
+            = seen ( nurl_str_cat3 seen item `|` )
+            : s known ( nurl_sym_get g_frz_memo item )
+            ? != 0 ( nurl_str_len known ) { = r - ( nurl_str_get known 0 ) 48 } {
+                : s kids ( __frz_node syms item )
+                ? != 0 ( nurl_str_len kids ) {
+                    ? == ( nurl_str_get kids 0 ) 33 { = r - ( nurl_str_get kids 1 ) 48 } {
+                        = work ? == 0 ( nurl_str_len work ) ( nurl_str_cat kids `` ) ( nurl_str_cat3 kids `|` work )
+                    }
+                } {}
+            }
+        } {}
+    }
+    ? > r 0 { ( nurl_sym_def g_frz_memo lty ? == r 1 `1` `2` ) ^ r } {}
+    // (Nothing found: `seen` is "|t1|t2|…|", every one of them answered.)
+    : ~ s done ( nurl_str_slice seen 1 - ( nurl_str_len seen ) 1 )
+    ~ != 0 ( nurl_str_len done ) {
+        : s t ( __bar_first done ) = done ( __bar_rest done )
+        ? & != 0 ( nurl_str_len t ) == 0 ( nurl_sym_len g_frz_memo t ) { ( nurl_sym_def g_frz_memo t `0` ) } {}
+    }
+    ^ 0
 }
 
-unsafe @ __ty_lend_frozen_walk i syms s lty i depth → i {
+// __frz_node: one node of __ty_lend_frozen's walk — "!1" (an Arc) or "!2"
+// (a `% Frozen` handle) when the type answers by itself, else the types it
+// holds, between bars, in the order they are to be asked: its type
+// arguments as the instance was written with them, the instance's own
+// fields and payloads (__inst_targ, __lty_layout_name), an inline
+// aggregate's members. A handle that synchronises what it holds holds
+// nothing for this rule.
+@ __frz_node i syms s lty → s {
     : s bn ( __lty_base_name lty )
-    ? ( seq bn `Arc` ) { ^ 1 } {}
-    ? & != 0 g_frozen_impls ( __thr_marked `Frozen##` lty bn ) { ^ 2 } {}
-    ? ( __thr_syncs lty bn ) { ^ 0 } {}
-    // (Each type argument as the instance was written with it, and the
-    // instance's own fields: __inst_targ, __lty_layout_name.)
+    ? ( seq bn `Arc` ) { ^ ( nurl_str_cat `!1` `` ) } {}
+    ? & != 0 g_frozen_impls ( __thr_marked `Frozen##` lty bn ) { ^ ( nurl_str_cat `!2` `` ) } {}
+    ? ( __thr_syncs lty bn ) { ^ ( nurl_str_cat `` `` ) } {}
+    : ~ s kids ( nurl_str_cat `` `` )
     : ~ i ak 0
     : ~ s arg ( __inst_targ lty 0 )
     ~ != 0 ( nurl_str_len arg ) {
-        : i ra ( __ty_lend_frozen syms ( nurl_llty arg ) + depth 1 )
-        ? > ra 0 { ^ ra } {}
+        = kids ( __bar_push kids ( nurl_llty arg ) )
         = ak + ak 1
         = arg ( __inst_targ lty ak )
     }
@@ -35396,8 +35432,7 @@ unsafe @ __ty_lend_frozen_walk i syms s lty i depth → i {
         : ~ i fi 0
         ~ < fi nf {
             : s ft ( nurl_sym_get syms ( nurl_str_cat3 ln `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) )
-            : i rf ( __ty_lend_frozen syms ( nurl_llty ft ) + depth 1 )
-            ? > rf 0 { ^ rf } {}
+            = kids ( __bar_push kids ( nurl_llty ft ) )
             = fi + fi 1
         }
     } {}
@@ -35412,8 +35447,7 @@ unsafe @ __ty_lend_frozen_walk i syms s lty i depth → i {
                 : ~ i pi 0
                 ~ < pi pn {
                     : s pt ( nurl_sym_get syms ( nurl_str_cat3 vname `__payload__` ( nurl_str_int pi ) ) )
-                    : i rp ( __ty_lend_frozen syms ( nurl_llty pt ) + depth 1 )
-                    ? > rp 0 { ^ rp } {}
+                    = kids ( __bar_push kids ( nurl_llty pt ) )
                     = pi + pi 1
                 }
             } {}
@@ -35424,12 +35458,11 @@ unsafe @ __ty_lend_frozen_walk i syms s lty i depth → i {
         : i afc ( agg_field_count syms lty )
         : ~ i ai 0
         ~ & >= afc 0 < ai afc {
-            : i ragg ( __ty_lend_frozen syms ( compound_field_type lty ai ) + depth 1 )
-            ? > ragg 0 { ^ ragg } {}
+            = kids ( __bar_push kids ( compound_field_type lty ai ) )
             = ai + ai 1
         }
     } {}
-    ^ 0
+    ^ kids
 }
 
 // ── What sits in an Arc's payload (agora #646) ─────────────────────
@@ -59867,47 +59900,59 @@ unsafe @ __thr_peel s lty → s {
     ^ F
 }
 
-// __thr_check: "" if `lty` satisfies `want` (0 = Send, 1 = Sync)
-// everywhere in its type graph, else "<TypeName> <kind>".
-@ __thr_check i syms s lty i want i depth → s {
-    : i n ( nurl_str_len lty )
-    // The cap is a backstop against a type that contains itself through
-    // a handle (`: Node { ( Vec Node ) kids }`), not a budget: nothing
-    // real nests ten deep, and bailing out only ever misses.
-    ? | > depth 10 == n 0 { ^ ( nurl_str_cat `` `` ) } {}
+// __thr_kid: `kids` with one more node to ask — type `ty` under question
+// `want` — as "<want><type>" items between bars (an LLVM type holds spaces
+// and commas, never a bar).
+@ __thr_kid s kids i want s ty → s {
+    ? == 0 ( nurl_str_len ty ) { ^ ( nurl_str_cat kids `` ) } {}
+    ? == 0 ( nurl_str_len kids ) { ^ ( nurl_str_cat ( nurl_str_int want ) ty ) } {}
+    ^ ( nurl_str_cat4 kids `|` ( nurl_str_int want ) ty )
+}
 
+// __thr_node: one node of the walk — type `lty` asked `want` (0 = Send,
+// 1 = Sync). "!<TypeName> <kind>" when the node itself answers no; else
+// the nodes it holds, each with the question it is held under
+// (__thr_kid), for __thr_check to ask in this order.
+@ __thr_node i syms s lty i want → s {
     : s bn ( __lty_base_name lty )
 
     // A negative marker outranks everything, including a positive one
     // on the same type: if a program asserts both, the contradiction
     // resolves toward rejection.
     ? ( __thr_marked `NotSend##` lty bn )
-    { ^ ( nurl_str_cat bn ` notsend` ) } {}
+    { ^ ( nurl_str_cat3 `!` bn ` notsend` ) } {}
     ? & == want 1 ( __thr_marked `NotSync##` lty bn )
-    { ^ ( nurl_str_cat bn ` notsync` ) } {}
+    { ^ ( nurl_str_cat3 `!` bn ` notsync` ) } {}
 
     // A positive marker answering the question at hand STOPS the walk.
     // Nothing inside is examined — that is the point of writing one:
     // the author has taken responsibility for the innards.
     ? & == want 0 ( __thr_marked `Send##` lty bn )
     { ^ ( nurl_str_cat `` `` ) } {}
+
+    : ~ s kids ( nurl_str_cat `` `` )
+
     // …except for what a container made to be shared holds: a Locked, a
     // Channel, a Pool hands its value to one thread at a time, so the value
     // must be Send; an RwLocked lets several read it at once, so Sync too
     // (Rust's `Mutex<T>: Sync where T: Send`). The marker vouches for the
     // container, never for its payload: `( Arc ( Locked ( Rc i ) ) )`
     // carried the Rc to every thread (#121).
+    // (A closure that is itself a type argument is not a node here, in
+    // this loop or the one below: what a closure holds is its captures,
+    // which its type never names — a container of closures is asked
+    // through the capture sets recorded where closures are put into it,
+    // __clo_cs_ident.)
     ? & == want 1 ( __thr_marked `Sync##` lty bn )
     { : i swant ? ( seq bn `RwLocked` ) 1 0
         : ~ i sk 0
         : ~ s sarg ( __inst_targ lty 0 )
         ~ != 0 ( nurl_str_len sarg ) {
-            : s rs ( __thr_check syms sarg swant + depth 1 )
-            ? != 0 ( nurl_str_len rs ) { ^ rs } {}
+            ? ! ( __is_closure_ty sarg ) { = kids ( __thr_kid kids swant sarg ) } {}
             = sk + sk 1
             = sarg ( __inst_targ lty sk )
         }
-        ^ ( nurl_str_cat `` `` ) } {}
+        ^ kids } {}
 
     // A trait object. Its box holds whichever type implements the trait,
     // and the object's type no longer says which: `{ i8*, i8* }` has no
@@ -59919,33 +59964,38 @@ unsafe @ __thr_peel s lty → s {
     // not move may not be shared either.
     : s dtr ( __dyn_trait_of bn )
     ? != 0 ( nurl_str_len dtr ) {
-        ? ! ( __trait_has_super dtr `Send` ) { ^ ( nurl_str_cat dtr ` dynsend` ) } {}
-        ? & == want 1 ! ( __trait_has_super dtr `Sync` ) { ^ ( nurl_str_cat dtr ` dynsync` ) } {}
+        ? ! ( __trait_has_super dtr `Send` ) { ^ ( nurl_str_cat3 `!` dtr ` dynsend` ) } {}
+        ? & == want 1 ! ( __trait_has_super dtr `Sync` ) { ^ ( nurl_str_cat3 `!` dtr ` dynsync` ) } {}
     } {}
 
     // The two built-in leaves. (An Rc's `Weak` is the same count: upgraded
     // on the other thread it is an Rc there.)
-    ? ( seq bn `Rc` ) { ^ ( nurl_str_cat `Rc` ` rc` ) } {}
-    ? & ( seq bn `Weak` ) ( __ty_std_named lty `Weak` ) { ^ ( nurl_str_cat `Weak` ` rcweak` ) } {}
-    ? & == want 1 ( seq bn `Cell` ) { ^ ( nurl_str_cat `Cell` ` cell` ) } {}
+    ? ( seq bn `Rc` ) { ^ ( nurl_str_cat `!Rc` ` rc` ) } {}
+    ? & ( seq bn `Weak` ) ( __ty_std_named lty `Weak` ) { ^ ( nurl_str_cat `!Weak` ` rcweak` ) } {}
+    ? & == want 1 ( seq bn `Cell` ) { ^ ( nurl_str_cat `!Cell` ` cell` ) } {}
+
+    // The library's `ArcWeak` is its `Arc` to both questions: upgraded on
+    // the other thread it is an Arc on the same payload (agora #690), every
+    // operation on one is on the Arc's atomic counts, and what it reaches is
+    // that frozen payload — asked below, as the Arc's is. (By what the type
+    // is: a program's own generic of that name is whatever its fields make
+    // it.)
+    : b aweak & ( seq bn `ArcWeak` ) ( __ty_std_named lty `ArcWeak` )
 
     // A share handle not made to be reached from two threads at once: its
     // copies are one state, changed in place with no lock (#66).
-    ? & == want 1 ( __thr_unsafe_share syms lty ) { ^ ( nurl_str_cat bn ` sharenosync` ) } {}
+    ? & & == want 1 ! aweak ( __thr_unsafe_share syms lty ) { ^ ( nurl_str_cat3 `!` bn ` sharenosync` ) } {}
 
     // Generic arguments. `Arc` SHARES its payload rather than moving it,
     // and an `RwLocked` lets several threads read its value at once, so
     // from here down the question becomes the harder one — `( Arc ( Rc i ) )`,
     // `( Arc Cell )` and `( RwLocked PNCounter )` die here, and a
     // `( Vec Cell )` correctly does not.
-    // (An `ArcWeak` as its `Arc`: upgraded on the other thread it is an
-    // Arc on the same payload, agora #690.)
-    : i sub_want ? | | ( seq bn `Arc` ) ( seq bn `ArcWeak` ) ( seq bn `RwLocked` ) 1 want
+    : i sub_want ? | | ( seq bn `Arc` ) aweak ( seq bn `RwLocked` ) 1 want
     : ~ i ak 0
     : ~ s arg ( __inst_targ lty 0 )
     ~ != 0 ( nurl_str_len arg ) {
-        : s ra ( __thr_check syms arg sub_want + depth 1 )
-        ? != 0 ( nurl_str_len ra ) { ^ ra } {}
+        ? ! ( __is_closure_ty arg ) { = kids ( __thr_kid kids sub_want arg ) } {}
         = ak + ak 1
         = arg ( __inst_targ lty ak )
     }
@@ -59957,10 +60007,8 @@ unsafe @ __thr_peel s lty → s {
     { : i fn_ ( nurl_str_to_int fc )
         : ~ i fi 0
         ~ < fi fn_ {
-            : s ft ( nurl_sym_get syms
-            ( nurl_str_cat3 ln `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) )
-            : s rf ( __thr_check syms ft want + depth 1 )
-            ? != 0 ( nurl_str_len rf ) { ^ rf } {}
+            = kids ( __thr_kid kids want ( nurl_sym_get syms
+            ( nurl_str_cat3 ln `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) ) )
             = fi + fi 1
         } }
     {}
@@ -59979,10 +60027,8 @@ unsafe @ __thr_peel s lty → s {
             { : i pn ( nurl_str_to_int pc )
                 : ~ i pi 0
                 ~ < pi pn {
-                    : s pt ( nurl_sym_get syms
-                    ( nurl_str_cat3 vname `__payload__` ( nurl_str_int pi ) ) )
-                    : s rp ( __thr_check syms pt want + depth 1 )
-                    ? != 0 ( nurl_str_len rp ) { ^ rp } {}
+                    = kids ( __thr_kid kids want ( nurl_sym_get syms
+                    ( nurl_str_cat3 vname `__payload__` ( nurl_str_int pi ) ) ) )
                     = pi + pi 1
                 } }
             {}
@@ -59993,17 +60039,50 @@ unsafe @ __thr_peel s lty → s {
     // Inline aggregates — `?T` is `{ i1, T }`, `!T E` is `{ i1, T, E }`,
     // a slice is `{ T*, i64 }`. These carry their element types in the
     // spelling itself, so no registry lookup is involved.
+    // (A closure's `{ R (i8*, P…)*, i8* }` is spelled the same way and is
+    // read the same way where it is a field or an aggregate's member, as
+    // it always was: by the types its code hands back, not by what it
+    // captured. That refuses a holder of a closure handing back an Rc
+    // whatever the closure holds — and is all that refuses one whose
+    // closure was stored where the capture sets do not follow, agora
+    // #718; reading a closure by its captures alone waits for that.)
     ? == ( nurl_str_get lty 0 ) 123  // '{' == 123
     { : i afc ( agg_field_count syms lty )
         : ~ i ai 0
         ~ & >= afc 0 < ai afc {
-            : s at_ ( compound_field_type lty ai )
-            : s ragg ( __thr_check syms at_ want + depth 1 )
-            ? != 0 ( nurl_str_len ragg ) { ^ ragg } {}
+            = kids ( __thr_kid kids want ( compound_field_type lty ai ) )
             = ai + ai 1
         } }
     {}
 
+    ^ kids
+}
+
+// __thr_check: "" if `lty` satisfies `want` (0 = Send, 1 = Sync)
+// everywhere in its type graph, else "<TypeName> <kind>".
+// The graph is finite — every node is a type the program wrote or
+// instantiated — so it is walked whole, depth first in the order the
+// nodes are held, with the set of (question, type) pairs already asked:
+// a pair met again, a type that holds itself through a handle
+// (`: Node { ( Vec Node ) kids }`) or one two fields both reach, has
+// nothing left to say. (There was a depth budget here instead, answering
+// "nothing found" past ten levels: an Rc eleven structs down crossed to
+// another thread, agora #711, and a type with f handles of its own kind
+// was walked f^10 times.)
+@ __thr_check i syms s lty i want → s {
+    : ~ s work ( nurl_str_cat ( nurl_str_int want ) lty )
+    : ~ s seen ( nurl_str_cat `|` `` )
+    ~ != 0 ( nurl_str_len work ) {
+        : s item ( __bar_first work ) = work ( __bar_rest work )
+        ? & > ( nurl_str_len item ) 1 < ( nurl_str_find seen ( nurl_str_cat3 `|` item `|` ) ) 0 {
+            = seen ( nurl_str_cat3 seen item `|` )
+            : s r ( __thr_node syms ( nurl_str_slice item 1 - ( nurl_str_len item ) 1 ) - ( nurl_str_get item 0 ) 48 )
+            ? != 0 ( nurl_str_len r ) {
+                ? == ( nurl_str_get r 0 ) 33 { ^ ( nurl_str_slice r 1 - ( nurl_str_len r ) 1 ) } {}
+                = work ? == 0 ( nurl_str_len work ) ( nurl_str_cat r `` ) ( nurl_str_cat3 r `|` work )
+            } {}
+        } {}
+    }
     ^ ( nurl_str_cat `` `` )
 }
 
@@ -60072,7 +60151,7 @@ unsafe @ __thr_peel s lty → s {
         ? ( seq m `-` ) { ^ ( nurl_str_cat `` `` ) } {}
         ^ ( nurl_str_cat m `` )
     } {}
-    : s r ( __thr_check syms lty 0 0 )
+    : s r ( __thr_check syms lty 0 )
     ( nurl_sym_def g_impl_name_syms key ? == 0 ( nurl_str_len r ) ( nurl_str_cat `-` `` ) ( nurl_str_cat r `` ) )
     ^ r
 }
@@ -60086,7 +60165,7 @@ unsafe @ __thr_peel s lty → s {
         ? ( seq m `-` ) { ^ ( nurl_str_cat `` `` ) } {}
         ^ ( nurl_str_cat m `` )
     } {}
-    : s r ( __thr_check syms lty 1 0 )
+    : s r ( __thr_check syms lty 1 )
     ( nurl_sym_def g_impl_name_syms key ? == 0 ( nurl_str_len r ) ( nurl_str_cat `-` `` ) ( nurl_str_cat r `` ) )
     ^ r
 }
@@ -60110,7 +60189,7 @@ unsafe @ __thr_peel s lty → s {
 // reach for the allocating spelling only on the path that is about to
 // `die` anyway.
 @ __thr_lacks i syms s lty i want → b {
-    : s r ( __thr_check syms lty want 0 )
+    : s r ( __thr_check syms lty want )
     : b bad != 0 ( nurl_str_len r )
     ^ bad
 }
@@ -70661,7 +70740,7 @@ unsafe @ __alloca_struct_params i syms i cg → v {
         ? ( __init_global_ty_std ll ) {} {
             ( die_file_rec ( nurl_sym_get2 g_root_syms g `__initglobal_at` ) ( nurl_str_cat4 `the global '` g `' is set at start, so every thread reads it: its type must synchronise itself — ( Locked T ), ( Arc T ), ( Channel T ), Mutex, Cond or Semaphore, the standard library's — and '` ( nurl_str_cat ( __zty_show ll ) `' is this program's own type of that name. Keep changing state in a Locked.` ) ) )
         } {}
-        : s nosync ( __thr_check g_root_syms ll 1 0 )
+        : s nosync ( __thr_check g_root_syms ll 1 )
         ? != 0 ( nurl_str_len nosync ) {
             ( die_file_rec ( nurl_sym_get2 g_root_syms g `__initglobal_at` ) ( nurl_str_cat4 `the global '` g `' is set at start, so every thread reads it, but its type '` ( nurl_str_cat3 ( __zty_show ll ) `' is not Sync: ` ( __thr_explain nosync ) ) ) )
         } {}
@@ -74038,6 +74117,14 @@ unsafe @ __type_needs_drop s ty i syms → b {
 
 @ __bar_add s l s w → s {
     ? | == 0 ( nurl_str_len w ) ( __bar_has l w ) { ^ ( nurl_str_cat l `` ) } {}
+    ? == 0 ( nurl_str_len l ) { ^ ( nurl_str_cat w `` ) } {}
+    ^ ( nurl_str_cat3 l `|` w )
+}
+
+// (…appended whether or not it is there already — for a list whose reader
+// keeps its own set of what it has seen.)
+@ __bar_push s l s w → s {
+    ? == 0 ( nurl_str_len w ) { ^ ( nurl_str_cat l `` ) } {}
     ? == 0 ( nurl_str_len l ) { ^ ( nurl_str_cat w `` ) } {}
     ^ ( nurl_str_cat3 l `|` w )
 }
@@ -84486,7 +84573,7 @@ unsafe @ __impl_sig_check i lex s tname s mname s impl_nurl s impl_llvm s ty s t
             // this type is parked and checked here as well.)
             : i thr_q ( __thr_bound_trait sup )
             ? | == thr_q 0 == thr_q 1 {
-                : s why ( __thr_check syms llvm thr_q 0 )
+                : s why ( __thr_check syms llvm thr_q )
                 ? != 0 ( nurl_str_len why ) {
                     : s what ? == thr_q 0
                     `' object may move to another thread, so every type it can box must be safe to move, and this one is not: `
