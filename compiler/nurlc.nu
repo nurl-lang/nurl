@@ -6882,6 +6882,7 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     ( nurl_sym_set_deep syms `__agg_lends_part__` `` )
     ( nurl_sym_set_deep syms `__agg_direct__` `` )
     ( nurl_sym_set_deep syms `__agg_kept__` `` )
+    ( nurl_sym_set_deep syms `__agg_copied__` `` )
     ( nurl_sym_set_deep syms `__agg_take_own__` `` )
     ( nurl_sym_set_deep syms `__ret_path_lends__` `` )
     ( nurl_sym_set_deep syms `__ret_path_sink__` `` )
@@ -34470,35 +34471,53 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
     ^ & | == c 37 == c 123 != ( nurl_str_get ll - ( nurl_str_len ll ) 1 ) 42
 }
 
-// Is the literal just handed back made of this function's own values
-// where it read an owning name: `name`, the last it read, is one the
-// literal took in whole (`__agg_kept__`, mem_note_kept), and so is every
-// other it took in — each a binding of this function, registered for its
-// drop, that owned its value: no parameter, no by-pointer capture of the
+// Is `w`, a name a returned literal took in whole, a binding of this
+// function that owned its value (__ret_lit_takes_own)? `sinks`: this
+// function's `sink` parameter indices.
+@ __ret_kept_own i syms s w s sinks → b {
+    : i k ( nurl_sym_word_index syms `__fn_param_names__` w )
+    ? & >= k 0 ! ( str_contains_word sinks ( nurl_str_int k ) ) { ^ F } {}
+    // (A compiler-managed enum's payload is its owner slot's.)
+    : s eo ( nurl_sym_get2 syms w `__enum_owner` )
+    : s p ? != 0 ( nurl_str_len eo ) ( nurl_str_cat eo `` ) ( nurl_sym_get2 syms w `__ptr` )
+    ? | == 0 ( nurl_str_len p ) ! ( nurl_sym_has_word syms `__user_drops__` p ) { ^ F } {}
+    ? | | & < k 0 != 0 ( nurl_sym_len2 syms p `__pname` ) != 0 ( nurl_sym_len2 syms p `__outer_owned` ) ( seq ( nurl_sym_get2 syms p `__sborrow` ) `1` ) { ^ F } {}
+    // (A cursor — a `??` payload over its option — is its sources':
+    // each a binding of this function that owned its value, whose flag
+    // the move cleared, mem_note_kept → mem_udrop_alias_lend.)
+    : ~ s al ( nurl_sym_get2 syms p `__alias` )
+    ~ != 0 ( nurl_str_len al ) {
+        : s a ( str_first_word al ) = al ( str_skip_word al )
+        ? ! ( __ret_own_slot syms a ) { ^ F } {}
+    }
+    ^ T
+}
+
+// Is the literal just handed back made of this function's own values: no
+// field of it lends, and every name it took in whole (`__agg_kept__`,
+// mem_note_kept) is a binding of this function, registered for its drop,
+// that owned its value: no parameter, no by-pointer capture of the
 // caller's, no borrow or cursor; a parameter only where it is `sink`. A
 // `~` loop's element of the caller's Vec is none of these.
 @ __ret_lit_takes_own i syms s name → b {
+    // A literal owns each field it holds outright unless one was stored as
+    // the borrow it was (`__agg_lends__`, `__agg_lends_call__`): a moved
+    // binding, a field moved out of a struct of this function (emptied
+    // there, mem_zero_field), a copy (fld_lent's clone) — the literal's own
+    // whichever name it read last. Asked of that name instead, a literal over
+    // `. p a` of an own struct, or one beside a copied borrowed name, was
+    // left unguarded and lost when a local's destructor panicked (agora
+    // #732). (A per-run take, `__agg_take_own__`, is in the result's own
+    // bit, which the guard reads.)
+    ? | != 0 ( nurl_sym_len syms `__agg_lends__` ) != 0 ( nurl_sym_len syms `__agg_lends_call__` ) { ^ F } {}
     : s kept ( nurl_sym_get syms `__agg_kept__` )
-    ? ! ( str_contains_word kept name ) { ^ F } {}
+    : s copied ( nurl_sym_get syms `__agg_copied__` )
     : s sinks ( nurl_sym_get g_fn_sink ( nurl_sym_get syms `__fn_self_name__` ) )
     : ~ s rest ( nurl_str_cat kept `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest ) = rest ( str_skip_word rest )
-        : i k ( nurl_sym_word_index syms `__fn_param_names__` w )
-        ? & >= k 0 ! ( str_contains_word sinks ( nurl_str_int k ) ) { ^ F } {}
-        // (A compiler-managed enum's payload is its owner slot's.)
-        : s eo ( nurl_sym_get2 syms w `__enum_owner` )
-        : s p ? != 0 ( nurl_str_len eo ) ( nurl_str_cat eo `` ) ( nurl_sym_get2 syms w `__ptr` )
-        ? | == 0 ( nurl_str_len p ) ! ( nurl_sym_has_word syms `__user_drops__` p ) { ^ F } {}
-        ? | | & < k 0 != 0 ( nurl_sym_len2 syms p `__pname` ) != 0 ( nurl_sym_len2 syms p `__outer_owned` ) ( seq ( nurl_sym_get2 syms p `__sborrow` ) `1` ) { ^ F } {}
-        // (A cursor — a `??` payload over its option — is its sources':
-        // each a binding of this function that owned its value, whose flag
-        // the move cleared, mem_note_kept → mem_udrop_alias_lend.)
-        : ~ s al ( nurl_sym_get2 syms p `__alias` )
-        ~ != 0 ( nurl_str_len al ) {
-            : s a ( str_first_word al ) = al ( str_skip_word al )
-            ? ! ( __ret_own_slot syms a ) { ^ F } {}
-        }
+        // (A name the literal copied: the copy is its own.)
+        ? & ! ( str_contains_word copied w ) ! ( __ret_kept_own syms w sinks ) { ^ F } {}
     }
     ^ T
 }
@@ -59040,7 +59059,15 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
             // (…which handed its sources over, or kept them where it was
             // copied: gen_ret does not hand them over again — `settled`.)
             : s __akp ( nurl_sym_get syms `__agg_kept__` )
-            ( nurl_sym_set_deep syms `__agg_kept__` ? == 0 ( nurl_str_len __akp ) ( nurl_str_cat fld_first_val `` ) ( nurl_str_cat3 __akp ` ` fld_first_val ) ) } {}
+            ( nurl_sym_set_deep syms `__agg_kept__` ? == 0 ( nurl_str_len __akp ) ( nurl_str_cat fld_first_val `` ) ( nurl_str_cat3 __akp ` ` fld_first_val ) )
+            // (…and one copied for certain, whose copy the literal owns
+            // outright whatever the name is: __ret_lit_takes_own, agora
+            // #732. Not copied after all, it was stored as the borrow it
+            // was, and `__agg_lends__` says so.)
+            ? ( seq fld_lent `1` ) {
+                : s __acp ( nurl_sym_get syms `__agg_copied__` )
+                ( nurl_sym_set_deep syms `__agg_copied__` ? == 0 ( nurl_str_len __acp ) ( nurl_str_cat fld_first_val `` ) ( nurl_str_cat3 __acp ` ` fld_first_val ) )
+            } {} } {}
         // …it is kept once the literal's binding leaves whole (stored,
         // returned, handed on): parked until then (mem_note_rawlit).
         ? & & & & ( is_ident_tok fld_first_tt ) __fk_rawparam ! fld_param_copy ! fld_param_lend == 0 ( nurl_str_len __argk ) {
