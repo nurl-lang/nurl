@@ -24204,6 +24204,11 @@ unsafe @ gen_match i lex i syms i cg → s {
     ? & & == match_first_tt TT_LPAREN ( __arm_call_bit_ok syms )
     | == 0 ( nurl_sym_len syms `__last_call_ret_view__` ) ( __call_answers syms match_first_tt )
     { = scrut_own ( mem_call_retown syms cg ) } {}
+    // …and so does an option or result LITERAL: it took its payload over
+    // (`@ ?String { T ( string_clone s ) }`, or a binding moved into it),
+    // and a match over it was the payload's last owner — released by
+    // nobody, it leaked (agora #654).
+    ? & == match_first_tt TT_AT != 0 ( nurl_str_starts match_type `{ i1, ` ) { = scrut_own ( nurl_str_cat `true` `` ) } {}
     // A call that lends what it hands back (a borrow — `vec_get`'s
     // element — or a view of an argument it does not answer per call for)
     // leaves the option with its owner: the arms are lent its payload.
