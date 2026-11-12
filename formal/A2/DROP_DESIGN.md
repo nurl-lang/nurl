@@ -680,10 +680,13 @@ each one shrinks `CLAIM.md`'s exception:
        channel, a lock, an `Arc`, a cell). A field or a payload is built
        (Agora #607, above); a `Vec` of `Vec D`s needs the drain to bind an
        element at a `Vec` type; a block's payload is 3d's.
-     - *`withElem`*: the element taken out needs a destructor frame of
-       its own while it is out (`withElem`'s hand-over binding is a plain
-       `scope`). **Built** (Agora #607, `A2/DropCode.lean`): the other
-       in-place drops need no new step, they are code the calculus types:
+     - **Built** (Agora #607, `A2/DropCode.lean`): the in-place drops
+       need no new step, they are code the calculus types: `withElem v i
+       x s` of a destructor element is `letd x f (vec_remove v i) (s ;
+       insert v i x)` (`withElemD_typed`, witness `mainElem_safe`): the
+       check-out's frame is a `letd`'s, so a panic in `s` runs the
+       element's destructor, and the give-back leaves it moved out
+       (`scopeDMoved`);
        `vec_free` is the `Vec` moved into a `letd` that ends at once
        (`vecFreeD_typed`), `vec_clear` a loop of `vec_remove x 0`s into a
        `letd` (`vecClearD_typed`), `vec_truncate x n` a loop of
