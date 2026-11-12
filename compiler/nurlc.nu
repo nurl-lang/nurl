@@ -28164,6 +28164,16 @@ unsafe @ mem_path_to_indices s path → s {
     ^ F
 }
 
+// Does a binding of struct type `vt` get a drop of the struct's own — a `%
+// Drop` impl or the compiler-written one of a struct that cannot be copied
+// (asked for now, as the binding's registration asks: __handle_drop_ensure)
+// — which releases every field it holds?
+@ __agg_drop_takes_fields s vt → b {
+    : s rvt ( __udrop_regty vt )
+    ( __handle_drop_ensure rvt )
+    ^ != 0 ( nurl_sym_len g_impl_name_syms ( nurl_str_cat `drop##` rvt ) )
+}
+
 @ mem_register_agg_owned_fields i syms s ptr s vt → v {
     : s idxs ( nurl_sym_get syms `__last_agg_owned_fields__` )
     ? & != 0 ( nurl_str_len idxs ) == ( nurl_str_get vt 0 ) 37
@@ -28182,7 +28192,15 @@ unsafe @ mem_path_to_indices s path → s {
             : i c3 ( nurl_str_find after2 `:` )
             : s leaf_sname ( nurl_str_slice after2 0 c3 )
             : s leaf_idx ( nurl_str_slice after2 + c3 1 - - ( nurl_str_len after2 ) c3 1 )
-            ( mem_own_add_struct_field syms ptr sname path kind leaf_sname leaf_idx )
+            // (A closure field of a struct with a drop of its own — a `%
+            // Drop`, or the one the compiler writes for a struct that holds
+            // such a value: that drop releases the env with the rest, and
+            // the binding is registered for it below. Registered here too,
+            // the env was released twice at the binding's end, a heap-use-
+            // after-free — Agora #642 item 1.)
+            ? & ( seq kind `clo` ) ( __agg_drop_takes_fields vt ) {} {
+                ( mem_own_add_struct_field syms ptr sname path kind leaf_sname leaf_idx )
+            }
         }
     }
     {}
@@ -33314,6 +33332,63 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
     ( nurl_print `  store i8* ` ) ( nurl_print val ) ( nurl_print `, ptr ` ) ( nurl_print js ) ( nurl_print `\n` )
     ( nurl_print `  call void @nurl_journal_push_drop2(ptr ` ) ( nurl_print js ) ( nurl_print `, ptr null, ptr @__jdrop_rawstr)\n` )
     ^ ( nurl_str_cat `j|` js )
+}
+
+// A literal's field `fval` (type `fty`) that the literal made, journaled
+// while the literal's later fields are evaluated: its slot, with its type's
+// thunk, or a closure's env (`j|slot`, ended by mem_drop_arg_temps); "" for
+// a value that owns nothing the journal can release.
+@ __agg_field_journal i cg s fty s fval → s {
+    ? ( __is_closure_llty fty ) {
+        : s env ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print env ) ( nurl_print ` = extractvalue ` ) ( nurl_print fty ) ( nurl_print ` ` ) ( nurl_print fval ) ( nurl_print `, 1\n` )
+        ^ ( mem_journal_push_cloenv cg env )
+    } {}
+    ? ! | ( __is_handle_ty fty ) ( __type_needs_drop fty g_root_syms ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s fnv ( __jthunk_of fty )
+    ? == 0 ( nurl_str_len fnv ) { ^ ( nurl_str_cat `` `` ) } {}
+    ^ ( mem_journal_push_temp_fn cg fty fval `true` fnv )
+}
+
+// The fields a literal made and has not journaled yet (`fty\tfval\n`
+// lines), journaled before a field whose expression may panic
+// (__agg_field_quiet): a literal whose later fields are all names and
+// constants journals nothing, and stores no field in a slot.
+@ __agg_field_journal_flush i cg s pend s words → s {
+    : ~ s rest ( nurl_str_cat pend `` )
+    : ~ s out ( nurl_str_cat words `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : i nl ( nurl_str_find rest `\n` )
+        : s e ( nurl_str_slice rest 0 nl )
+        = rest ( nurl_str_slice rest + nl 1 - - ( nurl_str_len rest ) nl 1 )
+        : i t ( nurl_str_find e `\t` )
+        : s w ( __agg_field_journal cg ( nurl_str_slice e 0 t ) ( nurl_str_slice e + t 1 - - ( nurl_str_len e ) t 1 ) )
+        ? != 0 ( nurl_str_len w ) { = out ? == 0 ( nurl_str_len out ) w ( nurl_str_cat3 out ` ` w ) } {}
+    }
+    ^ out
+}
+
+// A field expression that cannot panic, from its first token: a name, a
+// number, a truth value, a field read of a name (`. h f`).
+@ __agg_field_quiet i lex i tt → b {
+    ? | | ( is_ident_tok tt ) == tt TT_INT == tt TT_BOOL { ^ T } {}
+    ^ & == tt TT_DOT ( is_ident_tok ( nurl_lex_peek_type lex ) )
+}
+
+// …newest first: the journal pops the registration that ends inline
+// where it is the newest (nurl_journal_forget_slot); oldest first, every
+// one but the last took the search for it.
+@ __agg_field_journal_end s words → v {
+    : ~ s rest ( nurl_str_cat words `` )
+    : ~ s rev ``
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        = rev ? == 0 ( nurl_str_len rev ) ( nurl_str_cat w `` ) ( nurl_str_cat3 w ` ` rev )
+    }
+    ~ != 0 ( nurl_str_len rev ) {
+        : s w ( str_first_word rev ) = rev ( str_skip_word rev )
+        ( nurl_print `  call void @nurl_journal_forget_slot(ptr ` ) ( nurl_print ( nurl_str_slice w 2 - ( nurl_str_len w ) 2 ) ) ( nurl_print `)\n` )
+    }
 }
 
 @ mem_ret_guard_pop s slot → v {
@@ -54126,8 +54201,11 @@ unsafe @ __replaces_note i syms s name s field → v {
                 : b __fs_inout & != 0 ( nurl_str_len obj_name ) ( seq ( nurl_sym_get2 syms obj_name `__inout` ) `1` )
                 : s __ffv ( __fs_drop_replaced syms cg obj_name alloca_ptr pt ( nurl_str_int fidx ) ftype gep )
                 // …and a closure field of an owning struct (its drop graph
-                // owns the env): the closure it replaces is released.
-                ? & & ( __is_closure_ty ftype ) ( __is_owned_struct_ty pt ) | __fs_inout ( nurl_sym_has_word syms `__user_drops__` alloca_ptr )
+                // owns the env): the closure it replaces is released. (So
+                // does a struct with a drop of its own, which releases its
+                // closure fields with the rest: the field has no release of
+                // its own to do it any more, Agora #642.)
+                ? & & ( __is_closure_ty ftype ) | ( __is_owned_struct_ty pt ) ( __agg_drop_takes_fields pt ) | __fs_inout ( nurl_sym_has_word syms `__user_drops__` alloca_ptr )
                 { : s __cf ? __fs_inout ( nurl_str_cat `true` `` ) ( mem_udrop_flag_get syms cg alloca_ptr )
                     : s __cv ( nurl_cg_reg cg )
                     : s __ce ( nurl_cg_reg cg )
@@ -56064,6 +56142,9 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
     : ~ s __mx_lent ``
     : ~ b __mx_own F
     : ~ b __mx_foreign F
+    : ~ s __fj_words ``
+    : ~ s __fj_pend ``
+    : ~ s __fj_kept ``
     : i __mx_al0 ? agg_moves_fields ( nurl_sym_len syms `__agg_lends__` ) 0
     : i __mx_alp0 ? agg_moves_fields ( nurl_sym_len syms `__agg_lends_part__` ) 0
     = g_lm_depth + g_lm_depth 1
@@ -56098,6 +56179,14 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         // a direct parameter embed (`{ cb }`) from a derived value.
         : i fld_first_tt ( nurl_lex_type lex )
         : s fld_first_val ( nurl_lex_val lex )
+        // The fields made so far are journaled before an expression that
+        // may panic (Agora #642 item 3).
+        ? != 0 ( nurl_str_len __fj_pend ) {
+            ? ! ( __agg_field_quiet lex fld_first_tt ) {
+                = __fj_words ( __agg_field_journal_flush cg __fj_pend __fj_words )
+                = __fj_pend ``
+            } {}
+        } {}
         // For a `. obj field` value: the object's name, needed below to
         // tell a read out of a PARAMETER (which the caller still owns)
         // from a read out of something this function just allocated.
@@ -56205,6 +56294,12 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
             = __fk_rawparam & & > ( nurl_str_len __fkt ) 0 == ( nurl_str_get __fkt - ( nurl_str_len __fkt ) 1 ) 42
             ! ( str_contains_word ( nurl_sym_get g_fn_sink ( nurl_sym_get syms `__fn_self_name__` ) ) ( nurl_str_int __fpc_i ) )
         } {}
+        // A binding moved in hands its value over when the literal is
+        // complete: its drop flag is cleared at the `}`, so a later field's
+        // expression that panics finds the value the binding's still, and
+        // the unwind drops it once (Agora #741). A last field is the `}`.
+        : b __fj_defer & ( is_ident_tok fld_first_tt ) != ( nurl_lex_peek_type lex ) TT_RBRACE
+        ? __fj_defer { ( nurl_print_buf_start ) } {}
         ? & & & & ( is_ident_tok fld_first_tt ) ! fld_param_copy ! fld_param_lend | agg_returned == 0 ( nurl_str_len __argk ) ! __fk_rawparam
         // (Where it is copied — fld_lent, read before the move — its
         // sources keep their own, agora #476. Not a returned option's or
@@ -56236,6 +56331,7 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
                 ( mem_note_kept_arg syms cg fld_first_val ( mem_lend_const syms `one` ( str_first_word __lac ) ( str_first_word ( str_skip_word __lai ) ) ( nurl_str_to_int ( str_first_word __lai ) ) ) )
             } {}
         } {}
+        ? __fj_defer { = __fj_kept ( nurl_str_cat __fj_kept ( nurl_print_buf_stop ) ) } {}
         ? ( is_ident_tok fld_first_tt )
         { ( bck_record_embedded_param syms fld_first_val )
             // …and it is a MOVE, which the borrow checker was not told.
@@ -56676,7 +56772,11 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         // — mem_clo_into_store — and dropped with it, agora #173.)
         : b __ao_cloid & fld_is_clo ( is_ident_tok fld_first_tt )
         : b __ao_clo & ( __is_closure_ty fty ) | | == fld_first_tt TT_BACKSLASH == fld_first_tt TT_LPAREN __ao_cloid
-        : b __ao_ty & & | | ( __is_handle_ty fty ) ( __is_autodrop_enum fty syms ) __ao_clo | __ao_clo ! ( __is_closure_ty fty ) ! ( seq fval `zeroinitializer` )
+        // (…and a value with a drop of its own that cannot be copied — a
+        // `% Drop` struct, one holding such a value — which the literal made:
+        // left out, `( look @ S { ( bomb … ) … } )` never ran its
+        // destructor, Agora #642 item 2.)
+        : b __ao_ty & & | | | ( __is_handle_ty fty ) ( __is_autodrop_enum fty syms ) ( __nc_drop_ty fty ) __ao_clo | __ao_clo ! ( __is_closure_ty fty ) ! ( seq fval `zeroinitializer` )
         : b __ao_tag & == idx 0 | agg_is_wrap != 0 ( nurl_sym_len2 syms ( nurl_str_slice agg_ty 1 - ( nurl_str_len agg_ty ) 1 ) `__variants` )
         ? & & & __ao_ctx __ao_ty != fld_first_tt TT_AT ! __ao_tag {
             : s __aoc ? __ao_cloid ( nurl_str_cat `1` `` ) ? | ( is_ident_tok fld_first_tt ) == fld_first_tt TT_HASH ( nurl_str_cat fld_lent `` ) ( nurl_str_cat `1` `` )
@@ -57701,9 +57801,24 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
                 ? & == __mx_f0 0 != 0 ( nurl_sym_len syms `__agg_lends__` ) { = __mx_foreign T } {}
             }
         } {}
+        // A field the literal made — a call's value, a literal, a closure —
+        // is the literal's from here, and the literal is in no journal entry
+        // until it is complete: a later field's expression that panics left
+        // it to nobody (Agora #642 item 3). Where a field follows, it waits
+        // in __fj_pend for a field that may panic, and is journaled from
+        // there until the `}`.
+        ? & & & != 0 g_auto_drop_strings != ( nurl_lex_type lex ) TT_RBRACE ! ( seq actual_fval `zeroinitializer` ) | | == fld_first_tt TT_LPAREN == fld_first_tt TT_AT == fld_first_tt TT_BACKSLASH {
+            ? ! ( seq __lm_l `1` ) {
+                = __fj_pend ( nurl_str_cat4 __fj_pend actual_fty `\t` ( nurl_str_cat actual_fval `\n` ) )
+            } {}
+        } {}
         = idx + idx 1
     }
     ( expect lex TT_RBRACE )  // consume '}'
+    // (The literal is complete: it holds the bindings moved in, and its
+    // fields' registrations end.)
+    ? != 0 ( nurl_str_len __fj_kept ) { ( nurl_print __fj_kept ) } {}
+    ( __agg_field_journal_end __fj_words )
     = g_lm_depth - g_lm_depth 1
     // A plain struct handed on whole is its taker's to drop, or lent whole:
     // with a field of its own beside a lent one, lent whole leaked the own

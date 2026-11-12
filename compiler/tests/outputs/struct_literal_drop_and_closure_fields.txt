@@ -1,0 +1,30 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+beside_closure: built
+drop inline
+drop beside
+through_a_vec: len 1
+drop moved
+drop read.x
+drop read.y
+drop read.c
+to_a_reader: 27 43
+drop first
+panic_mid_literal: recovered: panic while building
+drop mixed.opt
+panic_mid_mixed: recovered: panic while building
+drop made
+drop moved
+moved_binding_then_panic: recovered: panic while building
+drop nested.moved
+drop nested.made
+moved_into_nested_then_panic: recovered: panic while building
+drop arg.moved
+moved_into_argument_then_panic: recovered: panic while building
+built
+drop kept.moved
+drop kept.made
+drop late
+moved_binding_no_panic: no panic
