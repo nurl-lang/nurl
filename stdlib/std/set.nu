@@ -130,7 +130,9 @@ $ `stdlib/core/box.nu`
     : ~ i i 0
     ~ < i old_cap {
         ? == . old_states i 1 {
+            // (the element moves, as a write-back: see __map_grow)
             : E k . old_keys i
+            ( mem_put_back k )
             : i h ( hash_fn k )
             : ~ i idx & h mask
             ~ != . new_states idx 0 { = idx & + idx 1 mask }

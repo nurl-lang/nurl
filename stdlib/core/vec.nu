@@ -745,8 +745,14 @@ raw @ vec_stash [A] i kind sink ( Vec A ) v i max → v {
     ? | | | < i_idx 0 >= i_idx len < j_idx 0 >= j_idx len { ^ F } {}
     ? == i_idx j_idx { ^ T } {}
     : *A data # *A ( nurl_vctl_data ctl )
+    // The two elements change places: each goes back into the buffer as
+    // it is, neither copied nor taken over. (Stored as plain bindings, two
+    // closures were copied — each slot got a clone of the other's
+    // environment and the two it held were nobody's: agora #706.)
     : A a . data i_idx
     : A b . data j_idx
+    ( mem_put_back a )
+    ( mem_put_back b )
     = . data i_idx b
     = . data j_idx a
     ^ T
@@ -760,8 +766,11 @@ raw @ vec_stash [A] i kind sink ( Vec A ) v i max → v {
         : ~ i i 0
         : ~ i j - len 1
         ~ < i j {
+            // (each goes back as it is: see vec_swap)
             : A a . data i
             : A b . data j
+            ( mem_put_back a )
+            ( mem_put_back b )
             = . data i b
             = . data j a
             = i + i 1
@@ -1261,7 +1270,10 @@ raw @ vec_with_cap_packed [A] i n → ( Vec A ) {
     ~ < r n {
         : A x . data r
         ? ( keep x ) {
+            // (the two change places, each as it is: see vec_swap)
             : A y . data w
+            ( mem_put_back x )
+            ( mem_put_back y )
             = . data w x
             = . data r y
             = w + w 1

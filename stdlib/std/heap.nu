@@ -25,8 +25,11 @@ $ `stdlib/core/vec.nu`
 
 // ── Internal sift helpers (operate on the raw element buffer) ─────────
 
+// (The two change places: `t` goes back into the buffer as it is — a
+// closure stored as a plain binding is copied, agora #706.)
 @ __heap_swap [A] * A data i i i j → v {
     : A t . data i
+    ( mem_put_back t )
     = . data i . data j
     = . data j t
 }
