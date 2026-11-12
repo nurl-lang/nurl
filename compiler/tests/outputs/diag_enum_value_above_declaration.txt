@@ -1,0 +1,10 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_enum_value_above_declaration.nu:9:7: error: type 'Shade' is used by value as a binding type here but is declared LATER in the program. An enum value needs the enum's declaration before this point: what releases the payloads it may hold is decided where the enum is declared (a pointer to it is fine, and a struct may be used above its declaration). Move ': | Shade { … }' above this use, or import the file that declares it before this one.
+    : Shade s ( mk )
+      ^
+compiler/tests/diag_enum_value_above_declaration.nu:13:10: error: type 'Shade' is used by value as the return type here but is declared LATER in the program. An enum value needs the enum's declaration before this point: what releases the payloads it may hold is decided where the enum is declared (a pointer to it is fine, and a struct may be used above its declaration). Move ': | Shade { … }' above this use, or import the file that declares it before this one.
+@ mk → Shade { ^ @ Shade { Mix @ Pt { 40 0 } } }
+         ^
+error: aborting due to 2 previous errors
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.
