@@ -45035,7 +45035,9 @@ unsafe @ __sx_mut_roots s st s e b named → s {
     : s cal ( nurl_str_slice sx 0 lp )
     // (A callee that moves or drops nothing it is handed: nothing to check.)
     : i lk ( bck_lib_kind ( bck_generic_base cal ) )
-    : b anymut | | | == lk 1 != 0 ( nurl_sym_len g_fn_reallocs cal ) & != 0 ( nurl_sym_len g_fn_safe cal ) != 0 ( nurl_sym_len g_fn_drops cal ) & & == lk 0 == 0 ( nurl_sym_len g_fn_safe cal ) != 0 ( nurl_sym_len g_fn_mutates cal )
+    // (…nor one that takes over none: a `sink` parameter's value is the
+    // callee's to release, agora #494.)
+    : b anymut | | | | == lk 1 != 0 ( nurl_sym_len g_fn_reallocs cal ) & != 0 ( nurl_sym_len g_fn_safe cal ) != 0 ( nurl_sym_len g_fn_drops cal ) & & == lk 0 == 0 ( nurl_sym_len g_fn_safe cal ) != 0 ( nurl_sym_len g_fn_mutates cal ) != 0 ( nurl_sym_len g_fn_sink cal )
     ? ! anymut { ^ } {}
     : s args ( bck_sx_split ( nurl_str_slice sx + lp 1 - - ( nurl_str_len sx ) lp 2 ) )
     : ~ s rest ( nurl_str_cat args `` )
@@ -45045,7 +45047,12 @@ unsafe @ __sx_mut_roots s st s e b named → s {
         : s aj ? < nl 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 nl )
         = rest ? < nl 0 `` ( nurl_str_slice rest + nl 1 - - ( nurl_str_len rest ) nl 1 )
         : s js ( nurl_str_int j )
-        : b dj ( bck_callee_drops_elems cal js )
+        // (An argument a `sink` parameter takes over is the callee's to
+        // release — its elements with it — wherever in its body: a borrow
+        // of it handed beside it is read, inside the call, after it may be
+        // gone; agora #494.)
+        : b sj ( nurl_sym_has_word g_fn_sink cal js )
+        : b dj | sj ( bck_callee_drops_elems cal js )
         : b rj | dj ( nurl_sym_has_word g_fn_reallocs cal js )
         ? & rj ! ( seq aj `-` ) {
             : s mj ( bck_sx_mut_storage st aj )
@@ -45065,7 +45072,7 @@ unsafe @ __sx_mut_roots s st s e b named → s {
                         ? != 0 ( nurl_str_len hit ) {
                             : s nm ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int ( bck_path_root ( nurl_str_to_int hit ) ) ) ) )
                             : s c1 ( nurl_str_cat4 `'` nm `' reaches '` ( bck_fn_show cal ) )
-                            : s c2 ( nurl_str_cat3 `' through argument ` ( nurl_str_int + j 1 ) ? dj `, whose elements it may drop or replace,` `, whose buffer it may move or free,` )
+                            : s c2 ( nurl_str_cat3 `' through argument ` ( nurl_str_int + j 1 ) ? sj `, which it takes over and may release,` ? dj `, whose elements it may drop or replace,` `, whose buffer it may move or free,` )
                             : s c3 ( nurl_str_cat4 ` and through argument ` ( nurl_str_int + k 1 ) `, which points into it or borrows from it: inside the call the two are unrelated names, and the change through one leaves the other dangling. Pass a copy that owns its data as one of them (mem_dup, string_from, slice_to_vec), or take what the second one reaches inside the callee.` `` )
                             ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat3 c1 c2 c3 ) )
                             ^

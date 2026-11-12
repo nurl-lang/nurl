@@ -1,0 +1,9 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_sink_container_beside_a_borrow_of_its_element.nu:31:5: error: 't' reaches 'eat_then_read' through argument 1, which it takes over and may release, and through argument 2, which points into it or borrows from it: inside the call the two are unrelated names, and the change through one leaves the other dangling. Pass a copy that owns its data as one of them (mem_dup, string_from, slice_to_vec), or take what the second one reaches inside the callee.
+    ^ ( eat_then_read t e )
+    ^
+compiler/tests/diag_sink_container_beside_a_borrow_of_its_element.nu:38:5: error: 't' reaches 'eat_then_run' through argument 1, which it takes over and may release, and through argument 2, which points into it or borrows from it: inside the call the two are unrelated names, and the change through one leaves the other dangling. Pass a copy that owns its data as one of them (mem_dup, string_from, slice_to_vec), or take what the second one reaches inside the callee.
+    ^ ( eat_then_run t f )
+    ^
+error: compilation aborted — 2 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)
