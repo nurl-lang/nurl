@@ -24192,6 +24192,12 @@ unsafe @ gen_match i lex i syms i cg → s {
     = g_m_heldcol __m_hcol0
     = g_m_heldtys ( nurl_str_cat __m_held0 __m_heldtys )
     : s match_type ( nurl_get_last_type )
+    // (A field the read took out of a call's result — `?? . ( mk ) ev`, a
+    // user enum's field, gen_member's `__last_tmp_field_own__` — is its own
+    // exactly where that flag says the call handed its result over: the
+    // h233 owner below takes it with that flag. Matched in place, nothing
+    // took it over, and it leaked, payload box and all; agora #764.)
+    : s __m_tfown ? == match_first_tt TT_DOT ( nurl_str_cat ( nurl_sym_get syms `__last_tmp_field_own__` ) `` ) ``
     // (Raw provenance: what the matched value reaches — a payload bound
     // out of it reaches that too. Named before any row takes the reads.)
     : s __m_rsrc ( __rpg_scrut_src syms match_first_tt match_var_name match_type )
@@ -24291,9 +24297,10 @@ unsafe @ gen_match i lex i syms i cg → s {
     // and no take moves one out, `__ekeep_tmp`; agora #641.)
     : b __m_udrop_enum & & == ( nurl_str_get match_type 0 ) 37 != 0 ( nurl_sym_len2 syms ( nurl_str_slice match_type 1 - ( nurl_str_len match_type ) 1 ) `__variants` ) ( __has_user_drop match_type )
     : ~ b m_tmp_enum F
-    ? & & & | == match_first_tt TT_LPAREN == match_first_tt TT_AT != 0 g_auto_drop_strings == 0 ( nurl_str_starts match_type `{ i1, ` )
+    ? & & & | | == match_first_tt TT_LPAREN == match_first_tt TT_AT != 0 ( nurl_str_len __m_tfown ) != 0 g_auto_drop_strings == 0 ( nurl_str_starts match_type `{ i1, ` )
     | | ( __is_autodrop_enum match_type syms ) ( __is_handle_enum match_type ) __m_udrop_enum {
-        : s mte_own ? == match_first_tt TT_AT ( nurl_str_cat `true` `` ) ( mem_call_retown syms cg )
+        : s mte_own ? == match_first_tt TT_AT ( nurl_str_cat `true` `` ) ? != 0 ( nurl_str_len __m_tfown ) ( nurl_str_cat __m_tfown `` ) ( mem_call_retown syms cg )
+        ? != 0 ( nurl_str_len __m_tfown ) { ( nurl_sym_def syms `__last_tmp_field_own__` `` ) } {}
         ? != 0 ( nurl_str_len mte_own ) {
             : s mte_p ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print mte_p ) ( nurl_print ` = alloca ` ) ( nurl_print ( nurl_llty match_type ) ) ( nurl_print `\n` )
