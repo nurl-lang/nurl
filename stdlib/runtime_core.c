@@ -11002,6 +11002,8 @@ typedef struct {
     void (*elem_drop)(void*);
     long long elem_size;
     long long next, end;          /* [next, end): the elements still to drop */
+    void *own;                    /* a buffer of the release's own, freed at
+                                   * the end (nurl_vec_drop_moved_dtor) */
 } NurlVecDrain;
 
 /* The end of a release. A whole Vec's release raised the collector's
@@ -11009,6 +11011,7 @@ typedef struct {
  * whichever function reaches the end. Left raised by a panic, as it was,
  * no cycle was ever collected on the thread again. */
 NURL_TLS_FN static void nurl__vec_drain_end(NurlVecDrain *d) {
+    if (d->own) nurl_free(d->own);
     if (!d->ctl) return;
     if (--nurl__cc_batch == 0) nurl__cc_batch_end();
     if (d->base != (char*)d->ctl + 24) nurl_free(d->base);
@@ -11063,11 +11066,11 @@ static void nurl__vec_drain_resume(void *rec) {
 __attribute__((no_sanitize("address", "undefined")))
 #endif
 NURL_TLS_FN static void nurl__vec_drain_run(void *ctl, char *base, long long from, long long to,
-                                            void (*elem_drop)(void*), long long elem_size) {
+                                            void (*elem_drop)(void*), long long elem_size, void *own) {
     /* (The record first: nothing is then held in a register across the
      * calls below — a thread-local access is one, in a position-
      * independent build.) */
-    NurlVecDrain d = { ctl, base, elem_drop, elem_size, from, to };
+    NurlVecDrain d = { ctl, base, elem_drop, elem_size, from, to, own };
     if (d.ctl) {
         /* A whole Vec (nurl_vec_drop_dtor): its buffer and length, read
          * here so that the entry itself keeps no frame. A borrowed view
@@ -11093,7 +11096,7 @@ NURL_TLS_FN static void nurl__vec_drain_run(void *ctl, char *base, long long fro
 NURL_TLS_WRAP void nurl_vec_drop_dtor(void *ctl, void (*elem_drop)(void*), long long elem_size) {
     if (!ctl) return;
     if (__builtin_expect(NURL_TLS_LD(long long, nurl__jrnl_active) != 0, 0) && elem_drop) {
-        nurl__vec_drain_run(ctl, NULL, 0, 0, elem_drop, elem_size);
+        nurl__vec_drain_run(ctl, NULL, 0, 0, elem_drop, elem_size, NULL);
         return;
     }
     nurl_vec_drop(ctl, elem_drop, elem_size);
@@ -11105,10 +11108,34 @@ NURL_TLS_WRAP void nurl_vec_drop_range_dtor(void *data, long long from, long lon
                                             void (*elem_drop)(void*), long long elem_size) {
     if (!data || !elem_drop || elem_size <= 0 || from >= to) return;
     if (__builtin_expect(NURL_TLS_LD(long long, nurl__jrnl_active) != 0, 0)) {
-        nurl__vec_drain_run(NULL, (char*)data, from, to, elem_drop, elem_size);
+        nurl__vec_drain_run(NULL, (char*)data, from, to, elem_drop, elem_size, NULL);
         return;
     }
     nurl_vec_drop_range(data, from, to, elem_drop, elem_size);
+}
+
+/* `( mem_drop_moved [A] buf n )`: drop the `n` elements of `buf`, a buffer
+ * of their own that their container moved them into before the first of
+ * their destructors runs, then free it (Agora #709). A container that
+ * dropped its elements out of its own storage, its count already short,
+ * left them in slots it counts free: a destructor that reached the
+ * container and pushed wrote over the next element to go (never dropped),
+ * the release then dropped the element pushed (twice: the container held
+ * it too), and a push that grew the buffer freed the storage the release
+ * was walking. Moved out first, the elements share no slot with the
+ * container: what a destructor does to it is its own business. Index
+ * order, and a panic in one goes on with the rest, as for a range. */
+NURL_TLS_WRAP void nurl_vec_drop_moved_dtor(void *buf, long long n,
+                                            void (*elem_drop)(void*), long long elem_size) {
+    if (!buf) return;
+    if (n > 0 && elem_drop && elem_size > 0) {
+        if (__builtin_expect(NURL_TLS_LD(long long, nurl__jrnl_active) != 0, 0)) {
+            nurl__vec_drain_run(NULL, (char*)buf, 0, n, elem_drop, elem_size, buf);
+            return;
+        }
+        nurl_vec_drop_range(buf, 0, n, elem_drop, elem_size);
+    }
+    nurl_free(buf);
 }
 #else  /* __wasi__: a panic ends the process (no recover), so nothing is journaled. */
 void nurl_vec_drop_dtor(void *ctl, void (*elem_drop)(void*), long long elem_size) {
@@ -11117,6 +11144,12 @@ void nurl_vec_drop_dtor(void *ctl, void (*elem_drop)(void*), long long elem_size
 void nurl_vec_drop_range_dtor(void *data, long long from, long long to,
                               void (*elem_drop)(void*), long long elem_size) {
     nurl_vec_drop_range(data, from, to, elem_drop, elem_size);
+}
+void nurl_vec_drop_moved_dtor(void *buf, long long n,
+                              void (*elem_drop)(void*), long long elem_size) {
+    if (!buf) return;
+    nurl_vec_drop_range(buf, 0, n, elem_drop, elem_size);
+    nurl_free(buf);
 }
 #endif
 

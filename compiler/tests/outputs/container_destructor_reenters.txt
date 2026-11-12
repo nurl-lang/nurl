@@ -1,0 +1,41 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+drop a
+drop b
+drop c
+clear: len 6
+drop a.1
+drop a.2
+drop b.1
+drop b.2
+drop c.1
+drop c.2
+drop x
+drop y
+truncate: len 3
+drop x.2
+drop x.1
+retain: len 4
+drop keep
+drop kept
+drop x.2.1
+drop x.2.2
+drop d2
+drop d3
+drop d4
+drop d5
+deque clear: len 6
+drop d2.1
+drop d2.2
+drop d3.1
+drop d3.2
+drop d4.1
+drop d4.2
+drop c1
+drop c0
+drop c2
+clearing destructor: len 0
+drop d1
+drop d0

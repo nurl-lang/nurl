@@ -680,6 +680,7 @@ raw @ vec_stash [A] i kind sink ( Vec A ) v i max → v {
 
 @ vec_clear [A] ( Vec A ) v → v {
     : s ctl . v ctl
+    ? ( mem_drop_runs_code [A] ) { ( __vec_release_from [A] ctl 0 ) ^ } {}
     : i len ( __vec_len_raw ctl )
     : *A data # *A ( nurl_vctl_data ctl )
     // Length first, so a drop that reaches `v` sees it empty.
@@ -690,12 +691,35 @@ raw @ vec_stash [A] i kind sink ( Vec A ) v i max → v {
     ( mem_drop_range [A] data 0 len )
 }
 
+// The elements from `from` on, for an element type whose drop runs code of
+// the program's own (mem_drop_runs_code): they leave the Vec's STORAGE
+// before the first destructor runs, not only its count — moved into a
+// buffer of their own, the Vec left with the ones before `from` and its
+// buffer, and dropped from there in index order (mem_drop_moved, Agora
+// #709). Dropped out of the Vec's own buffer, its length already short,
+// they sat in slots the Vec counts free: a destructor that reached `v` and
+// pushed wrote over the next element to go, which was never dropped, the
+// release then dropped the pushed one while `v` held it too, and a push
+// that grew the buffer freed the storage the release was walking. Now
+// what a destructor does to `v` is its own business. (The buffer is taken
+// before anything moves: a failed allocation leaves `v` as it was.)
+@ __vec_release_from [A] s ctl i from → v {
+    : i len ( __vec_len_raw ctl )
+    ? >= from len { ^ } {}
+    : i bytes * Z A - len from
+    : s buf ( nurl_alloc bytes )
+    ( nurl_memcpy buf # s + # i ( nurl_vctl_data ctl ) * Z A from bytes )
+    ( nurl_vctl_set ctl 1 from )
+    ( mem_drop_moved [A] buf - len from )
+}
+
 // Shorten `v` to its first `n` elements; the ones past `n` are dropped
 // (vec_set_len would forget them). F when `n` is negative or past the end.
 @ vec_truncate [A] ( Vec A ) v i n → b {
     : s ctl . v ctl
     : i len ( __vec_len_raw ctl )
     ? | < n 0 > n len { ^ F } {}
+    ? ( mem_drop_runs_code [A] ) { ( __vec_release_from [A] ctl n ) ^ T } {}
     : *A data # *A ( nurl_vctl_data ctl )
     // Length first, so a drop that reaches `v` sees it short.
     ( nurl_vctl_set ctl 1 n )
@@ -1280,6 +1304,8 @@ raw @ vec_with_cap_packed [A] i n → ( Vec A ) {
         } {}
         = r + r 1
     }
+    // (The ones to go out of the Vec's storage first: __vec_release_from.)
+    ? ( mem_drop_runs_code [A] ) { ( __vec_release_from [A] ctl w ) ^ } {}
     // Length first, so a drop that reaches `v` sees it short.
     ( nurl_vctl_set ctl 1 w )
     ( mem_drop_range [A] data w n )

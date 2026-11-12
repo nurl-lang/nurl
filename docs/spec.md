@@ -533,7 +533,7 @@ A function or method declaration may carry a leading `unsafe` prefix
 - call a raw-memory primitive (`nurl_alloc`, `nurl_free`, `nurl_realloc`,
   `nurl_peek*` / `nurl_poke*`, `nurl_memcpy`, …), an ownership primitive
   that gives a value up or claims it by hand (`mem_forget`, `mem_take`,
-  `mem_put_back`, `vec_put_back`, `mem_drop_range`), an `rcbox` primitive (`rcbox_new`, `rcbox_zero`,
+  `mem_put_back`, `vec_put_back`, `mem_drop_range`, `mem_drop_moved`), an `rcbox` primitive (`rcbox_new`, `rcbox_zero`,
   `rcbox_share`, `rcbox_release`, `rcbox_ptr`), an `Arc` held as a
   plain word (`arc_into_word`, `arc_from_word`, `arc_word_share`), an
   `Arc`'s payload replaced in place (`arc_set`: the payload is frozen
@@ -2744,6 +2744,14 @@ whichever way it leaves:
   shortens itself (`vec_truncate`, `vec_clear`, `vec_retain`). The elements go in index
   order, and one whose destructor panics does not keep the ones after it
   from being dropped (docs/MEMORY.md §7.2).
+- `( mem_drop_moved [T] buf n )` (only inside an `unsafe` function)
+  drops the `n` elements of `buf` — a buffer of their own that their
+  container moved them into, its count already short — in index order,
+  then frees `buf`. A container whose elements' destructors may reach it
+  releases them this way (`vec_clear`, `vec_truncate`, `vec_retain`,
+  `deque_clear`): a destructor that pushes into the container writes into
+  no slot the release still walks. A panic in one element's destructor
+  goes on with the rest, as for `mem_drop_range`.
 - `( mem_drop_runs_code [T] )` — one type or several, `[K V]` — is a
   constant `b`: may dropping a value of one of these types run code of
   the program's own (a `% Drop` anywhere inside it, a library handle, a
