@@ -2204,6 +2204,23 @@ unsafe @ agg_field_count i syms s ot → i {
 : ~ i g_frozen_impls 0
 // __ty_lend_frozen's answers, per lowered type (`0` / `1` / `2`).
 : ~ i g_frz_memo 0
+// __rc_reach's answers, per lowered type (the bar list, `-` for none),
+// and __rc_direct's.
+: ~ i g_rc_reach_memo 0
+: ~ i g_rc_direct_memo 0
+// The Rc type sets the borrow walk notes, interned: each set is written
+// once, and a note names it by its number (`#3`) — a struct of sixty Rc
+// fields bound six hundred times noted the sixty names twelve hundred
+// times, and every lookup re-read them.
+: ~ i g_rc_setid 0
+: ~ i g_rc_idset 0
+: ~ i g_rc_nsets 0
+// g_bck_rcty by key — `name=`, `name~=`, `name+=` — each the bar list of
+// what was noted under it (__bck_rc_note). 0 in g_bck_rcix_ok when
+// g_bck_rcty was set from elsewhere (a new function, a closure body's end,
+// a deferred walk): __bck_rcix_sync reads it again.
+: ~ i g_bck_rcix 0
+: ~ i g_bck_rcix_ok 0
 : ~ i g_fn_arcseen 0
 // The holders (lowered types, each ended by `\n`) that the calls of the
 // `??` scrutinee being generated took as a value holding an Arc
@@ -33542,6 +33559,7 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
         ( bck_put `pmoves` `` )
         ( bck_put `pmaybes` `` )
         = g_bck_rcty ``
+        = g_bck_rcix_ok 0
         = g_bck_depth 0
         = g_bck_cap_names ``
         = g_bck_cap_via ``
@@ -35462,9 +35480,22 @@ unsafe @ __ty_lend_frozen i syms s lty → i {
     ? ( seq bn `Arc` ) { ^ ( nurl_str_cat `!1` `` ) } {}
     ? & != 0 g_frozen_impls ( __thr_marked `Frozen##` lty bn ) { ^ ( nurl_str_cat `!2` `` ) } {}
     ? ( __thr_syncs lty bn ) { ^ ( nurl_str_cat `` `` ) } {}
+    ^ ( __ty_kids syms lty T )
+}
+
+// __ty_kids: the types a value of type `lty` holds by value, between bars,
+// in the order a walk asks them: its type arguments as the instance was
+// written with them (__inst_targ), the instance's own fields and enum
+// payloads (__lty_layout_name), an inline aggregate's members (an option,
+// a result, a closure's pair). A pointer, a slice's buffer, a dyn object's
+// data hold nothing a walk can name. Every type walk that asks "what is
+// in here" reads one level of it here (__frz_node, __rc_reach). With
+// `targs` F the type arguments are left out: what a container holds in
+// its buffer is not the value's own (__rc_direct).
+@ __ty_kids i syms s lty b targs → s {
     : ~ s kids ( nurl_str_cat `` `` )
     : ~ i ak 0
-    : ~ s arg ( __inst_targ lty 0 )
+    : ~ s arg ? targs ( __inst_targ lty 0 ) ``
     ~ != 0 ( nurl_str_len arg ) {
         = kids ( __bar_push kids ( nurl_llty arg ) )
         = ak + ak 1
@@ -37640,9 +37671,9 @@ unsafe @ __vk_union_of s fns s seen b dyn → s {
 // result revives the destination only after those effects have applied.
 unsafe @ bck_record_binding s kind s name i line i cls s lty → v {
     = g_bck_bind_scalar cls
-    // (An Rc binding: another handle of its type may be the same value —
-    // a clone a closure captured, bck_clo_route_check.)
-    ? | != 0 ( nurl_str_starts lty `%Rc__` ) ( __rc_handle_ty lty ) { ( bck_note_rc_arg name lty ) } {}
+    // (A binding that reaches an Rc: another handle of its type may be the
+    // same value — a clone a closure captured, bck_clo_route_check.)
+    ( bck_note_rc_arg name lty )
     // (A view that owns nothing — a struct of views, a Slice — is marked
     // `w`: no storage of its own for a result to point into.)
     = g_bck_bind_wview ? & == cls 2 ! ( __view_may_own lty ) 1 0
@@ -43497,13 +43528,18 @@ unsafe @ __sx_mut_roots s st s e b named → s {
             // (…or another handle of the capture's `( Rc T )` type, which may
             // be the same value: every clone shares one payload, agora #169.)
             ? & == 0 ( nurl_str_len hit ) ! ( seq sk `*` ) {
-                : s cty ( bck_rc_type_of ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int cap_root ) ) )
+                // (What the closure may drop through the capture is anything
+                // it reaches; a buffer it moves is one of the capture's own —
+                // an Rc's payload where the capture is or holds that Rc. A
+                // view of the argument's source is a view of an Rc's payload
+                // where the source is or holds one: __rc_direct, agora #712.)
+                : s cty ? dj ( bck_rc_type_of ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int cap_root ) ) ) ( bck_rc_direct_of ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int cap_root ) ) )
                 ? != 0 ( nurl_str_len cty ) {
                     : ~ s srest ( __src_plain sk )
                     ~ & == 0 ( nurl_str_len hit ) != 0 ( nurl_str_len srest ) {
                         : s sw ( str_first_word srest ) = srest ( str_skip_word srest )
                         : s sr ( nurl_str_int ( bck_path_root ( nurl_str_to_int sw ) ) )
-                        ? ( seq cty ( bck_rc_type_of ( nurl_sym_get2 g_bck `rv_` sr ) ) ) { = hit sw } {}
+                        ? ( __bar_meets cty ( bck_rc_direct_of ( nurl_sym_get2 g_bck `rv_` sr ) ) ) { = hit sw } {}
                     }
                 } {}
             } {}
@@ -46063,73 +46099,239 @@ unsafe @ __rpg_trace_on → b {
     ^ ( str_contains_word `vec_push vec_insert vec_extend vec_extend_range vec_append vec_reserve vec_shrink_to_fit vec_resize_zeroed vec_swap vec_reverse vec_sort vec_sort_by deque_push_back deque_push_front string_reserve string_reserve_at string_commit string_insert string_append rc_clone rc_downgrade arc_clone` base )
 }
 
-// `name` (a binding or a field path) holds an `( Rc T )` of type `ty`.
-// Is `lty` a program's own handle over an Rc — a struct with an `( Rc T )`
-// field (`: X { ( Rc Impl ) ctl }`, shared by an `X_share` that
-// rc_clones it)? Two values of it may be one Rc value, as two `( Rc T )`
-// may: the same-Rc rule is asked of them by their type (agora #345).
-@ __rc_handle_ty s lty → b {
-    ? | == 0 ( nurl_str_len lty ) != ( nurl_str_get lty 0 ) 37 { ^ F } {}
-    : s nm ( nurl_str_slice lty 1 - ( nurl_str_len lty ) 1 )
-    : s fcs ( nurl_sym_get2 g_root_syms nm `__field_count` )
-    ? == 0 ( nurl_str_len fcs ) { ^ F } {}
-    : i fc ( nurl_str_to_int fcs )
-    : ~ i k 0
-    ~ < k fc {
-        : s ft ( nurl_sym_get g_root_syms ( nurl_str_cat3 nm `__idx_` ( nurl_str_cat ( nurl_str_int k ) `__type` ) ) )
-        ? != 0 ( nurl_str_starts ( nurl_llty ft ) `%Rc__` ) { ^ T } {}
-        = k + k 1
+// The Rc types a value of type `lty` reaches, between bars (`%Rc__A|%Rc__B`),
+// or `` for none: an `( Rc T )` itself, an Rc's `Weak` (which upgrades to
+// that Rc), and every one its fields, enum payloads, members and type
+// arguments hold, at any depth — an Rc's payload included: an Rc in the
+// payload of an Rc is reached through it (agora #592). Two values whose
+// sets meet may hold handles on one Rc value — a struct holding a share
+// beside a bare share, a Vec of shares, a payload whose elements are
+// shares (agora #712, #497). The walk is whole every time — no budget: a
+// type graph is finite, and the set of types already asked ends it on a
+// type that holds itself — so its answer is final for the type asked.
+unsafe @ __rc_reach s lty → s {
+    ? == 0 ( nurl_str_len lty ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? == 0 g_rc_reach_memo { = g_rc_reach_memo ( nurl_sym_new ) } {}
+    : s memo ( nurl_sym_get g_rc_reach_memo lty )
+    ? != 0 ( nurl_str_len memo ) { ^ ? ( seq memo `-` ) ( nurl_str_cat `` `` ) ( nurl_str_cat memo `` ) } {}
+    : ~ s work ( nurl_str_cat lty `` )
+    : ~ s seen ( nurl_str_cat `|` `` )
+    : ~ s found ( nurl_str_cat `` `` )
+    ~ != 0 ( nurl_str_len work ) {
+        : s item ( __bar_first work ) = work ( __bar_rest work )
+        ? & != 0 ( nurl_str_len item ) < ( nurl_str_find seen ( nurl_str_cat3 `|` item `|` ) ) 0 {
+            = seen ( nurl_str_cat3 seen item `|` )
+            ? != 0 ( nurl_str_starts item `%Rc__` ) { = found ( __bar_add found item ) } {}
+            ? & != 0 ( nurl_str_starts item `%Weak__` ) ( __ty_std_named item `Weak` ) {
+                = found ( __bar_add found ( nurl_str_cat `%Rc__` ( nurl_str_slice item 7 - ( nurl_str_len item ) 7 ) ) )
+            } {}
+            : s kids ( __ty_kids g_root_syms item T )
+            ? != 0 ( nurl_str_len kids ) { = work ? == 0 ( nurl_str_len work ) ( nurl_str_cat kids `` ) ( nurl_str_cat3 kids `|` work ) } {}
+        } {}
     }
-    ^ F
+    ( nurl_sym_def g_rc_reach_memo lty ? == 0 ( nurl_str_len found ) `-` found )
+    ^ found
 }
 
+// The Rc types a value of type `lty` IS or holds in its own storage: an
+// `( Rc T )` (an Rc's `Weak`: that Rc), or the Rcs among its fields, enum
+// payloads and inline members, and theirs, at any depth (`: X { Inner in
+// }` with `: Inner { ( Rc Impl ) ctl }`, `?( Rc T )`), a Box's content
+// included (one owner, as a field) — not those in a container's buffer
+// nor in an Rc's payload. A view taken from a value of the type is a view
+// of one of those Rcs' payloads only when one is there (agora #345): a
+// Vec of shares lends its own buffer too, which no other handle changes.
+unsafe @ __rc_direct s lty → s {
+    ? == 0 ( nurl_str_len lty ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? == 0 g_rc_direct_memo { = g_rc_direct_memo ( nurl_sym_new ) } {}
+    : s memo ( nurl_sym_get g_rc_direct_memo lty )
+    ? != 0 ( nurl_str_len memo ) { ^ ? ( seq memo `-` ) ( nurl_str_cat `` `` ) ( nurl_str_cat memo `` ) } {}
+    : ~ s out ( nurl_str_cat `` `` )
+    : ~ s work ( nurl_str_cat lty `` )
+    : ~ s seen ( nurl_str_cat `|` `` )
+    ~ != 0 ( nurl_str_len work ) {
+        : s item ( __bar_first work ) = work ( __bar_rest work )
+        ? & != 0 ( nurl_str_len item ) < ( nurl_str_find seen ( nurl_str_cat3 `|` item `|` ) ) 0 {
+            = seen ( nurl_str_cat3 seen item `|` )
+            ? != 0 ( nurl_str_starts item `%Rc__` ) { = out ( __bar_add out item ) } {
+                ? & != 0 ( nurl_str_starts item `%Weak__` ) ( __ty_std_named item `Weak` ) {
+                    = out ( __bar_add out ( nurl_str_cat `%Rc__` ( nurl_str_slice item 7 - ( nurl_str_len item ) 7 ) ) )
+                } {
+                    : b boxed & != 0 ( nurl_str_starts item `%Box__` ) ( __ty_std_named item `Box` )
+                    : s kids ? boxed ( nurl_llty ( __inst_targ item 0 ) ) ( __ty_kids g_root_syms item F )
+                    ? != 0 ( nurl_str_len kids ) { = work ? == 0 ( nurl_str_len work ) ( nurl_str_cat kids `` ) ( nurl_str_cat3 kids `|` work ) } {}
+                }
+            }
+        } {}
+    }
+    ( nurl_sym_def g_rc_direct_memo lty ? == 0 ( nurl_str_len out ) `-` out )
+    ^ out
+}
+
+// The number a set of Rc types is noted by (g_rc_setid).
+unsafe @ __rc_set_id s set → s {
+    ? == 0 g_rc_setid { = g_rc_setid ( nurl_sym_new ) = g_rc_idset ( nurl_sym_new ) } {}
+    : s k ( nurl_sym_get g_rc_setid set )
+    ? != 0 ( nurl_str_len k ) { ^ ( nurl_str_cat k `` ) } {}
+    = g_rc_nsets + g_rc_nsets 1
+    : s id ( nurl_str_cat `#` ( nurl_str_int g_rc_nsets ) )
+    ( nurl_sym_def g_rc_setid set id )
+    ( nurl_sym_def g_rc_idset id set )
+    ^ id
+}
+
+// One note `key=value` into the index (g_bck_rcix).
+unsafe @ __bck_rcix_put s w → v {
+    : i eq ( nurl_str_find w `=` )
+    ? < eq 0 { ^ } {}
+    : s key ( nurl_str_slice w 0 + eq 1 )
+    : s val ( nurl_str_slice w + eq 1 - - ( nurl_str_len w ) eq 1 )
+    : s cur ( nurl_sym_get g_bck_rcix key )
+    ? ( __bar_has cur val ) { ^ } {}
+    ( nurl_sym_set g_bck_rcix key ( __bar_add cur val ) )
+}
+
+// The index read again from g_bck_rcty, once, when that was set from
+// elsewhere: one pass over its words.
+unsafe @ __bck_rcix_sync → v {
+    ? & != 0 g_bck_rcix_ok != 0 g_bck_rcix { ^ } {}
+    ? != 0 g_bck_rcix { ( nurl_sym_free g_bck_rcix ) } {}
+    = g_bck_rcix ( nurl_sym_new )
+    : i n ( nurl_str_len g_bck_rcty )
+    : *u bp # *u g_bck_rcty
+    : ~ i at 0
+    ~ < at n {
+        : ~ i e at
+        ~ & < e n != ( nurl_str_at bp n e ) 32 { = e + e 1 }
+        ? > e at { ( __bck_rcix_put ( nurl_str_slice g_bck_rcty at - e at ) ) } {}
+        = at + e 1
+    }
+    = g_bck_rcix_ok 1
+}
+
+// Does dropping a value of type `lty` run a `% Drop` of the program's
+// own? A library container's release (a HashMap's, a Vec's) is the
+// library's code, which drops what it holds and does nothing else: what
+// may run the program's code is the elements, its type arguments.
+unsafe @ __rc_runs_user_drop s lty → b {
+    ? | == 0 g_user_drop_seen == 0 ( nurl_str_len lty ) { ^ F } {}
+    : s first ( __inst_targ lty 0 )
+    ? & != 0 ( nurl_str_len first ) ( __ty_std_named lty ( __lty_base_name lty ) ) {
+        : ~ s a ( nurl_str_cat first `` )
+        : ~ i k 0
+        ~ != 0 ( nurl_str_len a ) {
+            ? ( __rc_runs_user_drop ( nurl_llty a ) ) { ^ T } {}
+            = k + k 1
+            = a ( __inst_targ lty k )
+        }
+        ^ F
+    } {}
+    ^ ( __holds_user_drop lty 0 )
+}
+
+unsafe @ __bck_rc_note s w → v {
+    ( __bck_rcix_sync )
+    : i eq ( nurl_str_find w `=` )
+    ? < eq 0 { ^ } {}
+    ? ( __bar_has ( nurl_sym_get g_bck_rcix ( nurl_str_slice w 0 + eq 1 ) ) ( nurl_str_slice w + eq 1 - - ( nurl_str_len w ) eq 1 ) ) { ^ } {}
+    = g_bck_rcty ? == 0 ( nurl_str_len g_bck_rcty ) ( nurl_str_cat w `` ) ( nurl_str_cat3 g_bck_rcty ` ` w )
+    ( __bck_rcix_put w )
+}
+
+// `name` (a binding, a field path, a call's argument) is a value of type
+// `ty`: noted with the Rc types it reaches (__rc_reach), when it reaches
+// any — `name=%Rc__A|%Rc__B` — with those it is or holds in its own
+// storage (__rc_direct) — `name~=%Rc__A` — and `name+=1` when dropping it
+// runs a `% Drop` of the program's own.
 unsafe @ bck_note_rc_arg s name s ty → v {
     ? | == g_borrowck 0 != g_bck_rec_off 0 { ^ } {}
-    ? & == 0 ( nurl_str_starts ( nurl_llty ty ) `%Rc__` ) ! ( __rc_handle_ty ( nurl_llty ty ) ) { ^ } {}
-    : s w ( nurl_str_cat3 name `=` ( nurl_llty ty ) )
-    ? ! ( str_contains_word g_bck_rcty w ) { = g_bck_rcty ? == 0 ( nurl_str_len g_bck_rcty ) w ( nurl_str_cat3 g_bck_rcty ` ` w ) } {}
+    : s lt ( nurl_llty ty )
+    : s rs ( __rc_reach lt )
+    ? == 0 ( nurl_str_len rs ) { ^ } {}
+    ( __bck_rc_note ( nurl_str_cat3 name `=` ( __rc_set_id rs ) ) )
+    : s ds ( __rc_direct lt )
+    ? != 0 ( nurl_str_len ds ) { ( __bck_rc_note ( nurl_str_cat3 name `~=` ( __rc_set_id ds ) ) ) } {}
+    // (…and whether dropping it runs a `% Drop` of the program's own —
+    // `name+=1`: what that code reaches is anything.)
+    ? ( __rc_runs_user_drop lt ) { ( __bck_rc_note ( nurl_str_cat name `+=1` ) ) } {}
 }
 
-// The Rc type the call's argument `wn` (root `wroot`) reaches: its own,
-// or, for a borrow — a payload lent out of a share, `: ( Vec S ) va (
-// rc_get . h a )`, a join or a value block of such — the type of a share
-// it borrows from. What the call drops through it is that Rc's payload,
-// which another share of the type may reach (agora #566).
+// The Rc types the call's argument `wn` (root `wroot`) reaches: its own,
+// and, for a borrow — a payload lent out of a share, `: ( Vec S ) va (
+// rc_get . h a )`, a join or a value block of such — those of the shares
+// it borrows from. What the call drops through it is in those Rcs'
+// payloads, which another share of each may reach (agora #566); and a
+// payload whose own type holds shares reaches those too (agora #712).
 @ __bck_rc_type_via s st s wn i wroot → s {
-    : s own ( bck_rc_type_of ( nurl_sym_get2 g_bck `rv_` wn ) )
-    ? | != 0 ( nurl_str_len own ) < wroot 0 { ^ own } {}
-    ? != BCK_BORROWED_SHARED ( bck_st_get st wroot ) { ^ own } {}
+    : ~ s out ( bck_rc_type_of ( nurl_sym_get2 g_bck `rv_` wn ) )
+    ? < wroot 0 { ^ out } {}
+    ? != BCK_BORROWED_SHARED ( bck_st_get st wroot ) { ^ out } {}
     : ~ s rest ( __src_plain ( nurl_sym_get g_bck ( bck_bkey `bs_` ( nurl_str_int wroot ) ) ) )
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s t ( bck_rc_type_of ( nurl_sym_get2 g_bck `rv_` w ) )
-        ? != 0 ( nurl_str_len t ) { ^ t } {}
+        = out ( __bar_union out ( bck_rc_type_of ( nurl_sym_get2 g_bck `rv_` w ) ) )
     }
-    ^ own
+    ^ out
 }
 
-// …and how a diagnostic names it: itself, or `'va', lent out of '. h a'`.
-@ __bck_rc_arg_show s st s wn i wroot → s {
-    : s me ( nurl_str_cat3 `'` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` wn ) ) `'` )
-    ? | != 0 ( nurl_str_len ( bck_rc_type_of ( nurl_sym_get2 g_bck `rv_` wn ) ) ) < wroot 0 { ^ ( nurl_str_cat me `,` ) } {}
+// …and those a call that may MOVE A BUFFER of it reaches: a value lent
+// out of it (`lent`, a payload `( rc_get . h a )`) is anything it reaches;
+// the value itself, whole, moves its own storage's buffers — an Rc's
+// payload is one when it is an Rc (__rc_direct), and a Vec of shares
+// moves its own buffer, no Rc's payload; plus what the shares it
+// borrows from reach, as above.
+@ __bck_rc_type_via_r s st s wn i wroot b lent → s {
+    : s nm ( nurl_sym_get2 g_bck `rv_` wn )
+    : ~ s out ? lent ( bck_rc_type_of nm ) ( bck_rc_direct_of nm )
+    ? < wroot 0 { ^ out } {}
+    ? != BCK_BORROWED_SHARED ( bck_st_get st wroot ) { ^ out } {}
     : ~ s rest ( __src_plain ( nurl_sym_get g_bck ( bck_bkey `bs_` ( nurl_str_int wroot ) ) ) )
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest ) = rest ( str_skip_word rest )
-        ? != 0 ( nurl_str_len ( bck_rc_type_of ( nurl_sym_get2 g_bck `rv_` w ) ) ) { ^ ( nurl_str_cat4 me `, lent out of '` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` w ) ) `',` ) } {}
+        = out ( __bar_union out ( bck_rc_type_of ( nurl_sym_get2 g_bck `rv_` w ) ) )
     }
-    ^ ( nurl_str_cat me `,` )
+    ^ out
 }
 
-// The Rc type `name` was seen holding in this function, or ``.
-@ bck_rc_type_of s name → s {
-    ? == 0 ( nurl_str_len g_bck_rcty ) { ^ `` } {}
-    : s key ( nurl_str_cat name `=` )
-    : ~ s rest ( nurl_str_cat g_bck_rcty `` )
+// …and how a diagnostic names it: itself, or `'va', lent out of '. h a'`
+// — the share whose Rcs meet the source's (`sty`) — and what it is to that
+// Rc: another handle when it is or holds one in its own storage
+// (__rc_direct), a holder of another handle when one is further in (a Vec
+// of shares, a payload of them).
+@ __bck_rc_arg_show s st s wn i wroot s sty → s {
+    : s nm ( nurl_sym_get2 g_bck `rv_` wn )
+    : s me ( nurl_str_cat3 `'` ( bck_name_show nm ) `'` )
+    : s be `, which may be another handle on the same Rc value,`
+    : s hold `, which may hold another handle on the same Rc value,`
+    ? ( __bar_meets ( bck_rc_type_of nm ) sty ) { ^ ( nurl_str_cat me ? ( __bar_meets ( bck_rc_direct_of nm ) sty ) be hold ) } {}
+    ? < wroot 0 { ^ ( nurl_str_cat me be ) } {}
+    : ~ s rest ( __src_plain ( nurl_sym_get g_bck ( bck_bkey `bs_` ( nurl_str_int wroot ) ) ) )
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest ) = rest ( str_skip_word rest )
-        ? != 0 ( nurl_str_starts w key ) { ^ ( nurl_str_slice w ( nurl_str_len key ) - ( nurl_str_len w ) ( nurl_str_len key ) ) } {}
+        : s wnm ( nurl_sym_get2 g_bck `rv_` w )
+        ? ( __bar_meets ( bck_rc_type_of wnm ) sty ) { ^ ( nurl_str_cat4 me `, lent out of '` ( bck_name_show wnm ) ( nurl_str_cat `'` ? ( __bar_meets ( bck_rc_direct_of wnm ) sty ) be hold ) ) } {}
     }
-    ^ ``
+    ^ ( nurl_str_cat me be )
+}
+
+// The Rc types `name` was seen reaching in this function (every note of
+// it, bck_note_rc_arg), between bars, or ``.
+@ bck_rc_type_of s name → s { ^ ( __bck_rc_noted name `=` ) }
+
+// …and those it was seen being or holding in its own storage.
+@ bck_rc_direct_of s name → s { ^ ( __bck_rc_noted name `~=` ) }
+
+@ __bck_rc_noted s name s tag → s {
+    ( __bck_rcix_sync )
+    : s ids ( nurl_sym_get g_bck_rcix ( nurl_str_cat name tag ) )
+    ? == 0 ( nurl_str_len ids ) { ^ `` } {}
+    : ~ s out ( nurl_str_cat `` `` )
+    : ~ s rest ( nurl_str_cat ids `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s x ( __bar_first rest ) = rest ( __bar_rest rest )
+        = out ( __bar_union out ? == ( nurl_str_get x 0 ) 35 ( nurl_sym_get g_rc_idset x ) x )
+    }
+    ^ out
 }
 
 // Does row `rec` name what it is about by a source expression (field 1
@@ -46289,10 +46491,34 @@ unsafe @ bck_note_rc_arg s name s ty → v {
             // that very share: no other handle, its own rows reach it —
             // `: GrpcClientImpl cl ( rc_get . . call client a )` handing
             // `. cl transport` on does not end cl, agora #566.)
-            : b wsame & & | != rid wroot wfield != 0 ( nurl_str_len wty ) & == 0 ( nurl_str_len ( bck_rc_type_of ( nurl_sym_get2 g_bck `rv_` wn ) ) ) & >= wroot 0 ( str_contains_word ( __src_plain ( nurl_sym_get g_bck ( bck_bkey `bs_` ( nurl_str_int wroot ) ) ) ) srcs )
-            ? & & & != 0 ( nurl_str_len wty ) | != rid wroot wfield ! wsame ( seq wty ( bck_rc_type_of ( nurl_sym_get2 g_bck `rv_` srcs ) ) ) {
-                ? ( bck_callee_drops_elems ( bck_field rec 5 ) ( bck_field rec 6 ) ) {
-                    = why ( nurl_str_cat4 ( __bck_rc_arg_show out wn wroot ) ` which may be another handle on the same Rc value, was passed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) `', which may drop or replace what it holds` ) `` )
+            // (…unless its own type reaches an Rc this source is or holds: a
+            // copy of a handle read out of an element, `: ( Rc ( Vec E ) ) u
+            // . x up`, is another handle on the Rc its source is, agora #482.
+            // The shares a payload lent out of the source holds — `: ( Vec (
+            // Rc T ) ) p ( rc_get r )` — are not the source's own, agora #712.)
+            // Two values may be one Rc value when the Rc types they reach
+            // meet (__rc_reach): a share beside a struct holding one, a Vec
+            // of them, a payload of them (agora #712, #497, #592).
+            // (A view of the source is a view of an Rc's payload only where
+            // the source is, or holds in its own storage, that Rc — a loop
+            // over a Vec of shares reads the Vec's buffer: __rc_direct.)
+            : s sty ( bck_rc_direct_of ( nurl_sym_get2 g_bck `rv_` srcs ) )
+            : b wsame & & | != rid wroot wfield != 0 ( nurl_str_len wty ) & ! ( __bar_meets ( bck_rc_type_of ( nurl_sym_get2 g_bck `rv_` wn ) ) sty ) & >= wroot 0 ( str_contains_word ( __src_plain ( nurl_sym_get g_bck ( bck_bkey `bs_` ( nurl_str_int wroot ) ) ) ) srcs )
+            ? & & & != 0 ( nurl_str_len wty ) | != rid wroot wfield ! wsame ( __bar_meets wty sty ) {
+                : b rlent & == kc 32 | g_bck_sx_part ( seq ( bck_field rec 0 ) `pendlend` )
+                // (A library dropper or element replacer handed the value whole
+                // — `( vec_clear hs )`, `( vec_put hs 0 x )` of a Vec of shares,
+                // `( map_set m k x )` of a map of them —
+                // drops its elements: an Rc among them
+                // is a handle going, which a view through another handle, a
+                // count of its own, outlives. What it changes of an Rc's
+                // payload is what the value is or holds in its own storage, or
+                // reaches through the shares it borrows from — unless dropping
+                // an element runs the program's own code, a `% Drop`.)
+                : s dbase ( bck_generic_base ( bck_field rec 5 ) )
+                : b dlib & & & | ( bck_lib_dropper dbase ) ( str_contains_word `vec_put slice_put vec_set map_set map_remove` dbase ) == 0 ( nurl_str_len ( __bck_rc_noted ( nurl_sym_get2 g_bck `rv_` wn ) `+=` ) ) ! rlent ! ( __bar_meets ( __bck_rc_type_via_r out wn wroot F ) sty )
+                ? & ! dlib ( bck_callee_drops_elems ( bck_field rec 5 ) ( bck_field rec 6 ) ) {
+                    = why ( nurl_str_cat4 ( __bck_rc_arg_show out wn wroot sty ) ` was passed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) `', which may drop or replace what it holds` ) `` )
                     = eonly T
                 } {
                     // …or move its buffer: the views of it end (agora #169),
@@ -46300,10 +46526,21 @@ unsafe @ bck_note_rc_arg s name s ty → v {
                     // call changes, as a value lent from it is (agora #349):
                     // `: ( Vec i ) p ( rc_get r )` then `( slice_from_vec p )`
                     // points into the buffer the call moves.
-                    ? ( nurl_sym_has_word g_fn_reallocs ( bck_field rec 5 ) ( bck_field rec 6 ) ) {
-                        : s rcw ( nurl_str_cat4 ( __bck_rc_arg_show out wn wroot ) ` which may be another handle on the same Rc value, was passed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) `', which may move or free its buffer` ) `` )
+                    ? & ( nurl_sym_has_word g_fn_reallocs ( bck_field rec 5 ) ( bck_field rec 6 ) ) ( __bar_meets ( __bck_rc_type_via_r out wn wroot rlent ) sty ) {
+                        : s rcw ( nurl_str_cat4 ( __bck_rc_arg_show out wn wroot sty ) ` was passed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) `', which may move or free its buffer` ) `` )
                         = out ( bck_view_end_ind ( bck_view_end out sid ( bck_field_int rec 3 ) rcw ) sid ( bck_field_int rec 3 ) rcw )
-                    } {}
+                    } {
+                        // …or move the buffer of one of its elements
+                        // (g_fn_ireallocs): what points into the buffers of
+                        // this source's elements ends, as for the argument's
+                        // own below (agora #497).
+                        ? & != 0 g_irealloc_any ( nurl_sym_has_word g_fn_ireallocs ( bck_field rec 5 ) ( bck_field rec 6 ) ) {
+                            : s rciw ( nurl_str_cat4 ( __bck_rc_arg_show out wn wroot sty ) ` was passed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) `', which may move the buffer of one of its elements` ) `` )
+                            = g_bck_end_elem 1
+                            = out ( bck_view_end ( bck_view_end_ind out sid ( bck_field_int rec 3 ) rciw ) sid ( bck_field_int rec 3 ) rciw )
+                            = g_bck_end_elem 0
+                        } {}
+                    }
                 }
             } {}
         } {}
@@ -46371,8 +46608,13 @@ unsafe @ bck_note_rc_arg s name s ty → v {
         // string_push_str e … )`, e a vec_get result): what points into
         // the buffers of those owners' elements ends — not the owners'
         // own, nor element handles.
-        ? & & == 0 ( nurl_str_len bwhy ) | | | == kc 9 == kc 12 == kc 13 == kc 32 ( nurl_sym_has_word g_fn_reallocs ( bck_field rec 5 ) ( bck_field rec 6 ) ) {
-            : s rwhy ( nurl_str_cat4 `an element of it, through '` ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int wroot ) ) `', was passed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) `', which may move its buffer` ) )
+        // (…or the buffer of one of ITS elements, g_fn_ireallocs — `(
+        // growelem q )` with q a `vec_at` of an owner of Vecs of Vecs: a
+        // level below the borrow's own buffer, as a value lent out of it
+        // below — agora #497.)
+        : b irthru & & & == 0 ( nurl_str_len bwhy ) != 0 g_irealloc_any ! ( nurl_sym_has_word g_fn_reallocs ( bck_field rec 5 ) ( bck_field rec 6 ) ) ( nurl_sym_has_word g_fn_ireallocs ( bck_field rec 5 ) ( bck_field rec 6 ) )
+        ? & & == 0 ( nurl_str_len bwhy ) | | | == kc 9 == kc 12 == kc 13 == kc 32 | irthru ( nurl_sym_has_word g_fn_reallocs ( bck_field rec 5 ) ( bck_field rec 6 ) ) {
+            : s rwhy ? irthru ( nurl_str_cat4 `an element of it, through '` ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int wroot ) ) `', was passed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) `', which may move the buffer of one of its elements` ) ) ( nurl_str_cat4 `an element of it, through '` ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int wroot ) ) `', was passed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) `', which may move its buffer` ) )
             // (A borrow that is a copy of an owner's own handle — `: ~ H q
             // hs`, `( id vs )`, a field viewer `. o buf` — moves THAT
             // owner's buffer, at the path the call went through: its views
@@ -46391,7 +46633,7 @@ unsafe @ bck_note_rc_arg s name s ty → v {
             // g_bck_sx_wid: a part only where that root is one, `^` — a
             // callee that hands the borrow back WHOLE, `( grow ( pickv cur
             // other ) )`, moves the borrow's own buffer.)
-            : b deep & == kc 32 ? >= g_bck_sx_wid 0 g_bck_sx_part ( seq ( bck_field rec 0 ) `pendlend` )
+            : b deep | irthru & == kc 32 ? >= g_bck_sx_wid 0 g_bck_sx_part ( seq ( bck_field rec 0 ) `pendlend` )
             // (…and through a `~` loop's own element — `( string_push_str x
             // … )` in `~ x . ( vec_at bs 0 ) items`: the element's buffer, a
             // level below the container that loop walks. Its cursor, `fcx_`,
@@ -49758,6 +50000,7 @@ unsafe @ __bck_walk_one s ix → v {
     = g_bck_cap_via ( nurl_sym_get g_deferred_bck ( nurl_str_cat `c` ix ) )
     = g_bck_own_params ( nurl_sym_get g_deferred_bck ( nurl_str_cat `o` ix ) )
     = g_bck_rcty ( nurl_sym_get g_deferred_bck ( nurl_str_cat `r` ix ) )
+    = g_bck_rcix_ok 0
     = g_bck_fn ( nurl_sym_get g_deferred_bck ( nurl_str_cat `n` ix ) )
     ( bck_analyze ( nurl_sym_get g_deferred_bck ( nurl_str_cat `p` ix ) ) )
 }
@@ -61503,6 +61746,7 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     = g_bck_depth __cl_bck_depth
     = g_bck_cap_names __cl_capnames_saved
     = g_bck_rcty __cl_rcty_saved
+    = g_bck_rcix_ok 0
     = g_bck_cap_via __cl_capvia_saved
     = g_bck_closure_depth - g_bck_closure_depth 1
     = g_clo_ret_body __crb_saved
@@ -74180,6 +74424,17 @@ unsafe @ __type_needs_drop s ty i syms → b {
     ? == 0 ( nurl_str_len w ) { ^ ( nurl_str_cat l `` ) } {}
     ? == 0 ( nurl_str_len l ) { ^ ( nurl_str_cat w `` ) } {}
     ^ ( nurl_str_cat3 l `|` w )
+}
+
+// Do bar lists `a` and `b` share an item?
+@ __bar_meets s a s b → b {
+    ? | == 0 ( nurl_str_len a ) == 0 ( nurl_str_len b ) { ^ F } {}
+    : ~ s r ( nurl_str_cat a `` )
+    ~ != 0 ( nurl_str_len r ) {
+        : s x ( __bar_first r ) = r ( __bar_rest r )
+        ? ( __bar_has b x ) { ^ T } {}
+    }
+    ^ F
 }
 
 @ __bar_union s a s b → s {
