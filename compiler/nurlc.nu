@@ -54411,9 +54411,24 @@ unsafe @ gen_assign i lex i syms i cg → s {
             : i __io_et rhs_eff_tt
             // (…or a field read of a value this frame owns, `= io . w s`:
             // the struct is dropped on the way out, so the field is copied.)
-            ? & == bck_rhs_tt TT_DOT ( __froot_lends_frame syms ( nurl_sym_get syms `__last_member_root__` ) ) {
+            // (…or of any other binding — a parameter this function only
+            // borrows, `= io . x v`, a cursor over one, a global: its owner
+            // still holds the struct, field and all, so a field read of a
+            // binding is always a lend. Stored as is, the caller's binding
+            // and that owner owned one buffer; agora #697. …and a field of a
+            // call's value where the call lent it, `. ( vec_at xs 0 ) v`:
+            // copied where its bit says lent, as `^ . ( f ) x` is — taken out
+            // of a temporary the call handed over, it is the caller's own.)
+            : s __io_froot ? == bck_rhs_tt TT_DOT ( nurl_sym_get syms `__last_member_root__` ) ``
+            : s __io_tfo ? & == bck_rhs_tt TT_DOT == 0 ( nurl_str_len __io_froot ) ( nurl_sym_get syms `__last_tmp_field_own__` ) ``
+            ? & == bck_rhs_tt TT_DOT | != 0 ( nurl_str_len __io_froot ) & != 0 ( nurl_str_len __io_tfo ) ! ( seq __io_tfo `true` ) {
                 ? ( __clone_supported vt syms ) {
-                    = store_val ( mem_emit_cloneif cg vt store_val `1` )
+                    : ~ s __io_fcp `1`
+                    ? != 0 ( nurl_str_len __io_tfo ) {
+                        = __io_fcp ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print __io_fcp ) ( nurl_print ` = xor i1 ` ) ( nurl_print __io_tfo ) ( nurl_print `, 1\n` )
+                    } {}
+                    = store_val ( mem_emit_cloneif cg vt store_val __io_fcp )
                     : s __io_fo ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print __io_fo ) ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty vt ) )
                     ( nurl_print `, ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )

@@ -1,0 +1,12 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+3
+an app name long enough for the heap buffer!
+an app name long enough for the heap buffer
+3
+3
+an option payload long enough for the heap
+3
+an app name long enough for the heap buffer
