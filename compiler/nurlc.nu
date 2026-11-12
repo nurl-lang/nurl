@@ -56450,9 +56450,12 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // is copied in, the caller's binding owning what it holds, and the
         // old value goes. Stored as is, the caller's binding shared the
         // other owner's buffer and its own old value leaked; agora #438.)
+        // (…and a value block whose tail is such a call, `= p { ( string_concat o
+        // o ) }`, by the tail call's answer, as a `:` binding of one is: the
+        // caller's old value and the result leaked, agora #628.)
         : ~ b __io_keyed F
         ? & & & & != 0 g_auto_drop_strings != 0 ( nurl_str_len ptr ) ( seq ( nurl_sym_get2 syms name `__inout` ) `1` ) ( __is_handle_ty vt )
-        | == bck_rhs_tt TT_AT & == bck_rhs_tt TT_LPAREN == 0 ( nurl_sym_len syms `__last_value_borrow__` ) {
+        | == bck_rhs_tt TT_AT & == rhs_eff_tt TT_LPAREN == 0 ( nurl_sym_len syms `__last_value_borrow__` ) {
             : s __io_ro ? == bck_rhs_tt TT_AT ( nurl_str_cat `true` `` ) ( mem_call_retown syms cg )
             ? != 0 ( nurl_str_len __io_ro ) {
                 : s __io_old ( nurl_cg_reg cg )
@@ -56471,8 +56474,8 @@ unsafe @ gen_assign i lex i syms i cg → s {
                 // instance, `( vec_new [X] )` — is no reason to refuse a type
                 // that cannot be copied.)
                 : b __io_other | g_call_lend_unnamed & != 0 ( nurl_str_len __io_lr ) ! ( __words_all_equal __io_lr name )
-                ? & & & == bck_rhs_tt TT_LPAREN ! ( seq __io_ro `true` ) __io_other ! __io_cl { ( __nc_copy_die ( nurl_sym_get syms `__fn_self_name__` ) vt ) } {}
-                ? & & & == bck_rhs_tt TT_LPAREN ! ( seq __io_ro `true` ) ! __io_self __io_cl {
+                ? & & & == rhs_eff_tt TT_LPAREN ! ( seq __io_ro `true` ) __io_other ! __io_cl { ( __nc_copy_die ( nurl_sym_get syms `__fn_self_name__` ) vt ) } {}
+                ? & & & == rhs_eff_tt TT_LPAREN ! ( seq __io_ro `true` ) ! __io_self __io_cl {
                     : s __io_ok ( mem_identity_key cg vt __io_old )
                     : s __io_nk ( mem_identity_key cg vt store_val )
                     ? & != 0 ( nurl_str_len __io_ok ) != 0 ( nurl_str_len __io_nk ) {
