@@ -1,6 +1,7 @@
 // A diagnostic raised while a generic function is instantiated, inside a
 // closure in a nested block of its body (the Send check at a chan_send of
-// an instance first named there), leaves that body mid-scope. The scope's
+// a value, after an instance is first named there), leaves that body
+// mid-scope. The scope's
 // module-scope pins table (nurl_sym_def_module) was in the compilation's
 // table list as well as its owner's slot, so the exit sweep released it
 // twice and nurlc died with SIGSEGV after printing the error (agora #715;
@@ -16,10 +17,11 @@ $ `stdlib/core/option.nu`
     : ~ i j 0
     ? > n 0 {
         : ( Channel ( Out T ) ) c ( chan_new [( Out T )] )
+        : ( Channel T ) d ( chan_new [T] )
         : ( @ v ) body \ → v {
             : ~ i k 0
             ~ < k n {
-                : b s ( chan_send [( Out T )] c @ ( Out T ) { k ( f k ) } )
+                : b s ( chan_send [T] d ( f k ) )
                 = k + k 1
             }
         }
