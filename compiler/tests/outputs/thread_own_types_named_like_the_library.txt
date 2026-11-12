@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+own Weak, only owner: crossed
+own Weak, share kept: thread_spawn: a 'PNCounter' crosses between threads with another owner of the same state left on this side (a share, a struct, Vec or closure holding one, a copy taken out of a Locked), and two threads would change one state in place with no lock. Hand over the only owner, or keep the state behind a Locked and share that (docs/MEMORY.md 6.5)
+own generic Weak, share kept: thread_spawn: a 'PNCounter' crosses between threads with another owner of the same state left on this side (a share, a struct, Vec or closure holding one, a copy taken out of a Locked), and two threads would change one state in place with no lock. Hand over the only owner, or keep the state behind a Locked and share that (docs/MEMORY.md 6.5)
+7
+8

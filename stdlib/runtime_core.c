@@ -11002,8 +11002,9 @@ typedef struct {
     void (*elem_drop)(void*);
     long long elem_size;
     long long next, end;          /* [next, end): the elements still to drop */
-    void *own;                    /* a buffer of the release's own, freed at
-                                   * the end (nurl_vec_drop_moved_dtor) */
+    void *own;                    /* a heap buffer of the release's own,
+                                   * freed at the end (nurl_vec_move_drop_dtor;
+                                   * NULL for its stack buffer) */
 } NurlVecDrain;
 
 /* The end of a release. A whole Vec's release raised the collector's
@@ -11114,28 +11115,50 @@ NURL_TLS_WRAP void nurl_vec_drop_range_dtor(void *data, long long from, long lon
     nurl_vec_drop_range(data, from, to, elem_drop, elem_size);
 }
 
-/* `( mem_drop_moved [A] buf n )`: drop the `n` elements of `buf`, a buffer
- * of their own that their container moved them into before the first of
- * their destructors runs, then free it (Agora #709). A container that
- * dropped its elements out of its own storage, its count already short,
- * left them in slots it counts free: a destructor that reached the
- * container and pushed wrote over the next element to go (never dropped),
- * the release then dropped the element pushed (twice: the container held
- * it too), and a push that grew the buffer freed the storage the release
- * was walking. Moved out first, the elements share no slot with the
- * container: what a destructor does to it is its own business. Index
- * order, and a panic in one goes on with the rest, as for a range. */
-NURL_TLS_WRAP void nurl_vec_drop_moved_dtor(void *buf, long long n,
-                                            void (*elem_drop)(void*), long long elem_size) {
-    if (!buf) return;
-    if (n > 0 && elem_drop && elem_size > 0) {
-        if (__builtin_expect(NURL_TLS_LD(long long, nurl__jrnl_active) != 0, 0)) {
-            nurl__vec_drain_run(NULL, (char*)buf, 0, n, elem_drop, elem_size, buf);
-            return;
-        }
-        nurl_vec_drop_range(buf, 0, n, elem_drop, elem_size);
+/* `( mem_move_drop [A] a na b nb w v )`: the elements a container's
+ * release drops leave its storage before the first of their destructors
+ * runs (Agora #709). The `na` elements at `a`, then the `nb` at `b` (a
+ * ring's second run), are moved into a buffer of the release's own; `v` is
+ * written to the count word `*w`; then they are dropped from the buffer.
+ * A container that dropped its elements out of its own storage, its count
+ * already short, left them in slots it counts free: a destructor that
+ * reached the container and pushed wrote over the next element to go
+ * (never dropped), the release then dropped the element pushed (twice:
+ * the container held it too), and a push that grew the buffer freed the
+ * storage the release was walking. Moved out first, the elements share no
+ * slot with the container: what a destructor does to it is its own
+ * business. Index order, and a panic in one goes on with the rest, as for
+ * a range.
+ *
+ * The buffer is this frame's own stack when the elements fit in
+ * NURL_MOVE_DROP_STACK bytes, the heap past that (Agora #748): a heap
+ * buffer cost an allocation and a free per release. Every destructor runs
+ * inside this frame — a panic's drain too (nurl__vec_drain_run's record
+ * names no buffer to free for the stack case, and the drain resumes the
+ * release before the panic's jump leaves this frame) — so the stack buffer
+ * outlives every use. The extra stack is on this path only: a whole Vec's
+ * drop (nurl_vec_drop_dtor), which a `% Drop` tree nests through, never
+ * comes here. The buffer is taken before the count is written: a failed
+ * allocation leaves the container as it was. */
+#define NURL_MOVE_DROP_STACK 512
+NURL_TLS_WRAP void nurl_vec_move_drop_dtor(const void *a, long long na, const void *b, long long nb,
+                                           long long *w, long long v,
+                                           void (*elem_drop)(void*), long long elem_size) {
+    long long n = na + nb;
+    if (n <= 0 || !elem_drop || elem_size <= 0) { *w = v; return; }
+    _Alignas(16) char sbuf[NURL_MOVE_DROP_STACK];
+    size_t bytes = (size_t)n * (size_t)elem_size;
+    char *buf = bytes <= sizeof sbuf ? sbuf : (char *)nurl_alloc((long long)bytes);
+    memcpy(buf, a, (size_t)na * (size_t)elem_size);
+    if (nb > 0) memcpy(buf + (size_t)na * (size_t)elem_size, b, (size_t)nb * (size_t)elem_size);
+    *w = v;
+    void *own = buf == sbuf ? NULL : buf;
+    if (__builtin_expect(NURL_TLS_LD(long long, nurl__jrnl_active) != 0, 0)) {
+        nurl__vec_drain_run(NULL, buf, 0, n, elem_drop, elem_size, own);
+        return;
     }
-    nurl_free(buf);
+    nurl_vec_drop_range(buf, 0, n, elem_drop, elem_size);
+    if (own) nurl_free(own);
 }
 #else  /* __wasi__: a panic ends the process (no recover), so nothing is journaled. */
 void nurl_vec_drop_dtor(void *ctl, void (*elem_drop)(void*), long long elem_size) {
@@ -11145,11 +11168,19 @@ void nurl_vec_drop_range_dtor(void *data, long long from, long long to,
                               void (*elem_drop)(void*), long long elem_size) {
     nurl_vec_drop_range(data, from, to, elem_drop, elem_size);
 }
-void nurl_vec_drop_moved_dtor(void *buf, long long n,
-                              void (*elem_drop)(void*), long long elem_size) {
-    if (!buf) return;
+void nurl_vec_move_drop_dtor(const void *a, long long na, const void *b, long long nb,
+                             long long *w, long long v,
+                             void (*elem_drop)(void*), long long elem_size) {
+    long long n = na + nb;
+    if (n <= 0 || !elem_drop || elem_size <= 0) { *w = v; return; }
+    _Alignas(16) char sbuf[512];
+    size_t bytes = (size_t)n * (size_t)elem_size;
+    char *buf = bytes <= sizeof sbuf ? sbuf : (char *)nurl_alloc((long long)bytes);
+    memcpy(buf, a, (size_t)na * (size_t)elem_size);
+    if (nb > 0) memcpy(buf + (size_t)na * (size_t)elem_size, b, (size_t)nb * (size_t)elem_size);
+    *w = v;
     nurl_vec_drop_range(buf, 0, n, elem_drop, elem_size);
-    nurl_free(buf);
+    if (buf != sbuf) nurl_free(buf);
 }
 #endif
 

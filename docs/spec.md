@@ -224,6 +224,24 @@ unsafe @ scratch → v {
 FFI declarations (`& "lib" @ name …`) and trait/impl methods are
 intentionally **not** renamed — FFI symbols resolve at the linker by
 literal C-ABI name, and trait dispatch is mangled by impl-target type.
+Neither are struct **field** names: a field is part of its struct's
+layout, not a name of the module, so the importer reads it with its own
+spelling (`. p x`) even where the module also declares a function `x`.
+
+A module has one set of names per compilation: it is compiled once, under
+the spelling of its first import. A later import of the same file under
+another alias — in the same file or in another one — is a second spelling
+of that one module: in the importing file, `n::name` is read as the first
+spelling's name (`m::name`, or the bare `name` when the first import was
+plain), so a library that imports a module as `m` and a program that
+imports it plainly share its types and functions. Its names cannot be
+bare a second time, though: a plain import of a file already imported
+under an alias is refused at the import, naming the earlier spelling —
+import it under that alias there too, or put the plain import first.
+
+Functions and types share one namespace at file scope: a function and a
+struct, generic struct or enum of the same name are refused at the later
+of the two declarations (a call `( Pt 4 )` would read as the type).
 
 The alias stands before each of the module's names with `__` between, and
 ends where that `__` starts, so it is held to what keeps the spelling
@@ -534,7 +552,7 @@ A function or method declaration may carry a leading `unsafe` prefix
 - call a raw-memory primitive (`nurl_alloc`, `nurl_free`, `nurl_realloc`,
   `nurl_peek*` / `nurl_poke*`, `nurl_memcpy`, …), an ownership primitive
   that gives a value up or claims it by hand (`mem_forget`, `mem_take`,
-  `mem_put_back`, `vec_put_back`, `mem_drop_range`, `mem_drop_moved`), an `rcbox` primitive (`rcbox_new`, `rcbox_zero`,
+  `mem_put_back`, `vec_put_back`, `mem_drop_range`, `mem_move_drop`), an `rcbox` primitive (`rcbox_new`, `rcbox_zero`,
   `rcbox_share`, `rcbox_release`, `rcbox_ptr`), an `Arc` held as a
   plain word (`arc_into_word`, `arc_from_word`, `arc_word_share`), an
   `Arc`'s payload replaced in place (`arc_set`: the payload is frozen
@@ -2760,14 +2778,18 @@ whichever way it leaves:
   shortens itself (`vec_truncate`, `vec_clear`, `vec_retain`). The elements go in index
   order, and one whose destructor panics does not keep the ones after it
   from being dropped (docs/MEMORY.md §7.2).
-- `( mem_drop_moved [T] buf n )` (only inside an `unsafe` function)
-  drops the `n` elements of `buf` — a buffer of their own that their
-  container moved them into, its count already short — in index order,
-  then frees `buf`. A container whose elements' destructors may reach it
-  releases them this way (`vec_clear`, `vec_truncate`, `vec_retain`,
-  `deque_clear`): a destructor that pushes into the container writes into
-  no slot the release still walks. A panic in one element's destructor
-  goes on with the rest, as for `mem_drop_range`.
+- `( mem_move_drop [T] a na b nb w v )` (only inside an `unsafe`
+  function) moves the `na` elements at `a`, then the `nb` at `b` (a
+  ring's second run; `0` for none), into a buffer of the release's own,
+  writes `v` to the count word at `w` (`*i`), and drops them from the
+  buffer in index order. A container whose elements' destructors may
+  reach it releases them this way (`vec_clear`, `vec_truncate`,
+  `vec_retain`, `deque_clear`): a destructor that pushes into the
+  container writes into no slot the release still walks. The buffer is the
+  runtime frame's own stack where the elements fit (512 bytes), the heap
+  past that. A panic in one element's destructor goes on with the rest,
+  as for `mem_drop_range`; for a `T` that owns nothing only the count is
+  written.
 - `( mem_drop_runs_code [T] )` — one type or several, `[K V]` — is a
   constant `b`: may dropping a value of one of these types run code of
   the program's own (a `% Drop` anywhere inside it, a library handle, a
@@ -3085,10 +3107,23 @@ foo.nu:6:3: error: bare identifier 'nurl_print' as a statement has no
 
 **Re-parsed contexts.** A diagnostic raised inside a generic
 instantiation's body is anchored at the **template's own** `file:line:col`
-(the re-lex buffer preserves the template's line structure), and the
-message carries a bracketed context suffix naming the instantiation and
-its first call site — `[while instantiating 'f__i64' — the error may
-depend on the concrete type arguments; first call site: main.nu:12]`.
+(the column is the file's, not the re-parsed body's), with the template
+file's own line echoed; a `note:` line
+follows for each instantiation the error is in, innermost first, naming
+the instance with its type arguments as the program writes them and
+anchored at the call that asked for it:
+
+```text
+stdlib/std/par.nu:44:87: error: chan_send would move this value …
+                    : b _s ( chan_send [( ParOut B )] cl @ ( ParOut B ) { j ( f j ) } )
+                                                                                      ^
+main.nu:5:7: note: in 'par_map_index [B = ( Rc i )]', instantiated here — the error may depend on these type arguments
+main.nu:8:26: note: in 'outer [A = ( Rc i )]', instantiated here — the error may depend on these type arguments
+```
+
+An instance no call asked for (a library handle's drop, copy or trace)
+says what made it instead: `note: in 'Rc_drop [A = Node]', made for the
+drop of '( Rc Node )', needed here`.
 Trait-method signature and default-body re-parses carry the analogous
 suffix naming the method, the trait, and the Self/impl type.
 

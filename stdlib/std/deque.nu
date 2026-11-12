@@ -197,12 +197,14 @@ $ `stdlib/core/box.nu`
 
 // deque_clear's release for an element type whose drop runs code of the
 // program's own: the elements leave the deque's storage before the first
-// destructor runs — both runs moved, in order, into a buffer of their own,
-// the deque left empty with its buffer — and are dropped from there
-// (mem_drop_moved, Agora #709). Dropped out of the deque's own buffer, a
-// destructor that reached the deque and pushed wrote over an element still
-// to go. (A deque being dropped is reachable by no destructor: its own
-// release, __dq_drop_elems, is the in-place one.)
+// destructor runs — both runs moved, in order, into a buffer of the
+// release's own, the deque left empty with its buffer — and are dropped
+// from there (mem_move_drop, Agora #709; the runtime's stack where they
+// fit, Agora #748). Dropped out of the deque's own buffer, a destructor
+// that reached the deque and pushed wrote over an element still to go. (A
+// deque being dropped is reachable by no destructor: its own release,
+// __dq_drop_elems, is the in-place one. An empty ring may start anywhere:
+// `head` stays where it was.)
 @ __dq_release_moved [A] * DqCtl c → v {
     : i len . c len
     ? == len 0 { ^ } {}
@@ -210,13 +212,11 @@ $ `stdlib/core/box.nu`
     : s data # s ( raw_block_ptr . c buf )
     // the run from `head`: all of them, or as many as fit before the end
     : i first ? > + head len . c cap - . c cap head len
-    : s buf ( nurl_alloc * Z A len )
-    ( nurl_memcpy buf # s + # i data * Z A head * Z A first )
-    ? > len first { ( nurl_memcpy # s + # i buf * Z A first data * Z A - len first ) } {}
-    = . c head 0
-    = . c len 0
-    ( mem_drop_moved [A] buf len )
+    ( mem_move_drop [A] # s + # i data * Z A head first data - len first ( __dq_len_at . c len ) 0 )
 }
+
+// The address of a deque's count, for the release that empties it.
+unsafe @ __dq_len_at inout i n → *i { ^ ( mem_addr n ) }
 
 // What dropping a deque does (its owner does it at scope exit — docs/
 // MEMORY.md §7.6): the live elements; the control record and its buffer
