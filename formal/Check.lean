@@ -84,6 +84,22 @@ import A3
 #print axioms A3.LockDtorWitness.main_no_leak_panic
 #print axioms A3.LockDtorWitness.last_drop_reaps
 #print axioms A3.lockDtor_claim
+-- Agora #755 item 1: A3's marking sweep and eager reaps (A3/Mark.lean, A3/Reap.lean):
+-- the thread that drops the last share runs the destructor
+#print axioms A3.CParts.sweepD
+#print axioms A3.Cfg.sweepD_reached
+#print axioms A3.Cfg.sweepD_marks
+#print axioms A3.CInv.thread_of
+#print axioms A3.CInv.raceFree
+#print axioms A3.CSettle.total
+#print axioms A3.TStep.thread_total
+#print axioms A3.CSettle.reaps_block
+#print axioms A3.TStep.last_drop_reaps
+#print axioms A3.reach_thread_total
+#print axioms A3.arcDtor_reaps
+#print axioms A3.arcVecDtor_reaps
+#print axioms A3.lockDtor_reaps
+#print axioms A3.glob_not_marked
 -- per-call ownership, as the calculus has it (A2/DynCell.lean)
 #print axioms A2.DynCell.pick_ok
 #print axioms A2.DynCell.main_safe

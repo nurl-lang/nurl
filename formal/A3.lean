@@ -22,3 +22,4 @@ import A3.SpawnNew
 import A3.Claim
 import A3.Make
 import A3.LockDtorWitness
+import A3.Reap

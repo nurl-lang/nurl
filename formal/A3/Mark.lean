@@ -491,4 +491,155 @@ theorem CInv.raceFree {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) (hR : Restr
       · exact hnr' (h3.roots (fun v ⟨x, o, hx⟩ => .inl ⟨i, ti, hij, hi, x, o, hx⟩))
       · exact hnr h3
 
+/-! ### The reaps can always be taken, and end
+
+So that `TStep.thread` asks nothing of a run it cannot give, every A2 step
+of a thread extends to a configuration step: the reaps can always be taken
+(a typed thread's statement has a source redex, `StmtT.reapable`, and an
+orphan's payload holds no cell share, `MInv.blocks`), and they end (each
+empties an orphan, and the marking sweep makes no block that holds a
+destructor value at its top: A2's count, `dtorCount`, falls). -/
+
+/-- The marking sweep makes no block that holds a destructor value at its
+    top: it keeps or marks them. -/
+theorem DtorBlk.of_sweepBlkD {R : Val → Prop} {B : Nat → Option Blk} {k : Nat}
+    (h : DtorBlk (sweepBlkD R B) k) : DtorBlk B k := by
+  obtain ⟨n, f, u, kd, p, hk, hkd⟩ := h
+  rcases sweepBlkD_some hk with ⟨h0, _⟩ | ⟨bl0, h0, _, hp, _⟩
+  · exact ⟨n, f, u, kd, p, h0, hkd⟩
+  · obtain ⟨n', f', u', p', kd', rfl, hkd'⟩ := hp.shape h0
+    exact ⟨n', f', u', kd', p', h0, hkd'⟩
+
+theorem dtorCount_sweepBlkD (R : Val → Prop) (B : Nat → Option Blk) (n : Nat) :
+    dtorCount (sweepBlkD R B) n ≤ dtorCount B n := by
+  unfold dtorCount
+  exact countP_le_of fun k _ h => by simp only [decide_eq_true_eq] at h ⊢; exact DtorBlk.of_sweepBlkD h
+
+/-- **A thread of a configuration with an orphan can reap it**, and the reap
+    lowers the count of blocks holding a destructor value. -/
+theorem CParts.reaps {P : Prog} {Z : Cfg} {ps : List (Nat → Bool)} (hc : CParts P Z ps) {i : Nat}
+    {t : Thread} (hi : Z.ths[i]? = some t) (ho : Z.Orphan) :
+    ∃ m1 s1, Step P (Z.view t) t.s (.ok m1 s1) ∧ ReapMem (Z.view t) m1 ∧
+      dtorCount m1.blk Z.nid < dtorCount Z.blk Z.nid := by
+  obtain ⟨a, ha⟩ := part_of hc.len hi
+  obtain ⟨hto, _⟩ := hc.ok i t a hi ha
+  obtain ⟨Γ, F, Δ, ht, hinv, _, _, _⟩ := hto
+  obtain ⟨k, n, f, u, p, hk⟩ := ho
+  obtain ⟨_, _, hpay, hcell, _⟩ := hinv.blocks k _ hk
+  have hnc : (Ty.nest n (.dtor f u)).hasCell = false := by
+    rcases hcell with h | h
+    · cases h
+    · exact h
+  obtain ⟨m1, s1, hs, hrm⟩ := ht.reapable.reap (m := Z.view t) hk fun c => (hpay p rfl).1.noCell_hasCell hnc
+  refine ⟨m1, s1, hs, hrm, ?_⟩
+  obtain ⟨k', n', f', u', p', hk', rfl⟩ := hrm
+  have hrmo : ReapMem (ownView Z t a) { ((ownView Z t a).set (ownView Z t a).nv ⟨true, some p'⟩) with
+      nv := (ownView Z t a).nv + 1,
+      blk := upd (ownView Z t a).blk k' (some ⟨Ty.nest n' (.dtor f' u'), .dead, none⟩) } :=
+    ⟨k', n', f', u', p', hk', rfl⟩
+  have := dtorCount_reap hinv.heap hrmo
+  exact this
+
+/-- **The reaps after a thread's step can always be taken, and end**: from a
+    configuration with its parts, thread `i` reaches one with no orphan. -/
+theorem CSettle.total {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) (hR : RestrictLemma P)
+    {Z : Cfg} {ps : List (Nat → Bool)} (hc : CParts P Z ps) {i : Nat} {t : Thread} (hi : Z.ths[i]? = some t) :
+    ∃ C', CSettle P i Z C' := by
+  suffices h : ∀ N (Z : Cfg) (ps : List (Nat → Bool)) (t : Thread), dtorCount Z.blk Z.nid < N →
+      CParts P Z ps → Z.ths[i]? = some t → ∃ C', CSettle P i Z C' from
+    h _ Z ps t (Nat.lt_succ_self _) hc hi
+  intro N
+  induction N with
+  | zero => intro _ _ _ h; cases h
+  | succ N ih =>
+    intro Z ps t hN hc hi
+    by_cases ho : Z.Orphan
+    · obtain ⟨m1, s1, hs, hrm, hlt⟩ := hc.reaps hi ho
+      obtain ⟨ps', hc'⟩ := hc.putD hP hPc hR hi hs
+      have hnid : m1.nid = Z.nid := by obtain ⟨_, _, _, _, _, _, rfl⟩ := hrm; rfl
+      have hlen : i < Z.ths.length := (List.getElem?_eq_some_iff.mp hi).1
+      have hi' : ((Z.put i m1 s1).sweepD).ths[i]? = some ⟨m1.st, m1.nv, s1⟩ := by
+        simp [Cfg.sweepD, Cfg.put, hlen]
+      have hN' : dtorCount (Z.put i m1 s1).sweepD.blk (Z.put i m1 s1).sweepD.nid < N := by
+        have h1 := dtorCount_sweepBlkD (Z.put i m1 s1).roots m1.blk m1.nid
+        show dtorCount (sweepBlkD (Z.put i m1 s1).roots m1.blk) m1.nid < N
+        rw [hnid] at h1 ⊢
+        omega
+      obtain ⟨C', hC'⟩ := ih _ ps' _ hN' hc' hi'
+      exact ⟨C', .reap hi hs hrm hC'⟩
+    · exact ⟨Z, .done ho⟩
+
+/-- **Every A2 step of a thread is one of the configuration's** (when it is
+    no spawn's): the reaps after it can be taken (`CSettle.total`), so the
+    eager reaping of `TStep.thread` blocks no thread. -/
+theorem TStep.thread_total {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) (hR : RestrictLemma P)
+    {spawn : Nat → Bool} {C : Cfg} (h : CInv P C) {i : Nat} {t : Thread} {m' : Mem} {s' : Stmt}
+    (hi : C.ths[i]? = some t) (hsp : ¬ SpawnRedex spawn t.s) (hst : Step P (C.view t) t.s (.ok m' s')) :
+    ∃ C', TStep P spawn C C' := by
+  obtain ⟨ps, hc, _⟩ := h
+  obtain ⟨ps', hc'⟩ := hc.putD hP hPc hR hi hst
+  have hlen : i < C.ths.length := (List.getElem?_eq_some_iff.mp hi).1
+  have hi' : ((C.put i m' s').sweepD).ths[i]? = some ⟨m'.st, m'.nv, s'⟩ := by
+    simp [Cfg.sweepD, Cfg.put, hlen]
+  obtain ⟨C', hse⟩ := CSettle.total hP hPc hR hc' hi'
+  exact ⟨C', .thread hi hsp hst hse⟩
+
+/-! ### The thread that drops the last share runs the destructor -/
+
+/-- **An orphan the reaps start from is reaped by thread `i`**: some reap of
+    the run, a step of thread `i`, moves its payload to a fresh slot of
+    thread `i` and leaves its block empty.  (Until then it stays an orphan,
+    its payload in it: no other step runs, and the marking sweep keeps it.) -/
+theorem CSettle.reaps_block {P : Prog} {i : Nat} {Z C' : Cfg} (h : CSettle P i Z C') {k n f : Nat}
+    {u : Ty} {p : Val} (hk : Z.blk k = some ⟨Ty.nest n (.dtor f u), .dead, some p⟩) :
+    ∃ (Y : Cfg) (t : Thread) (m1 : Mem) (s1 : Stmt), Y.ths[i]? = some t ∧
+      Y.blk k = some ⟨Ty.nest n (.dtor f u), .dead, some p⟩ ∧ Step P (Y.view t) t.s (.ok m1 s1) ∧
+      m1.blk k = some ⟨Ty.nest n (.dtor f u), .dead, none⟩ ∧ m1.st t.nv = some ⟨true, some p⟩ ∧
+      m1.nv = t.nv + 1 := by
+  induction h with
+  | done hn => exact absurd ⟨k, n, f, u, p, hk⟩ hn
+  | @reap Z C'' t m1 s1 hi hs hrm _ ih =>
+    obtain ⟨kr, n', f', u', p', hkr, hm1⟩ := hrm
+    by_cases he : kr = k
+    · subst he hm1
+      have hkr' : Z.blk kr = _ := hkr
+      have he2 := hkr'.symm.trans hk
+      simp only [Option.some.injEq, Blk.mk.injEq] at he2
+      obtain ⟨hty, -, rfl⟩ := he2
+      exact ⟨Z, t, _, s1, hi, hk, hs, by simp [upd, hty], by simp [Mem.set, upd, Cfg.view], rfl⟩
+    · -- another orphan was reaped: this one is as it was, and the marking sweep keeps it
+      have hk1 : (Z.put i m1 s1).blk k = some ⟨Ty.nest n (.dtor f u), .dead, some p⟩ := by
+        show m1.blk k = _
+        rw [hm1]
+        show upd Z.blk kr _ k = _
+        rw [upd_ne _ _ (Ne.symm he)]; exact hk
+      apply ih
+      have hp : Pinned (Z.put i m1 s1).roots (Z.put i m1 s1).blk k := Or.inr ⟨n, f, u, p, hk1⟩
+      by_cases hr : Reached (RootsD (Z.put i m1 s1).roots (Z.put i m1 s1).blk) (Z.put i m1 s1).blk k
+      · exact sweepBlkD_reached hk1 hr
+      · exact sweepBlkD_pinned hk1 hr hp
+
+/-- **Agora #755 item 1: the thread whose step drops the last share runs the
+    destructor.**  Thread `i`'s step leaves an `arc` block of a destructor
+    value (or of a drained `Vec` of them), or a lock block of one, its
+    payload in it, that nothing refers to any more: no thread's slot, no
+    module global, no block's payload.  Then the configuration's marking
+    sweep that ends the step marks it `dead`, its payload in it, and, before
+    any other thread runs, a step of thread `i` (a reap: `CSettle`, whose
+    every step is thread `i`'s) moves the payload to a fresh slot of thread
+    `i`, which `Step.reap` binds in a destructor frame of `f` at the
+    thread's redex (`A2.Reapable.reap`). -/
+theorem TStep.last_drop_reaps {P : Prog} {C : Cfg} {i : Nat} {m' : Mem} {s' : Stmt} {C' : Cfg}
+    (hse : CSettle P i (C.put i m' s').sweepD C') {k n f : Nat} {u : Ty} {p : Val} {kd : BKind}
+    (hkd : kd = .arc ∨ kd = .lock) (hk : m'.blk k = some ⟨Ty.nest n (.dtor f u), kd, some p⟩)
+    (hv : ∀ v, (C.put i m' s').roots v → ¬ Refers m'.blk v k)
+    (hb : ∀ k' bl', m'.blk k' = some bl' → ¬ Refers m'.blk bl'.keeps k) :
+    (C.put i m' s').sweepD.blk k = some ⟨Ty.nest n (.dtor f u), .dead, some p⟩ ∧
+      ∃ (Y : Cfg) (t1 : Thread) (m1 : Mem) (s1 : Stmt), Y.ths[i]? = some t1 ∧
+        Step P (Y.view t1) t1.s (.ok m1 s1) ∧
+        m1.blk k = some ⟨Ty.nest n (.dtor f u), .dead, none⟩ ∧ m1.st t1.nv = some ⟨true, some p⟩ := by
+  have hm := Cfg.sweepD_marks (C := C.put i m' s') hkd hk hv hb
+  obtain ⟨Y, t1, m1, s1, hY, _, hs, hb1, hst1, _⟩ := hse.reaps_block hm
+  exact ⟨hm, Y, t1, m1, s1, hY, hs, hb1, hst1⟩
+
 end A3
