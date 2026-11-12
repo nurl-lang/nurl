@@ -205,7 +205,8 @@ noncomputable def Mem.sweep (m : Mem) : Mem :=
 
 /-! ### Agora #610: the sweep that marks the orphans
 
-An `arc` block whose payload is a destructor value (`Ty.ok`'s `arc` case)
+An `arc` block whose payload is a destructor value (`Ty.ok`'s `arc` case),
+or (Agora #755) a drained `Vec` of them at any depth (`Ty.nest n (.dtor f u)`),
 is not freed by the sweep that finds it unreached: it is marked `dead` and
 its payload stays, for the thread whose step left it unreached to hand to a
 destructor frame (`Step.reap`, `Settle`).  Only a *top* orphan is marked:
@@ -217,20 +218,22 @@ root: what it reaches is kept.  Orphans that reach each other in a cycle
 (the runtime leaks such a cycle and runs no destructor either). -/
 
 /-- A `dead` block's payload, awaiting its destructor: a root of the sweep. -/
-def DeadPay (B : Nat → Option Blk) (v : Val) : Prop := ∃ k f u, B k = some ⟨.dtor f u, .dead, some v⟩
+def DeadPay (B : Nat → Option Blk) (v : Val) : Prop :=
+  ∃ k n f u, B k = some ⟨Ty.nest n (.dtor f u), .dead, some v⟩
 
 /-- The sweep's roots before marking: the slots' values and the orphans'
     payloads. -/
 def Roots0 (R : Val → Prop) (B : Nat → Option Blk) (v : Val) : Prop := R v ∨ DeadPay B v
 
-/-- An orphan to be: an `arc` block whose payload, a destructor value, is
+/-- An orphan to be: an `arc` block whose payload, a destructor value (or a
+    drained `Vec` of them, Agora #755), is
     in it, which the roots do not reach. -/
 def Cand (R : Val → Prop) (B : Nat → Option Blk) (k : Nat) : Prop :=
-  (∃ f u p, B k = some ⟨.dtor f u, .arc, some p⟩) ∧ ¬ Reached (Roots0 R B) B k
+  (∃ n f u p, B k = some ⟨Ty.nest n (.dtor f u), .arc, some p⟩) ∧ ¬ Reached (Roots0 R B) B k
 
 /-- An orphan to be's payload. -/
 def CandPay (R : Val → Prop) (B : Nat → Option Blk) (v : Val) : Prop :=
-  ∃ k f u, Cand R B k ∧ B k = some ⟨.dtor f u, .arc, some v⟩
+  ∃ k n f u, Cand R B k ∧ B k = some ⟨Ty.nest n (.dtor f u), .arc, some v⟩
 
 /-- A top orphan: no other orphan to be's payload reaches it either. -/
 def TopOrphan (R : Val → Prop) (B : Nat → Option Blk) (k : Nat) : Prop :=
@@ -238,7 +241,7 @@ def TopOrphan (R : Val → Prop) (B : Nat → Option Blk) (k : Nat) : Prop :=
 
 /-- A top orphan's payload. -/
 def TopPay (R : Val → Prop) (B : Nat → Option Blk) (v : Val) : Prop :=
-  ∃ k f u, TopOrphan R B k ∧ B k = some ⟨.dtor f u, .arc, some v⟩
+  ∃ k n f u, TopOrphan R B k ∧ B k = some ⟨Ty.nest n (.dtor f u), .arc, some v⟩
 
 /-- The marking sweep's roots: the slots' values, the orphans' payloads and
     the top orphans' to be. -/
@@ -247,7 +250,7 @@ def RootsD (R : Val → Prop) (B : Nat → Option Blk) (v : Val) : Prop := Roots
 /-- A block the marking sweep keeps though the roots do not reach it: a top
     orphan, marked, or an orphan whose payload is still in it. -/
 def Pinned (R : Val → Prop) (B : Nat → Option Blk) (k : Nat) : Prop :=
-  TopOrphan R B k ∨ ∃ f u p, B k = some ⟨.dtor f u, .dead, some p⟩
+  TopOrphan R B k ∨ ∃ n f u p, B k = some ⟨Ty.nest n (.dtor f u), .dead, some p⟩
 
 /-- A block marked `dead`. -/
 def Blk.mark (bl : Blk) : Blk := { bl with kind := .dead }
@@ -1466,15 +1469,20 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
       value, is still in it.  The payload moves out to a fresh binding of
       the thread that takes the step, in a destructor frame put before what
       the thread was about to run (`r`, source code: a redex); the frame's
-      end runs the destructor, as a `letd` binding's does.  The block stays,
+      end runs the destructor, as a `letd` binding's does.  (Agora #755: a
+      payload that is a drained `Vec` of destructor values, at any depth,
+      `Ty.nest n (.dtor f u)`, is bound at its own type, and the frame's end
+      drains it, each element's destructor in index order,
+      `Step.scopeDDrain`, as nurlc's drop of an `Arc<Vec<D>>`'s last share
+      drops the `Vec`'s elements.)  The block stays,
       empty, for the sweep to remove.  The rule's own position is any source
       statement, so it fires under every frame through the congruence rules
       (`seqL`, `scopeIn`, …), wherever the thread's next step would.  Only
       the marking sweep makes a block `dead` (`Mem.sweepD`), and the thread
       whose step it ended takes this step next (`Settle`): a run's other
       steps are taken from stores with no orphan, where it is not one. -/
-  | reap {m : Mem} {r : Stmt} {k f : Nat} {u : Ty} {p : Val} :
-      r.src = true → m.blk k = some ⟨.dtor f u, .dead, some p⟩ →
+  | reap {m : Mem} {r : Stmt} {k n f : Nat} {u : Ty} {p : Val} :
+      r.src = true → m.blk k = some ⟨Ty.nest n (.dtor f u), .dead, some p⟩ →
       -- (the payload holds no cell share: a typed program meets it, the type
       -- of a block that is no lock block holds none, `MInv.blocks`; A3's
       -- confinement of the cells, read off the steps alone, counts the
@@ -1482,20 +1490,20 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
       (∀ c, ¬ Sub (.cell c) p) →
       Step P m r
         (.ok { (m.set m.nv ⟨true, some p⟩) with
-                nv := m.nv + 1, blk := upd m.blk k (some ⟨.dtor f u, .dead, none⟩) }
+                nv := m.nv + 1, blk := upd m.blk k (some ⟨Ty.nest n (.dtor f u), .dead, none⟩) }
           (.seq (.scopeD m.nv f .skip) r))
 
 /-- Agora #610: an orphan awaits its destructor: some `dead` block still holds
     its payload, which `Step.reap` may move out.  Between the steps of a run
     none does (`Settle`, `A2.no_orphan`). -/
-def Orphan (m : Mem) : Prop := ∃ k f u p, m.blk k = some ⟨.dtor f u, .dead, some p⟩
+def Orphan (m : Mem) : Prop := ∃ k n f u p, m.blk k = some ⟨Ty.nest n (.dtor f u), .dead, some p⟩
 
 /-- Agora #610: the store after reaping the `dead` block `k` (`Step.reap`):
     its payload moved to the fresh slot `m.nv`, the block left empty. -/
 def ReapMem (m m' : Mem) : Prop :=
-  ∃ k f u p, m.blk k = some ⟨.dtor f u, .dead, some p⟩ ∧
+  ∃ k n f u p, m.blk k = some ⟨Ty.nest n (.dtor f u), .dead, some p⟩ ∧
     m' = { (m.set m.nv ⟨true, some p⟩) with
-            nv := m.nv + 1, blk := upd m.blk k (some ⟨.dtor f u, .dead, none⟩) }
+            nv := m.nv + 1, blk := upd m.blk k (some ⟨Ty.nest n (.dtor f u), .dead, none⟩) }
 
 /-- **Agora #610: the thread whose step the marking sweep ended reaps the
     orphans it marked**, each a step of its own (`Step.reap`, which puts a

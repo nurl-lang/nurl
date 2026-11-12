@@ -794,10 +794,11 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   moved into a struct, the struct's glue a function of the program
   checked by `FnOK`), and (Agora #607) as another such `Vec`'s element, at
   any depth (`Ty.nest`, `Ty.dnest`; witness `A2.DtorWitness.main11_safe`),
-  and a view's element (a view owns nothing). It is refused as a share's,
-  a lock's or a cell's payload (each of these asks `!vecD` of its part; a
-  lock's or a cell's payload owns no destructor value at all, an `Arc`'s is
-  one at its top or owns none, 3d below); every `Vec` in a binding's type
+  and a view's element (a view owns nothing), and (Agora #755) an `Arc`'s
+  payload, which the reap of the orphaned block binds at its own type in a
+  destructor frame that drains it (3d below). It is refused as a lock's or
+  a cell's payload (each of these asks `!vecD` of its part; a lock's or a
+  cell's payload owns no destructor value at all, 3d below); every `Vec` in a binding's type
   has elements that own no destructor value or are of a destructor type or
   such `Vec`s in turn (`A2.Dtor.vecs_dtor_free`). Its binder
   is `letd x f r s`,
@@ -828,7 +829,8 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   own `Vec` (`free`, a truncation, an element set and `withElem` ask
   `dtorFree`), so they release or check out no destructor value; a
   lock's or a cell's payload owns none either, and an `Arc`'s destructor
-  value is handed to a frame of its own (3d, below).
+  value, or (Agora #755) its drained `Vec` of them, is handed to a frame
+  of its own (3d, below).
   (On an empty `Vec`, `vec_pop` and `vec_remove` return `None` in nurlc; the
   calculus's `pop` / `remove` panic there instead, an unwrap: a program
   that matches the option is the same program with the `None` arm taken
@@ -896,8 +898,9 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   two levels down is bound by `letd` with its glue
   (`A2.DtorWitness.main4_safe`).
 - A2-drop.3d: no lock block's and no view's payload owns a destructor
-  value; an `Arc`'s may be one at its top (Agora #610), and is then of a
-  destructor type that holds no closure. The invariant carries it for every
+  value; an `Arc`'s may be one at its top (Agora #610), or (Agora #755) a
+  drained `Vec` of them at any depth (`Ty.nest n (.dtor f u)`, `Ty.dnest`),
+  and is then of such a type over a destructor type that holds no closure. The invariant carries it for every
   block in memory, whatever holds its shares (a binding, a closure's
   environment, another block's payload): `A2.Dtor.blocks_dtor_free`
   (`MInv.blocks`, `Blk.DtorOK`; a start built by hand must satisfy it too,
@@ -905,12 +908,13 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   program checked, `GlobsOK.dtors`). What keeps it: `Ty.ok` asks a lock's
   and a cell's payload type to own none (so a channel's queue and a read
   guard's view own none), and an `Arc`'s to own none or be a destructor
-  type (`Ty.ok_arc_dtor`); `arc_new`, a lock's and a library handle's
-  constructor ask the same of what moves in
-  (`A2.Dtor.share_new_dtor_free`), and `arc_new` of a destructor value
-  names a destructor the program checked (`Rhs.codeOK`, `DeadCodes`). Of
-  types: the payload type of every share in a binding's type owns none or
-  is a destructor type, a lock's and a cell's owns none
+  type or a drained `Vec` of them (`Ty.ok_arc_dtor`); `arc_new`, a lock's
+  and a library handle's constructor ask the same of what moves in
+  (`A2.Dtor.share_new_dtor_free`), and `arc_new` of a destructor value or
+  of such a `Vec` names a destructor the program checked (`Rhs.codeOK`,
+  `DeadCodes`). Of types: the payload type of every share in a binding's
+  type owns none or is a destructor type or such a `Vec`, a lock's and a
+  cell's owns none
   (`A2.Dtor.shares_dtor_free`, over `A2.Dtor.ok_payloads_free` and
   `ok_lockPayloads_free`), so a check-out binding (`withLock`,
   `withCell`), whose type is the lock's payload's, holds none, and an
@@ -918,14 +922,18 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
 - Agora #610: **the last share's drop runs an `Arc`'s destructor, on the
   thread that dropped it.** A2's step ends with the marking sweep
   (`Mem.sweepD`): an unreached `arc` block whose payload is a destructor
-  value, and that no other such block's payload reaches (a top orphan),
+  value (Agora #755: or a drained `Vec` of them, at any depth), and that
+  no other such block's payload reaches (a top orphan),
   is marked `dead`, its payload in it, and its payload, and a `dead`
   block's, are roots, so what they reach is kept; every other unreached
   block is removed and its payload freed, as before. The same thread then
   reaps every orphan before anything else runs (`Settle`, part of
   `Steps.step`): `Step.reap` moves the payload to a fresh binding in a
   destructor frame at the thread's redex, whose end runs the destructor
-  as a `letd`'s does. While a slot's value refers to the block (another
+  as a `letd`'s does (Agora #755: a `Vec` is bound at its own type, and
+  the frame's end drains it, each element's destructor in index order,
+  `Step.scopeDDrain`, as nurlc's drop of an `Arc<Vec<D>>`'s last share
+  drops the `Vec`'s elements). While a slot's value refers to the block (another
   share, a borrow of the payload) it is kept as it was
   (`A2.Mem.sweepD_keeps`); when nothing refers to it it is marked
   (`A2.Mem.sweepD_marks`). An inner `Arc` the payload holds is orphaned
@@ -945,7 +953,19 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   both shares dropped: typed, `main_safe`, `main_no_leak`;
   `last_drop_reaps`: in a store where nothing refers to the block any
   more, the marking sweep marks it and the thread's next step is a reap;
-  the theorems do not trace the witness's run; `A3.arcDtor_claim`: `A3.claim` over it). Left, each
+  the theorems do not trace the witness's run; `A3.arcDtor_claim`: `A3.claim` over it).
+  Agora #755's witness: `A2.ArcDtorWitness.mainV` (an `Arc` of a `Vec`
+  holding one destructor value, cloned, both shares dropped: typed,
+  `mainV_safe`, `mainV_no_leak`; `last_dropV_reaps`: in a store where
+  nothing refers to the block any more, the marking sweep marks it `dead`
+  at `vec DT` and the thread's next step is a reap; `reapV_drains`: the
+  reap binds the `Vec` in the frame `scopeD _ dfn skip`, whose end, while
+  the slot still holds a non-empty `Vec` and no orphan awaits, is the
+  drain step and nothing else; `A3.arcVecDtor_claim`: `A3.claim` over it).
+  As for `main`, no theorem traces this program's run: that the drain
+  runs `dfn` once per element is read off the steps
+  (`A2.Dtor.scopeD_end_drains`, `scopeD_end_runs_dtor`), as for a
+  binding's drained `Vec`. Left, each
   named in the stricter-than-nurlc list below or here: a panic no frame
   catches ends with the sweep that frees an orphaned payload with no code
   (`Steps.panic`: no frame is left to run it); orphans that reach each
@@ -962,10 +982,21 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   not run (`A3.Reach.noOrphan`: no A3 run has an orphan).
 - So a binding's end, a drained `Vec`'s, a call's result frame and
   (Agora #610) an `Arc`'s last share's drop, through the reaped payload's
-  frame, run the value's own, outermost destructor, and everywhere else
+  frame, run the value's own, outermost destructor (a drained `Vec`'s
+  elements' destructors, Agora #607 / #755), and everywhere else
   that could hold a destructor value is refused (the list below), but for
   the `Arc` payloads 3d names (an uncaught panic's end, a cycle of
-  orphans, A3's threads), freed with no code. That these are all
+  orphans, A3's threads), freed with no code. One exactness gap found in
+  review (Agora #790): an `Arc` orphaned by a panic's UNWINDING is reaped
+  at the first frame the unwinding reaches (a `scopeD` frame's
+  `seq (scope x (letcall … f [x] skip)) panic`, or the statement after a
+  `recover`), not inside the drain as nurlc's journal does it. A panic in
+  that reaped destructor (or in an element's, for an `Arc<Vec<D>>`) then
+  skips `x`'s own destructor (its `scope` frees it with no code), or
+  escapes the `recover`, where nurlc's drain runs the rest and the
+  `recover` catches. Memory safety and leak freedom are unaffected
+  (everything is freed); which destructors run, and whether that
+  `recover` catches, are not modelled faithfully there. That these are all
   the places is read off the rules, not a single theorem (above). The
   destructors INSIDE a value are shown for a struct's fields (Agora #616),
   an enum's payload (Agora #632) and a closure's environment (Agora
@@ -1017,10 +1048,11 @@ The rules are stricter than nurlc's in these places:
   the run). nurlc types the
   rest too, and drops a `Vec`'s elements wherever the `Vec` is dropped, in
   index order, each running its destructor. Refused here:
-  - the `Vec` as a shared payload: a channel of `D` (`Channel s` is a lock
-    of its queue, a `Vec s`, and its closed flag), `Locked (Vec D)`, `Arc
-    (Vec D)`, a cell of a `Vec D`. A block's payload is swept with no code
-    (Agora #544).
+  - the `Vec` as a lock's or a cell's payload: a channel of `D` (`Channel
+    s` is a lock of its queue, a `Vec s`, and its closed flag), `Locked (Vec
+    D)`, a cell of a `Vec D`: such a payload is swept with no code (Agora
+    #755). (`Arc (Vec D)` is typed since Agora #755: its orphaned payload is
+    reaped and drained on A2's runs, above.)
   Not refused: the in-place drops (the lemmas below are stated for
     elements that hold no views; a `Vec` of view-holding destructor
     values, Agora #782, is typed by the same rules, with no lemma stated).
@@ -1081,18 +1113,21 @@ The rules are stricter than nurlc's in these places:
 - for a share whose payload would own a destructor value (A2-drop.3d,
   Agora #610): an `Arc` of a destructor type (`Arc<D>`, `D` a `% Drop`
   struct or enum, or one with glue) is typed, and the thread that drops
-  the last share runs `D`'s destructor (3d, above). Still refused
+  the last share runs `D`'s destructor (3d, above); so (Agora #755) is an
+  `Arc` of a `Vec` of them, or of such `Vec`s at any depth
+  (`Arc<Vec<D>>`), whose last share's drop drains the `Vec`. Still refused
   (`Ty.ok`): a `Locked` / `RwLocked` / `Mutex`, a channel or a library
   handle of a `% Drop` type (a check-out binding of a destructor type
   needs a `scopeD`-style end that hands the value back); an `Arc` whose
-  payload holds a destructor value below its top (a struct or an option
-  of no destructor type of its own with a `% Drop` field, an `Arc` of a
-  `Vec` of them: `Step.reap` hands over a destructor type's value only);
-  and an `Arc<D>` whose `D` holds a closure (a destructor frame's binding
+  payload holds a destructor value in a field of a type of no destructor
+  of its own (a struct or an option with a `% Drop` field, or a `Vec` of
+  such structs: `Step.reap` hands over a value of a destructor type or of
+  a drained `Vec` of them only, `ScopeDTy`'s shapes); and an `Arc<D>` (or
+  `Arc<Vec<D>>`) whose `D` holds a closure (a destructor frame's binding
   holds none). nurlc types them, and the thread that drops the last share
   runs the payload's destructor. On A3's threads the configuration's sweep
-  frees an orphaned `Arc<D>` payload with no code: the claim covers such a
-  program, the destructor not run (3d, above). A program that shares a
+  frees an orphaned `Arc<D>` or `Arc<Vec<D>>` payload with no code: the
+  claim covers such a program, the destructor not run (3d, above). A program that shares a
   locked resource keeps the `% Drop` value in one thread's binding and
   shares what the others need of it.
 - for a spawned function's parameter of a type that holds a destructor

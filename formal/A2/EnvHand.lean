@@ -1692,7 +1692,7 @@ theorem handCaseD {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c 
   obtain ⟨fs0, te0, env0, f0, fn0, hslot0, hfs0, hf0, hps, hrt, hro, hl, hr, ho, hnt, hq⟩ :=
     hand_foundD hi.toMInv hcd hc htu hlc hmo hj hσ hsp
   cases hst with
-  | reap hrs hrk _ => exact absurd ⟨_, _, _, _, hrs, hrk, rfl, rfl⟩ hnr
+  | reap hrs hrk _ => exact absurd ⟨_, _, _, _, _, hrs, hrk, rfl, rfl⟩ hnr
   | callcE hslot hfs hf hmx hns =>
     have e1 := hslot0.symm.trans hslot
     simp only [Option.some.injEq, Slot.mk.injEq, Val.pkg.injEq, true_and] at e1
@@ -1892,7 +1892,7 @@ theorem handCase {P : Prog} (hP : ProgOK P) : HandCase P := by
   obtain ⟨hlc, hmo, fs0, te0, env0, f0, fn0, hslot0, hfs0, hf0, hps, hrt, hro, hl, hr, ho, hnt⟩ :=
     hand_found hi.toMInv hcd hc htc hcan hj hσ hsp hcT
   cases hst with
-  | reap hrs hrk _ => exact absurd ⟨_, _, _, _, hrs, hrk, rfl, rfl⟩ hnr
+  | reap hrs hrk _ => exact absurd ⟨_, _, _, _, _, hrs, hrk, rfl, rfl⟩ hnr
   | callcD hslot hfs hf hmx hsk =>
     -- (Agora #609: the code of an `inout` interface takes the environment `inout`)
     have e1 := hslot0.symm.trans hslot

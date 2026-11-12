@@ -49,4 +49,19 @@ theorem arcDtor_claim :
   exact claim _ _ Globs.empty _ Δ 5 A2.DtorWitness.prog_ok A2.DtorWitness.prog_codes
     (fun _ h => by cases h) GlobsOK.empty ht rfl A2.ArcDtorWitness.main_codes (by decide)
 
+/-- Agora #755, the witness (`A2.ArcDtorWitness.mainV`): an `Arc` of a `Vec`
+    of destructor values, cloned, both shares dropped, on one thread.  The
+    claim covers it: safe, race-free and leak-free on every interleaving.
+    (As for `arcDtor_claim`, A3's configuration sweep does not mark orphans
+    yet: there the last share's drop frees the `Vec` with no code; A2's
+    `Steps` reaps it and drains it, `A2.ArcDtorWitness.last_dropV_reaps`,
+    `reapV_drains`.) -/
+theorem arcVecDtor_claim :
+    MemorySafe A2.DtorWitness.P (fun _ => false) (Cfg.start Globs.empty A2.ArcDtorWitness.mainV 6) ∧
+      RaceFree A2.DtorWitness.P (fun _ => false) (Cfg.start Globs.empty A2.ArcDtorWitness.mainV 6) ∧
+      NoLeak A2.DtorWitness.P (fun _ => false) (Cfg.start Globs.empty A2.ArcDtorWitness.mainV 6) := by
+  obtain ⟨Δ, ht⟩ := A2.ArcDtorWitness.mainV_typed
+  exact claim _ _ Globs.empty _ Δ 6 A2.DtorWitness.prog_ok A2.DtorWitness.prog_codes
+    (fun _ h => by cases h) GlobsOK.empty ht rfl A2.ArcDtorWitness.mainV_codes (by decide)
+
 end A3

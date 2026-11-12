@@ -1391,7 +1391,7 @@ theorem pack_sync_noCell {Γ Γ1 : Ctx} {F : List Var} {fs : List Nat} {te : Ty}
 theorem arcNew_fn {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {q : Cross} {y : Var} {E : Entry}
     (h : RhsT Γ F (.arcNew (.fn ms q) y) E Γ1) : q = .sync ∨ q = .bare := by
   cases h with
-  | arcNew _ _ _ _ hc _ => cases q <;> simp_all [Ty.hasCell, Ty.dtorFree, Ty.hasDtor, Cross.drops]
+  | arcNew _ _ _ _ hc _ => cases q <;> simp_all [Ty.hasCell, Ty.dtorFree, Ty.dnest, Cross.drops]
 
 /-- h340 (`closure_sent_on_a_channel_captures_a_kept_handle`): a channel's
     element may hold a library handle (A3.5's second cut), so a closure sent on
@@ -2821,7 +2821,7 @@ theorem scopeL_end {P : Prog} {m : Mem} {k : Nat} {t : Ty} {x : Var} {r : Res}
   | reap hrs _ _ => cases hrs
   | scopeLSkip hrl hck => exact .inl ⟨_, rfl, hrl, hck⟩
   | scopeLFail hx hck => exact .inr ⟨rfl, _, hx, hck⟩
-  | scopeLIn hs => cases hs with | reap _ hk _ => exact absurd ⟨_, _, _, _, hk⟩ hno
+  | scopeLIn hs => cases hs with | reap _ hk _ => exact absurd ⟨_, _, _, _, _, hk⟩ hno
   | scopeLP hs _ => cases hs with | waitPanic hw => cases hw
   | waitPanic hw => cases hw
 

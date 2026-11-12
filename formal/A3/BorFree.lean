@@ -202,7 +202,7 @@ theorem Step.borFree {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r
   | scopeDPDrain _ _ ih => exact ih
   | scopeDPMoved _ _ ih => exact ih.remove _
   | withLock _ _ _ => exact (hb.of_st rfl).set _ (SlotFree.ids ids_nonNode)
-  | @reap r0 k0 f u p _ _ _ =>
+  | @reap r0 k0 n f u p _ _ _ =>
     exact BorFree.of_st (m := m.set m.nv ⟨true, some p⟩) (hb.set _ (SlotFree.own _)) rfl
   | scopeLIn _ ih => exact ih
   | scopeLSkip hrl => cases hrl <;> exact (hb.of_st rfl).remove _

@@ -48,11 +48,11 @@ theorem StmtT.reapable {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx
 
 /-- The reap of a `dead` block `k` is a step of every such statement, at its
     redex. -/
-theorem Reapable.reap {P : Prog} {m : Mem} {s : Stmt} (hr : Reapable s) {k f : Nat} {u : Ty} {p : Val}
-    (hk : m.blk k = some ⟨.dtor f u, .dead, some p⟩) (hnc : ∀ c, ¬ Sub (.cell c) p) :
+theorem Reapable.reap {P : Prog} {m : Mem} {s : Stmt} (hr : Reapable s) {k n f : Nat} {u : Ty} {p : Val}
+    (hk : m.blk k = some ⟨Ty.nest n (.dtor f u), .dead, some p⟩) (hnc : ∀ c, ¬ Sub (.cell c) p) :
     ∃ m1 s1, Step P m s (.ok m1 s1) ∧ ReapMem m m1 := by
   induction hr with
-  | src hs => exact ⟨_, _, Step.reap hs hk hnc, k, f, u, p, hk, rfl⟩
+  | src hs => exact ⟨_, _, Step.reap hs hk hnc, k, n, f, u, p, hk, rfl⟩
   | seq _ ih => obtain ⟨m1, s1, h, hm⟩ := ih; exact ⟨m1, _, Step.seqL h, hm⟩
   | scope _ ih => obtain ⟨m1, s1, h, hm⟩ := ih; exact ⟨m1, _, Step.scopeIn h, hm⟩
   | rbind _ ih => obtain ⟨m1, s1, h, hm⟩ := ih; exact ⟨m1, _, Step.rbindIn h, hm⟩
@@ -67,9 +67,9 @@ theorem Reapable.reap {P : Prog} {m : Mem} {s : Stmt} (hr : Reapable s) {k f : N
     its redex. -/
 theorem orphan_reaps {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (ht : StmtT P Γ F s Δ)
     {m : Mem} (hi : MInv m Γ) (ho : Orphan m) : ∃ m1 s1, Step P m s (.ok m1 s1) ∧ ReapMem m m1 := by
-  obtain ⟨k, f, u, p, hk⟩ := ho
+  obtain ⟨k, n, f, u, p, hk⟩ := ho
   obtain ⟨_, _, hpay, hcell, _⟩ := hi.blocks k _ hk
-  have hnc : (Ty.dtor f u).hasCell = false := by
+  have hnc : (Ty.nest n (.dtor f u)).hasCell = false := by
     rcases hcell with h | h
     · cases h
     · exact h
@@ -77,10 +77,11 @@ theorem orphan_reaps {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} 
 
 /-! ### The reaps end -/
 
-/-- A block that holds a destructor value at its top in it: an `arc` block
-    the marking sweep may mark, or an orphan. -/
+/-- A block that holds a destructor value at its top in it (Agora #755: or a
+    drained `Vec` of them): an `arc` block the marking sweep may mark, or an
+    orphan. -/
 def DtorBlk (B : Nat → Option Blk) (k : Nat) : Prop :=
-  ∃ f u kd p, B k = some ⟨.dtor f u, kd, some p⟩ ∧ (kd = .arc ∨ kd = .dead)
+  ∃ n f u kd p, B k = some ⟨Ty.nest n (.dtor f u), kd, some p⟩ ∧ (kd = .arc ∨ kd = .dead)
 
 open Classical in
 /-- How many such blocks there are below `n`. -/
@@ -112,11 +113,11 @@ theorem countP_lt_of {l : List Nat} {p q : Nat → Bool} (h : ∀ x ∈ l, p x =
 
 /-- The marking sweep makes no such block: it keeps or marks them. -/
 theorem DtorBlk.of_sweepD {m : Mem} {k : Nat} (h : DtorBlk m.sweepD.blk k) : DtorBlk m.blk k := by
-  obtain ⟨f, u, kd, p, hk, hkd⟩ := h
+  obtain ⟨n, f, u, kd, p, hk, hkd⟩ := h
   rcases sweepBlkD_some hk with ⟨h0, _⟩ | ⟨bl0, h0, _, hp, he⟩
-  · exact ⟨f, u, kd, p, h0, hkd⟩
-  · obtain ⟨f', u', p', kd', rfl, hkd'⟩ := hp.shape h0
-    exact ⟨f', u', kd', p', h0, hkd'⟩
+  · exact ⟨n, f, u, kd, p, h0, hkd⟩
+  · obtain ⟨n', f', u', p', kd', rfl, hkd'⟩ := hp.shape h0
+    exact ⟨n', f', u', kd', p', h0, hkd'⟩
 
 theorem dtorCount_sweepD (m : Mem) : dtorCount m.sweepD.blk m.nid ≤ dtorCount m.blk m.nid := by
   unfold dtorCount
@@ -125,24 +126,24 @@ theorem dtorCount_sweepD (m : Mem) : dtorCount m.sweepD.blk m.nid ≤ dtorCount 
 /-- A reap empties its orphan, and makes no such block. -/
 theorem dtorCount_reap {m m1 : Mem} (hh : HeapOK m) (hr : ReapMem m m1) :
     dtorCount m1.blk m.nid < dtorCount m.blk m.nid := by
-  obtain ⟨k, f, u, p, hk, rfl⟩ := hr
+  obtain ⟨k, n, f, u, p, hk, rfl⟩ := hr
   unfold dtorCount
   have hkey : k < m.nid := hh.bkey k _ hk
   refine countP_lt_of (a := k) (fun k' _ h => ?_) (List.mem_range.mpr hkey) ?_ ?_
   · simp only [decide_eq_true_eq] at h ⊢
-    obtain ⟨f', u', kd, p', hk', hkd⟩ := h
+    obtain ⟨n', f', u', kd, p', hk', hkd⟩ := h
     by_cases he : k' = k
     · subst he; simp [upd] at hk'
-    · exact ⟨f', u', kd, p', by simpa [upd, he] using hk', hkd⟩
-  · simp only [decide_eq_true_eq]; exact ⟨f, u, .dead, p, hk, Or.inr rfl⟩
+    · exact ⟨n', f', u', kd, p', by simpa [upd, he] using hk', hkd⟩
+  · simp only [decide_eq_true_eq]; exact ⟨n, f, u, .dead, p, hk, Or.inr rfl⟩
   · simp only [decide_eq_false_iff_not]
-    rintro ⟨f', u', kd, p', hk', _⟩
+    rintro ⟨n', f', u', kd, p', hk', _⟩
     simp [upd] at hk'
 
 /-- **The reaps that end a step can always be taken, and end** (Agora #610):
     from every typed configuration there is a `Settle`.  Each reap empties
     an orphan and the marking sweep after it makes no block that holds a
-    destructor value at its top (it keeps or marks them): their count below
+    destructor value at its top, or (Agora #755) a drained `Vec` of them (it keeps or marks them): their count below
     `nid`, which neither changes, falls each round. -/
 theorem settle_total {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {F : List Var} {s : Stmt}
     {Δ : Ctx} (ht : StmtT P Γ F s Δ) {m : Mem} (hcd : MemCodes P m) (hsc : s.codesOK P)
@@ -159,7 +160,7 @@ theorem settle_total {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {
     · obtain ⟨m1, s1, hst, hrm⟩ := orphan_reaps ht hi.toMInv ho
       obtain ⟨Γ', ht', hi', hk⟩ := preservation hP ht hcd hi hst
       obtain ⟨hcd', hsc'⟩ := (codes_step hPc hst hcd hcd.blk.1 hsc).1 _ _ rfl
-      have hnid : m1.nid = m.nid := by obtain ⟨_, _, _, _, _, rfl⟩ := hrm; rfl
+      have hnid : m1.nid = m.nid := by obtain ⟨_, _, _, _, _, _, rfl⟩ := hrm; rfl
       have hlt : dtorCount m1.sweepD.blk m1.sweepD.nid < n := by
         have h1 := dtorCount_sweepD m1
         have h2 := dtorCount_reap hi.heap hrm
@@ -195,7 +196,7 @@ theorem progress_no_reap {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {s : Stm
   rcases progress' hP ht' hcd' hi' with h | h | ⟨r, hr'⟩
   · exact Or.inl h
   · exact Or.inr (Or.inl h)
-  · exact Or.inr (Or.inr ⟨r, hr', fun m1 ⟨k, f, u, p, hk, _⟩ => hno ⟨k, f, u, p, hk⟩⟩)
+  · exact Or.inr (Or.inr ⟨r, hr', fun m1 ⟨k, n, f, u, p, hk, _⟩ => hno ⟨k, n, f, u, p, hk⟩⟩)
 
 /-- A store with an orphan settles only by a reap first: the thread's next
     step is the reap. -/
