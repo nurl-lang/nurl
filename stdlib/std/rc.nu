@@ -165,8 +165,9 @@ $ `stdlib/core/mem.nu`
 @ rc_take [A] ( Rc A ) r → A {
     : *( RcImpl A ) impl # *( RcImpl A ) . r ctl
     ? != 0 & . impl cc RC_TAKEN { ( __rc_taken_panic ) } {}
-    // (Claimed out of its slot, it leaves zero bytes there, which drop
-    // and trace as nothing.)
+    // (Claimed out of its slot, it leaves zero bytes there, which trace
+    // as nothing; RC_TAKEN tells the last handle's drop there is no value
+    // to drop — a `% Drop` type's destructor would run on them, #795.)
     : A x . impl value
     ( mem_take x )
     = . impl cc | . impl cc RC_TAKEN
@@ -226,8 +227,14 @@ $ `stdlib/core/mem.nu`
         // (nurl_rc_drop_value), which keeps a long chain of releases off the
         // stack; a leaf value is dropped right here.
         ? ( mem_rc_nested [A] ) { ( nurl_rc_drop_value # s impl ( mem_cc_ops [A] ) ) ^ } {}
-        : A v . impl value
-        ( mem_take v )
+        // (A value checked out by rc_take and never put back is its
+        // taker's: the slot holds zero bytes nobody owns, which a `% Drop`
+        // type's destructor ran over a second time — agora #795. The
+        // runtime asks the same of the two paths above.)
+        ? == 0 & . impl cc RC_TAKEN {
+            : A v . impl value
+            ( mem_take v )
+        } {}
         ? == 0 . impl weak { ( nurl_free # s impl ) } {}
     } {
         // A cycle that can hold a resource (a file, a socket — `% Resource`)
