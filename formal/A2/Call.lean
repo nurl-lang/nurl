@@ -2929,19 +2929,20 @@ theorem typedIn_of (h : CallH P Γ F x fn args base)
   -- (moved-out) result slot added, whose well-formedness is the final one's.
   rw [hrf]
   obtain ⟨_, g', t', hty', htv, htf, hdok⟩ :=
-    h.fnok.2.2.2.2.2.2.2.2.2.2.2.1.2.2 ho (by rcases hty with h' | h' <;> rw [h'] <;> rfl)
-  obtain ⟨hg, ht⟩ : g = g' ∧ t = t' := by
-    rcases hty with h1 | h1 <;> rcases hty' with h2 | h2 <;> rw [h1] at h2 <;> cases h2 <;> exact ⟨rfl, rfl⟩
+    h.fnok.2.2.2.2.2.2.2.2.2.2.2.1.2.2 ho hty.holdsDtor
+  obtain ⟨hg, ht⟩ : g = g' ∧ t = t' := hty.inj hty'
   subst hg; subst ht
   have hstr : t.isStruct = true := by
     have hok := h.fnok.2.2.2.1
-    rcases hty with h1 | h1 <;> rw [h1] at hok
-    · simp only [Ty.ok, Bool.and_eq_true] at hok; exact hok.1
-    · have := Ty.ok_vec_elem hok; simp only [Ty.ok, Bool.and_eq_true] at this; exact this.1
+    have hdok : (Ty.dtor g t).ok = true := by
+      rcases hty with h1 | ⟨n, h1⟩ <;> rw [h1] at hok
+      · exact hok
+      · exact Ty.ok_of_nest (Ty.ok_vec_elem hok)
+    simp only [Ty.ok, Bool.and_eq_true] at hdok; exact hdok.1
   have hsdt : ScopeDTy g t fn.resTy := by
-    rcases hty with h1 | h1
+    rcases hty with h1 | ⟨n, h1⟩
     · exact Or.inl h1
-    · exact Or.inr ⟨h1, htv⟩
+    · exact Or.inr ⟨n, h1, htv⟩
   have hown : resMode fn = .own := by simp [resMode, ho]
   have hsrcR : (fn.body.rename (callRen fn.params args base)).src = true := by
     rw [RSetup.src_rename]; exact h.fnok.1

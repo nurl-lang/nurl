@@ -1025,12 +1025,12 @@ def wrapParams : List (PMode × Ty) → Nat → Nat → Stmt → Stmt
     which runs the result's destructor before the panic goes on; on the
     normal path the result has moved to the caller's binding by the frame's
     end, which then runs nothing (`Step.scopeDMoved`).  An owned result that
-    is a `Vec` of destructor values is one too: its frame drains it on such a
-    panic (`Step.scopeDPDrain`).  Any other result's is a plain scope. -/
+    is a `Vec` of destructor values is one too, or (Agora #607) of such `Vec`s
+    at any depth: its frame drains it on such a panic (`Step.scopeDPDrain`).
+    Any other result's is a plain scope. -/
 def resFrame (fn : Fn) (r : Var) (s : Stmt) : Stmt :=
-  match fn.resOwn, fn.resTy with
-  | true, .dtor g _ => .scopeD r g s
-  | true, .vec (.dtor g _) => .scopeD r g s
+  match fn.resOwn, fn.resTy.dhead with
+  | true, some g => .scopeD r g s
   | _, _ => .scope r s
 
 /-- The inside of a call: the result slot `r = base + n` is bound (in its

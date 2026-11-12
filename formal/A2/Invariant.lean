@@ -961,13 +961,49 @@ def KeepOut (Γ Δ : Ctx) (sp : List Var) : Prop :=
 
 /-! ### The call's result frame (`resFrame`): a scope's, or a destructor frame's -/
 
+/-- Agora #607: the shapes a call's owned result of a destructor frame has:
+    a destructor type, or a nest of `Vec`s around one. -/
+def ResDTy (g : Nat) (t τ : Ty) : Prop :=
+  τ = .dtor g t ∨ ∃ n, τ = .vec (Ty.nest n (.dtor g t))
+
+theorem ResDTy.of_dhead {τ : Ty} {g : Nat} (h : τ.dhead = some g) : ∃ t, ResDTy g t τ := by
+  obtain ⟨n, t, rfl⟩ := Ty.dhead_some h
+  cases n with
+  | zero => exact ⟨t, Or.inl rfl⟩
+  | succ n => exact ⟨t, Or.inr ⟨n, rfl⟩⟩
+
+theorem ResDTy.dhead {τ : Ty} {g : Nat} {t : Ty} (h : ResDTy g t τ) : τ.dhead = some g := by
+  rcases h with rfl | ⟨n, rfl⟩
+  · rfl
+  · simp [Ty.dhead]
+
+theorem ResDTy.holdsDtor {τ : Ty} {g : Nat} {t : Ty} (h : ResDTy g t τ) : τ.holdsDtor = true := by
+  rcases h with rfl | ⟨n, rfl⟩ <;> simp [Ty.holdsDtor]
+
+theorem ResDTy.inj {τ : Ty} {g g' : Nat} {t t' : Ty} (h : ResDTy g t τ) (h' : ResDTy g' t' τ) :
+    g = g' ∧ t = t' := by
+  have key : ∀ n n' : Nat, Ty.nest n (.dtor g t) = Ty.nest n' (.dtor g' t') → g = g' ∧ t = t' := by
+    intro n; induction n with
+    | zero => intro n' e; cases n' with
+      | zero => cases e; exact ⟨rfl, rfl⟩
+      | succ n' => cases e
+    | succ n ih => intro n' e; cases n' with
+      | zero => cases e
+      | succ n' => exact ih n' (by simpa using e)
+  rcases h with rfl | ⟨n, rfl⟩ <;> rcases h' with e | ⟨n', e⟩
+  · cases e; exact ⟨rfl, rfl⟩
+  · cases e
+  · cases e
+  · exact key n n' (Ty.vec.inj e)
+
 theorem resFrame_cases (fn : Fn) (r : Var) (s : Stmt) :
     resFrame fn r s = .scope r s ∨
-      ∃ g t, fn.resOwn = true ∧ (fn.resTy = .dtor g t ∨ fn.resTy = .vec (.dtor g t)) ∧
+      ∃ g t, fn.resOwn = true ∧ ResDTy g t fn.resTy ∧
         resFrame fn r s = .scopeD r g s := by
   unfold resFrame; split
-  · exact Or.inr ⟨_, _, by assumption, Or.inl (by assumption), rfl⟩
-  · exact Or.inr ⟨_, _, by assumption, Or.inr (by assumption), rfl⟩
+  · rename_i g ho hg
+    obtain ⟨t, ht⟩ := ResDTy.of_dhead hg
+    exact Or.inr ⟨g, t, ho, ht, rfl⟩
   · exact Or.inl rfl
 
 @[simp] theorem resFrame_spine (fn : Fn) (r : Var) (s : Stmt) : (resFrame fn r s).spine = r :: s.spine := by
@@ -996,47 +1032,59 @@ theorem resFrame_cases (fn : Fn) (r : Var) (s : Stmt) :
 
 /-- A2-drop.3b: the type of a destructor frame's binding (`scopeD x f`):
     the destructor type `Ty.dtor f t` itself, or a `Vec` of such values,
-    which the frame's end drains (`Step.scopeDDrain`).  In this cut the
-    drained `Vec`'s elements hold no views. -/
+    which the frame's end drains (`Step.scopeDDrain`), or (Agora #607) a
+    `Vec` of such `Vec`s at any depth (`Ty.nest`), whose drain binds each
+    inner `Vec` by a `letd` frame of the same `f`, which drains it in turn.
+    The drained `Vec`'s elements hold no views. -/
 def ScopeDTy (f : Nat) (t τ : Ty) : Prop :=
-  τ = .dtor f t ∨ (τ = .vec (.dtor f t) ∧ t.holdsView = false)
+  τ = .dtor f t ∨ (∃ n, τ = .vec (Ty.nest n (.dtor f t)) ∧ t.holdsView = false)
 
 /-- What `letd x f r s` binds, at the type `τ`, from a value of type `a`: a
     destructor value (a `t` made here, or one of a destructor type over `t`
     moved in: that type, or another where `LetdFn` allows), or a `Vec` of
-    destructor values. -/
+    destructor values, or of such `Vec`s (Agora #607). -/
 def LetdTy (f : Nat) (t a τ : Ty) : Prop :=
-  (τ = .dtor f t ∧ (a = t ∨ ∃ g, a = .dtor g t)) ∨ (τ = .vec (.dtor f t) ∧ a = τ ∧ t.holdsView = false)
+  (τ = .dtor f t ∧ (a = t ∨ ∃ g, a = .dtor g t)) ∨
+    (∃ n, τ = .vec (Ty.nest n (.dtor f t)) ∧ a = τ ∧ t.holdsView = false)
 
 theorem LetdTy.scopeD {f : Nat} {t a τ : Ty} (h : LetdTy f t a τ) : ScopeDTy f t τ := by
-  rcases h with ⟨h, _⟩ | ⟨h, _, hv⟩
+  rcases h with ⟨h, _⟩ | ⟨n, h, _, hv⟩
   · exact Or.inl h
-  · exact Or.inr ⟨h, hv⟩
+  · exact Or.inr ⟨n, h, hv⟩
+
+/-- Agora #607: an element of a drained `Vec`, moved out to a `letd` of its
+    own frame, is bound at its own type: a destructor value, or a drained
+    `Vec` in turn. -/
+theorem LetdTy.elem {f n : Nat} {t : Ty} (hv : t.holdsView = false) :
+    LetdTy f t (Ty.nest n (.dtor f t)) (Ty.nest n (.dtor f t)) := by
+  cases n with
+  | zero => exact Or.inl ⟨rfl, Or.inr ⟨f, rfl⟩⟩
+  | succ n => exact Or.inr ⟨n, rfl, rfl, hv⟩
 
 /-- What `letd` binds is no integer: a struct or an enum, or its destructor
     type, or a `Vec`. -/
 theorem LetdTy.ne_int {f : Nat} {t a τ : Ty} (h : LetdTy f t a τ) (hst : t.isStruct = true) :
     a ≠ .int := by
-  rcases h with ⟨_, h' | ⟨g, h'⟩⟩ | ⟨h1, h', _⟩
+  rcases h with ⟨_, h' | ⟨g, h'⟩⟩ | ⟨_, h1, h', _⟩
   · rw [h']; cases t <;> simp_all [Ty.isStruct]
   · rw [h']; simp
   · rw [h', h1]; simp
 
 theorem ScopeDTy.hasFn {f : Nat} {t τ : Ty} (h : ScopeDTy f t τ) (hf : t.hasFn = false) :
     τ.hasFn = false := by
-  rcases h with rfl | ⟨rfl, _⟩ <;> simpa [Ty.hasFn] using hf
+  rcases h with rfl | ⟨_, rfl, _⟩ <;> simpa [Ty.hasFn] using hf
 
 theorem ScopeDTy.holdsView {f : Nat} {t τ : Ty} (h : ScopeDTy f t τ) : τ.holdsView = t.holdsView := by
-  rcases h with rfl | ⟨rfl, _⟩ <;> simp [Ty.holdsView]
+  rcases h with rfl | ⟨_, rfl, _⟩ <;> simp [Ty.holdsView]
 
 /-- The binding is armed exactly when its type holds views. -/
 theorem ScopeDTy.dtorViews {f : Nat} {t τ : Ty} (h : ScopeDTy f t τ) : τ.dtorViews = τ.holdsView := by
-  rcases h with rfl | ⟨rfl, hv⟩
+  rcases h with rfl | ⟨_, rfl, hv⟩
   · simp [Ty.dtorViews, Ty.holdsView]
   · simp [Ty.dtorViews, Ty.hasDtor, Ty.holdsView, hv]
 
 theorem ScopeDTy.ne_int {f : Nat} {t τ : Ty} (h : ScopeDTy f t τ) : τ ≠ .int := by
-  rcases h with rfl | ⟨rfl, _⟩ <;> simp
+  rcases h with rfl | ⟨_, rfl, _⟩ <;> simp
 
 /-- `f` is a destructor for values of type `t`: it takes one borrowed `t`,
     returns an integer and lends, holds and stores nothing. -/
@@ -1540,7 +1588,8 @@ def DtorParamsOK (P : Prog) (fn : Fn) : Prop :=
     -- `resFrame`: the result is of a destructor type itself, a struct holding
     -- one being one with its glue, or a `Vec` of such values, which the frame
     -- drains; it holds no views and no closure, so the frame is never armed)
-    ∃ g t, (fn.resTy = .dtor g t ∨ fn.resTy = .vec (.dtor g t)) ∧ t.holdsView = false ∧
+    -- (Agora #607: or a `Vec` of such `Vec`s, at any depth)
+    ∃ g t, ResDTy g t fn.resTy ∧ t.holdsView = false ∧
       t.hasFn = false ∧ DropFnOK P g t)
 
 /-- A function is well-typed when its body is, from its own view of the

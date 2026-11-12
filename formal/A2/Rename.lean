@@ -3688,7 +3688,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     -- (A2-drop.3a: a struct or an enum, or its destructor type: no integer)
     have hne : E.ty ≠ .int := hty.ne_int hstr
     have hov : τ.holdsView = E.ty.holdsView := by
-      rcases hty with ⟨rfl, h' | ⟨g, h'⟩⟩ | ⟨_, h', _⟩
+      rcases hty with ⟨rfl, h' | ⟨g, h'⟩⟩ | ⟨_, _, h', _⟩
       · rw [h']; rfl
       · rw [h']; rfl
       · rw [h']

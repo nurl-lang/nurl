@@ -300,6 +300,24 @@ def Ty.vecD : Ty → Bool
 @[simp] theorem Ty.vecD_cell (t : Ty) : (Ty.cell t).vecD = false := rfl
 @[simp] theorem Ty.vecD_dtor (f : Nat) (t : Ty) : (Ty.dtor f t).vecD = false := rfl
 
+/-- Agora #607: the types a drained `Vec`'s elements may be: a destructor
+    type, or a `Vec` of them in turn (a `Vec (Vec D)`, drained element by
+    element, each inner `Vec` by a `letd` frame of its own). -/
+def Ty.dnest : Ty → Bool
+  | .dtor _ _ => true
+  | .vec t => t.dnest
+  | _ => false
+
+/-- `n` `Vec`s around `u`: `Ty.nest 0 u = u`, `Ty.nest (n+1) u = vec (nest n u)`. -/
+def Ty.nest : Nat → Ty → Ty
+  | 0, u => u
+  | n + 1, u => .vec (Ty.nest n u)
+
+@[simp] theorem Ty.nest_zero (u : Ty) : Ty.nest 0 u = u := rfl
+@[simp] theorem Ty.nest_succ (n : Nat) (u : Ty) : Ty.nest (n + 1) u = .vec (Ty.nest n u) := rfl
+@[simp] theorem Ty.dnest_dtor (f : Nat) (t : Ty) : (Ty.dtor f t).dnest = true := rfl
+@[simp] theorem Ty.dnest_vec (t : Ty) : (Ty.vec t).dnest = t.dnest := rfl
+
 /-- A2 types: a view's element type holds no views of its own (a view of a
     container of views is left to A2, with the other aggregates that
     carry views).  (A3.1's first cut also asked it to hold no shares; A3.1's
@@ -315,8 +333,8 @@ def Ty.ok : Ty → Bool
   -- releases its elements, which runs no code and releases no destructor
   -- value: a share's payload and the environment of a closure that does not
   -- drop hold none, 3c, 3d)
-  | .vec t => t.ok && !t.vecD && (t.dtorFree || t.hasDtor)
-  | .slice t => t.ok && !t.holdsView && !t.vecD
+  | .vec t => t.ok && (t.dtorFree || t.dnest)
+  | .slice t => t.ok && !t.holdsView
   | .prod a b => a.ok && b.ok
   | .sum a b => a.ok && b.ok
   | .fn _ _ => true
@@ -358,7 +376,7 @@ theorem Ty.ok_prod {a b : Ty} (h : (Ty.prod a b).ok = true) : a.ok = true ∧ b.
 theorem Ty.ok_sum {a b : Ty} (h : (Ty.sum a b).ok = true) : a.ok = true ∧ b.ok = true := by
   simp only [Ty.ok, Bool.and_eq_true] at h; exact h
 theorem Ty.ok_slice {t : Ty} (h : (Ty.slice t).ok = true) : t.ok = true ∧ t.holdsView = false := by
-  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1
+  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h
 theorem Ty.ok_arc {t : Ty} (h : (Ty.arc t).ok = true) : t.ok = true ∧ t.holdsView = false := by
   simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1.1
 theorem Ty.ok_arc_vd {t : Ty} (h : (Ty.arc t).ok = true) : t.vecD = false := by
@@ -393,21 +411,96 @@ theorem Ty.vecD_of_dtorOr {t : Ty} (h : t.dtorFree = true ∨ t.hasDtor = true) 
   · cases t <;> simp_all [Ty.vecD, Ty.hasDtor]
 
 theorem Ty.ok_vec_elem {t : Ty} (h : (Ty.vec t).ok = true) : t.ok = true := by
-  simp only [Ty.ok, Bool.and_eq_true] at h; exact h.1.1
+  simp only [Ty.ok, Bool.and_eq_true] at h; exact h.1
 /-- A2-drop.3b's drain: a `Vec`'s elements own no destructor value, or are of
-    a destructor type (the drained `Vec`, `Ty.vecD`). -/
-theorem Ty.ok_vec_free {t : Ty} (h : (Ty.vec t).ok = true) : t.dtorFree = true ∨ t.hasDtor = true := by
+    a destructor type, or (Agora #607) are drained `Vec`s in turn
+    (`Ty.dnest`). -/
+theorem Ty.ok_vec_free {t : Ty} (h : (Ty.vec t).ok = true) : t.dtorFree = true ∨ t.dnest = true := by
   simp only [Ty.ok, Bool.and_eq_true, Bool.or_eq_true] at h; exact h.2
-theorem Ty.ok_vec_notVecD {t : Ty} (h : (Ty.vec t).ok = true) : t.vecD = false := by
-  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1.2
-/-- A `Vec` whose element type is not a destructor type has elements that
-    own none (A2-drop.3b part 1's reading). -/
-theorem Ty.ok_vec_free_of {t : Ty} (h : (Ty.vec t).ok = true) (hd : t.hasDtor = false) : t.dtorFree = true := by
+/-- A destructor type, or a `Vec` of them at any depth, owns a destructor value. -/
+theorem Ty.dtorFree_of_dnest {t : Ty} (h : t.dnest = true) : t.dtorFree = false := by
+  induction t with
+  | vec t ih => simpa [Ty.dnest, Ty.dtorFree] using ih (by simpa [Ty.dnest] using h)
+  | dtor => rfl
+  | _ => simp [Ty.dnest] at h
+/-- A `Vec` whose element type is no destructor type and no drained `Vec`
+    has elements that own none (A2-drop.3b part 1's reading). -/
+theorem Ty.ok_vec_free_of {t : Ty} (h : (Ty.vec t).ok = true) (hd : t.dnest = false) : t.dtorFree = true := by
   rcases Ty.ok_vec_free h with h' | h'
   · exact h'
   · rw [hd] at h'; cases h'
 theorem Ty.ok_vec_mk {t : Ty} (h : t.ok = true) (hf : t.dtorFree = true) : (Ty.vec t).ok = true := by
-  simp [Ty.ok, h, hf, Ty.vecD_of_dtorFree hf]
+  simp [Ty.ok, h, hf]
+/-- Agora #607: a `Vec` of drained elements is well formed. -/
+theorem Ty.ok_vec_mkD {t : Ty} (h : t.ok = true) (hd : t.dnest = true) : (Ty.vec t).ok = true := by
+  simp [Ty.ok, h, hd]
+/-- A drained element type (`Ty.dnest`) of a well-formed `Vec` is a nest of
+    `Vec`s around one destructor type. -/
+theorem Ty.dnest_shape {t : Ty} (h : t.dnest = true) : ∃ n f u, t = Ty.nest n (.dtor f u) := by
+  induction t with
+  | vec t ih =>
+    obtain ⟨n, f, u, rfl⟩ := ih (by simpa [Ty.dnest] using h)
+    exact ⟨n + 1, f, u, rfl⟩
+  | dtor f u => exact ⟨0, f, u, rfl⟩
+  | _ => simp [Ty.dnest] at h
+@[simp] theorem Ty.dnest_nest (n f : Nat) (u : Ty) : (Ty.nest n (.dtor f u)).dnest = true := by
+  induction n with
+  | zero => rfl
+  | succ n ih => simpa using ih
+@[simp] theorem Ty.holdsView_nest (n : Nat) (u : Ty) : (Ty.nest n u).holdsView = u.holdsView := by
+  induction n with
+  | zero => rfl
+  | succ n ih => simpa [Ty.holdsView] using ih
+@[simp] theorem Ty.dtorFree_nest (n : Nat) (u : Ty) : (Ty.nest n u).dtorFree = u.dtorFree := by
+  induction n with
+  | zero => rfl
+  | succ n ih => simpa using ih
+@[simp] theorem Ty.holdsDtor_nest (n : Nat) (u : Ty) : (Ty.nest n u).holdsDtor = u.holdsDtor := by
+  induction n with
+  | zero => rfl
+  | succ n ih => simpa [Ty.holdsDtor] using ih
+@[simp] theorem Ty.hasFn_nest (n : Nat) (u : Ty) : (Ty.nest n u).hasFn = u.hasFn := by
+  induction n with
+  | zero => rfl
+  | succ n ih => simpa [Ty.hasFn] using ih
+@[simp] theorem Ty.vecD_nest_succ (n f : Nat) (u : Ty) : (Ty.nest (n + 1) (.dtor f u)).vecD = true := by
+  simp [Ty.vecD]
+/-- A nest of `Vec`s around `dtor f t` that is a destructor type is that one. -/
+theorem Ty.nest_eq_dtor {n f g : Nat} {t u : Ty} (h : Ty.nest n (.dtor f t) = .dtor g u) : g = f := by
+  cases n with
+  | zero => cases h; rfl
+  | succ n => cases h
+/-- Agora #607: the destructor at the core of a destructor type or of a nest
+    of `Vec`s around one (`Ty.nest n (.dtor g t)`): what a call's result frame
+    (`resFrame`) runs or drains with. -/
+def Ty.dhead : Ty → Option Nat
+  | .dtor g _ => some g
+  | .vec t => t.dhead
+  | _ => none
+
+@[simp] theorem Ty.dhead_nest (n g : Nat) (t : Ty) : (Ty.nest n (.dtor g t)).dhead = some g := by
+  induction n with
+  | zero => rfl
+  | succ n ih => simpa [Ty.dhead] using ih
+
+theorem Ty.dhead_some {τ : Ty} {g : Nat} (h : τ.dhead = some g) : ∃ n t, τ = Ty.nest n (.dtor g t) := by
+  induction τ with
+  | vec t ih =>
+    obtain ⟨n, u, rfl⟩ := ih (by simpa [Ty.dhead] using h)
+    exact ⟨n + 1, u, rfl⟩
+  | dtor g' u => simp [Ty.dhead] at h; subst h; exact ⟨0, u, rfl⟩
+  | _ => simp [Ty.dhead] at h
+
+/-- What a well-formed nest of `Vec`s holds at its core is well formed. -/
+theorem Ty.ok_of_nest {n : Nat} {u : Ty} (h : (Ty.nest n u).ok = true) : u.ok = true := by
+  induction n with
+  | zero => exact h
+  | succ n ih => exact ih (Ty.ok_vec_elem h)
+/-- A nest of `Vec`s around a well-formed destructor type is well formed. -/
+theorem Ty.ok_nest {n f : Nat} {u : Ty} (h : (Ty.dtor f u).ok = true) : (Ty.nest n (.dtor f u)).ok = true := by
+  induction n with
+  | zero => exact h
+  | succ n ih => exact Ty.ok_vec_mkD ih (Ty.dnest_nest n f u)
 
 /-- A2-drop.3a: the type under a destructor is well formed when the
     destructor type is. -/
