@@ -431,6 +431,11 @@ def popE (y : Var) (E : Entry) : Ty → Entry
   | .dtor f t => ⟨.dtor f t, .own, true, [], E.held, false, false⟩
   | t => elemE y E t
 
+/-- Agora #607: what moves out of a drained `Vec` is owned, at its own type. -/
+@[simp] theorem popE_nest (y : Var) (E : Entry) (n f : Nat) (t : Ty) :
+    popE y E (Ty.nest n (.dtor f t)) = ⟨Ty.nest n (.dtor f t), .own, true, [], E.held, false, false⟩ := by
+  cases n <;> rfl
+
 /-- What a field of the struct `y` (entry `E`) lends: what is inside an
     owned struct depends on its owner, what is inside a borrowed one on
     what that borrows. -/

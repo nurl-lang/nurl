@@ -395,7 +395,7 @@ theorem RhsOut.retypeL {m1 : Mem} {Γ1 : Ctx} {E : Entry} {v : Val} {o : Bool}
     (h : RhsOut m1 Γ1 E v o) (hmo : E.mode = .own) {f : Nat} {t τ : Ty}
     (hty : LetdTy f t E.ty τ) (hst : t.isStruct = true) :
     RhsOut m1 Γ1 { E with ty := τ } v o := by
-  rcases hty with ⟨rfl, hty⟩ | ⟨hτ, he, _⟩
+  rcases hty with ⟨rfl, hty⟩ | ⟨_, _, he, _⟩
   · exact h.retype hmo hty hst
   · rw [← he]; exact h
 
@@ -1373,7 +1373,7 @@ theorem out_view {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t 
   live := rfl
   tyok := by
     have := hi.tyok hy; rw [hty] at this
-    simp [Ty.ok, hhv, Ty.ok_vec_elem this, Ty.ok_vec_notVecD this]
+    simp [Ty.ok, hhv, Ty.ok_vec_elem this]
   wf hn' := by
     rw [bor_vdeps _ rfl]
     have hnint : E.ty ≠ .int := by rw [hty]; simp

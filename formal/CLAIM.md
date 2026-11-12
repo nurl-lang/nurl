@@ -789,13 +789,14 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   glue hands the field to a `letd` at the `Vec`'s own type, whose frame
   drains it (`A2.DtorWitness.main9_safe`: a `Vec` of destructor values
   moved into a struct, the struct's glue a function of the program
-  checked by `FnOK`). It is refused as an element (a `Vec` of `Vec`s of
-  them), a view's element, a share's, a lock's or a cell's payload (each
-  of these asks `!vecD` of its part; a lock's or a cell's payload owns no
-  destructor value at all, an `Arc`'s is one at its top or owns none, 3d
-  below); every `Vec` in a binding's type has elements
-  that own no destructor value or are of a destructor type
-  (`A2.Dtor.vecs_dtor_free`). Its binder
+  checked by `FnOK`), and (Agora #607) as another such `Vec`'s element, at
+  any depth (`Ty.nest`, `Ty.dnest`; witness `A2.DtorWitness.main11_safe`),
+  and a view's element (a view owns nothing). It is refused as a share's,
+  a lock's or a cell's payload (each of these asks `!vecD` of its part; a
+  lock's or a cell's payload owns no destructor value at all, an `Arc`'s is
+  one at its top or owns none, 3d below); every `Vec` in a binding's type
+  has elements that own no destructor value or are of a destructor type or
+  such `Vec`s in turn (`A2.Dtor.vecs_dtor_free`). Its binder
   is `letd x f r s`,
   with `f` the elements' destructor and `u` holding no views (`LetdTy`;
   `letv` refuses the type, it holds a destructor value), so a call's
@@ -808,11 +809,12 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   run-time form: what `x` owns at the frame's end says which frame it is,
   a struct or an enum (the destructor runs on it) or a `Vec`'s node (the
   drain, above). Elements go in by `vec_push` and out by `vec_pop` /
-  `vec_remove x 0`, each popped one an owned destructor value, handed to a
+  `vec_remove x 0`, each popped one an owned destructor value (or, Agora
+  #607, an owned `Vec` of them in a `Vec (Vec D)`), handed to a
   `letd` of its own. `memory_safe`, `no_leak_end` and `no_leak_panic` cover
   the drain's steps. Every `Vec` in a binding's type has elements that
-  own no destructor value or are of a destructor type
-  (`A2.Dtor.vecs_dtor_free`, `vec_elems_dtor_free`, `new_dtor_free`), and
+  own no destructor value or are of a destructor type or drained `Vec`s
+  in turn (`Ty.dnest`; `A2.Dtor.vecs_dtor_free`, `vec_elems_dtor_free`, `new_dtor_free`), and
   the rules that release elements with no code ask the first of their
   own `Vec` (`free`, a truncation, an element set and `withElem` ask
   `dtorFree`), so they release or check out no destructor value; a
@@ -977,7 +979,8 @@ The rules are stricter than nurlc's in these places:
   one with `letd`. A function's owned result of such a type is set at
   most once on any path, and is of a destructor type itself that holds no
   views and no closure (its frame runs the destructor on a panic in the
-  callee), or a `Vec` of such values: nurlc also returns a plain struct,
+  callee), or a `Vec` of such values, or of such `Vec`s at any depth
+  (Agora #607, `ResDTy`): nurlc also returns a plain struct,
   enum or option that holds a `% Drop` value, and a `% Drop` value that
   holds views; here a struct or an enum holding one is its own destructor
   type, with its glue.
@@ -989,20 +992,28 @@ The rules are stricter than nurlc's in these places:
   taken apart by hand (`unpair`): that would skip its impl.
 - for a `Vec` of destructor values (A2-drop.3b), which is typed as a
   binding's own type, drained at the binding's end, or as a struct's field
-  or an enum's payload, drained by the `letd` the glue hands it to (above). nurlc types the
+  or an enum's payload, drained by the `letd` the glue hands it to (above),
+  or (Agora #607) as another such `Vec`'s element, at any depth (`Vec (Vec
+  D)`, `Ty.nest`): the drain moves each inner `Vec` out to a `letd` of the
+  same destructor, whose frame drains it in turn (read off the steps; the
+  witness `A2.DtorWitness.main11_safe` / `main11_no_leak` types such a
+  program and applies `memory_safe` and `no_leak_end`, it does not trace
+  the run). nurlc types the
   rest too, and drops a `Vec`'s elements wherever the `Vec` is dropped, in
   index order, each running its destructor. Refused here:
   - elements that hold views (a `Vec` of `% Drop` structs with a view
     field): a binding that runs a destructor gains no view (the first item
     of this list), so nothing could be pushed into it;
-  - the `Vec` as an element or a shared payload: a `Vec (Vec D)`, a
-    channel of `D` (`Channel s` is a lock of its queue, a `Vec s`, and its
-    closed flag), `Locked (Vec D)`, `Arc (Vec D)`, a cell of a `Vec D`. A
-    `Vec`'s drain binds each element at a destructor type, which a `Vec`
-    is not, and a block's payload is swept with no code. (A struct or an
-    enum with a `Vec D` field or payload is typed, Agora #607.)
+  - the `Vec` as a shared payload: a channel of `D` (`Channel s` is a lock
+    of its queue, a `Vec s`, and its closed flag), `Locked (Vec D)`, `Arc
+    (Vec D)`, a cell of a `Vec D`. A block's payload is swept with no code
+    (Agora #544).
   Not refused: the in-place drops. (`vec_free`, `vec_clear`,
-    `vec_truncate` and `vec_set` of such a `Vec`, and handing an element to
+    `vec_truncate` and `vec_set` of such a `Vec` — the lemmas below are
+    stated for a `Vec` of destructor values, `.vec (.dtor f t)`; for a
+    `Vec (Vec D)` the same code is typed by the same rules, `letd` binding
+    each moved-out inner `Vec` at its own type, with no lemma stated —
+    and handing an element to
     a callee that changes it (`withElem`), are code the calculus types,
     each element's destructor running:
     `x` moved into a destructor binding that ends at once, whose frame

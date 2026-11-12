@@ -149,7 +149,8 @@ A2-drop.3b; A2-drop.3a's rule looked one level down only).
   result stops at the frame, which runs `g` on it (`Step.scopeDP`); on the
   normal path the result has moved to the caller's binding
   (`Step.scopeDMoved`). `FnOK` asks an owned result that holds a destructor
-  value to be of a destructor type itself, or a `Vec` of such values, with
+  value to be of a destructor type itself, or a `Vec` of such values, or
+  (Agora #607, `ResDTy`) of such `Vec`s at any depth, with
   no views and no closure, whose function is a `DtorOK` destructor. The frame's typing
   (`CallH.typedIn_of`) types the call's inside against the call's final
   context with the moved-out result slot added, whose well-formedness is
@@ -159,13 +160,13 @@ A2-drop.3b; A2-drop.3a's rule looked one level down only).
 
 Refused rather than released since A2-drop.3b (stricter than nurlc, which
 types them and drops a `Vec`'s elements in index order, each running its
-destructor): a `Vec` of destructor values as an element or a shared payload
-(`Ty.ok`): a `Vec (Vec D)`, a channel of `D` (its queue is a `Vec`),
+destructor): a `Vec` of destructor values as a shared payload
+(`Ty.ok`): a channel of `D` (its queue is a `Vec`),
 `Locked (Vec D)`, `Arc (Vec D)`, a cell of a `Vec D` (a struct's field or
 an enum's payload is typed since Agora #607: glue hands it to a `letd`,
-which drains it); one whose elements hold views
-(`LetdTy`); and `vec_set` over an element and `withElem` (`vec_free`,
-`vec_clear` and `vec_truncate` are typed code, `A2/DropCode.lean`). And, since A2-drop.3c and 3d: a share whose payload owns a destructor
+which drains it; and so is a `Vec (Vec D)`, at any depth, below); one whose elements hold views
+(`LetdTy`) (`vec_free`, `vec_clear`, `vec_truncate`, `vec_set` over an
+element and `withElem` are typed code, `A2/DropCode.lean`). And, since A2-drop.3c and 3d: a share whose payload owns a destructor
 value (`Ty.ok`), and a trait object whose box holds one (a closure whose
 environment holds one is of the class `dropd`, dropped by its glue, Agora #609). The result moved from its slot into a local
 before a panic (`pair res w`, a destructor value two levels down) is a
@@ -641,6 +642,8 @@ each one shrinks `CLAIM.md`'s exception:
         which hands the field to a `letd` at the `Vec`'s own type
         (`LetdTy`'s second case), and that frame drains it;
         and a channel's queue is swept with its block, running no code (3d).
+        A view's element and a `Vec`'s element are lifted too (Agora #607,
+        *Built* below: a `Vec (Vec D)`).
      2. *`withElem` of a `Vec D`'s element.* Refused: the check-out is an
         owned binding of a destructor type that is no `letd`'s, so
         `StmtT.withElem` asks its element type `dtorFree`
@@ -687,18 +690,30 @@ each one shrinks `CLAIM.md`'s exception:
      (`StmtT.free` and `StmtT.editB` / `editBV` ask `dtorFree` of the
      elements they drop, `Edit.drops`; `A2.Dtor.free_dtor_free`,
      `edit_drops_dtor_free`). A program pops the elements into `letd`s
-     (`pop` and `remove` give an owned `.dtor f u`, which `movedFirst`
+     (`pop` and `remove` give an owned `.dtor f u`, or since Agora #607
+     an owned inner `Vec` of a `Vec (Vec D)`, which `movedFirst`
      hands to a `letd`), or lets the binding end; `vec_free`,
      `vec_clear` and `vec_truncate` are such code (`A2/DropCode.lean`).
    - **Left** (stricter than nurlc; `CLAIM.md` lists them):
      - *elements that hold views.* A2-drop.2's rule (a binding that runs a
        destructor gains no view) would let nothing be pushed into such a
        `Vec`; it needs the age order nurlc's finer rule has.
-     - *a `Vec D` as an element or a block's payload* (a `Vec` of them, a
-       channel, a lock, an `Arc`, a cell). A field or a payload is built
-       (Agora #607, above); a `Vec` of `Vec D`s needs the drain to bind an
-       element at a `Vec` type; a block's payload is 3d's.
-     - **Built** (Agora #607, `A2/DropCode.lean`): the in-place drops
+     - *a `Vec D` as a block's payload* (a channel, a lock, an `Arc`, a
+       cell): 3d's (Agora #544).
+   - **Built** (Agora #607): *a `Vec D` as an element*, at any depth. The
+     drained type is `vec (Ty.nest n (dtor f u))` (`ScopeDTy`, `LetdTy`;
+     `Ty.ok` admits a `Vec` whose elements are `Ty.dnest`: a destructor
+     type or such a `Vec` in turn). No new step: `Step.scopeDDrain` already
+     moves element 0 out to `letd nv f (vec_remove x 0)`, which binds an
+     inner `Vec` at its own type (`LetdTy.elem`), whose frame drains it
+     with the same `f`; the drain's preservation case is the old one at
+     the element type `Ty.nest n (dtor f u)`. A call's owned result may be
+     one too (`ResDTy`, `resFrame` reads the destructor at the nest's core,
+     `Ty.dhead`). A view of such a `Vec` is a slice of `Vec D`s
+     (`Ty.ok (slice t)` no longer asks `!t.vecD`): it owns nothing, and
+     every in-place drop through a borrow asks `dtorFree` of what it drops.
+     Witness: `A2.DtorWitness.main11_safe` / `main11_no_leak`.
+   - **Built** (Agora #607, `A2/DropCode.lean`): the in-place drops
        need no new step, they are code the calculus types: `withElem v i
        x s` of a destructor element is `letd x f (vec_remove v i) (s ;
        insert v i x)` (`withElemD_typed`, witness `mainElem_safe`): the

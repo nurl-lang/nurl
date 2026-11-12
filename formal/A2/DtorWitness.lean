@@ -265,7 +265,7 @@ theorem fnOK_dtor_params {P : Prog} {fn : Fn} (h : FnOK P fn) :
     (∀ i (hi : i < fn.params.length) b, fn.params[i].1 = .inout b → fn.params[i].2.holdsDtor = true →
       i ∉ fn.body.assigns) ∧
     (fn.resOwn = true → fn.resTy.holdsDtor = true → fn.body.asgMax fn.params.length ≤ 1 ∧
-      ∃ g t, (fn.resTy = .dtor g t ∨ fn.resTy = .vec (.dtor g t)) ∧ t.holdsView = false ∧
+      ∃ g t, ResDTy g t fn.resTy ∧ t.holdsView = false ∧
         t.hasFn = false ∧ DropFnOK P g t) :=
   h.2.2.2.2.2.2.2.2.2.2.2.1
 
@@ -274,12 +274,13 @@ theorem fnOK_dtor_params {P : Prog} {fn : Fn} (h : FnOK P fn) :
     inside is `scopeD r g …` on the result slot `r`, with `g` the result
     type's destructor (the shape of `callIn`; what the frame then does is
     `scopeD_panic_runs_dtor` / `scopeD_panic_drains` for a slot that owns,
-    and `Step.scopeDMoved` once the result has moved to the caller). -/
+    and `Step.scopeDMoved` once the result has moved to the caller).  Agora
+    #607: so does one that is a `Vec` of such `Vec`s, at any depth. -/
 theorem result_frame_is_scopeD (fn : Fn) (args : List Var) (base : Nat) (x : Var) {g : Nat} {t : Ty}
-    (ho : fn.resOwn = true) (hty : fn.resTy = .dtor g t ∨ fn.resTy = .vec (.dtor g t)) :
+    (ho : fn.resOwn = true) (hty : ResDTy g t fn.resTy) :
     ∃ s, callIn fn args base x = .scopeD (base + fn.params.length) g s := by
   have hf : ∀ r s, resFrame fn r s = .scopeD r g s := fun r s => by
-    unfold resFrame; rcases hty with h | h <;> rw [ho, h]
+    unfold resFrame; rw [ho, hty.dhead]
   exact ⟨_, hf _ _⟩
 
 /-- **The scope end of a destructor frame runs the destructor.** In a typed
@@ -508,26 +509,28 @@ theorem scopeD_typed {P : Prog} {Γ Δ : Ctx} {F : List Var} {x : Var} {f : Nat}
     no node is of the destructor type `Ty.dtor f t` (`scopeD_end_runs_dtor`'s
     step runs `f`, a destructor of that type, on it), and a node is a `Vec`
     of such values, whose elements are of that type (`scopeD_end_drains` /
-    `scopeD_end_empty`'s steps drain it). -/
+    `scopeD_end_empty`'s steps drain it), or (Agora #607, `n > 0`) of such
+    `Vec`s, each of which the drain binds by a frame of the same `f`. -/
 theorem scopeD_frame_value {P : Prog} {Γ Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {s : Stmt}
     {m : Mem} {v : Val} (ht : StmtT P Γ F (.scopeD x f s) Δ) (hi : MInv m Γ)
     (hx : m.st x = some ⟨true, some v⟩) :
     ∃ (E : Entry) (t : Ty), Γ x = some E ∧ DropFnOK P f t ∧
       ((v.isNode = false ∧ E.ty = .dtor f t) ∨
-        (∃ c d es, v = .node (.dtor f t) c d es ∧ E.ty = .vec (.dtor f t) ∧
-          ∀ e ∈ es, WFv (.dtor f t) e ∧ e.isNode = false)) := by
+        (∃ n c d es, v = .node (Ty.nest n (.dtor f t)) c d es ∧ E.ty = .vec (Ty.nest n (.dtor f t)) ∧
+          ∀ e ∈ es, WFv (Ty.nest n (.dtor f t)) e ∧ (n = 0 → e.isNode = false))) := by
   obtain ⟨E, t, hE, hmo, hty, hok, hstr⟩ := scopeD_typed ht
   have hw := hi.own_wfv hE (by rw [hmo]; rfl) hx
   refine ⟨E, t, hE, hok, ?_⟩
-  rcases hty.shape hstr hw with ⟨hn, he⟩ | ⟨c, d, es, hv, he, _⟩
+  rcases hty.shape hstr hw with ⟨hn, he⟩ | ⟨n, c, d, es, hv, he, _⟩
   · exact Or.inl ⟨hn, he⟩
-  · refine Or.inr ⟨c, d, es, hv, he, fun e hmem => ?_⟩
+  · refine Or.inr ⟨n, c, d, es, hv, he, fun e hmem => ?_⟩
     rw [he, hv] at hw
     cases hw with
     | node hes =>
       have hwe := hes e hmem
-      refine ⟨hwe, ?_⟩
-      rcases (ScopeDTy.shape (f := f) (t := t) (Or.inl rfl) hstr hwe) with ⟨hn, _⟩ | ⟨_, _, _, _, h', _⟩
+      refine ⟨hwe, fun hn0 => ?_⟩
+      subst hn0
+      rcases (ScopeDTy.shape (f := f) (t := t) (Or.inl rfl) hstr hwe) with ⟨hn, _⟩ | ⟨_, _, _, _, _, h', _⟩
       · exact hn
       · cases h'
 
@@ -797,14 +800,14 @@ theorem share_new_dtor_free {Γ Γ1 : Ctx} {F : List Var} {t : Ty} {y : Var} {E 
 
 /-- A2-drop.3b: in a running configuration, a binding whose type is a `Vec`
     has elements that own no destructor value, or are of a destructor type
-    themselves: the drained `Vec` (`Ty.vecD`), which a binding's own type
+    themselves, or (Agora #607) drained `Vec`s in turn (`Ty.dnest`): the drained `Vec` (`Ty.vecD`), which a binding's own type
     may be, or (Agora #607) a struct's field or an enum's payload, which glue
     hands to a `letd` (`vecs_dtor_free`).  A `Vec` of the second kind is `letd`'s (`letv` refuses it), and
     its frame's end drains it (`scopeD_end_drains`); what any other `Vec`'s
     drop releases holds no destructor value: no environment of a closure
     that does not drop does (`pkgs_env_dtor_free`) and no block's payload (`blocks_dtor_free`). -/
 theorem vec_elems_dtor_free {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {E : Entry} {t : Ty}
-    (hx : Γ x = some E) (ht : E.ty = .vec t) : t.dtorFree = true ∨ t.hasDtor = true := by
+    (hx : Γ x = some E) (ht : E.ty = .vec t) : t.dtorFree = true ∨ t.dnest = true := by
   have h := hi.tyok hx; rw [ht] at h; exact Ty.ok_vec_free h
 
 /-- The element types of the `Vec`s that occur in a type, at any depth:
@@ -822,9 +825,10 @@ def vecElems : Ty → List Ty
   | .fn _ _ => []
 
 /-- Every `Vec` in a well-formed type has elements that own no destructor
-    value, or are of a destructor type themselves (a drained `Vec`). -/
+    value, or are of a destructor type themselves, or `Vec`s of them in turn (a
+    drained `Vec`, `Ty.dnest`). -/
 theorem ok_vecElems {t : Ty} (h : t.ok = true) :
-    ∀ u ∈ vecElems t, u.dtorFree = true ∨ u.hasDtor = true := by
+    ∀ u ∈ vecElems t, u.dtorFree = true ∨ u.dnest = true := by
   induction t with
   | int => simp [vecElems]
   | fn _ _ => simp [vecElems]
@@ -834,7 +838,7 @@ theorem ok_vecElems {t : Ty} (h : t.ok = true) :
     · exact Ty.ok_vec_free h
     · exact ih (Ty.ok_vec_elem h) u hu
   | slice t ih =>
-    simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; simpa only [vecElems] using ih h.1.1
+    simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; simpa only [vecElems] using ih h.1
   | arc t ih =>
     simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; simpa only [vecElems] using ih h.1.1.1
   | lk t ih =>
@@ -859,20 +863,21 @@ theorem ok_vecElems {t : Ty} (h : t.ok = true) :
 
 /-- A2-drop.3b, the deep form: in a running configuration, every `Vec`
     occurring anywhere in a binding's type has elements free of destructor
-    values, or of a destructor type: a drained `Vec`.  (Agora #607: a
+    values, or of a destructor type, or `Vec`s of them in turn: a drained `Vec`.  (Agora #607: a
     drained `Vec` is a binding's own type, a struct's field or an enum's
     payload, which the struct's or the enum's glue hands to a `letd`, or an
     element type's field in turn; a share's, a lock's or a cell's payload
     holds none: `Ty.ok` asks `dtorFree` there, `ok_payloads_free`.  A view's
     element type may name one inside a struct; a view owns nothing.) -/
 theorem vecs_dtor_free {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {E : Entry}
-    (hx : Γ x = some E) : ∀ u ∈ vecElems E.ty, u.dtorFree = true ∨ u.hasDtor = true :=
+    (hx : Γ x = some E) : ∀ u ∈ vecElems E.ty, u.dtorFree = true ∨ u.dnest = true :=
   ok_vecElems (hi.tyok hx)
 
 /-- A2-drop.3b: `vec_new` makes a `Vec` whose elements own no destructor
-    value, or a drained one, of a destructor type's elements. -/
+    value, or a drained one, of a destructor type's elements or (Agora #607)
+    of drained `Vec`s. -/
 theorem new_dtor_free {Γ Γ1 : Ctx} {F : List Var} {t : Ty} {E : Entry}
-    (h : RhsT Γ F (.new t) E Γ1) : t.dtorFree = true ∨ t.hasDtor = true := by
+    (h : RhsT Γ F (.new t) E Γ1) : t.dtorFree = true ∨ t.dnest = true := by
   cases h with | new h => exact Ty.ok_vec_free h
 
 /-- A2-drop.3b: `Ty.holdsDtor` is deep, unfolded: a struct or an enum one
@@ -1353,7 +1358,7 @@ theorem glueV_body : ∃ Δ, StmtT P (sigCtx glueV) [] glueV.body Δ ∧
   have hlet := StmtT.letd (P := P) (Γ := Ka) (Γ1 := Kb) (F := []) (x := 4) (f := 0) (r := .var 2)
     (s := .assign 1 (.expr (.lit 0))) (t := T) (H := (compE EGV (.vec DT)).held) (τ := .vec DT) rfl
     (by simp [Ka, A2.setE, upd, A2.kill, sigCtx, glueV]) (by simp) hmv rfl
-    (Or.inr ⟨rfl, by rw [hEx], rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hasg (hKd.endOK _)
+    (Or.inr ⟨0, rfl, by rw [hEx], rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hasg (hKd.endOK _)
     (by simp [Stmt.assigns])
   have hun := StmtT.unpair (P := P) (Γ := sigCtx glueV) (F := []) (y := 0) (x := 2) (z := 3)
     (s := .letd 4 0 (.var 2) (.assign 1 (.expr (.lit 0)))) (E := EGV) (a := .vec DT) (b := .int)
@@ -2064,7 +2069,7 @@ theorem main5_typed : ∃ Δ, StmtT P (fun _ => none) [] main5 Δ := by
     (hK5.kill _ _ _).setE (by rw [hEVe]; simp)
   have hdv := StmtT.letd (P := P) (Γ := K3) (Γ1 := K3) (F := []) (x := 3) (f := 0) (r := .new DT)
     (s := .push 3 2) (E := EN) (t := T) (H := []) (τ := .vec DT) rfl (by simp [K3, K2, K1, A2.setE, upd])
-    (by simp) hnew rfl (Or.inr ⟨rfl, rfl, rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hpush (hK6.endOK _)
+    (by simp) hnew rfl (Or.inr ⟨0, rfl, rfl, rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hpush (hK6.endOK _)
   have hd := StmtT.letd (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .pair 0 1)
     (s := .letd 3 0 (.new DT) (.push 3 2)) (E := EP) (t := T) (H := []) rfl (by simp [K2, K1, A2.setE, upd])
     (by simp) hpair rfl (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hdv
@@ -2089,6 +2094,119 @@ theorem main5_letv_refused {Γ Δ : Ctx} {F : List Var} {x : Var} {s : Stmt} :
   obtain ⟨Γ0, E, Γ1, hr, hnd⟩ := A2.Dtor.letv_owned_no_dtor h
   cases hr with
   | new _ => exact absurd (hnd rfl) (by decide)
+
+/-! ### A `Vec` of `Vec`s of destructor values (Agora #607)
+
+`: a 1  : b 2  :drop x ( pair a b )  :drop v ( vec_new DT )  ( vec_push v x )
+ :drop w ( vec_new ( Vec DT ) )  ( vec_push w v )`: the inner `Vec` moves into
+the outer one, bound by `letd` at `vec (vec DT)`. Its frame's end takes the
+inner `Vec` out to a `letd` of the same destructor (`Step.scopeDDrain`), whose
+frame drains it in turn, each element's destructor running in its own frame. -/
+
+def main11 : Stmt :=
+  .letv 0 (.expr (.lit 1)) (.letv 1 (.expr (.lit 2))
+    (.letd 2 0 (.pair 0 1) (.letd 3 0 (.new DT)
+      (.seq (.push 3 2) (.letd 4 0 (.new (.vec DT)) (.push 4 3))))))
+
+theorem main11_typed : ∃ Δ, StmtT P (fun _ => none) [] main11 Δ := by
+  let K1 : Ctx := A2.setE (fun _ => none) 0 intE
+  let K2 : Ctx := A2.setE K1 1 intE
+  have hK1 : NoRootb K1 := noRootb_empty.setE (by simp [intE])
+  have hK2 : NoRootb K2 := hK1.setE (by simp [intE])
+  let ED : Entry := Entry.arm { EP with ty := DT, held := [] }
+  have hEDe : ED = ⟨DT, .own, true, [], [], false, false⟩ := by
+    simp [ED, EP, Entry.arm, DT, T, Ty.dtorViews, Ty.hasDtor, Ty.holdsView]
+  let K3 : Ctx := A2.setE K2 2 ED
+  have hK3 : NoRootb K3 := hK2.setE (by rw [hEDe]; simp)
+  have hpair : RhsT K2 [] (.pair 0 1) EP K2 :=
+    RhsT.pair (Ey := intE) (Ez := intE) (by simp [K2, K1, A2.setE, upd]) rfl PushArg.int
+      (by simp [K2, K1, A2.setE, upd]) rfl PushArg.int (by simp [intE, Mode.ownSlot])
+  -- the inner `Vec`, as in `main5`
+  let EN : Entry := ⟨.vec DT, .own, true, [], [], false, false⟩
+  have hnew : RhsT K3 [] (.new DT) EN K3 := RhsT.new (by decide)
+  let EV : Entry := Entry.arm { EN with ty := .vec DT, held := [] }
+  have hEVe : EV = ⟨.vec DT, .own, true, [], [], false, false⟩ := by
+    simp [EV, EN, Entry.arm, DT, T, Ty.dtorViews, Ty.hasDtor]
+  let K4 : Ctx := A2.setE K3 3 EV
+  have hK4 : NoRootb K4 := hK3.setE (by rw [hEVe]; simp)
+  let K5 : Ctx := A2.setE (kill .replace false 2 K4) 2 { ED with live := false, dtor := false }
+  have hK5 : NoRootb K5 := (hK4.kill _ _ _).setE (by rw [hEDe]; simp)
+  have hmove : PushArg K4 [] 2 ED DT ED.held K5 :=
+    PushArg.move (Γ := K4) (F := []) (y := 2) (E := ED) (t := DT) rfl (by rw [hEDe]) (by simp)
+      (hK4.noPin _) (DtorSafe.of_none (fun v E h => (hK4 v E h).2.1) _ _ _)
+  have hK53 : K5 3 = some EV := by
+    simp [K5, K4, A2.setE, upd, A2.kill, killE, hits, hEVe, Entry.vdeps, Mode.ownSlot]
+  have hpush := StmtT.push (P := P) (Γ := K4) (Γ1 := K5) (F := []) (x := 3) (y := 2) (Ex := EV) (Ey := ED)
+    (Ex1 := EV) (t := DT) (D := ED.held) (by simp [K4, A2.setE, upd]) (by rw [hEVe]) (by rw [hEVe])
+    (Or.inl (by rw [hEVe])) (by simp) (by simp [K4, K3, A2.setE, upd]) (by rw [hEDe]) (by rw [hEDe])
+    (by decide) hmove (by rw [hEDe]; simp [roots]) hK53 (by rw [hEVe])
+    (DtorSafe.of_none (fun v E h => (hK5 v E h).2.1) _ _ _) (by rw [hEVe]; simp)
+  let E3 : Entry := { EV with held := EV.held ++ ownHeld true DT ED.held }
+  have hE3e : E3 = ⟨.vec DT, .own, true, [], [], false, false⟩ := by
+    simp [E3, hEVe, hEDe, ownHeld]
+  let K6 : Ctx := A2.setE (kill .realloc DT.holdsView 3 K5) 3 E3
+  have hK6 : NoRootb K6 := (hK5.kill _ _ _).setE (by rw [hE3e]; simp)
+  -- the outer `Vec`, bound by `letd` at `vec (vec DT)`
+  let EN2 : Entry := ⟨.vec (.vec DT), .own, true, [], [], false, false⟩
+  have hnew2 : RhsT K6 [] (.new (.vec DT)) EN2 K6 := RhsT.new (by decide)
+  let EW : Entry := Entry.arm { EN2 with ty := .vec (.vec DT), held := [] }
+  have hEWe : EW = ⟨.vec (.vec DT), .own, true, [], [], false, false⟩ := by
+    simp [EW, EN2, Entry.arm, DT, T, Ty.dtorViews, Ty.hasDtor]
+  let K7 : Ctx := A2.setE K6 4 EW
+  have hK7 : NoRootb K7 := hK6.setE (by rw [hEWe]; simp)
+  -- the inner `Vec` moves into it
+  let K8 : Ctx := A2.setE (kill .replace false 3 K7) 3 { E3 with live := false, dtor := false }
+  have hK8 : NoRootb K8 := (hK7.kill _ _ _).setE (by rw [hE3e]; simp)
+  have hmove2 : PushArg K7 [] 3 E3 (.vec DT) E3.held K8 :=
+    PushArg.move (Γ := K7) (F := []) (y := 3) (E := E3) (t := .vec DT) rfl (by rw [hE3e]) (by simp)
+      (hK7.noPin _) (DtorSafe.of_none (fun v E h => (hK7 v E h).2.1) _ _ _)
+  have hK84 : K8 4 = some EW := by
+    simp [K8, K7, A2.setE, upd, A2.kill, killE, hits, hEWe, Entry.vdeps, Mode.ownSlot]
+  have hpush2 := StmtT.push (P := P) (Γ := K7) (Γ1 := K8) (F := []) (x := 4) (y := 3) (Ex := EW) (Ey := E3)
+    (Ex1 := EW) (t := .vec DT) (D := E3.held) (by simp [K7, A2.setE, upd]) (by rw [hEWe]) (by rw [hEWe])
+    (Or.inl (by rw [hEWe])) (by simp) (by simp [K7, K6, A2.setE, upd]) (by rw [hE3e]) (by rw [hE3e])
+    (by decide) hmove2 (by rw [hE3e]; simp [roots]) hK84 (by rw [hEWe])
+    (DtorSafe.of_none (fun v E h => (hK8 v E h).2.1) _ _ _) (by rw [hEWe]; simp)
+  have hK9 : NoRootb (A2.setE (kill .realloc (Ty.vec DT).holdsView 4 K8) 4
+      { EW with held := EW.held ++ ownHeld true (.vec DT) E3.held }) :=
+    (hK8.kill _ _ _).setE (by rw [hEWe]; simp)
+  have hdw := StmtT.letd (P := P) (Γ := K6) (Γ1 := K6) (F := []) (x := 4) (f := 0) (r := .new (.vec DT))
+    (s := .push 4 3) (E := EN2) (t := T) (H := []) (τ := .vec (.vec DT)) rfl
+    (by simp [K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill])
+    (by simp) hnew2 rfl (Or.inr ⟨1, rfl, rfl, rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hpush2
+    (hK9.endOK _)
+  have hseq := StmtT.seq (P := P) rfl hpush hdw
+  have hdv := StmtT.letd (P := P) (Γ := K3) (Γ1 := K3) (F := []) (x := 3) (f := 0) (r := .new DT)
+    (s := .seq (.push 3 2) (.letd 4 0 (.new (.vec DT)) (.push 4 3))) (E := EN) (t := T) (H := [])
+    (τ := .vec DT) rfl (by simp [K3, K2, K1, A2.setE, upd])
+    (by simp) hnew rfl (Or.inr ⟨0, rfl, rfl, rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hseq
+    ((hK9.exitScope 4).endOK _)
+  have hd := StmtT.letd (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .pair 0 1)
+    (s := .letd 3 0 (.new DT) (.seq (.push 3 2) (.letd 4 0 (.new (.vec DT)) (.push 4 3)))) (E := EP) (t := T)
+    (H := []) rfl (by simp [K2, K1, A2.setE, upd])
+    (by simp) hpair rfl (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hdv
+    (((hK9.exitScope 4).exitScope 3).endOK _)
+  have h1 := StmtT.letv (P := P) (x := 1) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K1) (Γ1 := K1)
+    rfl (by simp [K1, A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit) hd
+    ((((hK9.exitScope 4).exitScope 3).exitScope 2).endOK _)
+  exact ⟨_, StmtT.letv (P := P) (x := 0) (r := .expr (.lit 1)) (E := intE) (F := []) (Γ := fun _ => none)
+    (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.expr ExprT.lit) h1
+    (((((hK9.exitScope 4).exitScope 3).exitScope 2).exitScope 1).endOK _)⟩
+
+/-- The program with a `Vec` of `Vec`s of destructor values is memory safe. -/
+theorem main11_safe {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem 5) main11 (.ok m' s')) :
+    ¬ Stuck P m' s' := by
+  obtain ⟨Δ, ht⟩ := main11_typed
+  exact memory_safe prog_ok prog_codes ht rfl (by simp [main11, Stmt.codesOK, Rhs.codeOK]) (by decide) hr
+
+/-- ... and leaks nothing when it ends (`no_leak_end`: nothing is left
+    allocated).  That the drain runs each element's destructor, the inner
+    `Vec`'s by a frame of its own, is read off the steps, as for `main5`:
+    the theorem does not trace the run. -/
+theorem main11_no_leak {m' : Mem} (hr : Steps P (emptyMem 5) main11 (.ok m' .skip)) :
+    ∀ i, m'.alloc i = false := by
+  obtain ⟨Δ, ht⟩ := main11_typed
+  exact no_leak_end prog_ok prog_codes ht rfl (by simp [main11, Stmt.codesOK, Rhs.codeOK]) (by decide) hr
 
 /-! ### A struct with a destructor field, dropped by its glue (Agora #616)
 

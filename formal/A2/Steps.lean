@@ -1195,7 +1195,7 @@ theorem chan_tyok {s : Ty} (h : (Ty.lk (.prod (.vec s) .int)).ok = true) :
   exact ⟨by simp_all, by simp_all⟩
 
 theorem chan_vd {s : Ty} (h : (Ty.lk (.prod (.vec s) .int)).ok = true) : s.vecD = false :=
-  Ty.ok_vec_notVecD (Ty.ok_prod (Ty.ok_lk h).1).1
+  Ty.vecD_of_dtorFree (by simpa using Ty.ok_lk_free h)
 
 /-- An owned value of a type that holds no view, whose shares name blocks
     (A3.2's second cut: a payload's part may hold shares), and whose
@@ -1385,7 +1385,7 @@ theorem chanRecv_pres {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {k : 
   have hshv : SharesOK { m with blk := upd m.blk k (some ⟨.prod (.vec s) .int, .lock,
       some (.pair (.node u c d es) (.int f))⟩) } (.sum .int s) (.inr v) :=
     SharesOK.mk_inr ((hshp.fst.elem (List.mem_cons_self ..)).grow (BlkLe.setLock hk _))
-  refine out_ownNoView (by simp [Ty.ok, hso, Ty.ok_vec_notVecD (Ty.ok_prod (by simpa using htok)).1]) (by simp [Ty.holdsView, hsv]) hshv rfl
+  refine out_ownNoView (by simp [Ty.ok, hso]) (by simp [Ty.holdsView, hsv]) hshv rfl
     (.inr hwv.1) (by simpa using (List.nodup_append.mp hdv).1)
     (fun i hi' => ⟨(hall0 i (hin0 i (by simpa using hi'))).1, (hall0 i (hin0 i (by simpa using hi'))).2.1⟩)
     (fun x U hU i hi' => (hall0 i (hin0 i (by simpa using hi'))).2.2.1 x U hU) ?_

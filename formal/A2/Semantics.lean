@@ -1025,12 +1025,12 @@ def wrapParams : List (PMode × Ty) → Nat → Nat → Stmt → Stmt
     which runs the result's destructor before the panic goes on; on the
     normal path the result has moved to the caller's binding by the frame's
     end, which then runs nothing (`Step.scopeDMoved`).  An owned result that
-    is a `Vec` of destructor values is one too: its frame drains it on such a
-    panic (`Step.scopeDPDrain`).  Any other result's is a plain scope. -/
+    is a `Vec` of destructor values is one too, or (Agora #607) of such `Vec`s
+    at any depth: its frame drains it on such a panic (`Step.scopeDPDrain`).
+    Any other result's is a plain scope. -/
 def resFrame (fn : Fn) (r : Var) (s : Stmt) : Stmt :=
-  match fn.resOwn, fn.resTy with
-  | true, .dtor g _ => .scopeD r g s
-  | true, .vec (.dtor g _) => .scopeD r g s
+  match fn.resOwn, fn.resTy.dhead with
+  | true, some g => .scopeD r g s
   | _, _ => .scope r s
 
 /-- The inside of a call: the result slot `r = base + n` is bound (in its
@@ -1417,8 +1417,9 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
       destructor runs, in index order), then the panic goes on.  A panic in
       an element's destructor comes back here through the drain's own frame,
       which goes on with the elements after it: each destructor once, as the
-      journal runs bindings' (the runtime's element loop does not go on yet,
-      Agora #608; `CLAIM.md`). -/
+      journal runs bindings' (the runtime's release goes on with the
+      elements after it too, `nurl__vec_drain_resume`, Agora #608;
+      `CLAIM.md`). -/
   | scopeDPDrain {m m1 : Mem} {x : Var} {f : Nat} {s : Stmt} {t : Ty} {c d : Nat} {es : List Val} :
       Step P m s (.panic m1) → m1.st x = some ⟨true, some (.node t c d es)⟩ →
       Step P m (.scopeD x f s) (.ok m1 (.seq (.scopeD x f .skip) .panic))

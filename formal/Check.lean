@@ -121,6 +121,8 @@ import A3
 #print axioms A2.DtorWitness.main4_letv_refused
 #print axioms A2.DtorWitness.main5_safe
 #print axioms A2.DtorWitness.main5_letv_refused
+#print axioms A2.DtorWitness.main11_safe
+#print axioms A2.DtorWitness.main11_no_leak
 #print axioms A2.DtorWitness.enum_lends
 #print axioms A2.DtorWitness.enum_take_refused
 -- threads: moves, Arc's frozen shared payloads, Locked, RwLocked, Atomic, channels, library

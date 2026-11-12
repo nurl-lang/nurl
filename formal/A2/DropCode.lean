@@ -89,7 +89,7 @@ theorem vecFreeD_typed {P : Prog} {Γ : Ctx} {F : List Var} {x y : Var} {f : Nat
         refine ⟨E0, rfl, ?_, ?_, ?_, ?_, ?_⟩ <;> (unfold killE; split <;> first | rfl | exact id | simp [Entry.vdeps])
   have hr : RhsT Γ F (.var x) ⟨E.ty, .own, true, [], E.held, false, false⟩ Γ1 :=
     RhsT.moveOwn hx hl hm hxF hnp hds
-  have hτ : LetdTy f t E.ty (.vec (.dtor f t)) := Or.inr ⟨rfl, hty, hv⟩
+  have hτ : LetdTy f t E.ty (.vec (.dtor f t)) := Or.inr ⟨0, rfl, hty, hv⟩
   have hdv : (Ty.vec (.dtor f t)).dtorViews = false := by rw [hτ.scopeD.dtorViews, hτ.scopeD.holdsView, hv]
   have hlet := StmtT.letd (P := P) (Γ := Γ) (Γ1 := Γ1) (F := F) (x := y) (f := f) (r := .var x)
     (s := .skip) (E := ⟨E.ty, .own, true, [], E.held, false, false⟩) (t := t) (H := E.held)
@@ -305,7 +305,7 @@ theorem main6_typed : ∃ Δ, StmtT P (fun _ => none) [] main6 Δ := by
   have hbody := StmtT.seq (P := P) rfl hpush (StmtT.seq rfl htr (StmtT.seq rfl hcl hfr))
   have hdv := StmtT.letd (P := P) (Γ := K3) (Γ1 := K3) (F := []) (x := 3) (f := 0) (r := .new DT)
     (E := EN) (t := T) (H := []) (τ := .vec DT) rfl (by simp [K3, K2, K1, A2.setE, upd])
-    (by simp) hnew rfl (Or.inr ⟨rfl, rfl, rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hbody (hK7.endOK _)
+    (by simp) hnew rfl (Or.inr ⟨0, rfl, rfl, rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hbody (hK7.endOK _)
     (by simp [Stmt.assigns, Stmt.vecTruncD, Stmt.vecClearD, Stmt.vecFreeD])
   have hd := StmtT.letd (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .pair 0 1)
     (E := EP) (t := T) (H := []) rfl (by simp [K2, K1, A2.setE, upd])
@@ -432,7 +432,7 @@ theorem mainSet_typed : ∃ Δ, StmtT P (fun _ => none) [] mainSet Δ := by
   have hbody := StmtT.seq (P := P) rfl hpush hw
   have hdv := StmtT.letd (P := P) (Γ := K3) (Γ1 := K3) (F := []) (x := 3) (f := 0) (r := .new DT)
     (E := EN) (t := T) (H := []) (τ := .vec DT) rfl (by simp [K3, K2, K1, A2.setE, upd])
-    (by simp) hnew rfl (Or.inr ⟨rfl, rfl, rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hbody
+    (by simp) hnew rfl (Or.inr ⟨0, rfl, rfl, rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hbody
     (hK10.endOK _) (by simp [Stmt.assigns, Stmt.vecSetD])
   have hd := StmtT.letd (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .pair 0 1)
     (E := EP) (t := T) (H := []) rfl (by simp [K2, K1, A2.setE, upd])
@@ -553,7 +553,7 @@ theorem mainElem_typed : ∃ Δ, StmtT P (fun _ => none) [] mainElem Δ := by
   have hbody := StmtT.seq (P := P) rfl hpush hel
   have hdv := StmtT.letd (P := P) (Γ := K3) (Γ1 := K3) (F := []) (x := 3) (f := 0) (r := .new DT)
     (E := EN) (t := T) (H := []) (τ := .vec DT) rfl (by simp [K3, K2, K1, A2.setE, upd])
-    (by simp) hnew rfl (Or.inr ⟨rfl, rfl, rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hbody
+    (by simp) hnew rfl (Or.inr ⟨0, rfl, rfl, rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hbody
     (hK10.endOK _) (by simp [Stmt.assigns, Stmt.withElemD])
   have hd := StmtT.letd (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .pair 0 1)
     (E := EP) (t := T) (H := []) rfl (by simp [K2, K1, A2.setE, upd])
@@ -671,7 +671,7 @@ theorem main9_typed : ∃ Δ, StmtT P (fun _ => none) [] main9 Δ := by
   have hbody := StmtT.seq (P := P) rfl hpush h4
   have hdv := StmtT.letd (P := P) (Γ := K3) (Γ1 := K3) (F := []) (x := 3) (f := 0) (r := .new DT)
     (E := EN) (t := T) (H := []) (τ := .vec DT) rfl (by simp [K3, K2, K1, A2.setE, upd])
-    (by simp) hnew rfl (Or.inr ⟨rfl, rfl, rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hbody (hK7.endOK _)
+    (by simp) hnew rfl (Or.inr ⟨0, rfl, rfl, rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hbody (hK7.endOK _)
     (by simp [Stmt.assigns, Stmt.vecTruncD, Stmt.vecClearD, Stmt.vecFreeD])
   have hd := StmtT.letd (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .pair 0 1)
     (E := EP) (t := T) (H := []) rfl (by simp [K2, K1, A2.setE, upd])
