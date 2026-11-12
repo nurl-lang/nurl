@@ -365,7 +365,33 @@
 }
 
 @ __diag_notes_print → v {
-    ? != 0 ( nurl_str_len g_diag_notes ) { ( nurl_eprintln g_diag_notes ) } {}
+    ? != 0 ( nurl_str_len g_diag_notes ) { ( nurl_eprintln ( __diag_expand_args g_diag_notes ) ) } {}
+}
+
+// Each `{{T U}{i Rc__i64}}` of the notes spelled `T = i, U = ( Rc i )`.
+@ __diag_expand_args s text → s {
+    : ~ s rest ( nurl_str_cat text `` )
+    : ~ s out ``
+    : ~ i at ( nurl_str_find rest `{{` )
+    ~ >= at 0 {
+        : i mid ( nurl_str_find rest `}{` )
+        : i end ( nurl_str_find rest `}}` )
+        ? | < mid at < end mid { = at - 0 1 } {
+            : ~ s tps ( nurl_str_slice rest + at 2 - - mid at 2 )
+            : ~ s tas ( nurl_str_slice rest + mid 2 - - end mid 2 )
+            : ~ s shown ``
+            ~ != 0 ( nurl_str_len tas ) {
+                : s w ( str_first_word tas ) = tas ( str_skip_word tas )
+                : s p ( str_first_word tps ) = tps ( str_skip_word tps )
+                : s one ? == 0 ( nurl_str_len p ) ( __diag_show_word w ) ( nurl_str_cat3 p ` = ` ( __diag_show_word w ) )
+                = shown ( nurl_str_cat3 shown ? == 0 ( nurl_str_len shown ) `` `, ` one )
+            }
+            = out ( nurl_str_cat3 out ( nurl_str_slice rest 0 at ) shown )
+            = rest ( nurl_str_slice rest + end 2 - - ( nurl_str_len rest ) end 2 )
+            = at ( nurl_str_find rest `{{` )
+        }
+    }
+    ^ ( nurl_str_cat out rest )
 }
 
 // __diag_lit: `text` wrapped in the backticks a NURL string literal is
@@ -29762,7 +29788,14 @@ unsafe @ mem_path_to_indices s path → s {
     // a variant that owns a buffer.)
     ? ( __is_handle_enum t ) { ^ ( __enum_any_keyed_variant t ) } {}
     ? | ( seq t `%String` ) != 0 ( nurl_str_starts t `%Vec__` ) { ^ T } {}
-    ? ! ( __is_owned_struct_ty t ) { ^ F } {}
+    // (A library handle that is one pointer — an Rc's, an Arc's or a Box's
+    // control block — by that pointer, as mem_identity_key keys it: answered
+    // F here, `= o ( f1 o )` through a forwarder declared above its callee
+    // released o's share while o went on to hold it, agora #758.)
+    ? ( __is_libh t ) { ^ ( __libh_keyable t ) } {}
+    // (…and a struct with a `% Drop` of its own by its first owned handle
+    // field: it cannot be copied, so that buffer is its own — mem_identity_key.)
+    ? & ! ( __is_owned_struct_ty t ) ! ( __udrop_struct_keyable t ) { ^ F } {}
     : s sname ( nurl_str_slice t 1 - ( nurl_str_len t ) 1 )
     : i fc ( nurl_str_to_int ( nurl_sym_get2 g_root_syms sname `__field_count` ) )
     : ~ i i 0
@@ -30196,7 +30229,9 @@ unsafe @ mem_path_to_indices s path → s {
     ? ( __is_handle_enum ty ) { ^ ( mem_enum_variant_key cg ty val ) } {}
     // (A library handle that is one pointer: agora #456.)
     ? ( __is_libh ty ) { ^ ( mem_libh_key cg ty val ) } {}
-    ? ! ( __is_owned_struct_ty ty ) { ^ ( nurl_str_cat `` `` ) } {}
+    // (…and a struct with a `% Drop` of its own by its first keyed field:
+    // __udrop_struct_keyable, agora #758.)
+    ? & ! ( __is_owned_struct_ty ty ) ! ( __udrop_struct_keyable ty ) { ^ ( nurl_str_cat `` `` ) } {}
     : s sname ( nurl_str_slice ty 1 - ( nurl_str_len ty ) 1 )
     : i fc ( nurl_str_to_int ( nurl_sym_get2 g_root_syms sname `__field_count` ) )
     : ~ i i 0
@@ -30211,6 +30246,29 @@ unsafe @ mem_path_to_indices s path → s {
         = i + i 1
     }
     ^ ( nurl_str_cat `` `` )
+}
+
+// Does mem_libh_key find a key for library handle `ty`?
+@ __libh_keyable s ty → b {
+    : s sname ( nurl_str_slice ty 1 - ( nurl_str_len ty ) 1 )
+    ? != 1 ( nurl_str_to_int ( nurl_sym_get2 g_root_syms sname `__field_count` ) ) { ^ F } {}
+    : s ft ( nurl_sym_get g_root_syms ( nurl_str_cat sname `__idx_0__type` ) )
+    : s fl ( nurl_llty ft )
+    ? & != 0 ( nurl_str_len fl ) == ( nurl_str_get fl - ( nurl_str_len fl ) 1 ) 42 { ^ T } {}
+    ? ( __is_libh ft ) { ^ ( __libh_keyable ft ) } {}
+    ^ F
+}
+
+// A struct with a `% Drop` of its own, keyed by its first owned handle
+// field (mem_identity_key): no copy of such a value is made, so no other
+// value holds that buffer (agora #758).
+@ __udrop_struct_keyable s ty → b {
+    ? ! ( __has_user_drop ty ) { ^ F } {}
+    : i n ( nurl_str_len ty )
+    ? | < n 2 != ( nurl_str_get ty 0 ) 37 { ^ F } {}
+    : s sname ( nurl_str_slice ty 1 - n 1 )
+    ? != 0 ( nurl_sym_len2 g_root_syms sname `__variants` ) { ^ F } {}
+    ^ != 0 ( nurl_sym_len2 g_root_syms sname `__field_count` )
 }
 
 // A library handle whose whole value is one pointer — a Box's, an Rc's or
@@ -30480,7 +30538,12 @@ unsafe @ mem_path_to_indices s path → s {
     // after the call unless the callee consumes or keeps the argument.
     : ~ s __lo ? != 0 g_arg_litown_set ( nurl_sym_get syms `__argtmp_litown__` ) ``
     ? != 0 g_arg_litown_set { ( nurl_sym_def syms `__argtmp_litown__` `` ) = g_arg_litown_set 0 } {}
-    ? & & != 0 g_auto_drop_strings == arg_tt TT_AT != 0 ( nurl_str_len __lo ) {
+    // (…and a literal of a type with its own `% Drop`, whatever its fields:
+    // its destructor runs, below.)
+    // (…or an option literal over one, `@ ?Conn { T @ Conn { … } }`.)
+    : b __lw_opt & != 0 ( nurl_str_starts at `{ i1, ` ) != 0 ( nurl_str_len ( __wrap_twin at ) )
+    : b __lw_whole ? == arg_tt TT_AT | ( __has_user_drop at ) & __lw_opt ( __holds_user_drop at 0 ) F
+    ? & & != 0 g_auto_drop_strings == arg_tt TT_AT | != 0 ( nurl_str_len __lo ) __lw_whole {
         : s __lnk0 ( mem_arg_not_kept cg call_name fname arg_idx shadowed )
         // A callee that hands the literal back, as for a call's temporary
         // below: whole (`^ p`), the result IS it and its fields move into
@@ -30506,6 +30569,22 @@ unsafe @ mem_path_to_indices s path → s {
             : s __llb ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print __llb ) ( nurl_print ` = and i1 ` ) ( nurl_print __lnk0 ) ( nurl_print `, ` ) ( nurl_print __llo ) ( nurl_print `\n` )
             ( nurl_sym_def syms `__argtmp_one__` __llb )
+            // (…handed back whole on some runs only — the callee answers per
+            // call, `^ p` beside `^ ( mk )`: on the runs its answer says the
+            // result is its own, the literal was not handed back and goes
+            // after the call, whole, as a call's temporary does (`f|`,
+            // mem_drop_arg_temps). The field drops below are for the runs
+            // it may not hand back at all; left to them, `( f @ Conn { … }
+            // F )` leaked the literal on the run f made a new one, agora
+            // #760. The literal owns every field it holds: a binding's
+            // value went in with it.)
+            ? & | | ( __is_handle_ty at ) ( __nc_drop_ty at ) __lw_whole ! ( __ty_holds_view_p __crt ) {
+                : s __lfr ( nurl_cg_reg cg )
+                ? __lw_opt { ( gen_drop_for_type at syms ) } { ( __handle_drop_ensure at ) }
+                ( __dropifv_request at )
+                : s __lfw ( nurl_str_cat4 ( nurl_str_cat4 `f|` __lfr `|` __llb ) ` ` ( nurl_str_cat4 `h|` __lfr ( nurl_str_cat3 `|` ( __park_ty at ) `|` ) av ) `` )
+                = owned ? == 0 ( nurl_str_len owned ) __lfw ( nurl_str_cat3 owned ` ` __lfw )
+            } {}
             ? ( __clone_supported __crt syms ) {
                 : s __llq ( nurl_cg_reg cg )
                 ( emit_sink_flag_load ( mem_lend_const syms `part` call_name fname arg_idx ) __llq )
@@ -30517,6 +30596,20 @@ unsafe @ mem_path_to_indices s path → s {
             ( nurl_print `  ` ) ( nurl_print __lln ) ( nurl_print ` = xor i1 ` ) ( nurl_print __llo ) ( nurl_print `, 1\n` )
             = __lnk ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print __lnk ) ( nurl_print ` = and i1 ` ) ( nurl_print __lnk0 ) ( nurl_print `, ` ) ( nurl_print __lln ) ( nurl_print `\n` )
+        } {}
+        // A literal of a type with its own `% Drop` goes whole: its
+        // destructor runs, then its fields go (its drop glue). Dropped
+        // field by field, a `( rd @ Conn { … } )` handed to a reader
+        // released the fields and never ran Conn's destructor (agora #760).
+        // (Journaled while the call runs, as a call's temporary is.)
+        ? __lw_whole {
+            : s __lwf ( __jthunk_of at )
+            : s __lwj ? != 0 ( nurl_str_len __lwf ) ( mem_journal_push_temp_fn cg at av __lnk __lwf ) ``
+            ? __lw_opt { ( gen_drop_for_type at syms ) } { ( __handle_drop_ensure at ) }
+            ( __dropifv_request at )
+            : s __lww ( nurl_str_cat3 __lwj ` ` ( nurl_str_cat4 `h|` __lnk ( nurl_str_cat3 `|` ( __park_ty at ) `|` ) av ) )
+            = owned ? == 0 ( nurl_str_len owned ) __lww ( nurl_str_cat3 owned ` ` __lww )
+            = __lo ``
         } {}
         ~ != 0 ( nurl_str_len __lo ) {
             : i semi ( nurl_str_find __lo `;` )
@@ -30730,7 +30823,12 @@ unsafe @ mem_path_to_indices s path → s {
             // copied: `@ f Conn p b c → Conn { ? c { ^ p } {} ^ ( mk ) }`
             // handed `( mk )` leaked it on the runs f made a new one, agora
             // #739.)
-            ? & & != 0 ( nurl_str_len __tlb_one ) | | ( __is_handle_ty at ) __tfopt ( __nc_drop_ty at ) ! ( __ty_holds_view __crt 0 ) {
+            // (A result is asked precisely: a library handle holds what its
+            // type arguments can — its own pointer is its share, no view of
+            // this temporary. Taken for a view-holder, an Rc result kept
+            // `( g ( rc_new … ) F )` from dropping its temporary on the runs
+            // g made a new one, agora #760.)
+            ? & & != 0 ( nurl_str_len __tlb_one ) | | ( __is_handle_ty at ) __tfopt ( __nc_drop_ty at ) ! ( __ty_holds_view_p __crt ) {
                 : s __tfr ( nurl_cg_reg cg )
                 ? __tfopt { ( gen_drop_for_type at syms ) } { ( __handle_drop_ensure at ) }
                 ( __dropifv_request at )
@@ -36401,6 +36499,15 @@ unsafe @ resolve_arc_mut → v {
 // own: an `s`, a raw pointer, a Slice, a closure's captures, a container
 // or struct of them? An owner's own buffer (a String's bytes, a Vec's
 // element block) is not one; what the elements are may be.
+// __ty_holds_view asked precisely (g_thv_precise): a library handle
+// holds what its type arguments can, not whatever it may.
+@ __ty_holds_view_p s ty → b {
+    = g_thv_precise 1
+    : b hv ( __ty_holds_view ty 0 )
+    = g_thv_precise 0
+    ^ hv
+}
+
 unsafe @ __ty_holds_view s ty i depth → b {
     : i n ( nurl_str_len ty )
     : *u ty_p # *u ty
@@ -53511,13 +53618,17 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // (A trait object is told apart by its box, as a handle by its
         // buffer: mem_dyn_key, agora #459.)
         : b __ud_dyn != 0 ( nurl_str_starts vt `%dyn.` )
-        ? & & & & | ( __is_handle_ty vt ) __ud_dyn __ud_may_self ! __ud_whole ! ( __clone_supported vt syms ) & __ud_owns == bck_rhs_tt TT_LPAREN {
+        // (…and a value with a `% Drop` of its own by its first owned
+        // field, __udrop_struct_keyable: given back its own value by `( f0
+        // o )`, it was released and then read, agora #758.)
+        : b __ud_kty | | ( __is_handle_ty vt ) __ud_dyn ( __udrop_struct_keyable vt )
+        ? & & & & __ud_kty __ud_may_self ! __ud_whole ! ( __clone_supported vt syms ) & __ud_owns == bck_rhs_tt TT_LPAREN {
             : s __p1 ( nurl_str_cat3 `'` name `' is given back what this call may lend out of a part of '` )
             : s __p2 ( nurl_str_cat3 name `' itself — an element, a payload — and its type has no copy: nurlc cannot keep that part alive once '` name )
             : s __p3 ( nurl_str_cat3 `''s old value is released (agora #437). Bind the result to a new name, or take the part out of '` name `' first.` )
             ( die_stmt lex ( nurl_str_cat3 __p1 __p2 __p3 ) )
         } {}
-        : b __ud_hty | | ( __is_handle_ty vt ) __ud_dyn & & __ud_only_self != 0 ( nurl_str_starts vt `{ i1, ` ) ( __type_needs_drop vt syms )
+        : b __ud_hty | __ud_kty & & __ud_only_self != 0 ( nurl_str_starts vt `{ i1, ` ) ( __type_needs_drop vt syms )
         ? & & & != 0 ( nurl_str_len __ud_ptr ) == bck_rhs_tt TT_LPAREN __ud_hty | == 0 ( nurl_str_len __ud_borrow ) __ud_self_lend
         { = __ud_ro ( mem_call_retown syms cg )
             ? & != 0 ( nurl_str_len __ud_ro ) ! __ud_may_self { = __ud_ro_new __ud_ro = __ud_ro `` } {}
@@ -53529,7 +53640,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
                 // runs: the old value then goes by its flag, and the binding
                 // owns nothing of what it is given, agora #419.)
                 : ~ s __ud_keep ( nurl_str_cat __ud_ro `` )
-                ? | ( __is_handle_ty vt ) __ud_dyn {
+                ? __ud_kty {
                     : s __ud_ov ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print __ud_ov ) ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print `, ptr ` ) ( nurl_print __ud_ptr ) ( nurl_print `\n` )
                     : s __ud_ok ? __ud_dyn ( mem_dyn_key cg vt __ud_ov ) ( mem_identity_key cg vt __ud_ov )
@@ -80996,16 +81107,10 @@ unsafe @ emit_one_instantiation s fname s mangled s type_args s caller_file s ca
     : s saved_diag_notes ( nurl_str_cat g_diag_notes `` )
     : s saved_inst_args ( nurl_str_cat g_diag_inst_args `` )
     // (`[T = ( Rc i )]`: the echoed line is the template's own, which
-    // spells the parameter.)
-    : ~ s __ctx_shown ``
-    : ~ s __ctx_tas ( nurl_str_cat type_args `` )
-    : ~ s __ctx_tps ( nurl_str_cat tparams `` )
-    ~ != 0 ( nurl_str_len __ctx_tas ) {
-        : s __ctx_w ( str_first_word __ctx_tas ) = __ctx_tas ( str_skip_word __ctx_tas )
-        : s __ctx_p ( str_first_word __ctx_tps ) = __ctx_tps ( str_skip_word __ctx_tps )
-        : s __ctx_one ? == 0 ( nurl_str_len __ctx_p ) ( __diag_show_word __ctx_w ) ( nurl_str_cat3 __ctx_p ` = ` ( __diag_show_word __ctx_w ) )
-        = __ctx_shown ( nurl_str_cat3 __ctx_shown ? == 0 ( nurl_str_len __ctx_shown ) `` `, ` __ctx_one )
-    }
+    // spells the parameter. Spelled only when a diagnostic prints the
+    // note — `{{tparams}{type args}}`, __diag_notes_print: every instance
+    // is made with a note, and almost none is ever shown.)
+    : s __ctx_shown ( nurl_str_cat4 `{{` tparams `}{` ( nurl_str_cat type_args `}}` ) )
     : s __ctx_at ? & != 0 ( nurl_str_len caller_file ) != 0 ( nurl_str_len caller_line )
     ( nurl_str_cat4 caller_file `:` caller_line ? != 0 ( nurl_str_len caller_col ) ( nurl_str_cat3 `:` caller_col `: ` ) `: ` )
     ``

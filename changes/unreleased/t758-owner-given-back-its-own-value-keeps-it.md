@@ -1,0 +1,3 @@
+### Fixed
+
+- **An Rc, Arc, Box or `% Drop` owner given back its own value keeps it** (Agora #758). `= o ( f1 o )` through a forwarder declared above its callee released an Rc's, an Arc's or a Box's share while o went on to hold it, and `= o ( f0 o )` with `@ f0 R p → R { ^ p }` (R with its own `% Drop`) faulted in any declaration order: the assignment's run-time "is this my old value?" test had no key for these types. A library handle is told apart by its one pointer, and a struct with its own `% Drop` by its first owned field (it cannot be copied, so that buffer is its own) — through generic forwarders, a choice between two shares, and in a loop.
