@@ -986,7 +986,17 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   elements' destructors, Agora #607 / #755), and everywhere else
   that could hold a destructor value is refused (the list below), but for
   the `Arc` payloads 3d names (an uncaught panic's end, a cycle of
-  orphans, A3's threads), freed with no code. That these are all
+  orphans, A3's threads), freed with no code. One exactness gap found in
+  review (Agora #790): an `Arc` orphaned by a panic's UNWINDING is reaped
+  at the first frame the unwinding reaches (a `scopeD` frame's
+  `seq (scope x (letcall … f [x] skip)) panic`, or the statement after a
+  `recover`), not inside the drain as nurlc's journal does it. A panic in
+  that reaped destructor (or in an element's, for an `Arc<Vec<D>>`) then
+  skips `x`'s own destructor (its `scope` frees it with no code), or
+  escapes the `recover`, where nurlc's drain runs the rest and the
+  `recover` catches. Memory safety and leak freedom are unaffected
+  (everything is freed); which destructors run, and whether that
+  `recover` catches, are not modelled faithfully there. That these are all
   the places is read off the rules, not a single theorem (above). The
   destructors INSIDE a value are shown for a struct's fields (Agora #616),
   an enum's payload (Agora #632) and a closure's environment (Agora
@@ -1038,10 +1048,11 @@ The rules are stricter than nurlc's in these places:
   the run). nurlc types the
   rest too, and drops a `Vec`'s elements wherever the `Vec` is dropped, in
   index order, each running its destructor. Refused here:
-  - the `Vec` as a shared payload: a channel of `D` (`Channel s` is a lock
-    of its queue, a `Vec s`, and its closed flag), `Locked (Vec D)`, `Arc
-    (Vec D)`, a cell of a `Vec D`. A block's payload is swept with no code
-    (Agora #544).
+  - the `Vec` as a lock's or a cell's payload: a channel of `D` (`Channel
+    s` is a lock of its queue, a `Vec s`, and its closed flag), `Locked (Vec
+    D)`, a cell of a `Vec D`: such a payload is swept with no code (Agora
+    #755). (`Arc (Vec D)` is typed since Agora #755: its orphaned payload is
+    reaped and drained on A2's runs, above.)
   Not refused: the in-place drops (the lemmas below are stated for
     elements that hold no views; a `Vec` of view-holding destructor
     values, Agora #782, is typed by the same rules, with no lemma stated).

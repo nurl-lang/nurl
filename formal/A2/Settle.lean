@@ -143,7 +143,7 @@ theorem dtorCount_reap {m m1 : Mem} (hh : HeapOK m) (hr : ReapMem m m1) :
 /-- **The reaps that end a step can always be taken, and end** (Agora #610):
     from every typed configuration there is a `Settle`.  Each reap empties
     an orphan and the marking sweep after it makes no block that holds a
-    destructor value at its top (it keeps or marks them): their count below
+    destructor value at its top, or (Agora #755) a drained `Vec` of them (it keeps or marks them): their count below
     `nid`, which neither changes, falls each round. -/
 theorem settle_total {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {F : List Var} {s : Stmt}
     {Δ : Ctx} (ht : StmtT P Γ F s Δ) {m : Mem} (hcd : MemCodes P m) (hsc : s.codesOK P)

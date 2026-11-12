@@ -626,8 +626,10 @@ each one shrinks `CLAIM.md`'s exception:
      milestones 2a and 2b it is a binding's own type, drained (below), since
      Agora #607 also a struct's field or an enum's payload (handed to a
      `letd` by the glue), and the rules that release elements with no code
-     ask `dtorFree` of their own `Vec`. A share's payload and a view are free of
-     one by definition (3d; a view owns nothing).
+     ask `dtorFree` of their own `Vec`. A view is free of one by definition
+     (it owns nothing); a share's payload is a block's, swept or reaped
+     (3d: an `Arc`'s may be a destructor value or, since Agora #755, a
+     drained `Vec` of them).
    - **Built (Agora #542, part 2's first milestone): the drain's step.**
      `vec_remove y 0` is `Rhs.remove y (.lit 0)` (`Rhs.popFront` until Agora #607): element 0 moves out, typed as
      `vec_pop` (`RhsT.remove`), `EvalR.remove` / `removeOOB`.
@@ -706,8 +708,8 @@ each one shrinks `CLAIM.md`'s exception:
      hands to a `letd`), or lets the binding end; `vec_free`,
      `vec_clear` and `vec_truncate` are such code (`A2/DropCode.lean`).
    - **Left** (stricter than nurlc; `CLAIM.md` lists them):
-     - *a `Vec D` as a block's payload* (a channel, a lock, an `Arc`, a
-       cell): 3d's (Agora #544).
+     - *a `Vec D` as a lock's or a cell's payload* (a channel, a lock, a
+       cell): 3d's (Agora #755). An `Arc`'s is built (Agora #755, §4).
    - **Built** (Agora #782): *elements that hold views*, of bindings older
      than the `Vec`'s (a `Vec` of `% Drop` structs with a view field).
      A2-drop.2's rule stays (a binding that runs a destructor gains no
@@ -931,8 +933,13 @@ each one shrinks `CLAIM.md`'s exception:
        later than the runtime's count); orphans in a cycle (through a
        lock) are freed with no code, where the runtime leaks them; several
        orphans of one step are reaped in the order `Step.reap` picks; one
-       orphaned by a panic's unwinding that a `recover` catches is reaped
-       after the catch, not inside the unwound frames; an uncaught panic
+       orphaned by a panic's unwinding is reaped at the first frame the
+       unwinding reaches (a destructor frame's `seq (scope x (letcall …))
+       panic`, or the statement after a `recover` that catches it), not
+       inside the drain as nurlc's journal does: a panic in that reaped
+       destructor then skips `x`'s own destructor, or escapes the
+       `recover` (Agora #790; memory safety and leak freedom are
+       unaffected); an uncaught panic
        frees an orphaned payload with no code (above); the witness's run
        is not traced (its theorems are safety, no leak, and the sweep's
        lemmas of stores).

@@ -260,8 +260,9 @@ theorem mainV_safe {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem 6) mainV (.ok 
   obtain ⟨Δ, ht⟩ := mainV_typed
   exact memory_safe prog_ok prog_codes ht rfl mainV_codes (by decide) hr
 
-/-- **... and leaks nothing**: when it finishes, the `Vec` has been reaped and
-    drained, and every address is freed. -/
+/-- **... and leaks nothing**: when it finishes, every address is freed
+    (`no_leak_end`; that the `Vec` was reaped and drained on the way is read
+    off the steps, `last_dropV_reaps` / `reapV_drains`, not stated here). -/
 theorem mainV_no_leak {m' : Mem} (hr : Steps P (emptyMem 6) mainV (.ok m' .skip)) :
     ∀ i, m'.alloc i = false := by
   obtain ⟨Δ, ht⟩ := mainV_typed
