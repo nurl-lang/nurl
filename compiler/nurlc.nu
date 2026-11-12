@@ -19200,7 +19200,14 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // the lends, and the walk and module end decide by the final
         // summaries, as for a join.)
         ? & & arg_sxl != 0 g_borrowck | | | | == arg_eff_tt TT_DOT == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST == arg_eff_tt TT_LBRACE & == arg_eff_tt TT_LPAREN | g_call_may_lend ( __lend_pending ( nurl_sym_get syms `__last_call_name__` ) ) {
-            = arg_xsx ? & ( __arg_holds_changeable at ) ( __arg_may_change syms call_name fname arg_idx __clo_node ) ( nurl_str_cat arg_sx `` ) ``
+            // (…a handle, or a slice — a view of a container's elements: what
+            // the callee does through one it does to the container's.
+            // `( ch ( slice_from_vec vs ) )`, ch clearing an element through
+            // it, ended no borrow of vs's elements, agora #735, #737. A value
+            // with a drop of its own holding storage as much as a handle,
+            // __arg_holds_changeable: agora #692.)
+            : s __axp ? != 0 ( nurl_str_starts at `{ i1, ` ) ( __wrap_part at 0 ) at
+            = arg_xsx ? & | ( __arg_holds_changeable __axp ) != 0 ( nurl_str_starts __axp `%Slice__` ) ( __arg_may_change syms call_name fname arg_idx __clo_node ) ( nurl_str_cat arg_sx `` ) ``
         } {}
         // Closure-env reclamation: if this argument was an inline closure
         // literal that allocated a heap env, and the callee uses this
@@ -26135,6 +26142,12 @@ unsafe @ gen_match i lex i syms i cg → s {
     ( nurl_sym_def syms ( nurl_str_cat var_name `__eslot` ) gep )
     // (…and what it is an element of, by name or path: __fe_moved_drop_note.)
     ( nurl_sym_def syms ( nurl_str_cat var_name `__econt` ) fe_cont )
+    // (…and, for the drop summaries, the parameters the element was read
+    // out of: noted by its slot, as a binding read out of one is
+    // (__pderiv_note) — a binding that reuses its name later has a slot of
+    // its own. Not noted, `~ x vs { ( vec_clear x ) }` dropped nothing of
+    // vs by the summary, agora #735.)
+    ? != 0 ( nurl_str_len fe_cont ) { ( __pderiv_note syms var_name elem_ty TT_IDENT fe_cont `-` `` ) } {}
     // (…and, for a Vec, where its slot is NOW: the control block and the
     // index — the buffer may have moved since the round began, through
     // another name of the container; __fe_slot_now, agora #587.)
@@ -45638,19 +45651,36 @@ unsafe @ __lend_unnamed s ws → b {
     ^ out
 }
 
+// The container `name`'s `~` loop iterates, where `name` is still that
+// loop's element: a binding that reuses the name inside the loop — a `??`
+// arm's `T x`, a `: … x` — is newer than the loop's note and has sources of
+// its own (taken for the element, clearing a fresh option's payload in the
+// loop body was summarised as dropping the container's elements). A
+// closure's capture of the element is the element.
+@ __econt_of i syms s name → s {
+    : s ec ( nurl_sym_get2 syms name `__econt` )
+    ? == 0 ( nurl_str_len ec ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s ek ( nurl_str_cat name `__econt` )
+    : s pk ( nurl_str_cat name `__ptr` )
+    ? & & != 0 ( nurl_sym_len syms pk ) < ( nurl_sym_depth_of syms ek ) ( nurl_sym_depth_of syms pk ) ! ( __is_clo_capture syms name ) { ^ ( nurl_str_cat `` `` ) } {}
+    ^ ( nurl_str_cat ec `` )
+}
+
 // The parameters binding `root` (no parameter) of the function compiling
 // now was read out of — through the handles it was read out of (g_pderiv),
-// a `??` payload's binding (`__plend` / `__plroot`), eight hops at most:
-// each `p`, or `p#c` where a source expression's lend leads there
-// (g_cedges' `#pdc:<ptr>`; agora #461).
+// a `??` payload's binding (`__plend` / `__plroot`): each `p`, or `p#c`
+// where a source expression's lend leads there (g_cedges' `#pdc:<ptr>`;
+// agora #461). (Every source once, a visited set: the walk stopped after
+// eight of them and answered "read out of no parameter" — a ninth hop's
+// change was in no drop summary, agora #735.)
 @ __pderiv_reach i syms s root → s {
     : ~ s srcs ( __pderiv_params syms root )
     = srcs ( __word_union srcs ( nurl_sym_get2 syms root `__plend` ) )
     = srcs ( __word_union srcs ( nurl_sym_get2 syms root `__plroot` ) )
+    = srcs ( __word_union srcs ( __econt_of syms root ) )
     : ~ s out ( __pderiv_cparams syms root )
     : ~ s seen ( nurl_str_cat root `` )
-    : ~ i hops 0
-    ~ & != 0 ( nurl_str_len srcs ) < hops 8 {
+    ~ != 0 ( nurl_str_len srcs ) {
         : s w ( str_first_word srcs ) = srcs ( str_skip_word srcs )
         : s r ( __path_root_name w )
         ? ! ( str_contains_word seen r ) {
@@ -45660,10 +45690,10 @@ unsafe @ __lend_unnamed s ws → b {
                 = srcs ( __word_union srcs ( __pderiv_params syms r ) )
                 = srcs ( __word_union srcs ( nurl_sym_get2 syms r `__plend` ) )
                 = srcs ( __word_union srcs ( nurl_sym_get2 syms r `__plroot` ) )
+                = srcs ( __word_union srcs ( __econt_of syms r ) )
                 = out ( __word_union out ( __pderiv_cparams syms r ) )
             }
         } {}
-        = hops + hops 1
     }
     ^ out
 }
@@ -45994,7 +46024,12 @@ unsafe @ __pderiv_note i syms s name s vt i rhs_tt s rhs_val s lend s sx → v {
     // own as much as in any other; agora #424.)
     : b inclo & != 0 g_bck_closure_depth != 0 ( nurl_str_len g_clo_cur )
     ? | == 0 g_srcx_on & == 0 ( nurl_str_len g_cur_params ) ! inclo { ^ v } {}
-    ? ! ( seq at `%String` ) {
+    // (…or an Rc, whose payload a library replacer or dropper handed it —
+    // `rc_set` — releases under every other handle: what a callee does so
+    // through a `??` payload or a loop element of its parameter, the same-Rc
+    // rule asks of its drop summary, agora #734, #735.)
+    : b __dnv_rc != 0 ( nurl_str_starts at `%Rc__` )
+    ? & ! __dnv_rc ! ( seq at `%String` ) {
         ? == 0 ( nurl_str_starts at `%Vec__` ) { ^ v } {}
         ? ! ( __elem_owns ( __vec_elem_llvm at ) syms ) { ^ v } {}
     } {}
