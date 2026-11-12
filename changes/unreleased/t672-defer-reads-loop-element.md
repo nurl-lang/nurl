@@ -10,4 +10,8 @@
   so such a program is refused as that binding's is, with a note saying
   the defer runs when the function returns. A defer that reads the
   element of a container nothing changes after the loop is accepted as
-  before.
+  before — also with the `~` loop inside another loop, where the defer's
+  read used the round's registers of the loop and nurlc wrote IR that
+  clang refused ("Instruction does not dominate all uses"). Handing the
+  element, or a field of it, to a `sink` there is refused: at the exit it
+  is a borrow of the container's element.

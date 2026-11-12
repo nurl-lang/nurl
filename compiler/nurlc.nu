@@ -20053,12 +20053,21 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             ? != 0 ( nurl_str_len ffs ) {
                 ( nurl_print `  store ` ) ( nurl_print ( nurl_llty at ) ) ( nurl_print ` zeroinitializer, ptr ` ) ( nurl_print ffs ) ( nurl_print `\n` )
                 ( __fe_moved_drop_note syms ( nurl_str_slice arg_froot 0 ( nurl_str_find arg_froot `.` ) ) )
-            } {}
+            } {
+                // (…but in a `;` defer's body the element has no slot there
+                // (__fe_has_slot): it is a borrow of its container's element
+                // to the walk, which refuses its field taken over as it does
+                // a `vec_at` copy's — a `pendfx` row; agora #672.)
+                : s __ffr ( nurl_str_slice arg_froot 0 ( nurl_str_find arg_froot `.` ) )
+                ? & & ( bck_sound ) != 0 ( nurl_sym_len2 syms __ffr `__eslot` ) ! ( __fe_has_slot syms __ffr ) {
+                    ( bck_stash_store arg_froot ( nurl_lex_line lex ) call_name ( nurl_str_int arg_idx ) `pendfx` )
+                } {}
+            }
         } {}
         // A foreach element handed to a consumer (`~ x v { ( string_free x ) }`)
         // leaves the container: its slot is emptied, so dropping or freeing
         // the container afterwards skips it (docs/MEMORY.md §7.6).
-        ? & & ( is_ident_tok bck_arg_tt ) != 0 ( nurl_sym_len2 syms bck_arg_val `__eslot` ) ( __is_handle_ty at ) {
+        ? & & ( is_ident_tok bck_arg_tt ) ( __fe_has_slot syms bck_arg_val ) ( __is_handle_ty at ) {
             : s es ( __fe_slot_now syms cg bck_arg_val )
             : s fl ( nurl_llty at )
             ? ( str_has_index callee_sink arg_idx ) {
@@ -26137,6 +26146,11 @@ unsafe @ gen_match i lex i syms i cg → s {
     : s fe_eslot_saved ( nurl_str_cat ( nurl_sym_get2 syms var_name `__eslot` ) `` )
     : s fe_econt_saved ( nurl_str_cat ( nurl_sym_get2 syms var_name `__econt` ) `` )
     ( nurl_sym_def syms ( nurl_str_cat var_name `__eslot` ) gep )
+    // (…in the code of this round only: a `;` defer in the body runs at the
+    // function's exit, where the round's registers — the slot, the control
+    // block, the index — are no values at all; __fe_has_slot, agora #672.)
+    : s fe_edd_saved ( nurl_str_cat ( nurl_sym_get2 syms var_name `__eslot_dd` ) `` )
+    ( nurl_sym_def syms ( nurl_str_cat var_name `__eslot_dd` ) ( nurl_str_int g_defer_body_depth ) )
     // (…and what it is an element of, by name or path: __fe_moved_drop_note.)
     ( nurl_sym_def syms ( nurl_str_cat var_name `__econt` ) fe_cont )
     // (…and, for the drop summaries, the parameters the element was read
@@ -26255,6 +26269,7 @@ unsafe @ gen_match i lex i syms i cg → s {
     ( nurl_sym_def syms ( nurl_str_cat var_name `__eslot` ) fe_eslot_saved )
     ( nurl_sym_def syms ( nurl_str_cat var_name `__econt` ) fe_econt_saved )
     ( nurl_sym_def syms ( nurl_str_cat var_name `__eslot_at` ) fe_eat_saved )
+    ( nurl_sym_def syms ( nurl_str_cat var_name `__eslot_dd` ) fe_edd_saved )
     ( nurl_set_last_type `void` )
     // The exit path is LIVE, whatever the body did. gen_loop says so at
     // its own exit label — "a loop that CAN exit resets did_ret: its
@@ -46193,6 +46208,16 @@ unsafe @ resolve_irealloc_summaries → v {
     }
 }
 
+// Is `x` a `~` loop element whose slot in its container this code can
+// reach: one its loop bound, in that loop's round — not the body of a `;`
+// defer registered there, which runs at the function's exit, outside every
+// round (agora #672). There it is a view of its container's element, read
+// from its own binding; the walk keeps the container unchanged to the exit.
+@ __fe_has_slot i syms s x → b {
+    ? == 0 ( nurl_sym_len2 syms x `__eslot` ) { ^ F } {}
+    ^ ( seq ( nurl_sym_get2 syms x `__eslot_dd` ) ( nurl_str_int g_defer_body_depth ) )
+}
+
 // The address of `~` loop element `x`'s slot in its container as it is
 // now: a Vec's buffer may have moved since the round began — grown through
 // another name, the loop then left by `break` — so the slot is found again
@@ -46200,8 +46225,8 @@ unsafe @ resolve_irealloc_summaries → v {
 // where the round found it (`__eslot`). `` for a binding that is no loop
 // element here (agora #587).
 @ __fe_slot_now i syms i cg s x → s {
+    ? ! ( __fe_has_slot syms x ) { ^ ( nurl_str_cat `` `` ) } {}
     : s es ( nurl_sym_get2 syms x `__eslot` )
-    ? == 0 ( nurl_str_len es ) { ^ ( nurl_str_cat `` `` ) } {}
     : ~ s at ( nurl_str_cat ( nurl_sym_get2 syms x `__eslot_at` ) `` )
     ? == 0 ( nurl_str_len at ) { ^ ( nurl_str_cat es `` ) } {}
     : s ctl ( str_first_word at ) = at ( str_skip_word at )
@@ -46226,7 +46251,7 @@ unsafe @ resolve_irealloc_summaries → v {
     : i dot ( nurl_str_find path `.` )
     ? <= dot 0 { ^ ( nurl_str_cat `` `` ) } {}
     : s root ( nurl_str_slice path 0 dot )
-    ? == 0 ( nurl_sym_len2 syms root `__eslot` ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? ! ( __fe_has_slot syms root ) { ^ ( nurl_str_cat `` `` ) } {}
     // (Resolved before anything is emitted: a path that cannot be followed
     // emits nothing.)
     : ~ s cur ( nurl_str_cat ( nurl_sym_get syms root ) `` )
