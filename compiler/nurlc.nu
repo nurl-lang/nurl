@@ -21681,7 +21681,9 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // or free one's buffer, or drop its elements, while the other points
         // into it is decided at the walk (an exclusive call: `callx`).
         ? & & & >= __sx_naddr 2 >= __sx_nown 1 __sx_sum ! __callee_shadowed {
-            ( bck_stash_vpass `-` ( nurl_lex_line lex ) call_name -1 ( nurl_str_cat4 call_name `(` call_sx `)` ) )
+            // (On the call's own line: the lexer stands past its `)`, at
+            // the next statement — or the `}` — by now; agora #773.)
+            ( bck_stash_vpass `-` __call_line call_name -1 ( nurl_str_cat4 call_name `(` call_sx `)` ) )
         } {}
         // Shared mutation (docs/MEMORY.md §6.5; h212, h213). An Arc's
         // payload is frozen once made: every thread holding a clone reads
