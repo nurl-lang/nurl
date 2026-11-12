@@ -1,0 +1,15 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+the first argument, long enough for the heap
+the first argument, long enough for the heap
+the struct's name, long enough for the heap
+the second argument, long enough for the heap
+the second argument, long enough for the heap
+the first argument, long enough for the heap
+the first argument, long enough for the heap
+the first argument, long enough for the heap
+the second argument, long enough for the heap
+the struct's name, long enough for the heap
+a temporary argument, long enough heap
