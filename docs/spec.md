@@ -204,8 +204,9 @@ global namespace unchanged:
 $ `stdlib/core/string.nu`
 ```
 
-With an alias, every top-level `@`-function, struct/enum type, enum
-variant, and global `:` constant defined in the imported file is renamed
+With an alias, every top-level `@`-function, struct/enum type (a generic
+struct included: `( geo::Pair i )`), enum variant, and global `:`
+constant defined in the imported file is renamed
 to `alias__name` by a pre-tokenisation source rewrite; internal
 cross-calls inside the imported file are rewritten to match. The
 renamed names are reached from the importer via `alias::name`, which
@@ -1398,6 +1399,13 @@ copy:
 ( id [i] 42 )       // → @id__i64
 ( id [s] `hi` )     // → @id__i8ptr
 ```
+
+A generic struct, like a generic function, may be declared anywhere among
+the top-level declarations: below the functions, impls and structs that
+name its instances, below another generic struct that has it as a field,
+or in a file imported further down. Every template of the program is
+collected before the first instance is made, so `( Wrap i )` has its
+fields wherever it is written.
 
 **A declared type's name holds no `__` past its leading underscores, and
 does not end in `_`.** An instance of a generic type is spelled with its
