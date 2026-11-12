@@ -14923,23 +14923,29 @@ unsafe @ __lex_one i lex i base → v {
 // lifetime, like the lexer itself (which is never freed).
 unsafe @ __lex_build_linetab s lx → v {
     : i len ( nurl_peek lx LX_LEN )
-    : *u src # *u # s ( nurl_peek lx LX_SRC )
+    : i base ( nurl_peek lx LX_SRC )
+    // memchr walks from one line break to the next: every whole-file lexer
+    // of every scan pass builds this table, and a loop over each byte —
+    // two of them, the count and the fill — was most of what making a
+    // lexer cost (Agora #723).
     : ~ i count 0
     : ~ i i 0
     ~ < i len {
-        ? == & # i . src i 255 10 { = count + count 1 } {}
-        = i + i 1
+        : i hit # i ( memchr # *u + base i 10 - len i )
+        ? == hit 0 { = i len } {
+            = count + count 1
+            = i + - hit base 1
+        }
     }
     : s tab # s ( nurl_alloc * 8 ? > count 0 count 1 )
     : *i tp # *i tab
     : ~ i k 0
     = i 0
-    ~ < i len {
-        ? == & # i . src i 255 10 {
-            = . tp k i
-            = k + k 1
-        } {}
-        = i + i 1
+    ~ < k count {
+        : i at - # i ( memchr # *u + base i 10 - len i ) base
+        = . tp k at
+        = k + k 1
+        = i + at 1
     }
     ( nurl_poke lx LX_LINETAB # i tab )
     ( nurl_poke lx LX_NLINES count )
@@ -65869,12 +65875,20 @@ unsafe @ __tok_src_text i lex → s {
 // keep their backticks via __tok_src_text), so the result re-lexes to the
 // identical token stream — safe for generic template bodies.
 @ collect_fn_body i lex s what → s {
+    : i mark ( __tb_mark )
+    ( __tb_body lex what )
+    ^ ( __tb_take mark )
+}
+
+// collect_fn_body's walk: from the current '{' through its matching '}',
+// appended to the open piece of template text.
+@ __tb_body i lex s what → v {
     // Anchor for the unclosed-brace diagnostic: the opening '{' itself.
     // Reported there, not at EOF — EOF has no useful source line, and
     // the brace that never closed is the thing the user must find.
     : i open_line ( nurl_lex_line lex )
     : i open_col ( nurl_lex_col lex )
-    : ~ s result ( nurl_str_cat ( __tok_src_text lex ) ` ` )
+    ( __tb_tok lex )
     // Line-preserving reconstruction: when the next token sits on a
     // later SOURCE line, join with that many newlines instead of a
     // space. A template body used to flatten to one line, so any
@@ -65900,29 +65914,22 @@ unsafe @ __tok_src_text i lex → s {
         ? == tt2 TT_RBRACE { = depth - depth 1 } {}
         : i cur_ln ( nurl_lex_line lex )
         ? < prev_ln cur_ln
-        { = result ( nurl_str_cat3 result ( __nl_pad - cur_ln prev_ln ) ( __col_pad lex ) )
+        { ( __tb_pad lex - cur_ln prev_ln )
             = prev_ln cur_ln }
         {}
-        = result ( nurl_str_cat result ( nurl_str_cat ( __tok_src_text lex ) ` ` ) )
+        ( __tb_tok lex )
         ( nurl_lex_advance lex )
     }
-    result
 }
 
 // The spaces that put the first token of a re-lexed template line at its
-// SOURCE column. Tokens are joined by single spaces, so without this every
-// line of a template began at column 1 and every diagnostic raised inside
-// a generic instance said `file:line:1`, whatever the indentation. Columns
-// after the first token stay right for nurlfmt-canonical source (single
-// spaces between tokens). Shares one growing buffer like __nl_pad.
+// SOURCE column (__tb_pad). Tokens are joined by single spaces, so without
+// them every line of a template began at column 1 and every diagnostic
+// raised inside a generic instance said `file:line:1`, whatever the
+// indentation. Columns after the first token stay right for nurlfmt-
+// canonical source (single spaces between tokens). One growing buffer,
+// like g_nl_buf.
 : ~ s g_sp_buf ``
-
-unsafe @ __col_pad i lex → s {
-    : i n - ( nurl_lex_col lex ) 1
-    ? <= n 0 { ^ ( nurl_str_cat `` `` ) } {}
-    ~ < ( nurl_str_len g_sp_buf ) n { = g_sp_buf ( nurl_str_cat3 g_sp_buf g_sp_buf ` ` ) }
-    ^ ( nurl_str_slice g_sp_buf 0 n )
-}
 
 // N newlines — the re-lex padding that maps a template buffer's line 1
 // onto the template's real source line (see collect_fn_body).
@@ -65936,6 +65943,80 @@ unsafe @ __nl_pad i n → s {
     ? <= n 0 { ^ ( nurl_str_cat `` `` ) } {}
     ~ < ( nurl_str_len g_nl_buf ) n { = g_nl_buf ( nurl_str_cat3 g_nl_buf g_nl_buf `\n` ) }
     ^ ( nurl_str_slice g_nl_buf 0 n )
+}
+
+// ── Template text, built in one buffer ─────────────────────────────
+// A function body kept for later (a generic template, a lazily compiled
+// function) is stored as its tokens' source text joined by single spaces,
+// with the source's line breaks kept (collect_fn_body). It was built by
+// appending each token to a copy of everything before it — a strlen and a
+// copy of the whole prefix per token, quadratic in the body's length — and
+// each token's own text was an allocation and a free of its own: a
+// quarter of a compile that imports the standard containers and
+// instantiates nothing (Agora #723). It is built in one buffer now, each
+// token's bytes copied once, straight out of the lexer's source where the
+// token is a slice of it (nearly all are; a string literal is re-escaped
+// by __tok_src_text, as before). The text is byte for byte what it was.
+//
+// The buffer is the compiler's for the whole run and only grows (doubled
+// with nurl_realloc); a piece of text is the bytes from a mark to the
+// top. __tb_take copies the piece out and gives its bytes back, so pieces
+// nest like a stack: one begun while another is open is taken before the
+// other goes on. A diagnostic that unwinds a declaration mid-piece leaves
+// the top where it was, and the next mark starts above it: nothing is
+// overwritten, nothing is freed by hand.
+: ~ i g_tb_buf 0
+: ~ i g_tb_cap 0
+: ~ i g_tb_top 0
+
+unsafe @ __tb_mark → i { ^ g_tb_top }
+
+unsafe @ __tb_put s src i n → v {
+    ? <= n 0 { ^ v } {}
+    : i need + + g_tb_top n 1
+    ? > need g_tb_cap {
+        : ~ i nc ? < g_tb_cap 4096 4096 g_tb_cap
+        ~ < nc need { = nc * nc 2 }
+        = g_tb_buf # i ( nurl_realloc # s g_tb_buf nc )
+        = g_tb_cap nc
+    } {}
+    ( memcpy # s + g_tb_buf g_tb_top src n )
+    = g_tb_top + g_tb_top n
+}
+
+// The text from `mark` to the top, as a string of its own (the caller's
+// to drop: __span_dup's copy, which the ownership inference knows to be
+// fresh); the top goes back to `mark`.
+unsafe @ __tb_take i mark → s {
+    : i end g_tb_top
+    = g_tb_top mark
+    ^ ( __span_dup # s g_tb_buf mark end )
+}
+
+// The current token's source text and the space after it.
+unsafe @ __tb_tok i lex → v {
+    : s p # s lex
+    ? & == 3 ( nurl_peek p + LX_CUR TF_VALID ) != ( nurl_lex_type lex ) TT_STR {
+        ( __tb_put # s + ( nurl_peek p LX_SRC ) ( nurl_peek p + LX_CUR TF_START ) ( nurl_peek p + LX_CUR TF_VAL ) )
+    } {
+        : s t ( __tok_src_text lex )
+        ( __tb_put t ( nurl_str_len t ) )
+    }
+    ( __tb_put ` ` 1 )
+}
+
+// `nl` line breaks, then the spaces that put the current token at its
+// source column (g_nl_buf, g_sp_buf), copied straight into the piece.
+unsafe @ __tb_pad i lex i nl → v {
+    ? > nl 0 {
+        ~ < ( nurl_str_len g_nl_buf ) nl { = g_nl_buf ( nurl_str_cat3 g_nl_buf g_nl_buf `\n` ) }
+        ( __tb_put g_nl_buf nl )
+    } {}
+    : i n - ( nurl_lex_col lex ) 1
+    ? > n 0 {
+        ~ < ( nurl_str_len g_sp_buf ) n { = g_sp_buf ( nurl_str_cat3 g_sp_buf g_sp_buf ` ` ) }
+        ( __tb_put g_sp_buf n )
+    } {}
 }
 
 // compute_generic_inout_sink: derive a generic function's `inout` and
@@ -65953,16 +66034,20 @@ unsafe @ __nl_pad i n → s {
 // instantiation — the scan_generic_structs pre-pass owns that — so
 // walking the raw template here, tparam tokens (`A` / `T` …) and all,
 // is side-effect-free.
-@ compute_generic_inout_sink i syms s fname → v {
-    : s gsrc ( nurl_sym_get2 g_generic_syms fname `__gsrc` )
-    ? != 0 ( nurl_str_len gsrc )
+//
+// `sig` is the template's SIGNATURE text alone — its parameters, `→` and
+// return type, as gen_generic_fn_store collected them before the body.
+// The walk below reads no further than the `→`; handed the whole template
+// it copied, substituted and re-lexed the body as well (Agora #723).
+@ compute_generic_inout_sink i syms s fname s sig → v {
+    ? != 0 ( nurl_str_len sig )
     {  // Substitute every type parameter with a concrete primitive (`i`)
         // before parsing. A bare tparam letter such as `T` or `F` lexes
         // as TT_BOOL, which parse_type rejects with `expected type`; the
         // real instantiation path dodges this because emit_one_instantiation
         // substitutes the tparams away first. The substitution is
         // type-irrelevant here — only parameter POSITIONS are read.
-        : ~ s probe ( nurl_str_cat gsrc `` )
+        : ~ s probe ( nurl_str_cat sig `` )
         : ~ s tpr ( nurl_sym_get2 g_generic_syms fname `__tparams` )
         ~ != 0 ( nurl_str_len tpr )
         { : s tp ( str_first_word tpr )
@@ -66078,7 +66163,7 @@ unsafe @ __nl_pad i n → s {
     // same protocol as collect_fn_body: the signature may wrap over
     // several lines and a diagnostic inside an instantiation must keep
     // pointing at the template's real lines.
-    : ~ s src ( nurl_str_cat `` `` )
+    : i __gc_mark ( __tb_mark )
     // Where the SIGNATURE ends, found first with a lexer-only walk and then
     // used as the collection loop's stop. The old rule was "collect until the
     // next '{' anywhere", which is not the same thing: a template whose body
@@ -66101,12 +66186,14 @@ unsafe @ __nl_pad i n → s {
     ~ & < ( nurl_lex_cur_start lex ) __gc_sig_end != ( nurl_lex_type lex ) TT_EOF {
         : i __gc_ln ( nurl_lex_line lex )
         ? < __gc_prev_ln __gc_ln
-        { = src ( nurl_str_cat3 src ( __nl_pad - __gc_ln __gc_prev_ln ) ( __col_pad lex ) )
+        { ( __tb_pad lex - __gc_ln __gc_prev_ln )
             = __gc_prev_ln __gc_ln }
         {}
-        = src ( nurl_str_cat src ( nurl_str_cat ( __tok_src_text lex ) ` ` ) )
+        ( __tb_tok lex )
         ( nurl_lex_advance lex )
     }
+    // (The signature's text alone, for compute_generic_inout_sink below.)
+    : i __gc_sig_bytes - ( __tb_mark ) __gc_mark
     ? != ( nurl_lex_type lex ) TT_LBRACE
     { ( die lex ( nurl_str_cat3
         `expected '{' to open the body of generic function '` fname
@@ -66115,11 +66202,12 @@ unsafe @ __nl_pad i n → s {
     ? != ( nurl_lex_type lex ) TT_EOF
     { : i __gc_bln ( nurl_lex_line lex )
         ? < __gc_prev_ln __gc_bln
-        { = src ( nurl_str_cat3 src ( __nl_pad - __gc_bln __gc_prev_ln ) ( __col_pad lex ) )
+        { ( __tb_pad lex - __gc_bln __gc_prev_ln )
             = __gc_prev_ln __gc_bln }
         {}
-        = src ( nurl_str_cat src ( collect_fn_body lex `generic function` ) ) }
+        ( __tb_body lex `generic function` ) }
     {}
+    : s src ( __tb_take __gc_mark )
     ( nurl_sym_def g_generic_syms ( nurl_str_cat fname `__tparams` ) tparams )
     ( nurl_sym_def g_generic_syms ( nurl_str_cat fname `__gsrc` ) src )
     // Lint: names inside the stored template are references in THIS
@@ -66131,7 +66219,8 @@ unsafe @ __nl_pad i n → s {
     // parameter index sets (keyed by the generic name) so a call site
     // can pass `inout` arguments by address and move-mark `sink` ones
     // without waiting for the deferred instantiation to be compiled.
-    ( compute_generic_inout_sink syms fname )
+    : s __gc_sig ( nurl_str_slice src 0 __gc_sig_bytes )
+    ( compute_generic_inout_sink syms fname __gc_sig )
 }
 
 // compute_generic_ret_ty: determine return type of a generic instantiation
@@ -85156,15 +85245,18 @@ unsafe @ priv_resolve i lex i syms s fname → s {
                                     ` [ … ] … → <type> { … }'. This one has no '{', so the declaration after it would be read as its body.` ) ) }
                                 // Forward instantiations need the template itself,
                                 // not merely its raw parameter roster. Store it with
-                                // the same parser used at the declaration site.
-                                : i line_start - template_start - template_col 1
-                                : s template_src ( nurl_str_cat ( __nl_pad - template_line 1 )
-                                ( nurl_lex_src_slice lex line_start - ( nurl_lex_cur_start lex ) line_start ) )
-                                : i template_lex ( nurl_lex_new template_src ( nurl_lex_filename lex ) )
-                                ~ & < ( nurl_lex_cur_start template_lex ) + - template_line 1 - template_col 1
-                                != ( nurl_lex_type template_lex ) TT_EOF { ( nurl_lex_advance template_lex ) }
-                                ( gen_generic_fn_store template_lex syms fname )
-                                ( nurl_lex_free template_lex )
+                                // the same parser used at the declaration site — from
+                                // this lexer, read again from the template's `[`: the
+                                // same file, so its lines and columns are already the
+                                // template's own. (It was copied out, padded with a
+                                // line break for every line above it, and lexed by a
+                                // lexer of its own — a line table and a hash of that
+                                // copy included — for each generic of each file in
+                                // each scan pass: Agora #723.)
+                                : i __tpl_end ( nurl_lex_cur_start lex )
+                                ( nurl_lex_set_pos lex template_start )
+                                ( gen_generic_fn_store lex syms fname )
+                                ( nurl_lex_set_pos lex __tpl_end )
                             }
                             {  // Walk the parameter region counting parameters —
                                 // one `[marker] TYPE
