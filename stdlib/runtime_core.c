@@ -3949,6 +3949,11 @@ typedef struct {
     const unsigned char *flag;
     uint64_t sequence;
     size_t next;                 /* index + 1 in this pointer's hash bucket */
+    /* An owned slice's buffer (nurl_journal_push_slice): its element count,
+     * and `drop` is then `void (*)(void *data, long long n)`, which drops
+     * the elements; the buffer itself goes as a raw one's does. -1 for
+     * every other entry. */
+    long long n;
 } NurlJournalEntry;
 /* The running context's reference-count cycle collector (see "cycle
  * collector" below); swapped with the fiber like the journal. */
@@ -4049,7 +4054,7 @@ static void nurl__jrnl_push2_slow(void *p, void (*drop)(void*), const unsigned c
     }
     size_t bucket = nurl__jrnl_bucket(p);
     NurlJournalEntry *entry = &nurl__jrnl[nurl__jrnl_len];
-    entry->ptr = p; entry->drop = drop; entry->flag = flag;
+    entry->ptr = p; entry->drop = drop; entry->flag = flag; entry->n = -1;
     entry->sequence = ++nurl__jrnl_sequence;
     entry->next = nurl__jrnl_buckets[bucket];
     nurl__jrnl_buckets[bucket] = ++nurl__jrnl_len;
@@ -4062,6 +4067,17 @@ static inline void nurl__jrnl_push2(void *p, void (*drop)(void*), const unsigned
 
 static void nurl__jrnl_push(void *p, void (*drop)(void*)) { nurl__jrnl_push2(p, drop, NULL); }
 NURL_TLS_WRAP void nurl_journal_push(void *p) { nurl__jrnl_push(p, NULL); }
+/* An owned slice's buffer `p` holding `n` elements that own something:
+ * keyed by the buffer, as nurl_journal_push(p) is — so nurl_free of it, on
+ * whichever path releases it, ends the registration — and a panic's drain
+ * drops the elements (`drop(p, n)`, the slice's __slice_drop__<T> or
+ * nurl_closure_slice_drop) before it releases the buffer (Agora #509).
+ * The count is the slice's own: a slice's length never changes. */
+NURL_TLS_WRAP void nurl_journal_push_slice(void *p, void (*drop)(void*, long long), long long n) {
+    if (!p || __builtin_expect(!NURL_TLS_LD(long long, nurl__jrnl_active), 1)) return;
+    nurl__jrnl_push2_slow(p, (void (*)(void*))drop, NULL);
+    if (nurl__jrnl_len && nurl__jrnl[nurl__jrnl_len - 1].ptr == p) nurl__jrnl[nurl__jrnl_len - 1].n = n;
+}
 NURL_TLS_WRAP void nurl_journal_push_drop(void *slot, void (*fn)(void*)) {
     if (fn) nurl__jrnl_push(slot, fn);
 }
@@ -4380,6 +4396,12 @@ static void nurl__jrnl_drain_body(uint64_t mark) {
         }
         NurlJournalEntry entry = nurl__jrnl[nurl__jrnl_len - 1];
         nurl_journal_forget(entry.ptr);
+        /* A slice's buffer: its elements first, then the buffer as a raw
+         * one goes (below). */
+        if (entry.n >= 0 && entry.drop) {
+            if (entry.n > 0) ((void (*)(void*, long long))entry.drop)(entry.ptr, entry.n);
+            entry.drop = NULL;
+        }
         if (entry.drop) {
             if (!entry.flag || (*(volatile const unsigned char *)entry.flag & 1)) entry.drop(entry.ptr);
         } else {
