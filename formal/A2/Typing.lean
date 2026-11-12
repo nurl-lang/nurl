@@ -718,7 +718,9 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       holds nothing. -/
   | lockNew {t : Ty} {y : Var} {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
       Γ y = some Ey → Ey.live = true → Ey.ty = t →
-      t.dtorFree = true → t.holdsView = false ∧ t.hasFn = false →
+      -- (A2-drop.3d: the value owns no destructor value, or, Agora #755, is
+      -- one at its top holding no share: `Locked D`, `Ty.lkPay`)
+      t.lkPay = true → t.holdsView = false ∧ t.hasFn = false →
       PushArg Γ F y Ey t D Γ1 →
       RhsT Γ F (.lockNew t y) ⟨.lk t, .own, true, [], [], false, false⟩ Γ1
   /-- A3.2: `Locked_share`: a new share of the lock block `a` shares: owned,
@@ -736,6 +738,9 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       -- A3.5's second cut: read guards lend the value to several threads at
       -- once, so it faces the Sync question, as an `Arc`'s payload does (h357)
       t.hasCell = false →
+      -- (Agora #755: and owns no destructor value: a view's payload is a copy
+      -- of the lock's, which owns nothing, so `RwLocked D` is refused)
+      t.dtorFree = true →
       RhsT Γ F (.rwRead a) ⟨.arc (.prod (.lk t) t), .own, true, [], [], false, false⟩ Γ
   /-- A3.3: `rw_try_read a`: `rw_read`'s guard as an owned option
       (`Option` is `sum int _`), holding nothing; matched by value
@@ -743,7 +748,7 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       payload to every reader at once, so the payload holds no library handle
       (a cell share is not Sync, A3.5). -/
   | rwTryRead {a : Var} {E : Entry} {t : Ty} :
-      Γ a = some E → E.live = true → E.ty = .lk t → t.hasCell = false →
+      Γ a = some E → E.live = true → E.ty = .lk t → t.hasCell = false → t.dtorFree = true →
       RhsT Γ F (.rwTryRead a) ⟨.sum .int (.arc (.prod (.lk t) t)), .own, true, [], [], false, false⟩ Γ
   /-- A3.3: `rw_try_write a`'s answer: an owned option of an integer, holding
       nothing; the write itself is `withLock`'s check-out (`Stmt.withTryWrite`). -/
@@ -782,7 +787,7 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       owned cell share, which holds nothing. -/
   | cellNew {t : Ty} {y : Var} {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
       Γ y = some Ey → Ey.live = true → Ey.ty = t →
-      t.dtorFree = true → t.holdsView = false ∧ t.hasFn = false →
+      t.lkPay = true → t.holdsView = false ∧ t.hasFn = false →
       PushArg Γ F y Ey t D Γ1 →
       RhsT Γ F (.cellNew t y) ⟨.cell t, .own, true, [], [], false, false⟩ Γ1
   /-- A3.5: a copy of a library handle (`PNCounter_share`): a new owned cell
@@ -814,6 +819,10 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
   | lockRestore {a y : Var} {Ea Ey : Entry} {t : Ty} {Γ1 : Ctx} {D : List Dep} :
       Γ a = some Ea → Ea.live = true → Ea.ty = .lk t →
       Γ y = some Ey → Ey.live = true → Ey.ty = t → PushArg Γ F y Ey t D Γ1 →
+      -- (Agora #755: of a payload that owns no destructor value: the model's
+      -- restore also fills a block a `withLock` has checked out, whose
+      -- give-back would then drop its value with no code)
+      t.dtorFree = true →
       RhsT Γ F (.lockRestore a y) intE Γ1
 
 /-! ### Calls -/

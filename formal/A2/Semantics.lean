@@ -227,13 +227,15 @@ def Roots0 (R : Val → Prop) (B : Nat → Option Blk) (v : Val) : Prop := R v �
 
 /-- An orphan to be: an `arc` block whose payload, a destructor value (or a
     drained `Vec` of them, Agora #755), is
-    in it, which the roots do not reach. -/
+    in it, which the roots do not reach; or (Agora #755, `Locked D`) a lock
+    block whose payload, a destructor value, is in it (not checked out). -/
 def Cand (R : Val → Prop) (B : Nat → Option Blk) (k : Nat) : Prop :=
-  (∃ n f u p, B k = some ⟨Ty.nest n (.dtor f u), .arc, some p⟩) ∧ ¬ Reached (Roots0 R B) B k
+  (∃ n f u p kd, (kd = .arc ∨ kd = .lock) ∧ B k = some ⟨Ty.nest n (.dtor f u), kd, some p⟩) ∧
+    ¬ Reached (Roots0 R B) B k
 
 /-- An orphan to be's payload. -/
 def CandPay (R : Val → Prop) (B : Nat → Option Blk) (v : Val) : Prop :=
-  ∃ k n f u, Cand R B k ∧ B k = some ⟨Ty.nest n (.dtor f u), .arc, some v⟩
+  ∃ k n f u kd, Cand R B k ∧ B k = some ⟨Ty.nest n (.dtor f u), kd, some v⟩
 
 /-- A top orphan: no other orphan to be's payload reaches it either. -/
 def TopOrphan (R : Val → Prop) (B : Nat → Option Blk) (k : Nat) : Prop :=
@@ -241,7 +243,7 @@ def TopOrphan (R : Val → Prop) (B : Nat → Option Blk) (k : Nat) : Prop :=
 
 /-- A top orphan's payload. -/
 def TopPay (R : Val → Prop) (B : Nat → Option Blk) (v : Val) : Prop :=
-  ∃ k n f u, TopOrphan R B k ∧ B k = some ⟨Ty.nest n (.dtor f u), .arc, some v⟩
+  ∃ k n f u kd, TopOrphan R B k ∧ B k = some ⟨Ty.nest n (.dtor f u), kd, some v⟩
 
 /-- The marking sweep's roots: the slots' values, the orphans' payloads and
     the top orphans' to be. -/

@@ -872,7 +872,7 @@ theorem Anchored.mono {E : Entry} {F F' : List Var} (h : Anchored E F) (hF : ∀
     payload to one.  (That its destructor is one the program checked is
     `MemCodes`'s, which knows the program: `DeadCodes`.) -/
 def Blk.DtorOK (bl : Blk) : Prop :=
-  (bl.kind ≠ .dead → bl.kind ≠ .arc → bl.ty.dtorFree = true) ∧
+  (bl.kind ≠ .dead → bl.kind ≠ .arc → bl.ty.dtorFree = true ∨ (bl.kind = .lock ∧ bl.ty.lkPay = true)) ∧
   (bl.kind = .dead → bl.ty.dtorFree = false) ∧
   (bl.ty.dtorFree = false → ∃ n f u, bl.ty = Ty.nest n (.dtor f u) ∧ u.hasFn = false)
 
@@ -888,7 +888,7 @@ theorem Blk.DtorOK.of_eq {bl bl' : Blk} (h : bl.DtorOK) (ht : bl'.ty = bl.ty) (h
     bl'.DtorOK := by
   obtain ⟨h1, h2, h3⟩ := h
   refine ⟨fun a b => ?_, fun a => ?_, fun a => ?_⟩
-  · rw [ht]; exact h1 (hk ▸ a) (hk ▸ b)
+  · rw [ht, hk]; exact h1 (hk ▸ a) (hk ▸ b)
   · rw [ht]; exact h2 (hk ▸ a)
   · rw [ht] at a ⊢; exact h3 a
 
@@ -949,6 +949,15 @@ structure Inv (m : Mem) (Γ : Ctx) (F : List Var) (s : Stmt) : Prop extends MInv
                 (E.ty ≠ .int ∨ E.mode = .rootb) → v ∉ s.spine → ∀ d ∈ E.vdeps,
                 d.kind.isName = false → d.root ∉ s.spine
   dtorIn    : DtorPinOK Γ s
+
+/-- Agora #755: `StmtT.withLock`'s `hna` where the payload owns no destructor
+    value (its type is known) or the body assigns nothing to the binding. -/
+syntax "lock_na" : tactic
+macro_rules
+  | `(tactic| lock_na) =>
+    `(tactic| first
+      | (intro h; simp [Ty.holdsDtor] at h; done)
+      | (intro _; simp [Stmt.assigns]; done))
 
 /-! ### Typing of statements
 
@@ -1437,11 +1446,19 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       be replaced, not left moved out), so it is what goes back.  A3.5: the
       same rule is a library's in-place change of its state (`withCell`), on
       a cell share a root holds (`Entry.lockOf`): an owner, or (A3.5's third
-      cut) a borrowed parameter, a library's `in` handle. -/
+      cut) a borrowed parameter, a library's `in` handle.
+      Agora #755 (`Locked D`): the payload may be a destructor value
+      (`Ty.lkPay`).  Then `x` owns a destructor value no `letd` made, so, as
+      `letd`'s `hna`, it is given no other value in the body (`hna`: the old
+      value's drop, `DropSlot`, would run no destructor); it is not left
+      moved out at the end (above), and on a panic in the body the scope's
+      unwinding gives it back (`Step.scopeLP`, `Release.put`), as nurlc's
+      `locked_update` leaves the value in the lock's memory. -/
   | withLock {Γ Δ : Ctx} {F : List Var} {a x : Var} {s : Stmt} {Ea : Entry} {t : Ty} :
       s.src = true → Γ x = none → x ∉ F → Γ a = some Ea → Ea.live = true → Ea.lockOf t →
       StmtT P (setE Γ x (lockE t)) F s Δ → EndOK Δ x →
       Ea.mode.isRoot = true → a ∉ s.vars → (∃ E, Δ x = some E ∧ E.live = true) →
+      (hna : t.holdsDtor = true → x ∉ s.assigns := by lock_na) →
       StmtT P Γ F (.withLock a x s) (exitScope x Δ)
   /-- A3.2: run time: `x`'s lock scope, typed as a `scope`. -/
   | scopeL {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x : Var} {s : Stmt} :
@@ -1704,21 +1721,30 @@ def CodeOK (P : Prog) (fs : List Nat) (te : Ty) (ms : List Nat) (cs : List (Var 
     (`Rhs.codeOK`).  (A lock's and a view's payload owns no destructor
     value, `Blk.DtorOK`.) -/
 def DeadCodes (P : Prog) (B : Nat → Option Blk) : Prop :=
-  ∀ k n f u kd o, B k = some ⟨Ty.nest n (.dtor f u), kd, o⟩ → (kd = .arc ∨ kd = .dead) → DropFnOK P f u
+  ∀ k n f u kd o, B k = some ⟨Ty.nest n (.dtor f u), kd, o⟩ → DropFnOK P f u
 
-/-- No `arc` or `dead` block of a destructor type: nothing to check. -/
+/-- No block of a destructor type: nothing to check. -/
 theorem DeadCodes.of_none {P : Prog} {B : Nat → Option Blk}
-    (h : ∀ k bl, B k = some bl → (bl.kind = .arc ∨ bl.kind = .dead) → bl.ty.dtorFree = true) :
-    DeadCodes P B := fun k _ _ _ _ _ hk hkd => absurd (h k _ hk hkd) (by simp)
+    (h : ∀ k bl, B k = some bl → bl.ty.dtorFree = true) :
+    DeadCodes P B := fun k _ _ _ _ _ hk => absurd (h k _ hk) (by simp)
 
-/-- The check reads the blocks' types and kinds only. -/
+/-- The check reads the blocks' types only. -/
 theorem DeadCodes.of_types {P : Prog} {B B' : Nat → Option Blk} (h : DeadCodes P B)
-    (hb : ∀ k bl', B' k = some bl' → (bl'.kind = .arc ∨ bl'.kind = .dead) → bl'.ty.dtorFree = false →
-      ∃ bl, B k = some bl ∧ bl.ty = bl'.ty ∧ (bl.kind = .arc ∨ bl.kind = .dead)) :
-    DeadCodes P B' := fun k n f u kd o hk hkd => by
-  obtain ⟨⟨t, kd', o'⟩, h1, h2, h3⟩ := hb k _ hk hkd (by simp)
-  simp only at h2 h3; subst h2
-  exact h k n f u kd' o' h1 h3
+    (hb : ∀ k bl', B' k = some bl' → bl'.ty.dtorFree = false → ∃ bl, B k = some bl ∧ bl.ty = bl'.ty) :
+    DeadCodes P B' := fun k n f u kd o hk => by
+  obtain ⟨⟨t, kd', o'⟩, h1, h2⟩ := hb k _ hk (by simp)
+  simp only at h2; subst h2
+  exact h k n f u kd' o' h1
+
+/-- Agora #755: a block whose type is an old block's keeps its destructor's
+    check (a lock block's payload checked out, given back, changed). -/
+theorem DeadCodes.upd_same {P : Prog} {B : Nat → Option Blk} (h : DeadCodes P B) {k : Nat} {bl0 bl : Blk}
+    (hk : B k = some bl0) (hty : bl.ty = bl0.ty) :
+    ∀ n f u kd o, bl = ⟨Ty.nest n (.dtor f u), kd, o⟩ → DropFnOK P f u := by
+  intro n f u kd o e
+  obtain ⟨t0, kd0, o0⟩ := bl0
+  subst e; simp only at hty; subst hty
+  exact h k n f u kd0 o0 hk
 
 /-- Every package in memory names code that implements its interfaces: the
     ones the slots hold, and (A3.5b) the ones the blocks hold, which may be
@@ -1741,6 +1767,9 @@ def Rhs.codeOK (P : Prog) : Rhs → Prop
   -- Agora #610: an `Arc` of a destructor value names a destructor the program
   -- checked; Agora #755: so does one of a drained `Vec` of them
   | .arcNew t _ => ∀ n f u, t = Ty.nest n (.dtor f u) → DropFnOK P f u
+  -- Agora #755: so does a lock or a cell of one (`Locked D`)
+  | .lockNew t _ => ∀ n f u, t = Ty.nest n (.dtor f u) → DropFnOK P f u
+  | .cellNew t _ => ∀ n f u, t = Ty.nest n (.dtor f u) → DropFnOK P f u
   | _ => True
 
 /-- Agora #755: `arc_new` of a destructor value, or of a drained `Vec` of

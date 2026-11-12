@@ -200,7 +200,7 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
     exact CtxRel.bind hanch hx hxF (hk0.trans (hr.ctxRel hanchk)) hnrb (fun ha => by
       have h2 := ihs hks ha hnx
       exact h2.trans (ihp rfl (h2.anch ha) (StmtT.names hP hk hks hnx))) hpin.1
-  | @withLock Γ Δ F a x k Ea t hks hx hxF _ _ _ _ hpin _ _ _ ih =>
+  | @withLock Γ Δ F a x k Ea t hks hx hxF _ _ _ _ hpin _ _ _ _ ih =>
     intro _ hanch hn
     have hnx := NameWF.setE hn (E := lockE t) (fun Ex h => by rw [hx] at h; cases h)
       (fun Ex h => by rw [hx] at h; cases h) (fun _ _ => by unfold NameOK; rw [lockE_vdeps]; exact DepsNamed.nil _)

@@ -116,23 +116,30 @@ theorem MemCodes.of_st {P : Prog} {m m' : Mem} (h : MemCodes P m) (hst : m'.st =
     (hb : m'.blk = m.blk := by rfl) : MemCodes P m' :=
   h.withBlk hst (by rw [hb]; exact h.blk)
 
-/-- A3.5b: a block whose payload's packages name code of their signature. -/
+/-- A3.5b: a block whose payload's packages name code of their signature.
+    (Agora #610, #755: and whose destructor, if its type is a destructor
+    type or a drained `Vec` of them, the program checked; a block of no such
+    type, an integer lock, a view, has nothing more to check.) -/
 theorem BlkCodes.upd {P : Prog} {B : Nat → Option Blk} (h : BlkCodes P B) {k : Nat} {bl : Blk}
     (hbl : PkgOK P bl.tree ∧ PkgOK P bl.rd)
-    -- (Agora #610: a lock block or a view has nothing more to check)
-    (hd : ∀ n f u kd o, bl = ⟨Ty.nest n (.dtor f u), kd, o⟩ → (kd = .arc ∨ kd = .dead) → DropFnOK P f u := by
-      intro _ _ _ _ _ h hk
-      first
-        | (obtain ⟨-, h2, -⟩ := Blk.mk.inj h; subst h2; rcases hk with hk | hk <;> cases hk)
-        | (cases h <;> (rcases hk with hk | hk <;> cases hk))) :
+    (hd : ∀ n f u kd o, bl = ⟨Ty.nest n (.dtor f u), kd, o⟩ → DropFnOK P f u := by
+      intro n _ _ _ _ e; cases n <;> cases e) :
     BlkCodes P (upd B k (some bl)) := by
-  refine ⟨fun k' bl' hk' => ?_, fun k' n f u kd o hk' hkd => ?_⟩
+  refine ⟨fun k' bl' hk' => ?_, fun k' n f u kd o hk' => ?_⟩
   · by_cases hkk : k' = k
     · subst hkk; rw [upd_same] at hk'; cases hk'; exact hbl
     · rw [upd_ne _ _ hkk] at hk'; exact h.1 k' bl' hk'
   · by_cases hkk : k' = k
-    · subst hkk; rw [upd_same] at hk'; cases hk'; exact hd n f u kd o rfl hkd
-    · rw [upd_ne _ _ hkk] at hk'; exact h.2 k' n f u kd o hk' hkd
+    · subst hkk; rw [upd_same] at hk'; cases hk'; exact hd n f u kd o rfl
+    · rw [upd_ne _ _ hkk] at hk'; exact h.2 k' n f u kd o hk'
+
+/-- Agora #755: a block put where one of the same type was (a lock block
+    whose payload is checked out, given back or changed) keeps its
+    destructor's check. -/
+theorem BlkCodes.updSame {P : Prog} {B : Nat → Option Blk} (h : BlkCodes P B) {k : Nat} {bl0 bl : Blk}
+    (hbl : PkgOK P bl.tree ∧ PkgOK P bl.rd) (hk : B k = some bl0) (hty : bl.ty = bl0.ty := by rfl) :
+    BlkCodes P (A2.upd B k (some bl)) :=
+  BlkCodes.upd h hbl (h.2.upd_same hk hty)
 
 /-- Agora #610: ... a `dead` block's: it owns its payload, and no one reads it. -/
 theorem blkCodes_dead {P : Prog} {t : Ty} {p : Option Val} (hp : ∀ v, p = some v → PkgOK P v) :
@@ -285,17 +292,19 @@ theorem EvalR.codes {P : Prog} {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (he :
     -- A3.5b: the payload may hold packages, the ones the value moved in held
     obtain ⟨hv, hm1⟩ := h1.codes h
     exact ⟨pkgOK_leaf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h),
-      hm1.withBlk rfl (hm1.blk.upd (blkCodes_arc hv) (fun n f u kd o e _ => by cases e; exact hr n f u rfl))⟩
+      hm1.withBlk rfl (hm1.blk.upd (blkCodes_arc hv) (fun n f u kd o e => by cases e; exact hr n f u rfl))⟩
   | lockNew h1 _ =>
     obtain ⟨hv, hm1⟩ := h1.codes h
     exact ⟨pkgOK_leaf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h),
-      hm1.withBlk rfl (hm1.blk.upd (blkCodes_lock fun _ e => by cases e; exact hv))⟩
+      hm1.withBlk rfl (hm1.blk.upd (blkCodes_lock fun _ e => by cases e; exact hv)
+        (fun n f u kd o e => by cases e; exact hr n f u rfl))⟩
   | arcClone _ => exact ⟨pkgOK_leaf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h), h⟩
   | lockClone _ => exact ⟨pkgOK_leaf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h), h⟩
   | cellNew h1 _ =>
     obtain ⟨hv, hm1⟩ := h1.codes h
     exact ⟨pkgOK_leaf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h),
-      hm1.withBlk rfl (hm1.blk.upd (blkCodes_lock fun _ e => by cases e; exact hv))⟩
+      hm1.withBlk rfl (hm1.blk.upd (blkCodes_lock fun _ e => by cases e; exact hv)
+        (fun n f u kd o e => by cases e; exact hr n f u rfl))⟩
   | cellClone _ => exact ⟨pkgOK_leaf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h), h⟩
   | glob _ hf =>
     rcases hf with ⟨_, _, _, _, rfl, _⟩ | ⟨_, _, _, _, rfl, _⟩ <;>
@@ -334,7 +343,7 @@ theorem EvalR.codes {P : Prog} {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (he :
     -- A3.4: the queue's elements, and the value sent
     obtain ⟨hv, hm1⟩ := h1.codes h
     have hp : PkgOK P (.pair (.node u c d es) (.int 0)) := (hm1.blk.1 _ _ hk).1
-    refine ⟨pkgOK_int P _, hm1.withBlk rfl (hm1.blk.upd (blkCodes_lock fun _ e => ?_))⟩
+    refine ⟨pkgOK_int P _, hm1.withBlk rfl (hm1.blk.updSame (blkCodes_lock fun _ e => ?_) hk)⟩
     cases e
     refine pkgOK_of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
     cases hc with
@@ -353,7 +362,7 @@ theorem EvalR.codes {P : Prog} {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (he :
     -- A3.4: the queue's head was in the channel's payload
     have hp : PkgOK P (.pair (.node u c d (v :: es)) (.int f)) := (hB _ _ hk).1
     refine ⟨pkgOK_of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_),
-      h.withBlk rfl (h.blk.upd (blkCodes_lock fun _ e => ?_))⟩
+      h.withBlk rfl (h.blk.updSame (blkCodes_lock fun _ e => ?_) hk)⟩
     · cases hc with
       | inr => exact pkgOK_elem (hp.child Child.fst) (List.mem_cons_self ..)
     · cases e
@@ -370,13 +379,13 @@ theorem EvalR.codes {P : Prog} {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (he :
     | inl => exact pkgOK_int P _
   | lockTake _ hk _ =>
     -- A3.2's second cut: the taken payload's packages were the block's
-    exact ⟨(hB _ _ hk).1, h.withBlk rfl (h.blk.upd (blkCodes_lock fun _ e => by cases e))⟩
-  | lockRestore _ h1 _ =>
+    exact ⟨(hB _ _ hk).1, h.withBlk rfl (h.blk.updSame (blkCodes_lock fun _ e => by cases e) hk)⟩
+  | lockRestore _ h1 hk =>
     obtain ⟨hv, hm1⟩ := h1.codes h
-    exact ⟨pkgOK_int P _, hm1.withBlk rfl (hm1.blk.upd (blkCodes_lock fun _ e => by cases e; exact hv))⟩
+    exact ⟨pkgOK_int P _, hm1.withBlk rfl (hm1.blk.updSame (blkCodes_lock fun _ e => by cases e; exact hv) hk)⟩
   | @chanClose _ _ k _ q _ _ hk _ =>
     have hp : PkgOK P (.pair q (.int _)) := (hB _ _ hk).1
-    refine ⟨pkgOK_int P _, h.withBlk rfl (h.blk.upd (blkCodes_lock fun _ e => ?_))⟩
+    refine ⟨pkgOK_int P _, h.withBlk rfl (h.blk.updSame (blkCodes_lock fun _ e => ?_) hk)⟩
     cases e
     refine pkgOK_of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
     cases hc with
@@ -454,9 +463,9 @@ theorem callIn_codes {P : Prog} (hPc : ProgCodes P) {f : Nat} {fn : Fn} (hf : P[
 theorem Release.codes {P : Prog} {m m' : Mem} {k : Nat} {t : Ty} {x : Var} (hrl : Release m k t x m')
     (hm : MemCodes P m) : MemCodes P m' := by
   cases hrl with
-  | put hx _ _ =>
+  | put hx _ hk =>
     refine MemCodes.remove ?_ _
-    exact hm.withBlk rfl (hm.blk.upd (blkCodes_lock fun _ e => by cases e; exact hm.slot hx))
+    exact hm.withBlk rfl (hm.blk.updSame (blkCodes_lock fun _ e => by cases e; exact hm.slot hx) hk)
   | drop _ _ _ => exact (hm.of_st rfl).remove _
 
 /-- Every step keeps every package naming code of its signature. -/
@@ -500,7 +509,7 @@ theorem codes_step {P : Prog} (hPc : ProgCodes P) {m : Mem} {s : Stmt} {r : Res}
     -- A3.2: the payload checked out, with its packages, goes to `x`
     intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     refine ⟨MemCodes.set ?_ (fun V e => by cases e; exact (hB _ _ hk).1), hs⟩
-    exact hm.withBlk rfl (hm.blk.upd (blkCodes_lock fun _ e => by cases e))
+    exact hm.withBlk rfl (hm.blk.updSame (blkCodes_lock fun _ e => by cases e) hk)
   | @reap r0 k0 n f u p _ hk _ =>
     -- Agora #610: the payload moved out, with its packages, goes to the fresh
     -- binding; the block stays a `dead` block of its type
@@ -508,9 +517,9 @@ theorem codes_step {P : Prog} (hPc : ProgCodes P) {m : Mem} {s : Stmt} {r : Res}
     refine ⟨MemCodes.withBlk (m := m.set m.nv ⟨true, some p⟩)
       (MemCodes.set hm (fun V e => by cases e; exact (hB _ _ hk).1)) rfl
       (hm.blk.upd (blkCodes_dead fun _ e => by cases e)
-        (fun n' f' u' kd o e _ => by
+        (fun n' f' u' kd o e => by
           obtain ⟨-, rfl, rfl⟩ := Ty.nest_dtor_inj (Blk.mk.inj e).1
-          exact hm.dead k0 n f u _ _ hk (Or.inr rfl))), trivial, hs⟩
+          exact hm.dead k0 n f u _ _ hk)), trivial, hs⟩
   | scopeLSkip hrl _ =>
     intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact ⟨hrl.codes hm, trivial⟩
