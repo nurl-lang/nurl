@@ -7806,7 +7806,9 @@ unsafe @ gen_ret i lex i syms i cg → s {
     // effects before the `ret` — the walk stops there — after an `expr` row
     // that reads what the return read, as a statement's own row does,
     // agora #584.)
-    ? != 0 g_bck_vs_pend { ( __vself_ret_flush bck_line ) } {}
+    // …otherwise the rows of its calls the walk decides
+    // (__bck_ret_flush_ppends, Agora #680).
+    ? != 0 g_bck_vs_pend { ( __vself_ret_flush bck_line ) } { ( __bck_ret_flush_ppends bck_line ) }
     // With a `;` defer armed, the chain runs after the value is the
     // caller's: the owner this `^` hands back by name is lent to the
     // defers — read, not released (the walk's ret row, bck_apply_defers).
@@ -27514,7 +27516,9 @@ unsafe @ __bck_fall_ret_record i lex i syms i first_tt s first_val i sxn0 i line
     // effects before the `ret` — the walk stops there — after an `expr` row
     // that reads what the return read, as a statement's own row does,
     // agora #584.)
-    ? != 0 g_bck_vs_pend { ( __vself_ret_flush line ) } {}
+    // …otherwise the rows of its calls the walk decides
+    // (__bck_ret_flush_ppends, Agora #680).
+    ? != 0 g_bck_vs_pend { ( __vself_ret_flush line ) } { ( __bck_ret_flush_ppends line ) }
     ( bck_record `ret` g_bck_ret_whole line )
     = g_bck_ret_whole ``
     = g_bck_ret_sx ``
@@ -37062,6 +37066,58 @@ unsafe @ bck_swap_char s str i from i to → s {
 // A return's effects, its `sK` rows among them, ahead of its `ret` row:
 // what it read is read by an `expr` row before them, and the `ret` row
 // reads nothing more (what it hands back is its source expression's).
+// The rows of the calls whose effect is decided at the walk (`ppends`:
+// `pendcall`, `pendfx`, `pendkeep`, …), recorded where the walk is now —
+// all of them, or (`calls`) all but the stores into an owner (`store`,
+// `pendstore`), which stay in the list.
+@ __bck_flush_ppends b calls → v {
+    : ~ s prest ( nurl_sym_get g_bck `ppends` )
+    : ~ s keep ``
+    ( bck_put `ppends` `` )
+    ? ! calls { = g_bck_ownerless 0 } {}
+    ~ != 0 ( nurl_str_len prest ) {
+        : s pnm ( str_first_word prest )
+        = prest ( str_skip_word prest )
+        : s pln ( str_first_word prest )
+        = prest ( str_skip_word prest )
+        : s pcal ( str_first_word prest )
+        = prest ( str_skip_word prest )
+        : s paix ( str_first_word prest )
+        = prest ( str_skip_word prest )
+        : s pkind ( str_first_word prest )
+        = prest ( str_skip_word prest )
+        ? & calls | ( seq pkind `store` ) ( seq pkind `pendstore` ) {
+            : s e ( nurl_str_cat4 ( nurl_str_cat4 pnm ` ` pln ` ` ) pcal ` ` ( nurl_str_cat3 paix ` ` pkind ) )
+            = keep ? == 0 ( nurl_str_len keep ) e ( nurl_str_cat3 keep ` ` e )
+        } {
+            // (`L/S`: the row's line and its statement's, field 8 —
+            // __bck_pend_line.)
+            : i psl ( nurl_str_find pln `/` )
+            ? < psl 0 { ( bck_record2 pkind pnm ( nurl_str_to_int pln ) pcal paix ) } {
+                ( bck_record2 pkind pnm ( nurl_str_to_int pln ) pcal ( nurl_str_cat3 paix `\t\t:` ( nurl_str_slice pln + psl 1 - - ( nurl_str_len pln ) psl 1 ) ) )
+            }
+        }
+    }
+    ? != 0 ( nurl_str_len keep ) { ( bck_put `ppends` keep ) } {}
+}
+
+// A return's calls, judged before its `ret` row ends the path (Agora
+// #680): the pending rows its expression stashed — a field of a borrow
+// handed to a `sink` (`pendfx`), a keeping call — landed behind it, never
+// walked: `^ ( keep . c name )` freed a field the owner still held, where
+// the same call bound first was refused. As a statement's: an `expr` row
+// that reads what the return read, then the calls' rows (as
+// __vself_ret_flush, agora #584). Only those: what the return itself
+// moves or stores into the value it hands back is the `ret` row's to
+// judge — a lend, where it reads through a borrow; one store per arm of a
+// join (`^ ? c @ K { a b } @ K { b a }`), which a walk of the arms' rows
+// in turn would take for two owners.
+@ __bck_ret_flush_ppends i line → v {
+    ? | | == g_borrowck 0 != g_bck_rec_off 0 == 0 ( nurl_sym_len g_bck `ppends` ) { ^ } {}
+    ( bck_record `expr` `` line )
+    ( __bck_flush_ppends T )
+}
+
 @ __vself_ret_flush i line → v {
     ? | == g_borrowck 0 != g_bck_rec_off 0 { ^ } {}
     ( bck_record `expr` `` line )
@@ -37526,8 +37582,8 @@ unsafe @ __vk_union_of s fns s seen b dyn → s {
 // is on line L of a statement that began on an earlier line S (a call
 // whose arguments run over several lines). The row keeps L (diagnostics
 // name it, `atoll` reads it); S is the statement a lend the row notes is
-// for, the line the statement's own `let` / `assign` row carries
-// (bck_flush_moves, __bck_pl_line; Agora #678).
+// for, the line the statement's own `let` / `assign` row carries — the
+// row's field 8, `:S` (bck_flush_moves, __bck_pl_line; Agora #678).
 @ __bck_pend_line i line → s {
     ? | == g_bck_stmt_line 0 >= g_bck_stmt_line line { ^ ( nurl_str_int line ) } {}
     ^ ( nurl_str_cat3 ( nurl_str_int line ) `/` ( nurl_str_int g_bck_stmt_line ) )
@@ -37706,27 +37762,7 @@ unsafe @ __vk_union_of s fns s seen b dyn → s {
             ( bck_record2 ? cmv `cmove` `cdep` cnm ( nurl_str_to_int cln ) ccal ? cmv ( nurl_str_slice cix 0 - ( nurl_str_len cix ) 1 ) cix )
         }
         // …and the calls whose move effect is not decidable yet.
-        : ~ s prest ( nurl_sym_get g_bck `ppends` )
-        ( bck_put `ppends` `` )
-        = g_bck_ownerless 0
-        ~ != 0 ( nurl_str_len prest ) {
-            : s pnm ( str_first_word prest )
-            = prest ( str_skip_word prest )
-            : s pln ( str_first_word prest )
-            = prest ( str_skip_word prest )
-            : s pcal ( str_first_word prest )
-            = prest ( str_skip_word prest )
-            : s paix ( str_first_word prest )
-            = prest ( str_skip_word prest )
-            : s pkind ( str_first_word prest )
-            = prest ( str_skip_word prest )
-            // (`L/S`: the row's line and its statement's, field 8 —
-            // __bck_pend_line.)
-            : i psl ( nurl_str_find pln `/` )
-            ? < psl 0 { ( bck_record2 pkind pnm ( nurl_str_to_int pln ) pcal paix ) } {
-                ( bck_record2 pkind pnm ( nurl_str_to_int pln ) pcal ( nurl_str_cat3 paix `\t\t` ( nurl_str_slice pln + psl 1 - - ( nurl_str_len pln ) psl 1 ) ) )
-            }
-        }
+        ( __bck_flush_ppends F )
         // (Its `sK` rows among them: none wait now.)
         = g_bck_vs_pend 0
     } {}
@@ -38903,7 +38939,7 @@ unsafe @ bck_sx_ids s sx → s {
             ( nurl_str_cat3 `\t` ( bck_field rec 6 ) `` ) ) } {}
         // (Field 8: the statement's line, where it began on an earlier
         // line than the row's — __bck_pend_line.)
-        : s f8 ( bck_field rec 8 )
+        : s f8 ( __bck_row_sl rec )
         : s tl ? == 0 ( nurl_str_len f8 ) `` ( nurl_str_cat `\t` f8 )
         // A keeping call's container (`pko_`, the binding it was handed
         // first): as the enclosing scope spells it.
@@ -44617,9 +44653,22 @@ unsafe @ __bck_rv_self_tie i wid s cals → v {
 // A call whose arguments run over several lines lends to the binding its
 // statement binds as a one-line call does (Agora #678).
 @ __bck_pl_line s rec → s {
-    : s sl ( bck_field rec 8 )
-    ? != 0 ( nurl_str_len sl ) { ^ sl } {}
+    : s sl ( __bck_row_sl rec )
+    ? != 0 ( nurl_str_len sl ) { ^ ( nurl_str_slice sl 1 - ( nurl_str_len sl ) 1 ) } {}
     ^ ( bck_field rec 3 )
+}
+
+// A pending row's statement line, its last field (`:S`, field 8 —
+// bck_flush_moves), read from the row's end: every pending row is asked,
+// and bck_field walks a row from its start. "" for a row without one.
+unsafe @ __bck_row_sl s rec → s {
+    : i n ( nurl_str_len rec )
+    : *u rp # *u rec
+    : ~ i p - n 1
+    ~ & >= p 0 != 9 # i . rp p { = p - p 1 }
+    ? | < p 0 >= + p 1 n { ^ ( nurl_str_cat `` `` ) } {}
+    ? != 58 # i . rp + p 1 { ^ ( nurl_str_cat `` `` ) } {}
+    ^ ( __span_dup rec + p 1 n )
 }
 
 // Note that the call on `line` lends argument binding `id` (`tag` `:p`

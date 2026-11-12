@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/borrow_sink_field_in_returned_call.nu:16:5: error: 'c' is a borrow (a copy of an element vec_at lends, a view of something another binding owns), and its field '. c name' is handed here to 'keep', which takes it, as if it owned the value. Only the copy in 'c' is emptied: the owner still holds that field and releases it again. Hand over a copy that is yours (string_from, mem_dup, slice_to_vec), or take the field from where it lives — an element read with vec_get (its slot is emptied), the owner's own field.
+    ^ ( keep . c name )
+    ^
+error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)
