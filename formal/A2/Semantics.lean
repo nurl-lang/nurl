@@ -1369,9 +1369,17 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
       m.st c = some ⟨true, some (.pkg fs te ms env [])⟩ → fs[j]? = some f → P[f]? = some fn →
       m.st x = none → fn.params.head? = some (.sink, pt) →
       Step P m (.callcE x c j zs k) (.ok (handMem m c x env fn.resOwn) (handStmtD x f zs m.nv k))
+  /-- A `recover` frame catches a panic: the frames inside are unwound, `x`
+      says the call failed, and the frame stays, at its end (`catchSkip`
+      leaves it next).  Agora #790: a share whose last drop is the
+      unwinding's is reaped there, inside the frame (`Step.reap` at its
+      `skip`), so a panic of that orphan's destructor is caught by the same
+      `recover`, as nurlc's journal drain, which runs the drop, is: a panic
+      raised while the frame's journal drains is caught by the same frame
+      (`stdlib/runtime_core.c`, `nurl_panic`). -/
   | catchP {m m1 : Mem} {x : Var} {m0 : Mem} {s : Stmt} :
       Step P m s (.panic m1) → (m1.st x).isSome →
-      Step P m (.catchR x m0 s) (.ok (m1.set x ⟨false, some (.int 1)⟩) .skip)
+      Step P m (.catchR x m0 s) (.ok (m1.set x ⟨false, some (.int 1)⟩) (.catchR x m0 .skip))
   -- A2-drop: a binding whose type has a destructor (`% Drop`).
   | letd {m m' : Mem} {x : Var} {f : Nat} {r : Rhs} {s : Stmt} {v : Val} {o : Bool} :
       m.st x = none → EvalR m r (.ok v o m') →
@@ -1407,14 +1415,20 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
   | scopeDEmpty {m : Mem} {x : Var} {f : Nat} {t : Ty} {c d : Nat} :
       m.st x = some ⟨true, some (.node t c d [])⟩ →
       Step P m (.scopeD x f .skip) (.ok m (.scope x .skip))
-  /-- A panic stops at the frame: the destructor runs, `x` is freed, and the
-      panic goes on. The frame is gone, so a panic in the destructor does not
-      run it again, and `scope x` still frees the fields (of a value its
-      destructor took lent; a glue has them in frames of their own). -/
+  /-- A panic stops at the frame: the frame is left at its end, followed by
+      the panic raised again; its end (`scopeDEnd`) runs the destructor, `x`
+      is freed, and the panic goes on.  The frame is gone once its end is
+      taken, so a panic in the destructor does not run it again, and
+      `scope x` still frees the fields (of a value its destructor took lent;
+      a glue has them in frames of their own).  Agora #790: a share whose
+      last drop is the unwinding's is reaped at the frame's `skip`, inside
+      it (`Step.reap`), before the destructor runs: a panic of that orphan's
+      destructor comes back to this frame, which runs `x`'s destructor all
+      the same, as nurlc's journal drain runs the drops after one that
+      panics (`stdlib/runtime_core.c`, `nurl_panic`). -/
   | scopeDP {m m1 : Mem} {x : Var} {f : Nat} {s : Stmt} {v : Val} :
       Step P m s (.panic m1) → m1.st x = some ⟨true, some v⟩ → v.isNode = false →
-      Step P m (.scopeD x f s)
-        (.ok { m1 with nv := m1.nv + 1 } (.seq (.scope x (.letcall m1.nv f [x] .skip)) .panic))
+      Step P m (.scopeD x f s) (.ok m1 (.seq (.scopeD x f .skip) .panic))
   /-- A2-drop.3b: a panic stops at the frame of a `Vec` of destructor values
       too: the frame drains what the `Vec` still holds (each element's
       destructor runs, in index order), then the panic goes on.  A panic in

@@ -328,12 +328,38 @@ theorem scopeD_end_runs_dtor {P : Prog} {Γ Δ : Ctx} {F : List Var} {x : Var} {
     | waitPanic hw => exact hw.elim
 
 /-- …and on the panic path: a panic out of the body with `x` still owning
-    its value stops at the frame, runs `f` on `x`, frees it, and raises again. -/
+    its value stops at the frame, which is left at its end, followed by the
+    panic; from there (with no orphan to reap first) the only step is the
+    frame's end, which calls `f` on `x` (and `scope x` frees it), the panic
+    raised again after.  (Agora #790: an orphan the unwinding left is reaped
+    at that end's `skip`, inside the frame, first: a panic of its destructor
+    comes back to the frame, which still runs `f`,
+    `A2.ArcPanicWitness.reap_panic_runs_dtor`.) -/
 theorem scopeD_panic_runs_dtor {P : Prog} {x : Var} {f : Nat} {m m1 : Mem} {s : Stmt} {v : Val}
     (hs : Step P m s (.panic m1)) (hx : m1.st x = some ⟨true, some v⟩) (hv : v.isNode = false) :
-    Step P m (.scopeD x f s)
-      (.ok { m1 with nv := m1.nv + 1 } (.seq (.scope x (.letcall m1.nv f [x] .skip)) .panic)) :=
-  Step.scopeDP hs hx hv
+    Step P m (.scopeD x f s) (.ok m1 (.seq (.scopeD x f .skip) .panic)) ∧
+      (¬ Orphan m1 → ∀ r, Step P m1 (.seq (.scopeD x f .skip) .panic) r ↔
+        r = .ok { m1 with nv := m1.nv + 1 } (.seq (.scope x (.letcall m1.nv f [x] .skip)) .panic)) := by
+  refine ⟨Step.scopeDP hs hx hv, fun hno r => ⟨fun h => ?_, fun h => h ▸ Step.seqL (Step.scopeDEnd hx hv)⟩⟩
+  have hend : ∀ r', Step P m1 (.scopeD x f .skip) r' →
+      r' = .ok { m1 with nv := m1.nv + 1 } (.scope x (.letcall m1.nv f [x] .skip)) := by
+    intro r' h
+    cases h with
+    | reap hrs _ _ => cases hrs
+    | scopeDIn hs => exact (skip_no_step hno hs).elim
+    | scopeDEnd _ _ => rfl
+    | scopeDMoved hm => rw [hx] at hm; cases hm
+    | scopeDDrain h => rw [hx] at h; cases h; cases hv
+    | scopeDEmpty h => rw [hx] at h; cases h; cases hv
+    | scopeDP hs _ _ => exact (skip_no_step hno hs).elim
+    | scopeDPDrain hs _ => exact (skip_no_step hno hs).elim
+    | scopeDPMoved hs _ => exact (skip_no_step hno hs).elim
+    | waitPanic hw => exact hw.elim
+  cases h with
+  | reap hrs _ _ => cases hrs
+  | seqL h => cases hend _ h; rfl
+  | seqP h => cases hend _ h
+  | waitPanic hw => exact hw.elim
 
 /-- **A2-drop.3b: the scope end of a `Vec` of destructor values drains it.**
     When the frame's body is done and `x` still owns a `Vec` with an element,
