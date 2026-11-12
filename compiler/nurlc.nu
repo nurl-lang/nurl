@@ -35279,7 +35279,11 @@ unsafe @ __rpg_rget i r i k → i { ^ ( nurl_peek # s g_rpg_rec + * r 6 k ) }
         // (A view the call hands back owns nothing, whatever its result is
         // marked: it is derived through the callee's summary.)
         : b fresh | | | ( seq __rb_own `str` ) & ( seq __rb_own `1` ) != ( bck_bind_class vt ) 2 & __rb_num ! ( bck_raw_call cbase ) __rb_clo_own
-        : b summarised & & ! __rb_clo != 0 ( nurl_str_len cn ) | | != 0 ( nurl_sym_len2 g_root_syms cn `__nurlfn` ) != 0 ( nurl_sym_len2 g_root_syms cbase `__nurlfn` ) != 0 ( nurl_sym_len2 g_root_syms cbase `__garity` )
+        // (A `dyn` method call's virtual callee, `m__dyn__T`, is a NURL
+        // function of the call site's scope only — its summaries, the union
+        // of every impl's, are joined at module end (__dyn_virtual_round):
+        // what it lends is that union's, as at a direct call. Agora #699.)
+        : b summarised & & ! __rb_clo != 0 ( nurl_str_len cn ) | | | != 0 ( nurl_sym_len2 g_root_syms cn `__nurlfn` ) != 0 ( nurl_sym_len2 g_root_syms cbase `__nurlfn` ) != 0 ( nurl_sym_len2 g_root_syms cbase `__garity` ) != 0 ( nurl_sym_len2 g_pending_impl `dynvm##` cn )
         ? fresh {} { ? summarised {
                 // `0=a,b;1=c;…`: what each argument read.
                 : ~ s ar ( nurl_sym_get syms `__last_call_argreads__` )
@@ -66160,6 +66164,29 @@ unsafe @ __rpg_summarise i f i rlo i rhi b trace → b {
 // back more than it did. Then the raw writes and frees become mutation /
 // reallocation summaries and the argument edges join the mutation edges
 // (resolve_mutation_summaries).
+// A `dyn` method's virtual callee `v` (an id of the records) answers as any
+// of its impls may: what it lends, hands back a pointer into, or lets
+// escape is the union of theirs — rows 2, 4, 5, 6, 12 and 14 — as far as
+// their records have it now. Answers whether a row grew (Agora #699).
+unsafe @ __rpg_dyn_refresh i v → b {
+    : ~ s fns ( __dyn_impl_fns ( __rpg_fname v ) )
+    : ~ b grew F
+    ~ != 0 ( nurl_str_len fns ) {
+        : s fn ( str_first_word fns ) = fns ( str_skip_word fns )
+        : i c ( nurl_sym_int g_rpg_fid fn )
+        ? >= c 0 {
+            : ~ s rows `2 4 5 6 12 14`
+            ~ != 0 ( nurl_str_len rows ) {
+                : i k ( nurl_str_to_int ( str_first_word rows ) ) = rows ( str_skip_word rows )
+                : i was ( __rpg_fget v k )
+                : i now | was ( __rpg_fget c k )
+                ? != now was { ( __rpg_fset v k now ) = grew T } {}
+            }
+        } {}
+    }
+    ^ grew
+}
+
 unsafe @ resolve_raw_provenance → v {
     ( __rpg_retfwd_records )
     ? == g_rpg_nfn 0 { ^ v } {}
@@ -66193,6 +66220,31 @@ unsafe @ resolve_raw_provenance → v {
         } {}
         = rq + rq 1
     }
+    // A `dyn` method call's virtual callee (`m__dyn__T`, __dyn_virtual_note)
+    // has no body here, and resolve_pending_impls joins its impls'
+    // summaries into it only after this: what it lends is theirs (Agora
+    // #699), its rows their union (__rpg_dyn_refresh), kept up to date below
+    // as theirs grow. `dvm`: an impl → the virtuals (ids) it is one of.
+    : Tab dvm_tab @ Tab { ( nurl_sym_new ) }
+    : i dvm . dvm_tab h
+    ? != g_rpg_fid 0 {
+        : ~ s dvrest ( nurl_sym_get g_pending_impl `dynvirt` )
+        ~ != 0 ( nurl_str_len dvrest ) {
+            : s vn ( str_first_word dvrest ) = dvrest ( str_skip_word dvrest )
+            : i vi ( nurl_sym_int g_rpg_fid vn )
+            ? >= vi 0 {
+                : ~ s fns ( __dyn_impl_fns vn )
+                ~ != 0 ( nurl_str_len fns ) {
+                    : s fn ( str_first_word fns ) = fns ( str_skip_word fns )
+                    ( nurl_sym_append_word dvm fn ( nurl_str_int vi ) )
+                    // (…and what each lends by the summaries it has, as an
+                    // asked callee's row 2 is seeded above.)
+                    ( __rpg_fset vi 2 | ( __rpg_fget vi 2 ) ( __rpg_mask vi ( mem_fn_lend_sources fn ) ) )
+                }
+                ( __rpg_dyn_refresh vi )
+            } {}
+        }
+    } {}
     // Each function's records, in order (a counting sort by function):
     // row 11 is where its run starts in g_rpg_list.
     : Buf cnt_own @ Buf { # i ( nurl_zalloc * + g_rpg_nfn 1 8 ) }
@@ -66281,6 +66333,25 @@ unsafe @ resolve_raw_provenance → v {
                     ( __rpg_fset h 9 1 )
                 } {}
                 = ci + ci 1
+            }
+            // …and the callers of each virtual g is an impl of, where the
+            // union grew (Agora #699).
+            : ~ s dvs ( nurl_sym_get dvm ( __rpg_fname g ) )
+            ~ != 0 ( nurl_str_len dvs ) {
+                : i v ( nurl_str_to_int ( str_first_word dvs ) ) = dvs ( str_skip_word dvs )
+                ? ( __rpg_dyn_refresh v ) {
+                    : ~ i vci ( nurl_peek ccnt v )
+                    : i vce ( nurl_peek ccnt + v 1 )
+                    ~ < vci vce {
+                        : i vh ( nurl_peek callers vci )
+                        ? == 0 ( __rpg_fget vh 9 ) {
+                            ( nurl_poke queue % qn qcap vh )
+                            = qn + qn 1
+                            ( __rpg_fset vh 9 1 )
+                        } {}
+                        = vci + vci 1
+                    }
+                } {}
             }
         } {}
     }

@@ -23,7 +23,10 @@ output = Path(output)
 fixture = json.loads(source.read_text())
 Path('compiler-argv.json').write_text(json.dumps(sys.argv[1:]))
 if os.environ.get('RUNNER_BARRIER'):
-    Path('ready').write_text(str(output))
+    # Published whole: the test polls for `ready` and reads it at once, and a
+    # file seen between its creation and its write reads as an empty path.
+    Path('ready.part').write_text(str(output))
+    os.replace('ready.part', 'ready')
     deadline = time.monotonic() + 15
     while not Path(os.environ['RUNNER_BARRIER']).exists():
         if time.monotonic() > deadline:
