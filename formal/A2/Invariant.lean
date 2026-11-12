@@ -924,7 +924,8 @@ structure MInv (m : Mem) (Γ : Ctx) : Prop where
                 (bl.kind = .lock ∨ bl.ty.hasCell = false) ∧
                 -- A2-drop.3d, Agora #610: a lock's or a view's payload owns
                 -- no destructor value; an `arc` block's may be one at its
-                -- top, and a `dead` block's is (`Blk.DtorOK`)
+                -- top or (Agora #755) a drained `Vec` of them, and a `dead`
+                -- block's is (`Blk.DtorOK`)
                 bl.DtorOK
 
 /-- The invariant of a configuration running `s` in context `Γ`, with `F`

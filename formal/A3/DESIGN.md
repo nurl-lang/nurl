@@ -4176,12 +4176,13 @@ needed. No rule asks for it now; it stays as the bottom of the order.
   memory. A thread waiting on a lock forever (a deadlock) is not stuck in
   that sense. Deadlock freedom is not claimed.
 - **An `Arc` of a destructor value on A3's threads** (Agora #610). A2
-  types `Arc<D>` and its `Steps` runs `D`'s destructor on the thread whose
+  types `Arc<D>` (and, Agora #755, `Arc<Vec<D>>`, whose reaped frame
+  drains the `Vec`) and its `Steps` runs `D`'s destructor on the thread whose
   step dropped the last share (the marking sweep, `Mem.sweepD`, then the
   same thread's reaps, `Settle`). A3's configuration sweep (`Cfg.sweep`)
   does not mark yet: on A3's threads the last share's drop frees the
   payload with no code, so `A3.claim` covers such a program (as
-  `A3.arcDtor_claim` its witness) with the destructor not run, and no A3
+  `A3.arcDtor_claim` and `A3.arcVecDtor_claim` its witnesses) with the destructor not run, and no A3
   run has an orphan (`A3.Reach.noOrphan`). The next cut: `Cfg.sweepD i`
   from every thread's roots, `TStep.thread` reaping to exhaustion on
   thread `i`, the reaped payload moved from the shared part to thread

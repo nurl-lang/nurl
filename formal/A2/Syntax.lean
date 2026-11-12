@@ -278,8 +278,10 @@ def Ty.dtorFree : Ty → Bool
     `Ty.dnest`). It is a binding's own type, or (`Ty.ok` admits it too as a
     struct's field or an enum's payload, which the struct's or the enum's
     glue hands to a `letd`, and as another such `Vec`'s element or a view's
-    element, Agora #607; it refuses it as a share's or a channel's payload,
-    swept with no code). -/
+    element, Agora #607, and (Agora #755) as an `Arc`'s payload, which the
+    reap of the orphaned block hands to a destructor frame at its own type,
+    `Step.reap`; it refuses it as a lock's, a cell's or a channel's payload,
+    whose check-out binding is no `letd`'s). -/
 def Ty.vecD : Ty → Bool
   | .vec t => !t.dtorFree
   | _ => false
@@ -339,8 +341,9 @@ def Ty.ok : Ty → Bool
   -- hands to such a binding: it is drained at its end, element by element, each
   -- running its destructor, `Step.scopeDDrain`; any other `Vec`'s drop
   -- releases its elements, which runs no code and releases no destructor
-  -- value: a share's payload and the environment of a closure that does not
-  -- drop hold none, 3c, 3d)
+  -- value: a share's payload lives in its block, not in the tree of what
+  -- holds the share, and the environment of a closure that does not drop
+  -- holds none, 3c, 3d)
   | .vec t => t.ok && (t.dtorFree || t.dnest)
   | .slice t => t.ok && !t.holdsView
   | .prod a b => a.ok && b.ok
@@ -900,13 +903,15 @@ inductive BKind where
       lives.  A writer waits until no view of the block is left. -/
   | view
   /-- Agora #610: an orphan whose payload awaits its destructor.  The block
-      has no share left; its payload, a destructor value, is still in it
+      has no share left; its payload, a destructor value (Agora #755: or a
+      drained `Vec` of them, at any depth), is still in it
       (the block owns it, `Blk.tree`, and it keeps the blocks it reaches,
       `Blk.keeps`), and no one reads it (`Blk.rd`), as no one reads a lock
       block's.  `Step.reap` moves the payload out to a destructor frame of
       the thread that takes the step, and leaves the block empty.  Only
       the marking sweep makes a block `dead` (`Mem.sweepD`: an unreached
-      `arc` block whose payload is a destructor value), and the thread whose
+      `arc` block whose payload is a destructor value or a drained `Vec` of
+      them), and the thread whose
       step it ended reaps it next (`Settle`). -/
   | dead
 deriving DecidableEq, Repr

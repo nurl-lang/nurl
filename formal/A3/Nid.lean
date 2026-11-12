@@ -68,8 +68,9 @@ structure BlockOK (B : Nat → Option Blk) (n k : Nat) (bl : Blk) : Prop where
   ok    : bl.ty.ok = true ∧ bl.ty.holdsView = false ∧
     (∀ p, bl.pay = some p → WFv bl.ty p ∧ SharesIn B bl.ty p) ∧ (bl.kind = .lock ∨ bl.ty.hasCell = false) ∧
     -- A2-drop.3d, Agora #610: a lock's or a view's payload owns no
-    -- destructor value; an `arc` block's may be one at its top, and a
-    -- `dead` block's is (`Blk.DtorOK`, `MInv.blocks`)
+    -- destructor value; an `arc` block's may be one at its top (Agora #755:
+    -- or a drained `Vec` of them), and a `dead` block's is (`Blk.DtorOK`,
+    -- `MInv.blocks`)
     bl.DtorOK
   key   : k < n
   nodup : bl.tree.ids.Nodup

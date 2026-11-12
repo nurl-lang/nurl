@@ -117,7 +117,8 @@ import A3
 #print axioms A2.Dtor.pkgs_env_dtor_free
 #print axioms A2.Dtor.closure_dtor_is_glue
 #print axioms A2.Dtor.drop_method_code
--- A2-drop.3d: no lock's or cell's payload owns a destructor value; an `Arc`'s is one at its top or owns none
+-- A2-drop.3d: no lock's or cell's payload owns a destructor value; an `Arc`'s is one at its top,
+-- or (Agora #755) a drained `Vec` of them, or owns none
 #print axioms A2.Dtor.ok_payloads_free
 #print axioms A2.Dtor.ok_lockPayloads_free
 #print axioms A2.Dtor.shares_dtor_free

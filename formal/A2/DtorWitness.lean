@@ -872,8 +872,9 @@ theorem ok_vecElems {t : Ty} (h : t.ok = true) :
     values, or of a destructor type, or `Vec`s of them in turn: a drained `Vec`.  (Agora #607: a
     drained `Vec` is a binding's own type, a struct's field or an enum's
     payload, which the struct's or the enum's glue hands to a `letd`, or an
-    element type's field in turn; a share's, a lock's or a cell's payload
-    holds none: `Ty.ok` asks `dtorFree` there, `ok_payloads_free`.  A view's
+    element type's field in turn, or (Agora #755) an `Arc`'s payload; a
+    lock's or a cell's payload holds none: `Ty.ok` asks `dtorFree` there,
+    `ok_lockPayloads_free`.  A view's
     element type may name one inside a struct; a view owns nothing.) -/
 theorem vecs_dtor_free {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {E : Entry}
     (hx : Γ x = some E) : ∀ u ∈ vecElems E.ty, u.dtorFree = true ∨ u.dnest = true :=

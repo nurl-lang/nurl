@@ -499,8 +499,9 @@ type and as a field or a payload (the drain, Agora #542, #607; *Staging* below s
 (Agora #543) and the environment's drop as code (Agora #609) are
 mechanized. Of 3d, an `Arc`'s destructor payload's drop as code is
 mechanized on A2's runs (Agora #610: the marking sweep and the same
-thread's reaps; *Staging* item 4), not yet on A3's threads, nor for locks,
-cells and channels. Until they are, `CLAIM.md`'s
+thread's reaps; *Staging* item 4), for a payload of a destructor type and
+(Agora #755) for a drained `Vec` of them, which the reap's frame drains;
+not yet on A3's threads, nor for locks, cells and channels. Until they are, `CLAIM.md`'s
 *Destructors* section lists where the calculus releases a destructor value
 without running it.
 
@@ -519,7 +520,7 @@ made it:
 | an enum or option payload | the payload's destructor | the enum's glue moves the payload out to a `letd` frame (Agora #632) |
 | a closure's or a trait object's environment | the captures' destructors | the closure's glue calls its drop method, whose code takes the environment owned and binds it under `letd`s (Agora #609, `ClosureGlueOK`, `Step.callcD`); it is called lent, through its binding or a borrow of the destructor type (Agora #651); a method that changes the environment is refused for the class |
 | a panic's unwind through any of these | the journal runs each, once | `scopeP` frees in one step, except at `scopeD` |
-| an `Arc` / lock block's payload when its last share goes (A3) | on the thread that drops the last share | an `Arc` of a destructor type: the marking sweep marks the block `dead`, the same thread reaps it into a destructor frame (Agora #610, A2's `Steps`; A3's sweep frees it with no code yet); a lock's, a cell's, a channel's, or an `Arc`'s holding one deeper: refused (`Ty.ok`) |
+| an `Arc` / lock block's payload when its last share goes (A3) | on the thread that drops the last share | an `Arc` of a destructor type, or (Agora #755) of a drained `Vec` of them: the marking sweep marks the block `dead`, the same thread reaps it into a destructor frame at the payload's own type, which drains a `Vec` (Agora #610, A2's `Steps`; A3's sweep frees it with no code yet); a lock's, a cell's, a channel's, or an `Arc`'s holding one in a field of a type with no destructor of its own: refused (`Ty.ok`) |
 
 ### Semantics
 
@@ -821,7 +822,8 @@ each one shrinks `CLAIM.md`'s exception:
        crosses to a thread, and a witness with such a package inside a
        container and a method that reads or lends its environment.
 4. **A2-drop.3d: shared blocks (A3)** (first cut done, Agora #544; an
-   `Arc` of a destructor value on A2's runs, Agora #610).
+   `Arc` of a destructor value on A2's runs, Agora #610; an `Arc` of a
+   drained `Vec` of them, Agora #755).
    - **Built: the refusal.** `Ty.ok` asks a lock's and a cell's payload
      type to own no destructor value (`dtorFree`), and `RhsT.lockNew` /
      `cellNew` (and `StmtT.lockedSet`) ask it of what moves in. So a
@@ -839,7 +841,8 @@ each one shrinks `CLAIM.md`'s exception:
      frame is typed as a `letd`'s at its end).
    - **Built: the sweep marks, the thread reaps** (Agora #610, part 2, on
      A2's `Steps`). How the questions were settled:
-     1. *What is admitted.* `Ty.ok (arc t)` asks `t.dtorFree || t.hasDtor`:
+     1. *What is admitted.* `Ty.ok (arc t)` asked `t.dtorFree || t.hasDtor`
+        (since Agora #755 `t.dtorFree || t.dnest`, below):
         an `Arc` of a destructor type `dtor f u` (a `% Drop` struct or
         enum, or one with glue), whose `u` holds no closure (`arc_new`'s
         `hasFn` premise). `arc_new` of one names a destructor the program
@@ -883,6 +886,27 @@ each one shrinks `CLAIM.md`'s exception:
        (`settle_ok`). Witness: `A2/ArcDtorWitness.lean` (cloned twice,
        both dropped: `main_safe`, `main_no_leak`, `last_drop_reaps`;
        `A3.arcDtor_claim`).
+   - **Built: an `Arc` of a drained `Vec`** (Agora #755, on A2's runs).
+     `Ty.ok (arc t)` asks `t.dtorFree || t.dnest` (the `!vecD` refusal is
+     gone): the payload may be a nest of `Vec`s around a destructor type,
+     `Ty.nest n (.dtor f u)`, any `n` (`n = 0` is #610's case). The
+     marking sweep's candidates and orphans (`Cand`, `TopOrphan`,
+     `DeadPay`, `Pinned`), `Orphan`, `ReapMem` and `Step.reap` read the
+     block's type as such a nest, and `Step.reap` binds the payload at it
+     in the frame `scopeD z f skip`, unchanged: `StmtT.scopeD` already
+     types a frame whose binding is a drained `Vec` (`ScopeDTy`;
+     `ScopeDTy.nest`), and its end drains it (`Step.scopeDDrain`, each
+     element to a `letd` frame of `f`, index order; an inner `Vec` drained
+     by its own frame), as nurlc's drop of an `Arc<Vec<D>>`'s last share
+     drops the `Vec`'s elements. `Blk.DtorOK`'s last clause, `DeadCodes`
+     and `Rhs.codeOK` (`arcNew`, `arcNew_codeOK`) are stated over nests;
+     `pres_reap` types the frame at the nest (`ScopeDTy.nest`), and the
+     count `settle_total` falls by (`DtorBlk`) counts nests too.
+     Witness: `A2.ArcDtorWitness.mainV` (a `Vec` holding one destructor
+     value moved into an `Arc`, cloned, both shares dropped: `mainV_safe`,
+     `mainV_no_leak`, `last_dropV_reaps`, `reapV_drains`;
+     `A3.arcVecDtor_claim`). As for #610's witness, the run is not traced:
+     that `dfn` runs once per element is read off the drain's steps.
    - **Left.**
      - *A3's threads.* `Cfg.sweep` does not mark: the last share's drop
        frees the payload with no code there (`A3.Reach.noOrphan`: no A3
@@ -897,9 +921,11 @@ each one shrinks `CLAIM.md`'s exception:
        drops with the destructor, as the runtime's guard does. A channel's
        queue of destructor values is a `Vec D` inside a payload (with
        #607's cut 2).
-     - *An `Arc` whose payload holds a destructor value below its top* (a
-       struct of no destructor type with a `% Drop` field, `Arc<Vec<D>>`):
-       `Step.reap` hands over a destructor type's value only.
+     - *An `Arc` whose payload holds a destructor value in a field of a
+       type with no destructor of its own* (a struct or an option of no
+       destructor type with a `% Drop` field, or a `Vec` of them):
+       `Step.reap` hands over a value of `ScopeDTy`'s shapes only (a
+       destructor type, or a drained `Vec` of them, Agora #755).
      - *Exactness*: a slot still holding a handle into the payload after
        its borrow is dead keeps the block reached (the destructor runs
        later than the runtime's count); orphans in a cycle (through a
