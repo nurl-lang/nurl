@@ -694,23 +694,23 @@ raw @ vec_stash [A] i kind sink ( Vec A ) v i max → v {
 // The elements from `from` on, for an element type whose drop runs code of
 // the program's own (mem_drop_runs_code): they leave the Vec's STORAGE
 // before the first destructor runs, not only its count — moved into a
-// buffer of their own, the Vec left with the ones before `from` and its
-// buffer, and dropped from there in index order (mem_drop_moved, Agora
-// #709). Dropped out of the Vec's own buffer, its length already short,
-// they sat in slots the Vec counts free: a destructor that reached `v` and
-// pushed wrote over the next element to go, which was never dropped, the
-// release then dropped the pushed one while `v` held it too, and a push
-// that grew the buffer freed the storage the release was walking. Now
-// what a destructor does to `v` is its own business. (The buffer is taken
-// before anything moves: a failed allocation leaves `v` as it was.)
+// buffer of the release's own, the Vec left with the ones before `from`
+// and its buffer, and dropped from there in index order (mem_move_drop,
+// Agora #709). Dropped out of the Vec's own buffer, its length already
+// short, they sat in slots the Vec counts free: a destructor that reached
+// `v` and pushed wrote over the next element to go, which was never
+// dropped, the release then dropped the pushed one while `v` held it too,
+// and a push that grew the buffer freed the storage the release was
+// walking. Now what a destructor does to `v` is its own business. (The
+// buffer is the runtime's stack where it fits, so a small release
+// allocates nothing — Agora #748; taken before anything moves, a failed
+// allocation leaves `v` as it was.)
 @ __vec_release_from [A] s ctl i from → v {
     : i len ( __vec_len_raw ctl )
     ? >= from len { ^ } {}
-    : i bytes * Z A - len from
-    : s buf ( nurl_alloc bytes )
-    ( nurl_memcpy buf # s + # i ( nurl_vctl_data ctl ) * Z A from bytes )
-    ( nurl_vctl_set ctl 1 from )
-    ( mem_drop_moved [A] buf - len from )
+    : s at # s + # i ( nurl_vctl_data ctl ) * Z A from
+    // (The length is the control block's second word: nurl_vctl_set's 1.)
+    ( mem_move_drop [A] at - len from # s 0 0 # *i + # i ctl 8 from )
 }
 
 // Shorten `v` to its first `n` elements; the ones past `n` are dropped

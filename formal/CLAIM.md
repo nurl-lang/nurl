@@ -1114,10 +1114,11 @@ is stated here so the claim does not hide it:
   element and shortened the `Vec` to the kept ones) drop
   their elements through the same record (`nurl_vec_drop_range_dtor`),
   and where the element type's drop runs code of the program's own they
-  move them out of the `Vec`'s storage first, into a buffer the record
-  owns and frees at its end (`nurl_vec_drop_moved_dtor`, Agora #709;
-  `deque_clear` the same), so a destructor that pushes into the `Vec`
-  shares no slot with the release.
+  move them out of the `Vec`'s storage first, into a buffer of the
+  release's own (`nurl_vec_move_drop_dtor`, Agora #709; `deque_clear` the
+  same): the runtime frame's stack where they fit, otherwise the heap,
+  which the record owns and frees at its end (Agora #748). A destructor
+  that pushes into the `Vec` shares no slot with the release.
   Which element types may run one is nurlc's answer (`__drop_runs_code`:
   a `% Drop` anywhere inside, a library handle, a closure, a trait
   object); the others are released by a loop no panic can start in;
