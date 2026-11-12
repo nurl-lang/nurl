@@ -78631,9 +78631,14 @@ unsafe @ __jpb_note i cg s up → v {
     : ~ i depth 0
     ~ != ( nurl_lex_type lx ) TT_EOF {
         : i tt ( nurl_lex_type lx )
-        ? == tt TT_LBRACE
+        // (Parentheses nest like braces: an `@` inside them is a closure
+        // TYPE — a parameter `( @ v ) f`, a result `→ ( @ i K )` — and
+        // what follows it is that type's result, not a name the module
+        // declares. Taken for one, `( @ v )` renamed every `v` of the
+        // module: its functions then returned `alias__v`.)
+        ? | == tt TT_LBRACE == tt TT_LPAREN
         { = depth + depth 1 ( nurl_lex_advance lx ) }
-        { ? == tt TT_RBRACE
+        { ? | == tt TT_RBRACE == tt TT_RPAREN
             { = depth - depth 1 ( nurl_lex_advance lx ) }
             { ? & == depth 0 == tt TT_AMP
                 {  // FFI: skip '& STR @ IDENT' so the FFI target name is not collected
