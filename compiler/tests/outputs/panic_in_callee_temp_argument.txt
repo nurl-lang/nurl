@@ -1,0 +1,16 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+drop temp
+temp: recovered: boom
+drop bound
+bound: recovered: boom
+drop middle
+middle: recovered: boom3
+drop option
+option: recovered: boom_opt
+string: recovered: boom_str
+drop quiet
+quiet: 2
+quiet: no panic

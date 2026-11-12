@@ -39,3 +39,27 @@ drop quiet.local
 quiet: returned
 drop quiet.result
 quiet: no panic
+drop litbind.local
+drop litbind.result
+lit_bind: recovered: panic in drop litbind.local
+drop littwo.local
+drop littwo.inner
+lit_two: recovered: panic in drop littwo.local
+drop litnest.local
+drop litnest.inner
+lit_nested: recovered: panic in drop litnest.local
+drop litsink.local
+drop litsink.result
+lit_sink: recovered: panic in drop litsink.local
+drop deferlit.result
+defer_lit: recovered: panic in a defer
+drop deferbind.result
+defer_bind: recovered: panic in a defer
+drop raw.local
+raw_text: recovered: panic in drop raw.local
+drop clolit.local
+drop clolit.capture
+clo_lit: recovered: panic in drop clolit.local
+drop clocall.local
+drop clocall.capture
+clo_call: recovered: panic in drop clocall.local
