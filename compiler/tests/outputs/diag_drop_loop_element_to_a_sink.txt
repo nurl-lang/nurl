@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_drop_loop_element_to_a_sink.nu:18:17: error: argument 1 to 'eat' is 'x', this loop's element: it is still in the container the loop walks, which drops it, and 'Bomb' cannot be copied, so 'eat' (a 'sink') would release it a second time. Take the elements out of the container instead (vec_pop, vec_remove, or move the whole container to a function that drains it), or have the callee borrow the element (drop 'sink').
+        ( eat x )
+                ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.
