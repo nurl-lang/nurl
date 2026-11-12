@@ -12670,6 +12670,12 @@ unsafe @ origin_guard_retained i root → b {
     { ( die lex ( nurl_str_cat3
         `inout field argument: '` obj `' is not a struct binding in scope. An 'inout' argument must be a plain binding in scope, or one of its fields — the call site names the value plainly, '( f v )' or '( f . s field )'; the 'inout' marker appears only in the DECLARATION. The callee writes through it, so a temporary or an expression has nowhere to write back to.` ) ) }
     {}
+    // (In an aliased module: a field of the struct, or an element's index
+    // binding — __alias_field_tok.)
+    : s __ifa_st ? ( is_ptr_ty objty ) ( nurl_str_slice objty 0 - ( nurl_str_len objty ) 1 ) ( nurl_str_cat objty `` )
+    ? & != 0 ( nurl_str_len __ifa_st ) == ( nurl_str_get __ifa_st 0 ) 37 {
+        ( __alias_field_tok lex syms ( nurl_str_slice __ifa_st 1 - ( nurl_str_len __ifa_st ) 1 ) )
+    } {}
     // A named field through a struct pointer: the callee writes the
     // pointee, not the binding, so the pointer need not be mutable. An
     // element (`. p i`) still asks for a mutable pointer binding.
@@ -12723,6 +12729,7 @@ unsafe @ origin_guard_retained i root → b {
             ( nurl_print `, i32 0, i32 ` ) ( nurl_print field_index ) ( nurl_print `\n` )
             ( nurl_set_last_type ( nurl_str_cat field_type `*` ) )
         } {
+            ( __alias_index_tok lex )
             : s index ( gen_expr lex syms cg )
             : s index_type ( nurl_get_last_type )
             ( die_if_not_index lex index_type `inout element` )
@@ -12749,7 +12756,7 @@ unsafe @ origin_guard_retained i root → b {
     : s fty ( nurl_sym_get2 syms sname ( nurl_str_cat `__` ( nurl_str_cat fld `__type` ) ) )
     ? == 0 ( nurl_str_len idx_s )
     { ( die lex ( nurl_str_cat ( nurl_str_cat4
-        `inout field argument: struct '` sname `' has no field '` fld )
+        `inout field argument: struct '` ( __user_ty_name sname ) `' has no field '` fld )
         `'. The field form is '( f inout . <binding> <field> )' — check the spelling against the struct's declaration.` ) ) }
     {}
     : s gep ( nurl_cg_reg cg )
@@ -14423,6 +14430,9 @@ unsafe @ __suggest_ident i syms s name → s {
 // The identity of this lexer's text for g_body_ends — "path len hash",
 // owned — or 0 when brace ends are not shared (see skip_balanced).
 : i LX_MEMOKEY 39
+// The aliased imports' table (see __import_eff_src): the lexer reads a
+// module's second spelling from it. 0 until the first aliased import.
+: ~ i g_alias_tab 0
 
 // Where each brace block ends: "<text identity> <offset of a '{'>" → the
 // offset just past its matching '}'. Every source file is lexed by several
@@ -14973,6 +14983,28 @@ unsafe @ __lex_one i lex i base → v {
                     }
                 }
                 = . idp n # u 0
+                // A second spelling of a module imported before (agora
+                // #694): in a file that imported it as `n`, `n::x` is the
+                // first spelling's name — `m__x`, or `x` when that import
+                // was plain (__import_spelling).
+                ? != 0 g_alias_tab {
+                    : *u sp # *u # s ( nurl_peek p LX_SRC )
+                    : ~ i sl 0
+                    ~ != & # i . sp + id_start sl 255 58 { = sl + sl 1 }
+                    : s sk ( nurl_str_cat4 `sp##` # s ( nurl_peek p LX_FILENAME ) `|` ( nurl_str_slice # s idp 0 sl ) )
+                    ? != 0 ( nurl_sym_len g_alias_tab sk ) {
+                        : s pv ( nurl_sym_get g_alias_tab sk )
+                        : i pl - ( nurl_str_len pv ) 1
+                        : i rl - - n sl 2
+                        : *u nb # *u ( nurl_alloc + + pl rl 1 )
+                        ( memcpy # s nb # s + # i pv 1 pl )
+                        ( memcpy # s + # i nb pl # s + # i idp + sl 2 rl )
+                        = . nb + pl rl # u 0
+                        ( nurl_free # s idb )
+                        = idp nb
+                        = idw # i nb
+                    } {}
+                } {}
             } {}
             : ~ i ttype TT_IDENT
             : ~ i inum 0
@@ -15299,6 +15331,20 @@ unsafe @ nurl_lex_val i h → s {
         ^ # s ( nurl_strdup_n # s + ( nurl_peek p LX_SRC ) ( nurl_peek p + LX_CUR TF_START ) ( nurl_peek p + LX_CUR TF_VAL ) )
     } {}
     ^ # s ( nurl_strdup # s ( nurl_peek p + LX_CUR TF_VAL ) )
+}
+
+// Give the current token the text `t` (copied; the lexer owns the copy,
+// valid 1). Its kind, line and position stay. The parser spells a name
+// of an aliased module the way that module's own text meant it, where
+// only the parser can tell which name it is (__alias_field_tok).
+unsafe @ nurl_lex_set_cur_text i h s t → v {
+    : s p # s h
+    ? == 1 ( nurl_peek p + LX_CUR TF_VALID ) {
+        : i old ( nurl_peek p + LX_CUR TF_VAL )
+        ? != 0 old { ( nurl_free # s old ) } {}
+    } {}
+    ( nurl_poke p + LX_CUR TF_VAL # i ( nurl_strdup t ) )
+    ( nurl_poke p + LX_CUR TF_VALID 1 )
 }
 
 // The text of the token in the slot at `base`, as a string its caller
@@ -54064,13 +54110,14 @@ unsafe @ gen_assign i lex i syms i cg → s {
         ? ! ( is_ident_tok ( nurl_lex_type lex ) )
         { ( die lex `expected a field name in this nested field path — each '.' takes exactly one field, so '= . . o a b v' writes field 'b' of field 'a' of 'o'.` ) }
         {}
+        : s hsname ( nurl_str_slice cur_ty 1 - ( nurl_str_len cur_ty ) 1 )
+        ( __alias_field_tok lex syms hsname )
         : s hname ( nurl_lex_val lex )
         ( nurl_lex_advance lex )
-        : s hsname ( nurl_str_slice cur_ty 1 - ( nurl_str_len cur_ty ) 1 )
         : s hidx ( nurl_sym_get2 syms hsname ( nurl_str_cat `__` ( nurl_str_cat hname `__idx` ) ) )
         : s hty ( nurl_sym_get2 syms hsname ( nurl_str_cat `__` ( nurl_str_cat hname `__type` ) ) )
         ? == 0 ( nurl_str_len hidx )
-        { ( die lex ( nurl_str_cat4 `type '` hsname `' has no field '` ( nurl_str_cat hname `' — check the field name against the struct's declaration.` ) ) ) }
+        { ( die lex ( nurl_str_cat4 `type '` ( __user_ty_name hsname ) `' has no field '` ( nurl_str_cat hname `' — check the field name against the struct's declaration.` ) ) ) }
         {}
         : s gep ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print gep )
@@ -54672,6 +54719,7 @@ unsafe @ __replaces_note i syms s name s field → v {
                     // (how `stdlib/core/vec.nu` writes its elements).
                     : i stlen ( nurl_str_len st )
                     : s sname ( nurl_str_slice st 1 - stlen 1 )
+                    ( __alias_field_tok lex syms sname )
                     : s fname ( nurl_lex_val lex )
                     // Tparam-substituted element type → no source-accessible
                     // fields (opaque type variable in the generic); suppress
@@ -54693,7 +54741,8 @@ unsafe @ __replaces_note i syms s name s field → v {
                     // `lo` silently compiled to `t[lo] = lo` (value-as-index) —
                     // a struct-corrupting miscompile with no diagnostic.
                     : b field_wins is_field_match
-                    : s var_t ( nurl_sym_get syms fname )
+                    ? ! field_wins { ( __alias_index_tok lex ) } {}
+                    : s var_t ( nurl_sym_get syms ( nurl_lex_val lex ) )
                     ? & ! field_wins > ( int_width var_t ) 0
                     {  // IDENT is an integer variable (and not a param
                         // shadowing a field) — array-style store *T[idx] = rhs.
@@ -54860,6 +54909,7 @@ unsafe @ __replaces_note i syms s name s field → v {
                     }
                 }
                 {  // Raw pointer with variable index: one-index GEP
+                    ( __alias_index_tok lex )
                     : s idx_val ( gen_expr lex syms cg )
                     : s idx_type ( nurl_get_last_type )
                     ( die_if_not_index lex idx_type `element` )
@@ -54917,6 +54967,7 @@ unsafe @ __replaces_note i syms s name s field → v {
                 {}
                 : s pt_ptr ( nurl_str_cat pt `*` )
                 : s sname ( nurl_str_slice pt 1 - ptlen 1 )
+                ( __alias_field_tok lex syms sname )
                 : s fname ( nurl_lex_val lex )
                 ( nurl_lex_advance lex )
                 : s fidx_s ( nurl_sym_get2 syms sname ( nurl_str_cat `__` ( nurl_str_cat fname `__idx` ) ) )
@@ -56330,6 +56381,9 @@ unsafe @ gen_member i lex i syms i cg → s {
             // when the IDENT is NOT a field: raw pointers, or array-of-struct
             // indexed by a (non-field-named) variable.
             : ~ b is_field_access F
+            // (In an aliased module, a field and an index are told apart here,
+            // where the struct is known: __alias_field_tok.)
+            ? elem_is_struct { ( __alias_field_tok lex syms ( nurl_str_slice elem_type 1 - ( nurl_str_len elem_type ) 1 ) ) } {}
             : s fname ( nurl_lex_val lex )
             : ~ s fidx_s ``
             : ~ s ftype ``
@@ -56376,6 +56430,7 @@ unsafe @ gen_member i lex i syms i cg → s {
                 ^ res
             }
             {  // Variable / arbitrary expression index → array-style access
+                ( __alias_index_tok lex )
                 // (Which slot a raw read reads, when the index is a binding.)
                 : s __mb_ix ? ( is_ident_tok ( nurl_lex_type lex ) ) ( nurl_str_cat ( nurl_lex_val lex ) `` ) ``
                 // A member read in the index (`. p . c k`) publishes its own
@@ -56471,6 +56526,11 @@ unsafe @ gen_member i lex i syms i cg → s {
             }
         }
         {  // Named field access for structs or slice types
+            // (In an aliased module: a field of the struct, a slice's `ptr` /
+            // `length`, or an index binding — __alias_field_tok.)
+            ? == ( nurl_str_get ot 0 ) 37 { ( __alias_field_tok lex syms ( nurl_str_slice ot 1 - otlen 1 ) ) } {
+                ? == ( nurl_str_get ot 0 ) 123 { ( __alias_slice_tok lex ) } {}
+            }
             ? ( is_ident_tok ( nurl_lex_type lex ) )
             { : s fname ( nurl_lex_val lex )
                 ( nurl_lex_advance lex )
@@ -59050,6 +59110,9 @@ unsafe @ __l2n_closure s lt → s {
 // A named type: `Vec__u` → `( Vec u )` when `Vec` is a generic struct
 // (its instantiations are mangled `Name__arg__arg`), else the name.
 unsafe @ __l2n_named s nm → s {
+    // A name of a module imported under an alias: `geo__Pt` is `geo::Pt`.
+    : s __un ( __alias_user_name nm )
+    ? != 0 ( nurl_str_len __un ) { ^ ( nurl_str_cat __un `` ) } {}
     : i us ( nurl_str_find nm `__` )
     ? & > us 0 != 0 g_generic_struct_syms {
         : s base ( nurl_str_slice nm 0 us )
@@ -72039,14 +72102,26 @@ unsafe @ __check_value_type_defined i lex i syms s llvm_ty s ctx i tline i tcol 
             ~ & < j n ( __is_ident_char ( nurl_str_at llvm_ty_p n j ) ) { = j + j 1 }
             : s name ( nurl_str_slice llvm_ty + i 1 - j + i 1 )
             : i by_value ? | >= j n != ( nurl_str_at llvm_ty_p n j ) 42 1 0
+            // (A name with `__` is a generic's instance, emitted before its
+            // first use — unless it is a module's own name an aliased import
+            // spelled `geo__Pt`: that one follows the rule like any other,
+            // agora #730.)
+            : s __vt_user ( __alias_user_name name )
             ? & & & & != 0 by_value != 0 ( nurl_str_len name )
-            ! ( __has_dunder name ) ! ( seq name `dyn` ) ! ( is_tparam_like name )
+            | ! ( __has_dunder name ) != 0 ( nurl_str_len __vt_user ) ! ( seq name `dyn` ) ! ( is_tparam_like name )
             { : s sv ( nurl_sym_get syms name )
                 ? & & != 0 ( nurl_str_len sv ) == ( nurl_str_get sv 0 ) 37
                 == 0 ( nurl_sym_len g_fn_pos_syms ( nurl_str_cat `ty##` name ) )
-                { ( die_pos lex tline tcol ( nurl_str_cat
-                    ( nurl_str_cat4 `type '` name `' is used by value as ` ctx )
-                    ( nurl_str_cat3 ` here but is declared LATER in the program. A value of a named type needs the type's definition before this point — the compiler emits the program in order, and LLVM cannot size a struct whose body it has not seen (a pointer to it is fine). Move ': ` name `' above this use, or import the file that declares it before this one.` ) ) ) }
+                { ? == 0 ( nurl_str_len __vt_user ) {
+                        ( die_pos lex tline tcol ( nurl_str_cat
+                        ( nurl_str_cat4 `type '` name `' is used by value as ` ctx )
+                        ( nurl_str_cat3 ` here but is declared LATER in the program. A value of a named type needs the type's definition before this point — the compiler emits the program in order, and LLVM cannot size a struct whose body it has not seen (a pointer to it is fine). Move ': ` name `' above this use, or import the file that declares it before this one.` ) ) )
+                    } {
+                        ( die_pos lex tline tcol ( nurl_str_cat
+                        ( nurl_str_cat4 `type '` __vt_user `' is used by value as ` ctx )
+                        ` here but is declared LATER in the program: the import that declares it comes below this use. A value of a named type needs the type's definition before this point — the compiler emits the program in order, and LLVM cannot size a struct whose body it has not seen (a pointer to it is fine). Move the import above this use.` ) )
+                    }
+                }
                 {} }
             {}
             = i j }
@@ -80610,73 +80685,345 @@ unsafe @ __jpb_note i cg s up → v {
     names
 }
 
-// alias_rewrite_source: return a copy of `src` where every whole-identifier
-// occurrence that appears in the space-separated `names` list is prefixed
-// with `prefix`. Identifiers inside backtick string literals and `//` line
-// comments are preserved verbatim so that name mangling does not touch
-// strings or documentation.
-unsafe @ alias_rewrite_source s src s names s prefix → s {
-    : ~ s result ``
+// ── The alias rewrite ─────────────────────────────────────────────
+// alias_rewrite_source: a copy of `src` (the file `path`) in which every
+// name token whose text is on the space-separated `names` list is
+// prefixed with `prefix` — EXCEPT where the token is a struct field's
+// name. Strings and comments are untouched (they are no name tokens).
+//
+// A field name is not a name of the module: it is part of a struct's
+// layout, which an importer reaches with its own spelling (`. p x`).
+// Renamed with the module's `@ x`, the module's struct had a field
+// `fl__x` and no importer could read `x` (agora #729). Two places hold a
+// field name:
+//   * a struct body, `: Pt { i x i y }` / `: Pair [T] { T first … }` —
+//     purely syntactic: the word after each field type;
+//   * the word after a `.`'s object, `. p x` / `= . p x v` / `. . a b c`
+//     / `~ e . r items` — a field when the object's struct has one of that
+//     name, and otherwise an index expression (`. buf n`, n a local the
+//     rewrite renamed with everything else). Which it is depends on the
+//     object's type, so the word is left alone here and the parser
+//     settles it where the type is known (__alias_field_tok,
+//     __alias_index_tok): the module then reads exactly as it was written.
+// Merged `a::b` tokens are another module's names: never rewritten.
+//
+// One lex marks the field positions, a second walks the tokens and copies
+// the text between them: linear in the file (the per-byte string
+// concatenation this replaced was quadratic).
+unsafe @ alias_rewrite_source s src s path s names s prefix → s {
     : i slen ( nurl_str_len src )
-    : *u src_p # *u src
-    : ~ i pos 0
-    : ~ i word_start 0
-    : ~ i in_string 0  // 1 while scanning inside a backtick-delimited string
-    : ~ i in_comment 0  // 1 while scanning inside a // line comment
-    ~ < pos slen {
-        : i ch ( nurl_str_at src_p slen pos )
-        ? != in_string 0
-        { = result ( nurl_str_cat result ( nurl_str_slice src pos 1 ) )
-            ? == ch 96 { = in_string 0 } {}
-            = pos + pos 1
-            = word_start pos
-        }
-        { ? != in_comment 0
-            { = result ( nurl_str_cat result ( nurl_str_slice src pos 1 ) )
-                ? == ch 10 { = in_comment 0 } {}
-                = pos + pos 1
-                = word_start pos
-            }
-            { : b is_id ( __is_ident_char ch )
-                ? is_id
-                { = pos + pos 1 }
-                { ? > pos word_start
-                    { : s word ( nurl_str_slice src word_start - pos word_start )
-                        = result ( nurl_str_cat result
-                        ? ( str_contains_word names word )
-                        ( nurl_str_cat prefix word )
-                        word )
-                    }
-                    {}
-                    : i nxt ? < + pos 1 slen ( nurl_str_at src_p slen + pos 1 ) 0
-                    ? & == ch 47 == nxt 47
-                    { = result ( nurl_str_cat result ( nurl_str_slice src pos 2 ) )
-                        = in_comment 1
-                        = pos + pos 2
-                    }
-                    { ? == ch 96
-                        { = result ( nurl_str_cat result ( nurl_str_slice src pos 1 ) )
-                            = in_string 1
-                            = pos + pos 1
+    // Which names to rewrite: a table, not a word list searched per token.
+    : i want ( nurl_sym_new )
+    : ~ s nrest ( nurl_str_cat names `` )
+    ~ != 0 ( nurl_str_len nrest ) {
+        ( nurl_sym_def want ( str_first_word nrest ) `1` )
+        = nrest ( str_skip_word nrest )
+    }
+    // Byte k is 1 when the token starting at k is a field name.
+    : i flags # i ( nurl_zalloc + slen 1 )
+    : i lx ( nurl_lex_new src path )
+    ( __ar_mark_fields lx flags )
+    ( nurl_lex_free lx )
+    // The copy, grown by doubling: the text before each renamed name, the
+    // prefix, then (after the walk) the rest and its terminator.
+    : i plen ( nurl_str_len prefix )
+    : i base # i src
+    : ~ i cap + + slen 64 * 16 plen
+    : ~ i out # i ( nurl_alloc cap )
+    : ~ i olen 0
+    : ~ i copied 0
+    : i lx2 ( nurl_lex_new src path )
+    : s lp # s lx2
+    : *u fp # *u flags
+    : ~ b more T
+    ~ more {
+        : i tt ( nurl_lex_type lx2 )
+        : i st ? == tt TT_EOF slen ( nurl_lex_cur_start lx2 )
+        // A name token's text is its own span of the source (valid 3): a
+        // merged `a::b` is not (and is another module's name anyway).
+        : b hit & & | | == tt TT_IDENT == tt TT_TYPE_KW == tt TT_BOOL == 3 ( nurl_peek lp + LX_CUR TF_VALID )
+        & == 0 # i . fp st != 0 ( nurl_sym_len want ( nurl_lex_val lx2 ) )
+        ? | hit == tt TT_EOF {
+            // Room for the text before it, the prefix and the terminator.
+            : i need + + + olen - st copied plen 1
+            ? > need cap {
+                ~ > need cap { = cap * cap 2 }
+                : i grown # i ( nurl_alloc cap )
+                ( memcpy # s grown # s out olen )
+                ( nurl_free # s out )
+                = out grown
+            } {}
+            ( memcpy # s + out olen # s + base copied - st copied )
+            = olen + olen - st copied
+            = copied st
+            ? hit {
+                ( memcpy # s + out olen prefix plen )
+                = olen + olen plen
+            } {}
+        } {}
+        ? == tt TT_EOF { = more F } { ( nurl_lex_advance lx2 ) }
+    }
+    ( nurl_lex_free lx2 )
+    : *u op # *u out
+    = . op olen # u 0
+    : s res ( nurl_str_cat # s out `` )
+    ( nurl_free # s out )
+    ( nurl_free # s flags )
+    ( nurl_sym_free want )
+    ^ res
+}
+
+// Mark the start byte of the current token (a field name) in `flags`.
+unsafe @ __ar_mark_cur i lx i flags → v {
+    : *u fp # *u flags
+    = . fp ( nurl_lex_cur_start lx ) # u 1
+}
+
+// The field-name positions of a whole file: every struct body's field
+// names, and the word after each `.`'s object (see alias_rewrite_source).
+@ __ar_mark_fields i lx i flags → v {
+    : ~ i depth 0
+    ~ != ( nurl_lex_type lx ) TT_EOF {
+        : i tt ( nurl_lex_type lx )
+        ? == tt TT_DOT { ( __ar_member lx flags ) } {
+            ? & == depth 0 == tt TT_COLON {
+                ( nurl_lex_advance lx )
+                // `: Name {` or `: Name [ tparams ] {` — a struct. (A global
+                // `: Ty name …`, a constant `: i N …` or an enum `: | E`
+                // is followed by something else.)
+                ? & == ( nurl_lex_type lx ) TT_IDENT | == ( nurl_lex_peek_type lx ) TT_LBRACE == ( nurl_lex_peek_type lx ) TT_LBRACK {
+                    ( nurl_lex_advance lx )
+                    ? == ( nurl_lex_type lx ) TT_LBRACK { ( skip_balanced_bracks lx ) } {}
+                    ? == ( nurl_lex_type lx ) TT_LBRACE {
+                        ( nurl_lex_advance lx )
+                        // `field = type IDENT?`, as gen_struct_decl reads it.
+                        ~ & != ( nurl_lex_type lx ) TT_RBRACE != ( nurl_lex_type lx ) TT_EOF {
+                            ( skip_one_type lx )
+                            ? == ( nurl_lex_type lx ) TT_IDENT { ( __ar_mark_cur lx flags ) ( nurl_lex_advance lx ) } {}
                         }
-                        { = result ( nurl_str_cat result ( nurl_str_slice src pos 1 ) )
-                            = pos + pos 1
-                        }
-                    }
-                    = word_start pos
-                }
+                        ? == ( nurl_lex_type lx ) TT_RBRACE { ( nurl_lex_advance lx ) } {}
+                    } {}
+                } {}
+            } {
+                ? | == tt TT_LBRACE == tt TT_LPAREN { = depth + depth 1 } {}
+                ? | == tt TT_RBRACE == tt TT_RPAREN { = depth - depth 1 } {}
+                ( nurl_lex_advance lx )
             }
         }
     }
-    ? > pos word_start
-    { : s word ( nurl_str_slice src word_start - pos word_start )
-        = result ( nurl_str_cat result
-        ? ( str_contains_word names word )
-        ( nurl_str_cat prefix word )
-        word )
+}
+
+// `. obj field`: past the `.` and the object; the word after it is marked.
+@ __ar_member i lx i flags → v {
+    ( nurl_lex_advance lx )
+    ? ( __ar_operand lx flags ) {
+        ? == ( nurl_lex_type lx ) TT_IDENT { ( __ar_mark_cur lx flags ) ( nurl_lex_advance lx ) } {}
+    } {}
+}
+
+// Step over one operand, marking the field positions inside it. F on a
+// shape it does not know (the lexer is left inside it, and the word after
+// the object goes unmarked: the rewrite renames it, and the parser still
+// reads it as the field it names, __alias_field_tok).
+@ __ar_operand i lx i flags → b {
+    : i tt ( nurl_lex_type lx )
+    ? | | | | | == tt TT_IDENT == tt TT_TYPE_KW == tt TT_INT == tt TT_FLOAT == tt TT_STR == tt TT_BOOL { ( nurl_lex_advance lx ) ^ T } {}
+    ? == tt TT_DOT { ( __ar_member lx flags ) ^ T } {}
+    ? | | == tt TT_LPAREN == tt TT_LBRACE == tt TT_LBRACK { ( __ar_group lx flags ) ^ T } {}
+    ? | == tt TT_HASH == tt TT_SIZEOF { ( nurl_lex_advance lx ) ( skip_one_type lx ) ? == tt TT_SIZEOF { ^ T } {} ^ ( __ar_operand lx flags ) } {}
+    ? | | == tt TT_BANG == tt TT_TILDE == tt TT_CARET { ( nurl_lex_advance lx ) ^ ( __ar_operand lx flags ) } {}
+    ? | | ( is_binop_tt tt ) == tt TT_OROR == tt TT_ANDAND {
+        ( nurl_lex_advance lx )
+        ? ! ( __ar_operand lx flags ) { ^ F } {}
+        ^ ( __ar_operand lx flags )
+    } {}
+    ? == tt TT_QUEST {
+        ( nurl_lex_advance lx )
+        ? ! ( __ar_operand lx flags ) { ^ F } {}
+        ? ! ( __ar_operand lx flags ) { ^ F } {}
+        ^ ( __ar_operand lx flags )
+    } {}
+    ? == tt TT_QUESTQUEST {
+        ( nurl_lex_advance lx )
+        ? ! ( __ar_operand lx flags ) { ^ F } {}
+        ? != ( nurl_lex_type lx ) TT_LBRACE { ^ F } {}
+        ( __ar_group lx flags )
+        ^ T
+    } {}
+    // An aggregate literal, `@ Ty { … }`.
+    ? == tt TT_AT {
+        ( nurl_lex_advance lx )
+        ( skip_one_type lx )
+        ? != ( nurl_lex_type lx ) TT_LBRACE { ^ F } {}
+        ( __ar_group lx flags )
+        ^ T
+    } {}
+    ^ F
+}
+
+// A bracketed group, `( … )` / `{ … }` / `[ … ]`, whole.
+@ __ar_group i lx i flags → v {
+    ( nurl_lex_advance lx )
+    : ~ i depth 1
+    ~ & > depth 0 != ( nurl_lex_type lx ) TT_EOF {
+        : i tt ( nurl_lex_type lx )
+        ? == tt TT_DOT { ( __ar_member lx flags ) } {
+            ? | | == tt TT_LPAREN == tt TT_LBRACE == tt TT_LBRACK { = depth + depth 1 } {}
+            ? | | == tt TT_RPAREN == tt TT_RBRACE == tt TT_RBRACK { = depth - depth 1 } {}
+            ( nurl_lex_advance lx )
+        }
     }
-    {}
-    result
+}
+
+// What an aliased import's rewrite did, for the parser and the lexer:
+//   `pre##<file>`          → the prefix its names took (`fl__`)
+//   `nm##<file>|<name>`    → `1` for every name it renamed
+//   `src##<file>|<alias>`  → the rewritten text (every pass reads it)
+//   `sp##<file>|<alias>`   → for an alias the lexer reads as another
+//                            spelling of a module imported before (agora
+//                            #694): `=` + the prefix `alias::` stands for.
+//   `first##<key>`, `firstat##<key>` → the spelling a module was first
+//                            imported under (`=` + alias), and where.
+// (g_alias_tab itself is declared beside the lexer, which reads it.)
+
+@ __alias_tab → i {
+    ? == 0 g_alias_tab { = g_alias_tab ( nurl_sym_new ) } {}
+    ^ g_alias_tab
+}
+
+// The text a `$ path alias` import compiles: the file itself, or — under
+// an alias — its rewrite, made once and shared by every pass.
+@ __import_eff_src s src s path s alias → s {
+    ? == 0 ( nurl_str_len alias ) { ^ ( nurl_str_cat src `` ) } {}
+    : i tab ( __alias_tab )
+    : s ck ( nurl_str_cat4 `src##` path `|` alias )
+    ? != 0 ( nurl_sym_len tab ck ) { ^ ( nurl_str_cat ( nurl_sym_get tab ck ) `` ) } {}
+    : s names ( collect_alias_targets src path )
+    : s prefix ( nurl_str_cat alias `__` )
+    : s out ( alias_rewrite_source src path names prefix )
+    ( nurl_sym_def tab ( nurl_str_cat `pre##` path ) prefix )
+    : ~ s nrest ( nurl_str_cat names `` )
+    ~ != 0 ( nurl_str_len nrest ) {
+        : s nm ( str_first_word nrest )
+        ( nurl_sym_def tab ( nurl_str_cat4 `nm##` path `|` nm ) `1` )
+        ( nurl_sym_def tab ( nurl_str_cat3 `full##` prefix nm ) ( nurl_str_cat3 alias `::` nm ) )
+        = nrest ( str_skip_word nrest )
+    }
+    ( nurl_sym_def tab ck out )
+    ^ out
+}
+
+// One module, one set of names (agora #694). A file is compiled once, under
+// the spelling its first import gave it: plain, or `m` (its names then
+// `m__x`). A later `$ path n` — in the same file or another — is that same
+// module under a second spelling: `n::x` in the importing file is read by
+// the lexer as the first spelling's name (`m__x`, or `x` for a plain first
+// import), so every importer reaches the one compiled module however it
+// spells it. Its names cannot be bare a second time, though: a plain
+// import after an aliased one is refused at the import, naming both.
+// Called by every pass at every `$` (idempotent); `lex` is on the token
+// after the import, and its lookahead is read again when a spelling is
+// registered, so the very next token already sees it.
+@ __import_spelling i lex s key s path s alias i line i col → v {
+    : i tab ( __alias_tab )
+    : s fk ( nurl_str_cat `first##` key )
+    : s here ( nurl_str_cat3 ( nurl_lex_filename lex ) `:` ( nurl_str_int line ) )
+    ? == 0 ( nurl_sym_len tab fk ) {
+        ( nurl_sym_def tab fk ( nurl_str_cat `=` alias ) )
+        ( nurl_sym_def tab ( nurl_str_cat `firstat##` key ) here )
+        ^
+    } {}
+    : s first ( nurl_str_slice ( nurl_sym_get tab fk ) 1 - ( nurl_str_len ( nurl_sym_get tab fk ) ) 1 )
+    ? ( seq first alias ) { ^ } {}
+    : s at ( nurl_sym_get tab ( nurl_str_cat `firstat##` key ) )
+    ? == 0 ( nurl_str_len alias ) {
+        : s m1 ( nurl_str_cat4 `'` path `' is already imported under the alias '` first )
+        : s m2 ( nurl_str_cat4 `' (at ` at `), so its names are spelled '` first )
+        : s m3 ( nurl_str_cat3 `::name' in this compilation and cannot be bare here as well — a file is compiled once, with one set of names. Import it as '` first `' here too and write '` )
+        : s m4 ( nurl_str_cat3 first `::name', or move this plain import above the one that aliases it.` `` )
+        // (Every pass meets the import: one report.)
+        : s rk ( nurl_str_cat3 `rep##` key here )
+        ? == 0 ( nurl_sym_len tab rk ) {
+            ( nurl_sym_def tab rk `1` )
+            ( die_pos lex line col ( nurl_str_cat4 m1 m2 m3 m4 ) )
+        } {}
+        ^
+    } {}
+    : s sk ( nurl_str_cat4 `sp##` ( nurl_lex_filename lex ) `|` alias )
+    ? != 0 ( nurl_sym_len tab sk ) { ^ } {}
+    ( nurl_sym_def tab sk ( nurl_str_cat `=` ? == 0 ( nurl_str_len first ) `` ( nurl_str_cat first `__` ) ) )
+    // (The tokens after the import may be lexed already: read them again.)
+    ( nurl_lex_set_pos lex ( nurl_lex_cur_start lex ) )
+}
+
+// How a program spells `name` when it is a name an alias rewrite made
+// (`geo__Pt` is `geo::Pt`), or `` when it is none.
+@ __alias_user_name s name → s {
+    ? == 0 g_alias_tab { ^ `` } {}
+    ^ ( nurl_sym_get g_alias_tab ( nurl_str_cat `full##` name ) )
+}
+
+// A type name as the program writes it: `geo::Pt` for the `geo__Pt` an
+// aliased import made, the name itself otherwise.
+@ __user_ty_name s name → s {
+    : s u ( __alias_user_name name )
+    ^ ? != 0 ( nurl_str_len u ) ( nurl_str_cat u `` ) ( nurl_str_cat name `` )
+}
+
+// The prefix the alias rewrite gave the names of the file `lex` reads, or
+// `` when it is no aliased import.
+@ __alias_prefix_of i lex → s {
+    ? == 0 g_alias_tab { ^ `` } {}
+    ^ ( nurl_sym_get g_alias_tab ( nurl_str_cat `pre##` ( nurl_lex_filename lex ) ) )
+}
+
+// The word after a `.`'s object, in a file imported under an alias, when
+// the object is a `sname` struct: a field the rewrite renamed with the
+// module's names (it could not tell it from an index there) is read as
+// the field it names in the module's own text. `. p fl__x` on a struct
+// with a field `x` and none `fl__x` is `. p x`, so every reader of the
+// token — the access, the borrow paths — sees the field's one spelling.
+unsafe @ __alias_field_tok i lex i syms s sname → v {
+    ? | == 0 g_alias_tab != ( nurl_lex_type lex ) TT_IDENT { ^ } {}
+    : s pre ( __alias_prefix_of lex )
+    : i pl ( nurl_str_len pre )
+    ? == 0 pl { ^ } {}
+    : s w ( nurl_lex_val lex )
+    : i wl ( nurl_str_len w )
+    ? | <= wl pl == 0 ( nurl_str_starts w pre ) { ^ } {}
+    ? != 0 ( nurl_sym_len2 syms sname ( nurl_str_cat3 `__` w `__idx` ) ) { ^ } {}
+    : s orig ( nurl_str_slice w pl - wl pl )
+    ? == 0 ( nurl_sym_len g_alias_tab ( nurl_str_cat4 `nm##` ( nurl_lex_filename lex ) `|` orig ) ) { ^ } {}
+    ? == 0 ( nurl_sym_len2 syms sname ( nurl_str_cat3 `__` orig `__idx` ) ) { ^ } {}
+    ( nurl_lex_set_cur_text lex orig )
+}
+
+// …after a slice's `.`: its `ptr` / `length`, or an index binding.
+unsafe @ __alias_slice_tok i lex → v {
+    ? | == 0 g_alias_tab != ( nurl_lex_type lex ) TT_IDENT { ^ } {}
+    : s pre ( __alias_prefix_of lex )
+    : i pl ( nurl_str_len pre )
+    ? == 0 pl { ^ } {}
+    : s w ( nurl_lex_val lex )
+    ? | ( seq w `ptr` ) ( seq w `length` ) { ^ } {}
+    ? | ( seq w ( nurl_str_cat pre `ptr` ) ) ( seq w ( nurl_str_cat pre `length` ) ) {
+        ( nurl_lex_set_cur_text lex ( nurl_str_slice w pl - ( nurl_str_len w ) pl ) )
+        ^
+    } {}
+    ( __alias_index_tok lex )
+}
+
+// …and the other way: a word the rewrite left alone after a `.`'s object
+// that is NOT a field there is an index expression, and a name of the
+// module in it is spelled as the rewrite spelled every other use of it
+// (`. buf n`, n a local or a constant of the module: `. buf fl__n`).
+unsafe @ __alias_index_tok i lex → v {
+    ? | == 0 g_alias_tab != ( nurl_lex_type lex ) TT_IDENT { ^ } {}
+    : s pre ( __alias_prefix_of lex )
+    ? == 0 ( nurl_str_len pre ) { ^ } {}
+    : s w ( nurl_lex_val lex )
+    ? == 0 ( nurl_sym_len g_alias_tab ( nurl_str_cat4 `nm##` ( nurl_lex_filename lex ) `|` w ) ) { ^ } {}
+    ( nurl_lex_set_cur_text lex ( nurl_str_cat pre w ) )
 }
 
 // Add `dir` to the import roots, canonical. F when it does not resolve:
@@ -80774,24 +81121,15 @@ unsafe @ __import_allowed s path → b {
     {}
 
     : s __imp_key ( __canon_import_key path )
+    ( __import_spelling lex __imp_key path alias __li_line __li_col )
     ? ( mem_is_imported syms __imp_key )
     {}
     { ( mem_mark_imported syms __imp_key )
         ( __require_import_file lex __li_line __li_col path )
         : s src ( compiler_read_source path )
-        // Both arms allocate. The alias arm hands back a freshly rewritten
-        // copy of the source; spelling the other arm as a bare `src`
-        // borrow made the binding mixed-ownership, so nothing owned the
-        // rewritten copy and it leaked — 581 bytes per aliased import,
-        // three of them compiling alias_rewrite_types.nu, on a path the
-        // leak gate never reached because nurlc.nu has no aliased import.
-        // The copy the other arm now makes is freed at scope exit like
-        // any other owned string.
-        : s eff_src ? != 0 ( nurl_str_len alias )
-        { : s names ( collect_alias_targets src path )
-            ( alias_rewrite_source src names ( nurl_str_cat alias `__` ) )
-        }
-        ( nurl_str_cat src `` )
+        // An owned copy either way (the rewrite is made once, by the first
+        // pass that reads the file, and shared).
+        : s eff_src ( __import_eff_src src path alias )
         // Save / restore the current source-file across the nested scan
         // + parse passes so vis_record_fn and gen_call attribute decls
         // (and visibility checks) to the imported file's path, not the
@@ -86552,7 +86890,11 @@ unsafe @ gen_trait_or_impl i lex i syms i cg → v {
         // first and contributes a single mangled token (`Pair__str__i64`)
         // to the outer ta_list — keeping `ensure_struct_instantiated`'s
         // word-at-a-time walker simple.
-        ? & ! handled == tt TT_LPAREN {
+        // (A literal, or nothing, after the name is a call's argument list,
+        // never type arguments: `( Pt 4 )` is no instance `Pt__4`.)
+        : i __gs_a1 ? & ! handled == tt TT_LPAREN ( nurl_lex_peek2_type lex ) TT_EOF
+        : b __gs_call | | | == __gs_a1 TT_INT == __gs_a1 TT_FLOAT == __gs_a1 TT_STR == __gs_a1 TT_RPAREN
+        ? & & ! handled == tt TT_LPAREN ! __gs_call {
             ? == ( nurl_lex_peek_type lex ) TT_IDENT {
                 ( nurl_lex_advance lex )  // past '('
                 : s cand ( nurl_lex_val lex )
@@ -86582,8 +86924,10 @@ unsafe @ gen_trait_or_impl i lex i syms i cg → v {
             ? == ( nurl_lex_type lex ) TT_STR {
                 : s path ( __norm_import_path ( nurl_lex_val lex ) )
                 ( nurl_lex_advance lex )
-                ? ( __import_alias_tok lex ) { ( nurl_lex_advance lex ) } {}
+                : ~ s __gs_alias ``
+                ? ( __import_alias_tok lex ) { = __gs_alias ( nurl_lex_val lex ) ( nurl_lex_advance lex ) } {}
                 : s __gs_key ( __canon_import_key path )
+                ( __import_spelling lex __gs_key path __gs_alias __im_ln __im_cl )
                 : s marker ( nurl_sym_get g_generic_struct_syms `__scanned__` )
                 ? ( str_contains_word marker __gs_key ) {} {
                     : s new_marker ? == 0 ( nurl_str_len marker ) ( nurl_str_cat __gs_key `` )
@@ -86861,6 +87205,8 @@ unsafe @ priv_resolve i lex i syms s fname → s {
                             } {}
                             : s __fpos ( nurl_str_cat ( vis_current_src_file )
                             ( nurl_str_cat `:` ( nurl_str_int ( nurl_lex_line lex ) ) ) )
+                            // (A type of the same name: __note_decl_name.)
+                            ( __note_decl_name lex ? != 0 ( nurl_str_len fname_raw_scan ) fname_raw_scan fname `fn` )
                             ( nurl_lex_advance lex )
                             // Grammar v2.0: record per-fn source-file origin and (if the
                             // preceding token was `pub`) the public flag. Strict-mode for
@@ -87183,6 +87529,7 @@ unsafe @ priv_resolve i lex i syms s fname → s {
                         }
                         {}
                         : s __fs_key ( __canon_import_key path )
+                        ( __import_spelling lex __fs_key path alias __im_ln __im_cl )
                         : s scanned ( nurl_sym_get syms `__scanned_files__` )
                         ? ( str_contains_word scanned __fs_key )
                         {}
@@ -87192,12 +87539,7 @@ unsafe @ priv_resolve i lex i syms s fname → s {
                             ( nurl_sym_def syms `__scanned_files__` new_scanned )
                             ( __require_import_file lex __im_ln __im_cl path )
                             : s src2 ( compiler_read_source path )
-                            // Uniform ownership, as at the other two sites.
-                            : s eff_src2 ? != 0 ( nurl_str_len alias )
-                            { : s names ( collect_alias_targets src2 path )
-                                ( alias_rewrite_source src2 names ( nurl_str_cat alias `__` ) )
-                            }
-                            ( nurl_str_cat src2 `` )
+                            : s eff_src2 ( __import_eff_src src2 path alias )
                             : i lex2 ( nurl_lex_new eff_src2 path )
                             // Save / restore the current source-file across the nested
                             // scan so vis_record_fn attributes decls in the imported
@@ -87370,6 +87712,37 @@ unsafe @ priv_resolve i lex i syms s fname → s {
 // body at depth > 0 and are never registered here. A constant
 // (`: ~? Type name value`) carries its name in 2nd position with no
 // `{`/`[` after the 1st token, so it is correctly skipped.
+// One namespace at file scope, for functions and types alike (agora #728):
+// `( Pt 4 )` reads as the type wherever a struct `Pt` is declared, so a
+// function `@ Pt` beside one could never be called, and the call's error
+// blamed its argument ("argument 1 has type 'Pt'"). scan_type_names, the
+// first pass, notes where every type is declared (`ty`); scan_fn_sigs then
+// asks each function (`fn`), and the later of the two declarations is
+// refused where it stands, naming the other (the function, when they are
+// in different files). `lex` is on the declared name.
+@ __note_decl_name i lex s name s kind → v {
+    : s here ( nurl_str_cat3 ( vis_current_src_file ) `:` ( nurl_str_int ( nurl_lex_line lex ) ) )
+    ? ( seq kind `ty` ) {
+        : s k ( nurl_str_cat `tyat##` name )
+        ? != 0 ( nurl_sym_len g_fn_pos_syms k ) { ^ } {}
+        ( nurl_sym_def g_fn_pos_syms k here )
+        ( nurl_sym_def g_fn_pos_syms ( nurl_str_cat `tyfl##` name ) ( vis_current_src_file ) )
+        ( nurl_sym_def g_fn_pos_syms ( nurl_str_cat `tyln##` name ) ( nurl_str_int ( nurl_lex_line lex ) ) )
+        ( nurl_sym_def g_fn_pos_syms ( nurl_str_cat `tycl##` name ) ( nurl_str_int ( nurl_lex_col lex ) ) )
+        ^
+    } {}
+    : s at ( nurl_sym_get g_fn_pos_syms ( nurl_str_cat `tyat##` name ) )
+    ? == 0 ( nurl_str_len at ) { ^ } {}
+    : i tline ( nurl_str_to_int ( nurl_sym_get g_fn_pos_syms ( nurl_str_cat `tyln##` name ) ) )
+    : b tlater & ( seq ( nurl_sym_get g_fn_pos_syms ( nurl_str_cat `tyfl##` name ) ) ( vis_current_src_file ) ) > tline ( nurl_lex_line lex )
+    : s first ? tlater ( nurl_str_cat3 `a function '@ ` name `' is` ) ( nurl_str_cat3 `a type ': ` name `' is` )
+    : s msg ( nurl_str_cat4 ( nurl_str_cat3 `duplicate name '` name `' — ` ) first ( nurl_str_cat ` already declared at ` ? tlater here at )
+    ( nurl_str_cat3 `. Functions and types share one namespace at file scope, and a call '( ` name ` … )' reads as the type, so the function could never be called: rename one (a type is usually capitalised, a function not). If the two are in different files, both are visible to the importer, so the names must still differ.` ) )
+    ? tlater {
+        ( die_pos lex tline ( nurl_str_to_int ( nurl_sym_get g_fn_pos_syms ( nurl_str_cat `tycl##` name ) ) ) msg )
+    } { ( die lex msg ) }
+}
+
 @ scan_type_names i lex i syms → v {
     : ~ i depth 0
     ~ != ( nurl_lex_type lex ) TT_EOF {
@@ -87416,6 +87789,7 @@ unsafe @ priv_resolve i lex i syms s fname → s {
                                 ( nurl_lex_advance lex ) }
                             {}
                             : s __tn_key ( __canon_import_key path )
+                            ( __import_spelling lex __tn_key path alias __im_ln __im_cl )
                             : s marker ( nurl_sym_get syms `__tn_scanned__` )
                             ? ( str_contains_word marker __tn_key )
                             {}
@@ -87424,12 +87798,7 @@ unsafe @ priv_resolve i lex i syms s fname → s {
                                 ( nurl_sym_def syms `__tn_scanned__` new_marker )
                                 ( __require_import_file lex __im_ln __im_cl path )
                                 : s src2 ( compiler_read_source path )
-                                // Uniform ownership, as at the other two sites.
-                                : s eff_src2 ? != 0 ( nurl_str_len alias )
-                                { : s names ( collect_alias_targets src2 path )
-                                    ( alias_rewrite_source src2 names ( nurl_str_cat alias `__` ) )
-                                }
-                                ( nurl_str_cat src2 `` )
+                                : s eff_src2 ( __import_eff_src src2 path alias )
                                 : i lex2 ( nurl_lex_new eff_src2 path )
                                 // Track the imported file as current so its own
                                 // `$`-imports resolve importer-relative (mirrors
@@ -87452,6 +87821,7 @@ unsafe @ priv_resolve i lex i syms s fname → s {
                                 ? == ( nurl_lex_type lex ) TT_IDENT
                                 { : s name ( nurl_lex_val lex )
                                     ( nurl_sym_def syms name ( nurl_str_cat `%` name ) )
+                                    ( __note_decl_name lex name `ty` )
                                     ( nurl_lex_advance lex )
                                     ? == ( nurl_lex_type lex ) TT_LBRACE { ( record_type_layout lex name `enum` ) } {}
                                 }
@@ -87464,6 +87834,7 @@ unsafe @ priv_resolve i lex i syms s fname → s {
                                     ? | == nxt TT_LBRACE == nxt TT_LBRACK
                                     { : s name ( nurl_lex_val lex )
                                         ( nurl_sym_def syms name ( nurl_str_cat `%` name ) )
+                                        ( __note_decl_name lex name `ty` )
                                         ? == nxt TT_LBRACE {
                                             ( nurl_lex_advance lex )
                                             ( record_type_layout lex name `struct` )
