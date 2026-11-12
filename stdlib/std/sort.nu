@@ -25,9 +25,15 @@ $ `stdlib/core/mem.nu`
 
 // ── Internal helpers ───────────────────────────────────────────────
 
+// (The two change places, each going back into the buffer as it is — a
+// closure stored as a plain binding is copied, agora #706. The same for
+// the element the partition and the insertion sort hold while they shift
+// the others.)
 @ __sort_swap [A] * A data i i i j → v {
     : A a . data i
     : A b . data j
+    ( mem_put_back a )
+    ( mem_put_back b )
     = . data i b
     = . data j a
 }
@@ -55,6 +61,7 @@ $ `stdlib/core/mem.nu`
     : ~ i k + lo 1
     ~ <= k hi {
         : A x . data k
+        ( mem_put_back x )
         : i c ( cmp x pivot )
         : i left ? le ? <= c 0 1 0 ? < c 0 1 0
         = . data k . data store
@@ -111,6 +118,7 @@ $ `stdlib/core/mem.nu`
     : ~ i i + lo 1
     ~ <= i hi {
         : A x . data i
+        ( mem_put_back x )
         : ~ i j i
         ~ & > j lo > ( cmp . data - j 1 x ) 0 {
             = . data j . data - j 1

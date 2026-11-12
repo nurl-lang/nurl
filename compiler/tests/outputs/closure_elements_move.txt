@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+map values: 210
+records: 950
+vec moves: 20
+sorted: 1
+heaped: 4950
+treed: 266052991

@@ -11174,10 +11174,18 @@ unsafe @ __clo_copied_set s v → v { = g_clo_copied_val ( nurl_str_cat v `` ) }
 // by the storage, as a struct field's is (docs/MEMORY.md §7.5): a
 // literal's or a call's env moves in, a binding's or a parameter's is
 // copied (mem_clo_into_store). One read out of storage (`. data - i 1`, a
-// container shifting its own elements) moves as it is.
+// container shifting its own elements) moves as it is, and so does a
+// binding declared a write-back.
 @ mem_elem_store_val i syms i cg s st s val i first_tt → s {
-    ? & ( __is_closure_ty st ) | | == first_tt TT_BACKSLASH == first_tt TT_LPAREN ( is_ident_tok first_tt )
-    { ^ ( mem_clo_into_store syms cg st val first_tt ) } {}
+    ? & ( __is_closure_ty st ) | | == first_tt TT_BACKSLASH == first_tt TT_LPAREN ( is_ident_tok first_tt ) {
+        // A binding declared a write-back (mem_put_back) goes into the slot
+        // as it is, as an element of every other type does: it was read out
+        // of storage and returns to it — its own slot, or another (two
+        // elements changing places). Copied, the slot got a clone of its
+        // environment and the one it came with was nobody's (agora #706).
+        ? & ( is_ident_tok first_tt ) != 0 ( nurl_sym_len2 syms ( nurl_sym_get syms `__last_ident_name__` ) `__putback` ) { ^ ( nurl_str_cat val `` ) } {}
+        ^ ( mem_clo_into_store syms cg st val first_tt )
+    } {}
     ^ ( nurl_str_cat val `` )
 }
 

@@ -242,8 +242,14 @@ $ `stdlib/core/box.nu`
     : ~ i i 0
     ~ < i old_cap {
         ? ( __map_occupied # i . old_states i ) {
+            // The entry MOVES: its key and value go back into storage as
+            // they are (write-backs). Stored as plain bindings, a closure
+            // was copied — the new slot got a clone of its environment and
+            // the one in the old buffer was nobody's (agora #706).
             : K k . old_keys i
             : V v . old_vals i
+            ( mem_put_back k )
+            ( mem_put_back v )
             : i h ( hash_fn k )
             : ~ i idx & h mask
             ~ != # i . new_states idx 0 { = idx & + idx 1 mask }

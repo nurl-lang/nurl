@@ -585,6 +585,7 @@ $ `stdlib/core/box.nu`
             : *K pk # *K ( nurl_peek pn 0 )
             : *V pv # *V ( nurl_peek pn 2 )
             : K predk . pk - ( __bt_nkeys pn ) 1
+            ( mem_put_back predk )
             : V predv . pv - ( __bt_nkeys pn ) 1
             ( mem_take predv )
             ? != 0 # i kout { ( __bt_key_out [K] kp pos kout ) } {}
@@ -606,6 +607,7 @@ $ `stdlib/core/box.nu`
             : *K sk # *K ( nurl_peek sn 0 )
             : *V sv # *V ( nurl_peek sn 2 )
             : K succk . sk 0
+            ( mem_put_back succk )
             : V succv . sv 0
             ( mem_take succv )
             ? != 0 # i kout { ( __bt_key_out [K] kp pos kout ) } {}
