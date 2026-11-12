@@ -23319,8 +23319,11 @@ unsafe @ gen_cond i lex i syms i cg → s {
     = g_rpg_want 0
     // (What the arm's value is, for the join's raw provenance: named
     // while the arm's own markers still say what it was.)
-    : s __jv_t ? c_rval ( __rpg_val_of syms t_tt0 t_v0 ) ``
-    : s __jo_t ? c_rval ( __rpg_oval_from syms t_tt0 t_v0 ( nurl_get_last_type ) ) ``
+    // (A `( mem_dup x )` copy of a type with no view reaches nothing of x:
+    // __arm_dup_owns_all, agora #767.)
+    : b __jd_t & c_rval ( __arm_dup_owns_all syms t_tt0 )
+    : s __jv_t ? & c_rval ! __jd_t ( __rpg_val_of syms t_tt0 t_v0 ) ``
+    : s __jo_t ? & c_rval ! __jd_t ( __rpg_oval_from syms t_tt0 t_v0 ( nurl_get_last_type ) ) ``
     = g_dead_arm - g_dead_arm ? c_dead_then 1 0
     : s t_dtw ( nurl_str_cat ( nurl_sym_get syms `__deferred_temps__` ) `` )
     : s t_dti ( nurl_str_cat ( nurl_sym_get syms `__deferred_ids__` ) `` )
@@ -23586,8 +23589,9 @@ unsafe @ gen_cond i lex i syms i cg → s {
         = g_did_ret 1
     } {}
     = g_rpg_want 0
-    : s __jv_e ? c_rval ( __rpg_val_of syms e_tt0 e_v0 ) ``
-    : s __jo_e ? c_rval ( __rpg_oval_from syms e_tt0 e_v0 ( nurl_get_last_type ) ) ``
+    : b __jd_e & c_rval ( __arm_dup_owns_all syms e_tt0 )
+    : s __jv_e ? & c_rval ! __jd_e ( __rpg_val_of syms e_tt0 e_v0 ) ``
+    : s __jo_e ? & c_rval ! __jd_e ( __rpg_oval_from syms e_tt0 e_v0 ( nurl_get_last_type ) ) ``
     = g_dead_arm - g_dead_arm ? c_dead_else 1 0
     : s e_dtw ( nurl_str_cat ( nurl_sym_get syms `__deferred_temps__` ) `` )
     : s e_dti ( nurl_str_cat ( nurl_sym_get syms `__deferred_ids__` ) `` )
@@ -25958,7 +25962,9 @@ unsafe @ gen_match i lex i syms i cg → s {
             : ~ s arm_result ( gen_stmt lex syms cg )
             = g_rpg_want 0
             = g_rpg_bw __m_bw
-            ? m_rval {
+            // (…a `( mem_dup x )` copy of a type with no view reaching
+            // nothing of x: __arm_dup_owns_all, agora #767.)
+            ? & m_rval ! ( __arm_dup_owns_all syms arm_tt0 ) {
                 = __m_jr ( __word_union __m_jr g_rpg_vreads )
                 ? == 1 g_rpg_on { = __m_jp ( __word_union __m_jp g_rpg_vreads ) = __m_jo ( __word_union __m_jo g_rpg_ovreads ) } {}
             } {}
@@ -81901,6 +81907,15 @@ unsafe @ __jpb_note i cg s up → v {
 @ __arm_is_mem_dup i syms i tt0 → b {
     ? != g_dup_nest + g_call_nest 1 { ^ F } {}
     ^ == ( __arm_eff_tt syms tt0 ) TT_LPAREN
+}
+
+// …and one of a type that holds no view (__ty_holds_view_p): the copy owns
+// all it holds, so the arm's value reaches nothing the copy was read out
+// of — a join of it and a fresh value lends nothing (agora #767). A copy
+// of a view holder views what its source views, and still reaches it.
+@ __arm_dup_owns_all i syms i tt0 → b {
+    ? ! ( __arm_is_mem_dup syms tt0 ) { ^ F } {}
+    ^ ! ( __ty_holds_view_p ( nurl_get_last_type ) )
 }
 
 // May the call that ended an arm answer its ownership with its own bit?
