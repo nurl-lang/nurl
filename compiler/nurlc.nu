@@ -86365,79 +86365,11 @@ unsafe @ gen_trait_or_impl i lex i syms i cg → v {
     } {}
 }
 
-// scan_generic_templates: every generic struct template of the program —
-// this file's and those of every file it imports — stored before the
-// first instance is made. scan_generic_structs makes an instance where a
-// type names one, and can only do that for a template it knows: when the
-// templates were learned by that same walk, `( Wrap i )` written above
-// `: Wrap [T] { … }` named a type with no fields. The function it stood
-// in was compiled against that — a field read was refused ("has no field"),
-// a value of the type was never released, and the rules that ask what a
-// type holds (may it cross to a thread?) found it holding nothing; with no
-// use below the template the module reached clang with an unsized type
-// (Agora #716). A struct is declared at the top level, so every `{ … }`
-// block is stepped over (skip_balanced: scan_type_names has noted where
-// each one ends), and a trait or impl is skipped whole, as there — the `:`
-// of a supertrait header declares nothing. Imports are followed as
-// scan_generic_structs follows them, under a list of their own.
-@ scan_generic_templates i lex → v {
-    ~ != ( nurl_lex_type lex ) TT_EOF {
-        : i tt ( nurl_lex_type lex )
-        ? == tt TT_LBRACE { ( skip_balanced lex ) } {
-            ? == tt TT_PERCENT {
-                // A trait or impl header, up to its block — unless the `%`
-                // is a trait object's, `%Show`, written against its name in
-                // a type (an FFI declaration's: no block follows it). Taken
-                // for a header, the walk stepped over the next block there
-                // is, a template's body among them, and an instance above
-                // that template had no fields again (agora #716).
-                : i pl ( nurl_lex_line lex )
-                : i pc ( nurl_lex_col lex )
-                ( nurl_lex_advance lex )
-                ? | != ( nurl_lex_line lex ) pl != ( nurl_lex_col lex ) + pc 1 {
-                    ~ & != ( nurl_lex_type lex ) TT_LBRACE != ( nurl_lex_type lex ) TT_EOF { ( nurl_lex_advance lex ) }
-                    ? == ( nurl_lex_type lex ) TT_LBRACE { ( skip_balanced lex ) } {}
-                } {}
-            } {
-                ? == tt TT_COLON {
-                    ( nurl_lex_advance lex )
-                    ? == ( nurl_lex_type lex ) TT_TILDE { ( nurl_lex_advance lex ) } {}
-                    // (A global's type is read whole — `: ~ ( @ i %Show ) g
-                    // 0`: what it holds is no declaration.)
-                    ? | ( is_ident_tok ( nurl_lex_type lex ) ) == ( nurl_lex_type lex ) TT_PIPE { ( __scan_template_decl lex T ) } { ( skip_one_type lex ) }
-                } {
-                    ( nurl_lex_advance lex )
-                    ? & == tt TT_DOLLAR == ( nurl_lex_type lex ) TT_STR {
-                        : i __im_ln ( nurl_lex_line lex )
-                        : i __im_cl ( nurl_lex_col lex )
-                        : s path ( __norm_import_path ( nurl_lex_val lex ) )
-                        ( nurl_lex_advance lex )
-                        : s alias ? ( __import_alias_tok lex ) ( nurl_str_cat ( nurl_lex_val lex ) `` ) ``
-                        ? != 0 ( nurl_str_len alias ) { ( nurl_lex_advance lex ) } {}
-                        : s key ( __canon_import_key path )
-                        : s marker ( nurl_sym_get g_generic_struct_syms `__tscanned__` )
-                        ? ( str_contains_word marker key ) {} {
-                            ( nurl_sym_def g_generic_struct_syms `__tscanned__` ? == 0 ( nurl_str_len marker ) ( nurl_str_cat key `` ) ( nurl_str_cat3 marker ` ` key ) )
-                            ( __require_import_file lex __im_ln __im_cl path )
-                            : s src2 ( __import_src path alias )
-                            : i lex2 ( nurl_lex_new src2 path )
-                            : s saved_sf ( vis_current_src_file )
-                            ( vis_set_current_src_file path )
-                            ( scan_generic_templates lex2 )
-                            ( nurl_lex_free lex2 )
-                            ( vis_set_current_src_file saved_sf )
-                        }
-                    } {}
-                }
-            }
-        }
-    }
-}
-
 // scan_generic_structs: linear pre-pass that
 //   (a) stores generic struct templates `: Name [T+] { ... }` in
 //       g_generic_struct_syms (each is there already for the instances —
-//       scan_generic_templates — and is stored again as the walk meets it),
+//       scan_type_names stored it — and is stored again as the walk meets
+//       it),
 //       and
 //   (b) for every `( Name T1 T2 ... )` occurrence — whether at type
 //       position in a signature or mid-function-body — emits the
@@ -87186,7 +87118,17 @@ unsafe @ priv_resolve i lex i syms s fname → s {
                     }
                     { ? == tt TT_PERCENT
                         { ( __lazy_collect lex `__roots__` ) = g_impl_unsafe ? decl_unsafe 1 0 ( scan_impl_decl lex syms ) }
-                        { ( nurl_lex_advance lex ) }
+                        {
+                            // (A global's type is read whole: the `@` of a
+                            // closure type in it, `: ~ ( @ i %Show ) g 0`, is no
+                            // function declaration — taken for one, it swallowed
+                            // the function declared below the global, agora #727.)
+                            ? == tt TT_COLON {
+                                ( nurl_lex_advance lex )
+                                ? == ( nurl_lex_type lex ) TT_TILDE { ( nurl_lex_advance lex ) } {}
+                                ? & ! ( is_ident_tok ( nurl_lex_type lex ) ) != ( nurl_lex_type lex ) TT_PIPE { ( skip_one_type lex ) } {}
+                            } { ( nurl_lex_advance lex ) }
+                        }
                     }
                 } } }
     }
@@ -87353,14 +87295,21 @@ unsafe @ priv_resolve i lex i syms s fname → s {
                                     ? | == nxt TT_LBRACE == nxt TT_LBRACK
                                     { : s name ( nurl_lex_val lex )
                                         ( nurl_sym_def syms name ( nurl_str_cat `%` name ) )
+                                        // (A generic struct's template is stored
+                                        // here, before scan_generic_structs makes
+                                        // the first instance: wherever it is
+                                        // declared, an instance has its fields —
+                                        // agora #716.)
                                         ? == nxt TT_LBRACE {
                                             ( nurl_lex_advance lex )
                                             ( record_type_layout lex name `struct` )
-                                        } {}
+                                        } { ( __scan_template_decl lex T ) }
                                     }
                                     {}
                                 }
-                                {}
+                                // (A global's type is read whole: a trait object
+                                // in it, `: ~ ( @ i %Show ) g 0`, is no header.)
+                                { ? ! ( is_ident_tok ( nurl_lex_type lex ) ) { ( skip_one_type lex ) } {} }
                             }
                         }
                         { ( nurl_lex_advance lex ) }
@@ -91431,11 +91380,6 @@ unsafe @ __compile_pipeline s src s path i syms i cg → v {
     : i lex_tn ( nurl_lex_new src path )
     ( scan_type_names lex_tn syms )
     ( nurl_lex_free lex_tn )
-    // Every generic struct template next, wherever it is declared: the
-    // scan after it makes an instance where a type names one.
-    : i lex_gt ( nurl_lex_new src path )
-    ( scan_generic_templates lex_gt )
-    ( nurl_lex_free lex_gt )
     : i lex0 ( nurl_lex_new src path )
     ( scan_generic_structs lex0 syms )
     ( nurl_lex_free lex0 )

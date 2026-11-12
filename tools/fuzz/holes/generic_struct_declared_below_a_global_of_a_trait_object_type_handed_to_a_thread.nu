@@ -1,5 +1,5 @@
 // generic_struct_declared_below_a_global_of_a_trait_object_type_handed_to_a_thread: `: ~ ( @ i %Show ) g 0` right above `: Wrap [T] { ( Rc T ) r }`, an instance of which (named above both) a thread_spawn closure captures while the spawner keeps a share
-// Closed: the template pre-scan reads a global's type whole, and a `%` written against a name (`%Show`) is a trait object, not a trait or impl header: it no longer steps over the template's body (agora #716).
+// Closed: the type-name pre-scan, which stores every template before the first instance is made, reads a global's type whole: the `%` of `%Show` in it is no trait or impl header whose block the scan steps over — the template's body, there (agora #716, #727).
 // main 3b63ee3b: accepted — the instance had no fields (ASan: double-free).
 // map: §6.5 | A3 | rejected | - | a generic struct declared below a global whose type names a trait object, its instance captured by a thread (agora #716)
 $ `stdlib/std/rc.nu`
