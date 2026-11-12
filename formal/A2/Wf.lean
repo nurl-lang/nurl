@@ -1086,7 +1086,7 @@ theorem StmtT.keepF {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     obtain ⟨E3, h3, hm3⟩ := ihp r hr E2 h2
     exact ⟨killE .replace false x E3, by simp [A2.exitScope, upd_ne _ _ hrx, A2.kill, h3],
       by rw [killE_mode, hm3, hm2, hm1, killE_mode]⟩
-  | @withLock Γ Δ F a x k Ea t _ hx hxF _ _ _ _ _ _ _ _ ih =>
+  | @withLock Γ Δ F a x k Ea t _ hx hxF _ _ _ _ _ _ _ _ _ ih =>
     intro r hr E h
     have hrx : r ≠ x := fun e => hxF (e ▸ hr)
     obtain ⟨E2, h2, hm2⟩ := ih r hr E (by simp [A2.setE, upd_ne _ _ hrx, h])
@@ -1228,7 +1228,7 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
     exact (ihp (ihs (hw1.add hx1 hE (fun hd => absurd hd (by simp [hr.dtor_false.2]))
       (fun ha => absurd ha (by simp [hr.dtor_false.1])) (fun hd => absurd hd (by simp [hr.dtor_false.2]))))).exitScope
       x hpx.2.2
-  | @withLock Γ Δ F a x k Ea t _ hx _ _ _ _ _ hpx _ _ _ ih =>
+  | @withLock Γ Δ F a x k Ea t _ hx _ _ _ _ _ hpx _ _ _ _ ih =>
     intro h
     exact (ih (h.add hx (fun _ _ r hr => by simp [roots] at hr) (fun hd => absurd hd (by simp))
       (fun ha => absurd ha (by simp)) (fun hd => absurd hd (by simp)))).exitScope x hpx.2.2

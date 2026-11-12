@@ -207,7 +207,9 @@ noncomputable def Mem.sweep (m : Mem) : Mem :=
 
 An `arc` block whose payload is a destructor value (`Ty.ok`'s `arc` case),
 or (Agora #755) a drained `Vec` of them at any depth (`Ty.nest n (.dtor f u)`),
-is not freed by the sweep that finds it unreached: it is marked `dead` and
+or (Agora #755, `Locked D`) a lock block whose payload, a destructor value
+holding no share (`Ty.lkPay`), is in it (a cell's state too: a cell's block
+is a lock block), is not freed by the sweep that finds it unreached: it is marked `dead` and
 its payload stays, for the thread whose step left it unreached to hand to a
 destructor frame (`Step.reap`, `Settle`).  Only a *top* orphan is marked:
 one that no other orphan's payload reaches.  An inner one stays reached,
@@ -227,13 +229,15 @@ def Roots0 (R : Val → Prop) (B : Nat → Option Blk) (v : Val) : Prop := R v �
 
 /-- An orphan to be: an `arc` block whose payload, a destructor value (or a
     drained `Vec` of them, Agora #755), is
-    in it, which the roots do not reach. -/
+    in it, which the roots do not reach; or (Agora #755, `Locked D`) a lock
+    block whose payload, a destructor value, is in it (not checked out). -/
 def Cand (R : Val → Prop) (B : Nat → Option Blk) (k : Nat) : Prop :=
-  (∃ n f u p, B k = some ⟨Ty.nest n (.dtor f u), .arc, some p⟩) ∧ ¬ Reached (Roots0 R B) B k
+  (∃ n f u p kd, (kd = .arc ∨ kd = .lock) ∧ B k = some ⟨Ty.nest n (.dtor f u), kd, some p⟩) ∧
+    ¬ Reached (Roots0 R B) B k
 
 /-- An orphan to be's payload. -/
 def CandPay (R : Val → Prop) (B : Nat → Option Blk) (v : Val) : Prop :=
-  ∃ k n f u, Cand R B k ∧ B k = some ⟨Ty.nest n (.dtor f u), .arc, some v⟩
+  ∃ k n f u kd, Cand R B k ∧ B k = some ⟨Ty.nest n (.dtor f u), kd, some v⟩
 
 /-- A top orphan: no other orphan to be's payload reaches it either. -/
 def TopOrphan (R : Val → Prop) (B : Nat → Option Blk) (k : Nat) : Prop :=
@@ -241,7 +245,7 @@ def TopOrphan (R : Val → Prop) (B : Nat → Option Blk) (k : Nat) : Prop :=
 
 /-- A top orphan's payload. -/
 def TopPay (R : Val → Prop) (B : Nat → Option Blk) (v : Val) : Prop :=
-  ∃ k n f u, TopOrphan R B k ∧ B k = some ⟨Ty.nest n (.dtor f u), .arc, some v⟩
+  ∃ k n f u kd, TopOrphan R B k ∧ B k = some ⟨Ty.nest n (.dtor f u), kd, some v⟩
 
 /-- The marking sweep's roots: the slots' values, the orphans' payloads and
     the top orphans' to be. -/
@@ -1491,7 +1495,9 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
       `Ty.nest n (.dtor f u)`, is bound at its own type, and the frame's end
       drains it, each element's destructor in index order,
       `Step.scopeDDrain`, as nurlc's drop of an `Arc<Vec<D>>`'s last share
-      drops the `Vec`'s elements.)  The block stays,
+      drops the `Vec`'s elements.  And a lock block's, `Locked D`: its
+      payload, a destructor value, as nurlc's last `Locked_drop` drops the
+      value.)  The block stays,
       empty, for the sweep to remove.  The rule's own position is any source
       statement, so it fires under every frame through the congruence rules
       (`seqL`, `scopeIn`, …), wherever the thread's next step would.  Only
@@ -1501,7 +1507,9 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
   | reap {m : Mem} {r : Stmt} {k n f : Nat} {u : Ty} {p : Val} :
       r.src = true → m.blk k = some ⟨Ty.nest n (.dtor f u), .dead, some p⟩ →
       -- (the payload holds no cell share: a typed program meets it, the type
-      -- of a block that is no lock block holds none, `MInv.blocks`; A3's
+      -- of a block that is no lock block holds none, `MInv.blocks`, and
+      -- (Agora #755) a lock block marked `dead` held a destructor value whose
+      -- type holds no share, `Ty.lkPay`, so none either; A3's
       -- confinement of the cells, read off the steps alone, counts the
       -- slots' shares and the lock blocks')
       (∀ c, ¬ Sub (.cell c) p) →

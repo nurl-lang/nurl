@@ -1775,12 +1775,12 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
     have hc : S.canon Γa (S.ρ a) = some (S.liftE a Ea) := by rw [canon_ρ h, ha]; rfl
     exact ⟨_, RhsT.lockTake hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab ha]; exact ht),
       fun x => lockE_lift x t⟩
-  | @lockRestore a y Ea Ey t Γa1 D ha hl ht hy hly htyy hpa =>
+  | @lockRestore a y Ea Ey t Γa1 D ha hl ht hy hly htyy hpa hdf =>
     have hca : S.canon Γa (S.ρ a) = some (S.liftE a Ea) := by rw [canon_ρ h, ha]; rfl
     have hc1 : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
     obtain ⟨D1, hp1, _, _⟩ := pushArg_ren h hab hy hpa
     exact ⟨intE, RhsT.lockRestore hca (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab ha]; exact ht)
-      hc1 (by rw [liftE_live]; exact hly) (by rw [liftE_ty' h hab hy]; exact htyy) hp1, fun x => intE_lift x⟩
+      hc1 (by rw [liftE_live]; exact hly) (by rw [liftE_ty' h hab hy]; exact htyy) hp1 hdf, fun x => intE_lift x⟩
   | @lockClone a Ea t ha hl ht =>
     have hc : S.canon Γa (S.ρ a) = some (S.liftE a Ea) := by rw [canon_ρ h, ha]; rfl
     refine ⟨_, RhsT.lockClone hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab ha]; exact ht),
@@ -1805,15 +1805,15 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
     refine ⟨_, RhsT.glob hsy htok, fun x => ?_⟩
     exact EntryWeaker.mk' (by simp [liftE]) (by simp [liftE, liftMode]) (by simp) (by simp [liftE])
       (fun h' => by simp [Mode.ownSlot] at h') (by simp)
-  | @rwRead a Ea t ha hl ht hnc =>
+  | @rwRead a Ea t ha hl ht hnc hdf =>
     have hc : S.canon Γa (S.ρ a) = some (S.liftE a Ea) := by rw [canon_ρ h, ha]; rfl
-    refine ⟨_, RhsT.rwRead hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab ha]; exact ht) hnc,
+    refine ⟨_, RhsT.rwRead hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab ha]; exact ht) hnc hdf,
       fun x => ?_⟩
     exact EntryWeaker.mk' (by simp [liftE]) (by simp [liftE, liftMode]) (by simp) (by simp [liftE])
       (fun h' => by simp [Mode.ownSlot] at h') (by simp)
-  | @rwTryRead a Ea t ha hl ht hnc =>
+  | @rwTryRead a Ea t ha hl ht hnc hdf =>
     have hc : S.canon Γa (S.ρ a) = some (S.liftE a Ea) := by rw [canon_ρ h, ha]; rfl
-    refine ⟨_, RhsT.rwTryRead hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab ha]; exact ht) hnc,
+    refine ⟨_, RhsT.rwTryRead hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab ha]; exact ht) hnc hdf,
       fun x => ?_⟩
     exact EntryWeaker.mk' (by simp [liftE]) (by simp [liftE, liftMode]) (by simp) (by simp [liftE])
       (fun h' => by simp [Mode.ownSlot] at h') (by simp)
@@ -3642,7 +3642,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
         rcases hmo with hmo | hmo <;> simp only [liftE, hmo, reduceCtorEq, ite_false, liftMode] at hl hm
         · first | (rw [← hl]; exact hnd hmo) | (rw [hl]; exact hnd hmo)
         · first | (rw [← hm] at hmo'; cases hmo') | (rw [hm] at hmo'; cases hmo'))
-  | @withLock Γ Δ F a x k Ea t hks hx hxF ha hla hta hk hpe hroot hav hxl ih =>
+  | @withLock Γ Δ F a x k Ea t hks hx hxF ha hla hta hk hpe hroot hav hxl hna ih =>
     intro _ hab hw hn hT
     have hca : S.canon Γ (S.ρ a) = some (S.liftE a Ea) := by rw [canon_ρ h, ha]; rfl
     have hmo : (lockE t).mode = .own ∨ (lockE t).mode = .bor := by
@@ -3674,6 +3674,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (by
         obtain ⟨E, hE, hl⟩ := hxl
         exact ⟨S.liftE x E, by rw [canon_ρ h, hE]; rfl, by rw [liftE_live]; exact hl⟩)
+      (fun hd => not_mem_assigns_rename h.inj (hna hd))
   | @letd Γ Γ1 Δ F x f r k E t H τ hks hx hxF hr hown hty hstr hview hdtor hH hk hpe hna ih =>
     intro _ hab hw hn hT
     obtain ⟨E', hr', hE'⟩ := RhsT.ren h hab hr

@@ -197,15 +197,16 @@ theorem SlotOK.grow {m m' : Mem} (hst : m'.st = m.st) (hb : BlkLe m.blk m'.blk) 
 def BlocksIn (m : Mem) : Prop :=
   ∀ k bl, m.blk k = some bl → bl.ty.ok = true ∧ bl.ty.holdsView = false ∧
     (∀ p, bl.pay = some p → WFv bl.ty p ∧ SharesOK m bl.ty p) ∧ (bl.kind = .lock ∨ bl.ty.hasCell = false) ∧
-    -- A2-drop.3d, Agora #610: a lock's or a view's payload owns no destructor
-    -- value; an `arc` block's may be one at its top, or (Agora #755) a
-    -- drained `Vec` of them (`Blk.DtorOK`)
+    -- A2-drop.3d, Agora #610: a view's payload owns no destructor value, a
+    -- lock's none or (Agora #755) one at its top holding no share; an `arc`
+    -- block's may be one at its top, or (Agora #755) a drained `Vec` of them
+    -- (`Blk.DtorOK`)
     bl.DtorOK
 
 /-- A block that is not `dead`, of a type that owns no destructor value:
     what the invariant's last clause asks of it. -/
 theorem noDead {bl : Blk} (hk : bl.kind ≠ .dead := by simp) (hd : bl.ty.dtorFree = true) : bl.DtorOK :=
-  ⟨fun _ _ => hd, fun h => absurd h hk, fun h => absurd hd (by rw [h]; simp)⟩
+  ⟨fun _ _ => Or.inl hd, fun h => absurd h hk, fun h => absurd hd (by rw [h]; simp)⟩
 
 /-- Agora #610: an `arc` block whose payload owns no destructor value or is
     one at its top (Agora #755: or a drained `Vec` of them), of a type that
@@ -217,6 +218,22 @@ theorem arcDtorOK {t : Ty} {o : Option Val} (hd : t.dtorFree = true ∨ t.dnest 
   · simp only at hf; rw [hd] at hf; cases hf
   · obtain ⟨n, f, u, rfl⟩ := Ty.dnest_shape hd
     exact ⟨n, f, u, rfl, by simpa [Ty.hasFn] using hfn⟩
+
+/-- Agora #755 (`Locked D`): a lock block whose payload owns no destructor
+    value or is one at its top holding no share (`Ty.lkPay`), of a type that
+    holds no closure. -/
+theorem lockDtorOK {t : Ty} {o : Option Val} (hd : t.lkPay = true) (hfn : t.hasFn = false) :
+    Blk.DtorOK ⟨t, .lock, o⟩ := by
+  refine ⟨fun _ _ => Or.inr ⟨rfl, hd⟩, fun h => by simp at h, fun hf => ?_⟩
+  obtain ⟨hdt, -⟩ := Ty.lkPay_dtor hd hf
+  cases t with
+  | dtor f u => exact ⟨0, f, u, rfl, by simpa [Ty.hasFn] using hfn⟩
+  | _ => simp [Ty.hasDtor] at hdt
+
+/-- Agora #755: a lock block's facts are of its type: another lock block of
+    the same type (its payload checked out, given back, changed) has them. -/
+theorem Blk.DtorOK.lock {t : Ty} {o o' : Option Val} (h : Blk.DtorOK ⟨t, .lock, o⟩) :
+    Blk.DtorOK ⟨t, .lock, o'⟩ := h.of_eq rfl rfl
 
 /-- **More blocks**: the invariant holds over a store with the same slots and
     more blocks, each as the invariant asks. -/
@@ -1745,13 +1762,13 @@ theorem out_share {m : Mem} {Γ : Ctx} {t : Ty} {k : Nat} {p : Val} (htok : t.ok
 /-- A3.2: a lock share, owned: it holds nothing, and its block is a lock
     block of its type. -/
 theorem out_lkShare {m : Mem} {Γ : Ctx} {t : Ty} {k : Nat} (htok : t.ok = true)
-    (hvd : t.dtorFree = true)
+    (hvd : t.lkPay = true)
     (hvf : t.holdsView = false) (hk : ∃ o, m.blk k = some ⟨t, .lock, o⟩) :
     RhsOut m Γ ⟨.lk t, .own, true, [], [], false, false⟩ (.lk k) true where
   own := rfl
   mode := Or.inl rfl
   live := rfl
-  tyok := by simp [Ty.ok, htok, hvf, hvd, Ty.vecD_of_dtorFree hvd]
+  tyok := by simp [Ty.ok, htok, hvf, hvd, Ty.vecD_of_lkPay hvd]
   wf _ r hr := by simp [roots, Entry.vdeps, Mode.ownSlot] at hr
   valOwn _ := ⟨rfl, .lk, ViewsOK.none (show (Ty.lk t).holdsView = false from hvf) _ _,
     List.nodup_nil, fun _ h => (nomatch h), fun _ _ _ _ h => (nomatch h), fun _ _ _ h => (by cases h),
@@ -1802,20 +1819,20 @@ theorem out_lockClone {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry
     RhsOut m Γ ⟨.lk t, .own, true, [], [], false, false⟩ (.lk k) true := by
   have hk := hi.lk_val ha hl hty hv
   have hok := hi.tyok ha; rw [hty] at hok
-  have hvd := Ty.ok_lk_free hok
+  have hvd := Ty.ok_lk_pay hok
   replace hok := Ty.ok_lk hok
   exact out_lkShare hok.1 hvd (by simpa using hok.2) hk
 
 /-- A3.5: a cell share, owned: it holds nothing, and names a lock block of
     its type. -/
 theorem out_cellShare {m : Mem} {Γ : Ctx} {t : Ty} {k : Nat} (htok : t.ok = true)
-    (hvd : t.dtorFree = true)
+    (hvd : t.lkPay = true)
     (hvf : t.holdsView = false) (hk : ∃ o, m.blk k = some ⟨t, .lock, o⟩) :
     RhsOut m Γ ⟨.cell t, .own, true, [], [], false, false⟩ (.cell k) true where
   own := rfl
   mode := Or.inl rfl
   live := rfl
-  tyok := by simp [Ty.ok, htok, hvf, hvd, Ty.vecD_of_dtorFree hvd]
+  tyok := by simp [Ty.ok, htok, hvf, hvd, Ty.vecD_of_lkPay hvd]
   wf _ r hr := by simp [roots, Entry.vdeps, Mode.ownSlot] at hr
   valOwn _ := ⟨rfl, .cell, ViewsOK.none (show (Ty.cell t).holdsView = false from hvf) _ _,
     List.nodup_nil, fun _ h => (nomatch h), fun _ _ _ _ h => (nomatch h), fun _ _ _ h => (by cases h),
@@ -1868,7 +1885,7 @@ theorem out_cellClone {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry
     RhsOut m Γ ⟨.cell t, .own, true, [], [], false, false⟩ (.cell k) true := by
   have hk := hi.cell_val ha hl hty hv
   have hok := hi.tyok ha; rw [hty] at hok
-  have hvd := Ty.ok_cell_free hok
+  have hvd := Ty.ok_cell_pay hok
   replace hok := Ty.ok_cell hok
   exact out_cellShare hok.1 hvd (by simpa using hok.2) hk
 
@@ -1877,7 +1894,7 @@ theorem out_cellClone {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry
 theorem out_glob {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {t : Ty} (htok : t.ok = true) {v : Val}
     (hf : GlobFits m.blk t v) : RhsOut m Γ ⟨t, .own, true, [], [], false, false⟩ v true := by
   rcases hf with ⟨u, k, o, rfl, rfl, hk⟩ | ⟨u, k, p, rfl, rfl, hk⟩
-  · have hvd := Ty.ok_lk_free htok
+  · have hvd := Ty.ok_lk_pay htok
     replace htok := Ty.ok_lk htok
     exact out_lkShare htok.1 hvd (by simpa using htok.2) ⟨o, hk⟩
   · have hk' : ∃ kd, m.blk k = some ⟨u, kd, some p⟩ := by

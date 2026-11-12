@@ -59,17 +59,18 @@ theorem CatchOK.of_st {m m' : Mem} (hst : m'.st = m.st) (hnv : m.nv ≤ m'.nv) (
 @[simp] theorem Blk.mark_pay (bl : Blk) : bl.mark.pay = bl.pay := rfl
 @[simp] theorem Blk.mark_rd (bl : Blk) : bl.mark.rd = .int 0 := rfl
 
-/-- A pinned block is an `arc` block (a top orphan) or a `dead` one, of a
-    destructor type, its payload in it. -/
+/-- A pinned block is an `arc` block or (Agora #755) a lock block (a top
+    orphan), or a `dead` one, of a destructor type, its payload in it. -/
 theorem Pinned.shape {R : Val → Prop} {B : Nat → Option Blk} {k : Nat} (h : Pinned R B k) {bl : Blk}
     (hk : B k = some bl) :
-    ∃ n f u p kd, bl = ⟨Ty.nest n (.dtor f u), kd, some p⟩ ∧ (kd = .arc ∨ kd = .dead) := by
-  rcases h with ⟨⟨⟨n, f, u, p, hp⟩, _⟩, _⟩ | ⟨n, f, u, p, hp⟩
-  · rw [hk] at hp; cases hp; exact ⟨n, f, u, p, _, rfl, Or.inl rfl⟩
-  · rw [hk] at hp; cases hp; exact ⟨n, f, u, p, _, rfl, Or.inr rfl⟩
+    ∃ n f u p kd, bl = ⟨Ty.nest n (.dtor f u), kd, some p⟩ ∧ (kd = .arc ∨ kd = .lock ∨ kd = .dead) := by
+  rcases h with ⟨⟨⟨n, f, u, p, kd, hkd, hp⟩, _⟩, _⟩ | ⟨n, f, u, p, hp⟩
+  · rw [hk] at hp; cases hp
+    exact ⟨n, f, u, p, _, rfl, by rcases hkd with rfl | rfl <;> simp⟩
+  · rw [hk] at hp; cases hp; exact ⟨n, f, u, p, _, rfl, Or.inr (Or.inr rfl)⟩
 
 theorem Pinned.kind {R : Val → Prop} {B : Nat → Option Blk} {k : Nat} (h : Pinned R B k) {bl : Blk}
-    (hk : B k = some bl) : bl.kind = .arc ∨ bl.kind = .dead := by
+    (hk : B k = some bl) : bl.kind = .arc ∨ bl.kind = .lock ∨ bl.kind = .dead := by
   obtain ⟨n, f, u, p, kd, rfl, hkd⟩ := h.shape hk; exact hkd
 
 /-- ... marked, an orphan. -/
@@ -81,9 +82,9 @@ theorem Pinned.mark {R : Val → Prop} {B : Nat → Option Blk} {k : Nat} (h : P
 theorem Pinned.root {R : Val → Prop} {B : Nat → Option Blk} {k : Nat} (h : Pinned R B k) {bl : Blk}
     (hk : B k = some bl) : ∃ p, bl.pay = some p ∧ RootsD R B p := by
   rcases h with ⟨hc, hnr⟩ | ⟨n, f, u, p, hp⟩
-  · obtain ⟨n, f, u, p, hp⟩ := hc.1
+  · obtain ⟨n, f, u, p, kd, _, hp⟩ := hc.1
     rw [hk] at hp; cases hp
-    exact ⟨p, rfl, Or.inr ⟨k, n, f, u, ⟨hc, hnr⟩, hk⟩⟩
+    exact ⟨p, rfl, Or.inr ⟨k, n, f, u, kd, ⟨hc, hnr⟩, hk⟩⟩
   · rw [hk] at hp; cases hp
     exact ⟨p, rfl, Or.inl (Or.inr ⟨k, n, f, u, hk⟩)⟩
 
@@ -91,7 +92,7 @@ theorem Pinned.root {R : Val → Prop} {B : Nat → Option Blk} {k : Nat} (h : P
 theorem Pinned.tree {R : Val → Prop} {B : Nat → Option Blk} {k : Nat} (h : Pinned R B k) {bl : Blk}
     (hk : B k = some bl) : bl.mark.tree = bl.tree := by
   obtain ⟨n, f, u, p, kd, rfl, hkd⟩ := h.shape hk
-  rcases hkd with rfl | rfl <;> rfl
+  rcases hkd with rfl | rfl | rfl <;> rfl
 
 /-- The marking sweep's blocks: a reached one as it was, or a pinned one
     marked `dead`. -/
@@ -152,28 +153,30 @@ theorem Pinned.kept {k : Nat} (h : Pinned m.vals m.blk k) {bl : Blk} (hk : m.blk
   exact fun _ hr => .root hroot hr
 
 /-- A marked orphan holds what its block's invariant says. -/
-theorem Blk.DtorOK.mark {bl : Blk} (h : bl.DtorOK) (hd : bl.kind = .arc ∨ bl.kind = .dead)
-    (hfree : bl.kind = .arc → bl.ty.dtorFree = false) : bl.mark.DtorOK := by
+theorem Blk.DtorOK.mark {bl : Blk} (h : bl.DtorOK) (hd : bl.kind = .arc ∨ bl.kind = .lock ∨ bl.kind = .dead)
+    (hfree : bl.kind ≠ .dead → bl.ty.dtorFree = false) : bl.mark.DtorOK := by
   refine ⟨fun h1 => absurd rfl h1, fun _ => ?_, fun h1 => h.2.2 h1⟩
-  rcases hd with hd | hd
-  · exact hfree hd
+  rcases hd with hd | hd | hd
+  · exact hfree (by rw [hd]; simp)
+  · exact hfree (by rw [hd]; simp)
   · exact h.2.1 hd
 
 /-- A top orphan is not reached from the marking sweep's roots: they are
     the roots before marking and orphans' payloads. -/
 theorem TopOrphan.not_reached {R : Val → Prop} {B : Nat → Option Blk} {k : Nat} (h : TopOrphan R B k) :
     ¬ Reached (RootsD R B) B k := fun hr =>
-  h.2 (hr.roots fun _ hv => hv.elim Or.inl fun ⟨k1, n1, f1, u1, ht1, hk1⟩ => Or.inr ⟨k1, n1, f1, u1, ht1.1, hk1⟩)
+  h.2 (hr.roots fun _ hv => hv.elim Or.inl fun ⟨k1, n1, f1, u1, kd1, ht1, hk1⟩ =>
+    Or.inr ⟨k1, n1, f1, u1, kd1, ht1.1, hk1⟩)
 
 /-- A top orphan is of a destructor type. -/
 theorem TopOrphan.ty {R : Val → Prop} {B : Nat → Option Blk} {k : Nat} (h : TopOrphan R B k) {bl : Blk}
-    (hk : B k = some bl) : bl.kind = .arc ∧ bl.ty.dtorFree = false := by
-  obtain ⟨n, f, u, p, hp⟩ := h.1.1
-  rw [hk] at hp; cases hp; exact ⟨rfl, by simp⟩
+    (hk : B k = some bl) : (bl.kind = .arc ∨ bl.kind = .lock) ∧ bl.ty.dtorFree = false := by
+  obtain ⟨n, f, u, p, kd, hkd, hp⟩ := h.1.1
+  rw [hk] at hp; cases hp; exact ⟨hkd, by simp⟩
 
 /-- A pinned block is of a destructor type. -/
 theorem Pinned.arc_ty {R : Val → Prop} {B : Nat → Option Blk} {k : Nat} (h : Pinned R B k) {bl : Blk}
-    (hk : B k = some bl) (_ : bl.kind = .arc) : bl.ty.dtorFree = false := by
+    (hk : B k = some bl) (_ : bl.kind ≠ .dead) : bl.ty.dtorFree = false := by
   obtain ⟨n, f, u, p, kd, rfl, _⟩ := h.shape hk; simp
 
 /-- **The marking sweep keeps the heap's invariant**: it frees only what the
@@ -230,7 +233,13 @@ theorem MInv.sweepD {Γ : Ctx} (hi : MInv m Γ) : MInv m.sweepD Γ := by
     refine ⟨h1, h2, fun p hpay => ⟨(h3 p hpay).1, ?_⟩, ?_, h5.mark hkd (hp.arc_ty hk0)⟩
     · exact (((h3 p hpay).2.sweep (hp.kept hk0 hpay))).grow hle
     · rcases h4 with h | h
-      · rcases hkd with h' | h' <;> (rw [h'] at h; cases h)
+      · -- Agora #755: a lock block marked holds a destructor value that
+        -- holds no share (`Ty.lkPay`), so no cell share
+        right
+        have hfree := hp.arc_ty hk0 (by rw [h]; simp)
+        rcases h5.1 (by rw [h]; simp) (by rw [h]; simp) with h' | ⟨-, h'⟩
+        · rw [hfree] at h'; cases h'
+        · exact Ty.hasCell_of_hasArc (Ty.lkPay_dtor h' hfree).2
       · exact Or.inr h
 
 /-- **The marking sweep keeps `Covers`**: it frees exactly the payloads of
@@ -267,18 +276,18 @@ theorem Inv.sweepD {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s) : In
     sweep keeps or marks (a marked block owns what it owned and its holders
     read nothing of it); a marked block's destructor is its `arc` block's. -/
 theorem MemCodes.sweepD {P : Prog} (h : MemCodes P m) : MemCodes P m.sweepD := by
-  refine ⟨h.1, fun k bl fs te ms e cs hk hs => ?_, fun k n f u kd o hk hkd => ?_⟩
+  refine ⟨h.1, fun k bl fs te ms e cs hk hs => ?_, fun k n f u kd o hk => ?_⟩
   · rcases sweepBlkD_some hk with ⟨hk0, _⟩ | ⟨bl0, hk0, _, hp, rfl⟩
     · exact h.2.1 k bl fs te ms e cs hk0 hs
     · rcases hs with hs | hs
       · rw [hp.tree hk0] at hs; exact h.2.1 k bl0 fs te ms e cs hk0 (.inl hs)
       · rw [Blk.mark_rd] at hs; cases hs
   · rcases sweepBlkD_some hk with ⟨hk0, _⟩ | ⟨bl0, hk0, _, hp, he⟩
-    · exact h.2.2 k n f u kd o hk0 hkd
+    · exact h.2.2 k n f u kd o hk0
     · obtain ⟨t, kd0, p⟩ := bl0
       simp only [Blk.mark, Blk.mk.injEq] at he
       obtain ⟨rfl, rfl, rfl⟩ := he
-      exact h.2.2 k n f u kd0 o hk0 (hp.kind hk0)
+      exact h.2.2 k n f u kd0 o hk0
 
 /-- **When no slot holds a value and the marking sweep leaves no orphan, it
     leaves no block**: every block it keeps is reached from a pinned
@@ -287,7 +296,7 @@ theorem Mem.sweepD_empty (h : ∀ x o v, m.st x ≠ some ⟨o, some v⟩) (hn : 
     m.sweepD.blk k = none := by
   -- a root of the marking sweep is a pinned block's payload, and that block is left an orphan
   have hroot : ∀ v, RootsD m.vals m.blk v → False := by
-    rintro v ((⟨x, o, hx⟩ | ⟨k0, n, f, u, hk0⟩) | ⟨k0, n, f, u, htop, hk0⟩)
+    rintro v ((⟨x, o, hx⟩ | ⟨k0, n, f, u, hk0⟩) | ⟨k0, n, f, u, kd, htop, hk0⟩)
     · exact h x o v hx
     · have hp : Pinned m.vals m.blk k0 := Or.inr ⟨n, f, u, v, hk0⟩
       by_cases hr : Reached (RootsD m.vals m.blk) m.blk k0
@@ -328,22 +337,23 @@ theorem Mem.sweepD_keeps {k : Nat} {bl : Blk} (hk : m.blk k = some bl) {x : Var}
   sweepBlkD_reached hk (.root (Or.inl (Or.inl ⟨x, o, hx⟩)) hr)
 
 /-- **An `arc` block of a destructor value (Agora #755: or of a drained
-    `Vec` of them) that nothing refers to any more is marked `dead`, its
+    `Vec` of them; or a lock block of a destructor value, `Locked D`, its
+    payload in) that nothing refers to any more is marked `dead`, its
     payload in it** (the witness's last drop): no
     slot's value and no block's payload refers to it, so it is a top orphan. -/
-theorem Mem.sweepD_marks {k n f : Nat} {u : Ty} {p : Val}
-    (hk : m.blk k = some ⟨Ty.nest n (.dtor f u), .arc, some p⟩)
+theorem Mem.sweepD_marks {k n f : Nat} {u : Ty} {p : Val} {kd : BKind} (hkd : kd = .arc ∨ kd = .lock)
+    (hk : m.blk k = some ⟨Ty.nest n (.dtor f u), kd, some p⟩)
     (hv : ∀ x o v, m.st x = some ⟨o, some v⟩ → ¬ Refers m.blk v k)
     (hb : ∀ k' bl', m.blk k' = some bl' → ¬ Refers m.blk bl'.keeps k) :
     m.sweepD.blk k = some ⟨Ty.nest n (.dtor f u), .dead, some p⟩ := by
   have hroots : ∀ w, (Roots0 m.vals m.blk w ∨ CandPay m.vals m.blk w) → ¬ Refers m.blk w k := by
-    rintro w ((⟨x, o, hx⟩ | ⟨k', n', f', u', hk'⟩) | ⟨k', n', f', u', _, hk'⟩) hr
+    rintro w ((⟨x, o, hx⟩ | ⟨k', n', f', u', hk'⟩) | ⟨k', n', f', u', kd', _, hk'⟩) hr
     · exact hv x o w hx hr
     · exact hb k' _ hk' (by simpa [Blk.keeps] using hr)
     · exact hb k' _ hk' (by simpa [Blk.keeps] using hr)
   have hnr := Reached.none_refers hroots hb
   have htop : TopOrphan m.vals m.blk k :=
-    ⟨⟨⟨n, f, u, p, hk⟩, fun h => hnr (h.roots fun _ h => Or.inl h)⟩, hnr⟩
+    ⟨⟨⟨n, f, u, p, kd, hkd, hk⟩, fun h => hnr (h.roots fun _ h => Or.inl h)⟩, hnr⟩
   exact sweepBlkD_pinned hk htop.not_reached (Or.inl htop)
 
 end

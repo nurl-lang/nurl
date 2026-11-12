@@ -128,7 +128,7 @@ theorem last_drop_reaps {m : Mem} {k : Nat} {p : Val} (hk : m.blk k = some ⟨DT
     {s s' : Stmt} {m' : Mem} (h : Settle P m.sweepD s m' s') :
     m.sweepD.blk k = some ⟨DT, .dead, some p⟩ ∧
       ∃ m1 s1, Step P m.sweepD s (.ok m1 s1) ∧ ReapMem m.sweepD m1 := by
-  have hm := Mem.sweepD_marks (n := 0) (f := 0) (u := T) hk hv hb
+  have hm := Mem.sweepD_marks (n := 0) (f := 0) (u := T) (Or.inl rfl) hk hv hb
   exact ⟨hm, settle_reaps h ⟨k, 0, 0, T, p, hm⟩⟩
 
 /-! ### Agora #755: an `Arc` of a `Vec` of destructor values
@@ -279,7 +279,7 @@ theorem last_dropV_reaps {m : Mem} {k : Nat} {p : Val} (hk : m.blk k = some ⟨.
     {s s' : Stmt} {m' : Mem} (h : Settle P m.sweepD s m' s') :
     m.sweepD.blk k = some ⟨.vec DT, .dead, some p⟩ ∧
       ∃ m1 s1, Step P m.sweepD s (.ok m1 s1) ∧ ReapMem m.sweepD m1 := by
-  have hm := Mem.sweepD_marks (n := 1) (f := 0) (u := T) hk hv hb
+  have hm := Mem.sweepD_marks (n := 1) (f := 0) (u := T) (Or.inl rfl) hk hv hb
   exact ⟨hm, settle_reaps h ⟨k, 1, 0, T, p, hm⟩⟩
 
 /-- **The reap binds the `Vec` at its own type, and its frame drains it**: at

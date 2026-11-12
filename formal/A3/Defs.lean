@@ -167,12 +167,16 @@ theorem lk_sync {t : Ty} : (Ty.lk t).hasCell = false := rfl
     library handle is a `Locked`'s value (h358, h357: `Locked PNCounter`,
     `RwLocked PNCounter`). -/
 theorem lk_cell_ok {t : Ty} (h : (Ty.cell t).ok = true) : (Ty.lk (.cell t)).ok = true := by
-  simp [Ty.ok, (Ty.ok_cell h).1, (Ty.ok_cell h).2, Ty.ok_cell_vd h, Ty.ok_cell_free h, Ty.holdsView]
+  have hp := Ty.ok_cell_pay h
+  simp only [Ty.lkPay] at hp
+  simp [Ty.ok, (Ty.ok_cell h).1, (Ty.ok_cell h).2, Ty.ok_cell_vd h, Ty.lkPay, Ty.dtorFree, Ty.holdsView, hp]
 
 /-- ... and so may a cell's state, which is a lock's payload (a handle that
     keeps another handle in its state, A3.5's second cut). -/
 theorem cell_cell_ok {t : Ty} (h : (Ty.cell t).ok = true) : (Ty.cell (.cell t)).ok = true := by
-  simp [Ty.ok, (Ty.ok_cell h).1, (Ty.ok_cell h).2, Ty.ok_cell_vd h, Ty.ok_cell_free h, Ty.holdsView]
+  have hp := Ty.ok_cell_pay h
+  simp only [Ty.lkPay] at hp
+  simp [Ty.ok, (Ty.ok_cell h).1, (Ty.ok_cell h).2, Ty.ok_cell_vd h, Ty.lkPay, Ty.dtorFree, Ty.holdsView, hp]
 
 /-- ... which `locked_new` takes (a library handle is Send). -/
 theorem lockNew_cell {Γ Γ1 : Ctx} {F : List Var} {t : Ty} {y : Var} {Ey : Entry} {D : List Dep}
@@ -253,7 +257,7 @@ theorem tryRead_some {Γ : Ctx} {F : List Var} {o : Var} {t : Ty} (ho : Γ o = s
     (`tryRead_some`); the option's scope ends after both. -/
 theorem _root_.A2.StmtT.withTryRead {P : Prog} {Γ Δs : Ctx} {F : List Var} {a o g y x : Var} {s e : Stmt}
     {Ea : Entry} {t : Ty} (hs : s.src = true) (he : e.src = true) (ho : Γ o = none) (hoF : o ∉ F)
-    (ha : Γ a = some Ea) (hla : Ea.live = true) (hta : Ea.ty = .lk t) (hnc : t.hasCell = false)
+    (ha : Γ a = some Ea) (hla : Ea.live = true) (hta : Ea.ty = .lk t) (hnc : t.hasCell = false) (hdf : t.dtorFree = true)
     (hg : Γ g = none) (hgo : g ≠ o)
     (hgF : g ∉ F) (hpin : NoPin (setE Γ o (tryReadE t)) o)
     (hds : DtorSafe (setE Γ o (tryReadE t)) .replace false o)
@@ -264,7 +268,7 @@ theorem _root_.A2.StmtT.withTryRead {P : Prog} {Γ Δs : Ctx} {F : List Var} {a 
     (hendo : EndOK (exitScope g Δs) o) :
     StmtT P Γ F (Stmt.withTryRead a o g y x s e) (exitScope o (exitScope g Δs)) := by
   have hgo' : (setE Γ o (tryReadE t)) g = none := by simp [setE, upd_ne _ _ hgo, hg]
-  refine StmtT.letv (by simp [Stmt.src, Stmt.readWith, hs, he]) ho hoF (RhsT.rwTryRead ha hla hta hnc) ?_ hendo
+  refine StmtT.letv (by simp [Stmt.src, Stmt.readWith, hs, he]) ho hoF (RhsT.rwTryRead ha hla hta hnc hdf) ?_ hendo
   refine StmtT.ite he (by simp [Stmt.src, Stmt.readWith, hs]) (ExprT.isl (upd_same _ _ _) rfl rfl) hnone ?_
   exact StmtT.letv (by simp [Stmt.readWith, Stmt.src, hs]) hgo' hgF
     (tryRead_some (upd_same _ _ _) hoF hpin hds) hsome hendg
@@ -282,12 +286,13 @@ theorem _root_.A2.StmtT.withTryWrite {P : Prog} {Γ Δ : Ctx} {F : List Var} {a 
     (hao : a ≠ o) (hx : Γ x = none) (hxo : x ≠ o) (hxF : x ∉ F) (has : a ∉ s.vars)
     (hb : StmtT P (setE (setE Γ o tryWriteE) x (lockE t)) F s Δ) (hend : EndOK Δ x)
     (hlive : ∃ E, Δ x = some E ∧ E.live = true)
-    (hnone : StmtT P (setE Γ o tryWriteE) F e (exitScope x Δ)) (hendo : EndOK (exitScope x Δ) o) :
+    (hnone : StmtT P (setE Γ o tryWriteE) F e (exitScope x Δ)) (hendo : EndOK (exitScope x Δ) o)
+    (hna : t.holdsDtor = true → x ∉ s.assigns := by lock_na) :
     StmtT P Γ F (Stmt.withTryWrite a o x s e) (exitScope o (exitScope x Δ)) := by
   refine StmtT.letv (by simp [Stmt.src, hs, he]) ho hoF (RhsT.rwTryWrite ha hla hta) ?_ hendo
   refine StmtT.ite he (by simp [Stmt.src, hs]) (ExprT.isl (upd_same _ _ _) rfl rfl) hnone ?_
   exact StmtT.withLock hs (by simp [setE, upd_ne _ _ hxo, hx]) hxF (by simp [setE, upd_ne _ _ hao, ha])
-    hla (Or.inl hta) hb hend hroot has hlive
+    hla (Or.inl hta) hb hend hroot has hlive hna
 
 /-- **`wguard_get`**: in a write scope on a lock of a `Vec` (`withLock a x`,
     `x` the payload checked out: `lockE`), the value lent is a borrow of `x`
@@ -549,7 +554,7 @@ theorem guardSnd_live (g y : Var) (t : Ty) : (projE y (guardGetE g t) t).live = 
 theorem _root_.A2.StmtT.rwGet {P : Prog} {Γ : Ctx} {F : List Var} {a g y x c z : Var} {f : Nat} {fn : Fn}
     {Ea Ez : Entry} {t : Ty} (hd : DupFn P f t) (hf : P[f]? = some fn)
     (ha : Γ a = some Ea) (hla : Ea.live = true) (hta : Ea.ty = .lk t) (htv : t.holdsView = false)
-    (hnc : t.hasCell = false)
+    (hnc : t.hasCell = false) (hdf : t.dtorFree = true)
     (hg : Γ g = none) (hy : Γ y = none) (hx : Γ x = none) (hc : Γ c = none)
     (hgy : g ≠ y) (hgx : g ≠ x) (hgc : g ≠ c) (hyx : y ≠ x) (hyc : y ≠ c) (hxc : x ≠ c)
     (hgF : g ∉ F) (hyF : y ∉ F) (hxF : x ∉ F) (hcF : c ∉ F)
@@ -619,7 +624,7 @@ theorem _root_.A2.StmtT.rwGet {P : Prog} {Γ : Ctx} {F : List Var} {a g y x c z 
   -- the guard's scope
   show StmtT P Γ F (.letv g (.rwRead a) (Stmt.readWith g y x (Stmt.callOut x c z f))) _
   rw [← exitScope_out hg hug hzg.symm (by simp) .replace false]
-  exact StmtT.letv rfl hg hgF (RhsT.rwRead ha hla hta hnc) h2
+  exact StmtT.letv rfl hg hgF (RhsT.rwRead ha hla hta hnc hdf) h2
     (Unnamed.endOK (((hug.setE_nil hgE).kill' _ _ _).setE_nil (by simp)))
 
 /-- A binding set to what it holds is as it was. -/
@@ -659,6 +664,7 @@ theorem _root_.A2.StmtT.lockedGet {P : Prog} {Γ : Ctx} {F : List Var} {a x c z 
     (NoPin.setE_nil hpin (lockE_vdeps t)) (hds.setE_off (lockE_dtor t))
   rw [← exitScope_out hx hux hzx.symm (by simp) .replace false]
   refine StmtT.withLock rfl hx hxF ha hla (Or.inl hta) h4 ?_ hroot ?_ ?_
+    (fun _ => by simp [Stmt.callOut, Stmt.assigns, hxc, Ne.symm hzx])
   · exact Unnamed.endOK (((hux.setE_nil (lockE_vdeps t)).kill' _ _ _).setE_nil (by simp))
   · simp [Stmt.callOut, Stmt.vars, Rhs.vars, hax, hac, haz]
   · refine ⟨lockE t, ?_, lockE_live t⟩
@@ -758,6 +764,7 @@ theorem _root_.A2.StmtT.lockedApply {P : Prog} {Γ : Ctx} {F : List Var} {a x c 
     (NoPin.setE_nil hpin (lockE_vdeps t)) (hds.setE_off (lockE_dtor t))
   rw [← exitScope_out hx hux hzx.symm (by simp) .replace false]
   refine StmtT.withLock rfl hx hxF ha hla hta h4 ?_ hroot ?_ ?_
+    (fun _ => by simp [Stmt.callOut, Stmt.assigns, hxc, Ne.symm hzx])
   · exact Unnamed.endOK (((hux.setE_nil (lockE_vdeps t)).kill' _ _ _).setE_nil (by simp))
   · simp [Stmt.callOut, Stmt.vars, Rhs.vars, hax, hac, haz]
   · refine ⟨lockE t, ?_, lockE_live t⟩
@@ -868,9 +875,10 @@ theorem _root_.A2.StmtT.lockedSet {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {a b 
   have hwl := StmtT.withLock (P := P) (a := a) rfl hbx' hxF (show Γb a = some Ea by
       simp [Γb, A2.setE, upd_ne _ _ hab, h1a]) hla hta hasg huxx.endOK hroot
     (by simp [Stmt.vars, Rhs.vars, hax, hab]) ⟨lockE t, upd_same _ _ _, lockE_live t⟩
+    (fun hd => absurd hd (by rw [Ty.holdsDtor_eq_not_free, hvd]; simp))
   rw [exitScope_setE hbx' hux'] at hwl
   have hlet := StmtT.letv (P := P) (x := b) (s := .withLock a x (.assign x (.lockTake b))) rfl hb hbF
-    (RhsT.lockNew hy hly hty hvd htv hpush) hwl ((hu1b.setE_nil hEb).endOK)
+    (RhsT.lockNew hy hly hty (Ty.lkPay_of_free hvd) htv hpush) hwl ((hu1b.setE_nil hEb).endOK)
   rw [exitScope_setE h1b hu1b] at hlet
   exact hlet
 
@@ -970,7 +978,7 @@ theorem _root_.A2.StmtT.mutexUnlock {P : Prog} {Γ Δ : Ctx} {F : List Var} {r m
     (hu : Γ u = some Eu) (hlu : Eu.live = true) (htu : Eu.ty = .int)
     (hr : Γ r = none) (hrF : r ∉ F) (hb : StmtT P (A2.setE Γ r intE) F s Δ) (hend : EndOK Δ r) :
     StmtT P Γ F (Stmt.mutexUnlock r m u s) (exitScope r Δ) :=
-  StmtT.letv hs hr hrF (RhsT.lockRestore hm hlm htm hu hlu htu PushArg.int) hb hend
+  StmtT.letv hs hr hrF (RhsT.lockRestore hm hlm htm hu hlu htu PushArg.int rfl) hb hend
 
 /-- **`mutex_with` is typed**: A3.2's `withLock` on the integer lock, with its
     faithfulness premises (the mutex outlives the body: the runtime unlocks it
@@ -1017,7 +1025,8 @@ theorem _root_.A2.StmtT.withLockElem {P : Prog} {Γ Δs Δ : Ctx} {F : List Var}
       (elemLockE t Ev)) x (lockE t)) F s Δs)
     (hend : EndOK Δs x) (hlive : ∃ E, Δs x = some E ∧ E.live = true) (hes : e ∉ s.vars) (hvs : v ∉ s.vars)
     (hvx : v ≠ x) (hve : v ≠ e)
-    (hpush : StmtT P (exitScope x Δs) F (.push v e) Δ) (hende : EndOK Δ e) :
+    (hpush : StmtT P (exitScope x Δs) F (.push v e) Δ) (hende : EndOK Δ e)
+    (hna : t.holdsDtor = true → x ∉ s.assigns := by lock_na) :
     StmtT P Γ F (Stmt.withLockElem v i e x s) (exitScope e Δ) := by
   have hkv : A2.kill .replace false v Γ v = some Ev := by simp [A2.kill, hv, killE_nohit hvv]
   have hpop := RhsT.pop (F := F) (t := .lk t) hkv hlv htv (Or.inl hmv) hvF hdd
@@ -1026,7 +1035,7 @@ theorem _root_.A2.StmtT.withLockElem {P : Prog} {Γ Δs Δ : Ctx} {F : List Var}
   have hex : A2.setE (A2.kill .drop t.holdsView v (A2.kill .replace false v Γ)) e (elemLockE t Ev) x = none := by
     simp [A2.setE, A2.kill, upd_ne _ _ hxe, hx]
   refine StmtT.withElem (by simp [Stmt.src, hs]) he heF hv hmv hi hpin hds hpop ?_ hpush hende ?_ rfl
-  · exact StmtT.withLock hs hex hxF (upd_same _ _ _) rfl (Or.inl rfl) hb hend rfl hes hlive
+  · exact StmtT.withLock hs hex hxF (upd_same _ _ _) rfl (Or.inl rfl) hb hend rfl hes hlive hna
   · simp [Stmt.vars, hvs, hvx, hve]
 
 /-- **A lock that is a field is typed** (`Stmt.withLockField`): the field `l`
@@ -1048,7 +1057,8 @@ theorem _root_.A2.StmtT.withLockField {P : Prog} {Γ Δs Δ : Ctx} {F : List Var
     (hendw : EndOK Δ w) (hendl : EndOK (exitScope w Δ) l)
     -- (A2-drop.3a: the struct's other field holds no destructor value: it is
     -- put back only after the body, so a panic there would drop it)
-    (hbd : b.holdsDtor = false) :
+    (hbd : b.holdsDtor = false)
+    (hna : t.holdsDtor = true → x ∉ s.assigns := by lock_na) :
     StmtT P Γ F (Stmt.withLockField y l w x s) (exitScope l (exitScope w Δ)) := by
   have hcl : compE Ey (.lk t) = outE (.lk t) .own := by
     simp [compE, ownHeld, Ty.holdsView, htv, outE]
@@ -1058,7 +1068,7 @@ theorem _root_.A2.StmtT.withLockField {P : Prog} {Γ Δs Δ : Ctx} {F : List Var
   refine StmtT.seq rfl ?_ hput
   refine StmtT.withLock hs (by simp [A2.setE, A2.kill, upd_ne _ _ hxw, upd_ne _ _ hxl, upd_ne _ _ hxy, hx]) hxF
     (show _ = some (outE (.lk t) .own) by simp [A2.setE, upd_ne _ _ hlw]) rfl (Or.inl rfl) hb hend
-    rfl hls hlive
+    rfl hls hlive hna
 
 /-- A3.2: a function of the program that takes a lock `in` (as the runtime's
     `locked_update l f` takes `l`), and whose result borrows from and holds
@@ -1151,11 +1161,12 @@ theorem _root_.A2.StmtT.lockGlobal {P : Prog} {Γ Δ : Ctx} {F : List Var} {h x 
     {s : Stmt} (hs : s.src = true) (hh : Γ h = none) (hhF : h ∉ F) (hx : Γ x = none) (hxF : x ∉ F)
     (hxh : x ≠ h) (htok : (Ty.lk t).ok = true) (hhs : h ∉ s.vars)
     (hb : StmtT P (setE (setE Γ h ⟨.lk t, .own, true, [], [], false, false⟩) x (lockE t)) F s Δ)
-    (hend : EndOK Δ x) (hlive : ∃ E, Δ x = some E ∧ E.live = true) (hendh : EndOK (exitScope x Δ) h) :
+    (hend : EndOK Δ x) (hlive : ∃ E, Δ x = some E ∧ E.live = true) (hendh : EndOK (exitScope x Δ) h)
+    (hna : t.holdsDtor = true → x ∉ s.assigns := by lock_na) :
     StmtT P Γ F (Stmt.lockGlobal h x g t s) (exitScope h (exitScope x Δ)) :=
   StmtT.letv hs hh hhF (RhsT.glob rfl htok)
     (StmtT.withLock hs (by simp [setE, upd_ne _ _ hxh, hx]) hxF (upd_same _ _ _) rfl (Or.inl rfl) hb hend
-      rfl hhs hlive) hendh
+      rfl hhs hlive hna) hendh
 
 /-- A read of a scalar global is an atomic load, A3.4's rule unchanged, on the
     owner `h` of a clone of its share. -/
@@ -1235,10 +1246,11 @@ theorem _root_.A2.StmtT.withCellIn {P : Prog} {Γ Δ : Ctx} {F : List Var} {a x 
     {ps : List (PMode × Ty)} {t : Ty} (ha : Γ a = some (paramE ps (.inp, .cell t)))
     (hsrc : s.src = true) (hx : Γ x = none) (hxF : x ∉ F)
     (hs : StmtT P (setE Γ x (lockE t)) F s Δ) (hend : EndOK Δ x) (has : a ∉ s.vars)
-    (hxl : ∃ E, Δ x = some E ∧ E.live = true) :
+    (hxl : ∃ E, Δ x = some E ∧ E.live = true)
+    (hna : t.holdsDtor = true → x ∉ s.assigns := by lock_na) :
     StmtT P Γ F (Stmt.withCell a x s) (exitScope x Δ) :=
   StmtT.withLock hsrc hx hxF ha (paramE_cell_lockOf ps t).2.2 (paramE_cell_lockOf ps t).1 hs hend
-    (paramE_cell_lockOf ps t).2.1 has hxl
+    (paramE_cell_lockOf ps t).2.1 has hxl hna
 
 /-- ... and so is a copy of it (`PNCounter_share` of a handle the function was
     lent): a new owner, on the borrow's thread, which the crossing check then
@@ -1400,13 +1412,13 @@ theorem arcNew_fn {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {q : Cross} {y :
     panics if an owner of it is left behind (`chanSend_kept`) ... -/
 theorem chan_fn {ms : List Nat} {q : Cross} :
     (Ty.lk (.prod (.vec (.fn ms q)) .int)).ok = true ↔ q = .send ∨ q = .sync ∨ q = .bare := by
-  cases q <;> simp [Ty.ok, Ty.holdsView, Ty.dtorFree, Ty.hasDtor]
+  cases q <;> simp [Ty.ok, Ty.holdsView, Ty.dtorFree, Ty.hasDtor, Ty.lkPay, Ty.hasArc]
 
 /-- ... and so is one a lock keeps (A3.2), which one thread at a time runs. -/
 theorem lockNew_fn {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {q : Cross} {y : Var} {E : Entry}
     (h : RhsT Γ F (.lockNew (.fn ms q) y) E Γ1) : q = .send ∨ q = .sync ∨ q = .bare := by
   cases h with
-  | lockNew _ _ _ hp _ => cases q <;> simp_all [Ty.holdsView, Ty.hasFn, Ty.dtorFree]
+  | lockNew _ _ _ hp _ => cases q <;> simp_all [Ty.holdsView, Ty.hasFn, Ty.dtorFree, Ty.lkPay, Ty.hasDtor]
 
 /-- A Send closure, which may capture a library handle, is a lock's value:
     `locked_new` takes it (A3.5's second cut; A3.5b's gap) ... -/
@@ -2839,7 +2851,7 @@ theorem lockNew_dyn_send {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {y : Var}
     with a bound (`: Send` or `: Send Sync`), none of one with no bound. -/
 theorem chan_dyn {ms : List Nat} {b : TraitBound} :
     (Ty.lk (.prod (.vec (.fn ms b.cross)) .int)).ok = true ↔ b ≠ .none := by
-  cases b <;> simp [TraitBound.cross, Ty.ok, Ty.holdsView]
+  cases b <;> simp [TraitBound.cross, Ty.ok, Ty.holdsView, Ty.lkPay, Ty.dtorFree, Ty.hasDtor]
 
 /-- ... the same for a lock's: `locked_new` takes no object of a trait with no
     bound (h344's `%Churn`). -/
@@ -3214,9 +3226,11 @@ structure GlobsOK (P : Prog) (G : Globs) : Prop where
   cover : Covers (G.mem 0)
   reach : ∀ k bl, G.blk k = some bl → Reached (fun v => ∃ g, G.gl g = some v) G.blk k
   codes : ∀ k bl, G.blk k = some bl → PkgOK P bl.tree ∧ PkgOK P bl.rd
-  /-- Agora #610: an `Arc` block of a destructor value names a destructor
-      the program checked (`DeadCodes`; vacuous when no block's payload owns
-      one, which is all the invariant allowed before). -/
+  /-- Agora #610: a block of a destructor value names a destructor the
+      program checked (`DeadCodes`; since Agora #755 asked of every block of
+      a destructor type, whatever its kind: an `Arc`'s or, `Locked D`, a
+      lock's; vacuous when no block's payload owns one, which is all the
+      invariant allowed before). -/
   dtors : DeadCodes P G.blk
   cells : ∀ k k1 k2, LockHolds G.blk k1 k → LockHolds G.blk k2 k → k1 = k2 ∧ k < G.nid
 

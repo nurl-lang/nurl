@@ -498,7 +498,7 @@ theorem last_drop_marks {m : Mem} {k : Nat} {p : Val} (hk : m.blk k = some ⟨DP
     (hv : ∀ x o v, m.st x = some ⟨o, some v⟩ → ¬ Refers m.blk v k)
     (hb : ∀ k' bl', m.blk k' = some bl' → ¬ Refers m.blk bl'.keeps k) :
     m.sweepD.blk k = some ⟨DP, .dead, some p⟩ :=
-  Mem.sweepD_marks (n := 0) (f := 1) (u := T) hk hv hb
+  Mem.sweepD_marks (n := 0) (f := 1) (u := T) (Or.inl rfl) hk hv hb
 
 /-- The block `k` is the only orphan of the store: no other `dead` block
     holds a payload. -/

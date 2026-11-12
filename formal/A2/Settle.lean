@@ -78,10 +78,10 @@ theorem orphan_reaps {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} 
 /-! ### The reaps end -/
 
 /-- A block that holds a destructor value at its top in it (Agora #755: or a
-    drained `Vec` of them): an `arc` block the marking sweep may mark, or an
-    orphan. -/
+    drained `Vec` of them): an `arc` block or (Agora #755, `Locked D`) a lock
+    block the marking sweep may mark, or an orphan. -/
 def DtorBlk (B : Nat → Option Blk) (k : Nat) : Prop :=
-  ∃ n f u kd p, B k = some ⟨Ty.nest n (.dtor f u), kd, some p⟩ ∧ (kd = .arc ∨ kd = .dead)
+  ∃ n f u kd p, B k = some ⟨Ty.nest n (.dtor f u), kd, some p⟩ ∧ (kd = .arc ∨ kd = .lock ∨ kd = .dead)
 
 open Classical in
 /-- How many such blocks there are below `n`. -/
@@ -135,7 +135,7 @@ theorem dtorCount_reap {m m1 : Mem} (hh : HeapOK m) (hr : ReapMem m m1) :
     by_cases he : k' = k
     · subst he; simp [upd] at hk'
     · exact ⟨n', f', u', kd, p', by simpa [upd, he] using hk', hkd⟩
-  · simp only [decide_eq_true_eq]; exact ⟨n, f, u, .dead, p, hk, Or.inr rfl⟩
+  · simp only [decide_eq_true_eq]; exact ⟨n, f, u, .dead, p, hk, Or.inr (Or.inr rfl)⟩
   · simp only [decide_eq_false_iff_not]
     rintro ⟨n', f', u', kd, p', hk', _⟩
     simp [upd] at hk'

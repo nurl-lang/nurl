@@ -174,6 +174,7 @@ thread's bindings. No A2 rule is copied.
 | `Cell` | A3.5: confinement of library handles (`CellInv`: no two threads hold a share of one cell), kept by every step and by a spawn through `SendCheck`; no `CellRace` |
 | `Make` | A3.6: the make phase (each global's `make` before `main`, `Made`, `make_ok`) and `A3.claim_made`: the claim from the program's global declarations, `GlobsOK` derived |
 | `Claim` | `A3.claim : A3.Claim` |
+| `LockDtorWitness` | Agora #755, `Locked D`: the check-out of a destructor payload that holds no share gives it back at its end and on a panic (`scopeL_end_gives_back`, `scopeL_panic_gives_back`); a witness made, updated through `locked_apply`, its last share dropped (`main_safe`, `main_no_leak`, `last_drop_reaps`, `A3.lockDtor_claim`) |
 
 The theorems, `A3.claim` and `A3.claim_made` (`check.sh` prints their axioms): a program A2
 types, whose spawned functions take only `sink` parameters of view-free
