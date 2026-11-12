@@ -623,8 +623,9 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
     step too), the frame's only step calls `f` on `x` (lent,
     the tree freed after; or moved into a struct's glue) (`A2.Dtor.scopeD_end_runs_dtor`); a panic out
     of its body with `x` owning runs it too: the frame is left at its end,
-    the panic after it, and from there (no orphan) the only step is that
-    end's call (`A2.Dtor.scopeD_panic_runs_dtor`);
+    the panic after it, and from the store the marking sweep leaves after
+    that step, with no orphan, the only step is that end's call
+    (`A2.Dtor.scopeD_panic_runs_dtor`);
   - A2-drop.3b, the drain, step by step. In a state the invariant holds
     of, what a typed frame's `x` owns says which step its end takes: a
     value that is no node is of the destructor type, and a node is a `Vec`
@@ -1003,17 +1004,28 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   `x`'s destructor (`reaped_panic_runs_dtor`), and the `recover` still
   catches (`recover_catches_reaped`; no step of a `recover` frame is a
   panic, `catchR_no_panic`), as nurlc's journal drain runs the drops
-  after one that panics and keeps the first panic going, inside the same
-  frame (`stdlib/runtime_core.c`, `nurl_panic`). The order is nurlc's
-  too: the share's binding is inside `x`'s scope, so its drop goes before
-  `x`'s destructor in the drain, as the reap goes before `x`'s frame's
-  end. Witnesses: `A2.ArcPanicWitness.main1` (a destructor binding whose
-  scope's panic drops the last share of an `Arc` of a value whose
-  destructor panics: `main1_safe`, `main1_no_leak_panic`, `main1_no_leak`,
-  `main1_unwind`) and `main2` (the same under a `recover`: `main2_safe`,
-  `main2_no_leak`, `main2_no_leak_panic`, `main2_unwind`;
-  `A3.arcPanic_claim` over both); the runs are not traced, the steps are
-  theorems of any store of their shape. That these are all
+  after one that panics, inside the same frame (`stdlib/runtime_core.c`,
+  `nurl_panic`). nurlc's `recover` then reports the first panic's
+  message; the model's panics carry no identity, so that correspondence
+  holds only trivially (the two panics cannot be told apart) and is not
+  modelled. The order is nurlc's too: the share's binding is inside `x`'s
+  scope, so its drop goes before `x`'s destructor in the drain, as the
+  reap goes before `x`'s frame's end. The step lemmas are of any store and
+  statement of their shape: the run's next step is taken from the store
+  the marking sweep leaves (`m.sweepD`), and that `x` still owns its value
+  when the reaped destructor's panic comes back is a premise. Witnesses
+  (`A2/ArcPanicWitness.lean`, all typed, safe and leak-free on
+  `no_leak_end` and `no_leak_panic`; `A3.arcPanic_claim` over all three):
+  `main3`, the case nurlc runs: a `recover` of a function in which a
+  destructor binding `x` scopes a panic while an `Arc` of a value whose
+  destructor panics holds its last share (`main3_unwind`: `x`'s
+  destructor still runs, the `recover` catches); `main2`, a `recover`
+  whose function makes such an `Arc` and panics with no destructor frame
+  between (`main2_unwind`); and `main1`, `main3`'s frame with no
+  `recover` (`main1_unwind`), which shows the model's behaviour on an
+  uncaught panic, not nurlc's: with no `recover` frame nurlc aborts before
+  any drain (below), where the model runs the unwinding's frames (an
+  over-approximation older than #790). The runs are not traced. That these are all
   the places is read off the rules, not a single theorem (above). The
   destructors INSIDE a value are shown for a struct's fields (Agora #616),
   an enum's payload (Agora #632) and a closure's environment (Agora

@@ -14,22 +14,35 @@ frame: the reaped destructor runs inside it, and a panic of that destructor
 comes back to the same frame.  So x's own destructor still runs after it,
 and the `recover` still catches, as nurlc's journal drain does: a panic
 raised by a drop while a frame's journal drains is caught by the same
-frame, the drain releases what is left, and the first panic goes on
-(`stdlib/runtime_core.c`, `nurl_panic`).
+frame, and the drain releases what is left (`stdlib/runtime_core.c`,
+`nurl_panic`).  (nurlc keeps the first panic's message; the model's panics
+carry no identity, so which panic goes on is not modelled: the two cannot
+be told apart.)
 
-* Steps, of any program: `frame_reap_inside` / `recover_reap_inside` (the
-  reap a `Settle` takes there lands inside the frame), `reaped_panic_runs_dtor`
-  (a panic out of the reaped frame comes back to x's frame, whose end then
-  calls x's destructor and nothing else), `recover_catches_reaped`,
-  `catchR_no_panic` (no step of a `recover` frame is a panic).
+* Steps, of any program: `frame_reap_inside` / `recover_reap_inside` (a
+  reap step from there lands inside the frame, with the reaped block's
+  destructor), `reaped_panic_runs_dtor` (a panic out of the reaped frame
+  comes back to x's frame, whose end, from the store the marking sweep
+  leaves, is the call of x's destructor and nothing else),
+  `recover_catches_reaped`, `catchR_no_panic` (no step of a `recover`
+  frame is a panic).
 * The witness programs (`P`: `dfn`, the destructor of `DT`; `pfn`, the
-  destructor of `DP`, which panics; `rfn`, a function a `recover` calls):
-  `main1`, a destructor binding `x` (of `DT`) whose scope panics while an
-  `Arc` of a `DP` value is its last share's (typed, safe, `no_leak_panic`,
-  `no_leak_end`; `main1_reap`); `main2`, a `recover` of `rfn`, whose body
-  makes such an `Arc` and panics (typed, safe, leak-free both ways;
-  `main2_reap`).  As for the other witnesses, no theorem traces the runs:
-  the steps above are theorems about any store and statement of their shape. -/
+  destructor of `DP`, which panics; `rfn`, `rfn3`, functions a `recover`
+  calls), each typed, safe, and leak-free on `no_leak_end` and
+  `no_leak_panic`:
+  - `main3`, the case Agora #790 is about: a `recover` of `rfn3`, in which
+    a destructor binding `x` (of `DT`) scopes a panic while an `Arc` of a
+    `DP` value holds its last share (`main3_unwind`: `x`'s destructor still
+    runs, the `recover` catches);
+  - `main2`, a `recover` of `rfn`, whose body makes such an `Arc` and
+    panics with no destructor frame between (`main2_unwind`);
+  - `main1`, the `main3` frame with no `recover` (`main1_unwind`): the
+    model's behaviour on an uncaught panic, not nurlc's, which aborts with
+    no drain.
+  As for the other witnesses, no theorem traces the runs: the steps above
+  are theorems about any store and statement of their shape, the premises
+  they take (that `x` still owns its value when the panic comes back)
+  stated as premises. -/
 
 namespace A2.ArcPanicWitness
 open A2.DynCell (NoRootb noRootb_empty)
@@ -52,12 +65,14 @@ theorem reapMem_blk {m m1 : Mem} (hr : ReapMem m m1) (he : m1.blk = m.blk) : Fal
 
 /-- **Agora #790: after a destructor frame caught the unwinding**
     (`Step.scopeDP` / `scopeDPDrain`: the frame at its end, the panic
-    after it), a reap (`Settle`'s next step while an orphan is left) lands
-    inside the frame, at its end's `skip`: the reaped destructor's frame
-    runs inside `x`'s. -/
+    after it), a reap step (what `Settle` takes while an orphan is left:
+    a step whose store is a reap's, `ReapMem`) lands inside the frame, at
+    its end's `skip`: the frame of the reaped block's payload runs inside
+    `x`'s, with that block's destructor. -/
 theorem frame_reap_inside {P : Prog} {m m1 : Mem} {x : Var} {f : Nat} {s1 : Stmt}
     (h : Step P m (.seq (.scopeD x f .skip) .panic) (.ok m1 s1)) (hr : ReapMem m m1) :
-    ∃ g, s1 = .seq (.scopeD x f (.seq (.scopeD m.nv g .skip) .skip)) .panic := by
+    ∃ k n g u p, m.blk k = some ⟨Ty.nest n (.dtor g u), .dead, some p⟩ ∧
+      s1 = .seq (.scopeD x f (.seq (.scopeD m.nv g .skip) .skip)) .panic := by
   cases h with
   | reap hrs _ _ => cases hrs
   | seqL h =>
@@ -65,7 +80,7 @@ theorem frame_reap_inside {P : Prog} {m m1 : Mem} {x : Var} {f : Nat} {s1 : Stmt
     | reap hrs _ _ => cases hrs
     | scopeDIn h =>
       cases h with
-      | reap _ _ _ => exact ⟨_, rfl⟩
+      | reap _ hk _ => exact ⟨_, _, _, _, _, hk, rfl⟩
     | scopeDEnd _ _ => exact (reapMem_blk hr rfl).elim
     | scopeDMoved _ => exact (reapMem_blk hr rfl).elim
     | scopeDDrain _ => exact (reapMem_blk hr rfl).elim
@@ -75,17 +90,22 @@ theorem frame_reap_inside {P : Prog} {m m1 : Mem} {x : Var} {f : Nat} {s1 : Stmt
 
 /-- **... and a panic out of the reaped frame comes back to `x`'s frame**,
     which is left at its end again, followed by the panic (twice: the
-    reaped destructor's, then the unwinding's); from there (no orphan left)
-    the only step is that end, which calls `x`'s destructor `f` on `x`.  So
-    a panicking destructor of what the unwinding orphaned does not skip
-    `x`'s own (before Agora #790 the reap sat at the call of `f`, inside
-    `scope x`, and the panic dropped the call). -/
+    reaped destructor's, then the unwinding's).  The step after is taken
+    from the store the marking sweep leaves, `m1.sweepD` (`Steps.step`);
+    with no orphan there (`Settle.done`), the only step from it is that
+    end, which calls `x`'s destructor `f` on `x`.  So a panicking
+    destructor of what the unwinding orphaned does not skip `x`'s own
+    (before Agora #790 the reap sat at the call of `f`, inside `scope x`,
+    and the panic dropped the call).  Stated of any store and any `t`:
+    that `x` still owns its value when the panic comes back (`hx`) is a
+    premise, not derived here (the frames a typed run unwinds inside `x`'s
+    are its body's, which do not bind `x`). -/
 theorem reaped_panic_runs_dtor {P : Prog} {m m1 : Mem} {x : Var} {f : Nat} {t : Stmt} {v : Val}
     (ht : Step P m t (.panic m1)) (hx : m1.st x = some ⟨true, some v⟩) (hv : v.isNode = false) :
     Step P m (.seq (.scopeD x f t) .panic) (.ok m1 (.seq (.seq (.scopeD x f .skip) .panic) .panic)) ∧
-      (¬ Orphan m1 → ∀ r, Step P m1 (.seq (.seq (.scopeD x f .skip) .panic) .panic) r ↔
-        r = .ok { m1 with nv := m1.nv + 1 }
-          (.seq (.seq (.scope x (.letcall m1.nv f [x] .skip)) .panic) .panic)) := by
+      (¬ Orphan m1.sweepD → ∀ r, Step P m1.sweepD (.seq (.seq (.scopeD x f .skip) .panic) .panic) r ↔
+        r = .ok { m1.sweepD with nv := m1.sweepD.nv + 1 }
+          (.seq (.seq (.scope x (.letcall m1.sweepD.nv f [x] .skip)) .panic) .panic)) := by
   obtain ⟨h1, h2⟩ := A2.Dtor.scopeD_panic_runs_dtor (f := f) ht hx hv
   refine ⟨Step.seqL h1, fun hno r => ⟨fun h => ?_, fun h => h ▸ Step.seqL ((h2 hno _).mpr rfl)⟩⟩
   cases h with
@@ -95,15 +115,17 @@ theorem reaped_panic_runs_dtor {P : Prog} {m m1 : Mem} {x : Var} {f : Nat} {t : 
   | waitPanic hw => exact hw.elim
 
 /-- **Agora #790: after a `recover` caught the unwinding** (`Step.catchP`:
-    the frame at its end), a reap lands inside the frame, at its `skip`. -/
+    the frame at its end), a reap step lands inside the frame, at its
+    `skip`, with the reaped block's destructor. -/
 theorem recover_reap_inside {P : Prog} {m m1 : Mem} {x : Var} {m0 : Mem} {s1 : Stmt}
     (h : Step P m (.catchR x m0 .skip) (.ok m1 s1)) (hr : ReapMem m m1) :
-    ∃ g, s1 = .catchR x m0 (.seq (.scopeD m.nv g .skip) .skip) := by
+    ∃ k n g u p, m.blk k = some ⟨Ty.nest n (.dtor g u), .dead, some p⟩ ∧
+      s1 = .catchR x m0 (.seq (.scopeD m.nv g .skip) .skip) := by
   cases h with
   | reap hrs _ _ => cases hrs
   | catchIn h =>
     cases h with
-    | reap _ _ _ => exact ⟨_, rfl⟩
+    | reap _ hk _ => exact ⟨_, _, _, _, _, hk, rfl⟩
   | catchSkip => exact (reapMem_blk hr rfl).elim
   | catchP hs _ => exact (skip_no_panic hs).elim
 
@@ -156,7 +178,21 @@ def rfn : Fn where
   body := .seq (.assign 0 (.expr (.lit 0))) (tail 1 2 3 4)
   nvars := 5
 
-def P : Prog := [dfn, pfn, rfn]
+/-- the function the third witness's `recover` calls: a destructor binding
+    `x` (of `DT`) whose scope is `tail`:
+    `@ rfn3 → i { = r 0  : a 1  : b 2  :drop x ( pair a b )  tail }` -/
+def rfn3 : Fn where
+  params := []
+  resTy := .int
+  resOwn := false
+  lends := []
+  rholds := []
+  outHolds := []
+  body := .seq (.assign 0 (.expr (.lit 0)))
+    (.letv 1 (.expr (.lit 1)) (.letv 2 (.expr (.lit 2)) (.letd 3 0 (.pair 1 2) (tail 4 5 6 7))))
+  nvars := 8
+
+def P : Prog := [dfn, pfn, rfn, rfn3]
 
 theorem dfn_not_thru : ¬ ThruFn P 0 := by
   intro h
@@ -356,22 +392,82 @@ theorem rfn_ok : FnOK P rfn := by
     rw [hΔ 0 (by decide) (by decide) (by decide) (by decide), Gr_eq]; simp [setE]
   · intro i hi; simp [rfn] at hi
 
+/-- `rfn3`'s body after its `= r 0`: the destructor binding, then `tail`. -/
+theorem rfn3_rest_typed : ∃ Δ, StmtT P Gr []
+      (.letv 1 (.expr (.lit 1)) (.letv 2 (.expr (.lit 2)) (.letd 3 0 (.pair 1 2) (tail 4 5 6 7)))) Δ ∧
+      NoRootb Δ ∧ Δ 0 = some intE := by
+  have hR : NoRootb Gr := by rw [Gr_eq]; exact noRootb_empty.setE (by simp [intE])
+  have hD : NoDeps Gr := by rw [Gr_eq]; exact NoDeps.setE (fun _ _ h => by cases h) rfl
+  let K1 : Ctx := A2.setE Gr 1 intE
+  let K2 : Ctx := A2.setE K1 2 intE
+  have hK1 : NoRootb K1 := hR.setE (by simp [intE])
+  have hK2 : NoRootb K2 := hK1.setE (by simp [intE])
+  have hD2 : NoDeps K2 := (hD.setE rfl).setE rfl
+  let ED : Entry := Entry.arm { EP with ty := DT, held := [] }
+  have hED : ED.mode ≠ .rootb ∧ ED.dtor = false ∧ ED.dbind = false := by
+    simp [ED, EP, Entry.arm, DT, T, Ty.dtorViews, Ty.holdsView]
+  let K3 : Ctx := A2.setE K2 3 ED
+  have hK3 : NoRootb K3 := hK2.setE hED
+  have hD3 : NoDeps K3 := hD2.setE (by simp [ED, EP, Entry.arm, Entry.vdeps])
+  obtain ⟨Δ, ht, hΔR, hΔD, hΔ⟩ := tail_typed (Γ := K3) hK3 hD3 (a := 4) (b := 5) (y := 6) (s := 7)
+    (by decide) (by decide) (by decide) (by decide) (by decide) (by decide)
+    (by simp [K3, K2, K1, A2.setE, Gr_eq]) (by simp [K3, K2, K1, A2.setE, Gr_eq])
+    (by simp [K3, K2, K1, A2.setE, Gr_eq]) (by simp [K3, K2, K1, A2.setE, Gr_eq])
+  have hpair : RhsT K2 [] (.pair 1 2) EP K2 :=
+    RhsT.pair (Ey := intE) (Ez := intE) (by simp [K2, K1, A2.setE]) rfl PushArg.int
+      (by simp [K2, K1, A2.setE]) rfl PushArg.int (by simp [intE, Mode.ownSlot])
+  have hd := StmtT.letd (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 3) (f := 0) (r := .pair 1 2)
+    (E := EP) (t := T) (H := []) rfl (by simp [K2, K1, A2.setE, Gr_eq]) (by simp) hpair rfl
+    (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn drop0_ok) (HeldUp.refl _ _) ht (hΔR.endOK _)
+    (hna := by simp [tail, Stmt.assigns])
+  have h2 := StmtT.letv (P := P) (x := 2) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K1) (Γ1 := K1)
+    rfl (by simp [K1, A2.setE, Gr_eq]) (by simp) (RhsT.expr ExprT.lit) hd ((hΔR.exitScope 3).endOK _)
+  have h1 := StmtT.letv (P := P) (x := 1) (r := .expr (.lit 1)) (E := intE) (F := []) (Γ := Gr) (Γ1 := Gr)
+    rfl (by simp [A2.setE, Gr_eq]) (by simp) (RhsT.expr ExprT.lit) h2
+    (((hΔR.exitScope 3).exitScope 2).endOK _)
+  refine ⟨_, h1, ((hΔR.exitScope 3).exitScope 2).exitScope 1, ?_⟩
+  rw [hΔD.exitScope_eq, (hΔD.upd_none 3).exitScope_eq, ((hΔD.upd_none 3).upd_none 2).exitScope_eq]
+  simp only [upd_ne _ _ (show (0 : Nat) ≠ 1 by decide), upd_ne _ _ (show (0 : Nat) ≠ 2 by decide),
+    upd_ne _ _ (show (0 : Nat) ≠ 3 by decide)]
+  rw [hΔ 0 (by decide) (by decide) (by decide) (by decide)]
+  simp [K3, K2, K1, A2.setE, Gr_eq]
+
+theorem rfn3_ok : FnOK P rfn3 := by
+  have ha := assign_res (fn := rfn3) (r := 0) (by simp [sigCtx, rfn3, R0, resMode])
+    (by intro p E hp hm; rcases p with _ | p <;> simp [sigCtx, rfn3, resMode] at hp <;> subst hp <;> simp at hm)
+    (by intro v E h; rcases v with _ | v <;> simp [sigCtx, rfn3, resMode] at h <;> subst h <;> exact ⟨rfl, rfl⟩)
+  have hG : setE (kill .replace false 0 (sigCtx rfn3)) 0 { intE with mode := R0.mode } = Gr := rfl
+  rw [hG] at ha
+  obtain ⟨Δ, ht, hΔR, hΔ0⟩ := rfn3_rest_typed
+  refine ⟨rfl, by decide, by decide, rfl, by simp [rfn3], by simp [rfn3], by simp [rfn3], by simp [rfn3],
+    by simp [rfn3], by simp [rfn3], by simp [rfn3], ?_, Δ, StmtT.seq rfl ha ht,
+    fun v E h => ⟨(hΔR v E h).2.1, (hΔR v E h).2.2⟩, ?_, ?_⟩
+  · refine ⟨fun i hi _ _ => ?_, fun i hi _ _ _ => ?_, fun h => by simp [rfn3] at h⟩
+    · simp [rfn3] at hi
+    · simp [rfn3] at hi
+  · exact ⟨intE, hΔ0, rfl, rfl, by simp [intE, resMode, rfn3], by simp [intE], by simp [intE], by simp [rfn3]⟩
+  · intro i hi; simp [rfn3] at hi
+
 theorem prog_ok : ProgOK P := by
   intro fn hfn
   simp only [P, List.mem_cons, List.mem_nil_iff, or_false] at hfn
-  rcases hfn with rfl | rfl | rfl
+  rcases hfn with rfl | rfl | rfl | rfl
   · exact dfn_ok
   · exact pfn_ok
   · exact rfn_ok
+  · exact rfn3_ok
 
 theorem prog_codes : ProgCodes P := by
   intro fn hfn
   simp only [P, List.mem_cons, List.mem_nil_iff, or_false] at hfn
-  rcases hfn with rfl | rfl | rfl
+  rcases hfn with rfl | rfl | rfl | rfl
   · simp [dfn, Stmt.codesOK, Rhs.codeOK]
   · simp [pfn, Stmt.codesOK, Rhs.codeOK]
   · simp only [rfn, tail, Stmt.codesOK, Rhs.codeOK, DP]
     exact ⟨trivial, trivial, trivial, trivial, arcNew_codeOK (n := 0) drop1_ok, trivial⟩
+  · simp only [rfn3, tail, Stmt.codesOK, Rhs.codeOK, DP]
+    exact ⟨trivial, trivial, trivial, trivial, trivial, trivial, trivial,
+      arcNew_codeOK (n := 0) drop1_ok, trivial⟩
 
 /-! ### The reap's step, of any program -/
 
@@ -404,7 +500,77 @@ theorem last_drop_marks {m : Mem} {k : Nat} {p : Val} (hk : m.blk k = some ⟨DP
     m.sweepD.blk k = some ⟨DP, .dead, some p⟩ :=
   Mem.sweepD_marks (n := 0) (f := 1) (u := T) hk hv hb
 
-/-! ### The first witness: a destructor binding whose scope panics
+/-- The block `k` is the only orphan of the store: no other `dead` block
+    holds a payload. -/
+def OnlyOrphan (m : Mem) (k : Nat) : Prop :=
+  ∀ k' n f u p, m.blk k' = some ⟨Ty.nest n (.dtor f u), .dead, some p⟩ → k' = k
+
+/-- A reap of the only orphan, a `DP` value's block, runs `pfn` (1). -/
+theorem only_DP {m : Mem} {k : Nat} {p : Val} (hk : m.blk k = some ⟨DP, .dead, some p⟩)
+    (hu : OnlyOrphan m k) {k' n g : Nat} {u : Ty} {p' : Val}
+    (h : m.blk k' = some ⟨Ty.nest n (.dtor g u), .dead, some p'⟩) : g = 1 := by
+  have hk' := hu k' n g u p' h
+  subst hk'
+  rw [hk] at h
+  have hty : DP = Ty.nest n (.dtor g u) := by injection h with h1; injection h1
+  exact (Ty.nest_dtor_inj (n := 0) (f := 1) (u := T) hty).2.1.symm
+
+/-- What `frame_unwind` states of a destructor frame `x` of `dfn`. -/
+def FrameFacts (x : Var) (m : Mem) (k : Nat) (p : Val) : Prop :=
+    (∃ m1, Step P m (.seq (.scopeD x 0 .skip) .panic)
+        (.ok m1 (.seq (.scopeD x 0 (.seq (.scopeD m.nv 1 .skip) .skip)) .panic)) ∧ ReapMem m m1 ∧
+        m1.st m.nv = some ⟨true, some p⟩) ∧
+      (OnlyOrphan m k → ∀ m1 s1, Step P m (.seq (.scopeD x 0 .skip) .panic) (.ok m1 s1) → ReapMem m m1 →
+        s1 = .seq (.scopeD x 0 (.seq (.scopeD m.nv 1 .skip) .skip)) .panic) ∧
+      (∀ {m2 m3 : Mem} {t : Stmt} {v : Val}, Step P m2 t (.panic m3) →
+        m3.st x = some ⟨true, some v⟩ → v.isNode = false →
+        Step P m2 (.seq (.scopeD x 0 t) .panic) (.ok m3 (.seq (.seq (.scopeD x 0 .skip) .panic) .panic)) ∧
+        (¬ Orphan m3.sweepD → ∀ r, Step P m3.sweepD (.seq (.seq (.scopeD x 0 .skip) .panic) .panic) r ↔
+          r = .ok { m3.sweepD with nv := m3.sweepD.nv + 1 }
+            (.seq (.seq (.scope x (.letcall m3.sweepD.nv 0 [x] .skip)) .panic) .panic)))
+
+/-- **Agora #790 at a destructor frame `x` of `dfn` (0)**, of any store and
+    statement of the shape: (1) with the `DP` block `k` orphaned, the reap
+    can be taken inside `x`'s frame (the payload to the fresh slot `m.nv`,
+    in a frame of `pfn`, 1), and (2) when `k` is the only orphan, every reap
+    step from there is that one; (3) when a step `t` panics with `x` still
+    owning its value (a premise), the panic comes back to `x`'s frame, and
+    from the store the marking sweep leaves after it, with no orphan, the
+    only step calls `dfn` on `x`. -/
+theorem frame_unwind (x : Var) {m : Mem} {k : Nat} {p : Val} (hk : m.blk k = some ⟨DP, .dead, some p⟩)
+    (hnc : ∀ c, ¬ Sub (.cell c) p) :
+    FrameFacts x m k p := by
+  refine ⟨unwind_reap (n := 0) (u := T) hk hnc, fun hu _ _ h hr => ?_,
+    fun ht hx hv => reaped_panic_runs_dtor ht hx hv⟩
+  obtain ⟨_, _, _, _, _, h', rfl⟩ := frame_reap_inside h hr
+  rw [only_DP hk hu h']
+
+/-- What `recover_unwind` states of a `recover` frame of flag `e`. -/
+def RecoverFacts (e : Var) (m m0 : Mem) (k : Nat) (p : Val) : Prop :=
+    (∃ m1, Step P m (.catchR e m0 .skip) (.ok m1 (.catchR e m0 (.seq (.scopeD m.nv 1 .skip) .skip))) ∧
+        ReapMem m m1 ∧ m1.st m.nv = some ⟨true, some p⟩) ∧
+      (OnlyOrphan m k → ∀ m1 s1, Step P m (.catchR e m0 .skip) (.ok m1 s1) → ReapMem m m1 →
+        s1 = .catchR e m0 (.seq (.scopeD m.nv 1 .skip) .skip)) ∧
+      (∀ {m2 m3 : Mem} {t : Stmt}, Step P m2 t (.panic m3) → (m3.st e).isSome →
+        Step P m2 (.catchR e m0 t) (.ok (m3.set e ⟨false, some (.int 1)⟩) (.catchR e m0 .skip))) ∧
+      (∀ {m2 m3 : Mem} {t : Stmt}, ¬ Step P m2 (.catchR e m0 t) (.panic m3))
+
+/-- **Agora #790 at a `recover` frame of flag `e`**, of any store and
+    statement of the shape: (1) with the `DP` block `k` orphaned, the reap
+    can be taken inside the frame (a frame of `pfn`), (2) when `k` is the
+    only orphan every reap step from there is that one, (3) a panic out of
+    anything inside the frame (that reaped frame's, or the unwinding's of
+    a destructor frame inside it) is caught by it, which is at its end
+    again, and (4) no step of the frame is a panic. -/
+theorem recover_unwind (e : Var) {m : Mem} {m0 : Mem} {k : Nat} {p : Val}
+    (hk : m.blk k = some ⟨DP, .dead, some p⟩) (hnc : ∀ c, ¬ Sub (.cell c) p) :
+    RecoverFacts e m m0 k p := by
+  refine ⟨recover_reap (n := 0) (u := T) hk hnc, fun hu _ _ h hr => ?_,
+    fun ht hx => recover_catches_reaped ht hx, catchR_no_panic⟩
+  obtain ⟨_, _, _, _, _, h', rfl⟩ := recover_reap_inside h hr
+  rw [only_DP hk hu h']
+
+/-! ### The first witness: a destructor binding whose scope panics, no `recover`
 
 ```
 : a 1  : b 2  :drop x ( pair a b )                      -- x : DT, destructor dfn
@@ -412,13 +578,17 @@ theorem last_drop_marks {m : Mem} {k : Nat} {p : Val} (hk : m.blk k = some ⟨DP
 ( panic )
 ```
 
-The panic unwinds `s`'s scope (the `Arc`'s last share goes), `y`'s (moved
-out), `d`'s, `c`'s, and stops at `x`'s destructor frame (`Step.scopeDP`),
-which is left at its end; the marking sweep marks the block `dead`, and the
-reap lands inside `x`'s frame (`unwind_reap`, `frame_reap_inside`).  `pfn`
-panics there; the panic comes back to `x`'s frame, whose end then runs
-`dfn` on `x` (`reaped_panic_runs_dtor`, `main1_unwind`); then the panic
-goes on, uncaught. -/
+This is the model's behaviour on a panic no `recover` catches, NOT
+nurlc's: with no `recover` frame on the thread, nurlc's `nurl_panic` aborts
+the process at once and runs no drop at all (`CLAIM.md`); the model runs
+the unwinding's frames anyway, an over-approximation that predates Agora
+#790 (`main3` is the case nurlc runs).  In the model: the panic unwinds
+`s`'s scope (the `Arc`'s last share goes), `y`'s (moved out), `d`'s, `c`'s,
+and stops at `x`'s destructor frame (`Step.scopeDP`), which is left at its
+end; the marking sweep marks the block `dead`, and the reap lands inside
+`x`'s frame (`main1_unwind`, over `frame_unwind`).  `pfn` panics there;
+the panic comes back to `x`'s frame, whose end then runs `dfn` on `x`;
+then the panic goes on, uncaught, and the run ends with the sweep. -/
 
 def main1 : Stmt :=
   .letv 0 (.expr (.lit 1)) (.letv 1 (.expr (.lit 2)) (.letd 2 0 (.pair 0 1) (tail 3 4 5 6)))
@@ -475,28 +645,13 @@ theorem main1_no_leak {m' : Mem} (hr : Steps P (emptyMem 7) main1 (.ok m' .skip)
   obtain ⟨Δ, ht⟩ := main1_typed
   exact no_leak_end prog_ok prog_codes ht rfl main1_codes (by decide) hr
 
-/-- **Agora #790, the first case, at `main1`'s frame** (`x` is slot 2, its
-    destructor `dfn`, 0; the `Arc`'s payload a `DP`, destructor `pfn`, 1):
-    once `x`'s frame has caught the unwinding and the marking sweep has
-    marked the block `dead`, the reap (`Settle`'s next step) puts `pfn`'s
-    frame inside `x`'s, and only there; and when that frame panics with `x`
-    still owning its value (no frame inside touches it), the panic comes back
-    to `x`'s frame, whose end then calls `dfn` on `x` and nothing else. -/
+/-- **At `main1`'s frame** (`x` is slot 2, its destructor `dfn`, 0; the
+    `Arc`'s payload a `DP`, destructor `pfn`, 1): `frame_unwind` at slot 2.
+    Of stores and statements of the shape, not a trace of the run; on an
+    uncaught panic, the model's behaviour, not nurlc's (above). -/
 theorem main1_unwind {m : Mem} {k : Nat} {p : Val} (hk : m.blk k = some ⟨DP, .dead, some p⟩)
-    (hnc : ∀ c, ¬ Sub (.cell c) p) :
-    (∃ m1, Step P m (.seq (.scopeD 2 0 .skip) .panic)
-        (.ok m1 (.seq (.scopeD 2 0 (.seq (.scopeD m.nv 1 .skip) .skip)) .panic)) ∧ ReapMem m m1 ∧
-        m1.st m.nv = some ⟨true, some p⟩) ∧
-      (∀ m1 s1, Step P m (.seq (.scopeD 2 0 .skip) .panic) (.ok m1 s1) → ReapMem m m1 →
-        ∃ g, s1 = .seq (.scopeD 2 0 (.seq (.scopeD m.nv g .skip) .skip)) .panic) ∧
-      (∀ {m2 m3 : Mem} {t : Stmt} {v : Val}, Step P m2 t (.panic m3) →
-        m3.st 2 = some ⟨true, some v⟩ → v.isNode = false →
-        Step P m2 (.seq (.scopeD 2 0 t) .panic) (.ok m3 (.seq (.seq (.scopeD 2 0 .skip) .panic) .panic)) ∧
-        (¬ Orphan m3 → ∀ r, Step P m3 (.seq (.seq (.scopeD 2 0 .skip) .panic) .panic) r ↔
-          r = .ok { m3 with nv := m3.nv + 1 }
-            (.seq (.seq (.scope 2 (.letcall m3.nv 0 [2] .skip)) .panic) .panic))) :=
-  ⟨unwind_reap (n := 0) (u := T) hk hnc, fun _ _ h hr => frame_reap_inside h hr,
-    fun ht hx hv => reaped_panic_runs_dtor ht hx hv⟩
+    (hnc : ∀ c, ¬ Sub (.cell c) p) : FrameFacts 2 m k p :=
+  frame_unwind 2 hk hnc
 
 /-! ### The second witness: a `recover` of a function whose body panics
 
@@ -547,21 +702,93 @@ theorem main2_no_leak_panic {m' : Mem} (hr : Steps P (emptyMem 1) main2 (.panic 
   obtain ⟨Δ, ht⟩ := main2_typed
   exact no_leak_panic prog_ok prog_codes ht rfl main2_codes (by decide) hr
 
-/-- **Agora #790, the second case, at `main2`'s `recover`** (its flag `e` is
-    slot 0): once the `recover` has caught the unwinding and the block is
-    marked `dead`, the reap puts `pfn`'s frame inside the `recover`, and only
-    there; a panic out of that frame is caught by the same `recover` (no step
-    of it is a panic), which is at its end again. -/
+/-- **At `main2`'s `recover`** (its flag `e` is slot 0): `recover_unwind`
+    at slot 0.  Of stores and statements of the shape, not a trace of the
+    run. -/
 theorem main2_unwind {m : Mem} {m0 : Mem} {k : Nat} {p : Val} (hk : m.blk k = some ⟨DP, .dead, some p⟩)
-    (hnc : ∀ c, ¬ Sub (.cell c) p) :
-    (∃ m1, Step P m (.catchR 0 m0 .skip) (.ok m1 (.catchR 0 m0 (.seq (.scopeD m.nv 1 .skip) .skip))) ∧
-        ReapMem m m1 ∧ m1.st m.nv = some ⟨true, some p⟩) ∧
-      (∀ m1 s1, Step P m (.catchR 0 m0 .skip) (.ok m1 s1) → ReapMem m m1 →
-        ∃ g, s1 = .catchR 0 m0 (.seq (.scopeD m.nv g .skip) .skip)) ∧
-      (∀ {m2 m3 : Mem} {t : Stmt}, Step P m2 t (.panic m3) → (m3.st 0).isSome →
-        Step P m2 (.catchR 0 m0 t) (.ok (m3.set 0 ⟨false, some (.int 1)⟩) (.catchR 0 m0 .skip))) ∧
-      (∀ {m2 m3 : Mem} {t : Stmt}, ¬ Step P m2 (.catchR 0 m0 t) (.panic m3)) :=
-  ⟨recover_reap (n := 0) (u := T) hk hnc, fun _ _ h hr => recover_reap_inside h hr,
-    fun ht hx => recover_catches_reaped ht hx, catchR_no_panic⟩
+    (hnc : ∀ c, ¬ Sub (.cell c) p) : RecoverFacts 0 m m0 k p :=
+  recover_unwind (m0 := m0) 0 hk hnc
+
+/-! ### The third witness: a destructor frame inside a `recover`
+
+```
+: !v PanicInfo e ( recover rfn3 )
+@ rfn3 → i { = r 0  : a 1  : b 2  :drop x ( pair a b )     -- x : DT, destructor dfn
+             : c 1  : d 2  :drop y ( pair c d )  : s ( arc_new y )  ( panic ) }
+```
+
+The case Agora #790 is about, and the one nurlc runs: the panic has a
+`recover` frame to go to, so its journal drains, `Arc_drop` of `s` runs
+`pfn` (which panics: caught by the same frame, the drain goes on), then
+`dfn` on `x`, and the `recover` returns 1.  In the model (run from
+`emptyMem 1`, so `rfn3`'s locals are slots `1 + v`, `x` slot 4,
+`main3_body`): the panic unwinds `s`'s scope (the last share goes), `y`'s,
+`d`'s, `c`'s, and stops at `x`'s frame (`Step.scopeDP`), which is left at
+its end; the marking sweep marks the block `dead`, and the reap lands
+inside `x`'s frame (`main3_unwind` (1)-(2)).  `pfn`'s panic comes back to
+`x`'s frame, whose end then runs `dfn` on `x` ((3)); the panic raised
+again unwinds the call's frames (ordinary unwinding, not stated here) to
+the `recover`, which catches it ((4)); with no orphan left the run
+finishes normally (`main3_no_leak`). -/
+
+def main3 : Stmt := .letrec 0 3 .skip
+
+/-- What `rfn3`'s body is in the run from `emptyMem 1` (`callIn`'s renaming,
+    `callRen`, at base 1): `x` is slot 4. -/
+theorem main3_body : rfn3.body.rename (callRen rfn3.params [] 1) =
+    .seq (.assign 1 (.expr (.lit 0)))
+      (.letv 2 (.expr (.lit 1)) (.letv 3 (.expr (.lit 2)) (.letd 4 0 (.pair 2 3) (tail 5 6 7 8)))) := rfl
+
+theorem main3_typed : ∃ Δ, StmtT P (fun _ => none) [] main3 Δ := by
+  have hpost : callPost (fun _ => none) rfn3 [] = fun _ => none := by
+    funext v; simp [callPost, callPostAux, rfn3, killNames, mutNames, argNames]
+  have hres : callRes (fun _ => none) rfn3 [] = intE := by
+    simp [callRes, rfn3, resMode, intE, heldOfArgs, ownHeld, allKinds, argNames]
+  have hc : CallT P (fun _ => none) [] 3 [] intE (fun _ => none) := by
+    refine ⟨rfn3, rfl, rfl, fun i hi => by simp [rfn3] at hi, ?_,
+      CallDtorSafe.of_none (fun _ _ h => by cases h) _ _, hres.symm, hpost.symm, fun _ => by simp [callR]⟩
+    intro d hd; simp [mutNames, argNames] at hd
+  have hK : NoRootb (A2.setE (fun _ => none) 0 intE) := noRootb_empty.setE (by simp [intE])
+  exact ⟨_, StmtT.letrec (P := P) (fn := rfn3) rfl rfl (by simp) rfl rfl rfl rfl hc StmtT.skip (hK.endOK _)⟩
+
+theorem main3_codes : main3.codesOK P := by
+  simp [main3, Stmt.codesOK]
+
+/-- **Every run of it is safe.** -/
+theorem main3_safe {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem 1) main3 (.ok m' s')) :
+    ¬ Stuck P m' s' := by
+  obtain ⟨Δ, ht⟩ := main3_typed
+  exact memory_safe prog_ok prog_codes ht rfl main3_codes (by decide) hr
+
+/-- **... and, finished (the `recover` catches), leaks nothing** ... -/
+theorem main3_no_leak {m' : Mem} (hr : Steps P (emptyMem 1) main3 (.ok m' .skip)) :
+    ∀ i, m'.alloc i = false := by
+  obtain ⟨Δ, ht⟩ := main3_typed
+  exact no_leak_end prog_ok prog_codes ht rfl main3_codes (by decide) hr
+
+/-- **... nor does a run that panics.** -/
+theorem main3_no_leak_panic {m' : Mem} (hr : Steps P (emptyMem 1) main3 (.panic m')) :
+    ∀ i, m'.alloc i = false := by
+  obtain ⟨Δ, ht⟩ := main3_typed
+  exact no_leak_panic prog_ok prog_codes ht rfl main3_codes (by decide) hr
+
+/-- **Agora #790, at `main3`'s frames**: `x`'s destructor frame (slot 4,
+    `dfn`) and the `recover` around it (flag slot 0).  At `x`'s frame, once
+    it has caught the unwinding and the `DP` block `k` is `dead`: (1) the
+    reap can be taken inside it, in a frame of `pfn`, and (2) with `k` the
+    only orphan, every reap step from there is that one; (3) when that
+    frame's panic comes back with `x` still owning its value (a premise),
+    `x`'s frame is at its end again, and from the store the marking sweep
+    leaves, with no orphan, the only step calls `dfn` on `x`.  At the
+    `recover`: (4) a panic out of anything inside it is caught, the frame
+    at its end, `e` saying the call failed, and no step of it is a panic;
+    (5) an orphan left there (the `DP` block, had the unwinding reached the
+    `recover` with no destructor frame between) is reaped inside it.  Of
+    stores and statements of the shape, not a trace of the run: the steps
+    between (the unwinding from `x`'s frame up to the `recover`) are
+    ordinary panic steps. -/
+theorem main3_unwind {m : Mem} {m0 : Mem} {k : Nat} {p : Val} (hk : m.blk k = some ⟨DP, .dead, some p⟩)
+    (hnc : ∀ c, ¬ Sub (.cell c) p) : FrameFacts 4 m k p ∧ RecoverFacts 0 m m0 k p :=
+  ⟨frame_unwind 4 hk hnc, recover_unwind (m0 := m0) 0 hk hnc⟩
 
 end A2.ArcPanicWitness

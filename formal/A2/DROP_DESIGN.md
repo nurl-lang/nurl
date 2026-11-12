@@ -466,9 +466,15 @@ follows it. That needed three things A2 did not have:
 
    With it, `rootKeep_frame_sp` shows that every surviving view reaches the
    same memory.
-2. **The destructor's call** in that context (`dtorCall_typed`), as on the
-   normal path. `NoPin` for `x` follows from `pinOut`, because `x` is in
-   the frame's own spine.
+2. **The frame left at its end** in that context. Since Agora #790 the
+   panic step leaves `seq (scopeD x f skip) panic`: `preserve`'s
+   `scopeDP` case (shared with `scopeDPDrain`'s) types `scopeD x f skip`
+   by `StmtT.scopeD` at the binding's `ScopeDTy`, the binding revived
+   (`Entry.reviveD`), and the destructor's call is typed in `scopeDEnd`'s
+   case when that end is taken (`dtorCall_typed` / `glueCall_typed`), as
+   on the normal path. `NoPin` for `x` follows from `pinOut`, because `x`
+   is in the frame's own spine. (Before #790 the panic step left the call
+   itself, typed here.)
 3. **The re-raised panic.** `StmtT.panic` relates its input to its output:
    same bindings, modes and types, and fixed entries unchanged. Its output
    is the frame's original output `exitScope x Δ1`, so `Δ1` must agree with
@@ -883,8 +889,9 @@ each one shrinks `CLAIM.md`'s exception:
         eager `Steps` drops no step (`steps_step`).
      4. *An uncaught panic* ends with `Mem.sweep`, which frees an orphaned
         payload with no code: no frame is left to run it, and the run is
-        over (nurlc runs it in the unwinding). `no_leak_panic` holds as
-        stated.
+        over (nurlc, with no `recover` frame, aborts at the panic and runs
+        no drop at all; the model's unwinding of the frames on the way is
+        an over-approximation of it). `no_leak_panic` holds as stated.
      - Proof: `A2/SweepD.lean` (`Inv.sweepD` over `Inv.sweepR` from the
        marking sweep's roots and `MInv.grow`: the pinned blocks' facts are
        read off the store before the sweep; `Covers.sweepD`,
@@ -940,8 +947,10 @@ each one shrinks `CLAIM.md`'s exception:
      (`recover_catches_reaped`, `catchR_no_panic`). That is nurlc's drain
      (`stdlib/runtime_core.c`, `nurl_panic`: a drop that panics while the
      frame's journal drains is caught by the same frame, the rest is
-     released, the first panic goes on), and its order (the share's drop,
-     inside `x`'s scope, before `x`'s destructor). With no orphan the new
+     released), and its order (the share's drop, inside `x`'s scope,
+     before `x`'s destructor). nurlc's `recover` reports the first panic's
+     message; the model's panics carry no identity, so that holds only
+     trivially (they cannot be told apart) and is not modelled. With no orphan the new
      shapes cost one step each and run what the old ones ran
      (`A2.Dtor.scopeD_panic_runs_dtor`). Proof: `preserve`'s `scopeDP`
      case is now `scopeDPDrain`'s (one proof for both, the binding
@@ -949,14 +958,21 @@ each one shrinks `CLAIM.md`'s exception:
      own `ScopeDTy`); its `catchP` case types `catchR x m0 skip` by
      `StmtT.catchR` over `skip` at the frame's exit context, its
      `CatchOK` from the unwound store (`A2/Preservation.lean`); no
-     other proof changed. Witnesses: `A2.ArcPanicWitness.main1` (a
-     destructor binding `x` whose scope's panic drops the last share of an
-     `Arc` of a value whose destructor `pfn` panics; `main1_safe`,
-     `main1_no_leak_panic`, `main1_no_leak`, `main1_unwind`) and `main2`
-     (the same inside a function a `recover` calls; `main2_safe`,
-     `main2_no_leak`, `main2_no_leak_panic`, `main2_unwind`;
-     `A3.arcPanic_claim` over both). The runs are not traced: the steps are
-     theorems of any store of their shape.
+     other proof changed. The step lemmas are of any store and statement
+     of their shape (the run's next step is taken from the store the
+     marking sweep leaves, `m.sweepD`, which they name; that `x` still
+     owns its value when the reaped destructor's panic comes back is a
+     premise). Witnesses (`A2/ArcPanicWitness.lean`, each typed, safe and
+     leak-free on `no_leak_end` and `no_leak_panic`; `A3.arcPanic_claim`
+     over all three): `main3`, the case nurlc runs, a `recover` of a
+     function in which a destructor binding `x` scopes a panic while an
+     `Arc` of a value whose destructor `pfn` panics holds its last share
+     (`main3_unwind`: `x`'s destructor still runs, the `recover`
+     catches); `main2`, a `recover` whose function makes such an `Arc`
+     and panics with no destructor frame between (`main2_unwind`); and
+     `main1`, `main3`'s frame with no `recover` (`main1_unwind`): the
+     model's behaviour on an uncaught panic, not nurlc's, which aborts
+     with no drain (item 4 above). The runs are not traced.
    - **Left.**
      - *A3's threads.* `Cfg.sweep` does not mark: the last share's drop
        frees the payload with no code there (`A3.Reach.noOrphan`: no A3

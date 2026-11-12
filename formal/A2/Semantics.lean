@@ -1376,7 +1376,9 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
       `skip`), so a panic of that orphan's destructor is caught by the same
       `recover`, as nurlc's journal drain, which runs the drop, is: a panic
       raised while the frame's journal drains is caught by the same frame
-      (`stdlib/runtime_core.c`, `nurl_panic`). -/
+      (`stdlib/runtime_core.c`, `nurl_panic`).  (nurlc keeps the first
+      panic's message; panics here carry none, so which one goes on is not
+      modelled.) -/
   | catchP {m m1 : Mem} {x : Var} {m0 : Mem} {s : Stmt} :
       Step P m s (.panic m1) → (m1.st x).isSome →
       Step P m (.catchR x m0 s) (.ok (m1.set x ⟨false, some (.int 1)⟩) (.catchR x m0 .skip))
@@ -1425,7 +1427,8 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
       it (`Step.reap`), before the destructor runs: a panic of that orphan's
       destructor comes back to this frame, which runs `x`'s destructor all
       the same, as nurlc's journal drain runs the drops after one that
-      panics (`stdlib/runtime_core.c`, `nurl_panic`). -/
+      panics (`stdlib/runtime_core.c`, `nurl_panic`; nurlc keeps the first
+      panic's message, which is not modelled: panics here carry none). -/
   | scopeDP {m m1 : Mem} {x : Var} {f : Nat} {s : Stmt} {v : Val} :
       Step P m s (.panic m1) → m1.st x = some ⟨true, some v⟩ → v.isNode = false →
       Step P m (.scopeD x f s) (.ok m1 (.seq (.scopeD x f .skip) .panic))

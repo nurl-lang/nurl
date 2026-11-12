@@ -48,6 +48,8 @@ import A3
 #print axioms A2.ArcPanicWitness.unwind_reap
 #print axioms A2.ArcPanicWitness.recover_reap
 #print axioms A2.ArcPanicWitness.last_drop_marks
+#print axioms A2.ArcPanicWitness.frame_unwind
+#print axioms A2.ArcPanicWitness.recover_unwind
 #print axioms A2.ArcPanicWitness.main1_typed
 #print axioms A2.ArcPanicWitness.main1_safe
 #print axioms A2.ArcPanicWitness.main1_no_leak_panic
@@ -58,6 +60,14 @@ import A3
 #print axioms A2.ArcPanicWitness.main2_no_leak
 #print axioms A2.ArcPanicWitness.main2_no_leak_panic
 #print axioms A2.ArcPanicWitness.main2_unwind
+-- ... the case nurlc runs: a destructor frame inside a `recover` (main1 has no `recover`: the
+-- model's behaviour on an uncaught panic, where nurlc aborts with no drain)
+#print axioms A2.ArcPanicWitness.main3_body
+#print axioms A2.ArcPanicWitness.main3_typed
+#print axioms A2.ArcPanicWitness.main3_safe
+#print axioms A2.ArcPanicWitness.main3_no_leak
+#print axioms A2.ArcPanicWitness.main3_no_leak_panic
+#print axioms A2.ArcPanicWitness.main3_unwind
 #print axioms A3.arcPanic_claim
 -- per-call ownership, as the calculus has it (A2/DynCell.lean)
 #print axioms A2.DynCell.pick_ok

@@ -329,28 +329,31 @@ theorem scopeD_end_runs_dtor {P : Prog} {Γ Δ : Ctx} {F : List Var} {x : Var} {
 
 /-- …and on the panic path: a panic out of the body with `x` still owning
     its value stops at the frame, which is left at its end, followed by the
-    panic; from there (with no orphan to reap first) the only step is the
-    frame's end, which calls `f` on `x` (and `scope x` frees it), the panic
-    raised again after.  (Agora #790: an orphan the unwinding left is reaped
-    at that end's `skip`, inside the frame, first: a panic of its destructor
-    comes back to the frame, which still runs `f`,
-    `A2.ArcPanicWitness.reap_panic_runs_dtor`.) -/
+    panic.  The step after it is taken from the store the marking sweep
+    leaves, `m1.sweepD` (`Steps.step`, `Settle`); with no orphan there
+    (`Settle.done`), the only step from it is the frame's end, which calls
+    `f` on `x` (and `scope x` frees it), the panic raised again after.
+    (Agora #790: an orphan there is reaped first, at that end's `skip`,
+    inside the frame: a panic of its destructor comes back to the frame,
+    which still runs `f`, `A2.ArcPanicWitness.reaped_panic_runs_dtor`.) -/
 theorem scopeD_panic_runs_dtor {P : Prog} {x : Var} {f : Nat} {m m1 : Mem} {s : Stmt} {v : Val}
     (hs : Step P m s (.panic m1)) (hx : m1.st x = some ⟨true, some v⟩) (hv : v.isNode = false) :
     Step P m (.scopeD x f s) (.ok m1 (.seq (.scopeD x f .skip) .panic)) ∧
-      (¬ Orphan m1 → ∀ r, Step P m1 (.seq (.scopeD x f .skip) .panic) r ↔
-        r = .ok { m1 with nv := m1.nv + 1 } (.seq (.scope x (.letcall m1.nv f [x] .skip)) .panic)) := by
-  refine ⟨Step.scopeDP hs hx hv, fun hno r => ⟨fun h => ?_, fun h => h ▸ Step.seqL (Step.scopeDEnd hx hv)⟩⟩
-  have hend : ∀ r', Step P m1 (.scopeD x f .skip) r' →
-      r' = .ok { m1 with nv := m1.nv + 1 } (.scope x (.letcall m1.nv f [x] .skip)) := by
+      (¬ Orphan m1.sweepD → ∀ r, Step P m1.sweepD (.seq (.scopeD x f .skip) .panic) r ↔
+        r = .ok { m1.sweepD with nv := m1.sweepD.nv + 1 }
+          (.seq (.scope x (.letcall m1.sweepD.nv f [x] .skip)) .panic)) := by
+  have hx' : m1.sweepD.st x = some ⟨true, some v⟩ := by rw [Mem.sweepD_st]; exact hx
+  refine ⟨Step.scopeDP hs hx hv, fun hno r => ⟨fun h => ?_, fun h => h ▸ Step.seqL (Step.scopeDEnd hx' hv)⟩⟩
+  have hend : ∀ r', Step P m1.sweepD (.scopeD x f .skip) r' →
+      r' = .ok { m1.sweepD with nv := m1.sweepD.nv + 1 } (.scope x (.letcall m1.sweepD.nv f [x] .skip)) := by
     intro r' h
     cases h with
     | reap hrs _ _ => cases hrs
     | scopeDIn hs => exact (skip_no_step hno hs).elim
     | scopeDEnd _ _ => rfl
-    | scopeDMoved hm => rw [hx] at hm; cases hm
-    | scopeDDrain h => rw [hx] at h; cases h; cases hv
-    | scopeDEmpty h => rw [hx] at h; cases h; cases hv
+    | scopeDMoved hm => rw [hx'] at hm; cases hm
+    | scopeDDrain h => rw [hx'] at h; cases h; cases hv
+    | scopeDEmpty h => rw [hx'] at h; cases h; cases hv
     | scopeDP hs _ _ => exact (skip_no_step hno hs).elim
     | scopeDPDrain hs _ => exact (skip_no_step hno hs).elim
     | scopeDPMoved hs _ => exact (skip_no_step hno hs).elim
