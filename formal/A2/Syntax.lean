@@ -247,13 +247,7 @@ def Ty.holdsDtor : Ty → Bool
 theorem Ty.hasDtor_of_holdsDtor {t : Ty} (h : t.holdsDtor = false) : t.hasDtor = false := by
   cases t <;> simp_all [Ty.holdsDtor, Ty.hasDtor]
 
-/-- A2-drop.3a: the destructor such a value runs reads views: a binding of
-    this type must keep what its value views alive to its end (`Entry.arm`). -/
-def Ty.dtorViews (t : Ty) : Bool := t.hasDtor && t.holdsView
-
 @[simp] theorem Ty.hasDtor_dtor (f : Nat) (t : Ty) : (Ty.dtor f t).hasDtor = true := rfl
-@[simp] theorem Ty.dtorViews_dtor (f : Nat) (t : Ty) : (Ty.dtor f t).dtorViews = t.holdsView := by
-  simp [Ty.dtorViews, Ty.holdsView]
 
 /-- A module global's type (`Ty.sync`: a lock or an `Arc` share) is no
     destructor type. -/
@@ -318,6 +312,18 @@ def Ty.nest : Nat → Ty → Ty
 @[simp] theorem Ty.nest_succ (n : Nat) (u : Ty) : Ty.nest (n + 1) u = .vec (Ty.nest n u) := rfl
 @[simp] theorem Ty.dnest_dtor (f : Nat) (t : Ty) : (Ty.dtor f t).dnest = true := rfl
 @[simp] theorem Ty.dnest_vec (t : Ty) : (Ty.vec t).dnest = t.dnest := rfl
+
+/-- A2-drop.3a: the destructor such a value runs reads views: a binding of
+    this type must keep what its value views alive to its end (`Entry.arm`).
+    Agora #782: so must one of a drained `Vec` of such values (`Ty.dnest`),
+    whose elements' destructors read them where its frame drains it. -/
+def Ty.dtorViews (t : Ty) : Bool := t.dnest && t.holdsView
+
+@[simp] theorem Ty.dtorViews_dtor (f : Nat) (t : Ty) : (Ty.dtor f t).dtorViews = t.holdsView := by
+  simp [Ty.dtorViews, Ty.holdsView]
+
+@[simp] theorem Ty.dtorViews_vec (t : Ty) : (Ty.vec t).dtorViews = t.dtorViews := by
+  simp [Ty.dtorViews, Ty.holdsView]
 
 /-- A2 types: a view's element type holds no views of its own (a view of a
     container of views is left to A2, with the other aggregates that
@@ -453,6 +459,10 @@ theorem Ty.dnest_shape {t : Ty} (h : t.dnest = true) : ∃ n f u, t = Ty.nest n 
   induction n with
   | zero => rfl
   | succ n ih => simpa [Ty.holdsView] using ih
+@[simp] theorem Ty.dtorViews_nest (n f : Nat) (t : Ty) :
+    (Ty.nest n (.dtor f t)).dtorViews = t.holdsView := by
+  simp [Ty.dtorViews, Ty.holdsView]
+
 @[simp] theorem Ty.dtorFree_nest (n : Nat) (u : Ty) : (Ty.nest n u).dtorFree = u.dtorFree := by
   induction n with
   | zero => rfl

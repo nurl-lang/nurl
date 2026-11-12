@@ -395,7 +395,7 @@ theorem RhsOut.retypeL {m1 : Mem} {Γ1 : Ctx} {E : Entry} {v : Val} {o : Bool}
     (h : RhsOut m1 Γ1 E v o) (hmo : E.mode = .own) {f : Nat} {t τ : Ty}
     (hty : LetdTy f t E.ty τ) (hst : t.isStruct = true) :
     RhsOut m1 Γ1 { E with ty := τ } v o := by
-  rcases hty with ⟨rfl, hty⟩ | ⟨_, _, he, _⟩
+  rcases hty with ⟨rfl, hty⟩ | ⟨_, _, he⟩
   · exact h.retype hmo hty hst
   · rw [← he]; exact h
 

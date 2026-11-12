@@ -3688,7 +3688,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     -- (A2-drop.3a: a struct or an enum, or its destructor type: no integer)
     have hne : E.ty ≠ .int := hty.ne_int hstr
     have hov : τ.holdsView = E.ty.holdsView := by
-      rcases hty with ⟨rfl, h' | ⟨g, h'⟩⟩ | ⟨_, _, h', _⟩
+      rcases hty with ⟨rfl, h' | ⟨g, h'⟩⟩ | ⟨_, _, h'⟩
       · rw [h']; rfl
       · rw [h']; rfl
       · rw [h']
@@ -4041,24 +4041,6 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     have hwc := canon_wf h habo hwo
     have hnc := canon_names h habo hno
     rw [canon_setE h, canon_kill h hab1 (allowed_canDo hab hx hty hcan)] at hwc hnc ⊢
-    have hT' := StmtT.push (P := P) (F := S.Fc) (x := S.ρ x) (y := S.ρ y) (Ex := S.liftE x Ex)
-      (Ey := S.liftE y Ey) (Ex1 := S.liftE x Ex1) (t := t) (D := D')
-      (by rw [canon_ρ h, hx]; rfl) (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab hx]; exact hty)
-      (by rw [liftE_mode x hrbx]; exact canDo_lift hcan) (h.Fcout x)
-      (by rw [canon_ρ h, hy]; rfl) (by rw [liftE_live]; exact hly) (by rw [liftE_ty' h hab hy]; exact htyy)
-      (fun e => hyx (h.inj _ _ e)) hpa' (roots_lift_ρ h hD' hxD)
-      (by rw [canon_ρ h, hx1]; rfl) (by rw [liftE_live]; exact hl1)
-      (DtorSafe.canon h (allowed_canDo hab hx hty hcan) hds)
-      (fun hd => hdb (by rwa [liftE_dbind h, ite_eq_right hrbx] at hd))
-    refine StmtT.weakenOut (canon_wf h hab hw) (canon_names h hab hn) hT'
-      (Or.inr ⟨PW.setE (PW.refl _) ?_, hwc, hnc⟩)
-    have hdb1 : Ex1.dbind = Ex.dbind := PushArg.dbind_at hpa hy hx hx1
-    refine EntryWeaker.mk' (by simp [liftE, hrb1]) (by simp [liftE, hrb1])
-      (not_fixed_liftMode (by simp [liftE, hrb1]) hrb1) (by simp [liftE, hrb1]) (fun _ => by simp [liftE, hrb1]) ?_
-      (hdh := fun hh => by
-        have hd0 : Ex1.dbind = true := by simpa [liftE, hrb1] using hh
-        have hv : t.holdsView = false := hdb (by rw [← hdb1]; exact hd0)
-        simp [liftE, hrb1, ownHeld, hv])
     have hty1 : Ex1.ty = .vec t := by rw [PushArg.ty_at hpa hy hx hx1, hty]
     have hD'' : D' ⊆ rds S.ρ D ++ ownHeld Ex1.mode.ownSlot Ex1.ty S.A := by
       intro d hd
@@ -4070,6 +4052,54 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
         · simp only [ownHeld_false]; exact ownHeld_sub _ _ _ h1
         · have : ownHeld true (Ty.vec t) S.A = ownHeld true t S.A := by simp [ownHeld, Ty.holdsView]
           rw [this]; exact h1
+    -- (Agora #782: what is pushed into a `letd` binding, it views already)
+    have hsubL : (S.liftE x Ex1).dbind = true → ownHeld true t D' ⊆ (S.liftE x Ex1).held := by
+      intro hd
+      have hd0 : Ex1.dbind = true := by simpa [liftE, hrb1] using hd
+      have hsub := hdb hd0
+      by_cases hv : t.holdsView = true
+      · rw [ownHeld_views true hv D']
+        have hD0 : rds S.ρ D ⊆ rds S.ρ Ex1.held := by
+          rw [← ownHeld_views true hv D]; exact rds_subset hsub
+        simp only [liftE, hrb1, ↓reduceIte]
+        exact fun d hd' => (append_sub hD0 (List.Subset.refl _)) (hD'' hd')
+      · have hv' : t.holdsView = false := by simpa using hv
+        simp [ownHeld, hv']
+    have hT' := StmtT.push (P := P) (F := S.Fc) (x := S.ρ x) (y := S.ρ y) (Ex := S.liftE x Ex)
+      (Ey := S.liftE y Ey) (Ex1 := S.liftE x Ex1) (t := t) (D := D')
+      (by rw [canon_ρ h, hx]; rfl) (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab hx]; exact hty)
+      (by rw [liftE_mode x hrbx]; exact canDo_lift hcan) (h.Fcout x)
+      (by rw [canon_ρ h, hy]; rfl) (by rw [liftE_live]; exact hly) (by rw [liftE_ty' h hab hy]; exact htyy)
+      (fun e => hyx (h.inj _ _ e)) hpa' (roots_lift_ρ h hD' hxD)
+      (by rw [canon_ρ h, hx1]; rfl) (by rw [liftE_live]; exact hl1)
+      (DtorSafe.canon h (allowed_canDo hab hx hty hcan) hds)
+      hsubL
+    refine StmtT.weakenOut (canon_wf h hab hw) (canon_names h hab hn) hT'
+      (Or.inr ⟨PW.setE (PW.refl _) ?_, hwc, hnc⟩)
+    have hdb1 : Ex1.dbind = Ex.dbind := PushArg.dbind_at hpa hy hx hx1
+    refine EntryWeaker.mk' (by simp [liftE, hrb1]) (by simp [liftE, hrb1])
+      (not_fixed_liftMode (by simp [liftE, hrb1]) hrb1) (by simp [liftE, hrb1]) (fun _ => by simp [liftE, hrb1]) ?_
+      (hdh := fun hh _ _ d _ => by
+        have hd0 : Ex1.dbind = true := by simpa [liftE, hrb1] using hh
+        have hsub := hdb hd0
+        simp only [liftE, hrb1, ↓reduceIte, rds, List.map_append, List.mem_append]
+        constructor
+        · rintro ((h1 | h1) | h1)
+          · exact Or.inl (Or.inl h1)
+          · exact Or.inl (Or.inl (List.mem_map.mpr (by
+              obtain ⟨d0, hd0', rfl⟩ := List.mem_map.mp h1; exact ⟨d0, hsub hd0', rfl⟩)))
+          · exact Or.inl (Or.inr h1)
+        · rintro ((h1 | h1) | h1)
+          · exact Or.inl (Or.inl h1)
+          · exact Or.inr h1
+          · by_cases hv : t.holdsView = true
+            · rw [ownHeld_views true hv D'] at h1
+              rcases List.mem_append.mp (hD'' h1) with h2 | h2
+              · refine Or.inl (Or.inr ?_)
+                rw [ownHeld_views true hv D]; exact h2
+              · exact Or.inr h2
+            · have hv' : t.holdsView = false := by simpa using hv
+              simp [ownHeld, hv'] at h1)
     simp only [liftE, hrb1, ↓reduceIte]
     by_cases hv : t.holdsView = true
     · have h1 : ownHeld true t D' = D' := ownHeld_views true hv D'

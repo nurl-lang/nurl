@@ -89,7 +89,7 @@ theorem vecFreeD_typed {P : Prog} {Γ : Ctx} {F : List Var} {x y : Var} {f : Nat
         refine ⟨E0, rfl, ?_, ?_, ?_, ?_, ?_⟩ <;> (unfold killE; split <;> first | rfl | exact id | simp [Entry.vdeps])
   have hr : RhsT Γ F (.var x) ⟨E.ty, .own, true, [], E.held, false, false⟩ Γ1 :=
     RhsT.moveOwn hx hl hm hxF hnp hds
-  have hτ : LetdTy f t E.ty (.vec (.dtor f t)) := Or.inr ⟨0, rfl, hty, hv⟩
+  have hτ : LetdTy f t E.ty (.vec (.dtor f t)) := Or.inr ⟨0, rfl, hty⟩
   have hdv : (Ty.vec (.dtor f t)).dtorViews = false := by rw [hτ.scopeD.dtorViews, hτ.scopeD.holdsView, hv]
   have hlet := StmtT.letd (P := P) (Γ := Γ) (Γ1 := Γ1) (F := F) (x := y) (f := f) (r := .var x)
     (s := .skip) (E := ⟨E.ty, .own, true, [], E.held, false, false⟩) (t := t) (H := E.held)
@@ -241,7 +241,7 @@ theorem main6_typed : ∃ Δ, StmtT P (fun _ => none) [] main6 Δ := by
   have hK2 : NoRootb K2 := hK1.setE (by simp [intE])
   let ED : Entry := Entry.arm { EP with ty := DT, held := [] }
   have hEDe : ED = ⟨DT, .own, true, [], [], false, false⟩ := by
-    simp [ED, EP, Entry.arm, DT, T, Ty.dtorViews, Ty.hasDtor, Ty.holdsView]
+    simp [ED, EP, Entry.arm, DT, T, Ty.dtorViews, Ty.holdsView]
   let K3 : Ctx := A2.setE K2 2 ED
   have hK3 : NoRootb K3 := hK2.setE (by rw [hEDe]; simp)
   have hpair : RhsT K2 [] (.pair 0 1) EP K2 :=
@@ -251,7 +251,7 @@ theorem main6_typed : ∃ Δ, StmtT P (fun _ => none) [] main6 Δ := by
   have hnew : RhsT K3 [] (.new DT) EN K3 := RhsT.new (by decide)
   let EV : Entry := Entry.arm { EN with ty := .vec DT, held := [] }
   have hEVe : EV = ⟨.vec DT, .own, true, [], [], false, false⟩ := by
-    simp [EV, EN, Entry.arm, DT, T, Ty.dtorViews, Ty.hasDtor]
+    simp [EV, EN, Entry.arm, DT, T, Ty.dtorViews, Ty.holdsView]
   let K4 : Ctx := A2.setE K3 3 EV
   have hK4 : NoRootb K4 := hK3.setE (by rw [hEVe]; simp)
   let K5 : Ctx := A2.setE (kill .replace false 2 K4) 2 { ED with live := false, dtor := false }
@@ -305,7 +305,7 @@ theorem main6_typed : ∃ Δ, StmtT P (fun _ => none) [] main6 Δ := by
   have hbody := StmtT.seq (P := P) rfl hpush (StmtT.seq rfl htr (StmtT.seq rfl hcl hfr))
   have hdv := StmtT.letd (P := P) (Γ := K3) (Γ1 := K3) (F := []) (x := 3) (f := 0) (r := .new DT)
     (E := EN) (t := T) (H := []) (τ := .vec DT) rfl (by simp [K3, K2, K1, A2.setE, upd])
-    (by simp) hnew rfl (Or.inr ⟨0, rfl, rfl, rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hbody (hK7.endOK _)
+    (by simp) hnew rfl (Or.inr ⟨0, rfl, rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hbody (hK7.endOK _)
     (by simp [Stmt.assigns, Stmt.vecTruncD, Stmt.vecClearD, Stmt.vecFreeD])
   have hd := StmtT.letd (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .pair 0 1)
     (E := EP) (t := T) (H := []) rfl (by simp [K2, K1, A2.setE, upd])
@@ -345,7 +345,7 @@ theorem mainSet_typed : ∃ Δ, StmtT P (fun _ => none) [] mainSet Δ := by
   have hK2 : NoRootb K2 := hK1.setE (by simp [intE])
   let ED : Entry := Entry.arm { EP with ty := DT, held := [] }
   have hEDe : ED = ⟨DT, .own, true, [], [], false, false⟩ := by
-    simp [ED, EP, Entry.arm, DT, T, Ty.dtorViews, Ty.hasDtor, Ty.holdsView]
+    simp [ED, EP, Entry.arm, DT, T, Ty.dtorViews, Ty.holdsView]
   let K3 : Ctx := A2.setE K2 2 ED
   have hK3 : NoRootb K3 := hK2.setE (by rw [hEDe]; simp)
   have hpair : RhsT K2 [] (.pair 0 1) EP K2 :=
@@ -355,7 +355,7 @@ theorem mainSet_typed : ∃ Δ, StmtT P (fun _ => none) [] mainSet Δ := by
   have hnew : RhsT K3 [] (.new DT) EN K3 := RhsT.new (by decide)
   let EV : Entry := Entry.arm { EN with ty := .vec DT, held := [] }
   have hEVe : EV = ⟨.vec DT, .own, true, [], [], false, false⟩ := by
-    simp [EV, EN, Entry.arm, DT, T, Ty.dtorViews, Ty.hasDtor]
+    simp [EV, EN, Entry.arm, DT, T, Ty.dtorViews, Ty.holdsView]
   let K4 : Ctx := A2.setE K3 3 EV
   have hK4 : NoRootb K4 := hK3.setE (by rw [hEVe]; simp)
   let K5 : Ctx := A2.setE (kill .replace false 2 K4) 2 { ED with live := false, dtor := false }
@@ -432,7 +432,7 @@ theorem mainSet_typed : ∃ Δ, StmtT P (fun _ => none) [] mainSet Δ := by
   have hbody := StmtT.seq (P := P) rfl hpush hw
   have hdv := StmtT.letd (P := P) (Γ := K3) (Γ1 := K3) (F := []) (x := 3) (f := 0) (r := .new DT)
     (E := EN) (t := T) (H := []) (τ := .vec DT) rfl (by simp [K3, K2, K1, A2.setE, upd])
-    (by simp) hnew rfl (Or.inr ⟨0, rfl, rfl, rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hbody
+    (by simp) hnew rfl (Or.inr ⟨0, rfl, rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hbody
     (hK10.endOK _) (by simp [Stmt.assigns, Stmt.vecSetD])
   have hd := StmtT.letd (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .pair 0 1)
     (E := EP) (t := T) (H := []) rfl (by simp [K2, K1, A2.setE, upd])
@@ -471,7 +471,7 @@ theorem mainElem_typed : ∃ Δ, StmtT P (fun _ => none) [] mainElem Δ := by
   have hK2 : NoRootb K2 := hK1.setE (by simp [intE])
   let ED : Entry := Entry.arm { EP with ty := DT, held := [] }
   have hEDe : ED = ⟨DT, .own, true, [], [], false, false⟩ := by
-    simp [ED, EP, Entry.arm, DT, T, Ty.dtorViews, Ty.hasDtor, Ty.holdsView]
+    simp [ED, EP, Entry.arm, DT, T, Ty.dtorViews, Ty.holdsView]
   let K3 : Ctx := A2.setE K2 2 ED
   have hK3 : NoRootb K3 := hK2.setE (by rw [hEDe]; simp)
   have hpair : RhsT K2 [] (.pair 0 1) EP K2 :=
@@ -481,7 +481,7 @@ theorem mainElem_typed : ∃ Δ, StmtT P (fun _ => none) [] mainElem Δ := by
   have hnew : RhsT K3 [] (.new DT) EN K3 := RhsT.new (by decide)
   let EV : Entry := Entry.arm { EN with ty := .vec DT, held := [] }
   have hEVe : EV = ⟨.vec DT, .own, true, [], [], false, false⟩ := by
-    simp [EV, EN, Entry.arm, DT, T, Ty.dtorViews, Ty.hasDtor]
+    simp [EV, EN, Entry.arm, DT, T, Ty.dtorViews, Ty.holdsView]
   let K4 : Ctx := A2.setE K3 3 EV
   have hK4 : NoRootb K4 := hK3.setE (by rw [hEVe]; simp)
   let K5 : Ctx := A2.setE (kill .replace false 2 K4) 2 { ED with live := false, dtor := false }
@@ -521,7 +521,7 @@ theorem mainElem_typed : ∃ Δ, StmtT P (fun _ => none) [] mainElem Δ := by
   -- the element checked out to `x` (binding 4)
   let EA : Entry := Entry.arm { popE 3 EV6 DT with ty := DT, held := (popE 3 EV6 DT).held }
   have hEAe : EA = ⟨DT, .own, true, [], [], false, false⟩ := by
-    simp [EA, hEV6, popE, DT, T, Entry.arm, Ty.dtorViews, Ty.hasDtor, Ty.holdsView]
+    simp [EA, hEV6, popE, DT, T, Entry.arm, Ty.dtorViews, Ty.holdsView]
   let K7 : Ctx := A2.setE K6 4 EA
   have hK7 : NoRootb K7 := hK6.setE (by rw [hEAe]; simp)
   have hs : StmtT P (A2.setE (kill .drop false 3 K6) 4 EA) [] .skip K7 := by
@@ -553,7 +553,7 @@ theorem mainElem_typed : ∃ Δ, StmtT P (fun _ => none) [] mainElem Δ := by
   have hbody := StmtT.seq (P := P) rfl hpush hel
   have hdv := StmtT.letd (P := P) (Γ := K3) (Γ1 := K3) (F := []) (x := 3) (f := 0) (r := .new DT)
     (E := EN) (t := T) (H := []) (τ := .vec DT) rfl (by simp [K3, K2, K1, A2.setE, upd])
-    (by simp) hnew rfl (Or.inr ⟨0, rfl, rfl, rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hbody
+    (by simp) hnew rfl (Or.inr ⟨0, rfl, rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hbody
     (hK10.endOK _) (by simp [Stmt.assigns, Stmt.withElemD])
   have hd := StmtT.letd (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .pair 0 1)
     (E := EP) (t := T) (H := []) rfl (by simp [K2, K1, A2.setE, upd])
@@ -593,7 +593,7 @@ theorem main9_typed : ∃ Δ, StmtT P (fun _ => none) [] main9 Δ := by
   have hK2 : NoRootb K2 := hK1.setE (by simp [intE])
   let ED : Entry := Entry.arm { EP with ty := DT, held := [] }
   have hEDe : ED = ⟨DT, .own, true, [], [], false, false⟩ := by
-    simp [ED, EP, Entry.arm, DT, T, Ty.dtorViews, Ty.hasDtor, Ty.holdsView]
+    simp [ED, EP, Entry.arm, DT, T, Ty.dtorViews, Ty.holdsView]
   let K3 : Ctx := A2.setE K2 2 ED
   have hK3 : NoRootb K3 := hK2.setE (by rw [hEDe]; simp)
   have hpair : RhsT K2 [] (.pair 0 1) EP K2 :=
@@ -603,7 +603,7 @@ theorem main9_typed : ∃ Δ, StmtT P (fun _ => none) [] main9 Δ := by
   have hnew : RhsT K3 [] (.new DT) EN K3 := RhsT.new (by decide)
   let EV : Entry := Entry.arm { EN with ty := .vec DT, held := [] }
   have hEVe : EV = ⟨.vec DT, .own, true, [], [], false, false⟩ := by
-    simp [EV, EN, Entry.arm, DT, T, Ty.dtorViews, Ty.hasDtor]
+    simp [EV, EN, Entry.arm, DT, T, Ty.dtorViews, Ty.holdsView]
   let K4 : Ctx := A2.setE K3 3 EV
   have hK4 : NoRootb K4 := hK3.setE (by rw [hEVe]; simp)
   let K5 : Ctx := A2.setE (kill .replace false 2 K4) 2 { ED with live := false, dtor := false }
@@ -657,7 +657,7 @@ theorem main9_typed : ∃ Δ, StmtT P (fun _ => none) [] main9 Δ := by
       (by simp [intE, Mode.ownSlot])
   let EGa : Entry := Entry.arm { EG0 with ty := GVD, held := EG0.held }
   have hEGa : EGa.mode ≠ .rootb ∧ EGa.dtor = false ∧ EGa.dbind = false := by
-    simp [EGa, EG0, Entry.arm, GVD, GV, DT, T, Ty.dtorViews, Ty.hasDtor, Ty.holdsView]
+    simp [EGa, EG0, Entry.arm, GVD, GV, DT, T, Ty.dtorViews, Ty.holdsView]
   have hK9 : NoRootb (A2.setE K8 5 EGa) := hK8.setE hEGa
   have hg := StmtT.letd (P := P) (Γ := K7) (Γ1 := K8) (F := []) (x := 5) (f := 7) (r := .pair 3 4)
     (s := .skip) (E := EG0) (t := GV) (H := EG0.held) (τ := GVD) rfl
@@ -671,7 +671,7 @@ theorem main9_typed : ∃ Δ, StmtT P (fun _ => none) [] main9 Δ := by
   have hbody := StmtT.seq (P := P) rfl hpush h4
   have hdv := StmtT.letd (P := P) (Γ := K3) (Γ1 := K3) (F := []) (x := 3) (f := 0) (r := .new DT)
     (E := EN) (t := T) (H := []) (τ := .vec DT) rfl (by simp [K3, K2, K1, A2.setE, upd])
-    (by simp) hnew rfl (Or.inr ⟨0, rfl, rfl, rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hbody (hK7.endOK _)
+    (by simp) hnew rfl (Or.inr ⟨0, rfl, rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hbody (hK7.endOK _)
     (by simp [Stmt.assigns, Stmt.vecTruncD, Stmt.vecClearD, Stmt.vecFreeD])
   have hd := StmtT.letd (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .pair 0 1)
     (E := EP) (t := T) (H := []) rfl (by simp [K2, K1, A2.setE, upd])

@@ -2301,7 +2301,7 @@ theorem push_grow {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
     (hD : t.holdsView = false → D = []) {d' : Nat} {A' : Nat → Bool} {N' : Nat}
     (hre : (d' = d ∧ A' = m1.alloc ∧ N' = m1.nid) ∨
       (d' = m1.nid ∧ A' = upd (upd m1.alloc d false) m1.nid true ∧ N' = m1.nid + 1))
-    (hds : DtorSafe Γ1 .realloc t.holdsView x) (hdbv : Ex.dbind = true → t.holdsView = false) :
+    (hds : DtorSafe Γ1 .realloc t.holdsView x) :
     MInv ({ m1 with alloc := A', nid := N' }.set x ⟨true, some (.node t' c d' (es ++ [v]))⟩)
       (setE (kill .realloc t.holdsView x Γ1) x { Ex with held := Ex.held ++ D }) := by
   have hm : Ex.mode = .own := by
@@ -2380,6 +2380,29 @@ theorem push_grow {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
     have h0 := hi.shares x Ex _ _ hx hT rfl rfl
     rw [hty] at h0
     exact h0.node_push hp.sh rfl
+  have hvsN : ViewsOK m' Ex.ty (.node t' c d' (es ++ [v])) (Ex.held ++ D) := by
+    rw [hty]
+    intro s w hin
+    cases hin with
+    | child he hin =>
+      rename_i e
+      rcases List.mem_append.mp he with h | h
+      · obtain ⟨d0, o0, l0, rfl, dep, hd, ha⟩ := hvsT s _ (ViewIn.child h hin)
+        refine ⟨d0, o0, l0, rfl, dep, List.mem_append_left _ hd, ?_⟩
+        obtain ⟨r, k⟩ := dep
+        by_cases hne : r = x
+        · subst hne
+          by_cases hks : k = .share
+          · subst hks
+            exact vkeep_share (m := m1) (m' := m') (BlkLe.refl _) (RootMem.own (o := some (.node t' c d' (es ++ [v]))) (by simp [m'])) d0 o0 l0 s ha
+          · exact (viewAt_not_self hT hsfT (ViewIn.child h hin) hks ha).elim
+        exact (keep_notx hi hanch hxF hst (hrootH _ hd) hne).1 d0 o0 l0 s ha
+      · simp at h; subst h
+        obtain ⟨d0, o0, l0, rfl, dep, hd, ha⟩ := hp.vs s _ hin
+        refine ⟨d0, o0, l0, rfl, dep, List.mem_append_right _ hd, ?_⟩
+        have hne : dep.root ≠ x := fun heq => hxD (heq ▸ List.mem_map_of_mem hd)
+        exact (keep_notx hi hanch hxF hst (hp.root dep.root (List.mem_map_of_mem hd)) hne).1
+          d0 o0 l0 s ha
   refine hi.change hanch hx hxF (fun _ _ _ _ ⟨r, k⟩ _ hb hk => by cases k <;> simp_all [Kind.bound, Eff.kills])
     (by rw [hm]; simp) hst (hi.heap.grow hT hp.nd hp.al hp.dis hp.np hre hsfn) rfl ?_ ?_ hds (fun h => by cases h) (by simp)
     (fun _ Ex' hx' hl0 hh0 hhv => by
@@ -2397,10 +2420,10 @@ theorem push_grow {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
         fun _ => ⟨_, rfl, ?_⟩⟩, fun h => by simp [hos] at h⟩, rfl, fun hl' hn r hr => ?_, rfl,
         fun _ _ => ?_, fun _ T hT => ?_, fun T hT => ?_, fun _ _ _ dep hdd _ => ?_,
         fun hd => hi.wf.arm x Ex hx hd, fun hd => hi.wf.view x Ex hx hd,
-        -- (a binding `letd` made gains no view: none is pushed into)
-        fun hd => absurd (hdbv hd) (by
-          have h := hi.wf.view x Ex hx hd
-          rw [hty] at h; simp only [Ty.holdsView] at h; rw [h]; simp),
+        -- (Agora #782: a binding `letd` made stays armed, and the grown
+        -- tree's views are valid)
+        fun hd _ T hT0 => ⟨(hi.armed x Ex _ hx hT hd hos _ rfl).1, by
+          simp only [Option.some.injEq] at hT0; subst hT0; exact hvsN⟩,
         fun _ T hT => by cases hT; rw [hty]; exact hshN⟩
     rotate_right
     · simp only [Entry.vdeps, hos, ↓reduceIte, List.nil_append, List.mem_append] at hdd
@@ -2412,28 +2435,7 @@ theorem push_grow {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
           exact kill_root hEr hro
         · obtain ⟨Er, hEr, hro⟩ := hp.root dep.root (List.mem_map_of_mem hd)
           exact kill_root hEr hro
-    · rw [hty]
-      intro s w hin
-      cases hin with
-      | child he hin =>
-        rename_i e
-        rcases List.mem_append.mp he with h | h
-        · obtain ⟨d0, o0, l0, rfl, dep, hd, ha⟩ := hvsT s _ (ViewIn.child h hin)
-          refine ⟨d0, o0, l0, rfl, dep, List.mem_append_left _ hd, ?_⟩
-          obtain ⟨r, k⟩ := dep
-          by_cases hne : r = x
-          · subst hne
-            by_cases hks : k = .share
-            · subst hks
-              exact vkeep_share (m := m1) (m' := m') (BlkLe.refl _) (RootMem.own (o := some (.node t' c d' (es ++ [v]))) (by simp [m'])) d0 o0 l0 s ha
-            · exact (viewAt_not_self hT hsfT (ViewIn.child h hin) hks ha).elim
-          exact (keep_notx hi hanch hxF hst (hrootH _ hd) hne).1 d0 o0 l0 s ha
-        · simp at h; subst h
-          obtain ⟨d0, o0, l0, rfl, dep, hd, ha⟩ := hp.vs s _ hin
-          refine ⟨d0, o0, l0, rfl, dep, List.mem_append_right _ hd, ?_⟩
-          have hne : dep.root ≠ x := fun heq => hxD (heq ▸ List.mem_map_of_mem hd)
-          exact (keep_notx hi hanch hxF hst (hp.root dep.root (List.mem_map_of_mem hd)) hne).1
-            d0 o0 l0 s ha
+    · exact hvsN
     · simp only [Entry.vdeps, hos, ↓reduceIte, List.nil_append, roots, List.map_append,
         List.mem_append] at hr
       by_cases hrx : r = x

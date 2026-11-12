@@ -782,13 +782,20 @@ theorem StmtT.dkeep {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (
     exact (hr.dkeep.kill _ _ _).setE fun hd => absurd hd (by simp [hr.dtor_false.2])
   | ite ha _ _ _ _ iha _ => exact fun _ _ => DKeep.of_src ha iha
   | «while» => exact fun _ _ => DKeep.refl _ _
-  | push hx _ _ _ _ hy _ _ _ hpa _ hx1 _ _ hdb =>
+  | @push _ _ _ _ _ _ _ Ex1 t D hx _ _ _ _ hy _ _ _ hpa _ hx1 _ _ hdb =>
     intro _ _
     refine ((hpa.dkeep hy).kill _ _ _).setE fun hd hos hn _ => ?_
     obtain ⟨E0, h0, hd0, hos0, hn0, hs0⟩ := (hpa.dkeep hy) _ _ hx1 hd hos hn (by simp)
     rw [hx] at h0; cases h0
-    have ht := hdb hd0
-    exact ⟨_, hx, hd0, hos0, hn0, fun d hdd hnm => hs0 d (by simpa [Entry.vdeps, ownHeld, ht] using hdd) hnm⟩
+    -- (Agora #782: what is pushed into it, it views already)
+    have hsub := hdb hd
+    refine ⟨_, hx, hd0, hos0, hn0, fun d hdd hnm => hs0 d ?_ hnm⟩
+    have hdd' : d ∈ Ex1.vdeps ++ ownHeld true t D := by
+      simpa [Entry.vdeps, List.append_assoc] using hdd
+    rcases List.mem_append.mp hdd' with hdd | hdd
+    · exact hdd
+    · have hos1 : Ex1.mode.ownSlot = true := hos
+      simp only [Entry.vdeps, hos1, ↓reduceIte, List.nil_append]; exact hsub hdd
   | free hx => exact fun _ _ => DKeep.moveOut hx _ _
   | insert _ _ _ ih => exact ih
   | withElem hs _ _ _ _ _ _ _ hr _ _ _ _ _ ihs ihp =>
