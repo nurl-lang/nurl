@@ -1,0 +1,15 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_defer_in_a_loop_reads_an_earlier_rounds_value.nu:49:9: error: 'x' is handed to the caller by this return, but a ';' defer releases it (or a field of it) on the way out — the defers run after the value is the caller's, so the caller would get freed memory. Release it before the return and hand back something else, or return a copy (string_clone, vec_clone, mem_dup); a defer may still read it. (The ';' at line 50 stands further down the loop than this return: from the loop's second round on it runs here too, as an earlier round armed it — and releases 'x' as the caller gets it.)
+        ? == k n { ^ x } {}
+        ^
+compiler/tests/diag_defer_in_a_loop_reads_an_earlier_rounds_value.nu:25:9: error: 'v' borrows from 'x', which ended at line 22 — it was given a new value. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'v' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup v ). (This read is the ';' defer at line 25, which stands further down the loop than the way out at line 23: from the loop's second round on it runs at that way out too, as an earlier round armed it. There 'v' still holds the value an earlier round bound at line 24: this round has not reached that line yet. Leave the loop there only below the ';', or bind what the defer reads above that way out.)
+        ; { ( nurl_println v ) }
+        ^
+compiler/tests/diag_defer_in_a_loop_reads_an_earlier_rounds_value.nu:39:9: error: 'e' borrows from 'w', which ended at line 35 — it was passed to 'vec_clear', which may drop or replace what it holds. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'e' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup e ). (This read is the ';' defer at line 39, which stands further down the loop than the way out at line 37: from the loop's second round on it runs at that way out too, as an earlier round armed it. There 'e' still holds the value an earlier round bound at line 38: this round has not reached that line yet. Leave the loop there only below the ';', or bind what the defer reads above that way out.)
+        ; { ( nurl_println ( string_data e ) ) }
+        ^
+compiler/tests/diag_defer_in_a_loop_reads_an_earlier_rounds_value.nu:61:9: error: 'v' borrows from 'x', which ended at line 64 — it was given a new value. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'v' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup v ).
+        ; { ( nurl_println v ) }
+        ^
+error: compilation aborted — 4 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

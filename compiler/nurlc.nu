@@ -1664,6 +1664,7 @@ unsafe @ agg_field_count i syms s ot → i {
 // A `;` defer inside a loop body (agora #655): see __dloop_open.
 : ~ i g_fn_semi 0  // the function being compiled has a `;` byte in its body: its loops are scanned for a defer
 : ~ i g_dloop 0  // 1 inside the outermost loop whose body registers a `;` defer (a "defer loop")
+: ~ i g_dloop_exit 0  // 1 once a way out inside the defer loop branched to its label (__dexit_top)
 : ~ i g_dkeep_bind 0  // 1 while a `:` statement of a defer loop is compiled that a `;` further down its block keeps
 : ~ i g_dkr_any 0  // 1 once this function left a `;dkr` marker (mem_dkeep_rebind)
 : ~ i g_dkr_n 0  // registers the late releases of kept loop bindings (`;dkr` markers) take
@@ -1697,6 +1698,9 @@ unsafe @ agg_field_count i syms s ot → i {
 : ~ i g_bck_inn 0  // next dense binding id within the current function
 : ~ i g_bck_ret_guard -1  // while a return's defers replay: the owner it hands back (bck_apply_defers)
 : ~ i g_bck_has_defers 0  // the function being walked has a `;` defer site (defer_blocks non-empty)
+: ~ i g_bck_loop_defers 0  // …and one of them inside a `~` loop's body (agora #670)
+: ~ i g_bck_dlx_p -1  // while an exit's replay runs a defer further down a loop around it: the exit's row (bck_exit_maybe_defers)
+: ~ i g_bck_dlx_line 0  // …and its line
 : ~ i g_bck_ret_line 0  // …and that return's line
 // >0 while the borrow checker's capture hooks must not record. Used to be
 // spelled `g_bck_closure_depth != 0`, which conflated two different things:
@@ -5971,13 +5975,20 @@ unsafe @ __arg_lend_root i syms → s {
 }
 
 // Where an exit of the function goes: the defer chain's top, `` when no
-// defer is in sight — or, inside a defer loop before its first `;`, the
-// function's cleanup: what the loop's defer keeps is skipped by this exit
-// and has to be released there (__dloop_open; agora #655).
-@ __dexit_top i syms → s {
-    : s top ( nurl_sym_get g_fn_escapes `__defer_top_fn__` )
-    ? | != 0 ( nurl_str_len top ) == 0 g_dloop { ^ ( nurl_str_cat top `` ) } {}
-    ^ ( nurl_str_cat ( nurl_sym_get syms `__fn_cleanup__` ) `` )
+// defer is in sight — or, inside a defer loop, the loop's own label, which
+// branches to the chain's top as it is when the loop closes: a defer
+// further down the loop than this exit runs here once an earlier round
+// armed it, and the armed flags decide at run time what runs
+// (__dloop_close; agora #655, #670).
+@ __dexit_top i syms i cg → s {
+    ? != 0 g_dloop {
+        // (Named at the first exit that needs it: a defer loop no way out
+        // leaves compiles to the IR it did.)
+        ? == 0 g_dloop_exit { ( nurl_sym_set g_fn_escapes `__dloop_top__` ( nurl_cg_lbl cg `dloop_top` ) ) } {}
+        = g_dloop_exit 1
+        ^ ( nurl_str_cat ( nurl_sym_get g_fn_escapes `__dloop_top__` ) `` )
+    } {}
+    ^ ( nurl_str_cat ( nurl_sym_get g_fn_escapes `__defer_top_fn__` ) `` )
 }
 
 // Emit the `ret` terminator (or branch to the defer chain) after owned-
@@ -6003,7 +6014,7 @@ unsafe @ __arg_lend_root i syms → s {
     = g_ret_raw_own F
     : b __rclo g_ret_clo_lit
     = g_ret_clo_lit F
-    : s dtop ( __dexit_top syms )
+    : s dtop ( __dexit_top syms cg )
     : s fn_rt ( nurl_sym_get syms `__fn_ret_ty__` )
     : b __rg_ok | __rlo & & & == 0 ( nurl_str_len skip ) == 0 ( nurl_str_len skip_str_ptr ) == 0 ( nurl_str_len skip_user_ptr ) == 0 ( nurl_str_len skip_struct_ptr )
     ? != 0 ( nurl_str_len dtop )
@@ -7827,7 +7838,9 @@ unsafe @ gen_ret i lex i syms i cg → s {
     // With a `;` defer armed, the chain runs after the value is the
     // caller's: the owner this `^` hands back by name is lent to the
     // defers — read, not released (the walk's ret row, bck_apply_defers).
-    ? & & & != 0 g_defer_count != g_borrowck 0 == 0 g_bck_closure_depth != 0 ( nurl_sym_len g_fn_escapes `__defer_top_fn__` ) {
+    // (…or with one further down the loop this `^` stands in, which an
+    // earlier round armed: agora #670.)
+    ? & & | != 0 g_dloop & != 0 g_defer_count != 0 ( nurl_sym_len g_fn_escapes `__defer_top_fn__` ) != g_borrowck 0 == 0 g_bck_closure_depth {
         // (…a block whose tail names it hands it back too: agora #197.)
         : s __rto ? ( is_ident_tok ret_src_tt ) ret_src_val ? & == ret_src_tt TT_LBRACE ( is_ident_tok ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) ) ) ( nurl_sym_get syms `__tail_first_val__` ) ``
         ? & != 0 ( nurl_str_len __rto ) | ( __is_handle_ty ( nurl_get_last_type ) ) ( __type_needs_drop ( nurl_get_last_type ) syms ) {
@@ -26527,8 +26540,13 @@ unsafe @ gen_match i lex i syms i cg → s {
 //      closure over it, a `string_data`, an element, bound further down
 //      and not yet bound again this round — stays good, as the walk takes
 //      a kept binding to live to the exit;
-//   3. an exit above the loop's first `;` goes to the cleanup for what it
-//      left there (__dexit_top).
+//   3. every exit inside the loop enters the defer chain through one label
+//      at the loop's end, which branches to the chain's top as it is
+//      there (__dexit_top, __dloop_close): a `^` or a `\` above a `;` runs
+//      the defer an earlier round armed, the armed flags deciding at run
+//      time, and the walk reads it there (bck_exit_maybe_defers, with what
+//      the defer keeps carried across the rounds: __bck_loop_kept; agora
+//      #670).
 // Nothing is scanned in a function whose body holds no `;` byte, and a
 // loop with no defer compiles as it always did.
 
@@ -26578,6 +26596,7 @@ unsafe @ gen_match i lex i syms i cg → s {
     ( nurl_lex_set_pos lex here )
     ? ! found { ^ F } {}
     = g_dloop 1
+    = g_dloop_exit 0
     : s hd ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print hd ) ( nurl_print ` = alloca i8*\n` )
     ( nurl_sym_set g_fn_escapes `__dkhead__` hd )
@@ -26596,13 +26615,23 @@ unsafe @ gen_match i lex i syms i cg → s {
     ^ T
 }
 
-// The defer loop closes. (A `;` the scan saw is always compiled; were it
-// not, the exits after the loop still have to reach the cleanup for what
-// was kept back, so the chain's top becomes the cleanup.)
+// The defer loop closes: its label, for the exits inside it, branches to
+// the chain's top as it is now (__dexit_top) — written where one did. (The
+// block before it has its terminator: the loop's back-edge, or the exit
+// that ended its body. A `;`
+// the scan saw is always compiled; were it not, the exits still have to
+// reach the cleanup for what was kept back, so the chain's top becomes the
+// cleanup.)
 @ __dloop_close i syms i cg → v {
     ? == 0 ( nurl_sym_len g_fn_escapes `__defer_top_fn__` ) {
         ( nurl_sym_set g_fn_escapes `__defer_top_fn__` ( nurl_sym_get syms `__fn_cleanup__` ) )
     } {}
+    ? != 0 g_dloop_exit {
+        ( emit ( nurl_str_cat ( nurl_sym_get g_fn_escapes `__dloop_top__` ) `:` ) )
+        ( nurl_print `  br label %` ) ( nurl_print ( nurl_sym_get g_fn_escapes `__defer_top_fn__` ) ) ( emit_dbg_eol )
+    } {}
+    = g_dloop_exit 0
+    ( nurl_sym_set g_fn_escapes `__dloop_top__` `` )
     ( nurl_sym_set g_fn_escapes `__dkhead__` `` )
     = g_dloop 0
 }
@@ -34291,6 +34320,10 @@ unsafe @ bck_add_cap_name s name → v {
 // The ids a scope's end has released so far, as it releases them
 // (bck_scope_drop): dropped already, not after what they hold views of.
 : ~ s g_bck_ending ``
+// A sentence the next borrow-check error ends with (bck_emit_error): what
+// the read it names is, where that is not plain from its line — `` mostly
+// (__bck_dlx_note).
+: ~ s g_bck_err_note ``
 // While bck_end_post_defer ends what an exit releases before its defers:
 // whether the caller's storage is left viewing one of those is asked after
 // the defers ran (bck_param_view_check), since a defer may point it back.
@@ -39173,8 +39206,10 @@ unsafe @ bck_emit_error s file i line s msg → v {
         ? < k ln { = col + k 1 } {}
     } {}
     : s loc ( nurl_str_cat3 file `:` ( nurl_str_int line ) )
-    ( nurl_eprintln ( nurl_str_cat3 ? > col 0 ( nurl_str_cat3 loc `:` ( nurl_str_int col ) ) loc
-    `: error: ` msg ) )
+    : s note ( nurl_str_cat g_bck_err_note `` )
+    = g_bck_err_note ``
+    ( nurl_eprintln ( nurl_str_cat4 ? > col 0 ( nurl_str_cat3 loc `:` ( nurl_str_int col ) ) loc
+    `: error: ` msg note ) )
     ? > col 0 {
         ( nurl_eprintln lt )
         ( nurl_eprintln ( nurl_diag_caret col ) )
@@ -39576,10 +39611,14 @@ unsafe @ bck_check_moved_reads s reads i line s state → v {
                 = i + i 1
             }
             : i rst ( bck_st_get state idv )
+            // (A defer that runs at a way out above it: what it reads there
+            // is as an earlier round left it, __bck_dlx_note.)
+            ? & >= g_bck_dlx_p 0 | | | == BCK_MOVED rst == BCK_STORED rst == BCK_INVALID rst == BCK_MAYBE_MOVED rst { = g_bck_err_note ( __bck_dlx_note idv ) } {}
             ? == BCK_MOVED rst { ( bck_diag idv line ) } {}
             ? & ( bck_sound ) == BCK_STORED rst { ( bck_diag_stored_read idv line ) } {}
             ? & & ( bck_sound ) == BCK_INVALID rst ! ( __bck_inv_src_read idv reads state ) { ( bck_diag_invalid idv line ) } {}
             ? & & != 0 g_maybe_moved == BCK_MAYBE_MOVED rst ! ( bck_id_is_global idv ) { ( bck_diag_maybe_read idv line ) } {}
+            = g_bck_err_note ``
         }
     }
 }
@@ -40940,13 +40979,22 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                     : s rtn ( nurl_sym_get g_bck ( nurl_str_cat4 `rto_` ( nurl_sym_get g_bck `file` ) `:` ( nurl_str_int rln ) ) )
                     ? != 0 ( nurl_str_len rtn ) {
                         = rto ( bck_intern rtn )
+                        // (The name as this row sees it: a `:` of an arm that
+                        // shadows an outer binding is a binding of its own,
+                        // `g'1` — the row's own field. By the bare name, a
+                        // defer that releases the outer one was taken to
+                        // release what this `^` hands back; agora #670.)
+                        : s rf1 ( bck_field rec 1 )
+                        ? & != 0 ( nurl_str_len rf1 ) ! ( seq rf1 ( nurl_str_int rto ) ) {
+                            ? ( seq ( bck_xl_base ( nurl_sym_get2 g_bck `rv_` rf1 ) ) rtn ) { = rto ( nurl_str_to_int rf1 ) } {}
+                        } {}
                         ? != BCK_OWNED ( bck_st_get st rto ) { = rto -1 } {}
                     } {}
                 } {}
                 // (Any defer that may run at this return — armed for certain,
                 // on some path, or in a loop — read for what it does to that
                 // owner: the replay below walks only the certain ones.)
-                ? >= rto 0 { ? ( bck_defers_release_ret st p rto ) { ( bck_diag_defer_releases_returned rto ( bck_field_int rec 3 ) ) } {} } {}
+                ? >= rto 0 { ? ( bck_defers_release_ret st p rto ) { ( bck_diag_defer_releases_returned rto ( bck_field_int rec 3 ) ) = g_bck_err_note `` } {} } {}
                 ( bck_exit_maybe_defers st p rto ( bck_field_int rec 3 ) T )
                 = g_bck_ret_guard rto
                 = g_bck_ret_line ( bck_field_int rec 3 )
@@ -41089,6 +41137,12 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 = done T
             } {}
             ? == kc 2 {
+                // (A binding a loop's defer keeps, bound again: its earlier
+                // round's value is parked, and what borrows from it no
+                // borrower of this one — agora #670.)
+                ? & != 0 g_bck_loop_defers != BCK_UNINIT ( bck_st_raw st ( bck_field_int rec 1 ) ) {
+                    ? ( str_contains_word ( nurl_sym_get g_bck `dkall` ) ( bck_field rec 1 ) ) { ( __bck_kept_rebind ( bck_field rec 1 ) ) } {}
+                } {}
                 // (`: r2 ( rc_clone r )`: one Rc value with r — agora #392.)
                 ? ( seq ( bck_generic_base ( bck_field rec 6 ) ) `rc_clone` ) { ( __bck_rcf_link ( bck_field rec 1 ) ( bck_field rec 8 ) ) } {}
                 // A `let` (re)binds the name — Owned, reviving a Moved one,
@@ -42009,7 +42063,9 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                             ? ! ( seq lpost `!` ) { ( __bck_fe_retire lpost ( bck_field_int frec 1 ) ) } { ( __bck_fe_unfile ( bck_field frec 1 ) ) }
                             ( __bck_fe_codes_drop ( bck_field frec 1 ) )
                         } {}
-                        = st ( bck_scope_restore + p 1 eb blk_pre lpost )
+                        // (…but for what a defer of the body keeps: it reads
+                        // that at the function's exit, agora #670.)
+                        = st ( __bck_loop_restore + p 1 eb blk_pre lpost ( __bck_loop_kept + p 1 eb blk_pre ) )
                         // (…and its cursor with it: a view of nothing, agora
                         // #493.)
                         ? fel {
@@ -47749,19 +47805,124 @@ unsafe @ bck_note_rc_arg s name s ty → v {
     ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat4 m1 m2 `', the field stays in '` ( nurl_str_cat3 src `', which releases it again. Hand that field over from its owner, or take '` ( nurl_str_cat name `' over whole.` ) ) ) )
 }
 
+// Do rows `a` and `b` stand in the body of one `~` loop? A defer further
+// down a loop body than a way out of it runs at that way out from the
+// second round on: an earlier round armed it (agora #670).
+@ __bck_rows_share_loop i a i b → b {
+    : i lo ? < a b a b
+    : i hi ? < a b b a
+    : ~ i j 0
+    ~ < j lo {
+        : s r ( bck_rec j )
+        ? != 0 ( nurl_str_starts r `block\t` ) {
+            : s k ( bck_field r 1 )
+            ? | | ( seq k `loop` ) ( seq k `loopt` ) ( seq k `foreach` ) { ? > ( bck_match_close j `block` `endblock` ) hi { ^ T } {} } {}
+        } {}
+        = j + j 1
+    }
+    ^ F
+}
+
+// A defer at row `d`, further down than the way out at row `p` and in a
+// loop around both, keeps what it can see: the bindings in scope at `p`
+// that are declared in a block the defer stands in too (codegen keeps
+// them from the loop's head, or from their binding: __dloop_open). Those
+// are the ones declared above the first block, cond or match around `p`
+// that closes before `d` — its row, or `p` when every one of them
+// reaches `d`.
+@ __bck_kept_bound i d i p → i {
+    : ~ i j 0
+    ~ < j p {
+        : s rec ( bck_rec j )
+        : ~ i nx + j 1
+        : i cl ? != 0 ( nurl_str_starts rec `cond\t` ) ( bck_match_close j `cond` `endcond` )
+        ? != 0 ( nurl_str_starts rec `match\t` ) ( bck_match_close j `match` `endmatch` )
+        ? != 0 ( nurl_str_starts rec `block\t` ) ( bck_match_close j `block` `endblock` ) -1
+        ? >= cl 0 {
+            ? < cl p { = nx + cl 1 } { ? < cl d { ^ j } {} }
+        } {}
+        = j nx
+    }
+    ^ p
+}
+
+// The `let` row that binds `id` as the code at row `p` sees it — the last
+// one above `p` in scope there (a nested block, cond or match that closes
+// before `p` scoped its own) — or -1: a parameter's, or none.
+@ __bck_let_seen i id i p → i {
+    : ~ i at -1
+    : s ids ( nurl_str_int id )
+    : ~ i j 0
+    ~ < j p {
+        : s rec ( bck_rec j )
+        : ~ i nx + j 1
+        ? != 0 ( nurl_str_starts rec `let\t` ) {
+            ? ( seq ( bck_field rec 1 ) ids ) { = at j } {}
+        } {
+            : i cl ? != 0 ( nurl_str_starts rec `cond\t` ) ( bck_match_close j `cond` `endcond` )
+            ? != 0 ( nurl_str_starts rec `match\t` ) ( bck_match_close j `match` `endmatch` )
+            ? != 0 ( nurl_str_starts rec `block\t` ) ( bck_match_close j `block` `endblock` ) -1
+            ? & >= cl 0 < cl p { = nx + cl 1 } {}
+        }
+        = j nx
+    }
+    ^ at
+}
+
+// What an error about a read of `id` adds while an exit's replay runs a
+// defer that stands further down a loop around it (g_bck_dlx_p): that the
+// read is that defer's, run at the exit, and which round's value it reads
+// there. `` for a read that is no such defer's.
+@ __bck_dlx_note i id → s {
+    : ~ s out ``
+    : i p g_bck_dlx_p
+    : i at g_bck_row_at
+    ? | < p 0 <= at p { ^ out } {}
+    // (The defer whose body the read is in.)
+    : ~ i d -1
+    : ~ s rest ( nurl_sym_get g_bck `defer_blocks` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : i d0 ( nurl_str_to_int ( str_first_word rest ) ) = rest ( str_skip_word rest )
+        ? & & > d0 p < d0 at > ( bck_match_close d0 `block` `endblock` ) at { = d d0 } {}
+    }
+    ? < d 0 { ^ out } {}
+    : s name ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int id ) ) )
+    : s m1 ( nurl_str_cat4 ` (This read is the ';' defer at line ` ( nurl_str_int ( bck_field_int ( bck_rec d ) 3 ) ) `, which stands further down the loop than the way out at line ` ( nurl_str_int g_bck_dlx_line ) )
+    : s m2 `: from the loop's second round on it runs at that way out too, as an earlier round armed it. `
+    : i lr ( __bck_let_seen id d )
+    ? & > lr p < lr d {
+        : s m3 ( nurl_str_cat4 `There '` name `' still holds the value an earlier round bound at line ` ( nurl_str_int ( bck_field_int ( bck_rec lr ) 3 ) ) )
+        = out ( nurl_str_cat4 m1 m2 m3 `: this round has not reached that line yet. Leave the loop there only below the ';', or bind what the defer reads above that way out.)` )
+    } {
+        = out ( nurl_str_cat4 m1 m2 ( nurl_str_cat3 `There it reads '` name `' as this round left it.)` ) `` )
+    }
+    ^ out
+}
+
 // The defer sites a return at row `p` may run (state `st`): armed for
 // certain, on some path (a `?` arm), or registered inside a loop (which
-// keeps no flag for it). Does one of them release `id`, give it a new
-// value, or give away, replace or store a field of it?
-@ bck_defers_release_ret s st i p i id → b {
+// keeps no flag for it) — above the return, or further down a loop around
+// both (agora #670). Does one of them release `id`, give it a new value,
+// or give away, replace or store a field of it? (`unsafe` for
+// g_bck_err_note, the note the diagnostic it answers for ends with: set
+// here, emptied by the caller.)
+unsafe @ bck_defers_release_ret s st i p i id → b {
     : ~ s rest ( nurl_sym_get g_bck `defer_blocks` )
     ~ != 0 ( nurl_str_len rest ) {
         : s row ( str_first_word rest ) = rest ( str_skip_word rest )
         : i start ( nurl_str_to_int row )
-        ? < start p {
+        : b runs ? < start p T ? == 0 g_bck_loop_defers F ( __bck_rows_share_loop start p )
+        ? runs {
             : i fs ( bck_st_get st ( nurl_str_to_int ( nurl_sym_get g_bck ( nurl_str_cat `df_` row ) ) ) )
             ? | | == fs BCK_MOVED == fs BCK_MAYBE_MOVED ( __bck_row_in_loop start ) {
-                ? ( __bck_defer_body_releases start id ) { ^ T } {}
+                ? ( __bck_defer_body_releases start id ) {
+                    // (One further down the loop: say why it runs here.)
+                    ? > start p {
+                        : s m1 ( nurl_str_cat3 ` (The ';' at line ` ( nurl_str_int ( bck_field_int ( bck_rec start ) 3 ) ) ` stands further down the loop than this return: from the loop's second round on it runs here too, as an earlier round armed it — and releases '` )
+                        = g_bck_err_note ( nurl_str_cat3 m1 ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int id ) ) `' as the caller gets it.)` )
+                    } {}
+                    ^ T
+                } {}
             } {}
         } {}
     }
@@ -48645,20 +48806,29 @@ unsafe @ bck_exit_maybe_defers s st i p i keep i line b retchk → v {
     ? | ( seq st `!` ) == 0 g_bck_has_defers { ^ v } {}
     : ~ s st2 ( nurl_str_cat st `` )
     : ~ b any F
+    // (…one of them further down a loop around `p`: agora #670.)
+    : ~ b far F
     : ~ s rest ( nurl_sym_get g_bck `defer_blocks` )
     ~ != 0 ( nurl_str_len rest ) {
         : s row ( str_first_word rest ) = rest ( str_skip_word rest )
         : i start ( nurl_str_to_int row )
-        ? < start p {
+        // (…or further down a loop around both: an earlier round armed it,
+        // agora #670.)
+        : b runs ? < start p T ? == 0 g_bck_loop_defers F ( __bck_rows_share_loop start p )
+        ? runs {
             : i flag ( nurl_str_to_int ( nurl_sym_get g_bck ( nurl_str_cat `df_` row ) ) )
             : i fs ( bck_st_get st2 flag )
             ? & != fs BCK_MOVED | == fs BCK_MAYBE_MOVED ( __bck_row_in_loop start ) {
                 = st2 ( bck_st_set st2 flag BCK_MOVED )
                 = any T
+                ? > start p { = far T } {}
             } {}
         } {}
     }
     ? ! any { ^ v } {}
+    : i dlx_p g_bck_dlx_p
+    : i dlx_line g_bck_dlx_line
+    ? far { = g_bck_dlx_p p = g_bck_dlx_line line } {}
     : s cj_outer ( nurl_str_cat g_cj_log `` )
     : i cj_eo g_cj_entry
     = g_cj_depth + g_cj_depth 1
@@ -48677,6 +48847,8 @@ unsafe @ bck_exit_maybe_defers s st i p i keep i line b retchk → v {
     = g_cj_log cj_outer
     = g_cj_entry cj_eo
     = g_cj_depth - g_cj_depth 1
+    = g_bck_dlx_p dlx_p
+    = g_bck_dlx_line dlx_line
 }
 
 // What an exit at row `p` releases BEFORE its defers run: codegen keeps
@@ -48692,18 +48864,23 @@ unsafe @ bck_exit_maybe_defers s st i p i keep i line b retchk → v {
 unsafe @ bck_end_post_defer s st i p i keep i line → s {
     ? | ( seq st `!` ) == 0 g_bck_has_borrow { ^ st } {}
     : ~ i last -1
+    // (A defer further down a loop around `p` keeps what it can see too:
+    // the bindings declared above row `kb`, __bck_kept_bound; agora #670.)
+    : ~ i kb -1
     : ~ s rest ( nurl_sym_get g_bck `defer_blocks` )
     ~ != 0 ( nurl_str_len rest ) {
         : i d0 ( nurl_str_to_int ( str_first_word rest ) )
         = rest ( str_skip_word rest )
         ? & < d0 p > d0 last { = last d0 } {}
+        ? & != 0 g_bck_loop_defers > d0 p { ? ( __bck_rows_share_loop d0 p ) { : i b0 ( __bck_kept_bound d0 p ) ? > b0 kb { = kb b0 } {} } {} } {}
     }
-    ? < last 0 { ^ st } {}
+    ? & < last 0 < kb 0 { ^ st } {}
     // The `let`s from the last defer's end up to `p` that are in scope at
     // `p`: a nested cond / match / block that closes before `p` scoped its
     // own (they ended there); one that encloses `p` is stepped into.
     : ~ s lets ``
-    : ~ i j + ( bck_match_close last `block` `endblock` ) 1
+    : ~ i j ? >= last 0 + ( bck_match_close last `block` `endblock` ) 1 0
+    ? < j kb { = j kb } {}
     ~ < j p {
         : s rec ( bck_rec j )
         : ~ i nx + j 1
@@ -48951,6 +49128,146 @@ unsafe @ bck_loop_mask s pre s post → s {
             = . ob i zd
         } {}
         = i + i 1
+    }
+    ^ out
+}
+
+// ── A defer loop's kept bindings (agora #670) ─────────────────────
+// A `;` defer in a loop body keeps the body's bindings in sight at it
+// (codegen: a `:` with a `;` further down its own block, __dloop_open 2)
+// — every round's: a round's value is parked, not released, when the next
+// round binds the name again, and the defer reads the one of the last
+// round that reached it. So such a binding is no body-local one to the
+// walk: it is not ended at the body's end, its state crosses the
+// back-edge and the loop's exit with what it borrows, and binding it again
+// lets go of what borrowed from the earlier value (__bck_kept_rebind). A
+// change to one of its sources bound before the loop, in a later round,
+// ends it; an exit above its `:` that runs the defer (an earlier round
+// armed it: bck_exit_maybe_defers) reads it as the earlier round left it,
+// and so does the function's exit after the loop.
+
+// The ids the loop body [lo, hi) binds that a defer site of it keeps: a
+// `let` in scope at the site, above it, that was unbound when the loop was
+// entered (`pre`: a binding of the body, not one made before the loop) —
+// whether the defer reads it or not, as codegen keeps it, so a view of it
+// the defer reads is good. Space-separated, `` when the body has no defer
+// site.
+@ __bck_loop_kept i lo i hi s pre → s {
+    : ~ s out ``
+    ? == 0 g_bck_loop_defers { ^ out } {}
+    : ~ s rest ( nurl_sym_get g_bck `defer_blocks` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : i d0 ( nurl_str_to_int ( str_first_word rest ) )
+        = rest ( str_skip_word rest )
+        ? & >= d0 lo < d0 hi {
+            // (In scope at the site: a nested block, cond or match that
+            // closes before it scoped its own; one around it is stepped
+            // into.)
+            : ~ i j lo
+            ~ < j d0 {
+                : s rec ( bck_rec j )
+                : ~ i nx + j 1
+                ? != 0 ( nurl_str_starts rec `let\t` ) {
+                    : s ids ( bck_field rec 1 )
+                    ? & == BCK_UNINIT ( bck_st_raw pre ( nurl_str_to_int ids ) ) ! ( str_contains_word out ids ) {
+                        = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat ids `` ) ( nurl_str_cat3 out ` ` ids )
+                    } {}
+                } {
+                    : i cl ? != 0 ( nurl_str_starts rec `cond\t` ) ( bck_match_close j `cond` `endcond` )
+                    ? != 0 ( nurl_str_starts rec `match\t` ) ( bck_match_close j `match` `endmatch` )
+                    ? != 0 ( nurl_str_starts rec `block\t` ) ( bck_match_close j `block` `endblock` ) -1
+                    ? & >= cl 0 < cl d0 { = nx + cl 1 } {}
+                }
+                = j nx
+            }
+        } {}
+    }
+    ^ out
+}
+
+// `st` with each id of `kept` (__bck_loop_kept) in its state in `post`:
+// what the round that ends there left it, carried on. A view a scope's end
+// ended there (`bv_`'s why) whose source the loop body binds — the round's
+// end, an arm's — is no ended view at the back-edge: codegen keeps what the
+// defer keeps, every round's value, to the cleanup. (A source bound before
+// the loop that changed, an element dropped, a value released: ended.)
+@ __bck_kept_carry s st s post s kept s pre → s {
+    ? | ( seq st `!` ) ( seq post `!` ) { ^ ( nurl_str_cat st `` ) } {}
+    : ~ s out ( nurl_str_cat st `` )
+    : ~ s rest ( nurl_str_cat kept `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s ids ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i id ( nurl_str_to_int ids )
+        : ~ i v ( bck_st_raw post id )
+        ? == v BCK_INVALID {
+            : ~ s info ( nurl_sym_get g_bck ( bck_bkey `bv_` ids ) )
+            = info ( str_skip_word info )
+            : i src ( bck_path_root ( nurl_str_to_int ( str_first_word info ) ) )
+            = info ( str_skip_word info )
+            ? == 33 ( nurl_str_get info 0 ) { = info ( str_skip_word info ) } {}
+            ? & != 0 ( nurl_str_starts info `it went out of scope` ) == BCK_UNINIT ( bck_st_raw pre src ) { = v BCK_BORROWED_SHARED } {}
+        } {}
+        = out ( bck_st_set out id v )
+    }
+    ^ out
+}
+
+// A `let` rebinds `id`, a binding a defer of a loop around it keeps
+// (`dkall`), that holds an earlier round's value: codegen parks that value
+// to the cleanup (mem_dkeep_rebind), so what borrows from it, holds a view
+// of it or captured it is no borrower of the new one — the walk's ids are
+// names (agora #618), and those would end with this `let`, or with a
+// change to the new value. They are let go of it.
+@ __bck_kept_rebind s ids → v {
+    : i id ( nurl_str_to_int ids )
+    : ~ s rest ( nurl_str_cat4 ids ` ` ( nurl_sym_get g_bck ( bck_bkey `bsrcs` `` ) ) `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s o ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? == ( bck_path_root ( nurl_str_to_int o ) ) id {
+            ? != 0 ( nurl_sym_len g_bck ( bck_bkey `bb_` o ) ) { ( bck_put_bf `bb_` o `` ) } {}
+            ? != 0 ( nurl_sym_len g_bck ( bck_bkey `dd_` o ) ) { ( bck_put_bf `dd_` o `` ) } {}
+            : s vk ( bck_bkey `vdd_` o )
+            ? != 0 ( nurl_sym_len g_bck vk ) { ( bck_put_vd vk id `` ) } {}
+        } {}
+    }
+}
+
+// The loop body's end (bck_scope_end of [lo, hi)) but for the bindings
+// its defer keeps (`kept`): they are not released there.
+@ __bck_loop_body_end i lo i hi s st i line s kept → s {
+    ? | ( seq st `!` ) == 0 g_bck_has_borrow { ^ ( bck_scope_end lo hi st line ) } {}
+    : ~ s lets ``
+    : ~ s rest ( __bck_scope_lets lo hi )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s js ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ! ( str_contains_word kept ( bck_field ( bck_rec ( nurl_str_to_int js ) ) 1 ) ) {
+            = lets ? == 0 ( nurl_str_len lets ) ( nurl_str_cat js `` ) ( nurl_str_cat3 lets ` ` js )
+        } {}
+    }
+    : ~ s out ? == 0 g_bck_jgb_any ( nurl_str_cat st `` ) ( bck_join_giveback st lets )
+    = out ( bck_scope_drop out lets line )
+    = rest lets
+    ~ != 0 ( nurl_str_len rest ) {
+        : s js ( str_first_word rest ) = rest ( str_skip_word rest )
+        ( bck_put ( bck_bkey `oos_` ( nurl_str_int ( bck_field_int ( bck_rec ( nurl_str_to_int js ) ) 1 ) ) ) `1` )
+    }
+    ^ out
+}
+
+// After the loop: bck_scope_restore of its body [lo, hi) but for `kept`,
+// which the defer reads at the function's exit as the last round left
+// them.
+@ __bck_loop_restore i lo i hi s pre s post s kept → s {
+    ? | == 0 ( nurl_str_len kept ) ( seq post `!` ) { ^ ( bck_scope_restore lo hi pre post ) } {}
+    : ~ s out ( nurl_str_cat post `` )
+    : ~ s rest ( __bck_scope_lets lo hi )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s js ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i id ( bck_field_int ( bck_rec ( nurl_str_to_int js ) ) 1 )
+        ? ! ( str_contains_word kept ( nurl_str_int id ) ) {
+            = out ( bck_st_set out id ( bck_st_raw pre id ) )
+            ( bck_partner_unlink id )
+        } {}
     }
     ^ out
 }
@@ -49601,6 +49918,11 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     : i fe_self ? fe_lp 1 0
     : s fe_curs ? fe_lp ( bck_field ( bck_rec lo ) 7 ) ``
     : i fe_cur ? == 0 ( nurl_str_len fe_curs ) -1 ( nurl_str_to_int fe_curs )
+    // (What a defer of the body keeps lives across rounds: agora #670.)
+    : s dkept ( __bck_loop_kept lo hi pre )
+    : b dk != 0 ( nurl_str_len dkept )
+    : s dkall0 ? dk ( nurl_str_cat ( nurl_sym_get g_bck `dkall` ) `` ) ``
+    ? dk { ( bck_put `dkall` ( nurl_str_cat3 dkall0 ` ` dkept ) ) } {}
     = g_bck_watch + g_bck_watch 1
     ~ & ! done < iter 16 {
         ( bck_put `lbrk` `` )
@@ -49614,7 +49936,7 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
         : s bsnap ( __bs_snapshot )
         : s fvsnap ( __fv_snapshot )
         : s vdsnap ? != 0 g_bck_has_deps ( __vd_snapshot ) ``
-        : s post0 ( bck_scope_end lo hi ( bck_walk_seq lo hi head ) ( bck_field_int ( bck_rec hi ) 3 ) )
+        : s post0 ? dk ( __bck_loop_body_end lo hi ( bck_walk_seq lo hi head ) ( bck_field_int ( bck_rec hi ) 3 ) dkept ) ( bck_scope_end lo hi ( bck_walk_seq lo hi head ) ( bck_field_int ( bck_rec hi ) 3 ) )
         : s cnt ( nurl_sym_get g_bck `lcnt` )
         = brk ( nurl_sym_get g_bck `lbrk` )
         = brkvd ( nurl_sym_get g_bck `lbrkvd` )
@@ -49654,6 +49976,7 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
         : ~ s carried ( bck_loop_mask pre post )
         ? > g_bck_fe_live fe_self { = carried ( __bck_fe_carry carried post fe_own ) } {}
         ? != 0 g_bck_fmv_any { = carried ( __bck_fmv_carry carried pre post ) } {}
+        ? dk { = carried ( __bck_kept_carry carried post dkept pre ) } {}
         : s merged ( bck_join_state head carried )
         // Converged when the next walk would repeat one already made: the
         // state is where this walk started, and the facts are where this
@@ -49694,8 +50017,9 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     // the innermost body, 32 s for 15 nested `~` (agora #210). A cycle,
     // or a fixpoint the iteration cap cut short, still walks `head` for
     // its exit.
-    ? | ! done cyc { = back ( bck_scope_end lo hi ( bck_walk_seq lo hi head ) ( bck_field_int ( bck_rec hi ) 3 ) ) } {}
-    : s verif ( bck_loop_carry_seed pre back )
+    ? | ! done cyc { = back ? dk ( __bck_loop_body_end lo hi ( bck_walk_seq lo hi head ) ( bck_field_int ( bck_rec hi ) 3 ) dkept ) ( bck_scope_end lo hi ( bck_walk_seq lo hi head ) ( bck_field_int ( bck_rec hi ) 3 ) ) } {}
+    : ~ s verif ( bck_loop_carry_seed pre back )
+    ? dk { = verif ( __bck_kept_carry verif back dkept pre ) } {}
     ( bck_check_moved_reads cond_reads cond_line verif )
     // (…and under the head itself: a borrow the body ended — INVALID, which
     // the seed does not carry — is read again by a `~ cond` before the next
@@ -49718,6 +50042,7 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
         ( __fv_join fvhead )
         ? != 0 g_bck_has_deps { ( __vd_join vdhead ) } {}
     } {}
+    ? dk { ( bck_put `dkall` dkall0 ) } {}
     ( bck_put `lbrk` outer_brk )
     ( bck_put `lcnt` outer_cnt )
     ( bck_put `lbrkvd` outer_brkvd )
@@ -49736,6 +50061,7 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     : ~ s left ( bck_loop_mask pre brk )
     ? > g_bck_fe_live fe_self { = left ( __bck_fe_carry left brk fe_own ) } {}
     ? != 0 g_bck_fmv_any { = left ( __bck_fmv_carry left pre brk ) } {}
+    ? dk { = left ( __bck_kept_carry left brk dkept pre ) } {}
     ? __lbrk_only { ^ left } {}
     ^ ( bck_join_state head left )
 }
@@ -49829,6 +50155,8 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     : i n ( bck_explode )
     ( bck_put `defer_blocks` `` )
     = g_bck_has_defers 0
+    = g_bck_loop_defers 0
+    ( bck_put `dkall` `` )
     : ~ i row 0
     ~ < row n {
         : s rec ( bck_rec row )
@@ -49842,6 +50170,7 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
             ( bck_put ( nurl_str_cat `dw_` index ) `0` )
             ( bck_put `defer_blocks`
             ( nurl_str_cat3 index ` ` ( nurl_sym_get g_bck `defer_blocks` ) ) )
+            ? == 0 g_bck_loop_defers { ? ( __bck_row_in_loop row ) { = g_bck_loop_defers 1 } {} } {}
         } {}
         = row + row 1
     }
@@ -63315,7 +63644,7 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
     // For opt_type: return zeroinitializer (None = { false, 0 }).
     ( emit ( nurl_str_cat lfail `:` ) )
     : s fn_rt ( nurl_sym_get syms `__fn_ret_ty__` )
-    : s dtop ( __dexit_top syms )
+    : s dtop ( __dexit_top syms cg )
     // Use the original val if types match (res propagation), else zeroinitializer
     : ~ s fail_val ? ( seq fn_rt vt ) val `zeroinitializer`
     // Result propagation where the caller's Ok type T differs from the callee's

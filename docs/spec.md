@@ -1817,8 +1817,12 @@ Semantics (v2.3, 2026-08-03):
   the defer still reads stays good — and is released after the defer
   chain, newest first (agora #655). So a long loop whose defer keeps a
   value per round holds them all: register that defer outside the loop.
-  A `^` or a `\` above the `;` does not yet run the defer an earlier
-  round armed (agora #670).
+  A `^` or a `\` above the `;` runs the defer an earlier round armed,
+  with what that round left: a binding the body makes between the way
+  out and the `;` still holds the earlier round's value there. A defer
+  that would read such a value after this round changed what it borrows
+  from (a binding made before the loop given a new value or cleared), or
+  that releases what that `^` hands back, is a compile error (agora #670).
   Returning an owned value transfers it to the caller as usual. With
   several return paths, a pre-defer owned value is transferred on the
   paths that return it and dropped after the chain on the others. A
