@@ -10547,6 +10547,18 @@ unsafe @ extract_fn_ptr_return_type s fn_ptr_type → s {
             ( nurl_print ? == 0 ( nurl_str_len o0 ) `false` o0 ) ( nurl_print `\n` )
             = reg ( nurl_str_cat `` `` )
         } {}
+        // `z|cond|n|ptr`: an `inout` field target the callee consumed is
+        // emptied where `cond` holds (agora #567).
+        ? ( nurl_str_starts reg `z|` ) {
+            : s zw ( nurl_str_slice reg 2 - ( nurl_str_len reg ) 2 )
+            : i z1 ( nurl_str_find zw `|` )
+            : s zr ( nurl_str_slice zw + z1 1 - - ( nurl_str_len zw ) z1 1 )
+            : i z2 ( nurl_str_find zr `|` )
+            ( nurl_print `  call void @__nurl_zero_if.` ) ( nurl_print ( nurl_str_slice zr 0 z2 ) )
+            ( nurl_print `(i1 ` ) ( nurl_print ( nurl_str_slice zw 0 z1 ) ) ( nurl_print `, ptr ` )
+            ( nurl_print ( nurl_str_slice zr + z2 1 - - ( nurl_str_len zr ) z2 1 ) ) ( nurl_print `)\n` )
+            = reg ( nurl_str_cat `` `` )
+        } {}
         ? == 0 ( nurl_str_len reg ) {} {
             // `j|slot`: a temporary's journal registration ends.
             ? ( nurl_str_starts reg `j|` ) {
@@ -17446,6 +17458,17 @@ unsafe @ __sx_publish i me s sx → v {
     ^ != 0 ( nurl_str_len ( nurl_sym_get syms `__tail_root_ptr__` ) )
 }
 
+// Is every word of `names` (at least one) a whole `inout` parameter?
+@ __all_inout i syms s names → b {
+    : ~ s rest ( nurl_str_cat names `` )
+    ? == 0 ( nurl_str_len rest ) { ^ F } {}
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ! ( seq ( nurl_sym_get2 syms w `__inout` ) `1` ) { ^ F } {}
+    }
+    ^ T
+}
+
 // Is a word of `names` a whole `inout` parameter?
 @ __any_inout i syms s names → b {
     : ~ s rest ( nurl_str_cat names `` )
@@ -18873,6 +18896,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // (…and whether a `?` / `??` join made as it owns what it yields,
         // before mem_lent_cond takes the bit: mem_arg_temps.)
         : ~ s arg_join_own ``
+        : ~ b arg_join_io F
         // (…and the bindings its arms lend, where it lends them on every
         // path — no ownership of its own published: agora #451.)
         : ~ s arg_join_ids ``
@@ -18900,6 +18924,9 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // what the field holds (the `pendfield` row below).
         : ~ s arg_froot ``
         : ~ s arg_vfroot ``
+        // An `inout` field target that owns storage: its address and type
+        // (`<ptr> <ty>`), for the callee that consumes it (below).
+        : ~ s arg_io_fld ``
         ? is_inout_arg
         { ? == bck_arg_tt TT_DOT
             {  // `inout` field target — `. obj field`.
@@ -18912,6 +18939,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
                 // (A field that holds storage: one a borrow can be taken from.)
                 : s __io_fty ? ( is_ptr_ty at ) ( nurl_str_slice at 0 - ( nurl_str_len at ) 1 ) ``
                 ? & != 0 g_borrowck | ( __is_handle_ty __io_fty ) ( __type_needs_drop __io_fty syms ) { = arg_froot __io_path } {}
+                ? & != 0 g_auto_drop_strings | ( __is_handle_ty __io_fty ) ( __type_needs_drop __io_fty syms ) { = arg_io_fld ( nurl_str_cat3 av ` ` __io_fty ) } {}
                 // (…and a view field by its path too: agora #590.)
                 ? & & & != 0 g_borrowck == 0 ( nurl_str_len arg_froot ) != 0 ( nurl_str_len __io_path ) == ( bck_walk_class __io_fty ) 2 { = arg_vfroot __io_path } {}
             }
@@ -19094,6 +19122,10 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             = arg_eff_tt ( __val_eff_tt bck_arg_tt )
             = arg_join_own ? | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST ( nurl_sym_get syms `__last_join_own__` ) ``
             = arg_join_ids ? & == 0 ( nurl_str_len arg_join_own ) | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST ( nurl_sym_get syms `__last_phi_idents__` ) ``
+            // (The bindings the join may select are all whole `inout`
+            // parameters: what it hands a `sink` on those paths is taken
+            // over, as `( eat p )` takes it — agora #567.)
+            = arg_join_io & | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST ( __all_inout syms ( nurl_sym_get syms `__last_phi_idents__` ) )
             = arg_lent ( mem_lent_cond syms cg at arg_eff_tt bck_arg_val )
             // (A call that may lend its result — by name, as a view, or on
             // some paths — for a value no copy can stand in for, h228.)
@@ -20151,6 +20183,24 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // Consumption is a whole-module fact, including transitive forward
         // calls. Record every parameter implication; codegen order is irrelevant.
         : b summary_callee & ! __callee_shadowed ( __summarised_callee syms fname call_name )
+        // An `inout` field target the callee consumes (`( f . h a )`, f
+        // handing its parameter to a `sink`) leaves its struct once the
+        // call returns: the field is emptied, on the same answer that clears
+        // the drop flag of a binding handed over that way (mem_arg_
+        // consumption). Left in place, the struct's own drop released it
+        // again (agora #567). After the call: the callee reads it through
+        // the address.
+        ? & != 0 ( nurl_str_len arg_io_fld ) | summary_callee ( str_has_index callee_sink arg_idx ) {
+            : s __iz_p ( str_first_word arg_io_fld )
+            : s __iz_t ( nurl_str_slice arg_io_fld + ( nurl_str_len __iz_p ) 1 - - ( nurl_str_len arg_io_fld ) ( nurl_str_len __iz_p ) 1 )
+            : ~ s __iz_c ( nurl_str_cat `true` `` )
+            ? ! ( str_has_index callee_sink arg_idx ) {
+                = __iz_c ( nurl_cg_reg cg )
+                ( emit_sink_flag_load ( nurl_str_cat `@.__nurl_sink.` ( nurl_str_int ( sink_flag call_name fname arg_idx ) ) ) __iz_c )
+            } {}
+            : s __iz_w ( nurl_str_cat4 `z|` __iz_c ( nurl_str_cat3 `|` ( __zero_if_request ( nurl_llty __iz_t ) ) `|` ) __iz_p )
+            = owned_arg_temps ? == 0 ( nurl_str_len owned_arg_temps ) __iz_w ( nurl_str_cat3 owned_arg_temps ` ` __iz_w )
+        } {}
         // A capture of a closure returned right here — its env keeps it for
         // the next call — or a payload or a part read out of one, handed
         // to a declared `sink`: the callee is handed a copy, as `^ x` in
@@ -20534,7 +20584,11 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             // what such an arm only lent, and its owner again. Copied on the
             // paths where the join lends (its published ownership,
             // `__last_join_own__`); one that cannot be copied is rejected.
-            ? & & | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST != 0 ( nurl_str_len arg_join_own ) ! ( seq arg_join_own `true` ) {
+            // (A path that selects a whole `inout` parameter hands it over
+            // as `( eat p )` does: arg_join_io, agora #567. The function
+            // consumes that parameter for its caller, which drops nothing;
+            // copied, the caller's value leaked.)
+            ? & & & | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST != 0 ( nurl_str_len arg_join_own ) ! ( seq arg_join_own `true` ) ! arg_join_io {
                 ? ( __clone_supported at syms ) {
                     : s __sjl ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print __sjl ) ( nurl_print ` = xor i1 ` ) ( nurl_print arg_join_own ) ( nurl_print `, 1\n` )
@@ -20555,7 +20609,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             // (…and one whose arms lend bindings on every path — `( eat ? c
             // u t )`, u and t owners: no ownership of its own is published,
             // and the callee released the buffer its owner still drops.)
-            ? & & | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST == 0 ( nurl_str_len arg_join_own ) != 0 ( nurl_str_len arg_join_ids ) {
+            ? & & & | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST == 0 ( nurl_str_len arg_join_own ) != 0 ( nurl_str_len arg_join_ids ) ! arg_join_io {
                 ? ( __clone_supported at syms ) { = av ( mem_emit_cloneif cg at av `1` ) } { ? ( __nc_drop_ty at ) { ( __nc_copy_die ( nurl_sym_get syms `__fn_self_name__` ) at ) } {} }
             } {}
             // An enum's payload, which the arm only borrows: a copy goes
@@ -20598,7 +20652,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // result over, as for a `sink` above.)
         : i __apm ? == bck_arg_tt TT_DOT ? != 0 ( nurl_str_len arg_ofcall ) 4 0
         ? == arg_eff_tt TT_LPAREN ? & & != 0 ( nurl_str_len arg_lent ) ! ( seq arg_lent `0` ) ! ( seq arg_lent `false` ) 1 0
-        ? | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST
+        ? & | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST ! arg_join_io
         ? & != 0 ( nurl_str_len arg_join_own ) ! ( seq arg_join_own `true` ) 2
         ? & == 0 ( nurl_str_len arg_join_own ) != 0 ( nurl_str_len arg_join_ids ) 3 0 0
         : b __apc & & & & & summary_callee != __apm 0 == 0 ( nurl_sym_len g_fn_compiled call_name )
