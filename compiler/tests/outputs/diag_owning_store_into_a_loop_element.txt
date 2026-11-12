@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_owning_store_into_a_loop_element.nu:16:13: error: field 'name' of 'p' is given a value that owns memory, but 'p' is a loop element: a '~' loop lends each element and binds a copy of it, so the store lands in that copy — the container keeps its old value — and nothing would release the new one. Replace the element in the container instead (an index loop and vec_put / vec_set), or build the new values into another Vec.
+        = . p name ( string_from `new, a name long enough for a heap buffer` )
+            ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

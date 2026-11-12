@@ -1,6 +1,9 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/borrow_escape_vec.nu:27:5: error: passing a value that references a stack binding by pointer to 'thread_spawn' — it escapes the current stack frame and dangles (move it to a heap-backed handle)
+compiler/tests/borrow_escape_vec.nu:28:5: error: passing a value that references a stack binding by pointer to 'thread_spawn' — it escapes the current stack frame and dangles (move it to a heap-backed handle)
     : !Thread ThreadErr t ( thread_spawn bump )
     ^
+compiler/tests/borrow_escape_vec.nu:40:13: warning: assignment to field 'n' of 'c' is lost: 'c' is a capture of this closure, by value — the body works on its own copy, made at each call, so the store is gone when the call returns and the binding outside never sees it. Declare the binding mutable (': ~ Counter c'), so the closure captures it by pointer, or have the closure return the new value.
+        = . c n + . c n 1
+            ^
 error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

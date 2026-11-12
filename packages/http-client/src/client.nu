@@ -747,7 +747,7 @@ $ `stdlib/core/slice.nu`
 // All transports share this owning response decoder. Malformed compressed
 // content is a protocol error; compressed output beyond the configured cap
 // is HcTooLarge. On failure the response is freed, never returned encoded.
-@ __hc_decode_response HttpClientImpl c HttpResponse r s method → !HttpResponse HttpClientErr {
+@ __hc_decode_response HttpClientImpl c sink HttpResponse r s method → !HttpResponse HttpClientErr {
     ? & > . c body_max 0 > ( vec_len [u] . r body ) . c body_max {
         ( http_response_free r )
         ^ @ !HttpResponse HttpClientErr { F HcTooLarge }

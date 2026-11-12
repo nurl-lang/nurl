@@ -26856,6 +26856,9 @@ unsafe @ gen_match i lex i syms i cg → s {
     ( nurl_sym_push syms )
     ( nurl_sym_def syms var_name elem_ty )
     ( nurl_sym_def syms ( nurl_str_cat var_name `__ptr` ) elem_ptr )
+    // (Its slot is a copy of the element: a field store into it lands
+    // nowhere the container sees — __fs_borrowed_copy_kind, agora #488.)
+    ( nurl_sym_def syms ( nurl_str_cat elem_ptr `__fe_copy` ) `1` )
     // …and it is the container's: a view of the element where it is, with
     // no owner slot of its own. Handed back or stored, it says whose it is
     // — the binding iterated, or the one whose field was (agora #635).
@@ -56329,6 +56332,8 @@ unsafe @ __replaces_note i syms s name s field → v {
     : b nested & == ( nurl_lex_type lex ) TT_DOT ( __nested_lvalue_ok lex syms )
     // Save object name before gen_expr consumes the token (needed for struct-by-value alloca lookup)
     : s obj_name ? ( is_ident_tok ( nurl_lex_type lex ) ) ( nurl_lex_val lex ) ``
+    : i __fs_ol ( nurl_lex_line lex )
+    : i __fs_oc ( nurl_lex_col lex )
     // (A binding a value block made, named after the block: agora #575.)
     ? != 0 g_vb_marks { ? != 0 ( nurl_str_len obj_name ) { ( __vb_gone_check lex syms obj_name ( nurl_lex_line lex ) ( nurl_lex_col lex ) ) } {} } {}
     ( __rp_note_write syms obj_name )
@@ -56358,7 +56363,7 @@ unsafe @ __replaces_note i syms s name s field → v {
     ? & != 0 ( nurl_str_len obj_name ) ! __fs_dtor_recv
     { : s __fs_oty ( nurl_sym_get syms obj_name )
         : i __fs_olen ( nurl_str_len __fs_oty )
-        ? & & & & & & != 0 ( nurl_sym_len2 syms obj_name `__param` )
+        ? & & & & & & & != 0 ( nurl_sym_len2 syms obj_name `__param` )
         == 0 ( nurl_sym_len2 syms obj_name `__inout` )
         // A param with no alloca behind it has nowhere to store at all;
         // that store is a hard error further down and must not also
@@ -56368,6 +56373,9 @@ unsafe @ __replaces_note i syms s name s field → v {
         == ( nurl_str_get __fs_oty 0 ) 37
         != ( nurl_str_get __fs_oty - __fs_olen 1 ) 42
         ! ( __ret_carries_type g_cur_ret_llty __fs_oty )
+        // (A field that owns memory is refused below, in its own words:
+        // __fs_borrowed_copy_kind, agora #643.)
+        ! ( __fs_field_owns syms __fs_oty ( nurl_lex_peek_val lex ) )
         { ( warn lex ( nurl_str_cat3
             `assignment to a field of by-value parameter '` obj_name
             ( nurl_str_cat3 `' is not visible to the caller — a struct parameter is passed by value, so the store lands in this function's own copy. Handle-typed fields are different: pushing into a ( Vec T ) field, or writing through a String / Json field, IS seen by the caller, because those share a control block — which is exactly why a scalar field beside them looks like it should be too. Declare the parameter 'inout ` obj_name `' if the caller should see the write, return the new value, or move the state into a handle-typed field.` ) ) ) }
@@ -56849,6 +56857,16 @@ unsafe @ __replaces_note i syms s name s field → v {
                 // (An owned field of an `inout` parameter replaced: h295.)
                 ? ( seq ( nurl_sym_get2 syms obj_name `__inout` ) `1` ) {
                     ? ( __type_needs_drop ftype syms ) { ( __replaces_note syms obj_name fname ) } {}
+                } {}
+                // (An owning value stored into a borrowed copy: refused, with
+                // the way to say what was meant — agora #488, #643.)
+                // A value that owns nothing is lost there without a word:
+                // said, as a by-value parameter's is above.
+                : i __bck_k ( __fs_borrowed_copy_kind syms obj_name )
+                ? != __bck_k 0 {
+                    ? ( __type_needs_drop ftype syms ) { ( die_pos lex __fs_ol __fs_oc ( __fs_borrowed_copy_msg __bck_k obj_name fname ( llvm_to_nurl pt ) ) ) } {
+                        ? != __bck_k 1 { ( warn_pos lex __fs_ol __fs_oc ( __fs_borrowed_copy_lost __bck_k obj_name fname ( llvm_to_nurl pt ) ) ) } {}
+                    }
                 } {}
                 ( __clo_note_fassigned syms obj_name ftype )
                 ( __clo_cond_off_field obj_name ftype )
@@ -73448,7 +73466,10 @@ unsafe @ __alloca_struct_params i syms i cg → v {
                     ( nurl_print `  store ` ) ( nurl_print ( nurl_llty ptype ) ) ( nurl_print ` %` )
                     ( nurl_print pname ) ( nurl_print `, ` ) ( nurl_print ( nurl_llty ptype ) )
                     ( nurl_print `* ` ) ( nurl_print pp ) ( nurl_print `\n` )
-                    ( nurl_sym_def syms ( nurl_str_cat pname `__ptr` ) pp ) }
+                    ( nurl_sym_def syms ( nurl_str_cat pname `__ptr` ) pp )
+                    // (The parameter's own copy: a binding of its name in
+                    // the body has a slot of its own — __fs_borrowed_copy_kind.)
+                    ( nurl_sym_def syms ( nurl_str_cat pp `__pslot` ) `1` ) }
                 {} }
             {  // An enum that is a `% Drop` impl's receiver: a slot for its
                 // glue (the payloads, mem_emit_drop_glue) and for the
@@ -80790,6 +80811,64 @@ unsafe @ __clo_take_capture i syms i cg s name → v {
     ? ! | ( __type_needs_drop ftype syms ) ( __is_closure_ty ftype ) { ^ v } {}
     : s cur ( nurl_sym_get syms `__clo_fassigned__` )
     ? ! ( str_contains_word cur root ) { ( nurl_sym_set_deep syms `__clo_fassigned__` ( nurl_str_cat3 cur ` ` root ) ) } {}
+}
+
+// Is `obj` a COPY of a value this frame only borrows — a field store into it
+// lands where its owner never looks, and nothing releases an owning value
+// stored there (agora #488, #643)? 1: a by-value (`in`) parameter — its
+// own copy of the caller's value (§7.2); 2: a `~` loop's element — a copy
+// of the container's element, which the loop borrows (§5.4); 3: a closure
+// body's by-value capture — the body's copy, made at each call. 0: none of
+// those (an owned local, an `inout` or `sink` parameter, a by-pointer
+// capture, a destructor's receiver).
+@ __fs_borrowed_copy_kind i syms s obj → i {
+    ? == 0 ( nurl_str_len obj ) { ^ 0 } {}
+    : s op ( nurl_sym_get2 syms obj `__ptr` )
+    // (A closure body's capture: its slot says whose copy it is.)
+    ? & != 0 ( nurl_str_len op ) != 0 ( nurl_sym_len2 syms op `__capname` ) {
+        ^ ? ( seq ( nurl_sym_get2 syms obj `__captured_byref` ) `1` ) 0 3
+    } {}
+    ? & != 0 ( nurl_str_len op ) != 0 ( nurl_sym_len2 syms op `__fe_copy` ) { ^ 2 } {}
+    ? & & & & != 0 ( nurl_str_len op ) != 0 ( nurl_sym_len2 syms op `__pslot` ) ! ( seq ( nurl_sym_get2 syms obj `__inout` ) `1` ) == 0 ( nurl_sym_len2 syms obj `__sinkp` ) == 0 ( nurl_str_len g_drop_glue_ty ) { ^ 1 } {}
+    ^ 0
+}
+
+// Does field `fname` of struct type `oty` (`%T`) own memory?
+@ __fs_field_owns i syms s oty s fname → b {
+    : i n ( nurl_str_len oty )
+    ? | < n 2 != ( nurl_str_get oty 0 ) 37 { ^ F } {}
+    : s ft ( nurl_sym_get2 syms ( nurl_str_slice oty 1 - n 1 ) ( nurl_str_cat3 `__` fname `__type` ) )
+    ? == 0 ( nurl_str_len ft ) { ^ F } {}
+    ^ ( __type_needs_drop ft syms )
+}
+
+// …and the warning for a store of a value that owns nothing into one: the
+// write is lost where the owner looks (a parameter has its own, above).
+@ __fs_borrowed_copy_lost i kind s obj s fname s ty → s {
+    : s head ( nurl_str_cat4 `assignment to field '` fname `' of '` ( nurl_str_cat obj `' is lost: '` ) )
+    ? == kind 2 {
+        ^ ( nurl_str_cat4 head obj `' is a loop element — a '~' loop binds a copy of each element, so the store lands in that copy and the container keeps its old value. `
+        `Replace the element in the container instead (an index loop and vec_put / vec_set), or build the new values into another Vec.` )
+    } {}
+    ^ ( nurl_str_cat4 head obj ( nurl_str_cat `' is a capture of this closure, by value — the body works on its own copy, made at each call, so the store is gone when the call returns and the binding outside never sees it. Declare the binding mutable (': ~ ` ty ) ( nurl_str_cat3 ` ` obj `'), so the closure captures it by pointer, or have the closure return the new value.` ) )
+}
+
+@ __fs_borrowed_copy_msg i kind s obj s fname s ty → s {
+    : s head ( nurl_str_cat4 `field '` fname `' of '` ( nurl_str_cat3 obj `' is given a value that owns memory, but '` obj ) )
+    ? == kind 1 {
+        : s why ( nurl_str_cat3 `' is a by-value parameter: the store lands in this function's own copy of the caller's ` ty `, the caller never sees it, and nothing would release the new value. ` )
+        : s fix1 ( nurl_str_cat3 `Take it 'inout ` obj `' if the caller should see the new value, or 'sink ` )
+        : s fix2 ( nurl_str_cat3 obj `' if this function owns the value (the old one is released, and the ` ( nurl_str_cat ty ` can be handed back with ^).` ) )
+        ^ ( nurl_str_cat4 head why fix1 fix2 )
+    } {}
+    ? == kind 2 {
+        : s why ( nurl_str_cat `' is a loop element: a '~' loop lends each element and binds a copy of it, so the store lands in that copy — the container keeps its old value — and nothing would release the new one. ` `` )
+        : s fix `Replace the element in the container instead (an index loop and vec_put / vec_set), or build the new values into another Vec.`
+        ^ ( nurl_str_cat3 head why fix )
+    } {}
+    : s why ( nurl_str_cat `' is a capture of this closure, by value: the body works on its own copy, made at each call, so the binding outside never sees the store and nothing would release the new value. ` `` )
+    : s fix ( nurl_str_cat4 `Declare the binding mutable (': ~ ` ty ` ` ( nurl_str_cat obj `'), so the closure captures it by pointer and the store lands in it, or have the closure return the new value.` ) )
+    ^ ( nurl_str_cat3 head why fix )
 }
 
 // The slot a capture lives in inside the closure body: its env's copy (by
