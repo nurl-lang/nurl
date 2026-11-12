@@ -2440,6 +2440,10 @@ unsafe @ __fn_io_add s name → v { = g_fn_io_names ( nurl_str_cat3 g_fn_io_name
 : ~ i g_sxe_arc -1
 // Whether any borrow of this function's walk is one of a payload (`ab_`).
 : ~ i g_bck_ab_any 0
+// …and whether any owner of its walk holds views of one (`ah_`): a Vec,
+// a map, a struct a payload view was stored into. A copy of what it holds,
+// lent back out of it, is a view of that payload too (agora #682).
+: ~ i g_bck_ah_any 0
 // The source expression of the call a `match` row matches (gen_match).
 : ~ s g_bck_match_sx ``
 // Whether any parameter is run on several threads at once (`syncrun##`,
@@ -37371,6 +37375,46 @@ unsafe @ __pay_outside i syms s helds s ty b hv → b {
     ^ ( bck_path_root ( nurl_str_to_int ws ) )
 }
 
+// An owner a view of an Arc's payload went into — a Vec it was pushed
+// into, a map, a struct a field of which was given it, an owner bound to
+// a value holding one — holds a view of that payload (`ah_`: the Arc, as
+// g_sxe_arc names it). It is not one itself: pushing more into it changes
+// the owner, not the payload. A copy of what it holds, lent back out of it
+// (an element, a `??` payload, a field), is one (agora #682).
+@ __ah_mark i root i arc → v {
+    ( bck_put ( bck_bkey `ah_` ( nurl_str_int root ) ) ( nurl_str_int arc ) )
+    = g_bck_ah_any 1
+}
+
+// …raising g_sxe_arc for a copy of what the owner whose root is `rs` holds.
+@ __ah_raise s rs → v {
+    ? | == 0 g_bck_ah_any != g_sxe_arc -1 { ^ v } {}
+    : s ah ( nurl_sym_get g_bck ( bck_bkey `ah_` rs ) )
+    ? != 0 ( nurl_str_len ah ) { = g_sxe_arc ( nurl_str_to_int ah ) } {}
+}
+
+// …for a copy of what any of the owners among sources `srcs` (bck_sx_ev's
+// ids, `^id`, `~id`) holds.
+@ __ah_raise_srcs s srcs → v {
+    ? | == 0 g_bck_ah_any != g_sxe_arc -1 { ^ v } {}
+    : ~ s rest ( __src_plain srcs )
+    ~ & != 0 ( nurl_str_len rest ) == g_sxe_arc -1 {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ( __is_int_lit w ) { ( __ah_raise ( nurl_str_int ( bck_path_root ( nurl_str_to_int w ) ) ) ) } {}
+    }
+}
+
+// Can what `cal` hands back hold a view (its declared result; unknown: it
+// may)?
+@ __ret_may_hold_view s cal → b {
+    : s rt ( nurl_sym_get g_root_syms cal )
+    ? == 0 ( nurl_str_len rt ) { ^ T } {}
+    = g_thv_precise 1
+    : b hv ( __ty_holds_view ( nurl_llty rt ) 0 )
+    = g_thv_precise 0
+    ^ hv
+}
+
 // The diagnostic for a change to an Arc's payload (docs/MEMORY.md §6.5).
 @ __arc_frozen_msg s what → s {
     ^ ( nurl_str_cat3 `this call ` what
@@ -41464,6 +41508,9 @@ unsafe @ bck_sx_skip s e → v {
     : s deps ( __src_mark2 ( nurl_sym_get g_bck ( bck_bkey `vds_` rs ) ) ( nurl_sym_get g_bck ( bck_bkey `vdi_` rs ) ) ( nurl_sym_get g_bck ( bck_bkey `vdh_` rs ) ) ? == 0 g_bck_hn_any `` ( nurl_sym_get g_bck ( bck_bkey `vdn_` rs ) ) )
     : i vr ( bck_st_raw st r )
     ? | == vr BCK_INVALID == vr BCK_MAYBE_ALIAS { ^ ( nurl_str_cat `` `` ) } {}
+    // (A view of an Arc's payload among what it holds, `ah_`: so is the
+    // copy, agora #682.)
+    ( __ah_raise rs )
     // (A view — a binding of one, a view parameter — that is a field of an
     // owner copied whole, g_sxe_hctn, is copied itself: the copy points
     // where this one does, `( mem_dup @ Tok { Word p } )`.)
@@ -41584,6 +41631,10 @@ unsafe @ __sx_view_at s st s e → b {
         : s ab ( nurl_sym_get g_bck ( bck_bkey `ab_` rs ) )
         ? != 0 ( nurl_str_len ab ) { = g_sxe_arc ( nurl_str_to_int ab ) } {}
     } {}
+    // (…and a field of an owner that holds one, `ah_`: `. x w` of a struct
+    // given a payload view, agora #682. Not the owner itself: what is
+    // pushed into it, or taken out, changes it, not the payload.)
+    ? != id r { ( __ah_raise rs ) } {}
     // (…and what the views it holds point into: bck_dep_set.)
     : s deps ( __src_mark2 ( nurl_sym_get g_bck ( bck_bkey `vds_` rs ) ) ( nurl_sym_get g_bck ( bck_bkey `vdi_` rs ) ) ( nurl_sym_get g_bck ( bck_bkey `vdh_` rs ) ) ? == 0 g_bck_hn_any `` ( nurl_sym_get g_bck ( bck_bkey `vdn_` rs ) ) )
     // (A scalar, a closure that owns its env — or one borrowed out of an
@@ -41832,6 +41883,14 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 // (What a callee lends through an Arc parameter is a view
                 // of the payload, §6.5.)
                 ? & & != 0 g_arcp_any == g_sxe_arc -1 ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `arcp##` w ) js ) { = g_sxe_arc ( __sxe_arc_id __lj ) ( __frz_mark w js ) } {}
+                // (…and what it lends out of an owner that holds views of
+                // one, `ah_`, where its result can hold a view: it may be one
+                // of those — `( vec_at [( Slice T )] ws 0 )`, a helper's
+                // element of its parameter; agora #682. As a binding of it
+                // is, bck_borrow_begin.)
+                ? & != 0 g_bck_ah_any == g_sxe_arc -1 {
+                    ? ( __ret_may_hold_view w ) { ( __ah_raise_srcs __lj ) } {}
+                } {}
                 = out ( __word_union out __lj )
             } { ? ( __fn_retcap_arg w js ) {
                     // An argument the closure it returns took over (`retcap`):
@@ -42680,6 +42739,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 // (…and its fields, if a callee took one of the name's before.)
                 ? != 0 g_bck_fmv_any { = st ( __bck_fmv_revive st ( bck_field_int rec 1 ) ) } {}
                 ? != 0 g_bck_ab_any { ( bck_put ( bck_bkey `ab_` ( bck_field rec 1 ) ) `` ) } {}
+                ? != 0 g_bck_ah_any { ( bck_put ( bck_bkey `ah_` ( bck_field rec 1 ) ) `` ) } {}
                 ? & != 0 g_bck_has_cv & == 0 ( nurl_sym_len g_bck ( bck_bkey `cc_` ( bck_field rec 1 ) ) ) == 0 ( nurl_sym_len g_bck ( bck_bkey `pp_` ( bck_field rec 1 ) ) ) { ( bck_put ( bck_bkey `cv_` ( bck_field rec 1 ) ) `` ) } {}
                 ( bck_nh_mark rec )
                 // A view (an address into storage another binding owns) —
@@ -42749,6 +42809,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 ( bck_partner_unlink asid )
                 = st ( bck_st_set st asid BCK_OWNED )
                 ? != 0 g_bck_ab_any { ( bck_put ( bck_bkey `ab_` ( nurl_str_int asid ) ) `` ) } {}
+                ? != 0 g_bck_ah_any { ( bck_put ( bck_bkey `ah_` ( nurl_str_int asid ) ) `` ) } {}
                 ? & != 0 g_bck_has_cv & == 0 ( nurl_sym_len g_bck ( bck_bkey `cc_` ( bck_field rec 1 ) ) ) == 0 ( nurl_sym_len g_bck ( bck_bkey `pp_` ( bck_field rec 1 ) ) ) { ( bck_put ( bck_bkey `cv_` ( bck_field rec 1 ) ) `` ) } {}
                 ( bck_nh_mark rec )
                 // A view (an address into storage another binding owns) —
@@ -42957,6 +43018,11 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 ? != 0 g_bck_ab_any {
                     : s xab ( nurl_sym_get g_bck ( bck_bkey `ab_` ( nurl_str_int ( bck_path_root ( nurl_str_to_int xsn ) ) ) ) )
                     ? != 0 ( nurl_str_len xab ) { ( bck_put ( bck_bkey `ab_` xdn ) xab ) } {}
+                } {}
+                // (…or what holds one, agora #682.)
+                ? != 0 g_bck_ah_any {
+                    : s xah ( nurl_sym_get g_bck ( bck_bkey `ah_` ( nurl_str_int ( bck_path_root ( nurl_str_to_int xsn ) ) ) ) )
+                    ? != 0 ( nurl_str_len xah ) { ( bck_put ( bck_bkey `ah_` xdn ) xah ) } {}
                 } {}
                 : ~ s xrest ? == g_bck_sx_gen g_bck_gen ( nurl_sym_get g_bck ( bck_sx_key xsn ) ) ``
                 ~ != 0 ( nurl_str_len xrest ) {
@@ -43363,7 +43429,14 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                         // (Into a closure's capture or `inout` parameter: refused.)
                         : s vcc ? vcx ( nurl_str_cat `` `` ) ( nurl_sym_get g_bck ( bck_bkey `cc_` ( nurl_str_int ( bck_path_root ( nurl_str_to_int vc ) ) ) ) )
                         = g_bck_cv_leaf ? | == 0 ( nurl_str_len vcc ) ( seq vcc `v` ) 0 1
+                        // (…a view of an Arc's payload among what it gets: the
+                        // traces below raise g_sxe_arc, and the holders are
+                        // marked holding one, `ah_`, agora #682.)
+                        : i varc0 g_sxe_arc
+                        = g_sxe_arc -1
                         : s vs0 ? vhs ( __src_drop_handles ( bck_sx_arg_held st ( bck_field rec 8 ) vcal vk vheld ) ) ? vbuf ( bck_sx_arg_sources st ( bck_field rec 8 ) ) ( __src_drop_handles ( bck_sx_sources st ( bck_field rec 8 ) -1 ) )
+                        : i varc g_sxe_arc
+                        = g_sxe_arc varc0
                         // (An element pair's: the argument's elements, `^`.)
                         : s vs ? & vbe ! ( seq vs0 `*` ) ? vbh ( __word_union vs0 ( __src_as_elems ( bck_sx_arg_sources st ( bck_field rec 8 ) ) ) ) ( __src_as_elems vs0 ) ( nurl_str_cat vs0 `` )
                         = g_bck_cv_leaf 0
@@ -43417,6 +43490,15 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                                 : s vhs ( str_first_word vholders ) = vholders ( str_skip_word vholders )
                                 : i vroot ( nurl_str_to_int vhs )
                                 ( bck_dep_add vroot vs )
+                                // (A field given one, `= . x w v`, lands in the
+                                // binding's own bytes: a struct of views holding
+                                // it is one, as its literal would make it.)
+                                ? != varc -1 {
+                                    ? ( seq vcal `=.` ) {
+                                        ( bck_put ( bck_bkey `ab_` ( nurl_str_int ( bck_path_root vroot ) ) ) ( nurl_str_int varc ) )
+                                        = g_bck_ab_any 1
+                                    } { ( __ah_mark ( bck_path_root vroot ) varc ) }
+                                } {}
                                 ? != 0 ( nurl_str_len vsin ) {
                                     : s vsk ( bck_bkey `vsv_` ( nurl_str_int ( bck_path_root vroot ) ) )
                                     ? | ( seq vsin `1` ) == 0 ( nurl_sym_len g_bck vsk ) { ( bck_put vsk vsin ) } {}
@@ -43888,13 +43970,17 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
     ? ( bck_holds_nothing bids ) { ^ st } {}
     = g_bck_has_borrow 1
     : ~ s set ``
-    // (A borrow of a borrow of an Arc's payload is one too, §6.5.)
-    ? & != 0 g_bck_ab_any == g_sxe_arc -1 {
+    // (A borrow of a borrow of an Arc's payload is one too, §6.5 — and a
+    // borrow of an owner that holds one, `ah_`: what it reaches may be a
+    // copy of that view, a helper's element of the owner; agora #682.)
+    ? & | != 0 g_bck_ab_any != 0 g_bck_ah_any == g_sxe_arc -1 {
         : ~ s ar ( nurl_str_cat srcs `` )
         ~ & != 0 ( nurl_str_len ar ) == g_sxe_arc -1 {
             : s aw ( str_first_word ar ) = ar ( str_skip_word ar )
-            : s ab ( nurl_sym_get g_bck ( bck_bkey `ab_` ( nurl_str_int ( bck_path_root ( nurl_str_to_int aw ) ) ) ) )
+            : s ars ( nurl_str_int ( bck_path_root ( nurl_str_to_int aw ) ) )
+            : s ab ( nurl_sym_get g_bck ( bck_bkey `ab_` ars ) )
             ? != 0 ( nurl_str_len ab ) { = g_sxe_arc ( nurl_str_to_int ab ) } {}
+            ( __ah_raise ars )
         }
     } {}
     // Flattened to owners: a borrow of a borrow borrows from what that one
@@ -46106,6 +46192,9 @@ unsafe @ __bck_rv_self_tie i wid s cals → v {
             : s rs ( nurl_str_int r )
             ? == BCK_BORROWED_SHARED ( bck_st_get st r ) { = out ( __word_union out ( nurl_sym_get g_bck ( bck_bkey `bs_` rs ) ) ) } {}
             = out ( __word_union out ( nurl_sym_get g_bck ( bck_bkey `vds_` rs ) ) )
+            // (…a view of an Arc's payload among them, `ah_`: the value may
+            // be a copy of it, agora #682.)
+            ( __ah_raise rs )
         } {}
     }
     ^ out
@@ -46152,6 +46241,10 @@ unsafe @ __bck_rv_self_tie i wid s cals → v {
             } {}
         } {}
         ( bck_dep_set wid dsrcs )
+        // (A value holding a view of an Arc's payload — a helper's that
+        // builds one over its Arc parameter, a copy of an owner holding one:
+        // the owner holds it, agora #682.)
+        ? != g_sxe_arc -1 { ( __ah_mark wid g_sxe_arc ) } {}
         ^ out
     } {}
     ? != 0 g_bck_has_deps { ( bck_dep_clear wid ) } {}
@@ -46341,6 +46434,8 @@ unsafe @ __bck_row_sl s rec → s {
             : s ab ( nurl_sym_get g_bck ( bck_bkey `ab_` ( nurl_str_int wr ) ) )
             ? != 0 ( nurl_str_len ab ) { = g_sxe_arc ( nurl_str_to_int ab ) } {}
         } {}
+        // (…or of an owner holding one, `ah_`, agora #682.)
+        ( __ah_raise ( nurl_str_int wr ) )
         ? ! ( bck_dead_state v ) {
             : ~ s add ? == v BCK_BORROWED_SHARED ( nurl_sym_get g_bck ( bck_bkey `bs_` ( nurl_str_int wr ) ) ) ( nurl_str_cat w `` )
             // (…and the sources the binding's views depend on — a sibling
@@ -50484,6 +50579,9 @@ unsafe @ __bck_body_defers s st i p i line → s {
                             ? ! ( seq msr `*` ) { = lsrc ( __word_union lsrc ( __src_plain msr ) ) } {}
                         } {}
                     } {}
+                    // (Lent out of an owner that holds views of an Arc's
+                    // payload, `ah_`: a view of it, agora #682.)
+                    ( __ah_raise_srcs lsrc )
                     ? isview { = lsrc ( __vpay_srcs state lsrc ) } {}
                 } {}
                 // `&`: decided now, every summary final. Out of a call
@@ -50519,6 +50617,7 @@ unsafe @ __bck_body_defers s st i p i line → s {
                         // the call's arguments reach is what it may hold views of (hv_deps,
                         // below), not what it is lent out of.)
                         ? & ! isview ( mem_ret_owned_always g_root_syms callee ( bck_generic_base callee ) ) { = lsrc `` } {}
+                        ( __ah_raise_srcs lsrc )
                         ? isview { = lsrc ( __vpay_srcs state lsrc ) } {}
                         // (A payload that holds views, of a call's result:
                         // what that result holds, by the call's own answers
@@ -50630,7 +50729,12 @@ unsafe @ __bck_body_defers s st i p i line → s {
                 ? != 0 g_bck_has_borrow { ( bck_put_bf `bs_` ( nurl_str_int id ) `` ) } {}
                 // (One that holds views holds its scrutinee's, from this run
                 // on: agora #338.)
-                ? ishv { ( bck_dep_set id hv_deps ) } {}
+                ? != 0 g_bck_ah_any { ( bck_put ( bck_bkey `ah_` ( nurl_str_int id ) ) `` ) } {}
+                ? ishv {
+                    ( bck_dep_set id hv_deps )
+                    // (…views of an Arc's payload among them, agora #682.)
+                    ? & != g_sxe_arc -1 ! lent { ( __ah_mark id g_sxe_arc ) } {}
+                } {}
                 // (…and its fields: an earlier arm's payload of the same name
                 // may have had one taken, agora #280.)
                 ? != 0 g_bck_fmv_any { = entry ( __bck_fmv_revive entry id ) } {}
@@ -52237,6 +52341,7 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     ? != 0 g_bck_inp_any { ( bck_put `inp` `` ) = g_bck_inp_any 0 } {}
     ( bck_put `pml` `` )
     = g_bck_ab_any 0
+    = g_bck_ah_any 0
     = g_bck_nch_any 0
     = g_bck_hn_any 0
     = g_bck_rva_any 0
