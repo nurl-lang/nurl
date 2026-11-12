@@ -40,7 +40,9 @@ Two kinds of fact, both checked here (`check.sh` prints their axioms):
   `sink` argument holding them (`glueS`, `main10`).  Agora #750: so may an
   enum with glue (`ofnV`, of `sum DT (slice int)`; `main12`, its view
   variant), and a struct whose glue runs its own `% Drop` impl first
-  (`implS`, `glueS2`; `main13`).
+  (`implS`, `glueS2`; `main13`).  Agora #782: a `Vec` of such view-holding
+  structs, its `letd` recording the view of the older binding up front
+  (`main14`, with `memory_safe` and `no_leak_end`).
   A2-drop.3c and 3d: no block's payload and no environment of a closure
   that does not drop (Agora #609: of a class other than `dropd`) holds
   a destructor value (`A2.Dtor.pkgs_env_dtor_free`, `blk_pkgs_env_dtor_free`,
@@ -406,7 +408,7 @@ theorem scopeD_panic_drains {P : Prog} {x : Var} {f : Nat} {m m1 : Mem} {s : Stm
 
 /-- A2-drop.3b: what a typed `letd` binds: a destructor value (a struct or
     an enum made here, or a value of a destructor type moved in), or a
-    `Vec` of destructor values, whose elements hold no views (`LetdTy`); its
+    `Vec` of destructor values (`LetdTy`; Agora #782: whose elements may hold views); its
     scope is a destructor frame of that type (`scopeD_end_runs_dtor`,
     `scopeD_end_drains`).  Agora #616: a value of ANOTHER destructor type
     `Ty.dtor g t` moves in only where that is `g`'s drop (`LetdFn`): `g` is
@@ -485,7 +487,7 @@ theorem withElem_dtor_free {P : Prog} {Γ Δ : Ctx} {F : List Var} {v x : Var} {
 
 /-- A2-drop.3b: a typed destructor frame's binding, in the context the frame
     is typed in: an owner of the destructor type `Ty.dtor f t`, or of a `Vec`
-    of such values whose elements hold no views; `f` is a `DtorOK` destructor
+    of such values (Agora #782: whose elements may hold views); `f` is a `DtorOK` destructor
     of `Ty.dtor f t`, a struct's or an enum's. -/
 theorem scopeD_typed {P : Prog} {Γ Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {s : Stmt}
     (h : StmtT P Γ F (.scopeD x f s) Δ) :
@@ -3079,5 +3081,212 @@ theorem enum_take_refused {Γ Γ' : Ctx} {F : List Var} {E E0 : Entry} {f : Nat}
       rcases hty with hty | ⟨g, hty, hd⟩
       · cases hty
       · cases hty; rw [hb] at hd; cases hd
+
+/-! ### A `Vec` of destructor values that hold views of an older binding (Agora #782)
+
+`: s ( new int )  : v ( view s )  : a 1  : b 2  :drop c ( pair a b )
+:drop p ( pair c v )  :drop w ( vec_new GSD )  ( vec_push w p )`: `main10`'s
+struct, which views the older binding `s`, moves into a `Vec` bound by
+`letd` at `vec GSD`.  The `Vec`'s binding records that view up front
+(`HeldUp`: a view of `s`, a root bound before it): it is armed
+(`Ty.dtorViews`), so nothing ends `s` while it lives, and the push gains it
+no view (`StmtT.push`).  Its frame's end drains it (`Step.scopeDDrain`),
+each element moved out to a `letd` armed with that view, whose frame moves
+it into its glue `glueS`. -/
+
+def main14 : Stmt :=
+  .letv 0 (.new .int) (.letv 1 (.view 0) (.letv 2 (.expr (.lit 1)) (.letv 3 (.expr (.lit 2))
+    (.letd 4 0 (.pair 2 3) (.letd 5 8 (.pair 4 1) (.letd 6 8 (.new GSD) (.push 6 5)))))))
+
+/-- The witness's contexts: no borrowed parameter, and each binding that
+    runs a destructor or is `letd`'s is one of `A`, viewing in memory only
+    roots of `R`. -/
+def Calm (A R : List Var) (Γ : Ctx) : Prop :=
+  ∀ v E, Γ v = some E → E.mode ≠ .rootb ∧ ((E.dtor = true ∨ E.dbind = true) →
+    v ∈ A ∧ ∀ d ∈ E.vdeps, d.kind.isName = false → d.root ∈ R)
+
+theorem calm_of_noRootb {Γ : Ctx} (h : NoRootb Γ) (A R : List Var) : Calm A R Γ := fun v E hv => by
+  obtain ⟨hm, hd, hb⟩ := h v E hv
+  exact ⟨hm, fun h' => by rw [hd, hb] at h'; simp at h'⟩
+
+theorem Calm.noRootb {R : List Var} {Γ : Ctx} (h : Calm [] R Γ) : NoRootb Γ := fun v E hv => by
+  obtain ⟨hm, h'⟩ := h v E hv
+  refine ⟨hm, ?_, ?_⟩
+  · cases hd : E.dtor
+    · rfl
+    · exact absurd (h' (Or.inl hd)).1 (by simp)
+  · cases hd : E.dbind
+    · rfl
+    · exact absurd (h' (Or.inr hd)).1 (by simp)
+
+theorem Calm.setE {A R : List Var} {Γ : Ctx} (h : Calm A R Γ) {x : Var} {E : Entry}
+    (hm : E.mode ≠ .rootb)
+    (hE : (E.dtor = true ∨ E.dbind = true) → x ∈ A ∧ ∀ d ∈ E.vdeps, d.kind.isName = false → d.root ∈ R) :
+    Calm A R (A2.setE Γ x E) := by
+  intro v Ev hv
+  by_cases hvx : v = x
+  · subst hvx; simp only [A2.setE, upd_same, Option.some.injEq] at hv; subst hv; exact ⟨hm, hE⟩
+  · simp only [A2.setE, upd_ne _ _ hvx] at hv; exact h v Ev hv
+
+theorem Calm.kill {A R : List Var} {Γ : Ctx} (h : Calm A R Γ) (e : Eff) (hv : Bool) (x : Var) :
+    Calm A R (A2.kill e hv x Γ) := by
+  intro v E hE
+  simp only [A2.kill] at hE
+  cases hg : Γ v with
+  | none => rw [hg] at hE; cases hE
+  | some E0 =>
+    rw [hg] at hE; simp only [Option.map_some, Option.some.injEq] at hE; subst hE
+    obtain ⟨hm, h'⟩ := h v E0 hg
+    rw [killE_mode, killE_dtor, killE_dbind, killE_vdeps]; exact ⟨hm, h'⟩
+
+theorem Calm.exitScope {A R : List Var} {Γ : Ctx} (h : Calm A R Γ) (x : Var) (A' : List Var)
+    (hA : ∀ v ∈ A, v ≠ x → v ∈ A') : Calm A' R (A2.exitScope x Γ) := by
+  intro v E hv
+  by_cases hvx : v = x
+  · subst hvx; simp [A2.exitScope] at hv
+  · simp only [A2.exitScope, upd_ne _ _ hvx] at hv
+    obtain ⟨hm, h'⟩ := (h.kill .replace false x) v E hv
+    exact ⟨hm, fun hd => ⟨hA v (h' hd).1 hvx, (h' hd).2⟩⟩
+
+theorem Calm.noPin {A R : List Var} {Γ : Ctx} (h : Calm A R Γ) (x : Var) : NoPin Γ x :=
+  fun p E hp hm => absurd hm (h p E hp).1
+
+theorem Calm.dtorSafe {A R : List Var} {Γ : Ctx} (h : Calm A R Γ) {x : Var} (hx : x ∉ R) (e : Eff)
+    (hv : Bool) : DtorSafe Γ e hv x := by
+  intro v E hE hd _
+  have hR := ((h v E hE).2 (Or.inl hd)).2
+  cases hg : (E.ty != .int || E.mode == .rootb)
+  · simp [hitsMem, hg]
+  · unfold hitsMem; rw [hg, Bool.true_and, List.any_eq_false]
+    intro d hdd hc
+    simp only [Bool.and_eq_true, beq_iff_eq, Bool.not_eq_true'] at hc
+    exact hx (by rw [← hc.1.1]; exact hR d hdd hc.1.2)
+
+theorem Calm.dbindSafe {A R : List Var} {Γ : Ctx} (h : Calm A R Γ) {x : Var} (hx : x ∉ R) :
+    DbindSafe Γ x :=
+  fun v E hE hd _ _ d hdd hnm hdx => hx (by rw [← hdx]; exact ((h v E hE).2 (Or.inr hd)).2 d hdd hnm)
+
+theorem Calm.endOK {A R : List Var} {Γ : Ctx} (h : Calm A R Γ) {x : Var} (hx : x ∉ R) : EndOK Γ x :=
+  ⟨h.noPin x, h.dtorSafe hx _ _, h.dbindSafe hx⟩
+
+theorem main14_typed : ∃ Δ, StmtT P (fun _ => none) [] main14 Δ := by
+  -- as in `main10`, up to the struct's binding
+  let K1 : Ctx := A2.setE (fun _ => none) 0 EN0
+  have hK1 : NoRootb K1 := noRootb_empty.setE (by simp [EN0])
+  let K2 : Ctx := A2.setE K1 1 EVw
+  have hK2 : NoRootb K2 := hK1.setE (by simp [EVw])
+  let K3 : Ctx := A2.setE K2 2 intE
+  let K4 : Ctx := A2.setE K3 3 intE
+  have hK4 : NoRootb K4 := (hK2.setE (by simp [intE])).setE (by simp [intE])
+  have hview : RhsT K1 [] (.view 0) EVw K1 :=
+    RhsT.view (E := EN0) (t := .int) (by simp [K1, A2.setE]) rfl rfl rfl
+  let ED : Entry := Entry.arm { EP with ty := DT, held := [] }
+  have hEDe : ED = ⟨DT, .own, true, [], [], false, false⟩ := by
+    simp [ED, EP, Entry.arm, DT, T, Ty.dtorViews, Ty.holdsView]
+  have hpair : RhsT K4 [] (.pair 2 3) EP K4 :=
+    RhsT.pair (Ey := intE) (Ez := intE) (by simp [K4, K3, A2.setE, upd]) rfl PushArg.int
+      (by simp [K4, A2.setE]) rfl PushArg.int (by simp [intE, Mode.ownSlot])
+  let K5 : Ctx := A2.setE K4 4 ED
+  have hK5 : NoRootb K5 := hK4.setE (by rw [hEDe]; simp)
+  let K6 : Ctx := A2.setE (kill .replace false 4 K5) 4 { ED with live := false, dtor := false }
+  have hK6 : NoRootb K6 := (hK5.kill _ _ _).setE (by rw [hEDe]; simp)
+  have hmove : PushArg K5 [] 4 ED ED.ty ED.held K6 :=
+    PushArg.move (Γ := K5) (F := []) (y := 4) (E := ED) (t := ED.ty) rfl (by rw [hEDe]) (by simp)
+      (hK5.noPin _) (DtorSafe.of_none (fun v E h => (hK5 v E h).2.1) _ _ _)
+  have hK61 : K6 1 = some EVw := by
+    simp [K6, K5, K4, K3, K2, A2.setE, upd, A2.kill, killE, hits, EVw, EN0, derive, Mode.isRoot,
+      rootKind, Entry.vdeps, Mode.ownSlot]
+  let EG0 : Entry := ⟨.prod ED.ty EVw.ty, .own, true, [], ED.held ++ (derive 1 EVw .self ++ EVw.held),
+    false, false⟩
+  have hgp : RhsT K5 [] (.pair 4 1) EG0 K6 :=
+    RhsT.pair (Ey := ED) (Ez := EVw) (by simp [K5, A2.setE]) (by rw [hEDe]) hmove
+      hK61 rfl (PushArg.slice (s := .int) (Or.inl rfl)) (by simp [EVw, Mode.ownSlot])
+  let EGa : Entry := Entry.arm { EG0 with ty := GSD, held := EG0.held }
+  have hEGa : EGa = ⟨GSD, .own, true, [], [⟨0, .view⟩], true, true⟩ := by
+    simp [EGa, EG0, hEDe, Entry.arm, EVw, EN0, derive, Mode.isRoot, rootKind, comp, GSD, GS, DT, T,
+      Ty.dtorViews, Ty.holdsView]
+  -- the struct's binding, armed: it views `s` (binding 0)
+  let K7 : Ctx := A2.setE K6 5 EGa
+  have hC7 : Calm [5, 6] [0] K7 := (calm_of_noRootb hK6 _ _).setE (by rw [hEGa]; simp)
+    (fun _ => by rw [hEGa]; simp [Entry.vdeps, Mode.ownSlot])
+  -- the `Vec`, bound by `letd` at `vec GSD`, recording the view of `s` up front
+  let EN : Entry := ⟨.vec GSD, .own, true, [], [], false, false⟩
+  have hnew : RhsT K7 [] (.new GSD) EN K7 := RhsT.new (by decide)
+  have hK70 : K7 0 = some EN0 := by
+    simp [K7, K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill, killE, hits, EN0, Entry.vdeps, Mode.ownSlot]
+  have hH : HeldUp K7 EN [⟨0, .view⟩] := ⟨List.nil_subset _, fun d hd => by
+    simp only [List.mem_singleton] at hd; subst hd
+    exact Or.inr ⟨rfl, EN0, hK70, rfl⟩⟩
+  let EW : Entry := Entry.arm { EN with ty := .vec GSD, held := [⟨0, .view⟩] }
+  -- armed: its elements' destructors read what it views
+  have hEWe : EW = ⟨.vec GSD, .own, true, [], [⟨0, .view⟩], true, true⟩ := by
+    simp [EW, EN, Entry.arm, GSD, GS, DT, T, Ty.dtorViews, Ty.holdsView]
+  let K8 : Ctx := A2.setE K7 6 EW
+  have hC8 : Calm [5, 6] [0] K8 := hC7.setE (by rw [hEWe]; simp)
+    (fun _ => by rw [hEWe]; simp [Entry.vdeps, Mode.ownSlot])
+  -- the struct moves into it
+  let K9 : Ctx := A2.setE (kill .replace false 5 K8) 5 { EGa with live := false, dtor := false }
+  have hC9 : Calm [5, 6] [0] K9 := (hC8.kill _ _ _).setE (by rw [hEGa]; simp)
+    (fun _ => by rw [hEGa]; simp [Entry.vdeps, Mode.ownSlot])
+  have hmove2 : PushArg K8 [] 5 EGa GSD EGa.held K9 :=
+    PushArg.move (Γ := K8) (F := []) (y := 5) (E := EGa) (t := GSD) rfl (by rw [hEGa]) (by simp)
+      (hC8.noPin _) (hC8.dtorSafe (by simp) _ _)
+  have hK96 : K9 6 = some EW := by
+    simp [K9, K8, A2.setE, upd, A2.kill, killE, hits, hEWe, Entry.vdeps, Mode.ownSlot]
+  have hpush := StmtT.push (P := P) (Γ := K8) (Γ1 := K9) (F := []) (x := 6) (y := 5) (Ex := EW) (Ey := EGa)
+    (Ex1 := EW) (t := GSD) (D := EGa.held) (by simp [K8, A2.setE]) (by rw [hEWe]) (by rw [hEWe])
+    (Or.inl (by rw [hEWe])) (by simp) (by simp [K8, K7, A2.setE, upd]) (by rw [hEGa]) (by rw [hEGa])
+    (by decide) hmove2 (by rw [hEGa]; simp [roots]) hK96 (by rw [hEWe])
+    (hC9.dtorSafe (by simp) _ _)
+    -- what the struct views, the `Vec`'s binding views already
+    (fun _ => by rw [hEWe, hEGa]; simp [ownHeld, GSD, GS, Ty.holdsView])
+  let E10 : Entry := { EW with held := EW.held ++ ownHeld true GSD EGa.held }
+  have hE10 : E10 = ⟨.vec GSD, .own, true, [], [⟨0, .view⟩, ⟨0, .view⟩], true, true⟩ := by
+    simp [E10, hEWe, hEGa, ownHeld, GSD, GS, Ty.holdsView]
+  have hC10 : Calm [5, 6] [0] (A2.setE (kill .realloc GSD.holdsView 6 K9) 6 E10) :=
+    (hC9.kill _ _ _).setE (by rw [hE10]; simp) (fun _ => by rw [hE10]; simp [Entry.vdeps, Mode.ownSlot])
+  have hdw := StmtT.letd (P := P) (Γ := K7) (Γ1 := K7) (F := []) (x := 6) (f := 8) (r := .new GSD)
+    (s := .push 6 5) (E := EN) (t := GS) (H := [⟨0, .view⟩]) (τ := .vec GSD) rfl
+    (by simp [K7, K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill])
+    (by simp) hnew rfl (Or.inr ⟨0, rfl, rfl⟩) rfl rfl (letd_fn gsdrop_ok) hH hpush
+    (hC10.endOK (by simp))
+  have hC11 := hC10.exitScope 6 [5] (by simp)
+  have hg := StmtT.letd (P := P) (Γ := K5) (Γ1 := K6) (F := []) (x := 5) (f := 8) (r := .pair 4 1)
+    (s := .letd 6 8 (.new GSD) (.push 6 5)) (E := EG0) (t := GS) (H := EG0.held) (τ := GSD) rfl
+    (by simp [K5, K4, K3, K2, K1, A2.setE, upd]) (by simp) hgp rfl
+    (Or.inl ⟨rfl, Or.inl (by simp [EG0, hEDe, EVw, GS])⟩) rfl rfl (letd_fn gsdrop_ok) (HeldUp.refl _ _)
+    hdw (hC11.endOK (by simp))
+  have hK12 : NoRootb _ := (hC11.exitScope 5 [] (by simp)).noRootb
+  have hd := StmtT.letd (P := P) (Γ := K4) (Γ1 := K4) (F := []) (x := 4) (f := 0) (r := .pair 2 3)
+    (E := EP) (t := T) (H := []) rfl (by simp [K4, K3, K2, K1, A2.setE, upd])
+    (by simp) hpair rfl (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hg
+    (hK12.endOK _)
+  have h3 := StmtT.letv (P := P) (x := 3) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K3) (Γ1 := K3)
+    rfl (by simp [K3, K2, K1, A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit) hd
+    ((hK12.exitScope 4).endOK _)
+  have h2 := StmtT.letv (P := P) (x := 2) (r := .expr (.lit 1)) (E := intE) (F := []) (Γ := K2) (Γ1 := K2)
+    rfl (by simp [K2, K1, A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit) h3
+    (((hK12.exitScope 4).exitScope 3).endOK _)
+  have h1 := StmtT.letv (P := P) (x := 1) (r := .view 0) (E := EVw) (F := []) (Γ := K1) (Γ1 := K1)
+    rfl (by simp [K1, A2.setE]) (by simp) hview h2
+    ((((hK12.exitScope 4).exitScope 3).exitScope 2).endOK _)
+  exact ⟨_, StmtT.letv (P := P) (x := 0) (r := .new .int) (E := EN0) (F := []) (Γ := fun _ => none)
+    (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.new (by decide)) h1
+    (((((hK12.exitScope 4).exitScope 3).exitScope 2).exitScope 1).endOK _)⟩
+
+/-- The program with a `Vec` of destructor values that hold a view of an
+    older binding is memory safe. -/
+theorem main14_safe {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem 7) main14 (.ok m' s')) :
+    ¬ Stuck P m' s' := by
+  obtain ⟨Δ, ht⟩ := main14_typed
+  exact memory_safe prog_ok prog_codes ht rfl (by simp [main14, Stmt.codesOK, Rhs.codeOK]) (by decide) hr
+
+/-- ... and leaks nothing when it ends (`no_leak_end`).  That the drain runs
+    each element's glue, in a frame armed with the view, is read off the
+    steps, as for `main11`: the theorem does not trace the run. -/
+theorem main14_no_leak {m' : Mem} (hr : Steps P (emptyMem 7) main14 (.ok m' .skip)) :
+    ∀ i, m'.alloc i = false := by
+  obtain ⟨Δ, ht⟩ := main14_typed
+  exact no_leak_end prog_ok prog_codes ht rfl (by simp [main14, Stmt.codesOK, Rhs.codeOK]) (by decide) hr
 
 end A2.DtorWitness

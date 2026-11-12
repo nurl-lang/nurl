@@ -1363,7 +1363,8 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
           exact kill_root hEr hro
         · obtain ⟨Er, hEr, hro⟩ := hD r (ownHeld_roots hr)
           exact kill_root hEr hro
-    · -- A2-drop.2: a binding `letd` made takes only values that hold no views
+    · -- A2-drop.2: a binding `letd` made takes only values whose views it holds
+      -- already (Agora #782)
       by_cases hrx : d.root = x
       · exact Or.inl ⟨hrx, hroot⟩
       · refine Or.inr ⟨hrx, ?_⟩
