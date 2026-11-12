@@ -81,10 +81,10 @@ class ToolchainTest(unittest.TestCase):
         self.project = Path(self.tmp.name)
         self.source = self.project / 'unsaved ä # %.nu'
 
-    def compiler(self, text, *options, path=None):
+    def compiler(self, text, *options, path=None, timeout=30):
         run = run_process([str(self.bin / 'nurlc'), *options, '--', str(path or self.source)],
                               input=text.encode(), cwd=self.project,
-                              env={**self.env, 'NURL_STDLIB': str(self.prefix)}, timeout=30)
+                              env={**self.env, 'NURL_STDLIB': str(self.prefix)}, timeout=timeout)
         self.assertNotIn(b'Sanitizer', run.stderr)
         self.assertNotIn(b'runtime error:', run.stderr)
         return run
@@ -187,7 +187,13 @@ class ToolchainTest(unittest.TestCase):
         self.assertFalse([d for d in diags[0] if d['severity'] == 1], diags)
 
     def test_check_self_compile_from_stdin(self):
-        run = self.compiler((ROOT / 'compiler/nurlc.nu').read_text(), '--check', '--stdin')
+        # The input is the whole compiler, and it grows with it: about 4 s
+        # plain and 28 s under ASan + UBSan at 90 000 lines (the CI job that
+        # runs this file builds nurlc instrumented), from 68 000 when this
+        # test came in with the 30 s guard the small sessions use. The guard
+        # catches a hang, so it is sized for the instrumented compile with
+        # room to grow; it does not measure the compiler's speed.
+        run = self.compiler((ROOT / 'compiler/nurlc.nu').read_text(), '--check', '--stdin', timeout=300)
         self.assertEqual(run.returncode, 0, run.stderr)
         self.assertEqual(run.stdout, b'')
         self.assertEqual(run.stderr, b'')
