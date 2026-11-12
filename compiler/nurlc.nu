@@ -23774,6 +23774,16 @@ unsafe @ gen_match i lex i syms i cg → s {
     : s __m_lkey ? == match_first_tt TT_LPAREN ( nurl_sym_get syms `__last_call_lend_key__` ) ``
     : s __m_largs ? == match_first_tt TT_LPAREN ( nurl_sym_get syms `__last_call_args__` ) ``
     : s __m_lroots ? & == match_first_tt TT_LPAREN != 0 ( nurl_str_len g_call_roots ) ( nurl_str_cat g_call_roots `` ) ( nurl_str_cat __m_largs `` )
+    // (…and a field read out of a call's result that the read took over
+    // under that call's flag — `?? . ( arc_get [App] mine ) ev`, a user
+    // enum's field: the read's own where the call handed its result over,
+    // a view of what it lent from where it lent it (gen_member,
+    // `__last_tmp_field_own__`). Its payloads are decided from that call
+    // the same way, at module end; seen as nobody's, a payload of an Arc's
+    // payload changed passed the frozen-Arc rule, agora #681.)
+    : b __m_tfk & & == match_first_tt TT_DOT != 0 ( nurl_sym_len syms `__last_tmp_field_own__` ) ! ( seq ( nurl_sym_get syms `__last_tmp_field_own__` ) `true` )
+    : s __m_tkey ? __m_tfk ( nurl_sym_get syms `__last_call_lend_key__` ) ``
+    : s __m_troots ? __m_tfk ? != 0 ( nurl_str_len g_call_roots ) ( nurl_str_cat g_call_roots `` ) ( nurl_sym_get syms `__last_call_args__` ) ``
     // A fresh `? T` / `! T E` from a call owns its payload: the payload
     // binding takes it over (docs/MEMORY.md §7.6) — dropped at the end of
     // a statement arm unless moved on. Whether the call's result is owned
@@ -25091,7 +25101,7 @@ unsafe @ gen_match i lex i syms i cg → s {
                     : b __abc & & ! __lent ( bck_sound ) | | | ( __arg_holds_changeable __abt ) ( __is_hown_ty __abt ) __abv __abcl
                     // (`&*`: a cursor over the option binding it matched —
                     // mem_udrop_link_alias, bck_handle_match.)
-                    : s __abn1 ? __abc ? != 0 ( nurl_str_len __m_lkey ) ( nurl_str_cat4 __ab `&` ( str_first_word __m_lkey ) ( nurl_str_cat `%` ( bck_swap_char __m_lroots 32 43 ) ) ) ( nurl_str_cat3 __ab `&` ? & pv0_cursor ( seq __ab pv0 ) `*` `` ) __abn0
+                    : s __abn1 ? __abc ? != 0 ( nurl_str_len __m_lkey ) ( nurl_str_cat4 __ab `&` ( str_first_word __m_lkey ) ( nurl_str_cat `%` ( bck_swap_char __m_lroots 32 43 ) ) ) ? != 0 ( nurl_str_len __m_tkey ) ( nurl_str_cat4 __ab `&` ( str_first_word __m_tkey ) ( nurl_str_cat `%` ( bck_swap_char __m_troots 32 43 ) ) ) ( nurl_str_cat3 __ab `&` ? & pv0_cursor ( seq __ab pv0 ) `*` `` ) __abn0
                     // A view payload is marked (`~`; `!` one that owns nothing):
                     // its buffer moving ends it.
                     // (`%`: one that holds views itself — a struct with a view
