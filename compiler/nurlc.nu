@@ -156,13 +156,20 @@
 // the concrete type arguments.
 : ~ s g_diag_ctx ``
 // …and what an instantiation adds after the diagnostic itself (agora
-// #751): `g_diag_notes` holds its note lines, innermost instantiation
-// first (`file:line:col: note: in 'f [T]', instantiated here`), and
+// #751): `g_diag_notes` holds the note of the instantiation being made
+// (`file:line:col: note: in 'f [T = …]', instantiated here`, its type
+// arguments spelled when printed, __diag_expand_args) and
 // `g_diag_inst_args` the mangled type-argument words its re-parsed source
-// spells (`Rc__i64`), which the echoed source line and the notes show as
-// the program writes them (`( Rc i )`: __diag_src).
+// spells (`Rc__i64`). The instantiations it is nested in are frame
+// records (__diag_frame_id): `g_diag_parent` names the innermost, and
+// `g_diag_cur_id` the current one's once an instance queued inside it
+// asked for it — one record per instance that queues another, an integer
+// in each queued one.
 : ~ s g_diag_notes ``
 : ~ s g_diag_inst_args ``
+: ~ i g_diag_parent 0
+: ~ i g_diag_cur_id 0
+: ~ i g_diag_frame_n 0
 
 // LLVM return type of the function whose body is currently being
 // generated. Diagnostics-only: gen_field_store consults it to tell the
@@ -299,7 +306,7 @@
 // Inside an instantiation, line `line` of the template's own file; ``
 // outside one, or when no file holds it (a template read from no file).
 @ __diag_tmpl_line s file i line → s {
-    ? | == 0 ( nurl_str_len g_diag_inst_args ) <= line 0 { ^ ( nurl_str_cat `` `` ) } {}
+    ? | == 0 ( nurl_str_len g_diag_notes ) <= line 0 { ^ ( nurl_str_cat `` `` ) } {}
     : s src ( compiler_read_source file )
     ? == 0 ( nurl_str_len src ) { ^ ( nurl_str_cat `` `` ) } {}
     ^ ( __src_line_text src ( nurl_str_len src ) line )
@@ -335,8 +342,13 @@
 // line where there is one.)
 @ __diag_src s text → s {
     : ~ s out ( nurl_str_cat text `` )
-    ? == 0 ( nurl_str_len g_diag_inst_args ) { ^ out } {}
+    ? == 0 ( nurl_str_len g_diag_notes ) { ^ out } {}
     : ~ s rest ( nurl_str_cat g_diag_inst_args `` )
+    : ~ i fp g_diag_parent
+    ~ != 0 fp {
+        = rest ( nurl_str_cat3 rest ` ` ( __diag_frame_get fp `__fra` ) )
+        = fp ( nurl_str_to_int ( __diag_frame_get fp `__frp` ) )
+    }
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest ) = rest ( str_skip_word rest )
         : s sh ( __diag_show_word w )
@@ -347,7 +359,7 @@
 
 // The caret column `col` of `text` once __diag_src has respelled it.
 @ __diag_col s text i col → i {
-    ? | == 0 ( nurl_str_len g_diag_inst_args ) <= col 1 { ^ col } {}
+    ? | == 0 ( nurl_str_len g_diag_notes ) <= col 1 { ^ col } {}
     : i n ? > - col 1 ( nurl_str_len text ) ( nurl_str_len text ) - col 1
     : s pre ( nurl_str_slice text 0 n )
     : s np ( __diag_src pre )
@@ -365,7 +377,13 @@
 }
 
 @ __diag_notes_print → v {
-    ? != 0 ( nurl_str_len g_diag_notes ) { ( nurl_eprintln ( __diag_expand_args g_diag_notes ) ) } {}
+    ? == 0 ( nurl_str_len g_diag_notes ) { ^ v } {}
+    ( nurl_eprintln ( __diag_expand_args g_diag_notes ) )
+    : ~ i fp g_diag_parent
+    ~ != 0 fp {
+        ( nurl_eprintln ( __diag_expand_args ( __diag_frame_get fp `__fr` ) ) )
+        = fp ( nurl_str_to_int ( __diag_frame_get fp `__frp` ) )
+    }
 }
 
 // Each `{{T U}{i Rc__i64}}` of the notes spelled `T = i, U = ( Rc i )`.
@@ -29792,10 +29810,12 @@ unsafe @ mem_path_to_indices s path → s {
     // control block — by that pointer, as mem_identity_key keys it: answered
     // F here, `= o ( f1 o )` through a forwarder declared above its callee
     // released o's share while o went on to hold it, agora #758.)
-    ? ( __is_libh t ) { ^ ( __libh_keyable t ) } {}
     // (…and a struct with a `% Drop` of its own by its first owned handle
     // field: it cannot be copied, so that buffer is its own — mem_identity_key.)
-    ? & ! ( __is_owned_struct_ty t ) ! ( __udrop_struct_keyable t ) { ^ F } {}
+    ? ! ( __is_owned_struct_ty t ) {
+        ? ( __is_libh t ) { ^ ( __libh_keyable t ) } {}
+        ? ! ( __udrop_struct_keyable t ) { ^ F } {}
+    } {}
     : s sname ( nurl_str_slice t 1 - ( nurl_str_len t ) 1 )
     : i fc ( nurl_str_to_int ( nurl_sym_get2 g_root_syms sname `__field_count` ) )
     : ~ i i 0
@@ -30231,7 +30251,7 @@ unsafe @ mem_path_to_indices s path → s {
     ? ( __is_libh ty ) { ^ ( mem_libh_key cg ty val ) } {}
     // (…and a struct with a `% Drop` of its own by its first keyed field:
     // __udrop_struct_keyable, agora #758.)
-    ? & ! ( __is_owned_struct_ty ty ) ! ( __udrop_struct_keyable ty ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? ! ( __is_owned_struct_ty ty ) { ? ! ( __udrop_struct_keyable ty ) { ^ ( nurl_str_cat `` `` ) } {} } {}
     : s sname ( nurl_str_slice ty 1 - ( nurl_str_len ty ) 1 )
     : i fc ( nurl_str_to_int ( nurl_sym_get2 g_root_syms sname `__field_count` ) )
     : ~ i i 0
@@ -30541,8 +30561,9 @@ unsafe @ mem_path_to_indices s path → s {
     // (…and a literal of a type with its own `% Drop`, whatever its fields:
     // its destructor runs, below.)
     // (…or an option literal over one, `@ ?Conn { T @ Conn { … } }`.)
-    : b __lw_opt & != 0 ( nurl_str_starts at `{ i1, ` ) != 0 ( nurl_str_len ( __wrap_twin at ) )
-    : b __lw_whole ? == arg_tt TT_AT | ( __has_user_drop at ) & __lw_opt ( __holds_user_drop at 0 ) F
+    // (Asked of a literal argument only.)
+    : b __lw_opt ? == arg_tt TT_AT ? != 0 ( nurl_str_starts at `{ i1, ` ) != 0 ( nurl_str_len ( __wrap_twin at ) ) F F
+    : b __lw_whole ? == arg_tt TT_AT ? ( __has_user_drop at ) T ? __lw_opt ( __holds_user_drop at 0 ) F F
     ? & & != 0 g_auto_drop_strings == arg_tt TT_AT | != 0 ( nurl_str_len __lo ) __lw_whole {
         : s __lnk0 ( mem_arg_not_kept cg call_name fname arg_idx shadowed )
         // A callee that hands the literal back, as for a call's temporary
@@ -53621,7 +53642,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // (…and a value with a `% Drop` of its own by its first owned
         // field, __udrop_struct_keyable: given back its own value by `( f0
         // o )`, it was released and then read, agora #758.)
-        : b __ud_kty | | ( __is_handle_ty vt ) __ud_dyn ( __udrop_struct_keyable vt )
+        : b __ud_kty ? | ( __is_handle_ty vt ) __ud_dyn T ? == bck_rhs_tt TT_LPAREN ( __udrop_struct_keyable vt ) F
         ? & & & & __ud_kty __ud_may_self ! __ud_whole ! ( __clone_supported vt syms ) & __ud_owns == bck_rhs_tt TT_LPAREN {
             : s __p1 ( nurl_str_cat3 `'` name `' is given back what this call may lend out of a part of '` )
             : s __p2 ( nurl_str_cat3 name `' itself — an element, a payload — and its type has no copy: nurlc cannot keep that part alive once '` name )
@@ -68577,10 +68598,7 @@ unsafe @ ensure_struct_instantiated i syms s sname s ta_list → v {
     // (…and, asked for inside another instantiation, that one's notes: an
     // instance is emitted after the one that queued it has finished, and its
     // diagnostics still say how the program got there — agora #751.)
-    ? != 0 ( nurl_str_len g_diag_notes ) {
-        ( nurl_sym_def g_generic_syms ( nurl_str_cat base `_nt` ) g_diag_notes )
-        ( nurl_sym_def g_generic_syms ( nurl_str_cat base `_ia` ) g_diag_inst_args )
-    } {}
+    ? != 0 ( nurl_str_len g_diag_notes ) { ( nurl_sym_def g_generic_syms ( nurl_str_cat base `_fr` ) ( nurl_str_int ( __diag_frame_id ) ) ) } {}
 }
 
 // emit_str_globals: emit global constants for string literals [base..top).
@@ -81035,9 +81053,9 @@ unsafe @ __import_allowed s path → b {
 // fields), then again to actually emit the function. The two passes
 // share `syms` so the rescan's emitted instantiations are visible to
 // the body-parsing pass.
-// (`outer_nt` / `outer_ia`: the notes and type-argument words of the
-// instantiation that queued this one, when one did — defer_instantiation_at.)
-unsafe @ emit_one_instantiation s fname s mangled s type_args s caller_file s caller_line s caller_col s why s outer_nt s outer_ia i syms i cg → v {
+// (`outer_fr`: the frame of the instantiation that queued this one, when
+// one did — defer_instantiation_at, __diag_frame_id.)
+unsafe @ emit_one_instantiation s fname s mangled s type_args s caller_file s caller_line s caller_col s why s outer_fr i syms i cg → v {
     : s tparams ( nurl_sym_get2 g_generic_syms fname `__tparams` )
     : s gsrc ( nurl_sym_get2 g_generic_syms fname `__gsrc` )
     // No stored template for this name: the call site referenced a
@@ -81106,6 +81124,11 @@ unsafe @ emit_one_instantiation s fname s mangled s type_args s caller_file s ca
     : s saved_diag_ctx ( nurl_str_cat g_diag_ctx `` )
     : s saved_diag_notes ( nurl_str_cat g_diag_notes `` )
     : s saved_inst_args ( nurl_str_cat g_diag_inst_args `` )
+    : i saved_diag_parent g_diag_parent
+    : i saved_diag_cur g_diag_cur_id
+    // (Made while another instance is being made — not queued — it is
+    // nested in that one: __diag_frame_id records it.)
+    : i __ctx_parent ? != 0 ( nurl_str_len outer_fr ) ( nurl_str_to_int outer_fr ) ( __diag_frame_id )
     // (`[T = ( Rc i )]`: the echoed line is the template's own, which
     // spells the parameter. Spelled only when a diagnostic prints the
     // note — `{{tparams}{type args}}`, __diag_notes_print: every instance
@@ -81118,9 +81141,10 @@ unsafe @ emit_one_instantiation s fname s mangled s type_args s caller_file s ca
     ? != 0 ( nurl_str_len why ) ( nurl_str_cat3 `, made for ` why ? != 0 ( nurl_str_len __ctx_at ) `, needed here` `` )
     ? != 0 ( nurl_str_len __ctx_at ) `, instantiated here` `` )
     : s __ctx_note ( nurl_str_cat3 __ctx_at __ctx_what ` — the error may depend on these type arguments` )
-    : s __ctx_outer ? != 0 ( nurl_str_len outer_nt ) outer_nt saved_diag_notes
-    = g_diag_notes ? == 0 ( nurl_str_len __ctx_outer ) ( nurl_str_cat __ctx_note `` ) ( nurl_str_cat3 __ctx_note `\n` __ctx_outer )
-    = g_diag_inst_args ( nurl_str_cat3 type_args ` ` ? != 0 ( nurl_str_len outer_nt ) outer_ia saved_inst_args )
+    = g_diag_notes __ctx_note
+    = g_diag_inst_args ( nurl_str_cat type_args `` )
+    = g_diag_parent __ctx_parent
+    = g_diag_cur_id 0
     // `T` and `F` are the boolean literals, and the lexer is context-free:
     // a bare `T` is TT_BOOL wherever it appears. Monomorphisation rewrites
     // the type parameter through the body by whole word, so a template
@@ -81146,8 +81170,7 @@ unsafe @ emit_one_instantiation s fname s mangled s type_args s caller_file s ca
     ? != 0 ( nurl_str_len __tp_bool )
     { = g_diag_notes ( nurl_str_cat4 ( nurl_str_cat __ctx_note `\n` )
         `note: this generic's type parameter is named '` __tp_bool
-        ( nurl_str_cat `', which is also a boolean literal. Monomorphisation rewrites the parameter through the body by whole word, so a value-position use of it — '? T { … }' — is rewritten into the type argument too. Rename the parameter; the stdlib uses '[A]', '[K V]', '[E]'.`
-        ? == 0 ( nurl_str_len __ctx_outer ) `` ( nurl_str_cat `\n` __ctx_outer ) ) ) }
+        `', which is also a boolean literal. Monomorphisation rewrites the parameter through the body by whole word, so a value-position use of it — '? T { … }' — is rewritten into the type argument too. Rename the parameter; the stdlib uses '[A]', '[K V]', '[E]'.` ) }
     {}
     // DWARF Phase 7: stash the original generic-decl line so
     // gen_fn_decl_concrete points this mono's !DISubprogram at the
@@ -81206,9 +81229,32 @@ unsafe @ emit_one_instantiation s fname s mangled s type_args s caller_file s ca
     = g_diag_ctx saved_diag_ctx
     = g_diag_notes saved_diag_notes
     = g_diag_inst_args saved_inst_args
+    = g_diag_parent saved_diag_parent
+    = g_diag_cur_id saved_diag_cur
     = g_dbg_override_line saved_override
     = g_dbg_override_file saved_override_file
     = g_mono_tparam_tys saved_mono_tys
+}
+
+// The instantiation being made as a frame record an instance queued inside
+// it can name (`__fr<k>` its note, `__frp<k>` the frame it is nested in,
+// `__fra<k>` its type-argument words), made the first time one asks; 0
+// outside an instantiation.
+@ __diag_frame_id → i {
+    ? == 0 ( nurl_str_len g_diag_notes ) { ^ 0 } {}
+    ? != 0 g_diag_cur_id { ^ g_diag_cur_id } {}
+    = g_diag_frame_n + g_diag_frame_n 1
+    : s k ( nurl_str_int g_diag_frame_n )
+    ( nurl_sym_def g_generic_syms ( nurl_str_cat `__fr` k ) g_diag_notes )
+    ( nurl_sym_def g_generic_syms ( nurl_str_cat `__frp` k ) ( nurl_str_int g_diag_parent ) )
+    ( nurl_sym_def g_generic_syms ( nurl_str_cat `__fra` k ) g_diag_inst_args )
+    = g_diag_cur_id g_diag_frame_n
+    ^ g_diag_cur_id
+}
+
+// Field `f` (`__fr` note, `__frp` parent, `__fra` type args) of frame `k`.
+@ __diag_frame_get i k s f → s {
+    ^ ( nurl_sym_get g_generic_syms ( nurl_str_cat f ( nurl_str_int k ) ) )
 }
 
 // flush_deferred_instantiations: emit all queued generic instantiations.
@@ -81229,7 +81275,7 @@ unsafe @ emit_one_instantiation s fname s mangled s type_args s caller_file s ca
         : s caller_col ( nurl_sym_get2 g_generic_syms base `_cc` )
         : s why ( nurl_sym_get2 g_generic_syms base `_why` )
         ( emit_one_instantiation fname mangled type_args caller_file caller_line caller_col why
-        ( nurl_sym_get2 g_generic_syms base `_nt` ) ( nurl_sym_get2 g_generic_syms base `_ia` ) syms cg )
+        ( nurl_sym_get2 g_generic_syms base `_fr` ) syms cg )
         = k + k 1
     }
     = g_inst_done k
