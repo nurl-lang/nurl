@@ -75828,6 +75828,11 @@ unsafe @ __hmemo_close s key i mark b r → v {
     ~ < i fc {
         : s ft ( nurl_sym_get g_root_syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int i ) `__type` ) ) )
         ? | | ( __has_user_drop ft ) != 0 ( nurl_sym_len2 g_impl_name_syms `synthdrop##` ft ) ( __is_moveonly_libh ft ) { ^ T } {}
+        // …or an enum the compiler drops that cannot be copied as a handle
+        // (a payload it boxes is no value handle: `: | Shade { Mix Pt }`).
+        // The struct is then no handle either, and nothing dropped it — the
+        // enum's box and every other field leaked (agora #787).
+        ? & != 0 ( nurl_sym_len2 g_impl_name_syms `autodrop##` ft ) ! ( __is_handle_enum ft ) { ^ T } {}
         // …or holds one anywhere — its own fields (what a field that needs
         // a synthesised drop holds: __holds_user_drop asks the same three
         // questions at every level, answered once per type; asking this
