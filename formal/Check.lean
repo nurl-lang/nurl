@@ -69,6 +69,21 @@ import A3
 #print axioms A2.ArcPanicWitness.main3_no_leak_panic
 #print axioms A2.ArcPanicWitness.main3_unwind
 #print axioms A3.arcPanic_claim
+-- Agora #755, `Locked D`: a lock's payload that is a destructor value holding no share; the
+-- check-out gives it back at its end and on a panic, and the orphaned lock block is reaped
+-- (A3/LockDtorWitness.lean)
+#print axioms A3.LockDtorWitness.release_puts
+#print axioms A3.LockDtorWitness.scopeL_end_gives_back
+#print axioms A3.LockDtorWitness.scopeL_panic_gives_back
+#print axioms A3.LockDtorWitness.sendCheck_noArc
+#print axioms A3.LockDtorWitness.rwRead_dtor_refused
+#print axioms A3.LockDtorWitness.lockRestore_dtor_refused
+#print axioms A3.LockDtorWitness.main_typed
+#print axioms A3.LockDtorWitness.main_safe
+#print axioms A3.LockDtorWitness.main_no_leak
+#print axioms A3.LockDtorWitness.main_no_leak_panic
+#print axioms A3.LockDtorWitness.last_drop_reaps
+#print axioms A3.lockDtor_claim
 -- per-call ownership, as the calculus has it (A2/DynCell.lean)
 #print axioms A2.DynCell.pick_ok
 #print axioms A2.DynCell.main_safe
