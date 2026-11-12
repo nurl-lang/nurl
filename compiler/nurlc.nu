@@ -22345,7 +22345,11 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     : ~ s acc ``
     : ~ i idx 0
     ~ != 0 ( nurl_str_len rest ) {
-        : s nm ( str_first_word rest ) = rest ( str_skip_word rest )
+        // (A field path, `lo.name` — g_call_roots names one by its path —
+        // is its root binding's: lent out of an outer one, it is none of
+        // the arm's own; agora #662.)
+        : s nm0 ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s nm ? ( seq nm0 `-` ) nm0 ( __path_root_name nm0 )
         // `how`: `` — a safe lender, nothing to ask; `ask` — ask the callee;
         // else the binding's drop flag — ask the callee where it is down.
         : ~ s how `ask`
@@ -22472,7 +22476,10 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     : ~ s mine ``
     : ~ b any F
     ~ != 0 ( nurl_str_len rest ) {
-        : s nm ( str_first_word rest ) = rest ( str_skip_word rest )
+        // (A field path, `lo.name`, is its root binding's: a field of one of
+        // the arm's own is the arm's own too; agora #662.)
+        : s nm0 ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s nm ? ( seq nm0 `-` ) nm0 ( __path_root_name nm0 )
         : s up ? ( seq nm `-` ) `` ( mem_udrop_ptr_of syms nm )
         : b own & != 0 ( nurl_str_len up ) ! ( str_contains_word old_user up )
         ? own { = any T } {}
@@ -23087,6 +23094,11 @@ unsafe @ gen_cond i lex i syms i cg → s {
     // moves out of q, so the arm hands over a value of its own and its
     // locals go at its exit (agora #180).
     : ~ b t_took F
+    // (…by the call's copy — not a field moved out: the copy is the arm's on
+    // the runs the call lent one of its locals, and on the others the call
+    // lent only what the arm does not own, so its locals may still go there,
+    // mem_arm_outer_lend; agora #662.)
+    : ~ b t_tookc F
     ? & t_lends != 0 ( nurl_str_len t_froot ) {
         : s __tk ( mem_arm_take_field syms cg tt2 t_froot old_user_t )
         ? != 0 ( nurl_str_len __tk ) { = t_hown __tk = t_took T } {}
@@ -23095,7 +23107,7 @@ unsafe @ gen_cond i lex i syms i cg → s {
     // copied there, so the arm's locals go at its exit too (agora #191).
     ? & & t_lends ! t_took == 0 g_did_ret {
         : s __tc ( mem_arm_take_call syms cg tt2 t_tt0 t_hown tv old_user_t )
-        ? != 0 ( nurl_str_len __tc ) { = tv ( str_first_word __tc ) = t_hown ( str_first_word ( str_skip_word __tc ) ) = t_took T } {}
+        ? != 0 ( nurl_str_len __tc ) { = tv ( str_first_word __tc ) = t_hown ( str_first_word ( str_skip_word __tc ) ) = t_took T = t_tookc T } {}
     } {}
     : s t_alend ? == 0 g_did_ret ( mem_arm_call_lend syms t_tt0 t_v0 tt2 t_hown ) ``
     : s t_xhown ? == 0 g_did_ret ? t_took ( nurl_str_cat `true` `` ) ( mem_arm_call_xhown syms cg tt2 t_tt0 t_hown ) ``
@@ -23148,7 +23160,7 @@ unsafe @ gen_cond i lex i syms i cg → s {
             ? != 0 g_fn_slice_decls { ( mem_drop_new_slices syms cg old_slices_t ) } {} }
         { ? != 0 g_auto_drop_strings
             { ( mem_defer_new_strings syms old_strs_t )
-                : s __tx ( mem_arm_exit_open syms cg old_user_t old_structs_t tt2 t_hown t_xhown t_tt0 & t_lends ! t_took )
+                : s __tx ( mem_arm_exit_open syms cg old_user_t old_structs_t tt2 t_hown t_xhown t_tt0 & t_lends | ! t_took t_tookc )
                 ? != 0 ( nurl_str_len __tx )
                 { = tlbl ( nurl_str_cat __tx `` )
                     = t_via_exit T
@@ -23305,13 +23317,14 @@ unsafe @ gen_cond i lex i syms i cg → s {
         ? ( is_ident_tok e_tt0 ) { ( mem_note_payload_part syms e_v0 ) } {}
     } { = e_fl 0 }
     : ~ b e_took F
+    : ~ b e_tookc F
     ? & e_lends != 0 ( nurl_str_len e_froot ) {
         : s __ek ( mem_arm_take_field syms cg et2 e_froot old_user_e )
         ? != 0 ( nurl_str_len __ek ) { = e_hown __ek = e_took T } {}
     } {}
     ? & & e_lends ! e_took == 0 g_did_ret {
         : s __ec ( mem_arm_take_call syms cg et2 e_tt0 e_hown ev old_user_e )
-        ? != 0 ( nurl_str_len __ec ) { = ev ( str_first_word __ec ) = e_hown ( str_first_word ( str_skip_word __ec ) ) = e_took T } {}
+        ? != 0 ( nurl_str_len __ec ) { = ev ( str_first_word __ec ) = e_hown ( str_first_word ( str_skip_word __ec ) ) = e_took T = e_tookc T } {}
     } {}
     : s e_alend ? == 0 g_did_ret ( mem_arm_call_lend syms e_tt0 e_v0 et2 e_hown ) ``
     : s e_xhown ? == 0 g_did_ret ? e_took ( nurl_str_cat `true` `` ) ( mem_arm_call_xhown syms cg et2 e_tt0 e_hown ) ``
@@ -23347,7 +23360,7 @@ unsafe @ gen_cond i lex i syms i cg → s {
             ? != 0 g_fn_slice_decls { ( mem_drop_new_slices syms cg old_slices_e ) } {} }
         { ? != 0 g_auto_drop_strings
             { ( mem_defer_new_strings syms old_strs_e )
-                : s __ex ( mem_arm_exit_open syms cg old_user_e old_structs_e et2 e_hown e_xhown e_tt0 & e_lends ! e_took )
+                : s __ex ( mem_arm_exit_open syms cg old_user_e old_structs_e et2 e_hown e_xhown e_tt0 & e_lends | ! e_took e_tookc )
                 ? != 0 ( nurl_str_len __ex )
                 { = elbl ( nurl_str_cat __ex `` )
                     = e_via_exit T
@@ -25697,13 +25710,14 @@ unsafe @ gen_match i lex i syms i cg → s {
             // (…a field of a struct the arm owns itself moves out of it, as
             // in gen_cond's arms; agora #180.)
             : ~ b arm_took F
+            : ~ b arm_tookc F
             ? & arm_lends != 0 ( nurl_str_len arm_froot ) {
                 : s __mk ( mem_arm_take_field syms cg arm_type arm_froot old_user_m )
                 ? != 0 ( nurl_str_len __mk ) { = arm_hown __mk = arm_took T } {}
             } {}
             ? & & arm_lends ! arm_took == 0 g_did_ret {
                 : s __mc ( mem_arm_take_call syms cg arm_type arm_tt0 arm_hown arm_result old_user_m )
-                ? != 0 ( nurl_str_len __mc ) { = arm_result ( str_first_word __mc ) = arm_hown ( str_first_word ( str_skip_word __mc ) ) = arm_took T } {}
+                ? != 0 ( nurl_str_len __mc ) { = arm_result ( str_first_word __mc ) = arm_hown ( str_first_word ( str_skip_word __mc ) ) = arm_took T = arm_tookc T } {}
             } {}
             // (A payload's pairs that are the scrutinee call's own are
             // __last_join_lend_key__'s already.)
@@ -25771,7 +25785,7 @@ unsafe @ gen_match i lex i syms i cg → s {
                 { ( mem_defer_new_strings syms old_strs_m )
                     // Drop values and owned struct fields wait in a private
                     // exit block for the join's verdict (mem_arm_exit_open).
-                    : s __ax ( mem_arm_exit_open syms cg old_user_m old_structs_m arm_type arm_hown arm_xhown arm_tt0 & arm_lends ! arm_took )
+                    : s __ax ( mem_arm_exit_open syms cg old_user_m old_structs_m arm_type arm_hown arm_xhown arm_tt0 & arm_lends | ! arm_took arm_tookc )
                     ? != 0 ( nurl_str_len __ax )
                     { = arm_lbl ( nurl_str_cat __ax `` )
                         = arm_via_exit T
