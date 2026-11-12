@@ -423,9 +423,9 @@ namespace A3
 /-- Agora #755, the witness (`A3.LockDtorWitness.main`): a `Locked` of a
     destructor value, made, updated through `locked_apply`, its last share
     dropped, on one thread.  The claim covers it: safe, race-free and
-    leak-free on every interleaving.  (As for `arcDtor_claim`, A3's
-    configuration sweep does not mark orphans yet: there the last share's
-    drop frees the payload with no code; A2's `Steps` reaps it,
+    leak-free on every interleaving.  (As for `arcDtor_claim`, on A3's
+    threads the thread that drops the last share reaps the lock block's
+    payload and runs its destructor, `A3.lockDtor_reaps`; on A2's `Steps`,
     `A3.LockDtorWitness.last_drop_reaps`.) -/
 theorem lockDtor_claim :
     MemorySafe LockDtorWitness.P (fun _ => false) (Cfg.start Globs.empty LockDtorWitness.main 7) ∧

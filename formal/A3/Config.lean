@@ -10,7 +10,7 @@ sees its own part and the payloads (`ownView`), and there it has A2's facts
 shows the program's start has it, and draws the leak claim from it: when
 every thread has finished nothing is allocated but what the module globals
 reach (each finished thread's part is empty, and no slot is left to reach a
-block, so the last sweep left only the payloads a global reaches, A3.6).  The race claim is drawn in `A3.Pres`, from a thread's step on its
+block, so the last sweep left only the payloads a global reaches, A3.6).  The race claim is drawn in `A3.Mark`, from a thread's step on its
 own view. -/
 
 namespace A3

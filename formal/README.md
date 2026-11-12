@@ -175,6 +175,7 @@ thread's bindings. No A2 rule is copied.
 | `Make` | A3.6: the make phase (each global's `make` before `main`, `Made`, `make_ok`) and `A3.claim_made`: the claim from the program's global declarations, `GlobsOK` derived |
 | `Claim` | `A3.claim : A3.Claim` |
 | `LockDtorWitness` | Agora #755, `Locked D`: the check-out of a destructor payload that holds no share gives it back at its end and on a panic (`scopeL_end_gives_back`, `scopeL_panic_gives_back`); a witness made, updated through `locked_apply`, its last share dropped (`main_safe`, `main_no_leak`, `last_drop_reaps`, `A3.lockDtor_claim`) |
+| `Mark`, `Reap` | Agora #755 item 1: the configuration's marking sweep (`Cfg.sweepD`, from every thread's slots and the globals) and the stepping thread's reaps (`CSettle`) that end `TStep.thread`; the parts, the invariant and race freedom over them (`CInv.thread_of`, `CInv.raceFree`); the reaps can always be taken and end (`reach_thread_total`); the thread that drops the last share reaps the payload (`TStep.last_drop_reaps`, `arcDtor_reaps`, `arcVecDtor_reaps`, `lockDtor_reaps`) |
 
 The theorems, `A3.claim` and `A3.claim_made` (`check.sh` prints their axioms): a program A2
 types, whose spawned functions take only `sink` parameters of view-free

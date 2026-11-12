@@ -514,9 +514,10 @@ thread's reaps; *Staging* item 4), for a payload of a destructor type and
 and (Agora #790) for one a panic's unwinding orphans, reaped inside the
 frame that caught it, and (Agora #755) for a lock's or a cell's payload
 that is a destructor value holding no share (`Locked D`: the check-out
-gives it back, the orphaned lock block is reaped as an `Arc`'s); not yet
-on A3's threads, nor for channels and the lock payloads `Ty.lkPay`
-refuses. Until they are, `CLAIM.md`'s
+gives it back, the orphaned lock block is reaped as an `Arc`'s), and
+(Agora #755 item 1) on A3's threads, where the configuration's marking
+sweep and the stepping thread's reaps do the same; not yet for channels
+and the lock payloads `Ty.lkPay` refuses. Until they are, `CLAIM.md`'s
 *Destructors* section lists where the calculus releases a destructor value
 without running it.
 
@@ -535,7 +536,7 @@ made it:
 | an enum or option payload | the payload's destructor | the enum's glue moves the payload out to a `letd` frame (Agora #632) |
 | a closure's or a trait object's environment | the captures' destructors | the closure's glue calls its drop method, whose code takes the environment owned and binds it under `letd`s (Agora #609, `ClosureGlueOK`, `Step.callcD`); it is called lent, through its binding or a borrow of the destructor type (Agora #651); a method that changes the environment is refused for the class |
 | a panic's unwind through any of these | the journal runs each, once | `scopeP` frees in one step, except at `scopeD` |
-| an `Arc` / lock block's payload when its last share goes (A3) | on the thread that drops the last share | an `Arc` of a destructor type, or (Agora #755) of a drained `Vec` of them: the marking sweep marks the block `dead`, the same thread reaps it into a destructor frame at the payload's own type, which drains a `Vec` (Agora #610, A2's `Steps`; A3's sweep frees it with no code yet); a lock's or a cell's destructor value that holds no share likewise (Agora #755, `Locked D`); any other lock's or cell's, a channel's, or an `Arc`'s holding one in a field of a type with no destructor of its own: refused (`Ty.ok`) |
+| an `Arc` / lock block's payload when its last share goes (A3) | on the thread that drops the last share | an `Arc` of a destructor type, or (Agora #755) of a drained `Vec` of them: the marking sweep marks the block `dead`, the same thread reaps it into a destructor frame at the payload's own type, which drains a `Vec` (Agora #610, A2's `Steps`; Agora #755 item 1, A3's `TStep`: the configuration's marking sweep and the same thread's reaps); a lock's or a cell's destructor value that holds no share likewise (Agora #755, `Locked D`); any other lock's or cell's, a channel's, or an `Arc`'s holding one in a field of a type with no destructor of its own: refused (`Ty.ok`) |
 
 ### Semantics
 
@@ -1027,8 +1028,9 @@ each one shrinks `CLAIM.md`'s exception:
         blocks. `RwLocked D`'s read guard is refused (`RhsT.rwRead` /
         `rwTryRead` ask `dtorFree`: a view's payload is a copy).
      3. *A3.* Unchanged statements, re-proven: `A3.claim` covers `Locked D`
-        (witness `A3.lockDtor_claim`), and on A3's threads `Cfg.sweep`
-        still frees the orphan with no code (item 1 of Agora #755, left).
+        (witness `A3.lockDtor_claim`); on A3's threads the orphan is
+        reaped by the thread that drops the last share since item 1 of
+        Agora #755 (below, `A3.lockDtor_reaps`).
      Witness: `A3.LockDtorWitness.main` (a `Locked` of `DT`, updated by
      `locked_apply` with a closure taking it `inout`, its share dropped:
      `main_typed`, `main_safe`, `main_no_leak`, `main_no_leak_panic`,
@@ -1042,14 +1044,30 @@ each one shrinks `CLAIM.md`'s exception:
      the model's semantics, the intended one; nurlc's `locked_take`
      leaves zeros that its last `Locked_drop` drops again (Agora #795,
      open, `tools/fuzz/holes/open/t795.md`): the runtime must match.
+   - **Agora #755 item 1, A3's threads** (`A3/Mark.lean`, `A3/Reap.lean`).
+     `TStep.thread` ends a thread's step with the configuration's marking
+     sweep (`Cfg.sweepD`: `sweepBlkD` / `sweepAllocD` from `Cfg.roots`,
+     every thread's slots and the module globals, so a global's block is
+     never marked; A2's lemmas generalized to roots that include the
+     slots, `Mem.sweepDR`, `Inv.sweepDR`) and that thread's reaps to
+     exhaustion (`CSettle`: each a `Step.reap` of thread `i` on its view,
+     ended by the marking sweep). A reap moves the payload to a fresh slot
+     of thread `i`: its addresses leave the shared part for thread `i`'s
+     (`CParts.thread_of`, whose other threads survive it by
+     `ThreadOK.move`, as a lock's check-out). `SweepFrees` charges every
+     sweep of the configuration step to thread `i`; `CParts.ctouch` shows
+     they free only payloads no other thread reaches (`LiveThru`: what the
+     roots after the step reach stays reached through the reaps, which no
+     chain from a root runs through, since no root reaches an orphan). So
+     `A3.claim` and `claim_made` are re-proven, unchanged in statement; the
+     reaps can always be taken and end (`CSettle.total`,
+     `reach_thread_total`), no run has an orphan between its steps
+     (`Reach.noOrphan`), and the thread whose step drops the last share
+     reaps the payload (`TStep.last_drop_reaps`, `A3.arcDtor_reaps`,
+     `arcVecDtor_reaps`, `lockDtor_reaps`). Exactness, as on A2: a dead
+     borrow's slot holding a handle into the payload keeps the block
+     reached; on A3 it may be another thread's, which then reaps it.
    - **Left.**
-     - *A3's threads.* `Cfg.sweep` does not mark: the last share's drop
-       frees the payload with no code there (`A3.Reach.noOrphan`: no A3
-       run has an orphan). Next: `Cfg.sweepD i` and `TStep.thread` reaping
-       to exhaustion on thread `i`, the payload moved from the shared part
-       to thread `i`'s (`ThreadOK.move`), `A3.claim` and `claim_made`
-       re-proven over it (the destructor's reads are of the payload, in no
-       other thread's part once its block is unreached).
      - *Locks and cells* of a destructor type that holds a share, of a
        `Vec` of them, or of a type holding one in a field of a type of no
        destructor of its own (`Ty.lkPay` admits a destructor type at the

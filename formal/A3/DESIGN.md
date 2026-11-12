@@ -46,7 +46,10 @@ no new rule, the claim covers them unchanged. Three typing gaps are closed
 after them (A3.5's third cut, `% NotSend` guards, shares in a slice, below):
 a library handle is changed and copied through a borrow (a lent cell share
 is the share), a read guard faces the crossing check and does not cross,
-and a slice's elements may be shares. This note fixes the
+and a slice's elements may be shares. Since Agora #755 item 1 a
+thread's step ends with the configuration's marking sweep and that thread's
+reaps, so a share's destructor payload is dropped, as code, by the thread
+that drops the last share (the #755 item 1 section, below). This note fixes the
 semantics, the theorem statements and the order of work, so the
 mechanization can be cut into tasks (Agora: formal track, F4–F8). The guarantee it targets is the
 "no data race" clause of `CLAIM.md` and `docs/MEMORY.md` §6.2. The rules
@@ -559,6 +562,9 @@ with the sweep is the phase-D obligation above. `check.sh` is green with:
     over the roots, `Mem.sweepR`, `ThreadOK.sweepR`). So no reachable
     configuration keeps a block nothing reaches (`CInv`'s second half),
     which `no_leak` needs. Thread-local runs keep `Steps0` (`reach_ok0`).
+    (Agora #755 item 1: the sweep is now the marking one, `Cfg.sweepD`,
+    followed by the stepping thread's reaps, `CSettle`; `Cfg.sweep` is gone.
+    See the #755 section below.)
   - *`Race` counts the sweep's frees as the stepping thread's writes*
     (`SweepFrees`, `CTouch`): an address live before the step and after
     it, which the sweep then frees. `race_free` (`CInv.raceFree`): a write
@@ -960,20 +966,19 @@ settled:
    `scopeL_panic_gives_back` are lemmas of stores: `x` owning a `t` and
    the block checked out are their hypotheses, read off the rules for a
    typed program, as for every `scopeL`.
-3. *A3.* Lock blocks are shared, and A3's configuration sweep
-   (`Cfg.sweep`) still frees an orphan with no code (Agora #755 item 1,
-   out of scope here): on A3's threads the last share's drop frees a
-   `Locked D`'s payload with no code. `A3.claim` and `claim_made` are
-   unchanged in statement and re-proven over the new rules; the
-   race-freedom proof needed no change (a check-out of a destructor value
-   is a check-out). `GlobsOK.dtors` (`DeadCodes`) now speaks of every
-   block of a destructor type; under the old invariant no lock block had
-   one, so every start `GlobsOK` admitted before it still admits. A global
-   `Locked D` is admissible (`Ty.sync (lk _)`), and `A2.Mem.sweepD` roots
-   the slots only, not `m.gl`: harmless on A2 (its runs start from
-   `emptyMem`, which holds no global) and on A3 (`Cfg.sweep` roots the
-   globals), but the future `Cfg.sweepD` must root the globals too, or it
-   would mark a global's block an orphan.
+3. *A3.* Lock blocks are shared. Since item 1 of Agora #755 (below) the
+   configuration's marking sweep marks an orphaned `Locked D`'s block and
+   the thread whose step dropped the last share reaps it
+   (`A3.lockDtor_reaps`). `A3.claim` and `claim_made` are unchanged in
+   statement and re-proven over the new rules; the race-freedom proof
+   needed no change for the check-out (a check-out of a destructor value is
+   a check-out). `GlobsOK.dtors` (`DeadCodes`) now speaks of every block of
+   a destructor type; under the old invariant no lock block had one, so
+   every start `GlobsOK` admitted before it still admits. A global `Locked
+   D` is admissible (`Ty.sync (lk _)`), and `A2.Mem.sweepD` roots the slots
+   only, not `m.gl`: harmless on A2 (its runs start from `emptyMem`, which
+   holds no global); A3's marking sweep `Cfg.sweepD` roots the globals
+   (`Cfg.roots`), so it never marks a global's block (`A3.glob_not_marked`).
 
 Witness (`A3/LockDtorWitness.lean`): `main`, a `Locked` of a destructor
 value, updated by `locked_apply` with a closure that takes it `inout`
@@ -987,6 +992,74 @@ state out with `rc_take` / `rc_restore`, which meet Agora #795. Still refused: a
 share, a `Vec` of destructor values, a destructor value in a field of a
 type of no destructor of its own, and a channel of them (its queue is a
 `Vec`).
+
+### Agora #755 item 1: the destructor on A3's threads
+
+Before, A3's configuration sweep (`Cfg.sweep`, A2's code-less sweep from
+every thread's slots and the globals) freed an orphaned `Arc<D>`'s,
+`Arc<Vec<D>>`'s or `Locked D`'s payload with no code. Now (`A3/Mark.lean`,
+`A3/Reap.lean`):
+
+- *The marking sweep.* `Cfg.sweepD` is A2's marking sweep (`sweepBlkD`,
+  `sweepAllocD`) from `Cfg.roots`: every thread's slots and the module
+  globals. A2's lemmas of it are generalized to roots that include the
+  store's slots (`Mem.sweepDR`, `HeapOK.sweepDR`, `MInv.sweepDR`,
+  `Inv.sweepDR`, `MemCodes.sweepDR`; `Mem.sweepD` is the one from the
+  slots), so every thread's facts survive it (`ThreadOK.sweepDR`) and the
+  parts do (`CParts.sweepD`: a marked block keeps its tree, in the shared
+  part). When it leaves no orphan, every block it leaves is reached from the
+  roots (`Cfg.sweepD_reached`), `CInv`'s second half.
+- *Eager reaps, on the stepping thread.* `TStep.thread` is a thread's A2
+  step, the marking sweep, then `CSettle P i`: the same thread's reaps to
+  exhaustion, each a `Step.reap` of thread `i` on its view, ended by the
+  marking sweep, with no other thread's step between (A2's `Settle` on the
+  configuration). So no configuration a run reaches has an orphan
+  (`Reach.noOrphan`, now over `CSettle.noOrphan`), no thread ever sees
+  another's mark (item 5 of formal-610-review-part1), and `scopeL_end`'s
+  no-orphan premise holds on every A3 run (item 7). The reaps can always be
+  taken and end (`CSettle.total`: a typed thread's statement has a source
+  redex and an orphan's payload holds no cell share, `CParts.reaps`; A2's
+  count `dtorCount` falls), so every A2 step of a thread a typed start
+  reaches is one of the configuration's (`TStep.thread_total`,
+  `reach_thread_total`), and `MemorySafe`'s A2 progress is the
+  configuration's.
+- *The payload moves to thread `i`.* A reap is a step of thread `i`:
+  `CParts.thread_of` gives thread `i` a part that now holds the payload's
+  addresses (no longer `PayIn`: the block is emptied), and the other
+  threads survive the payload leaving the shared part by `ThreadOK.move`,
+  as a lock's check-out (`BlkKeep` admits a `dead` block emptied).
+  `CInv.thread_of` folds it over the reaps (`CSettle.parts`), and so do the
+  cells' homes (`CellInv.settle`; `LockHolds.of_sweepD`: a marked lock
+  block holds its payload as no lock), the globals (`CSettle.gl`,
+  `CSettle.globFits`) and the globals' typing (`CSettle.globsAt`).
+- *The race clause.* `SweepFrees` is what the whole configuration step
+  frees: an address live before it and after the A2 step, dead at its end
+  (any of its sweeps), charged to thread `i` as a write. `CParts.ctouch`
+  shows it was a payload no other thread reaches: were it owned by no
+  payload, or by one the roots after the step reach, it would stay live
+  through the reaps and sweeps (`LiveThru`: the roots only grow, a reap's
+  fresh slot holds what the orphan held, no root reaches an orphan, so no
+  chain runs through the block a reap empties, `Reached.to_reaped` /
+  `of_reaped`, and the marking sweep keeps every block the roots reach,
+  `Reached.sweepBlkD` / `of_sweepBlkD`). The destructor's reads and writes
+  are thread `i`'s later steps', on its own part, which the existing
+  argument covers (`CInv.raceFree`).
+- *The witness, as step lemmas.* `TStep.last_drop_reaps`: when thread
+  `i`'s step leaves an `arc` block of a destructor value (or of a drained
+  `Vec` of them) or a lock block of one, its payload in it, that no
+  thread's slot, no global and no block's payload refers to, the marking
+  sweep marks it, and a step of thread `i` in the reaps that follow moves
+  its payload to a fresh slot of thread `i` and empties the block
+  (`CSettle.reaps_block`); `Step.reap` binds it in a destructor frame at
+  the thread's redex. Instances at the three witnesses' programs:
+  `A3.arcDtor_reaps`, `arcVecDtor_reaps`, `lockDtor_reaps`. As on A2, no
+  theorem traces a witness's run.
+- *Exactness.* As on A2, a dead borrow's slot that still holds a handle
+  into the payload keeps the block reached (the Phase D obligation above);
+  on A3 that slot may be another thread's, and the destructor then runs on
+  the thread whose later step leaves the block unreached. Several orphans
+  one step leaves are reaped in the order `Step.reap` picks; a cycle of
+  orphans (through a lock) is freed with no code, as on A2.
 
 ## A3.3's mechanization (`RwLocked`, `% Frozen`)
 
@@ -1390,7 +1463,7 @@ third block kind. The cut uses A3.2's lock block of type `int` instead.
   `fiber_consumes_one_capture_frees_shared_atomic`: a thread consumed one
   capture and freed the spawner's `Atomic`. In the model a share's drop
   frees nothing (`Frees.lk`), and a block lives while some thread's slot
-  reaches it (`Cfg.sweep`, `Reached`, `CInv`'s second half). The spawner's
+  reaches it (`Cfg.sweepD`, `Reached`, `CInv`'s second half). The spawner's
   `atomic_load` after the join is `EvalR.atomic` on a block its own slot
   reaches.
 - `chan_send_then_use` (h21) maps to `RhsT.chanSend` (the channels'
@@ -2408,7 +2481,8 @@ that the store they leave is such a start, without a phase in `TStep`.
     program (`BlkCodes`), as `MemCodes` says of the store a typed `make`
     leaves. So `GlobsOK` takes the program: `GlobsOK P G`.
 - `Cfg.roots`: the configuration's sweep counts the globals' shares as
-  roots, beside every thread's slots (`Cfg.sweep`). So a global's block,
+  roots, beside every thread's slots (`Cfg.sweep`; since Agora #755 item 1
+  the marking sweep `Cfg.sweepD`, which roots them too). So a global's block,
   and every block its payload reaches, lives as long as the program runs.
 - `NoLeak`, restated: when every thread has ended, every live address is
   owned by the payload of a block the start's globals reach.
@@ -4261,17 +4335,8 @@ needed. No rule asks for it now; it stays as the bottom of the order.
 - **Fairness and progress.** `memory_safe` says no thread is stuck on
   memory. A thread waiting on a lock forever (a deadlock) is not stuck in
   that sense. Deadlock freedom is not claimed.
-- **An `Arc` of a destructor value on A3's threads** (Agora #610). A2
-  types `Arc<D>` (and, Agora #755, `Arc<Vec<D>>`, whose reaped frame
-  drains the `Vec`, and `Locked D`, a lock block marked and reaped alike) and its `Steps` runs `D`'s destructor on the thread whose
-  step dropped the last share (the marking sweep, `Mem.sweepD`, then the
-  same thread's reaps, `Settle`). A3's configuration sweep (`Cfg.sweep`)
-  does not mark yet: on A3's threads the last share's drop frees the
-  payload with no code, so `A3.claim` covers such a program (as
-  `A3.arcDtor_claim`, `A3.arcVecDtor_claim` and `A3.lockDtor_claim` its witnesses) with the destructor not run, and no A3
-  run has an orphan (`A3.Reach.noOrphan`). The next cut: `Cfg.sweepD i`
-  from every thread's roots, `TStep.thread` reaping to exhaustion on
-  thread `i`, the reaped payload moved from the shared part to thread
-  `i`'s (`ThreadOK.move`), and the race clause over the destructor's
-  reads (the payload is in no other thread's part once its block is
-  unreached).
+- **An `Arc` of a destructor value on A3's threads** (Agora #610).
+  Decided (Agora #755 item 1, above): the configuration's marking sweep
+  (`Cfg.sweepD`, rooting every thread's slots and the globals) and the
+  stepping thread's eager reaps (`CSettle`), so the thread whose step
+  drops the last share runs the destructor (`A3.TStep.last_drop_reaps`).

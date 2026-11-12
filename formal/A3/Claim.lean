@@ -38,10 +38,11 @@ theorem no_leak_init {P : Prog} {spawn : Nat → Bool} {s : Stmt} {Δ : Ctx} {nv
 
 /-- Agora #610, the witness (`A2.ArcDtorWitness`): an `Arc` of a destructor
     value, cloned, both shares dropped, on one thread.  The claim covers it:
-    safe, race-free and leak-free on every interleaving.  (A3's
-    configuration sweep does not mark orphans yet: there the last share's
-    drop frees the payload with no code, `CLAIM.md`; A2's `Steps` runs the
-    destructor, `A2.ArcDtorWitness.last_drop_reaps`.) -/
+    safe, race-free and leak-free on every interleaving.  (Agora #755 item 1:
+    on A3's threads as on A2's, the last share's drop leaves the block an
+    orphan that the configuration's marking sweep marks and the same thread
+    reaps, running the destructor: `A3.arcDtor_reaps`, on any thread of any
+    configuration, as `A2.ArcDtorWitness.last_drop_reaps` on A2's `Steps`.) -/
 theorem arcDtor_claim :
     MemorySafe A2.DtorWitness.P (fun _ => false) (Cfg.start Globs.empty A2.ArcDtorWitness.main 5) ∧
       RaceFree A2.DtorWitness.P (fun _ => false) (Cfg.start Globs.empty A2.ArcDtorWitness.main 5) ∧
@@ -53,10 +54,10 @@ theorem arcDtor_claim :
 /-- Agora #755, the witness (`A2.ArcDtorWitness.mainV`): an `Arc` of a `Vec`
     of destructor values, cloned, both shares dropped, on one thread.  The
     claim covers it: safe, race-free and leak-free on every interleaving.
-    (As for `arcDtor_claim`, A3's configuration sweep does not mark orphans
-    yet: there the last share's drop frees the `Vec` with no code; A2's
-    `Steps` reaps it and drains it, `A2.ArcDtorWitness.last_dropV_reaps`,
-    `reapV_drains`.) -/
+    (As for `arcDtor_claim`, the thread that drops the last share reaps the
+    `Vec`, `A3.arcVecDtor_reaps`, and its frame drains it,
+    `A2.ArcDtorWitness.reapV_drains`; on A2's `Steps`,
+    `A2.ArcDtorWitness.last_dropV_reaps`.) -/
 theorem arcVecDtor_claim :
     MemorySafe A2.DtorWitness.P (fun _ => false) (Cfg.start Globs.empty A2.ArcDtorWitness.mainV 6) ∧
       RaceFree A2.DtorWitness.P (fun _ => false) (Cfg.start Globs.empty A2.ArcDtorWitness.mainV 6) ∧
@@ -70,11 +71,11 @@ theorem arcVecDtor_claim :
     unwinding, caught by a destructor frame with no `recover` (`main1`), by
     a `recover` (`main2`), or by a destructor frame inside a `recover`
     (`main3`), on one thread.  The claim covers all three: safe, race-free
-    and leak-free on every interleaving.  (As for `arcDtor_claim`, A3's
-    configuration sweep does not mark orphans yet: there the last share's
-    drop frees the payload with no code; A2's `Steps` reaps it inside the
-    catching frame, `A2.ArcPanicWitness.main1_unwind`, `main2_unwind`,
-    `main3_unwind`.) -/
+    and leak-free on every interleaving.  (As for `arcDtor_claim`, the thread
+    whose unwinding step dropped the last share reaps the orphan before its
+    next step, with the same `Step.reap` at its redex, inside the catching
+    frame, A2's `Settle` on the configuration (`CSettle`); on A2's `Steps`,
+    `A2.ArcPanicWitness.main1_unwind`, `main2_unwind`, `main3_unwind`.) -/
 theorem arcPanic_claim :
     (MemorySafe A2.ArcPanicWitness.P (fun _ => false) (Cfg.start Globs.empty A2.ArcPanicWitness.main1 7) ∧
       RaceFree A2.ArcPanicWitness.P (fun _ => false) (Cfg.start Globs.empty A2.ArcPanicWitness.main1 7) ∧

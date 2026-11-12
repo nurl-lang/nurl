@@ -13,7 +13,8 @@ import A2.Soundness
   tree no binding of the spawner can reach any more (Send, as A3.0 has
   it). A3.1's `Arc` is A2's own (`Mem.blk`, `Val.arc`): its blocks are
   shared by every thread, and the configuration's sweep ends every
-  thread's step. The other shared blocks (`Locked`, `RwLocked`, `Atomic`,
+  thread's step (Agora #755 item 1: the marking sweep, `Cfg.sweepD`, and
+  the same thread's reaps of the orphans it marks, `CSettle`). The other shared blocks (`Locked`, `RwLocked`, `Atomic`,
   channels) are added by A3.2–A3.5.  A3.6's module globals set at start
   are the configuration's (`Cfg.gl`): every thread reads them, no step
   writes them, and the sweep keeps what they reach.
@@ -3142,7 +3143,8 @@ def SweepFrees (P : Prog) (C : Cfg) (i : Nat) (t : Thread) (a : Nat) : Prop :=
     C.alloc a = true ∧ m'.alloc a = true ∧ C'.alloc a = false
 
 /-- What thread `t` (the `i`-th) touches next in the configuration: what its
-    rule touches, and (A3.1) what the sweep that ends its step frees, a
+    rule touches, and (A3.1) what the sweeps that end its step free (the
+    marking sweep's and, Agora #755 item 1, those after its reaps), a
     write. -/
 inductive CTouch (P : Prog) (C : Cfg) (i : Nat) (t : Thread) : Nat → Bool → Prop
   | step {a : Nat} {w : Bool} : Touch P (C.view t) t.s a w → CTouch P C i t a w
