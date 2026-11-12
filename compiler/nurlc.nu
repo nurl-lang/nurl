@@ -33436,11 +33436,11 @@ unsafe @ __jt_reg i cg → s {
 // its name names here; not a tail of the `:`'s own name `name` (`: s { :
 // s … s }`, which names the binding being made by the time its flag is
 // set), not a closure (__blk_tail_closure's), and not a raw string, which
-// has no drop flag. Not a `: ~` binding (`is_mut`) either: a cursor's
-// owner link is fixed where it is bound, and one assigned a value of its
-// own later would still hand its first owner's away.
+// has no drop flag. (A `: ~` binding too: a cursor assigned a value of its
+// own later hands over only that one — mem_cursor_own0's flag says which,
+// agora #781 — so its owner link may stand; agora #668.)
 @ __let_blk_tail_name i syms i tt s ty i rmin s name b is_mut → s {
-    ? | | | is_mut != tt TT_LBRACE ( __is_closure_ty ty ) ( seq ty `i8*` ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? | | != tt TT_LBRACE ( __is_closure_ty ty ) ( seq ty `i8*` ) { ^ ( nurl_str_cat `` `` ) } {}
     : s nm ( nurl_sym_get syms `__tail_name__` )
     : s tp ( nurl_sym_get syms `__tail_ptr__` )
     ? | | | == 0 ( nurl_str_len nm ) == 0 ( nurl_str_len tp ) ( seq nm name ) ! ( seq tp ( nurl_sym_get2 syms nm `__ptr` ) ) { ^ ( nurl_str_cat `` `` ) } {}
