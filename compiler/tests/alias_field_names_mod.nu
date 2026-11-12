@@ -1,10 +1,12 @@
 // fixture: module; alias_field_names_mod.nu — a module whose struct fields
 // are named like its own functions (alias_field_names.nu, agora #729).
 // Imported under an alias, the module's `x`, `first`, `len` and `name`
-// become `fl__x` …, but the FIELDS of the same names stay `x`, `len` and
-// `name`: an importer reads them with its own `. p x`.
+// become `fl__x` …, but the FIELDS of the same names stay `x`, `first`,
+// `len` and `name`: an importer reads them with its own `. p x`.
 
 : Pt { i x i y }
+
+: Pair [T] { T first T second }
 
 : Named { s name i len }
 
@@ -13,6 +15,8 @@
 @ x Pt p → i { ^ . p x }
 
 @ name Named n → s { ^ . n name }
+
+@ first ( Pair i ) p → i { ^ . p first }
 
 // A local named like a module function is an index here, not a field: the
 // rewrite spells it as it spells every other use of that local.

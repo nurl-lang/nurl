@@ -1,8 +1,9 @@
 // alias_field_names.nu — agora #729: an import alias renames the module's
 // top-level names, never the fields of its structs. `: Pt { i x i y }`
 // beside `@ x Pt p → i` read `. p x` as `. p fl__x` ("has no field 'x'"),
-// for an importer of the module — and a parameter named like one of its
-// functions is still labelled `x:` by a caller.
+// for an importer of the module and for a generic struct's instances —
+// and a parameter named like one of its functions is still labelled `x:`
+// by a caller.
 
 $ `compiler/tests/alias_field_names_mod.nu` fl
 
@@ -19,5 +20,7 @@ $ `compiler/tests/alias_field_names_mod.nu` fl
     ( nurl_println_int ( fl::stretch @ fl::Line { p q } ) )
     ( nurl_println_int ( fl::scale x : 3 ) )
     ( nurl_println_int ( fl::scale k : 5 x : 2 ) )
+    : ( fl::Pair i ) pr @ ( fl::Pair i ) { 1 2 }
+    ( nurl_println_int + ( fl::first pr ) . pr second )
     ^ 0
 }

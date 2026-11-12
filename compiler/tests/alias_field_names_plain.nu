@@ -16,5 +16,7 @@ $ `compiler/tests/alias_field_names_mod.nu`
     ( nurl_println_int ( stretch @ Line { p q } ) )
     ( nurl_println_int ( scale x : 3 ) )
     ( nurl_println_int ( scale k : 5 x : 2 ) )
+    : ( Pair i ) pr @ ( Pair i ) { 1 2 }
+    ( nurl_println_int + ( first pr ) . pr second )
     ^ 0
 }
