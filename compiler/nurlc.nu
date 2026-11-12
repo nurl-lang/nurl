@@ -4511,6 +4511,13 @@ unsafe @ nurl_cg_lbl i h s hint → s {
     ? | ( seq bit `false` ) != 0 ( nurl_sym_len syms `__ret_path_lends__` ) { ( nurl_sym_set_deep syms `__hown_saw_false__` `1` ) } {
         ( nurl_sym_set_deep syms `__hown_saw_owned__` `1` ) }
     ? & != 0 ( nurl_sym_len syms `__hown_saw_false__` ) != 0 ( nurl_sym_len syms `__hown_saw_owned__` ) { ( mem_hown_mark_dyn syms ) } {}
+    // (…and a path that hands over a value of its own outright — a literal,
+    // a copy — beside one that hands back a lending call's result, which
+    // stores that call's answer, no literal `false`: per call too, decided
+    // at module end once the call's summary is final, __hown_mixed. Agora
+    // #625.)
+    // (Not a path marked as one that lends.)
+    ? & ( seq bit `true` ) == 0 ( nurl_sym_len syms `__ret_path_lends__` ) { ( nurl_sym_def g_pending_impl ( nurl_str_cat `retownnv##` ( nurl_sym_get syms `__fn_self_name__` ) ) `1` ) } {}
     // (A path handing back a `sink` parameter hands over this function's
     // own value — its flag says so per run — beside a path that lends: no
     // static answer is right on both. Taken for "lent" throughout, a
@@ -7060,6 +7067,13 @@ unsafe @ gen_ret i lex i syms i cg → s {
     // at is the one the field read recorded, __last_member_root__ — agora
     // #560.)
     : s ret_pl_root ? & == ret_eff_tt TT_DOT == 0 ( nurl_str_len ret_first_root ) ( nurl_sym_get syms `__last_member_root__` ) ret_first_root
+    // (`^ . x f` of a by-value parameter: the caller's value, lent back,
+    // unless the frame owns x — its answer is x's flag, no literal `false`:
+    // a return that lends, for __hown_mixed (`retplend##`). Beside one that
+    // hands over a value of its own (`^ ( mks )`) the function answers per
+    // call; taken for a lender throughout, the fresh String of `? c { ^ . x
+    // s } {} ^ ( mks )` leaked, agora #739.)
+    ? & & == ret_eff_tt TT_DOT ! ret_field_copy >= ( nurl_sym_word_index syms `__fn_param_names__` ret_pl_root ) 0 { ( nurl_sym_def g_pending_impl ( nurl_str_cat `retplend##` ( nurl_sym_get syms `__fn_self_name__` ) ) `1` ) } {}
     ? & & == ret_eff_tt TT_DOT ! ret_field_copy != 0 ( nurl_sym_len2 syms ret_pl_root `__pljk` ) {
         : s pfr ( nurl_sym_get syms `__last_field_read__` )
         : s pf_ptr ( str_first_word pfr )
@@ -11968,6 +11982,7 @@ unsafe @ __hown_dyn_walk i syms s fname → b {
             : s known ? & != 0 g_summaries_final ! ( seq f fname ) ( nurl_sym_get2 g_pending_impl `hdynmemo##` f ) ``
             ? ( seq known `1` ) { ^ T } {}
             ? == 0 ( nurl_str_len known ) {
+                ? ( __hown_mixed syms f ) { ^ T } {}
                 : s via ( nurl_sym_get g_pending_impl ( nurl_str_cat `retvia##` f ) )
                 ? != 0 ( nurl_str_len via ) { = work ? == 0 ( nurl_str_len work ) ( nurl_str_cat via `` ) ( nurl_str_cat3 work ` ` via ) } {}
                 // A binding handed back as it came from a call (mem_hown_dyn_if):
@@ -11991,6 +12006,34 @@ unsafe @ __hown_dyn_walk i syms s fname → b {
                 }
             } {}
         } {}
+    }
+    ^ F
+}
+
+// Do `f`'s returns hand back a lending call's result on one path (`^ (
+// vec_at [S] v 0 )`, a via return whose callee lends) and a value of its
+// own on another — a literal or a copy (`retownnv##`), a call that lends
+// nothing (`^ ( mks … )`), a binding of one? Every path stores its own
+// answer in the per-call slot, but none stores a literal `false`, so the
+// function was taken for a lender throughout and its fresh results were
+// never released (agora #625, #739). A pure forwarder — every return a
+// lending call — stays a static lender.
+@ __hown_mixed i syms s f → b {
+    : ~ b lends F
+    : ~ b owns != 0 ( nurl_sym_len2 g_pending_impl `retownnv##` f )
+    : ~ s via ( nurl_sym_get g_pending_impl ( nurl_str_cat `retvia##` f ) )
+    ~ != 0 ( nurl_str_len via ) {
+        : s c ( str_first_word via ) = via ( str_skip_word via )
+        ? ( __callee_lent syms c c ) { = lends T } { = owns T }
+    }
+    ? != 0 ( nurl_sym_len2 g_pending_impl `retplend##` f ) { = lends T } {}
+    ? ! lends { ^ F } {}
+    ? owns { ^ T } {}
+    : ~ s cond ( nurl_sym_get g_pending_impl ( nurl_str_cat `retdynif##` f ) )
+    ~ != 0 ( nurl_str_len cond ) {
+        : s c ( str_first_word cond ) = cond ( str_skip_word cond )
+        : s g ( str_first_word cond ) = cond ( str_skip_word cond )
+        ? ! ( __callee_lent syms c g ) { ^ T } {}
     }
     ^ F
 }
@@ -30548,7 +30591,11 @@ unsafe @ mem_path_to_indices s path → s {
             // whole, through its twin's drop: its type is parked by its
             // drop name in the word, which has no blanks.)
             : b __tfopt & != 0 ( nurl_str_starts at `{ i1, ` ) != 0 ( nurl_str_len ( __wrap_twin at ) )
-            ? & & != 0 ( nurl_str_len __tlb_one ) | ( __is_handle_ty at ) __tfopt ! ( __ty_holds_view __crt 0 ) {
+            // (…and a value with a `% Drop` of its own, which cannot be
+            // copied: `@ f Conn p b c → Conn { ? c { ^ p } {} ^ ( mk ) }`
+            // handed `( mk )` leaked it on the runs f made a new one, agora
+            // #739.)
+            ? & & != 0 ( nurl_str_len __tlb_one ) | | ( __is_handle_ty at ) __tfopt ( __nc_drop_ty at ) ! ( __ty_holds_view __crt 0 ) {
                 : s __tfr ( nurl_cg_reg cg )
                 ? __tfopt { ( gen_drop_for_type at syms ) } { ( __handle_drop_ensure at ) }
                 ( __dropifv_request at )
