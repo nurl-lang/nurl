@@ -31606,13 +31606,31 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
     ^ ( mem_journal_push_temp_fn cg at av own ( __hjdrop_fn at ) )
 }
 
+// A journal temporary's slot: a register named `%j<N>` (its own-flag
+// slot, where it has one, `%k<N>`) — the length of `%r<N>`, so nothing that
+// keeps register names pays for the mark. The slot is written only for its
+// registration — the push and the forget that __jrnl_slot_elide blanks
+// where no panic can meet it — so its `store` lines go with
+// that pair (__jrnl_blank_jt_stores, Agora #747). A binding's slot never has the
+// name.
+unsafe @ __jt_reg i cg → s {
+    // (nurl_cg_reg's numbering, the name spelled once.)
+    : s p # s cg
+    : i n ( nurl_peek p 0 )
+    ( nurl_poke p 0 + n 1 )
+    ^ ( nurl_str_cat `%j` ( nurl_str_int n ) )
+}
+
+// …and its own-flag slot's.
+@ __jt_flag s js → s { ^ ( nurl_str_cat `%k` ( nurl_str_slice js 2 - ( nurl_str_len js ) 2 ) ) }
+
 // …dropped by journal thunk `fnv`.
 @ mem_journal_push_temp_fn i cg s at s av s own s fnv → s {
     : s lt ( nurl_llty at )
-    : s js ( nurl_cg_reg cg )
+    : s js ( __jt_reg cg )
     ( nurl_print `  ` ) ( nurl_print js ) ( nurl_print ` = alloca ` ) ( nurl_print lt ) ( nurl_print `\n` )
     ( nurl_print `  store ` ) ( nurl_print lt ) ( nurl_print ` ` ) ( nurl_print av ) ( nurl_print `, ptr ` ) ( nurl_print js ) ( nurl_print `\n` )
-    : s jf ( nurl_cg_reg cg )
+    : s jf ( __jt_flag js )
     ( nurl_print `  ` ) ( nurl_print jf ) ( nurl_print ` = alloca i1\n` )
     ( nurl_print `  store i1 ` ) ( nurl_print own ) ( nurl_print `, ptr ` ) ( nurl_print jf ) ( nurl_print `\n` )
     ( nurl_print `  call void @nurl_journal_push_drop2(ptr ` ) ( nurl_print js ) ( nurl_print `, ptr ` )
@@ -31626,7 +31644,7 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
 // ends the registration once the call returns (mem_drop_arg_temps), just
 // before the env's drop. Elided where no panic can reach (__jrnl_elide).
 @ mem_journal_push_cloenv i cg s env → s {
-    : s js ( nurl_cg_reg cg )
+    : s js ( __jt_reg cg )
     ( nurl_print `  ` ) ( nurl_print js ) ( nurl_print ` = alloca i8*\n` )
     ( nurl_print `  store i8* ` ) ( nurl_print env ) ( nurl_print `, ptr ` ) ( nurl_print js ) ( nurl_print `\n` )
     ( nurl_print `  call void @nurl_journal_push_drop2(ptr ` ) ( nurl_print js ) ( nurl_print `, ptr null, ptr @nurl_jdrop_cloenv)\n` )
@@ -33454,14 +33472,17 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
     ? == 0 ( nurl_str_len fnv ) { ^ ( nurl_str_cat `` `` ) } {}
     : s ll ( nurl_llty lt )
     : ~ s js ( nurl_str_cat slot `` )
-    ? == 0 ( nurl_str_len js ) {
-        = js ( nurl_cg_reg cg )
+    // (A slot of its own is a journal temporary, `%j<N>` — __jt_reg; the
+    // function's result slot is not.)
+    : b own_slot == 0 ( nurl_str_len js )
+    ? own_slot {
+        = js ( __jt_reg cg )
         ( nurl_print `  ` ) ( nurl_print js ) ( nurl_print ` = alloca ` ) ( nurl_print ll ) ( nurl_print `\n` )
     } {}
     ( nurl_print `  store ` ) ( nurl_print ll ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, ptr ` ) ( nurl_print js ) ( nurl_print `\n` )
     : ~ s jf ( nurl_str_cat `null` `` )
     ? ! ( seq hbit `true` ) {
-        = jf ( nurl_cg_reg cg )
+        = jf ? own_slot ( __jt_flag js ) ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print jf ) ( nurl_print ` = alloca i1\n` )
         ( nurl_print `  store i1 ` ) ( nurl_print hbit ) ( nurl_print `, ptr ` ) ( nurl_print jf ) ( nurl_print `\n` )
     } {}
@@ -33505,7 +33526,7 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
 @ mem_ret_guard_raw i cg s lt s val b raw → s {
     ? raw {
         ? ! ( seq lt `i8*` ) { ^ ( nurl_str_cat `` `` ) } {}
-        : s js ( nurl_cg_reg cg )
+        : s js ( __jt_reg cg )
         ( nurl_print `  ` ) ( nurl_print js ) ( nurl_print ` = alloca i8*\n` )
         ^ ( mem_ret_guard_rawstr val js )
     } {}
@@ -88024,6 +88045,12 @@ unsafe @ __sp_code_bytes i st i en → i {
 : ~ i g_dce_live 0  // i64[n]: 1 once reached
 : ~ i g_dce_queue 0  // i64[n]: worklist of reached-but-unscanned indices
 : ~ i g_dce_qn 0  // worklist length
+// 1 while the reachability scan defers a journal push's thunk edge
+// (__dce_scan, __dce_journal_edges).
+: ~ i g_dce_defer_jrnl 0
+: ~ i g_dce_jat 0  // i64[]: where each deferred journal thunk is named (its `@`)
+: ~ i g_dce_jn 0
+: ~ i g_dce_jcap 0
 : ~ i g_dce_at 0  // i64[n]: 1 when the scan saw function n's address taken
 : ~ i g_dce_map 0  // symtab: function name → its index, as decimal text
 : ~ b g_dce_dotfn F  // some function's name starts with a `.`
@@ -88063,6 +88090,8 @@ unsafe @ __dce_scan i from i to → v {
     : *u mp # *u # s g_dce_mod
     : *u idb # *u # s g_dce_idb
     : ~ i p from
+    // (The end of the journal push line the scan is on, or -1.)
+    : ~ i push_end -1
     ~ < p to {
         // To the next '@' sixteen bytes a step: a body is mostly not names.
         = p + p ( nurl_scan_byte3 # s + # i mp p - to p 64 64 64 )
@@ -88079,7 +88108,21 @@ unsafe @ __dce_scan i from i to → v {
                     // hand a line to a `s`-taking helper without copying.
                     : u sv . mp q
                     = . mp q # u 0
-                    : i fi ( __dce_mark_name # s + # i mp + p 1 )
+                    // A journal push's thunk (`call void
+                    // @nurl_journal_push_drop2(…, ptr @thunk)`) is live only
+                    // if the push survives the elision: its edge waits for
+                    // __dce_journal_edges (Agora #747). Its address is taken
+                    // all the same. (The callee's name is 23 bytes: the
+                    // length rules out nearly every other name.)
+                    // (push_end is set only while edges are deferred.)
+                    : b jtd < p push_end
+                    : i fi ? jtd ( __dce_index_of # s + # i mp + p 1 ) ( __dce_mark_name # s + # i mp + p 1 )
+                    ? jtd { ( __dce_jat_add p ) } {}
+                    // (The push's callee is no function of the module: only
+                    // a name the lookup missed is asked.)
+                    ? & < fi 0 == - q p 24 {
+                        ? & & != 0 g_dce_defer_jrnl == # i sv 40 == 0 # i ( memcmp # s + # i mp + p 1 `nurl_journal_push_drop2` 23 ) { = push_end ( __mp_eol q to ) } {}
+                    } {}
                     = . mp q sv
                     // Not a direct call's callee (`@name(`): its address is
                     // taken (__ext_compute).
@@ -88089,6 +88132,55 @@ unsafe @ __dce_scan i from i to → v {
             }
         } {}
     }
+}
+
+// The index of the function named `nm`, or -1; nothing is marked (read in
+// place, as __dce_mark_name reads it).
+@ __dce_index_of s nm → i { ^ ( nurl_sym_int g_dce_map nm ) }
+
+// After the elision: the thunk of every journal push that survived in a
+// live function is live (__dce_scan deferred those edges, and kept where
+// each `@thunk` is: one the elision blanked is a space now), and so is
+// what it reaches — scanned here, its own pushes' thunks too, to the fixed
+// point. A thunk only an elided push named is left out of the module
+// (Agora #747).
+unsafe @ __dce_journal_edges → v {
+    : *u mp # *u # s g_dce_mod
+    : ~ i qi g_dce_qn
+    : ~ i li 0
+    ~ | < li g_dce_jn < qi g_dce_qn {
+        ~ < li g_dce_jn {
+            : i a ( nurl_peek # s g_dce_jat li )
+            ? == # i . mp a 64 {
+                : ~ i q + a 1
+                ~ ( __dce_ident_byte & # i . mp q 255 ) { = q + q 1 }
+                : u sv . mp q
+                = . mp q # u 0
+                ( __dce_mark_name # s + # i mp + a 1 )
+                = . mp q sv
+            } {}
+            = li + li 1
+        }
+        // (A function made live here was never scanned: its body.)
+        ~ < qi g_dce_qn {
+            : i fi ( nurl_peek # s g_dce_queue qi )
+            ( __dce_scan ( nurl_peek # s g_dce_start fi ) ( nurl_peek # s g_dce_end fi ) )
+            = qi + qi 1
+        }
+    }
+    ? != 0 g_dce_jat { ( nurl_free # s g_dce_jat ) = g_dce_jat 0 } {}
+    = g_dce_jn 0
+    = g_dce_jcap 0
+}
+
+// Keep where a deferred journal thunk is named (__dce_scan).
+unsafe @ __dce_jat_add i p → v {
+    ? >= g_dce_jn g_dce_jcap {
+        = g_dce_jcap ? == 0 g_dce_jcap 64 * g_dce_jcap 2
+        = g_dce_jat # i ( nurl_realloc # s g_dce_jat * g_dce_jcap 8 )
+    } {}
+    ( nurl_poke # s g_dce_jat g_dce_jn p )
+    = g_dce_jn + g_dce_jn 1
 }
 
 // Record the name on the `define` line starting at byte `st` as index
@@ -88656,6 +88748,37 @@ unsafe @ __jrnl_push_elidable i le i en i rs i re → b {
     ^ F
 }
 
+// A journal push at line [ls, le) is being blanked: the stores just above
+// it into its own slot (`%j<N>`, and its flag `%k<N>` — __jt_reg) go with
+// it, nothing else reading that slot (Agora #747). Each such store is
+// emitted right before its push; the slot's `alloca` is hoisted into the
+// entry block, where LLVM drops it unused.
+unsafe @ __jrnl_blank_jt_stores i ls i le → v {
+    : *u mp # *u # s g_dce_mod
+    // The slot right after `(ptr `: `%j<N>`.
+    : i ss + ls 41
+    ? != # i . mp + ss 1 106 { ^ v } {}
+    : i se + ss ( nurl_scan_byte3 # s + # i mp ss - le ss 44 41 44 )
+    : i n - se ss
+    ? < n 3 { ^ v } {}
+    // Up to two lines above: `  store <ty> <v>, ptr %j<N>` / `…, ptr %k<N>`,
+    // known by their ends first (no line before the function's start is
+    // reached: its `define` line ends otherwise).
+    : ~ i e - ls 1
+    : ~ i k 0
+    : i m + n 6
+    ~ & < k 2 > e m {
+        : i ns - e n
+        : i c # i . mp + ns 1
+        : b hit & & | == c 106 == c 107 == 0 # i ( memcmp # s + # i mp - e m `, ptr %` 7 ) == 0 # i ( memcmp # s + # i mp + ns 2 # s + # i mp + ss 2 - n 2 )
+        ? hit {
+            : ~ i b0 - e m
+            ~ & > b0 0 != # i . mp - b0 1 10 { = b0 - b0 1 }
+            ? == 0 # i ( memcmp # s + # i mp b0 `  store ` 8 ) { ( __jrnl_blank_line b0 e ) = e - b0 1 = k + k 1 } { = k 2 }
+        } { = k 2 }
+    }
+}
+
 // Blank (as a comment) every line of function `fi` that starts with `pat`.
 unsafe @ __jrnl_blank_calls i fi s pat i pn → v {
     : *u mp # *u # s g_dce_mod
@@ -88666,6 +88789,7 @@ unsafe @ __jrnl_blank_calls i fi s pat i pn → v {
         ? < rel 0 { = p en } {
             : i ls + p rel
             : i le ( __mp_eol ls en )
+            ? == 0 # i ( strncmp # s + # i mp ls `  call void @nurl_journal_push_drop2(` 37 ) { ( __jrnl_blank_jt_stores ls le ) } {}
             = . mp ls # u 59
             : ~ i q + ls 1
             ~ < q le { = . mp q # u 32 = q + q 1 }
@@ -89411,6 +89535,7 @@ unsafe @ __jrnl_slot_elide i fi → v {
     ~ < k nl {
         : i kd . kind k
         ? & | == kd 1 == kd 2 & != 0 . has . sid k != 0 . ok . sid k {
+            ? == kd 1 { ( __jrnl_blank_jt_stores . lst k - . lst + k 1 1 ) } {}
             ( __jrnl_blank_line . lst k - . lst + k 1 1 )
         } {}
         = k + k 1
@@ -90746,6 +90871,7 @@ unsafe @ __dce_emit_module s mod i mlen → v {
         : ~ i li 0
         ~ < li n { ( nurl_poke # s g_dce_live li 1 ) = li + li 1 }
     } {
+        = g_dce_defer_jrnl 1
         ( __dce_mark_name `main` )
         // `--keep=` roots: names the LINK needs that the module never
         // mentions. Comma-separated, and a name that is not in this
@@ -90783,6 +90909,8 @@ unsafe @ __dce_emit_module s mod i mlen → v {
         }
     }
     ( __jrnl_elide n == 0 ( nurl_str_len mainent ) )
+    // (The journal pushes that survived the elision: their thunks.)
+    ? != 0 g_dce_defer_jrnl { ( __dce_journal_edges ) = g_dce_defer_jrnl 0 } {}
     // Emit the live sub-sequence.
     : ~ i pos 0
     : ~ i ei 0
