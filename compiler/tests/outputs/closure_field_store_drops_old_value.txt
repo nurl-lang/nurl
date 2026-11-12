@@ -1,0 +1,12 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+drop captured.0
+drop captured.1
+drop own.0
+drop own.1
+drop captured.1
+drop captured.2
+done
+drop captured.3

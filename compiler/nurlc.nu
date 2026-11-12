@@ -54110,7 +54110,14 @@ unsafe @ __replaces_note i syms s name s field → v {
     // (h198: `= . s note @ ?String { … }` left the old string). (A closure
     // field is released by the caller, gen_field_store.)
     : b __fs_other & & ! __fs_hty ! ( __is_closure_llty ftype ) | ( __type_needs_drop ftype syms ) != 0 ( nurl_str_len ( __nc_opt_payload ftype ) )
-    ? & & __fs_other == 0 g_bck_closure_depth | __fs_inout ( nurl_sym_has_word syms `__user_drops__` alloca_ptr ) {
+    // (…inside a closure too, for a struct it captured by pointer from an
+    // owner that owns it — the owner's flag says, `__outer_owned`, as for
+    // a handle field above. Left out there, the replaced value leaked on
+    // every store: Agora #731.)
+    // (Asked only of a field that owns something: most stores are of one
+    // that does not, and the registration lookup is the cost.)
+    : b __fs_odrop ? __fs_other ? | __fs_inout ( nurl_sym_has_word syms `__user_drops__` alloca_ptr ) T ? != 0 g_bck_closure_depth != 0 ( nurl_sym_len2 syms alloca_ptr `__outer_owned` ) F F
+    ? __fs_odrop {
         : s __of ? __fs_inout ( nurl_str_cat `true` `` ) ( mem_udrop_flag_get syms cg alloca_ptr )
         ( __fs_rawdrop_old cg __of ftype gep )
     } {}
