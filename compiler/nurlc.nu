@@ -4803,7 +4803,7 @@ unsafe @ nurl_cg_lbl i h s hint → s {
     : s m ( nurl_sym_get2 g_pending_impl `ostmemo##` c )
     ? != 0 ( nurl_str_len m ) { ^ ( seq m `1` ) } {}
     : ~ b r F
-    ? | ( __hown_dyn syms c 0 ) ( __hown_dyn syms g 0 ) {
+    ? | ( __hown_dyn syms c ) ( __hown_dyn syms g ) {
         ( nurl_sym_def g_ost `seen` `` )
         = r ( __ret_ost_node syms c 0 )
         ? & ! r ! ( seq c g ) { = r ( __ret_ost_node syms g 0 ) } {}
@@ -4820,7 +4820,7 @@ unsafe @ nurl_cg_lbl i h s hint → s {
 // of such a call is that value's owner (bck_handle_match).
 @ mem_ret_owned_always i syms s c s g → b {
     ? == 0 g_summaries_final { ^ F } {}
-    ? | ( __hown_dyn syms c 0 ) ( __hown_dyn syms g 0 ) { ^ F } {}
+    ? | ( __hown_dyn syms c ) ( __hown_dyn syms g ) { ^ F } {}
     : s rt ( nurl_sym_get syms c )
     ^ & & != 0 ( nurl_str_len rt ) ( __is_hown_ty rt ) ! ( __callee_lent syms c g )
 }
@@ -4851,7 +4851,7 @@ unsafe @ nurl_cg_lbl i h s hint → s {
         ? == 0 ( nurl_str_len pr ) { = r T } {
             : s c2 ( str_first_word pr )
             : s g2 ( str_first_word ( str_skip_word pr ) )
-            ? | ( __hown_dyn syms c2 0 ) ( __hown_dyn syms g2 0 ) {
+            ? | ( __hown_dyn syms c2 ) ( __hown_dyn syms g2 ) {
                 ? ( __ret_ost_node syms c2 + depth 1 ) { = r T } {
                     ? & ! ( seq c2 g2 ) ( __ret_ost_node syms g2 + depth 1 ) { = r T } {}
                 }
@@ -10676,7 +10676,7 @@ unsafe @ extract_fn_ptr_return_type s fn_ptr_type → s {
     | != 0 ( nurl_sym_len2 syms ic `__nurlfn` ) != 0 ( nurl_sym_len2 syms ig `__garity` ) {
         ^ ! | ( __ret_never_owned syms ic ) ( __ret_never_owned syms ig )
     } {}
-    ^ | ! ( __callee_lent syms ic ig ) | ( __hown_dyn syms ic 0 ) ( __hown_dyn syms ig 0 )
+    ^ | ! ( __callee_lent syms ic ig ) | ( __hown_dyn syms ic ) ( __hown_dyn syms ig )
 }
 
 // The rule's words for a fresh raw string stored into a field (gen_agg_lit,
@@ -11493,9 +11493,14 @@ unsafe @ __clol_srcs_set s v → v { = g_clol_srcs ( nurl_str_cat v `` ) }
 }
 
 // Does `fname` hand back a borrow rather than a value its caller owns — its
-// own summaries, or (depth-bounded) a callee whose result it returns as is.
+// own summaries, or a callee whose result it returns as is, at any depth:
+// the callees it hands back (`retvia##`) are followed as a worklist with
+// the set of those already asked, which ends it on a call graph that
+// loops. A budget of eight answered "owned" below it: an identity chain of
+// twelve functions declared bottom-up handed the caller its own argument
+// as a value of its own, freed twice (agora #721).
 @ mem_fn_lends i syms s fname i depth → b {
-    ? | == 0 ( nurl_str_len fname ) > depth 8 { ^ F } {}
+    ? == 0 ( nurl_str_len fname ) { ^ F } {}
     ? != 0 ( nurl_sym_len2 syms fname `__ret_borrow` ) { ^ T } {}
     // A view or alias of an argument lends only what the caller passed in;
     // a callee reached through `^ ( g … )` is handed this function's own
@@ -11532,14 +11537,56 @@ unsafe @ __clol_srcs_set s v → v { = g_clol_srcs ( nurl_str_cat v `` ) }
             : i c2 ( nurl_str_find tail `:` )
             : s ai ( nurl_str_slice tail 0 c2 )
             : s pi ( nurl_str_slice tail + c2 1 - - ( nurl_str_len tail ) c2 1 )
-            ? & & ( str_contains_word via cn ) ! ( str_contains_word own0 pi ) ( __fn_lends_arg cn ai 0 ) { ^ T } {}
+            ? & & ( str_contains_word via cn ) ! ( str_contains_word own0 pi ) ( __fn_lends_arg cn ai ) { ^ T } {}
         }
     } {}
-    ~ != 0 ( nurl_str_len via ) {
+    // (Below the function asked, only a callee's own borrow summary counts
+    // — what it lends of its parameters is this function's, read above.)
+    ^ ( __via_ret_borrow syms fname via )
+}
+
+// Does a callee reached through `via` (the callees `fname` hands back as
+// is, and theirs) carry a borrow summary of its own? A worklist with the set
+// already asked; once every summary is final the answer is kept per
+// function (`vrb##`, a whole walk's only), so a chain asked of each of its
+// functions is walked once, not once per function.
+unsafe @ __via_ret_borrow i syms s fname s via0 → b {
+    ? != 0 g_summaries_final {
+        : s m ( nurl_sym_get2 g_pending_impl `vrb##` fname )
+        ? != 0 ( nurl_str_len m ) { ^ ( seq m `1` ) } {}
+    } {}
+    : ~ s via ( nurl_str_cat via0 `` )
+    : s stamp ( __seen_begin )
+    ( __seen_add stamp ( nurl_str_cat `vrb|` fname ) )
+    : ~ s vis ``
+    : ~ b r F
+    ~ & ! r != 0 ( nurl_str_len via ) {
         : s c ( str_first_word via ) = via ( str_skip_word via )
-        ? ( mem_fn_lends syms c + depth 1 ) { ^ T } {}
+        ? & != 0 ( nurl_str_len c ) ( __seen_add stamp ( nurl_str_cat `vrb|` c ) ) {
+            = vis ( nurl_str_cat3 vis ` ` c )
+            ? != 0 ( nurl_sym_len2 syms c `__ret_borrow` ) { = r T } {
+                : s cm ? != 0 g_summaries_final ( nurl_sym_get2 g_pending_impl `vrb##` c ) ``
+                ? ( seq cm `1` ) { = r T } {
+                    ? == 0 ( nurl_str_len cm ) {
+                        : s more ( nurl_sym_get g_pending_impl ( nurl_str_cat `retvia##` c ) )
+                        ? != 0 ( nurl_str_len more ) { = via ? == 0 ( nurl_str_len via ) ( nurl_str_cat more `` ) ( nurl_str_cat3 via ` ` more ) } {}
+                    } {}
+                }
+            }
+        } {}
     }
-    ^ F
+    ? != 0 g_summaries_final {
+        ( nurl_sym_def g_pending_impl ( nurl_str_cat `vrb##` fname ) ? r `1` `0` )
+        // (A walk that found nothing has answered for every function it met:
+        // what each reaches is among what it met.)
+        ? ! r {
+            ~ != 0 ( nurl_str_len vis ) {
+                : s w ( str_first_word vis ) = vis ( str_skip_word vis )
+                ? == 0 ( nurl_sym_len2 g_pending_impl `vrb##` w ) { ( nurl_sym_def g_pending_impl ( nurl_str_cat `vrb##` w ) `0` ) } {}
+            }
+        } {}
+    } {}
+    ^ r
 }
 
 // Does `fname` hand its argument `ai` back as the handle it is — `^ p`,
@@ -11547,25 +11594,73 @@ unsafe @ __clol_srcs_set s v → v { = g_clol_srcs ( nurl_str_cat v `` ) }
 // parameters it takes over) — or by handing back, as is, the result of a
 // callee it passed that parameter to which does (`^ ( g p )`, the
 // `callee:position:parameter` notes)?
-@ __fn_lends_arg s fname s ai i depth → b {
-    ? | == 0 ( nurl_str_len fname ) > depth 8 { ^ F } {}
-    : s own ( nurl_str_cat3 ( nurl_sym_get g_fn_sink fname ) ` ` ( nurl_sym_get g_fn_keeps fname ) )
-    ? ( str_contains_word own ai ) { ^ F } {}
-    ? | ( str_contains_word ( nurl_sym_get g_fn_ret_alias fname ) ai ) ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `retlend##` fname ) ai ) { ^ T } {}
-    : s via ( nurl_sym_get g_pending_impl ( nurl_str_cat `retvia##` fname ) )
-    ? == 0 ( nurl_str_len via ) { ^ F } {}
-    : ~ s fw ( nurl_sym_get g_pending_impl ( nurl_str_cat `retfwd##` fname ) )
-    ~ != 0 ( nurl_str_len fw ) {
-        : s e ( str_first_word fw ) = fw ( str_skip_word fw )
-        : i c1 ( nurl_str_find e `:` )
-        : s cn ( nurl_str_slice e 0 c1 )
-        : s tail ( nurl_str_slice e + c1 1 - - ( nurl_str_len e ) c1 1 )
-        : i c2 ( nurl_str_find tail `:` )
-        : s a2 ( nurl_str_slice tail 0 c2 )
-        : s pi ( nurl_str_slice tail + c2 1 - - ( nurl_str_len tail ) c2 1 )
-        ? & & ( seq pi ai ) ( str_contains_word via cn ) ( __fn_lends_arg cn a2 + depth 1 ) { ^ T } {}
+unsafe @ __fn_lends_arg s fname s ai → b {
+    ? == 0 ( nurl_str_len fname ) { ^ F } {}
+    // (A worklist of `callee:argument` pairs with the set already asked, as
+    // mem_fn_lends: no depth budget — eight levels answered "no", agora #721.)
+    // (Once every summary is final the answer is kept per `callee:argument`
+    // — a whole walk's only, and a walk that found nothing for every pair it
+    // met — so a chain asked of each of its functions is walked once.)
+    : s start ( nurl_str_cat3 fname `:` ai )
+    ? != 0 g_summaries_final {
+        : s m0 ( nurl_sym_get2 g_pending_impl `fla##` start )
+        ? != 0 ( nurl_str_len m0 ) { ^ ( seq m0 `1` ) } {}
+    } {}
+    : ~ s work ( nurl_str_cat start `` )
+    : s stamp ( __seen_begin )
+    : ~ s vis ``
+    : ~ b r F
+    : ~ s hit ``
+    ~ & ! r != 0 ( nurl_str_len work ) {
+        : s it ( str_first_word work ) = work ( str_skip_word work )
+        : i cc ( nurl_str_find it `:` )
+        : s km ? & != 0 g_summaries_final ! ( seq it start ) ( nurl_sym_get2 g_pending_impl `fla##` it ) ``
+        ? ( seq km `1` ) { = r T = hit it } {}
+        ? & & & ! r > cc 0 == 0 ( nurl_str_len km ) ( __seen_add stamp ( nurl_str_cat `fla|` it ) ) {
+            = vis ( nurl_str_cat3 vis ` ` it )
+            : s f ( nurl_str_slice it 0 cc )
+            : s a ( nurl_str_slice it + cc 1 - - ( nurl_str_len it ) cc 1 )
+            : s own ( nurl_str_cat3 ( nurl_sym_get g_fn_sink f ) ` ` ( nurl_sym_get g_fn_keeps f ) )
+            ? ! ( str_contains_word own a ) {
+                ? | ( str_contains_word ( nurl_sym_get g_fn_ret_alias f ) a ) ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `retlend##` f ) a ) { = r T = hit it } {}
+                : s via ( nurl_sym_get g_pending_impl ( nurl_str_cat `retvia##` f ) )
+                ? != 0 ( nurl_str_len via ) {
+                    : ~ s fw ( nurl_sym_get g_pending_impl ( nurl_str_cat `retfwd##` f ) )
+                    ~ != 0 ( nurl_str_len fw ) {
+                        : s e ( str_first_word fw ) = fw ( str_skip_word fw )
+                        : i c1 ( nurl_str_find e `:` )
+                        : s cn ( nurl_str_slice e 0 c1 )
+                        : s tail ( nurl_str_slice e + c1 1 - - ( nurl_str_len e ) c1 1 )
+                        : i c2 ( nurl_str_find tail `:` )
+                        : s a2 ( nurl_str_slice tail 0 c2 )
+                        : s pi ( nurl_str_slice tail + c2 1 - - ( nurl_str_len tail ) c2 1 )
+                        ? & ( seq pi a ) ( str_contains_word via cn ) {
+                            ( __seen_parent stamp ( nurl_str_cat3 `fla|` cn ( nurl_str_cat `:` a2 ) ) it )
+                            = work ? == 0 ( nurl_str_len work ) ( nurl_str_cat3 cn `:` a2 ) ( nurl_str_cat4 work ` ` cn ( nurl_str_cat `:` a2 ) )
+                        } {}
+                    }
+                } {}
+            } {}
+        } {}
     }
-    ^ F
+    ? != 0 g_summaries_final {
+        ( nurl_sym_def g_pending_impl ( nurl_str_cat `fla##` start ) ? r `1` `0` )
+        // (A yes is every item's on the path it was found by.)
+        ? r {
+            : ~ s x ( nurl_str_cat hit `` )
+            ~ & != 0 ( nurl_str_len x ) ! ( seq x start ) {
+                ? == 0 ( nurl_sym_len2 g_pending_impl `fla##` x ) { ( nurl_sym_def g_pending_impl ( nurl_str_cat `fla##` x ) `1` ) } {}
+                = x ( __seen_parent_of stamp ( nurl_str_cat `fla|` x ) )
+            }
+        } {}
+        ? ! r {
+            ~ != 0 ( nurl_str_len vis ) {
+                : s w ( str_first_word vis ) = vis ( str_skip_word vis )
+                ? == 0 ( nurl_sym_len2 g_pending_impl `fla##` w ) { ( nurl_sym_def g_pending_impl ( nurl_str_cat `fla##` w ) `0` ) } {}
+            }
+        } {}
+    } {}
+    ^ r
 }
 
 // Does whatever `fname` lends come from its own parameters — handed back
@@ -11794,43 +11889,75 @@ unsafe @ __clol_srcs_set s v → v { = g_clol_srcs ( nurl_str_cat v `` ) }
     ^ ( nurl_str_cat4 `@.__nurl_lend` kind `.` ( nurl_str_int number ) )
 }
 
+// (The functions the last walk met, for __hown_dyn's memo.)
+: ~ s g_hd_vis ``
+
 // Does `fname` answer per call whether its result is owned — itself, or
 // by handing back as is (`^ ( g … )`) the result of a callee that does?
-@ __hown_dyn i syms s fname i depth → b {
-    ? | == 0 ( nurl_str_len fname ) > depth 8 { ^ F } {}
+// The callees are followed as a worklist with the set already asked: a
+// budget of eight answered "owned, whatever the call" below it, and the
+// depth-0 memo kept that capped answer for every later question — a chain
+// of ten forwarders handed the caller a Vec's element as its own, dropped
+// by both (agora #721). An answer is kept only for a walk that ran whole,
+// once every summary is final.
+@ __hown_dyn i syms s fname → b {
+    ? == 0 ( nurl_str_len fname ) { ^ F } {}
     ? != 0 ( nurl_sym_len2 g_pending_impl `retdyn##` fname ) { ^ T } {}
-    // Asked once per callee at module end, when every summary is final.
-    ? == 0 g_summaries_final { ^ ( __hown_dyn_walk syms fname depth ) } {}
-    : s __hdm ( nurl_sym_get2 g_pending_impl `hdynmemo##` fname )
-    ? != 0 ( nurl_str_len __hdm ) { ^ ( seq __hdm `1` ) } {}
-    : b __hd ( __hown_dyn_walk syms fname depth )
-    ? == depth 0 { ( nurl_sym_def g_pending_impl ( nurl_str_cat `hdynmemo##` fname ) ? __hd `1` `0` ) } {}
+    ? != 0 g_summaries_final {
+        : s __hdm ( nurl_sym_get2 g_pending_impl `hdynmemo##` fname )
+        ? != 0 ( nurl_str_len __hdm ) { ^ ( seq __hdm `1` ) } {}
+    } {}
+    : b __hd ( __hown_dyn_walk syms fname )
+    ? != 0 g_summaries_final {
+        ( nurl_sym_def g_pending_impl ( nurl_str_cat `hdynmemo##` fname ) ? __hd `1` `0` )
+        // (…and a walk that found nothing, for every function it met.)
+        ? ! __hd {
+            : ~ s vis ( nurl_str_cat g_hd_vis `` )
+            ~ != 0 ( nurl_str_len vis ) {
+                : s w ( str_first_word vis ) = vis ( str_skip_word vis )
+                ? == 0 ( nurl_sym_len2 g_pending_impl `hdynmemo##` w ) { ( nurl_sym_def g_pending_impl ( nurl_str_cat `hdynmemo##` w ) `0` ) } {}
+            }
+        } {}
+    } {}
     ^ __hd
 }
 
-@ __hown_dyn_walk i syms s fname i depth → b {
-    : ~ s via ( nurl_sym_get g_pending_impl ( nurl_str_cat `retvia##` fname ) )
-    ~ != 0 ( nurl_str_len via ) {
-        : s c ( str_first_word via ) = via ( str_skip_word via )
-        ? ( __hown_dyn syms c + depth 1 ) { ^ T } {}
-    }
-    // A binding handed back as it came from a call (mem_hown_dyn_if): per
-    // call exactly when that call may lend.
-    : ~ s cond ( nurl_sym_get g_pending_impl ( nurl_str_cat `retdynif##` fname ) )
-    ~ != 0 ( nurl_str_len cond ) {
-        : s c ( str_first_word cond ) = cond ( str_skip_word cond )
-        : s g ( str_first_word cond ) = cond ( str_skip_word cond )
-        ? | | ( __callee_lent syms c g ) ( __hown_dyn syms c + depth 1 ) ( __hown_dyn syms g + depth 1 ) { ^ T } {}
-    }
-    // A result copied where a call lent from a value this frame owns
-    // (mem_hown_dyn_lend): per call exactly when that call can lend so.
-    : ~ s lt ( nurl_sym_get g_pending_impl ( nurl_str_cat `retdynlend##` fname ) )
-    ~ != 0 ( nurl_str_len lt ) {
-        : s c ( str_first_word lt ) = lt ( str_skip_word lt )
-        : s g ( str_first_word lt ) = lt ( str_skip_word lt )
-        : s ix ( str_first_word lt ) = lt ( str_skip_word lt )
-        : s who ? != 0 ( nurl_sym_len2 syms c `__body_done` ) c g
-        ? != 0 ( mem_fn_lend_kind syms who ( nurl_str_to_int ix ) ) { ^ T } {}
+unsafe @ __hown_dyn_walk i syms s fname → b {
+    : ~ s work ( nurl_str_cat fname `` )
+    : s stamp ( __seen_begin )
+    = g_hd_vis ``
+    ~ != 0 ( nurl_str_len work ) {
+        : s f ( str_first_word work ) = work ( str_skip_word work )
+        ? & != 0 ( nurl_str_len f ) ( __seen_add stamp ( nurl_str_cat `hd|` f ) ) {
+            = g_hd_vis ( nurl_str_cat3 g_hd_vis ` ` f )
+            ? & ! ( seq f fname ) != 0 ( nurl_sym_len2 g_pending_impl `retdyn##` f ) { ^ T } {}
+            // (A callee whose whole answer is known: no need to go on.)
+            : s known ? & != 0 g_summaries_final ! ( seq f fname ) ( nurl_sym_get2 g_pending_impl `hdynmemo##` f ) ``
+            ? ( seq known `1` ) { ^ T } {}
+            ? == 0 ( nurl_str_len known ) {
+                : s via ( nurl_sym_get g_pending_impl ( nurl_str_cat `retvia##` f ) )
+                ? != 0 ( nurl_str_len via ) { = work ? == 0 ( nurl_str_len work ) ( nurl_str_cat via `` ) ( nurl_str_cat3 work ` ` via ) } {}
+                // A binding handed back as it came from a call (mem_hown_dyn_if):
+                // per call exactly when that call may lend.
+                : ~ s cond ( nurl_sym_get g_pending_impl ( nurl_str_cat `retdynif##` f ) )
+                ~ != 0 ( nurl_str_len cond ) {
+                    : s c ( str_first_word cond ) = cond ( str_skip_word cond )
+                    : s g ( str_first_word cond ) = cond ( str_skip_word cond )
+                    ? ( __callee_lent syms c g ) { ^ T } {}
+                    = work ( nurl_str_cat4 work ` ` c ( nurl_str_cat ` ` g ) )
+                }
+                // A result copied where a call lent from a value this frame owns
+                // (mem_hown_dyn_lend): per call exactly when that call can lend so.
+                : ~ s lt ( nurl_sym_get g_pending_impl ( nurl_str_cat `retdynlend##` f ) )
+                ~ != 0 ( nurl_str_len lt ) {
+                    : s c ( str_first_word lt ) = lt ( str_skip_word lt )
+                    : s g ( str_first_word lt ) = lt ( str_skip_word lt )
+                    : s ix ( str_first_word lt ) = lt ( str_skip_word lt )
+                    : s who ? != 0 ( nurl_sym_len2 syms c `__body_done` ) c g
+                    ? != 0 ( mem_fn_lend_kind syms who ( nurl_str_to_int ix ) ) { ^ T } {}
+                }
+            } {}
+        } {}
     }
     ^ F
 }
@@ -11886,7 +12013,7 @@ unsafe @ __clol_srcs_set s v → v { = g_clol_srcs ( nurl_str_cat v `` ) }
         : b lent ( __callee_lent syms callee generic )
         ( nurl_print `@.__nurl_retown.` ) ( nurl_print number )
         ( nurl_print ` = private constant i1 ` ) ( nurl_print ? lent `false` `true` ) ( nurl_print `\n` )
-        : b dyn | ( __hown_dyn syms callee 0 ) ( __hown_dyn syms generic 0 )
+        : b dyn | ( __hown_dyn syms callee ) ( __hown_dyn syms generic )
         ? & & != 0 g_lint != 0 g_lint_fpend & ! lent ! dyn
         { ( nurl_sym_def g_lint_fpend ( nurl_str_cat `owned @.__nurl_retown.` number ) `1` ) } {}
         ( nurl_print `@.__nurl_retdyn.` ) ( nurl_print number )
@@ -18893,7 +19020,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
                         : s __vs_root ? ( seq __vs_path `*` ) ( nurl_str_cat bck_arg_root `` ) ? > __vs_d 0 ( nurl_str_slice __vs_path 0 __vs_d ) ( nurl_str_cat __vs_path `` )
                         ? & != 0 ( nurl_str_len __vs_root ) ( __is_ident_char ( nurl_str_get __vs_root 0 ) ) {
                             : s __vs_lt ? & is_inout_arg != 0 ( nurl_str_ends at `*` ) ( nurl_str_slice at 0 - ( nurl_str_len at ) 1 ) ( nurl_str_cat at `` )
-                            : s __vs_fb ? == __vs 2 ( __vself_fb_rels syms __vs_lt `` 0 ) ``
+                            : s __vs_fb ? == __vs 2 ( __vself_fb_rels syms __vs_lt `` ) ``
                             // (Not known yet, for a value with no field that
                             // holds storage — a Vec, a String, a struct of
                             // views: nothing of it to view, no row.)
@@ -30712,7 +30839,7 @@ unsafe @ __src_has_raw_ptr s text → b {
 // #185).
 @ __call_answers i syms i rhs_tt → b {
     ? != rhs_tt TT_LPAREN { ^ F } {}
-    ^ ( __hown_dyn syms ( nurl_sym_get syms `__last_call_name__` ) 0 )
+    ^ ( __hown_dyn syms ( nurl_sym_get syms `__last_call_name__` ) )
 }
 
 // The own bit of the call whose result is `val` (an IR value), when that
@@ -32344,7 +32471,7 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
     : s cn ( str_first_word pr )
     : s gn ( str_first_word ( str_skip_word pr ) )
     ? | == 0 ( nurl_str_len cn ) == 0 ( nurl_sym_len g_fn_compiled cn ) { ^ F } {}
-    ^ & ! ( __callee_lent syms cn gn ) ! | ( __hown_dyn syms cn 0 ) ( __hown_dyn syms gn 0 )
+    ^ & ! ( __callee_lent syms cn gn ) ! | ( __hown_dyn syms cn ) ( __hown_dyn syms gn )
 }
 
 // At a drop point of `ptr` (its struct drop gated on `cond`, `` when
@@ -36974,9 +37101,11 @@ unsafe @ __vk_union_of s fns s seen b dyn → s {
 // The fields of a value of type `lty` that hold storage of their own — a
 // String, a Vec, a handle, through struct fields (`pre` the path so far):
 // what an argument a callee's answer never names is tied to (an `sK` row's,
-// agora #584), `,`-separated.
-@ __vself_fb_rels i syms s lty s pre i depth → s {
-    ? | > depth 3 != 37 ( nurl_str_get lty 0 ) { ^ ( nurl_str_cat `` `` ) } {}
+// agora #584), `,`-separated. At any depth: what a value holds by value
+// is a finite tree, and three levels left a field four structs down tied
+// to nothing (agora #721).
+@ __vself_fb_rels i syms s lty s pre → s {
+    ? != 37 ( nurl_str_get lty 0 ) { ^ ( nurl_str_cat `` `` ) } {}
     : s sname ( nurl_str_slice lty 1 - ( nurl_str_len lty ) 1 )
     : s fcs ( nurl_sym_get2 syms sname `__field_count` )
     ? == 0 ( nurl_str_len fcs ) { ^ ( nurl_str_cat `` `` ) } {}
@@ -36989,7 +37118,7 @@ unsafe @ __vk_union_of s fns s seen b dyn → s {
         : s rel ? == 0 ( nurl_str_len pre ) ( nurl_str_cat fnm `` ) ( nurl_str_cat3 pre `.` fnm )
         : ~ s add ``
         ? | | ( __is_handle_ty ft ) ( seq ft `%String` ) != 0 ( nurl_str_starts ft `%Vec__` ) { = add rel } {
-            ? ( __type_needs_drop ft syms ) { = add ( __vself_fb_rels syms ft rel + depth 1 ) } {}
+            ? ( __type_needs_drop ft syms ) { = add ( __vself_fb_rels syms ft rel ) } {}
         }
         ? != 0 ( nurl_str_len add ) { = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat add `` ) ( nurl_str_cat3 out `,` add ) } {}
         = i + i 1
@@ -50126,7 +50255,7 @@ unsafe @ borrowck_fn_end i lex i syms s fname → v {
                 : s cn ( str_first_word pr )
                 : s gn ( str_first_word ( str_skip_word pr ) )
                 ? & & & != 0 ( nurl_str_len cn ) != 0 ( nurl_sym_len g_fn_compiled cn )
-                ! ( __callee_lent syms cn gn ) ! | ( __hown_dyn syms cn 0 ) ( __hown_dyn syms gn 0 ) { ( nurl_sym_def g_ptrtab ( nurl_str_cat up `__oname` ) nm ) ^ ( nurl_str_cat up `` ) } {}
+                ! ( __callee_lent syms cn gn ) ! | ( __hown_dyn syms cn ) ( __hown_dyn syms gn ) { ( nurl_sym_def g_ptrtab ( nurl_str_cat up `__oname` ) nm ) ^ ( nurl_str_cat up `` ) } {}
             } {}
             ^ ( nurl_str_cat `` `` )
         } {}
@@ -54377,10 +54506,16 @@ unsafe @ __agg_shape_clash s vty s dty → b {
 // closure, a handle) or a payload tag (an enum with payloads), anywhere in
 // it: what a cast may not make outside `unsafe`. Numbers, unit-only enums
 // and aggregates of them hold neither.
+// Read whole, at any depth: what a value holds by value is a finite tree
+// (a type cannot hold itself but through a pointer, which answers at
+// once), and each named type is answered once (`haddr##`). A budget of
+// sixteen levels answered "none" below it — and recorded that for every
+// type above — so `# L18 4096` made a String eighteen structs down out of
+// an integer in safe code (agora #721).
 unsafe @ __ty_holds_addr s ty i depth → b {
     : i n ( nurl_str_len ty )
     : *u ty_p # *u ty
-    ? | == n 0 > depth 16 { ^ F } {}
+    ? == n 0 { ^ F } {}
     ? == ( nurl_str_at ty_p n - n 1 ) 42 { ^ T } {}
     : i c0 ( nurl_str_at ty_p n 0 )
     // `{ … }` (an option, a result, a closure) and `[ N x T ]`: their parts.
@@ -54400,6 +54535,11 @@ unsafe @ __ty_holds_addr s ty i depth → b {
     ? != c0 37 { ^ F } {}
     : s memo ( nurl_sym_get2 g_impl_name_syms `haddr##` ty )
     ? != 0 ( nurl_str_len memo ) { ^ ( seq memo `1` ) } {}
+    // (Marked while its fields are read: a type that holds itself by value
+    // — through options, `: A { ?B b }` `: B { ?A a }` — is an error
+    // reported where it is declared, and compiling goes on; the mark ends
+    // the walk there instead of the stack.)
+    ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `haddr##` ty ) `-` )
     : s sname ( nurl_str_slice ty 1 - n 1 )
     : ~ b r F
     ? != 0 ( nurl_sym_len2 g_root_syms sname `__variants` ) {
@@ -54416,7 +54556,7 @@ unsafe @ __ty_holds_addr s ty i depth → b {
             ? == 0 ( nurl_sym_len2 g_root_syms sname `__field_count` ) { = r T } {}
         }
     }
-    ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `haddr##` ty ) ? r `1` `-` )
+    ( nurl_sym_set g_impl_name_syms ( nurl_str_cat `haddr##` ty ) ? r `1` `-` )
     ^ r
 }
 
@@ -67582,27 +67722,38 @@ unsafe @ __ha_is_ret s line → b {
 
 // Does the LLVM type `t` carry a wide vector — a `<4 x i64>` (v256) or
 // `<8 x i64>` (v512) anywhere in it, an option or a tuple around one, or
-// a struct whose fields do (g_struct_ll, followed to `depth` 16)? Such a
+// a struct whose fields do (g_struct_ll, at any depth)? Such a
 // value is passed and returned element by element, so it crosses a call
 // in the registers its vectors would. (A function type inside `t` — a
 // closure field — reads as one too: harmless, it only costs a spill.)
-unsafe @ __ty_has_wide s t i depth → b {
+unsafe @ __ty_has_wide s t → b {
     ? | >= ( nurl_str_find t `<4 x i64>` ) 0 >= ( nurl_str_find t `<8 x i64>` ) 0 { ^ T } {}
-    ? > depth 16 { ^ F } {}
-    : i n ( strlen t )
-    : *u p # *u t
-    : ~ i k 0
-    ~ < k n {
-        ? == # i . p k 37 {
-            : ~ i e + k 1
-            ~ & < e n | ( __dce_ident_byte # i . p e ) == # i . p e 46 { = e + e 1 }
-            ? > e + k 1 {
-                : s nm ( nurl_str_slice t + k 1 - - e k 1 )
-                : s body ( nurl_sym_get g_struct_ll nm )
-                ? & > ( nurl_str_len body ) 0 ( __ty_has_wide body + depth 1 ) { ^ T } {}
-            } {}
-            = k e
-        } { = k + k 1 }
+    // (The struct bodies it names are followed as a worklist with the set
+    // of names already asked: a struct named through a pointer or a
+    // closure's signature may name itself, which a budget of sixteen levels
+    // ended — at the cost of every path to it again, fan^16 — agora #721.)
+    : ~ s work ( nurl_str_cat t `` )
+    : s stamp ( __seen_begin )
+    ~ != 0 ( nurl_str_len work ) {
+        : s cur ( __bar_first work ) = work ( __bar_rest work )
+        : i n ( strlen cur )
+        : *u p # *u cur
+        : ~ i k 0
+        ~ < k n {
+            ? == # i . p k 37 {
+                : ~ i e + k 1
+                ~ & < e n | ( __dce_ident_byte # i . p e ) == # i . p e 46 { = e + e 1 }
+                ? > e + k 1 {
+                    : s nm ( nurl_str_slice cur + k 1 - - e k 1 )
+                    ? ( __seen_add stamp ( nurl_str_cat `tw|` nm ) ) {
+                        : s body ( nurl_sym_get g_struct_ll nm )
+                        ? | >= ( nurl_str_find body `<4 x i64>` ) 0 >= ( nurl_str_find body `<8 x i64>` ) 0 { ^ T } {}
+                        ? > ( nurl_str_len body ) 0 { = work ? == 0 ( nurl_str_len work ) ( nurl_str_cat body `` ) ( nurl_str_cat3 work `|` body ) } {}
+                    } {}
+                } {}
+                = k e
+            } { = k + k 1 }
+        }
     }
     ^ F
 }
@@ -67618,7 +67769,7 @@ unsafe @ __vabi_vty s t b is_param → s {
     ~ & > k 0 != # i . p k 37 { = k - k 1 }
     : b param & is_param & > k 1 == # i . p - k 1 32
     : s ty ? param ( nurl_str_slice t 0 - k 1 ) ( nurl_str_cat t `` )
-    ? & & > ( nurl_str_len ty ) 0 ! ( seq ty `void` ) ( __ty_has_wide ty 0 ) { ^ ty } {}
+    ? & & > ( nurl_str_len ty ) 0 ! ( seq ty `void` ) ( __ty_has_wide ty ) { ^ ty } {}
     ^ ( nurl_str_cat `` `` )
 }
 
@@ -67883,7 +68034,7 @@ unsafe @ __vcall_args s args i mode s tag → s {
                 }
                 : s ty ? > sp a ( nurl_str_slice args a - sp a ) ( nurl_str_slice args a - k a )
                 : s val ? > sp a ( nurl_str_slice args + sp 1 - - k sp 1 ) ``
-                : b wide ( __ty_has_wide ty 0 )
+                : b wide ( __ty_has_wide ty )
                 : s ks ( nurl_str_int ai )
                 : s sep ? == 0 ( nurl_str_len out ) `` `, `
                 ? == mode 0 { = out ( nurl_str_cat3 out sep ty ) } {}
@@ -70916,6 +71067,10 @@ unsafe @ __check_value_type_defined i lex i syms s llvm_ty s ctx i tline i tcol 
 }
 
 @ gen_struct_decl s sname i lex i syms → v {
+    // (Its layout is registered again here: what the type walks kept is
+    // stale — at the start, since a declaration refused half way through
+    // leaves its table changed all the same.)
+    ( __type_facts_changed )
     ( nurl_lex_advance lex )
     // Same flat-namespace guard as `@` functions (g_fn_pos_syms): a second
     // `: Name { … }` from a DIFFERENT file:line would emit a second
@@ -72371,8 +72526,12 @@ unsafe @ __hmemo_close s key i mark b r → v {
     ~ < i fc {
         : s ft ( nurl_sym_get g_root_syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int i ) `__type` ) ) )
         ? | | ( __has_user_drop ft ) != 0 ( nurl_sym_len2 g_impl_name_syms `synthdrop##` ft ) ( __is_moveonly_libh ft ) { ^ T } {}
-        ? ( __needs_synth_drop ft ) { ^ T } {}
-        // …or holds one inside a Vec, a Box, an option or an enum payload:
+        // …or holds one anywhere — its own fields (what a field that needs
+        // a synthesised drop holds: __holds_user_drop asks the same three
+        // questions at every level, answered once per type; asking this
+        // function of each field again walked every path to a type, 8^8
+        // for a generic of eight fields eight deep, agora #722), or inside
+        // a Vec, a Box, an option or an enum payload:
         // that container cannot be copied either, so the struct holding it
         // is no handle — it is dropped field by field (h209: `: Imp { ( Vec
         // R ) xs }`, R with a `% Drop`, was never dropped at all, the Vec
@@ -72510,6 +72669,24 @@ unsafe @ __hmemo_close s key i mark b r → v {
 : ~ i g_drc_memo 0
 // …and __holds_user_drop's, the same way.
 : ~ i g_hud_memo 0
+// __holds_user_drop's answers across questions, `<generation>:<0|1>` per
+// type: a `% Drop` impl registered later, or a layout registered again by
+// its declaration (a refused enum's variants: g_drop_gen), makes them
+// stale — as it does __type_needs_drop's.
+: ~ i g_hud_pmemo 0
+: ~ i g_drop_gen 0
+// 1 once every named layout is read (read_type_layouts): an answer about a
+// type's fields may be kept from then on (__type_needs_drop).
+: ~ i g_layouts_final 0
+// A visited set per question without a table per question: each walk takes
+// a fresh stamp (__seen_begin), and a key is in its set when g_seen_tab
+// holds that stamp for it. Keys carry the walk's own prefix, so a walk run
+// inside another (__hown_dyn asking __callee_lent) keeps its own.
+: ~ i g_seen_tab 0
+: ~ i g_seen_stamp 0
+// …and who first queued a key in its walk (__seen_parent): the path back
+// to the question a yes was found on.
+: ~ i g_seen_par 0
 
 @ __drop_runs_code s ty → b {
     : b top == g_drc_memo 0
@@ -72582,17 +72759,64 @@ unsafe @ __hmemo_close s key i mark b r → v {
 // Box's elements, an option's or an enum's payloads, a struct's fields —
 // a value with a `% Drop` of the program's own?
 //
-// The first eight levels are walked as they are; below that the walk
-// becomes a search with an in-progress mark per type (g_hud_memo), so that
-// it ends on a type that reaches itself (a list's node) however deep it
-// has to go. It used to give up there and answer "none": a `% Drop` value
-// nine Vecs deep was never dropped (agora #660). Nearly every type is
-// answered in the first levels, at the cost it always had.
-@ __holds_user_drop s ty i depth → b {
+// A search with an in-progress mark per type (g_hud_memo, one per
+// question), so it ends on a type that reaches itself (a list's node)
+// however deep it has to go — it used to give up below eight levels and
+// answer "none": a `% Drop` value nine Vecs deep was never dropped (agora
+// #660) — and asks each type once: the first eight levels were walked as
+// they are, every field of every level again, so a generic of eight
+// fields nested eight deep cost 8^8 lookups per question, ~117 s for one
+// binding (agora #722). (A mark read while its type is still in progress
+// answers "none" for that path; the type it belongs to is an ancestor on
+// the same path, whose own answer decides the question.)
+// What the kept answers about types read has changed (g_drop_gen).
+unsafe @ __type_facts_changed → v {
+    = g_drop_gen + g_drop_gen 1
+}
+
+unsafe @ __seen_begin → s {
+    ? == 0 g_seen_tab { = g_seen_tab ( nurl_sym_new ) } {}
+    = g_seen_stamp + g_seen_stamp 1
+    ^ ( nurl_str_int g_seen_stamp )
+}
+
+// Notes `parent` as the item that queued `key` in the walk stamped
+// `stamp`, unless `key` was queued or met there already.
+unsafe @ __seen_parent s stamp s key s parent → v {
+    ? == 0 g_seen_par { = g_seen_par ( nurl_sym_new ) } {}
+    : s cur ( nurl_sym_get g_seen_par key )
+    ? & != 0 ( nurl_str_len cur ) != 0 ( nurl_str_starts cur ( nurl_str_cat stamp `:` ) ) { ^ } {}
+    ( nurl_sym_set g_seen_par key ( nurl_str_cat3 stamp `:` parent ) )
+}
+
+// The item that queued `key` in the walk stamped `stamp`, or ``.
+@ __seen_parent_of s stamp s key → s {
+    ? == 0 g_seen_par { ^ `` } {}
+    : s cur ( nurl_sym_get g_seen_par key )
+    : s pre ( nurl_str_cat stamp `:` )
+    ? == 0 ( nurl_str_starts cur pre ) { ^ `` } {}
+    ^ ( nurl_str_slice cur ( nurl_str_len pre ) - ( nurl_str_len cur ) ( nurl_str_len pre ) )
+}
+
+// Adds `key` to the set of the walk stamped `stamp`: T when it was not in it.
+unsafe @ __seen_add s stamp s key → b {
+    ? ( seq ( nurl_sym_get g_seen_tab key ) stamp ) { ^ F } {}
+    ( nurl_sym_set g_seen_tab key stamp )
+    ^ T
+}
+
+unsafe @ __holds_user_drop s ty i depth → b {
     ? == 0 ( nurl_str_len ty ) { ^ F } {}
     ? == ( nurl_str_get ty - ( nurl_str_len ty ) 1 ) 42 { ^ F } {}
-    ? <= depth 8 { ^ ( __hud_walk ty depth ) } {}
     : b top == g_hud_memo 0
+    // (A question asked before, with no `% Drop` registered since: its
+    // answer — a question's own answer is whole, g_hud_pmemo.)
+    : s gen ( nurl_str_cat ( nurl_str_int g_drop_gen ) `:` )
+    ? top {
+        ? == 0 g_hud_pmemo { = g_hud_pmemo ( nurl_sym_new ) } {}
+        : s pm ( nurl_sym_get g_hud_pmemo ty )
+        ? & != 0 ( nurl_str_len pm ) != 0 ( nurl_str_starts pm gen ) { ^ == ( nurl_str_get pm - ( nurl_str_len pm ) 1 ) 49 } {}
+    } {}
     ? top { = g_hud_memo ( nurl_sym_new ) } {}
     : i known ( nurl_sym_int g_hud_memo ty )
     : ~ b r F
@@ -72601,7 +72825,10 @@ unsafe @ __hmemo_close s key i mark b r → v {
         = r ( __hud_walk ty depth )
         ( nurl_sym_set g_hud_memo ty ? r `1` `0` )
     }
-    ? top { ( nurl_sym_free g_hud_memo ) = g_hud_memo 0 } {}
+    ? top {
+        ( nurl_sym_free g_hud_memo ) = g_hud_memo 0
+        ( nurl_sym_set g_hud_pmemo ty ( nurl_str_cat gen ? r `1` `0` ) )
+    } {}
     ^ r
 }
 
@@ -72788,7 +73015,7 @@ unsafe @ __hmemo_close s key i mark b r → v {
     ^ ( __type_needs_drop elem syms )
 }
 
-@ __type_needs_drop s ty i syms → b {
+unsafe @ __type_needs_drop s ty i syms → b {
     ? == 0 ( nurl_str_len ty ) { ^ F } {}
     // A pointer owns nothing it points at — `%Vec__u8*`, the data field of
     // a `( Slice ( Vec u ) )`, is no Vec: asked by its prefix below, it got
@@ -72807,21 +73034,33 @@ unsafe @ __hmemo_close s key i mark b r → v {
     // value runs it — as a Vec element or a struct field too.
     ? ( __has_user_drop ty ) { ^ T } {}
     : s sname ( nurl_str_slice ty 1 - ( nurl_str_len ty ) 1 )
+    // (Kept per type once the layouts are final, with the `% Drop` impls
+    // registered so far — g_drop_gen: every field of every level was asked
+    // again for every question, 8^8 lookups for a generic of eight fields
+    // eight deep, agora #722. A type with no layout yet is not kept.)
+    : s mkey ( nurl_str_cat `tnd##` ty )
+    : s gen ( nurl_str_cat ( nurl_str_int g_drop_gen ) `:` )
+    ? != 0 g_layouts_final {
+        : s pm ( nurl_sym_get g_impl_name_syms mkey )
+        ? & != 0 ( nurl_str_len pm ) != 0 ( nurl_str_starts pm gen ) { ^ == ( nurl_str_get pm - ( nurl_str_len pm ) 1 ) 49 } {}
+    } {}
     : s vlist ( nurl_sym_get2 syms sname `__variants` )
-    ? != 0 ( nurl_str_len vlist ) { ^ ( __enum_needs_drop vlist syms ) } {}
     : s fcs ( nurl_sym_get2 syms sname `__field_count` )
-    : i fc ? != 0 ( nurl_str_len fcs ) ( nurl_str_to_int fcs ) 0
-    : ~ i i 0
     : ~ b r F
-    ~ < i fc {
-        : s ft ( nurl_sym_get syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int i ) `__type` ) ) )
-        // A closure in a struct field is the struct's own (docs/MEMORY.md
-        // §7.4): its env goes with the struct wherever the struct goes.
-        ? | ( __is_closure_llty ft ) ( __type_needs_drop ft syms ) { = r T } {
-            ? ( __is_nc_opt ft ) { = r T } {}
+    ? != 0 ( nurl_str_len vlist ) { = r ( __enum_needs_drop vlist syms ) } {
+        : i fc ? != 0 ( nurl_str_len fcs ) ( nurl_str_to_int fcs ) 0
+        : ~ i i 0
+        ~ & < i fc ! r {
+            : s ft ( nurl_sym_get syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int i ) `__type` ) ) )
+            // A closure in a struct field is the struct's own (docs/MEMORY.md
+            // §7.4): its env goes with the struct wherever the struct goes.
+            ? | ( __is_closure_llty ft ) ( __type_needs_drop ft syms ) { = r T } {
+                ? ( __is_nc_opt ft ) { = r T } {}
+            }
+            = i + i 1
         }
-        = i + i 1
     }
+    ? & != 0 g_layouts_final | != 0 ( nurl_str_len vlist ) != 0 ( nurl_str_len fcs ) { ( nurl_sym_set g_impl_name_syms mkey ( nurl_str_cat gen ? r `1` `0` ) ) } {}
     ^ r
 }
 
@@ -73764,22 +74003,30 @@ unsafe @ __cc_mangle s ty → s {
     ^ ( seq ( __libh_base ty ) `Rc` )
 }
 
-// The edges of a value of type `ty` (`seen`: the types on the walk so far).
-@ __cc_walk s ty i syms s seen → s {
+// The edges of a value of type `ty`: each type the walk reaches is asked
+// once — g_cc_seen, the set of those asked; the path's own list re-walked a
+// type once per path to it (agora #722).
+: ~ s g_cc_seen ``
+
+unsafe @ __cc_walk s ty i syms → s {
+    = g_cc_seen ( __seen_begin )
+    ^ ( __cc_walk_r ty syms )
+}
+
+unsafe @ __cc_walk_r s ty i syms → s {
     : i n ( nurl_str_len ty )
-    ? | < n 2 ( __bar_has seen ty ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? | < n 2 ! ( __seen_add g_cc_seen ( nurl_str_cat `cc|` ty ) ) { ^ ( nurl_str_cat `` `` ) } {}
     ? ( __is_closure_ty ty ) { ^ ( nurl_str_cat `*` `` ) } {}
     ? != 0 ( nurl_str_starts ty `%dyn.` ) { ^ ( nurl_str_cat `*` `` ) } {}
     ? == ( nurl_str_get ty - n 1 ) 42 { ^ ( nurl_str_cat `` `` ) } {}
-    : s seen2 ( __bar_add seen ty )
     ? != 0 ( nurl_str_starts ty `{ i1, ` ) {
-        : s a ( __cc_walk ( __wrap_part ty 0 ) syms seen2 )
-        : s b ( __cc_walk ( __wrap_part ty 1 ) syms seen2 )
+        : s a ( __cc_walk_r ( __wrap_part ty 0 ) syms )
+        : s b ( __cc_walk_r ( __wrap_part ty 1 ) syms )
         ^ ( __bar_union a b )
     } {}
     ? != ( nurl_str_get ty 0 ) 37 { ^ ( nurl_str_cat `` `` ) } {}
     ? ( __cc_is_rc ty ) { ^ ( __libh_targ ty 0 ) } {}
-    ? != 0 ( nurl_str_starts ty `%Vec__` ) { ^ ( __cc_walk ( __vec_elem_llvm ty ) syms seen2 ) } {}
+    ? != 0 ( nurl_str_starts ty `%Vec__` ) { ^ ( __cc_walk_r ( __vec_elem_llvm ty ) syms ) } {}
     ? ( __is_libh ty ) {
         : s b ( __libh_base ty )
         // (A Weak owns nothing; Arc / Channel contents are Send / Sync.)
@@ -73789,7 +74036,7 @@ unsafe @ __cc_mangle s ty → s {
         : ~ i k 0
         ~ < k na {
             : s ta ( __libh_targ ty k )
-            : s e ( __cc_walk ta syms seen2 )
+            : s e ( __cc_walk_r ta syms )
             = out ( __bar_union out e )
             = k + k 1
         }
@@ -73805,7 +74052,7 @@ unsafe @ __cc_mangle s ty → s {
             : i pc ( nurl_str_to_int ( nurl_sym_get2 syms vname `__paycount` ) )
             : ~ i pi 0
             ~ < pi pc {
-                : s e ( __cc_walk ( nurl_sym_get syms ( nurl_str_cat3 vname `__payload__` ( nurl_str_int pi ) ) ) syms seen2 )
+                : s e ( __cc_walk_r ( nurl_sym_get syms ( nurl_str_cat3 vname `__payload__` ( nurl_str_int pi ) ) ) syms )
                 = out ( __bar_union out e )
                 = pi + pi 1
             }
@@ -73815,7 +74062,7 @@ unsafe @ __cc_mangle s ty → s {
     : i fc ( nurl_str_to_int ( nurl_sym_get2 syms sname `__field_count` ) )
     : ~ i fi 0
     ~ < fi fc {
-        : s e ( __cc_walk ( nurl_sym_get syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) ) syms seen2 )
+        : s e ( __cc_walk_r ( nurl_sym_get syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) ) syms )
         = out ( __bar_union out e )
         = fi + fi 1
     }
@@ -73830,7 +74077,7 @@ unsafe @ __cc_mangle s ty → s {
         ? ( seq m `-` ) { ^ ( nurl_str_cat `` `` ) } {}
         ^ ( nurl_str_cat m `` )
     } {}
-    : s e ( __cc_walk ty syms `` )
+    : s e ( __cc_walk ty syms )
     ( nurl_sym_def g_impl_name_syms key ? == 0 ( nurl_str_len e ) ( nurl_str_cat `-` `` ) ( nurl_str_cat e `` ) )
     ^ e
 }
@@ -73957,20 +74204,30 @@ unsafe @ __cc_mangle s ty → s {
 
 // The thread-shared nodes a value of type `ty` holds (`|` list; `*` for a
 // closure).
-@ __ts_walk s ty i syms s seen → s {
+// (A question's walk: each type it reaches is asked once — the set of
+// those asked, g_ts_seen, in place of the path's own list, which re-walked
+// every type once per path to it: a generic of eight fields eight deep is
+// 8^8 paths, agora #722.)
+: ~ s g_ts_seen ``
+
+unsafe @ __ts_walk s ty i syms → s {
+    = g_ts_seen ( __seen_begin )
+    ^ ( __ts_walk_r ty syms )
+}
+
+unsafe @ __ts_walk_r s ty i syms → s {
     : i n ( nurl_str_len ty )
-    ? | < n 2 ( __bar_has seen ty ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? | < n 2 ! ( __seen_add g_ts_seen ( nurl_str_cat `ts|` ty ) ) { ^ ( nurl_str_cat `` `` ) } {}
     ? ( __is_closure_ty ty ) { ^ ( nurl_str_cat `*` `` ) } {}
     ? != 0 ( nurl_str_starts ty `%dyn.` ) { ^ ( nurl_str_cat `*` `` ) } {}
     ? == ( nurl_str_get ty - n 1 ) 42 { ^ ( nurl_str_cat `` `` ) } {}
-    : s seen2 ( __bar_add seen ty )
     ? != 0 ( nurl_str_starts ty `{ i1, ` ) {
-        : s a ( __ts_walk ( __wrap_part ty 0 ) syms seen2 )
-        : s b ( __ts_walk ( __wrap_part ty 1 ) syms seen2 )
+        : s a ( __ts_walk_r ( __wrap_part ty 0 ) syms )
+        : s b ( __ts_walk_r ( __wrap_part ty 1 ) syms )
         ^ ( __bar_union a b )
     } {}
     ? != ( nurl_str_get ty 0 ) 37 { ^ ( nurl_str_cat `` `` ) } {}
-    ? != 0 ( nurl_str_starts ty `%Vec__` ) { ^ ( __ts_walk ( __vec_elem_llvm ty ) syms seen2 ) } {}
+    ? != 0 ( nurl_str_starts ty `%Vec__` ) { ^ ( __ts_walk_r ( __vec_elem_llvm ty ) syms ) } {}
     ? ( __is_libh ty ) {
         : s b ( __libh_base ty )
         ? | | ( seq b `Arc` ) ( seq b `Channel` ) ( seq b `DChannel` ) { ^ ( nurl_str_cat ty `` ) } {}
@@ -73981,7 +74238,7 @@ unsafe @ __cc_mangle s ty → s {
         : i na ( count_words ( nurl_sym_get2 g_impl_name_syms `libhta##` ty ) )
         : ~ i k 0
         ~ < k na {
-            : s e ( __ts_walk ( __libh_targ ty k ) syms seen2 )
+            : s e ( __ts_walk_r ( __libh_targ ty k ) syms )
             = out ( __bar_union out e )
             = k + k 1
         }
@@ -73997,7 +74254,7 @@ unsafe @ __cc_mangle s ty → s {
             : i pc ( nurl_str_to_int ( nurl_sym_get2 syms vname `__paycount` ) )
             : ~ i pi 0
             ~ < pi pc {
-                : s e ( __ts_walk ( nurl_sym_get syms ( nurl_str_cat3 vname `__payload__` ( nurl_str_int pi ) ) ) syms seen2 )
+                : s e ( __ts_walk_r ( nurl_sym_get syms ( nurl_str_cat3 vname `__payload__` ( nurl_str_int pi ) ) ) syms )
                 = out ( __bar_union out e )
                 = pi + pi 1
             }
@@ -74007,7 +74264,7 @@ unsafe @ __cc_mangle s ty → s {
     : i fc ( nurl_str_to_int ( nurl_sym_get2 syms sname `__field_count` ) )
     : ~ i fi 0
     ~ < fi fc {
-        : s e ( __ts_walk ( nurl_sym_get syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) ) syms seen2 )
+        : s e ( __ts_walk_r ( nurl_sym_get syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) ) syms )
         = out ( __bar_union out e )
         = fi + fi 1
     }
@@ -74026,7 +74283,7 @@ unsafe @ __cc_mangle s ty → s {
 // Can a value of type `ty` lead, through thread-shared handles, to the node
 // `target` — or to a closure, which may capture it?
 @ __ts_reaches s ty s target i syms → b {
-    : ~ s todo ( __ts_walk ty syms `` )
+    : ~ s todo ( __ts_walk ty syms )
     : ~ s seen ``
     ~ != 0 ( nurl_str_len todo ) {
         : s u ( __bar_first todo ) = todo ( __bar_rest todo )
@@ -74035,7 +74292,7 @@ unsafe @ __cc_mangle s ty → s {
             = seen ( __bar_add seen u )
             : s c ( __ts_contents u )
             ? ( seq c `*` ) { ^ T } {}
-            ? != 0 ( nurl_str_len c ) { = todo ( __bar_union todo ( __ts_walk c syms `` ) ) } {}
+            ? != 0 ( nurl_str_len c ) { = todo ( __bar_union todo ( __ts_walk c syms ) ) } {}
         } {}
     }
     ^ F
@@ -74044,7 +74301,7 @@ unsafe @ __cc_mangle s ty → s {
 // As __ts_reaches, following handles only: a closure is no edge.
 @ __ts_reaches_handles s ty s target i syms → b {
     ? | == 0 ( nurl_str_len ty ) ( seq ty `*` ) { ^ F } {}
-    : ~ s todo ( __ts_walk ty syms `` )
+    : ~ s todo ( __ts_walk ty syms )
     : ~ s seen ``
     ~ != 0 ( nurl_str_len todo ) {
         : s u ( __bar_first todo ) = todo ( __bar_rest todo )
@@ -74052,7 +74309,7 @@ unsafe @ __cc_mangle s ty → s {
         ? & ! ( seq u `*` ) ! ( __bar_has seen u ) {
             = seen ( __bar_add seen u )
             : s c ( __ts_contents u )
-            ? & != 0 ( nurl_str_len c ) ! ( seq c `*` ) { = todo ( __bar_union todo ( __ts_walk c syms `` ) ) } {}
+            ? & != 0 ( nurl_str_len c ) ! ( seq c `*` ) { = todo ( __bar_union todo ( __ts_walk c syms ) ) } {}
         } {}
     }
     ^ F
@@ -74077,7 +74334,7 @@ unsafe @ __cc_mangle s ty → s {
 // cycle through it would have to pass through the handle, so it has none.
 // The closures in an Arc's payload or on a channel stay edges.
 @ __ts_reaches_vetted s ty s target i syms → b {
-    : ~ s todo ( __ts_walk ty syms `` )
+    : ~ s todo ( __ts_walk ty syms )
     : ~ s seen ``
     ~ != 0 ( nurl_str_len todo ) {
         : s u ( __bar_first todo ) = todo ( __bar_rest todo )
@@ -74089,7 +74346,7 @@ unsafe @ __cc_mangle s ty → s {
             : b vetted ! | | ( seq b `Arc` ) ( seq b `Channel` ) ( seq b `DChannel` )
             ? & ( seq c `*` ) ! vetted { ^ T } {}
             ? & != 0 ( nurl_str_len c ) ! ( seq c `*` ) {
-                : ~ s w ( __ts_walk c syms `` )
+                : ~ s w ( __ts_walk c syms )
                 ? vetted { = w ( __bar_drop_star w ) } {}
                 = todo ( __bar_union todo w )
             } {}
@@ -74161,7 +74418,7 @@ unsafe @ __cc_mangle s ty → s {
     ? & != c0 37 != c0 123 { ^ F } {}
     : s key ( nurl_str_cat `tsmhc##` ty )
     ? != 0 ( nurl_sym_len g_impl_name_syms key ) { ^ ( seq ( nurl_sym_get g_impl_name_syms key ) `1` ) } {}
-    : ~ s todo ( __ts_walk ty syms `` )
+    : ~ s todo ( __ts_walk ty syms )
     : ~ s seen ``
     : ~ b r F
     ~ & ! r != 0 ( nurl_str_len todo ) {
@@ -74170,7 +74427,7 @@ unsafe @ __cc_mangle s ty → s {
             ? ! ( __bar_has seen u ) {
                 = seen ( __bar_add seen u )
                 : s c ( __ts_contents u )
-                ? ( seq c `*` ) { = r T } { ? != 0 ( nurl_str_len c ) { = todo ( __bar_union todo ( __ts_walk c syms `` ) ) } {} }
+                ? ( seq c `*` ) { = r T } { ? != 0 ( nurl_str_len c ) { = todo ( __bar_union todo ( __ts_walk c syms ) ) } {} }
             } {}
         }
     }
@@ -74191,7 +74448,7 @@ unsafe @ __cc_mangle s ty → s {
         ? ( seq m `-` ) { ^ ( nurl_str_cat `` `` ) } {}
         ^ ( nurl_str_cat m `` )
     } {}
-    : ~ s r ( __ts_walk ty syms `` )
+    : ~ s r ( __ts_walk ty syms )
     : ~ s out ``
     ~ != 0 ( nurl_str_len r ) {
         : s u ( __bar_first r ) = r ( __bar_rest r )
@@ -75212,7 +75469,7 @@ unsafe @ __cc_note_call i syms s call_name s fname s arg_cs s arg_tys s arg_ids 
         : s pair ( __retown_pair retk )
         : s ic ( str_first_word pair )
         : s ig ( str_first_word ( str_skip_word pair ) )
-        ? & & != 0 ( nurl_str_len ic ) ( __callee_lent syms ic ig ) ! | ( __hown_dyn syms ic 0 ) ( __hown_dyn syms ig 0 ) { ^ F } {}
+        ? & & != 0 ( nurl_str_len ic ) ( __callee_lent syms ic ig ) ! | ( __hown_dyn syms ic ) ( __hown_dyn syms ig ) { ^ F } {}
     } {}
     ? ! ( seq shadowed `1` ) {
         : ~ s sinks ( nurl_sym_get g_fn_sink callee )
@@ -75293,7 +75550,7 @@ unsafe @ __cc_note_call i syms s call_name s fname s arg_cs s arg_tys s arg_ids 
             : s pair ( __retown_pair retk )
             : s ic ( str_first_word pair )
             : s ig ( str_first_word ( str_skip_word pair ) )
-            ? | | == 0 ( nurl_str_len ic ) ! ( __callee_lent syms ic ig ) | ( __hown_dyn syms ic 0 ) ( __hown_dyn syms ig 0 ) {
+            ? | | == 0 ( nurl_str_len ic ) ! ( __callee_lent syms ic ig ) | ( __hown_dyn syms ic ) ( __hown_dyn syms ig ) {
                 ( bck_emit_error file ( nurl_str_to_int line ) ( nurl_str_cat4
                 ( nurl_str_cat3 `the result of '` ( bck_fn_show callee ) `' borrows part of its argument ` )
                 ( nurl_str_int + ( nurl_str_to_int index ) 1 )
@@ -75923,23 +76180,30 @@ u` ) ( nurl_print q ) ( nurl_print `:
 // Does a value of type `ty` reach such a handle, or a closure (whose
 // captures its type does not name)? Memoised; a type reached again inside
 // itself answers no there, and its other branches decide.
-@ __sk_needed s ty i syms → b {
-    ^ ( __sk_walk ty syms `` )
+// (Each type a question reaches is asked once — g_sk_seen, the set of those
+// asked, in place of the path's own list: the path list re-walked a type
+// once per path to it, agora #722.)
+: ~ s g_sk_seen ``
+
+unsafe @ __sk_needed s ty i syms → b {
+    = g_sk_seen ( __seen_begin )
+    ^ ( __sk_walk ty syms T )
 }
 
-@ __sk_walk s ty i syms s seen → b {
+unsafe @ __sk_walk s ty i syms b outer → b {
     : i n ( nurl_str_len ty )
-    ? | < n 2 ( __bar_has seen ty ) { ^ F } {}
+    ? < n 2 { ^ F } {}
     : s key ( nurl_str_cat `skneed##` ty )
     ? != 0 ( nurl_sym_len g_impl_name_syms key ) { ^ ( seq ( nurl_sym_get g_impl_name_syms key ) `1` ) } {}
-    : b r ( __sk_walk_calc ty syms ( __bar_add seen ty ) )
+    ? ! ( __seen_add g_sk_seen ( nurl_str_cat `sk|` ty ) ) { ^ F } {}
+    : b r ( __sk_walk_calc ty syms )
     // (A no found under a type still being walked may be that type's own
     // answer cut short: only a yes, or the outermost answer, is kept.)
-    ? | r == 0 ( nurl_str_len seen ) { ( nurl_sym_def g_impl_name_syms key ? r `1` `0` ) } {}
+    ? | r outer { ( nurl_sym_def g_impl_name_syms key ? r `1` `0` ) } {}
     ^ r
 }
 
-@ __sk_walk_calc s ty i syms s seen → b {
+unsafe @ __sk_walk_calc s ty i syms → b {
     : i n ( nurl_str_len ty )
     ? ( __is_closure_ty ty ) { ^ T } {}
     // Raw memory.
@@ -75950,16 +76214,16 @@ u` ) ( nurl_print q ) ( nurl_print `:
     ? != 0 ( nurl_str_starts ty `%dyn.` ) { ^ ( __trait_has_super ( nurl_str_slice ty 5 - n 5 ) `Send` ) } {}
     ? == ( nurl_str_get ty 0 ) 123 {
         ? != 0 ( nurl_str_starts ty `{ i1, ` ) {
-            ? ( __sk_walk ( __wrap_part ty 0 ) syms seen ) { ^ T } {}
-            ^ ( __sk_walk ( __wrap_part ty 1 ) syms seen )
+            ? ( __sk_walk ( __wrap_part ty 0 ) syms F ) { ^ T } {}
+            ^ ( __sk_walk ( __wrap_part ty 1 ) syms F )
         } {}
         // A slice `{ T*, i64 }`: its elements.
         : s se ( __sk_slice_elem ty )
-        ? != 0 ( nurl_str_len se ) { ^ ( __sk_walk se syms seen ) } {}
+        ? != 0 ( nurl_str_len se ) { ^ ( __sk_walk se syms F ) } {}
         : i afc ( agg_field_count syms ty )
         : ~ i ai 0
         ~ & >= afc 0 < ai afc {
-            ? ( __sk_walk ( compound_field_type ty ai ) syms seen ) { ^ T } {}
+            ? ( __sk_walk ( compound_field_type ty ai ) syms F ) { ^ T } {}
             = ai + ai 1
         }
         ^ F
@@ -75975,12 +76239,12 @@ u` ) ( nurl_print q ) ( nurl_print `:
     ? ( __thr_unsafe_share syms ty ) { ^ T } {}
     // An Rc never crosses (it is not Send); a Weak owns nothing.
     ? | ( seq bn `Rc` ) ( seq bn `Weak` ) { ^ F } {}
-    ? != 0 ( nurl_str_starts ty `%Vec__` ) { ^ ( __sk_walk ( __vec_elem_llvm ty ) syms seen ) } {}
+    ? != 0 ( nurl_str_starts ty `%Vec__` ) { ^ ( __sk_walk ( __vec_elem_llvm ty ) syms F ) } {}
     ? ( __is_libh ty ) {
         : i na ( count_words ( nurl_sym_get2 g_impl_name_syms `libhta##` ty ) )
         : ~ i k 0
         ~ < k na {
-            ? ( __sk_walk ( __libh_targ ty k ) syms seen ) { ^ T } {}
+            ? ( __sk_walk ( __libh_targ ty k ) syms F ) { ^ T } {}
             = k + k 1
         }
         ^ F
@@ -75994,7 +76258,7 @@ u` ) ( nurl_print q ) ( nurl_print `:
             : i pc ( nurl_str_to_int ( nurl_sym_get2 syms vname `__paycount` ) )
             : ~ i pi 0
             ~ < pi pc {
-                ? ( __sk_walk ( nurl_sym_get syms ( nurl_str_cat3 vname `__payload__` ( nurl_str_int pi ) ) ) syms seen ) { ^ T } {}
+                ? ( __sk_walk ( nurl_sym_get syms ( nurl_str_cat3 vname `__payload__` ( nurl_str_int pi ) ) ) syms F ) { ^ T } {}
                 = pi + pi 1
             }
         }
@@ -76003,7 +76267,7 @@ u` ) ( nurl_print q ) ( nurl_print `:
     : i fc ( nurl_str_to_int ( nurl_sym_get2 syms sname `__field_count` ) )
     : ~ i fi 0
     ~ < fi fc {
-        ? ( __sk_walk ( nurl_sym_get syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) ) syms seen ) { ^ T } {}
+        ? ( __sk_walk ( nurl_sym_get syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) ) syms F ) { ^ T } {}
         = fi + fi 1
     }
     ^ F
@@ -77132,7 +77396,7 @@ unsafe @ __sx_names_capture i syms s sx → b {
         : s gn ( str_first_word r ) = r ( str_skip_word r )
         : s line ( str_first_word r ) = r ( str_skip_word r )
         : s tshow ( str_first_word r ) = r ( str_skip_word r )
-        ? | ( __callee_lent syms cn gn ) | ( __hown_dyn syms cn 0 ) ( __hown_dyn syms gn 0 ) {
+        ? | ( __callee_lent syms cn gn ) | ( __hown_dyn syms cn ) ( __hown_dyn syms gn ) {
             ( bck_emit_error r ( nurl_str_to_int line ) ( nurl_str_cat3
             ( nurl_str_cat3 `a closure hands its result to its caller as the caller's own, but '` ( bck_fn_show cn ) `' may lend what it hands back, ` )
             ( nurl_str_cat3 `and a '` tshow `' cannot be copied — the value would be released by its owner and by the closure's caller. ` )
@@ -78845,6 +79109,7 @@ unsafe @ __jpb_note i cg s up → v {
 // Each variant becomes a global i64 constant (tag value 0, 1, …).
 
 @ gen_enum_decl i lex i syms → v {
+    ( __type_facts_changed )
     ( nurl_lex_advance lex )  // consume '|'
     // The name was taken on trust, so `: | { A B }` registered whatever
     // `{` renders as and then failed at the brace it had already eaten,
@@ -83837,7 +84102,7 @@ unsafe @ scan_impl_decl i lex i syms → v {
                         ( __note_sig_raw mangled ( nurl_lex_src_slice lex __sig0 - ( nurl_lex_cur_start lex ) __sig0 ) )
                         ( __coherence_register lex mname impl_llvm impl_nurl tname )
                         ( nurl_sym_def g_impl_name_syms key impl_mangle )
-                        ? & ( seq tname `Drop` ) ( seq mname `drop` ) { = g_user_drop_seen 1 } {}
+                        ? & ( seq tname `Drop` ) ( seq mname `drop` ) { = g_user_drop_seen 1 = g_drop_gen + g_drop_gen 1 } {}
                         ( nurl_sym_def g_impl_name_syms ( nurl_str_cat mname `__impl_seen` ) `1` )
                         ( nurl_sym_def syms mangled ret_ty )
                         ( nurl_sym_def syms ( nurl_str_cat mangled `__nurlfn` ) `1` )
@@ -84589,6 +84854,7 @@ unsafe @ dyn_method_decltrait s tname s m → s {
     // boxed value and every sibling field (docs/LIMITATIONS.md used to list
     // it as a struct "not dropped as a whole").
     = g_user_drop_seen 1
+    = g_drop_gen + g_drop_gen 1
     // Panic-unwind journal thunk (loads the fat pointer from an alloca).
     ( emit_jdrop_thunk dynty mangle )
 }
@@ -90060,6 +90326,7 @@ unsafe @ __compile_pipeline s src s path i syms i cg → v {
     ( llvm_linkage_init )
     ? g_fn_link_program { ( lazy_reach ) } {}
     ( read_type_layouts syms )
+    = g_layouts_final 1
     ( resolve_trait_impls syms )
     // AFTER scan_fn_sigs, and this is load-bearing: the preamble must
     // not declare a symbol the program itself defines (__emit_rt_decl),
