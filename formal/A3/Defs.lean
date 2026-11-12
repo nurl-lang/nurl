@@ -13,7 +13,8 @@ import A2.Soundness
   tree no binding of the spawner can reach any more (Send, as A3.0 has
   it). A3.1's `Arc` is A2's own (`Mem.blk`, `Val.arc`): its blocks are
   shared by every thread, and the configuration's sweep ends every
-  thread's step. The other shared blocks (`Locked`, `RwLocked`, `Atomic`,
+  thread's step (Agora #755 item 1: the marking sweep, `Cfg.sweepD`, and
+  the same thread's reaps of the orphans it marks, `CSettle`). The other shared blocks (`Locked`, `RwLocked`, `Atomic`,
   channels) are added by A3.2–A3.5.  A3.6's module globals set at start
   are the configuration's (`Cfg.gl`): every thread reads them, no step
   writes them, and the sweep keeps what they reach.
@@ -60,13 +61,37 @@ def Cfg.globVals (C : Cfg) (v : Val) : Prop := ∃ g, C.gl g = some v
     read for as long as the program runs. -/
 def Cfg.roots (C : Cfg) (v : Val) : Prop := C.vals v ∨ C.globVals v
 
-/-- A3.1: the configuration's sweep, which ends every thread's step: the
-    blocks nothing reaches from a thread's slot or (A3.6) a global are
-    removed and their payloads freed — A2's `Mem.sweep`, from every thread's
-    slots at once (the count of a block's shares is over all threads) and
-    the globals (which hold a share each until the process exits). -/
-noncomputable def Cfg.sweep (C : Cfg) : Cfg :=
-  { C with alloc := sweepAlloc C.roots C.blk C.alloc, blk := sweepBlk C.roots C.blk }
+/-- Agora #755 item 1: **the configuration's marking sweep**, A2's
+    `Mem.sweepD` from the configuration's roots: every thread's slots and
+    (A3.6) the module globals, which hold a share each until the process
+    exits (so a global's block, a `Locked D` one too, is never an orphan).
+    It ends every thread's step (`TStep.thread`; the count of a block's
+    shares is over all threads).  A block nothing reaches is removed and its payload freed, but an
+    orphan whose payload awaits its destructor (an `arc` block of a
+    destructor value or of a drained `Vec` of them, or a lock block of a
+    destructor value, its payload in it: `Cand`) is marked `dead`, its
+    payload kept, for the thread whose step left it unreached to reap
+    (`CSettle`). -/
+noncomputable def Cfg.sweepD (C : Cfg) : Cfg :=
+  { C with alloc := sweepAllocD C.roots C.blk C.alloc, blk := sweepBlkD C.roots C.blk }
+
+/-- Agora #755 item 1: an orphan awaits its destructor in the configuration:
+    some `dead` block still holds its payload (A2's `Orphan`, of the shared
+    blocks every thread's view holds). -/
+def Cfg.Orphan (C : Cfg) : Prop := ∃ k n f u p, C.blk k = some ⟨Ty.nest n (.dtor f u), .dead, some p⟩
+
+/-- Agora #755 item 1: **thread `i` reaps the orphans the marking sweep left**,
+    each by a step of its own (`Step.reap`, on its view: the payload moves to
+    a fresh slot of thread `i`, and a destructor frame of it goes to the
+    thread's redex), each ended by the configuration's marking sweep, until
+    no orphan is left; no other thread runs in between.  So the destructor
+    runs on the thread whose step dropped the last share (A2's `Settle`, on
+    a configuration), as nurlc's last share's drop does. -/
+inductive CSettle (P : Prog) (i : Nat) : Cfg → Cfg → Prop
+  | done {C : Cfg} : ¬ C.Orphan → CSettle P i C C
+  | reap {C C'' : Cfg} {t : Thread} {m1 : Mem} {s1 : Stmt} :
+      C.ths[i]? = some t → Step P (C.view t) t.s (.ok m1 s1) → ReapMem (C.view t) m1 →
+      CSettle P i (C.put i m1 s1).sweepD C'' → CSettle P i C C''
 
 /-- A program run from the empty store, on one thread (A2's `emptyMem`). -/
 def Cfg.init (s : Stmt) (nv : Nat) : Cfg :=
@@ -2864,10 +2889,14 @@ theorem lockNew_dyn {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {b : TraitBoun
 inductive TStep (P : Prog) (spawn : Nat → Bool) : Cfg → Cfg → Prop
   /-- A thread takes one of A2's steps, unless its next step is a spawn;
       (A3.1) the configuration's sweep ends it, as A2's `Steps` ends every
-      step with the store's. -/
-  | thread {C : Cfg} {i : Nat} {t : Thread} {m' : Mem} {s' : Stmt} :
+      step with the store's: (Agora #755 item 1) the marking sweep
+      (`Cfg.sweepD`), whose orphans the same thread then reaps, each reap a
+      step of its own ended by the marking sweep, before any other thread
+      runs (`CSettle`, A2's `Settle`): the thread whose step dropped the
+      last share runs the destructor. -/
+  | thread {C : Cfg} {i : Nat} {t : Thread} {m' : Mem} {s' : Stmt} {C' : Cfg} :
       C.ths[i]? = some t → ¬ SpawnRedex spawn t.s → Step P (C.view t) t.s (.ok m' s') →
-      TStep P spawn C (C.put i m' s').sweep
+      CSettle P i (C.put i m' s').sweepD C' → TStep P spawn C C'
   /-- A spawn: the arguments move to a new thread, which runs the body in
       its parameters' scopes and its result's (variable `n`, the number of
       parameters, as in the body's own numbering — so its end drops the
@@ -3102,16 +3131,20 @@ inductive Touch (P : Prog) (m : Mem) : Stmt → Nat → Bool → Prop
       Step P m s (.panic m1) → m1.st x = some ⟨true, some T⟩ → i ∈ T.ids →
       Touch P m (.scopeL k t x s) i true
 
-/-- A3.1: what the sweep that ends thread `i`'s next step frees: an address
-    live before the step and after it, which the sweep frees — the payload
-    of a block no thread reaches any more.  (A fresh address is no touch, as
-    above.) -/
+/-- A3.1: what the sweeps that end thread `i`'s next step free: an address
+    live before the step and after it, which the configuration's step frees —
+    the payload of a block no thread reaches any more, freed by the marking
+    sweep after the step or (Agora #755 item 1) after one of the reaps that
+    follow it.  (A fresh address is no touch, as above.  The reaps move a
+    payload to the thread's slot and touch no address; the destructor's
+    reads and writes are the thread's later steps', on its own part.) -/
 def SweepFrees (P : Prog) (C : Cfg) (i : Nat) (t : Thread) (a : Nat) : Prop :=
-  ∃ m' s', Step P (C.view t) t.s (.ok m' s') ∧ C.alloc a = true ∧ m'.alloc a = true ∧
-    (C.put i m' s').sweep.alloc a = false
+  ∃ m' s' C', Step P (C.view t) t.s (.ok m' s') ∧ CSettle P i (C.put i m' s').sweepD C' ∧
+    C.alloc a = true ∧ m'.alloc a = true ∧ C'.alloc a = false
 
 /-- What thread `t` (the `i`-th) touches next in the configuration: what its
-    rule touches, and (A3.1) what the sweep that ends its step frees, a
+    rule touches, and (A3.1) what the sweeps that end its step free (the
+    marking sweep's and, Agora #755 item 1, those after its reaps), a
     write. -/
 inductive CTouch (P : Prog) (C : Cfg) (i : Nat) (t : Thread) : Nat → Bool → Prop
   | step {a : Nat} {w : Bool} : Touch P (C.view t) t.s a w → CTouch P C i t a w

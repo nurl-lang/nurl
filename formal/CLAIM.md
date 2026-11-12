@@ -123,11 +123,13 @@ the LLVM / C11 memory model rather than redefining it.
       change through a borrow never reaches one (`ThruOK.noShare`).
     - **Freeing.** A block lives while some thread's slot, or a live
       payload, holds a share of it or a handle into it. A sweep at the end
-      of every step frees the rest, over all threads.
+      of every step frees the rest, over all threads (Agora #610 / #755:
+      but an orphan whose payload awaits its destructor, which it marks
+      for the stepping thread to reap, *Destructors* below).
     - **Threads.** The address space is each thread's part plus a
       shared, read-only payload part. Two threads meet on a payload only
       by reading it. The sweep's frees are writes to a block no thread
-      reaches.
+      reaches; a reaped payload moves to the reaping thread's part.
     - **Slices of shares.** A slice's elements may hold shares (`Ty.ok (slice t)` asks no view): a slice holds a view, so it never crosses a thread (`slice_not_send`).
     - **In Lean.** `A2.memory_safe`, `A2.no_leak_end`, `A2.no_leak_panic`
       and `A3.claim` hold with all of this, on the standard axioms only.
@@ -976,9 +978,10 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   `Locked` of a destructor value, updated through `locked_apply` with a
   closure that takes it `inout`, its share dropped: typed, `main_safe`,
   `main_no_leak`, `main_no_leak_panic`; `A3.lockDtor_claim`: `A3.claim`
-  over it). As for the `Arc` witnesses, no theorem traces the run, and on
-  A3's threads `Cfg.sweep` frees an orphaned lock block's destructor
-  value with no code. A cell's state of a destructor value is admitted by
+  over it). As for the `Arc` witnesses, no theorem traces the run; on
+  A3's threads, as on A2's, the thread that drops the last share reaps the
+  lock block's payload and runs its destructor (Agora #755 item 1,
+  `A3.lockDtor_reaps`, below). A cell's state of a destructor value is admitted by
   the same rules (`Ty.ok (cell t)` asks `lkPay`; a cell's block is a lock
   block, marked and reaped alike), with no witness program, and what it
   covers rests on an assumption about the library, not a result: the
@@ -1045,16 +1048,51 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   catches ends with the sweep that frees an orphaned payload with no code
   (`Steps.panic`: no frame is left to run it); orphans that reach each
   other in a cycle (no top one; arc payloads never do, a cycle needs a
-  lock between them) are freed with no code, where the runtime leaks
-  them, running no destructor either; several orphans one step leaves
+  lock between them), and the blocks reached only from their payloads,
+  are freed with no code, where the runtime leaks them, running no
+  destructor either; several orphans one step leaves
   are reaped in the order `Step.reap` picks, not nurlc's drop order; a
   slot that still holds a handle into the payload after its borrow is
   dead in the context keeps the block reached, so the destructor runs
   later than the runtime's count would (A3's *Phase D obligation* on
-  handles that outlive their share, `A3/DESIGN.md`); and A3's
-  configuration sweep (`Cfg.sweep`) does not mark yet: on A3's threads
-  the last share's drop frees the payload with no code, the destructor
-  not run (`A3.Reach.noOrphan`: no A3 run has an orphan).
+  handles that outlive their share, `A3/DESIGN.md`; on A3's threads such
+  a slot may be another thread's, which then runs the destructor, below).
+- Agora #755 item 1: **on A3's threads too, the thread that drops the last
+  share runs the destructor.** A thread's step (`A3.TStep.thread`) ends
+  with the configuration's marking sweep (`A3.Cfg.sweepD`: A2's
+  `Mem.sweepD` from every thread's slots and the module globals, so a
+  global's block, a global `Locked D`'s too, is never marked,
+  `A3.glob_not_marked`) and that thread's reaps of the orphans it marked,
+  each a `Step.reap` of that thread ended by the marking sweep, all inside
+  that one configuration step, before any other thread runs (`A3.CSettle`,
+  A2's `Settle` on the configuration).
+  When a thread's step leaves an `Arc<D>`'s, an `Arc<Vec<D>>`'s or a
+  `Locked D`'s block that no thread's slot, no global and no payload
+  refers to, the sweep marks it, and in the result of that configuration
+  step a fresh slot of that thread owns the payload (a reap of the thread
+  bound it, in a destructor frame) and the block is emptied or gone
+  (`A3.TStep.last_drop_reaps`; at the three witnesses `A3.arcDtor_reaps`,
+  `A3.arcVecDtor_reaps`, `A3.lockDtor_reaps`; a block only a payload the
+  same sweep removes refers to is outside the lemma, though the semantics
+  marks it too). The reaped payload's
+  addresses leave the shared part for that thread's part, the other
+  threads' facts surviving it as a lock's check-out (`A3.CInv.thread_of`),
+  so the destructor's reads and writes, its later steps', are of its own
+  part, and race freedom is re-proven with every sweep of the step charged
+  to the stepping thread (`A3.CInv.raceFree`). The reaps can always be
+  taken and end (`A3.CSettle.total`, `A3.reach_thread_total`: every A2
+  step of a thread a typed start reaches to an `.ok` result, at no spawn
+  redex, starts one of the configuration's; a top-level step to `.panic`
+  is none, as before, and no lemma shows a spawn redex always steps),
+  and no configuration a run reaches has an orphan (`A3.Reach.noOrphan`).
+  `A3.claim` and `A3.claim_made` are unchanged in statement, over the new
+  step. As on A2, the theorems are of configurations and steps; none
+  traces a witness's run. Exactness: a dead borrow's slot that still
+  holds a handle into the payload keeps the block reached (as on A2,
+  above); on A3 that slot may be another thread's, and then the
+  destructor runs on the thread whose later step leaves the block
+  unreached, or never if that thread never ends the slot, which nurlc's
+  count would not wait for.
 - So a binding's end, a drained `Vec`'s, a call's result frame and
   (Agora #610) an `Arc`'s last share's drop, through the reaped payload's
   frame (Agora #755: and a `Locked D`'s, its check-out giving the value
@@ -1062,7 +1100,7 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   elements' destructors, Agora #607 / #755), and everywhere else
   that could hold a destructor value is refused (the list below), but for
   the `Arc` and lock payloads 3d names (an uncaught panic's end, a cycle of
-  orphans, A3's threads), freed with no code. An `Arc` orphaned by a
+  orphans), freed with no code. An `Arc` orphaned by a
   panic's UNWINDING (Agora #790) is reaped inside the frame that caught
   the unwinding: a destructor frame's catch (`Step.scopeDP`,
   `scopeDPDrain`) leaves the frame at its end, `seq (scopeD x f skip)
@@ -1232,9 +1270,8 @@ The rules are stricter than nurlc's in these places:
   a drained `Vec` of them only, `ScopeDTy`'s shapes); and an `Arc<D>` (or
   `Arc<Vec<D>>`) whose `D` holds a closure (a destructor frame's binding
   holds none). nurlc types them, and the thread that drops the last share
-  runs the payload's destructor. On A3's threads the configuration's sweep
-  frees an orphaned `Arc<D>` or `Arc<Vec<D>>` payload with no code: the
-  claim covers such a program, the destructor not run (3d, above). A program that shares a
+  runs the payload's destructor, as the model does for the typed ones, on
+  A2's and (Agora #755 item 1) A3's threads (3d, above). A program that shares a
   locked resource keeps the `% Drop` value in one thread's binding and
   shares what the others need of it.
 - for a spawned function's parameter of a type that holds a destructor

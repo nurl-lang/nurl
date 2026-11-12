@@ -1,4 +1,5 @@
 import A3.Pres
+import A3.Mark
 import A3.SpawnOld
 
 /-! A3.5 — library handles whose copies are one state: confinement.
@@ -866,23 +867,14 @@ theorem CellInv.start {P : Prog} {G : Globs} (hG : GlobsOK P G) (s : Stmt) (nv :
     fun i _ ti _ k hi _ hk _ => absurd hk (hnone i ti k hi), fun j t k _ hj hk => absurd hk (hnone j t k hj),
     fun k k1 k2 hk1 hk2 => (hG.cells k k1 k2 hk1 hk2).1⟩
 
-/-- The sweep only removes blocks. -/
-theorem LockHolds.of_sweep {R : Val → Prop} {B : Nat → Option Blk} {k' k : Nat}
-    (h : LockHolds (sweepBlk R B) k' k) : LockHolds B k' k := by
-  obtain ⟨t, p, hk, hs⟩ := h
-  simp only [sweepBlk] at hk
-  split at hk
-  · exact ⟨t, p, hk, hs⟩
-  · cases hk
-
-/-- **A thread's step, and the sweep that ends it, keep the cells' homes**:
+/-- **A thread's step, and the marking sweep that ends it, keep the cells' homes**:
     a share the stepping thread or a lock block holds afterwards was in the
     thread's view before (its slots or a lock block), or is a new cell's, at a
     key no thread's share names; and its cell's shares stay in one place
     (`Step.cellKeep`). -/
 theorem CellInv.thread_of {P : Prog} {C : Cfg} (h : CellInv C) {i : Nat} {t : Thread}
     {m' : Mem} {s' : Stmt} (hi : C.ths[i]? = some t) (hst : Step P (C.view t) t.s (.ok m' s')) :
-    CellInv (C.put i m' s').sweep := by
+    CellInv (C.put i m' s').sweepD := by
   have hk : CellKeep (C.view t) m' := Step.cellKeep hst
   have hbl := h.view_below hi
   have hilen : i < C.ths.length := (List.getElem?_eq_some_iff.mp hi).1
@@ -890,16 +882,16 @@ theorem CellInv.thread_of {P : Prog} {C : Cfg} (h : CellInv C) {i : Nat} {t : Th
   -- a share the stepping thread holds afterwards was in its view, or is new
   have hnew : ∀ k, Holds m' k → (t.cellAt k ∨ ∃ k', LockHolds C.blk k' k) ∨ (C.nid ≤ k ∧ k < m'.nid) :=
     fun k hh => hk.holds k hh
-  have hths : ∀ j tj, ((C.put i m' s').sweep).ths[j]? = some tj →
+  have hths : ∀ j tj, ((C.put i m' s').sweepD).ths[j]? = some tj →
       (j = i ∧ tj = ⟨m'.st, m'.nv, s'⟩) ∨ (j ≠ i ∧ C.ths[j]? = some tj) := by
     intro j tj hj
-    simp only [Cfg.sweep, Cfg.put] at hj
+    simp only [Cfg.sweepD, Cfg.put] at hj
     rw [list_set_get hilen] at hj
     by_cases hij : i = j
     · rw [ite_eq_left hij] at hj; cases hj; exact .inl ⟨hij.symm, rfl⟩
     · rw [ite_eq_right hij] at hj; exact .inr ⟨Ne.symm hij, hj⟩
-  have hblk : ∀ k' k, LockHolds ((C.put i m' s').sweep).blk k' k → LockHolds m'.blk k' k :=
-    fun k' k h' => LockHolds.of_sweep h'
+  have hblk : ∀ k' k, LockHolds ((C.put i m' s').sweepD).blk k' k → LockHolds m'.blk k' k :=
+    fun k' k h' => LockHolds.of_sweepD h'
   have hm'cell : ∀ k, (⟨m'.st, m'.nv, s'⟩ : Thread).cellAt k → CellAt m' k := fun k h' => h'
   -- a cell another thread holds is in no lock block and not the stepping thread's, before and after
   have hother : ∀ j tj k, j ≠ i → C.ths[j]? = some tj → tj.cellAt k → ¬ Holds m' k := by
@@ -929,6 +921,14 @@ theorem CellInv.thread_of {P : Prog} {C : Cfg} (h : CellInv C) {i : Nat} {t : Th
   · rcases hk.one hbl k (h.onePlace hi k) with h0 | ⟨_, huniq⟩
     · exact absurd (hblk k1 k h1) (h0 k1)
     · exact huniq k1 k2 (hblk k1 k h1) (hblk k2 k h2)
+
+/-- Agora #755 item 1: **the reaps after a thread's step keep the cells'
+    homes**: each is a step of the thread, ended by the marking sweep. -/
+theorem CellInv.settle {P : Prog} {i : Nat} {C C' : Cfg} (h : CSettle P i C C') (hc : CellInv C) :
+    CellInv C' := by
+  induction h with
+  | done _ => exact hc
+  | reap hi hs _ _ ih => exact ih (hc.thread_of hi hs)
 
 /-- A thread whose statement changes, and nothing else, keeps the cells'
     homes (a spawn whose crossing check fails). -/

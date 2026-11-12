@@ -49,6 +49,20 @@ theorem CatchOK.of_st {m m' : Mem} (hst : m'.st = m.st) (hnv : m.nv ≤ m'.nv) (
   | .withElem .., _ => trivial
   | .callcE .., _ => trivial
 
+/-- The marking sweep from the roots `R` (which include the store's slots):
+    `Mem.sweepD` is the one from the store's own slots (`Mem.sweepD_eq`), A3's
+    the configuration's, from every thread's slots and the module globals
+    (`A3.Cfg.sweepD`). -/
+noncomputable def Mem.sweepDR (R : Val → Prop) (m : Mem) : Mem :=
+  { m with alloc := sweepAllocD R m.blk m.alloc, blk := sweepBlkD R m.blk }
+
+theorem Mem.sweepD_eq (m : Mem) : m.sweepD = m.sweepDR m.vals := rfl
+
+@[simp] theorem Mem.sweepDR_st (R : Val → Prop) (m : Mem) : (m.sweepDR R).st = m.st := rfl
+@[simp] theorem Mem.sweepDR_nv (R : Val → Prop) (m : Mem) : (m.sweepDR R).nv = m.nv := rfl
+@[simp] theorem Mem.sweepDR_nid (R : Val → Prop) (m : Mem) : (m.sweepDR R).nid = m.nid := rfl
+@[simp] theorem Mem.sweepDR_vals (R : Val → Prop) (m : Mem) : (m.sweepDR R).vals = m.vals := rfl
+
 @[simp] theorem Mem.sweepD_st (m : Mem) : m.sweepD.st = m.st := rfl
 @[simp] theorem Mem.sweepD_nv (m : Mem) : m.sweepD.nv = m.nv := rfl
 @[simp] theorem Mem.sweepD_nid (m : Mem) : m.sweepD.nid = m.nid := rfl
@@ -132,22 +146,27 @@ theorem sweepAllocD_true {R : Val → Prop} {B : Nat → Option Blk} {a : Nat �
   · simp [h]
 
 section
-variable {m : Mem}
+variable {R : Val → Prop} {m : Mem}
 
 /-- The slots' values are roots of the marking sweep. -/
 theorem rootsD_vals : ∀ v, m.vals v → RootsD m.vals m.blk v := fun _ h => Or.inl (Or.inl h)
 
+/-- ... and so are they of the marking sweep from more roots (A3's, from every
+    thread's slots and the globals). -/
+theorem rootsD_of (hR : ∀ v, m.vals v → R v) : ∀ v, m.vals v → RootsD R m.blk v :=
+  fun v h => Or.inl (Or.inl (hR v h))
+
 /-- The sweep from the marking sweep's roots keeps no block the marking
     sweep does not keep as it was. -/
-theorem sweepD_blkLe (m : Mem) : BlkLe (m.sweepR (RootsD m.vals m.blk)).blk m.sweepD.blk :=
+theorem sweepDR_blkLe (R : Val → Prop) (m : Mem) : BlkLe (m.sweepR (RootsD R m.blk)).blk ((m.sweepDR R)).blk :=
   BlkLe.of_le fun _ _ h => by
     obtain ⟨hk, hr⟩ := Mem.sweepR_blk.mp h
     exact sweepBlkD_reached hk hr
 
 /-- What a pinned block's payload refers to, the marking sweep's roots
     reach. -/
-theorem Pinned.kept {k : Nat} (h : Pinned m.vals m.blk k) {bl : Blk} (hk : m.blk k = some bl)
-    {p : Val} (hp : bl.pay = some p) : Kept (RootsD m.vals m.blk) m p := by
+theorem Pinned.kept {k : Nat} (h : Pinned R m.blk k) {bl : Blk} (hk : m.blk k = some bl)
+    {p : Val} (hp : bl.pay = some p) : Kept (RootsD R m.blk) m p := by
   obtain ⟨p', hp', hroot⟩ := h.root hk
   rw [hp] at hp'; cases hp'
   exact fun _ hr => .root hroot hr
@@ -181,7 +200,7 @@ theorem Pinned.arc_ty {R : Val → Prop} {B : Nat → Option Blk} {k : Nat} (h :
 
 /-- **The marking sweep keeps the heap's invariant**: it frees only what the
     payload of a block it removes owns. -/
-theorem HeapOK.sweepD (hh : HeapOK m) : HeapOK m.sweepD where
+theorem HeapOK.sweepDR (hh : HeapOK m) : HeapOK ((m.sweepDR R)) where
   nodup x t h := hh.nodup x t h
   disj x y t u hne h1 h2 := hh.disj x y t u hne h1 h2
   alloc x t h i hi := by
@@ -193,7 +212,7 @@ theorem HeapOK.sweepD (hh : HeapOK m) : HeapOK m.sweepD where
   blk k bl hk := by
     -- the block it comes from, which owns the same addresses
     have hsrc : ∃ bl0, m.blk k = some bl0 ∧ bl.tree = bl0.tree ∧
-        (Reached (RootsD m.vals m.blk) m.blk k ∨ Pinned m.vals m.blk k) := by
+        (Reached (RootsD R m.blk) m.blk k ∨ Pinned R m.blk k) := by
       rcases sweepBlkD_some hk with ⟨h0, hr⟩ | ⟨bl0, h0, _, hp, rfl⟩
       · exact ⟨bl, h0, rfl, Or.inl hr⟩
       · exact ⟨bl0, h0, hp.tree h0, Or.inr hp⟩
@@ -221,10 +240,10 @@ theorem HeapOK.sweepD (hh : HeapOK m) : HeapOK m.sweepD where
     · cases hv
 
 /-- **The marking sweep keeps the memory invariant.** -/
-theorem MInv.sweepD {Γ : Ctx} (hi : MInv m Γ) : MInv m.sweepD Γ := by
-  have hi1 := hi.sweepR (R := RootsD m.vals m.blk) rootsD_vals
-  have hle := sweepD_blkLe m
-  refine hi1.grow rfl hi.heap.sweepD (Nat.le_refl _) hle fun k bl hk => ?_
+theorem MInv.sweepDR (hR : ∀ v, m.vals v → R v) {Γ : Ctx} (hi : MInv m Γ) : MInv ((m.sweepDR R)) Γ := by
+  have hi1 := hi.sweepR (R := RootsD R m.blk) (rootsD_of hR)
+  have hle := sweepDR_blkLe R m
+  refine hi1.grow rfl hi.heap.sweepDR (Nat.le_refl _) hle fun k bl hk => ?_
   rcases sweepBlkD_some hk with ⟨hk0, hr⟩ | ⟨bl0, hk0, _, hp, rfl⟩
   · obtain ⟨h1, h2, h3, h4⟩ := hi1.blocks k bl (Mem.sweepR_blk.mpr ⟨hk0, hr⟩)
     exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.grow hle⟩, h4⟩
@@ -244,29 +263,30 @@ theorem MInv.sweepD {Γ : Ctx} (hi : MInv m Γ) : MInv m.sweepD Γ := by
 
 /-- **The marking sweep keeps `Covers`**: it frees exactly the payloads of
     the blocks it removes. -/
-theorem Covers.sweepD (hc : Covers m) : Covers m.sweepD := by
+theorem Covers.sweepDR (hc : Covers m) : Covers ((m.sweepDR R)) := by
   intro i hi
   obtain ⟨ha, hnu⟩ := sweepAllocD_true.mp hi
   rcases hc i ha with ⟨x, T, hT, hiT⟩ | ⟨k, bl, hk, hik⟩
   · exact Or.inl ⟨x, T, hT, hiT⟩
-  · by_cases hr : Reached (RootsD m.vals m.blk) m.blk k
+  · by_cases hr : Reached (RootsD R m.blk) m.blk k
     · exact Or.inr ⟨k, bl, sweepBlkD_reached hk hr, hik⟩
-    · by_cases hp : Pinned m.vals m.blk k
+    · by_cases hp : Pinned R m.blk k
       · exact Or.inr ⟨k, bl.mark, sweepBlkD_pinned hk hr hp, by rw [hp.tree hk]; exact hik⟩
       · exact absurd ⟨k, bl, hk, hr, hp, hik⟩ hnu
 
 /-- **The marking sweep keeps the invariant** of a running configuration. -/
-theorem Inv.sweepD {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s) : Inv m.sweepD Γ F s :=
-  { toMInv := hi.toMInv.sweepD
+theorem Inv.sweepDR (hR : ∀ v, m.vals v → R v) {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s) :
+    Inv ((m.sweepDR R)) Γ F s :=
+  { toMInv := hi.toMInv.sweepDR hR
     nvS := hi.nvS
     nvF := hi.nvF
     anch := hi.anch
     spineNd := hi.spineNd
     spineDom := hi.spineDom
-    catchOK := CatchOK.of_st (m := m.sweepR (RootsD m.vals m.blk)) (m' := m.sweepD) rfl (Nat.le_refl _)
-      (sweepD_blkLe m)
-      (hi.catchOK.sweepR (R := RootsD m.vals m.blk) rootsD_vals)
-    cover := hi.cover.sweepD
+    catchOK := CatchOK.of_st (m := m.sweepR (RootsD R m.blk)) (m' := (m.sweepDR R)) rfl (Nat.le_refl _)
+      (sweepDR_blkLe R m)
+      (hi.catchOK.sweepR (R := RootsD R m.blk) (rootsD_of hR))
+    cover := hi.cover.sweepDR
     pinOut := hi.pinOut
     pinIn := hi.pinIn
     dtorOut := hi.dtorOut
@@ -275,7 +295,7 @@ theorem Inv.sweepD {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s) : In
 /-- The packages in memory are the slots' and the blocks', which the marking
     sweep keeps or marks (a marked block owns what it owned and its holders
     read nothing of it); a marked block's destructor is its `arc` block's. -/
-theorem MemCodes.sweepD {P : Prog} (h : MemCodes P m) : MemCodes P m.sweepD := by
+theorem MemCodes.sweepDR {P : Prog} (h : MemCodes P m) : MemCodes P ((m.sweepDR R)) := by
   refine ⟨h.1, fun k bl fs te ms e cs hk hs => ?_, fun k n f u kd o hk => ?_⟩
   · rcases sweepBlkD_some hk with ⟨hk0, _⟩ | ⟨bl0, hk0, _, hp, rfl⟩
     · exact h.2.1 k bl fs te ms e cs hk0 hs
@@ -288,6 +308,24 @@ theorem MemCodes.sweepD {P : Prog} (h : MemCodes P m) : MemCodes P m.sweepD := b
       simp only [Blk.mark, Blk.mk.injEq] at he
       obtain ⟨rfl, rfl, rfl⟩ := he
       exact h.2.2 k n f u kd0 o hk0
+
+/-! The marking sweep from the store's own slots (`Mem.sweepD`), A2's. -/
+
+theorem sweepD_blkLe (m : Mem) : BlkLe (m.sweepR (RootsD m.vals m.blk)).blk m.sweepD.blk := sweepDR_blkLe m.vals m
+
+theorem HeapOK.sweepD (hh : HeapOK m) : HeapOK m.sweepD := hh.sweepDR
+
+/-- **The marking sweep keeps the memory invariant.** -/
+theorem MInv.sweepD {Γ : Ctx} (hi : MInv m Γ) : MInv m.sweepD Γ := hi.sweepDR fun _ h => h
+
+/-- **The marking sweep keeps `Covers`.** -/
+theorem Covers.sweepD (hc : Covers m) : Covers m.sweepD := hc.sweepDR
+
+/-- **The marking sweep keeps the invariant** of a running configuration. -/
+theorem Inv.sweepD {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s) : Inv m.sweepD Γ F s :=
+  hi.sweepDR fun _ h => h
+
+theorem MemCodes.sweepD {P : Prog} (h : MemCodes P m) : MemCodes P m.sweepD := h.sweepDR
 
 /-- **When no slot holds a value and the marking sweep leaves no orphan, it
     leaves no block**: every block it keeps is reached from a pinned

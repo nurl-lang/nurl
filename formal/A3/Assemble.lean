@@ -3,8 +3,8 @@ import A3.Cell
 /-! A3.0 — the claim, from the configuration invariant.
 
 Every reachable configuration keeps the invariant: the start has it
-(`CInv.init`), a thread's step and the sweep that ends it keep it
-(`CInv.thread_of`), and so does a spawn.  From it, no thread is stuck (A2's progress on the thread's part,
+(`CInv.init`), a thread's step, the marking sweep that ends it and
+(Agora #755 item 1) its reaps keep it (`CInv.thread_of`), and so does a spawn.  From it, no thread is stuck (A2's progress on the thread's part,
 lifted to the shared address space), no two threads race (`CInv.raceFree`)
 and nothing is left allocated once every thread has finished
 (`CInv.noLeak`).  The frame lemmas and the spawn case are hypotheses here,
@@ -63,7 +63,7 @@ theorem reach_cinv {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hPc : Prog
   | refl => exact ⟨h, hc⟩
   | step hst _ ih =>
     cases hst with
-    | thread hi _ hs => exact ih (CInv.thread_of hP hPc hR h hi hs) (hc.thread_of hi hs)
+    | thread hi _ hs hse => exact ih (CInv.thread_of hP hPc hR h hi hs hse) (CellInv.settle hse (hc.thread_of hi hs))
     | spawn hi hK hsp hf hx hmv hsc => exact ih (hS h hi hK hsp hf hx hmv) (hc.spawn_of hi hmv hsc)
     | spawnFail hi hK _ _ _ _ _ => exact ih (hF h hi hK) (hc.setStmt hi _)
 
@@ -87,7 +87,9 @@ theorem claim_of
   have hreach : ∀ C, Reach P spawn (Cfg.start G s nv) C → CInv P C ∧ CellInv C :=
     fun C hr => reach_cinv hP hPc (hR P) (hS P spawn hP hPc hSp) (hF P) h0 (CellInv.start hG s nv) hr
   refine ⟨fun C hr => CInv.memSafe_of hP (hL P) (hreach C hr).1,
-    fun C hr hrace => hrace.elim (CInv.raceFree (hreach C hr).1) (CellInv.cellRaceFree (hreach C hr).1 (hreach C hr).2),
+    fun C hr hrace => hrace.elim
+      (CInv.raceFree hP hPc (hR P) (hreach C hr).1 (Reach.noOrphan hr hG.noOrphan))
+      (CellInv.cellRaceFree (hreach C hr).1 (hreach C hr).2),
     fun C hr hend i hi => ?_⟩
   -- A3.6: what is left is what the start's globals reach: no step wrote them
   obtain ⟨k, bl, hk, hik, hgr⟩ := CInv.noLeak (hreach C hr).1 hend i hi

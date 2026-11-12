@@ -53,13 +53,27 @@ theorem Redex.globsAt {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {GT : G
 /-- Every thread of a configuration reads its globals at their declared types. -/
 def Cfg.globsAt (C : Cfg) (GT : GTy) : Prop := ∀ t ∈ C.ths, t.s.globsAt GT
 
+/-- Agora #755 item 1: the reaps after a thread's step keep it: each is a
+    step of the thread (`globs_step`). -/
+theorem CSettle.globsAt {P : Prog} {GT : GTy} (hPG : ProgGlobs P GT) {i : Nat} {C C' : Cfg}
+    (h : CSettle P i C C') (hC : C.globsAt GT) : C'.globsAt GT := by
+  induction h with
+  | done _ => exact hC
+  | @reap C C'' t m1 s1 hi hs _ _ ih =>
+    refine ih ?_
+    intro t' ht'
+    rcases List.mem_or_eq_of_mem_set ht' with ht' | rfl
+    · exact hC t' ht'
+    · exact globs_step hPG hs (hC t (List.mem_of_getElem? hi)) _ _ rfl
+
 /-- **A step keeps it**: a thread's step leaves a part of its statement or a
     function's body (`globs_step`), a spawn the spawner's statement with its
     call replaced and the spawned function's body. -/
 theorem TStep.globsAt {P : Prog} {spawn : Nat → Bool} {GT : GTy} (hPG : ProgGlobs P GT) {C C' : Cfg}
     (h : TStep P spawn C C') (hC : C.globsAt GT) : C'.globsAt GT := by
   cases h with
-  | @thread i t m' s' hi _ hs =>
+  | @thread i t m' s' _ hi _ hs hse =>
+    refine CSettle.globsAt hPG hse ?_
     intro t' ht'
     rcases List.mem_or_eq_of_mem_set ht' with ht' | rfl
     · exact hC t' ht'
