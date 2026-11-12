@@ -1573,7 +1573,7 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
     result is set at most once on any path (`Stmt.asgMax`), so no earlier
     result is dropped.   A2-drop (Agora #611): an owned result of
     such a type is of a destructor type itself, or a `Vec` of such values,
-    with no views and no closure: the call's result frame (`resFrame`) runs
+    or (Agora #607) of such `Vec`s at any depth, with no views and no closure: the call's result frame (`resFrame`) runs
     its destructor, or drains it, on a panic in the callee. -/
 def DtorParamsOK (P : Prog) (fn : Fn) : Prop :=
   (∀ i (h : i < fn.params.length), fn.params[i].1 = .sink → fn.params[i].2.holdsDtor = true →

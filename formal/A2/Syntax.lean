@@ -279,12 +279,13 @@ def Ty.dtorFree : Ty → Bool
   | .fn _ q => !q.drops
   | _ => true
 
-/-- A2-drop.3b's drain: a `Vec` of destructor values (`.vec (.dtor f u)`), the
-    one `Vec` whose elements hold one. It is a binding's own type, or
-    (`Ty.ok` admits it too as a struct's field or an enum's payload, which the
-    struct's or the enum's glue hands to a `letd`, Agora #607; it refuses it as
-    an element, a view's element, and a share's or a channel's payload, swept
-    with no code). -/
+/-- A2-drop.3b's drain: a `Vec` whose elements hold a destructor value
+    (`.vec (.dtor f u)`, or since Agora #607 `.vec (Ty.nest n (.dtor f u))`,
+    `Ty.dnest`). It is a binding's own type, or (`Ty.ok` admits it too as a
+    struct's field or an enum's payload, which the struct's or the enum's
+    glue hands to a `letd`, and as another such `Vec`'s element or a view's
+    element, Agora #607; it refuses it as a share's or a channel's payload,
+    swept with no code). -/
 def Ty.vecD : Ty → Bool
   | .vec t => !t.dtorFree
   | _ => false
@@ -326,7 +327,8 @@ def Ty.nest : Nat → Ty → Ty
 def Ty.ok : Ty → Bool
   | .int => true
   -- (A2-drop.3b: a `Vec`'s elements hold no destructor value, or are of a
-  -- destructor type themselves, `Ty.vecD`, which a binding's own type may
+  -- destructor type themselves, or (Agora #607) drained `Vec`s in turn,
+  -- `Ty.dnest`: a drained `Vec`, `Ty.vecD`, which a binding's own type may
   -- be, or (Agora #607) a struct's field or an enum's payload, which glue
   -- hands to such a binding: it is drained at its end, element by element, each
   -- running its destructor, `Step.scopeDDrain`; any other `Vec`'s drop

@@ -2199,8 +2199,10 @@ theorem main11_safe {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem 5) main11 (.o
   obtain ⟨Δ, ht⟩ := main11_typed
   exact memory_safe prog_ok prog_codes ht rfl (by simp [main11, Stmt.codesOK, Rhs.codeOK]) (by decide) hr
 
-/-- ... and leaks nothing when it ends: every destructor value, the inner
-    `Vec` and the outer one are released by their frames. -/
+/-- ... and leaks nothing when it ends (`no_leak_end`: nothing is left
+    allocated).  That the drain runs each element's destructor, the inner
+    `Vec`'s by a frame of its own, is read off the steps, as for `main5`:
+    the theorem does not trace the run. -/
 theorem main11_no_leak {m' : Mem} (hr : Steps P (emptyMem 5) main11 (.ok m' .skip)) :
     ∀ i, m'.alloc i = false := by
   obtain ⟨Δ, ht⟩ := main11_typed

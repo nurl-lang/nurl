@@ -149,7 +149,8 @@ A2-drop.3b; A2-drop.3a's rule looked one level down only).
   result stops at the frame, which runs `g` on it (`Step.scopeDP`); on the
   normal path the result has moved to the caller's binding
   (`Step.scopeDMoved`). `FnOK` asks an owned result that holds a destructor
-  value to be of a destructor type itself, or a `Vec` of such values, with
+  value to be of a destructor type itself, or a `Vec` of such values, or
+  (Agora #607, `ResDTy`) of such `Vec`s at any depth, with
   no views and no closure, whose function is a `DtorOK` destructor. The frame's typing
   (`CallH.typedIn_of`) types the call's inside against the call's final
   context with the moved-out result slot added, whose well-formedness is
@@ -164,8 +165,8 @@ destructor): a `Vec` of destructor values as a shared payload
 `Locked (Vec D)`, `Arc (Vec D)`, a cell of a `Vec D` (a struct's field or
 an enum's payload is typed since Agora #607: glue hands it to a `letd`,
 which drains it; and so is a `Vec (Vec D)`, at any depth, below); one whose elements hold views
-(`LetdTy`); and `vec_set` over an element and `withElem` (`vec_free`,
-`vec_clear` and `vec_truncate` are typed code, `A2/DropCode.lean`). And, since A2-drop.3c and 3d: a share whose payload owns a destructor
+(`LetdTy`) (`vec_free`, `vec_clear`, `vec_truncate`, `vec_set` over an
+element and `withElem` are typed code, `A2/DropCode.lean`). And, since A2-drop.3c and 3d: a share whose payload owns a destructor
 value (`Ty.ok`), and a trait object whose box holds one (a closure whose
 environment holds one is of the class `dropd`, dropped by its glue, Agora #609). The result moved from its slot into a local
 before a panic (`pair res w`, a destructor value two levels down) is a
@@ -689,7 +690,8 @@ each one shrinks `CLAIM.md`'s exception:
      (`StmtT.free` and `StmtT.editB` / `editBV` ask `dtorFree` of the
      elements they drop, `Edit.drops`; `A2.Dtor.free_dtor_free`,
      `edit_drops_dtor_free`). A program pops the elements into `letd`s
-     (`pop` and `remove` give an owned `.dtor f u`, which `movedFirst`
+     (`pop` and `remove` give an owned `.dtor f u`, or since Agora #607
+     an owned inner `Vec` of a `Vec (Vec D)`, which `movedFirst`
      hands to a `letd`), or lets the binding end; `vec_free`,
      `vec_clear` and `vec_truncate` are such code (`A2/DropCode.lean`).
    - **Left** (stricter than nurlc; `CLAIM.md` lists them):
@@ -711,7 +713,7 @@ each one shrinks `CLAIM.md`'s exception:
      (`Ty.ok (slice t)` no longer asks `!t.vecD`): it owns nothing, and
      every in-place drop through a borrow asks `dtorFree` of what it drops.
      Witness: `A2.DtorWitness.main11_safe` / `main11_no_leak`.
-     - **Built** (Agora #607, `A2/DropCode.lean`): the in-place drops
+   - **Built** (Agora #607, `A2/DropCode.lean`): the in-place drops
        need no new step, they are code the calculus types: `withElem v i
        x s` of a destructor element is `letd x f (vec_remove v i) (s ;
        insert v i x)` (`withElemD_typed`, witness `mainElem_safe`): the

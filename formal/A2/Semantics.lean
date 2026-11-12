@@ -1417,8 +1417,9 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
       destructor runs, in index order), then the panic goes on.  A panic in
       an element's destructor comes back here through the drain's own frame,
       which goes on with the elements after it: each destructor once, as the
-      journal runs bindings' (the runtime's element loop does not go on yet,
-      Agora #608; `CLAIM.md`). -/
+      journal runs bindings' (the runtime's release goes on with the
+      elements after it too, `nurl__vec_drain_resume`, Agora #608;
+      `CLAIM.md`). -/
   | scopeDPDrain {m m1 : Mem} {x : Var} {f : Nat} {s : Stmt} {t : Ty} {c d : Nat} {es : List Val} :
       Step P m s (.panic m1) → m1.st x = some ⟨true, some (.node t c d es)⟩ →
       Step P m (.scopeD x f s) (.ok m1 (.seq (.scopeD x f .skip) .panic))

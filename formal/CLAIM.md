@@ -809,11 +809,12 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   run-time form: what `x` owns at the frame's end says which frame it is,
   a struct or an enum (the destructor runs on it) or a `Vec`'s node (the
   drain, above). Elements go in by `vec_push` and out by `vec_pop` /
-  `vec_remove x 0`, each popped one an owned destructor value, handed to a
+  `vec_remove x 0`, each popped one an owned destructor value (or, Agora
+  #607, an owned `Vec` of them in a `Vec (Vec D)`), handed to a
   `letd` of its own. `memory_safe`, `no_leak_end` and `no_leak_panic` cover
   the drain's steps. Every `Vec` in a binding's type has elements that
-  own no destructor value or are of a destructor type
-  (`A2.Dtor.vecs_dtor_free`, `vec_elems_dtor_free`, `new_dtor_free`), and
+  own no destructor value or are of a destructor type or drained `Vec`s
+  in turn (`Ty.dnest`; `A2.Dtor.vecs_dtor_free`, `vec_elems_dtor_free`, `new_dtor_free`), and
   the rules that release elements with no code ask the first of their
   own `Vec` (`free`, a truncation, an element set and `withElem` ask
   `dtorFree`), so they release or check out no destructor value; a
@@ -994,8 +995,10 @@ The rules are stricter than nurlc's in these places:
   or an enum's payload, drained by the `letd` the glue hands it to (above),
   or (Agora #607) as another such `Vec`'s element, at any depth (`Vec (Vec
   D)`, `Ty.nest`): the drain moves each inner `Vec` out to a `letd` of the
-  same destructor, whose frame drains it in turn (witness
-  `A2.DtorWitness.main11_safe`, `main11_no_leak`). nurlc types the
+  same destructor, whose frame drains it in turn (read off the steps; the
+  witness `A2.DtorWitness.main11_safe` / `main11_no_leak` types such a
+  program and applies `memory_safe` and `no_leak_end`, it does not trace
+  the run). nurlc types the
   rest too, and drops a `Vec`'s elements wherever the `Vec` is dropped, in
   index order, each running its destructor. Refused here:
   - elements that hold views (a `Vec` of `% Drop` structs with a view
@@ -1006,7 +1009,11 @@ The rules are stricter than nurlc's in these places:
     (Vec D)`, a cell of a `Vec D`. A block's payload is swept with no code
     (Agora #544).
   Not refused: the in-place drops. (`vec_free`, `vec_clear`,
-    `vec_truncate` and `vec_set` of such a `Vec`, and handing an element to
+    `vec_truncate` and `vec_set` of such a `Vec` — the lemmas below are
+    stated for a `Vec` of destructor values, `.vec (.dtor f t)`; for a
+    `Vec (Vec D)` the same code is typed by the same rules, `letd` binding
+    each moved-out inner `Vec` at its own type, with no lemma stated —
+    and handing an element to
     a callee that changes it (`withElem`), are code the calculus types,
     each element's destructor running:
     `x` moved into a destructor binding that ends at once, whose frame

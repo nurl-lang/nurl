@@ -4,7 +4,7 @@
 
 * **Toolchain:** `leanprover/lean4:v4.35.0` (zero external dependencies; standard axioms `propext`, `Classical.choice`, `Quot.sound` only; `0` `sorry`s)
 * **Phase A3 (Threads & Data-Race Freedom):** **22 modules**, **10,354 lines of Lean 4**, **528 theorems**, **649 total declarations**
-* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **42 modules**, **50,528 lines of Lean 4**, **2130 theorems**, **2671 total declarations**
+* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **42 modules**, **50,533 lines of Lean 4**, **2130 theorems**, **2671 total declarations**
 * **Phase A1 (Core Calculus):** **22 modules**, **9,571 lines of Lean 4**, **449 theorems**, **613 total declarations**
 * **Soundness Corpus (`corpus/map.tsv`):** every hole probe in [`tools/fuzz/holes/`](../tools/fuzz/holes/), with the rule and the proof phase (A1, A2, A3, B) that covers it. The table is generated from the probes' `// map:` lines by `tools/fuzz/holes/map.sh` (build.sh writes it; it is not committed); `tools/fuzz/holes/map.py --counts` gives the totals
 
@@ -150,7 +150,7 @@ flowchart BT
   Codes["Codes<br/>(799L, 40 thms)"]
   Ctx["Ctx<br/>(298L, 30 thms)"]
   DropCode["DropCode<br/>(694L, 15 thms)"]
-  DtorWitness["DtorWitness<br/>(2539L, 122 thms)"]
+  DtorWitness["DtorWitness<br/>(2541L, 122 thms)"]
   DynCell["DynCell<br/>(480L, 33 thms)"]
   EditB["EditB<br/>(2207L, 61 thms)"]
   EditBV["EditBV<br/>(1077L, 35 thms)"]
@@ -167,7 +167,7 @@ flowchart BT
   Rename["Rename<br/>(4204L, 180 thms)"]
   Repl["Repl<br/>(387L, 21 thms)"]
   Rhs["Rhs<br/>(2790L, 144 thms)"]
-  Semantics["Semantics<br/>(1555L, 13 thms)"]
+  Semantics["Semantics<br/>(1556L, 13 thms)"]
   Settle["Settle<br/>(209L, 12 thms)"]
   Soundness["Soundness<br/>(270L, 17 thms)"]
   SrcKeep["SrcKeep<br/>(346L, 14 thms)"]
@@ -176,7 +176,7 @@ flowchart BT
   Steps["Steps<br/>(3398L, 113 thms)"]
   Sweep["Sweep<br/>(593L, 65 thms)"]
   SweepD["SweepD<br/>(349L, 26 thms)"]
-  Syntax["Syntax<br/>(1147L, 48 thms)"]
+  Syntax["Syntax<br/>(1149L, 48 thms)"]
   Typing["Typing<br/>(1885L, 91 thms)"]
   TypingFacts["TypingFacts<br/>(1013L, 61 thms)"]
   Values["Values<br/>(220L, 17 thms)"]
@@ -243,8 +243,8 @@ flowchart BT
 <!-- BEGIN generated: A2 module index (webdocs/scripts/gen-formal-data.mjs) -->
 | Layer | Module | Lines | Theorems | Defs / Types | Summary |
 |---|---|---:|---:|---:|---|
-| 0. Syntax & Store | [`A2/Semantics.lean`](A2/Semantics.lean) | 1555 | 13 | 93 | Small-step operational semantics (Step, Steps), tree deallocation (Frees, DropSlot), call expansion, and Stuck. |
-| 0. Syntax & Store | [`A2/Syntax.lean`](A2/Syntax.lean) | 1147 | 48 | 71 | Types, effect & kill lattice (Eff.kills), expressions, statements, and store values (Mem, Slot, Val). |
+| 0. Syntax & Store | [`A2/Semantics.lean`](A2/Semantics.lean) | 1556 | 13 | 93 | Small-step operational semantics (Step, Steps), tree deallocation (Frees, DropSlot), call expansion, and Stuck. |
+| 0. Syntax & Store | [`A2/Syntax.lean`](A2/Syntax.lean) | 1149 | 48 | 71 | Types, effect & kill lattice (Eff.kills), expressions, statements, and store values (Mem, Slot, Val). |
 | 1. Flow-Sensitive Typing | [`A2/Basic.lean`](A2/Basic.lean) | 520 | 45 | 1 | Foundational lemmas for store updates (upd), value subtrees, and contexts. |
 | 1. Flow-Sensitive Typing | [`A2/Ctx.lean`](A2/Ctx.lean) | 298 | 30 | 0 | Algebraic properties and monotonicity of context operations (kill, exitScope, derive). |
 | 1. Flow-Sensitive Typing | [`A2/Typing.lean`](A2/Typing.lean) | 1885 | 91 | 110 | Flow-sensitive context Γ, kill operation, and typing rules for RHS, statements, calls, and functions (RhsT, StmtT, CallT, FnOK). |
@@ -259,7 +259,7 @@ flowchart BT
 | 3. Proof Infrastructure | [`A2/ArcDtorWitness.lean`](A2/ArcDtorWitness.lean) | 135 | 6 | 2 |  |
 | 3. Proof Infrastructure | [`A2/ClosureDropWitness.lean`](A2/ClosureDropWitness.lean) | 866 | 51 | 21 |  |
 | 3. Proof Infrastructure | [`A2/DropCode.lean`](A2/DropCode.lean) | 694 | 15 | 9 |  |
-| 3. Proof Infrastructure | [`A2/DtorWitness.lean`](A2/DtorWitness.lean) | 2539 | 122 | 52 |  |
+| 3. Proof Infrastructure | [`A2/DtorWitness.lean`](A2/DtorWitness.lean) | 2541 | 122 | 52 |  |
 | 3. Proof Infrastructure | [`A2/EditB.lean`](A2/EditB.lean) | 2207 | 61 | 0 | Element edits through borrows (StmtT.editB): push, truncate, and element set through borrowed paths. |
 | 3. Proof Infrastructure | [`A2/EditBV.lean`](A2/EditBV.lean) | 1077 | 35 | 0 | A view stored through a borrow (StmtT.editBV): every view-holding root of the borrow's path holds what the stored value depends on. |
 | 3. Proof Infrastructure | [`A2/Elem.lean`](A2/Elem.lean) | 67 | 1 | 0 | An element handed over (withElem, insert): the invariant does not see the order of an owned Vec's elements (MInv.perm). |
