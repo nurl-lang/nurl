@@ -1034,10 +1034,11 @@ def DtorOK (P : Prog) (f : Nat) (t : Ty) : Prop :=
     its own: a field that holds a destructor value goes to its `letd`
     (`StmtT.unpair`'s `hdx` / `hdz`), whose frame runs its destructor, on a
     panic in another field's too.  Its tail does nothing else (`Stmt.pureGlue`),
-    so `unpair` of such a struct anywhere does what its drop does.  (In this
-    cut the struct holds no views.) -/
+    so `unpair` of such a struct anywhere does what its drop does.  (Agora
+    #633: the struct may hold views, of the caller's bindings: the frame's end
+    moves it into the glue as any `sink` argument, `glueCall_typed`.) -/
 def GlueOK (P : Prog) (f : Nat) (t : Ty) : Prop :=
-  ∃ fn a b, P[f]? = some fn ∧ t = .prod a b ∧ t.holdsView = false ∧ fn.params = [(.sink, .dtor f t)] ∧ fn.resTy = .int ∧
+  ∃ fn a b, P[f]? = some fn ∧ t = .prod a b ∧ fn.params = [(.sink, .dtor f t)] ∧ fn.resTy = .int ∧
     fn.resOwn = false ∧ fn.lends = [] ∧ fn.rholds = [] ∧ fn.outHolds = [] ∧ ¬ ThruFn P f ∧
     ∃ x z s, fn.body = .unpair 0 x z s ∧ s.pureGlue = true
 
@@ -1061,9 +1062,10 @@ def EnumGlueOK (P : Prog) (f : Nat) (t : Ty) : Prop :=
     rebinds it under the fields' (or the payload's) glue `h` (a `letd` at
     `Ty.dtor h t`: from there on a panic takes it apart, a frame per part),
     runs the impl on it lent, and sets its result.  nurlc's order: the impl,
-    then the parts. -/
+    then the parts.  (Agora #633: a struct's may hold views; an enum's holds
+    none, `EnumGlueOK`.) -/
 def ImplGlueOK (P : Prog) (f : Nat) (t : Ty) (h i : Nat) : Prop :=
-  ∃ fn w r e, P[f]? = some fn ∧ t.isStruct = true ∧ t.holdsView = false ∧
+  ∃ fn w r e, P[f]? = some fn ∧ t.isStruct = true ∧
     fn.params = [(.sink, .dtor f t)] ∧ fn.resTy = .int ∧
     fn.resOwn = false ∧ fn.lends = [] ∧ fn.rholds = [] ∧ fn.outHolds = [] ∧ ¬ ThruFn P f ∧
     (GlueOK P h t ∨ EnumGlueOK P h t) ∧ DtorOK P i (.dtor h t) ∧
@@ -1106,16 +1108,16 @@ def DropFnOK (P : Prog) (f : Nat) (t : Ty) : Prop :=
 /-- A glue of any kind takes its value owned. -/
 theorem sinkOf {P : Prog} {f : Nat} {t : Ty}
     (hg : GlueOK P f t ∨ (∃ h i, ImplGlueOK P f t h i) ∨ EnumGlueOK P f t ∨ ClosureGlueOK P f t) :
-    ∃ fn, P[f]? = some fn ∧ t.holdsView = false ∧ fn.params = [(.sink, .dtor f t)] ∧
+    ∃ fn, P[f]? = some fn ∧ fn.params = [(.sink, .dtor f t)] ∧
       fn.resOwn = false ∧ ¬ ThruFn P f := by
-  rcases hg with ⟨fn, _, _, hfn, _, hv, hps, _, hro, _, _, _, hnt, _⟩ |
-    ⟨_, _, fn, _, _, _, hfn, _, hv, hps, _, hro, _, _, _, hnt, _⟩ |
-    ⟨fn, _, _, _, _, hfn, _, hv, hps, _, hro, _, _, _, hnt, _⟩ |
-    ⟨fn, _, _, _, _, _, _, hfn, ht, hps, _, hro, _, _, _, hnt, _⟩
-  · exact ⟨fn, hfn, hv, hps, hro, hnt⟩
-  · exact ⟨fn, hfn, hv, hps, hro, hnt⟩
-  · exact ⟨fn, hfn, hv, hps, hro, hnt⟩
-  · exact ⟨fn, hfn, by rw [ht]; rfl, hps, hro, hnt⟩
+  rcases hg with ⟨fn, _, _, hfn, _, hps, _, hro, _, _, _, hnt, _⟩ |
+    ⟨_, _, fn, _, _, _, hfn, _, hps, _, hro, _, _, _, hnt, _⟩ |
+    ⟨fn, _, _, _, _, hfn, _, _, hps, _, hro, _, _, _, hnt, _⟩ |
+    ⟨fn, _, _, _, _, _, _, hfn, _, hps, _, hro, _, _, _, hnt, _⟩
+  · exact ⟨fn, hfn, hps, hro, hnt⟩
+  · exact ⟨fn, hfn, hps, hro, hnt⟩
+  · exact ⟨fn, hfn, hps, hro, hnt⟩
+  · exact ⟨fn, hfn, hps, hro, hnt⟩
 
 /-- What `letd x f r s` asks of `f`, binding a value of type `a`: `f` is the
     destructor of `Ty.dtor f t` (`DropFnOK`); and a value of ANOTHER
@@ -1451,6 +1453,9 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       -- A2-drop.2: the binding is `letd`'s when its type holds views (its
       -- destructor reads them)
       (∀ E, Δ x = some E → E.ty.holdsView = true → E.dbind = true) →
+      -- Agora #633: ... and views nothing of its own (a panic's unwind moves
+      -- it into its glue, a `sink` argument)
+      DSelf Γ x →
       StmtT P Γ F (.scopeD x f s) (exitScope x Δ)
   /-- Agora #295: a change of a `Vec`'s elements through a borrow `x` (a
       push, a truncation or an element set), of an element type that holds

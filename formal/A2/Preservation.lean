@@ -645,6 +645,7 @@ theorem pres_reap {P : Prog} {Γ Δ : Ctx} {F : List Var} {r : Stmt} (ht : StmtT
     hm.wf hm.names
     (fun E' hE' hv' => by
       simp [setE] at hE'; subst hE'; rw [hEty] at hv'; rw [hvf] at hv'; cases hv')
+    (DSelf.of_dbind fun E' hE' => by simp [setE] at hE'; subst hE'; exact hEdb)
   rw [exitScope_setE_fresh hwf hΓz] at hfr
   refine ⟨setE Γ m.nv E, StmtT.seq hsrc hfr ht, ?_, Nat.le_succ _, ?_, fun v hv => ?_⟩
   · refine Inv.mk hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine])
@@ -888,6 +889,15 @@ theorem revive_dep {x : Var} {E : Entry} (hos : E.mode.ownSlot = true) {d : Dep}
     simp only [Bool.or_eq_true, bne_iff_ne, ne_eq, beq_iff_eq] at this
     exact this
   · cases hd
+
+/-- Agora #633: ... and none of itself, where `letd`'s binding viewed none
+    (`DSelf`; `revive` keeps a view through a share the binding holds). -/
+theorem revive_self {Γ : Ctx} {x : Var} {Ex : Entry} (hx : Γ x = some Ex) (hos : Ex.mode.ownSlot = true)
+    (hn : Ex.ty ≠ .int) (h : DSelf Γ x) : x ∉ roots (Ex.revive x).vdeps := by
+  intro hr
+  obtain ⟨d, hd, hdx⟩ := List.mem_map.mp hr
+  obtain ⟨hdb, hdh, hnm, _⟩ := revive_dep hos hd
+  exact h Ex hx hdb hos (Or.inl hn) d (by simp [Entry.vdeps, hos, hdh]) hnm hdx
 
 /-- A value holds no view into its own tree: what it views through its own
     binding, it views through nothing (A3.1: but a share it holds, as
@@ -1548,12 +1558,14 @@ theorem endOK_bind {Γ : Ctx} {y : Var} {E : Entry} (he : EndOK Γ y) (hy : Γ y
     · rw [setE, upd_ne _ _ hvy] at hv; exact he.2.2 v E1 hv hdb hos hn d hdd hnm
 
 /-- Agora #616: a struct's glue called on `x` at the end of its frame, from
-    any context where `x` owns a value of a type that holds nothing: the
-    value moves into the glue (its parameter is `sink`), and `x`'s scope ends
-    after it, moved out. -/
+    any context where `x` owns a value: the value moves into the glue (its
+    parameter is `sink`), and `x`'s scope ends after it, moved out.  Agora
+    #633: the value may hold views (of other bindings, in memory: `CallT`'s
+    `sink` argument reaches nothing of itself), as any `sink` argument. -/
 theorem glueCall_typed {P : Prog} {m : Mem} {Γ0 : Ctx} {F : List Var} {x : Var} {f : Nat}
     {E : Entry} {fn : Fn} (hm : MInv m Γ0) (hx : Γ0 x = some E) (hmo : E.mode = .own)
-    (hlive : E.live = true) (hnv : E.vdeps = []) (hfn : P[f]? = some fn)
+    (hlive : E.live = true) (hnn : ∀ d ∈ E.vdeps, d.kind.isName = false) (hself : x ∉ roots E.vdeps)
+    (hfn : P[f]? = some fn)
     (hps : fn.params = [(.sink, E.ty)]) (hown : E.ty.owning = true)
     (hro : fn.resOwn = false) (hxF : x ∉ F) (hnF : m.nv ∉ F) (hpin : EndOK Γ0 x)
     (hnt : ¬ ThruFn P f) :
@@ -1566,8 +1578,13 @@ theorem glueCall_typed {P : Prog} {m : Mem} {Γ0 : Ctx} {F : List Var} {x : Var}
     have := hm.dom m.nv; rw [hmr] at this
     cases h : Γ0 m.nv <;> simp_all
   have hxr : m.nv ≠ x := fun h => by rw [h, hx] at hrΓ; cases hrΓ
+  have hnd : nameDeps E.vdeps = [] := List.filter_eq_nil_iff.mpr fun d hd => by simp [hnn d hd]
   have hnm : mutNames Γ0 [x] = [] := by
-    simp [mutNames, argNames, argE, hx, hnv, nameDeps]
+    simp [mutNames, argNames, argE, hx, hnd]
+  have hmem : x ∉ roots (memDeps E.vdeps) := fun h => hself (by
+    simp only [roots, memDeps, List.mem_map, List.mem_filter] at h ⊢
+    obtain ⟨d, ⟨hd, _⟩, hdx⟩ := h
+    exact ⟨d, hd, hdx⟩)
   let Γp : Ctx := setE (kill .replace false x Γ0) x { E with live := false, dtor := false }
   have hpost : callPost Γ0 fn [x] = Γp := by
     simp [callPost, hnm, killNames, hps, callPostAux, argE, hx, Γp]
@@ -1576,8 +1593,8 @@ theorem glueCall_typed {P : Prog} {m : Mem} {Γ0 : Ctx} {F : List Var} {x : Var}
       fun h => absurd h hnt⟩
     · have hi0 : i = 0 := by simp [hps] at hi; omega
       subst hi0
-      refine ⟨E, by simp [hx], hlive, ?_, fun _ => ⟨by simpa using hxF, by simp [hnv, memDeps, roots],
-        fun _ => by simp [hnv, roots], fun b hb => by simp [hps] at hb, fun j hj hne => ?_⟩,
+      refine ⟨E, by simp [hx], hlive, ?_, fun _ => ⟨by simpa using hxF, by simpa using hmem,
+        fun _ => by simpa using hself, fun b hb => by simp [hps] at hb, fun j hj hne => ?_⟩,
         fun _ => by simpa using hpin.1⟩
       · simp [hps, paramOK, hmo, hown]
       · simp [hps] at hj; omega
@@ -1859,8 +1876,18 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           (by show E2.ty.dtorViews = true; rw [hsd2.dtorViews]; exact hhv)
           (by rw [show E2.arm.mode = E2.mode from rfl, hmo2]; rfl) (by simp)
         rw [hE'] at h2; cases h2; exact hd2
+      -- Agora #633: what the binding views is of roots bound before it
+      have hself : DSelf (setE Γ1 x E2.arm) x := by
+        intro E' hE' _ _ hn d hd _ hdx
+        simp only [setE, upd_same, Option.some.injEq] at hE'; subst hE'
+        have hnt : E2.ty ≠ .int := by
+          rcases hn with h | h
+          · exact h
+          · exact absurd h hnrb
+        obtain ⟨Er, hEr, _⟩ := out2.wf hnt x (by rw [← hdx]; exact List.mem_map_of_mem hd)
+        rw [hx1] at hEr; cases hEr
       refine ⟨setE Γ1 x E2.arm, StmtT.scopeD ⟨E2.arm, t, by simp [setE], hmo2, hsd2, hfn2, hdtor.1.1, hstr⟩ hxF hs hpx
-        (by rw [hsp]; exact hKOd) hWd hNd hΔd, ?_, by simp [post.nv], ?_, fun v hv => ?_⟩
+        (by rw [hsp]; exact hKOd) hWd hNd hΔd hself, ?_, by simp [post.nv], ?_, fun v hv => ?_⟩
       · refine Inv.mk hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
           (by simp [Stmt.spine, hsp, setE]) (show CatchOK _ k from catchOK_src hsrc)
           (covers_take (covers_evalR hi.cover he) (fun T h => by
@@ -2445,7 +2472,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         simp only [Stmt.spine, List.mem_cons, not_or] at hvs
         obtain ⟨hvs', rest⟩ := hk.2.1 v E' hv hvs.2
         exact ⟨by simp only [Stmt.spine, List.mem_cons, not_or]; exact ⟨hvs.1, hvs'⟩, rest⟩
-  | @scopeD Γ Δ1 F x f k hxE hxF hs hpx hKO hWd hNd hΔd ihs =>
+  | @scopeD Γ Δ1 F x f k hxE hxF hs hpx hKO hWd hNd hΔd hself ihs =>
     intro m m' s' hcd hi hst
     obtain ⟨Ex, tx, hx, hmo, htx, hhf, hdtor, hstr⟩ := hxE
     have hnrb : Ex.mode ≠ .rootb := by rw [hmo]; simp
@@ -2557,8 +2584,13 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       have hi0 : Inv m Γ F k := hiS.scopeIn hx hnrb
       obtain ⟨Γ', ht', hi', hnv, hk, hfz⟩ := ihs hs hcd hi0 hst'
       obtain ⟨hxsp', Ex', hx', hm', ht'', _⟩ := hk.1 x Ex hx hxsp
+      -- Agora #633: the binding gains no view (`DKeep`), of itself neither
+      have hself' : DSelf Γ' x := by
+        intro E' hE' hd hos hn d hdd hnm
+        obtain ⟨E0, h0, hd0, hos0, hn0, hsub⟩ := hk.2.2 x E' hE' hd hos hn hxsp'
+        exact hself E0 h0 hd0 hos0 hn0 d (hsub d hdd hnm) hnm
       refine ⟨Γ', StmtT.scopeD ⟨Ex', tx, hx', by rw [hm', hmo], by rw [ht'']; exact htx, by rw [ht'', hhf],
-          hdtor, hstr⟩ hxF ht' hpx (hKO.step hk) hWd hNd hΔd, Inv.scopeD_iff.mpr ?_, hnv,
+          hdtor, hstr⟩ hxF ht' hpx (hKO.step hk) hWd hNd hΔd hself', Inv.scopeD_iff.mpr ?_, hnv,
         ⟨?_, ?_, hk.2.2.mono fun v hv h => hv (List.mem_cons_of_mem _ h)⟩, hfz⟩
       · exact
         { toMInv := hi'.toMInv
@@ -2705,15 +2737,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
             · simp [exitScope, upd_ne _ _ hwx, A2.kill, setE]
           rw [hex] at hsc
           exact hsc
-        · obtain ⟨fn, hfn, hvw, hps, hro, hnt⟩ := sinkOf hg
-          have hdb : Ex.dbind = false := by
-            cases h : Ex.dbind with
-            | false => rfl
-            | true =>
-              have := hiS.wf.view x Ex hx h
-              rw [htx'] at this; simp [Ty.holdsView, hvw] at this
-          have hvd : (Ex.revive x).vdeps = [] := by
-            simp [Entry.revive, Entry.vdeps, hos, hdb]
+        · obtain ⟨fn, hfn, hps, hro, hnt⟩ := sinkOf hg
           have hmr : m.st m.nv = none := by
             cases h : m.st m.nv with
             | none => rfl
@@ -2728,8 +2752,10 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
             by_cases hpx' : p = x
             · subst hpx'; simp [setE] at hp; subst hp; simp [Entry.revive, hmo] at hm
             · simp only [setE, upd_ne _ _ hpx'] at hp; exact hNoPinΓ.1 p E hp hm d hd hb
+          -- Agora #633: the binding views nothing of its own (its scope's end asks it)
           have hsc := glueCall_typed (hiS.toMInv.revive hx hmo hhf hdbv hsl) (by simp [setE])
-            (by simp [Entry.revive, hmo]) rfl hvd hfn
+            (by simp [Entry.revive, hmo]) rfl (fun d hd => (revive_dep hos hd).2.2.1)
+            (revive_self hx hos (by rw [htx']; simp) hNoPinΓ.2.2.self) hfn
             (by rw [hps]; simp [Entry.revive, htx']) (by simp [Entry.revive, htx', Ty.owning]) hro hxF hrF hNoPinΓ' hnt
           have hex : exitScope x (setE Γ x (Ex.revive x)) = exitScope x Γ := by
             funext w
@@ -2915,6 +2941,8 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           rw [killE_ty] at hv
           have : (Ex.revive x).ty = .vec (.dtor f tx) := hty
           rw [this] at hv; simp [Ty.holdsView, htv] at hv)
+        (DSelf.of_dbind fun E hE => by
+          simp only [setE, upd_same, Option.some.injEq] at hE; subst hE; rfl)
       have hex : exitScope x (setE Γ x (Ex.revive x)) = exitScope x Γ := by
         funext w
         by_cases hwx : w = x
@@ -3010,15 +3038,10 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         · obtain ⟨fn, hfn, hps, _, hro, _, _, _, hnt⟩ : DtorOK P f Ex.ty := by rw [htx']; exact hdt
           exact dtorCall_typed hMu hux (by simp [Entry.revive, hmo]) rfl
             (fun d hd => (revive_dep hos hd).2.2.1) hfn hps hro hxF hnF hpinU hnt
-        · obtain ⟨fn, hfn, hvw, hps, hro, hnt⟩ := sinkOf hg
-          have hdb : Ex.dbind = false := by
-            cases h : Ex.dbind with
-            | false => rfl
-            | true =>
-              have := hiS.wf.view x Ex hx h
-              rw [htx'] at this; simp [Ty.holdsView, hvw] at this
+        · obtain ⟨fn, hfn, hps, hro, hnt⟩ := sinkOf hg
+          -- Agora #633: the binding views nothing of its own (the frame keeps it)
           exact glueCall_typed hMu hux (by simp [Entry.revive, hmo]) rfl
-            (by simp [Entry.revive, Entry.vdeps, hos, hdb]) hfn
+            (fun d hd => (revive_dep hos hd).2.2.1) (revive_self hx hos (by rw [htx']; simp) hself) hfn
             (by rw [hps]; simp [Entry.revive, htx']) (by simp [Entry.revive, htx', Ty.owning]) hro hxF hnF hpinU hnt
       refine ⟨unwindCtx k.spine x Γ, StmtT.seq rfl hsc hpan, ?_,
         by show m.nv ≤ m1.nv + 1; rw [hnv1]; exact Nat.le_succ _,
@@ -3094,6 +3117,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
             rw [hux] at hE; cases hE
             have : (Ex.revive x).ty = .vec (.dtor f tx) := hty
             rw [this] at hv; simp [Ty.holdsView, htv] at hv)
+          (DSelf.of_dbind fun E hE => by rw [hux] at hE; cases hE; rfl)
       refine ⟨unwindCtx k.spine x Γ, StmtT.seq rfl hsc hpan, ?_,
         by show m.nv ≤ m'.nv; rw [hnv1]; exact Nat.le_refl _,
         ⟨?_, ?_, DKeep.unwind _ fun w hw h => hw (by simp [Stmt.spine, h])⟩, ?_⟩

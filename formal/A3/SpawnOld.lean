@@ -242,7 +242,7 @@ theorem Redex.typed {s r : Stmt} {K : Stmt → Stmt} (hR : Redex s K r) {P : Pro
     intro Γ F Δ ht hi
     generalize hS : Stmt.scopeD x f s = S at ht hi
     induction ht with
-    | scopeD hxE _ hs _ _ _ _ _ =>
+    | scopeD hxE _ hs _ _ _ _ _ _ =>
       cases hS
       obtain ⟨Ex, _, hx, hmo, _⟩ := hxE
       exact ih _ _ _ hs ((Inv.scopeD_iff.mp hi).scopeIn hx (by rw [hmo]; simp))
@@ -316,13 +316,13 @@ theorem Redex.plug {s r : Stmt} {K : Stmt → Stmt} (hR : Redex s K r) {P : Prog
     intro Γ F Δ ht hi
     generalize hS : Stmt.scopeD x f s = S at ht hi
     induction ht with
-    | scopeD hxE hxF hs hpx hKO hWd hNd hΔd _ =>
+    | scopeD hxE hxF hs hpx hKO hWd hNd hΔd hself _ =>
       cases hS
       have hsp' : (K r').spine = s.spine := by rw [Redex.spine_eq h hsp, ← Redex.eq h]
       obtain ⟨Ex, tx, hx, hmo, hrest⟩ := hxE
       exact StmtT.scopeD ⟨Ex, tx, hx, hmo, hrest⟩ hxF
         (ih hsp hhole _ _ _ hs ((Inv.scopeD_iff.mp hi).scopeIn hx (by rw [hmo]; simp))) hpx
-        (by rw [hsp']; exact hKO) hWd hNd hΔd
+        (by rw [hsp']; exact hKO) hWd hNd hΔd hself
     | sub hw _ ho ih0 => exact StmtT.sub hw (ih0 hS (hi.weaker hw)) ho
     | _ => cases hS
   | @scopeL k t x s r K _ ih =>

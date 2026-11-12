@@ -63,8 +63,22 @@ A2-drop.3b; A2-drop.3a's rule looked one level down only).
   takes a value of such a type apart anywhere (its rule's `h5`): that is
   what its drop does. Nesting the `letd`s as `letd z' (var z) (letd y'
   (var x) skip)` runs the fields' destructors in field order, nurlc's.
-  In this cut the struct holds no views (the moved-in value must hold
-  nothing). **A struct (or an enum, Agora #632) with a `% Drop` of its own
+  **Agora #633: the struct may hold views** (a `% Drop` field beside a
+  view field of an older binding, nurlc's `: P { Conn c s name }`). Its
+  `letd` arms it with what it views; the frame's end revives it with those
+  views (`Entry.revive`) and moves it into the glue as any `sink` argument,
+  which reaches nothing of itself (`CallT`). That holds because a `letd`
+  binding views nothing of its own (`DSelf`: what `DbindSafe` at its
+  scope's end asks of the binding itself; `revive` keeps a view through a
+  share the binding holds, so the unwind needs it too, and `StmtT.scopeD`
+  carries it: true when `letd` binds, the views being of roots bound
+  before, and kept by every step inside, which gains the binding no view,
+  `DKeep`). The glue sees its parameter as viewing nothing (`paramE`), as
+  any callee does; the call keeps what the views are valid through. No new
+  step and no new field of `Inv`: `glueCall_typed` takes an argument that
+  holds views instead of none (witness `A2.DtorWitness.main10_safe`). An enum with
+  glue still holds no views (`EnumGlueOK`).
+  **A struct (or an enum, Agora #632) with a `% Drop` of its own
   beside a destructor field or payload** (`ImplGlueOK P f t h i`, `h` the
   struct's `GlueOK` or the enum's `EnumGlueOK` function) needs no new step either: its glue `f`
   takes it owned and its body is `letd w h (var 0) (letcall r i [w]
@@ -399,7 +413,8 @@ and the result's move back is safe.
 - `Entry.revive`: at `scopeDEnd` and in the unwind, an armed dead binding
   whose slot owns is revived for the destructor's call. It keeps its views
   in memory, minus any of itself, which `SelfFree` rules out
-  (`ViewsOK.dropSelf`).
+  (`ViewsOK.dropSelf`), but one through a share it holds. That there is
+  none of those either is the typing's (`DSelf`, Agora #633, above).
 - `HeldUp`: `letd` may record its binding as viewing more memory than the
   value does, of bound roots. Where a call places a callee's body, the
   callee's binding is read as viewing anything the arguments held (`A`),

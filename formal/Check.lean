@@ -31,6 +31,11 @@ import A3
 #print axioms A2.Dtor.letd_retype
 #print axioms A2.Dtor.impl_glue_body
 #print axioms A2.DtorWitness.main8_safe
+-- Agora #633: ... and one that holds views of older bindings, moved into its glue as a `sink` argument
+#print axioms A2.glueCall_typed
+#print axioms A2.DtorWitness.glueS_ok
+#print axioms A2.DtorWitness.main10_typed
+#print axioms A2.DtorWitness.main10_safe
 -- Agora #609: a closure whose environment is a destructor value is dropped by its glue, which calls its drop method (A2/ClosureDropWitness.lean)
 #print axioms A2.ClosureDropWitness.glue_calls_drop
 #print axioms A2.ClosureDropWitness.prog_ok
