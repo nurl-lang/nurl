@@ -8,9 +8,28 @@ import A3
 #print axioms A2.soundness
 #print axioms A2.no_leak_end
 #print axioms A2.no_leak_panic
--- Agora #610 (preparation): reaping an orphan keeps typing and invariant; nothing makes one yet
+-- Agora #610: the marking sweep marks an unreached `Arc` of a destructor value `dead`, and the
+-- thread whose step it ended reaps it (`Settle`) before anything else runs: the invariant
+-- through both, the reaps always possible and finite, no orphan left between steps
 #print axioms A2.pres_reap
+#print axioms A2.Inv.sweepD
+#print axioms A2.MemCodes.sweepD
+#print axioms A2.Mem.sweepD_empty
+#print axioms A2.Mem.sweepD_keeps
+#print axioms A2.Mem.sweepD_marks
+#print axioms A2.settle_ok
+#print axioms A2.orphan_reaps
+#print axioms A2.settle_total
+#print axioms A2.steps_step
+#print axioms A2.settle_reaps
+#print axioms A2.progress_no_reap
 #print axioms A2.no_orphan
+-- ... a witness: an `Arc` of a destructor value, cloned, both shares dropped (A2/ArcDtorWitness.lean)
+#print axioms A2.ArcDtorWitness.main_typed
+#print axioms A2.ArcDtorWitness.main_safe
+#print axioms A2.ArcDtorWitness.main_no_leak
+#print axioms A2.ArcDtorWitness.last_drop_reaps
+#print axioms A3.arcDtor_claim
 -- per-call ownership, as the calculus has it (A2/DynCell.lean)
 #print axioms A2.DynCell.pick_ok
 #print axioms A2.DynCell.main_safe
@@ -82,8 +101,9 @@ import A3
 #print axioms A2.Dtor.pkgs_env_dtor_free
 #print axioms A2.Dtor.closure_dtor_is_glue
 #print axioms A2.Dtor.drop_method_code
--- A2-drop.3d: no share's payload owns a destructor value
+-- A2-drop.3d: no lock's or cell's payload owns a destructor value; an `Arc`'s is one at its top or owns none
 #print axioms A2.Dtor.ok_payloads_free
+#print axioms A2.Dtor.ok_lockPayloads_free
 #print axioms A2.Dtor.shares_dtor_free
 #print axioms A2.Dtor.blocks_dtor_free
 #print axioms A2.Dtor.blk_pkgs_env_dtor_free

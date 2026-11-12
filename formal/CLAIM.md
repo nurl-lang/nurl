@@ -612,7 +612,9 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
     (`DropFnOK`: one that takes it lent, or a struct's glue, Agora #616),
     and the binding is assigned nothing in its scope (`A2.Dtor.letd_dtor`);
   - at the end of a typed `scopeD x f` frame whose `x` still owns its
-    value, a struct or an enum, the frame's only step calls `f` on `x` (lent,
+    value, a struct or an enum, in a store with no orphan (every store a run
+    reaches between its steps, `A2.no_orphan`; with one, `Step.reap` is a
+    step too), the frame's only step calls `f` on `x` (lent,
     the tree freed after; or moved into a struct's glue) (`A2.Dtor.scopeD_end_runs_dtor`); a panic out
     of its body with `x` owning runs it too
     (`A2.Dtor.scopeD_panic_runs_dtor`);
@@ -789,8 +791,9 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   moved into a struct, the struct's glue a function of the program
   checked by `FnOK`). It is refused as an element (a `Vec` of `Vec`s of
   them), a view's element, a share's, a lock's or a cell's payload (each
-  of these asks `!vecD` of its part; a share's payload owns no destructor
-  value at all, 3d below); every `Vec` in a binding's type has elements
+  of these asks `!vecD` of its part; a lock's or a cell's payload owns no
+  destructor value at all, an `Arc`'s is one at its top or owns none, 3d
+  below); every `Vec` in a binding's type has elements
   that own no destructor value or are of a destructor type
   (`A2.Dtor.vecs_dtor_free`). Its binder
   is `letd x f r s`,
@@ -813,7 +816,8 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   the rules that release elements with no code ask the first of their
   own `Vec` (`free`, a truncation, an element set and `withElem` ask
   `dtorFree`), so they release or check out no destructor value; a
-  share's payload owns none either (3d, below).
+  lock's or a cell's payload owns none either, and an `Arc`'s destructor
+  value is handed to a frame of its own (3d, below).
   (On an empty `Vec`, `vec_pop` and `vec_remove` return `None` in nurlc; the
   calculus's `pop` / `remove` panic there instead, an unwrap: a program
   that matches the option is the same program with the `None` arm taken
@@ -880,33 +884,77 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   (`A2.Dtor.letv_owned_dtor_free`), and a struct or an enum holding one
   two levels down is bound by `letd` with its glue
   (`A2.DtorWitness.main4_safe`).
-- A2-drop.3d: no block's payload owns a destructor value. The invariant
-  carries it for every block in memory, whatever holds its shares (a
-  binding, a closure's environment, another block's payload):
-  `A2.Dtor.blocks_dtor_free` (`MInv.blocks`; a start built by hand must
-  satisfy it too, `GlobsOK`). So the sweep that frees a block when its
-  last share goes, which runs no code, releases no destructor value.
-  (Agora #610, a preparation: the model now has a block kind `dead`, an
-  orphan whose payload awaits its destructor, and a step `Step.reap` that
-  moves such a payload to a destructor frame of the thread that takes it,
-  with its case of preservation, `A2.pres_reap`; nothing marks a block
-  `dead` yet, so no run from the empty store has one or takes the step,
-  `A2.no_orphan`, and the theorems above are stated with that in view:
-  `blocks_dtor_free` of a block that is not `dead`, the destructor
-  frame's only-step theorems of a store with no orphan.) What
-  keeps it: `Ty.ok` asks it of an `Arc`'s, a lock's and a cell's payload
-  type (so of a channel's queue and a read guard's view), and `arc_new`, a
-  lock's and a library handle's constructor ask it of what moves in
-  (`A2.Dtor.share_new_dtor_free`). Of types: the payload type of every
-  share in a binding's type owns none (`A2.Dtor.shares_dtor_free`, over
-  `A2.Dtor.ok_payloads_free`), so a check-out binding (`withLock`,
+- A2-drop.3d: no lock block's and no view's payload owns a destructor
+  value; an `Arc`'s may be one at its top (Agora #610), and is then of a
+  destructor type that holds no closure. The invariant carries it for every
+  block in memory, whatever holds its shares (a binding, a closure's
+  environment, another block's payload): `A2.Dtor.blocks_dtor_free`
+  (`MInv.blocks`, `Blk.DtorOK`; a start built by hand must satisfy it too,
+  `GlobsOK`, whose `Arc` blocks of destructor values name destructors the
+  program checked, `GlobsOK.dtors`). What keeps it: `Ty.ok` asks a lock's
+  and a cell's payload type to own none (so a channel's queue and a read
+  guard's view own none), and an `Arc`'s to own none or be a destructor
+  type (`Ty.ok_arc_dtor`); `arc_new`, a lock's and a library handle's
+  constructor ask the same of what moves in
+  (`A2.Dtor.share_new_dtor_free`), and `arc_new` of a destructor value
+  names a destructor the program checked (`Rhs.codeOK`, `DeadCodes`). Of
+  types: the payload type of every share in a binding's type owns none or
+  is a destructor type, a lock's and a cell's owns none
+  (`A2.Dtor.shares_dtor_free`, over `A2.Dtor.ok_payloads_free` and
+  `ok_lockPayloads_free`), so a check-out binding (`withLock`,
   `withCell`), whose type is the lock's payload's, holds none, and an
-  `assign` to it drops no destructor value. This is a refusal, not the
-  model of nurlc's drop of a block's payload (the stricter-than-nurlc list
-  below; `A2/DROP_DESIGN.md` staging item 4).
-- So a binding's end, a drained `Vec`'s, and a call's result frame run
-  the value's own, outermost destructor, and everywhere else that could
-  hold a destructor value is refused (the list below). That these are all
+  `assign` to it drops no destructor value.
+- Agora #610: **the last share's drop runs an `Arc`'s destructor, on the
+  thread that dropped it.** A2's step ends with the marking sweep
+  (`Mem.sweepD`): an unreached `arc` block whose payload is a destructor
+  value, and that no other such block's payload reaches (a top orphan),
+  is marked `dead`, its payload in it, and its payload, and a `dead`
+  block's, are roots, so what they reach is kept; every other unreached
+  block is removed and its payload freed, as before. The same thread then
+  reaps every orphan before anything else runs (`Settle`, part of
+  `Steps.step`): `Step.reap` moves the payload to a fresh binding in a
+  destructor frame at the thread's redex, whose end runs the destructor
+  as a `letd`'s does. While a slot's value refers to the block (another
+  share, a borrow of the payload) it is kept as it was
+  (`A2.Mem.sweepD_keeps`); when nothing refers to it it is marked
+  (`A2.Mem.sweepD_marks`). An inner `Arc` the payload holds is orphaned
+  when the outer destructor drops its share: outer first, as the
+  runtime's counts. The invariant holds through the marking sweep
+  (`A2.Inv.sweepD`, `A2.MemCodes.sweepD`) and the reaps
+  (`A2.settle_ok`, over `A2.pres_reap`). The reaps can always be taken
+  and end (`A2.orphan_reaps`: from every typed statement, at its redex;
+  `A2.settle_total`: each empties an orphan and the sweep after it makes
+  no new block of a destructor value; `A2.steps_step`: every step of a
+  typed configuration is one of a run), so the eager `Steps` drops no
+  run `Step` has. No store a run reaches between its steps has an orphan
+  (`A2.no_orphan`), so a reached configuration that is not finished
+  steps by a step that is no reap (`A2.progress_no_reap`), and a finished
+  run has none left (`A2.no_leak_end`, over `A2.Mem.sweepD_empty`).
+  Witness: `A2.ArcDtorWitness` (an `Arc` of a destructor value, cloned,
+  both shares dropped: typed, `main_safe`, `main_no_leak`;
+  `last_drop_reaps`: in a store where nothing refers to the block any
+  more, the marking sweep marks it and the thread's next step is a reap;
+  the theorems do not trace the witness's run; `A3.arcDtor_claim`: `A3.claim` over it). Left, each
+  named in the stricter-than-nurlc list below or here: a panic no frame
+  catches ends with the sweep that frees an orphaned payload with no code
+  (`Steps.panic`: no frame is left to run it); orphans that reach each
+  other in a cycle (no top one; arc payloads never do, a cycle needs a
+  lock between them) are freed with no code, where the runtime leaks
+  them, running no destructor either; several orphans one step leaves
+  are reaped in the order `Step.reap` picks, not nurlc's drop order; a
+  slot that still holds a handle into the payload after its borrow is
+  dead in the context keeps the block reached, so the destructor runs
+  later than the runtime's count would (A3's *Phase D obligation* on
+  handles that outlive their share, `A3/DESIGN.md`); and A3's
+  configuration sweep (`Cfg.sweep`) does not mark yet: on A3's threads
+  the last share's drop frees the payload with no code, the destructor
+  not run (`A3.Reach.noOrphan`: no A3 run has an orphan).
+- So a binding's end, a drained `Vec`'s, a call's result frame and
+  (Agora #610) an `Arc`'s last share's drop, through the reaped payload's
+  frame, run the value's own, outermost destructor, and everywhere else
+  that could hold a destructor value is refused (the list below), but for
+  the `Arc` payloads 3d names (an uncaught panic's end, a cycle of
+  orphans, A3's threads), freed with no code. That these are all
   the places is read off the rules, not a single theorem (above). The
   destructors INSIDE a value are shown for a struct's fields (Agora #616),
   an enum's payload (Agora #632) and a closure's environment (Agora
@@ -1003,13 +1051,23 @@ The rules are stricter than nurlc's in these places:
   captured keeps the `% Drop` value in a binding of its own and lets the
   closure borrow it (a capture by name: the closure is then of class
   `any`).
-- for a share whose payload would own a destructor value (A2-drop.3d): an
-  `Arc`, a `Locked` / `RwLocked` / `Mutex`, a channel or a library handle
-  of a `% Drop` type (or of a struct, an enum, an option or a `Vec` holding
-  one) is refused (`Ty.ok`). nurlc types them, and the thread that drops
-  the last share runs the payload's destructor. A program that shares a
-  resource keeps the `% Drop` value in one thread's binding and shares
-  what the others need of it.
+- for a share whose payload would own a destructor value (A2-drop.3d,
+  Agora #610): an `Arc` of a destructor type (`Arc<D>`, `D` a `% Drop`
+  struct or enum, or one with glue) is typed, and the thread that drops
+  the last share runs `D`'s destructor (3d, above). Still refused
+  (`Ty.ok`): a `Locked` / `RwLocked` / `Mutex`, a channel or a library
+  handle of a `% Drop` type (a check-out binding of a destructor type
+  needs a `scopeD`-style end that hands the value back); an `Arc` whose
+  payload holds a destructor value below its top (a struct or an option
+  of no destructor type of its own with a `% Drop` field, an `Arc` of a
+  `Vec` of them: `Step.reap` hands over a destructor type's value only);
+  and an `Arc<D>` whose `D` holds a closure (a destructor frame's binding
+  holds none). nurlc types them, and the thread that drops the last share
+  runs the payload's destructor. On A3's threads the configuration's sweep
+  frees an orphaned `Arc<D>` payload with no code: the claim covers such a
+  program, the destructor not run (3d, above). A program that shares a
+  locked resource keeps the `% Drop` value in one thread's binding and
+  shares what the others need of it.
 - for a spawned function's parameter of a type that holds a destructor
   value (`SpawnOK`, since A2-drop.3a): refused. nurlc moves a `% Drop`
   value to a new thread, which runs its destructor there.

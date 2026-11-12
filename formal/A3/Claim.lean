@@ -3,6 +3,7 @@ import A3.Restrict
 import A3.Lift
 import A3.SpawnOld
 import A3.SpawnNew
+import A2.ArcDtorWitness
 
 /-! A3.0 — the claim. -/
 
@@ -33,5 +34,19 @@ theorem no_leak_init {P : Prog} {spawn : Nat → Bool} {s : Stmt} {Δ : Ctx} {nv
     (hv : ∀ v ∈ s.vars, v < nv) :
     ∀ C, Reach P spawn (Cfg.init s nv) C → (∀ t ∈ C.ths, t.s = .skip) → ∀ i, C.alloc i = false :=
   NoLeak.empty (claim P spawn Globs.empty s Δ nv hP hPc hSp GlobsOK.empty ht hs hsc hv).2.2
+
+/-- Agora #610, the witness (`A2.ArcDtorWitness`): an `Arc` of a destructor
+    value, cloned, both shares dropped, on one thread.  The claim covers it:
+    safe, race-free and leak-free on every interleaving.  (A3's
+    configuration sweep does not mark orphans yet: there the last share's
+    drop frees the payload with no code, `CLAIM.md`; A2's `Steps` runs the
+    destructor, `A2.ArcDtorWitness.last_drop_reaps`.) -/
+theorem arcDtor_claim :
+    MemorySafe A2.DtorWitness.P (fun _ => false) (Cfg.start Globs.empty A2.ArcDtorWitness.main 5) ∧
+      RaceFree A2.DtorWitness.P (fun _ => false) (Cfg.start Globs.empty A2.ArcDtorWitness.main 5) ∧
+      NoLeak A2.DtorWitness.P (fun _ => false) (Cfg.start Globs.empty A2.ArcDtorWitness.main 5) := by
+  obtain ⟨Δ, ht⟩ := A2.ArcDtorWitness.main_typed
+  exact claim _ _ Globs.empty _ Δ 5 A2.DtorWitness.prog_ok A2.DtorWitness.prog_codes
+    (fun _ h => by cases h) GlobsOK.empty ht rfl A2.ArcDtorWitness.main_codes (by decide)
 
 end A3

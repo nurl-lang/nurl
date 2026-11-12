@@ -1391,7 +1391,7 @@ theorem pack_sync_noCell {Γ Γ1 : Ctx} {F : List Var} {fs : List Nat} {te : Ty}
 theorem arcNew_fn {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {q : Cross} {y : Var} {E : Entry}
     (h : RhsT Γ F (.arcNew (.fn ms q) y) E Γ1) : q = .sync ∨ q = .bare := by
   cases h with
-  | arcNew _ _ _ _ hc _ => cases q <;> simp_all [Ty.hasCell, Ty.dtorFree]
+  | arcNew _ _ _ _ hc _ => cases q <;> simp_all [Ty.hasCell, Ty.dtorFree, Ty.hasDtor, Cross.drops]
 
 /-- h340 (`closure_sent_on_a_channel_captures_a_kept_handle`): a channel's
     element may hold a library handle (A3.5's second cut), so a closure sent on
@@ -1438,7 +1438,7 @@ theorem arcNew_sync {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {y : Var} {Ey 
     (hy : Γ y = some Ey) (hl : Ey.live = true) (hty : Ey.ty = .fn ms .sync)
     (hpa : PushArg Γ F y Ey (.fn ms .sync) D Γ1) :
     RhsT Γ F (.arcNew (.fn ms .sync) y) ⟨.arc (.fn ms .sync), .own, true, [], [], false, false⟩ Γ1 :=
-  RhsT.arcNew hy hl hty rfl ⟨rfl, rfl⟩ rfl hpa
+  RhsT.arcNew hy hl hty (Or.inl rfl) ⟨rfl, rfl⟩ rfl hpa
 
 /-- ... `arc_get` lends it, through a share of the `Arc` (`getE`): a borrow
     every change through which is refused (`ThruOK.noShare`, `canDo`) ... -/
@@ -2812,7 +2812,8 @@ theorem lockRestore_kept {m m1 : Mem} {a y : Var} {v : Val} (ht : TakeVal m y v 
     unwinding then drops `x`, the lock left held). -/
 theorem scopeL_end {P : Prog} {m : Mem} {k : Nat} {t : Ty} {x : Var} {r : Res}
     (h : Step P m (.scopeL k t x .skip) r)
-    -- (Agora #610: with no orphan to reap first; no typed run has one in this cut)
+    -- (Agora #610: with no orphan to reap first; no configuration a run reaches has one,
+    -- `A3.Reach.noOrphan`)
     (hno : ¬ Orphan m) :
     (∃ m', r = .ok m' .skip ∧ Release m k t x m' ∧ ∀ sl, m.st x = some sl → GiveCheck m x sl) ∨
       (r = .ok m (.scopeL k t x .panic) ∧ ∃ sl, m.st x = some sl ∧ ¬ GiveCheck m x sl) := by
@@ -3213,6 +3214,10 @@ structure GlobsOK (P : Prog) (G : Globs) : Prop where
   cover : Covers (G.mem 0)
   reach : ∀ k bl, G.blk k = some bl → Reached (fun v => ∃ g, G.gl g = some v) G.blk k
   codes : ∀ k bl, G.blk k = some bl → PkgOK P bl.tree ∧ PkgOK P bl.rd
+  /-- Agora #610: an `Arc` block of a destructor value names a destructor
+      the program checked (`DeadCodes`; vacuous when no block's payload owns
+      one, which is all the invariant allowed before). -/
+  dtors : DeadCodes P G.blk
   cells : ∀ k k1 k2, LockHolds G.blk k1 k → LockHolds G.blk k2 k → k1 = k2 ∧ k < G.nid
 
 /-- **The A3.0 claim**, for A2 plus `spawn`: a program A2 types, whose

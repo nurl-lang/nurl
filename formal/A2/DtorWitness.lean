@@ -47,8 +47,8 @@ Two kinds of fact, both checked here (`check.sh` prints their axioms):
 namespace A2.Dtor
 
 /-- `skip` has no step, when no orphan awaits its destructor (Agora #610:
-    `Step.reap` fires from any source statement, `skip` too; in this cut
-    nothing makes a block `dead`, so no typed run has an orphan). -/
+    `Step.reap` fires from any source statement, `skip` too; no store a run
+    reaches between its steps has an orphan, `A2.no_orphan`). -/
 theorem skip_no_step {P : Prog} {m : Mem} {r : Res} (hno : ¬ Orphan m) (h : Step P m .skip r) : False := by
   cases h with
   | waitPanic hw => exact hw
@@ -294,7 +294,7 @@ theorem result_frame_is_scopeD (fn : Fn) (args : List Var) (base : Nat) (x : Var
 theorem scopeD_end_runs_dtor {P : Prog} {Γ Δ : Ctx} {F : List Var} {x : Var} {f : Nat}
     {m : Mem} {v : Val} (ht : StmtT P Γ F (.scopeD x f .skip) Δ)
     (hx : m.st x = some ⟨true, some v⟩) (hv : v.isNode = false)
-    -- (Agora #610: with no orphan to reap first; no typed run has one in this cut)
+    -- (Agora #610: with no orphan to reap first; no store a run reaches has one, `A2.no_orphan`)
     (hno : ¬ Orphan m) :
     (∃ t, DropFnOK P f t) ∧
       Step P m (.scopeD x f .skip) (.ok { m with nv := m.nv + 1 } (.scope x (.letcall m.nv f [x] .skip))) ∧
@@ -335,7 +335,7 @@ theorem scopeD_panic_runs_dtor {P : Prog} {x : Var} {f : Nat} {m m1 : Mem} {s : 
     (`vec_remove x 0`), under the same frame ... -/
 theorem scopeD_end_drains {P : Prog} {x : Var} {f : Nat} {m : Mem} {t : Ty} {c d : Nat} {e : Val}
     {es : List Val} (hx : m.st x = some ⟨true, some (.node t c d (e :: es))⟩)
-    -- (Agora #610: with no orphan to reap first; no typed run has one in this cut)
+    -- (Agora #610: with no orphan to reap first; no store a run reaches has one, `A2.no_orphan`)
     (hno : ¬ Orphan m) :
     Step P m (.scopeD x f .skip)
         (.ok { m with nv := m.nv + 1 } (.scopeD x f (.letd m.nv f (.remove x (.lit 0)) .skip))) ∧
@@ -372,7 +372,7 @@ theorem scopeD_drain_binds {P : Prog} {x y : Var} {f : Nat} {m : Mem} {t : Ty} {
     value is: the frame's one step leaves `scope x`. -/
 theorem scopeD_end_empty {P : Prog} {x : Var} {f : Nat} {m : Mem} {t : Ty} {c d : Nat}
     (hx : m.st x = some ⟨true, some (.node t c d [])⟩)
-    -- (Agora #610: with no orphan to reap first; no typed run has one in this cut)
+    -- (Agora #610: with no orphan to reap first; no store a run reaches has one, `A2.no_orphan`)
     (hno : ¬ Orphan m) :
     Step P m (.scopeD x f .skip) (.ok m (.scope x .skip)) ∧
       ∀ r, Step P m (.scopeD x f .skip) r → r = .ok m (.scope x .skip) := by
@@ -659,8 +659,24 @@ def payloads : Ty → List Ty
   | .int => []
   | .fn _ _ => []
 
-/-- A2-drop.3d: a well-formed type's share payloads own no destructor value. -/
-theorem ok_payloads_free {t : Ty} (h : t.ok = true) : ∀ u ∈ payloads t, u.dtorFree = true := by
+/-- ... and those of the lock and cell shares alone: what a check-out
+    binding (`withLock`, `withCell`) may be of. -/
+def lockPayloads : Ty → List Ty
+  | .arc t => lockPayloads t
+  | .lk t => t :: lockPayloads t
+  | .cell t => t :: lockPayloads t
+  | .vec t => lockPayloads t
+  | .slice t => lockPayloads t
+  | .dtor _ t => lockPayloads t
+  | .prod a b => lockPayloads a ++ lockPayloads b
+  | .sum a b => lockPayloads a ++ lockPayloads b
+  | .int => []
+  | .fn _ _ => []
+
+/-- A2-drop.3d, Agora #610: a well-formed type's share payloads own no
+    destructor value, or (an `Arc`'s) are one at their top. -/
+theorem ok_payloads_free {t : Ty} (h : t.ok = true) :
+    ∀ u ∈ payloads t, u.dtorFree = true ∨ u.hasDtor = true := by
   induction t with
   | int => simp [payloads]
   | fn _ _ => simp [payloads]
@@ -669,17 +685,17 @@ theorem ok_payloads_free {t : Ty} (h : t.ok = true) : ∀ u ∈ payloads t, u.dt
   | arc t ih =>
     simp only [payloads, List.mem_cons]
     rintro u (rfl | hu)
-    · exact Ty.ok_arc_free h
+    · exact Ty.ok_arc_dtor h
     · exact ih (Ty.ok_arc h).1 u hu
   | lk t ih =>
     simp only [payloads, List.mem_cons]
     rintro u (rfl | hu)
-    · exact Ty.ok_lk_free h
+    · exact Or.inl (Ty.ok_lk_free h)
     · exact ih (Ty.ok_lk h).1 u hu
   | cell t ih =>
     simp only [payloads, List.mem_cons]
     rintro u (rfl | hu)
-    · exact Ty.ok_cell_free h
+    · exact Or.inl (Ty.ok_cell_free h)
     · exact ih (Ty.ok_cell h).1 u hu
   | dtor _ t ih =>
     simp only [Ty.ok, Bool.and_eq_true] at h
@@ -695,44 +711,83 @@ theorem ok_payloads_free {t : Ty} (h : t.ok = true) : ∀ u ∈ payloads t, u.dt
     · exact iha (Ty.ok_sum h).1 u hu
     · exact ihb (Ty.ok_sum h).2 u hu
 
+/-- A2-drop.3d: a well-formed type's lock and cell payloads own no
+    destructor value. -/
+theorem ok_lockPayloads_free {t : Ty} (h : t.ok = true) : ∀ u ∈ lockPayloads t, u.dtorFree = true := by
+  induction t with
+  | int => simp [lockPayloads]
+  | fn _ _ => simp [lockPayloads]
+  | vec t ih => simpa only [lockPayloads] using ih (Ty.ok_vec_elem h)
+  | slice t ih => simpa only [lockPayloads] using ih (Ty.ok_slice h).1
+  | arc t ih => simpa only [lockPayloads] using ih (Ty.ok_arc h).1
+  | lk t ih =>
+    simp only [lockPayloads, List.mem_cons]
+    rintro u (rfl | hu)
+    · exact Ty.ok_lk_free h
+    · exact ih (Ty.ok_lk h).1 u hu
+  | cell t ih =>
+    simp only [lockPayloads, List.mem_cons]
+    rintro u (rfl | hu)
+    · exact Ty.ok_cell_free h
+    · exact ih (Ty.ok_cell h).1 u hu
+  | dtor _ t ih =>
+    simp only [Ty.ok, Bool.and_eq_true] at h
+    simpa only [lockPayloads] using ih h.2
+  | prod a b iha ihb =>
+    simp only [lockPayloads, List.mem_append]
+    rintro u (hu | hu)
+    · exact iha (Ty.ok_prod h).1 u hu
+    · exact ihb (Ty.ok_prod h).2 u hu
+  | sum a b iha ihb =>
+    simp only [lockPayloads, List.mem_append]
+    rintro u (hu | hu)
+    · exact iha (Ty.ok_sum h).1 u hu
+    · exact ihb (Ty.ok_sum h).2 u hu
+
 /-- A2-drop.3d, of types: in a running configuration, the payload type of
     every share in a binding's type (an `Arc`'s, a lock's, a cell's, a
     channel's queue; not those inside a closure type, whose environment the
-    type does not name) owns no destructor value.  So a check-out binding
-    (`withLock`, `withCell`: the lock's payload type) is of a type that
-    holds none.  The fact about the blocks themselves is `blocks_dtor_free`. -/
+    type does not name) owns no destructor value, or (Agora #610, an
+    `Arc`'s) is one at its top; a lock's and a cell's owns none, so a
+    check-out binding (`withLock`, `withCell`: the lock's payload type) is
+    of a type that holds none.  The fact about the blocks themselves is
+    `blocks_dtor_free`. -/
 theorem shares_dtor_free {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {E : Entry}
-    (hx : Γ x = some E) : ∀ u ∈ payloads E.ty, u.dtorFree = true :=
-  ok_payloads_free (hi.tyok hx)
+    (hx : Γ x = some E) : (∀ u ∈ payloads E.ty, u.dtorFree = true ∨ u.hasDtor = true) ∧
+      ∀ u ∈ lockPayloads E.ty, u.dtorFree = true :=
+  ⟨ok_payloads_free (hi.tyok hx), ok_lockPayloads_free (hi.tyok hx)⟩
 
-/-- **A2-drop.3d: in a running configuration no block's payload owns a
-    destructor value** (the invariant carries it, `MInv.blocks`): every
-    block, whatever holds its shares (a binding, a closure's environment,
-    another block's payload).  So the sweep that frees a block when its last
-    share goes, which runs no code, releases no destructor value.  (Agora
-    #610: but for a `dead` block, an orphan whose payload awaits its
-    destructor, which the sweep is not to free; in this cut nothing makes a
-    block `dead`.) -/
+/-- **A2-drop.3d, Agora #610: in a running configuration no lock block's
+    and no view's payload owns a destructor value, and a block whose payload
+    owns one (an `arc` block, or a `dead` one: an orphan whose payload
+    awaits its destructor) is of a destructor type that holds no closure**
+    (the invariant carries it, `MInv.blocks`): every block, whatever holds
+    its shares.  The sweep marks such an `arc` block `dead` when nothing
+    reaches it, rather than freeing it (`Mem.sweepD`), and the thread whose
+    step it ends hands the payload to a destructor frame (`Settle`,
+    `Step.reap`). -/
 theorem blocks_dtor_free {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {k : Nat} {bl : Blk}
-    (hk : m.blk k = some bl) (hnd : bl.kind ≠ .dead) : bl.ty.dtorFree = true :=
-  (hi.blocks k bl hk).2.2.2.2.1 hnd
+    (hk : m.blk k = some bl) :
+    (bl.kind ≠ .dead → bl.kind ≠ .arc → bl.ty.dtorFree = true) ∧
+      (bl.ty.dtorFree = false → ∃ f u, bl.ty = .dtor f u ∧ u.hasFn = false) :=
+  ⟨(hi.blocks k bl hk).2.2.2.2.1, (hi.blocks k bl hk).2.2.2.2.2.2⟩
 
-/-- A2-drop.3c, in a block: a package in a block's payload (a channel of
-    closures, a `Locked` closure, an `Arc` of a `sync` one), however deep,
-    has an environment that holds no destructor value. -/
+/-- A2-drop.3c, in a block: a package in the payload of a block of a type
+    that owns no destructor value (a channel of closures, a `Locked`
+    closure, an `Arc` of a `sync` one), however deep, has an environment
+    that holds no destructor value. -/
 theorem blk_pkgs_env_dtor_free {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {k : Nat} {bl : Blk}
-    (hk : m.blk k = some bl) (hnd : bl.kind ≠ .dead) {p : Val} (hp : bl.pay = some p)
+    (hk : m.blk k = some bl) (hfree : bl.ty.dtorFree = true) {p : Val} (hp : bl.pay = some p)
     {fs : List Nat} {te : Ty} {ms : List Nat} {e : Val} {cs : List (Var × PMode × Ty)}
     (hs : Sub (.pkg fs te ms e cs) p) : te.holdsDtor = false :=
   (((hi.blocks k bl hk).2.2.1 p hp).1).pkg_env_dtor_free
-    (Ty.noDropd_of_free (by
-      have := (hi.blocks k bl hk).2.2.2.2.1 hnd
-      rw [Ty.holdsDtor_eq_not_free]; simpa using this)) hs
+    (Ty.noDropd_of_free (by rw [Ty.holdsDtor_eq_not_free]; simpa using hfree)) hs
 
-/-- A2-drop.3d: `arc_new`, a lock's and a library handle's constructor take
-    a value that owns no destructor value. -/
+/-- A2-drop.3d: a lock's and a library handle's constructor take a value
+    that owns no destructor value; (Agora #610) `arc_new` takes one that
+    owns none or is one at its top. -/
 theorem share_new_dtor_free {Γ Γ1 : Ctx} {F : List Var} {t : Ty} {y : Var} {E : Entry} :
-    (RhsT Γ F (.arcNew t y) E Γ1 → t.dtorFree = true) ∧
+    (RhsT Γ F (.arcNew t y) E Γ1 → t.dtorFree = true ∨ t.hasDtor = true) ∧
     (RhsT Γ F (.lockNew t y) E Γ1 → t.dtorFree = true) ∧
     (RhsT Γ F (.cellNew t y) E Γ1 → t.dtorFree = true) := by
   refine ⟨fun h => ?_, fun h => ?_, fun h => ?_⟩

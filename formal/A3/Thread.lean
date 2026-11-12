@@ -51,6 +51,7 @@ theorem GlobsOK.empty {P : Prog} : GlobsOK P Globs.empty where
   cover _ h := by cases h
   reach _ _ h := by cases h
   codes _ _ h := by cases h
+  dtors _ _ _ _ _ h := by cases h
   cells _ _ _ h := by obtain ⟨_, _, h, _⟩ := h; cases h
 
 /-- A3.6: the blocks the globals' `make`s left are as every thread's view
@@ -82,10 +83,37 @@ theorem GlobsOK.noDead {P : Prog} {G : Globs} (hG : GlobsOK P G) {k : Nat} {bl :
     cases ha
     exact hk'
 
+/-- Agora #610: **no configuration a run reaches has an orphan** (item 7 of
+    #610's review): a thread's step leaves none in a store that had none
+    (`A2.Step.noOrphan`: only `Step.reap` touches a `dead` block, and it
+    needs one), the configuration's sweep only removes blocks (it marks no
+    orphan: on A3's threads the last share's drop frees the payload with no
+    code, `CLAIM.md`), and a spawn changes no block.  So the hypothesis of
+    the lock scope's end (`scopeL_end`) holds on every A3 run. -/
+theorem Reach.noOrphan {P : Prog} {spawn : Nat → Bool} {C C' : Cfg} (hr : Reach P spawn C C')
+    (h : ¬ ∃ k f u p, C.blk k = some ⟨.dtor f u, .dead, some p⟩) :
+    ¬ ∃ k f u p, C'.blk k = some ⟨.dtor f u, .dead, some p⟩ := by
+  induction hr with
+  | refl => exact h
+  | step hst _ ih =>
+    apply ih
+    cases hst with
+    | thread _ _ hs =>
+      have hm := A2.Step.noOrphan hs (fun ⟨k, f, u, p, hk⟩ => h ⟨k, f, u, p, hk⟩)
+      rintro ⟨k, f, u, p, hk⟩
+      exact hm ⟨k, f, u, p, (sweepBlk_some.mp hk).1⟩
+    | spawn => exact h
+    | spawnFail => exact h
+
+/-- ... and none at the start the claim admits: no global's block is `dead`. -/
+theorem GlobsOK.noOrphan {P : Prog} {G : Globs} (hG : GlobsOK P G) :
+    ¬ ∃ k f u p, G.blk k = some ⟨.dtor f u, .dead, some p⟩ :=
+  fun ⟨_, _, _, _, hk⟩ => hG.noDead hk rfl
+
 /-- ... so the blocks' packages name code of their signature, and there is
     no orphan's destructor to check (`BlkCodes`). -/
 theorem GlobsOK.blkCodes {P : Prog} {G : Globs} (hG : GlobsOK P G) : BlkCodes P G.blk :=
-  ⟨hG.codes, DeadCodes.of_none fun _ _ hk => hG.noDead hk⟩
+  ⟨hG.codes, hG.dtors⟩
 
 /-- ... and every address they left live is a payload's. -/
 theorem GlobsOK.alloc {P : Prog} {G : Globs} (hG : GlobsOK P G) (i : Nat) : G.alloc i = true ↔ PayIn G.blk i := by
@@ -108,7 +136,7 @@ theorem ThreadOK.start {P : Prog} {s : Stmt} {Δ : Ctx} {nv : Nat}
   have h0 : ThreadOK P { emptyMem nv with gl := G.gl } s :=
     ⟨fun _ => none, [], Δ, ht, inv_emptyGl G.gl hs hv,
       ⟨fun _ _ _ _ _ _ _ _ h => (by cases h), fun _ _ _ _ _ _ _ h => (by cases h),
-        fun _ _ _ _ h => (by cases h)⟩, hsc, closed_empty s⟩
+        fun _ _ _ _ _ h => (by cases h)⟩, hsc, closed_empty s⟩
   exact h0.move (fun _ _ h => by cases h) (fun i hi => .inr (by simpa [union, payPart_iff] using hi))
     (fun i hi => by simp [union, payPart_iff, hi]) (Nat.zero_le _) (fun _ _ h => by cases h) hG.blocksAt
     hG.blkCodes (fun _ _ _ _ h => by cases h)

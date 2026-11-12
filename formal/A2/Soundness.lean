@@ -45,8 +45,23 @@ theorem Closed.step {Γ Γ' : Ctx} {s s' : Stmt} (hc : Closed Γ s) (hk : Keep �
     obtain ⟨hns0, E, hE⟩ := hk.2.1 v E' hE' hns
     exact absurd (hc v (by rw [hE]; rfl)) hns0
 
+/-- Agora #610: the reaps that end a step keep the typing and the
+    invariant: each is a step (`preservation`'s `Step.reap` case,
+    `pres_reap`), ended by the marking sweep (`Inv.sweepD`). -/
+theorem settle_ok {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {F : List Var} {s : Stmt}
+    {Δ : Ctx} (ht : StmtT P Γ F s Δ) {m : Mem} (hcd : MemCodes P m) (hsc : s.codesOK P)
+    (hi : Inv m Γ F s) (hc : Closed Γ s) {m' : Mem} {s' : Stmt} (hs : Settle P m s m' s') :
+    ∃ Γ', StmtT P Γ' F s' Δ ∧ Inv m' Γ' F s' ∧ Closed Γ' s' ∧ MemCodes P m' ∧ s'.codesOK P := by
+  induction hs generalizing Γ with
+  | done _ => exact ⟨Γ, ht, hi, hc, hcd, hsc⟩
+  | reap hst _ _ ih =>
+    obtain ⟨Γ', ht', hi', hk⟩ := preservation hP ht hcd hi hst
+    obtain ⟨hcd', hsc'⟩ := (codes_step hPc hst hcd hcd.blk.1 hsc).1 _ _ rfl
+    exact ih ht' hcd'.sweepD hsc' hi'.sweepD (hc.step hk)
+
 /-- Every configuration a well-typed one reaches is well-typed (A3.1: each
-    step's sweep keeps the invariant, `Inv.sweep`). -/
+    step's sweep keeps the invariant, `Inv.sweep`; Agora #610: the marking
+    sweep, `Inv.sweepD`, and the reaps after it, `settle_ok`). -/
 theorem reach_ok {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {F : List Var} {s : Stmt}
     {Δ : Ctx} (ht : StmtT P Γ F s Δ) {m : Mem} (hcd : MemCodes P m) (hsc : s.codesOK P)
     (hi : Inv m Γ F s) (hc : Closed Γ s) {m' : Mem} {s' : Stmt} (hs : Steps P m s (.ok m' s')) :
@@ -54,10 +69,12 @@ theorem reach_ok {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {F : 
   generalize hr : (Res.ok m' s') = r at hs
   induction hs generalizing Γ with
   | refl => cases hr; exact ⟨Γ, ht, hi, hc, hcd, hsc⟩
-  | step hst _ ih =>
+  | step hst hse _ ih =>
     obtain ⟨Γ', ht', hi', hk⟩ := preservation hP ht hcd hi hst
     obtain ⟨hcd', hsc'⟩ := (codes_step hPc hst hcd hcd.blk.1 hsc).1 _ _ rfl
-    exact ih ht' hcd'.sweep hsc' hi'.sweep (hc.step hk) hr
+    obtain ⟨Γ'', ht'', hi'', hc'', hcd'', hsc''⟩ :=
+      settle_ok hP hPc ht' hcd'.sweepD hsc' hi'.sweepD (hc.step hk) hse
+    exact ih ht'' hcd'' hsc'' hi'' hc'' hr
   | panic _ => cases hr
 
 /-- ... and so is every one a thread's own steps reach, with no sweep (A3:
@@ -75,15 +92,30 @@ theorem reach_ok0 {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {F :
     exact ih ht' hcd' hsc' hi' (hc.step hk) hr
   | panic _ => cases hr
 
-/-- A run that ends normally ends at its start or at a swept store. -/
+/-- The reaps that end a step end at a store the marking sweep left. -/
+theorem Settle.swept {P : Prog} {m m' : Mem} {s s' : Stmt} (hs : Settle P m s m' s') :
+    m' = m ∨ ∃ m1 : Mem, m' = m1.sweepD := by
+  induction hs with
+  | done _ => exact Or.inl rfl
+  | @reap _ m1 _ _ _ _ _ _ _ ih =>
+    rcases ih with h | h
+    · exact Or.inr ⟨m1, h⟩
+    · exact Or.inr h
+
+/-- A run that ends normally ends at its start or at a store the marking
+    sweep left (Agora #610), with no orphan left (`Settle`). -/
 theorem Steps.ok_swept {P : Prog} {m m' : Mem} {s s' : Stmt} (hs : Steps P m s (.ok m' s')) :
-    m' = m ∨ ∃ m1 : Mem, m' = m1.sweep := by
+    m' = m ∨ (∃ m1 : Mem, m' = m1.sweepD) ∧ ¬ Orphan m' := by
   generalize hr : (Res.ok m' s') = r at hs
   induction hs with
   | refl => cases hr; exact Or.inl rfl
-  | @step _ m1 _ _ _ _ _ ih =>
+  | @step _ m1 m2 _ _ _ _ _ hse hrest ih =>
     rcases ih hr with h | h
-    · exact Or.inr ⟨m1, h⟩
+    · subst h
+      refine Or.inr ⟨?_, hse.noOrphan⟩
+      rcases hse.swept with h | h
+      · exact ⟨m1, h⟩
+      · exact h
     · exact Or.inr h
   | panic _ => cases hr
 
@@ -97,10 +129,12 @@ theorem reach_panic {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {F
   generalize hr : Res.panic m' = r at hs
   induction hs generalizing Γ with
   | refl => cases hr
-  | step hst _ ih =>
+  | step hst hse _ ih =>
     obtain ⟨Γ', ht', hi', hk⟩ := preservation hP ht hcd hi hst
     obtain ⟨hcd', hsc'⟩ := (codes_step hPc hst hcd hcd.blk.1 hsc).1 _ _ rfl
-    exact ih ht' hcd'.sweep hsc' hi'.sweep (hc.step hk) hr
+    obtain ⟨Γ'', ht'', hi'', hc'', hcd'', hsc''⟩ :=
+      settle_ok hP hPc ht' hcd'.sweepD hsc' hi'.sweepD (hc.step hk) hse
+    exact ih ht'' hcd'' hsc'' hi'' hc'' hr
   | @panic m0 m1 s0 hst =>
     cases hr
     obtain ⟨hout, hin, _, hcov, _⟩ := panic_unwind hst hi.heap hi.cover hi.spineNd
@@ -166,7 +200,7 @@ theorem closed_empty (s : Stmt) : Closed (fun _ => none) s := fun _ h => by case
 
 theorem codes_empty (P : Prog) (nv : Nat) : MemCodes P (emptyMem nv) :=
   ⟨fun _ _ _ _ _ _ _ _ h => (by cases h), fun _ _ _ _ _ _ _ h => (by cases h),
-    fun _ _ _ _ h => (by cases h)⟩
+    fun _ _ _ _ _ h => (by cases h)⟩
 
 /-- The memory model of stage A2 is sound: a well-typed program, run from
     the empty store, never gets stuck — it finishes, panics, or runs on. -/
@@ -176,15 +210,15 @@ theorem memory_safe {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {s : Stmt} {�
     {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem nv) s (.ok m' s')) : ¬ Stuck P m' s' :=
   soundness hP hPc ht (codes_empty P nv) hsc (inv_empty hs hv) (closed_empty s) hr
 
-/-- Agora #610: **in this cut no run from the empty store takes `Step.reap`**:
-    none of its stores has a `dead` block, so none has an orphan awaiting
-    its destructor (nothing makes a block `dead` yet; the sweep's marking of
-    the orphans is the next step).  The destructor frames' theorems that ask
-    for no orphan (`A2.Dtor.scopeD_end_runs_dtor`, …) are asked nothing more
-    on such a run. -/
+/-- Agora #610: **no store a run from the empty store reaches has an orphan
+    awaiting its destructor**: the marking sweep that ends a step marks the
+    top orphans, and the same thread reaps each before anything else runs
+    (`Settle`).  So the destructor frames' theorems that ask for no orphan
+    (`A2.Dtor.scopeD_end_runs_dtor`, …) are asked nothing more on such a
+    run, and a finished run has no orphan left (`no_leak_end`). -/
 theorem no_orphan {P : Prog} {s : Stmt} {nv : Nat} {r : Res} (hr : Steps P (emptyMem nv) s r) :
     ¬ Orphan r.mem :=
-  (hr.noDead (fun _ _ h => by cases h)).noOrphan
+  hr.noOrphan fun ⟨_, _, _, _, h⟩ => by cases h
 
 /-- Nothing leaks: when a well-typed program finishes, every allocation it
     made has been freed. -/
@@ -208,10 +242,11 @@ theorem no_leak_end {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {s : Stmt} {�
         exact absurd (hc' v hd) (by simp [Stmt.spine])
     rcases hi'.cover i ha with ⟨o, T, hT, _⟩ | ⟨k, bl, hk, hik⟩
     · unfold OwnedAt at hT; rw [hnone o] at hT; cases hT
-    · rcases Steps.ok_swept hr with rfl | ⟨m1, rfl⟩
+    · -- Agora #610: the last marking sweep left no `dead` block, so no block
+      rcases Steps.ok_swept hr with rfl | ⟨⟨m1, rfl⟩, hnd⟩
       · cases hk
-      · rw [Mem.sweep_empty (fun x o v h => by
-          rw [show m1.st x = m1.sweep.st x from rfl, hnone x] at h; cases h) k] at hk
+      · rw [Mem.sweepD_empty (fun x o v h => by
+          rw [show m1.st x = m1.sweepD.st x from rfl, hnone x] at h; cases h) hnd k] at hk
         cases hk
 
 /-- ... and when a panic no `recover` frame catches ends it, the unwinding

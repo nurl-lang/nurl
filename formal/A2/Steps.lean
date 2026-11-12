@@ -1,4 +1,5 @@
 import A2.Rhs
+import A2.SweepD
 
 /-! A2 — the memory side of each step. -/
 
@@ -412,7 +413,8 @@ theorem push_take {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} (hi : MInv m Γ)
     tree and no payload, `Pushed`); every slot is as it was. -/
 theorem rhs_arcNew {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {t : Ty} {v : Val} {D : List Dep}
     (post : RhsPost m m1 Γ Γ1 F) (pu : Pushed m1 Γ1 t v D) (hpl : t.holdsView = false ∧ t.hasFn = false)
-    (hnc : t.hasCell = false) (hvd : t.dtorFree = true) (htok : t.ok = true) (hfr : m1.blk m1.nid = none) :
+    (hnc : t.hasCell = false) (hvd : t.dtorFree = true ∨ t.hasDtor = true) (htok : t.ok = true)
+    (hfr : m1.blk m1.nid = none) :
     RhsPost m { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, .arc, some v⟩) } Γ Γ1 F ∧
     RhsOut { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, .arc, some v⟩) } Γ1
       ⟨.arc t, .own, true, [], [], false, false⟩ (.arc m1.nid v) true := by
@@ -451,7 +453,7 @@ theorem rhs_arcNew {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {t : Ty} {v : Val}
   have hheap : HeapOK m2 := HeapOK.mono post.inv.heap rfl (fun _ h => h) (Nat.le_succ _) hbo (post.inv.heap.views.fresh hfr (by simp))
   have hB : BlocksIn m2 := fun k bl hk => by
     rcases hcases k bl hk with ⟨rfl, rfl⟩ | ⟨_, h⟩
-    · refine ⟨htok, hvf, fun p hp => ?_, Or.inr hnc, noDead (by simp) hvd⟩
+    · refine ⟨htok, hvf, fun p hp => ?_, Or.inr hnc, arcDtorOK hvd hpl.2⟩
       obtain rfl : v = p := Option.some.inj hp
       exact ⟨pu.wf, pu.sh.grow hb⟩
     · obtain ⟨h1, h2, h3, h4⟩ := post.inv.blocks k bl h
@@ -588,12 +590,12 @@ theorem rhs_rwRead {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {k : Nat
     | snd ha => exact (hshp.grow hb) u k' q ha
   have hB : BlocksIn m2 := fun k' bl hk' => by
     rcases hcases k' bl hk' with ⟨rfl, rfl⟩ | ⟨_, h⟩
-    · exact ⟨hok, hvf', fun q hq => by cases hq; exact ⟨hwv, hsh⟩, Or.inr (by simp [Ty.hasCell, hnc]), by simp [hvd]⟩
+    · exact ⟨hok, hvf', fun q hq => by cases hq; exact ⟨hwv, hsh⟩, Or.inr (by simp [Ty.hasCell, hnc]), noDead (by simp) (by simp [hvd])⟩
     · obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k' bl h
       exact ⟨h1, h2, fun q hq => ⟨(h3 q hq).1, (h3 q hq).2.grow hb⟩, h4⟩
   refine ⟨⟨hi.grow rfl hheap (Nat.le_refl _) hb hB, rfl, Nat.le_succ _, fun _ => rfl, fun _ _ => rfl,
     fun _ _ h _ => h, fun _ => rfl, fun _ E1 h => ⟨E1, h, rfl, rfl⟩, DKeep.refl _ _, hb⟩, ?_⟩
-  exact out_share hok (by simp [hvd]) hvf' hwv (Or.inr hnew)
+  exact out_share hok (Or.inl (by simp [hvd])) hvf' hwv (Or.inr hnew)
 
 theorem RhsPost.trans {m m1 m2 : Mem} {Γ Γ1 Γ2 : Ctx} {F : List Var} (h1 : RhsPost m m1 Γ Γ1 F)
     (h2 : RhsPost m1 m2 Γ1 Γ2 F) : RhsPost m m2 Γ Γ2 F where
@@ -3229,14 +3231,14 @@ theorem Step.leafKeep {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
     exact .inl ⟨bl, by rw [← TakeVal.blk ht] at hk; exact hk, hs⟩
   | _ => intro k bl hk w hw hs; exact .inl ⟨bl, hk, hs⟩
 
-/-! ### Agora #610: in this cut nothing makes a block `dead`
+/-! ### Agora #610: only the marking sweep makes a block `dead`
 
-No rule makes a `dead` block: a right-hand side adds `arc`, lock and view
+No step makes a `dead` block: a right-hand side adds `arc`, lock and view
 blocks, a step changes a lock block's payload (or, `Step.reap`, a `dead`
-block's), and the sweep only removes blocks.  So a store with no `dead`
-block steps to stores with none, and `Step.reap`, which needs one, is not
-taken.  (The sweep's marking of the orphans is the next step of Agora #610;
-this section goes with it.) -/
+block's), and the sweep that ends an uncaught panic only removes blocks.
+The marking sweep that ends every other step marks the top orphans
+(`Mem.sweepD`), and the same thread reaps them before anything else runs
+(`Settle`): so between the steps of a run no block is `dead`. -/
 
 /-- No block of the store is `dead`. -/
 def NoDead (m : Mem) : Prop := ∀ k bl, m.blk k = some bl → bl.kind ≠ .dead
@@ -3307,13 +3309,89 @@ theorem Step.noDead {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r)
 theorem NoDead.sweep {m : Mem} (h : NoDead m) : NoDead m.sweep :=
   fun k bl hk => h k bl (Mem.sweep_blk.mp hk).1
 
-/-- **A run from a store with no `dead` block has none**, at its every
-    store: so (in this cut) no step of it is `Step.reap`'s. -/
-theorem Steps.noDead {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Steps P m s r) (hn : NoDead m) :
-    NoDead r.mem := by
+/-- No orphan awaits its destructor. -/
+def NoOrphan (m : Mem) : Prop := ¬ Orphan m
+
+theorem NoOrphan.of_blk {m m' : Mem} (h : NoOrphan m) (hb : m'.blk = m.blk) : NoOrphan m' :=
+  fun ⟨k, f, u, p, hk⟩ => h ⟨k, f, u, p, by rw [← hb]; exact hk⟩
+
+theorem NoOrphan.upd {m : Mem} (h : NoOrphan m) {B : Nat → Option Blk} {k0 : Nat} {b : Blk} (hb : b.kind ≠ .dead)
+    (hB : B = upd m.blk k0 (some b)) {m' : Mem} (hm : m'.blk = B) : NoOrphan m' := by
+  rintro ⟨k, f, u, p, hk⟩
+  rw [hm, hB] at hk
+  by_cases he : k = k0
+  · subst he; simp at hk; subst hk; exact hb rfl
+  · rw [upd_ne _ _ he] at hk; exact h ⟨k, f, u, p, hk⟩
+
+theorem EvalR.noOrphan {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.ok v o m'))
+    (hn : NoOrphan m) : NoOrphan m' := by
+  cases h
+  case pair h1 h2 => exact hn.of_blk ((TakeVal.blk h2).trans (TakeVal.blk h1))
+  case chanSendClosed h1 _ _ _ => exact (hn.of_blk (TakeVal.blk h1)).of_blk rfl
+  all_goals first
+    | exact hn
+    | exact hn.of_blk rfl
+    | exact hn.upd (by simp) rfl rfl
+    | (rename_i h1; exact hn.of_blk (TakeVal.blk h1))
+    | (rename_i h1 _; exact hn.of_blk (TakeVal.blk h1))
+    | (rename_i h1 _ _; exact hn.of_blk (TakeVal.blk h1))
+    | (rename_i h1 _ _ _; exact hn.of_blk (TakeVal.blk h1))
+    | (rename_i m1 _ _ _ _ _ _ _; exact (hn.of_blk (m' := m1) (TakeVal.blk (by assumption))).upd (by simp) rfl rfl)
+    | (rename_i m1 _ _ _ _ _ _ ; exact (hn.of_blk (m' := m1) (TakeVal.blk (by assumption))).upd (by simp) rfl rfl)
+    | (rename_i m1 _ _ _ _ _ ; exact (hn.of_blk (m' := m1) (TakeVal.blk (by assumption))).upd (by simp) rfl rfl)
+    | (rename_i m1 _ _ _ _ ; exact (hn.of_blk (m' := m1) (TakeVal.blk (by assumption))).upd (by simp) rfl rfl)
+    | (rename_i m1 _ _ _ ; exact (hn.of_blk (m' := m1) (TakeVal.blk (by assumption))).upd (by simp) rfl rfl)
+    | (rename_i m1 _ _ ; exact (hn.of_blk (m' := m1) (TakeVal.blk (by assumption))).upd (by simp) rfl rfl)
+    | (rename_i m1 _ ; exact (hn.of_blk (m' := m1) (TakeVal.blk (by assumption))).upd (by simp) rfl rfl)
+
+theorem Release.noOrphan {m m' : Mem} {k : Nat} {t : Ty} {x : Var} (h : Release m k t x m') (hn : NoOrphan m) :
+    NoOrphan m' := by
+  cases h with
+  | put _ _ _ => exact hn.upd (b := ⟨t, .lock, _⟩) (by simp) rfl rfl
+  | drop _ _ _ => exact hn.of_blk rfl
+
+/-- **No step leaves an orphan** in a store that had none: only `Step.reap`
+    touches a `dead` block, and it needs one. -/
+theorem Step.noOrphan {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) :
+    NoOrphan m → NoOrphan r.mem := by
+  induction h with
+  | seqL _ ih | seqP _ ih | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | frozenP _ ih | catchIn _ ih
+    | scopeDIn _ ih | scopeLIn _ ih => exact ih
+  | scopeP _ _ _ ih | rbindP _ _ ih | catchP _ _ ih | scopeDP _ _ _ ih | scopeDPDrain _ _ ih
+    | scopeDPMoved _ _ ih => exact fun hn => (ih hn).of_blk rfl
+  | scopeLP _ hr ih => exact fun hn => hr.noOrphan (ih hn)
+  | scopeLSkip hr => exact fun hn => hr.noOrphan hn
+  | withLock _ _ _ => exact fun hn => hn.upd (b := ⟨_, .lock, none⟩) (by simp) rfl rfl
+  | reap _ hk _ => exact fun hn => absurd ⟨_, _, _, _, hk⟩ hn
+  | letv _ he | letd _ he | assign _ he _ _ => exact fun hn => (he.noOrphan hn).of_blk rfl
+  | letcall _ _ hb => exact fun hn => (hn.of_blk (BindParams.blk hb)).of_blk rfl
+  | @callc m1 _ _ _ _ _ _ _ _ _ env _ _ _ _ _ _ _ hb =>
+    exact fun hn => ((hn.of_blk (m' := envMem m env) rfl).of_blk (BindParams.blk hb)).of_blk rfl
+  | push ht _ _ _ | pushRealloc ht _ _ _ | insert _ ht _ _ _ | editPush ht _ _ | editPushRealloc ht _ _
+    | editSet _ _ ht _ _ _ | editSetOOB _ ht _ _ _ => exact fun hn => (hn.of_blk (TakeVal.blk ht)).of_blk rfl
+  | _ => exact fun hn => hn.of_blk rfl
+
+/-- The sweep that ends an uncaught panic leaves none either: it only
+    removes blocks. -/
+theorem NoOrphan.sweep {m : Mem} (h : NoOrphan m) : NoOrphan m.sweep :=
+  fun ⟨k, f, u, p, hk⟩ => h ⟨k, f, u, p, (Mem.sweep_blk.mp hk).1⟩
+
+/-- Agora #610: the reaps that end a step leave no orphan. -/
+theorem Settle.noOrphan {P : Prog} {m m' : Mem} {s s' : Stmt} (h : Settle P m s m' s') : NoOrphan m' := by
+  induction h with
+  | done hn => exact hn
+  | reap _ _ _ ih => exact ih
+
+/-- **A run from a store with no orphan has none at its every store**: the
+    orphans a step's marking sweep leaves, the same thread reaps before
+    anything else runs (`Settle`), and a panic no frame catches ends with
+    the sweep that marks none (`Mem.sweep`).  So no step of the run but the
+    reaps inside `Settle` is `Step.reap`'s. -/
+theorem Steps.noOrphan {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Steps P m s r) (hn : NoOrphan m) :
+    NoOrphan r.mem := by
   induction h with
   | refl => exact hn
-  | step hst _ ih => exact ih (hst.noDead hn).sweep
-  | panic hst => exact (hst.noDead hn).sweep
+  | step _ hse _ ih => exact ih hse.noOrphan
+  | panic hst => exact (hst.noOrphan hn).sweep
 
 end A2
