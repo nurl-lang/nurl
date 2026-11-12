@@ -53372,7 +53372,10 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // )` out of a borrowed parameter, `( idopt other )` — is copied in
         // and the old value released in place. Stored as is, the caller's
         // binding and the other owner shared one value; agora #343.)
-        ? & & & & & & != 0 g_auto_drop_strings != 0 ( nurl_str_len ptr ) ( seq ( nurl_sym_get2 syms name `__inout` ) `1` ) __io_oty == bck_rhs_tt TT_LPAREN ! __io_keyed ( __ud_keyable vt ) {
+        // (Not a struct with a `% Drop` of its own that cannot be copied,
+        // keyed only for the keep-same test (agora #758): a lend of one has
+        // nothing to be copied in by, and #196's refusal below says so.)
+        ? & & & & & & & != 0 g_auto_drop_strings != 0 ( nurl_str_len ptr ) ( seq ( nurl_sym_get2 syms name `__inout` ) `1` ) __io_oty == bck_rhs_tt TT_LPAREN ! __io_keyed ( __ud_keyable vt ) | ( __clone_supported vt syms ) ! ( __udrop_struct_keyable vt ) {
             : s __io_ro4 ( mem_call_retown syms cg )
             : s __io_lr4 ( __word_union ( nurl_sym_get syms `__last_call_lend_idents__` ) g_call_lend_roots )
             : b __io_self4 & & != 0 ( nurl_str_len __io_lr4 ) ( __words_all_equal __io_lr4 name ) ! g_call_lend_unnamed
