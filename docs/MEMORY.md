@@ -2284,6 +2284,19 @@ again, would dangle — but parked, and released after the defer chain
 with the rest, newest first. The values in sight at the head of such a
 loop are kept from the loop's head. Each is released once (agora #655).
 
+Every way out of such a loop enters the defer chain through one label at
+the loop's end, which branches to the chain's top as it is there: a `^`
+or a `\` above the `;` runs the defers earlier rounds armed, their flags
+deciding at run time (agora #670). The defer then reads what the earlier
+round left — a binding made below the way out holds that round's value —
+and the borrow checker reads it so: the bindings the defer keeps carry
+their state and what they borrow across the back-edge and out of the
+loop, a `:` that binds one again lets go of what borrowed from the parked
+value, and a defer further down a loop around a way out is replayed
+there. A view of a binding made before the loop that this round changed
+above the way out, read by such a defer, is refused, and so is a defer
+there that releases what the `^` hands back.
+
 ### 7.2 Panics
 
 A panic jumps to the nearest `recover` frame without unwinding through

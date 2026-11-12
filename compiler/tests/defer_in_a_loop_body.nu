@@ -29,10 +29,10 @@
 //   handed   a `^` above the `;` that hands back what the defer reads.
 // Before, a `break`, a `^` or a `\` above the `;` freed what the defer
 // read, and every round's value but the last was never released.
-// (A `^` or a `\` above the `;` does not run the defer an earlier round
-// armed: `ret`, `try`, `outer`, `cont`, `nested`, `arm` and `handed` print
-// no defer line on that way out. That is agora #670; those lines of the
-// golden change when it is closed.)
+// A `^` or a `\` above the `;` runs the defer an earlier round armed, with
+// what that round left (agora #670): `ret`, `try`, `outer`, `rounds`,
+// `cont`, `nested`, `arm` and `handed` print their defer line on that way
+// out, before the cleanup releases the rounds' values.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`

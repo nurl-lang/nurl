@@ -5,11 +5,16 @@ OUTPUT
 brk: a loop string long enough for a heap buffer 1
 1
 0
+ret: an element long enough for a heap buffer 2
 102
+try: a loop string long enough for a heap buffer 1
 try: an error long enough for a heap buffer
+outer: a string bound before the loop, long enough
 101
 outer: a string bound before the loop, long enough
 3
+rounds: the defer sees 2
+54
 drop 2
 drop 1
 drop 0
@@ -45,12 +50,17 @@ payloads: a fresh option's string, long enough 2
 2
 3
 3
+cont: a loop string long enough for a heap buffer 4
 44
+nested: an outer-loop string long enough for a heap 2
+nested: an inner-loop string long enough for a heap 1
 102
 nested: an outer-loop string long enough for a heap 2
 nested: an inner-loop string long enough for a heap 1
 3
+arm: an arm string long enough for a heap buffer 2
 103
+53
 handed: a loop string long enough for a heap buffer 1
 53
 handed: fell off
