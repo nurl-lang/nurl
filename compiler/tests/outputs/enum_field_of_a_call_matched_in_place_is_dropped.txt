@@ -1,0 +1,16 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+1
+2
+1
+100
+1
+1
+recovered
+1
+1
+1
+1
+1
