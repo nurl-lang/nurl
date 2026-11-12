@@ -68,6 +68,37 @@ def Cfg.roots (C : Cfg) (v : Val) : Prop := C.vals v ∨ C.globVals v
 noncomputable def Cfg.sweep (C : Cfg) : Cfg :=
   { C with alloc := sweepAlloc C.roots C.blk C.alloc, blk := sweepBlk C.roots C.blk }
 
+/-- Agora #755 item 1: **the configuration's marking sweep**, A2's
+    `Mem.sweepD` from the configuration's roots: every thread's slots and
+    (A3.6) the module globals, which hold a share each until the process
+    exits (so a global's block, a `Locked D` one too, is never an orphan).
+    A block nothing reaches is removed and its payload freed, but an
+    orphan whose payload awaits its destructor (an `arc` block of a
+    destructor value or of a drained `Vec` of them, or a lock block of a
+    destructor value, its payload in it: `Cand`) is marked `dead`, its
+    payload kept, for the thread whose step left it unreached to reap
+    (`CSettle`). -/
+noncomputable def Cfg.sweepD (C : Cfg) : Cfg :=
+  { C with alloc := sweepAllocD C.roots C.blk C.alloc, blk := sweepBlkD C.roots C.blk }
+
+/-- Agora #755 item 1: an orphan awaits its destructor in the configuration:
+    some `dead` block still holds its payload (A2's `Orphan`, of the shared
+    blocks every thread's view holds). -/
+def Cfg.Orphan (C : Cfg) : Prop := ∃ k n f u p, C.blk k = some ⟨Ty.nest n (.dtor f u), .dead, some p⟩
+
+/-- Agora #755 item 1: **thread `i` reaps the orphans the marking sweep left**,
+    each by a step of its own (`Step.reap`, on its view: the payload moves to
+    a fresh slot of thread `i`, and a destructor frame of it goes to the
+    thread's redex), each ended by the configuration's marking sweep, until
+    no orphan is left; no other thread runs in between.  So the destructor
+    runs on the thread whose step dropped the last share (A2's `Settle`, on
+    a configuration), as nurlc's last share's drop does. -/
+inductive CSettle (P : Prog) (i : Nat) : Cfg → Cfg → Prop
+  | done {C : Cfg} : ¬ C.Orphan → CSettle P i C C
+  | reap {C C'' : Cfg} {t : Thread} {m1 : Mem} {s1 : Stmt} :
+      C.ths[i]? = some t → Step P (C.view t) t.s (.ok m1 s1) → ReapMem (C.view t) m1 →
+      CSettle P i (C.put i m1 s1).sweepD C'' → CSettle P i C C''
+
 /-- A program run from the empty store, on one thread (A2's `emptyMem`). -/
 def Cfg.init (s : Stmt) (nv : Nat) : Cfg :=
   { alloc := fun _ => false, nid := 0, blk := fun _ => none, gl := fun _ => none,
