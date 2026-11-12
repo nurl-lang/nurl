@@ -18834,7 +18834,11 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             // may still grow, and the walk decides from the final summaries,
             // as it does for one compiled after — agora #169, #352.)
             // (A handle the call hands back: only it can be changed in place.)
-            = arg_lend_srcs ? & & != 0 g_borrowck == bck_arg_tt TT_LPAREN ( __is_handle_ty ( nurl_get_last_type ) ) ( bck_call_lend_srcs syms ) ``
+            // (…or a value with a drop of its own that holds one — a `% Drop`
+            // struct with a Vec field: __is_handle_ty answers F for it, and a
+            // lent element of one handed to a changer ended no view of its
+            // buffer, Agora #692.)
+            = arg_lend_srcs ? & & != 0 g_borrowck == bck_arg_tt TT_LPAREN ( __arg_holds_changeable ( nurl_get_last_type ) ) ( bck_call_lend_srcs syms ) ``
             = __arg_shared ? == 0 ( nurl_str_len arg_lend_srcs ) F ( __shared_cell_get ( bck_generic_base ( nurl_sym_get syms `__last_call_name__` ) ) )
             // A `?` / `??` join as the argument hands the callee what one of
             // its arms selects: the callee changes that binding as if it were
@@ -18842,7 +18846,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             // j ? c vs vt`, then `( vec_clear [S] j )`). Without rows of its
             // own the call ended no borrow of either arm's owner (agora #314).
             ? | == bck_arg_tt TT_QUEST == bck_arg_tt TT_QUESTQUEST {
-                ? & != 0 g_borrowck ( __is_handle_ty ( nurl_get_last_type ) ) {
+                ? & != 0 g_borrowck ( __arg_holds_changeable ( nurl_get_last_type ) ) {
                     = arg_lend_srcs ( nurl_str_cat ( nurl_sym_get syms `__last_phi_idents__` ) `` )
                     = __arg_join T
                 } {}
@@ -19196,7 +19200,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // the lends, and the walk and module end decide by the final
         // summaries, as for a join.)
         ? & & arg_sxl != 0 g_borrowck | | | | == arg_eff_tt TT_DOT == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST == arg_eff_tt TT_LBRACE & == arg_eff_tt TT_LPAREN | g_call_may_lend ( __lend_pending ( nurl_sym_get syms `__last_call_name__` ) ) {
-            = arg_xsx ? & ( __is_handle_ty at ) ( __arg_may_change syms call_name fname arg_idx __clo_node ) ( nurl_str_cat arg_sx `` ) ``
+            = arg_xsx ? & ( __arg_holds_changeable at ) ( __arg_may_change syms call_name fname arg_idx __clo_node ) ( nurl_str_cat arg_sx `` ) ``
         } {}
         // Closure-env reclamation: if this argument was an inline closure
         // literal that allocated a heap env, and the callee uses this
@@ -25070,7 +25074,7 @@ unsafe @ gen_match i lex i syms i cg → s {
                     : b __abcl ( __is_closure_ty __abt )
                     // (A closure's out of an option binding: it is that
                     // binding's — giving the option a new value drops it.)
-                    : b __lent & | | | != 0 ( nurl_str_len match_scrut_borrow ) != 0 ( nurl_str_len match_scrut_field ) __scrut_param & __abcl != 0 ( nurl_str_len match_var_name ) | | | ( __is_handle_ty __abt ) ( __is_hown_ty __abt ) __abv __abcl
+                    : b __lent & | | | != 0 ( nurl_str_len match_scrut_borrow ) != 0 ( nurl_str_len match_scrut_field ) __scrut_param & __abcl != 0 ( nurl_str_len match_var_name ) | | | ( __arg_holds_changeable __abt ) ( __is_hown_ty __abt ) __abv __abcl
                     // (Out of a parameter: that parameter is what it is lent from,
                     // whatever its type spells — `?? String` included.)
                     : s __abown ( bck_owning_reads syms bck_mreads `+` )
@@ -25082,7 +25086,9 @@ unsafe @ gen_match i lex i syms i cg → s {
                     // the matched call's final summaries (`&callee%args`) or
                     // from the matched binding's state — a payload of a borrow
                     // is a borrow (bck_handle_match).
-                    : b __abc & & ! __lent ( bck_sound ) | | | ( __is_handle_ty __abt ) ( __is_hown_ty __abt ) __abv __abcl
+                    // (A `% Drop` payload that holds a handle as much as a
+                    // handle, __arg_holds_changeable: Agora #692.)
+                    : b __abc & & ! __lent ( bck_sound ) | | | ( __arg_holds_changeable __abt ) ( __is_hown_ty __abt ) __abv __abcl
                     // (`&*`: a cursor over the option binding it matched —
                     // mem_udrop_link_alias, bck_handle_match.)
                     : s __abn1 ? __abc ? != 0 ( nurl_str_len __m_lkey ) ( nurl_str_cat4 __ab `&` ( str_first_word __m_lkey ) ( nurl_str_cat `%` ( bck_swap_char __m_lroots 32 43 ) ) ) ( nurl_str_cat3 __ab `&` ? & pv0_cursor ( seq __ab pv0 ) `*` `` ) __abn0
@@ -73384,6 +73390,18 @@ unsafe @ __opt_err_mangle s e → s {
     // writes for it, field by field.)
     ? ( __has_user_drop ty ) { ^ F } {}
     ^ ( __type_needs_drop ty g_root_syms )
+}
+
+// Does a value of type `ty` hold storage a callee can change in place: a
+// handle, or a value with a drop of its own that cannot be copied and
+// holds an address (a `% Drop` struct with a Vec field, an enum holding
+// one)? __is_handle_ty answers F for the second (__is_owned_struct_ty's
+// last test), which a move handles apart; for "can it be changed in
+// place" it is as much one (Agora #692).
+@ __arg_holds_changeable s ty → b {
+    ? ( __is_handle_ty ty ) { ^ T } {}
+    ? ! ( __nc_drop_ty ty ) { ^ F } {}
+    ^ ( __ty_holds_addr ty 0 )
 }
 
 @ __is_owned_struct_ty s ty → b {
