@@ -1,0 +1,9 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/borrow_enum_field_of_a_call_matched_in_place.nu:38:13: error: 'sl' borrows from 'apps', which ended at line 37 — an element of it, through 'q', was passed to 'growp', which may move its buffer. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'sl' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup sl ).
+            ( nurl_println_int ( slice_at [i] sl 0 ) )
+            ^
+compiler/tests/borrow_enum_field_of_a_call_matched_in_place.nu:28:5: error: this call hands 'growp' the contents of Arc 'mine' to change, but an Arc's payload is frozen once made: every thread holding a clone reads it without a lock, so changing it races them, whatever lock this code holds. Build the value before arc_new and arc_new it whole; keep state one thread changes in an Rc; put state threads share and change in a Locked (stdlib/std/thread.nu) and change it with locked_with / locked_set, which hold its lock.
+    ?? . ( arc_get [App] mine ) ev { Got p → { ( growp p 1 ) } Nil → {} }
+    ^
+error: compilation aborted — 2 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

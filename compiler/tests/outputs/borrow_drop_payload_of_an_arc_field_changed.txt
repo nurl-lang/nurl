@@ -1,0 +1,9 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/borrow_drop_payload_of_an_arc_field_changed.nu:24:5: error: this call hands 'rg' the contents of Arc 'mine' to change, but an Arc's payload is frozen once made: every thread holding a clone reads it without a lock, so changing it races them, whatever lock this code holds. Build the value before arc_new and arc_new it whole; keep state one thread changes in an Rc; put state threads share and change in a Locked (stdlib/std/thread.nu) and change it with locked_with / locked_set, which hold its lock.
+    : ( @ v i ) f \ i k → v { ?? ( vec_get [R] . ( arc_get [App] mine ) rs 0 ) { T e → { ( rg e k ) } F → {} } }
+    ^
+compiler/tests/borrow_drop_payload_of_an_arc_field_changed.nu:30:5: error: this call hands 'rg' the contents of Arc 'mine' to change, but an Arc's payload is frozen once made: every thread holding a clone reads it without a lock, so changing it races them, whatever lock this code holds. Build the value before arc_new and arc_new it whole; keep state one thread changes in an Rc; put state threads share and change in a Locked (stdlib/std/thread.nu) and change it with locked_with / locked_set, which hold its lock.
+    ?? ( vec_get [R] . ( arc_get [App] mine ) rs 0 ) { T e → { ( rg e 3 ) } F → {} }
+    ^
+error: compilation aborted — 2 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)
