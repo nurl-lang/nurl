@@ -1835,7 +1835,7 @@ unsafe @ agg_field_count i syms s ot → i {
 // whose elements may run a destructor of the program's own (__vec_drop_fn),
 // declares the runtime's release at its end; no other module's IR changes.
 // (g_use_drop_range: 1 the plain release, 2 the `_dtor` one, 3 both; 4
-// the release of elements moved out first, mem_drop_moved.)
+// the release of elements moved out first, mem_move_drop.)
 : ~ i g_use_drop_range 0
 // A fresh raw string result was journaled by its slot (mem_ret_guard_raw):
 // `@__jdrop_rawstr`, its thunk, is written at module end.
@@ -17836,7 +17836,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     ? != 0 ( nurl_str_starts fname `mem_` ) {
         // The ownership primitives give up or claim a value by hand: raw
         // memory, which only an `unsafe` function may vouch for (spec §3.3d).
-        ? | | | | | ( seq fname `mem_forget` ) ( seq fname `mem_take` ) ( seq fname `mem_put_back` ) ( seq fname `mem_addr` ) ( seq fname `mem_drop_range` ) ( seq fname `mem_drop_moved` ) {
+        ? | | | | | ( seq fname `mem_forget` ) ( seq fname `mem_take` ) ( seq fname `mem_put_back` ) ( seq fname `mem_addr` ) ( seq fname `mem_drop_range` ) ( seq fname `mem_move_drop` ) {
             ? ! __callee_shadowed { ( bck_check_raw_call lex syms fname ) } {}
         } {}
         ? & ( seq fname `mem_addr` ) ! __callee_shadowed
@@ -17857,8 +17857,8 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         ? & ( seq fname `mem_drop_range` ) ! __callee_shadowed
         { ^ ( gen_mem_drop_range lex syms cg ) }
         {}
-        ? & ( seq fname `mem_drop_moved` ) ! __callee_shadowed
-        { ^ ( gen_mem_drop_moved lex syms cg ) }
+        ? & ( seq fname `mem_move_drop` ) ! __callee_shadowed
+        { ^ ( gen_mem_move_drop lex syms cg ) }
         {}
         ? ( seq fname `mem_drop_runs_code` )
         { ^ ( gen_mem_drop_runs_code lex syms cg ) }
@@ -28066,17 +28066,26 @@ unsafe @ __bck_fall_ret_record i lex i syms i first_tt s first_val i sxn0 i line
     ^ ( nurl_str_cat `undef` `` )
 }
 
-// `( mem_drop_moved [T] buf n )` — drop the `n` elements of `buf`, a
-// buffer of their own that their container moved them into before the
-// first destructor runs, and free it (nurl_vec_drop_moved_dtor, Agora
-// #709): what a destructor then does to the container — push into it, grow
-// it, clear it — shares no slot with the release. Raw, as mem_drop_range
-// is; a panic in one element's destructor goes on with the rest, and the
-// buffer is freed either way. For a T that owns nothing, only the buffer.
-@ gen_mem_drop_moved i lex i syms i cg → s {
+// `( mem_move_drop [T] a na b nb w v )` — the elements to go leave their
+// container's storage before the first destructor runs (Agora #709): the
+// `na` elements at `a` and then the `nb` at `b` (a ring's second run; 0
+// for none) are moved into a buffer of the release's own, `v` is written
+// to the count word at `w` (the container now holds only what stays), and
+// they are dropped from the buffer in index order
+// (nurl_vec_move_drop_dtor). What a destructor then does to the container
+// — push into it, grow it, clear it — shares no slot with the release. The
+// buffer is the runtime frame's own stack where it fits (512 bytes), the
+// heap past that, so a small release allocates nothing (Agora #748). Raw,
+// as mem_drop_range is; a panic in one element's destructor goes on with
+// the rest. For a T that owns nothing, only the count is written.
+@ gen_mem_move_drop i lex i syms i cg → s {
     : s ty ( __cc_parse_targ lex )
-    : s buf ( gen_operand lex syms cg )
-    : s n ( gen_operand lex syms cg )
+    : s a ( gen_operand lex syms cg )
+    : s na ( gen_operand lex syms cg )
+    : s b ( gen_operand lex syms cg )
+    : s nb ( gen_operand lex syms cg )
+    : s w ( gen_operand lex syms cg )
+    : s v ( gen_operand lex syms cg )
     ( expect lex TT_RPAREN )
     : s ll ( nurl_llty ty )
     ? ( __elem_owns ty syms ) {
@@ -28085,10 +28094,12 @@ unsafe @ __bck_fall_ret_record i lex i syms i first_tt s first_val i sxn0 i line
         ( nurl_print `  ` ) ( nurl_print szp ) ( nurl_print ` = getelementptr ` ) ( nurl_print ll ) ( nurl_print `, ptr null, i32 1\n` )
         : s szi ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print szi ) ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print szp ) ( nurl_print ` to i64\n` )
-        ( nurl_print `  call void @nurl_vec_drop_moved_dtor(ptr ` ) ( nurl_print buf ) ( nurl_print `, i64 ` ) ( nurl_print n )
+        ( nurl_print `  call void @nurl_vec_move_drop_dtor(ptr ` ) ( nurl_print a ) ( nurl_print `, i64 ` ) ( nurl_print na )
+        ( nurl_print `, ptr ` ) ( nurl_print b ) ( nurl_print `, i64 ` ) ( nurl_print nb )
+        ( nurl_print `, ptr ` ) ( nurl_print w ) ( nurl_print `, i64 ` ) ( nurl_print v )
         ( nurl_print `, ptr @` ) ( nurl_print ( __elem_drop_request ty ) )
         ( nurl_print `, i64 ` ) ( nurl_print szi ) ( nurl_print `)` ) ( emit_dbg_eol )
-    } { ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print buf ) ( nurl_print `)` ) ( emit_dbg_eol ) }
+    } { ( nurl_print `  store i64 ` ) ( nurl_print v ) ( nurl_print `, ptr ` ) ( nurl_print w ) ( emit_dbg_eol ) }
     ( nurl_set_last_type `void` )
     ^ ( nurl_str_cat `undef` `` )
 }
@@ -34671,7 +34682,7 @@ unsafe @ bck_trusted_file s path → b {
 @ bck_raw_call s base → b {
     // (`vec_set_len` declares raw writes initialised: the elements it
     // exposes are whatever the memory held.)
-    ^ ( str_contains_word `nurl_alloc nurl_zalloc nurl_free nurl_realloc alloc zalloc mem_forget nurl_peek nurl_poke nurl_vctl_get nurl_vctl_set nurl_vctl_data nurl_memcpy nurl_memmove nurl_memset nurl_mac_row nurl_p256_mulm nurl_p256_sqrm nurl_x25519_mulm nurl_x25519_sqrm malloc calloc realloc free memcpy memmove memset nurl_closure_drop nurl_closure_clone rcbox_ptr rcbox_new rcbox_zero rcbox_share rcbox_release shared_new shared_zero shared_null shared_ptr shared_addr shared_publish_once shared_into_word shared_from_word vec_publish_once arc_into_word arc_from_word arc_word_share mem_take mem_put_back vec_put_back mem_addr mem_drop_range mem_drop_moved vec_set_len` base )
+    ^ ( str_contains_word `nurl_alloc nurl_zalloc nurl_free nurl_realloc alloc zalloc mem_forget nurl_peek nurl_poke nurl_vctl_get nurl_vctl_set nurl_vctl_data nurl_memcpy nurl_memmove nurl_memset nurl_mac_row nurl_p256_mulm nurl_p256_sqrm nurl_x25519_mulm nurl_x25519_sqrm malloc calloc realloc free memcpy memmove memset nurl_closure_drop nurl_closure_clone rcbox_ptr rcbox_new rcbox_zero rcbox_share rcbox_release shared_new shared_zero shared_null shared_ptr shared_addr shared_publish_once shared_into_word shared_from_word vec_publish_once arc_into_word arc_from_word arc_word_share mem_take mem_put_back vec_put_back mem_addr mem_drop_range mem_move_drop vec_set_len` base )
 }
 
 // A function that takes a raw pointer (`*T` in a parameter's type, outside
@@ -75183,7 +75194,7 @@ unsafe @ __type_needs_drop s ty i syms → b {
     ? != 0 g_use_slot_take { ( nurl_print `declare void @nurl_vec_slot_take_if(i1, i8*, i64, i64, i64, i64, ptr)\n` ) } {}
     ? != 0 & g_use_drop_range 1 { ( nurl_print `declare void @nurl_vec_drop_range(i8*, i64, i64, ptr, i64)\n` ) } {}
     ? != 0 & g_use_drop_range 2 { ( nurl_print `declare void @nurl_vec_drop_range_dtor(i8*, i64, i64, ptr, i64)\n` ) } {}
-    ? != 0 & g_use_drop_range 4 { ( nurl_print `declare void @nurl_vec_drop_moved_dtor(i8*, i64, ptr, i64)\n` ) } {}
+    ? != 0 & g_use_drop_range 4 { ( nurl_print `declare void @nurl_vec_move_drop_dtor(ptr, i64, ptr, i64, ptr, i64, ptr, i64)\n` ) } {}
     ? != 0 g_use_vec_drop_dtor { ( nurl_print `declare void @nurl_vec_drop_dtor(i8*, ptr, i64)\n` ) } {}
     // Per-call result ownership (mem_capture_hown / mem_publish_hown).
     ? != 0 g_use_hown {

@@ -1,5 +1,5 @@
 // moved_release_of_a_vec_whose_destructor_panics_runs_clean: under recover, vec_clear, vec_truncate, vec_retain and deque_clear release `% Drop` elements, one of whose destructors panics; afterwards each container is used and dropped.
-// Guard for agora #709's release: the elements moved into a buffer of their own (mem_drop_moved) are journaled with that buffer (NurlVecDrain.own): a panic in one destructor goes on with the rest and frees the buffer, once.
+// Guard for agora #709's release: the elements moved into a buffer of their own (mem_move_drop) are journaled with that buffer (NurlVecDrain.own): a panic in one destructor goes on with the rest and frees the buffer, once.
 // main 70f7232: accepted, clean (the in-place release, #608); with a moved release that did not own its buffer, LeakSanitizer: the buffer.
 // map: §7.2 | A2 | runs-clean | - | agora #709 guard: a destructor that panics in a moved release leaves every other element dropped once and the release's buffer freed
 $ `stdlib/std/panic.nu`

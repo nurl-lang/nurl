@@ -1,5 +1,5 @@
 // destructor_pushing_into_its_own_vec_and_deque_while_cleared_runs_clean: nodes held in an Rc'd Vec and an Rc'd Deque push two nodes into their own container from their destructors while vec_clear, vec_truncate, vec_retain and deque_clear drop them; the containers are used and cleared again afterwards.
-// Guard for agora #709: the elements a release drops leave the container's storage first (__vec_release_from, __dq_release_moved → mem_drop_moved): a push from a destructor lands in slots the release does not walk.
+// Guard for agora #709: the elements a release drops leave the container's storage first (__vec_release_from, __dq_release_moved → mem_move_drop): a push from a destructor lands in slots the release does not walk.
 // main 70f7232: accepted, heap-use-after-free (a pushed node dropped twice, the old buffer freed under the release by a growth) and the elements written over leaked.
 // map: §7.2 | A2 | runs-clean | - | agora #709 guard: a destructor that pushes into the Vec / Deque it is being cleared or truncated out of — every element dropped once, the pushed ones kept
 $ `stdlib/core/string.nu`
