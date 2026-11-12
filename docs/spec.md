@@ -3083,7 +3083,7 @@ follows for each instantiation the error is in, innermost first, naming
 the instance with its type arguments as the program writes them and
 anchored at the call that asked for it:
 
-```
+```text
 stdlib/std/par.nu:44:87: error: chan_send would move this value …
                     : b _s ( chan_send [( ParOut B )] cl @ ( ParOut B ) { j ( f j ) } )
                                                                                       ^
