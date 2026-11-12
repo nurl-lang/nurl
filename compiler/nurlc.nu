@@ -63155,10 +63155,49 @@ unsafe @ __clo_scan_skip_type i lex i outer_syms i tt i prev1 i prev2 s ctx → 
 // pointer to one — `. p k` through a pointer indexes it by the value `k`.
 @ __clo_scan_struct_obj i outer_syms s obj → b {
     ? ( str_contains_word g_clo_scan_structs obj ) { ^ T } {}
-    : s ty ( nurl_sym_get outer_syms obj )
+    ^ ( __clo_scan_struct_ty outer_syms ( nurl_sym_get outer_syms obj ) )
+}
+
+// `a,b,c` → `a b c`.
+@ __commas_to_words s list → s {
+    : ~ s out ``
+    : ~ s rest ( nurl_str_cat list `` )
+    : ~ i at ( nurl_str_find rest `,` )
+    ~ >= at 0 {
+        = out ( nurl_str_cat3 out ( nurl_str_slice rest 0 at ) ` ` )
+        = rest ( nurl_str_slice rest + at 1 - - ( nurl_str_len rest ) at 1 )
+        = at ( nurl_str_find rest `,` )
+    }
+    ^ ( nurl_str_cat out rest )
+}
+
+// Is `ty` (an LLVM type) a struct by value — not a pointer to one?
+@ __clo_scan_struct_ty i outer_syms s ty → b {
     : i n ( nurl_str_len ty )
     ? | < n 2 | != ( nurl_str_get ty 0 ) 37 == ( nurl_str_get ty - n 1 ) 42 { ^ F } {}
     ^ != 0 ( nurl_sym_len2 outer_syms ( nurl_str_slice ty 1 - n 1 ) `__field_count` )
+}
+
+// The base of `. ( f … ) k` is the value the call `f` hands back: is it a
+// struct by value, so that `k` is one of its fields and no binding (agora
+// #710)? `targs` are the call's type arguments as the instance spells them
+// (__gen_ta_word), comma-separated, `-` for none. A callee the scan cannot
+// type — a closure binding, one not declared, a type argument it could not
+// spell as one word — is no struct: its `k` is read as a binding, as
+// before (an index into a pointer is one).
+@ __clo_scan_call_struct i outer_syms s fname s targs → b {
+    ? | == 0 ( nurl_str_len fname ) ( seq fname `-` ) { ^ F } {}
+    ? != 0 ( nurl_str_len ( nurl_sym_get2 g_generic_syms fname `__tparams` ) ) {
+        ? | ( seq targs `-` ) >= ( nurl_str_find targs ` ` ) 0 { ^ F } {}
+        : s ta ( __commas_to_words targs )
+        ? != ( count_words ta ) ( count_words ( nurl_sym_get2 g_generic_syms fname `__tparams` ) ) { ^ F } {}
+        ^ ( __clo_scan_struct_ty outer_syms ( compute_generic_ret_ty fname ta outer_syms ) )
+    } {}
+    ? ! ( seq targs `-` ) { ^ F } {}
+    // (A closure or a function-pointer binding of that name is no function
+    // the scan can type.)
+    ? | != 0 ( nurl_sym_len2 outer_syms fname `__ptr` ) != 0 ( nurl_sym_len2 outer_syms fname `__param` ) { ^ F } {}
+    ^ ( __clo_scan_struct_ty outer_syms ( nurl_sym_get outer_syms fname ) )
 }
 
 // ── The capture scan's scopes (agora #125) ────────────────────────
@@ -63296,6 +63335,15 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
     : ~ i prev2 TT_EOF
     // (The name after the last `.`, for the name after it: a field?)
     : ~ s dot_obj ``
+    // (The `. ( f … )` calls open, innermost first: the bracket level each
+    // opened, its callee and its type arguments; and whether the token
+    // after the `)` that closed one is a field of a struct the call handed
+    // back — agora #710.)
+    : ~ s dc_l ``
+    : ~ s dc_f ``
+    : ~ s dc_t ``
+    : ~ b rp_fld F
+    : ~ b rp_fld_next F
     = g_clo_scan_structs ( nurl_str_cat `` `` )
     : ~ b held F
     // The names the body binds itself (the capture scan's scopes, above):
@@ -63325,6 +63373,8 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
         : i tt ( nurl_lex_type lex )
         ? & == tt TT_IDENT == prev1 TT_DOT { = dot_obj ( nurl_lex_val lex ) } {}
         = held F
+        = rp_fld rp_fld_next
+        = rp_fld_next F
 
         // Unbalanced braces used to spin this loop at EOF forever — the
         // capture pre-scan runs before the body parse, so a closure
@@ -63484,14 +63534,42 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
                     // (A call's type arguments are not an operand.)
                     : b targs & & == tt TT_LBRACK ( is_ident_tok prev1 ) == prev2 TT_LPAREN
                     // A type's tokens are skipped; the scan resumes on the
-                    // token after it.
-                    : i skt ( __clo_scan_skip_type lex outer_syms tt prev1 prev2 ctx )
+                    // token after it. (…and a `. ( f [T…] … )` call's are
+                    // kept, as its instance spells them: what the call hands
+                    // back is typed by them — agora #710.)
+                    : ~ i skt 0
+                    ? & & & targs != 0 ( nurl_str_len dc_l ) == clen ( nurl_str_to_int ( str_first_word dc_l ) ) ( seq ( str_first_word dc_t ) `-` ) {
+                        ( nurl_lex_advance lex )
+                        : ~ s tas ``
+                        ~ & != ( nurl_lex_type lex ) TT_RBRACK != ( nurl_lex_type lex ) TT_EOF {
+                            : s taw ( __gen_ta_word lex )
+                            = tas ? == 0 ( nurl_str_len tas ) ( nurl_str_cat taw `` ) ( nurl_str_cat3 tas `,` taw )
+                        }
+                        ? == ( nurl_lex_type lex ) TT_RBRACK { ( nurl_lex_advance lex ) } {}
+                        = dc_t ( nurl_str_cat3 ? == 0 ( nurl_str_len tas ) `-` tas ` ` ( str_skip_word dc_t ) )
+                        = skt 1
+                    } { = skt ( __clo_scan_skip_type lex outer_syms tt prev1 prev2 ctx ) }
                     = held != 0 skt
                     ? == skt 2 { = ctx ( nurl_str_cat ctx `[` ) } {}
                     ? == tt TT_LPAREN { = ctx ( nurl_str_cat ctx `(` ) } {}
                     ? == tt TT_RPAREN { = ctx ( __clo_ctx_pop ctx 40 ) } {}
                     ? == tt TT_RBRACK { = ctx ( __clo_ctx_pop ctx 91 ) } {}
                     ? | | | == skt 2 == tt TT_LPAREN == tt TT_RPAREN == tt TT_RBRACK { = clen ( nurl_str_len ctx ) } {}
+                    // (`. ( f … )` opens a call whose result is the base of
+                    // a field read; its `)` says whether the name after it
+                    // is a field — agora #710.)
+                    ? & & == tt TT_LPAREN == prev1 TT_DOT == skt 0 {
+                        : s dcf ? ( is_ident_tok ( nurl_lex_peek_type lex ) ) ( nurl_lex_peek_val lex ) `-`
+                        = dc_l ( nurl_str_cat3 ( nurl_str_int clen ) ` ` dc_l )
+                        = dc_f ( nurl_str_cat3 dcf ` ` dc_f )
+                        = dc_t ( nurl_str_cat `- ` dc_t )
+                    } {}
+                    ? == tt TT_RPAREN {
+                        ~ & != 0 ( nurl_str_len dc_l ) > ( nurl_str_to_int ( str_first_word dc_l ) ) clen {
+                            = rp_fld_next ( __clo_scan_call_struct outer_syms ( str_first_word dc_f ) ( str_first_word dc_t ) )
+                            = dc_l ( str_skip_word dc_l ) = dc_f ( str_skip_word dc_f ) = dc_t ( str_skip_word dc_t )
+                        }
+                    } {}
                     // Where the token stands in the expressions the scan
                     // follows (the capture scan's scopes, above).
                     ? < clen lvl {
@@ -63569,6 +63647,9 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
                         : ~ b is_clo_param ( str_contains_word closure_params var_name )
                         ? & ! is_clo_param != 0 ( nurl_str_len bl ) { = is_clo_param ( __cs_bound bl var_name ) } {}
                         ? & & ! is_clo_param == prev2 TT_DOT == prev1 TT_IDENT { = is_clo_param ( __clo_scan_struct_obj outer_syms dot_obj ) } {}
+                        // (…or `. ( f … ) fo` over a call handing back a
+                        // struct by value: agora #710.)
+                        ? & & ! is_clo_param == prev1 TT_RPAREN rp_fld { = is_clo_param T } {}
                         // (Read, not the root of a store: agora #358.)
                         // (…before the body gives it a value of its own: one
                         // assigned first needs none where the closure is made.)
