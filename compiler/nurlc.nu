@@ -2283,6 +2283,9 @@ unsafe @ agg_field_count i syms s ot → i {
 : ~ i g_bck_ab_any 0
 // The source expression of the call a `match` row matches (gen_match).
 : ~ s g_bck_match_sx ``
+// Whether any parameter is run on several threads at once (`syncrun##`,
+// resolve_send_checks): until one is, its rounds and questions are skipped.
+: ~ i g_syncrun_any 0
 // What the bindings declared in value-position blocks hold (h216): words
 // `D:name=sx` (a `let` at block depth D), `D:name~sx` (an assignment in
 // that block), `D:name+sx` (one in a block nested in it — either value);
@@ -20068,6 +20071,10 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             ( nurl_sym_def g_pending_impl ( nurl_str_cat `sendchk#` ( nurl_str_int __sn ) )
             ( nurl_str_cat4 ( nurl_str_cat4 fname ` ` ( nurl_sym_get syms `__fn_self_name__` ) ` ` )
             ( nurl_str_int bck_arg_line ) ( nurl_str_cat3 ` ` ( nurl_lex_filename lex ) ` ` ) __acs ) )
+            // (Inside a loop, the closure is built and run on a thread each
+            // round: what it captures from outside the loop, a parameter of
+            // this function, several threads run at once — agora #713.)
+            ? > g_loop_nest 0 { ( nurl_sym_def g_pending_impl ( nurl_str_cat `sendloop#` ( nurl_str_int __sn ) ) `1` ) } {}
         } {}
         // Deferred interprocedural-escape (docs/MEMORY.md §3 forward /
         // generic). This argument is a stack reference (`bck_arg_rd > 0`)
@@ -77914,11 +77921,32 @@ unsafe @ __cc_note_call i syms s call_name s fname s arg_cs s arg_tys s arg_ids 
     : i m ( nurl_str_to_int ( nurl_sym_get g_pending_impl `sendchk_n` ) )
     ? & == n 0 == m 0 { ^ v } {}
     // Seeds: a detach of a closure that captures a parameter.
+    // (One that a detach inside a loop captures, or two detaches do, is run
+    // by several threads at once: what the caller's closure captures must
+    // be Sync, and it may not change it — the Sync-closure rule, as for a
+    // closure kept in an Arc. Asked Send alone, `par_map_index`'s `f`
+    // pushing to a captured Vec raced on eight threads; agora #713.)
     : ~ i j 0
     ~ < j m {
         : s rec ( nurl_sym_get g_pending_impl ( nurl_str_cat `sendchk#` ( nurl_str_int j ) ) )
         : s encl ( str_first_word ( str_skip_word rec ) )
-        ( __send_req_params encl ( __cc_expand ( str_skip_word ( str_skip_word ( str_skip_word ( str_skip_word rec ) ) ) ) 0 ) )
+        : s jcs ( __cc_expand ( str_skip_word ( str_skip_word ( str_skip_word ( str_skip_word rec ) ) ) ) 0 )
+        // (A parameter an earlier detach captured is already marked: the
+        // seeds are the first to mark one, so this one is its second.)
+        : b jloop != 0 ( nurl_sym_len g_pending_impl ( nurl_str_cat `sendloop#` ( nurl_str_int j ) ) )
+        : ~ s jr ( nurl_str_cat jcs `` )
+        ~ != 0 ( nurl_str_len jr ) {
+            : s u ( __bar_first jr ) = jr ( __bar_rest jr )
+            : s fk ( __cc_param_atom encl u )
+            ? != 0 ( nurl_str_len fk ) {
+                ? | jloop != 0 ( nurl_sym_len g_pending_impl ( nurl_str_cat `sendreq##` fk ) ) {
+                    ( nurl_sym_def g_pending_impl ( nurl_str_cat `syncrun##` fk ) `1` )
+                    = g_syncrun_any 1
+                    ( nurl_sym_def g_pending_impl ( nurl_str_cat `syncreq##` fk ) `1` )
+                } {}
+            } {}
+        }
+        ( __send_req_params encl jcs )
         = j + j 1
     }
     : ~ b changed T
@@ -77935,13 +77963,16 @@ unsafe @ __cc_note_call i syms s call_name s fname s arg_cs s arg_tys s arg_ids 
                 : s ccs ( __cc_expand ( str_skip_word ( str_skip_word ( str_skip_word r3 ) ) ) 0 )
                 ? ( __send_req_params encl ccs ) { = changed T } {}
                 ? ( __sync_crossing syms ns ) {
-                    ? ( __sync_req_params encl ccs ) { = changed T } {}
+                    ? ( __sync_req_params encl ccs ( __syncrun_crossing ns ) ) { = changed T } {}
                 } {}
             } {}
             = i + i 1
         }
         ? ( __dyn_virtual_arg_round `sendreq##` ) { = changed T } {}
         ? ( __dyn_virtual_arg_round `syncreq##` ) { = changed T } {}
+        // (…and how it does so, for the message: a `dyn` call's virtual
+        // runs its parameter on several threads where an impl does.)
+        ? && != 0 g_syncrun_any ( __dyn_virtual_arg_round `syncrun##` ) { = changed T } {}
     }
     // The verdicts.
     = j 0
@@ -78026,6 +78057,9 @@ unsafe @ __cc_note_call i syms s call_name s fname s arg_cs s arg_tys s arg_ids 
     : s ks ( str_first_word ( str_skip_word ( str_skip_word rec ) ) )
     : i k ( nurl_str_to_int ks )
     : s shown ( llvm_to_nurl gn )
+    ? ( __syncrun_crossing ns ) {
+        ^ ( nurl_str_cat4 `'` shown ( nurl_str_cat3 `' hands its parameter ` ( nurl_str_int + k 1 ) ` to several threads or fibers` ) `` )
+    } {}
     ? | != 0 ( nurl_sym_len g_pending_impl ( nurl_str_cat4 `syncreq##` cn `##` ks ) )
     != 0 ( nurl_sym_len g_pending_impl ( nurl_str_cat4 `syncreq##` gn `##` ks ) ) {
         ^ ( nurl_str_cat4 `'` shown ( nurl_str_cat3 `' keeps its parameter ` ( nurl_str_int + k 1 ) ` in a handle shared across threads` ) `` )
@@ -78157,7 +78191,10 @@ unsafe @ __cc_note_call i syms s call_name s fname s arg_cs s arg_tys s arg_ids 
     ^ & ( seq k `0` ) | ( bck_is_container_mutator base ) != 0 ( bck_lib_kind base )
 }
 
-@ __sync_req_params s encl s cs → b {
+// (`run`: the callee runs it on several threads, rather than keeping it
+// in a shared handle — the parameter is run so too, `syncrun##`, which only
+// the message reads.)
+@ __sync_req_params s encl s cs b run → b {
     : ~ b added F
     : ~ s r ( nurl_str_cat cs `` )
     ~ != 0 ( nurl_str_len r ) {
@@ -78165,10 +78202,24 @@ unsafe @ __cc_note_call i syms s call_name s fname s arg_cs s arg_tys s arg_ids 
         : s fk ( __cc_param_atom encl u )
         ? != 0 ( nurl_str_len fk ) {
             : s key ( nurl_str_cat `syncreq##` fk )
-            ? == 0 ( nurl_sym_len g_pending_impl key ) { ( nurl_sym_def g_pending_impl key `1` ) = added T } {}
+            ? == 0 ( nurl_sym_len g_pending_impl key ) {
+                ( nurl_sym_def g_pending_impl key `1` ) = added T
+                ? run { ( nurl_sym_def g_pending_impl ( nurl_str_cat `syncrun##` fk ) `1` ) = g_syncrun_any 1 } {}
+            } {}
         } {}
     }
     ^ added
+}
+
+// Is call record `ns`'s parameter one its callee runs on several threads
+// at once (and keeps in no shared handle)?
+@ __syncrun_crossing s ns → b {
+    ? == g_syncrun_any 0 { ^ F } {}
+    : s rec ( nurl_sym_get g_pending_impl ( nurl_str_cat `ccchk#` ns ) )
+    : s cn ( str_first_word rec )
+    : s gn ( str_first_word ( str_skip_word rec ) )
+    : s ks ( str_first_word ( str_skip_word ( str_skip_word rec ) ) )
+    ^ | != 0 ( nurl_sym_len g_pending_impl ( nurl_str_cat4 `syncrun##` cn `##` ks ) ) != 0 ( nurl_sym_len g_pending_impl ( nurl_str_cat4 `syncrun##` gn `##` ks ) )
 }
 
 @ __send_verdict s cs s file s line s how → v {
