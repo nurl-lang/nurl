@@ -60000,7 +60000,12 @@ unsafe @ __thr_peel s lty → s {
         : ~ i sk 0
         : ~ s sarg ( __inst_targ lty 0 )
         ~ != 0 ( nurl_str_len sarg ) {
-            ? ! ( __is_closure_ty sarg ) { = kids ( __thr_kid kids swant sarg ) } {}
+            ? ! ( __is_closure_ty sarg ) {
+                = kids ( __thr_kid kids swant sarg )
+                // (Several readers share an RwLocked's value, and the last
+                // one may drop it: Sync AND Send, as an Arc's payload below.)
+                ? == swant 1 { = kids ( __thr_kid kids 0 sarg ) } {}
+            } {}
             = sk + sk 1
             = sarg ( __inst_targ lty sk )
         }
@@ -60043,11 +60048,21 @@ unsafe @ __thr_peel s lty → s {
     // from here down the question becomes the harder one — `( Arc ( Rc i ) )`,
     // `( Arc Cell )` and `( RwLocked PNCounter )` die here, and a
     // `( Vec Cell )` correctly does not.
-    : i sub_want ? | | ( seq bn `Arc` ) aweak ( seq bn `RwLocked` ) 1 want
+    // Shared is Send AND Sync, not Sync alone: every thread holding a share
+    // reaches the payload, and the one that lets go of the last share drops
+    // it there (Rust's `Arc<T>: Send where T: Send + Sync`). Structurally
+    // Sync implies Send, but a type asserted `% Sync` stops the Sync walk
+    // without answering Send — `: S { ( Rc i ) r }` with `unsafe % Sync S`
+    // in an Arc crossed, and its Rc was released on the worker.
+    : b shared | | ( seq bn `Arc` ) aweak ( seq bn `RwLocked` )
+    : i sub_want ? shared 1 want
     : ~ i ak 0
     : ~ s arg ( __inst_targ lty 0 )
     ~ != 0 ( nurl_str_len arg ) {
-        ? ! ( __is_closure_ty arg ) { = kids ( __thr_kid kids sub_want arg ) } {}
+        ? ! ( __is_closure_ty arg ) {
+            = kids ( __thr_kid kids sub_want arg )
+            ? shared { = kids ( __thr_kid kids 0 arg ) } {}
+        } {}
         = ak + ak 1
         = arg ( __inst_targ lty ak )
     }
