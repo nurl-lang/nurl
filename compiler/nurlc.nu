@@ -53459,7 +53459,13 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // or the callees' module-end answers where their summaries are not
         // final yet — folded away by LLVM where they lend nothing.)
         : b __ud_kgo & & != 0 ( nurl_str_len __ud_ptr ) ! ( seq ( nurl_sym_get2 syms __ud_ptr `__sborrow` ) `1` ) ( __ud_keyable vt )
-        : s __ud_kcond ? ! __ud_kgo `` ? == bck_rhs_tt TT_LPAREN ? & g_call_may_lend ! __ud_may_self ( mem_ud_lend_own_cond syms cg vt ) `` ? & ( is_ident_tok bck_rhs_tt ) ! ( seq bck_rhs_val name ) ( mem_ud_hold_lend_cond syms cg bck_rhs_val vt ) ``
+        // (…or one whose lends still wait on a module-end note — a lend it
+        // forwards from a callee compiled after it, `^ ( f0 p )` with f0
+        // below (__lend_pending): until then its summary reads as lending
+        // nothing, and `= o ( f1 o )` dropped o's value though the call
+        // handed it back — agora #742. The module-end answers decide.)
+        : b __ud_clend | g_call_may_lend ( __lend_pending ( nurl_sym_get syms `__last_call_name__` ) )
+        : s __ud_kcond ? ! __ud_kgo `` ? == bck_rhs_tt TT_LPAREN ? & __ud_clend ! __ud_may_self ( mem_ud_lend_own_cond syms cg vt ) `` ? & ( is_ident_tok bck_rhs_tt ) ! ( seq bck_rhs_val name ) ( mem_ud_hold_lend_cond syms cg bck_rhs_val vt ) ``
         // (Only an owner that may own its value: one bound as a borrow
         // outright (`__sborrow` `1`, a `: ~` lend out of a `vec_get`) owns
         // nothing to keep, and its flag, never set, gates no drop — setting
