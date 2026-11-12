@@ -48259,6 +48259,21 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
             // lends is recorded: agora #349.)
             = g_bck_end_elem 1
             = out ( bck_view_end ( bck_view_end_ind out wid ( bck_field_int rec 3 ) irw ) wid ( bck_field_int rec 3 ) irw )
+            // (…and through the elements of the field paths it holds — the
+            // value handed whole, or a field of it: a struct parameter's
+            // `. p rows` is where its elements are, and a view through
+            // `( vec_at . w rows 0 )` is one through an element of `w.rows`,
+            // the source it was taken of. Not a view of such a field's own
+            // buffer, `string_data . w name`: an element's buffer moving
+            // leaves that be; agora #785.)
+            : ~ s frest ( nurl_sym_get g_bck ( bck_bkey `bsrcs` `` ) )
+            ~ != 0 ( nurl_str_len frest ) {
+                : s fsw ( str_first_word frest ) = frest ( str_skip_word frest )
+                : i fsid ( nurl_str_to_int fsw )
+                ? & != fsid wid ( bck_id_holds wid fsid ) {
+                    = out ( bck_view_end_ind out fsid ( bck_field_int rec 3 ) irw )
+                } {}
+            }
             = g_bck_end_elem 0
         } {}
     } {}
