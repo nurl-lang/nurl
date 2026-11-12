@@ -599,10 +599,10 @@ each one shrinks `CLAIM.md`'s exception:
      ask `dtorFree` of their own `Vec`. A share's payload and a view are free of
      one by definition (3d; a view owns nothing).
    - **Built (Agora #542, part 2's first milestone): the drain's step.**
-     `vec_remove y 0` is `Rhs.popFront`: element 0 moves out, typed as
-     `vec_pop` (`RhsT.popFront`), `EvalR.popFront` / `popFrontEmpty`.
+     `vec_remove y 0` is `Rhs.remove y (.lit 0)` (`Rhs.popFront` until Agora #607): element 0 moves out, typed as
+     `vec_pop` (`RhsT.remove`), `EvalR.remove` / `removeOOB`.
      Its preservation is a `vec_pop` of element 0 moved to the end
-     (`A2.rhs_popFront`, from `MInv.perm` and `rhs_pop`; the permutation
+     (`A2.rhs_remove`, from `MInv.perm` and `rhs_pop`; the permutation
      lemmas moved from `A2/Elem.lean` into `A2/Rhs.lean` so that
      `rhs_pres` can use them). nurlc drops a `Vec`'s elements in index
      order (`nurl__vec_drop_elems`, `i = 0 .. len`), so the drain takes
@@ -635,9 +635,9 @@ each one shrinks `CLAIM.md`'s exception:
         `StmtT.scopeD` takes `ScopeDTy f u E.ty`. One run-time form serves
         both: `scopeD x f .skip` steps by the value `x` owns (`Val.isNode`),
         - a non-empty node: `Step.scopeDDrain`, to `scopeD x f (letd m.nv f
-          (.popFront x) .skip)` with `nv + 1`. This is a statement rewrite:
-          the memory moves in `letd`'s step (`EvalR.popFront`,
-          `rhs_popFront`), and the element's own `scopeD` runs its
+          (.remove x (.lit 0)) .skip)` with `nv + 1`. This is a statement rewrite:
+          the memory moves in `letd`'s step (`EvalR.remove`,
+          `rhs_remove`), and the element's own `scopeD` runs its
           destructor (`scopeD_end_runs_dtor`);
         - an empty node: `Step.scopeDEmpty`, to `scope x .skip`;
         - `scopeDEnd` and `scopeDP` take only a value that is no node;
@@ -649,7 +649,7 @@ each one shrinks `CLAIM.md`'s exception:
           by the panic, Agora #608.)
         Preservation of the drain step is a typing lemma (`preserve`'s
         `scopeDDrain` case): the binding is revived as at `scopeDEnd`
-        (`MInv.revive`), `RhsT.popFront`'s premises for `x` follow from the
+        (`MInv.revive`), `RhsT.remove`'s premises for `x` follow from the
         frame's `EndOK`, and the frame's exit context is unchanged
         (`exitScope_kill`). The panic step's proof is `scopeDP`'s, the
         re-raised panic's typing shared by both (hoisted in `preserve`).
@@ -669,7 +669,7 @@ each one shrinks `CLAIM.md`'s exception:
      (`StmtT.free` and `StmtT.editB` / `editBV` ask `dtorFree` of the
      elements they drop, `Edit.drops`; `A2.Dtor.free_dtor_free`,
      `edit_drops_dtor_free`). A program pops the elements into `letd`s
-     (`pop` and `popFront` give an owned `.dtor f u`, which `movedFirst`
+     (`pop` and `remove` give an owned `.dtor f u`, which `movedFirst`
      hands to a `letd`), or lets the binding end; `vec_free`,
      `vec_clear` and `vec_truncate` are such code (`A2/DropCode.lean`).
    - **Left** (stricter than nurlc; `CLAIM.md` lists them):
@@ -680,15 +680,20 @@ each one shrinks `CLAIM.md`'s exception:
        channel, a lock, an `Arc`, a cell). A field or a payload is built
        (Agora #607, above); a `Vec` of `Vec D`s needs the drain to bind an
        element at a `Vec` type; a block's payload is 3d's.
-     - *`vec_set` over an element and `withElem`*: the element taken out
-       needs a destructor frame of its own while it is out (`withElem`'s
-       hand-over binding is a plain `scope`), and `set` an Rhs that takes
-       element `i` out. **Built** (Agora #607, `A2/DropCode.lean`): the
-       other in-place drops need no new step, they are code the calculus
-       types: `vec_free` is the `Vec` moved into a `letd` that ends at
-       once (`vecFreeD_typed`), `vec_clear` a loop of `popFront`s into a
-       `letd` (`vecClearD_typed`), `vec_truncate` a loop of `pop`s
-       (`vecTruncD_typed`; last first, where nurlc goes in index order).
+     - *`withElem`*: the element taken out needs a destructor frame of
+       its own while it is out (`withElem`'s hand-over binding is a plain
+       `scope`). **Built** (Agora #607, `A2/DropCode.lean`): the other
+       in-place drops need no new step, they are code the calculus types:
+       `vec_free` is the `Vec` moved into a `letd` that ends at once
+       (`vecFreeD_typed`), `vec_clear` a loop of `vec_remove x 0`s into a
+       `letd` (`vecClearD_typed`), `vec_truncate x n` a loop of
+       `vec_remove x n`s (`vecTruncD_typed`, in index order as nurlc's),
+       and `vec_set x i z` a `vec_remove x i` into a `letd` that ends at
+       once followed by `insert x i z` (`vecSetD_typed`; witness
+       `mainSet_safe`). The drain's `popFront` was generalised for it to
+       `Rhs.remove y i` (`vec_remove`, bounds-checked: `EvalR.remove` /
+       `removeOOB`), whose preservation is a `vec_pop` of element `i`
+       moved to the end (`A2.rhs_remove`, `perm_eraseIdx_append`).
 3. **A2-drop.3c: environments** (the refusal, Agora #543; the drop as code, Agora #609).
    - **Built: the refusal.** `Cross.Fits` asks an environment type to hold
      no destructor value, of every class but `dropd` (Agora #609: the

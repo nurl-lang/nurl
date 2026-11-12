@@ -580,12 +580,16 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
       EvalR m (.pop y) (.ok e e.owns (m.set y ⟨true, some (.node t c d es)⟩))
   | popEmpty {y : Var} {t : Ty} {c d : Nat} :
       m.st y = some ⟨true, some (.node t c d [])⟩ → EvalR m (.pop y) .panic
-  /-- A2-drop.3b: element 0 moves out (the drain's step, in index order). -/
-  | popFront {y : Var} {t : Ty} {c d : Nat} {es : List Val} {e : Val} :
-      m.st y = some ⟨true, some (.node t c d (e :: es))⟩ → m.alloc c = true → m.alloc d = true →
-      EvalR m (.popFront y) (.ok e e.owns (m.set y ⟨true, some (.node t c d es)⟩))
-  | popFrontEmpty {y : Var} {t : Ty} {c d : Nat} :
-      m.st y = some ⟨true, some (.node t c d [])⟩ → EvalR m (.popFront y) .panic
+  /-- `vec_remove y i`: element `n` moves out and the ones after it close
+      up (A2-drop.3b: the drain's step takes element 0, in index order;
+      Agora #607: any element, for `vec_set` over a destructor value). -/
+  | remove {y : Var} {i : Expr} {t : Ty} {c d n : Nat} {es : List Val} (h : n < es.length) :
+      m.st y = some ⟨true, some (.node t c d es)⟩ → m.alloc c = true → m.alloc d = true →
+      Eval m i n →
+      EvalR m (.remove y i) (.ok es[n] es[n].owns (m.set y ⟨true, some (.node t c d (es.eraseIdx n))⟩))
+  | removeOOB {y : Var} {i : Expr} {t : Ty} {c d n : Nat} {es : List Val} :
+      m.st y = some ⟨true, some (.node t c d es)⟩ → Eval m i n → es.length ≤ n →
+      EvalR m (.remove y i) .panic
   | pair {y z : Var} {v w : Val} {m1 m2 : Mem} :
       TakeVal m y v m1 → TakeVal m1 z w m2 → EvalR m (.pair y z) (.ok (.pair v w) true m2)
   | fst {y : Var} {o : Bool} {v w : Val} :
@@ -837,7 +841,7 @@ def Rhs.rename (ρ : Var → Var) : Rhs → Rhs
   | .view y => .view (ρ y)
   | .sat y i => .sat (ρ y) (i.rename ρ)
   | .pop y => .pop (ρ y)
-  | .popFront y => .popFront (ρ y)
+  | .remove y i => .remove (ρ y) (i.rename ρ)
   | .pair y z => .pair (ρ y) (ρ z)
   | .fst y => .fst (ρ y)
   | .snd y => .snd (ρ y)
@@ -1323,7 +1327,7 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
   | scopeDDrain {m : Mem} {x : Var} {f : Nat} {t : Ty} {c d : Nat} {e : Val} {es : List Val} :
       m.st x = some ⟨true, some (.node t c d (e :: es))⟩ →
       Step P m (.scopeD x f .skip)
-        (.ok { m with nv := m.nv + 1 } (.scopeD x f (.letd m.nv f (.popFront x) .skip)))
+        (.ok { m with nv := m.nv + 1 } (.scopeD x f (.letd m.nv f (.remove x (.lit 0)) .skip)))
   /-- ... and with every element gone: the empty `Vec` is freed, as any
       binding's value is at its scope's end. -/
   | scopeDEmpty {m : Mem} {x : Var} {f : Nat} {t : Ty} {c d : Nat} :

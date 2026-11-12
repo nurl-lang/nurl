@@ -39,7 +39,7 @@ theorem RhsT.ctxRel {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry}
   | moveOwn hy _ hm hyF hpin => exact CtxRel.moved hanch hy (by rw [hm]; simp) hyF hpin
   | moveUp hy _ hm hyF hpin => exact CtxRel.moved hanch hy (by rw [hm]; simp) hyF hpin
   | pop _ _ _ _ hyF => exact CtxRel.kill hanch hyF .drop _ (hmn_of_ne_replace _ (by simp) _)
-  | popFront _ _ _ _ hyF => exact CtxRel.kill hanch hyF .drop _ (hmn_of_ne_replace _ (by simp) _)
+  | remove _ _ _ _ hyF => exact CtxRel.kill hanch hyF .drop _ (hmn_of_ne_replace _ (by simp) _)
   | pair hy _ hp1 hz _ hp2 _ =>
     have h1 := hp1.ctxRel hy hanch
     exact h1.trans (hp2.ctxRel hz (h1.anch hanch))

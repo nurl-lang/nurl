@@ -804,7 +804,7 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   `dtorFree`), so they release or check out no destructor value; a
   share's payload owns none either (3d, below).
   (On an empty `Vec`, `vec_pop` and `vec_remove` return `None` in nurlc; the
-  calculus's `pop` / `popFront` panic there instead, an unwrap: a program
+  calculus's `pop` / `remove` panic there instead, an unwrap: a program
   that matches the option is the same program with the `None` arm taken
   before the call. The drain pops only a `Vec` that has an element.)
 - A2-drop.3c: the environment of a closure or a trait object of a class
@@ -943,24 +943,31 @@ The rules are stricter than nurlc's in these places:
     `Vec`'s drain binds each element at a destructor type, which a `Vec`
     is not, and a block's payload is swept with no code. (A struct or an
     enum with a `Vec D` field or payload is typed, Agora #607.)
-  - `vec_set` over an element, and handing an element to a callee that
-    changes it (`withElem`). (`vec_free`, `vec_clear` and `vec_truncate`
-    of such a `Vec` are code the calculus types, each element's destructor
-    running: `x` moved into a destructor binding that ends at once, whose
-    frame drains it (`A2.Dtor.vecFreeD_typed`, leaving the context
-    `vec_free`'s rule leaves); a loop moving element 0 out to a destructor
-    binding (`vecClearD_typed`, in index order as nurlc's); a loop of
-    `vec_pop`s into one (`vecTruncD_typed`: the elements go last first,
-    where nurlc's `vec_truncate` drops them in index order, so the order
-    of the destructors' effects differs). The loops are typed in a context
-    with no live borrow of the `Vec`'s elements, which is what a
-    truncation leaves; `A2.DtorWitness.main6_typed` types a program with
-    all three. That each element's destructor runs is read off the steps
-    of `letd`'s frame, as for the drain; it is no theorem about these
-    forms. Two differences from nurlc's run, beside the order: nurlc cuts
-    the length before it drops, so a destructor that reached the `Vec`
-    would see it short (none does here: the `Vec` is not lent while it
-    drops); and a panic in an element's destructor leaves the loop with
+  - handing an element to a callee that changes it (`withElem`): the
+    element checked out needs a destructor frame of its own while it is
+    out. (`vec_free`, `vec_clear`, `vec_truncate` and `vec_set` of such a
+    `Vec` are code the calculus types, each element's destructor running:
+    `x` moved into a destructor binding that ends at once, whose frame
+    drains it (`A2.Dtor.vecFreeD_typed`, leaving the context `vec_free`'s
+    rule leaves); a loop moving element 0 out to a destructor binding
+    (`vecClearD_typed`); a loop moving element `n` out while the `Vec` is
+    longer than `n` (`vecTruncD_typed`), both in index order as nurlc's;
+    element `i` moved out to a destructor binding that ends at once, then
+    the new value inserted at `i` (`vecSetD_typed`, typed where `vec_push`
+    of the new value is, and leaving the context the push leaves): the old
+    element's destructor runs before the new one is stored, as nurlc's
+    `vec_set` drops it. `vec_remove y i` is the calculus's `Rhs.remove`,
+    bounds-checked; out of range it panics, where nurlc's `vec_set`
+    answers `F`, and the new value is dropped, its destructor running,
+    either way. The loops are typed in a context with no live borrow of
+    the `Vec`'s elements, which is what a truncation leaves;
+    `A2.DtorWitness.main6_typed` types a program with the three loops and
+    `mainSet_typed` one with a `vec_set`. That each element's destructor
+    runs is read off the steps of `letd`'s frame, as for the drain; it is
+    no theorem about these forms. Two differences from nurlc's run: nurlc
+    cuts the length before it drops, so a destructor that reached the
+    `Vec` would see it short (none does here: the `Vec` is not lent while
+    it drops); and a panic in an element's destructor leaves the loop with
     the elements not yet dropped still in the `Vec`, which its binding's
     end drains, where nurlc, the length already cut, goes on with them
     through the journal before the panic goes on (Agora #608, #619;

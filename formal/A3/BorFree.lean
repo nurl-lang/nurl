@@ -86,7 +86,7 @@ theorem EvalR.borFree {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r
   | view _ => exact ⟨hb, fun _ => rfl⟩
   | sat _ _ _ _ _ _ => exact ⟨hb, fun _ => lendOf_ids _⟩
   | pop _ _ _ => exact ⟨hb.set _ (SlotFree.own _), fun h => ids_nonNode h⟩
-  | popFront _ _ _ => exact ⟨hb.set _ (SlotFree.own _), fun h => ids_nonNode h⟩
+  | remove _ _ _ _ _ => exact ⟨hb.set _ (SlotFree.own _), fun h => ids_nonNode h⟩
   | pair h1 h2 =>
     exact ⟨(TakeVal.borFree h2 (TakeVal.borFree h1 hb).1).1, fun h => by cases h⟩
   | fst _ => exact ⟨hb, fun _ => lendOf_ids _⟩
