@@ -88,7 +88,9 @@
 //
 // A negative marker always wins over a positive one on the same type —
 // if both are written, the type is rejected. That is the safe direction
-// for a contradiction to resolve in. A negative marker only adds checks,
+// for a contradiction to resolve in. It also wins on one instance of a
+// generic the positive one names: with `unsafe % Sync W { }`,
+// `% NotSync ( W i ) { }` takes the promise back for `( W i )` alone. A negative marker only adds checks,
 // so it is ordinary safe code: no `unsafe`.
 //
 // ── As a bound ─────────────────────────────────────────────────────

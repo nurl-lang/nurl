@@ -7,7 +7,8 @@
 // counts use ordinary reads and writes, and since `Send`/`Sync`
 // (stdlib/core/marker.nu) an Rc reaching `thread_spawn`, `spawn` or
 // `chan_send` — directly, through a field, an element, a payload or a
-// closure capture — is a compile error. Cross-thread sharing is `Arc[T]`
+// closure capture — is a compile error, and so is a `Weak`, which
+// upgrades to an Rc on the same counts. Cross-thread sharing is `Arc[T]`
 // (stdlib/std/arc.nu).
 //
 // Cycles are collected. A value that, through its own contents, holds an
