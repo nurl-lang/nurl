@@ -978,7 +978,11 @@ The rules are stricter than nurlc's in these places:
   - nurlc lets it gain views of older bindings; here it views, from its
     `letd` on, what the `letd` records (the value's views, and up front
     views of older bindings, `HeldUp`), and a push into a drained `Vec`
-    adds only what that records (Agora #782);
+    adds only what that records (Agora #782). The cost of "up front":
+    every root the binding may ever view is protected (`DtorSafe`) from
+    the `letd` on, not from the push, so changing or ending such a root
+    between the `letd` and the first push is refused here, where nurlc
+    accepts it;
   - nurlc lets it be an `inout` argument, whose callee may give it views
     only of what the caller passed in: a view of the callee's own local is
     refused where it is given, even for a moment (#284). One shape is
@@ -1017,7 +1021,10 @@ The rules are stricter than nurlc's in these places:
     of its queue, a `Vec s`, and its closed flag), `Locked (Vec D)`, `Arc
     (Vec D)`, a cell of a `Vec D`. A block's payload is swept with no code
     (Agora #544).
-  Not refused: the in-place drops. (`vec_free`, `vec_clear`,
+  Not refused: the in-place drops (the lemmas below are stated for
+    elements that hold no views; a `Vec` of view-holding destructor
+    values, Agora #782, is typed by the same rules, with no lemma stated).
+    (`vec_free`, `vec_clear`,
     `vec_truncate` and `vec_set` of such a `Vec` — the lemmas below are
     stated for a `Vec` of destructor values, `.vec (.dtor f t)`; for a
     `Vec (Vec D)` the same code is typed by the same rules, `letd` binding

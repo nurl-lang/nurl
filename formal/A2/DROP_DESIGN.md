@@ -170,7 +170,9 @@ an enum's payload is typed since Agora #607: glue hands it to a `letd`,
 which drains it; and so is a `Vec (Vec D)`, at any depth, below, and since
 Agora #782 one whose elements hold views of older bindings, its `letd`
 recording them up front) (`vec_free`, `vec_clear`, `vec_truncate`, `vec_set` over an
-element and `withElem` are typed code, `A2/DropCode.lean`). And, since A2-drop.3c and 3d: a share whose payload owns a destructor
+element and `withElem` are typed code, `A2/DropCode.lean`; its lemmas are
+stated for elements that hold no views, `hv : t.holdsView = false`: the
+view-holding case is typed by the same rules, with no lemma stated). And, since A2-drop.3c and 3d: a share whose payload owns a destructor
 value (`Ty.ok`), and a trait object whose box holds one (a closure whose
 environment holds one is of the class `dropd`, dropped by its glue, Agora #609). The result moved from its slot into a local
 before a panic (`pair res w`, a destructor value two levels down) is a
@@ -737,7 +739,10 @@ each one shrinks `CLAIM.md`'s exception:
        frame's `EndOK` or its typing), so `RhsT.remove`'s `DtorSafe` and
        the frame's `DSelf` still hold.
      A call's owned result is still of a type that holds no views
-     (`FnOK`), and so is a destructor value's `inout`: unchanged.
+     (`FnOK`, `ResDTy`), and a `letd` binding is still no `inout`
+     argument (`CallDtorSafe`); only `letd` binds a view-holding
+     destructor value, so no callee's `inout` parameter receives one:
+     unchanged.
      Witness: `A2.DtorWitness.main14_typed` / `main14_safe` /
      `main14_no_leak` (`main10`'s view-holding struct pushed into a `Vec`
      whose `letd` records the view of `s` up front).
