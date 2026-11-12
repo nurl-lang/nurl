@@ -1054,7 +1054,12 @@ is stated here so the claim does not hide it:
   after it, so the stack is no deeper for it). `vec_truncate`,
   `vec_clear` and `vec_retain` (Agora #624: once it has judged every
   element and shortened the `Vec` to the kept ones) drop
-  their elements through the same record (`nurl_vec_drop_range_dtor`).
+  their elements through the same record (`nurl_vec_drop_range_dtor`),
+  and where the element type's drop runs code of the program's own they
+  move them out of the `Vec`'s storage first, into a buffer the record
+  owns and frees at its end (`nurl_vec_drop_moved_dtor`, Agora #709;
+  `deque_clear` the same), so a destructor that pushes into the `Vec`
+  shares no slot with the release.
   Which element types may run one is nurlc's answer (`__drop_runs_code`:
   a `% Drop` anywhere inside, a library handle, a closure, a trait
   object); the others are released by a loop no panic can start in;
