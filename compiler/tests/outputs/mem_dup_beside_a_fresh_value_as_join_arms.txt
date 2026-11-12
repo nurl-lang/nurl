@@ -1,0 +1,13 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+the caller's own name, long enough for the heap
+a fresh name, long enough for the heap
+a fresh name, long enough for the heap
+the caller's own name, long enough for the heap
+the caller's own name, long enough for the heap
+the caller's own name, long enough for the heap
+a fresh name, long enough for the heap
+the caller's own name, long enough for the heap
+a fresh name, long enough for the heap
