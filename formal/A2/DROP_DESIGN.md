@@ -466,9 +466,15 @@ follows it. That needed three things A2 did not have:
 
    With it, `rootKeep_frame_sp` shows that every surviving view reaches the
    same memory.
-2. **The destructor's call** in that context (`dtorCall_typed`), as on the
-   normal path. `NoPin` for `x` follows from `pinOut`, because `x` is in
-   the frame's own spine.
+2. **The frame left at its end** in that context. Since Agora #790 the
+   panic step leaves `seq (scopeD x f skip) panic`: `preserve`'s
+   `scopeDP` case (shared with `scopeDPDrain`'s) types `scopeD x f skip`
+   by `StmtT.scopeD` at the binding's `ScopeDTy`, the binding revived
+   (`Entry.reviveD`), and the destructor's call is typed in `scopeDEnd`'s
+   case when that end is taken (`dtorCall_typed` / `glueCall_typed`), as
+   on the normal path. `NoPin` for `x` follows from `pinOut`, because `x`
+   is in the frame's own spine. (Before #790 the panic step left the call
+   itself, typed here.)
 3. **The re-raised panic.** `StmtT.panic` relates its input to its output:
    same bindings, modes and types, and fixed entries unchanged. Its output
    is the frame's original output `exitScope x Δ1`, so `Δ1` must agree with
@@ -500,8 +506,9 @@ type and as a field or a payload (the drain, Agora #542, #607; *Staging* below s
 mechanized. Of 3d, an `Arc`'s destructor payload's drop as code is
 mechanized on A2's runs (Agora #610: the marking sweep and the same
 thread's reaps; *Staging* item 4), for a payload of a destructor type and
-(Agora #755) for a drained `Vec` of them, which the reap's frame drains;
-not yet on A3's threads, nor for locks, cells and channels. Until they are, `CLAIM.md`'s
+(Agora #755) for a drained `Vec` of them, which the reap's frame drains,
+and (Agora #790) for one a panic's unwinding orphans, reaped inside the
+frame that caught it; not yet on A3's threads, nor for locks, cells and channels. Until they are, `CLAIM.md`'s
 *Destructors* section lists where the calculus releases a destructor value
 without running it.
 
@@ -686,7 +693,9 @@ each one shrinks `CLAIM.md`'s exception:
         (`MInv.revive`), `RhsT.remove`'s premises for `x` follow from the
         frame's `EndOK`, and the frame's exit context is unchanged
         (`exitScope_kill`). The panic step's proof is `scopeDP`'s, the
-        re-raised panic's typing shared by both (hoisted in `preserve`).
+        re-raised panic's typing shared by both (hoisted in `preserve`;
+        since Agora #790 the two steps leave one shape, and share one
+        proof).
         Which step a typed frame takes follows from its binding's type
         (`ScopeDTy.shape`): a `dtor f u` value is a struct's or an enum's,
         never a node. Each new step has its case in Progress, StepFrame,
@@ -825,7 +834,8 @@ each one shrinks `CLAIM.md`'s exception:
        container and a method that reads or lends its environment.
 4. **A2-drop.3d: shared blocks (A3)** (first cut done, Agora #544; an
    `Arc` of a destructor value on A2's runs, Agora #610; an `Arc` of a
-   drained `Vec` of them, Agora #755).
+   drained `Vec` of them, Agora #755; an orphan of a panic's unwinding
+   reaped inside the frame that caught it, Agora #790).
    - **Built: the refusal.** `Ty.ok` asks a lock's and a cell's payload
      type to own no destructor value (`dtorFree`), and `RhsT.lockNew` /
      `cellNew` (and `StmtT.lockedSet`) ask it of what moves in. So a
@@ -879,8 +889,9 @@ each one shrinks `CLAIM.md`'s exception:
         eager `Steps` drops no step (`steps_step`).
      4. *An uncaught panic* ends with `Mem.sweep`, which frees an orphaned
         payload with no code: no frame is left to run it, and the run is
-        over (nurlc runs it in the unwinding). `no_leak_panic` holds as
-        stated.
+        over (nurlc, with no `recover` frame, aborts at the panic and runs
+        no drop at all; the model's unwinding of the frames on the way is
+        an over-approximation of it). `no_leak_panic` holds as stated.
      - Proof: `A2/SweepD.lean` (`Inv.sweepD` over `Inv.sweepR` from the
        marking sweep's roots and `MInv.grow`: the pinned blocks' facts are
        read off the store before the sweep; `Covers.sweepD`,
@@ -909,6 +920,59 @@ each one shrinks `CLAIM.md`'s exception:
      `mainV_no_leak`, `last_dropV_reaps`, `reapV_drains`;
      `A3.arcVecDtor_claim`). As for #610's witness, the run is not traced:
      that `dfn` runs once per element is read off the drain's steps.
+   - **Built: an orphan of the unwinding is reaped inside the frame that
+     caught it** (Agora #790, on A2's runs). The block a panic's unwinding
+     orphans (its last share's scope unwound) is marked by the sweep that
+     ends the step that catches the panic: a destructor frame's
+     (`Step.scopeDP`, `scopeDPDrain`) or a `recover`'s (`Step.catchP`).
+     Before, `scopeDP` left `seq (scope x (letcall n f [x] skip)) panic`
+     and `catchP` left `skip`, so the reap's redex was the call of `f`
+     (inside `scope x`: a panic of the reaped destructor dropped the call,
+     and `x` was freed with no code) or the statement after the `recover`
+     (the panic escaped it). Two directions were weighed: (a) a reap form
+     that absorbs its destructor's panic while one propagates (a new
+     catch-and-drop frame, and `Settle` told whether the step before was a
+     catch); (b) settle the orphans as part of the catching step. Chosen:
+     a third, smaller one in the spirit of (b), with no new form or rule:
+     the catching step leaves the frame in place, at its end.
+     `Step.scopeDP` now leaves `seq (scopeD x f skip) panic`, the shape
+     `scopeDPDrain` already had (the frame's end, `Step.scopeDEnd`, then
+     calls `f`), and `Step.catchP` leaves `catchR x m0 skip` (its end,
+     `catchSkip`, then leaves it). The only source redex is that end's
+     `skip`, inside the frame, so the reap lands there
+     (`A2.ArcPanicWitness.frame_reap_inside`, `recover_reap_inside`), and
+     the frame catches what the reaped destructor raises with its
+     existing rules: `x`'s frame runs `x`'s destructor after it
+     (`reaped_panic_runs_dtor`), the `recover` catches it
+     (`recover_catches_reaped`, `catchR_no_panic`). That is nurlc's drain
+     (`stdlib/runtime_core.c`, `nurl_panic`: a drop that panics while the
+     frame's journal drains is caught by the same frame, the rest is
+     released), and its order (the share's drop, inside `x`'s scope,
+     before `x`'s destructor). nurlc's `recover` reports the first panic's
+     message; the model's panics carry no identity, so that holds only
+     trivially (they cannot be told apart) and is not modelled. With no orphan the new
+     shapes cost one step each and run what the old ones ran
+     (`A2.Dtor.scopeD_panic_runs_dtor`). Proof: `preserve`'s `scopeDP`
+     case is now `scopeDPDrain`'s (one proof for both, the binding
+     revived by `Entry.reviveD`, the frame typed by `StmtT.scopeD` at its
+     own `ScopeDTy`); its `catchP` case types `catchR x m0 skip` by
+     `StmtT.catchR` over `skip` at the frame's exit context, its
+     `CatchOK` from the unwound store (`A2/Preservation.lean`); no
+     other proof changed. The step lemmas are of any store and statement
+     of their shape (the run's next step is taken from the store the
+     marking sweep leaves, `m.sweepD`, which they name; that `x` still
+     owns its value when the reaped destructor's panic comes back is a
+     premise). Witnesses (`A2/ArcPanicWitness.lean`, each typed, safe and
+     leak-free on `no_leak_end` and `no_leak_panic`; `A3.arcPanic_claim`
+     over all three): `main3`, the case nurlc runs, a `recover` of a
+     function in which a destructor binding `x` scopes a panic while an
+     `Arc` of a value whose destructor `pfn` panics holds its last share
+     (`main3_unwind`: `x`'s destructor still runs, the `recover`
+     catches); `main2`, a `recover` whose function makes such an `Arc`
+     and panics with no destructor frame between (`main2_unwind`); and
+     `main1`, `main3`'s frame with no `recover` (`main1_unwind`): the
+     model's behaviour on an uncaught panic, not nurlc's, which aborts
+     with no drain (item 4 above). The runs are not traced.
    - **Left.**
      - *A3's threads.* `Cfg.sweep` does not mark: the last share's drop
        frees the payload with no code there (`A3.Reach.noOrphan`: no A3
@@ -932,14 +996,8 @@ each one shrinks `CLAIM.md`'s exception:
        its borrow is dead keeps the block reached (the destructor runs
        later than the runtime's count); orphans in a cycle (through a
        lock) are freed with no code, where the runtime leaks them; several
-       orphans of one step are reaped in the order `Step.reap` picks; one
-       orphaned by a panic's unwinding is reaped at the first frame the
-       unwinding reaches (a destructor frame's `seq (scope x (letcall …))
-       panic`, or the statement after a `recover` that catches it), not
-       inside the drain as nurlc's journal does: a panic in that reaped
-       destructor then skips `x`'s own destructor, or escapes the
-       `recover` (Agora #790; memory safety and leak freedom are
-       unaffected); an uncaught panic
+       orphans of one step are reaped in the order `Step.reap` picks; an
+       uncaught panic
        frees an orphaned payload with no code (above); the witness's run
        is not traced (its theorems are safety, no leak, and the sweep's
        lemmas of stores).

@@ -38,6 +38,37 @@ import A3
 #print axioms A2.ArcDtorWitness.last_dropV_reaps
 #print axioms A2.ArcDtorWitness.reapV_drains
 #print axioms A3.arcVecDtor_claim
+-- Agora #790: a share whose last drop is a panic's unwinding is reaped inside the frame that
+-- caught it: a panic of its destructor comes back to that frame (A2/ArcPanicWitness.lean)
+#print axioms A2.ArcPanicWitness.frame_reap_inside
+#print axioms A2.ArcPanicWitness.reaped_panic_runs_dtor
+#print axioms A2.ArcPanicWitness.recover_reap_inside
+#print axioms A2.ArcPanicWitness.recover_catches_reaped
+#print axioms A2.ArcPanicWitness.catchR_no_panic
+#print axioms A2.ArcPanicWitness.unwind_reap
+#print axioms A2.ArcPanicWitness.recover_reap
+#print axioms A2.ArcPanicWitness.last_drop_marks
+#print axioms A2.ArcPanicWitness.frame_unwind
+#print axioms A2.ArcPanicWitness.recover_unwind
+#print axioms A2.ArcPanicWitness.main1_typed
+#print axioms A2.ArcPanicWitness.main1_safe
+#print axioms A2.ArcPanicWitness.main1_no_leak_panic
+#print axioms A2.ArcPanicWitness.main1_no_leak
+#print axioms A2.ArcPanicWitness.main1_unwind
+#print axioms A2.ArcPanicWitness.main2_typed
+#print axioms A2.ArcPanicWitness.main2_safe
+#print axioms A2.ArcPanicWitness.main2_no_leak
+#print axioms A2.ArcPanicWitness.main2_no_leak_panic
+#print axioms A2.ArcPanicWitness.main2_unwind
+-- ... the case nurlc runs: a destructor frame inside a `recover` (main1 has no `recover`: the
+-- model's behaviour on an uncaught panic, where nurlc aborts with no drain)
+#print axioms A2.ArcPanicWitness.main3_body
+#print axioms A2.ArcPanicWitness.main3_typed
+#print axioms A2.ArcPanicWitness.main3_safe
+#print axioms A2.ArcPanicWitness.main3_no_leak
+#print axioms A2.ArcPanicWitness.main3_no_leak_panic
+#print axioms A2.ArcPanicWitness.main3_unwind
+#print axioms A3.arcPanic_claim
 -- per-call ownership, as the calculus has it (A2/DynCell.lean)
 #print axioms A2.DynCell.pick_ok
 #print axioms A2.DynCell.main_safe
