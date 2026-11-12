@@ -55,6 +55,14 @@ import A3
 #print axioms A2.DtorWitness.glueS_ok
 #print axioms A2.DtorWitness.main10_typed
 #print axioms A2.DtorWitness.main10_safe
+-- Agora #750: an enum with a destructor payload and a view payload, its view variant holding a view of an older binding
+#print axioms A2.DtorWitness.ofnV_ok
+#print axioms A2.DtorWitness.main12_typed
+#print axioms A2.DtorWitness.main12_safe
+-- ... and a view-holding struct whose glue runs its own `% Drop` impl first
+#print axioms A2.DtorWitness.glueS2_ok
+#print axioms A2.DtorWitness.main13_typed
+#print axioms A2.DtorWitness.main13_safe
 -- Agora #609: a closure whose environment is a destructor value is dropped by its glue, which calls its drop method (A2/ClosureDropWitness.lean)
 #print axioms A2.ClosureDropWitness.glue_calls_drop
 #print axioms A2.ClosureDropWitness.prog_ok

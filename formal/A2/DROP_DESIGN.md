@@ -77,7 +77,10 @@ A2-drop.3b; A2-drop.3a's rule looked one level down only).
   any callee does; the call keeps what the views are valid through. No new
   step and no new field of `Inv`: `glueCall_typed` takes an argument that
   holds views instead of none (witness `A2.DtorWitness.main10_safe`). An enum with
-  glue still holds no views (`EnumGlueOK`).
+  glue may hold views too (Agora #750: `EnumGlueOK` asks nothing of them;
+  witness `main12_safe`, the view-holding variant of `sum DT (slice int)`
+  bound and armed), and so may a struct whose glue runs its own `% Drop`
+  impl first (`ImplGlueOK`, witness `main13_safe`).
   **A struct (or an enum, Agora #632) with a `% Drop` of its own
   beside a destructor field or payload** (`ImplGlueOK P f t h i`, `h` the
   struct's `GlueOK` or the enum's `EnumGlueOK` function) needs no new step either: its glue `f`

@@ -1113,9 +1113,11 @@ def GlueOK (P : Prog) (f : Nat) (t : Ty) : Prop :=
     tag; in the arm of a variant whose payload holds a destructor value the
     payload moves out to a `letd` first thing (`takel` / `taker`), whose
     frame runs its destructor; the arms do nothing else (`Stmt.pureGlue`).
-    (In this cut the enum holds no views.) -/
+    (Agora #750: the enum may hold views, a payload of its own, as a
+    struct's field may since #633: the frame's end moves it into the glue
+    as any `sink` argument; witness `A2.DtorWitness.main12_safe`.) -/
 def EnumGlueOK (P : Prog) (f : Nat) (t : Ty) : Prop :=
-  ∃ fn a b sa sb, P[f]? = some fn ∧ t = .sum a b ∧ t.holdsView = false ∧
+  ∃ fn a b sa sb, P[f]? = some fn ∧ t = .sum a b ∧
     fn.params = [(.sink, .dtor f t)] ∧ fn.resTy = .int ∧
     fn.resOwn = false ∧ fn.lends = [] ∧ fn.rholds = [] ∧ fn.outHolds = [] ∧ ¬ ThruFn P f ∧
     fn.body = .ite (.isl 0) sa sb ∧ sa.pureGlue = true ∧ sb.pureGlue = true ∧
@@ -1128,8 +1130,8 @@ def EnumGlueOK (P : Prog) (f : Nat) (t : Ty) : Prop :=
     rebinds it under the fields' (or the payload's) glue `h` (a `letd` at
     `Ty.dtor h t`: from there on a panic takes it apart, a frame per part),
     runs the impl on it lent, and sets its result.  nurlc's order: the impl,
-    then the parts.  (Agora #633: a struct's may hold views; an enum's holds
-    none, `EnumGlueOK`.) -/
+    then the parts.  (Agora #633, #750: a struct's or an enum's may hold views;
+    witness `A2.DtorWitness.main13_safe`.) -/
 def ImplGlueOK (P : Prog) (f : Nat) (t : Ty) (h i : Nat) : Prop :=
   ∃ fn w r e, P[f]? = some fn ∧ t.isStruct = true ∧
     fn.params = [(.sink, .dtor f t)] ∧ fn.resTy = .int ∧
@@ -1178,7 +1180,7 @@ theorem sinkOf {P : Prog} {f : Nat} {t : Ty}
       fn.resOwn = false ∧ ¬ ThruFn P f := by
   rcases hg with ⟨fn, _, _, hfn, _, hps, _, hro, _, _, _, hnt, _⟩ |
     ⟨_, _, fn, _, _, _, hfn, _, hps, _, hro, _, _, _, hnt, _⟩ |
-    ⟨fn, _, _, _, _, hfn, _, _, hps, _, hro, _, _, _, hnt, _⟩ |
+    ⟨fn, _, _, _, _, hfn, _, hps, _, hro, _, _, _, hnt, _⟩ |
     ⟨fn, _, _, _, _, _, _, hfn, _, hps, _, hro, _, _, _, hnt, _⟩
   · exact ⟨fn, hfn, hps, hro, hnt⟩
   · exact ⟨fn, hfn, hps, hro, hnt⟩
