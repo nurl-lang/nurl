@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_replaced_field_third_reader_after_first_consumed.nu:17:5: error: 'g3' borrows from 'g1', which ended at line 16 — it was released or moved away. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'g3' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup g3 ).
+    ( nurl_println ( string_data g3 ) )
+    ^
+error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

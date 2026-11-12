@@ -3677,6 +3677,8 @@ unsafe @ note_unsafe_item s pos s what → v {
 : ~ s g_bck_rhs_path ``
 // A field viewer's path a binding bound from it inherits (agora #271).
 : ~ s g_bck_rhs_fview ``
+// The order field readers were bound in, for bck_fview_take (agora #387).
+: ~ i g_bck_fq 0
 // Source expressions (srcx): where a view's value came from, as an
 // expression the walk evaluates once every summary is final — a binding
 // (`v`), a field path (`b.items`), a call (`callee(a0|a1|…)`: the
@@ -42644,6 +42646,9 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 // field it views, before its sources were flattened to owners.)
                 ( bck_put_bf `fb_` bws ? bfvh `h` ? bfv `1` `` )
                 ( bck_put_bf `fp_` bws ? bfv ( nurl_str_cat bsrcs `` ) `` )
+                // (…and when, among the readers of a field: the first one a
+                // store replacing it hands the value to, bck_fview_take.)
+                ? bfv { = g_bck_fq + g_bck_fq 1 ( bck_put ( bck_bkey `fq_` bws ) ( nurl_str_int g_bck_fq ) ) } {}
                 // (`tborrow`: it holds the drop of the local it copies —
                 // bck_let_alias — which a replacing `inout` call hands it.)
                 ( bck_put ( bck_bkey `tk_` bws ) ? != 0 ( nurl_str_starts rec `tborrow\t` ) ( nurl_str_cat bsrcs `` ) `` )
@@ -49485,27 +49490,47 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
 }
 
 // End every borrow taken from `sid` (and the borrows taken from those).
-// A field replaced: each binding viewing exactly that field (`fborrow`,
+// A field replaced: the first binding viewing exactly that field (`fborrow`,
 // still a borrow) owns the value it held from here on, as codegen hands it
-// over (__fs_viewers_take).
+// over (__fs_viewers_take) — to the first such reader, in the order the
+// readers were bound (`fq_`). Every later one is left a view of that
+// value: a borrow of the reader that owns it now, ended where that one
+// is consumed or given a new value, and never handed over itself (agora
+// #387).
 @ bck_fview_take s st s wids → s {
     : ~ s out st
     : ~ s takers ``
     : i n ( nurl_str_len st )
     : ~ i k 0
+    : ~ i first -1
+    : ~ i fq 0
     ~ < k n {
         ? == BCK_BORROWED_SHARED ( bck_st_get out k ) {
             : s ks ( nurl_str_int k )
             ? & != 0 ( nurl_sym_len g_bck ( bck_bkey `fb_` ks ) ) ( seq ( nurl_sym_get g_bck ( bck_bkey `fp_` ks ) ) wids ) {
-                = out ( bck_st_set out k BCK_OWNED )
-                ( bck_put_bf `bs_` ks `` )
-                ( bck_put_bf `fb_` ks `` )
-                ( bck_put_bf `fp_` ks `` )
+                : i q ( nurl_str_to_int ( nurl_sym_get g_bck ( bck_bkey `fq_` ks ) ) )
+                ? | < first 0 < q fq { = first k = fq q } {}
                 = takers ? == 0 ( nurl_str_len takers ) ( nurl_str_cat ks `` ) ( nurl_str_cat3 takers ` ` ks )
             } {}
         } {}
         = k + k 1
     }
+    ? >= first 0 {
+        : s fs ( nurl_str_int first )
+        = out ( bck_st_set out first BCK_OWNED )
+        ( bck_put_bf `bs_` fs `` )
+        ( bck_put_bf `fb_` fs `` )
+        ( bck_put_bf `fp_` fs `` )
+        : ~ s trest ( nurl_str_cat takers `` )
+        ~ != 0 ( nurl_str_len trest ) {
+            : s ts ( str_first_word trest ) = trest ( str_skip_word trest )
+            ? ! ( seq ts fs ) {
+                ( bck_put_bf `fb_` ts `` )
+                ( bck_put_bf `fp_` ts `` )
+                = out ( bck_borrow_begin out ( nurl_str_to_int ts ) fs )
+            } {}
+        }
+    } {}
     // (…and what held a copy of the field's handle — a closure over a
     // viewer of it — holds one of the value a viewer took over: agora #483.)
     ? != 0 ( nurl_str_len takers ) { ( __bck_take_retie wids takers ) } {}
@@ -56175,6 +56200,12 @@ unsafe @ gen_assign i lex i syms i cg → s {
     }
     ? == 0 ( nurl_str_len place ) { ^ v } {}
     ( nurl_sym_def syms ( nurl_str_cat ptr `__fview` ) ( nurl_str_cat3 place `@` ( nurl_str_int g_bck_closure_depth ) ) )
+    // (…and, in this binding's own scope, whether a store replacing the
+    // field has handed it the old value since — `__ftk`, set there by
+    // __fs_viewers_take. Defined first in a block that store ran in, the
+    // fact went with that block: the binding, handed on after it, took
+    // the field's NEW value out of the struct, which leaked.)
+    ( nurl_sym_def syms ( nurl_str_cat ptr `__ftk` ) `` )
     : s cur ( nurl_sym_get syms `__fviews__` )
     ? ! ( str_contains_word cur ptr ) { ( nurl_sym_set_deep syms `__fviews__` ? == 0 ( nurl_str_len cur ) ( nurl_str_cat ptr `` ) ( nurl_str_cat3 cur ` ` ptr ) ) } {}
 }
