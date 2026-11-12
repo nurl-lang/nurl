@@ -1,0 +1,13 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+a heap string long enough for the buffer 8
+a heap string long enough for the buffer 2
+a heap string long enough for the buffer 2
+a heap string long enough for the buffer 3
+a heap string long enough for the buffer 7
+a heap string long enough for the buffer 2
+a heap string long enough for the buffer 7
+a heap string long enough for the buffer 4
+420

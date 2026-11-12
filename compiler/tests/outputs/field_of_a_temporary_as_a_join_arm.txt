@@ -1,0 +1,14 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+a fresh struct name long enough heap
+a fresh one long enough for the heap buffer
+the owner string, long enough for the heap
+the owner string, long enough for the heap
+a fresh one long enough for the heap buffer
+an element name long enough for the heap
+43
+a tag string long enough for the heap buf
+830
+an inner name long enough for the heap buffer
