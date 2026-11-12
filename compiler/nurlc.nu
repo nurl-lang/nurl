@@ -1649,8 +1649,9 @@ unsafe @ agg_field_count i syms s ot → i {
 // 1 once every named layout is read (read_type_layouts): an answer about a
 // type's fields may be kept from then on (__type_needs_drop).
 : ~ i g_layouts_final 0
-: ~ s g_noaddr_visiting ``  // types __ty_no_address is examining (a recursive type qualifies provisionally)
-: ~ i g_noaddr_assumed 0  // how many times __ty_no_address read such a provisional answer
+: ~ i g_noaddr_depth 0  // how deep __ty_no_address is in the named types of one question
+: ~ s g_noaddr_stamp ``  // that question's visited set (__seen_begin)
+: ~ s g_noaddr_vis ``  // the named types it met, kept as yes when its answer is yes
 : ~ i g_ff_gen 0  // function counter keying the field-owner flags (mem_ff_slot)
 : ~ i g_ff_any 0  // 1 once this function made a field-owner flag
 : ~ i g_summaries_final 0  // 1 once the module's functions are all compiled (mem_emit_arg_flags): __hown_dyn may memoize
@@ -22132,17 +22133,20 @@ unsafe @ __ty_no_address s ty0 i depth → b {
         : s pm ( nurl_sym_get g_impl_name_syms mkey )
         ? & != 0 ( nurl_str_len pm ) != 0 ( nurl_str_starts pm gen ) { ^ == ( nurl_str_get pm - ( nurl_str_len pm ) 1 ) 49 } {}
     } {}
-    // A type reached again through its own parts — an enum's payloads (`Json`
-    // in `( Vec Json )`), a struct's Vec of itself (`: Node { ( Vec Node )
-    // kids }`) — is assumed to qualify while it is being examined: it adds no
-    // part the walk has not seen (the greatest fixed point). Only enums had
+    // A type met again in the same question — reached through its own parts
+    // (`Json` in `( Vec Json )`, `: Node { ( Vec Node ) kids }`), or through
+    // another path to it — is taken to qualify: it adds no part the walk has
+    // not seen, or has seen already (the greatest fixed point), and any part
+    // that does not qualify ends the whole question with a no. Only enums had
     // the mark; a struct recursed until a budget of six levels answered no,
     // and the arm locals of every value-bearing arm over a tree leaked
-    // (agora #740).
-    ? ( str_contains_word g_noaddr_visiting ty ) { = g_noaddr_assumed + g_noaddr_assumed 1 ^ T } {}
-    : s __nav_saved ( nurl_str_cat g_noaddr_visiting `` )
-    : i __nav_a0 g_noaddr_assumed
-    = g_noaddr_visiting ( nurl_str_cat3 g_noaddr_visiting ` ` ty )
+    // (agora #740). Marked on the path alone, a graph of types that hold each
+    // other through Vecs was walked once per path to each type — exponential.
+    : b __nav_top == 0 g_noaddr_depth
+    ? __nav_top { = g_noaddr_stamp ( __seen_begin ) = g_noaddr_vis `` } {}
+    ? ! ( __seen_add g_noaddr_stamp ( nurl_str_cat `na|` ty ) ) { ^ T } {}
+    ? != 0 g_layouts_final { = g_noaddr_vis ( nurl_str_cat3 g_noaddr_vis ` ` ty ) } {}
+    = g_noaddr_depth + g_noaddr_depth 1
     : ~ b r T
     ? isenum { = r ( __ty_no_address_enum sname depth ) } {
         : i fc ( nurl_str_to_int ( nurl_sym_get2 g_root_syms sname `__field_count` ) )
@@ -22153,8 +22157,20 @@ unsafe @ __ty_no_address s ty0 i depth → b {
             = fi + fi 1
         }
     }
-    = g_noaddr_visiting ( nurl_str_cat __nav_saved `` )
-    ? & != 0 g_layouts_final | ! r == __nav_a0 g_noaddr_assumed { ( nurl_sym_set g_impl_name_syms mkey ( nurl_str_cat gen ? r `1` `0` ) ) } {}
+    = g_noaddr_depth - g_noaddr_depth 1
+    // (Kept: a no wherever it is found — it comes from a part that does not
+    // qualify, never from a type taken to; a yes for every type the question
+    // met, once its own answer is yes.)
+    ? != 0 g_layouts_final {
+        ? ! r { ( nurl_sym_set g_impl_name_syms mkey ( nurl_str_cat gen `0` ) ) } {}
+        ? & r __nav_top {
+            : ~ s vis ( nurl_str_cat g_noaddr_vis `` )
+            ~ != 0 ( nurl_str_len vis ) {
+                : s w ( str_first_word vis ) = vis ( str_skip_word vis )
+                ( nurl_sym_set g_impl_name_syms ( nurl_str_cat `noaddr##` w ) ( nurl_str_cat gen `1` ) )
+            }
+        } {}
+    } {}
     ^ r
 }
 
