@@ -583,8 +583,8 @@ theorem exitScope_setE_fresh {Γ : Ctx} (hw : CtxWF Γ) {r : Var} (hr : Γ r = n
     is typed as a `letd`'s frame at its end is (`StmtT.scopeD` over `skip`: the
     invariant says the type holds no closure and no views, `MemCodes` that the
     destructor is one the program checked), and it leaves the context as it
-    was, so `r` is typed after it as before.  (In this cut nothing makes a
-    block `dead`: no typed run takes the step.) -/
+    was, so `r` is typed after it as before.  (A run takes the step right
+    after the marking sweep marks an orphan, `Settle`.) -/
 theorem pres_reap {P : Prog} {Γ Δ : Ctx} {F : List Var} {r : Stmt} (ht : StmtT P Γ F r Δ)
     (hsrc : r.src = true) {m : Mem} {k f : Nat} {u : Ty} {p : Val} (hcd : MemCodes P m)
     (hi : Inv m Γ F r) (hk : m.blk k = some ⟨.dtor f u, .dead, some p⟩) :
@@ -598,12 +598,12 @@ theorem pres_reap {P : Prog} {Γ Δ : Ctx} {F : List Var} {r : Stmt} (ht : StmtT
   have hsp : r.spine = [] := src_spine hsrc
   have hanch := hi.leafAnch hsp
   -- what the invariant says of the block
-  obtain ⟨htok, hvf, _, _, _, hdead⟩ := hi.blocks k _ hk
+  obtain ⟨htok, hvf, _, _, hdead⟩ := hi.blocks k _ hk
   have hstr : u.isStruct = true := by simp [Ty.ok] at htok; exact htok.1
   have hfn : (Ty.dtor f u).hasFn = false := by
-    obtain ⟨f', u', he, h⟩ := hdead rfl
+    obtain ⟨f', u', he, h⟩ := hdead.dead rfl
     cases he; exact h
-  have hdrop : DropFnOK P f u := hcd.dead k f u _ hk
+  have hdrop : DropFnOK P f u := hcd.dead k f u _ _ hk (Or.inr rfl)
   -- the fresh variable
   have hmz : m.st m.nv = none := by
     cases h : m.st m.nv with

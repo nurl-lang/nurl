@@ -2947,7 +2947,9 @@ asked at each entry:
   `Release` drops `x` (`Release.drop`'s condition gains `¬ GiveCheck`), and
   the block stays checked out: the lock is held, as the runtime's is.
 - `Step.scopeLSkip` asks the check, so a scope's normal end gives back or
-  panics, never drops silently (`scopeL_end`). On a panic's unwinding the
+  panics, never drops silently (`scopeL_end`, of a store with no orphan to
+  reap first, which every A3 run's is: `A3.Reach.noOrphan`, Agora #610).
+  On a panic's unwinding the
   give-back is `Release.put` only past the check, and otherwise drops `x`.
 
 **A receive's check** (`RecvCheck v es`, `EvalR.chanRecv`,
@@ -3175,7 +3177,7 @@ with a payload is what a check-out already moves.
 - **h354** `locked_update_stores_a_kept_handle_into_the_value` (phase B's
   probe, which runs clean). The give-back's check: a scope's end whose `x`
   holds a share of a cell another slot holds panics, the lock held
-  (`scopeL_end`, `Step.scopeLFail`).
+  (`scopeL_end`, `Step.scopeLFail`; with no orphan, `A3.Reach.noOrphan`).
 
 ### Simplifications in this cut
 
@@ -3202,7 +3204,8 @@ Each is a restriction, and sound as stated.
   as the runtime's is.
 - The probes as whole typed programs (as `A2/DynCell.lean` types `pick`).
   `chanSend_kept`, `lockNew_kept`, `lockRestore_kept` and `scopeL_end`
-  state their rules on one step each.
+  state their rules on one step each (`scopeL_end` of a store with no
+  orphan, as every A3 run's is, `A3.Reach.noOrphan`).
 
 ## A3.5b's and A3.5c's rest (subsumption, bounds, what A2's closures leave out)
 
@@ -4172,3 +4175,16 @@ needed. No rule asks for it now; it stays as the bottom of the order.
 - **Fairness and progress.** `memory_safe` says no thread is stuck on
   memory. A thread waiting on a lock forever (a deadlock) is not stuck in
   that sense. Deadlock freedom is not claimed.
+- **An `Arc` of a destructor value on A3's threads** (Agora #610). A2
+  types `Arc<D>` and its `Steps` runs `D`'s destructor on the thread whose
+  step dropped the last share (the marking sweep, `Mem.sweepD`, then the
+  same thread's reaps, `Settle`). A3's configuration sweep (`Cfg.sweep`)
+  does not mark yet: on A3's threads the last share's drop frees the
+  payload with no code, so `A3.claim` covers such a program (as
+  `A3.arcDtor_claim` its witness) with the destructor not run, and no A3
+  run has an orphan (`A3.Reach.noOrphan`). The next cut: `Cfg.sweepD i`
+  from every thread's roots, `TStep.thread` reaping to exhaustion on
+  thread `i`, the reaped payload moved from the shared part to thread
+  `i`'s (`ThreadOK.move`), and the race clause over the destructor's
+  reads (the payload is in no other thread's part once its block is
+  unreached).

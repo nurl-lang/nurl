@@ -320,10 +320,13 @@ def Ty.ok : Ty → Bool
   | .prod a b => a.ok && b.ok
   | .sum a b => a.ok && b.ok
   | .fn _ _ => true
-  -- (A2-drop.3d: a block's payload owns no destructor value: the sweep that
-  -- frees a block runs no code, and a check-out binding is no `letd`'s, so a
-  -- payload that would hold one is refused, stricter than nurlc)
-  | .arc t => t.ok && !t.holdsView && !t.vecD && t.dtorFree   -- A3.1: a payload holds no views
+  -- (A2-drop.3d: a lock's or a cell's payload owns no destructor value: a
+  -- check-out binding is no `letd`'s, so a payload that would hold one is
+  -- refused, stricter than nurlc.  Agora #610: an `Arc`'s payload may be a
+  -- destructor value itself (`hasDtor`): the sweep that finds its block
+  -- unreached marks it `dead` and the thread whose step it ends reaps it,
+  -- `Mem.sweepD`, `Settle`; a payload holding one deeper is still refused)
+  | .arc t => t.ok && !t.holdsView && !t.vecD && (t.dtorFree || t.hasDtor)   -- A3.1: a payload holds no views
   | .lk t => t.ok && !t.holdsView && !t.vecD && t.dtorFree  -- A3.2: nor does a lock's (it is Send); A3.2's
                                    -- second cut: it may hold `arc` and lock shares; A3.5's second cut:
                                    -- and cell shares, each value going in past the crossing check
@@ -360,9 +363,10 @@ theorem Ty.ok_arc {t : Ty} (h : (Ty.arc t).ok = true) : t.ok = true ∧ t.holdsV
   simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1.1
 theorem Ty.ok_arc_vd {t : Ty} (h : (Ty.arc t).ok = true) : t.vecD = false := by
   simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1.2
-/-- A2-drop.3d: a block's payload owns no destructor value. -/
-theorem Ty.ok_arc_free {t : Ty} (h : (Ty.arc t).ok = true) : t.dtorFree = true := by
-  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.2
+/-- A2-drop.3d, Agora #610: an `Arc`'s payload owns no destructor value, or
+    is one at its top. -/
+theorem Ty.ok_arc_dtor {t : Ty} (h : (Ty.arc t).ok = true) : t.dtorFree = true ∨ t.hasDtor = true := by
+  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true', Bool.or_eq_true] at h; exact h.2
 theorem Ty.ok_lk {t : Ty} (h : (Ty.lk t).ok = true) : t.ok = true ∧ t.holdsView = false := by
   simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1.1
 theorem Ty.ok_lk_vd {t : Ty} (h : (Ty.lk t).ok = true) : t.vecD = false := by
@@ -381,6 +385,12 @@ theorem Ty.ok_cell_free {t : Ty} (h : (Ty.cell t).ok = true) : t.dtorFree = true
 /-- A type that owns no destructor value is no `Vec` of destructor values. -/
 theorem Ty.vecD_of_dtorFree {t : Ty} (h : t.dtorFree = true) : t.vecD = false := by
   cases t <;> simp_all [Ty.vecD, Ty.dtorFree]
+
+/-- Agora #610: an `Arc`'s payload type (`Ty.ok_arc_dtor`) is no drained `Vec`. -/
+theorem Ty.vecD_of_dtorOr {t : Ty} (h : t.dtorFree = true ∨ t.hasDtor = true) : t.vecD = false := by
+  rcases h with h | h
+  · exact Ty.vecD_of_dtorFree h
+  · cases t <;> simp_all [Ty.vecD, Ty.hasDtor]
 
 theorem Ty.ok_vec_elem {t : Ty} (h : (Ty.vec t).ok = true) : t.ok = true := by
   simp only [Ty.ok, Bool.and_eq_true] at h; exact h.1.1
@@ -766,9 +776,10 @@ inductive BKind where
       (the block owns it, `Blk.tree`, and it keeps the blocks it reaches,
       `Blk.keeps`), and no one reads it (`Blk.rd`), as no one reads a lock
       block's.  `Step.reap` moves the payload out to a destructor frame of
-      the thread that takes the step, and leaves the block empty.  **In
-      this cut nothing makes a block `dead`** (marking the orphans is the
-      sweep's, the next step of Agora #610), so no typed run has one. -/
+      the thread that takes the step, and leaves the block empty.  Only
+      the marking sweep makes a block `dead` (`Mem.sweepD`: an unreached
+      `arc` block whose payload is a destructor value), and the thread whose
+      step it ended reaps it next (`Settle`). -/
   | dead
 deriving DecidableEq, Repr
 

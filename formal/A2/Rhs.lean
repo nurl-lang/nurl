@@ -197,18 +197,25 @@ theorem SlotOK.grow {m m' : Mem} (hst : m'.st = m.st) (hb : BlkLe m.blk m'.blk) 
 def BlocksIn (m : Mem) : Prop :=
   ∀ k bl, m.blk k = some bl → bl.ty.ok = true ∧ bl.ty.holdsView = false ∧
     (∀ p, bl.pay = some p → WFv bl.ty p ∧ SharesOK m bl.ty p) ∧ (bl.kind = .lock ∨ bl.ty.hasCell = false) ∧
-    -- A2-drop.3d: a block's payload owns no destructor value (the sweep that
-    -- frees a block runs no code), unless the block is `dead` (Agora #610)
-    (bl.kind ≠ .dead → bl.ty.dtorFree = true) ∧
-    -- Agora #610: a `dead` block is of a destructor type that holds no closure
-    (bl.kind = .dead → ∃ f u, bl.ty = .dtor f u ∧ u.hasFn = false)
+    -- A2-drop.3d, Agora #610: a lock's or a view's payload owns no destructor
+    -- value; an `arc` block's may be one at its top (`Blk.DtorOK`)
+    bl.DtorOK
 
 /-- A block that is not `dead`, of a type that owns no destructor value:
-    what the invariant's last two clauses ask of it. -/
-theorem noDead {bl : Blk} (hk : bl.kind ≠ .dead := by simp) (hd : bl.ty.dtorFree = true) :
-    (bl.kind ≠ .dead → bl.ty.dtorFree = true) ∧
-      (bl.kind = .dead → ∃ f u, bl.ty = .dtor f u ∧ u.hasFn = false) :=
-  ⟨fun _ => hd, fun h => absurd h hk⟩
+    what the invariant's last clause asks of it. -/
+theorem noDead {bl : Blk} (hk : bl.kind ≠ .dead := by simp) (hd : bl.ty.dtorFree = true) : bl.DtorOK :=
+  ⟨fun _ _ => hd, fun h => absurd h hk, fun h => absurd hd (by rw [h]; simp)⟩
+
+/-- Agora #610: an `arc` block whose payload owns no destructor value or is
+    one at its top, of a type that holds no closure. -/
+theorem arcDtorOK {t : Ty} {o : Option Val} (hd : t.dtorFree = true ∨ t.hasDtor = true) (hfn : t.hasFn = false) :
+    Blk.DtorOK ⟨t, .arc, o⟩ := by
+  refine ⟨fun _ h => absurd rfl h, fun h => by simp at h, fun hf => ?_⟩
+  rcases hd with hd | hd
+  · simp only at hf; rw [hd] at hf; cases hf
+  · cases t with
+    | dtor f u => exact ⟨f, u, rfl, by simpa [Ty.hasFn] using hfn⟩
+    | _ => simp [Ty.hasDtor] at hd
 
 /-- **More blocks**: the invariant holds over a store with the same slots and
     more blocks, each as the invariant asks. -/
@@ -1715,13 +1722,15 @@ theorem MInv.share_lands {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : En
 
 /-- A share, owned: it holds nothing, and its block holds its payload. -/
 theorem out_share {m : Mem} {Γ : Ctx} {t : Ty} {k : Nat} {p : Val} (htok : t.ok = true)
-    (hvd : t.dtorFree = true)
+    (hvd : t.dtorFree = true ∨ t.hasDtor = true)
     (hvf : t.holdsView = false) (hwp : WFv t p) (hk : ArcBlk (m.blk k) t p) :
     RhsOut m Γ ⟨.arc t, .own, true, [], [], false, false⟩ (.arc k p) true where
   own := rfl
   mode := Or.inl rfl
   live := rfl
-  tyok := by simp [Ty.ok, htok, hvf, hvd, Ty.vecD_of_dtorFree hvd]
+  tyok := by
+    have h2 : (t.dtorFree || t.hasDtor) = true := by simpa [Bool.or_eq_true] using hvd
+    simp [Ty.ok, htok, hvf, h2, Ty.vecD_of_dtorOr hvd]
   wf _ r hr := by simp [roots, Entry.vdeps, Mode.ownSlot] at hr
   valOwn _ := ⟨rfl, .arc hwp hvf, ViewsOK.none (show (Ty.arc t).holdsView = false from hvf) _ _,
     List.nodup_nil, fun _ h => (nomatch h), fun _ _ _ _ h => (nomatch h), fun _ _ _ h => (by cases h),
@@ -1876,7 +1885,7 @@ theorem out_glob {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {t : Ty} (htok : t.ok = t
       · exact ⟨_, hk⟩
     obtain ⟨_, hk'⟩ := hk'
     obtain ⟨_, hvf, hpay, _⟩ := hi.blocks k _ hk'
-    have hvd := Ty.ok_arc_free htok
+    have hvd := Ty.ok_arc_dtor htok
     replace htok := Ty.ok_arc htok
     exact out_share htok.1 hvd hvf (hpay p rfl).1 hk
 
@@ -1911,7 +1920,7 @@ theorem out_arcClone {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry}
     RhsOut m Γ ⟨.arc t, .own, true, [], [], false, false⟩ (.arc k p) true := by
   obtain ⟨hk, hwp, hvf⟩ := hi.arc_val ha hl hty hv
   have hok := hi.tyok ha; rw [hty] at hok
-  have hvd := Ty.ok_arc_free hok
+  have hvd := Ty.ok_arc_dtor hok
   replace hok := Ty.ok_arc hok
   exact out_share hok.1 hvd hvf hwp hk
 
@@ -1925,7 +1934,6 @@ theorem out_arcGet {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : Entry} (
   obtain ⟨hk, hwp, hvf⟩ := hi.arc_val ha hl hty hv
   have hsh : SharesOK m t p := hi.arcBlk_shares hk
   have hok := hi.tyok ha; rw [hty] at hok
-  have hvd := Ty.ok_arc_free hok
   replace hok := Ty.ok_arc hok
   have htok := hok.1
   have hnint : E.ty ≠ .int := by rw [hty]; simp

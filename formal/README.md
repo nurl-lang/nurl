@@ -97,6 +97,7 @@ The same modules under `A2/`, extended, and:
 | `Codes` | packages name code of their signature, through every step |
 | `SrcKeep` | source typing keeps every binding with its mode and type, and an anchored borrowed parameter with its entry (`StmtT.ctxRel`): what a destructor's frame needs of its body, so `letd` takes no premise for it (`srcCase`) |
 | `CAPTURES_DESIGN.md` | by-name captures: the rules a closure that changes a binding is under, and why each is what the renaming lemma needs |
+| `SweepD`, `Settle` | Agora #610: the marking sweep (an unreached `Arc` of a destructor value marked `dead`, its payload a root) keeps the invariant; the same thread's reaps after it (`Settle`, part of every step of `Steps`) can always be taken and end |
 | `DynCell` | values owned or not per call, as the calculus has them: an owner cell the caller provides (an `inout` option the callee fills when the value is fresh) and a borrow of its payload or of the argument; the per-call function checked against its summary (`pick_ok`) and a caller run safe and leak-free by the crown theorems (`main_safe`, `main_no_leak`) |
 | `DYN_DESIGN.md` | why the owner cell, how it corresponds to nurlc's ownership bit, and what phase C / D must show of it |
 

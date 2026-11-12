@@ -39,39 +39,6 @@ theorem heapOK_grow {m m' : Mem} (hh : HeapOK m) (hst : m'.st = m.st)
   blk := BlkOwn.grow hh.blk hst hb ha hn
   views := by rw [hb]; exact hh.views
 
-theorem CatchOK.of_st {m m' : Mem} (hst : m'.st = m.st) (hnv : m.nv ≤ m'.nv) (hb : BlkLe m.blk m'.blk) :
-    ∀ {s : Stmt}, CatchOK m s → CatchOK m' s
-  | .seq a _, h => CatchOK.of_st hst hnv hb (s := a) h
-  | .scope _ k, h => CatchOK.of_st hst hnv hb (s := k) h
-  | .scopeD _ _ k, h => CatchOK.of_st hst hnv hb (s := k) h
-  | .rbind _ k, h => CatchOK.of_st hst hnv hb (s := k) h
-  | .frozen _ k, h => CatchOK.of_st hst hnv hb (s := k) h
-  | .catchR x m0 k, h => by
-    obtain ⟨h1, h2, h3, h4, h5⟩ := h
-    exact ⟨fun v hv hx => by rw [hst]; exact h1 v hv hx, h2, Nat.le_trans h3 hnv,
-      fun k' bl hk hr => by
-        obtain ⟨bl', h1', h2'⟩ := h4 k' bl hk hr
-        obtain ⟨bl'', h3', h4'⟩ := hb k' bl' h1'
-        exact ⟨bl'', h3', h2'.trans h4'⟩, CatchOK.of_st hst hnv hb (s := k) h5⟩
-  | .skip, _ => trivial
-  | .letv .., _ => trivial
-  | .letcall .., _ => trivial
-  | .assign .., _ => trivial
-  | .ite .., _ => trivial
-  | .while .., _ => trivial
-  | .push .., _ => trivial
-  | .free .., _ => trivial
-  | .panic, _ => trivial
-  | .letrec .., _ => trivial
-  | .unpair .., _ => trivial
-  | .callc .., _ => trivial
-  | .letd .., _ => trivial
-  | .edit .., _ => trivial
-  | .withLock .., _ => trivial
-  | .scopeL _ _ _ k, h => CatchOK.of_st hst hnv hb (s := k) h
-  | .insert .., _ => trivial
-  | .withElem .., _ => trivial
-  | .callcE .., _ => trivial
 
 /-- What A2 knows of one thread, on the thread's own part of the address
     space: its statement is typed, the invariant holds, its packages' codes
@@ -100,11 +67,10 @@ theorem payPart_false {B : Nat → Option Blk} {i : Nat} : payPart B i = false �
 structure BlockOK (B : Nat → Option Blk) (n k : Nat) (bl : Blk) : Prop where
   ok    : bl.ty.ok = true ∧ bl.ty.holdsView = false ∧
     (∀ p, bl.pay = some p → WFv bl.ty p ∧ SharesIn B bl.ty p) ∧ (bl.kind = .lock ∨ bl.ty.hasCell = false) ∧
-    -- A2-drop.3d: a block's payload owns no destructor value, unless the
-    -- block is `dead` (Agora #610), which is then of a destructor type that
-    -- holds no closure (`MInv.blocks`)
-    (bl.kind ≠ .dead → bl.ty.dtorFree = true) ∧
-    (bl.kind = .dead → ∃ f u, bl.ty = .dtor f u ∧ u.hasFn = false)
+    -- A2-drop.3d, Agora #610: a lock's or a view's payload owns no
+    -- destructor value; an `arc` block's may be one at its top, and a
+    -- `dead` block's is (`Blk.DtorOK`, `MInv.blocks`)
+    bl.DtorOK
   key   : k < n
   nodup : bl.tree.ids.Nodup
   lt    : ∀ i ∈ bl.tree.ids, i < n

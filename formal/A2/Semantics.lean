@@ -203,6 +203,77 @@ noncomputable def sweepBlk (R : Val → Prop) (B : Nat → Option Blk) : Nat →
 noncomputable def Mem.sweep (m : Mem) : Mem :=
   { m with alloc := sweepAlloc m.vals m.blk m.alloc, blk := sweepBlk m.vals m.blk }
 
+/-! ### Agora #610: the sweep that marks the orphans
+
+An `arc` block whose payload is a destructor value (`Ty.ok`'s `arc` case)
+is not freed by the sweep that finds it unreached: it is marked `dead` and
+its payload stays, for the thread whose step left it unreached to hand to a
+destructor frame (`Step.reap`, `Settle`).  Only a *top* orphan is marked:
+one that no other orphan's payload reaches.  An inner one stays reached,
+through the outer payload, until the outer destructor drops its share:
+outer first, as the runtime's counts do.  A `dead` block's payload is a
+root: what it reaches is kept.  Orphans that reach each other in a cycle
+(no top one) are freed with no code, as `Mem.sweep` frees every block
+(the runtime leaks such a cycle and runs no destructor either). -/
+
+/-- A `dead` block's payload, awaiting its destructor: a root of the sweep. -/
+def DeadPay (B : Nat → Option Blk) (v : Val) : Prop := ∃ k f u, B k = some ⟨.dtor f u, .dead, some v⟩
+
+/-- The sweep's roots before marking: the slots' values and the orphans'
+    payloads. -/
+def Roots0 (R : Val → Prop) (B : Nat → Option Blk) (v : Val) : Prop := R v ∨ DeadPay B v
+
+/-- An orphan to be: an `arc` block whose payload, a destructor value, is
+    in it, which the roots do not reach. -/
+def Cand (R : Val → Prop) (B : Nat → Option Blk) (k : Nat) : Prop :=
+  (∃ f u p, B k = some ⟨.dtor f u, .arc, some p⟩) ∧ ¬ Reached (Roots0 R B) B k
+
+/-- An orphan to be's payload. -/
+def CandPay (R : Val → Prop) (B : Nat → Option Blk) (v : Val) : Prop :=
+  ∃ k f u, Cand R B k ∧ B k = some ⟨.dtor f u, .arc, some v⟩
+
+/-- A top orphan: no other orphan to be's payload reaches it either. -/
+def TopOrphan (R : Val → Prop) (B : Nat → Option Blk) (k : Nat) : Prop :=
+  Cand R B k ∧ ¬ Reached (fun v => Roots0 R B v ∨ CandPay R B v) B k
+
+/-- A top orphan's payload. -/
+def TopPay (R : Val → Prop) (B : Nat → Option Blk) (v : Val) : Prop :=
+  ∃ k f u, TopOrphan R B k ∧ B k = some ⟨.dtor f u, .arc, some v⟩
+
+/-- The marking sweep's roots: the slots' values, the orphans' payloads and
+    the top orphans' to be. -/
+def RootsD (R : Val → Prop) (B : Nat → Option Blk) (v : Val) : Prop := Roots0 R B v ∨ TopPay R B v
+
+/-- A block the marking sweep keeps though the roots do not reach it: a top
+    orphan, marked, or an orphan whose payload is still in it. -/
+def Pinned (R : Val → Prop) (B : Nat → Option Blk) (k : Nat) : Prop :=
+  TopOrphan R B k ∨ ∃ f u p, B k = some ⟨.dtor f u, .dead, some p⟩
+
+/-- A block marked `dead`. -/
+def Blk.mark (bl : Blk) : Blk := { bl with kind := .dead }
+
+open Classical in
+/-- The marking sweep's blocks: the reached ones as they were, the pinned
+    ones `dead`. -/
+noncomputable def sweepBlkD (R : Val → Prop) (B : Nat → Option Blk) : Nat → Option Blk := fun k =>
+  if Reached (RootsD R B) B k then B k else if Pinned R B k then (B k).map Blk.mark else none
+
+/-- An address the marking sweep frees: owned by the payload of a block it
+    removes. -/
+def UnreachedD (R : Val → Prop) (B : Nat → Option Blk) (i : Nat) : Prop :=
+  ∃ k bl, B k = some bl ∧ ¬ Reached (RootsD R B) B k ∧ ¬ Pinned R B k ∧ i ∈ bl.tree.ids
+
+open Classical in
+noncomputable def sweepAllocD (R : Val → Prop) (B : Nat → Option Blk) (a : Nat → Bool) : Nat → Bool :=
+  fun i => a i && !decide (UnreachedD R B i)
+
+/-- **Agora #610, the marking sweep** at the end of a step: every block no
+    slot's value reaches is removed and its payload freed, but a top orphan,
+    which is marked `dead` with its payload in it, and an orphan whose
+    payload is still in it, and what their payloads reach. -/
+noncomputable def Mem.sweepD (m : Mem) : Mem :=
+  { m with alloc := sweepAllocD m.vals m.blk m.alloc, blk := sweepBlkD m.vals m.blk }
+
 /-- What leaving a scope releases: an owned value whose flag is set. -/
 inductive DropSlot : (Nat → Bool) → Slot → (Nat → Bool) → Prop
   | owned {a a' : Nat → Bool} {t : Val} : Frees a t a' → DropSlot a ⟨true, some t⟩ a'
@@ -1397,10 +1468,10 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
       end runs the destructor, as a `letd` binding's does.  The block stays,
       empty, for the sweep to remove.  The rule's own position is any source
       statement, so it fires under every frame through the congruence rules
-      (`seqL`, `scopeIn`, …), wherever the thread's next step would.
-      **In this cut nothing makes a block `dead`** (the sweep's marking of
-      the orphans is the next step of Agora #610): no typed run takes this
-      step yet. -/
+      (`seqL`, `scopeIn`, …), wherever the thread's next step would.  Only
+      the marking sweep makes a block `dead` (`Mem.sweepD`), and the thread
+      whose step it ended takes this step next (`Settle`): a run's other
+      steps are taken from stores with no orphan, where it is not one. -/
   | reap {m : Mem} {r : Stmt} {k f : Nat} {u : Ty} {p : Val} :
       r.src = true → m.blk k = some ⟨.dtor f u, .dead, some p⟩ →
       -- (the payload holds no cell share: a typed program meets it, the type
@@ -1414,16 +1485,38 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
           (.seq (.scopeD m.nv f .skip) r))
 
 /-- Agora #610: an orphan awaits its destructor: some `dead` block still holds
-    its payload, which `Step.reap` may move out.  (In this cut nothing makes a
-    block `dead`, so no typed run has one.) -/
+    its payload, which `Step.reap` may move out.  Between the steps of a run
+    none does (`Settle`, `A2.no_orphan`). -/
 def Orphan (m : Mem) : Prop := ∃ k f u p, m.blk k = some ⟨.dtor f u, .dead, some p⟩
 
+/-- Agora #610: the store after reaping the `dead` block `k` (`Step.reap`):
+    its payload moved to the fresh slot `m.nv`, the block left empty. -/
+def ReapMem (m m' : Mem) : Prop :=
+  ∃ k f u p, m.blk k = some ⟨.dtor f u, .dead, some p⟩ ∧
+    m' = { (m.set m.nv ⟨true, some p⟩) with
+            nv := m.nv + 1, blk := upd m.blk k (some ⟨.dtor f u, .dead, none⟩) }
+
+/-- **Agora #610: the thread whose step the marking sweep ended reaps the
+    orphans it marked**, each a step of its own (`Step.reap`, which puts a
+    destructor frame of the payload at the thread's redex), each ended by
+    the marking sweep, until no orphan is left; nothing else runs in
+    between.  So the destructor runs on the thread that dropped the last
+    share, before its next step, as the runtime's does. -/
+inductive Settle (P : Prog) : Mem → Stmt → Mem → Stmt → Prop
+  | done {m : Mem} {s : Stmt} : ¬ Orphan m → Settle P m s m s
+  | reap {m m1 m2 : Mem} {s s1 s2 : Stmt} :
+      Step P m s (.ok m1 s1) → ReapMem m m1 → Settle P m1.sweepD s1 m2 s2 → Settle P m s m2 s2
+
 /-- Reachability: A3.1, every step ends with the sweep, which frees the
-    blocks no slot reaches (`Mem.sweep`). -/
+    blocks no slot reaches; Agora #610: the marking sweep (`Mem.sweepD`),
+    whose orphans the same thread reaps before anything else runs
+    (`Settle`).  A panic no frame catches ends the run with the sweep that
+    frees every block no slot reaches, running no code (`Mem.sweep`: no
+    thread is left to run a destructor; `CLAIM.md`). -/
 inductive Steps (P : Prog) : Mem → Stmt → Res → Prop
   | refl {m : Mem} {s : Stmt} : Steps P m s (.ok m s)
-  | step {m m' : Mem} {s s' : Stmt} {r : Res} :
-      Step P m s (.ok m' s') → Steps P m'.sweep s' r → Steps P m s r
+  | step {m m' m'' : Mem} {s s' s'' : Stmt} {r : Res} :
+      Step P m s (.ok m' s') → Settle P m'.sweepD s' m'' s'' → Steps P m'' s'' r → Steps P m s r
   | panic {m m' : Mem} {s : Stmt} : Step P m s (.panic m') → Steps P m s (.panic m'.sweep)
 
 /-- Steps with no sweep: one thread's, in A3, where the sweep is the
