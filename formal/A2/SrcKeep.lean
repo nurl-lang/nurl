@@ -287,17 +287,17 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
     rw [hx] at h0; cases h0
     have hnrb : Ex1.mode ≠ .rootb := by
       rw [hm0]; rcases hcan with h | ⟨b, h, _⟩ <;> rw [h] <;> simp
-    -- what the vector gains it holds by name only: a `letd` binding gains no view
-    have hnv : Ex1.dbind = true → t.holdsView = false := fun hd => by
-      obtain ⟨E0, h0, hd0, _⟩ := (hpa.dkeep hy) x Ex1 hx1 hd (by rw [hm0]; exact hcan.ownSlot)
-        (Or.inl (by rw [ht0, hxt]; simp)) (by simp)
-      rw [hx] at h0; cases h0
-      exact hdb hd0
+    -- what a `letd` binding gains it views already (Agora #782)
+    have hos1 : Ex1.mode.ownSlot = true := by rw [hm0]; exact hcan.ownSlot
     exact h1.trans ((CtxRel.kill (h1.anch hanch) hxF .realloc _ (hmn_of_ne_replace _ (by simp) _)).trans
       (CtxRel.setE (Ex := killE .realloc t.holdsView x Ex1) (by simp [A2.kill, hx1]) (by simp [killE_mode]) (by simp [killE_ty])
         (by simp [killE_mode, hnrb])
         fun hd => ⟨by rw [killE_dbind]; exact hd, fun d hdd _ => by
-          rw [killE_vdeps]; simpa [Entry.vdeps, ownHeld, hnv hd] using hdd⟩))
+          rw [killE_vdeps]
+          simp only [Entry.vdeps, hos1, ↓reduceIte, List.nil_append, List.mem_append] at hdd ⊢
+          rcases hdd with hdd | hdd
+          · exact hdd
+          · exact hdb hd hdd⟩))
   | editB hx hmx _ _ _ _ harg hyx hx1 hl1 _ hthru =>
     exact fun _ hanch _ => CtxRel.editB hanch hx hmx harg hyx hx1 hl1 hthru
   | editBV hx hmx _ _ _ _ _ harg hyx hx1 hl1 _ hthru hV =>

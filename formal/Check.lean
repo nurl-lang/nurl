@@ -131,6 +131,12 @@ import A3
 #print axioms A2.DtorWitness.main5_letv_refused
 #print axioms A2.DtorWitness.main11_safe
 #print axioms A2.DtorWitness.main11_no_leak
+-- Agora #782: a `Vec` of destructor values whose elements hold views of an older binding,
+-- armed by its `letd`, typed and drained
+#print axioms A2.MInv.rearm
+#print axioms A2.DtorWitness.main14_typed
+#print axioms A2.DtorWitness.main14_safe
+#print axioms A2.DtorWitness.main14_no_leak
 #print axioms A2.DtorWitness.enum_lends
 #print axioms A2.DtorWitness.enum_take_refused
 -- threads: moves, Arc's frozen shared payloads, Locked, RwLocked, Atomic, channels, library

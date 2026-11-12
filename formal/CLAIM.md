@@ -577,7 +577,10 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   into outlives the binding while it may own its value (#224's rule,
   `DtorSafe`). No rule ends such a view on any path, the panic path
   included. A binding `letd` made gains no view: it is assigned nothing,
-  pushed no view, and is no `inout` argument.
+  pushed no view it does not record already (Agora #782: its `letd` may
+  record views of older bindings up front, `HeldUp`, so a drained `Vec`
+  of such values may take elements that view them), and is no `inout`
+  argument.
 - `memory_safe`, `no_leak_end` and `no_leak_panic` cover all of this, on
   the standard axioms. That includes a *double panic*: a destructor that
   panics while a panic unwinds.
@@ -607,8 +610,8 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
     inside, no more). `memory_safe` and the leak theorems cover the frame
     (its typing is `CallH.typedIn_of`'s);
   - a typed `letd` binds a value of a destructor type `Ty.dtor f t`, or
-    (A2-drop.3b) a `Vec` of such values whose elements hold no views
-    (`A2.Dtor.letd_binds`); `f` is the destructor of `Ty.dtor f t`
+    (A2-drop.3b) a `Vec` of such values, whose elements may hold views
+    (Agora #782; the binding is then armed with them) (`A2.Dtor.letd_binds`); `f` is the destructor of `Ty.dtor f t`
     (`DropFnOK`: one that takes it lent, or a struct's glue, Agora #616),
     and the binding is assigned nothing in its scope (`A2.Dtor.letd_dtor`);
   - at the end of a typed `scopeD x f` frame whose `x` still owns its
@@ -798,7 +801,13 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   has elements that own no destructor value or are of a destructor type or
   such `Vec`s in turn (`A2.Dtor.vecs_dtor_free`). Its binder
   is `letd x f r s`,
-  with `f` the elements' destructor and `u` holding no views (`LetdTy`;
+  with `f` the elements' destructor (`LetdTy`; Agora #782: `u` may hold
+  views, of bindings older than the `Vec`'s, which its `letd` records up
+  front, `HeldUp`: the binding is armed, `Ty.dtorViews`, a push into it
+  adds no view it does not record, `StmtT.push`, and the drain revives it
+  still armed, `Entry.reviveD`, each element moved out to a `letd` armed
+  with those views; witness `A2.DtorWitness.main14_safe` /
+  `main14_no_leak`;
   `letv` refuses the type, it holds a destructor value), so a call's
   result and a `sink` parameter of that type are handed on first thing as
   a destructor value is (`movedFirst`: into a `letd`, by `assign y
@@ -966,7 +975,14 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
 
 The rules are stricter than nurlc's in these places:
 - for a binding of a type whose destructor may read a view:
-  - nurlc lets it gain views of older bindings;
+  - nurlc lets it gain views of older bindings; here it views, from its
+    `letd` on, what the `letd` records (the value's views, and up front
+    views of older bindings, `HeldUp`), and a push into a drained `Vec`
+    adds only what that records (Agora #782). The cost of "up front":
+    every root the binding may ever view is protected (`DtorSafe`) from
+    the `letd` on, not from the push, so changing or ending such a root
+    between the `letd` and the first push is refused here, where nurlc
+    accepts it;
   - nurlc lets it be an `inout` argument, whose callee may give it views
     only of what the caller passed in: a view of the callee's own local is
     refused where it is given, even for a moment (#284). One shape is
@@ -1001,14 +1017,14 @@ The rules are stricter than nurlc's in these places:
   the run). nurlc types the
   rest too, and drops a `Vec`'s elements wherever the `Vec` is dropped, in
   index order, each running its destructor. Refused here:
-  - elements that hold views (a `Vec` of `% Drop` structs with a view
-    field): a binding that runs a destructor gains no view (the first item
-    of this list), so nothing could be pushed into it;
   - the `Vec` as a shared payload: a channel of `D` (`Channel s` is a lock
     of its queue, a `Vec s`, and its closed flag), `Locked (Vec D)`, `Arc
     (Vec D)`, a cell of a `Vec D`. A block's payload is swept with no code
     (Agora #544).
-  Not refused: the in-place drops. (`vec_free`, `vec_clear`,
+  Not refused: the in-place drops (the lemmas below are stated for
+    elements that hold no views; a `Vec` of view-holding destructor
+    values, Agora #782, is typed by the same rules, with no lemma stated).
+    (`vec_free`, `vec_clear`,
     `vec_truncate` and `vec_set` of such a `Vec` — the lemmas below are
     stated for a `Vec` of destructor values, `.vec (.dtor f t)`; for a
     `Vec (Vec D)` the same code is typed by the same rules, `letd` binding

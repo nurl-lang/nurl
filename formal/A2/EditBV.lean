@@ -571,7 +571,7 @@ theorem MInv.edit_dropV {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 �
 theorem MInv.edit_growV {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
     (hanch : RootbAnch Γ1 F) {o : Var} {Eo : Entry} (ho : Γ1 o = some Eo) (hl : Eo.live = true)
     (hoF : o ∉ F) (hcan : canDo Eo.mode .realloc) {t : Ty} (hty : Eo.ty = .vec t)
-    (hhv : t.holdsView = true) (hds : DtorSafe Γ1 .realloc true o) (hdb : Eo.dbind = false)
+    (hhv : t.holdsView = true) (hds : DtorSafe Γ1 .realloc true o) (_hdb : Eo.dbind = false)
     {t' : Ty} {c d : Nat} {es : List Val} (hT : m1.st o = some ⟨true, some (.node t' c d es)⟩)
     {v : Val} {D : List Dep} (hp : Pushed m1 Γ1 t v D) (hoD : o ∉ roots D) {d' : Nat} {A' : Nat → Bool}
     {N' : Nat} (hre : (d' = d ∧ A' = m1.alloc ∧ N' = m1.nid) ∨
@@ -583,7 +583,7 @@ theorem MInv.edit_growV {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
     · exact h
     · exact absurd h (hi.noInout o Eo b ho)
   have h := push_grow hi hanch ho hl hcan hoF hty hT hp hoD (fun h => by rw [hhv] at h; cases h) hre
-    (by rw [hhv]; exact hds) (fun h => by rw [hdb] at h; cases h)
+    (by rw [hhv]; exact hds)
   rw [hhv] at h
   have hanch2 : RootbAnch (A2.setE (A2.kill .realloc true o Γ1) o { Eo with held := Eo.held ++ D }) F :=
     fun p Ep hp hm => by

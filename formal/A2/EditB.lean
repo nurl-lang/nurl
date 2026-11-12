@@ -1712,7 +1712,7 @@ theorem MInv.edit_grow {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
     · exact absurd h (hi.noInout o Eo b ho)
   have hD : ownHeld true t D = [] := by simp [ownHeld, hhv]
   have h := push_grow hi hanch ho hl hcan hoF hty hT hp.ownHeld (by rw [hD]; simp [roots])
-    (fun _ => hD) hre (by rw [hhv]; exact hds) (fun _ => hhv)
+    (fun _ => hD) hre (by rw [hhv]; exact hds)
   rw [hD, hhv] at h
   have hanch2 : RootbAnch (A2.setE (A2.kill .realloc false o Γ1) o { Eo with held := Eo.held ++ [] }) F :=
     fun p Ep hp hm => by

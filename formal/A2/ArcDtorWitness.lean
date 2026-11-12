@@ -49,7 +49,7 @@ theorem main_typed : ∃ Δ, StmtT P (fun _ => none) [] main Δ := by
   have hD2 : NoDeps K2 := hD1.setE rfl
   let ED : Entry := Entry.arm { EP with ty := DT, held := [] }
   have hED : ED.mode ≠ .rootb ∧ ED.dtor = false ∧ ED.dbind = false := by
-    simp [ED, EP, Entry.arm, DT, T, Ty.dtorViews, Ty.hasDtor, Ty.holdsView]
+    simp [ED, EP, Entry.arm, DT, T, Ty.dtorViews, Ty.holdsView]
   let K3 : Ctx := A2.setE K2 2 ED
   have hK3 : NoRootb K3 := hK2.setE hED
   have hD3 : NoDeps K3 := hD2.setE (by simp [ED, EP, Entry.arm, Entry.vdeps])
@@ -65,7 +65,7 @@ theorem main_typed : ∃ Δ, StmtT P (fun _ => none) [] main Δ := by
       (PushArg.move (by simp [DT, T, Ty.owning]) (by simp [ED, Entry.arm, EP]) (by simp)
         (hK3.noPin 2) (DtorSafe.of_none (fun v E h => (hK3 v E h).2.1) _ _ _))
     rw [hkill] at h; exact h
-  have hK3' : NoRootb K3' := hK3.setE (by simp [ED', ED, EP, Entry.arm, DT, T, Ty.dtorViews, Ty.hasDtor, Ty.holdsView])
+  have hK3' : NoRootb K3' := hK3.setE (by simp [ED', ED, EP, Entry.arm, DT, T, Ty.dtorViews, Ty.holdsView])
   let K4 : Ctx := A2.setE K3' 3 ES
   have hK4 : NoRootb K4 := hK3'.setE ES_flags
   have hK4s : K4 3 = some ES := by simp [K4, A2.setE]

@@ -1035,9 +1035,11 @@ theorem resFrame_cases (fn : Fn) (r : Var) (s : Stmt) :
     which the frame's end drains (`Step.scopeDDrain`), or (Agora #607) a
     `Vec` of such `Vec`s at any depth (`Ty.nest`), whose drain binds each
     inner `Vec` by a `letd` frame of the same `f`, which drains it in turn.
-    The drained `Vec`'s elements hold no views. -/
+    (Agora #782: the drained `Vec`'s elements may hold views, of bindings
+    older than the `Vec`'s: its binding is armed, `Ty.dtorViews`, and each
+    element moved out to its own `letd` is armed with them.) -/
 def ScopeDTy (f : Nat) (t τ : Ty) : Prop :=
-  τ = .dtor f t ∨ (∃ n, τ = .vec (Ty.nest n (.dtor f t)) ∧ t.holdsView = false)
+  τ = .dtor f t ∨ (∃ n, τ = .vec (Ty.nest n (.dtor f t)))
 
 /-- What `letd x f r s` binds, at the type `τ`, from a value of type `a`: a
     destructor value (a `t` made here, or one of a destructor type over `t`
@@ -1045,46 +1047,48 @@ def ScopeDTy (f : Nat) (t τ : Ty) : Prop :=
     destructor values, or of such `Vec`s (Agora #607). -/
 def LetdTy (f : Nat) (t a τ : Ty) : Prop :=
   (τ = .dtor f t ∧ (a = t ∨ ∃ g, a = .dtor g t)) ∨
-    (∃ n, τ = .vec (Ty.nest n (.dtor f t)) ∧ a = τ ∧ t.holdsView = false)
+    (∃ n, τ = .vec (Ty.nest n (.dtor f t)) ∧ a = τ)
 
 theorem LetdTy.scopeD {f : Nat} {t a τ : Ty} (h : LetdTy f t a τ) : ScopeDTy f t τ := by
-  rcases h with ⟨h, _⟩ | ⟨n, h, _, hv⟩
+  rcases h with ⟨h, _⟩ | ⟨n, h, _⟩
   · exact Or.inl h
-  · exact Or.inr ⟨n, h, hv⟩
+  · exact Or.inr ⟨n, h⟩
 
 /-- Agora #607: an element of a drained `Vec`, moved out to a `letd` of its
     own frame, is bound at its own type: a destructor value, or a drained
     `Vec` in turn. -/
-theorem LetdTy.elem {f n : Nat} {t : Ty} (hv : t.holdsView = false) :
+theorem LetdTy.elem {f n : Nat} {t : Ty} :
     LetdTy f t (Ty.nest n (.dtor f t)) (Ty.nest n (.dtor f t)) := by
   cases n with
   | zero => exact Or.inl ⟨rfl, Or.inr ⟨f, rfl⟩⟩
-  | succ n => exact Or.inr ⟨n, rfl, rfl, hv⟩
+  | succ n => exact Or.inr ⟨n, rfl, rfl⟩
 
 /-- What `letd` binds is no integer: a struct or an enum, or its destructor
     type, or a `Vec`. -/
 theorem LetdTy.ne_int {f : Nat} {t a τ : Ty} (h : LetdTy f t a τ) (hst : t.isStruct = true) :
     a ≠ .int := by
-  rcases h with ⟨_, h' | ⟨g, h'⟩⟩ | ⟨_, h1, h', _⟩
+  rcases h with ⟨_, h' | ⟨g, h'⟩⟩ | ⟨_, h1, h'⟩
   · rw [h']; cases t <;> simp_all [Ty.isStruct]
   · rw [h']; simp
   · rw [h', h1]; simp
 
 theorem ScopeDTy.hasFn {f : Nat} {t τ : Ty} (h : ScopeDTy f t τ) (hf : t.hasFn = false) :
     τ.hasFn = false := by
-  rcases h with rfl | ⟨_, rfl, _⟩ <;> simpa [Ty.hasFn] using hf
+  rcases h with rfl | ⟨_, rfl⟩ <;> simpa [Ty.hasFn] using hf
 
 theorem ScopeDTy.holdsView {f : Nat} {t τ : Ty} (h : ScopeDTy f t τ) : τ.holdsView = t.holdsView := by
-  rcases h with rfl | ⟨_, rfl, _⟩ <;> simp [Ty.holdsView]
+  rcases h with rfl | ⟨n, rfl⟩
+  · simp [Ty.holdsView]
+  · simp [Ty.holdsView]
 
 /-- The binding is armed exactly when its type holds views. -/
 theorem ScopeDTy.dtorViews {f : Nat} {t τ : Ty} (h : ScopeDTy f t τ) : τ.dtorViews = τ.holdsView := by
-  rcases h with rfl | ⟨_, rfl, hv⟩
+  rcases h with rfl | ⟨n, rfl⟩
   · simp [Ty.dtorViews, Ty.holdsView]
-  · simp [Ty.dtorViews, Ty.hasDtor, Ty.holdsView, hv]
+  · simp [Ty.holdsView]
 
 theorem ScopeDTy.ne_int {f : Nat} {t τ : Ty} (h : ScopeDTy f t τ) : τ ≠ .int := by
-  rcases h with rfl | ⟨_, rfl, _⟩ <;> simp
+  rcases h with rfl | ⟨_, rfl⟩ <;> simp
 
 /-- `f` is a destructor for values of type `t`: it takes one borrowed `t`,
     returns an integer and lends, holds and stores nothing. -/
@@ -1310,8 +1314,10 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       Γ y = some Ey → Ey.live = true → Ey.ty = t → y ≠ x →
       PushArg Γ F y Ey t D Γ1 → x ∉ roots D →
       Γ1 x = some Ex1 → Ex1.live = true → DtorSafe Γ1 .realloc t.holdsView x →
-      -- A2-drop.2: a destructor binding gains no view
-      (Ex.dbind = true → t.holdsView = false) →
+      -- A2-drop.2: a destructor binding gains no view: (Agora #782) what the
+      -- value pushed into one holds, it records as viewing already (`letd`
+      -- may record views of older bindings up front, `HeldUp`)
+      (Ex1.dbind = true → ownHeld true t D ⊆ Ex1.held) →
       StmtT P Γ F (.push x y)
         (setE (kill .realloc t.holdsView x Γ1) x { Ex1 with held := Ex1.held ++ ownHeld true t D })
   | free {Γ : Ctx} {F : List Var} {x : Var} {E : Entry} {t : Ty} :
@@ -1394,7 +1400,10 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       -- destructor type moved in (whose old binding's scope then runs nothing),
       -- or (Agora #616, `LetdFn`) of the type of a struct's glue with an impl,
       -- rebound under its fields' glue with the impl's call next.
-      -- A2-drop.3b: or it is a `Vec` of such values, drained at its end
+      -- A2-drop.3b: or it is a `Vec` of such values, drained at its end (Agora
+      -- #782: whose elements may hold views, of roots bound before it: armed,
+      -- `Ty.dtorViews`, it may record them up front, `HeldUp`, and takes no
+      -- element that views more, `StmtT.push`)
       LetdTy f t E.ty τ → t.isStruct = true →
       t.hasFn = false → LetdFn P f t E.ty x s ∧ TakeOK P Γ r →
       -- A2-drop.2: the binding, armed, views what the value does, or more
@@ -1513,7 +1522,8 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       StmtT P Γ F (.callcE x c j [] k) (exitScope x Δ)
   | scopeD {Γ Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {s : Stmt} :
       -- (A2-drop.3a: of the destructor type `Ty.dtor f t`, whose destructor `f` is)
-      -- (A2-drop.3b: or a `Vec` of such values, of a type that holds no views)
+      -- (A2-drop.3b: or a `Vec` of such values; Agora #782: whose elements may
+      -- hold views, the binding then `letd`'s and armed with them)
       (∃ E t, Γ x = some E ∧ E.mode = .own ∧ ScopeDTy f t E.ty ∧ E.ty.hasFn = false ∧
         DropFnOK P f t ∧ t.isStruct = true) → x ∉ F →
       StmtT P Γ F s Δ → EndOK Δ x →

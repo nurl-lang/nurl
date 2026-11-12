@@ -192,7 +192,7 @@ theorem code_body : ∃ Δ, StmtT Pc (sigCtx code) [] code.body Δ ∧
   let ED : Entry := Entry.arm { (⟨EDT.ty, .own, true, [], EDT.held, false, false⟩ : Entry)
     with ty := DT, held := EDT.held }
   have hED : ED = ⟨DT, .own, true, [], [], false, false⟩ := by
-    simp [ED, EDT, Entry.arm, DT, T, Ty.dtorViews, Ty.hasDtor, Ty.holdsView]
+    simp [ED, EDT, Entry.arm, DT, T, Ty.dtorViews, Ty.holdsView]
   let Kc : Ctx := A2.setE Kb 2 ED
   have hKc : NoRootb Kc := hKb.setE (by rw [hED]; simp)
   have hc1 : Kc 1 = some R0 := by
@@ -336,7 +336,7 @@ theorem main_typed : ∃ Δ, StmtT Pc (fun _ => none) [] main Δ := by
   have hK2 : NoRootb K2 := hK1.setE (by simp [intE])
   let ED : Entry := Entry.arm { EP with ty := DT, held := [] }
   have hEDe : ED = ⟨DT, .own, true, [], [], false, false⟩ := by
-    simp [ED, EP, Entry.arm, DT, T, Ty.dtorViews, Ty.hasDtor, Ty.holdsView]
+    simp [ED, EP, Entry.arm, DT, T, Ty.dtorViews, Ty.holdsView]
   let K3 : Ctx := A2.setE K2 2 ED
   have hK3 : NoRootb K3 := hK2.setE (by rw [hEDe]; simp)
   have hpair : RhsT K2 [] (.pair 0 1) EP K2 :=
@@ -355,7 +355,7 @@ theorem main_typed : ∃ Δ, StmtT Pc (fun _ => none) [] main Δ := by
       ⟨List.nodup_nil, fun _ h => by cases h⟩ env_fits
   let ECa : Entry := Entry.arm { EC0 with ty := CDT, held := EC0.held }
   have hECa : ECa.mode ≠ .rootb ∧ ECa.dtor = false ∧ ECa.dbind = false := by
-    simp [ECa, EC0, Entry.arm, CDT, CT, Ty.dtorViews, Ty.hasDtor, Ty.holdsView]
+    simp [ECa, EC0, Entry.arm, CDT, CT, Ty.dtorViews, Ty.holdsView]
   have hK6 : NoRootb (A2.setE K5 3 ECa) := hK5.setE hECa
   have hg := StmtT.letd (P := Pc) (Γ := K3) (Γ1 := K5) (F := []) (x := 3) (f := 2)
     (r := .pack [1] DT [2] 2 []) (s := .skip) (E := EC0) (t := CT) (H := EC0.held) (τ := CDT) rfl
@@ -570,7 +570,7 @@ theorem code_body2 : ∃ Δ, StmtT Pd (sigCtx code) [] code.body Δ ∧
   let ED : Entry := Entry.arm { (⟨EDT.ty, .own, true, [], EDT.held, false, false⟩ : Entry)
     with ty := DT, held := EDT.held }
   have hED : ED = ⟨DT, .own, true, [], [], false, false⟩ := by
-    simp [ED, EDT, Entry.arm, DT, T, Ty.dtorViews, Ty.hasDtor, Ty.holdsView]
+    simp [ED, EDT, Entry.arm, DT, T, Ty.dtorViews, Ty.holdsView]
   let Kc : Ctx := A2.setE Kb 2 ED
   have hKc : NoRootb Kc := hKb.setE (by rw [hED]; simp)
   have hc1 : Kc 1 = some R0 := by
@@ -793,7 +793,7 @@ theorem main2_typed : ∃ Δ, StmtT Pd (fun _ => none) [] main2 Δ := by
   have hK2 : NoRootb K2 := hK1.setE (by simp [intE])
   let ED : Entry := Entry.arm { EP with ty := DT, held := [] }
   have hEDe : ED = ⟨DT, .own, true, [], [], false, false⟩ := by
-    simp [ED, EP, Entry.arm, DT, T, Ty.dtorViews, Ty.hasDtor, Ty.holdsView]
+    simp [ED, EP, Entry.arm, DT, T, Ty.dtorViews, Ty.holdsView]
   let K3 : Ctx := A2.setE K2 2 ED
   have hK3 : NoRootb K3 := hK2.setE (by rw [hEDe]; simp)
   have hpair : RhsT K2 [] (.pair 0 1) EP K2 :=
@@ -813,7 +813,7 @@ theorem main2_typed : ∃ Δ, StmtT Pd (fun _ => none) [] main2 Δ := by
   let ECa : Entry := Entry.arm { EC0 with ty := CDT2, held := EC0.held }
   -- the closure's binding: of the destructor type, owned, holding nothing
   have hECe : ECa = ⟨CDT2, .own, true, [], [], false, false⟩ := by
-    simp [ECa, EC0, hEDe, capDeps, Entry.arm, CDT2, CT2, Ty.dtorViews, Ty.hasDtor, Ty.holdsView]
+    simp [ECa, EC0, hEDe, capDeps, Entry.arm, CDT2, CT2, Ty.dtorViews, Ty.holdsView]
   have hECa : ECa.mode ≠ .rootb ∧ ECa.dtor = false ∧ ECa.dbind = false := by rw [hECe]; simp
   let K6 : Ctx := A2.setE K5 3 ECa
   have hK6 : NoRootb K6 := hK5.setE hECa

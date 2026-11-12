@@ -167,9 +167,12 @@ destructor): a `Vec` of destructor values as a shared payload
 (`Ty.ok`): a channel of `D` (its queue is a `Vec`),
 `Locked (Vec D)`, `Arc (Vec D)`, a cell of a `Vec D` (a struct's field or
 an enum's payload is typed since Agora #607: glue hands it to a `letd`,
-which drains it; and so is a `Vec (Vec D)`, at any depth, below); one whose elements hold views
-(`LetdTy`) (`vec_free`, `vec_clear`, `vec_truncate`, `vec_set` over an
-element and `withElem` are typed code, `A2/DropCode.lean`). And, since A2-drop.3c and 3d: a share whose payload owns a destructor
+which drains it; and so is a `Vec (Vec D)`, at any depth, below, and since
+Agora #782 one whose elements hold views of older bindings, its `letd`
+recording them up front) (`vec_free`, `vec_clear`, `vec_truncate`, `vec_set` over an
+element and `withElem` are typed code, `A2/DropCode.lean`; its lemmas are
+stated for elements that hold no views, `hv : t.holdsView = false`: the
+view-holding case is typed by the same rules, with no lemma stated). And, since A2-drop.3c and 3d: a share whose payload owns a destructor
 value (`Ty.ok`), and a trait object whose box holds one (a closure whose
 environment holds one is of the class `dropd`, dropped by its glue, Agora #609). The result moved from its slot into a local
 before a panic (`pair res w`, a destructor value two levels down) is a
@@ -358,13 +361,17 @@ destructor must view nothing those scopes bound, at any point, not only
 at their normal end. In A2-drop.2 a `dbind` binding of a view-holding type
 gains no view at all:
 - `assign` to it is refused;
-- `push` into it needs elements that hold no views;
+- `push` into it needs elements that hold no views (since Agora #782:
+  elements whose views it records already);
 - it is no `inout` argument.
 
 Its `held` is then the one `letd` gave it, made from what was already
 bound. nurlc's rule is finer: a holder may gain views of older bindings
-only. Covering that needs an age order the calculus does not have, so it
-stays a documented gap.
+only. Covering that in general needs an age order the calculus does not
+have, so it stays a documented gap; since Agora #782 `letd` may record
+views of older bindings up front (`HeldUp`), and a push into a drained
+`Vec` adds only those, which covers a `Vec` of view-holding destructor
+values (below, A2-drop.3b).
 
 The third point is a rule, not a convenience. A callee may point an
 `inout` parameter at a view of its own local and back again before it
@@ -655,7 +662,7 @@ each one shrinks `CLAIM.md`'s exception:
      3. *The binder and the frame.* `letd x f r s`, where `r`'s type is
         `.vec (.dtor f u)` and `f` is the element's destructor: `StmtT.letd`
         takes `LetdTy f u E.ty τ` (the destructor type as before, or the
-        `Vec`, its elements holding no views) and binds at `τ`;
+        `Vec`; its elements held no views until Agora #782, below) and binds at `τ`;
         `StmtT.scopeD` takes `ScopeDTy f u E.ty`. One run-time form serves
         both: `scopeD x f .skip` steps by the value `x` owns (`Val.isNode`),
         - a non-empty node: `Step.scopeDDrain`, to `scopeD x f (letd m.nv f
@@ -698,11 +705,47 @@ each one shrinks `CLAIM.md`'s exception:
      hands to a `letd`), or lets the binding end; `vec_free`,
      `vec_clear` and `vec_truncate` are such code (`A2/DropCode.lean`).
    - **Left** (stricter than nurlc; `CLAIM.md` lists them):
-     - *elements that hold views.* A2-drop.2's rule (a binding that runs a
-       destructor gains no view) would let nothing be pushed into such a
-       `Vec`; it needs the age order nurlc's finer rule has.
      - *a `Vec D` as a block's payload* (a channel, a lock, an `Arc`, a
        cell): 3d's (Agora #544).
+   - **Built** (Agora #782): *elements that hold views*, of bindings older
+     than the `Vec`'s (a `Vec` of `% Drop` structs with a view field).
+     A2-drop.2's rule stays (a binding that runs a destructor gains no
+     view: `DKeep`, which the unwind needs, `unwindCtx` rebuilding the
+     frame's binding from the frame's static entry); nurlc's age order
+     enters through what `letd` already allowed: its `HeldUp` lets the
+     binding record views of roots bound before it, up front. So:
+     - `LetdTy` / `ScopeDTy` no longer ask the elements to hold no views;
+       `Ty.dtorViews` is `dnest && holdsView`, so `letd` arms such a `Vec`
+       (`dtor`, `dbind`), and `DtorSafe` keeps what it records alive;
+     - `StmtT.push` into a `letd` binding asks, in place of "the element
+       type holds no views", that what the pushed value adds
+       (`ownHeld true t D`) is in the binding's `held` already: `DKeep`
+       holds as before (`SrcKeep`, `TypingFacts`), and so does the renamed
+       premise at a call (`Rename`). `push_grow` no longer needs the
+       binding unarmed: its `ArmOK` is the grown tree's `ViewsOK`.
+       (`insert` is typed as the push; `editB` pushes no view; `editBV`
+       refuses `letd` roots; `withElem` checks out `dtorFree` elements
+       only; an `inout` argument is no `letd` binding: none needs more.)
+     - The drain revives the binding *still armed* (`Entry.reviveD`:
+       `Entry.revive` with `dtor` / `dbind` kept, `MInv.rearm` /
+       `MInv.reviveD`), on the normal path (`scopeDDrain`) and the panic
+       path (`scopeDPDrain`, over `unwindCtx`): the elements still to
+       drain hold what it views, and `scopeD` asks a binding whose type
+       holds views to be `letd`'s. Element 0 moves out to a `letd` whose
+       entry is `popE`'s, holding the revived binding's views, armed by
+       `Entry.arm` (`LetdTy.elem` at any `u`); its `EndOK` holds as those
+       views are of roots bound before (`DtorSafe.setE_away`). The
+       revived binding views nothing of its own (`DSelf`, from the
+       frame's `EndOK` or its typing), so `RhsT.remove`'s `DtorSafe` and
+       the frame's `DSelf` still hold.
+     A call's owned result is still of a type that holds no views
+     (`FnOK`, `ResDTy`), and a `letd` binding is still no `inout`
+     argument (`CallDtorSafe`); only `letd` binds a view-holding
+     destructor value, so no callee's `inout` parameter receives one:
+     unchanged.
+     Witness: `A2.DtorWitness.main14_typed` / `main14_safe` /
+     `main14_no_leak` (`main10`'s view-holding struct pushed into a `Vec`
+     whose `letd` records the view of `s` up front).
    - **Built** (Agora #607): *a `Vec D` as an element*, at any depth. The
      drained type is `vec (Ty.nest n (dtor f u))` (`ScopeDTy`, `LetdTy`;
      `Ty.ok` admits a `Vec` whose elements are `Ty.dnest`: a destructor

@@ -2942,7 +2942,7 @@ theorem typedIn_of (h : CallH P Γ F x fn args base)
   have hsdt : ScopeDTy g t fn.resTy := by
     rcases hty with h1 | ⟨n, h1⟩
     · exact Or.inl h1
-    · exact Or.inr ⟨n, h1, htv⟩
+    · exact Or.inr ⟨n, h1⟩
   have hown : resMode fn = .own := by simp [resMode, ho]
   have hsrcR : (fn.body.rename (callRen fn.params args base)).src = true := by
     rw [RSetup.src_rename]; exact h.fnok.1

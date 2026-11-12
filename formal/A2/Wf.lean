@@ -1363,12 +1363,18 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
           exact kill_root hEr hro
         · obtain ⟨Er, hEr, hro⟩ := hD r (ownHeld_roots hr)
           exact kill_root hEr hro
-    · -- A2-drop.2: a binding `letd` made takes only values that hold no views
+    · -- A2-drop.2: a binding `letd` made takes only values whose views it holds
+      -- already (Agora #782)
       by_cases hrx : d.root = x
       · exact Or.inl ⟨hrx, hroot⟩
       · refine Or.inr ⟨hrx, ?_⟩
-        have ht : t.holdsView = false := hdb (by rw [← hdb1]; exact hd)
-        have hdd1 : d ∈ Ex1.vdeps := by simpa [Entry.vdeps, hos, ownHeld, ht] using hdd
+        -- (Agora #782: what it gains is of roots it views already)
+        have hdd1 : d ∈ Ex1.vdeps := by
+          have hdd' : d ∈ Ex1.vdeps ++ ownHeld true t D := by
+            simpa [Entry.vdeps, List.append_assoc] using hdd
+          rcases List.mem_append.mp hdd' with h' | h'
+          · exact h'
+          · simp only [Entry.vdeps, hos, ↓reduceIte, List.nil_append]; exact hdb hd h'
         obtain ⟨Er, hEr, hro⟩ := hw1.dtor x Ex1 hx1 hd hos (Or.inl hnint) d hdd1 hnm
         exact kill_root hEr hro
   | insert _ _ _ ih => exact ih
