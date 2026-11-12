@@ -7801,8 +7801,14 @@ unsafe @ __gen_ret i lex i syms i cg → s {
         // (A binding that may hold another local's value is copied by the
         // rule above; this one is a cursor, or bound to a borrow.)
         : b cother & == 0 ( nurl_sym_len2 syms cup `__alias` ) | | == 0 ( nurl_str_len csb ) ( seq csb `local` ) ( seq csb `dyn` )
+        // (…and one that cannot be copied — a struct with a `% Drop` of its
+        // own: it answers per call, always, with no copy to fall back on.
+        // Left out, `= best x` of a loop element then `^ best` answered
+        // "owned" on the runs best held the element, and the caller
+        // released what the Vec still held, agora #669.)
+        : b __c_cp ( __clone_supported cty syms )
         ? & & & & != 0 ( nurl_str_len cup ) ! cother == 0 ( nurl_sym_len2 syms cup `__optparam` )
-        == 0 ( nurl_sym_len2 syms cup `__pname` ) ( __clone_supported cty syms ) {
+        == 0 ( nurl_sym_len2 syms cup `__pname` ) | __c_cp ( __nc_drop_ty cty ) {
             : s self ( nurl_sym_get syms `__fn_self_name__` )
             : s kv ( nurl_cg_reg cg )
             ( emit_sink_flag_load ( nurl_str_cat `@.__nurl_retown.` ( nurl_str_int ( retown_flag self self ) ) ) kv )
@@ -7848,8 +7854,8 @@ unsafe @ __gen_ret i lex i syms i cg → s {
             // path owns answers statically.)
             : s __cpair ? & == 0 ( nurl_sym_len2 syms cup `__alias` ) == ( nurl_str_get csb 0 ) 64
             ( __retown_pair ( nurl_sym_get2 syms ( nurl_str_slice csb 1 - ( nurl_str_len csb ) 1 ) `__sbcn` ) ) ``
-            ? != 0 ( nurl_str_len __cpair ) { ( mem_hown_dyn_if syms __cpair ) } { ( mem_hown_mark_dyn syms ) }
-            = val ( mem_emit_cloneif cg cty val ( mem_hown_static syms cg c ) )
+            ? & __c_cp != 0 ( nurl_str_len __cpair ) { ( mem_hown_dyn_if syms __cpair ) } { ( mem_hown_mark_dyn syms ) }
+            ? __c_cp { = val ( mem_emit_cloneif cg cty val ( mem_hown_static syms cg c ) ) } {}
             = hbit acc
             = __rost_reg ( nurl_str_cat hbit `` )
             = __rost ? ret_pl_copied ( nurl_str_cat `!` `` ) ( __ost_of_ident syms ret_first_val )
@@ -20432,6 +20438,20 @@ unsafe @ gen_call_body i lex i syms i cg → s {
                     ( nurl_print `  call void @__nurl_zero_if.` ) ( nurl_print ( __zero_if_request fl ) )
                     ( nurl_print `(i1 ` ) ( nurl_print zf ) ( nurl_print `, ptr ` ) ( nurl_print es ) ( nurl_print `)\n` )
                 } {} }
+        } {}
+        // …and one that is no handle — a struct with a `% Drop` of its own:
+        // its slot cannot be emptied (the container would run the
+        // destructor on the emptied value, agora #759's fault), so the
+        // `sink` is handed a copy where one can be made, and one that
+        // cannot is refused. Handed over as it was, the callee released the
+        // element the container still drops (agora #669).
+        ? & & & & ( is_ident_tok bck_arg_tt ) != 0 ( nurl_sym_len2 syms bck_arg_val `__eslot` ) ! ( __is_handle_ty at ) ( str_has_index callee_sink arg_idx ) ( __type_needs_drop at g_root_syms ) {
+            ? ( __clone_supported at syms ) { = av ( mem_emit_cloneif cg at av `1` ) } {
+                ( die lex ( nurl_str_cat4 ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+                ( nurl_str_cat4 `' is '` bck_arg_val `', this loop's element: it is still in the container the loop walks, which drops it, and '` ( llvm_to_nurl at ) )
+                ( nurl_str_cat3 `' cannot be copied, so '` fname `' (a 'sink') would release it a second time. ` )
+                `Take the elements out of the container instead (vec_pop, vec_remove, or move the whole container to a function that drains it), or have the callee borrow the element (drop 'sink').` ) )
+            }
         } {}
         // A field of an owned struct handed to a consumer — `( string_free
         // . kr key )`, a helper that frees it — leaves the struct: the
