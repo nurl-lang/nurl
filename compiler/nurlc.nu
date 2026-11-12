@@ -77187,6 +77187,25 @@ unsafe @ __str_rfind_char s x i c → i {
     ^ -1
 }
 
+// The type of field path `rest` (`ap`, `in.ap`) of a value of type `ty`,
+// walked through struct fields held BY VALUE only; `` where a step is not
+// one (a pointer, a container's element, an unknown field).
+@ __clo_fpath_ty i syms s ty s rest → s {
+    : ~ s cur ( nurl_str_cat ty `` )
+    : ~ s r ( nurl_str_cat rest `` )
+    ~ != 0 ( nurl_str_len r ) {
+        : i d ( nurl_str_find r `.` )
+        : s f ? < d 0 ( nurl_str_cat r `` ) ( nurl_str_slice r 0 d )
+        = r ? < d 0 `` ( nurl_str_slice r + d 1 - - ( nurl_str_len r ) d 1 )
+        : i n ( nurl_str_len cur )
+        ? | | < n 2 != ( nurl_str_get cur 0 ) 37 ( is_ptr_ty cur ) { ^ ( nurl_str_cat `` `` ) } {}
+        : s nx ( nurl_sym_get2 syms ( nurl_str_slice cur 1 - n 1 ) ( nurl_str_cat3 `__` f `__type` ) )
+        ? == 0 ( nurl_str_len nx ) { ^ ( nurl_str_cat `` `` ) } {}
+        = cur ( nurl_str_cat nx `` )
+    }
+    ^ cur
+}
+
 // What running a closure built on `line` changes of its captures that do
 // not synchronise themselves (not a handle asserted `% Sync`): a capture it
 // hands to a call (`effs`: `name:callee:k`) as `&name@line@callee@k`, one it
@@ -77209,9 +77228,20 @@ unsafe @ __str_rfind_char s x i c → i {
             : i dot ( nurl_str_find nm `.` )
             : s root ? > dot 0 ( nurl_str_slice nm 0 dot ) nm
             : s ty ( nurl_sym_get syms root )
-            ? & & != 0 ( nurl_str_len ty ) ! ( __is_closure_ty ty ) ! ( __thr_orders_itself syms ty ) {
-                : s cal ( nurl_str_slice e + c1 1 - - c2 c1 1 )
-                : s k0 ( nurl_str_slice e + c2 1 - - ( nurl_str_len e ) c2 1 )
+            // (What is handed over is the field the path names: an Arc or
+            // another handle that orders itself, held by value in a captured
+            // struct — `( arc_clone [Pl] . a ap )` — changes nothing of the
+            // capture a lock should guard, as the Arc captured itself does
+            // not; agora #684.)
+            // (Handed by value only: an `inout` or `sink` parameter is the
+            // holder's storage, or takes the field out of it — agora #639.)
+            : s cal ( nurl_str_slice e + c1 1 - - c2 c1 1 )
+            : s k0 ( nurl_str_slice e + c2 1 - - ( nurl_str_len e ) c2 1 )
+            : s cbase ( bck_generic_base cal )
+            : b byval ! | | | ( nurl_sym_has_word g_fn_inout cal k0 ) ( nurl_sym_has_word g_fn_inout cbase k0 ) ( nurl_sym_has_word g_fn_sink cal k0 ) ( nurl_sym_has_word g_fn_sink cbase k0 )
+            : s fty ? & > dot 0 byval ( __clo_fpath_ty syms ty ( nurl_str_slice nm + dot 1 - - ( nurl_str_len nm ) dot 1 ) ) ``
+            ? & & & != 0 ( nurl_str_len ty ) ! ( __is_closure_ty ty ) ! ( __thr_orders_itself syms ty )
+            | == 0 ( nurl_str_len fty ) ! ( __thr_orders_itself syms fty ) {
                 : s k ? == 0 ( nurl_str_len effco ) ( nurl_str_cat k0 `` ) ( __clo_eff_cond_k effco e0 k0 )
                 = out ( __bar_add out ( nurl_str_cat4 ( nurl_str_cat3 `&` root `@` ) ( nurl_str_int line ) ( nurl_str_cat `@` cal ) ( nurl_str_cat `@` k ) ) )
             } {}
