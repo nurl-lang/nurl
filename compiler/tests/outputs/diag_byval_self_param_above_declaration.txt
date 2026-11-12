@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_byval_self_param_above_declaration.nu:6:11: error: 'A' holds itself by value, so it has no finite size: 'A.b' has the type 'A'. A value cannot contain a value of its own type. Put the inner one behind an owner: '( Box A )' for one owner, '( Rc A )' when it is shared, '( Vec A )' for several — and '?( Box A )' where there may be none.
+: A { i n A b }
+          ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

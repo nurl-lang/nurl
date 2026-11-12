@@ -4001,6 +4001,21 @@ unsafe @ note_unsafe_item s pos s what → v {
     {}
 }
 
+// A struct's origin and visibility, noted by the type-name pre-scan: a use
+// in a file above the struct's import is checked as one below it (agora
+// #772 — a struct's values work above its declaration). The declaration
+// records the same again (vis_record_type).
+@ __vis_note_type s sname b was_pub → v {
+    : s sf ( vis_current_src_file )
+    ? != 0 ( nurl_sym_len g_vis_syms ( nurl_str_cat sname `__src_file` ) ) { ^ } {}
+    ( nurl_sym_def g_vis_syms ( nurl_str_cat sname `__src_file` ) sf )
+    ? was_pub
+    { ( nurl_sym_def g_vis_syms ( nurl_str_cat sname `__pub` ) `1` )
+        ( nurl_sym_def g_vis_syms ( nurl_str_cat sf `__strict` ) `1` )
+    }
+    {}
+}
+
 // vis_record_const: register source-file origin of a `:` global
 // constant (or `: ~` mutable global). Identical bookkeeping shape
 // as vis_record_type — the use site reads via the same lookup.
@@ -24565,6 +24580,11 @@ unsafe @ gen_match i lex i syms i cg → s {
     ? & & == match_first_tt TT_LPAREN ( __arm_call_bit_ok syms )
     | == 0 ( nurl_sym_len syms `__last_call_ret_view__` ) ( __call_answers syms match_first_tt )
     { = scrut_own ( mem_call_retown syms cg ) } {}
+    // …and so does an option or result LITERAL: it took its payload over
+    // (`@ ?String { T ( string_clone s ) }`, or a binding moved into it),
+    // and a match over it was the payload's last owner — released by
+    // nobody, it leaked (agora #654).
+    ? & == match_first_tt TT_AT != 0 ( nurl_str_starts match_type `{ i1, ` ) { = scrut_own ( nurl_str_cat `true` `` ) } {}
     // A call that lends what it hands back (a borrow — `vec_get`'s
     // element — or a view of an argument it does not answer per call for)
     // leaves the option with its owner: the arms are lent its payload.
@@ -53870,7 +53890,6 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         // "use of undefined identifier 'x'", blaming the NAME. Same
         // helper, same wording as the parameter case, so the two agree.
         ( check_type_known lex syms ptype `a binding type` __bt_line __bt_col )
-        ( __check_value_type_defined lex syms ptype `a binding type` __bt_line __bt_col )
         // Capture the NURL form of `! T E` when present, so gen_match can
         // recover the inner T (e.g. `Json`) for struct-handle reconstruction.
         // parse_type's recursive descent through parse_type_res leaves the
@@ -72378,7 +72397,6 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     : i __rt_col ( nurl_lex_col lex )
     : s ret_ty ( parse_type lex )
     ( check_type_known lex syms ret_ty `the return type` __rt_line __rt_col )
-    ( __check_value_type_defined lex syms ret_ty `the return type` __rt_line __rt_col )
     : s nurl_ret ( nurl_sym_get g_res_type_syms `__last_res_nurl__` )
     // LLVM type of the Ok-payload T (e.g. `%Vec__i8` for `! ( Vec u ) s`,
     // `i8*` for `! s E`). Recorded per-function — mirrors `<fname>__nurl_ret`
@@ -73290,7 +73308,6 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     : i __pt_col ( nurl_lex_col lex )
     : s lt ( parse_type lex )
     ( check_type_known lex syms lt `a parameter type` __pt_line __pt_col )
-    ( __check_value_type_defined lex syms lt `a parameter type` __pt_line __pt_col )
     // Capture the `! T E` / `? T` payload metadata for this parameter so a
     // `?? <param> { T x → … }` match can reconstruct a struct / pointer
     // payload from its i64 slot — exactly as gen_let_or_struct does for a
@@ -74148,57 +74165,6 @@ unsafe @ __check_fnty_types_defined i lex i syms s flt → v {
     }
 }
 
-// A named type used BY VALUE — a binding, a parameter, a return, a
-// global — must already be DEFINED in the emitted IR: LLVM sizes the
-// alloca / load / store / argument from the type's body, and a body that
-// arrives later in the module leaves an opaque struct at the use site.
-// The failure was location-free ("Cannot allocate unsized type
-// %FineTuneReport" from clang, or "type 'X' has no field 'a'" from the
-// field pass when the struct's fields were not registered yet, both
-// pointing away from the cause: a `: X x …` above the `: X { … }`).
-// Only the by-value form is affected — a pointer to a later-declared
-// type is resolved when the definition arrives — and generic
-// instantiations (`%Vec__i64`) are emitted ahead of every user struct,
-// so dunder names are skipped, as is the `%dyn.` fat pointer. The
-// pre-scan registered every type NAME, so a name that maps to `%Name`
-// without a `ty##` position is exactly "declared later".
-unsafe @ __check_value_type_defined i lex i syms s llvm_ty s ctx i tline i tcol → v {
-    : i n ( nurl_str_len llvm_ty )
-    : *u llvm_ty_p # *u llvm_ty
-    : ~ i i 0
-    ~ < i n {
-        ? == ( nurl_str_at llvm_ty_p n i ) 37
-        { : ~ i j + i 1
-            ~ & < j n ( __is_ident_char ( nurl_str_at llvm_ty_p n j ) ) { = j + j 1 }
-            : s name ( nurl_str_slice llvm_ty + i 1 - j + i 1 )
-            : i by_value ? | >= j n != ( nurl_str_at llvm_ty_p n j ) 42 1 0
-            // (A name with `__` is a generic's instance, emitted before its
-            // first use — unless it is a module's own name an aliased import
-            // spelled `geo__Pt`: that one follows the rule like any other,
-            // agora #730.)
-            : s __vt_user ( __alias_user_name name )
-            ? & & & & != 0 by_value != 0 ( nurl_str_len name )
-            | ! ( __has_dunder name ) != 0 ( nurl_str_len __vt_user ) ! ( seq name `dyn` ) ! ( is_tparam_like name )
-            { : s sv ( nurl_sym_get syms name )
-                ? & & != 0 ( nurl_str_len sv ) == ( nurl_str_get sv 0 ) 37
-                == 0 ( nurl_sym_len g_fn_pos_syms ( nurl_str_cat `ty##` name ) )
-                { ? == 0 ( nurl_str_len __vt_user ) {
-                        ( die_pos lex tline tcol ( nurl_str_cat
-                        ( nurl_str_cat4 `type '` name `' is used by value as ` ctx )
-                        ( nurl_str_cat3 ` here but is declared LATER in the program. A value of a named type needs the type's definition before this point — the compiler emits the program in order, and LLVM cannot size a struct whose body it has not seen (a pointer to it is fine). Move ': ` name `' above this use, or import the file that declares it before this one.` ) ) )
-                    } {
-                        ( die_pos lex tline tcol ( nurl_str_cat
-                        ( nurl_str_cat4 `type '` __vt_user `' is used by value as ` ctx )
-                        ` here but is declared LATER in the program: the import that declares it comes below this use. A value of a named type needs the type's definition before this point — the compiler emits the program in order, and LLVM cannot size a struct whose body it has not seen (a pointer to it is fine). Move the import above this use.` ) )
-                    }
-                }
-                {} }
-            {}
-            = i j }
-        { = i + i 1 }
-    }
-}
-
 // ── A struct that holds itself by value (agora #661) ─────────────
 // `: N { i v ?N next }`, or `: A { B b }` beside `: B { A a }`: a value
 // that contains a value of its own type has no finite size. Only the field
@@ -74590,8 +74556,7 @@ unsafe @ gen_const_decl s ty_tok b is_mutable i lex i syms i ty_line i ty_col �
                 ( nurl_str_cat ( nurl_str_cat4
                 `', which is a type keyword. A declaration is ': TYPE name value' — the type comes FIRST. Swap them: ': ` cname ` ` ty_tok )
                 ` <value>'.` ) ) ) }
-            { ( check_type_known lex syms lt `a global declaration's type` __ct_line __ct_col )
-                ( __check_value_type_defined lex syms lt `a global declaration's type` __ct_line __ct_col ) }
+            { ( check_type_known lex syms lt `a global declaration's type` __ct_line __ct_col ) }
         }
         {}
         // Flat-namespace guard for globals, twin of the struct one above: a
@@ -76374,6 +76339,15 @@ unsafe @ __type_needs_drop s ty i syms → b {
     } {}
     : s vlist ( nurl_sym_get2 syms sname `__variants` )
     : s fcs ( nurl_sym_get2 syms sname `__field_count` )
+    // (A type asked again while its own fields are asked holds itself by
+    // value — refused as having no finite size (__byval_cycle_check); a
+    // Vec, an option or a pointer between answers before recursing. "No"
+    // while it is in progress: the walk went round the cycle until the
+    // stack ran out, and nurlc crashed after the diagnostic, or before it
+    // for a parameter of the type compiled above its declaration.)
+    : s wkey ( nurl_str_cat `tndwip##` ty )
+    ? != 0 ( nurl_sym_len g_impl_name_syms wkey ) { ^ F } {}
+    ( nurl_sym_def g_impl_name_syms wkey `1` )
     : ~ b r F
     ? != 0 ( nurl_str_len vlist ) { = r ( __enum_needs_drop vlist syms ) } {
         : i fc ? != 0 ( nurl_str_len fcs ) ( nurl_str_to_int fcs ) 0
@@ -76388,6 +76362,7 @@ unsafe @ __type_needs_drop s ty i syms → b {
             = i + i 1
         }
     }
+    ( nurl_sym_def g_impl_name_syms wkey `` )
     ? & != 0 g_layouts_final | != 0 ( nurl_str_len vlist ) != 0 ( nurl_str_len fcs ) { ( nurl_sym_set g_impl_name_syms mkey ( nurl_str_cat gen ? r `1` `0` ) ) } {}
     ^ r
 }
@@ -77928,6 +77903,25 @@ unsafe @ __str_rfind_char s x i c → i {
     ^ -1
 }
 
+// The type of field path `rest` (`ap`, `in.ap`) of a value of type `ty`,
+// walked through struct fields held BY VALUE only; `` where a step is not
+// one (a pointer, a container's element, an unknown field).
+@ __clo_fpath_ty i syms s ty s rest → s {
+    : ~ s cur ( nurl_str_cat ty `` )
+    : ~ s r ( nurl_str_cat rest `` )
+    ~ != 0 ( nurl_str_len r ) {
+        : i d ( nurl_str_find r `.` )
+        : s f ? < d 0 ( nurl_str_cat r `` ) ( nurl_str_slice r 0 d )
+        = r ? < d 0 `` ( nurl_str_slice r + d 1 - - ( nurl_str_len r ) d 1 )
+        : i n ( nurl_str_len cur )
+        ? | | < n 2 != ( nurl_str_get cur 0 ) 37 ( is_ptr_ty cur ) { ^ ( nurl_str_cat `` `` ) } {}
+        : s nx ( nurl_sym_get2 syms ( nurl_str_slice cur 1 - n 1 ) ( nurl_str_cat3 `__` f `__type` ) )
+        ? == 0 ( nurl_str_len nx ) { ^ ( nurl_str_cat `` `` ) } {}
+        = cur ( nurl_str_cat nx `` )
+    }
+    ^ cur
+}
+
 // What running a closure built on `line` changes of its captures that do
 // not synchronise themselves (not a handle asserted `% Sync`): a capture it
 // hands to a call (`effs`: `name:callee:k`) as `&name@line@callee@k`, one it
@@ -77950,9 +77944,20 @@ unsafe @ __str_rfind_char s x i c → i {
             : i dot ( nurl_str_find nm `.` )
             : s root ? > dot 0 ( nurl_str_slice nm 0 dot ) nm
             : s ty ( nurl_sym_get syms root )
-            ? & & != 0 ( nurl_str_len ty ) ! ( __is_closure_ty ty ) ! ( __thr_orders_itself syms ty ) {
-                : s cal ( nurl_str_slice e + c1 1 - - c2 c1 1 )
-                : s k0 ( nurl_str_slice e + c2 1 - - ( nurl_str_len e ) c2 1 )
+            // (What is handed over is the field the path names: an Arc or
+            // another handle that orders itself, held by value in a captured
+            // struct — `( arc_clone [Pl] . a ap )` — changes nothing of the
+            // capture a lock should guard, as the Arc captured itself does
+            // not; agora #684.)
+            // (Handed by value only: an `inout` or `sink` parameter is the
+            // holder's storage, or takes the field out of it — agora #639.)
+            : s cal ( nurl_str_slice e + c1 1 - - c2 c1 1 )
+            : s k0 ( nurl_str_slice e + c2 1 - - ( nurl_str_len e ) c2 1 )
+            : s cbase ( bck_generic_base cal )
+            : b byval ! | | | ( nurl_sym_has_word g_fn_inout cal k0 ) ( nurl_sym_has_word g_fn_inout cbase k0 ) ( nurl_sym_has_word g_fn_sink cal k0 ) ( nurl_sym_has_word g_fn_sink cbase k0 )
+            : s fty ? & > dot 0 byval ( __clo_fpath_ty syms ty ( nurl_str_slice nm + dot 1 - - ( nurl_str_len nm ) dot 1 ) ) ``
+            ? & & & != 0 ( nurl_str_len ty ) ! ( __is_closure_ty ty ) ! ( __thr_orders_itself syms ty )
+            | == 0 ( nurl_str_len fty ) ! ( __thr_orders_itself syms fty ) {
                 : s k ? == 0 ( nurl_str_len effco ) ( nurl_str_cat k0 `` ) ( __clo_eff_cond_k effco e0 k0 )
                 = out ( __bar_add out ( nurl_str_cat4 ( nurl_str_cat3 `&` root `@` ) ( nurl_str_int line ) ( nurl_str_cat `@` cal ) ( nurl_str_cat `@` k ) ) )
             } {}
@@ -89496,8 +89501,12 @@ unsafe @ priv_resolve i lex i syms s fname → s {
                             } {}
                             : s __fpos ( nurl_str_cat ( vis_current_src_file )
                             ( nurl_str_cat `:` ( nurl_str_int ( nurl_lex_line lex ) ) ) )
-                            // (A type of the same name: __note_decl_name.)
-                            ( __note_decl_name lex ? != 0 ( nurl_str_len fname_raw_scan ) fname_raw_scan fname `fn` )
+                            // (A type of the same name: __note_decl_name. `@ S {`
+                            // is a struct literal — a global's misplaced value,
+                            // refused where it is compiled — not a function.)
+                            ? != ( nurl_lex_peek_type lex ) TT_LBRACE {
+                                ( __note_decl_name lex ? != 0 ( nurl_str_len fname_raw_scan ) fname_raw_scan fname `fn` )
+                            } {}
                             ( nurl_lex_advance lex )
                             // Grammar v2.0: record per-fn source-file origin and (if the
                             // preceding token was `pub`) the public flag. Strict-mode for
@@ -89954,6 +89963,16 @@ unsafe @ priv_resolve i lex i syms s fname → s {
                 : s variant ( nurl_lex_val lex )
                 ( nurl_lex_advance lex )
                 = variants ( nurl_str_cat3 variants variant ` ` )
+                // A variant is a file-scope constant, its global `@X` emitted
+                // where gen_enum_decl reaches the enum: known by name from
+                // here, a function above the declaration builds and tests
+                // one as it reads a struct's field (agora #772).
+                ? == 0 ( nurl_sym_len2 syms variant `__enum_of` ) {
+                    ( nurl_sym_def syms variant `i64` )
+                    ( nurl_sym_def syms ( nurl_str_cat variant `__global` ) `1` )
+                    ( nurl_sym_def syms ( nurl_str_cat variant `__enum_of` ) name )
+                } {}
+
                 : ~ i count 0
                 ~ & != ( nurl_lex_type lex ) TT_RBRACE ( could_be_payload_type lex syms ) {
                     : s ty ( parse_type lex )
@@ -89970,7 +89989,17 @@ unsafe @ priv_resolve i lex i syms s fname → s {
             ~ & != ( nurl_lex_type lex ) TT_RBRACE != ( nurl_lex_type lex ) TT_EOF {
                 : s ty ( parse_type lex )
                 ( nurl_sym_def syms ( nurl_str_cat3 name `__idx_` ( nurl_str_cat ( nurl_str_int count ) `__type` ) ) ty )
-                ? ( is_ident_tok ( nurl_lex_type lex ) ) { ( nurl_lex_advance lex ) } {}
+                // …and by name, as gen_struct_decl registers them: a field
+                // read in a function above the declaration — a by-value
+                // parameter's, a payload's, a binding's — finds its field
+                // (agora #769, #772).
+                ? ( is_ident_tok ( nurl_lex_type lex ) ) {
+                    : s fname ( nurl_lex_val lex )
+                    ( nurl_sym_def syms ( nurl_str_cat4 name `__` fname `__idx` ) ( nurl_str_int count ) )
+                    ( nurl_sym_def syms ( nurl_str_cat4 name `__` fname `__type` ) ty )
+                    ( nurl_sym_def syms ( nurl_str_cat3 name `__idx_` ( nurl_str_cat ( nurl_str_int count ) `__name` ) ) fname )
+                    ( nurl_lex_advance lex )
+                } {}
                 = count + count 1
             }
             ( nurl_sym_def syms ( nurl_str_cat name `__field_count` ) ( nurl_str_int count ) )
@@ -90010,6 +90039,37 @@ unsafe @ priv_resolve i lex i syms s fname → s {
     } {}
 }
 
+// One namespace at file scope, for functions and types alike (agora #728):
+// `( Pt 4 )` reads as the type wherever a struct `Pt` is declared, so a
+// function `@ Pt` beside one could never be called, and the call's error
+// blamed its argument ("argument 1 has type 'Pt'"). scan_type_names, the
+// first pass, notes where every type is declared (`ty`); scan_fn_sigs then
+// asks each function (`fn`), and the later of the two declarations is
+// refused where it stands, naming the other (the function, when they are
+// in different files). `lex` is on the declared name.
+@ __note_decl_name i lex s name s kind → v {
+    : s here ( nurl_str_cat3 ( vis_current_src_file ) `:` ( nurl_str_int ( nurl_lex_line lex ) ) )
+    ? ( seq kind `ty` ) {
+        : s k ( nurl_str_cat `tyat##` name )
+        ? != 0 ( nurl_sym_len g_fn_pos_syms k ) { ^ } {}
+        ( nurl_sym_def g_fn_pos_syms k here )
+        // (`line col`: the file is `here`'s.)
+        ( nurl_sym_def g_fn_pos_syms ( nurl_str_cat `tylc##` name ) ( nurl_str_cat3 ( nurl_str_int ( nurl_lex_line lex ) ) ` ` ( nurl_str_int ( nurl_lex_col lex ) ) ) )
+        ^
+    } {}
+    : s at ( nurl_sym_get g_fn_pos_syms ( nurl_str_cat `tyat##` name ) )
+    ? == 0 ( nurl_str_len at ) { ^ } {}
+    : s lc ( nurl_sym_get g_fn_pos_syms ( nurl_str_cat `tylc##` name ) )
+    : i tline ( nurl_str_to_int ( str_first_word lc ) )
+    : b tlater & ( seq at ( nurl_str_cat3 ( vis_current_src_file ) `:` ( str_first_word lc ) ) ) > tline ( nurl_lex_line lex )
+    : s first ? tlater ( nurl_str_cat3 `a function '@ ` name `' is` ) ( nurl_str_cat3 `a type ': ` name `' is` )
+    : s msg ( nurl_str_cat4 ( nurl_str_cat3 `duplicate name '` name `' — ` ) first ( nurl_str_cat ` already declared at ` ? tlater here at )
+    ( nurl_str_cat3 `. Functions and types share one namespace at file scope, and a call '( ` name ` … )' reads as the type, so the function could never be called: rename one (a type is usually capitalised, a function not). If the two are in different files, both are visible to the importer, so the names must still differ.` ) )
+    ? tlater {
+        ( die_pos lex tline ( nurl_str_to_int ( str_skip_word lc ) ) msg )
+    } { ( die lex msg ) }
+}
+
 // scan_type_names: linear pre-pass that registers every top-level type
 // NAME into `syms` as `Name → %Name` — struct `: Name { ... }`, generic
 // struct `: Name [T+] { ... }`, and enum `: | Name { ... }` — and
@@ -90025,39 +90085,12 @@ unsafe @ priv_resolve i lex i syms s fname → s {
 // body at depth > 0 and are never registered here. A constant
 // (`: ~? Type name value`) carries its name in 2nd position with no
 // `{`/`[` after the 1st token, so it is correctly skipped.
-// One namespace at file scope, for functions and types alike (agora #728):
-// `( Pt 4 )` reads as the type wherever a struct `Pt` is declared, so a
-// function `@ Pt` beside one could never be called, and the call's error
-// blamed its argument ("argument 1 has type 'Pt'"). scan_type_names, the
-// first pass, notes where every type is declared (`ty`); scan_fn_sigs then
-// asks each function (`fn`), and the later of the two declarations is
-// refused where it stands, naming the other (the function, when they are
-// in different files). `lex` is on the declared name.
-@ __note_decl_name i lex s name s kind → v {
-    : s here ( nurl_str_cat3 ( vis_current_src_file ) `:` ( nurl_str_int ( nurl_lex_line lex ) ) )
-    ? ( seq kind `ty` ) {
-        : s k ( nurl_str_cat `tyat##` name )
-        ? != 0 ( nurl_sym_len g_fn_pos_syms k ) { ^ } {}
-        ( nurl_sym_def g_fn_pos_syms k here )
-        ( nurl_sym_def g_fn_pos_syms ( nurl_str_cat `tyfl##` name ) ( vis_current_src_file ) )
-        ( nurl_sym_def g_fn_pos_syms ( nurl_str_cat `tyln##` name ) ( nurl_str_int ( nurl_lex_line lex ) ) )
-        ( nurl_sym_def g_fn_pos_syms ( nurl_str_cat `tycl##` name ) ( nurl_str_int ( nurl_lex_col lex ) ) )
-        ^
-    } {}
-    : s at ( nurl_sym_get g_fn_pos_syms ( nurl_str_cat `tyat##` name ) )
-    ? == 0 ( nurl_str_len at ) { ^ } {}
-    : i tline ( nurl_str_to_int ( nurl_sym_get g_fn_pos_syms ( nurl_str_cat `tyln##` name ) ) )
-    : b tlater & ( seq ( nurl_sym_get g_fn_pos_syms ( nurl_str_cat `tyfl##` name ) ) ( vis_current_src_file ) ) > tline ( nurl_lex_line lex )
-    : s first ? tlater ( nurl_str_cat3 `a function '@ ` name `' is` ) ( nurl_str_cat3 `a type ': ` name `' is` )
-    : s msg ( nurl_str_cat4 ( nurl_str_cat3 `duplicate name '` name `' — ` ) first ( nurl_str_cat ` already declared at ` ? tlater here at )
-    ( nurl_str_cat3 `. Functions and types share one namespace at file scope, and a call '( ` name ` … )' reads as the type, so the function could never be called: rename one (a type is usually capitalised, a function not). If the two are in different files, both are visible to the importer, so the names must still differ.` ) )
-    ? tlater {
-        ( die_pos lex tline ( nurl_str_to_int ( nurl_sym_get g_fn_pos_syms ( nurl_str_cat `tycl##` name ) ) ) msg )
-    } { ( die lex msg ) }
-}
-
 @ scan_type_names i lex i syms → v {
     : ~ i depth 0
+    // Was the declaration now starting marked `pub` (the prefixes before
+    // it read)? A struct's visibility is known from here, as its layout is
+    // (__vis_note_type).
+    : ~ b decl_pub F
     ~ != ( nurl_lex_type lex ) TT_EOF {
         // The ':' in a trait's supertrait header is not a struct
         // declaration. Skip the entire trait/impl before looking for types.
@@ -90153,6 +90186,7 @@ unsafe @ priv_resolve i lex i syms s fname → s {
                                         // declared, an instance has its fields —
                                         // agora #716.)
                                         ? == nxt TT_LBRACE {
+                                            ( __vis_note_type name decl_pub )
                                             ( nurl_lex_advance lex )
                                             ( record_type_layout lex name `struct` )
                                         } { ( __scan_template_decl lex T ) }
@@ -90163,8 +90197,18 @@ unsafe @ priv_resolve i lex i syms s fname → s {
                                 // in it, `: ~ ( @ i %Show ) g 0`, is no header.)
                                 { ? ! ( is_ident_tok ( nurl_lex_type lex ) ) { ( skip_one_type lex ) } {} }
                             }
+                            = decl_pub F
                         }
-                        { ( nurl_lex_advance lex ) }
+                        {  // (`pub` and the prefixes that may follow it.)
+                            : i ptt ( nurl_lex_type lex )
+                            // (Asked only while a `pub` waits for its declaration:
+                            // a word's text is copied to be compared.)
+                            ? == ptt TT_PUB { = decl_pub T } {
+                                ? decl_pub {
+                                    ? ! | | | == ptt TT_SIMD == ptt TT_INLINE == ptt TT_UNSAFE & == ptt TT_IDENT ( __raw_prefix_tok lex ) { = decl_pub F } {}
+                                } {}
+                            }
+                            ( nurl_lex_advance lex ) }
                     }
                 }
             } }
