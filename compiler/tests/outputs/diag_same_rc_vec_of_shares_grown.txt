@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_same_rc_vec_of_shares_grown.nu:19:5: error: 'sl' borrows from 'r2', which ended at line 18 — 'hs', which may hold another handle on the same Rc value, was passed to 'grow', which may move the buffer of one of its elements. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'sl' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup sl ).
+    ( nurl_println_int # i ( slice_at [u] sl 0 ) )
+    ^
+error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

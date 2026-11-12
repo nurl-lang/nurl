@@ -1609,6 +1609,22 @@ same value: a clone (h245), a field holding one (h247), or a parameter
 the caller filled with the same value (h246). The walk now ends the
 borrows of every `( Rc T )` handle a function holds, of that type, when
 any of them is handed to a call that may drop or replace what it holds.
+Which values may be the same Rc value is read from the Rc types each
+one reaches (Agora #712): a struct holding a share, a Vec of shares, a
+payload whose elements are shares, an Rc two structs down or held in the
+payload of another Rc are handles on every Rc of those types. What a
+call may change through an argument is everything the argument reaches
+(and a callee that grows an element of it counts, as one that moves its
+buffer does); a view of a value is a view of an Rc's payload only where
+the value is, or holds in its own storage, that Rc — so a loop over a
+Vec of shares that clears each payload goes on, and growing the Vec of
+shares itself ends no view of a payload. Clearing it, or replacing one of
+its elements, through the library's own functions is a handle going,
+which a view through another handle — a count of its own — outlives,
+unless dropping an element runs a `% Drop` of the program's. The answer
+is by type: two
+structs that each made their own Rc look like one value to it; take the
+view again after the call.
 And `vec_put_back` took on trust that `x` came out of slot `i`: written
 back into another slot, two slots held one value (h248). It is raw, for
 `unsafe` code, as `mem_put_back` is.
