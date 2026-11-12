@@ -1,0 +1,48 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+drop binding.old
+drop binding.new
+binding: recovered: panic in drop binding.old
+drop vec.old-1
+drop vec.old-2
+drop vec.old-3
+drop vec.new
+vec_binding: recovered: panic in drop vec.old-2
+drop option.old
+drop option.new
+option: recovered: panic in drop option.old
+drop inout.old
+drop inout.new
+inout_param: recovered: panic in drop inout.old
+drop field.old
+drop field.new
+field: recovered: panic in drop field.old
+drop vfield.old
+drop vfield.new
+vec_field: recovered: panic in drop vfield.old
+drop ofield.old
+drop ofield.new
+option_field: recovered: panic in drop ofield.old
+drop cfield.old
+drop cfield.new
+closure_field: recovered: panic in drop cfield.old
+drop nested.old
+drop nested.new
+nested_field: recovered: panic in drop nested.old
+drop loop.0
+drop loop.1
+drop loop.2
+drop loop.3
+drop loop.4
+looped: recovered: panic in drop loop.3
+drop quiet.old
+quiet: assigned
+drop quiet.new
+quiet: no panic
+drop outer.old-1
+drop outer.old-2
+outer: recovered: panic in drop outer.old-2
+outer: len 1
+drop outer.new

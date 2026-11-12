@@ -10,6 +10,12 @@
 // run_san_tests.sh). A binding handed back (`^ res`) was lost the same way
 // when it was declared after the local whose destructor panics: its
 // registration ended first, in list order.
+//
+// The same holds for a literal handed back that took in a binding of the
+// function (`^ @ ?Bomb { T k }`, Agora #720: the binding's own registration
+// had let go of the value, and the literal was in none), for a result held
+// through a `;` defer chain that panics, and for a fresh raw string or a
+// closure handed back (Agora #620).
 
 $ `stdlib/std/panic.nu`
 $ `stdlib/core/string.nu`
@@ -115,6 +121,68 @@ $ `stdlib/core/vec.nu`
     ^ ( bomb `quiet.result` 0 )
 }
 
+// A literal that took in bindings of the function (Agora #720): an option
+// over one, a struct over two, a literal nested in a literal, a `sink`
+// parameter.
+@ lit_bind → ?Bomb {
+    : Bomb loc ( bomb `litbind.local` 1 )
+    : Bomb k ( bomb `litbind.result` 0 )
+    ^ @ ?Bomb { T k }
+}
+
+@ lit_two → Holder {
+    : Bomb loc ( bomb `littwo.local` 1 )
+    : String name ( string_from `a holder's name, long enough for the heap` )
+    : Bomb inner ( bomb `littwo.inner` 0 )
+    ^ @ Holder { name inner }
+}
+
+@ lit_nested → ?Holder {
+    : Bomb loc ( bomb `litnest.local` 1 )
+    : Bomb inner ( bomb `litnest.inner` 0 )
+    ^ @ ?Holder { T @ Holder { ( string_from `a nested holder's name` ) inner } }
+}
+
+@ lit_sink sink Bomb p → ?Bomb {
+    : Bomb loc ( bomb `litsink.local` 1 )
+    ^ @ ?Bomb { T p }
+}
+
+// A `;` defer that panics after the result is set (Agora #620): a literal,
+// a binding.
+@ defer_lit → Bomb {
+    ; { ( panic `panic in a defer` ) }
+    ^ @ Bomb { ( string_from `deferlit.result` ) 0 }
+}
+
+@ defer_bind → Bomb {
+    : Bomb r ( bomb `deferbind.result` 0 )
+    ; { ( panic `panic in a defer` ) }
+    ^ r
+}
+
+// A fresh raw string, a closure literal, a closure a call made (Agora #620).
+@ raw_text → s {
+    : Bomb loc ( bomb `raw.local` 1 )
+    ^ ( nurl_str_cat `a raw result string, ` `concatenated on the heap` )
+}
+
+@ clo_lit → ( @ i ) {
+    : Bomb loc ( bomb `clolit.local` 1 )
+    : Bomb cap ( bomb `clolit.capture` 0 )
+    ^ \ → i { ^ . cap boom }
+}
+
+@ mk_clo → ( @ i ) {
+    : Bomb cap ( bomb `clocall.capture` 0 )
+    ^ \ → i { ^ . cap boom }
+}
+
+@ clo_call → ( @ i ) {
+    : Bomb loc ( bomb `clocall.local` 1 )
+    ^ ( mk_clo )
+}
+
 @ run s name ( @ v ) f → v {
     : !v PanicInfo r ( recover f )
     ?? r {
@@ -136,5 +204,14 @@ $ `stdlib/core/vec.nu`
     ( run `two` \ → v { : Bomb r ( two ) ( nurl_println `not reached` ) } )
     ( run `lent_elem` \ → v { ( lent_caller ) } )
     ( run `quiet` \ → v { : Bomb r ( quiet ) ( nurl_println `quiet: returned` ) } )
+    ( run `lit_bind` \ → v { : ?Bomb r ( lit_bind ) ( nurl_println `not reached` ) } )
+    ( run `lit_two` \ → v { : Holder r ( lit_two ) ( nurl_println `not reached` ) } )
+    ( run `lit_nested` \ → v { : ?Holder r ( lit_nested ) ( nurl_println `not reached` ) } )
+    ( run `lit_sink` \ → v { : ?Bomb r ( lit_sink ( bomb `litsink.result` 0 ) ) ( nurl_println `not reached` ) } )
+    ( run `defer_lit` \ → v { : Bomb r ( defer_lit ) ( nurl_println `not reached` ) } )
+    ( run `defer_bind` \ → v { : Bomb r ( defer_bind ) ( nurl_println `not reached` ) } )
+    ( run `raw_text` \ → v { : s r ( raw_text ) ( nurl_println `not reached` ) } )
+    ( run `clo_lit` \ → v { : ( @ i ) r ( clo_lit ) ( nurl_println `not reached` ) } )
+    ( run `clo_call` \ → v { : ( @ i ) r ( clo_call ) ( nurl_println `not reached` ) } )
     ^ 0
 }
