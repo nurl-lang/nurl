@@ -1,0 +1,3 @@
+### Fixed
+
+- **nurlc terminates on value blocks whose bindings reuse one name in their initialisers** (Agora #631). `: String t { : String s { : String s ( string_concat s s ) s } s }` never finished compiling. A name in a block local's recorded source expression was re-read, to a fixed point, against the bindings in scope at the block's tail, so the outer `s` inside the inner `s`'s value was taken for the inner `s` itself, and every round doubled the text. Each name now resolves to the binding visible where its value was recorded (`__sx_close_lim`, one pass, the bound shrinking with each expansion), and the program compiles at once.
