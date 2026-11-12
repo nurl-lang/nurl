@@ -27327,8 +27327,12 @@ unsafe @ gen_match i lex i syms i cg → s {
 
 // The depth of the innermost value block that declared `name`, -1 none.
 // (The log is scanned in place: a word is `D:name<op>sx`.)
-unsafe @ __blk_owner s name → i {
-    : i n ( nurl_str_len g_blk_lets )
+unsafe @ __blk_owner s name → i { ^ ( __blk_owner_lim name ( nurl_str_len g_blk_lets ) ) }
+
+// …among the words that start before byte `lim` of the log: the bindings
+// visible where a value logged at `lim` was made (__sx_close_lim).
+unsafe @ __blk_owner_lim s name i lim → i {
+    : i n ? < lim ( nurl_str_len g_blk_lets ) lim ( nurl_str_len g_blk_lets )
     ? == 0 n { ^ -1 } {}
     : *u lp # *u g_blk_lets
     : *u np # *u name
@@ -27352,11 +27356,14 @@ unsafe @ __blk_owner s name → i {
 
 // What block-local `name`, declared at `depth`, holds now: its `let`'s
 // source expression, replaced by an assignment in that block, joined with
-// one in a block nested in it. `` when it was not declared there.
-unsafe @ __blk_val s name i depth → s {
+// one in a block nested in it — among the log's words before byte `lim`,
+// each closed (__sx_close_lim, names deeper than `mind`) against the words
+// logged before it: what its names meant where it was logged. `` when it
+// was not declared there.
+unsafe @ __blk_val s name i depth i lim i mind → s {
     : s pre ( nurl_str_cat3 ( nurl_str_int depth ) `:` name )
     : i pl ( nurl_str_len pre )
-    : i n ( nurl_str_len g_blk_lets )
+    : i n ? < lim ( nurl_str_len g_blk_lets ) lim ( nurl_str_len g_blk_lets )
     : *u lp # *u g_blk_lets
     : *u pp # *u pre
     : ~ s acc ``
@@ -27364,12 +27371,13 @@ unsafe @ __blk_val s name i depth → s {
     : ~ i k 0
     ~ < k n {
         : ~ i e k
-        ~ & < e n != # i . lp e 32 { = e + e 1 }
+        ~ & < e ( nurl_str_len g_blk_lets ) != # i . lp e 32 { = e + e 1 }
         : ~ i j 0
         ~ & & < j pl < + k j e == # i . lp + k j # i . pp j { = j + j 1 }
         ? & == j pl < + k pl e {
             : i op # i . lp + k pl
-            : s v ( nurl_str_slice g_blk_lets + + k pl 1 - - - e k pl 1 )
+            : s v0 ( nurl_str_slice g_blk_lets + + k pl 1 - - - e k pl 1 )
+            : s v ( __sx_close_lim v0 mind k )
             ? == op 61 { = acc ( nurl_str_cat v `` ) = seen T } {}
             ? & == op 126 seen { = acc ( nurl_str_cat v `` ) } {}
             ? & == op 43 seen { = acc ( __sx_join acc v ) } {}
@@ -27382,43 +27390,46 @@ unsafe @ __blk_val s name i depth → s {
 
 // `sx` with every name a value block deeper than `mind` declared replaced
 // by what it holds (a field of one by the same: a field lends what its
-// value does) — to a fixed point, the replacement may name such a binding.
-unsafe @ __sx_close s sx i mind → s {
-    : ~ s cur ( nurl_str_cat sx `` )
-    : ~ i round 0
-    : ~ b changed T
-    ~ & changed < round 8 {
-        = changed F
-        = round + round 1
-        : i n ( nurl_str_len cur )
-        : *u cp # *u cur
-        : ~ s out ``
-        : ~ i k 0
-        ~ < k n {
-            : i c # i . cp k
-            ? | | | | | == c 40 == c 41 == c 124 == c 123 == c 125 == c 59 {
-                = out ( nurl_str_cat out ( nurl_str_slice cur k 1 ) )
-                = k + k 1
-            } {
-                : i k0 k
-                ~ & < k n ! | | | | | == # i . cp k 40 == # i . cp k 41 == # i . cp k 124 == # i . cp k 123 == # i . cp k 125 == # i . cp k 59 { = k + k 1 }
-                : s tok ( nurl_str_slice cur k0 - k k0 )
-                : b callee & < k n == # i . cp k 40
-                : i dot ( nurl_str_find tok `.` )
-                : s root ? < dot 0 ( nurl_str_cat tok `` ) ( nurl_str_slice tok 0 dot )
-                : i c0 ? > ( nurl_str_len root ) 0 ( nurl_str_get root 0 ) 0
-                : b namey | | & >= c0 97 <= c0 122 & >= c0 65 <= c0 90 == c0 95
-                : i own ? & ! callee namey ( __blk_owner root ) -1
-                ? > own mind {
-                    : s v ( __blk_val root own )
-                    = out ( nurl_str_cat out ? == 0 ( nurl_str_len v ) `*` v )
-                    = changed T
-                } { = out ( nurl_str_cat out tok ) }
-            }
+// value does).
+unsafe @ __sx_close s sx i mind → s { ^ ( __sx_close_lim sx mind ( nurl_str_len g_blk_lets ) ) }
+
+// …where `sx` was made before byte `lim` of the log: a name resolves to the
+// binding visible there, and what that binding holds is closed against
+// the words logged before its own (__blk_val). So a name inside a value
+// means what it meant where the value was logged, and a binding that
+// shadows it later is not taken for it. (Re-read to a fixed point, the
+// `s` in `: String s { : String s ( string_concat s s ) s }`'s inner value
+// was taken for the inner `s` itself, and every round doubled the text:
+// nurlc did not terminate, agora #631.) The bound shrinks with each
+// expansion, so it ends.
+unsafe @ __sx_close_lim s sx i mind i lim → s {
+    : s cur ( nurl_str_cat sx `` )
+    : i n ( nurl_str_len cur )
+    : *u cp # *u cur
+    : ~ s out ``
+    : ~ i k 0
+    ~ < k n {
+        : i c # i . cp k
+        ? | | | | | == c 40 == c 41 == c 124 == c 123 == c 125 == c 59 {
+            = out ( nurl_str_cat out ( nurl_str_slice cur k 1 ) )
+            = k + k 1
+        } {
+            : i k0 k
+            ~ & < k n ! | | | | | == # i . cp k 40 == # i . cp k 41 == # i . cp k 124 == # i . cp k 123 == # i . cp k 125 == # i . cp k 59 { = k + k 1 }
+            : s tok ( nurl_str_slice cur k0 - k k0 )
+            : b callee & < k n == # i . cp k 40
+            : i dot ( nurl_str_find tok `.` )
+            : s root ? < dot 0 ( nurl_str_cat tok `` ) ( nurl_str_slice tok 0 dot )
+            : i c0 ? > ( nurl_str_len root ) 0 ( nurl_str_get root 0 ) 0
+            : b namey | | & >= c0 97 <= c0 122 & >= c0 65 <= c0 90 == c0 95
+            : i own ? & ! callee namey ( __blk_owner_lim root lim ) -1
+            ? > own mind {
+                : s v ( __blk_val root own lim mind )
+                = out ( nurl_str_cat out ? == 0 ( nurl_str_len v ) `*` v )
+            } { = out ( nurl_str_cat out tok ) }
         }
-        = cur ( nurl_str_cat out `` )
     }
-    ^ cur
+    ^ out
 }
 
 // A `let` (or an assignment) of `name` to a value whose source expression
