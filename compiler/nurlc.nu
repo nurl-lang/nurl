@@ -3118,6 +3118,18 @@ unsafe @ emit_coverage_modules s module → b {
 // > 0 while an arm of a `?` whose condition folded to a constant is
 // generated: code that never runs, for this instance (gen_cond).
 : ~ i g_dead_arm 0
+// Set by a type predicate that is a constant of the instance being
+// generated (`( mem_cyclic [T] )`, `( mem_drop_runs_code [K V] )`, …), read
+// and cleared by gen_cond around its condition: in the standard library
+// and in an `unsafe` function, a statement `?` whose whole condition is
+// one of them generates only the arm the constant selects. The other is
+// never run for this instance, so it is not generated either — its block
+// is passed over (g_skip_dead_block, read by gen_block_expr), and what it
+// would have instantiated is not: a `( HashMap i String )` asks for none
+// of the release a map of destructor values needs (Agora #659). Safe code
+// is not touched: both arms of its `?` are generated and checked.
+: ~ i g_const_pred 0
+: ~ b g_skip_dead_block F
 : ~ i g_unsafe_report 0
 : ~ s g_unsafe_list ``
 
@@ -17501,55 +17513,64 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     ? ( seq fname `volatile_store` )
     { ^ ( gen_volatile_store lex syms cg ) }
     {}
-    // The ownership primitives give up or claim a value by hand: raw
-    // memory, which only an `unsafe` function may vouch for (spec §3.3d).
-    ? | | | | ( seq fname `mem_forget` ) ( seq fname `mem_take` ) ( seq fname `mem_put_back` ) ( seq fname `mem_addr` ) ( seq fname `mem_drop_range` ) {
-        ? ! __callee_shadowed { ( bck_check_raw_call lex syms fname ) } {}
+    // The `mem_*` intrinsics, behind one test of the prefix: every call
+    // the compiler generates comes through here, and all but a handful
+    // are of some other name — they used to be compared with each of the
+    // twenty names below in turn.
+    ? != 0 ( nurl_str_starts fname `mem_` ) {
+        // The ownership primitives give up or claim a value by hand: raw
+        // memory, which only an `unsafe` function may vouch for (spec §3.3d).
+        ? | | | | ( seq fname `mem_forget` ) ( seq fname `mem_take` ) ( seq fname `mem_put_back` ) ( seq fname `mem_addr` ) ( seq fname `mem_drop_range` ) {
+            ? ! __callee_shadowed { ( bck_check_raw_call lex syms fname ) } {}
+        } {}
+        ? & ( seq fname `mem_addr` ) ! __callee_shadowed
+        { ^ ( gen_mem_addr lex syms cg ) }
+        {}
+        ? ( seq fname `mem_forget` )
+        { ^ ( gen_mem_forget lex syms cg ) }
+        {}
+        ? ( seq fname `mem_take` )
+        { ^ ( gen_mem_take lex syms cg ) }
+        {}
+        ? ( seq fname `mem_put_back` )
+        { ^ ( gen_mem_put_back lex syms cg ) }
+        {}
+        ? ( seq fname `mem_dup` )
+        { ^ ( gen_mem_dup lex syms cg __sx_me ) }
+        {}
+        ? & ( seq fname `mem_drop_range` ) ! __callee_shadowed
+        { ^ ( gen_mem_drop_range lex syms cg ) }
+        {}
+        ? ( seq fname `mem_drop_runs_code` )
+        { ^ ( gen_mem_drop_runs_code lex syms cg ) }
+        {}
+        // Reference-count cycle collection (docs/MEMORY.md §7.7).
+        ? ( seq fname `mem_cyclic` )
+        { ^ ( gen_mem_cyclic lex syms cg ) }
+        {}
+        ? ( seq fname `mem_cc_ops` )
+        { ^ ( gen_mem_cc_ops lex syms cg ) }
+        {}
+        ? ( seq fname `mem_trace` )
+        { ^ ( gen_mem_trace lex syms cg ) }
+        {}
+        // The thread crossing's run-time check (docs/MEMORY.md §6.5).
+        ? ( seq fname `mem_send_check` )
+        { ^ ( gen_mem_send_check lex syms cg ) }
+        {}
+        ? ( seq fname `mem_rc_nested` )
+        { ^ ( gen_mem_rc_nested lex syms cg ) }
+        {}
+        ? ( seq fname `mem_resource` )
+        { ^ ( gen_mem_resource lex syms cg ) }
+        {}
+        ? ( seq fname `mem_ts_cyclic` )
+        { ^ ( gen_mem_ts_cyclic lex syms cg ) }
+        {}
+        ? ( seq fname `mem_ts_frozen_only` )
+        { ^ ( gen_mem_ts_frozen_only lex syms cg ) }
+        {}
     } {}
-    ? & ( seq fname `mem_addr` ) ! __callee_shadowed
-    { ^ ( gen_mem_addr lex syms cg ) }
-    {}
-    ? ( seq fname `mem_forget` )
-    { ^ ( gen_mem_forget lex syms cg ) }
-    {}
-    ? ( seq fname `mem_take` )
-    { ^ ( gen_mem_take lex syms cg ) }
-    {}
-    ? ( seq fname `mem_put_back` )
-    { ^ ( gen_mem_put_back lex syms cg ) }
-    {}
-    ? ( seq fname `mem_dup` )
-    { ^ ( gen_mem_dup lex syms cg __sx_me ) }
-    {}
-    ? & ( seq fname `mem_drop_range` ) ! __callee_shadowed
-    { ^ ( gen_mem_drop_range lex syms cg ) }
-    {}
-    // Reference-count cycle collection (docs/MEMORY.md §7.7).
-    ? ( seq fname `mem_cyclic` )
-    { ^ ( gen_mem_cyclic lex syms cg ) }
-    {}
-    ? ( seq fname `mem_cc_ops` )
-    { ^ ( gen_mem_cc_ops lex syms cg ) }
-    {}
-    ? ( seq fname `mem_trace` )
-    { ^ ( gen_mem_trace lex syms cg ) }
-    {}
-    // The thread crossing's run-time check (docs/MEMORY.md §6.5).
-    ? ( seq fname `mem_send_check` )
-    { ^ ( gen_mem_send_check lex syms cg ) }
-    {}
-    ? ( seq fname `mem_rc_nested` )
-    { ^ ( gen_mem_rc_nested lex syms cg ) }
-    {}
-    ? ( seq fname `mem_resource` )
-    { ^ ( gen_mem_resource lex syms cg ) }
-    {}
-    ? ( seq fname `mem_ts_cyclic` )
-    { ^ ( gen_mem_ts_cyclic lex syms cg ) }
-    {}
-    ? ( seq fname `mem_ts_frozen_only` )
-    { ^ ( gen_mem_ts_frozen_only lex syms cg ) }
-    {}
     // Dynamic trait object construction `( dyn Trait v )` (docs/spec.md §4.9).
     // Intercepted only when `dyn` is followed by a known trait name, so a
     // user function that happens to be named `dyn` still calls through.
@@ -22049,8 +22070,16 @@ unsafe @ gen_cond i lex i syms i cg → s {
     // Parsing a CONDITION: a `{` after a ternary in here opens this
     // construct's own block, not a stray one (see g_cond_depth).
     = g_cond_depth + g_cond_depth 1
+    = g_const_pred 0
     : ~ s cv ( gen_operand lex syms cg )
     = g_cond_depth - g_cond_depth 1
+    // (The condition as a whole is a type predicate's constant: it left a
+    // literal, and nothing else was generated for it. Only in code that
+    // vouches for itself — the standard library, an `unsafe` function,
+    // where these predicates are written: an arm of safe code is generated
+    // and checked whatever its condition, as it always was.)
+    : b c_pred & & != 0 g_const_pred | ( seq cv `true` ) ( seq cv `false` ) ( bck_unsafe_ctx )
+    = g_const_pred 0
     : s ct ( nurl_get_last_type )
     // Allow non-i1 integer conditions (e.g. `? & i64a i64b { … }`) by
     // narrowing to i1 via `icmp ne … 0`.
@@ -22166,6 +22195,12 @@ unsafe @ gen_cond i lex i syms i cg → s {
     : i t_mp0 g_member_path_on
     = g_member_path_on ? & != 0 __sx_me == t_tt0 TT_DOT 1 g_member_path_on
     = g_dead_arm + g_dead_arm ? c_dead_then 1 0
+    // (The dead arm of a statement whose condition is a type predicate is
+    // not generated: g_const_pred. It is never entered, so its block ends
+    // in `unreachable` and reaches no join: a function whose live arm
+    // returns has returned.)
+    : b t_skip & & & c_pred c_dead_then c_is_stmt == t_tt0 TT_LBRACE
+    ? t_skip { = g_skip_dead_block T } {}
     // (A temporary an arm's value may view is the join's to hand on: its
     // drop words go through a phi, below.)
     ( nurl_sym_def syms `__deferred_temps__` `` )
@@ -22176,6 +22211,10 @@ unsafe @ gen_cond i lex i syms i cg → s {
     ? c_retv { = g_ret_vpos ( nurl_lex_cur_start lex ) } {}
     ? & c_rval == t_tt0 TT_LBRACE { = g_rpg_want 1 } {}
     : ~ s tv ( gen_expr lex syms cg )
+    ? t_skip {
+        ( nurl_print `  unreachable\n` )
+        = g_did_ret 1
+    } {}
     = g_rpg_want 0
     // (What the arm's value is, for the join's raw provenance: named
     // while the arm's own markers still say what it was.)
@@ -22428,12 +22467,18 @@ unsafe @ gen_cond i lex i syms i cg → s {
     : i e_mp0 g_member_path_on
     = g_member_path_on ? & != 0 __sx_me == e_tt0 TT_DOT 1 g_member_path_on
     = g_dead_arm + g_dead_arm ? c_dead_else 1 0
+    : b e_skip & & & c_pred c_dead_else c_is_stmt == e_tt0 TT_LBRACE
+    ? e_skip { = g_skip_dead_block T } {}
     = g_join_flends 0
     = g_join_deep 0
     = g_join_rdepth ? & < c_jdepth c_jdepth0 | == e_tt0 TT_QUEST == e_tt0 TT_QUESTQUEST c_jdepth -1
     ? c_retv { = g_ret_vpos ( nurl_lex_cur_start lex ) } {}
     ? & c_rval == e_tt0 TT_LBRACE { = g_rpg_want 1 } {}
     : ~ s ev ( gen_expr lex syms cg )
+    ? e_skip {
+        ( nurl_print `  unreachable\n` )
+        = g_did_ret 1
+    } {}
     = g_rpg_want 0
     : s __jv_e ? c_rval ( __rpg_val_of syms e_tt0 e_v0 ) ``
     : s __jo_e ? c_rval ( __rpg_oval_from syms e_tt0 e_v0 ( nurl_get_last_type ) ) ``
@@ -26736,6 +26781,21 @@ unsafe @ __blk_leave b val → v {
     }
 }
 
+// The lexer, just past a block's `{`, is moved to that block's closing
+// `}` (left for the caller): what lies between is not generated.
+@ __lex_skip_block_rest i lex → v {
+    : ~ i depth 1
+    ~ != ( nurl_lex_type lex ) TT_EOF {
+        : i tt ( nurl_lex_type lex )
+        ? == tt TT_LBRACE { = depth + depth 1 } {}
+        ? == tt TT_RBRACE {
+            = depth - depth 1
+            ? == depth 0 { ^ v } {}
+        } {}
+        ( nurl_lex_advance lex )
+    }
+}
+
 @ gen_block_expr i lex i syms i cg → s {
     : i bck_line ( nurl_lex_line lex )
     // A `?`/`??` arm body (mem_arm_body_mark) leaves the exits its tail
@@ -26809,6 +26869,12 @@ unsafe @ __blk_leave b val → v {
         } {}
     } {}
     ( nurl_lex_advance lex )
+    // An arm a type predicate left dead (gen_cond, g_const_pred): its
+    // statements are passed over, and the block is the empty one.
+    ? g_skip_dead_block {
+        = g_skip_dead_block F
+        ( __lex_skip_block_rest lex )
+    } {}
     ( bck_block_enter bck_line )
     : ~ s last ( nurl_str_cat `undef` `` )
     : ~ b any F
@@ -27624,6 +27690,27 @@ unsafe @ __bck_fall_ret_record i lex i syms i first_tt s first_val i sxn0 i line
     } {}
     ( nurl_set_last_type `void` )
     ^ ( nurl_str_cat `undef` `` )
+}
+
+// `( mem_drop_runs_code [T] )`, `( mem_drop_runs_code [K V] )` — may
+// dropping a value of one of these types run code of the program's own
+// (__drop_runs_code: a `% Drop` anywhere inside it, a library handle, a
+// closure, a trait object), which may panic, or reach the container it is
+// being dropped out of? A constant. A container that releases its entries
+// by hand asks it (HashMap, Set, Deque, BTree): only for such types does it
+// move the entries out before it drops them (Agora #659); for every other
+// type its release is the plain loop it always was.
+@ gen_mem_drop_runs_code i lex i syms i cg → s {
+    ( expect lex TT_LBRACK )
+    : ~ b runs F
+    ~ & != ( nurl_lex_type lex ) TT_RBRACK != ( nurl_lex_type lex ) TT_EOF {
+        ? ( __drop_runs_code ( parse_type lex ) ) { = runs T } {}
+    }
+    ( expect lex TT_RBRACK )
+    ( expect lex TT_RPAREN )
+    ( nurl_set_last_type `i1` )
+    = g_const_pred 1
+    ^ ? runs ( nurl_str_cat `true` `` ) ( nurl_str_cat `false` `` )
 }
 
 @ emit_pending_slice_drops i syms → v {
@@ -73616,6 +73703,7 @@ unsafe @ __cc_mangle s ty → s {
     : s ty ( __cc_parse_targ lex )
     ( expect lex TT_RPAREN )
     ( nurl_set_last_type `i1` )
+    = g_const_pred 1
     ^ ? ( __ts_cyclic ty syms ) ( nurl_str_cat `true` `` ) ( nurl_str_cat `false` `` )
 }
 
@@ -75174,6 +75262,7 @@ unsafe @ __cc_note_call i syms s call_name s fname s arg_cs s arg_tys s arg_ids 
     : s ty ( __cc_parse_targ lex )
     ( expect lex TT_RPAREN )
     ( nurl_set_last_type `i1` )
+    = g_const_pred 1
     ^ ? ( __cc_cyclic ty syms ) ( nurl_str_cat `true` `` ) ( nurl_str_cat `false` `` )
 }
 
@@ -75184,6 +75273,7 @@ unsafe @ __cc_note_call i syms s call_name s fname s arg_cs s arg_tys s arg_ids 
     : s ty ( __cc_parse_targ lex )
     ( expect lex TT_RPAREN )
     ( nurl_set_last_type `i1` )
+    = g_const_pred 1
     ^ ? ( __cc_holds_rc ty syms ) ( nurl_str_cat `true` `` ) ( nurl_str_cat `false` `` )
 }
 
@@ -75196,6 +75286,7 @@ unsafe @ __cc_note_call i syms s call_name s fname s arg_cs s arg_tys s arg_ids 
     : s ty ( __cc_parse_targ lex )
     ( expect lex TT_RPAREN )
     ( nurl_set_last_type `i1` )
+    = g_const_pred 1
     ^ ? ( __cc_resource ty syms ) ( nurl_str_cat `true` `` ) ( nurl_str_cat `false` `` )
 }
 
@@ -78540,9 +78631,14 @@ unsafe @ __jpb_note i cg s up → v {
     : ~ i depth 0
     ~ != ( nurl_lex_type lx ) TT_EOF {
         : i tt ( nurl_lex_type lx )
-        ? == tt TT_LBRACE
+        // (Parentheses nest like braces: an `@` inside them is a closure
+        // TYPE — a parameter `( @ v ) f`, a result `→ ( @ i K )` — and
+        // what follows it is that type's result, not a name the module
+        // declares. Taken for one, `( @ v )` renamed every `v` of the
+        // module: its functions then returned `alias__v`.)
+        ? | == tt TT_LBRACE == tt TT_LPAREN
         { = depth + depth 1 ( nurl_lex_advance lx ) }
-        { ? == tt TT_RBRACE
+        { ? | == tt TT_RBRACE == tt TT_RPAREN
             { = depth - depth 1 ( nurl_lex_advance lx ) }
             { ? & == depth 0 == tt TT_AMP
                 {  // FFI: skip '& STR @ IDENT' so the FFI target name is not collected

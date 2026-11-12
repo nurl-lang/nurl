@@ -68,3 +68,39 @@ unsafe inline @ raw_block_zero i n → RawBlock {
 }
 
 unsafe inline @ raw_block_ptr RawBlock b → *u { ^ # *u . b ptr }
+
+// ── A release a panic can go on with ───────────────────────────────
+// A container that releases its entries by hand (a HashMap's slots, a
+// Deque's two runs, a BTree's nodes) drops each one through a destructor
+// that may be the program's own — and may panic. The panic leaves the
+// loop, and nothing would stand for the entries after it: no destructor
+// for them, and what they owned leaked (agora #659).
+//
+// So such a release has two halves, and each container writes both:
+//
+//  1. Its release is RESTARTABLE: an entry leaves the container — the
+//     count goes down, the slot is marked, the kid is unlinked — BEFORE
+//     its destructor runs. Whenever a destructor runs, or panics, the
+//     container holds exactly the entries still to go, and running the
+//     release again releases those.
+//  2. While it runs, a record of its own type (`MapRelease`, `DqRelease`,
+//     …) is a binding of the releasing frame, so the journal holds it: a
+//     panic's drain drops the record, and the record's drop is
+//     `mem_release_rest` over the same release. When the release returns
+//     the record is forgotten: there is nothing left it stands for.
+//
+// Only where dropping an entry runs code of the program's own
+// (`( mem_drop_runs_code [T] )`, a constant): a container of anything else
+// keeps the plain loop, and costs what it always did.
+//
+// `again` is run until it returns. A panic out of it — a later entry's
+// destructor — is caught here and it is run again, on the same frame:
+// however many destructors panic, the stack is no deeper than for one
+// (the runtime's element release does the same, agora #608). Each round
+// drops at least the entry that panicked, so it ends. The panic already
+// on its way, the cause, keeps its own message.
+unsafe @ mem_release_rest ( @ v ) again → v {
+    : *u fnp # *u again 0
+    : *u env # *u again 1
+    ~ != 0 ( nurl_recover fnp env ) {}
+}

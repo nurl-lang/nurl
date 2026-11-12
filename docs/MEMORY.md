@@ -2340,6 +2340,21 @@ journal** instead:
   `Vec` whose elements run no code of the program's own when dropped (a
   `String`, plain data) records nothing: no panic can start in its
   release.
+- A `HashMap`, a `Set`, a `Deque` and a `BTree` release their entries the
+  same way where dropping a key, a value or an element may run a
+  destructor: an entry leaves the container before its destructor runs,
+  and the release in progress is a record of the releasing frame
+  (`MapRelease`, `SetRelease`, `DqRelease`, `BtRelease`), so a destructor
+  that panics does not end it — the entries after it are dropped, once
+  each, then the container's buffers, and only then does the panic go on
+  (`deque_clear` leaves an empty deque that lives on). A container that
+  hands an entry out drops what goes with it last — `btree_remove` and
+  `map_remove` the stored key, `btree_set` and `map_set` over an existing
+  entry the passed key — with every count final and the value handed back
+  still a binding: a key's destructor that panics there leaves the
+  container without the entry and usable, and the value is released by
+  the unwind. A container of anything else records nothing and runs the
+  loop it always did (`( mem_drop_runs_code [T] )`, a constant).
 - What a destructor allocates and frees while the journal is drained is
   freed like anything else. The drain keeps the buffers it frees until it
   ends, so an address it has freed is not handed out again while it runs:
@@ -2752,6 +2767,8 @@ are dropped, moved and copied by the same rules:
 | `( mem_dup x )` | an owned copy: deep for an owning value, the value itself otherwise; it holds the views `x` holds (§2.13) |
 | `( mem_forget x )` | gives up `x`'s value without releasing it; `unsafe` only |
 | `( mem_drop_range [T] data from to )` | drops the elements `[from, to)` of the buffer at `data`, which their container has given up, in index order (`vec_truncate`, `vec_clear`, `vec_retain`); one whose destructor panics does not end it (§7.2); no code at all for a `T` that owns nothing; `unsafe` only |
+| `( mem_drop_runs_code [T] )`, `( mem_drop_runs_code [K V] )` | a constant: may dropping a value of one of these types run code of the program's own (a `% Drop` anywhere inside it, a library handle, a closure, a trait object) — and so panic? What a container that releases its entries by hand asks before it records the release (§7.2); F for a `String`, a `Vec` of them, plain data. In the standard library and in an `unsafe` function, a statement `? ( mem_drop_runs_code [T] ) { … } { … }` compiles only the arm the constant selects, as for every type predicate (`mem_cyclic`, `mem_rc_nested`, `mem_resource`): the other arm instantiates nothing (spec §8.5) |
+| `( mem_release_rest again )` | runs the closure `again` — a container's restartable release, each entry leaving the container before its destructor runs — until it returns, catching a later destructor's panic and going on, on one frame: the drop of the record a release in progress keeps in the journal (§7.2; stdlib/core/mem.nu, `unsafe`) |
 | `( mem_replace [T] place x )` | `x` goes into `place` (a mutable binding, a field of one, or a field through a pointer) and what `place` held comes back, owned; nothing is dropped or copied (stdlib/core/mem.nu, `unsafe`) |
 | `( vec_retain [A] v keep )` | the elements `keep` answers T for stay, in order; the rest are dropped, in place, once every element has been judged (in no order of their own); a `keep` or a destructor that panics leaves `v` holding each of its elements once (§7.2) (stdlib/core/vec.nu) |
 | `( vec_put_back [A] v i x )` | `x`, read out of slot `i` and updated, goes back: the check-in of a table that lends its records by value; a function handing its parameter on to it writes it back too, for its own callers. Nothing checks that `i` is the slot `x` was read from, so it is `unsafe` only, as `mem_put_back` is (h248) |

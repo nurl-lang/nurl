@@ -2744,6 +2744,24 @@ whichever way it leaves:
   shortens itself (`vec_truncate`, `vec_clear`, `vec_retain`). The elements go in index
   order, and one whose destructor panics does not keep the ones after it
   from being dropped (docs/MEMORY.md §7.2).
+- `( mem_drop_runs_code [T] )` — one type or several, `[K V]` — is a
+  constant `b`: may dropping a value of one of these types run code of
+  the program's own (a `% Drop` anywhere inside it, a library handle, a
+  closure, a trait object), which may panic? A container that releases
+  its entries by hand asks it, and only then keeps a record of the
+  release for a panic to go on with (`mem_release_rest`,
+  stdlib/core/mem.nu; docs/MEMORY.md §7.2). It reads no memory and is not
+  restricted to `unsafe` code.
+- A type predicate is a constant of the generic instance being compiled
+  (`mem_drop_runs_code`, `mem_cyclic`, `mem_rc_nested`, `mem_resource`).
+  In the standard library and in an `unsafe` function — where these
+  predicates are written — a STATEMENT `? ( predicate [T] ) { … } { … }`
+  whose whole condition is one of them, with a block for the arm the
+  constant leaves out, compiles only the arm it selects: the other arm is
+  never run for this instance, so it is not generated, and what it names
+  is not instantiated. A `?` whose value is taken, a condition that
+  combines a predicate with anything else, and every `?` of safe code
+  compile both arms as any `?` does.
 - `( mem_replace [T] place x )` (stdlib/core/mem.nu, `unsafe`) puts `x`
   into the `inout` place and returns what the place held, owned — for
   taking a value out of a field (through a pointer too) and leaving

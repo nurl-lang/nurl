@@ -252,24 +252,68 @@ $ `stdlib/core/box.nu`
 
 // ── Cleanup ─────────────────────────────────────────────────────────
 
+// Release every element from slot `next` on; the set is empty when
+// this returns. An element leaves the set — its slot a tombstone, the
+// count down — before it is dropped, and `next` is moved past it: so
+// whenever a destructor runs the set holds exactly the elements still to
+// go, and calling this again with the same `next` releases those
+// (stdlib/core/mem.nu, "A release a panic can go on with").
+@ __set_release [E] * SetCtl c inout i next → v {
+    : i cap . c cap
+    : *E keys # *E ( raw_block_ptr . c keys )
+    : *i states # *i ( raw_block_ptr . c states )
+    : ~ i i next
+    ~ < i cap {
+        ? == . states i 1 {
+            = . states i 2
+            = . c len - . c len 1
+            = . c tomb + . c tomb 1
+            = next + i 1
+            : E e . keys i
+            ( mem_take e )
+        } {}
+        = i + i 1
+    }
+    = next cap
+}
+
+// A set whose release is under way, and the slot it has come to: what a
+// panic out of an element's destructor finds in the journal, to go on with
+// the elements after it.
+: SetRelease [E] { * SetCtl c i next }
+
+@ SetRelease_drop [E] sink ( SetRelease E ) r → v {
+    : *SetCtl c . r c
+    : ~ i next . r next
+    ( mem_release_rest \ → v { ( __set_release [E] c next ) } )
+}
+
 // What dropping a set does (its owner does it at scope exit — docs/
 // MEMORY.md §7.6): every live element is dropped (no work, and no loop,
 // for elements that own nothing); the record and its buffers go with the
-// handle's field.
+// handle's field. Where dropping an element may run code of the program's
+// own, a destructor that panics does not end it: the elements after it
+// are still dropped, each once (agora #659).
 @ Set_drop [E] sink ( Set E ) st → v {
     ? ( box_is_null [SetCtl] . st ctl ) { ^ } {}
     : *SetCtl c ( box_ptr [SetCtl] . st ctl )
     : i cap . c cap
     ? > cap 0 {
-        : *E keys # *E ( raw_block_ptr . c keys )
-        : *i states # *i ( raw_block_ptr . c states )
-        : ~ i i 0
-        ~ < i cap {
-            ? == . states i 1 {
-                : E e . keys i
-                ( mem_take e )
-            } {}
-            = i + i 1
+        ? ( mem_drop_runs_code [E] ) {
+            : ~ ( SetRelease E ) rest @ ( SetRelease E ) { c 0 }
+            ( __set_release [E] c . rest next )
+            ( mem_forget rest )
+        } {
+            : *E keys # *E ( raw_block_ptr . c keys )
+            : *i states # *i ( raw_block_ptr . c states )
+            : ~ i i 0
+            ~ < i cap {
+                ? == . states i 1 {
+                    : E e . keys i
+                    ( mem_take e )
+                } {}
+                = i + i 1
+            }
         }
     } {}
 }
