@@ -1957,6 +1957,14 @@ unsafe @ agg_field_count i syms s ot → i {
 // call (mem_arg_temps); gen_dyn_construct saves and restores it around
 // its operand's own calls.
 : ~ i g_arg_dyn_box 0
+// The register number (`%r<N>`) of the `( dyn Trait v )` box that the
+// right-hand side being bound made, or -1. The box is fresh and owned,
+// always; a binding given that register owns it (mem_udrop_bind_flag,
+// __rhs_borrow_of). Keyed by the register (SSA: no other value of the
+// function has it, and a binding resets it before its right-hand side), so
+// it is never stale, and none of the last-call channels the borrow walk
+// reads need clearing for it.
+: ~ i g_dyn_box_reg -1
 
 // Set when a literal argument's owned fields wait in `__argtmp_litown__`
 // for mem_arg_temps: the symbol is written and read for a literal only.
@@ -31042,7 +31050,28 @@ unsafe @ __src_has_raw_ptr s text → b {
 // A tried call (`: T x \ ( mk )`) binds the call's payload: whether x owns
 // it is the call's answer, not a borrow's. A block ending in a join is
 // judged by that join (agora #199).
-@ mem_udrop_bind_flag i syms i cg s ptr s ty i rhs_tt s rhs_val s rhs_borrow → v {
+// Is `val` the register of the `( dyn … )` box this right-hand side made?
+@ __is_fresh_box s val → b {
+    ? < g_dyn_box_reg 0 { ^ F } {}
+    ^ ( seq val ( nurl_str_cat `%r` ( nurl_str_int g_dyn_box_reg ) ) )
+}
+
+// What a binding given the value `val` borrows (`__last_value_borrow__`):
+// nothing when `val` is a `( dyn … )` box just made — that box is fresh and
+// owned, whatever the last call before it lent (agora #687: after a lending
+// call the binding was marked a borrow and the box leaked).
+@ __rhs_borrow_of i syms s val → s {
+    ? ( __is_fresh_box val ) { ^ ( nurl_str_cat `` `` ) } {}
+    ^ ( nurl_sym_get syms `__last_value_borrow__` )
+}
+
+// `rhs_reg` is the value's register: a `( dyn … )` box just made is this
+// binding's own, whatever the calls before it (in its operand, or earlier
+// in the function) said of their results. Read off those, the box was
+// taken for lent after a lending call and leaked (agora #687).
+@ mem_udrop_bind_flag i syms i cg s ptr s ty i rhs_tt s rhs_val s rhs_borrow s rhs_reg → v {
+    ? & == rhs_tt TT_LPAREN ( __is_fresh_box rhs_reg )
+    { ( mem_udrop_flag_set syms cg ptr `1` ) ( __sb syms ptr `` ) ^ v } {}
     ? & & == rhs_tt TT_BACKSLASH ( seq ( nurl_sym_get syms `__last_backslash_try__` ) `1` )
     ( seq ( nurl_sym_get syms `__last_try_inner_tt__` ) ( nurl_str_int TT_LPAREN ) )
     { ( __mem_udrop_bind_flag syms cg ptr ty TT_LPAREN rhs_val rhs_borrow ) ^ v } {}
@@ -51617,6 +51646,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         : i __rs_at ( nurl_lex_cur_start lex )
         : i __cra0 g_clo_rhs_at
         = g_clo_rhs_at ? & ! is_mutable == bck_rhs_tt TT_LPAREN __rs_at -1
+        = g_dyn_box_reg -1  // (a box this right-hand side makes: mem_udrop_bind_flag)
         : ~ s val ( gen_expr lex syms cg )
         = g_clo_rhs_at __cra0
         ? | != 0 g_vb_on != 0 g_vb_marks { ( __vb_note_let syms name ) } {}
@@ -51738,7 +51768,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         // Borrow provenance: did the RHS produce a borrow (a value aliasing
         // something the caller still owns)? If so, an auto-Drop binding here
         // must NOT register its drop — the owner reclaims it.
-        : s rhs_borrow ( nurl_sym_get syms `__last_value_borrow__` )
+        : s rhs_borrow ( __rhs_borrow_of syms val )
         // Borrow checker: record this binding (inference path).
         = g_bck_rhs_lend ? == bck_rhs_tt TT_LPAREN ( bck_call_lend_srcs syms ) `-`
         = g_bck_rhs_whole ? & == bck_rhs_tt TT_LPAREN ( __one_word g_bck_rhs_lend ) ( mem_fn_lends_params syms ( nurl_sym_get syms `__last_call_name__` ) T 0 ) F
@@ -51909,7 +51939,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
                     ( mem_note_vget_binding syms name bck_rhs_tt )
                     ( mem_note_bound_lend syms name __own_tt __own_val )
                     ( mem_own_add_user_drop syms cg ptr rvt )
-                    ( mem_udrop_bind_flag syms cg ptr rvt ( __blk_bind_tt __own_tt __blk_lend ) __own_val rhs_borrow )
+                    ( mem_udrop_bind_flag syms cg ptr rvt ( __blk_bind_tt __own_tt __blk_lend ) __own_val rhs_borrow val )
                     ? __blk_lend { ( mem_blk_tail_call_own syms cg ptr ) ( mem_blk_tail_copy_slot syms cg ptr rvt ptr __rhs_r0 ) } {}
                     ( __most_init syms name ptr val __blk_lend )
                     ( mem_journal_push_userdrop syms cg ptr rvt )
@@ -52040,6 +52070,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             : i __rs_at ( nurl_lex_cur_start lex )
             : i __cra0 g_clo_rhs_at
             = g_clo_rhs_at ? & ! is_mutable == bck_rhs_tt TT_LPAREN __rs_at -1
+            = g_dyn_box_reg -1  // (a box this right-hand side makes: mem_udrop_bind_flag)
             : ~ s val ( gen_expr lex syms cg )
             = g_clo_rhs_at __cra0
             ? | != 0 g_vb_on != 0 g_vb_marks { ( __vb_note_let syms name ) } {}
@@ -52152,7 +52183,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             {}
             // Borrow provenance (typed path): a borrow RHS must not
             // register an auto-Drop — the owner reclaims it.
-            : s rhs_borrow ( nurl_sym_get syms `__last_value_borrow__` )
+            : s rhs_borrow ( __rhs_borrow_of syms val )
             // Borrow checker: record this binding (typed path).
             = g_bck_rhs_lend ? == bck_rhs_tt TT_LPAREN ( bck_call_lend_srcs syms ) `-`
             = g_bck_rhs_whole ? & == bck_rhs_tt TT_LPAREN ( __one_word g_bck_rhs_lend ) ( mem_fn_lends_params syms ( nurl_sym_get syms `__last_call_name__` ) T 0 ) F
@@ -52322,7 +52353,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
                     { = g_udrop_noinit ? > g_defer_body_depth 0 2 1
                         ( mem_note_bound_lend syms name __own_tt __own_val )
                         ( mem_own_add_user_drop syms cg ptr rpt )
-                        ( mem_udrop_bind_flag syms cg ptr rpt ( __blk_bind_tt __own_tt __blk_lend ) __own_val rhs_borrow )
+                        ( mem_udrop_bind_flag syms cg ptr rpt ( __blk_bind_tt __own_tt __blk_lend ) __own_val rhs_borrow val )
                         ? __blk_lend { ( mem_blk_tail_call_own syms cg ptr ) ( mem_blk_tail_copy_slot syms cg ptr rpt ptr __rhs_r0 ) } {}
                         ( __most_init syms name ptr val __blk_lend )
                         ( mem_journal_push_userdrop syms cg ptr rpt )
@@ -52486,6 +52517,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
             }
         } {}
         : i __rp_at ( nurl_lex_cur_start lex )
+        = g_dyn_box_reg -1  // (a box this right-hand side makes: mem_udrop_bind_flag)
         : ~ s val ( gen_operand lex syms cg )
         ? != 0 g_most_n { ( __most_wreset syms __ud_ptr0 ) } {}
         ( __rp_rhs_set & ( seq ( nurl_sym_get2 syms name `__inout` ) `1` ) ( __rp_literal_only ( nurl_lex_src_slice lex __rp_at - ( nurl_lex_cur_start lex ) __rp_at ) ) )
@@ -53356,7 +53388,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
                 ( __fs_dropifv_old `true` vt __io_old3 )
             }
         } {}
-        : s __ud_borrow ( nurl_str_cat ( nurl_sym_get syms `__last_value_borrow__` ) `` )
+        : s __ud_borrow ( nurl_str_cat ( __rhs_borrow_of syms val ) `` )
         // `= c ( bump c )` with bump handing its argument back: the same
         // value returns to the same binding — nothing to drop or re-own.
         // Whether it does is known at module end (mem_call_retown): until
@@ -53618,7 +53650,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
                     ( __sb syms __ud_ptr ( nurl_str_cat `@` __ud_ls ) )
                 } }
             { ? & & != 0 ( nurl_str_len __ud_ptr ) ! ( seq bck_rhs_val name ) ! __ud_same
-                { ( mem_udrop_bind_flag syms cg __ud_ptr vt bck_rhs_tt bck_rhs_val __ud_borrow )
+                { ( mem_udrop_bind_flag syms cg __ud_ptr vt bck_rhs_tt bck_rhs_val __ud_borrow val )
                     ? __as_blk { ( mem_blk_tail_call_own syms cg __ud_ptr ) } {} } {} }
         }
         // (…and owns it again past whatever the call's answer said.)
@@ -61677,6 +61709,20 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     // last emitted), which clang rejects as `use of undefined value`.
     ( nurl_sym_def body_syms `__cur_lbl__` `entry` )
     ( nurl_sym_def body_syms `__clo_cap_ptrs__` `` )
+    // The per-expression channels that describe the last call / value
+    // describe one of the ENCLOSING function's, and may name its registers
+    // (`__last_call_own__`, the bit mem_capture_hown reserved after it).
+    // The body starts with none, as a function body does: read before the
+    // body's own first call, they put an undefined register into the
+    // closure's function (agora #687). Restored on sym_pop below.
+    ( nurl_sym_def body_syms `__last_call_name__` `` )
+    ( nurl_sym_def body_syms `__last_call_forward__` `` )
+    ( nurl_sym_def body_syms `__last_call_own__` `` )
+    ( nurl_sym_def body_syms `__last_call_ret_owned__` `` )
+    ( nurl_sym_def body_syms `__last_value_hown__` `` )
+    ( nurl_sym_def body_syms `__last_value_borrow__` `` )
+    ( nurl_sym_def body_syms `__last_call_ret_view__` `` )
+    ( nurl_sym_def body_syms `__last_fresh_reg__` `` )
     // Shadow outer __owned_slices__ with empty list for the closure body
     ( nurl_sym_def body_syms `__owned_slices__` `` )
     ( nurl_sym_def body_syms `__slice_decls__` `` )
@@ -86214,6 +86260,7 @@ unsafe @ dyn_method_decltrait s tname s m → s {
     : s f1 ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print f1 ) ( nurl_print ` = insertvalue ` ) ( nurl_print dynty ) ( nurl_print ` ` ) ( nurl_print f0 ) ( nurl_print `, i8* ` ) ( nurl_print vti8 ) ( nurl_print `, 1\n` )
     ( __sx_publish __me __dsx )
+    = g_dyn_box_reg ( nurl_str_to_int ( nurl_str_slice f1 2 - ( nurl_str_len f1 ) 2 ) )
     ( nurl_set_last_type dynty )
     ^ f1
 }
