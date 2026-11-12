@@ -67,19 +67,6 @@ theorem Reached.sweepBlkD {R' R : Val → Prop} {B : Nat → Option Blk} (hR : �
     · exact Or.inl h
     · exact Or.inr ⟨bl', sweepBlkD_reached hk' (.pay (hr'.roots hR) hk (Or.inr ⟨bl', hk', h⟩)), h⟩
 
-/-- A block the configuration's roots reach is kept by its marking sweep as
-    it was (a global's among them: the sweep roots the globals). -/
-theorem Cfg.sweepD_keeps {C : Cfg} {k : Nat} {bl : Blk} (hk : C.blk k = some bl)
-    (hr : Reached C.roots C.blk k) : C.sweepD.blk k = some bl :=
-  sweepBlkD_reached hk (hr.roots fun _ h => Or.inl (Or.inl h))
-
-/-- **A global's block is never an orphan** (#755's review: the sweep must
-    root the globals, since a global `Locked D` is admissible): a block a
-    module global refers to is kept by the marking sweep as it was. -/
-theorem Cfg.sweepD_glob {C : Cfg} {g : Nat} {v : Val} (hg : C.gl g = some v) {k : Nat} {bl : Blk}
-    (hk : C.blk k = some bl) (hr : Refers C.blk v k) : C.sweepD.blk k = some bl :=
-  Cfg.sweepD_keeps hk (.root (.inr ⟨g, hg⟩) hr)
-
 /-- **When the marking sweep leaves no orphan, every block it leaves is
     reached from the roots**: one reached from the marking sweep's roots was
     reached from the configuration's (an orphan's payload as a root would
@@ -238,15 +225,270 @@ theorem LockHolds.of_sweepD {R : Val → Prop} {B : Nat → Option Blk} {k' k : 
   · exact ⟨t, p, hk0, hs⟩
   · exact absurd (congrArg Blk.kind he) (by simp)
 
-/-- A3.6: the marking sweep keeps what a global's share fits: a global is a
-    root. -/
-theorem _root_.A2.GlobFits.sweepD {C : Cfg} {g : Nat} {t : Ty} {v : Val} (hg : C.gl g = some v)
-    (h : GlobFits C.blk t v) : GlobFits C.sweepD.blk t v := by
-  rcases h with ⟨u, k, o, rfl, rfl, hk⟩ | ⟨u, k, p, rfl, rfl, hk⟩
-  · exact .inl ⟨u, k, o, rfl, rfl, Cfg.sweepD_glob hg hk (.inl (.inl ⟨none, Sub.refl _⟩))⟩
-  · have hr : Refers C.blk (.arc k p) k := .inl (.inl ⟨some p, Sub.refl _⟩)
-    rcases hk with hk | hk
-    · exact .inr ⟨u, k, p, rfl, rfl, .inl (Cfg.sweepD_glob hg hk hr)⟩
-    · exact .inr ⟨u, k, p, rfl, rfl, .inr (Cfg.sweepD_glob hg hk hr)⟩
+/-! ### Agora #755 item 1: the reaps after a thread's step
+
+Thread `i`'s step is followed by its reaps (`CSettle`): each is a step of
+thread `i` (`Step.reap`, on its view), which moves an orphan's payload to a
+fresh slot of thread `i`, so its addresses leave the shared part for thread
+`i`'s (`CParts.thread_of`, whose other threads' facts survive the payload
+leaving the shared part by `ThreadOK.move`, as a lock's check-out), and each
+is ended by the marking sweep (`CParts.sweepD`).  So the parts survive the
+whole configuration step, and since it ends with the marking sweep leaving
+no orphan, every block it leaves is reached from the roots. -/
+
+/-- A thread's step written back, and the marking sweep after it, keep the
+    parts. -/
+theorem CParts.putD {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) (hR : RestrictLemma P)
+    {C : Cfg} {ps : List (Nat → Bool)} (hc : CParts P C ps) {i : Nat} {t : Thread} {m' : Mem} {s' : Stmt}
+    (hi : C.ths[i]? = some t) (hst : Step P (C.view t) t.s (.ok m' s')) :
+    ∃ ps', CParts P (C.put i m' s').sweepD ps' := by
+  obtain ⟨ps', h⟩ := hc.thread_of hP hPc hR hi hst
+  exact ⟨ps', h.sweepD⟩
+
+/-- **The reaps keep the parts.** -/
+theorem CSettle.parts {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) (hR : RestrictLemma P)
+    {i : Nat} {C C' : Cfg} (h : CSettle P i C C') (hc : ∃ ps, CParts P C ps) : ∃ ps, CParts P C' ps := by
+  induction h with
+  | done _ => exact hc
+  | reap hi hs _ _ ih =>
+    obtain ⟨ps, hc⟩ := hc
+    exact ih (hc.putD hP hPc hR hi hs)
+
+/-- The reaps end at a marking sweep's configuration. -/
+theorem CSettle.swept {P : Prog} {i : Nat} {C C' : Cfg} (h : CSettle P i C C') (hC : ∃ W : Cfg, C = W.sweepD) :
+    ∃ W : Cfg, C' = W.sweepD := by
+  induction h with
+  | done _ => exact hC
+  | reap _ _ _ _ ih => exact ih ⟨_, rfl⟩
+
+/-- **A thread's step, the marking sweep after it and its reaps keep the
+    configuration invariant** (Agora #755 item 1). -/
+theorem CInv.thread_of {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) (hR : RestrictLemma P)
+    {C : Cfg} (h : CInv P C) {i : Nat} {t : Thread} {m' : Mem} {s' : Stmt} {C' : Cfg}
+    (hi : C.ths[i]? = some t) (hst : Step P (C.view t) t.s (.ok m' s'))
+    (hse : CSettle P i (C.put i m' s').sweepD C') : CInv P C' := by
+  obtain ⟨ps, hc, _⟩ := h
+  obtain ⟨ps', hc'⟩ := hse.parts hP hPc hR (hc.putD hP hPc hR hi hst)
+  have hno := hse.noOrphan
+  obtain ⟨W, rfl⟩ := hse.swept ⟨_, rfl⟩
+  exact ⟨ps', hc', fun k bl hk => Cfg.sweepD_reached hno hk⟩
+
+/-! ### No race, with the reaps
+
+The sweeps that end a thread's step free only payloads no other thread
+reaches: what the roots after the step reach stays reached through the reaps
+(each adds a slot of thread `i` holding what the orphan's payload held, and
+no root reaches an orphan, so no chain runs through the block it empties)
+and through the marking sweeps (which keep every block the roots reach). -/
+
+theorem upd_at {α : Type} (f : Nat → α) (k : Nat) (v : α) : upd f k v k = v := by simp [upd]
+
+/-- Block `d` of `B` is an orphan: `dead`, its payload in it. -/
+def OrphanAt (B : Nat → Option Blk) (d : Nat) : Prop :=
+  ∃ n f u p, B d = some ⟨Ty.nest n (.dtor f u), .dead, some p⟩
+
+/-- What a set of roots reaches once a reap emptied its orphan, it reached
+    before: the emptied block holds nothing and is read by no one. -/
+theorem Reached.of_reaped {R : Val → Prop} {B : Nat → Option Blk} {kr : Nat} {ty : Ty} {k : Nat}
+    (h : Reached R (upd B kr (some ⟨ty, .dead, none⟩)) k) : Reached R B k := by
+  have href : ∀ {v : Val} {k : Nat}, Refers (upd B kr (some ⟨ty, .dead, none⟩)) v k → Refers B v k := by
+    intro v k hr
+    rcases hr with h | ⟨bl, hk, h⟩
+    · exact .inl h
+    · by_cases he : k = kr
+      · rw [he, upd_at] at hk
+        cases hk
+        rcases h with ⟨c, _, hc⟩ | ⟨d, o, l, _, hc⟩ <;> simp [Blk.rd, Val.ids] at hc
+      · exact .inr ⟨bl, by rw [upd_ne _ _ he] at hk; exact hk, h⟩
+  induction h with
+  | root hv hr => exact .root hv (href hr)
+  | @pay k k' bl _ hk hr ih =>
+    by_cases he : k' = kr
+    · rw [he, upd_at] at hk
+      cases hk
+      exact absurd (href hr) (by simpa [Blk.keeps] using (Refers.not_int (B := B) (n := 0) (k := k)))
+    · exact .pay ih (by rw [upd_ne _ _ he] at hk; exact hk) (href hr)
+
+/-- ... and what it reached before, it reaches after, when it did not reach
+    the emptied block: no chain ran through it. -/
+theorem Reached.to_reaped {R : Val → Prop} {B : Nat → Option Blk} {kr : Nat} {b : Option Blk}
+    (hkr : ¬ Reached R B kr) {k : Nat} (h : Reached R B k) : Reached R (upd B kr b) k := by
+  induction h with
+  | @root v k hv hr =>
+    have hne : k ≠ kr := fun he => hkr (he ▸ .root hv hr)
+    refine .root hv ?_
+    rcases hr with h | ⟨bl, hk, h⟩
+    · exact .inl h
+    · exact .inr ⟨bl, by rw [upd_ne _ _ hne]; exact hk, h⟩
+  | @pay k k' bl hr' hk hr ih =>
+    have hne' : k' ≠ kr := fun he => hkr (he ▸ hr')
+    have hne : k ≠ kr := fun he => hkr (he ▸ .pay hr' hk hr)
+    refine .pay ih (by rw [upd_ne _ _ hne']; exact hk) ?_
+    rcases hr with h | ⟨bl', hk', h⟩
+    · exact .inl h
+    · exact .inr ⟨bl', by rw [upd_ne _ _ hne]; exact hk', h⟩
+
+/-- What keeps address `a` live through thread `q`'s reaps and the marking
+    sweeps after them: the parts; roots that include `R`; no orphan that `R`
+    reaches; and `a` live, owned by no payload or by one `R` reaches. -/
+structure LiveThru (P : Prog) (R : Val → Prop) (a : Nat) (Y : Cfg) : Prop where
+  parts : ∃ ps, CParts P Y ps
+  roots : ∀ v, R v → Y.roots v
+  orph  : ∀ d, OrphanAt Y.blk d → ¬ Reached R Y.blk d
+  live  : Y.alloc a = true
+  held  : ¬ PayIn Y.blk a ∨ ∃ k bl, Y.blk k = some bl ∧ a ∈ bl.tree.ids ∧ Reached R Y.blk k
+
+/-- The marking sweep keeps it: it keeps every block the roots reach, and an
+    orphan it leaves was one, or one it marked, which no root reached. -/
+theorem LiveThru.sweepD {P : Prog} {R : Val → Prop} {a : Nat} {Y : Cfg} (h : LiveThru P R a Y) :
+    LiveThru P R a Y.sweepD := by
+  obtain ⟨ps, hc⟩ := h.parts
+  have hRD : ∀ v, R v → RootsD Y.roots Y.blk v := fun v hv => Or.inl (Or.inl (h.roots v hv))
+  refine ⟨⟨ps, hc.sweepD⟩, h.roots, fun d ⟨n, f, u, p, hd⟩ hr => ?_, ?_, ?_⟩
+  · have hr0 : Reached R Y.blk d := Reached.of_sweepBlkD hr
+    rcases sweepBlkD_some hd with ⟨hd0, _⟩ | ⟨bl0, _, hnr, _, _⟩
+    · exact h.orph d ⟨n, f, u, p, hd0⟩ hr0
+    · exact hnr (hr0.roots hRD)
+  · refine Cfg.sweepD_alloc.mpr ⟨h.live, ?_⟩
+    rintro ⟨k', bl', hk', hnr, _, hik'⟩
+    rcases h.held with hnp | ⟨k, bl, hk, hik, hr⟩
+    · exact hnp ⟨k', bl', hk', hik'⟩
+    · have := hc.uniq k k' bl bl' a hk hk' hik hik'; subst this
+      exact hnr (hr.roots hRD)
+  · rcases h.held with hnp | ⟨k, bl, hk, hik, hr⟩
+    · refine .inl fun hp => hnp ?_
+      obtain ⟨k, bl, hk, hik, _⟩ := Cfg.sweepD_payIn.mp hp
+      exact ⟨k, bl, hk, hik⟩
+    · exact .inr ⟨k, bl, sweepBlkD_reached hk (hr.roots hRD), hik, Reached.sweepBlkD hRD hr⟩
+
+/-- A reap of thread `q` keeps it: the payload goes to a fresh slot of `q`
+    (every slot of `q` stays), the emptied block was an orphan, which `R`
+    did not reach, and the addresses stay live. -/
+theorem LiveThru.reap {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) (hR : RestrictLemma P)
+    {R : Val → Prop} {a : Nat} {Z : Cfg} (h : LiveThru P R a Z) {q : Nat} {t : Thread} {m1 : Mem} {s1 : Stmt}
+    (hq : Z.ths[q]? = some t) (hst : Step P (Z.view t) t.s (.ok m1 s1)) (hrm : ReapMem (Z.view t) m1) :
+    LiveThru P R a (Z.put q m1 s1) := by
+  obtain ⟨ps, hc⟩ := h.parts
+  obtain ⟨aq, haq⟩ := part_of hc.len hq
+  obtain ⟨hto, _⟩ := hc.ok q t aq hq haq
+  obtain ⟨Γ, F, Δ, _, hinv, _, _, _⟩ := hto
+  have hlt : q < Z.ths.length := (List.getElem?_eq_some_iff.mp hq).1
+  obtain ⟨kr, n, f, u, p, hkr, rfl⟩ := hrm
+  have hkrR : ¬ Reached R Z.blk kr := h.orph kr ⟨n, f, u, p, hkr⟩
+  have hnv : ∀ x, (t.st x).isSome = true → x < t.nv := fun x hx => hinv.nvSt x hx
+  have hblk : ∀ k, (Z.put q {(Mem.set (Z.view t) (Z.view t).nv ⟨true, some p⟩) with
+      nv := (Z.view t).nv + 1, blk := upd (Z.view t).blk kr (some ⟨Ty.nest n (.dtor f u), .dead, none⟩)} s1).blk k =
+      upd Z.blk kr (some ⟨Ty.nest n (.dtor f u), .dead, none⟩) k := fun _ => rfl
+  refine ⟨hc.thread_of hP hPc hR hq hst, fun v hv => ?_, fun d ⟨n', f', u', p', hd⟩ hr => ?_, h.live, ?_⟩
+  · -- every root stays: another thread's slots and the globals as they were, `q`'s and a new one
+    rcases h.roots v hv with ⟨j, tj, hj, x, o, hx⟩ | hg
+    · by_cases hjq : j = q
+      · rw [hjq, hq] at hj; cases hj
+        have hxn : x ≠ t.nv := fun he => by
+          have := hnv x (by rw [hx]; rfl)
+          rw [he] at this; exact Nat.lt_irrefl _ this
+        refine .inl ⟨q, ⟨upd t.st t.nv (some ⟨true, some p⟩), t.nv + 1, s1⟩, ?_, x, o, ?_⟩
+        · simp [Cfg.put, hlt, Cfg.view, Mem.set]
+        · show upd t.st t.nv _ x = _
+          rw [upd_ne _ _ hxn]; exact hx
+      · exact .inl ⟨j, tj, by simp only [Cfg.put]; rw [List.getElem?_set_ne (Ne.symm hjq)]; exact hj, x, o, hx⟩
+    · exact .inr hg
+  · -- an orphan after the reap was one before
+    rw [hblk] at hd
+    have hne : d ≠ kr := fun he => by rw [he, upd_at] at hd; simp at hd
+    rw [upd_ne _ _ hne] at hd
+    exact h.orph d ⟨n', f', u', p', hd⟩ (Reached.of_reaped (ty := Ty.nest n (.dtor f u)) hr)
+  · rcases h.held with hnp | ⟨k, bl, hk, hik, hr⟩
+    · refine .inl fun ⟨k, bl, hk, hik⟩ => hnp ⟨k, bl, ?_, hik⟩
+      rw [hblk] at hk
+      by_cases he : k = kr
+      · rw [he, upd_at] at hk
+        cases hk; simp [Blk.tree] at hik
+      · rw [upd_ne _ _ he] at hk; exact hk
+    · have hne : k ≠ kr := fun he => hkrR (he ▸ hr)
+      exact .inr ⟨k, bl, by rw [hblk, upd_ne _ _ hne]; exact hk, hik, Reached.to_reaped hkrR hr⟩
+
+/-- **What the roots after thread `q`'s step reach stays live through its
+    reaps.** -/
+theorem LiveThru.settle {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) (hR : RestrictLemma P)
+    {R : Val → Prop} {a : Nat} {q : Nat} {Z C' : Cfg} (hse : CSettle P q Z C') (h : LiveThru P R a Z) :
+    C'.alloc a = true := by
+  induction hse with
+  | done _ => exact h.live
+  | reap hi hs hrm _ ih => exact ih ((h.reap hP hPc hR hi hs hrm).sweepD)
+
+/-- **What a thread's next step touches**: an address of its own part; a
+    read of a payload its own slots reach; or (what the sweeps that end it
+    free) a payload no other thread's slots, nor (A3.6) a global, reach. -/
+theorem CParts.ctouch {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) (hR : RestrictLemma P) {C : Cfg}
+    {ps : List (Nat → Bool)} (hc : CParts P C ps) (hno : ¬ C.Orphan) {q : Nat} {tq : Thread}
+    {aq : Nat → Bool} (hq : C.ths[q]? = some tq) (haq : ps[q]? = some aq) {a : Nat} {b : Bool}
+    (h : CTouch P C q tq a b) :
+    aq a = true ∨ ∃ k bl, C.blk k = some bl ∧ a ∈ bl.tree.ids ∧
+      ((b = false ∧ Reached (C.view tq).vals C.blk k) ∨ ¬ Reached (C.rootsBut q) C.blk k) := by
+  obtain ⟨hto, hbo⟩ := hc.ok q tq aq hq haq
+  cases h with
+  | step ht =>
+    rcases touch_seen ht (m1 := ownView C tq aq) rfl rfl (TypedAt.of_threadOK hto) with
+      h1 | ⟨hb, h1 | ⟨k, bl, hk, hak, hr⟩⟩
+    · exact .inl (owned_part hto h1)
+    · exact .inl (owned_part hto h1)
+    · obtain ⟨k0, bl0, hk0, hak0, hr0⟩ := hto.blocksAt.views.rd_reached hk hak hr
+      exact .inr ⟨k0, bl0, hk0, hak0, .inl ⟨hb, hr0⟩⟩
+  | sweep hs =>
+    obtain ⟨m', s', C', hst, hse, _, hma, hsw⟩ := hs
+    obtain ⟨ps0, hc0⟩ := hc.thread_of hP hPc hR hq hst
+    have hno' : ∀ d, ¬ OrphanAt m'.blk d := fun d ⟨n, f, u, p, hd⟩ =>
+      Step.noOrphan hst (fun ⟨k, n, f, u, p, hk⟩ => hno ⟨k, n, f, u, p, hk⟩) ⟨d, n, f, u, p, hd⟩
+    -- were `a` owned by no payload, or by one the roots after the step reach, it would stay live
+    have hlive : (¬ PayIn m'.blk a ∨ ∃ k bl, m'.blk k = some bl ∧ a ∈ bl.tree.ids ∧
+        Reached (C.put q m' s').roots m'.blk k) → False := fun hh => by
+      have hl : LiveThru P (C.put q m' s').roots a (C.put q m' s') :=
+        ⟨⟨ps0, hc0⟩, fun _ h => h, fun d hd _ => hno' d hd, hma, hh⟩
+      have := LiveThru.settle hP hPc hR hse hl.sweepD
+      rw [hsw] at this; cases this
+    by_cases hp : PayIn m'.blk a
+    · obtain ⟨k, bl, hk, hak⟩ := hp
+      have hnr : ¬ Reached (C.put q m' s').roots m'.blk k := fun hr => hlive (.inr ⟨k, bl, hk, hak, hr⟩)
+      -- A3.2: the same block's payload owned it before the step, or the
+      -- thread did (a new block's, or a lock's given back)
+      rcases Step.payAt hst (hbo.of_st rfl) k a ⟨bl, hk, hak⟩ with ⟨bl0, hk0, hak0⟩ | h1
+      · exact .inr ⟨k, bl0, hk0, hak0, .inr fun hr =>
+          hnr (hr.step hst (fun v hv => Cfg.rootsBut_put (Step.gl hst) hv) (fun v hv => Cfg.put_vals hq hv))⟩
+      · exact .inl (owned_part hto h1)
+    · exact (hlive (.inl hp)).elim
+
+/-- **No race**: two threads never touch one address, one of them writing.
+    A write is to the writer's own part, or (the sweeps' frees) to a payload
+    no other thread reaches; what another thread touches is on its own part,
+    or a payload its own slots reach, or one the sweeps after its own step
+    would free — and a block is reached from some thread or (A3.6) a global
+    (`CInv`), so not two threads' sweeps free it.  (Agora #755 item 1: a
+    reaped payload is on the reaping thread's part from then on, so the
+    destructor's reads and writes, its later steps', are of its own part.) -/
+theorem CInv.raceFree {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) (hR : RestrictLemma P) {C : Cfg}
+    (h : CInv P C) (hno : ¬ C.Orphan) : ¬ AddrRace P C := by
+  rintro ⟨i, j, ti, tj, a, w, hij, hi, hj, hti, htj⟩
+  obtain ⟨ps, hc, hreach⟩ := h
+  obtain ⟨ai, hai⟩ := part_of hc.len hi
+  obtain ⟨aj, haj⟩ := part_of hc.len hj
+  rcases hc.ctouch hP hPc hR hno hi hai hti with h1 | ⟨k, bl, hk, hak, ⟨hf, _⟩ | hnr⟩
+  · -- `i` writes its own part
+    have hnp : ¬ PayIn C.blk a := hc.pay i ai hai a h1
+    rcases hc.ctouch hP hPc hR hno hj haj htj with h2 | ⟨k', bl', hk', hak', _⟩
+    · rw [hc.disj i j ai aj hij hai haj a h1] at h2; cases h2
+    · exact hnp ⟨k', bl', hk', hak'⟩
+  · cases hf
+  · -- `i`'s sweeps free a payload no other thread reaches
+    rcases hc.ctouch hP hPc hR hno hj haj htj with h2 | ⟨k', bl', hk', hak', ⟨_, hr'⟩ | hnr'⟩
+    · exact hc.pay j aj haj a h2 ⟨k, bl, hk, hak⟩
+    · have := hc.uniq k k' bl bl' a hk hk' hak hak'; subst this
+      exact hnr (hr'.roots (fun v ⟨x, o, hx⟩ => .inl ⟨j, tj, Ne.symm hij, hj, x, o, hx⟩))
+    · have := hc.uniq k k' bl bl' a hk hk' hak hak'; subst this
+      have hr0 : Reached (fun v => (C.view ti).vals v ∨ C.rootsBut i v) C.blk k :=
+        (hreach k bl hk).roots (fun v hv => Cfg.roots_split hi hv)
+      rcases Reached.or hr0 with h3 | h3
+      · exact hnr' (h3.roots (fun v ⟨x, o, hx⟩ => .inl ⟨i, ti, hij, hi, x, o, hx⟩))
+      · exact hnr h3
 
 end A3

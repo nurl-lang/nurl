@@ -60,19 +60,12 @@ def Cfg.globVals (C : Cfg) (v : Val) : Prop := ∃ g, C.gl g = some v
     read for as long as the program runs. -/
 def Cfg.roots (C : Cfg) (v : Val) : Prop := C.vals v ∨ C.globVals v
 
-/-- A3.1: the configuration's sweep, which ends every thread's step: the
-    blocks nothing reaches from a thread's slot or (A3.6) a global are
-    removed and their payloads freed — A2's `Mem.sweep`, from every thread's
-    slots at once (the count of a block's shares is over all threads) and
-    the globals (which hold a share each until the process exits). -/
-noncomputable def Cfg.sweep (C : Cfg) : Cfg :=
-  { C with alloc := sweepAlloc C.roots C.blk C.alloc, blk := sweepBlk C.roots C.blk }
-
 /-- Agora #755 item 1: **the configuration's marking sweep**, A2's
     `Mem.sweepD` from the configuration's roots: every thread's slots and
     (A3.6) the module globals, which hold a share each until the process
     exits (so a global's block, a `Locked D` one too, is never an orphan).
-    A block nothing reaches is removed and its payload freed, but an
+    It ends every thread's step (`TStep.thread`; the count of a block's
+    shares is over all threads).  A block nothing reaches is removed and its payload freed, but an
     orphan whose payload awaits its destructor (an `arc` block of a
     destructor value or of a drained `Vec` of them, or a lock block of a
     destructor value, its payload in it: `Cand`) is marked `dead`, its
@@ -2895,10 +2888,14 @@ theorem lockNew_dyn {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {b : TraitBoun
 inductive TStep (P : Prog) (spawn : Nat → Bool) : Cfg → Cfg → Prop
   /-- A thread takes one of A2's steps, unless its next step is a spawn;
       (A3.1) the configuration's sweep ends it, as A2's `Steps` ends every
-      step with the store's. -/
-  | thread {C : Cfg} {i : Nat} {t : Thread} {m' : Mem} {s' : Stmt} :
+      step with the store's: (Agora #755 item 1) the marking sweep
+      (`Cfg.sweepD`), whose orphans the same thread then reaps, each reap a
+      step of its own ended by the marking sweep, before any other thread
+      runs (`CSettle`, A2's `Settle`): the thread whose step dropped the
+      last share runs the destructor. -/
+  | thread {C : Cfg} {i : Nat} {t : Thread} {m' : Mem} {s' : Stmt} {C' : Cfg} :
       C.ths[i]? = some t → ¬ SpawnRedex spawn t.s → Step P (C.view t) t.s (.ok m' s') →
-      TStep P spawn C (C.put i m' s').sweep
+      CSettle P i (C.put i m' s').sweepD C' → TStep P spawn C C'
   /-- A spawn: the arguments move to a new thread, which runs the body in
       its parameters' scopes and its result's (variable `n`, the number of
       parameters, as in the body's own numbering — so its end drops the
@@ -3133,13 +3130,16 @@ inductive Touch (P : Prog) (m : Mem) : Stmt → Nat → Bool → Prop
       Step P m s (.panic m1) → m1.st x = some ⟨true, some T⟩ → i ∈ T.ids →
       Touch P m (.scopeL k t x s) i true
 
-/-- A3.1: what the sweep that ends thread `i`'s next step frees: an address
-    live before the step and after it, which the sweep frees — the payload
-    of a block no thread reaches any more.  (A fresh address is no touch, as
-    above.) -/
+/-- A3.1: what the sweeps that end thread `i`'s next step free: an address
+    live before the step and after it, which the configuration's step frees —
+    the payload of a block no thread reaches any more, freed by the marking
+    sweep after the step or (Agora #755 item 1) after one of the reaps that
+    follow it.  (A fresh address is no touch, as above.  The reaps move a
+    payload to the thread's slot and touch no address; the destructor's
+    reads and writes are the thread's later steps', on its own part.) -/
 def SweepFrees (P : Prog) (C : Cfg) (i : Nat) (t : Thread) (a : Nat) : Prop :=
-  ∃ m' s', Step P (C.view t) t.s (.ok m' s') ∧ C.alloc a = true ∧ m'.alloc a = true ∧
-    (C.put i m' s').sweep.alloc a = false
+  ∃ m' s' C', Step P (C.view t) t.s (.ok m' s') ∧ CSettle P i (C.put i m' s').sweepD C' ∧
+    C.alloc a = true ∧ m'.alloc a = true ∧ C'.alloc a = false
 
 /-- What thread `t` (the `i`-th) touches next in the configuration: what its
     rule touches, and (A3.1) what the sweep that ends its step frees, a

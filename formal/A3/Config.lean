@@ -123,11 +123,19 @@ theorem CInv.noLeak {P : Prog} {C : Cfg} (h : CInv P C) (hend : ∀ t ∈ C.ths,
     · exact absurd hv (hc.vals_end hend v)
     · exact hv
 
+/-- Agora #755 item 1: the reaps that end a thread's step write no module
+    global (`Step.gl`), and the marking sweep leaves them. -/
+theorem CSettle.gl {P : Prog} {i : Nat} {C C' : Cfg} (h : CSettle P i C C') : C'.gl = C.gl := by
+  induction h with
+  | done _ => rfl
+  | reap _ hs _ _ ih => exact ih.trans (Step.gl hs)
+
 /-- **A3.6: no step of the configuration writes a module global**: a thread's
-    step writes none (`Step.gl`), and a spawn and the sweep leave them. -/
+    step writes none (`Step.gl`), nor do the reaps after it, and a spawn and
+    the sweep leave them. -/
 theorem TStep.gl {P : Prog} {spawn : Nat → Bool} {C C' : Cfg} (h : TStep P spawn C C') : C'.gl = C.gl := by
   cases h with
-  | thread _ _ hs => have h := Step.gl hs; exact h
+  | thread _ _ hs hse => exact hse.gl.trans (Step.gl hs)
   | spawn => rfl
   | spawnFail => rfl
 
@@ -148,26 +156,56 @@ theorem _root_.A2.GlobFits.grow {B B' : Nat → Option Blk} (hb : BlkLe B B') {t
     exact .inl ⟨_, _, _, rfl, rfl, hk'⟩
   · exact .inr ⟨_, _, _, rfl, rfl, ArcBlk.grow hb hk⟩
 
-/-- ... and the configuration's sweep keeps it: a global is a root. -/
-theorem _root_.A2.GlobFits.sweep {C : Cfg} {g : Nat} {t : Ty} {v : Val} (hg : C.gl g = some v)
-    (h : GlobFits C.blk t v) : GlobFits C.sweep.blk t v := by
+/-- A block the configuration's roots reach is kept by its marking sweep as
+    it was (a global's among them: the sweep roots the globals). -/
+theorem Cfg.sweepD_keeps {C : Cfg} {k : Nat} {bl : Blk} (hk : C.blk k = some bl)
+    (hr : Reached C.roots C.blk k) : C.sweepD.blk k = some bl :=
+  sweepBlkD_reached hk (hr.roots fun _ h => Or.inl (Or.inl h))
+
+/-- **A global's block is never an orphan** (#755's review: the sweep must
+    root the globals, since a global `Locked D` is admissible): a block a
+    module global refers to is kept by the marking sweep as it was. -/
+theorem Cfg.sweepD_glob {C : Cfg} {g : Nat} {v : Val} (hg : C.gl g = some v) {k : Nat} {bl : Blk}
+    (hk : C.blk k = some bl) (hr : Refers C.blk v k) : C.sweepD.blk k = some bl :=
+  Cfg.sweepD_keeps hk (.root (.inr ⟨g, hg⟩) hr)
+
+/-- ... and the configuration's marking sweep keeps what a global's share
+    fits: a global is a root. -/
+theorem _root_.A2.GlobFits.sweepD {C : Cfg} {g : Nat} {t : Ty} {v : Val} (hg : C.gl g = some v)
+    (h : GlobFits C.blk t v) : GlobFits C.sweepD.blk t v := by
   rcases h with ⟨u, k, o, rfl, rfl, hk⟩ | ⟨u, k, p, rfl, rfl, hk⟩
-  · exact .inl ⟨u, k, o, rfl, rfl,
-      sweepBlk_some.mpr ⟨hk, .root (.inr ⟨g, hg⟩) (.inl (.inl ⟨none, Sub.refl _⟩))⟩⟩
-  · have hr : Reached C.roots C.blk k := .root (.inr ⟨g, hg⟩) (.inl (.inl ⟨some p, Sub.refl _⟩))
+  · exact .inl ⟨u, k, o, rfl, rfl, Cfg.sweepD_glob hg hk (.inl (.inl ⟨none, Sub.refl _⟩))⟩
+  · have hr : Refers C.blk (.arc k p) k := .inl (.inl ⟨some p, Sub.refl _⟩)
     rcases hk with hk | hk
-    · exact .inr ⟨u, k, p, rfl, rfl, .inl (sweepBlk_some.mpr ⟨hk, hr⟩)⟩
-    · exact .inr ⟨u, k, p, rfl, rfl, .inr (sweepBlk_some.mpr ⟨hk, hr⟩)⟩
+    · exact .inr ⟨u, k, p, rfl, rfl, .inl (Cfg.sweepD_glob hg hk hr)⟩
+    · exact .inr ⟨u, k, p, rfl, rfl, .inr (Cfg.sweepD_glob hg hk hr)⟩
+
+/-- A thread's step written back, and the marking sweep after it, keep what
+    a global's share fits. -/
+theorem GlobFits.putD {P : Prog} {C : Cfg} {i : Nat} {t : Thread} {m' : Mem} {s' : Stmt}
+    (hs : Step P (C.view t) t.s (.ok m' s')) {g : Nat} {ty : Ty} {v : Val} (hg : C.gl g = some v)
+    (hf : GlobFits C.blk ty v) : GlobFits (C.put i m' s').sweepD.blk ty v := by
+  have hgl : m'.gl = C.gl := Step.gl hs
+  exact GlobFits.sweepD (C := C.put i m' s') (by show m'.gl g = some v; rw [hgl]; exact hg)
+    (hf.grow (Step.grows hs).blk)
+
+theorem Cfg.putD_gl {P : Prog} {C : Cfg} {i : Nat} {t : Thread} {m' : Mem} {s' : Stmt}
+    (hs : Step P (C.view t) t.s (.ok m' s')) : (C.put i m' s').sweepD.gl = C.gl := Step.gl hs
+
+/-- ... and so do the reaps after it. -/
+theorem CSettle.globFits {P : Prog} {i : Nat} {C C' : Cfg} (h : CSettle P i C C') {g : Nat} {ty : Ty}
+    {v : Val} (hg : C.gl g = some v) (hf : GlobFits C.blk ty v) : GlobFits C'.blk ty v := by
+  induction h with
+  | done _ => exact hf
+  | reap _ hs _ _ ih => exact ih (by rw [Cfg.putD_gl hs]; exact hg) (GlobFits.putD hs hg hf)
 
 /-- **A3.6: a global stays readable**: what a global's share fits, it fits after
     every step of the configuration ... -/
 theorem TStep.globFits {P : Prog} {spawn : Nat → Bool} {C C' : Cfg} (h : TStep P spawn C C') {g : Nat}
     {t : Ty} {v : Val} (hg : C.gl g = some v) (hf : GlobFits C.blk t v) : GlobFits C'.blk t v := by
   cases h with
-  | @thread i th m' s' _ _ hs =>
-    have hgl : m'.gl = C.gl := Step.gl hs
-    exact GlobFits.sweep (C := C.put i m' s') (by show m'.gl g = some v; rw [hgl]; exact hg)
-      (hf.grow (Step.grows hs).blk)
+  | thread _ _ hs hse =>
+    exact hse.globFits (by rw [Cfg.putD_gl hs]; exact hg) (GlobFits.putD hs hg hf)
   | spawn => exact hf
   | spawnFail => exact hf
 

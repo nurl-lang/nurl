@@ -83,13 +83,17 @@ theorem GlobsOK.noDead {P : Prog} {G : Globs} (hG : GlobsOK P G) {k : Nat} {bl :
     cases ha
     exact hk'
 
+/-- Agora #755 item 1: the reaps that end a thread's step leave no orphan. -/
+theorem CSettle.noOrphan {P : Prog} {i : Nat} {C C' : Cfg} (h : CSettle P i C C') : ¬ C'.Orphan := by
+  induction h with
+  | done hn => exact hn
+  | reap _ _ _ _ ih => exact ih
+
 /-- Agora #610: **no configuration a run reaches has an orphan** (item 7 of
-    #610's review): a thread's step leaves none in a store that had none
-    (`A2.Step.noOrphan`: only `Step.reap` touches a `dead` block, and it
-    needs one), the configuration's sweep only removes blocks (it marks no
-    orphan: on A3's threads the last share's drop frees the payload with no
-    code, `CLAIM.md`), and a spawn changes no block.  So the hypothesis of
-    the lock scope's end (`scopeL_end`) holds on every A3 run. -/
+    #610's review): a thread's step ends with the reaps of every orphan its
+    marking sweep left (Agora #755 item 1, `CSettle`), and a spawn changes no
+    block.  So the hypothesis of the lock scope's end (`scopeL_end`) holds on
+    every A3 run, and no thread ever sees another's mark. -/
 theorem Reach.noOrphan {P : Prog} {spawn : Nat → Bool} {C C' : Cfg} (hr : Reach P spawn C C')
     (h : ¬ ∃ k n f u p, C.blk k = some ⟨Ty.nest n (.dtor f u), .dead, some p⟩) :
     ¬ ∃ k n f u p, C'.blk k = some ⟨Ty.nest n (.dtor f u), .dead, some p⟩ := by
@@ -98,10 +102,7 @@ theorem Reach.noOrphan {P : Prog} {spawn : Nat → Bool} {C C' : Cfg} (hr : Reac
   | step hst _ ih =>
     apply ih
     cases hst with
-    | thread _ _ hs =>
-      have hm := A2.Step.noOrphan hs (fun ⟨k, n, f, u, p, hk⟩ => h ⟨k, n, f, u, p, hk⟩)
-      rintro ⟨k, n, f, u, p, hk⟩
-      exact hm ⟨k, n, f, u, p, (sweepBlk_some.mp hk).1⟩
+    | thread _ _ _ hse => exact hse.noOrphan
     | spawn => exact h
     | spawnFail => exact h
 
