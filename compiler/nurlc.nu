@@ -2114,6 +2114,14 @@ unsafe @ agg_field_count i syms s ot → i {
 // it is never stale, and none of the last-call channels the borrow walk
 // reads need clearing for it.
 : ~ i g_dyn_box_reg -1
+// The names of the `inout` parameters of the function being compiled (and
+// of a closure body in it): gen_call's hand-over step for them (agora
+// #778) asks this short list, not the symbol table, per argument.
+: ~ s g_fn_io_names ``
+// (nurlc compiles on one thread: nothing races on the list.)
+unsafe @ __fn_io_reset → v { = g_fn_io_names `` }
+
+unsafe @ __fn_io_add s name → v { = g_fn_io_names ( nurl_str_cat3 g_fn_io_names ` ` name ) }
 
 // Set when a literal argument's owned fields wait in `__argtmp_litown__`
 // for mem_arg_temps: the symbol is written and read for a literal only.
@@ -10690,6 +10698,18 @@ unsafe @ extract_fn_ptr_return_type s fn_ptr_type → s {
             ( nurl_print ? == 0 ( nurl_str_len o0 ) `false` o0 ) ( nurl_print `\n` )
             = reg ( nurl_str_cat `` `` )
         } {}
+        // `z|cond|n|ptr`: an `inout` field target the callee consumed is
+        // emptied where `cond` holds (agora #567).
+        ? ( nurl_str_starts reg `z|` ) {
+            : s zw ( nurl_str_slice reg 2 - ( nurl_str_len reg ) 2 )
+            : i z1 ( nurl_str_find zw `|` )
+            : s zr ( nurl_str_slice zw + z1 1 - - ( nurl_str_len zw ) z1 1 )
+            : i z2 ( nurl_str_find zr `|` )
+            ( nurl_print `  call void @__nurl_zero_if.` ) ( nurl_print ( nurl_str_slice zr 0 z2 ) )
+            ( nurl_print `(i1 ` ) ( nurl_print ( nurl_str_slice zw 0 z1 ) ) ( nurl_print `, ptr ` )
+            ( nurl_print ( nurl_str_slice zr + z2 1 - - ( nurl_str_len zr ) z2 1 ) ) ( nurl_print `)\n` )
+            = reg ( nurl_str_cat `` `` )
+        } {}
         ? == 0 ( nurl_str_len reg ) {} {
             // `j|slot`: a temporary's journal registration ends.
             ? ( nurl_str_starts reg `j|` ) {
@@ -17593,6 +17613,17 @@ unsafe @ __sx_publish i me s sx → v {
     ^ != 0 ( nurl_str_len ( nurl_sym_get syms `__tail_root_ptr__` ) )
 }
 
+// Is every word of `names` (at least one) a whole `inout` parameter?
+@ __all_inout i syms s names → b {
+    : ~ s rest ( nurl_str_cat names `` )
+    ? == 0 ( nurl_str_len rest ) { ^ F } {}
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ! ( seq ( nurl_sym_get2 syms w `__inout` ) `1` ) { ^ F } {}
+    }
+    ^ T
+}
+
 // Is a word of `names` a whole `inout` parameter?
 @ __any_inout i syms s names → b {
     : ~ s rest ( nurl_str_cat names `` )
@@ -19030,6 +19061,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // (…and whether a `?` / `??` join made as it owns what it yields,
         // before mem_lent_cond takes the bit: mem_arg_temps.)
         : ~ s arg_join_own ``
+        : ~ b arg_join_io F
         // (…and the bindings its arms lend, where it lends them on every
         // path — no ownership of its own published: agora #451.)
         : ~ s arg_join_ids ``
@@ -19251,6 +19283,10 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             = arg_eff_tt ( __val_eff_tt bck_arg_tt )
             = arg_join_own ? | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST ( nurl_sym_get syms `__last_join_own__` ) ``
             = arg_join_ids ? & == 0 ( nurl_str_len arg_join_own ) | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST ( nurl_sym_get syms `__last_phi_idents__` ) ``
+            // (The bindings the join may select are all whole `inout`
+            // parameters: what it hands a `sink` on those paths is taken
+            // over, as `( eat p )` takes it — agora #567.)
+            = arg_join_io & | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST ( __all_inout syms ( nurl_sym_get syms `__last_phi_idents__` ) )
             = arg_lent ( mem_lent_cond syms cg at arg_eff_tt bck_arg_val )
             // (A call that may lend its result — by name, as a view, or on
             // some paths — for a value no copy can stand in for, h228.)
@@ -20330,6 +20366,47 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // Consumption is a whole-module fact, including transitive forward
         // calls. Record every parameter implication; codegen order is irrelevant.
         : b summary_callee & ! __callee_shadowed ( __summarised_callee syms fname call_name )
+        // An `inout` field target the callee consumes (`( f . h a )`, f
+        // handing its parameter to a `sink`) leaves its struct once the
+        // call returns: the field is emptied, on the same answer that clears
+        // the drop flag of a binding handed over that way (mem_arg_
+        // consumption). Left in place, the struct's own drop released it
+        // again (agora #567). After the call: the callee reads it through
+        // the address.
+        // (`av` is the field's address there, `at` a pointer to its type.)
+        ? & & & & != 0 g_auto_drop_strings is_inout_arg == bck_arg_tt TT_DOT ( is_ptr_ty at ) | summary_callee ( str_has_index callee_sink arg_idx ) {
+            : s __iz_t ( nurl_str_slice at 0 - ( nurl_str_len at ) 1 )
+            ? | ( __is_handle_ty __iz_t ) ( __type_needs_drop __iz_t syms ) {
+                : s __iz_p ( nurl_str_cat av `` )
+                : ~ s __iz_c ( nurl_str_cat `true` `` )
+                ? ! ( str_has_index callee_sink arg_idx ) {
+                    = __iz_c ( nurl_cg_reg cg )
+                    ( emit_sink_flag_load ( nurl_str_cat `@.__nurl_sink.` ( nurl_str_int ( sink_flag call_name fname arg_idx ) ) ) __iz_c )
+                } {}
+                : s __iz_w ( nurl_str_cat4 `z|` __iz_c ( nurl_str_cat3 `|` ( __zero_if_request ( nurl_llty __iz_t ) ) `|` ) __iz_p )
+                = owned_arg_temps ? == 0 ( nurl_str_len owned_arg_temps ) __iz_w ( nurl_str_cat3 owned_arg_temps ` ` __iz_w )
+            } {}
+        } {}
+        // This function's own `inout` parameter handed by name to a callee
+        // that takes it (`( eat p )`): its value is loaded already, and the
+        // caller's slot is emptied now, on the same answer, as a field
+        // handed to a `sink` is emptied before the call. The caller then
+        // finds nothing to release on any path — a panic's unwind included,
+        // which ran before a post-call step could (agora #778). (A handle
+        // type only: its zero is the empty value. The caller's drop flag is
+        // cleared as before.)
+        ? & & & & & != 0 ( nurl_str_len g_fn_io_names ) != 0 g_auto_drop_strings ( is_ident_tok bck_arg_tt ) ( str_contains_word g_fn_io_names bck_arg_val ) | summary_callee ( str_has_index callee_sink arg_idx ) ( seq ( nurl_sym_get2 syms bck_arg_val `__inout` ) `1` ) {
+            : s __ie_p ( nurl_sym_get2 syms bck_arg_val `__ptr` )
+            ? & != 0 ( nurl_str_len __ie_p ) ( __is_handle_ty at ) {
+                : ~ s __ie_c ( nurl_str_cat `true` `` )
+                ? ! ( str_has_index callee_sink arg_idx ) {
+                    = __ie_c ( nurl_cg_reg cg )
+                    ( emit_sink_flag_load ( nurl_str_cat `@.__nurl_sink.` ( nurl_str_int ( sink_flag call_name fname arg_idx ) ) ) __ie_c )
+                } {}
+                ( nurl_print `  call void @__nurl_zero_if.` ) ( nurl_print ( __zero_if_request ( nurl_llty at ) ) )
+                ( nurl_print `(i1 ` ) ( nurl_print __ie_c ) ( nurl_print `, ptr ` ) ( nurl_print __ie_p ) ( nurl_print `)\n` )
+            } {}
+        } {}
         // A capture of a closure returned right here — its env keeps it for
         // the next call — or a payload or a part read out of one, handed
         // to a declared `sink`: the callee is handed a copy, as `^ x` in
@@ -20713,7 +20790,11 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             // what such an arm only lent, and its owner again. Copied on the
             // paths where the join lends (its published ownership,
             // `__last_join_own__`); one that cannot be copied is rejected.
-            ? & & | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST != 0 ( nurl_str_len arg_join_own ) ! ( seq arg_join_own `true` ) {
+            // (A path that selects a whole `inout` parameter hands it over
+            // as `( eat p )` does: arg_join_io, agora #567. The function
+            // consumes that parameter for its caller, which drops nothing;
+            // copied, the caller's value leaked.)
+            ? & & & | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST != 0 ( nurl_str_len arg_join_own ) ! ( seq arg_join_own `true` ) ! arg_join_io {
                 ? ( __clone_supported at syms ) {
                     : s __sjl ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print __sjl ) ( nurl_print ` = xor i1 ` ) ( nurl_print arg_join_own ) ( nurl_print `, 1\n` )
@@ -20734,7 +20815,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             // (…and one whose arms lend bindings on every path — `( eat ? c
             // u t )`, u and t owners: no ownership of its own is published,
             // and the callee released the buffer its owner still drops.)
-            ? & & | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST == 0 ( nurl_str_len arg_join_own ) != 0 ( nurl_str_len arg_join_ids ) {
+            ? & & & | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST == 0 ( nurl_str_len arg_join_own ) != 0 ( nurl_str_len arg_join_ids ) ! arg_join_io {
                 ? ( __clone_supported at syms ) { = av ( mem_emit_cloneif cg at av `1` ) } { ? ( __nc_drop_ty at ) { ( __nc_copy_die ( nurl_sym_get syms `__fn_self_name__` ) at ) } {} }
             } {}
             // An enum's payload, which the arm only borrows: a copy goes
@@ -20777,7 +20858,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // result over, as for a `sink` above.)
         : i __apm ? == bck_arg_tt TT_DOT ? != 0 ( nurl_str_len arg_ofcall ) 4 0
         ? == arg_eff_tt TT_LPAREN ? & & != 0 ( nurl_str_len arg_lent ) ! ( seq arg_lent `0` ) ! ( seq arg_lent `false` ) 1 0
-        ? | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST
+        ? & | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST ! arg_join_io
         ? & != 0 ( nurl_str_len arg_join_own ) ! ( seq arg_join_own `true` ) 2
         ? & == 0 ( nurl_str_len arg_join_own ) != 0 ( nurl_str_len arg_join_ids ) 3 0 0
         : b __apc & & & & & summary_callee != __apm 0 == 0 ( nurl_sym_len g_fn_compiled call_name )
@@ -27458,8 +27539,12 @@ unsafe @ gen_match i lex i syms i cg → s {
 
 // The depth of the innermost value block that declared `name`, -1 none.
 // (The log is scanned in place: a word is `D:name<op>sx`.)
-unsafe @ __blk_owner s name → i {
-    : i n ( nurl_str_len g_blk_lets )
+unsafe @ __blk_owner s name → i { ^ ( __blk_owner_lim name ( nurl_str_len g_blk_lets ) ) }
+
+// …among the words that start before byte `lim` of the log: the bindings
+// visible where a value logged at `lim` was made (__sx_close_lim).
+unsafe @ __blk_owner_lim s name i lim → i {
+    : i n ? < lim ( nurl_str_len g_blk_lets ) lim ( nurl_str_len g_blk_lets )
     ? == 0 n { ^ -1 } {}
     : *u lp # *u g_blk_lets
     : *u np # *u name
@@ -27483,11 +27568,14 @@ unsafe @ __blk_owner s name → i {
 
 // What block-local `name`, declared at `depth`, holds now: its `let`'s
 // source expression, replaced by an assignment in that block, joined with
-// one in a block nested in it. `` when it was not declared there.
-unsafe @ __blk_val s name i depth → s {
+// one in a block nested in it — among the log's words before byte `lim`,
+// each closed (__sx_close_lim, names deeper than `mind`) against the words
+// logged before it: what its names meant where it was logged. `` when it
+// was not declared there.
+unsafe @ __blk_val s name i depth i lim i mind → s {
     : s pre ( nurl_str_cat3 ( nurl_str_int depth ) `:` name )
     : i pl ( nurl_str_len pre )
-    : i n ( nurl_str_len g_blk_lets )
+    : i n ? < lim ( nurl_str_len g_blk_lets ) lim ( nurl_str_len g_blk_lets )
     : *u lp # *u g_blk_lets
     : *u pp # *u pre
     : ~ s acc ``
@@ -27495,12 +27583,13 @@ unsafe @ __blk_val s name i depth → s {
     : ~ i k 0
     ~ < k n {
         : ~ i e k
-        ~ & < e n != # i . lp e 32 { = e + e 1 }
+        ~ & < e ( nurl_str_len g_blk_lets ) != # i . lp e 32 { = e + e 1 }
         : ~ i j 0
         ~ & & < j pl < + k j e == # i . lp + k j # i . pp j { = j + j 1 }
         ? & == j pl < + k pl e {
             : i op # i . lp + k pl
-            : s v ( nurl_str_slice g_blk_lets + + k pl 1 - - - e k pl 1 )
+            : s v0 ( nurl_str_slice g_blk_lets + + k pl 1 - - - e k pl 1 )
+            : s v ( __sx_close_lim v0 mind k )
             ? == op 61 { = acc ( nurl_str_cat v `` ) = seen T } {}
             ? & == op 126 seen { = acc ( nurl_str_cat v `` ) } {}
             ? & == op 43 seen { = acc ( __sx_join acc v ) } {}
@@ -27513,43 +27602,46 @@ unsafe @ __blk_val s name i depth → s {
 
 // `sx` with every name a value block deeper than `mind` declared replaced
 // by what it holds (a field of one by the same: a field lends what its
-// value does) — to a fixed point, the replacement may name such a binding.
-unsafe @ __sx_close s sx i mind → s {
-    : ~ s cur ( nurl_str_cat sx `` )
-    : ~ i round 0
-    : ~ b changed T
-    ~ & changed < round 8 {
-        = changed F
-        = round + round 1
-        : i n ( nurl_str_len cur )
-        : *u cp # *u cur
-        : ~ s out ``
-        : ~ i k 0
-        ~ < k n {
-            : i c # i . cp k
-            ? | | | | | == c 40 == c 41 == c 124 == c 123 == c 125 == c 59 {
-                = out ( nurl_str_cat out ( nurl_str_slice cur k 1 ) )
-                = k + k 1
-            } {
-                : i k0 k
-                ~ & < k n ! | | | | | == # i . cp k 40 == # i . cp k 41 == # i . cp k 124 == # i . cp k 123 == # i . cp k 125 == # i . cp k 59 { = k + k 1 }
-                : s tok ( nurl_str_slice cur k0 - k k0 )
-                : b callee & < k n == # i . cp k 40
-                : i dot ( nurl_str_find tok `.` )
-                : s root ? < dot 0 ( nurl_str_cat tok `` ) ( nurl_str_slice tok 0 dot )
-                : i c0 ? > ( nurl_str_len root ) 0 ( nurl_str_get root 0 ) 0
-                : b namey | | & >= c0 97 <= c0 122 & >= c0 65 <= c0 90 == c0 95
-                : i own ? & ! callee namey ( __blk_owner root ) -1
-                ? > own mind {
-                    : s v ( __blk_val root own )
-                    = out ( nurl_str_cat out ? == 0 ( nurl_str_len v ) `*` v )
-                    = changed T
-                } { = out ( nurl_str_cat out tok ) }
-            }
+// value does).
+unsafe @ __sx_close s sx i mind → s { ^ ( __sx_close_lim sx mind ( nurl_str_len g_blk_lets ) ) }
+
+// …where `sx` was made before byte `lim` of the log: a name resolves to the
+// binding visible there, and what that binding holds is closed against
+// the words logged before its own (__blk_val). So a name inside a value
+// means what it meant where the value was logged, and a binding that
+// shadows it later is not taken for it. (Re-read to a fixed point, the
+// `s` in `: String s { : String s ( string_concat s s ) s }`'s inner value
+// was taken for the inner `s` itself, and every round doubled the text:
+// nurlc did not terminate, agora #631.) The bound shrinks with each
+// expansion, so it ends.
+unsafe @ __sx_close_lim s sx i mind i lim → s {
+    : s cur ( nurl_str_cat sx `` )
+    : i n ( nurl_str_len cur )
+    : *u cp # *u cur
+    : ~ s out ``
+    : ~ i k 0
+    ~ < k n {
+        : i c # i . cp k
+        ? | | | | | == c 40 == c 41 == c 124 == c 123 == c 125 == c 59 {
+            = out ( nurl_str_cat out ( nurl_str_slice cur k 1 ) )
+            = k + k 1
+        } {
+            : i k0 k
+            ~ & < k n ! | | | | | == # i . cp k 40 == # i . cp k 41 == # i . cp k 124 == # i . cp k 123 == # i . cp k 125 == # i . cp k 59 { = k + k 1 }
+            : s tok ( nurl_str_slice cur k0 - k k0 )
+            : b callee & < k n == # i . cp k 40
+            : i dot ( nurl_str_find tok `.` )
+            : s root ? < dot 0 ( nurl_str_cat tok `` ) ( nurl_str_slice tok 0 dot )
+            : i c0 ? > ( nurl_str_len root ) 0 ( nurl_str_get root 0 ) 0
+            : b namey | | & >= c0 97 <= c0 122 & >= c0 65 <= c0 90 == c0 95
+            : i own ? & ! callee namey ( __blk_owner_lim root lim ) -1
+            ? > own mind {
+                : s v ( __blk_val root own lim mind )
+                = out ( nurl_str_cat out ? == 0 ( nurl_str_len v ) `*` v )
+            } { = out ( nurl_str_cat out tok ) }
         }
-        = cur ( nurl_str_cat out `` )
     }
-    ^ cur
+    ^ out
 }
 
 // A `let` (or an assignment) of `name` to a value whose source expression
@@ -63265,6 +63357,7 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
             ( nurl_sym_def body_syms ( nurl_str_cat bpname `__param` ) `1` )
             ( nurl_sym_def body_syms ( nurl_str_cat bpname `__mutable` ) `1` )
             ( nurl_sym_def body_syms ( nurl_str_cat bpname `__inout` ) `1` )
+            ( __fn_io_add bpname )
         } {
             // Alloca for each param so it can be loaded
             : s bpptr ( nurl_cg_reg cg )
@@ -71804,6 +71897,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     ( nurl_sym_def syms `__fn_param_names__` `` )
     ( nurl_sym_def syms `__fn_param_lltys__` `` )
     ( nurl_sym_def syms `__drop_glue_moved__` `` )
+    ( __fn_io_reset )
     // Guard against EOF too: without this, a malformed header that
     // never produces TT_ARROW (e.g. ASCII `->` instead of `→`) hangs
     // the compiler in an infinite loop, because gen_fn_param on EOF
@@ -72865,7 +72959,8 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
         { ( nurl_sym_def syms ( nurl_str_cat pname `__mutable` ) `1` )
             ( nurl_sym_def syms ( nurl_str_cat pname `__ptr` ) ( nurl_str_cat `%` pname ) )
             ( nurl_sym_def syms ( nurl_str_cat pname `__inout` ) `1` )
-            ( nurl_sym_def syms `__last_param_inout__` `1` ) }
+            ( nurl_sym_def syms `__last_param_inout__` `1` )
+            ( __fn_io_add pname ) }
         {}
         // A `sink` parameter is an ordinary by-value parameter here;
         // only the side-channel is set so gen_fn_decl_concrete records
