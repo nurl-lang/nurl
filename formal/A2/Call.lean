@@ -3057,6 +3057,10 @@ theorem typedIn_of (h : CallH P Γ F x fn args base)
       simp only [setE, upd_same, Option.some.injEq] at hE; subst hE
       have : fn.resTy.holdsView = true := by rw [← hrt]; exact hv
       rw [hsdt.holdsView, htv] at this; cases this)
+    (fun E hE hdb => by
+      rw [hEinr] at hE; cases hE
+      have hv := hwfin.view _ _ hEinr hdb
+      rw [RSetup.liftE_ty _ (resMode_ne' fn), hsdt.holdsView, htv] at hv; cases hv)
   rw [exitScope_setE_fresh hwfF hfr] at hsd
   exact hsd
 

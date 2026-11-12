@@ -145,8 +145,8 @@ theorem StmtT.scopeD_repl {P : Prog} {Γ : Ctx} {F : List Var} {x : Var} {f : Na
     StmtT P Γ F (.scopeD x f s') Δ := by
   generalize hs : Stmt.scopeD x f s = s0 at ht
   induction ht with
-  | scopeD hE hx hb hp hk hw hn hΔ _ =>
-    cases hs; exact .scopeD hE hx (hrep hb) hp (by rw [hsp]; exact hk) hw hn hΔ
+  | scopeD hE hx hb hp hk hw hn hΔ hsf _ =>
+    cases hs; exact .scopeD hE hx (hrep hb) hp (by rw [hsp]; exact hk) hw hn hΔ hsf
   | sub hw _ hd ih => exact .sub hw (ih hs) hd
   | _ => cases hs
 

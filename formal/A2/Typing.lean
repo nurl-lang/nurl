@@ -206,6 +206,20 @@ theorem DbindSafe.of_none {Γ : Ctx} (h : ∀ v E, Γ v = some E → E.dbind = f
     DbindSafe Γ x :=
   fun v E hE hd => by rw [h v E hE] at hd; cases hd
 
+/-- Agora #633: `x`, if `letd` made it, views nothing of its own in memory:
+    what `DbindSafe Γ x` asks of `x` itself.  A destructor frame keeps it for
+    its binding (`StmtT.scopeD`): the glue its end calls takes the binding as
+    a `sink` argument, which reaches nothing of itself (`CallT`). -/
+def DSelf (Γ : Ctx) (x : Var) : Prop :=
+  ∀ E, Γ x = some E → E.dbind = true → E.mode.ownSlot = true → (E.ty ≠ .int ∨ E.mode = .rootb) →
+    ∀ d ∈ E.vdeps, d.kind.isName = false → d.root ≠ x
+
+theorem DbindSafe.self {Γ : Ctx} {x : Var} (h : DbindSafe Γ x) : DSelf Γ x :=
+  fun E hE => h x E hE
+
+theorem DSelf.of_dbind {Γ : Ctx} {x : Var} (h : ∀ E, Γ x = some E → E.dbind = false) : DSelf Γ x :=
+  fun E hE hd => by rw [h E hE] at hd; cases hd
+
 /-- A2-drop.2: ... and every one in `Γ`, outside `sp`, is one in `Γ'`: a
     binding never stops being `letd`'s. -/
 def DStay (Γ Γ' : Ctx) (sp : List Var) : Prop :=

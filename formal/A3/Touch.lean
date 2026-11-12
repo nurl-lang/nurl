@@ -154,7 +154,7 @@ theorem TypedAt.scopeD {P : Prog} {m : Mem} {x : Var} {f : Nat} {s : Stmt}
   obtain ⟨Γ, F, Δ, ht, hi⟩ := h
   generalize hs : Stmt.scopeD x f s = s0 at ht
   induction ht with
-  | scopeD _ _ hb _ _ _ _ _ => cases hs; exact ⟨_, _, _, hb, hi⟩
+  | scopeD _ _ hb _ _ _ _ _ _ => cases hs; exact ⟨_, _, _, hb, hi⟩
   | sub hw _ _ ih => exact ih (hi.weaker hw) hs
   | _ => cases hs
 

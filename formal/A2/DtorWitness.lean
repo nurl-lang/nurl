@@ -35,7 +35,9 @@ Two kinds of fact, both checked here (`check.sh` prints their axioms):
   of its own (`A2.Dtor.struct_dtor_is_glue`, `glue_takes_apart`; `main7`);
   one with a `% Drop` of its own has glue that rebinds it under the fields'
   glue and runs the impl on it lent (`ImplGlueOK`, `impl_glue_body`,
-  `letd_retype`; the functions `impl` and `glue2`, `main8`).
+  `letd_retype`; the functions `impl` and `glue2`, `main8`).  Agora #633:
+  such a struct may hold views of older bindings, moved into its glue as a
+  `sink` argument holding them (`glueS`, `main10`).
   A2-drop.3c and 3d: no block's payload and no environment of a closure
   that does not drop (Agora #609: of a class other than `dropd`) holds
   a destructor value (`A2.Dtor.pkgs_env_dtor_free`, `blk_pkgs_env_dtor_free`,
@@ -124,7 +126,7 @@ theorem letd_retype {P : Prog} {f : Nat} {t a : Ty} {x : Var} {s : Stmt} (h : Le
       DtorOK P i (.dtor f t) := by
   obtain ⟨i, r, k, hig, hs⟩ := h.2 g ha hne
   have hig' := hig
-  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, hgl, hdt, _⟩ := hig'
+  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, hgl, hdt, _⟩ := hig'
   exact ⟨i, r, k, hig, hs, hgl, hdt⟩
 
 /-- **Agora #616, #632: the glue of a struct or an enum with a `% Drop` of
@@ -136,7 +138,7 @@ theorem impl_glue_body {P : Prog} {f : Nat} {t : Ty} {h i : Nat} (hg : ImplGlueO
     ∃ fn w r e, P[f]? = some fn ∧ fn.params = [(.sink, .dtor f t)] ∧
       fn.body = .letd w h (.var 0) (.letcall r i [w] (.assign 1 (.expr e))) ∧
       (GlueOK P h t ∨ EnumGlueOK P h t) ∧ DtorOK P i (.dtor h t) := by
-  obtain ⟨fn, w, r, e, hfn, _, _, hps, _, _, _, _, _, _, hgl, hdt, hb⟩ := hg
+  obtain ⟨fn, w, r, e, hfn, _, hps, _, _, _, _, _, _, hgl, hdt, hb⟩ := hg
   exact ⟨fn, w, r, e, hfn, hps, hb, hgl, hdt⟩
 
 /-- Agora #616: the destructor of a struct that holds a destructor value is
@@ -225,7 +227,7 @@ theorem glue_takes_apart {P : Prog} (hP : ProgOK P) {f : Nat} {a b : Ty} (h : Gl
       fn.body = .unpair 0 x z s ∧ s.pureGlue = true ∧
       (a.holdsDtor = true → x ∈ s.movedFirst ∧ x ∉ s.assigns) ∧
       (b.holdsDtor = true → z ∈ s.movedFirst ∧ z ∉ s.assigns) := by
-  obtain ⟨fn, a', b', hfn, hab, _, hps, _, _, _, _, _, _, x, z, s, hbody, hpure⟩ := h
+  obtain ⟨fn, a', b', hfn, hab, hps, _, _, _, _, _, _, x, z, s, hbody, hpure⟩ := h
   cases hab
   obtain ⟨Δ, hb, _⟩ := (hP fn (List.mem_of_getElem? hfn)).2.2.2.2.2.2.2.2.2.2.2.2
   rw [hbody] at hb
@@ -301,7 +303,7 @@ theorem scopeD_end_runs_dtor {P : Prog} {Γ Δ : Ctx} {F : List Var} {x : Var} {
   refine ⟨?_, Step.scopeDEnd hx hv, fun r h => ?_⟩
   · generalize hst : Stmt.scopeD x f .skip = st at ht
     induction ht with
-    | scopeD hE _ _ _ _ _ _ _ =>
+    | scopeD hE _ _ _ _ _ _ _ _ =>
       cases hst
       obtain ⟨E, t, _, _, _, _, h5, _⟩ := hE
       exact ⟨t, h5⟩
@@ -487,7 +489,7 @@ theorem scopeD_typed {P : Prog} {Γ Δ : Ctx} {F : List Var} {x : Var} {f : Nat}
       DropFnOK P f t ∧ t.isStruct = true := by
   generalize hst : Stmt.scopeD x f s = st at h
   induction h with
-  | scopeD hE _ _ _ _ _ _ _ =>
+  | scopeD hE _ _ _ _ _ _ _ _ =>
     cases hst
     obtain ⟨E, t, hx, hmo, hty, _, hok, hstr⟩ := hE
     exact ⟨E, t, hx, hmo, hty, hok, hstr⟩
@@ -612,7 +614,7 @@ theorem pkgs_env_dtor_free {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {E : 
     destructor that takes it lent is refused for it. -/
 theorem closure_dtor_is_glue {P : Prog} {f : Nat} {ms : List Nat} (h : DropFnOK P f (.fn ms .dropd)) :
     ClosureGlueOK P f (.fn ms .dropd) := by
-  rcases h with ⟨_, h⟩ | ⟨_, _, _, _, ht, _⟩ | ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, hg, _⟩ |
+  rcases h with ⟨_, h⟩ | ⟨_, _, _, _, ht, _⟩ | ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, hg, _⟩ |
     ⟨_, _, _, _, _, _, ht, _⟩ | h
   · cases h
   · cases ht
@@ -1013,7 +1015,23 @@ def glueV : Fn where
   body := .unpair 0 2 3 (.letd 4 0 (.var 2) (.assign 1 (.expr (.lit 0))))
   nvars := 5
 
-def P : Prog := [dfn, mk, ofn, gfn, glue, impl, glue2, glueV]
+/-- Agora #633: a struct with a destructor field and a view field (nurlc's
+    `: P { Conn c s name }`), and its glue:
+    `@ glueS sink self → i { unpair self x z  :drop y x  = r 0 }`. -/
+def GS : Ty := .prod DT (.slice .int)
+def GSD : Ty := .dtor 8 GS
+
+def glueS : Fn where
+  params := [(.sink, GSD)]
+  resTy := .int
+  resOwn := false
+  lends := []
+  rholds := []
+  outHolds := []
+  body := .unpair 0 2 3 (.letd 4 0 (.var 2) (.assign 1 (.expr (.lit 0))))
+  nvars := 5
+
+def P : Prog := [dfn, mk, ofn, gfn, glue, impl, glue2, glueV, glueS]
 
 theorem dfn_not_thru : ¬ ThruFn P 0 := by
   intro h
@@ -1153,7 +1171,7 @@ theorem glue_not_thru : ¬ ThruFn P 4 := by
   | call hf hg ht => simp [P] at hf; subst hf; simp [glue, Stmt.calls] at hg; subst hg; exact dfn_not_thru ht
 
 theorem glue_glueOK : GlueOK P 4 GT :=
-  ⟨glue, DT, .int, rfl, rfl, by decide, rfl, rfl, rfl, rfl, rfl, rfl, glue_not_thru, 2, 3, _, rfl, rfl⟩
+  ⟨glue, DT, .int, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, glue_not_thru, 2, 3, _, rfl, rfl⟩
 
 theorem gluedrop_ok : DropFnOK P 4 GT := Or.inr (Or.inl glue_glueOK)
 
@@ -1235,7 +1253,7 @@ theorem glueV_not_thru : ¬ ThruFn P 7 := by
   | call hf hg ht => simp [P] at hf; subst hf; simp [glueV, Stmt.calls] at hg; subst hg; exact dfn_not_thru ht
 
 theorem glueV_glueOK : GlueOK P 7 GV :=
-  ⟨glueV, .vec DT, .int, rfl, rfl, by decide, rfl, rfl, rfl, rfl, rfl, rfl, glueV_not_thru, 2, 3, _, rfl, rfl⟩
+  ⟨glueV, .vec DT, .int, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, glueV_not_thru, 2, 3, _, rfl, rfl⟩
 
 theorem gvdrop_ok : DropFnOK P 7 GV := Or.inr (Or.inl glueV_glueOK)
 
@@ -1304,6 +1322,90 @@ theorem glueV_ok : FnOK P glueV := by
       by simp [intE], by simp [intE], by simp [glueV]⟩
   · intro i hi b hb; simp [glueV] at hi; subst hi; simp [glueV] at hb
 
+/-! ### A struct with a destructor field and a view field (Agora #633)
+
+`prod DT (slice int)`: its glue takes it apart as `glue` does; the view
+field is a borrow, which ends with the glue's scope.  The callee sees its
+parameter as holding nothing (`paramE`): what the view is valid through is
+the caller's, which the call keeps. -/
+
+theorem glueS_not_thru : ¬ ThruFn P 8 := by
+  intro h
+  cases h with
+  | here hf hb => simp [P] at hf; subst hf; simp [glueS, Stmt.hasThru] at hb
+  | call hf hg ht => simp [P] at hf; subst hf; simp [glueS, Stmt.calls] at hg; subst hg; exact dfn_not_thru ht
+
+theorem glueS_glueOK : GlueOK P 8 GS :=
+  ⟨glueS, DT, .slice .int, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, glueS_not_thru, 2, 3, _, rfl, rfl⟩
+
+theorem gsdrop_ok : DropFnOK P 8 GS := Or.inr (Or.inl glueS_glueOK)
+
+def EGS : Entry := ⟨GSD, .own, true, [], [], false, false⟩
+
+theorem glueS_body : ∃ Δ, StmtT P (sigCtx glueS) [] glueS.body Δ ∧
+    (∀ v E, Δ v = some E → E.mode ≠ .rootb ∧ E.dtor = false ∧ E.dbind = false) ∧
+    Δ 1 = some { intE with mode := R0.mode } := by
+  have h0 : sigCtx glueS 0 = some EGS := by simp [sigCtx, glueS, paramE, EGS, GSD, GS, DT, T, Ty.hasFn]
+  have h1 : sigCtx glueS 1 = some R0 := by simp [sigCtx, glueS, R0, resMode]
+  have hS : NoRootb (sigCtx glueS) := by
+    intro v E h
+    rcases v with _ | _ | v
+    · rw [h0] at h; cases h; simp [EGS]
+    · rw [h1] at h; cases h; simp [R0]
+    · simp [sigCtx, glueS] at h
+  let Ka : Ctx := A2.setE (A2.setE (A2.setE (kill .replace false 0 (sigCtx glueS)) 0
+    { EGS with live := false, dtor := false }) 2 (compE EGS DT)) 3 (compE EGS (.slice .int))
+  have hKa : NoRootb Ka :=
+    (((hS.kill _ _ _).setE (by simp [EGS])).setE (by simp [compE, DT])).setE (by simp [compE])
+  have hEx : compE EGS DT = ⟨DT, .own, true, [], [], false, false⟩ := by
+    simp [compE, DT, EGS, ownHeld]
+  let Kb : Ctx := A2.setE (kill .replace false 2 Ka) 2 { compE EGS DT with live := false, dtor := false }
+  have hKb : NoRootb Kb := (hKa.kill _ _ _).setE (by rw [hEx]; simp)
+  have hmv : RhsT Ka [] (.var 2) ⟨(compE EGS DT).ty, .own, true, [], (compE EGS DT).held, false, false⟩ Kb :=
+    RhsT.moveOwn (by simp [Ka, A2.setE, upd]) (by rw [hEx]) (by rw [hEx]) (by simp) (hKa.noPin _)
+      (DtorSafe.of_none (fun v E h => (hKa v E h).2.1) _ _ _)
+  let ED : Entry := Entry.arm { (⟨(compE EGS DT).ty, .own, true, [], (compE EGS DT).held, false, false⟩ : Entry)
+    with ty := DT, held := (compE EGS DT).held }
+  have hED : ED = ⟨DT, .own, true, [], [], false, false⟩ := by
+    simp only [ED]; rw [hEx]; simp [Entry.arm, DT, T, Ty.dtorViews, Ty.hasDtor, Ty.holdsView]
+  let Kc : Ctx := A2.setE Kb 4 ED
+  have hKc : NoRootb Kc := hKb.setE (by rw [hED]; simp)
+  have hc1 : Kc 1 = some R0 := by
+    simp [Kc, Kb, Ka, A2.setE, upd, A2.kill, h1, killE, hits, R0, Entry.vdeps]
+  let Kd : Ctx := A2.setE (kill .replace false 1 Kc) 1 { intE with mode := R0.mode }
+  have hKd : NoRootb Kd := (hKc.kill _ _ _).setE (by simp [intE, R0])
+  have hasg : StmtT P Kc [] (.assign 1 (.expr (.lit 0))) Kd :=
+    StmtT.assign (Ex := R0) (E := intE) hc1 (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
+      (RhsT.expr ExprT.lit) rfl (by simp [intE, roots, Entry.vdeps, Mode.ownSlot]) (by simp [hc1])
+      (hKc.noPin _) (DtorSafe.of_none (fun v E h => (hKc v E h).2.1) _ _ _) rfl
+  have hlet := StmtT.letd (P := P) (Γ := Ka) (Γ1 := Kb) (F := []) (x := 4) (f := 0) (r := .var 2)
+    (s := .assign 1 (.expr (.lit 0))) (t := T) (H := (compE EGS DT).held) (τ := DT) rfl
+    (by simp [Ka, A2.setE, upd, A2.kill, sigCtx, glueS]) (by simp) hmv rfl
+    (Or.inl ⟨rfl, Or.inr ⟨0, by rw [hEx]; rfl⟩⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hasg (hKd.endOK _)
+    (by simp [Stmt.assigns])
+  have hun := StmtT.unpair (P := P) (Γ := sigCtx glueS) (F := []) (y := 0) (x := 2) (z := 3)
+    (s := .letd 4 0 (.var 2) (.assign 1 (.expr (.lit 0)))) (E := EGS) (a := DT) (b := .slice .int)
+    rfl h0 rfl (Or.inl rfl) (Or.inr ⟨8, rfl, glueS_glueOK⟩) (by simp)
+    (by simp [sigCtx, glueS]) (by simp [sigCtx, glueS]) (by decide) (by simp) (by simp) hlet
+    (hS.noPin _) (DtorSafe.of_none (fun v E h => (hS v E h).2.1) _ _ _)
+    ((hKd.exitScope 4).endOK _) (((hKd.exitScope 4).exitScope 3).endOK _)
+    (fun _ => by simp [Stmt.movedFirst, Stmt.assigns]) (fun h => by simp [Ty.holdsDtor] at h)
+  refine ⟨_, hun, (((hKd.exitScope 4).exitScope 3).exitScope 2), ?_⟩
+  simp [exitScope, upd, A2.kill, Kd, A2.setE, killE, hits, intE, Entry.vdeps, R0]
+
+theorem glueS_ok : FnOK P glueS := by
+  obtain ⟨Δ, hb, hfl, hr⟩ := glueS_body
+  refine ⟨rfl, by decide, by decide, rfl, by simp [glueS], ?_, by simp [glueS], by simp [glueS], by simp [glueS],
+    by simp [glueS], by simp [glueS], ?_, Δ, hb, fun v E h => (hfl v E h).2, ?_, ?_⟩
+  · intro pt hpt; simp [glueS] at hpt; subst hpt
+    simp [GSD, GS, DT, T, Ty.ok, Ty.isStruct, Ty.owning, Ty.vecD, Ty.holdsView]
+  · refine ⟨fun i hi hs _ => ?_, fun i hi b hb _ => ?_, fun h => by simp [glueS] at h⟩
+    · simp [glueS] at hi; subst hi; simp [glueS, Stmt.movedFirst, Stmt.assigns]
+    · simp [glueS] at hi; subst hi; simp [glueS] at hb
+  · exact ⟨{ intE with mode := R0.mode }, by simpa [glueS] using hr, rfl, rfl, by simp [R0, resMode, glueS],
+      by simp [intE], by simp [intE], by simp [glueS]⟩
+  · intro i hi b hb; simp [glueS] at hi; subst hi; simp [glueS] at hb
+
 /-! ### A struct with its own `% Drop` beside a destructor field (Agora #616) -/
 
 theorem impl_not_thru : ¬ ThruFn P 5 := by
@@ -1354,7 +1456,7 @@ theorem glue2_not_thru : ¬ ThruFn P 6 := by
     · exact impl_not_thru ht
 
 theorem glue2_implOK : ImplGlueOK P 6 GT 4 5 :=
-  ⟨glue2, 2, 3, .lit 0, rfl, rfl, by decide, rfl, rfl, rfl, rfl, rfl, rfl, glue2_not_thru,
+  ⟨glue2, 2, 3, .lit 0, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, glue2_not_thru,
     Or.inl glue_glueOK, impl_dtorOK, rfl⟩
 
 theorem impldrop_ok : DropFnOK P 6 GT := Or.inr (Or.inr (Or.inl ⟨4, 5, glue2_implOK⟩))
@@ -1733,7 +1835,7 @@ theorem gfn_ok : FnOK P gfn := by
 theorem prog_ok : ProgOK P := by
   intro fn hfn
   simp only [P, List.mem_cons, List.mem_nil_iff, or_false] at hfn
-  rcases hfn with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl
+  rcases hfn with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl
   · exact dfn_ok
   · exact mk_ok
   · exact ofn_ok
@@ -1742,6 +1844,7 @@ theorem prog_ok : ProgOK P := by
   · exact impl_ok
   · exact glue2_ok
   · exact glueV_ok
+  · exact glueS_ok
 
 /-! ### The caller: `: DT y ( mk )  :drop z y` -/
 
@@ -1779,8 +1882,8 @@ theorem main2_typed : ∃ Δ, StmtT P (fun _ => none) [] main2 Δ := by
 theorem prog_codes : ProgCodes P := by
   intro fn hfn
   simp only [P, List.mem_cons, List.mem_nil_iff, or_false] at hfn
-  rcases hfn with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;>
-    simp [dfn, mk, ofn, gfn, glue, impl, glue2, glueV, Stmt.codesOK, Rhs.codeOK]
+  rcases hfn with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;>
+    simp [dfn, mk, ofn, gfn, glue, impl, glue2, glueV, glueS, Stmt.codesOK, Rhs.codeOK]
 
 theorem main2_safe {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem 2) main2 (.ok m' s')) :
     ¬ Stuck P m' s' := by
@@ -2001,7 +2104,7 @@ theorem main7_safe {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem 5) main7 (.ok 
 /-- ... and the destructor `dfn`, which takes its value lent, is no
     destructor for that struct: one that holds a destructor value has glue. -/
 theorem main7_lent_refused : ¬ DropFnOK P 0 GT := by
-  rintro (⟨_, h⟩ | ⟨fn, a, b, hfn, _, _, hps, _⟩ | ⟨_, _, fn, _, _, _, hfn, _, _, hps, _⟩ |
+  rintro (⟨_, h⟩ | ⟨fn, a, b, hfn, _, hps, _⟩ | ⟨_, _, fn, _, _, _, hfn, _, hps, _⟩ |
     ⟨fn, _, _, _, _, hfn, _, _, hps, _⟩ | ⟨_, _, _, _, _, _, _, _, ht, _⟩)
   · exact absurd h (by decide)
   · simp [P] at hfn; subst hfn; simp [dfn] at hps
@@ -2072,6 +2175,118 @@ theorem main8_safe {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem 5) main8 (.ok 
     ¬ Stuck P m' s' := by
   obtain ⟨Δ, ht⟩ := main8_typed
   exact memory_safe prog_ok prog_codes ht rfl (by simp [main8, Stmt.codesOK, Rhs.codeOK]) (by decide) hr
+
+/-! ### A struct with a destructor field and a view field (Agora #633)
+
+`: s ( new int )  : v ( view s )  : a 1  : b 2  :drop c ( pair a b )
+:drop g ( pair c v )`: the struct holds the destructor value `c` and a view
+of the older binding `s` (nurlc's `: P { Conn c s name }`); it is bound by
+`letd` at `GSD`, armed: it views `s`.  At the frame's end it moves into its
+glue `glueS` as a `sink` argument that holds that view (`glueCall_typed`),
+which takes it apart, the destructor field going to a `letd` of its own. -/
+
+def main10 : Stmt :=
+  .letv 0 (.new .int) (.letv 1 (.view 0) (.letv 2 (.expr (.lit 1)) (.letv 3 (.expr (.lit 2))
+    (.letd 4 0 (.pair 2 3) (.letd 5 8 (.pair 4 1) .skip)))))
+
+/-- The end of a binding that views other bindings, in a context with no
+    borrowed parameter and no other binding that runs a destructor. -/
+theorem endOK_viewing {Γ : Ctx} (h : NoRootb Γ) {x : Var} {E : Entry} (hm : E.mode ≠ .rootb)
+    (hx : x ∉ roots E.vdeps) : EndOK (A2.setE Γ x E) x := by
+  refine ⟨fun p Ep hp hmp => ?_, fun v Ev hv hd _ => ?_, fun v Ev hv hd _ _ d hdd _ => ?_⟩
+  · by_cases hpx : p = x
+    · subst hpx; simp [A2.setE] at hp; subst hp; exact absurd hmp hm
+    · rw [A2.setE, upd_ne _ _ hpx] at hp; exact absurd hmp (h p Ep hp).1
+  · by_cases hvx : v = x
+    · subst hvx; simp [A2.setE] at hv; subst hv
+      simp [hitsMem]
+      intro _ d hd hdv
+      exact absurd (by rw [← hdv]; exact List.mem_map_of_mem hd) hx
+    · rw [A2.setE, upd_ne _ _ hvx] at hv; rw [(h v Ev hv).2.1] at hd; cases hd
+  · by_cases hvx : v = x
+    · subst hvx; simp [A2.setE] at hv; subst hv
+      intro hdx; exact hx (by rw [← hdx]; exact List.mem_map_of_mem hdd)
+    · rw [A2.setE, upd_ne _ _ hvx] at hv; rw [(h v Ev hv).2.2] at hd; cases hd
+
+theorem exitScope_setE_same (Γ : Ctx) (x : Var) (E : Entry) :
+    A2.exitScope x (A2.setE Γ x E) = A2.exitScope x Γ := by
+  funext w
+  by_cases hwx : w = x
+  · subst hwx; simp [A2.exitScope]
+  · simp [A2.exitScope, upd_ne _ _ hwx, A2.kill, A2.setE]
+
+def EN0 : Entry := ⟨.vec .int, .own, true, [], [], false, false⟩
+def EVw : Entry := ⟨.slice .int, .bor, true, derive 0 EN0 .view, EN0.held, false, false⟩
+
+theorem main10_typed : ∃ Δ, StmtT P (fun _ => none) [] main10 Δ := by
+  let K1 : Ctx := A2.setE (fun _ => none) 0 EN0
+  have hK1 : NoRootb K1 := noRootb_empty.setE (by simp [EN0])
+  let K2 : Ctx := A2.setE K1 1 EVw
+  have hK2 : NoRootb K2 := hK1.setE (by simp [EVw])
+  let K3 : Ctx := A2.setE K2 2 intE
+  let K4 : Ctx := A2.setE K3 3 intE
+  have hK4 : NoRootb K4 := (hK2.setE (by simp [intE])).setE (by simp [intE])
+  have hview : RhsT K1 [] (.view 0) EVw K1 :=
+    RhsT.view (E := EN0) (t := .int) (by simp [K1, A2.setE]) rfl rfl rfl
+  let ED : Entry := Entry.arm { EP with ty := DT, held := [] }
+  have hEDe : ED = ⟨DT, .own, true, [], [], false, false⟩ := by
+    simp [ED, EP, Entry.arm, DT, T, Ty.dtorViews, Ty.hasDtor, Ty.holdsView]
+  have hpair : RhsT K4 [] (.pair 2 3) EP K4 :=
+    RhsT.pair (Ey := intE) (Ez := intE) (by simp [K4, K3, A2.setE, upd]) rfl PushArg.int
+      (by simp [K4, A2.setE]) rfl PushArg.int (by simp [intE, Mode.ownSlot])
+  let K5 : Ctx := A2.setE K4 4 ED
+  have hK5 : NoRootb K5 := hK4.setE (by rw [hEDe]; simp)
+  -- the struct literal: the destructor value moves in, the view is copied
+  let K6 : Ctx := A2.setE (kill .replace false 4 K5) 4 { ED with live := false, dtor := false }
+  have hK6 : NoRootb K6 := (hK5.kill _ _ _).setE (by rw [hEDe]; simp)
+  have hmove : PushArg K5 [] 4 ED ED.ty ED.held K6 :=
+    PushArg.move (Γ := K5) (F := []) (y := 4) (E := ED) (t := ED.ty) rfl (by rw [hEDe]) (by simp)
+      (hK5.noPin _) (DtorSafe.of_none (fun v E h => (hK5 v E h).2.1) _ _ _)
+  have hK61 : K6 1 = some EVw := by
+    simp [K6, K5, K4, K3, K2, A2.setE, upd, A2.kill, killE, hits, EVw, EN0, derive, Mode.isRoot,
+      rootKind, Entry.vdeps, Mode.ownSlot]
+  let EG0 : Entry := ⟨.prod ED.ty EVw.ty, .own, true, [], ED.held ++ (derive 1 EVw .self ++ EVw.held),
+    false, false⟩
+  have hgp : RhsT K5 [] (.pair 4 1) EG0 K6 :=
+    RhsT.pair (Ey := ED) (Ez := EVw) (by simp [K5, A2.setE]) (by rw [hEDe]) hmove
+      hK61 rfl (PushArg.slice (s := .int) (Or.inl rfl)) (by simp [EVw, Mode.ownSlot])
+  let EGa : Entry := Entry.arm { EG0 with ty := GSD, held := EG0.held }
+  -- armed: it views `s` (binding 0), and nothing of its own
+  have hEGa : EGa = ⟨GSD, .own, true, [], [⟨0, .view⟩], true, true⟩ := by
+    simp [EGa, EG0, hEDe, Entry.arm, EVw, EN0, derive, Mode.isRoot, rootKind, comp, GSD, GS, DT, T,
+      Ty.dtorViews, Ty.hasDtor, Ty.holdsView]
+  have hEnd5 : EndOK (A2.setE K6 5 EGa) 5 :=
+    endOK_viewing hK6 (by rw [hEGa]; simp) (by rw [hEGa]; simp [roots, Entry.vdeps, Mode.ownSlot])
+  have hg := StmtT.letd (P := P) (Γ := K5) (Γ1 := K6) (F := []) (x := 5) (f := 8) (r := .pair 4 1)
+    (s := .skip) (E := EG0) (t := GS) (H := EG0.held) (τ := GSD) rfl
+    (by simp [K5, K4, K3, K2, K1, A2.setE, upd]) (by simp) hgp rfl
+    (Or.inl ⟨rfl, Or.inl (by simp [EG0, hEDe, EVw, GS])⟩) rfl rfl (letd_fn gsdrop_ok) (HeldUp.refl _ _)
+    StmtT.skip hEnd5
+  rw [exitScope_setE_same] at hg
+  have hK7 := hK6.exitScope 5
+  have hd := StmtT.letd (P := P) (Γ := K4) (Γ1 := K4) (F := []) (x := 4) (f := 0) (r := .pair 2 3)
+    (E := EP) (t := T) (H := []) rfl (by simp [K4, K3, K2, K1, A2.setE, upd])
+    (by simp) hpair rfl (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hg
+    (hK7.endOK _)
+  have h3 := StmtT.letv (P := P) (x := 3) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K3) (Γ1 := K3)
+    rfl (by simp [K3, K2, K1, A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit) hd
+    ((hK7.exitScope 4).endOK _)
+  have h2 := StmtT.letv (P := P) (x := 2) (r := .expr (.lit 1)) (E := intE) (F := []) (Γ := K2) (Γ1 := K2)
+    rfl (by simp [K2, K1, A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit) h3
+    (((hK7.exitScope 4).exitScope 3).endOK _)
+  have h1 := StmtT.letv (P := P) (x := 1) (r := .view 0) (E := EVw) (F := []) (Γ := K1) (Γ1 := K1)
+    rfl (by simp [K1, A2.setE]) (by simp) hview h2
+    ((((hK7.exitScope 4).exitScope 3).exitScope 2).endOK _)
+  exact ⟨_, StmtT.letv (P := P) (x := 0) (r := .new .int) (E := EN0) (F := []) (Γ := fun _ => none)
+    (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.new (by decide)) h1
+    (((((hK7.exitScope 4).exitScope 3).exitScope 2).exitScope 1).endOK _)⟩
+
+/-- The program with a struct that holds a destructor value and a view of an
+    older binding, dropped by its glue, is memory safe. -/
+theorem main10_safe {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem 6) main10 (.ok m' s')) :
+    ¬ Stuck P m' s' := by
+  obtain ⟨Δ, ht⟩ := main10_typed
+  exact memory_safe prog_ok prog_codes ht rfl (by simp [main10, Stmt.codesOK, Rhs.codeOK]) (by decide) hr
 
 /-! ### A destructor value two levels down (A2-drop.3b)
 

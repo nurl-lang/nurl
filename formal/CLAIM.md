@@ -698,7 +698,18 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   destructors run, each once, is read off these steps and theorems; it is
   no single theorem about a run. Taking such a struct apart anywhere else
   (`unpair`) is typed too, and is what its drop does: the fields go to
-  their `letd`s. In this cut a struct with glue holds no views.
+  their `letd`s. Such a struct may hold views (Agora #633): its `letd`
+  arms it with what it views, of older bindings. At its frame's end it
+  moves into the glue as any `sink` argument does, holding them; the
+  call's rule asks that it reach nothing of itself, which holds because
+  a `letd` binding views nothing of its own (`DSelf`: its scope's end asks
+  it, its frame keeps it, `StmtT.scopeD`; `A2.glueCall_typed`). The glue
+  sees its parameter as viewing nothing, as any callee sees a parameter.
+  `A2.DtorWitness.main10_safe` is a typed program with a struct of a
+  destructor field and a view field of an older binding (nurlc's
+  `: P { Conn c s name }`), its glue checked by `FnOK`. A struct with an
+  impl beside its glue may hold views too (`ImplGlueOK`); no witness
+  program is mechanized for that case.
   A struct with a `% Drop` OF ITS OWN beside a field that holds a
   destructor value has two functions: its impl `i`, which takes it lent,
   and its glue, which takes it owned, rebinds it first thing under the
@@ -923,9 +934,8 @@ The rules are stricter than nurlc's in these places:
   holds views; here a struct or an enum holding one is its own destructor
   type, with its glue.
 - for a struct whose drop takes it apart (Agora #616): its glue does
-  nothing but hand its fields on (`Stmt.pureGlue`); it holds no views, so
-  a struct with a destructor field and a view field is refused
-  altogether; and a struct of three or more fields is nested pairs here,
+  nothing but hand its fields on (`Stmt.pureGlue`); and a struct of three
+  or more fields is nested pairs here,
   each inner pair that holds a destructor value with glue of its own. A
   struct with a `% Drop` of its own beside a destructor field is not
   taken apart by hand (`unpair`): that would skip its impl.

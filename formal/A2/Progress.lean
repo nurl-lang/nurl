@@ -648,7 +648,7 @@ theorem progress {P : Prog}
     cases res with
     | ok v o m1 => exact Or.inr <| Or.inr ⟨_, Step.letd hmx hres⟩
     | panic => exact Or.inr <| Or.inr ⟨_, Step.letdP hres⟩
-  | @scopeD Γ Δ1 F x f k hxE _ _ _ _ _ _ _ ih =>
+  | @scopeD Γ Δ1 F x f k hxE _ _ _ _ _ _ _ _ ih =>
     intro m hcd hi
     obtain ⟨Ex, _, hx, hmo, _, _, _⟩ := hxE
     have hnrb : Ex.mode ≠ .rootb := by rw [hmo]; simp
