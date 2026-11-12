@@ -207,15 +207,15 @@ theorem noDead {bl : Blk} (hk : bl.kind ≠ .dead := by simp) (hd : bl.ty.dtorFr
   ⟨fun _ _ => hd, fun h => absurd h hk, fun h => absurd hd (by rw [h]; simp)⟩
 
 /-- Agora #610: an `arc` block whose payload owns no destructor value or is
-    one at its top, of a type that holds no closure. -/
-theorem arcDtorOK {t : Ty} {o : Option Val} (hd : t.dtorFree = true ∨ t.hasDtor = true) (hfn : t.hasFn = false) :
+    one at its top (Agora #755: or a drained `Vec` of them), of a type that
+    holds no closure. -/
+theorem arcDtorOK {t : Ty} {o : Option Val} (hd : t.dtorFree = true ∨ t.dnest = true) (hfn : t.hasFn = false) :
     Blk.DtorOK ⟨t, .arc, o⟩ := by
   refine ⟨fun _ h => absurd rfl h, fun h => by simp at h, fun hf => ?_⟩
   rcases hd with hd | hd
   · simp only at hf; rw [hd] at hf; cases hf
-  · cases t with
-    | dtor f u => exact ⟨f, u, rfl, by simpa [Ty.hasFn] using hfn⟩
-    | _ => simp [Ty.hasDtor] at hd
+  · obtain ⟨n, f, u, rfl⟩ := Ty.dnest_shape hd
+    exact ⟨n, f, u, rfl, by simpa [Ty.hasFn] using hfn⟩
 
 /-- **More blocks**: the invariant holds over a store with the same slots and
     more blocks, each as the invariant asks. -/
@@ -1722,15 +1722,15 @@ theorem MInv.share_lands {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {a : Var} {E : En
 
 /-- A share, owned: it holds nothing, and its block holds its payload. -/
 theorem out_share {m : Mem} {Γ : Ctx} {t : Ty} {k : Nat} {p : Val} (htok : t.ok = true)
-    (hvd : t.dtorFree = true ∨ t.hasDtor = true)
+    (hvd : t.dtorFree = true ∨ t.dnest = true)
     (hvf : t.holdsView = false) (hwp : WFv t p) (hk : ArcBlk (m.blk k) t p) :
     RhsOut m Γ ⟨.arc t, .own, true, [], [], false, false⟩ (.arc k p) true where
   own := rfl
   mode := Or.inl rfl
   live := rfl
   tyok := by
-    have h2 : (t.dtorFree || t.hasDtor) = true := by simpa [Bool.or_eq_true] using hvd
-    simp [Ty.ok, htok, hvf, h2, Ty.vecD_of_dtorOr hvd]
+    have h2 : (t.dtorFree || t.dnest) = true := by simpa [Bool.or_eq_true] using hvd
+    simp [Ty.ok, htok, hvf, h2]
   wf _ r hr := by simp [roots, Entry.vdeps, Mode.ownSlot] at hr
   valOwn _ := ⟨rfl, .arc hwp hvf, ViewsOK.none (show (Ty.arc t).holdsView = false from hvf) _ _,
     List.nodup_nil, fun _ h => (nomatch h), fun _ _ _ _ h => (nomatch h), fun _ _ _ h => (by cases h),

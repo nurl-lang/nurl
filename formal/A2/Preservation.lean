@@ -371,9 +371,9 @@ def Frz (F : List Var) (m m' : Mem) : Prop := ∀ v ∈ F, m'.st v = m.st v
     (not from inside it): the cases proven apart from `preserve` are asked
     for the other steps only, and `preserve` answers this one (`pres_reap`). -/
 def IsReap (m : Mem) (s : Stmt) (m' : Mem) (s' : Stmt) : Prop :=
-  ∃ k f u p, s.src = true ∧ m.blk k = some ⟨.dtor f u, .dead, some p⟩ ∧
+  ∃ k n f u p, s.src = true ∧ m.blk k = some ⟨Ty.nest n (.dtor f u), .dead, some p⟩ ∧
     m' = { (m.set m.nv ⟨true, some p⟩) with
-            nv := m.nv + 1, blk := upd m.blk k (some ⟨.dtor f u, .dead, none⟩) } ∧
+            nv := m.nv + 1, blk := upd m.blk k (some ⟨Ty.nest n (.dtor f u), .dead, none⟩) } ∧
     s' = .seq (.scopeD m.nv f .skip) s
 
 theorem reap_or {P : Prog} {m m' : Mem} {s s' : Stmt} (_ : Step P m s (.ok m' s')) :
@@ -586,24 +586,26 @@ theorem exitScope_setE_fresh {Γ : Ctx} (hw : CtxWF Γ) {r : Var} (hr : Γ r = n
     was, so `r` is typed after it as before.  (A run takes the step right
     after the marking sweep marks an orphan, `Settle`.) -/
 theorem pres_reap {P : Prog} {Γ Δ : Ctx} {F : List Var} {r : Stmt} (ht : StmtT P Γ F r Δ)
-    (hsrc : r.src = true) {m : Mem} {k f : Nat} {u : Ty} {p : Val} (hcd : MemCodes P m)
-    (hi : Inv m Γ F r) (hk : m.blk k = some ⟨.dtor f u, .dead, some p⟩) :
+    (hsrc : r.src = true) {m : Mem} {k n f : Nat} {u : Ty} {p : Val} (hcd : MemCodes P m)
+    (hi : Inv m Γ F r) (hk : m.blk k = some ⟨Ty.nest n (.dtor f u), .dead, some p⟩) :
     ∃ Γ', StmtT P Γ' F (.seq (.scopeD m.nv f .skip) r) Δ ∧
       Inv { (m.set m.nv ⟨true, some p⟩) with
-              nv := m.nv + 1, blk := upd m.blk k (some ⟨.dtor f u, .dead, none⟩) } Γ' F
+              nv := m.nv + 1, blk := upd m.blk k (some ⟨Ty.nest n (.dtor f u), .dead, none⟩) } Γ' F
         (.seq (.scopeD m.nv f .skip) r) ∧
       m.nv ≤ m.nv + 1 ∧ Keep Γ Γ' r (.seq (.scopeD m.nv f .skip) r) ∧
       Frz F m { (m.set m.nv ⟨true, some p⟩) with
-              nv := m.nv + 1, blk := upd m.blk k (some ⟨.dtor f u, .dead, none⟩) } := by
+              nv := m.nv + 1, blk := upd m.blk k (some ⟨Ty.nest n (.dtor f u), .dead, none⟩) } := by
   have hsp : r.spine = [] := src_spine hsrc
   have hanch := hi.leafAnch hsp
   -- what the invariant says of the block
   obtain ⟨htok, hvf, _, _, hdead⟩ := hi.blocks k _ hk
-  have hstr : u.isStruct = true := by simp [Ty.ok] at htok; exact htok.1
-  have hfn : (Ty.dtor f u).hasFn = false := by
-    obtain ⟨f', u', he, h⟩ := hdead.dead rfl
-    cases he; exact h
-  have hdrop : DropFnOK P f u := hcd.dead k f u _ _ hk (Or.inr rfl)
+  have hstr : u.isStruct = true := by
+    have := Ty.ok_of_nest htok; simp [Ty.ok] at this; exact this.1
+  have hfn : (Ty.nest n (.dtor f u)).hasFn = false := by
+    obtain ⟨n', f', u', he, h⟩ := hdead.dead rfl
+    obtain ⟨rfl, rfl, rfl⟩ := Ty.nest_dtor_inj (show Ty.nest n (.dtor f u) = _ from he)
+    simpa [Ty.hasFn] using h
+  have hdrop : DropFnOK P f u := hcd.dead k n f u _ _ hk (Or.inr rfl)
   -- the fresh variable
   have hmz : m.st m.nv = none := by
     cases h : m.st m.nv with
@@ -618,8 +620,8 @@ theorem pres_reap {P : Prog} {Γ Δ : Ctx} {F : List Var} {r : Stmt} (ht : StmtT
     hi.toMInv.of_st rfl ⟨hi.heap.nodup, hi.heap.disj, hi.heap.alloc, hi.heap.self, hi.heap.blk, hi.heap.views⟩
       (Nat.le_succ _)
   obtain ⟨post, out⟩ := reap_pres (F := F) (m := { m with nv := m.nv + 1 }) hm0 hk
-  generalize hE : (⟨.dtor f u, .own, true, [], [], false, false⟩ : Entry) = E at out
-  have hEty : E.ty = .dtor f u := by rw [← hE]
+  generalize hE : (⟨Ty.nest n (.dtor f u), .own, true, [], [], false, false⟩ : Entry) = E at out
+  have hEty : E.ty = Ty.nest n (.dtor f u) := by rw [← hE]
   have hEmo : E.mode = .own := by rw [← hE]
   have hEdb : E.dbind = false := by rw [← hE]
   have hEdt : E.dtor = false := by rw [← hE]
@@ -640,7 +642,7 @@ theorem pres_reap {P : Prog} {Γ Δ : Ctx} {F : List Var} {r : Stmt} (ht : StmtT
         have := hi.dom q; rw [hq] at this; exact this.symm)
       intro h; rw [h] at hlt; exact absurd hqn (Nat.lt_asymm hlt)
   have hfr := StmtT.scopeD (P := P) (F := F) (x := m.nv) (f := f) (s := .skip)
-    ⟨E, u, by simp [setE], hEmo, Or.inl hEty, by rw [hEty]; exact hfn, hdrop, hstr⟩ hzF StmtT.skip hEnd
+    ⟨E, u, by simp [setE], hEmo, hEty ▸ ScopeDTy.nest n f u, by rw [hEty]; exact hfn, hdrop, hstr⟩ hzF StmtT.skip hEnd
     ⟨fun v Ev hv _ => ⟨Ev, hv, rfl, rfl, fun _ => rfl⟩, fun v Ev hv => ⟨by simp [Stmt.spine], Ev, hv⟩⟩
     hm.wf hm.names
     (fun E' hE' hv' => by
@@ -704,7 +706,7 @@ theorem pres_unpair {P : Prog} {Γ Δ : Ctx} {F : List Var} {y x z : Var} {s : S
     ∃ Γ', StmtT P Γ' F s' (exitScope x (exitScope z Δ)) ∧ Inv m' Γ' F s' ∧ m.nv ≤ m'.nv ∧
       Keep Γ Γ' (.unpair y x z s) s' ∧ Frz F m m' := by
   cases hst with
-  | reap hrs hrk _ => exact absurd ⟨_, _, _, _, hrs, hrk, rfl, rfl⟩ hnr
+  | reap hrs hrk _ => exact absurd ⟨_, _, _, _, _, hrs, hrk, rfl, rfl⟩ hnr
   | unpair hvy hmx hmz hxz' =>
     rename_i v w
     have hanch := hi.leafAnch rfl
@@ -2092,7 +2094,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         simp only [Mem.set_st, upd_ne _ _ hvx]; exact post.frz v hv
   | letcall hsrc hx hxF hc hs hpx _ _ =>
     intro m m' s' hcd hi hst
-    rcases reap_or hst with ⟨_, _, _, _, hrs, hrk, rfl, rfl⟩ | hnr
+    rcases reap_or hst with ⟨_, _, _, _, _, hrs, hrk, rfl, rfl⟩ | hnr
     · exact pres_reap ht0 hrs hcd hi hrk
     exact hcall hsrc hx hxF hc hs hpx hi hst hnr
   | assign hx hxF hmodes hr hty hxd _ hpin hds =>
@@ -3506,17 +3508,17 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
     | reap hrs hrk _ => exact pres_reap ht0 hrs hcd hi hrk
   | letrec hsrc hx hxF hf hp hty ho hc hs hpx _ =>
     intro m m' s' hcd hi hst
-    rcases reap_or hst with ⟨_, _, _, _, hrs, hrk, rfl, rfl⟩ | hnr
+    rcases reap_or hst with ⟨_, _, _, _, _, hrs, hrk, rfl, rfl⟩ | hnr
     · exact pres_reap ht0 hrs hcd hi hrk
     exact hrec hsrc hx hxF hf hp hty ho hc hs hpx hi hst hnr
   | callc hk hx hxF hc htc hj hσ hhd hout hcT hnz hkT hpx _ =>
     intro m m' s' hcd hi hst
-    rcases reap_or hst with ⟨_, _, _, _, hrs, hrk, rfl, rfl⟩ | hnr
+    rcases reap_or hst with ⟨_, _, _, _, _, hrs, hrk, rfl, rfl⟩ | hnr
     · exact pres_reap ht0 hrs hcd hi hrk
     exact hclo hk hx hxF hc htc hj hσ hhd hout hcT hnz hkT hpx hcd hi hst hnr
   | callcE hk hx hxF hc htc hcan _ hj hσ hsp hsl hsr hso hny hdc hcT hkT hpx _ =>
     intro m m' s' hcd hi hst
-    rcases reap_or hst with ⟨_, _, _, _, hrs, hrk, rfl, rfl⟩ | hnr
+    rcases reap_or hst with ⟨_, _, _, _, _, hrs, hrk, rfl, rfl⟩ | hnr
     · exact pres_reap ht0 hrs hcd hi hrk
     exact hhand hk hx hxF hc htc hcan hj hσ hsp hsl hsr hso hny hdc hcT hkT hpx hcd hi hst hnr
   | @catchR Γ Δ F x m0 s hxF hs hM hanchΔ hKO hds ih =>
@@ -3665,7 +3667,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
 
   | unpair hsrc hy hl hm hty hyF hx hz hxz hxF hzF hs hny hdy hpz hpx _ _ _ =>
     intro m m' s' hcd hi hst
-    rcases reap_or hst with ⟨_, _, _, _, hrs, hrk, rfl, rfl⟩ | hnr
+    rcases reap_or hst with ⟨_, _, _, _, _, hrs, hrk, rfl, rfl⟩ | hnr
     · exact pres_reap ht0 hrs hcd hi hrk
     exact pres_unpair hsrc hy hl hm (hty.imp id fun ⟨f, h, _⟩ => ⟨f, h⟩) hyF hx hz hxz hxF hzF hs hny hdy hpz hpx hi hst hnr
 

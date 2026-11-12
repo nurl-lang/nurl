@@ -349,10 +349,12 @@ def Ty.ok : Ty → Bool
   -- (A2-drop.3d: a lock's or a cell's payload owns no destructor value: a
   -- check-out binding is no `letd`'s, so a payload that would hold one is
   -- refused, stricter than nurlc.  Agora #610: an `Arc`'s payload may be a
-  -- destructor value itself (`hasDtor`): the sweep that finds its block
-  -- unreached marks it `dead` and the thread whose step it ends reaps it,
-  -- `Mem.sweepD`, `Settle`; a payload holding one deeper is still refused)
-  | .arc t => t.ok && !t.holdsView && !t.vecD && (t.dtorFree || t.hasDtor)   -- A3.1: a payload holds no views
+  -- destructor value itself: the sweep that finds its block unreached marks
+  -- it `dead` and the thread whose step it ends reaps it, `Mem.sweepD`,
+  -- `Settle`; Agora #755: or a drained `Vec` of them, at any depth
+  -- (`Ty.dnest`), which the reap hands to a destructor frame at its own type
+  -- that drains it; a payload holding one in a field is still refused)
+  | .arc t => t.ok && !t.holdsView && (t.dtorFree || t.dnest)   -- A3.1: a payload holds no views
   | .lk t => t.ok && !t.holdsView && !t.vecD && t.dtorFree  -- A3.2: nor does a lock's (it is Send); A3.2's
                                    -- second cut: it may hold `arc` and lock shares; A3.5's second cut:
                                    -- and cell shares, each value going in past the crossing check
@@ -386,12 +388,11 @@ theorem Ty.ok_sum {a b : Ty} (h : (Ty.sum a b).ok = true) : a.ok = true ∧ b.ok
 theorem Ty.ok_slice {t : Ty} (h : (Ty.slice t).ok = true) : t.ok = true ∧ t.holdsView = false := by
   simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h
 theorem Ty.ok_arc {t : Ty} (h : (Ty.arc t).ok = true) : t.ok = true ∧ t.holdsView = false := by
-  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1.1
-theorem Ty.ok_arc_vd {t : Ty} (h : (Ty.arc t).ok = true) : t.vecD = false := by
-  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1.2
+  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1
 /-- A2-drop.3d, Agora #610: an `Arc`'s payload owns no destructor value, or
-    is one at its top. -/
-theorem Ty.ok_arc_dtor {t : Ty} (h : (Ty.arc t).ok = true) : t.dtorFree = true ∨ t.hasDtor = true := by
+    is one at its top, or (Agora #755) a drained `Vec` of them at any depth
+    (`Ty.dnest`). -/
+theorem Ty.ok_arc_dtor {t : Ty} (h : (Ty.arc t).ok = true) : t.dtorFree = true ∨ t.dnest = true := by
   simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true', Bool.or_eq_true] at h; exact h.2
 theorem Ty.ok_lk {t : Ty} (h : (Ty.lk t).ok = true) : t.ok = true ∧ t.holdsView = false := by
   simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1.1
@@ -411,12 +412,6 @@ theorem Ty.ok_cell_free {t : Ty} (h : (Ty.cell t).ok = true) : t.dtorFree = true
 /-- A type that owns no destructor value is no `Vec` of destructor values. -/
 theorem Ty.vecD_of_dtorFree {t : Ty} (h : t.dtorFree = true) : t.vecD = false := by
   cases t <;> simp_all [Ty.vecD, Ty.dtorFree]
-
-/-- Agora #610: an `Arc`'s payload type (`Ty.ok_arc_dtor`) is no drained `Vec`. -/
-theorem Ty.vecD_of_dtorOr {t : Ty} (h : t.dtorFree = true ∨ t.hasDtor = true) : t.vecD = false := by
-  rcases h with h | h
-  · exact Ty.vecD_of_dtorFree h
-  · cases t <;> simp_all [Ty.vecD, Ty.hasDtor]
 
 theorem Ty.ok_vec_elem {t : Ty} (h : (Ty.vec t).ok = true) : t.ok = true := by
   simp only [Ty.ok, Bool.and_eq_true] at h; exact h.1
@@ -482,6 +477,34 @@ theorem Ty.nest_eq_dtor {n f g : Nat} {t u : Ty} (h : Ty.nest n (.dtor f t) = .d
   cases n with
   | zero => cases h; rfl
   | succ n => cases h
+@[simp] theorem Ty.hasCell_nest (n : Nat) (u : Ty) : (Ty.nest n u).hasCell = u.hasCell := by
+  induction n with
+  | zero => rfl
+  | succ n ih => simpa [Ty.hasCell] using ih
+@[simp] theorem Ty.hasArc_nest (n : Nat) (u : Ty) : (Ty.nest n u).hasArc = u.hasArc := by
+  induction n with
+  | zero => rfl
+  | succ n ih => simpa [Ty.hasArc] using ih
+/-- Agora #755: a nest of `Vec`s around a destructor type determines its
+    depth, its destructor and the type under it. -/
+theorem Ty.nest_dtor_inj {n n' f f' : Nat} {u u' : Ty}
+    (h : Ty.nest n (.dtor f u) = Ty.nest n' (.dtor f' u')) : n = n' ∧ f = f' ∧ u = u' := by
+  induction n generalizing n' with
+  | zero => cases n' with
+    | zero => cases h; exact ⟨rfl, rfl, rfl⟩
+    | succ n' => cases h
+  | succ n ih => cases n' with
+    | zero => cases h
+    | succ n' =>
+      obtain ⟨h1, h2, h3⟩ := ih (Ty.vec.inj h)
+      exact ⟨by rw [h1], h2, h3⟩
+theorem Ty.nest_dtor_ne_int (n f : Nat) (u : Ty) : Ty.nest n (.dtor f u) ≠ .int := by
+  cases n <;> simp
+/-- Agora #755: a drained element type is exactly a nest of `Vec`s around a
+    destructor type. -/
+theorem Ty.dnest_iff {t : Ty} : t.dnest = true ↔ ∃ n f u, t = Ty.nest n (.dtor f u) :=
+  ⟨Ty.dnest_shape, fun ⟨n, f, u, h⟩ => by rw [h]; exact Ty.dnest_nest n f u⟩
+
 /-- Agora #607: the destructor at the core of a destructor type or of a nest
     of `Vec`s around one (`Ty.nest n (.dtor g t)`): what a call's result frame
     (`resFrame`) runs or drains with. -/

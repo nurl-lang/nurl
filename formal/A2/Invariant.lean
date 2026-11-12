@@ -866,18 +866,20 @@ theorem Anchored.mono {E : Entry} {F F' : List Var} (h : Anchored E F) (hF : ∀
     its top (`Ty.ok`'s `arc` case, `RhsT.arcNew`), and a `dead` block's (an
     orphan whose payload awaits its destructor, which the sweep marks from
     such an `arc` block, `Mem.sweepD`) is one.  A block of a type that owns
-    one is of a destructor type that holds no closure: what a destructor
-    frame's binding may be (`StmtT.scopeD`), so `Step.reap` can hand its
+    one is of a destructor type that holds no closure, or (Agora #755) a
+    drained `Vec` of such values at any depth: what a destructor frame's
+    binding may be (`StmtT.scopeD`, `ScopeDTy`), so `Step.reap` can hand its
     payload to one.  (That its destructor is one the program checked is
     `MemCodes`'s, which knows the program: `DeadCodes`.) -/
 def Blk.DtorOK (bl : Blk) : Prop :=
   (bl.kind ≠ .dead → bl.kind ≠ .arc → bl.ty.dtorFree = true) ∧
   (bl.kind = .dead → bl.ty.dtorFree = false) ∧
-  (bl.ty.dtorFree = false → ∃ f u, bl.ty = .dtor f u ∧ u.hasFn = false)
+  (bl.ty.dtorFree = false → ∃ n f u, bl.ty = Ty.nest n (.dtor f u) ∧ u.hasFn = false)
 
-/-- A `dead` block is of a destructor type that holds no closure. -/
+/-- A `dead` block is of a destructor type that holds no closure, or (Agora
+    #755) of a drained `Vec` of such values, at any depth. -/
 theorem Blk.DtorOK.dead {bl : Blk} (h : bl.DtorOK) (hd : bl.kind = .dead) :
-    ∃ f u, bl.ty = .dtor f u ∧ u.hasFn = false :=
+    ∃ n f u, bl.ty = Ty.nest n (.dtor f u) ∧ u.hasFn = false :=
   h.2.2 (h.2.1 hd)
 
 /-- The facts are of the block's type and kind: a block of the same type and
@@ -1089,6 +1091,14 @@ theorem ScopeDTy.dtorViews {f : Nat} {t τ : Ty} (h : ScopeDTy f t τ) : τ.dtor
 
 theorem ScopeDTy.ne_int {f : Nat} {t τ : Ty} (h : ScopeDTy f t τ) : τ ≠ .int := by
   rcases h with rfl | ⟨_, rfl⟩ <;> simp
+
+/-- Agora #755: a nest of `Vec`s around a destructor type, at any depth, is
+    a destructor frame's binding's type (what `Step.reap` binds an orphan's
+    payload at). -/
+theorem ScopeDTy.nest (n f : Nat) (t : Ty) : ScopeDTy f t (Ty.nest n (.dtor f t)) := by
+  cases n with
+  | zero => exact Or.inl rfl
+  | succ n => exact Or.inr ⟨n, rfl⟩
 
 /-- `f` is a destructor for values of type `t`: it takes one borrowed `t`,
     returns an integer and lends, holds and stores nothing. -/
@@ -1693,21 +1703,21 @@ def CodeOK (P : Prog) (fs : List Nat) (te : Ty) (ms : List Nat) (cs : List (Var 
     (`Rhs.codeOK`).  (A lock's and a view's payload owns no destructor
     value, `Blk.DtorOK`.) -/
 def DeadCodes (P : Prog) (B : Nat → Option Blk) : Prop :=
-  ∀ k f u kd o, B k = some ⟨.dtor f u, kd, o⟩ → (kd = .arc ∨ kd = .dead) → DropFnOK P f u
+  ∀ k n f u kd o, B k = some ⟨Ty.nest n (.dtor f u), kd, o⟩ → (kd = .arc ∨ kd = .dead) → DropFnOK P f u
 
 /-- No `arc` or `dead` block of a destructor type: nothing to check. -/
 theorem DeadCodes.of_none {P : Prog} {B : Nat → Option Blk}
     (h : ∀ k bl, B k = some bl → (bl.kind = .arc ∨ bl.kind = .dead) → bl.ty.dtorFree = true) :
-    DeadCodes P B := fun k _ _ _ _ hk hkd => absurd (h k _ hk hkd) (by simp)
+    DeadCodes P B := fun k _ _ _ _ _ hk hkd => absurd (h k _ hk hkd) (by simp)
 
 /-- The check reads the blocks' types and kinds only. -/
 theorem DeadCodes.of_types {P : Prog} {B B' : Nat → Option Blk} (h : DeadCodes P B)
     (hb : ∀ k bl', B' k = some bl' → (bl'.kind = .arc ∨ bl'.kind = .dead) → bl'.ty.dtorFree = false →
       ∃ bl, B k = some bl ∧ bl.ty = bl'.ty ∧ (bl.kind = .arc ∨ bl.kind = .dead)) :
-    DeadCodes P B' := fun k f u kd o hk hkd => by
-  obtain ⟨⟨t, kd', o'⟩, h1, h2, h3⟩ := hb k _ hk hkd rfl
+    DeadCodes P B' := fun k n f u kd o hk hkd => by
+  obtain ⟨⟨t, kd', o'⟩, h1, h2, h3⟩ := hb k _ hk hkd (by simp)
   simp only at h2 h3; subst h2
-  exact h k f u kd' o' h1 h3
+  exact h k n f u kd' o' h1 h3
 
 /-- Every package in memory names code that implements its interfaces: the
     ones the slots hold, and (A3.5b) the ones the blocks hold, which may be
@@ -1727,9 +1737,18 @@ theorem MemCodes.dead {P : Prog} {m : Mem} (h : MemCodes P m) : DeadCodes P m.bl
 
 def Rhs.codeOK (P : Prog) : Rhs → Prop
   | .pack fs te ms _ cs => CodeOK P fs te ms cs
-  -- Agora #610: an `Arc` of a destructor value names a destructor the program checked
-  | .arcNew (.dtor f u) _ => DropFnOK P f u
+  -- Agora #610: an `Arc` of a destructor value names a destructor the program
+  -- checked; Agora #755: so does one of a drained `Vec` of them
+  | .arcNew t _ => ∀ n f u, t = Ty.nest n (.dtor f u) → DropFnOK P f u
   | _ => True
+
+/-- Agora #755: `arc_new` of a destructor value, or of a drained `Vec` of
+    them, names the destructor the program checked. -/
+theorem arcNew_codeOK {P : Prog} {n f : Nat} {u : Ty} (h : DropFnOK P f u) :
+    ∀ n' f' u', Ty.nest n (.dtor f u) = Ty.nest n' (.dtor f' u') → DropFnOK P f' u' := by
+  intro n' f' u' he
+  obtain ⟨-, rfl, rfl⟩ := Ty.nest_dtor_inj he
+  exact h
 
 /-- Every package a statement makes names code of its signature (a closure
     literal's body is its code, checked with it). -/

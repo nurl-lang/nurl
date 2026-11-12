@@ -690,9 +690,10 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       Γ y = some Ey → Ey.live = true → Ey.ty = t →
       -- (A2-drop.3d: a block's payload owns no destructor value, or (Agora
       -- #610) is one at its top, which the sweep hands to a destructor frame
-      -- of the thread whose step leaves its block unreached, `Mem.sweepD`; so
-      -- it is no drained `Vec`, A2-drop.3b)
-      (t.dtorFree = true ∨ t.hasDtor = true) → t.holdsView = false ∧ t.hasFn = false →
+      -- of the thread whose step leaves its block unreached, `Mem.sweepD`, or
+      -- (Agora #755) a drained `Vec` of them at any depth, `Ty.dnest`, which
+      -- that frame drains)
+      (t.dtorFree = true ∨ t.dnest = true) → t.holdsView = false ∧ t.hasFn = false →
       -- A3.5: an `Arc`'s payload is reached from every thread that holds a
       -- share, so it holds no library handle (a cell share is not Sync)
       t.hasCell = false →

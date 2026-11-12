@@ -391,7 +391,7 @@ theorem Step.ownedId {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r
     · exact .inr (.inr ⟨_, _, hk, hiv⟩)
     · exact .inl hi
   -- Agora #610: so is a `dead` block's payload reaped
-  | @reap r0 k0 f u p _ hk _ =>
+  | @reap r0 k0 n f u p _ hk _ =>
     intro i hi
     rcases OwnedId.set_some (m := m) (x := m.nv) (o := true) (v := p) hi with ⟨_, hiv⟩ | hi
     · exact .inr (.inr ⟨_, _, hk, hiv⟩)
@@ -596,9 +596,9 @@ theorem Step.payAt {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
     intro k i ⟨bl, hk, hi⟩
     rw [← TakeVal.blk ht]
     exact .inl ⟨bl, hk, hi⟩
-  | @reap r0 k0 f u p _ hk0 _ =>
+  | @reap r0 k0 n f u p _ hk0 _ =>
     intro k i ⟨bl, hk, hi⟩
-    have hk' : upd m.blk k0 (some ⟨.dtor f u, .dead, none⟩) k = some bl := hk
+    have hk' : upd m.blk k0 (some ⟨Ty.nest n (.dtor f u), .dead, none⟩) k = some bl := hk
     by_cases he : k = k0
     · subst he
       simp [upd] at hk'

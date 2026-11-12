@@ -120,16 +120,19 @@ theorem MemCodes.of_st {P : Prog} {m m' : Mem} (h : MemCodes P m) (hst : m'.st =
 theorem BlkCodes.upd {P : Prog} {B : Nat → Option Blk} (h : BlkCodes P B) {k : Nat} {bl : Blk}
     (hbl : PkgOK P bl.tree ∧ PkgOK P bl.rd)
     -- (Agora #610: a lock block or a view has nothing more to check)
-    (hd : ∀ f u kd o, bl = ⟨.dtor f u, kd, o⟩ → (kd = .arc ∨ kd = .dead) → DropFnOK P f u := by
-      intro _ _ _ _ h hk; cases h <;> (rcases hk with hk | hk <;> cases hk)) :
+    (hd : ∀ n f u kd o, bl = ⟨Ty.nest n (.dtor f u), kd, o⟩ → (kd = .arc ∨ kd = .dead) → DropFnOK P f u := by
+      intro _ _ _ _ _ h hk
+      first
+        | (obtain ⟨-, h2, -⟩ := Blk.mk.inj h; subst h2; rcases hk with hk | hk <;> cases hk)
+        | (cases h <;> (rcases hk with hk | hk <;> cases hk))) :
     BlkCodes P (upd B k (some bl)) := by
-  refine ⟨fun k' bl' hk' => ?_, fun k' f u kd o hk' hkd => ?_⟩
+  refine ⟨fun k' bl' hk' => ?_, fun k' n f u kd o hk' hkd => ?_⟩
   · by_cases hkk : k' = k
     · subst hkk; rw [upd_same] at hk'; cases hk'; exact hbl
     · rw [upd_ne _ _ hkk] at hk'; exact h.1 k' bl' hk'
   · by_cases hkk : k' = k
-    · subst hkk; rw [upd_same] at hk'; cases hk'; exact hd f u kd o rfl hkd
-    · rw [upd_ne _ _ hkk] at hk'; exact h.2 k' f u kd o hk' hkd
+    · subst hkk; rw [upd_same] at hk'; cases hk'; exact hd n f u kd o rfl hkd
+    · rw [upd_ne _ _ hkk] at hk'; exact h.2 k' n f u kd o hk' hkd
 
 /-- Agora #610: ... a `dead` block's: it owns its payload, and no one reads it. -/
 theorem blkCodes_dead {P : Prog} {t : Ty} {p : Option Val} (hp : ∀ v, p = some v → PkgOK P v) :
@@ -282,7 +285,7 @@ theorem EvalR.codes {P : Prog} {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (he :
     -- A3.5b: the payload may hold packages, the ones the value moved in held
     obtain ⟨hv, hm1⟩ := h1.codes h
     exact ⟨pkgOK_leaf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h),
-      hm1.withBlk rfl (hm1.blk.upd (blkCodes_arc hv) (fun f u kd o e _ => by cases e; exact hr))⟩
+      hm1.withBlk rfl (hm1.blk.upd (blkCodes_arc hv) (fun n f u kd o e _ => by cases e; exact hr n f u rfl))⟩
   | lockNew h1 _ =>
     obtain ⟨hv, hm1⟩ := h1.codes h
     exact ⟨pkgOK_leaf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h),
@@ -498,14 +501,16 @@ theorem codes_step {P : Prog} (hPc : ProgCodes P) {m : Mem} {s : Stmt} {r : Res}
     intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     refine ⟨MemCodes.set ?_ (fun V e => by cases e; exact (hB _ _ hk).1), hs⟩
     exact hm.withBlk rfl (hm.blk.upd (blkCodes_lock fun _ e => by cases e))
-  | @reap r0 k0 f u p _ hk _ =>
+  | @reap r0 k0 n f u p _ hk _ =>
     -- Agora #610: the payload moved out, with its packages, goes to the fresh
     -- binding; the block stays a `dead` block of its type
     intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     refine ⟨MemCodes.withBlk (m := m.set m.nv ⟨true, some p⟩)
       (MemCodes.set hm (fun V e => by cases e; exact (hB _ _ hk).1)) rfl
       (hm.blk.upd (blkCodes_dead fun _ e => by cases e)
-        (fun f' u' kd o e _ => by cases e; exact hm.dead k0 f u _ _ hk (Or.inr rfl))), trivial, hs⟩
+        (fun n' f' u' kd o e _ => by
+          obtain ⟨-, rfl, rfl⟩ := Ty.nest_dtor_inj (Blk.mk.inj e).1
+          exact hm.dead k0 n f u _ _ hk (Or.inr rfl))), trivial, hs⟩
   | scopeLSkip hrl _ =>
     intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact ⟨hrl.codes hm, trivial⟩

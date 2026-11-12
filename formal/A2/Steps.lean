@@ -413,7 +413,7 @@ theorem push_take {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} (hi : MInv m Γ)
     tree and no payload, `Pushed`); every slot is as it was. -/
 theorem rhs_arcNew {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {t : Ty} {v : Val} {D : List Dep}
     (post : RhsPost m m1 Γ Γ1 F) (pu : Pushed m1 Γ1 t v D) (hpl : t.holdsView = false ∧ t.hasFn = false)
-    (hnc : t.hasCell = false) (hvd : t.dtorFree = true ∨ t.hasDtor = true) (htok : t.ok = true)
+    (hnc : t.hasCell = false) (hvd : t.dtorFree = true ∨ t.dnest = true) (htok : t.ok = true)
     (hfr : m1.blk m1.nid = none) :
     RhsPost m { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, .arc, some v⟩) } Γ Γ1 F ∧
     RhsOut { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, .arc, some v⟩) } Γ1
@@ -1540,27 +1540,28 @@ theorem ViewsAt.setDead {B : Nat → Option Blk} (h : ViewsAt B) {k : Nat} {t : 
     exact ⟨k0, t0, p, rfl, by rw [upd_ne _ _ hkn]; exact hk0⟩
 
 /-- Agora #610, **reaping an orphan** (`Step.reap`): the `dead` block `k`'s
-    payload `v`, of the destructor type `Ty.dtor f u`, is moved out.  The
+    payload `v`, of the destructor type `Ty.dtor f u` (Agora #755: or a
+    drained `Vec` of such values, `Ty.nest n (.dtor f u)`), is moved out.  The
     block keeps no payload (it stays a `dead` block of its type), and `v` is
     handed over as an owned value of that type that holds nothing (it views
     nothing), its addresses in no owned tree and in no payload any more
     (`BlkOwn`): as a lock's payload is checked out (`acquire_pres`). -/
-theorem reap_pres {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {k f : Nat} {u : Ty} {v : Val}
-    (hk : m.blk k = some ⟨.dtor f u, .dead, some v⟩) :
-    RhsPost m { m with blk := upd m.blk k (some ⟨.dtor f u, .dead, none⟩) } Γ Γ F ∧
-    RhsOut { m with blk := upd m.blk k (some ⟨.dtor f u, .dead, none⟩) } Γ
-      ⟨.dtor f u, .own, true, [], [], false, false⟩ v true := by
+theorem reap_pres {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {k n f : Nat} {u : Ty} {v : Val}
+    (hk : m.blk k = some ⟨Ty.nest n (.dtor f u), .dead, some v⟩) :
+    RhsPost m { m with blk := upd m.blk k (some ⟨Ty.nest n (.dtor f u), .dead, none⟩) } Γ Γ F ∧
+    RhsOut { m with blk := upd m.blk k (some ⟨Ty.nest n (.dtor f u), .dead, none⟩) } Γ
+      ⟨Ty.nest n (.dtor f u), .own, true, [], [], false, false⟩ v true := by
   obtain ⟨htok, hvf, hpay, hcell, hdfk⟩ := hi.blocks k _ hk
   obtain ⟨hwv, hshv⟩ := hpay v rfl
-  have hb : BlkLe m.blk (upd m.blk k (some ⟨.dtor f u, .dead, none⟩)) := BlkLe.setDead hk none
+  have hb : BlkLe m.blk (upd m.blk k (some ⟨Ty.nest n (.dtor f u), .dead, none⟩)) := BlkLe.setDead hk none
   obtain ⟨hkey, hnd, hall⟩ := hi.heap.blk k _ hk
-  have hcases : ∀ k' bl, upd m.blk k (some ⟨.dtor f u, .dead, none⟩) k' = some bl →
-      (k' = k ∧ bl = ⟨.dtor f u, .dead, none⟩) ∨ (k' ≠ k ∧ m.blk k' = some bl) := by
+  have hcases : ∀ k' bl, upd m.blk k (some ⟨Ty.nest n (.dtor f u), .dead, none⟩) k' = some bl →
+      (k' = k ∧ bl = ⟨Ty.nest n (.dtor f u), .dead, none⟩) ∨ (k' ≠ k ∧ m.blk k' = some bl) := by
     intro k' bl h
     by_cases he : k' = k
     · subst he; simp [upd] at h; exact Or.inl ⟨rfl, h.symm⟩
     · exact Or.inr ⟨he, by simpa [upd, he] using h⟩
-  have hbo : BlkOwn { m with blk := upd m.blk k (some ⟨.dtor f u, .dead, none⟩) } := by
+  have hbo : BlkOwn { m with blk := upd m.blk k (some ⟨Ty.nest n (.dtor f u), .dead, none⟩) } := by
     intro k' bl hk'
     rcases hcases k' bl hk' with ⟨rfl, rfl⟩ | ⟨hne, h⟩
     · exact ⟨hkey, List.nodup_nil, fun i hi => by simp [Blk.tree] at hi⟩
@@ -1571,18 +1572,18 @@ theorem reap_pres {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {k f : Na
       rcases hcases k'' bl'' h'' with ⟨rfl, rfl⟩ | ⟨_, h2⟩
       · simp [Blk.tree]
       · exact hoth k'' bl'' hk'' h2
-  have hheap : HeapOK { m with blk := upd m.blk k (some ⟨.dtor f u, .dead, none⟩) } :=
+  have hheap : HeapOK { m with blk := upd m.blk k (some ⟨Ty.nest n (.dtor f u), .dead, none⟩) } :=
     HeapOK.mono hi.heap rfl (fun _ h => h) (Nat.le_refl _) hbo (hi.heap.views.setDead hk _)
-  have hB : BlocksIn { m with blk := upd m.blk k (some ⟨.dtor f u, .dead, none⟩) } := fun k' bl hk' => by
+  have hB : BlocksIn { m with blk := upd m.blk k (some ⟨Ty.nest n (.dtor f u), .dead, none⟩) } := fun k' bl hk' => by
     rcases hcases k' bl hk' with ⟨rfl, rfl⟩ | ⟨_, h⟩
     · exact ⟨htok, hvf, fun p hp => (by cases hp), hcell, hdfk⟩
     · obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k' bl h
       exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.grow hb⟩, h4⟩
-  have hinv : MInv { m with blk := upd m.blk k (some ⟨.dtor f u, .dead, none⟩) } Γ :=
+  have hinv : MInv { m with blk := upd m.blk k (some ⟨Ty.nest n (.dtor f u), .dead, none⟩) } Γ :=
     hi.grow rfl hheap (Nat.le_refl _) hb hB
   refine ⟨⟨hinv, rfl, Nat.le_refl _, fun _ => rfl, fun _ _ => rfl, fun _ _ h _ => h, fun _ => rfl,
     fun _ E1 h => ⟨E1, h, rfl, rfl⟩, DKeep.refl _ _, hb⟩, ?_⟩
-  have hti : Ty.dtor f u ≠ .int := by simp
+  have hti : Ty.nest n (.dtor f u) ≠ .int := Ty.nest_dtor_ne_int n f u
   exact {
     own := rfl
     mode := Or.inl rfl
@@ -3214,7 +3215,7 @@ theorem Step.leafKeep {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
     · subst he; rw [hk0] at hk; cases hk
       exact .inr ⟨v, ⟨x, v.owns, by simp [Mem.set, upd]⟩, by simpa using hs⟩
     · exact .inl ⟨bl, by show upd m.blk k0 _ k = some bl; rw [upd_ne _ _ he]; exact hk, hs⟩
-  | @reap r0 k0 f u p _ hk0 _ =>
+  | @reap r0 k0 n f u p _ hk0 _ =>
     -- Agora #610: the reaped payload is in the fresh binding
     intro k bl hk w hw hs
     by_cases he : k = k0
@@ -3258,7 +3259,7 @@ theorem NoDead.upd {m : Mem} (h : NoDead m) {B : Nat → Option Blk} {k0 : Nat} 
 
 /-- With no `dead` block no orphan awaits its destructor. -/
 theorem NoDead.noOrphan {m : Mem} (h : NoDead m) : ¬ Orphan m :=
-  fun ⟨k, _, _, _, hk⟩ => h k _ hk rfl
+  fun ⟨k, _, _, _, _, hk⟩ => h k _ hk rfl
 
 theorem EvalR.noDead {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.ok v o m'))
     (hn : NoDead m) : NoDead m' := by
@@ -3315,15 +3316,15 @@ theorem NoDead.sweep {m : Mem} (h : NoDead m) : NoDead m.sweep :=
 def NoOrphan (m : Mem) : Prop := ¬ Orphan m
 
 theorem NoOrphan.of_blk {m m' : Mem} (h : NoOrphan m) (hb : m'.blk = m.blk) : NoOrphan m' :=
-  fun ⟨k, f, u, p, hk⟩ => h ⟨k, f, u, p, by rw [← hb]; exact hk⟩
+  fun ⟨k, n, f, u, p, hk⟩ => h ⟨k, n, f, u, p, by rw [← hb]; exact hk⟩
 
 theorem NoOrphan.upd {m : Mem} (h : NoOrphan m) {B : Nat → Option Blk} {k0 : Nat} {b : Blk} (hb : b.kind ≠ .dead)
     (hB : B = upd m.blk k0 (some b)) {m' : Mem} (hm : m'.blk = B) : NoOrphan m' := by
-  rintro ⟨k, f, u, p, hk⟩
+  rintro ⟨k, n, f, u, p, hk⟩
   rw [hm, hB] at hk
   by_cases he : k = k0
   · subst he; simp at hk; subst hk; exact hb rfl
-  · rw [upd_ne _ _ he] at hk; exact h ⟨k, f, u, p, hk⟩
+  · rw [upd_ne _ _ he] at hk; exact h ⟨k, n, f, u, p, hk⟩
 
 theorem EvalR.noOrphan {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.ok v o m'))
     (hn : NoOrphan m) : NoOrphan m' := by
@@ -3364,7 +3365,7 @@ theorem Step.noOrphan {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
   | scopeLP _ hr ih => exact fun hn => hr.noOrphan (ih hn)
   | scopeLSkip hr => exact fun hn => hr.noOrphan hn
   | withLock _ _ _ => exact fun hn => hn.upd (b := ⟨_, .lock, none⟩) (by simp) rfl rfl
-  | reap _ hk _ => exact fun hn => absurd ⟨_, _, _, _, hk⟩ hn
+  | reap _ hk _ => exact fun hn => absurd ⟨_, _, _, _, _, hk⟩ hn
   | letv _ he | letd _ he | assign _ he _ _ => exact fun hn => (he.noOrphan hn).of_blk rfl
   | letcall _ _ hb => exact fun hn => (hn.of_blk (BindParams.blk hb)).of_blk rfl
   | @callc m1 _ _ _ _ _ _ _ _ _ env _ _ _ _ _ _ _ hb =>
@@ -3376,7 +3377,7 @@ theorem Step.noOrphan {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
 /-- The sweep that ends an uncaught panic leaves none either: it only
     removes blocks. -/
 theorem NoOrphan.sweep {m : Mem} (h : NoOrphan m) : NoOrphan m.sweep :=
-  fun ⟨k, f, u, p, hk⟩ => h ⟨k, f, u, p, (Mem.sweep_blk.mp hk).1⟩
+  fun ⟨k, n, f, u, p, hk⟩ => h ⟨k, n, f, u, p, (Mem.sweep_blk.mp hk).1⟩
 
 /-- Agora #610: the reaps that end a step leave no orphan. -/
 theorem Settle.noOrphan {P : Prog} {m m' : Mem} {s s' : Stmt} (h : Settle P m s m' s') : NoOrphan m' := by
