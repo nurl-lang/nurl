@@ -3700,6 +3700,21 @@ unsafe @ note_unsafe_item s pos s what → v {
 // g_fn_ireallocs and its call edges (resolve_irealloc_summaries).
 : ~ i g_irealloc_edges 0
 : ~ i g_fn_ireallocs 0
+// …those of the edges whose handle may be a field path of the parameter —
+// not an element read out of a container in it, `( vec_at . p rows 0 )`, a
+// `~` loop's element (g_ifr_edges) — and the parameters a buffer at such a
+// path of which a function may move (g_fn_ifreallocs): a caller's views of
+// its argument's field paths end only at those (agora #647).
+: ~ i g_ifr_edges 0
+: ~ i g_fn_ifreallocs 0
+// Whether the binding __pderiv_note is told of is being declared `: ~`
+// (its `__mutable` is written after; __pd_ek_note).
+: ~ b g_pd_let_mut F
+// The function compiling now's slots read out of a parameter as an element
+// (`e`: a `vec_at` / `slice_at` result, a `~` loop's element, a field or a
+// copy of one): __pd_ek_note, __pd_may_field (agora #647).
+: ~ b g_pd_loop_elem F
+: ~ i g_pd_ek 0
 // …and the functions that have such an edge, and whether any function has
 // such a summary (the walks ask g_fn_ireallocs only then).
 : ~ s g_irealloc_fns ``
@@ -12579,7 +12594,7 @@ unsafe @ __hown_dyn_walk i syms s fname → b {
     // (…and what it may drop, move the buffer of, or move an element's
     // buffer of, per parameter: the same-Rc and view-ending rules' answers.)
     ( nurl_eprintln ( nurl_str_cat4 `  drops=` ? == 0 g_fn_drops `` ( nurl_sym_get g_fn_drops f ) ` reallocs=` ( nurl_sym_get g_fn_reallocs f ) ) )
-    ( nurl_eprintln ( nurl_str_cat `  ireallocs=` ( nurl_sym_get g_fn_ireallocs f ) ) )
+    ( nurl_eprintln ( nurl_str_cat4 `  ireallocs=` ( nurl_sym_get g_fn_ireallocs f ) ` ifreallocs=` ? == 0 g_fn_ifreallocs `` ( nurl_sym_get g_fn_ifreallocs f ) ) )
     ( nurl_eprintln ( nurl_str_cat4 `  ret_param=` ( nurl_sym_get g_fn_ret_param f ) ` ret_alias=` ( nurl_sym_get g_fn_ret_alias f ) ) )
     ( nurl_eprintln ( nurl_str_cat4 `  unverified=` ( nurl_sym_get g_fn_unverified f ) ` lent=` ( mem_fn_lent_params syms f ) ) )
     ( nurl_eprintln ( nurl_str_cat4 `  body_done=` ( nurl_sym_get2 syms f `__body_done` ) ` ret_owned=` ( nurl_sym_get2 syms f `__ret_owned` ) ) )
@@ -19868,7 +19883,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
                     = __me_root __mp
                     // (Its payload is an element of it: a buffer the callee
                     // moves there is an element's too — g_fn_ireallocs.)
-                    ? ! ( seq __mp __mr ) { ( __irealloc_edge_note syms __mp ? != 0 ( nurl_str_len __clo_node ) __clo_node call_name arg_idx ) } {}
+                    ? ! ( seq __mp __mr ) { ( __irealloc_edge_note syms __mp ? != 0 ( nurl_str_len __clo_node ) __clo_node call_name arg_idx T ) } {}
                 } {}
             } {}
             // (A closure value called: an edge to its node, agora #359.)
@@ -19915,6 +19930,14 @@ unsafe @ gen_call_body i lex i syms i cg → s {
                 // (The parameter itself handed on is a mutation edge already:
                 // __mut_edge_note.)
                 ? & != 0 ( nurl_str_len __pr ) ( __rprov_param syms __pr ) {} {
+                    // (Whether the handle may be at a field path of the
+                    // parameter: not an element accessor's result written
+                    // here, nor a local holding one or a `~` loop's
+                    // element — agora #647.)
+                    // (A name or a field path by its local — a source
+                    // expression it carries is its first value's, agora
+                    // #647's review — anything else by its own.)
+                    : b __ire_f ? != 0 ( nurl_str_len __pr ) ( __pd_may_field syms ( __path_root_name __pr ) ) ? != 0 ( nurl_str_len arg_xsx ) ! ( __sx_elem_head arg_xsx ) ! ( __sx_elem_head arg_sx )
                     : s __prr ? == 0 ( nurl_str_len __pr ) `` ( __pderiv_reach syms ( __path_root_name __pr ) )
                     : ~ s __pd ( __words_plain __prr )
                     : ~ s __pc ( __words_cond __prr )
@@ -19933,12 +19956,12 @@ unsafe @ gen_call_body i lex i syms i cg → s {
                         // (A closure value called: its node, which answers for
                         // the closures it may be — a closure parameter's, the
                         // literals its callers pass, agora #496.)
-                        ( __irealloc_edge_note syms __pn ? != 0 ( nurl_str_len __clo_node ) __clo_node call_name arg_idx )
+                        ( __irealloc_edge_note syms __pn ? != 0 ( nurl_str_len __clo_node ) __clo_node call_name arg_idx __ire_f )
                     }
                     ~ != 0 ( nurl_str_len __pc ) {
                         : s __pcw ( str_first_word __pc ) = __pc ( str_skip_word __pc )
                         : i __pch ( nurl_str_find __pcw `#` )
-                        ( __irealloc_edge_note_c syms ( nurl_str_slice __pcw 0 __pch ) ? != 0 ( nurl_str_len __clo_node ) __clo_node call_name arg_idx ( nurl_str_slice __pcw + __pch 1 - - ( nurl_str_len __pcw ) __pch 1 ) )
+                        ( __irealloc_edge_note_c syms ( nurl_str_slice __pcw 0 __pch ) ? != 0 ( nurl_str_len __clo_node ) __clo_node call_name arg_idx ( nurl_str_slice __pcw + __pch 1 - - ( nurl_str_len __pcw ) __pch 1 ) __ire_f )
                     }
                 }
             } {}
@@ -26940,7 +26963,7 @@ unsafe @ gen_match i lex i syms i cg → s {
     // (__pderiv_note) — a binding that reuses its name later has a slot of
     // its own. Not noted, `~ x vs { ( vec_clear x ) }` dropped nothing of
     // vs by the summary, agora #735.)
-    ? != 0 ( nurl_str_len fe_cont ) { ( __pderiv_note syms var_name elem_ty TT_IDENT fe_cont `-` `` ) } {}
+    ? != 0 ( nurl_str_len fe_cont ) { = g_pd_loop_elem T ( __pderiv_note syms var_name elem_ty TT_IDENT fe_cont `-` `` ) = g_pd_loop_elem F } {}
     // (…and, for a Vec, where its slot is NOW: the control block and the
     // index — the buffer may have moved since the round began, through
     // another name of the container; __fe_slot_now, agora #587.)
@@ -36294,7 +36317,9 @@ unsafe @ __rp_apply i syms s cal i line → v {
 // never one whole; a lend of 5 in raw code, a borrow alone in safe code,
 // 13 the parameters the buffer of an element of which it may move
 // (resolve_irealloc_summaries), 14 those it retains past the call
-// (g_fn_escapes: what a `10` record asks).
+// (g_fn_escapes: what a `10` record asks), 15 those of 13 where the buffer
+// may be at a field path of the parameter, not inside an element of a
+// container there (g_fn_ifreallocs; agora #647).
 : ~ i g_rpg_f 0
 : ~ i g_rpg_nfn 0
 : ~ i g_rpg_fcap 0
@@ -36317,9 +36342,9 @@ unsafe @ __rp_apply i syms s cal i line → v {
 : ~ s g_rpg_me_self ``  // the function compiling now and its number (-1: not asked yet)
 : ~ i g_rpg_me_id -1
 
-unsafe @ __rpg_fget i f i k → i { ^ ( nurl_peek # s g_rpg_f + * f 15 k ) }
+unsafe @ __rpg_fget i f i k → i { ^ ( nurl_peek # s g_rpg_f + * f 16 k ) }
 
-unsafe @ __rpg_fset i f i k i v → v { ( nurl_poke # s g_rpg_f + * f 15 k v ) }
+unsafe @ __rpg_fset i f i k i v → v { ( nurl_poke # s g_rpg_f + * f 16 k v ) }
 
 // Does `cn`'s lend summary still wait on a module-end note: a lend it
 // forwards from a callee compiled after it (`retfwd`, resolve_retfwd_lends),
@@ -36341,10 +36366,10 @@ unsafe @ __rpg_fn_id s name → i {
     : i id g_rpg_nfn
     ? >= id g_rpg_fcap {
         = g_rpg_fcap ? == g_rpg_fcap 0 256 * g_rpg_fcap 2
-        = g_rpg_f # i ( nurl_realloc # s g_rpg_f * g_rpg_fcap 120 )
+        = g_rpg_f # i ( nurl_realloc # s g_rpg_f * g_rpg_fcap 128 )
     } {}
     : ~ i k 1
-    ~ < k 15 { ( __rpg_fset id k 0 ) = k + k 1 }
+    ~ < k 16 { ( __rpg_fset id k 0 ) = k + k 1 }
     ( __rpg_fset id 0 # i ( nurl_strdup name ) )
     ( nurl_sym_def g_rpg_fid name ( nurl_str_int id ) )
     = g_rpg_nfn + id 1
@@ -47313,11 +47338,12 @@ unsafe @ __sx_names_any s sx → b {
     ( __cedge_add f ( nurl_str_cat4 ( nurl_str_cat4 `D:` ks `:` callee ) `:` ( nurl_str_int aix ) `:` ) c )
 }
 
-// __irealloc_edge_note's, under condition `c`.
-@ __irealloc_edge_note_c i syms s pn s callee i aix s c → v {
+// __irealloc_edge_note's, under condition `c`: `R:` where the handle may be
+// at a field path of the parameter, `Q:` an element's (agora #647).
+@ __irealloc_edge_note_c i syms s pn s callee i aix s c b fe → v {
     : i k ( __irealloc_param_index syms pn )
     ? < k 0 { ^ v } {}
-    ( __cedge_add g_rpg_me_self ( nurl_str_cat4 ( nurl_str_cat4 `R:` ( nurl_str_int k ) `:` callee ) `:` ( nurl_str_int aix ) `:` ) c )
+    ( __cedge_add g_rpg_me_self ( nurl_str_cat4 ( nurl_str_cat4 ? fe `R:` `Q:` ( nurl_str_int k ) `:` callee ) `:` ( nurl_str_int aix ) `:` ) c )
 }
 
 // What a callee drops of an argument that is no binding but a value lent
@@ -47400,6 +47426,9 @@ unsafe @ __pderiv_note i syms s name s vt i rhs_tt s rhs_val s lend s sx → v {
     // (Only a value read through a parameter, or through a handle read out
     // of one, can be one.)
     ? & == 0 ( nurl_str_len g_pderiv ) ! __pclo { ? == 0 ( nurl_sym_len syms `__fn_storage_params__` ) { ^ v } {} } {}
+    // (An element, for __pd_may_field: an element accessor's result, a `~`
+    // loop's element, …)
+    ? | g_pd_loop_elem ( __pd_rhs_elem syms rhs_tt rhs_val sx ) { ( __pd_ek_note syms name ) } {}
     // (…a value block or a join whose value is one binding or field path —
     // `{ v }`, `{ . h a }`, `? c v v`: that name, as the bare spelling's;
     // agora #556.)
@@ -47572,9 +47601,73 @@ unsafe @ __pderiv_note i syms s name s vt i rhs_tt s rhs_val s lend s sx → v {
     ^ ( nurl_sym_word_index syms `__fn_param_names__` pn )
 }
 
+// A call of an element accessor: what it hands back is a view of an
+// element of the container it is handed, and what is grown through it is
+// inside that element — never the buffer of a field path of what holds the
+// container (agora #647). The library's generic `vec_at` / `slice_at`
+// only: an instance of it (`vec_at__Vec__u8`), not a function of the
+// program named so (`@ slice_at …`, `@ vec_at__pick …`).
+@ __elem_accessor_call s cn → b {
+    ? & == 0 ( nurl_str_starts cn `vec_at__` ) == 0 ( nurl_str_starts cn `slice_at__` ) { ^ F } {}
+    : s base ( bck_generic_base cn )
+    ? | ( seq base cn ) ! ( str_contains_word `vec_at slice_at` base ) { ^ F } {}
+    ? ! ( __fn_from_stdlib base ) { ^ F } {}
+    : s f ( nurl_sym_get2 g_vis_syms cn `__src_file` )
+    ^ | == 0 ( nurl_str_len f ) ( bck_trusted_file f )
+}
+
+// A source expression whose outermost step is one: `vec_at__…(p.rows|-)`,
+// or a field of its result.
+@ __sx_elem_head s sx → b {
+    : i lp ( nurl_str_find sx `(` )
+    ? <= lp 0 { ^ F } {}
+    ^ ( __elem_accessor_call ( nurl_str_slice sx 0 lp ) )
+}
+
+// Local `name` of the function compiling now is given a value read out of
+// a parameter: an element (`el`, an element accessor's result) or anything
+// else. A slot read both ways may be either (agora #647).
+// Only a binding never given another value — one value, one derivation: a
+// `: ~` one may be given a field path later, after the grow in the text and
+// before it at run time, round a loop (agora #647's review).
+unsafe @ __pd_ek_note i syms s name → v {
+    ? | g_pd_let_mut != 0 ( nurl_sym_len2 syms name `__mutable` ) { ^ v } {}
+    : s ptr ( nurl_sym_get2 syms name `__ptr` )
+    ? == 0 ( nurl_str_len ptr ) { ^ v } {}
+    ? == 0 g_pd_ek { = g_pd_ek ( nurl_sym_new ) } {}
+    ( nurl_sym_def g_pd_ek ptr `e` )
+}
+
+// Is the value just read an element's: an element accessor's result, a
+// field of one written inline (`. ( vec_at . p rows 0 ) cells`), or a field
+// or a copy of a local holding one (`: a ( vec_at . w apps 0 )`, then `. a
+// name`; a `~` loop's element)?
+@ __pd_rhs_elem i syms i rhs_tt s rhs_val s sx → b {
+    ? == rhs_tt TT_LPAREN { ^ ( __elem_accessor_call ( nurl_sym_get syms `__last_call_name__` ) ) } {}
+    : s r ? ( is_ident_tok rhs_tt ) ( nurl_str_cat rhs_val `` ) ? == rhs_tt TT_DOT ( nurl_sym_get syms `__last_member_root__` ) ``
+    ? == 0 ( nurl_str_len r ) { ^ & == rhs_tt TT_DOT ( __sx_elem_head sx ) } {}
+    ? == 0 g_pd_ek { ^ F } {}
+    : s ptr ( nurl_sym_get2 syms r `__ptr` )
+    ? == 0 ( nurl_str_len ptr ) { ^ F } {}
+    ^ ( seq ( nurl_sym_get g_pd_ek ptr ) `e` )
+}
+
+// May local `name`, read out of a parameter, be (a handle at) a field path
+// of it? Not an element read out of a container (`: r ( vec_at . p rows 0
+// )`) nor a `~` loop's element: their buffers are inside elements.
+@ __pd_may_field i syms s name → b {
+    ? != 0 ( nurl_str_len ( __econt_of syms name ) ) { ^ F } {}
+    ? == 0 g_pd_ek { ^ T } {}
+    : s ptr ( nurl_sym_get2 syms name `__ptr` )
+    ? == 0 ( nurl_str_len ptr ) { ^ T } {}
+    ^ ! ( seq ( nurl_sym_get g_pd_ek ptr ) `e` )
+}
+
 // A handle read out of parameter `pn` goes to `callee` as argument `aix`:
-// an edge of g_fn_ireallocs (resolve_irealloc_summaries).
-@ __irealloc_edge_note i syms s pn s callee i aix → v {
+// an edge of g_fn_ireallocs (resolve_irealloc_summaries) — and of
+// g_fn_ifreallocs where the handle may be at a field path of the parameter
+// (`fe`; agora #647).
+@ __irealloc_edge_note i syms s pn s callee i aix b fe → v {
     : i k ( __irealloc_param_index syms pn )
     ? < k 0 { ^ v } {}
     : s e ( nurl_str_cat4 ( nurl_str_int k ) `:` callee ( nurl_str_cat `:` ( nurl_str_int aix ) ) )
@@ -47583,6 +47676,13 @@ unsafe @ __pderiv_note i syms s name s vt i rhs_tt s rhs_val s lend s sx → v {
         ( nurl_sym_def g_irealloc_edges g_rpg_me_self ? == 0 ( nurl_str_len cur ) ( nurl_str_cat e `` ) ( nurl_str_cat3 cur ` ` e ) )
         ? ! ( str_contains_word g_irealloc_fns g_rpg_me_self ) { ( __irealloc_fn_add g_rpg_me_self ) } {}
     } {}
+    ? fe { ( __ifr_edge_add g_rpg_me_self e ) } {}
+}
+
+// (`unsafe` for the global it writes, as __irealloc_fn_add.)
+unsafe @ __ifr_edge_add s f s e → v {
+    : s cur ( nurl_sym_get g_ifr_edges f )
+    ? ! ( str_contains_word cur e ) { ( nurl_sym_def g_ifr_edges f ? == 0 ( nurl_str_len cur ) ( nurl_str_cat e `` ) ( nurl_str_cat3 cur ` ` e ) ) } {}
 }
 
 // The words of `ws` with no condition (`p`), and those with one (`p#c`).
@@ -47646,6 +47746,25 @@ unsafe @ resolve_irealloc_summaries → v {
                     = changed T
                 } {}
             }
+            // (…field 15 through the edges whose handle may be at a field
+            // path: the callee moves its buffer, or one at a field path of
+            // it — agora #647.)
+            : ~ s fes ( nurl_sym_get g_ifr_edges f )
+            ~ != 0 ( nurl_str_len fes ) {
+                : s e ( str_first_word fes ) = fes ( str_skip_word fes )
+                : i c1 ( nurl_str_find e `:` )
+                : i k ( nurl_str_to_int ( nurl_str_slice e 0 c1 ) )
+                : s t1 ( nurl_str_slice e + c1 1 - - ( nurl_str_len e ) c1 1 )
+                : i c2 ( nurl_str_find t1 `:` )
+                : s cal ( nurl_str_slice t1 0 c2 )
+                : s ax ( nurl_str_slice t1 + c2 1 - - ( nurl_str_len t1 ) c2 1 )
+                : i cid ( __rpg_fn_id cal )
+                : i bk ( __rpg_bit fid k )
+                ? & == 0 & ( __rpg_fget fid 15 ) bk | ( nurl_sym_has_word g_fn_reallocs cal ax ) != 0 & ( __rpg_fget cid 15 ) ( __rpg_bit cid ( nurl_str_to_int ax ) ) {
+                    ( __rpg_fset fid 15 | ( __rpg_fget fid 15 ) bk )
+                    = changed T
+                } {}
+            }
         }
         // (A parameter handed on: the mutation summaries' edges.)
         : s eg # s g_rpg_edge
@@ -47657,9 +47776,16 @@ unsafe @ resolve_irealloc_summaries → v {
             ? != 0 cm {
                 : i ef ( nurl_peek eg b )
                 : i ebk ( __rpg_bit ef ( nurl_peek eg + b 1 ) )
-                ? != 0 & cm ( __rpg_bit ( nurl_peek eg + b 2 ) ( nurl_peek eg + b 3 ) ) {
+                : i cbit ( __rpg_bit ( nurl_peek eg + b 2 ) ( nurl_peek eg + b 3 ) )
+                ? != 0 & cm cbit {
                     ? == 0 & ( __rpg_fget ef 13 ) ebk {
                         ( __rpg_fset ef 13 | ( __rpg_fget ef 13 ) ebk )
+                        = changed T
+                    } {}
+                    // (…and field 15: a parameter handed on whole or by a
+                    // field path is where the callee's field paths are.)
+                    ? & != 0 & ( __rpg_fget ( nurl_peek eg + b 2 ) 15 ) cbit == 0 & ( __rpg_fget ef 15 ) ebk {
+                        ( __rpg_fset ef 15 | ( __rpg_fget ef 15 ) ebk )
                         = changed T
                     } {}
                 } {}
@@ -47672,6 +47798,8 @@ unsafe @ resolve_irealloc_summaries → v {
     ~ < f g_rpg_nfn {
         : i m ( __rpg_fget f 13 )
         ? != 0 m { ( nurl_sym_set g_fn_ireallocs ( __rpg_fname f ) ( __rpg_mask_add f `` m ) ) = g_irealloc_any 1 } {}
+        : i m15 ( __rpg_fget f 15 )
+        ? != 0 m15 { ( nurl_sym_set g_fn_ifreallocs ( __rpg_fname f ) ( __rpg_mask_add f `` m15 ) ) } {}
         = f + f 1
     }
 }
@@ -47996,7 +48124,7 @@ unsafe @ __sx_nroots s e b ns → s {
         ~ != 0 ( nurl_str_len es ) {
             : s ek ( str_first_word es ) = es ( str_skip_word es )
             : i kd ( nurl_str_get ek 0 )
-            : b ir == kd 82
+            : b ir | == kd 82 == kd 81
             // (Each call's condition, until one holds.)
             : ~ s alts ( nurl_str_cat ( nurl_sym_get g_cedges ( nurl_str_cat3 f `^^` ek ) ) `` )
             : ~ b holds F
@@ -48012,12 +48140,15 @@ unsafe @ __sx_nroots s e b ns → s {
                 // `B:k:` — the elements of parameter k dropped.
                 ? == kd 66 { ( __drop_base_add f ks ) } {
                     // `D:k:callee:aix:`, `R:k:callee:aix:` — an edge.
+                    // (`Q:` an irealloc one whose handle is an element's,
+                    // not at a field path: agora #647.)
                     : s edge ( nurl_str_slice t1 0 - ( nurl_str_len t1 ) 1 )
                     : s cur ( nurl_sym_get ? ir g_irealloc_edges g_drop_edges f )
                     ? ! ( str_contains_word cur edge ) {
                         ( nurl_sym_def ? ir g_irealloc_edges g_drop_edges f ? == 0 ( nurl_str_len cur ) ( nurl_str_cat edge `` ) ( nurl_str_cat3 cur ` ` edge ) )
                         ? & ir ! ( str_contains_word g_irealloc_fns f ) { ( __irealloc_fn_add f ) } {}
                     } {}
+                    ? == kd 82 { ( __ifr_edge_add f edge ) } {}
                 }
             } {}
         }
@@ -48767,15 +48898,26 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
             // value handed whole, or a field of it: a struct parameter's
             // `. p rows` is where its elements are, and a view through
             // `( vec_at . w rows 0 )` is one through an element of `w.rows`,
-            // the source it was taken of. Not a view of such a field's own
-            // buffer, `string_data . w name`: an element's buffer moving
-            // leaves that be; agora #785.)
+            // the source it was taken of; agora #785.)
+            // (…and the views of such a field's own buffer, `string_data . w
+            // name`, where the callee's summary says a buffer at a field path
+            // of its parameter may move — a handle it read out of one, `:
+            // String nm . a name`, grown — not where only an element's may,
+            // `( vec_at . p rows 0 )` grown: g_fn_ifreallocs; agora #647.)
+            : b fown ( nurl_sym_has_word g_fn_ifreallocs ( bck_field rec 5 ) ( bck_field rec 6 ) )
             : ~ s frest ( nurl_sym_get g_bck ( bck_bkey `bsrcs` `` ) )
+            : ~ s ifw ``
             ~ != 0 ( nurl_str_len frest ) {
                 : s fsw ( str_first_word frest ) = frest ( str_skip_word frest )
                 : i fsid ( nurl_str_to_int fsw )
                 ? & != fsid wid ( bck_id_holds wid fsid ) {
-                    = out ( bck_view_end_ind out fsid ( bck_field_int rec 3 ) irw )
+                    ? == 0 ( nurl_str_len ifw ) { = ifw ( nurl_str_cat4 `'` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int wid ) ) ) `', which holds it, was passed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) ? fown `', which may move the buffer of one of its fields or elements` `', which may move the buffer of one of its elements` ) ) } {}
+                    = out ( bck_view_end_ind out fsid ( bck_field_int rec 3 ) ifw )
+                    ? fown {
+                        = g_bck_end_elem 0
+                        = out ( bck_view_end out fsid ( bck_field_int rec 3 ) ifw )
+                        = g_bck_end_elem 1
+                    } {}
                 } {}
             }
             = g_bck_end_elem 0
@@ -53772,7 +53914,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         ( nurl_sym_def syms ( nurl_str_cat name `__ptr` ) ptr )
         // …and back, for the borrow checker (bck_note_payload_taken).
         ( nurl_sym_def syms ( nurl_str_cat ptr `__bname` ) name )
-        ? > ( nurl_str_len vt ) 1 { ( __pderiv_note syms name vt bck_rhs_tt bck_rhs_val g_bck_rhs_lend g_bck_let_sx_last ) ( __clo_deriv_note syms name vt bck_rhs_tt bck_rhs_val g_bck_rhs_lend g_bck_let_sx_last ) } {}
+        ? > ( nurl_str_len vt ) 1 { = g_pd_let_mut is_mutable ( __pderiv_note syms name vt bck_rhs_tt bck_rhs_val g_bck_rhs_lend g_bck_let_sx_last ) = g_pd_let_mut F ( __clo_deriv_note syms name vt bck_rhs_tt bck_rhs_val g_bck_rhs_lend g_bck_let_sx_last ) } {}
         ? != 0 ( nurl_sym_len2 syms name `__eaddr` ) { ( nurl_sym_def syms ( nurl_str_cat ptr `__eaddr` ) ( nurl_sym_get2 syms name `__eaddr` ) ) } {}
         // Only mark mutability if explicitly specified with ~
         ? is_mutable
@@ -54192,7 +54334,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             ( rec_decl_loc syms name bck_line lex )
             ( nurl_sym_def syms ( nurl_str_cat name `__ptr` ) ptr )
             ( nurl_sym_def syms ( nurl_str_cat ptr `__bname` ) name )
-            ? > ( nurl_str_len ptype ) 1 { ( __pderiv_note syms name ptype bck_rhs_tt bck_rhs_val g_bck_rhs_lend g_bck_let_sx_last ) ( __clo_deriv_note syms name ptype bck_rhs_tt bck_rhs_val g_bck_rhs_lend g_bck_let_sx_last ) } {}
+            ? > ( nurl_str_len ptype ) 1 { = g_pd_let_mut is_mutable ( __pderiv_note syms name ptype bck_rhs_tt bck_rhs_val g_bck_rhs_lend g_bck_let_sx_last ) = g_pd_let_mut F ( __clo_deriv_note syms name ptype bck_rhs_tt bck_rhs_val g_bck_rhs_lend g_bck_let_sx_last ) } {}
             ? != 0 ( nurl_sym_len2 syms name `__eaddr` ) { ( nurl_sym_def syms ( nurl_str_cat ptr `__eaddr` ) ( nurl_sym_get2 syms name `__eaddr` ) ) } {}
             // Only mark mutability if explicitly specified with ~
             ? is_mutable
@@ -72505,6 +72647,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     = g_outer_params ( nurl_str_cat ( nurl_sym_get syms `__fn_param_names__` ) `` )
     = g_pderiv ``
     = g_pd_put ``
+    ? != 0 g_pd_ek { ( nurl_sym_free g_pd_ek ) = g_pd_ek 0 } {}
     = g_cur_rc ? & != 0 g_srcx_on ( __fn_rc_param syms ) 1 0
     = g_pl_seen 0
     ? != 0 g_pderiv_cn { ( __pdc_reset ) = g_pderiv_cn 0 } {}
@@ -94779,6 +94922,8 @@ unsafe @ main → i {
     = g_irealloc_edges ( nurl_sym_new )
     = g_cedges ( nurl_sym_new )
     = g_fn_ireallocs ( nurl_sym_new )
+    = g_ifr_edges ( nurl_sym_new )
+    = g_fn_ifreallocs ( nurl_sym_new )
     = g_fn_drops ( nurl_sym_new )
     = g_fn_safe ( nurl_sym_new )
     = g_impl_trait_syms ( nurl_sym_new )
