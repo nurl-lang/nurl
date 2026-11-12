@@ -1981,6 +1981,9 @@ unsafe @ agg_field_count i syms s ot → i {
 // (g_use_drop_range: 1 the plain release, 2 the `_dtor` one, 3 both; 4
 // the release of elements moved out first, mem_move_drop.)
 : ~ i g_use_drop_range 0
+// A slice that owns its elements was journaled with them
+// (nurl_journal_push_slice, agora #509): declared at module end.
+: ~ i g_use_jslice 0
 // A fresh raw string result was journaled by its slot (mem_ret_guard_raw):
 // `@__jdrop_rawstr`, its thunk, is written at module end.
 : ~ i g_use_jdrop_rawstr 0
@@ -28782,7 +28785,12 @@ unsafe @ __bck_fall_ret_record i lex i syms i first_tt s first_val i sxn0 i line
 // `{ T*, i64 }` value; record its buffer pointer (field 0) so a panic
 // reclaims it. Like a string a slice is captured by value (its type is
 // `{ ... }`, not `%Name`), so it cannot escape a recover extent by
-// reference and needs no forget hook.
+// reference and needs no forget hook: the registration is keyed by the
+// buffer, and whichever path frees it ends it. A slice that owns its
+// elements (Strings, Vecs, closures' envs — #485) is registered with its
+// length and its element drop (nurl_journal_push_slice), so a panic drops
+// them before it releases the buffer; registered as a raw buffer, every
+// element leaked (agora #509).
 @ mem_journal_push_slice i cg s ty s slot → v {
     : i tylen ( nurl_str_len ty )
     : s tptr ( nurl_str_slice ty 2 - tylen 9 )
@@ -28798,7 +28806,26 @@ unsafe @ __bck_fall_ret_record i lex i syms i first_tt s first_val i sxn0 i line
     ( nurl_print `  ` ) ( nurl_print raw )
     ( nurl_print ` = bitcast ` ) ( nurl_print ( nurl_llty tptr ) )
     ( nurl_print ` ` ) ( nurl_print dp ) ( nurl_print ` to i8*\n` )
-    ( nurl_print `  call void @nurl_journal_push(i8* ` ) ( nurl_print raw ) ( nurl_print `)\n` )
+    ( mem_journal_push_slice_buf cg ty sv raw )
+}
+
+// The journal push for slice value `sv` (type `ty`, buffer `raw`): with its
+// length and element drop where the slice owns its elements, a raw buffer
+// otherwise (agora #509).
+@ mem_journal_push_slice_buf i cg s ty s sv s raw → v {
+    : i tylen ( nurl_str_len ty )
+    : s tptr ( nurl_str_slice ty 2 - tylen 9 )
+    : s elem ( nurl_llty ( nurl_str_slice tptr 0 - ( nurl_str_len tptr ) 1 ) )
+    : b clo ( __is_closure_ty elem )
+    ? | clo ( __slice_owns_elems elem ) {
+        : s ln ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print ln ) ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty ty ) )
+        ( nurl_print ` ` ) ( nurl_print sv ) ( nurl_print `, 1\n` )
+        = g_use_jslice 1
+        ( nurl_print `  call void @nurl_journal_push_slice(i8* ` ) ( nurl_print raw ) ( nurl_print `, ptr @` )
+        ( nurl_print ? clo `nurl_closure_slice_drop` ( __slice_drop_request elem ) )
+        ( nurl_print `, i64 ` ) ( nurl_print ln ) ( nurl_print `)\n` )
+    } { ( nurl_print `  call void @nurl_journal_push(i8* ` ) ( nurl_print raw ) ( nurl_print `)\n` ) }
 }
 
 @ mem_own_add_str i syms s ptr → v {
@@ -29076,7 +29103,9 @@ unsafe @ mem_path_to_indices s path → s {
         ( nurl_print `  ` ) ( nurl_print raw )
         ( nurl_print ` = bitcast ` ) ( nurl_print ( nurl_llty tptr ) )
         ( nurl_print ` ` ) ( nurl_print dp ) ( nurl_print ` to i8*\n` )
-        ( nurl_print `  call void @nurl_journal_push(i8* ` ) ( nurl_print raw ) ( nurl_print `)\n` )
+        // (…with its length and element drop where it owns its elements:
+        // agora #509.)
+        ( mem_journal_push_slice_buf cg slice_ty sv2 raw )
     }
 }
 
@@ -76776,6 +76805,7 @@ unsafe @ __type_needs_drop s ty i syms → b {
     ? != 0 g_use_slot_take { ( nurl_print `declare void @nurl_vec_slot_take_if(i1, i8*, i64, i64, i64, i64, ptr)\n` ) } {}
     ? != 0 & g_use_drop_range 1 { ( nurl_print `declare void @nurl_vec_drop_range(i8*, i64, i64, ptr, i64)\n` ) } {}
     ? != 0 & g_use_drop_range 2 { ( nurl_print `declare void @nurl_vec_drop_range_dtor(i8*, i64, i64, ptr, i64)\n` ) } {}
+    ? != 0 g_use_jslice { ( nurl_print `declare void @nurl_journal_push_slice(i8*, ptr, i64)\n` ) } {}
     ? != 0 & g_use_drop_range 4 { ( nurl_print `declare void @nurl_vec_move_drop_dtor(ptr, i64, ptr, i64, ptr, i64, ptr, i64)\n` ) } {}
     ? != 0 g_use_vec_drop_dtor { ( nurl_print `declare void @nurl_vec_drop_dtor(i8*, ptr, i64)\n` ) } {}
     // Per-call result ownership (mem_capture_hown / mem_publish_hown).
