@@ -188,16 +188,17 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
       · rw [List.concat_eq_append] at h; exact ⟨_, EvalR.pop h hac had⟩
     · obtain ⟨T, hT, _⟩ := hi.own_val hy hl (by rw [hm]; rfl)
       rw [hT] at h; cases h
-  | @popFront y E' t hy hl ht hcan _ =>
+  | @remove y ix E' t hy hl ht hcan _ _ hix =>
     have hm : E'.mode = .own := by
       rcases hcan with h | ⟨b, h, _⟩
       · exact h
       · exact absurd h (hi.noInout y E' b hy)
     obtain ⟨c, d, es, ⟨hac, had, hvec⟩, _⟩ := hi.vec_node hy hl ht
+    obtain ⟨n, hn⟩ := eval_exists hi hix
     rcases hvec with h | ⟨h, _⟩
-    · cases es with
-      | nil => exact ⟨_, EvalR.popFrontEmpty h⟩
-      | cons e es' => exact ⟨_, EvalR.popFront h hac had⟩
+    · by_cases hlt : n < es.length
+      · exact ⟨_, EvalR.remove hlt h hac had hn⟩
+      · exact ⟨_, EvalR.removeOOB h hn (by omega)⟩
     · obtain ⟨T, hT, _⟩ := hi.own_val hy hl (by rw [hm]; rfl)
       rw [hT] at h; cases h
   | @pair y z Ey Ez Γ1 Γ2 Dy Dz hy hly hpa1 hz hlz hpa2 _ =>

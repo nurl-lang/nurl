@@ -336,9 +336,9 @@ theorem scopeD_end_drains {P : Prog} {x : Var} {f : Nat} {m : Mem} {t : Ty} {c d
     -- (Agora #610: with no orphan to reap first; no typed run has one in this cut)
     (hno : ¬ Orphan m) :
     Step P m (.scopeD x f .skip)
-        (.ok { m with nv := m.nv + 1 } (.scopeD x f (.letd m.nv f (.popFront x) .skip))) ∧
+        (.ok { m with nv := m.nv + 1 } (.scopeD x f (.letd m.nv f (.remove x (.lit 0)) .skip))) ∧
       ∀ r, Step P m (.scopeD x f .skip) r →
-        r = .ok { m with nv := m.nv + 1 } (.scopeD x f (.letd m.nv f (.popFront x) .skip)) := by
+        r = .ok { m with nv := m.nv + 1 } (.scopeD x f (.letd m.nv f (.remove x (.lit 0)) .skip)) := by
   refine ⟨Step.scopeDDrain hx, fun r h => ?_⟩
   cases h with
   | reap hrs _ _ => cases hrs
@@ -361,10 +361,10 @@ theorem scopeD_end_drains {P : Prog} {x : Var} {f : Nat} {m : Mem} {t : Ty} {c d
 theorem scopeD_drain_binds {P : Prog} {x y : Var} {f : Nat} {m : Mem} {t : Ty} {c d : Nat} {e : Val}
     {es : List Val} (hx : m.st x = some ⟨true, some (.node t c d (e :: es))⟩) (hy : m.st y = none)
     (hc : m.alloc c = true) (hd : m.alloc d = true) :
-    Step P m (.scopeD x f (.letd y f (.popFront x) .skip))
+    Step P m (.scopeD x f (.letd y f (.remove x (.lit 0)) .skip))
       (.ok ((m.set x ⟨true, some (.node t c d es)⟩).set y ⟨e.owns, some e⟩)
         (.scopeD x f (.scopeD y f .skip))) :=
-  Step.scopeDIn (Step.letd hy (EvalR.popFront hx hc hd))
+  Step.scopeDIn (Step.letd hy (EvalR.remove (n := 0) (by simp) hx hc hd Eval.lit))
 
 /-- ... and with every element gone the empty `Vec` is freed as any binding's
     value is: the frame's one step leaves `scope x`. -/

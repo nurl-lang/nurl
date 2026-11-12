@@ -49,7 +49,7 @@ elements made through something other than its owner (Agora #295, step
 | A function that changes the elements of a Vec or String it takes as a plain parameter, as the standard library's mutators (`vec_push`, `vec_set`, `vec_clear`, `string_push_*`) take theirs | an `inout b` parameter, `b` the most it does: `realloc` if it only grows it, `drop` if it may drop elements, never `replace` (a plain parameter is not rebound) | `CallT`, `paramOK_inout`, `callPostAux` (the kill by the bound) |
 | A change through a copy of one owner's whole handle (`: x ( id vs )`, `: ~ c vs`, a cursor), to its elements only | the same change made on that owner | `StmtT.push`, `RhsT.pop` |
 | A change through a field path of an owner (`( vec_push [u] . o kids x )`) | the struct taken apart, its field changed, the struct put back (§2.12) | `StmtT.unpair`, `StmtT.push`, `StmtT.assign` |
-| `vec_clear`, `vec_truncate`, `vec_insert`, `vec_remove` | loops of pops and pushes; `vec_remove v 0` directly (`RhsT.popFront`, A2-drop.3b) | `RhsT.pop`, `RhsT.popFront`, `StmtT.push` |
+| `vec_clear`, `vec_truncate`, `vec_insert`, `vec_remove` | loops of pops and pushes; `vec_remove v i` directly (`RhsT.remove`, A2-drop.3b; any index since Agora #607) | `RhsT.pop`, `RhsT.remove`, `StmtT.push` |
 
 A reading holds only where nurlc's summary of the callee is at least what
 the callee does: Agora #315 was a hole in that summary. A replacing

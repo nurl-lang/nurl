@@ -60,11 +60,13 @@ import A3
 #print axioms A2.Dtor.free_dtor_free
 #print axioms A2.Dtor.edit_drops_dtor_free
 #print axioms A2.Dtor.withElem_dtor_free
--- ... and `vec_free` / `vec_clear` / `vec_truncate` of one are typed code (A2/DropCode.lean)
+-- ... and `vec_free` / `vec_clear` / `vec_truncate` / `vec_set` of one are typed code (A2/DropCode.lean)
 #print axioms A2.Dtor.vecFreeD_typed
 #print axioms A2.Dtor.vecClearD_typed
 #print axioms A2.Dtor.vecTruncD_typed
+#print axioms A2.Dtor.vecSetD_typed
 #print axioms A2.DtorWitness.main6_safe
+#print axioms A2.DtorWitness.mainSet_safe
 -- Agora #607: a `Vec` of destructor values as a struct's field, drained through the struct's glue
 #print axioms A2.DtorWitness.main9_safe
 -- A2-drop.3c: no closure or trait-object environment holds a destructor value
@@ -82,7 +84,7 @@ import A3
 #print axioms A2.Dtor.vec_elems_dtor_free
 #print axioms A2.Dtor.new_dtor_free
 #print axioms A2.Dtor.vecs_dtor_free
-#print axioms A2.rhs_popFront
+#print axioms A2.rhs_remove
 #print axioms A2.Dtor.holdsDtor_deep
 #print axioms A2.Dtor.letv_owned_dtor_free
 #print axioms A2.DtorWitness.main_safe

@@ -1622,20 +1622,20 @@ theorem take_facts {E : Entry} {a b : Ty} {G : Nat → Prop}
   · refine ⟨Ty.ok_sum (by simp [Ty.ok, Ty.isStruct] at hok; simpa [Ty.ok] using hok), by simp,
       fun _ h => (WFv.dtor_iff.mp h).2, fun _ _ _ h => ViewIn.dtor h, fun _ _ _ _ h => ArcIn.dtor h⟩
 
-/-- A2-drop.3b: `vec_remove y 0` (the drain's step) is a `vec_pop` of
-    element 0 moved to the end (`MInv.perm`). -/
-theorem rhs_popFront {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
+/-- `vec_remove y i` (A2-drop.3b: the drain's step, `i = 0`) is a
+    `vec_pop` of element `n` moved to the end (`MInv.perm`). -/
+theorem rhs_remove {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     (hanch : RootbAnch Γ F)
     {y : Var} {E : Entry} {t : Ty} (hy : Γ y = some E) (hl : E.live = true) (hty : E.ty = .vec t)
     (hcan : canDo E.mode .drop) (hyF : y ∉ F)
-    {t' : Ty} {c d : Nat} {es : List Val} {e : Val}
-    (hT : m.st y = some ⟨true, some (.node t' c d (e :: es))⟩) (hds : DtorSafe Γ .drop t.holdsView y) :
-    RhsPost m (m.set y ⟨true, some (.node t' c d es)⟩) Γ (kill .drop t.holdsView y Γ) F ∧
-    RhsOut (m.set y ⟨true, some (.node t' c d es)⟩) (kill .drop t.holdsView y Γ) (popE y E t) e
-      e.owns := by
-  have hp : (e :: es).Perm (es ++ [e]) := (List.perm_append_singleton e es).symm
-  let m1 := m.set y ⟨true, some (.node t' c d (es ++ [e]))⟩
-  have hT1 : m1.st y = some ⟨true, some (.node t' c d (es ++ [e]))⟩ := by simp [m1]
+    {t' : Ty} {c d n : Nat} {es : List Val} (hn : n < es.length)
+    (hT : m.st y = some ⟨true, some (.node t' c d es)⟩) (hds : DtorSafe Γ .drop t.holdsView y) :
+    RhsPost m (m.set y ⟨true, some (.node t' c d (es.eraseIdx n))⟩) Γ (kill .drop t.holdsView y Γ) F ∧
+    RhsOut (m.set y ⟨true, some (.node t' c d (es.eraseIdx n))⟩) (kill .drop t.holdsView y Γ)
+      (popE y E t) es[n] es[n].owns := by
+  have hp : es.Perm (es.eraseIdx n ++ [es[n]]) := perm_eraseIdx_append es n hn
+  let m1 := m.set y ⟨true, some (.node t' c d (es.eraseIdx n ++ [es[n]]))⟩
+  have hT1 : m1.st y = some ⟨true, some (.node t' c d (es.eraseIdx n ++ [es[n]]))⟩ := by simp [m1]
   have hst1 : ∀ o, o ≠ y → m1.st o = m.st o := fun o ho => by simp [m1, upd_ne _ _ ho]
   have hpm : RhsPost m m1 Γ Γ F :=
     ⟨hi.perm hanch hyF hT hp, rfl, Nat.le_refl _,
@@ -1646,7 +1646,8 @@ theorem rhs_popFront {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       fun o ho => hst1 o (fun h => hyF (h ▸ ho)), fun _ _ h _ => h, fun _ => rfl,
       fun _ E1 h => ⟨E1, h, rfl, rfl⟩, DKeep.refl _ [], BlkLe.refl _⟩
   obtain ⟨post, out⟩ := rhs_pop hpm.inv hanch hy hl hty hcan hyF hT1 hds
-  have hm2 : m1.set y ⟨true, some (.node t' c d es)⟩ = m.set y ⟨true, some (.node t' c d es)⟩ :=
+  have hm2 : m1.set y ⟨true, some (.node t' c d (es.eraseIdx n))⟩ =
+      m.set y ⟨true, some (.node t' c d (es.eraseIdx n))⟩ :=
     Mem.set_set _ _ _ _
   exact ⟨hpm.trans (hm2 ▸ post), hm2 ▸ out⟩
 
@@ -1734,9 +1735,9 @@ theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry
   | pop hy hl ht hcan hyF hds =>
     cases he with
     | pop hT _ _ => exact rhs_pop hi hanch hy hl ht hcan hyF hT hds
-  | popFront hy hl ht hcan hyF hds =>
+  | remove hy hl ht hcan hyF hds _ =>
     cases he with
-    | popFront hT _ _ => exact rhs_popFront hi hanch hy hl ht hcan hyF hT hds
+    | remove hn hT _ _ _ => exact rhs_remove hi hanch hy hl ht hcan hyF hn hT hds
 
   | @pair y z Ey Ez Γ1 Γ2 Dy Dz hy hly hpa1 hz hlz hpa2 hzd =>
     cases he with

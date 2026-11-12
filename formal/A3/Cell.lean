@@ -150,10 +150,10 @@ theorem _root_.A2.EvalR.cellSt {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : 
     · cases hw
       exact .of_slot hy (sub_cell_node_sub hs fun e he => List.mem_append_left _ he)
     · exact hc
-  | popFront hy _ _ =>
+  | remove _ hy _ _ _ =>
     rcases CellAt.set hc with ⟨w, hw, hs⟩ | hc
     · cases hw
-      exact .of_slot hy (sub_cell_node_sub hs fun e he => List.mem_cons_of_mem _ he)
+      exact .of_slot hy (sub_cell_node_sub hs fun e he => List.mem_of_mem_eraseIdx he)
     · exact hc
   | pair h1 h2 => exact h1.cell.2 (h2.cell.2 hc)
   | inl h1 => exact h1.cell.2 hc
@@ -393,8 +393,9 @@ theorem _root_.A2.EvalR.cellKeep {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h 
   | sat _ _ _ _ _ _ => exact CellKeep.setVal x _ hn hst (fun h => nomatch h) (fun _ _ h => h)
   | pop hy _ _ =>
     exact CellKeep.setVal x _ hn hst (fun _ _ hs => .of_slot hy (Sub.child (by simp) hs)) (fun _ _ h => h)
-  | popFront hy _ _ =>
-    exact CellKeep.setVal x _ hn hst (fun _ _ hs => .of_slot hy (Sub.child (by simp) hs)) (fun _ _ h => h)
+  | remove hn' hy _ _ _ =>
+    exact CellKeep.setVal x _ hn hst (fun _ _ hs => .of_slot hy (Sub.child (List.getElem_mem hn') hs))
+      (fun _ _ h => h)
   | pair h1 h2 =>
     refine CellKeep.setVal x _ hn hst (fun _ _ hs => ?_)
       (fun _ _ h => LockHolds.of_blk (TakeVal.blk h1) (LockHolds.of_blk (TakeVal.blk h2) h))

@@ -2852,9 +2852,10 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         simp only [Stmt.spine, List.mem_cons, List.not_mem_nil, or_false]
         intro h; subst h; rw [hx] at hp; cases hp; exact hnrb hm
       -- element 0 moves out to a fresh binding of the destructor type
-      have hpop := RhsT.popFront (Γ := setE Γ x (Ex.revive x)) (F := F) (y := x) (E := Ex.revive x)
+      have hpop := RhsT.remove (Γ := setE Γ x (Ex.revive x)) (F := F) (y := x) (i := .lit 0)
+        (E := Ex.revive x)
         (t := .dtor f tx) (by simp [setE]) rfl hty (Or.inl hmo) hxF
-        (fun v E hE hd hos => hitsMem_of_replace (hNoPinΓ'.2.1 v E hE hd hos))
+        (fun v E hE hd hos => hitsMem_of_replace (hNoPinΓ'.2.1 v E hE hd hos)) ExprT.lit
       generalize hΓ1 : A2.kill .drop (Ty.dtor f tx).holdsView x (setE Γ x (Ex.revive x)) = Γ1 at hpop
       have hwf1 : CtxWF Γ1 := by rw [← hΓ1]; exact hm1.wf.kill _ _ _
       have hnm1 : NameWF Γ1 := by rw [← hΓ1]; exact hm1.names.kill _ _ _
@@ -2879,7 +2880,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           have hpn : p < m.nv := hiS.nvSt p (by
             have := hm1.dom p; rw [h0] at this; exact this.symm)
           intro h; rw [h] at hlt; exact absurd hpn (Nat.lt_asymm hlt)
-      have hlet := StmtT.letd (P := P) (F := F) (x := m.nv) (f := f) (r := .popFront x) (s := .skip)
+      have hlet := StmtT.letd (P := P) (F := F) (x := m.nv) (f := f) (r := .remove x (.lit 0)) (s := .skip)
         (t := tx) (H := (popE x (Ex.revive x) (.dtor f tx)).held) (τ := .dtor f tx)
         rfl hrΓ' hrF hpop rfl (Or.inl ⟨rfl, Or.inr ⟨f, rfl⟩⟩) hstr hfnt
         ⟨LetdFn.of hdtor (fun g hg => by simp [popE] at hg; exact hg.symm),
@@ -2896,7 +2897,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           rw [killE_dbind] at hd; rw [killE_mode] at hos; rw [killE_ty, killE_mode] at hn
           rw [killE_vdeps] at hdd
           exact hNoPinΓ'.2.2 v E0 h0 hd hos hn d hdd hnm
-      have hKO1 : KeepOut (setE Γ x (Ex.revive x)) Γ1 (Stmt.letd m.nv f (.popFront x) .skip).spine := by
+      have hKO1 : KeepOut (setE Γ x (Ex.revive x)) Γ1 (Stmt.letd m.nv f (.remove x (.lit 0)) .skip).spine := by
         refine ⟨fun v E hv _ => ?_, fun v E' hv => ?_⟩
         · refine ⟨killE .drop (Ty.dtor f tx).holdsView x E, by rw [← hΓ1]; simp [A2.kill, hv],
             killE_mode .., killE_ty .., fun hrb => ?_⟩
@@ -2921,7 +2922,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         · simp [exitScope, upd_ne _ _ hwx, A2.kill, setE]
       rw [← hΓ1, exitScope_kill, hex] at hsc
       have hfin : StmtT P (setE Γ x (Ex.revive x)) F
-          (.scopeD x f (.letd m.nv f (.popFront x) .skip)) (exitScope x Δ1) := by
+          (.scopeD x f (.letd m.nv f (.remove x (.lit 0)) .skip)) (exitScope x Δ1) := by
         rcases skip_inv hs with rfl | hw
         · exact hsc
         · exact hsc.weakenOut hm1.wf hm1.names (Or.inr (hw.exitScope x hpx.2.2))
@@ -2933,7 +2934,8 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       · exact
         { toMInv := hm'
           nvS := fun w hw => by
-            simp only [Stmt.vars, Rhs.vars, List.mem_cons, List.mem_append, List.not_mem_nil, or_false] at hw
+            simp only [Stmt.vars, Rhs.vars, Expr.vars, List.mem_cons, List.mem_append, List.not_mem_nil,
+              or_false] at hw
             show w < m.nv + 1
             rcases hw with h | h | h
             · rw [h]; exact Nat.lt_succ_of_lt hxn

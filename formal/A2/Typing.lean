@@ -607,12 +607,13 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       Γ y = some E → E.live = true → E.ty = .vec t → canDo E.mode .drop → y ∉ F →
       DtorSafe Γ .drop t.holdsView y →
       RhsT Γ F (.pop y) (popE y E t) (kill .drop t.holdsView y Γ)
-  /-- A2-drop.3b: `vec_remove y 0`, typed as `vec_pop` (the element moves
-      out; which one is no part of the typing, `MInv.perm`). -/
-  | popFront {y : Var} {E : Entry} {t : Ty} :
+  /-- `vec_remove y i`, typed as `vec_pop` (the element moves out; which
+      one is no part of the typing, `MInv.perm`). A2-drop.3b: the drain's
+      `vec_remove y 0`; Agora #607: any index. -/
+  | remove {y : Var} {i : Expr} {E : Entry} {t : Ty} :
       Γ y = some E → E.live = true → E.ty = .vec t → canDo E.mode .drop → y ∉ F →
-      DtorSafe Γ .drop t.holdsView y →
-      RhsT Γ F (.popFront y) (popE y E t) (kill .drop t.holdsView y Γ)
+      DtorSafe Γ .drop t.holdsView y → ExprT Γ i →
+      RhsT Γ F (.remove y i) (popE y E t) (kill .drop t.holdsView y Γ)
   | pair {y z : Var} {Ey Ez : Entry} {Γ1 Γ2 : Ctx} {Dy Dz : List Dep} :
       Γ y = some Ey → Ey.live = true → PushArg Γ F y Ey Ey.ty Dy Γ1 →
       Γ1 z = some Ez → Ez.live = true → PushArg Γ1 F z Ez Ez.ty Dz Γ2 →
@@ -816,7 +817,7 @@ theorem RhsT.out {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT 
   | view => exact ⟨Or.inr rfl, rfl⟩
   | @sat _ _ _ t => cases t <;> exact ⟨Or.inr rfl, rfl⟩
   | @pop _ _ t => cases t <;> first | exact ⟨Or.inl rfl, rfl⟩ | exact ⟨Or.inr rfl, rfl⟩
-  | @popFront _ _ t => cases t <;> first | exact ⟨Or.inl rfl, rfl⟩ | exact ⟨Or.inr rfl, rfl⟩
+  | @remove _ _ _ t => cases t <;> first | exact ⟨Or.inl rfl, rfl⟩ | exact ⟨Or.inr rfl, rfl⟩
   | pair => exact ⟨Or.inl rfl, rfl⟩
   | @fst _ _ a => cases a <;> exact ⟨Or.inr rfl, rfl⟩
   | @snd _ _ _ b => cases b <;> exact ⟨Or.inr rfl, rfl⟩
@@ -1784,7 +1785,7 @@ def Rhs.vars : Rhs → List Var
   | .view y => [y]
   | .sat y i => y :: i.vars
   | .pop y => [y]
-  | .popFront y => [y]
+  | .remove y i => y :: i.vars
   | .pair y z => [y, z]
   | .fst y => [y]
   | .snd y => [y]

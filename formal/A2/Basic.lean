@@ -42,6 +42,17 @@ theorem idsL_append (a b : List Val) : idsL (a ++ b) = idsL a ++ idsL b := by
   | nil => simp
   | cons x xs ih => simp [ih]
 
+/-- Element `n` taken out of a list, the rest closing up, is a
+    permutation that moves it to the end. -/
+theorem perm_eraseIdx_append {α : Type} (l : List α) (n : Nat) (h : n < l.length) :
+    l.Perm (l.eraseIdx n ++ [l[n]]) := by
+  have hl : l = l.take n ++ l[n] :: l.drop (n + 1) := by
+    rw [← List.drop_eq_getElem_cons h, List.take_append_drop]
+  have he : l.eraseIdx n = l.take n ++ l.drop (n + 1) := List.eraseIdx_eq_take_drop_succ l n
+  rw [he]
+  conv => lhs; rw [hl]
+  exact List.perm_middle.trans (List.perm_append_singleton _ _).symm
+
 theorem mem_idsL {e : Val} {es : List Val} (h : e ∈ es) {i : Nat} (hi : i ∈ e.ids) :
     i ∈ idsL es := by
   induction es with
@@ -56,6 +67,21 @@ theorem mem_idsL_iff {es : List Val} {i : Nat} : i ∈ idsL es ↔ ∃ e ∈ es,
   induction es with
   | nil => simp
   | cons x xs ih => simp [ih]
+
+/-- `vec_remove`'s addresses: those of the element taken out and of the
+    rest. -/
+theorem mem_idsL_eraseIdx {es : List Val} {n : Nat} (hn : n < es.length) {i : Nat} :
+    i ∈ idsL es ↔ i ∈ es[n].ids ∨ i ∈ idsL (es.eraseIdx n) := by
+  rw [mem_idsL_iff, mem_idsL_iff]
+  have hp := perm_eraseIdx_append es n hn
+  constructor
+  · rintro ⟨e, he, hi⟩
+    rcases List.mem_append.mp (hp.mem_iff.mp he) with h | h
+    · exact Or.inr ⟨e, h, hi⟩
+    · simp at h; subst h; exact Or.inl hi
+  · rintro (hi | ⟨e, he, hi⟩)
+    · exact ⟨_, List.getElem_mem hn, hi⟩
+    · exact ⟨e, hp.mem_iff.mpr (List.mem_append_left _ he), hi⟩
 
 @[simp] theorem ids_pair (v w : Val) : (Val.pair v w).ids = v.ids ++ w.ids := by simp [Val.ids]
 @[simp] theorem ids_inl (v : Val) : (Val.inl v).ids = v.ids := by simp [Val.ids]

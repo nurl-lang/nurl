@@ -2135,7 +2135,7 @@ theorem SelfFree.shrink {t : Ty} {c d : Nat} {es es' : List Val} (hsf : SelfFree
 /-! ### The elements of an owned `Vec` in another order
 
 (Moved here from `A2/Elem.lean` for A2-drop.3b: the drain's `vec_remove v
-0` is a `vec_pop` of element 0 moved to the end, `rhs_popFront`.) An
+0` is a `vec_pop` of element 0 moved to the end, `rhs_remove`.) An
 owner's tree is read by membership, whatever the order of a node's
 elements, so permuting them keeps `HeapOK`, `Covers` and `MInv`
 (`MInv.perm`). -/

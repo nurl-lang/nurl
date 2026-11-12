@@ -639,8 +639,10 @@ inductive Rhs where
   | view (y : Var)             -- `slice_from_vec` / `string_data`
   | sat (y : Var) (i : Expr)   -- `slice_at`: bounds-checked
   | pop (y : Var)              -- `vec_pop`: the element moves out
-  | popFront (y : Var)         -- `vec_remove y 0`: element 0 moves out (A2-drop.3b: what a
-                               -- `Vec`'s drain takes, in index order)
+  | remove (y : Var) (i : Expr) -- `vec_remove y i`: bounds-checked, element `i` moves out
+                               -- (A2-drop.3b: the drain takes element 0, in index order;
+                               -- Agora #607: `vec_set` over a destructor value is a remove
+                               -- into a `letd` and an `insert`, A2/DropCode.lean)
   | pair (y z : Var)           -- a struct literal: owners move in, the rest is copied
   | fst (y : Var)              -- a field read: lends what the field holds
   | snd (y : Var)
