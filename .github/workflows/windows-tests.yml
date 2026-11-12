@@ -81,6 +81,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Package files are LF in this checkout (core.autocrlf=true)
+        # A tarball nurlpkg publish packs here holds what a Linux
+        # checkout of the commit holds (Agora #705).
+        if: ${{ !inputs.update_goldens }}
+        shell: pwsh
+        run: |
+          Write-Host "core.autocrlf=$(git config --get core.autocrlf)"
+          python tools/tests/test_package_eol.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: get-nurl.ps1 replaces a running toolchain, started from pwsh
         # `nurl upgrade` runs the installer with Windows PowerShell 5.1
         # from inside the toolchain it replaces. Start 5.1 the same way,

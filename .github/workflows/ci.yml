@@ -363,6 +363,12 @@ jobs:
         # clean (Agora #232). No toolchain.
         shell: bash
         run: python3 tools/tests/test_holes_check.py
+      - name: Package files are LF in every checkout
+        # nurlpkg publish packs a package's files as the checkout holds
+        # them: every text file under packages/ is pinned `eol=lf` or is
+        # binary, and none is CRLF (Agora #705). No toolchain.
+        shell: bash
+        run: python3 tools/tests/test_package_eol.py
       - name: TLS benchmark per-CPU-family report controls
         # bench/tls_bench/gen_tls_results.py keeps each runner CPU
         # family's latest tls-bench run and refuses a run that does not say

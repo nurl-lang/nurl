@@ -1,0 +1,13 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+second element, long enough for the heap
+1
+second element, long enough for the heap
+2
+second element, long enough for the heap
+second element, long enough for the heap
+2
+second element, long enough for the heap
+6

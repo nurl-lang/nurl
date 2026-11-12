@@ -168,6 +168,8 @@
 // for (`%R`), or `` — while set, every exit of that function ends with the
 // drop glue of its parameter (mem_emit_drop_glue).
 : ~ s g_drop_glue_ty ``
+: ~ i g_call_nest 0  // how many calls deep the expression being compiled is (__gen_call_nested)
+: ~ i g_dup_nest -1  // the call depth of the last `( mem_dup x )` copy made in this expression, -1: none (agora #688)
 : ~ i g_use_sinkstr 0  // a call went through __nurl_sinkstr (mem_sink_str_arg)
 : ~ i g_fn_strp 0  // fn → its raw string params no summary may make a `sink` (__own_sink_str_params)
 : ~ b g_origin_arg_str F  // the argument origin_call_arg records is a raw string the compiler manages
@@ -8513,10 +8515,17 @@ unsafe @ gen_ret i lex i syms i cg → s {
 // __bck_call_open): gen_call has many ways out, and the list is the
 // borrow checker's, not codegen's.
 @ __gen_call_nested i lex i syms i cg → s {
-    ? == g_borrowck 0 { ^ ( gen_call lex syms cg ) } {}
+    // (…one call deeper while it is compiled: __arm_is_mem_dup.)
+    = g_call_nest + g_call_nest 1
+    ? == g_borrowck 0 {
+        : s r0 ( gen_call lex syms cg )
+        = g_call_nest - g_call_nest 1
+        ^ r0
+    } {}
     : s open ( nurl_str_cat ( nurl_sym_get g_bck `copen` ) `` )
     : s r ( gen_call lex syms cg )
     ? ! ( seq open ( nurl_sym_get g_bck `copen` ) ) { ( bck_put `copen` open ) } {}
+    = g_call_nest - g_call_nest 1
     ^ r
 }
 
@@ -8527,6 +8536,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
     // Transparent producers (block, try, conditional, match) republish their
     // own lattice element before returning.
     ( nurl_sym_def syms `__last_value_hown__` `` )
+    = g_dup_nest -1
     : i tt ( nurl_lex_type lex )
     ? == tt TT_INT ( gen_int_lit lex )
     ? == tt TT_FLOAT ( gen_float_lit lex )
@@ -16046,6 +16056,11 @@ unsafe @ __rp_rhs_set b v → v { = g_rp_rhs_lit v }
         // to ask, the argument path recognises the copy by its register
         // (SSA: no other value has it). Before, every such copy leaked.
         ( nurl_sym_def syms `__last_fresh_reg__` r )
+        // …and says at which call depth it was made, which a `?` join's arm
+        // asks (__arm_is_mem_dup): a builtin has no callee answer for the
+        // join to ask, and the copy chosen by `? c ( mem_dup a ) ( mem_dup
+        // b )` was nobody's (agora #688).
+        = g_dup_nest g_call_nest
         // A deep copy owns its data — unless the type holds views (a raw
         // string field, §2.13), which the copy points where they did.
         : s __dll ( nurl_llty ty )
@@ -42241,6 +42256,10 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                         // container's element, __bck_fe_retire — and what it is
                         // a part of ends it no longer, `feo_`, on a path that
                         // leaves the loop by none.)
+                        // (One a `;` defer of the body reads is read again at
+                        // the function's exit: its owners, before they go —
+                        // __bck_fe_defer_keep below; agora #672.)
+                        : s fe_dk ? & fel ! ( seq lpost `!` ) ( __bck_fe_defer_owners + p 1 eb ( bck_field frec 1 ) ) ``
                         ? fel {
                             ? ! ( seq lpost `!` ) { ( __bck_fe_retire lpost ( bck_field_int frec 1 ) ) } { ( __bck_fe_unfile ( bck_field frec 1 ) ) }
                             ( __bck_fe_codes_drop ( bck_field frec 1 ) )
@@ -42248,6 +42267,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                         // (…but for what a defer of the body keeps: it reads
                         // that at the function's exit, agora #670.)
                         = st ( __bck_loop_restore + p 1 eb blk_pre lpost ( __bck_loop_kept + p 1 eb blk_pre ) )
+                        ? != 0 ( nurl_str_len fe_dk ) { = st ( __bck_fe_defer_keep st ( bck_field_int frec 1 ) fe_dk ) } {}
                         // (…and its cursor with it: a view of nothing, agora
                         // #493.)
                         ? fel {
@@ -45248,6 +45268,52 @@ unsafe @ __bck_row_sl s rec → s {
     }
 }
 
+// Does a `;` defer in the loop's rows [lo, hi) read `~` loop element
+// `fids`? The defer runs at the function's exit and reads the element's
+// slot there — the element of the last round the loop ran — so the
+// element outlives its loop (agora #672).
+@ __bck_defer_reads_fe i lo i hi s fids → b {
+    ? == 0 g_bck_has_defers { ^ F } {}
+    : ~ s rest ( nurl_sym_get g_bck `defer_blocks` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : i d0 ( nurl_str_to_int ( str_first_word rest ) )
+        = rest ( str_skip_word rest )
+        ? & >= d0 lo < d0 hi {
+            : i de ( bck_match_close d0 `block` `endblock` )
+            : ~ i q + d0 1
+            ~ < q de {
+                ? ( bck_row_reads_any q ) {
+                    ? ( str_contains_word ( bck_field ( bck_rec q ) 2 ) fids ) { ^ T } {}
+                } {}
+                = q + q 1
+            }
+        } {}
+    }
+    ^ F
+}
+
+// …and its owners (its `fe_`) as its loop's walk ends, when one does:
+// `` otherwise.
+@ __bck_fe_defer_owners i lo i hi s fids → s {
+    // (Asked at every `~` loop's end: nothing to look up in a function
+    // with no defer.)
+    ? == 0 g_bck_has_defers { ^ ( nurl_str_cat `` `` ) } {}
+    : s fe ( nurl_sym_get g_bck ( bck_bkey `fe_` fids ) )
+    ? | == 0 ( nurl_str_len fe ) ! ( __bck_defer_reads_fe lo hi fids ) { ^ ( nurl_str_cat `` `` ) } {}
+    ^ ( nurl_str_cat fe `` )
+}
+
+// A `~` loop element a `;` defer of its body reads, as its loop's walk
+// ends: a borrow of its container's owners `fe` from here to the exit, as
+// `: String e ( vec_at v k )` is — what ends them after the loop (`(
+// vec_clear v )`) ends it, and the defer's read of it at the exit is
+// refused there as that binding's is. Gone with its loop instead, the
+// defer read the cleared buffer (agora #672).
+@ __bck_fe_defer_keep s st i fid s fe → s {
+    ? ( seq st `!` ) { ^ st } {}
+    ^ ( bck_borrow_begin st fid fe )
+}
+
 @ bck_dead_state i v → b {
     ^ | | | | == v BCK_MOVED == v BCK_MAYBE_MOVED == v BCK_STORED == v BCK_INVALID == v BCK_MAYBE_ALIAS
 }
@@ -48016,7 +48082,28 @@ unsafe @ bck_note_rc_arg s name s ty → v {
     : s m1 ( nurl_str_cat4 `'` name `' borrows from '` sname )
     : s m2 ( nurl_str_cat4 `', which ended at line ` ln ` — ` info )
     : s m3 ( nurl_str_cat4 `. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so '` name `' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup ` ( nurl_str_cat name ` ).` ) )
-    ( bck_emit_error ( nurl_sym_get g_bck `file` ) useline ( nurl_str_cat3 m1 m2 m3 ) )
+    ( bck_emit_error ( nurl_sym_get g_bck `file` ) useline ( nurl_str_cat4 m1 m2 m3 ( __bck_defer_read_note ln info ) ) )
+}
+
+// What an error about a read adds when the read is in a `;` defer's body
+// that stands above line `ln`, where its source ended: the defer runs when
+// the function returns, after that line — what it reads must last until
+// then (agora #672). `` for any other read, and where the reason the
+// source ended already says it was the defers' order (`info`).
+@ __bck_defer_read_note s ln s info → s {
+    ? >= ( nurl_str_find info `defers` ) 0 { ^ ( nurl_str_cat `` `` ) } {}
+    : i at g_bck_row_at
+    : i el ( nurl_str_to_int ln )
+    : ~ i d -1
+    : ~ s rest ( nurl_sym_get g_bck `defer_blocks` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : i d0 ( nurl_str_to_int ( str_first_word rest ) ) = rest ( str_skip_word rest )
+        ? & < d0 at > ( bck_match_close d0 `block` `endblock` ) at { = d d0 } {}
+    }
+    ? < d 0 { ^ ( nurl_str_cat `` `` ) } {}
+    : i dl ( bck_field_int ( bck_rec d ) 3 )
+    ? >= dl el { ^ ( nurl_str_cat `` `` ) } {}
+    ^ ( nurl_str_cat4 ` (This read is the ';' defer at line ` ( nurl_str_int dl ) `: it runs when the function returns, after line ` ( nurl_str_cat ln `, so what it reads has to last until then.)` ) )
 }
 
 // A field of a field viewer handed to `cal`, which takes it.
@@ -49395,7 +49482,12 @@ unsafe @ bck_loop_mask s pre s post → s {
             ~ < j d0 {
                 : s rec ( bck_rec j )
                 : ~ i nx + j 1
-                ? != 0 ( nurl_str_starts rec `let\t` ) {
+                // (…and the element of a `~` loop around the site, inside
+                // this one, that the defer reads: a borrow of its
+                // container from that loop's end on, __bck_fe_defer_keep;
+                // agora #672.)
+                : b kfe ? != 0 ( nurl_str_starts rec `fevar\t` ) ( __bck_defer_reads_fe d0 + d0 1 ( bck_field rec 1 ) ) F
+                ? | kfe != 0 ( nurl_str_starts rec `let\t` ) {
                     : s ids ( bck_field rec 1 )
                     ? & == BCK_UNINIT ( bck_st_raw pre ( nurl_str_to_int ids ) ) ! ( str_contains_word out ids ) {
                         = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat ids `` ) ( nurl_str_cat3 out ` ` ids )
@@ -79776,6 +79868,8 @@ unsafe @ __jpb_note i cg s up → v {
     // itself while that payload is local to THIS arm and must therefore move
     // through the outer join. Transparent try expressions have no such
     // promotion and arrive here with their published lattice element intact.
+    // `( mem_dup x )` (__arm_is_mem_dup): a copy the arm owns.
+    ? ( __arm_is_mem_dup syms tt0 ) { ^ ( nurl_str_cat `true` `` ) } {}
     : s explicit ( nurl_sym_get syms `__last_value_hown__` )
     ? != 0 ( nurl_str_len explicit ) { ^ ( mem_own_lattice explicit ) } {}
     // `{ … ( f ) }`: a block arm hands over what its tail call does — also
@@ -79788,6 +79882,17 @@ unsafe @ __jpb_note i cg s up → v {
             ? != 0 ( nurl_str_len r ) { ^ r } {}
         } {} } {}
     ^ ( nurl_str_cat `false` `` )
+}
+
+// Is the value of the `?` arm just compiled — `tt0` its first token — a
+// `( mem_dup x )` copy: the arm is that call (or a block ending in it), and
+// the copy was made one call below the join, not inside a call the arm
+// makes (`( f ( mem_dup x ) )`, whose value is f's). The depth is reset at
+// every expression, so a copy an earlier statement made says nothing here
+// (agora #688).
+@ __arm_is_mem_dup i syms i tt0 → b {
+    ? != g_dup_nest + g_call_nest 1 { ^ F } {}
+    ^ == ( __arm_eff_tt syms tt0 ) TT_LPAREN
 }
 
 // May the call that ended an arm answer its ownership with its own bit?
@@ -79807,6 +79912,7 @@ unsafe @ __jpb_note i cg s up → v {
 @ mem_arm_struct_hown i syms i cg s ty i tt0 → s {
     ? != ( __arm_eff_tt syms tt0 ) TT_LPAREN { ^ ( nurl_str_cat `` `` ) } {}
     ? | ( __is_handle_ty ( __udrop_regty ty ) ) ! ( __is_hown_ty ty ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? ( __arm_is_mem_dup syms tt0 ) { ^ ( nurl_str_cat `true` `` ) } {}
     ? | ! ( __arm_call_bit_ok syms ) & != 0 ( nurl_sym_len syms `__last_call_ret_view__` ) ! ( __call_answers syms tt0 ) { ^ ( nurl_str_cat `` `` ) } {}
     ^ ( mem_call_retown syms cg )
 }

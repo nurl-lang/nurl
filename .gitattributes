@@ -6,6 +6,21 @@
 Dockerfile text eol=lf
 *.nu      text eol=lf
 
+# A package's files are packed into its registry tarball as the working
+# copy holds them (`nurlpkg publish`): with core.autocrlf=true a Windows
+# checkout gave every text file of a package CRLF line ends — README,
+# nurl.toml, CHANGELOG, line-based test data — so what a tarball held
+# depended on the machine that packed it (Agora #705). Every text file
+# under packages/ is LF in every checkout; git's own detection leaves a
+# binary file as it is, and the ones it could take for text (raw float
+# data with no NUL byte) are named binary.
+packages/**                text=auto eol=lf
+packages/**/*.f32          binary
+packages/**/*.onnx         binary
+packages/**/*.safetensors  binary
+packages/**/*.png          binary
+packages/**/*.jpg          binary
+
 # Keep Windows batch files as CRLF so cmd.exe is happy.
 *.bat     text eol=crlf
 *.cmd     text eol=crlf
