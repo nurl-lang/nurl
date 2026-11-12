@@ -13391,14 +13391,25 @@ unsafe @ nurl_sym_new → i {
     // 14 pins: a table of the module-scope definitions made inside a
     // scope (nurl_sym_def_module), replayed by each pop until the table
     // is back at depth 0; 0 when there are none.
-    : i nb 4096
-    : s t # s ( nurl_zalloc 120 )
+    : i h ( __sym_alloc )
+    : s t # s h
     // Compilation owns every table until its explicit release. Intrusive
     // links (slots 9/10) let final cleanup reclaim handles abandoned by a
     // diagnostic without scanning on normal release or allocating a tracker.
     ( nurl_poke t 10 g_live_symtables )
     ? != g_live_symtables 0 { ( nurl_poke # s g_live_symtables 9 # i t ) } {}
     = g_live_symtables # i t
+    ^ h
+}
+
+// A table no list links: one another table owns (a scope's pins, slot 14),
+// released with its owner. In the compilation's list as well, it was
+// released twice when a diagnostic left a function body mid-scope: the
+// exit sweep reached the pins first, then their owner released them again
+// (agora #715).
+unsafe @ __sym_alloc → i {
+    : i nb 4096
+    : s t # s ( nurl_zalloc 120 )
     ( nurl_poke t 2 64 )
     ( nurl_poke t 3 # i # s ( nurl_alloc * 64 8 ) )
     ( nurl_poke t 4 # i # s ( nurl_alloc * 64 8 ) )
@@ -13420,8 +13431,10 @@ unsafe @ nurl_sym_free sink i h → v {
     : s t # s h
     : i previous ( nurl_peek t 9 )
     : i following ( nurl_peek t 10 )
+    // (A table no list links — __sym_alloc's — has neither neighbour and is
+    // not the head.)
     ? != previous 0 { ( nurl_poke # s previous 10 following ) }
-    { = g_live_symtables following }
+    { ? == g_live_symtables h { = g_live_symtables following } {} }
     ? != following 0 { ( nurl_poke # s following 9 previous ) } {}
     : i count ( nurl_peek t 0 )
     // `*s`, not `*i`: these are the POINTER arrays every other reader
@@ -14107,7 +14120,8 @@ unsafe @ nurl_sym_def_module i h s name s value → v {
     : s t # s h
     ( nurl_sym_def h name value )
     ? == 0 ( nurl_peek t 1 ) { ^ } {}
-    ? == 0 ( nurl_peek t 14 ) { ( nurl_poke t 14 ( nurl_sym_new ) ) } {}
+    // (The pins are this table's own: __sym_alloc, in no list.)
+    ? == 0 ( nurl_peek t 14 ) { ( nurl_poke t 14 ( __sym_alloc ) ) } {}
     ( nurl_sym_def ( nurl_peek t 14 ) name value )
 }
 
