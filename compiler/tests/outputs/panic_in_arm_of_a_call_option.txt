@@ -1,0 +1,23 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+drop option
+option_payload: recovered: late
+drop result
+result_payload: recovered: late
+drop moved
+moved_then_panic: recovered: late
+drop round
+drop round
+drop round
+in_a_loop: recovered: late
+drop inner
+drop outer
+nested: recovered: late
+drop element
+lent_element: recovered: late
+drop local
+local_option: recovered: late
+drop quiet
+no_panic: no panic

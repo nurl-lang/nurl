@@ -1640,7 +1640,18 @@ unsafe @ agg_field_count i syms s ot → i {
 // credited only where its holder argument is the one read so far.
 : ~ i g_rp_rd 0
 : ~ i g_rp_nstmt 0
-: ~ s g_noaddr_visiting ``  // enum types __ty_no_address is examining (a recursive type qualifies provisionally)
+// __holds_user_drop's answers across questions, `<generation>:<0|1>` per
+// type: a `% Drop` impl registered later, or a layout registered again by
+// its declaration (a refused enum's variants: g_drop_gen), makes them
+// stale — as it does __type_needs_drop's.
+: ~ i g_hud_pmemo 0
+: ~ i g_drop_gen 0
+// 1 once every named layout is read (read_type_layouts): an answer about a
+// type's fields may be kept from then on (__type_needs_drop).
+: ~ i g_layouts_final 0
+: ~ i g_noaddr_depth 0  // how deep __ty_no_address is in the named types of one question
+: ~ s g_noaddr_stamp ``  // that question's visited set (__seen_begin)
+: ~ s g_noaddr_vis ``  // the named types it met, kept as yes when its answer is yes
 : ~ i g_ff_gen 0  // function counter keying the field-owner flags (mem_ff_slot)
 : ~ i g_ff_any 0  // 1 once this function made a field-owner flag
 : ~ i g_summaries_final 0  // 1 once the module's functions are all compiled (mem_emit_arg_flags): __hown_dyn may memoize
@@ -4511,6 +4522,13 @@ unsafe @ nurl_cg_lbl i h s hint → s {
     ? | ( seq bit `false` ) != 0 ( nurl_sym_len syms `__ret_path_lends__` ) { ( nurl_sym_set_deep syms `__hown_saw_false__` `1` ) } {
         ( nurl_sym_set_deep syms `__hown_saw_owned__` `1` ) }
     ? & != 0 ( nurl_sym_len syms `__hown_saw_false__` ) != 0 ( nurl_sym_len syms `__hown_saw_owned__` ) { ( mem_hown_mark_dyn syms ) } {}
+    // (…and a path that hands over a value of its own outright — a literal,
+    // a copy — beside one that hands back a lending call's result, which
+    // stores that call's answer, no literal `false`: per call too, decided
+    // at module end once the call's summary is final, __hown_mixed. Agora
+    // #625.)
+    // (Not a path marked as one that lends.)
+    ? & ( seq bit `true` ) == 0 ( nurl_sym_len syms `__ret_path_lends__` ) { ( nurl_sym_def g_pending_impl ( nurl_str_cat `retownnv##` ( nurl_sym_get syms `__fn_self_name__` ) ) `1` ) } {}
     // (A path handing back a `sink` parameter hands over this function's
     // own value — its flag says so per run — beside a path that lends: no
     // static answer is right on both. Taken for "lent" throughout, a
@@ -7060,6 +7078,13 @@ unsafe @ gen_ret i lex i syms i cg → s {
     // at is the one the field read recorded, __last_member_root__ — agora
     // #560.)
     : s ret_pl_root ? & == ret_eff_tt TT_DOT == 0 ( nurl_str_len ret_first_root ) ( nurl_sym_get syms `__last_member_root__` ) ret_first_root
+    // (`^ . x f` of a by-value parameter: the caller's value, lent back,
+    // unless the frame owns x — its answer is x's flag, no literal `false`:
+    // a return that lends, for __hown_mixed (`retplend##`). Beside one that
+    // hands over a value of its own (`^ ( mks )`) the function answers per
+    // call; taken for a lender throughout, the fresh String of `? c { ^ . x
+    // s } {} ^ ( mks )` leaked, agora #739.)
+    ? & & == ret_eff_tt TT_DOT ! ret_field_copy >= ( nurl_sym_word_index syms `__fn_param_names__` ret_pl_root ) 0 { ( nurl_sym_def g_pending_impl ( nurl_str_cat `retplend##` ( nurl_sym_get syms `__fn_self_name__` ) ) `1` ) } {}
     ? & & == ret_eff_tt TT_DOT ! ret_field_copy != 0 ( nurl_sym_len2 syms ret_pl_root `__pljk` ) {
         : s pfr ( nurl_sym_get syms `__last_field_read__` )
         : s pf_ptr ( str_first_word pfr )
@@ -11968,6 +11993,7 @@ unsafe @ __hown_dyn_walk i syms s fname → b {
             : s known ? & != 0 g_summaries_final ! ( seq f fname ) ( nurl_sym_get2 g_pending_impl `hdynmemo##` f ) ``
             ? ( seq known `1` ) { ^ T } {}
             ? == 0 ( nurl_str_len known ) {
+                ? ( __hown_mixed syms f ) { ^ T } {}
                 : s via ( nurl_sym_get g_pending_impl ( nurl_str_cat `retvia##` f ) )
                 ? != 0 ( nurl_str_len via ) { = work ? == 0 ( nurl_str_len work ) ( nurl_str_cat via `` ) ( nurl_str_cat3 work ` ` via ) } {}
                 // A binding handed back as it came from a call (mem_hown_dyn_if):
@@ -11991,6 +12017,34 @@ unsafe @ __hown_dyn_walk i syms s fname → b {
                 }
             } {}
         } {}
+    }
+    ^ F
+}
+
+// Do `f`'s returns hand back a lending call's result on one path (`^ (
+// vec_at [S] v 0 )`, a via return whose callee lends) and a value of its
+// own on another — a literal or a copy (`retownnv##`), a call that lends
+// nothing (`^ ( mks … )`), a binding of one? Every path stores its own
+// answer in the per-call slot, but none stores a literal `false`, so the
+// function was taken for a lender throughout and its fresh results were
+// never released (agora #625, #739). A pure forwarder — every return a
+// lending call — stays a static lender.
+@ __hown_mixed i syms s f → b {
+    : ~ b lends F
+    : ~ b owns != 0 ( nurl_sym_len2 g_pending_impl `retownnv##` f )
+    : ~ s via ( nurl_sym_get g_pending_impl ( nurl_str_cat `retvia##` f ) )
+    ~ != 0 ( nurl_str_len via ) {
+        : s c ( str_first_word via ) = via ( str_skip_word via )
+        ? ( __callee_lent syms c c ) { = lends T } { = owns T }
+    }
+    ? != 0 ( nurl_sym_len2 g_pending_impl `retplend##` f ) { = lends T } {}
+    ? ! lends { ^ F } {}
+    ? owns { ^ T } {}
+    : ~ s cond ( nurl_sym_get g_pending_impl ( nurl_str_cat `retdynif##` f ) )
+    ~ != 0 ( nurl_str_len cond ) {
+        : s c ( str_first_word cond ) = cond ( str_skip_word cond )
+        : s g ( str_first_word cond ) = cond ( str_skip_word cond )
+        ? ! ( __callee_lent syms c g ) { ^ T } {}
     }
     ^ F
 }
@@ -16991,8 +17045,13 @@ unsafe @ __has_nonzero_word s list → b {
 
 // Is `ty` built of numbers alone — scalars, and options / results /
 // plain structs of them?
-@ __ty_numbers_only s ty0 i depth → b {
-    ? > depth 6 { ^ F } {}
+// (No depth budget: a value's by-value parts are a finite tree. Six levels
+// answered no below them — the arm locals of a value-bearing arm over
+// numbers seven structs deep leaked — and walked every path again: thirty
+// fields six deep took minutes, agora #740. Each struct's answer is kept
+// once the layouts are final; it is marked while its fields are read, so a
+// type that holds itself — an error its declaration reports — ends.)
+unsafe @ __ty_numbers_only s ty0 i depth → b {
     : s ty ( nurl_llty ty0 )
     : i n ( nurl_str_len ty )
     ? == 0 n { ^ F } {}
@@ -17002,8 +17061,8 @@ unsafe @ __has_nonzero_word s list → b {
         : s a ( __wrap_part ty 0 )
         : s b ( __wrap_part ty 1 )
         ? == 0 ( nurl_str_len a ) { ^ F } {}
-        ? ! ( __ty_numbers_only a + depth 1 ) { ^ F } {}
-        ^ | == 0 ( nurl_str_len b ) ( __ty_numbers_only b + depth 1 )
+        ? ! ( __ty_numbers_only a depth ) { ^ F } {}
+        ^ | == 0 ( nurl_str_len b ) ( __ty_numbers_only b depth )
     } {}
     ? | | | != ( nurl_str_get ty 0 ) 37 ( seq ty `%String` ) != 0 ( nurl_str_starts ty `%Vec__` ) ( __is_libh ty ) { ^ F } {}
     ? == 0 g_root_syms { ^ F } {}
@@ -17015,14 +17074,21 @@ unsafe @ __has_nonzero_word s list → b {
     } {}
     ? == 0 ( nurl_sym_len2 g_root_syms sname `__field_count` ) { ^ F } {}
     ? != 0 ( nurl_sym_len2 g_impl_name_syms `drop##` ty ) { ^ F } {}
+    : s mkey ( nurl_str_cat `numonly##` ty )
+    : s gen ( nurl_str_cat ( nurl_str_int g_drop_gen ) `:` )
+    : s pm ( nurl_sym_get g_impl_name_syms mkey )
+    ? & != 0 ( nurl_str_len pm ) != 0 ( nurl_str_starts pm gen ) { ^ == ( nurl_str_get pm - ( nurl_str_len pm ) 1 ) 49 } {}
+    ( nurl_sym_set g_impl_name_syms mkey ( nurl_str_cat gen `-` ) )
     : i fc ( nurl_str_to_int ( nurl_sym_get2 g_root_syms sname `__field_count` ) )
     : ~ i fi 0
-    ~ < fi fc {
+    : ~ b r T
+    ~ & r < fi fc {
         : s ft ( nurl_sym_get g_root_syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) )
-        ? ! ( __ty_numbers_only ft + depth 1 ) { ^ F } {}
+        ? ! ( __ty_numbers_only ft depth ) { = r F } {}
         = fi + fi 1
     }
-    ^ T
+    ( nurl_sym_set g_impl_name_syms mkey ? != 0 g_layouts_final ( nurl_str_cat gen ? r `1` `0` ) `` )
+    ^ r
 }
 
 @ bck_esc_check_call_arg i lex i syms i line s ident s fname → v {
@@ -19130,7 +19196,12 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // the lends, and the walk and module end decide by the final
         // summaries, as for a join.)
         ? & & arg_sxl != 0 g_borrowck | | | | == arg_eff_tt TT_DOT == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST == arg_eff_tt TT_LBRACE & == arg_eff_tt TT_LPAREN | g_call_may_lend ( __lend_pending ( nurl_sym_get syms `__last_call_name__` ) ) {
-            = arg_xsx ? & ( __is_handle_ty at ) ( __arg_may_change syms call_name fname arg_idx __clo_node ) ( nurl_str_cat arg_sx `` ) ``
+            // (…a handle, or a slice — a view of a container's elements: what
+            // the callee does through one it does to the container's.
+            // `( ch ( slice_from_vec vs ) )`, ch clearing an element through
+            // it, ended no borrow of vs's elements, agora #735, #737.)
+            : s __axp ? != 0 ( nurl_str_starts at `{ i1, ` ) ( __wrap_part at 0 ) at
+            = arg_xsx ? & | ( __is_handle_ty __axp ) != 0 ( nurl_str_starts __axp `%Slice__` ) ( __arg_may_change syms call_name fname arg_idx __clo_node ) ( nurl_str_cat arg_sx `` ) ``
         } {}
         // Closure-env reclamation: if this argument was an inline closure
         // literal that allocated a heap env, and the callee uses this
@@ -22084,44 +22155,71 @@ unsafe @ gen_call_body i lex i syms i cg → s {
 // such, options / results and plain structs of them. A view, a raw
 // pointer, an enum, a library handle or a trait object can.
 unsafe @ __ty_no_address s ty0 i depth → b {
-    ? > depth 6 { ^ F } {}
     : s ty ( nurl_llty ty0 )
     : i n ( nurl_str_len ty )
     ? == 0 n { ^ F } {}
     ? == ( nurl_str_get ty - n 1 ) 42 { ^ F } {}
     ? | | | > ( int_width ty ) 0 ( seq ty `double` ) ( seq ty `float` ) ( __is_vec_num_ty ty ) { ^ T } {}
     ? ( seq ty `%String` ) { ^ T } {}
-    ? != 0 ( nurl_str_starts ty `%Vec__` ) { ^ ( __ty_no_address ( __vec_elem_llvm ty ) + depth 1 ) } {}
+    ? != 0 ( nurl_str_starts ty `%Vec__` ) { ^ ( __ty_no_address ( __vec_elem_llvm ty ) depth ) } {}
     ? != 0 ( nurl_str_starts ty `{ i1, ` ) {
         : s a ( __wrap_part ty 0 )
         : s b ( __wrap_part ty 1 )
         ? == 0 ( nurl_str_len a ) { ^ F } {}
-        ? ! ( __ty_no_address a + depth 1 ) { ^ F } {}
-        ^ | == 0 ( nurl_str_len b ) ( __ty_no_address b + depth 1 )
+        ? ! ( __ty_no_address a depth ) { ^ F } {}
+        ^ | == 0 ( nurl_str_len b ) ( __ty_no_address b depth )
     } {}
     ? | | != ( nurl_str_get ty 0 ) 37 ( __is_libh ty ) != 0 ( nurl_str_starts ty `%dyn.` ) { ^ F } {}
     : s sname ( nurl_str_slice ty 1 - n 1 )
-    // An enum whose every payload is such a value (`Json`: strings, Vecs
-    // of Json, numbers) — an owned one is whole on its own.
-    ? != 0 ( nurl_sym_len2 g_root_syms sname `__variants` ) {
-        // A type reached again through its own payloads (`Json` in `( Vec
-        // Json )`) is assumed to qualify while it is being examined.
-        ? ( str_contains_word g_noaddr_visiting ty ) { ^ T } {}
-        : s __nav_saved ( nurl_str_cat g_noaddr_visiting `` )
-        = g_noaddr_visiting ( nurl_str_cat3 g_noaddr_visiting ` ` ty )
-        : b __nav_r ( __ty_no_address_enum sname + depth 1 )
-        = g_noaddr_visiting ( nurl_str_cat __nav_saved `` )
-        ^ __nav_r
+    : b isenum != 0 ( nurl_sym_len2 g_root_syms sname `__variants` )
+    ? & ! isenum == 0 ( nurl_sym_len2 g_root_syms sname `__field_count` ) { ^ F } {}
+    // (Kept once the layouts are final: a no always — it comes from a part
+    // that holds one — and a yes read without a provisional answer.)
+    : s mkey ( nurl_str_cat `noaddr##` ty )
+    : s gen ( nurl_str_cat ( nurl_str_int g_drop_gen ) `:` )
+    ? != 0 g_layouts_final {
+        : s pm ( nurl_sym_get g_impl_name_syms mkey )
+        ? & != 0 ( nurl_str_len pm ) != 0 ( nurl_str_starts pm gen ) { ^ == ( nurl_str_get pm - ( nurl_str_len pm ) 1 ) 49 } {}
     } {}
-    ? == 0 ( nurl_sym_len2 g_root_syms sname `__field_count` ) { ^ F } {}
-    : i fc ( nurl_str_to_int ( nurl_sym_get2 g_root_syms sname `__field_count` ) )
-    : ~ i fi 0
-    ~ < fi fc {
-        : s ft ( nurl_sym_get g_root_syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) )
-        ? ! ( __ty_no_address ft + depth 1 ) { ^ F } {}
-        = fi + fi 1
+    // A type met again in the same question — reached through its own parts
+    // (`Json` in `( Vec Json )`, `: Node { ( Vec Node ) kids }`), or through
+    // another path to it — is taken to qualify: it adds no part the walk has
+    // not seen, or has seen already (the greatest fixed point), and any part
+    // that does not qualify ends the whole question with a no. Only enums had
+    // the mark; a struct recursed until a budget of six levels answered no,
+    // and the arm locals of every value-bearing arm over a tree leaked
+    // (agora #740). Marked on the path alone, a graph of types that hold each
+    // other through Vecs was walked once per path to each type — exponential.
+    : b __nav_top == 0 g_noaddr_depth
+    ? __nav_top { = g_noaddr_stamp ( __seen_begin ) = g_noaddr_vis `` } {}
+    ? ! ( __seen_add g_noaddr_stamp ( nurl_str_cat `na|` ty ) ) { ^ T } {}
+    ? != 0 g_layouts_final { = g_noaddr_vis ( nurl_str_cat3 g_noaddr_vis ` ` ty ) } {}
+    = g_noaddr_depth + g_noaddr_depth 1
+    : ~ b r T
+    ? isenum { = r ( __ty_no_address_enum sname depth ) } {
+        : i fc ( nurl_str_to_int ( nurl_sym_get2 g_root_syms sname `__field_count` ) )
+        : ~ i fi 0
+        ~ & r < fi fc {
+            : s ft ( nurl_sym_get g_root_syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) )
+            ? ! ( __ty_no_address ft depth ) { = r F } {}
+            = fi + fi 1
+        }
     }
-    ^ T
+    = g_noaddr_depth - g_noaddr_depth 1
+    // (Kept: a no wherever it is found — it comes from a part that does not
+    // qualify, never from a type taken to; a yes for every type the question
+    // met, once its own answer is yes.)
+    ? != 0 g_layouts_final {
+        ? ! r { ( nurl_sym_set g_impl_name_syms mkey ( nurl_str_cat gen `0` ) ) } {}
+        ? & r __nav_top {
+            : ~ s vis ( nurl_str_cat g_noaddr_vis `` )
+            ~ != 0 ( nurl_str_len vis ) {
+                : s w ( str_first_word vis ) = vis ( str_skip_word vis )
+                ( nurl_sym_set g_impl_name_syms ( nurl_str_cat `noaddr##` w ) ( nurl_str_cat gen `1` ) )
+            }
+        } {}
+    } {}
+    ^ r
 }
 
 // Emit parked exit blocks: each runs its drops when `drop` (the value
@@ -24724,7 +24822,16 @@ unsafe @ gen_match i lex i syms i cg → s {
                                     } {}
                                 }
                             }
-                        } {} }
+                        } {}
+                        // The payload is the arm's own from here, as a `:`
+                        // binding's value is from its statement: journaled
+                        // with its flag (a lent payload's says "not owned",
+                        // and the drain passes it by). Only registered, a
+                        // panic in the arm found nothing standing for a
+                        // call's fresh option or result: its payload leaked
+                        // (Agora #745). A String / Vec payload is journaled
+                        // as a handle already.
+                        ( mem_journal_push_userdrop syms cg vp0 pt0_eff ) }
                     {}
                     // A String / Vec payload of a fresh option or result.
                     // (An option payload — `??T`'s inner option — counts as its
@@ -26017,6 +26124,12 @@ unsafe @ gen_match i lex i syms i cg → s {
     ( nurl_sym_def syms ( nurl_str_cat var_name `__eslot` ) gep )
     // (…and what it is an element of, by name or path: __fe_moved_drop_note.)
     ( nurl_sym_def syms ( nurl_str_cat var_name `__econt` ) fe_cont )
+    // (…and, for the drop summaries, the parameters the element was read
+    // out of: noted by its slot, as a binding read out of one is
+    // (__pderiv_note) — a binding that reuses its name later has a slot of
+    // its own. Not noted, `~ x vs { ( vec_clear x ) }` dropped nothing of
+    // vs by the summary, agora #735.)
+    ? != 0 ( nurl_str_len fe_cont ) { ( __pderiv_note syms var_name elem_ty TT_IDENT fe_cont `-` `` ) } {}
     // (…and, for a Vec, where its slot is NOW: the control block and the
     // index — the buffer may have moved since the round began, through
     // another name of the container; __fe_slot_now, agora #587.)
@@ -30548,7 +30661,11 @@ unsafe @ mem_path_to_indices s path → s {
             // whole, through its twin's drop: its type is parked by its
             // drop name in the word, which has no blanks.)
             : b __tfopt & != 0 ( nurl_str_starts at `{ i1, ` ) != 0 ( nurl_str_len ( __wrap_twin at ) )
-            ? & & != 0 ( nurl_str_len __tlb_one ) | ( __is_handle_ty at ) __tfopt ! ( __ty_holds_view __crt 0 ) {
+            // (…and a value with a `% Drop` of its own, which cannot be
+            // copied: `@ f Conn p b c → Conn { ? c { ^ p } {} ^ ( mk ) }`
+            // handed `( mk )` leaked it on the runs f made a new one, agora
+            // #739.)
+            ? & & != 0 ( nurl_str_len __tlb_one ) | | ( __is_handle_ty at ) __tfopt ( __nc_drop_ty at ) ! ( __ty_holds_view __crt 0 ) {
                 : s __tfr ( nurl_cg_reg cg )
                 ? __tfopt { ( gen_drop_for_type at syms ) } { ( __handle_drop_ensure at ) }
                 ( __dropifv_request at )
@@ -35173,7 +35290,11 @@ unsafe @ __rpg_rget i r i k → i { ^ ( nurl_peek # s g_rpg_rec + * r 6 k ) }
         // (A view the call hands back owns nothing, whatever its result is
         // marked: it is derived through the callee's summary.)
         : b fresh | | | ( seq __rb_own `str` ) & ( seq __rb_own `1` ) != ( bck_bind_class vt ) 2 & __rb_num ! ( bck_raw_call cbase ) __rb_clo_own
-        : b summarised & & ! __rb_clo != 0 ( nurl_str_len cn ) | | != 0 ( nurl_sym_len2 g_root_syms cn `__nurlfn` ) != 0 ( nurl_sym_len2 g_root_syms cbase `__nurlfn` ) != 0 ( nurl_sym_len2 g_root_syms cbase `__garity` )
+        // (A `dyn` method call's virtual callee, `m__dyn__T`, is a NURL
+        // function of the call site's scope only — its summaries, the union
+        // of every impl's, are joined at module end (__dyn_virtual_round):
+        // what it lends is that union's, as at a direct call. Agora #699.)
+        : b summarised & & ! __rb_clo != 0 ( nurl_str_len cn ) | | | != 0 ( nurl_sym_len2 g_root_syms cn `__nurlfn` ) != 0 ( nurl_sym_len2 g_root_syms cbase `__nurlfn` ) != 0 ( nurl_sym_len2 g_root_syms cbase `__garity` ) != 0 ( nurl_sym_len2 g_pending_impl `dynvm##` cn )
         ? fresh {} { ? summarised {
                 // `0=a,b;1=c;…`: what each argument read.
                 : ~ s ar ( nurl_sym_get syms `__last_call_argreads__` )
@@ -45512,19 +45633,36 @@ unsafe @ __lend_unnamed s ws → b {
     ^ out
 }
 
+// The container `name`'s `~` loop iterates, where `name` is still that
+// loop's element: a binding that reuses the name inside the loop — a `??`
+// arm's `T x`, a `: … x` — is newer than the loop's note and has sources of
+// its own (taken for the element, clearing a fresh option's payload in the
+// loop body was summarised as dropping the container's elements). A
+// closure's capture of the element is the element.
+@ __econt_of i syms s name → s {
+    : s ec ( nurl_sym_get2 syms name `__econt` )
+    ? == 0 ( nurl_str_len ec ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s ek ( nurl_str_cat name `__econt` )
+    : s pk ( nurl_str_cat name `__ptr` )
+    ? & & != 0 ( nurl_sym_len syms pk ) < ( nurl_sym_depth_of syms ek ) ( nurl_sym_depth_of syms pk ) ! ( __is_clo_capture syms name ) { ^ ( nurl_str_cat `` `` ) } {}
+    ^ ( nurl_str_cat ec `` )
+}
+
 // The parameters binding `root` (no parameter) of the function compiling
 // now was read out of — through the handles it was read out of (g_pderiv),
-// a `??` payload's binding (`__plend` / `__plroot`), eight hops at most:
-// each `p`, or `p#c` where a source expression's lend leads there
-// (g_cedges' `#pdc:<ptr>`; agora #461).
+// a `??` payload's binding (`__plend` / `__plroot`): each `p`, or `p#c`
+// where a source expression's lend leads there (g_cedges' `#pdc:<ptr>`;
+// agora #461). (Every source once, a visited set: the walk stopped after
+// eight of them and answered "read out of no parameter" — a ninth hop's
+// change was in no drop summary, agora #735.)
 @ __pderiv_reach i syms s root → s {
     : ~ s srcs ( __pderiv_params syms root )
     = srcs ( __word_union srcs ( nurl_sym_get2 syms root `__plend` ) )
     = srcs ( __word_union srcs ( nurl_sym_get2 syms root `__plroot` ) )
+    = srcs ( __word_union srcs ( __econt_of syms root ) )
     : ~ s out ( __pderiv_cparams syms root )
     : ~ s seen ( nurl_str_cat root `` )
-    : ~ i hops 0
-    ~ & != 0 ( nurl_str_len srcs ) < hops 8 {
+    ~ != 0 ( nurl_str_len srcs ) {
         : s w ( str_first_word srcs ) = srcs ( str_skip_word srcs )
         : s r ( __path_root_name w )
         ? ! ( str_contains_word seen r ) {
@@ -45534,10 +45672,10 @@ unsafe @ __lend_unnamed s ws → b {
                 = srcs ( __word_union srcs ( __pderiv_params syms r ) )
                 = srcs ( __word_union srcs ( nurl_sym_get2 syms r `__plend` ) )
                 = srcs ( __word_union srcs ( nurl_sym_get2 syms r `__plroot` ) )
+                = srcs ( __word_union srcs ( __econt_of syms r ) )
                 = out ( __word_union out ( __pderiv_cparams syms r ) )
             }
         } {}
-        = hops + hops 1
     }
     ^ out
 }
@@ -45868,7 +46006,12 @@ unsafe @ __pderiv_note i syms s name s vt i rhs_tt s rhs_val s lend s sx → v {
     // own as much as in any other; agora #424.)
     : b inclo & != 0 g_bck_closure_depth != 0 ( nurl_str_len g_clo_cur )
     ? | == 0 g_srcx_on & == 0 ( nurl_str_len g_cur_params ) ! inclo { ^ v } {}
-    ? ! ( seq at `%String` ) {
+    // (…or an Rc, whose payload a library replacer or dropper handed it —
+    // `rc_set` — releases under every other handle: what a callee does so
+    // through a `??` payload or a loop element of its parameter, the same-Rc
+    // rule asks of its drop summary, agora #734, #735.)
+    : b __dnv_rc != 0 ( nurl_str_starts at `%Rc__` )
+    ? & ! __dnv_rc ! ( seq at `%String` ) {
         ? == 0 ( nurl_str_starts at `%Vec__` ) { ^ v } {}
         ? ! ( __elem_owns ( __vec_elem_llvm at ) syms ) { ^ v } {}
     } {}
@@ -53403,7 +53546,13 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // or the callees' module-end answers where their summaries are not
         // final yet — folded away by LLVM where they lend nothing.)
         : b __ud_kgo & & != 0 ( nurl_str_len __ud_ptr ) ! ( seq ( nurl_sym_get2 syms __ud_ptr `__sborrow` ) `1` ) ( __ud_keyable vt )
-        : s __ud_kcond ? ! __ud_kgo `` ? == bck_rhs_tt TT_LPAREN ? & g_call_may_lend ! __ud_may_self ( mem_ud_lend_own_cond syms cg vt ) `` ? & ( is_ident_tok bck_rhs_tt ) ! ( seq bck_rhs_val name ) ( mem_ud_hold_lend_cond syms cg bck_rhs_val vt ) ``
+        // (…or one whose lends still wait on a module-end note — a lend it
+        // forwards from a callee compiled after it, `^ ( f0 p )` with f0
+        // below (__lend_pending): until then its summary reads as lending
+        // nothing, and `= o ( f1 o )` dropped o's value though the call
+        // handed it back — agora #742. The module-end answers decide.)
+        : b __ud_clend | g_call_may_lend ( __lend_pending ( nurl_sym_get syms `__last_call_name__` ) )
+        : s __ud_kcond ? ! __ud_kgo `` ? == bck_rhs_tt TT_LPAREN ? & __ud_clend ! __ud_may_self ( mem_ud_lend_own_cond syms cg vt ) `` ? & ( is_ident_tok bck_rhs_tt ) ! ( seq bck_rhs_val name ) ( mem_ud_hold_lend_cond syms cg bck_rhs_val vt ) ``
         // (Only an owner that may own its value: one bound as a borrow
         // outright (`__sborrow` `1`, a `: ~` lend out of a `vec_get`) owns
         // nothing to keep, and its flag, never set, gates no drop — setting
@@ -66054,6 +66203,29 @@ unsafe @ __rpg_summarise i f i rlo i rhi b trace → b {
 // back more than it did. Then the raw writes and frees become mutation /
 // reallocation summaries and the argument edges join the mutation edges
 // (resolve_mutation_summaries).
+// A `dyn` method's virtual callee `v` (an id of the records) answers as any
+// of its impls may: what it lends, hands back a pointer into, or lets
+// escape is the union of theirs — rows 2, 4, 5, 6, 12 and 14 — as far as
+// their records have it now. Answers whether a row grew (Agora #699).
+unsafe @ __rpg_dyn_refresh i v → b {
+    : ~ s fns ( __dyn_impl_fns ( __rpg_fname v ) )
+    : ~ b grew F
+    ~ != 0 ( nurl_str_len fns ) {
+        : s fn ( str_first_word fns ) = fns ( str_skip_word fns )
+        : i c ( nurl_sym_int g_rpg_fid fn )
+        ? >= c 0 {
+            : ~ s rows `2 4 5 6 12 14`
+            ~ != 0 ( nurl_str_len rows ) {
+                : i k ( nurl_str_to_int ( str_first_word rows ) ) = rows ( str_skip_word rows )
+                : i was ( __rpg_fget v k )
+                : i now | was ( __rpg_fget c k )
+                ? != now was { ( __rpg_fset v k now ) = grew T } {}
+            }
+        } {}
+    }
+    ^ grew
+}
+
 unsafe @ resolve_raw_provenance → v {
     ( __rpg_retfwd_records )
     ? == g_rpg_nfn 0 { ^ v } {}
@@ -66087,6 +66259,31 @@ unsafe @ resolve_raw_provenance → v {
         } {}
         = rq + rq 1
     }
+    // A `dyn` method call's virtual callee (`m__dyn__T`, __dyn_virtual_note)
+    // has no body here, and resolve_pending_impls joins its impls'
+    // summaries into it only after this: what it lends is theirs (Agora
+    // #699), its rows their union (__rpg_dyn_refresh), kept up to date below
+    // as theirs grow. `dvm`: an impl → the virtuals (ids) it is one of.
+    : Tab dvm_tab @ Tab { ( nurl_sym_new ) }
+    : i dvm . dvm_tab h
+    ? != g_rpg_fid 0 {
+        : ~ s dvrest ( nurl_sym_get g_pending_impl `dynvirt` )
+        ~ != 0 ( nurl_str_len dvrest ) {
+            : s vn ( str_first_word dvrest ) = dvrest ( str_skip_word dvrest )
+            : i vi ( nurl_sym_int g_rpg_fid vn )
+            ? >= vi 0 {
+                : ~ s fns ( __dyn_impl_fns vn )
+                ~ != 0 ( nurl_str_len fns ) {
+                    : s fn ( str_first_word fns ) = fns ( str_skip_word fns )
+                    ( nurl_sym_append_word dvm fn ( nurl_str_int vi ) )
+                    // (…and what each lends by the summaries it has, as an
+                    // asked callee's row 2 is seeded above.)
+                    ( __rpg_fset vi 2 | ( __rpg_fget vi 2 ) ( __rpg_mask vi ( mem_fn_lend_sources fn ) ) )
+                }
+                ( __rpg_dyn_refresh vi )
+            } {}
+        }
+    } {}
     // Each function's records, in order (a counting sort by function):
     // row 11 is where its run starts in g_rpg_list.
     : Buf cnt_own @ Buf { # i ( nurl_zalloc * + g_rpg_nfn 1 8 ) }
@@ -66175,6 +66372,25 @@ unsafe @ resolve_raw_provenance → v {
                     ( __rpg_fset h 9 1 )
                 } {}
                 = ci + ci 1
+            }
+            // …and the callers of each virtual g is an impl of, where the
+            // union grew (Agora #699).
+            : ~ s dvs ( nurl_sym_get dvm ( __rpg_fname g ) )
+            ~ != 0 ( nurl_str_len dvs ) {
+                : i v ( nurl_str_to_int ( str_first_word dvs ) ) = dvs ( str_skip_word dvs )
+                ? ( __rpg_dyn_refresh v ) {
+                    : ~ i vci ( nurl_peek ccnt v )
+                    : i vce ( nurl_peek ccnt + v 1 )
+                    ~ < vci vce {
+                        : i vh ( nurl_peek callers vci )
+                        ? == 0 ( __rpg_fget vh 9 ) {
+                            ( nurl_poke queue % qn qcap vh )
+                            = qn + qn 1
+                            ( __rpg_fset vh 9 1 )
+                        } {}
+                        = vci + vci 1
+                    }
+                } {}
             }
         } {}
     }
@@ -73681,15 +73897,6 @@ unsafe @ __hmemo_close s key i mark b r → v {
 : ~ i g_drc_memo 0
 // …and __holds_user_drop's, the same way.
 : ~ i g_hud_memo 0
-// __holds_user_drop's answers across questions, `<generation>:<0|1>` per
-// type: a `% Drop` impl registered later, or a layout registered again by
-// its declaration (a refused enum's variants: g_drop_gen), makes them
-// stale — as it does __type_needs_drop's.
-: ~ i g_hud_pmemo 0
-: ~ i g_drop_gen 0
-// 1 once every named layout is read (read_type_layouts): an answer about a
-// type's fields may be kept from then on (__type_needs_drop).
-: ~ i g_layouts_final 0
 // A visited set per question without a table per question: each walk takes
 // a fresh stamp (__seen_begin), and a key is in its set when g_seen_tab
 // holds that stamp for it. Keys carry the walk's own prefix, so a walk run
@@ -87190,6 +87397,26 @@ unsafe @ priv_resolve i lex i syms s fname → s {
         ( expect lex TT_RBRACE )
         ( nurl_lex_free lex )
     }
+    // An enum the declaration pass gives a compiler drop (emit_auto_drop: a
+    // variant whose payload owns something) is one from here on — every
+    // layout is read. Known only when gen_enum_decl reached it, a struct
+    // holding `?E` compiled above E's declaration was kept as owning
+    // nothing, and a value of it below leaked its payload (agora #744).
+    ? != 0 g_auto_drop_strings {
+        : ~ s er ( nurl_sym_get g_type_layouts `names` )
+        ~ != 0 ( nurl_str_len er ) {
+            : s en ( str_first_word er ) = er ( str_skip_word er )
+            ? & ( seq ( nurl_sym_get2 g_type_layouts en `__kind` ) `enum` ) == 0 ( nurl_sym_len g_impl_name_syms ( nurl_str_cat `drop##%` en ) ) {
+                : ~ s vs ( nurl_sym_get2 syms en `__variants` )
+                : ~ b box F
+                ~ & ! box != 0 ( nurl_str_len vs ) {
+                    : s vn ( str_first_word vs ) = vs ( str_skip_word vs )
+                    ? ( __drop_variant_has_box vn syms ) { = box T } {}
+                }
+                ? box { ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `autodrop##%` en ) `1` ) } {}
+            } {}
+        }
+    } {}
 }
 
 // scan_type_names: linear pre-pass that registers every top-level type
