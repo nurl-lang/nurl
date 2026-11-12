@@ -861,11 +861,13 @@ theorem Anchored.mono {E : Entry} {F F' : List Var} (h : Anchored E F) (hF : ∀
 
 
 /-- A2-drop.3d, Agora #610: what the invariant asks of a block's destructor
-    values.  A lock block's and a view's payload owns none (a check-out
-    binding is no `letd`'s).  An `arc` block's may be a destructor value at
+    values.  A view's payload owns none; a lock block's owns none or
+    (Agora #755, `Locked D`) is a destructor value at its top that holds no
+    share (`Ty.lkPay`: the check-out binding is given no other value,
+    `StmtT.withLock`'s `hna`, and gives it back).  An `arc` block's may be a destructor value at
     its top (`Ty.ok`'s `arc` case, `RhsT.arcNew`), and a `dead` block's (an
     orphan whose payload awaits its destructor, which the sweep marks from
-    such an `arc` block, `Mem.sweepD`) is one.  A block of a type that owns
+    such an `arc` block or such a lock block, `Mem.sweepD`) is one.  A block of a type that owns
     one is of a destructor type that holds no closure, or (Agora #755) a
     drained `Vec` of such values at any depth: what a destructor frame's
     binding may be (`StmtT.scopeD`, `ScopeDTy`), so `Step.reap` can hand its
@@ -922,8 +924,9 @@ structure MInv (m : Mem) (Γ : Ctx) : Prop where
   blocks    : ∀ k bl, m.blk k = some bl → bl.ty.ok = true ∧ bl.ty.holdsView = false ∧
                 (∀ p, bl.pay = some p → WFv bl.ty p ∧ SharesOK m bl.ty p) ∧
                 (bl.kind = .lock ∨ bl.ty.hasCell = false) ∧
-                -- A2-drop.3d, Agora #610: a lock's or a view's payload owns
-                -- no destructor value; an `arc` block's may be one at its
+                -- A2-drop.3d, Agora #610: a view's payload owns no
+                -- destructor value, a lock's none or (Agora #755) one at its
+                -- top holding no share; an `arc` block's may be one at its
                 -- top or (Agora #755) a drained `Vec` of them, and a `dead`
                 -- block's is (`Blk.DtorOK`)
                 bl.DtorOK
@@ -1718,8 +1721,9 @@ def CodeOK (P : Prog) (fs : List Nat) (te : Ty) (ms : List Nat) (cs : List (Var 
     or a glue (`DropFnOK`).  The sweep marks such an `arc` block `dead`
     (`Mem.sweepD`), and `Step.reap` hands a `dead` block's payload to a frame
     that runs it.  `arc_new` of such a value asks it of its type
-    (`Rhs.codeOK`).  (A lock's and a view's payload owns no destructor
-    value, `Blk.DtorOK`.) -/
+    (`Rhs.codeOK`), and (Agora #755) so do `locked_new` and a cell's
+    constructor of one.  The check is asked of every block of such a type,
+    whatever its kind (a view's payload owns none, `Blk.DtorOK`). -/
 def DeadCodes (P : Prog) (B : Nat → Option Blk) : Prop :=
   ∀ k n f u kd o, B k = some ⟨Ty.nest n (.dtor f u), kd, o⟩ → DropFnOK P f u
 

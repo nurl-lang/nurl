@@ -937,7 +937,8 @@ inductive BKind where
       the thread that takes the step, and leaves the block empty.  Only
       the marking sweep makes a block `dead` (`Mem.sweepD`: an unreached
       `arc` block whose payload is a destructor value or a drained `Vec` of
-      them), and the thread whose
+      them, or, Agora #755, an unreached lock block whose payload, a
+      destructor value, is in it), and the thread whose
       step it ended reaps it next (`Settle`). -/
   | dead
 deriving DecidableEq, Repr
@@ -1025,8 +1026,9 @@ inductive Stmt where
                                                           -- is checked out to `x` for `body`
   | scopeL (k : Nat) (t : Ty) (x : Var) (body : Stmt)     -- run time: `x` holds lock block `k`'s
                                                           -- payload (a `t`); it goes back at
-                                                          -- the end (a panic drops it, and the
-                                                          -- lock stays checked out)
+                                                          -- the end, and on a panic's unwinding
+                                                          -- (`Step.scopeLP`: dropped only if it
+                                                          -- cannot go back)
   | insert (x : Var) (i : Expr) (y : Var)                 -- A2-elem (#391): `y`'s value moves into
                                                           -- `x` at index `i` (at its end if `x` is
                                                           -- shorter): an element handed over goes

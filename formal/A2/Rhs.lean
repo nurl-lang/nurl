@@ -197,9 +197,10 @@ theorem SlotOK.grow {m m' : Mem} (hst : m'.st = m.st) (hb : BlkLe m.blk m'.blk) 
 def BlocksIn (m : Mem) : Prop :=
   ∀ k bl, m.blk k = some bl → bl.ty.ok = true ∧ bl.ty.holdsView = false ∧
     (∀ p, bl.pay = some p → WFv bl.ty p ∧ SharesOK m bl.ty p) ∧ (bl.kind = .lock ∨ bl.ty.hasCell = false) ∧
-    -- A2-drop.3d, Agora #610: a lock's or a view's payload owns no destructor
-    -- value; an `arc` block's may be one at its top, or (Agora #755) a
-    -- drained `Vec` of them (`Blk.DtorOK`)
+    -- A2-drop.3d, Agora #610: a view's payload owns no destructor value, a
+    -- lock's none or (Agora #755) one at its top holding no share; an `arc`
+    -- block's may be one at its top, or (Agora #755) a drained `Vec` of them
+    -- (`Blk.DtorOK`)
     bl.DtorOK
 
 /-- A block that is not `dead`, of a type that owns no destructor value:

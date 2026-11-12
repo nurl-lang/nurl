@@ -207,7 +207,9 @@ noncomputable def Mem.sweep (m : Mem) : Mem :=
 
 An `arc` block whose payload is a destructor value (`Ty.ok`'s `arc` case),
 or (Agora #755) a drained `Vec` of them at any depth (`Ty.nest n (.dtor f u)`),
-is not freed by the sweep that finds it unreached: it is marked `dead` and
+or (Agora #755, `Locked D`) a lock block whose payload, a destructor value
+holding no share (`Ty.lkPay`), is in it (a cell's state too: a cell's block
+is a lock block), is not freed by the sweep that finds it unreached: it is marked `dead` and
 its payload stays, for the thread whose step left it unreached to hand to a
 destructor frame (`Step.reap`, `Settle`).  Only a *top* orphan is marked:
 one that no other orphan's payload reaches.  An inner one stays reached,
@@ -1493,7 +1495,9 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
       `Ty.nest n (.dtor f u)`, is bound at its own type, and the frame's end
       drains it, each element's destructor in index order,
       `Step.scopeDDrain`, as nurlc's drop of an `Arc<Vec<D>>`'s last share
-      drops the `Vec`'s elements.)  The block stays,
+      drops the `Vec`'s elements.  And a lock block's, `Locked D`: its
+      payload, a destructor value, as nurlc's last `Locked_drop` drops the
+      value.)  The block stays,
       empty, for the sweep to remove.  The rule's own position is any source
       statement, so it fires under every frame through the congruence rules
       (`seqL`, `scopeIn`, …), wherever the thread's next step would.  Only
