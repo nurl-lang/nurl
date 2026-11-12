@@ -48584,6 +48584,20 @@ unsafe @ __bck_body_defers s st i p i line → s {
                         : s lid ( nurl_str_int ( bck_intern ln ) )
                         = lsrc ? == 0 ( nurl_str_len lsrc ) lid ( nurl_str_cat3 lsrc ` ` lid )
                     }
+                    // (…and, out of a call, what that call lends from: the
+                    // match row's source expression, as `&` reads it below.
+                    // The names are the bindings the scrutinee reads, and a
+                    // field of a call's result is none — `?? ( vec_get [R]
+                    // . ( arc_get [App] mine ) rs 0 )` lent its payload out
+                    // of nothing, so no view of the Arc's payload, where R
+                    // cannot be copied; agora #763.)
+                    ? != 0 ( nurl_str_len mcal ) {
+                        : s msx ( bck_field ( bck_rec mi ) 8 )
+                        ? != 0 ( nurl_str_len msx ) {
+                            : s msr ( bck_sx_sources state msx -1 )
+                            ? ! ( seq msr `*` ) { = lsrc ( __word_union lsrc ( __src_plain msr ) ) } {}
+                        } {}
+                    } {}
                     ? isview { = lsrc ( __vpay_srcs state lsrc ) } {}
                 } {}
                 // `&`: decided now, every summary final. Out of a call
