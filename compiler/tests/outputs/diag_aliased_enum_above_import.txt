@@ -1,7 +1,0 @@
-COMPILE FAIL
-ERRORS
-compiler/tests/diag_aliased_enum_above_import.nu:6:7: error: type 'm::Shade' is used by value as a binding type here but is declared LATER in the program: the import that declares it comes below this use. An enum value needs the enum's declaration before this point: what releases the payloads it may hold is decided where the enum is declared (a pointer to it is fine, and a struct may be used above its declaration). Move the import above this use.
-    : m::Shade s m::Light
-      ^
-error: aborting due to 1 previous error
-note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

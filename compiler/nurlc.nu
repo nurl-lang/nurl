@@ -73437,19 +73437,20 @@ unsafe @ __check_value_type_defined i lex i syms s llvm_ty s ctx i tline i tcol 
             { : s sv ( nurl_sym_get syms name )
                 ? & & & != 0 ( nurl_str_len sv ) == ( nurl_str_get sv 0 ) 37
                 == 0 ( nurl_sym_len g_fn_pos_syms ( nurl_str_cat `ty##` name ) )
-                // (A struct's layout — fields, their names and types — is read
-                // before any body compiles, read_type_layouts: its values work
-                // above its declaration, agora #772. An enum's drop is still
-                // decided where it is declared, #752: it keeps the rule.)
-                ! ( seq ( nurl_sym_get2 g_type_layouts name `__kind` ) `struct` )
+                // (A struct's or an enum's layout — fields and their names,
+                // variants and their payloads, the compiler drop it needs — is
+                // read before any body compiles, read_type_layouts: its values
+                // work above its declaration, agora #772, #752. What is left is
+                // a type no layout was read for.)
+                == 0 ( nurl_sym_len2 g_type_layouts name `__body` )
                 { ? == 0 ( nurl_str_len __vt_user ) {
                         ( die_pos lex tline tcol ( nurl_str_cat
                         ( nurl_str_cat4 `type '` name `' is used by value as ` ctx )
-                        ( nurl_str_cat3 ` here but is declared LATER in the program. An enum value needs the enum's declaration before this point: what releases the payloads it may hold is decided where the enum is declared (a pointer to it is fine, and a struct may be used above its declaration). Move ': | ` name ` { … }' above this use, or import the file that declares it before this one.` ) ) )
+                        ( nurl_str_cat3 ` here but is declared LATER in the program, and its layout is not known before its declaration (a pointer to it is fine). Move the declaration of '` name `' above this use, or import the file that declares it before this one.` ) ) )
                     } {
                         ( die_pos lex tline tcol ( nurl_str_cat
                         ( nurl_str_cat4 `type '` __vt_user `' is used by value as ` ctx )
-                        ` here but is declared LATER in the program: the import that declares it comes below this use. An enum value needs the enum's declaration before this point: what releases the payloads it may hold is decided where the enum is declared (a pointer to it is fine, and a struct may be used above its declaration). Move the import above this use.` ) )
+                        ` here but is declared LATER in the program: the import that declares it comes below this use, and its layout is not known before it (a pointer to it is fine). Move the import above this use.` ) )
                     }
                 }
                 {} }
@@ -89166,6 +89167,15 @@ unsafe @ priv_resolve i lex i syms s fname → s {
                 : s variant ( nurl_lex_val lex )
                 ( nurl_lex_advance lex )
                 = variants ( nurl_str_cat3 variants variant ` ` )
+                // A variant is a file-scope constant, its global `@X` emitted
+                // where gen_enum_decl reaches the enum: known by name from
+                // here, a function above the declaration builds and tests
+                // one as it reads a struct's field (agora #772).
+                ? == 0 ( nurl_sym_len2 syms variant `__enum_of` ) {
+                    ( nurl_sym_def syms variant `i64` )
+                    ( nurl_sym_def syms ( nurl_str_cat variant `__global` ) `1` )
+                    ( nurl_sym_def syms ( nurl_str_cat variant `__enum_of` ) name )
+                } {}
 
                 : ~ i count 0
                 ~ & != ( nurl_lex_type lex ) TT_RBRACE ( could_be_payload_type lex syms ) {

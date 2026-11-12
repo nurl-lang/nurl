@@ -1391,14 +1391,13 @@ A struct is `:` `Name` `{` field* `}`; a field is `type IDENT?` (the
 name is optional when only the type matters). Fields are accessed via
 `. obj field` (§6.6).
 
-A struct may be used anywhere in the program — by value as a binding, a
-parameter, a return or a field, read field by field — above its
-declaration and above the import that declares it: every struct's layout
-is read before any function body is compiled. (Its visibility is too: a
-private struct of another file is refused there as below its import.) An
-enum value still needs the enum's declaration before its first use by
-value ("declared LATER"), because what releases the payloads it holds is
-decided where the enum is declared.
+A struct or an enum may be used anywhere in the program — by value as a
+binding, a parameter, a return or a field, read field by field, made from
+a variant and matched — above its declaration and above the import that
+declares it: every struct's and enum's layout (field names and types,
+variants and payloads, the drop it needs) is read before any function
+body is compiled. Its visibility is too: a private struct of another file
+is refused there as below its import.
 
 An enum is `:` `|` `Name` `{` variant* `}`; a variant is
 `IDENT type*` — the variant name followed by zero or more payload types.
