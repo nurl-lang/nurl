@@ -4,6 +4,7 @@ import A3.Lift
 import A3.SpawnOld
 import A3.SpawnNew
 import A2.ArcDtorWitness
+import A2.ArcPanicWitness
 
 /-! A3.0 — the claim. -/
 
@@ -63,5 +64,27 @@ theorem arcVecDtor_claim :
   obtain ⟨Δ, ht⟩ := A2.ArcDtorWitness.mainV_typed
   exact claim _ _ Globs.empty _ Δ 6 A2.DtorWitness.prog_ok A2.DtorWitness.prog_codes
     (fun _ h => by cases h) GlobsOK.empty ht rfl A2.ArcDtorWitness.mainV_codes (by decide)
+
+/-- Agora #790, the witnesses (`A2.ArcPanicWitness`): an `Arc` of a destructor
+    value whose destructor panics, its last share dropped by a panic's
+    unwinding, caught by a destructor frame (`main1`) or by a `recover`
+    (`main2`), on one thread.  The claim covers both: safe, race-free and
+    leak-free on every interleaving.  (As for `arcDtor_claim`, A3's
+    configuration sweep does not mark orphans yet: there the last share's
+    drop frees the payload with no code; A2's `Steps` reaps it inside the
+    catching frame, `A2.ArcPanicWitness.main1_unwind`, `main2_unwind`.) -/
+theorem arcPanic_claim :
+    (MemorySafe A2.ArcPanicWitness.P (fun _ => false) (Cfg.start Globs.empty A2.ArcPanicWitness.main1 7) ∧
+      RaceFree A2.ArcPanicWitness.P (fun _ => false) (Cfg.start Globs.empty A2.ArcPanicWitness.main1 7) ∧
+      NoLeak A2.ArcPanicWitness.P (fun _ => false) (Cfg.start Globs.empty A2.ArcPanicWitness.main1 7)) ∧
+    (MemorySafe A2.ArcPanicWitness.P (fun _ => false) (Cfg.start Globs.empty A2.ArcPanicWitness.main2 1) ∧
+      RaceFree A2.ArcPanicWitness.P (fun _ => false) (Cfg.start Globs.empty A2.ArcPanicWitness.main2 1) ∧
+      NoLeak A2.ArcPanicWitness.P (fun _ => false) (Cfg.start Globs.empty A2.ArcPanicWitness.main2 1)) := by
+  obtain ⟨Δ1, ht1⟩ := A2.ArcPanicWitness.main1_typed
+  obtain ⟨Δ2, ht2⟩ := A2.ArcPanicWitness.main2_typed
+  exact ⟨claim _ _ Globs.empty _ Δ1 7 A2.ArcPanicWitness.prog_ok A2.ArcPanicWitness.prog_codes
+      (fun _ h => by cases h) GlobsOK.empty ht1 rfl A2.ArcPanicWitness.main1_codes (by decide),
+    claim _ _ Globs.empty _ Δ2 1 A2.ArcPanicWitness.prog_ok A2.ArcPanicWitness.prog_codes
+      (fun _ h => by cases h) GlobsOK.empty ht2 rfl A2.ArcPanicWitness.main2_codes (by decide)⟩
 
 end A3
