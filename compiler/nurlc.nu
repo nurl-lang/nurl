@@ -75635,6 +75635,15 @@ unsafe @ __type_needs_drop s ty i syms → b {
     } {}
     : s vlist ( nurl_sym_get2 syms sname `__variants` )
     : s fcs ( nurl_sym_get2 syms sname `__field_count` )
+    // (A type asked again while its own fields are asked holds itself by
+    // value — refused as having no finite size (__byval_cycle_check); a
+    // Vec, an option or a pointer between answers before recursing. "No"
+    // while it is in progress: the walk went round the cycle until the
+    // stack ran out, and nurlc crashed after the diagnostic, or before it
+    // for a parameter of the type compiled above its declaration.)
+    : s wkey ( nurl_str_cat `tndwip##` ty )
+    ? != 0 ( nurl_sym_len g_impl_name_syms wkey ) { ^ F } {}
+    ( nurl_sym_def g_impl_name_syms wkey `1` )
     : ~ b r F
     ? != 0 ( nurl_str_len vlist ) { = r ( __enum_needs_drop vlist syms ) } {
         : i fc ? != 0 ( nurl_str_len fcs ) ( nurl_str_to_int fcs ) 0
@@ -75649,6 +75658,7 @@ unsafe @ __type_needs_drop s ty i syms → b {
             = i + i 1
         }
     }
+    ( nurl_sym_def g_impl_name_syms wkey `` )
     ? & != 0 g_layouts_final | != 0 ( nurl_str_len vlist ) != 0 ( nurl_str_len fcs ) { ( nurl_sym_set g_impl_name_syms mkey ( nurl_str_cat gen ? r `1` `0` ) ) } {}
     ^ r
 }
@@ -89405,8 +89415,12 @@ unsafe @ priv_resolve i lex i syms s fname → s {
                         }
                         {  // (`pub` and the prefixes that may follow it.)
                             : i ptt ( nurl_lex_type lex )
+                            // (Asked only while a `pub` waits for its declaration:
+                            // a word's text is copied to be compared.)
                             ? == ptt TT_PUB { = decl_pub T } {
-                                ? ! | | | == ptt TT_SIMD == ptt TT_INLINE == ptt TT_UNSAFE ( __raw_prefix_tok lex ) { = decl_pub F } {}
+                                ? decl_pub {
+                                    ? ! | | | == ptt TT_SIMD == ptt TT_INLINE == ptt TT_UNSAFE & == ptt TT_IDENT ( __raw_prefix_tok lex ) { = decl_pub F } {}
+                                } {}
                             }
                             ( nurl_lex_advance lex ) }
                     }
