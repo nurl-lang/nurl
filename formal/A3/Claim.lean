@@ -72,10 +72,11 @@ theorem arcVecDtor_claim :
     a `recover` (`main2`), or by a destructor frame inside a `recover`
     (`main3`), on one thread.  The claim covers all three: safe, race-free
     and leak-free on every interleaving.  (As for `arcDtor_claim`, the thread
-    whose unwinding step dropped the last share reaps the orphan before its
-    next step, with the same `Step.reap` at its redex, inside the catching
-    frame, A2's `Settle` on the configuration (`CSettle`); on A2's `Steps`,
-    `A2.ArcPanicWitness.main1_unwind`, `main2_unwind`, `main3_unwind`.) -/
+    whose unwinding step dropped the last share reaps the orphan in that
+    configuration step, `A3.TStep.last_drop_reaps`; the reap is A2's
+    `Step.reap`, whose only redex inside the catching frame is the frame's
+    end, as `A2.ArcPanicWitness.main1_unwind`, `main2_unwind` and
+    `main3_unwind` show of A2's `Steps`; no A3 theorem traces these runs.) -/
 theorem arcPanic_claim :
     (MemorySafe A2.ArcPanicWitness.P (fun _ => false) (Cfg.start Globs.empty A2.ArcPanicWitness.main1 7) ∧
       RaceFree A2.ArcPanicWitness.P (fun _ => false) (Cfg.start Globs.empty A2.ArcPanicWitness.main1 7) ∧

@@ -11,16 +11,20 @@ same thread's reaps (`CSettle`), as A2's `Steps` ends a step with
 honest on every run the claim covers:
 
 - **no thread is held up by it** (`reach_thread_total`): in every
-  configuration a typed start reaches, every A2 step of a thread (but a
-  spawn's) is the start of a configuration step: the reaps after it can be
-  taken and end (`CSettle.total`);
+  configuration a typed start reaches, every A2 step of a thread to an
+  `.ok` result, at no spawn redex, is the start of a configuration step: the
+  reaps after it can be taken and end (`CSettle.total`).  (As before the
+  reaps, a top-level step to `.panic` is no configuration step, and no
+  lemma here shows a spawn redex always has `TStep.spawn` or `spawnFail`);
 - **the destructor runs on the thread that drops the last share**
   (`TStep.last_drop_reaps`, and its instances at the three witnesses of a
   share of a destructor value: `arcDtor_reaps`, `arcVecDtor_reaps`,
   `lockDtor_reaps`): when thread `i`'s step leaves such a block that no
   thread's slot, no global and no payload refers to, the marking sweep marks
-  it, and a step of thread `i`, before any other thread's, moves its payload
-  to a fresh slot of thread `i`, in a destructor frame (`Step.reap`). -/
+  it, and in the result of that configuration step (whose reaps are all
+  thread `i`'s, before any other thread runs) a fresh slot of thread `i`
+  owns its payload and the block is emptied or gone: a reap of thread `i`
+  bound it there, in a destructor frame (`Step.reap`). -/
 
 namespace A3
 open A2
@@ -29,11 +33,11 @@ open A2
 theorem restrictLemma (P : Prog) : RestrictLemma P :=
   fun h => fun hav hb hp hf => Step.restrict h hav hb hp hf
 
-/-- **Every A2 step of a thread is one of the configuration's**, in every
-    configuration a typed start reaches (a spawn's but its own rule's): the
-    eager reaping of `TStep.thread` holds up no thread, so `MemorySafe`'s
-    progress (an A2 step of every thread that is not finished or waiting) is
-    progress of the configuration. -/
+/-- **Every `.ok` A2 step of a thread, at no spawn redex, is the start of one
+    of the configuration's**, in every configuration a typed start reaches:
+    the eager reaping of `TStep.thread` holds up no such step.  (A top-level
+    step to `.panic` is no configuration step, as before the reaps; that a
+    spawn redex always has `TStep.spawn` or `spawnFail` is not proved here.) -/
 theorem reach_thread_total {P : Prog} {spawn : Nat → Bool} {G : Globs} {s : Stmt} {Δ : Ctx} {nv : Nat}
     (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn) (hG : GlobsOK P G)
     (ht : StmtT P (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P)
@@ -44,49 +48,48 @@ theorem reach_thread_total {P : Prog} {spawn : Nat → Bool} {G : Globs} {s : St
 
 /-- Agora #755 item 1, at `A3.arcDtor_claim`'s witness's program: **an `Arc`
     of a destructor value whose last share thread `i`'s step drops is reaped
-    by thread `i`**: the marking sweep marks its block, and a step of thread
-    `i` (before any other thread's) moves the payload to a fresh slot of its
-    own, in a frame `scopeD _ 0 skip` whose end calls the destructor `dfn`
-    (`A2.Dtor.scopeD_end_runs_dtor`). -/
-theorem arcDtor_reaps {C : Cfg} {i : Nat} {m' : Mem} {s' : Stmt} {C' : Cfg}
+    by thread `i` in that configuration step**: the marking sweep marks its
+    block, and in the step's result `C'` a fresh slot of thread `i` owns the
+    payload (a reap of thread `i`, before any other thread ran, bound it in a
+    frame `scopeD _ 0 skip` whose end calls the destructor `dfn`,
+    `A2.Dtor.scopeD_end_runs_dtor`) and the block is emptied or gone. -/
+theorem arcDtor_reaps {C : Cfg} {i : Nat} {m' : Mem} {s' : Stmt} {C' : Cfg} (hlen : i < C.ths.length)
     (hse : CSettle A2.DtorWitness.P i (C.put i m' s').sweepD C') {k : Nat} {p : Val}
     (hk : m'.blk k = some ⟨A2.DtorWitness.DT, .arc, some p⟩)
     (hv : ∀ v, (C.put i m' s').roots v → ¬ Refers m'.blk v k)
     (hb : ∀ k' bl', m'.blk k' = some bl' → ¬ Refers m'.blk bl'.keeps k) :
     (C.put i m' s').sweepD.blk k = some ⟨A2.DtorWitness.DT, .dead, some p⟩ ∧
-      ∃ (Y : Cfg) (t1 : Thread) (m1 : Mem) (s1 : Stmt), Y.ths[i]? = some t1 ∧
-        Step A2.DtorWitness.P (Y.view t1) t1.s (.ok m1 s1) ∧
-        m1.blk k = some ⟨A2.DtorWitness.DT, .dead, none⟩ ∧ m1.st t1.nv = some ⟨true, some p⟩ :=
-  TStep.last_drop_reaps (n := 0) (f := 0) (u := A2.DtorWitness.T) hse (Or.inl rfl) hk hv hb
+      ∃ (t' : Thread) (x : Var), C'.ths[i]? = some t' ∧ t'.st x = some ⟨true, some p⟩ ∧ m'.nv ≤ x ∧
+        Emptied C'.blk k (A2.DtorWitness.DT) :=
+  TStep.last_drop_reaps (n := 0) (f := 0) (u := A2.DtorWitness.T) hlen hse (Or.inl rfl) hk hv hb
 
 /-- ... and (`A3.arcVecDtor_claim`'s witness) an `Arc` of a `Vec` of them:
-    thread `i` reaps it, binding the `Vec` at its own type in a destructor
-    frame whose end drains it (`A2.ArcDtorWitness.reapV_drains`). -/
-theorem arcVecDtor_reaps {C : Cfg} {i : Nat} {m' : Mem} {s' : Stmt} {C' : Cfg}
+    thread `i` reaps it in that configuration step, binding the `Vec` at its
+    own type in a destructor frame whose end drains it
+    (`A2.ArcDtorWitness.reapV_drains`). -/
+theorem arcVecDtor_reaps {C : Cfg} {i : Nat} {m' : Mem} {s' : Stmt} {C' : Cfg} (hlen : i < C.ths.length)
     (hse : CSettle A2.DtorWitness.P i (C.put i m' s').sweepD C') {k : Nat} {p : Val}
     (hk : m'.blk k = some ⟨.vec A2.DtorWitness.DT, .arc, some p⟩)
     (hv : ∀ v, (C.put i m' s').roots v → ¬ Refers m'.blk v k)
     (hb : ∀ k' bl', m'.blk k' = some bl' → ¬ Refers m'.blk bl'.keeps k) :
     (C.put i m' s').sweepD.blk k = some ⟨.vec A2.DtorWitness.DT, .dead, some p⟩ ∧
-      ∃ (Y : Cfg) (t1 : Thread) (m1 : Mem) (s1 : Stmt), Y.ths[i]? = some t1 ∧
-        Step A2.DtorWitness.P (Y.view t1) t1.s (.ok m1 s1) ∧
-        m1.blk k = some ⟨.vec A2.DtorWitness.DT, .dead, none⟩ ∧ m1.st t1.nv = some ⟨true, some p⟩ :=
-  TStep.last_drop_reaps (n := 1) (f := 0) (u := A2.DtorWitness.T) hse (Or.inl rfl) hk hv hb
+      ∃ (t' : Thread) (x : Var), C'.ths[i]? = some t' ∧ t'.st x = some ⟨true, some p⟩ ∧ m'.nv ≤ x ∧
+        Emptied C'.blk k (.vec A2.DtorWitness.DT) :=
+  TStep.last_drop_reaps (n := 1) (f := 0) (u := A2.DtorWitness.T) hlen hse (Or.inl rfl) hk hv hb
 
 /-- ... and (`A3.lockDtor_claim`'s witness, `Locked D`) a lock of a destructor
     value whose last share thread `i`'s step drops, its payload in it: thread
-    `i` reaps it, as nurlc's last `Locked_drop` drops the value on the
-    thread that runs it. -/
-theorem lockDtor_reaps {C : Cfg} {i : Nat} {m' : Mem} {s' : Stmt} {C' : Cfg}
+    `i` reaps it in that configuration step, as nurlc's last `Locked_drop`
+    drops the value on the thread that runs it. -/
+theorem lockDtor_reaps {C : Cfg} {i : Nat} {m' : Mem} {s' : Stmt} {C' : Cfg} (hlen : i < C.ths.length)
     (hse : CSettle A3.LockDtorWitness.P i (C.put i m' s').sweepD C') {k : Nat} {p : Val}
     (hk : m'.blk k = some ⟨A2.DtorWitness.DT, .lock, some p⟩)
     (hv : ∀ v, (C.put i m' s').roots v → ¬ Refers m'.blk v k)
     (hb : ∀ k' bl', m'.blk k' = some bl' → ¬ Refers m'.blk bl'.keeps k) :
     (C.put i m' s').sweepD.blk k = some ⟨A2.DtorWitness.DT, .dead, some p⟩ ∧
-      ∃ (Y : Cfg) (t1 : Thread) (m1 : Mem) (s1 : Stmt), Y.ths[i]? = some t1 ∧
-        Step A3.LockDtorWitness.P (Y.view t1) t1.s (.ok m1 s1) ∧
-        m1.blk k = some ⟨A2.DtorWitness.DT, .dead, none⟩ ∧ m1.st t1.nv = some ⟨true, some p⟩ :=
-  TStep.last_drop_reaps (n := 0) (f := 0) (u := A2.DtorWitness.T) hse (Or.inr rfl) hk hv hb
+      ∃ (t' : Thread) (x : Var), C'.ths[i]? = some t' ∧ t'.st x = some ⟨true, some p⟩ ∧ m'.nv ≤ x ∧
+        Emptied C'.blk k (A2.DtorWitness.DT) :=
+  TStep.last_drop_reaps (n := 0) (f := 0) (u := A2.DtorWitness.T) hlen hse (Or.inr rfl) hk hv hb
 
 /-- **A global `Locked D` is never reaped**: the marking sweep roots the
     module globals, so a block a global's share names is kept as it was, at

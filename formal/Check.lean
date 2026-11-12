@@ -93,6 +93,7 @@ import A3
 #print axioms A3.CInv.raceFree
 #print axioms A3.CSettle.total
 #print axioms A3.TStep.thread_total
+#print axioms A3.CSettle.keeps_slot
 #print axioms A3.CSettle.reaps_block
 #print axioms A3.TStep.last_drop_reaps
 #print axioms A3.reach_thread_total

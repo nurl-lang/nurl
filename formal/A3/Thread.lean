@@ -196,13 +196,6 @@ theorem ThreadOK.no_leak {P : Prog} {m : Mem} (h : ThreadOK P m .skip) :
   · unfold OwnedAt at hT; rw [hst o] at hT; cases hT
   · exact hp
 
-/-- A3.1: a thread's facts survive a sweep whose roots include its slots
-    (the configuration's, from every thread's). -/
-theorem ThreadOK.sweepR {P : Prog} {m : Mem} {s : Stmt} (h : ThreadOK P m s) {R : Val → Prop}
-    (hR : ∀ v, m.vals v → R v) : ThreadOK P (m.sweepR R) s := by
-  obtain ⟨Γ, F, Δ, ht, hi, hcd, hsc, hc⟩ := h
-  exact ⟨Γ, F, Δ, ht, hi.sweepR hR, hcd.sweepR, hsc, hc⟩
-
 /-- Every address live on a thread's part is below `nid`. -/
 theorem ThreadOK.lt_nid {P : Prog} {m : Mem} {s : Stmt} (h : ThreadOK P m s) :
     ∀ i, m.alloc i = true → i < m.nid := by

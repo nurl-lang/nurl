@@ -867,15 +867,6 @@ theorem CellInv.start {P : Prog} {G : Globs} (hG : GlobsOK P G) (s : Stmt) (nv :
     fun i _ ti _ k hi _ hk _ => absurd hk (hnone i ti k hi), fun j t k _ hj hk => absurd hk (hnone j t k hj),
     fun k k1 k2 hk1 hk2 => (hG.cells k k1 k2 hk1 hk2).1⟩
 
-/-- The sweep only removes blocks. -/
-theorem LockHolds.of_sweep {R : Val → Prop} {B : Nat → Option Blk} {k' k : Nat}
-    (h : LockHolds (sweepBlk R B) k' k) : LockHolds B k' k := by
-  obtain ⟨t, p, hk, hs⟩ := h
-  simp only [sweepBlk] at hk
-  split at hk
-  · exact ⟨t, p, hk, hs⟩
-  · cases hk
-
 /-- **A thread's step, and the marking sweep that ends it, keep the cells' homes**:
     a share the stepping thread or a lock block holds afterwards was in the
     thread's view before (its slots or a lock block), or is a new cell's, at a

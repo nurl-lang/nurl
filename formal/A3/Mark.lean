@@ -586,60 +586,129 @@ theorem TStep.thread_total {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) (hR : 
 
 /-! ### The thread that drops the last share runs the destructor -/
 
-/-- **An orphan the reaps start from is reaped by thread `i`**: some reap of
-    the run, a step of thread `i`, moves its payload to a fresh slot of
-    thread `i` and leaves its block empty.  (Until then it stays an orphan,
-    its payload in it: no other step runs, and the marking sweep keeps it.) -/
-theorem CSettle.reaps_block {P : Prog} {i : Nat} {Z C' : Cfg} (h : CSettle P i Z C') {k n f : Nat}
-    {u : Ty} {p : Val} (hk : Z.blk k = some ⟨Ty.nest n (.dtor f u), .dead, some p⟩) :
-    ∃ (Y : Cfg) (t : Thread) (m1 : Mem) (s1 : Stmt), Y.ths[i]? = some t ∧
-      Y.blk k = some ⟨Ty.nest n (.dtor f u), .dead, some p⟩ ∧ Step P (Y.view t) t.s (.ok m1 s1) ∧
-      m1.blk k = some ⟨Ty.nest n (.dtor f u), .dead, none⟩ ∧ m1.st t.nv = some ⟨true, some p⟩ ∧
-      m1.nv = t.nv + 1 := by
-  induction h with
-  | done hn => exact absurd ⟨k, n, f, u, p, hk⟩ hn
-  | @reap Z C'' t m1 s1 hi hs hrm _ ih =>
+/-- A block emptied by a reap, or gone. -/
+def Emptied (B : Nat → Option Blk) (k : Nat) (ty : Ty) : Prop :=
+  B k = none ∨ B k = some ⟨ty, .dead, none⟩
+
+/-- The marking sweep keeps an emptied block emptied (or removes it). -/
+theorem Emptied.sweepD {C : Cfg} {k : Nat} {ty : Ty} (h : Emptied C.blk k ty) : Emptied C.sweepD.blk k ty := by
+  unfold Emptied at h ⊢
+  cases hk : C.sweepD.blk k with
+  | none => exact .inl rfl
+  | some bl =>
+    right
+    rcases sweepBlkD_some hk with ⟨hk0, _⟩ | ⟨bl0, hk0, _, _, rfl⟩
+    · rcases h with h | h <;> rw [h] at hk0 <;> cases hk0; rfl
+    · rcases h with h | h <;> rw [h] at hk0 <;> cases hk0; rfl
+
+/-- **What a reap of the run left, the run's end keeps**: a later reap of
+    thread `i` binds its payload in a slot above every slot it had, and
+    empties another block; the marking sweep changes no slot.  So a slot of
+    thread `i` below its next fresh variable keeps its value, and an emptied
+    block stays emptied or is gone. -/
+theorem CSettle.keeps_slot {P : Prog} {i : Nat} {Z C' : Cfg} (h : CSettle P i Z C') {t : Thread} {x : Var}
+    {sl : Slot} {k : Nat} {ty : Ty} (hi : Z.ths[i]? = some t) (hx : t.st x = some sl) (hxn : x < t.nv)
+    (hk : Emptied Z.blk k ty) :
+    ∃ t', C'.ths[i]? = some t' ∧ t'.st x = some sl ∧ t.nv ≤ t'.nv ∧ Emptied C'.blk k ty := by
+  induction h generalizing t with
+  | done _ => exact ⟨t, hi, hx, Nat.le_refl _, hk⟩
+  | @reap Z C'' t2 m1 s1 hi2 _ hrm _ ih =>
+    have he := Option.some.inj (hi.symm.trans hi2)
+    subst he
     obtain ⟨kr, n', f', u', p', hkr, hm1⟩ := hrm
+    have hlen : i < Z.ths.length := (List.getElem?_eq_some_iff.mp hi).1
+    have hne : kr ≠ k := by
+      rintro rfl
+      rcases hk with h | h <;> (have hkr' : Z.blk kr = _ := hkr; rw [h] at hkr'; simp at hkr')
+    have hk1 : Emptied (Z.put i m1 s1).blk k ty := by
+      unfold Emptied
+      show m1.blk k = none ∨ m1.blk k = _
+      rw [hm1]
+      show upd Z.blk kr _ k = none ∨ upd Z.blk kr _ k = _
+      rw [upd_ne _ _ (Ne.symm hne)]; exact hk
+    have hxn' : x ≠ t.nv := Nat.ne_of_lt hxn
+    have hnv : m1.nv = t.nv + 1 := by rw [hm1]; rfl
+    obtain ⟨t', h1, h2, h3, h4⟩ := ih (t := ⟨m1.st, m1.nv, s1⟩)
+      (by simp [Cfg.sweepD, Cfg.put, hlen])
+      (by show m1.st x = _; rw [hm1]; show upd t.st t.nv _ x = _; rw [upd_ne _ _ hxn']; exact hx)
+      (by show x < m1.nv; rw [hnv]; exact Nat.lt_succ_of_lt hxn) hk1.sweepD
+    exact ⟨t', h1, h2, by simp only at h3; omega, h4⟩
+
+/-- **An orphan the reaps start from is reaped by thread `i`, in this run of
+    reaps**: at the run's end `C'` (the configuration step's result), a slot
+    of thread `i` at or above its next fresh variable where the run began
+    (so one this run made) holds the orphan's payload, owned, and its block
+    is emptied or gone.  (Until its reap it stays an orphan, its payload in
+    it: no other step runs, and the marking sweep keeps it; after it, the
+    later reaps add slots above it and touch no emptied block.) -/
+theorem CSettle.reaps_block {P : Prog} {i : Nat} {Z C' : Cfg} (h : CSettle P i Z C') {k n f : Nat}
+    {u : Ty} {p : Val} (hk : Z.blk k = some ⟨Ty.nest n (.dtor f u), .dead, some p⟩) {t0 : Thread}
+    (hi0 : Z.ths[i]? = some t0) :
+    ∃ (t' : Thread) (x : Var), C'.ths[i]? = some t' ∧ t'.st x = some ⟨true, some p⟩ ∧ t0.nv ≤ x ∧
+      Emptied C'.blk k (Ty.nest n (.dtor f u)) := by
+  induction h generalizing t0 with
+  | done hn => exact absurd ⟨k, n, f, u, p, hk⟩ hn
+  | @reap Z C'' t m1 s1 hi hs hrm hrest ih =>
+    have he0 := Option.some.inj (hi0.symm.trans hi)
+    subst he0
+    obtain ⟨kr, n', f', u', p', hkr, hm1⟩ := hrm
+    have hlen : i < Z.ths.length := (List.getElem?_eq_some_iff.mp hi0).1
+    have hi1 : ((Z.put i m1 s1).sweepD).ths[i]? = some ⟨m1.st, m1.nv, s1⟩ := by
+      simp [Cfg.sweepD, Cfg.put, hlen]
     by_cases he : kr = k
-    · subst he hm1
+    · subst he
       have hkr' : Z.blk kr = _ := hkr
       have he2 := hkr'.symm.trans hk
       simp only [Option.some.injEq, Blk.mk.injEq] at he2
       obtain ⟨hty, -, rfl⟩ := he2
-      exact ⟨Z, t, _, s1, hi, hk, hs, by simp [upd, hty], by simp [Mem.set, upd, Cfg.view], rfl⟩
+      have hE : Emptied (Z.put i m1 s1).blk kr (Ty.nest n (.dtor f u)) := by
+        right; show m1.blk kr = _; rw [hm1]; show upd Z.blk kr _ kr = _; rw [upd_at, hty]
+      have hnv : m1.nv = t0.nv + 1 := by rw [hm1]; rfl
+      obtain ⟨t', h1, h2, h3, h4⟩ := hrest.keeps_slot (x := t0.nv) (sl := ⟨true, some p'⟩) hi1
+        (by show m1.st t0.nv = _; rw [hm1]; simp [Mem.set, upd, Cfg.view]) (by show t0.nv < m1.nv; omega)
+        hE.sweepD
+      exact ⟨t', t0.nv, h1, h2, Nat.le_refl _, h4⟩
     · -- another orphan was reaped: this one is as it was, and the marking sweep keeps it
       have hk1 : (Z.put i m1 s1).blk k = some ⟨Ty.nest n (.dtor f u), .dead, some p⟩ := by
         show m1.blk k = _
         rw [hm1]
         show upd Z.blk kr _ k = _
         rw [upd_ne _ _ (Ne.symm he)]; exact hk
-      apply ih
       have hp : Pinned (Z.put i m1 s1).roots (Z.put i m1 s1).blk k := Or.inr ⟨n, f, u, p, hk1⟩
-      by_cases hr : Reached (RootsD (Z.put i m1 s1).roots (Z.put i m1 s1).blk) (Z.put i m1 s1).blk k
-      · exact sweepBlkD_reached hk1 hr
-      · exact sweepBlkD_pinned hk1 hr hp
+      have hk2 : (Z.put i m1 s1).sweepD.blk k = some ⟨Ty.nest n (.dtor f u), .dead, some p⟩ := by
+        by_cases hr : Reached (RootsD (Z.put i m1 s1).roots (Z.put i m1 s1).blk) (Z.put i m1 s1).blk k
+        · exact sweepBlkD_reached hk1 hr
+        · exact sweepBlkD_pinned hk1 hr hp
+      obtain ⟨t', x, h1, h2, h3, h4⟩ := ih hk2 hi1
+      have hnv : m1.nv = t0.nv + 1 := by rw [hm1]; rfl
+      exact ⟨t', x, h1, h2, by simp only at h3; omega, h4⟩
 
 /-- **Agora #755 item 1: the thread whose step drops the last share runs the
-    destructor.**  Thread `i`'s step leaves an `arc` block of a destructor
-    value (or of a drained `Vec` of them), or a lock block of one, its
-    payload in it, that nothing refers to any more: no thread's slot, no
-    module global, no block's payload.  Then the configuration's marking
-    sweep that ends the step marks it `dead`, its payload in it, and, before
-    any other thread runs, a step of thread `i` (a reap: `CSettle`, whose
-    every step is thread `i`'s) moves the payload to a fresh slot of thread
-    `i`, which `Step.reap` binds in a destructor frame of `f` at the
-    thread's redex (`A2.Reapable.reap`). -/
+    destructor.**  Thread `i`'s step (to `m'`, `s'`) leaves an `arc` block of
+    a destructor value (or of a drained `Vec` of them), or a lock block of
+    one, its payload in it, that nothing refers to any more: no thread's
+    slot, no module global, no block's payload.  Then the configuration's
+    marking sweep that ends the step marks it `dead`, its payload in it, and
+    in the result `C'` of this configuration step (`TStep.thread`'s, whose
+    reaps, `CSettle`, are all thread `i`'s, before any other thread runs) a
+    fresh slot of thread `i` (at or above `m'.nv`, so made by its reaps)
+    owns the payload and the block is emptied or gone: a reap of thread `i`
+    bound it there, in a destructor frame of `f` at its redex
+    (`Step.reap`).  (The premise `hb` asks it of every block of `m'`, also of
+    those the same sweep removes; a block only such a payload refers to is
+    not covered by this lemma, though the semantics marks it as well.) -/
 theorem TStep.last_drop_reaps {P : Prog} {C : Cfg} {i : Nat} {m' : Mem} {s' : Stmt} {C' : Cfg}
+    (hlen : i < C.ths.length)
     (hse : CSettle P i (C.put i m' s').sweepD C') {k n f : Nat} {u : Ty} {p : Val} {kd : BKind}
     (hkd : kd = .arc ∨ kd = .lock) (hk : m'.blk k = some ⟨Ty.nest n (.dtor f u), kd, some p⟩)
     (hv : ∀ v, (C.put i m' s').roots v → ¬ Refers m'.blk v k)
     (hb : ∀ k' bl', m'.blk k' = some bl' → ¬ Refers m'.blk bl'.keeps k) :
     (C.put i m' s').sweepD.blk k = some ⟨Ty.nest n (.dtor f u), .dead, some p⟩ ∧
-      ∃ (Y : Cfg) (t1 : Thread) (m1 : Mem) (s1 : Stmt), Y.ths[i]? = some t1 ∧
-        Step P (Y.view t1) t1.s (.ok m1 s1) ∧
-        m1.blk k = some ⟨Ty.nest n (.dtor f u), .dead, none⟩ ∧ m1.st t1.nv = some ⟨true, some p⟩ := by
+      ∃ (t' : Thread) (x : Var), C'.ths[i]? = some t' ∧ t'.st x = some ⟨true, some p⟩ ∧ m'.nv ≤ x ∧
+        Emptied C'.blk k (Ty.nest n (.dtor f u)) := by
   have hm := Cfg.sweepD_marks (C := C.put i m' s') hkd hk hv hb
-  obtain ⟨Y, t1, m1, s1, hY, _, hs, hb1, hst1, _⟩ := hse.reaps_block hm
-  exact ⟨hm, Y, t1, m1, s1, hY, hs, hb1, hst1⟩
+  have hi : ((C.put i m' s').sweepD).ths[i]? = some ⟨m'.st, m'.nv, s'⟩ := by
+    simp [Cfg.sweepD, Cfg.put, hlen]
+  exact ⟨hm, hse.reaps_block hm hi⟩
 
 end A3

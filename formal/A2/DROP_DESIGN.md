@@ -1066,7 +1066,9 @@ each one shrinks `CLAIM.md`'s exception:
      reaps the payload (`TStep.last_drop_reaps`, `A3.arcDtor_reaps`,
      `arcVecDtor_reaps`, `lockDtor_reaps`). Exactness, as on A2: a dead
      borrow's slot holding a handle into the payload keeps the block
-     reached; on A3 it may be another thread's, which then reaps it.
+     reached; on A3 it may be another thread's, which then reaps it when
+     its step leaves the block unreached, or never if it never ends that
+     slot.
    - **Left.**
      - *Locks and cells* of a destructor type that holds a share, of a
        `Vec` of them, or of a type holding one in a field of a type of no
@@ -1082,8 +1084,8 @@ each one shrinks `CLAIM.md`'s exception:
        destructor type, or a drained `Vec` of them, Agora #755).
      - *Exactness*: a slot still holding a handle into the payload after
        its borrow is dead keeps the block reached (the destructor runs
-       later than the runtime's count); orphans in a cycle (through a
-       lock) are freed with no code, where the runtime leaks them; several
+       later than the runtime's count, or never); orphans in a cycle (through a
+       lock), and blocks reached only from their payloads, are freed with no code, where the runtime leaks them; several
        orphans of one step are reaped in the order `Step.reap` picks; an
        uncaught panic
        frees an orphaned payload with no code (above); the witness's run

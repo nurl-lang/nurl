@@ -559,7 +559,7 @@ with the sweep is the phase-D obligation above. `check.sh` is green with:
   - *The configuration-level sweep is part of `TStep.thread`*, not a rule
     of its own: a thread's A2 step, then `Cfg.sweep`, A2's sweep with every
     thread's slot values as roots (`Cfg.vals`; `A2/Sweep.lean` is generic
-    over the roots, `Mem.sweepR`, `ThreadOK.sweepR`). So no reachable
+    over the roots, `Mem.sweepR`, `ThreadOK.sweepR`, now gone with it). So no reachable
     configuration keeps a block nothing reaches (`CInv`'s second half),
     which `no_leak` needs. Thread-local runs keep `Steps0` (`reach_ok0`).
     (Agora #755 item 1: the sweep is now the marking one, `Cfg.sweepD`,
@@ -571,7 +571,9 @@ with the sweep is the phase-D obligation above. `check.sh` is green with:
     is to the writer's own part, or a payload no other thread reaches
     (`CParts.ctouch`); two threads meeting on a payload address are both
     reading; and two threads' sweeps never free one block, since some
-    thread reaches it (`Reached.or`).
+    thread reaches it (`Reached.or`). (Agora #755 item 1: `SweepFrees` now
+    covers every sweep of the configuration step, the marking sweep's and
+    those after the reaps; see that section.)
   - *`no_leak`*: when every thread has ended no slot holds a value, so no
     block is reached and the last sweep left none; a finished thread owns
     no tree (`ThreadOK.no_leak`, `CInv.noLeak`).
@@ -1020,9 +1022,10 @@ every thread's slots and the globals) freed an orphaned `Arc<D>`'s,
   taken and end (`CSettle.total`: a typed thread's statement has a source
   redex and an orphan's payload holds no cell share, `CParts.reaps`; A2's
   count `dtorCount` falls), so every A2 step of a thread a typed start
-  reaches is one of the configuration's (`TStep.thread_total`,
-  `reach_thread_total`), and `MemorySafe`'s A2 progress is the
-  configuration's.
+  reaches to an `.ok` result, at no spawn redex, starts one of the
+  configuration's (`TStep.thread_total`, `reach_thread_total`). (A
+  top-level step to `.panic` is no configuration step, as before; that a
+  spawn redex always has `TStep.spawn` or `spawnFail` is not proved.)
 - *The payload moves to thread `i`.* A reap is a step of thread `i`:
   `CParts.thread_of` gives thread `i` a part that now holds the payload's
   addresses (no longer `PayIn`: the block is emptied), and the other
@@ -1048,18 +1051,25 @@ every thread's slots and the globals) freed an orphaned `Arc<D>`'s,
   `i`'s step leaves an `arc` block of a destructor value (or of a drained
   `Vec` of them) or a lock block of one, its payload in it, that no
   thread's slot, no global and no block's payload refers to, the marking
-  sweep marks it, and a step of thread `i` in the reaps that follow moves
-  its payload to a fresh slot of thread `i` and empties the block
-  (`CSettle.reaps_block`); `Step.reap` binds it in a destructor frame at
-  the thread's redex. Instances at the three witnesses' programs:
+  sweep marks it, and in the result `C'` of that configuration step a slot
+  of thread `i` at or above the step's fresh variable (one its reaps made)
+  owns the payload and the block is emptied or gone (`CSettle.reaps_block`,
+  over `CSettle.keeps_slot`: later reaps add slots above it and touch no
+  emptied block); a reap of thread `i` put it there, `Step.reap` binding it
+  in a destructor frame at the thread's redex. The premise that no block's
+  payload refers to it asks it also of blocks the same sweep removes, so a
+  block only such a dying payload refers to is not covered by the lemma
+  (the semantics marks it as well). Instances at the three witnesses' programs:
   `A3.arcDtor_reaps`, `arcVecDtor_reaps`, `lockDtor_reaps`. As on A2, no
   theorem traces a witness's run.
 - *Exactness.* As on A2, a dead borrow's slot that still holds a handle
   into the payload keeps the block reached (the Phase D obligation above);
   on A3 that slot may be another thread's, and the destructor then runs on
-  the thread whose later step leaves the block unreached. Several orphans
-  one step leaves are reaped in the order `Step.reap` picks; a cycle of
-  orphans (through a lock) is freed with no code, as on A2.
+  the thread whose later step leaves the block unreached, or never, if that
+  thread never ends the slot (its scope does not end). Several orphans one
+  step leaves are reaped in the order `Step.reap` picks; a cycle of orphans
+  (through a lock), and every block reached only from that cycle's
+  payloads, is freed with no code, as on A2.
 
 ## A3.3's mechanization (`RwLocked`, `% Frozen`)
 
@@ -3239,7 +3249,9 @@ It is kept by every step of the configuration:
     thread's, so it is neither after (`CellKeep.holds`).
   - Any other cell was in one place in the thread's view
     (`CellInv.onePlace`), and stays so (`CellKeep.one`).
-  - The sweep only removes blocks (`LockHolds.of_sweep`).
+  - The sweep only removes blocks (`LockHolds.of_sweep`; since Agora #755
+    item 1 the marking sweep, which removes or marks them,
+    `LockHolds.of_sweepD`, and the reaps after it, `CellInv.settle`).
 - *A spawn* (`CellInv.spawn_of`) as before, by `SendCheck`. The blocks do
   not change, so `apart` for the new thread is the spawner's.
 - *The start* (`CellInv.start`) holds no binding. Its blocks are the
