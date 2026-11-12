@@ -359,13 +359,17 @@ destructor must view nothing those scopes bound, at any point, not only
 at their normal end. In A2-drop.2 a `dbind` binding of a view-holding type
 gains no view at all:
 - `assign` to it is refused;
-- `push` into it needs elements that hold no views;
+- `push` into it needs elements that hold no views (since Agora #782:
+  elements whose views it records already);
 - it is no `inout` argument.
 
 Its `held` is then the one `letd` gave it, made from what was already
 bound. nurlc's rule is finer: a holder may gain views of older bindings
-only. Covering that needs an age order the calculus does not have, so it
-stays a documented gap.
+only. Covering that in general needs an age order the calculus does not
+have, so it stays a documented gap; since Agora #782 `letd` may record
+views of older bindings up front (`HeldUp`), and a push into a drained
+`Vec` adds only those, which covers a `Vec` of view-holding destructor
+values (below, A2-drop.3b).
 
 The third point is a rule, not a convenience. A callee may point an
 `inout` parameter at a view of its own local and back again before it
