@@ -9,10 +9,8 @@
 // `m::make_point` confirms the original @-function rewrite still works
 // alongside the new ones.
 //
-// Generic structs (`: Box [A] { ... }`) are intentionally NOT exercised
-// here — the type-arg suffix in the monomorphised name (`Box__i`)
-// interacts with whole-identifier rewriting in a way that needs
-// follow-up handling (out of scope for this iteration).
+// Generic structs under an alias are exercised by
+// generic_struct_aliased_import.nu (agora #724).
 
 $ `compiler/tests/alias_rewrite_types_mod.nu` m
 

@@ -68309,6 +68309,21 @@ unsafe @ __has_dunder s str → b {
     F
 }
 
+// __alias_plain_name: is `name` an aliased import's own type — `geo__Pt`,
+// the `Pt` of a module imported as `geo`? It is spelled with the
+// compiler's separator, but it is a declared type like any other and is
+// checked like one (`geo::Ptt`, which the module does not declare, is an
+// unknown type): the part before the first `__` is an import alias (which
+// may not hold `__` nor name a type, __import_alias_check) and the rest
+// holds no other `__`, so no instance (`geo__Pair__i`) is taken for one.
+@ __alias_plain_name s name → b {
+    : i k ( nurl_str_find name `__` )
+    ? | <= k 0 == 0 g_import_aliases { ^ F } {}
+    ? == 0 ( nurl_sym_len g_import_aliases ( nurl_str_slice name 0 k ) ) { ^ F } {}
+    : s rest ( nurl_str_slice name + k 2 - - ( nurl_str_len name ) k 2 )
+    ^ & != 0 ( nurl_str_len rest ) < ( nurl_str_find rest `__` ) 0
+}
+
 // `tline` / `tcol` are where the type was WRITTEN, captured by the caller
 // before `parse_type` consumed it. Every check here fires once the type is
 // fully parsed, so `die lex` anchored on whatever came after it — for a
@@ -68361,7 +68376,7 @@ unsafe @ check_type_known i lex i syms s llvm_ty s ctx i tline i tcol → v {
                 {} }
             { ? != 0 ( nurl_str_len name )
                 { ? ( is_tparam_like name ) {}
-                    { ? ( __has_dunder name ) {}
+                    { ? & ( __has_dunder name ) ! ( __alias_plain_name name ) {}
                         {  // A declared struct/enum maps to `%Name` in syms (set by
                             // the pre-scan + gen_struct/enum_decl). A bare non-empty
                             // value that does NOT start with '%' means the name is in
@@ -81068,20 +81083,7 @@ unsafe @ __import_allowed s path → b {
     {}
     { ( mem_mark_imported syms __imp_key )
         ( __require_import_file lex __li_line __li_col path )
-        : s src ( compiler_read_source path )
-        // Both arms allocate. The alias arm hands back a freshly rewritten
-        // copy of the source; spelling the other arm as a bare `src`
-        // borrow made the binding mixed-ownership, so nothing owned the
-        // rewritten copy and it leaked — 581 bytes per aliased import,
-        // three of them compiling alias_rewrite_types.nu, on a path the
-        // leak gate never reached because nurlc.nu has no aliased import.
-        // The copy the other arm now makes is freed at scope exit like
-        // any other owned string.
-        : s eff_src ? != 0 ( nurl_str_len alias )
-        { : s names ( collect_alias_targets src path )
-            ( alias_rewrite_source src names ( nurl_str_cat alias `__` ) )
-        }
-        ( nurl_str_cat src `` )
+        : s eff_src ( __import_src path alias )
         // Save / restore the current source-file across the nested scan
         // + parse passes so vis_record_fn and gen_call attribute decls
         // (and visibility checks) to the imported file's path, not the
@@ -86774,9 +86776,65 @@ unsafe @ gen_trait_or_impl i lex i syms i cg → v {
     ^ ( nurl_str_cat sname mangle_sfx )
 }
 
+// `Name [ tparams ] { body }` at `lex` — just past a declaration's `:` and
+// its `~` — is a generic struct's template: stored in
+// g_generic_struct_syms and consumed whole. Anything else is left where
+// the walk stopped reading it (past the name, for a name with no `[`).
+// `lint`: the template's name and the names its body uses are noted for
+// the import lint as well — once, by the pass that makes the instances.
+@ __scan_template_decl i lex b prescan → v {
+    ? ! ( is_ident_tok ( nurl_lex_type lex ) ) { ^ } {}
+    : s sname ( nurl_lex_val lex )
+    : i sline ( nurl_lex_line lex )
+    : i scol ( nurl_lex_col lex )
+    ( nurl_lex_advance lex )
+    ? != ( nurl_lex_type lex ) TT_LBRACK { ^ } {}
+    ( nurl_lex_advance lex )
+    : ~ s tparams ``
+    ~ & != ( nurl_lex_type lex ) TT_RBRACK != ( nurl_lex_type lex ) TT_EOF {
+        : s tp ( nurl_lex_val lex )
+        ( nurl_lex_advance lex )
+        = tparams ? == 0 ( nurl_str_len tparams ) ( nurl_str_cat tp `` )
+        ( nurl_str_cat tparams ( nurl_str_cat ` ` tp ) )
+    }
+    ? == ( nurl_lex_type lex ) TT_RBRACK { ( nurl_lex_advance lex ) } {}
+    ? != ( nurl_lex_type lex ) TT_LBRACE { ^ } {}
+    : s body ( collect_fn_body lex `generic struct` )
+    // (The pre-scan reads each declaration once: a second template of the
+    // name, from another file or line, is refused as a second plain struct
+    // is. Kept, every instance was made from whichever template the walk
+    // had read last — an instance above both and one between them had
+    // different layouts.)
+    ? prescan {
+        : s tpos ( nurl_str_cat3 ( nurl_lex_filename lex ) `:` ( nurl_str_int sline ) )
+        : s tprev ( nurl_sym_get2 g_generic_struct_syms sname `__sdecl` )
+        ? & != 0 ( nurl_str_len tprev ) ! ( seq tprev tpos ) {
+            ( die_pos lex sline scol ( nurl_str_cat4 `duplicate generic struct ': ` sname ( nurl_str_cat3 ` [` tparams `]' — already defined at ` ) ( nurl_str_cat tprev `. NURL has no overloading and no shadowing at file scope: rename one, or delete the duplicate. If the two are in different files, both are visible to the importer, so the names must still differ.` ) ) )
+        } {}
+        ( nurl_sym_def g_generic_struct_syms ( nurl_str_cat sname `__sdecl` ) tpos )
+    } {}
+    ( nurl_sym_def g_generic_struct_syms ( nurl_str_cat sname `__stparams` ) tparams )
+    ( nurl_sym_def g_generic_struct_syms ( nurl_str_cat sname `__sbody` ) body )
+    // …and where it is declared: a library handle of the standard library
+    // is a sealed representation (__ty_sealed).
+    ( nurl_sym_def g_generic_struct_syms ( nurl_str_cat sname `__sfile` ) ( nurl_lex_filename lex ) )
+    ? ! prescan {
+        // Lint: generic struct templates never reach vis_record_type, so
+        // register the name here. This scan recurses into imports without
+        // touching vis_current_src_file — the lexer's filename is the real
+        // defining file. Field types inside the body (`( Vec A ) data`) are
+        // references in that file too.
+        ( lint_note_def_at sname ( nurl_lex_filename lex ) )
+        ( lint_note_template_src body ( nurl_lex_filename lex ) )
+    } {}
+}
+
 // scan_generic_structs: linear pre-pass that
 //   (a) stores generic struct templates `: Name [T+] { ... }` in
-//       g_generic_struct_syms, and
+//       g_generic_struct_syms (each is there already for the instances —
+//       scan_type_names stored it — and is stored again as the walk meets
+//       it),
+//       and
 //   (b) for every `( Name T1 T2 ... )` occurrence — whether at type
 //       position in a signature or mid-function-body — emits the
 //       corresponding `%Name__T1[__T2] = type { ... }` named type and
@@ -86801,39 +86859,7 @@ unsafe @ gen_trait_or_impl i lex i syms i cg → v {
             ( nurl_lex_advance lex )
             = handled T
             ? == ( nurl_lex_type lex ) TT_TILDE { ( nurl_lex_advance lex ) } {}
-            ? ( is_ident_tok ( nurl_lex_type lex ) ) {
-                : s sname ( nurl_lex_val lex )
-                ( nurl_lex_advance lex )
-                ? == ( nurl_lex_type lex ) TT_LBRACK {
-                    ( nurl_lex_advance lex )
-                    : ~ s tparams ``
-                    ~ & != ( nurl_lex_type lex ) TT_RBRACK != ( nurl_lex_type lex ) TT_EOF {
-                        : s tp ( nurl_lex_val lex )
-                        ( nurl_lex_advance lex )
-                        = tparams ? == 0 ( nurl_str_len tparams ) ( nurl_str_cat tp `` )
-                        ( nurl_str_cat tparams ( nurl_str_cat ` ` tp ) )
-                    }
-                    ? == ( nurl_lex_type lex ) TT_RBRACK { ( nurl_lex_advance lex ) } {}
-                    ? == ( nurl_lex_type lex ) TT_LBRACE {
-                        : s body ( collect_fn_body lex `generic struct` )
-                        ( nurl_sym_def g_generic_struct_syms ( nurl_str_cat sname `__stparams` ) tparams )
-                        ( nurl_sym_def g_generic_struct_syms ( nurl_str_cat sname `__sbody` ) body )
-                        // …and where it is declared: a library handle of the
-                        // standard library is a sealed representation
-                        // (__ty_sealed).
-                        ( nurl_sym_def g_generic_struct_syms ( nurl_str_cat sname `__sfile` ) ( nurl_lex_filename lex ) )
-                        // Lint: generic struct templates never reach
-                        // vis_record_type, so register the name here.
-                        // This scan recurses into imports without
-                        // touching vis_current_src_file — the lexer's
-                        // filename is the real defining file. Field
-                        // types inside the body (`( Vec A ) data`) are
-                        // references in that file too.
-                        ( lint_note_def_at sname ( nurl_lex_filename lex ) )
-                        ( lint_note_template_src body ( nurl_lex_filename lex ) )
-                    } {}
-                } {}
-            } {}
+            ( __scan_template_decl lex F )
         } {}
 
         // (b) Generic struct instantiation: `( Name T1 T2 ... )`.
@@ -86872,7 +86898,8 @@ unsafe @ gen_trait_or_impl i lex i syms i cg → v {
             ? == ( nurl_lex_type lex ) TT_STR {
                 : s path ( __norm_import_path ( nurl_lex_val lex ) )
                 ( nurl_lex_advance lex )
-                ? ( __import_alias_tok lex ) { ( nurl_lex_advance lex ) } {}
+                : s alias ? ( __import_alias_tok lex ) ( nurl_str_cat ( nurl_lex_val lex ) `` ) ``
+                ? != 0 ( nurl_str_len alias ) { ( nurl_lex_advance lex ) } {}
                 : s __gs_key ( __canon_import_key path )
                 : s marker ( nurl_sym_get g_generic_struct_syms `__scanned__` )
                 ? ( str_contains_word marker __gs_key ) {} {
@@ -86880,7 +86907,7 @@ unsafe @ gen_trait_or_impl i lex i syms i cg → v {
                     ( nurl_str_cat3 marker ` ` __gs_key )
                     ( nurl_sym_def g_generic_struct_syms `__scanned__` new_marker )
                     ( __require_import_file lex __im_ln __im_cl path )
-                    : s src2 ( compiler_read_source path )
+                    : s src2 ( __import_src path alias )
                     : i lex2 ( nurl_lex_new src2 path )
                     // Track the imported file so its imports resolve
                     // importer-relative (mirrors the other scan passes).
@@ -87481,13 +87508,7 @@ unsafe @ priv_resolve i lex i syms s fname → s {
                             ( nurl_str_cat3 scanned ` ` __fs_key )
                             ( nurl_sym_def syms `__scanned_files__` new_scanned )
                             ( __require_import_file lex __im_ln __im_cl path )
-                            : s src2 ( compiler_read_source path )
-                            // Uniform ownership, as at the other two sites.
-                            : s eff_src2 ? != 0 ( nurl_str_len alias )
-                            { : s names ( collect_alias_targets src2 path )
-                                ( alias_rewrite_source src2 names ( nurl_str_cat alias `__` ) )
-                            }
-                            ( nurl_str_cat src2 `` )
+                            : s eff_src2 ( __import_src path alias )
                             : i lex2 ( nurl_lex_new eff_src2 path )
                             // Save / restore the current source-file across the nested
                             // scan so vis_record_fn attributes decls in the imported
@@ -87561,7 +87582,17 @@ unsafe @ priv_resolve i lex i syms s fname → s {
                     }
                     { ? == tt TT_PERCENT
                         { ( __lazy_collect lex `__roots__` ) = g_impl_unsafe ? decl_unsafe 1 0 ( scan_impl_decl lex syms ) }
-                        { ( nurl_lex_advance lex ) }
+                        {
+                            // (A global's type is read whole: the `@` of a
+                            // closure type in it, `: ~ ( @ i %Show ) g 0`, is no
+                            // function declaration — taken for one, it swallowed
+                            // the function declared below the global, agora #727.)
+                            ? == tt TT_COLON {
+                                ( nurl_lex_advance lex )
+                                ? == ( nurl_lex_type lex ) TT_TILDE { ( nurl_lex_advance lex ) } {}
+                                ? & ! ( is_ident_tok ( nurl_lex_type lex ) ) != ( nurl_lex_type lex ) TT_PIPE { ( skip_one_type lex ) } {}
+                            } { ( nurl_lex_advance lex ) }
+                        }
                     }
                 } } }
     }
@@ -87713,13 +87744,7 @@ unsafe @ priv_resolve i lex i syms s fname → s {
                                 ( nurl_str_cat3 marker ` ` __tn_key )
                                 ( nurl_sym_def syms `__tn_scanned__` new_marker )
                                 ( __require_import_file lex __im_ln __im_cl path )
-                                : s src2 ( compiler_read_source path )
-                                // Uniform ownership, as at the other two sites.
-                                : s eff_src2 ? != 0 ( nurl_str_len alias )
-                                { : s names ( collect_alias_targets src2 path )
-                                    ( alias_rewrite_source src2 names ( nurl_str_cat alias `__` ) )
-                                }
-                                ( nurl_str_cat src2 `` )
+                                : s eff_src2 ( __import_src path alias )
                                 : i lex2 ( nurl_lex_new eff_src2 path )
                                 // Track the imported file as current so its own
                                 // `$`-imports resolve importer-relative (mirrors
@@ -87754,14 +87779,21 @@ unsafe @ priv_resolve i lex i syms s fname → s {
                                     ? | == nxt TT_LBRACE == nxt TT_LBRACK
                                     { : s name ( nurl_lex_val lex )
                                         ( nurl_sym_def syms name ( nurl_str_cat `%` name ) )
+                                        // (A generic struct's template is stored
+                                        // here, before scan_generic_structs makes
+                                        // the first instance: wherever it is
+                                        // declared, an instance has its fields —
+                                        // agora #716.)
                                         ? == nxt TT_LBRACE {
                                             ( nurl_lex_advance lex )
                                             ( record_type_layout lex name `struct` )
-                                        } {}
+                                        } { ( __scan_template_decl lex T ) }
                                     }
                                     {}
                                 }
-                                {}
+                                // (A global's type is read whole: a trait object
+                                // in it, `: ~ ( @ i %Show ) g 0`, is no header.)
+                                { ? ! ( is_ident_tok ( nurl_lex_type lex ) ) { ( skip_one_type lex ) } {} }
                             }
                         }
                         { ( nurl_lex_advance lex ) }
@@ -88351,6 +88383,27 @@ unsafe @ compiler_read_source s path → s {
     ( nurl_sym_def g_source_snapshots key source )
     ( nurl_sym_def g_source_snapshots seen_key `1` )
     ^ source
+}
+
+// __import_src: the source a `$` import is read as — the file itself,
+// or, under an alias, the copy alias_rewrite_source makes with every
+// top-level name the file declares prefixed `alias__`. Every pass that
+// follows an import reads it through here, so each pass sees the names
+// the others see: the generic-struct template scans read the raw file
+// and stored `Pair` where every use was `geo__Pair` (agora #724).
+// The rewrite is made once per file and alias, and kept beside the
+// file's snapshot (compiler_read_source): five passes read it, and the
+// rewrite walks the source once per name the file declares — an aliased
+// 71 KB module cost each pass that rewrote it about 0.4 s.
+unsafe @ __import_src s path s alias → s {
+    : s src ( compiler_read_source path )
+    ? == 0 ( nurl_str_len alias ) { ^ src } {}
+    : s ckey ( nurl_str_cat4 `alias:` alias `:` ( __canon_import_key path ) )
+    ? != 0 ( nurl_sym_len g_source_snapshots ckey ) { ^ ( nurl_sym_get g_source_snapshots ckey ) } {}
+    : s names ( collect_alias_targets src path )
+    : s out ( alias_rewrite_source src names ( nurl_str_cat alias `__` ) )
+    ( nurl_sym_def g_source_snapshots ckey out )
+    ^ out
 }
 
 // Print module bytes [from, to) without copying them out.
