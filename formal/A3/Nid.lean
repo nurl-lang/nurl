@@ -67,8 +67,9 @@ theorem payPart_false {B : Nat → Option Blk} {i : Nat} : payPart B i = false �
 structure BlockOK (B : Nat → Option Blk) (n k : Nat) (bl : Blk) : Prop where
   ok    : bl.ty.ok = true ∧ bl.ty.holdsView = false ∧
     (∀ p, bl.pay = some p → WFv bl.ty p ∧ SharesIn B bl.ty p) ∧ (bl.kind = .lock ∨ bl.ty.hasCell = false) ∧
-    -- A2-drop.3d, Agora #610: a lock's or a view's payload owns no
-    -- destructor value; an `arc` block's may be one at its top (Agora #755:
+    -- A2-drop.3d, Agora #610: a view's payload owns no destructor value, a
+    -- lock's none or (Agora #755, `Locked D`) one at its top that holds no
+    -- share; an `arc` block's may be one at its top (Agora #755:
     -- or a drained `Vec` of them), and a `dead` block's is (`Blk.DtorOK`,
     -- `MInv.blocks`)
     bl.DtorOK

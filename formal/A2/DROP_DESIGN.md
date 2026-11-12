@@ -869,10 +869,13 @@ each one shrinks `CLAIM.md`'s exception:
         enum, or one with glue), whose `u` holds no closure (`arc_new`'s
         `hasFn` premise). `arc_new` of one names a destructor the program
         checked (`Rhs.codeOK`: `DropFnOK P f u`, carried by `MemCodes`'
-        `DeadCodes` for every `arc` and `dead` block). The invariant's
-        clause is `Blk.DtorOK`: a lock's and a view's payload owns none; a
-        block of a type that owns one is of a destructor type holding no
-        closure; a `dead` block is of such a type.
+        `DeadCodes` for every `arc` and `dead` block; since Agora #755 for
+        every block of a destructor type, whatever its kind). The
+        invariant's clause is `Blk.DtorOK`: (before Agora #755) a lock's
+        and a view's payload owns none (since #755, `Locked D` below, a
+        lock's may be a destructor value holding no share); a block of a
+        type that owns one is of a destructor type holding no closure; a
+        `dead` block is of such a type.
      2. *The mark.* `Mem.sweepD`, the sweep that ends every step but an
         uncaught panic: the roots are the slots' values, the `dead`
         blocks' payloads and the top orphans' to be (`RootsD`); an
@@ -1030,8 +1033,15 @@ each one shrinks `CLAIM.md`'s exception:
      `locked_apply` with a closure taking it `inout`, its share dropped:
      `main_typed`, `main_safe`, `main_no_leak`, `main_no_leak_panic`,
      `last_drop_reaps`, `A3.lockDtor_claim`). The run is not traced. A
-     cell's state of a destructor value is typed by the same rules (its
-     block is a lock block), with no witness program.
+     cell's state of a destructor value is admitted by the same rules (its
+     block is a lock block), with no witness program; that a real handle
+     with such a state behaves as the model's cell is an assumption about
+     the library (trusted base, phase B): the handles check their state
+     out with `rc_take` / `rc_restore`, which meet Agora #795. A taken
+     block is freed with no code, the destructor run once on the taker:
+     the model's semantics, the intended one; nurlc's `locked_take`
+     leaves zeros that its last `Locked_drop` drops again (Agora #795,
+     open, `tools/fuzz/holes/open/t795.md`): the runtime must match.
    - **Left.**
      - *A3's threads.* `Cfg.sweep` does not mark: the last share's drop
        frees the payload with no code there (`A3.Reach.noOrphan`: no A3

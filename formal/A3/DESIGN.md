@@ -949,7 +949,17 @@ settled:
    its type (`BlkCodes.updSame`); `settle_total`'s count (`DtorBlk`) counts
    lock blocks too. The payload is in its block whenever the last share
    goes, unless `locked_take` moved it to a binding of its own (a
-   `letd`'s): `withLock` keeps its root share alive through the body.
+   `letd`'s): `withLock` keeps its root share alive through the body. A
+   taken block (`⟨t, .lock, none⟩`) is freed with no code and the
+   destructor runs once, on the taker: the model's semantics and the
+   intended one. nurlc diverges today (Agora #795, open,
+   `tools/fuzz/holes/open/t795.md`): `locked_take` leaves zero bytes that
+   nothing marks taken, and the last `Locked_drop` runs the destructor
+   again on them (`rc_take` / `rc_restore` share the design). The runtime
+   must match the model. `scopeL_end_gives_back` and
+   `scopeL_panic_gives_back` are lemmas of stores: `x` owning a `t` and
+   the block checked out are their hypotheses, read off the rules for a
+   typed program, as for every `scopeL`.
 3. *A3.* Lock blocks are shared, and A3's configuration sweep
    (`Cfg.sweep`) still frees an orphan with no code (Agora #755 item 1,
    out of scope here): on A3's threads the last share's drop frees a
@@ -958,14 +968,22 @@ settled:
    race-freedom proof needed no change (a check-out of a destructor value
    is a check-out). `GlobsOK.dtors` (`DeadCodes`) now speaks of every
    block of a destructor type; under the old invariant no lock block had
-   one, so every start `GlobsOK` admitted before it still admits.
+   one, so every start `GlobsOK` admitted before it still admits. A global
+   `Locked D` is admissible (`Ty.sync (lk _)`), and `A2.Mem.sweepD` roots
+   the slots only, not `m.gl`: harmless on A2 (its runs start from
+   `emptyMem`, which holds no global) and on A3 (`Cfg.sweep` roots the
+   globals), but the future `Cfg.sweepD` must root the globals too, or it
+   would mark a global's block an orphan.
 
 Witness (`A3/LockDtorWitness.lean`): `main`, a `Locked` of a destructor
 value, updated by `locked_apply` with a closure that takes it `inout`
 (`ApplyFn`), its share dropped: `main_typed`, `main_safe`,
 `main_no_leak`, `main_no_leak_panic`, `last_drop_reaps`,
-`A3.lockDtor_claim`. A cell's state of a destructor value is typed by the
-same rules, with no witness program. Still refused: a payload that holds a
+`A3.lockDtor_claim`. A cell's state of a destructor value is admitted by
+the same rules, with no witness program; that a real library handle with
+such a state behaves as the model's cell is an assumption about the
+library (trusted base, phase B), not a result: the handles check their
+state out with `rc_take` / `rc_restore`, which meet Agora #795. Still refused: a payload that holds a
 share, a `Vec` of destructor values, a destructor value in a field of a
 type of no destructor of its own, and a channel of them (its queue is a
 `Vec`).

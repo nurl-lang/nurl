@@ -944,15 +944,18 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   give-back's crossing check cannot fail, so `Step.scopeLFail` and the
   code-less `Release.drop` are not taken
   (`A3.LockDtorWitness.scopeL_end_gives_back`, over `release_puts`,
-  `sendCheck_noArc`). A panic in the body gives it back too
+  `sendCheck_noArc`; a lemma of stores: that `x` owns a `t` and the block
+  is checked out are its hypotheses, which a typed program meets but no
+  invariant proves, as for every `scopeL`, A3.2 above). A panic in the body gives it back too
   (`scopeL_panic_gives_back`: `Step.scopeLP`'s release is the give-back
-  whenever `x` still owns a `D`), where nurlc's `locked_update`, which runs
+  whenever `x` still owns a `D`, the same hypotheses), where nurlc's `locked_update`, which runs
   `f` in place in the lock's memory, leaves the value there with the lock
   held (the model releases the lock: A3.2's over-approximation, above). A
   body that moves the value out (to a `letd`, a call's `sink` parameter)
   hands it to an owner that runs its destructor, by the rules above; that
-  a typed body leaves `x` holding a `D` wherever it panics, unless it moved
-  it so, is read off the rules, not proved. When the lock's last share is
+  a typed body leaves `x` holding a `D` at its end and wherever it panics,
+  unless it moved it so, and that the block is then checked out, is read
+  off the rules, not proved: both lemmas are conditional on it. When the lock's last share is
   gone the marking sweep marks the lock block `dead`, its payload in it
   (`Cand` admits a lock block whose payload is in it), and the same thread
   reaps it as an `Arc`'s (`A3.LockDtorWitness.last_drop_reaps`, over
@@ -960,15 +963,30 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   The check-out keeps the lock's share alive through the body (`withLock`
   asks a root the body does not name), so the payload is in the block
   whenever its last share goes, unless `locked_take` moved it out to a
-  binding of its own (a `letd`'s: `letv` takes no destructor value). Witness: `A3.LockDtorWitness.main` (a
+  binding of its own (a `letd`'s: `letv` takes no destructor value). That
+  is the model's semantics, and the intended one: a taken block holds
+  nothing (`⟨t, .lock, none⟩`), the sweep frees it with no code, and the
+  destructor runs once, on the taker's binding. **nurlc diverges today**
+  (Agora #795, open; `tools/fuzz/holes/open/t795.md`): `locked_take` leaves
+  zero bytes in the slot and nothing marks it taken, so the last
+  `Locked_drop` runs the destructor a second time, on the zeros (and
+  `rc_take` / `rc_restore` share the design). The runtime must match the
+  model; until it does, the claim does not cover a `Locked D` taken and
+  never restored before its last share goes. Witness: `A3.LockDtorWitness.main` (a
   `Locked` of a destructor value, updated through `locked_apply` with a
   closure that takes it `inout`, its share dropped: typed, `main_safe`,
   `main_no_leak`, `main_no_leak_panic`; `A3.lockDtor_claim`: `A3.claim`
   over it). As for the `Arc` witnesses, no theorem traces the run, and on
   A3's threads `Cfg.sweep` frees an orphaned lock block's destructor
-  value with no code. A cell's state of a destructor value is typed by the
-  same rules (a cell's block is a lock block, marked and reaped alike); no
-  witness program of one. Still refused: `RwLocked D`'s read guard
+  value with no code. A cell's state of a destructor value is admitted by
+  the same rules (`Ty.ok (cell t)` asks `lkPay`; a cell's block is a lock
+  block, marked and reaped alike), with no witness program, and what it
+  covers rests on an assumption about the library, not a result: the
+  model's `withCell` gives the state back on a panic as `withLock` does,
+  but the real handles check their state out with `rc_take` /
+  `rc_restore` (`compiler/tests/handle_checkout.nu`), which with a
+  `% Drop` state meet Agora #795. That a library's handle with such a
+  state behaves as the model's cell is part of the trusted base (phase B). Still refused: `RwLocked D`'s read guard
   (`rwRead_dtor_refused`: a view copies the payload, which owns nothing)
   and `locked_restore` of a destructor value (`lockRestore_dtor_refused`:
   the model's restore may also fill a block a `withLock` has checked out,
@@ -1201,10 +1219,13 @@ The rules are stricter than nurlc's in these places:
   type holds a share, of a `Vec` of them, or of a type holding one in a
   field of a type of no destructor of its own (a `Locked D` whose `D`
   holds no share is typed since Agora #755, 3d above: the check-out gives
-  the value back, and the last share's drop reaps it); an `RwLocked` of
-  a `% Drop` type (its read guard, `rw_read`), `locked_restore` and
-  `locked_set` of one, a `Mutex` guarding one (a `Mutex` guards no value
-  in the model) and a channel of one (its queue is a `Vec`); an `Arc` whose
+  the value back, and the last share's drop reaps it); a channel of one
+  (its queue is a `Vec`); a `Mutex` guarding one (a `Mutex` guards no
+  value in the model). Refused by a rule while `Ty.ok` admits the type:
+  an `RwLocked D`'s read guard (`RhsT.rwRead` / `rwTryRead` ask `dtorFree`:
+  `RwLocked D` itself is typed, and its write side is `withLock`),
+  `locked_restore` of one (`RhsT.lockRestore`) and `locked_set` of one
+  (its body assigns the checked-out binding, `StmtT.withLock`'s `hna`); an `Arc` whose
   payload holds a destructor value in a field of a type of no destructor
   of its own (a struct or an option with a `% Drop` field, or a `Vec` of
   such structs: `Step.reap` hands over a value of a destructor type or of

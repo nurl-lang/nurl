@@ -3226,9 +3226,11 @@ structure GlobsOK (P : Prog) (G : Globs) : Prop where
   cover : Covers (G.mem 0)
   reach : ∀ k bl, G.blk k = some bl → Reached (fun v => ∃ g, G.gl g = some v) G.blk k
   codes : ∀ k bl, G.blk k = some bl → PkgOK P bl.tree ∧ PkgOK P bl.rd
-  /-- Agora #610: an `Arc` block of a destructor value names a destructor
-      the program checked (`DeadCodes`; vacuous when no block's payload owns
-      one, which is all the invariant allowed before). -/
+  /-- Agora #610: a block of a destructor value names a destructor the
+      program checked (`DeadCodes`; since Agora #755 asked of every block of
+      a destructor type, whatever its kind: an `Arc`'s or, `Locked D`, a
+      lock's; vacuous when no block's payload owns one, which is all the
+      invariant allowed before). -/
   dtors : DeadCodes P G.blk
   cells : ∀ k k1 k2, LockHolds G.blk k1 k → LockHolds G.blk k2 k → k1 = k2 ∧ k < G.nid
 

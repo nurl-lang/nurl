@@ -1507,7 +1507,9 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
   | reap {m : Mem} {r : Stmt} {k n f : Nat} {u : Ty} {p : Val} :
       r.src = true → m.blk k = some ⟨Ty.nest n (.dtor f u), .dead, some p⟩ →
       -- (the payload holds no cell share: a typed program meets it, the type
-      -- of a block that is no lock block holds none, `MInv.blocks`; A3's
+      -- of a block that is no lock block holds none, `MInv.blocks`, and
+      -- (Agora #755) a lock block marked `dead` held a destructor value whose
+      -- type holds no share, `Ty.lkPay`, so none either; A3's
       -- confinement of the cells, read off the steps alone, counts the
       -- slots' shares and the lock blocks')
       (∀ c, ¬ Sub (.cell c) p) →
