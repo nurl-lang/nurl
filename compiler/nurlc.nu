@@ -37509,7 +37509,7 @@ unsafe @ __vk_union_of s fns s seen b dyn → s {
         : s mck ( nurl_str_cat3 `mc_` name ( nurl_str_int line ) )
         ? == 0 ( nurl_sym_len g_bck mck ) { ( bck_put mck cause ) } {}
         : s add ( nurl_str_cat3
-        ( nurl_str_cat3 name ` ` ( nurl_str_int line ) )
+        ( nurl_str_cat3 name ` ` ( __bck_pend_line line ) )
         ( nurl_str_cat3 ` ` callee ` ` )
         ( nurl_str_cat3 ( nurl_str_int argidx ) ` ` kind ) )
         ( bck_add_word `ppends` add )
@@ -37517,11 +37517,27 @@ unsafe @ __vk_union_of s fns s seen b dyn → s {
     } {}
 }
 
+// The line of the statement being compiled, innermost — kept apart from
+// g_stmt_line, which the diagnostics anchor on and a nested statement
+// leaves at its own: a pending row is that statement's (Agora #678).
+: ~ i g_bck_stmt_line 0
+
+// A pending row's line, as its `ppends` word: `L`, or `L/S` where the row
+// is on line L of a statement that began on an earlier line S (a call
+// whose arguments run over several lines). The row keeps L (diagnostics
+// name it, `atoll` reads it); S is the statement a lend the row notes is
+// for, the line the statement's own `let` / `assign` row carries
+// (bck_flush_moves, __bck_pl_line; Agora #678).
+@ __bck_pend_line i line → s {
+    ? | == g_bck_stmt_line 0 >= g_bck_stmt_line line { ^ ( nurl_str_int line ) } {}
+    ^ ( nurl_str_cat3 ( nurl_str_int line ) `/` ( nurl_str_int g_bck_stmt_line ) )
+}
+
 // …a `pendlend` / `pendjoin` row named by an argument's source expression,
 // `@sx` (gen_call): no binding of that name to name a consume's cause for.
 @ bck_stash_pending_sx s sx i line s callee i argidx s kind → v {
     ? & != g_borrowck 0 == g_bck_rec_off 0 {
-        ( bck_add_word `ppends` ( nurl_str_cat4 ( nurl_str_cat3 `@` sx ` ` ) ( nurl_str_int line ) ( nurl_str_cat3 ` ` callee ` ` ) ( nurl_str_cat3 ( nurl_str_int argidx ) ` ` kind ) ) )
+        ( bck_add_word `ppends` ( nurl_str_cat4 ( nurl_str_cat3 `@` sx ` ` ) ( __bck_pend_line line ) ( nurl_str_cat3 ` ` callee ` ` ) ( nurl_str_cat3 ( nurl_str_int argidx ) ` ` kind ) ) )
         ( bck_put `deferred` `1` )
     } {}
 }
@@ -37704,7 +37720,12 @@ unsafe @ __vk_union_of s fns s seen b dyn → s {
             = prest ( str_skip_word prest )
             : s pkind ( str_first_word prest )
             = prest ( str_skip_word prest )
-            ( bck_record2 pkind pnm ( nurl_str_to_int pln ) pcal paix )
+            // (`L/S`: the row's line and its statement's, field 8 —
+            // __bck_pend_line.)
+            : i psl ( nurl_str_find pln `/` )
+            ? < psl 0 { ( bck_record2 pkind pnm ( nurl_str_to_int pln ) pcal paix ) } {
+                ( bck_record2 pkind pnm ( nurl_str_to_int pln ) pcal ( nurl_str_cat3 paix `\t\t` ( nurl_str_slice pln + psl 1 - - ( nurl_str_len pln ) psl 1 ) ) )
+            }
         }
         // (Its `sK` rows among them: none wait now.)
         = g_bck_vs_pend 0
@@ -38880,14 +38901,18 @@ unsafe @ bck_sx_ids s sx → s {
         ? & != 0 ( nurl_str_len f5 ) == ( nurl_str_get f5 0 ) 61 {
             ^ ( nurl_str_cat4 five `\t` ( nurl_str_cat `=` ( nurl_str_int ( bck_intern ( bck_xl_resolve ( nurl_str_slice f5 1 - ( nurl_str_len f5 ) 1 ) ) ) ) )
             ( nurl_str_cat3 `\t` ( bck_field rec 6 ) `` ) ) } {}
+        // (Field 8: the statement's line, where it began on an earlier
+        // line than the row's — __bck_pend_line.)
+        : s f8 ( bck_field rec 8 )
+        : s tl ? == 0 ( nurl_str_len f8 ) `` ( nurl_str_cat `\t` f8 )
         // A keeping call's container (`pko_`, the binding it was handed
         // first): as the enclosing scope spells it.
         ? ( seq kind `pendkeep` ) {
             : s pko ( nurl_sym_get g_bck ( nurl_str_cat4 `pko_` w `_` ( bck_field rec 3 ) ) )
-            ? != 0 ( nurl_str_len pko ) { ^ ( nurl_str_cat4 five `\t` f5 ( nurl_str_cat4 `\t` ( bck_field rec 6 ) `\t` ( bck_xl_resolve pko ) ) ) } {}
+            ? != 0 ( nurl_str_len pko ) { ^ ( nurl_str_cat4 five `\t` f5 ( nurl_str_cat4 `\t` ( bck_field rec 6 ) `\t` ( nurl_str_cat ( bck_xl_resolve pko ) tl ) ) ) } {}
         } {}
         ^ ( nurl_str_cat4 five `\t` f5
-        ( nurl_str_cat3 `\t` ( bck_field rec 6 ) `` ) ) }
+        ( nurl_str_cat3 `\t` ( bck_field rec 6 ) ? == 0 ( nurl_str_len tl ) `` ( nurl_str_cat `\t` tl ) ) ) }
     {}
     // (…and field 7 the loop's cursor: a binding of its own no program can
     // name, `x~` — the view of the container's storage the loop reads each
@@ -41544,7 +41569,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                             // owner. The binding the statement binds it to is
                             // the next `let` / `assign` on this line.
                             : s pe ( nurl_str_cat3 pvn `:` pcal )
-                            ( bck_plend_note pe ( bck_field rec 3 ) )
+                            ( bck_plend_note pe ( __bck_pl_line rec ) )
                             // (Lent through an Arc parameter: a view of the
                             // payload, §6.5.)
                             ? & != 0 g_arcp_any ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `arcp##` pcal ) paix ) {
@@ -41559,7 +41584,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                     {
                         // …or its result may point into the argument (retptr):
                         // a view the statement binds borrows it (`:p`).
-                        ? & & ( bck_sound ) ! ptake ( mem_fn_retptr_arg pcal paix ) { ( bck_plend_add pvn pcal `:p` ( bck_field rec 3 ) ) } {}
+                        ? & & ( bck_sound ) ! ptake ( mem_fn_retptr_arg pcal paix ) { ( bck_plend_add pvn pcal `:p` ( __bck_pl_line rec ) ) } {}
                     } }
                 ? | != 0 g_bck_has_cursor != 0 g_bck_epy_any { = st ( bck_cursor_follow st rec kc ) } {}
                 = p + p 1
@@ -41579,7 +41604,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                     : ~ s lrest ( bck_sx_hpaths ( nurl_str_slice w1 1 - ( nurl_str_len w1 ) 1 ) )
                     ~ != 0 ( nurl_str_len lrest ) {
                         : s lw ( str_first_word lrest ) = lrest ( str_skip_word lrest )
-                        ( bck_plend_add lw ( bck_field rec 5 ) `` ( bck_field rec 3 ) )
+                        ( bck_plend_add lw ( bck_field rec 5 ) `` ( __bck_pl_line rec ) )
                     }
                 } {}
                 // (A closure that runs here and gives a borrowing binding a
@@ -41835,7 +41860,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 // field holds no storage, so nothing else of a `pendfield`
                 // row's applies (agora #566).
                 : s vfc ( bck_field rec 5 )
-                ? ( mem_fn_lends_arg vfc ( bck_field rec 6 ) ) { ( bck_plend_add ( bck_field rec 1 ) vfc `:v` ( bck_field rec 3 ) ) } {}
+                ? ( mem_fn_lends_arg vfc ( bck_field rec 6 ) ) { ( bck_plend_add ( bck_field rec 1 ) vfc `:v` ( __bck_pl_line rec ) ) } {}
                 = p + p 1
                 = done T
             } {}
@@ -41856,13 +41881,13 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 } {}
                 = st ( bck_inout_borrow_check st rec )
                 ? ( mem_fn_lends_arg fcal ( bck_field rec 6 ) ) {
-                    ( bck_plend_add ( bck_field rec 1 ) fcal `` ( bck_field rec 3 ) )
+                    ( bck_plend_add ( bck_field rec 1 ) fcal `` ( __bck_pl_line rec ) )
                     ? & != 0 g_arcp_any ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `arcp##` fcal ) ( bck_field rec 6 ) ) {
                         ( bck_add_word_once `plarc` ( nurl_str_cat3 ( bck_field rec 1 ) `:` fcal ) )
                         ? & != 0 g_frzp_any ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `frzp##` fcal ) ( bck_field rec 6 ) ) { ( bck_add_word_once `plfrz` ( nurl_str_cat3 ( bck_field rec 1 ) `:` fcal ) ) } {}
                         ? & != 0 g_frzp_any ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `frzh##` fcal ) ( bck_field rec 6 ) ) { ( bck_add_word_once `plfrh` ( nurl_str_cat3 ( bck_field rec 1 ) `:` fcal ) ) } {}
                     } {}
-                } { ? ( mem_fn_retptr_arg fcal ( bck_field rec 6 ) ) { ( bck_plend_add ( bck_field rec 1 ) fcal `:p` ( bck_field rec 3 ) ) } {} }
+                } { ? ( mem_fn_retptr_arg fcal ( bck_field rec 6 ) ) { ( bck_plend_add ( bck_field rec 1 ) fcal `:p` ( __bck_pl_line rec ) ) } {} }
                 // A field a `sink` parameter takes (`( take . h buf )`) is
                 // emptied where it lives: moved, as a binding handed to one
                 // is, until it is given a value again (a `fieldset` row).
@@ -44584,6 +44609,17 @@ unsafe @ __bck_rv_self_tie i wid s cals → v {
     ? == 0 ( nurl_str_len srcs ) { ^ st } {}
     : s prior ? == BCK_BORROWED_SHARED ( bck_st_get st wid ) ( nurl_sym_get g_bck ( bck_bkey `bs_` ( nurl_str_int wid ) ) ) ``
     ^ ( bck_borrow_begin st wid ? == 0 ( nurl_str_len prior ) srcs ( nurl_str_cat3 prior ` ` srcs ) )
+}
+
+// The line a pending row's lend is keyed by: its statement's, where that
+// began on an earlier line (field 8, __bck_pend_line), else its own — the
+// line of the `let` / `assign` row that takes the lend (bck_take_plend).
+// A call whose arguments run over several lines lends to the binding its
+// statement binds as a one-line call does (Agora #678).
+@ __bck_pl_line s rec → s {
+    : s sl ( bck_field rec 8 )
+    ? != 0 ( nurl_str_len sl ) { ^ sl } {}
+    ^ ( bck_field rec 3 )
 }
 
 // Note that the call on `line` lends argument binding `id` (`tag` `:p`
@@ -50097,7 +50133,10 @@ unsafe @ borrowck_fn_end i lex i syms s fname → v {
 @ gen_stmt i lex i syms i cg → s {
     ? == g_cg_blk_depth g_rp_d0 { = g_rp_nstmt + g_rp_nstmt 1 = g_rp_rd 0 } {}
     ( __nest_enter lex )
+    : i __bsl g_bck_stmt_line
+    = g_bck_stmt_line ( nurl_lex_line lex )
     : s v ( __gen_stmt_level lex syms cg )
+    = g_bck_stmt_line __bsl
     = g_nest_depth - g_nest_depth 1
     ^ v
 }
