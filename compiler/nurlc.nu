@@ -53168,7 +53168,6 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         // "use of undefined identifier 'x'", blaming the NAME. Same
         // helper, same wording as the parameter case, so the two agree.
         ( check_type_known lex syms ptype `a binding type` __bt_line __bt_col )
-        ( __check_value_type_defined lex syms ptype `a binding type` __bt_line __bt_col )
         // Capture the NURL form of `! T E` when present, so gen_match can
         // recover the inner T (e.g. `Json`) for struct-handle reconstruction.
         // parse_type's recursive descent through parse_type_res leaves the
@@ -71637,7 +71636,6 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     : i __rt_col ( nurl_lex_col lex )
     : s ret_ty ( parse_type lex )
     ( check_type_known lex syms ret_ty `the return type` __rt_line __rt_col )
-    ( __check_value_type_defined lex syms ret_ty `the return type` __rt_line __rt_col )
     : s nurl_ret ( nurl_sym_get g_res_type_syms `__last_res_nurl__` )
     // LLVM type of the Ok-payload T (e.g. `%Vec__i8` for `! ( Vec u ) s`,
     // `i8*` for `! s E`). Recorded per-function — mirrors `<fname>__nurl_ret`
@@ -72546,7 +72544,6 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     : i __pt_col ( nurl_lex_col lex )
     : s lt ( parse_type lex )
     ( check_type_known lex syms lt `a parameter type` __pt_line __pt_col )
-    ( __check_value_type_defined lex syms lt `a parameter type` __pt_line __pt_col )
     // Capture the `! T E` / `? T` payload metadata for this parameter so a
     // `?? <param> { T x → … }` match can reconstruct a struct / pointer
     // payload from its i64 slot — exactly as gen_let_or_struct does for a
@@ -73403,63 +73400,6 @@ unsafe @ __check_fnty_types_defined i lex i syms s flt → v {
     }
 }
 
-// A named type used BY VALUE — a binding, a parameter, a return, a
-// global — must already be DEFINED in the emitted IR: LLVM sizes the
-// alloca / load / store / argument from the type's body, and a body that
-// arrives later in the module leaves an opaque struct at the use site.
-// The failure was location-free ("Cannot allocate unsized type
-// %FineTuneReport" from clang, or "type 'X' has no field 'a'" from the
-// field pass when the struct's fields were not registered yet, both
-// pointing away from the cause: a `: X x …` above the `: X { … }`).
-// Only the by-value form is affected — a pointer to a later-declared
-// type is resolved when the definition arrives — and generic
-// instantiations (`%Vec__i64`) are emitted ahead of every user struct,
-// so dunder names are skipped, as is the `%dyn.` fat pointer. The
-// pre-scan registered every type NAME, so a name that maps to `%Name`
-// without a `ty##` position is exactly "declared later".
-unsafe @ __check_value_type_defined i lex i syms s llvm_ty s ctx i tline i tcol → v {
-    : i n ( nurl_str_len llvm_ty )
-    : *u llvm_ty_p # *u llvm_ty
-    : ~ i i 0
-    ~ < i n {
-        ? == ( nurl_str_at llvm_ty_p n i ) 37
-        { : ~ i j + i 1
-            ~ & < j n ( __is_ident_char ( nurl_str_at llvm_ty_p n j ) ) { = j + j 1 }
-            : s name ( nurl_str_slice llvm_ty + i 1 - j + i 1 )
-            : i by_value ? | >= j n != ( nurl_str_at llvm_ty_p n j ) 42 1 0
-            // (A name with `__` is a generic's instance, emitted before its
-            // first use — unless it is a module's own name an aliased import
-            // spelled `geo__Pt`: that one follows the rule like any other,
-            // agora #730.)
-            : s __vt_user ( __alias_user_name name )
-            ? & & & & != 0 by_value != 0 ( nurl_str_len name )
-            | ! ( __has_dunder name ) != 0 ( nurl_str_len __vt_user ) ! ( seq name `dyn` ) ! ( is_tparam_like name )
-            { : s sv ( nurl_sym_get syms name )
-                ? & & & != 0 ( nurl_str_len sv ) == ( nurl_str_get sv 0 ) 37
-                == 0 ( nurl_sym_len g_fn_pos_syms ( nurl_str_cat `ty##` name ) )
-                // (A struct's or an enum's layout — fields and their names,
-                // variants and their payloads, the compiler drop it needs — is
-                // read before any body compiles, read_type_layouts: its values
-                // work above its declaration, agora #772, #752. What is left is
-                // a type no layout was read for.)
-                == 0 ( nurl_sym_len2 g_type_layouts name `__body` )
-                { ? == 0 ( nurl_str_len __vt_user ) {
-                        ( die_pos lex tline tcol ( nurl_str_cat
-                        ( nurl_str_cat4 `type '` name `' is used by value as ` ctx )
-                        ( nurl_str_cat3 ` here but is declared LATER in the program, and its layout is not known before its declaration (a pointer to it is fine). Move the declaration of '` name `' above this use, or import the file that declares it before this one.` ) ) )
-                    } {
-                        ( die_pos lex tline tcol ( nurl_str_cat
-                        ( nurl_str_cat4 `type '` __vt_user `' is used by value as ` ctx )
-                        ` here but is declared LATER in the program: the import that declares it comes below this use, and its layout is not known before it (a pointer to it is fine). Move the import above this use.` ) )
-                    }
-                }
-                {} }
-            {}
-            = i j }
-        { = i + i 1 }
-    }
-}
-
 // ── A struct that holds itself by value (agora #661) ─────────────
 // `: N { i v ?N next }`, or `: A { B b }` beside `: B { A a }`: a value
 // that contains a value of its own type has no finite size. Only the field
@@ -73851,8 +73791,7 @@ unsafe @ gen_const_decl s ty_tok b is_mutable i lex i syms i ty_line i ty_col �
                 ( nurl_str_cat ( nurl_str_cat4
                 `', which is a type keyword. A declaration is ': TYPE name value' — the type comes FIRST. Swap them: ': ` cname ` ` ty_tok )
                 ` <value>'.` ) ) ) }
-            { ( check_type_known lex syms lt `a global declaration's type` __ct_line __ct_col )
-                ( __check_value_type_defined lex syms lt `a global declaration's type` __ct_line __ct_col ) }
+            { ( check_type_known lex syms lt `a global declaration's type` __ct_line __ct_col ) }
         }
         {}
         // Flat-namespace guard for globals, twin of the struct one above: a
