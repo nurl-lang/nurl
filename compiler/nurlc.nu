@@ -1987,6 +1987,14 @@ unsafe @ agg_field_count i syms s ot → i {
 // it is never stale, and none of the last-call channels the borrow walk
 // reads need clearing for it.
 : ~ i g_dyn_box_reg -1
+// The names of the `inout` parameters of the function being compiled (and
+// of a closure body in it): gen_call's hand-over step for them (agora
+// #778) asks this short list, not the symbol table, per argument.
+: ~ s g_fn_io_names ``
+// (nurlc compiles on one thread: nothing races on the list.)
+unsafe @ __fn_io_reset → v { = g_fn_io_names `` }
+
+unsafe @ __fn_io_add s name → v { = g_fn_io_names ( nurl_str_cat3 g_fn_io_names ` ` name ) }
 
 // Set when a literal argument's owned fields wait in `__argtmp_litown__`
 // for mem_arg_temps: the symbol is written and read for a literal only.
@@ -18924,9 +18932,6 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // what the field holds (the `pendfield` row below).
         : ~ s arg_froot ``
         : ~ s arg_vfroot ``
-        // An `inout` field target that owns storage: its address and type
-        // (`<ptr> <ty>`), for the callee that consumes it (below).
-        : ~ s arg_io_fld ``
         ? is_inout_arg
         { ? == bck_arg_tt TT_DOT
             {  // `inout` field target — `. obj field`.
@@ -18939,7 +18944,6 @@ unsafe @ gen_call_body i lex i syms i cg → s {
                 // (A field that holds storage: one a borrow can be taken from.)
                 : s __io_fty ? ( is_ptr_ty at ) ( nurl_str_slice at 0 - ( nurl_str_len at ) 1 ) ``
                 ? & != 0 g_borrowck | ( __is_handle_ty __io_fty ) ( __type_needs_drop __io_fty syms ) { = arg_froot __io_path } {}
-                ? & != 0 g_auto_drop_strings | ( __is_handle_ty __io_fty ) ( __type_needs_drop __io_fty syms ) { = arg_io_fld ( nurl_str_cat3 av ` ` __io_fty ) } {}
                 // (…and a view field by its path too: agora #590.)
                 ? & & & != 0 g_borrowck == 0 ( nurl_str_len arg_froot ) != 0 ( nurl_str_len __io_path ) == ( bck_walk_class __io_fty ) 2 { = arg_vfroot __io_path } {}
             }
@@ -20190,16 +20194,19 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // consumption). Left in place, the struct's own drop released it
         // again (agora #567). After the call: the callee reads it through
         // the address.
-        ? & != 0 ( nurl_str_len arg_io_fld ) | summary_callee ( str_has_index callee_sink arg_idx ) {
-            : s __iz_p ( str_first_word arg_io_fld )
-            : s __iz_t ( nurl_str_slice arg_io_fld + ( nurl_str_len __iz_p ) 1 - - ( nurl_str_len arg_io_fld ) ( nurl_str_len __iz_p ) 1 )
-            : ~ s __iz_c ( nurl_str_cat `true` `` )
-            ? ! ( str_has_index callee_sink arg_idx ) {
-                = __iz_c ( nurl_cg_reg cg )
-                ( emit_sink_flag_load ( nurl_str_cat `@.__nurl_sink.` ( nurl_str_int ( sink_flag call_name fname arg_idx ) ) ) __iz_c )
+        // (`av` is the field's address there, `at` a pointer to its type.)
+        ? & & & & != 0 g_auto_drop_strings is_inout_arg == bck_arg_tt TT_DOT ( is_ptr_ty at ) | summary_callee ( str_has_index callee_sink arg_idx ) {
+            : s __iz_t ( nurl_str_slice at 0 - ( nurl_str_len at ) 1 )
+            ? | ( __is_handle_ty __iz_t ) ( __type_needs_drop __iz_t syms ) {
+                : s __iz_p ( nurl_str_cat av `` )
+                : ~ s __iz_c ( nurl_str_cat `true` `` )
+                ? ! ( str_has_index callee_sink arg_idx ) {
+                    = __iz_c ( nurl_cg_reg cg )
+                    ( emit_sink_flag_load ( nurl_str_cat `@.__nurl_sink.` ( nurl_str_int ( sink_flag call_name fname arg_idx ) ) ) __iz_c )
+                } {}
+                : s __iz_w ( nurl_str_cat4 `z|` __iz_c ( nurl_str_cat3 `|` ( __zero_if_request ( nurl_llty __iz_t ) ) `|` ) __iz_p )
+                = owned_arg_temps ? == 0 ( nurl_str_len owned_arg_temps ) __iz_w ( nurl_str_cat3 owned_arg_temps ` ` __iz_w )
             } {}
-            : s __iz_w ( nurl_str_cat4 `z|` __iz_c ( nurl_str_cat3 `|` ( __zero_if_request ( nurl_llty __iz_t ) ) `|` ) __iz_p )
-            = owned_arg_temps ? == 0 ( nurl_str_len owned_arg_temps ) __iz_w ( nurl_str_cat3 owned_arg_temps ` ` __iz_w )
         } {}
         // This function's own `inout` parameter handed by name to a callee
         // that takes it (`( eat p )`): its value is loaded already, and the
@@ -20209,7 +20216,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // which ran before a post-call step could (agora #778). (A handle
         // type only: its zero is the empty value. The caller's drop flag is
         // cleared as before.)
-        ? & & & != 0 g_auto_drop_strings ( is_ident_tok bck_arg_tt ) ( seq ( nurl_sym_get2 syms bck_arg_val `__inout` ) `1` ) | summary_callee ( str_has_index callee_sink arg_idx ) {
+        ? & & & & & != 0 ( nurl_str_len g_fn_io_names ) != 0 g_auto_drop_strings ( is_ident_tok bck_arg_tt ) ( str_contains_word g_fn_io_names bck_arg_val ) | summary_callee ( str_has_index callee_sink arg_idx ) ( seq ( nurl_sym_get2 syms bck_arg_val `__inout` ) `1` ) {
             : s __ie_p ( nurl_sym_get2 syms bck_arg_val `__ptr` )
             ? & != 0 ( nurl_str_len __ie_p ) ( __is_handle_ty at ) {
                 : ~ s __ie_c ( nurl_str_cat `true` `` )
@@ -62903,6 +62910,7 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
             ( nurl_sym_def body_syms ( nurl_str_cat bpname `__param` ) `1` )
             ( nurl_sym_def body_syms ( nurl_str_cat bpname `__mutable` ) `1` )
             ( nurl_sym_def body_syms ( nurl_str_cat bpname `__inout` ) `1` )
+            ( __fn_io_add bpname )
         } {
             // Alloca for each param so it can be loaded
             : s bpptr ( nurl_cg_reg cg )
@@ -71424,6 +71432,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     ( nurl_sym_def syms `__fn_param_names__` `` )
     ( nurl_sym_def syms `__fn_param_lltys__` `` )
     ( nurl_sym_def syms `__drop_glue_moved__` `` )
+    ( __fn_io_reset )
     // Guard against EOF too: without this, a malformed header that
     // never produces TT_ARROW (e.g. ASCII `->` instead of `→`) hangs
     // the compiler in an infinite loop, because gen_fn_param on EOF
@@ -72481,7 +72490,8 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
         { ( nurl_sym_def syms ( nurl_str_cat pname `__mutable` ) `1` )
             ( nurl_sym_def syms ( nurl_str_cat pname `__ptr` ) ( nurl_str_cat `%` pname ) )
             ( nurl_sym_def syms ( nurl_str_cat pname `__inout` ) `1` )
-            ( nurl_sym_def syms `__last_param_inout__` `1` ) }
+            ( nurl_sym_def syms `__last_param_inout__` `1` )
+            ( __fn_io_add pname ) }
         {}
         // A `sink` parameter is an ordinary by-value parameter here;
         // only the side-channel is set so gen_fn_decl_concrete records
