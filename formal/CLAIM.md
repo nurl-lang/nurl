@@ -569,10 +569,13 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   of the program's function on the binding (`Step.scopeDEnd`): lent to a
   destructor that takes it lent, after which the scope frees the tree; or
   moved into a struct's glue, which takes it apart (Agora #616, below).
-- A panic that unwinds to the frame stops there. It runs the destructor,
-  frees the binding, and raises again (`Step.scopeDP`). The frame is gone,
-  so a panic inside the destructor does not run it again, and `scope x`
-  still frees the fields.
+- A panic that unwinds to the frame stops there. The frame is left at its
+  end, followed by the panic raised again (`Step.scopeDP`); its end runs
+  the destructor and frees the binding (`Step.scopeDEnd`). The frame is
+  gone once its end is taken, so a panic inside the destructor does not
+  run it again, and `scope x` still frees the fields. (Agora #790: what
+  the unwinding orphaned is reaped at that end, inside the frame, first;
+  `A2/DROP_DESIGN.md`, 3d.)
 - A destructor of a type that holds views reads them, so what they point
   into outlives the binding while it may own its value (#224's rule,
   `DtorSafe`). No rule ends such a view on any path, the panic path
@@ -619,8 +622,9 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
     reaches between its steps, `A2.no_orphan`; with one, `Step.reap` is a
     step too), the frame's only step calls `f` on `x` (lent,
     the tree freed after; or moved into a struct's glue) (`A2.Dtor.scopeD_end_runs_dtor`); a panic out
-    of its body with `x` owning runs it too
-    (`A2.Dtor.scopeD_panic_runs_dtor`);
+    of its body with `x` owning runs it too: the frame is left at its end,
+    the panic after it, and from there (no orphan) the only step is that
+    end's call (`A2.Dtor.scopeD_panic_runs_dtor`);
   - A2-drop.3b, the drain, step by step. In a state the invariant holds
     of, what a typed frame's `x` owns says which step its end takes: a
     value that is no node is of the destructor type, and a node is a `Vec`
@@ -667,7 +671,8 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   result frame does: a panic in the callee after it has set its result
   (in nurlc, where `^ v` returns at once, the destructor of one of the
   callee's own bindings) stops at the frame with the slot owning, and the
-  frame's panic step runs the result's destructor and frees it, or drains
+  frame, left at its end by its panic step, runs the result's destructor
+  and frees it, or drains
   a `Vec` result, before the panic goes on (`scopeD_panic_runs_dtor`,
   `scopeD_panic_drains`); on the normal path the result has moved to the
   caller's binding by the frame's end, which runs nothing
@@ -986,17 +991,29 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   elements' destructors, Agora #607 / #755), and everywhere else
   that could hold a destructor value is refused (the list below), but for
   the `Arc` payloads 3d names (an uncaught panic's end, a cycle of
-  orphans, A3's threads), freed with no code. One exactness gap found in
-  review (Agora #790): an `Arc` orphaned by a panic's UNWINDING is reaped
-  at the first frame the unwinding reaches (a `scopeD` frame's
-  `seq (scope x (letcall … f [x] skip)) panic`, or the statement after a
-  `recover`), not inside the drain as nurlc's journal does it. A panic in
-  that reaped destructor (or in an element's, for an `Arc<Vec<D>>`) then
-  skips `x`'s own destructor (its `scope` frees it with no code), or
-  escapes the `recover`, where nurlc's drain runs the rest and the
-  `recover` catches. Memory safety and leak freedom are unaffected
-  (everything is freed); which destructors run, and whether that
-  `recover` catches, are not modelled faithfully there. That these are all
+  orphans, A3's threads), freed with no code. An `Arc` orphaned by a
+  panic's UNWINDING (Agora #790) is reaped inside the frame that caught
+  the unwinding: a destructor frame's catch (`Step.scopeDP`,
+  `scopeDPDrain`) leaves the frame at its end, `seq (scopeD x f skip)
+  panic`, and a `recover`'s (`Step.catchP`) leaves `catchR x m0 skip`, so
+  the reap's only redex is that end's `skip`, inside the frame
+  (`A2.ArcPanicWitness.frame_reap_inside`, `recover_reap_inside`). A
+  panic in the reaped destructor (or in an element's, for an
+  `Arc<Vec<D>>`) comes back to that frame: `x`'s frame then still runs
+  `x`'s destructor (`reaped_panic_runs_dtor`), and the `recover` still
+  catches (`recover_catches_reaped`; no step of a `recover` frame is a
+  panic, `catchR_no_panic`), as nurlc's journal drain runs the drops
+  after one that panics and keeps the first panic going, inside the same
+  frame (`stdlib/runtime_core.c`, `nurl_panic`). The order is nurlc's
+  too: the share's binding is inside `x`'s scope, so its drop goes before
+  `x`'s destructor in the drain, as the reap goes before `x`'s frame's
+  end. Witnesses: `A2.ArcPanicWitness.main1` (a destructor binding whose
+  scope's panic drops the last share of an `Arc` of a value whose
+  destructor panics: `main1_safe`, `main1_no_leak_panic`, `main1_no_leak`,
+  `main1_unwind`) and `main2` (the same under a `recover`: `main2_safe`,
+  `main2_no_leak`, `main2_no_leak_panic`, `main2_unwind`;
+  `A3.arcPanic_claim` over both); the runs are not traced, the steps are
+  theorems of any store of their shape. That these are all
   the places is read off the rules, not a single theorem (above). The
   destructors INSIDE a value are shown for a struct's fields (Agora #616),
   an enum's payload (Agora #632) and a closure's environment (Agora
