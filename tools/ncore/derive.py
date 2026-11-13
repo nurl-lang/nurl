@@ -147,8 +147,11 @@ def extern(ws):
     its result is the caller's own where the walk says so (`ret_owned`),
     and nothing to follow otherwise."""
     n = 16
+    # (a foreign function writes through a pointer parameter it does not
+    # declare `in`: `ffi_writes`)
     return {"modes": ["in"] * n, "res": "own" if ws.get("ret_owned") else "none", "lends": [], "rholds": [],
-            "effects": [], "stores": [], "consumes": sorted(_idx(ws, "sink", n)),
+            "effects": [(k, (), "drop") for k in _idx(ws, "ffi_writes", n)], "stores": [],
+            "consumes": sorted(_idx(ws, "sink", n)),
             "elems": [], "detaches": [], "invokes": [], "cloargs": [], "shares": [], "derived": True}
 
 

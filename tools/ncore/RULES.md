@@ -69,6 +69,7 @@ summarised by the same analysis, to a fixpoint over the program.
 | A field read off a temporary leaves it | §7.5 (h323) | `transfer` |
 | An owned temporary a callee hands back whole leaves with the result; the result is owned per call | §1 Temporaries, §7.6 | `apply_call` (`whole`) |
 | A result owned on some paths and lent on others borrows its argument | §7.6 Call results | `make_summary` |
+| A field or a payload of an owned temporary a callee hands back is taken out of it: the result owns it (an element of its buffer is not) | §1 Temporaries, §7.6 (#635) | `apply_call` (`part`) |
 | An owned slice moves into the literal that takes it | §7.6 | `transfer` (`stored`) |
 | A fresh raw string kept by a value is owned by nothing | §2.13 | `fresh_string_kept` |
 | A module global outlives every frame: it holds no view of one | §2.13 | `gstore` |

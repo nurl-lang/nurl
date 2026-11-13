@@ -95,14 +95,13 @@ def verdict_nurlc(path):
                 # a function of the runtime, an extern: no body anywhere
                 memo[n] = derive.extern(prog.walk_sums[n]) if n in prog.walk_sums else None
             else:
-                ws = derive.walk_answers(prog, n) if prog.fn_flags[n] & 1 else {}
-                memo[n] = derive.derive(prog, fn, ws) if ws.get("body_done") else None
+                # (it has IR, so the walk compiled it: its answers are final)
+                memo[n] = derive.derive(prog, fn, derive.walk_answers(prog, n)) if prog.fn_flags[n] & 1 else None
         return memo[n]
     prog.derived = derived
 
     def declared(n):
-        return (PRIMS.get(n) is not None or PRIMS.get(prog.fn_tmpl.get(n) or "") is not None
-                or derived(n) is not None)
+        return PRIMS.get(n) is not None or PRIMS.get(prog.fn_tmpl.get(n) or "") is not None
 
     def callees(fn):
         out = set()
@@ -124,11 +123,15 @@ def verdict_nurlc(path):
         if flags & 1:
             if declared(n):
                 continue
-            if flags & 2:
-                # the library function the program called that led here is
-                # the one to declare a summary for
+            if flags & 6:
+                # its body crosses the raw boundary (raw memory, a `raw`
+                # callee, a foreign function): the walk's answers stand
+                # for it
+                # (derive.py) until a summary is declared
+                if derived(n) is not None:
+                    continue
                 top = by or n
-                raise Unsupported(f"no summary for {prog.fn_tmpl.get(top) or top}")
+                raise Unsupported(f"no summary for {prog.fn_tmpl.get(top) or top}" + (f" ({n})" if n != top else ""))
             trusted.add(n)
         keep[n] = every[n]
         # (`src`: the library function the program itself called on the way here)

@@ -737,7 +737,7 @@ class FnCheck:
                     continue
             if avs[k].own == "L":
                 ty = self.ty_of_place((op[1], op[2])) if op[0] == "v" else None
-                if ty is not None and self.T.owning(ty) and ty[0] not in VIEW_TYPES:
+                if ty is not None and self.T.owns_handle(ty):
                     # a part read in place out of its owner is taken out of
                     # it; any other borrowed value is handed over as a copy
                     # (MEMORY.md §7.6: an owner moves, a borrow is copied)
@@ -871,6 +871,7 @@ class FnCheck:
                 # (the arguments this call may hand back whole, as written)
                 self.call_lent[dest_vid] = [ops[k] for (k, path, kind) in sm["lends"]
                                             if not path and kind == "handle" and k < len(ops)]
+            part = False
             for k in whole:
                 moved = self.move_out(st, ops[k][1], line)
                 loans |= moved.loans
@@ -883,13 +884,23 @@ class FnCheck:
                     # what the argument holds, handed back as the value itself
                     loans |= hloans(hsub(av.held, tuple(path)))
                     continue
+                if (kind == "handle" and path and "*" not in path and ops[k][0] == "v" and not ops[k][2]
+                        and av.own == "O" and self.fn.vars[ops[k][1]].kind == "temp"):
+                    # a part of an owned temporary the callee hands back - a
+                    # field, a payload: not an element of its buffer - is
+                    # taken out of it: the result owns the part, the rest
+                    # goes with the temporary (MEMORY.md §1, Temporaries)
+                    held |= hsub(av.held, tuple(path))
+                    st.gone = st.gone | {(ops[k][1], tuple(path))}
+                    part = True
+                    continue
                 loans |= av.loans
                 for a in av.alias:
                     pl = (a[0], a[1] + tuple(path))
                     alias.add(pl)
                     loans.add(self.loan(st, (site, "l", k), pl, kind))
                 held |= hsub(av.held, tuple(path))
-            if whole:
+            if whole or part:
                 # (its own on the calls that handed a temporary back, a lend
                 # of the other arguments on the rest: owned per call)
                 return AV("O", loans, alias, held)

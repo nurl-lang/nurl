@@ -257,6 +257,7 @@
 : ~ i g_core_virt_n 0
 : ~ i g_core_virt_cap 0
 : ~ i g_core_virt_seen 0
+: ~ i g_raw_probe 0  // 1 while the core IR asks whether a call crosses the raw boundary, 2 once a rule said yes (bck_check_raw_call)
 : ~ i g_core_callees 0  // the functions the IR called, interned, each once (core_note_callee)
 : ~ i g_core_callee_n 0
 : ~ i g_core_callee_cap 0
@@ -9894,6 +9895,9 @@ unsafe @ core_call i h0 s ret_ty b ind → v {
     ? & ! ind != 0 g_core_callee {
         ? >= ( nurl_str_find # s g_core_callee `__dyn__` ) 0 { ( core_note_virt g_core_callee ) } {}
         ( core_note_callee g_core_callee )
+        // (a foreign function: what it does to the memory it is handed is
+        // nothing this IR shows — bit 2 of the function's flags)
+        ? & != 0 g_root_syms != 0 ( nurl_sym_len2 g_root_syms # s g_core_callee `__ffi` ) { = g_core_fflags | g_core_fflags 4 } {}
     } {}
     ? ( core_ty_scalar ret_ty ) {
         ( core_w CO_EVAL )
@@ -10757,6 +10761,8 @@ unsafe @ core_print_sum i syms s f i np → v {
     ( __core_sum_kv `ret_borrow` ( nurl_str_cat ( nurl_sym_get2 syms f `__ret_borrow` ) `` ) )
     ( __core_sum_kv `ret_unowned` ( nurl_str_cat ( nurl_sym_get2 syms f `__ret_unowned` ) `` ) )
     ( __core_sum_kv `body_done` ( nurl_str_cat ( nurl_sym_get2 syms f `__body_done` ) `` ) )
+    ( __core_sum_kv `ffi` ( nurl_str_cat ( nurl_sym_get2 syms f `__ffi` ) `` ) )
+    ( __core_sum_kv `ffi_writes` ( nurl_str_cat ( nurl_sym_get2 syms f `__ffi_writes` ) `` ) )
     // (per parameter: how the result may lend it — 0 never, 1 the argument
     // itself, 2 possibly a part of it — and whether the function runs what
     // the parameter holds)
@@ -39770,52 +39776,72 @@ unsafe @ __callee_decl_name s cn → s {
 // A call to a raw-memory primitive, or to a foreign function declared
 // outside the stdlib, from code that is not `unsafe`.
 @ bck_check_raw_call i lex i syms s call_name → v {
+    // The core IR's answer to "does this function's body cross the raw
+    // boundary?" is this rule's, asked of every call whoever makes it (bit
+    // 1 of the function's flags, docs/dev/CORE_IR.md §2).
+    ? != 0 g_core_live {
+        = g_raw_probe 1
+        ( __bck_raw_call_rules lex syms call_name )
+        ? == g_raw_probe 2 { = g_core_fflags | g_core_fflags 2 } {}
+        = g_raw_probe 0
+    } {}
     ? | ! ( bck_sound ) ( bck_unsafe_ctx ) { ^ v } {}
+    ( __bck_raw_call_rules lex syms call_name )
+}
+
+// A refusal of __bck_raw_call_rules: the diagnostic, or only the answer
+// when the core IR asks (g_raw_probe).
+@ __raw_call_die i lex s msg → v {
+    ? != 0 g_raw_probe { = g_raw_probe 2 ^ v } {}
+    ( die lex msg )
+}
+
+@ __bck_raw_call_rules i lex i syms s call_name → v {
     : s base ( bck_generic_base call_name )
     ? != 0 g_raw_fns {
         ? | != 0 ( nurl_sym_len g_raw_fns call_name ) != 0 ( nurl_sym_len g_raw_fns ( __callee_decl_name call_name ) ) {
-            ( die lex ( nurl_str_cat3 `'` ( bck_fn_show call_name ) `' is declared 'raw': it trusts its caller for what its comment says it requires (a pointer that is live, a size that fits, code that is sound), which the compiler cannot check — so only an 'unsafe' function, vouching for that, may call it. Use the safe API its package offers around it, or, if this function genuinely needs it and you vouch for the call, declare it 'unsafe @ name …'.` ) )
+            ( __raw_call_die lex ( nurl_str_cat3 `'` ( bck_fn_show call_name ) `' is declared 'raw': it trusts its caller for what its comment says it requires (a pointer that is live, a size that fits, code that is sound), which the compiler cannot check — so only an 'unsafe' function, vouching for that, may call it. Use the safe API its package offers around it, or, if this function genuinely needs it and you vouch for the call, declare it 'unsafe @ name …'.` ) )
             ^ v
         } {}
     } {}
     ? | ( bck_raw_call base ) != 0 ( nurl_sym_len2 syms call_name `__rawcall` ) {
-        ( die lex ( nurl_str_cat3 `'` base `' handles raw memory, which only an 'unsafe' function may do: what it returns or takes is memory the compiler cannot follow, so a mistake there is a use-after-free, a double free or a leak no check can see. Use the owning types instead (String, Vec, HashMap, Box/Rc, a struct of them — they release themselves), or, if this function genuinely needs raw memory and you vouch for its memory safety, declare it 'unsafe @ name …'.` ) )
+        ( __raw_call_die lex ( nurl_str_cat3 `'` base `' handles raw memory, which only an 'unsafe' function may do: what it returns or takes is memory the compiler cannot follow, so a mistake there is a use-after-free, a double free or a leak no check can see. Use the owning types instead (String, Vec, HashMap, Box/Rc, a struct of them — they release themselves), or, if this function genuinely needs raw memory and you vouch for its memory safety, declare it 'unsafe @ name …'.` ) )
         ^ v
     } {}
     // An Arc's payload is frozen once made (h213): replacing it in place
     // races every clone's unlocked read, so only raw code that vouches no
     // other thread can see the Arc may.
     ? ( seq base `arc_set` ) {
-        ( die lex `'arc_set' replaces an Arc's payload in place, but an Arc's payload is frozen once made: every thread holding a clone reads it without a lock, so replacing it races them. arc_new the new value as an Arc of its own; keep state one thread changes in an Rc; put state threads share and change in a Locked (stdlib/std/thread.nu) and replace it with locked_set, which holds its lock. Only an 'unsafe' function, vouching that no other thread can see this Arc, may call arc_set.` )
+        ( __raw_call_die lex `'arc_set' replaces an Arc's payload in place, but an Arc's payload is frozen once made: every thread holding a clone reads it without a lock, so replacing it races them. arc_new the new value as an Arc of its own; keep state one thread changes in an Rc; put state threads share and change in a Locked (stdlib/std/thread.nu) and replace it with locked_set, which holds its lock. Only an 'unsafe' function, vouching that no other thread can see this Arc, may call arc_set.` )
         ^ v
     } {}
     ? ( __fn_stdlib_raw_table call_name ) {
-        ( die lex ( nurl_str_cat3 `'` call_name `' takes the standard library's raw symbol table as a plain integer — the table's address, which any number can pose as and any thread can hold — so only an 'unsafe' function may call it. Use a SymTab (symtab_new, symtab_def, symtab_get): it owns its table, cannot be made up, and releases the table when it goes.` ) )
+        ( __raw_call_die lex ( nurl_str_cat3 `'` call_name `' takes the standard library's raw symbol table as a plain integer — the table's address, which any number can pose as and any thread can hold — so only an 'unsafe' function may call it. Use a SymTab (symtab_new, symtab_def, symtab_get): it owns its table, cannot be made up, and releases the table when it goes.` ) )
         ^ v
     } {}
     ? & ( bck_raw_addr_call base ) ( __fn_from_stdlib base ) {
-        ( die lex ( nurl_str_cat3 `'` base `' takes a physical address as a plain integer, and the CPU or the device reads or writes memory there whatever the number is — only an 'unsafe' function, which vouches that the address is the device's own register block or a buffer it owns, may call it.` ) )
+        ( __raw_call_die lex ( nurl_str_cat3 `'` base `' takes a physical address as a plain integer, and the CPU or the device reads or writes memory there whatever the number is — only an 'unsafe' function, which vouches that the address is the device's own register block or a buffer it owns, may call it.` ) )
         ^ v
     } {}
     ? & ( bck_raw_stream_call base ) ( __fn_from_stdlib base ) {
-        ( die lex ( nurl_str_cat3 `'` base `' passes a C stream (a FILE*) as a string ('s'): read as text it is not one, and a string taken as a stream is closed as one when its File goes — memory the program does not own. Only an 'unsafe' function may call it. Use a File (file_open, file_create, file_close): it owns its stream, and closing it twice is harmless.` ) )
+        ( __raw_call_die lex ( nurl_str_cat3 `'` base `' passes a C stream (a FILE*) as a string ('s'): read as text it is not one, and a string taken as a stream is closed as one when its File goes — memory the program does not own. Only an 'unsafe' function may call it. Use a File (file_open, file_create, file_close): it owns its stream, and closing it twice is harmless.` ) )
         ^ v
     } {}
     ? | != 0 ( nurl_sym_len2 syms call_name `__ffi_raw` ) ( bck_raw_handle_call base ) {
-        ( die lex ( nurl_str_cat3 `'` call_name `' takes a runtime handle — the address of the runtime's own record for a socket, a process or a stream — as a plain integer, and reads or frees what is there: a number that is not a live handle is memory the program does not own. Only an 'unsafe' function may call it. Use the handle type the standard library wraps it in (TcpConn, UdpSocket, ProcChild, …), whose operations are safe.` ) )
+        ( __raw_call_die lex ( nurl_str_cat3 `'` call_name `' takes a runtime handle — the address of the runtime's own record for a socket, a process or a stream — as a plain integer, and reads or frees what is there: a number that is not a live handle is memory the program does not own. Only an 'unsafe' function may call it. Use the handle type the standard library wraps it in (TcpConn, UdpSocket, ProcChild, …), whose operations are safe.` ) )
         ^ v
     } {}
     ? & != 0 ( nurl_sym_len2 syms call_name `__ffi` ) ! ( bck_trusted_file ( nurl_sym_get2 syms call_name `__ffi_src` ) ) {
-        ( die lex ( nurl_str_cat3 `'` call_name `' is a foreign (FFI) function declared outside the standard library: the compiler cannot see what it does with the memory it is handed. Call it only from an 'unsafe' function ('unsafe @ name …'), which vouches that the call is memory-safe, and give the rest of the program a safe wrapper around it.` ) )
+        ( __raw_call_die lex ( nurl_str_cat3 `'` call_name `' is a foreign (FFI) function declared outside the standard library: the compiler cannot see what it does with the memory it is handed. Call it only from an 'unsafe' function ('unsafe @ name …'), which vouches that the call is memory-safe, and give the rest of the program a safe wrapper around it.` ) )
     } {}
     ? ( __fn_raw_param syms call_name ) {
-        ( die lex ( nurl_str_cat3 `'` base `' takes a raw pointer ('*T') and reads or writes through it as far as its caller says, which only an 'unsafe' function may vouch for: a pointer carries no length, so the compiler cannot check that the memory is there. Use the safe API over the owning value (a Vec, a String, a Slice of a Vec), or, if this function genuinely needs raw memory and you vouch for its memory safety, declare it 'unsafe @ name …'.` ) )
+        ( __raw_call_die lex ( nurl_str_cat3 `'` base `' takes a raw pointer ('*T') and reads or writes through it as far as its caller says, which only an 'unsafe' function may vouch for: a pointer carries no length, so the compiler cannot check that the memory is there. Use the safe API over the owning value (a Vec, a String, a Slice of a Vec), or, if this function genuinely needs raw memory and you vouch for its memory safety, declare it 'unsafe @ name …'.` ) )
     } {}
     ? ( __fn_raw_ret syms call_name ) {
-        ( die lex ( nurl_str_cat3 `'` base `' hands back a raw pointer ('*T'), which only an 'unsafe' function may take: the compiler stops following what it points at once the address is out, so reading through it, keeping it, or passing it on as a string ('s') can reach freed memory or run past the buffer. Use the safe API over the owning value (vec_get or iteration for a Vec, a Slice of it, string_data for a String's text), or, if this function genuinely needs the raw pointer and you vouch for its memory safety, declare it 'unsafe @ name …'.` ) )
+        ( __raw_call_die lex ( nurl_str_cat3 `'` base `' hands back a raw pointer ('*T'), which only an 'unsafe' function may take: the compiler stops following what it points at once the address is out, so reading through it, keeping it, or passing it on as a string ('s') can reach freed memory or run past the buffer. Use the safe API over the owning value (vec_get or iteration for a Vec, a Slice of it, string_data for a String's text), or, if this function genuinely needs the raw pointer and you vouch for its memory safety, declare it 'unsafe @ name …'.` ) )
     } {}
     ? ( __fn_stdlib_internal call_name ) {
-        ( die lex ( nurl_str_cat3 `'` ( bck_fn_show call_name ) `' is internal to the standard library (its name begins with '__'): it takes control blocks and buffers as plain values and trusts them, so outside the library only an 'unsafe' function may call it. Use the public API it implements, or, if this function genuinely needs the library's internals and you vouch for its memory safety, declare it 'unsafe @ name …'.` ) )
+        ( __raw_call_die lex ( nurl_str_cat3 `'` ( bck_fn_show call_name ) `' is internal to the standard library (its name begins with '__'): it takes control blocks and buffers as plain values and trusts them, so outside the library only an 'unsafe' function may call it. Use the public API it implements, or, if this function genuinely needs the library's internals and you vouch for its memory safety, declare it 'unsafe @ name …'.` ) )
     } {}
 }
 
