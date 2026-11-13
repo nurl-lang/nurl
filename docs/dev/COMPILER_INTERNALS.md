@@ -14,7 +14,9 @@ and every incremental step here is gated (see §5).
 
 `compiler/nurlc.nu` is **one self-contained file** (no `$`
 imports — it defines its own string/symtab/lexer helpers so stage0 can
-build it from `nurlc_lastgood.ll` with nothing but clang). There is **no
+build it from `nurlc_lastgood.ll` with nothing but clang). Why it is not
+split into modules of its own either:
+[ADR 0003](../adr/0003-one-file-compiler.md). There is **no
 AST and no IR data structure**: parsing, type checking, borrow checking
 and code generation are one recursive descent (`parse_program` →
 `gen_stmt` / `gen_expr` / `gen_*`) that **emits LLVM IR text to stdout

@@ -75,6 +75,9 @@ The compiler (`compiler/nurlc.nu`) is written in NURL itself. The bootstrap
 runs it twice over its own source and requires byte-identical LLVM IR on both
 rounds before the build is accepted. Details: [`docs/BUILDING.md`](docs/BUILDING.md).
 
+Why is the compiler one file, not modules? See
+[ADR 0003](docs/adr/0003-one-file-compiler.md).
+
 ---
 
 ## Quick start
