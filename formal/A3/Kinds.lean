@@ -23,7 +23,8 @@ share of the configuration agrees with (`CKinds`): in every thread's slot
 module globals.  A configuration step keeps one (`TStep.kinds`: a step moves
 `κ` only at the fresh key `nid`, which no share names yet).  The start has
 one when its blocks and globals do (`GlobsKinds`), which the make phase
-leaves (`made_kinds`); `GlobsOK` alone does not ask it.  Hence `ShareKind`
+leaves (`made_kinds`); `GlobsOK` alone does not ask it (`mix_globsOK`,
+`mix_not_shareKind`).  Hence `ShareKind`
 (`reach_shareKind`): no key is named by a share `.lk k` and by a share
 `.cell k` of one reached configuration, and a check-out of a cell's block is
 through a cell share (`reach_frame_cell_owner`). -/
@@ -691,7 +692,8 @@ theorem Reach.kinds {P : Prog} {spawn : Nat → Bool} {C C' : Cfg} (hr : Reach P
     global agrees with.  The make phase leaves one (`made_kinds`), and so does
     no global (`GlobsKinds.empty`); `GlobsOK` alone does not ask it (it
     admits a global lock share `.lk k` beside a payload holding the cell
-    share `.cell k`: both name a lock block of `k`'s payload type). -/
+    share `.cell k`: both name a lock block of `k`'s payload type,
+    `mix_globsOK`). -/
 def GlobsKinds (G : Globs) : Prop :=
   ∃ κ : Nat → Bool, (∀ k t kd v, G.blk k = some ⟨t, kd, some v⟩ → KK κ v) ∧ ∀ g v, G.gl g = some v → KK κ v
 
@@ -814,5 +816,97 @@ theorem reach_frame_cellOp (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P 
   exact .inr ⟨mem_lfr_keys (hK.lfr_mem rfl), y', v, hy', hs'⟩
 
 end reach
+
+/-! ### `GlobsOK` alone does not keep the kinds apart
+
+A start `GlobsOK` holds of whose key 0 is named by a lock share (global 0, a
+`Locked int`) and by a cell share (in the payload of block 1, the lock
+global 1 shares, a `Locked (cell int)`): both name a lock block of payload
+type `int`, which is all the typing asks of either.  No make phase leaves it
+(`made_kinds`), but `A3.claim`'s `GlobsOK` premise admits it; `GlobsKinds`
+is the start's fact the kinds rest on. -/
+
+/-- Block 0 a lock of an integer, block 1 a lock whose payload is a cell
+    share of block 0. -/
+def mixB : Nat → Option Blk := fun k =>
+  if k = 0 then some ⟨.int, .lock, some (.int 0)⟩
+  else if k = 1 then some ⟨.cell .int, .lock, some (.cell 0)⟩ else none
+
+/-- ... global 0 a lock share of block 0, global 1 one of block 1. -/
+def mixG : Globs := ⟨fun _ => false, 2, mixB, fun g => if g = 0 then some (.lk 0) else if g = 1 then some (.lk 1) else none⟩
+
+theorem mixB_some {k : Nat} {bl : Blk} (h : mixB k = some bl) :
+    (k = 0 ∧ bl = ⟨.int, .lock, some (.int 0)⟩) ∨ (k = 1 ∧ bl = ⟨.cell .int, .lock, some (.cell 0)⟩) := by
+  unfold mixB at h
+  by_cases h0 : k = 0
+  · rw [ite_eq_left h0] at h; cases h; exact .inl ⟨h0, rfl⟩
+  · rw [ite_eq_right h0] at h
+    by_cases h1 : k = 1
+    · rw [ite_eq_left h1] at h; cases h; exact .inr ⟨h1, rfl⟩
+    · rw [ite_eq_right h1] at h; cases h
+
+/-- `GlobsOK` holds of it ... -/
+theorem mix_globsOK (P : Prog) : GlobsOK P mixG where
+  sync g v h := by
+    simp only [mixG] at h
+    by_cases h0 : g = 0
+    · rw [ite_eq_left h0] at h; cases h
+      exact ⟨.lk .int, rfl, rfl, .inl ⟨.int, 0, _, rfl, rfl, rfl⟩⟩
+    · rw [ite_eq_right h0] at h
+      by_cases h1 : g = 1
+      · rw [ite_eq_left h1] at h; cases h
+        exact ⟨.lk (.cell .int), rfl, rfl, .inl ⟨.cell .int, 1, _, rfl, rfl, rfl⟩⟩
+      · rw [ite_eq_right h1] at h; cases h
+  inv := {
+    dom := fun _ => rfl
+    slot := fun _ _ h => by cases h
+    heap := by
+      refine ⟨fun _ _ h => (by cases h), fun _ _ _ _ _ h => (by cases h), fun _ _ h => (by cases h),
+        fun _ _ h => (by cases h), fun k bl hk => ?_, fun k bl hk hv => ?_⟩
+      · rcases mixB_some hk with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩
+        · exact ⟨by decide, by simp [Blk.tree], fun i hi => by simp [Blk.tree] at hi⟩
+        · exact ⟨by decide, by simp [Blk.tree, Val.ids], fun i hi => by simp [Blk.tree, Val.ids] at hi⟩
+      · rcases mixB_some hk with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ <;> cases hv
+    nvSt := fun _ h => by cases h
+    noInout := fun _ _ _ h => by cases h
+    wf := ⟨fun _ _ h => (by cases h), fun _ _ h => (by cases h), fun _ _ h => (by cases h),
+      fun _ _ h => (by cases h)⟩
+    rootbLive := fun _ _ h => by cases h
+    rootbLt := fun _ _ h => by cases h
+    names := fun _ _ h => by cases h
+    held := fun _ _ _ _ h => by cases h
+    pkgs := fun _ _ _ h => by cases h
+    armed := fun _ _ _ h => by cases h
+    shares := fun _ _ _ _ h => by cases h
+    blocks := fun k bl hk => by
+      rcases mixB_some hk with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩
+      · refine ⟨rfl, rfl, fun p hp => ?_, .inl rfl, ?_⟩
+        · cases hp; exact ⟨.int, fun u k' q ha => by cases ha⟩
+        · exact ⟨fun _ _ => .inl rfl, fun h => (by cases h), fun h => (by cases h)⟩
+      · refine ⟨rfl, rfl, fun p hp => ?_, .inl rfl, ?_⟩
+        · cases hp
+          refine ⟨.cell, fun u k' q ha => ?_⟩
+          cases ha
+          exact ⟨_, rfl⟩
+        · exact ⟨fun _ _ => .inl rfl, fun h => (by cases h), fun h => (by cases h)⟩ }
+  cover _ h := by cases h
+  reach k bl h := by
+    rcases mixB_some h with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩
+    · exact .root ⟨0, rfl⟩ (.inl (.inl ⟨none, .refl _⟩))
+    · exact .root ⟨1, rfl⟩ (.inl (.inl ⟨none, .refl _⟩))
+  codes k bl h := by
+    rcases mixB_some h with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ <;>
+      exact ⟨fun _ _ _ _ _ hs => (by cases hs), fun _ _ _ _ _ hs => (by cases hs)⟩
+  dtors := DeadCodes.of_none fun k bl h => by rcases mixB_some h with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ <;> rfl
+  cells k k1 k2 h1 h2 := by
+    obtain ⟨t1, p1, hb1, hs1⟩ := h1
+    obtain ⟨t2, p2, hb2, hs2⟩ := h2
+    rcases mixB_some hb1 with ⟨rfl, he⟩ | ⟨rfl, he⟩ <;> cases he <;> cases hs1
+    rcases mixB_some hb2 with ⟨rfl, he⟩ | ⟨rfl, he⟩ <;> cases he <;> cases hs2
+    exact ⟨rfl, by decide⟩
+
+/-- ... and its start names key 0 by both kinds. -/
+theorem mix_not_shareKind (s : Stmt) (nv : Nat) : ¬ ShareKind (Cfg.start mixG s nv) := fun h =>
+  h 0 (.inr (.inr ⟨0, _, rfl, .refl _⟩)) (.inr (.inl ⟨1, _, _, _, rfl, .refl _⟩))
 
 end A3

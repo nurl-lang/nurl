@@ -412,15 +412,23 @@ the LLVM / C11 memory model rather than redefining it.
       Confinement is over owners and live borrows (`CellInv`,
       `cellAt_of_live`), and a race on a cell is two threads with an
       owner's share at a check-out (`CellOp`). A thread inside a check-out
-      through a cell share does hold one (Agora #808,
-      `A3.reach_frame_cell_owner`: the check-out's root share stays in its
-      slot for the whole body, and a borrowed root is a borrowed
-      parameter, live, whose caller's owner is in the store,
-      `MInv.cell_owned`). Not proved: that every check-out of a cell's
-      block is through a cell share — cells and locks are both lock
-      blocks, and that no block is named by both lock and cell shares
-      (`cellNew` and `lockNew` take fresh keys, and only clones copy a
-      share) is read off the rules, not an invariant.
+      of a cell's block does hold one (Agora #808 / #815,
+      `A3.reach_frame_cell_owner`, `A3.reach_frame_cellOp`): the
+      check-out's root share stays in its slot for the whole body, and a
+      borrowed root is a borrowed parameter, live, whose caller's owner is
+      in the store, `MInv.cell_owned`; and the root is a cell share, since
+      no block is named by both lock and cell shares (Agora #815,
+      `A3.reach_shareKind`: cells and locks are both lock blocks, but a
+      kind per key agrees with every share of the configuration,
+      `A3.CKinds`, in every slot, payload and global, kept by every step:
+      `cellNew` and `lockNew` take a fresh key above every share,
+      `A3.CKeys`, and every other share is a copy of one of the same
+      kind). That holds from a start whose globals keep the kinds apart
+      (`A3.GlobsKinds`), which the make phase leaves (`A3.made_kinds`,
+      `A3.reach_shareKind_made`); `GlobsOK` alone admits a start naming a
+      key by both (`A3.mix_globsOK`, `A3.mix_not_shareKind`: a global lock
+      share of a block whose cell share another global lock's payload
+      holds), on which a check-out through the lock share is no `CellOp`.
     - **Not typed yet:** a store of a borrowed handle into an owner (the
       runtime's implicit copy); a handle changed through a borrow that is
       no root; `% Sync` / `% NotSend` assertions on a program's own types;
@@ -475,10 +483,12 @@ the LLVM / C11 memory model rather than redefining it.
       or panics in the model, where the runtime goes on: that is the
       library's code (phase B).
     - **Not proven here:** phase D must show the runtime's reference
-      count of a handle's block equals the model's owners; that no block
-      is named by both lock and cell shares (above). (That a thread inside
-      a check-out through a cell share holds an owner's share of the cell
-      is proved, Agora #808: `A3.reach_frame_cell_owner`.)
+      count of a handle's block equals the model's owners. (That a thread
+      inside a check-out of a cell's block holds an owner's share of the
+      cell is proved, Agora #808 / #815: `A3.reach_frame_cell_owner`, from
+      a start whose globals keep lock and cell shares apart,
+      `A3.GlobsKinds`, which every start the make phase leaves does and
+      `A3.claim`'s `GlobsOK` does not ask.)
   - **A3.6** *(proven)* — module globals reached by several
     threads.
     - **The calculus.** A global set at start (`: ( Locked T ) g ( make )`)
@@ -1023,8 +1033,9 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   block stays. So the give-back lemmas hold of every frame of a reached
   configuration with no hypothesis on the block
   (`A3.reach_scopeL_end_gives_back`, `A3.reach_scopeL_panic`). The same
-  fact gives a cell check-out's "the thread holds an owner's share", for a
-  check-out through a cell share (A3.5 below, `A3.reach_frame_cell_owner`). Exclusion is proved only for a payload that holds a destructor
+  fact gives a cell check-out's "the thread holds an owner's share", for
+  every check-out of a cell's block, which no lock share names (A3.5 below,
+  `A3.reach_frame_cell_owner`, `A3.reach_shareKind`, Agora #815). Exclusion is proved only for a payload that holds a destructor
   value: for a `dtorFree` one the model's `locked_restore` can refill a
   checked-out block (Agora #810). When the lock's last share is
   gone the marking sweep marks the lock block `dead`, its payload in it

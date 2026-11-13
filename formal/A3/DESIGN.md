@@ -2020,16 +2020,27 @@ where the call places it).
   program that re-enters a handle's state is covered only up to that
   point.
 - *`CellOp`'s second case* asks the thread inside a check-out to hold an
-  owner's share of the cell. For a check-out through a cell share it does
-  (`A3.reach_frame_cell_owner`, Agora #808): the share the check-out is
-  through stays in `a` for the whole body (`A3.reach_frame_root`, the
-  lock check-out's lemma), and a borrowed `a` is a borrowed parameter,
-  bound by an `rbind` around the frame and live, whose caller's owner is
-  in the store (`MInv.cell_owned`). That every check-out of a cell's block
-  is through a cell share is argued, not proven: cells and locks are both
-  lock blocks, and no invariant says a block is named by lock shares only
-  or by cell shares only (`cellNew` / `lockNew` take fresh keys from
-  `nid`, and only a clone copies a share).
+  owner's share of the cell. For a check-out of a cell's block it does
+  (`A3.reach_frame_cell_owner`, `A3.reach_frame_cellOp`, Agora #808 /
+  #815): the share the check-out is through stays in `a` for the whole
+  body (`A3.reach_frame_root`, the lock check-out's lemma), and a borrowed
+  `a` is a borrowed parameter, bound by an `rbind` around the frame and
+  live, whose caller's owner is in the store (`MInv.cell_owned`,
+  `A3.reach_frame_root_cell_owner`). That share is a cell share: cells and
+  locks are both lock blocks, which the typing cannot tell apart, but no
+  block is named by both lock and cell shares (`A3.reach_shareKind`,
+  A3/Kinds.lean). A kind per key (`κ`, `A3.CKinds`) agrees with every
+  share in every thread's slots (a dead borrow's too), block payloads and
+  globals; a step moves it only at the key `nid`, which no share names
+  yet (`A3.CKeys`), when `cellNew` or `lockNew` takes it, and every other
+  share is a copy (`lockClone`, `cellClone`, a move, a payload checked out
+  or in, a global read) of one of the same kind; `withLock` /
+  `Stmt.withCell` and the `scopeL` frame name the block by its key and
+  make no share. The start's blocks and globals must agree with one
+  (`A3.GlobsKinds`): the make phase leaves that (`A3.made_kinds`), but
+  `GlobsOK` does not ask it, and admits a start whose global lock share
+  names the block a cell share in another global lock's payload names
+  (`A3.mix_globsOK`, `A3.mix_not_shareKind`).
 
 **Probes** (`tools/fuzz/holes/*.nu`). In the model, a thread's closure is
 the spawned function, and its captures are `sink` arguments.
@@ -2068,9 +2079,10 @@ the spawned function, and its captures are `sink` arguments.
 - *Phase D*: that the runtime's reference count of a handle's block is the
   number of cell shares the model's slots hold, so its walk passes exactly
   when `SendCheck` holds (above).
-- That a thread inside a check-out of a cell holds a share of it, as a
-  lemma (`CellOp`'s second case). It would need an invariant tying each
-  `scopeL k` frame to its binding `a`, which A3.2 also leaves out.
+- (Since proven: that a thread inside a check-out of a cell holds a share
+  of it, as a lemma, `CellOp`'s second case: `A3.reach_frame_cell_owner`,
+  over the invariant tying each `scopeL k` frame to its root, Agora #808,
+  and the kind per key, Agora #815.)
 - That a cell's checked-out state is in its home thread's part. It is in
   the part of the thread whose frame holds it (A3.2's partition), and that
   thread is the home by the argument above.
@@ -4484,8 +4496,10 @@ needed. No rule asks for it now; it stays as the bottom of the order.
 
 - *Phase D*, as above: the runtime's count of a handle's block is the cell
   shares the model's owned slots and lock payloads hold.
-- That a thread inside a check-out of a cell holds an owner's share of it,
-  as a lemma (`CellOp`'s second case; A3.5 argued it of any share).
+- (Since proven: that a thread inside a check-out of a cell holds an
+  owner's share of it, as a lemma, `CellOp`'s second case:
+  `A3.reach_frame_cell_owner`, `A3.reach_frame_cellOp`, Agora #808 /
+  #815.)
 - A store of a borrowed handle into an owner (an implicit copy), and
   `% Sync` / `% NotSend` assertions on a program's own types (A3.5b's and
   A3.5c's rest: a negative marker only removes typings).
