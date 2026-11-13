@@ -1565,12 +1565,16 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
       this path.  Such a payload holds no cell share (`Ty.lkPay`'s
       `!hasCell`), so the cell half of `SendCheck` holds of it
       (`WFv.noCell_hasCell`) and `GiveCheck` fails only through `NoGuard`:
-      the value reaches a read guard.  nurlc refuses that statically
-      (`% NotSend RGuard`, `stdlib/std/rwlock.nu`), and its `mem_send_check`
-      counts only handle blocks, so its `locked_with` / `locked_update` /
-      `locked_apply` / `locked_await` never panic there on such a payload;
-      since Agora #837 the model's types refuse it too (a read guard is of
-      type `Ty.rguard`, which no lock's payload type holds, `Ty.hasGuard`).
+      the value reaches a read guard.  nurlc refuses a guard only where it
+      crosses (`% NotSend RGuard`, `stdlib/std/rwlock.nu`: a spawn, a
+      channel's send), and its `mem_send_check` counts only handle blocks,
+      so its `locked_with` / `locked_update` / `locked_apply` /
+      `locked_await` never panic there on such a payload, a guard in it or
+      not; since Agora #837 the model's types refuse a guard in every lock's
+      payload (a read guard is of type `Ty.rguard`, which no lock's payload
+      type holds, `Ty.hasGuard`), stricter than nurlc for a guard kept on
+      its thread, where the model's `NoGuard` would otherwise panic and
+      nurlc's check does not.
       The rule keeps the semantics total on an untyped store; leaving the
       block checked out mirrors the runtime's held lock word, should the
       case arise (`A3/DESIGN.md`, Agora #803, #837). -/

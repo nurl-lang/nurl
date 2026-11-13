@@ -213,6 +213,7 @@ import A3
 #print axioms A3.reach_no_scopeLPD
 #print axioms A3.RwDtorWitness.guard_refused
 #print axioms A3.RwDtorWitness.arc_pair_ok
+#print axioms A3.RwDtorWitness.dropd_closure_ok
 -- (A3/ChanDtorWitness.lean)
 #print axioms A3.ChanDtorWitness.main_typed
 #print axioms A3.ChanDtorWitness.main_safe

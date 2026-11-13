@@ -359,27 +359,53 @@ the LLVM / C11 memory model rather than redefining it.
       locking thread (`spawn_guard`, `lockNew_guard`, `chanSend_guard`).
       That no guard leaves its thread is argued over reachable
       configurations, not a lemma.
-    - **Agora #837: a read guard's own type, refused where nurlc refuses
-      it.** The guard is of type `Ty.rguard u` (its value still a share of
-      a view, `WFv.rguard`; only a guard's share names a view, `ArcBlk`).
-      Until #837 it was `arc (prod (lk u) u)`, which a genuine `Arc` of a
-      pair of a lock and a value of its payload's type shares (nurlc's
-      `Arc<(Locked U, U)>`), so the types could not refuse the guard
-      without refusing that `Arc`. `Ty.hasGuard` holds exactly where an
-      `rguard` occurs, and, as nurlc's `% NotSend RGuard` does, `Ty.ok`
-      refuses one in a lock's, a cell's (so a channel's) and an `Arc`'s
-      payload, at any depth, `Ty.sync` refuses one as a global, and
-      `Cross.Fits` in the environment of a closure of a class that crosses
-      (`send`, `sync`, `bare`; so a `: Send` trait object): a closure that
-      holds one is `any` or `dropd`, which cross nowhere
-      (`A3.RwDtorWitness.guard_refused`). A local binding, a struct and a
-      `Vec` may hold one, and the genuine `Arc` of a pair is admitted as
-      before (`arc_pair_ok`). `arc_clone` takes no guard (nurlc has no
+    - **Agora #837: a read guard's own type, kept out of every shared
+      payload.** The guard is of type `Ty.rguard u` (its value still a
+      share of a view, `WFv.rguard`; only a guard's share names a view,
+      `ArcBlk`). Until #837 it was `arc (prod (lk u) u)`, which a genuine
+      `Arc` of a pair of a lock and a value of its payload's type shares
+      (nurlc's `Arc<(Locked U, U)>`), so the types could not refuse the
+      guard without refusing that `Arc`. `Ty.hasGuard` holds exactly where
+      an `rguard` occurs (a closure's type answers its class's `views`:
+      only an `any` closure may hold one), and `Ty.ok` refuses one in a
+      lock's, a cell's (so a channel's) and an `Arc`'s payload, at any
+      depth, so also in a global (whose type `GlobsOK` asks `Ty.ok` of;
+      `Ty.sync` alone admits `arc (prod (rguard int) int)`), and
+      `Cross.Fits` in the environment of a closure of every class but `any`
+      (so of a `: Send` trait object): a closure that holds one is `any`,
+      which crosses nowhere (`A3.RwDtorWitness.guard_refused`). A local
+      binding, a struct and a `Vec` may hold one; the genuine `Arc` of a
+      pair is admitted as before (`arc_pair_ok`), and so are a lock, an
+      `Arc` and a cell of a closure of the dropping class
+      (`dropd_closure_ok`). `arc_clone` takes no guard (nurlc has no
       `RGuard` clone); `rguard_get` is `arc_get` through the guard
       (`Ty.Lends`). No block's type holds a guard (`MInv.blocks`), so a
       value of a type that holds none reaches no view
       (`A3.LockDtorWitness.noGuard_of_free`): a lock's payload meets the
-      crossing check's guard half statically, as nurlc's does.
+      crossing check's guard half statically. **That is stricter than
+      nurlc**, which asks `% NotSend` only where a value crosses
+      (`thread_spawn`, `spawn`, `chan_send`): nurlc compiles and runs a
+      guard kept on its own thread inside a `Locked`, an `Arc` or a cell
+      (`locked_new [(RGuard i)] g`, `arc_new` and `arc_clone` of an
+      `Arc<RGuard>`, a `% Drop` struct holding a guard put into
+      `locked_new` and updated with `locked_update`), which the model
+      refuses (the list of stricter rules, below). Before #837 the model
+      typed those programs, but its give-back check (`NoGuard`) panicked
+      where nurlc's `mem_send_check`, which counts only handle blocks, does
+      not, so the model was unfaithful to them either way; refusing them is
+      the sound choice, and keeps `GiveCheck` unfailable on a destructor
+      payload. A guard is `% NotSend` in the types except as a spawn's
+      parameter: `SpawnOK` lets a spawned function take an `rguard`, which
+      only the run-time check refuses (`spawn_guard`, `TStep.spawnFail`),
+      looser than nurlc there and sound. The headline statements
+      (`A2.memory_safe`, `soundness`, `no_leak_end`, `no_leak_panic`,
+      `A3.claim`, `claim_full`, `claim_made`, `claim_made_full`) are
+      unchanged in text, but their premise class changed with `Ty.ok`,
+      `Cross.Fits` and `MInv.blocks` / `BlockOK`: a guard's type no longer
+      collides with an `Arc`'s (an `arc (prod (lk u) u)` is a genuine
+      `Arc` of a pair, never a guard), and fewer programs are typed where a
+      guard sits in a shared payload or a closure holds a guard and a
+      destructor value (the stricter rules, below).
     - **Agora #804: `RwLocked D`.** A read guard of a payload that is a
       destructor value (or holds one) is typed (`RhsT.rwRead` /
       `rwTryRead` ask only `hasCell = false`;
@@ -466,7 +492,8 @@ the LLVM / C11 memory model rather than redefining it.
       held (`Step.scopeLFail`), as `locked_with` does (Agora #803: a
       destructor payload that fails it would go to a destructor frame on
       the unwinding, `Step.scopeLPD`, not the code-less drop; since Agora
-      #837 no typed reachable configuration takes that rule,
+      #837, which keeps a read guard out of every lock's payload, no typed
+      reachable configuration takes that rule,
       `A3.reach_no_scopeLPD`: a lock's payload holds no read guard, and a
       destructor payload no cell share). A lock is Sync
       whatever it holds (`Ty.hasCell (lk _) = false`, h358).
@@ -1232,14 +1259,16 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   `A3.lockArcDtor_claim`). Such a value holds no cell share, so the cell
   half of `SendCheck` holds of it (`A2.WFv.noCell_hasCell`), and its
   give-back's check (`GiveCheck`) can fail only through `NoGuard`: when
-  the value reaches a read guard. nurlc refuses that statically (`%
-  NotSend RGuard`, `stdlib/std/rwlock.nu`), and its `mem_send_check`
-  (`stdlib/runtime_core.c`) counts only handle blocks, so nurlc's
-  `locked_with` / `locked_update` / `locked_apply` / `locked_await`
-  (`stdlib/std/thread.nu`) never panic in `mem_send_check` on such a
-  payload. Since Agora #837 the model refuses that case statically too: a
-  read guard is a type of its own (`Ty.rguard`), which no lock's payload
-  type holds (`Ty.ok`, `Ty.hasGuard`), so a typed check-out's value passes
+  the value reaches a read guard. nurlc refuses a guard only where it
+  crosses (`% NotSend RGuard`, `stdlib/std/rwlock.nu`: a spawn, a
+  channel's send), and its `mem_send_check` (`stdlib/runtime_core.c`)
+  counts only handle blocks, so nurlc's `locked_with` / `locked_update` /
+  `locked_apply` / `locked_await` (`stdlib/std/thread.nu`) never panic in
+  `mem_send_check` on such a payload, a guard in it or not. Since Agora #837 the
+  model refuses a guard in every lock's payload, crossing or not (stricter
+  than nurlc for one kept on its thread, below): a read guard is a type of
+  its own (`Ty.rguard`), which no lock's payload type holds (`Ty.ok`,
+  `Ty.hasGuard`), so a typed check-out's value passes
   its crossing check (`A3.LockDtorWitness.giveCheck_typed`, of every
   payload type holding no cell share: every destructor payload, `arc` and
   lock shares included) and `Step.scopeLPD` never fires from a typed
@@ -1523,6 +1552,19 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   See Agora #542–#544, #609, #611, #616, #632.
 
 The rules are stricter than nurlc's in these places:
+- Agora #837, read guards: nurlc asks `% NotSend RGuard` only where a value
+  crosses (`thread_spawn`, `spawn`, `chan_send`); the model refuses a
+  guard in every lock's, cell's, channel's and `Arc`'s payload and in a
+  global (`Ty.ok`, `Ty.hasGuard`), so a guard kept on its own thread inside
+  one is refused here and accepted by nurlc: `locked_new [(RGuard i)] g`;
+  `arc_new` of a guard and `arc_clone` of that `Arc<RGuard>`; a `% Drop`
+  struct holding a guard, put into `locked_new` and updated by
+  `locked_update`. (Before #837 the model typed them, but its give-back's
+  `NoGuard` panicked where nurlc's `mem_send_check`, counting handle blocks
+  only, does not: unfaithful either way.) And a local closure that captures
+  both a read guard and a destructor value has no class (`any` holds no
+  destructor value, `dropd` no guard, `Cross.Fits`), so it is refused,
+  where nurlc accepts it;
 - for a binding of a type whose destructor may read a view:
   - nurlc lets it gain views of older bindings; here it views, from its
     `letd` on, what the `letd` records (the value's views, and up front

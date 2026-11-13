@@ -167,14 +167,12 @@ cell share as well (every destructor payload, `Ty.lkPay`), the crossing check
 give-back passes it (`giveCheck_typed`), whatever shares it holds. -/
 
 /-- A closure's type may hold a read guard when its environment holds one:
-    only a class that crosses nowhere (`any`, `dropd`) admits one
-    (`Cross.Fits`). -/
+    only the class `any`, which crosses nowhere, admits one (`Cross.Fits`). -/
 theorem _root_.A2.Cross.Fits.fn_hasGuard {q : Cross} {te : Ty} {cs : List (Var × PMode × Ty)}
     (hq : q.Fits te cs) (h : te.hasGuard = true) (ms : List Nat) : (Ty.fn ms q).hasGuard = true := by
   cases q with
   | any => rfl
-  | dropd => rfl
-  | _ => rw [hq.guard rfl rfl] at h; cases h
+  | _ => rw [hq.guard rfl] at h; cases h
 
 /-- A share of a read guard lies only in a tree of a type that holds a
     guard (a closure's environment that holds one is of a class that may,

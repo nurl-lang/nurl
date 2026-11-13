@@ -546,7 +546,7 @@ made it:
 | a closure's or a trait object's environment | the captures' destructors | the closure's glue calls its drop method, whose code takes the environment owned and binds it under `letd`s (Agora #609, `ClosureGlueOK`, `Step.callcD`); it is called lent, through its binding or a borrow of the destructor type (Agora #651); a method that changes the environment is refused for the class |
 | a panic's unwind through any of these | the journal runs each, once | `scopeP` frees in one step, except at `scopeD` |
 | an `Arc` / lock block's payload when its last share goes (A3) | on the thread that drops the last share | an `Arc` of a destructor type, or (Agora #755) of a drained `Vec` of them: the marking sweep marks the block `dead`, the same thread reaps it into a destructor frame at the payload's own type, which drains a `Vec` (Agora #610, A2's `Steps`; Agora #755 item 1, A3's `TStep`: the configuration's marking sweep and the same thread's reaps); a lock's or a cell's destructor value, or drained `Vec` of them, that holds no cell share likewise (Agora #755, `Locked D`, `Locked (Vec D)`; Agora #803: it may hold `arc` and lock shares); a channel's queue of them likewise, its state under its glue, whose frame drains the queue (Agora #755); a lock's or a cell's whose destructor value holds a cell share, or a lock's, a cell's or an `Arc`'s holding one in a field of a type with no destructor of its own: refused (`Ty.ok`) |
-| a lock's or a cell's destructor payload whose give-back fails its crossing check (A3) | on the thread that checked it out, during the unwinding | Agora #803: the check-out's frame becomes the value's destructor frame at its end (`Step.scopeLPD`), never the code-less `Release.drop`, the block left checked out; the check fails only when the value reaches a read guard, which nurlc refuses statically (the model does not yet, Agora #837), so nurlc never takes this path; the lemmas (`A3.LockArcDtorWitness.release_none`, `fail_end_runs_dtor`) take the failing check as a hypothesis |
+| a lock's or a cell's destructor payload whose give-back fails its crossing check (A3) | on the thread that checked it out, during the unwinding | Agora #803: the check-out's frame becomes the value's destructor frame at its end (`Step.scopeLPD`), never the code-less `Release.drop`, the block left checked out; the check fails only when the value reaches a read guard: nurlc's check, counting handle blocks only, never fails there, and since Agora #837 no lock's payload type holds a guard, so no typed reachable configuration takes this path (`A3.reach_no_scopeLPD`); the lemmas (`A3.LockArcDtorWitness.release_none`, `fail_end_runs_dtor`) take the failing check as a hypothesis |
 | a value `chan_send` does not queue (closed channel) | dropped in `chan_send`, on the sender | Agora #755: moved into a fresh lock block of the element type (`EvalR.chanSendClosed`), which the marking sweep frees (no destructor value) or marks for the sending thread to reap (Agora #805, proved for a `letv`- or `assign`-bound send: `A3.TStep.closed_send_reaps`, `closed_send_reaps_assign`) |
 
 ### Semantics
@@ -1011,7 +1011,8 @@ each one shrinks `CLAIM.md`'s exception:
      at its top (`Ty.dtor f u`) that holds no share (since Agora #803 no
      cell share: `arc` and lock shares are typed, and a give-back whose
      check then fails hands the value to a destructor frame,
-     `Step.scopeLPD`, a case nurlc refuses statically, Agora #837). What
+     `Step.scopeLPD`, a case no typed reachable configuration meets since
+     Agora #837, `A3.reach_no_scopeLPD`). What
      was asked:
      1. *The check-out binding.* nurlc's `locked_update` runs `f` in place
         in the lock's memory, the lock held, and on a panic in `f` the value

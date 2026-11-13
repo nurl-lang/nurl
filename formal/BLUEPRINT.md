@@ -3,8 +3,8 @@
 > **Interactive Explorer:** You can also explore this proof interactively (with a step-by-step memory & borrow-checker simulator, clickable theorem dependency graph, and searchable soundness-hole corpus) on **[nurl-lang.org/docs/formal-verification](https://nurl-lang.org/docs/formal-verification)**.
 
 * **Toolchain:** `leanprover/lean4:v4.35.0` (zero external dependencies; standard axioms `propext`, `Classical.choice`, `Quot.sound` only; `0` `sorry`s)
-* **Phase A3 (Threads & Data-Race Freedom):** **33 modules**, **18,531 lines of Lean 4**, **916 theorems**, **1093 total declarations**
-* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **43 modules**, **53,851 lines of Lean 4**, **2293 theorems**, **2877 total declarations**
+* **Phase A3 (Threads & Data-Race Freedom):** **33 modules**, **18,552 lines of Lean 4**, **917 theorems**, **1094 total declarations**
+* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **43 modules**, **53,863 lines of Lean 4**, **2293 theorems**, **2877 total declarations**
 * **Phase A1 (Core Calculus):** **22 modules**, **9,571 lines of Lean 4**, **449 theorems**, **613 total declarations**
 * **Soundness Corpus (`corpus/map.tsv`):** every hole probe in [`tools/fuzz/holes/`](../tools/fuzz/holes/), with the rule and the proof phase (A1, A2, A3, B) that covers it. The table is generated from the probes' `// map:` lines by `tools/fuzz/holes/map.sh` (build.sh writes it; it is not committed); `tools/fuzz/holes/map.py --counts` gives the totals
 
@@ -168,7 +168,7 @@ flowchart BT
   Rename["Rename<br/>(4250L, 180 thms)"]
   Repl["Repl<br/>(387L, 21 thms)"]
   Rhs["Rhs<br/>(2954L, 152 thms)"]
-  Semantics["Semantics<br/>(1682L, 13 thms)"]
+  Semantics["Semantics<br/>(1686L, 13 thms)"]
   Settle["Settle<br/>(210L, 12 thms)"]
   Soundness["Soundness<br/>(270L, 17 thms)"]
   SrcKeep["SrcKeep<br/>(346L, 14 thms)"]
@@ -177,7 +177,7 @@ flowchart BT
   Steps["Steps<br/>(3512L, 115 thms)"]
   Sweep["Sweep<br/>(597L, 65 thms)"]
   SweepD["SweepD<br/>(400L, 34 thms)"]
-  Syntax["Syntax<br/>(1400L, 64 thms)"]
+  Syntax["Syntax<br/>(1408L, 64 thms)"]
   Typing["Typing<br/>(1907L, 91 thms)"]
   TypingFacts["TypingFacts<br/>(1042L, 62 thms)"]
   Values["Values<br/>(220L, 17 thms)"]
@@ -245,8 +245,8 @@ flowchart BT
 <!-- BEGIN generated: A2 module index (webdocs/scripts/gen-formal-data.mjs) -->
 | Layer | Module | Lines | Theorems | Defs / Types | Summary |
 |---|---|---:|---:|---:|---|
-| 0. Syntax & Store | [`A2/Semantics.lean`](A2/Semantics.lean) | 1682 | 13 | 94 | Small-step operational semantics (Step, Steps), tree deallocation (Frees, DropSlot), call expansion, and Stuck. |
-| 0. Syntax & Store | [`A2/Syntax.lean`](A2/Syntax.lean) | 1400 | 64 | 78 | Types, effect & kill lattice (Eff.kills), expressions, statements, and store values (Mem, Slot, Val). |
+| 0. Syntax & Store | [`A2/Semantics.lean`](A2/Semantics.lean) | 1686 | 13 | 94 | Small-step operational semantics (Step, Steps), tree deallocation (Frees, DropSlot), call expansion, and Stuck. |
+| 0. Syntax & Store | [`A2/Syntax.lean`](A2/Syntax.lean) | 1408 | 64 | 78 | Types, effect & kill lattice (Eff.kills), expressions, statements, and store values (Mem, Slot, Val). |
 | 1. Flow-Sensitive Typing | [`A2/Basic.lean`](A2/Basic.lean) | 520 | 45 | 1 | Foundational lemmas for store updates (upd), value subtrees, and contexts. |
 | 1. Flow-Sensitive Typing | [`A2/Ctx.lean`](A2/Ctx.lean) | 302 | 30 | 0 | Algebraic properties and monotonicity of context operations (kill, exitScope, derive). |
 | 1. Flow-Sensitive Typing | [`A2/Typing.lean`](A2/Typing.lean) | 1907 | 91 | 110 | Flow-sensitive context Γ, kill operation, and typing rules for RHS, statements, calls, and functions (RhsT, StmtT, CallT, FnOK). |

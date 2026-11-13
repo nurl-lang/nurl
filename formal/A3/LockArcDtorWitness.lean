@@ -13,13 +13,15 @@ cell share, which the reap's no-cell premise needs).
 
 **When the check can fail.**  Holding no cell share, such a value meets the
 cell half of `SendCheck` (`WFv.noCell_hasCell`), so `GiveCheck` fails only
-through `NoGuard`: the value reaches a read guard.  nurlc refuses that
-statically (`% NotSend RGuard`, `stdlib/std/rwlock.nu`), and its
-`mem_send_check` counts only handle blocks, so nurlc's `locked_with` /
-`locked_update` / `locked_apply` / `locked_await` never panic there on such
-a payload.  Since Agora #837 the model refuses it statically too: a read
-guard is of a type of its own (`Ty.rguard`), which no lock's payload type
-holds (`Ty.hasGuard`), so a typed check-out's give-back passes the check
+through `NoGuard`: the value reaches a read guard.  nurlc refuses a guard
+only where it crosses (`% NotSend RGuard`, `stdlib/std/rwlock.nu`: a
+spawn, a channel's send), and its `mem_send_check` counts only handle
+blocks, so nurlc's `locked_with` / `locked_update` / `locked_apply` /
+`locked_await` never panic there on such a payload, a guard in it or not.
+Since Agora #837 the model refuses a guard in every lock's payload,
+stricter than nurlc for a guard kept on its thread: a read guard is of a
+type of its own (`Ty.rguard`), which no lock's payload type holds
+(`Ty.hasGuard`), so a typed check-out's give-back passes the check
 (`A3.LockDtorWitness.giveCheck_typed`) and `Step.scopeLPD` never fires from
 a typed reachable configuration (`A3.reach_no_scopeLPD`).  The rule stays,
 a total, defensive case of the semantics of an untyped store.

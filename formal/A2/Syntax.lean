@@ -185,17 +185,22 @@ def Ty.isGuard : Ty → Bool
     `% NotSend` (nurlc's `RGuard`, `stdlib/std/rwlock.nu`), so no value that
     crosses or is shared holds one: a lock's, a cell's or a channel's payload
     (`Ty.ok`'s `lk` and `cell` cases), an `Arc`'s (its `arc` case), a module
-    global (`Ty.sync`, whose shares' payloads are those) and a closure's
-    environment of a class that crosses (`Cross.Fits`: a closure that may
-    hold one is of class `any` or `dropd`, which cross nowhere).  A local
-    binding may hold one. -/
+    global (`Ty.ok` of its type, which `GlobsOK` asks) and a closure's
+    environment of every class but `any` (`Cross.Fits`: a closure that may
+    hold one is of class `any`, which crosses nowhere and goes into no
+    lock or `Arc`; a `dropd` one holds none either, so a closure of the
+    dropping class may go into a lock or an `Arc`, as nurlc lets a closure
+    holding a `% Drop` value).  A local binding may hold one.  (The model
+    is stricter than nurlc, which asks `% NotSend` only where a value
+    crosses: a spawn, a channel's send; here no lock's, cell's or `Arc`'s
+    payload and no global holds a guard, even one kept on its thread.) -/
 def Ty.hasGuard : Ty → Bool
   | .int => false
   | .vec t => t.hasGuard
   | .slice t => t.hasGuard
   | .prod a b => a.hasGuard || b.hasGuard
   | .sum a b => a.hasGuard || b.hasGuard
-  | .fn _ q => q.views || q.drops
+  | .fn _ q => q.views
   | .arc t => t.hasGuard
   | .lk t => t.hasGuard
   | .cell t => t.hasGuard
@@ -404,9 +409,11 @@ def Ty.dtorViews (t : Ty) : Bool := t.dnest && t.holdsView
     it is always reaped, at its own type (a `Vec` drained by the reap's
     frame).  Agora #803: it may hold `arc` and lock shares (nurlc's `Locked
     Conn`, `% Drop Conn` holding an `Arc Pool`).  Its give-back's crossing
-    check (`GiveCheck`) could fail only if the value reached a read guard,
-    which nurlc refuses statically (`% NotSend RGuard`) and, since Agora
-    #837, so does `Ty.ok` (a lock's payload asks `!hasGuard`): a typed
+    check (`GiveCheck`) could fail only if the value reached a read guard
+    (nurlc's check, counting handle blocks only, never fails there, and
+    nurlc refuses a guard only where it crosses, `% NotSend RGuard`); since
+    Agora #837 `Ty.ok` refuses a guard in every lock's payload (it asks
+    `!hasGuard`, stricter than nurlc for a guard kept on its thread): a typed
     check-out's give-back passes it (`A3.LockDtorWitness.giveCheck_typed`),
     and the defensive `Step.scopeLPD`, which hands a value failing it to a
     destructor frame, never fires from a typed reachable configuration
@@ -862,16 +869,17 @@ def PMode.bound : PMode → Eff
     dropping one (Agora #609), no destructor value: such a package's drop
     releases its environment running no code.  A package of the dropping
     class is a destructor value itself, dropped by its glue.  Agora #837: a
-    package of a class that crosses (`send`, `sync`, `bare`) holds no read
-    guard (`Ty.hasGuard`; nurlc's `RGuard` is `% NotSend`, and so is a
-    closure that captures one): a closure that holds one is of class `any`
-    or `dropd`, which cross nowhere. -/
+    package of every class but `any` holds no read guard (`Ty.hasGuard`;
+    nurlc's `RGuard` is `% NotSend`, and so is a closure that captures one):
+    a closure that holds one is of class `any`, which crosses nowhere (so a
+    closure holding both a guard and a destructor value has no class and is
+    refused, stricter than nurlc). -/
 def Cross.Fits (q : Cross) (te : Ty) (cs : List (Var × PMode × Ty)) : Prop :=
   (q.views = false → te.holdsView = false ∧ cs = []) ∧
   (q.cells = false → te.hasCell = false) ∧
   (q.shares = false → te.hasArc = false) ∧
   (q.drops = false → te.holdsDtor = false) ∧
-  (q.views = false → q.drops = false → te.hasGuard = false)
+  (q.views = false → te.hasGuard = false)
 
 /-- What fits reads of the captures is whether there are any, not their names. -/
 theorem Cross.Fits.map {q : Cross} {te : Ty} {cs : List (Var × PMode × Ty)} (h : q.Fits te cs)
@@ -881,7 +889,7 @@ theorem Cross.Fits.map {q : Cross} {te : Ty} {cs : List (Var × PMode × Ty)} (h
 /-- Agora #837: the environment of a package of a class that crosses holds
     no read guard. -/
 theorem Cross.Fits.guard {q : Cross} {te : Ty} {cs : List (Var × PMode × Ty)} (h : q.Fits te cs)
-    (hv : q.views = false) (hd : q.drops = false) : te.hasGuard = false := h.2.2.2.2 hv hd
+    (hv : q.views = false) : te.hasGuard = false := h.2.2.2.2 hv
 
 theorem Cross.fits_any (te : Ty) (cs : List (Var × PMode × Ty)) (hd : te.holdsDtor = false) :
     Cross.any.Fits te cs :=
@@ -936,7 +944,7 @@ theorem Cross.Fits.mono {q q' : Cross} {te : Ty} {cs : List (Var × PMode × Ty)
     (hle : q.Le q') : q'.Fits te cs :=
   ⟨fun hv => h.1 (hle.views hv), fun hc => h.2.1 (hle.cells hc), fun hs => h.2.2.1 (hle.shares hs),
     fun hd => h.2.2.2.1 (by rw [hle.2]; exact hd),
-    fun hv hd => h.2.2.2.2 (hle.views hv) (by rw [hle.2]; exact hd)⟩
+    fun hv => h.2.2.2.2 (hle.views hv)⟩
 
 /-- A3.4: an `Atomic`'s operations (`stdlib/std/atomic.nu`), each one
     `nurl_atomic_i64_*` (`__ATOMIC_SEQ_CST`) on the word. -/

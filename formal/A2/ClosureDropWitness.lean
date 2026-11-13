@@ -132,7 +132,7 @@ theorem pack_codes : CodeOK Pc [1] DT [2] [] := by
     other: `Cross.Fits` of a class that does not drop asks `holdsDtor = false`). -/
 theorem env_fits : Cross.dropd.Fits DT [] :=
   ⟨fun _ => ⟨rfl, rfl⟩, fun _ => rfl, fun h => absurd h (by decide), fun h => absurd h (by decide),
-    fun _ h => absurd h (by decide)⟩
+    fun _ => by simp [DT, T, Ty.hasGuard]⟩
 
 theorem env_fits_only (q : Cross) (h : q.Fits DT []) : q = .dropd := by
   cases q

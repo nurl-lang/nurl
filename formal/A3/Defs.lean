@@ -1725,7 +1725,7 @@ holds, which synchronises itself: an `Atomic` (or a `Locked`) moved in. -/
     block), fits `sync`: a lock share is Sync, so an `Arc` keeps the closure
     and several threads call it ... -/
 theorem accum_sync : Cross.sync.Fits (.lk .int) [] :=
-  ⟨fun _ => ⟨rfl, rfl⟩, fun _ => rfl, fun h => absurd h (by decide), fun _ => rfl, fun _ _ => rfl⟩
+  ⟨fun _ => ⟨rfl, rfl⟩, fun _ => rfl, fun h => absurd h (by decide), fun _ => rfl, fun _ => rfl⟩
 
 /-- ... and its code counts by one atomic step on the environment it is lent
     (any live `lk int`, a borrowed parameter's too): the change synchronises
@@ -1797,18 +1797,18 @@ theorem TraitBound.fits_none (te : Ty) (cs : List (Var × PMode × Ty)) (hd : te
 theorem TraitBound.fits_send {te : Ty} {cs : List (Var × PMode × Ty)} :
     TraitBound.send.cross.Fits te cs ↔
       (te.holdsView = false ∧ cs = []) ∧ te.holdsDtor = false ∧ te.hasGuard = false :=
-  ⟨fun h => ⟨h.1 rfl, h.2.2.2.1 rfl, h.2.2.2.2 rfl rfl⟩,
+  ⟨fun h => ⟨h.1 rfl, h.2.2.2.1 rfl, h.2.2.2.2 rfl⟩,
     fun h => ⟨fun _ => h.1, fun h' => absurd h' (by decide), fun h' => absurd h' (by decide), fun _ => h.2.1,
-      fun _ _ => h.2.2⟩⟩
+      fun _ => h.2.2⟩⟩
 
 /-- ... and with `: Send Sync`, also no library handle (a cell share, A3.5,
     is not Sync). -/
 theorem TraitBound.fits_sendSync {te : Ty} {cs : List (Var × PMode × Ty)} :
     TraitBound.sendSync.cross.Fits te cs ↔
       ((te.holdsView = false ∧ cs = []) ∧ te.hasCell = false) ∧ te.holdsDtor = false ∧ te.hasGuard = false :=
-  ⟨fun h => ⟨⟨h.1 rfl, h.2.1 rfl⟩, h.2.2.2.1 rfl, h.2.2.2.2 rfl rfl⟩,
+  ⟨fun h => ⟨⟨h.1 rfl, h.2.1 rfl⟩, h.2.2.2.1 rfl, h.2.2.2.2 rfl⟩,
     fun h => ⟨fun _ => h.1.1, fun _ => h.1.2, fun h' => absurd h' (by decide), fun _ => h.2.1,
-      fun _ _ => h.2.2⟩⟩
+      fun _ => h.2.2⟩⟩
 
 /-- A call through a package asks its receiver to be a package, `fn ms q`
     (or, Agora #651, a destructor type over one: a closure of the dropping
@@ -1983,7 +1983,7 @@ theorem _root_.A2.WFv.noView_fits {τ : Ty} {v : Val} (hw : WFv τ v) (hhv : τ.
     obtain ⟨hv, _, hcs⟩ := hq.send hhv
     have hte := hq.2.2.2.1 (by simpa using hdf)
     cases hs with
-    | refl => exact TraitBound.fits_send.mpr ⟨⟨hv, hcs⟩, hte, hq.guard hhv (by simpa using hdf)⟩
+    | refl => exact TraitBound.fits_send.mpr ⟨⟨hv, hcs⟩, hte, hq.guard hhv⟩
     | pkg h => exact ih hv (by rw [Ty.holdsDtor_eq_not_free] at hte; simpa using hte) h
   | arc _ _ => cases hs
   | rguard _ _ => cases hs
@@ -2470,7 +2470,7 @@ theorem accum_codes : CodeOK accP [1] accEnv [0] [] := by
     method that changes the count is called only at `send` (a `sync` one is
     moved up first, `RhsT.moveUp`, and is then no `Arc`'s payload). -/
 theorem accum_fits (q : Cross) : q.Fits accEnv [] :=
-  ⟨fun _ => ⟨rfl, rfl⟩, fun _ => rfl, fun _ => rfl, fun _ => rfl, fun _ _ => rfl⟩
+  ⟨fun _ => ⟨rfl, rfl⟩, fun _ => rfl, fun _ => rfl, fun _ => rfl, fun _ => rfl⟩
 
 /-- **The accumulator, typed through `callcE` on the owned closure**: its owner
     calls it, the environment handed over to the code, which adds one to the
