@@ -3864,6 +3864,11 @@ unsafe @ note_unsafe_item s pos s what → v {
 // 1 when it is an owner returned by name — its dependencies (field 5 `d`).
 : ~ s g_bck_ret_sx ``
 : ~ i g_bck_ret_dep 0
+// The owned slices a returned join may hand back (their keys) and the value
+// it hands back: mem_drop_owned releases those by identity (__gen_ret).
+: ~ s g_ret_sl_ids ``
+: ~ s g_ret_sl_val ``
+
 // The bare binding a `^` hands back whole (`^ h`, not `^ . h f`): the ret
 // row's name field, so the walk can ask whether a field of it was taken
 // (agora #280).
@@ -7869,6 +7874,7 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     // on the taking path, and callers read the answer through the
     // function's `@.__nurl_retown` constant (`retlend##`).
     : ~ s ret_pfield ``
+    : ~ b ret_slice_taken F
     ? == ret_eff_tt TT_DOT { = ret_pfield ( nurl_sym_get syms `__last_field_read__` ) } {}
     ? ( is_ident_tok ret_first_tt ) {
         : s __rpu ( mem_udrop_ptr_of syms ret_first_val )
@@ -7892,7 +7898,20 @@ unsafe @ __gen_ret i lex i syms i cg → s {
             ( __record_param_idx syms `__fn_retpart__` rpf_pn )
             = ret_field_copy T
             = hbit own
-        } {}
+        } {
+            // (…and a slice field of a local struct this function releases
+            // on the way out, `^ . q xs`: taken — the field is left empty,
+            // so the struct's release frees nothing of it, and the caller
+            // owns the buffer. Lent, the caller read what q's release freed,
+            // agora #664.)
+            // (A slice's type is several words: the rest of the record.)
+            : s rpf_fty_all ( str_skip_words ret_pfield 3 )
+            ? && && && && == 0 ( nurl_str_len rpf_pn ) == 37 ( nurl_str_get rpf_ptr 0 ) ( mem_is_slice_ty rpf_fty_all ) == ret_eff_tt TT_DOT ( __struct_owns_field syms rpf_ptr rpf_idx ) {
+                ( mem_zero_field cg rpf_ptr rpf_sty rpf_idx rpf_fty_all `1` )
+                = ret_field_copy T
+                = ret_slice_taken T
+            } {}
+        }
     } {}
     // `^ x` of a payload of an enum this function owns: the enum is dropped
     // on the way out, so x leaves it — taken out, not lent (agora #175).
@@ -8715,7 +8734,10 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     // caller gets its own value, and t is this frame's to drop.)
     : b ret_arg_alias | & ! ret_is_direct_call ! ret_is_det_join
     & != 0 ( nurl_sym_len syms `__last_value_borrow__` ) ! ret_call_copied
-    : s skip ? & & ( mem_is_slice_ty lt ) ( mem_slice_owned syms ret_ident )
+    // (A slice literal handed back is a fresh buffer, never one of the
+    // locals its elements read: `^ [i | ( sum a ) 6]` skipped a's release
+    // as the last name read, and a leaked, agora #664.)
+    : s skip ? & & & ( mem_is_slice_ty lt ) ( mem_slice_owned syms ret_ident ) != ret_first_tt TT_LBRACK
     ret_arg_alias
     ret_ident
     ``
@@ -8806,9 +8828,18 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     // caller never freed it (nor, now, the elements it owns).
     // (The literal's flag is read only where the literal or a join made
     // it last: a literal passed to a call inside the return set it too.)
-    : b ret_fresh_slice & ( mem_is_slice_ty lt ) | & | | == ret_first_tt TT_LBRACK == ret_first_tt TT_QUEST == ret_first_tt TT_QUESTQUEST
+    // (…and a join whose every arm is an owned slice of this function's,
+    // `^ ? c a b`: the selected one goes to the caller, released here by
+    // no one — the return frees each of them only where its buffer is not
+    // the one handed back, by identity (mem_drop_owned, g_ret_sl_ids).
+    // Taken for no slice of its own, the caller borrowed what the return
+    // released, agora #664.)
+    = g_ret_sl_ids ? & ( mem_is_slice_ty lt ) | == ret_first_tt TT_QUEST == ret_first_tt TT_QUESTQUEST ( __ret_join_own_slices syms ) ``
+    = g_ret_sl_val ? != 0 ( nurl_str_len g_ret_sl_ids ) ( nurl_str_cat val `` ) ``
+    : b ret_fresh_slice & ( mem_is_slice_ty lt ) | | & | | == ret_first_tt TT_LBRACK == ret_first_tt TT_QUEST == ret_first_tt TT_QUESTQUEST
     ( seq ( nurl_sym_get syms `__last_slice_owned__` ) `1` )
     & ret_is_direct_call ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `1` )
+    | != 0 ( nurl_str_len g_ret_sl_ids ) ret_slice_taken
     ? | != 0 ( nurl_str_len skip ) ret_fresh_slice
     { ( nurl_sym_set_deep syms `__fn_ret_owned__` `1` ) }
     // An all-paths fact, as for a string (__fn_ret_str_mixed__): a slice
@@ -8936,6 +8967,8 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     // docs/MEMORY.md §7.4.)
     = g_ret_clo_lit ? | == ret_first_tt TT_BACKSLASH ret_is_direct_call ( __is_closure_llty ( nurl_llty lt ) ) F
     ( gen_ret_term lex syms cg lt val skip skip_str_ptr skip_user_ptr skip_struct_ptr ret_ident __rg_hbit )
+    = g_ret_sl_ids ``
+    = g_ret_sl_val ``
     // (This return's answer, read by its own hand-over only.)
     ? != 0 ( nurl_str_len __ffl_ptr ) { ( nurl_sym_def syms ( nurl_str_cat __ffl_ptr `__ffleave` ) `` ) } {}
     ( nurl_set_last_type `void` )
@@ -29363,6 +29396,44 @@ unsafe @ __bck_fall_ret_record i lex i syms i first_tt s first_val i sxn0 i line
     ( mem_emit_slice_free_at cg ( nurl_sym_get syms name ) ( nurl_sym_get2 syms name `__ptr` ) )
 }
 
+// The owned-slice keys every arm of the join just returned names, when each
+// arm is an owned slice binding of this function (`__last_phi_idents__`, and
+// no arm yielded anything else); `` otherwise.
+@ __ret_join_own_slices i syms → s {
+    : s ids ( nurl_sym_get syms `__last_phi_idents__` )
+    ? == 0 ( nurl_str_len ids ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? == 0 ( nurl_str_len ( nurl_sym_get syms `__last_join_own__` ) ) {} { ^ ( nurl_str_cat `` `` ) }
+    : ~ s out ``
+    : ~ s rest ( nurl_str_cat ids `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ! ( mem_slice_owned syms w ) { ^ ( nurl_str_cat `` `` ) } {}
+        : s k ( __slice_key syms w )
+        ? == 37 ( nurl_str_get k 0 ) {} { ^ ( nurl_str_cat `` `` ) }
+        = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat k `` ) ( nurl_str_cat3 out ` ` k )
+    }
+    ^ out
+}
+
+// Release the owned slice at slot `key` unless its buffer is the one the
+// slice value `rv` holds (it is being handed back).
+@ mem_emit_slice_free_unless i syms i cg s key s rv → v {
+    : s ty ( nurl_sym_get2 g_fn_escapes key `__slt` )
+    : s lt ( nurl_llty ty )
+    : i tylen ( nurl_str_len ty )
+    : s tptr ( nurl_llty ( nurl_str_slice ty 2 - tylen 9 ) )
+    : s v ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print v ) ( nurl_print ` = load ` ) ( nurl_print lt ) ( nurl_print `, ` ) ( nurl_print lt ) ( nurl_print `* ` ) ( nurl_print key ) ( nurl_print `\n` )
+    : s dp ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print dp ) ( nurl_print ` = extractvalue ` ) ( nurl_print lt ) ( nurl_print ` ` ) ( nurl_print v ) ( nurl_print `, 0\n` )
+    : s rp ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print rp ) ( nurl_print ` = extractvalue ` ) ( nurl_print lt ) ( nurl_print ` ` ) ( nurl_print rv ) ( nurl_print `, 0\n` )
+    : s ne ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print ne ) ( nurl_print ` = icmp ne ` ) ( nurl_print tptr ) ( nurl_print ` ` ) ( nurl_print dp ) ( nurl_print `, ` ) ( nurl_print rp ) ( nurl_print `\n` )
+    : s f ? != 0 ( nurl_sym_len2 syms key `__live` ) ( __and_i1 cg ( mem_udrop_flag_get syms cg key ) ne ) ne
+    ( mem_emit_slice_free_flagged cg ty key f )
+}
+
 // …of what one word of the owned-slice lists stands for (__slice_key).
 @ mem_emit_slice_free_key i syms i cg s key → v {
     // (A slot with a drop flag owns its buffer where the flag says: a join
@@ -29662,8 +29733,11 @@ unsafe @ __bck_fall_ret_record i lex i syms i first_tt s first_val i sxn0 i line
         = rest ( str_skip_word rest )
         ? ( seq key skipk ) {} {
             // (Kept back by a defer: the cleanup's, from here — mem_dkeep_mark.)
-            ? ( str_contains_word snap key ) { ( mem_dkeep_mark key ) }
-            { ( mem_emit_slice_free_key syms cg key ) }
+            ? ( str_contains_word snap key ) { ( mem_dkeep_mark key ) } {
+                // (One of the slices a returned join may hand back: released
+                // where its buffer is not the one handed back, by identity.)
+                ? & != 0 ( nurl_str_len g_ret_sl_ids ) ( str_contains_word g_ret_sl_ids key ) { ( mem_emit_slice_free_unless syms cg key g_ret_sl_val ) } { ( mem_emit_slice_free_key syms cg key ) }
+            }
         }
     }
 }
@@ -30145,6 +30219,21 @@ unsafe @ mem_path_to_indices s path → s {
 // drop paths; only multi-field structs with owned leaf fields qualify,
 // which structurally excludes stdlib's incremental-build-then-`^ binding`
 // returns (they never register agg owned fields on the returned struct).
+// Does the struct binding at `ptr` own its field `idx` — listed in
+// `__owned_struct_fields__` (6-token groups `<ptr> <sname> <path> <kind>
+// <leaf_sname> <leaf_idx>`), its release freeing it?
+@ __struct_owns_field i syms s ptr s idx → b {
+    : ~ s rest ( nurl_sym_get syms `__owned_struct_fields__` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s p ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s sn ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s path ( str_first_word rest ) = rest ( str_skip_word rest )
+        = rest ( str_skip_words rest 3 )
+        ? & ( seq p ptr ) ( seq path idx ) { ^ T } {}
+    }
+    ^ F
+}
+
 @ mem_ret_struct_transfer i syms s lt s ret_ident → s {
     ? == 0 g_auto_drop_strings { ^ ( nurl_str_cat `` `` ) } {}
     // Only a named non-pointer struct return can carry owned fields.
