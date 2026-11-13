@@ -5453,6 +5453,17 @@ unsafe @ __arg_param_lend_root i syms → s {
     ^ r
 }
 
+// The condition an `inout` target's old value is dropped under: `cond`,
+// and, for a slot this function owns by a drop flag (an `inout` of a
+// `% Drop` type it may consume, agora #849), that the slot still holds its
+// value — after a move on, there is nothing of the caller's left to drop.
+@ __io_live_and i syms i cg s ud s cond → s {
+    ? == 0 ( nurl_str_len ud ) { ^ ( nurl_str_cat cond `` ) } {}
+    : s lv ( mem_udrop_flag_get syms cg ud )
+    ? ( seq cond `true` ) { ^ lv } {}
+    ^ ( __and_i1 cg cond lv )
+}
+
 @ __and_not i cg s c s d → s {
     : s nd ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print nd ) ( nurl_print ` = xor i1 ` ) ( nurl_print d ) ( nurl_print `, 1\n` )
@@ -58087,7 +58098,11 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // stay visible to the end of the statement, so one of them
         // shadowing `name` — `= v { : ~ ( Vec i ) v … v }` — was taken for
         // the target, its value released as the old one; agora #562.)
-        : s __ud_ptr ( nurl_str_cat __ud_ptr0 `` )
+        // (An `inout` target's old value goes by the branches below, under
+        // its drop flag where it has one, __io_live_and: not a second time
+        // as a binding's, agora #849.)
+        : s __ud_iop ? & __tg_io != 0 ( nurl_sym_len2 syms __ud_ptr0 `__sinkflag` ) ( nurl_str_cat __ud_ptr0 `` ) ``
+        : s __ud_ptr ? != 0 ( nurl_str_len __ud_iop ) `` ( nurl_str_cat __ud_ptr0 `` )
         // (An `inout` parameter that owns something given a new value: h295.)
         ? __tg_io {
             ? | ( __is_handle_ty vt ) ( __type_needs_drop vt syms ) { ( __replaces_note_io syms name `` ) } {}
@@ -58179,7 +58194,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
                     = store_val ( mem_emit_cloneif cg vt store_val __io_cp4 )
                     : s __io_dc4 ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print __io_dc4 ) ( nurl_print ` = or i1 ` ) ( nurl_print __io_ro4 ) ( nurl_print `, ` ) ( nurl_print __io_sm4 ) ( nurl_print `\n` )
-                    ( __fs_rawdrop_old cg __io_dc4 vt ptr )
+                    ( __fs_rawdrop_old cg ( __io_live_and syms cg __ud_iop __io_dc4 ) vt ptr )
                     = __io_keyed T
                 } {}
             } {}
@@ -58257,7 +58272,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
                     ( nurl_sym_def syms `__last_join_own__` `true` )
                 } {}
                 ? __io_oty {
-                    ( __fs_rawdrop_old cg `true` vt ptr )
+                    ( __fs_rawdrop_old cg ( __io_live_and syms cg __ud_iop `true` ) vt ptr )
                 } {
                     : s __io_oldj ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print __io_oldj ) ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty vt ) )
@@ -58270,7 +58285,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         | == bck_rhs_tt TT_AT & == rhs_eff_tt TT_LPAREN == 0 ( nurl_sym_len syms `__last_value_borrow__` ) {
             : s __io_ro3 ? == bck_rhs_tt TT_AT ( nurl_str_cat `true` `` ) ( mem_call_retown syms cg )
             ? != 0 ( nurl_str_len __io_ro3 ) {
-                ( __fs_rawdrop_old cg __io_ro3 vt ptr )
+                ( __fs_rawdrop_old cg ( __io_live_and syms cg __ud_iop __io_ro3 ) vt ptr )
             } {}
         } {}
         // …and so does the value of a local that owns one outright, assigned
@@ -58299,7 +58314,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         = __io_move | __io_move __io_part
         ? __io_move {
             ? __io_oty {
-                ( __fs_rawdrop_old cg `true` vt ptr )
+                ( __fs_rawdrop_old cg ( __io_live_and syms cg __ud_iop `true` ) vt ptr )
             } {
                 : s __io_old2 ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print __io_old2 ) ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty vt ) )
@@ -58358,7 +58373,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         __io_bparam {
             = store_val ( mem_emit_clone_on cg vt store_val `1` )
             ? __io_oty {
-                ( __fs_rawdrop_old cg `true` vt ptr )
+                ( __fs_rawdrop_old cg ( __io_live_and syms cg __ud_iop `true` ) vt ptr )
             } {
                 : s __io_old3 ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print __io_old3 ) ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty vt ) )
@@ -58637,6 +58652,9 @@ unsafe @ gen_assign i lex i syms i cg → s {
             // (A join one of whose arms lent what it bound below `name`:
             // the lent paths are copied in place, agora #179.)
             ? != 0 g_join_deep { ( mem_join_copy_slot syms cg ptr vt ) } {}
+            // (An `inout` slot owned by a drop flag holds a value again,
+            // agora #849.)
+            ? != 0 ( nurl_str_len __ud_iop ) { ( mem_udrop_flag_set syms cg __ud_iop `1` ) } {}
         }
         { ? != 0 ( nurl_str_len glb )
             { ( store_global syms cg vt store_val name ) ( emit_dbg_line_eol bck_line )
@@ -77244,6 +77262,27 @@ unsafe @ __note_ioh_params i syms s fname → v {
                 ? ! ( str_has_index sinks index ) { ( nurl_sym_def syms ( nurl_str_cat pptr `__pinit` ) pc ) } {}
             }
             ( mem_journal_push_userdrop syms cg pptr rty )
+        } {}
+        // An `inout` parameter of a `% Drop` type (no handle: one of those
+        // is emptied where it is handed on and never consumed, agora #776)
+        // that the function hands to a taker on some paths is summarised as
+        // consumed, so its caller drops nothing: the function owns the
+        // caller's value then, and drops it on the way out wherever it was
+        // not taken, as a `sink` does. Its slot — the caller's — is owned
+        // under the module-end answer to whether the function consumes it
+        // (`__sinkflag`, consume_flag) and a flag that it still holds its
+        // value: up at entry, down where it is moved on. A function that
+        // never consumes it folds the drop away, and `= p` drops the old
+        // value as ever. Before, on the paths that took nothing the caller's
+        // value leaked (agora #849).
+        // (Its binding's type is the pointer it is passed as.)
+        : s iot ? == 0 ( nurl_sym_len2 syms name `__inout` ) `` ? != 0 ( nurl_str_ends ty `*` ) ( nurl_str_slice ty 0 - ( nurl_str_len ty ) 1 ) ty
+        ? & & & & ! __is_dtor != 0 ( nurl_str_len iot ) ! ( __is_handle_ty iot ) ! ( __is_autodrop_enum iot syms )
+        != 0 ( nurl_sym_len2 g_impl_name_syms `drop##` iot ) {
+            : s iop ( nurl_str_cat `%` name )
+            ( mem_own_add_user_drop syms cg iop iot )
+            ( nurl_sym_def syms ( nurl_str_cat iop `__sinkflag` ) ( consume_flag fname fname index ) )
+            ( mem_journal_push_userdrop syms cg iop iot )
         } {}
         = index + index 1
     }
