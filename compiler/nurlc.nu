@@ -10339,7 +10339,9 @@ unsafe @ core_note_ty s ty → v {
 
 // Every type the module's IR mentioned, and the types those hold, one a
 // line: `ty`, the type, its binding class (bck_bind_class), whether it has
-// something to release (`1`) and whether a copy of it can be made (`c`),
+// something to release (`1`), whether a copy of it can be made (`c`) and
+// whether dropping it runs code of the program's own that may read the
+// views it holds (`d`),
 // its base name, then `A` and its type arguments,
 // `F` and its fields (name, type), `V` and its variants (name, payload
 // types). The lists a type has none of are empty.
@@ -10353,6 +10355,7 @@ unsafe @ core_print_types i syms → v {
         ( __core_o `\t` ) ( __core_oi ( bck_bind_class ty ) )
         ( __core_o `\t` ) ( __core_o ? ( __type_needs_drop ty syms ) `1` `0` )
         ( __core_o ? ( __clone_supported ty syms ) `c` `-` )
+        ( __core_o ? ( __drop_may_read_view ty ) `d` `-` )
         : i c0 ( nurl_str_get ty 0 )
         : b ptr == ( nurl_str_get ty - n 1 ) 42
         ( __core_o `\t` )
@@ -32459,7 +32462,7 @@ unsafe @ mem_path_to_indices s path → s {
     ? | | | ! ( bck_sound ) ! ( is_ident_tok rhs_tt ) ( seq rhs dst ) ( bck_unsafe_ctx ) { ^ v } {}
     : s rptr ( nurl_sym_get2 syms rhs `__ptr` )
     ? == 0 ( nurl_str_len ( mem_collect_struct_fields_for syms rptr ) ) { ^ v } {}
-    ( die lex ( nurl_str_cat4 `'` rhs `' owns raw string or slice fields that are freed when '` ( nurl_str_cat3 rhs `' goes out of scope; '` ( nurl_str_cat3 dst `' would be a second name for them that can outlive them (a use after free). Give the struct owning field types (String, Vec) so the value can move, or build the struct where it is kept instead of copying it from '` ( nurl_str_cat rhs `' (code that manages those fields by hand belongs in an 'unsafe' function).` ) ) ) ) )
+    ( own_die lex ( nurl_str_cat4 `'` rhs `' owns raw string or slice fields that are freed when '` ( nurl_str_cat3 rhs `' goes out of scope; '` ( nurl_str_cat3 dst `' would be a second name for them that can outlive them (a use after free). Give the struct owning field types (String, Vec) so the value can move, or build the struct where it is kept instead of copying it from '` ( nurl_str_cat rhs `' (code that manages those fields by hand belongs in an 'unsafe' function).` ) ) ) ) )
 }
 
 @ mem_collect_struct_fields_for i syms s want_ptr → s {
@@ -64767,7 +64770,7 @@ unsafe @ __gen_agg_lit_body i lex i syms i cg → s {
                     = fld_view_lend T
                 } {
                     ? ( __nc_held_ty fty ) {
-                        ( die_pos lex agg_line agg_col ( nurl_str_cat4 ( nurl_str_cat4 `this literal is handed on holding '` fld_first_val `', which is part of ` ( __lv_show __fvr ) )
+                        ( own_die_pos lex agg_line agg_col ( nurl_str_cat4 ( nurl_str_cat4 `this literal is handed on holding '` fld_first_val `', which is part of ` ( __lv_show __fvr ) )
                         `, and that is not a parameter the caller of this function keeps: it is released on the way out, or stays with what holds it, while the literal would hold the value as well; a '` ( llvm_to_nurl fty )
                         `' cannot be copied — the value would be released twice. Take it out of what holds it (vec_remove, vec_pop) so that this function owns it, or pass what holds it as a parameter: a part of a borrowed parameter is lent back to the caller.` ) )
                     } {}
@@ -78182,7 +78185,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     // (A join that lent a field of a value this frame releases, which
     // cannot be copied, is refused, as by `^`: agora #178.)
     ? & & & __fall_used | == __ftt TT_QUEST == __ftt TT_QUESTQUEST != 0 g_join_flends ! ( __clone_supported ret_ty syms ) {
-        ( die_pos lex g_stmt_line g_stmt_col ( nurl_str_cat3 `this hands back, on one of its paths, a field of a value this function releases, fields and all, on the way out; a '` ( llvm_to_nurl ret_ty )
+        ( own_die_pos lex g_stmt_line g_stmt_col ( nurl_str_cat3 `this hands back, on one of its paths, a field of a value this function releases, fields and all, on the way out; a '` ( llvm_to_nurl ret_ty )
         `' cannot be copied out of it — the field would be released with it under the caller. Keep the value in a binding of its own and hand that back, or hand back the whole of it.` ) )
     } {}
     // A `?` / `??` tail is handed back as `^` hands one back
@@ -86524,7 +86527,7 @@ unsafe @ __sx_names_capture i syms s sx → b {
     // paths lent (agora #186).
     ? & clo | == tt TT_QUEST == tt TT_QUESTQUEST {
         ? | == 0 ( nurl_sym_len syms `__last_join_own__` ) != 0 g_join_lent {
-            ( die_pos lex g_stmt_line g_stmt_col ( nurl_str_cat3 `a closure hands its result to its caller as the caller's own, but on some path this join hands back a value the body only lends — a capture the closure keeps for its next call, a parameter its caller keeps, a field of one, or a binding the body drops on the way out — and a '` tshow
+            ( own_die_pos lex g_stmt_line g_stmt_col ( nurl_str_cat3 `a closure hands its result to its caller as the caller's own, but on some path this join hands back a value the body only lends — a capture the closure keeps for its next call, a parameter its caller keeps, a field of one, or a binding the body drops on the way out — and a '` tshow
             `' cannot be copied: the value would be released twice. Hand back on every path a value the body makes (a literal, or a call that hands its result over).` ) )
         } {}
         // (…and an arm's call that may lend it, as a bare call is.)
@@ -86545,7 +86548,7 @@ unsafe @ __sx_names_capture i syms s sx → b {
         // own to be read (h330): that owner is dropped on the way out.
         : s tfp ( str_first_word ( nurl_sym_get syms `__last_field_read__` ) )
         ? & != 0 ( nurl_str_len tfp ) != 0 ( nurl_sym_len2 syms tfp `__tmpown` ) {
-            ( die_pos lex g_stmt_line g_stmt_col ( nurl_str_cat3 `this hands back a field of a call's result, which is dropped, fields and all, on the way out; a '` tshow
+            ( own_die_pos lex g_stmt_line g_stmt_col ( nurl_str_cat3 `this hands back a field of a call's result, which is dropped, fields and all, on the way out; a '` tshow
             `' cannot be copied out of it — the field would be released with it under the caller. Bind the result, and keep the field in a binding of its own and hand that back, or hand back the whole result.` ) )
         } {}
         // (A field of a call's result leaves with the result; one read
@@ -86561,7 +86564,7 @@ unsafe @ __sx_names_capture i syms s sx → b {
         ? param `a parameter of this closure's function`
         ? != 0 ( nurl_sym_len2 syms root `__global` ) `a module global, which keeps it`
         `dropped, fields and all, on the way out`
-        ( die_pos lex g_stmt_line g_stmt_col ( nurl_str_cat4 ( nurl_str_cat3 `this hands back a field of '` root `', which is ` )
+        ( own_die_pos lex g_stmt_line g_stmt_col ( nurl_str_cat4 ( nurl_str_cat3 `this hands back a field of '` root `', which is ` )
         whose ( nurl_str_cat3 `; a '` tshow `' cannot be copied out of it — the field would be released with it under the caller. ` )
         `Keep the value in a binding of its own and hand that back, or hand back the whole of it.` ) )
     } {}

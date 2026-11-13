@@ -1077,6 +1077,23 @@ class FnCheck:
             if 0 <= i < len(places) and places[i] is not None:
                 self.effect(st, (places[i][0], places[i][1] + tuple(path)), eff, line)
 
+    def exit_drops(self, st, line, keep=None):
+        """A function's exit releases what its frame still owns, newest
+        first: the drop of a value whose destructor may read its views is a
+        use of them (MEMORY.md §2.14)."""
+        udrop = getattr(self.prog, "udrop", ())
+        if st.bottom or not udrop:
+            return
+        for vid in sorted(st.vals, reverse=True):
+            av = st.vals[vid]
+            v = self.fn.vars[vid]
+            if av.own != "O" or v.kind == "param" or vid == keep:
+                continue
+            if av.held and v.ty is not None and v.ty[0] == "named" and v.ty[1] in udrop:
+                self.check_live(st, AV("N", held=av.held), line, f"the drop of {v.name}", held=True)
+            self.effect(st, (vid, ()), "replace", line)
+            st.vals[vid] = AV("D")
+
     def params_hold_locals(self, st, line):
         """Storage the caller holds - a parameter, or what one points into -
         may not be left holding a view of this frame's own values."""
@@ -1399,10 +1416,12 @@ class FnCheck:
                 self.check_live(st, av, ln, "the returned value", held=True)
                 self.params_hold_locals(st, ln)
                 self.rets.append((av, st.copy()))
+                self.exit_drops(st, ln)
             else:
                 st = self.run_defers(st)
                 self.params_hold_locals(st, ln)
                 self.exits.append(st.copy())
+                self.exit_drops(st, ln)
             return State(bottom=True)
         if k == "break":
             if self.loop_stack:
