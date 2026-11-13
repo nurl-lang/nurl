@@ -57133,7 +57133,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // capture; a harmless no-op otherwise.
         ? & & != 0 g_auto_drop_strings
         == ( nurl_str_get vt 0 ) 37
-        != 0 ( nurl_sym_len2 syms name `__captured_byref` )
+        __tg_byref
         { ( mem_journal_forget_struct syms cg store_val vt ) }
         {}
         // Dangling-borrow tracking: re-fetching the pointer from its
