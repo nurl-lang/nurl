@@ -984,12 +984,24 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   `scopeL_typed_end_gives_back`), and at every panic point `x` owns a `t`,
   given back when the block is checked out, or nothing, the value moved to
   an owner that runs its destructor, and the release frees nothing
-  (`scopeL_typed_panic`, over `Step.panic_st`, `scopeL_entry`). What stays
-  read off the rules, not proved (Agora #808): that the block is then
-  checked out (`m.blk k = some ⟨t, .lock, none⟩`): no invariant ties a
-  `scopeL` frame to its block (the block is checked out exactly while a
-  frame of it is on some thread), so the give-back lemmas keep that
-  hypothesis. When the lock's last share is
+  (`scopeL_typed_panic`, over `Step.panic_st`, `scopeL_entry`). Agora
+  #808 proves the block's half on every configuration a run reaches, but
+  for the block being there: an invariant (`A3.LockInv`, `A3.reach_lockInv`,
+  kept by every `TStep`: a thread's step, its marking sweep and reaps, a
+  spawn, a failed spawn) says each `scopeL k t x s` frame's block is a lock
+  block of type `t`, or gone, at a key below `nid`; for a `t` that is not
+  `dtorFree` (one that holds a destructor value) it is checked out
+  (`⟨t, .lock, none⟩`), and the frame is its only one on any thread, once
+  (A3.2's mutual exclusion, `A3.reach_lock_excl`, `A3.Redex.frame_unique`:
+  every operation on the block waits on `none`, and `locked_restore` of
+  such a payload is not typed, `A3.Step.stay`). So the give-back lemmas
+  hold of a frame of a reached configuration with only `C.blk k ≠ none`
+  left of the block's hypothesis (`A3.reach_scopeL_end_gives_back`,
+  `A3.reach_scopeL_panic`). Not proved (Agora #808, what is left): that the
+  block is never removed while its frame is out, i.e. that the check-out's
+  root share outlives the body (`withLock` asks it, but the frame keeps no
+  record of the binding the share is in, so the invariant cannot follow
+  it). When the lock's last share is
   gone the marking sweep marks the lock block `dead`, its payload in it
   (`Cand` admits a lock block whose payload is in it), and the same thread
   reaps it as an `Arc`'s (`A3.LockDtorWitness.last_drop_reaps`, over
@@ -1058,8 +1070,9 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   run is not traced; that the body leaves the binding holding a `Vec` at
   its end and where it panics is proved for a typed frame as for `Locked
   D` (Agora #805, `scopeL_end_owns`, `scopeL_typed_panic`), and that the
-  block is then checked out is read off the rules, as for `Locked D`
-  (Agora #808).
+  block is then checked out is proved on a reached configuration given the
+  block is there, as for `Locked D` (Agora #808: `A3.reach_frame_out`; that
+  the block stays there is not proved).
 - Agora #755: **a channel of destructor values.** nurlc's `Channel A` is a
   counted `ChImpl A`, a struct holding the queue (`Vec A`), whose drop glue
   drops the queue's elements in index order when the last `Channel_drop`
