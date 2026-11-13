@@ -1,0 +1,18 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_closure_carrying_the_views_its_captured_handle_holds.nu:20:5: error: what 'thread_spawn' runs on another thread holds a view of 'm' (an address into its storage), which this side may release while the other runs. Give it a value that owns its data — a String or a Vec, moved in (string_from, slice_to_vec), or one shared through Arc — and drop the view of 'm'.
+    : !Thread ThreadErr t ( thread_spawn \ → v { ( nurl_println ( vec_at [s] c 0 ) ) } )
+    ^
+compiler/tests/diag_closure_carrying_the_views_its_captured_handle_holds.nu:27:5: error: what 'thread_spawn' runs on another thread holds a copy of the views 'msgs' holds — into its caller's storage, which the caller may release while the other runs. Give it values that own their data — Strings moved in (string_from), a Vec of them — or ones shared through Arc.
+    : !Thread ThreadErr t ( thread_spawn \ → v { ( nurl_println ( vec_at [s] c 0 ) ) } )
+    ^
+compiler/tests/diag_closure_carrying_the_views_its_captured_handle_holds.nu:36:5: error: this returns a view of 'loc' (an address into its storage), and 'loc' is released when the function returns, so the caller would read freed memory. Return a value that owns its data (a copy — slice_to_vec, string_from — or the owner itself), or take what the view points into as a parameter.
+    ^ \ → v { ( nurl_println ( vec_at [s] h 0 ) ) }
+    ^
+compiler/tests/diag_closure_carrying_the_views_its_captured_handle_holds.nu:53:5: error: 'f' holds a view of 's' (one stored into it, or captured by it), and 's' ended at line 52 — it went out of scope at the end of its block. Using 'f' now would read freed memory. End 's' only after 'f' is done, or have 'f' hold a copy that owns its data (string_from, slice_to_vec).
+    ( f )
+    ^
+compiler/tests/diag_closure_carrying_the_views_its_captured_handle_holds.nu:68:5: error: 'f' holds a view of 's' (one stored into it, or captured by it), and 's' ended at line 67 — it went out of scope at the end of its block. Using 'f' now would read freed memory. End 's' only after 'f' is done, or have 'f' hold a copy that owns its data (string_from, slice_to_vec).
+    ( f )
+    ^
+error: compilation aborted — 5 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

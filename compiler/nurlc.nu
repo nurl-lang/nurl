@@ -1817,6 +1817,7 @@ unsafe @ agg_field_count i syms s ot → i {
 : ~ i g_retclo_n 0  // functions with a `retclo##` summary so far (gen_call skips the lookup while 0)
 : ~ i g_retcap_n 0  // …and with a `retcap##` one (a `sink` parameter the returned closure took over)
 : ~ i g_thv_precise 0  // 1 while __ty_holds_view answers for a library handle by its type arguments
+: ~ i g_thv_own 0  // 1 while __ty_holds_view answers for a value's own storage: an Arc's or a shared cell's payload is no part of it (agora #469)
 : ~ i g_thv_memo 0  // __ty_holds_view's per-question memo of named types (2 in progress, 1 holds a view, 0 none); 0 between questions
 : ~ i g_thv_final 0  // …and its answers that are final: a named type's, asked once its layout and every layout it reaches are known (`ty`, `ty!` when g_thv_precise)
 : ~ i g_thv_unknown 0  // 1 while the question being answered met a type whose layout is not known yet (its answer is then not kept in g_thv_final)
@@ -38289,6 +38290,19 @@ unsafe @ resolve_arc_mut → v {
     ^ hv
 }
 
+// …of what a value of type `ty` holds in its own storage (g_thv_own,
+// precisely): a Vec of views, a struct with a view field — what a copy of
+// its handle still holds — not what an Arc's or a shared cell's payload
+// holds.
+@ __ty_own_view_p s ty → b {
+    = g_thv_precise 1
+    = g_thv_own 1
+    : b hv ( __ty_holds_view ty 0 )
+    = g_thv_own 0
+    = g_thv_precise 0
+    ^ hv
+}
+
 unsafe @ __ty_holds_view s ty i depth → b {
     : i n ( nurl_str_len ty )
     : *u ty_p # *u ty
@@ -38323,7 +38337,7 @@ unsafe @ __ty_holds_view s ty i depth → b {
     // every later one (g_thv_final) — unless it met a type whose layout is
     // not known yet (a generic instance recorded ahead of its
     // instantiation), which is asked again.
-    : s fkey ? != 0 g_thv_precise ( nurl_str_cat ty `!` ) ty
+    : s fkey ? != 0 g_thv_precise ( nurl_str_cat ty ? != 0 g_thv_own `!o` `!` ) ty
     : i fin ? == 0 g_thv_final -1 ( nurl_sym_int g_thv_final fkey )
     ? >= fin 0 { ^ == fin 1 } {}
     : b top == g_thv_memo 0
@@ -38345,6 +38359,10 @@ unsafe @ __ty_holds_view s ty i depth → b {
 
 // …of a named type `ty` (`%sname`), its walk not yet asked this question.
 @ __thv_named s ty s sname i depth → b {
+    // (Asked of a value's own storage, g_thv_own: what an `Arc` or a share
+    // handle whose state is in an rcbox holds is the one payload every
+    // copy shares, no part of the copy.)
+    ? && != 0 g_thv_own || ( __ty_std_arc ty ) && ( __is_libh ty ) ( __libh_rc_backed g_root_syms ty 0 ) { ^ F } {}
     // A library handle (Box, Rc, a map, a trait object): what it holds is
     // not told apart here — it may hold views. (Asked precisely,
     // g_thv_precise — what a callee's result can hold, bck_sx_ev — a
@@ -42175,6 +42193,30 @@ unsafe @ bck_check_moved_reads s reads i line s state → v {
     ^ out
 }
 
+// What the bindings whose handles `list` copies (`~id`, `~^id`) hold: the
+// views each one's value holds (`vds_`), through the handles those hold in
+// turn — what a copy of its handle holds too (gen_closure_expr's
+// `\\~v(…)`, asked only where the binding's own storage can hold a view).
+@ __src_handle_views s list → s {
+    ? < ( nurl_str_find list `~` ) 0 { ^ ( nurl_str_cat `` `` ) } {}
+    : ~ s out ``
+    : ~ s todo ( __src_handles_only list )
+    : ~ s seen ``
+    : ~ i guard 0
+    ~ & != 0 ( nurl_str_len todo ) < guard 64 {
+        = guard + guard 1
+        : s w ( str_first_word todo ) = todo ( str_skip_word todo )
+        : s id ( nurl_str_int ( bck_path_root ( nurl_str_to_int ( __src_hid w ) ) ) )
+        ? ! ( str_contains_word seen id ) {
+            = seen ( __word_add seen id )
+            : s vd ( nurl_sym_get g_bck ( bck_bkey `vds_` id ) )
+            = out ( __word_union out ( __src_drop_handles_all vd ) )
+            = todo ( __word_union todo ( __src_handles_only vd ) )
+        } {}
+    }
+    ^ out
+}
+
 // …all of them, those too: what crosses to another thread takes its handle
 // copies along (bck_send_view_check).
 @ __src_drop_handles_all s list → s {
@@ -42672,7 +42714,7 @@ unsafe @ bck_sx_ev s st s e b arg → s {
         // (…and what its result is: a view's copy holds what the elements
         // of the storage it points into view, below.)
         : i __vcls ? & __vh != 0 ( nurl_sym_len g_root_syms w ) ( bck_bind_class ( nurl_llty ( nurl_sym_get g_root_syms w ) ) ) -1
-        ? ! | | | | ( seq w `\\` ) ( seq w `\\~` ) ( seq w `\\~!` ) ( seq w `\\~*` ) ( seq w `\\a` ) { = g_sxe_vonly F } {}
+        ? ! | | | | | ( seq w `\\` ) ( seq w `\\~` ) ( seq w `\\~!` ) ( seq w `\\~*` ) ( seq w `\\a` ) ( seq w `\\~v` ) { = g_sxe_vonly F } {}
         : ~ s out ``
         : ~ i j 0
         : ~ b more ! & < g_sxe_pos n == # i . ep g_sxe_pos 41
@@ -42694,7 +42736,8 @@ unsafe @ bck_sx_ev s st s e b arg → s {
             // `\\~*(…)`: a captured closure — the handle copies it holds,
             // marked so, and not one of its own: the env owns a share.)
             : b __hin ( seq w `\\~*` )
-            : b __hcap | ( seq w `\\~!` ) ( seq w `\\~` )
+            : b __hown ( seq w `\\~v` )
+            : b __hcap | | ( seq w `\\~!` ) ( seq w `\\~` ) __hown
             : b __hnc | __hin ( seq w `\\~!` )
             : b __adop ( seq w `\\a` )
             // (…or the value it hands back views, by its walk's answer:
@@ -42755,6 +42798,19 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                     = __lj ( bck_sx_handle_mark st __lj ( nurl_str_slice e __a0 - g_sxe_pos __a0 ) )
                 } {}
                 ? | __hcap __hin { = __lj ( __src_handles_only __lj ) } {}
+                // (`\\~v(…)`: the views the copy's own storage holds — a Vec
+                // of views of a String — which go wherever the closure goes:
+                // to another thread, out of the function, into an owner that
+                // adopts it; agora #469, #467.)
+                // (By the binding itself, whatever it is now: an inline
+                // literal handed to a sink has moved it in by now — `cmove`,
+                // its row before the call's. Always a capture: the id
+                // gen_closure_expr's name became.)
+                ? __hown {
+                    : s __hw ( nurl_str_slice e __a0 - g_sxe_pos __a0 )
+                    : s __hid ? ( __is_int_lit __hw ) ( nurl_str_cat `~` ( nurl_str_int ( bck_path_root ( nurl_str_to_int __hw ) ) ) ) ``
+                    = __lj ( __src_handle_views ( __word_union __lj __hid ) )
+                } {}
                 ? __hnc { ( __src_mark_nc __lj ) } {}
                 ? __adop { = __lj ( __src_drop_handles __lj ) } {}
                 // (What a callee lends through an Arc parameter is a view
@@ -65051,6 +65107,16 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
                 : s __cap_ty ( nurl_sym_get syms __cap_w )
                 : b __cap_cp & ! __cap_clo & ( __is_handle_ty __cap_ty ) ( __clone_supported __cap_ty syms )
                 = __cap_sx ( __sx_join __cap_sx ( nurl_str_cat3 ? __cap_clo `\\~*(` ? __cap_cp `\\~(` `\\~!(` __cap_w `)` ) )
+            } {}
+            // (…and `\\~v(…)`, where what its own storage holds can be a
+            // view: the copy holds those views — a closure handed back holds
+            // its own copy of the handle, and still them — and they go where
+            // the closure goes: to another thread, out of the function, into
+            // an owner that adopts it (agora #469, #467). Not what an Arc's
+            // or a shared cell's payload holds: that is the one payload every
+            // share of it reads, no part of the copy.)
+            ? && != 0 __sx_me && ! __cap_clo && ( bck_is_heap_lty __cap_ll ) && ! ( str_contains_word g_nc_own_caps __cap_w ) && ! ( __is_capture_byref __cap_w syms ) ( __ty_own_view_p __cap_ll ) {
+                = __cap_sx ( __sx_join __cap_sx ( nurl_str_cat3 `\\~v(` __cap_w `)` ) )
             } {}
             ? & ( bck_is_heap_lty __cap_ll ) ! ( str_contains_word g_nc_own_caps __cap_w )
             { = __cap_heap ? == 0 ( nurl_str_len __cap_heap )
