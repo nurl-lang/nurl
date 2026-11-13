@@ -6917,6 +6917,7 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     ( nurl_sym_set_deep syms `__agg_direct__` `` )
     ( nurl_sym_set_deep syms `__agg_kept__` `` )
     ( nurl_sym_set_deep syms `__agg_copied__` `` )
+    ( nurl_sym_set_deep syms `__agg_pcopy__` `` )
     ( nurl_sym_set_deep syms `__agg_take_own__` `` )
     ( nurl_sym_set_deep syms `__ret_path_lends__` `` )
     ( nurl_sym_set_deep syms `__ret_path_sink__` `` )
@@ -8603,7 +8604,9 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     : b __rg_lit_reads ? == ret_first_tt TT_AT ( __ret_reads_owner_name syms ret_ident ) F
     : b __rg_lit_own ? & & __rg_lit_reads == 0 ( nurl_str_len skip_str_ptr ) == 0 ( nurl_str_len skip_struct_ptr ) ( __ret_lit_takes_own syms ret_ident ) F
     : b __rg_lit_name & __rg_lit_reads ! __rg_lit_own
-    : s __rg_hbit ? | __rg_named __rg_lit_name ( nurl_str_cat `` `` ) ( nurl_str_cat hbit `` )
+    // (…a parameter that is no `sink` among them owns its value on the runs
+    // this function consumes it: guarded on those, __ret_lit_param_own.)
+    : s __rg_hbit ? | __rg_named __rg_lit_name ( nurl_str_cat `` `` ) ? & __rg_lit_own != 0 ( nurl_str_len hbit ) ( __ret_lit_param_own syms cg hbit ) ( nurl_str_cat hbit `` )
     = g_ret_lit_own __rg_lit_own
     // (A raw string a call made fresh — the same proof the function's own
     // `__fn_ret_str_owned__` takes — and a closure literal: gen_ret_term
@@ -34558,7 +34561,10 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
 // function's `sink` parameter indices.
 @ __ret_kept_own i syms s w s sinks → b {
     : i k ( nurl_sym_word_index syms `__fn_param_names__` w )
-    ? & >= k 0 ! ( str_contains_word sinks ( nurl_str_int k ) ) { ^ F } {}
+    // (A parameter that is no `sink` owns its value on the runs this
+    // function consumes it — its flag's entry value, `__pinit`: the literal
+    // is guarded on those runs only, __ret_lit_param_own. Agora #796.)
+    ? & >= k 0 ! ( str_contains_word sinks ( nurl_str_int k ) ) { ^ & == 0 ( nurl_sym_len2 syms w `__enum_owner` ) ( __ret_param_pinit_ok syms w ) } {}
     // (A compiler-managed enum's payload is its owner slot's.)
     : s eo ( nurl_sym_get2 syms w `__enum_owner` )
     : s p ? != 0 ( nurl_str_len eo ) ( nurl_str_cat eo `` ) ( nurl_sym_get2 syms w `__ptr` )
@@ -34575,7 +34581,44 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
     ^ T
 }
 
-// Is the literal just handed back made of this function's own values: no
+// Is `w`, a parameter that is no `sink`, one a returned literal took in
+// whole owning it on the runs its flag's entry value says (`__pinit`, the
+// module-end consume answer, __own_sink_enum_params)? Not where the field
+// copied it per call (`__agg_pcopy__`): that answer is a value of the
+// field's own block.
+@ __ret_param_pinit_ok i syms s w → b {
+    : s p ( nurl_sym_get2 syms w `__ptr` )
+    ? | == 0 ( nurl_str_len p ) == 0 ( nurl_sym_len2 syms p `__pinit` ) { ^ F } {}
+    ? ( nurl_sym_has_word syms `__agg_pcopy__` w ) { ^ F } {}
+    ? ! ( nurl_sym_has_word syms `__user_drops__` p ) { ^ F } {}
+    ^ ! | | != 0 ( nurl_sym_len2 syms p `__outer_owned` ) != 0 ( nurl_sym_len2 syms p `__alias` ) ( seq ( nurl_sym_get2 syms p `__sborrow` ) `1` )
+}
+
+// The guard's ownership bit for a literal __ret_lit_takes_own took for the
+// function's own: `hbit`, and for each parameter that is no `sink` it took
+// in whole, that parameter's entry ownership — the runs this function did
+// not consume it, the caller still owns it, and the literal holds the
+// caller's value. ("" for `hbit` itself: nothing to add.)
+@ __ret_lit_param_own i syms i cg s hbit → s {
+    : s copied ( nurl_sym_get syms `__agg_copied__` )
+    : s sinks ( nurl_sym_get g_fn_sink ( nurl_sym_get syms `__fn_self_name__` ) )
+    : ~ s rest ( nurl_sym_get syms `__agg_kept__` )
+    : ~ s bit ( nurl_str_cat hbit `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i k ( nurl_sym_word_index syms `__fn_param_names__` w )
+        ? & & >= k 0 ! ( str_contains_word sinks ( nurl_str_int k ) ) ! ( str_contains_word copied w ) {
+            : s pi ( nurl_sym_get2 syms ( nurl_sym_get2 syms w `__ptr` ) `__pinit` )
+            ? ! ( seq pi `1` ) {
+                : s r ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ` = and i1 ` ) ( nurl_print bit ) ( nurl_print `, ` ) ( nurl_print pi ) ( nurl_print `\n` )
+                = bit r
+            } {}
+        } {}
+    }
+    ^ bit
+}
+
 // field of it lends, and every name it took in whole (`__agg_kept__`,
 // mem_note_kept) is a binding of this function, registered for its drop,
 // that owned its value: no parameter, no by-pointer capture of the
@@ -59420,7 +59463,15 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
             ? ( seq fld_lent `1` ) {
                 : s __acp ( nurl_sym_get syms `__agg_copied__` )
                 ( nurl_sym_set_deep syms `__agg_copied__` ? == 0 ( nurl_str_len __acp ) ( nurl_str_cat fld_first_val `` ) ( nurl_str_cat3 __acp ` ` fld_first_val ) )
-            } {} } {}
+            } {
+                // (…and one copied per call: its answer is a value of this
+                // field's block, which the result's guard may not reach —
+                // __ret_param_pinit_ok, agora #796.)
+                ? & != 0 ( nurl_str_len fld_lent ) ! ( seq fld_lent `0` ) {
+                    : s __apc ( nurl_sym_get syms `__agg_pcopy__` )
+                    ( nurl_sym_set_deep syms `__agg_pcopy__` ? == 0 ( nurl_str_len __apc ) ( nurl_str_cat fld_first_val `` ) ( nurl_str_cat3 __apc ` ` fld_first_val ) )
+                } {}
+            } } {}
         // …it is kept once the literal's binding leaves whole (stored,
         // returned, handed on): parked until then (mem_note_rawlit).
         ? & & & & ( is_ident_tok fld_first_tt ) __fk_rawparam ! fld_param_copy ! fld_param_lend == 0 ( nurl_str_len __argk ) {
@@ -74173,10 +74224,15 @@ unsafe @ __alloca_struct_params i syms i cg → v {
                 ( nurl_print `  ` ) ( nurl_print own ) ( nurl_print ` = and i1 ` ) ( nurl_print pc )
                 ( nurl_print `, ` ) ( nurl_print nd ) ( nurl_print `\n` )
                 ( mem_udrop_flag_set syms cg pptr own )
+                ( nurl_sym_def syms ( nurl_str_cat pptr `__pinit` ) own )
             } {
                 ( nurl_sym_def syms ( nurl_str_cat pptr `__dsel` ) dflag )
                 ( __glue_request rty )
                 ( mem_udrop_flag_set syms cg pptr pc )
+                // (What the parameter owns on entry, a value of the entry
+                // block: a literal handed back that took it in owns it on
+                // the same runs, __ret_lit_param_own.)
+                ( nurl_sym_def syms ( nurl_str_cat pptr `__pinit` ) pc )
             }
             ( mem_journal_push_userdrop syms cg pptr rty )
         } {}
