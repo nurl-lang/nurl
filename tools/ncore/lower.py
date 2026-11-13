@@ -205,6 +205,8 @@ class Types:
             return None
         if ty[0] == "opt":
             return [("T", [ty[1]]), ("F", [ty[1]])]
+        if ty[0] == "res":
+            return [("T", [ty[1]]), ("F", [ty[2]])]
         if ty[0] == "b":
             return [("T", []), ("F", [])]
         if ty[0] == "named" and ty[1] in self.prog.enums:

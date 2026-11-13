@@ -475,7 +475,7 @@ class FnCheck:
         return any(self.fn.vars[a[0]].blk == blk for a in av.alias)
 
     def transfer(self, st, op, line, site, dest_depth, dest_ty, what, copy_ok=False, is_ret=False,
-                 lend_owner=lambda vid: False, dest_vid=None, named=False):
+                 lend_owner=lambda vid: False, dest_vid=None, named=False, stored=False):
         """A value handed to a new holder (a let, `=`, a return, a field): an
         owner moves; a lend is copied with its loans, or - where it would
         outlive a local it borrows from - deep-copied (a join's value, a
@@ -489,7 +489,8 @@ class FnCheck:
             to_view = dest_ty is not None and dest_ty[0] == "s" and vty is not None and vty[0] != "s"
             if to_view:
                 av = AV("L", {self.loan(st, site, (vid, ()), "view")}, {(vid, ())}, frozenset())
-            elif src.own == "P" or (self.fn.vars[vid].kind != "temp" and ((raw and not is_ret) or lend_owner(vid))):
+            elif src.own == "P" or (self.fn.vars[vid].kind != "temp" and (
+                    (raw and not is_ret and not (stored and vty[0] == "slice")) or lend_owner(vid))):
                 # a parameter is lent to its new name (the caller owns it); an
                 # owned raw string or slice is viewed, not moved
                 av = AV("L", {self.loan(st, site, (vid, ()), "view" if raw else "handle")}, {(vid, ())}, src.held)
@@ -1025,7 +1026,7 @@ class FnCheck:
                     held |= hroot(av.held, fp)
                     lent[names[i]] = op[1]
                     continue
-                av = self.transfer(st, op, line, (site, i), dest_depth, fty, f"field {i + 1}")
+                av = self.transfer(st, op, line, (site, i), dest_depth, fty, f"field {i + 1}", stored=True)
                 if av.own == "L":
                     if fty is not None and self.T.owning(fty) and fty[0] not in VIEW_TYPES and self.T.copyable(fty):
                         # a lend stored into an owning field is copied: the
