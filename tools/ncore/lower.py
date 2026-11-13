@@ -27,12 +27,13 @@ SCALARS = {"i", "u", "f", "b", "i8", "i16", "i32", "u16", "u32", "u64", "f32",
 
 
 class Var:
-    __slots__ = ("id", "name", "ty", "kind", "line", "depth", "mut", "blk")
+    __slots__ = ("id", "name", "ty", "kind", "line", "depth", "mut", "blk", "byref")
 
     def __init__(self, vid, name, ty, kind, line, depth):
         self.id, self.name, self.ty, self.kind, self.line, self.depth = vid, name, ty, kind, line, depth
         self.mut = False
         self.blk = None       # the value block's temporary, for a binding the block made
+        self.byref = False    # a closure body's capture taken by pointer
 
     def __repr__(self):
         return f"{self.name}#{self.id}"
@@ -143,6 +144,10 @@ class Types:
         k = ty[0]
         if k == "String":
             return True
+        # nurlc's own answer for a named type (a library handle's copy is a
+        # share of it, a struct's a copy of each field)
+        if k == "named" and ty[1] in getattr(self.prog, "clonable", ()):
+            return True
         if k in ("vec", "box", "opt"):
             return self.copyable(ty[1], seen)
         if k == "named" and ty[1] in self.prog.structs and ty[1] not in seen:
@@ -181,6 +186,11 @@ class Types:
     def elem(self, ty):
         if ty and ty[0] in ("vec", "slice", "box"):
             return ty[1]
+        # a library handle's payload (an Rc's, an Arc's): nurlc's type table
+        if ty and ty[0] == "named":
+            he = getattr(self.prog, "handle_elem", None)
+            if he and ty[1] in he:
+                return he[ty[1]]
         if ty and ty[0] == "String":
             return ("u",)
         return None

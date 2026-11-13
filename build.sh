@@ -777,8 +777,11 @@ if (( RUN_TESTS == 1 )); then
     # function's returns through a stack slot, never as a `phi` of the
     # aggregate, and a variant's tag is an immediate — the shapes LLVM
     # can take apart (the values are agg_join_return_slots.nu's to prove).
-    step "split equivalence + simd dispatch IR + simd baseline agree + crypto tier IR + global atomics IR + aggregate joins IR + unsafe report + import roots + nesting limit" \
-        run_checks_parallel split_equivalence simd_dispatch_ir simd_baseline_agree crypto_tier_ir global_atomic_ir journal_null_ir journal_slot_cfg_ir agg_no_phi_ir unsafe_report import_roots nesting_limit
+    # core_ir: `--emit-core` lowers every construct to the core IR
+    # (docs/dev/CORE_IR.md) and leaves nothing `opaque`, in its shapes and
+    # in the compiler's own source.
+    step "split equivalence + simd dispatch IR + simd baseline agree + crypto tier IR + global atomics IR + aggregate joins IR + core IR + unsafe report + import roots + nesting limit" \
+        run_checks_parallel split_equivalence simd_dispatch_ir simd_baseline_agree crypto_tier_ir global_atomic_ir journal_null_ir journal_slot_cfg_ir agg_no_phi_ir core_ir unsafe_report import_roots nesting_limit
 fi
 
 # Both tools are required outputs of a complete toolchain build. Their

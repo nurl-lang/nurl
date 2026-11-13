@@ -5,6 +5,11 @@ Nothing in `compiler/nurlc.nu` changes with this document. It comes with a
 working prototype of the checker it proposes (`tools/ncore/`) and the
 measurements below.
 
+**Where it stands.** S1 is in the compiler (AGORA-858): the walk builds
+the core IR and `nurlc --emit-core` prints it. [CORE_IR.md](CORE_IR.md)
+describes it, and `tools/ncore --nurlc` runs the reference checker on what
+nurlc lowers instead of on its own parser's lowering.
+
 ## 1. The decision asked
 
 Stop closing memory-safety holes one surface shape at a time. Replace the
