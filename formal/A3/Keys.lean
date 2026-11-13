@@ -227,6 +227,9 @@ theorem EvalR.keys {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.
   | new =>
     exact ⟨hk.of_eq rfl rfl rfl (by show m.nid ≤ m.nid + 2; omega), .node fun _ h => by cases h⟩
   | moveOwn hy => exact ⟨hk.set _ (fun _ h => by cases h), hk.st _ _ _ hy⟩
+  | take hy =>
+    exact ⟨(hk.withAN _ (n := m.nid + 2) (by omega)).set _ (fun _ h => by cases h; exact .node fun _ h => by cases h),
+      (hk.st _ _ _ hy).mono (by show m.nid ≤ m.nid + 2; omega)⟩
   | copy hy => exact ⟨hk, hk.st _ _ _ hy⟩
   | borrowOwn _ => exact ⟨hk, .href⟩
   | borrowBor hy => exact ⟨hk, hk.st _ _ _ hy⟩

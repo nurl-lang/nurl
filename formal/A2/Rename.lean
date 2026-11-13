@@ -1541,6 +1541,38 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
         ⟨(S.liftE y Ey).ty, .own, true, [], (S.liftE y Ey).held, false, false⟩ := by
       simp [liftE, hm, liftMode, rds, Mode.ownSlot]
     rw [he]; exact EntryWeaker.refl _
+  | @take y Ey t hy hl hty hhv hcan hdb hyF _ hds =>
+    -- Agora #826: an `inout .replace` parameter's take is its caller's owner's
+    have hc : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
+    have hos := hcan.ownSlot
+    have hrb : Ey.mode ≠ .rootb := fun e => by rw [e] at hos; cases hos
+    have hm3 : Ey.mode = .own ∨ Ey.mode = .bor ∨ Ey.mode = .inout .replace := by
+      rcases canDo_replace_cases hcan with e | e
+      · exact Or.inl e
+      · exact Or.inr (Or.inr e)
+    have hm3' : Ey.mode = .own ∨ Ey.mode = .inout .replace ∨ Ey.mode = .bor := by
+      rcases hm3 with e | e | e
+      · exact Or.inl e
+      · exact Or.inr (Or.inr e)
+      · exact Or.inr (Or.inl e)
+    have hal : Allowed S .replace false y := by
+      have := allowed_canDo' hab hy hcan
+      rwa [hty, show (Ty.vec t).elem = t from rfl, hhv] at this
+    have hvt : (Ty.vec t).holdsView = false := by simpa [Ty.holdsView] using hhv
+    have hctx : S.canon (setE (kill .replace false y Γa) y ⟨Ey.ty, Ey.mode, true, [], [], false, false⟩) =
+        setE (kill .replace false (S.ρ y) (S.canon Γa)) (S.ρ y)
+          ⟨(S.liftE y Ey).ty, (S.liftE y Ey).mode, true, [], [], false, false⟩ := by
+      rw [canon_setE h, canon_kill h hab hal, liftE_ty y hrb, liftE_mode y hrb]
+      congr 1
+      simp [liftE, hrb, rds, hos, ownHeld, hty, hvt]
+    rw [hctx]
+    refine ⟨_, RhsT.take hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty y hrb]; exact hty) hhv
+      (by rw [liftE_mode y hrb]; exact canDo_lift hcan) (by simp [liftE, hrb, hdb]) (h.Fcout y)
+      (NoPin.lift h hab (bnd_replace hab hy hm3')) (DtorSafe.canon h hal hds), fun x => ?_⟩
+    have he : S.liftE x ⟨Ey.ty, .own, true, [], Ey.held, false, false⟩ =
+        ⟨(S.liftE y Ey).ty, .own, true, [], (S.liftE y Ey).held, false, false⟩ := by
+      simp [liftE, hrb, liftMode, rds, hos, show Mode.ownSlot .own = true from rfl]
+    rw [he]; exact EntryWeaker.refl _
   | @copyRoot y Ey hy hl hm =>
     have hc : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
     refine ⟨_, RhsT.copyRoot hc (by rw [liftE_live]; exact hl) (by rw [liftE_rootb h]; exact hm),
@@ -3072,6 +3104,9 @@ theorem RhsT.absOK {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : Rhs
     exact (hab.kill _ _ _).setE' hab hy rfl rfl (by rw [hm]; simp) (fun hf => absurd hf (by simp [hm]))
   | @taker y Ey _ _ hy _ hm _ _ _ =>
     exact (hab.kill _ _ _).setE' hab hy rfl rfl (by rw [hm]; simp) (fun hf => absurd hf (by simp [hm]))
+  | @take y Ey _ hy _ _ _ hcan =>
+    exact (hab.kill _ _ _).setE' hab hy rfl rfl
+      (fun e => by have := hcan.ownSlot; rw [e] at this; cases this) (fun _ => ⟨rfl, rfl⟩)
   | _ => exact hab
 
 theorem CallT.absOK {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {f : Nat} {args : List Var} {E : Entry}

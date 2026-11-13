@@ -185,6 +185,9 @@ theorem evalR_none {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (he : EvalR m r (
   | @pop y _ _ _ _ _ hy _ _ =>
     have : x ≠ y := fun e => by subst e; rw [hx] at hy; cases hy
     simp [Mem.set, upd_ne _ _ this, hx]
+  | @take y _ _ _ _ hy =>
+    have : x ≠ y := fun e => by subst e; rw [hx] at hy; cases hy
+    simp [Mem.set, upd_ne _ _ this, hx]
   | @remove y _ _ _ _ _ _ _ hy _ _ _ =>
     have : x ≠ y := fun e => by subst e; rw [hx] at hy; cases hy
     simp [Mem.set, upd_ne _ _ this, hx]

@@ -101,7 +101,7 @@ theorem _root_.A2.TakeVal.st_ne {m m1 : Mem} {y' : Var} {v : Val} (h : TakeVal m
 theorem EvalR.st_ne {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.ok v o m1)) {y : Var}
     (hy : y ∉ r.vars) : m1.st y = m.st y := by
   cases h with
-  | moveOwn _ | pop _ _ _ | remove _ _ _ _ _ | takel _ | taker _ =>
+  | moveOwn _ | pop _ _ _ | remove _ _ _ _ _ | takel _ | taker _ | take _ =>
     simp only [Rhs.vars, List.mem_cons, not_or] at hy
     simp [upd_ne _ _ hy.1]
   | pair h1 h2 =>

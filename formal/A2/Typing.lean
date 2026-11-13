@@ -835,6 +835,20 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       Γ a = some Ea → Ea.live = true → Ea.ty = .lk t →
       Γ y = some Ey → Ey.live = true → Ey.ty = t → PushArg Γ F y Ey t D Γ1 →
       RhsT Γ F (.lockRestore a y) intE Γ1
+  /-- Agora #826: a take out of `y`'s place, a `Vec` that may be replaced
+      (an owner, or an `inout .replace` parameter): the value moves out, as
+      `moveOwn`'s does, to an owned binding that holds what `y` held; `y` is
+      killed as a replace kills it (`kill .replace false y`, with
+      `moveOwn`'s `NoPin` and `DtorSafe`) and keeps a fresh empty `Vec`:
+      its entry stays live and holds nothing.  Its elements hold no view
+      (a String is a `Vec` of bytes), so what `y` holds is empty wherever
+      a call places it. -/
+  | take {y : Var} {E : Entry} {t : Ty} :
+      Γ y = some E → E.live = true → E.ty = .vec t → t.holdsView = false → canDo E.mode .replace →
+      -- (no `letd` binding: one is of a type that holds views, `CtxWF.view`)
+      E.dbind = false → y ∉ F → NoPin Γ y → DtorSafe Γ .replace false y →
+      RhsT Γ F (.take y) ⟨E.ty, .own, true, [], E.held, false, false⟩
+        (setE (kill .replace false y Γ) y ⟨E.ty, E.mode, true, [], [], false, false⟩)
 
 /-! ### Calls -/
 
@@ -887,6 +901,7 @@ theorem RhsT.out {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT 
   | glob => exact ⟨Or.inl rfl, rfl⟩
   | @lockTake _ _ t => unfold lockE; split <;> first | exact ⟨Or.inl rfl, rfl⟩ | exact ⟨Or.inr rfl, rfl⟩
   | lockRestore => exact ⟨Or.inr rfl, rfl⟩
+  | take => exact ⟨Or.inl rfl, rfl⟩
 
 /-- What the summary pair `(j, k)` means at this call.  An integer argument
     lends nothing. -/
@@ -1856,6 +1871,7 @@ def Rhs.vars : Rhs → List Var
   | .glob _ _ => []
   | .lockTake a => [a]
   | .lockRestore a y => [a, y]
+  | .take y => [y]
 
 def Edit.vars : Edit → List Var
   | .push y => [y]

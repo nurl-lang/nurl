@@ -144,6 +144,10 @@ theorem _root_.A2.EvalR.cellSt {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : 
     (hc : CellAt m1 k) : CellAt m k := by
   cases h with
   | moveOwn _ => exact CellAt.set_none hc
+  | take _ =>
+    rcases CellAt.set hc with ⟨w, hw, hs⟩ | hc
+    · cases hw; obtain ⟨e, he, _⟩ := sub_cell_node hs; cases he
+    · exact CellAt.of_st rfl hc
   | takel _ => exact CellAt.set_none hc
   | taker _ => exact CellAt.set_none hc
   | pop hy _ _ =>
@@ -386,6 +390,7 @@ theorem _root_.A2.EvalR.cellKeep {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h 
   | expr _ => exact CellKeep.setVal x _ hn hst (fun _ _ hs => by cases hs) (fun _ _ h => h)
   | new => exact CellKeep.setVal x _ hn hst (fun _ _ hs => absurd (sub_cell_node hs) (by simp)) (fun _ _ h => h)
   | moveOwn hy => exact CellKeep.setVal x _ hn hst (fun _ _ hs => .of_slot hy hs) (fun _ _ h => h)
+  | take hy => exact CellKeep.setVal x _ hn hst (fun _ _ hs => .of_slot hy hs) (fun _ _ h => h)
   | copy _ => exact CellKeep.setVal x _ hn hst (fun h => nomatch h) (fun _ _ h => h)
   | borrowOwn _ => exact CellKeep.setVal x _ hn hst (fun _ _ hs => by cases hs) (fun _ _ h => h)
   | borrowBor _ => exact CellKeep.setVal x _ hn hst (fun h => nomatch h) (fun _ _ h => h)

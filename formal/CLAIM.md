@@ -94,6 +94,22 @@ the LLVM / C11 memory model rather than redefining it.
   and an owner given a lend that cannot come out of its old value
   (`rules/t375.md`); it does not cover the hand-over. Those programs are
   outside the claim until an A2 rule (or phase C/D) covers the hand-over.
+
+  A hand-over out of an `inout` parameter is inside the claim (Agora
+  #826): a function that hands its `inout` parameter of a handle type to a
+  taker leaves the caller's binding the type's empty value (Agora #776),
+  and the caller may read it after the call. A2 has the step: a take out of
+  a place that may be replaced (`RhsT.take`, `EvalR.take`) — an owner or an
+  `inout .replace` parameter, of a `Vec` whose elements hold no views (a
+  String is a `Vec` of bytes) — moves the `Vec` out to an owned binding,
+  kills the place as a replace does, and leaves a fresh empty `Vec` there,
+  live and holding nothing. nurlc summarises the callee as replacing the
+  parameter, so every borrow the caller holds of it ends at the call, as
+  `callPostAux`'s kill of an `inout .replace` argument does
+  (`A2/TakeWitness.lean`, `A2/TAKE_DESIGN.md`). That nurlc's lowering
+  empties the slot on exactly the runs the callee takes it is phase C / D.
+  A `Vec` of views handed on this way, and a library handle (a cell share,
+  not a `Vec`), stay outside the claim.
 - **A3** *(proven)* — the theorem with threads: a well-typed program has no data
   race. Proven under sequential consistency, where a race is two threads'
   next steps touching one address, one of them writing, not both atomic.

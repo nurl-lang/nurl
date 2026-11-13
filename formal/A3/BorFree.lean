@@ -79,6 +79,7 @@ theorem EvalR.borFree {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r
   | expr _ => exact ⟨hb, fun _ => rfl⟩
   | new => exact ⟨hb.of_st rfl, fun h => by cases h⟩
   | moveOwn _ => exact ⟨hb.set _ (SlotFree.own _), fun h => by cases h⟩
+  | take _ => exact ⟨(hb.of_st (m' := { m with alloc := _, nid := _ }) rfl).set _ (SlotFree.own _), fun h => by cases h⟩
   | copy hy => exact ⟨hb, fun _ => hb _ _ hy⟩
   | borrowOwn _ => exact ⟨hb, fun _ => rfl⟩
   | borrowBor hy => exact ⟨hb, fun _ => hb _ _ hy⟩
