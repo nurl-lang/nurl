@@ -796,8 +796,12 @@ a cell whose payload one scope at a time checks out.
     checked out, `A3.reach_frame_checked_out`, and `x` holds a `t`). The
     block's half holds for every payload type (Agora #810: `locked_restore`
     fills only a taken block, never a checked-out one); for a `dtorFree`
-    payload the typing does not ask `x` an owner live at the end (it may be
-    moved out, and then the end is a `drop`, the block left checked out).
+    payload the run-time frame rule `StmtT.scopeL` does not carry `x`'s
+    liveness to the end (the source rule `StmtT.withLock` asks it for every
+    payload type), so the give-back lemmas keep a `holdsDtor` premise — a
+    gap in the proof's run-time typing, not a behaviour of the model (the
+    proof that a typed program's normal end leaves no block checked out
+    for every payload is Agora #825).
   - `Release` is total by construction, so no invariant has to say that the
     frame's `x` holds what was checked out of block `k`. Such an invariant
     (`LockOK`) was tried and dropped: keeping it at `scopeLIn` needs facts
@@ -918,7 +922,8 @@ stated.
   to block `k`, checked out for every payload type since Agora #810, the
   block outlives the frame, `A3.reach_frame_live`, and
   `reach_scopeL_end_gives_back` proves the `put` for a destructor payload;
-  for a `dtorFree` one the typing lets the body move `x` out);
+  for a `dtorFree` one the run-time rule `StmtT.scopeL` does not carry `x`'s
+  liveness, which `StmtT.withLock` asks, Agora #825);
 - shares in a lock's payload (A3.2's second cut: `arc` and lock shares, not
   cell shares);
 - the probes h267 h358;
@@ -3218,15 +3223,18 @@ dropped the value being handed back. The next take read freed memory.
 **Faithful to the runtime** (`stdlib/std/thread.nu`, docs/MEMORY.md
 §7.6's *A value claimed out of a place leaves a zero behind*).
 - *The take moves.* `locked_take` copies `. p val` into `x`, and
-  `mem_take x` leaves zero bytes in the slot, which own nothing. It sets
-  `taken` and unlocks. So the value moves out to the caller and the lock's
-  slot holds nothing, as `EvalR.lockTake` has it.
+  `mem_take x` leaves zero bytes in the slot, which own nothing; the lock
+  word goes TAKEN (`nurl_lk_take`). So the value moves out to the caller and
+  the lock's slot holds nothing, as `EvalR.lockTake` has it (setting
+  `Mem.taken`, Agora #810).
   - The value's heap memory is the same memory before and after. Only its
     owner changes, from the lock to the caller, as the model's tree keeps
     its addresses and changes owner.
 - *The restore moves back.* `locked_restore` swaps `x` into the slot
-  (`mem_replace`) and forgets the zero bytes, with no drop glue. It then
-  clears `taken`. That is `EvalR.lockRestore`. "The value was not taken"
+  (`mem_replace`) and forgets the zero bytes, with no drop glue; the lock
+  word goes TAKEN → HELD (`nurl_lk_restore_begin`) → FREE (`nurl_lk_exit`).
+  That is `EvalR.lockRestore` (which leaves `Mem.taken` set: the flag is
+  read only of a block whose payload is out). "The value was not taken"
   panics, which is `EvalR.lockRestoreP` (the lock word free: the value in)
   and, since Agora #810, `EvalR.lockRestoreHeld` (the lock word `HELD`: a
   `locked_update` has it in place, the model's checked-out block;
@@ -4097,8 +4105,15 @@ run of the model.
   - A `mutex_unlock` of a mutex the thread does not hold panics in the
     runtime (an error-checking mutex, Agora #455; undefined before), and so
     does a relock by the holder. The model's unlock panics (the integer in,
-    `lockRestoreP`) or puts an integer back, which may let another thread
-    in. Neither touches memory, since the mutex guards none.
+    `lockRestoreP`; or, since Agora #810, the block checked out by a
+    `mutex_with`, `lockRestoreHeld`) or puts an integer back into a taken
+    block. Neither touches memory, since the mutex guards none. One
+    under-approximation since Agora #810: inside `mutex_with`, a
+    `mutex_unlock` through another share of the same mutex succeeds in the
+    runtime (a pthread mutex has no taken / held distinction; the body's
+    later unlock then fails, EPERM on an error-checking build), where the
+    model panics at the inner unlock. Those runs are not in the model;
+    they touch no memory either way.
   - The runtime's `mutex_with` does not unlock on a panic. The model's
     releases (A3.3's `scopeLP`): more runs, as for `locked_with` (A3.2).
   - `Cond` and `Semaphore` have no rule, as in A3.6.
