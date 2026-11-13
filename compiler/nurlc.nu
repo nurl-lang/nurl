@@ -32126,9 +32126,10 @@ unsafe @ __pfo_bind_lends i syms s name → v {
     ? ! ( __clone_supported rlt g_root_syms ) {
         ? ( __nc_drop_ty rlt ) { ^ T } {}
         ? != 0 ( nurl_str_len ( __nc_wrap_payload rlt ) ) { ^ T } {}
-        // (…an option of an option, which has no copy: by what its sides
-        // own, below — agora #475.)
-        ? == 0 ( nurl_str_starts rlt `{ i1, ` ) { ^ F } {}
+        // (…an option of an option, which has no copy: by what its payload
+        // owns, below — agora #475. Only that: any other wrap with no copy
+        // answers as it did.)
+        ? | == 0 ( nurl_str_starts rlt `{ i1, ` ) == 0 ( nurl_str_starts ( __wrap_part_key rlt 0 ) `{ i1, ` ) { ^ F } {}
     } {}
     ? != 0 ( nurl_str_starts rlt `{ i1, ` ) {
         // (A side that is an option itself — `? ?String` — by what it owns:
