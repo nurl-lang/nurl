@@ -2121,6 +2121,11 @@ unsafe @ agg_field_count i syms s ot → i {
 // of a closure body in it): gen_call's hand-over step for them (agora
 // #778) asks this short list, not the symbol table, per argument.
 : ~ s g_fn_io_names ``
+// The value `?`s whose arms' stores are kept apart (agora #757,
+// __bck_arm_join): a counter for their ids, and how many noted are not
+// written yet — a statement's flush asks the table only when there are some.
+: ~ i g_bck_ajn 0
+: ~ i g_bck_ajp 0
 // (nurlc compiles on one thread: nothing races on the list.)
 unsafe @ __fn_io_reset → v { = g_fn_io_names `` }
 
@@ -23393,7 +23398,14 @@ unsafe @ gen_cond i lex i syms i cg → s {
     = g_join_rdepth ? & < c_jdepth c_jdepth0 | == t_tt0 TT_QUEST == t_tt0 TT_QUESTQUEST c_jdepth -1
     ? c_retv { = g_ret_vpos ( nurl_lex_cur_start lex ) } {}
     ? & c_rval == t_tt0 TT_LBRACE { = g_rpg_want 1 } {}
+    // (What the arm stashes from here is the arm's: agora #757.)
+    // (Only an arm that is a literal or a join stores values of its own.)
+    : b __aj_t & != 0 g_borrowck | | == t_tt0 TT_AT == t_tt0 TT_QUEST == t_tt0 TT_QUESTQUEST
+    : s __aj0 ? __aj_t ( nurl_str_cat ( nurl_sym_get g_bck `ppends` ) `` ) ``
+    : s __ajj0 ? __aj_t ( nurl_str_cat ( nurl_sym_get g_bck `pajoins` ) `` ) ``
     : ~ s tv ( gen_expr lex syms cg )
+    : s __ajt ? __aj_t ( __bck_arm_take __aj0 ) ``
+    : s __ajtj ? __aj_t ( __bck_arm_take_joins __ajj0 ) ``
     ? t_skip {
         ( nurl_print `  unreachable\n` )
         = g_did_ret 1
@@ -23662,7 +23674,13 @@ unsafe @ gen_cond i lex i syms i cg → s {
     = g_join_rdepth ? & < c_jdepth c_jdepth0 | == e_tt0 TT_QUEST == e_tt0 TT_QUESTQUEST c_jdepth -1
     ? c_retv { = g_ret_vpos ( nurl_lex_cur_start lex ) } {}
     ? & c_rval == e_tt0 TT_LBRACE { = g_rpg_want 1 } {}
+    : b __aj_e & != 0 g_borrowck | | == e_tt0 TT_AT == e_tt0 TT_QUEST == e_tt0 TT_QUESTQUEST
+    : s __aj1 ? __aj_e ( nurl_str_cat ( nurl_sym_get g_bck `ppends` ) `` ) ``
+    : s __ajj1 ? __aj_e ( nurl_str_cat ( nurl_sym_get g_bck `pajoins` ) `` ) ``
     : ~ s ev ( gen_expr lex syms cg )
+    : s __aje ? __aj_e ( __bck_arm_take __aj1 ) ``
+    : s __ajej ? __aj_e ( __bck_arm_take_joins __ajj1 ) ``
+    ? | | | != 0 ( nurl_str_len __ajt ) != 0 ( nurl_str_len __aje ) != 0 ( nurl_str_len __ajtj ) != 0 ( nurl_str_len __ajej ) { ( __bck_arm_join __ajt __ajtj __aje __ajej ) } {}
     ? e_skip {
         ( nurl_print `  unreachable\n` )
         = g_did_ret 1
@@ -35051,7 +35069,9 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
 
 // Reset the per-function capture state. Called at function entry.
 @ bck_fn_begin → v {
+    = g_bck_ajp 0
     ? != g_borrowck 0 {
+        ( bck_put `pajoins` `` )
         ( bck_put `stmts` `` )
         ( bck_put `reads` `` )
         ( bck_put `rvcallees` `` )
@@ -39348,6 +39368,103 @@ unsafe @ bck_stash_rc_value i line s callee i argidx s at → v {
     } {}
 }
 
+// A value `?`'s arms each store values into an owner — bare literals,
+// `: K r ? c @ K { k1 k2 } @ K { k2 k1 }` — and only one arm runs. Their
+// stashed `store` / `pendstore` rows (bck_stash_store) are the arm's: kept
+// apart per arm (__bck_arm_take) and written, after the statement's own
+// row, inside a `cond` with a block per arm (__bck_flush_arm_joins), so the
+// walk forks its state as it does for a statement's arms. Written one
+// after the other, the second arm's stores read as second owners of what
+// the first stored (agora #757). Only an arm whose stash holds nothing but
+// such rows is kept apart; any other leaves the order as it was.
+
+// The words stashed since `p0` (the `ppends` list when the arm began), when
+// every one of them is a store — `` otherwise; `ppends` is put back to `p0`
+// when they are taken.
+@ __bck_arm_take s p0 → s {
+    ? | == g_borrowck 0 != 0 g_bck_rec_off { ^ ( nurl_str_cat `` `` ) } {}
+    : s now ( nurl_sym_get g_bck `ppends` )
+    : i n0 ( nurl_str_len p0 )
+    ? <= ( nurl_str_len now ) n0 { ^ ( nurl_str_cat `` `` ) } {}
+    ? ! ( seq ( nurl_str_slice now 0 n0 ) p0 ) { ^ ( nurl_str_cat `` `` ) } {}
+    : ~ s add ( nurl_str_slice now n0 - ( nurl_str_len now ) n0 )
+    ? == ( nurl_str_get add 0 ) 32 { = add ( nurl_str_slice add 1 - ( nurl_str_len add ) 1 ) } {}
+    // (Five words a row: name line callee argidx kind.)
+    : ~ s r ( nurl_str_cat add `` )
+    ~ != 0 ( nurl_str_len r ) {
+        = r ( str_skip_word ( str_skip_word ( str_skip_word ( str_skip_word r ) ) ) )
+        : s k ( str_first_word r ) = r ( str_skip_word r )
+        ? ! | ( seq k `store` ) ( seq k `pendstore` ) { ^ ( nurl_str_cat `` `` ) } {}
+    }
+    ( bck_put `ppends` p0 )
+    ^ add
+}
+
+// The value `?`s noted since `j0` (the `pajoins` list when an arm began):
+// the arm's own, nested in its block (__bck_arm_block). `pajoins` is put
+// back to `j0`.
+@ __bck_arm_take_joins s j0 → s {
+    ? | == g_borrowck 0 != 0 g_bck_rec_off { ^ ( nurl_str_cat `` `` ) } {}
+    : s now ( nurl_sym_get g_bck `pajoins` )
+    : i n0 ( nurl_str_len j0 )
+    ? <= ( nurl_str_len now ) n0 { ^ ( nurl_str_cat `` `` ) } {}
+    : ~ s add ( nurl_str_slice now n0 - ( nurl_str_len now ) n0 )
+    ? == ( nurl_str_get add 0 ) 32 { = add ( nurl_str_slice add 1 - ( nurl_str_len add ) 1 ) } {}
+    ( bck_put `pajoins` j0 )
+    ^ add
+}
+
+// Note a value `?` whose arms' stores were kept apart (`t`, `e`: their
+// stashed words; `tj`, `ej`: the value `?`s nested in them; any may be
+// ``): written by bck_flush_moves.
+@ __bck_arm_join s t s tj s e s ej → v {
+    = g_bck_ajn + g_bck_ajn 1
+    : s id ( nurl_str_int g_bck_ajn )
+    ( bck_put ( nurl_str_cat `ajt_` id ) t )
+    ( bck_put ( nurl_str_cat `aje_` id ) e )
+    ( bck_put ( nurl_str_cat `ajtj_` id ) tj )
+    ( bck_put ( nurl_str_cat `ajej_` id ) ej )
+    ( bck_put ( nurl_str_cat `ajl_` id ) ( nurl_str_int g_stmt_line ) )
+    ( bck_add_word `pajoins` id )
+    = g_bck_ajp + g_bck_ajp 1
+}
+
+// Write each noted value `?`'s arms as a `cond` with a block per arm.
+@ __bck_flush_arm_joins → v {
+    ? == 0 g_bck_ajp { ^ v } {}
+    : ~ s jr ( nurl_sym_get g_bck `pajoins` )
+    ? == 0 ( nurl_str_len jr ) { ^ v } {}
+    ( bck_put `pajoins` `` )
+    ~ != 0 ( nurl_str_len jr ) {
+        : s id ( str_first_word jr ) = jr ( str_skip_word jr )
+        = g_bck_ajp - g_bck_ajp 1
+        : s t ( nurl_sym_get g_bck ( nurl_str_cat `ajt_` id ) )
+        : s e ( nurl_sym_get g_bck ( nurl_str_cat `aje_` id ) )
+        : s tj ( nurl_sym_get g_bck ( nurl_str_cat `ajtj_` id ) )
+        : s ej ( nurl_sym_get g_bck ( nurl_str_cat `ajej_` id ) )
+        : i ln ( nurl_str_to_int ( nurl_sym_get g_bck ( nurl_str_cat `ajl_` id ) ) )
+        ( bck_put `reads` `` )
+        ( bck_record `cond` `` ln )
+        ( __bck_arm_block `cond-then` t tj ln )
+        ( bck_record `cond-else-edge` `` ln )
+        ( __bck_arm_block `cond-else` e ej ln )
+        ( bck_record `endcond` `` ln )
+    }
+}
+
+// One arm's block: its stores, flushed inside it, then the value `?`s
+// nested in it.
+@ __bck_arm_block s kind s words s joins i ln → v {
+    ( bck_record `block` kind ln )
+    = g_bck_depth + g_bck_depth 1
+    ( bck_put `ppends` words )
+    ( __bck_flush_ppends F )
+    ( bck_put `pajoins` joins )
+    ( __bck_flush_arm_joins )
+    = g_bck_depth - g_bck_depth 1
+    ( bck_record `endblock` `` ln )
+}
+
 // Drain the per-statement move stash into `move` rows. Called by
 // gen_stmt once the enclosing statement's own record is in place.
 @ bck_flush_moves → v {
@@ -39442,6 +39559,8 @@ unsafe @ bck_stash_rc_value i line s callee i argidx s at → v {
         }
         // …and the calls whose move effect is not decidable yet.
         ( __bck_flush_ppends F )
+        // …and a value `?`'s arms' stores, an arm a block (agora #757).
+        ( __bck_flush_arm_joins )
         // (Its `sK` rows among them: none wait now.)
         = g_bck_vs_pend 0
     } {}
