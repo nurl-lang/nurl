@@ -30519,6 +30519,22 @@ unsafe @ mem_path_to_indices s path → s {
 // handed e's own string on and left s's to s, which drops it. (Cleared
 // whatever, s's value leaked: agora #781.)
 @ mem_udrop_alias_move_own i syms i cg s ptr s own0 → v {
+    // (A cursor over two or more sources — a join's binding, `: String e {
+    // … ? c s t }` — holds one of them: each leaves only where the cursor
+    // holds its very value, by the value's identity (mem_alias_src_leaves),
+    // whichever route moves it on — a `sink` argument, a push, a store, a
+    // return. Cleared all through its owner links, the one the join did
+    // not select was dropped by no one, agora #628. One source needs no
+    // test: mem_cursor_own0's flag answers it.)
+    ? ( __alias_whole_srcs_many syms ptr ) {
+        ( mem_udrop_optparam_taken syms ptr )
+        : ~ s rest ( nurl_sym_get2 syms ptr `__alias` )
+        ~ != 0 ( nurl_str_len rest ) {
+            : s src ( str_first_word rest ) = rest ( str_skip_word rest )
+            ? ( __part_src syms ptr src ) {} { ( mem_alias_src_leaves syms cg src ptr `` ) ( mem_udrop_param_moved syms src ) }
+        }
+        ^ v
+    } {}
     ? | == 0 ( nurl_str_len own0 ) | ( seq own0 `0` ) ( seq own0 `false` ) { ( mem_udrop_alias_move syms cg ptr `0` ) ^ v } {}
     ? == 0 ( nurl_str_len ptr ) { ^ v } {}
     ( mem_udrop_optparam_taken syms ptr )
@@ -30548,21 +30564,6 @@ unsafe @ mem_path_to_indices s path → s {
         ~ != 0 ( nurl_str_len rest ) {
             : s src ( str_first_word rest ) = rest ( str_skip_word rest )
             ? ( __part_src syms ptr src ) {} { ( mem_udrop_param_moved syms src ) }
-        }
-        ^ v
-    } {}
-    // (A cursor over two or more sources — a join's binding, `: String e {
-    // … ? c s t }` — holds one of them: each leaves only where the cursor
-    // holds its very value, by the value's identity (mem_alias_src_leaves),
-    // as a store or a return moving it on asks. Cleared all, the one the
-    // join did not select was dropped by no one, agora #628. One source
-    // needs no test: mem_cursor_own0's flag answers it.)
-    ? ( __alias_whole_srcs_many syms ptr ) {
-        ( mem_udrop_optparam_taken syms ptr )
-        : ~ s rest ( nurl_sym_get2 syms ptr `__alias` )
-        ~ != 0 ( nurl_str_len rest ) {
-            : s src ( str_first_word rest ) = rest ( str_skip_word rest )
-            ? ( __part_src syms ptr src ) {} { ( mem_alias_src_leaves syms cg src ptr `` ) ( mem_udrop_param_moved syms src ) }
         }
         ^ v
     } {}
