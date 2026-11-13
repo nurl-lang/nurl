@@ -91,8 +91,9 @@ PRIMS = {
     "vec_get": S(["in", "in"], res="lent", lends=[(0, E, "handle")], elems=[0]),
     "vec_clear": S(["in"], effects=[(0, (), "drop")]),
     "vec_truncate": S(["in", "in"], effects=[(0, (), "drop")]),
+    # (an option of the element: what the element held, its payload holds)
     "vec_pop": S(["in"], res="own", effects=[(0, (), "drop")], elems=[0],
-                 rholds=[((), 0, E, "held")]),
+                 rholds=[(("#T0",), 0, E, "held")]),
     "vec_reserve": S(["in", "in"], effects=[(0, (), "realloc")]),
     "vec_free": S(["sink"], consumes=[0]),
     "vec_clone": S(["in"], res="own", rholds=[((), 0, (), "held")], elems=[0]),
@@ -110,7 +111,7 @@ PRIMS = {
                           stores=[(0, (), 1, (), "held")], elems=[1]),
     "vec_shrink_to_fit": S(["in"], effects=[(0, (), "realloc")]),
     "vec_remove": S(["in", "in"], res="own", effects=[(0, (), "drop")], elems=[0],
-                    rholds=[((), 0, E, "held")]),
+                    rholds=[(("#T0",), 0, E, "held")]),
     "vec_data": None,  # raw pointer: unsafe only
     # ---- Slice ----------------------------------------------------------
     "slice_from_vec": S(["in"], res="lent", lends=[(0, (), "view")]),
