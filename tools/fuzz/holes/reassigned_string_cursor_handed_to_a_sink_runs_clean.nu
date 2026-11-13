@@ -1,5 +1,5 @@
 // reassigned_string_cursor_handed_to_a_sink_runs_clean: as reassigned_vec_cursor_handed_to_a_sink_runs_clean, a String, u read after
-// Closed: a sink takes a cursor's value from its source only where the cursor still holds that very value, by the value's identity (mem_alias_src_leaves), as a store or a return moving the cursor on already asked (agora #668).
+// Closed: a sink takes a cursor's value from its source only where the cursor holds no value of its own, by the cursor's per-run own flag (mem_cursor_own0, agora #781 in github#1836); kept as #668 item 2's probe.
 // main 9052104: LeakSanitizer: detected memory leaks.
 // map: §7.6 | A2 | runs-clean | - | agora #668: as that probe, a String
 $ `stdlib/core/string.nu`
