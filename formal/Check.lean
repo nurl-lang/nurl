@@ -72,17 +72,22 @@ import A3
 -- Agora #755, `Locked D`: a lock's payload that is a destructor value holding no share; the
 -- check-out gives it back at its end and on a panic, and the orphaned lock block is reaped
 -- (A3/LockDtorWitness.lean)
+#print axioms A3.LockDtorWitness.giveable_of
 #print axioms A3.LockDtorWitness.release_puts
 #print axioms A3.LockDtorWitness.scopeL_end_gives_back
 #print axioms A3.LockDtorWitness.scopeL_panic_gives_back
 #print axioms A3.LockDtorWitness.sendCheck_noArc
--- Agora #805: a typed check-out frame of a destructor payload ends with `x` owning a `t`, and at every
--- panic point `x` owns a `t` (given back) or nothing (`StmtT.scopeL` asks `x` an owner, live at the end)
+-- Agora #805, #825: a typed check-out frame, of every payload type, ends with `x` holding a `t` (owned,
+-- or an integer payload's plain integer), and at every panic point `x` holds a `t` (given back) or
+-- nothing (`StmtT.scopeL` asks `x` bound as `withLock` binds it, live at the end)
+#print axioms A3.LockDtorWitness.scopeL_entry
 #print axioms A3.LockDtorWitness.scopeL_end_entry
+#print axioms A3.LockDtorWitness.frame_slot
+#print axioms A3.LockDtorWitness.frame_slot_live
 #print axioms A3.LockDtorWitness.scopeL_end_owns
 #print axioms A3.LockDtorWitness.scopeL_typed_end_gives_back
 #print axioms A3.LockDtorWitness.Step.panic_st
-#print axioms A3.LockDtorWitness.scopeL_entry
+#print axioms A3.LockDtorWitness.release_cases
 #print axioms A3.LockDtorWitness.scopeL_typed_panic
 -- Agora #810: a lock block's payload is taken (`locked_take`, `Mem.taken`) or checked out (a
 -- `withLock`); a restore fills only a taken block, and panics on a checked-out one or a full one

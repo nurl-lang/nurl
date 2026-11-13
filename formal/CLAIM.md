@@ -1046,14 +1046,20 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   body that moves the value out (to a `letd`, a call's `sink` parameter)
   hands it to an owner that runs its destructor, by the rules above.
   Agora #805 proves the binding's half for a typed frame: the run-time
-  check-out frame's typing (`StmtT.scopeL`) now asks, for a payload that
-  holds a destructor value, that `x` is an owner and live where the body
-  ends (as `withLock` already asked), so at the frame's end `x` owns a
-  value of the payload's type (`A3.LockDtorWitness.scopeL_end_owns`,
-  `scopeL_typed_end_gives_back`), and at every panic point `x` owns a `t`,
-  given back when the block is checked out, or nothing, the value moved to
-  an owner that runs its destructor, and the release frees nothing
-  (`scopeL_typed_panic`, over `Step.panic_st`, `scopeL_entry`). Agora
+  check-out frame's typing (`StmtT.scopeL`) asks that `x` is an owner and
+  live where the body ends (as `withLock` already asked), so at the
+  frame's end `x` owns a value of the payload's type
+  (`A3.LockDtorWitness.scopeL_end_owns`, `scopeL_typed_end_gives_back`),
+  and at every panic point `x` owns a `t`, given back when the block is
+  checked out, or nothing, the value moved to an owner that runs its
+  destructor, and the release frees nothing (`scopeL_typed_panic`, over
+  `Step.panic_st`, `scopeL_entry`). Agora #805 asked this for a payload
+  that holds a destructor value only; since Agora #825 `StmtT.scopeL`
+  carries `x`'s liveness for every payload type and binds `x` as
+  `withLock` does (an owner, or, for an `int` payload, a plain integer
+  binding: `frame_slot`, `release_cases`), so these lemmas, and the
+  give-back over a reached configuration below, hold for every payload
+  type that holds no share, with no `holdsDtor` premise. Agora
   #808 proves the block's half on every configuration a run reaches: an invariant (`A3.LockInv`, `A3.reach_lockInv`,
   kept by every `TStep`: a thread's step, its marking sweep and reaps, a
   spawn, a failed spawn) says each `scopeL k t x s` frame's block is a lock

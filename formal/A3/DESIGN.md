@@ -789,19 +789,23 @@ a cell whose payload one scope at a time checks out.
     can give it back (`Giveable`: an owned tree, since
     A3.3 one of the payload's type, or an integer for an `int` lock).
   - Otherwise `Release.drop` drops `x`'s slot as a scope's end does;
-    `drop` keeps the rule total. For a payload that holds a destructor
-    value, `StmtT.withLock`'s premises make a typed program's normal-path
+    `drop` keeps the rule total. For every payload type that holds no
+    share, `StmtT.withLock`'s premises make a typed program's normal-path
     end a `put`: Agora #808 proves it on every reached configuration
     (`A3.reach_scopeL_end_gives_back`; the block outlives the body and is
     checked out, `A3.reach_frame_checked_out`, and `x` holds a `t`). The
     block's half holds for every payload type (Agora #810: `locked_restore`
-    fills only a taken block, never a checked-out one); for a `dtorFree`
-    payload the run-time frame rule `StmtT.scopeL` does not carry `x`'s
-    liveness to the end (the source rule `StmtT.withLock` asks it for every
-    payload type), so the give-back lemmas keep a `holdsDtor` premise — a
-    gap in the proof's run-time typing, not a behaviour of the model (the
-    proof that a typed program's normal end leaves no block checked out
-    for every payload is Agora #825).
+    fills only a taken block, never a checked-out one), and so does the
+    binding's (Agora #825): the run-time frame rule `StmtT.scopeL` carries
+    `x`'s liveness to the end for every payload type, as the source rule
+    `StmtT.withLock` asks it, and binds `x` as `withLock` does (an owner,
+    or, for an `int` payload, a plain integer binding), so at the end `x`
+    holds a `t` it can give back (`A3.LockDtorWitness.scopeL_end_owns`) and
+    the give-back lemmas need no `holdsDtor` premise. (Until #825 the rule
+    carried the liveness for a destructor payload only: a gap in the
+    proof's run-time typing, not a behaviour of the model.) The lemmas keep
+    the payload's type holding no share and no view (`hasArc`, `holdsView`
+    false), under which the crossing check cannot refuse the give-back.
   - `Release` is total by construction, so no invariant has to say that the
     frame's `x` holds what was checked out of block `k`. Such an invariant
     (`LockOK`) was tried and dropped: keeping it at `scopeLIn` needs facts
@@ -917,13 +921,15 @@ stated.
 
 **Not proven here.**
 - deadlock freedom;
-- that a typed program's lock scope of a `dtorFree` payload ends in a
-  `put`, as a lemma (Agora #808's `A3.LockInv` ties each `scopeL k` frame
-  to block `k`, checked out for every payload type since Agora #810, the
-  block outlives the frame, `A3.reach_frame_live`, and
-  `reach_scopeL_end_gives_back` proves the `put` for a destructor payload;
-  for a `dtorFree` one the run-time rule `StmtT.scopeL` does not carry `x`'s
-  liveness, which `StmtT.withLock` asks, Agora #825);
+- that a typed program's lock scope of a payload that holds a share ends
+  in a `put`, as a lemma (its crossing check is argued, not proven, below).
+  For a payload that holds none the `put` is proved for every payload type:
+  Agora #808's `A3.LockInv` ties each `scopeL k` frame to block `k`,
+  checked out for every payload type since Agora #810, the block outlives
+  the frame, `A3.reach_frame_live`, and `reach_scopeL_end_gives_back`
+  proves the `put`, for a destructor payload and, since Agora #825 (the
+  run-time rule `StmtT.scopeL` carries `x`'s liveness, which
+  `StmtT.withLock` asks, for every payload type), for a `dtorFree` one;
 - shares in a lock's payload (A3.2's second cut: `arc` and lock shares, not
   cell shares);
 - the probes h267 h358;
@@ -996,9 +1002,11 @@ settled:
    end is the give-back and nothing else (`scopeL_end_gives_back`), and so
    is a panic's release (`scopeL_panic_gives_back`, over `release_puts`).
    That a typed body leaves `x` owning a `D` there is proved since Agora
-   #805 for a typed frame: `StmtT.scopeL` asks, for a payload that holds a
-   destructor value, that `x` is an owner, live where the body ends (as
-   `withLock` asks), so at the end `x` owns a `t` (`scopeL_end_owns`,
+   #805 for a typed frame: `StmtT.scopeL` asks that `x` is bound as
+   `withLock` binds it (an owner, for a payload that holds a destructor
+   value) and live where the body ends (as `withLock` asks; Agora #825: for
+   every payload type, an `int` payload's `x` a plain integer binding), so
+   at the end `x` owns a `t` (`scopeL_end_owns`,
    `scopeL_typed_end_gives_back`), and at every panic point a `t`, given
    back, or nothing, a body that moved it out having handed it to an owner
    that runs its destructor (A2-drop's binders), the release freeing nothing
@@ -1033,8 +1041,9 @@ settled:
    `scopeL_panic_gives_back` are lemmas of stores: `x` owning a `t` and
    the block checked out are their hypotheses. Agora #805 discharges the
    first for a typed frame (`scopeL_typed_end_gives_back`,
-   `scopeL_typed_panic`); Agora #808 the second on every reached
-   configuration:
+   `scopeL_typed_panic`; since Agora #825 for every payload type that holds
+   no share, `x` an owner or an `int` payload's plain integer binding);
+   Agora #808 the second on every reached configuration:
    - *The invariant* (`A3.LockInv`, `reach_lockInv`): over the threads'
      frames (`Stmt.lfr`, `lkeys` with the payload types) and the shared
      blocks, each frame's block is a lock block of the frame's type checked
@@ -1193,8 +1202,8 @@ out bound by `letd` under its glue `ofnR`, `EnumGlueOK` over `sum int DT`:
 `mainR_typed`, `mainR_safe`, `mainR_no_leak`, `mainR_no_leak_panic`,
 `A3.chanRecv_claim`, `recv_runs_glue`, `ofnR_takes_payload`). (The check-out
 body's half is proved since Agora #805 for a typed frame, `scopeL_end_owns`,
-`scopeL_typed_panic`; the block's half since Agora #808 on every reached
-configuration.) Still refused: a channel of destructor values holding a
+`scopeL_typed_panic`, since Agora #825 for every payload type that holds no
+share; the block's half since Agora #808 on every reached configuration.) Still refused: a channel of destructor values holding a
 share, and the plain `prod (vec D) int` lock payload (no glue).
 
 ### Agora #755 item 1: the destructor on A3's threads
@@ -3993,7 +4002,9 @@ run of the model.
   the box's share and the lock's old value, whose cells are in no other
   place (`CellInv.one`). This is argued, not proven as a lemma (A3.2's
   lock scope ending in a `put` is proved since Agora #805 / #808 for a
-  payload that holds a destructor value).
+  payload that holds a destructor value, and since Agora #825 for every
+  payload type that holds no share; a payload that holds a share, which
+  this check is about, is not covered).
 - `rw_set` is the same form. The runtime's `rw_set` checks nothing, and
   the model's `RwLocked` checks every value going in (A3.5's second cut).
   The check finds nothing on a payload that holds no library handle, which

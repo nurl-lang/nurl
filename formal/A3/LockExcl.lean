@@ -893,13 +893,14 @@ theorem reach_lock_excl (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spa
     store of the same slots as the one the step runs on. -/
 theorem scopeL_typed_panic_of {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x : Var} {s : Stmt}
     {m mo m2 : Mem} (ht : StmtT P Γ F (.scopeL k t x s) Δ) (hi : Inv mo Γ F (.scopeL k t x s))
-    (hst0 : mo.st = m.st) (hd : t.holdsDtor = true) (hna : t.hasArc = false) (hvf : t.holdsView = false)
+    (hst0 : mo.st = m.st) (hna : t.hasArc = false) (hvf : t.holdsView = false)
     (h : Step P m (.scopeL k t x s) (.panic m2)) :
     ∃ m1, Step P m s (.panic m1) ∧
-      ((∃ v, m1.st x = some ⟨true, some v⟩ ∧ WFv t v ∧
+      ((∃ o v, m1.st x = some ⟨o, some v⟩ ∧ WFv t v ∧ (o = true ∨ t = .int) ∧
           (CheckedOut m1 k t →
             m2 = ({ m1 with blk := upd m1.blk k (some ⟨t, .lock, some v⟩) }.remove x))) ∨
-        (m1.st x = some ⟨true, none⟩ ∧ m2 = m1.remove x)) := by
+        ((m1.st x = some ⟨true, none⟩ ∨ (t = .int ∧ ∃ w, m1.st x = some ⟨false, w⟩)) ∧
+          m2 = m1.remove x)) := by
   cases h with
   | waitPanic hw => exact hw.elim
   | @scopeLP m1 _ _ _ _ _ hs hrl =>
@@ -907,24 +908,12 @@ theorem scopeL_typed_panic_of {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x
     have hxsp : x ∉ s.spine := by
       have := hi.spineNd; simp only [Stmt.spine, List.nodup_cons] at this; exact this.1
     have hst := LockDtorWitness.Step.panic_st hs x hxsp
-    obtain ⟨E, hx, hm, hty⟩ := LockDtorWitness.scopeL_entry ht hd
-    obtain ⟨sl, hsl, _, hown, hok, _⟩ := hi.slot x E hx
-    rw [hst0] at hsl
-    rw [hm] at hown hok
-    obtain ⟨_, hw, _⟩ := hok rfl
-    obtain ⟨o, val⟩ := sl
-    simp only at hown; subst hown
-    cases val with
-    | some v =>
-      have hx1 : m1.st x = some ⟨true, some v⟩ := by rw [hst]; exact hsl
-      exact .inl ⟨v, hx1, hty ▸ hw v rfl,
-        fun hk => LockDtorWitness.release_puts hx1 (hty ▸ hw v rfl) hna hvf hk hrl⟩
-    | none =>
-      have hx1 : m1.st x = some ⟨true, none⟩ := by rw [hst]; exact hsl
-      refine .inr ⟨hx1, ?_⟩
-      cases hrl with
-      | put hx' _ _ _ => rw [hx1] at hx'; cases hx'
-      | drop _ hx' hdr => rw [hx1] at hx'; cases hx'; cases hdr; rfl
+    obtain ⟨E, hx, hrb, hmo, hty⟩ := LockDtorWitness.scopeL_entry ht
+    refine LockDtorWitness.release_cases hna hvf ?_ hrl
+    rw [hst, ← hst0]
+    rcases LockDtorWitness.frame_slot hi.toMInv hx hrb hmo hty with ⟨w, hsl, hw, _⟩ | ⟨hti, w, hsl, _⟩
+    · exact .inl ⟨w, hsl, hw⟩
+    · exact .inr ⟨hti, w, hsl⟩
 
 end reach
 

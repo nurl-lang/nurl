@@ -1942,10 +1942,8 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       have hnrb : (lockE t).mode ≠ .rootb := by rcases out.mode with h | h <;> rw [h] <;> simp
       have hanch1 := post.rel.anch hanch
       have hsp : k.spine = [] := src_spine hsrc
-      have hdl : t.holdsDtor = true → (lockE t).mode = .own ∧ ∃ E', Δ x = some E' ∧ E'.live = true :=
-        fun hd => ⟨by unfold lockE; split
-                      · next h => subst h; cases hd
-                      · rfl, hlive⟩
+      have hdl : (t ≠ .int → (lockE t).mode = .own) ∧ ∃ E', Δ x = some E' ∧ E'.live = true :=
+        ⟨fun hne => by simp [lockE, hne], hlive⟩
       refine ⟨setE Γ x (lockE t), StmtT.scopeL ⟨lockE t, by simp [setE], hnrb, lockE_ty t, hdl⟩ hxF hs hpx, ?_,
         by simp, ?_,
         fun v hv => ?_⟩
@@ -2596,7 +2594,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       obtain ⟨Γ', ht', hi', hnv, hk, hfz⟩ := ihs hs hcd hi0 hst'
       obtain ⟨hxsp', Ex', hx', hm', ht'', _⟩ := hk.1 x Ex hx hxsp
       refine ⟨Γ', StmtT.scopeL ⟨Ex', hx', by rw [hm']; exact hnrb, by rw [ht'']; exact hty,
-          fun hd => ⟨by rw [hm']; exact (hdl hd).1, (hdl hd).2⟩⟩ hxF ht' hpx, ?_, hnv,
+          ⟨fun hne => by rw [hm']; exact hdl.1 hne, hdl.2⟩⟩ hxF ht' hpx, ?_, hnv,
         ⟨?_, ?_, hk.2.2.mono fun v hv h => hv (List.mem_cons_of_mem _ h)⟩, hfz⟩
       · exact
         { toMInv := hi'.toMInv

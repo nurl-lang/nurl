@@ -1020,8 +1020,9 @@ each one shrinks `CLAIM.md`'s exception:
         `scopeL_panic_gives_back`, `release_puts`. Agora #805: that a typed
         body leaves `x` owning the value at its end, and wherever it panics
         owning it or moved out (to an owner that runs its destructor), is
-        proved for a typed frame (`StmtT.scopeL` asks, for a destructor
-        payload, `x` an owner live at the body's end, as `withLock` does:
+        proved for a typed frame (`StmtT.scopeL` asks `x` an owner, for a
+        destructor payload, live at the body's end, as `withLock` does;
+        since Agora #825 the liveness for every payload type:
         `A3.LockDtorWitness.scopeL_end_owns`, `scopeL_typed_end_gives_back`,
         `scopeL_typed_panic`); that the block is then there and checked
         out is proved on every reached configuration (Agora #808:
