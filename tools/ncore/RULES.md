@@ -82,6 +82,8 @@ summarised by the same analysis, to a fixpoint over the program.
 | A closure leaves no capture and no argument holding a view | §2.11 | `check_program` |
 | A closure kept by an owner, and a literal handed back as it is, copies in what it captured and can copy; a bound closure handed back by name does not | §7.5, §2.11 (h310) | `closure_owned`, `transfer` |
 | A closure another thread runs takes the bindings it captured; one taken by pointer may not go. A handle whose copy is a share two threads may use (the type table's `t`) is captured as a share of its own | §2.1, §2.3, §6.5 | `detaches`, `cap_loans`, `thread_share` |
+| A closure binding handed to another binding gives it its environment and stays a borrow of it; stored into a literal or handed to a keeper, the holder has a copy | §7.5 (#835, #173) | `closure_moved_into`, `transfer`, `apply_call` |
+| A call's lend of a parameter the function keeps on another path is refused where it is handed back (`^ p` itself is the function's to give) | §7.6 (#743) | `calllends`, `check_program` |
 | A borrowed closure handed to a keeper is copied: what the callee does to its copy is not done to the caller's | §7.5 | `apply_call` (`copied`) |
 | An argument the callee took over and hands back as it is is the caller's own again, holding what it held | §7.5 (#463) | `apply_call` |
 | `= b ( wrap b )`: a new value that holds a handle of the binding's old one keeps it; nothing is released | §7.6 (#475) | `stmt` (`assign`, `inside`) |

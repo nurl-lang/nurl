@@ -576,6 +576,11 @@ class FnCheck:
                 # a parameter is lent to its new name (the caller owns it); an
                 # owned raw string or slice is viewed, not moved
                 av = AV("L", {self.loan(st, site, (vid, ()), "view" if raw else "handle")}, {(vid, ())}, src.held)
+            elif (stored and vty is not None and vty[0] == "closure" and self.fn.vars[vid].kind != "temp"
+                  and not is_ret):
+                # a closure binding stored into a literal: the literal owns
+                # a copy of it (MEMORY.md §7.5, agora #173)
+                av = AV("O", (), (), self.closure_owned(src.held))
             else:
                 av = self.move_out(st, vid, line)
                 if is_ret and self.moved_from:
@@ -736,6 +741,12 @@ class FnCheck:
                                    any(self.loans.get(l, ((None,), None))[0][0] == op[1] for l in av.loans)):
                         self.err(line, f"{name} takes {self.vname(op[1])} while argument {m + 1} still reads it")
                 cur = st.vals.get(op[1])
+                cv = self.fn.vars[op[1]]
+                if cur and cur.own in ("O", "P") and cv.kind != "temp" and cv.ty is not None and cv.ty[0] == "closure":
+                    # a closure binding handed to a keeper: the keeper has a
+                    # copy, the binding keeps its own (MEMORY.md §7.5)
+                    copied.add(k)
+                    continue
                 if cur and cur.own in ("O", "P"):
                     moved = self.move_out(st, op[1], line)
                     # (what the callee keeps of it is what the value holds
@@ -1043,6 +1054,20 @@ class FnCheck:
                 self.cap_loans |= av.loans
                 held |= hfrom(av.loans, fp) | hroot(av.held, fp)
         return AV("O", (), (), held)
+
+    def closure_moved_into(self, st, rv, dest):
+        """`= keep f`, `: g f`: a closure binding handed to another binding
+        gives it its environment and stays a borrow of it - readable while
+        that binding holds the value (MEMORY.md §7.5, agora #835)."""
+        if not rv or rv[0] != "use" or rv[1][0] != "v" or rv[1][2]:
+            return
+        src = rv[1][1]
+        v = self.fn.vars[src]
+        cur, d = st.vals.get(src), st.vals.get(dest)
+        if (v.kind == "temp" or v.ty is None or v.ty[0] != "closure" or cur is None or cur.own != "M"
+                or d is None or d.own != "O" or self.fn.vars[dest].kind == "temp"):
+            return
+        st.vals[src] = AV("L", {self.loan(st, ("clomv", src, dest), (dest, ()), "handle")}, {(dest, ())}, d.held)
 
     def closure_owned(self, held):
         """What a closure kept by an owner - stored into a container, a
@@ -1403,6 +1428,7 @@ class FnCheck:
                             and self.take_payload(st, new, ln)):
                         new = AV("O", (), (), new.held)
                 st.vals[vid] = self.reroot(st, new, vid)
+                self.closure_moved_into(st, rv, vid)
             return st
         if k == "assign":
             _, (vid, path), rv, ln = s
@@ -1465,6 +1491,7 @@ class FnCheck:
                     st.vals[vid] = AV("L", new.loans, new.alias, new.held)
                 else:
                     st.vals[vid] = new
+                self.closure_moved_into(st, rv, vid)
                 if st.gone:
                     st.gone = frozenset(g for g in st.gone if g[0] != vid)
                 return st
