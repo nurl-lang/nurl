@@ -1,0 +1,104 @@
+# The reference checker's rules
+
+What `check.py` checks on the core IR ([docs/dev/CORE_IR.md](../../docs/dev/CORE_IR.md)),
+one rule a row. This is the working list for stage S2 of
+[PROPOSAL_CORE_IR.md](../../docs/dev/PROPOSAL_CORE_IR.md): the rules the engine
+in nurlc will transcribe, each with where docs/MEMORY.md states it. A rule
+that is here is applied to every spelling: the checker never sees one.
+
+`run.py --nurlc --all` says how many hole probes agree with their `// map:`
+verdict under these rules. A probe that disagrees is a rule missing from
+this list, or one written too coarsely.
+
+## State
+
+Per variable, at a program point:
+
+| part | meaning |
+|---|---|
+| `own` | `O` owner, `P` a parameter (the caller's), `L` lent, `N` nothing to track, `M` moved, `X` moved on some paths, `U` not assigned yet, `D` released |
+| `loans` | the loans the value itself needs: it is a handle or a view of those places |
+| `alias` | the places it is a handle or a view of (what an effect through it reaches) |
+| `held` | (path, loan): the loans held inside it, by where they sit (`name`, `*`, `#T0`, `^i` a closure's capture `i`) |
+| `call` | the lend came out of a call: a copy of a handle its owner keeps, not the owner's part read in place |
+
+Per path: `dead` (the loans ended so far), `gone` (fields taken out of their
+owner), the `;` blocks armed.
+
+A **loan** is a place and a kind:
+
+| kind | is | ended by |
+|---|---|---|
+| `handle` | a copy of the handle the place holds | the place replaced or released; its elements dropped, for a loan below them |
+| `view` | a pointer into the place's own buffer | the same, and the buffer moving (`realloc`) |
+| `ref` | a pointer to the binding itself (a capture taken by pointer) | the binding's scope ending, or the binding moved |
+| `share` | a closure's own copy of a shared handle | nothing |
+
+An **effect** on a place is `realloc`, `drop` (its elements), `replace` (its
+value) or `end` (the binding). `kills_paths` is formal/A2's `Eff.kills`
+lifted from bindings to places.
+
+A **summary** per function: `res`, `lends`, `rholds`, `effects`, `stores`,
+`consumes`, `elems` as in prims.py, and `invokes` (the closure arguments it
+runs), `cloargs` (what it hands them of its other arguments), `detaches`
+(closures another thread runs), `shares` (arguments several threads reach),
+`regions` (effects inside a shared payload). Program functions are
+summarised by the same analysis, to a fixpoint over the program.
+
+## Rules
+
+| rule | MEMORY.md | in check.py |
+|---|---|---|
+| A use of a value whose loan has ended is the error | §2.10 | `check_live` |
+| An owner handed on by name moves; `: ~` of a name is a cursor | §2.2, §7.6 | `transfer`, `move_out` |
+| A value that holds a view is read whole only while what the view points into is there | §2.10 | `read` |
+| A call's arguments are frozen for its duration: its effects end no view another argument holds | §2.4 | `apply_call` |
+| A call's effects come before its stores; a consumed argument is moved | §2.1 | `apply_call` |
+| A view-typed parameter (`s`, a slice) is a view the caller lent, never an owner | §1 | `read` |
+| A borrow handed to a consumer: a part read in place is taken out of its owner; a call's lend in a temporary is copied; a binding of a call's lend is refused | §2.5, §7.6 | `apply_call`, `take_payload` |
+| A field taken out of its owner is not read, nor the value handed on whole, until it is given a value again | §2.1 | `State.gone` |
+| A store replacing a place hands its old value to the binding that read that very place | §7.6 (#265) | `handover` |
+| `= o ( f o … )`: a binding given a part of its own value keeps it | §7.6 (#475) | `own_parts` |
+| A lend handed to a holder that outlives what it borrows is copied where it can be, refused where it cannot | §7.6 | `transfer` |
+| A value owned on some paths and lent on others is copied on the paths that lend it, for a holder that outlives the lender | §7.6 | `transfer` (`mixed`) |
+| A borrowed value stored into an owner is copied, with the views it holds; one that cannot be copied is refused | §7.6, §2.13 | `rvalue` (`agg`), `apply_call` stores |
+| A `?` / `??` that selects among this frame's owners moves the one it selects into an immutable binding, and out with a return | §2.2 | `stmt` (`let`), `transfer` |
+| A literal that is a statement's temporary shows its consumer the bindings it names; they move into it only where it is taken | §7.6 (h693) | `agg_lends` |
+| A field read off a temporary leaves it | §7.5 (h323) | `transfer` |
+| An owned temporary a callee hands back whole leaves with the result; the result is owned per call | §1 Temporaries, §7.6 | `apply_call` (`whole`) |
+| A result owned on some paths and lent on others borrows its argument | §7.6 Call results | `make_summary` |
+| An owned slice moves into the literal that takes it | §7.6 | `transfer` (`stored`) |
+| A fresh raw string kept by a value is owned by nothing | §2.13 | `fresh_string_kept` |
+| A module global outlives every frame: it holds no view of one | §2.13 | `gstore` |
+| A function's exit runs the `;` blocks armed on the way, newest first, after its result is made | §1 | `run_defers` |
+| A `~` loop walks its container's buffer: a change to it ends the walk | §2.5 | `foreach`, `walking` |
+| A closure holds what it captured: a copy of each handle, the views those hold; one taken by pointer is a `ref` | §2.11, §2.3 | `make_closure` |
+| Running a closure reads every capture and does what its body does to them, and to the arguments it is called with | §2.11 | `run_closures`, `closure_arg_effects` |
+| A function that runs a closure argument does so at its call; what it hands the closure of its other arguments is in its summary | §2.11 | `invokes`, `cloargs` |
+| A closure that changes a capture meets no other argument that reaches it | §2.4, §2.11 | `apply_call` |
+| A closure leaves no capture and no argument holding a view | §2.11 | `check_program` |
+| A closure kept by an owner, and a literal handed back as it is, copies in what it captured and can copy; a bound closure handed back by name does not | §7.5, §2.11 (h310) | `closure_owned`, `transfer` |
+| A closure another thread runs takes what it captured; one taken by pointer may not go | §2.1, §2.3 | `detaches` |
+| A closure several threads may run changes nothing it captured | §6.5 | `shares` |
+| What an `Arc` shares is not changed in place | §6.5 | `effect` |
+| A shared payload (`Rc`, `Arc`, `Shared`) is one place per handle type: an effect inside one ends what was lent out of any | proposal D3 | `shared_tails`, `region_effect` |
+| A `dyn` method's call may run any impl of the method | §1 Methods | `summary` (`virt`) |
+| The drop of a value whose destructor may read its views is a use of them | §2.14 | `scope_end` |
+| A copy hook (`S_clone`, `S_share`) hands back a value of its own | §7.6 | `check_program` |
+
+## Not rules of the engine
+
+A refusal the fused walk makes on types alone stays the walk's: the raw
+memory boundary (docs/spec.md §3.3d), what may cross to another thread
+(`Send` / `Sync`, MEMORY.md §6.5), typing. `run.py` counts a probe nurlc
+stops that way as decided by the walk (`WALK_RULES`).
+
+The walk's ownership refusals go through one door (`own_die`,
+`bck_emit_error`, `g_walk_owns` in compiler/nurlc.nu) that `--emit-core`
+passes, so the program reaches the checker whole.
+
+## Declared summaries
+
+A library function whose body uses raw memory has no body the checker can
+read: `prims.py` declares its summary (proposal D2). A probe that calls one
+with none is skipped and named (`no summary for …`), never guessed.

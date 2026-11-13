@@ -1033,6 +1033,22 @@ class FnCheck:
             if 0 <= i < len(places) and places[i] is not None:
                 self.effect(st, (places[i][0], places[i][1] + tuple(path)), eff, line)
 
+    def params_hold_locals(self, st, line):
+        """Storage the caller holds - a parameter, or what one points into -
+        may not be left holding a view of this frame's own values."""
+        if st.bottom:
+            return
+        for vid in self.pidx:
+            av = st.vals.get(vid)
+            if av is None:
+                continue
+            for hp, l in av.held:
+                if l in self.loans and l not in st.dead:
+                    v = self.fn.vars[self.loans[l][0][0]]
+                    if v.kind != "param" and self.loans[l][1] != "share":
+                        self.err(line, f"{self.vname(vid)} is the caller's, and goes back holding a view of {v.name}")
+                        return
+
     def run_defers(self, st):
         """A function's exit runs the `;` blocks armed on the way, newest
         first."""
@@ -1170,6 +1186,11 @@ class FnCheck:
             if av is None:
                 continue
             if av.own == "O":
+                vty = self.fn.vars[vid].ty
+                if av.held and vty is not None and vty[0] == "named" and vty[1] in getattr(self.prog, "udrop", ()):
+                    # its destructor may read the views it holds: its drop
+                    # is a use of what they point into (MEMORY.md §2.14)
+                    self.check_live(st, AV("N", held=av.held), line, f"the drop of {self.vname(vid)}", held=True)
                 self.effect(st, (vid, ()), "replace", line)
             # (the binding itself is gone: what points at it ends)
             self.effect(st, (vid, ()), "end", line)
@@ -1322,9 +1343,11 @@ class FnCheck:
                                    copy_ok=True, is_ret=True)
                 st = self.run_defers(st)
                 self.check_live(st, av, ln, "the returned value", held=True)
+                self.params_hold_locals(st, ln)
                 self.rets.append((av, st.copy()))
             else:
                 st = self.run_defers(st)
+                self.params_hold_locals(st, ln)
                 self.exits.append(st.copy())
             return State(bottom=True)
         if k == "break":
@@ -1424,7 +1447,9 @@ class FnCheck:
             st.vals[vid] = NONE if v.ty is not None and self.T.is_scalar(v.ty) else AV("P")
         end = self.run(st, self.fn.body)
         if not end.bottom:
-            self.exits.append(self.run_defers(end))
+            end = self.run_defers(end)
+            self.params_hold_locals(end, self.fn.line)
+            self.exits.append(end)
         return self.make_summary()
 
     def param_loan(self, lid):
