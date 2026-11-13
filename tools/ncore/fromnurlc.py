@@ -79,6 +79,7 @@ class Reader:
         self.prog.clonable = set()     # named types nurlc can copy a value of
         self.prog.handle_elem = {}     # a one-payload handle type -> its payload's type
         self.prog.shared = set()       # …the ones whose copies share the payload
+        self.prog.arcs = set()         # …and the ones other threads may hold a copy of
         self.prog.virt = {}            # a `dyn` method's virtual callee -> the impls it may run
         self.types = {}                # type string -> TypeInfo
         self.conv_memo = {}
@@ -187,6 +188,8 @@ class Reader:
                 self.prog.handle_elem[name] = self.conv(info.targs[0])
                 if info.base in SHARED_HANDLES:
                     self.prog.shared.add(name)
+                if info.base == "Arc":
+                    self.prog.arcs.add(name)
                 return ("named", name, ())
             if info.variants:
                 self.prog.enums[name] = [(v, list(pts)) for v, pts in info.variants]

@@ -168,6 +168,8 @@ class Types:
             return True   # an owned raw string (nurl_str_cat) owns; a view does not
         if k == "opt":
             return self.owning(ty[1], seen)
+        if k == "named" and ty[1] in getattr(self.prog, "handle_elem", ()):
+            return True       # a library handle owns its block
         if k == "named" and ty[1] not in seen:
             nseen = seen + (ty[1],)
             if ty[1] in self.prog.structs:

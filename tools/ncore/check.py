@@ -169,7 +169,9 @@ class FnCheck:
     # -- types of places ----------------------------------------------------------
     def ty_of_place(self, place):
         vid, path = place
-        ty = self.fn.vars[vid].ty
+        return self.ty_at(self.fn.vars[vid].ty, path)
+
+    def ty_at(self, ty, path):
         for p in path:
             if ty is None:
                 return None
@@ -313,8 +315,13 @@ class FnCheck:
             # an effect inside a shared payload is one on that handle type's
             # payload, whichever handle it was reached through: the callers'
             # too (the summary's `regions`)
+            arcs = getattr(self.prog, "arcs", ())
             for (ty, tail) in self.shared_tails(place):
                 self.s_regions.add((ty, tail[:3], eff))
+                if ty in arcs:
+                    # every thread holding a copy of the Arc reads its
+                    # payload: nothing changes it in place (MEMORY.md §6.5)
+                    self.err(line, f"{self.pname(place)} is inside what an Arc shares, and is changed here")
         killed = {l for l in self.loans if l not in st.dead and self.kills(eff, place, l)}
         if killed:
             st.dead = st.dead | killed
@@ -475,14 +482,30 @@ class FnCheck:
         own_block = dest_vid is not None and self.refers_to_block(av, dest_vid)
         if av.own == "L" and (own_block or self.local_depth(AV("L", av.loans, av.alias)) > dest_depth):
             if copy_ok and dest_ty is not None and self.T.copyable(dest_ty) and not self.T.is_scalar(dest_ty):
-                return AV("O")
-            if own_block:
+                av = AV("O", (), (), av.held)
+            elif own_block:
                 return av
-            if copy_ok and not is_ret and not named:
+            elif copy_ok and not is_ret and not named:
                 # a join's or block's value that cannot be copied stays a
                 # lend: if what it borrows ends first, its use is the error
                 return av
-            self.err(line, f"{what}: a view of a value released before its holder escapes")
+            else:
+                self.err(line, f"{what}: a view of a value released before its holder escapes")
+        if av.held and self.local_depth(AV("N", held=av.held)) > dest_depth and copy_ok and dest_ty is not None:
+            # a part the value holds as a lend of something that ends before
+            # its new holder - a payload a callee lent, a field read into a
+            # literal - is copied where it can be (MEMORY.md §7.6, "borrowed
+            # values are copied into owners")
+            keep = set()
+            for hp, l in av.held:
+                if l in self.loans and self.loans[l][1] == "handle":
+                    v = self.fn.vars[self.loans[l][0][0]]
+                    pty = self.ty_at(dest_ty, hp)
+                    if (v.kind != "param" and v.depth > dest_depth and pty is not None
+                            and pty[0] not in VIEW_TYPES and self.T.copyable(pty)):
+                        continue
+                keep.add((hp, l))
+            av = AV(av.own, av.loans, av.alias, keep, av.call)
         if av.held and self.local_depth(AV("N", held=av.held)) > dest_depth and not (copy_ok and not is_ret and not named):
             self.err(line, f"{what}: holds a view of a value released before it")
         return av
@@ -620,7 +643,8 @@ class FnCheck:
                 elif src.own == "L":
                     ty = self.ty_of_place((op[1], op[2])) if op[0] == "v" else None
                     if ty is not None and self.T.owning(ty) and ty[0] not in VIEW_TYPES and self.T.copyable(ty):
-                        add = frozenset()          # a lend stored as an owner is copied
+                        # a lend stored as an owner is copied, with the views it holds
+                        add = hroot(src.held, dpath)
                     else:
                         add = hfrom(src.loans, dpath) | hroot(src.held, dpath)
                 else:
@@ -917,7 +941,10 @@ class FnCheck:
                 fp = (names[i],)
                 if av.own == "L":
                     if fty is not None and self.T.owning(fty) and fty[0] not in VIEW_TYPES and self.T.copyable(fty):
-                        continue   # a lend stored into an owning field is copied
+                        # a lend stored into an owning field is copied: the
+                        # copy holds the views the value holds (§2.13)
+                        held |= hroot(av.held, fp)
+                        continue
                     held |= hfrom(av.loans, fp)
                 held |= hroot(self.closure_owned(av.held), fp)
             return AV("O", (), (), held)
