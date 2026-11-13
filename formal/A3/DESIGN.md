@@ -782,13 +782,14 @@ a cell whose payload one scope at a time checks out.
   - `Release.put` applies when the block is there with its payload checked
     out and `x`'s slot can give it back (`Giveable`: an owned tree, since
     A3.3 one of the payload's type, or an integer for an `int` lock).
-  - Otherwise `Release.drop` drops `x`'s slot as a scope's end does. With
-    `StmtT.withLock`'s premises a typed program's normal-path end is always
-    a `put` (the block outlives the body, and `x` holds a `t` there); `drop`
-    keeps the rule total. Agora #808 proves the end a `put` for a payload
-    that holds a destructor value on every reached configuration
-    (`A3.reach_scopeL_end_gives_back`; the block outlives the body,
-    `A3.reach_frame_live`).
+  - Otherwise `Release.drop` drops `x`'s slot as a scope's end does;
+    `drop` keeps the rule total. For a payload that holds a destructor
+    value, `StmtT.withLock`'s premises make a typed program's normal-path
+    end a `put`: Agora #808 proves it on every reached configuration
+    (`A3.reach_scopeL_end_gives_back`; the block outlives the body and is
+    checked out, `A3.reach_frame_checked_out`, and `x` holds a `t`). For a
+    `dtorFree` payload the model's `locked_restore` can refill the
+    checked-out block (Agora #810), and then the end is a `drop`.
   - `Release` is total by construction, so no invariant has to say that the
     frame's `x` holds what was checked out of block `k`. Such an invariant
     (`LockOK`) was tried and dropped: keeping it at `scopeLIn` needs facts
@@ -2019,12 +2020,16 @@ where the call places it).
   program that re-enters a handle's state is covered only up to that
   point.
 - *`CellOp`'s second case* asks the thread inside a check-out to hold an
-  owner's share of the cell. In a typed program it always does
+  owner's share of the cell. For a check-out through a cell share it does
   (`A3.reach_frame_cell_owner`, Agora #808): the share the check-out is
   through stays in `a` for the whole body (`A3.reach_frame_root`, the
   lock check-out's lemma), and a borrowed `a` is a borrowed parameter,
   bound by an `rbind` around the frame and live, whose caller's owner is
-  in the store (`MInv.cell_owned`).
+  in the store (`MInv.cell_owned`). That every check-out of a cell's block
+  is through a cell share is argued, not proven: cells and locks are both
+  lock blocks, and no invariant says a block is named by lock shares only
+  or by cell shares only (`cellNew` / `lockNew` take fresh keys from
+  `nid`, and only a clone copies a share).
 
 **Probes** (`tools/fuzz/holes/*.nu`). In the model, a thread's closure is
 the spawned function, and its captures are `sink` arguments.

@@ -103,7 +103,7 @@ import A3
 -- slot of a binding its statement does not name that holds a share (through calls' `frozen` lists and
 -- a package's by-name captures, `inp` or a `Vec`: `PkgsOK`); each frame keeps a root on its thread
 -- and its block (kept by every `TStep`); the give-back lemmas with no hypothesis on the block; a
--- thread inside a cell's check-out holds an owner's share of it (`CellOp`'s second case)
+-- thread inside a check-out through a cell share holds an owner's share of it (`CellOp`'s second case)
 #print axioms A3.Step.keepSlot
 #print axioms A3.TypedAt.capShr
 #print axioms A3.Step.lkRoots

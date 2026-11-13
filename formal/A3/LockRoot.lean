@@ -1333,33 +1333,36 @@ theorem _root_.A2.StmtT.rbind_live {P : Prog} {m : Mem} {Γ Δ : Ctx} {F : List 
   | sub hw _ _ ih => exact ih (hi.weaker hw) hs
   | _ => cases hs
 
-/-- **A3.5: a thread inside a check-out holds a share of its block**: the
-    check-out is through a lock share the thread holds, or the thread holds
-    an owner's share of cell `k` (`CellOp`'s second case: the root share of a
-    cell's check-out, through an owner, or, through a borrowed parameter, its
-    caller's owner, `MInv.cell_owned`). -/
+/-- **A3.5: a check-out through a cell share is by a thread that holds an
+    owner's share of the cell** (`CellOp`'s second case): the frame's root
+    share (`reach_frame_root`) is a lock share or a cell share of block `k`;
+    when it is a cell share, the thread holds an owner's share of cell `k`:
+    the root itself, through an owner, or, through a borrowed parameter (live,
+    bound by an `rbind` around the frame), its caller's owner
+    (`MInv.cell_owned`).  (That every check-out of a cell's block is through a
+    cell share, i.e. that no block is named by both lock and cell shares, is
+    not proved here.) -/
 theorem reach_frame_cell_owner (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn)
     (hG : GlobsOK P G) (ht : StmtT P (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
     (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
     {i : Nat} {th : Thread} {K : Stmt → Stmt} {k : Nat} {u : Ty} {x : Var} {b : Stmt}
     (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x b)) :
-    (∃ y o, th.st y = some ⟨o, some (.lk k)⟩) ∨
-      ∃ y v, th.st y = some ⟨true, some v⟩ ∧ Sub (.cell k) v := by
-  obtain ⟨y, o, w, hy, hw, _, hyR⟩ := reach_frame_root hP hPc hSp hG ht hs hsc hv hr hi hK
-  rcases hw with rfl | rfl
-  · exact .inl ⟨y, o, hy⟩
-  · right
-    cases o with
-    | true => exact ⟨y, _, hy, Sub.refl _⟩
-    | false =>
-      obtain ⟨K', s', hK'⟩ := hyR rfl
-      obtain ⟨ps, hcp, _⟩ := (reach_inv hP hPc hSp hG ht hs hsc hv hr).1
-      obtain ⟨a, ha⟩ := part_of hcp.len hi
-      obtain ⟨hto, _⟩ := hcp.ok i th a hi ha
-      obtain ⟨Γ, F, Δ, hth, hinv, _⟩ := hto
-      obtain ⟨Γ', F', Δ', ht', hinv'⟩ := hK'.typed Γ F Δ hth hinv
-      obtain ⟨Γ'', E, hi'', hE, hl⟩ := ht'.rbind_live hinv'.toMInv
-      exact hi''.cell_owned (m := ownView C th a) hE hl hy (Sub.refl _)
+    ∃ y o w, th.st y = some ⟨o, some w⟩ ∧ (w = .lk k ∨ w = .cell k) ∧ y ∉ b.nm ∧
+      (w = .cell k → ∃ y' v, th.st y' = some ⟨true, some v⟩ ∧ Sub (.cell k) v) := by
+  obtain ⟨y, o, w, hy, hw, hyn, hyR⟩ := reach_frame_root hP hPc hSp hG ht hs hsc hv hr hi hK
+  refine ⟨y, o, w, hy, hw, hyn, fun hc => ?_⟩
+  subst hc
+  cases o with
+  | true => exact ⟨y, _, hy, Sub.refl _⟩
+  | false =>
+    obtain ⟨K', s', hK'⟩ := hyR rfl
+    obtain ⟨ps, hcp, _⟩ := (reach_inv hP hPc hSp hG ht hs hsc hv hr).1
+    obtain ⟨a, ha⟩ := part_of hcp.len hi
+    obtain ⟨hto, _⟩ := hcp.ok i th a hi ha
+    obtain ⟨Γ, F, Δ, hth, hinv, _⟩ := hto
+    obtain ⟨Γ', F', Δ', ht', hinv'⟩ := hK'.typed Γ F Δ hth hinv
+    obtain ⟨Γ'', E, hi'', hE, hl⟩ := ht'.rbind_live hinv'.toMInv
+    exact hi''.cell_owned (m := ownView C th a) hE hl hy (Sub.refl _)
 
 end reach
 
