@@ -1195,8 +1195,6 @@ theorem chan_tyok {s : Ty} (h : (Ty.lk (.prod (.vec s) .int)).ok = true) :
   simp [Ty.ok, Ty.holdsView] at h
   exact ⟨by simp_all, by simp_all⟩
 
-theorem chan_vd {s : Ty} (h : (Ty.lk (.prod (.vec s) .int)).ok = true) : s.vecD = false :=
-  Ty.vecD_of_dtorFree (by have := Ty.ok_lk_pay h; simpa [Ty.lkPay, Ty.hasDtor] using this)
 
 /-- An owned value of a type that holds no view, whose shares name blocks
     (A3.2's second cut: a payload's part may hold shares), and whose
@@ -1608,9 +1606,8 @@ theorem reap_pres {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {k n f : 
 theorem guardTy_ok {t : Ty} (h : (Ty.lk t).ok = true) (h4 : t.dtorFree = true) :
     (Ty.arc (.prod (.lk t) t)).ok = true ∧ (Ty.arc (.prod (.lk t) t)).holdsView = false := by
   obtain ⟨h1, h2⟩ := Ty.ok_lk h
-  have h3 := Ty.ok_lk_vd h
   refine ⟨?_, by simp [Ty.holdsView, h2]⟩
-  simp [Ty.ok, Ty.holdsView, Ty.lkPay, h1, h2, h3, h4]
+  simp [Ty.ok, Ty.holdsView, Ty.lkPay, h1, h2, h4]
 
 /-- Agora #632: what `takel` / `taker` take a payload out of: an enum, or
     one under its destructor type; the value's facts at its type are the
@@ -1923,8 +1920,7 @@ theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry
       exact chanRecv_pres hi hk hnv
     | chanRecvNone _ _ _ _ =>
       obtain ⟨hso, hsv⟩ := chan_tyok (by rw [← hty]; exact hi.tyok ha)
-      have hsd := chan_vd (by rw [← hty]; exact hi.tyok ha)
-      exact ⟨RhsPost.same hi, out_ownNoView (by simp [Ty.ok, hso, hsd]) (by simp [Ty.holdsView, hsv])
+      exact ⟨RhsPost.same hi, out_ownNoView (by simp [Ty.ok, hso]) (by simp [Ty.holdsView, hsv])
         (fun u k' p ha => by cases ha with | inl ha => cases ha) rfl (.inl .int) (by simp) (by simp)
         (by simp) (by simp)⟩
   | chanClose _ _ _ =>

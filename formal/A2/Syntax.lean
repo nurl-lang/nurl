@@ -329,12 +329,14 @@ def Ty.dtorViews (t : Ty) : Bool := t.dnest && t.holdsView
 
 /-- Agora #755 (`Locked D`): what a lock's or a cell's payload may own of
     destructor values: none, or it is one at its top (a `% Drop` struct or
-    enum, or one with glue: `Ty.dtor f u`) that holds no share.  The share
-    rule keeps the give-back's crossing check (`GiveCheck`) and the reap's
-    no-cell premise true of every value of the type, so the value always
-    goes back into its block (on a panic too) and an orphaned block of it is
-    always reaped. -/
-def Ty.lkPay (t : Ty) : Bool := t.dtorFree || (t.hasDtor && !t.hasArc)
+    enum, or one with glue: `Ty.dtor f u`), or (`Locked (Vec D)`) a drained
+    `Vec` of them at any depth (`Ty.dnest`, which contains the destructor
+    type itself), that holds no share.  The share rule keeps the give-back's
+    crossing check (`GiveCheck`) and the reap's no-cell premise true of
+    every value of the type, so the value always goes back into its block
+    (on a panic too) and an orphaned block of it is always reaped, at its
+    own type (a `Vec` drained by the reap's frame). -/
+def Ty.lkPay (t : Ty) : Bool := t.dtorFree || (t.dnest && !t.hasArc)
 
 /-- A2 types: a view's element type holds no views of its own (a view of a
     container of views is left to A2, with the other aggregates that
@@ -368,10 +370,10 @@ def Ty.ok : Ty → Bool
   -- (`Ty.dnest`), which the reap hands to a destructor frame at its own type
   -- that drains it; a payload holding one in a field is still refused)
   | .arc t => t.ok && !t.holdsView && (t.dtorFree || t.dnest)   -- A3.1: a payload holds no views
-  | .lk t => t.ok && !t.holdsView && !t.vecD && t.lkPay  -- A3.2: nor does a lock's (it is Send); A3.2's
+  | .lk t => t.ok && !t.holdsView && t.lkPay  -- A3.2: nor does a lock's (it is Send); A3.2's
                                    -- second cut: it may hold `arc` and lock shares; A3.5's second cut:
                                    -- and cell shares, each value going in past the crossing check
-  | .cell t => t.ok && !t.holdsView && !t.vecD && t.lkPay  -- A3.5: a cell's payload is a lock's (A3.5's
+  | .cell t => t.ok && !t.holdsView && t.lkPay  -- A3.5: a cell's payload is a lock's (A3.5's
                                      -- second cut: shares in it too, each going in past the crossing check)
   | .dtor _ t => t.isStruct && t.ok  -- A2-drop.3: `% Drop` is on a struct or an enum
 
@@ -408,35 +410,29 @@ theorem Ty.ok_arc {t : Ty} (h : (Ty.arc t).ok = true) : t.ok = true ∧ t.holdsV
 theorem Ty.ok_arc_dtor {t : Ty} (h : (Ty.arc t).ok = true) : t.dtorFree = true ∨ t.dnest = true := by
   simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true', Bool.or_eq_true] at h; exact h.2
 theorem Ty.ok_lk {t : Ty} (h : (Ty.lk t).ok = true) : t.ok = true ∧ t.holdsView = false := by
-  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1.1
-theorem Ty.ok_lk_vd {t : Ty} (h : (Ty.lk t).ok = true) : t.vecD = false := by
-  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1.2
+  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1
 /-- A2-drop.3d: a lock's payload owns no destructor value, or (Agora #755)
     is one at its top that holds no share. -/
 theorem Ty.ok_lk_pay {t : Ty} (h : (Ty.lk t).ok = true) : t.lkPay = true := by
   simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.2
 theorem Ty.ok_cell {t : Ty} (h : (Ty.cell t).ok = true) : t.ok = true ∧ t.holdsView = false := by
-  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1.1
-theorem Ty.ok_cell_vd {t : Ty} (h : (Ty.cell t).ok = true) : t.vecD = false := by
-  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1.2
+  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1
 /-- ... and so for a cell's. -/
 theorem Ty.ok_cell_pay {t : Ty} (h : (Ty.cell t).ok = true) : t.lkPay = true := by
   simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.2
 
 /-- Agora #755: a lock's payload that owns a destructor value is one at its
-    top, and holds no share. -/
+    top or a drained `Vec` of them, and holds no share. -/
 theorem Ty.lkPay_dtor {t : Ty} (h : t.lkPay = true) (hd : t.dtorFree = false) :
-    t.hasDtor = true ∧ t.hasArc = false := by
+    t.dnest = true ∧ t.hasArc = false := by
   simp only [Ty.lkPay, hd, Bool.false_or, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h
 
 theorem Ty.lkPay_of_free {t : Ty} (h : t.dtorFree = true) : t.lkPay = true := by
   simp [Ty.lkPay, h]
 
 theorem Ty.lkPay_free_or_dnest {t : Ty} (h : t.lkPay = true) : t.dtorFree = true ∨ t.dnest = true := by
-  cases t <;> simp_all [Ty.lkPay, Ty.dnest, Ty.hasDtor]
-
-theorem Ty.vecD_of_lkPay {t : Ty} (h : t.lkPay = true) : t.vecD = false := by
-  cases t <;> simp_all [Ty.lkPay, Ty.vecD, Ty.dtorFree, Ty.hasDtor]
+  simp only [Ty.lkPay, Bool.or_eq_true, Bool.and_eq_true] at h
+  exact h.imp id (fun h => h.1)
 
 /-- A type that owns no destructor value is no `Vec` of destructor values. -/
 theorem Ty.vecD_of_dtorFree {t : Ty} (h : t.dtorFree = true) : t.vecD = false := by

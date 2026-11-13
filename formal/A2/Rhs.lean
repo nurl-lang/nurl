@@ -219,16 +219,15 @@ theorem arcDtorOK {t : Ty} {o : Option Val} (hd : t.dtorFree = true ∨ t.dnest 
   · obtain ⟨n, f, u, rfl⟩ := Ty.dnest_shape hd
     exact ⟨n, f, u, rfl, by simpa [Ty.hasFn] using hfn⟩
 
-/-- Agora #755 (`Locked D`): a lock block whose payload owns no destructor
-    value or is one at its top holding no share (`Ty.lkPay`), of a type that
-    holds no closure. -/
+/-- Agora #755 (`Locked D`, `Locked (Vec D)`): a lock block whose payload
+    owns no destructor value or is one at its top, or a drained `Vec` of
+    them, holding no share (`Ty.lkPay`), of a type that holds no closure. -/
 theorem lockDtorOK {t : Ty} {o : Option Val} (hd : t.lkPay = true) (hfn : t.hasFn = false) :
     Blk.DtorOK ⟨t, .lock, o⟩ := by
   refine ⟨fun _ _ => Or.inr ⟨rfl, hd⟩, fun h => by simp at h, fun hf => ?_⟩
   obtain ⟨hdt, -⟩ := Ty.lkPay_dtor hd hf
-  cases t with
-  | dtor f u => exact ⟨0, f, u, rfl, by simpa [Ty.hasFn] using hfn⟩
-  | _ => simp [Ty.hasDtor] at hdt
+  obtain ⟨n, f, u, rfl⟩ := Ty.dnest_shape hdt
+  exact ⟨n, f, u, rfl, by simpa [Ty.hasFn] using hfn⟩
 
 /-- Agora #755: a lock block's facts are of its type: another lock block of
     the same type (its payload checked out, given back, changed) has them. -/
@@ -1768,7 +1767,7 @@ theorem out_lkShare {m : Mem} {Γ : Ctx} {t : Ty} {k : Nat} (htok : t.ok = true)
   own := rfl
   mode := Or.inl rfl
   live := rfl
-  tyok := by simp [Ty.ok, htok, hvf, hvd, Ty.vecD_of_lkPay hvd]
+  tyok := by simp [Ty.ok, htok, hvf, hvd]
   wf _ r hr := by simp [roots, Entry.vdeps, Mode.ownSlot] at hr
   valOwn _ := ⟨rfl, .lk, ViewsOK.none (show (Ty.lk t).holdsView = false from hvf) _ _,
     List.nodup_nil, fun _ h => (nomatch h), fun _ _ _ _ h => (nomatch h), fun _ _ _ h => (by cases h),
@@ -1832,7 +1831,7 @@ theorem out_cellShare {m : Mem} {Γ : Ctx} {t : Ty} {k : Nat} (htok : t.ok = tru
   own := rfl
   mode := Or.inl rfl
   live := rfl
-  tyok := by simp [Ty.ok, htok, hvf, hvd, Ty.vecD_of_lkPay hvd]
+  tyok := by simp [Ty.ok, htok, hvf, hvd]
   wf _ r hr := by simp [roots, Entry.vdeps, Mode.ownSlot] at hr
   valOwn _ := ⟨rfl, .cell, ViewsOK.none (show (Ty.cell t).holdsView = false from hvf) _ _,
     List.nodup_nil, fun _ h => (nomatch h), fun _ _ _ _ h => (nomatch h), fun _ _ _ h => (by cases h),
