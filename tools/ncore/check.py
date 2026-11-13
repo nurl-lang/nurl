@@ -818,6 +818,13 @@ class FnCheck:
             whole = {k for (k, path, kind) in sm["lends"] if not path and kind == "handle" and k < len(ops)
                      and ops[k][0] == "v" and not ops[k][2] and self.fn.vars[ops[k][1]].kind == "temp"
                      and avs[k].own == "O"}
+        # the closure bodies the callee leaves in an argument, and in its result
+        for (j, dpath, fname) in sm.get("sclos", ()):
+            if j < len(ops) and ops[j][0] == "v":
+                self.store_into(st, (ops[j][1], ops[j][2]), {(tuple(dpath), ("clo", fname))})
+        for (dpath, fname) in sm.get("rclos", ()):
+            held.add((tuple(dpath), ("clo", fname)))
+        vcopy = None
         for (dpath, k, path, kind) in sm["rholds"]:
             if k >= len(avs) or (k in whole and kind == "held" and not path and not dpath):
                 # (what a temporary handed back whole holds comes with it)
@@ -826,6 +833,11 @@ class FnCheck:
             if kind == "held":
                 # (a closure the result keeps copies in what it can, §7.5)
                 held |= hroot(self.closure_owned(hsub(avs[k].held, tuple(path))), dpath)
+                if not path and not dpath and avs[k].own == "L" and dest_vid is not None:
+                    ty = self.fn.vars[dest_vid].ty
+                    if ty is not None and ty[0] in VIEW_TYPES:
+                        # a copy of a view is that view (MEMORY.md §2.13)
+                        vcopy = avs[k]
             else:
                 held |= hfrom(avs[k].loans, dpath)
                 for a in avs[k].alias:
@@ -836,6 +848,8 @@ class FnCheck:
                 # sibling field): views of the result's holder
                 for (dpath, path, kind) in sm.get("selfholds", ()):
                     held.add((tuple(dpath), self.loan(st, (site, "self", tuple(dpath)), (dest_vid, tuple(path)), kind)))
+            if vcopy is not None:
+                return AV("L", vcopy.loans, vcopy.alias, held, True)
             return AV("O", (), (), held)
         if sm["res"] == "lent":
             loans, alias = set(), set()
@@ -1560,7 +1574,15 @@ class FnCheck:
     def make_summary(self):
         res = "none"
         lends, rholds = set(), set()
+        rclos, sclos = set(), set()
+
+        def clo_path(hp):
+            return hp if len(hp) <= 6 else hp[:5] + ("^f",)
         for av, _ in self.rets:
+            for hp, l in av.held:
+                if isinstance(l, tuple) and len(l) == 2 and l[0] == "clo":
+                    # the closure bodies the result may run
+                    rclos.add((clo_path(hp), l[1]))
             if av.own in ("O", "P"):
                 res = "own" if res in ("none", "own") else res
             elif av.own == "L":
@@ -1589,6 +1611,9 @@ class FnCheck:
                 if av is None:
                     continue
                 for hp, lid in av.held:
+                    if isinstance(lid, tuple) and len(lid) == 2 and lid[0] == "clo":
+                        sclos.add((j, clo_path(hp), lid[1]))
+                        continue
                     pl = self.param_loan(lid)
                     if pl and not (pl[2] == "held" and pl[0] == j):
                         stores.add((j, hp[:3]) + pl)
@@ -1597,7 +1622,8 @@ class FnCheck:
                 "effects": sorted(self.s_effects), "stores": sorted(stores),
                 "consumes": sorted(consumes), "elems": sorted(self.s_elems),
                 "invokes": sorted(self.s_invokes), "cloargs": sorted(self.s_cloargs),
-                "regions": sorted(self.s_regions), "selfholds": sorted(self.s_selfholds)}
+                "regions": sorted(self.s_regions), "selfholds": sorted(self.s_selfholds),
+                "rclos": sorted(rclos), "sclos": sorted(sclos)}
 
 
 def initial_summary(prog, fn):
@@ -1605,7 +1631,7 @@ def initial_summary(prog, fn):
     return {"modes": list(fn.modes), "res": "none" if fn.ret is None or T.is_scalar(fn.ret) else "own",
             "lends": [], "rholds": [], "effects": [], "stores": [],
             "consumes": [k for k, m in enumerate(fn.modes) if m == "sink"], "elems": [], "invokes": [],
-            "cloargs": [], "regions": [], "selfholds": []}
+            "cloargs": [], "regions": [], "selfholds": [], "rclos": [], "sclos": []}
 
 
 def check_program(prog, max_rounds=40):
@@ -1662,6 +1688,6 @@ def merge_summary(a, b):
     """Summaries only grow, so the fixpoint terminates."""
     order = {"none": 0, "own": 1, "lent": 2}
     out = {"modes": a["modes"], "res": a["res"] if order[a["res"]] >= order[b["res"]] else b["res"]}
-    for key in ("lends", "rholds", "effects", "stores", "consumes", "elems", "invokes", "cloargs", "regions", "selfholds"):
+    for key in ("lends", "rholds", "effects", "stores", "consumes", "elems", "invokes", "cloargs", "regions", "selfholds", "rclos", "sclos"):
         out[key] = sorted(set(map(tuple_ify, a.get(key, ()))) | set(map(tuple_ify, b.get(key, ()))), key=repr)
     return out

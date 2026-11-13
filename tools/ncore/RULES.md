@@ -86,6 +86,8 @@ summarised by the same analysis, to a fixpoint over the program.
 | A `dyn` method's call may run any impl of the method | §1 Methods | `summary` (`virt`) |
 | The drop of a value whose destructor may read its views is a use of them | §2.14 | `scope_end` |
 | A copy hook (`S_clone`, `S_share`) hands back a value of its own | §7.6 | `check_program` |
+| A closure a callee hands back, or leaves in an argument, runs the body it was made with: the summary names the bodies (`rclos`, `sclos`) | §2.11 | `make_summary`, `apply_call` |
+| A copy of a view is that view | §2.13 | `apply_call` (`vcopy`) |
 | What an argument holds, its copy and whatever was given its elements hold too, through any number of callees | §2.10, §2.13 | `held` loans, `make_summary` |
 
 ## Not rules of the engine
