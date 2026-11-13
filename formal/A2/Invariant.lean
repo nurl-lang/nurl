@@ -459,11 +459,13 @@ def ViewsOK (m : Mem) (τ : Ty) (T : Val) (H : List Dep) : Prop :=
 def NamesIn (T : Val) (H : List Dep) : Prop :=
   ∀ c ∈ T.names, (⟨c.1, .name c.2.1.bound c.2.2⟩ : Dep) ∈ H
 
-/-- A closure's captures by name are distinct, each read or changed, and
-    one captured again inside its environment is only read, by both. -/
+/-- A closure's captures by name are distinct, each read or changed (Agora
+    #808: one it changes a `Vec`, as `CapsOK` asks), and one captured again
+    inside its environment is only read, by both. -/
 def PkgsOK (T : Val) : Prop :=
   ∀ fs te ms e cs, Sub (.pkg fs te ms e cs) T →
-    (cs.map (·.1)).Nodup ∧ (∀ c ∈ cs, c.2.1 = .inp ∨ ∃ b, c.2.1 = .inout b ∧ b ≠ .none) ∧
+    (cs.map (·.1)).Nodup ∧
+    (∀ c ∈ cs, c.2.1 = .inp ∨ ∃ b, c.2.1 = .inout b ∧ b ≠ .none ∧ ∃ s, c.2.2 = .vec s) ∧
     (∀ c ∈ cs, ∀ c' ∈ e.names, c.1 = c'.1 → c.2.1 = .inp ∧ c'.2.1 = .inp)
 
 /-- The borrowed `Vec` `c` of element type `t` is valid through `dep`. -/

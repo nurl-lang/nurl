@@ -1581,7 +1581,7 @@ theorem pkg_cap {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {c : Var} {Ec : Entry} (hc
     · rw [h] at hov; cases hov
   have hmd := (hi.pkgs c _ _ hslot rfl fs te ms env cs (Sub.refl _)).2.1 ci hci
   refine ⟨Ev, hEv, hlv, hhv, htv, hmo, by simp [Entry.vdeps, hmo, Mode.ownSlot, hhv], hvv, ?_⟩
-  rcases hmd with h | ⟨b, hb, hbn⟩
+  rcases hmd with h | ⟨b, hb, hbn, _⟩
   · exact Or.inl h
   · refine Or.inr ⟨b, hb, hbn, ?_⟩
     simp only [hb, PMode.bound] at hbd

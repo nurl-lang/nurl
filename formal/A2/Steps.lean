@@ -1858,9 +1858,9 @@ theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry
         · cases h
           refine ⟨hcaps.1, fun c hc => ?_, fun c hc c' hc' hcc => ?_⟩
           · obtain ⟨_, _, _, _, _, _, _, hmode⟩ := hcaps.2 c hc
-            rcases hmode with ⟨hinp, _⟩ | ⟨b, s, hb, hbn, _⟩
+            rcases hmode with ⟨hinp, _⟩ | ⟨b, s, hb, hbn, _, _, _, hvec, _⟩
             · exact Or.inl hinp
-            · exact Or.inr ⟨b, hb, hbn⟩
+            · exact Or.inr ⟨b, hb, hbn, s, hvec⟩
           · obtain ⟨_, _, _, _, _, _, _, hmode⟩ := hcaps.2 c hc
             have hd : (⟨c'.1, .name c'.2.1.bound c'.2.2⟩ : Dep) ∈ D := pu.nin c' hc'
             rcases hmode with ⟨hinp, hrd⟩ | ⟨b, s, _, _, _, _, _, _, _, hnD, _⟩

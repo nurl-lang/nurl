@@ -26,3 +26,4 @@ import A3.Reap
 import A3.Keys
 import A3.ChanDtorWitness
 import A3.LockExcl
+import A3.LockRoot
