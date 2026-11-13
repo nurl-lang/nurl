@@ -487,6 +487,16 @@ class FnCheck:
         outlive a local it borrows from - deep-copied (a join's value, a
         return) or refused."""
         av = self.read(st, op, line, site, what)
+        if op[0] == "v" and op[2] and av.own == "L" and "*" not in op[2]:
+            root = st.vals.get(op[1])
+            pty = self.ty_of_place((op[1], op[2]))
+            if (root is not None and root.own == "O" and self.fn.vars[op[1]].kind == "temp"
+                    and pty is not None and pty[0] not in VIEW_TYPES and self.T.owning(pty)):
+                # a field read off a temporary leaves it: whatever takes the
+                # read owns it, and the temporary's rest is released where
+                # its statement ends (MEMORY.md §7.5 table, h323)
+                mine = {l for l in av.loans if self.loans.get(l, (None,))[0] == (op[1], op[2])}
+                av = AV("O", av.loans - mine, (), av.held)
         if op[0] == "v" and not op[2] and av.own in ("O", "P"):
             vid = op[1]
             src = st.vals[vid]
