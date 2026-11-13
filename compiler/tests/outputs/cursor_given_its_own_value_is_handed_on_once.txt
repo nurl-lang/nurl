@@ -1,0 +1,14 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+field: replaced, long enough for a heap buffer
+second: a, long enough for a heap buffer
+second: replaced b, long enough for a heap buffer
+arm: replaced, long enough for a heap buffer
+arm: orig, long enough for a heap buffer
+twice: second, long enough for a heap buffer
+beside: p keeps its own name, long enough
+beside: e's own name, long enough for a heap buffer
+50
+sunk: s keeps its own, long enough for a heap buffer
