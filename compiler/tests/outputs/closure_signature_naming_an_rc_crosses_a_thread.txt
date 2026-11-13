@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+1
+2
+3
+4
+arc: 4 threads
+bound: Send
