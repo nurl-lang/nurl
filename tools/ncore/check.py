@@ -145,6 +145,7 @@ class FnCheck:
         self.loop_stack = []
         self.defer_bodies = []
         self.tails_memo = {}
+        self.agg_lends = {}      # a literal temporary -> the bindings it shows and has not taken
         self.s_invokes = set()
         self.s_cloargs = set()
         self.s_retparams = set()
@@ -309,6 +310,11 @@ class FnCheck:
             for a in av.alias:
                 self.effect(st, (a[0], a[1] + path), eff, line, depth + 1)
             return
+        shown = self.agg_lends.get(vid)
+        if shown and path and path[0] in shown and eff != "end":
+            # a field of a literal temporary that shows a binding: what is
+            # done to it is done to the binding
+            self.effect(st, (shown[path[0]], path[1:]), eff, line, depth + 1)
         if vid in self.pidx and eff != "end":
             self.s_effects.add((self.pidx[vid], path[:3], eff))
         if eff != "end":
@@ -444,6 +450,18 @@ class FnCheck:
 
     def move_out(self, st, vid, line):
         src = st.vals[vid]
+        named = self.agg_lends.pop(vid, None)
+        if named:
+            # the literal is taken: the bindings it showed move into it
+            gone = set()
+            for b in named.values():
+                cur = st.vals.get(b)
+                if cur is not None and cur.own == "O":
+                    gone |= {l for hp, l in src.held if l in self.loans and self.loans[l] == ((b, ()), "handle")}
+                    self.effect(st, (b, ()), "replace", line)
+                    st.vals[b] = AV("M")
+            src = AV(src.own, src.loans, src.alias, {(hp, l) for hp, l in src.held if l not in gone}, src.call)
+            st.vals[vid] = src
         if src.own == "P":
             self.s_consumes.add(self.pidx[vid])
         self.effect(st, (vid, ()), "replace", line)
@@ -596,7 +614,10 @@ class FnCheck:
                         self.err(line, f"{name} takes {self.vname(op[1])} while argument {m + 1} still reads it")
                 cur = st.vals.get(op[1])
                 if cur and cur.own in ("O", "P"):
-                    self.move_out(st, op[1], line)
+                    moved = self.move_out(st, op[1], line)
+                    # (what the callee keeps of it is what the value holds
+                    # now that it is taken)
+                    avs[k] = AV(avs[k].own, avs[k].loans, avs[k].alias, moved.held, avs[k].call)
                     continue
             if avs[k].own == "L":
                 ty = self.ty_of_place((op[1], op[2])) if op[0] == "v" else None
@@ -980,10 +1001,25 @@ class FnCheck:
             _, ty, variant, ops, site = rv
             names = self.agg_paths(ty, variant, len(ops))
             held = set()
+            lent = {}
             for i, op in enumerate(ops):
                 fty = self.ty_of_field(ty, variant, i)
-                av = self.transfer(st, op, line, (site, i), dest_depth, fty, f"field {i + 1}")
                 fp = (names[i],)
+                cur = st.vals.get(op[1]) if op[0] == "v" and not op[2] else None
+                if (dest_vid is not None and self.fn.vars[dest_vid].kind == "temp" and cur is not None
+                        and cur.own == "O" and self.fn.vars[op[1]].kind == "local"
+                        and fty is not None and fty[0] not in VIEW_TYPES):
+                    # a literal that is a statement's temporary shows its
+                    # consumer the bindings it names: they move into it only
+                    # where the literal itself is taken (stored, handed to a
+                    # consumer, handed back) - a callee that borrows it
+                    # leaves them their owners' (MEMORY.md §7.6, h693)
+                    av = self.read(st, op, line, (site, i), f"field {i + 1}")
+                    held.add((fp, self.loan(st, (site, i, "lit"), (op[1], ()), "handle")))
+                    held |= hroot(av.held, fp)
+                    lent[names[i]] = op[1]
+                    continue
+                av = self.transfer(st, op, line, (site, i), dest_depth, fty, f"field {i + 1}")
                 if av.own == "L":
                     if fty is not None and self.T.owning(fty) and fty[0] not in VIEW_TYPES and self.T.copyable(fty):
                         # a lend stored into an owning field is copied: the
@@ -992,6 +1028,8 @@ class FnCheck:
                         continue
                     held |= hfrom(av.loans, fp)
                 held |= hroot(self.closure_owned(av.held), fp)
+            if lent:
+                self.agg_lends[dest_vid] = lent
             return AV("O", (), (), held)
         if k == "closure":
             return self.make_closure(st, rv, line)
@@ -1082,7 +1120,7 @@ class FnCheck:
                 st.vals[vid] = AV("U")
             else:
                 # `: ~ T c x` is a cursor: it borrows the owner x
-                new = self.rvalue(st, rv, ln, v.depth, v.ty, v.name,
+                new = self.rvalue(st, rv, ln, v.depth, v.ty, v.name, dest_vid=vid,
                                   lend_owner=(lambda x: True) if v.mut else (lambda x: False))
                 if (not v.mut and v.kind == "local" and rv[0] == "use" and rv[1][0] == "v" and not rv[1][2]
                         and self.fn.vars[rv[1][1]].kind == "temp" and new.own == "L" and not new.call
