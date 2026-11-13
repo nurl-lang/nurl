@@ -22,13 +22,11 @@ spawn):
 * **mutual exclusion** (A3.2): at most one frame of such a block, on one
   thread, once (`reach_lock_excl`).
 
-So the give-back lemmas of `A3.LockDtorWitness` (`scopeL_typed_end_gives_back`,
-`scopeL_typed_panic`) hold of a frame of a reached configuration with the
-block's state discharged, given only that the block is still there
-(`reach_scopeL_end_gives_back`, `reach_scopeL_panic`).  That a frame's block
-is never removed while the frame is out (the check-out's root share outlives
-the body) is not proved here: a frame does not record the binding its share
-is in. -/
+That a frame's block is never removed while the frame is out (the
+check-out's root share outlives the body) is `A3/LockRoot.lean`'s
+(`reach_frame_live`), which then discharges the block's state in the
+give-back lemmas of `A3.LockDtorWitness` (`reach_scopeL_end_gives_back`,
+`reach_scopeL_panic`). -/
 
 namespace A3
 open A2

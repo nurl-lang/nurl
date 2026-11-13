@@ -3175,7 +3175,7 @@ def _root_.A2.Stmt.lkeys : Stmt → List Nat
     third cut, a borrow), or it runs inside a check-out of it, holding an
     owner's share of it (the one the check-out is through, which `withLock`'s
     premises keep in its binding for the whole body, or, for a borrowed
-    parameter, its caller's owner).  Such a step writes the state wherever it is: the model checks it
+    parameter, its caller's owner: `A3.reach_frame_cell_owner`).  Such a step writes the state wherever it is: the model checks it
     out as a lock's payload, so two threads at once would be serialized
     there, where the runtime's copies write one memory with no lock; so a
     step on a cell is not an address's touch, but a race of its own. -/
