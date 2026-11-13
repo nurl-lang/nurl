@@ -30640,7 +30640,7 @@ unsafe @ __pfo_bind_lends i syms s name → v {
     // (A cursor that replaced a field of the value — the first buffer, it
     // may be — and moves out with the rest: the value leaves all the same,
     // gen_ret's `__ffleave`, agora #781.)
-    : s fl ( nurl_sym_get2 syms ptr `__ffleave` )
+    : s fl ? == 0 g_ff_any `` ( nurl_sym_get2 syms ptr `__ffleave` )
     ? != 0 ( nurl_str_len fl ) {
         : s nfl ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print nfl ) ( nurl_print ` = xor i1 ` ) ( nurl_print fl ) ( nurl_print `, 1\n` )
@@ -33978,6 +33978,86 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
         = out ( nurl_str_cat3 out `, i32 ` one )
     }
     ^ out
+}
+
+// `= <name> …` (slot `optr`, type `vt`, new value `nv`) where a word of
+// `cands` — the bare name given, or a call's bare arguments — is a cursor
+// over `optr` that owns some fields on its own (mem_ff_slot): on the runs
+// the new value is that cursor's — its flag clear (it holds optr's value
+// still), and `direct` or the same key as its value — the old value stays:
+// each value one of those fields replaced goes, the fields are optr's from
+// here (their flags clear), the old value's drop is skipped, and the
+// binding keeps its flag (`of0`: as it was before the `=` — a self-lend
+// gates it first — or `` to read it). Returns that i1, ANDed with that flag,
+// with the flag cleared on those runs (as mem_udrop_keep_same does: the
+// `=` settles it after the store); `` where no word is such a cursor. A
+// cursor over other sources too is refused: which source a run's field
+// replaced is not known. Agora #450 I.
+@ mem_ff_write_back i lex i syms i cg s optr s name s vt s nv s cands b direct s of0 → s {
+    : ~ s rest ( nurl_str_cat cands `` )
+    : ~ s acc ``
+    : ~ s of ( nurl_str_cat of0 `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s qp ? ( seq w name ) `` ( mem_udrop_ptr_of syms w )
+        ? & & != 0 ( nurl_str_len qp ) ( str_contains_word ( nurl_sym_get2 syms qp `__alias` ) optr ) != 0 ( nurl_sym_len g_fn_escapes ( nurl_str_cat3 qp `__ff` ( nurl_str_int g_ff_gen ) ) ) {
+            ? ! ( seq ( nurl_sym_get2 syms qp `__alias` ) optr ) {
+                ( die_stmt lex ( nurl_str_cat4 `'` name ( nurl_str_cat3 `' is given back what may be '` w `', a cursor over it and over another binding, which has given some fields values of its own: nurlc cannot tell whose values those fields replaced (agora #450). Give '` ) ( nurl_str_cat3 w `' a value of its own first — ( mem_dup ` ( nurl_str_cat w ` ) — or keep the two cursors apart.` ) ) ) )
+            } {}
+            // (Only where the binding owns its value: the values q's fields
+            // replaced are its.)
+            ? == 0 ( nurl_str_len of ) { = of ( mem_udrop_flag_get syms cg optr ) } {}
+            : s qf ( mem_udrop_flag_get syms cg qp )
+            : s nqf ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print nqf ) ( nurl_print ` = xor i1 ` ) ( nurl_print qf ) ( nurl_print `, 1\n` )
+            : ~ s sq ( __and_i1 cg nqf of )
+            ? ! direct {
+                : s ll ( nurl_llty vt )
+                : s qv ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print qv ) ( nurl_print ` = load ` ) ( nurl_print ll ) ( nurl_print `, ptr ` ) ( nurl_print qp ) ( nurl_print `\n` )
+                : s qk ( mem_ud_ident_key cg vt qv )
+                : s nk ( mem_ud_ident_key cg vt nv )
+                ? | == 0 ( nurl_str_len qk ) == 0 ( nurl_str_len nk ) { = sq ( nurl_str_cat `false` `` ) } {
+                    : s eq ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print eq ) ( nurl_print ` = icmp eq i8* ` ) ( nurl_print nk ) ( nurl_print `, ` ) ( nurl_print qk ) ( nurl_print `\n` )
+                    = sq ( __and_i1 cg sq eq )
+                }
+            } {}
+            // The values the cursor's own fields replaced go, and its
+            // fields are the binding's.
+            : ~ s fr ( nurl_sym_get g_fn_escapes ( nurl_str_cat3 qp `__ff` ( nurl_str_int g_ff_gen ) ) )
+            ~ != 0 ( nurl_str_len fr ) {
+                = fr ( str_skip_word fr )
+                : s f ( str_first_word fr ) = fr ( str_skip_word fr )
+                : s fty ( str_first_word fr ) = fr ( str_skip_word fr )
+                = fr ( str_skip_word fr )
+                : s o ( str_first_word fr ) = fr ( str_skip_word fr )
+                : s fv ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print fv ) ( nurl_print ` = load i1, ptr ` ) ( nurl_print f ) ( nurl_print `\n` )
+                : s c ( __and_i1 cg fv sq )
+                : s ov ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print ov ) ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty fty ) ) ( nurl_print `, ptr ` ) ( nurl_print o ) ( nurl_print `\n` )
+                ( __handle_drop_ensure fty )
+                ( __dropifv_request fty )
+                ( nurl_print `  call void @__dropifv_` ) ( nurl_print ( __drop_mangle fty ) ) ( nurl_print `(i1 ` ) ( nurl_print c )
+                ( nurl_print `, ` ) ( nurl_print ( nurl_llty fty ) ) ( nurl_print ` ` ) ( nurl_print ov ) ( nurl_print `)\n` )
+                : s nsq ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print nsq ) ( nurl_print ` = xor i1 ` ) ( nurl_print sq ) ( nurl_print `, 1\n` )
+                : s nf ( __and_i1 cg fv nsq )
+                ( nurl_print `  store i1 ` ) ( nurl_print nf ) ( nurl_print `, ptr ` ) ( nurl_print f ) ( nurl_print `\n` )
+            }
+            = acc ? == 0 ( nurl_str_len acc ) ( nurl_str_cat sq `` ) {
+                : s o2 ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print o2 ) ( nurl_print ` = or i1 ` ) ( nurl_print acc ) ( nurl_print `, ` ) ( nurl_print sq ) ( nurl_print `\n` )
+                o2
+            }
+        } {}
+    }
+    ? == 0 ( nurl_str_len acc ) { ^ acc } {}
+    : s nk ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print nk ) ( nurl_print ` = xor i1 ` ) ( nurl_print acc ) ( nurl_print `, 1\n` )
+    ( mem_udrop_flag_set syms cg optr ( __and_i1 cg ( mem_udrop_flag_get syms cg optr ) nk ) )
+    ^ acc
 }
 
 // The replaced-value slot of `ptr`'s field `idx` (mem_ff_slot made it).
@@ -39648,7 +39728,7 @@ unsafe @ bck_stash_rc_value i line s callee i argidx s at → v {
         // …and the calls whose move effect is not decidable yet.
         ( __bck_flush_ppends F )
         // …and a value `?`'s arms' stores, an arm a block (agora #757).
-        ( __bck_flush_arm_joins )
+        ? != 0 g_bck_ajp { ( __bck_flush_arm_joins ) } {}
         // (Its `sK` rows among them: none wait now.)
         = g_bck_vs_pend 0
     } {}
@@ -56078,7 +56158,29 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // outright (`__sborrow` `1`, a `: ~` lend out of a `vec_get`) owns
         // nothing to keep, and its flag, never set, gates no drop — setting
         // it here made it an owner.)
-        : s __ud_kept ? != 0 ( nurl_str_len __ud_kcond ) ( mem_udrop_keep_same syms cg __ud_ptr vt store_val __ud_kcond ) ``
+        // (The binding's flag before the `=` touches it — a self-lend gates
+        // it first, __ud_of — for mem_ff_write_back below.)
+        : s __ud_of0 ? | == 0 g_ff_any == 0 ( nurl_str_len __ud_ptr ) `` ? != 0 ( nurl_str_len __ud_of ) ( nurl_str_cat __ud_of `` ) ( mem_udrop_flag_get syms cg __ud_ptr )
+        : ~ s __ud_kept ? != 0 ( nurl_str_len __ud_kcond ) ( mem_udrop_keep_same syms cg __ud_ptr vt store_val __ud_kcond ) ``
+        // (…or the value of a cursor over this binding that owns some of
+        // its fields on its own — `: ~ P q o  = . q name …  = o q`, or a
+        // call handing q back: what it is given is its old value, those
+        // fields replaced. On the runs it is — q still a cursor, the same
+        // key as q's — it keeps its value, the values q's fields replaced
+        // go, and q's fields are its own now: mem_ff_write_back. Taken for
+        // another value, the old one was dropped under the fields q shared
+        // with it, or kept with q's replaced field dropped again by q,
+        // agora #450 I.)
+        ? & != 0 g_ff_any != 0 ( nurl_str_len __ud_ptr ) {
+            : s __ud_wb ( mem_ff_write_back lex syms cg __ud_ptr name vt store_val ? ( is_ident_tok bck_rhs_tt ) ( nurl_str_cat bck_rhs_val `` ) ? == bck_rhs_tt TT_LPAREN ( nurl_sym_get syms `__last_call_args__` ) `` ( is_ident_tok bck_rhs_tt ) __ud_of0 )
+            ? != 0 ( nurl_str_len __ud_wb ) {
+                = __ud_kept ? == 0 ( nurl_str_len __ud_kept ) ( nurl_str_cat __ud_wb `` ) {
+                    : s __ud_ko ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __ud_ko ) ( nurl_print ` = or i1 ` ) ( nurl_print __ud_kept ) ( nurl_print `, ` ) ( nurl_print __ud_wb ) ( nurl_print `\n` )
+                    __ud_ko
+                }
+            } {}
+        } {}
         // …and a call that lends only out of other owners (`= om ( vec_get
         // [Msg] ms 0 )`, ms a local Vec): what it hands back is no part of
         // the value om holds, which goes by its flag as for any other
@@ -74432,15 +74534,16 @@ unsafe @ __alloca_struct_params i syms i cg → v {
                 ( nurl_print `  ` ) ( nurl_print own ) ( nurl_print ` = and i1 ` ) ( nurl_print pc )
                 ( nurl_print `, ` ) ( nurl_print nd ) ( nurl_print `\n` )
                 ( mem_udrop_flag_set syms cg pptr own )
-                ( nurl_sym_def syms ( nurl_str_cat pptr `__pinit` ) own )
+                ? ! ( str_has_index sinks index ) { ( nurl_sym_def syms ( nurl_str_cat pptr `__pinit` ) own ) } {}
             } {
                 ( nurl_sym_def syms ( nurl_str_cat pptr `__dsel` ) dflag )
                 ( __glue_request rty )
                 ( mem_udrop_flag_set syms cg pptr pc )
                 // (What the parameter owns on entry, a value of the entry
                 // block: a literal handed back that took it in owns it on
-                // the same runs, __ret_lit_param_own.)
-                ( nurl_sym_def syms ( nurl_str_cat pptr `__pinit` ) pc )
+                // the same runs, __ret_lit_param_own. A `sink` owns it on
+                // every run, and is asked by its index.)
+                ? ! ( str_has_index sinks index ) { ( nurl_sym_def syms ( nurl_str_cat pptr `__pinit` ) pc ) } {}
             }
             ( mem_journal_push_userdrop syms cg pptr rty )
         } {}
