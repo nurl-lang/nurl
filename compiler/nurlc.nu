@@ -12929,6 +12929,12 @@ unsafe @ __fn_lends_arg s fname s ai → b {
 // (The functions the last walk met, for __hown_dyn's memo.)
 : ~ s g_hd_vis ``
 
+// The register (`%rN`, its N) of the own bit captured right after the last
+// call, for a slice from a callee compiled after its caller
+// (mem_capture_hown); -1 where none was. A global, not a symbol: it is reset
+// at every call (agora #510).
+: ~ i g_call_own_slc -1
+
 // Does `fname` answer per call whether its result is owned — itself, or
 // by handing back as is (`^ ( g … )`) the result of a callee that does?
 // The callees are followed as a worklist with the set already asked: a
@@ -13123,6 +13129,11 @@ unsafe @ __hown_dyn_walk i syms s fname → b {
         { ( nurl_sym_def g_lint_fpend ( nurl_str_cat `owned @.__nurl_retown.` number ) `1` ) } {}
         ( nurl_print `@.__nurl_retdyn.` ) ( nurl_print number )
         ( nurl_print ` = private constant i1 ` ) ( nurl_print ? dyn `true` `false` ) ( nurl_print `\n` )
+        ? != 0 ( nurl_sym_len2 g_pending_impl `retslc##` number ) {
+            : b __rso | ( seq ( __ret_owned_of syms callee ) `1` ) ( seq ( __ret_owned_of syms generic ) `1` )
+            ( nurl_print `@.__nurl_retslc.` ) ( nurl_print number )
+            ( nurl_print ` = private constant i1 ` ) ( nurl_print ? __rso `true` `false` ) ( nurl_print `\n` )
+        } {}
     }
     // `@.__nurl_retone.N` (mem_hown_one_answer).
     : ~ s rones ( nurl_sym_get g_pending_impl `retones` )
@@ -13590,6 +13601,7 @@ unsafe @ origin_guard_retained i root → b {
     ( __clo_tmp_set `` )
     ( nurl_sym_def syms `__last_nurl_call__` ( nurl_sym_get2 syms cn `__nurl_ret` ) )
     ( nurl_sym_def syms `__last_call_name__` cn )
+    = g_call_own_slc -1
     // (What a callee's result views of its arguments is its walk's answer,
     // g_fn_rviews: a callee not compiled yet, or whose walk is parked until
     // the module has compiled, answers then — the caller's walk waits for
@@ -17052,7 +17064,7 @@ unsafe @ __rp_rhs_set b v → v { = g_rp_rhs_lit v }
         // lent it, agora #552.)
         : s __dte ( __clo_temp_owner syms v )
         ? != 0 ( nurl_str_len __dte ) { ( nurl_print `  call void @nurl_closure_drop(i8* ` ) ( nurl_print __dte ) ( nurl_print `)\n` ) } {}
-        ( nurl_sym_def syms `__last_call_name__` `` )
+        ( nurl_sym_def syms `__last_call_name__` `` ) = g_call_own_slc -1
         ( mem_retclo_take syms cg cr ty )
         ( __sx_publish __me __osx )
         ( nurl_set_last_type ty )
@@ -17078,7 +17090,7 @@ unsafe @ __rp_rhs_set b v → v { = g_rp_rhs_lit v }
         // which call made it describes it (mem_lent_cond / mem_call_retown
         // read the last call's answer — `( vec_push out ( mem_dup c ) )`
         // with c a `vec_get` payload copied the copy, and leaked one).
-        ( nurl_sym_def syms `__last_call_name__` `` )
+        ( nurl_sym_def syms `__last_call_name__` `` ) = g_call_own_slc -1
         ( nurl_sym_def syms `__last_call_forward__` `` )
         ( nurl_sym_def syms `__last_value_borrow__` `` )
         ( nurl_sym_def syms `__last_call_ret_view__` `` )
@@ -29781,6 +29793,24 @@ unsafe @ __bck_fall_ret_record i lex i syms i first_tt s first_val i sxn0 i line
     >= ( nurl_str_find t `*, i64 }` ) 0
 }
 
+// Exactly a slice `{ T*, i64 }`: its first comma outside nested braces is the
+// one before the length (an optional slice, `{ i1, { T*, i64 } }`, is not).
+unsafe @ __is_slice_ll s t → b {
+    ? ! ( mem_is_slice_ty t ) { ^ F } {}
+    : i n ( nurl_str_len t )
+    : *u sp # *u t
+    : ~ i d 0
+    : ~ i i 1
+    ~ < i n {
+        : i c # i . sp i
+        ? | == c 123 == c 40 { = d + d 1 } {}
+        ? | == c 125 == c 41 { = d - d 1 } {}
+        ? & == c 44 == d 0 { ^ & == - n i 7 ( seq ( nurl_str_slice t i 7 ) `, i64 }` ) } {}
+        = i + i 1
+    }
+    ^ F
+}
+
 // Record that `name` was DECLARED (`:`-bound) as an owned slice in the
 // current scope. Parallel sideband to `__owned_slices__`, needed by the
 // Phase 2D arm-local slice drop: `= outer [ … ]` inside an arm also
@@ -29869,11 +29899,21 @@ unsafe @ __bck_fall_ret_record i lex i syms i first_tt s first_val i sxn0 i line
     ( __slice_mut_flag syms cg name ptr vt is_mut )
 }
 
+// (…and a callee compiled after this caller — defined below it, or a
+// generic instance — has no summary yet, so the static answer took its
+// slice for a lend and nobody released it. It answers by its module-end
+// constant then, `@.__nurl_retown.N`, as a String's does; agora #510.)
 @ __slice_call_flag i syms i cg s name s ptr s vt i rhs_tt → v {
     ? | | != rhs_tt TT_LPAREN ! ( mem_is_slice_ty vt ) ( mem_slice_owned syms name ) { ^ v } {}
     ? | == 0 ( nurl_str_len ptr ) != 37 ( nurl_str_get ptr 0 ) { ^ v } {}
-    ? ! ( __hown_dyn syms ( nurl_sym_get syms `__last_call_name__` ) ) { ^ v } {}
-    : s bit ( mem_call_retown syms cg )
+    : s __scn ( nurl_sym_get syms `__last_call_name__` )
+    // (Only a NURL function's, captured right after its call — mem_capture_hown:
+    // a closure or function-value call has no module-end answer of its own,
+    // and one handing back its borrowed argument would have been released
+    // here; agora #841.)
+    : s __sfwd ? >= g_call_own_slc 0 ( nurl_str_cat `%r` ( nurl_str_int g_call_own_slc ) ) ( nurl_str_cat `` `` )
+    ? ! | ( __hown_dyn syms __scn ) != 0 ( nurl_str_len __sfwd ) { ^ v } {}
+    : s bit ? != 0 ( nurl_str_len __sfwd ) ( nurl_str_cat __sfwd `` ) ( mem_call_retown syms cg )
     ? == 0 ( nurl_str_len bit ) { ^ v } {}
     ( mem_own_add syms name )
     ( mem_slice_decl_add syms name )
@@ -29996,6 +30036,38 @@ unsafe @ __bck_fall_ret_record i lex i syms i first_tt s first_val i sxn0 i line
     ( nurl_print `  ` ) ( nurl_print tmp ) ( nurl_print ` = alloca ` ) ( nurl_print lt ) ( nurl_print `\n  store ` ) ( nurl_print lt ) ( nurl_print ` ` ) ( nurl_print s2 )
     ( nurl_print `, ` ) ( nurl_print lt ) ( nurl_print `* ` ) ( nurl_print tmp ) ( nurl_print `\n` )
     ( mem_emit_slice_free_at cg ty tmp )
+}
+
+// A copy of slice value `val` (type `ty`, `{ T*, i64 }`) in a buffer of its
+// own: the elements copied as they are, so only for elements that own
+// nothing (a slice of Strings would need each one copied; refused).
+@ mem_emit_slice_copy i lex i syms i cg s ty s val i line → s {
+    : s lt ( nurl_llty ty )
+    : s et ( nurl_str_slice lt 2 - ( nurl_str_len lt ) 10 )
+    ? | ( __is_handle_ty et ) ( __type_needs_drop et syms ) {
+        ( die_pos lex line 1 ( nurl_str_cat3 `this gives an 'inout' slice parameter a slice it does not own, of '` ( llvm_to_nurl et ) `' elements, which own values of their own: the caller's slot would share them with their owner. Give it a fresh slice ('[T | …]', or a call that makes one), or pass the slice's owner to a 'sink' parameter and store that.` ) )
+    } {}
+    : s dp ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print dp ) ( nurl_print ` = extractvalue ` ) ( nurl_print lt ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
+    : s ln ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print ln ) ( nurl_print ` = extractvalue ` ) ( nurl_print lt ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 1\n` )
+    : s g ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print g ) ( nurl_print ` = getelementptr ` ) ( nurl_print et ) ( nurl_print `, ` ) ( nurl_print et ) ( nurl_print `* null, i64 ` ) ( nurl_print ln ) ( nurl_print `\n` )
+    : s sz ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print sz ) ( nurl_print ` = ptrtoint ` ) ( nurl_print et ) ( nurl_print `* ` ) ( nurl_print g ) ( nurl_print ` to i64\n` )
+    : s raw ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print raw ) ( nurl_print ` = call i8* @nurl_malloc(i64 ` ) ( nurl_print sz ) ( nurl_print `)` ) ( emit_dbg_eol )
+    : s src ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print src ) ( nurl_print ` = bitcast ` ) ( nurl_print et ) ( nurl_print `* ` ) ( nurl_print dp ) ( nurl_print ` to i8*\n` )
+    : s cpr ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print cpr ) ( nurl_print ` = call i8* @memcpy(i8* ` ) ( nurl_print raw ) ( nurl_print `, i8* ` ) ( nurl_print src ) ( nurl_print `, i64 ` ) ( nurl_print sz ) ( nurl_print `)\n` )
+    : s tp ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print tp ) ( nurl_print ` = bitcast i8* ` ) ( nurl_print raw ) ( nurl_print ` to ` ) ( nurl_print et ) ( nurl_print `*\n` )
+    : s n0 ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print n0 ) ( nurl_print ` = insertvalue ` ) ( nurl_print lt ) ( nurl_print ` undef, ` ) ( nurl_print et ) ( nurl_print `* ` ) ( nurl_print tp ) ( nurl_print `, 0\n` )
+    : s n1 ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print n1 ) ( nurl_print ` = insertvalue ` ) ( nurl_print lt ) ( nurl_print ` ` ) ( nurl_print n0 ) ( nurl_print `, i64 ` ) ( nurl_print ln ) ( nurl_print `, 1\n` )
+    ^ n1
 }
 
 // …of the slice of type `ty` stored at `ptr`.
@@ -32898,6 +32970,7 @@ unsafe @ __pfo_bind_lends i syms s name → v {
 // static case back to that constant.
 @ mem_capture_hown i syms i cg s cn s gen s rlt → v {
     ( nurl_sym_def syms `__last_call_own__` `` )
+    = g_call_own_slc -1
     ? ! ( __is_hown_ty rlt ) { ^ v } {}
     : ~ s c ( nurl_sym_get syms `__last_call_name__` )
     : ~ s gn ``
@@ -32921,6 +32994,18 @@ unsafe @ __pfo_bind_lends i syms s name → v {
     ( nurl_print `, ptr @.__nurl_retown.` ) ( nurl_print k ) ( nurl_print `)\n` )
     ( nurl_sym_def syms `__last_call_own__` r )
     ( nurl_sym_def syms `__last_call_own_k__` k )
+    // (…and a slice from a callee compiled after this caller: its answer
+    // where it answers per call, else its static one, `__ret_owned` —
+    // `@.__nurl_retslc.N`, resolved at module end, the answer a caller
+    // compiled after it reads. The retown constant says "not a lend",
+    // which a slice field of a parameter is not; agora #510.)
+    ? & ( mem_is_slice_ty rlt ) == 0 ( nurl_sym_len2 syms c `__body_done` ) {
+        ( nurl_sym_def g_pending_impl ( nurl_str_cat `retslc##` k ) `1` )
+        : s r2 ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print r2 ) ( nurl_print ` = call i1 @__nurl_ret_own(ptr @.__nurl_retdyn.` ) ( nurl_print k )
+        ( nurl_print `, ptr @.__nurl_retslc.` ) ( nurl_print k ) ( nurl_print `)\n` )
+        = g_call_own_slc ( nurl_str_to_int ( nurl_str_slice r2 2 - ( nurl_str_len r2 ) 2 ) )
+    } {}
 }
 
 // The temporaries argument `arg_idx` (`av`, type `at`, spelled from token
@@ -39922,7 +40007,10 @@ unsafe @ amv_close → v { = g_amv_cur 0 }
     {
         // A `: ~` copy (the cursor idiom) or a copy of a parameter: a
         // borrow of it.
-        ? & & & ( bck_sound ) ( is_ident_tok rhs_tt ) ( bck_is_heap_lty vt ) | is_mut is_param
+        // (…a slice's too: a `: ~` copy of one names the buffer its source
+        // owns, so a callee that replaces what an `inout` slice holds would
+        // release the source's — agora #545.)
+        ? & & & ( bck_sound ) ( is_ident_tok rhs_tt ) | ( bck_is_heap_lty vt ) & is_mut ( mem_is_slice_ty vt ) | is_mut is_param
         {  // (It owns none of the value: handed 'inout' to a callee that
             // replaces what it holds, it would release the owner's —
             // bck_inout_borrow_check. Except that a struct copied from a
@@ -58066,6 +58154,19 @@ unsafe @ gen_assign i lex i syms i cg → s {
         : b __slc_mix & & __slc_fl | == bck_rhs_tt TT_QUEST == bck_rhs_tt TT_QUESTQUEST != 0 ( nurl_sym_len syms `__last_slice_own_bit__` )
         : b __slc_fresh | | | == bck_rhs_tt TT_LBRACK ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `1` ) rhs_slice_owned rhs_other_owner
         : b __slc_lent & & __slc_fl ( is_ident_tok bck_rhs_tt ) ! ( seq bck_rhs_val name )
+        // (An `inout` slice parameter is the caller's slot (§2.4): a fresh
+        // value or an owned local moved in replaces the caller's buffer,
+        // which goes here, as an inout String's old value does. Left alone,
+        // it leaked on every call; agora #545.)
+        // (…and one given a slice it does not own — a borrowed parameter, a
+        // cursor — gets a copy of its buffer, as a String gets a copy of a
+        // lend (#438): stored as is, the caller's slot and the slice's owner
+        // both released one buffer. Copied BEFORE the old value goes: the
+        // right-hand side may be a view of it.)
+        : b __slc_io & & __tg_io ( mem_is_slice_ty vt ) ! lhs_is_owned_slc
+        : b __slc_io_cp & & & __slc_io ( is_ident_tok bck_rhs_tt ) ! __slc_fresh ! ( seq bck_rhs_val name )
+        ? __slc_io_cp { = val ( mem_emit_slice_copy lex syms cg vt val bck_line ) } {}
+        ? & __slc_io | __slc_fresh __slc_io_cp { ( mem_emit_slice_free_at cg ( nurl_llty vt ) ptr ) } {}
         ? __slc_fl {
             ? | | __slc_fresh __slc_mix __slc_lent { ( mem_emit_slice_free_key syms cg ptr ) } {}
         } {
@@ -58294,7 +58395,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // until it is given a buffer again. (Taken off the owned list
         // instead, it was back on it where the enclosing arm or loop body
         // ended: both names freed the buffer, agora #634.)
-        ? ( __slice_asn_moves syms bck_rhs_tt bck_rhs_val name vt )
+        ? | ( __slice_asn_moves syms bck_rhs_tt bck_rhs_val name vt ) & & __slc_io rhs_other_owner != 0 ( nurl_sym_len2 syms bck_rhs_val `__ptr` )
         { ( nurl_print `  store ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print ` zeroinitializer, ` ) ( nurl_print ( nurl_llty vt ) )
             ( nurl_print `* ` ) ( nurl_print ( nurl_sym_get2 syms bck_rhs_val `__ptr` ) ) ( nurl_print `\n` ) }
         { ? & & lhs_is_owned_slc ( is_ident_tok bck_rhs_tt )
@@ -58337,7 +58438,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         : s __ud_ptr ? != 0 ( nurl_str_len __ud_iop ) `` ( nurl_str_cat __ud_ptr0 `` )
         // (An `inout` parameter that owns something given a new value: h295.)
         ? __tg_io {
-            ? | ( __is_handle_ty vt ) ( __type_needs_drop vt syms ) { ( __replaces_note_io syms name `` ) } {}
+            ? | | ( __is_handle_ty vt ) ( __type_needs_drop vt syms ) ( mem_is_slice_ty vt ) { ( __replaces_note_io syms name `` ) } {}
         } {}
         // An `inout` parameter is the caller's binding (§2.4): a fresh value
         // assigned over it replaces the caller's, which is dropped. A call
@@ -60384,6 +60485,7 @@ unsafe @ __replaces_note_io i syms s name s field → v {
                 = g_agg_fpfx_st __fs_px0
                 ( nurl_sym_def syms `__last_field_fld__` `` )
                 : b __fs_fresh ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` )
+                : b __fs_slfresh | == __fs_tt TT_LBRACK ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `1` )
                 : s __fs_guard ? == __fs_tt TT_LPAREN ( nurl_sym_get syms `__last_call_guard__` ) ``
                 ? ( __store_type_clash ( nurl_get_last_type ) ftype )
                 { ( die lex ( nurl_str_cat ( nurl_str_cat4
@@ -60488,10 +60590,23 @@ unsafe @ __replaces_note_io i syms s name s field → v {
                     ( nurl_print `  ` ) ( nurl_print __fso ) ( nurl_print ` = load i8*, i8** ` ) ( nurl_print gep ) ( nurl_print `\n` )
                     ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print __fso ) ( nurl_print `)` ) ( emit_dbg_eol )
                 } {}
+                // (A slice field this binding owns, as a string field: a
+                // fresh slice is taken as it is, an owned slice binding
+                // moves in — its slot left empty once the field holds the
+                // buffer — and any other slice is copied (refused for
+                // elements that own values); the one it replaces is freed
+                // once the new one is in hand. Stored as it came, the
+                // binding and the field both released one buffer; agora
+                // #545.)
+                : b __fs_slown & & != 0 g_auto_drop_strings ( mem_is_slice_ty ftype ) ( mem_struct_field_owned syms alloca_ptr ( nurl_str_int fidx ) `slice` )
+                : b __fs_slmv & & __fs_slown ( is_ident_tok __fs_tt ) ( __slice_let_moves syms __fs_tt __fs_v1 `` ftype F )
+                ? & & __fs_slown ! | __fs_slfresh __fs_slmv ! ( bck_unsafe_ctx ) { = __fs_sval ( mem_emit_slice_copy lex syms cg ftype __fs_sval __fs_l1 ) } {}
+                ? __fs_slown { ( mem_emit_slice_free_at cg ( nurl_llty ftype ) gep ) } {}
                 ( nurl_print `  store ` ) ( nurl_print ( nurl_llty ftype ) )
                 ( nurl_print ` ` ) ( nurl_print __fs_sval )
                 ( nurl_print `, ` ) ( nurl_print ( nurl_llty ftype ) )
                 ( nurl_print `* ` ) ( nurl_print gep ) ( emit_dbg_line_eol bck_line )
+                ? __fs_slmv { ( __slice_slot_empty syms __fs_v1 ftype ) ( bck_stash_move __fs_v1 __fs_l1 ( nurl_str_cat3 `the field store that moved its buffer to '` ( nurl_str_cat3 obj_name `.` fname ) `'` ) ) } {}
                 ( __fs_store_done syms cg alloca_ptr __ffv )
                 ( __fs_late_emit )
                 ^ rhs
@@ -62662,6 +62777,25 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
             } {}
         } {}
         : ~ s fval ( gen_expr lex syms cg )
+        // (An owned slice binding moved into a literal that leaves — returned,
+        // or nested in one — hands its buffer to the field: its slot is left
+        // empty once the field has read it, so the scope's release frees
+        // nothing (free(NULL)) on the runs that moved it, as a String's flag
+        // is cleared above. At the `}` where more fields follow: a later
+        // field that panics finds the buffer its binding's still, #741.
+        // Released at the return as well, the caller freed it again; agora
+        // #545.)
+        // (…and the field owns it then: the literal's owned fields name it,
+        // so the caller that gets the value releases it.)
+        // (…and any enum literal, bound or not: its payload is boxed and the
+        // enum's drop releases the slice, agora #841.)
+        : b fld_moved_slice & & | agg_moves_fields != enum_paycount -1 ( is_ident_tok fld_first_tt ) ( __slice_let_moves syms fld_first_tt fld_first_val `` ( nurl_get_last_type ) F )
+        ? fld_moved_slice {
+            ( bck_stash_move fld_first_val ( nurl_lex_line lex ) `the literal that moved its buffer into a field` )
+            ? __fj_defer { ( nurl_print_buf_start ) } {}
+            ( __slice_slot_empty syms fld_first_val ( nurl_get_last_type ) )
+            ? __fj_defer { = __fj_kept ( nurl_str_cat __fj_kept ( nurl_print_buf_stop ) ) } {}
+        } {}
         ? agg_fsub {
             = g_agg_fpfx_st agg_fpst
             ? & __afw == agg_fpst 2 { ( nurl_sym_def g_root_syms `__agg_fpfx__` agg_fpfx ) } {}
@@ -63325,7 +63459,7 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         ? & & & & != 0 g_auto_drop_strings ! is_str_fresh ( seq ( nurl_llty fty ) `i8*` ) == fld_first_tt TT_LPAREN ! ( bck_unsafe_ctx ) {
             ? != 0 ( nurl_sym_len syms `__last_call_guard__` ) { ( mem_note_owned_string_field lex syms __fld_line ) } {}
         } {}
-        : b is_slice_fresh & ( mem_is_slice_ty fty ) | fld_is_slice_lit ( seq ret_owned `1` )
+        : b is_slice_fresh & ( mem_is_slice_ty fty ) | | fld_is_slice_lit ( seq ret_owned `1` ) fld_moved_slice
         : s idx_str ( nurl_str_int idx )
         ? & != 0 g_auto_drop_strings is_str_fresh
         { : s tag ( nurl_str_cat3 idx_str `:str:` ( nurl_str_cat3 cur_sname `:` idx_str ) )
@@ -63334,7 +63468,11 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
             ( nurl_str_cat3 owned_field_idxs ` ` tag )
         }
         {}
-        ? & != 0 g_auto_drop_strings is_slice_fresh
+        // (Not an enum's payload: it is boxed, and the enum's own drop
+        // releases what the box holds. Tracked as a struct's slice field,
+        // the drop read the box pointer as a slice of no type — invalid IR,
+        // agora #841.)
+        ? & & != 0 g_auto_drop_strings is_slice_fresh == enum_paycount -1
         { : s tag ( nurl_str_cat3 idx_str `:slice:` ( nurl_str_cat3 cur_sname `:` idx_str ) )
             = owned_field_idxs ? == 0 ( nurl_str_len owned_field_idxs )
             ( nurl_str_cat tag `` )
@@ -80243,6 +80381,8 @@ unsafe @ __type_needs_drop s ty i syms → b {
 @ __payload_needs_drop s pt i syms → b {
     ? == 0 ( nurl_str_len pt ) { ^ F } {}
     ? ( seq pt `%String` ) { ^ T } {}
+    // (A slice payload owns its buffer, boxed: agora #841.)
+    ? & != 0 g_auto_drop_strings ( __is_slice_ll ( nurl_llty pt ) ) { ^ T } {}
     ? != 0 ( nurl_str_starts pt `%Vec__` ) { ^ T } {}
     ? ( __is_libh pt ) { ^ T } {}
     ? ( __drop_is_boxed pt syms ) { ^ T } {}
@@ -80565,6 +80705,36 @@ unsafe @ __type_needs_drop s ty i syms → b {
         ( nurl_print sp ) ( nurl_print `, 0\n` )
         ( emit_drop_value pt hv ctr syms )
         ( nurl_print `  br label %` ) ( nurl_print hd ) ( nurl_print `\n` ) ( nurl_print hd ) ( nurl_print `:\n` )
+        ^ v
+    } {}
+    // A slice payload is boxed: its buffer (and the elements it owns, as an
+    // owned slice binding's) goes, then the box. A zero slot was taken out.
+    // (Not dropped at all, a slice payload leaked; agora #841.)
+    ? ( __is_slice_ll ( nurl_llty pt ) ) {
+        : s sz ( __dr ctr )
+        : s sl ( nurl_str_cat `drop_slive_` ( nurl_str_int ctr ) )
+        : s sd ( nurl_str_cat `drop_sdone_` ( nurl_str_int ctr ) )
+        ( nurl_print `  ` ) ( nurl_print sz ) ( nurl_print ` = icmp ne i64 ` ) ( nurl_print slot ) ( nurl_print `, 0\n` )
+        ( nurl_print `  br i1 ` ) ( nurl_print sz ) ( nurl_print `, label %` ) ( nurl_print sl ) ( nurl_print `, label %` ) ( nurl_print sd ) ( nurl_print `\n` )
+        ( nurl_print sl ) ( nurl_print `:\n` )
+        : s lt ( nurl_llty pt )
+        : s et ( nurl_str_slice lt 2 - ( nurl_str_len lt ) 10 )
+        : s sb ( __dr ctr )
+        ( nurl_print `  ` ) ( nurl_print sb ) ( nurl_print ` = bitcast i8* ` ) ( nurl_print sp ) ( nurl_print ` to ` ) ( nurl_print lt ) ( nurl_print `*\n` )
+        : s sv ( __dr ctr )
+        ( nurl_print `  ` ) ( nurl_print sv ) ( nurl_print ` = load ` ) ( nurl_print lt ) ( nurl_print `, ` ) ( nurl_print lt ) ( nurl_print `* ` ) ( nurl_print sb ) ( nurl_print `\n` )
+        : s sdp ( __dr ctr )
+        ( nurl_print `  ` ) ( nurl_print sdp ) ( nurl_print ` = extractvalue ` ) ( nurl_print lt ) ( nurl_print ` ` ) ( nurl_print sv ) ( nurl_print `, 0\n` )
+        : s sraw ( __dr ctr )
+        ( nurl_print `  ` ) ( nurl_print sraw ) ( nurl_print ` = bitcast ` ) ( nurl_print et ) ( nurl_print `* ` ) ( nurl_print sdp ) ( nurl_print ` to i8*\n` )
+        ? ( __slice_owns_elems et ) {
+            : s sln ( __dr ctr )
+            ( nurl_print `  ` ) ( nurl_print sln ) ( nurl_print ` = extractvalue ` ) ( nurl_print lt ) ( nurl_print ` ` ) ( nurl_print sv ) ( nurl_print `, 1\n` )
+            ( nurl_print `  call void @` ) ( nurl_print ( __slice_drop_request et ) ) ( nurl_print `(i8* ` ) ( nurl_print sraw ) ( nurl_print `, i64 ` ) ( nurl_print sln ) ( nurl_print `)\n` )
+        } {}
+        ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print sraw ) ( nurl_print `)\n` )
+        ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print sp ) ( nurl_print `)\n` )
+        ( nurl_print `  br label %` ) ( nurl_print sd ) ( nurl_print `\n` ) ( nurl_print sd ) ( nurl_print `:\n` )
         ^ v
     } {}
     ? != 0 ( nurl_str_starts pt `%Vec__` ) {
