@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_replaced_field_second_reader_sunk_in_loop.nu:17:9: error: 'g2' is a borrow (a vec_get result, a field read, a view of something another binding owns) and is released or handed over here as if it owned the value. The owner still holds and releases it. Take a copy that is yours where it is bound: ( mem_dup g2 ), or release the value through its owner — when that owner is a parameter of this function, declare the parameter 'sink' so the function owns it.
+        ( gone g2 )
+        ^
+error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)
