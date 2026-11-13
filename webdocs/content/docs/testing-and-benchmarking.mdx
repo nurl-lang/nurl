@@ -112,7 +112,7 @@ has its own pass/fail logic. This logic is separate from the goldens.
 Two additional gates guard memory safety:
 
 - **Soundness hole regression suite (`tools/fuzz/holes/check.sh`)** — runs every adversarial probe in `tools/fuzz/holes/`, covering historical ownership, borrow-checking, view-lifetime, closure-capture, and concurrency edge cases. Negative probes must be rejected at compile time; positive probes must compile and run clean under ASan + LSan.
-- **Mechanized Lean 4 soundness proof (`formal/`)** — `cd formal && ./check.sh` checks the machine-verified proof (`A1.memory_safe`, `A2.memory_safe`, `A2.no_leak_end`, `A3.claim`, `A3.claim_made`; no `sorry`, only Lean's standard axioms) that well-typed, borrow-checked NURL programs — structs, enums, closures, trait objects, panics, and concurrent threads (`Send` / `Sync`, `Arc`, `Locked`, `RwLocked`, `Atomic`, channels) included — neither use-after-free, double-free, leak owned allocations, nor data-race.
+- **Mechanized Lean 4 soundness proof (`formal/`)** — `cd formal && ./check.sh` checks the machine-verified proof (`A1.memory_safe`, `A2.memory_safe`, `A2.no_leak_end`, `A3.claim_full`, `A3.claim_made_full`; no `sorry`, only Lean's standard axioms) that well-typed, borrow-checked NURL programs — structs, enums, closures, trait objects, panics, and concurrent threads (`Send` / `Sync`, `Arc`, `Locked`, `RwLocked`, `Atomic`, channels) included — neither use-after-free, double-free, leak owned allocations, nor data-race.
 
 ## Next
 

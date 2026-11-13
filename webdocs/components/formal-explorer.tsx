@@ -781,7 +781,7 @@ export function FormalExplorer() {
               Explore both visually (step-by-step memory &amp; borrow simulator) and mathematically (Lean Blueprint
               dependency DAG + {TOTAL_DECLS.toLocaleString('en-US')} Lean 4 declarations) how NURL proves memory safety
               (A2.memory_safe), leak freedom (A2.no_leak_end, A2.no_leak_panic), and concurrent data-race freedom
-              (A3.claim, A3.claim_made).
+              (A3.claim_full, A3.claim_made_full).
             </p>
           </div>
         </div>
@@ -930,22 +930,22 @@ export function FormalExplorer() {
                 <div>
                   <div className="flex items-center justify-between">
                     <span className="rounded bg-violet-500/20 px-2 py-0.5 font-mono text-xs font-bold text-violet-700 dark:text-violet-300">
-                      A3.claim / claim_made
+                      A3.claim_full / claim_made_full
                     </span>
                     <GitBranch className="h-4 w-4 text-violet-600 dark:text-violet-400" />
                   </div>
                   <h4 className="mt-2 font-semibold text-fd-foreground">4. Data-Race Freedom Across Threads</h4>
                   <p className="mt-1 text-xs leading-relaxed text-fd-muted-foreground">
                     In a well-typed program, every interleaving of threads sharing values via moves, Arc, Locked / Mutex, RwLocked, Atomic,
-                    channels, SendCheck handles, and module globals satisfies MemorySafe ∧ RaceFree ∧ NoLeak.
+                    channels, SendCheck handles, and module globals satisfies MemorySafe ∧ RaceFree ∧ NoLeak, and every check-out of a cell's block is a cell operation of its owner's share (CellAdequate).
                   </p>
                 </div>
                 <button
                   type="button"
-                  onClick={() => openDeclInBrowser('claim', 'A3')}
+                  onClick={() => openDeclInBrowser('claim_full', 'A3')}
                   className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-violet-700 hover:underline dark:text-violet-300"
                 >
-                  <span>Inspect A3.claim →</span>
+                  <span>Inspect A3.claim_full →</span>
                 </button>
               </div>
             </div>
