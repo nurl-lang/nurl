@@ -2728,8 +2728,15 @@ unsafe @ __fn_io_add s name → v { = g_fn_io_names ( nurl_str_cat3 g_fn_io_name
 // types are parsed in a pseudo-file); see vis_check_xref.
 : ~ s g_vis_inst_targs ``
 
-// Did type `v` reach the template being instantiated as a type argument?
+// Nonzero while the compiler reads back a type it recorded itself (a
+// library handle's type argument, __libh_targ): the program wrote it
+// somewhere it was visible, and reading it back is not another mention.
+: ~ i g_vis_readback 0
+
+// Did type `v` reach the template being instantiated as a type argument,
+// or is it a recorded type being read back?
 @ __vis_targ_exempt s v → b {
+    ? != 0 g_vis_readback { ^ T } {}
     ^ | ( str_contains_word g_mono_tparam_tys v ) ( str_contains_word g_vis_inst_targs v )
 }
 
@@ -81172,8 +81179,16 @@ unsafe @ __hmemo_close s key i mark b r → v {
     ~ < j k { = ta ( str_skip_word ta ) = j + j 1 }
     : s w ( str_first_word ta )
     ? == 0 ( nurl_str_len w ) { ^ w } {}
+    // Read back in whatever file is being compiled: a module's handle over
+    // its own private type (`pub : H { ( Shared Impl ) ctl }`) is copied
+    // and dropped in its users' files, where `Impl` is not visible and was
+    // never written. Judged as a mention, the copy died with `private type
+    // 'Impl' is not visible across files`, pointing into this pseudo-file
+    // (AGORA-860).
     : i lx ( nurl_lex_new w `<libh-targ>` )
+    = g_vis_readback + g_vis_readback 1
     : s t ( parse_type lx )
+    = g_vis_readback - g_vis_readback 1
     ( nurl_lex_free lx )
     ^ t
 }
