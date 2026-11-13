@@ -33,6 +33,7 @@ A **loan** is a place and a kind:
 | `view` | a pointer into the place's own buffer | the same, and the buffer moving (`realloc`) |
 | `ref` | a pointer to the binding itself (a capture taken by pointer) | the binding's scope ending, or the binding moved |
 | `share` | a closure's own copy of a shared handle | nothing |
+| `held` | what a parameter's value holds: the caller's to say | nothing in this frame; each call puts what its argument holds in its place |
 
 An **effect** on a place is `realloc`, `drop` (its elements), `replace` (its
 value) or `end` (the binding). `kills_paths` is formal/A2's `Eff.kills`
@@ -85,6 +86,7 @@ summarised by the same analysis, to a fixpoint over the program.
 | A `dyn` method's call may run any impl of the method | §1 Methods | `summary` (`virt`) |
 | The drop of a value whose destructor may read its views is a use of them | §2.14 | `scope_end` |
 | A copy hook (`S_clone`, `S_share`) hands back a value of its own | §7.6 | `check_program` |
+| What an argument holds, its copy and whatever was given its elements hold too, through any number of callees | §2.10, §2.13 | `held` loans, `make_summary` |
 
 ## Not rules of the engine
 

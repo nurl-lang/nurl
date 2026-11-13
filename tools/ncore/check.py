@@ -20,7 +20,7 @@ formal/A2's Eff.kills, extended from bindings to places.
 Function summaries are those of prims.py, inferred for program functions by a
 fixpoint over the whole program: definition order plays no part."""
 from prims import PRIMS
-from lower import Types
+from lower import Types, Var
 
 
 class CheckError(Exception):
@@ -138,6 +138,16 @@ class FnCheck:
         self.errors = []
         self.loans = {}          # loan id -> (place, kind)
         self.pidx = {vid: i for i, vid in enumerate(fn.params)}
+        # What a parameter's value holds is the caller's to say. One loan
+        # stands for it (kind `held`), on a place of its own that nothing in
+        # this frame changes; the summary hands it on by the parameter's
+        # number, and each call puts what its argument holds in its place.
+        self.hvid = {}
+        for i, vid in enumerate(fn.params):
+            h = -1 - vid
+            if h not in fn.vars:
+                fn.vars[h] = Var(h, f"what {fn.vars[vid].name} holds", None, "param", fn.vars[vid].line, 0)
+            self.hvid[h] = i
         self.s_effects = set()
         self.s_consumes = set()
         self.s_elems = set()
@@ -274,7 +284,7 @@ class FnCheck:
         return out
 
     def kills_paths(self, eff, p, pp, q, qp, k):
-        if k == "share":
+        if k in ("share", "held"):
             return False
         if k == "ref" or eff == "end":
             # a pointer to the binding itself: good while the binding is,
@@ -375,7 +385,7 @@ class FnCheck:
         loans = hloans(held_here)
         if not loans:
             return NONE
-        alias = {self.loans[l][0] for l in loans if l in self.loans}
+        alias = {self.loans[l][0] for l in loans if l in self.loans and self.loans[l][1] != "held"}
         return AV("L", loans, alias, frozenset())
 
     def read(self, st, op, line, site, what="value"):
@@ -801,8 +811,16 @@ class FnCheck:
             self.store_into(st, (ops[j][1], ops[j][2] + dpath), add, already_rooted=True, base=ops[j][2])
         # the result
         held = set()
+        # an owned temporary the callee hands back whole leaves with the
+        # result: the result owns it (MEMORY.md §1, Temporaries)
+        whole = set()
+        if sm["res"] == "lent":
+            whole = {k for (k, path, kind) in sm["lends"] if not path and kind == "handle" and k < len(ops)
+                     and ops[k][0] == "v" and not ops[k][2] and self.fn.vars[ops[k][1]].kind == "temp"
+                     and avs[k].own == "O"}
         for (dpath, k, path, kind) in sm["rholds"]:
-            if k >= len(avs):
+            if k >= len(avs) or (k in whole and kind == "held" and not path and not dpath):
+                # (what a temporary handed back whole holds comes with it)
                 continue
             dpath = tuple(dpath)
             if kind == "held":
@@ -821,11 +839,6 @@ class FnCheck:
             return AV("O", (), (), held)
         if sm["res"] == "lent":
             loans, alias = set(), set()
-            # an owned temporary the callee hands back whole leaves with the
-            # result: the result owns it (MEMORY.md §1, Temporaries)
-            whole = {k for (k, path, kind) in sm["lends"] if not path and kind == "handle" and k < len(ops)
-                     and ops[k][0] == "v" and not ops[k][2] and self.fn.vars[ops[k][1]].kind == "temp"
-                     and avs[k].own == "O"}
             for k in whole:
                 moved = self.move_out(st, ops[k][1], line)
                 loans |= moved.loans
@@ -834,6 +847,10 @@ class FnCheck:
                 if k >= len(avs) or avs[k].own == "N" or (k in whole and not path):
                     continue
                 av = avs[k]
+                if kind == "held":
+                    # what the argument holds, handed back as the value itself
+                    loans |= hloans(hsub(av.held, tuple(path)))
+                    continue
                 loans |= av.loans
                 for a in av.alias:
                     pl = (a[0], a[1] + tuple(path))
@@ -1517,7 +1534,12 @@ class FnCheck:
         st = State()
         for vid in self.fn.params:
             v = self.fn.vars[vid]
-            st.vals[vid] = NONE if v.ty is not None and self.T.is_scalar(v.ty) else AV("P")
+            if v.ty is not None and self.T.is_scalar(v.ty):
+                st.vals[vid] = NONE
+            else:
+                # what a parameter's value holds is the caller's to say: one
+                # loan stands for it, and the summary hands it on by name
+                st.vals[vid] = AV("P", (), (), {((), self.loan(st, ("ph", vid), (-1 - vid, ()), "held"))})
         end = self.run(st, self.fn.body)
         if not end.bottom:
             end = self.run_defers(end)
@@ -1529,6 +1551,8 @@ class FnCheck:
         if lid not in self.loans:
             return None
         place, kind = self.loans[lid]
+        if place[0] in self.hvid:
+            return self.hvid[place[0]], (), "held"
         if place[0] in self.pidx:
             return self.pidx[place[0]], place[1][:3], kind
         return None
@@ -1566,7 +1590,7 @@ class FnCheck:
                     continue
                 for hp, lid in av.held:
                     pl = self.param_loan(lid)
-                    if pl:
+                    if pl and not (pl[2] == "held" and pl[0] == j):
                         stores.add((j, hp[:3]) + pl)
         consumes = set(self.s_consumes) | {k for k, m in enumerate(self.fn.modes) if m == "sink"}
         return {"modes": list(self.fn.modes), "res": res, "lends": sorted(lends), "rholds": sorted(rholds),
