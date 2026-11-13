@@ -18732,6 +18732,8 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     // (…and what this call keeps of parameters, set as g_pk_last once its
     // arguments are done: a nested call's own is its own.)
     : ~ s __pk_acc ``
+    : ~ s __pk_locs ``
+    : ~ s __pk_cws ``
     // Containers this call mutates: their borrowed pointers go stale only
     // once every argument has been read — `( vec_push out . op k )` reads
     // `op` before the push (§2.10). Applied after the argument loop.
@@ -21252,13 +21254,36 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // storage from here on (__pderiv_note; agora #770).)
         // (…and a call written there that keeps one, `( box_new ( wrap h ) )`:
         // its result, kept here too where this callee keeps it.)
-        ? & & & != 0 g_srcx_on | ( is_ident_tok bck_arg_tt ) & == bck_arg_tt TT_LPAREN != 0 ( nurl_str_len g_pk_last ) | != 0 g_cur_rc & != 0 g_bck_closure_depth ( __fn_rc_param syms ) != 0 ( nurl_str_len ( __rc_reach ( nurl_llty at ) ) ) {
-            : s __pkps ? ( is_ident_tok bck_arg_tt ) ( __word_union ( __pderiv_params syms bck_arg_val ) ( __pderiv_cparams syms bck_arg_val ) ) ( nurl_str_cat g_pk_last `` )
-            ? & == arg_idx 0 ( is_ident_tok bck_arg_tt ) {
-                ? ! | ( str_contains_word g_cur_params bck_arg_val ) ( __pderiv_clo_param bck_arg_val ) { = __pk_a0 ( nurl_str_cat bck_arg_val `` ) } {}
-            } {}
+        // (…a field path, `. p a` kept or `. x hs` the container — by its
+        // root; a literal written there, `@ W { h }`, by the names it is made
+        // of — agora #786.)
+        : b __pk_nm | ( is_ident_tok bck_arg_tt ) == bck_arg_tt TT_DOT
+        : b __pk_ll ( __pd_litlike bck_arg_tt )
+        ? & & & != 0 g_srcx_on | | __pk_nm __pk_ll & == bck_arg_tt TT_LPAREN != 0 ( nurl_str_len g_pk_last ) | != 0 g_cur_rc & != 0 g_bck_closure_depth ( __fn_rc_param syms ) != 0 ( nurl_str_len ( __rc_reach ( nurl_llty at ) ) ) {
+            : s __pkr ? ( is_ident_tok bck_arg_tt ) ( nurl_str_cat bck_arg_val `` ) ? == bck_arg_tt TT_DOT ( nurl_sym_get syms `__last_member_root__` ) ``
+            : s __pklit ? __pk_ll ( __pd_lit_names syms ( __sx_operand_c syms bck_arg_tt bck_arg_val 0 `` __sx_n0 ) ) ``
+            : s __pkps ? != 0 ( nurl_str_len __pkr ) ( __word_union ( __pderiv_params syms __pkr ) ( __pderiv_cparams syms __pkr ) ) ? __pk_ll ( __pd_names_params syms __pklit ) ( nurl_str_cat g_pk_last `` )
+            : b __pkloc & != 0 ( nurl_str_len __pkr ) ! | ( str_contains_word g_cur_params __pkr ) ( __pderiv_clo_param __pkr )
+            ? & == arg_idx 0 __pkloc { = __pk_a0 ( nurl_str_cat __pkr `` ) } {}
+            // (…and the locals among the later arguments: a callee of the
+            // program may put a kept argument into any of them, `( addto2 h
+            // xs )` — under its keep condition, at the arguments' end.)
+            ? & > arg_idx 0 __pkloc { = __pk_locs ( __word_union __pk_locs __pkr ) } {}
             // (…the first one only into the call's result, `( box_new h )`.)
-            = __pk_acc ( __word_union __pk_acc ( __pk_note syms __pkps call_name arg_idx ( str_has_index callee_sink arg_idx ) ? == arg_idx 0 `` __pk_a0 ) )
+            : s __pkws ( __pk_note syms __pkps call_name arg_idx ( str_has_index callee_sink arg_idx ) ? == arg_idx 0 `` __pk_a0 )
+            // (…a field path into the result only where kept for certain:
+            // under a keep condition, `( rc_get . . call client a )` — read
+            // out of `call` as well — would follow what the result was read
+            // out of whole, which a drop edge naming no path ends; agora
+            // #495, packages/gRPC.)
+            : s __pkrw ? == bck_arg_tt TT_DOT ( __words_plain __pkws ) ( nurl_str_cat __pkws `` )
+            = __pk_acc ( __word_union __pk_acc __pkrw )
+            // (…what a `sink` parameter of a callee of the program takes, as
+            // what one keeps: it may put it into a later argument, `( adds (
+            // rc_clone h ) xs )` — not a library keeper's, which puts it into
+            // the first.)
+            : s __pkcw ? & ( str_has_index callee_sink arg_idx ) != 2 ( bck_lib_kind ( bck_generic_base call_name ) ) ( nurl_str_cat __pkws `` ) ( __words_cond __pkws )
+            = __pk_cws ( __word_union __pk_cws __pkcw )
             // (…and a result whose Rc types meet the argument's may hold
             // shares of its Rcs whatever the summaries say of keeping it —
             // `( vec_clone xs )` of a Vec of shares, `( mkw h )` handing back
@@ -21679,6 +21704,16 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         = arg_idx + arg_idx 1
     }
     = g_pk_last __pk_acc
+    // (A kept argument of a callee of the program, into the locals among
+    // its other arguments — the container it is put into, wherever it is:
+    // agora #786.)
+    ? & != 0 ( nurl_str_len __pk_cws ) != 0 ( nurl_str_len __pk_locs ) {
+        : ~ s __pkl ( nurl_str_cat __pk_locs `` )
+        ~ != 0 ( nurl_str_len __pkl ) {
+            : s __pkw ( str_first_word __pkl ) = __pkl ( str_skip_word __pkl )
+            ( __pderiv_put syms __pkw __pk_cws )
+        }
+    } {}
     ? != __vbm0 g_vb_marks { ( __vb_gone_check lex syms fname_bare __call_line __call_col ) } {}
     ? != 0 ( nurl_str_len __dt_carry ) {
         ( nurl_sym_def syms `__deferred_temps__` ( __words_join __dt_carry ( nurl_sym_get syms `__deferred_temps__` ) ) )
@@ -47060,6 +47095,50 @@ unsafe @ __pderiv_put i syms s name s ps0 → v {
     = g_pderiv ? == 0 ( nurl_str_len g_pderiv ) ( nurl_str_cat e `` ) ( nurl_str_cat3 g_pderiv ` ` e )
 }
 
+// A value written as a literal, or as a join or a block that may be one
+// (`? c @ W { h } @ W { h2 }`, `{ @ W { h 1 } }`): what it is made of is in
+// its source expression (agora #786).
+@ __pd_litlike i tt → b {
+    ^ | | | == tt TT_AT == tt TT_QUEST == tt TT_QUESTQUEST == tt TT_LBRACE
+}
+
+// Can a value made here hold a parameter's Rc share: does a parameter of
+// the function compiling now reach an Rc? Otherwise no name a literal is
+// made of that reaches one (__pd_lit_names) leads to a parameter, and the
+// type is not asked. (A closure body is always asked: its literal's own
+// parameters are roots too, and the scope's `__fn_rc_param__` there may be
+// the enclosing function's answer.)
+@ __pd_rc_scope → b {
+    ^ | != 0 g_cur_rc != 0 g_bck_closure_depth
+}
+
+// The parameters the names `ns` lead to, plain and conditioned.
+@ __pd_names_params i syms s ns → s {
+    : ~ s out ``
+    : ~ s rest ( nurl_str_cat ns `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        = out ( __word_union out ( __word_union ( __pderiv_params syms w ) ( __pderiv_cparams syms w ) ) )
+    }
+    ^ out
+}
+
+// A field of local `obj` given a value (`= . w a h`, `= . . w a b h`) whose
+// names lead to parameters, in a type that may share an Rc: the local holds
+// them from here on, as a literal made of them does — a name or a field
+// path, a call that keeps them (g_pk_last: `( rc_clone h )`, `( wrap h )`),
+// a literal or a join of them (`@ I { h }`, `? c h h2`; agora #786). `n0`
+// is g_sx_n before the value was made.
+unsafe @ __pd_field_put i syms s obj i tt s val s ftype i n0 → v {
+    ? | == 0 g_srcx_on == 0 ( nurl_str_len obj ) { ^ v } {}
+    ? | ( str_contains_word g_cur_params obj ) ( __pderiv_clo_param obj ) { ^ v } {}
+    ? == 0 ( nurl_str_len ( __rc_reach ( nurl_llty ftype ) ) ) { ^ v } {}
+    ? == tt TT_LPAREN { ( __pderiv_put syms obj g_pk_last ) ^ v } {}
+    : s r ? ( is_ident_tok tt ) ( nurl_str_cat val `` ) ? == tt TT_DOT ( nurl_sym_get syms `__last_member_root__` ) ? ( __pd_litlike tt ) ( __pd_lit_names syms ( __sx_operand_c syms tt val ( bck_walk_class ftype ) `` n0 ) ) ``
+    ? == 0 ( nurl_str_len r ) { ^ v } {}
+    ( __pderiv_put syms obj ( __pd_names_params syms r ) )
+}
+
 // Was a parameter put into local `name` (g_pd_put)?
 @ __pd_is_put i syms s name → b {
     : s ptr ( nurl_sym_get2 syms name `__ptr` )
@@ -47460,13 +47539,17 @@ unsafe @ __sx_names_any s sx → b {
     // (…and an Rc, as __drop_note_via admits it: agora #734, #770.)
     : b via | | ( seq at `%String` ) & != 0 ( nurl_str_starts at `%Vec__` ) ( __elem_owns ( __vec_elem_llvm at ) syms ) != 0 ( nurl_str_starts at `%Rc__` )
     : ~ s rest ( __sx_leaf_names sx )
+    // (…or a struct, an option or a Box read out of a local a parameter was
+    // put into — `( setw ( vec_at ws 0 ) )` with `ws` holding `@ W { h }`:
+    // per leaf, as __drop_note_via admits it; agora #786.)
+    : b stv & & != 0 ( nurl_str_len g_pd_put ) == 0 ( nurl_str_starts at `%Vec__` ) & | == ( nurl_str_get at 0 ) 37 == ( nurl_str_get at 0 ) 123 ( __type_needs_drop at syms )
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest ) = rest ( str_skip_word rest )
         : s r ( __path_root_name w )
         : s c ( nurl_str_cat3 r `>` sx )
         ? clo { ( __drop_note_c syms g_clo_cur g_clo_params r callee aix c ) } {}
         ? ( str_contains_word g_cur_params r ) { ( __drop_note_c syms g_rpg_me_self g_cur_params r callee aix c ) } {
-            ? & via != 0 ( nurl_str_len g_cur_params ) {
+            ? & | via & stv ( __pd_is_put syms r ) != 0 ( nurl_str_len g_cur_params ) {
                 : ~ s ps ( __cond_onto ( __pderiv_reach syms r ) c )
                 ~ != 0 ( nurl_str_len ps ) {
                     : s pw ( str_first_word ps ) = ps ( str_skip_word ps )
@@ -47508,7 +47591,7 @@ unsafe @ __pderiv_note i syms s name s vt i rhs_tt s rhs_val s lend s sx → v {
     // h )` holds h — whatever it lends: g_pk_last, __pk_note; and a literal
     // made of them, `@ H { h 1 }`; agora #770.)
     ? & == rhs_tt TT_LPAREN != 0 ( nurl_str_len g_pk_last ) { ( __pderiv_put syms name g_pk_last ) } {}
-    ? & == rhs_tt TT_AT != 0 ( nurl_str_len ( __rc_reach ( nurl_llty vt ) ) ) {
+    ? & & ( __pd_litlike rhs_tt ) ( __pd_rc_scope ) != 0 ( nurl_str_len ( __rc_reach ( nurl_llty vt ) ) ) {
         : s __lp ( __pd_lit_names syms sx )
         : ~ s __lps ``
         : ~ s __lr ( nurl_str_cat __lp `` )
@@ -47531,7 +47614,7 @@ unsafe @ __pderiv_note i syms s name s vt i rhs_tt s rhs_val s lend s sx → v {
     // (…a literal, `@ H { h 1 }`: the bindings that may share an Rc's
     // payload it was made of; a call's result: what the call keeps of its
     // arguments too, g_pk_last — agora #770.)
-    : s srcs ? == rhs_tt TT_LPAREN lend ? == rhs_tt TT_DOT ( nurl_sym_get syms `__last_member_root__` ) ? ( is_ident_tok rhs_tt ) rhs_val ? __sx_one ( __path_root_name sx ) ? & == rhs_tt TT_AT != 0 ( nurl_str_len ( __rc_reach ( nurl_llty vt ) ) ) ( __pd_lit_names syms sx ) ``
+    : s srcs ? == rhs_tt TT_LPAREN lend ? == rhs_tt TT_DOT ( nurl_sym_get syms `__last_member_root__` ) ? ( is_ident_tok rhs_tt ) rhs_val ? __sx_one ( __path_root_name sx ) ? & & ( __pd_litlike rhs_tt ) ( __pd_rc_scope ) != 0 ( nurl_str_len ( __rc_reach ( nurl_llty vt ) ) ) ( __pd_lit_names syms sx ) ``
     ? ( __lend_unnamed srcs ) {
         // (__sx_lendy's cheap tests first — most values here lend nothing
         // — then the type, whose LLVM spelling nurl_llty builds, and the
@@ -55999,6 +56082,10 @@ unsafe @ gen_assign i lex i syms i cg → s {
             ? ! ( seq __fs_sx `-` ) { ( bck_stash_vpass __fs_obj __fs_line `=.` 1 __fs_sx ) } {}
         } {}
     } {}
+    // (…and one whose names lead to parameters, stored into a field of a
+    // local — by any spelling, a nested path's too — puts them into it:
+    // __pd_field_put, agora #786.)
+    ? & & ! manual ! indirect | != 0 g_cur_rc & != 0 g_bck_closure_depth ( __fn_rc_param syms ) { ( __pd_field_put syms __fs_obj0 __fs_tt __fs_val __fs_ty __fs_sxn0 ) } {}
     // An element read through a pointer and written back through one
     // (`: item . p k … = . p k item`) is put back, not copied.
     : ~ b __fs_wb F
