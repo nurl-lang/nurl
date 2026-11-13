@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+key 0: q name, long enough for a heap buffer / r extra, long enough for a heap buffer
+key 1: q name, long enough for a heap buffer / o extra, long enough for a heap buffer
+other 0: r name, long enough for a heap buffer / q extra, long enough for a heap buffer
+other 1: o name, long enough for a heap buffer / q extra, long enough for a heap buffer
+call 0: q name, long enough for a heap buffer / r extra, long enough for a heap buffer
+call 1: q name, long enough for a heap buffer / o extra, long enough for a heap buffer

@@ -34356,31 +34356,59 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
                 } {}
                 // The values the cursor's own fields replaced go, and its
                 // fields are the binding's.
-                : ~ s fr ( nurl_sym_get g_fn_escapes ( nurl_str_cat3 qp `__ff` ( nurl_str_int g_ff_gen ) ) )
-                ~ != 0 ( nurl_str_len fr ) {
-                    = fr ( str_skip_word fr )
-                    : s f ( str_first_word fr ) = fr ( str_skip_word fr )
-                    : s fty ( str_first_word fr ) = fr ( str_skip_word fr )
-                    = fr ( str_skip_word fr )
-                    : s o ( str_first_word fr ) = fr ( str_skip_word fr )
-                    : s fv ( nurl_cg_reg cg )
-                    ( nurl_print `  ` ) ( nurl_print fv ) ( nurl_print ` = load i1, ptr ` ) ( nurl_print f ) ( nurl_print `\n` )
-                    : s c ( __and_i1 cg fv sq )
-                    : s ov ( nurl_cg_reg cg )
-                    ( nurl_print `  ` ) ( nurl_print ov ) ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty fty ) ) ( nurl_print `, ptr ` ) ( nurl_print o ) ( nurl_print `\n` )
-                    ( __handle_drop_ensure fty )
-                    ( __dropifv_request fty )
-                    ( nurl_print `  call void @__dropifv_` ) ( nurl_print ( __drop_mangle fty ) ) ( nurl_print `(i1 ` ) ( nurl_print c )
-                    ( nurl_print `, ` ) ( nurl_print ( nurl_llty fty ) ) ( nurl_print ` ` ) ( nurl_print ov ) ( nurl_print `)\n` )
-                    : s nsq ( nurl_cg_reg cg )
-                    ( nurl_print `  ` ) ( nurl_print nsq ) ( nurl_print ` = xor i1 ` ) ( nurl_print sq ) ( nurl_print `, 1\n` )
-                    : s nf ( __and_i1 cg fv nsq )
-                    ( nurl_print `  store i1 ` ) ( nurl_print nf ) ( nurl_print `, ptr ` ) ( nurl_print f ) ( nurl_print `\n` )
-                }
+                ( __ff_take_back cg qp sq )
                 = acc ? == 0 ( nurl_str_len acc ) ( nurl_str_cat sq `` ) {
                     : s o2 ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print o2 ) ( nurl_print ` = or i1 ` ) ( nurl_print acc ) ( nurl_print `, ` ) ( nurl_print sq ) ( nurl_print `\n` )
                     o2
+                }
+            } {}
+        } {}
+        // (…or a binding that only borrows, with fields of its own and no
+        // cursor link — `: ~ P q ? c o r`, bound from a join: on the runs
+        // it holds optr's value, which its own key, the fields it replaced
+        // put back, says — a buffer has one owner — it is given back as a
+        // cursor's is. Taken for another value, the old one was dropped
+        // under the fields q still shared with it: agora #819.)
+        : s bp ? ( seq w name ) `` ? != 0 ( nurl_str_len qp ) ( nurl_str_cat qp `` ) ( nurl_sym_get2 syms w `__ptr` )
+        ? & & != 0 ( nurl_str_len bp ) ! ( str_contains_word ( nurl_sym_get2 syms bp `__alias` ) optr ) != 0 ( nurl_sym_len g_fn_escapes ( nurl_str_cat3 bp `__ff` ( nurl_str_int g_ff_gen ) ) ) {
+            ? == 0 ( nurl_str_len of ) { = of ( mem_udrop_flag_get syms cg optr ) } {}
+            : s ll ( nurl_llty vt )
+            : s qv ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print qv ) ( nurl_print ` = load ` ) ( nurl_print ll ) ( nurl_print `, ptr ` ) ( nurl_print bp ) ( nurl_print `\n` )
+            : s rv ( __ff_orig_value cg bp ll qv )
+            : s ov0 ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print ov0 ) ( nurl_print ` = load ` ) ( nurl_print ll ) ( nurl_print `, ptr ` ) ( nurl_print optr ) ( nurl_print `\n` )
+            : s rk ( mem_ud_ident_key cg vt rv )
+            : s ok ( mem_ud_ident_key cg vt ov0 )
+            ? & != 0 ( nurl_str_len rk ) != 0 ( nurl_str_len ok ) {
+                : s eq ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print eq ) ( nurl_print ` = icmp eq i8* ` ) ( nurl_print rk ) ( nurl_print `, ` ) ( nurl_print ok ) ( nurl_print `\n` )
+                : s nn ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print nn ) ( nurl_print ` = icmp ne i8* ` ) ( nurl_print ok ) ( nurl_print `, null\n` )
+                : ~ s sq ( __and_i1 cg ( __and_i1 cg eq nn ) of )
+                // (…q holding no value of its own: its flag, where it has one.)
+                ? != 0 ( nurl_sym_len2 syms bp `__live` ) {
+                    : s bf ( mem_udrop_flag_get syms cg bp )
+                    : s nbf ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print nbf ) ( nurl_print ` = xor i1 ` ) ( nurl_print bf ) ( nurl_print `, 1\n` )
+                    = sq ( __and_i1 cg sq nbf )
+                } {}
+                // (Through a call: and the result is q's value.)
+                ? ! direct {
+                    : s qk ( mem_ud_ident_key cg vt qv )
+                    : s nk ( mem_ud_ident_key cg vt nv )
+                    ? | == 0 ( nurl_str_len qk ) == 0 ( nurl_str_len nk ) { = sq ( nurl_str_cat `false` `` ) } {
+                        : s eq2 ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print eq2 ) ( nurl_print ` = icmp eq i8* ` ) ( nurl_print nk ) ( nurl_print `, ` ) ( nurl_print qk ) ( nurl_print `\n` )
+                        = sq ( __and_i1 cg sq eq2 )
+                    }
+                } {}
+                ( __ff_take_back cg bp sq )
+                = acc ? == 0 ( nurl_str_len acc ) ( nurl_str_cat sq `` ) {
+                    : s o3 ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print o3 ) ( nurl_print ` = or i1 ` ) ( nurl_print acc ) ( nurl_print `, ` ) ( nurl_print sq ) ( nurl_print `\n` )
+                    o3
                 }
             } {}
         } {}
@@ -34390,6 +34418,67 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
     ( nurl_print `  ` ) ( nurl_print nk ) ( nurl_print ` = xor i1 ` ) ( nurl_print acc ) ( nurl_print `, 1\n` )
     ( mem_udrop_flag_set syms cg optr ( __and_i1 cg ( mem_udrop_flag_get syms cg optr ) nk ) )
     ^ acc
+}
+
+// On the runs `sq` holds, binding `qp` gives its fields of its own
+// (mem_ff_slot) to the slot it is written back to: each value one of them
+// replaced — the slot's own, kept by the first store — goes, and the
+// fields' flags clear. (mem_ff_write_back.)
+@ __ff_take_back i cg s qp s sq → v {
+    : ~ s fr ( nurl_sym_get g_fn_escapes ( nurl_str_cat3 qp `__ff` ( nurl_str_int g_ff_gen ) ) )
+    ~ != 0 ( nurl_str_len fr ) {
+        = fr ( str_skip_word fr )
+        : s f ( str_first_word fr ) = fr ( str_skip_word fr )
+        : s fty ( str_first_word fr ) = fr ( str_skip_word fr )
+        = fr ( str_skip_word fr )
+        : s o ( str_first_word fr ) = fr ( str_skip_word fr )
+        : s fv ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print fv ) ( nurl_print ` = load i1, ptr ` ) ( nurl_print f ) ( nurl_print `\n` )
+        : s c ( __and_i1 cg fv sq )
+        : s ov ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print ov ) ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty fty ) ) ( nurl_print `, ptr ` ) ( nurl_print o ) ( nurl_print `\n` )
+        ( __handle_drop_ensure fty )
+        ( __dropifv_request fty )
+        ( nurl_print `  call void @__dropifv_` ) ( nurl_print ( __drop_mangle fty ) ) ( nurl_print `(i1 ` ) ( nurl_print c )
+        ( nurl_print `, ` ) ( nurl_print ( nurl_llty fty ) ) ( nurl_print ` ` ) ( nurl_print ov ) ( nurl_print `)\n` )
+        : s nsq ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print nsq ) ( nurl_print ` = xor i1 ` ) ( nurl_print sq ) ( nurl_print `, 1\n` )
+        : s nf ( __and_i1 cg fv nsq )
+        ( nurl_print `  store i1 ` ) ( nurl_print nf ) ( nurl_print `, ptr ` ) ( nurl_print f ) ( nurl_print `\n` )
+    }
+}
+
+// Binding `qp`'s value `qv` (LLVM type `ll`) as it was before it gave
+// fields values of its own: each such field's first replaced value (the
+// slot mem_ff_slot keeps) put back where its flag is set. A copy in a
+// scratch slot; nothing of it is owned.
+@ __ff_orig_value i cg s qp s ll s qv → s {
+    : s t ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print t ) ( nurl_print ` = alloca ` ) ( nurl_print ll ) ( nurl_print `\n` )
+    ( nurl_print `  store ` ) ( nurl_print ll ) ( nurl_print ` ` ) ( nurl_print qv ) ( nurl_print `, ptr ` ) ( nurl_print t ) ( nurl_print `\n` )
+    : ~ s fr ( nurl_sym_get g_fn_escapes ( nurl_str_cat3 qp `__ff` ( nurl_str_int g_ff_gen ) ) )
+    ~ != 0 ( nurl_str_len fr ) {
+        : s idx ( str_first_word fr ) = fr ( str_skip_word fr )
+        : s f ( str_first_word fr ) = fr ( str_skip_word fr )
+        : s fty ( str_first_word fr ) = fr ( str_skip_word fr )
+        = fr ( str_skip_word fr )
+        : s o ( str_first_word fr ) = fr ( str_skip_word fr )
+        : s fl ( nurl_llty fty )
+        : s gp ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print gp ) ( nurl_print ` = getelementptr ` ) ( nurl_print ll ) ( nurl_print `, ptr ` ) ( nurl_print t ) ( nurl_print `, i32 0` ) ( nurl_print ( __ff_gep_path idx ) ) ( nurl_print `\n` )
+        : s cur ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print cur ) ( nurl_print ` = load ` ) ( nurl_print fl ) ( nurl_print `, ptr ` ) ( nurl_print gp ) ( nurl_print `\n` )
+        : s fv ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print fv ) ( nurl_print ` = load i1, ptr ` ) ( nurl_print f ) ( nurl_print `\n` )
+        : s ov ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print ov ) ( nurl_print ` = load ` ) ( nurl_print fl ) ( nurl_print `, ptr ` ) ( nurl_print o ) ( nurl_print `\n` )
+        : s sel ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print sel ) ( nurl_print ` = select i1 ` ) ( nurl_print fv ) ( nurl_print `, ` ) ( nurl_print fl ) ( nurl_print ` ` ) ( nurl_print ov ) ( nurl_print `, ` ) ( nurl_print fl ) ( nurl_print ` ` ) ( nurl_print cur ) ( nurl_print `\n` )
+        ( nurl_print `  store ` ) ( nurl_print fl ) ( nurl_print ` ` ) ( nurl_print sel ) ( nurl_print `, ptr ` ) ( nurl_print gp ) ( nurl_print `\n` )
+    }
+    : s r ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ` = load ` ) ( nurl_print ll ) ( nurl_print `, ptr ` ) ( nurl_print t ) ( nurl_print `\n` )
+    ^ r
 }
 
 // Does cursor `qp` stand for `optr`'s value alone: every word of its
