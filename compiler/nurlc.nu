@@ -57344,6 +57344,7 @@ unsafe @ __replaces_note i syms s name s field → v {
                                 ? ( __type_needs_drop ftype syms ) { ( __replaces_note syms __rp_root ? != 0 ( nurl_str_len __nl_root ) ( __path_head ( nurl_sym_get syms `__last_nested_names__` ) ) fname ) } {}
                             } {}
                             ( __clo_note_fassigned syms __rp_root ftype )
+                            ( __clo_field_cs syms __rp_root ftype __fs_tt __fs_v0 )
                             ( __clo_cond_off_field __rp_root ftype )
                             ? & != 0 ( nurl_str_len __nl_root ) ( __type_needs_drop ftype syms ) {
                                 ( __iter_assign_check lex __fs_l0 ( nurl_str_cat4 __nl_root `.` ( nurl_sym_get syms `__last_nested_names__` ) ( nurl_str_cat `.` fname ) ) )
@@ -57540,6 +57541,7 @@ unsafe @ __replaces_note i syms s name s field → v {
                     ? ( __type_needs_drop ftype syms ) { ( __replaces_note syms obj_name fname ) } {}
                 } {}
                 ( __clo_note_fassigned syms obj_name ftype )
+                ( __clo_field_cs syms obj_name ftype __fs_tt __fs_v1 )
                 ( __clo_cond_off_field obj_name ftype )
                 ? & != 0 ( nurl_str_len obj_name ) | ( __type_needs_drop ftype syms ) ( __is_closure_ty ftype ) { ( __iter_assign_check lex __fs_l1 ( nurl_str_cat3 obj_name `.` fname ) ) ? != 0 g_bck_closure_depth { ( __clo_assign_note syms ( nurl_str_cat3 obj_name `.` fname ) ftype ) } {} ( bck_stash_fieldset ( nurl_str_cat3 obj_name `.` fname ) __fs_l1 ) ? ( bck_sound ) { ( __ptr_kill obj_name __fs_l1 ) } {} } {}
                 : s gep ( nurl_cg_reg cg )
@@ -79055,6 +79057,21 @@ unsafe @ __clo_nodes_close → v {
     }
 }
 
+// A field of binding `root` of type `ftype` is given the value spelled from
+// `tt`/`val`: the binding may now hold the closures that value is, and
+// carries their captures from here on, as an initialiser's or a call
+// argument's do — `= . h f \ → … q …` in a maker that hands `h` back
+// (agora #718).
+@ __clo_field_cs i syms s root s ftype i tt s val → v {
+    ? == 0 ( nurl_str_len root ) { ^ v } {}
+    ? ! | ( __is_closure_ty ftype ) ( __ts_may_hold_closures ftype syms ) { ^ v } {}
+    : s c ( __clo_cs_expr syms tt val ftype )
+    ? == 0 ( nurl_str_len c ) { ^ v } {}
+    : ~ s old ( nurl_sym_get2 syms root `__clocs` )
+    ? ( seq old `-` ) { = old `` } {}
+    ( nurl_sym_set_deep syms ( nurl_str_cat root `__clocs` ) ( __bar_union old c ) )
+}
+
 // A closure-typed binding `name` takes the CS of its initialiser (`grow`:
 // an assignment, which adds to what it may already hold).
 @ __clo_bind_cs i syms s name s ty i tt s val b grow → v {
@@ -79108,6 +79125,9 @@ unsafe @ __cc_note_call i syms s call_name s fname s arg_cs s arg_tys s arg_ids 
     : ~ i aci 0
     ~ & ! any < aci acn { ? != ( nurl_str_at arg_cs_p acn aci ) 59 { = any T } {} = aci + aci 1 }
     : b rclo | ( __is_closure_ty rlt ) ( __ts_may_hold_closures rlt syms )
+    // (What the callee stores into a closure-holding argument: that
+    // argument's binding holds it from here on — __cc_store_ref.)
+    ? ! shadowed { ( __cc_store_ref syms call_name fname arg_cs arg_tys arg_ids ) } {}
     ? & ! any ! rclo { ^ v } {}
     // A closure handed to a call alongside a binding that is not itself a
     // thread-shared handle (a router, a spec being filled): the binding may
@@ -79116,7 +79136,11 @@ unsafe @ __cc_note_call i syms s call_name s fname s arg_cs s arg_tys s arg_ids 
     : ~ i ci 0
     : ~ s ct ( __semi_nth arg_tys 0 )
     ~ != 0 ( nurl_str_len ct ) {
-        ? ( __is_closure_ty ct ) { = capcs ( __bar_union capcs ( __cc_capture_atoms ( __semi_nth arg_cs ci ) ) ) } {}
+        // (…or a value that holds one — a struct with a closure field, an
+        // option of one, a Vec of them: `( vec_push hs @ H { clo 1 } )`
+        // teaches `hs` the closure's captures as `( vec_push fs clo )` does;
+        // agora #665, #718.)
+        ? | ( __is_closure_ty ct ) ( __ts_may_hold_closures ct syms ) { = capcs ( __bar_union capcs ( __cc_capture_atoms ( __semi_nth arg_cs ci ) ) ) } {}
         = ci + ci 1
         = ct ( __semi_nth arg_tys ci )
     }
@@ -79130,6 +79154,7 @@ unsafe @ __cc_note_call i syms s call_name s fname s arg_cs s arg_tys s arg_ids 
                 : ~ s old ( nurl_sym_get2 syms nm `__clocs` )
                 ? ( seq old `-` ) { = old `` } {}
                 ( nurl_sym_set_deep syms ( nurl_str_cat nm `__clocs` ) ( __bar_union old capcs ) )
+                ( __cc_store_note syms nm capcs )
             } {}
             = ri + ri 1
         }
@@ -79196,6 +79221,145 @@ unsafe @ __cc_note_call i syms s call_name s fname s arg_cs s arg_tys s arg_ids 
         } {}
         = k + k 1
     }
+}
+
+// Parameter `nm` of the function being compiled is handed closures whose
+// CS is `cs` (stored into it — `( vec_push makers \ → … )`): what a call of
+// this function stores into its argument K (`storecs##F##K`), which the
+// call's binding of that argument then holds (__cc_store_ref; agora #717).
+// (A closure body's own parameters are no function's: left out.)
+@ __cc_store_note i syms s nm s cs → v {
+    ? | != 0 g_bck_closure_depth == 0 ( nurl_str_len cs ) { ^ v } {}
+    : i k ( nurl_sym_word_index syms `__fn_param_names__` nm )
+    ? < k 0 { ^ v } {}
+    : s sf ( nurl_sym_get syms `__fn_self_name__` )
+    : s key ( nurl_str_cat4 `storecs##` sf `##` ( nurl_str_int k ) )
+    ( nurl_sym_def g_pending_impl key ( __bar_union ( nurl_sym_get g_pending_impl key ) cs ) )
+    ( nurl_sym_def g_pending_impl ( nurl_str_cat `storecs##` sf ) `1` )
+}
+
+// A call of `call_name` (generic `fname`): each argument K whose binding
+// may hold closures, where the callee stores some (`storecs##F##K`) — or
+// may, compiled after this call — holds what it stores from here on: a
+// reference `^n#K` to this call (`ccsto#n`, its arguments' CSs), expanded
+// at module end when every summary is final (__cc_expand, __cc_sto_ref).
+// A forwarder's parameter passes it on to its own callers (__cc_store_note).
+unsafe @ __cc_store_ref i syms s call_name s fname s arg_cs s arg_tys s arg_ids → v {
+    // (Asked of every call. Only an argument whose type can hold a closure
+    // without being one — a Vec of closures, a struct with a closure field —
+    // can learn anything here, and which of a callee's parameters are such
+    // is the callee's to answer once (`ccmhc##`, `-` for none): nearly every
+    // call is answered by that one lookup. Of those, only a binding, not a
+    // temporary. A call whose arguments are numbers, strings and pointers —
+    // no named struct `%…`, no aggregate `{…}` — is answered before it.)
+    ? && < ( nurl_str_find arg_tys `%` ) 0 < ( nurl_str_find arg_tys `{` ) 0 { ^ v } {}
+    : ~ s mh ( nurl_sym_get2 g_pending_impl `ccmhc##` call_name )
+    ? == 0 ( nurl_str_len mh ) {
+        : ~ i ti 0
+        : ~ s tt ( __semi_nth arg_tys 0 )
+        ~ != 0 ( nurl_str_len tt ) {
+            : i c0 ( nurl_str_get tt 0 )
+            ? | == c0 37 == c0 123 {
+                ? && ( __ts_may_hold_closures tt syms ) ! ( __is_closure_ty tt ) { = mh ( __word_add mh ( nurl_str_int ti ) ) } {}
+            } {}
+            = ti + ti 1
+            = tt ( __semi_nth arg_tys ti )
+        }
+        ? == 0 ( nurl_str_len mh ) { = mh ( nurl_str_cat `-` `` ) } {}
+        ( nurl_sym_def g_pending_impl ( nurl_str_cat `ccmhc##` call_name ) mh )
+    } {}
+    ? ( seq mh `-` ) { ^ v } {}
+    : ~ b cand F
+    : ~ i ci 0
+    : ~ s cr ( nurl_str_cat arg_ids `` )
+    ~ & ! cand != 0 ( nurl_str_len cr ) {
+        : s nm ( str_first_word cr ) = cr ( str_skip_word cr )
+        ? && ! ( seq nm `-` ) ( str_contains_word mh ( nurl_str_int ci ) ) { = cand != 0 ( nurl_sym_len2 syms nm `__ptr` ) } {}
+        = ci + ci 1
+    }
+    ? ! cand { ^ v } {}
+    // (A callee compiled already that stores no closure into a parameter:
+    // nothing.)
+    : b known || != 0 ( nurl_sym_len2 syms call_name `__body_done` ) != 0 ( nurl_sym_len2 syms fname `__body_done` )
+    ? known {
+        ? && == 0 ( nurl_sym_len2 g_pending_impl `storecs##` call_name ) == 0 ( nurl_sym_len2 g_pending_impl `storecs##` fname ) { ^ v } {}
+    } {}
+    : ~ i ri 0
+    : ~ i n -1
+    : ~ s rest ( nurl_str_cat arg_ids `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s nm ( str_first_word rest ) = rest ( str_skip_word rest )
+        : b bound && ! ( seq nm `-` ) != 0 ( nurl_sym_len2 syms nm `__ptr` )
+        : s rt ? bound ( __semi_nth arg_tys ri ) ( nurl_str_cat `` `` )
+        ? && bound && ( __ts_may_hold_closures rt syms ) ! ( __is_closure_ty rt ) {
+            : s rks ( nurl_str_int ri )
+            : b may ? known | != 0 ( nurl_sym_len g_pending_impl ( nurl_str_cat4 `storecs##` call_name `##` rks ) ) != 0 ( nurl_sym_len g_pending_impl ( nurl_str_cat4 `storecs##` fname `##` rks ) ) T
+            ? may {
+                ? < n 0 {
+                    = n ( nurl_str_to_int ( nurl_sym_get g_pending_impl `ccsto_n` ) )
+                    ( nurl_sym_def g_pending_impl `ccsto_n` ( nurl_str_int + n 1 ) )
+                    ( nurl_sym_def g_pending_impl ( nurl_str_cat `ccsto#` ( nurl_str_int n ) ) ( nurl_str_cat3 call_name ` ` fname ) )
+                    ( nurl_sym_def g_pending_impl ( nurl_str_cat3 `ccsto#` ( nurl_str_int n ) `#args` ) arg_cs )
+                } {}
+                : s ref ( nurl_str_cat4 `^` ( nurl_str_int n ) `#` rks )
+                : ~ s old ( nurl_sym_get2 syms nm `__clocs` )
+                ? ( seq old `-` ) { = old `` } {}
+                ( nurl_sym_set_deep syms ( nurl_str_cat nm `__clocs` ) ( __bar_add old ref ) )
+                ( __cc_store_note syms nm ref )
+            } {}
+        } {}
+        = ri + ri 1
+    }
+}
+
+// What call `n` (`ref` is `n#K`) stores into its argument K, in the terms of
+// the function that made the call: the callee's `storecs##F##K`, each `?pJ`
+// filled in from the call's argument J, each reference the callee made to a
+// call of its own (`^m#I`) resolved the same way first.
+// Each answered once, at module end, where every summary is final
+// (`ccstom#`): a binding a run of calls stores into holds a reference to
+// each, and each call's arguments hold the references made before it, so
+// unanswered, the sixty `( __mcp_add srv … )` of packages/anomaly's MCP
+// server were expanded 2^60 times. A reference met again while it is being
+// answered is a cycle — a helper storing into its parameter through itself
+// — and answers `?`, as one too deep to follow does (one first met that
+// deep is not kept: met nearer, it is answered whole).
+@ __cc_sto_ref s ref i depth → s {
+    : s mk ( nurl_str_cat `ccstom#` ref )
+    : s memo ( nurl_sym_get g_pending_impl mk )
+    ? != 0 ( nurl_str_len memo ) { ^ ( nurl_str_slice memo 1 - ( nurl_str_len memo ) 1 ) } {}
+    ? > depth 8 { ^ ( nurl_str_cat `?` `` ) } {}
+    : i h ( nurl_str_find ref `#` )
+    ? < h 0 { ^ ( nurl_str_cat `?` `` ) } {}
+    : s ns ( nurl_str_slice ref 0 h )
+    : s ks ( nurl_str_slice ref + h 1 - - ( nurl_str_len ref ) h 1 )
+    : s ce ( nurl_sym_get g_pending_impl ( nurl_str_cat `ccsto#` ns ) )
+    : s args ( nurl_sym_get g_pending_impl ( nurl_str_cat3 `ccsto#` ns `#args` ) )
+    : s cn ( str_first_word ce )
+    : s gn ( str_first_word ( str_skip_word ce ) )
+    : s st ( __bar_union ( nurl_sym_get g_pending_impl ( nurl_str_cat4 `storecs##` cn `##` ks ) ) ( nurl_sym_get g_pending_impl ( nurl_str_cat4 `storecs##` gn `##` ks ) ) )
+    ( nurl_sym_def g_pending_impl mk `:?` )
+    : s res ( __cc_sto_subst st args depth )
+    ( nurl_sym_def g_pending_impl mk ( nurl_str_cat `:` res ) )
+    ^ res
+}
+
+// `cs` (atoms in a callee's terms) in a call's: `?pJ` is the call's argument
+// J (`args`), a reference `^m#I` the callee made is resolved and filled in.
+@ __cc_sto_subst s cs s args i depth → s {
+    : ~ s r ( nurl_str_cat cs `` )
+    : ~ s out ``
+    ~ != 0 ( nurl_str_len r ) {
+        : s u ( __bar_first r ) = r ( __bar_rest r )
+        ? & > ( nurl_str_len u ) 2 ( seq ( nurl_str_slice u 0 2 ) `?p` ) {
+            = out ( __bar_union out ( __cc_expand ( __semi_nth args ( nurl_str_to_int ( nurl_str_slice u 2 - ( nurl_str_len u ) 2 ) ) ) + depth 1 ) )
+        } {
+            ? & > ( nurl_str_len u ) 1 == ( nurl_str_get u 0 ) 94 {
+                = out ( __bar_union out ( __cc_sto_subst ( __cc_sto_ref ( nurl_str_slice u 1 - ( nurl_str_len u ) 1 ) + depth 1 ) args + depth 1 ) )
+            } { = out ( __bar_add out u ) }
+        }
+    }
+    ^ out
 }
 
 // `cs` with every `=` tag dropped.
@@ -79278,7 +79442,7 @@ unsafe @ __cc_note_call i syms s call_name s fname s arg_cs s arg_tys s arg_ids 
 // closure-holding value through a NURL return answers nothing; a chain
 // deeper than 8 answers `?`.
 @ __cc_expand s cs i depth → s {
-    ? == ( nurl_str_find cs `@` ) -1 { ^ ( nurl_str_cat cs `` ) } {}
+    ? & == ( nurl_str_find cs `@` ) -1 == ( nurl_str_find cs `^` ) -1 { ^ ( nurl_str_cat cs `` ) } {}
     ? > depth 8 { ^ ( nurl_str_cat `?` `` ) } {}
     : ~ s r ( nurl_str_cat cs `` )
     : ~ s out ``
@@ -79299,7 +79463,12 @@ unsafe @ __cc_note_call i syms s call_name s fname s arg_cs s arg_tys s arg_ids 
                     } { = out ( __bar_union out ( __cc_expand w + depth 1 ) ) }
                 }
             }
-        } { = out ( __bar_add out u ) }
+        } {
+            // (What a call stored into the binding: agora #717.)
+            ? & > ( nurl_str_len u ) 1 == ( nurl_str_get u 0 ) 94 {
+                = out ( __bar_union out ( __cc_expand ( __cc_sto_ref ( nurl_str_slice u 1 - ( nurl_str_len u ) 1 ) + depth 1 ) + depth 1 ) )
+            } { = out ( __bar_add out u ) }
+        }
     }
     ^ out
 }

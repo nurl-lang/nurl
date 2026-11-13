@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_sync_closure_in_a_struct_in_a_vec_in_an_arc.nu:27:5: error: 'arc_new' keeps this value inside the '( Arc ( Vec Holder ) )' it returns, a handle shared across threads, where several threads may run the closure at once, but the closure built on line 23 gives 'a' away when it runs (its body hands it over to a callee, a container or a value that takes it): the closure can run once, and two threads running it at once would both take the one value, which is then released twice. Give each thread a value of its own (a closure built for each thread, over its own copy), or keep the value outside the shared closure and let the closure read it.
+    : ( Arc ( Vec Holder ) ) shared ( arc_new [( Vec Holder )] hv )
+    ^
