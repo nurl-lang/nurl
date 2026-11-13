@@ -60536,7 +60536,7 @@ unsafe @ __replaces_note_io i syms s name s field → v {
                 ? == __bck_k 4 { ( warn_pos lex __fs_ol __fs_oc ( __fs_borrowed_copy_lost 4 obj_name fname ( nurl_sym_get2 syms obj_name `__lendcopy` ) ) ) = __bck_k 0 } {}
                 ? != __bck_k 0 {
                     ? ( __type_needs_drop ftype syms ) { ( die_pos lex __fs_ol __fs_oc ( __fs_borrowed_copy_msg __bck_k obj_name fname ( llvm_to_nurl pt ) ) ) } {
-                        ? != __bck_k 1 { ( warn_pos lex __fs_ol __fs_oc ( __fs_borrowed_copy_lost __bck_k obj_name fname ( llvm_to_nurl pt ) ) ) } {}
+                        ? & != __bck_k 1 != __bck_k 5 { ( warn_pos lex __fs_ol __fs_oc ( __fs_borrowed_copy_lost __bck_k obj_name fname ( llvm_to_nurl pt ) ) ) } {}
                     }
                 } {}
                 ( __clo_note_fassigned syms obj_name ftype )
@@ -67564,6 +67564,10 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
             // temporaries. What the body stores or hands back is copied
             // (mem_lent_cond, gen_ret); released, it is an error.
             ( nurl_sym_def body_syms ( nurl_str_cat bpname `__cloparam` ) `1` )
+            // (Its slot is the body's own copy of the caller's value: a field
+            // store into it lands nowhere the caller looks —
+            // __fs_borrowed_copy_kind 5, agora #643.)
+            ( nurl_sym_def body_syms ( nurl_str_cat bpptr `__pslot` ) `1` )
         }
         // Mirror into the closure-local shadow-check roster.
         : s c_name_roster ( nurl_sym_get body_syms `__fn_param_names__` )
@@ -85283,7 +85287,9 @@ unsafe @ __clo_take_capture i syms i cg s name → v {
 // of the container's element, which the loop borrows (§5.4); 3: a closure
 // body's by-value capture — the body's copy, made at each call; 4: a
 // struct binding of a value a call lent (`: App e ( vec_at [App] ps 0 )`)
-// — a copy of the lent value, made by the `:` (agora #798). 0: none of
+// — a copy of the lent value, made by the `:` (agora #798); 5: a closure
+// literal's by-value parameter — the body's copy, as a function's is (1).
+// 0: none of
 // those (an owned local, an `inout` or `sink` parameter, a by-pointer
 // capture, a destructor's receiver).
 @ __fs_borrowed_copy_kind i syms s obj → i {
@@ -85294,9 +85300,23 @@ unsafe @ __clo_take_capture i syms i cg s name → v {
         ^ ? ( seq ( nurl_sym_get2 syms obj `__captured_byref` ) `1` ) 0 3
     } {}
     ? & != 0 ( nurl_str_len op ) != 0 ( nurl_sym_len2 syms op `__fe_copy` ) { ^ 2 } {}
-    ? & & & & != 0 ( nurl_str_len op ) != 0 ( nurl_sym_len2 syms op `__pslot` ) ! ( seq ( nurl_sym_get2 syms obj `__inout` ) `1` ) == 0 ( nurl_sym_len2 syms obj `__sinkp` ) == 0 ( nurl_str_len g_drop_glue_ty ) { ^ 1 } {}
+    ? & & & & != 0 ( nurl_str_len op ) != 0 ( nurl_sym_len2 syms op `__pslot` ) ! ( seq ( nurl_sym_get2 syms obj `__inout` ) `1` ) == 0 ( nurl_sym_len2 syms obj `__sinkp` ) == 0 ( nurl_str_len g_drop_glue_ty ) { ^ ? ( seq ( nurl_sym_get2 syms obj `__cloparam` ) `1` ) 5 1 } {}
     ? != 0 ( nurl_sym_len2 syms obj `__lendcopy` ) { ^ 4 } {}
     ^ 0
+}
+
+// The type of `src`: a binding (`ps`) or a field path of one (`w.apps`).
+@ __lendcopy_src_ty i syms s src → s {
+    : i d ( nurl_str_find src `.` )
+    ? < d 0 { ^ ( nurl_sym_get syms src ) } {}
+    ^ ( __clo_fpath_ty syms ( nurl_sym_get syms ( nurl_str_slice src 0 d ) ) ( nurl_str_slice src + d 1 - - ( nurl_str_len src ) d 1 ) )
+}
+
+// Does a value of type `st` hold values of struct type `ty` (`%App`) as its
+// elements or payload: `%Vec__App`, `%Rc__App`, `%Vec__Vec__App`?
+@ __lendcopy_holds s st s ty → b {
+    : s tag ( nurl_str_cat `__` ( nurl_str_slice ty 1 - ( nurl_str_len ty ) 1 ) )
+    ^ | != 0 ( nurl_str_ends st tag ) != -1 ( nurl_str_find st ( nurl_str_cat tag `__` ) )
 }
 
 // Is `ty` a program struct (`%Name`, with fields, not an enum)?
@@ -85314,18 +85334,28 @@ unsafe @ __clo_take_capture i syms i cg s name → v {
 // `( vec_at [App] . w apps 0 )`, `( rc_get [App] r )` — is a copy of the lent
 // value: a field store into it lands in that copy, and the lender keeps its
 // old value (agora #798). While that holds, `name__lendcopy` names what the
-// call lent out of (kind 4 above): the first source the walk gives the
-// call's result (`lend`, g_bck_rhs_lend; `-` is none). A value of the
-// binding's own — a fresh result, `mem_dup`, a copy the call made (`lcp`),
-// a call that answers per call whether it lent, a value block's copy —
-// leaves no mark; `=` of a new value clears it (gen_assign).
+// call lent out of (kind 4 above): a source the walk gives the call's
+// result (`lend`, g_bck_rhs_lend; `-` is none) that holds values of the
+// binding's type as its elements or payload — the value IS one of them, not
+// a fresh struct that views its argument (`: ZsDec d ( __zs_new src n )`).
+// A value of the binding's own — a fresh result, `mem_dup`, a copy the call
+// made (`lcp`), a call that answers per call whether it lent, a value
+// block's copy — leaves no mark, nor does a call to a program function not
+// compiled yet: its lends are every argument until its summary is written,
+// and it may hand back a fresh value. (A generic's instance is compiled
+// after its caller too — `__last_call_forward__` `vec_at__App vec_at` —
+// and is judged by its arguments' types, as above.) `=` of a new value
+// clears it (gen_assign).
 @ __lendcopy_note i syms s name s ty i rhs_tt s lend b blk_lend s lcp → v {
     : ~ s src ``
-    ? & & & & == rhs_tt TT_LPAREN ! blk_lend == 0 ( nurl_str_len lcp ) ! ( __call_answers syms rhs_tt ) ( __lc_struct_ty ty ) {
+    : s fw ( nurl_sym_get syms `__last_call_forward__` )
+    : s fwb ( str_first_word ( str_skip_word fw ) )
+    : b fw_ok | == 0 ( nurl_str_len fw ) & != 0 ( nurl_str_len fwb ) != 0 ( nurl_str_starts fw ( nurl_str_cat fwb `__` ) )
+    ? & & & & & == rhs_tt TT_LPAREN ! blk_lend == 0 ( nurl_str_len lcp ) ! ( __call_answers syms rhs_tt ) fw_ok ( __lc_struct_ty ty ) {
         : ~ s rest ( nurl_str_cat lend `` )
         ~ & == 0 ( nurl_str_len src ) != 0 ( nurl_str_len rest ) {
             : s w ( str_first_word rest ) = rest ( str_skip_word rest )
-            ? & != 0 ( nurl_str_len w ) ! ( seq w `-` ) { = src w } {}
+            ? & & != 0 ( nurl_str_len w ) ! ( seq w `-` ) ( __lendcopy_holds ( __lendcopy_src_ty syms w ) ty ) { = src w } {}
         }
     } {}
     ? != 0 ( nurl_str_len src ) { ( nurl_sym_def syms ( nurl_str_cat name `__lendcopy` ) src ) ^ } {}
@@ -85364,13 +85394,18 @@ unsafe @ __clo_take_capture i syms i cg s name → v {
         : s fix2 ( nurl_str_cat3 obj `' if this function owns the value (the old one is released, and the ` ( nurl_str_cat ty ` can be handed back with ^).` ) )
         ^ ( nurl_str_cat4 head why fix1 fix2 )
     } {}
+    ? == kind 5 {
+        : s why ( nurl_str_cat3 `' is a parameter of this closure, by value: the store lands in the body's own copy of the caller's ` ty `, the caller never sees it, and nothing would release the new value. ` )
+        : s fix ( nurl_str_cat3 `Take it 'inout' (\ inout ` ty ( nurl_str_cat3 ` ` obj ` → …) if the caller should see the new value, or have the closure return the new value.` ) )
+        ^ ( nurl_str_cat3 head why fix )
+    } {}
     ? == kind 2 {
         : s why ( nurl_str_cat `' is a loop element: a '~' loop lends each element and binds a copy of it, so the store lands in that copy — the container keeps its old value — and nothing would release the new one. ` `` )
         : s fix `Replace the element in the container instead (an index loop and vec_put / vec_set), or build the new values into another Vec.`
         ^ ( nurl_str_cat3 head why fix )
     } {}
     : s why ( nurl_str_cat `' is a capture of this closure, by value: the body works on its own copy, made at each call, so the binding outside never sees the store and nothing would release the new value. ` `` )
-    : s fix ( nurl_str_cat4 `Declare the binding mutable (': ~ ` ty ` ` ( nurl_str_cat obj `'), so the closure captures it by pointer and the store lands in it, or have the closure return the new value.` ) )
+    : s fix ( nurl_str_cat4 `Declare the binding mutable (': ~ ` ty ` ` ( nurl_str_cat obj `'; a parameter: copy it into such a binding first), so the closure captures it by pointer and the store lands in it, or have the closure return the new value.` ) )
     ^ ( nurl_str_cat3 head why fix )
 }
 
