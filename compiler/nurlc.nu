@@ -13062,6 +13062,11 @@ unsafe @ __hown_dyn_walk i syms s fname → b {
         { ( nurl_sym_def g_lint_fpend ( nurl_str_cat `owned @.__nurl_retown.` number ) `1` ) } {}
         ( nurl_print `@.__nurl_retdyn.` ) ( nurl_print number )
         ( nurl_print ` = private constant i1 ` ) ( nurl_print ? dyn `true` `false` ) ( nurl_print `\n` )
+        ? != 0 ( nurl_sym_len2 g_pending_impl `retslc##` number ) {
+            : b __rso | ( seq ( __ret_owned_of syms callee ) `1` ) ( seq ( __ret_owned_of syms generic ) `1` )
+            ( nurl_print `@.__nurl_retslc.` ) ( nurl_print number )
+            ( nurl_print ` = private constant i1 ` ) ( nurl_print ? __rso `true` `false` ) ( nurl_print `\n` )
+        } {}
     }
     // `@.__nurl_retone.N` (mem_hown_one_answer).
     : ~ s rones ( nurl_sym_get g_pending_impl `retones` )
@@ -13556,6 +13561,7 @@ unsafe @ origin_guard_retained i root → b {
     ( __clo_tmp_set `` )
     ( nurl_sym_def syms `__last_nurl_call__` ( nurl_sym_get2 syms cn `__nurl_ret` ) )
     ( nurl_sym_def syms `__last_call_name__` cn )
+    ( nurl_sym_def syms `__last_call_own_slc__` `` )
     // (What a callee's result views of its arguments is its walk's answer,
     // g_fn_rviews: a callee not compiled yet, or whose walk is parked until
     // the module has compiled, answers then — the caller's walk waits for
@@ -17018,7 +17024,7 @@ unsafe @ __rp_rhs_set b v → v { = g_rp_rhs_lit v }
         // lent it, agora #552.)
         : s __dte ( __clo_temp_owner syms v )
         ? != 0 ( nurl_str_len __dte ) { ( nurl_print `  call void @nurl_closure_drop(i8* ` ) ( nurl_print __dte ) ( nurl_print `)\n` ) } {}
-        ( nurl_sym_def syms `__last_call_name__` `` )
+        ( nurl_sym_def syms `__last_call_name__` `` ) ( nurl_sym_def syms `__last_call_own_slc__` `` )
         ( mem_retclo_take syms cg cr ty )
         ( __sx_publish __me __osx )
         ( nurl_set_last_type ty )
@@ -17044,7 +17050,7 @@ unsafe @ __rp_rhs_set b v → v { = g_rp_rhs_lit v }
         // which call made it describes it (mem_lent_cond / mem_call_retown
         // read the last call's answer — `( vec_push out ( mem_dup c ) )`
         // with c a `vec_get` payload copied the copy, and leaked one).
-        ( nurl_sym_def syms `__last_call_name__` `` )
+        ( nurl_sym_def syms `__last_call_name__` `` ) ( nurl_sym_def syms `__last_call_own_slc__` `` )
         ( nurl_sym_def syms `__last_call_forward__` `` )
         ( nurl_sym_def syms `__last_value_borrow__` `` )
         ( nurl_sym_def syms `__last_call_ret_view__` `` )
@@ -29787,8 +29793,13 @@ unsafe @ __bck_fall_ret_record i lex i syms i first_tt s first_val i sxn0 i line
     ? | | != rhs_tt TT_LPAREN ! ( mem_is_slice_ty vt ) ( mem_slice_owned syms name ) { ^ v } {}
     ? | == 0 ( nurl_str_len ptr ) != 37 ( nurl_str_get ptr 0 ) { ^ v } {}
     : s __scn ( nurl_sym_get syms `__last_call_name__` )
-    ? ! | ( __hown_dyn syms __scn ) & != 0 ( nurl_str_len __scn ) == 0 ( nurl_sym_len2 syms __scn `__body_done` ) { ^ v } {}
-    : s bit ( mem_call_retown syms cg )
+    // (Only a NURL function's, captured right after its call — mem_capture_hown:
+    // a closure or function-value call has no module-end answer of its own,
+    // and one handing back its borrowed argument would have been released
+    // here; agora #841.)
+    : s __sfwd ( nurl_sym_get syms `__last_call_own_slc__` )
+    ? ! | ( __hown_dyn syms __scn ) != 0 ( nurl_str_len __sfwd ) { ^ v } {}
+    : s bit ? != 0 ( nurl_str_len __sfwd ) ( nurl_str_cat __sfwd `` ) ( mem_call_retown syms cg )
     ? == 0 ( nurl_str_len bit ) { ^ v } {}
     ( mem_own_add syms name )
     ( mem_slice_decl_add syms name )
@@ -32841,6 +32852,7 @@ unsafe @ __pfo_bind_lends i syms s name → v {
 // static case back to that constant.
 @ mem_capture_hown i syms i cg s cn s gen s rlt → v {
     ( nurl_sym_def syms `__last_call_own__` `` )
+    ( nurl_sym_def syms `__last_call_own_slc__` `` )
     ? ! ( __is_hown_ty rlt ) { ^ v } {}
     : ~ s c ( nurl_sym_get syms `__last_call_name__` )
     : ~ s gn ``
@@ -32864,6 +32876,18 @@ unsafe @ __pfo_bind_lends i syms s name → v {
     ( nurl_print `, ptr @.__nurl_retown.` ) ( nurl_print k ) ( nurl_print `)\n` )
     ( nurl_sym_def syms `__last_call_own__` r )
     ( nurl_sym_def syms `__last_call_own_k__` k )
+    // (…and a slice from a callee compiled after this caller: its answer
+    // where it answers per call, else its static one, `__ret_owned` —
+    // `@.__nurl_retslc.N`, resolved at module end, the answer a caller
+    // compiled after it reads. The retown constant says "not a lend",
+    // which a slice field of a parameter is not; agora #510.)
+    ? & ( mem_is_slice_ty rlt ) == 0 ( nurl_sym_len2 syms c `__body_done` ) {
+        ( nurl_sym_def g_pending_impl ( nurl_str_cat `retslc##` k ) `1` )
+        : s r2 ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print r2 ) ( nurl_print ` = call i1 @__nurl_ret_own(ptr @.__nurl_retdyn.` ) ( nurl_print k )
+        ( nurl_print `, ptr @.__nurl_retslc.` ) ( nurl_print k ) ( nurl_print `)\n` )
+        ( nurl_sym_def syms `__last_call_own_slc__` r2 )
+    } {}
 }
 
 // The temporaries argument `arg_idx` (`av`, type `at`, spelled from token
