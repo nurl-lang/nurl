@@ -257,6 +257,10 @@
 : ~ i g_core_virt_n 0
 : ~ i g_core_virt_cap 0
 : ~ i g_core_virt_seen 0
+: ~ i g_core_callees 0  // the functions the IR called, interned, each once (core_note_callee)
+: ~ i g_core_callee_n 0
+: ~ i g_core_callee_cap 0
+: ~ i g_core_callee_seen 0
 : ~ i g_core_fns 0  // the functions built, 3 words each: name, template (interned), parameter count (core_note_fn)
 : ~ i g_core_fn_n 0
 : ~ i g_core_fn_cap 0
@@ -9867,9 +9871,30 @@ unsafe @ core_print_virts → v {
     }
 }
 
+// A function a call named: listed once, so that core_print_sums can say
+// what the walk holds of one that has no body here (a function of the
+// runtime, an extern).
+unsafe @ core_note_callee i callee → v {
+    : s cn # s callee
+    ? == 0 g_core_callee_seen { = g_core_callee_seen ( nurl_sym_new ) } {}
+    ? != 0 ( nurl_sym_len g_core_callee_seen cn ) { ^ } {}
+    ( nurl_sym_def g_core_callee_seen cn `1` )
+    ? >= g_core_callee_n g_core_callee_cap {
+        : i nc ? == g_core_callee_cap 0 256 * g_core_callee_cap 2
+        = g_core_callees ( __core_grown g_core_callees g_core_callee_n nc )
+        = g_core_callee_cap nc
+    } {}
+    : *i ca # *i # s g_core_callees
+    = . ca g_core_callee_n callee
+    = g_core_callee_n + g_core_callee_n 1
+}
+
 // A call through a closure value (`ind`): the value is the first operand.
 unsafe @ core_call i h0 s ret_ty b ind → v {
-    ? & ! ind != 0 g_core_callee { ? >= ( nurl_str_find # s g_core_callee `__dyn__` ) 0 { ( core_note_virt g_core_callee ) } {} } {}
+    ? & ! ind != 0 g_core_callee {
+        ? >= ( nurl_str_find # s g_core_callee `__dyn__` ) 0 { ( core_note_virt g_core_callee ) } {}
+        ( core_note_callee g_core_callee )
+    } {}
     ? ( core_ty_scalar ret_ty ) {
         ( core_w CO_EVAL )
         ? ind { ( core_w RV_CALLIND ) } { ( core_w RV_CALL ) ( core_w g_core_callee ) }
@@ -10771,6 +10796,17 @@ unsafe @ core_print_sums i syms → v {
         } {}
         = k + k 3
     }
+    // …and each function called that was not built here.
+    : *i ca # *i # s g_core_callees
+    = k 0
+    ~ < k g_core_callee_n {
+        : s f ( nurl_str_cat # s . ca k `` )
+        ? == 0 ( nurl_sym_len seen f ) {
+            ( nurl_sym_def seen f `1` )
+            ( core_print_sum syms f 0 )
+        } {}
+        = k + k 1
+    }
     ( nurl_sym_free seen )
 }
 
@@ -10800,6 +10836,7 @@ unsafe @ core_flush i syms → v {
     ? != 0 g_core_tys { ( nurl_free # s g_core_tys ) = g_core_tys 0 = g_core_ty_n 0 = g_core_ty_cap 0 } {}
     ? != 0 g_core_virts { ( nurl_free # s g_core_virts ) = g_core_virts 0 = g_core_virt_n 0 = g_core_virt_cap 0 } {}
     ? != 0 g_core_fns { ( nurl_free # s g_core_fns ) = g_core_fns 0 = g_core_fn_n 0 = g_core_fn_cap 0 } {}
+    ? != 0 g_core_callees { ( nurl_free # s g_core_callees ) = g_core_callees 0 = g_core_callee_n 0 = g_core_callee_cap 0 } {}
 }
 
 @ __nest_enter i lex → v {

@@ -141,6 +141,17 @@ def derive(prog, fn, ws):
             "derived": True}
 
 
+def extern(ws):
+    """A function with no body in the program or the library (the runtime's,
+    an extern): it keeps no argument and changes none the walk knows of;
+    its result is the caller's own where the walk says so (`ret_owned`),
+    and nothing to follow otherwise."""
+    n = 16
+    return {"modes": ["in"] * n, "res": "own" if ws.get("ret_owned") else "none", "lends": [], "rholds": [],
+            "effects": [], "stores": [], "consumes": sorted(_idx(ws, "sink", n)),
+            "elems": [], "detaches": [], "invokes": [], "cloargs": [], "shares": [], "derived": True}
+
+
 def walk_answers(prog, name):
     """The walk's answers for `name`: its own, and its template's where its
     own are silent (the walk keys some answers by either)."""

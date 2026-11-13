@@ -250,6 +250,9 @@ class Reader:
                 ty = self.T.elem(ty)
             else:
                 nty, _ = self.T.field(ty, p)
+                if nty is None and ty is not None and ty[0] == "slice" and p == "length":
+                    # a slice's length: a number
+                    return ("c", ("i",))
                 if nty is None and ty is not None and ty[0] not in ("named",):
                     raise Unsupported(f"field {p} of {ty[0]}")
                 ty = nty

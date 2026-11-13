@@ -91,8 +91,12 @@ def verdict_nurlc(path):
         (derive.py); None for one the walk did not compile."""
         if n not in memo:
             fn = every.get(n)
-            ws = derive.walk_answers(prog, n) if fn is not None and prog.fn_flags[n] & 1 else {}
-            memo[n] = derive.derive(prog, fn, ws) if ws.get("body_done") else None
+            if fn is None:
+                # a function of the runtime, an extern: no body anywhere
+                memo[n] = derive.extern(prog.walk_sums[n]) if n in prog.walk_sums else None
+            else:
+                ws = derive.walk_answers(prog, n) if prog.fn_flags[n] & 1 else {}
+                memo[n] = derive.derive(prog, fn, ws) if ws.get("body_done") else None
         return memo[n]
     prog.derived = derived
 
@@ -132,8 +136,16 @@ def verdict_nurlc(path):
         for c in callees(every[n]):
             todo.append((c, src))
             todo.extend((m, src) for m in prog.virt.get(c, ()))
-    for fn in keep.values():
-        rd.lower_body(fn)
+    for n, fn in list(keep.items()):
+        try:
+            rd.lower_body(fn)
+        except Unsupported:
+            # a library function that reads a handle's own fields has no
+            # body the checker follows: the walk's answers stand for it
+            if not prog.fn_flags[n] & 1 or derived(n) is None:
+                raise
+            del keep[n]
+            trusted.discard(n)
     prog.fns = keep
     prog.trusted = trusted
     errors, summ = check_program(prog)
