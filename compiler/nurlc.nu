@@ -187,7 +187,7 @@
 : ~ i g_dup_nest -1  // the call depth of the last `( mem_dup x )` copy made in this expression, -1: none (agora #688)
 : ~ i g_use_sinkstr 0  // a call went through __nurl_sinkstr (mem_sink_str_arg)
 : ~ i g_fn_strp 0  // fn → its raw string params no summary may make a `sink` (__own_sink_str_params)
-: ~ b g_origin_arg_str F  // the argument origin_call_arg records is a raw string the compiler manages
+: ~ b g_origin_arg_str F  // the argument origin_call_arg records is one whose slot is emptied where it is handed over: a raw string the compiler manages, an `inout` handle parameter (agora #776)
 : ~ i g_use_ownstr 0  // a return went through __nurl_ownstr (gen_ret)
 : ~ i g_use_sltmask8 0  // a call of nurl_v128_sltmask8 (defined at module end, only then)
 : ~ s g_bck_own_params ``  // the parameters the function being walked owns (a safe `sink s`)
@@ -17341,7 +17341,7 @@ unsafe @ __kw_trim s raw → s {
         ? & & != 0 g_borrowck | ( is_ident_tok origin_tt ) == origin_tt TT_DOT ( bck_is_heap_lty ( nurl_llty at ) ) {
             ( die lex ( nurl_str_cat4 `argument '` ( nurl_sym_get syms ( __kw_key fname `pn` slot ) ) ( nurl_str_cat3 `' of '` fname `' holds heap storage, and this call names its arguments out of the order '` ) ( nurl_str_cat3 fname `' declares them: the borrow checker follows such an argument only in declaration order. Name them in the order '` ( nurl_str_cat fname `' declares them, or pass them positionally.` ) ) ) )
         } {}
-        = g_origin_arg_str & ( seq ( nurl_llty at ) `i8*` ) ( __auto_str_ctx )
+        = g_origin_arg_str | & ( seq ( nurl_llty at ) `i8*` ) ( __auto_str_ctx ) & ( is_ident_tok origin_tt ) ( __inout_handle_param syms origin_value )
         ( origin_call_arg syms origin_result fname slot origin_tt origin_value )
         = g_origin_arg_str F
         = string_transfers ( nurl_str_cat string_transfers
@@ -17983,6 +17983,20 @@ unsafe @ __sx_publish i me s sx → v {
     ^ T
 }
 
+// The one `inout` parameter of a handle type every word of `names` (a
+// join's selected bindings) is, `` otherwise — two of them, or another
+// binding among them, leave which one a path selected unknown.
+@ __join_io_handle i syms s names → s {
+    : s w0 ( str_first_word names )
+    ? | == 0 ( nurl_str_len w0 ) ! ( __inout_handle_param syms w0 ) { ^ ( nurl_str_cat `` `` ) } {}
+    : ~ s rest ( str_skip_word names )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ! ( seq w w0 ) { ^ ( nurl_str_cat `` `` ) } {}
+    }
+    ^ ( nurl_str_cat w0 `` )
+}
+
 // Is a word of `names` a whole `inout` parameter?
 @ __any_inout i syms s names → b {
     : ~ s rest ( nurl_str_cat names `` )
@@ -18388,7 +18402,8 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
     ? & & summary_callee ( is_ident_tok bck_arg_tt ) ! ( __safe_str_param syms bck_arg_val ) {
         // (…or the parameter whose own value this binding holds: __pmove_param.)
         : i param ( nurl_sym_word_index syms `__fn_param_names__` ( __pmove_param syms bck_arg_val ) )
-        ? >= param 0 {
+        // (Not an `inout` parameter of a handle type: bck_record_inferred_sink.)
+        ? & >= param 0 ! ( __inout_handle_param syms ( __pmove_param syms bck_arg_val ) ) {
             : s implication ( nurl_str_cat4 ( nurl_str_int param ) ` ` call_name
             ( nurl_str_cat4 ` ` fname ` ` ( nurl_str_int arg_idx ) ) )
             ( __park_append syms `__fn_pending_sink_impl__` implication )
@@ -19432,6 +19447,9 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // before mem_lent_cond takes the bit: mem_arg_temps.)
         : ~ s arg_join_own ``
         : ~ b arg_join_io F
+        // (…the one `inout` parameter of a handle type those paths select,
+        // whose slot is emptied on them: __join_io_handle, agora #776.)
+        : ~ s arg_join_ioh ``
         // (…and the bindings its arms lend, where it lends them on every
         // path — no ownership of its own published: agora #451.)
         : ~ s arg_join_ids ``
@@ -19657,6 +19675,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             // parameters: what it hands a `sink` on those paths is taken
             // over, as `( eat p )` takes it — agora #567.)
             = arg_join_io & | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST ( __all_inout syms ( nurl_sym_get syms `__last_phi_idents__` ) )
+            = arg_join_ioh ? arg_join_io ( __join_io_handle syms ( nurl_sym_get syms `__last_phi_idents__` ) ) ``
             = arg_lent ( mem_lent_cond syms cg at arg_eff_tt bck_arg_val )
             // (A call that may lend its result — by name, as a view, or on
             // some paths — for a value no copy can stand in for, h228.)
@@ -20549,7 +20568,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // for the returned-handle propagation after the call (§2.2). A
         // non-identifier argument holds the place with `-` so the list
         // stays index-addressable by bck_nth_word.
-        = g_origin_arg_str & ( seq ( nurl_llty at ) `i8*` ) ( __auto_str_ctx )
+        = g_origin_arg_str | | & ( seq ( nurl_llty at ) `i8*` ) ( __auto_str_ctx ) & ( is_ident_tok bck_arg_tt ) ( __inout_handle_param syms bck_arg_val ) != 0 ( nurl_str_len arg_join_ioh )
         ( origin_call_arg syms origin_result call_name arg_idx bck_arg_tt bck_arg_val )
         = g_origin_arg_str F
         ? ! __callee_shadowed {
@@ -21217,6 +21236,26 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             // as `( eat p )` does: arg_join_io, agora #567. The function
             // consumes that parameter for its caller, which drops nothing;
             // copied, the caller's value leaked.)
+            // (…emptying that parameter's slot on the paths that select it,
+            // as `( eat p )` empties it: its caller drops its binding as
+            // ever — agora #776.)
+            ? & != 0 ( nurl_str_len arg_join_ioh ) | summary_callee ( str_has_index callee_sink arg_idx ) {
+                : s __jz_p ( nurl_sym_get2 syms arg_join_ioh `__ptr` )
+                ? != 0 ( nurl_str_len __jz_p ) {
+                    : ~ s __jz_c ( nurl_str_cat `true` `` )
+                    ? ! ( str_has_index callee_sink arg_idx ) {
+                        = __jz_c ( nurl_cg_reg cg )
+                        ( emit_sink_flag_load ( nurl_str_cat `@.__nurl_sink.` ( nurl_str_int ( sink_flag call_name fname arg_idx ) ) ) __jz_c )
+                    } {}
+                    ? & != 0 ( nurl_str_len arg_join_own ) ! ( seq arg_join_own `true` ) {
+                        : s __jz_l ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print __jz_l ) ( nurl_print ` = xor i1 ` ) ( nurl_print arg_join_own ) ( nurl_print `, 1\n` )
+                        = __jz_c ( __and_i1 cg __jz_c __jz_l )
+                    } {}
+                    ( nurl_print `  call void @__nurl_zero_if.` ) ( nurl_print ( __zero_if_request ( nurl_llty at ) ) )
+                    ( nurl_print `(i1 ` ) ( nurl_print __jz_c ) ( nurl_print `, ptr ` ) ( nurl_print __jz_p ) ( nurl_print `)\n` )
+                } {}
+            } {}
             ? & & & | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST != 0 ( nurl_str_len arg_join_own ) ! ( seq arg_join_own `true` ) ! arg_join_io {
                 ? ( __clone_supported at syms ) {
                     : s __sjl ( nurl_cg_reg cg )
@@ -67834,6 +67873,16 @@ unsafe @ str_has_index s list i k → b {
 // body) becomes a borrow-checker error like the direct form already
 // is. Duplicates are skipped so an explicit `sink` declaration on
 // the same param is not double-listed.
+// Is `name` an `inout` parameter of a handle type — one whose slot this
+// function empties where it hands the value on (agora #778), so it is never
+// consumed (bck_record_inferred_sink, agora #776)?
+@ __inout_handle_param i syms s name → b {
+    ? ! ( seq ( nurl_sym_get2 syms name `__inout` ) `1` ) { ^ F } {}
+    // (Its binding's type is the pointer it is passed as.)
+    : s t ( nurl_sym_get syms name )
+    ^ ( __is_handle_ty ? & != 0 ( nurl_str_len t ) != 0 ( nurl_str_ends t `*` ) ( nurl_str_slice t 0 - ( nurl_str_len t ) 1 ) t )
+}
+
 @ bck_record_inferred_sink i syms s arg_name0 → v {
     : s arg_name ( __pmove_param syms arg_name0 )
     : s pn ( nurl_sym_get syms `__fn_param_names__` )
@@ -67841,6 +67890,13 @@ unsafe @ str_has_index s list i k → b {
     // (In safe code a raw string parameter is a `sink` only when declared
     // one: __own_sink_str_params.)
     ? ( __safe_str_param syms arg_name ) { ^ v } {}
+    // (An `inout` parameter of a handle type is not consumed: the caller's
+    // slot is emptied where this function hands its value on (gen_call,
+    // agora #778), and the caller drops its binding as ever — the empty
+    // value where it was taken, its own where it was not. Taken for
+    // consumed, the caller dropped nothing, and on a path that took
+    // nothing its value leaked: agora #776.)
+    ? & >= idx 0 ( __inout_handle_param syms arg_name ) { ^ v } {}
     ? & >= idx 0 ! ( __fn_param_raw syms ( nurl_sym_get syms `__fn_self_name__` ) idx )
     { : s cur ( nurl_sym_get syms `__fn_inferred_sink__` )
         : s new ( nurl_str_int idx )
@@ -68256,7 +68312,10 @@ unsafe @ origin_call_arg i syms i result s callee i index i tt s value → v {
     // when the string it holds is the one handed over, a copy goes
     // otherwise (mem_sink_str_arg) — so such a hand-off neither makes a
     // parameter a sink nor stops a binding from freeing what it still holds
-    // on the paths that do not hand it over.)
+    // on the paths that do not hand it over. So for an `inout` parameter of
+    // a handle type, whose caller's slot is emptied where it is handed on —
+    // gen_call, agora #778 — and whose caller drops its binding as ever:
+    // __inout_handle_param, agora #776.)
     ? ! g_origin_arg_str {
         : i consumer ( nurl_str_to_int ( nurl_sym_get syms `__origin_sink__` ) )
         ( origin_edge argument consumer ( origin_summary g_fn_sink callee ) index )
@@ -74125,6 +74184,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     ( nurl_sym_def syms `__origin_sink__` ( nurl_str_int ( origin_summary g_fn_sink fname ) ) )
     ( nurl_sym_def syms `__origin_escape__` ( nurl_str_int ( origin_summary g_fn_escapes fname ) ) )
     ( __own_sink_str_params syms cg fname sink_acc )
+    ( __note_ioh_params syms fname )
     : i __rp_d00 g_rp_d0
     : i __rp_c00 g_rp_calls
     : i __rp_n00 g_rp_nstmt
@@ -75249,6 +75309,24 @@ unsafe @ __alloca_struct_params i syms i cg → v {
 }
 
 // Is parameter `index` of `fname` a raw string no summary may make a sink?
+// …and this function's `inout` parameters of a handle type, which no
+// summary makes a `sink` either: the caller's slot is emptied where one is
+// handed on, and the caller drops its binding as ever (__inout_handle_param,
+// agora #776).
+@ __note_ioh_params i syms s fname → v {
+    : ~ s names ( nurl_sym_get syms `__fn_param_names__` )
+    : ~ i index 0
+    : ~ s add ``
+    ~ != 0 ( nurl_str_len names ) {
+        : s name ( str_first_word names ) = names ( str_skip_word names )
+        ? ( __inout_handle_param syms name ) { = add ? == 0 ( nurl_str_len add ) ( nurl_str_int index ) ( nurl_str_cat3 add ` ` ( nurl_str_int index ) ) } {}
+        = index + index 1
+    }
+    ? == 0 ( nurl_str_len add ) { ^ v } {}
+    ? == g_fn_strp 0 { = g_fn_strp ( nurl_sym_new ) } {}
+    ( __merge_word_set g_fn_strp fname add )
+}
+
 @ __strp_has s fname s item → b {
     ? == g_fn_strp 0 { ^ F } {}
     ^ ( str_contains_word ( nurl_sym_get g_fn_strp fname ) item )
