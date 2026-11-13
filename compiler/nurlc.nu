@@ -6810,10 +6810,15 @@ unsafe @ __arg_lend_root i syms → s {
                 ( str_contains_word __rvl first_val )
                 & == ( int_width lt ) 64 ( seq __rjve __ren )
                 { ? & ( is_ident_tok first_tt ) ( str_contains_word __rvl first_val ) { ( __bare_variant_check lex syms first_val ) } {}
+                    // (A unit variant's payload slot is zero, not undef: a key
+                    // read out of it — the hand-over to a cursor, the keep rule —
+                    // is null there. Undef, LLVM folded each read of it apart, and
+                    // a record keyed on such a field was dropped by no one —
+                    // agora #366. The same at every site that makes one.)
                     : s __ewr ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print __ewr )
                     ( nurl_print ` = insertvalue ` ) ( nurl_print ( nurl_llty fn_rt ) )
-                    ( nurl_print ` undef, i64 ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
+                    ( nurl_print ` zeroinitializer, i64 ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
                     = val __ewr
                     = lt ( nurl_str_cat fn_rt `` ) }
                 { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
@@ -32431,7 +32436,12 @@ unsafe @ __pfo_bind_lends i syms s name → v {
     : ~ i i 0
     ~ < i fc {
         : s ft ( nurl_sym_get g_root_syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int i ) `__type` ) ) )
-        ? ( __is_value_handle ft ) { ^ ( __handle_keyed ft T ) } {}
+        // (The first owned field that keys, as mem_identity_key takes it: one
+        // that can be null while a later field owns memory — an enum with a
+        // unit variant, `: R { E e String s }` — is passed over, not the end
+        // of the search. Answered "no key" there, an owner given a lend
+        // kept its old value back for good, agora #366.)
+        ? & ( __is_value_handle ft ) ( __handle_keyed ft T ) { ^ T } {}
         = i + i 1
     }
     ^ F
@@ -32452,9 +32462,10 @@ unsafe @ __pfo_bind_lends i syms s name → v {
         : s vname ( str_first_word scan ) = scan ( str_skip_word scan )
         : s pcs ( nurl_sym_get2 g_root_syms vname `__paycount` )
         : i pc ? != 0 ( nurl_str_len pcs ) ( nurl_str_to_int pcs ) 0
-        : s p0 ? > pc 0 ( nurl_sym_get g_root_syms ( nurl_str_cat vname `__payload__0` ) ) ``
-        : i st ? > pc 0 ( enum_payload_storage p0 g_root_syms ) 0
-        : b slot_key ? == st 3 T ? == st 2 ( __type_needs_drop p0 g_root_syms ) F
+        // (Keyed by its first payload that is its own buffer or box, which
+        // need not be the first payload — `A i String` by its String,
+        // mem_enum_variant_key: agora #366.)
+        : b slot_key > ( __variant_key_slot vname ) 0
         ? ! slot_key {
             ? nonnull { ^ F } {}
             : ~ i k 0
@@ -32626,22 +32637,20 @@ unsafe @ __pfo_bind_lends i syms s name → v {
         ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty ty ) ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
         ^ r
     } {}
-    // An enum: its first payload slot — the buffer or box of the variant
-    // that owns one (a scalar variant owns nothing to confuse it with).
-    ? ( __is_handle_enum ty ) {
-        : s e ( nurl_cg_reg cg )
-        ( nurl_print `  ` ) ( nurl_print e ) ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty ty ) ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 1\n` )
-        : s r ( nurl_cg_reg cg )
-        ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ` = inttoptr i64 ` ) ( nurl_print e ) ( nurl_print ` to i8*\n` )
-        ^ r
-    } {}
+    // An enum: its active variant's first payload that is its own buffer or
+    // box (mem_enum_variant_key) — null for a variant that has none. Read at
+    // slot 1 whatever the variant, `A i String` was keyed by its number,
+    // which another value holds too (agora #366).
+    ? ( __is_handle_enum ty ) { ^ ( mem_enum_variant_key cg ty val ) } {}
     ? ! ( __is_owned_struct_ty ty ) { ^ ( nurl_str_cat `` `` ) } {}
     : s sname ( nurl_str_slice ty 1 - ( nurl_str_len ty ) 1 )
     : i fc ( nurl_str_to_int ( nurl_sym_get2 g_root_syms sname `__field_count` ) )
     : ~ i i 0
     ~ < i fc {
         : s ft ( nurl_sym_get g_root_syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int i ) `__type` ) ) )
-        ? ( __is_value_handle ft ) {
+        // (A record by its first owned field that keys, as __handle_keyed
+        // asks: an enum field that may hold a unit variant is passed over.)
+        ? & ( __is_value_handle ft ) ( __handle_keyed ft T ) {
             : s f ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print f ) ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty ty ) ) ( nurl_print ` ` ) ( nurl_print val )
             ( nurl_print `, ` ) ( nurl_print ( nurl_str_int i ) ) ( nurl_print `\n` )
@@ -58390,7 +58399,14 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // binding's own value and nothing else (`= c ( prune c )`, prune
         // handing back a cursor over its parameter). Taken for a borrow,
         // c ended up owning nothing and its value leaked.
-        : b __ud_self_lend & & == bck_rhs_tt TT_LPAREN != 0 ( nurl_str_len __ud_borrow )
+        // (A value block whose tail is a call is that call's value here —
+        // `= o { … ( id o ) }`: whether it may be o's own value, by its key
+        // at run time, as for `= o ( id o )`. Read as a block, o's value was
+        // released and stored back freed — agora #427. A block-local the tail
+        // lends is copied in place below, mem_blk_tail_copy_slot, and so is
+        // another value by its key.)
+        : i __ud_tt ? & == bck_rhs_tt TT_LBRACE == g_blk_tail_eff TT_LPAREN TT_LPAREN bck_rhs_tt
+        : b __ud_self_lend & & == __ud_tt TT_LPAREN != 0 ( nurl_str_len __ud_borrow )
         & ( nurl_sym_has_word syms `__last_phi_idents__` name )
         ( __words_all_equal ( nurl_sym_get syms `__last_call_lend_idents__` ) name )
         : ~ s __ud_ro ``
@@ -58432,7 +58448,11 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // this line is its flag's, at run time: one bound as a cursor or an
         // alias may have been given a value of its own since.)
         : b __ud_owns | __tg_io != 0 ( nurl_str_len __ud_ptr )
-        ? & & & & __ud_optv __ud_may_self ! __ud_only_self ! ( __is_handle_ty vt ) & __ud_owns == bck_rhs_tt TT_LPAREN {
+        // (…a value block whose tail is such a call too, `= o { … ( pick o
+        // other k ) }`: the same call's value, only spelled inside a block —
+        // let through, the run that handed o's own value back freed it under
+        // o, agora #427.)
+        ? & & & & __ud_optv __ud_may_self ! __ud_only_self ! ( __is_handle_ty vt ) & __ud_owns == __ud_tt TT_LPAREN {
             : s __q1 ( nurl_str_cat3 `'` name `' is given back what this call may lend out of '` )
             : s __q2 ( nurl_str_cat3 name `' itself or out of another argument: nurlc cannot tell which one a run hands back, so it cannot know whether '` name )
             : s __q3 ( nurl_str_cat3 `''s old value is still in use or must be released (agora #412). Give '` name `' a value of its own — a copy of the call's result, ( mem_dup … ) — or bind the result to a new name and keep the two owners apart.` )
@@ -58445,7 +58465,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // the old value — `( kid o )` handing back `( vec_at v 0 )` of o's
         // own — has a key of its own too, and dropping the old value freed
         // it under the binding, agora #437.)
-        : b __ud_whole & & __ud_may_self == bck_rhs_tt TT_LPAREN ( mem_fn_lends_params syms ( nurl_sym_get syms `__last_call_name__` ) T 0 )
+        : b __ud_whole & & __ud_may_self == __ud_tt TT_LPAREN ( mem_fn_lends_params syms ( nurl_sym_get syms `__last_call_name__` ) T 0 )
         // A handle given what a call may lend out of a PART of itself or out
         // of another argument: no per-run answer is right on both kinds of
         // run (#412's form for handles): refused.
@@ -58457,15 +58477,15 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // (…and a value with a `% Drop` of its own by its first owned
         // field, __udrop_struct_keyable: given back its own value by `( f0
         // o )`, it was released and then read, agora #758.)
-        : b __ud_kty ? | ( __is_handle_ty vt ) __ud_dyn T ? == bck_rhs_tt TT_LPAREN ( __udrop_struct_keyable vt ) F
-        ? & & & & __ud_kty __ud_may_self ! __ud_whole ! ( __clone_supported vt syms ) & __ud_owns == bck_rhs_tt TT_LPAREN {
+        : b __ud_kty ? | ( __is_handle_ty vt ) __ud_dyn T ? == __ud_tt TT_LPAREN ( __udrop_struct_keyable vt ) F
+        ? & & & & __ud_kty __ud_may_self ! __ud_whole ! ( __clone_supported vt syms ) & __ud_owns == __ud_tt TT_LPAREN {
             : s __p1 ( nurl_str_cat3 `'` name `' is given back what this call may lend out of a part of '` )
             : s __p2 ( nurl_str_cat3 name `' itself — an element, a payload — and its type has no copy: nurlc cannot keep that part alive once '` name )
             : s __p3 ( nurl_str_cat3 `''s old value is released (agora #437). Bind the result to a new name, or take the part out of '` name `' first.` )
             ( die_stmt lex ( nurl_str_cat3 __p1 __p2 __p3 ) )
         } {}
         : b __ud_hty | __ud_kty & & __ud_only_self != 0 ( nurl_str_starts vt `{ i1, ` ) ( __type_needs_drop vt syms )
-        ? & & & != 0 ( nurl_str_len __ud_ptr ) == bck_rhs_tt TT_LPAREN __ud_hty | == 0 ( nurl_str_len __ud_borrow ) __ud_self_lend
+        ? & & & != 0 ( nurl_str_len __ud_ptr ) == __ud_tt TT_LPAREN __ud_hty | == 0 ( nurl_str_len __ud_borrow ) __ud_self_lend
         { = __ud_ro ( mem_call_retown syms cg )
             ? & != 0 ( nurl_str_len __ud_ro ) ! __ud_may_self { = __ud_ro_new __ud_ro = __ud_ro `` } {}
             ? != 0 ( nurl_str_len __ud_ro ) {
@@ -58548,7 +58568,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // nothing, and `= o ( f1 o )` dropped o's value though the call
         // handed it back — agora #742. The module-end answers decide.)
         : b __ud_clend | g_call_may_lend ( __lend_pending ( nurl_sym_get syms `__last_call_name__` ) )
-        : ~ s __ud_kcond ? ! __ud_kgo `` ? == bck_rhs_tt TT_LPAREN ? & __ud_clend ! __ud_may_self ( mem_ud_lend_own_cond syms cg vt ) `` ? & ( is_ident_tok bck_rhs_tt ) ! ( seq bck_rhs_val name ) ? ( seq ( nurl_sym_get2 syms bck_rhs_val `__btail` ) name ) ( nurl_str_cat `1` `` ) ( mem_ud_hold_lend_cond syms cg bck_rhs_val vt ) ``
+        : ~ s __ud_kcond ? ! __ud_kgo `` ? == __ud_tt TT_LPAREN ? & __ud_clend ! __ud_may_self ( mem_ud_lend_own_cond syms cg vt ) `` ? & ( is_ident_tok bck_rhs_tt ) ! ( seq bck_rhs_val name ) ? ( seq ( nurl_sym_get2 syms bck_rhs_val `__btail` ) name ) ( nurl_str_cat `1` `` ) ( mem_ud_hold_lend_cond syms cg bck_rhs_val vt ) ``
         // (Only an owner that may own its value: one bound as a borrow
         // outright (`__sborrow` `1`, a `: ~` lend out of a `vec_get`) owns
         // nothing to keep, and its flag, never set, gates no drop — setting
@@ -58561,7 +58581,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // `( rc_clone r )`, has the old share's block. Kept as the old one,
         // the new share was never released — agora #475.)
         : s __ud_lco ( nurl_sym_get syms `__last_call_own__` )
-        ? & & & != 0 ( nurl_str_len __ud_kcond ) == bck_rhs_tt TT_LPAREN != 0 ( nurl_str_len __ud_lco ) ! ( seq __ud_lco `false` ) {
+        ? & & & != 0 ( nurl_str_len __ud_kcond ) == __ud_tt TT_LPAREN != 0 ( nurl_str_len __ud_lco ) ! ( seq __ud_lco `false` ) {
             : s __ud_nl ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print __ud_nl ) ( nurl_print ` = xor i1 ` ) ( nurl_print ? ( seq __ud_lco `1` ) `true` __ud_lco ) ( nurl_print `, 1\n` )
             ? ( seq __ud_kcond `1` ) { = __ud_kcond __ud_nl } {
@@ -58581,7 +58601,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // with it, or kept with q's replaced field dropped again by q,
         // agora #450 I.)
         ? & != 0 g_ff_any != 0 ( nurl_str_len __ud_ptr ) {
-            : s __ud_wb ( mem_ff_write_back lex syms cg __ud_ptr name vt store_val ? ( is_ident_tok bck_rhs_tt ) ( nurl_str_cat bck_rhs_val `` ) ? == bck_rhs_tt TT_LPAREN ( nurl_sym_get syms `__last_call_args__` ) `` ( is_ident_tok bck_rhs_tt ) __ud_of0 )
+            : s __ud_wb ( mem_ff_write_back lex syms cg __ud_ptr name vt store_val ? ( is_ident_tok bck_rhs_tt ) ( nurl_str_cat bck_rhs_val `` ) ? == __ud_tt TT_LPAREN ( nurl_sym_get syms `__last_call_args__` ) `` ( is_ident_tok bck_rhs_tt ) __ud_of0 )
             ? != 0 ( nurl_str_len __ud_wb ) {
                 = __ud_kept ? == 0 ( nurl_str_len __ud_kept ) ( nurl_str_cat __ud_wb `` ) {
                     : s __ud_ko ( nurl_cg_reg cg )
@@ -58606,7 +58626,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // where the binding owns its old value still: a cursor's old value
         // is dropped by no one, and `= cur ( next cur )` walks on through
         // the container as before.)
-        ? & & & != 0 ( nurl_str_len __ud_kcond ) == bck_rhs_tt TT_LPAREN ! __ud_may_self ( __clone_supported vt syms ) {
+        ? & & & != 0 ( nurl_str_len __ud_kcond ) == __ud_tt TT_LPAREN ! __ud_may_self ( __clone_supported vt syms ) {
             = __ud_pcpy ( mem_ud_part_copy_cond syms cg name ( __lend_pending ( nurl_sym_get syms `__last_call_name__` ) ) )
             ? != 0 ( nurl_str_len __ud_pcpy ) {
                 = __ud_pcpy ( __and_i1 cg __ud_pcpy ( mem_udrop_flag_get syms cg __ud_ptr ) )
@@ -58630,7 +58650,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // the borrower, a heap-use-after-free, or compared against nothing,
         // IR clang rejects. Kept back there, as before #317's fix: a leak
         // until those types have keys, agora #361.)
-        : b __ud_other_lend ? & & & == bck_rhs_tt TT_LPAREN != 0 ( nurl_str_len __ud_borrow ) != 0 ( nurl_str_len __ud_ptr ) ! __ud_may_self
+        : b __ud_other_lend ? & & & == __ud_tt TT_LPAREN != 0 ( nurl_str_len __ud_borrow ) != 0 ( nurl_str_len __ud_ptr ) ! __ud_may_self
         ? ( __lend_from_other_owners syms name ) ( __ud_hand_over_keyed syms __ud_ptr vt ) F F
         // (An old value whose drop runs code of the program's own leaves
         // its slot before that code runs: mem_udrop_take_old.)
@@ -63803,7 +63823,7 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
                     : s __efw ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print __efw )
                     ( nurl_print ` = insertvalue ` ) ( nurl_print ( nurl_llty decl_fty ) )
-                    ( nurl_print ` undef, i64 ` ) ( nurl_print actual_fval ) ( nurl_print `, 0\n` )
+                    ( nurl_print ` zeroinitializer, i64 ` ) ( nurl_print actual_fval ) ( nurl_print `, 0\n` )
                     = actual_fval __efw
                     = actual_fty ( nurl_str_cat decl_fty `` ) }
                 { ( die lex ( nurl_str_cat3
@@ -64097,7 +64117,7 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
                     : s __sew2 ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print __sew2 )
                     ( nurl_print ` = insertvalue ` ) ( nurl_print ( nurl_llty elem_ty ) )
-                    ( nurl_print ` undef, i64 ` ) ( nurl_print v ) ( nurl_print `, 0\n` )
+                    ( nurl_print ` zeroinitializer, i64 ` ) ( nurl_print v ) ( nurl_print `, 0\n` )
                     = v __sew2
                     = vt ( nurl_str_cat ( nurl_llty elem_ty ) `` )
                     = __se_bare T }
@@ -64626,7 +64646,7 @@ unsafe @ __l2n_list s lst → s {
             : s r ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print r )
             ( nurl_print ` = insertvalue ` ) ( nurl_print ( nurl_llty to_ty ) )
-            ( nurl_print ` undef, i64 ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
+            ( nurl_print ` zeroinitializer, i64 ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
             ^ r }
         {  // Single-pointer-handle struct (`{ s ctl }`-shape — Vec[A],
             // String, Channel[A], Thread, ArenaImpl). When a Result Ok-arm
