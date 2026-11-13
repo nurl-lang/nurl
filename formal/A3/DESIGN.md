@@ -2004,8 +2004,10 @@ where the call places it).
 - *`CellOp`'s second case* asks the thread inside a check-out to hold a
   share of the cell. In a typed program it always does (the share the
   check-out is through stays in `a` for the whole body, by `withLock`'s
-  premises). That is argued, not proven as a lemma (as A3.2's "a typed
-  lock scope ends in a `put`").
+  premises). That is argued, not proven as a lemma; it is the same fact as
+  the lock check-out's "the block stays while its frame is out", left by
+  Agora #808, and one lemma (a step keeps the slot of a root the body does
+  not name) closes both.
 
 **Probes** (`tools/fuzz/holes/*.nu`). In the model, a thread's closure is
 the spawned function, and its captures are `sink` arguments.
@@ -3868,8 +3870,9 @@ run of the model.
   give-back's own check passes in every reachable configuration. The value
   passed `locked_new`'s check, and since then the thread's slots took only
   the box's share and the lock's old value, whose cells are in no other
-  place (`CellInv.one`). This is argued, as A3.2 argues that a lock scope
-  ends in a `put`, not proven as a lemma.
+  place (`CellInv.one`). This is argued, not proven as a lemma (A3.2's
+  lock scope ending in a `put` is proved since Agora #805 / #808, given the
+  block is still there).
 - `rw_set` is the same form. The runtime's `rw_set` checks nothing, and
   the model's `RwLocked` checks every value going in (A3.5's second cut).
   The check finds nothing on a payload that holds no library handle, which

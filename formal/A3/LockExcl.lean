@@ -941,8 +941,10 @@ theorem reach_frame_out (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spa
 
 /-- **A3.2's mutual exclusion** (Agora #808): in a reached configuration, two
     frames of one block whose payload is not `dtorFree` (one that holds a
-    destructor value) are one frame, of one thread: at most one check-out
-    of a block is out at a time. -/
+    destructor value) are one frame, of one thread: for such a block at
+    most one `scopeL` frame is out at a time.  (A `dtorFree` payload is not
+    covered: the model's `locked_restore` may refill a checked-out block,
+    Agora #810.) -/
 theorem reach_lock_excl (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn) (hG : GlobsOK P G)
     (ht : StmtT P (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
     (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)

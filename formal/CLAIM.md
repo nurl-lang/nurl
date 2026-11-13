@@ -142,7 +142,12 @@ the LLVM / C11 memory model rather than redefining it.
       an `Arc` of a library handle (`RhsT.arcNew` asks `t.hasCell = false`:
       a cell share is not Sync, A3.5).
   - **A3.2** *(proven)* — `Locked`: a value one thread at a
-    time changes.
+    time changes. (Mutual exclusion as a theorem, `A3.reach_lock_excl`,
+    Agora #808, holds for a payload that holds a destructor value; for a
+    `dtorFree` payload the model's `locked_restore` may refill a block a
+    `withLock` has checked out, which nurlc refuses — "the value was not
+    taken" — so the model admits more interleavings there, Agora #810.
+    Race freedom, `A3.claim`, holds over all of them.)
     - **The calculus.** A lock is a second kind of block. `locked_new`
       moves a value into a lock block, and `Locked_share` makes a new
       share. `locked_update l f` (and `locked_with`) checks the payload
@@ -965,11 +970,16 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   and leaves it holding a `D` at its end (as before), and the scope's end
   gives it back, and nothing else: with no share in the type the
   give-back's crossing check cannot fail, so `Step.scopeLFail` and the
-  code-less `Release.drop` are not taken
+  code-less `Release.drop` are not taken while the block is there
   (`A3.LockDtorWitness.scopeL_end_gives_back`, over `release_puts`,
-  `sendCheck_noArc`; a lemma of stores: that `x` owns a `t` and the block
-  is checked out are its hypotheses, which a typed program meets but no
-  invariant proves, as for every `scopeL`, A3.2 above). A panic in the body gives it back too
+  `sendCheck_noArc`; that `x` owns a `t` is proved for a typed frame,
+  Agora #805, and that the block is checked out on every reached
+  configuration given it is still there, Agora #808 below). If the block
+  were gone at the frame's end, `Release.drop` would free `x`'s tree with
+  no code: memory safety and leak freedom would still hold (nothing is
+  left), but `D`'s destructor would be skipped — so the one unproved
+  fact, that the block stays while its frame is out, backs only the
+  destructor-runs-once claim for a check-out. A panic in the body gives it back too
   (`scopeL_panic_gives_back`: `Step.scopeLP`'s release is the give-back
   whenever `x` still owns a `D`, the same hypotheses), where nurlc's `locked_update`, which runs
   `f` in place in the lock's memory, leaves the value there with the lock
@@ -1001,7 +1011,13 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   block is never removed while its frame is out, i.e. that the check-out's
   root share outlives the body (`withLock` asks it, but the frame keeps no
   record of the binding the share is in, so the invariant cannot follow
-  it). When the lock's last share is
+  it). It is the same fact as a cell check-out's "the thread holds an
+  owner's share" (A3.5 below): one lemma — a step leaves the slot of a
+  root the body does not name unchanged, through calls (`frozen`) and by-
+  name captures (`CapsOK`: only `inp`, or `inout` of a `Vec`) — closes
+  both. Exclusion is proved only for a payload that holds a destructor
+  value: for a `dtorFree` one the model's `locked_restore` can refill a
+  checked-out block (Agora #810). When the lock's last share is
   gone the marking sweep marks the lock block `dead`, its payload in it
   (`Cand` admits a lock block whose payload is in it), and the same thread
   reaps it as an `Arc`'s (`A3.LockDtorWitness.last_drop_reaps`, over
