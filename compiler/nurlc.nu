@@ -24784,6 +24784,12 @@ unsafe @ gen_match i lex i syms i cg → s {
     : ~ s m_ost ``
     : ~ b m_allnone T
     : ~ s m_alends ``
+    // (Every arm that yields a value is a call whose own answer says what
+    // it lends — a fresh value, a copy, a lend of its own arguments (those
+    // go through m_alends): none hands back the scrutinee's payload as is,
+    // so the join lends nothing of the scrutinee's call, and its key is
+    // published empty. Agora #702.)
+    : ~ b m_allfresh T
     : ~ s __m_jr ``
     : ~ s __m_jp ``
     : ~ s __m_jo ``
@@ -26155,6 +26161,14 @@ unsafe @ gen_match i lex i syms i cg → s {
                     : s __msl ( nurl_str_cat3 __m_lkey `\t` __m_lroots )
                     ? ! & != 0 ( nurl_str_len __m_lkey ) ( seq __alend __msl ) { = m_alends ( __arm_lends_join m_alends __alend ) } {}
                 } {}
+                // (A call arm that lends nothing — and, a `( mem_dup x )`,
+                // one of a type holding no view — hands over its own value.)
+                // (…or one whose lend is its own call's, not the scrutinee's:
+                // that one answers through m_alends, at module end.)
+                ? m_allfresh {
+                    : b __ascr & != 0 ( nurl_str_len __m_lkey ) ( seq __alend ( nurl_str_cat3 __m_lkey `\t` __m_lroots ) )
+                    ? | | | != arm_tt0 TT_LPAREN __ascr & ( __arm_is_mem_dup syms arm_tt0 ) ( __ty_holds_view_p arm_type ) ( __plain_scalar_lty arm_type ) { = m_allfresh F } {}
+                } {}
             } {}
             : s arm_xhown ? == 0 g_did_ret ? arm_took ( nurl_str_cat `true` `` ) ( mem_arm_call_xhown syms cg arm_type arm_tt0 arm_hown ) ``
             // The phi's predecessor for this arm: its last block, or the
@@ -26456,9 +26470,9 @@ unsafe @ gen_match i lex i syms i cg → s {
             }
             = g_join_lent ? < ( nurl_str_find hown_entries `[ false` ) 0 0 1
         } {}
-        ( nurl_sym_set_deep syms `__last_join_lend_key__` __m_lkey )
-        ( nurl_sym_set_deep syms `__last_join_lend_args__` __m_largs )
-        ( nurl_sym_set_deep syms `__last_join_lend_roots__` __m_lroots )
+        ( nurl_sym_set_deep syms `__last_join_lend_key__` ? m_allfresh `` __m_lkey )
+        ( nurl_sym_set_deep syms `__last_join_lend_args__` ? m_allfresh `` __m_largs )
+        ( nurl_sym_set_deep syms `__last_join_lend_roots__` ? m_allfresh `` __m_lroots )
         ( nurl_sym_set_deep syms `__last_join_arm_lends__` m_alends )
         ? & & & != 0 g_auto_drop_strings ! all_str_owned any_str_owner
         ( seq ( nurl_llty phi_type ) `i8*` ) {
