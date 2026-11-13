@@ -1235,7 +1235,7 @@ class FnCheck:
                     # `= o ( f o … )`: o is given (a part of) its own value back
                     # - it keeps owning it; nothing is released (the keep rule)
                     rest = {l for l in new.loans if self.loans.get(l, ((None,),))[0][0] != vid}
-                    if rest and new.call:
+                    if rest and new.call and v.ty is not None and not self.T.copyable(v.ty):
                         # which of them a run hands back is not known, so
                         # neither is whether the binding still owns its value
                         self.err(ln, f"{v.name} is given back what this call may lend out of itself "
@@ -1508,7 +1508,7 @@ def check_program(prog, max_rounds=40):
         sm = fc.check()
         errors += fc.errors
         lent = {k for (k, _, _) in sm["lends"]} & set(sm["consumes"])
-        if lent:
+        if lent and fn.ret is not None and not T.copyable(fn.ret):
             # the caller cannot both keep an argument the result borrows
             # and have handed it over
             errors.append((name, fn.line, "hands back what it may lend out of a parameter it takes over on another path"))
