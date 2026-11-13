@@ -1,0 +1,36 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/borrow_closure_run_through_a_copy.nu:25:5: error: 'sl' borrows from 'xs', which ended at line 24 — a closure that runs here passes it to 'vec_reserve', which may move or free its buffer. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'sl' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup sl ).
+    ( nurl_println_int # i ( slice_at [u] sl 0 ) )
+    ^
+compiler/tests/borrow_closure_run_through_a_copy.nu:39:5: error: 'sl' borrows from 'xs', which ended at line 38 — a closure that runs here passes it to 'vec_reserve', which may move or free its buffer. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'sl' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup sl ).
+    ( nurl_println_int # i ( slice_at [u] sl 0 ) )
+    ^
+compiler/tests/borrow_closure_run_through_a_copy.nu:52:5: error: 'sl' borrows from 'xs', which ended at line 51 — a closure that runs here passes it to 'vec_reserve', which may move or free its buffer. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'sl' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup sl ).
+    ( nurl_println_int # i ( slice_at [u] sl 0 ) )
+    ^
+compiler/tests/borrow_closure_run_through_a_copy.nu:66:5: error: 'sl' borrows from 'xs', which ended at line 65 — a closure that runs here passes it to 'vec_reserve', which may move or free its buffer. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'sl' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup sl ).
+    ( nurl_println_int # i ( slice_at [u] sl 0 ) )
+    ^
+compiler/tests/borrow_closure_run_through_a_copy.nu:79:5: error: 'sl' borrows from 'xs', which ended at line 78 — a closure that runs here passes it to 'vec_reserve', which may move or free its buffer. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'sl' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup sl ).
+    ( nurl_println_int # i ( slice_at [u] sl 0 ) )
+    ^
+compiler/tests/borrow_closure_run_through_a_copy.nu:92:5: error: 'sl' borrows from 'xs', which ended at line 91 — a closure that runs here passes it to 'vec_reserve', which may move or free its buffer. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'sl' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup sl ).
+    ( nurl_println_int # i ( slice_at [u] sl 0 ) )
+    ^
+compiler/tests/borrow_closure_run_through_a_copy.nu:105:5: error: 'sl' borrows from 'xs', which ended at line 104 — a closure that runs here passes it to 'vec_reserve', which may move or free its buffer. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'sl' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup sl ).
+    ( nurl_println_int # i ( slice_at [u] sl 0 ) )
+    ^
+compiler/tests/borrow_closure_run_through_a_copy.nu:118:5: error: 'sl' borrows from 'xs', which ended at line 117 — a closure that runs here passes it to 'vec_reserve', which may move or free its buffer. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'sl' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup sl ).
+    ( nurl_println_int # i ( slice_at [u] sl 0 ) )
+    ^
+compiler/tests/borrow_closure_run_through_a_copy.nu:132:5: error: 'sl' borrows from 'xs', which ended at line 131 — a closure that runs here passes it to 'vec_reserve', which may move or free its buffer. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'sl' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup sl ).
+    ( nurl_println_int # i ( slice_at [u] sl 0 ) )
+    ^
+compiler/tests/borrow_closure_run_through_a_copy.nu:150:5: error: 'sl' borrows from 'xs', which ended at line 146 — a closure that runs here passes it to 'vec_reserve', which may move or free its buffer. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'sl' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup sl ).
+    ( nurl_println_int # i ( slice_at [u] sl 0 ) )
+    ^
+compiler/tests/borrow_closure_run_through_a_copy.nu:168:5: error: 'sl' borrows from 'xs', which ended at line 164 — a closure that runs here passes it to 'vec_reserve', which may move or free its buffer. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'sl' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup sl ).
+    ( nurl_println_int # i ( slice_at [u] sl 0 ) )
+    ^
+error: compilation aborted — 11 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

@@ -6882,6 +6882,7 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     ( nurl_sym_set_deep syms `__agg_lends_part__` `` )
     ( nurl_sym_set_deep syms `__agg_direct__` `` )
     ( nurl_sym_set_deep syms `__agg_kept__` `` )
+    ( nurl_sym_set_deep syms `__agg_copied__` `` )
     ( nurl_sym_set_deep syms `__agg_take_own__` `` )
     ( nurl_sym_set_deep syms `__ret_path_lends__` `` )
     ( nurl_sym_set_deep syms `__ret_path_sink__` `` )
@@ -20333,8 +20334,9 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // captures happens here (bck_closure_effects_run).
         ? & != 0 g_srcx_on ( __is_closure_ty at ) {
             : s __ce_effs ? == bck_arg_tt TT_BACKSLASH ( nurl_sym_get syms `__last_closure_effects__` )
-            ? ( is_ident_tok bck_arg_tt ) ( nurl_sym_get2 syms bck_arg_val `__closure_effects` ) ``
+            ? ( is_ident_tok bck_arg_tt ) ( __clo_run_attr syms bck_arg_val `__closure_effects` `le` ) ``
             ( bck_closure_effects_run __ce_effs ( nurl_lex_line lex ) )
+            ? ( is_ident_tok bck_arg_tt ) { ( __loop_clo_note syms bck_arg_val ( nurl_lex_line lex ) ) } {}
             = __clo_routes ( __clo_routes_add __clo_routes arg_idx __ce_effs )
         } {}
         // …and inside a `~` loop, one may change the loop's container when
@@ -21128,7 +21130,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         ? & & & != 0 g_borrowck __callee_shadowed | ( is_ident_tok bck_arg_tt ) != 0 ( nurl_str_len arg_froot ) | ( __is_handle_ty at ) ( __type_needs_drop at syms ) {
             // (A field the closure stores is given back its own value by
             // identity — #419 — so only a whole new value is refused here.)
-            : s __asg ( nurl_sym_get2 syms fname `__closure_assigns` )
+            : s __asg ( __clo_run_attr syms fname `__closure_assigns` `la` )
             : s __an ? ( is_ident_tok bck_arg_tt ) ( nurl_str_cat bck_arg_val `` ) ( __path_root_name arg_froot )
             ? & != 0 ( nurl_str_len __asg ) ( str_contains_word __asg __an ) {
                 ( die lex ( nurl_str_cat4 ( nurl_str_cat3 `'` __an `' is passed to '` ) ( nurl_str_cat4 fname `', a closure that gives '` __an `' a new value by name — inside, the parameter and the capture are one value, and the assignment releases what the parameter still is. Pass a copy that owns its data (string_from, mem_dup), or let the closure take '` ) __an `' as an inout parameter instead of capturing it.` ) )
@@ -22022,7 +22024,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // the walk, with the summaries of what its body passes its captures
         // to (an exclusive call through closures: `clox`). The called
         // closure is the last argument of these rows.
-        : s __cr_recv ? __callee_shadowed ( nurl_sym_get2 syms fname `__closure_effects` ) ``
+        : s __cr_recv ? __callee_shadowed ( __clo_run_attr syms fname `__closure_effects` `le` ) ``
         : s __cr_all ( __clo_routes_add __clo_routes -1 __cr_recv )
         ? & __sx_need != 0 ( nurl_str_len __cr_all ) {
             // (A closure argument reaches what it captured: `\(…)`.)
@@ -26662,7 +26664,7 @@ unsafe @ gen_match i lex i syms i cg → s {
 // or moved under the loop's cursor (§2.5).
 @ __iter_closure_check i syms s name i line s file → v {
     ? == 0 g_bck_iter_live { ^ v } {}
-    ( __iter_closure_effs_check ( nurl_str_cat3 `'` name `'` ) ( nurl_sym_get2 syms name `__closure_assigns` ) ( nurl_sym_get2 syms name `__closure_effects` ) line file )
+    ( __iter_closure_effs_check ( nurl_str_cat3 `'` name `'` ) ( __clo_run_attr syms name `__closure_assigns` `la` ) ( __clo_run_attr syms name `__closure_effects` `le` ) line file )
 }
 
 // …for a closure (`who`, named for the message) by the captures it
@@ -26983,6 +26985,7 @@ unsafe @ gen_match i lex i syms i cg → s {
     : b __fe_dl ( __dloop_open lex syms cg )
     : s fe_iter_saved ( bck_iter_enter fe_cont )
     ( gen_block_stmts lex syms cg )
+    ( __loop_clo_replay syms g_loop_nest )
     ( bck_iter_exit fe_iter_saved )
     ( nurl_sym_def syms `__loop_depth__` old_bc_ldepth )
     ( nurl_sym_def syms `__loop_sdepth__` old_bc_sdepth )
@@ -27353,6 +27356,7 @@ unsafe @ gen_match i lex i syms i cg → s {
         : b __lp_dl ( __dloop_open lex syms cg )
         ( bck_set_block_kind ? __lp_true `loopt` `loop` )
         ( gen_block_stmts lex syms cg )
+        ( __loop_clo_replay syms g_loop_nest )
         ? != 0 ( nurl_str_len __lp_vs ) { ( __vself_record __lp_vs ) } {}
         ( nurl_sym_def syms `__loop_depth__` old_bc_ldepth )
         ( nurl_sym_def syms `__loop_sdepth__` old_bc_sdepth )
@@ -34467,35 +34471,53 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
     ^ & | == c 37 == c 123 != ( nurl_str_get ll - ( nurl_str_len ll ) 1 ) 42
 }
 
-// Is the literal just handed back made of this function's own values
-// where it read an owning name: `name`, the last it read, is one the
-// literal took in whole (`__agg_kept__`, mem_note_kept), and so is every
-// other it took in — each a binding of this function, registered for its
-// drop, that owned its value: no parameter, no by-pointer capture of the
+// Is `w`, a name a returned literal took in whole, a binding of this
+// function that owned its value (__ret_lit_takes_own)? `sinks`: this
+// function's `sink` parameter indices.
+@ __ret_kept_own i syms s w s sinks → b {
+    : i k ( nurl_sym_word_index syms `__fn_param_names__` w )
+    ? & >= k 0 ! ( str_contains_word sinks ( nurl_str_int k ) ) { ^ F } {}
+    // (A compiler-managed enum's payload is its owner slot's.)
+    : s eo ( nurl_sym_get2 syms w `__enum_owner` )
+    : s p ? != 0 ( nurl_str_len eo ) ( nurl_str_cat eo `` ) ( nurl_sym_get2 syms w `__ptr` )
+    ? | == 0 ( nurl_str_len p ) ! ( nurl_sym_has_word syms `__user_drops__` p ) { ^ F } {}
+    ? | | & < k 0 != 0 ( nurl_sym_len2 syms p `__pname` ) != 0 ( nurl_sym_len2 syms p `__outer_owned` ) ( seq ( nurl_sym_get2 syms p `__sborrow` ) `1` ) { ^ F } {}
+    // (A cursor — a `??` payload over its option — is its sources':
+    // each a binding of this function that owned its value, whose flag
+    // the move cleared, mem_note_kept → mem_udrop_alias_lend.)
+    : ~ s al ( nurl_sym_get2 syms p `__alias` )
+    ~ != 0 ( nurl_str_len al ) {
+        : s a ( str_first_word al ) = al ( str_skip_word al )
+        ? ! ( __ret_own_slot syms a ) { ^ F } {}
+    }
+    ^ T
+}
+
+// Is the literal just handed back made of this function's own values: no
+// field of it lends, and every name it took in whole (`__agg_kept__`,
+// mem_note_kept) is a binding of this function, registered for its drop,
+// that owned its value: no parameter, no by-pointer capture of the
 // caller's, no borrow or cursor; a parameter only where it is `sink`. A
 // `~` loop's element of the caller's Vec is none of these.
 @ __ret_lit_takes_own i syms s name → b {
+    // A literal owns each field it holds outright unless one was stored as
+    // the borrow it was (`__agg_lends__`, `__agg_lends_call__`): a moved
+    // binding, a field moved out of a struct of this function (emptied
+    // there, mem_zero_field), a copy (fld_lent's clone) — the literal's own
+    // whichever name it read last. Asked of that name instead, a literal over
+    // `. p a` of an own struct, or one beside a copied borrowed name, was
+    // left unguarded and lost when a local's destructor panicked (agora
+    // #732). (A per-run take, `__agg_take_own__`, is in the result's own
+    // bit, which the guard reads.)
+    ? | != 0 ( nurl_sym_len syms `__agg_lends__` ) != 0 ( nurl_sym_len syms `__agg_lends_call__` ) { ^ F } {}
     : s kept ( nurl_sym_get syms `__agg_kept__` )
-    ? ! ( str_contains_word kept name ) { ^ F } {}
+    : s copied ( nurl_sym_get syms `__agg_copied__` )
     : s sinks ( nurl_sym_get g_fn_sink ( nurl_sym_get syms `__fn_self_name__` ) )
     : ~ s rest ( nurl_str_cat kept `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest ) = rest ( str_skip_word rest )
-        : i k ( nurl_sym_word_index syms `__fn_param_names__` w )
-        ? & >= k 0 ! ( str_contains_word sinks ( nurl_str_int k ) ) { ^ F } {}
-        // (A compiler-managed enum's payload is its owner slot's.)
-        : s eo ( nurl_sym_get2 syms w `__enum_owner` )
-        : s p ? != 0 ( nurl_str_len eo ) ( nurl_str_cat eo `` ) ( nurl_sym_get2 syms w `__ptr` )
-        ? | == 0 ( nurl_str_len p ) ! ( nurl_sym_has_word syms `__user_drops__` p ) { ^ F } {}
-        ? | | & < k 0 != 0 ( nurl_sym_len2 syms p `__pname` ) != 0 ( nurl_sym_len2 syms p `__outer_owned` ) ( seq ( nurl_sym_get2 syms p `__sborrow` ) `1` ) { ^ F } {}
-        // (A cursor — a `??` payload over its option — is its sources':
-        // each a binding of this function that owned its value, whose flag
-        // the move cleared, mem_note_kept → mem_udrop_alias_lend.)
-        : ~ s al ( nurl_sym_get2 syms p `__alias` )
-        ~ != 0 ( nurl_str_len al ) {
-            : s a ( str_first_word al ) = al ( str_skip_word al )
-            ? ! ( __ret_own_slot syms a ) { ^ F } {}
-        }
+        // (A name the literal copied: the copy is its own.)
+        ? & ! ( str_contains_word copied w ) ! ( __ret_kept_own syms w sinks ) { ^ F } {}
     }
     ^ T
 }
@@ -35476,16 +35498,20 @@ unsafe @ __clo_cap_marks i syms s caps i line → v {
 
 unsafe @ bck_note_closure_caps i syms s name i line → v {
     ? == g_borrowck 0 { ^ v } {}
-    // What running it does to its captures (bck_closure_effects_run).
-    ( bck_closure_effects_run ( nurl_sym_get2 syms name `__closure_effects` ) line )
+    // What running it does to its captures (bck_closure_effects_run) — run
+    // under any name the closure may have, __clo_run_attr (agora #686).
+    ( bck_closure_effects_run ( __clo_run_attr syms name `__closure_effects` `le` ) line )
     // (Run inside another closure's body: what it frees, that closure
     // frees when it runs — agora #151.)
-    ? != 0 g_bck_closure_depth { ( __clo_frees_note ( nurl_sym_get2 syms name `__closure_frees` ) ) } {}
-    ? ! ( str_contains_word g_bck_cap_names name ) { ^ v } {}
+    : s __frees ( __clo_run_attr syms name `__closure_frees` `lf` )
+    ( __loop_clo_note syms name line )
+    ? != 0 g_bck_closure_depth { ( __clo_frees_note __frees ) } {}
+    : s __caps ( __clo_run_attr syms name `__closure_caps` `lc` )
+    ? & ! ( str_contains_word g_bck_cap_names name ) == 0 ( nurl_str_len __caps ) { ^ v } {}
     // Walk a COPY: `caps` borrows the symbol-table entry and the cursor
     // below reassigns itself with owned slices of it (bck_alias_from_phi
     // idiom).
-    : ~ s rest ( nurl_str_cat ( nurl_sym_get2 syms name `__closure_caps` ) `` )
+    : ~ s rest ( nurl_str_cat __caps `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest )
         = rest ( str_skip_word rest )
@@ -35503,12 +35529,72 @@ unsafe @ bck_note_closure_caps i syms s name i line → v {
     // A use of the closure may run its body, and the body frees these:
     // after this statement they are maybe-freed (a second invocation, or a
     // read through the captured name, is the use-after-free).
-    : ~ s frest ( nurl_str_cat ( nurl_sym_get2 syms name `__closure_frees` ) `` )
+    : ~ s frest ( nurl_str_cat __frees `` )
     ~ != 0 ( nurl_str_len frest ) {
         : s fw ( str_first_word frest )
         = frest ( str_skip_word frest )
         ( bck_stash_maybe_move fw line ( nurl_str_cat3 `the closure '` name `' frees it when it runs, and it was used` ) )
     }
+}
+
+// A run of closure binding `name` on `line` inside a loop, through a node
+// that may still grow there: the next round runs what the body assigns
+// below it (__loop_clo_replay, agora #686).
+@ __loop_clo_note i syms s name i line → v {
+    ? | | == 0 g_loop_nest == 0 g_clo_nodes == 0 ( nurl_sym_len2 syms name `__clonode` ) { ^ v } {}
+    : s nd ( nurl_sym_get2 syms name `__clonode` )
+    // (Kept as `cruns` in g_clo_nodes: `nest|cdepth|name|node|line|lits`
+    // words, the literals the node may be at the run, comma-separated.)
+    : s w ( nurl_str_cat4 ( nurl_str_cat4 ( nurl_str_int g_loop_nest ) `|` ( nurl_str_int g_bck_closure_depth ) `|` ) ( nurl_str_cat3 name `|` nd ) ( nurl_str_cat3 `|` ( nurl_str_int line ) `|` ) ( bck_swap_char ( __clo_lits_of nd ) 32 44 ) )
+    : s cur ( nurl_sym_get g_clo_nodes `cruns` )
+    ( nurl_sym_def g_clo_nodes `cruns` ? == 0 ( nurl_str_len cur ) ( nurl_str_cat w `` ) ( nurl_str_cat3 cur ` ` w ) )
+}
+
+// At the end of a loop's body (nesting `nest`): each closure run in it, or
+// in a loop inside it, through a node that gained literals after the run —
+// a literal assigned below it (`~ { ( d ) = d \ → … }`) — runs those on the
+// next round. Their effects happen at the run's line, here in the body's
+// order, before the back edge: the walk carries them round to the run and
+// out of the loop (agora #686). Runs of this loop are then done with.
+@ __loop_clo_replay i syms i nest → v {
+    ? || == 0 g_clo_nodes == 0 ( nurl_sym_len g_clo_nodes `cruns` ) { ^ v } {}
+    : ~ s rest ( nurl_str_cat ( nurl_sym_get g_clo_nodes `cruns` ) `` )
+    : ~ s keep ``
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s f ( bck_swap_char w 124 32 )
+        : i wn ( nurl_str_to_int ( str_first_word f ) )
+        : s f2 ( str_skip_word f )
+        : i wd ( nurl_str_to_int ( str_first_word f2 ) )
+        : s f3 ( str_skip_word f2 )
+        : s nm ( str_first_word f3 )
+        : s f4 ( str_skip_word f3 )
+        : s nd ( str_first_word f4 )
+        : s f5 ( str_skip_word f4 )
+        : i ln ( nurl_str_to_int ( str_first_word f5 ) )
+        : s old ( bck_swap_char ( str_first_word ( str_skip_word f5 ) ) 44 32 )
+        ? < wn nest { = keep ? == 0 ( nurl_str_len keep ) ( nurl_str_cat w `` ) ( nurl_str_cat3 keep ` ` w ) } {
+            ? == wd g_bck_closure_depth {
+                : ~ s effs ``
+                : ~ s frees ``
+                : ~ s ls ( __clo_lits_of nd )
+                ~ != 0 ( nurl_str_len ls ) {
+                    : s l ( str_first_word ls ) = ls ( str_skip_word ls )
+                    ? ! ( str_contains_word old l ) {
+                        = effs ( __word_union effs ( nurl_sym_get g_clo_nodes ( nurl_str_cat `le#` l ) ) )
+                        = frees ( __word_union frees ( nurl_sym_get g_clo_nodes ( nurl_str_cat `lf#` l ) ) )
+                    } {}
+                }
+                ? != 0 ( nurl_str_len effs ) { ( bck_closure_effects_run effs ln ) } {}
+                : ~ s fr ( nurl_str_cat frees `` )
+                ~ != 0 ( nurl_str_len fr ) {
+                    : s fw ( str_first_word fr ) = fr ( str_skip_word fr )
+                    ( bck_stash_maybe_move fw ln ( nurl_str_cat3 `the closure '` nm `' frees it when it runs, and it was used` ) )
+                }
+            } {}
+        }
+    }
+    ( nurl_sym_def g_clo_nodes `cruns` keep )
 }
 
 // The dual: `name` is being (re)bound to something that is NOT a
@@ -58973,7 +59059,15 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
             // (…which handed its sources over, or kept them where it was
             // copied: gen_ret does not hand them over again — `settled`.)
             : s __akp ( nurl_sym_get syms `__agg_kept__` )
-            ( nurl_sym_set_deep syms `__agg_kept__` ? == 0 ( nurl_str_len __akp ) ( nurl_str_cat fld_first_val `` ) ( nurl_str_cat3 __akp ` ` fld_first_val ) ) } {}
+            ( nurl_sym_set_deep syms `__agg_kept__` ? == 0 ( nurl_str_len __akp ) ( nurl_str_cat fld_first_val `` ) ( nurl_str_cat3 __akp ` ` fld_first_val ) )
+            // (…and one copied for certain, whose copy the literal owns
+            // outright whatever the name is: __ret_lit_takes_own, agora
+            // #732. Not copied after all, it was stored as the borrow it
+            // was, and `__agg_lends__` says so.)
+            ? ( seq fld_lent `1` ) {
+                : s __acp ( nurl_sym_get syms `__agg_copied__` )
+                ( nurl_sym_set_deep syms `__agg_copied__` ? == 0 ( nurl_str_len __acp ) ( nurl_str_cat fld_first_val `` ) ( nurl_str_cat3 __acp ` ` fld_first_val ) )
+            } {} } {}
         // …it is kept once the literal's binding leaves whole (stored,
         // returned, handed on): parked until then (mem_note_rawlit).
         ? & & & & ( is_ident_tok fld_first_tt ) __fk_rawparam ! fld_param_copy ! fld_param_lend == 0 ( nurl_str_len __argk ) {
@@ -64770,6 +64864,16 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
         ? ( str_contains_word captured_vars __clf ) { = __cl_fr ? == 0 ( nurl_str_len __cl_fr ) ( nurl_str_cat __clf `` ) ( nurl_str_cat3 __cl_fr ` ` __clf ) } {}
     }
     ( nurl_sym_def syms `__last_closure_fldroots__` __cl_fr )
+    // (…and all four under the literal itself, for a run through a binding
+    // that may be it under another name — an alias, a `?` / `??` / block
+    // value, an assignment in an arm: __clo_run_attr, agora #686.)
+    ? & != 0 g_borrowck | | | != 0 ( nurl_str_len __cap_heap ) != 0 ( nurl_str_len __cl_frees ) != 0 ( nurl_str_len __cl_effs ) != 0 ( nurl_str_len __cl_asg ) {
+        ? == 0 g_clo_nodes { = g_clo_nodes ( nurl_sym_new ) } {}
+        ( nurl_sym_def g_clo_nodes ( nurl_str_cat `lc#` closure_fn_name ) __cap_heap )
+        ( nurl_sym_def g_clo_nodes ( nurl_str_cat `lf#` closure_fn_name ) __cl_frees )
+        ( nurl_sym_def g_clo_nodes ( nurl_str_cat `le#` closure_fn_name ) __cl_effs )
+        ( nurl_sym_def g_clo_nodes ( nurl_str_cat `la#` closure_fn_name ) __cl_asg )
+    } {}
     // A body that may move a capture's buffer or drop its elements must not
     // also hold another capture that reaches it — a view or a borrow of it,
     // a closure that captured it: inside the body the two are unrelated
@@ -78106,6 +78210,36 @@ unsafe @ __clo_val_members i syms i tt s val → s {
         ? ! ( str_contains_word ( nurl_sym_get g_clo_nodes nd ) m ) { ( __clo_node_add nd m ) = grew T } {}
     }
     ^ grew
+}
+
+// What running closure binding `name` may do: its own `attr` (one of
+// `__closure_caps` / `_frees` / `_effects` / `_assigns`), and that of each
+// literal its node may be (`key`: `lc` / `lf` / `le` / `la`, recorded by
+// gen_closure_expr). The name's own is set only where a literal was bound
+// to it; a copy of the closure — `: d c`, `= d c`, a `?` / `??` / block
+// value, a literal assigned in an arm — reaches the literal through the
+// node, which follows each of those (agora #686).
+@ __clo_run_attr i syms s name s attr s key → s {
+    : s own ( nurl_sym_get2 syms name attr )
+    ? == 0 g_clo_nodes { ^ ( nurl_str_cat own `` ) } {}
+    : s nd ( nurl_sym_get2 syms name `__clonode` )
+    ? == 0 ( nurl_str_len nd ) { ^ ( nurl_str_cat own `` ) } {}
+    // (A node that is one literal — nearly every closure binding, the one
+    // its literal was bound to: the name's own attributes are that
+    // literal's, set from the same channel, so no walk.)
+    : s mem ( nurl_sym_get g_clo_nodes nd )
+    ? & < ( nurl_str_find mem ` ` ) 0 == 0 ( nurl_str_find mem `__closure_` ) {
+        ? != 0 ( nurl_str_len own ) { ^ ( nurl_str_cat own `` ) } {}
+        ^ ( nurl_str_cat ( nurl_sym_get g_clo_nodes ( nurl_str_cat3 key `#` mem ) ) `` )
+    } {}
+    : ~ s out ( nurl_str_cat own `` )
+    : ~ s ls ( __clo_lits_of nd )
+    ~ != 0 ( nurl_str_len ls ) {
+        : s l ( str_first_word ls ) = ls ( str_skip_word ls )
+        : s a ( nurl_sym_get g_clo_nodes ( nurl_str_cat3 key `#` l ) )
+        ? != 0 ( nurl_str_len a ) { = out ( __word_union out a ) } {}
+    }
+    ^ out
 }
 
 // The literals node (or literal) `nd` may be, through its member nodes.

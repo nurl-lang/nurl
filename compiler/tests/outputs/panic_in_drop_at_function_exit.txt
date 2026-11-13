@@ -51,6 +51,13 @@ lit_nested: recovered: panic in drop litnest.local
 drop litsink.local
 drop litsink.result
 lit_sink: recovered: panic in drop litsink.local
+drop litfield.local
+lit_field: recovered: panic in drop litfield.local
+drop litcopy.local
+lit_copy: recovered: panic in drop litcopy.local
+drop lentlit.local
+drop lentlit.e0
+lent_lit: recovered: panic in drop lentlit.local
 drop deferlit.result
 defer_lit: recovered: panic in a defer
 drop deferbind.result

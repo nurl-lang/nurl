@@ -148,6 +148,48 @@ $ `stdlib/core/vec.nu`
     ^ @ ?Bomb { T p }
 }
 
+// A literal that owns its fields without taking in a name whole (Agora
+// #732): a field moved out of a struct the function owns, and an own
+// binding beside a copy of a borrowed one.
+: P { String a i n }
+
+: Pair { String a String b }
+
+@ lit_field → ?String {
+    : Bomb loc ( bomb `litfield.local` 1 )
+    : P p @ P { ( string_from `a field moved out of a local struct, on the heap` ) 1 }
+    ^ @ ?String { T . p a }
+}
+
+@ lit_copy ( Vec String ) xs → ?Pair {
+    : Bomb loc ( bomb `litcopy.local` 1 )
+    : String s ( string_from `an own string beside a copied borrowed one` )
+    ~ x xs { ^ @ ?Pair { T @ Pair { s x } } }
+    ^ @ ?Pair { F }
+}
+
+@ lit_copy_caller → v {
+    : ~ ( Vec String ) xs ( vec_new [String] )
+    ( vec_push [String] xs ( string_from `the caller's element, copied into the literal` ) )
+    : ?Pair r ( lit_copy xs )
+    ( nurl_println `not reached` )
+}
+
+// …while a literal over the caller's element as it is stays the caller's:
+// the panic leaves it where it lives, and the caller's Vec drops it, once.
+@ lent_lit ( Vec Bomb ) v → ?Bomb {
+    : Bomb loc ( bomb `lentlit.local` 1 )
+    ~ x v { ^ @ ?Bomb { T x } }
+    ^ @ ?Bomb { F }
+}
+
+@ lent_lit_caller → v {
+    : ~ ( Vec Bomb ) v ( vec_new [Bomb] )
+    ( vec_push [Bomb] v ( bomb `lentlit.e0` 0 ) )
+    : ?Bomb r ( lent_lit v )
+    ( nurl_println `not reached` )
+}
+
 // A `;` defer that panics after the result is set (Agora #620): a literal,
 // a binding.
 @ defer_lit → Bomb {
@@ -208,6 +250,9 @@ $ `stdlib/core/vec.nu`
     ( run `lit_two` \ → v { : Holder r ( lit_two ) ( nurl_println `not reached` ) } )
     ( run `lit_nested` \ → v { : ?Holder r ( lit_nested ) ( nurl_println `not reached` ) } )
     ( run `lit_sink` \ → v { : ?Bomb r ( lit_sink ( bomb `litsink.result` 0 ) ) ( nurl_println `not reached` ) } )
+    ( run `lit_field` \ → v { : ?String r ( lit_field ) ( nurl_println `not reached` ) } )
+    ( run `lit_copy` \ → v { ( lit_copy_caller ) } )
+    ( run `lent_lit` \ → v { ( lent_lit_caller ) } )
     ( run `defer_lit` \ → v { : Bomb r ( defer_lit ) ( nurl_println `not reached` ) } )
     ( run `defer_bind` \ → v { : Bomb r ( defer_bind ) ( nurl_println `not reached` ) } )
     ( run `raw_text` \ → v { : s r ( raw_text ) ( nurl_println `not reached` ) } )
