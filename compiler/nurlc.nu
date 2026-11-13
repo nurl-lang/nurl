@@ -96841,6 +96841,11 @@ unsafe @ __compile_pipeline s src s path i syms i cg → v {
         // conditions — `%K:callee:k`, agora #770: their fixed point first,
         // which reads none of these.)
         ? != 0 g_pk_cond_any { ( resolve_pending_impls ) } {}
+        // (…a `dyn` call's virtual callee's lends among them: the union of
+        // its impls', which resolve_pending_impls makes below — before the
+        // conditions are asked, a value a `dyn` method hands back out of an
+        // argument was taken to be read out of nothing; agora #800.)
+        ? & == 0 g_pk_cond_any != 0 ( nurl_sym_len g_pending_impl `dynvirt` ) { ~ ( __dyn_virtual_round ) {} } {}
         ( resolve_cond_edges )
         ( resolve_drop_summaries )
         ( resolve_irealloc_summaries )
