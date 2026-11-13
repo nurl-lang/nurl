@@ -62513,7 +62513,9 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         // #545.)
         // (…and the field owns it then: the literal's owned fields name it,
         // so the caller that gets the value releases it.)
-        : b fld_moved_slice & & agg_moves_fields ( is_ident_tok fld_first_tt ) ( __slice_let_moves syms fld_first_tt fld_first_val `` ( nurl_get_last_type ) F )
+        // (…and any enum literal, bound or not: its payload is boxed and the
+        // enum's drop releases the slice, agora #841.)
+        : b fld_moved_slice & & | agg_moves_fields != enum_paycount -1 ( is_ident_tok fld_first_tt ) ( __slice_let_moves syms fld_first_tt fld_first_val `` ( nurl_get_last_type ) F )
         ? fld_moved_slice {
             ( bck_stash_move fld_first_val ( nurl_lex_line lex ) `the literal that moved its buffer into a field` )
             ? __fj_defer { ( nurl_print_buf_start ) } {}
@@ -63192,7 +63194,11 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
             ( nurl_str_cat3 owned_field_idxs ` ` tag )
         }
         {}
-        ? & != 0 g_auto_drop_strings is_slice_fresh
+        // (Not an enum's payload: it is boxed, and the enum's own drop
+        // releases what the box holds. Tracked as a struct's slice field,
+        // the drop read the box pointer as a slice of no type — invalid IR,
+        // agora #841.)
+        ? & & != 0 g_auto_drop_strings is_slice_fresh == enum_paycount -1
         { : s tag ( nurl_str_cat3 idx_str `:slice:` ( nurl_str_cat3 cur_sname `:` idx_str ) )
             = owned_field_idxs ? == 0 ( nurl_str_len owned_field_idxs )
             ( nurl_str_cat tag `` )
@@ -80096,6 +80102,8 @@ unsafe @ __type_needs_drop s ty i syms → b {
 @ __payload_needs_drop s pt i syms → b {
     ? == 0 ( nurl_str_len pt ) { ^ F } {}
     ? ( seq pt `%String` ) { ^ T } {}
+    // (A slice payload owns its buffer, boxed: agora #841.)
+    ? & != 0 g_auto_drop_strings ( mem_is_slice_ty pt ) { ^ T } {}
     ? != 0 ( nurl_str_starts pt `%Vec__` ) { ^ T } {}
     ? ( __is_libh pt ) { ^ T } {}
     ? ( __drop_is_boxed pt syms ) { ^ T } {}
@@ -80418,6 +80426,36 @@ unsafe @ __type_needs_drop s ty i syms → b {
         ( nurl_print sp ) ( nurl_print `, 0\n` )
         ( emit_drop_value pt hv ctr syms )
         ( nurl_print `  br label %` ) ( nurl_print hd ) ( nurl_print `\n` ) ( nurl_print hd ) ( nurl_print `:\n` )
+        ^ v
+    } {}
+    // A slice payload is boxed: its buffer (and the elements it owns, as an
+    // owned slice binding's) goes, then the box. A zero slot was taken out.
+    // (Not dropped at all, a slice payload leaked; agora #841.)
+    ? ( mem_is_slice_ty pt ) {
+        : s sz ( __dr ctr )
+        : s sl ( nurl_str_cat `drop_slive_` ( nurl_str_int ctr ) )
+        : s sd ( nurl_str_cat `drop_sdone_` ( nurl_str_int ctr ) )
+        ( nurl_print `  ` ) ( nurl_print sz ) ( nurl_print ` = icmp ne i64 ` ) ( nurl_print slot ) ( nurl_print `, 0\n` )
+        ( nurl_print `  br i1 ` ) ( nurl_print sz ) ( nurl_print `, label %` ) ( nurl_print sl ) ( nurl_print `, label %` ) ( nurl_print sd ) ( nurl_print `\n` )
+        ( nurl_print sl ) ( nurl_print `:\n` )
+        : s lt ( nurl_llty pt )
+        : s et ( nurl_str_slice lt 2 - ( nurl_str_len lt ) 10 )
+        : s sb ( __dr ctr )
+        ( nurl_print `  ` ) ( nurl_print sb ) ( nurl_print ` = bitcast i8* ` ) ( nurl_print sp ) ( nurl_print ` to ` ) ( nurl_print lt ) ( nurl_print `*\n` )
+        : s sv ( __dr ctr )
+        ( nurl_print `  ` ) ( nurl_print sv ) ( nurl_print ` = load ` ) ( nurl_print lt ) ( nurl_print `, ` ) ( nurl_print lt ) ( nurl_print `* ` ) ( nurl_print sb ) ( nurl_print `\n` )
+        : s sdp ( __dr ctr )
+        ( nurl_print `  ` ) ( nurl_print sdp ) ( nurl_print ` = extractvalue ` ) ( nurl_print lt ) ( nurl_print ` ` ) ( nurl_print sv ) ( nurl_print `, 0\n` )
+        : s sraw ( __dr ctr )
+        ( nurl_print `  ` ) ( nurl_print sraw ) ( nurl_print ` = bitcast ` ) ( nurl_print et ) ( nurl_print `* ` ) ( nurl_print sdp ) ( nurl_print ` to i8*\n` )
+        ? ( __slice_owns_elems et ) {
+            : s sln ( __dr ctr )
+            ( nurl_print `  ` ) ( nurl_print sln ) ( nurl_print ` = extractvalue ` ) ( nurl_print lt ) ( nurl_print ` ` ) ( nurl_print sv ) ( nurl_print `, 1\n` )
+            ( nurl_print `  call void @` ) ( nurl_print ( __slice_drop_request et ) ) ( nurl_print `(i8* ` ) ( nurl_print sraw ) ( nurl_print `, i64 ` ) ( nurl_print sln ) ( nurl_print `)\n` )
+        } {}
+        ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print sraw ) ( nurl_print `)\n` )
+        ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print sp ) ( nurl_print `)\n` )
+        ( nurl_print `  br label %` ) ( nurl_print sd ) ( nurl_print `\n` ) ( nurl_print sd ) ( nurl_print `:\n` )
         ^ v
     } {}
     ? != 0 ( nurl_str_starts pt `%Vec__` ) {
