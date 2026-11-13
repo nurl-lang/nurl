@@ -147,6 +147,7 @@ class FnCheck:
         self.tails_memo = {}
         self.s_invokes = set()
         self.s_cloargs = set()
+        self.s_retparams = set()
         self.ncap = getattr(fn, "ncap", 0)
 
     # -- names / errors -----------------------------------------------------
@@ -382,6 +383,15 @@ class FnCheck:
             return AV("L", loans, alias, sub)
         return av
 
+    def lent_part(self, av):
+        """A part read out of a value that holds it as a lend - a field the
+        value was given a handle copy for - is that lend, not an owner."""
+        own = {l for hp, l in av.held if not hp and l in self.loans}
+        if not own:
+            return av
+        alias = {self.loans[l][0] for l in own}
+        return AV("L", av.loans | own, av.alias | alias, {(hp, l) for hp, l in av.held if hp or l not in own}, True)
+
     def local_depth(self, av):
         d = 0
         for lid in av.loans | hloans(av.held):
@@ -611,6 +621,14 @@ class FnCheck:
             return AV("O", (), (), held)
         if sm["res"] == "lent":
             loans, alias = set(), set()
+            # an owned temporary the callee hands back whole leaves with the
+            # result: the result owns it (MEMORY.md §1, Temporaries)
+            whole = [k for (k, path, kind) in sm["lends"] if not path and kind == "handle" and k < len(ops)
+                     and ops[k][0] == "v" and not ops[k][2] and self.fn.vars[ops[k][1]].kind == "temp"
+                     and avs[k].own == "O"]
+            if len(whole) == 1 and len({k for (k, _, _) in sm["lends"]}) == 1:
+                moved = self.move_out(st, ops[whole[0]][1], line)
+                return AV("O", moved.loans, (), moved.held | frozenset(held))
             for (k, path, kind) in sm["lends"]:
                 if k >= len(avs) or avs[k].own == "N":
                     continue
@@ -883,7 +901,7 @@ class FnCheck:
             sub = hsub(av.held, (tag,))
             pty = self.ty_of_field(self.fn.vars[op[1]].ty if op[0] == "v" and not op[2] else None, variant, idx)
             if op[0] == "v" and not op[2] and self.fn.vars[op[1]].kind == "temp" and av.own == "O":
-                return AV("O", (), (), sub)
+                return self.lent_part(AV("O", (), (), sub))
             if pty is not None and pty[0] in VIEW_TYPES:
                 v = self.view_value(sub)
                 return AV("L", v.loans | av.loans, v.alias, frozenset()) if v.own == "L" else NONE
