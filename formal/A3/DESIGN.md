@@ -1290,7 +1290,7 @@ every thread's slots and the globals) freed an orphaned `Arc<D>`'s,
   step leaves are reaped in the order `Step.reap` picks; a cycle of orphans
   (through a lock; since Agora #803 two `Locked D` payloads can form one
   directly, each holding a share of the other's lock in a closure's
-  environment), and every block reached only from that cycle's payloads,
+  environment, a store nurlc refuses, docs/MEMORY.md §7.7), and every block reached only from that cycle's payloads,
   is freed with no code, as on A2, where the runtime leaks it.
 
 ### Agora #803: a destructor payload that holds a share

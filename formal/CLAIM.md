@@ -1387,7 +1387,8 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   other in a cycle (no top one; arc payloads never do, a cycle needs a
   lock between them; since Agora #803 two `Locked D` payloads can form
   one directly, each holding a share of the other's lock, in a closure's
-  environment, types being finite otherwise), and the blocks reached only
+  environment, types being finite otherwise; nurlc refuses such a store,
+  docs/MEMORY.md §7.7, so no program it accepts forms one), and the blocks reached only
   from their payloads, are freed with no code, where the runtime leaks
   them, running no destructor either; several orphans one step leaves
   are reaped in the order `Step.reap` picks, not nurlc's drop order; a

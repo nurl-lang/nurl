@@ -220,7 +220,8 @@ root: what it reaches is kept.  Orphans that reach each other in a cycle
 (the runtime leaks such a cycle and runs no destructor either).  Since
 Agora #803 two `Locked D` payloads, each holding a share of the other's
 lock (in a closure's environment: types are finite otherwise), form such a
-cycle directly, with no other lock between them. -/
+cycle directly, with no other lock between them (a store nurlc refuses,
+docs/MEMORY.md §7.7). -/
 
 /-- A `dead` block's payload, awaiting its destructor: a root of the sweep. -/
 def DeadPay (B : Nat → Option Blk) (v : Val) : Prop :=
