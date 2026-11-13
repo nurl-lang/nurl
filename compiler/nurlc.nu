@@ -2141,7 +2141,7 @@ unsafe @ agg_field_count i syms s ot → i {
 : ~ i g_call_jphi_set 0
 : ~ i g_bck_ajp 0
 // (nurlc compiles on one thread: nothing races on the list.)
-unsafe @ __fn_io_reset → v { = g_fn_io_names `` }
+unsafe @ __fn_io_reset → v { = g_fn_io_names `` = g_fn_ioh_names `` }
 
 unsafe @ __fn_io_add s name → v { = g_fn_io_names ( nurl_str_cat3 g_fn_io_names ` ` name ) }
 
@@ -20856,8 +20856,11 @@ unsafe @ gen_call_body i lex i syms i cg → s {
                 ( nurl_print `(i1 ` ) ( nurl_print __ie_c ) ( nurl_print `, ptr ` ) ( nurl_print __ie_p ) ( nurl_print `)\n` )
                 // (…which gives the caller's binding a new value, the empty one:
                 // a replace of the parameter, so what the caller lent out of
-                // it ends at the call — agora #776.)
-                ( __replaces_note syms bck_arg_val `` )
+                // it ends at the call — agora #776. Where the callee takes it:
+                // a `sink` position now, else by its final answer at module
+                // end — an `s` edge, __repl_s_edge; one that only borrows the
+                // position empties nothing.)
+                ? ( str_has_index callee_sink arg_idx ) { ( __replaces_note syms bck_arg_val `` ) } { ( __repl_s_edge syms bck_arg_val call_name arg_idx ) }
             } {}
         } {}
         // A capture of a closure returned right here — its env keeps it for
@@ -21305,7 +21308,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
                     } {}
                     ( nurl_print `  call void @__nurl_zero_if.` ) ( nurl_print ( __zero_if_request ( nurl_llty at ) ) )
                     ( nurl_print `(i1 ` ) ( nurl_print __jz_c ) ( nurl_print `, ptr ` ) ( nurl_print __jz_p ) ( nurl_print `)\n` )
-                    ( __replaces_note syms arg_join_ioh `` )
+                    ? ( str_has_index callee_sink arg_idx ) { ( __replaces_note syms arg_join_ioh `` ) } { ( __repl_s_edge syms arg_join_ioh call_name arg_idx ) }
                 } {}
             } {}
             // An enum's payload, which the arm only borrows: a copy goes
@@ -70726,6 +70729,21 @@ unsafe @ __thr_unsync_change s callee s base s k → b {
         ( __drops_close T )
     } {}
     ^ ( __drops_has ( nurl_sym_get g_fn_tdrops callee ) k )
+}
+
+// An `s` edge of the replacement summary (resolve_replaces): this
+// function's `inout` parameter `name`, whole, handed to argument `aidx`
+// of `callee` — which, where it takes that position (its final `sink`
+// answer), empties the parameter's slot: a replace of the whole of it
+// (agora #776). Each edge once.
+unsafe @ __repl_s_edge i syms s name s callee i aidx → v {
+    : i k ( nurl_sym_word_index syms `__fn_param_names__` name )
+    ? < k 0 { ^ v } {}
+    : s e ( nurl_str_cat4 ( nurl_str_cat3 ( nurl_sym_get syms `__fn_self_name__` ) `|` ( nurl_str_int k ) ) `|` callee ( nurl_str_cat3 `|s` ( nurl_str_int aidx ) `|` ) )
+    : s ek ( nurl_str_cat `rpe##` e )
+    ? != 0 ( nurl_sym_len g_pending_impl ek ) { ^ v } {}
+    ( nurl_sym_set g_pending_impl ek `1` )
+    = g_repl_edges ( nurl_str_cat3 g_repl_edges ` ` e )
 }
 
 // The replacement summary closed over its call edges, before the walks
