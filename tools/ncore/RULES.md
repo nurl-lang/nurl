@@ -81,7 +81,11 @@ summarised by the same analysis, to a fixpoint over the program.
 | A closure that changes a capture meets no other argument that reaches it | §2.4, §2.11 | `apply_call` |
 | A closure leaves no capture and no argument holding a view | §2.11 | `check_program` |
 | A closure kept by an owner, and a literal handed back as it is, copies in what it captured and can copy; a bound closure handed back by name does not | §7.5, §2.11 (h310) | `closure_owned`, `transfer` |
-| A closure another thread runs takes what it captured; one taken by pointer may not go | §2.1, §2.3 | `detaches` |
+| A closure another thread runs takes the bindings it captured; one taken by pointer may not go. A handle whose copy is a share two threads may use (the type table's `t`) is captured as a share of its own | §2.1, §2.3, §6.5 | `detaches`, `cap_loans`, `thread_share` |
+| A borrowed closure handed to a keeper is copied: what the callee does to its copy is not done to the caller's | §7.5 | `apply_call` (`copied`) |
+| An argument the callee took over and hands back as it is is the caller's own again, holding what it held | §7.5 (#463) | `apply_call` |
+| `= b ( wrap b )`: a new value that holds a handle of the binding's old one keeps it; nothing is released | §7.6 (#475) | `stmt` (`assign`, `inside`) |
+| A view a closure hands back may point into its arguments, never into what it captured; judged where the closure is made (a captured literal is no view of anything) | §7.5 | `make_closure` (`vback`) |
 | A closure several threads may run changes nothing it captured | §6.5 | `shares` |
 | What an `Arc` shares is not changed in place | §6.5 | `effect` |
 | A shared payload (`Rc`, `Arc`, `Shared`) is one place per handle type: an effect inside one ends what was lent out of any | proposal D3 | `shared_tails`, `region_effect` |

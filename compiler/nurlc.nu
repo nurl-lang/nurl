@@ -10389,6 +10389,11 @@ unsafe @ core_print_types i syms → v {
         ( __core_o `\t` ) ( __core_o ? ( __type_needs_drop ty syms ) `1` `0` )
         ( __core_o ? ( __clone_supported ty syms ) `c` `-` )
         ( __core_o ? ( __drop_may_read_view ty ) `d` `-` )
+        // (a handle whose copy is a share of one object, and whether two
+        // threads may use copies of it at once: MEMORY.md §6.5)
+        : b share ? ( __is_libh ty ) ( seq ( __libh_copy_op ty ) `share` ) F
+        ( __core_o ? share `h` `-` )
+        ( __core_o ? & share ( __thr_share_ok syms ty ) `t` `-` )
         : i c0 ( nurl_str_get ty 0 )
         : b ptr == ( nurl_str_get ty - n 1 ) 42
         ( __core_o `\t` )

@@ -33,7 +33,7 @@ KINDS = {0: "param", 1: "local", 2: "temp", 3: "param"}
 
 
 class TypeInfo:
-    __slots__ = ("name", "cls", "drops", "clone", "udrop", "base", "targs", "fields", "variants")
+    __slots__ = ("name", "cls", "drops", "clone", "udrop", "share", "tshare", "base", "targs", "fields", "variants")
 
 
 def nurlc_binary():
@@ -81,6 +81,7 @@ class Reader:
         self.prog.udrop = set()        # named types whose drop is a use of the views they hold (§2.14)
         self.prog.handle_elem = {}     # a one-payload handle type -> its payload's type
         self.prog.shared = set()       # …the ones whose copies share the payload
+        self.prog.thread_share = set() # handles a thread's closure captures as a share of its own (§6.5)
         self.prog.arcs = set()         # …and the ones other threads may hold a copy of
         self.prog.virt = {}            # a `dyn` method's virtual callee -> the impls it may run
         self.prog.walk_sums = {}       # a function -> the answers the walk's summaries hold for it (`sum` lines)
@@ -126,6 +127,8 @@ class Reader:
         t.name, t.cls, t.drops, t.base = f[1], int(f[2]), f[3].startswith("1"), f[4]
         t.clone = "c" in f[3]              # a copy of a value of it can be made
         t.udrop = "d" in f[3]              # its drop runs the program's code, which may read its views
+        t.share = "h" in f[3]              # its copy is a share of one object
+        t.tshare = "t" in f[3]             # …that two threads may use at once
         i = 5
         assert f[i] == "A"
         n = int(f[i + 1])
@@ -191,6 +194,8 @@ class Reader:
             # its own and no clone has none
             if getattr(info, "udrop", False):
                 self.prog.udrop.add(name)
+            if getattr(info, "tshare", False):
+                self.prog.thread_share.add(name)
             if getattr(info, "clone", False):
                 self.prog.clonable.add(name)
             else:

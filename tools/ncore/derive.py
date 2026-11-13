@@ -122,9 +122,11 @@ def derive(prog, fn, ws):
             continue
         if not ret_scalar:
             rholds.add(((), k, (), "held"))
-        for h in changed:
-            if h != k:
-                stores.add((h, (), k, (), "held"))
+        if not ws.get("vkeeps", "").startswith(":"):
+            # (…unless the walk answered what it leaves in its arguments)
+            for h in changed:
+                if h != k:
+                    stores.add((h, (), k, (), "held"))
 
     invokes = {k for k in range(n) if pty[k] is not None and pty[k][0] == "closure"}
     invokes |= {k for k in _idx(ws, "hrun", n)}
