@@ -30551,7 +30551,35 @@ unsafe @ mem_path_to_indices s path → s {
         }
         ^ v
     } {}
+    // (A cursor over two or more sources — a join's binding, `: String e {
+    // … ? c s t }` — holds one of them: each leaves only where the cursor
+    // holds its very value, by the value's identity (mem_alias_src_leaves),
+    // as a store or a return moving it on asks. Cleared all, the one the
+    // join did not select was dropped by no one, agora #628. One source
+    // needs no test: mem_cursor_own0's flag answers it.)
+    ? ( __alias_whole_srcs_many syms ptr ) {
+        ( mem_udrop_optparam_taken syms ptr )
+        : ~ s rest ( nurl_sym_get2 syms ptr `__alias` )
+        ~ != 0 ( nurl_str_len rest ) {
+            : s src ( str_first_word rest ) = rest ( str_skip_word rest )
+            ? ( __part_src syms ptr src ) {} { ( mem_alias_src_leaves syms cg src ptr `` ) ( mem_udrop_param_moved syms src ) }
+        }
+        ^ v
+    } {}
     ( mem_udrop_alias_move_own syms cg ptr own0 )
+}
+
+// Whether the cursor `ptr` is over two or more whole sources (a join of
+// bindings), not parts of one.
+@ __alias_whole_srcs_many i syms s ptr → b {
+    : ~ s rest ( nurl_sym_get2 syms ptr `__alias` )
+    ? == 0 ( nurl_str_len rest ) { ^ F } {}
+    : ~ i n 0
+    ~ != 0 ( nurl_str_len rest ) {
+        : s src ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ( __part_src syms ptr src ) {} { = n + n 1 }
+    }
+    ^ > n 1
 }
 
 // A cursor over a parameter, copied into a returned closure's env: the
