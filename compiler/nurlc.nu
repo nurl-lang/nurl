@@ -45507,11 +45507,12 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
     : s rs ( nurl_str_int r )
     ? & != 0 ( nurl_sym_len g_bck ( bck_bkey `pp_` rs ) ) == 0 ( nurl_sym_len g_bck ( bck_bkey `po_` rs ) ) { ^ -1 } {}
     ? ( bck_id_is_global r ) { ^ -1 } {}
-    // (…but one a block declared and closed is this function's still — a
-    // value block's local, `^ { : String s … : ( @ i i ) f \ … s … f }`:
+    // (…but an owner a block declared and closed is this function's still —
+    // a value block's local, `^ { : String s … : ( @ i i ) f \ … s … f }`:
     // its frame ended before the return, and codegen releases it on the
-    // way out, `oos_`; agora #638.)
-    ? & == BCK_UNINIT ( bck_st_get st r ) == 0 ( nurl_sym_len g_bck ( bck_bkey `oos_` rs ) ) { ^ -1 } {}
+    // way out, `oon_`; a view or a payload the block bound is no owner of
+    // anything released; agora #638.)
+    ? & == BCK_UNINIT ( bck_st_get st r ) == 0 ( nurl_sym_len g_bck ( bck_bkey `oon_` rs ) ) { ^ -1 } {}
     ^ r
 }
 
@@ -53113,6 +53114,10 @@ unsafe @ bck_end_post_defer s st i p i keep i line → s {
         : s js ( str_first_word rest ) = rest ( str_skip_word rest )
         : i id ( bck_field_int ( bck_rec ( nurl_str_to_int js ) ) 1 )
         ? ends { ( bck_put ( bck_bkey `oos_` ( nurl_str_int id ) ) `1` ) } {}
+        // (…and whether it owned its value when its frame closed: one a
+        // return then hands on is this function's to release still,
+        // bck_local_source; agora #638.)
+        ? == BCK_OWNED ( bck_st_get out id ) { ( bck_put ( bck_bkey `oon_` ( nurl_str_int id ) ) `1` ) } {}
         = out ( bck_st_set out id ( bck_st_raw pre id ) )
         ( bck_partner_unlink id )
     }
