@@ -11,7 +11,8 @@
 // warning fires for vec_push/insert/set as for thread_spawn — adding
 // type-list support for closures would unlock those test cases.
 //
-// Two negative controls confirm the warning is stack-reference-only.
+// Two negative controls confirm the warning is stack-reference-only (a
+// store into a by-value capture is warned as lost, agora #643).
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/thread.nu`

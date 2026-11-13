@@ -11,7 +11,8 @@
 // (the scope frame it points into) and rejects `^`-returning it past
 // that frame.
 //
-// Two positive cases (both warn) + two negative controls (no warning).
+// Two positive cases (both warn) + two negative controls (no escape warning; a store
+// into a by-value capture is warned as lost, agora #643).
 
 : Counter { i n i max }
 

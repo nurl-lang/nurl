@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+renamed through a sink parameter, long enough
+renamed through an inout parameter, long enough
+renamed by a closure over a mutable binding
+the local renamed, a name long enough for heap
+2
+the body local renamed, long enough for heap

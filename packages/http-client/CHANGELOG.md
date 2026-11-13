@@ -10,6 +10,7 @@ Requires the NURL with std/net's `NetDialer` (`net_dial`, std/net_sim.nu's `nets
 
 ### Changed
 
+- The response decoder every transport shares takes the response over (`sink`): it frees and replaces the body of a value it was only lent, which a NURL that refuses an owning value stored into a by-value parameter's field (agora #643) no longer compiles. No caller changes; the client tests pass unchanged.
 - The plaintext transport underneath (http_pure's `HttpConn`) is a std/net `TcpConn` instead of a raw runtime socket handle. Measured on keep-alive GETs to a local hyper server: callgrind +144 instructions per request (+0.35 %, the std/net dispatch and the runtime's ownership check visiting the new handle fields), the same syscalls and allocations; wall clock within this VM's noise (median of 6: 21.5k → 21.9k requests/s).
 
 ## [0.3.6] — 2026-10-23

@@ -12,7 +12,8 @@
 // reference closure is itself a stack reference and the `^`-return
 // check fires exactly as it does for a bare closure.
 //
-// One positive case (warns) + one negative control (no warning).
+// One positive case (warns) + one negative control (no escape warning; a store
+// into a by-value capture is warned as lost, agora #643).
 
 : Counter { i n i max }
 : Slot { ( @ v ) cb }
@@ -30,7 +31,8 @@
 
 // CONTROL — the closure captures the Counter BY VALUE (immutable `:`,
 // snapshotted into the env). Wrapping it in a Slot and returning that
-// is safe; no warning must fire.
+// is safe; no escape warning must fire. (The store into the by-value
+// capture is warned as lost to `c` — agora #643.)
 @ make_safe_slot → Slot {
     : Counter c @ Counter { 0 10 }
     : ( @ v ) bump \ → v {

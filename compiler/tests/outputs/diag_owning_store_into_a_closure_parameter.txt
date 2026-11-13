@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_owning_store_into_a_closure_parameter.nu:15:41: error: field 'name' of 'x' is given a value that owns memory, but 'x' is a parameter of this closure, by value: the store lands in the body's own copy of the caller's App, the caller never sees it, and nothing would release the new value. Take it 'inout' (\ inout App x → …) if the caller should see the new value, or have the closure return the new value.
+    : ( @ v App ) f \ App x → v { = . x name ( string_from `a replacement name that is long enough to live on the heap` ) }
+                                        ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.
