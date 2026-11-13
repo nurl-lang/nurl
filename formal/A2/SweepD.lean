@@ -374,25 +374,96 @@ theorem Mem.sweepD_keeps {k : Nat} {bl : Blk} (hk : m.blk k = some bl) {x : Var}
     (hx : m.st x = some ⟨o, some v⟩) (hr : Refers m.blk v k) : m.sweepD.blk k = some bl :=
   sweepBlkD_reached hk (.root (Or.inl (Or.inl ⟨x, o, hx⟩)) hr)
 
+/-- Agora #831: a block whose payload the marking sweep reads as a root of
+    its top-orphan test when no root reaches it: an `arc` or a lock block of
+    a destructor type (an orphan to be, `CandPay`) or a `dead` one
+    (`DeadPay`), its payload in it: the shape of a pinned block
+    (`Pinned.shape`).  A view (Agora #804) is none. -/
+def Blk.Pins (bl : Blk) : Prop :=
+  ∃ n f u p kd, bl = ⟨Ty.nest n (.dtor f u), kd, some p⟩ ∧ (kd = .arc ∨ kd = .lock ∨ kd = .dead)
+
+/-- Agora #831: **the blocks `U` are cut off from the roots `R`**: no root
+    refers to one, and a block whose payload refers to one is in `U` itself
+    and pins nothing (`Blk.Pins`: it is no orphan to be and no `dead`
+    block, whose payload would be a root of the top-orphan test).  So no
+    block of `U` is reached from the marking sweep's roots, nor from an
+    orphan to be's payload (`CutOff.not_reached`).  `U = {k}` is "nothing
+    refers to `k`" (`CutOff.one`); a lock block and the view a dropped read
+    guard left (unreached, not yet swept, its payload a share of the lock)
+    are cut off together. -/
+def CutOff (R : Val → Prop) (B : Nat → Option Blk) (U : Nat → Prop) : Prop :=
+  (∀ v, R v → ∀ j, U j → ¬ Refers B v j) ∧
+    ∀ k' bl' j, B k' = some bl' → U j → Refers B bl'.keeps j → U k' ∧ ¬ bl'.Pins
+
+/-- A block nothing refers to, from the roots nor from any block's payload,
+    is cut off alone. -/
+theorem CutOff.one {R : Val → Prop} {B : Nat → Option Blk} {k : Nat}
+    (hv : ∀ v, R v → ¬ Refers B v k) (hb : ∀ k' bl', B k' = some bl' → ¬ Refers B bl'.keeps k) :
+    CutOff R B (· = k) :=
+  ⟨fun v hv' _ hj hr => hv v hv' (hj ▸ hr), fun k' bl' _ hk' hj hr => absurd (hj ▸ hr) (hb k' bl' hk')⟩
+
+/-- **No block cut off is reached** from the roots of the marking sweep's
+    top-orphan test: the roots, the `dead` blocks' payloads and the orphans
+    to be's. -/
+theorem CutOff.not_reached {R : Val → Prop} {B : Nat → Option Blk} {U : Nat → Prop} (h : CutOff R B U)
+    {j : Nat} (hr : Reached (fun v => Roots0 R B v ∨ CandPay R B v) B j) : ¬ U j := by
+  induction hr with
+  | root hv hr =>
+    rename_i v j
+    intro hj
+    rcases hv with (hv | ⟨k0, n, f, u, hk0⟩) | ⟨k0, n, f, u, kd, hc, hk0⟩
+    · exact h.1 v hv j hj hr
+    · exact (h.2 k0 _ j hk0 hj (by simpa [Blk.keeps] using hr)).2
+        ⟨n, f, u, v, .dead, rfl, Or.inr (Or.inr rfl)⟩
+    · obtain ⟨n', f', u', p', kd', hkd', hk'⟩ := hc.1
+      rw [hk0] at hk'
+      simp only [Option.some.injEq, Blk.mk.injEq] at hk'
+      obtain ⟨-, rfl, -⟩ := hk'
+      exact (h.2 k0 _ j hk0 hj (by simpa [Blk.keeps] using hr)).2
+        ⟨n, f, u, v, kd, rfl, hkd'.elim Or.inl (fun e => Or.inr (Or.inl e))⟩
+  | pay _ hk hr ih => exact fun hj => ih (h.2 _ _ _ hk hj hr).1
+
+/-- **A cut-off `arc` or lock block of a destructor value, its payload in it,
+    is a top orphan.** -/
+theorem CutOff.top {R : Val → Prop} {B : Nat → Option Blk} {U : Nat → Prop} (h : CutOff R B U)
+    {k n f : Nat} {u : Ty} {p : Val} {kd : BKind} (hkd : kd = .arc ∨ kd = .lock)
+    (hk : B k = some ⟨Ty.nest n (.dtor f u), kd, some p⟩) (hU : U k) : TopOrphan R B k :=
+  ⟨⟨⟨n, f, u, p, kd, hkd, hk⟩, fun hr => h.not_reached (hr.roots fun _ h => Or.inl h) hU⟩,
+    fun hr => h.not_reached hr hU⟩
+
+/-- **Agora #831: a cut-off `arc` or lock block of a destructor value is
+    marked `dead` by the marking sweep**, its payload in it: blocks may still
+    refer to it, so long as they are cut off too (a dropped read guard's
+    view, not yet swept). -/
+theorem sweepBlkD_marks {R : Val → Prop} {B : Nat → Option Blk} {U : Nat → Prop} (h : CutOff R B U)
+    {k n f : Nat} {u : Ty} {p : Val} {kd : BKind} (hkd : kd = .arc ∨ kd = .lock)
+    (hk : B k = some ⟨Ty.nest n (.dtor f u), kd, some p⟩) (hU : U k) :
+    sweepBlkD R B k = some ⟨Ty.nest n (.dtor f u), .dead, some p⟩ := by
+  have htop := h.top hkd hk hU
+  exact sweepBlkD_pinned hk htop.not_reached (Or.inl htop)
+
 /-- **An `arc` block of a destructor value (Agora #755: or of a drained
     `Vec` of them; or a lock block of a destructor value, `Locked D`, its
     payload in) that nothing refers to any more is marked `dead`, its
     payload in it** (the witness's last drop): no
-    slot's value and no block's payload refers to it, so it is a top orphan. -/
+    slot's value and no block's payload refers to it, so it is a top orphan.
+    (Agora #831: the case `U = {k}` of `Mem.sweepD_marks_cut`.) -/
 theorem Mem.sweepD_marks {k n f : Nat} {u : Ty} {p : Val} {kd : BKind} (hkd : kd = .arc ∨ kd = .lock)
     (hk : m.blk k = some ⟨Ty.nest n (.dtor f u), kd, some p⟩)
     (hv : ∀ x o v, m.st x = some ⟨o, some v⟩ → ¬ Refers m.blk v k)
     (hb : ∀ k' bl', m.blk k' = some bl' → ¬ Refers m.blk bl'.keeps k) :
-    m.sweepD.blk k = some ⟨Ty.nest n (.dtor f u), .dead, some p⟩ := by
-  have hroots : ∀ w, (Roots0 m.vals m.blk w ∨ CandPay m.vals m.blk w) → ¬ Refers m.blk w k := by
-    rintro w ((⟨x, o, hx⟩ | ⟨k', n', f', u', hk'⟩) | ⟨k', n', f', u', kd', _, hk'⟩) hr
-    · exact hv x o w hx hr
-    · exact hb k' _ hk' (by simpa [Blk.keeps] using hr)
-    · exact hb k' _ hk' (by simpa [Blk.keeps] using hr)
-  have hnr := Reached.none_refers hroots hb
-  have htop : TopOrphan m.vals m.blk k :=
-    ⟨⟨⟨n, f, u, p, kd, hkd, hk⟩, fun h => hnr (h.roots fun _ h => Or.inl h)⟩, hnr⟩
-  exact sweepBlkD_pinned hk htop.not_reached (Or.inl htop)
+    m.sweepD.blk k = some ⟨Ty.nest n (.dtor f u), .dead, some p⟩ :=
+  sweepBlkD_marks (CutOff.one (fun _ ⟨x, o, hx⟩ => hv x o _ hx) hb) hkd hk rfl
+
+/-- **Agora #831: ... and so is one cut off from the slots together with
+    blocks that still refer to it** (`CutOff`): a lock block whose last
+    share is gone, and the view of it a read guard dropped after it left,
+    unreached and not yet swept. -/
+theorem Mem.sweepD_marks_cut {U : Nat → Prop} (hc : CutOff m.vals m.blk U) {k n f : Nat} {u : Ty} {p : Val}
+    {kd : BKind} (hkd : kd = .arc ∨ kd = .lock)
+    (hk : m.blk k = some ⟨Ty.nest n (.dtor f u), kd, some p⟩) (hU : U k) :
+    m.sweepD.blk k = some ⟨Ty.nest n (.dtor f u), .dead, some p⟩ :=
+  sweepBlkD_marks hc hkd hk hU
 
 end
 

@@ -93,21 +93,27 @@ theorem Cfg.sweepD_reached {C : Cfg} (hn : ¬ C.sweepD.Orphan) {k : Nat} {bl : B
 /-- **An `arc` block of a destructor value (or of a drained `Vec` of them),
     or a lock block of one, its payload in, that nothing refers to any more
     is marked `dead` by the configuration's marking sweep**, its payload in
-    it: no thread's slot, no global and no block's payload refers to it. -/
+    it: no thread's slot, no global and no block's payload refers to it.
+    (Agora #831: the case `U = {k}` of `Cfg.sweepD_marks_cut`.) -/
 theorem Cfg.sweepD_marks {C : Cfg} {k n f : Nat} {u : Ty} {p : Val} {kd : BKind} (hkd : kd = .arc ∨ kd = .lock)
     (hk : C.blk k = some ⟨Ty.nest n (.dtor f u), kd, some p⟩)
     (hv : ∀ v, C.roots v → ¬ Refers C.blk v k)
     (hb : ∀ k' bl', C.blk k' = some bl' → ¬ Refers C.blk bl'.keeps k) :
-    C.sweepD.blk k = some ⟨Ty.nest n (.dtor f u), .dead, some p⟩ := by
-  have hroots : ∀ w, (Roots0 C.roots C.blk w ∨ CandPay C.roots C.blk w) → ¬ Refers C.blk w k := by
-    rintro w ((hw | ⟨k', n', f', u', hk'⟩) | ⟨k', n', f', u', kd', _, hk'⟩) hr
-    · exact hv w hw hr
-    · exact hb k' _ hk' (by simpa [Blk.keeps] using hr)
-    · exact hb k' _ hk' (by simpa [Blk.keeps] using hr)
-  have hnr := Reached.none_refers hroots hb
-  have htop : TopOrphan C.roots C.blk k :=
-    ⟨⟨⟨n, f, u, p, kd, hkd, hk⟩, fun h => hnr (h.roots fun _ h => Or.inl h)⟩, hnr⟩
-  exact sweepBlkD_pinned hk htop.not_reached (Or.inl htop)
+    C.sweepD.blk k = some ⟨Ty.nest n (.dtor f u), .dead, some p⟩ :=
+  sweepBlkD_marks (CutOff.one hv hb) hkd hk rfl
+
+/-- **Agora #831: ... and so is one cut off from the configuration's roots
+    together with blocks that still refer to it** (`A2.CutOff`): blocks no
+    root refers to, each block whose payload refers to one of them among
+    them and pinning nothing (a view, `Blk.Pins`).  So a lock block whose
+    last share went while a read guard lived is marked by the sweep that
+    ends the guard's drop, though the guard's view, unreached, is still in
+    the store and refers to it. -/
+theorem Cfg.sweepD_marks_cut {C : Cfg} {U : Nat → Prop} (hc : CutOff C.roots C.blk U) {k n f : Nat} {u : Ty}
+    {p : Val} {kd : BKind} (hkd : kd = .arc ∨ kd = .lock)
+    (hk : C.blk k = some ⟨Ty.nest n (.dtor f u), kd, some p⟩) (hU : U k) :
+    C.sweepD.blk k = some ⟨Ty.nest n (.dtor f u), .dead, some p⟩ :=
+  sweepBlkD_marks hc hkd hk hU
 
 /-! ### The parts survive the marking sweep -/
 
@@ -686,27 +692,30 @@ theorem CSettle.reaps_block {P : Prog} {i : Nat} {Z C' : Cfg} (h : CSettle P i Z
 /-- **Agora #755 item 1: the thread whose step drops the last share runs the
     destructor.**  Thread `i`'s step (to `m'`, `s'`) leaves an `arc` block of
     a destructor value (or of a drained `Vec` of them), or a lock block of
-    one, its payload in it, that nothing refers to any more: no thread's
-    slot, no module global, no block's payload.  Then the configuration's
-    marking sweep that ends the step marks it `dead`, its payload in it, and
-    in the result `C'` of this configuration step (`TStep.thread`'s, whose
-    reaps, `CSettle`, are all thread `i`'s, before any other thread runs) a
-    fresh slot of thread `i` (at or above `m'.nv`, so made by its reaps)
-    owns the payload and the block is emptied or gone: a reap of thread `i`
-    bound it there, in a destructor frame of `f` at its redex
-    (`Step.reap`).  (The premise `hb` asks it of every block of `m'`, also of
-    those the same sweep removes; a block only such a payload refers to is
-    not covered by this lemma, though the semantics marks it as well.) -/
+    one, its payload in it, cut off from the roots (`A2.CutOff`, a set `U`
+    of blocks holding `k`): no thread's slot and no module global refers to
+    a block of `U`, and a block whose payload refers to one is in `U` and
+    pins nothing (it is no orphan to be and no `dead` block).  Then the
+    configuration's marking sweep that ends the step marks it `dead`, its
+    payload in it, and in the result `C'` of this configuration step
+    (`TStep.thread`'s, whose reaps, `CSettle`, are all thread `i`'s, before
+    any other thread runs) a fresh slot of thread `i` (at or above `m'.nv`,
+    so made by its reaps) owns the payload and the block is emptied or
+    gone: a reap of thread `i` bound it there, in a destructor frame of `f`
+    at its redex (`Step.reap`).  Agora #831: before, the lemma asked that no
+    block of `m'` at all refer to `k` (`U = {k}`, `CutOff.one`); a block
+    that refers to it but is itself cut off, such as the view a read guard
+    dropped after the lock's last share leaves, unreached and not yet
+    swept (`A3.RwDtorWitness.guard_drop_reaps`), is covered now. -/
 theorem TStep.last_drop_reaps {P : Prog} {C : Cfg} {i : Nat} {m' : Mem} {s' : Stmt} {C' : Cfg}
     (hlen : i < C.ths.length)
     (hse : CSettle P i (C.put i m' s').sweepD C') {k n f : Nat} {u : Ty} {p : Val} {kd : BKind}
     (hkd : kd = .arc ∨ kd = .lock) (hk : m'.blk k = some ⟨Ty.nest n (.dtor f u), kd, some p⟩)
-    (hv : ∀ v, (C.put i m' s').roots v → ¬ Refers m'.blk v k)
-    (hb : ∀ k' bl', m'.blk k' = some bl' → ¬ Refers m'.blk bl'.keeps k) :
+    {U : Nat → Prop} (hc : CutOff (C.put i m' s').roots m'.blk U) (hU : U k) :
     (C.put i m' s').sweepD.blk k = some ⟨Ty.nest n (.dtor f u), .dead, some p⟩ ∧
       ∃ (t' : Thread) (x : Var), C'.ths[i]? = some t' ∧ t'.st x = some ⟨true, some p⟩ ∧ m'.nv ≤ x ∧
         Emptied C'.blk k (Ty.nest n (.dtor f u)) := by
-  have hm := Cfg.sweepD_marks (C := C.put i m' s') hkd hk hv hb
+  have hm := Cfg.sweepD_marks_cut (C := C.put i m' s') hc hkd hk hU
   have hi : ((C.put i m' s').sweepD).ths[i]? = some ⟨m'.st, m'.nv, s'⟩ := by
     simp [Cfg.sweepD, Cfg.put, hlen]
   exact ⟨hm, hse.reaps_block hm hi⟩

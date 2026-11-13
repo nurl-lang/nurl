@@ -52,7 +52,8 @@ stores and steps, not of this program's run (which no theorem here traces):
 * when the lock's last share is gone, the marking sweep marks its block
   `dead`, its payload in it, and the same thread's next step is the reap
   that hands the payload to a destructor frame of `dfn`
-  (`last_drop_reaps`, over `Mem.sweepD_marks` at a lock block).
+  (`last_drop_reaps`, over `Mem.sweepD_marks_cut` at a lock block; Agora #831:
+  blocks cut off with it may still refer to it, `A2.CutOff`).
 
 Since Agora #804 `RwLocked D`'s read guard is typed
 (`A3/RwDtorWitness.lean`: the view lends the payload in place).  Still
@@ -985,21 +986,27 @@ theorem main_no_leak_panic {m' : Mem} (hr : Steps P (emptyMem 7) main (.panic m'
   exact no_leak_panic prog_ok prog_codes ht rfl main_codes (by decide) hr
 
 /-- **The lock's last share's drop hands the payload to a destructor frame of
-    the same thread**: when no slot's value and no block's payload refers to
-    the lock block, its payload in it (`l`'s scope has ended, the update's
-    give-back long done), the marking sweep that ends the step marks it
-    `dead`, its payload in it (`Mem.sweepD_marks`, at a lock block), so the
-    thread's next step is a reap (`settle_reaps`), which moves the payload
-    to a fresh binding in a frame `scopeD _ 0 skip` whose end calls `dfn` on
-    it (`A2.Dtor.scopeD_end_runs_dtor`), as nurlc's last `Locked_drop` drops
-    the value. -/
+    the same thread**: when no slot's value refers to the lock block, its
+    payload in it (`l`'s scope has ended, the update's give-back long done),
+    and no block's payload does but one cut off with it, the marking sweep
+    that ends the step marks it `dead`, its payload in it
+    (`Mem.sweepD_marks_cut`, at a lock block), so the thread's next step is
+    a reap (`settle_reaps`), which moves the payload to a fresh binding in a
+    frame `scopeD _ 0 skip` whose end calls `dfn` on it
+    (`A2.Dtor.scopeD_end_runs_dtor`), as nurlc's last `Locked_drop` drops the
+    value.  Agora #831: "cut off" is `A2.CutOff`, of a set `U` of blocks
+    holding the lock block: no slot's value refers to a block of `U`, and a
+    block whose payload refers to one is in `U` and pins nothing.  Before,
+    no block's payload at all could refer to the lock block (`U = {k}`,
+    `CutOff.one`); now a read guard's view, unreached once the guard is
+    dropped but not yet swept, may (the guard dropped after the lock's last
+    share, `A3.RwDtorWitness.guard_drop_reaps_settle`). -/
 theorem last_drop_reaps {m : Mem} {k : Nat} {p : Val} (hk : m.blk k = some ⟨DT, .lock, some p⟩)
-    (hv : ∀ x o v, m.st x = some ⟨o, some v⟩ → ¬ Refers m.blk v k)
-    (hb : ∀ k' bl', m.blk k' = some bl' → ¬ Refers m.blk bl'.keeps k)
+    {U : Nat → Prop} (hc : CutOff m.vals m.blk U) (hU : U k)
     {s s' : Stmt} {m' : Mem} (h : Settle P m.sweepD s m' s') :
     m.sweepD.blk k = some ⟨DT, .dead, some p⟩ ∧
       ∃ m1 s1, Step P m.sweepD s (.ok m1 s1) ∧ ReapMem m.sweepD m1 := by
-  have hm := Mem.sweepD_marks (n := 0) (f := 0) (u := T) (Or.inr rfl) hk hv hb
+  have hm := Mem.sweepD_marks_cut (n := 0) (f := 0) (u := T) hc (Or.inr rfl) hk hU
   exact ⟨hm, settle_reaps h ⟨k, 0, 0, T, p, hm⟩⟩
 
 
@@ -1165,15 +1172,16 @@ theorem mainV_no_leak_panic {m' : Mem} (hr : Steps P (emptyMem 6) mainV (.panic 
 /-- **The lock's last share's drop hands the `Vec` to a destructor frame of
     the same thread**: when no slot's value and no block's payload refers to
     the lock block, its payload in it, the marking sweep marks it `dead`
-    (`Mem.sweepD_marks`, at a lock block of the nest `vec (dtor 0 T)`), and
-    the thread's next step is a reap (`settle_reaps`). -/
+    (`Mem.sweepD_marks_cut`, at a lock block of the nest `vec (dtor 0 T)`), and
+    the thread's next step is a reap (`settle_reaps`).  (Agora #831: as
+    `last_drop_reaps`, the lock block cut off from the slots, `A2.CutOff`,
+    where before no block's payload could refer to it.) -/
 theorem last_dropV_reaps {m : Mem} {k : Nat} {p : Val} (hk : m.blk k = some ⟨.vec DT, .lock, some p⟩)
-    (hv : ∀ x o v, m.st x = some ⟨o, some v⟩ → ¬ Refers m.blk v k)
-    (hb : ∀ k' bl', m.blk k' = some bl' → ¬ Refers m.blk bl'.keeps k)
+    {U : Nat → Prop} (hc : CutOff m.vals m.blk U) (hU : U k)
     {s s' : Stmt} {m' : Mem} (h : Settle P m.sweepD s m' s') :
     m.sweepD.blk k = some ⟨.vec DT, .dead, some p⟩ ∧
       ∃ m1 s1, Step P m.sweepD s (.ok m1 s1) ∧ ReapMem m.sweepD m1 := by
-  have hm := Mem.sweepD_marks (n := 1) (f := 0) (u := T) (Or.inr rfl) hk hv hb
+  have hm := Mem.sweepD_marks_cut (n := 1) (f := 0) (u := T) hc (Or.inr rfl) hk hU
   exact ⟨hm, settle_reaps h ⟨k, 1, 0, T, p, hm⟩⟩
 
 /-- **The reap binds the `Vec` at its own type, and its frame drains it**

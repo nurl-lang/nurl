@@ -3,8 +3,8 @@
 > **Interactive Explorer:** You can also explore this proof interactively (with a step-by-step memory & borrow-checker simulator, clickable theorem dependency graph, and searchable soundness-hole corpus) on **[nurl-lang.org/docs/formal-verification](https://nurl-lang.org/docs/formal-verification)**.
 
 * **Toolchain:** `leanprover/lean4:v4.35.0` (zero external dependencies; standard axioms `propext`, `Classical.choice`, `Quot.sound` only; `0` `sorry`s)
-* **Phase A3 (Threads & Data-Race Freedom):** **33 modules**, **18,552 lines of Lean 4**, **917 theorems**, **1094 total declarations**
-* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **43 modules**, **53,863 lines of Lean 4**, **2293 theorems**, **2877 total declarations**
+* **Phase A3 (Threads & Data-Race Freedom):** **33 modules**, **18,715 lines of Lean 4**, **921 theorems**, **1099 total declarations**
+* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **43 modules**, **53,934 lines of Lean 4**, **2298 theorems**, **2884 total declarations**
 * **Phase A1 (Core Calculus):** **22 modules**, **9,571 lines of Lean 4**, **449 theorems**, **613 total declarations**
 * **Soundness Corpus (`corpus/map.tsv`):** every hole probe in [`tools/fuzz/holes/`](../tools/fuzz/holes/), with the rule and the proof phase (A1, A2, A3, B) that covers it. The table is generated from the probes' `// map:` lines by `tools/fuzz/holes/map.sh` (build.sh writes it; it is not committed); `tools/fuzz/holes/map.py --counts` gives the totals
 
@@ -176,7 +176,7 @@ flowchart BT
   StepFrame["StepFrame<br/>(405L, 17 thms)"]
   Steps["Steps<br/>(3512L, 115 thms)"]
   Sweep["Sweep<br/>(597L, 65 thms)"]
-  SweepD["SweepD<br/>(400L, 34 thms)"]
+  SweepD["SweepD<br/>(471L, 39 thms)"]
   Syntax["Syntax<br/>(1408L, 64 thms)"]
   Typing["Typing<br/>(1907L, 91 thms)"]
   TypingFacts["TypingFacts<br/>(1042L, 62 thms)"]
@@ -270,7 +270,7 @@ flowchart BT
 | 3. Proof Infrastructure | [`A2/Repl.lean`](A2/Repl.lean) | 387 | 21 | 0 | One-hole replacement (Repl): a change through a borrowed handle rewrites one node of its owner's tree and leaves the rest. |
 | 3. Proof Infrastructure | [`A2/Settle.lean`](A2/Settle.lean) | 210 | 12 | 3 |  |
 | 3. Proof Infrastructure | [`A2/Sweep.lean`](A2/Sweep.lean) | 597 | 65 | 3 | The sweep (Mem.sweep): shared blocks (Arc, lock blocks) that nothing reaches are removed and their payloads freed, from every thread's roots. |
-| 3. Proof Infrastructure | [`A2/SweepD.lean`](A2/SweepD.lean) | 400 | 34 | 1 |  |
+| 3. Proof Infrastructure | [`A2/SweepD.lean`](A2/SweepD.lean) | 471 | 39 | 3 |  |
 | 3. Step & Unwinding Lemmas | [`A2/Frame.lean`](A2/Frame.lean) | 638 | 40 | 1 | How runtime frames (scope, rbind, frozen) interact with the memory invariant. |
 | 3. Step & Unwinding Lemmas | [`A2/Leak.lean`](A2/Leak.lean) | 653 | 26 | 1 | Leak-freedom invariant (Covers): every allocated address is owned by a live binding. |
 | 3. Step & Unwinding Lemmas | [`A2/Panic.lean`](A2/Panic.lean) | 384 | 23 | 1 | Panic unwinding (panic_unwind): every exited scope drops its owned trees via the drop journal. |
