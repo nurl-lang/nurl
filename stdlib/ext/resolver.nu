@@ -586,11 +586,14 @@ $ `stdlib/core/mem.nu`
                         ? < . frame next ( vec_len [i] . frame candidates ) {
                             : i chosen . ( vec_data [i] . frame candidates ) . frame next
                             = . frame next + . frame next 1
+                            // (The frame goes back on the stack: what is read of
+                            // it after is read before — the stack owns it now.)
+                            : i fnode . frame node
                             ( vec_push [__SolveFrame] . solver frames frame )
-                            ( __solver_select solver . frame node chosen )
+                            ( __solver_select solver fnode chosen )
                             : i level - ( vec_len [__SolveFrame] . solver frames ) 1
-                            ? ( __solver_prepare solver . frame node chosen ) {
-                                : __SolveNode node . ( vec_data [__SolveNode] . solver nodes ) . frame node
+                            ? ( __solver_prepare solver fnode chosen ) {
+                                : __SolveNode node . ( vec_data [__SolveNode] . solver nodes ) fnode
                                 : __SolveVersion version . ( vec_data [__SolveVersion] . node versions ) chosen
                                 = advanced T
                                 : ~ i k 0
