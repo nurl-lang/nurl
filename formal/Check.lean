@@ -117,6 +117,9 @@ import A3
 #print axioms A3.reach_keys
 #print axioms A3.TStep.closed_send_reaps
 #print axioms A3.reach_closed_send_reaps
+#print axioms A3.closed_send_core
+#print axioms A3.TStep.closed_send_reaps_assign
+#print axioms A3.reach_closed_send_reaps_assign
 #print axioms A3.ChanDtorWitness.mainC_typed
 #print axioms A3.ChanDtorWitness.mainC_safe
 #print axioms A3.ChanDtorWitness.mainC_no_leak
@@ -128,6 +131,8 @@ import A3
 #print axioms A3.LetdChain.of_movedFirst
 #print axioms A3.LetdChain.typed
 #print axioms A3.unpair_body
+#print axioms A3.RhsT.var_out_ty
+#print axioms A3.letd_vec_nest
 #print axioms A3.chanGlue_drains
 #print axioms A3.ChanDtorWitness.glueV_drains
 -- Agora #805: a receive of a destructor value: the option bound under its glue (`ofnR`, an

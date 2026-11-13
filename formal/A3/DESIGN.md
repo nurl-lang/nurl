@@ -949,7 +949,8 @@ settled:
    back, or nothing, a body that moved it out having handed it to an owner
    that runs its destructor (A2-drop's binders), the release freeing nothing
    (`scopeL_typed_panic`). Not proved: that the block is checked out there
-   (as for every `scopeL`, above: no invariant ties a frame to its block). `RwLocked D`'s read guard is refused
+   (as for every `scopeL`, above: no invariant ties a frame to its block;
+   Agora #808). `RwLocked D`'s read guard is refused
    (`RhsT.rwRead` asks `dtorFree`: a view's payload is a copy, which owns
    nothing), and so is `locked_set` of one (its body assigns `x`).
 2. *The last share.* The marking sweep (`Mem.sweepD`, Agora #610) admits a
@@ -977,7 +978,7 @@ settled:
    the block checked out are their hypotheses. Agora #805 discharges the
    first for a typed frame (`scopeL_typed_end_gives_back`,
    `scopeL_typed_panic`); the second is read off the rules for a typed
-   program, as for every `scopeL`.
+   program, as for every `scopeL` (Agora #808).
 3. *A3.* Lock blocks are shared. Since item 1 of Agora #755 (below) the
    configuration's marking sweep marks an orphaned `Locked D`'s block and
    the thread whose step dropped the last share reaps it
@@ -1068,20 +1069,23 @@ dropped: `main_typed`, `main_safe`, `main_no_leak`, `main_no_leak_panic`,
 `A3.chanDtor_claim`), and (Agora #805) `A3.ChanDtorWitness.mainC` (the
 channel closed, then a destructor value sent: `mainC_typed`, `mainC_safe`,
 `mainC_no_leak`, `mainC_no_leak_panic`, `A3.chanClosed_claim`,
-`A3.chanClosed_reaps`). Agora #805: the glue drains the queue in index order,
-stated as its frame's steps (`A3.chanGlue_drains`: `GlueOK`'s `unpair` puts
-the queue's field in `movedFirst`, the typing makes its hand-over a `letd` at
-`vec s` in the chain the tail starts with, `LetdChain`, whose frame
-`scopeD w f` ends by `Step.scopeDDrain` and nothing else, element 0 first;
-`glueV_drains` at the witness). Read off the steps, not proved: the reap's
-call into the glue's body, and that a typed check-out body leaves the binding
-holding its value; no run is traced. Agora #805: a receive of a destructor
+`A3.chanClosed_reaps`; the send bound by `assign` too,
+`TStep.closed_send_reaps_assign`). Agora #805: the glue starts the queue's
+drain, stated as its frame's steps (`A3.chanGlue_drains`: `GlueOK`'s `unpair`
+puts the queue's field in `movedFirst`, the typing makes its hand-over a `letd
+w f` at `vec s` in the chain the tail starts with, `LetdChain`, `f` the
+elements' destructor, `s = Ty.nest n (.dtor f u)`, whose frame `scopeD w f`
+ends, the queue non-empty, by one `Step.scopeDDrain` and nothing else,
+element 0 first; index order is that step iterated, which no theorem does;
+`glueV_drains` at the witness, `f = 0`). Read off the steps, not proved: the
+reap's call into the glue's body, and that the check-out's block is checked
+out where the body ends or panics (Agora #808); no run is traced. Agora #805: a receive of a destructor
 value has a witness, `A3.ChanDtorWitness.mainR` (the option `chan_recv` hands
 out bound by `letd` under its glue `ofnR`, `EnumGlueOK` over `sum int DT`:
 `mainR_typed`, `mainR_safe`, `mainR_no_leak`, `mainR_no_leak_panic`,
 `A3.chanRecv_claim`, `recv_runs_glue`, `ofnR_takes_payload`). (The check-out
 body's half is proved since Agora #805 for a typed frame, `scopeL_end_owns`,
-`scopeL_typed_panic`; the block's half is not.) Still refused: a channel of destructor values holding a
+`scopeL_typed_panic`; the block's half is not: Agora #808.) Still refused: a channel of destructor values holding a
 share, and the plain `prod (vec D) int` lock payload (no glue).
 
 ### Agora #755 item 1: the destructor on A3's threads

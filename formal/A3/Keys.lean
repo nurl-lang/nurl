@@ -17,7 +17,8 @@ slot, which still holds what it held: this is the fact for every value.
 Its use: the block a step makes at the key `nid` is named by no share but
 the ones the step itself makes (none, for a closed channel's send), so the
 marking sweep that ends the step finds nothing that refers to it
-(`A3.ChanDtorWitness.closed_send_reaped`). -/
+(`A3.TStep.closed_send_reaps`, `A3.TStep.closed_send_reaps_assign`;
+at the witness, `A3.chanClosed_reaps`). -/
 
 namespace A3
 open A2
@@ -714,45 +715,37 @@ theorem Refers.lock_share {B : Nat → Option Blk} {k : Nat} {t : Ty} {p : Optio
     rcases h with ⟨c, _, hc⟩ | ⟨d, o, l, _, hc⟩ <;> simp [Blk.rd] at hc
 
 /-- **Agora #805: a closed channel's send parks the value for the sender to
-    reap.**  Thread `i`'s next step is `chan_send a y` on a closed channel
-    (`a` shares the lock block `kc`, whose flag is set) whose elements are
-    destructor values (`Ty.nest n (.dtor g u)`: a destructor value, or a
-    drained `Vec` of them), bound by `letv x`.  The value taken from `y` goes
-    into a fresh lock block at the key `C.nid` (`EvalR.chanSendClosed`), the
-    answer is 0, and:
+    reap**, whatever binds its answer (the core of `TStep.closed_send_reaps`
+    and `TStep.closed_send_reaps_assign`).  Thread `i` evaluates `chan_send
+    a y` on a closed channel (`a` shares the lock block `kc`, whose flag is
+    set) whose elements are destructor values (`Ty.nest n (.dtor g u)`: a
+    destructor value, or a drained `Vec` of them), and its step writes the
+    answer to a slot `x`, the addresses `al` live (a `letv`'s fresh slot, or
+    an `assign`'s, whose old integer's drop frees nothing).  The value taken
+    from `y` goes into a fresh lock block at the key `C.nid`
+    (`EvalR.chanSendClosed`), the answer is 0, and:
 
     - the configuration's marking sweep that ends the step marks that block
       `dead`, the value in it: no thread's slot, no global and no block's
       payload holds a share of it, since every share in the configuration
-      names a key below `C.nid` (`CKeys`, which every configuration a typed
-      start reaches has: `reach_keys`);
-    - in the result `C'` of this configuration step (its reaps, `CSettle`,
-      all thread `i`'s before any other thread runs) a fresh slot of thread
-      `i` (at or above its `nv` before the step: one its reaps made) owns
-      the value and the block is emptied or gone — a reap of thread `i`
-      bound it in a destructor frame of `g` (`Step.reap`, `CSettle.reaps_block`
-      through `TStep.last_drop_reaps`): the destructor runs on the sender, as
-      nurlc's `chan_send` drops its unqueued (inferred-`sink`) parameter
-      before it returns;
-    - and it is a configuration step (`TStep.thread`) when the redex is no
-      spawn's. -/
-theorem TStep.closed_send_reaps {P : Prog} {spawn : Nat → Bool} {C : Cfg} (hK : CKeys C) {i : Nat}
-    {t : Thread} {K : Stmt → Stmt} {x a y : Var} {k : Stmt} (hi : C.ths[i]? = some t)
-    (hR : Redex t.s K (.letv x (.chanSend a y) k)) (hsp : ¬ SpawnRedex spawn t.s) (hx : t.st x = none)
-    {r : Val} {o : Bool} {m1 : Mem} (he : EvalR (C.view t) (.chanSend a y) (.ok r o m1))
+      names a key below `C.nid` (`CKeys`);
+    - in the result `C'` of the step's reaps (`CSettle`, all thread `i`'s,
+      before any other thread runs) a slot `w` of thread `i` at or above its
+      `nv` before the step owns the value, and the block is emptied or gone
+      (`TStep.last_drop_reaps`, over `CSettle.reaps_block`). -/
+theorem closed_send_core {P : Prog} {C : Cfg} (hK : CKeys C) {i : Nat} {t : Thread} (hi : C.ths[i]? = some t)
+    {a y : Var} {r : Val} {o : Bool} {m1 : Mem} (he : EvalR (C.view t) (.chanSend a y) (.ok r o m1))
     {o' : Bool} {kc : Nat} {τ : Ty} {q : Val} {f : Nat} (ha : t.st a = some ⟨o', some (.lk kc)⟩)
     (hc : C.blk kc = some ⟨τ, .lock, some (.pair q (.int (f + 1)))⟩)
     {n g : Nat} {u : Ty} (hs : τ.undtor = .prod (.vec (Ty.nest n (.dtor g u))) .int)
-    {C' : Cfg} (hse : CSettle P i (C.put i (m1.set x ⟨o, some r⟩) (K (.scope x k))).sweepD C') :
-    TStep P spawn C C' ∧ r = .int 0 ∧ ∃ v m0, TakeVal (C.view t) y v m0 ∧
-      (C.put i (m1.set x ⟨o, some r⟩) (K (.scope x k))).sweepD.blk C.nid =
+    {x : Var} {al : Nat → Bool} {s' : Stmt} {C' : Cfg}
+    (hse : CSettle P i (C.put i { m1 with alloc := al, st := upd m1.st x (some ⟨o, some r⟩) } s').sweepD C') :
+    r = .int 0 ∧ ∃ v m0, TakeVal (C.view t) y v m0 ∧
+      (C.put i { m1 with alloc := al, st := upd m1.st x (some ⟨o, some r⟩) } s').sweepD.blk C.nid =
         some ⟨Ty.nest n (.dtor g u), .dead, some v⟩ ∧
-      ∃ (t' : Thread) (z : Var), C'.ths[i]? = some t' ∧ t'.st z = some ⟨true, some v⟩ ∧ t.nv ≤ z ∧
+      ∃ (t' : Thread) (w : Var), C'.ths[i]? = some t' ∧ t'.st w = some ⟨true, some v⟩ ∧ t.nv ≤ w ∧
         Emptied C'.blk C.nid (Ty.nest n (.dtor g u)) := by
   have hlen : i < C.ths.length := (List.getElem?_eq_some_iff.mp hi).1
-  have hst : Step P (C.view t) t.s (.ok (m1.set x ⟨o, some r⟩) (K (.scope x k))) := by
-    rw [hR.eq]; exact hR.step (Step.letv hx he)
-  refine ⟨.thread hi hsp hst hse, ?_⟩
   have hkv := hK.view hi
   cases he with
   | chanSend hv ht hk' _ _ _ _ =>
@@ -768,17 +761,18 @@ theorem TStep.closed_send_reaps {P : Prog} {spawn : Nat → Bool} {C : Cfg} (hK 
     have hnid : m0.nid = C.nid := hn0
     have hnv : m0.nv = t.nv := by cases ht <;> rfl
     -- the store after the step, and one of the same slots and globals with `nid` as it was
-    let m' : Mem := { m0 with nid := m0.nid + 1, blk := upd m0.blk m0.nid (some ⟨Ty.nest n (.dtor g u), .lock, some v⟩) }.set x
-      ⟨false, some (.int 0)⟩
+    let m1' : Mem :=
+      { m0 with nid := m0.nid + 1, blk := upd m0.blk m0.nid (some ⟨Ty.nest n (.dtor g u), .lock, some v⟩) }
+    let m' : Mem := { m1' with alloc := al, st := upd m1'.st x (some ⟨false, some (.int 0)⟩) }
     let m'' : Mem := m0.set x ⟨false, some (.int 0)⟩
     have hm'' : MKeys m'' := hk0.set x (fun w hw => by cases hw; exact .int)
-    have hK'' : CKeys (C.put i m'' (K (.scope x k))) := hK.put hm'' (by show C.nid ≤ m0.nid; omega)
+    have hK'' : CKeys (C.put i m'' s') := hK.put hm'' (by show C.nid ≤ m0.nid; omega)
     have hblk : m'.blk = upd C.blk C.nid (some ⟨Ty.nest n (.dtor g u), .lock, some v⟩) := by
       show upd m0.blk m0.nid _ = _; rw [hb0, hnid]; rfl
     have hk : m'.blk C.nid = some ⟨Ty.nest n (.dtor g u), .lock, some v⟩ := by rw [hblk]; simp [upd]
-    have hv' : ∀ w, (C.put i m' (K (.scope x k))).roots w → ¬ Refers m'.blk w C.nid := by
+    have hv' : ∀ w, (C.put i m' s').roots w → ¬ Refers m'.blk w C.nid := by
       intro w hw hr
-      have hw' : (C.put i m'' (K (.scope x k))).roots w := hw
+      have hw' : (C.put i m'' s').roots w := hw
       have := (hK''.root hw').share (Refers.lock_share hk hr)
       simp [Cfg.put, m'', hnid] at this
     have hb : ∀ k' bl', m'.blk k' = some bl' → ¬ Refers m'.blk bl'.keeps C.nid := by
@@ -795,9 +789,56 @@ theorem TStep.closed_send_reaps {P : Prog} {spawn : Nat → Bool} {C : Cfg} (hK 
         | none =>
           exact Nat.lt_irrefl _ ((KB.int (n := C.nid) (j := 0)).share hsh)
         | some p1 => exact Nat.lt_irrefl _ ((hK.blk _ _ _ _ hk').share hsh)
-    obtain ⟨hm, t', z, h1, h2, h3, h4⟩ :=
+    obtain ⟨hm, t', w, h1, h2, h3, h4⟩ :=
       TStep.last_drop_reaps (P := P) (C := C) (i := i) (m' := m') hlen hse (Or.inr rfl) hk hv' hb
-    exact ⟨rfl, v, m0, ht, hm, t', z, h1, h2, by rw [← hnv]; exact h3, h4⟩
+    exact ⟨rfl, v, m0, ht, hm, t', w, h1, h2, by rw [← hnv]; exact h3, h4⟩
+
+/-- **Agora #805: a closed channel's send bound by `letv x`** (`: r ( chan_send
+    ch x )`): the step is a configuration step (`TStep.thread`, at no spawn
+    redex), the answer is 0, the value taken from `y` sits in the block at
+    `C.nid`, which the step's marking sweep marks `dead`, and in the step's
+    result `C'` a slot `w` of thread `i` at or above its `nv` before the step
+    (one its reaps made) owns the value, the block emptied or gone
+    (`closed_send_core`).  (Which frame the reap put around the redex is
+    `Step.reap`'s: `scopeD _ g`, whose end runs the destructor; this
+    statement does not trace it.) -/
+theorem TStep.closed_send_reaps {P : Prog} {spawn : Nat → Bool} {C : Cfg} (hK : CKeys C) {i : Nat}
+    {t : Thread} {K : Stmt → Stmt} {x a y : Var} {k : Stmt} (hi : C.ths[i]? = some t)
+    (hR : Redex t.s K (.letv x (.chanSend a y) k)) (hsp : ¬ SpawnRedex spawn t.s) (hx : t.st x = none)
+    {r : Val} {o : Bool} {m1 : Mem} (he : EvalR (C.view t) (.chanSend a y) (.ok r o m1))
+    {o' : Bool} {kc : Nat} {τ : Ty} {q : Val} {f : Nat} (ha : t.st a = some ⟨o', some (.lk kc)⟩)
+    (hc : C.blk kc = some ⟨τ, .lock, some (.pair q (.int (f + 1)))⟩)
+    {n g : Nat} {u : Ty} (hs : τ.undtor = .prod (.vec (Ty.nest n (.dtor g u))) .int)
+    {C' : Cfg} (hse : CSettle P i (C.put i (m1.set x ⟨o, some r⟩) (K (.scope x k))).sweepD C') :
+    TStep P spawn C C' ∧ r = .int 0 ∧ ∃ v m0, TakeVal (C.view t) y v m0 ∧
+      (C.put i (m1.set x ⟨o, some r⟩) (K (.scope x k))).sweepD.blk C.nid =
+        some ⟨Ty.nest n (.dtor g u), .dead, some v⟩ ∧
+      ∃ (t' : Thread) (w : Var), C'.ths[i]? = some t' ∧ t'.st w = some ⟨true, some v⟩ ∧ t.nv ≤ w ∧
+        Emptied C'.blk C.nid (Ty.nest n (.dtor g u)) := by
+  have hst : Step P (C.view t) t.s (.ok (m1.set x ⟨o, some r⟩) (K (.scope x k))) := by
+    rw [hR.eq]; exact hR.step (Step.letv hx he)
+  exact ⟨.thread hi hsp hst hse, closed_send_core (al := m1.alloc) hK hi he ha hc hs hse⟩
+
+/-- **... and bound by `assign z`** (`= r ( chan_send ch x )`): the same, the
+    step an `Step.assign` whose old value's drop (`DropSlot`, to the
+    addresses `al`) is part of the step. -/
+theorem TStep.closed_send_reaps_assign {P : Prog} {spawn : Nat → Bool} {C : Cfg} (hK : CKeys C) {i : Nat}
+    {t : Thread} {K : Stmt → Stmt} {z a y : Var} (hi : C.ths[i]? = some t)
+    (hR : Redex t.s K (.assign z (.chanSend a y))) (hsp : ¬ SpawnRedex spawn t.s) (hz : (t.st z).isSome)
+    {r : Val} {o : Bool} {m1 : Mem} (he : EvalR (C.view t) (.chanSend a y) (.ok r o m1))
+    {sl : Slot} {al : Nat → Bool} (hsl : m1.st z = some sl) (hd : DropSlot m1.alloc sl al)
+    {o' : Bool} {kc : Nat} {τ : Ty} {q : Val} {f : Nat} (ha : t.st a = some ⟨o', some (.lk kc)⟩)
+    (hc : C.blk kc = some ⟨τ, .lock, some (.pair q (.int (f + 1)))⟩)
+    {n g : Nat} {u : Ty} (hs : τ.undtor = .prod (.vec (Ty.nest n (.dtor g u))) .int)
+    {C' : Cfg} (hse : CSettle P i (C.put i ({ m1 with alloc := al }.set z ⟨o, some r⟩) (K .skip)).sweepD C') :
+    TStep P spawn C C' ∧ r = .int 0 ∧ ∃ v m0, TakeVal (C.view t) y v m0 ∧
+      (C.put i ({ m1 with alloc := al }.set z ⟨o, some r⟩) (K .skip)).sweepD.blk C.nid =
+        some ⟨Ty.nest n (.dtor g u), .dead, some v⟩ ∧
+      ∃ (t' : Thread) (w : Var), C'.ths[i]? = some t' ∧ t'.st w = some ⟨true, some v⟩ ∧ t.nv ≤ w ∧
+        Emptied C'.blk C.nid (Ty.nest n (.dtor g u)) := by
+  have hst : Step P (C.view t) t.s (.ok ({ m1 with alloc := al }.set z ⟨o, some r⟩) (K .skip)) := by
+    rw [hR.eq]; exact hR.step (Step.assign hz he hsl hd)
+  exact ⟨.thread hi hsp hst hse, closed_send_core hK hi he ha hc hs hse⟩
 
 /-- ... on every configuration a start with typed globals reaches
     (`reach_keys`). -/
@@ -813,8 +854,26 @@ theorem reach_closed_send_reaps {P : Prog} {spawn : Nat → Bool} {G : Globs} (h
     TStep P spawn C C' ∧ r = .int 0 ∧ ∃ v m0, TakeVal (C.view t) y v m0 ∧
       (C.put i (m1.set x ⟨o, some r⟩) (K (.scope x k))).sweepD.blk C.nid =
         some ⟨Ty.nest n (.dtor g u), .dead, some v⟩ ∧
-      ∃ (t' : Thread) (z : Var), C'.ths[i]? = some t' ∧ t'.st z = some ⟨true, some v⟩ ∧ t.nv ≤ z ∧
+      ∃ (t' : Thread) (w : Var), C'.ths[i]? = some t' ∧ t'.st w = some ⟨true, some v⟩ ∧ t.nv ≤ w ∧
         Emptied C'.blk C.nid (Ty.nest n (.dtor g u)) :=
   TStep.closed_send_reaps (reach_keys hG hr) hi hR hsp hx he ha hc hs hse
+
+/-- ... and the `assign`-bound send there. -/
+theorem reach_closed_send_reaps_assign {P : Prog} {spawn : Nat → Bool} {G : Globs} (hG : GlobsOK P G)
+    {s0 : Stmt} {nv : Nat} {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C) {i : Nat}
+    {t : Thread} {K : Stmt → Stmt} {z a y : Var} (hi : C.ths[i]? = some t)
+    (hR : Redex t.s K (.assign z (.chanSend a y))) (hsp : ¬ SpawnRedex spawn t.s) (hz : (t.st z).isSome)
+    {r : Val} {o : Bool} {m1 : Mem} (he : EvalR (C.view t) (.chanSend a y) (.ok r o m1))
+    {sl : Slot} {al : Nat → Bool} (hsl : m1.st z = some sl) (hd : DropSlot m1.alloc sl al)
+    {o' : Bool} {kc : Nat} {τ : Ty} {q : Val} {f : Nat} (ha : t.st a = some ⟨o', some (.lk kc)⟩)
+    (hc : C.blk kc = some ⟨τ, .lock, some (.pair q (.int (f + 1)))⟩)
+    {n g : Nat} {u : Ty} (hs : τ.undtor = .prod (.vec (Ty.nest n (.dtor g u))) .int)
+    {C' : Cfg} (hse : CSettle P i (C.put i ({ m1 with alloc := al }.set z ⟨o, some r⟩) (K .skip)).sweepD C') :
+    TStep P spawn C C' ∧ r = .int 0 ∧ ∃ v m0, TakeVal (C.view t) y v m0 ∧
+      (C.put i ({ m1 with alloc := al }.set z ⟨o, some r⟩) (K .skip)).sweepD.blk C.nid =
+        some ⟨Ty.nest n (.dtor g u), .dead, some v⟩ ∧
+      ∃ (t' : Thread) (w : Var), C'.ths[i]? = some t' ∧ t'.st w = some ⟨true, some v⟩ ∧ t.nv ≤ w ∧
+        Emptied C'.blk C.nid (Ty.nest n (.dtor g u)) :=
+  TStep.closed_send_reaps_assign (reach_keys hG hr) hi hR hsp hz he hsl hd ha hc hs hse
 
 end A3

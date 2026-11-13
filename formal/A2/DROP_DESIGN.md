@@ -542,7 +542,7 @@ made it:
 | a closure's or a trait object's environment | the captures' destructors | the closure's glue calls its drop method, whose code takes the environment owned and binds it under `letd`s (Agora #609, `ClosureGlueOK`, `Step.callcD`); it is called lent, through its binding or a borrow of the destructor type (Agora #651); a method that changes the environment is refused for the class |
 | a panic's unwind through any of these | the journal runs each, once | `scopeP` frees in one step, except at `scopeD` |
 | an `Arc` / lock block's payload when its last share goes (A3) | on the thread that drops the last share | an `Arc` of a destructor type, or (Agora #755) of a drained `Vec` of them: the marking sweep marks the block `dead`, the same thread reaps it into a destructor frame at the payload's own type, which drains a `Vec` (Agora #610, A2's `Steps`; Agora #755 item 1, A3's `TStep`: the configuration's marking sweep and the same thread's reaps); a lock's or a cell's destructor value, or drained `Vec` of them, that holds no share likewise (Agora #755, `Locked D`, `Locked (Vec D)`); a channel's queue of them likewise, its state under its glue, whose frame drains the queue (Agora #755); any other lock's or cell's, or an `Arc`'s holding one in a field of a type with no destructor of its own: refused (`Ty.ok`) |
-| a value `chan_send` does not queue (closed channel) | dropped in `chan_send`, on the sender | Agora #755: moved into a fresh lock block of the element type (`EvalR.chanSendClosed`), which the marking sweep frees (no destructor value) or marks for the sending thread to reap (Agora #805, proved: `A3.TStep.closed_send_reaps`) |
+| a value `chan_send` does not queue (closed channel) | dropped in `chan_send`, on the sender | Agora #755: moved into a fresh lock block of the element type (`EvalR.chanSendClosed`), which the marking sweep frees (no destructor value) or marks for the sending thread to reap (Agora #805, proved for a `letv`- or `assign`-bound send: `A3.TStep.closed_send_reaps`, `closed_send_reaps_assign`) |
 
 ### Semantics
 
@@ -1024,7 +1024,8 @@ each one shrinks `CLAIM.md`'s exception:
         payload, `x` an owner live at the body's end, as `withLock` does:
         `A3.LockDtorWitness.scopeL_end_owns`, `scopeL_typed_end_gives_back`,
         `scopeL_typed_panic`); that the block is then checked out is read off
-        the rules, not proved (no invariant ties a frame to its block).
+        the rules, not proved (no invariant ties a frame to its block;
+        Agora #808).
         `x` is still `lockE t` (no `dtor`, no `dbind`): nothing reads those
         flags of a check-out binding, as it views nothing and runs nothing.
      2. *The orphaned lock block.* `Cand` / `CandPay` / `TopPay` admit a
@@ -1121,10 +1122,12 @@ each one shrinks `CLAIM.md`'s exception:
      panic), with the mark-and-reap step lemmas, A3's claim
      (`A3.lockVecDtor_claim`, `A3.chanDtor_claim`) and the A3 reap instance
      (`A3.lockVecDtor_reaps`, `A3.chanDtor_reaps`). Agora #805: the glue's
-     body drains the queue in index order, as the frame's steps
+     body starts the queue's drain, as the frame's steps
      (`A3.chanGlue_drains`, over `GlueOK`'s shape and the glue's typing: the
-     queue handed to a `letd` at `vec s`, whose frame's end is
-     `Step.scopeDDrain`, element 0 first; `A3.ChanDtorWitness.glueV_drains`).
+     queue handed to a `letd w f` at `vec s`, `f` the elements' destructor,
+     whose frame's end, the queue non-empty, is one `Step.scopeDDrain`,
+     element 0 first; index order is that step iterated, which no theorem
+     does; `A3.ChanDtorWitness.glueV_drains`, `f = 0`, `dfn`).
      Read off the steps, not proved: the reap's call into the glue's body; no
      run is traced.  (Agora
      #805: the parked block of a closed channel's send is marked and reaped

@@ -39,7 +39,7 @@ stores and steps, not of this program's run (which no theorem here traces):
   point a `t` (given back) or nothing (moved to an owner that runs its
   destructor; the release then frees nothing): `scopeL_typed_panic`.  The
   block's half (its payload checked out there) is still a hypothesis: no
-  invariant ties a `scopeL` frame to its block;
+  invariant ties a `scopeL` frame to its block (Agora #808);
 * when the lock's last share is gone, the marking sweep marks its block
   `dead`, its payload in it, and the same thread's next step is the reap
   that hands the payload to a destructor frame of `dfn`
@@ -240,7 +240,7 @@ theorem scopeL_end_owns {P : Prog} {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : T
 
 /-- **The check-out's end gives the value back, for a typed frame**: with
     `x`'s ownership discharged by the typing (`scopeL_end_owns`), what is
-    left of `scopeL_end_gives_back`'s hypotheses is the block's: that it has
+    left of `scopeL_end_gives_back`'s hypotheses is the block's (Agora #808): that it has
     its payload checked out (`m.blk k = some ⟨t, .lock, none⟩`). -/
 theorem scopeL_typed_end_gives_back {P : Prog} {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x : Var}
     {m : Mem} (ht : StmtT P Γ F (.scopeL k t x .skip) Δ) (hi : MInv m Γ) (hd : t.holdsDtor = true)

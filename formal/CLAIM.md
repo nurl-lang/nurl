@@ -262,8 +262,9 @@ the LLVM / C11 memory model rather than redefining it.
       kept by every step: `A3.Step.keys`, `A3.TStep.keys`), so nothing
       refers to the fresh block, and the step's marking sweep marks it and
       the sending thread's reaps bind the value in a fresh slot of its own,
-      in that configuration step (`A3.TStep.closed_send_reaps`,
-      `A3.reach_closed_send_reaps`). A typed witness closes a channel, then
+      in that configuration step, whether a `letv` or an `assign` binds the
+      answer (`A3.TStep.closed_send_reaps`, `closed_send_reaps_assign`,
+      `A3.reach_closed_send_reaps`, `reach_closed_send_reaps_assign`). A typed witness closes a channel, then
       sends a destructor value (`A3.ChanDtorWitness.mainC`,
       `A3.chanClosed_claim`, `A3.chanClosed_reaps`).
       `chan_recv` moves the front out to the receiver, owned (an option:
@@ -984,10 +985,11 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   given back when the block is checked out, or nothing, the value moved to
   an owner that runs its destructor, and the release frees nothing
   (`scopeL_typed_panic`, over `Step.panic_st`, `scopeL_entry`). What stays
-  read off the rules, not proved: that the block is then checked out
-  (`m.blk k = some ⟨t, .lock, none⟩`): no invariant ties a `scopeL` frame
-  to its block (the block is checked out exactly while a frame of it is on
-  some thread), so the give-back lemmas keep that hypothesis. When the lock's last share is
+  read off the rules, not proved (Agora #808): that the block is then
+  checked out (`m.blk k = some ⟨t, .lock, none⟩`): no invariant ties a
+  `scopeL` frame to its block (the block is checked out exactly while a
+  frame of it is on some thread), so the give-back lemmas keep that
+  hypothesis. When the lock's last share is
   gone the marking sweep marks the lock block `dead`, its payload in it
   (`Cand` admits a lock block whose payload is in it), and the same thread
   reaps it as an `Arc`'s (`A3.LockDtorWitness.last_drop_reaps`, over
@@ -1054,7 +1056,8 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   run is not traced; that the body leaves the binding holding a `Vec` at
   its end and where it panics is proved for a typed frame as for `Locked
   D` (Agora #805, `scopeL_end_owns`, `scopeL_typed_panic`), and that the
-  block is then checked out is read off the rules, as for `Locked D`.
+  block is then checked out is read off the rules, as for `Locked D`
+  (Agora #808).
 - Agora #755: **a channel of destructor values.** nurlc's `Channel A` is a
   counted `ChImpl A`, a struct holding the queue (`Vec A`), whose drop glue
   drops the queue's elements in index order when the last `Channel_drop`
@@ -1090,13 +1093,16 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   channel closed, then a destructor value sent: `mainC_typed`,
   `mainC_safe`, `mainC_no_leak`, `mainC_no_leak_panic`;
   `A3.chanClosed_claim`, `A3.chanClosed_reaps`). Agora #805: a channel's
-  glue drains the queue in index order (`A3.chanGlue_drains`, any
-  `GlueOK` glue of `prod (vec s) int` with `s` holding a destructor value,
-  and `A3.ChanDtorWitness.glueV_drains`): its body takes the struct apart
-  and, through the typing, hands the queue to a `letd` at `vec s` (an
-  `assign` or `unpair` of it is refused), whose frame's end, under any
-  renaming the call applies, is the drain's step and nothing else, element
-  0 first, each in a frame of its own. Read off the steps, not proved:
+  glue starts the queue's drain (`A3.chanGlue_drains`, any `GlueOK` glue
+  of `prod (vec s) int` with `s` holding a destructor value, and
+  `A3.ChanDtorWitness.glueV_drains`): its body takes the struct apart and,
+  through the typing, hands the queue to a `letd w f` at `vec s` (an
+  `assign` or `unpair` of it is refused), `f` the elements' destructor
+  (`s = Ty.nest n (.dtor f u)`; `dfn` at the witness), whose frame's end,
+  under any renaming the call applies and the queue non-empty, is one drain
+  step and nothing else, element 0 to a frame of `f` of its own. Index
+  order is that step taken again on the shorter queue; no theorem iterates
+  it. Read off the steps, not proved:
   the run from the reap's call of the glue into its body (the parameter's
   binding, `BindParams`); no theorem traces the run. Agora #805: a receive
   of a destructor value has a witness, `A3.ChanDtorWitness.mainR` (sent,
