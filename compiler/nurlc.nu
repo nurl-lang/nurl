@@ -6790,10 +6790,15 @@ unsafe @ __arg_lend_root i syms → s {
                 ( str_contains_word __rvl first_val )
                 & == ( int_width lt ) 64 ( seq __rjve __ren )
                 { ? & ( is_ident_tok first_tt ) ( str_contains_word __rvl first_val ) { ( __bare_variant_check lex syms first_val ) } {}
+                    // (A unit variant's payload slot is zero, not undef: a key
+                    // read out of it — the hand-over to a cursor, the keep rule —
+                    // is null there. Undef, LLVM folded each read of it apart, and
+                    // a record keyed on such a field was dropped by no one —
+                    // agora #366. The same at every site that makes one.)
                     : s __ewr ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print __ewr )
                     ( nurl_print ` = insertvalue ` ) ( nurl_print ( nurl_llty fn_rt ) )
-                    ( nurl_print ` undef, i64 ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
+                    ( nurl_print ` zeroinitializer, i64 ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
                     = val __ewr
                     = lt ( nurl_str_cat fn_rt `` ) }
                 { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
@@ -32147,7 +32152,12 @@ unsafe @ __pfo_bind_lends i syms s name → v {
     : ~ i i 0
     ~ < i fc {
         : s ft ( nurl_sym_get g_root_syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int i ) `__type` ) ) )
-        ? ( __is_value_handle ft ) { ^ ( __handle_keyed ft T ) } {}
+        // (The first owned field that keys, as mem_identity_key takes it: one
+        // that can be null while a later field owns memory — an enum with a
+        // unit variant, `: R { E e String s }` — is passed over, not the end
+        // of the search. Answered "no key" there, an owner given a lend
+        // kept its old value back for good, agora #366.)
+        ? & ( __is_value_handle ft ) ( __handle_keyed ft T ) { ^ T } {}
         = i + i 1
     }
     ^ F
@@ -32168,9 +32178,10 @@ unsafe @ __pfo_bind_lends i syms s name → v {
         : s vname ( str_first_word scan ) = scan ( str_skip_word scan )
         : s pcs ( nurl_sym_get2 g_root_syms vname `__paycount` )
         : i pc ? != 0 ( nurl_str_len pcs ) ( nurl_str_to_int pcs ) 0
-        : s p0 ? > pc 0 ( nurl_sym_get g_root_syms ( nurl_str_cat vname `__payload__0` ) ) ``
-        : i st ? > pc 0 ( enum_payload_storage p0 g_root_syms ) 0
-        : b slot_key ? == st 3 T ? == st 2 ( __type_needs_drop p0 g_root_syms ) F
+        // (Keyed by its first payload that is its own buffer or box, which
+        // need not be the first payload — `A i String` by its String,
+        // mem_enum_variant_key: agora #366.)
+        : b slot_key > ( __variant_key_slot vname ) 0
         ? ! slot_key {
             ? nonnull { ^ F } {}
             : ~ i k 0
@@ -32342,22 +32353,20 @@ unsafe @ __pfo_bind_lends i syms s name → v {
         ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty ty ) ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
         ^ r
     } {}
-    // An enum: its first payload slot — the buffer or box of the variant
-    // that owns one (a scalar variant owns nothing to confuse it with).
-    ? ( __is_handle_enum ty ) {
-        : s e ( nurl_cg_reg cg )
-        ( nurl_print `  ` ) ( nurl_print e ) ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty ty ) ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 1\n` )
-        : s r ( nurl_cg_reg cg )
-        ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ` = inttoptr i64 ` ) ( nurl_print e ) ( nurl_print ` to i8*\n` )
-        ^ r
-    } {}
+    // An enum: its active variant's first payload that is its own buffer or
+    // box (mem_enum_variant_key) — null for a variant that has none. Read at
+    // slot 1 whatever the variant, `A i String` was keyed by its number,
+    // which another value holds too (agora #366).
+    ? ( __is_handle_enum ty ) { ^ ( mem_enum_variant_key cg ty val ) } {}
     ? ! ( __is_owned_struct_ty ty ) { ^ ( nurl_str_cat `` `` ) } {}
     : s sname ( nurl_str_slice ty 1 - ( nurl_str_len ty ) 1 )
     : i fc ( nurl_str_to_int ( nurl_sym_get2 g_root_syms sname `__field_count` ) )
     : ~ i i 0
     ~ < i fc {
         : s ft ( nurl_sym_get g_root_syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int i ) `__type` ) ) )
-        ? ( __is_value_handle ft ) {
+        // (A record by its first owned field that keys, as __handle_keyed
+        // asks: an enum field that may hold a unit variant is passed over.)
+        ? & ( __is_value_handle ft ) ( __handle_keyed ft T ) {
             : s f ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print f ) ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty ty ) ) ( nurl_print ` ` ) ( nurl_print val )
             ( nurl_print `, ` ) ( nurl_print ( nurl_str_int i ) ) ( nurl_print `\n` )
@@ -63423,7 +63432,7 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
                     : s __efw ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print __efw )
                     ( nurl_print ` = insertvalue ` ) ( nurl_print ( nurl_llty decl_fty ) )
-                    ( nurl_print ` undef, i64 ` ) ( nurl_print actual_fval ) ( nurl_print `, 0\n` )
+                    ( nurl_print ` zeroinitializer, i64 ` ) ( nurl_print actual_fval ) ( nurl_print `, 0\n` )
                     = actual_fval __efw
                     = actual_fty ( nurl_str_cat decl_fty `` ) }
                 { ( die lex ( nurl_str_cat3
@@ -63717,7 +63726,7 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
                     : s __sew2 ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print __sew2 )
                     ( nurl_print ` = insertvalue ` ) ( nurl_print ( nurl_llty elem_ty ) )
-                    ( nurl_print ` undef, i64 ` ) ( nurl_print v ) ( nurl_print `, 0\n` )
+                    ( nurl_print ` zeroinitializer, i64 ` ) ( nurl_print v ) ( nurl_print `, 0\n` )
                     = v __sew2
                     = vt ( nurl_str_cat ( nurl_llty elem_ty ) `` )
                     = __se_bare T }
@@ -64246,7 +64255,7 @@ unsafe @ __l2n_list s lst → s {
             : s r ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print r )
             ( nurl_print ` = insertvalue ` ) ( nurl_print ( nurl_llty to_ty ) )
-            ( nurl_print ` undef, i64 ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
+            ( nurl_print ` zeroinitializer, i64 ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
             ^ r }
         {  // Single-pointer-handle struct (`{ s ctl }`-shape — Vec[A],
             // String, Channel[A], Thread, ArenaImpl). When a Result Ok-arm
