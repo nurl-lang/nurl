@@ -1,5 +1,5 @@
 // vec_that_may_own_given_back_a_lend_of_itself_runs_clean: `: ~ v ? > c 0 ( vec_new … ) h` owns its value on one path only; `: x { v }` then `= v x` gives it back, and a `: ~ w v` cursor handed back the same way (`= v w`).
-// Closed (agora #667): on the path v owned its value, `= v x` released it and stored the same buffer back (heap-use-after-free). x, bound as a lend, is now asked by its key.
+// Closed (agora #667): on the path v owned its value, `= v x` released it and stored the same buffer back (heap-use-after-free). x, bound from a block whose tail is v, is now asked by its key.
 // map: §7.6 | A2 | runs-clean | - | agora #667: a binding that may own its value given back a lend of itself
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`

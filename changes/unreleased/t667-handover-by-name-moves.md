@@ -16,5 +16,5 @@
   new value. The entry follows `a`'s drop flag and is now kept.
 - **An owner given back a lend of itself keeps it** (Agora #667).
   `: x { v }` binds a lend of `v`, and `= v x` released v's value and
-  stored the freed buffer back. Such a binding is now checked by its key,
-  as a cursor is.
+  stored the freed buffer back. Such a binding is now checked by its key
+  at `= v x`, as a cursor is.

@@ -31385,17 +31385,8 @@ unsafe @ __pfo_bind_lends i syms s name → v {
 // that call may lend from may hold it, by the same answers.
 @ mem_ud_hold_lend_cond i syms i cg s w s vt → s {
     : s up ( mem_udrop_ptr_of syms w )
-    // (A binding that owns nothing of its own — `: x { v }` over an outer
-    // `v` is lent it: what it holds may be this owner's own value, and `= v
-    // x` gives v that value back. Asked by its key, as a cursor is; taken
-    // for another value, v's was released and stored back freed — agora
-    // #667.)
-    ? == 0 ( nurl_str_len up ) { ^ ? & != 0 ( nurl_sym_len2 syms w `__ptr` ) == 0 ( nurl_sym_len2 syms w `__param` ) ( nurl_str_cat `1` `` ) ( nurl_str_cat `` `` ) } {}
+    ? == 0 ( nurl_str_len up ) { ^ ( nurl_str_cat `` `` ) } {}
     ? != 0 ( nurl_sym_len2 syms up `__alias` ) { ^ ( nurl_str_cat `1` `` ) } {}
-    // (…and one bound as a lend, on every path or on some — `__sborrow` `1`
-    // or `dyn`: the same, whatever it lends.)
-    : s usb ( nurl_sym_get2 syms up `__sborrow` )
-    ? | ( seq usb `1` ) ( seq usb `dyn` ) { ^ ( nurl_str_cat `1` `` ) } {}
     : ~ s ks ( nurl_str_cat ( nurl_sym_get2 syms w `__pljk` ) `` )
     : ~ s rs ( nurl_str_cat ( nurl_sym_get2 syms w `__pljr` ) `` )
     : s want ( __ud_core_ty vt )
@@ -33621,6 +33612,20 @@ unsafe @ __jt_reg i cg → s {
     : s tp ( nurl_sym_get syms `__tail_ptr__` )
     ? | | | == 0 ( nurl_str_len nm ) == 0 ( nurl_str_len tp ) ( seq nm name ) ! ( seq tp ( nurl_sym_get2 syms nm `__ptr` ) ) { ^ ( nurl_str_cat `` `` ) } {}
     ? | == 0 ( nurl_str_starts tp `%r` ) < ( nurl_str_to_int ( nurl_str_slice tp 2 ( nurl_str_len tp ) ) ) rmin { ^ ( nurl_str_cat `` `` ) } {}
+    ? ! ( seq ( nurl_sym_get syms `__last_ident_name__` ) nm ) { ^ ( nurl_str_cat `` `` ) } {}
+    ^ ( nurl_str_cat nm `` )
+}
+
+// …and a value block whose tail is a binding from outside it (`: x { v }`,
+// `: x { { v } }`): that binding's name, else ``. x is lent v's value: `= v
+// x` gives v its own value back, and is asked by its key where it runs
+// (agora #667: v's value was released and stored back freed).
+@ __let_blk_tail_outer i syms i tt i rmin → s {
+    ? != tt TT_LBRACE { ^ ( nurl_str_cat `` `` ) } {}
+    : s nm ( nurl_sym_get syms `__tail_name__` )
+    : s tp ( nurl_sym_get syms `__tail_ptr__` )
+    ? | | == 0 ( nurl_str_len nm ) == 0 ( nurl_str_len tp ) ! ( seq tp ( nurl_sym_get2 syms nm `__ptr` ) ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? | == 0 ( nurl_str_starts tp `%r` ) >= ( nurl_str_to_int ( nurl_str_slice tp 2 ( nurl_str_len tp ) ) ) rmin { ^ ( nurl_str_cat `` `` ) } {}
     ? ! ( seq ( nurl_sym_get syms `__last_ident_name__` ) nm ) { ^ ( nurl_str_cat `` `` ) } {}
     ^ ( nurl_str_cat nm `` )
 }
@@ -55425,6 +55430,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         // (A value block whose tail is a binding the block made is that
         // binding to this one's drop flag, as `: e s` is: agora #615.)
         : s __lbt ( __let_blk_tail_name syms bck_rhs_tt ( nurl_get_last_type ) __rhs_r0 name is_mutable )
+        ( nurl_sym_def syms ( nurl_str_cat name `__btail` ) ( __let_blk_tail_outer syms bck_rhs_tt __rhs_r0 ) )
         : i __own_tt ? != 0 ( nurl_str_len __lbt ) TT_IDENT bck_rhs_tt
         : s __own_val ? != 0 ( nurl_str_len __lbt ) __lbt bck_rhs_val
         ( __nc_bind_lend_note syms name bck_rhs_tt F )
@@ -55864,6 +55870,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             // (A value block whose tail is a binding the block made is that
             // binding to this one's drop flag, as `: e s` is: agora #615.)
             : s __lbt ( __let_blk_tail_name syms bck_rhs_tt ( nurl_get_last_type ) __rhs_r0 name is_mutable )
+            ( nurl_sym_def syms ( nurl_str_cat name `__btail` ) ( __let_blk_tail_outer syms bck_rhs_tt __rhs_r0 ) )
             : i __own_tt ? != 0 ( nurl_str_len __lbt ) TT_IDENT bck_rhs_tt
             : s __own_val ? != 0 ( nurl_str_len __lbt ) __lbt bck_rhs_val
             ( __nc_bind_lend_note syms name bck_rhs_tt F )
@@ -57389,7 +57396,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // nothing, and `= o ( f1 o )` dropped o's value though the call
         // handed it back — agora #742. The module-end answers decide.)
         : b __ud_clend | g_call_may_lend ( __lend_pending ( nurl_sym_get syms `__last_call_name__` ) )
-        : s __ud_kcond ? ! __ud_kgo `` ? == bck_rhs_tt TT_LPAREN ? & __ud_clend ! __ud_may_self ( mem_ud_lend_own_cond syms cg vt ) `` ? & ( is_ident_tok bck_rhs_tt ) ! ( seq bck_rhs_val name ) ( mem_ud_hold_lend_cond syms cg bck_rhs_val vt ) ``
+        : s __ud_kcond ? ! __ud_kgo `` ? == bck_rhs_tt TT_LPAREN ? & __ud_clend ! __ud_may_self ( mem_ud_lend_own_cond syms cg vt ) `` ? & ( is_ident_tok bck_rhs_tt ) ! ( seq bck_rhs_val name ) ? ( seq ( nurl_sym_get2 syms bck_rhs_val `__btail` ) name ) ( nurl_str_cat `1` `` ) ( mem_ud_hold_lend_cond syms cg bck_rhs_val vt ) ``
         // (Only an owner that may own its value: one bound as a borrow
         // outright (`__sborrow` `1`, a `: ~` lend out of a `vec_get`) owns
         // nothing to keep, and its flag, never set, gates no drop — setting

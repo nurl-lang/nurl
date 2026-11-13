@@ -1,5 +1,5 @@
 // vec_given_back_a_lend_of_itself_through_a_block_binding_runs_clean: `: x { v }` binds a lend of an outer `v`, and `= v x` gives v that value back — over an owner, over one that owns its value on some paths only, and through a nested block (`: x { { v } }`).
-// Closed (agora #667): `= v x` took x's value for another one and released v's old value, the very buffer it then stored back (heap-use-after-free). A binding bound as a lend (`__sborrow` `1` / `dyn`) is now asked by its key at `= o e`, as a cursor is: on the runs it holds o's own value, o keeps it. The elaborated twin of owned_vec_assigned_a_nested_value_block_of_itself reached it once that probe's join moved by name.
+// Closed (agora #667): `= v x` took x's value for another one and released v's old value, the very buffer it then stored back (heap-use-after-free). A binding bound from a value block whose tail is o (`__btail`) is now asked by its key at `= o e`, as a cursor is: on the runs it holds o's own value, o keeps it. The elaborated twin of owned_vec_assigned_a_nested_value_block_of_itself reached it once that probe's join moved by name.
 // map: §7.6 | A2 | runs-clean | - | agora #667: an owner given back a lend of itself through a block-bound binding
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
