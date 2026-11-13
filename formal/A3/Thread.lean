@@ -44,6 +44,10 @@ theorem inv_emptyGl {s : Stmt} {nv : Nat} (g : Nat → Option Val) (hs : s.src =
   dtorOut _ _ h := by cases h
   dtorIn := DtorPinOK.of_spine_nil (src_spine hs)
 
+/-- Agora #815: no global keeps lock and cell shares apart. -/
+theorem GlobsKinds.empty : GlobsKinds Globs.empty :=
+  ⟨fun _ => false, fun _ _ _ _ h => (by cases h), fun _ _ h => (by cases h)⟩
+
 /-- A3.6: no global is a start the claim admits: A3.0–A3.5's. -/
 theorem GlobsOK.empty {P : Prog} : GlobsOK P Globs.empty where
   sync _ _ h := by cases h
@@ -53,6 +57,7 @@ theorem GlobsOK.empty {P : Prog} : GlobsOK P Globs.empty where
   codes _ _ h := by cases h
   dtors _ _ h := by cases h
   cells _ _ _ h := by obtain ⟨_, _, h, _⟩ := h; cases h
+  kinds := GlobsKinds.empty
 
 /-- A3.6: the blocks the globals' `make`s left are as every thread's view
     needs them ... -/

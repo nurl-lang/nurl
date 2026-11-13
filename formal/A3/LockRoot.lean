@@ -1,4 +1,5 @@
 import A3.LockExcl
+import A3.Kinds
 
 /-! A3.2 — Agora #808: **a check-out's root share outlives its body.**
 
@@ -1339,10 +1340,11 @@ theorem _root_.A2.StmtT.rbind_live {P : Prog} {m : Mem} {Γ Δ : Ctx} {F : List 
     when it is a cell share, the thread holds an owner's share of cell `k`:
     the root itself, through an owner, or, through a borrowed parameter (live,
     bound by an `rbind` around the frame), its caller's owner
-    (`MInv.cell_owned`).  (That every check-out of a cell's block is through a
-    cell share, i.e. that no block is named by both lock and cell shares, is
-    not proved here.) -/
-theorem reach_frame_cell_owner (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn)
+    (`MInv.cell_owned`).  That every check-out of a cell's block is through a
+    cell share, no block being named by both lock and cell shares, is
+    A3/Kinds.lean's (`reach_shareKind`), and so `reach_frame_cell_owner`
+    below, for any check-out of a cell's block. -/
+theorem reach_frame_root_cell_owner (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn)
     (hG : GlobsOK P G) (ht : StmtT P (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
     (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
     {i : Nat} {th : Thread} {K : Stmt → Stmt} {k : Nat} {u : Ty} {x : Var} {b : Stmt}
@@ -1363,6 +1365,37 @@ theorem reach_frame_cell_owner (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnO
     obtain ⟨Γ', F', Δ', ht', hinv'⟩ := hK'.typed Γ F Δ hth hinv
     obtain ⟨Γ'', E, hi'', hE, hl⟩ := ht'.rbind_live hinv'.toMInv
     exact hi''.cell_owned (m := ownView C th a) hE hl hy (Sub.refl _)
+
+/-- **A3.5, Agora #815: a check-out of a cell's block is through a cell share,
+    by a thread that holds an owner's share of the cell** (`CellOp`'s second
+    case).  In a reached configuration, a thread inside a check-out of block
+    `k` (a `scopeL k` frame), where some value of the configuration holds a
+    cell share of `k` (`Cfg.Holds`: a thread's slot, a block's payload or a
+    global), holds that cell share in a slot the frame's body does not name
+    (the frame's root, `reach_frame_root`: a lock share of `k` would name
+    `k` by both kinds, which `reach_shareKind` rules out), and an owner's
+    share of cell `k` (`reach_frame_root_cell_owner`). -/
+theorem reach_frame_cell_owner (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn)
+    (hG : GlobsOK P G) (ht : StmtT P (fun _ => none) [] s0 Δ0) (hs : s0.src = true)
+    (hsc : s0.codesOK P) (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
+    {i : Nat} {th : Thread} {K : Stmt → Stmt} {k : Nat} {u : Ty} {x : Var} {b : Stmt}
+    (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x b)) (hc : C.Holds (.cell k)) :
+    ∃ y o, th.st y = some ⟨o, some (.cell k)⟩ ∧ y ∉ b.nm ∧
+      ∃ y' v, th.st y' = some ⟨true, some v⟩ ∧ Sub (.cell k) v := by
+  obtain ⟨y, o, w, hy, hw, hyn, how⟩ := reach_frame_root_cell_owner hP hPc hSp hG ht hs hsc hv hr hi hK
+  rcases hw with rfl | rfl
+  · exact absurd hc (reach_shareKind hG hr k (.inl ⟨i, th, y, o, _, hi, hy, Sub.refl _⟩))
+  · exact ⟨y, o, hy, hyn, how rfl⟩
+
+/-- ... so its next step is a step on the cell (`CellOp`, its second case). -/
+theorem reach_frame_cellOp (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn)
+    (hG : GlobsOK P G) (ht : StmtT P (fun _ => none) [] s0 Δ0) (hs : s0.src = true)
+    (hsc : s0.codesOK P) (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
+    {i : Nat} {th : Thread} {K : Stmt → Stmt} {k : Nat} {u : Ty} {x : Var} {b : Stmt}
+    (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x b)) (hc : C.Holds (.cell k)) :
+    CellOp th k := by
+  obtain ⟨_, _, _, _, y', v, hy', hs'⟩ := reach_frame_cell_owner hP hPc hSp hG ht hs hsc hv hr hi hK hc
+  exact .inr ⟨mem_lfr_keys (hK.lfr_mem rfl), y', v, hy', hs'⟩
 
 end reach
 

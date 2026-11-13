@@ -3175,8 +3175,9 @@ def _root_.A2.Stmt.lkeys : Stmt → List Nat
     third cut, a borrow), or it runs inside a check-out of it, holding an
     owner's share of it (the one the check-out is through, which `withLock`'s
     premises keep in its binding for the whole body, or, for a borrowed
-    parameter, its caller's owner: `A3.reach_frame_cell_owner`, for a
-    check-out through a cell share).  Such a step writes the state wherever it is: the model checks it
+    parameter, its caller's owner: `A3.reach_frame_cell_owner`, for every
+    check-out of a cell's block, which no lock share names,
+    `A3.reach_shareKind`).  Such a step writes the state wherever it is: the model checks it
     out as a lock's payload, so two threads at once would be serialized
     there, where the runtime's copies write one memory with no lock; so a
     step on a cell is not an address's touch, but a race of its own. -/
@@ -3236,7 +3237,7 @@ theorem NoLeak.empty {P : Prog} {spawn : Nat → Bool} {s : Stmt} {nv : Nat}
 def LockHolds (B : Nat → Option Blk) (k' k : Nat) : Prop :=
   ∃ t p, B k' = some ⟨t, .lock, some p⟩ ∧ Sub (.cell k) p
 
-/-- **A3.6, what a start-set global may be**, as the claim asks it of the
+/-- **A3.6, what a start-set global may be**, as its typing sees the
     start:
     - each global holds a share of a block that synchronises itself, at a
       type `Ty.sync` admits (`GlobFits`): a lock share (`Locked`, `RwLocked`,
@@ -3253,8 +3254,10 @@ def LockHolds (B : Nat → Option Blk) (k' k : Nat) : Prop :=
     - (A3.5's second cut) a library handle the blocks hold (a `Locked
       PNCounter` global) has all its shares in one block's payload, at a key
       taken from `nid`: the `make`s ran the crossing check at every value
-      going into a lock, as every thread does (A3's `CellInv`). -/
-structure GlobsOK (P : Prog) (G : Globs) : Prop where
+      going into a lock, as every thread does (A3's `CellInv`).
+    `GlobsOK` adds (Agora #815) that no key is named by both a lock share and
+    a cell share (`GlobsKinds`). -/
+structure GlobsTyped (P : Prog) (G : Globs) : Prop where
   sync  : ∀ g v, G.gl g = some v → ∃ t, t.sync = true ∧ t.ok = true ∧ GlobFits G.blk t v
   inv   : MInv (G.mem 0) (fun _ => none)
   cover : Covers (G.mem 0)
@@ -3267,6 +3270,47 @@ structure GlobsOK (P : Prog) (G : Globs) : Prop where
       invariant allowed before). -/
   dtors : DeadCodes P G.blk
   cells : ∀ k k1 k2, LockHolds G.blk k1 k → LockHolds G.blk k2 k → k1 = k2 ∧ k < G.nid
+
+/-- Every lock share `v` holds names a key of kind `false` under `κ`, every
+    cell share one of kind `true` (outside a carried `arc` payload, which is
+    ghost data, as in `KB`, A3/Keys.lean).  Agora #815: what keeps lock and cell
+    shares apart, which the typing does not (both name a lock block of their
+    payload type): A3/Kinds.lean. -/
+inductive KK (κ : Nat → Bool) : Val → Prop
+  | int {j : Nat} : KK κ (.int j)
+  | href {c : Nat} : KK κ (.href c)
+  | view {d o l : Nat} : KK κ (.view d o l)
+  | node {t : Ty} {c d : Nat} {es : List Val} : (∀ e ∈ es, KK κ e) → KK κ (.node t c d es)
+  | pair {v w : Val} : KK κ v → KK κ w → KK κ (.pair v w)
+  | inl {v : Val} : KK κ v → KK κ (.inl v)
+  | inr {v : Val} : KK κ v → KK κ (.inr v)
+  | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {v : Val} {cs : List (Var × PMode × Ty)} :
+      KK κ v → KK κ (.pkg fs te ms v cs)
+  | arc {k : Nat} {p : Val} : KK κ (.arc k p)
+  | lk {k : Nat} : κ k = false → KK κ (.lk k)
+  | cell {k : Nat} : κ k = true → KK κ (.cell k)
+
+/-- **A3.5, Agora #815: a start whose blocks and globals keep lock and cell
+    shares apart**: a kind per key that every share in a block's payload or a
+    global agrees with.  The make phase leaves one (`make_ok`), and so does no
+    global (`GlobsOK.empty`); without it a start may name one key by a global
+    lock share and by a cell share another global lock's payload holds
+    (`A3.mixG`, which `GlobsTyped` admits: the typing sees a lock block of
+    the payload type either way). -/
+def GlobsKinds (G : Globs) : Prop :=
+  ∃ κ : Nat → Bool, (∀ k t kd v, G.blk k = some ⟨t, kd, some v⟩ → KK κ v) ∧ ∀ g v, G.gl g = some v → KK κ v
+
+/-- **A3.6, what the start may be** (`A3.Claim`'s premise): the globals as
+    `GlobsTyped` asks them, and (A3.5, Agora #815) keeping lock and cell
+    shares apart (`GlobsKinds`): no key is named by a lock share and by a cell
+    share.  The typing cannot see that, both naming a lock block of their
+    payload type, and on a start that breaks it (`A3.mixG`, `GlobsTyped` but
+    not `GlobsOK`: `A3.mix_not_globsOK`) a check-out through the lock share
+    changes a cell's state as no `CellOp`, a race the claim would not see.
+    The make phase leaves it (`make_ok`), so `A3.claim_made` asks nothing
+    more of the program. -/
+structure GlobsOK (P : Prog) (G : Globs) : Prop extends GlobsTyped P G where
+  kinds : GlobsKinds G
 
 /-- **The A3.0 claim**, for A2 plus `spawn`: a program A2 types, whose
     spawned functions take only view-free `sink` parameters, is memory-safe,
