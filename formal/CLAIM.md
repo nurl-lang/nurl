@@ -1,7 +1,7 @@
 # The claim
 
 > **Status: A1, A2 and A3 are proven** (`A1.memory_safe`, `A2.memory_safe`,
-> `A2.no_leak_end`, `A2.no_leak_panic`, `A3.claim`, `A3.claim_made`;
+> `A2.no_leak_end`, `A2.no_leak_panic`, `A3.claim_full`, `A3.claim_made_full`;
 > [`README.md`](README.md)). Each phase's section below names what its
 > calculus leaves out. Phases B–D are the statement the proof is working
 > towards, not one it has reached.
@@ -98,8 +98,26 @@ the LLVM / C11 memory model rather than redefining it.
   race. Proven under sequential consistency, where a race is two threads'
   next steps touching one address, one of them writing, not both atomic.
   Carried to C11 / LLVM by the DRF-SC theorem (below). The statements are
-  `A3.claim` (`A3/Claim.lean`) and `A3.claim_made` (`A3/Make.lean`), and `A3/DESIGN.md` gives the semantics
-  and the milestones.
+  `A3.claim_full : A3.ClaimFull` and `A3.claim_made_full` (`A3/ClaimFull.lean`):
+  `A3.claim` (`A3/Claim.lean`) and `A3.claim_made` (`A3/Make.lean`) — memory
+  safety, race freedom and no leak — together with the adequacy of that race
+  freedom for cells (`A3.CellAdequate`, A3.5 below: every check-out of a
+  cell's block is a step on the cell, so every cell race is a `Race`), on the
+  same premises. `A3/DESIGN.md` gives the semantics and the milestones.
+  In Lean:
+
+  ```lean
+  def ClaimFull : Prop :=
+    ∀ (P : Prog) (spawn : Nat → Bool) (G : Globs) (s : Stmt) (Δ : Ctx) (nv : Nat),
+      ProgOK P → ProgCodes P → SpawnOK P spawn → GlobsOK P G →
+      StmtT P (fun _ => none) [] s Δ → s.src = true → s.codesOK P → (∀ v ∈ s.vars, v < nv) →
+      MemorySafe P spawn (Cfg.start G s nv) ∧ RaceFree P spawn (Cfg.start G s nv) ∧
+        NoLeak P spawn (Cfg.start G s nv) ∧ CellAdequate P spawn (Cfg.start G s nv)
+
+  def CellAdequate (P : Prog) (spawn : Nat → Bool) (C0 : Cfg) : Prop :=
+    ∀ C, Reach P spawn C0 C → ∀ (i : Nat) (t : Thread) (K : Stmt → Stmt) (k : Nat) (u : Ty) (x : Var) (b : Stmt),
+      C.ths[i]? = some t → Redex t.s K (.scopeL k u x b) → C.Holds (.cell k) → CellOp t k
+  ```
   - **A3.0** *(proven)* — threads that only move. A function the program
     marks is called on a new thread; its parameters are `sink` and of
     types that hold no views and no destructor value (`SpawnOK`), so what crosses is trees the
@@ -412,8 +430,9 @@ the LLVM / C11 memory model rather than redefining it.
       Confinement is over owners and live borrows (`CellInv`,
       `cellAt_of_live`), and a race on a cell is two threads with an
       owner's share at a check-out (`CellOp`). A thread inside a check-out
-      of a cell's block does hold one (Agora #808 / #815,
-      `A3.reach_frame_cell_owner`, `A3.reach_frame_cellOp`): the
+      of a cell's block does hold one, and the claim says so
+      (`A3.CellAdequate`, a conjunct of `A3.ClaimFull`; Agora #808 / #815 /
+      #818, `A3.reach_frame_cell_owner`, `A3.reach_frame_cellOp`): the
       check-out's root share stays in its slot for the whole body, and a
       borrowed root is a borrowed parameter, live, whose caller's owner is
       in the store, `MInv.cell_owned`; and the root is a cell share, since
@@ -511,16 +530,17 @@ the LLVM / C11 memory model rather than redefining it.
       refuses it, `A3.mix_not_globsOK`). There a check-out through the lock
       share changes the cell's state as no `CellOp`, so a race with a
       `withCell`, which the runtime runs with no lock, was not a `Race`.
-      `A3.claim`'s text is unchanged; only `GlobsOK` asks more. Read it with
-      care: as a theorem `A3.claim` concludes what it did (its `RaceFree`
-      and `CellOp` are unchanged), and the fact that makes `RaceFree`
-      adequate on cells — every check-out of a cell's block is a `CellOp`
-      of an owner's share — is the separate theorem `A3.reach_frame_cellOp`
-      (with `A3.reach_shareKind`), not part of `A3.Claim`'s statement.
-      ("A cell's block" is a definition: a block some value of the
-      configuration names by a cell share, `Cfg.Holds (.cell k)`; blocks
-      carry no mark of their own.) Folding it into `A3.Claim` is
-      Agora #818. The sweep keeps what the globals reach, and
+      `A3.claim`'s text is unchanged; only `GlobsOK` asks more. The claim
+      includes the cell adequacy (Agora #818): `A3.ClaimFull`, which
+      `A3.claim_full` proves on the same premises, concludes, beside
+      `MemorySafe`, `RaceFree` and `NoLeak`, `A3.CellAdequate` — in every
+      reached configuration every check-out of a cell's block on a thread
+      is a `CellOp` of that thread, so the `RaceFree` it concludes sees
+      every race on a cell (from `A3.reach_frame_cellOp`, with
+      `A3.reach_shareKind`). ("A cell's block" is a definition: a block
+      some value of the configuration names by a cell share,
+      `Cfg.Holds (.cell k)`; blocks carry no mark of their own.)
+      The sweep keeps what the globals reach, and
       `NoLeak` says only that is left once every thread has finished, as
       the runtime keeps globals until the process exits.
     - **In Lean.** `A2.memory_safe`, `A2.no_leak_end`, `A2.no_leak_panic`
@@ -539,7 +559,9 @@ the LLVM / C11 memory model rather than redefining it.
       `made_ok`), the kinds field too (each make's run keeps a kind per
       key, `A3.reach_kinds`, and its result is one of its values), so the
       premise is derived, not assumed, and `A3.claim_made`'s statement is
-      unchanged by Agora #815; a make that
+      unchanged by Agora #815. `A3.claim_made_full` (Agora #818) adds the
+      cell adequacy (`A3.CellAdequate`) on every make's run
+      (`A3.made_safe_full`) and on the program's; a make that
       panics ends the program before `main` (`MakePanics`). A typed
       program reads each global at its declared type (`ProgGlobs`,
       `Stmt.globsAt`), so no read panics (`Reach.glob_typed`).

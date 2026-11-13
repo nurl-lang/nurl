@@ -338,3 +338,8 @@ import A3
 -- module globals made before main by their declarations' makes, read at their declared types
 -- (A3/Make.lean)
 #print axioms A3.claim_made
+-- the claim in full (Agora #818): with race freedom adequate for cells, every check-out of a
+-- cell's block a step on the cell (A3/ClaimFull.lean)
+#print axioms A3.claim_full
+#print axioms A3.made_safe_full
+#print axioms A3.claim_made_full

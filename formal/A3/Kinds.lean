@@ -688,13 +688,8 @@ theorem reach_kinds {P : Prog} {spawn : Nat → Bool} {G : Globs} (hG : GlobsOK 
 
 /-! ### No key named by both a lock share and a cell share -/
 
-/-- Some value of the configuration holds `w`: a thread's slot (a live
-    binding or a dead one), a block's payload or a module global. -/
-def Cfg.Holds (C : Cfg) (w : Val) : Prop :=
-  (∃ (j : Nat) (t : Thread) (x : Var) (o : Bool) (v : Val),
-      C.ths[j]? = some t ∧ t.st x = some ⟨o, some v⟩ ∧ Sub w v) ∨
-  (∃ (k : Nat) (t : Ty) (kd : BKind) (v : Val), C.blk k = some ⟨t, kd, some v⟩ ∧ Sub w v) ∨
-  (∃ (g : Nat) (v : Val), C.gl g = some v ∧ Sub w v)
+-- `Cfg.Holds` (some value of the configuration holds a share) is in
+-- A3/Defs.lean, where `A3.CellAdequate` states with it what a cell's block is.
 
 /-- **Agora #815: no key is named by both a lock share and a cell share** of
     the configuration: if some value holds `.lk k`, none holds `.cell k`. -/

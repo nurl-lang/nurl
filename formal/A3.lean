@@ -28,3 +28,4 @@ import A3.ChanDtorWitness
 import A3.LockExcl
 import A3.LockRoot
 import A3.Kinds
+import A3.ClaimFull

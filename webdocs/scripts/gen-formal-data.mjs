@@ -320,6 +320,11 @@ const A3_MODULE_LAYERS = {
     category: 'Data-Race Freedom Theorems',
     summaryEn: 'Module-global initialization phase (Made, made_safe, made_ok) and crown theorem A3.claim_made.',
   },
+  ClaimFull: {
+    layer: 5,
+    category: 'Data-Race Freedom Theorems',
+    summaryEn: 'The stated claim A3.claim_full (and A3.claim_made_full): A3.claim plus race freedom adequate for cells (CellAdequate: every check-out of a cell\'s block is a CellOp of its thread).',
+  },
 };
 
 function cleanComment(raw) {
@@ -405,6 +410,7 @@ function parseLeanFile(phase, modName, filePath) {
       'Defs',
       'Claim',
       'Make',
+      'ClaimFull',
     ]);
     const maxLines = keepFullModules.has(modName) ? 110 : 40;
     let displayCode = fullCode;
@@ -909,7 +915,7 @@ for (const mod of a2Modules) {
   }
 }
 for (const mod of a3Modules) {
-  if (mod.name === 'Claim' || mod.name === 'Make') {
+  if (mod.name === 'Claim' || mod.name === 'Make' || mod.name === 'ClaimFull') {
     for (const d of mod.decls) {
       initialDecls[d.name] = d;
     }
