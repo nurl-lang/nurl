@@ -257,6 +257,9 @@
 : ~ i g_core_virt_n 0
 : ~ i g_core_virt_cap 0
 : ~ i g_core_virt_seen 0
+: ~ i g_core_fns 0  // the functions built, 3 words each: name, template (interned), parameter count (core_note_fn)
+: ~ i g_core_fn_n 0
+: ~ i g_core_fn_cap 0
 : ~ i g_walk_owns 1  // 1: the fused walk makes its ownership refusals (own_die, bck_emit_error); 0 under --emit-core, where the IR's reader decides them
 : i CORE_VW 7
 : i CORE_VS 1048576
@@ -10000,6 +10003,7 @@ unsafe @ core_fn_ret s ret_ty → v {
 // builder is back.
 unsafe @ core_fn_end → v {
     ? == 0 g_core_live { ^ } {}
+    ( core_note_fn )
     ( core_print_fn )
     ? == 0 g_core_saved { = g_core_live 0 ^ } {}
     ? != 0 g_core_code { ( nurl_free # s g_core_code ) } {}
@@ -10659,10 +10663,122 @@ unsafe @ core_print_fn → v {
     ( __core_o `endfn\n` )
 }
 
+// The function just built: listed for core_print_sums.
+unsafe @ core_note_fn → v {
+    ? >= + g_core_fn_n 3 g_core_fn_cap {
+        : i nc ? == g_core_fn_cap 0 192 * g_core_fn_cap 2
+        = g_core_fns ( __core_grown g_core_fns g_core_fn_n nc )
+        = g_core_fn_cap nc
+    } {}
+    : *i fa # *i # s g_core_fns
+    = . fa g_core_fn_n g_core_fname
+    = . fa + g_core_fn_n 1 g_core_ftmpl
+    = . fa + g_core_fn_n 2 g_core_nparam
+    = g_core_fn_n + g_core_fn_n 3
+}
+
+@ __core_tab i tab s f → s {
+    ? == 0 tab { ^ ( nurl_str_cat `` `` ) } {}
+    ^ ( nurl_str_cat ( nurl_sym_get tab f ) `` )
+}
+
+unsafe @ __core_sum_kv s key s val → v {
+    ? == 0 ( nurl_str_len val ) { ^ } {}
+    ( __core_o `\t` ) ( __core_o key ) ( __core_o `=` ) ( __core_o val )
+}
+
+// `sum`, a name, its parameter count, then `key=words` for each answer
+// the walk's summaries hold for that name once every one is final (the
+// tables of docs/dev/COMPILER_INTERNALS.md, "escape analysis"): what the
+// walk believes of a function, in its own words, an empty answer left
+// out. A generic's instance is listed under its own name and its
+// template's, as the walk keys some answers by either. This is what
+// answers for a function whose body uses raw memory (PROPOSAL_CORE_IR D2)
+// until its summary is declared in source.
+unsafe @ core_print_sum i syms s f i np → v {
+    ( __core_o `sum\t` ) ( __core_o f ) ( __core_o `\t` ) ( __core_oi np )
+    ( __core_sum_kv `sink` ( __core_tab g_fn_sink f ) )
+    ( __core_sum_kv `keeps` ( __core_tab g_fn_keeps f ) )
+    ( __core_sum_kv `stores` ( __core_tab g_fn_stores f ) )
+    ( __core_sum_kv `handkeeps` ( __core_tab g_fn_handkeeps f ) )
+    ( __core_sum_kv `escapes` ( __core_tab g_fn_escapes f ) )
+    ( __core_sum_kv `inout` ( __core_tab g_fn_inout f ) )
+    ( __core_sum_kv `mutates` ( __core_tab g_fn_mutates f ) )
+    ( __core_sum_kv `reallocs` ( __core_tab g_fn_reallocs f ) )
+    ( __core_sum_kv `ireallocs` ( __core_tab g_fn_ireallocs f ) )
+    ( __core_sum_kv `drops` ( __core_tab g_fn_drops f ) )
+    ( __core_sum_kv `replaces` ( __core_tab g_fn_replaces f ) )
+    ( __core_sum_kv `safe` ( __core_tab g_fn_safe f ) )
+    ( __core_sum_kv `vkeeps` ( __core_tab g_fn_vkeeps f ) )
+    ( __core_sum_kv `vholds` ( __core_tab g_fn_vholds f ) )
+    ( __core_sum_kv `vkpend` ( __core_tab g_fn_vkpend f ) )
+    ( __core_sum_kv `rviews` ( __core_tab g_fn_rviews f ) )
+    ( __core_sum_kv `vcopies` ( __core_tab g_fn_vcopies f ) )
+    ( __core_sum_kv `ret_alias` ( __core_tab g_fn_ret_alias f ) )
+    ( __core_sum_kv `unverified` ( __core_tab g_fn_unverified f ) )
+    ( __core_sum_kv `invoke_only` ( __core_tab g_fn_invoke_only f ) )
+    ( __core_sum_kv `cloparams` ( __core_tab g_fn_cloparams f ) )
+    ( __core_sum_kv `lsrc` ( nurl_str_cat ( mem_fn_lend_sources f ) `` ) )
+    ( __core_sum_kv `retlend` ( __core_tab g_pending_impl ( nurl_str_cat `retlend##` f ) ) )
+    ( __core_sum_kv `retpart` ( __core_tab g_pending_impl ( nurl_str_cat `retpart##` f ) ) )
+    ( __core_sum_kv `retptr` ( __core_tab g_pending_impl ( nurl_str_cat `retptr##` f ) ) )
+    ( __core_sum_kv `retpass` ( __core_tab g_pending_impl ( nurl_str_cat `retpass##` f ) ) )
+    ( __core_sum_kv `retread` ( __core_tab g_pending_impl ( nurl_str_cat `retread##` f ) ) )
+    ( __core_sum_kv `retdyn` ( __core_tab g_pending_impl ( nurl_str_cat `retdyn##` f ) ) )
+    ( __core_sum_kv `retclo` ( __core_tab g_pending_impl ( nurl_str_cat `retclo##` f ) ) )
+    ( __core_sum_kv `retcap` ( __core_tab g_pending_impl ( nurl_str_cat `retcap##` f ) ) )
+    ( __core_sum_kv `retcloeff` ( __core_tab g_pending_impl ( nurl_str_cat `retcloeff##` f ) ) )
+    ( __core_sum_kv `ret_owned` ( nurl_str_cat ( nurl_sym_get2 syms f `__ret_owned` ) `` ) )
+    ( __core_sum_kv `ret_borrow` ( nurl_str_cat ( nurl_sym_get2 syms f `__ret_borrow` ) `` ) )
+    ( __core_sum_kv `ret_unowned` ( nurl_str_cat ( nurl_sym_get2 syms f `__ret_unowned` ) `` ) )
+    ( __core_sum_kv `body_done` ( nurl_str_cat ( nurl_sym_get2 syms f `__body_done` ) `` ) )
+    // (per parameter: how the result may lend it — 0 never, 1 the argument
+    // itself, 2 possibly a part of it — and whether the function runs what
+    // the parameter holds)
+    : ~ s lk ( nurl_str_cat `` `` )
+    : ~ s hr ( nurl_str_cat `` `` )
+    : ~ b any F
+    : ~ i k 0
+    ~ < k np {
+        : i kind ( mem_fn_lend_kind syms f k )
+        ? != 0 kind { = any T } {}
+        = lk ( nurl_str_cat lk ( nurl_str_int kind ) )
+        ? ( __hruns_is ( nurl_str_cat3 f `#` ( nurl_str_int k ) ) ) { = hr ( nurl_str_cat3 hr ? == 0 ( nurl_str_len hr ) `` ` ` ( nurl_str_int k ) ) } {}
+        = k + k 1
+    }
+    ? any { ( __core_sum_kv `lkind` lk ) } {}
+    ( __core_sum_kv `hrun` hr )
+    ( __core_o `\n` )
+}
+
+// Every function built, and each template once.
+unsafe @ core_print_sums i syms → v {
+    ? == 0 g_summaries_final { ^ } {}
+    : i seen ( nurl_sym_new )
+    : *i fa # *i # s g_core_fns
+    : ~ i k 0
+    ~ < k g_core_fn_n {
+        : s f ( nurl_str_cat # s . fa k `` )
+        : s t ( nurl_str_cat # s . fa + k 1 `` )
+        : i np . fa + k 2
+        ? == 0 ( nurl_sym_len seen f ) {
+            ( nurl_sym_def seen f `1` )
+            ( core_print_sum syms f np )
+        } {}
+        ? & != 0 ( nurl_str_len t ) == 0 ( nurl_sym_len seen t ) {
+            ( nurl_sym_def seen t `1` )
+            ( core_print_sum syms t np )
+        } {}
+        = k + k 3
+    }
+    ( nurl_sym_free seen )
+}
+
 // The module's IR to stdout, and what was not lowered to stderr.
 unsafe @ core_flush i syms → v {
     ( core_print_types syms )
     ( core_print_virts )
+    ( core_print_sums syms )
     ? != 0 g_core_out {
         : *u ob # *u # s g_core_out
         = . ob g_core_out_n # u 0
@@ -10683,6 +10799,7 @@ unsafe @ core_flush i syms → v {
     ? != 0 g_core_tmps { ( nurl_free # s g_core_tmps ) = g_core_tmps 0 = g_core_tmp_cap 0 } {}
     ? != 0 g_core_tys { ( nurl_free # s g_core_tys ) = g_core_tys 0 = g_core_ty_n 0 = g_core_ty_cap 0 } {}
     ? != 0 g_core_virts { ( nurl_free # s g_core_virts ) = g_core_virts 0 = g_core_virt_n 0 = g_core_virt_cap 0 } {}
+    ? != 0 g_core_fns { ( nurl_free # s g_core_fns ) = g_core_fns 0 = g_core_fn_n 0 = g_core_fn_cap 0 } {}
 }
 
 @ __nest_enter i lex → v {
@@ -18993,7 +19110,7 @@ inline @ gen_call_kwargs i lex i syms i cg s fname → s {
         // ending no borrow of its elements (agora #434). Named in declared
         // order, the call takes the positional path, rows and all.)
         ? & & != 0 g_borrowck | ( is_ident_tok origin_tt ) == origin_tt TT_DOT ( bck_is_heap_lty ( nurl_llty at ) ) {
-            ( die lex ( nurl_str_cat4 `argument '` ( nurl_sym_get syms ( __kw_key fname `pn` slot ) ) ( nurl_str_cat3 `' of '` fname `' holds heap storage, and this call names its arguments out of the order '` ) ( nurl_str_cat3 fname `' declares them: the borrow checker follows such an argument only in declaration order. Name them in the order '` ( nurl_str_cat fname `' declares them, or pass them positionally.` ) ) ) )
+            ( own_die lex ( nurl_str_cat4 `argument '` ( nurl_sym_get syms ( __kw_key fname `pn` slot ) ) ( nurl_str_cat3 `' of '` fname `' holds heap storage, and this call names its arguments out of the order '` ) ( nurl_str_cat3 fname `' declares them: the borrow checker follows such an argument only in declaration order. Name them in the order '` ( nurl_str_cat fname `' declares them, or pass them positionally.` ) ) ) )
         } {}
         = g_origin_arg_str | & ( seq ( nurl_llty at ) `i8*` ) ( __auto_str_ctx ) & ( is_ident_tok origin_tt ) ( __inout_handle_param syms origin_value )
         ( origin_call_arg syms origin_result fname slot origin_tt origin_value )
@@ -19890,7 +20007,7 @@ unsafe @ resolve_sealed_handoffs → v {
 }
 
 unsafe @ resolve_lit_handoffs → v {
-    ? | == g_lm_pend 0 == 0 g_borrowck { ^ } {}
+    ? | | == g_lm_pend 0 == 0 g_borrowck == 0 g_walk_owns { ^ } {}
     : ~ i i 0
     ~ < i g_lm_pend_n {
         : s k ( nurl_str_int i )
@@ -19953,7 +20070,7 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
                 ~ != 0 ( nurl_str_len ms ) {
                     : s mvj ( str_first_word ms ) = ms ( str_skip_word ms )
                     ? | | ( seq ( __lm_word moved k ) mvj ) ( str_contains_word ( __lm_moved_names pm pk0 pk1 ) mvj ) ( str_contains_word ( __lm_inner_of itab k n ) mvj ) {
-                        ( die_pos lex line col ( nurl_str_cat
+                        ( own_die_pos lex line col ( nurl_str_cat
                         ( nurl_str_cat4 `'` mvj `' is moved into field ` ( nurl_str_cat4 ( nurl_str_int + j 1 ) ` of '` what `'` ) )
                         ( nurl_str_cat3 ` and handed on by field ` ( nurl_str_int + k 1 )
                         ` as well — the literal and that other owner would both release it. Give one of them a copy (clone it, or share a handle), or put the value in only once.` ) ) )
@@ -19968,7 +20085,7 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
                         ( nurl_str_cat3 ` and handed by field ` ( nurl_str_int + k 1 ) ` to ` ) ) )
                     } {}
                     ? & & & ( seq ( __lm_word lent k ) `1` ) < rk0 rk1 <= rk1 rn ( str_contains_word ( nurl_str_slice reads rk0 - rk1 rk0 ) mvj ) {
-                        ( die_pos lex line col ( nurl_str_cat
+                        ( own_die_pos lex line col ( nurl_str_cat
                         ( nurl_str_cat4 `'` mvj `' is moved into field ` ( nurl_str_cat4 ( nurl_str_int + j 1 ) ` of '` what `'` ) )
                         ( nurl_str_cat3 ` while field ` ( nurl_str_int + k 1 )
                         ` holds a value lent from it, kept as is — the result would own it twice. Copy that value (string_clone, vec_clone, or share a handle) before the literal, or leave the moved one out.` ) ) )
@@ -20042,7 +20159,7 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
                     : b sc & < k 62 != 0 & scmask << 1 k
                     ? & & & != k j < r0 r1 <= r1 rn | ! sc & > k j ! ( seq nm jid ) {
                         ? ( str_contains_word ( nurl_str_slice reads r0 - r1 r0 ) nm )
-                        { ( die lex ( nurl_str_cat
+                        { ( own_die lex ( nurl_str_cat
                             ( nurl_str_cat4 `'` nm `' is moved by argument ` ( nurl_str_cat4 ( nurl_str_int + j 1 ) ` of '` callee `'` ) )
                             ( nurl_str_cat4 ` and also used by argument ` ( nurl_str_int + k 1 )
                             ? > k j ` — the arguments run in order, so that one reads what was already given away.`
@@ -23182,7 +23299,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             : s __asg ( __clo_run_attr syms fname `__closure_assigns` `la` )
             : s __an ? ( is_ident_tok bck_arg_tt ) ( nurl_str_cat bck_arg_val `` ) ( __path_root_name arg_froot )
             ? & != 0 ( nurl_str_len __asg ) ( str_contains_word __asg __an ) {
-                ( die lex ( nurl_str_cat4 ( nurl_str_cat3 `'` __an `' is passed to '` ) ( nurl_str_cat4 fname `', a closure that gives '` __an `' a new value by name — inside, the parameter and the capture are one value, and the assignment releases what the parameter still is. Pass a copy that owns its data (string_from, mem_dup), or let the closure take '` ) __an `' as an inout parameter instead of capturing it.` ) )
+                ( own_die lex ( nurl_str_cat4 ( nurl_str_cat3 `'` __an `' is passed to '` ) ( nurl_str_cat4 fname `', a closure that gives '` __an `' a new value by name — inside, the parameter and the capture are one value, and the assignment releases what the parameter still is. Pass a copy that owns its data (string_from, mem_dup), or let the closure take '` ) __an `' as an inout parameter instead of capturing it.` ) )
             } {}
         } {}
         // (…and a closure value's: its node answers, agora #359.)
@@ -86483,7 +86600,7 @@ unsafe @ __sx_names_capture i syms s sx → b {
 // change or go under the view while the caller holds it, unseen (h220).
 @ __clo_view_ret_check i lex i syms s sx → v {
     ? ( __sx_names_capture syms sx ) {
-        ( die_pos lex g_stmt_line g_stmt_col `a closure hands back a view (an address into storage) of what it captured: its caller cannot see what the view points into, so nothing stops that storage from changing or going under it. Hand back a value that owns its data (a copy — slice_to_vec, string_from), or pass what the view points into as an argument: a view of an argument is followed at the call.` )
+        ( own_die_pos lex g_stmt_line g_stmt_col `a closure hands back a view (an address into storage) of what it captured: its caller cannot see what the view points into, so nothing stops that storage from changing or going under it. Hand back a value that owns its data (a copy — slice_to_vec, string_from), or pass what the view points into as an argument: a view of an argument is followed at the call.` )
     } {}
 }
 

@@ -57,7 +57,7 @@ def emit_core(path):
             with open(key + ".rc") as f:
                 rc = int(f.read())
             return out, [l for l in err.splitlines() if l.startswith("core-gap\t")], rc, err
-    r = subprocess.run([nurlc_binary(), "--no-borrowck", "--emit-core", os.path.abspath(path)], cwd=ROOT,
+    r = subprocess.run([nurlc_binary(), "--emit-core", os.path.abspath(path)], cwd=ROOT,
                        capture_output=True, text=True, encoding="utf-8", errors="replace")
     if key:
         with open(key + ".core", "w", encoding="utf-8") as f:
@@ -83,6 +83,7 @@ class Reader:
         self.prog.shared = set()       # …the ones whose copies share the payload
         self.prog.arcs = set()         # …and the ones other threads may hold a copy of
         self.prog.virt = {}            # a `dyn` method's virtual callee -> the impls it may run
+        self.prog.walk_sums = {}       # a function -> the answers the walk's summaries hold for it (`sum` lines)
         self.types = {}                # type string -> TypeInfo
         self.conv_memo = {}
         self.raw_fns = []
@@ -114,6 +115,9 @@ class Reader:
             elif line.startswith("virt\t"):
                 f = line.split("\t")
                 self.prog.virt[f[1]] = f[2:]
+            elif line.startswith("sum\t"):
+                f = line.split("\t")
+                self.prog.walk_sums[f[1]] = dict(kv.split("=", 1) for kv in f[3:])
             elif cur is not None:
                 cur["stmts"].append(line)
 
