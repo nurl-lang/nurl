@@ -8883,7 +8883,12 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     ( seq ( nurl_sym_get syms `__last_slice_owned__` ) `1` )
     & ret_is_direct_call ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `1` )
     | != 0 ( nurl_str_len g_ret_sl_ids ) ret_slice_taken
-    ? | != 0 ( nurl_str_len skip ) ret_fresh_slice
+    // (A returned slice binding with a drop flag — a `: ~` one — owns what
+    // it holds where its flag says: per call, not a fact of every call.
+    // Marked owned, `: ~ [i r p  ^ r` handed the caller its own argument.)
+    : s __skp ? & ( mem_is_slice_ty lt ) != 0 ( nurl_str_len skip ) ( nurl_sym_get2 syms skip `__ptr` ) ``
+    : b __skfl & != 0 ( nurl_str_len __skp ) != 0 ( nurl_sym_len2 syms __skp `__live` )
+    ? | & != 0 ( nurl_str_len skip ) ! __skfl ret_fresh_slice
     { ( nurl_sym_set_deep syms `__fn_ret_owned__` `1` ) }
     // An all-paths fact, as for a string (__fn_ret_str_mixed__): a slice
     // returned on another path that is not this function's own (a
@@ -8974,7 +8979,18 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     // (A slice: whether this path hands over the function's own — a binding
     // it owns, a fresh literal or join, a field taken — or another's: the
     // per-call answer its callers drop by, agora #540.)
-    ? & ( mem_is_slice_ty lt ) == 0 ( nurl_str_len hbit ) { = hbit ? | != 0 ( nurl_str_len skip ) ret_fresh_slice `true` `false` } {}
+    // (hbit starts `true` — nothing above set it for a slice handed back as
+    // it is — so a slice decides here: a fresh one, a join or field of this
+    // function's own, is owned; a binding it lists hands over what its drop
+    // flag says, a `: ~` cursor over a parameter owning nothing; anything
+    // else — a parameter's field, a view — is lent. Left `true`, `^ . p v`
+    // handed the caller its argument's buffer as its own, a double free. A
+    // register or `false` a rule above set stands.)
+    ? ( mem_is_slice_ty lt ) {
+        ? & __skfl | ( seq hbit `true` ) ( seq hbit `false` ) { = hbit ( mem_udrop_flag_get syms cg __skp ) } {
+            ? ( seq hbit `true` ) { = hbit ? | ret_fresh_slice != 0 ( nurl_str_len skip ) ( nurl_str_cat `true` `` ) ( nurl_str_cat `false` `` ) } {}
+        }
+    } {}
     ( mem_store_hown syms hbit )
     ( mem_save_return_proof syms cg lt skip_str_ptr | ret_is_direct_call ret_is_det_join )
     // The result's guard (mem_ret_guard_push) is for a value this function
@@ -39748,6 +39764,15 @@ unsafe @ amv_close → v { = g_amv_cur 0 }
 
 @ bck_let_alias i syms b is_mut i rhs_tt s rhs_val s vt i line s dest → v {
     ( amv_close )
+    // (`: [i c a` out of an owned slice moves its buffer — gen_let leaves
+    // a's slot empty (__slice_let_moves) — so a read of a after it is
+    // refused, as after `= c a` (agora #634) and `: String c a`. Unrecorded,
+    // the read found the empty slot and ran on with no elements; agora
+    // #664.)
+    ? ( __slice_let_moves syms rhs_tt rhs_val dest vt is_mut ) {
+        ( bck_stash_move rhs_val line ( nurl_str_cat3 `the binding that moved its buffer to '` dest `'` ) )
+        ^ v
+    } {}
     // A `sink` parameter is the function's own: copying it hands it on
     // like any owner, it is not a borrow of the caller's value.
     // (…and so is one whose drop flag the generated code moves into the
