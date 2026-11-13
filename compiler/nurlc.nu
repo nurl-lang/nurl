@@ -18172,7 +18172,10 @@ unsafe @ __sx_publish i me s sx → v {
     // String, agora #638.)
     ? == tt TT_LBRACE {
         : s tn ( nurl_sym_get syms `__tail_name__` )
-        ? && && != 0 ( nurl_str_len tn ) ( __is_closure_ty ( nurl_sym_get syms tn ) ) ( seq ( nurl_sym_get syms `__tail_ptr__` ) ( nurl_sym_get2 syms tn `__ptr` ) ) { ^ ( nurl_str_cat `|` tn ) } {}
+        // (…and a value block whose tail is any binding — a view of a block
+        // local, `: s e { : s t … t }`: that binding's sources, as the bare
+        // `: s e t` has them; agora #823, formal's OK.)
+        ? && && != 0 ( nurl_str_len tn ) ( seq ( nurl_sym_get syms `__tail_ptr__` ) ( nurl_sym_get2 syms tn `__ptr` ) ) ( seq ( nurl_sym_get syms `__last_ident_name__` ) tn ) { ^ ( nurl_str_cat `|` tn ) } {}
     } {}
     ? | | | | | == tt TT_LPAREN == tt TT_QUEST == tt TT_AT == tt TT_BACKSLASH == tt TT_LBRACE == tt TT_QUESTQUEST {
         ^ ? == g_sx_at + n0 1 ( nurl_str_cat g_sx `` ) ( nurl_str_cat `*` `` )
@@ -34011,12 +34014,28 @@ unsafe @ __jt_reg i cg → s {
 // has no drop flag. (A `: ~` binding too: a cursor assigned a value of its
 // own later hands over only that one — mem_cursor_own0's flag says which,
 // agora #781 — so its owner link may stand; agora #668.)
+// The binding a value block's tail is, when the tail is exactly a binding
+// (not a closure: agora #835's), spelled for the walk as the block's frame
+// closed with it (`|t`, bck_xl_resolve); `` otherwise.
+@ __blk_tail_binding i syms s vt → s {
+    : s nm ( nurl_sym_get syms `__tail_name__` )
+    ? == 0 ( nurl_str_len nm ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? ( __is_closure_ty vt ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? ! ( seq ( nurl_sym_get syms `__tail_ptr__` ) ( nurl_sym_get2 syms nm `__ptr` ) ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? ! ( seq ( nurl_sym_get syms `__last_ident_name__` ) nm ) { ^ ( nurl_str_cat `` `` ) } {}
+    ^ ( nurl_str_cat `|` nm )
+}
+
 @ __let_blk_tail_name i syms i tt s ty i rmin s name b is_mut → s {
     ? | | != tt TT_LBRACE ( __is_closure_ty ty ) ( seq ty `i8*` ) { ^ ( nurl_str_cat `` `` ) } {}
     : s nm ( nurl_sym_get syms `__tail_name__` )
     : s tp ( nurl_sym_get syms `__tail_ptr__` )
     ? | | == 0 ( nurl_str_len nm ) == 0 ( nurl_str_len tp ) ! ( seq tp ( nurl_sym_get2 syms nm `__ptr` ) ) { ^ ( nurl_str_cat `` `` ) } {}
-    ? | == 0 ( nurl_str_starts tp `%r` ) < ( nurl_str_to_int ( nurl_str_slice tp 2 ( nurl_str_len tp ) ) ) rmin { ^ ( nurl_str_cat `` `` ) } {}
+    // (A tail bound outside the block too — `: String t { s }`: it is that
+    // binding, as `: t s` is (formal's OK on agora #823: a value block is
+    // its statements then the binding of its tail, A2's ANF). Not a
+    // parameter's storage, which the caller holds.)
+    ? == 0 ( nurl_str_starts tp `%r` ) { ^ ( nurl_str_cat `` `` ) } {}
     ? ! ( seq ( nurl_sym_get syms `__last_ident_name__` ) nm ) { ^ ( nurl_str_cat `` `` ) } {}
     // (…and a tail of the `:`'s own name, `: String s { : String s … s }`:
     // by its slot, under a name of its own — `|s`, as gen_assign hands such
@@ -56027,7 +56046,10 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         ( mem_note_clo_bind_lend syms name vt bck_rhs_tt bck_rhs_val rhs_closure_caps )
         ( __note_view_lend syms name vt bck_rhs_tt bck_rhs_val )
         ? != 0 g_rawlit_pending { ( mem_note_rawlit syms name ) } {}
-        ( bck_let_alias syms is_mutable bck_rhs_tt bck_rhs_val vt bck_line name )
+        // (A value block whose tail is a binding hands it on as `: t s` does,
+        // to the walk too: agora #823, formal's OK.)
+        : s __bta ? == bck_rhs_tt TT_LBRACE ( __blk_tail_binding syms vt ) ``
+        ( bck_let_alias syms is_mutable ? != 0 ( nurl_str_len __bta ) TT_IDENT bck_rhs_tt ? != 0 ( nurl_str_len __bta ) __bta bck_rhs_val vt bck_line name )
         ( bck_alias_from_phi syms ! is_mutable name vt bck_line ? is_mutable F | == bck_rhs_tt TT_QUEST == bck_rhs_tt TT_QUESTQUEST )
         : b rhs_is_owned_call != 0 ( nurl_sym_len syms `__last_call_ret_owned__` )
         // A `?`-ternary whose live arms are all fresh owned slices hands the
@@ -56454,7 +56476,8 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             ( mem_note_clo_bind_lend syms name vt bck_rhs_tt bck_rhs_val rhs_closure_caps )
             ( __note_view_lend syms name ( nurl_llty ptype ) bck_rhs_tt bck_rhs_val )
             ? != 0 g_rawlit_pending { ( mem_note_rawlit syms name ) } {}
-            ( bck_let_alias syms is_mutable bck_rhs_tt bck_rhs_val vt bck_line name )
+            : s __bta ? == bck_rhs_tt TT_LBRACE ( __blk_tail_binding syms vt ) ``
+            ( bck_let_alias syms is_mutable ? != 0 ( nurl_str_len __bta ) TT_IDENT bck_rhs_tt ? != 0 ( nurl_str_len __bta ) __bta bck_rhs_val vt bck_line name )
             ( bck_alias_from_phi syms ! is_mutable name vt bck_line ? is_mutable F | == bck_rhs_tt TT_QUEST == bck_rhs_tt TT_QUESTQUEST )
             : b rhs_is_owned_call != 0 ( nurl_sym_len syms `__last_call_ret_owned__` )
             // A `?`-ternary whose live arms are all fresh owned slices
