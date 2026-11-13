@@ -57639,6 +57639,31 @@ unsafe @ gen_assign i lex i syms i cg → s {
     ? & & & ! manual ! __fs_wb ! __fs_moved ! __fs_param_copy
     { = __fs_copied ( mem_lent_cond syms cg __fs_ty __fs_eff_tt __fs_val )
         = __fs_v ( mem_emit_cloneif cg __fs_ty __fs_v __fs_copied ) } {}
+    // (This function's own `inout` parameter of a handle type stored by name
+    // moves out of its slot, as `( eat p )` hands it on: the slot is
+    // emptied where it was not copied, so the parameter given a new value
+    // after (`= p ( vec_new … )`) drops nothing the field now holds, and the
+    // caller's binding ends empty — a replace of it, so what the caller lent
+    // out of it ends at the call. Left full, the field and the slot shared
+    // one buffer, and `= p` freed it under the field: agora #598.)
+    ? & & & & ( is_ident_tok __fs_tt ) ! manual ! __fs_wb ! __fs_param_copy ( __inout_handle_param syms __fs_val ) {
+        : s __iop ( nurl_sym_get2 syms __fs_val `__ptr` )
+        ? != 0 ( nurl_str_len __iop ) {
+            : ~ s __ioc ( nurl_str_cat `true` `` )
+            ? & != 0 ( nurl_str_len __fs_copied ) ! ( seq __fs_copied `0` ) {
+                = __ioc ? ( seq __fs_copied `1` ) ( nurl_str_cat `false` `` ) {
+                    : s __ion ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __ion ) ( nurl_print ` = xor i1 ` ) ( nurl_print __fs_copied ) ( nurl_print `, 1\n` )
+                    __ion
+                }
+            } {}
+            ? ! ( seq __ioc `false` ) {
+                ( nurl_print `  call void @__nurl_zero_if.` ) ( nurl_print ( __zero_if_request ( nurl_llty __fs_ty ) ) )
+                ( nurl_print `(i1 ` ) ( nurl_print __ioc ) ( nurl_print `, ptr ` ) ( nurl_print __iop ) ( nurl_print `)\n` )
+                ( __replaces_note syms __fs_val `` )
+            } {}
+        } {}
+    } {}
     // `= . p f . am g` into memory managed by hand, from a local that still
     // owns (and will drop) its field: the hand-managed struct gets its own
     // copy — the local's field stays readable, as the legacy code reads it.
