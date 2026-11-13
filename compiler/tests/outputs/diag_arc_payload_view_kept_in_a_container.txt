@@ -1,0 +1,27 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_arc_payload_view_kept_in_a_container.nu:31:5: error: this call hands 'slice_put' the contents of Arc 'mine' to change, but an Arc's payload is frozen once made: every thread holding a clone reads it without a lock, so changing it races them, whatever lock this code holds. Build the value before arc_new and arc_new it whole; keep state one thread changes in an Rc; put state threads share and change in a Locked (stdlib/std/thread.nu) and change it with locked_with / locked_set, which hold its lock.
+    ?? ( vec_get [( Slice ( Vec i ) )] ws 0 ) { T w → { ( slice_put [( Vec i )] w 0 ( fresh 1 ) ) } F → {} }
+    ^
+compiler/tests/diag_arc_payload_view_kept_in_a_container.nu:38:5: error: this call hands 'slice_put' the contents of Arc 'mine' to change, but an Arc's payload is frozen once made: every thread holding a clone reads it without a lock, so changing it races them, whatever lock this code holds. Build the value before arc_new and arc_new it whole; keep state one thread changes in an Rc; put state threads share and change in a Locked (stdlib/std/thread.nu) and change it with locked_with / locked_set, which hold its lock.
+    ( slice_put [( Vec i )] ( vec_at [( Slice ( Vec i ) )] ws 0 ) 0 ( fresh 2 ) )
+    ^
+compiler/tests/diag_arc_payload_view_kept_in_a_container.nu:46:5: error: this call hands 'slice_put' the contents of Arc 'mine' to change, but an Arc's payload is frozen once made: every thread holding a clone reads it without a lock, so changing it races them, whatever lock this code holds. Build the value before arc_new and arc_new it whole; keep state one thread changes in an Rc; put state threads share and change in a Locked (stdlib/std/thread.nu) and change it with locked_with / locked_set, which hold its lock.
+    ( slice_put [( Vec i )] w 0 ( fresh 3 ) )
+    ^
+compiler/tests/diag_arc_payload_view_kept_in_a_container.nu:55:5: error: this call hands 'slice_put' the contents of Arc 'mine' to change, but an Arc's payload is frozen once made: every thread holding a clone reads it without a lock, so changing it races them, whatever lock this code holds. Build the value before arc_new and arc_new it whole; keep state one thread changes in an Rc; put state threads share and change in a Locked (stdlib/std/thread.nu) and change it with locked_with / locked_set, which hold its lock.
+    ( slice_put [( Vec i )] ( firstw ws ) 0 ( fresh 4 ) )
+    ^
+compiler/tests/diag_arc_payload_view_kept_in_a_container.nu:62:5: error: this call hands 'slice_put' the contents of Arc 'mine' to change, but an Arc's payload is frozen once made: every thread holding a clone reads it without a lock, so changing it races them, whatever lock this code holds. Build the value before arc_new and arc_new it whole; keep state one thread changes in an Rc; put state threads share and change in a Locked (stdlib/std/thread.nu) and change it with locked_with / locked_set, which hold its lock.
+    ?? ( vec_get [Win] ws 0 ) { T x → { ( slice_put [( Vec i )] . x w 0 ( fresh 5 ) ) } F → {} }
+    ^
+compiler/tests/diag_arc_payload_view_kept_in_a_container.nu:71:5: error: this call hands 'slice_put' the contents of Arc 'mine' to change, but an Arc's payload is frozen once made: every thread holding a clone reads it without a lock, so changing it races them, whatever lock this code holds. Build the value before arc_new and arc_new it whole; keep state one thread changes in an Rc; put state threads share and change in a Locked (stdlib/std/thread.nu) and change it with locked_with / locked_set, which hold its lock.
+    ?? ( map_get [i ( Slice ( Vec i ) )] m 1 hs es ) { T w → { ( slice_put [( Vec i )] w 0 ( fresh 6 ) ) } F → {} }
+    ^
+compiler/tests/diag_arc_payload_view_kept_in_a_container.nu:78:5: error: this call hands 'slice_put' the contents of Arc 'mine' to change, but an Arc's payload is frozen once made: every thread holding a clone reads it without a lock, so changing it races them, whatever lock this code holds. Build the value before arc_new and arc_new it whole; keep state one thread changes in an Rc; put state threads share and change in a Locked (stdlib/std/thread.nu) and change it with locked_with / locked_set, which hold its lock.
+    ( slice_put [( Vec i )] . x w 0 ( fresh 7 ) )
+    ^
+compiler/tests/diag_arc_payload_view_kept_in_a_container.nu:92:5: error: this call hands 'slice_put' the contents of Arc 'mine' to change, but an Arc's payload is frozen once made: every thread holding a clone reads it without a lock, so changing it races them, whatever lock this code holds. Build the value before arc_new and arc_new it whole; keep state one thread changes in an Rc; put state threads share and change in a Locked (stdlib/std/thread.nu) and change it with locked_with / locked_set, which hold its lock.
+    ?? ( winof x 0 ) { T w → { ( slice_put [( Vec i )] . w w 0 ( fresh 8 ) ) } F → {} }
+    ^
+error: compilation aborted — 8 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)
