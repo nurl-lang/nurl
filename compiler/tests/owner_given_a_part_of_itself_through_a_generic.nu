@@ -21,6 +21,10 @@ $ `stdlib/core/vec.nu`
 
 @ firstor N x i k → N { ? == k 1 { ^ ( vec_at [N] . x kids 0 ) } {} ^ @ N { ( string_from `fresh name, long enough for a heap buffer` ) ( vec_new [N] ) } }
 
+@ tfwd N x → N { ^ x }
+
+@ tor N x i k → N { ? == k 1 { ^ x } {} ^ @ N { ( string_from `fresh name, long enough for a heap buffer` ) ( vec_new [N] ) } }
+
 @ tree → N {
     : ~ ( Vec N ) ks ( vec_new [N] )
     ( vec_push [N] ks @ N { ( string_from `kid name, long enough for a heap buffer` ) ( vec_new [N] ) } )
@@ -32,5 +36,15 @@ $ `stdlib/core/vec.nu`
     : ~ N b ( tree ) = b ( firstk b ) ( nurl_println ( string_data . b name ) )
     : ~ N c ( tree ) = c ( firstor c 1 ) ( nurl_println ( string_data . c name ) )
     : ~ N d ( tree ) = d ( firstor d 0 ) ( nurl_println ( string_data . d name ) )
+    // A part bound first, then handed back through a callee: ce is a lend out
+    // of e's Vec field (its roots, `e.kids`).
+    : ~ N e ( tree )
+    : N ce ( vec_at [N] . e kids 0 )
+    = e ( tfwd ce )
+    ( nurl_println ( string_data . e name ) )
+    : ~ N f ( tree )
+    : N cf ( vec_at [N] . f kids 0 )
+    = f ( tor cf 0 )
+    ( nurl_println ( string_data . f name ) )
     ^ 0
 }

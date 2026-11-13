@@ -30966,6 +30966,18 @@ unsafe @ __pfo_bind_lends i syms s name → v {
     ^ acc
 }
 
+// Does a word of `roots` name `name` — itself, or a field path of it
+// (`name.kids`)?
+@ __roots_reach s roots s name → b {
+    : ~ s rest ( nurl_str_cat roots `` )
+    : s pre ( nurl_str_cat name `.` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? | ( seq w name ) != 0 ( nurl_str_starts w pre ) { ^ T } {}
+    }
+    ^ F
+}
+
 // The words of `s`, its lines joined (`__pljr`'s rows).
 @ __str_lines_words s txt → s {
     : ~ s rest ( nurl_str_cat txt `` )
@@ -30981,10 +30993,13 @@ unsafe @ __pfo_bind_lends i syms s name → v {
 
 // Whether the call just made may hand back a PART of binding `name`'s value
 // — the callee's module-end `part` answer (mem_fn_lend_kind's 2) for each
-// argument position `name` is at, ORed: an i1, or `` where `name` is at no
-// position or the call is not named. (gen_assign's `= name ( … )`, agora
+// argument position `name` is at, where its lends wait on module end
+// (`pend`: a final summary is answered by gen_assign's `__ud_whole`), and
+// its `one`-or-`part` answer for each position of a binding that may be a
+// lend out of `name` (its roots, `__pljr`: `t` or a field path `t.kids`),
+// ORed: an i1, or `` where neither is. (gen_assign's `= name ( … )`, agora
 // #450 A.)
-@ mem_ud_part_copy_cond i syms i cg s name → s {
+@ mem_ud_part_copy_cond i syms i cg s name b pend → s {
     ? g_call_lend_unnamed { ^ ( nurl_str_cat `` `` ) } {}
     : s key ( nurl_sym_get syms `__last_call_lend_key__` )
     : s cn ( str_first_word key )
@@ -30998,18 +31013,20 @@ unsafe @ __pfo_bind_lends i syms s name → v {
         : s w ( str_first_word rest ) = rest ( str_skip_word rest )
         ? ! ( __callee_param_scalar syms cn j ) {
             ? ( seq w name ) {
-                : s r ( nurl_cg_reg cg )
-                ( emit_sink_flag_load ( mem_lend_const syms `part` cn gn j ) r )
-                = acc ? == 0 ( nurl_str_len acc ) ( nurl_str_cat r `` ) {
-                    : s o ( nurl_cg_reg cg )
-                    ( nurl_print `  ` ) ( nurl_print o ) ( nurl_print ` = or i1 ` ) ( nurl_print acc ) ( nurl_print `, ` ) ( nurl_print r ) ( nurl_print `\n` )
-                    o
-                }
+                ? pend {
+                    : s r ( nurl_cg_reg cg )
+                    ( emit_sink_flag_load ( mem_lend_const syms `part` cn gn j ) r )
+                    = acc ? == 0 ( nurl_str_len acc ) ( nurl_str_cat r `` ) {
+                        : s o ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print o ) ( nurl_print ` = or i1 ` ) ( nurl_print acc ) ( nurl_print `, ` ) ( nurl_print r ) ( nurl_print `\n` )
+                        o
+                    }
+                } {}
             } {
                 // (A binding that may be a lend out of `name` — `: Tr c (
                 // vec_at [Tr] . t kids 0 )`, its roots `__pljr` — lent back
                 // whole or in part is a part of `name` too.)
-                ? ( str_contains_word ( __str_lines_words ( nurl_sym_get2 syms w `__pljr` ) ) name ) { = acc ( __ud_or_one syms cg acc cn gn j ) } {}
+                ? ( __roots_reach ( __str_lines_words ( nurl_sym_get2 syms w `__pljr` ) ) name ) { = acc ( __ud_or_one syms cg acc cn gn j ) } {}
             }
         } {}
         = j + j 1
@@ -56242,12 +56259,14 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // was dropped with the old value under the binding: `= o ( first o
         // )`, first handing back `( vec_at [N] . x kids 0 )`, agora #450 A.)
         : ~ s __ud_pcpy ``
-        // (Only a callee whose lends wait on module end — a final summary
-        // answers above — and only where the binding owns its old value
-        // still: a cursor's old value is dropped by no one, and `= cur (
-        // next cur )` walks on through the container as before.)
-        ? & & & & != 0 ( nurl_str_len __ud_kcond ) == bck_rhs_tt TT_LPAREN ! __ud_may_self ( __clone_supported vt syms ) ( __lend_pending ( nurl_sym_get syms `__last_call_name__` ) ) {
-            = __ud_pcpy ( mem_ud_part_copy_cond syms cg name )
+        // (For the binding itself only a callee whose lends wait on module
+        // end — a final summary answers above; also a binding lent out of
+        // it, `= t ( tfwd c )` with c `( vec_at [Tr] . t kids 0 )`. And only
+        // where the binding owns its old value still: a cursor's old value
+        // is dropped by no one, and `= cur ( next cur )` walks on through
+        // the container as before.)
+        ? & & & != 0 ( nurl_str_len __ud_kcond ) == bck_rhs_tt TT_LPAREN ! __ud_may_self ( __clone_supported vt syms ) {
+            = __ud_pcpy ( mem_ud_part_copy_cond syms cg name ( __lend_pending ( nurl_sym_get syms `__last_call_name__` ) ) )
             ? != 0 ( nurl_str_len __ud_pcpy ) {
                 = __ud_pcpy ( __and_i1 cg __ud_pcpy ( mem_udrop_flag_get syms cg __ud_ptr ) )
                 // (Only a run whose result is lent: one the callee made is
