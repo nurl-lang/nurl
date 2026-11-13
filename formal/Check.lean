@@ -86,8 +86,7 @@ import A3
 #print axioms A3.LockDtorWitness.scopeL_typed_panic
 -- Agora #808: the check-outs' invariant over every reached configuration (A3/LockExcl.lean): each
 -- frame's block a lock block of its type, or gone; a frame of a payload that holds a destructor value
--- has its block checked out and is its only frame (A3.2's mutual exclusion); the give-back lemmas
--- with the block's state discharged, given that the block is still there
+-- has its block checked out and is its only frame (A3.2's mutual exclusion)
 #print axioms A3.Step.lfr
 #print axioms A3.EvalR.stay
 #print axioms A3.Step.stay
@@ -100,6 +99,27 @@ import A3
 #print axioms A3.Redex.frame_unique
 #print axioms A3.reach_frame_out
 #print axioms A3.reach_lock_excl
+-- Agora #808: the check-out's root share outlives its body (A3/LockRoot.lean): a step leaves the
+-- slot of a binding its statement does not name that holds a share (through calls' `frozen` lists and
+-- a package's by-name captures, `inp` or a `Vec`: `PkgsOK`); each frame keeps a root on its thread
+-- and its block (kept by every `TStep`); the give-back lemmas with no hypothesis on the block; a
+-- thread inside a check-out through a cell share holds an owner's share of it (`CellOp`'s second case)
+#print axioms A3.Step.keepSlot
+#print axioms A3.TypedAt.capShr
+#print axioms A3.Step.lkRoots
+#print axioms A3.Redex.lkRoots
+#print axioms A3.RootInv.put
+#print axioms A3.RootInv.sweepD
+#print axioms A3.RootInv.settle
+#print axioms A3.RootInv.spawn
+#print axioms A3.RootInv.spawnFail
+#print axioms A3.RootInv.tstep
+#print axioms A3.reach_rootInv
+#print axioms A3.reach_frame_root
+#print axioms A3.reach_frame_live
+#print axioms A3.reach_frame_checked_out
+#print axioms A3.rbOK_of
+#print axioms A3.reach_frame_cell_owner
 #print axioms A3.reach_scopeL_end_gives_back
 #print axioms A3.reach_scopeL_panic
 #print axioms A3.LockDtorWitness.rwRead_dtor_refused

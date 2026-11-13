@@ -39,8 +39,8 @@ stores and steps, not of this program's run (which no theorem here traces):
   point a `t` (given back) or nothing (moved to an owner that runs its
   destructor; the release then frees nothing): `scopeL_typed_panic`.  The
   block's half (its payload checked out there) is a hypothesis here;
-  Agora #808 discharges it on every reached configuration, given the block
-  is still there (`A3/LockExcl.lean`: `reach_scopeL_end_gives_back`,
+  Agora #808 discharges it on every reached configuration
+  (`A3/LockExcl.lean`, `A3/LockRoot.lean`: `reach_scopeL_end_gives_back`,
   `reach_scopeL_panic`);
 * when the lock's last share is gone, the marking sweep marks its block
   `dead`, its payload in it, and the same thread's next step is the reap
@@ -244,8 +244,8 @@ theorem scopeL_end_owns {P : Prog} {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : T
     `x`'s ownership discharged by the typing (`scopeL_end_owns`), what is
     left of `scopeL_end_gives_back`'s hypotheses is the block's: that it has
     its payload checked out (`m.blk k = some ⟨t, .lock, none⟩`), which
-    Agora #808 proves of a reached configuration's frame whose block is
-    still there (`A3.reach_scopeL_end_gives_back`). -/
+    Agora #808 proves of every reached configuration's frame
+    (`A3.reach_scopeL_end_gives_back`). -/
 theorem scopeL_typed_end_gives_back {P : Prog} {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x : Var}
     {m : Mem} (ht : StmtT P Γ F (.scopeL k t x .skip) Δ) (hi : MInv m Γ) (hd : t.holdsDtor = true)
     (hna : t.hasArc = false) (hvf : t.holdsView = false) (hk : m.blk k = some ⟨t, .lock, none⟩)

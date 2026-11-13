@@ -22,13 +22,11 @@ spawn):
 * **mutual exclusion** (A3.2): at most one frame of such a block, on one
   thread, once (`reach_lock_excl`).
 
-So the give-back lemmas of `A3.LockDtorWitness` (`scopeL_typed_end_gives_back`,
-`scopeL_typed_panic`) hold of a frame of a reached configuration with the
-block's state discharged, given only that the block is still there
-(`reach_scopeL_end_gives_back`, `reach_scopeL_panic`).  That a frame's block
-is never removed while the frame is out (the check-out's root share outlives
-the body) is not proved here: a frame does not record the binding its share
-is in. -/
+That a frame's block is never removed while the frame is out (the
+check-out's root share outlives the body) is `A3/LockRoot.lean`'s
+(`reach_frame_live`), which then discharges the block's state in the
+give-back lemmas of `A3.LockDtorWitness` (`reach_scopeL_end_gives_back`,
+`reach_scopeL_panic`). -/
 
 namespace A3
 open A2
@@ -959,34 +957,6 @@ theorem reach_lock_excl (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spa
   rw [hi] at hj; cases hj
   exact ⟨rfl, Redex.frame_unique h1 h2 (hl.nd i ti hi k u1 (h1.lfr_mem rfl) hu)⟩
 
-/-- **The check-out's end gives the value back, in a reached configuration**
-    (Agora #808): `scopeL_typed_end_gives_back` with the block's state
-    discharged by the invariant, given only that the block is still there:
-    the frame's typing (the thread's, at the frame) names `x` an owner of a
-    `u`, and the block is checked out, so every step of the frame's end is the
-    give-back. -/
-theorem reach_scopeL_end_gives_back (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn)
-    (hG : GlobsOK P G) (ht : StmtT P (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
-    (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
-    {i : Nat} {th : Thread} {K : Stmt → Stmt} {k : Nat} {u : Ty} {x : Var}
-    (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x .skip))
-    (hd : u.holdsDtor = true) (hna : u.hasArc = false) (hvf : u.holdsView = false)
-    (hlive : C.blk k ≠ none) {r : Res} (h : Step P (C.view th) (.scopeL k u x .skip) r) :
-    ∃ v, th.st x = some ⟨true, some v⟩ ∧
-      r = .ok ({ C.view th with blk := upd C.blk k (some ⟨u, .lock, some v⟩) }.remove x) .skip := by
-  obtain ⟨ps, hcp, _⟩ := (reach_inv hP hPc hSp hG ht hs hsc hv hr).1
-  obtain ⟨a, ha⟩ := part_of hcp.len hi
-  obtain ⟨hto, _⟩ := hcp.ok i th a hi ha
-  obtain ⟨Γ, F, Δ, hth, hinv, _⟩ := hto
-  obtain ⟨Γ', F', Δ', ht', hinv'⟩ := hK.typed Γ F Δ hth hinv
-  obtain ⟨w, hx, hw⟩ := LockDtorWitness.scopeL_end_owns ht' hinv'.toMInv hd
-  have hk : (C.view th).blk k = some ⟨u, .lock, none⟩ := by
-    rcases (reach_frame_out hP hPc hSp hG ht hs hsc hv hr hi hK (dtorFree_of_holdsDtor hd)).2 with h0 | h0
-    · exact absurd h0 hlive
-    · exact h0
-  have hno : ¬ Orphan (C.view th) := fun ho => Reach.noOrphan hr hG.noOrphan ho
-  exact ⟨w, hx, LockDtorWitness.scopeL_end_gives_back (m := C.view th) hx hw hna hvf hk hno h⟩
-
 theorem Redex.rf {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {m : Mem} (hrf : RF m s) : RF m r := by
   induction h with
   | here => exact hrf
@@ -1034,49 +1004,6 @@ theorem scopeL_typed_panic_of {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x
       cases hrl with
       | put hx' _ _ _ => rw [hx1] at hx'; cases hx'
       | drop _ hx' hdr => rw [hx1] at hx'; cases hx'; cases hdr; rfl
-
-/-- **A panic through the check-out gives the value back, in a reached
-    configuration** (Agora #808): `scopeL_typed_panic` with the block's state
-    discharged (the body's unwinding leaves the block as it was: its frame is
-    the block's only one, `Step.stay`), given only that the block is still
-    there: at the panic point `x` owns a `u`, given back into the block, or
-    nothing, the release freeing nothing. -/
-theorem reach_scopeL_panic (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn)
-    (hG : GlobsOK P G) (ht : StmtT P (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
-    (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
-    {i : Nat} {th : Thread} {K : Stmt → Stmt} {k : Nat} {u : Ty} {x : Var} {b : Stmt}
-    (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x b))
-    (hd : u.holdsDtor = true) (hna : u.hasArc = false) (hvf : u.holdsView = false)
-    (hlive : C.blk k ≠ none) {m2 : Mem} (h : Step P (C.view th) (.scopeL k u x b) (.panic m2)) :
-    ∃ m1, Step P (C.view th) b (.panic m1) ∧
-      ((∃ v, m1.st x = some ⟨true, some v⟩ ∧ WFv u v ∧
-          m2 = ({ m1 with blk := upd m1.blk k (some ⟨u, .lock, some v⟩) }.remove x)) ∨
-        (m1.st x = some ⟨true, none⟩ ∧ m2 = m1.remove x)) := by
-  have hl := reach_lockInv hP hPc hSp hG ht hs hsc hv hr
-  obtain ⟨ps, hcp, _⟩ := (reach_inv hP hPc hSp hG ht hs hsc hv hr).1
-  obtain ⟨a, ha⟩ := part_of hcp.len hi
-  obtain ⟨hto, _⟩ := hcp.ok i th a hi ha
-  have hrf : RF (C.view th) th.s := RF.congr (m := ownView C th a) (m' := C.view th) rfl rfl
-    (TypedAt.of_threadOK hto).rf
-  obtain ⟨Γ, F, Δ, hth, hinv, _⟩ := hto
-  obtain ⟨Γ', F', Δ', ht', hinv'⟩ := hK.typed Γ F Δ hth hinv
-  have hk : (C.view th).blk k = some ⟨u, .lock, none⟩ := by
-    rcases (reach_frame_out hP hPc hSp hG ht hs hsc hv hr hi hK (dtorFree_of_holdsDtor hd)).2 with h0 | h0
-    · exact absurd h0 hlive
-    · exact h0
-  obtain ⟨m1, hb, hres⟩ := scopeL_typed_panic_of (m := C.view th) ht' hinv' rfl hd hna hvf h
-  -- the body's unwinding leaves the block checked out: the frame is its only one
-  have hk1 : m1.blk k = some ⟨u, .lock, none⟩ := by
-    have hout : Out (C.view th) k := .inr ⟨u, hk, dtorFree_of_holdsDtor hd⟩
-    rcases Step.stay hb (hK.rf hrf) hout with h1 | ⟨hkb, _, _⟩
-    · exact h1.trans hk
-    · have h2 := hK.count_two rfl hkb
-      rw [hl.nd i th hi k u (hK.lfr_mem rfl) (dtorFree_of_holdsDtor hd)] at h2
-      omega
-  refine ⟨m1, hb, ?_⟩
-  rcases hres with ⟨v, hx, hw, hput⟩ | hnone
-  · exact .inl ⟨v, hx, hw, hput hk1⟩
-  · exact .inr hnone
 
 end reach
 

@@ -730,7 +730,9 @@ theorem names_pkg : (T : Val) → ∀ c ∈ T.names, ∃ fs te ms e cs, Sub (.pk
 theorem PkgsOK.mode {T : Val} (h : PkgsOK T) {c : Var × PMode × Ty} (hc : c ∈ T.names) :
     c.2.1 = .inp ∨ ∃ b, c.2.1 = .inout b ∧ b ≠ .none := by
   obtain ⟨fs, te, ms, e, cs, hs, hcs⟩ := names_pkg T c hc
-  exact (h fs te ms e cs hs).2.1 c hcs
+  rcases (h fs te ms e cs hs).2.1 c hcs with h1 | ⟨b, hb, hbn, _⟩
+  · exact .inl h1
+  · exact .inr ⟨b, hb, hbn⟩
 
 theorem own_named {Γ : Ctx} {t : Ty} {D : List Dep} (h : DepsNamed Γ D) :
     NameOK Γ ⟨t, .own, true, [], D, false, false⟩ :=

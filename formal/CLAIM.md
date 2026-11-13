@@ -411,12 +411,20 @@ the LLVM / C11 memory model rather than redefining it.
       left in scope does not fail it (`sendCheck_dead_borrow_ok`).
       Confinement is over owners and live borrows (`CellInv`,
       `cellAt_of_live`), and a race on a cell is two threads with an
-      owner's share at a check-out (`CellOp`).
+      owner's share at a check-out (`CellOp`). A thread inside a check-out
+      through a cell share does hold one (Agora #808,
+      `A3.reach_frame_cell_owner`: the check-out's root share stays in its
+      slot for the whole body, and a borrowed root is a borrowed
+      parameter, live, whose caller's owner is in the store,
+      `MInv.cell_owned`). Not proved: that every check-out of a cell's
+      block is through a cell share — cells and locks are both lock
+      blocks, and that no block is named by both lock and cell shares
+      (`cellNew` and `lockNew` take fresh keys, and only clones copy a
+      share) is read off the rules, not an invariant.
     - **Not typed yet:** a store of a borrowed handle into an owner (the
       runtime's implicit copy); a handle changed through a borrow that is
       no root; `% Sync` / `% NotSend` assertions on a program's own types;
-      that a thread inside a cell's check-out holds an owner's share is
-      argued from typing, not a lemma; `locked_take` through a cell share; a failed give-back
+      `locked_take` through a cell share; a failed give-back
       frees the value where the runtime keeps it in the held lock (no one
       reaches it either way);
       a closure that captures by name and also changes its environment;
@@ -466,10 +474,11 @@ the LLVM / C11 memory model rather than redefining it.
       `%Trait` to `fn ms` at its bound's class. A library that re-enters its own state waits
       or panics in the model, where the runtime goes on: that is the
       library's code (phase B).
-    - **Not proven here:** that a thread inside a cell's check-out holds a
-      share of it is argued from typing, not a lemma, and phase D must
-      show the runtime's reference count of a handle's block equals the
-      model's owners.
+    - **Not proven here:** phase D must show the runtime's reference
+      count of a handle's block equals the model's owners; that no block
+      is named by both lock and cell shares (above). (That a thread inside
+      a check-out through a cell share holds an owner's share of the cell
+      is proved, Agora #808: `A3.reach_frame_cell_owner`.)
   - **A3.6** *(proven)* — module globals reached by several
     threads.
     - **The calculus.** A global set at start (`: ( Locked T ) g ( make )`)
@@ -970,16 +979,11 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   and leaves it holding a `D` at its end (as before), and the scope's end
   gives it back, and nothing else: with no share in the type the
   give-back's crossing check cannot fail, so `Step.scopeLFail` and the
-  code-less `Release.drop` are not taken while the block is there
+  code-less `Release.drop` are not taken
   (`A3.LockDtorWitness.scopeL_end_gives_back`, over `release_puts`,
   `sendCheck_noArc`; that `x` owns a `t` is proved for a typed frame,
-  Agora #805, and that the block is checked out on every reached
-  configuration given it is still there, Agora #808 below). If the block
-  were gone at the frame's end, `Release.drop` would free `x`'s tree with
-  no code: memory safety and leak freedom would still hold (nothing is
-  left), but `D`'s destructor would be skipped — so the one unproved
-  fact, that the block stays while its frame is out, backs only the
-  destructor-runs-once claim for a check-out. A panic in the body gives it back too
+  Agora #805, and that the block is there and checked out on every
+  reached configuration, Agora #808 below). A panic in the body gives it back too
   (`scopeL_panic_gives_back`: `Step.scopeLP`'s release is the give-back
   whenever `x` still owns a `D`, the same hypotheses), where nurlc's `locked_update`, which runs
   `f` in place in the lock's memory, leaves the value there with the lock
@@ -995,8 +999,7 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   given back when the block is checked out, or nothing, the value moved to
   an owner that runs its destructor, and the release frees nothing
   (`scopeL_typed_panic`, over `Step.panic_st`, `scopeL_entry`). Agora
-  #808 proves the block's half on every configuration a run reaches, but
-  for the block being there: an invariant (`A3.LockInv`, `A3.reach_lockInv`,
+  #808 proves the block's half on every configuration a run reaches: an invariant (`A3.LockInv`, `A3.reach_lockInv`,
   kept by every `TStep`: a thread's step, its marking sweep and reaps, a
   spawn, a failed spawn) says each `scopeL k t x s` frame's block is a lock
   block of type `t`, or gone, at a key below `nid`; for a `t` that is not
@@ -1004,18 +1007,24 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   (`⟨t, .lock, none⟩`), and the frame is its only one on any thread, once
   (A3.2's mutual exclusion, `A3.reach_lock_excl`, `A3.Redex.frame_unique`:
   every operation on the block waits on `none`, and `locked_restore` of
-  such a payload is not typed, `A3.Step.stay`). So the give-back lemmas
-  hold of a frame of a reached configuration with only `C.blk k ≠ none`
-  left of the block's hypothesis (`A3.reach_scopeL_end_gives_back`,
-  `A3.reach_scopeL_panic`). Not proved (Agora #808, what is left): that the
-  block is never removed while its frame is out, i.e. that the check-out's
-  root share outlives the body (`withLock` asks it, but the frame keeps no
-  record of the binding the share is in, so the invariant cannot follow
-  it). It is the same fact as a cell check-out's "the thread holds an
-  owner's share" (A3.5 below): one lemma — a step leaves the slot of a
-  root the body does not name unchanged, through calls (`frozen`) and by-
-  name captures (`CapsOK`: only `inp`, or `inout` of a `Vec`) — closes
-  both. Exclusion is proved only for a payload that holds a destructor
+  such a payload is not typed, `A3.Step.stay`). And the block is never
+  removed while its frame is out: the check-out's root share outlives the
+  body (`A3.reach_frame_root`, `A3.reach_frame_live`, over a second
+  invariant, `A3.RootInv`, `A3.reach_rootInv`, kept by every `TStep`):
+  `withLock` asks its root `a` a root binding its body does not name, and
+  a step leaves the slot of a binding its statement does not name that
+  holds a share (`A3.Step.keepSlot`): what a step changes is a binding it
+  names, a fresh one, or the owner of a `Vec` (a change through a borrow);
+  a call's inside is named apart but for its `inout` arguments, which the
+  call names (the `frozen` list it lends out is no name); a call through a
+  package passes its by-name captures unnamed, but only `inp` ones or
+  `Vec`s (`CapsOK`, kept in memory since Agora #808 by `PkgsOK`; `A3.CapShr`,
+  `A3.TypedAt.capShr`). The sweep's roots are every thread's slots, so the
+  block stays. So the give-back lemmas hold of every frame of a reached
+  configuration with no hypothesis on the block
+  (`A3.reach_scopeL_end_gives_back`, `A3.reach_scopeL_panic`). The same
+  fact gives a cell check-out's "the thread holds an owner's share", for a
+  check-out through a cell share (A3.5 below, `A3.reach_frame_cell_owner`). Exclusion is proved only for a payload that holds a destructor
   value: for a `dtorFree` one the model's `locked_restore` can refill a
   checked-out block (Agora #810). When the lock's last share is
   gone the marking sweep marks the lock block `dead`, its payload in it
@@ -1086,9 +1095,8 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   run is not traced; that the body leaves the binding holding a `Vec` at
   its end and where it panics is proved for a typed frame as for `Locked
   D` (Agora #805, `scopeL_end_owns`, `scopeL_typed_panic`), and that the
-  block is then checked out is proved on a reached configuration given the
-  block is there, as for `Locked D` (Agora #808: `A3.reach_frame_out`; that
-  the block stays there is not proved).
+  block is then there and checked out is proved on every reached
+  configuration, as for `Locked D` (Agora #808: `A3.reach_frame_checked_out`).
 - Agora #755: **a channel of destructor values.** nurlc's `Channel A` is a
   counted `ChImpl A`, a struct holding the queue (`Vec A`), whose drop glue
   drops the queue's elements in index order when the last `Channel_drop`
