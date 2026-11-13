@@ -346,7 +346,10 @@ class Reader:
                 out.append(("let", vid, self.rvalue(toks[2:], rest_ty, fn, self.next_site(fn)), ln))
             elif k == "assign":
                 rv = self.rvalue(toks[2:], rest_ty, fn, self.next_site(fn))
-                if toks[1].startswith("g:"):
+                if toks[1] == "c":
+                    # a store into a global of numbers: nothing to track
+                    out.append(("eval", rv, ln))
+                elif toks[1].startswith("g:"):
                     # a store into a module global: what it is given outlives
                     # every frame
                     out.append(("gstore", toks[1][2:].split("/")[0], rv, ln))
