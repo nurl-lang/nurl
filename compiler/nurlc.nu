@@ -32125,7 +32125,10 @@ unsafe @ __pfo_bind_lends i syms s name → v {
     // one path and freshly opened on another).
     ? ! ( __clone_supported rlt g_root_syms ) {
         ? ( __nc_drop_ty rlt ) { ^ T } {}
-        ^ != 0 ( nurl_str_len ( __nc_wrap_payload rlt ) )
+        ? != 0 ( nurl_str_len ( __nc_wrap_payload rlt ) ) { ^ T } {}
+        // (…an option of an option, which has no copy: by what its sides
+        // own, below — agora #475.)
+        ? == 0 ( nurl_str_starts rlt `{ i1, ` ) { ^ F } {}
     } {}
     ? != 0 ( nurl_str_starts rlt `{ i1, ` ) {
         // (A side that is an option itself — `? ?String` — by what it owns:
@@ -57575,7 +57578,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // nothing, and `= o ( f1 o )` dropped o's value though the call
         // handed it back — agora #742. The module-end answers decide.)
         : b __ud_clend | g_call_may_lend ( __lend_pending ( nurl_sym_get syms `__last_call_name__` ) )
-        : s __ud_kcond ? ! __ud_kgo `` ? == bck_rhs_tt TT_LPAREN ? & __ud_clend ! __ud_may_self ( mem_ud_lend_own_cond syms cg vt ) `` ? & ( is_ident_tok bck_rhs_tt ) ! ( seq bck_rhs_val name ) ? ( seq ( nurl_sym_get2 syms bck_rhs_val `__btail` ) name ) ( nurl_str_cat `1` `` ) ( mem_ud_hold_lend_cond syms cg bck_rhs_val vt ) ``
+        : ~ s __ud_kcond ? ! __ud_kgo `` ? == bck_rhs_tt TT_LPAREN ? & __ud_clend ! __ud_may_self ( mem_ud_lend_own_cond syms cg vt ) `` ? & ( is_ident_tok bck_rhs_tt ) ! ( seq bck_rhs_val name ) ? ( seq ( nurl_sym_get2 syms bck_rhs_val `__btail` ) name ) ( nurl_str_cat `1` `` ) ( mem_ud_hold_lend_cond syms cg bck_rhs_val vt ) ``
         // (Only an owner that may own its value: one bound as a borrow
         // outright (`__sborrow` `1`, a `: ~` lend out of a `vec_get`) owns
         // nothing to keep, and its flag, never set, gates no drop — setting
@@ -57583,6 +57586,20 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // (The binding's flag before the `=` touches it — a self-lend gates
         // it first, __ud_of — for mem_ff_write_back below.)
         : s __ud_of0 ? | == 0 g_ff_any == 0 ( nurl_str_len __ud_ptr ) `` ? != 0 ( nurl_str_len __ud_of ) ( nurl_str_cat __ud_of `` ) ( mem_udrop_flag_get syms cg __ud_ptr )
+        // (…and only on a run the call lent its result: one it handed over
+        // is a value of the caller's own, whatever its key — an Rc share,
+        // `( rc_clone r )`, has the old share's block. Kept as the old one,
+        // the new share was never released — agora #475.)
+        : s __ud_lco ( nurl_sym_get syms `__last_call_own__` )
+        ? & & & != 0 ( nurl_str_len __ud_kcond ) == bck_rhs_tt TT_LPAREN != 0 ( nurl_str_len __ud_lco ) ! ( seq __ud_lco `false` ) {
+            : s __ud_nl ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print __ud_nl ) ( nurl_print ` = xor i1 ` ) ( nurl_print ? ( seq __ud_lco `1` ) `true` __ud_lco ) ( nurl_print `, 1\n` )
+            ? ( seq __ud_kcond `1` ) { = __ud_kcond __ud_nl } {
+                : s __ud_kc2 ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print __ud_kc2 ) ( nurl_print ` = and i1 ` ) ( nurl_print __ud_kcond ) ( nurl_print `, ` ) ( nurl_print __ud_nl ) ( nurl_print `\n` )
+                = __ud_kcond __ud_kc2
+            }
+        } {}
         : ~ s __ud_kept ? != 0 ( nurl_str_len __ud_kcond ) ( mem_udrop_keep_same syms cg __ud_ptr vt store_val __ud_kcond ) ``
         // (…or the value of a cursor over this binding that owns some of
         // its fields on its own — `: ~ P q o  = . q name …  = o q`, or a

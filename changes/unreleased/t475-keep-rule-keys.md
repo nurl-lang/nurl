@@ -8,3 +8,7 @@
   are now keyed by their active side, by nesting. A function returning an
   option of an option now answers per call whether it hands over its own
   value.
+- **`= o ( f o k )` for a result of an Rc share** (Agora #475). An
+  `rc_clone` share has the old share's key and was kept as if it were the
+  old value, so one count leaked. The old value is now kept only on runs
+  where the call lent its result.
