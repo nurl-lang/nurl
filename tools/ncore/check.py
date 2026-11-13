@@ -148,11 +148,13 @@ class FnCheck:
         self.tails_memo = {}
         self.agg_lends = {}      # a literal temporary -> the bindings it shows and has not taken
         self.temp_fresh = {}
-        self.walking = set()     # the loans of the loops being walked: their containers' buffers     # a temporary -> its value is what a call made and handed over
+        self.walking = set()
+        self.moved_from = None   # the last value moved that holds views of its own parts     # the loans of the loops being walked: their containers' buffers     # a temporary -> its value is what a call made and handed over
         self.s_invokes = set()
         self.s_cloargs = set()
         self.s_retparams = set()
         self.s_regions = set()
+        self.s_selfholds = set()
         self.ncap = getattr(fn, "ncap", 0)
 
     # -- names / errors -----------------------------------------------------
@@ -446,6 +448,24 @@ class FnCheck:
                 and not cur.held and self.temp_fresh.get(op[1])):
             self.err(line, f"a fresh string handed to {where} is owned by nothing")
 
+    def reroot(self, st, av, dest, base=()):
+        """The value just moved into `dest` (at path `base`) holds views of
+        its own parts: they are views of `dest`'s parts now."""
+        mf, self.moved_from = self.moved_from, None
+        if not mf:
+            return av
+        src, own = mf
+        held = set()
+        for hp, l in av.held:
+            if l in own:
+                place, kind = self.loans[l]
+                nl = ("rr", l, dest, base)
+                self.loans[nl] = ((dest, base + place[1]), kind)
+                held.add((hp, nl))
+            else:
+                held.add((hp, l))
+        return AV(av.own, av.loans, av.alias, held, av.call)
+
     def lent_part(self, av):
         """A part read out of a value that holds it as a lend - a field the
         value was given a handle copy for - is that lend, not an owner."""
@@ -486,8 +506,14 @@ class FnCheck:
             st.vals[vid] = src
         if src.own == "P":
             self.s_consumes.add(self.pidx[vid])
+        # (what the value holds of its own parts - an index field viewing
+        # its arena field - goes with it: those loans are re-rooted at its
+        # new holder, reroot)
+        own = {l for hp, l in src.held if l in self.loans and self.loans[l][0][0] == vid}
         self.effect(st, (vid, ()), "replace", line)
+        st.dead = st.dead - own
         st.vals[vid] = AV("M")
+        self.moved_from = (vid, own) if own else None
         return AV("O", src.loans, frozenset(), src.held)
 
     def refers_to_block(self, av, blk):
@@ -529,6 +555,16 @@ class FnCheck:
                 av = AV("L", {self.loan(st, site, (vid, ()), "view" if raw else "handle")}, {(vid, ())}, src.held)
             else:
                 av = self.move_out(st, vid, line)
+                if is_ret and self.moved_from:
+                    # (its views of its own parts leave with it: they are no
+                    # views of this frame's values)
+                    own = self.moved_from[1]
+                    for hp, l in av.held:
+                        if l in own:
+                            # (…and the caller's result holds them: `selfholds`)
+                            self.s_selfholds.add((hp[:3], self.loans[l][0][1][:3], self.loans[l][1]))
+                    av = AV(av.own, av.loans, av.alias, {(hp, l) for hp, l in av.held if l not in own}, av.call)
+                    self.moved_from = None
         if (av.held and is_ret and op[0] == "v" and self.fn.vars[op[1]].kind == "temp"
                 and self.local_depth(AV("N", held=av.held)) > dest_depth):
             # a closure literal handed back as it is takes over what it
@@ -613,7 +649,7 @@ class FnCheck:
         from syntax import Unsupported
         raise Unsupported(f"no summary for {tmpl or name}")
 
-    def apply_call(self, st, rv, line):
+    def apply_call(self, st, rv, line, dest_vid=None):
         _, name, ops, site = rv
         sm = self.summary(name)
         avs = []
@@ -742,6 +778,7 @@ class FnCheck:
                 if src.own in ("O", "P") and op[0] == "v" and not op[2]:
                     self.fresh_string_kept(st, op, src, line, f"{name}, which keeps it")
                     moved = self.move_out(st, op[1], line)
+                    moved = self.reroot(st, moved, ops[j][1], ops[j][2] + dpath)
                     add = hroot(self.closure_owned(moved.held), dpath)
                 elif src.own == "L":
                     ty = self.ty_of_place((op[1], op[2])) if op[0] == "v" else None
@@ -776,6 +813,11 @@ class FnCheck:
                 for a in avs[k].alias:
                     held.add((dpath, self.loan(st, (site, "r", k, dpath), (a[0], a[1] + tuple(path)), kind)))
         if sm["res"] == "own":
+            if dest_vid is not None:
+                # what the result holds of its own parts (a field viewing a
+                # sibling field): views of the result's holder
+                for (dpath, path, kind) in sm.get("selfholds", ()):
+                    held.add((tuple(dpath), self.loan(st, (site, "self", tuple(dpath)), (dest_vid, tuple(path)), kind)))
             return AV("O", (), (), held)
         if sm["res"] == "lent":
             loans, alias = set(), set()
@@ -1072,7 +1114,7 @@ class FnCheck:
             return self.transfer(st, rv[1], line, ("use", id(rv)), dest_depth, dest_ty, what, copy_ok=copy_ok,
                                  lend_owner=lend_owner, dest_vid=dest_vid, named=named)
         if k == "call":
-            av = self.apply_call(st, rv, line)
+            av = self.apply_call(st, rv, line, dest_vid)
             if av.own == "L" and dest_ty is not None and dest_ty[0] == "closure":
                 # a closure a call hands back is its caller's own copy: it
                 # holds what the lent one holds, and is no borrow of where
@@ -1107,7 +1149,10 @@ class FnCheck:
                     continue
                 if cur is not None:
                     self.fresh_string_kept(st, op, cur, line, "a field")
+                self.moved_from = None
                 av = self.transfer(st, op, line, (site, i), dest_depth, fty, f"field {i + 1}", stored=True)
+                if dest_vid is not None:
+                    av = self.reroot(st, av, dest_vid, (names[i],))
                 if av.own == "L":
                     if (fty is not None and self.T.owning(fty) and fty[0] not in VIEW_TYPES
                             and not self.T.copyable(fty)):
@@ -1239,7 +1284,7 @@ class FnCheck:
                             and all(self.fn.vars[a[0]].depth >= v.depth for a in new.alias)
                             and self.take_payload(st, new, ln)):
                         new = AV("O", (), (), new.held)
-                st.vals[vid] = new
+                st.vals[vid] = self.reroot(st, new, vid)
             return st
         if k == "assign":
             _, (vid, path), rv, ln = s
@@ -1273,6 +1318,7 @@ class FnCheck:
                 if cur is not None and cur.own in ("O", "P"):
                     self.handover(st, (vid, ()))
                     self.effect(st, (vid, ()), "replace", ln)
+                new = self.reroot(st, new, vid)
                 if cur is not None and cur.own == "P":
                     held = (new.held | hfrom(new.loans)) if new.own == "L" else new.held
                     st.vals[vid] = AV("P", (), (), held)
@@ -1348,6 +1394,7 @@ class FnCheck:
             if op is not None:
                 av = self.transfer(st, op, ln, ("ret", id(s)), 0, self.fn.ret, "the returned value",
                                    copy_ok=True, is_ret=True)
+                self.moved_from = None
                 st = self.run_defers(st)
                 self.check_live(st, av, ln, "the returned value", held=True)
                 self.params_hold_locals(st, ln)
@@ -1507,7 +1554,7 @@ class FnCheck:
                 "effects": sorted(self.s_effects), "stores": sorted(stores),
                 "consumes": sorted(consumes), "elems": sorted(self.s_elems),
                 "invokes": sorted(self.s_invokes), "cloargs": sorted(self.s_cloargs),
-                "regions": sorted(self.s_regions)}
+                "regions": sorted(self.s_regions), "selfholds": sorted(self.s_selfholds)}
 
 
 def initial_summary(prog, fn):
@@ -1515,7 +1562,7 @@ def initial_summary(prog, fn):
     return {"modes": list(fn.modes), "res": "none" if fn.ret is None or T.is_scalar(fn.ret) else "own",
             "lends": [], "rholds": [], "effects": [], "stores": [],
             "consumes": [k for k, m in enumerate(fn.modes) if m == "sink"], "elems": [], "invokes": [],
-            "cloargs": [], "regions": []}
+            "cloargs": [], "regions": [], "selfholds": []}
 
 
 def check_program(prog, max_rounds=40):
@@ -1572,6 +1619,6 @@ def merge_summary(a, b):
     """Summaries only grow, so the fixpoint terminates."""
     order = {"none": 0, "own": 1, "lent": 2}
     out = {"modes": a["modes"], "res": a["res"] if order[a["res"]] >= order[b["res"]] else b["res"]}
-    for key in ("lends", "rholds", "effects", "stores", "consumes", "elems", "invokes", "cloargs", "regions"):
+    for key in ("lends", "rholds", "effects", "stores", "consumes", "elems", "invokes", "cloargs", "regions", "selfholds"):
         out[key] = sorted(set(map(tuple_ify, a.get(key, ()))) | set(map(tuple_ify, b.get(key, ()))), key=repr)
     return out

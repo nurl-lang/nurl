@@ -3,10 +3,12 @@
 """Run the core-IR checker over hole probes and compare with each probe's
 `// map:` verdict (rejected / runs-clean).
 
-  python tools/ncore/run.py [--nurlc] [--all] [--list FILE] [--jobs N] [--show N] [probe.nu ...]
+  python tools/ncore/run.py [--nurlc] [--all] [--clean] [--list FILE] [--jobs N] [--show N] [probe.nu ...]
 
 --nurlc checks the IR nurlc itself lowers the program to (fromnurlc.py);
-without it the prototype's own parser and lowering are used.
+without it the prototype's own parser and lowering are used. --clean takes
+every file given as a program that must be accepted (the tree's own code:
+a refusal there is a rule written too coarsely).
 """
 import os
 import sys
@@ -25,7 +27,12 @@ import fromnurlc                                 # noqa: E402
 HOLES = os.path.join(HERE, "..", "fuzz", "holes")
 
 
+CLEAN = False     # --clean: every file given is a program that must be accepted
+
+
 def expected(path):
+    if CLEAN:
+        return "runs-clean"
     with open(path, encoding="utf-8") as f:
         for line in f:
             if line.startswith("// map:"):
@@ -153,6 +160,11 @@ def main(argv):
             use_nurlc = True
             i += 1
             continue
+        if a == "--clean":
+            global CLEAN
+            CLEAN = True
+            i += 1
+            continue
         if a == "--all":
             files += sorted(os.path.join(HOLES, n) for n in os.listdir(HOLES) if n.endswith(".nu"))
             i += 1
@@ -206,7 +218,8 @@ def main(argv):
     for n, e in mism["false_reject"][:show]:
         print("   ", n, "--", e)
     if len(files) > 3:
-        with open(os.path.join(HERE, "results_nurlc.tsv" if use_nurlc else "results_own.tsv"), "w", encoding="utf-8") as f:
+        out = "results_clean.tsv" if CLEAN else "results_nurlc.tsv" if use_nurlc else "results_own.tsv"
+        with open(os.path.join(HERE, out), "w", encoding="utf-8") as f:
             f.write("".join(f"{n}\t{st}\t{err if err else detail}\n" for n, st, detail, err in done))
 
 
