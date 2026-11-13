@@ -119,7 +119,7 @@ import A3
 #print axioms A3.reach_frame_live
 #print axioms A3.reach_frame_checked_out
 #print axioms A3.rbOK_of
-#print axioms A3.reach_frame_cell_owner
+#print axioms A3.reach_frame_root_cell_owner
 #print axioms A3.reach_scopeL_end_gives_back
 #print axioms A3.reach_scopeL_panic
 #print axioms A3.LockDtorWitness.rwRead_dtor_refused
@@ -158,6 +158,23 @@ import A3
 #print axioms A3.closed_send_core
 #print axioms A3.TStep.closed_send_reaps_assign
 #print axioms A3.reach_closed_send_reaps_assign
+-- Agora #815: no block is named by both a lock share and a cell share (A3/Kinds.lean): a kind per
+-- key that every share of the configuration agrees with, kept by every step (a constructor's fresh
+-- key above every share), at a start whose globals keep the kinds apart (which the make phase
+-- leaves); so a check-out of a cell's block is through a cell share, by an owner (`CellOp`)
+#print axioms A3.EvalR.kinds
+#print axioms A3.Step.kinds
+#print axioms A3.CSettle.kinds
+#print axioms A3.TStep.kinds
+#print axioms A3.Reach.kinds
+#print axioms A3.CKinds.start
+#print axioms A3.reach_kinds
+#print axioms A3.CKinds.shareKind
+#print axioms A3.reach_shareKind
+#print axioms A3.made_kinds
+#print axioms A3.reach_shareKind_made
+#print axioms A3.reach_frame_cell_owner
+#print axioms A3.reach_frame_cellOp
 #print axioms A3.ChanDtorWitness.mainC_typed
 #print axioms A3.ChanDtorWitness.mainC_safe
 #print axioms A3.ChanDtorWitness.mainC_no_leak

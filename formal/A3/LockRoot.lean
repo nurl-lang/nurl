@@ -1339,10 +1339,11 @@ theorem _root_.A2.StmtT.rbind_live {P : Prog} {m : Mem} {Γ Δ : Ctx} {F : List 
     when it is a cell share, the thread holds an owner's share of cell `k`:
     the root itself, through an owner, or, through a borrowed parameter (live,
     bound by an `rbind` around the frame), its caller's owner
-    (`MInv.cell_owned`).  (That every check-out of a cell's block is through a
-    cell share, i.e. that no block is named by both lock and cell shares, is
-    not proved here.) -/
-theorem reach_frame_cell_owner (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn)
+    (`MInv.cell_owned`).  That every check-out of a cell's block is through a
+    cell share, no block being named by both lock and cell shares, is
+    A3/Kinds.lean's (`reach_shareKind`), and so `reach_frame_cell_owner`
+    there, for any check-out of a cell's block. -/
+theorem reach_frame_root_cell_owner (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn)
     (hG : GlobsOK P G) (ht : StmtT P (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
     (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
     {i : Nat} {th : Thread} {K : Stmt → Stmt} {k : Nat} {u : Ty} {x : Var} {b : Stmt}
