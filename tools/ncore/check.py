@@ -212,6 +212,10 @@ class FnCheck:
         if q[0] != p[0]:
             return False
         pp, qp = p[1], q[1]
+        if k == "ref" or eff == "end":
+            # a pointer to the binding itself: good while the binding is,
+            # whatever value it is given - and only that ends with it
+            return k == "ref" and eff == "end" and prefix(pp, qp)
         if pp == qp:
             if eff == "replace" or k == "view":
                 return True
@@ -243,11 +247,11 @@ class FnCheck:
         av = st.vals.get(vid)
         if av is None or depth > 8:
             return
-        if av.own == "L":
+        if av.own == "L" and eff != "end":
             for a in av.alias:
                 self.effect(st, (a[0], a[1] + path), eff, line, depth + 1)
             return
-        if vid in self.pidx:
+        if vid in self.pidx and eff != "end":
             self.s_effects.add((self.pidx[vid], path[:3], eff))
         killed = {l for l in self.loans if l not in st.dead and self.kills(eff, place, l)}
         if killed:
@@ -370,7 +374,7 @@ class FnCheck:
         return any(self.fn.vars[a[0]].blk == blk for a in av.alias)
 
     def transfer(self, st, op, line, site, dest_depth, dest_ty, what, copy_ok=False, is_ret=False,
-                 lend_owner=lambda vid: False, dest_vid=None):
+                 lend_owner=lambda vid: False, dest_vid=None, named=False):
         """A value handed to a new holder (a let, `=`, a return, a field): an
         owner moves; a lend is copied with its loans, or - where it would
         outlive a local it borrows from - deep-copied (a join's value, a
@@ -390,18 +394,25 @@ class FnCheck:
                 av = AV("L", {self.loan(st, site, (vid, ()), "view" if raw else "handle")}, {(vid, ())}, src.held)
             else:
                 av = self.move_out(st, vid, line)
+        if av.held and self.local_depth(AV("N", held=av.held)) > dest_depth and not (
+                is_ret and op[0] == "v" and self.fn.vars[op[1]].kind != "temp"):
+            # a closure that leaves the scope of what it captured takes its
+            # own copies along - a literal handed back as it is too, but
+            # not a binding of one, which holds only copies of the handles
+            # (MEMORY.md §2.11, h310)
+            av = AV(av.own, av.loans, av.alias, self.closure_owned(av.held), av.call)
         own_block = dest_vid is not None and self.refers_to_block(av, dest_vid)
         if av.own == "L" and (own_block or self.local_depth(AV("L", av.loans, av.alias)) > dest_depth):
             if copy_ok and dest_ty is not None and self.T.copyable(dest_ty) and not self.T.is_scalar(dest_ty):
                 return AV("O")
             if own_block:
                 return av
-            if copy_ok and not is_ret:
+            if copy_ok and not is_ret and not named:
                 # a join's or block's value that cannot be copied stays a
                 # lend: if what it borrows ends first, its use is the error
                 return av
             self.err(line, f"{what}: a view of a value released before its holder escapes")
-        if av.held and self.local_depth(AV("N", held=av.held)) > dest_depth and not (copy_ok and not is_ret):
+        if av.held and self.local_depth(AV("N", held=av.held)) > dest_depth and not (copy_ok and not is_ret and not named):
             self.err(line, f"{what}: holds a view of a value released before it")
         return av
 
@@ -494,6 +505,10 @@ class FnCheck:
                 for hp, l in avs[k].held:
                     if l in self.loans and hp and hp[-1].startswith("^") and hp[-1] != "^f":
                         place = self.loans[l][0]
+                        if self.loans[l][1] == "ref":
+                            self.err(line, f"{name}: the closure points into this frame through "
+                                           f"{self.pname(place)}, and another thread would run it")
+                            continue
                         cur = st.vals.get(place[0])
                         if not place[1] and cur is not None and cur.own in ("O", "P"):
                             self.move_out(st, place[0], line)
@@ -517,7 +532,7 @@ class FnCheck:
                 op = ops[k]
                 if src.own in ("O", "P") and op[0] == "v" and not op[2]:
                     moved = self.move_out(st, op[1], line)
-                    add = hroot(moved.held, dpath)
+                    add = hroot(self.closure_owned(moved.held), dpath)
                 elif src.own == "L":
                     ty = self.ty_of_place((op[1], op[2])) if op[0] == "v" else None
                     if ty is not None and self.T.owning(ty) and ty[0] not in VIEW_TYPES and self.T.copyable(ty):
@@ -628,17 +643,49 @@ class FnCheck:
         its body: `('clo', F)` beside its captures."""
         _, fname, ops, site = rv
         held = {(("^f",), ("clo", fname))}
+        body = self.prog.fns.get(fname)
         for i, op in enumerate(ops):
             av = self.read(st, op, line, (site, i), f"capture {i + 1}")
+            fp = (f"^{i}",)
+            byref = body is not None and i < len(body.params) and getattr(body.vars[body.params[i]], "byref", False)
+            if byref and op[0] == "v":
+                # taken by pointer (a `: ~` binding the body assigns): the
+                # closure points into this frame (MEMORY.md §2.3)
+                held.add((fp, self.loan(st, (site, i, "ref"), (op[1], op[2]), "ref")))
             if av.own == "N":
                 continue
-            fp = (f"^{i}",)
             if av.own in ("O", "P") and op[0] == "v":
                 held.add((fp, self.loan(st, (site, i), (op[1], op[2]), "handle")))
                 held |= hroot(av.held, fp)
             else:
                 held |= hfrom(av.loans, fp) | hroot(av.held, fp)
         return AV("O", (), (), held)
+
+    def closure_owned(self, held):
+        """What a closure kept by an owner - stored into a container, a
+        field or a literal, or handed back - holds: it copies in every
+        capture it held a handle of that has a copy (§7.5), so only what it
+        cannot copy, the views its captures hold and its pointers into the
+        frame still borrow."""
+        bases = [(hp[:-1], l[1]) for hp, l in held
+                 if isinstance(l, tuple) and len(l) == 2 and l[0] == "clo" and hp and hp[-1] == "^f"]
+        if not bases:
+            return held
+        drop = set()
+        for base, fname in bases:
+            body = self.prog.fns.get(fname)
+            if body is None:
+                continue
+            n = len(base)
+            for hp, l in held:
+                if hp[:n] != base or len(hp) != n + 1 or not hp[n].startswith("^") or hp[n] == "^f":
+                    continue
+                if l not in self.loans or self.loans[l][1] != "handle":
+                    continue
+                i = int(hp[n][1:])
+                if i < len(body.params) and self.T.copyable(body.vars[body.params[i]].ty):
+                    drop.add((hp, l))
+        return frozenset(held) - drop
 
     def closures_in(self, av):
         """The closure bodies a value may run, with where its captures sit."""
@@ -706,11 +753,11 @@ class FnCheck:
 
     # -- rvalues ---------------------------------------------------------------
     def rvalue(self, st, rv, line, dest_depth, dest_ty, what, copy_ok=False, lend_owner=lambda vid: False,
-               dest_vid=None):
+               dest_vid=None, named=False):
         k = rv[0]
         if k == "use":
             return self.transfer(st, rv[1], line, ("use", id(rv)), dest_depth, dest_ty, what, copy_ok=copy_ok,
-                                 lend_owner=lend_owner, dest_vid=dest_vid)
+                                 lend_owner=lend_owner, dest_vid=dest_vid, named=named)
         if k == "call":
             av = self.apply_call(st, rv, line)
             if av.own == "L" and self.local_depth(AV("L", av.loans, av.alias)) > dest_depth:
@@ -730,7 +777,7 @@ class FnCheck:
                     if fty is not None and self.T.owning(fty) and fty[0] not in VIEW_TYPES and self.T.copyable(fty):
                         continue   # a lend stored into an owning field is copied
                     held |= hfrom(av.loans, fp)
-                held |= hroot(av.held, fp)
+                held |= hroot(self.closure_owned(av.held), fp)
             return AV("O", (), (), held)
         if k == "closure":
             return self.make_closure(st, rv, line)
@@ -803,6 +850,8 @@ class FnCheck:
                 continue
             if av.own == "O":
                 self.effect(st, (vid, ()), "replace", line)
+            # (the binding itself is gone: what points at it ends)
+            self.effect(st, (vid, ()), "end", line)
             if av.own != "M":
                 st.vals[vid] = AV("D")
         return st
@@ -827,9 +876,15 @@ class FnCheck:
             if not path:
                 outer = lambda x: self.fn.vars[x].depth <= v.depth and self.fn.vars[x].blk != vid
                 repoint = cur is not None and cur.own == "L"
-                new = self.rvalue(st, rv, ln, ddepth, v.ty, v.name, copy_ok=v.kind == "temp", dest_vid=vid,
+                # (a lend of something that ends before the target - an inner
+                # block's local, an arm's - is copied in: MEMORY.md §7.6,
+                # "hands it a value of its own")
+                new = self.rvalue(st, rv, ln, ddepth, v.ty, v.name, copy_ok=True, dest_vid=vid,
+                                  named=v.kind != "temp",
                                   lend_owner=outer if v.kind == "temp" else ((lambda x: True) if v.mut and repoint else (lambda x: False)))
-                own_parts = cur is not None and cur.own == "O" and new.own == "L" and any(
+                # (…through a join too: `= x ? c x ( f )` - where the join may
+                # select the target, its value is copied in, h373)
+                own_parts = cur is not None and cur.own == "O" and new.own in ("L", "O") and any(
                     self.loans.get(l, ((None,),))[0][0] == vid for l in new.loans) and v.kind != "temp"
                 if own_parts:
                     # `= o ( f o … )`: o is given (a part of) its own value back

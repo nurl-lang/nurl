@@ -3,7 +3,10 @@
 """Run the core-IR checker over hole probes and compare with each probe's
 `// map:` verdict (rejected / runs-clean).
 
-  python tools/ncore/run.py [--list FILE] [--show N] [probe.nu ...]
+  python tools/ncore/run.py [--nurlc] [--all] [--list FILE] [--jobs N] [--show N] [probe.nu ...]
+
+--nurlc checks the IR nurlc itself lowers the program to (fromnurlc.py);
+without it the prototype's own parser and lowering are used.
 """
 import os
 import sys
@@ -67,11 +70,11 @@ def verdict_nurlc(path):
                     out.add(t[i + 1])
         return out
 
-    todo = [n for n, f in every.items() if not prog.fn_flags[n] & 1]
+    todo = [(n, None) for n, f in every.items() if not prog.fn_flags[n] & 1]
     keep = {}
     trusted = set()
     while todo:
-        n = todo.pop()
+        n, by = todo.pop()
         if n in keep or n not in every:
             continue
         flags = prog.fn_flags[n]
@@ -79,12 +82,17 @@ def verdict_nurlc(path):
             if declared(n):
                 continue
             if flags & 2:
-                raise Unsupported(f"no summary for {prog.fn_tmpl.get(n) or n}")
+                # the library function the program called that led here is
+                # the one to declare a summary for
+                top = by or n
+                raise Unsupported(f"no summary for {prog.fn_tmpl.get(top) or top}")
             trusted.add(n)
         keep[n] = every[n]
+        # (`src`: the library function the program itself called on the way here)
+        src = (by or n) if flags & 1 else None
         for c in callees(every[n]):
-            todo.append(c)
-            todo.extend(prog.virt.get(c, ()))
+            todo.append((c, src))
+            todo.extend((m, src) for m in prog.virt.get(c, ()))
     for fn in keep.values():
         rd.lower_body(fn)
     prog.fns = keep
@@ -125,6 +133,10 @@ def main(argv):
             continue
         if a == "--nurlc":
             use_nurlc = True
+            i += 1
+            continue
+        if a == "--all":
+            files += sorted(os.path.join(HOLES, n) for n in os.listdir(HOLES) if n.endswith(".nu"))
             i += 1
             continue
         if a == "--jobs":

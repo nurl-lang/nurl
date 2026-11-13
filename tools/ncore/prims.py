@@ -103,6 +103,9 @@ PRIMS = {
                     stores=[((0, (), 1, (), "held"))], elems=[1]),
     "vec_extend_range": S(["in", "in", "in", "in"], effects=[(0, (), "realloc")],
                           stores=[(0, (), 1, (), "held")], elems=[1]),
+    "vec_shrink_to_fit": S(["in"], effects=[(0, (), "realloc")]),
+    "vec_remove": S(["in", "in"], res="own", effects=[(0, (), "drop")], elems=[0],
+                    rholds=[((), 0, E, "held")]),
     "vec_data": None,  # raw pointer: unsafe only
     # ---- Slice ----------------------------------------------------------
     "slice_from_vec": S(["in"], res="lent", lends=[(0, (), "view")]),
@@ -154,6 +157,8 @@ PRIMS = {
     "map_get": S(["in"] * 4, res="lent", lends=[(0, E, "handle")], elems=[0]),
     "map_len": S(["in"]),
     # ---- more of the runtime ---------------------------------------------------
+    "nurl_panic": S(["in"]),
+    "nurl_exit": S(["in"]),
     "strlen": S(["in"]),
     "nurl_eprint": S(["in"]),
     "nurl_eprintln": S(["in"]),

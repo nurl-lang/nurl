@@ -266,6 +266,7 @@ class Reader:
                     line, depth)
             v.mut = bool(flags & 1)
             v.blk = blk if blk >= 0 else None
+            v.byref = bool(flags & 8)      # a capture taken by pointer
             fn.vars[vid] = v
             if kind == 3:
                 # a closure body's capture: a parameter the closure itself hands it

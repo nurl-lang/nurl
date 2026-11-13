@@ -20,7 +20,7 @@ model (`formal/A2`), extended only where NURL has more.
   `#n` (the n-th member of an option, a result or another inline
   aggregate). A global is a place of its own, `g:name`.
 - An **operand** is a place, or `c`: a value with nothing to track (a
-  number, a literal, a unit variant).
+  number, a literal, a unit variant, a global of numbers).
 - **Every producer is bound before anything consumes it.** A call's
   result, a literal, a join, a value block, a closure and a try each land
   in a temporary. A consumer only ever sees an operand. This is
@@ -38,19 +38,23 @@ v     <id> <kind> <depth> <flags> <line> <value block> <name> <type>
 <statements>
 endfn
 ty    <type> <class> <drops> <base> A <n> <type arguments> F <n> (<field> <type>)… V <n> (<variant> <payloads> <type>…)…
+virt  <virtual callee> <impl function>…
 ```
 
 - `fn` flags: bit 0 the body may use raw memory (`unsafe`, or a file of the
   standard library), bit 1 it does so itself (a read or a store through a
   pointer, a cast that makes an address). `template` is the generic an
   instance was made from.
-- `v` kind: 0 parameter, 1 binding, 2 temporary, 3 capture. Flags: bit 0
-  mutable, 2 `inout`, 4 `sink`. `depth` counts the scopes open where it
-  was made. `value block` is the temporary of the value block it was
-  bound in, -1 for none.
+- `v` kind: 0 parameter, 1 binding, 2 temporary, 3 capture. Flags: 1
+  mutable, 2 `inout`, 4 `sink`, 8 a capture taken by pointer (a `: ~`
+  binding the closure assigns, MEMORY.md §2.3). `depth` counts the scopes
+  open where it was made. `value block` is the temporary of the value
+  block it was bound in, -1 for none.
 - `ty` lists every type the IR mentions, and the types those hold: the
   borrow walk's binding class, whether it has something to release, and
   its layout.
+- `virt` lists, for each `dyn` method the IR calls (`m__dyn__Trait`), the
+  impl functions the call may run.
 
 Statements:
 
