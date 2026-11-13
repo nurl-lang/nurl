@@ -182,6 +182,11 @@ class Types:
     def elem(self, ty):
         if ty and ty[0] in ("vec", "slice", "box"):
             return ty[1]
+        # a library handle's payload (an Rc's, an Arc's): nurlc's type table
+        if ty and ty[0] == "named":
+            he = getattr(self.prog, "handle_elem", None)
+            if he and ty[1] in he:
+                return he[ty[1]]
         if ty and ty[0] == "String":
             return ("u",)
         return None

@@ -25,6 +25,9 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), 
 SCALAR_NAMES = {"i64": "i", "i1": "b", "double": "f", "float": "f32", "void": "v", "": "v",
                 "i8": "u", "u8": "u", "i16": "i16", "i32": "i32", "u16": "u16", "u32": "u32",
                 "u64": "u64"}
+# Library handles over one payload, and the ones whose copies share it.
+SHARED_HANDLES = {"Rc", "Arc", "Shared"}
+HANDLES_OF_ONE = SHARED_HANDLES | {"Channel", "Locked", "RwLocked", "Deque", "Set"}
 KINDS = {0: "param", 1: "local", 2: "temp", 3: "param"}
 
 
@@ -72,6 +75,8 @@ class Reader:
         self.prog.fn_flags = {}        # name -> flags (bit 0: raw memory allowed)
         self.prog.fn_tmpl = {}         # name -> the generic it is an instance of
         self.prog.fn_file = {}
+        self.prog.handle_elem = {}     # a one-payload handle type -> its payload's type
+        self.prog.shared = set()       # …the ones whose copies share the payload
         self.prog.virt = {}            # a `dyn` method's virtual callee -> the impls it may run
         self.types = {}                # type string -> TypeInfo
         self.conv_memo = {}
@@ -170,6 +175,12 @@ class Reader:
                 return ("box", self.conv(info.targs[0]))
             if info.base == "Slice" and len(info.targs) == 1:
                 return ("slice", self.conv(info.targs[0]))
+            if len(info.targs) == 1 and info.base in HANDLES_OF_ONE:
+                # a handle over one payload: `*` is the payload
+                self.prog.handle_elem[name] = self.conv(info.targs[0])
+                if info.base in SHARED_HANDLES:
+                    self.prog.shared.add(name)
+                return ("named", name, ())
             if info.variants:
                 self.prog.enums[name] = [(v, list(pts)) for v, pts in info.variants]
                 self.prog.enums[name] = [(v, [self.conv(p) for p in pts]) for v, pts in info.variants]

@@ -144,6 +144,7 @@ class FnCheck:
         self.exits = []
         self.loop_stack = []
         self.defer_bodies = []
+        self.tails_memo = {}
         self.s_invokes = set()
         self.s_cloargs = set()
         self.ncap = getattr(fn, "ncap", 0)
@@ -210,9 +211,43 @@ class FnCheck:
 
     def kills(self, eff, p, lid):
         (q, k) = self.loans[lid]
-        if q[0] != p[0]:
+        if q[0] == p[0] and self.kills_paths(eff, p, p[1], q, q[1], k):
+            return True
+        # A shared payload - what every copy of an Rc / Arc / Shared handle
+        # reaches - is one place per handle type: which handles are copies
+        # of one another is not known here (PROPOSAL_CORE_IR D3), so an
+        # effect inside a payload of that type ends what was lent out of
+        # any payload of it.
+        ps = self.shared_tails(p)
+        if not ps:
             return False
-        pp, qp = p[1], q[1]
+        for (ty, qtail) in self.shared_tails(q):
+            for (pty, ptail) in ps:
+                if ty == pty and self.kills_paths(eff, p, ptail, q, qtail, k):
+                    return True
+        return False
+
+    def shared_tails(self, place):
+        """(handle type, path below its payload) for every shared handle the
+        place reaches through."""
+        memo = self.tails_memo
+        if place in memo:
+            return memo[place]
+        out = []
+        shared = getattr(self.prog, "shared", None)
+        if shared:
+            vid, path = place
+            ty = self.fn.vars[vid].ty
+            for i, e in enumerate(path):
+                if ty is None:
+                    break
+                if e == "*" and ty[0] == "named" and ty[1] in shared:
+                    out.append((ty[1], path[i + 1:]))
+                ty = self.ty_of_place((vid, path[:i + 1]))
+        memo[place] = out
+        return out
+
+    def kills_paths(self, eff, p, pp, q, qp, k):
         if k == "ref" or eff == "end":
             # a pointer to the binding itself: good while the binding is,
             # whatever value it is given - and only that ends with it
@@ -517,8 +552,10 @@ class FnCheck:
         # to its captures (MEMORY.md §2.11); a callee nothing says that of
         # may run any closure it is handed
         inv = sm.get("invokes")
+        gone = set(sm.get("detaches", ()))
         for k, av in enumerate(avs):
-            if (inv is None or k in inv) and self.closures_in(av):
+            # (one another thread runs took its captures with it, above)
+            if k not in gone and (inv is None or k in inv) and self.closures_in(av):
                 self.run_closures(st, av, line, f"{name}: the closure in argument {k + 1}")
                 for a in av.alias:
                     if a[0] in self.pidx:
@@ -890,6 +927,9 @@ class FnCheck:
             self.effect(st, (vid, ()), "end", line)
             if av.own != "M":
                 st.vals[vid] = AV("D")
+        # a loan nothing holds any more is no fact about a later round or a
+        # later use of its site: only what some value still needs stays ended
+        st.dead = st.dead & self.all_loans(st)
         return st
 
     def stmt(self, st, s):
