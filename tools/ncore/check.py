@@ -147,7 +147,8 @@ class FnCheck:
         self.defer_bodies = []
         self.tails_memo = {}
         self.agg_lends = {}      # a literal temporary -> the bindings it shows and has not taken
-        self.temp_fresh = {}     # a temporary -> its value is what a call made and handed over
+        self.temp_fresh = {}
+        self.walking = set()     # the loans of the loops being walked: their containers' buffers     # a temporary -> its value is what a call made and handed over
         self.s_invokes = set()
         self.s_cloargs = set()
         self.s_retparams = set()
@@ -392,6 +393,11 @@ class FnCheck:
         if av.own == "U":
             return NONE
         self.check_live(st, av, line, name)
+        if av.held and not path:
+            # a value that holds a view - one stored into it, or captured by
+            # it - is read whole: what the view points into must still be
+            # there (MEMORY.md §2.10)
+            self.check_live(st, av, line, name, held=True)
         if st.gone:
             for (gv, gp) in st.gone:
                 if gv == vid and (prefix(gp, path) or prefix(path, gp)):
@@ -1171,7 +1177,7 @@ class FnCheck:
                 st.vals[vid] = AV("D")
         # a loan nothing holds any more is no fact about a later round or a
         # later use of its site: only what some value still needs stays ended
-        st.dead = st.dead & self.all_loans(st)
+        st.dead = st.dead & (self.all_loans(st) | self.walking)
         if st.gone:
             st.gone = frozenset(g for g in st.gone if g[0] not in declared)
         return st
@@ -1229,7 +1235,7 @@ class FnCheck:
                     # `= o ( f o … )`: o is given (a part of) its own value back
                     # - it keeps owning it; nothing is released (the keep rule)
                     rest = {l for l in new.loans if self.loans.get(l, ((None,),))[0][0] != vid}
-                    if rest and new.call and v.ty is not None and not self.T.copyable(v.ty):
+                    if rest and new.call:
                         # which of them a run hands back is not known, so
                         # neither is whether the binding still owns its value
                         self.err(ln, f"{v.name} is given back what this call may lend out of itself "
@@ -1372,6 +1378,8 @@ class FnCheck:
         head = st.copy()
         final = self.final
         self.final = False
+        outer = set(self.walking)
+        self.walking |= walk
         for _ in range(12):
             nxt, _ = self._fe_round(head, s, vid, walk, elem_alias, src, body, ln)
             if nxt.key() == head.key():
@@ -1379,6 +1387,7 @@ class FnCheck:
             head = nxt
         self.final = final
         _, out = self._fe_round(head, s, vid, walk, elem_alias, src, body, ln)
+        self.walking = outer
         return out
 
     def _fe_round(self, head, s, vid, walk, elem_alias, src, body, ln):
@@ -1499,7 +1508,7 @@ def check_program(prog, max_rounds=40):
         sm = fc.check()
         errors += fc.errors
         lent = {k for (k, _, _) in sm["lends"]} & set(sm["consumes"])
-        if lent and fn.ret is not None and not T.copyable(fn.ret):
+        if lent:
             # the caller cannot both keep an argument the result borrows
             # and have handed it over
             errors.append((name, fn.line, "hands back what it may lend out of a parameter it takes over on another path"))
