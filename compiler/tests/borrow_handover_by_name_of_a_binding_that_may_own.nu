@@ -1,8 +1,9 @@
 // `= t a` moves `a`'s value where it runs. An `a` that owns its value on
 // one path only — a fresh string in one arm, a borrow of the parameter in
-// the other — cannot be handed over by name: on the path it owns the
-// value, `t` would take it and release it at `= t …`, under the read of
-// `a` that follows. Refused as handing over a borrow (agora #634).
+// the other — is handed over by name as one that owns it outright is: `t`
+// takes the flag `a` has at run time (agora #667). On the path it owned the
+// value, `t` releases it at `= t …`, under the read of `a` that follows:
+// that read is refused, `a` being maybe-moved (agora #634, #667).
 $ `stdlib/core/string.nu`
 
 @ pick i c String h0 → i {
