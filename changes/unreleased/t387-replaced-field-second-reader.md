@@ -6,6 +6,10 @@
   Handing `g2` to a `sink`, or reading it after `g1` is consumed or given a
   new value, compiled and read freed memory. It is now refused: "'g2'
   borrows from 'g1', which ended at line N…".
+- **A field reader given another value with `=` is no longer taken for the
+  field's reader** (found fixing Agora #387). Re-pointed at a `vec_at`
+  element, then the field replaced, it was made the old value's owner, and
+  handing it to a `sink` freed the element under the Vec.
 - **No leak when a reader that took a field's old value in a block is
   handed on after it** (found fixing Agora #387). The struct's new value
   was taken out of the field with it and leaked.

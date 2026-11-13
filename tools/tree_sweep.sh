@@ -24,12 +24,22 @@
 #    tools/tree_sweep.sh FILE...         # only these files
 #
 #  Environment:
-#    NURL_SWEEP_JOBS   parallel compiles (default: nproc)
-#    NURL_SWEEP_OUT    transcript directory (default: a temp dir)
+#    NURL_SWEEP_JOBS     parallel compiles (default: nproc)
+#    NURL_SWEEP_OUT      transcript directory (default: a temp dir)
+#    NURL_SWEEP_TIMEOUT  seconds one compile may take (default: 120)
+#    NURL_SWEEP_SLOWER   a file whose compile takes this many times as
+#                        long with the new compiler is reported (default:
+#                        5; only compiles of a second or more count)
+#
+#  A compile that runs past NURL_SWEEP_TIMEOUT is stopped and recorded as
+#  `exit=timeout`: one side timing out is a difference, and the summary
+#  names every timed-out file first. A compile-time blowup would otherwise
+#  hold the sweep forever and report nothing (agora #794).
 #
 #  Exit codes:
 #    0 — every covered file produced identical output and exit code
-#    1 — at least one file differs (the files and their diffs are listed)
+#    1 — at least one file differs (the files and their diffs are listed),
+#        or timed out on either side
 #    2 — environment problem (a compiler could not be built or found)
 #
 #  The baseline is built the way build.sh builds stage 1: the named
@@ -54,7 +64,7 @@ while [[ $# -gt 0 ]]; do
         --base)     BASE_REF="$2"; shift 2 ;;
         --base-bin) BASE_BIN="$2"; shift 2 ;;
         --new-bin)  NEW_BIN="$2";  shift 2 ;;
-        -h|--help)  sed -n '4,40p' "$0" | sed 's|^#\s\?||'; exit 0 ;;
+        -h|--help)  sed -n '4,50p' "$0" | sed 's|^#\s\?||'; exit 0 ;;
         *)          FILES+=("$1"); shift ;;
     esac
 done
@@ -146,6 +156,14 @@ if [[ ${#FILES[@]} -eq 0 ]]; then
 fi
 
 JOBS="${NURL_SWEEP_JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}"
+SWEEP_TIMEOUT="${NURL_SWEEP_TIMEOUT:-120}"
+SWEEP_SLOWER="${NURL_SWEEP_SLOWER:-5}"
+# (GNU coreutils' `timeout`, or Homebrew's `gtimeout`. Without either, a
+# hang still holds the sweep — said so once, not silently.)
+TIMEOUT_BIN="$(command -v timeout || command -v gtimeout || true)"
+if [[ -z "$TIMEOUT_BIN" ]]; then
+    echo "tree_sweep: WARNING: no timeout(1) found — a compile that hangs will hold the sweep" >&2
+fi
 echo "tree_sweep: ${#FILES[@]} file(s), $JOBS job(s)"
 echo "tree_sweep: base = $BASE_BIN"
 echo "tree_sweep: new  = $NEW_BIN"
@@ -181,24 +199,39 @@ done
 # then a hash of the emitted IR. The IR is hashed rather than stored
 # because the tree emits hundreds of megabytes of it and the only
 # question asked here is "the same or not".
-export WORK PKGROOT ROOT_DIR
+# Each compile runs under the time limit; one stopped there is recorded as
+# `exit=timeout` with nothing else (what it printed before it was stopped
+# depends on when). Its wall time goes beside the transcript, in a file
+# of its own, so a slower compile is no difference — only a far slower one
+# is reported, below.
+export WORK PKGROOT ROOT_DIR SWEEP_TIMEOUT TIMEOUT_BIN
 record() {
     local which="$1" bin="$2" f="$3"
     local out="$WORK/$which/${f//\//__}.txt"
-    local ir err rc
+    local ir rc t0 t1
+    local -a lim=()
+    [[ -n "$TIMEOUT_BIN" ]] && lim=("$TIMEOUT_BIN" --kill-after=5 "$SWEEP_TIMEOUT")
+    t0="${EPOCHREALTIME/,/.}"
     if [[ "$f" == packages/*/*/* && -d "$PKGROOT/$(cut -d/ -f2 <<<"$f")" ]]; then
         local pd rel
         pd="$(cut -d/ -f2 <<<"$f")"; rel="${f#packages/$pd/}"
-        ir="$(cd "$PKGROOT/$pd" && NURL_STDLIB="$ROOT_DIR" "$bin" "$rel" 2>"$out.stderr")"; rc=$?
+        ir="$(cd "$PKGROOT/$pd" && NURL_STDLIB="$ROOT_DIR" "${lim[@]}" "$bin" "$rel" 2>"$out.stderr")"; rc=$?
     else
-        ir="$("$bin" "$f" 2>"$out.stderr")"; rc=$?
+        ir="$("${lim[@]}" "$bin" "$f" 2>"$out.stderr")"; rc=$?
     fi
-    {
-        echo "exit=$rc"
-        echo "ir_sha=$(printf '%s' "$ir" | sha256sum | cut -d' ' -f1)"
-        echo "--- stderr ---"
-        cat "$out.stderr"
-    } > "$out"
+    t1="${EPOCHREALTIME/,/.}"
+    # (124: timeout stopped it; 137: killed after the grace period.)
+    if [[ -n "$TIMEOUT_BIN" ]] && (( rc == 124 || rc == 137 )); then
+        echo "exit=timeout" > "$out"
+    else
+        {
+            echo "exit=$rc"
+            echo "ir_sha=$(printf '%s' "$ir" | sha256sum | cut -d' ' -f1)"
+            echo "--- stderr ---"
+            cat "$out.stderr"
+        } > "$out"
+    fi
+    awk -v a="$t0" -v b="$t1" 'BEGIN { printf "%.3f\n", b - a }' > "$out.time"
     rm -f "$out.stderr"
 }
 export -f record
@@ -207,6 +240,34 @@ printf '%s\0' "${FILES[@]}" | xargs -0 -P "$JOBS" -I{} bash -c 'record base "$0"
 printf '%s\0' "${FILES[@]}" | xargs -0 -P "$JOBS" -I{} bash -c 'record new  "$0" "$1"' "$NEW_BIN"  {}
 
 # ── The verdict ──────────────────────────────────────────────────
+# Timed out first: a hang is the loudest thing a sweep can find, and the
+# one a diff below would bury.
+timedout=0
+for f in "${FILES[@]}"; do
+    k="${f//\//__}.txt"
+    bt=""; nt=""
+    grep -qx 'exit=timeout' "$WORK/base/$k" 2>/dev/null && bt="base"
+    grep -qx 'exit=timeout' "$WORK/new/$k" 2>/dev/null && nt="new"
+    if [[ -n "$bt$nt" ]]; then
+        (( timedout == 0 )) && echo
+        timedout=$((timedout + 1))
+        echo "TIMEOUT (${SWEEP_TIMEOUT}s, $(echo $bt $nt | sed 's/ / and /')): $f"
+    fi
+done
+# …then a compile far slower with the new compiler: a blowup short of the
+# limit (ten times as long on one file) is a regression the transcripts
+# cannot show.
+slower=0
+for f in "${FILES[@]}"; do
+    k="${f//\//__}.txt.time"
+    [[ -f "$WORK/base/$k" && -f "$WORK/new/$k" ]] || continue
+    read -r bs < "$WORK/base/$k"; read -r ns < "$WORK/new/$k"
+    if awk -v b="$bs" -v n="$ns" -v r="$SWEEP_SLOWER" 'BEGIN { exit !(n >= 1 && n > b * r) }'; then
+        (( slower == 0 )) && echo
+        slower=$((slower + 1))
+        echo "SLOWER (${bs}s -> ${ns}s): $f"
+    fi
+done
 differs=0
 for f in "${FILES[@]}"; do
     b="$WORK/base/${f//\//__}.txt"
@@ -220,12 +281,18 @@ for f in "${FILES[@]}"; do
 done
 
 echo
-if (( differs == 0 )); then
+if (( timedout > 0 )); then
+    echo "tree_sweep: $timedout file(s) TIMED OUT after ${SWEEP_TIMEOUT}s (listed first above)"
+fi
+if (( slower > 0 )); then
+    echo "tree_sweep: $slower file(s) compile more than ${SWEEP_SLOWER}x slower with the new compiler (listed above)"
+fi
+if (( differs == 0 && timedout == 0 )); then
     echo "tree_sweep: ${#FILES[@]} file(s) byte-identical — no behaviour changed outside the corpus."
     [[ -n "${NURL_SWEEP_OUT:-}" ]] || rm -rf "$WORK"
     exit 0
 fi
-echo "tree_sweep: $differs of ${#FILES[@]} file(s) DIFFER (transcripts in $WORK)"
+(( differs > 0 )) && echo "tree_sweep: $differs of ${#FILES[@]} file(s) DIFFER (transcripts in $WORK)"
 echo "tree_sweep: every difference must be one the change intends — read each one."
 echo "tree_sweep: tools/sweep_classify.py $WORK $BASE_BIN $NEW_BIN groups them by function."
 exit 1

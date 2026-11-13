@@ -37820,11 +37820,27 @@ unsafe @ amv_close → v { = g_amv_cur 0 }
 // Does the statement being compiled move `src` (amv_open)?
 @ amv_moves s src → b { ^ & != 0 g_amv_cur ( seq g_amv_src src ) }
 
+// Does `: T q p` move by-value parameter `p`'s drop flag into q
+// (__mem_udrop_bind_flag)? A value with a drop of its own that is no value
+// handle — a String or a Vec is linked as a cursor instead — whose
+// parameter has a drop registration.
+@ __param_flag_moves i syms s p s vt → b {
+    ? ( __is_handle_ty vt ) { ^ F } {}
+    : s sp ( mem_udrop_ptr_of syms p )
+    ^ & != 0 ( nurl_str_len sp ) != 0 ( nurl_sym_len2 syms sp `__pname` )
+}
+
 @ bck_let_alias i syms b is_mut i rhs_tt s rhs_val s vt i line s dest → v {
     ( amv_close )
     // A `sink` parameter is the function's own: copying it hands it on
     // like any owner, it is not a borrow of the caller's value.
-    : b is_param & ( nurl_sym_has_word syms `__fn_param_names__` rhs_val ) == 0 ( nurl_sym_len2 syms rhs_val `__sinkp` )
+    // (…and so is one whose drop flag the generated code moves into the
+    // new name — a by-value parameter with a drop of its own, its flag
+    // "this function consumes it", __mem_udrop_bind_flag: `: R q p` holds
+    // p under another name, and what q is handed to, p is (__pmove, agora
+    // #759). Copied for the walk, q was a borrow, and handing it to a sink
+    // was refused where p itself was accepted — agora #768.)
+    : b is_param & & ( nurl_sym_has_word syms `__fn_param_names__` rhs_val ) == 0 ( nurl_sym_len2 syms rhs_val `__sinkp` ) ! ( __param_flag_moves syms rhs_val vt )
     ? & & & ! is_mut ( is_ident_tok rhs_tt ) ( bck_is_heap_lty vt ) ! is_param
     {  // Under the sound rules the walk decides (`:a`): an owner's value
         // moves to `b`, a borrow is copied (b borrows from its sources).
@@ -42795,7 +42811,17 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 // bck_sx_name — one key per row, not a key per question).
                 ( bck_put ( bck_bkey `vw_` ( bck_field rec 1 ) ) ? ( seq ( bck_field rec 5 ) `o` ) `o` ? | ( seq ( bck_field rec 5 ) `v` ) ( seq ( bck_field rec 5 ) `w` ) `1` `` )
                 ( bck_put ( bck_bkey `wv_` ( bck_field rec 1 ) ) ? ( seq ( bck_field rec 5 ) `w` ) `1` `` )
-                ? != 0 g_bck_has_borrow { ( bck_put_bf `bs_` ( bck_field rec 1 ) `` ) } {}
+                // (…and it views no field any more, as at a `let`: its new
+                // value's own borrow row says if it does. Kept, a reader of
+                // `. o name` re-pointed at a `vec_at` element was still
+                // taken for the field's viewer — a store replacing the field
+                // made it the old value's owner, and handed to a sink it
+                // freed the element under the Vec; agora #387.)
+                ? != 0 g_bck_has_borrow {
+                    ( bck_put_bf `bs_` ( bck_field rec 1 ) `` )
+                    ( bck_put_bf `fb_` ( bck_field rec 1 ) `` )
+                    ( bck_put_bf `fp_` ( bck_field rec 1 ) `` )
+                } {}
                 ( bck_br_event asid )
                 // (A join or a block with no call of its own: the line's other calls
                 // lend to its arms, not to it — as for a `let`.)
