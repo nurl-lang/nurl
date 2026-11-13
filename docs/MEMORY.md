@@ -2409,7 +2409,11 @@ journal** instead:
 
 The journal belongs to the thread outside fibers and to the fiber inside
 one. The scheduler switches it with the fiber, so fibers sharing a worker,
-or moving between workers, never drain each other's extents. Functions
+or moving between workers, never drain each other's extents. A drain in
+progress is the fiber's too, with the record of what it has freed: a
+destructor it runs may yield, and the fiber then waits while others run
+on its worker, or goes on on another worker, with its drain where it left
+it. Functions
 that cannot reach a panic do not register anything and pay nothing, and
 neither does a binding that never owns while it is registered (a
 parameter its function does not take over, a value read out of a
