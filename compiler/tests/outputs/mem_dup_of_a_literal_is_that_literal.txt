@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+the holder's name, long enough for heap
+a fresh field, long enough for the heap
+the holder's name, long enough for heap
+a fresh field beside the copy, long
+a source string long enough for the heap
+the holder's name, long enough for heap
