@@ -148,6 +148,7 @@ class FnCheck:
         self.s_invokes = set()
         self.s_cloargs = set()
         self.s_retparams = set()
+        self.s_regions = set()
         self.ncap = getattr(fn, "ncap", 0)
 
     # -- names / errors -----------------------------------------------------
@@ -228,6 +229,22 @@ class FnCheck:
                     return True
         return False
 
+    def region_effect(self, st, ty, tail, eff):
+        """An effect at `tail` inside some payload of shared handle type
+        `ty`: ends what was lent out of any payload of that type."""
+        self.s_regions.add((ty, tail[:3], eff))
+        killed = set()
+        for lid in self.loans:
+            if lid in st.dead:
+                continue
+            (q, k) = self.loans[lid]
+            for (qty, qtail) in self.shared_tails(q):
+                if qty == ty and self.kills_paths(eff, None, tail, q, qtail, k):
+                    killed.add(lid)
+                    break
+        if killed:
+            st.dead = st.dead | killed
+
     def shared_tails(self, place):
         """(handle type, path below its payload) for every shared handle the
         place reaches through."""
@@ -292,6 +309,12 @@ class FnCheck:
             return
         if vid in self.pidx and eff != "end":
             self.s_effects.add((self.pidx[vid], path[:3], eff))
+        if eff != "end":
+            # an effect inside a shared payload is one on that handle type's
+            # payload, whichever handle it was reached through: the callers'
+            # too (the summary's `regions`)
+            for (ty, tail) in self.shared_tails(place):
+                self.s_regions.add((ty, tail[:3], eff))
         killed = {l for l in self.loans if l not in st.dead and self.kills(eff, place, l)}
         if killed:
             st.dead = st.dead | killed
@@ -547,6 +570,10 @@ class FnCheck:
         for (k, path, eff) in sm["effects"]:
             if k < len(ops) and ops[k][0] == "v":
                 self.effect(st, (ops[k][1], ops[k][2] + tuple(path)), eff, line)
+        # what the callee may do inside a shared payload, whichever handle it
+        # reaches it through
+        for (ty, tail, eff) in sm.get("regions", ()):
+            self.region_effect(st, ty, tuple(tail), eff)
         # a closure another thread runs takes what it captured with it
         for k in sm.get("detaches", ()):
             if k < len(avs):
@@ -1217,7 +1244,8 @@ class FnCheck:
         return {"modes": list(self.fn.modes), "res": res, "lends": sorted(lends), "rholds": sorted(rholds),
                 "effects": sorted(self.s_effects), "stores": sorted(stores),
                 "consumes": sorted(consumes), "elems": sorted(self.s_elems),
-                "invokes": sorted(self.s_invokes), "cloargs": sorted(self.s_cloargs)}
+                "invokes": sorted(self.s_invokes), "cloargs": sorted(self.s_cloargs),
+                "regions": sorted(self.s_regions)}
 
 
 def initial_summary(prog, fn):
@@ -1225,7 +1253,7 @@ def initial_summary(prog, fn):
     return {"modes": list(fn.modes), "res": "none" if fn.ret is None or T.is_scalar(fn.ret) else "own",
             "lends": [], "rholds": [], "effects": [], "stores": [],
             "consumes": [k for k, m in enumerate(fn.modes) if m == "sink"], "elems": [], "invokes": [],
-            "cloargs": []}
+            "cloargs": [], "regions": []}
 
 
 def check_program(prog, max_rounds=40):
@@ -1266,6 +1294,6 @@ def merge_summary(a, b):
     """Summaries only grow, so the fixpoint terminates."""
     order = {"none": 0, "own": 1, "lent": 2}
     out = {"modes": a["modes"], "res": a["res"] if order[a["res"]] >= order[b["res"]] else b["res"]}
-    for key in ("lends", "rholds", "effects", "stores", "consumes", "elems", "invokes", "cloargs"):
+    for key in ("lends", "rholds", "effects", "stores", "consumes", "elems", "invokes", "cloargs", "regions"):
         out[key] = sorted(set(map(tuple_ify, a.get(key, ()))) | set(map(tuple_ify, b.get(key, ()))), key=repr)
     return out
