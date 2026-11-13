@@ -34198,12 +34198,25 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
 // copied in place on those paths, and the binding owns it there. The walk
 // takes such a value for what the block's names held (h216); this makes
 // it so (agora #190). One that cannot be copied is refused.
-@ mem_blk_tail_copy_slot i syms i cg s ptr s ty s up i rmin → v {
+@ mem_blk_tail_copy_slot i syms i cg s ptr s ty s up i rmin s val → v {
     ? == 0 ( nurl_str_len up ) { ^ v } {}
     : s deeper ( mem_blk_tail_deeper_args syms ( nurl_str_to_int ( nurl_sym_get2 syms up `__depth` ) ) rmin )
     ? == 0 ( nurl_str_len deeper ) { ^ v } {}
-    : s lp ( mem_local_lend_of syms cg ( nurl_sym_get syms `__last_call_lend_key__` ) deeper )
+    : ~ s lp ( mem_local_lend_of syms cg ( nurl_sym_get syms `__last_call_lend_key__` ) deeper )
     ? == 0 ( nurl_str_len lp ) { ^ v } {}
+    // (…not where the call already copied its result: a call that may lend
+    // a temporary it was handed copies what it hands back on the runs it
+    // lent (mem_own_lendback's `part`), and its own bit says so —
+    // __call_copied_own. Copied again here, `: String g { : String s …
+    // ( pick ( string_concat … ) s ) }` overwrote the call's copy and
+    // leaked it, agora #822.)
+    : s ccp ( __call_copied_own val )
+    ? != 0 ( nurl_str_len ccp ) {
+        ? | ( seq ccp `1` ) ( seq ccp `true` ) { ^ v } {}
+        : s nc ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print nc ) ( nurl_print ` = xor i1 ` ) ( nurl_print ccp ) ( nurl_print `, 1\n` )
+        = lp ( __and_i1 cg lp nc )
+    } {}
     ? ! ( __clone_supported ty syms ) { ( __nc_copy_die ( nurl_sym_get syms `__fn_self_name__` ) ty ) ^ v } {}
     : s lt ( nurl_llty ty )
     : s cur ( nurl_cg_reg cg )
@@ -55280,7 +55293,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
                     ( mem_note_bound_lend syms name __own_tt __own_val )
                     ( mem_own_add_user_drop syms cg ptr rvt )
                     ( mem_udrop_bind_flag syms cg ptr rvt ( __blk_bind_tt __own_tt __blk_lend ) __own_val rhs_borrow val )
-                    ? __blk_lend { ( mem_blk_tail_call_own syms cg ptr ) ( mem_blk_tail_copy_slot syms cg ptr rvt ptr __rhs_r0 ) } {}
+                    ? __blk_lend { ( mem_blk_tail_call_own syms cg ptr ) ( mem_blk_tail_copy_slot syms cg ptr rvt ptr __rhs_r0 val ) } {}
                     ( __most_init syms name ptr val __blk_lend )
                     ( mem_journal_push_userdrop syms cg ptr rvt )
                     ( __jpb_attach syms ptr __jpb_mine ) }
@@ -55698,7 +55711,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
                         ( mem_note_bound_lend syms name __own_tt __own_val )
                         ( mem_own_add_user_drop syms cg ptr rpt )
                         ( mem_udrop_bind_flag syms cg ptr rpt ( __blk_bind_tt __own_tt __blk_lend ) __own_val rhs_borrow val )
-                        ? __blk_lend { ( mem_blk_tail_call_own syms cg ptr ) ( mem_blk_tail_copy_slot syms cg ptr rpt ptr __rhs_r0 ) } {}
+                        ? __blk_lend { ( mem_blk_tail_call_own syms cg ptr ) ( mem_blk_tail_copy_slot syms cg ptr rpt ptr __rhs_r0 val ) } {}
                         ( __most_init syms name ptr val __blk_lend )
                         ( mem_journal_push_userdrop syms cg ptr rpt )
                         ( __jpb_attach syms ptr __jpb_mine ) }
@@ -57104,7 +57117,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         } {}
         // A value block whose tail call may lend what was bound below
         // `name`, which dies first: copied in place, owned (agora #190).
-        ? & & != 0 ( nurl_str_len ptr ) | == bck_rhs_tt TT_LBRACE == bck_rhs_tt TT_BACKSLASH == g_blk_tail_eff TT_LPAREN { ( mem_blk_tail_copy_slot syms cg ptr vt __ud_ptr -1 ) } {}
+        ? & & != 0 ( nurl_str_len ptr ) | == bck_rhs_tt TT_LBRACE == bck_rhs_tt TT_BACKSLASH == g_blk_tail_eff TT_LPAREN { ( mem_blk_tail_copy_slot syms cg ptr vt __ud_ptr -1 store_val ) } {}
         // The binding holds its new value and says whether it owns it: the
         // old one goes now (Agora #621) — an `inout` parameter's too.
         ( mem_udrop_drop_old cg __ud_late )
