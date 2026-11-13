@@ -477,12 +477,12 @@ class FnCheck:
                 av = AV("L", {self.loan(st, site, (vid, ()), "view" if raw else "handle")}, {(vid, ())}, src.held)
             else:
                 av = self.move_out(st, vid, line)
-        if av.held and self.local_depth(AV("N", held=av.held)) > dest_depth and not (
-                is_ret and op[0] == "v" and self.fn.vars[op[1]].kind != "temp"):
-            # a closure that leaves the scope of what it captured takes its
-            # own copies along - a literal handed back as it is too, but
-            # not a binding of one, which holds only copies of the handles
-            # (MEMORY.md §2.11, h310)
+        if (av.held and is_ret and op[0] == "v" and self.fn.vars[op[1]].kind == "temp"
+                and self.local_depth(AV("N", held=av.held)) > dest_depth):
+            # a closure literal handed back as it is takes over what it
+            # captured (§7.5); a binding of one - handed back by name, or
+            # assigned to a binding that outlives its captures - holds only
+            # copies of their handles (MEMORY.md §2.11, h310)
             av = AV(av.own, av.loans, av.alias, self.closure_owned(av.held), av.call)
         own_block = dest_vid is not None and self.refers_to_block(av, dest_vid)
         if av.own == "L" and (own_block or self.local_depth(AV("L", av.loans, av.alias)) > dest_depth):
@@ -564,6 +564,20 @@ class FnCheck:
                     # A2: an argument is frozen for the call - a part of it may
                     # not view what the call changes in another part
                     self.err(line, f"{name}: a part of argument {k + 1} views what the call changes in it")
+        # a closure that changes what it captured is a second route to it: it
+        # may not meet another argument that reaches that capture (§2.4, §2.11)
+        for k, av in enumerate(avs):
+            for place, eff in self.closure_capture_effects(av):
+                for m, other in enumerate(avs):
+                    if m == k:
+                        continue
+                    reach = any(a[0] == place[0] and (prefix(a[1], place[1]) or prefix(place[1], a[1]))
+                                for a in other.alias)
+                    reach = reach or (ops[m][0] == "v" and ops[m][1] == place[0]
+                                      and (prefix(ops[m][2], place[1]) or prefix(place[1], ops[m][2])))
+                    if reach or self.would_kill(st, place, eff, other.loans | hloans(other.held)):
+                        self.err(line, f"{name}: the closure in argument {k + 1} changes "
+                                       f"{self.pname(place)}, which argument {m + 1} also reaches")
         # consumed arguments
         for k in sm["consumes"]:
             if k >= len(ops):
@@ -895,6 +909,26 @@ class FnCheck:
                         if a[0] in self.pidx:
                             self.s_cloargs.add((k, i, self.pidx[a[0]], a[1][:3]))
         return AV("O")
+
+    def closure_capture_effects(self, av):
+        """(place, effect) for what the closures a value may run do to what
+        they captured."""
+        out = []
+        for base, fname in self.closures_in(av):
+            sm = self.summ.get(fname)
+            fn = self.prog.fns.get(fname)
+            if sm is None or fn is None:
+                continue
+            ncap = getattr(fn, "ncap", 0)
+            n = len(base)
+            for (k, path, eff) in sm["effects"]:
+                if k >= ncap:
+                    continue
+                for hp, l in av.held:
+                    if hp[:n] == base and len(hp) == n + 1 and hp[n] == f"^{k}" and l in self.loans:
+                        place = self.loans[l][0]
+                        out.append(((place[0], place[1] + tuple(path)), eff))
+        return out
 
     def closure_arg_effects(self, st, fname, places, line):
         """The effects of closure body `fname` on its own parameters, applied
