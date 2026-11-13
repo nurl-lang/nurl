@@ -23,7 +23,8 @@ stores and steps, not of this program's run (which no theorem here traces):
 
 * the check-out's end gives the value back, and nothing else
   (`scopeL_end_gives_back`): its crossing check cannot fail
-  (`sendCheck_noArc`, the payload type holding no share, `Ty.lkPay`), so
+  (`sendCheck_noArc`, the payload type holding no share, as `DT` does and
+  `Ty.lkPay` asked before Agora #803), so
   the scope's end never panics (`Step.scopeLFail`) or drops the value with
   no code (`Release.drop`);
 * a panic in the body gives it back too (`scopeL_panic_gives_back`):
@@ -55,7 +56,12 @@ Since Agora #804 `RwLocked D`'s read guard is typed
 (`A3/RwDtorWitness.lean`: the view lends the payload in place).  Still
 refused (stricter than nurlc): a payload that holds a destructor value in a field of a type with
 no destructor of its own, or a destructor value (or a drained `Vec` of them)
-that holds a share (`Ty.lkPay`).  Since Agora #810 `locked_restore` of a
+that holds a cell share (`Ty.lkPay`).  Since Agora #803 one that holds `arc`
+or lock shares is typed (`A3/LockArcDtorWitness.lean`): its give-back's
+check can fail, and the value then goes to a destructor frame
+(`Step.scopeLPD`); the lemmas here are of a payload that holds no share
+(`hasArc = false`): that a typed share-holding payload's check-out ends in
+`Release.put` is not yet a lemma (Agora #837 item 3).  Since Agora #810 `locked_restore` of a
 destructor value is typed (`lockRestore_dtor_typed`: the restore fills only a
 taken block, never a checked-out one).  Since Agora #755's last cut a `Locked (Vec D)` is typed
 (`mainV`, below: a push through the check-out), and so is a channel of `D`
@@ -171,7 +177,7 @@ theorem release_puts {m m' : Mem} {k : Nat} {t : Ty} {x : Var} {o : Bool} {v : V
     cases hw'; exact sendCheck_noArc hw hna hvf _ _
   cases hr with
   | put hx' _ _ _ => rw [hx] at hx'; cases hx'; rfl
-  | drop hno hx' _ =>
+  | drop hno _ hx' _ =>
     rw [hx] at hx'; cases hx'
     rcases hno with h | h | h
     · exact absurd hk h
@@ -198,6 +204,7 @@ theorem scopeL_end_gives_back {P : Prog} {m : Mem} {k : Nat} {t : Ty} {x : Var} 
     rw [hx] at hx'; cases hx'
     exact absurd (fun w hw' => by cases hw'; exact sendCheck_noArc hw hna hvf _ _) hng
   | scopeLP hs _ => exact (A2.Dtor.skip_no_step hno hs).elim
+  | scopeLPD hs _ _ _ _ => exact (A2.Dtor.skip_no_step hno hs).elim
   | waitPanic hw' => exact hw'.elim
   | reap hrs _ _ => cases hrs
 
@@ -404,7 +411,7 @@ theorem release_cases {m1 m2 : Mem} {k : Nat} {t : Ty} {x : Var}
       refine .inr ⟨.inl hx1, ?_⟩
       cases hrl with
       | put hx' _ _ _ => rw [hx1] at hx'; cases hx'
-      | drop _ hx' hdr => rw [hx1] at hx'; cases hx'; cases hdr; rfl
+      | drop _ _ hx' hdr => rw [hx1] at hx'; cases hx'; cases hdr; rfl
   · by_cases hwi : ∃ n, w = some (.int n)
     · obtain ⟨n, rfl⟩ := hwi
       exact .inl ⟨false, .int n, hx1, .int, .inr rfl,
@@ -415,7 +422,7 @@ theorem release_cases {m1 m2 : Mem} {k : Nat} {t : Ty} {x : Var}
         rw [hx1] at hx'; cases hx'
         obtain ⟨n, rfl⟩ : ∃ n, v = .int n := by cases v <;> simp_all [Giveable]
         exact absurd rfl (hni n)
-      | drop _ hx' hdr =>
+      | drop _ _ hx' hdr =>
         rw [hx1] at hx'; cases hx'
         exact .inr ⟨.inr ⟨rfl, w, hx1, hni⟩, by cases hdr; rfl⟩
 
@@ -577,7 +584,8 @@ def main : Stmt :=
 def EL : Entry := ⟨.lk DT, .own, true, [], [], false, false⟩
 
 /-- **A `Locked` of a destructor value is typed** (Agora #755: `Ty.ok` admits
-    `lk (dtor f u)` when `u` holds no share, `RhsT.lockNew` takes the value),
+    `lk (dtor f u)` when `u` holds no cell share, since Agora #803, and no
+    share at all before; `RhsT.lockNew` takes the value),
     and so is its update through `locked_apply` (`StmtT.lockedApply`, A3.2's
     `withLock`: the body gives the checked-out binding no other value). -/
 theorem main_typed : ∃ Δ, StmtT P (fun _ => none) [] main Δ := by
@@ -728,7 +736,8 @@ theorem lockE_vecDT : lockE (.vec DT) = ⟨.vec DT, .own, true, [], [], false, f
   unfold lockE; simp
 
 /-- **A `Locked` of a `Vec` of destructor values is typed** (Agora #755:
-    `Ty.lkPay` admits a drained `Vec` that holds no share, `RhsT.lockNew`
+    `Ty.lkPay` admits a drained `Vec` that holds no cell share (Agora #803;
+    before, no share), `RhsT.lockNew`
     takes it), and so is a push into the checked-out `Vec` (`StmtT.withLock`:
     the body gives the binding no other value). -/
 theorem mainV_typed : ∃ Δ, StmtT P (fun _ => none) [] mainV Δ := by

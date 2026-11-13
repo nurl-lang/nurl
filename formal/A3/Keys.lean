@@ -487,7 +487,7 @@ theorem Step.keys {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) (
   | scopeDDrain _ => exact hk.of_eq rfl rfl rfl (Nat.le_refl _)
   | scopeDEmpty _ => exact hk
   | scopeDP _ _ _ ih => exact ih
-  | scopeDPDrain _ _ ih => exact ih
+  | scopeDPDrain _ _ ih | scopeLPD _ _ _ _ _ ih => exact ih
   | scopeDPMoved _ _ ih => exact (ih).remove _
   | withLock _ hb _ _ =>
     exact ((hk.updBlk _ (fun _ h => by cases h)).withTaken _).set _ (fun w hw => by cases hw; exact hk.blk _ _ _ _ hb)

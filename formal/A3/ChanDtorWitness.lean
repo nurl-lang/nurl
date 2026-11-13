@@ -76,7 +76,7 @@ theorem chan_of : (Ty.lk GVD).ChanOf DT := ⟨GVD, rfl, rfl⟩
 
 /-- **A channel of destructor values is typed** (Agora #755): its state is a
     struct holding a drained `Vec`, bound by `letd` under its glue (`GVD`),
-    moved into a lock (`Ty.lkPay`: a destructor type holding no share), and
+    moved into a lock (`Ty.lkPay`: a destructor type holding no cell share), and
     `chan_send` sends a destructor value into it (`RhsT.chanSend` over
     `Ty.ChanOf`). -/
 theorem main_typed : ∃ Δ, StmtT P (fun _ => none) [] main Δ := by

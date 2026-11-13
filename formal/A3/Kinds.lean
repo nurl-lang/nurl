@@ -511,7 +511,7 @@ theorem Step.kinds {P : Prog} {κ : Nat → Bool} {m : Mem} {s : Stmt} {r : Res}
   | scopeDDrain _ => exact MKinds.ext (hk.of_eq (m' := { m with nv := m.nv + 1 }) rfl rfl rfl)
   | scopeDEmpty _ => exact hk.ext
   | scopeDP _ _ _ ih => exact ih
-  | scopeDPDrain _ _ ih => exact ih
+  | scopeDPDrain _ _ ih | scopeLPD _ _ _ _ _ ih => exact ih
   | scopeDPMoved _ _ ih => exact (ih).map fun _ h => h.remove _
   | withLock _ hb _ _ =>
     refine MKinds.ext ?_

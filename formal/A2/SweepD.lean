@@ -255,12 +255,12 @@ theorem MInv.sweepDR (hR : ∀ v, m.vals v → R v) {Γ : Ctx} (hi : MInv m Γ) 
     · exact (((h3 p hpay).2.sweep (hp.kept hk0 hpay))).grow hle
     · rcases h4 with h | h
       · -- Agora #755: a lock block marked holds a destructor value that
-        -- holds no share (`Ty.lkPay`), so no cell share
+        -- holds no cell share (`Ty.lkPay`, Agora #803)
         right
         have hfree := hp.arc_ty hk0 (by rw [h]; simp)
         rcases h5.1 (by rw [h]; simp) (by rw [h]; simp) with h' | ⟨-, h'⟩ | ⟨h', -⟩
         · rw [hfree] at h'; cases h'
-        · exact Ty.hasCell_of_hasArc (Ty.lkPay_dtor h' hfree).2
+        · exact (Ty.lkPay_dtor h' hfree).2
         · rw [h] at h'; cases h'
       · exact Or.inr h
 

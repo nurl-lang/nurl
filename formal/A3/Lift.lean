@@ -345,6 +345,8 @@ theorem Step.lifts {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
   | @scopeDPDrain m1 _ _ _ _ _ _ _ _ hx ih =>
     exact ⟨_, GhostRel.refl _, Step.scopeDPDrain (m1 := liftMem a2 m1) ih hx⟩
   | @scopeDPMoved m1 _ _ _ _ hx ih => exact Step.scopeDPMoved (m1 := liftMem a2 m1) ih hx
+  | @scopeLPD m1 _ _ _ _ _ _ _ _ _ hck ht hx hng ih =>
+    exact ⟨_, GhostRel.refl _, Step.scopeLPD (m1 := liftMem a2 m1) ih hck ht hx hng⟩
   -- A3.2: taking a lock and giving it back touch no address
   | withLock ha hk hx hnv => exact ⟨_, GhostRel.refl _, Step.withLock (m := liftMem a2 m) ha hk hx hnv⟩
   -- Agora #610: so does reaping an orphan
@@ -356,16 +358,16 @@ theorem Step.lifts {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
     cases hrl with
     | put hx hg hk hck' =>
       exact ⟨_, GhostRel.refl _, Step.scopeLSkip (m := liftMem a2 m) (Release.put hx hg hk hck') hck⟩
-    | drop hc hx hdr =>
+    | drop hc hgc hx hdr =>
       exact ⟨_, GhostRel.refl _,
-        Step.scopeLSkip (m := liftMem a2 m) (Release.drop hc hx (DropSlot.lift hdr hd)) hck⟩
+        Step.scopeLSkip (m := liftMem a2 m) (Release.drop hc hgc hx (DropSlot.lift hdr hd)) hck⟩
   | scopeLFail hx hck => exact ⟨_, GhostRel.refl _, Step.scopeLFail (m := liftMem a2 m) hx hck⟩
   | @scopeLP m1 _ _ _ _ _ hs hrl ih =>
     -- A3.3: the payload goes back on the way out, or the slot is dropped
     cases hrl with
     | put hx hg hk hck => exact Step.scopeLP (m1 := liftMem a2 m1) ih (Release.put hx hg hk hck)
-    | drop hc hx hdr =>
-      exact Step.scopeLP (m1 := liftMem a2 m1) ih (Release.drop hc hx (DropSlot.lift hdr ((Step.grows hs).disj hd hf)))
+    | drop hc hgc hx hdr =>
+      exact Step.scopeLP (m1 := liftMem a2 m1) ih (Release.drop hc hgc hx (DropSlot.lift hdr ((Step.grows hs).disj hd hf)))
 
 /-- A step to a configuration, lifted: its store with `a2` added, its
     statement equal but for the stores of `recover` frames. -/

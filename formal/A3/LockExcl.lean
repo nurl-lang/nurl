@@ -428,6 +428,13 @@ theorem Step.stay {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) {
     rcases ih hk with h1 | ⟨h1, hs, _⟩
     · exact .inl h1
     · exact .inr ⟨h1, hs, fun _ _ he _ => by cases he; simp [Stmt.lkeys]⟩
+  | scopeLPD _ _ _ _ _ ih =>
+    -- Agora #803: the check-out's frame becomes a destructor frame, its block
+    -- left checked out
+    intro hk
+    rcases ih hk with h1 | ⟨h1, hs, _⟩
+    · exact .inl h1
+    · exact .inr ⟨List.mem_cons_of_mem _ h1, hs, fun _ _ he _ => by cases he; simp [Stmt.lkeys]⟩
   | @scopeLIn m' k0 t0 x b b' _ ih =>
     intro hk
     rcases ih hk with h1 | ⟨h1, hs, h2⟩
@@ -483,7 +490,7 @@ theorem Step.taken_stay {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m 
   induction h with
   | seqL _ ih | seqP _ ih | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | frozenP _ ih | catchIn _ ih
     | scopeDIn _ ih | scopeLIn _ ih | scopeP _ _ _ ih | rbindP _ _ ih | scopeDPMoved _ _ ih | catchP _ _ ih
-    | scopeDP _ _ _ ih | scopeDPDrain _ _ ih => exact fun hk => ih hk
+    | scopeDP _ _ _ ih | scopeDPDrain _ _ ih | scopeLPD _ _ _ _ _ ih => exact fun hk => ih hk
   | scopeLP _ hrl ih => exact fun hk => (congrFun (Release.taken_eq hrl) k).trans (ih hk)
   | scopeLSkip hrl _ => exact fun _ => congrFun (Release.taken_eq hrl) k
   | letv _ he | letd _ he => exact fun hk => EvalR.taken_stay he hk

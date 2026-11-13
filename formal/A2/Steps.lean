@@ -1219,8 +1219,8 @@ theorem chan_tyok {τ s : Ty} (hc : τ.ChanOf s) (h : τ.ok = true) :
     a lock block's (`EvalR.chanSendClosed` puts the value it does not queue
     in one): it is an A2 type that holds no view, and owns no destructor
     value, or is a destructor type or a drained `Vec` of them holding no
-    share and no closure (`Ty.lkPay`: the channel's payload is then under
-    its glue, a destructor type holding no share). -/
+    cell share and no closure (`Ty.lkPay`: the channel's payload is then
+    under its glue, a destructor type holding no cell share, Agora #803). -/
 theorem chan_elem_blk {t s : Ty} {o o' : Option Val} (ht : t.undtor = .prod (.vec s) .int)
     (htok : t.ok = true) (hvf : t.holdsView = false) (hd : Blk.DtorOK ⟨t, .lock, o⟩) :
     s.ok = true ∧ s.holdsView = false ∧ Blk.DtorOK ⟨s, .lock, o'⟩ := by
@@ -1255,7 +1255,7 @@ theorem chan_elem_blk {t s : Ty} {o o' : Option Val} (ht : t.undtor = .prod (.ve
       have : u.undtor = u := by cases u <;> simp_all [Ty.isStruct, Ty.undtor]
       rw [← this]; simpa using ht
     subst hu
-    have hsa : s.hasArc = false := by simpa [Ty.hasArc] using hna
+    have hsa : s.hasCell = false := by simpa [Ty.hasCell] using hna
     have hsfn : s.hasFn = false := by simpa [Ty.hasFn] using hfn
     have hdn : s.dnest = true := by
       rcases Ty.ok_vec_free hv with h | h
@@ -3096,7 +3096,7 @@ theorem Step.blk {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) : 
   | reap _ hk _ => exact BlkLe.setDead hk _
   | scopeLSkip hr => exact hr.blk
   | scopeLP _ hr ih => exact ih.trans hr.blk
-  | scopeP _ _ _ ih | rbindP _ _ ih | catchP _ _ ih | scopeDP _ _ _ ih | scopeDPDrain _ _ ih
+  | scopeP _ _ _ ih | rbindP _ _ ih | catchP _ _ ih | scopeDP _ _ _ ih | scopeLPD _ _ _ _ _ ih | scopeDPDrain _ _ ih
     | scopeDPMoved _ _ ih => exact ih
   | letv _ he | letd _ he | assign _ he _ _ => have := EvalR.blk he; exact this
   | letcall _ _ hb => have := BlkLe.of_eq (BindParams.blk hb); exact this
@@ -3268,7 +3268,7 @@ theorem Step.leafKeep {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
   induction h with
   | seqL _ ih | seqP _ ih | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | frozenP _ ih | catchIn _ ih
     | scopeDIn _ ih | scopeLIn _ ih => exact ih
-  | scopeP _ _ _ ih | rbindP _ _ ih | scopeDPMoved _ _ ih | catchP _ _ ih | scopeDP _ _ _ ih
+  | scopeP _ _ _ ih | rbindP _ _ ih | scopeDPMoved _ _ ih | catchP _ _ ih | scopeDP _ _ _ ih | scopeLPD _ _ _ _ _ ih
     | scopeDPDrain _ _ ih =>
     intro k bl hk w hw hs
     rcases ih hk hw hs with h | h
@@ -3380,7 +3380,7 @@ theorem Step.noDead {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r)
   induction h with
   | seqL _ ih | seqP _ ih | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | frozenP _ ih | catchIn _ ih
     | scopeDIn _ ih | scopeLIn _ ih => exact ih
-  | scopeP _ _ _ ih | rbindP _ _ ih | catchP _ _ ih | scopeDP _ _ _ ih | scopeDPDrain _ _ ih
+  | scopeP _ _ _ ih | rbindP _ _ ih | catchP _ _ ih | scopeDP _ _ _ ih | scopeLPD _ _ _ _ _ ih | scopeDPDrain _ _ ih
     | scopeDPMoved _ _ ih => exact fun hn => (ih hn).of_blk rfl
   | scopeLP _ hr ih => exact fun hn => hr.noDead (ih hn)
   | scopeLSkip hr => exact fun hn => hr.noDead hn
@@ -3446,7 +3446,7 @@ theorem Step.noOrphan {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
   induction h with
   | seqL _ ih | seqP _ ih | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | frozenP _ ih | catchIn _ ih
     | scopeDIn _ ih | scopeLIn _ ih => exact ih
-  | scopeP _ _ _ ih | rbindP _ _ ih | catchP _ _ ih | scopeDP _ _ _ ih | scopeDPDrain _ _ ih
+  | scopeP _ _ _ ih | rbindP _ _ ih | catchP _ _ ih | scopeDP _ _ _ ih | scopeLPD _ _ _ _ _ ih | scopeDPDrain _ _ ih
     | scopeDPMoved _ _ ih => exact fun hn => (ih hn).of_blk rfl
   | scopeLP _ hr ih => exact fun hn => hr.noOrphan (ih hn)
   | scopeLSkip hr => exact fun hn => hr.noOrphan hn

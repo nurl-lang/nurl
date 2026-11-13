@@ -382,7 +382,7 @@ theorem Step.ownedId {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r
   | scopeDEmpty _ => exact fun i hi => .inl hi
   | scopeDMoved _ => exact fun i hi => .inl (OwnedId.of_remove hi)
   | scopeDP _ _ _ ih => exact fun i hi => ih i (OwnedId.of_nv hi)
-  | scopeDPDrain _ _ ih => exact ih
+  | scopeDPDrain _ _ ih | scopeLPD _ _ _ _ _ ih => exact ih
   | scopeDPMoved _ _ ih => exact fun i hi => ih i (OwnedId.of_remove hi)
   -- A3.2: a lock's payload checked out is owned; one given back is the block's
   | withLock _ hk _ =>
@@ -582,7 +582,7 @@ theorem Step.payAt {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
   induction h with
   | seqL _ ih | seqP _ ih | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | frozenP _ ih | catchIn _ ih
     | scopeDIn _ ih | scopeLIn _ ih => exact ih
-  | scopeP _ _ _ ih | rbindP _ _ ih | catchP _ _ ih | scopeDP _ _ _ ih | scopeDPDrain _ _ ih
+  | scopeP _ _ _ ih | rbindP _ _ ih | catchP _ _ ih | scopeDP _ _ _ ih | scopeDPDrain _ _ ih | scopeLPD _ _ _ _ _ ih
     | scopeDPMoved _ _ ih => exact ih
   | letv _ he | letd _ he | assign _ he _ _ => exact fun k i hp => EvalR.payAt he hb k i hp
   | letcall _ _ hbp =>

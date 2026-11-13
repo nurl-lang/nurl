@@ -159,6 +159,26 @@ import A3
 #print axioms A3.LockDtorWitness.last_dropV_reaps
 #print axioms A3.LockDtorWitness.reapV_drains
 #print axioms A3.lockVecDtor_claim
+-- Agora #803 (A3/LockArcDtorWitness.lean): a destructor payload may hold `arc` and lock shares (no
+-- cell share, `Ty.lkPay`); its give-back's failing crossing check turns the check-out's frame into
+-- the value's destructor frame (`Step.scopeLPD`), never the code-less drop (`Release.drop`): a
+-- case nurlc refuses statically (the check fails only through a read guard, Agora #837), and the
+-- lemmas take the failing check as a hypothesis; a witness, a `Locked` of a destructor value
+-- holding an `Arc` share
+#print axioms A2.pres_unwindD
+#print axioms A2.Inv.scopeL_iff
+#print axioms A3.LockArcDtorWitness.release_none
+#print axioms A3.LockArcDtorWitness.scopeL_fail_end
+#print axioms A3.LockArcDtorWitness.scopeL_fail_frame
+#print axioms A3.LockArcDtorWitness.fail_frame_runs_dtor
+#print axioms A3.LockArcDtorWitness.fail_end_runs_dtor
+#print axioms A3.LockArcDtorWitness.lk_ok
+#print axioms A3.LockArcDtorWitness.main_typed
+#print axioms A3.LockArcDtorWitness.main_safe
+#print axioms A3.LockArcDtorWitness.main_no_leak
+#print axioms A3.LockArcDtorWitness.main_no_leak_panic
+#print axioms A3.LockArcDtorWitness.last_drop_reaps
+#print axioms A3.lockArcDtor_claim
 -- (A3/ChanDtorWitness.lean)
 #print axioms A3.ChanDtorWitness.main_typed
 #print axioms A3.ChanDtorWitness.main_safe

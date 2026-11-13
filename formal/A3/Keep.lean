@@ -142,7 +142,7 @@ theorem Step.keep {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) (
   | scopeDIn _ ih => exact ih
   | scopeDEnd _ _ | scopeDDrain _ | scopeDEmpty _ => intro _ _; rfl
   | scopeDMoved _ => intro _ _; rfl
-  | scopeDP _ _ _ ih | scopeDPDrain _ _ ih => exact ih
+  | scopeDP _ _ _ ih | scopeDPDrain _ _ ih | scopeLPD _ _ _ _ _ ih => exact ih
   | scopeDPMoved _ _ ih => exact ih
   | withLock _ _ _ => intro _ _; rfl
   | reap _ _ _ => intro _ _; rfl
@@ -150,7 +150,7 @@ theorem Step.keep {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) (
   | scopeLSkip hrl =>
     cases hrl with
     | put _ _ _ => intro _ _; rfl
-    | drop _ hx hd =>
+    | drop _ _ hx hd =>
       exact DropSlot.keep hd (fun T hT i hi => hav i (OwnedId.of_slot (hx.trans (congrArg some hT)) hi))
   | scopeLFail _ _ => intro _ _; rfl
   | scopeLP hs hrl ih =>
@@ -159,7 +159,7 @@ theorem Step.keep {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) (
     rw [← ih i hi]
     cases hrl with
     | put _ _ _ => rfl
-    | drop _ hx hd =>
+    | drop _ _ hx hd =>
       exact DropSlot.keep hd (fun T hT j hj => hav1 j (OwnedId.of_slot (hx.trans (congrArg some hT)) hj)) i hi
 
 end A3

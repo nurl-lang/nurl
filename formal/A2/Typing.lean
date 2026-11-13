@@ -719,7 +719,8 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
   | lockNew {t : Ty} {y : Var} {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
       Γ y = some Ey → Ey.live = true → Ey.ty = t →
       -- (A2-drop.3d: the value owns no destructor value, or, Agora #755, is
-      -- one at its top holding no share: `Locked D`, `Ty.lkPay`)
+      -- one at its top holding no cell share: `Locked D`, `Ty.lkPay`;
+      -- Agora #803: `arc` and lock shares allowed)
       t.lkPay = true → t.holdsView = false ∧ t.hasFn = false →
       PushArg Γ F y Ey t D Γ1 →
       RhsT Γ F (.lockNew t y) ⟨.lk t, .own, true, [], [], false, false⟩ Γ1

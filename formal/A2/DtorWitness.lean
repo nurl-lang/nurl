@@ -755,7 +755,7 @@ theorem ok_payloads_free {t : Ty} (h : t.ok = true) :
 
 /-- A2-drop.3d: a well-formed type's lock and cell payloads own no
     destructor value, or (Agora #755, `Locked D`) are one at their top that
-    holds no share (`Ty.lkPay`). -/
+    holds no cell share (`Ty.lkPay`; Agora #803: before, no share). -/
 theorem ok_lockPayloads_free {t : Ty} (h : t.ok = true) : ∀ u ∈ lockPayloads t, u.lkPay = true := by
   induction t with
   | int => simp [lockPayloads]
@@ -793,7 +793,8 @@ theorem ok_lockPayloads_free {t : Ty} (h : t.ok = true) : ∀ u ∈ lockPayloads
     type does not name) owns no destructor value, or (Agora #610, an
     `Arc`'s) is one at its top or (Agora #755) a drained `Vec` of them; a
     lock's and a cell's owns none or (Agora #755, `Locked D`) is one at its
-    top that holds no share (`Ty.lkPay`), so a check-out binding
+    top that holds no cell share (`Ty.lkPay`; Agora #803: before, no
+    share), so a check-out binding
     (`withLock`, `withCell`: the lock's payload type) is of a type that holds
     none, or is that destructor value, given no other value in the body
     (`StmtT.withLock`'s `hna`).  The fact about the blocks themselves is
@@ -808,7 +809,8 @@ theorem shares_dtor_free {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {E : En
     lock block's, read in place, of a read guard's view type or owning none,
     and it is never an orphan to be nor marked `dead`, so no destructor runs
     from it), a lock block's owns none or (Agora #755,
-    `Locked D`) is one at its top that holds no share, and a block whose payload
+    `Locked D`) is one at its top that holds no cell share (Agora #803;
+    before, no share), and a block whose payload
     owns one (an `arc` block, or a `dead` one: an orphan whose payload
     awaits its destructor) is of a destructor type that holds no closure,
     or (Agora #755) of a drained `Vec` of such values at any depth**
@@ -881,7 +883,8 @@ theorem blk_pkgs_env_dtor_free {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {k : Nat} {
 
 /-- A2-drop.3d: a lock's and a library handle's constructor take a value
     that owns no destructor value or (Agora #755, `Locked D`) is one at its
-    top that holds no share; (Agora #610) `arc_new` takes one that
+    top that holds no cell share (Agora #803; before, no share); (Agora
+    #610) `arc_new` takes one that
     owns none or is one at its top, or (Agora #755) a drained `Vec` of them. -/
 theorem share_new_dtor_free {Γ Γ1 : Ctx} {F : List Var} {t : Ty} {y : Var} {E : Entry} :
     (RhsT Γ F (.arcNew t y) E Γ1 → t.dtorFree = true ∨ t.dnest = true) ∧
