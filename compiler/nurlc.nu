@@ -39748,6 +39748,15 @@ unsafe @ amv_close → v { = g_amv_cur 0 }
 
 @ bck_let_alias i syms b is_mut i rhs_tt s rhs_val s vt i line s dest → v {
     ( amv_close )
+    // (`: [i c a` out of an owned slice moves its buffer — gen_let leaves
+    // a's slot empty (__slice_let_moves) — so a read of a after it is
+    // refused, as after `= c a` (agora #634) and `: String c a`. Unrecorded,
+    // the read found the empty slot and ran on with no elements; agora
+    // #664.)
+    ? ( __slice_let_moves syms rhs_tt rhs_val dest vt is_mut ) {
+        ( bck_stash_move rhs_val line ( nurl_str_cat3 `the binding that moved its buffer to '` dest `'` ) )
+        ^ v
+    } {}
     // A `sink` parameter is the function's own: copying it hands it on
     // like any owner, it is not a borrow of the caller's value.
     // (…and so is one whose drop flag the generated code moves into the
