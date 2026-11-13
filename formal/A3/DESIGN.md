@@ -773,8 +773,8 @@ a cell whose payload one scope at a time checks out.
   its argument as `x`). This refines the design's `lock_with` as a `callc`
   with an `inout` argument.
   - When `a`'s block has its payload, the payload is checked out
-    (`pay := none`) into `x`, owned. An integer payload is a plain integer
-    binding.
+    (`pay := none`, and `Mem.taken` cleared at the block: Agora #810) into
+    `x`, owned. An integer payload is a plain integer binding.
   - `s` then runs in `x`'s lock scope `scopeL k t x s` (`Step.withLock`).
     The scope carries the payload's type `t` as ghost data.
   - Typing: `StmtT.withLock` gives `x` the entry `lockE t` (owned, holding
@@ -785,16 +785,23 @@ a cell whose payload one scope at a time checks out.
     scope as a `scope` and needs neither, since `Release` is total.
 - The scope's end gives `x`'s value back (`Step.scopeLSkip`, `Release`).
   - `Release.put` applies when the block is there with its payload checked
-    out and `x`'s slot can give it back (`Giveable`: an owned tree, since
+    out (`CheckedOut`: out, and not taken by `locked_take`) and `x`'s slot
+    can give it back (`Giveable`: an owned tree, since
     A3.3 one of the payload's type, or an integer for an `int` lock).
   - Otherwise `Release.drop` drops `x`'s slot as a scope's end does;
     `drop` keeps the rule total. For a payload that holds a destructor
     value, `StmtT.withLock`'s premises make a typed program's normal-path
     end a `put`: Agora #808 proves it on every reached configuration
     (`A3.reach_scopeL_end_gives_back`; the block outlives the body and is
-    checked out, `A3.reach_frame_checked_out`, and `x` holds a `t`). For a
-    `dtorFree` payload the model's `locked_restore` can refill the
-    checked-out block (Agora #810), and then the end is a `drop`.
+    checked out, `A3.reach_frame_checked_out`, and `x` holds a `t`). The
+    block's half holds for every payload type (Agora #810: `locked_restore`
+    fills only a taken block, never a checked-out one); for a `dtorFree`
+    payload the run-time frame rule `StmtT.scopeL` does not carry `x`'s
+    liveness to the end (the source rule `StmtT.withLock` asks it for every
+    payload type), so the give-back lemmas keep a `holdsDtor` premise — a
+    gap in the proof's run-time typing, not a behaviour of the model (the
+    proof that a typed program's normal end leaves no block checked out
+    for every payload is Agora #825).
   - `Release` is total by construction, so no invariant has to say that the
     frame's `x` holds what was checked out of block `k`. Such an invariant
     (`LockOK`) was tried and dropped: keeping it at `scopeLIn` needs facts
@@ -912,10 +919,11 @@ stated.
 - deadlock freedom;
 - that a typed program's lock scope of a `dtorFree` payload ends in a
   `put`, as a lemma (Agora #808's `A3.LockInv` ties each `scopeL k` frame
-  to block `k`, the block outlives the frame, `A3.reach_frame_live`, and
+  to block `k`, checked out for every payload type since Agora #810, the
+  block outlives the frame, `A3.reach_frame_live`, and
   `reach_scopeL_end_gives_back` proves the `put` for a destructor payload;
-  a `dtorFree` one's block may be refilled by `locked_restore`, Agora
-  #810);
+  for a `dtorFree` one the run-time rule `StmtT.scopeL` does not carry `x`'s
+  liveness, which `StmtT.withLock` asks, Agora #825);
 - shares in a lock's payload (A3.2's second cut: `arc` and lock shares, not
   cell shares);
 - the probes h267 h358;
@@ -924,6 +932,37 @@ stated.
   waits for (`Blocked`) or, since A3.3, panics at (`Step.waitPanic`),
   panics in the runtime since Agora #455; it was undefined while a default
   pthread mutex was held across the closure.
+
+### Agora #810: a taken block and a checked-out one
+
+A lock block whose payload is out (`⟨t, .lock, none⟩`) was one state in the
+model, so `locked_restore` could fill a block a `withLock` had checked out
+and a second `withLock` then check it out again: two frames of one lock.
+nurlc's lock word tells the two apart (`stdlib/runtime_locked.c`: `HELD` in
+place by a `locked_update`, `TAKEN` by a `locked_take`), and
+`nurl_lk_restore_begin` refuses a word that is not `TAKEN` ("the value was
+not taken"). The model now does too, with the smallest change that works:
+- the store records which lock blocks are taken (`Mem.taken : Nat → Bool`,
+  with `Cfg.taken` and `Globs.taken`), read only of a block whose payload is
+  out; `EvalR.lockTake` sets it, `Step.withLock` clears it (a checked-out
+  block: `CheckedOut`, out and not taken);
+- `EvalR.lockRestore` asks the block taken; on a checked-out block the
+  restore panics (`EvalR.lockRestoreHeld`), as on a full one
+  (`EvalR.lockRestoreP`): `A3.lockRestore_checked_out`,
+  `A3.lockRestore_present`;
+- the give-back at a lock scope's end goes only into a checked-out block
+  (`Release.put` asks `CheckedOut`);
+- every operation that waits on an out payload (`lockTake`, `withLock`,
+  `rwRead`, the atomic and channel steps) reads the block alone, so it
+  waits on both states; the marking sweep, the reaps and `Cand` read the
+  payload, so a taken or checked-out block is never a candidate
+  (`LkOut.sweepD`) and the sweep frees an unreached one with no code.
+So `A3.LockInv` holds for every payload type (`reach_lock_excl`,
+`reach_frame_out`, `reach_frame_checked_out` lost their `dtorFree`
+premise; `Step.taken_stay`: only a take and a check-out mark a block, one
+whose payload is in), and `RhsT.lockRestore` no longer asks `dtorFree`
+(`A3.LockDtorWitness.lockRestore_dtor_typed`). The claims' statements are
+unchanged.
 
 ### Agora #755: `Locked D`, a lock of a destructor value
 
@@ -947,9 +986,12 @@ settled:
    `hna : t.holdsDtor = true → x ∉ s.assigns`, as `letd`'s); a give-back
    crossing check that fails (`Step.scopeLFail`, then `Release.drop`) cannot
    fail on a type with no share (`A3.LockDtorWitness.sendCheck_noArc`); a
-   block filled again while checked out (the model's `locked_restore` also
-   fills a block a `withLock` has checked out, as nurlc's would not) is
-   refused for a destructor payload (`RhsT.lockRestore` asks `dtorFree`).
+   block filled again while checked out cannot be: `locked_restore` fills
+   only a block `locked_take` emptied (Agora #810, `Mem.taken`; on a
+   checked-out one it panics, `EvalR.lockRestoreHeld`, as nurlc's does),
+   so since #810 it is typed of a destructor payload too (until then
+   `RhsT.lockRestore` asked `dtorFree`, the model's restore also filling a
+   checked-out block).
    So from a store where `x` owns a `D` and the block is checked out, the
    end is the give-back and nothing else (`scopeL_end_gives_back`), and so
    is a panic's release (`scopeL_panic_gives_back`, over `release_puts`).
@@ -995,10 +1037,11 @@ settled:
    configuration:
    - *The invariant* (`A3.LockInv`, `reach_lockInv`): over the threads'
      frames (`Stmt.lfr`, `lkeys` with the payload types) and the shared
-     blocks, each frame's block is a lock block of the frame's type, or
-     gone, at a key below `nid`; a frame of a payload that is not
-     `dtorFree` has its block checked out (`⟨t, .lock, none⟩`), and no
-     other frame on any thread is of that block (`one`, `nd`).
+     blocks, each frame's block is a lock block of the frame's type checked
+     out (`⟨t, .lock, none⟩`, not taken, `LkOut`), or gone, at a key below
+     `nid`, and no other frame on any thread is of that block (`one`,
+     `nd`); for every payload type since Agora #810 (before, only for one
+     that is not `dtorFree`).
    - *Kept by a thread's step* (`LockInv.put`): a step's frames are its
      statement's, or the inner ones of them, or those and one new one at
      the innermost end, a `withLock`'s, of a block whose payload it took
@@ -1006,16 +1049,17 @@ settled:
      frame, by the typing and `ProgOK`); a checked-out block is left as it
      was but by its own frame's end (`Step.stay`, `EvalR.stay`: every
      operation that writes a lock block asks its payload in, a new block's
-     key is fresh, and `locked_restore`, which asks it out, is of a
-     `dtorFree` payload, `RhsT.lockRestore`); so a new frame's block was no
-     frame's of a payload that is not `dtorFree`.  The marking sweep keeps
-     a frame's block or removes it, and marks none (an orphan to be holds
-     its payload, of a destructor type, `Cand`); the reaps are steps
+     key is fresh, and `locked_restore`, which asks it out, asks it taken;
+     and it stays not taken, `Step.taken_stay`, `EvalR.taken_stay`: only a
+     take and a check-out mark a block, one whose payload is in); so a new
+     frame's block was no frame's.  The marking sweep keeps a frame's
+     block or removes it, and marks none (an orphan to be holds its
+     payload, `Cand`); the reaps are steps
      (`LockInv.settle`); a spawn and a failed spawn leave the frames where
      they were (`LockInv.spawn`, `spawnFail`).
    - *So*: A3.2's mutual exclusion (`reach_lock_excl`: two frames of one
-     such block are one frame, `Redex.frame_unique`) and the block's state
-     at a frame (`reach_frame_out`).
+     block are one frame, `Redex.frame_unique`, whatever the payload's
+     type) and the block's state at a frame (`reach_frame_out`).
    - *The block outlives its frame* (`A3/LockRoot.lean`): the sweep
      removes an unreached lock block whose payload is out, so the
      check-out's root share must outlive the body. The run-time frame
@@ -1088,7 +1132,8 @@ the last cut, below.)
    (`CSettle`, `CParts.thread_of`) needed no change.
 2. *The check-out of a `Vec D`.* The `Locked D` cut's three closed paths
    cover it: `hna` (no `assign`), the give-back's check (`sendCheck_noArc`,
-   of any type holding no share), `locked_restore`'s `dtorFree`; the
+   of any type holding no share), and a restore that fills only a taken
+   block (Agora #810; until then `locked_restore` asked `dtorFree`); the
    model's in-place drops (`free`, the edits `trunc` and `set`, i.e.
    `vec_truncate` and `vec_set`, and `withElem`; `vec_clear` is a
    truncation to 0, or code, `A2/DropCode.lean`) ask elements owning no
@@ -3112,7 +3157,8 @@ A3.2's check-out already moves.
   payload, owned, of its type, holding nothing (an integer is a plain
   integer binding), as `withLock` checks one out.
   - `EvalR.lockTake`: the payload is in and no view of it lives. It moves
-    out as the value handed back, and the block holds `none`.
+    out as the value handed back, and the block holds `none`, marked taken
+    (`Mem.taken`, Agora #810).
   - With the payload out, or a view of it living, there is no step:
     `RBlocked`'s new case. So the thread waits (`Blocked`) or panics
     (`Step.waitPanic`, through `Waits`).
@@ -3122,10 +3168,15 @@ A3.2's check-out already moves.
   dies, an integer is copied). The answer is an integer (`intE`). It is a
   right-hand side, as `chanSend` is, so every rule and lemma on right-hand
   sides covers it.
-  - `EvalR.lockRestore`: the block's payload is out. `y`'s value
-    (`TakeVal`) goes in, and the answer is 0.
+  - `EvalR.lockRestore`: the block's payload was taken (out, and marked
+    taken, `Mem.taken`). `y`'s value (`TakeVal`) goes in, and the answer is
+    0.
   - `EvalR.lockRestoreP`: the payload is in, so the restore panics, the
     store as it was. `y` keeps its value, and the unwinding drops it.
+  - `EvalR.lockRestoreHeld` (Agora #810): the payload is checked out by a
+    `withLock` (out, not taken), so the restore panics too, the store as it
+    was (`A3.lockRestore_checked_out`). Before #810 the model did not tell
+    the two apart, and a restore could fill a checked-out block.
   - A restore never waits.
 
 **A2's proof.**
@@ -3161,7 +3212,7 @@ dropped the value being handed back. The next take read freed memory.
   block holds `none` (`lockTake_empties`).
 - The restore then finds nothing to drop. `EvalR.lockRestore` moves the
   value in and frees no address (`lockRestore_frees_nothing`), and it
-  applies only to a block whose payload is out.
+  applies only to a block whose payload was taken.
 - The payload is an `Option` (`sum int _`) of a struct that holds an
   `arc (vec int)` (the `Arc String`), which part (A) types. The `Arc` is
   kept alive by the lock's payload while it is in
@@ -3172,16 +3223,22 @@ dropped the value being handed back. The next take read freed memory.
 **Faithful to the runtime** (`stdlib/std/thread.nu`, docs/MEMORY.md
 §7.6's *A value claimed out of a place leaves a zero behind*).
 - *The take moves.* `locked_take` copies `. p val` into `x`, and
-  `mem_take x` leaves zero bytes in the slot, which own nothing. It sets
-  `taken` and unlocks. So the value moves out to the caller and the lock's
-  slot holds nothing, as `EvalR.lockTake` has it.
+  `mem_take x` leaves zero bytes in the slot, which own nothing; the lock
+  word goes TAKEN (`nurl_lk_take`). So the value moves out to the caller and
+  the lock's slot holds nothing, as `EvalR.lockTake` has it (setting
+  `Mem.taken`, Agora #810).
   - The value's heap memory is the same memory before and after. Only its
     owner changes, from the lock to the caller, as the model's tree keeps
     its addresses and changes owner.
 - *The restore moves back.* `locked_restore` swaps `x` into the slot
-  (`mem_replace`) and forgets the zero bytes, with no drop glue. It then
-  clears `taken`. That is `EvalR.lockRestore`. "The value was not taken"
-  panics, which is `EvalR.lockRestoreP`.
+  (`mem_replace`) and forgets the zero bytes, with no drop glue; the lock
+  word goes TAKEN → HELD (`nurl_lk_restore_begin`) → FREE (`nurl_lk_exit`).
+  That is `EvalR.lockRestore` (which leaves `Mem.taken` set: the flag is
+  read only of a block whose payload is out). "The value was not taken"
+  panics, which is `EvalR.lockRestoreP` (the lock word free: the value in)
+  and, since Agora #810, `EvalR.lockRestoreHeld` (the lock word `HELD`: a
+  `locked_update` has it in place, the model's checked-out block;
+  `nurl_lk_restore_begin` asks `TAKEN`).
 - **No faithfulness premise is needed** (unlike `withLock`'s "the lock
   outlives the body"). `withLock` models an in-place update as a move out
   and back, so the two agree only while the lock lives. The take really is
@@ -4048,8 +4105,15 @@ run of the model.
   - A `mutex_unlock` of a mutex the thread does not hold panics in the
     runtime (an error-checking mutex, Agora #455; undefined before), and so
     does a relock by the holder. The model's unlock panics (the integer in,
-    `lockRestoreP`) or puts an integer back, which may let another thread
-    in. Neither touches memory, since the mutex guards none.
+    `lockRestoreP`; or, since Agora #810, the block checked out by a
+    `mutex_with`, `lockRestoreHeld`) or puts an integer back into a taken
+    block. Neither touches memory, since the mutex guards none. One
+    under-approximation since Agora #810: inside `mutex_with`, a
+    `mutex_unlock` through another share of the same mutex succeeds in the
+    runtime (a pthread mutex has no taken / held distinction; the body's
+    later unlock then fails, EPERM on an error-checking build), where the
+    model panics at the inner unlock. Those runs are not in the model;
+    they touch no memory either way.
   - The runtime's `mutex_with` does not unlock on a panic. The model's
     releases (A3.3's `scopeLP`): more runs, as for `locked_with` (A3.2).
   - `Cond` and `Semaphore` have no rule, as in A3.6.

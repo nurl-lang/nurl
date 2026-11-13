@@ -1935,7 +1935,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       obtain ⟨ob, hk0⟩ := hi.lockOf_val ha hla hta ha'
       rw [hk] at hk0; cases hk0
       have hanch := hi.leafAnch rfl
-      obtain ⟨post, out⟩ := acquire_pres (F := F) hi.toMInv hk hnv
+      obtain ⟨post, out⟩ := acquire_pres (F := F) hi.toMInv hk hnv (upd m.taken kk false)
       have hx1 : Γ x = none := hx
       have hxn : x < m.nv := hi.nvS x (by simp [Stmt.vars])
       have hm := post.inv.add hx1 hxn out
@@ -1951,7 +1951,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         fun v hv => ?_⟩
       · refine Inv.mk hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
           (by simp [Stmt.spine, hsp, setE]) (show CatchOK _ k from catchOK_src hsrc)
-          (covers_take (covers_acquire hi.cover hk) (fun T h => by
+          (covers_take (covers_acquire hi.cover hk _) (fun T h => by
             unfold OwnedAt at h; simp [hmx] at h))
           (pinOut_fresh hi.toMInv (fun p Ep hp hmp => by
             have hpx : p ≠ x := fun h => by
@@ -2551,7 +2551,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       have key : MInv m' (exitScope x Γ) ∧ Covers m' := by
         cases hrl with
         | put hsl hg hkb _ =>
-          exact ⟨step_release hi.toMInv hanch hx hnrb hxF hxn hty hsl hg hkb, covers_release_put hi.cover hsl hkb⟩
+          exact ⟨step_release hi.toMInv hanch hx hnrb hxF hxn hty hsl hg hkb.1, covers_release_put hi.cover hsl hkb.1⟩
         | drop _ hsl hd =>
           exact ⟨step_scopeExit hi.toMInv hanch hx hnrb hxF hsl hd hxn, covers_remove hi.cover hsl hd⟩
       obtain ⟨hinv, hcov⟩ := key

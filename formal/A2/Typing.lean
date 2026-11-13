@@ -816,14 +816,14 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
   /-- ... `locked_restore a y`: `y`'s value, a `t`, is handed back as
       `vec_push` takes it (`PushArg`: an owner moves and its entry dies, an
       integer is copied), as `chan_send` hands its value over; the answer is
-      an integer. -/
+      an integer.  Of any payload, as nurlc's (Agora #810: the restore fills
+      only a block `locked_take` emptied, `EvalR.lockRestore`, never one a
+      `withLock` has checked out, so a destructor value restored is never
+      dropped with no code by the check-out's give-back; until then the rule
+      asked `t.dtorFree`, Agora #755). -/
   | lockRestore {a y : Var} {Ea Ey : Entry} {t : Ty} {Γ1 : Ctx} {D : List Dep} :
       Γ a = some Ea → Ea.live = true → Ea.ty = .lk t →
       Γ y = some Ey → Ey.live = true → Ey.ty = t → PushArg Γ F y Ey t D Γ1 →
-      -- (Agora #755: of a payload that owns no destructor value: the model's
-      -- restore also fills a block a `withLock` has checked out, whose
-      -- give-back would then drop its value with no code)
-      t.dtorFree = true →
       RhsT Γ F (.lockRestore a y) intE Γ1
 
 /-! ### Calls -/

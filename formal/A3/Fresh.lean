@@ -91,7 +91,7 @@ theorem BindParams.grows {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var} 
 /-- A lock scope's end, on either path, gives a payload back or drops a slot. -/
 theorem Release.grows {m m' : Mem} {k : Nat} {t : Ty} {x : Var} (h : Release m k t x m') : Grows m m' := by
   cases h with
-  | put _ _ hk => exact ⟨Nat.le_refl _, fun _ h => .inl h, BlkLe.setLock hk _⟩
+  | put _ _ hk => exact ⟨Nat.le_refl _, fun _ h => .inl h, BlkLe.setLock hk.1 _⟩
   | drop _ _ hd => exact Grows.shrink (DropSlot.le hd) rfl
 
 /-- **A step allocates only fresh addresses**, and `nid` never goes back. -/

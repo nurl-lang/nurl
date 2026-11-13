@@ -466,7 +466,7 @@ theorem Release.codes {P : Prog} {m m' : Mem} {k : Nat} {t : Ty} {x : Var} (hrl 
   cases hrl with
   | put hx _ hk =>
     refine MemCodes.remove ?_ _
-    exact hm.withBlk rfl (hm.blk.updSame (blkCodes_lock fun _ e => by cases e; exact hm.slot hx) hk)
+    exact hm.withBlk rfl (hm.blk.updSame (blkCodes_lock fun _ e => by cases e; exact hm.slot hx) hk.1)
   | drop _ _ _ => exact (hm.of_st rfl).remove _
 
 /-- Every step keeps every package naming code of its signature. -/

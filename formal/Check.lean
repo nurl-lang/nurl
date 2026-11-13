@@ -84,12 +84,18 @@ import A3
 #print axioms A3.LockDtorWitness.Step.panic_st
 #print axioms A3.LockDtorWitness.scopeL_entry
 #print axioms A3.LockDtorWitness.scopeL_typed_panic
+-- Agora #810: a lock block's payload is taken (`locked_take`, `Mem.taken`) or checked out (a
+-- `withLock`); a restore fills only a taken block, and panics on a checked-out one or a full one
+#print axioms A3.lockRestore_checked_out
+#print axioms A3.lockRestore_present
 -- Agora #808: the check-outs' invariant over every reached configuration (A3/LockExcl.lean): each
--- frame's block a lock block of its type, or gone; a frame of a payload that holds a destructor value
--- has its block checked out and is its only frame (A3.2's mutual exclusion)
+-- frame's block checked out (out, not taken), or gone, and the frame its only one (A3.2's mutual
+-- exclusion); Agora #810: for every payload type
 #print axioms A3.Step.lfr
 #print axioms A3.EvalR.stay
 #print axioms A3.Step.stay
+#print axioms A3.EvalR.taken_stay
+#print axioms A3.Step.taken_stay
 #print axioms A3.LockInv.put
 #print axioms A3.LockInv.settle
 #print axioms A3.LockInv.spawn
@@ -123,7 +129,7 @@ import A3
 #print axioms A3.reach_scopeL_end_gives_back
 #print axioms A3.reach_scopeL_panic
 #print axioms A3.LockDtorWitness.rwRead_dtor_refused
-#print axioms A3.LockDtorWitness.lockRestore_dtor_refused
+#print axioms A3.LockDtorWitness.lockRestore_dtor_typed
 #print axioms A3.LockDtorWitness.main_typed
 #print axioms A3.LockDtorWitness.main_safe
 #print axioms A3.LockDtorWitness.main_no_leak

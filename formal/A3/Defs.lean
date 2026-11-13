@@ -38,16 +38,18 @@ structure Cfg where
   blk   : Nat → Option Blk   -- A3.1: the counted blocks, shared by every thread
   gl    : Nat → Option Val     -- A3.6: the module globals set at start, which every thread reads
   ths   : List Thread
+  taken : Nat → Bool           -- Agora #810: which lock blocks `locked_take` emptied (`Mem.taken`)
 
 /-- What A2's step runs on for thread `t`: the shared address space, the
     thread's own bindings. -/
 def Cfg.view (C : Cfg) (t : Thread) : Mem :=
-  { alloc := C.alloc, nid := C.nid, nv := t.nv, st := t.st, blk := C.blk, gl := C.gl }
+  { alloc := C.alloc, nid := C.nid, nv := t.nv, st := t.st, blk := C.blk, gl := C.gl, taken := C.taken }
 
 /-- Thread `i`'s step written back: the address space to the configuration,
     the bindings and the statement to the thread. -/
 def Cfg.put (C : Cfg) (i : Nat) (m : Mem) (s : Stmt) : Cfg :=
-  { alloc := m.alloc, nid := m.nid, blk := m.blk, gl := m.gl, ths := C.ths.set i ⟨m.st, m.nv, s⟩ }
+  { alloc := m.alloc, nid := m.nid, blk := m.blk, gl := m.gl, ths := C.ths.set i ⟨m.st, m.nv, s⟩,
+    taken := m.taken }
 
 /-- A3.1: the values the threads' slots hold. -/
 def Cfg.vals (C : Cfg) (v : Val) : Prop :=
@@ -96,7 +98,7 @@ inductive CSettle (P : Prog) (i : Nat) : Cfg → Cfg → Prop
 /-- A program run from the empty store, on one thread (A2's `emptyMem`). -/
 def Cfg.init (s : Stmt) (nv : Nat) : Cfg :=
   { alloc := fun _ => false, nid := 0, blk := fun _ => none, gl := fun _ => none,
-    ths := [⟨fun _ => none, nv, s⟩] }
+    ths := [⟨fun _ => none, nv, s⟩], taken := fun _ => false }
 
 /-- **A3.6: the module globals set at start**, as `main` finds them: the
     store their `make`s left — the blocks they built, the addresses those
@@ -109,18 +111,20 @@ structure Globs where
   nid   : Nat
   blk   : Nat → Option Blk
   gl    : Nat → Option Val
+  taken : Nat → Bool   -- Agora #810: which lock blocks the `make`s left taken (`Mem.taken`)
 
 /-- No global: A3.0–A3.5's start. -/
-def Globs.empty : Globs := ⟨fun _ => false, 0, fun _ => none, fun _ => none⟩
+def Globs.empty : Globs := ⟨fun _ => false, 0, fun _ => none, fun _ => none, fun _ => false⟩
 
 /-- The store the globals' `make`s left, with no binding. -/
-def Globs.mem (G : Globs) (nv : Nat) : Mem := ⟨G.alloc, G.nid, nv, fun _ => none, G.blk, G.gl⟩
+def Globs.mem (G : Globs) (nv : Nat) : Mem := ⟨G.alloc, G.nid, nv, fun _ => none, G.blk, G.gl, G.taken⟩
 
 /-- A3.6: a program run with its module globals set, on one thread, which
     (as every thread it spawns) reads them through the configuration
     (`Cfg.gl`, `Cfg.view`). -/
 def Cfg.start (G : Globs) (s : Stmt) (nv : Nat) : Cfg :=
-  { alloc := G.alloc, nid := G.nid, blk := G.blk, gl := G.gl, ths := [⟨fun _ => none, nv, s⟩] }
+  { alloc := G.alloc, nid := G.nid, blk := G.blk, gl := G.gl, ths := [⟨fun _ => none, nv, s⟩],
+    taken := G.taken }
 
 /-- With no global, the start is A3.0's. -/
 theorem Cfg.init_start (s : Stmt) (nv : Nat) : Cfg.init s nv = Cfg.start Globs.empty s nv := rfl
@@ -225,7 +229,7 @@ taken out of a `Locked` and restored in a loop, was left in the lock's slot
 by `locked_take`, and the restore dropped what the slot held, which was the
 value handed back.  In the model the take moves the payload out and the
 block holds nothing (`EvalR.lockTake`: the runtime's zero bytes and its
-`taken` flag), so the restore finds nothing to drop: it moves the value in,
+lock word `TAKEN`, `Mem.taken`), so the restore finds nothing to drop: it moves the value in,
 freeing no address (`EvalR.lockRestore`).  The option's `Arc` is kept alive
 by the lock's payload while it is in (`Blk.keeps`) and by the taker's slot
 while it is out. -/
@@ -247,6 +251,31 @@ theorem lockRestore_frees_nothing {m m' : Mem} {a y : Var} {v : Val} {o : Bool}
   | @lockRestore _ _ _ k t w m1 _ h1 hk =>
     have ha := TakeVal.alloc h1
     exact ⟨ha, k, t, w, by rw [← TakeVal.blk h1]; exact hk, by simp [upd]⟩
+
+/-- Agora #810: **a restore fills only a taken block**: on a lock block whose
+    payload a `withLock` has checked out (`CheckedOut`: out, not taken)
+    `locked_restore` panics (`EvalR.lockRestoreHeld`) and has no other
+    result, as `nurl_lk_restore_begin` refuses a lock word that is `HELD`,
+    not `TAKEN` ("the value was not taken"); so a restore never refills a
+    block another frame holds (`A3.reach_lock_excl`). -/
+theorem lockRestore_checked_out {m : Mem} {a y : Var} {o : Bool} {k : Nat} {t : Ty}
+    (ha : m.st a = some ⟨o, some (.lk k)⟩) (hk : CheckedOut m k t) :
+    EvalR m (.lockRestore a y) .panic ∧ ∀ v o' m', ¬ EvalR m (.lockRestore a y) (.ok v o' m') := by
+  refine ⟨EvalR.lockRestoreHeld ha hk.1 hk.2, fun v o' m' h => ?_⟩
+  cases h with
+  | lockRestore ha' h1 _ htk _ =>
+    rw [ha] at ha'; cases ha'
+    rw [TakeVal.taken h1, hk.2] at htk; cases htk
+
+/-- ... and on one whose payload is in it panics too (`EvalR.lockRestoreP`). -/
+theorem lockRestore_present {m : Mem} {a y : Var} {o : Bool} {k : Nat} {t : Ty} {p : Val}
+    (ha : m.st a = some ⟨o, some (.lk k)⟩) (hk : m.blk k = some ⟨t, .lock, some p⟩) :
+    EvalR m (.lockRestore a y) .panic ∧ ∀ v o' m', ¬ EvalR m (.lockRestore a y) (.ok v o' m') := by
+  refine ⟨EvalR.lockRestoreP ha hk, fun v o' m' h => ?_⟩
+  cases h with
+  | lockRestore ha' h1 h0 _ _ =>
+    rw [ha] at ha'; cases ha'
+    rw [TakeVal.blk h1, hk] at h0; cases h0
 
 /-! ### A3.3's rest: `rw_try_read`, `rw_try_write`, `wguard_get`, `rw_get`
 
@@ -1003,7 +1032,7 @@ theorem _root_.A2.StmtT.mutexUnlock {P : Prog} {Γ Δ : Ctx} {F : List Var} {r m
     (hu : Γ u = some Eu) (hlu : Eu.live = true) (htu : Eu.ty = .int)
     (hr : Γ r = none) (hrF : r ∉ F) (hb : StmtT P (A2.setE Γ r intE) F s Δ) (hend : EndOK Δ r) :
     StmtT P Γ F (Stmt.mutexUnlock r m u s) (exitScope r Δ) :=
-  StmtT.letv hs hr hrF (RhsT.lockRestore hm hlm htm hu hlu htu PushArg.int rfl) hb hend
+  StmtT.letv hs hr hrF (RhsT.lockRestore hm hlm htm hu hlu htu PushArg.int) hb hend
 
 /-- **`mutex_with` is typed**: A3.2's `withLock` on the integer lock, with its
     faithfulness premises (the mutex outlives the body: the runtime unlocks it
@@ -2837,7 +2866,7 @@ theorem lockRestore_kept {m m1 : Mem} {a y : Var} {v : Val} (ht : TakeVal m y v 
     EvalR m (.lockRestore a y) .panic ∧ ∀ r o' m', ¬ EvalR m (.lockRestore a y) (.ok r o' m') := by
   refine ⟨EvalR.lockRestoreFail ht (not_sendCheck hv hz hw), fun r o' m' h => ?_⟩
   cases h with
-  | lockRestore _ ht' _ hck =>
+  | lockRestore _ ht' _ _ hck =>
     obtain ⟨rfl, rfl⟩ := ht.det ht'
     exact not_sendCheck hv hz hw hck
 

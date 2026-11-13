@@ -170,6 +170,10 @@ theorem set {m : Mem} (h : MKinds κ m) (x : Var) {o : Bool} {w : Option Val}
 theorem withAlloc {m : Mem} (h : MKinds κ m) (a : Nat → Bool) : MKinds κ { m with alloc := a } :=
   ⟨h.st, h.blk, h.gl⟩
 
+/-- Agora #810: which blocks are taken holds no share. -/
+theorem withTaken {m : Mem} (h : MKinds κ m) (T : Nat → Bool) : MKinds κ { m with taken := T } :=
+  ⟨h.st, h.blk, h.gl⟩
+
 theorem withAN {m : Mem} (h : MKinds κ m) (a : Nat → Bool) (n : Nat) :
     MKinds κ { m with alloc := a, nid := n } := ⟨h.st, h.blk, h.gl⟩
 
@@ -332,8 +336,8 @@ theorem EvalR.kinds_of {κ : Nat → Bool} {m m' : Mem} {r : Rhs} {v : Val} {o :
   | rwTryWriteNone _ _ => exact ⟨hk, .inl .int⟩
   | glob hg _ => exact ⟨hk, hk.gl _ _ hg⟩
   | lockTake _ hb _ =>
-    exact ⟨hk.updBlk _ (fun _ h => by cases h), hk.blk _ _ _ _ hb⟩
-  | lockRestore _ h1 _ _ =>
+    exact ⟨(hk.updBlk _ (fun _ h => by cases h)).withTaken _, hk.blk _ _ _ _ hb⟩
+  | lockRestore _ h1 _ _ _ =>
     obtain ⟨hk1, hv1, _⟩ := hk.takeVal h1
     exact ⟨hk1.updBlk _ (fun w hw => by cases hw; exact hv1), .int⟩
 
@@ -511,7 +515,7 @@ theorem Step.kinds {P : Prog} {κ : Nat → Bool} {m : Mem} {s : Stmt} {r : Res}
   | scopeDPMoved _ _ ih => exact (ih).map fun _ h => h.remove _
   | withLock _ hb _ _ =>
     refine MKinds.ext ?_
-    exact (hk.updBlk _ (fun _ h => by cases h)).set _ (fun w hw => by cases hw; exact hk.blk _ _ _ _ hb)
+    exact ((hk.updBlk _ (fun _ h => by cases h)).withTaken _).set _ (fun w hw => by cases hw; exact hk.blk _ _ _ _ hb)
   | scopeLIn _ ih => exact ih
   | scopeLSkip hrl _ => exact (Release.kinds hrl hk).ext
   | scopeLFail _ _ => exact hk.ext
@@ -738,7 +742,9 @@ def mixB : Nat → Option Blk := fun k =>
   else if k = 1 then some ⟨.cell .int, .lock, some (.cell 0)⟩ else none
 
 /-- ... global 0 a lock share of block 0, global 1 one of block 1. -/
-def mixG : Globs := ⟨fun _ => false, 2, mixB, fun g => if g = 0 then some (.lk 0) else if g = 1 then some (.lk 1) else none⟩
+def mixG : Globs :=
+  ⟨fun _ => false, 2, mixB, fun g => if g = 0 then some (.lk 0) else if g = 1 then some (.lk 1) else none,
+   fun _ => false⟩
 
 theorem mixB_some {k : Nat} {bl : Blk} (h : mixB k = some bl) :
     (k = 0 ∧ bl = ⟨.int, .lock, some (.int 0)⟩) ∨ (k = 1 ∧ bl = ⟨.cell .int, .lock, some (.cell 0)⟩) := by

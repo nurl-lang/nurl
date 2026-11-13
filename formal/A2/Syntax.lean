@@ -886,10 +886,11 @@ inductive Rhs where
   -- A3.2's second cut: a `Locked`'s value checked out to the caller and back
   -- (`stdlib/std/thread.nu`; the `taken` flag is the payload being out)
   | lockTake (a : Var)         -- `locked_take a`: the payload of the lock block `a` shares moves
-                               -- out, owned; the block holds nothing until a restore, and every
-                               -- other operation on it waits
+                               -- out, owned; the block holds nothing until a restore (it is taken,
+                               -- `Mem.taken`), and every other operation on it waits
   | lockRestore (a y : Var)    -- `locked_restore a y`: `y`'s value moves back in, to a block whose
-                               -- payload is out (answer 0); with the payload in, a panic
+                               -- payload was taken (answer 0); with the payload in, or checked out
+                               -- by a `withLock` (Agora #810), a panic
 deriving DecidableEq, Repr
 
 /-! ### Memory (here because a run-time form records a snapshot of it) -/
@@ -961,7 +962,9 @@ deriving DecidableEq, Repr
     many shares it has is the number of leaves naming it (ghost, so nothing
     stores it).  The payload's addresses are the block's (`BlkOwn`).  An
     `arc` block's payload is always there and never changes; a `lock`
-    block's is `none` while a thread has it checked out; a `dead` block's
+    block's is `none` while a thread has it checked out (by a `withLock`) or
+    taken (by `locked_take`), which the store tells apart (`Mem.taken`, Agora
+    #810); a `dead` block's
     (Agora #610) is there until `Step.reap` moves it out.  No step removes a
     block (`arcNew` adds one, `BlkLe`); the sweep at a step's end removes
     those nothing reaches and frees their payloads (`Mem.sweep`). -/
@@ -978,6 +981,15 @@ structure Mem where
   blk   : Nat → Option Blk    -- A3.1: the counted blocks
   gl    : Nat → Option Val    -- A3.6: the module globals set at start: global `g`'s share, made
                               -- before `main`; no step writes it
+  /-- Agora #810: which lock blocks' payloads `locked_take` took out.  A lock
+      block whose payload is out (`⟨t, .lock, none⟩`) is **taken** when this
+      says so (`EvalR.lockTake` sets it; only `locked_restore` puts a payload
+      back, `EvalR.lockRestore`), and otherwise **checked out** by a
+      `withLock` (`Step.withLock` clears it; only the scope's end gives the
+      payload back, `Release.put`), as the runtime's lock word is `TAKEN` or
+      `HELD` (`stdlib/runtime_locked.c`).  It is read only of a lock block
+      whose payload is out: every step that takes a payload out sets it. -/
+  taken : Nat → Bool
 
 def upd {α : Type} (f : Nat → α) (k : Nat) (v : α) : Nat → α :=
   fun i => if i = k then v else f i

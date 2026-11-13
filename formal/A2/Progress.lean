@@ -435,11 +435,16 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
     obtain ⟨ob, hk⟩ := hi.lk_val ha hl hty hv
     cases ob with
     | none =>
-      obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly hpa htyy
-      have hb1 : m1.blk = m.blk := by cases htk <;> rfl
-      by_cases hck : SendCheck m1.blk [v] m1.st
-      · exact ⟨_, EvalR.lockRestore hv htk (by rw [hb1]; exact hk) hck⟩
-      · exact ⟨_, EvalR.lockRestoreFail htk hck⟩
+      -- Agora #810: a block a `withLock` checked out is not restored: a panic
+      cases htk0 : m.taken k with
+      | false => exact ⟨_, EvalR.lockRestoreHeld hv hk htk0⟩
+      | true =>
+        obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly hpa htyy
+        have hb1 : m1.blk = m.blk := by cases htk <;> rfl
+        have ht1 : m1.taken = m.taken := by cases htk <;> rfl
+        by_cases hck : SendCheck m1.blk [v] m1.st
+        · exact ⟨_, EvalR.lockRestore hv htk (by rw [hb1]; exact hk) (by rw [ht1]; exact htk0) hck⟩
+        · exact ⟨_, EvalR.lockRestoreFail htk hck⟩
     | some p => exact ⟨_, EvalR.lockRestoreP hv hk⟩
   | arcGet ha hl hty _ _ =>
     obtain ⟨o, k, p, hv⟩ := hi.arc_slot ha hl hty

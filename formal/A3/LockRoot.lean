@@ -545,7 +545,7 @@ theorem Step.keepSlot {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
     intro _ y o w _ _ hyn _
     simp only [Stmt.nm, List.mem_cons, not_or] at hyn
     refine ⟨?_, fun _ _ he => by cases he; nm_close⟩
-    show (({ m with blk := _ } : Mem).set x _).st y = _
+    show (({ m with blk := _, taken := _ } : Mem).set x _).st y = _
     simp only [Mem.set_st]; rw [upd_ne _ _ hyn.1]
   | scopeLIn _ ih =>
     intro hck y o w hy hw hyn hlt
@@ -1083,7 +1083,7 @@ theorem RootInv.put {P : Prog} (hP : ProgOK P) {C : Cfg} {ps : List (Nat → Boo
       · rw [he, List.mem_append, List.mem_singleton] at hm
         rcases hm with hm | hm
         · exact BlkLe.ne_none hg.blk (h.live i t hi k u hm)
-        · cases hm; rw [h2]; exact fun h => nomatch h
+        · cases hm; rw [h2.1]; exact fun h => nomatch h
     · exact BlkLe.ne_none hg.blk (h.live j tj hj k u hm)
 
 /-- **The marking sweep keeps every frame's block**: the frame's root is a
@@ -1245,16 +1245,16 @@ theorem reach_frame_live (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P sp
     (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x b)) : C.blk k ≠ none :=
   (reach_rootInv hP hPc hSp hG ht hs hsc hv hr).live i th hi k u (hK.lfr_mem rfl)
 
-/-- **A frame's block, in a reached configuration**: for a payload that
-    holds a destructor value, checked out, `⟨u, .lock, none⟩`
+/-- **A frame's block, in a reached configuration**: checked out,
+    `⟨u, .lock, none⟩` and (Agora #810) not taken, for every payload type
     (`reach_frame_out` with the block there, `reach_frame_live`). -/
 theorem reach_frame_checked_out (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn)
     (hG : GlobsOK P G) (ht : StmtT P (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
     (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
     {i : Nat} {th : Thread} {K : Stmt → Stmt} {k : Nat} {u : Ty} {x : Var} {b : Stmt}
-    (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x b)) (hu : u.dtorFree = false) :
-    C.blk k = some ⟨u, .lock, none⟩ := by
-  rcases (reach_frame_out hP hPc hSp hG ht hs hsc hv hr hi hK hu).2 with h0 | h0
+    (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x b)) :
+    C.blk k = some ⟨u, .lock, none⟩ ∧ C.taken k = false := by
+  rcases (reach_frame_out hP hPc hSp hG ht hs hsc hv hr hi hK).2 with h0 | h0
   · exact absurd h0 (reach_frame_live hP hPc hSp hG ht hs hsc hv hr hi hK)
   · exact h0
 
@@ -1279,8 +1279,7 @@ theorem reach_scopeL_end_gives_back (hP : ProgOK P) (hPc : ProgCodes P) (hSp : S
   obtain ⟨Γ, F, Δ, hth, hinv, _⟩ := hto
   obtain ⟨Γ', F', Δ', ht', hinv'⟩ := hK.typed Γ F Δ hth hinv
   obtain ⟨w, hx, hw⟩ := LockDtorWitness.scopeL_end_owns ht' hinv'.toMInv hd
-  have hk : (C.view th).blk k = some ⟨u, .lock, none⟩ :=
-    reach_frame_checked_out hP hPc hSp hG ht hs hsc hv hr hi hK (dtorFree_of_holdsDtor hd)
+  have hk : CheckedOut (C.view th) k u := reach_frame_checked_out hP hPc hSp hG ht hs hsc hv hr hi hK
   have hno : ¬ Orphan (C.view th) := fun ho => Reach.noOrphan hr hG.noOrphan ho
   exact ⟨w, hx, LockDtorWitness.scopeL_end_gives_back (m := C.view th) hx hw hna hvf hk hno h⟩
 
@@ -1305,20 +1304,18 @@ theorem reach_scopeL_panic (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P 
   obtain ⟨ps, hcp, _⟩ := (reach_inv hP hPc hSp hG ht hs hsc hv hr).1
   obtain ⟨a, ha⟩ := part_of hcp.len hi
   obtain ⟨hto, _⟩ := hcp.ok i th a hi ha
-  have hrf : RF (C.view th) th.s := RF.congr (m := ownView C th a) (m' := C.view th) rfl rfl
-    (TypedAt.of_threadOK hto).rf
   obtain ⟨Γ, F, Δ, hth, hinv, _⟩ := hto
   obtain ⟨Γ', F', Δ', ht', hinv'⟩ := hK.typed Γ F Δ hth hinv
-  have hk : (C.view th).blk k = some ⟨u, .lock, none⟩ :=
-    reach_frame_checked_out hP hPc hSp hG ht hs hsc hv hr hi hK (dtorFree_of_holdsDtor hd)
+  have hk : CheckedOut (C.view th) k u := reach_frame_checked_out hP hPc hSp hG ht hs hsc hv hr hi hK
   obtain ⟨m1, hb, hres⟩ := scopeL_typed_panic_of (m := C.view th) ht' hinv' rfl hd hna hvf h
   -- the body's unwinding leaves the block checked out: the frame is its only one
-  have hk1 : m1.blk k = some ⟨u, .lock, none⟩ := by
-    have hout : Out (C.view th) k := .inr ⟨u, hk, dtorFree_of_holdsDtor hd⟩
-    rcases Step.stay hb (hK.rf hrf) hout with h1 | ⟨hkb, _, _⟩
-    · exact h1.trans hk
+  have hk1 : CheckedOut m1 k u := by
+    have hout : Out (C.view th) k := .inr ⟨u, hk⟩
+    have htk : m1.taken k = (C.view th).taken k := Step.taken_stay hb hout
+    rcases Step.stay hb hout with h1 | ⟨hkb, _, _⟩
+    · exact ⟨h1.trans hk.1, htk.trans hk.2⟩
     · have h2 := hK.count_two rfl hkb
-      rw [hl.nd i th hi k u (hK.lfr_mem rfl) (dtorFree_of_holdsDtor hd)] at h2
+      rw [hl.nd i th hi k u (hK.lfr_mem rfl)] at h2
       omega
   refine ⟨m1, hb, ?_⟩
   rcases hres with ⟨v, hx, hw, hput⟩ | hnone

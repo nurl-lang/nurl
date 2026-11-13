@@ -161,11 +161,13 @@ the LLVM / C11 memory model rather than redefining it.
       a cell share is not Sync, A3.5).
   - **A3.2** *(proven)* — `Locked`: a value one thread at a
     time changes. (Mutual exclusion as a theorem, `A3.reach_lock_excl`,
-    Agora #808, holds for a payload that holds a destructor value; for a
-    `dtorFree` payload the model's `locked_restore` may refill a block a
-    `withLock` has checked out, which nurlc refuses — "the value was not
-    taken" — so the model admits more interleavings there, Agora #810.
-    Race freedom, `A3.claim`, holds over all of them.)
+    Agora #808, for every payload type: at most one check-out frame of a
+    lock block is out at a time. Agora #810: a lock block whose payload is
+    out is either *checked out* by a `withLock` or *taken* by
+    `locked_take` (`Mem.taken`, the runtime's lock word `HELD` or
+    `TAKEN`), and `locked_restore` fills only a taken block; on a
+    checked-out one it panics, as nurlc's does — "the value was not
+    taken".)
     - **The calculus.** A lock is a second kind of block. `locked_new`
       moves a value into a lock block, and `Locked_share` makes a new
       share. `locked_update l f` (and `locked_with`) checks the payload
@@ -205,9 +207,11 @@ the LLVM / C11 memory model rather than redefining it.
       `sync` closure fits in a lock or a channel. The sweep reaches
       through a lock's payload (`Blk.keeps`). `locked_take` moves the
       payload out to the caller and `locked_restore` moves a value back
-      (`Rhs.lockTake`, `Rhs.lockRestore`; restoring a value that is in
-      panics, as the runtime does). The take leaves the block empty, so a
-      restore drops nothing (h267). The runtime's `mem_take` moves the
+      (`Rhs.lockTake`, `Rhs.lockRestore`; restoring into a block whose
+      value is in, or is checked out by a `withLock`, panics, as the
+      runtime does: Agora #810, `A3.lockRestore_present`,
+      `A3.lockRestore_checked_out`). The take leaves the block empty and
+      marks it taken (`Mem.taken`), so a restore drops nothing (h267). The runtime's `mem_take` moves the
       value out too, so the model's move is exact.
     - **Cycles.** The sweep frees a cycle of shares, where the runtime's
       counts never reach zero. A cycle through a block's payload can form
@@ -1053,12 +1057,13 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   #808 proves the block's half on every configuration a run reaches: an invariant (`A3.LockInv`, `A3.reach_lockInv`,
   kept by every `TStep`: a thread's step, its marking sweep and reaps, a
   spawn, a failed spawn) says each `scopeL k t x s` frame's block is a lock
-  block of type `t`, or gone, at a key below `nid`; for a `t` that is not
-  `dtorFree` (one that holds a destructor value) it is checked out
-  (`⟨t, .lock, none⟩`), and the frame is its only one on any thread, once
-  (A3.2's mutual exclusion, `A3.reach_lock_excl`, `A3.Redex.frame_unique`:
-  every operation on the block waits on `none`, and `locked_restore` of
-  such a payload is not typed, `A3.Step.stay`). And the block is never
+  block of type `t` checked out (`⟨t, .lock, none⟩`, and since Agora #810
+  not taken, `A2.CheckedOut`), or gone, at a key below `nid`, and the
+  frame is its only one on any thread, once (A3.2's mutual exclusion,
+  `A3.reach_lock_excl`, `A3.Redex.frame_unique`: every operation on the
+  block waits on `none`, `locked_restore` fills only a taken block,
+  `A3.Step.stay`, and only a take or a check-out of a block whose payload
+  is in marks one, `A3.Step.taken_stay`), whatever the payload's type. And the block is never
   removed while its frame is out: the check-out's root share outlives the
   body (`A3.reach_frame_root`, `A3.reach_frame_live`, over a second
   invariant, `A3.RootInv`, `A3.reach_rootInv`, kept by every `TStep`):
@@ -1076,9 +1081,7 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   (`A3.reach_scopeL_end_gives_back`, `A3.reach_scopeL_panic`). The same
   fact gives a cell check-out's "the thread holds an owner's share", for
   every check-out of a cell's block, which no lock share names (A3.5 below,
-  `A3.reach_frame_cell_owner`, `A3.reach_shareKind`, Agora #815). Exclusion is proved only for a payload that holds a destructor
-  value: for a `dtorFree` one the model's `locked_restore` can refill a
-  checked-out block (Agora #810). When the lock's last share is
+  `A3.reach_frame_cell_owner`, `A3.reach_shareKind`, Agora #815). When the lock's last share is
   gone the marking sweep marks the lock block `dead`, its payload in it
   (`Cand` admits a lock block whose payload is in it), and the same thread
   reaps it as an `Arc`'s (`A3.LockDtorWitness.last_drop_reaps`, over
@@ -1115,13 +1118,16 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   `rc_restore` (`compiler/tests/handle_checkout.nu`), whose taken state
   the last handle's drop skips since Agora #795 (github#1832). That a library's handle with such a
   state behaves as the model's cell is part of the trusted base (phase B). Still refused: `RwLocked D`'s read guard
-  (`rwRead_dtor_refused`: a view copies the payload, which owns nothing)
-  and `locked_restore` of a destructor value (`lockRestore_dtor_refused`:
-  the model's restore may also fill a block a `withLock` has checked out,
-  whose give-back would then drop its value with no code); `locked_set`
+  (`rwRead_dtor_refused`: a view copies the payload, which owns nothing);
+  `locked_set`
   of one is not typed (its body assigns the checked-out binding, `hna`);
   a `% Drop` value's fields cannot be written in place by the update
   (as anywhere: a field of a destructor value is lent through the type).
+  `locked_restore` of a destructor value is typed since Agora #810
+  (`lockRestore_dtor_typed`; refused before, while the model's restore
+  could also fill a block a `withLock` had checked out, whose give-back
+  would then have dropped its value with no code): it fills only a taken
+  block (`Mem.taken`).
 - Agora #755: **`Locked (Vec D)`.** `Ty.lkPay t` is `t.dtorFree || (t.dnest
   && !t.hasArc)`: a drained `Vec` of destructor values, at any depth,
   holding no share, which contains the destructor type itself (`Ty.ok`'s
@@ -1134,8 +1140,9 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   no form of its own: it is a truncation to 0, or for a `Vec D` code the
   calculus types, `A2/DropCode.lean`); `hna` still refuses an `assign` to the binding; the
   give-back's crossing check cannot fail (`sendCheck_noArc` is of any type
-  that holds no share); `locked_restore` still asks `dtorFree`. So the
-  `Locked D` cut's three closed paths cover it unchanged. When the last share
+  that holds no share); `locked_restore` of the `Vec` is typed (Agora
+  #810: it fills only a taken block). So the `Locked D` cut's three closed
+  paths cover it unchanged. When the last share
   goes the marking sweep marks the lock block (`Cand` already reads a lock
   block's type as a nest) and the reap binds the `Vec` at its own type in
   a destructor frame that drains it, element 0 first, as nurlc's last
@@ -1470,9 +1477,10 @@ The rules are stricter than nurlc's in these places:
   since Agora #755, its state under its glue, above); a `Mutex` guarding one (a `Mutex` guards no
   value in the model). Refused by a rule while `Ty.ok` admits the type:
   an `RwLocked D`'s read guard (`RhsT.rwRead` / `rwTryRead` ask `dtorFree`:
-  `RwLocked D` itself is typed, and its write side is `withLock`),
-  `locked_restore` of one (`RhsT.lockRestore`) and `locked_set` of one
-  (its body assigns the checked-out binding, `StmtT.withLock`'s `hna`); an `Arc` whose
+  `RwLocked D` itself is typed, and its write side is `withLock`) and
+  `locked_set` of one (its body assigns the checked-out binding,
+  `StmtT.withLock`'s `hna`; `locked_restore` of one is typed since Agora
+  #810, `RhsT.lockRestore`); an `Arc` whose
   payload holds a destructor value in a field of a type of no destructor
   of its own (a struct or an option with a `% Drop` field, or a `Vec` of
   such structs: `Step.reap` hands over a value of a destructor type or of

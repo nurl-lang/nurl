@@ -176,7 +176,7 @@ inductive Made (P : Prog) (spawn : Nat → Bool) (D : List Decl) : Nat → Globs
   | make {i : Nat} {d : Decl} {G : Globs} {C : Cfg} {st : Var → Option Slot} {nv : Nat} {o : Bool} {v : Val} :
       Made P spawn D i G → D[i]? = some d → Reach P spawn (Cfg.start G (makeStmt i d) 1) C →
       C.ths = [⟨st, nv, .scope 0 (.assign 0 (.glob i d.ty))⟩] → st 0 = some ⟨o, some v⟩ →
-      Made P spawn D (i + 1) ⟨C.alloc, C.nid, C.blk, upd C.gl i (some v)⟩
+      Made P spawn D (i + 1) ⟨C.alloc, C.nid, C.blk, upd C.gl i (some v), C.taken⟩
 
 /-- ... and the other way a `make` ends: it panics before `main`, its thread's
     next step a panic no frame catches. -/
@@ -310,7 +310,7 @@ theorem globFits_of {B : Nat → Option Blk} {t : Ty} {v : Val} (hs : t.sync = t
 /-- The store a `make` left, with no binding, once its result is the global:
     A2's invariant, over the blocks as they are. -/
 theorem MInv.unbind {m : Mem} {Γ : Ctx} (hi : MInv m Γ) (a : Nat → Bool) (ha : ∀ i, a i = m.alloc i)
-    (gl : Nat → Option Val) : MInv ⟨a, m.nid, 0, fun _ => none, m.blk, gl⟩ (fun _ => none) where
+    (gl : Nat → Option Val) (T : Nat → Bool) : MInv ⟨a, m.nid, 0, fun _ => none, m.blk, gl, T⟩ (fun _ => none) where
   dom _ := rfl
   slot _ _ h := by cases h
   heap := by
@@ -341,7 +341,7 @@ theorem make_ok {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hPc : ProgCod
     (hG : GlobsOK P G) (hGi : G.gl i = none) {C : Cfg} (hr : Reach P spawn (Cfg.start G (makeStmt i d) 1) C)
     {st : Var → Option Slot} {nv : Nat} (hths : C.ths = [⟨st, nv, .scope 0 (.assign 0 (.glob i d.ty))⟩])
     {o : Bool} {v : Val} (hst : st 0 = some ⟨o, some v⟩) :
-    GlobsOK P ⟨C.alloc, C.nid, C.blk, upd C.gl i (some v)⟩ ∧ GlobFits C.blk d.ty v ∧ C.gl = G.gl := by
+    GlobsOK P ⟨C.alloc, C.nid, C.blk, upd C.gl i (some v), C.taken⟩ ∧ GlobFits C.blk d.ty v ∧ C.gl = G.gl := by
   obtain ⟨hsy, _⟩ := hD i d hd
   obtain ⟨Δ0, ht0⟩ := makeStmt_typed hP hD hd
   obtain ⟨hci, hcell⟩ := reach_inv hP hPc hSp hG ht0 rfl trivial (makeStmt_vars i d) hr
@@ -405,7 +405,7 @@ theorem make_ok {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hPc : ProgCod
       | some _ => rw [h'] at this; cases this
   -- Agora #815: a kind per key agrees with every share of `C` (`reach_kinds`), the
   -- result's too, which moves into the global
-  have hkinds : GlobsKinds ⟨C.alloc, C.nid, C.blk, upd C.gl i (some v)⟩ := by
+  have hkinds : GlobsKinds ⟨C.alloc, C.nid, C.blk, upd C.gl i (some v), C.taken⟩ := by
     obtain ⟨κ, hC⟩ := reach_kinds hG hr
     refine ⟨κ, hC.blk, fun g w hg => ?_⟩
     simp only [upd] at hg
@@ -423,7 +423,7 @@ theorem make_ok {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hPc : ProgCod
       rw [hgl] at hg
       obtain ⟨t', hs', hok', hf'⟩ := hG.sync g w hg
       exact ⟨t', hs', hok', (hr.globFits (C := Cfg.start G (makeStmt i d) 1) hg hf').2⟩
-  · exact MInv.unbind hi.toMInv C.alloc (fun j => (hall j).symm) _
+  · exact MInv.unbind hi.toMInv C.alloc (fun j => (hall j).symm) _ _
   · -- every live address is a payload's: the result owns none
     rcases hi.cover j (by show union a (payPart C.blk) j = true; rw [hall]; exact hj) with
       ⟨x, T, hT, hjT⟩ | hp

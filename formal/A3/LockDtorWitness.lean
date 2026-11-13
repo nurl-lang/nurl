@@ -49,12 +49,11 @@ stores and steps, not of this program's run (which no theorem here traces):
 
 Still refused (stricter than nurlc): `RwLocked D`'s read guard
 (`rwRead_dtor_refused`: a view's payload is a copy of the lock's, which owns
-nothing) and `locked_restore` of a destructor value (`lockRestore_dtor_refused`:
-the model's restore also fills a block a `withLock` has checked out, whose
-give-back would then drop its value with no code); a payload that holds a
-destructor value in a field of a type with no destructor of its own, or a
-destructor value (or a drained `Vec` of them) that holds a share
-(`Ty.lkPay`).  Since Agora #755's last cut a `Locked (Vec D)` is typed
+nothing); a payload that holds a destructor value in a field of a type with
+no destructor of its own, or a destructor value (or a drained `Vec` of them)
+that holds a share (`Ty.lkPay`).  Since Agora #810 `locked_restore` of a
+destructor value is typed (`lockRestore_dtor_typed`: the restore fills only a
+taken block, never a checked-out one).  Since Agora #755's last cut a `Locked (Vec D)` is typed
 (`mainV`, below: a push through the check-out), and so is a channel of `D`
 (`A3/ChanDtorWitness.lean`: its state under its glue). -/
 
@@ -147,7 +146,7 @@ theorem sharesIn_noArc {τ : Ty} {v : Val} (h : τ.hasArc = false) (B : Nat → 
     never the code-less drop. -/
 theorem release_puts {m m' : Mem} {k : Nat} {t : Ty} {x : Var} {v : Val}
     (hx : m.st x = some ⟨true, some v⟩) (hw : WFv t v) (hna : t.hasArc = false) (hvf : t.holdsView = false)
-    (hk : m.blk k = some ⟨t, .lock, none⟩) (hr : Release m k t x m') :
+    (hk : CheckedOut m k t) (hr : Release m k t x m') :
     m' = ({ m with blk := upd m.blk k (some ⟨t, .lock, some v⟩) }.remove x) := by
   have hg : Giveable m.blk t ⟨true, some v⟩ := ⟨hw, sharesIn_noArc hna _⟩
   have hgc : GiveCheck m x ⟨true, some v⟩ := fun w hw' => by
@@ -169,7 +168,7 @@ theorem release_puts {m m' : Mem} {k : Nat} {t : Ty} {x : Var} {v : Val}
     value is not dropped. -/
 theorem scopeL_end_gives_back {P : Prog} {m : Mem} {k : Nat} {t : Ty} {x : Var} {v : Val}
     (hx : m.st x = some ⟨true, some v⟩) (hw : WFv t v) (hna : t.hasArc = false) (hvf : t.holdsView = false)
-    (hk : m.blk k = some ⟨t, .lock, none⟩) (hno : ¬ Orphan m) {r : Res}
+    (hk : CheckedOut m k t) (hno : ¬ Orphan m) {r : Res}
     (h : Step P m (.scopeL k t x .skip) r) :
     r = .ok ({ m with blk := upd m.blk k (some ⟨t, .lock, some v⟩) }.remove x) .skip := by
   cases h with
@@ -191,7 +190,7 @@ theorem scopeL_panic_gives_back {P : Prog} {m m2 : Mem} {k : Nat} {t : Ty} {x : 
     (h : Step P m (.scopeL k t x s) (.panic m2)) :
     ∃ m1, Step P m s (.panic m1) ∧
       ∀ v, m1.st x = some ⟨true, some v⟩ → WFv t v → t.hasArc = false → t.holdsView = false →
-        m1.blk k = some ⟨t, .lock, none⟩ →
+        CheckedOut m1 k t →
         m2 = ({ m1 with blk := upd m1.blk k (some ⟨t, .lock, some v⟩) }.remove x) := by
   cases h with
   | scopeLP hs hrl => exact ⟨_, hs, fun v hx hw hna hvf hk => release_puts hx hw hna hvf hk hrl⟩
@@ -243,12 +242,13 @@ theorem scopeL_end_owns {P : Prog} {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : T
 /-- **The check-out's end gives the value back, for a typed frame**: with
     `x`'s ownership discharged by the typing (`scopeL_end_owns`), what is
     left of `scopeL_end_gives_back`'s hypotheses is the block's: that it has
-    its payload checked out (`m.blk k = some ⟨t, .lock, none⟩`), which
+    its payload checked out (`CheckedOut m k t`: `m.blk k = some ⟨t, .lock, none⟩`,
+    not taken), which
     Agora #808 proves of every reached configuration's frame
     (`A3.reach_scopeL_end_gives_back`). -/
 theorem scopeL_typed_end_gives_back {P : Prog} {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x : Var}
     {m : Mem} (ht : StmtT P Γ F (.scopeL k t x .skip) Δ) (hi : MInv m Γ) (hd : t.holdsDtor = true)
-    (hna : t.hasArc = false) (hvf : t.holdsView = false) (hk : m.blk k = some ⟨t, .lock, none⟩)
+    (hna : t.hasArc = false) (hvf : t.holdsView = false) (hk : CheckedOut m k t)
     (hno : ¬ Orphan m) {r : Res} (h : Step P m (.scopeL k t x .skip) r) :
     ∃ v, m.st x = some ⟨true, some v⟩ ∧ r = .ok ({ m with blk := upd m.blk k (some ⟨t, .lock, some v⟩) }.remove x) .skip := by
   obtain ⟨v, hx, hw⟩ := scopeL_end_owns ht hi hd
@@ -327,7 +327,7 @@ theorem scopeL_typed_panic {P : Prog} {Γ Δ : Ctx} {F : List Var} {k : Nat} {t 
     (h : Step P m (.scopeL k t x s) (.panic m2)) :
     ∃ m1, Step P m s (.panic m1) ∧
       ((∃ v, m1.st x = some ⟨true, some v⟩ ∧ WFv t v ∧
-          (m1.blk k = some ⟨t, .lock, none⟩ →
+          (CheckedOut m1 k t →
             m2 = ({ m1 with blk := upd m1.blk k (some ⟨t, .lock, some v⟩) }.remove x))) ∨
         (m1.st x = some ⟨true, none⟩ ∧ m2 = m1.remove x)) := by
   cases h with
@@ -363,11 +363,16 @@ theorem rwRead_dtor_refused {Γ Γ1 : Ctx} {F : List Var} {a : Var} {E Ea : Entr
   cases h with
   | rwRead ha' _ hty' _ hdf => rw [ha] at ha'; cases ha'; rw [hty] at hty'; cases hty'; cases hdf
 
-/-- **... and so is `locked_restore` of a destructor value.** -/
-theorem lockRestore_dtor_refused {Γ Γ1 : Ctx} {F : List Var} {a y : Var} {E Ea : Entry} {f : Nat} {u : Ty}
-    (ha : Γ a = some Ea) (hty : Ea.ty = .lk (.dtor f u)) : ¬ RhsT Γ F (.lockRestore a y) E Γ1 := fun h => by
-  cases h with
-  | lockRestore ha' _ hty' _ _ _ _ hdf => rw [ha] at ha'; cases ha'; rw [hty] at hty'; cases hty'; cases hdf
+/-- **... but `locked_restore` of a destructor value is typed** (Agora #810,
+    as nurlc's): the restore fills only a block `locked_take` emptied
+    (`EvalR.lockRestore` asks `Mem.taken`), never one a `withLock` has
+    checked out, whose give-back would then drop its value with no code;
+    until the model told the two apart the typing refused it (Agora #755). -/
+theorem lockRestore_dtor_typed {Γ Γ1 : Ctx} {F : List Var} {a y : Var} {Ea Ey : Entry} {f : Nat} {u : Ty}
+    {D : List Dep} (ha : Γ a = some Ea) (hla : Ea.live = true) (hty : Ea.ty = .lk (.dtor f u))
+    (hy : Γ y = some Ey) (hly : Ey.live = true) (htyy : Ey.ty = .dtor f u)
+    (hp : PushArg Γ F y Ey (.dtor f u) D Γ1) : RhsT Γ F (.lockRestore a y) intE Γ1 :=
+  RhsT.lockRestore ha hla hty hy hly htyy hp
 
 /-! ### The program -/
 

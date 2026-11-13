@@ -401,8 +401,8 @@ theorem covers_take {m : Mem} {v : Val} {o : Bool} (hc : CoversBut m v o) {x : V
 /-- A3.2: taking a lock: what block `k`'s payload owned is the value in
     flight, which `x` owns. -/
 theorem covers_acquire {m : Mem} (hc : Covers m) {k : Nat} {t : Ty} {v : Val}
-    (hk : m.blk k = some ⟨t, .lock, some v⟩) :
-    CoversBut { m with blk := upd m.blk k (some ⟨t, .lock, none⟩) } v v.owns := by
+    (hk : m.blk k = some ⟨t, .lock, some v⟩) (T : Nat → Bool) :
+    CoversBut { m with blk := upd m.blk k (some ⟨t, .lock, none⟩), taken := T } v v.owns := by
   intro i hi
   rcases hc i hi with ⟨o, U, hU, hiU⟩ | ⟨k', bl, hk', hik⟩
   · exact Or.inl (Or.inl ⟨o, U, hU, hiU⟩)
