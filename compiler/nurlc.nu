@@ -5728,9 +5728,22 @@ unsafe @ __arg_param_lend_root i syms → s {
             // (…or a parameter owned by its flag: on the runs it is, agora #743.)
             ? & != 0 ( nurl_str_len up ) | | == 0 ( nurl_sym_len2 syms up `__pname` ) ( __param_owned_slot syms up ) ( __param_flag_owned syms up ) { ^ T } {}
             ? & > rdot 0 ( __local_owns_fields syms rb ) { ^ T } {}
+            // (…or a payload of an enum this frame keeps or owns: agora #783.)
+            ? ( __payload_of_frame syms rb ) { ^ T } {}
         } {}
     }
     ^ ( __roots_have_lend_chain syms roots0 )
+}
+
+// Is `nm` a `??` payload of an enum this frame releases on the way out —
+// owned (a take record, mem_enum_take_note) or kept whole
+// (__payload_lent_of_frame) — or such a payload under another name? A call
+// that lends it lends out of a local (agora #783: `^ ( gid [String] s )`
+// answered "owned" and the enum freed the String under the caller).
+@ __payload_of_frame i syms s nm → b {
+    ? & == 0 g_etake_n == 0 g_epl_n { ^ F } {}
+    ? != 0 ( nurl_str_len ( __etake_rec syms nm ) ) { ^ T } {}
+    ^ ( __payload_lent_of_frame syms nm )
 }
 
 // The stand-in for a call argument that is itself a call (the one just
@@ -5779,7 +5792,7 @@ unsafe @ __arg_lend_root i syms → s {
             } {
                 // (…or a local struct that owns the field a call read from, a
                 // root __mem_payload_local_lend1 hands it: agora #550.)
-                ? | & != 0 ( nurl_str_len up ) | == 0 ( nurl_sym_len2 syms up `__pname` ) ( __param_owned_slot syms up ) & == 0 ( nurl_str_len up ) ( __local_owns_fields syms nm ) {
+                ? | | & != 0 ( nurl_str_len up ) | == 0 ( nurl_sym_len2 syms up `__pname` ) ( __param_owned_slot syms up ) & == 0 ( nurl_str_len up ) ( __local_owns_fields syms nm ) ( __payload_of_frame syms nm ) {
                     : s __tri ( nurl_str_cat4 cn ` ` gn ( nurl_str_cat ` ` ( nurl_str_int idx ) ) )
                     : s __tcur ( nurl_sym_get syms `__last_local_lend__` )
                     ( nurl_sym_def syms `__last_local_lend__` ? == 0 ( nurl_str_len __tcur ) ( nurl_str_cat __tri `` ) ( nurl_str_cat3 __tcur ` ` __tri ) )
@@ -23486,8 +23499,11 @@ unsafe @ gen_cond i lex i syms i cg → s {
     = g_rpg_want 0
     // (What the arm's value is, for the join's raw provenance: named
     // while the arm's own markers still say what it was.)
-    : s __jv_t ? c_rval ( __rpg_val_of syms t_tt0 t_v0 ) ``
-    : s __jo_t ? c_rval ( __rpg_oval_from syms t_tt0 t_v0 ( nurl_get_last_type ) ) ``
+    // (A `( mem_dup x )` copy of a type with no view reaches nothing of x:
+    // __arm_dup_owns_all, agora #767.)
+    : b __jd_t & c_rval ( __arm_dup_owns_all syms t_tt0 )
+    : s __jv_t ? & c_rval ! __jd_t ( __rpg_val_of syms t_tt0 t_v0 ) ``
+    : s __jo_t ? & c_rval ! __jd_t ( __rpg_oval_from syms t_tt0 t_v0 ( nurl_get_last_type ) ) ``
     = g_dead_arm - g_dead_arm ? c_dead_then 1 0
     : s t_dtw ( nurl_str_cat ( nurl_sym_get syms `__deferred_temps__` ) `` )
     : s t_dti ( nurl_str_cat ( nurl_sym_get syms `__deferred_ids__` ) `` )
@@ -23753,8 +23769,9 @@ unsafe @ gen_cond i lex i syms i cg → s {
         = g_did_ret 1
     } {}
     = g_rpg_want 0
-    : s __jv_e ? c_rval ( __rpg_val_of syms e_tt0 e_v0 ) ``
-    : s __jo_e ? c_rval ( __rpg_oval_from syms e_tt0 e_v0 ( nurl_get_last_type ) ) ``
+    : b __jd_e & c_rval ( __arm_dup_owns_all syms e_tt0 )
+    : s __jv_e ? & c_rval ! __jd_e ( __rpg_val_of syms e_tt0 e_v0 ) ``
+    : s __jo_e ? & c_rval ! __jd_e ( __rpg_oval_from syms e_tt0 e_v0 ( nurl_get_last_type ) ) ``
     = g_dead_arm - g_dead_arm ? c_dead_else 1 0
     : s e_dtw ( nurl_str_cat ( nurl_sym_get syms `__deferred_temps__` ) `` )
     : s e_dti ( nurl_str_cat ( nurl_sym_get syms `__deferred_ids__` ) `` )
@@ -24890,6 +24907,12 @@ unsafe @ gen_match i lex i syms i cg → s {
     : ~ s m_ost ``
     : ~ b m_allnone T
     : ~ s m_alends ``
+    // (Every arm that yields a value is a call whose own answer says what
+    // it lends — a fresh value, a copy, a lend of its own arguments (those
+    // go through m_alends): none hands back the scrutinee's payload as is,
+    // so the join lends nothing of the scrutinee's call, and its key is
+    // published empty. Agora #702.)
+    : ~ b m_allfresh T
     : ~ s __m_jr ``
     : ~ s __m_jp ``
     : ~ s __m_jo ``
@@ -26130,7 +26153,9 @@ unsafe @ gen_match i lex i syms i cg → s {
             : ~ s arm_result ( gen_stmt lex syms cg )
             = g_rpg_want 0
             = g_rpg_bw __m_bw
-            ? m_rval {
+            // (…a `( mem_dup x )` copy of a type with no view reaching
+            // nothing of x: __arm_dup_owns_all, agora #767.)
+            ? & m_rval ! ( __arm_dup_owns_all syms arm_tt0 ) {
                 = __m_jr ( __word_union __m_jr g_rpg_vreads )
                 ? == 1 g_rpg_on { = __m_jp ( __word_union __m_jp g_rpg_vreads ) = __m_jo ( __word_union __m_jo g_rpg_ovreads ) } {}
             } {}
@@ -26258,6 +26283,14 @@ unsafe @ gen_match i lex i syms i cg → s {
                 ? != 0 ( nurl_str_len __alend ) {
                     : s __msl ( nurl_str_cat3 __m_lkey `\t` __m_lroots )
                     ? ! & != 0 ( nurl_str_len __m_lkey ) ( seq __alend __msl ) { = m_alends ( __arm_lends_join m_alends __alend ) } {}
+                } {}
+                // (A call arm that lends nothing — and, a `( mem_dup x )`,
+                // one of a type holding no view — hands over its own value.)
+                // (…or one whose lend is its own call's, not the scrutinee's:
+                // that one answers through m_alends, at module end.)
+                ? m_allfresh {
+                    : b __ascr & != 0 ( nurl_str_len __m_lkey ) ( seq __alend ( nurl_str_cat3 __m_lkey `\t` __m_lroots ) )
+                    ? | | | != arm_tt0 TT_LPAREN __ascr & ( __arm_is_mem_dup syms arm_tt0 ) ( __ty_holds_view_p arm_type ) ( __plain_scalar_lty arm_type ) { = m_allfresh F } {}
                 } {}
             } {}
             : s arm_xhown ? == 0 g_did_ret ? arm_took ( nurl_str_cat `true` `` ) ( mem_arm_call_xhown syms cg arm_type arm_tt0 arm_hown ) ``
@@ -26560,9 +26593,9 @@ unsafe @ gen_match i lex i syms i cg → s {
             }
             = g_join_lent ? < ( nurl_str_find hown_entries `[ false` ) 0 0 1
         } {}
-        ( nurl_sym_set_deep syms `__last_join_lend_key__` __m_lkey )
-        ( nurl_sym_set_deep syms `__last_join_lend_args__` __m_largs )
-        ( nurl_sym_set_deep syms `__last_join_lend_roots__` __m_lroots )
+        ( nurl_sym_set_deep syms `__last_join_lend_key__` ? m_allfresh `` __m_lkey )
+        ( nurl_sym_set_deep syms `__last_join_lend_args__` ? m_allfresh `` __m_largs )
+        ( nurl_sym_set_deep syms `__last_join_lend_roots__` ? m_allfresh `` __m_lroots )
         ( nurl_sym_set_deep syms `__last_join_arm_lends__` m_alends )
         ? & & & != 0 g_auto_drop_strings ! all_str_owned any_str_owner
         ( seq ( nurl_llty phi_type ) `i8*` ) {
@@ -33525,6 +33558,21 @@ unsafe @ __jt_reg i cg → s {
 @ __etake_rec i syms s name → s {
     : s r ( nurl_sym_get2 syms name `__etake` )
     ? != 0 ( nurl_str_len r ) { ^ ( nurl_str_cat r `` ) } {}
+    // (…or a binding that is that payload under another name: `: String t
+    // s`, agora #783.)
+    : s al ( nurl_sym_get2 syms name `__etake_of` )
+    ? != 0 ( nurl_str_len al ) { ^ ( __etake_rec syms al ) } {}
+    ^ ( __etake_rec_own syms name )
+}
+
+// The payload binding `name` is under another name (`: String t s`,
+// gen_let_or_struct's `__etake_of`), or `name` itself (agora #783).
+@ __pl_alias_of i syms s name → s {
+    : s al ( nurl_sym_get2 syms name `__etake_of` )
+    ^ ? == 0 ( nurl_str_len al ) ( nurl_str_cat name `` ) ( nurl_str_cat al `` )
+}
+
+@ __etake_rec_own i syms s name → s {
     : s o ( nurl_sym_get2 syms name `__plend` )
     ? | == 0 ( nurl_str_len o ) != 0 ( nurl_str_len ( str_skip_word o ) ) { ^ ( nurl_str_cat `` `` ) } {}
     ? == 0 ( nurl_str_starts ( nurl_sym_get syms o ) `{ i1, ` ) { ^ ( nurl_str_cat `` `` ) } {}
@@ -33693,7 +33741,9 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
 // whole for its destructor as a struct is; an enum in a field of a local?
 // Handed out by name it would go under whoever took it: copied where it
 // can be, refused where not, as a struct's field is (agora #641).
-@ __payload_lent_of_frame i syms s name → b {
+@ __payload_lent_of_frame i syms s name0 → b {
+    // (…under another name too: `: String t s`, agora #783.)
+    : s name ( __pl_alias_of syms name0 )
     ? ! ( seq ( nurl_sym_get2 syms name `__enum_pl` ) `1` ) { ^ F } {}
     // (Not one a take moves out, its own or its option's.)
     ? != 0 ( nurl_str_len ( __etake_rec syms name ) ) { ^ F } {}
@@ -33718,7 +33768,8 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
 // `` for always (a binding that owns its value on every path, a
 // temporary), else its binding's drop flag, as an i1 — a call's own answer
 // (`@<slot>`), `dyn`.
-@ __payload_keeper_flag i syms i cg s name → s {
+@ __payload_keeper_flag i syms i cg s name0 → s {
+    : s name ( __pl_alias_of syms name0 )
     ? ( seq ( nurl_sym_get2 syms name `__ekeep_tmp` ) `1` ) { ^ ( nurl_str_cat `` `` ) } {}
     : s rup ( mem_udrop_ptr_of syms ( __payload_root_binding syms name ) )
     ? ! ( __sb_by_flag ( nurl_sym_get2 syms rup `__sborrow` ) ) { ^ ( nurl_str_cat `` `` ) } {}
@@ -54358,6 +54409,14 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         ( nurl_sym_def syms ( nurl_str_cat name `__ptr` ) ptr )
         // …and back, for the borrow checker (bck_note_payload_taken).
         ( nurl_sym_def syms ( nurl_str_cat ptr `__bname` ) name )
+        // (A payload of an enum this frame owns bound under another name,
+        // `: String t s`: `t` is that payload, and handed back it leaves the
+        // enum as `^ s` does — __etake_rec. Answered "lent" out of a local
+        // that dies on the way out, the caller read freed memory: agora
+        // #783. Not a `: ~` binding, which may be given another value; nor
+        // a view of an enum with a `% Drop` of its own (`__lview`), whose
+        // binding is copied on the way out already, #641.)
+        ? | != 0 g_etake_n != 0 g_epl_n { ( nurl_sym_def syms ( nurl_str_cat name `__etake_of` ) ? & & & ! is_mutable ( is_ident_tok bck_rhs_tt ) == 0 ( nurl_sym_len2 syms bck_rhs_val `__lview` ) | != 0 ( nurl_str_len ( __etake_rec syms bck_rhs_val ) ) ( seq ( nurl_sym_get2 syms ( __pl_alias_of syms bck_rhs_val ) `__enum_pl` ) `1` ) ( __pl_alias_of syms bck_rhs_val ) `` ) } {}
         ? > ( nurl_str_len vt ) 1 { = g_pd_let_mut is_mutable ( __pderiv_note syms name vt bck_rhs_tt bck_rhs_val g_bck_rhs_lend g_bck_let_sx_last ) = g_pd_let_mut F ( __clo_deriv_note syms name vt bck_rhs_tt bck_rhs_val g_bck_rhs_lend g_bck_let_sx_last ) } {}
         ? != 0 ( nurl_sym_len2 syms name `__eaddr` ) { ( nurl_sym_def syms ( nurl_str_cat ptr `__eaddr` ) ( nurl_sym_get2 syms name `__eaddr` ) ) } {}
         // Only mark mutability if explicitly specified with ~
@@ -54779,6 +54838,8 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             ( rec_decl_loc syms name bck_line lex )
             ( nurl_sym_def syms ( nurl_str_cat name `__ptr` ) ptr )
             ( nurl_sym_def syms ( nurl_str_cat ptr `__bname` ) name )
+            // (A payload bound under another name: as above, agora #783.)
+            ? | != 0 g_etake_n != 0 g_epl_n { ( nurl_sym_def syms ( nurl_str_cat name `__etake_of` ) ? & & & ! is_mutable ( is_ident_tok bck_rhs_tt ) == 0 ( nurl_sym_len2 syms bck_rhs_val `__lview` ) | != 0 ( nurl_str_len ( __etake_rec syms bck_rhs_val ) ) ( seq ( nurl_sym_get2 syms ( __pl_alias_of syms bck_rhs_val ) `__enum_pl` ) `1` ) ( __pl_alias_of syms bck_rhs_val ) `` ) } {}
             ? > ( nurl_str_len ptype ) 1 { = g_pd_let_mut is_mutable ( __pderiv_note syms name ptype bck_rhs_tt bck_rhs_val g_bck_rhs_lend g_bck_let_sx_last ) = g_pd_let_mut F ( __clo_deriv_note syms name ptype bck_rhs_tt bck_rhs_val g_bck_rhs_lend g_bck_let_sx_last ) } {}
             ? != 0 ( nurl_sym_len2 syms name `__eaddr` ) { ( nurl_sym_def syms ( nurl_str_cat ptr `__eaddr` ) ( nurl_sym_get2 syms name `__eaddr` ) ) } {}
             // Only mark mutability if explicitly specified with ~
@@ -61169,7 +61230,14 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         = result r
         ? & < - __lm_n 1 62 ( __mx_scalar_ty actual_fty ) { = __lm_sc | __lm_sc << 1 - __lm_n 1 } {}
         ? & agg_moves_fields == g_bck_closure_depth 0 {
-            ? ( seq __lm_l `1` ) {
+            // (…and a literal field that lends whole — `@ P1 { . h name }`,
+            // its own fields all lent, so its own rule copied none — beside
+            // a field of this one's own: copied whole as a lent field is,
+            // where it holds no view (a copy of a view still views its
+            // source). Left lent, the outer literal was lent whole and its
+            // own field leaked: agora #783 item 5.)
+            : b __mx_inner & & & & == fld_first_tt TT_AT > ( nurl_sym_len syms `__agg_lends__` ) __mx_f0 ( __type_needs_drop actual_fty syms ) ! ( __ty_holds_view_p actual_fty ) ( __clone_supported actual_fty syms )
+            ? | ( seq __lm_l `1` ) __mx_inner {
                 = __mx_lent ( nurl_str_cat4 __mx_lent ( nurl_str_int ins_idx ) `\t` ( nurl_str_cat4 actual_fty `\t` actual_fval `\n` ) )
             } {
                 ? & ( __type_needs_drop actual_fty syms ) ! ( seq actual_fval `zeroinitializer` ) { = __mx_own T } {}
@@ -82823,6 +82891,15 @@ unsafe @ __jpb_note i cg s up → v {
 @ __arm_is_mem_dup i syms i tt0 → b {
     ? != g_dup_nest + g_call_nest 1 { ^ F } {}
     ^ == ( __arm_eff_tt syms tt0 ) TT_LPAREN
+}
+
+// …and one of a type that holds no view (__ty_holds_view_p): the copy owns
+// all it holds, so the arm's value reaches nothing the copy was read out
+// of — a join of it and a fresh value lends nothing (agora #767). A copy
+// of a view holder views what its source views, and still reaches it.
+@ __arm_dup_owns_all i syms i tt0 → b {
+    ? ! ( __arm_is_mem_dup syms tt0 ) { ^ F } {}
+    ^ ! ( __ty_holds_view_p ( nurl_get_last_type ) )
 }
 
 // May the call that ended an arm answer its ownership with its own bit?

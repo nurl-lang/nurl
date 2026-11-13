@@ -54,9 +54,9 @@
 //     to free by hand.
 //   * `chan_close` wakes every blocked receiver; a receiver holds its
 //     own copy, so the channel outlives it.
-//   * Closed channel: send returns F (caller's value is dropped — the
-//     slot is not freed since we don't know what it points at); recv
-//     drains remaining items, then returns None.
+//   * Closed channel: send returns F and the value is dropped on the
+//     sender, before chan_send returns (`v` is chan_send's own on every
+//     way out); recv drains remaining items, then returns None.
 //
 // Producer / consumer pattern (works identically on threads or fibers):
 //
