@@ -1282,6 +1282,11 @@ class FnCheck:
                 pl = self.param_loan(lid)
                 if pl:
                     rholds.add((hp[:3],) + pl)
+        if res == "own" and lends:
+            # its own on some paths, a lend of an argument on others: the
+            # caller's result borrows that argument (answered per call,
+            # MEMORY.md §7.6 "Call results")
+            res = "lent"
         if self.fn.ret is not None and self.T.is_scalar(self.fn.ret):
             res = "none"
         if res == "lent" and not lends:
