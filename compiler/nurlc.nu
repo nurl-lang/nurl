@@ -12903,6 +12903,12 @@ unsafe @ __fn_lends_arg s fname s ai → b {
 // (The functions the last walk met, for __hown_dyn's memo.)
 : ~ s g_hd_vis ``
 
+// The register (`%rN`, its N) of the own bit captured right after the last
+// call, for a slice from a callee compiled after its caller
+// (mem_capture_hown); -1 where none was. A global, not a symbol: it is reset
+// at every call (agora #510).
+: ~ i g_call_own_slc -1
+
 // Does `fname` answer per call whether its result is owned — itself, or
 // by handing back as is (`^ ( g … )`) the result of a callee that does?
 // The callees are followed as a worklist with the set already asked: a
@@ -13561,7 +13567,7 @@ unsafe @ origin_guard_retained i root → b {
     ( __clo_tmp_set `` )
     ( nurl_sym_def syms `__last_nurl_call__` ( nurl_sym_get2 syms cn `__nurl_ret` ) )
     ( nurl_sym_def syms `__last_call_name__` cn )
-    ( nurl_sym_def syms `__last_call_own_slc__` `` )
+    = g_call_own_slc -1
     // (What a callee's result views of its arguments is its walk's answer,
     // g_fn_rviews: a callee not compiled yet, or whose walk is parked until
     // the module has compiled, answers then — the caller's walk waits for
@@ -17024,7 +17030,7 @@ unsafe @ __rp_rhs_set b v → v { = g_rp_rhs_lit v }
         // lent it, agora #552.)
         : s __dte ( __clo_temp_owner syms v )
         ? != 0 ( nurl_str_len __dte ) { ( nurl_print `  call void @nurl_closure_drop(i8* ` ) ( nurl_print __dte ) ( nurl_print `)\n` ) } {}
-        ( nurl_sym_def syms `__last_call_name__` `` ) ( nurl_sym_def syms `__last_call_own_slc__` `` )
+        ( nurl_sym_def syms `__last_call_name__` `` ) = g_call_own_slc -1
         ( mem_retclo_take syms cg cr ty )
         ( __sx_publish __me __osx )
         ( nurl_set_last_type ty )
@@ -17050,7 +17056,7 @@ unsafe @ __rp_rhs_set b v → v { = g_rp_rhs_lit v }
         // which call made it describes it (mem_lent_cond / mem_call_retown
         // read the last call's answer — `( vec_push out ( mem_dup c ) )`
         // with c a `vec_get` payload copied the copy, and leaked one).
-        ( nurl_sym_def syms `__last_call_name__` `` ) ( nurl_sym_def syms `__last_call_own_slc__` `` )
+        ( nurl_sym_def syms `__last_call_name__` `` ) = g_call_own_slc -1
         ( nurl_sym_def syms `__last_call_forward__` `` )
         ( nurl_sym_def syms `__last_value_borrow__` `` )
         ( nurl_sym_def syms `__last_call_ret_view__` `` )
@@ -29815,7 +29821,7 @@ unsafe @ __is_slice_ll s t → b {
     // a closure or function-value call has no module-end answer of its own,
     // and one handing back its borrowed argument would have been released
     // here; agora #841.)
-    : s __sfwd ( nurl_sym_get syms `__last_call_own_slc__` )
+    : s __sfwd ? >= g_call_own_slc 0 ( nurl_str_cat `%r` ( nurl_str_int g_call_own_slc ) ) ( nurl_str_cat `` `` )
     ? ! | ( __hown_dyn syms __scn ) != 0 ( nurl_str_len __sfwd ) { ^ v } {}
     : s bit ? != 0 ( nurl_str_len __sfwd ) ( nurl_str_cat __sfwd `` ) ( mem_call_retown syms cg )
     ? == 0 ( nurl_str_len bit ) { ^ v } {}
@@ -32870,7 +32876,7 @@ unsafe @ __pfo_bind_lends i syms s name → v {
 // static case back to that constant.
 @ mem_capture_hown i syms i cg s cn s gen s rlt → v {
     ( nurl_sym_def syms `__last_call_own__` `` )
-    ( nurl_sym_def syms `__last_call_own_slc__` `` )
+    = g_call_own_slc -1
     ? ! ( __is_hown_ty rlt ) { ^ v } {}
     : ~ s c ( nurl_sym_get syms `__last_call_name__` )
     : ~ s gn ``
@@ -32904,7 +32910,7 @@ unsafe @ __pfo_bind_lends i syms s name → v {
         : s r2 ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print r2 ) ( nurl_print ` = call i1 @__nurl_ret_own(ptr @.__nurl_retdyn.` ) ( nurl_print k )
         ( nurl_print `, ptr @.__nurl_retslc.` ) ( nurl_print k ) ( nurl_print `)\n` )
-        ( nurl_sym_def syms `__last_call_own_slc__` r2 )
+        = g_call_own_slc ( nurl_str_to_int ( nurl_str_slice r2 2 - ( nurl_str_len r2 ) 2 ) )
     } {}
 }
 
