@@ -26,7 +26,8 @@
 #  Environment:
 #    NURL_SWEEP_JOBS     parallel compiles (default: nproc)
 #    NURL_SWEEP_OUT      transcript directory (default: a temp dir)
-#    NURL_SWEEP_TIMEOUT  seconds one compile may take (default: 120)
+#    NURL_SWEEP_TIMEOUT  seconds one compile may take (default: 120; 0: no
+#                        limit)
 #    NURL_SWEEP_SLOWER   a file whose compile takes this many times as
 #                        long with the new compiler is reported (default:
 #                        5; only compiles of a second or more count)
@@ -161,7 +162,8 @@ SWEEP_SLOWER="${NURL_SWEEP_SLOWER:-5}"
 # (GNU coreutils' `timeout`, or Homebrew's `gtimeout`. Without either, a
 # hang still holds the sweep — said so once, not silently.)
 TIMEOUT_BIN="$(command -v timeout || command -v gtimeout || true)"
-if [[ -z "$TIMEOUT_BIN" ]]; then
+[[ "$SWEEP_TIMEOUT" == 0 ]] && TIMEOUT_BIN=""
+if [[ -z "$TIMEOUT_BIN" && "$SWEEP_TIMEOUT" != 0 ]]; then
     echo "tree_sweep: WARNING: no timeout(1) found — a compile that hangs will hold the sweep" >&2
 fi
 echo "tree_sweep: ${#FILES[@]} file(s), $JOBS job(s)"
@@ -265,7 +267,9 @@ for f in "${FILES[@]}"; do
     if awk -v b="$bs" -v n="$ns" -v r="$SWEEP_SLOWER" 'BEGIN { exit !(n >= 1 && n > b * r) }'; then
         (( slower == 0 )) && echo
         slower=$((slower + 1))
-        echo "SLOWER (${bs}s -> ${ns}s): $f"
+        # (The first twenty: a change that slows everything down says so in
+        # the count below, not in five thousand lines.)
+        (( slower <= 20 )) && echo "SLOWER (${bs}s -> ${ns}s): $f"
     fi
 done
 differs=0

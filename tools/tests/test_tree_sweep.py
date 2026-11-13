@@ -92,6 +92,13 @@ class TreeSweepTests(unittest.TestCase):
         self.assertIn('TIMEOUT (2s, base and new): c.nu', r.stdout)
         self.assertNotIn('DIFFERS', r.stdout)
 
+    def test_zero_means_no_limit(self):
+        r, _ = self.sweep(new_env={'SLEEP_ON': 'b.nu', 'SLEEP_FOR': '2'},
+                          NURL_SWEEP_TIMEOUT='0')
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertNotIn('TIMEOUT', r.stdout)
+        self.assertNotIn('WARNING', r.stderr)
+
     def test_far_slower_compile_is_reported(self):
         r, _ = self.sweep(new_env={'SLEEP_ON': 'a.nu', 'SLEEP_FOR': '1.5'},
                           NURL_SWEEP_TIMEOUT='20')

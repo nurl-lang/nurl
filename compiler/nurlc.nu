@@ -3679,6 +3679,8 @@ unsafe @ note_unsafe_item s pos s what → v {
 : ~ s g_bck_rhs_fview ``
 // The order field readers were bound in, for bck_fview_take (agora #387).
 : ~ i g_bck_fq 0
+// Was a field viewer (`fb_`) bound in this function at all?
+: ~ i g_bck_fv_any 0
 // Source expressions (srcx): where a view's value came from, as an
 // expression the walk evaluates once every summary is final — a binding
 // (`v`), a field path (`b.items`), a call (`callee(a0|a1|…)`: the
@@ -37840,7 +37842,7 @@ unsafe @ amv_close → v { = g_amv_cur 0 }
     // p under another name, and what q is handed to, p is (__pmove, agora
     // #759). Copied for the walk, q was a borrow, and handing it to a sink
     // was refused where p itself was accepted — agora #768.)
-    : b is_param & & ( nurl_sym_has_word syms `__fn_param_names__` rhs_val ) == 0 ( nurl_sym_len2 syms rhs_val `__sinkp` ) ! ( __param_flag_moves syms rhs_val vt )
+    : b is_param && && ( nurl_sym_has_word syms `__fn_param_names__` rhs_val ) == 0 ( nurl_sym_len2 syms rhs_val `__sinkp` ) ! ( __param_flag_moves syms rhs_val vt )
     ? & & & ! is_mut ( is_ident_tok rhs_tt ) ( bck_is_heap_lty vt ) ! is_param
     {  // Under the sound rules the walk decides (`:a`): an owner's value
         // moves to `b`, a borrow is copied (b borrows from its sources).
@@ -42664,7 +42666,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 ( bck_put_bf `fp_` bws ? bfv ( nurl_str_cat bsrcs `` ) `` )
                 // (…and when, among the readers of a field: the first one a
                 // store replacing it hands the value to, bck_fview_take.)
-                ? bfv { = g_bck_fq + g_bck_fq 1 ( bck_put ( bck_bkey `fq_` bws ) ( nurl_str_int g_bck_fq ) ) } {}
+                ? bfv { = g_bck_fq + g_bck_fq 1 ( bck_put ( bck_bkey `fq_` bws ) ( nurl_str_int g_bck_fq ) ) = g_bck_fv_any 1 } {}
                 // (`tborrow`: it holds the drop of the local it copies —
                 // bck_let_alias — which a replacing `inout` call hands it.)
                 ( bck_put ( bck_bkey `tk_` bws ) ? != 0 ( nurl_str_starts rec `tborrow\t` ) ( nurl_str_cat bsrcs `` ) `` )
@@ -42819,8 +42821,13 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 // freed the element under the Vec; agora #387.)
                 ? != 0 g_bck_has_borrow {
                     ( bck_put_bf `bs_` ( bck_field rec 1 ) `` )
-                    ( bck_put_bf `fb_` ( bck_field rec 1 ) `` )
-                    ( bck_put_bf `fp_` ( bck_field rec 1 ) `` )
+                    // (Asked only where a field viewer was bound at all.)
+                    ? != 0 g_bck_fv_any {
+                        ? != 0 ( nurl_sym_len g_bck ( bck_bkey `fb_` ( bck_field rec 1 ) ) ) {
+                            ( bck_put_bf `fb_` ( bck_field rec 1 ) `` )
+                            ( bck_put_bf `fp_` ( bck_field rec 1 ) `` )
+                        } {}
+                    } {}
                 } {}
                 ( bck_br_event asid )
                 // (A join or a block with no call of its own: the line's other calls
@@ -52364,6 +52371,7 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     = g_bck_has_deps 0
     = g_bck_has_cursor 0
     = g_bck_hc_any 0
+    = g_bck_fv_any 0
     = g_bck_bvr_any 0
     = g_bck_jgb_any 0
     = g_bck_hr_any 0
