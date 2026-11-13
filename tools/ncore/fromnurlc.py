@@ -77,6 +77,7 @@ class Reader:
         self.prog.fn_tmpl = {}         # name -> the generic it is an instance of
         self.prog.fn_file = {}
         self.prog.clonable = set()     # named types nurlc can copy a value of
+        self.prog.unclonable = set()   # …and the ones it cannot
         self.prog.handle_elem = {}     # a one-payload handle type -> its payload's type
         self.prog.shared = set()       # …the ones whose copies share the payload
         self.prog.arcs = set()         # …and the ones other threads may hold a copy of
@@ -179,10 +180,13 @@ class Reader:
                 return ("box", self.conv(info.targs[0]))
             if info.base == "Slice" and len(info.targs) == 1:
                 return ("slice", self.conv(info.targs[0]))
-            if getattr(info, "clone", False) and info.base in SHARED_HANDLES:
-                # (a share of the handle; a struct's field-by-field copy is
-                # decided by its fields, as before)
+            # nurlc's own answer: a library handle's copy is a share of it, a
+            # struct's a copy of each field - and a value with a `% Drop` of
+            # its own and no clone has none
+            if getattr(info, "clone", False):
                 self.prog.clonable.add(name)
+            else:
+                self.prog.unclonable.add(name)
             if len(info.targs) == 1 and info.base in HANDLES_OF_ONE:
                 # a handle over one payload: `*` is the payload
                 self.prog.handle_elem[name] = self.conv(info.targs[0])

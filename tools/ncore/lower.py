@@ -148,6 +148,8 @@ class Types:
         # share of it, a struct's a copy of each field)
         if k == "named" and ty[1] in getattr(self.prog, "clonable", ()):
             return True
+        if k == "named" and ty[1] in getattr(self.prog, "unclonable", ()):
+            return False
         if k in ("vec", "box", "opt"):
             return self.copyable(ty[1], seen)
         if k == "named" and ty[1] in seen:

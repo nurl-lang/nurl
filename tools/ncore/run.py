@@ -49,7 +49,10 @@ WALK_RULES = ("raw memory", "only an 'unsafe' function", "which only an 'unsafe'
               "not Send:", "is set at start", "is declared 'raw'", "runtime handle", "FFI parameter",
               "expects type", "undefined identifier", "internal to the standard library",
               "takes a raw pointer", "hands back a raw pointer", "the standard library's address",
-              "a number passed where", "is left out of this literal", "carries a payload, and a bare variant")
+              "a number passed where", "is left out of this literal", "carries a payload, and a bare variant",
+              "was bound inside the value block", "fills its value with zero bytes", "cannot assign to immutable",
+              "and every thread can", "a number cannot become", "passes a C stream", "would copy a '",
+              "where several threads may run", "asserts that '")
 
 
 def verdict_nurlc(path):

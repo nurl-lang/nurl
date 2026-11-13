@@ -257,6 +257,7 @@
 : ~ i g_core_virt_n 0
 : ~ i g_core_virt_cap 0
 : ~ i g_core_virt_seen 0
+: ~ i g_walk_owns 1  // 1: the fused walk makes its ownership refusals (own_die, bck_emit_error); 0 under --emit-core, where the IR's reader decides them
 : i CORE_VW 7
 : i CORE_VS 1048576
 // Statement words.
@@ -360,6 +361,35 @@
 // One line, because __tok_label already IS the token table. Keeping a
 // second copy here would mean the next token added renders one way in
 // half the diagnostics and another way in the rest.
+// ── The walk's ownership refusals ────────────────────────────────────
+// A refusal the fused walk makes on ownership — a borrowed value that
+// would have to be copied and cannot, a value handed back out of what the
+// function releases, a closure's result that is not its own — is one the
+// core IR's reader decides instead (docs/dev/CORE_IR.md §6). These are
+// `die`, `die_stmt`, `die_pos` and `die_file_pos` for those refusals: with
+// g_walk_owns 0 (`--emit-core`) they report nothing and the walk goes on,
+// so the whole function is lowered. bck_emit_error is the same door for
+// the borrow walk's own errors.
+@ own_die i lex s msg → v {
+    ? == 0 g_walk_owns { ^ v } {}
+    ( die lex msg )
+}
+
+@ own_die_stmt i lex s msg → v {
+    ? == 0 g_walk_owns { ^ v } {}
+    ( die_stmt lex msg )
+}
+
+@ own_die_pos i lex i line i col s msg → v {
+    ? == 0 g_walk_owns { ^ v } {}
+    ( die_pos lex line col msg )
+}
+
+@ own_die_file_pos s file i line i col s msg → v {
+    ? == 0 g_walk_owns { ^ v } {}
+    ( die_file_pos file line col msg )
+}
+
 @ tok_here i lex → s {
     ^ ( __tok_label ( nurl_lex_type lex ) ( nurl_lex_val lex ) )
 }
@@ -7620,7 +7650,7 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     // releases on the way out (g_join_flends; agora #178): copied below
     // when it can be, refused when it cannot.
     ? & & | == ret_eff_tt TT_QUEST == ret_eff_tt TT_QUESTQUEST != 0 g_join_flends ! ( __clone_supported ( nurl_get_last_type ) syms ) {
-        ( die_pos lex bck_line __ret_col ( nurl_str_cat3 `this hands back, on one of its paths, a field of a value this function releases, fields and all, on the way out; a '` ( llvm_to_nurl ( nurl_get_last_type ) )
+        ( own_die_pos lex bck_line __ret_col ( nurl_str_cat3 `this hands back, on one of its paths, a field of a value this function releases, fields and all, on the way out; a '` ( llvm_to_nurl ( nurl_get_last_type ) )
         `' cannot be copied out of it — the field would be released with it under the caller. Keep the value in a binding of its own and hand that back, or hand back the whole of it.` ) )
     } {}
     // What a view handed back came from (the walk checks it points into
@@ -8127,7 +8157,7 @@ unsafe @ __gen_ret i lex i syms i cg → s {
                     = ret_pl_taken ( nurl_str_cat __plk_f `` )
                 }
             } {
-                ( die_pos lex bck_line __ret_col ( nurl_str_cat3 `this hands back a payload of an enum this function keeps and releases, payloads and all, on the way out; a '` ( llvm_to_nurl __plk_ty )
+                ( own_die_pos lex bck_line __ret_col ( nurl_str_cat3 `this hands back a payload of an enum this function keeps and releases, payloads and all, on the way out; a '` ( llvm_to_nurl __plk_ty )
                 `' cannot be copied out of it — the payload would be released with the enum under the caller. Hand back the whole enum, or a value built on its own.` ) )
             }
         } {}
@@ -8161,7 +8191,7 @@ unsafe @ __gen_ret i lex i syms i cg → s {
             } {}
         } {}
         ? & ! __lvp __lvn {
-            ( die_pos lex bck_line __ret_col ( nurl_str_cat4 ( nurl_str_cat4 `this hands back '` __lvnm `', which is part of ` ( __lv_show __lvr ) )
+            ( own_die_pos lex bck_line __ret_col ( nurl_str_cat4 ( nurl_str_cat4 `this hands back '` __lvnm `', which is part of ` ( __lv_show __lvr ) )
             `, and that is not a parameter the caller of this function keeps: it is released on the way out, or stays with what holds it, while the caller would hold this result as well; a '` ( llvm_to_nurl __lvt )
             `' cannot be copied — the value would be released twice. Take it out of what holds it (vec_remove, vec_pop) so that this function owns it, or pass what holds it as a parameter: a part of a borrowed parameter is lent back to the caller.` ) )
         } {}
@@ -22745,7 +22775,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // element the container still drops (agora #669).
         ? & & & & ( is_ident_tok bck_arg_tt ) != 0 ( nurl_sym_len2 syms bck_arg_val `__eslot` ) ! ( __is_handle_ty at ) ( str_has_index callee_sink arg_idx ) ( __type_needs_drop at g_root_syms ) {
             ? ( __clone_supported at syms ) { = av ( mem_emit_cloneif cg at av `1` ) } {
-                ( die lex ( nurl_str_cat4 ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+                ( own_die lex ( nurl_str_cat4 ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
                 ( nurl_str_cat4 `' is '` bck_arg_val `', this loop's element: it is still in the container the loop walks, which drops it, and '` ( llvm_to_nurl at ) )
                 ( nurl_str_cat3 `' cannot be copied, so '` fname `' (a 'sink') would release it a second time. ` )
                 `Take the elements out of the container instead (vec_pop, vec_remove, or move the whole container to a function that drains it), or have the callee borrow the element (drop 'sink').` ) )
@@ -23032,7 +23062,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
                 }
             } {}
             ? & & == bck_arg_tt TT_DOT ( __nc_drop_ty at ) == 0 ( nurl_str_len arg_faddr ) {
-                ( die lex ( nurl_str_cat3 ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+                ( own_die lex ( nurl_str_cat3 ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
                 ( nurl_str_cat3 `' moves a '` ( llvm_to_nurl at ) `' out of a field, and it cannot be copied — the struct it is a field of still drops it, so it would be released twice. ` )
                 `Move the whole struct, take the value out by replacing the field (keep it in a binding of its own), or lend it (drop 'sink').` ) )
             } {}
@@ -31579,7 +31609,7 @@ unsafe @ __is_slice_ll s t → b {
     : s lt ( nurl_llty ty )
     : s et ( nurl_str_slice lt 2 - ( nurl_str_len lt ) 10 )
     ? | ( __is_handle_ty et ) ( __type_needs_drop et syms ) {
-        ( die_pos lex line 1 ( nurl_str_cat3 `this gives an 'inout' slice parameter a slice it does not own, of '` ( llvm_to_nurl et ) `' elements, which own values of their own: the caller's slot would share them with their owner. Give it a fresh slice ('[T | …]', or a call that makes one), or pass the slice's owner to a 'sink' parameter and store that.` ) )
+        ( own_die_pos lex line 1 ( nurl_str_cat3 `this gives an 'inout' slice parameter a slice it does not own, of '` ( llvm_to_nurl et ) `' elements, which own values of their own: the caller's slot would share them with their owner. Give it a fresh slice ('[T | …]', or a call that makes one), or pass the slice's owner to a 'sink' parameter and store that.` ) )
     } {}
     : s dp ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print dp ) ( nurl_print ` = extractvalue ` ) ( nurl_print lt ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
@@ -34365,7 +34395,7 @@ unsafe @ __pfo_bind_lends i syms s name → v {
     ? | == n 0 != ( nurl_str_get f0 - n 1 ) 42 { ^ v } {}
     : s el ( nurl_str_slice f0 0 - n 1 )
     ? | ( __ty_holds_view el 0 ) == 2 ( bck_bind_class el ) {
-        ( die lex ( nurl_str_cat3 `'` ( bck_generic_base cn ) `' stores into the elements of a Slice whose elements are views: a Slice views storage another binding owns, and what its elements view is followed nowhere, so a view stored there could outlive what it points into (agora #415). Store it through the Vec that owns the storage — vec_put / vec_set — or store a value that owns its data (string_from, mem_dup).` ) )
+        ( own_die lex ( nurl_str_cat3 `'` ( bck_generic_base cn ) `' stores into the elements of a Slice whose elements are views: a Slice views storage another binding owns, and what its elements view is followed nowhere, so a view stored there could outlive what it points into (agora #415). Store it through the Vec that owns the storage — vec_put / vec_set — or store a value that owns its data (string_from, mem_dup).` ) )
     } {}
 }
 
@@ -35671,7 +35701,7 @@ unsafe @ __src_has_raw_ptr s text → b {
     : s m3 ( nurl_str_cat4 `' is declared in a block that ends before '` bn `' does, and a '` tshow )
     : s m4 ( nurl_str_cat3 `' cannot be copied out of it, nor moved out (a value with a '% Drop' of its own leaves nothing in its place). Declare '` bn `' inside that block, or move the whole of '` )
     : s m5 ( nurl_str_cat4 root `' out to where '` bn `' is used.` )
-    ( die_file_pos ( str_first_word rec ) ( nurl_str_to_int ( str_first_word r1 ) ) ( nurl_str_to_int ( str_first_word ( str_skip_word r1 ) ) )
+    ( own_die_file_pos ( str_first_word rec ) ( nurl_str_to_int ( str_first_word r1 ) ) ( nurl_str_to_int ( str_first_word ( str_skip_word r1 ) ) )
     ( nurl_str_cat ( nurl_str_cat4 m1 m2 m3 m4 ) m5 ) )
 }
 
@@ -44728,6 +44758,8 @@ unsafe @ bck_emit_error s file i line s msg → v {
     // (A walk that only makes its answers reports nothing: the walk made
     // on the final ones does, __bck_walk_scc.)
     ? != 0 g_bck_quiet { ^ v } {}
+    // (…and nothing where the core IR's reader decides ownership: own_die.)
+    ? == 0 g_walk_owns { ^ v } {}
     // Owned strings (`src`, `lt`) are reclaimed by auto-drop at scope
     // exit — no manual frees here (they would double-free).
     : s src ( compiler_read_source file )
@@ -60334,7 +60366,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
             : s __q1 ( nurl_str_cat3 `'` name `' is given back what this call may lend out of '` )
             : s __q2 ( nurl_str_cat3 name `' itself or out of another argument: nurlc cannot tell which one a run hands back, so it cannot know whether '` name )
             : s __q3 ( nurl_str_cat3 `''s old value is still in use or must be released (agora #412). Give '` name `' a value of its own — a copy of the call's result, ( mem_dup … ) — or bind the result to a new name and keep the two owners apart.` )
-            ( die_stmt lex ( nurl_str_cat3 __q1 __q2 __q3 ) )
+            ( own_die_stmt lex ( nurl_str_cat3 __q1 __q2 __q3 ) )
         } {}
         // (Whether a lend of this binding's value can only be the WHOLE
         // value: the callee hands back its parameters whole, never a part of
@@ -60360,7 +60392,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
             : s __p1 ( nurl_str_cat3 `'` name `' is given back what this call may lend out of a part of '` )
             : s __p2 ( nurl_str_cat3 name `' itself — an element, a payload — and its type has no copy: nurlc cannot keep that part alive once '` name )
             : s __p3 ( nurl_str_cat3 `''s old value is released (agora #437). Bind the result to a new name, or take the part out of '` name `' first.` )
-            ( die_stmt lex ( nurl_str_cat3 __p1 __p2 __p3 ) )
+            ( own_die_stmt lex ( nurl_str_cat3 __p1 __p2 __p3 ) )
         } {}
         : b __ud_hty | __ud_kty & & __ud_only_self != 0 ( nurl_str_starts vt `{ i1, ` ) ( __type_needs_drop vt syms )
         ? & & & != 0 ( nurl_str_len __ud_ptr ) == __ud_tt TT_LPAREN __ud_hty | == 0 ( nurl_str_len __ud_borrow ) __ud_self_lend
@@ -62094,7 +62126,7 @@ inline @ gen_field_store i lex i syms i cg → s {
                     = __bck_k 0
                 } {}
                 ? != __bck_k 0 {
-                    ? ( __type_needs_drop ftype syms ) { ( die_pos lex __fs_ol __fs_oc ( __fs_borrowed_copy_msg __bck_k obj_name fname ( llvm_to_nurl pt ) ) ) } {
+                    ? ( __type_needs_drop ftype syms ) { ( own_die_pos lex __fs_ol __fs_oc ( __fs_borrowed_copy_msg __bck_k obj_name fname ( llvm_to_nurl pt ) ) ) } {
                         ? & != __bck_k 1 != __bck_k 5 { ( warn_pos lex __fs_ol __fs_oc ( __fs_borrowed_copy_lost __bck_k obj_name fname ( llvm_to_nurl pt ) ) ) } {}
                     }
                 } {}
@@ -62160,7 +62192,7 @@ inline @ gen_field_store i lex i syms i cg → s {
                 // One it does not own is a view (docs/MEMORY.md §2.13): a
                 // fresh string stored there is owned by nothing (h134, h135).
                 ? & & & != 0 g_auto_drop_strings ( seq ( nurl_llty ftype ) `i8*` ) ! __fs_sreg ! ( bck_unsafe_ctx ) {
-                    ? __fs_fresh { ( die_pos lex __fs_l1 __fs_c1 ( __owned_s_field_msg F `` ) ) } {}
+                    ? __fs_fresh { ( own_die_pos lex __fs_l1 __fs_c1 ( __owned_s_field_msg F `` ) ) } {}
                     ? & ! __fs_fresh != 0 ( nurl_str_len __fs_guard ) { ( mem_note_owned_string_field lex syms __fs_l1 ) } {}
                 } {}
                 ? & & != 0 g_auto_drop_strings ( seq ( nurl_llty ftype ) `i8*` ) __fs_sreg {
@@ -65074,7 +65106,7 @@ unsafe @ __gen_agg_lit_body i lex i syms i cg → s {
         // holds an owned string; a binding of the fresh one, stored here as a
         // view, lives as long as the walk lets the struct use it.
         ? & & != 0 g_auto_drop_strings is_str_fresh ! ( bck_unsafe_ctx ) {
-            ( die_pos lex __fld_line __fld_col ( __owned_s_field_msg fld_moved_str fld_first_val ) )
+            ( own_die_pos lex __fld_line __fld_col ( __owned_s_field_msg fld_moved_str fld_first_val ) )
         } {}
         // …and one that may be fresh (a call that answers per call), once
         // the call's summaries are final.
@@ -65901,7 +65933,7 @@ unsafe @ __gen_agg_lit_body i lex i syms i cg → s {
             : s __mx_ty ( nurl_str_slice __mx_tv 0 __mx_t2 )
             : s __mx_v ( nurl_str_slice __mx_tv + __mx_t2 1 - - ( nurl_str_len __mx_tv ) __mx_t2 1 )
             ? ! ( __clone_supported __mx_ty syms ) {
-                ( die_pos lex agg_line agg_col ( nurl_str_cat4 `this '` cur_sname `' is handed on with a field of its own beside a field it only borrows, a '` ( nurl_str_cat ( llvm_to_nurl __mx_ty )
+                ( own_die_pos lex agg_line agg_col ( nurl_str_cat4 `this '` cur_sname `' is handed on with a field of its own beside a field it only borrows, a '` ( nurl_str_cat ( llvm_to_nurl __mx_ty )
                 `', which cannot be copied: lent whole, the literal's own field is released by no one, and owned whole, the borrowed one is released twice. Give the literal a value its owner gives up (a 'sink' parameter, a value taken out of what holds it), or hand back the borrowed part on its own.` ) ) )
             } {}
             : s __mx_c ( mem_emit_cloneif cg __mx_ty __mx_v `1` )
@@ -66092,7 +66124,7 @@ inline @ gen_slice_literal i lex i syms i cg → s {
         // one there is owned by nothing (h140) — and one a call may hand
         // over, once that call's summaries are final.
         ? & & != 0 g_auto_drop_strings ( seq ( nurl_llty vt ) `i8*` ) ! ( bck_unsafe_ctx ) {
-            ? ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` ) { ( die_pos lex __sel __sec ( __owned_s_field_msg F `` ) ) } {}
+            ? ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` ) { ( own_die_pos lex __sel __sec ( __owned_s_field_msg F `` ) ) } {}
             ? & == __setok TT_LPAREN != 0 ( nurl_sym_len syms `__last_call_guard__` ) { ( mem_note_owned_string_field lex syms __sel ) } {}
         } {}
         // A slice of closures owns its elements' envs (docs/MEMORY.md
@@ -70004,7 +70036,7 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
         // (One bound from a call whose summary says it never lends owns
         // its value: __binding_owned_now.)
         ? & & != 0 ( nurl_str_len __cfp ) != 0 ( nurl_sym_len2 syms __cfp `__sborrow` ) ! ( __binding_owned_now syms __cfp ) {
-            ( die_pos lex clo_line clo_col ( nurl_str_cat ( nurl_str_cat3 `this closure gives a field of '` __cf `' a new value through its pointer to it, but '` )
+            ( own_die_pos lex clo_line clo_col ( nurl_str_cat ( nurl_str_cat3 `this closure gives a field of '` __cf `' a new value through its pointer to it, but '` )
             ( nurl_str_cat3 __cf `' borrows its value (a copy vec_at lends, a field read, a value a call lends): the struct is its owner's, so the value stored would have no owner and leak. ` `Give the field its value outside the closure, or capture a binding that owns its value (a copy: clone, string_from, vec_clone).` ) ) )
         } {}
     }
@@ -70068,7 +70100,7 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
             : s __cnp ( mem_udrop_ptr_of syms __cnw )
             : b __cno & & & != 0 ( nurl_str_len __cnp ) == 0 ( nurl_sym_len2 syms __cnp `__sborrow` ) == 0 ( nurl_sym_len2 syms __cnp `__alias` ) ! ( __alias_of_borrowed_param syms __cnp )
             ? & & & & & & __cno != 0 ( nurl_str_starts __cnt `{ i1, ` ) ( __type_needs_drop __cnt syms ) ! ( __env_handle_ty __cnt syms ) ! ( __is_capture_byref __cnw syms ) ! ( __capture_lends __cnw syms ) ! ( str_contains_word g_nc_own_caps __cnw ) {
-                ( die_pos lex clo_line clo_col ( nurl_str_cat3 ( nurl_str_cat3 `this closure is returned and captures '` __cnw `', a '` ) ( llvm_to_nurl __cnt )
+                ( own_die_pos lex clo_line clo_col ( nurl_str_cat3 ( nurl_str_cat3 `this closure is returned and captures '` __cnw `', a '` ) ( llvm_to_nurl __cnt )
                 ( nurl_str_cat `' this function releases when it returns, and the closure cannot be given a copy of its own: it holds what has no Clone (a value with a Drop of its own), or an option of an option. Running it would read freed memory (agora #463). ` `Share the value instead — bind it as an ( Rc T ) (rc_new) and capture that — or capture what the closure needs out of it (a field, a copy of the payload).` ) ) )
             } {}
         }
@@ -86147,7 +86179,7 @@ unsafe @ __die_at_fn s fname s what s msg → v {
 
 @ __nc_copy_die_rec s rec s ty → v {
     : s r1 ( str_skip_word rec )
-    ( die_file_pos ( str_first_word rec ) ( nurl_str_to_int ( str_first_word r1 ) ) ( nurl_str_to_int ( str_first_word ( str_skip_word r1 ) ) )
+    ( own_die_file_pos ( str_first_word rec ) ( nurl_str_to_int ( str_first_word r1 ) ) ( nurl_str_to_int ( str_first_word ( str_skip_word r1 ) ) )
     ( nurl_str_cat3 `a borrowed '` ( llvm_to_nurl ty ) `' would have to be copied here, and it cannot be copied — pass or return the value its owner gives up (a 'sink' parameter, or the owner itself), not a borrow of it` ) )
 }
 
@@ -86467,7 +86499,7 @@ unsafe @ __sx_names_capture i syms s sx → b {
     ? & clo ( is_ident_tok tt ) {
         : s what ? ( __is_clo_param syms val ) `a parameter of this closure, which its caller keeps` ? ( __is_clo_capture syms val ) `captured by this closure, which keeps it for its next call` ``
         ? != 0 ( nurl_str_len what ) {
-            ( die_pos lex g_stmt_line g_stmt_col ( nurl_str_cat4 ( nurl_str_cat3 `a closure hands its result to its caller as the caller's own, but '` val `' is ` )
+            ( own_die_pos lex g_stmt_line g_stmt_col ( nurl_str_cat4 ( nurl_str_cat3 `a closure hands its result to its caller as the caller's own, but '` val `' is ` )
             what ( nurl_str_cat3 `, and a '` tshow `' cannot be copied — the value would be released twice. ` )
             `Hand back a value the body makes (a literal, or a call that hands its result over), or let the closure take the value as a parameter and return what it builds from it.` ) )
         } {}
@@ -86480,7 +86512,7 @@ unsafe @ __sx_names_capture i syms s sx → b {
         // value is all it can hand over; agora #446.)
         : s dv ( __clo_nc_derived syms val )
         ? != 0 ( nurl_str_len dv ) {
-            ( die_pos lex g_stmt_line g_stmt_col ( nurl_str_cat4 ( nurl_str_cat3 `a closure hands its result to its caller as the caller's own, but '` val `' is read out of '` ) dv ( nurl_str_cat3 `', which the closure keeps (a capture) or its caller does (a parameter), and a '` tshow `' cannot be copied — the value would be released twice. ` )
+            ( own_die_pos lex g_stmt_line g_stmt_col ( nurl_str_cat4 ( nurl_str_cat3 `a closure hands its result to its caller as the caller's own, but '` val `' is read out of '` ) dv ( nurl_str_cat3 `', which the closure keeps (a capture) or its caller does (a parameter), and a '` tshow `' cannot be copied — the value would be released twice. ` )
             `Hand back a value the body makes (a literal, or a call that hands its result over), or take the value out of the Vec it is in (vec_remove, vec_pop) so the body owns it.` ) )
         } {}
         : s nk ( nurl_sym_get2 syms val `__nclk` )
@@ -101114,7 +101146,7 @@ unsafe @ main → i {
         } {}
         ? ( seq a `--stdin` ) { = stdin_source T = ai + ai 1 continue } {}
         ? ( seq a `--check` ) { = check_only T = ai + ai 1 continue } {}
-        ? ( seq a `--emit-core` ) { = check_only T = g_core_on 1 = ai + ai 1 continue } {}
+        ? ( seq a `--emit-core` ) { = check_only T = g_core_on 1 = g_walk_owns 0 = ai + ai 1 continue } {}
         ? != 0 ( nurl_str_starts a `--coverage-link-ir=` ) {
             = g_coverage_link_ir ( nurl_str_slice a 19 - ( nurl_str_len a ) 19 )
             ? == 0 ( nurl_str_len g_coverage_link_ir ) {

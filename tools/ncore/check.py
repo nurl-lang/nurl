@@ -520,6 +520,22 @@ class FnCheck:
             # copies of their handles (MEMORY.md §2.11, h310)
             av = AV(av.own, av.loans, av.alias, self.closure_owned(av.held), av.call)
         own_block = dest_vid is not None and self.refers_to_block(av, dest_vid)
+        if is_ret and av.own == "L" and not av.call and av.alias and op[0] == "v" and not op[2]:
+            # what a `?` / `??` or a value block selected among this
+            # frame's owners goes to the caller with the return: the one
+            # selected moves out (MEMORY.md §2.2); a parameter it may be
+            # instead is lent, as before
+            mine = [a for a in av.alias if (st.vals.get(a[0]) is not None and st.vals[a[0]].own == "O"
+                                            and self.fn.vars[a[0]].kind != "param" and "*" not in a[1])]
+            if mine and self.fn.vars[op[1]].kind == "temp":
+                gone = set()
+                for a in mine:
+                    gone |= {l for l in av.loans if self.loans.get(l, (None,))[0][0:1] == (a[0],)}
+                    self.effect(st, a, "replace", line)
+                    if not a[1]:
+                        st.vals[a[0]] = AV("M" if len(av.alias) == 1 else "X")
+                rest = av.loans - gone
+                av = AV("L" if rest else "O", rest, av.alias - set(mine), av.held, av.call)
         # (a value that is its own on some paths and a lend on others - a
         # join of a fresh value and a borrowed one - is copied on the paths
         # that lend it, where its new holder outlives what it borrows)
