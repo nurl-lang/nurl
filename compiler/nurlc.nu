@@ -19686,6 +19686,10 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             = arg_join_io & | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST ( __all_inout syms ( nurl_sym_get syms `__last_phi_idents__` ) )
             = arg_join_ioh ? arg_join_io ( __join_io_handle syms ( nurl_sym_get syms `__last_phi_idents__` ) ) ``
             ? | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST { = __call_jphi ( __word_union __call_jphi ( nurl_sym_get syms `__last_phi_idents__` ) ) } {}
+            // (…and a value block's tail binding: `( idg [String] { : String t
+            // ( mk 3 ) t } )` hands on t, a binding of the scope the block is
+            // in — agora #830.)
+            ? & == bck_arg_tt TT_LBRACE ( is_ident_tok ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) ) ) { = __call_jphi ( __word_union __call_jphi ( nurl_sym_get syms `__tail_first_val__` ) ) } {}
             = arg_lent ( mem_lent_cond syms cg at arg_eff_tt bck_arg_val )
             // (A call that may lend its result — by name, as a view, or on
             // some paths — for a value no copy can stand in for, h228.)
@@ -23145,7 +23149,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
 // parent's snapshot, not defer-snapshotted, with a destructor to run).
 // Returns the exit label, or `` when the arm has nothing to drop — then
 // the caller keeps branching straight to the join.
-@ mem_arm_exit_open i syms i cg s old_user s old_structs s ty s hown00 s xhown i tt0 b lends → s {
+@ mem_arm_exit_open i syms i cg s old_user s old_structs s old_slices s ty s hown00 s xhown i tt0 b lends → s {
     : s usnap ( nurl_sym_get g_fn_escapes `__dsnap_udrop__` )
     : ~ s udelta ``
     : ~ s urest ( nurl_sym_get syms `__user_drops__` )
@@ -23182,7 +23186,23 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         { ? ( str_contains_word old_structs ptr ) {} { ( mem_dkeep_mark ptr ) } }
         { = sdelta ? == 0 ( nurl_str_len sdelta ) ( nurl_str_cat rec `` ) ( nurl_str_cat3 sdelta ` ` rec ) }
     }
-    ? & == 0 ( nurl_str_len udelta ) == 0 ( nurl_str_len sdelta )
+    // (…and the slices it declared — the owned buffers mem_drop_new_slices
+    // frees at a fall-through: parked with the rest, they go where the
+    // rest goes. Left behind, a lent arm's slice literal leaked; agora
+    // #830.)
+    : ~ s ldelta ``
+    ? != 0 g_fn_slice_decls {
+        : s lsnap ( nurl_sym_get g_fn_escapes `__dsnap_slice__` )
+        : s lowned ( nurl_sym_get syms `__owned_slices__` )
+        : ~ s lrest ( nurl_sym_get syms `__slice_decls__` )
+        ~ != 0 ( nurl_str_len lrest ) {
+            : s key ( str_first_word lrest ) = lrest ( str_skip_word lrest )
+            ? | | ( str_contains_word old_slices key ) ! ( str_contains_word lowned key ) ( str_contains_word lsnap key ) {} {
+                = ldelta ? == 0 ( nurl_str_len ldelta ) ( nurl_str_cat key `` ) ( nurl_str_cat3 ldelta ` ` key )
+            }
+        }
+    } {}
+    ? & & == 0 ( nurl_str_len udelta ) == 0 ( nurl_str_len sdelta ) == 0 ( nurl_str_len ldelta )
     { ^ ( nurl_str_cat `` `` ) } {}
     // (An arm that lends out of bindings made outside it: its locals go
     // whatever its ownership bit says — mem_arm_outer_lend, asked only now
@@ -23204,6 +23224,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     : s skey ( nurl_str_cat lbl `__x_sfields` )
     ( nurl_sym_set g_fn_escapes ukey udelta )
     ( nurl_sym_set g_fn_escapes skey sdelta )
+    ? != 0 ( nurl_str_len ldelta ) { ( nurl_sym_set g_fn_escapes ( nurl_str_cat lbl `__x_slices` ) ldelta ) } {}
     : s __xh ( mem_arm_exit_hown ty hown0 )
     ( nurl_sym_set g_fn_escapes ( nurl_str_cat lbl `__x_hown` ) ? & == 0 ( nurl_str_len __xh ) != 0 ( nurl_str_len xhown ) xhown __xh )
     ^ lbl
@@ -23476,6 +23497,7 @@ unsafe @ __ty_no_address s ty0 i depth → b {
         : s ukey ( nurl_str_cat lbl `__x_udrops` )
         : s skey ( nurl_str_cat lbl `__x_sfields` )
         : s hkey ( nurl_str_cat lbl `__x_hown` )
+        : s lkey ( nurl_str_cat lbl `__x_slices` )
         : s hown ( nurl_sym_get g_fn_escapes hkey )
         ( nurl_print lbl ) ( nurl_print `:\n` )
         ? & ! drop != 0 ( nurl_str_len hown )
@@ -23487,6 +23509,12 @@ unsafe @ __ty_no_address s ty0 i depth → b {
                 : s lv ( str_first_word urest ) = urest ( str_skip_word urest )
                 ( mem_journal_forget_userdrop cg ptr vt )
                 ( mem_emit_gated_drop_when cg ptr vt ? ( seq sf `-` ) `` sf ? ( seq lv `-` ) `` lv hown )
+            }
+            // (…its slices on the same runs: __slice_free_when.)
+            : ~ s lrest ( nurl_sym_get g_fn_escapes lkey )
+            ~ != 0 ( nurl_str_len lrest ) {
+                : s key ( str_first_word lrest ) = lrest ( str_skip_word lrest )
+                ( __slice_free_when syms cg key hown )
             } }
         {}
         // Consumed, and nothing to drop here (the value may be one of
@@ -23521,9 +23549,15 @@ unsafe @ __ty_no_address s ty0 i depth → b {
                 : s leaf_sname ( str_first_word srest ) = srest ( str_skip_word srest )
                 : s leaf_idx ( str_first_word srest ) = srest ( str_skip_word srest )
                 ( mem_emit_struct_field_drop syms cg ptr sname path kind leaf_sname leaf_idx )
+            }
+            : ~ s lrest ( nurl_sym_get g_fn_escapes lkey )
+            ~ != 0 ( nurl_str_len lrest ) {
+                : s key ( str_first_word lrest ) = lrest ( str_skip_word lrest )
+                ( mem_emit_slice_free_key syms cg key )
             } }
         {}
         ( nurl_print `  br label %` ) ( nurl_print end_label ) ( emit_dbg_eol )
+        ( nurl_sym_set g_fn_escapes lkey `` )
         ( nurl_sym_set g_fn_escapes ukey `` )
         ( nurl_sym_set g_fn_escapes skey `` )
         ( nurl_sym_set g_fn_escapes hkey `` )
@@ -24001,7 +24035,7 @@ unsafe @ gen_cond i lex i syms i cg → s {
             ? != 0 g_fn_slice_decls { ( mem_drop_new_slices syms cg old_slices_t ) } {} }
         { ? != 0 g_auto_drop_strings
             { ( mem_defer_new_strings syms old_strs_t )
-                : s __tx ( mem_arm_exit_open syms cg old_user_t old_structs_t tt2 t_hown t_xhown t_tt0 & t_lends | ! t_took t_tookc )
+                : s __tx ( mem_arm_exit_open syms cg old_user_t old_structs_t old_slices_t tt2 t_hown t_xhown t_tt0 & t_lends | ! t_took t_tookc )
                 ? != 0 ( nurl_str_len __tx )
                 { = tlbl ( nurl_str_cat __tx `` )
                     = t_via_exit T
@@ -24208,7 +24242,7 @@ unsafe @ gen_cond i lex i syms i cg → s {
             ? != 0 g_fn_slice_decls { ( mem_drop_new_slices syms cg old_slices_e ) } {} }
         { ? != 0 g_auto_drop_strings
             { ( mem_defer_new_strings syms old_strs_e )
-                : s __ex ( mem_arm_exit_open syms cg old_user_e old_structs_e et2 e_hown e_xhown e_tt0 & e_lends | ! e_took e_tookc )
+                : s __ex ( mem_arm_exit_open syms cg old_user_e old_structs_e old_slices_e et2 e_hown e_xhown e_tt0 & e_lends | ! e_took e_tookc )
                 ? != 0 ( nurl_str_len __ex )
                 { = elbl ( nurl_str_cat __ex `` )
                     = e_via_exit T
@@ -26661,7 +26695,7 @@ unsafe @ gen_match i lex i syms i cg → s {
                 { ( mem_defer_new_strings syms old_strs_m )
                     // Drop values and owned struct fields wait in a private
                     // exit block for the join's verdict (mem_arm_exit_open).
-                    : s __ax ( mem_arm_exit_open syms cg old_user_m old_structs_m arm_type arm_hown arm_xhown arm_tt0 & arm_lends | ! arm_took arm_tookc )
+                    : s __ax ( mem_arm_exit_open syms cg old_user_m old_structs_m old_slices_m arm_type arm_hown arm_xhown arm_tt0 & arm_lends | ! arm_took arm_tookc )
                     ? != 0 ( nurl_str_len __ax )
                     { = arm_lbl ( nurl_str_cat __ax `` )
                         = arm_via_exit T
@@ -29264,6 +29298,31 @@ unsafe @ __bck_fall_ret_record i lex i syms i first_tt s first_val i sxn0 i line
         ( nurl_print `  store ` ) ( nurl_print ( nurl_llty ty ) ) ( nurl_print ` zeroinitializer, ` ) ( nurl_print ( nurl_llty ty ) )
         ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
     } {}
+}
+
+// The owned slice a word of the owned-slice lists stands for (`key`,
+// __slice_key) freed on the runs `cond` holds — with no branch: the exit
+// block it is emitted in is named by its join's phi. A scratch slot holds
+// the slice there and the empty slice elsewhere, and is what is freed; in a
+// loop the slot itself is emptied where it was freed. (mem_arm_exits_emit,
+// agora #830.)
+@ __slice_free_when i syms i cg s key s cond → v {
+    : s ty ? == 37 ( nurl_str_get key 0 ) ( nurl_sym_get2 g_fn_escapes key `__slt` ) ( nurl_sym_get syms key )
+    : s ptr ? == 37 ( nurl_str_get key 0 ) ( nurl_str_cat key `` ) ( nurl_sym_get2 syms key `__ptr` )
+    ? | == 0 ( nurl_str_len ty ) == 0 ( nurl_str_len ptr ) { ^ v } {}
+    // (A constant answer needs no scratch slot.)
+    ? | ( seq cond `false` ) ( seq cond `0` ) { ^ v } {}
+    ? | ( seq cond `true` ) ( seq cond `1` ) { ( mem_emit_slice_free_key syms cg key ) ^ v } {}
+    : s ll ( nurl_llty ty )
+    // (By pointer: the slot itself where `cond` holds, an empty slice in a
+    // scratch slot elsewhere — what is freed, and, in a loop, what is
+    // emptied.)
+    : s z ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print z ) ( nurl_print ` = alloca ` ) ( nurl_print ll ) ( nurl_print `\n` )
+    ( nurl_print `  store ` ) ( nurl_print ll ) ( nurl_print ` zeroinitializer, ptr ` ) ( nurl_print z ) ( nurl_print `\n` )
+    : s pp ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print pp ) ( nurl_print ` = select i1 ` ) ( nurl_print cond ) ( nurl_print `, ptr ` ) ( nurl_print ptr ) ( nurl_print `, ptr ` ) ( nurl_print z ) ( nurl_print `\n` )
+    ( mem_emit_slice_free_at cg ty pp )
 }
 
 // Whether an owned slice owns its elements as well as its buffer: an
