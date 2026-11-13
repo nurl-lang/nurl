@@ -147,6 +147,7 @@ class FnCheck:
         self.defer_bodies = []
         self.tails_memo = {}
         self.agg_lends = {}      # a literal temporary -> the bindings it shows and has not taken
+        self.temp_fresh = {}     # a temporary -> its value is what a call made and handed over
         self.s_invokes = set()
         self.s_cloargs = set()
         self.s_retparams = set()
@@ -429,6 +430,15 @@ class FnCheck:
                 loans.add(self.loan(st, site, a, "handle"))
             return AV("L", loans, alias, sub)
         return av
+
+    def fresh_string_kept(self, st, op, cur, line, where):
+        """A fresh raw string - the result of a call that hands its string
+        over - kept by a value (a field, an element) is owned by nothing: a
+        raw string in a value is a view (MEMORY.md §2.13)."""
+        v = self.fn.vars[op[1]]
+        if (v.kind == "temp" and v.ty is not None and v.ty[0] == "s" and cur.own == "O" and not op[2]
+                and not cur.held and self.temp_fresh.get(op[1])):
+            self.err(line, f"a fresh string handed to {where} is owned by nothing")
 
     def lent_part(self, av):
         """A part read out of a value that holds it as a lend - a field the
@@ -723,6 +733,7 @@ class FnCheck:
             if kind == "value":
                 op = ops[k]
                 if src.own in ("O", "P") and op[0] == "v" and not op[2]:
+                    self.fresh_string_kept(st, op, src, line, f"{name}, which keeps it")
                     moved = self.move_out(st, op[1], line)
                     add = hroot(self.closure_owned(moved.held), dpath)
                 elif src.own == "L":
@@ -731,6 +742,9 @@ class FnCheck:
                         # a lend stored as an owner is copied, with the views it holds
                         add = hroot(src.held, dpath)
                     else:
+                        if ty is not None and self.T.owning(ty) and ty[0] not in VIEW_TYPES:
+                            self.err(line, f"{name} keeps a borrowed value that would have to be copied, "
+                                           f"and it cannot be copied")
                         add = hfrom(src.loans, dpath) | hroot(src.held, dpath)
                 else:
                     add = hroot(src.held, dpath)
@@ -1062,8 +1076,14 @@ class FnCheck:
                     held |= hroot(av.held, fp)
                     lent[names[i]] = op[1]
                     continue
+                if cur is not None:
+                    self.fresh_string_kept(st, op, cur, line, "a field")
                 av = self.transfer(st, op, line, (site, i), dest_depth, fty, f"field {i + 1}", stored=True)
                 if av.own == "L":
+                    if (fty is not None and self.T.owning(fty) and fty[0] not in VIEW_TYPES
+                            and not self.T.copyable(fty)):
+                        self.err(line, f"field {i + 1}: a borrowed value would have to be copied here, "
+                                       f"and it cannot be copied")
                     if fty is not None and self.T.owning(fty) and fty[0] not in VIEW_TYPES and self.T.copyable(fty):
                         # a lend stored into an owning field is copied: the
                         # copy holds the views the value holds (§2.13)
@@ -1161,6 +1181,9 @@ class FnCheck:
         if k == "let":
             _, vid, rv, ln = s
             v = self.fn.vars[vid]
+            if rv is not None and v.kind == "temp":
+                # (a call whose summary says its result is its own)
+                self.temp_fresh[vid] = rv[0] == "call" and self.summary(rv[1])["res"] == "own" and not self.summary(rv[1])["rholds"]
             if rv is None:
                 st.vals[vid] = AV("U")
             else:
@@ -1206,6 +1229,11 @@ class FnCheck:
                     # `= o ( f o … )`: o is given (a part of) its own value back
                     # - it keeps owning it; nothing is released (the keep rule)
                     rest = {l for l in new.loans if self.loans.get(l, ((None,),))[0][0] != vid}
+                    if rest and new.call and v.ty is not None and not self.T.copyable(v.ty):
+                        # which of them a run hands back is not known, so
+                        # neither is whether the binding still owns its value
+                        self.err(ln, f"{v.name} is given back what this call may lend out of itself "
+                                     f"or out of another argument")
                     st.vals[vid] = AV("O", rest, frozenset(), cur.held | new.held)
                     return st
                 if cur is not None and cur.own in ("O", "P"):
@@ -1462,6 +1490,7 @@ def check_program(prog, max_rounds=40):
         if not changed:
             break
     errors = []
+    T = Types(prog)
     trusted = getattr(prog, "trusted", ())
     for name, fn in prog.fns.items():
         if name in trusted:
@@ -1469,6 +1498,14 @@ def check_program(prog, max_rounds=40):
         fc = FnCheck(prog, fn, summ, final=True)
         sm = fc.check()
         errors += fc.errors
+        lent = {k for (k, _, _) in sm["lends"]} & set(sm["consumes"])
+        if lent and fn.ret is not None and not T.copyable(fn.ret):
+            # the caller cannot both keep an argument the result borrows
+            # and have handed it over
+            errors.append((name, fn.line, "hands back what it may lend out of a parameter it takes over on another path"))
+        if (name.endswith("_clone") or name.endswith("_share")) and sm["res"] == "lent":
+            # a handle's copy hook makes a value of its own (§7.6)
+            errors.append((name, fn.line, "a copy hook hands its argument back, whole or in part"))
         if getattr(fn, "is_closure", False) and sm["stores"]:
             # a closure's type does not say what running it stores, so
             # nothing where it runs would follow a view it leaves in a
