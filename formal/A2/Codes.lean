@@ -122,16 +122,15 @@ theorem MemCodes.of_st {P : Prog} {m m' : Mem} (h : MemCodes P m) (hst : m'.st =
     type, an integer lock, a view, has nothing more to check.) -/
 theorem BlkCodes.upd {P : Prog} {B : Nat → Option Blk} (h : BlkCodes P B) {k : Nat} {bl : Blk}
     (hbl : PkgOK P bl.tree ∧ PkgOK P bl.rd)
-    (hd : ∀ n f u kd o, bl = ⟨Ty.nest n (.dtor f u), kd, o⟩ → DropFnOK P f u := by
-      intro n _ _ _ _ e; cases n <;> cases e) :
+    (hd : ∀ f u, bl.ty.Reaps f u → DropFnOK P f u := by reaps_none) :
     BlkCodes P (upd B k (some bl)) := by
-  refine ⟨fun k' bl' hk' => ?_, fun k' n f u kd o hk' => ?_⟩
+  refine ⟨fun k' bl' hk' => ?_, fun k' bl' hk' => ?_⟩
   · by_cases hkk : k' = k
     · subst hkk; rw [upd_same] at hk'; cases hk'; exact hbl
     · rw [upd_ne _ _ hkk] at hk'; exact h.1 k' bl' hk'
   · by_cases hkk : k' = k
-    · subst hkk; rw [upd_same] at hk'; cases hk'; exact hd n f u kd o rfl
-    · rw [upd_ne _ _ hkk] at hk'; exact h.2 k' n f u kd o hk'
+    · subst hkk; rw [upd_same] at hk'; cases hk'; exact hd
+    · rw [upd_ne _ _ hkk] at hk'; exact h.2 k' bl' hk'
 
 /-- Agora #755: a block put where one of the same type was (a lock block
     whose payload is checked out, given back or changed) keeps its
@@ -292,19 +291,17 @@ theorem EvalR.codes {P : Prog} {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (he :
     -- A3.5b: the payload may hold packages, the ones the value moved in held
     obtain ⟨hv, hm1⟩ := h1.codes h
     exact ⟨pkgOK_leaf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h),
-      hm1.withBlk rfl (hm1.blk.upd (blkCodes_arc hv) (fun n f u kd o e => by cases e; exact hr n f u rfl))⟩
+      hm1.withBlk rfl (hm1.blk.upd (blkCodes_arc hv) hr)⟩
   | lockNew h1 _ =>
     obtain ⟨hv, hm1⟩ := h1.codes h
     exact ⟨pkgOK_leaf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h),
-      hm1.withBlk rfl (hm1.blk.upd (blkCodes_lock fun _ e => by cases e; exact hv)
-        (fun n f u kd o e => by cases e; exact hr n f u rfl))⟩
+      hm1.withBlk rfl (hm1.blk.upd (blkCodes_lock fun _ e => by cases e; exact hv) hr)⟩
   | arcClone _ => exact ⟨pkgOK_leaf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h), h⟩
   | lockClone _ => exact ⟨pkgOK_leaf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h), h⟩
   | cellNew h1 _ =>
     obtain ⟨hv, hm1⟩ := h1.codes h
     exact ⟨pkgOK_leaf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h),
-      hm1.withBlk rfl (hm1.blk.upd (blkCodes_lock fun _ e => by cases e; exact hv)
-        (fun n f u kd o e => by cases e; exact hr n f u rfl))⟩
+      hm1.withBlk rfl (hm1.blk.upd (blkCodes_lock fun _ e => by cases e; exact hv) hr)⟩
   | cellClone _ => exact ⟨pkgOK_leaf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h), h⟩
   | glob _ hf =>
     rcases hf with ⟨_, _, _, _, rfl, _⟩ | ⟨_, _, _, _, rfl, _⟩ <;>
@@ -355,9 +352,13 @@ theorem EvalR.codes {P : Prog} {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (he :
         · exact pkgOK_elem (hp.child Child.fst) he
         · simp at he; subst he; exact hv
     | snd => exact pkgOK_int P _
-  | chanSendClosed _ h1 _ _ =>
-    obtain ⟨_, hm1⟩ := h1.codes h
-    exact ⟨pkgOK_int P _, hm1.of_st rfl⟩
+  | @chanSendClosed _ _ _ k t s q f v m1 _ h1 hk ht _ _ =>
+    -- Agora #755: the value goes into a lock block of the queue's element
+    -- type, whose destructor is the channel's elements' (`Ty.Reaps.chan`)
+    obtain ⟨hv, hm1⟩ := h1.codes h
+    refine ⟨pkgOK_int P _, hm1.withBlk rfl (hm1.blk.upd (blkCodes_lock fun _ e => by cases e; exact hv)
+      (fun f' u' hr => ?_))⟩
+    exact hm1.blk.2 k _ hk f' u' (.chan ht hr)
   | @chanRecv _ _ _ _ _ u c d f v es _ hk _ _ =>
     -- A3.4: the queue's head was in the channel's payload
     have hp : PkgOK P (.pair (.node u c d (v :: es)) (.int f)) := (hB _ _ hk).1
@@ -517,9 +518,7 @@ theorem codes_step {P : Prog} (hPc : ProgCodes P) {m : Mem} {s : Stmt} {r : Res}
     refine ⟨MemCodes.withBlk (m := m.set m.nv ⟨true, some p⟩)
       (MemCodes.set hm (fun V e => by cases e; exact (hB _ _ hk).1)) rfl
       (hm.blk.upd (blkCodes_dead fun _ e => by cases e)
-        (fun n' f' u' kd o e => by
-          obtain ⟨-, rfl, rfl⟩ := Ty.nest_dtor_inj (Blk.mk.inj e).1
-          exact hm.dead k0 n f u _ _ hk)), trivial, hs⟩
+        (fun f' u' hr => hm.dead k0 _ hk f' u' hr)), trivial, hs⟩
   | scopeLSkip hrl _ =>
     intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact ⟨hrl.codes hm, trivial⟩

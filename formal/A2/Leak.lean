@@ -324,17 +324,20 @@ theorem covers_evalR {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (hc : Covers m)
         · exact .inr (.inl h)
         · exact .inr (.inr (.inl h))
       · exact Or.inl (Or.inr ⟨k', bl, by simp [upd, he, hk'], hik⟩)
-  | @chanSendClosed _ _ _ _ _ _ _ w m1 a' _ htk _ hf =>
-    -- ... or, on a closed channel, drops: no address of it stays live
-    have hle : m.alloc i = true := by rw [← htk.alloc]; exact hf.le hi
-    rcases hc i hle with ⟨o', U, hU, hiU⟩ | hp
+  | @chanSendClosed _ _ _ _ _ u _ _ w m1 _ htk _ _ hfr _ =>
+    -- ... or, on a closed channel, into a fresh lock block (Agora #755): the
+    -- value is that block's payload, for the marking sweep to free or reap
+    have hi' : m.alloc i = true := by rw [← htk.alloc]; exact hi
+    have hgrow : ∀ {j}, PayAddr m1 j →
+        PayAddr { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨u, .lock, some w⟩) } j := by
+      intro j ⟨k, bl, hk, hj⟩
+      have hne : k ≠ m1.nid := fun e => by rw [e, hfr] at hk; cases hk
+      exact ⟨k, bl, by simpa [upd, hne] using hk, hj⟩
+    rcases hc i hi' with ⟨o', U, hU, hiU⟩ | hp
     · rcases htk.owned hU with hU1 | ⟨_, hUw⟩
       · exact Or.inl (Or.inl ⟨o', U, hU1, hiU⟩)
-      · subst hUw
-        have := hf.freed hiU
-        change a' i = true at hi
-        rw [this] at hi; cases hi
-    · refine Or.inl (Or.inr ?_)
+      · exact Or.inl (Or.inr ⟨m1.nid, ⟨u, .lock, some w⟩, by simp [upd], by rw [← hUw]; exact hiU⟩)
+    · refine Or.inl (Or.inr (hgrow ?_))
       unfold PayAddr; rw [htk.blk]; exact hp
   | @chanRecv _ _ _ k t u c d f v es _ hk _ _ =>
     -- A3.4: the queue's head leaves the payload as the value in flight

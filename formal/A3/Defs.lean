@@ -1458,7 +1458,7 @@ theorem chanSend_send {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {a y : Var} 
     (ha : Γ a = some Ea) (hla : Ea.live = true) (htya : Ea.ty = .lk (.prod (.vec (.fn ms .send)) .int))
     (hy : Γ y = some Ey) (hl : Ey.live = true) (hty : Ey.ty = .fn ms .send)
     (hpa : PushArg Γ F y Ey (.fn ms .send) D Γ1) : RhsT Γ F (.chanSend a y) intE Γ1 :=
-  RhsT.chanSend ha hla htya hy hl hty hpa
+  RhsT.chanSend ha hla (htya ▸ Ty.chanOf_plain _) hy hl hty hpa
 
 /-- A Send closure that captured a library handle crosses a spawn only with
     every other owner of the handle's state: the crossing check counts what
@@ -2802,7 +2802,7 @@ theorem chanSend_kept {m m1 : Mem} {a y : Var} {v : Val} (ht : TakeVal m y v m1)
   | chanSend _ ht' _ _ _ _ hck =>
     obtain ⟨rfl, rfl⟩ := ht.det ht'
     exact not_sendCheck hv hz hw hck
-  | chanSendClosed _ ht' _ _ hck =>
+  | chanSendClosed _ ht' _ _ _ hck =>
     obtain ⟨rfl, rfl⟩ := ht.det ht'
     exact not_sendCheck hv hz hw hck
 
@@ -2813,7 +2813,7 @@ theorem chanSend_moves {m m' : Mem} {a y : Var} {r : Val} {o : Bool} (h : EvalR 
     ∃ v m1, TakeVal m y v m1 ∧ m'.st = m1.st ∧ SendCheck m1.blk [v] m'.st := by
   cases h with
   | chanSend _ ht _ _ _ _ hck => exact ⟨_, _, ht, rfl, hck⟩
-  | chanSendClosed _ ht _ _ hck => exact ⟨_, _, ht, rfl, hck⟩
+  | chanSendClosed _ ht _ _ _ hck => exact ⟨_, _, ht, rfl, hck⟩
 
 /-- h358 (`rc_in_a_locked_in_an_arc_on_two_threads`) and h357
     (`rwlocked_of_a_library_handle_on_two_threads`): a value that holds a
@@ -2977,7 +2977,7 @@ theorem chanSend_guard {m m1 : Mem} {a y : Var} {v : Val} (ht : TakeVal m y v m1
   | chanSend _ ht' _ _ _ _ hck =>
     obtain ⟨rfl, rfl⟩ := ht.det ht'
     exact hng hck.2
-  | chanSendClosed _ ht' _ _ hck =>
+  | chanSendClosed _ ht' _ _ _ hck =>
     obtain ⟨rfl, rfl⟩ := ht.det ht'
     exact hng hck.2
 

@@ -766,7 +766,7 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       `EvalR.chanSend`), is handed over as `vec_push` takes it (`PushArg`: an
       owner moves, an integer is copied); the answer is an integer. -/
   | chanSend {a y : Var} {Ea Ey : Entry} {s : Ty} {Γ1 : Ctx} {D : List Dep} :
-      Γ a = some Ea → Ea.live = true → Ea.ty = .lk (.prod (.vec s) .int) →
+      Γ a = some Ea → Ea.live = true → Ea.ty.ChanOf s →
       Γ y = some Ey → Ey.live = true → Ey.ty = s → PushArg Γ F y Ey s D Γ1 →
       RhsT Γ F (.chanSend a y) intE Γ1
   /-- A3.4: `chan_recv` / `chan_try_recv`, through a live share of a channel
@@ -774,11 +774,11 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       owned `Option s` (`sum int s`), holding nothing (`s` holds no view:
       `Ty.ok`; the shares it holds the queue's block kept alive). -/
   | chanRecv {w : Bool} {a : Var} {E : Entry} {s : Ty} :
-      Γ a = some E → E.live = true → E.ty = .lk (.prod (.vec s) .int) →
+      Γ a = some E → E.live = true → E.ty.ChanOf s →
       RhsT Γ F (.chanRecv w a) ⟨.sum .int s, .own, true, [], [], false, false⟩ Γ
   /-- A3.4: `chan_close`, through a live share of a channel. -/
   | chanClose {a : Var} {E : Entry} {s : Ty} :
-      Γ a = some E → E.live = true → E.ty = .lk (.prod (.vec s) .int) →
+      Γ a = some E → E.live = true → E.ty.ChanOf s →
       RhsT Γ F (.chanClose a) intE Γ
   /-- A3.5: a library handle's constructor: `y`'s value, of a type that holds
       no view and no closure that holds bindings by name (a lock's payload:

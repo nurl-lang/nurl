@@ -1716,6 +1716,47 @@ def Implements (P : Prog) (f : Nat) (te : Ty) (cs : List (Var × PMode × Ty)) (
 def CodeOK (P : Prog) (fs : List Nat) (te : Ty) (ms : List Nat) (cs : List (Var × PMode × Ty)) : Prop :=
   fs.length = ms.length ∧ ∀ (j f σ : Nat), fs[j]? = some f → ms[j]? = some σ → Implements P f te cs σ
 
+/-- Agora #755: the destructors a block of type `t` may hand to a reap's
+    frame (`Step.reap`) or to the reap of a value it drops: its own, when it
+    is a destructor type or a drained `Vec` of them (`Ty.nest n (.dtor f
+    u)`), and, for a channel's payload (`prod (vec s) int`, or that struct
+    under its glue), its queue's elements' (`s`'s: the value a closed
+    channel's `chan_send` drops goes to a block of type `s`,
+    `EvalR.chanSendClosed`). -/
+inductive Ty.Reaps : Ty → Nat → Ty → Prop
+  | nest {n f : Nat} {u : Ty} : Ty.Reaps (Ty.nest n (.dtor f u)) f u
+  | chan {t s : Ty} {f : Nat} {u : Ty} :
+      t.undtor = .prod (.vec s) .int → Ty.Reaps s f u → Ty.Reaps t f u
+
+/-- A type with a destructor to hand over owns a destructor value. -/
+theorem Ty.Reaps.dtorFree {t : Ty} {f : Nat} {u : Ty} (h : t.Reaps f u) : t.dtorFree = false := by
+  induction h with
+  | nest => simp
+  | @chan t s _ _ h _ ih =>
+    cases t with
+    | dtor => rfl
+    | prod a b => simp [Ty.undtor] at h; obtain ⟨rfl, rfl⟩ := h; simp [ih]
+    | _ => simp [Ty.undtor] at h
+
+/-- Its shapes: a destructor type or a drained `Vec` of them, or a channel's
+    payload. -/
+theorem Ty.Reaps.shape {t : Ty} {f : Nat} {u : Ty} (h : t.Reaps f u) :
+    (∃ n, t = Ty.nest n (.dtor f u)) ∨ ∃ s, t.undtor = .prod (.vec s) .int := by
+  cases h with
+  | nest => exact .inl ⟨_, rfl⟩
+  | chan he _ => exact .inr ⟨_, he⟩
+
+/-- `Ty.Reaps` of a type of neither shape: there is none (the default of
+    `BlkCodes.upd`'s premise). -/
+syntax "reaps_none" : tactic
+macro_rules
+  | `(tactic| reaps_none) =>
+    `(tactic| (intro _ _ hr; rcases Ty.Reaps.shape hr with ⟨n, h⟩ | ⟨_, h⟩ <;>
+      first
+        | (cases n <;> cases h; done)
+        | (simp [Ty.undtor] at h; done)
+        | (have := hr.dtorFree; simp_all [Ty.dtorFree]; done)))
+
 /-- Agora #610: the destructor of an `arc` or a `dead` block's destructor
     type is one the program checked: a destructor that takes the value lent,
     or a glue (`DropFnOK`).  The sweep marks such an `arc` block `dead`
@@ -1725,30 +1766,31 @@ def CodeOK (P : Prog) (fs : List Nat) (te : Ty) (ms : List Nat) (cs : List (Var 
     constructor of one.  The check is asked of every block of such a type,
     whatever its kind (a view's payload owns none, `Blk.DtorOK`). -/
 def DeadCodes (P : Prog) (B : Nat → Option Blk) : Prop :=
-  ∀ k n f u kd o, B k = some ⟨Ty.nest n (.dtor f u), kd, o⟩ → DropFnOK P f u
+  ∀ k bl, B k = some bl → ∀ f u, bl.ty.Reaps f u → DropFnOK P f u
 
 /-- No block of a destructor type: nothing to check. -/
 theorem DeadCodes.of_none {P : Prog} {B : Nat → Option Blk}
     (h : ∀ k bl, B k = some bl → bl.ty.dtorFree = true) :
-    DeadCodes P B := fun k _ _ _ _ _ hk => absurd (h k _ hk) (by simp)
+    DeadCodes P B := fun k bl hk _ _ hr => absurd (h k _ hk) (by simp [hr.dtorFree])
 
 /-- The check reads the blocks' types only. -/
 theorem DeadCodes.of_types {P : Prog} {B B' : Nat → Option Blk} (h : DeadCodes P B)
     (hb : ∀ k bl', B' k = some bl' → bl'.ty.dtorFree = false → ∃ bl, B k = some bl ∧ bl.ty = bl'.ty) :
-    DeadCodes P B' := fun k n f u kd o hk => by
-  obtain ⟨⟨t, kd', o'⟩, h1, h2⟩ := hb k _ hk (by simp)
-  simp only at h2; subst h2
-  exact h k n f u kd' o' h1
+    DeadCodes P B' := fun k bl' hk f u hr => by
+  obtain ⟨bl, h1, h2⟩ := hb k _ hk hr.dtorFree
+  exact h k bl h1 f u (h2 ▸ hr)
 
 /-- Agora #755: a block whose type is an old block's keeps its destructor's
     check (a lock block's payload checked out, given back, changed). -/
 theorem DeadCodes.upd_same {P : Prog} {B : Nat → Option Blk} (h : DeadCodes P B) {k : Nat} {bl0 bl : Blk}
     (hk : B k = some bl0) (hty : bl.ty = bl0.ty) :
-    ∀ n f u kd o, bl = ⟨Ty.nest n (.dtor f u), kd, o⟩ → DropFnOK P f u := by
-  intro n f u kd o e
-  obtain ⟨t0, kd0, o0⟩ := bl0
-  subst e; simp only at hty; subst hty
-  exact h k n f u kd0 o0 hk
+    ∀ f u, bl.ty.Reaps f u → DropFnOK P f u := fun f u hr => h k bl0 hk f u (hty ▸ hr)
+
+/-- A block of a destructor type, or of a drained `Vec` of them, names its
+    destructor's check. -/
+theorem DeadCodes.nest {P : Prog} {B : Nat → Option Blk} (h : DeadCodes P B) {k n f : Nat} {u : Ty}
+    {kd : BKind} {o : Option Val} (hk : B k = some ⟨Ty.nest n (.dtor f u), kd, o⟩) : DropFnOK P f u :=
+  h k _ hk f u .nest
 
 /-- Every package in memory names code that implements its interfaces: the
     ones the slots hold, and (A3.5b) the ones the blocks hold, which may be
@@ -1770,19 +1812,46 @@ def Rhs.codeOK (P : Prog) : Rhs → Prop
   | .pack fs te ms _ cs => CodeOK P fs te ms cs
   -- Agora #610: an `Arc` of a destructor value names a destructor the program
   -- checked; Agora #755: so does one of a drained `Vec` of them
-  | .arcNew t _ => ∀ n f u, t = Ty.nest n (.dtor f u) → DropFnOK P f u
+  | .arcNew t _ => ∀ f u, t.Reaps f u → DropFnOK P f u
   -- Agora #755: so does a lock or a cell of one (`Locked D`)
-  | .lockNew t _ => ∀ n f u, t = Ty.nest n (.dtor f u) → DropFnOK P f u
-  | .cellNew t _ => ∀ n f u, t = Ty.nest n (.dtor f u) → DropFnOK P f u
+  -- (and, of a channel of them, its elements' destructor: `Ty.Reaps`)
+  | .lockNew t _ => ∀ f u, t.Reaps f u → DropFnOK P f u
+  | .cellNew t _ => ∀ f u, t.Reaps f u → DropFnOK P f u
   | _ => True
 
-/-- Agora #755: `arc_new` of a destructor value, or of a drained `Vec` of
-    them, names the destructor the program checked. -/
-theorem arcNew_codeOK {P : Prog} {n f : Nat} {u : Ty} (h : DropFnOK P f u) :
-    ∀ n' f' u', Ty.nest n (.dtor f u) = Ty.nest n' (.dtor f' u') → DropFnOK P f' u' := by
-  intro n' f' u' he
-  obtain ⟨-, rfl, rfl⟩ := Ty.nest_dtor_inj he
-  exact h
+/-- Agora #755: `arc_new` (or `locked_new`) of a destructor value, or of a
+    drained `Vec` of them, whose type is no channel's payload under its glue
+    (`hc`, by `decide` for a closed type), names the destructor the program
+    checked. -/
+theorem arcNew_codeOK {P : Prog} {n f : Nat} {u : Ty} (h : DropFnOK P f u)
+    (hc : (Ty.nest n (.dtor f u)).undtor.isChan = false := by decide) :
+    ∀ f' u', (Ty.nest n (.dtor f u)).Reaps f' u' → DropFnOK P f' u' := by
+  intro f' u' hr
+  generalize ht : Ty.nest n (.dtor f u) = t at hr hc
+  cases hr with
+  | nest => obtain ⟨-, rfl, rfl⟩ := Ty.nest_dtor_inj ht; exact h
+  | chan he => rw [he] at hc; simp [Ty.isChan] at hc
+
+/-- Agora #755: `locked_new` of a channel's payload under its glue `g`, whose
+    queue's elements are destructor values or drained `Vec`s of them (of no
+    channel's payload type, `hc`), names the glue's check and the elements'
+    destructor's. -/
+theorem chanNew_codeOK {P : Prog} {g n f : Nat} {u : Ty}
+    (hg : DropFnOK P g (.prod (.vec (Ty.nest n (.dtor f u))) .int)) (hf : DropFnOK P f u)
+    (hc : (Ty.nest n (.dtor f u)).undtor.isChan = false := by decide) :
+    ∀ f' u', (Ty.dtor g (.prod (.vec (Ty.nest n (.dtor f u))) .int)).Reaps f' u' → DropFnOK P f' u' := by
+  intro f' u' hr
+  generalize ht : Ty.dtor g (.prod (.vec (Ty.nest n (.dtor f u))) .int) = t at hr
+  cases hr with
+  | @nest n' _ _ =>
+    cases n' with
+    | zero => cases ht; exact hg
+    | succ => cases ht
+  | chan he hs =>
+    subst ht
+    simp only [Ty.undtor, Ty.prod.injEq, Ty.vec.injEq, and_true] at he
+    subst he
+    exact arcNew_codeOK hf hc f' u' hs
 
 /-- Every package a statement makes names code of its signature (a closure
     literal's body is its code, checked with it). -/

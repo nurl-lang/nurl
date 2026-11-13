@@ -153,11 +153,9 @@ theorem EvalR.lift {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.
   | chanSend hy h1 hk hc hd hnv hck =>
     exact EvalR.chanSend (m := liftMem a2 m) hy (TakeVal.lift h1 a2) hk (union_true a2 hc)
       (union_true a2 hd) hnv hck
-  | @chanSendClosed _ _ _ _ _ _ _ _ m1 a' hy h1 hk hfr hck =>
-    -- A3.4: what a send to a closed channel drops is the thread's own
-    exact EvalR.chanSendClosed (m := liftMem a2 m) (m1 := liftMem a2 m1) (a' := union a' a2) hy
-      (TakeVal.lift h1 a2) hk
-      (Frees.lift hfr fun i h => hd i (by rw [← TakeVal.alloc h1]; exact h)) hck
+  | chanSendClosed hy h1 hk ht hfr hck =>
+    -- A3.4: what a send to a closed channel drops goes to a fresh block (Agora #755)
+    exact EvalR.chanSendClosed (m := liftMem a2 m) hy (TakeVal.lift h1 a2) hk ht hfr hck
   | chanRecv hy hk hc hd hnv hck =>
     exact EvalR.chanRecv hy hk (union_true a2 hc) (union_true a2 hd) hnv hck
   | chanRecvNone hy hk hc hw => exact EvalR.chanRecvNone hy hk (union_true a2 hc) hw

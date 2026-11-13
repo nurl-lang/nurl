@@ -51,7 +51,7 @@ theorem GlobsOK.empty {P : Prog} : GlobsOK P Globs.empty where
   cover _ h := by cases h
   reach _ _ h := by cases h
   codes _ _ h := by cases h
-  dtors _ _ _ _ _ _ h := by cases h
+  dtors _ _ h := by cases h
   cells _ _ _ h := by obtain ⟨_, _, h, _⟩ := h; cases h
 
 /-- A3.6: the blocks the globals' `make`s left are as every thread's view
@@ -137,7 +137,7 @@ theorem ThreadOK.start {P : Prog} {s : Stmt} {Δ : Ctx} {nv : Nat}
   have h0 : ThreadOK P { emptyMem nv with gl := G.gl } s :=
     ⟨fun _ => none, [], Δ, ht, inv_emptyGl G.gl hs hv,
       ⟨fun _ _ _ _ _ _ _ _ h => (by cases h), fun _ _ _ _ _ _ _ h => (by cases h),
-        fun _ _ _ _ _ _ h => (by cases h)⟩, hsc, closed_empty s⟩
+        fun _ _ h => (by cases h)⟩, hsc, closed_empty s⟩
   exact h0.move (fun _ _ h => by cases h) (fun i hi => .inr (by simpa [union, payPart_iff] using hi))
     (fun i hi => by simp [union, payPart_iff, hi]) (Nat.zero_le _) (fun _ _ h => by cases h) hG.blocksAt
     hG.blkCodes (fun _ _ _ _ h => by cases h)

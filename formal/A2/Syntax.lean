@@ -177,6 +177,21 @@ theorem Ty.undtor_ne (τ : Ty) (f : Nat) (t : Ty) : τ.undtor ≠ .dtor f t := b
 
 @[simp] theorem Ty.undtor_dtor (f : Nat) (t : Ty) : (Ty.dtor f t).undtor = t.undtor := rfl
 
+/-- A3.4, Agora #755: `τ` is a channel share of `s`: a lock share whose
+    payload is the queue and the closed flag, `prod (vec s) int`, or that
+    struct under a destructor type of its own (`Ty.dtor g (prod (vec s)
+    int)`, `g` its glue: nurlc's `ChImpl A`, a struct whose drop glue drops
+    the queue), the form a channel of destructor values takes (a lock's
+    payload is no struct holding a drained `Vec` with no glue, `Ty.lkPay`). -/
+def Ty.ChanOf (τ s : Ty) : Prop := ∃ t, τ = .lk t ∧ t.undtor = .prod (.vec s) .int
+
+theorem Ty.chanOf_plain (s : Ty) : (Ty.lk (.prod (.vec s) .int)).ChanOf s := ⟨_, rfl, rfl⟩
+
+/-- Agora #755: a type of a channel's payload's shape (`prod (vec s) int`). -/
+def Ty.isChan : Ty → Bool
+  | .prod (.vec _) .int => true
+  | _ => false
+
 theorem Ty.holdsView_undtor (τ : Ty) : τ.undtor.holdsView = τ.holdsView := by
   induction τ with
   | dtor _ _ ih => exact ih

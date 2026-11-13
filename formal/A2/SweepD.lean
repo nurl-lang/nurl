@@ -296,18 +296,15 @@ theorem Inv.sweepDR (hR : ∀ v, m.vals v → R v) {Γ : Ctx} {F : List Var} {s 
     sweep keeps or marks (a marked block owns what it owned and its holders
     read nothing of it); a marked block's destructor is its `arc` block's. -/
 theorem MemCodes.sweepDR {P : Prog} (h : MemCodes P m) : MemCodes P ((m.sweepDR R)) := by
-  refine ⟨h.1, fun k bl fs te ms e cs hk hs => ?_, fun k n f u kd o hk => ?_⟩
+  refine ⟨h.1, fun k bl fs te ms e cs hk hs => ?_, fun k bl hk => ?_⟩
   · rcases sweepBlkD_some hk with ⟨hk0, _⟩ | ⟨bl0, hk0, _, hp, rfl⟩
     · exact h.2.1 k bl fs te ms e cs hk0 hs
     · rcases hs with hs | hs
       · rw [hp.tree hk0] at hs; exact h.2.1 k bl0 fs te ms e cs hk0 (.inl hs)
       · rw [Blk.mark_rd] at hs; cases hs
-  · rcases sweepBlkD_some hk with ⟨hk0, _⟩ | ⟨bl0, hk0, _, hp, he⟩
-    · exact h.2.2 k n f u kd o hk0
-    · obtain ⟨t, kd0, p⟩ := bl0
-      simp only [Blk.mark, Blk.mk.injEq] at he
-      obtain ⟨rfl, rfl, rfl⟩ := he
-      exact h.2.2 k n f u kd0 o hk0
+  · rcases sweepBlkD_some hk with ⟨hk0, _⟩ | ⟨bl0, hk0, _, hp, rfl⟩
+    · exact h.2.2 k bl hk0
+    · exact h.2.2 k bl0 hk0
 
 /-! The marking sweep from the store's own slots (`Mem.sweepD`), A2's. -/
 

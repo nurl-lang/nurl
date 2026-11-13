@@ -335,9 +335,10 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
         obtain ⟨n1, h1⟩ := eval_exists hi he1
         obtain ⟨n2, h2⟩ := eval_exists hi he2
         exact ⟨_, EvalR.atomic hv hk h1 h2 hnv⟩
-  | chanSend ha hl hty hy hly htyy hpa =>
+  | chanSend ha hl hty0 hy hly htyy hpa =>
     -- A3.4: into the queue, or (closed) dropped, unless the channel's payload
     -- is checked out
+    obtain ⟨t, hty, ht⟩ := hty0
     obtain ⟨o, k, hv⟩ := hi.lk_slot ha hl hty
     obtain ⟨ob, hk⟩ := hi.lk_val ha hl hty hv
     have hnv : ¬ HasView m.blk k := fun h => hnb ⟨o, k, .int, hv, Or.inr h⟩
@@ -345,11 +346,18 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
     | none => exact absurd ⟨o, k, _, hv, Or.inl hk⟩ hnb
     | some p =>
       obtain ⟨_, _, hpay, _⟩ := hi.blocks k _ hk
-      obtain ⟨hw, _⟩ := hpay p rfl
+      obtain ⟨hw0, _⟩ := hpay p rfl
+      have hw := hw0.undtor; rw [ht] at hw
       obtain ⟨_, _, hall⟩ := hi.heap.blk k _ hk
       obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly hpa htyy
       have hb1 : m1.blk = m.blk := by cases htk <;> rfl
       have ha1 : m1.alloc = m.alloc := by cases htk <;> rfl
+      have hfr : m1.blk m1.nid = none := by
+        have hn : m1.nid = m.nid := by cases htk <;> rfl
+        rw [hb1, hn]
+        cases h : m.blk m.nid with
+        | none => rfl
+        | some bl => exact absurd (hi.heap.bkey _ bl h) (Nat.lt_irrefl _)
       -- A3.5's second cut: the crossing check first
       by_cases hck : SendCheck m1.blk [v] m1.st
       case neg => exact ⟨_, EvalR.chanSendFail htk hck⟩
@@ -365,12 +373,11 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
                 (by rw [ha1]; exact (hall c (by simp [Blk.tree])).1)
                 (by rw [ha1]; exact (hall d (by simp [Blk.tree])).1) (by rw [hb1]; exact hnv) hck⟩
             | succ f =>
-              obtain ⟨_, hp⟩ := push_take hi hanch hy hly htyy hpa htk
-              obtain ⟨a', hfr⟩ := frees_exists hp.wf m1.alloc hp.nd (fun i hi' => (hp.al i hi').1)
-              exact ⟨_, EvalR.chanSendClosed hv htk (by rw [hb1]; exact hk) hfr hck⟩
-  | @chanRecv w a E s ha hl hty =>
+              exact ⟨_, EvalR.chanSendClosed hv htk (by rw [hb1]; exact hk) ht hfr hck⟩
+  | @chanRecv w a E s ha hl hty0 =>
     -- A3.4: the queue's head, or none, unless the channel's payload is
     -- checked out or (`chan_recv`) its queue is empty and open
+    obtain ⟨t, hty, ht⟩ := hty0
     obtain ⟨o, k, hv⟩ := hi.lk_slot ha hl hty
     obtain ⟨ob, hk⟩ := hi.lk_val ha hl hty hv
     have hnv : ¬ HasView m.blk k := fun h => hnb ⟨o, k, .int, hv, Or.inr (Or.inr h)⟩
@@ -378,7 +385,8 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
     | none => exact absurd ⟨o, k, _, hv, Or.inl hk⟩ hnb
     | some p =>
       obtain ⟨_, _, hpay, _⟩ := hi.blocks k _ hk
-      obtain ⟨hw, _⟩ := hpay p rfl
+      obtain ⟨hw0, _⟩ := hpay p rfl
+      have hw := hw0.undtor; rw [ht] at hw
       obtain ⟨_, _, hall⟩ := hi.heap.blk k _ hk
       cases hw with
       | pair hq hf =>
@@ -398,7 +406,8 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
               · obtain ⟨rfl, rfl⟩ := hb
                 exact absurd ⟨o, k, _, hv, Or.inr (Or.inl ⟨rfl, _, _, _, hk⟩)⟩ hnb
               · exact ⟨_, EvalR.chanRecvNone hv hk hc (by cases w <;> simp_all)⟩
-  | chanClose ha hl hty =>
+  | chanClose ha hl hty0 =>
+    obtain ⟨t, hty, ht⟩ := hty0
     obtain ⟨o, k, hv⟩ := hi.lk_slot ha hl hty
     obtain ⟨ob, hk⟩ := hi.lk_val ha hl hty hv
     have hnv : ¬ HasView m.blk k := fun h => hnb ⟨o, k, .int, hv, Or.inr h⟩
@@ -406,7 +415,8 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
     | none => exact absurd ⟨o, k, _, hv, Or.inl hk⟩ hnb
     | some p =>
       obtain ⟨_, _, hpay, _⟩ := hi.blocks k _ hk
-      obtain ⟨hw, _⟩ := hpay p rfl
+      obtain ⟨hw0, _⟩ := hpay p rfl
+      have hw := hw0.undtor; rw [ht] at hw
       cases hw with
       | pair _ hf =>
         cases hf with

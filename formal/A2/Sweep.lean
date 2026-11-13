@@ -585,7 +585,7 @@ theorem Inv.sweep {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ 
     keeps (A3.5b: it only removes blocks). -/
 theorem MemCodes.sweepR {P : Prog} {R : Val → Prop} {m : Mem} (h : MemCodes P m) : MemCodes P (m.sweepR R) :=
   ⟨h.1, fun k bl fs te ms e cs hk hs => h.2.1 k bl fs te ms e cs (Mem.sweepR_blk.mp hk).1 hs,
-    fun k n f u kd o hk => h.2.2 k n f u kd o (Mem.sweepR_blk.mp hk).1⟩
+    fun k bl hk => h.2.2 k bl (Mem.sweepR_blk.mp hk).1⟩
 
 theorem MemCodes.sweep {P : Prog} {m : Mem} (h : MemCodes P m) : MemCodes P m.sweep := h.sweepR
 
