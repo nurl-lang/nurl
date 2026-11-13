@@ -30966,6 +30966,62 @@ unsafe @ __pfo_bind_lends i syms s name → v {
     ^ acc
 }
 
+// The words of `s`, its lines joined (`__pljr`'s rows).
+@ __str_lines_words s txt → s {
+    : ~ s r ( nurl_str_cat txt `` )
+    : ~ i i 0
+    : i n ( nurl_str_len r )
+    : ~ s out ``
+    : ~ i st 0
+    ~ <= i n {
+        ? | == i n == ( nurl_str_get r i ) 10 {
+            : s ln ( nurl_str_slice r st - i st )
+            = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat ln `` ) ( nurl_str_cat3 out ` ` ln )
+            = st + i 1
+        } {}
+        = i + i 1
+    }
+    ^ out
+}
+
+// Whether the call just made may hand back a PART of binding `name`'s value
+// — the callee's module-end `part` answer (mem_fn_lend_kind's 2) for each
+// argument position `name` is at, ORed: an i1, or `` where `name` is at no
+// position or the call is not named. (gen_assign's `= name ( … )`, agora
+// #450 A.)
+@ mem_ud_part_copy_cond i syms i cg s name → s {
+    ? g_call_lend_unnamed { ^ ( nurl_str_cat `` `` ) } {}
+    : s key ( nurl_sym_get syms `__last_call_lend_key__` )
+    : s cn ( str_first_word key )
+    ? == 0 ( nurl_str_len cn ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s gn0 ( str_first_word ( str_skip_word key ) )
+    : s gn ? == 0 ( nurl_str_len gn0 ) cn gn0
+    : ~ s rest ( nurl_sym_get syms `__last_call_args__` )
+    : ~ s acc ``
+    : ~ i j 0
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ! ( __callee_param_scalar syms cn j ) {
+            ? ( seq w name ) {
+                : s r ( nurl_cg_reg cg )
+                ( emit_sink_flag_load ( mem_lend_const syms `part` cn gn j ) r )
+                = acc ? == 0 ( nurl_str_len acc ) ( nurl_str_cat r `` ) {
+                    : s o ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print o ) ( nurl_print ` = or i1 ` ) ( nurl_print acc ) ( nurl_print `, ` ) ( nurl_print r ) ( nurl_print `\n` )
+                    o
+                }
+            } {
+                // (A binding that may be a lend out of `name` — `: Tr c (
+                // vec_at [Tr] . t kids 0 )`, its roots `__pljr` — lent back
+                // whole or in part is a part of `name` too.)
+                ? ( str_contains_word ( __str_lines_words ( nurl_sym_get2 syms w `__pljr` ) ) name ) { = acc ( __ud_or_one syms cg acc cn gn j ) } {}
+            }
+        } {}
+        = j + j 1
+    }
+    ^ acc
+}
+
 // …and for `= o w`, w a binding by name: whether w may hold such a value as
 // a lend — a cursor or an alias of another binding (`__alias`), or a
 // binding of a call's lend (`__pljk` / `__pljr`) whose root at a position
@@ -56181,6 +56237,27 @@ unsafe @ gen_assign i lex i syms i cg → s {
                 }
             } {}
         } {}
+        // (…and where the call may hand back a PART of this binding's
+        // value by an answer only module end gives — its lends wait on a
+        // callee compiled later, a generic's instance, a forwarder, so
+        // `__ud_whole` above could not ask: a run whose result is not the
+        // old value itself and that the callee's `part` answer for this
+        // binding's position allows gets a copy, which the binding owns,
+        // and the old value goes. Taken for another owner's value, the part
+        // was dropped with the old value under the binding: `= o ( first o
+        // )`, first handing back `( vec_at [N] . x kids 0 )`, agora #450 A.)
+        : ~ s __ud_pcpy ``
+        ? & & & != 0 ( nurl_str_len __ud_kcond ) == bck_rhs_tt TT_LPAREN ! __ud_may_self ( __clone_supported vt syms ) {
+            = __ud_pcpy ( mem_ud_part_copy_cond syms cg name )
+            ? != 0 ( nurl_str_len __ud_pcpy ) {
+                // (Only a run whose result is lent: one the callee made is
+                // the binding's as it is.)
+                : s __ud_pro ( mem_call_retown syms cg )
+                ? != 0 ( nurl_str_len __ud_pro ) { = __ud_pcpy ( __and_not cg __ud_pcpy __ud_pro ) } {}
+                ? != 0 ( nurl_str_len __ud_kept ) { = __ud_pcpy ( __and_not cg __ud_pcpy __ud_kept ) } {}
+                = store_val ( mem_emit_cloneif cg vt store_val __ud_pcpy )
+            } {}
+        } {}
         // …and a call that lends only out of other owners (`= om ( vec_get
         // [Msg] ms 0 )`, ms a local Vec): what it hands back is no part of
         // the value om holds, which goes by its flag as for any other
@@ -56279,6 +56356,13 @@ unsafe @ gen_assign i lex i syms i cg → s {
         }
         // (…and owns it again past whatever the call's answer said.)
         ? != 0 ( nurl_str_len __ud_kept ) { ( mem_udrop_keep_settle syms cg __ud_ptr __ud_kept ) } {}
+        // (…a copy of a part of the old value is the binding's own.)
+        ? != 0 ( nurl_str_len __ud_pcpy ) {
+            : s __ud_pf0 ( mem_udrop_flag_get syms cg __ud_ptr )
+            : s __ud_pf ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print __ud_pf ) ( nurl_print ` = or i1 ` ) ( nurl_print __ud_pf0 ) ( nurl_print `, ` ) ( nurl_print __ud_pcpy ) ( nurl_print `\n` )
+            ( mem_udrop_flag_set syms cg __ud_ptr __ud_pf )
+        } {}
         // A value block whose tail call may lend what was bound below
         // `name`, which dies first: copied in place, owned (agora #190).
         ? & & != 0 ( nurl_str_len ptr ) | == bck_rhs_tt TT_LBRACE == bck_rhs_tt TT_BACKSLASH == g_blk_tail_eff TT_LPAREN { ( mem_blk_tail_copy_slot syms cg ptr vt __ud_ptr -1 ) } {}
