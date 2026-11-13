@@ -56780,6 +56780,14 @@ unsafe @ gen_assign i lex i syms i cg → s {
         = g_bck_self_asn F
         ( __rp_note_assign syms name )
         ? == __acbc 5 { ( bck_note_clo_borrow syms name bck_line __acbr ) } {}
+        // (`= keep f` moved f's env into keep: f still names it, so f is a
+        // borrow of keep from here — keep given a new value or ending ends
+        // f, as a closure that does not own its env ends with its owner;
+        // agora #835. A call of f right after stays the env's own.)
+        ? & __asn_move_env ( is_ident_tok bck_rhs_tt ) {
+            ( bck_record_binding `assign` bck_rhs_val bck_line 5 vt )
+            ( bck_note_clo_borrow syms bck_rhs_val bck_line name )
+        } {}
         = g_bck_rhs_callee ``
         = g_bck_let_sx_last ( nurl_str_cat g_bck_rhs_sx `` )
         = g_bck_let_jv ? == bck_rhs_tt TT_LBRACE 3 ? | == bck_rhs_tt TT_QUEST == bck_rhs_tt TT_QUESTQUEST 2 0
