@@ -1459,6 +1459,10 @@ class FnCheck:
                 if cur is not None and cur.own == "P":
                     held = (new.held | hfrom(new.loans)) if new.own == "L" else new.held
                     st.vals[vid] = AV("P", (), (), held)
+                elif cur is not None and cur.own == "O" and new.own == "L" and new.call:
+                    # (an owner given a call's lend holds its own copy of
+                    # the handle from here on: no longer "what a call lent")
+                    st.vals[vid] = AV("L", new.loans, new.alias, new.held)
                 else:
                     st.vals[vid] = new
                 if st.gone:
@@ -1667,7 +1671,14 @@ class FnCheck:
 
         def clo_path(hp):
             return hp if len(hp) <= 6 else hp[:5] + ("^f",)
+        calllends = set()
         for av, _ in self.rets:
+            if av.call and av.own == "L":
+                # (handed back as a call lent it: not the parameter itself)
+                for lid in av.loans:
+                    pl = self.param_loan(lid)
+                    if pl and pl[2] == "handle":
+                        calllends.add(pl[0])
             for hp, l in av.held:
                 if isinstance(l, tuple) and len(l) == 2 and l[0] == "clo":
                     # the closure bodies the result may run
@@ -1712,7 +1723,7 @@ class FnCheck:
                 "consumes": sorted(consumes), "elems": sorted(self.s_elems),
                 "invokes": sorted(self.s_invokes), "cloargs": sorted(self.s_cloargs),
                 "regions": sorted(self.s_regions), "selfholds": sorted(self.s_selfholds),
-                "rclos": sorted(rclos), "sclos": sorted(sclos)}
+                "rclos": sorted(rclos), "sclos": sorted(sclos), "calllends": sorted(calllends)}
 
 
 def initial_summary(prog, fn):
@@ -1745,7 +1756,13 @@ def check_program(prog, max_rounds=40):
         sm = fc.check()
         errors += fc.errors
         lent = {k for (k, _, _) in sm["lends"]} & set(sm["consumes"])
-        if lent and fn.ret is not None and not T.copyable(fn.ret):
+        kept = {k for k in sm.get("calllends", ()) if k in sm["consumes"] and fn.modes[k] != "sink"}
+        if kept:
+            # what a callee lent out of a parameter this function keeps on
+            # another path: the parameter is released there, and no copy of
+            # the lend was asked for (MEMORY.md §7.6)
+            errors.append((name, fn.line, "hands back what a call lends out of a parameter it takes over on another path"))
+        elif lent and fn.ret is not None and not T.copyable(fn.ret):
             # the caller cannot both keep an argument the result borrows
             # and have handed it over
             errors.append((name, fn.line, "hands back what it may lend out of a parameter it takes over on another path"))
@@ -1770,6 +1787,6 @@ def merge_summary(a, b):
     """Summaries only grow, so the fixpoint terminates."""
     order = {"none": 0, "own": 1, "lent": 2}
     out = {"modes": a["modes"], "res": a["res"] if order[a["res"]] >= order[b["res"]] else b["res"]}
-    for key in ("lends", "rholds", "effects", "stores", "consumes", "elems", "invokes", "cloargs", "regions", "selfholds", "rclos", "sclos"):
+    for key in ("lends", "rholds", "effects", "stores", "consumes", "elems", "invokes", "cloargs", "regions", "selfholds", "rclos", "sclos", "calllends"):
         out[key] = sorted(set(map(tuple_ify, a.get(key, ()))) | set(map(tuple_ify, b.get(key, ()))), key=repr)
     return out
