@@ -886,10 +886,11 @@ inductive Rhs where
   -- A3.2's second cut: a `Locked`'s value checked out to the caller and back
   -- (`stdlib/std/thread.nu`; the `taken` flag is the payload being out)
   | lockTake (a : Var)         -- `locked_take a`: the payload of the lock block `a` shares moves
-                               -- out, owned; the block holds nothing until a restore, and every
-                               -- other operation on it waits
+                               -- out, owned; the block holds nothing until a restore (it is taken,
+                               -- `Mem.taken`), and every other operation on it waits
   | lockRestore (a y : Var)    -- `locked_restore a y`: `y`'s value moves back in, to a block whose
-                               -- payload is out (answer 0); with the payload in, a panic
+                               -- payload was taken (answer 0); with the payload in, or checked out
+                               -- by a `withLock` (Agora #810), a panic
 deriving DecidableEq, Repr
 
 /-! ### Memory (here because a run-time form records a snapshot of it) -/
@@ -961,7 +962,9 @@ deriving DecidableEq, Repr
     many shares it has is the number of leaves naming it (ghost, so nothing
     stores it).  The payload's addresses are the block's (`BlkOwn`).  An
     `arc` block's payload is always there and never changes; a `lock`
-    block's is `none` while a thread has it checked out; a `dead` block's
+    block's is `none` while a thread has it checked out (by a `withLock`) or
+    taken (by `locked_take`), which the store tells apart (`Mem.taken`, Agora
+    #810); a `dead` block's
     (Agora #610) is there until `Step.reap` moves it out.  No step removes a
     block (`arcNew` adds one, `BlkLe`); the sweep at a step's end removes
     those nothing reaches and frees their payloads (`Mem.sweep`). -/

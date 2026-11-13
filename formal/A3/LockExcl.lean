@@ -4,23 +4,26 @@ import A3.Reap
 configuration's run.
 
 A `withLock` checks its block's payload out (`Step.withLock`: the block is
-left `⟨t, .lock, none⟩`) and puts a run-time frame `scopeL k t x s` on its
-thread's statement; the frame's end gives the payload back (`Release.put`).
-Nothing in a frame records the block's state.  This file ties the two
-together on every configuration a run reaches (`LockInv`, preserved by every
-`TStep`: a thread's step, its marking sweep and its reaps, a spawn, a failed
-spawn):
+left `⟨t, .lock, none⟩`, not taken, `CheckedOut`) and puts a run-time frame
+`scopeL k t x s` on its thread's statement; the frame's end gives the payload
+back (`Release.put`, which asks the block checked out).  A lock block whose
+payload is out is in one of two states (Agora #810, `Mem.taken`, the runtime's
+lock word `HELD` or `TAKEN`): checked out by a `withLock`, or taken by
+`locked_take`, which only `locked_restore` fills (`EvalR.lockRestore`; on a
+checked-out block the restore panics, `EvalR.lockRestoreHeld`).  Nothing in a
+frame records the block's state.  This file ties the two together on every
+configuration a run reaches (`LockInv`, preserved by every `TStep`: a
+thread's step, its marking sweep and its reaps, a spawn, a failed spawn):
 
-* every frame's block is a lock block of the frame's type, or gone (the
-  sweep removed it), at a key below `nid` (so no new block takes the key);
-* a frame whose payload type is not `dtorFree` (it holds a destructor
-  value, `Ty.holdsDtor`) has its block checked out (`⟨t, .lock, none⟩`) or
-  gone: nothing but the frame's own end fills it (`locked_restore` of such a
-  payload is not typed, `RhsT.lockRestore`; every other operation on the
-  block waits on `none`), and the marking sweep marks no lock block whose
-  payload is out;
-* **mutual exclusion** (A3.2): at most one frame of such a block, on one
-  thread, once (`reach_lock_excl`).
+* every frame's block is checked out (`⟨t, .lock, none⟩`, not taken) or gone
+  (the sweep removed it), at a key below `nid` (so no new block takes the
+  key): nothing but the frame's own end fills it (`locked_restore` fills only
+  a taken block; every other operation on the block waits on `none`; only a
+  take or a check-out, of a block whose payload is in, marks a block,
+  `Step.taken_stay`), and the marking sweep marks no lock block whose payload
+  is out;
+* **mutual exclusion** (A3.2): at most one frame of a block, on one thread,
+  once (`reach_lock_excl`), whatever the payload's type.
 
 That a frame's block is never removed while the frame is out (the
 check-out's root share outlives the body) is `A3/LockRoot.lean`'s

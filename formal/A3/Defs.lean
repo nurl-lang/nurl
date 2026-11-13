@@ -229,7 +229,7 @@ taken out of a `Locked` and restored in a loop, was left in the lock's slot
 by `locked_take`, and the restore dropped what the slot held, which was the
 value handed back.  In the model the take moves the payload out and the
 block holds nothing (`EvalR.lockTake`: the runtime's zero bytes and its
-`taken` flag), so the restore finds nothing to drop: it moves the value in,
+lock word `TAKEN`, `Mem.taken`), so the restore finds nothing to drop: it moves the value in,
 freeing no address (`EvalR.lockRestore`).  The option's `Arc` is kept alive
 by the lock's payload while it is in (`Blk.keeps`) and by the taker's slot
 while it is out. -/
