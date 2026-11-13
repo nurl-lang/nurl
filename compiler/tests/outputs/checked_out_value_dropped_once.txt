@@ -1,0 +1,22 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+locked: taken, never restored
+1
+locked: taken and restored
+locked: never taken
+3
+locked: a second share while out
+4
+locked: a destructor that writes a Vec field
+101
+rc: taken, never restored
+6
+rc: taken and restored
+rc: a value holding handles, taken
+8
+locked: a Vec, taken
+end of main
+7
+2

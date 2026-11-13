@@ -166,6 +166,8 @@ $ `stdlib/core/rcbox.nu`
 
 & `c` @ nurl_lk_restore_begin sync *u l → i
 
+& `c` @ nurl_lk_taken *u l → i
+
 & `c` @ nurl_lk_await sync *u l i changed s op → v
 
 // pthread_create's start_routine signature is `void *(*)(void *)`.
@@ -492,7 +494,29 @@ $ `stdlib/core/rcbox.nu`
     ^ @ ( Locked T ) { ( shared_clone [( LockedImpl T )] . l ctl ) }
 }
 
-@ Locked_drop [T] sink ( Locked T ) l → v {}
+// The last share releases the block — and the value only when it is in
+// its slot: one checked out by locked_take and never put back is its
+// taker's, and the slot holds zero bytes nobody owns. Run through T's
+// drop glue, they ran a `% Drop` type's destructor a second time, on
+// zeros (agora #795). Asked once the share is known to be the last, when
+// no other can restore it in between.
+@ Locked_drop [T] sink ( Locked T ) l → v {
+    ( mem_forget l )
+    : i b ( shared_addr [( LockedImpl T )] . l ctl )
+    ? == 0 b { ^ } {}
+    ? != 0 ( nurl_rc_release # *u b ) {
+        : *( RcBox ( LockedImpl T ) ) box # *( RcBox ( LockedImpl T ) ) b
+        : *( LockedImpl T ) p ( rcbox_ptr [( LockedImpl T )] b )
+        ? != 0 ( nurl_lk_taken ( __lk [T] p ) ) {
+            : LkLatch lk . p lk
+            ( mem_take lk )
+        } {
+            : ( LockedImpl T ) whole . box value
+            ( mem_take whole )
+        }
+        ( nurl_free # s b )
+    } {}
+}
 
 // Run `f` on the value while holding the lock. `f` gets a view: what it
 // does to a container changes the value; a copy it keeps is its own (a
