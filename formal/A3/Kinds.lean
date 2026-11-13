@@ -791,10 +791,10 @@ theorem mix_globsTyped (P : Prog) : GlobsTyped P mixG where
     shares := fun _ _ _ _ h => by cases h
     blocks := fun k bl hk => by
       rcases mixB_some hk with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩
-      · refine ⟨rfl, rfl, fun p hp => ?_, .inl rfl, ?_⟩
+      · refine ⟨rfl, rfl, fun p hp => ?_, .inl rfl, ?_, rfl⟩
         · cases hp; exact ⟨.int, fun u k' q ha => by cases ha⟩
         · exact ⟨fun _ _ => .inl rfl, fun h => (by cases h), fun h => (by cases h)⟩
-      · refine ⟨rfl, rfl, fun p hp => ?_, .inl rfl, ?_⟩
+      · refine ⟨rfl, rfl, fun p hp => ?_, .inl rfl, ?_, rfl⟩
         · cases hp
           refine ⟨.cell, fun u k' q ha => ?_⟩
           cases ha

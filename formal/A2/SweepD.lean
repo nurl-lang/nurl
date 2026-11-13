@@ -249,9 +249,9 @@ theorem MInv.sweepDR (hR : ∀ v, m.vals v → R v) {Γ : Ctx} (hi : MInv m Γ) 
   rcases sweepBlkD_some hk with ⟨hk0, hr⟩ | ⟨bl0, hk0, _, hp, rfl⟩
   · obtain ⟨h1, h2, h3, h4⟩ := hi1.blocks k bl (Mem.sweepR_blk.mpr ⟨hk0, hr⟩)
     exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.grow hle⟩, h4⟩
-  · obtain ⟨h1, h2, h3, h4, h5⟩ := hi.blocks k bl0 hk0
+  · obtain ⟨h1, h2, h3, h4, h5, h6⟩ := hi.blocks k bl0 hk0
     have hkd := hp.kind hk0
-    refine ⟨h1, h2, fun p hpay => ⟨(h3 p hpay).1, ?_⟩, ?_, h5.mark hkd (hp.arc_ty hk0)⟩
+    refine ⟨h1, h2, fun p hpay => ⟨(h3 p hpay).1, ?_⟩, ?_, h5.mark hkd (hp.arc_ty hk0), h6⟩
     · exact (((h3 p hpay).2.sweep (hp.kept hk0 hpay))).grow hle
     · rcases h4 with h | h
       · -- Agora #755: a lock block marked holds a destructor value that

@@ -216,6 +216,7 @@ theorem WFv.node_holdsView {τ : Ty} {T : Val} (hw : WFv τ T) {u : Ty} {c d : N
   | int => cases hs
   | view => cases hs
   | arc => cases hs
+  | rguard => cases hs
   | lk => cases hs
   | cell => cases hs
   | node hes ih =>
@@ -257,6 +258,7 @@ theorem WFv.no_pkg {τ : Ty} {v : Val} (hw : WFv τ v) (hf : τ.hasFn = false) {
   | int => cases hs
   | view => cases hs
   | arc => cases hs
+  | rguard => cases hs
   | lk => cases hs
   | cell => cases hs
   | node hes ih =>

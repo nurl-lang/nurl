@@ -237,7 +237,7 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
     obtain ⟨v, hv | hv⟩ := sum_slot_undtor hi hy hl (take_undtor ht) <;> rw [hm] at hv
     · exact ⟨_, EvalR.takerP hv⟩
     · exact ⟨_, EvalR.taker hv⟩
-  | arcNew hy hly hty _ _ _ hpa =>
+  | arcNew hy hly hty _ _ _ _ hpa =>
     obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly hpa hty
     -- the key `nid` is fresh: every block's key is below it
     have hfr : m1.blk m1.nid = none := by
@@ -248,7 +248,7 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
       | none => rfl
       | some bl => exact absurd (hi.heap.bkey _ bl h) (Nat.lt_irrefl _)
     exact ⟨_, EvalR.arcNew htk hfr⟩
-  | lockNew hy hly hty _ _ hpa =>
+  | lockNew hy hly hty _ _ _ hpa =>
     obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly hpa hty
     -- the key `nid` is fresh: every block's key is below it
     have hfr : m1.blk m1.nid = none := by
@@ -267,7 +267,7 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
   | lockClone ha hl hty =>
     obtain ⟨o, k, hv⟩ := hi.lk_slot ha hl hty
     exact ⟨_, EvalR.lockClone hv⟩
-  | cellNew hy hly hty _ _ hpa =>
+  | cellNew hy hly hty _ _ _ hpa =>
     obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly hpa hty
     -- the key `nid` is fresh: every block's key is below it
     have hfr : m1.blk m1.nid = none := by
@@ -447,8 +447,8 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
         · exact ⟨_, EvalR.lockRestoreFail htk hck⟩
     | some p => exact ⟨_, EvalR.lockRestoreP hv hk⟩
   | arcGet ha hl hty _ _ =>
-    obtain ⟨o, k, p, hv⟩ := hi.arc_slot ha hl hty
-    obtain ⟨bl, hbl, _⟩ := (hi.arc_val ha hl hty hv).1.rd
+    obtain ⟨o, k, p, hv⟩ := hi.lends_slot ha hl hty
+    obtain ⟨bl, hbl, _⟩ := (hi.lends_val ha hl hty hv).1
     exact ⟨_, EvalR.arcGet hv hbl⟩
 
 /-- A part of a tree whose addresses are distinct has distinct addresses. -/

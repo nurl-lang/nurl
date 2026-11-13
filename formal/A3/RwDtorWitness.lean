@@ -4,8 +4,8 @@ import A3.LockDtorWitness
 destructor value, read through a guard that lends its payload, and a
 witness.
 
-A read guard (`rw_read a`, `RhsT.rwRead`) is an owned `arc` share of a new
-*view* of the lock block (`EvalR.rwRead`): a block of kind `.view` whose
+A read guard (`rw_read a`, `RhsT.rwRead`) is an owned share (`Val.arc`) of a new
+*view* of the lock block (`EvalR.rwRead`), of type `Ty.rguard u` (Agora #837): a block of kind `.view` whose
 payload is a share of the lock block and the lock block's payload, as the
 lock block holds it (`ViewsAt`).  The view owns nothing: its tree is empty
 (`Blk.tree_view`), so no sweep frees anything of it, and it is never an
@@ -29,10 +29,31 @@ yet a lemma (Agora #831).
 Before Agora #804 the read guard asked a payload that owns no destructor
 value (the type-level reading of the view as a copy of the payload;
 `RwLocked D` was refused).  It is typed now (`rwRead_dtor_typed`,
-`rwTryRead_dtor_typed`): `Ty.ok` admits the guard's type
-`arc (prod (lk u) u)` through `Ty.rview`, and the invariant admits a view of
-that type (`Blk.DtorOK`); an `arc` block is still never of it
-(`A2.Dtor.arc_blocks_dtor`).
+`rwTryRead_dtor_typed`): `Ty.ok` admits the guard's type `rguard u` (its
+payload a lock's, holding no cell share), and the invariant admits a view of
+type `prod (lk u) u` (`Ty.rview`, `Blk.DtorOK`); an `arc` block is never of a
+destructor type of that shape (`A2.Dtor.arc_blocks_dtor`).
+
+Agora #837: until then the guard's type was `arc (prod (lk u) u)`, which a
+genuine `Arc` of a pair of a lock and a value of its payload's type shares
+(`arc_new (pair l v)`, nurlc's `Arc<(Locked U, U)>`), so the types could not
+refuse the guard without refusing that `Arc` too.  A read guard is now a type
+of its own, `Ty.rguard u`; its value is still a share of a view
+(`WFv.rguard`), and only a guard's share names a view (`ArcBlk`).
+`Ty.hasGuard` is true exactly where an `rguard` occurs (a closure's type
+answers its class's `views`: only `any` may hold one), and `Ty.ok` refuses it
+in a lock's, a cell's (so a channel's) and an `Arc`'s payload, so in a
+global's type (`GlobsOK`), and `Cross.Fits` in a closure of every class but
+`any` (`guard_refused`); a local binding, a struct or a `Vec` may hold one,
+and the genuine `Arc` of a pair is admitted as before (`arc_pair_ok`), and so
+is a lock, an `Arc` or a cell of a closure of the dropping class
+(`dropd_closure_ok`).  nurlc refuses a guard only where it crosses (a spawn,
+a channel's send), so the model is stricter for a guard kept on its thread
+in a lock, an `Arc` or a cell, and for a closure holding both a guard and a
+destructor value (`CLAIM.md`); a spawn's parameter of a guard's type is
+refused at run time only (`SpawnOK` admits it, `spawn_guard`).  So a lock's
+payload reaches no view, and its give-back's crossing check passes
+(`A3.LockDtorWitness.giveCheck_typed`).
 
 `main` makes a destructor value (`DT`, `A2/DtorWitness.lean`), moves it into
 an `RwLocked` (`rw_new` is `locked_new`), reads it through a guard
@@ -54,6 +75,53 @@ open A2
 open A2.DynCell (NoRootb noRootb_empty)
 open A2.DtorWitness (NoDeps T DT dfn EP R0)
 open A3.LockDtorWitness (P prog_ok prog_codes drop0_ok EL)
+
+/-! ### Agora #837: the guard's own type, refused where it would cross -/
+
+/-- **A read guard is `% NotSend` in the types** (Agora #837): no lock's or
+    cell's payload holds one, at any depth (here a `Locked` of a destructor
+    value holding a guard in a field, the case `Step.scopeLPD` was made
+    total for), nor a channel's queue, nor an `Arc`'s payload (so no
+    global's type, which `GlobsOK` asks `Ty.ok` of; a guard's own type is
+    no `Ty.sync` one), nor the environment of a closure of any class but
+    `any` (`Cross.Fits`); a local binding may hold one, and so may a struct
+    or a `Vec` that stays on its thread.  (Stricter than nurlc, which
+    refuses a guard only where it crosses; a spawn's parameter is refused
+    at run time only.) -/
+theorem guard_refused :
+    (Ty.lk (.dtor 0 (.prod (.rguard .int) .int))).ok = false ∧
+    (Ty.cell (.prod (.rguard .int) .int)).ok = false ∧
+    (Ty.lk (.prod (.vec (.rguard .int)) .int)).ok = false ∧
+    (Ty.arc (.rguard .int)).ok = false ∧
+    (Ty.arc (.prod (.rguard .int) .int)).ok = false ∧
+    (Ty.rguard .int).sync = false ∧
+    (∀ cs, ¬ Cross.send.Fits (.prod (.rguard .int) .int) cs) ∧
+    (Ty.rguard (.dtor 0 (.prod .int .int))).ok = true ∧
+    (Ty.vec (.prod (.rguard .int) .int)).ok = true := by
+  refine ⟨by decide, by decide, by decide, by decide, by decide, rfl, fun cs h => ?_, by decide, by decide⟩
+  have := h.guard rfl
+  simp [Ty.hasGuard] at this
+
+/-- ... and only it: a genuine `Arc` of a pair of a lock and a value of its
+    payload's type (nurlc's `Arc<(Locked U, U)>`), which until Agora #837 had
+    the guard's type, is admitted in a lock's payload, an `Arc`'s and a
+    global, as nurlc admits it. -/
+theorem arc_pair_ok :
+    (Ty.lk (.arc (.prod (.lk .int) .int))).ok = true ∧
+    (Ty.arc (.arc (.prod (.lk .int) .int))).ok = true ∧
+    (Ty.arc (.prod (.lk .int) .int)).sync = true ∧ (Ty.arc (.prod (.lk .int) .int)).ok = true := by
+  decide
+
+/-- ... nor a closure of the dropping class (`A2.ClosureDropWitness.CDT`,
+    `dtor 2 (fn [2] dropd)`, a closure whose environment holds a `% Drop` value): a lock, an
+    `Arc` and a cell of one are admitted, as nurlc admits `locked_new` and
+    `arc_new` of such a closure (the #837 review: `Ty.hasGuard` of a closure
+    is its class's `views`, and a `dropd` environment holds no guard,
+    `Cross.Fits`). -/
+theorem dropd_closure_ok :
+    (Ty.lk (.dtor 2 (.fn [2] .dropd))).ok = true ∧ (Ty.arc (.dtor 2 (.fn [2] .dropd))).ok = true ∧
+    (Ty.cell (.dtor 2 (.fn [2] .dropd))).ok = true := by
+  decide
 
 /-! ### The read guard of a destructor payload is typed -/
 
@@ -154,7 +222,7 @@ theorem main_typed : ∃ Δ, StmtT P (fun _ => none) [] main Δ := by
   have hnew : RhsT K3 [] (.lockNew DT 2) EL K3' := by
     have h := RhsT.lockNew (Γ := K3) (F := []) (t := DT) (y := 2) (Ey := ED) hK3d
       (by simp [ED, Entry.arm, EP]) (by simp [ED, Entry.arm]) (by decide)
-      ⟨by simp [DT, T, Ty.holdsView], by simp [DT, T, Ty.hasFn]⟩
+      ⟨by simp [DT, T, Ty.holdsView], by simp [DT, T, Ty.hasFn]⟩ (by simp [DT, T, Ty.hasGuard])
       (PushArg.move (by simp [DT, T, Ty.owning]) (by simp [ED, Entry.arm, EP]) (by simp)
         (hK3.noPin 2) (DtorSafe.of_none (fun v E h => (hK3 v E h).2.1) _ _ _))
     rw [hkill] at h; exact h
@@ -172,7 +240,7 @@ theorem main_typed : ∃ Δ, StmtT P (fun _ => none) [] main Δ := by
   have hK6 : NoRootb K6 := hK5.setE (by simp [guardGetE])
   have hget : RhsT K5 [] (.arcGet 4) (guardGetE 4 DT) K5 := by
     have h := RhsT.arcGet (Γ := K5) (F := []) (a := 4) (E := guardE DT) (t := .prod (.lk DT) DT)
-      (by simp [K5, A2.setE]) rfl rfl (by simp [DT, T, Ty.holdsView]) (by simp [DT, T, Ty.hasFn])
+      (by simp [K5, A2.setE]) rfl (Or.inr ⟨_, rfl, rfl⟩) (by simp [DT, T, Ty.holdsView]) (by simp [DT, T, Ty.hasFn])
     rw [guardGet_eq] at h; exact h
   -- `snd y`: the payload, lent
   let EX : Entry := projE 5 (guardGetE 4 DT) DT

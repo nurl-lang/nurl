@@ -13,20 +13,23 @@ cell share, which the reap's no-cell premise needs).
 
 **When the check can fail.**  Holding no cell share, such a value meets the
 cell half of `SendCheck` (`WFv.noCell_hasCell`), so `GiveCheck` fails only
-through `NoGuard`: the value reaches a read guard.  nurlc refuses that
-statically (`% NotSend RGuard`, `stdlib/std/rwlock.nu`), and its
-`mem_send_check` counts only handle blocks, so nurlc's `locked_with` /
-`locked_update` / `locked_apply` / `locked_await` never panic there on such
-a payload.  The model is looser: it admits a `Locked` of a `D` holding a read
-guard, and `Step.scopeLPD` makes its semantics total on that case, which
-nurlc rules out at compile time (Agora #837 tracks refusing it in the
-model's types, and proving the failing case unreachable, `giveCheck_typed`,
-not yet a lemma).
+through `NoGuard`: the value reaches a read guard.  nurlc refuses a guard
+only where it crosses (`% NotSend RGuard`, `stdlib/std/rwlock.nu`: a
+spawn, a channel's send), and its `mem_send_check` counts only handle
+blocks, so nurlc's `locked_with` / `locked_update` / `locked_apply` /
+`locked_await` never panic there on such a payload, a guard in it or not.
+Since Agora #837 the model refuses a guard in every lock's payload,
+stricter than nurlc for a guard kept on its thread: a read guard is of a
+type of its own (`Ty.rguard`), which no lock's payload type holds
+(`Ty.hasGuard`), so a typed check-out's give-back passes the check
+(`A3.LockDtorWitness.giveCheck_typed`) and `Step.scopeLPD` never fires from
+a typed reachable configuration (`A3.reach_no_scopeLPD`).  The rule stays,
+a total, defensive case of the semantics of an untyped store.
 
 **The lemmas are conditional.**  `release_none`, `scopeL_fail_end`,
 `scopeL_fail_frame` and `fail_end_runs_dtor` take `¬ GiveCheck` as a
-hypothesis, and no typed reachable configuration is shown here to meet it
-(it needs a read guard in the payload).  Under it:
+hypothesis, which no typed reachable configuration meets (Agora #837,
+above): they describe the defensive rule.  Under it:
 
 * at the check-out's normal end, the end panics with the lock held
   (`Step.scopeLFail`), and the panic's one step turns the frame into `x`'s
@@ -66,12 +69,13 @@ safe (`main_safe`) and leaks nothing (`main_no_leak`, `main_no_leak_panic`);
 the lock's last drop hands the payload, the `Arc` share in it, to a
 destructor frame (`last_drop_reaps`); A3's claim covers it
 (`A3.lockArcDtor_claim`).  Its give-back's check cannot fail (it holds no read
-guard), so it does not reach the lemmas above; and its give-back is not
-traced either: the give-back lemmas of `A3.LockDtorWitness`
+guard), so it does not reach the lemmas above; its give-back is not
+traced, but since Agora #837 the give-back lemmas of `A3.LockDtorWitness`
 (`giveable_of`, `scopeL_typed_end_gives_back`, `release_cases`,
-`scopeL_typed_panic`) still assume `hasArc = false`, so that a typed
-share-holding payload's check-out ends in `Release.put` is not yet a lemma
-(Agora #837 item 3). -/
+`scopeL_typed_panic`; over a reached configuration
+`A3.reach_scopeL_end_gives_back`, `A3.reach_scopeL_panic`) cover its payload
+type, which holds an `arc` share and no cell share: a typed check-out of it
+ends in `Release.put`, at its end and on a panic. -/
 
 namespace A3.LockArcDtorWitness
 open A2
@@ -254,7 +258,7 @@ theorem dfnA_ok : FnOK P dfnA := by
     by simp [dfnA], by simp [dfnA], ?_, _,
     assign_res (by simp [sigCtx, dfnA, R0, resMode]) ?_ sig_dfnA_flags, ?_, ?_, ?_⟩
   · intro pt hpt; simp [dfnA] at hpt; subst hpt
-    simp [DA, TA, Ty.ok, Ty.isStruct, Ty.holdsView, Ty.dtorFree]
+    simp [DA, TA, Ty.ok, Ty.isStruct, Ty.holdsView, Ty.dtorFree, Ty.hasGuard]
   · refine ⟨fun i hi hs _ => ?_, fun i hi b hb _ => ?_, fun h => by simp [dfnA] at h⟩
     · simp [dfnA] at hi; subst hi; simp [dfnA] at hs
     · simp [dfnA] at hi; subst hi; simp [dfnA] at hb
@@ -277,7 +281,7 @@ theorem ufnA_ok : FnOK P ufnA := by
     by simp [ufnA], by simp [ufnA], ?_, _,
     assign_res (by simp [sigCtx, ufnA, R0, resMode]) ?_ sig_ufnA_flags, ?_, ?_, ?_⟩
   · intro pt hpt; simp [ufnA] at hpt; subst hpt
-    simp [DA, TA, Ty.ok, Ty.isStruct, Ty.owning, Ty.holdsView, Ty.dtorFree]
+    simp [DA, TA, Ty.ok, Ty.isStruct, Ty.owning, Ty.holdsView, Ty.dtorFree, Ty.hasGuard]
   · refine ⟨fun i hi hs _ => ?_, fun i hi b hb _ => ?_, fun h => by simp [ufnA] at h⟩
     · simp [ufnA] at hi; subst hi; simp [ufnA] at hs
     · simp [ufnA] at hi; subst hi; simp [ufnA, Stmt.assigns]
@@ -334,7 +338,7 @@ theorem main_typed : ∃ Δ, StmtT P (fun _ => none) [] main Δ := by
   have hD1 : NoDeps K1 := hD0.setE rfl
   -- `arc_new a`: the integer is copied into the block
   have harc : RhsT K1 [] (.arcNew .int 0) EA K1 :=
-    RhsT.arcNew (Ey := intE) (by simp [K1, A2.setE]) rfl rfl (Or.inl rfl) ⟨rfl, rfl⟩ rfl PushArg.int
+    RhsT.arcNew (Ey := intE) (by simp [K1, A2.setE]) rfl rfl (Or.inl rfl) ⟨rfl, rfl⟩ rfl rfl PushArg.int
   let K2 : Ctx := A2.setE K1 1 EA
   have hK2 : NoRootb K2 := hK1.setE (by simp [EA])
   have hD2 : NoDeps K2 := hD1.setE rfl
@@ -368,7 +372,7 @@ theorem main_typed : ∃ Δ, StmtT P (fun _ => none) [] main Δ := by
   have hnew : RhsT K4 [] (.lockNew DA 3) EL K4' := by
     have h := RhsT.lockNew (Γ := K4) (F := []) (t := DA) (y := 3) (Ey := ED) hK4d
       (by simp [ED, Entry.arm, EP]) (by simp [ED, Entry.arm]) lk_ok
-      ⟨by simp [DA, TA, Ty.holdsView], by simp [DA, TA, Ty.hasFn]⟩
+      ⟨by simp [DA, TA, Ty.holdsView], by simp [DA, TA, Ty.hasFn]⟩ (by simp [DA, TA, Ty.hasGuard])
       (PushArg.move (by simp [DA, Ty.owning]) (by simp [ED, Entry.arm, EP]) (by simp)
         (hK4.noPin 3) (DtorSafe.of_none (fun v E h => (hK4 v E h).2.1) _ _ _))
     rw [hkill] at h; exact h

@@ -177,9 +177,9 @@ theorem _root_.A2.GlobFits.sweepD {C : Cfg} {g : Nat} {t : Ty} {v : Val} (hg : C
   rcases h with ⟨u, k, o, rfl, rfl, hk⟩ | ⟨u, k, p, rfl, rfl, hk⟩
   · exact .inl ⟨u, k, o, rfl, rfl, Cfg.sweepD_glob hg hk (.inl (.inl ⟨none, Sub.refl _⟩))⟩
   · have hr : Refers C.blk (.arc k p) k := .inl (.inl ⟨some p, Sub.refl _⟩)
-    rcases hk with hk | hk
-    · exact .inr ⟨u, k, p, rfl, rfl, .inl (Cfg.sweepD_glob hg hk hr)⟩
-    · exact .inr ⟨u, k, p, rfl, rfl, .inr (Cfg.sweepD_glob hg hk hr)⟩
+    rcases hk with ⟨hgu, hk⟩ | ⟨w, k0, p0, hu, hp, hk⟩
+    · exact .inr ⟨u, k, p, rfl, rfl, .inl ⟨hgu, Cfg.sweepD_glob hg hk hr⟩⟩
+    · exact .inr ⟨u, k, p, rfl, rfl, .inr ⟨w, k0, p0, hu, hp, Cfg.sweepD_glob hg hk hr⟩⟩
 
 /-- A thread's step written back, and the marking sweep after it, keep what
     a global's share fits. -/

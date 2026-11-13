@@ -214,9 +214,9 @@ theorem HeapOK.sweep {m : Mem} (hh : HeapOK m) : HeapOK m.sweep := hh.sweepR
 /-- A3.3: an `arc` share's block, reached, is kept. -/
 theorem ArcBlk.sweepR {R : Val → Prop} {m : Mem} {k : Nat} {u : Ty} {p : Val} (h : ArcBlk (m.blk k) u p)
     (hr : Reached R m.blk k) : ArcBlk ((m.sweepR R).blk k) u p := by
-  rcases h with h | h
-  · exact Or.inl (Mem.sweepR_blk.mpr ⟨h, hr⟩)
-  · exact Or.inr (Mem.sweepR_blk.mpr ⟨h, hr⟩)
+  rcases h with ⟨hg, h⟩ | ⟨w, k0, p0, hu, hp, h⟩
+  · exact Or.inl ⟨hg, Mem.sweepR_blk.mpr ⟨h, hr⟩⟩
+  · exact Or.inr ⟨w, k0, p0, hu, hp, Mem.sweepR_blk.mpr ⟨h, hr⟩⟩
 
 /-! ### A3.1: the sweep keeps every borrow valid
 
@@ -295,6 +295,7 @@ theorem ArcIn.sub {τ : Ty} {T : Val} {u : Ty} {k : Nat} {p : Option Val} (h : A
     ShareIn k T := by
   induction h with
   | @here _ _ p => exact Or.inl ⟨some p, Sub.refl _⟩
+  | @rguard _ _ p => exact Or.inl ⟨some p, Sub.refl _⟩
   | lk => exact Or.inl ⟨none, Sub.refl _⟩
   | cell => exact Or.inr (Sub.refl _)
   | child he _ ih => exact ih.imp (fun ⟨p, h⟩ => ⟨p, Sub.child he h⟩) (Sub.child he)
@@ -405,6 +406,9 @@ theorem ValOK.sweep {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m τ v P H) 
   | arc hk hw hvf hl =>
     obtain ⟨dep, hd, hla⟩ := hl
     exact .arc (ArcBlk.sweepR hk (hv.arc (Sub.refl _))) hw hvf ⟨dep, hd, hla.sweep hR⟩
+  | rguard hk hw hvf hl =>
+    obtain ⟨dep, hd, hla⟩ := hl
+    exact .rguard (ArcBlk.sweepR hk (hv.arc (Sub.refl _))) hw hvf ⟨dep, hd, hla.sweep hR⟩
   | lk h =>
     obtain ⟨o, ho⟩ := h
     exact .lk ⟨o, Mem.sweepR_blk.mpr ⟨ho, hv.lk (Sub.refl _)⟩⟩

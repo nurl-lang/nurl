@@ -97,6 +97,11 @@ inductive Ty where
   | dtor (f : Nat) (t : Ty)  -- A2-drop.3: a `t` whose drop first runs the program's function `f`
                              -- (its `% Drop`, DtorOK); the destructor is on the type, so every
                              -- drop of such a value runs it, wherever the value went
+  | rguard (u : Ty)  -- A3.3, Agora #837: a read guard of an `RwLocked` whose payload is a `u`
+                     -- (`rw_read`'s, nurlc's `RGuard`): an `arc` share (`Val.arc`) of a view
+                     -- block of type `prod (lk u) u` (`ArcBlk`), which lends the lock's payload
+                     -- in place; `% NotSend`, so no value that crosses or is shared holds one
+                     -- (`Ty.hasGuard`)
 deriving DecidableEq, Repr
 
 /-- Does a value of this type hold views (so that storing one into a
@@ -113,6 +118,7 @@ def Ty.holdsView : Ty → Bool
   | .lk t => t.holdsView
   | .cell t => t.holdsView
   | .dtor _ t => t.holdsView
+  | .rguard t => t.holdsView
 
 /-- May a value of this type hold a closure that holds bindings by name (or
     views)?  A3.5b: a Send closure (`fn ms q`, `q` not `any`) holds neither, so
@@ -128,6 +134,7 @@ def Ty.hasFn : Ty → Bool
   | .lk t => t.hasFn
   | .cell t => t.hasFn
   | .dtor _ t => t.hasFn
+  | .rguard t => t.hasFn
 
 /-- A3.1: may a value of this type hold a share (an `Arc`)?  A closure's
     environment may, unless its type says it holds none (A3.5b: `bare`). -/
@@ -142,6 +149,7 @@ def Ty.hasArc : Ty → Bool
   | .lk _ => true
   | .cell _ => true
   | .dtor _ t => t.hasArc
+  | .rguard _ => true
 
 /-- A3.5: may a value of this type hold a cell share (a library handle whose
     copies are one state)?  A closure's environment may, unless its type says
@@ -163,6 +171,44 @@ def Ty.hasCell : Ty → Bool
   | .lk _ => false
   | .cell _ => true
   | .dtor _ t => t.hasCell
+  | .rguard t => t.hasCell
+
+/-- A3.3, Agora #837: a read guard's type (`ArcBlk`: its share, and no
+    other, names a view). -/
+def Ty.isGuard : Ty → Bool
+  | .rguard _ => true
+  | _ => false
+
+/-- A3.3, Agora #837: may a value of this type hold a read guard (`Ty.rguard`),
+    at any depth: in a field, an element, a payload of a share it holds
+    (an `Arc`'s, a lock's, a cell's), or a closure's environment?  A guard is
+    `% NotSend` (nurlc's `RGuard`, `stdlib/std/rwlock.nu`), so no value that
+    crosses or is shared holds one: a lock's, a cell's or a channel's payload
+    (`Ty.ok`'s `lk` and `cell` cases), an `Arc`'s (its `arc` case), a module
+    global (`Ty.ok` of its type, which `GlobsOK` asks) and a closure's
+    environment of every class but `any` (`Cross.Fits`: a closure that may
+    hold one is of class `any`, which crosses nowhere and goes into no
+    lock or `Arc`; a `dropd` one holds none either, so a closure of the
+    dropping class may go into a lock or an `Arc`, as nurlc lets a closure
+    holding a `% Drop` value).  A local binding may hold one.  (The model
+    is stricter than nurlc, which asks `% NotSend` only where a value
+    crosses: a spawn, a channel's send; here no lock's, cell's or `Arc`'s
+    payload and no global holds a guard, even one kept on its thread.) -/
+def Ty.hasGuard : Ty → Bool
+  | .int => false
+  | .vec t => t.hasGuard
+  | .slice t => t.hasGuard
+  | .prod a b => a.hasGuard || b.hasGuard
+  | .sum a b => a.hasGuard || b.hasGuard
+  | .fn _ q => q.views
+  | .arc t => t.hasGuard
+  | .lk t => t.hasGuard
+  | .cell t => t.hasGuard
+  | .dtor _ t => t.hasGuard
+  | .rguard _ => true
+
+theorem Ty.isGuard_of_hasGuard {t : Ty} (h : t.hasGuard = false) : t.isGuard = false := by
+  cases t <;> simp_all [Ty.hasGuard, Ty.isGuard]
 
 /-- A2-drop.3: the type under every destructor wrapper; a destructor
     type's values are those of the type it wraps. -/
@@ -197,6 +243,11 @@ theorem Ty.holdsView_undtor (τ : Ty) : τ.undtor.holdsView = τ.holdsView := by
   | dtor _ _ ih => exact ih
   | _ => rfl
 
+theorem Ty.hasGuard_undtor (τ : Ty) : τ.undtor.hasGuard = τ.hasGuard := by
+  induction τ with
+  | dtor _ _ ih => exact ih
+  | _ => rfl
+
 /-- A type that holds no share holds no cell share. -/
 theorem Ty.hasCell_of_hasArc {t : Ty} (h : t.hasArc = false) : t.hasCell = false := by
   induction t with
@@ -214,13 +265,18 @@ theorem Ty.hasCell_of_hasArc {t : Ty} (h : t.hasArc = false) : t.hasCell = false
   | lk _ _ => cases h
   | cell _ _ => cases h
   | dtor _ t ih => exact ih h
+  | rguard _ _ => cases h
 
 /-- A3.6: does a value of this type synchronise itself, so that a module
     global set at start may hold it and every thread reach it?  A lock share
     does (`Locked`, `RwLocked`, `Mutex`, `Atomic` and `Channel` are all
     `lk _`), and so does an `Arc` whose payload holds no library handle (a
     cell share is not Sync, A3.5).  A cell share does not, nor does an owned
-    tree (a `Vec` pushed from two threads through a global races: h263). -/
+    tree (a `Vec` pushed from two threads through a global races: h263), nor
+    (Agora #837) a read guard (`Ty.rguard`, `% NotSend`: its view is its
+    thread's), and no share's payload holds one (`Ty.ok`'s `lk` and `arc`
+    cases ask `!hasGuard`).  Until Agora #837 the guard's type was
+    `arc (prod (lk u) u)`, which this admitted. -/
 def Ty.sync : Ty → Bool
   | .lk _ => true
   | .arc t => !t.hasCell
@@ -352,24 +408,28 @@ def Ty.dtorViews (t : Ty) : Bool := t.dnest && t.holdsView
     no-cell premise true of every value of the type, so an orphaned block of
     it is always reaped, at its own type (a `Vec` drained by the reap's
     frame).  Agora #803: it may hold `arc` and lock shares (nurlc's `Locked
-    Conn`, `% Drop Conn` holding an `Arc Pool`), so its give-back's crossing
-    check (`GiveCheck`) can fail (the value reaches a read guard, which
-    nurlc refuses statically and the model does not yet: Agora #837); the
-    value then goes to a destructor frame on the unwinding (`Step.scopeLPD`),
-    never to the code-less drop (`Release.drop`).  Until Agora #803 it asked
-    `!t.hasArc`, which kept that check unfailable. -/
+    Conn`, `% Drop Conn` holding an `Arc Pool`).  Its give-back's crossing
+    check (`GiveCheck`) could fail only if the value reached a read guard
+    (nurlc's check, counting handle blocks only, never fails there, and
+    nurlc refuses a guard only where it crosses, `% NotSend RGuard`); since
+    Agora #837 `Ty.ok` refuses a guard in every lock's payload (it asks
+    `!hasGuard`, stricter than nurlc for a guard kept on its thread): a typed
+    check-out's give-back passes it (`A3.LockDtorWitness.giveCheck_typed`),
+    and the defensive `Step.scopeLPD`, which hands a value failing it to a
+    destructor frame, never fires from a typed reachable configuration
+    (`A3.reach_no_scopeLPD`).  Until Agora #803 it
+    asked `!t.hasArc`, which kept that check unfailable. -/
 def Ty.lkPay (t : Ty) : Bool := t.dtorFree || (t.dnest && !t.hasCell)
 
-/-- Agora #804 (`RwLocked D`): a read guard's view type, `prod (lk u) u`: a
-    share of the lock block and its payload, which the view reads in place
-    and owns none of (`Blk.tree_view`: a view's tree is empty, so no sweep
-    frees anything of it, and it is never an orphan to be, `Cand`).  Its
-    payload `u` is a lock's (`Ty.lkPay`) that holds no cell share (the Sync
-    question, A3.5).  The read guard, an `arc` share of the view, is of type
-    `arc (prod (lk u) u)`, which `Ty.ok` admits by this disjunct even where
-    `u` is a destructor value; `arc_new` asks its own `dtorFree ∨ dnest` of
-    what moves in, so no `arc` block is ever of this type
-    (`Blk.DtorOK.arc`). -/
+/-- Agora #804 (`RwLocked D`): a read guard's view type, `prod (lk u) u`: the
+    type of a view block, a share of the lock block and its payload, which
+    the view reads in place and owns none of (`Blk.tree_view`: a view's tree
+    is empty, so no sweep frees anything of it, and it is never an orphan to
+    be, `Cand`).  Its payload `u` is a lock's (`Ty.lkPay`) that holds no cell
+    share (the Sync question, A3.5).  The read guard, a share of the view, is
+    of type `Ty.rguard u` (Agora #837; before, `arc (prod (lk u) u)`, which
+    a genuine `Arc` of a pair of a lock and its payload's type shares), and
+    `Ty.ok` admits it even where `u` is a destructor value. -/
 def Ty.rview : Ty → Bool
   | .prod (.lk u) u' => decide (u = u') && u.lkPay && !u.hasCell
   | _ => false
@@ -389,6 +449,18 @@ theorem Ty.rview_shape {t : Ty} (h : t.rview = true) :
 theorem Ty.rview_mk {u : Ty} (h1 : u.lkPay = true) (h2 : u.hasCell = false) :
     (Ty.prod (.lk u) u).rview = true := by
   simp [Ty.rview, h1, h2]
+
+/-- A3.1, A3.3: a share of type `τ` lends a `t` (`arc_get`, `RhsT.arcGet`):
+    an `Arc`'s payload, or (Agora #837) a read guard's view, `prod (lk u) u`
+    (the lock's share and its payload, which `rguard_get` reads the second
+    field of). -/
+def Ty.Lends (τ t : Ty) : Prop := τ = .arc t ∨ ∃ u, τ = .rguard u ∧ t = .prod (.lk u) u
+
+theorem Ty.Lends.ne_int {τ t : Ty} (h : τ.Lends t) : τ ≠ .int := by
+  rcases h with rfl | ⟨_, rfl, _⟩ <;> simp
+
+theorem Ty.Lends.ne_dtor {τ t : Ty} (h : τ.Lends t) (f : Nat) (u : Ty) : τ ≠ .dtor f u := by
+  rcases h with rfl | ⟨_, rfl, _⟩ <;> simp
 
 /-- A2 types: a view's element type holds no views of its own (a view of a
     container of views is left to A2, with the other aggregates that
@@ -423,15 +495,20 @@ def Ty.ok : Ty → Bool
   -- `Settle`; Agora #755: or a drained `Vec` of them, at any depth
   -- (`Ty.dnest`), which the reap hands to a destructor frame at its own type
   -- that drains it; a payload holding one in a field is still refused)
-  -- (Agora #804: or a read guard's view, `prod (lk u) u`, `Ty.rview`, which
-  -- owns nothing: no `arc` block is of that type, `arc_new` asks its own)
-  | .arc t => t.ok && !t.holdsView && (t.dtorFree || t.dnest || t.rview)   -- A3.1: a payload holds no views
-  | .lk t => t.ok && !t.holdsView && t.lkPay  -- A3.2: nor does a lock's (it is Send); A3.2's
+  -- (Agora #837: no payload of a share holds a read guard, `Ty.hasGuard`:
+  -- a guard is `% NotSend`, nurlc's `RGuard`)
+  | .arc t => t.ok && !t.holdsView && !t.hasGuard && (t.dtorFree || t.dnest)   -- A3.1: a payload holds no views
+  | .lk t => t.ok && !t.holdsView && !t.hasGuard && t.lkPay  -- A3.2: nor does a lock's (it is Send); A3.2's
                                    -- second cut: it may hold `arc` and lock shares; A3.5's second cut:
                                    -- and cell shares, each value going in past the crossing check
-  | .cell t => t.ok && !t.holdsView && t.lkPay  -- A3.5: a cell's payload is a lock's (A3.5's
+  | .cell t => t.ok && !t.holdsView && !t.hasGuard && t.lkPay  -- A3.5: a cell's payload is a lock's (A3.5's
                                      -- second cut: shares in it too, each going in past the crossing check)
   | .dtor _ t => t.isStruct && t.ok  -- A2-drop.3: `% Drop` is on a struct or an enum
+  -- (A3.3, Agora #804, #837: a read guard of a lock's payload, `(lk u).ok`,
+  -- that holds no cell share, Sync's question, as readers read it at once;
+  -- it may be a destructor value, which the view reads in place: `Ty.rview`
+  -- of the view's type `prod (lk u) u`)
+  | .rguard u => u.ok && !u.holdsView && !u.hasGuard && u.lkPay && !u.hasCell
 
 @[simp] theorem Ty.dtorFree_int : Ty.int.dtorFree = true := rfl
 @[simp] theorem Ty.dtorFree_slice (t : Ty) : (Ty.slice t).dtorFree = true := rfl
@@ -459,31 +536,55 @@ theorem Ty.ok_sum {a b : Ty} (h : (Ty.sum a b).ok = true) : a.ok = true ∧ b.ok
 theorem Ty.ok_slice {t : Ty} (h : (Ty.slice t).ok = true) : t.ok = true ∧ t.holdsView = false := by
   simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h
 theorem Ty.ok_arc {t : Ty} (h : (Ty.arc t).ok = true) : t.ok = true ∧ t.holdsView = false := by
-  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1
+  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1.1
 /-- A2-drop.3d, Agora #610: an `Arc`'s payload owns no destructor value, or
     is one at its top, or (Agora #755) a drained `Vec` of them at any depth
-    (`Ty.dnest`), or (Agora #804) the share is a read guard and its payload
-    a view's, `prod (lk u) u` (`Ty.rview`), which owns nothing.  Of the
-    blocks: an `arc` block's type is of the first two kinds
-    (`Blk.DtorOK.arc`). -/
+    (`Ty.dnest`).  (Agora #804 added a third case, a read guard's view
+    `prod (lk u) u`, `Ty.rview`, while the guard was an `arc` share; since
+    Agora #837 it is a type of its own, `Ty.rguard`.) -/
 theorem Ty.ok_arc_dtor {t : Ty} (h : (Ty.arc t).ok = true) :
-    t.dtorFree = true ∨ t.dnest = true ∨ t.rview = true := by
+    t.dtorFree = true ∨ t.dnest = true := by
   simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true', Bool.or_eq_true] at h
-  rcases h.2 with (h | h) | h
-  · exact Or.inl h
-  · exact Or.inr (Or.inl h)
-  · exact Or.inr (Or.inr h)
+  exact h.2
+/-- Agora #837: an `Arc`'s payload holds no read guard (`% NotSend`). -/
+theorem Ty.ok_arc_guard {t : Ty} (h : (Ty.arc t).ok = true) : t.hasGuard = false := by
+  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1.2
 theorem Ty.ok_lk {t : Ty} (h : (Ty.lk t).ok = true) : t.ok = true ∧ t.holdsView = false := by
-  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1
+  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1.1
 /-- A2-drop.3d: a lock's payload owns no destructor value, or (Agora #755)
     is one at its top that holds no cell share (Agora #803). -/
 theorem Ty.ok_lk_pay {t : Ty} (h : (Ty.lk t).ok = true) : t.lkPay = true := by
   simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.2
+/-- Agora #837: a lock's payload holds no read guard (`% NotSend`: a value
+    going into a lock may go to another thread). -/
+theorem Ty.ok_lk_guard {t : Ty} (h : (Ty.lk t).ok = true) : t.hasGuard = false := by
+  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1.2
 theorem Ty.ok_cell {t : Ty} (h : (Ty.cell t).ok = true) : t.ok = true ∧ t.holdsView = false := by
-  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1
+  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1.1
 /-- ... and so for a cell's. -/
 theorem Ty.ok_cell_pay {t : Ty} (h : (Ty.cell t).ok = true) : t.lkPay = true := by
   simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.2
+theorem Ty.ok_cell_guard {t : Ty} (h : (Ty.cell t).ok = true) : t.hasGuard = false := by
+  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1.2
+/-- A3.3, Agora #837: a read guard's payload type is a lock's (`(lk u).ok`)
+    that holds no cell share. -/
+theorem Ty.ok_rguard {u : Ty} (h : (Ty.rguard u).ok = true) :
+    (Ty.lk u).ok = true ∧ u.hasCell = false := by
+  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h ⊢
+  exact ⟨h.1, h.2⟩
+theorem Ty.ok_rguard_mk {u : Ty} (h : (Ty.lk u).ok = true) (hc : u.hasCell = false) :
+    (Ty.rguard u).ok = true := by
+  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h ⊢
+  exact ⟨h, hc⟩
+/-- A read guard's view type (`prod (lk u) u`) is well formed and a read
+    view's (`Ty.rview`). -/
+theorem Ty.ok_rguard_view {u : Ty} (h : (Ty.rguard u).ok = true) :
+    (Ty.prod (.lk u) u).ok = true ∧ (Ty.prod (.lk u) u).rview = true := by
+  obtain ⟨hl, hc⟩ := Ty.ok_rguard h
+  refine ⟨?_, Ty.rview_mk (Ty.ok_lk_pay hl) hc⟩
+  have h1 := (Ty.ok_lk hl).1
+  simp only [Ty.ok, Bool.and_eq_true] at hl h1 ⊢
+  exact ⟨hl, h1⟩
 
 /-- Agora #755: a lock's payload that owns a destructor value is one at its
     top or a drained `Vec` of them, and (Agora #803) holds no cell share. -/
@@ -650,6 +751,7 @@ def Ty.owning : Ty → Bool
   | .lk _ => true
   | .cell _ => true
   | .dtor _ _ => true
+  | .rguard _ => true
   | _ => false
 
 theorem Ty.owning_of_isStruct {t : Ty} (h : t.isStruct = true) : t.owning = true := by
@@ -766,21 +868,33 @@ def PMode.bound : PMode → Eff
     bare one no share at all.  A2-drop.3c: and, of any class but the
     dropping one (Agora #609), no destructor value: such a package's drop
     releases its environment running no code.  A package of the dropping
-    class is a destructor value itself, dropped by its glue. -/
+    class is a destructor value itself, dropped by its glue.  Agora #837: a
+    package of every class but `any` holds no read guard (`Ty.hasGuard`;
+    nurlc's `RGuard` is `% NotSend`, and so is a closure that captures one):
+    a closure that holds one is of class `any`, which crosses nowhere (so a
+    closure holding both a guard and a destructor value has no class and is
+    refused, stricter than nurlc). -/
 def Cross.Fits (q : Cross) (te : Ty) (cs : List (Var × PMode × Ty)) : Prop :=
   (q.views = false → te.holdsView = false ∧ cs = []) ∧
   (q.cells = false → te.hasCell = false) ∧
   (q.shares = false → te.hasArc = false) ∧
-  (q.drops = false → te.holdsDtor = false)
+  (q.drops = false → te.holdsDtor = false) ∧
+  (q.views = false → te.hasGuard = false)
 
 /-- What fits reads of the captures is whether there are any, not their names. -/
 theorem Cross.Fits.map {q : Cross} {te : Ty} {cs : List (Var × PMode × Ty)} (h : q.Fits te cs)
     (f : Var × PMode × Ty → Var × PMode × Ty) : q.Fits te (cs.map f) :=
   ⟨fun hq => ⟨(h.1 hq).1, by rw [(h.1 hq).2]; rfl⟩, h.2⟩
 
+/-- Agora #837: the environment of a package of a class that crosses holds
+    no read guard. -/
+theorem Cross.Fits.guard {q : Cross} {te : Ty} {cs : List (Var × PMode × Ty)} (h : q.Fits te cs)
+    (hv : q.views = false) : te.hasGuard = false := h.2.2.2.2 hv
+
 theorem Cross.fits_any (te : Ty) (cs : List (Var × PMode × Ty)) (hd : te.holdsDtor = false) :
     Cross.any.Fits te cs :=
-  ⟨fun h => absurd h (by decide), fun h => absurd h (by decide), fun h => absurd h (by decide), fun _ => hd⟩
+  ⟨fun h => absurd h (by decide), fun h => absurd h (by decide), fun h => absurd h (by decide), fun _ => hd,
+    fun h => absurd h (by decide)⟩
 
 /-- A3.5b's order on classes, by what an environment may hold: `bare`, `sync`,
     `send`, `any`, each holding more than the one before.  (`dropd`'s rank is
@@ -829,7 +943,8 @@ theorem Cross.Le.shares {q q' : Cross} (h : q.Le q') (h' : q'.shares = false) : 
 theorem Cross.Fits.mono {q q' : Cross} {te : Ty} {cs : List (Var × PMode × Ty)} (h : q.Fits te cs)
     (hle : q.Le q') : q'.Fits te cs :=
   ⟨fun hv => h.1 (hle.views hv), fun hc => h.2.1 (hle.cells hc), fun hs => h.2.2.1 (hle.shares hs),
-    fun hd => h.2.2.2 (by rw [hle.2]; exact hd)⟩
+    fun hd => h.2.2.2.1 (by rw [hle.2]; exact hd),
+    fun hv => h.2.2.2.2 (hle.views hv)⟩
 
 /-- A3.4: an `Atomic`'s operations (`stdlib/std/atomic.nu`), each one
     `nurl_atomic_i64_*` (`__ATOMIC_SEQ_CST`) on the word. -/

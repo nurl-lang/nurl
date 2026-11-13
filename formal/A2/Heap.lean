@@ -40,6 +40,7 @@ theorem frees_exists {τ : Ty} {T : Val} (hw : WFv τ T) :
   | int => exact fun a _ _ => ⟨a, Frees.int⟩
   | view => exact fun a _ _ => ⟨a, Frees.view⟩
   | arc => exact fun a _ _ => ⟨a, Frees.arc⟩
+  | rguard => exact fun a _ _ => ⟨a, Frees.arc⟩
   | lk => exact fun a _ _ => ⟨a, Frees.lk⟩
   | cell => exact fun a _ _ => ⟨a, Frees.cell⟩
   | node hes ih =>

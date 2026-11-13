@@ -655,9 +655,9 @@ theorem RhsT.dkeep {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (h : RhsT
   | takel hy => exact DKeep.moveOut hy _ _
   | taker hy => exact DKeep.moveOut hy _ _
   | pack hy _ _ hp _ => exact hp.dkeep hy
-  | arcNew hy _ _ _ _ _ hp => exact hp.dkeep hy
-  | lockNew hy _ _ _ _ hp => exact hp.dkeep hy
-  | cellNew hy _ _ _ _ hp => exact hp.dkeep hy
+  | arcNew hy _ _ _ _ _ _ hp => exact hp.dkeep hy
+  | lockNew hy _ _ _ _ _ hp => exact hp.dkeep hy
+  | cellNew hy _ _ _ _ _ hp => exact hp.dkeep hy
   | chanSend _ _ _ hy _ _ hp => exact hp.dkeep hy
   | lockRestore _ _ _ hy _ _ hp => exact hp.dkeep hy
   | _ => exact DKeep.refl Γ []
@@ -919,9 +919,9 @@ theorem RhsT.dstay {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (h : RhsT
   | takel hy => exact DStay.moveOut hy _ _
   | taker hy => exact DStay.moveOut hy _ _
   | pack hy _ _ hp _ => exact hp.dstay hy
-  | arcNew hy _ _ _ _ _ hp => exact hp.dstay hy
-  | lockNew hy _ _ _ _ hp => exact hp.dstay hy
-  | cellNew hy _ _ _ _ hp => exact hp.dstay hy
+  | arcNew hy _ _ _ _ _ _ hp => exact hp.dstay hy
+  | lockNew hy _ _ _ _ _ hp => exact hp.dstay hy
+  | cellNew hy _ _ _ _ _ hp => exact hp.dstay hy
   | chanSend _ _ _ hy _ _ hp => exact hp.dstay hy
   | lockRestore _ _ _ hy _ _ hp => exact hp.dstay hy
   | _ => exact DStay.refl Γ []
