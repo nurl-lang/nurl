@@ -507,7 +507,8 @@ class FnCheck:
             root = st.vals.get(op[1])
             pty = self.ty_of_place((op[1], op[2]))
             if (root is not None and root.own == "O" and self.fn.vars[op[1]].kind == "temp"
-                    and pty is not None and pty[0] not in VIEW_TYPES and self.T.owning(pty)):
+                    and pty is not None and pty[0] not in VIEW_TYPES
+                    and (self.T.owning(pty) or pty[0] == "closure")):
                 # a field read off a temporary leaves it: whatever takes the
                 # read owns it, and the temporary's rest is released where
                 # its statement ends (MEMORY.md §7.5 table, h323)
@@ -768,7 +769,8 @@ class FnCheck:
                 continue
             dpath = tuple(dpath)
             if kind == "held":
-                held |= hroot(hsub(avs[k].held, tuple(path)), dpath)
+                # (a closure the result keeps copies in what it can, §7.5)
+                held |= hroot(self.closure_owned(hsub(avs[k].held, tuple(path))), dpath)
             else:
                 held |= hfrom(avs[k].loans, dpath)
                 for a in avs[k].alias:
