@@ -19685,6 +19685,13 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             // over, as `( eat p )` takes it — agora #567.)
             = arg_join_io & | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST ( __all_inout syms ( nurl_sym_get syms `__last_phi_idents__` ) )
             = arg_join_ioh ? arg_join_io ( __join_io_handle syms ( nurl_sym_get syms `__last_phi_idents__` ) ) ``
+            // (…or the block arms' tails of a join, `? c { p } { p }`, or a
+            // value block's own, `{ p }`: a whole `inout` parameter a block
+            // hands on is taken, as `( eat p )` takes it — agora #555, #776.)
+            ? & == 0 ( nurl_str_len arg_join_ioh ) != 0 ( nurl_str_len g_fn_ioh_names ) {
+                ? | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST { = arg_join_ioh ( __join_io_handle syms ( nurl_sym_get syms `__last_join_tails__` ) ) } {}
+                ? & & == 0 ( nurl_str_len arg_join_ioh ) == bck_arg_tt TT_LBRACE ( is_ident_tok ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) ) ) { = arg_join_ioh ( __join_io_handle syms ( nurl_sym_get syms `__tail_first_val__` ) ) } {}
+            } {}
             ? | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST { = __call_jphi ( __word_union __call_jphi ( nurl_sym_get syms `__last_phi_idents__` ) ) } {}
             // (…and a value block's tail binding: `( idg [String] { : String t
             // ( mk 3 ) t } )` hands on t, a binding of the scope the block is
@@ -21254,10 +21261,36 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             // as `( eat p )` does: arg_join_io, agora #567. The function
             // consumes that parameter for its caller, which drops nothing;
             // copied, the caller's value leaked.)
+            : ~ b __arg_cp F
+            ? & & & | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST != 0 ( nurl_str_len arg_join_own ) ! ( seq arg_join_own `true` ) ! arg_join_io {
+                ? ( __clone_supported at syms ) {
+                    : s __sjl ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __sjl ) ( nurl_print ` = xor i1 ` ) ( nurl_print arg_join_own ) ( nurl_print `, 1\n` )
+                    = av ( mem_emit_cloneif cg at av __sjl )
+                    = __arg_cp T
+                } { ? ( __nc_drop_ty at ) { ( __nc_copy_die ( nurl_sym_get syms `__fn_self_name__` ) at ) } {} }
+            } {}
+            // (…and one whose arms only lend — fields, views — on every path,
+            // no ownership published and no binding selected: `( eat ? c . h
+            // a . h b )`; or a value block whose tail is a binding of an outer
+            // scope or a field of one, `( eat { . h a } )`, `( eat { w } )`:
+            // the callee released what the owner still drops — agora #555.)
+            // (A whole `inout` parameter an arm's block hands on is taken
+            // over, as `( eat p )` takes it.)
+            : b __sj_lends | & & & | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST == 0 ( nurl_str_len arg_join_own ) == 0 ( nurl_str_len arg_join_ids ) ! ( __any_inout syms ( nurl_sym_get syms `__last_join_tails__` ) ) & == arg_eff_tt TT_LBRACE ( __blk_arg_lends syms )
+            ? __sj_lends {
+                ? ( __clone_supported at syms ) { = av ( mem_emit_cloneif cg at av `1` ) = __arg_cp T } { ? ( __nc_drop_ty at ) { ( __nc_copy_die ( nurl_sym_get syms `__fn_self_name__` ) at ) } {} }
+            } {}
+            // (…and one whose arms lend bindings on every path — `( eat ? c
+            // u t )`, u and t owners: no ownership of its own is published,
+            // and the callee released the buffer its owner still drops.)
+            ? & & & | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST == 0 ( nurl_str_len arg_join_own ) != 0 ( nurl_str_len arg_join_ids ) ! arg_join_io {
+                ? ( __clone_supported at syms ) { = av ( mem_emit_cloneif cg at av `1` ) = __arg_cp T } { ? ( __nc_drop_ty at ) { ( __nc_copy_die ( nurl_sym_get syms `__fn_self_name__` ) at ) } {} }
+            } {}
             // (…emptying that parameter's slot on the paths that select it,
-            // as `( eat p )` empties it: its caller drops its binding as
-            // ever — agora #776.)
-            ? & != 0 ( nurl_str_len arg_join_ioh ) | summary_callee ( str_has_index callee_sink arg_idx ) {
+            // as `( eat p )` empties it — where no copy went instead: its
+            // caller drops its binding as ever, agora #776.)
+            ? & & ! __arg_cp != 0 ( nurl_str_len arg_join_ioh ) | summary_callee ( str_has_index callee_sink arg_idx ) {
                 : s __jz_p ( nurl_sym_get2 syms arg_join_ioh `__ptr` )
                 ? != 0 ( nurl_str_len __jz_p ) {
                     : ~ s __jz_c ( nurl_str_cat `true` `` )
@@ -21274,30 +21307,6 @@ unsafe @ gen_call_body i lex i syms i cg → s {
                     ( nurl_print `(i1 ` ) ( nurl_print __jz_c ) ( nurl_print `, ptr ` ) ( nurl_print __jz_p ) ( nurl_print `)\n` )
                     ( __replaces_note syms arg_join_ioh `` )
                 } {}
-            } {}
-            ? & & & | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST != 0 ( nurl_str_len arg_join_own ) ! ( seq arg_join_own `true` ) ! arg_join_io {
-                ? ( __clone_supported at syms ) {
-                    : s __sjl ( nurl_cg_reg cg )
-                    ( nurl_print `  ` ) ( nurl_print __sjl ) ( nurl_print ` = xor i1 ` ) ( nurl_print arg_join_own ) ( nurl_print `, 1\n` )
-                    = av ( mem_emit_cloneif cg at av __sjl )
-                } { ? ( __nc_drop_ty at ) { ( __nc_copy_die ( nurl_sym_get syms `__fn_self_name__` ) at ) } {} }
-            } {}
-            // (…and one whose arms only lend — fields, views — on every path,
-            // no ownership published and no binding selected: `( eat ? c . h
-            // a . h b )`; or a value block whose tail is a binding of an outer
-            // scope or a field of one, `( eat { . h a } )`, `( eat { w } )`:
-            // the callee released what the owner still drops — agora #555.)
-            // (A whole `inout` parameter an arm's block hands on is taken
-            // over, as `( eat p )` takes it.)
-            : b __sj_lends | & & & | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST == 0 ( nurl_str_len arg_join_own ) == 0 ( nurl_str_len arg_join_ids ) ! ( __any_inout syms ( nurl_sym_get syms `__last_join_tails__` ) ) & == arg_eff_tt TT_LBRACE ( __blk_arg_lends syms )
-            ? __sj_lends {
-                ? ( __clone_supported at syms ) { = av ( mem_emit_cloneif cg at av `1` ) } { ? ( __nc_drop_ty at ) { ( __nc_copy_die ( nurl_sym_get syms `__fn_self_name__` ) at ) } {} }
-            } {}
-            // (…and one whose arms lend bindings on every path — `( eat ? c
-            // u t )`, u and t owners: no ownership of its own is published,
-            // and the callee released the buffer its owner still drops.)
-            ? & & & | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST == 0 ( nurl_str_len arg_join_own ) != 0 ( nurl_str_len arg_join_ids ) ! arg_join_io {
-                ? ( __clone_supported at syms ) { = av ( mem_emit_cloneif cg at av `1` ) } { ? ( __nc_drop_ty at ) { ( __nc_copy_die ( nurl_sym_get syms `__fn_self_name__` ) at ) } {} }
             } {}
             // An enum's payload, which the arm only borrows: a copy goes
             // over; one that cannot be copied is rejected (h231). (Other
