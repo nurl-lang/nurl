@@ -737,10 +737,11 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       Γ a = some E → E.live = true → E.ty = .lk t →
       -- A3.5's second cut: read guards lend the value to several threads at
       -- once, so it faces the Sync question, as an `Arc`'s payload does (h357)
+      -- (Agora #804: and it may own a destructor value, `RwLocked D`: the
+      -- view reads the lock's payload in place and owns none of it, so no
+      -- sweep and no reap of the view drops it; the lock block's last share
+      -- does, once, `Ty.rview`)
       t.hasCell = false →
-      -- (Agora #755: and owns no destructor value: a view's payload is a copy
-      -- of the lock's, which owns nothing, so `RwLocked D` is refused)
-      t.dtorFree = true →
       RhsT Γ F (.rwRead a) ⟨.arc (.prod (.lk t) t), .own, true, [], [], false, false⟩ Γ
   /-- A3.3: `rw_try_read a`: `rw_read`'s guard as an owned option
       (`Option` is `sum int _`), holding nothing; matched by value
@@ -748,7 +749,7 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       payload to every reader at once, so the payload holds no library handle
       (a cell share is not Sync, A3.5). -/
   | rwTryRead {a : Var} {E : Entry} {t : Ty} :
-      Γ a = some E → E.live = true → E.ty = .lk t → t.hasCell = false → t.dtorFree = true →
+      Γ a = some E → E.live = true → E.ty = .lk t → t.hasCell = false →
       RhsT Γ F (.rwTryRead a) ⟨.sum .int (.arc (.prod (.lk t) t)), .own, true, [], [], false, false⟩ Γ
   /-- A3.3: `rw_try_write a`'s answer: an owned option of an integer, holding
       nothing; the write itself is `withLock`'s check-out (`Stmt.withTryWrite`). -/

@@ -883,7 +883,9 @@ each one shrinks `CLAIM.md`'s exception:
         every block of a destructor type, whatever its kind). The
         invariant's clause is `Blk.DtorOK`: (before Agora #755) a lock's
         and a view's payload owns none (since #755, `Locked D` below, a
-        lock's may be a destructor value holding no share); a block of a
+        lock's may be a destructor value holding no share; since #804 a
+        view's payload, its lock block's read in place, may be one too: the
+        view owns nothing, `Ty.rview`, `A3/RwDtorWitness.lean`); a block of a
         type that owns one is of a destructor type holding no closure; a
         `dead` block is of such a type.
      2. *The mark.* `Mem.sweepD`, the sweep that ends every step but an
@@ -1020,8 +1022,9 @@ each one shrinks `CLAIM.md`'s exception:
         `scopeL_panic_gives_back`, `release_puts`. Agora #805: that a typed
         body leaves `x` owning the value at its end, and wherever it panics
         owning it or moved out (to an owner that runs its destructor), is
-        proved for a typed frame (`StmtT.scopeL` asks, for a destructor
-        payload, `x` an owner live at the body's end, as `withLock` does:
+        proved for a typed frame (`StmtT.scopeL` asks `x` an owner, for a
+        destructor payload, live at the body's end, as `withLock` does;
+        since Agora #825 the liveness for every payload type:
         `A3.LockDtorWitness.scopeL_end_owns`, `scopeL_typed_end_gives_back`,
         `scopeL_typed_panic`); that the block is then there and checked
         out is proved on every reached configuration (Agora #808:

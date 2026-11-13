@@ -863,7 +863,9 @@ theorem Anchored.mono {E : Entry} {F F' : List Var} (h : Anchored E F) (hF : ∀
 
 
 /-- A2-drop.3d, Agora #610: what the invariant asks of a block's destructor
-    values.  A view's payload owns none; a lock block's owns none or
+    values.  A view owns nothing (its tree is empty, `Blk.tree_view`; Agora
+    #804: its payload, its lock block's read in place, is of a read guard's
+    view type, `Ty.rview`, or owns no destructor value); a lock block's owns none or
     (Agora #755, `Locked D`) is a destructor value at its top that holds no
     share (`Ty.lkPay`: the check-out binding is given no other value,
     `StmtT.withLock`'s `hna`, and gives it back).  An `arc` block's may be a destructor value at
@@ -876,15 +878,37 @@ theorem Anchored.mono {E : Entry} {F F' : List Var} (h : Anchored E F) (hF : ∀
     payload to one.  (That its destructor is one the program checked is
     `MemCodes`'s, which knows the program: `DeadCodes`.) -/
 def Blk.DtorOK (bl : Blk) : Prop :=
-  (bl.kind ≠ .dead → bl.kind ≠ .arc → bl.ty.dtorFree = true ∨ (bl.kind = .lock ∧ bl.ty.lkPay = true)) ∧
+  (bl.kind ≠ .dead → bl.kind ≠ .arc → bl.ty.dtorFree = true ∨ (bl.kind = .lock ∧ bl.ty.lkPay = true) ∨
+    (bl.kind = .view ∧ bl.ty.rview = true)) ∧
   (bl.kind = .dead → bl.ty.dtorFree = false) ∧
-  (bl.ty.dtorFree = false → ∃ n f u, bl.ty = Ty.nest n (.dtor f u) ∧ u.hasFn = false)
+  (bl.ty.dtorFree = false → bl.kind ≠ .view → ∃ n f u, bl.ty = Ty.nest n (.dtor f u) ∧ u.hasFn = false)
 
 /-- A `dead` block is of a destructor type that holds no closure, or (Agora
     #755) of a drained `Vec` of such values, at any depth. -/
 theorem Blk.DtorOK.dead {bl : Blk} (h : bl.DtorOK) (hd : bl.kind = .dead) :
     ∃ n f u, bl.ty = Ty.nest n (.dtor f u) ∧ u.hasFn = false :=
-  h.2.2 (h.2.1 hd)
+  h.2.2 (h.2.1 hd) (by rw [hd]; simp)
+
+/-- A block that is no view, of a type that owns a destructor value, is of a
+    destructor type that holds no closure, or of a drained `Vec` of them. -/
+theorem Blk.DtorOK.nest {bl : Blk} (h : bl.DtorOK) (hd : bl.ty.dtorFree = false) (hv : bl.kind ≠ .view) :
+    ∃ n f u, bl.ty = Ty.nest n (.dtor f u) ∧ u.hasFn = false :=
+  h.2.2 hd hv
+
+/-- **Agora #804, the block-level fact behind an `Arc`'s type**: an `arc`
+    block (made by `arc_new`, shared by its clones, or a global's) is of a
+    type that owns no destructor value, or is one at its top, or a drained
+    `Vec` of them: never a read guard's view type, which only a view is
+    (`Ty.ok_arc_dtor` reads this off a share's type, which a read guard's
+    widens). -/
+theorem Blk.DtorOK.arc {bl : Blk} (h : bl.DtorOK) (ha : bl.kind = .arc) :
+    bl.ty.dtorFree = true ∨ bl.ty.dnest = true := by
+  cases hd : bl.ty.dtorFree with
+  | true => exact Or.inl rfl
+  | false =>
+    obtain ⟨n, f, u, he, _⟩ := h.2.2 hd (by rw [ha]; simp)
+    refine Or.inr ?_
+    rw [he]; simp
 
 /-- The facts are of the block's type and kind: a block of the same type and
     kind has them. -/
@@ -894,7 +918,7 @@ theorem Blk.DtorOK.of_eq {bl bl' : Blk} (h : bl.DtorOK) (ht : bl'.ty = bl.ty) (h
   refine ⟨fun a b => ?_, fun a => ?_, fun a => ?_⟩
   · rw [ht, hk]; exact h1 (hk ▸ a) (hk ▸ b)
   · rw [ht]; exact h2 (hk ▸ a)
-  · rw [ht] at a ⊢; exact h3 a
+  · rw [ht, hk] at *; exact h3 a
 
 /-- What memory and context guarantee, whatever is running. -/
 structure MInv (m : Mem) (Γ : Ctx) : Prop where
@@ -926,8 +950,9 @@ structure MInv (m : Mem) (Γ : Ctx) : Prop where
   blocks    : ∀ k bl, m.blk k = some bl → bl.ty.ok = true ∧ bl.ty.holdsView = false ∧
                 (∀ p, bl.pay = some p → WFv bl.ty p ∧ SharesOK m bl.ty p) ∧
                 (bl.kind = .lock ∨ bl.ty.hasCell = false) ∧
-                -- A2-drop.3d, Agora #610: a view's payload owns no
-                -- destructor value, a lock's none or (Agora #755) one at its
+                -- A2-drop.3d, Agora #610: a view owns nothing (Agora #804:
+                -- its payload, its lock block's, is of a read guard's view
+                -- type or owns no destructor value), a lock's none or (Agora #755) one at its
                 -- top holding no share; an `arc` block's may be one at its
                 -- top or (Agora #755) a drained `Vec` of them, and a `dead`
                 -- block's is (`Blk.DtorOK`)
@@ -1465,13 +1490,15 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       Ea.mode.isRoot = true → a ∉ s.vars → (∃ E, Δ x = some E ∧ E.live = true) →
       (hna : t.holdsDtor = true → x ∉ s.assigns := by lock_na) →
       StmtT P Γ F (.withLock a x s) (exitScope x Δ)
-  /-- A3.2: run time: `x`'s lock scope, typed as a `scope`.  (Agora #805: for
-      a payload that holds a destructor value, `x` is an owner, and live where
-      the body ends, as `withLock` asks: its check-out's end gives a `t` back,
-      `A3.LockDtorWitness.scopeL_end_owns`.) -/
+  /-- A3.2: run time: `x`'s lock scope, typed as a `scope`.  `x` is bound
+      as `withLock` binds it (`lockE`): an owner, or, for an integer payload,
+      a plain integer binding; and (Agora #825, for every payload type) it is
+      live where the body ends, as `withLock` asks.  So its check-out's end
+      gives a `t` back (`A3.LockDtorWitness.scopeL_end_owns`; Agora #805 had
+      this for a payload that holds a destructor value only). -/
   | scopeL {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x : Var} {s : Stmt} :
-      (∃ E, Γ x = some E ∧ E.mode ≠ .rootb ∧ E.ty = t ∧
-        (t.holdsDtor = true → E.mode = .own ∧ ∃ E', Δ x = some E' ∧ E'.live = true)) →
+      (∃ E, Γ x = some E ∧ E.mode ≠ .rootb ∧ E.ty = t ∧ (t ≠ .int → E.mode = .own) ∧
+        ∃ E', Δ x = some E' ∧ E'.live = true) →
       x ∉ F → StmtT P Γ F s Δ → EndOK Δ x →
       StmtT P Γ F (.scopeL k t x s) (exitScope x Δ)
   /-- A2-elem (Agora #391): `y`'s value moves into `x` at index `i`: a push
@@ -1771,7 +1798,8 @@ macro_rules
     that runs it.  `arc_new` of such a value asks it of its type
     (`Rhs.codeOK`), and (Agora #755) so do `locked_new` and a cell's
     constructor of one.  The check is asked of every block of such a type,
-    whatever its kind (a view's payload owns none, `Blk.DtorOK`). -/
+    whatever its kind (a view is of no destructor type: its own is a read
+    guard's view type, `prod (lk u) u`, `Blk.DtorOK`, and it owns nothing). -/
 def DeadCodes (P : Prog) (B : Nat → Option Blk) : Prop :=
   ∀ k bl, B k = some bl → ∀ f u, bl.ty.Reaps f u → DropFnOK P f u
 

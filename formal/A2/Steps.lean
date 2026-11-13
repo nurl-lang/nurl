@@ -460,7 +460,7 @@ theorem rhs_arcNew {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {t : Ty} {v : Val}
       exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.grow hb⟩, h4⟩
   refine ⟨⟨post.inv.grow rfl hheap (Nat.le_refl _) hb hB, post.nv, Nat.le_trans post.nid (Nat.le_succ _),
     post.dom, post.frz, post.rootb, post.cdom, post.cmode, post.dkeep, post.blk.trans hb⟩, ?_⟩
-  exact out_share htok hvd hvf pu.wf (Or.inl hnew)
+  exact out_share htok (hvd.imp_right Or.inl) hvf pu.wf (Or.inl hnew)
 
 /-- A3.2, `locked_new`: as `arc_new` (`rhs_arcNew`), into a lock block: the tree taken from `y`, of a type that holds no view
     and no closure, moves into a fresh block, whose key no share names yet:
@@ -544,11 +544,12 @@ theorem rhs_cellNew {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {t : Ty} {v : Val
 /-- **A3.3, `rw_read`**: a new view of the lock block `k`, whose payload `p`
     is in, at the fresh key `nid`: it owns nothing, and reads the block's
     payload as the block holds it (`ViewsAt`); its payload, a share of the
-    block and `p`, is well formed.  The result is the view's one share, the
+    block and `p`, is well formed, of a read guard's view type (`Ty.rview`;
+    Agora #804: `p` may be a destructor value, which the view lends and
+    never drops: `viewDtorOK`).  The result is the view's one share, the
     read guard, owned and holding nothing.  Every slot is as it was. -/
 theorem rhs_rwRead {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {k : Nat} {t : Ty} {p : Val}
-    (hk : m.blk k = some ⟨t, .lock, some p⟩) (hfr : m.blk m.nid = none) (hnc : t.hasCell = false)
-    (hvd : t.dtorFree = true) :
+    (hk : m.blk k = some ⟨t, .lock, some p⟩) (hfr : m.blk m.nid = none) (hnc : t.hasCell = false) :
     RhsPost m { m with nid := m.nid + 1, blk := upd m.blk m.nid (some ⟨.prod (.lk t) t, .view, some (.pair (.lk k) p)⟩) } Γ Γ F ∧
     RhsOut { m with nid := m.nid + 1, blk := upd m.blk m.nid (some ⟨.prod (.lk t) t, .view, some (.pair (.lk k) p)⟩) } Γ
       ⟨.arc (.prod (.lk t) t), .own, true, [], [], false, false⟩ (.arc m.nid (.pair (.lk k) p)) true := by
@@ -584,25 +585,33 @@ theorem rhs_rwRead {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {k : Nat
       have hkn0 : k0 ≠ m.nid := fun e => by rw [e, hfr] at hk0; cases hk0
       exact ⟨k0, t0, q, rfl, by simp [m2, upd_ne _ _ hkn0, hk0]⟩
   have hheap : HeapOK m2 := HeapOK.mono hi.heap rfl (fun _ h => h) (Nat.le_succ _) hbo hv
-  obtain ⟨htok, hvf, hpay, _⟩ := hi.blocks k _ hk
+  obtain ⟨htok, hvf, hpay, _, hdk⟩ := hi.blocks k _ hk
   obtain ⟨hwp, hshp⟩ := hpay p rfl
+  -- (Agora #804: the payload is a lock's, `Ty.lkPay`, whatever destructor
+  -- value it is: the view reads it in place and owns none of it)
+  have hlp : t.lkPay = true := by
+    rcases hdk.1 (by simp) (by simp) with h | ⟨_, h⟩ | ⟨h, _⟩
+    · exact Ty.lkPay_of_free h
+    · exact h
+    · cases h
+  have hrv : (Ty.prod (.lk t) t).rview = true := Ty.rview_mk hlp hnc
   have hok : (Ty.prod (.lk t) t).ok = true := by
-    simp [Ty.ok, Ty.lkPay, htok, hvf, hvd, Ty.vecD_of_dtorFree hvd]
+    simp [Ty.ok, htok, hvf, hlp]
   have hvf' : (Ty.prod (.lk t) t).holdsView = false := by simp [Ty.holdsView, hvf]
   have hwv : WFv (.prod (.lk t) t) (.pair (.lk k) p) := .pair .lk hwp
-  -- A3.2's second cut: the view's copy of the payload holds the payload's shares
+  -- A3.2's second cut: the view's payload, the lock's read in place, holds the payload's shares
   have hsh : SharesOK m2 (.prod (.lk t) t) (.pair (.lk k) p) := fun u k' q ha => by
     cases ha with
     | fst ha => cases ha; exact ⟨_, hk2⟩
     | snd ha => exact (hshp.grow hb) u k' q ha
   have hB : BlocksIn m2 := fun k' bl hk' => by
     rcases hcases k' bl hk' with ⟨rfl, rfl⟩ | ⟨_, h⟩
-    · exact ⟨hok, hvf', fun q hq => by cases hq; exact ⟨hwv, hsh⟩, Or.inr (by simp [Ty.hasCell, hnc]), noDead (by simp) (by simp [hvd])⟩
+    · exact ⟨hok, hvf', fun q hq => by cases hq; exact ⟨hwv, hsh⟩, Or.inr (by simp [Ty.hasCell, hnc]), viewDtorOK hrv⟩
     · obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k' bl h
       exact ⟨h1, h2, fun q hq => ⟨(h3 q hq).1, (h3 q hq).2.grow hb⟩, h4⟩
   refine ⟨⟨hi.grow rfl hheap (Nat.le_refl _) hb hB, rfl, Nat.le_succ _, fun _ => rfl, fun _ _ => rfl,
     fun _ _ h _ => h, fun _ => rfl, fun _ E1 h => ⟨E1, h, rfl, rfl⟩, DKeep.refl _ _, hb⟩, ?_⟩
-  exact out_share hok (Or.inl (by simp [hvd])) hvf' hwv (Or.inr hnew)
+  exact out_share hok (Or.inr (Or.inr hrv)) hvf' hwv (Or.inr hnew)
 
 theorem RhsPost.trans {m m1 m2 : Mem} {Γ Γ1 Γ2 : Ctx} {F : List Var} (h1 : RhsPost m m1 Γ Γ1 F)
     (h2 : RhsPost m1 m2 Γ1 Γ2 F) : RhsPost m m2 Γ Γ2 F where
@@ -1222,7 +1231,7 @@ theorem chan_elem_blk {t s : Ty} {o o' : Option Val} (ht : t.undtor = .prod (.ve
     have := Ty.holdsView_undtor t; rw [ht, hvf] at this; simpa [Ty.holdsView] using this
   refine ⟨hso, hsv, ?_⟩
   by_cases hsf : s.dtorFree = true
-  · exact ⟨fun _ _ => Or.inl hsf, fun h => (by cases h), fun h => (by simp [hsf] at h)⟩
+  · exact ⟨fun _ _ => Or.inl hsf, fun h => (by cases h), fun h _ => (by simp [hsf] at h)⟩
   -- `s` owns a destructor value, so `t` does: a destructor type at its top
   have htf : t.dtorFree = false := by
     cases t with
@@ -1230,11 +1239,12 @@ theorem chan_elem_blk {t s : Ty} {o o' : Option Val} (ht : t.undtor = .prod (.ve
     | prod a b =>
       simp [Ty.undtor] at ht; obtain ⟨rfl, rfl⟩ := ht; simpa using hsf
     | _ => simp [Ty.undtor] at ht
-  obtain ⟨n, f, u, he, hfn⟩ := hd.2.2 htf
+  obtain ⟨n, f, u, he, hfn⟩ := hd.2.2 htf (by simp)
   have hlk : t.lkPay = true := by
-    rcases hd.1 (by simp) (by simp) with h | ⟨-, h⟩
+    rcases hd.1 (by simp) (by simp) with h | ⟨-, h⟩ | ⟨h, -⟩
     · rw [htf] at h; cases h
     · exact h
+    · cases h
   obtain ⟨-, hna⟩ := Ty.lkPay_dtor hlk htf
   cases n with
   | succ n => subst he; simp [Ty.undtor] at ht
@@ -1251,7 +1261,7 @@ theorem chan_elem_blk {t s : Ty} {o o' : Option Val} (ht : t.undtor = .prod (.ve
       rcases Ty.ok_vec_free hv with h | h
       · exact absurd h hsf
       · exact h
-    refine ⟨fun _ _ => Or.inr ⟨rfl, by simp [Ty.lkPay, hdn, hsa]⟩, fun h => (by cases h), fun _ => ?_⟩
+    refine ⟨fun _ _ => Or.inr (Or.inl ⟨rfl, by simp [Ty.lkPay, hdn, hsa]⟩), fun h => (by cases h), fun _ _ => ?_⟩
     obtain ⟨n', f', u', rfl⟩ := Ty.dnest_shape hdn
     exact ⟨n', f', u', rfl, by simpa [Ty.hasFn] using hsfn⟩
 
@@ -1669,12 +1679,15 @@ theorem reap_pres {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {k n f : 
     shares := fun _ => hshv.grow hb }
 
 /-- A3.3: a read guard's type, `arc (prod (lk t) t)`, is an A2 type that holds
-    no view when its lock's is one. -/
-theorem guardTy_ok {t : Ty} (h : (Ty.lk t).ok = true) (h4 : t.dtorFree = true) :
+    no view when its lock's is one (Agora #804: whatever destructor value the
+    payload is, `Ty.rview`, when it holds no cell share). -/
+theorem guardTy_ok {t : Ty} (h : (Ty.lk t).ok = true) (h4 : t.hasCell = false) :
     (Ty.arc (.prod (.lk t) t)).ok = true ∧ (Ty.arc (.prod (.lk t) t)).holdsView = false := by
   obtain ⟨h1, h2⟩ := Ty.ok_lk h
+  have hp := Ty.ok_lk_pay h
+  have hrv := Ty.rview_mk hp h4
   refine ⟨?_, by simp [Ty.holdsView, h2]⟩
-  simp [Ty.ok, Ty.holdsView, Ty.lkPay, h1, h2, h4]
+  simp [Ty.ok, Ty.holdsView, h1, h2, hp, hrv]
 
 /-- Agora #632: what `takel` / `taker` take a payload out of: an enum, or
     one under its destructor type; the value's facts at its type are the
@@ -1929,21 +1942,21 @@ theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry
   | glob _ htok =>
     cases he with
     | glob _ hf => exact ⟨RhsPost.same hi, out_glob hi htok hf⟩
-  | rwRead ha hl hty hnc hdf =>
+  | rwRead ha hl hty hnc =>
     cases he with
     | rwRead hv hk hfr =>
       obtain ⟨_, hk'⟩ := hi.lk_val ha hl hty hv
       rw [hk] at hk'; cases hk'
-      exact rhs_rwRead hi hk hfr hnc hdf
-  | @rwTryRead a E t ha hl hty hnc hdf =>
+      exact rhs_rwRead hi hk hfr hnc
+  | @rwTryRead a E t ha hl hty hnc =>
     have hok : (Ty.lk t).ok = true := by rw [← hty]; exact hi.tyok ha
-    obtain ⟨hgok, hgvf⟩ := guardTy_ok hok hdf
+    obtain ⟨hgok, hgvf⟩ := guardTy_ok hok hnc
     cases he with
     | rwTryRead hv hk hfr =>
       -- A3.3: `rw_read`'s view and guard, the guard wrapped as `some`
       obtain ⟨_, hk'⟩ := hi.lk_val ha hl hty hv
       rw [hk] at hk'; cases hk'
-      obtain ⟨post, out⟩ := rhs_rwRead (F := F) hi hk hfr hnc hdf
+      obtain ⟨post, out⟩ := rhs_rwRead (F := F) hi hk hfr hnc
       obtain ⟨_, hwv, _, _, _, _, _, _⟩ := out.valOwn rfl
       refine ⟨post, out_ownNoView (show (Ty.int.ok && _) = true by rw [hgok]; rfl)
         (show (Ty.int.holdsView || _) = false by rw [hgvf]; rfl)
