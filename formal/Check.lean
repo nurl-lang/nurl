@@ -102,7 +102,8 @@ import A3
 -- Agora #808: the check-out's root share outlives its body (A3/LockRoot.lean): a step leaves the
 -- slot of a binding its statement does not name that holds a share (through calls' `frozen` lists and
 -- a package's by-name captures, `inp` or a `Vec`: `PkgsOK`); each frame keeps a root on its thread
--- and its block (kept by every `TStep`); the give-back lemmas with no hypothesis on the block
+-- and its block (kept by every `TStep`); the give-back lemmas with no hypothesis on the block; a
+-- thread inside a cell's check-out holds an owner's share of it (`CellOp`'s second case)
 #print axioms A3.Step.keepSlot
 #print axioms A3.TypedAt.capShr
 #print axioms A3.Step.lkRoots
@@ -117,6 +118,8 @@ import A3
 #print axioms A3.reach_frame_root
 #print axioms A3.reach_frame_live
 #print axioms A3.reach_frame_checked_out
+#print axioms A3.rbOK_of
+#print axioms A3.reach_frame_cell_owner
 #print axioms A3.reach_scopeL_end_gives_back
 #print axioms A3.reach_scopeL_panic
 #print axioms A3.LockDtorWitness.rwRead_dtor_refused

@@ -653,34 +653,50 @@ theorem _root_.A2.StmtT.withLock_a {P : Prog} {Γ Δ : Ctx} {F : List Var} {a x 
 
 /-- Each `scopeL k` frame on a statement's spine has a slot of its thread that
     holds a share of block `k`, a lock's or a cell's, and that the frame's
-    body does not name (the check-out's root `a`). -/
-def LkRoots (st : Var → Option Slot) : Stmt → Prop
-  | .seq a _ => LkRoots st a
-  | .scope _ s => LkRoots st s
-  | .scopeD _ _ s => LkRoots st s
-  | .rbind _ s => LkRoots st s
-  | .frozen _ s => LkRoots st s
-  | .catchR _ _ s => LkRoots st s
-  | .scopeL k _ _ s =>
-    (∃ y o w, st y = some ⟨o, some w⟩ ∧ (w = .lk k ∨ w = .cell k) ∧ y ∉ s.nm) ∧ LkRoots st s
-  | _ => True
+    body does not name (the check-out's root `a`); one that is a borrow (a
+    borrowed parameter's, the slot owning nothing) is bound by an `rbind`
+    around the frame (`R`: the `rbind`s the spine has gone through). -/
+def LkRoots (st : Var → Option Slot) : List Var → Stmt → Prop
+  | R, .seq a _ => LkRoots st R a
+  | R, .scope _ s => LkRoots st R s
+  | R, .scopeD _ _ s => LkRoots st R s
+  | R, .rbind p s => LkRoots st (p :: R) s
+  | R, .frozen _ s => LkRoots st R s
+  | R, .catchR _ _ s => LkRoots st R s
+  | R, .scopeL k _ _ s =>
+    (∃ y o w, st y = some ⟨o, some w⟩ ∧ (w = .lk k ∨ w = .cell k) ∧ y ∉ s.nm ∧ (o = false → y ∈ R)) ∧
+      LkRoots st R s
+  | _, _ => True
+
+/-- A check-out through a borrow is through a borrowed parameter, bound by an
+    `rbind` around it (`R`).  Asked of the redexes of a statement's spine. -/
+def RbOK (st : Var → Option Slot) : List Var → Stmt → Prop
+  | R, .seq a _ => RbOK st R a
+  | R, .scope _ s => RbOK st R s
+  | R, .scopeD _ _ s => RbOK st R s
+  | R, .rbind p s => RbOK st (p :: R) s
+  | R, .frozen _ s => RbOK st R s
+  | R, .catchR _ _ s => RbOK st R s
+  | R, .scopeL _ _ _ s => RbOK st R s
+  | R, .withLock a _ _ => ∀ v, st a = some ⟨false, v⟩ → a ∈ R
+  | _, _ => True
 
 /-- A statement inside no frame has nothing to keep. -/
-theorem lkRoots_nil (st : Var → Option Slot) : ∀ {s : Stmt}, s.lfr = [] → LkRoots st s := by
+theorem lkRoots_nil (st : Var → Option Slot) : ∀ {s : Stmt} (R : List Var), s.lfr = [] → LkRoots st R s := by
   intro s
   induction s with
   | seq _ _ ih _ => exact ih
   | scope _ _ ih => exact ih
   | scopeD _ _ _ ih => exact ih
-  | rbind _ _ ih => exact ih
+  | rbind _ _ ih => exact fun R => ih _
   | frozen _ _ ih => exact ih
   | catchR _ _ _ ih => exact ih
-  | scopeL _ _ _ _ _ => intro h; cases h
-  | _ => exact fun _ => trivial
+  | scopeL _ _ _ _ _ => intro _ h; cases h
+  | _ => exact fun _ _ => trivial
 
 /-- A frame's root, from the spine's. -/
-theorem LkRoots.root {st : Var → Option Slot} : ∀ {s : Stmt}, LkRoots st s → ∀ {k : Nat} {u : Ty},
-    (k, u) ∈ s.lfr → ∃ y o w, st y = some ⟨o, some w⟩ ∧ (w = .lk k ∨ w = .cell k) := by
+theorem LkRoots.root {st : Var → Option Slot} : ∀ {s : Stmt} {R : List Var}, LkRoots st R s →
+    ∀ {k : Nat} {u : Ty}, (k, u) ∈ s.lfr → ∃ y o w, st y = some ⟨o, some w⟩ ∧ (w = .lk k ∨ w = .cell k) := by
   intro s
   induction s with
   | seq _ _ ih _ => exact ih
@@ -690,79 +706,215 @@ theorem LkRoots.root {st : Var → Option Slot} : ∀ {s : Stmt}, LkRoots st s �
   | frozen _ _ ih => exact ih
   | catchR _ _ _ ih => exact ih
   | scopeL k0 t0 x0 b ih =>
-    intro hl k u hm
+    intro R hl k u hm
     simp only [Stmt.lfr, List.mem_cons] at hm
     rcases hm with hm | hm
     · cases hm
       obtain ⟨⟨y, o, w, hy, hw, _⟩, _⟩ := hl
       exact ⟨y, o, w, hy, hw⟩
     · exact ih hl.2 hm
-  | _ => intro _ _ _ hm; simp [Stmt.lfr] at hm
+  | _ => intro _ _ _ _ hm; simp [Stmt.lfr] at hm
+
+/-! ### `RbOK` from the typing -/
+
+/-- A borrowed parameter of a context `Weaker` than another is one of it. -/
+theorem Weaker.rootb {Γ Γ' : Ctx} (hw : Weaker Γ Γ') {p : Var} {E' : Entry} (hp : Γ' p = some E')
+    (hm : E'.mode = .rootb) : ∃ E, Γ p = some E ∧ E.mode = .rootb := by
+  cases h : Γ p with
+  | none => rw [(hw.1 p).1.1 h] at hp; cases hp
+  | some E => exact ⟨E, rfl, ((hw.1 p).2 E E' h hp).mode ▸ hm⟩
+
+/-- **A typed statement's check-outs through a borrow are through borrowed
+    parameters bound around them**: every borrowed parameter of the context
+    is bound on the spine or by an `rbind` gone through (`R`); a `scope`'s,
+    a destructor frame's and a check-out's bindings are no borrowed
+    parameters, so one on the spine is an `rbind`'s. -/
+theorem rbOK_of {P : Prog} {m : Mem} : ∀ (s : Stmt) {Γ : Ctx} {F : List Var} {Δ : Ctx} (R : List Var),
+    StmtT P Γ F s Δ → MInv m Γ →
+    (∀ p E, Γ p = some E → E.mode = .rootb → p ∈ s.spine ∨ p ∈ R) → RbOK m.st R s := by
+  intro s
+  induction s with
+  | seq a b iha _ =>
+    intro Γ F Δ R ht hi hR
+    generalize hs : Stmt.seq a b = s0 at ht hR
+    induction ht with
+    | seq _ ha _ _ _ => cases hs; exact iha R ha hi hR
+    | sub hw _ _ ih =>
+      exact ih (hi.weaker hw) hs (fun p E hp hm => by
+        obtain ⟨E0, h0, hm0⟩ := Weaker.rootb hw hp hm; exact hR p E0 h0 hm0)
+    | _ => cases hs
+  | scope x b ih =>
+    intro Γ F Δ R ht hi hR
+    generalize hs : Stmt.scope x b = s0 at ht hR
+    induction ht with
+    | scope hx _ hb _ =>
+      cases hs
+      refine ih R hb hi fun p E hp hm => ?_
+      obtain ⟨Ex, hEx, hmx⟩ := hx
+      rcases hR p E hp hm with h | h
+      · rcases List.mem_cons.mp h with h | h
+        · subst h; rw [hp] at hEx; cases hEx; exact absurd hm hmx
+        · exact .inl h
+      · exact .inr h
+    | sub hw _ _ ih0 =>
+      exact ih0 (hi.weaker hw) hs (fun p E hp hm => by
+        obtain ⟨E0, h0, hm0⟩ := Weaker.rootb hw hp hm; exact hR p E0 h0 hm0)
+    | _ => cases hs
+  | scopeD x f b ih =>
+    intro Γ F Δ R ht hi hR
+    generalize hs : Stmt.scopeD x f b = s0 at ht hR
+    induction ht with
+    | scopeD hx _ hb _ _ _ _ _ _ =>
+      cases hs
+      refine ih R hb hi fun p E hp hm => ?_
+      obtain ⟨Ex, _, hEx, hmx, _⟩ := hx
+      rcases hR p E hp hm with h | h
+      · rcases List.mem_cons.mp h with h | h
+        · subst h; rw [hp] at hEx; cases hEx; rw [hmx] at hm; cases hm
+        · exact .inl h
+      · exact .inr h
+    | sub hw _ _ ih0 =>
+      exact ih0 (hi.weaker hw) hs (fun p E hp hm => by
+        obtain ⟨E0, h0, hm0⟩ := Weaker.rootb hw hp hm; exact hR p E0 h0 hm0)
+    | _ => cases hs
+  | rbind q b ih =>
+    intro Γ F Δ R ht hi hR
+    generalize hs : Stmt.rbind q b = s0 at ht hR
+    induction ht with
+    | rbind _ _ _ _ _ hb _ =>
+      cases hs
+      refine ih (q :: R) hb hi fun p E hp hm => ?_
+      rcases hR p E hp hm with h | h
+      · rcases List.mem_cons.mp h with h | h
+        · exact .inr (h ▸ List.mem_cons_self)
+        · exact .inl h
+      · exact .inr (List.mem_cons_of_mem _ h)
+    | sub hw _ _ ih0 =>
+      exact ih0 (hi.weaker hw) hs (fun p E hp hm => by
+        obtain ⟨E0, h0, hm0⟩ := Weaker.rootb hw hp hm; exact hR p E0 h0 hm0)
+    | _ => cases hs
+  | frozen z b ih =>
+    intro Γ F Δ R ht hi hR
+    generalize hs : Stmt.frozen z b = s0 at ht hR
+    induction ht with
+    | frozen hb _ => cases hs; exact ih R hb hi hR
+    | sub hw _ _ ih0 =>
+      exact ih0 (hi.weaker hw) hs (fun p E hp hm => by
+        obtain ⟨E0, h0, hm0⟩ := Weaker.rootb hw hp hm; exact hR p E0 h0 hm0)
+    | _ => cases hs
+  | catchR x m0 b ih =>
+    intro Γ F Δ R ht hi hR
+    generalize hs : Stmt.catchR x m0 b = s0 at ht hR
+    induction ht with
+    | catchR _ hb _ _ _ _ => cases hs; exact ih R hb hi hR
+    | sub hw _ _ ih0 =>
+      exact ih0 (hi.weaker hw) hs (fun p E hp hm => by
+        obtain ⟨E0, h0, hm0⟩ := Weaker.rootb hw hp hm; exact hR p E0 h0 hm0)
+    | _ => cases hs
+  | scopeL k t x b ih =>
+    intro Γ F Δ R ht hi hR
+    generalize hs : Stmt.scopeL k t x b = s0 at ht hR
+    induction ht with
+    | scopeL hx _ hb _ =>
+      cases hs
+      refine ih R hb hi fun p E hp hm => ?_
+      obtain ⟨Ex, hEx, hmx, _⟩ := hx
+      rcases hR p E hp hm with h | h
+      · rcases List.mem_cons.mp h with h | h
+        · subst h; rw [hp] at hEx; cases hEx; exact absurd hm hmx
+        · exact .inl h
+      · exact .inr h
+    | sub hw _ _ ih0 =>
+      exact ih0 (hi.weaker hw) hs (fun p E hp hm => by
+        obtain ⟨E0, h0, hm0⟩ := Weaker.rootb hw hp hm; exact hR p E0 h0 hm0)
+    | _ => cases hs
+  | withLock a x b _ =>
+    intro Γ F Δ R ht hi hR
+    generalize hs : Stmt.withLock a x b = s0 at ht hR
+    induction ht with
+    | withLock _ _ _ h4 _ _ _ _ h9 _ =>
+      cases hs
+      intro v hv
+      obtain ⟨sl, hsl, _, hown, _⟩ := hi.slot _ _ h4
+      rw [hv] at hsl; cases hsl
+      rcases hi.mode_cases h4 with hm | hm | hm
+      · rw [hm] at hown; cases hown
+      · rcases hR _ _ h4 hm with h | h
+        · simp [Stmt.spine] at h
+        · exact h
+      · rw [hm] at h9; cases h9
+    | sub hw _ _ ih0 =>
+      exact ih0 (hi.weaker hw) hs (fun p E hp hm => by
+        obtain ⟨E0, h0, hm0⟩ := Weaker.rootb hw hp hm; exact hR p E0 h0 hm0)
+    | _ => cases hs
+  | _ => intros; trivial
 
 /-- **A thread's step keeps each frame's root**: the step of a frame's body
     leaves the root's slot, which the body does not name (`Step.keepSlot`),
     and a check-out's new frame has its own `a`, which `withLock`'s typing
-    says its body does not name. -/
+    says its body does not name (a borrowed one an `rbind`'s, `RbOK`). -/
 theorem Step.lkRoots {P : Prog} (hP : ProgOK P) {m m' : Mem} {s s' : Stmt} (h : Step P m s (.ok m' s'))
     (ht : Typed P s) (hck : CapShr P m.st m.nv s) (hnv : ∀ v, (m.st v).isSome = true → v < m.nv)
-    (hl : LkRoots m.st s) : LkRoots m'.st s' := by
-  revert ht hck hnv hl
+    {R : List Var} (hrb : RbOK m.st R s) (hl : LkRoots m.st R s) : LkRoots m'.st R s' := by
+  revert ht hck hnv hrb hl
   generalize hr : Res.ok m' s' = r at h
-  induction h generalizing m' s' with
-  | seqL _ ih => cases hr; intro ht hck hnv hl; have h1 := ih rfl ht.seq hck hnv hl; exact h1
-  | scopeIn _ ih => cases hr; intro ht hck hnv hl; have h1 := ih rfl ht.scope hck hnv hl; exact h1
-  | rbindIn _ ih => cases hr; intro ht hck hnv hl; have h1 := ih rfl ht.rbind hck hnv hl; exact h1
-  | frozenIn _ ih => cases hr; intro ht hck hnv hl; have h1 := ih rfl ht.frozen hck hnv hl; exact h1
-  | catchIn _ ih => cases hr; intro ht hck hnv hl; have h1 := ih rfl ht.catchR hck hnv hl; exact h1
-  | scopeDIn _ ih => cases hr; intro ht hck hnv hl; have h1 := ih rfl ht.scopeD hck hnv hl; exact h1
+  induction h generalizing m' s' R with
+  | seqL _ ih => cases hr; intro ht hck hnv hrb hl; have h1 := ih rfl ht.seq hck hnv hrb hl; exact h1
+  | scopeIn _ ih => cases hr; intro ht hck hnv hrb hl; have h1 := ih rfl ht.scope hck hnv hrb hl; exact h1
+  | rbindIn _ ih => cases hr; intro ht hck hnv hrb hl; have h1 := ih rfl ht.rbind hck hnv hrb hl; exact h1
+  | frozenIn _ ih => cases hr; intro ht hck hnv hrb hl; have h1 := ih rfl ht.frozen hck hnv hrb hl; exact h1
+  | catchIn _ ih => cases hr; intro ht hck hnv hrb hl; have h1 := ih rfl ht.catchR hck hnv hrb hl; exact h1
+  | scopeDIn _ ih => cases hr; intro ht hck hnv hrb hl; have h1 := ih rfl ht.scopeD hck hnv hrb hl; exact h1
   | @scopeLIn m1 k t x b b' hb ih =>
-    cases hr; intro ht hck hnv hl
-    obtain ⟨⟨y, o, w, hy, hw, hyn⟩, hlb⟩ := hl
-    refine ⟨?_, by have h1 := ih rfl ht.scopeL hck hnv hlb; exact h1⟩
+    cases hr; intro ht hck hnv hrb hl
+    obtain ⟨⟨y, o, w, hy, hw, hyn, hyR⟩, hlb⟩ := hl
+    refine ⟨?_, by have h1 := ih rfl ht.scopeL hck hnv hrb hlb; exact h1⟩
     have hlt : y < m.nv := hnv y (by rw [hy]; rfl)
     obtain ⟨h1, h2⟩ := Step.keepSlot hb hck hy ⟨k, hw⟩ hyn hlt
-    exact ⟨y, o, w, h1.trans hy, hw, h2 _ _ rfl⟩
+    exact ⟨y, o, w, h1.trans hy, hw, h2 _ _ rfl, hyR⟩
   | seqSkip =>
-    cases hr; rintro ⟨_, _, _, ht⟩ _ _ _; exact lkRoots_nil _ (lfr_src ht.seq_src)
+    cases hr; rintro ⟨_, _, _, ht⟩ _ _ _ _; exact lkRoots_nil _ _ (lfr_src ht.seq_src)
   | letv _ _ =>
-    cases hr; rintro ⟨_, _, _, ht⟩ _ _ _; exact lkRoots_nil _ (by simp [Stmt.lfr, lfr_src ht.letv_src])
+    cases hr; rintro ⟨_, _, _, ht⟩ _ _ _ _; exact lkRoots_nil _ _ (by simp [Stmt.lfr, lfr_src ht.letv_src])
   | iteT _ _ =>
-    cases hr; rintro ⟨_, _, _, ht⟩ _ _ _; exact lkRoots_nil _ (lfr_src ht.ite_src.1)
+    cases hr; rintro ⟨_, _, _, ht⟩ _ _ _ _; exact lkRoots_nil _ _ (lfr_src ht.ite_src.1)
   | iteF _ =>
-    cases hr; rintro ⟨_, _, _, ht⟩ _ _ _; exact lkRoots_nil _ (lfr_src ht.ite_src.2)
+    cases hr; rintro ⟨_, _, _, ht⟩ _ _ _ _; exact lkRoots_nil _ _ (lfr_src ht.ite_src.2)
   | withElem _ _ _ _ _ _ =>
-    cases hr; rintro ⟨_, _, _, ht⟩ _ _ _; exact lkRoots_nil _ (by simp [Stmt.lfr, lfr_src ht.withElem_src])
+    cases hr; rintro ⟨_, _, _, ht⟩ _ _ _ _
+    exact lkRoots_nil _ _ (by simp [Stmt.lfr, lfr_src ht.withElem_src])
   | unpair _ _ _ _ =>
-    cases hr; rintro ⟨_, _, _, ht⟩ _ _ _; exact lkRoots_nil _ (by simp [Stmt.lfr, lfr_src ht.unpair_src])
+    cases hr; rintro ⟨_, _, _, ht⟩ _ _ _ _
+    exact lkRoots_nil _ _ (by simp [Stmt.lfr, lfr_src ht.unpair_src])
   | letd _ _ =>
-    cases hr; rintro ⟨_, _, _, ht⟩ _ _ _; exact lkRoots_nil _ (by simp [Stmt.lfr, lfr_src ht.letd_src])
+    cases hr; rintro ⟨_, _, _, ht⟩ _ _ _ _; exact lkRoots_nil _ _ (by simp [Stmt.lfr, lfr_src ht.letd_src])
   | letcall hf _ _ =>
-    cases hr; intro _ _ _ _
-    exact lkRoots_nil _ (by simp [Stmt.lfr, callStmt, lfr_callIn (body_src hP hf)])
+    cases hr; intro _ _ _ _ _
+    exact lkRoots_nil _ _ (by simp [Stmt.lfr, callStmt, lfr_callIn (body_src hP hf)])
   | letrec hf _ _ =>
-    cases hr; intro _ _ _ _
-    exact lkRoots_nil _ (by simp [Stmt.lfr, recStmt, lfr_callIn (body_src hP hf)])
+    cases hr; intro _ _ _ _ _
+    exact lkRoots_nil _ _ (by simp [Stmt.lfr, recStmt, lfr_callIn (body_src hP hf)])
   | callc _ _ hf _ _ =>
-    cases hr; intro _ _ _ _; exact lkRoots_nil _ (by simp [Stmt.lfr, lfr_callIn (body_src hP hf)])
+    cases hr; intro _ _ _ _ _; exact lkRoots_nil _ _ (by simp [Stmt.lfr, lfr_callIn (body_src hP hf)])
   | @withLock a x s0 k t v hla _ hx _ =>
-    cases hr; rintro ⟨_, _, _, ht⟩ _ _ _
+    cases hr; rintro ⟨_, _, _, ht⟩ _ _ hrb _
     obtain ⟨o, ha⟩ := hla
     have hax : a ≠ x := fun e => by
       subst e; rcases ha with ha | ha <;> rw [hx] at ha <;> cases ha
     have hst : (({ m with blk := upd m.blk k (some ⟨t, .lock, none⟩) } : Mem).set x ⟨v.owns, some v⟩).st a =
         m.st a := by simp [upd_ne _ _ hax]
     have hn : a ∉ s0.nm := nm_vars _ _ ht.withLock_a
-    refine ⟨?_, lkRoots_nil _ (lfr_src ht.withLock_src)⟩
+    refine ⟨?_, lkRoots_nil _ _ (lfr_src ht.withLock_src)⟩
     rcases ha with ha | ha
-    · exact ⟨a, o, .lk k, hst.trans ha, .inl rfl, hn⟩
-    · exact ⟨a, o, .cell k, hst.trans ha, .inr rfl, hn⟩
+    · exact ⟨a, o, .lk k, hst.trans ha, .inl rfl, hn, fun ho => hrb _ (ho ▸ ha)⟩
+    · exact ⟨a, o, .cell k, hst.trans ha, .inr rfl, hn, fun ho => hrb _ (ho ▸ ha)⟩
   | scopeLFail _ _ =>
-    cases hr; intro _ _ _ hl
-    obtain ⟨⟨y, o, w, hy, hw, _⟩, _⟩ := hl
-    exact ⟨⟨y, o, w, hy, hw, by simp [Stmt.nm]⟩, trivial⟩
+    cases hr; intro _ _ _ _ hl
+    obtain ⟨⟨y, o, w, hy, hw, _, hyR⟩, _⟩ := hl
+    exact ⟨⟨y, o, w, hy, hw, by simp [Stmt.nm], hyR⟩, trivial⟩
   | _ => first
     | (cases hr; done)
-    | (cases hr; intro _ _ _ _; exact lkRoots_nil _ (by simp [Stmt.lfr, handStmt, handStmtD]))
+    | (cases hr; intro _ _ _ _ _; exact lkRoots_nil _ _ (by simp [Stmt.lfr, handStmt, handStmtD]))
 
 /-! ### Through a redex's context -/
 
@@ -792,13 +944,13 @@ theorem Redex.nm_mono {s r r' : Stmt} {K : Stmt → Stmt} (h : Redex s K r)
     exact ⟨hy.1, ih hr y hy.2⟩
   | frozen _ ih => exact ih hr
 
-/-- A redex replaced by one that names no more and changes only slots the
-    old one names keeps every frame's root around it. -/
+/-- A redex replaced by one inside no frame, that names no more and changes
+    only slots the old one names, keeps every frame's root around it. -/
 theorem Redex.lkRoots {s r r' : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {st st' : Var → Option Slot}
-    (hl : LkRoots st s) (hr' : LkRoots st' r') (hnm : ∀ y, y ∉ r.nm → y ∉ r'.nm)
-    (hst : ∀ y, y ∉ r.nm → st' y = st y) : LkRoots st' (K r') := by
-  induction h with
-  | here => exact hr'
+    {R : List Var} (hl : LkRoots st R s) (hr' : r'.lfr = []) (hnm : ∀ y, y ∉ r.nm → y ∉ r'.nm)
+    (hst : ∀ y, y ∉ r.nm → st' y = st y) : LkRoots st' R (K r') := by
+  induction h generalizing R with
+  | here => exact lkRoots_nil _ _ hr'
   | seq _ ih => exact ih hl hnm hst
   | scope _ ih => exact ih hl hnm hst
   | rbind _ ih => exact ih hl hnm hst
@@ -806,23 +958,65 @@ theorem Redex.lkRoots {s r r' : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {st 
   | catchR _ ih => exact ih hl hnm hst
   | scopeD _ ih => exact ih hl hnm hst
   | scopeL hb ih =>
-    obtain ⟨⟨y, o, w, hy, hw, hyn⟩, hlb⟩ := hl
-    exact ⟨⟨y, o, w, (hst y (hb.nm_sub hyn)).trans hy, hw, hb.nm_mono hnm y hyn⟩, ih hlb hnm hst⟩
+    obtain ⟨⟨y, o, w, hy, hw, hyn, hyR⟩, hlb⟩ := hl
+    exact ⟨⟨y, o, w, (hst y (hb.nm_sub hyn)).trans hy, hw, hb.nm_mono hnm y hyn, hyR⟩, ih hlb hnm hst⟩
 
-/-- The root of a frame on a statement's spine. -/
+/-- The root of a frame on a statement's spine: a borrowed one is bound by
+    an `rbind` around the frame. -/
 theorem Redex.lkRoot {s : Stmt} {K : Stmt → Stmt} {k : Nat} {u : Ty} {x : Var} {b : Stmt}
-    (h : Redex s K (.scopeL k u x b)) {st : Var → Option Slot} (hl : LkRoots st s) :
-    ∃ y o w, st y = some ⟨o, some w⟩ ∧ (w = .lk k ∨ w = .cell k) ∧ y ∉ b.nm := by
+    (h : Redex s K (.scopeL k u x b)) {st : Var → Option Slot} {R : List Var} (hl : LkRoots st R s) :
+    ∃ y o w, st y = some ⟨o, some w⟩ ∧ (w = .lk k ∨ w = .cell k) ∧ y ∉ b.nm ∧
+      (o = false → y ∈ R ∨ ∃ K' s', Redex s K' (.rbind y s')) := by
   generalize hr : Stmt.scopeL k u x b = r at h
-  induction h with
-  | here => subst hr; exact hl.1
-  | seq _ ih => exact ih hl hr
-  | scope _ ih => exact ih hl hr
-  | rbind _ ih => exact ih hl hr
-  | frozen _ ih => exact ih hl hr
-  | catchR _ ih => exact ih hl hr
-  | scopeD _ ih => exact ih hl hr
-  | scopeL _ ih => exact ih hl.2 hr
+  induction h generalizing R with
+  | here =>
+    subst hr
+    obtain ⟨y, o, w, hy, hw, hyn, hyR⟩ := hl.1
+    exact ⟨y, o, w, hy, hw, hyn, fun ho => .inl (hyR ho)⟩
+  | seq _ ih =>
+    obtain ⟨y, o, w, hy, hw, hyn, hyR⟩ := ih hl hr
+    refine ⟨y, o, w, hy, hw, hyn, fun ho => ?_⟩
+    rcases hyR ho with h | ⟨K', s', h⟩
+    · exact .inl h
+    · exact .inr ⟨_, _, .seq h⟩
+  | scope _ ih =>
+    obtain ⟨y, o, w, hy, hw, hyn, hyR⟩ := ih hl hr
+    refine ⟨y, o, w, hy, hw, hyn, fun ho => ?_⟩
+    rcases hyR ho with h | ⟨K', s', h⟩
+    · exact .inl h
+    · exact .inr ⟨_, _, .scope h⟩
+  | @rbind p s0 r0 K0 _ ih =>
+    obtain ⟨y, o, w, hy, hw, hyn, hyR⟩ := ih hl hr
+    refine ⟨y, o, w, hy, hw, hyn, fun ho => ?_⟩
+    rcases hyR ho with h | ⟨K', s', h⟩
+    · rcases List.mem_cons.mp h with h | h
+      · subst h; exact .inr ⟨_, _, .here⟩
+      · exact .inl h
+    · exact .inr ⟨_, _, .rbind h⟩
+  | frozen _ ih =>
+    obtain ⟨y, o, w, hy, hw, hyn, hyR⟩ := ih hl hr
+    refine ⟨y, o, w, hy, hw, hyn, fun ho => ?_⟩
+    rcases hyR ho with h | ⟨K', s', h⟩
+    · exact .inl h
+    · exact .inr ⟨_, _, .frozen h⟩
+  | catchR _ ih =>
+    obtain ⟨y, o, w, hy, hw, hyn, hyR⟩ := ih hl hr
+    refine ⟨y, o, w, hy, hw, hyn, fun ho => ?_⟩
+    rcases hyR ho with h | ⟨K', s', h⟩
+    · exact .inl h
+    · exact .inr ⟨_, _, .catchR h⟩
+  | scopeD _ ih =>
+    obtain ⟨y, o, w, hy, hw, hyn, hyR⟩ := ih hl hr
+    refine ⟨y, o, w, hy, hw, hyn, fun ho => ?_⟩
+    rcases hyR ho with h | ⟨K', s', h⟩
+    · exact .inl h
+    · exact .inr ⟨_, _, .scopeD h⟩
+  | scopeL _ ih =>
+    obtain ⟨y, o, w, hy, hw, hyn, hyR⟩ := ih hl.2 hr
+    refine ⟨y, o, w, hy, hw, hyn, fun ho => ?_⟩
+    rcases hyR ho with h | ⟨K', s', h⟩
+    · exact .inl h
+    · exact .inr ⟨_, _, .scopeL h⟩
 
 theorem MoveArgs.st_ne {st st' : Var → Option Slot} {as : List Var} {vs : List Val}
     (h : MoveArgs st as vs st') {y : Var} (hy : y ∉ as) : st' y = st y := by
@@ -838,7 +1032,7 @@ theorem MoveArgs.st_ne {st st' : Var → Option Slot} {as : List Var} {vs : List
     slot of its thread holding a share of its block that its body does not
     name (`LkRoots`), and its block is there. -/
 structure RootInv (C : Cfg) : Prop where
-  roots : ∀ (i : Nat) (t : Thread), C.ths[i]? = some t → LkRoots t.st t.s
+  roots : ∀ (i : Nat) (t : Thread), C.ths[i]? = some t → LkRoots t.st [] t.s
   live  : ∀ (i : Nat) (t : Thread), C.ths[i]? = some t → ∀ (k : Nat) (u : Ty), (k, u) ∈ t.s.lfr →
     C.blk k ≠ none
 
@@ -861,8 +1055,10 @@ theorem RootInv.put {P : Prog} (hP : ProgOK P) {C : Cfg} {ps : List (Nat → Boo
   obtain ⟨hto, _⟩ := hc.ok i t a hi ha
   have hta : TypedAt P (ownView C t a) t.s := TypedAt.of_threadOK hto
   have htyp : Typed P t.s := by obtain ⟨Γ, F, Δ, ht, _⟩ := hta; exact ⟨Γ, F, Δ, ht⟩
-  obtain ⟨Γ, F, Δ, _, hinv, hcd, _⟩ := hto
+  obtain ⟨Γ, F, Δ, ht0, hinv, hcd, _, hcl⟩ := hto
   have hck : CapShr P (C.view t).st (C.view t).nv t.s := TypedAt.capShr hcd hta
+  have hrb : RbOK (C.view t).st [] t.s :=
+    rbOK_of (m := ownView C t a) t.s [] ht0 hinv.toMInv fun p E hp _ => .inl (hcl p (by rw [hp]; rfl))
   have hnv : ∀ v, ((C.view t).st v).isSome = true → v < (C.view t).nv := hinv.nvSt
   have hE := Step.lfr hP hst htyp
   have hg : Grows (C.view t) m' := Step.grows hst
@@ -877,7 +1073,7 @@ theorem RootInv.put {P : Prog} (hP : ProgOK P) {C : Cfg} {ps : List (Nat → Boo
     · rw [ite_eq_right hij] at hj; exact .inr ⟨Ne.symm hij, hj⟩
   refine ⟨fun j tj hj => ?_, fun j tj hj k u hm => ?_⟩
   · rcases hths j tj hj with ⟨-, rfl⟩ | ⟨_, hj⟩
-    · exact Step.lkRoots hP hst htyp hck hnv (h.roots i t hi)
+    · exact Step.lkRoots hP hst htyp hck hnv hrb (h.roots i t hi)
     · exact h.roots j tj hj
   · show m'.blk k ≠ none
     rcases hths j tj hj with ⟨-, rfl⟩ | ⟨_, hj⟩
@@ -932,8 +1128,8 @@ theorem RootInv.spawn {P : Prog} (hP : ProgOK P) {C : Cfg} {ps : List (Nat → B
   have hks : k.src = true := by simpa [Stmt.src] using letcall_src ht'
   have hlfr : (K (.scope x k)).lfr = t.s.lfr := by
     rw [hK.eq]; exact hK.lfr_eq (by simp [Stmt.lfr, lfr_src hks])
-  have hroot : LkRoots (upd st' x (some ⟨false, some (.int 0)⟩)) (K (.scope x k)) := by
-    refine hK.lkRoots (h.roots i t hi) (lkRoots_nil _ (by simp [Stmt.lfr, lfr_src hks])) ?_ ?_
+  have hroot : LkRoots (upd st' x (some ⟨false, some (.int 0)⟩)) [] (K (.scope x k)) := by
+    refine hK.lkRoots (h.roots i t hi) (by simp [Stmt.lfr, lfr_src hks]) ?_ ?_
     · intro y hy
       simp only [Stmt.nm, List.cons_append, List.mem_cons, List.mem_append, not_or] at hy ⊢
       exact ⟨hy.1, hy.2.2⟩
@@ -952,7 +1148,7 @@ theorem RootInv.spawn {P : Prog} (hP : ProgOK P) {C : Cfg} {ps : List (Nat → B
       · rw [ite_eq_right hij] at hj; exact h.roots j tj hj
     · rw [ite_eq_right hjl] at hj
       by_cases hje : j = C.ths.length
-      · rw [ite_eq_left hje] at hj; cases hj; exact lkRoots_nil _ hnew
+      · rw [ite_eq_left hje] at hj; cases hj; exact lkRoots_nil _ _ hnew
       · rw [ite_eq_right hje] at hj; cases hj
   · by_cases hjl : j < C.ths.length
     · rw [ite_eq_left hjl] at hj
@@ -971,8 +1167,8 @@ theorem RootInv.spawnFail {C : Cfg} (h : RootInv C) {i : Nat} {t : Thread} {K : 
     RootInv { C with ths := C.ths.set i ⟨t.st, t.nv, K (.seq .panic (.letcall x f args k))⟩ } := by
   have hlfr : (K (.seq .panic (.letcall x f args k))).lfr = t.s.lfr := by
     rw [hK.eq]; exact hK.lfr_eq rfl
-  have hroot : LkRoots t.st (K (.seq .panic (.letcall x f args k))) :=
-    hK.lkRoots (h.roots i t hi) trivial (fun y hy => by simpa [Stmt.nm] using hy) (fun _ _ => rfl)
+  have hroot : LkRoots t.st [] (K (.seq .panic (.letcall x f args k))) :=
+    hK.lkRoots (h.roots i t hi) rfl (fun y hy => by simpa [Stmt.nm] using hy) (fun _ _ => rfl)
   have hilen : i < C.ths.length := (List.getElem?_eq_some_iff.mp hi).1
   refine ⟨fun j tj hj => ?_, fun j tj hj k' u hm => ?_⟩ <;> simp only at hj <;>
     rw [list_set_get hilen] at hj
@@ -1000,7 +1196,7 @@ theorem RootInv.start {G : Globs} {s : Stmt} (hs : s.src = true) (nv : Nat) : Ro
     cases j with
     | zero => simp [Cfg.start] at hj; subst hj; exact lfr_src hs
     | succ j => simp [Cfg.start] at hj
-  exact ⟨fun j t hj => lkRoots_nil _ (hnil j t hj), fun j t hj k u hm => by rw [hnil j t hj] at hm; cases hm⟩
+  exact ⟨fun j t hj => lkRoots_nil _ _ (hnil j t hj), fun j t hj k u hm => by rw [hnil j t hj] at hm; cases hm⟩
 
 /-- **Agora #808: every configuration a typed start reaches keeps the
     check-outs' roots.** -/
@@ -1024,14 +1220,20 @@ variable {P : Prog} {spawn : Nat → Bool} {G : Globs} {s0 : Stmt} {Δ0 : Ctx} {
 /-- **The check-out's root share outlives its body** (Agora #808): in a
     reached configuration, a thread inside a check-out of block `k` holds a
     share of block `k` (a lock's or a cell's) in a slot the frame's body does
-    not name. -/
+    not name; a borrowed one (the slot owns nothing) is a borrowed
+    parameter's, bound by an `rbind` on the thread's spine. -/
 theorem reach_frame_root (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn) (hG : GlobsOK P G)
     (ht : StmtT P (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
     (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
     {i : Nat} {th : Thread} {K : Stmt → Stmt} {k : Nat} {u : Ty} {x : Var} {b : Stmt}
     (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x b)) :
-    ∃ y o w, th.st y = some ⟨o, some w⟩ ∧ (w = .lk k ∨ w = .cell k) ∧ y ∉ b.nm :=
-  hK.lkRoot ((reach_rootInv hP hPc hSp hG ht hs hsc hv hr).roots i th hi)
+    ∃ y o w, th.st y = some ⟨o, some w⟩ ∧ (w = .lk k ∨ w = .cell k) ∧ y ∉ b.nm ∧
+      (o = false → ∃ K' s', Redex th.s K' (.rbind y s')) := by
+  obtain ⟨y, o, w, hy, hw, hyn, hyR⟩ := hK.lkRoot ((reach_rootInv hP hPc hSp hG ht hs hsc hv hr).roots i th hi)
+  refine ⟨y, o, w, hy, hw, hyn, fun ho => ?_⟩
+  rcases hyR ho with h | h
+  · cases h
+  · exact h
 
 /-- **A frame's block is never removed while the frame is out** (Agora
     #808): the sweep keeps what the root's share refers to. -/
@@ -1121,6 +1323,43 @@ theorem reach_scopeL_panic (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P 
   rcases hres with ⟨v, hx, hw, hput⟩ | hnone
   · exact .inl ⟨v, hx, hw, hput hk1⟩
   · exact .inr hnone
+
+theorem _root_.A2.StmtT.rbind_live {P : Prog} {m : Mem} {Γ Δ : Ctx} {F : List Var} {y : Var} {s : Stmt}
+    (ht : StmtT P Γ F (.rbind y s) Δ) (hi : MInv m Γ) :
+    ∃ Γ' E, MInv m Γ' ∧ Γ' y = some E ∧ E.live = true := by
+  generalize hs : Stmt.rbind y s = s0 at ht
+  induction ht with
+  | rbind h1 _ h3 => cases hs; exact ⟨_, _, hi, h1, h3⟩
+  | sub hw _ _ ih => exact ih (hi.weaker hw) hs
+  | _ => cases hs
+
+/-- **A3.5: a thread inside a check-out holds a share of its block**: the
+    check-out is through a lock share the thread holds, or the thread holds
+    an owner's share of cell `k` (`CellOp`'s second case: the root share of a
+    cell's check-out, through an owner, or, through a borrowed parameter, its
+    caller's owner, `MInv.cell_owned`). -/
+theorem reach_frame_cell_owner (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn)
+    (hG : GlobsOK P G) (ht : StmtT P (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
+    (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
+    {i : Nat} {th : Thread} {K : Stmt → Stmt} {k : Nat} {u : Ty} {x : Var} {b : Stmt}
+    (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x b)) :
+    (∃ y o, th.st y = some ⟨o, some (.lk k)⟩) ∨
+      ∃ y v, th.st y = some ⟨true, some v⟩ ∧ Sub (.cell k) v := by
+  obtain ⟨y, o, w, hy, hw, _, hyR⟩ := reach_frame_root hP hPc hSp hG ht hs hsc hv hr hi hK
+  rcases hw with rfl | rfl
+  · exact .inl ⟨y, o, hy⟩
+  · right
+    cases o with
+    | true => exact ⟨y, _, hy, Sub.refl _⟩
+    | false =>
+      obtain ⟨K', s', hK'⟩ := hyR rfl
+      obtain ⟨ps, hcp, _⟩ := (reach_inv hP hPc hSp hG ht hs hsc hv hr).1
+      obtain ⟨a, ha⟩ := part_of hcp.len hi
+      obtain ⟨hto, _⟩ := hcp.ok i th a hi ha
+      obtain ⟨Γ, F, Δ, hth, hinv, _⟩ := hto
+      obtain ⟨Γ', F', Δ', ht', hinv'⟩ := hK'.typed Γ F Δ hth hinv
+      obtain ⟨Γ'', E, hi'', hE, hl⟩ := ht'.rbind_live hinv'.toMInv
+      exact hi''.cell_owned (m := ownView C th a) hE hl hy (Sub.refl _)
 
 end reach
 
