@@ -122,6 +122,13 @@ theorem EvalR.ownedId {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r
     simp only [ids_node, idsL_nil, List.mem_cons, List.not_mem_nil, or_false] at hi
     rcases hi with rfl | rfl <;> omega
   | moveOwn hy => exact ⟨fun _ i hi => .inl (OwnedId.of_slot hy hi), fun i hi => .inl (OwnedId.set_none hi)⟩
+  -- Agora #826: a take hands on `y`'s tree; the fresh empty `Vec` `y` keeps is new
+  | take hy =>
+    refine ⟨fun _ i hi => .inl (OwnedId.of_slot hy hi), fun i hi => ?_⟩
+    rcases OwnedId.set_some hi with ⟨_, hi⟩ | hi
+    · simp only [ids_node, idsL_nil, List.mem_cons, List.not_mem_nil, or_false] at hi
+      exact .inr (by rcases hi with rfl | rfl <;> omega)
+    · exact .inl (OwnedId.of_st rfl hi)
   | pop hy _ _ =>
     refine ⟨fun _ i hi => .inl (OwnedId.of_slot hy (mem_ids_pop (.inr hi))), fun i hi => .inl ?_⟩
     rcases OwnedId.set_some hi with ⟨_, hi⟩ | hi

@@ -143,6 +143,15 @@ theorem EvalR.restrict {m : Mem} {r : Rhs} {res : RRes} (h : EvalR m r res) {a2 
       at h1
     exact ⟨_, h1, rfl, rfl, rfl⟩
   | moveOwn hy => exact ⟨_, .moveOwn hy, rfl, rfl, rfl⟩
+  | @take y t c d es hy =>
+    -- Agora #826: the fresh empty `Vec` is past the part, as `new`'s
+    have h1 : EvalR { m with alloc := minus m.alloc a2 } (.take y)
+        (.ok (.node t c d es) true
+          (Mem.set { m with alloc := upd (upd (minus m.alloc a2) m.nid true) (m.nid + 1) true, nid := m.nid + 2 }
+            y ⟨true, some (.node t m.nid (m.nid + 1) [])⟩)) := .take hy
+    rw [← minus_upd_true (hf m.nid (Nat.le_refl _)), ← minus_upd_true (hf (m.nid + 1) (by omega))]
+      at h1
+    exact ⟨_, h1, rfl, rfl, rfl⟩
   | copy hy => exact ⟨_, .copy hy, rfl, rfl, rfl⟩
   | borrowOwn hy => exact ⟨_, .borrowOwn hy, rfl, rfl, rfl⟩
   | borrowBor hy => exact ⟨_, .borrowBor hy, rfl, rfl, rfl⟩

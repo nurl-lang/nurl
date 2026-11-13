@@ -1054,6 +1054,11 @@ inductive Rhs where
   | lockRestore (a y : Var)    -- `locked_restore a y`: `y`'s value moves back in, to a block whose
                                -- payload was taken (answer 0); with the payload in, or checked out
                                -- by a `withLock` (Agora #810), a panic
+  -- Agora #826: a hand-over out of an `inout .replace` place (nurlc's
+  -- `( eat p )` of an `inout` handle parameter, which empties the caller's
+  -- slot to the type's empty value)
+  | take (y : Var)             -- `y`'s `Vec` moves out, owned; `y` keeps a fresh empty `Vec` of
+                               -- its element type, and stays live
 deriving DecidableEq, Repr
 
 /-! ### Memory (here because a run-time form records a snapshot of it) -/

@@ -18,6 +18,10 @@ import A3
 #print axioms A2.Mem.sweepD_empty
 #print axioms A2.Mem.sweepD_keeps
 #print axioms A2.Mem.sweepD_marks
+#print axioms A2.CutOff.not_reached
+#print axioms A2.CutOff.top
+#print axioms A2.sweepBlkD_marks
+#print axioms A2.Mem.sweepD_marks_cut
 #print axioms A2.settle_ok
 #print axioms A2.orphan_reaps
 #print axioms A2.settle_total
@@ -151,6 +155,10 @@ import A3
 #print axioms A3.RwDtorWitness.main_safe
 #print axioms A3.RwDtorWitness.main_no_leak
 #print axioms A3.RwDtorWitness.main_no_leak_panic
+-- (Agora #831: the guard dropped after the lock's last share; the lock block and the view cut off)
+#print axioms A3.RwDtorWitness.view_cutOff
+#print axioms A3.RwDtorWitness.guard_drop_reaps
+#print axioms A3.RwDtorWitness.guard_drop_reaps_settle
 #print axioms A3.rwDtor_claim
 #print axioms A3.LockDtorWitness.mainV_typed
 #print axioms A3.LockDtorWitness.mainV_safe
@@ -285,6 +293,7 @@ import A3
 #print axioms A3.CParts.sweepD
 #print axioms A3.Cfg.sweepD_reached
 #print axioms A3.Cfg.sweepD_marks
+#print axioms A3.Cfg.sweepD_marks_cut
 #print axioms A3.CInv.thread_of
 #print axioms A3.CInv.raceFree
 #print axioms A3.CSettle.total
@@ -303,6 +312,11 @@ import A3
 #print axioms A2.DynCell.pick_ok
 #print axioms A2.DynCell.main_safe
 #print axioms A2.DynCell.main_no_leak
+-- Agora #826: a take out of an `inout .replace` place (A2/TakeWitness.lean)
+#print axioms A2.rhs_take
+#print axioms A2.TakeWitness.g_ok
+#print axioms A2.TakeWitness.main_safe
+#print axioms A2.TakeWitness.main_no_leak
 -- A2-drop.3a: the destructor on the type (A2/DtorWitness.lean): the typing's
 -- guarantee for each binder, the destructor frame's end and panic, a witness
 #print axioms A2.Dtor.letv_owned_no_dtor

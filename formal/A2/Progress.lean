@@ -141,6 +141,11 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
   | expr he =>
     obtain ⟨n, hn⟩ := eval_exists hi he; exact ⟨_, EvalR.expr hn⟩
   | new _ => exact ⟨_, EvalR.new⟩
+  | take hy hl ht _ hcan =>
+    -- Agora #826: `y` owns its `Vec` (a run-time context has no `inout` binding)
+    obtain ⟨T, hT, hw, _⟩ := hi.own_val hy hl hcan.ownSlot
+    rw [ht] at hw; cases hw
+    exact ⟨_, EvalR.take hT⟩
   | moveOwn hy hl hm _ _ =>
     obtain ⟨T, hT, _⟩ := hi.own_val hy hl (by rw [hm]; rfl)
     exact ⟨_, EvalR.moveOwn hT⟩

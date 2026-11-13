@@ -126,6 +126,12 @@ theorem EvalR.lift {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.
     rw [union_alloc2]
     exact EvalR.new
   | moveOwn hy => exact EvalR.moveOwn hy
+  | take hy =>
+    show EvalR _ _ (.ok _ _ (Mem.set
+      ⟨union (upd (upd m.alloc m.nid true) (m.nid + 1) true) a2, m.nid + 2, m.nv, m.st, m.blk, m.gl,
+        m.taken⟩ _ _))
+    rw [union_alloc2]
+    exact EvalR.take hy
   | copy hy => exact EvalR.copy hy
   | borrowOwn hy => exact EvalR.borrowOwn hy
   | borrowBor hy => exact EvalR.borrowBor hy

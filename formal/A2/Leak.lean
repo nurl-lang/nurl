@@ -170,6 +170,18 @@ theorem covers_evalR {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (hc : Covers m)
       · subst hoy; unfold OwnedAt at hU; rw [hy] at hU; cases hU; exact Or.inr ⟨rfl, hiU⟩
       · exact Or.inl (Or.inl ⟨o', U, ownedAt_set.mpr (Or.inr ⟨hoy, hU⟩), hiU⟩)
     · exact Or.inl (Or.inr hp)
+  | @take y t c d es hy =>
+    -- Agora #826: the fresh empty `Vec` is `y`'s; what `y` held moves out
+    simp only [Mem.set] at hi
+    by_cases hnew : i = m.nid ∨ i = m.nid + 1
+    · exact Or.inl (Or.inl ⟨y, _, ownedAt_set.mpr (Or.inl ⟨rfl, rfl⟩), by
+        simp only [ids_node, idsL_nil, List.mem_cons, List.not_mem_nil, or_false]; exact hnew⟩)
+    · rw [upd_ne _ _ (fun h => hnew (Or.inr h)), upd_ne _ _ (fun h => hnew (Or.inl h))] at hi
+      rcases hc i hi with ⟨o', U, hU, hiU⟩ | hp
+      · by_cases hoy : o' = y
+        · subst hoy; unfold OwnedAt at hU; rw [hy] at hU; cases hU; exact Or.inr ⟨rfl, hiU⟩
+        · exact Or.inl (Or.inl ⟨o', U, ownedAt_set.mpr (Or.inr ⟨hoy, hU⟩), hiU⟩)
+      · exact Or.inl (Or.inr hp)
   | copy _ => exact Or.inl (hc i hi)
   | borrowOwn _ => exact Or.inl (hc i hi)
   | borrowBor _ => exact Or.inl (hc i hi)

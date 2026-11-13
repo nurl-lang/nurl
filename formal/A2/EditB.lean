@@ -191,11 +191,7 @@ theorem killE_comm (a : Eff) (ha : Bool) (x : Var) (b : Eff) (hb : Bool) (y : Va
   unfold killE
   by_cases hA : hits a ha x E = true <;> by_cases hB : hits b hb y E = true <;> simp [hA, hB, h1, h2]
 
-theorem killE_idem (a : Eff) (ha : Bool) (x : Var) (E : Entry) :
-    killE a ha x (killE a ha x E) = killE a ha x E := by
-  have h1 : ∀ (E : Entry) (l : Bool), hits a ha x { E with live := l } = hits a ha x E := fun _ _ => rfl
-  unfold killE
-  by_cases hA : hits a ha x E = true <;> simp [hA, h1]
+-- (`killE_idem`: A2/Steps.lean)
 
 theorem kill_comm (a : Eff) (ha : Bool) (x : Var) (b : Eff) (hb : Bool) (y : Var) (Γ : Ctx) :
     A2.kill a ha x (A2.kill b hb y Γ) = A2.kill b hb y (A2.kill a ha x Γ) := by

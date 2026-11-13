@@ -227,6 +227,9 @@ theorem EvalR.keys {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.
   | new =>
     exact ⟨hk.of_eq rfl rfl rfl (by show m.nid ≤ m.nid + 2; omega), .node fun _ h => by cases h⟩
   | moveOwn hy => exact ⟨hk.set _ (fun _ h => by cases h), hk.st _ _ _ hy⟩
+  | take hy =>
+    exact ⟨(hk.withAN _ (n := m.nid + 2) (by omega)).set _ (fun _ h => by cases h; exact .node fun _ h => by cases h),
+      (hk.st _ _ _ hy).mono (by show m.nid ≤ m.nid + 2; omega)⟩
   | copy hy => exact ⟨hk, hk.st _ _ _ hy⟩
   | borrowOwn _ => exact ⟨hk, .href⟩
   | borrowBor hy => exact ⟨hk, hk.st _ _ _ hy⟩
@@ -798,7 +801,7 @@ theorem closed_send_core {P : Prog} {C : Cfg} (hK : CKeys C) {i : Nat} {t : Thre
           exact Nat.lt_irrefl _ ((KB.int (n := C.nid) (j := 0)).share hsh)
         | some p1 => exact Nat.lt_irrefl _ ((hK.blk _ _ _ _ hk').share hsh)
     obtain ⟨hm, t', w, h1, h2, h3, h4⟩ :=
-      TStep.last_drop_reaps (P := P) (C := C) (i := i) (m' := m') hlen hse (Or.inr rfl) hk hv' hb
+      TStep.last_drop_reaps (P := P) (C := C) (i := i) (m' := m') hlen hse (Or.inr rfl) hk (CutOff.one hv' hb) rfl
     exact ⟨rfl, v, m0, ht, hm, t', w, h1, h2, by rw [← hnv]; exact h3, h4⟩
 
 /-- **Agora #805: a closed channel's send bound by `letv x`** (`: r ( chan_send

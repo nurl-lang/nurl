@@ -1269,17 +1269,23 @@ every thread's slots and the globals) freed an orphaned `Arc<D>`'s,
   argument covers (`CInv.raceFree`).
 - *The witness, as step lemmas.* `TStep.last_drop_reaps`: when thread
   `i`'s step leaves an `arc` block of a destructor value (or of a drained
-  `Vec` of them) or a lock block of one, its payload in it, that no
-  thread's slot, no global and no block's payload refers to, the marking
-  sweep marks it, and in the result `C'` of that configuration step a slot
+  `Vec` of them) or a lock block of one, its payload in it, cut off from
+  the roots (`A2.CutOff`, Agora #831: no thread's slot and no global
+  refers to it, and no block's payload but one of a block cut off with it,
+  no orphan to be and not `dead`; before, no block's payload at all), the
+  marking sweep marks it, and in the result `C'` of that configuration step a slot
   of thread `i` at or above the step's fresh variable (one its reaps made)
   owns the payload and the block is emptied or gone (`CSettle.reaps_block`,
   over `CSettle.keeps_slot`: later reaps add slots above it and touch no
   emptied block); a reap of thread `i` put it there, `Step.reap` binding it
-  in a destructor frame at the thread's redex. The premise that no block's
-  payload refers to it asks it also of blocks the same sweep removes, so a
-  block only such a dying payload refers to is not covered by the lemma
-  (the semantics marks it as well). Instances at the three witnesses' programs:
+  in a destructor frame at the thread's redex. Until Agora #831 the premise
+  that no block's payload refers to it asked it also of blocks the same
+  sweep removes, so a block only such a dying payload refers to was not
+  covered (the semantics marks it as well); a cut-off set covers it when
+  the dying blocks are no orphans to be, as a dropped read guard's view
+  (`A3.RwDtorWitness.guard_drop_reaps`). A block a dying orphan to be's
+  payload refers to is an inner orphan, kept until the outer destructor
+  drops its share, and stays outside, as the semantics has it. Instances at the three witnesses' programs:
   `A3.arcDtor_reaps`, `arcVecDtor_reaps`, `lockDtor_reaps`. As on A2, no
   theorem traces a witness's run.
 - *Exactness.* As on A2, a dead borrow's slot that still holds a handle
@@ -1977,29 +1983,42 @@ no global's type (`Ty.ok`, which `GlobsOK` asks), holds: stricter than
 nurlc for a guard kept on its thread in an `Arc` or a lock.) While a guard lives, its view keeps the lock block reached
 (`A3.RwDtorWitness.view_keeps_lock`), so the lock block is not an orphan
 to be (`view_lock_not_cand`) and a guard cannot outlive the payload it
-lends. What is proved of the payload's drop covers one order only:
+lends. What is proved of the payload's drop covers both orders:
 - *The lock's last share goes after every guard.* `last_drop_reaps`
   (`A3.LockDtorWitness`, of a lock block of the witness's type `DT`, its
-  payload in it) asks, of the store the step ends with, that no slot's
-  value and no block's payload refers to the lock block. Every guard's
-  view must then be gone, not only its guard: the sweep that ends a
-  guard's drop removes its view once nothing reaches it (a view is never
-  an orphan to be nor marked, `A2.Dtor.blocks_dtor_free`), and the
-  lemma takes the absence of a view as its hypothesis (`hb`), not from the
-  order of the drops. Given it, the marking sweep marks the lock block
-  `dead`, its payload in it, and the thread's next step is the reap, whose
-  frame runs the destructor (`settle_reaps`,
-  `A2.Dtor.scopeD_end_runs_dtor`).
-- *A guard is dropped last*, after the lock's last share: the view then
-  still refers to the lock block, so `last_drop_reaps` does not apply. The
-  marking sweep that ends the guard's drop removes the view and marks the
-  lock block, and that thread reaps it, but that is not yet a lemma
-  (Agora #831).
+  payload in it) asks, of the store the step ends with, that the lock
+  block be cut off from the slots (`A2.CutOff`): here, that no slot's
+  value and no block's payload refers to it (`CutOff.one`). Every guard's
+  view is then gone, not only its guard: the sweep that ends a guard's
+  drop removes its view once nothing reaches it (a view is never an
+  orphan to be nor marked, `A2.Dtor.blocks_dtor_free`). Given it, the
+  marking sweep marks the lock block `dead`, its payload in it, and the
+  thread's next step is the reap, whose frame runs the destructor
+  (`settle_reaps`, `A2.Dtor.scopeD_end_runs_dtor`).
+- *A guard is dropped last*, after the lock's last share (Agora #831).
+  When the guard's drop ends, its view, unreached but not yet swept, still
+  refers to the lock block. The lock block and the view are cut off from
+  the roots together (`A2.CutOff`: no root refers to either, and the only
+  block whose payload refers to one of them is the view, which pins
+  nothing), so neither is reached from the marking sweep's roots, an
+  orphan to be's payload included (`CutOff.not_reached`), and the lock
+  block is a top orphan (`CutOff.top`). The sweep removes the view, marks
+  the lock block `dead` (`sweepBlkD_marks`, `A3.Cfg.sweepD_marks_cut`),
+  and the thread that dropped the guard reaps it in the same
+  configuration step: `A3.RwDtorWitness.guard_drop_reaps`, over
+  `A3.TStep.last_drop_reaps`, whose hypothesis `hb` ("no block of the
+  store refers to the block") became a cut-off set (`hc : CutOff .. U`,
+  `hU : U k`; the old hypotheses are the case `U = {k}`). On A2's `Steps`:
+  `guard_drop_reaps_settle`, over the likewise generalised
+  `A3.LockDtorWitness.last_dropV_reaps`.
 No lemma states that the payload is dropped exactly once.
-Witness: `A3/RwDtorWitness.lean` (`main`: an `RwLocked D` made, read through
-a guard, dropped; `main_typed`, `main_safe`, `main_no_leak`,
-`main_no_leak_panic`, `A3.rwDtor_claim`; `rwRead_dtor_typed` and
-`rwTryRead_dtor_typed` replace Agora #755's `rwRead_dtor_refused`).
+Witness: `A3/RwDtorWitness.lean` (`main`, since Agora #831: an
+`RwLocked (Vec D)` made, a value pushed, read through a guard, the lock's
+only share moved to a binding whose scope ends while the guard is bound,
+then the guard dropped; `main_typed`, `main_safe`, `main_no_leak`,
+`main_no_leak_panic`, `A3.rwDtor_claim`, `guard_drop_reaps`;
+`rwRead_dtor_typed` and `rwTryRead_dtor_typed` replace Agora #755's
+`rwRead_dtor_refused`).
 
 ## A3.4's mechanization (`Atomic`, channels)
 

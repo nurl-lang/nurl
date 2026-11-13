@@ -293,7 +293,7 @@ theorem chanDtor_reaps {C : Cfg} {i : Nat} {m' : Mem} {s' : Stmt} {C' : Cfg} (hl
     (C.put i m' s').sweepD.blk k = some ⟨A2.DtorWitness.GVD, .dead, some p⟩ ∧
       ∃ (t' : Thread) (x : Var), C'.ths[i]? = some t' ∧ t'.st x = some ⟨true, some p⟩ ∧ m'.nv ≤ x ∧
         Emptied C'.blk k A2.DtorWitness.GVD :=
-  TStep.last_drop_reaps (n := 0) (f := 7) (u := A2.DtorWitness.GV) hlen hse (Or.inr rfl) hk hv hb
+  TStep.last_drop_reaps (n := 0) (f := 7) (u := A2.DtorWitness.GV) hlen hse (Or.inr rfl) hk (CutOff.one hv hb) rfl
 
 end A3
 

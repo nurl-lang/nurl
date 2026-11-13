@@ -120,6 +120,7 @@ theorem RhsT.domTy {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : Rhs
   | lockRestore _ _ _ hy _ _ hpa => exact PushArg.domTy hy hpa
   | @takel y Ey _ _ hy _ _ _ _ => exact ((DomTy.refl Γ).kill .replace false y).setE ⟨Ey, hy, rfl, rfl⟩
   | @taker y Ey _ _ hy _ _ _ _ => exact ((DomTy.refl Γ).kill .replace false y).setE ⟨Ey, hy, rfl, rfl⟩
+  | @take y Ey _ hy => exact ((DomTy.refl Γ).kill .replace false y).setE ⟨Ey, hy, rfl, rfl⟩
   | _ => exact DomTy.refl Γ
 
 theorem callPostAux_domTy {Γ0 : Ctx} {fn : Fn} {args : List Var} :

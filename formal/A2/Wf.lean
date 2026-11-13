@@ -266,6 +266,27 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
       · subst hry; exact ⟨{ Ey with live := false, dtor := false }, by simp [A2.setE], by rw [hm]; rfl⟩
       · obtain ⟨E', h', hro'⟩ := kill_root (e := .replace) (hv := false) (y := y) hEr hro
         exact ⟨E', by simp only [A2.setE, upd_ne _ _ hry]; exact h', hro'⟩
+  | @take y Ey t hy hl hty _ hcan _ _ _ _ =>
+    -- Agora #826: `y` replaced, live again, holding nothing
+    have hos := hcan.ownSlot
+    have hky : A2.kill .replace false y Γ y = some (killE .replace false y Ey) := by simp [A2.kill, hy]
+    have hwf : CtxWF (A2.setE (kill .replace false y Γ) y ⟨Ey.ty, Ey.mode, true, [], [], false, false⟩) :=
+      (h.kill .replace false y).setE ⟨killE .replace false y Ey, hky, fun _ => Mode.isRoot_of_ownSlot hos⟩
+        (fun _ _ r hr => by simp [roots, Entry.vdeps, hos] at hr)
+    refine ⟨hwf, fun x => ?_, fun x E1 h1 => ?_, fun _ hn r hr => ?_⟩
+    · by_cases hxy : x = y
+      · subst hxy; simp [A2.setE, hy]
+      · simp only [A2.setE, upd_ne _ _ hxy]; exact kill_dom ..
+    · by_cases hxy : x = y
+      · subst hxy; simp only [A2.setE, upd_same, Option.some.injEq] at h1; subst h1; exact ⟨Ey, hy, rfl⟩
+      · simp only [A2.setE, upd_ne _ _ hxy] at h1
+        obtain ⟨E0, h0, hm0, _⟩ := kill_cmode h1; exact ⟨E0, h0, hm0⟩
+    · have hr' : r ∈ roots Ey.held := by simpa [roots, Entry.vdeps, Mode.ownSlot] using hr
+      obtain ⟨Er, hEr, hro⟩ := hheld y Ey hy hl (Or.inl (by rw [hty]; simp)) r hr'
+      by_cases hry : r = y
+      · subst hry; exact ⟨⟨Ey.ty, Ey.mode, true, [], [], false, false⟩, by simp [A2.setE], Mode.isRoot_of_ownSlot hos⟩
+      · obtain ⟨E', h', hro'⟩ := kill_root (e := .replace) (hv := false) (y := y) hEr hro
+        exact ⟨E', by simp only [A2.setE, upd_ne _ _ hry]; exact h', hro'⟩
   | @copyRoot y Ey hy hl hm =>
     refine ⟨h, fun _ => rfl, same, fun _ hn => ?_⟩
     have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inr hm
@@ -936,6 +957,7 @@ theorem RhsT.domMode {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : R
   | chanSend _ _ _ hy _ _ hpa => exact PushArg.domMode hy hpa
   | lockRestore _ _ _ hy _ _ hpa => exact PushArg.domMode hy hpa
   | @takel y Ey _ _ hy _ _ _ _ _ => exact (DomMode.refl Γ |>.kill .replace false y).setE ⟨Ey, hy, rfl⟩
+  | @take y Ey _ hy => exact (DomMode.refl Γ |>.kill .replace false y).setE ⟨Ey, hy, rfl⟩
   | @taker y Ey _ _ hy _ _ _ _ _ => exact (DomMode.refl Γ |>.kill .replace false y).setE ⟨Ey, hy, rfl⟩
   | _ => exact DomMode.refl Γ
 
