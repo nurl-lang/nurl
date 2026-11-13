@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_inout_slice_of_owning_elements_given_a_borrowed_slice.nu:7:1: error: this gives an 'inout' slice parameter a slice it does not own, of 'String' elements, which own values of their own: the caller's slot would share them with their owner. Give it a fresh slice ('[T | …]', or a call that makes one), or pass the slice's owner to a 'sink' parameter and store that.
+@ setq inout [String p [String q → v { = p q }
+^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.
