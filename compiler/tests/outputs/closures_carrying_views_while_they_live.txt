@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+owned by the Vec
+a literal
+3
+the caller's String, alive while f runs
+freed before g runs

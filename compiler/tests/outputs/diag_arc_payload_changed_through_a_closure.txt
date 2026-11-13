@@ -1,0 +1,24 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_arc_payload_changed_through_a_closure.nu:18:5: error: this call hands closure 'g' the contents of Arc 'mine' to change, but an Arc's payload is frozen once made: every thread holding a clone reads it without a lock, so changing it races them, whatever lock this code holds. Build the value before arc_new and arc_new it whole; keep state one thread changes in an Rc; put state threads share and change in a Locked (stdlib/std/thread.nu) and change it with locked_with / locked_set, which hold its lock.
+    ( g ( arc_get [App] mine ) )
+    ^
+compiler/tests/diag_arc_payload_changed_through_a_closure.nu:25:5: error: this call hands closure 'g2' the contents of Arc 'mine' to change, but an Arc's payload is frozen once made: every thread holding a clone reads it without a lock, so changing it races them, whatever lock this code holds. Build the value before arc_new and arc_new it whole; keep state one thread changes in an Rc; put state threads share and change in a Locked (stdlib/std/thread.nu) and change it with locked_with / locked_set, which hold its lock.
+    ( g2 ( arc_get [App] mine ) )
+    ^
+compiler/tests/diag_arc_payload_changed_through_a_closure.nu:31:5: error: this call hands closure 'g' the contents of Arc 'mine' to change, but an Arc's payload is frozen once made: every thread holding a clone reads it without a lock, so changing it races them, whatever lock this code holds. Build the value before arc_new and arc_new it whole; keep state one thread changes in an Rc; put state threads share and change in a Locked (stdlib/std/thread.nu) and change it with locked_with / locked_set, which hold its lock.
+    ( g ( arc_get [App] mine ) )
+    ^
+compiler/tests/diag_arc_payload_changed_through_a_closure.nu:42:5: error: this call runs a closure that hands 'vec_push' the contents of Arc 'mine' to change, but an Arc's payload is frozen once made: every thread holding a clone reads it without a lock, so changing it races them, whatever lock this code holds. Build the value before arc_new and arc_new it whole; keep state one thread changes in an Rc; put state threads share and change in a Locked (stdlib/std/thread.nu) and change it with locked_with / locked_set, which hold its lock.
+    ( c )
+    ^
+compiler/tests/diag_arc_payload_changed_through_a_closure.nu:53:5: error: this call runs a closure that hands 'bump' the contents of Arc 'mine' to change, but an Arc's payload is frozen once made: every thread holding a clone reads it without a lock, so changing it races them, whatever lock this code holds. Build the value before arc_new and arc_new it whole; keep state one thread changes in an Rc; put state threads share and change in a Locked (stdlib/std/thread.nu) and change it with locked_with / locked_set, which hold its lock.
+    ( c )
+    ^
+compiler/tests/diag_arc_payload_changed_through_a_closure.nu:64:5: error: this call runs a closure that hands 'vec_push' the contents of Arc 'mine' to change, but an Arc's payload is frozen once made: every thread holding a clone reads it without a lock, so changing it races them, whatever lock this code holds. Build the value before arc_new and arc_new it whole; keep state one thread changes in an Rc; put state threads share and change in a Locked (stdlib/std/thread.nu) and change it with locked_with / locked_set, which hold its lock.
+    ( run_it c )
+    ^
+compiler/tests/diag_arc_payload_changed_through_a_closure.nu:72:5: error: this call runs a closure that hands 'vec_push' the contents of Arc 'mine' to change, but an Arc's payload is frozen once made: every thread holding a clone reads it without a lock, so changing it races them, whatever lock this code holds. Build the value before arc_new and arc_new it whole; keep state one thread changes in an Rc; put state threads share and change in a Locked (stdlib/std/thread.nu) and change it with locked_with / locked_set, which hold its lock.
+    ( c2 )
+    ^
+error: compilation aborted — 7 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)
