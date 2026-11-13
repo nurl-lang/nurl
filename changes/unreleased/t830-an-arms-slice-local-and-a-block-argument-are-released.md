@@ -1,0 +1,3 @@
+### Fixed
+
+- **An arm's slice literal local, and a value-block argument of its tail call, are released** (Agora #830, #775's rest). `: String e ? c { : [i sl [i | 1 2 3] ( vec_at [String] v 0 ) } ( mk 3 )` leaked the slice's buffer: a lent arm's locals were parked and released where its value lets them go, but an owned slice was not among them. `? c ( idg [String] { : String t ( mk 3 ) t } ) ( mk 3 )` leaked `t`, which the call lent back through the block and nothing then owned. The arm's slices are now parked with its other locals and freed on the same runs, inside a loop too. A value block's tail binding handed to the tail call is taken for the arm's own, copied where the callee lends it, as the binding by name is.
