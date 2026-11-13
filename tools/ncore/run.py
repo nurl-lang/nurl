@@ -1,0 +1,103 @@
+# Copyright (c) 2026 The NURL Project Developers
+# SPDX-License-Identifier: MIT OR Apache-2.0
+"""Run the core-IR checker over hole probes and compare with each probe's
+`// map:` verdict (rejected / runs-clean).
+
+  python tools/ncore/run.py [--list FILE] [--show N] [probe.nu ...]
+"""
+import os
+import sys
+import collections
+import traceback
+
+sys.setrecursionlimit(10000)
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+from syntax import Unsupported, ParseError       # noqa: E402
+from load import load, lib_headers               # noqa: E402
+from lower import build_program                  # noqa: E402
+from check import check_program, CheckError      # noqa: E402
+
+HOLES = os.path.join(HERE, "..", "fuzz", "holes")
+
+
+def expected(path):
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            if line.startswith("// map:"):
+                cols = [c.strip() for c in line[len("// map:"):].split("|")]
+                return cols[2] if len(cols) > 2 else None
+    return None
+
+
+def verdict(path):
+    decls, imports = load(path)
+    hdrs = dict(lib_headers())
+    hdrs["mem_dup"] = (["T"], [("in", ("tvar", "T"), "x")], ("tvar", "T"))
+    prog = build_program(decls, hdrs)
+    errors, summ = check_program(prog)
+    return ("rejected" if errors else "runs-clean"), errors, summ
+
+
+def main(argv):
+    files = []
+    show = 15
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--list":
+            with open(argv[i + 1]) as f:
+                files += [os.path.join(HOLES, l.strip()) for l in f if l.strip()]
+            i += 2
+            continue
+        if a == "--show":
+            show = int(argv[i + 1])
+            i += 2
+            continue
+        files.append(a if os.path.exists(a) else os.path.join(HOLES, a))
+        i += 1
+    counts = collections.Counter()
+    skips = collections.Counter()
+    mism = {"false_accept": [], "false_reject": []}
+    for path in files:
+        exp = expected(path)
+        name = os.path.basename(path)
+        try:
+            got, errors, _ = verdict(path)
+        except Unsupported as e:
+            counts["skip"] += 1
+            skips[str(e).split(" (")[0][:40]] += 1
+            continue
+        except (ParseError, CheckError, KeyError, IndexError, TypeError, AttributeError, ValueError) as e:
+            counts["crash"] += 1
+            skips["CRASH " + type(e).__name__ + ": " + str(e)[:60]] += 1
+            if len(argv) <= 3:
+                traceback.print_exc()
+            continue
+        if exp == got:
+            counts["agree:" + got] += 1
+        elif exp == "rejected":
+            counts["FALSE-ACCEPT"] += 1
+            mism["false_accept"].append(name)
+        else:
+            counts["false-reject"] += 1
+            mism["false_reject"].append((name, errors[0] if errors else None))
+        if len(files) <= 3:
+            print(name, "expected", exp, "got", got)
+            for e in errors:
+                print("   ", e)
+    print(dict(counts))
+    print("skips:", skips.most_common(25))
+    print("FALSE ACCEPTS (unsafe, prototype accepts):", len(mism["false_accept"]))
+    for n in mism["false_accept"][:show]:
+        print("   ", n)
+    print("false rejects (safe, prototype refuses):", len(mism["false_reject"]))
+    for n, e in mism["false_reject"][:show]:
+        print("   ", n, "--", e)
+    with open(os.path.join(HERE, "last_run.txt"), "w", encoding="utf-8") as f:
+        f.write("FALSE_ACCEPT\n" + "\n".join(mism["false_accept"]) + "\nFALSE_REJECT\n")
+        f.write("\n".join(f"{n}\t{e}" for n, e in mism["false_reject"]) + "\n")
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
