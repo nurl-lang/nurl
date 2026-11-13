@@ -24,3 +24,5 @@ owned_string_assigned_a_value_block_of_itself.nu          `: __el { s }  = s __e
 owned_struct_assigned_a_value_block_of_itself.nu          the same with an owned struct `p`
 owned_vec_assigned_a_block_with_statements_of_itself.nu   the same with `{ : i t 1 v }`
 owned_vec_assigned_a_value_block_of_itself.nu             the same with an owned Vec `v`
+value_block_returning_a_closure_over_a_block_local_string.nu agora #835: a closure bound from a value block carries none of its tail binding's captures (`: g { … f }  ^ g`)
+closure_assigned_a_value_block_ending_in_itself_runs_clean.nu agora #835: a closure bound from a value block whose tail is an outer closure takes over no env (`: g { … a }  = a g`)

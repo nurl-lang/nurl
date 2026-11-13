@@ -7451,8 +7451,11 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     : ~ s __ret_sx ? & != 0 g_srcx_on == __ret_cls 2 ( __sx_operand syms ret_src_tt ret_src_val ( nurl_get_last_type ) ( __sx_froot syms ret_src_tt ( nurl_get_last_type ) ) __rsxn0 ) ``
     // …and an owner that may hold views handed back by name (a closure, a
     // container of views): what those point into (its dependencies).
-    : b __ret_dep & & != 0 g_srcx_on >= __ret_cls 3 ( is_ident_tok ret_src_tt )
-    ? __ret_dep { = __ret_sx ( nurl_str_cat ret_src_val `` ) } {}
+    // (…and a value block whose tail is a closure binding of its own, `^ {
+    // … f }`: that binding, as `^ f` — `|f`, __sx_operand_c; agora #638.)
+    : s __ret_btc ? & != 0 g_srcx_on == ret_src_tt TT_LBRACE ( __sx_operand_c syms ret_src_tt ret_src_val 0 `` 0 ) ``
+    : b __ret_dep & & != 0 g_srcx_on >= __ret_cls 3 | ( is_ident_tok ret_src_tt ) == 124 ( nurl_str_get __ret_btc 0 )
+    ? __ret_dep { = __ret_sx ? ( is_ident_tok ret_src_tt ) ( nurl_str_cat ret_src_val `` ) ( nurl_str_cat __ret_btc `` ) } {}
     // …and a closure or a literal handed back as written (`^ \ → …`, `^ @
     // T { … }`): what the views it holds point into, by its source
     // expression — none of which is handed over with it (a captured owned
@@ -18118,6 +18121,16 @@ unsafe @ __sx_publish i me s sx → v {
         // (A field of a call's result: what that call's result lends.)
         ? == 0 ( nurl_str_len root ) { ^ ? == g_sx_at + n0 1 ( nurl_str_cat g_sx `` ) ( nurl_str_cat `*` `` ) } {}
         ^ ( nurl_str_cat root `` )
+    } {}
+    // (A value block whose tail is a closure binding of its own is that
+    // binding — `|f`, the spelling the block's frame closed with
+    // (bck_xl_resolve) — as `^ f` is: what the closure captured is what
+    // the value holds. Taken for `*`, nothing was checked: `^ { : String s
+    // … : ( @ i i ) f \ … s … f }` handed out a closure over a released
+    // String, agora #638.)
+    ? == tt TT_LBRACE {
+        : s tn ( nurl_sym_get syms `__tail_name__` )
+        ? && && != 0 ( nurl_str_len tn ) ( __is_closure_ty ( nurl_sym_get syms tn ) ) ( seq ( nurl_sym_get syms `__tail_ptr__` ) ( nurl_sym_get2 syms tn `__ptr` ) ) { ^ ( nurl_str_cat `|` tn ) } {}
     } {}
     ? | | | | | == tt TT_LPAREN == tt TT_QUEST == tt TT_AT == tt TT_BACKSLASH == tt TT_LBRACE == tt TT_QUESTQUEST {
         ^ ? == g_sx_at + n0 1 ( nurl_str_cat g_sx `` ) ( nurl_str_cat `*` `` )
@@ -41732,6 +41745,14 @@ unsafe @ __bck_view_row s rec → b {
 unsafe @ bck_sx_ids s sx → s {
     : i n ( nurl_str_len sx )
     : *u sp # *u sx
+    // (`|f` whole: the binding of that name a block that just closed made —
+    // a value block's tail, bck_xl_resolve's `|` spelling; `|` is otherwise
+    // a delimiter. Agora #638.)
+    ? & > n 1 == # i . sp 0 124 {
+        : ~ i j 1
+        ~ & < j n ! ( __sx_delim # i . sp j ) { = j + j 1 }
+        ? == j n { ^ ( nurl_str_int ( bck_intern ( bck_xl_resolve sx ) ) ) } {}
+    } {}
     : ~ s out ( nurl_str_cat `` `` )
     : ~ i i 0
     ~ < i n {
@@ -45475,7 +45496,11 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
     : s rs ( nurl_str_int r )
     ? & != 0 ( nurl_sym_len g_bck ( bck_bkey `pp_` rs ) ) == 0 ( nurl_sym_len g_bck ( bck_bkey `po_` rs ) ) { ^ -1 } {}
     ? ( bck_id_is_global r ) { ^ -1 } {}
-    ? == BCK_UNINIT ( bck_st_get st r ) { ^ -1 } {}
+    // (…but one a block declared and closed is this function's still — a
+    // value block's local, `^ { : String s … : ( @ i i ) f \ … s … f }`:
+    // its frame ended before the return, and codegen releases it on the
+    // way out, `oos_`; agora #638.)
+    ? & == BCK_UNINIT ( bck_st_get st r ) == 0 ( nurl_sym_len g_bck ( bck_bkey `oos_` rs ) ) { ^ -1 } {}
     ^ r
 }
 
@@ -56494,9 +56519,13 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // after it is another — and a tail of the target's own name, the
         // target itself, not a block-local shadowing it (agora #562,
         // #575). Not a closure, whose env the bare spelling
-        // takes over before the value is made.)
+        // takes over before the value is made — but for the target itself,
+        // `= a { … a }`, which takes nothing over: `= a a`. Read as a fresh
+        // closure, a's env was released as the old value and the same
+        // closure stored back, agora #638.)
         : s __tl_nm ( nurl_sym_get syms `__tail_name__` )
-        ? & & & == bck_rhs_tt TT_LBRACE != 0 ( nurl_str_len __tl_nm ) ( seq ( nurl_sym_get syms `__last_ident_name__` ) __tl_nm ) & & ( seq ( nurl_sym_get syms `__tail_ptr__` ) ( nurl_sym_get2 syms __tl_nm `__ptr` ) ) | ! ( seq __tl_nm name ) ( seq ( nurl_sym_get syms `__tail_ptr__` ) ptr ) ! ( __is_closure_ty vt ) {
+        : b __tl_self & ( seq __tl_nm name ) ( seq ( nurl_sym_get syms `__tail_ptr__` ) ptr )
+        ? & & & == bck_rhs_tt TT_LBRACE != 0 ( nurl_str_len __tl_nm ) ( seq ( nurl_sym_get syms `__last_ident_name__` ) __tl_nm ) & & ( seq ( nurl_sym_get syms `__tail_ptr__` ) ( nurl_sym_get2 syms __tl_nm `__ptr` ) ) | ! ( seq __tl_nm name ) ( seq ( nurl_sym_get syms `__tail_ptr__` ) ptr ) | __tl_self ! ( __is_closure_ty vt ) {
             = bck_rhs_tt TT_IDENT
             = bck_rhs_val ( nurl_str_cat __tl_nm `` )
         } {
