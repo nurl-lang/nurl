@@ -3656,6 +3656,11 @@ unsafe @ note_unsafe_item s pos s what → v {
 // when that binding is assigned (`= t ? …`, gen_assign): what the join's
 // arms bound below it dies before it does (agora #179). -1: none.
 : ~ i g_join_rdepth -1
+// The next `?` / `??` is a bare arm of a join in a value block (agora
+// #836): it publishes what its arms lent for that join to fold in, as a
+// block's tail join does for its block (__vb_tail_takes). Read and
+// cleared at its entry.
+: ~ i g_vb_arm_pub 0
 // A `:` binding of a `?` / `??` (docs/MEMORY.md §2.2): the owner an arm
 // selects moves into the binding on that path (g_join_rdepth 0), and the
 // binding gives it back where it dies still holding it while the owner
@@ -19086,6 +19091,12 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     // argument was not one) — the returned-handle propagation below
     // maps the callee's ret-alias indices back to caller bindings.
     : ~ s arg_idents ``
+    // (…as codegen's ownership questions read them, `__last_call_args__`:
+    // a value block argument whose tail is a binding of its own stands for
+    // that binding — `( idg [String] { : String t ( mk c ) t } )` hands it,
+    // this frame's, to the call; agora #833. The walk's roster keeps `-`:
+    // the block's names ended at its `}`.)
+    : ~ s arg_onames ``
     // …and the positions of the arguments that are no bare name but may
     // still lend what they read: a field, a join, a call that may lend —
     // not a literal or a fresh value (agora #412).
@@ -20676,6 +20687,8 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         = arg_idents ? == 0 ( nurl_str_len arg_idents )
         ( nurl_str_cat bck_arg_nm `` )
         ( nurl_str_cat3 arg_idents ` ` bck_arg_nm )
+        : s __arg_onm ? & & == bck_arg_tt TT_LBRACE ( is_ident_tok ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) ) ) == 0 ( nurl_sym_len syms `__tail_first_deep__` ) ( nurl_sym_get syms `__tail_first_val__` ) bck_arg_nm
+        = arg_onames ? == 0 ( nurl_str_len arg_onames ) ( nurl_str_cat __arg_onm `` ) ( nurl_str_cat3 arg_onames ` ` __arg_onm )
         ? __want_effr {
             : s __aer ? ( is_ident_tok bck_arg_tt ) ( nurl_str_cat bck_arg_val `` ) ? != 0 ( nurl_str_len arg_froot ) ( nurl_str_cat arg_froot `` ) ? == bck_arg_tt TT_LPAREN ( __effr_lent ( bck_call_lend_srcs syms ) ) ( nurl_str_cat `-` `` )
             = arg_effr ? == 0 ( nurl_str_len arg_effr ) ( nurl_str_cat __aer `` ) ( nurl_str_cat3 arg_effr ` ` __aer )
@@ -22340,7 +22353,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     // …and, for a decision that cannot wait for the callee's summaries (a
     // generic instance compiled after this caller), the arguments by
     // position and the callee to ask at module end (mem_ret_local_lend).
-    ( nurl_sym_def syms `__last_call_args__` arg_idents )
+    ( nurl_sym_def syms `__last_call_args__` arg_onames )
     // …and its source expression: the callee's summaries say which
     // arguments its result points into or lends (a callee without one —
     // a foreign function, a builtin — hands back a value of its own; a
@@ -23492,6 +23505,8 @@ unsafe @ gen_cond i lex i syms i cg → s {
     : i c_jdepth0 ( nurl_peek # s syms 1 )
     : i c_jdepth ? & >= g_join_rdepth 0 < g_join_rdepth c_jdepth0 g_join_rdepth c_jdepth0
     = g_join_rdepth -1
+    : b c_vbarm != 0 g_vb_arm_pub
+    = g_vb_arm_pub 0
     ( nurl_sym_def syms `__last_join_own__` `` )
     // Borrow checker (Phase 0d): source line of the `?`, for the
     // `cond`/`endcond` structural markers bracketing this conditional.
@@ -23669,7 +23684,13 @@ unsafe @ gen_cond i lex i syms i cg → s {
     : b __aj_t & != 0 g_borrowck | | == t_tt0 TT_AT == t_tt0 TT_QUEST == t_tt0 TT_QUESTQUEST
     : s __aj0 ? __aj_t ( nurl_str_cat ( nurl_sym_get g_bck `ppends` ) `` ) ``
     : s __ajj0 ? __aj_t ( nurl_str_cat ( nurl_sym_get g_bck `pajoins` ) `` ) ``
+    = g_vb_arm_pub ? & != 0 g_vb_on | == t_tt0 TT_QUEST == t_tt0 TT_QUESTQUEST 1 0
     : ~ s tv ( gen_expr lex syms cg )
+    = g_vb_arm_pub 0
+    // (…what a bare `?` / `??` arm published of what its own arms lent:
+    // agora #836.)
+    : s t_vbin ? & != 0 g_vb_on | == t_tt0 TT_QUEST == t_tt0 TT_QUESTQUEST ( nurl_str_cat ( nurl_sym_get syms `__last_join_vbsel__` ) `` ) ``
+    ? != 0 ( nurl_str_len t_vbin ) { ( nurl_sym_def syms `__last_join_vbsel__` `` ) } {}
     : s __ajt ? __aj_t ( __bck_arm_take __aj0 ) ``
     : s __ajtj ? __aj_t ( __bck_arm_take_joins __ajj0 ) ``
     ? t_skip {
@@ -23947,7 +23968,11 @@ unsafe @ gen_cond i lex i syms i cg → s {
     : b __aj_e & != 0 g_borrowck | | == e_tt0 TT_AT == e_tt0 TT_QUEST == e_tt0 TT_QUESTQUEST
     : s __aj1 ? __aj_e ( nurl_str_cat ( nurl_sym_get g_bck `ppends` ) `` ) ``
     : s __ajj1 ? __aj_e ( nurl_str_cat ( nurl_sym_get g_bck `pajoins` ) `` ) ``
+    = g_vb_arm_pub ? & != 0 g_vb_on | == e_tt0 TT_QUEST == e_tt0 TT_QUESTQUEST 1 0
     : ~ s ev ( gen_expr lex syms cg )
+    = g_vb_arm_pub 0
+    : s e_vbin ? & != 0 g_vb_on | == e_tt0 TT_QUEST == e_tt0 TT_QUESTQUEST ( nurl_str_cat ( nurl_sym_get syms `__last_join_vbsel__` ) `` ) ``
+    ? != 0 ( nurl_str_len e_vbin ) { ( nurl_sym_def syms `__last_join_vbsel__` `` ) } {}
     : s __aje ? __aj_e ( __bck_arm_take __aj1 ) ``
     : s __ajej ? __aj_e ( __bck_arm_take_joins __ajj1 ) ``
     ? | | | != 0 ( nurl_str_len __ajt ) != 0 ( nurl_str_len __aje ) != 0 ( nurl_str_len __ajtj ) != 0 ( nurl_str_len __ajej ) { ( __bck_arm_join __ajt __ajtj __aje __ajej ) } {}
@@ -24364,14 +24389,20 @@ unsafe @ gen_cond i lex i syms i cg → s {
             // one that lends something else besides — an inner join's pick of
             // two locals — would leave the join owned on some paths only, and
             // what takes the block's value may not ask.)
-            : b __vb_t_ok | | != 0 tdr != 0 ( nurl_str_len t_vbnm ) ! ( seq t_hown `false` )
-            : b __vb_e_ok | | != 0 edr != 0 ( nurl_str_len e_vbnm ) ! ( seq e_hown `false` )
-            ? & & & & __vb_t_ok __vb_e_ok | != 0 ( nurl_str_len t_vbnm ) != 0 ( nurl_str_len e_vbnm ) c_is_stmt == ( nurl_lex_type lex ) TT_RBRACE {
+            // (An arm that is itself such a join, all of whose arms do, counts:
+            // what it lent folds in under its own bits, agora #836.)
+            : b __vb_t_ok | | | != 0 tdr != 0 ( nurl_str_len t_vbnm ) != 0 ( nurl_str_len t_vbin ) ! ( seq t_hown `false` )
+            : b __vb_e_ok | | | != 0 edr != 0 ( nurl_str_len e_vbnm ) != 0 ( nurl_str_len e_vbin ) ! ( seq e_hown `false` )
+            : b __vb_any | | | != 0 ( nurl_str_len t_vbnm ) != 0 ( nurl_str_len e_vbnm ) != 0 ( nurl_str_len t_vbin ) != 0 ( nurl_str_len e_vbin )
+            ? & & & __vb_t_ok __vb_e_ok __vb_any | c_vbarm & c_is_stmt == ( nurl_lex_type lex ) TT_RBRACE {
                 ? ? ( seq ( nurl_llty phi_ty ) `i8*` ) F ? ( __is_handle_ty ( __udrop_regty phi_ty ) ) T ( __nc_held_ty phi_ty ) {
                     // (The else arm's bit is the condition's negation, made
                     // only if its binding moves: `~cv`.)
-                    : s __vbs ( __vb_sel_add `` ? == 0 tdr t_vbnm `` cv )
-                    ( nurl_sym_def syms `__last_join_vbsel__` ( __vb_sel_add __vbs ? == 0 edr e_vbnm `` ( nurl_str_cat `~` cv ) ) )
+                    : ~ s __vbs ( __vb_sel_add `` ? == 0 tdr t_vbnm `` cv )
+                    = __vbs ( __vb_sel_add __vbs ? == 0 edr e_vbnm `` ( nurl_str_cat `~` cv ) )
+                    ? & == 0 tdr != 0 ( nurl_str_len t_vbin ) { = __vbs ( __words_join __vbs ( __vb_sel_lift cg t_vbin tlbl ? == 0 edr elbl `` ) ) } {}
+                    ? & == 0 edr != 0 ( nurl_str_len e_vbin ) { = __vbs ( __words_join __vbs ( __vb_sel_lift cg e_vbin elbl ? == 0 tdr tlbl `` ) ) } {}
+                    ( nurl_sym_def syms `__last_join_vbsel__` __vbs )
                 } {}
             } {}
             // Both arms handed over an owned env: so does the join.
@@ -25112,6 +25143,8 @@ unsafe @ gen_match i lex i syms i cg → s {
     : ~ s m_lbls ``
     : ~ s m_vbs ``
     : ~ b m_vb_ok T
+    : b m_vbarm != 0 g_vb_arm_pub
+    = g_vb_arm_pub 0
     // What the owning arms hand over (agora #594), and whether every live
     // arm yields a value holding nothing.
     : ~ s m_ost ``
@@ -26360,7 +26393,11 @@ unsafe @ gen_match i lex i syms i cg → s {
             : i __m_bw g_rpg_bw
             = g_rpg_bw 0
             ? m_rval { = g_rpg_want 1 } {}
+            = g_vb_arm_pub ? & != 0 g_vb_on | == arm_tt0 TT_QUEST == arm_tt0 TT_QUESTQUEST 1 0
             : ~ s arm_result ( gen_stmt lex syms cg )
+            = g_vb_arm_pub 0
+            : s arm_vbin ? & != 0 g_vb_on | == arm_tt0 TT_QUEST == arm_tt0 TT_QUESTQUEST ( nurl_str_cat ( nurl_sym_get syms `__last_join_vbsel__` ) `` ) ``
+            ? != 0 ( nurl_str_len arm_vbin ) { ( nurl_sym_def syms `__last_join_vbsel__` `` ) } {}
             = g_rpg_want 0
             = g_rpg_bw __m_bw
             // (…a `( mem_dup x )` copy of a type with no view reaching
@@ -26585,8 +26622,9 @@ unsafe @ gen_match i lex i syms i cg → s {
                 = owner_entries ? == 0 ( nurl_str_len owner_entries )
                 ( nurl_str_cat owner_entry `` ) ( nurl_str_cat3 owner_entries `, ` owner_entry )
                 = m_lbls ( __vb_sel_add m_lbls arm_lbl `-` )
-                = m_vbs ( __vb_sel_add m_vbs arm_vbnm arm_lbl )
-                ? & == 0 ( nurl_str_len arm_vbnm ) ( seq arm_hown `false` ) { = m_vb_ok F } {}
+                = m_vbs ? == 0 ( nurl_str_len arm_vbnm ) m_vbs ( __words_join m_vbs ( nurl_str_cat4 arm_vbnm ` true ` arm_lbl `` ) )
+                = m_vbs ( __words_join m_vbs ( __vb_sel_tag arm_vbin arm_lbl ) )
+                ? & & == 0 ( nurl_str_len arm_vbnm ) == 0 ( nurl_str_len arm_vbin ) ( seq arm_hown `false` ) { = m_vb_ok F } {}
                 : s hown_entry ( nurl_str_cat4 `[ ` arm_hown `, %` ( nurl_str_cat arm_lbl ` ]` ) )
                 = hown_entries ? == 0 ( nurl_str_len hown_entries )
                 ( nurl_str_cat hown_entry `` ) ( nurl_str_cat3 hown_entries `, ` hown_entry )
@@ -26813,7 +26851,7 @@ unsafe @ gen_match i lex i syms i cg → s {
         // `}` to take over (__vb_tail_takes, agora #807).
         // (Only when every live arm then hands over a value of its own, as
         // for a `?`.)
-        ? & & & m_vb_ok != 0 ( nurl_str_len m_vbs ) m_is_stmt == ( nurl_lex_type lex ) TT_RBRACE {
+        ? & & m_vb_ok != 0 ( nurl_str_len m_vbs ) | m_vbarm & m_is_stmt == ( nurl_lex_type lex ) TT_RBRACE {
             ? ? ( seq ( nurl_llty phi_type ) `i8*` ) F ? ( __is_closure_ty phi_type ) F ? ( __is_handle_ty ( __udrop_regty phi_type ) ) T ( __nc_held_ty phi_type ) {
                 ( nurl_sym_def syms `__last_join_vbsel__` ( __match_vb_sels cg m_vbs m_lbls fallback_pred ) )
             } {}
@@ -84154,15 +84192,55 @@ unsafe @ __jpb_note i cg s up → v {
     ^ o
 }
 
-// A `??`'s arms that lent a binding (`name label` pairs): each binding
-// with a phi that is true on its arm's edge, false on every other live
-// arm's (`label -` pairs) and on the fall-through edge.
+// `list` of `name bit` pairs, each with `label` after it: `name bit
+// label` triples (a `??` arm's, __match_vb_sels).
+@ __vb_sel_tag s list s label → s {
+    : ~ s out ``
+    : ~ s rest ( nurl_str_cat list `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s nm ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s sel ( str_first_word rest ) = rest ( str_skip_word rest )
+        = out ( __words_join out ( nurl_str_cat4 nm ` ` sel ( nurl_str_cat ` ` label ) ) )
+    }
+    ^ out
+}
+
+// The bits a join's arm published (an inner join's `name bit` pairs),
+// lifted to the outer join's merge (agora #836): a phi that is the bit on
+// the arm's edge (`lbl`) and false on the other's (`other`, `` when that
+// arm returned). A bit `~x` is lifted as `~` of a phi true there, so it is
+// false off the arm's edge too.
+@ __vb_sel_lift i cg s list s lbl s other → s {
+    : ~ s out ``
+    : ~ s rest ( nurl_str_cat list `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s nm ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s sel ( str_first_word rest ) = rest ( str_skip_word rest )
+        : b neg == ( nurl_str_get sel 0 ) 126
+        : s raw ? neg ( nurl_str_slice sel 1 - ( nurl_str_len sel ) 1 ) ( nurl_str_cat sel `` )
+        : s r ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ` = phi i1 [ ` ) ( nurl_print raw ) ( nurl_print `, %` ) ( nurl_print lbl ) ( nurl_print ` ]` )
+        ? != 0 ( nurl_str_len other ) { ( nurl_print `, [ ` ) ( nurl_print ? neg `true` `false` ) ( nurl_print `, %` ) ( nurl_print other ) ( nurl_print ` ]` ) } {}
+        ( nurl_print `\n` )
+        = out ( __vb_sel_add out nm ? neg ( nurl_str_cat `~` r ) r )
+    }
+    ^ out
+}
+
+// A `??`'s arms that lent a binding (`name bit label` triples, the bit
+// `true` for an arm's own binding): each with a phi that is the bit on its
+// arm's edge, and false — true for a `~` bit, negated — on every other
+// live arm's (`label -` pairs) and on the fall-through edge.
 @ __match_vb_sels i cg s vbs s lbls s fallback → s {
     : ~ s out ``
     : ~ s rest ( nurl_str_cat vbs `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s nm ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s sel ( str_first_word rest ) = rest ( str_skip_word rest )
         : s lb ( str_first_word rest ) = rest ( str_skip_word rest )
+        : b neg == ( nurl_str_get sel 0 ) 126
+        : s raw ? neg ( nurl_str_slice sel 1 - ( nurl_str_len sel ) 1 ) ( nurl_str_cat sel `` )
+        : s off ? neg `true` `false`
         : s r ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ` = phi i1 ` )
         : ~ s ls ( nurl_str_cat lbls `` )
@@ -84172,11 +84250,11 @@ unsafe @ __jpb_note i cg s up → v {
             = ls ( str_skip_word ls )
             ? ! first { ( nurl_print `, ` ) } {}
             = first F
-            ( nurl_print `[ ` ) ( nurl_print ? ( seq l lb ) `true` `false` ) ( nurl_print `, %` ) ( nurl_print l ) ( nurl_print ` ]` )
+            ( nurl_print `[ ` ) ( nurl_print ? ( seq l lb ) raw off ) ( nurl_print `, %` ) ( nurl_print l ) ( nurl_print ` ]` )
         }
-        ? != 0 ( nurl_str_len fallback ) { ( nurl_print `, [ false, %` ) ( nurl_print fallback ) ( nurl_print ` ]` ) } {}
+        ? != 0 ( nurl_str_len fallback ) { ( nurl_print `, [ ` ) ( nurl_print off ) ( nurl_print `, %` ) ( nurl_print fallback ) ( nurl_print ` ]` ) } {}
         ( nurl_print `\n` )
-        = out ( __vb_sel_add out nm r )
+        = out ( __vb_sel_add out nm ? neg ( nurl_str_cat `~` r ) r )
     }
     ^ out
 }
