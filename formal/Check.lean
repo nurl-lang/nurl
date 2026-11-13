@@ -84,6 +84,24 @@ import A3
 #print axioms A3.LockDtorWitness.Step.panic_st
 #print axioms A3.LockDtorWitness.scopeL_entry
 #print axioms A3.LockDtorWitness.scopeL_typed_panic
+-- Agora #808: the check-outs' invariant over every reached configuration (A3/LockExcl.lean): each
+-- frame's block a lock block of its type, or gone; a frame of a payload that holds a destructor value
+-- has its block checked out and is its only frame (A3.2's mutual exclusion); the give-back lemmas
+-- with the block's state discharged, given that the block is still there
+#print axioms A3.Step.lfr
+#print axioms A3.EvalR.stay
+#print axioms A3.Step.stay
+#print axioms A3.LockInv.put
+#print axioms A3.LockInv.settle
+#print axioms A3.LockInv.spawn
+#print axioms A3.LockInv.spawnFail
+#print axioms A3.LockInv.tstep
+#print axioms A3.reach_lockInv
+#print axioms A3.Redex.frame_unique
+#print axioms A3.reach_frame_out
+#print axioms A3.reach_lock_excl
+#print axioms A3.reach_scopeL_end_gives_back
+#print axioms A3.reach_scopeL_panic
 #print axioms A3.LockDtorWitness.rwRead_dtor_refused
 #print axioms A3.LockDtorWitness.lockRestore_dtor_refused
 #print axioms A3.LockDtorWitness.main_typed
