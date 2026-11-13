@@ -2052,6 +2052,12 @@ unsafe @ agg_field_count i syms s ot → i {
 // are captured by reference (__is_capture_byref), so the write lands on
 // the binding — a counter in a callback counts.
 : ~ s g_clo_assigned ``
+// …and the bindings the closures its body runs give a new value by name
+// (their `__closure_assigns`): running it runs them, so it gives those a
+// new value too — a call of it handed one of them is refused as for its
+// own (agora #445). Kept apart from g_clo_assigned, which decides what is
+// captured by reference before the body is generated.
+: ~ s g_clo_run_asg ``
 // A `~ x xs` loop's element binding is waiting for its body's block row
 // (`pending_fevar` in g_bck names it).
 : ~ i g_bck_fevar 0
@@ -20472,7 +20478,9 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             ? ( is_ident_tok bck_arg_tt ) ( __clo_run_attr syms bck_arg_val `__closure_effects` `le` ) ``
             ( bck_closure_effects_run syms __ce_effs ( nurl_lex_line lex ) )
             ? ( is_ident_tok bck_arg_tt ) { ( __loop_clo_note syms bck_arg_val ( nurl_lex_line lex ) ) } {}
-            = __clo_routes ( __clo_routes_add __clo_routes arg_idx __ce_effs )
+            : s __ce_asg ? == bck_arg_tt TT_BACKSLASH ( nurl_sym_get syms `__last_closure_assigns__` )
+            ? ( is_ident_tok bck_arg_tt ) ( __clo_run_attr syms bck_arg_val `__closure_assigns` `la` ) ``
+            = __clo_routes ( __clo_routes_add __clo_routes arg_idx ( __word_union __ce_effs ( __clo_asg_effs syms __ce_asg ) ) )
         } {}
         // …and inside a `~` loop, one may change the loop's container when
         // it runs: a closure literal, or a binding handed to any callee —
@@ -22192,7 +22200,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // the walk, with the summaries of what its body passes its captures
         // to (an exclusive call through closures: `clox`). The called
         // closure is the last argument of these rows.
-        : s __cr_recv ? __callee_shadowed ( __clo_run_attr syms fname `__closure_effects` `le` ) ``
+        : s __cr_recv ? __callee_shadowed ( __word_union ( __clo_run_attr syms fname `__closure_effects` `le` ) ( __clo_asg_effs syms ( __clo_run_attr syms fname `__closure_assigns` `la` ) ) ) ``
         : s __cr_all ( __clo_routes_add __clo_routes -1 __cr_recv )
         ? & __sx_need != 0 ( nurl_str_len __cr_all ) {
             // (A closure argument reaches what it captured: `\(…)`.)
@@ -35751,7 +35759,13 @@ unsafe @ bck_note_closure_caps i syms s name i line → v {
     // frees when it runs — agora #151.)
     : s __frees ( __clo_run_attr syms name `__closure_frees` `lf` )
     ( __loop_clo_note syms name line )
-    ? != 0 g_bck_closure_depth { ( __clo_frees_note __frees ) } {}
+    ? != 0 g_bck_closure_depth {
+        ( __clo_frees_note __frees )
+        // (…and what it gives a new value by name, the enclosing closure
+        // does, agora #445.)
+        : s __rasg ( __clo_run_attr syms name `__closure_assigns` `la` )
+        ? != 0 ( nurl_str_len __rasg ) { = g_clo_run_asg ( __word_union g_clo_run_asg __rasg ) } {}
+    } {}
     : s __caps ( __clo_run_attr syms name `__closure_caps` `lc` )
     ? & ! ( str_contains_word g_bck_cap_names name ) == 0 ( nurl_str_len __caps ) { ^ v } {}
     // Walk a COPY: `caps` borrows the symbol-table entry and the cursor
@@ -39186,6 +39200,23 @@ unsafe @ __vk_union_of s fns s seen b dyn → s {
 // of `sx`; `C` 1 when there is one), and the call's arguments `sx`.
 @ bck_stash_clox s routes i line s sx b recv → v {
     ? | == g_borrowck 0 != g_bck_rec_off 0 { ^ } {}
+    // (A route can only be refused by another argument that reaches
+    // something — a binding, a call over one: `-` is a number or a literal.
+    // A call whose other arguments are all `-` is stashed nothing; every
+    // row here is asked at every later call of the function's walk.)
+    : s parts ( bck_sx_split sx )
+    : ~ i nreal 0
+    : ~ i np 0
+    : ~ i lastreal -9
+    : ~ s pr ( nurl_str_cat parts `` )
+    ~ != 0 ( nurl_str_len pr ) {
+        : i nl ( nurl_str_find pr `\n` )
+        : s pk ? < nl 0 ( nurl_str_cat pr `` ) ( nurl_str_slice pr 0 nl )
+        = pr ? < nl 0 `` ( nurl_str_slice pr + nl 1 - - ( nurl_str_len pr ) nl 1 )
+        ? & != 0 ( nurl_str_len pk ) ! ( seq pk `-` ) { = nreal + nreal 1 = lastreal np } {}
+        = np + np 1
+    }
+    ? == nreal 0 { ^ } {}
     : ~ s rest ( nurl_str_cat routes `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest ) = rest ( str_skip_word rest )
@@ -39198,6 +39229,11 @@ unsafe @ __vk_union_of s fns s seen b dyn → s {
         : i c2 ( nurl_str_find tail `:` )
         : s cal ( nurl_str_slice tail 0 c2 )
         : s aix ( nurl_str_slice tail + c2 1 - - ( nurl_str_len tail ) c2 1 )
+        // (…the closure's own argument is no other: a call whose one real
+        // argument is the closure — handed, or called, the last — has none.)
+        : i ri ( nurl_str_to_int r )
+        : i own ? < ri -1 -9 ? < ri 0 - np 1 ri
+        ? & == nreal 1 == lastreal own { continue } {}
         : s ix ( nurl_str_cat4 `c` aix ( nurl_str_cat3 `:` r `:` ) ? recv `1` `0` )
         : s add ( nurl_str_cat4 nm ` ` ( nurl_str_int line ) ( nurl_str_cat4 ` ` cal ` ` ( nurl_str_cat3 ix ` ` sx ) ) )
         ( bck_add_word `pvpass` add )
@@ -45546,7 +45582,10 @@ unsafe @ __sx_mut_roots s st s e b named → s {
     : i c2 ( nurl_str_find tl `:` )
     : i route ( nurl_str_to_int ( nurl_str_slice tl 0 c2 ) )
     : b recv ( seq ( nurl_str_slice tl + c2 1 - - ( nurl_str_len tl ) c2 1 ) `1` )
-    : b dj ( bck_callee_drops_elems cal aix )
+    // (`=`: the closure gives the capture a new value, releasing what it
+    // held — every view, element and payload of it; agora #445.)
+    : b asg ( seq cal `=` )
+    : b dj | asg ( bck_callee_drops_elems cal aix )
     ? ! | dj ( nurl_sym_has_word g_fn_reallocs cal aix ) { ^ } {}
     : s mj ( bck_sx_mut_storage st cap )
     ? | == 0 ( nurl_str_len mj ) ( seq mj `*` ) { ^ } {}
@@ -45567,6 +45606,13 @@ unsafe @ __sx_mut_roots s st s e b named → s {
         ? & & != k own_ix ! ( seq ak `-` ) ! selfcap {
             : s sk ( bck_sx_arg_sources st ak )
             : ~ s hit ? ( seq sk `*` ) `` ( bck_alias_conflict mj sk dj )
+            // (…a `??` payload read in place out of the capture, a cursor
+            // over it: given a new value inside the call, the option's old
+            // value goes, and the payload with it — no `=` here hands it to
+            // the cursor; agora #445.)
+            ? & & & asg == 0 ( nurl_str_len hit ) != 0 g_bck_has_cursor ( bck_sx_is_id ak ) {
+                ? ( nurl_sym_has_word g_bck ( bck_bkey `cu_` ( nurl_str_int cap_root ) ) ( nurl_str_int ( bck_path_root ( nurl_str_to_int ak ) ) ) ) { = hit ( nurl_str_int cap_root ) } {}
+            } {}
             // (…or another handle of the capture's `( Rc T )` type, which may
             // be the same value: every clone shares one payload, agora #169.)
             ? & == 0 ( nurl_str_len hit ) ! ( seq sk `*` ) {
@@ -45590,7 +45636,7 @@ unsafe @ __sx_mut_roots s st s e b named → s {
                 : s r1 ? made `the body of this closure` ? < route 0 `the closure it calls` ( nurl_str_cat3 `the closure at argument ` ( nurl_str_int + route 1 ) `` )
                 : s k1 ? made `another of its captures` ? & recv == k - nargs 1 `the closure it calls` ( nurl_str_cat `argument ` ( nurl_str_int + k 1 ) )
                 : s c1 ( nurl_str_cat4 `'` nm ? made `' is reached by this closure through ` `' is reached by this call through ` r1 )
-                : s c2 ( nurl_str_cat3 `, which passes it to '` ( bck_fn_show cal ) ? dj `', which may drop or replace what it holds, when it runs here,` `', which may move or free its buffer, when it runs here,` )
+                : s c2 ? asg ( nurl_str_cat `, which gives it a new value when it runs here, releasing what it held,` `` ) ( nurl_str_cat3 `, which passes it to '` ( bck_fn_show cal ) ? dj `', which may drop or replace what it holds, when it runs here,` `', which may move or free its buffer, when it runs here,` )
                 : s c3 ( nurl_str_cat3 ` and through ` k1 ? made `, which points into it, borrows from it or captured it: inside the body the two are unrelated names, and the change leaves the other dangling. Capture a copy that owns its data (string_from, vec_clone, slice_to_vec) instead, or take the view inside the body after the change.` `, which is it, points into it, borrows from it or captured it: inside the call the two are unrelated names, and the closure's change leaves the other dangling. Hand the call a copy that owns its data (string_from, vec_clone, slice_to_vec) as the other one, or do not hand both to the same call.` )
                 ( bck_emit_error ( nurl_sym_get g_bck `file` ) ( bck_field_int rec 3 ) ( nurl_str_cat3 c1 c2 c3 ) )
                 ^
@@ -45691,6 +45737,29 @@ unsafe @ bck_sx_is_id s e → b {
         : s e ( __eff_plain ( str_first_word rest ) ) = rest ( str_skip_word rest )
         : s w ( nurl_str_cat3 ( nurl_str_int idx ) `=` e )
         = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat w `` ) ( nurl_str_cat3 out ` ` w )
+    }
+    ^ out
+}
+
+// …and the captures `asg` the closure gives a new value by name (`= o …`,
+// its `__closure_assigns`), as effects `name:=:0`: a call that runs it
+// releases what each held, as a callee dropping it would, so no other
+// argument of the call may reach it — the capture itself, a view, an
+// element or a payload of it (agora #445; #339 asked only the argument's
+// own name). A field given its own value back (#419) is no new value, and
+// a number or a flag given one releases nothing: only a capture whose type
+// holds something to release — that needs dropping, a handle, a closure —
+// as __clo_assign_note asks.
+@ __clo_asg_effs i syms s asg → s {
+    ? == 0 ( nurl_str_len asg ) { ^ ( nurl_str_cat `` `` ) } {}
+    : ~ s out ``
+    : ~ s rest ( nurl_str_cat asg `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? & != 0 ( nurl_str_len w ) < ( nurl_str_find w `.` ) 0 {
+            : s ty ( nurl_sym_get syms w )
+            ? | | ( __type_needs_drop ty syms ) ( __is_handle_ty ty ) ( __is_closure_ty ty ) { = out ( __word_add out ( nurl_str_cat w `:=:0` ) ) } {}
+        } {}
     }
     ^ out
 }
@@ -64093,6 +64162,8 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     : s __ncf_saved ( nurl_str_cat g_nc_flag_caps `` )
     : s __nco_saved ( nurl_str_cat g_nc_own_caps `` )
     : s __cla_saved ( nurl_str_cat g_clo_assigned `` )
+    : s __clra_saved ( nurl_str_cat g_clo_run_asg `` )
+    = g_clo_run_asg ``
     : s __clr_saved ( nurl_str_cat g_clo_read `` )
     : s __clf_saved ( nurl_str_cat g_clo_fld_roots `` )
     = g_clo_detach 0
@@ -65549,6 +65620,8 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
         : s __cla ( str_first_word __cl_asr ) = __cl_asr ( str_skip_word __cl_asr )
         ? ( str_contains_word captured_vars __cla ) { = __cl_asg ? == 0 ( nurl_str_len __cl_asg ) ( nurl_str_cat __cla `` ) ( nurl_str_cat3 __cl_asg ` ` __cla ) } {}
     }
+    // (…and what the closures it runs give a new value, agora #445.)
+    ? != 0 ( nurl_str_len g_clo_run_asg ) { = __cl_asg ( __word_union __cl_asg g_clo_run_asg ) } {}
     ( nurl_sym_def syms `__last_closure_assigns__` __cl_asg )
     // (…and the ones it stores a field of: a call with one of them as its
     // argument is refused too, agora #339.)
@@ -65575,9 +65648,10 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     // names, and the change leaves the other dangling. Decided at the walk
     // with the final summaries, as for a call: a `clox` row of the
     // literal, its captures the arguments (h279).
-    ? & != 0 __sx_me != 0 ( nurl_str_len __cl_effs ) {
+    : s __cl_ceffs ( __word_union __cl_effs ( __clo_asg_effs syms __cl_asg ) )
+    ? & != 0 __sx_me != 0 ( nurl_str_len __cl_ceffs ) {
         : s __cm_sx ( __clo_caps_sx syms captured_vars )
-        ? != 0 ( nurl_str_len __cm_sx ) { ( bck_stash_clox ( __clo_routes_add `` -2 __cl_effs ) __cl_line0 __cm_sx F ) } {}
+        ? != 0 ( nurl_str_len __cm_sx ) { ( bck_stash_clox ( __clo_routes_add `` -2 __cl_ceffs ) __cl_line0 __cm_sx F ) } {}
     } {}
     // A value that cannot be copied (a `% Drop` with no clone), captured by
     // value and not moved out by the body: the env holds a copy of its bits
@@ -65612,6 +65686,7 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     = g_nc_flag_caps __ncf_saved
     = g_nc_own_caps __nco_saved
     = g_clo_assigned __cla_saved
+    = g_clo_run_asg __clra_saved
     = g_clo_read __clr_saved
     = g_clo_fld_roots __clf_saved
     result2

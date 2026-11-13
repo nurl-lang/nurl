@@ -1,0 +1,15 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+82
+82
+41
+the owner string long enough for the heap
+42
+41
+the owner string long enough for the heap
+41
+the owner string long enough for the heap
+another
+new

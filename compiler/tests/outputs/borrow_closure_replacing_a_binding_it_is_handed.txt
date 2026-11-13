@@ -1,0 +1,18 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/borrow_closure_replacing_a_binding_it_is_handed.nu:24:5: error: 'o' is reached by this call through the closure at argument 1, which gives it a new value when it runs here, releasing what it held, and through argument 2, which is it, points into it, borrows from it or captured it: inside the call the two are unrelated names, and the closure's change leaves the other dangling. Hand the call a copy that owns its data (string_from, vec_clone, slice_to_vec) as the other one, or do not hand both to the same call.
+    ( run1 c o )
+    ^
+compiler/tests/borrow_closure_replacing_a_binding_it_is_handed.nu:30:5: error: 'o' is reached by this call through the closure at argument 1, which gives it a new value when it runs here, releasing what it held, and through argument 2, which is it, points into it, borrows from it or captured it: inside the call the two are unrelated names, and the closure's change leaves the other dangling. Hand the call a copy that owns its data (string_from, vec_clone, slice_to_vec) as the other one, or do not hand both to the same call.
+    ( run1 \ String p → v { = o ( string_from `new` ) ( nurl_println ( string_data p ) ) } o )
+    ^
+compiler/tests/borrow_closure_replacing_a_binding_it_is_handed.nu:38:5: error: 'vs' is reached by this call through the closure it calls, which gives it a new value when it runs here, releasing what it held, and through argument 1, which is it, points into it, borrows from it or captured it: inside the call the two are unrelated names, and the closure's change leaves the other dangling. Hand the call a copy that owns its data (string_from, vec_clone, slice_to_vec) as the other one, or do not hand both to the same call.
+    ( c ( vec_at [String] vs 0 ) )
+    ^
+compiler/tests/borrow_closure_replacing_a_binding_it_is_handed.nu:45:5: error: 'o' is reached by this call through the closure it calls, which gives it a new value when it runs here, releasing what it held, and through argument 1, which is it, points into it, borrows from it or captured it: inside the call the two are unrelated names, and the closure's change leaves the other dangling. Hand the call a copy that owns its data (string_from, vec_clone, slice_to_vec) as the other one, or do not hand both to the same call.
+    ( c ( string_data o ) )
+    ^
+compiler/tests/borrow_closure_replacing_a_binding_it_is_handed.nu:52:5: error: 'o' is reached by this call through the closure it calls, which gives it a new value when it runs here, releasing what it held, and through argument 1, which is it, points into it, borrows from it or captured it: inside the call the two are unrelated names, and the closure's change leaves the other dangling. Hand the call a copy that owns its data (string_from, vec_clone, slice_to_vec) as the other one, or do not hand both to the same call.
+    ?? o { T e → { ( c e ) } F → {} }
+    ^
+error: compilation aborted — 5 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)
