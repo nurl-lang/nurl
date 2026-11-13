@@ -33775,9 +33775,20 @@ unsafe @ __jt_reg i cg → s {
     ? | | != tt TT_LBRACE ( __is_closure_ty ty ) ( seq ty `i8*` ) { ^ ( nurl_str_cat `` `` ) } {}
     : s nm ( nurl_sym_get syms `__tail_name__` )
     : s tp ( nurl_sym_get syms `__tail_ptr__` )
-    ? | | | == 0 ( nurl_str_len nm ) == 0 ( nurl_str_len tp ) ( seq nm name ) ! ( seq tp ( nurl_sym_get2 syms nm `__ptr` ) ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? | | == 0 ( nurl_str_len nm ) == 0 ( nurl_str_len tp ) ! ( seq tp ( nurl_sym_get2 syms nm `__ptr` ) ) { ^ ( nurl_str_cat `` `` ) } {}
     ? | == 0 ( nurl_str_starts tp `%r` ) < ( nurl_str_to_int ( nurl_str_slice tp 2 ( nurl_str_len tp ) ) ) rmin { ^ ( nurl_str_cat `` `` ) } {}
     ? ! ( seq ( nurl_sym_get syms `__last_ident_name__` ) nm ) { ^ ( nurl_str_cat `` `` ) } {}
+    // (…and a tail of the `:`'s own name, `: String s { : String s … s }`:
+    // by its slot, under a name of its own — `|s`, as gen_assign hands such
+    // a tail over (agora #806); by the time the flag is set, `s` names the
+    // binding being made. Read as a block, the block-local kept its drop
+    // and a `sink` took it too, agora #823.)
+    ? ( seq nm name ) {
+        : s al ( nurl_str_cat `|` nm )
+        ( nurl_sym_def syms al ty )
+        ( nurl_sym_def syms ( nurl_str_cat al `__ptr` ) tp )
+        ^ al
+    } {}
     ^ ( nurl_str_cat nm `` )
 }
 
