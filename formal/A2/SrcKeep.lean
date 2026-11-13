@@ -53,6 +53,11 @@ theorem RhsT.ctxRel {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry}
   | cellNew hy _ _ _ _ _ hp => exact hp.ctxRel hy hanch
   | chanSend _ _ _ hy _ _ hp => exact hp.ctxRel hy hanch
   | lockRestore _ _ _ hy _ _ hp => exact hp.ctxRel hy hanch
+  | @take y Ey _ hy _ _ _ hcan _ hyF hpin =>
+    have hrb : Ey.mode ≠ .rootb := fun e => by have := hcan.ownSlot; rw [e] at this; cases this
+    exact (CtxRel.kill hanch hyF .replace false (hpin.kills .replace false)).trans
+      (CtxRel.setE (Ex := killE .replace false y Ey) (by simp [A2.kill, hy]) (by simp [killE_mode])
+        (by simp [killE_ty]) (by simp [killE_mode, hrb]) (fun h => by cases h))
   | lockTake _ _ _ => exact CtxRel.refl _
   | arcClone _ _ _ => exact CtxRel.refl _
   | lockClone _ _ _ => exact CtxRel.refl _

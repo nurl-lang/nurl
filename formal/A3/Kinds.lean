@@ -249,6 +249,10 @@ theorem EvalR.kinds_of {κ : Nat → Bool} {m m' : Mem} {r : Rhs} {v : Val} {o :
   | expr _ => exact ⟨hk, .int⟩
   | new => exact ⟨hk.of_eq rfl rfl rfl, .node fun _ h => by cases h⟩
   | moveOwn hy => exact ⟨hk.set _ (fun _ h => by cases h), hk.st _ _ _ hy⟩
+  | take hy =>
+    exact ⟨(hk.of_eq (m' := { m with alloc := upd (upd m.alloc m.nid true) (m.nid + 1) true, nid := m.nid + 2 })
+      rfl rfl rfl).set _
+      (fun _ h => by cases h; exact .node fun _ h => by cases h), hk.st _ _ _ hy⟩
   | copy hy => exact ⟨hk, hk.st _ _ _ hy⟩
   | borrowOwn _ => exact ⟨hk, .href⟩
   | borrowBor hy => exact ⟨hk, hk.st _ _ _ hy⟩

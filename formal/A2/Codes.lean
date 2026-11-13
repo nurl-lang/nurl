@@ -243,6 +243,11 @@ theorem EvalR.codes {P : Prog} {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (he :
     refine ⟨pkgOK_of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_), h.of_st rfl⟩
     cases hc with | elem he => simp at he
   | moveOwn hv => exact ⟨h.slot hv, h.set (fun _ e => by cases e)⟩
+  | take hv =>
+    refine ⟨h.slot hv, (h.of_st rfl).set (fun V e => ?_)⟩
+    cases e
+    refine pkgOK_of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
+    cases hc with | elem he => simp at he
   | copy hv => exact ⟨h.slot hv, h⟩
   | borrowOwn _ => exact ⟨pkgOK_href P _, h⟩
   | borrowBor hv => exact ⟨h.slot hv, h⟩

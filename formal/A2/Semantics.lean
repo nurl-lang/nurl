@@ -942,6 +942,15 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
   | lockRestoreHeld {a y : Var} {o : Bool} {k : Nat} {t : Ty} :
       m.st a = some ⟨o, some (.lk k)⟩ → m.blk k = some ⟨t, .lock, none⟩ → m.taken k = false →
       EvalR m (.lockRestore a y) .panic
+  /-- Agora #826: a take out of `y`'s place: its `Vec` moves out, owned,
+      and the slot keeps a fresh empty `Vec` of the same element type (as
+      `new` allocates one), so `y` stays live — nurlc's hand-over of an
+      `inout` handle parameter, which leaves the caller's slot empty. -/
+  | take {y : Var} {t : Ty} {c d : Nat} {es : List Val} :
+      m.st y = some ⟨true, some (.node t c d es)⟩ →
+      EvalR m (.take y) (.ok (.node t c d es) true
+        (({ m with alloc := upd (upd m.alloc m.nid true) (m.nid + 1) true, nid := m.nid + 2 } : Mem).set y
+          ⟨true, some (.node t m.nid (m.nid + 1) [])⟩))
 
 /-! ### Calls
 
@@ -996,6 +1005,7 @@ def Rhs.rename (ρ : Var → Var) : Rhs → Rhs
   | .glob g t => .glob g t
   | .lockTake a => .lockTake (ρ a)
   | .lockRestore a y => .lockRestore (ρ a) (ρ y)
+  | .take y => .take (ρ y)
 
 def Edit.rename (ρ : Var → Var) : Edit → Edit
   | .push y => .push (ρ y)

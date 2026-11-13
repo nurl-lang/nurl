@@ -256,6 +256,19 @@ theorem RhsT.names {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : Rhs
   | moveOwn hy hl _ _ _ =>
     refine ⟨hn.moved hy, fun _ h => own_named (moved_named hn hy hl (h.resolve_right (by intro e; cases e))),
       ⟨_, Keeps.moved Γ hy⟩⟩
+  | @take y Ey t hy hl hty hhv hcan _ _ _ _ =>
+    -- Agora #826: `y` replaced by a fresh empty `Vec`: it holds nothing, so it
+    -- may be held by name as before
+    have hos := hcan.ownSlot
+    have hk : Keeps Γ (A2.setE (A2.kill .replace false y Γ) y ⟨Ey.ty, Ey.mode, true, [], [], false, false⟩) [] :=
+      ((Keeps.refl Γ []).kill _ _ _).setE fun E0 h0 => by
+        rw [hy] at h0; cases h0
+        exact ⟨rfl, rfl, fun _ _ => ⟨rfl, rfl, hos, by rw [hty]; simpa [Ty.holdsView] using hhv⟩⟩
+    have hN := (hn y Ey hy hl (Or.inl (by rw [hty]; simp))).held
+    refine ⟨hn.replaced (fun Ex h => by rw [hy] at h; cases h; exact ⟨rfl, rfl⟩)
+      (fun _ _ d hd => by simp [Entry.vdeps, hos] at hd)
+      (fun _ _ d hd => by simp [Entry.vdeps, hos] at hd),
+      fun _ _ => own_named (hN.keeps' hk), ⟨[], hk⟩⟩
   | copyRoot hy hl hm =>
     have hN := hn _ _ hy hl (Or.inr hm)
     exact ⟨hn, fun _ _ => by

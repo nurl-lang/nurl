@@ -312,6 +312,11 @@ import A3
 #print axioms A2.DynCell.pick_ok
 #print axioms A2.DynCell.main_safe
 #print axioms A2.DynCell.main_no_leak
+-- Agora #826: a take out of an `inout .replace` place (A2/TakeWitness.lean)
+#print axioms A2.rhs_take
+#print axioms A2.TakeWitness.g_ok
+#print axioms A2.TakeWitness.main_safe
+#print axioms A2.TakeWitness.main_no_leak
 -- A2-drop.3a: the destructor on the type (A2/DtorWitness.lean): the typing's
 -- guarantee for each binder, the destructor frame's end and panic, a witness
 #print axioms A2.Dtor.letv_owned_no_dtor

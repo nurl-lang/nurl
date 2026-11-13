@@ -207,6 +207,11 @@ const MODULE_LAYERS = {
     category: 'Worked Examples',
     summaryEn: 'Per-call ownership through an owner cell: the pick example typed with A2\'s rules, and memory_safe and no_leak_end applied to it (pick_ok, main_safe, main_no_leak).',
   },
+  TakeWitness: {
+    layer: 5,
+    category: 'Worked Examples',
+    summaryEn: 'Agora #826: a take out of an inout .replace place (RhsT.take): a callee that hands its inout String on, checked against its summary, and a caller that reads its argument after the call, with memory_safe and no_leak_end applied (g_ok, main_safe, main_no_leak).',
+  },
 };
 
 const A3_MODULE_LAYERS = {

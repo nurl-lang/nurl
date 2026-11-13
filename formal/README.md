@@ -100,6 +100,8 @@ The same modules under `A2/`, extended, and:
 | `SweepD`, `Settle` | Agora #610: the marking sweep (an unreached `Arc` of a destructor value, or (Agora #755) of a drained `Vec` of them, marked `dead`, its payload a root) keeps the invariant; Agora #831: a block cut off from the roots together with the blocks that still refer to it (`CutOff`: none reached from the roots, an orphan to be's payload included) is a top orphan and marked (`CutOff.top`, `sweepBlkD_marks`, `Mem.sweepD_marks_cut`); the same thread's reaps after it (`Settle`, part of every step of `Steps`) can always be taken and end |
 | `DynCell` | values owned or not per call, as the calculus has them: an owner cell the caller provides (an `inout` option the callee fills when the value is fresh) and a borrow of its payload or of the argument; the per-call function checked against its summary (`pick_ok`) and a caller run safe and leak-free by the crown theorems (`main_safe`, `main_no_leak`) |
 | `DYN_DESIGN.md` | why the owner cell, how it corresponds to nurlc's ownership bit, and what phase C / D must show of it |
+| `TakeWitness` | Agora #826: a take out of an `inout .replace` place (`RhsT.take`: the `Vec` moves out, the place keeps a fresh empty one and stays live), nurlc's hand-over of an `inout` handle parameter: the callee checked against its summary (`g_ok`), and a caller that reads its argument after the call run safe and leak-free (`main_safe`, `main_no_leak`) |
+| `TAKE_DESIGN.md` | the take's step and typing, why its `Vec`'s elements hold no view, and how each part of the proof covers it |
 
 The theorems, `A2.memory_safe`, `A2.soundness`, `A2.no_leak_end` and
 `A2.no_leak_panic` (`check.sh` prints the axioms of each).
