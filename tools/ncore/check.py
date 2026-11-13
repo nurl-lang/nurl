@@ -145,6 +145,7 @@ class FnCheck:
         self.loop_stack = []
         self.defer_bodies = []
         self.s_invokes = set()
+        self.s_cloargs = set()
         self.ncap = getattr(fn, "ncap", 0)
 
     # -- names / errors -----------------------------------------------------
@@ -522,6 +523,13 @@ class FnCheck:
                 for a in av.alias:
                     if a[0] in self.pidx:
                         self.s_invokes.add(self.pidx[a[0]])
+        # …and what the callee hands that closure of its other arguments
+        for (k, i, j, path) in sm.get("cloargs", ()):
+            if k < len(avs) and j < len(ops) and ops[j][0] == "v":
+                for _, fname in self.closures_in(avs[k]):
+                    pl = [None] * (i + 1)
+                    pl[i] = (ops[j][1], ops[j][2] + tuple(path))
+                    self.closure_arg_effects(st, fname, pl, line)
         # stores into arguments
         for (j, dpath, k, path, kind) in sm["stores"]:
             if j >= len(ops) or k >= len(ops) or ops[j][0] != "v":
@@ -727,16 +735,44 @@ class FnCheck:
         is its caller's own (§7.5)."""
         _, ops, site = rv
         cav = self.read(st, ops[0], line, (site, 0), "the closure")
+        avs = []
         for i, op in enumerate(ops[1:]):
-            self.read(st, op, line, (site, i + 1), f"argument {i + 1} of the closure")
+            avs.append(self.read(st, op, line, (site, i + 1), f"argument {i + 1} of the closure"))
         self.run_closures(st, cav, line, "the closure called here")
-        if not self.closures_in(cav):
-            for a in cav.alias:
-                if a[0] in self.pidx:
-                    self.s_invokes.add(self.pidx[a[0]])
+        known = self.closures_in(cav)
+        # what the body does to its parameters it does to these arguments
+        for _, fname in known:
+            self.closure_arg_effects(st, fname, [(op[1], op[2]) if op[0] == "v" else None for op in ops[1:]], line)
+        if not known:
+            roots = {self.pidx[a[0]] for a in cav.alias if a[0] in self.pidx}
             if ops[0][0] == "v" and ops[0][1] in self.pidx:
-                self.s_invokes.add(self.pidx[ops[0][1]])
+                roots.add(self.pidx[ops[0][1]])
+            self.s_invokes |= roots
+            # a closure the caller chose is run on these arguments: which of
+            # this function's parameters they are parts of is its summary's
+            for k in roots:
+                for i, av in enumerate(avs):
+                    op = ops[1 + i]
+                    places = set(av.alias)
+                    if op[0] == "v":
+                        places.add((op[1], op[2]))
+                    for a in places:
+                        if a[0] in self.pidx:
+                            self.s_cloargs.add((k, i, self.pidx[a[0]], a[1][:3]))
         return AV("O")
+
+    def closure_arg_effects(self, st, fname, places, line):
+        """The effects of closure body `fname` on its own parameters, applied
+        to the places it is called with (None: not a place)."""
+        sm = self.summ.get(fname)
+        fn = self.prog.fns.get(fname)
+        if sm is None or fn is None:
+            return
+        ncap = getattr(fn, "ncap", 0)
+        for (k, path, eff) in sm["effects"]:
+            i = k - ncap
+            if 0 <= i < len(places) and places[i] is not None:
+                self.effect(st, (places[i][0], places[i][1] + tuple(path)), eff, line)
 
     def run_defers(self, st):
         """A function's exit runs the `;` blocks armed on the way, newest
@@ -1112,14 +1148,15 @@ class FnCheck:
         return {"modes": list(self.fn.modes), "res": res, "lends": sorted(lends), "rholds": sorted(rholds),
                 "effects": sorted(self.s_effects), "stores": sorted(stores),
                 "consumes": sorted(consumes), "elems": sorted(self.s_elems),
-                "invokes": sorted(self.s_invokes)}
+                "invokes": sorted(self.s_invokes), "cloargs": sorted(self.s_cloargs)}
 
 
 def initial_summary(prog, fn):
     T = Types(prog)
     return {"modes": list(fn.modes), "res": "none" if fn.ret is None or T.is_scalar(fn.ret) else "own",
             "lends": [], "rholds": [], "effects": [], "stores": [],
-            "consumes": [k for k, m in enumerate(fn.modes) if m == "sink"], "elems": [], "invokes": []}
+            "consumes": [k for k, m in enumerate(fn.modes) if m == "sink"], "elems": [], "invokes": [],
+            "cloargs": []}
 
 
 def check_program(prog, max_rounds=40):
@@ -1140,8 +1177,13 @@ def check_program(prog, max_rounds=40):
         if name in trusted:
             continue
         fc = FnCheck(prog, fn, summ, final=True)
-        fc.check()
+        sm = fc.check()
         errors += fc.errors
+        if getattr(fn, "is_closure", False) and sm["stores"]:
+            # a closure's type does not say what running it stores, so
+            # nothing where it runs would follow a view it leaves in a
+            # capture or in an argument (MEMORY.md §2.11)
+            errors.append((name, fn.line, "a closure leaves a capture or an argument holding a view"))
     return errors, summ
 
 
@@ -1155,6 +1197,6 @@ def merge_summary(a, b):
     """Summaries only grow, so the fixpoint terminates."""
     order = {"none": 0, "own": 1, "lent": 2}
     out = {"modes": a["modes"], "res": a["res"] if order[a["res"]] >= order[b["res"]] else b["res"]}
-    for key in ("lends", "rholds", "effects", "stores", "consumes", "elems", "invokes"):
+    for key in ("lends", "rholds", "effects", "stores", "consumes", "elems", "invokes", "cloargs"):
         out[key] = sorted(set(map(tuple_ify, a.get(key, ()))) | set(map(tuple_ify, b.get(key, ()))), key=repr)
     return out
