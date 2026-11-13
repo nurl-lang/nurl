@@ -3,8 +3,8 @@
 > **Interactive Explorer:** You can also explore this proof interactively (with a step-by-step memory & borrow-checker simulator, clickable theorem dependency graph, and searchable soundness-hole corpus) on **[nurl-lang.org/docs/formal-verification](https://nurl-lang.org/docs/formal-verification)**.
 
 * **Toolchain:** `leanprover/lean4:v4.35.0` (zero external dependencies; standard axioms `propext`, `Classical.choice`, `Quot.sound` only; `0` `sorry`s)
-* **Phase A3 (Threads & Data-Race Freedom):** **27 modules**, **13,389 lines of Lean 4**, **674 theorems**, **813 total declarations**
-* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **43 modules**, **52,888 lines of Lean 4**, **2257 theorems**, **2833 total declarations**
+* **Phase A3 (Threads & Data-Race Freedom):** **27 modules**, **13,602 lines of Lean 4**, **682 theorems**, **822 total declarations**
+* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **43 modules**, **53,052 lines of Lean 4**, **2262 theorems**, **2841 total declarations**
 * **Phase A1 (Core Calculus):** **22 modules**, **9,571 lines of Lean 4**, **449 theorems**, **613 total declarations**
 * **Soundness Corpus (`corpus/map.tsv`):** every hole probe in [`tools/fuzz/holes/`](../tools/fuzz/holes/), with the rule and the proof phase (A1, A2, A3, B) that covers it. The table is generated from the probes' `// map:` lines by `tools/fuzz/holes/map.sh` (build.sh writes it; it is not committed); `tools/fuzz/holes/map.py --counts` gives the totals
 
@@ -151,7 +151,7 @@ flowchart BT
   Codes["Codes<br/>(812L, 41 thms)"]
   Ctx["Ctx<br/>(298L, 30 thms)"]
   DropCode["DropCode<br/>(694L, 15 thms)"]
-  DtorWitness["DtorWitness<br/>(3331L, 158 thms)"]
+  DtorWitness["DtorWitness<br/>(3495L, 163 thms)"]
   DynCell["DynCell<br/>(480L, 33 thms)"]
   EditB["EditB<br/>(2207L, 61 thms)"]
   EditBV["EditBV<br/>(1077L, 35 thms)"]
@@ -262,7 +262,7 @@ flowchart BT
 | 3. Proof Infrastructure | [`A2/ArcPanicWitness.lean`](A2/ArcPanicWitness.lean) | 795 | 52 | 15 |  |
 | 3. Proof Infrastructure | [`A2/ClosureDropWitness.lean`](A2/ClosureDropWitness.lean) | 866 | 51 | 21 |  |
 | 3. Proof Infrastructure | [`A2/DropCode.lean`](A2/DropCode.lean) | 694 | 15 | 9 |  |
-| 3. Proof Infrastructure | [`A2/DtorWitness.lean`](A2/DtorWitness.lean) | 3331 | 158 | 64 |  |
+| 3. Proof Infrastructure | [`A2/DtorWitness.lean`](A2/DtorWitness.lean) | 3495 | 163 | 67 |  |
 | 3. Proof Infrastructure | [`A2/EditB.lean`](A2/EditB.lean) | 2207 | 61 | 0 | Element edits through borrows (StmtT.editB): push, truncate, and element set through borrowed paths. |
 | 3. Proof Infrastructure | [`A2/EditBV.lean`](A2/EditBV.lean) | 1077 | 35 | 0 | A view stored through a borrow (StmtT.editBV): every view-holding root of the borrow's path holds what the stored value depends on. |
 | 3. Proof Infrastructure | [`A2/Elem.lean`](A2/Elem.lean) | 67 | 1 | 0 | An element handed over (withElem, insert): the invariant does not see the order of an owned Vec's elements (MInv.perm). |

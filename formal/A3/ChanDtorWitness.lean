@@ -51,8 +51,8 @@ which the sweep marks and the sender's reaps bind
 destructor value (`mainC_typed`, `A3.chanClosed_claim`,
 `A3.chanClosed_reaps`).  The receiver's binding of a `chan_recv` of destructor
 values is an `Option D`, which only a `letd` with the option's glue binds
-(`letv` refuses a type that holds a destructor value): no witness of a
-receive is given here. -/
+(`letv` refuses a type that holds a destructor value): Agora #805's
+`mainR` is that witness (its glue `A2.DtorWitness.ofnR`). -/
 
 namespace A3.ChanDtorWitness
 open A2
@@ -706,3 +706,216 @@ theorem glueV_drains : ∃ fn x z s' w f k, P[7]? = some fn ∧ fn.body = .unpai
   exact ⟨fn, x, z, s', w, f, k, h1, h3, h5, fun m t c d e es hw hno => ((h6 id).2.2.2 m t c d e es hw hno).1⟩
 
 end A3.ChanDtorWitness
+
+/-! ### Agora #805: a receive of a destructor value
+
+`mainR` makes the channel as `main` does, sends a destructor value, and
+receives it: `chan_recv` hands the head out as an owned `Option DT`
+(`sum int DT`), which a `letd` binds under the option's glue `ofnR`
+(`A2.DtorWitness.ofnR`, `EnumGlueOK`, at index 12 of the witnesses'
+program), whose frame's end calls the glue; the glue moves the payload out
+to a `letd` frame of `dfn` (`ofnR_takes_payload`):
+
+```
+: a 1  : b 2  :drop q ( vec_new DT )  : c 0  :drop h ( pair q c )
+: ch ( locked_new h )  :drop x ( pair a b )  : r ( chan_send ch x )
+:drop o ( chan_recv ch )
+``` -/
+
+namespace A3.ChanDtorWitness
+open A2
+open A2.DynCell (NoRootb noRootb_empty)
+open A2.DtorWitness (NoDeps T DT GV GVD EP P prog_ok prog_codes drop_ok gvdrop_ok RT RDT rdrop_ok ofnR)
+
+/-- `... : r ( chan_send ch x )  :drop o ( chan_recv ch )` -/
+def mainR : Stmt :=
+  .letv 0 (.expr (.lit 1)) (.letv 1 (.expr (.lit 2)) (.letd 2 0 (.new DT)
+    (.letv 3 (.expr (.lit 0)) (.letd 4 7 (.pair 2 3)
+      (.letv 5 (.lockNew GVD 4) (.letd 6 0 (.pair 0 1) (.letv 7 (.chanSend 5 6)
+        (.letd 8 12 (.chanRecv true 5) .skip))))))))
+
+/-- **A receive of a destructor value is typed**: `chan_recv`'s owned
+    `Option DT` is bound by `letd` under the option's glue (`RhsT.chanRecv`,
+    `LetdTy` at `RDT`). -/
+theorem mainR_typed : ∃ Δ, StmtT P (fun _ => none) [] mainR Δ := by
+  let K1 : Ctx := A2.setE (fun _ => none) 0 intE
+  let K2 : Ctx := A2.setE K1 1 intE
+  have hK1 : NoRootb K1 := noRootb_empty.setE (by simp [intE])
+  have hK2 : NoRootb K2 := hK1.setE (by simp [intE])
+  let EN : Entry := ⟨.vec DT, .own, true, [], [], false, false⟩
+  have hnew : RhsT K2 [] (.new DT) EN K2 := RhsT.new (by decide)
+  let EV : Entry := Entry.arm { EN with ty := .vec DT, held := [] }
+  have hEVe : EV = ⟨.vec DT, .own, true, [], [], false, false⟩ := by
+    simp [EV, EN, Entry.arm, DT, T, Ty.dtorViews, Ty.holdsView]
+  let K3 : Ctx := A2.setE K2 2 EV
+  have hK3 : NoRootb K3 := hK2.setE (by rw [hEVe]; simp)
+  let K4 : Ctx := A2.setE K3 3 intE
+  have hK4 : NoRootb K4 := hK3.setE (by simp [intE])
+  let K5 : Ctx := A2.setE (kill .replace false 2 K4) 2 { EV with live := false, dtor := false }
+  have hK5 : NoRootb K5 := (hK4.kill _ _ _).setE (by rw [hEVe]; simp)
+  have h42 : K4 2 = some EV := by simp [K4, K3, A2.setE, upd]
+  have hmv : PushArg K4 [] 2 EV EV.ty EV.held K5 :=
+    PushArg.move (Γ := K4) (F := []) (y := 2) (E := EV) (t := EV.ty) rfl (by rw [hEVe]) (by simp)
+      (hK4.noPin _) (DtorSafe.of_none (fun v E h => (hK4 v E h).2.1) _ _ _)
+  have h53 : K5 3 = some intE := by
+    simp [K5, K4, A2.setE, upd, A2.kill, killE, hits, intE, Entry.vdeps, Mode.ownSlot]
+  let EG0 : Entry := ⟨.prod EV.ty intE.ty, .own, true, [], EV.held ++ [], false, false⟩
+  have hgp : RhsT K4 [] (.pair 2 3) EG0 K5 :=
+    RhsT.pair (Ey := EV) (Ez := intE) h42 (by rw [hEVe]) hmv h53 rfl PushArg.int
+      (by simp [intE, Mode.ownSlot])
+  have hEG0 : EG0 = ⟨GV, .own, true, [], [], false, false⟩ := by simp [EG0, hEVe, intE, GV]
+  let EGa : Entry := Entry.arm { EG0 with ty := GVD, held := EG0.held }
+  have hEGa : EGa = ⟨GVD, .own, true, [], [], false, false⟩ := by
+    simp [EGa, hEG0, Entry.arm, GVD, GV, DT, T, Ty.dtorViews, Ty.holdsView]
+  let K6 : Ctx := A2.setE K5 4 EGa
+  have hK6 : NoRootb K6 := hK5.setE (by rw [hEGa]; simp)
+  let K6' : Ctx := A2.setE (kill .replace false 4 K6) 4 { EGa with live := false, dtor := false }
+  have hK6' : NoRootb K6' := (hK6.kill _ _ _).setE (by rw [hEGa]; simp)
+  have hmv4 : PushArg K6 [] 4 EGa GVD EGa.held K6' :=
+    PushArg.move (Γ := K6) (F := []) (y := 4) (E := EGa) (t := GVD) rfl (by rw [hEGa]) (by simp)
+      (hK6.noPin _) (DtorSafe.of_none (fun v E h => (hK6 v E h).2.1) _ _ _)
+  have hlnew : RhsT K6 [] (.lockNew GVD 4) EC K6' :=
+    RhsT.lockNew (by simp [K6, A2.setE]) (by rw [hEGa]) (by rw [hEGa]) (by decide)
+      ⟨by simp [GVD, GV, DT, T, Ty.holdsView], by simp [GVD, GV, DT, T, Ty.hasFn]⟩ hmv4
+  let K7 : Ctx := A2.setE K6' 5 EC
+  have hK7 : NoRootb K7 := hK6'.setE (by simp [EC])
+  have hpair : RhsT K7 [] (.pair 0 1) EP K7 :=
+    RhsT.pair (Ey := intE) (Ez := intE)
+      (by simp [K7, K6', K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill, killE, hits, intE, Entry.vdeps,
+        Mode.ownSlot])
+      rfl PushArg.int
+      (by simp [K7, K6', K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill, killE, hits, intE, Entry.vdeps,
+        Mode.ownSlot])
+      rfl PushArg.int (by simp [intE, Mode.ownSlot])
+  let ED : Entry := Entry.arm { EP with ty := DT, held := [] }
+  have hEDe : ED = ⟨DT, .own, true, [], [], false, false⟩ := by
+    simp [ED, EP, Entry.arm, DT, T, Ty.dtorViews, Ty.holdsView]
+  let K8 : Ctx := A2.setE K7 6 ED
+  have hK8 : NoRootb K8 := hK7.setE (by rw [hEDe]; simp)
+  let K8' : Ctx := A2.setE (kill .replace false 6 K8) 6 { ED with live := false, dtor := false }
+  have hK8' : NoRootb K8' := (hK8.kill _ _ _).setE (by rw [hEDe]; simp)
+  have hmv6 : PushArg K8 [] 6 ED DT ED.held K8' :=
+    PushArg.move (Γ := K8) (F := []) (y := 6) (E := ED) (t := DT) rfl (by rw [hEDe]) (by simp)
+      (hK8.noPin _) (DtorSafe.of_none (fun v E h => (hK8 v E h).2.1) _ _ _)
+  have hsend : RhsT K8 [] (.chanSend 5 6) intE K8' :=
+    RhsT.chanSend (Ea := EC) (s := DT)
+      (by simp [K8, K7, A2.setE, upd]) rfl chan_of (by simp [K8, A2.setE]) (by rw [hEDe]) (by rw [hEDe])
+      hmv6
+  let K9 : Ctx := A2.setE K8' 7 intE
+  have hK9 : NoRootb K9 := hK8'.setE (by simp [intE])
+  -- `:drop o ( chan_recv ch )`: an owned `Option DT`, bound under its glue
+  let ER : Entry := ⟨.sum .int DT, .own, true, [], [], false, false⟩
+  have hrecv : RhsT K9 [] (.chanRecv true 5) ER K9 :=
+    RhsT.chanRecv (E := EC) (s := DT)
+      (by simp [K9, K8', K8, K7, A2.setE, upd, A2.kill, killE, hits, EC, Entry.vdeps, Mode.ownSlot]) rfl chan_of
+  let EOd : Entry := Entry.arm { ER with ty := RDT, held := [] }
+  have hEOd : EOd.mode ≠ .rootb ∧ EOd.dtor = false ∧ EOd.dbind = false := by
+    simp [EOd, ER, Entry.arm, RDT, RT, DT, T, Ty.dtorViews, Ty.holdsView]
+  have hK10 : NoRootb (A2.setE K9 8 EOd) := hK9.setE hEOd
+  have ho := StmtT.letd (P := P) (Γ := K9) (Γ1 := K9) (F := []) (x := 8) (f := 12) (r := .chanRecv true 5)
+    (s := .skip) (E := ER) (t := RT) (H := []) (τ := RDT) rfl
+    (by simp [K9, K8', K8, K7, K6', K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill]) (by simp) hrecv rfl
+    (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn rdrop_ok) (HeldUp.refl _ _) StmtT.skip (hK10.endOK _)
+  have hr := StmtT.letv (P := P) (x := 7) (r := .chanSend 5 6) (E := intE) (F := []) (Γ := K8) (Γ1 := K8')
+    (s := .letd 8 12 (.chanRecv true 5) .skip) rfl
+    (by simp [K8, K7, K6', K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill]) (by simp)
+    hsend ho ((hK10.exitScope 8).endOK _)
+  have hx := StmtT.letd (P := P) (Γ := K7) (Γ1 := K7) (F := []) (x := 6) (f := 0) (r := .pair 0 1)
+    (s := .letv 7 (.chanSend 5 6) (.letd 8 12 (.chanRecv true 5) .skip)) (E := EP) (t := T) (H := []) rfl
+    (by simp [K7, K6', K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill]) (by simp) hpair rfl
+    (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hr
+    (((hK10.exitScope 8).exitScope 7).endOK _)
+  have hc := StmtT.letv (P := P) (x := 5) (r := .lockNew GVD 4) (E := EC) (F := []) (Γ := K6) (Γ1 := K6')
+    rfl (by simp [K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill]) (by simp) hlnew hx
+    ((((hK10.exitScope 8).exitScope 7).exitScope 6).endOK _) (fun _ => rfl)
+  have hg := StmtT.letd (P := P) (Γ := K4) (Γ1 := K5) (F := []) (x := 4) (f := 7) (r := .pair 2 3)
+    (s := .letv 5 (.lockNew GVD 4) (.letd 6 0 (.pair 0 1) (.letv 7 (.chanSend 5 6)
+      (.letd 8 12 (.chanRecv true 5) .skip))))
+    (E := EG0) (t := GV) (H := EG0.held) (τ := GVD) rfl
+    (by simp [K4, K3, K2, K1, A2.setE, upd]) (by simp) hgp rfl
+    (Or.inl ⟨rfl, Or.inl (by rw [hEG0])⟩) rfl rfl (letd_fn gvdrop_ok) (HeldUp.refl _ _) hc
+    (((((hK10.exitScope 8).exitScope 7).exitScope 6).exitScope 5).endOK _)
+  have h3 := StmtT.letv (P := P) (x := 3) (r := .expr (.lit 0)) (E := intE) (F := []) (Γ := K3) (Γ1 := K3)
+    rfl (by simp [K3, K2, K1, A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit) hg
+    ((((((hK10.exitScope 8).exitScope 7).exitScope 6).exitScope 5).exitScope 4).endOK _)
+  have hdv := StmtT.letd (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .new DT)
+    (E := EN) (t := T) (H := []) (τ := .vec DT) rfl (by simp [K2, K1, A2.setE, upd])
+    (by simp) hnew rfl (Or.inr ⟨0, rfl, rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) h3
+    (((((((hK10.exitScope 8).exitScope 7).exitScope 6).exitScope 5).exitScope 4).exitScope 3).endOK _)
+  have h1 := StmtT.letv (P := P) (x := 1) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K1) (Γ1 := K1)
+    rfl (by simp [K1, A2.setE]) (by simp) (RhsT.expr ExprT.lit) hdv
+    ((((((((hK10.exitScope 8).exitScope 7).exitScope 6).exitScope 5).exitScope 4).exitScope 3).exitScope 2).endOK _)
+  exact ⟨_, StmtT.letv (P := P) (x := 0) (r := .expr (.lit 1)) (E := intE) (F := []) (Γ := fun _ => none)
+    (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.expr ExprT.lit) h1
+    (((((((((hK10.exitScope 8).exitScope 7).exitScope 6).exitScope 5).exitScope 4).exitScope 3).exitScope 2).exitScope 1).endOK _)⟩
+
+theorem mainR_codes : mainR.codesOK P := by
+  simp only [mainR, Stmt.codesOK, Rhs.codeOK]
+  exact ⟨trivial, trivial, trivial, trivial, trivial, chanNew_codeOK (n := 0) gvdrop_ok drop_ok, trivial,
+    trivial, trivial, trivial⟩
+
+theorem mainR_safe {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem 9) mainR (.ok m' s')) :
+    ¬ Stuck P m' s' := by
+  obtain ⟨Δ, ht⟩ := mainR_typed
+  exact memory_safe prog_ok prog_codes ht rfl mainR_codes (by decide) hr
+
+theorem mainR_no_leak {m' : Mem} (hr : Steps P (emptyMem 9) mainR (.ok m' .skip)) :
+    ∀ i, m'.alloc i = false := by
+  obtain ⟨Δ, ht⟩ := mainR_typed
+  exact no_leak_end prog_ok prog_codes ht rfl mainR_codes (by decide) hr
+
+theorem mainR_no_leak_panic {m' : Mem} (hr : Steps P (emptyMem 9) mainR (.panic m')) :
+    ∀ i, m'.alloc i = false := by
+  obtain ⟨Δ, ht⟩ := mainR_typed
+  exact no_leak_panic prog_ok prog_codes ht rfl mainR_codes (by decide) hr
+
+/-- **The receive hands the head out, owned, to a frame of the option's
+    glue**: `chan_recv` on a channel `a` shares whose queue's head is `v`
+    answers `inr v`, owned; the `letd` binds it in the frame `scopeD x 12`,
+    and that frame's end, the value still in it, calls the glue `ofnR` on it
+    (`Step.scopeDEnd`: an option is no node). -/
+theorem recv_runs_glue {m m1 : Mem} {x a : Var} {r : Val} {o : Bool} {k : Stmt} (hx : m.st x = none)
+    (he : EvalR m (.chanRecv true a) (.ok r o m1)) {o' : Bool} {kc : Nat} {t u : Ty} {c d f : Nat} {v : Val}
+    {es : List Val} (ha : m.st a = some ⟨o', some (.lk kc)⟩)
+    (hk : m.blk kc = some ⟨t, .lock, some (.pair (.node u c d (v :: es)) (.int f))⟩) :
+    r = .inr v ∧ o = true ∧
+      Step P m (.letd x 12 (.chanRecv true a) k) (.ok (m1.set x ⟨true, some (.inr v)⟩) (.scopeD x 12 k)) ∧
+      ∀ m2 : Mem, m2.st x = some ⟨true, some (.inr v)⟩ →
+        Step P m2 (.scopeD x 12 .skip) (.ok { m2 with nv := m2.nv + 1 } (.scope x (.letcall m2.nv 12 [x] .skip))) := by
+  have hst := Step.letd (P := P) (f := 12) (s := k) hx he
+  cases he with
+  | chanRecv hv hk' _ _ _ _ =>
+    rw [ha] at hv; cases hv; rw [hk] at hk'; cases hk'
+    exact ⟨rfl, rfl, hst, fun m2 h2 => Step.scopeDEnd h2 rfl⟩
+  | chanRecvNone hv hk' _ _ => rw [ha] at hv; cases hv; rw [hk] at hk'; cases hk'
+
+/-- **... and the glue moves the payload out to a `letd` frame of `dfn`**
+    (under any renaming `ρ`, as a call runs it): with the parameter owning
+    `inr v`, `ofnR`'s body takes its second arm, whose `letd` binds `v` in a
+    frame `scopeD _ 0` (the `letd`'s frame runs `dfn` at its end and on a
+    panic). -/
+theorem ofnR_takes_payload (ρ : Var → Var) {m : Mem} {v : Val} (h0 : m.st (ρ 0) = some ⟨true, some (.inr v)⟩)
+    (h2 : m.st (ρ 2) = none) :
+    Step P m (ofnR.body.rename ρ) (.ok m ((Stmt.letd 2 0 (.taker 0) (.assign 1 (.expr (.lit 0)))).rename ρ)) ∧
+      Step P m ((Stmt.letd 2 0 (.taker 0) (.assign 1 (.expr (.lit 0)))).rename ρ)
+        (.ok ((m.set (ρ 0) ⟨true, none⟩).set (ρ 2) ⟨v.owns, some v⟩)
+          (.scopeD (ρ 2) 0 ((Stmt.assign 1 (.expr (.lit 0))).rename ρ))) :=
+  ⟨Step.iteF (Eval.isr h0), Step.letd h2 (EvalR.taker h0)⟩
+
+end A3.ChanDtorWitness
+
+namespace A3
+open A2
+
+/-- Agora #805, the receive's witness (`A3.ChanDtorWitness.mainR`): a
+    destructor value sent and received, bound under the option's glue: safe,
+    race-free and leak-free on every interleaving. -/
+theorem chanRecv_claim :
+    MemorySafe A2.DtorWitness.P (fun _ => false) (Cfg.start Globs.empty ChanDtorWitness.mainR 9) ∧
+      RaceFree A2.DtorWitness.P (fun _ => false) (Cfg.start Globs.empty ChanDtorWitness.mainR 9) ∧
+      NoLeak A2.DtorWitness.P (fun _ => false) (Cfg.start Globs.empty ChanDtorWitness.mainR 9) := by
+  obtain ⟨Δ, ht⟩ := ChanDtorWitness.mainR_typed
+  exact claim _ _ Globs.empty _ Δ 9 A2.DtorWitness.prog_ok A2.DtorWitness.prog_codes
+    (fun _ h => by cases h) GlobsOK.empty ht rfl ChanDtorWitness.mainR_codes (by decide)
+
+end A3

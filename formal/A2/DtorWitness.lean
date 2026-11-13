@@ -42,7 +42,10 @@ Two kinds of fact, both checked here (`check.sh` prints their axioms):
   variant), and a struct whose glue runs its own `% Drop` impl first
   (`implS`, `glueS2`; `main13`).  Agora #782: a `Vec` of such view-holding
   structs, its `letd` recording the view of the older binding up front
-  (`main14`, with `memory_safe` and `no_leak_end`).
+  (`main14`, with `memory_safe` and `no_leak_end`).  Agora #805: the glue
+  of the option a channel's receive hands out, `sum int DT` (`ofnR`, its
+  payload in the right variant; the receive's witness is
+  `A3.ChanDtorWitness.mainR`).
   A2-drop.3c and 3d: no block's payload and no environment of a closure
   that does not drop (Agora #609: of a class other than `dropd`) holds
   a destructor value (`A2.Dtor.pkgs_env_dtor_free`, `blk_pkgs_env_dtor_free`,
@@ -1181,7 +1184,24 @@ def glueS2 : Fn where
   body := .letd 2 8 (.var 0) (.letcall 3 10 [2] (.assign 1 (.expr (.lit 0))))
   nvars := 4
 
-def P : Prog := [dfn, mk, ofn, gfn, glue, impl, glue2, glueV, glueS, ofnV, implS, glueS2]
+/-- Agora #805: the glue of the option a channel's receive hands out,
+    `Option DT` as nurlc's `chan_recv` returns it: `sum int DT`, the payload
+    in the right variant:
+    `@ ofnR sink self → i { ? ( isl self ) { = r 0 } { :drop y ( taker self )  = r 0 } }`. -/
+def RT : Ty := .sum .int DT
+def RDT : Ty := .dtor 12 RT
+
+def ofnR : Fn where
+  params := [(.sink, RDT)]
+  resTy := .int
+  resOwn := false
+  lends := []
+  rholds := []
+  outHolds := []
+  body := .ite (.isl 0) (.assign 1 (.expr (.lit 0))) (.letd 2 0 (.taker 0) (.assign 1 (.expr (.lit 0))))
+  nvars := 3
+
+def P : Prog := [dfn, mk, ofn, gfn, glue, impl, glue2, glueV, glueS, ofnV, implS, glueS2, ofnR]
 
 theorem dfn_not_thru : ¬ ThruFn P 0 := by
   intro h
@@ -2341,10 +2361,153 @@ theorem glueS2_ok : FnOK P glueS2 := by
       by simp [intE], by simp [intE], by simp [glueS2]⟩
   · intro i hi b hb; simp [glueS2] at hi; subst hi; simp [glueS2] at hb
 
+/-! ### Agora #805: the receive's option glue `ofnR` (`sum int DT`) -/
+
+theorem ofnR_not_thru : ¬ ThruFn P 12 := by
+  intro h
+  cases h with
+  | here hf hb => simp [P] at hf; subst hf; simp [ofnR, Stmt.hasThru] at hb
+  | call hf hg ht => simp [P] at hf; subst hf; simp [ofnR, Stmt.calls] at hg; subst hg; exact dfn_not_thru ht
+
+theorem ofnR_enumOK : EnumGlueOK P 12 RT :=
+  ⟨ofnR, .int, DT, _, _, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, ofnR_not_thru, rfl, rfl, rfl,
+    fun h => absurd h (by decide), fun _ => ⟨2, 0, _, rfl⟩⟩
+
+theorem rdrop_ok : DropFnOK P 12 RT := Or.inr (Or.inr (Or.inr (Or.inl ofnR_enumOK)))
+
+theorem ofnR_body : ∃ Δ, StmtT P (sigCtx ofnR) [] ofnR.body Δ ∧
+    (∀ v E, Δ v = some E → E.mode ≠ .rootb ∧ E.dtor = false ∧ E.dbind = false) ∧
+    Δ 1 = some { intE with mode := R0.mode } := by
+  let E0 : Entry := ⟨RDT, .own, true, [], [], false, false⟩
+  let I : Entry := { intE with mode := R0.mode }
+  have h0 : sigCtx ofnR 0 = some E0 := by simp [sigCtx, ofnR, paramE, E0, RDT, RT, DT, T, Ty.hasFn]
+  have h1 : sigCtx ofnR 1 = some R0 := by simp [sigCtx, ofnR, R0, resMode]
+  have h2 : ∀ v : Nat, v ≠ 0 → v ≠ 1 → sigCtx ofnR v = none := by
+    intro v hv0 hv1
+    have hlt : ¬ v < 1 := fun h => hv0 (Nat.lt_one_iff.mp h)
+    simp [sigCtx, ofnR, hlt, hv1]
+  have hS : NoRootb (sigCtx ofnR) := by
+    intro v E h
+    rcases v with _ | _ | v
+    · rw [h0] at h; cases h; simp [E0]
+    · rw [h1] at h; cases h; simp [R0]
+    · rw [h2 _ (by simp) (by simp)] at h; cases h
+  have hSd : NoDeps (sigCtx ofnR) := by
+    intro v E h
+    rcases v with _ | _ | v
+    · rw [h0] at h; cases h; rfl
+    · rw [h1] at h; cases h; rfl
+    · rw [h2 _ (by simp) (by simp)] at h; cases h
+  -- the arm that takes the payload out
+  let Ka : Ctx := A2.setE (kill .replace false 0 (sigCtx ofnR)) 0 { E0 with live := false, dtor := false }
+  have hKa : NoRootb Ka := (hS.kill _ _ _).setE (by simp [E0])
+  have hKad : NoDeps Ka := (hSd.kill _ _ _).setE rfl
+  have hEx : compE E0 DT = ⟨DT, .own, true, [], [], false, false⟩ := by
+    simp [compE, E0, ownHeld, DT, T]
+  have htk : RhsT (sigCtx ofnR) [] (.taker 0) (compE E0 DT) Ka :=
+    RhsT.taker (a := .int) h0 rfl rfl (Or.inr ⟨12, rfl, by decide⟩) (by simp) (hS.noPin _)
+      (DtorSafe.of_none (fun v E h => (hS v E h).2.1) _ _ _)
+  let ED : Entry := Entry.arm { compE E0 DT with ty := DT, held := (compE E0 DT).held }
+  have hED : ED = ⟨DT, .own, true, [], [], false, false⟩ := by
+    simp only [ED]; rw [hEx]; simp [Entry.arm, DT, T, Ty.dtorViews, Ty.holdsView]
+  let Kb : Ctx := A2.setE Ka 2 ED
+  have hKb : NoRootb Kb := hKa.setE (by rw [hED]; simp)
+  have hKbd : NoDeps Kb := hKad.setE (by rw [hED]; rfl)
+  have hc1 : Kb 1 = some R0 := by
+    simp [Kb, Ka, A2.setE, upd, hSd.kill_eq, h1]
+  let Kc : Ctx := A2.setE (kill .replace false 1 Kb) 1 I
+  have hKc : NoRootb Kc := (hKb.kill _ _ _).setE (by simp [I, intE, R0])
+  have hKcd : NoDeps Kc := (hKbd.kill _ _ _).setE rfl
+  have hasg1 : StmtT P Kb [] (.assign 1 (.expr (.lit 0))) Kc :=
+    StmtT.assign (Ex := R0) (E := intE) hc1 (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
+      (RhsT.expr ExprT.lit) rfl (by simp [intE, roots, Entry.vdeps, Mode.ownSlot]) (by simp [hc1])
+      (hKb.noPin _) (DtorSafe.of_none (fun v E h => (hKb v E h).2.1) _ _ _) rfl
+  have harm1 := StmtT.letd (P := P) (Γ := sigCtx ofnR) (Γ1 := Ka) (F := []) (x := 2) (f := 0) (r := .taker 0)
+    (s := .assign 1 (.expr (.lit 0))) (t := T) (H := (compE E0 DT).held) (τ := DT) rfl
+    (h2 2 (by decide) (by decide)) (by simp) htk (by rw [hEx])
+    (Or.inl ⟨rfl, Or.inr ⟨0, by rw [hEx]; rfl⟩⟩) rfl rfl
+    ⟨LetdFn.of drop_ok (fun g hg => by rw [hEx] at hg; exact (Ty.dtor.inj hg).1.symm),
+      fun y Ey g u hr hy hgy => by
+        have hy0 : y = 0 := by rcases hr with hr | hr <;> cases hr <;> rfl
+        subst hy0
+        rw [h0] at hy; cases hy
+        cases hgy
+        exact ofnR_enumOK⟩
+    (HeldUp.refl _ _) hasg1 (hKc.endOK _) (by simp [Stmt.assigns])
+  -- the arm that takes nothing: the enum stays, and its scope frees it
+  let Δ2 : Ctx := A2.setE (kill .replace false 1 (sigCtx ofnR)) 1 I
+  have hasg2 : StmtT P (sigCtx ofnR) [] (.assign 1 (.expr (.lit 0))) Δ2 :=
+    StmtT.assign (Ex := R0) (E := intE) h1 (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
+      (RhsT.expr ExprT.lit) rfl (by simp [intE, roots, Entry.vdeps, Mode.ownSlot]) (by simp [h1])
+      (hS.noPin _) (DtorSafe.of_none (fun v E h => (hS v E h).2.1) _ _ _) rfl
+  let Δ1 : Ctx := exitScope 2 Kc
+  have hΔ1r : NoRootb Δ1 := hKc.exitScope 2
+  have hΔ1d : NoDeps Δ1 := by
+    intro v E h
+    simp only [Δ1, exitScope] at h
+    by_cases hv : v = 2
+    · subst hv; simp at h
+    · rw [upd_ne _ _ hv] at h; exact (hKcd.kill _ _ _) v E h
+  have hw : Weaker Δ2 Δ1 := by
+    refine ⟨fun v => ?_, hΔ1d.wf hΔ1r, hΔ1d.names⟩
+    have e1 : Δ1 v = if v = 2 then none else if v = 1 then some I else if v = 0 then
+        some { E0 with live := false, dtor := false } else none := by
+      simp only [Δ1, exitScope, hKcd.kill_eq]
+      by_cases hv2 : v = 2
+      · subst hv2; simp
+      · rw [upd_ne _ _ hv2]; simp only [hv2, ↓reduceIte, Kc, A2.setE]
+        by_cases hv1 : v = 1
+        · subst hv1; simp
+        · rw [upd_ne _ _ hv1, hKbd.kill_eq]; simp only [hv1, ↓reduceIte, Kb, A2.setE, upd_ne _ _ hv2, Ka]
+          by_cases hv0 : v = 0
+          · subst hv0; simp
+          · rw [upd_ne _ _ hv0, hSd.kill_eq, h2 v hv0 hv1]; simp [hv0]
+    have e2 : Δ2 v = if v = 1 then some I else if v = 0 then some E0 else none := by
+      simp only [Δ2, A2.setE, hSd.kill_eq]
+      by_cases hv1 : v = 1
+      · subst hv1; simp
+      · rw [upd_ne _ _ hv1]; simp only [hv1, ↓reduceIte]
+        by_cases hv0 : v = 0
+        · subst hv0; simp [h0]
+        · simp only [hv0, ↓reduceIte]; exact h2 v hv0 hv1
+    rw [e1, e2]
+    by_cases hv2 : v = 2
+    · subst hv2; simp
+    by_cases hv1 : v = 1
+    · subst hv1; simp; exact EntryWeaker.refl _
+    by_cases hv0 : v = 0
+    · subst hv0
+      simp only [hv2, hv1, ↓reduceIte, reduceCtorEq, false_iff, Option.some.injEq, true_and]
+      intro E E' hE hE'
+      subst hE; subst hE'
+      exact ⟨rfl, rfl, fun hf => by simp [Entry.fixed, E0] at hf, fun hl => by simp at hl,
+        fun hd => by simp [E0] at hd, rfl, fun hd => by simp at hd, fun hd => by simp [E0] at hd⟩
+    · simp [hv2, hv1, hv0]
+  have harm2 : StmtT P (sigCtx ofnR) [] (.assign 1 (.expr (.lit 0))) Δ1 :=
+    StmtT.sub (Weaker.refl (hSd.wf hS) hSd.names) hasg2 (Or.inr hw)
+  refine ⟨Δ1, StmtT.ite rfl rfl (ExprT.isl h0 rfl rfl) harm2 harm1, hΔ1r, ?_⟩
+  show exitScope 2 Kc 1 = some I
+  simp only [exitScope]
+  rw [upd_ne _ _ (by decide), hKcd.kill_eq]
+  simp [Kc, A2.setE]
+
+theorem ofnR_ok : FnOK P ofnR := by
+  obtain ⟨Δ, hb, hfl, hr⟩ := ofnR_body
+  refine ⟨rfl, by decide, by decide, rfl, by simp [ofnR], ?_, by simp [ofnR], by simp [ofnR], by simp [ofnR],
+    by simp [ofnR], by simp [ofnR], ?_, Δ, hb, fun v E h => (hfl v E h).2, ?_, ?_⟩
+  · intro pt hpt; simp [ofnR] at hpt; subst hpt; simp [RDT, RT, DT, T, Ty.ok, Ty.isStruct, Ty.owning, Ty.vecD]
+  · refine ⟨fun i hi hs _ => ?_, fun i hi b hb _ => ?_, fun h => by simp [ofnR] at h⟩
+    · simp [ofnR] at hi; subst hi
+      exact ⟨Or.inr ⟨12, RT, rfl, Or.inl ofnR_enumOK⟩, by simp [ofnR, Stmt.assigns]⟩
+    · simp [ofnR] at hi; subst hi; simp [ofnR] at hb
+  · exact ⟨{ intE with mode := R0.mode }, by simpa [ofnR] using hr, rfl, rfl, by simp [R0, resMode, ofnR],
+      by simp [intE], by simp [intE], by simp [ofnR]⟩
+  · intro i hi b hb; simp [ofnR] at hi; subst hi; simp [ofnR] at hb
+
 theorem prog_ok : ProgOK P := by
   intro fn hfn
   simp only [P, List.mem_cons, List.mem_nil_iff, or_false] at hfn
-  rcases hfn with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl
+  rcases hfn with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl
   · exact dfn_ok
   · exact mk_ok
   · exact ofn_ok
@@ -2357,6 +2520,7 @@ theorem prog_ok : ProgOK P := by
   · exact ofnV_ok
   · exact implS_ok
   · exact glueS2_ok
+  · exact ofnR_ok
 
 /-! ### The caller: `: DT y ( mk )  :drop z y` -/
 
@@ -2394,8 +2558,8 @@ theorem main2_typed : ∃ Δ, StmtT P (fun _ => none) [] main2 Δ := by
 theorem prog_codes : ProgCodes P := by
   intro fn hfn
   simp only [P, List.mem_cons, List.mem_nil_iff, or_false] at hfn
-  rcases hfn with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;>
-    simp [dfn, mk, ofn, gfn, glue, impl, glue2, glueV, glueS, ofnV, implS, glueS2, Stmt.codesOK,
+  rcases hfn with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;>
+    simp [dfn, mk, ofn, gfn, glue, impl, glue2, glueV, glueS, ofnV, implS, glueS2, ofnR, Stmt.codesOK,
       Rhs.codeOK]
 
 theorem main2_safe {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem 2) main2 (.ok m' s')) :

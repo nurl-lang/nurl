@@ -1157,8 +1157,9 @@ each one shrinks `CLAIM.md`'s exception:
        `locked_restore` and `locked_set` of one. A *channel* of
        destructor values that hold a share, and a channel's state of `D`
        elements with no glue over it (the plain `prod (vec D) int`, no
-       destructor type and no `Vec`). No receive of a destructor value has
-       a witness.
+       destructor type and no `Vec`). (Agora #805: a receive of a
+       destructor value has a witness, `A3.ChanDtorWitness.mainR`, its
+       option bound under the glue `A2.DtorWitness.ofnR`.)
      - *An `Arc` whose payload holds a destructor value in a field of a
        type with no destructor of its own* (a struct or an option of no
        destructor type with a `% Drop` field, or a `Vec` of them):

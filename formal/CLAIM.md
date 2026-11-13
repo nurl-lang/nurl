@@ -1086,8 +1086,14 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   renaming the call applies, is the drain's step and nothing else, element
   0 first, each in a frame of its own. Read off the steps, not proved:
   the run from the reap's call of the glue into its body (the parameter's
-  binding, `BindParams`); no theorem traces the run, and no receive of a
-  destructor value is given a witness. Not typed: a channel of destructor values that hold a share
+  binding, `BindParams`); no theorem traces the run. Agora #805: a receive
+  of a destructor value has a witness, `A3.ChanDtorWitness.mainR` (sent,
+  then received and bound by `letd` under the option's glue `ofnR`, an
+  `EnumGlueOK` glue of `sum int DT`: `mainR_typed`, `mainR_safe`,
+  `mainR_no_leak`, `mainR_no_leak_panic`, `A3.chanRecv_claim`;
+  `recv_runs_glue`: the head handed out, owned, in a frame whose end calls
+  the glue; `ofnR_takes_payload`: the glue moves it to a `letd` frame of
+  its destructor). Not typed: a channel of destructor values that hold a share
   (`Ty.lkPay`'s `!hasArc`, stricter than nurlc), or of values holding one
   in a field of a type with no destructor of its own.
 - Agora #610: **the last share's drop runs an `Arc`'s destructor, on the

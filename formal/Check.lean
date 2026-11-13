@@ -122,6 +122,16 @@ import A3
 #print axioms A3.unpair_body
 #print axioms A3.chanGlue_drains
 #print axioms A3.ChanDtorWitness.glueV_drains
+-- Agora #805: a receive of a destructor value: the option bound under its glue (`ofnR`, an
+-- `EnumGlueOK` glue of `sum int DT`), whose frame's end calls the glue, which takes the payload out
+#print axioms A2.DtorWitness.ofnR_ok
+#print axioms A3.ChanDtorWitness.mainR_typed
+#print axioms A3.ChanDtorWitness.mainR_safe
+#print axioms A3.ChanDtorWitness.mainR_no_leak
+#print axioms A3.ChanDtorWitness.mainR_no_leak_panic
+#print axioms A3.ChanDtorWitness.recv_runs_glue
+#print axioms A3.ChanDtorWitness.ofnR_takes_payload
+#print axioms A3.chanRecv_claim
 -- Agora #755 item 1: A3's marking sweep and eager reaps (A3/Mark.lean, A3/Reap.lean):
 -- the thread that drops the last share runs the destructor
 #print axioms A3.CParts.sweepD

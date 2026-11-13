@@ -1068,8 +1068,11 @@ the queue's field in `movedFirst`, the typing makes its hand-over a `letd` at
 `scopeD w f` ends by `Step.scopeDDrain` and nothing else, element 0 first;
 `glueV_drains` at the witness). Read off the steps, not proved: the reap's
 call into the glue's body, and that a typed check-out body leaves the binding
-holding its value; no run is traced, and no receive of a destructor value
-has a witness. Still refused: a channel of destructor values holding a
+holding its value; no run is traced. Agora #805: a receive of a destructor
+value has a witness, `A3.ChanDtorWitness.mainR` (the option `chan_recv` hands
+out bound by `letd` under its glue `ofnR`, `EnumGlueOK` over `sum int DT`:
+`mainR_typed`, `mainR_safe`, `mainR_no_leak`, `mainR_no_leak_panic`,
+`A3.chanRecv_claim`, `recv_runs_glue`, `ofnR_takes_payload`). Still refused: a channel of destructor values holding a
 share, and the plain `prod (vec D) int` lock payload (no glue).
 
 ### Agora #755 item 1: the destructor on A3's threads
