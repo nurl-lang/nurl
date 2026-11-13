@@ -57158,6 +57158,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         // the binding owns that copy by the call's own bit, agora #477.)
         : s __lcp ? == bck_rhs_tt TT_LPAREN ( __call_copied_own val ) ``
         ( nurl_sym_def g_call_cp `bind` __lcp )
+        ( __lendcopy_note syms name vt bck_rhs_tt g_bck_rhs_lend __blk_lend __lcp )
         ? & & & & != 0 g_auto_drop_strings ( __is_autodrop_enum vt syms ) != 0 ( nurl_str_len rhs_borrow ) ! __blk_lend == 0 ( nurl_str_len __lcp )
         { ( nurl_sym_def syms ( nurl_str_cat name `__borrow` ) `1` ) }
         { ? != 0 g_auto_drop_strings
@@ -57581,6 +57582,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             // #477.)
             : s __lcp ? == bck_rhs_tt TT_LPAREN ( __call_copied_own store_val ) ``
             ( nurl_sym_def g_call_cp `bind` __lcp )
+            ( __lendcopy_note syms name ptype bck_rhs_tt g_bck_rhs_lend __blk_lend __lcp )
             ? & & & & != 0 g_auto_drop_strings ( __is_autodrop_enum ptype syms ) != 0 ( nurl_str_len rhs_borrow ) ! __blk_lend == 0 ( nurl_str_len __lcp )
             { ( nurl_sym_def syms ( nurl_str_cat name `__borrow` ) `1` ) }
             { ? != 0 g_auto_drop_strings
@@ -57846,6 +57848,8 @@ unsafe @ gen_assign i lex i syms i cg → s {
             ( nurl_sym_def syms ( nurl_str_cat name `__closure_assigns` ) ( nurl_sym_get syms `__last_closure_assigns__` ) ) ( nurl_sym_def syms ( nurl_str_cat name `__closure_fldroots` ) ( nurl_sym_get syms `__last_closure_fldroots__` ) )
             ( bck_add_cap_name name ) }
         { ( bck_clear_cap_name syms name ) }
+        // (A new value: no longer the copy of a lend the `:` made, agora #798.)
+        ? != 0 ( nurl_sym_len2 syms name `__lendcopy` ) { ( nurl_sym_def syms ( nurl_str_cat name `__lendcopy` ) `` ) } {}
         // (…a closure a call hands back: its effects, as for `:`; agora #802.)
         ? & & != 0 g_clo_eff_set == bck_rhs_tt TT_LPAREN ( __is_closure_ty ( nurl_sym_get syms name ) ) { ( nurl_sym_def syms ( nurl_str_cat name `__closure_effects` ) ( nurl_sym_get syms `__last_call_clo_effects__` ) ) } {}
         // Env ownership, the `:` binding's rule in the `=` spelling. A
@@ -60525,7 +60529,11 @@ unsafe @ __replaces_note_io i syms s name s field → v {
                 // the way to say what was meant — agora #488, #643.)
                 // A value that owns nothing is lost there without a word:
                 // said, as a by-value parameter's is above.
-                : i __bck_k ( __fs_borrowed_copy_kind syms obj_name )
+                : ~ i __bck_k ( __fs_borrowed_copy_kind syms obj_name )
+                // (A struct binding of a lend: the value stored is the
+                // binding's by its flag, so only the write is lost — agora
+                // #798.)
+                ? == __bck_k 4 { ( warn_pos lex __fs_ol __fs_oc ( __fs_borrowed_copy_lost 4 obj_name fname ( nurl_sym_get2 syms obj_name `__lendcopy` ) ) ) = __bck_k 0 } {}
                 ? != __bck_k 0 {
                     ? ( __type_needs_drop ftype syms ) { ( die_pos lex __fs_ol __fs_oc ( __fs_borrowed_copy_msg __bck_k obj_name fname ( llvm_to_nurl pt ) ) ) } {
                         ? != __bck_k 1 { ( warn_pos lex __fs_ol __fs_oc ( __fs_borrowed_copy_lost __bck_k obj_name fname ( llvm_to_nurl pt ) ) ) } {}
@@ -85273,7 +85281,9 @@ unsafe @ __clo_take_capture i syms i cg s name → v {
 // stored there (agora #488, #643)? 1: a by-value (`in`) parameter — its
 // own copy of the caller's value (§7.2); 2: a `~` loop's element — a copy
 // of the container's element, which the loop borrows (§5.4); 3: a closure
-// body's by-value capture — the body's copy, made at each call. 0: none of
+// body's by-value capture — the body's copy, made at each call; 4: a
+// struct binding of a value a call lent (`: App e ( vec_at [App] ps 0 )`)
+// — a copy of the lent value, made by the `:` (agora #798). 0: none of
 // those (an owned local, an `inout` or `sink` parameter, a by-pointer
 // capture, a destructor's receiver).
 @ __fs_borrowed_copy_kind i syms s obj → i {
@@ -85285,7 +85295,41 @@ unsafe @ __clo_take_capture i syms i cg s name → v {
     } {}
     ? & != 0 ( nurl_str_len op ) != 0 ( nurl_sym_len2 syms op `__fe_copy` ) { ^ 2 } {}
     ? & & & & != 0 ( nurl_str_len op ) != 0 ( nurl_sym_len2 syms op `__pslot` ) ! ( seq ( nurl_sym_get2 syms obj `__inout` ) `1` ) == 0 ( nurl_sym_len2 syms obj `__sinkp` ) == 0 ( nurl_str_len g_drop_glue_ty ) { ^ 1 } {}
+    ? != 0 ( nurl_sym_len2 syms obj `__lendcopy` ) { ^ 4 } {}
     ^ 0
+}
+
+// Is `ty` a program struct (`%Name`, with fields, not an enum)?
+@ __lc_struct_ty s ty → b {
+    ? == 0 g_root_syms { ^ F } {}
+    : i n ( nurl_str_len ty )
+    ? | < n 2 != ( nurl_str_get ty 0 ) 37 { ^ F } {}
+    ? == ( nurl_str_get ty - n 1 ) 42 { ^ F } {}
+    : s sname ( nurl_str_slice ty 1 - n 1 )
+    ? == 0 ( nurl_sym_len2 g_root_syms sname `__field_count` ) { ^ F } {}
+    ^ == 0 ( nurl_sym_len2 g_root_syms sname `__variants` )
+}
+
+// A struct binding of a value a call lends — `: App e ( vec_at [App] ps 0 )`,
+// `( vec_at [App] . w apps 0 )`, `( rc_get [App] r )` — is a copy of the lent
+// value: a field store into it lands in that copy, and the lender keeps its
+// old value (agora #798). While that holds, `name__lendcopy` names what the
+// call lent out of (kind 4 above): the first source the walk gives the
+// call's result (`lend`, g_bck_rhs_lend; `-` is none). A value of the
+// binding's own — a fresh result, `mem_dup`, a copy the call made (`lcp`),
+// a call that answers per call whether it lent, a value block's copy —
+// leaves no mark; `=` of a new value clears it (gen_assign).
+@ __lendcopy_note i syms s name s ty i rhs_tt s lend b blk_lend s lcp → v {
+    : ~ s src ``
+    ? & & & & == rhs_tt TT_LPAREN ! blk_lend == 0 ( nurl_str_len lcp ) ! ( __call_answers syms rhs_tt ) ( __lc_struct_ty ty ) {
+        : ~ s rest ( nurl_str_cat lend `` )
+        ~ & == 0 ( nurl_str_len src ) != 0 ( nurl_str_len rest ) {
+            : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+            ? & != 0 ( nurl_str_len w ) ! ( seq w `-` ) { = src w } {}
+        }
+    } {}
+    ? != 0 ( nurl_str_len src ) { ( nurl_sym_def syms ( nurl_str_cat name `__lendcopy` ) src ) ^ } {}
+    ? != 0 ( nurl_sym_len2 syms name `__lendcopy` ) { ( nurl_sym_def syms ( nurl_str_cat name `__lendcopy` ) `` ) } {}
 }
 
 // Does field `fname` of struct type `oty` (`%T`) own memory?
@@ -85301,6 +85345,10 @@ unsafe @ __clo_take_capture i syms i cg s name → v {
 // write is lost where the owner looks (a parameter has its own, above).
 @ __fs_borrowed_copy_lost i kind s obj s fname s ty → s {
     : s head ( nurl_str_cat4 `assignment to field '` fname `' of '` ( nurl_str_cat obj `' is lost: '` ) )
+    ? == kind 4 {
+        ^ ( nurl_str_cat4 head obj ( nurl_str_cat3 `' is a copy of the value a call lent it out of '` ty `' — binding a lent struct copies it, so the store lands in that copy and '` )
+        ( nurl_str_cat3 ty `' keeps its old value. Replace the value where it lives (vec_put / vec_set for a Vec element, a field store through its owner), or bind an owned copy with ( mem_dup … ) if '` ( nurl_str_cat obj `' is meant to be a value of its own.` ) ) )
+    } {}
     ? == kind 2 {
         ^ ( nurl_str_cat4 head obj `' is a loop element — a '~' loop binds a copy of each element, so the store lands in that copy and the container keeps its old value. `
         `Replace the element in the container instead (an index loop and vec_put / vec_set), or build the new values into another Vec.` )

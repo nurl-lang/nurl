@@ -1,0 +1,16 @@
+COMPILE OK
+WARNINGS
+compiler/tests/should_warn_field_store_into_a_struct_binding_of_a_lend.nu:24:9: warning: assignment to field 'name' of 'e' is lost: 'e' is a copy of the value a call lent it out of 'ps' — binding a lent struct copies it, so the store lands in that copy and 'ps' keeps its old value. Replace the value where it lives (vec_put / vec_set for a Vec element, a field store through its owner), or bind an owned copy with ( mem_dup … ) if 'e' is meant to be a value of its own.
+    = . e name ( string_from `the new name, long enough for a heap buffer` )
+        ^
+compiler/tests/should_warn_field_store_into_a_struct_binding_of_a_lend.nu:25:9: warning: assignment to field 'n' of 'e' is lost: 'e' is a copy of the value a call lent it out of 'ps' — binding a lent struct copies it, so the store lands in that copy and 'ps' keeps its old value. Replace the value where it lives (vec_put / vec_set for a Vec element, a field store through its owner), or bind an owned copy with ( mem_dup … ) if 'e' is meant to be a value of its own.
+    = . e n 7
+        ^
+LINK OK
+EXIT 0
+OUTPUT
+the old name, long enough for a heap buffer
+1
+8
+9
+10

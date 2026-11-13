@@ -1,7 +1,7 @@
 ### Changed
 
 - **An owning value stored into a field of a borrowed copy is refused**
-  (Agora #488, #643). A by-value (`in`) struct parameter, a `~` loop's
+  (AGORA-488, AGORA-643). A by-value (`in`) struct parameter, a `~` loop's
   element and a closure's by-value capture are each a copy of a value
   the code only borrows: `= . a name ( string_from … )` landed in that
   copy, the owner never saw it, and nothing released the new value (a
