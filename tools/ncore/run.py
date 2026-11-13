@@ -43,6 +43,15 @@ def verdict(path):
     return ("rejected" if errors else "runs-clean"), errors, summ
 
 
+# What marks a diagnostic of the fused walk that the ownership engine does
+# not replace (docs/spec.md §3.3d, MEMORY.md §6.5's Send / Sync, typing).
+WALK_RULES = ("raw memory", "only an 'unsafe' function", "which only an 'unsafe'", "is not Send", "is not Sync",
+              "not Send:", "is set at start", "is declared 'raw'", "runtime handle", "FFI parameter",
+              "expects type", "undefined identifier", "internal to the standard library",
+              "takes a raw pointer", "hands back a raw pointer", "the standard library's address",
+              "a number passed where", "is left out of this literal", "carries a payload, and a bare variant")
+
+
 def verdict_nurlc(path):
     """The verdict on the IR nurlc itself lowers the program to.
 
@@ -54,7 +63,13 @@ def verdict_nurlc(path):
     rd, gaps, rc, err = fromnurlc.read_program(path)
     if rc != 0:
         first = next((l for l in err.splitlines() if "error" in l), "nurlc failed")
-        raise Unsupported("nurlc: " + first.split("error:")[-1].strip()[:40])
+        msg = first.split("error:")[-1].strip()
+        # A refusal that is no ownership rule - the raw-memory boundary, a
+        # type that may not cross to another thread, a type error - is the
+        # walk's to make, on types alone: the engine is not asked.
+        if any(w in msg for w in WALK_RULES):
+            return "rejected", [("nurlc", 0, "the walk: " + msg[:60])], {}
+        raise Unsupported("nurlc: " + msg[:40])
     prog = rd.prog
     every = dict(prog.fns)
 
