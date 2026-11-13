@@ -293,10 +293,12 @@ def Ty.dtorFree : Ty → Bool
     `Ty.dnest`). It is a binding's own type, or (`Ty.ok` admits it too as a
     struct's field or an enum's payload, which the struct's or the enum's
     glue hands to a `letd`, and as another such `Vec`'s element or a view's
-    element, Agora #607, and (Agora #755) as an `Arc`'s payload, which the
-    reap of the orphaned block hands to a destructor frame at its own type,
-    `Step.reap`; it refuses it as a lock's, a cell's or a channel's payload,
-    whose check-out binding is no `letd`'s). -/
+    element, Agora #607, and (Agora #755) as an `Arc`'s, a lock's or a
+    cell's payload, which the reap of the orphaned block hands to a
+    destructor frame at its own type, `Step.reap`; a lock's check-out
+    binding of one is given no other value, `StmtT.withLock`'s `hna`, and
+    goes back into the block.  A channel's queue of them is a struct's field
+    under the struct's glue, `Ty.ChanOf`). -/
 def Ty.vecD : Ty → Bool
   | .vec t => !t.dtorFree
   | _ => false
@@ -376,7 +378,8 @@ def Ty.ok : Ty → Bool
   | .sum a b => a.ok && b.ok
   | .fn _ _ => true
   -- (A2-drop.3d: a lock's or a cell's payload owns no destructor value, or
-  -- (Agora #755, `Ty.lkPay`) is one at its top that holds no share: the
+  -- (Agora #755, `Ty.lkPay`) is one at its top, or a drained `Vec` of them,
+  -- that holds no share (a channel of them: its state under its glue): the
   -- check-out binding is given no other value in the body and goes back on a
   -- panic, and the orphaned block is reaped as an `Arc`'s.  Agora #610: an `Arc`'s payload may be a
   -- destructor value itself: the sweep that finds its block unreached marks

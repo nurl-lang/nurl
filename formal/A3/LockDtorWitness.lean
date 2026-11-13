@@ -42,9 +42,11 @@ Still refused (stricter than nurlc): `RwLocked D`'s read guard
 nothing) and `locked_restore` of a destructor value (`lockRestore_dtor_refused`:
 the model's restore also fills a block a `withLock` has checked out, whose
 give-back would then drop its value with no code); a payload that holds a
-destructor value in a field of a type with no destructor of its own, a
-`Vec` of them, or a destructor value that holds a share (`Ty.lkPay`); a
-channel of `D` (its payload is `prod (vec D) int`, no destructor type). -/
+destructor value in a field of a type with no destructor of its own, or a
+destructor value (or a drained `Vec` of them) that holds a share
+(`Ty.lkPay`).  Since Agora #755's last cut a `Locked (Vec D)` is typed
+(`mainV`, below: a push through the check-out), and so is a channel of `D`
+(`A3/ChanDtorWitness.lean`: its state under its glue). -/
 
 namespace A3.LockDtorWitness
 open A2
