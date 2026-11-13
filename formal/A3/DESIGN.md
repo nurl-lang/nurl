@@ -49,7 +49,10 @@ is the share), a read guard faces the crossing check and does not cross,
 and a slice's elements may be shares. Since Agora #755 item 1 a
 thread's step ends with the configuration's marking sweep and that thread's
 reaps, so a share's destructor payload is dropped, as code, by the thread
-that drops the last share (the #755 item 1 section, below). This note fixes the
+that drops the last share (the #755 item 1 section, below); since #755's
+last cut that covers a `Locked (Vec D)` and a channel of destructor values
+too (its state under its glue; a closed channel's unqueued value reaped by
+the sender). This note fixes the
 semantics, the theorem statements and the order of work, so the
 mechanization can be cut into tasks (Agora: formal track, F4–F8). The guarantee it targets is the
 "no data race" clause of `CLAIM.md` and `docs/MEMORY.md` §6.2. The rules
@@ -991,9 +994,75 @@ the same rules, with no witness program; that a real library handle with
 such a state behaves as the model's cell is an assumption about the
 library (trusted base, phase B), not a result: the handles check their
 state out with `rc_take` / `rc_restore`, which meet Agora #795. Still refused: a payload that holds a
-share, a `Vec` of destructor values, a destructor value in a field of a
-type of no destructor of its own, and a channel of them (its queue is a
-`Vec`).
+share and a destructor value in a field of a type of no destructor of its
+own. (A `Vec` of destructor values and a channel of them are typed since
+the last cut, below.)
+
+### Agora #755, last cut: `Locked (Vec D)` and a channel of `D`
+
+1. *Admission.* `Ty.lkPay t := t.dtorFree || (t.dnest && !t.hasArc)`: a
+   drained `Vec` of destructor values at any depth, holding no share, is a
+   lock's or a cell's payload (the old `hasDtor` case is `dnest` at depth
+   0); `Ty.ok (lk t)` no longer asks `!t.vecD`. A channel of destructor
+   values is not admitted part by part, nor by a channel case of `lkPay`:
+   its payload is the struct of the queue and the flag under the struct's
+   glue, `Ty.dtor g (prod (vec s) int)` (nurlc's `ChImpl A`, whose drop
+   glue drops the queue), a destructor type holding no share, so a
+   `Locked D` already. `RhsT.chanSend` / `chanRecv` / `chanClose` ask
+   `Ea.ty.ChanOf s`: a lock share of `prod (vec s) int` or of that struct
+   under a destructor type; the preservation lemmas read the payload through
+   `Ty.undtor`. Why: the reap hands one value of a destructor type, or a
+   drained `Vec`, to one frame (`ScopeDTy`); a glue struct is such a value,
+   and its glue drains the queue, so `Cand`, `CandPay`, `TopPay`,
+   `DeadPay`, `Orphan`, `ReapMem`, `Step.reap` and the A3 reap machinery
+   (`CSettle`, `CParts.thread_of`) needed no change.
+2. *The check-out of a `Vec D`.* The `Locked D` cut's three closed paths
+   cover it: `hna` (no `assign`), the give-back's check (`sendCheck_noArc`,
+   of any type holding no share), `locked_restore`'s `dtorFree`; the
+   model's in-place drops (`free`, the edits `trunc` and `set`, i.e.
+   `vec_truncate` and `vec_set`, and `withElem`; `vec_clear` is a
+   truncation to 0, or code, `A2/DropCode.lean`) ask elements owning no
+   destructor value; a pop's element is
+   an owned destructor value, which only a `letd` binds. A push needs no new
+   rule. The orphaned block is reaped at the `Vec`'s type and its frame
+   drains it.
+3. *Send, receive, close, last drop.* A send moves the value into the queue
+   (`chanSend_pres` over the glue); a receive hands the head out as an owned
+   `Option s`, which only a `letd` under the option's glue binds; a close
+   sets the flag and drops nothing (nurlc's `chan_close` likewise: receivers
+   drain the queue). The last share's drop is `Locked D`'s: the configuration's
+   marking sweep marks the block and the dropping thread reaps it into a
+   frame of `g`, whose end calls the glue, which drains the queue in index
+   order (FIFO), as nurlc's last `Channel_drop` drops `ChImpl`'s queue on
+   the dropping thread (`stdlib/std/channel.nu`).
+4. *A closed channel's send* used to free the value with no code
+   (`Frees`). `EvalR.chanSendClosed` now moves it into a fresh lock block
+   of the element type (`t.undtor = prod (vec s) int`, read off the
+   channel's type) that no share names (`closed_send_parks` proves that
+   much); the marking sweep that ends the step is then to free it, or mark
+   it `dead` for the sending thread to reap (read off the steps): nurlc's
+   `chan_send` drops its unqueued (inferred-`sink`) parameter before it
+   returns, on the sender. The A3 proofs take it as `locked_new`'s block
+   (`CellKeep.moveIn`, `EvalR.ownedId`, `Grows`, `lift` / `restrict` /
+   `keep`); `DeadCodes` is over `Ty.Reaps` (a block's own destructor and a
+   channel's elements'), so the parked block's destructor is checked.
+5. *A3.* `A3.claim` and `claim_made` are unchanged in statement and
+   re-proven. The reap is the dropping thread's (item 1): instances
+   `A3.lockVecDtor_reaps`, `A3.chanDtor_reaps`.
+
+Witnesses: `A3.LockDtorWitness.mainV` (a `Locked (Vec DT)`, a value pushed
+through the check-out, the share dropped: `mainV_typed`, `mainV_safe`,
+`mainV_no_leak`, `mainV_no_leak_panic`, `last_dropV_reaps`, `reapV_drains`,
+`A3.lockVecDtor_claim`) and `A3.ChanDtorWitness.main` (a channel of `DT`,
+its state `glueV`'s struct, one value sent and never received, the share
+dropped: `main_typed`, `main_safe`, `main_no_leak`, `main_no_leak_panic`,
+`last_drop_reaps`, `reap_runs_glue`, `closed_send_parks`,
+`A3.chanDtor_claim`). Read off the steps, not proved: that the glue's body
+drains the queue, that the parked block of a closed channel's send is
+marked and reaped by the sender (no typed witness closes a channel), and that a typed check-out body leaves the binding
+holding its value; no run is traced, and no receive of a destructor value
+has a witness. Still refused: a channel of destructor values holding a
+share, and the plain `prod (vec D) int` lock payload (no glue).
 
 ### Agora #755 item 1: the destructor on A3's threads
 
@@ -1487,7 +1556,9 @@ lock block's payload.
 runtime's `ChImpl` is a mutex, a condition variable, a queue `Vec A`, a
 `closed` flag and the waiters' lists. The model keeps the queue and the
 flag, as the payload of A3.2's lock block: `Channel s` is
-`Ty.lk (.prod (.vec s) .int)`, and its payload is
+`Ty.lk (.prod (.vec s) .int)` (or, Agora #755, a lock of that struct under
+its glue, `Ty.dtor g (.prod (.vec s) .int)`, `Ty.ChanOf`: a channel of
+destructor values, below), and its payload is
 `pair (node s c d es) (int f)`, with `es` the queue from the front and `f`
 the flag (0 is open).
 - The flag is a pair's second field, not a field of `Blk` or a third
@@ -1511,7 +1582,8 @@ the flag (0 is open).
 
 **The rules.**
 - `Rhs.chanSend a y` (`chan_send a y`), typed by `RhsT.chanSend`:
-  - `a` is a live share of type `lk (prod (vec s) int)`, and `y` a live `s`,
+  - `a` is a live share of type `lk (prod (vec s) int)` (Agora #755: or of
+    that struct under its glue, `Ty.ChanOf`), and `y` a live `s`,
     handed over by `PushArg` as `vec_push` takes it (an owner moves and its
     entry dies, an integer is copied). The answer is an integer (`intE`).
   - `s` holds no view, no closure and no share: `Ty.ok (lk _)`'s condition,
@@ -1573,8 +1645,9 @@ the flag (0 is open).
   thread's part. The runtime's mutex (`ChImpl.m`) orders the operations on
   one channel, and it is trusted base, as a lock's word is (A3.2).
   - `RTouch.chanSend` is the one new touch. It counts `y`'s tree as
-    written. A closed channel's drop frees that tree, and for a move into
-    the queue the touch over-approximates. The tree is the sender's own
+    written. A closed channel's drop moves that tree into a fresh lock
+    block (since Agora #755, for the marking sweep to free or for the sender
+    to reap), and for a move into the queue the touch over-approximates. The tree is the sender's own
     (`rTouch_seen`).
 - *The values in the queue are in the block's payload*, in `payPart` and in
   no thread's part (`CParts.pay`).
@@ -1590,10 +1663,11 @@ the flag (0 is open).
     block is kept as a lock block of its type.
 - *The frame lemmas.* The queue's two addresses are a payload's, so
   `EvalR.restrict` keeps their checks through `PayOff`, as for `VecOf`.
-  A closed channel's drop is of the sender's own tree. For it,
-  `EvalR.restrict` takes `BorFree`, `EvalR.keep` takes `BorFree` and
-  `Avoids`, and `EvalR.lift` takes the part's disjointness, as `Step`'s
-  versions already did. `Frees.lift` and `Frees.restrict` move before them.
+  A closed channel's drop is of the sender's own tree. (Since Agora #755 it
+  moves the tree into a fresh lock block, as `locked_new` does, and the
+  frame lemmas take it as `locked_new`'s case; before, it freed the tree:
+  `EvalR.restrict` took `BorFree`, `EvalR.keep` took `BorFree` and
+  `Avoids`, and `EvalR.lift` took the part's disjointness.)
   `Grows`, `BorFree` and `RBlocked.of_eq` get the new cases.
 - *`no_leak` covers values left in a queue.* They are the block's tree, and
   the configuration's sweep frees them with the block once no thread

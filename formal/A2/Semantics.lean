@@ -771,13 +771,23 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
       EvalR m (.chanSend a y)
         (.ok (.int 1) false
           { m1 with blk := upd m1.blk k (some ⟨t, .lock, some (.pair (.node u c d (es ++ [v])) (.int 0))⟩) })
-  /-- ... on a closed channel the value is dropped, and the answer is 0. -/
-  | chanSendClosed {a y : Var} {o : Bool} {k : Nat} {t : Ty} {q : Val} {f : Nat} {v : Val} {m1 : Mem}
-      {a' : Nat → Bool} :
+  /-- ... on a closed channel the value is not queued, and the answer is 0.
+      It is dropped: (Agora #755) it goes into a fresh lock block of the
+      queue's element type (`s`, read off the channel's type), which no share
+      names, so the marking sweep that ends the step frees it with no code
+      when it owns no destructor value, and otherwise (a destructor value,
+      or a drained `Vec` of them, `Ty.lkPay`) marks it `dead` for this
+      thread to reap before its next step (`Settle`, A3's `CSettle`): its
+      destructor runs on the sending thread, as nurlc's `chan_send` drops
+      the value it did not queue (its parameter, an inferred `sink`) before it
+      returns. -/
+  | chanSendClosed {a y : Var} {o : Bool} {k : Nat} {t s : Ty} {q : Val} {f : Nat} {v : Val} {m1 : Mem} :
       m.st a = some ⟨o, some (.lk k)⟩ → TakeVal m y v m1 →
-      m1.blk k = some ⟨t, .lock, some (.pair q (.int (f + 1)))⟩ → Frees m1.alloc v a' →
-      SendCheck m1.blk [v] m1.st →
-      EvalR m (.chanSend a y) (.ok (.int 0) false { m1 with alloc := a' })
+      m1.blk k = some ⟨t, .lock, some (.pair q (.int (f + 1)))⟩ → t.undtor = .prod (.vec s) .int →
+      m1.blk m1.nid = none → SendCheck m1.blk [v] m1.st →
+      EvalR m (.chanSend a y)
+        (.ok (.int 0) false
+          { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨s, .lock, some v⟩) })
   /-- A3.5's second cut: a value that fails the crossing check is not sent:
       `chan_send` panics, before it looks at the channel, the store as it was. -/
   | chanSendFail {a y : Var} {v : Val} {m1 : Mem} :

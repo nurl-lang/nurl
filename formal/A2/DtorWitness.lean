@@ -884,9 +884,9 @@ theorem ok_vecElems {t : Ty} (h : t.ok = true) :
   | arc t ih =>
     simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; simpa only [vecElems] using ih h.1.1
   | lk t ih =>
-    simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; simpa only [vecElems] using ih h.1.1.1
+    simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; simpa only [vecElems] using ih h.1.1
   | cell t ih =>
-    simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; simpa only [vecElems] using ih h.1.1.1
+    simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; simpa only [vecElems] using ih h.1.1
   | dtor _ t ih =>
     simp only [Ty.ok, Bool.and_eq_true] at h
     simpa only [vecElems] using ih h.2

@@ -17,9 +17,9 @@ honest on every run the claim covers:
   reaps, a top-level step to `.panic` is no configuration step, and no
   lemma here shows a spawn redex always has `TStep.spawn` or `spawnFail`);
 - **the destructor runs on the thread that drops the last share**
-  (`TStep.last_drop_reaps`, and its instances at the three witnesses of a
+  (`TStep.last_drop_reaps`, and its instances at the witnesses of a
   share of a destructor value: `arcDtor_reaps`, `arcVecDtor_reaps`,
-  `lockDtor_reaps`): when thread `i`'s step leaves such a block that no
+  `lockDtor_reaps`, `lockVecDtor_reaps`): when thread `i`'s step leaves such a block that no
   thread's slot, no global and no payload refers to, the marking sweep marks
   it, and in the result of that configuration step (whose reaps are all
   thread `i`'s, before any other thread runs) a fresh slot of thread `i`
@@ -90,6 +90,22 @@ theorem lockDtor_reaps {C : Cfg} {i : Nat} {m' : Mem} {s' : Stmt} {C' : Cfg} (hl
       ∃ (t' : Thread) (x : Var), C'.ths[i]? = some t' ∧ t'.st x = some ⟨true, some p⟩ ∧ m'.nv ≤ x ∧
         Emptied C'.blk k (A2.DtorWitness.DT) :=
   TStep.last_drop_reaps (n := 0) (f := 0) (u := A2.DtorWitness.T) hlen hse (Or.inr rfl) hk hv hb
+
+/-- ... and (`A3.lockVecDtor_claim`'s witness, `Locked (Vec D)`) a lock of a
+    drained `Vec` of destructor values whose last share thread `i`'s step
+    drops, its payload in it: thread `i` reaps it in that configuration step,
+    binding the `Vec` at its own type in a destructor frame whose end drains
+    it (`A3.LockDtorWitness.reapV_drains`), as nurlc's last `Locked_drop`
+    drops the `Vec`'s elements on the thread that runs it. -/
+theorem lockVecDtor_reaps {C : Cfg} {i : Nat} {m' : Mem} {s' : Stmt} {C' : Cfg} (hlen : i < C.ths.length)
+    (hse : CSettle A3.LockDtorWitness.P i (C.put i m' s').sweepD C') {k : Nat} {p : Val}
+    (hk : m'.blk k = some ⟨.vec A2.DtorWitness.DT, .lock, some p⟩)
+    (hv : ∀ v, (C.put i m' s').roots v → ¬ Refers m'.blk v k)
+    (hb : ∀ k' bl', m'.blk k' = some bl' → ¬ Refers m'.blk bl'.keeps k) :
+    (C.put i m' s').sweepD.blk k = some ⟨.vec A2.DtorWitness.DT, .dead, some p⟩ ∧
+      ∃ (t' : Thread) (x : Var), C'.ths[i]? = some t' ∧ t'.st x = some ⟨true, some p⟩ ∧ m'.nv ≤ x ∧
+        Emptied C'.blk k (.vec A2.DtorWitness.DT) :=
+  TStep.last_drop_reaps (n := 1) (f := 0) (u := A2.DtorWitness.T) hlen hse (Or.inr rfl) hk hv hb
 
 /-- **A global `Locked D` is never reaped**: the marking sweep roots the
     module globals, so a block a global's share names is kept as it was, at

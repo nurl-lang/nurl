@@ -483,8 +483,20 @@ theorem _root_.A2.EvalR.cellKeep {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h 
     · rcases CellAt.set hc with ⟨u', hu, hs'⟩ | ⟨y', u', hy', hs'⟩
       · cases hu; cases hs'
       · exact absurd hs' (hck.1 k ⟨w, List.mem_singleton_self _, hs⟩ y' u' hy')
-  | chanSendClosed _ h1 _ _ _ =>
-    exact CellKeep.setVal x _ hn hst (fun _ _ hs => by cases hs) (fun _ _ h => LockHolds.of_blk (TakeVal.blk h1) h)
+  | @chanSendClosed _ _ _ _ _ _ _ _ w m2 _ h1 _ _ _ hck =>
+    -- Agora #755: the value a closed channel does not queue goes into a new
+    -- lock block, past the crossing check (as `locked_new`'s)
+    refine CellKeep.moveIn m2.nid w hn (fun k hc => ?_) (fun k' k hk => ?_) (fun k hs => h1.cell.1 hs)
+      (fun k hs hc => ?_)
+    · rcases CellAt.set hc with ⟨u, hu, hs⟩ | hc
+      · cases hu; cases hs
+      · exact .inl (hst k hc)
+    · rcases LockHolds.upd hk with ⟨_, hk⟩ | ⟨rfl, _, _, hb, hs⟩
+      · exact .inl (LockHolds.of_blk (TakeVal.blk h1) hk)
+      · cases hb; exact .inr ⟨rfl, hs⟩
+    · rcases CellAt.set hc with ⟨u, hu, hs'⟩ | ⟨y', u, hy', hs'⟩
+      · cases hu; cases hs'
+      · exact absurd hs' (hck.1 k ⟨w, List.mem_singleton_self _, hs⟩ y' u hy')
   | @chanRecv w a o0 k0 t u c d f hd es _ hk _ _ _ hck =>
     -- the head comes out of the queue, sharing no cell with the rest
     refine CellKeep.moveOut k0 hd hn (fun k hc => ?_) (fun k' k hk' => ?_)

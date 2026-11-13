@@ -44,11 +44,7 @@ theorem EvalR.keep {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.
   | cellNew h1 _ => exact congrFun (TakeVal.alloc h1) i
   | chanSend _ h1 _ _ _ => exact congrFun (TakeVal.alloc h1) i
   | lockRestore _ h1 _ => exact congrFun (TakeVal.alloc h1) i
-  | chanSendClosed _ h1 _ hfr =>
-    -- A3.4: what a send to a closed channel drops was the thread's own
-    have hav2 := (TakeVal.avoids h1 hb hav).2
-    exact (Frees.other hfr (fun hm => by have := hav2 i hm; rw [hi] at this; cases this)).trans
-      (congrFun (TakeVal.alloc h1) i)
+  | chanSendClosed _ h1 _ _ _ _ => exact congrFun (TakeVal.alloc h1) i
   | _ => rfl
 
 /-- **A step leaves another part as it was.** -/

@@ -199,9 +199,8 @@ theorem EvalR.restrict {m : Mem} {r : Rhs} {res : RRes} (h : EvalR m r res) {a2 
     rw [TakeVal.blk h1] at hk0
     exact ⟨_, .chanSend hy (TakeVal.restrict h1 a2) hk (minus_true hc (hp _ (.inl ⟨_, _, hk0, by simp [Blk.tree]⟩)))
       (minus_true hd (hp _ (.inl ⟨_, _, hk0, by simp [Blk.tree]⟩))) hnv hck, rfl, rfl, rfl⟩
-  | chanSendClosed hy h1 hk hfr hck =>
-    exact ⟨_, .chanSendClosed hy (TakeVal.restrict h1 a2) hk
-      (Frees.restrict hfr (TakeVal.avoids h1 hb hav).2) hck, rfl, rfl, rfl⟩
+  | chanSendClosed hy h1 hk ht hfr hck =>
+    exact ⟨_, .chanSendClosed hy (TakeVal.restrict h1 a2) hk ht hfr hck, rfl, rfl, rfl⟩
   | chanRecv hy hk hc hd hnv hck =>
     exact ⟨_, .chanRecv hy hk (minus_true hc (hp _ (.inl ⟨_, _, hk, by simp [Blk.tree]⟩)))
       (minus_true hd (hp _ (.inl ⟨_, _, hk, by simp [Blk.tree]⟩))) hnv hck, rfl, rfl, rfl⟩

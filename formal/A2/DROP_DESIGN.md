@@ -34,8 +34,9 @@ A2-drop.3b; A2-drop.3a's rule looked one level down only).
   runs the destructor at its end and on a panic's unwind. (A check-out
   binding is of no such type, but one: `withLock` and `withCell` check
   out a payload, which owns no destructor value since A2-drop.3d, or
-  since Agora #755 is one that holds no share, `Locked D`, given back at
-  the scope's end and on a panic and reaped with its block, below; and
+  since Agora #755 is one that holds no share, `Locked D`, or a drained
+  `Vec` of them, `Locked (Vec D)`, given back at the scope's end and on a
+  panic and reaped with its block, below; and
   `withElem` asks an element type that owns none, A2-drop.3b.) `letv` refuses
   one (`StmtT.letv`'s `hnd`). A binder that may receive one without running
   `scopeD` itself hands it to its `letd` first thing (`Stmt.movedFirst`):
@@ -166,8 +167,9 @@ A2-drop.3b; A2-drop.3a's rule looked one level down only).
 Refused rather than released since A2-drop.3b (stricter than nurlc, which
 types them and drops a `Vec`'s elements in index order, each running its
 destructor): a `Vec` of destructor values as a shared payload
-(`Ty.ok`): a channel of `D` (its queue is a `Vec`),
-`Locked (Vec D)`, `Arc (Vec D)`, a cell of a `Vec D` (a struct's field or
+(`Ty.ok`) whose elements hold a share (`Arc (Vec D)` is typed since Agora
+#755, and so are `Locked (Vec D)`, a cell of a `Vec D` and a channel of `D`,
+its state a struct holding the queue under its glue, below) (a struct's field or
 an enum's payload is typed since Agora #607: glue hands it to a `letd`,
 which drains it; and so is a `Vec (Vec D)`, at any depth, below, and since
 Agora #782 one whose elements hold views of older bindings, its `letd`
@@ -176,8 +178,8 @@ element and `withElem` are typed code, `A2/DropCode.lean`; its lemmas are
 stated for elements that hold no views, `hv : t.holdsView = false`: the
 view-holding case is typed by the same rules, with no lemma stated). And, since A2-drop.3c and 3d: a share whose payload owns a destructor
 value (`Ty.ok`; but an `Arc` of one or of a drained `Vec` of them,
-Agora #610 / #755, and a `Locked` or a cell of one that holds no share,
-Agora #755), and a trait object whose box holds one (a closure whose
+Agora #610 / #755, and a `Locked` or a cell of one or of a drained `Vec` of
+them that holds no share, Agora #755), and a trait object whose box holds one (a closure whose
 environment holds one is of the class `dropd`, dropped by its glue, Agora #609). The result moved from its slot into a local
 before a panic (`pair res w`, a destructor value two levels down) is a
 `letd`'s, since `Ty.holdsDtor` is deep: `letv` refuses it, and the
@@ -516,8 +518,11 @@ frame that caught it, and (Agora #755) for a lock's or a cell's payload
 that is a destructor value holding no share (`Locked D`: the check-out
 gives it back, the orphaned lock block is reaped as an `Arc`'s), and
 (Agora #755 item 1) on A3's threads, where the configuration's marking
-sweep and the stepping thread's reaps do the same; not yet for channels
-and the lock payloads `Ty.lkPay` refuses. Until they are, `CLAIM.md`'s
+sweep and the stepping thread's reaps do the same; and (Agora #755's last
+cut) for a lock's payload that is a drained `Vec` of them (`Locked (Vec
+D)`) and for a channel of them (its state under its glue, `Ty.ChanOf`), a
+value sent to a closed channel parked in a lock block of its own that the
+sender reaps; not yet for the lock payloads `Ty.lkPay` refuses. Until they are, `CLAIM.md`'s
 *Destructors* section lists where the calculus releases a destructor value
 without running it.
 
@@ -536,7 +541,8 @@ made it:
 | an enum or option payload | the payload's destructor | the enum's glue moves the payload out to a `letd` frame (Agora #632) |
 | a closure's or a trait object's environment | the captures' destructors | the closure's glue calls its drop method, whose code takes the environment owned and binds it under `letd`s (Agora #609, `ClosureGlueOK`, `Step.callcD`); it is called lent, through its binding or a borrow of the destructor type (Agora #651); a method that changes the environment is refused for the class |
 | a panic's unwind through any of these | the journal runs each, once | `scopeP` frees in one step, except at `scopeD` |
-| an `Arc` / lock block's payload when its last share goes (A3) | on the thread that drops the last share | an `Arc` of a destructor type, or (Agora #755) of a drained `Vec` of them: the marking sweep marks the block `dead`, the same thread reaps it into a destructor frame at the payload's own type, which drains a `Vec` (Agora #610, A2's `Steps`; Agora #755 item 1, A3's `TStep`: the configuration's marking sweep and the same thread's reaps); a lock's or a cell's destructor value that holds no share likewise (Agora #755, `Locked D`); any other lock's or cell's, a channel's, or an `Arc`'s holding one in a field of a type with no destructor of its own: refused (`Ty.ok`) |
+| an `Arc` / lock block's payload when its last share goes (A3) | on the thread that drops the last share | an `Arc` of a destructor type, or (Agora #755) of a drained `Vec` of them: the marking sweep marks the block `dead`, the same thread reaps it into a destructor frame at the payload's own type, which drains a `Vec` (Agora #610, A2's `Steps`; Agora #755 item 1, A3's `TStep`: the configuration's marking sweep and the same thread's reaps); a lock's or a cell's destructor value, or drained `Vec` of them, that holds no share likewise (Agora #755, `Locked D`, `Locked (Vec D)`); a channel's queue of them likewise, its state under its glue, whose frame drains the queue (Agora #755); any other lock's or cell's, or an `Arc`'s holding one in a field of a type with no destructor of its own: refused (`Ty.ok`) |
+| a value `chan_send` does not queue (closed channel) | dropped in `chan_send`, on the sender | Agora #755: moved into a fresh lock block of the element type (`EvalR.chanSendClosed`), which the marking sweep frees (no destructor value) or marks for the sending thread to reap (read off the steps) |
 
 ### Semantics
 
@@ -670,7 +676,9 @@ each one shrinks `CLAIM.md`'s exception:
         destructor value, so its destructor is its glue (#616, #632),
         which hands the field to a `letd` at the `Vec`'s own type
         (`LetdTy`'s second case), and that frame drains it;
-        and a channel's queue is swept with its block, running no code (3d).
+        and a channel's queue was swept with its block, running no code (3d;
+        since Agora #755 a channel of destructor values has its state under
+        its glue, whose reap drains the queue).
         A view's element and a `Vec`'s element are lifted too (Agora #607,
         *Built* below: a `Vec (Vec D)`).
      2. *`withElem` of a `Vec D`'s element.* Refused: the check-out is an
@@ -845,7 +853,8 @@ each one shrinks `CLAIM.md`'s exception:
    `Arc` of a destructor value on A2's runs, Agora #610; an `Arc` of a
    drained `Vec` of them, Agora #755; an orphan of a panic's unwinding
    reaped inside the frame that caught it, Agora #790; a `Locked` of a
-   destructor value, Agora #755).
+   destructor value, Agora #755; a `Locked (Vec D)` and a channel of `D`,
+   Agora #755's last cut).
    - **Built: the refusal.** `Ty.ok` asks a lock's and a cell's payload
      type to own no destructor value (`dtorFree`), and `RhsT.lockNew` /
      `cellNew` (and `StmtT.lockedSet`) ask it of what moves in. So a
@@ -1044,6 +1053,69 @@ each one shrinks `CLAIM.md`'s exception:
      the model's semantics, the intended one; nurlc's `locked_take`
      leaves zeros that its last `Locked_drop` drops again (Agora #795,
      open, `tools/fuzz/holes/open/t795.md`): the runtime must match.
+   - **Built: `Locked (Vec D)` and a channel of `D`** (Agora #755's last
+     cut, A2's runs and A3's threads; `A3/DESIGN.md`'s A3.2 and A3.4
+     sections have the design).
+     1. *Admission.* `Ty.lkPay t := t.dtorFree || (t.dnest && !t.hasArc)`,
+        which contains the old `hasDtor` case (`dnest` of a destructor type)
+        and adds a drained `Vec` of them at any depth; `Ty.ok`'s lock and
+        cell cases drop their `!vecD`. A channel is *not* admitted as
+        "`lkPay` of each part" (that would admit `prod D D`, `prod (vec D)
+        (vec D)`, payloads the reap would need two frames for), nor by a
+        channel-specific case of `lkPay` (a plain `prod (vec D) int` lock
+        block would need the reap, `Orphan`, `DeadPay`, `ReapMem` and the
+        frame's typing taught a second shape): it is admitted as what nurlc
+        has, a struct holding the queue under its glue, `Ty.dtor g (prod
+        (vec s) int)`, a `Locked D` already (`Ty.ChanOf`: the channel
+        operations' rules take the plain payload or that one; their
+        preservation lemmas read the payload through `Ty.undtor`).
+     2. *The check-out of a `Vec D`.* Unchanged rules: `hna` refuses an
+        `assign` to the binding; the model's in-place drops, `free`, the
+        edits `trunc` and `set` (`vec_truncate`, `vec_set`) and `withElem`,
+        ask elements that own no destructor value (`vec_clear` has no form
+        of its own: a truncation to 0, or for a `Vec D` code the calculus
+        types, `A2/DropCode.lean`);
+        a popped element is owned and only a `letd` binds it; the
+        give-back's crossing check cannot fail on a type that holds no share
+        (`sendCheck_noArc`, generic in the type); `locked_restore` asks
+        `dtorFree`. The marking sweep's `Cand` already read a lock block's
+        type as a nest, so the orphaned block is reaped at the `Vec`'s type
+        and its frame drains it (`A3.LockDtorWitness.reapV_drains`).
+     3. *The channel's last share.* The reap binds the channel's state at
+        `Ty.dtor g (prod (vec s) int)` in a frame of `g` (nest 0), whose end
+        calls the glue, which hands the queue to a `letd` that drains it in
+        index order (`A3.ChanDtorWitness.reap_runs_glue`): no new reap
+        shape, no change to `Cand` / `CandPay` / `TopPay` / `DeadPay` /
+        `ReapMem`. nurlc's last `Channel_drop` drops `ChImpl`'s queue the
+        same way, on the dropping thread; `chan_close` does not drop it.
+     4. *A closed channel's `chan_send`.* Before, `EvalR.chanSendClosed`
+        freed the value with no code (`Frees`): a destructor value sent to
+        a closed channel would have been released without running. Now the
+        value goes into a fresh lock block of the element type (read off the
+        channel's type, `t.undtor = prod (vec s) int`) that no share names;
+        the marking sweep that ends the step is to free it if it owns no
+        destructor value, else mark it `dead` for the sending thread to reap
+        (read off the steps: `A3.ChanDtorWitness.closed_send_parks` proves
+        only that the value lands in the fresh block) (as nurlc's `chan_send`, whose inferred-`sink` parameter is
+        dropped on its closed path before it returns). Its preservation is
+        `locked_new`'s (`rhs_lockBlk_post`, the element's lock-block facts
+        from the channel's, `chan_elem_blk`). `DeadCodes` is now over
+        `Ty.Reaps`: a block's own destructor (a nest) and, for a channel's
+        payload, its elements' (recursively), so the parked block's
+        destructor is one the program checked; `Rhs.codeOK` of `arc_new` /
+        `locked_new` / a cell's constructor asks the same
+        (`arcNew_codeOK`, `chanNew_codeOK`).
+     Witnesses: `A3.LockDtorWitness.mainV` (a `Locked (Vec DT)`, a value
+     pushed through the check-out, the share dropped) and
+     `A3.ChanDtorWitness.main` (a channel of `DT`, one value sent and never
+     received, the share dropped), each typed, safe, leak-free (end and
+     panic), with the mark-and-reap step lemmas, A3's claim
+     (`A3.lockVecDtor_claim`, `A3.chanDtor_claim`) and the A3 reap instance
+     (`A3.lockVecDtor_reaps`, `A3.chanDtor_reaps`). Read off the steps, not
+     proved: that the glue's body drains the queue; that the parked block of
+     a closed channel's send is marked and reaped by the sender (no lemma
+     discharges `Mem.sweepD_marks`'s no-reference premises for the fresh
+     block, and no typed witness closes a channel); no run is traced.
    - **Agora #755 item 1, A3's threads** (`A3/Mark.lean`, `A3/Reap.lean`).
      `TStep.thread` ends a thread's step with the configuration's marking
      sweep (`Cfg.sweepD`: `sweepBlkD` / `sweepAllocD` from `Cfg.roots`,
@@ -1070,13 +1142,14 @@ each one shrinks `CLAIM.md`'s exception:
      its step leaves the block unreached, or never if it never ends that
      slot.
    - **Left.**
-     - *Locks and cells* of a destructor type that holds a share, of a
-       `Vec` of them, or of a type holding one in a field of a type of no
-       destructor of its own (`Ty.lkPay` admits a destructor type at the
-       top, holding no share: below); `RwLocked D`'s read guard,
+     - *Locks and cells* of a destructor type (or a drained `Vec` of them)
+       that holds a share, or of a type holding one in a field of a type of
+       no destructor of its own (`Ty.lkPay`); `RwLocked D`'s read guard,
        `locked_restore` and `locked_set` of one. A *channel* of
-       destructor values: its queue is a `Vec D` inside a payload, which
-       `Ty.lkPay` refuses (a lock's payload is no drained `Vec`).
+       destructor values that hold a share, and a channel's state of `D`
+       elements with no glue over it (the plain `prod (vec D) int`, no
+       destructor type and no `Vec`). No receive of a destructor value has
+       a witness.
      - *An `Arc` whose payload holds a destructor value in a field of a
        type with no destructor of its own* (a struct or an option of no
        destructor type with a `% Drop` field, or a `Vec` of them):

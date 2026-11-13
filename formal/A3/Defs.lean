@@ -194,14 +194,14 @@ theorem lk_sync {t : Ty} : (Ty.lk t).hasCell = false := rfl
 theorem lk_cell_ok {t : Ty} (h : (Ty.cell t).ok = true) : (Ty.lk (.cell t)).ok = true := by
   have hp := Ty.ok_cell_pay h
   simp only [Ty.lkPay] at hp
-  simp [Ty.ok, (Ty.ok_cell h).1, (Ty.ok_cell h).2, Ty.ok_cell_vd h, Ty.lkPay, Ty.dtorFree, Ty.holdsView, hp]
+  simp [Ty.ok, (Ty.ok_cell h).1, (Ty.ok_cell h).2, Ty.lkPay, Ty.dtorFree, Ty.holdsView, hp]
 
 /-- ... and so may a cell's state, which is a lock's payload (a handle that
     keeps another handle in its state, A3.5's second cut). -/
 theorem cell_cell_ok {t : Ty} (h : (Ty.cell t).ok = true) : (Ty.cell (.cell t)).ok = true := by
   have hp := Ty.ok_cell_pay h
   simp only [Ty.lkPay] at hp
-  simp [Ty.ok, (Ty.ok_cell h).1, (Ty.ok_cell h).2, Ty.ok_cell_vd h, Ty.lkPay, Ty.dtorFree, Ty.holdsView, hp]
+  simp [Ty.ok, (Ty.ok_cell h).1, (Ty.ok_cell h).2, Ty.lkPay, Ty.dtorFree, Ty.holdsView, hp]
 
 /-- ... which `locked_new` takes (a library handle is Send). -/
 theorem lockNew_cell {Γ Γ1 : Ctx} {F : List Var} {t : Ty} {y : Var} {Ey : Entry} {D : List Dep}
@@ -1437,13 +1437,13 @@ theorem arcNew_fn {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {q : Cross} {y :
     panics if an owner of it is left behind (`chanSend_kept`) ... -/
 theorem chan_fn {ms : List Nat} {q : Cross} :
     (Ty.lk (.prod (.vec (.fn ms q)) .int)).ok = true ↔ q = .send ∨ q = .sync ∨ q = .bare := by
-  cases q <;> simp [Ty.ok, Ty.holdsView, Ty.dtorFree, Ty.hasDtor, Ty.lkPay, Ty.hasArc]
+  cases q <;> simp [Ty.ok, Ty.holdsView, Ty.dtorFree, Ty.hasDtor, Ty.lkPay, Ty.hasArc, Ty.dnest]
 
 /-- ... and so is one a lock keeps (A3.2), which one thread at a time runs. -/
 theorem lockNew_fn {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {q : Cross} {y : Var} {E : Entry}
     (h : RhsT Γ F (.lockNew (.fn ms q) y) E Γ1) : q = .send ∨ q = .sync ∨ q = .bare := by
   cases h with
-  | lockNew _ _ _ hp _ => cases q <;> simp_all [Ty.holdsView, Ty.hasFn, Ty.dtorFree, Ty.lkPay, Ty.hasDtor]
+  | lockNew _ _ _ hp _ => cases q <;> simp_all [Ty.holdsView, Ty.hasFn, Ty.dtorFree, Ty.lkPay, Ty.hasDtor, Ty.dnest]
 
 /-- A Send closure, which may capture a library handle, is a lock's value:
     `locked_new` takes it (A3.5's second cut; A3.5b's gap) ... -/
@@ -1458,7 +1458,7 @@ theorem chanSend_send {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {a y : Var} 
     (ha : Γ a = some Ea) (hla : Ea.live = true) (htya : Ea.ty = .lk (.prod (.vec (.fn ms .send)) .int))
     (hy : Γ y = some Ey) (hl : Ey.live = true) (hty : Ey.ty = .fn ms .send)
     (hpa : PushArg Γ F y Ey (.fn ms .send) D Γ1) : RhsT Γ F (.chanSend a y) intE Γ1 :=
-  RhsT.chanSend ha hla htya hy hl hty hpa
+  RhsT.chanSend ha hla (htya ▸ Ty.chanOf_plain _) hy hl hty hpa
 
 /-- A Send closure that captured a library handle crosses a spawn only with
     every other owner of the handle's state: the crossing check counts what
@@ -2802,7 +2802,7 @@ theorem chanSend_kept {m m1 : Mem} {a y : Var} {v : Val} (ht : TakeVal m y v m1)
   | chanSend _ ht' _ _ _ _ hck =>
     obtain ⟨rfl, rfl⟩ := ht.det ht'
     exact not_sendCheck hv hz hw hck
-  | chanSendClosed _ ht' _ _ hck =>
+  | chanSendClosed _ ht' _ _ _ hck =>
     obtain ⟨rfl, rfl⟩ := ht.det ht'
     exact not_sendCheck hv hz hw hck
 
@@ -2813,7 +2813,7 @@ theorem chanSend_moves {m m' : Mem} {a y : Var} {r : Val} {o : Bool} (h : EvalR 
     ∃ v m1, TakeVal m y v m1 ∧ m'.st = m1.st ∧ SendCheck m1.blk [v] m'.st := by
   cases h with
   | chanSend _ ht _ _ _ _ hck => exact ⟨_, _, ht, rfl, hck⟩
-  | chanSendClosed _ ht _ _ hck => exact ⟨_, _, ht, rfl, hck⟩
+  | chanSendClosed _ ht _ _ _ hck => exact ⟨_, _, ht, rfl, hck⟩
 
 /-- h358 (`rc_in_a_locked_in_an_arc_on_two_threads`) and h357
     (`rwlocked_of_a_library_handle_on_two_threads`): a value that holds a
@@ -2876,7 +2876,7 @@ theorem lockNew_dyn_send {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {y : Var}
     with a bound (`: Send` or `: Send Sync`), none of one with no bound. -/
 theorem chan_dyn {ms : List Nat} {b : TraitBound} :
     (Ty.lk (.prod (.vec (.fn ms b.cross)) .int)).ok = true ↔ b ≠ .none := by
-  cases b <;> simp [TraitBound.cross, Ty.ok, Ty.holdsView, Ty.lkPay, Ty.dtorFree, Ty.hasDtor]
+  cases b <;> simp [TraitBound.cross, Ty.ok, Ty.holdsView, Ty.lkPay, Ty.dtorFree, Ty.hasDtor, Ty.dnest]
 
 /-- ... the same for a lock's: `locked_new` takes no object of a trait with no
     bound (h344's `%Churn`). -/
@@ -2977,7 +2977,7 @@ theorem chanSend_guard {m m1 : Mem} {a y : Var} {v : Val} (ht : TakeVal m y v m1
   | chanSend _ ht' _ _ _ _ hck =>
     obtain ⟨rfl, rfl⟩ := ht.det ht'
     exact hng hck.2
-  | chanSendClosed _ ht' _ _ hck =>
+  | chanSendClosed _ ht' _ _ _ hck =>
     obtain ⟨rfl, rfl⟩ := ht.det ht'
     exact hng hck.2
 

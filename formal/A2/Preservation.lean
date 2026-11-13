@@ -605,7 +605,7 @@ theorem pres_reap {P : Prog} {Γ Δ : Ctx} {F : List Var} {r : Stmt} (ht : StmtT
     obtain ⟨n', f', u', he, h⟩ := hdead.dead rfl
     obtain ⟨rfl, rfl, rfl⟩ := Ty.nest_dtor_inj (show Ty.nest n (.dtor f u) = _ from he)
     simpa [Ty.hasFn] using h
-  have hdrop : DropFnOK P f u := hcd.dead k n f u _ _ hk
+  have hdrop : DropFnOK P f u := hcd.dead.nest hk
   -- the fresh variable
   have hmz : m.st m.nv = none := by
     cases h : m.st m.nv with

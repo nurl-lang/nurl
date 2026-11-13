@@ -492,10 +492,16 @@ theorem EvalR.payAt {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (
       · exact .inr ((TakeVal.ownedId h1 hb).1 i h)
     · rw [upd_ne _ _ he, TakeVal.blk h1] at hk'
       exact .inl ⟨bl, hk', hi⟩
-  | chanSendClosed _ h1 _ _ =>
-    have hk' : _ = some bl := hk
-    rw [TakeVal.blk h1] at hk'
-    exact .inl ⟨bl, hk', hi⟩
+  | @chanSendClosed _ _ _ _ _ _ _ _ v1 m1 _ h1 _ _ _ _ =>
+    -- Agora #755: what a send to a closed channel drops goes to a fresh lock block
+    by_cases he : k = m1.nid
+    · subst he
+      simp [upd] at hk
+      subst hk
+      exact .inr ((TakeVal.ownedId h1 hb).1 i (by simpa [Blk.tree] using hi))
+    · have hk' : upd m1.blk m1.nid _ k = some bl := hk
+      rw [upd_ne _ _ he, TakeVal.blk h1] at hk'
+      exact .inl ⟨bl, hk', hi⟩
   | @chanRecv _ _ _ k0 _ _ _ _ _ _ _ _ hk0 _ _ =>
     have hk' : upd _ k0 _ k = some bl := hk
     by_cases he : k = k0

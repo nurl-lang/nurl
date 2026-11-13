@@ -200,7 +200,7 @@ theorem closed_empty (s : Stmt) : Closed (fun _ => none) s := fun _ h => by case
 
 theorem codes_empty (P : Prog) (nv : Nat) : MemCodes P (emptyMem nv) :=
   ⟨fun _ _ _ _ _ _ _ _ h => (by cases h), fun _ _ _ _ _ _ _ h => (by cases h),
-    fun _ _ _ _ _ _ h => (by cases h)⟩
+    fun _ _ h => (by cases h)⟩
 
 /-- The memory model of stage A2 is sound: a well-typed program, run from
     the empty store, never gets stuck — it finishes, panics, or runs on. -/
