@@ -19,8 +19,14 @@ formal/A2's Eff.kills, extended from bindings to places.
 
 Function summaries are those of prims.py, inferred for program functions by a
 fixpoint over the whole program: definition order plays no part."""
+import os
+
 from prims import PRIMS
 from lower import Types, Var
+
+# NCORE_DERIVE=1: a library function's derived summary (derive.py) answers
+# before its declared one - how far the walk's own answers carry.
+DERIVE_FIRST = os.environ.get("NCORE_DERIVE") == "1"
 
 
 class CheckError(Exception):
@@ -640,6 +646,9 @@ class FnCheck:
     def summary(self, name):
         if name in self.summ:
             return self.summ[name]
+        derived = getattr(self.prog, "derived", None)
+        if derived is not None and DERIVE_FIRST and derived(name) is not None:
+            return derived(name)
         if PRIMS.get(name) is not None:
             return PRIMS[name]
         # a `dyn` method's virtual callee may run any impl of the method
@@ -657,6 +666,10 @@ class FnCheck:
         tmpl = getattr(self.prog, "fn_tmpl", {}).get(name)
         if tmpl and PRIMS.get(tmpl) is not None:
             return PRIMS[tmpl]
+        # a library function with no declared summary: what the walk
+        # believes of it (derive.py)
+        if derived is not None and derived(name) is not None:
+            return derived(name)
         from syntax import Unsupported
         raise Unsupported(f"no summary for {tmpl or name}")
 

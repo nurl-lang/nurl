@@ -23,6 +23,7 @@ from load import load, lib_headers               # noqa: E402
 from lower import build_program                  # noqa: E402
 from check import check_program, CheckError      # noqa: E402
 import fromnurlc                                 # noqa: E402
+import derive                                    # noqa: E402
 
 HOLES = os.path.join(HERE, "..", "fuzz", "holes")
 
@@ -83,8 +84,21 @@ def verdict_nurlc(path):
     prog = rd.prog
     every = dict(prog.fns)
 
+    memo = {}
+
+    def derived(n):
+        """The summary of library function `n` the walk's answers give
+        (derive.py); None for one the walk did not compile."""
+        if n not in memo:
+            fn = every.get(n)
+            ws = derive.walk_answers(prog, n) if fn is not None and prog.fn_flags[n] & 1 else {}
+            memo[n] = derive.derive(prog, fn, ws) if ws.get("body_done") else None
+        return memo[n]
+    prog.derived = derived
+
     def declared(n):
-        return PRIMS.get(n) is not None or PRIMS.get(prog.fn_tmpl.get(n) or "") is not None
+        return (PRIMS.get(n) is not None or PRIMS.get(prog.fn_tmpl.get(n) or "") is not None
+                or derived(n) is not None)
 
     def callees(fn):
         out = set()
