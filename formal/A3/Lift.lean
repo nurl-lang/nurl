@@ -121,7 +121,8 @@ theorem EvalR.lift {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.
   | expr he => exact EvalR.expr (Eval.lift he a2)
   | new =>
     show EvalR _ _ (.ok _ _
-      ⟨union (upd (upd m.alloc m.nid true) (m.nid + 1) true) a2, m.nid + 2, m.nv, m.st, m.blk, m.gl⟩)
+      ⟨union (upd (upd m.alloc m.nid true) (m.nid + 1) true) a2, m.nid + 2, m.nv, m.st, m.blk, m.gl,
+        m.taken⟩)
     rw [union_alloc2]
     exact EvalR.new
   | moveOwn hy => exact EvalR.moveOwn hy
@@ -168,7 +169,8 @@ theorem EvalR.lift {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.
   | rwTryWriteNone hy hw => exact EvalR.rwTryWriteNone hy hw
   | glob hg hf => exact EvalR.glob hg hf
   | lockTake hy hk hnv => exact EvalR.lockTake hy hk hnv
-  | lockRestore hy h1 hk hck => exact EvalR.lockRestore (m := liftMem a2 m) hy (TakeVal.lift h1 a2) hk hck
+  | lockRestore hy h1 hk htk hck =>
+    exact EvalR.lockRestore (m := liftMem a2 m) hy (TakeVal.lift h1 a2) hk htk hck
 
 theorem EvalR.liftP {m : Mem} {r : Rhs} (h : EvalR m r .panic) (a2 : Nat → Bool) :
     EvalR (liftMem a2 m) r .panic := by
@@ -183,6 +185,7 @@ theorem EvalR.liftP {m : Mem} {r : Rhs} (h : EvalR m r .panic) (a2 : Nat → Boo
   | takerP hy => exact EvalR.takerP hy
   | globP hg => exact EvalR.globP hg
   | lockRestoreP hy hk => exact EvalR.lockRestoreP hy hk
+  | lockRestoreHeld hy hk htk => exact EvalR.lockRestoreHeld hy hk htk
   -- A3.5's second cut: the crossing check reads the slots only
   | lockNewFail h1 hck => exact EvalR.lockNewFail (TakeVal.lift h1 a2) hck
   | cellNewFail h1 hck => exact EvalR.cellNewFail (TakeVal.lift h1 a2) hck
@@ -270,7 +273,7 @@ theorem Step.lifts {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
     have had : a2 d = false := hd d (by rw [← TakeVal.alloc ht]; exact hdd)
     refine ⟨_, GhostRel.refl _, ?_⟩
     show Step P _ _ (.ok (Mem.set ⟨union (upd (upd m1.alloc d false) m1.nid true) a2, m1.nid + 1,
-      m1.nv, m1.st, m1.blk, m1.gl⟩ x ⟨true, some (.node t c m1.nid (es ++ [v]))⟩) .skip)
+      m1.nv, m1.st, m1.blk, m1.gl, m1.taken⟩ x ⟨true, some (.node t c m1.nid (es ++ [v]))⟩) .skip)
     rw [union_realloc had]
     exact Step.pushRealloc (m1 := liftMem a2 m1) (TakeVal.lift ht a2) hx (union_true a2 hc)
       (union_true a2 hdd)
@@ -289,7 +292,7 @@ theorem Step.lifts {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
     have had : a2 d = false := hd d (by rw [← TakeVal.alloc ht]; exact hn.2.1)
     refine ⟨_, GhostRel.refl _, ?_⟩
     show Step P _ _ (.ok (Mem.set ⟨union (upd (upd m1.alloc d false) m1.nid true) a2, m1.nid + 1,
-      m1.nv, m1.st, m1.blk, m1.gl⟩ o ⟨true, some T'⟩) .skip)
+      m1.nv, m1.st, m1.blk, m1.gl, m1.taken⟩ o ⟨true, some T'⟩) .skip)
     rw [union_realloc had]
     exact Step.editPushRealloc (m1 := liftMem a2 m1) (TakeVal.lift ht a2) (NodeOf.lift hn a2) hr
   | editTrunc he hn hfr hr =>
@@ -342,6 +345,8 @@ theorem Step.lifts {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
   | @scopeDPDrain m1 _ _ _ _ _ _ _ _ hx ih =>
     exact ⟨_, GhostRel.refl _, Step.scopeDPDrain (m1 := liftMem a2 m1) ih hx⟩
   | @scopeDPMoved m1 _ _ _ _ hx ih => exact Step.scopeDPMoved (m1 := liftMem a2 m1) ih hx
+  | @scopeLPD m1 _ _ _ _ _ _ _ _ _ hck ht hx hng ih =>
+    exact ⟨_, GhostRel.refl _, Step.scopeLPD (m1 := liftMem a2 m1) ih hck ht hx hng⟩
   -- A3.2: taking a lock and giving it back touch no address
   | withLock ha hk hx hnv => exact ⟨_, GhostRel.refl _, Step.withLock (m := liftMem a2 m) ha hk hx hnv⟩
   -- Agora #610: so does reaping an orphan
@@ -353,16 +358,16 @@ theorem Step.lifts {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
     cases hrl with
     | put hx hg hk hck' =>
       exact ⟨_, GhostRel.refl _, Step.scopeLSkip (m := liftMem a2 m) (Release.put hx hg hk hck') hck⟩
-    | drop hc hx hdr =>
+    | drop hc hgc hx hdr =>
       exact ⟨_, GhostRel.refl _,
-        Step.scopeLSkip (m := liftMem a2 m) (Release.drop hc hx (DropSlot.lift hdr hd)) hck⟩
+        Step.scopeLSkip (m := liftMem a2 m) (Release.drop hc hgc hx (DropSlot.lift hdr hd)) hck⟩
   | scopeLFail hx hck => exact ⟨_, GhostRel.refl _, Step.scopeLFail (m := liftMem a2 m) hx hck⟩
   | @scopeLP m1 _ _ _ _ _ hs hrl ih =>
     -- A3.3: the payload goes back on the way out, or the slot is dropped
     cases hrl with
     | put hx hg hk hck => exact Step.scopeLP (m1 := liftMem a2 m1) ih (Release.put hx hg hk hck)
-    | drop hc hx hdr =>
-      exact Step.scopeLP (m1 := liftMem a2 m1) ih (Release.drop hc hx (DropSlot.lift hdr ((Step.grows hs).disj hd hf)))
+    | drop hc hgc hx hdr =>
+      exact Step.scopeLP (m1 := liftMem a2 m1) ih (Release.drop hc hgc hx (DropSlot.lift hdr ((Step.grows hs).disj hd hf)))
 
 /-- A step to a configuration, lifted: its store with `a2` added, its
     statement equal but for the stores of `recover` frames. -/

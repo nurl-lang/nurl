@@ -199,7 +199,7 @@ theorem Step.borFree {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r
   | scopeDEmpty _ => exact hb
   | scopeDMoved _ => exact hb.remove _
   | scopeDP _ _ _ ih => exact ih.of_st rfl
-  | scopeDPDrain _ _ ih => exact ih
+  | scopeDPDrain _ _ ih | scopeLPD _ _ _ _ _ ih => exact ih
   | scopeDPMoved _ _ ih => exact ih.remove _
   | withLock _ _ _ => exact (hb.of_st rfl).set _ (SlotFree.ids ids_nonNode)
   | @reap r0 k0 n f u p _ _ _ =>

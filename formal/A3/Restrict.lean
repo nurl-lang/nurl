@@ -217,8 +217,10 @@ theorem EvalR.restrict {m : Mem} {r : Rhs} {res : RRes} (h : EvalR m r res) {a2 
   | globP hg => exact ⟨_, .globP hg, trivial⟩
   -- A3.2's second cut: a take and a restore check no address
   | lockTake hy hk hnv => exact ⟨_, .lockTake hy hk hnv, rfl, rfl, rfl⟩
-  | lockRestore hy h1 hk hck => exact ⟨_, .lockRestore hy (TakeVal.restrict h1 a2) hk hck, rfl, rfl, rfl⟩
+  | lockRestore hy h1 hk htk hck =>
+    exact ⟨_, .lockRestore hy (TakeVal.restrict h1 a2) hk htk hck, rfl, rfl, rfl⟩
   | lockRestoreP hy hk => exact ⟨_, .lockRestoreP hy hk, trivial⟩
+  | lockRestoreHeld hy hk htk => exact ⟨_, .lockRestoreHeld hy hk htk, trivial⟩
 
 theorem EvalR.restrict_ok {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.ok v o m1))
     {a2 : Nat → Bool} (hav : Avoids m a2) (hb : BorFree m) (hp : PayOff m a2) (hf : FreshFrom a2 m.nid) :
@@ -416,6 +418,10 @@ theorem Step.restrict {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
     obtain ⟨r1, h1, hd⟩ := ih
     obtain rfl := ResDown.panic_inv hd
     exact ⟨_, .scopeDPMoved h1 hx, rfl⟩
+  | scopeLPD _ hck ht hx hng ih =>
+    obtain ⟨r1, h1, hd⟩ := ih
+    obtain rfl := ResDown.panic_inv hd
+    exact ⟨_, .scopeLPD h1 hck ht hx hng, rfl, .refl _⟩
   -- A3.2: taking a lock and giving it back touch no address
   | withLock ha hk hx hnv => exact ⟨_, .withLock ha hk hx hnv, rfl, .refl _⟩
   -- Agora #610: so does reaping an orphan
@@ -427,7 +433,7 @@ theorem Step.restrict {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
   | scopeLSkip hrl hck =>
     cases hrl with
     | put hx hg hk hck' => exact ⟨_, .scopeLSkip (.put hx hg hk hck') hck, rfl, .refl _⟩
-    | drop hc hx hd => exact ⟨_, .scopeLSkip (.drop hc hx (DropSlot.restrict hx hd hav)) hck, rfl, .refl _⟩
+    | drop hc hgc hx hd => exact ⟨_, .scopeLSkip (.drop hc hgc hx (DropSlot.restrict hx hd hav)) hck, rfl, .refl _⟩
   | scopeLFail hx hck => exact ⟨_, .scopeLFail hx hck, rfl, .refl _⟩
   | scopeLP hs hrl ih =>
     obtain ⟨r1, h1, hd'⟩ := ih
@@ -435,6 +441,6 @@ theorem Step.restrict {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
     -- A3.3: the payload goes back on the way out, or the slot is dropped
     cases hrl with
     | put hx hg hk hck => exact ⟨_, .scopeLP h1 (.put hx hg hk hck), rfl⟩
-    | drop hc hx hd => exact ⟨_, .scopeLP h1 (.drop hc hx (DropSlot.restrict hx hd (Step.avoids hs hb hav hf hp))), rfl⟩
+    | drop hc hgc hx hd => exact ⟨_, .scopeLP h1 (.drop hc hgc hx (DropSlot.restrict hx hd (Step.avoids hs hb hav hf hp))), rfl⟩
 
 end A3

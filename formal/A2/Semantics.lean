@@ -208,8 +208,8 @@ noncomputable def Mem.sweep (m : Mem) : Mem :=
 An `arc` block whose payload is a destructor value (`Ty.ok`'s `arc` case),
 or (Agora #755) a drained `Vec` of them at any depth (`Ty.nest n (.dtor f u)`),
 or (Agora #755, `Locked D`) a lock block whose payload, a destructor value
-holding no share (`Ty.lkPay`), is in it (a cell's state too: a cell's block
-is a lock block), is not freed by the sweep that finds it unreached: it is marked `dead` and
+holding no cell share (`Ty.lkPay`; Agora #803: before, no share), is in
+it (a cell's state too: a cell's block is a lock block), is not freed by the sweep that finds it unreached: it is marked `dead` and
 its payload stays, for the thread whose step left it unreached to hand to a
 destructor frame (`Step.reap`, `Settle`).  Only a *top* orphan is marked:
 one that no other orphan's payload reaches.  An inner one stays reached,
@@ -217,7 +217,11 @@ through the outer payload, until the outer destructor drops its share:
 outer first, as the runtime's counts do.  A `dead` block's payload is a
 root: what it reaches is kept.  Orphans that reach each other in a cycle
 (no top one) are freed with no code, as `Mem.sweep` frees every block
-(the runtime leaks such a cycle and runs no destructor either). -/
+(the runtime leaks such a cycle and runs no destructor either).  Since
+Agora #803 two `Locked D` payloads, each holding a share of the other's
+lock (in a closure's environment: types are finite otherwise), form such a
+cycle directly, with no other lock between them (a store nurlc refuses,
+docs/MEMORY.md §7.7). -/
 
 /-- A `dead` block's payload, awaiting its destructor: a root of the sweep. -/
 def DeadPay (B : Nat → Option Blk) (v : Val) : Prop :=
@@ -310,6 +314,12 @@ inductive WFv : Ty → Val → Prop
   /-- A2-drop.3: a destructor type's values are its inner type's, a struct's
       or an enum's (`% Drop` is on one of these). -/
   | dtor {f : Nat} {t : Ty} {v : Val} : t.isStruct = true → WFv t v → WFv (.dtor f t) v
+  /-- A3.3, Agora #837: a read guard of a lock's payload `u`: a share of a
+      view, which, in memory, holds the payload it carries, a share of the
+      lock block and that block's payload, at the view's type `prod (lk u) u`
+      (`ArcBlk`), one that holds no view. -/
+  | rguard {u : Ty} {k : Nat} {p : Val} :
+      WFv (.prod (.lk u) u) p → (Ty.prod (.lk u) u).holdsView = false → WFv (.rguard u) (.arc k p)
 
 /-- A3.1: tree `T` of type `τ` holds a share of block `k`, whose payload is
     a `u`: the one it carries, `some p`, or (A3.2) none, for a lock share.
@@ -337,13 +347,21 @@ inductive ArcIn : Ty → Val → Ty → Nat → Option Val → Prop
   /-- A2-drop.3: a destructor type's values are its inner type's. -/
   | dtor {f : Nat} {t : Ty} {x : Val} {u : Ty} {k : Nat} {p : Option Val} :
       ArcIn t x u k p → ArcIn (.dtor f t) x u k p
+  /-- A3.3, Agora #837: a read guard is a share of block `k`, a view; the
+      share's type `rguard u` names it (`ArcBlk`: a view of type
+      `prod (lk u) u`). -/
+  | rguard {u : Ty} {k : Nat} {p : Val} : ArcIn (.rguard u) (.arc k p) (.rguard u) k (some p)
 
-/-- A3.3: a block an `arc` share names: an `arc` block holding `p`, or a
-    view of a lock block (`rw_read`'s guard), whose payload `p` is a share of
+/-- A3.3: a block an `arc` share names: an `arc` block of the share's
+    payload type `u` holding `p`, or, for a read guard (Agora #837: `u` is
+    `rguard w`, the guard's own type, `ArcIn.rguard`), a view of a lock block
+    (`rw_read`'s), of type `prod (lk w) w`, whose payload `p` is a share of
     the lock block and that block's payload.  Both are frozen while they
-    live. -/
+    live.  Only a guard's share names a view (until Agora #837 any `arc`
+    share of a payload type `prod (lk w) w` might have). -/
 def ArcBlk (b : Option Blk) (u : Ty) (p : Val) : Prop :=
-  b = some ⟨u, .arc, some p⟩ ∨ b = some ⟨u, .view, some p⟩
+  (u.isGuard = false ∧ b = some ⟨u, .arc, some p⟩) ∨
+    ∃ w k0 p0, u = .rguard w ∧ p = .pair (.lk k0) p0 ∧ b = some ⟨.prod (.lk w) w, .view, some p⟩
 
 /-- A3.2: what a share asks of its block: an `arc` share (carrying `some p`)
     an `arc` block holding `p`, a lock share (`none`) a lock block of its
@@ -503,23 +521,35 @@ def Giveable (B : Nat → Option Blk) (t : Ty) : Slot → Prop
   | ⟨false, some (.int _)⟩ => t = .int
   | _ => False
 
+/-- Agora #810: lock block `k`, of payload type `t`, has its payload checked
+    out by a `withLock` (the runtime's lock word `HELD`): out, and not taken
+    by `locked_take` (`Mem.taken`). -/
+def CheckedOut (m : Mem) (k : Nat) (t : Ty) : Prop :=
+  m.blk k = some ⟨t, .lock, none⟩ ∧ m.taken k = false
+
 /-- A3.2: the end of `x`'s lock scope on lock block `k`, whose payload is a
     `t`: `x`'s value goes back into the block, which has it checked out; or
     else `x`'s slot is dropped as a scope's is.  That is when the block is
     gone (no share reaches it any more), or `x` holds nothing it can give
-    back (it was moved out: the lock stays checked out until a restore, as
-    `locked_take` leaves it, `Rhs.lockTake`); a typed program meets
+    back (it was moved out: the lock stays checked out, and Agora #810 no
+    `locked_restore` fills it, as nurlc's `locked_update` lends its closure
+    the value `inout`, which it cannot move out); a typed program meets
     no other case (the block is the one `x` took its payload from), but
     the rule needs no invariant to say so.  A3.5's second cut: or what it
     would give back fails the crossing check (`GiveCheck`).  That is the
     panic's unwinding only: at the scope's normal end a failed check panics
-    first (`Step.scopeLFail`). -/
+    first (`Step.scopeLFail`).  Agora #803: but not a destructor value
+    (`Ty.nest n (.dtor f u)`, `Ty.lkPay`'s destructor payload) that fails
+    the check while its block is checked out: dropping it here would run no
+    destructor.  It goes to a destructor frame on the unwinding instead
+    (`Step.scopeLPD`), the block left checked out. -/
 inductive Release (m : Mem) (k : Nat) (t : Ty) (x : Var) : Mem → Prop
   | put {o : Bool} {v : Val} : m.st x = some ⟨o, some v⟩ → Giveable m.blk t ⟨o, some v⟩ →
-      m.blk k = some ⟨t, .lock, none⟩ → GiveCheck m x ⟨o, some v⟩ →
+      CheckedOut m k t → GiveCheck m x ⟨o, some v⟩ →
       Release m k t x ({ m with blk := upd m.blk k (some ⟨t, .lock, some v⟩) }.remove x)
   | drop {sl : Slot} {a' : Nat → Bool} :
-      (m.blk k ≠ some ⟨t, .lock, none⟩ ∨ ¬ Giveable m.blk t sl ∨ ¬ GiveCheck m x sl) →
+      (¬ CheckedOut m k t ∨ ¬ Giveable m.blk t sl ∨ ¬ GiveCheck m x sl) →
+      (CheckedOut m k t → ∀ n f u, t = Ty.nest n (.dtor f u) → GiveCheck m x sl) →
       m.st x = some sl → DropSlot m.alloc sl a' → Release m k t x ({ m with alloc := a' }.remove x)
 
 /-- The vector `x` names — its own tree, or the one its borrow points at —
@@ -620,9 +650,8 @@ inductive RRes where
 
 /-- A3.6: what a read of a module global of type `t` finds: a share of a
     block of that type — a lock share of a lock block, or an `arc` share of
-    the block whose payload it carries (`ArcBlk`: an `arc` block, or a view, a
-    read guard a `make` handed back, which the model's `arc` type does not
-    tell from an `Arc`). -/
+    the block whose payload it carries (`ArcBlk`; Agora #837: an `arc` block,
+    as no global is a read guard, `Ty.sync`). -/
 def GlobFits (B : Nat → Option Blk) (t : Ty) (v : Val) : Prop :=
   (∃ u k o, t = .lk u ∧ v = .lk k ∧ B k = some ⟨u, .lock, o⟩) ∨
   (∃ u k p, t = .arc u ∧ v = .arc k p ∧ ArcBlk (B k) u p)
@@ -881,16 +910,20 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
       `withLock` checks one out), and the block holds nothing, as `locked_take`
       leaves zero bytes in the slot and sets `taken`.  With the payload out
       (or a view of it living) it has no step: the thread waits (`RBlocked`),
-      as every operation on a taken `Locked` does. -/
+      as every operation on a taken `Locked` does.  Agora #810: the block is
+      marked taken (`Mem.taken`), as `nurl_lk_take` sets the lock word
+      `TAKEN`, so that only a restore fills it. -/
   | lockTake {a : Var} {o : Bool} {k : Nat} {t : Ty} {v : Val} :
       m.st a = some ⟨o, some (.lk k)⟩ → m.blk k = some ⟨t, .lock, some v⟩ → ¬ HasView m.blk k →
-      EvalR m (.lockTake a) (.ok v v.owns { m with blk := upd m.blk k (some ⟨t, .lock, none⟩) })
+      EvalR m (.lockTake a) (.ok v v.owns
+        { m with blk := upd m.blk k (some ⟨t, .lock, none⟩), taken := upd m.taken k true })
   /-- ... `locked_restore a y`: the value taken from `y` (an owner's tree
-      moves, an integer is copied) goes back into the block, whose payload is
-      out; the answer is 0. -/
+      moves, an integer is copied) goes back into the block, whose payload
+      `locked_take` took out (Agora #810: the block is taken, `Mem.taken`, as
+      `nurl_lk_restore_begin` asks the lock word `TAKEN`); the answer is 0. -/
   | lockRestore {a y : Var} {o : Bool} {k : Nat} {t : Ty} {v : Val} {m1 : Mem} :
       m.st a = some ⟨o, some (.lk k)⟩ → TakeVal m y v m1 → m1.blk k = some ⟨t, .lock, none⟩ →
-      SendCheck m1.blk [v] m1.st →
+      m1.taken k = true → SendCheck m1.blk [v] m1.st →
       EvalR m (.lockRestore a y)
         (.ok (.int 0) false { m1 with blk := upd m1.blk k (some ⟨t, .lock, some v⟩) })
   /-- A3.5's second cut: ... a value that fails the crossing check is not
@@ -902,6 +935,12 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
       the store as it was. -/
   | lockRestoreP {a y : Var} {o : Bool} {k : Nat} {t : Ty} {p : Val} :
       m.st a = some ⟨o, some (.lk k)⟩ → m.blk k = some ⟨t, .lock, some p⟩ →
+      EvalR m (.lockRestore a y) .panic
+  /-- ... and so it does (Agora #810) with the payload checked out by a
+      `withLock` (not taken, `Mem.taken`): the runtime's lock word is `HELD`,
+      not `TAKEN`, and `nurl_lk_restore_begin` refuses it. -/
+  | lockRestoreHeld {a y : Var} {o : Bool} {k : Nat} {t : Ty} :
+      m.st a = some ⟨o, some (.lk k)⟩ → m.blk k = some ⟨t, .lock, none⟩ → m.taken k = false →
       EvalR m (.lockRestore a y) .panic
 
 /-! ### Calls
@@ -1470,7 +1509,8 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
       LockAt m a k → m.blk k = some ⟨t, .lock, some v⟩ → m.st x = none →
       ¬ HasView m.blk k →
       Step P m (.withLock a x s)
-        (.ok ({ m with blk := upd m.blk k (some ⟨t, .lock, none⟩) }.set x ⟨v.owns, some v⟩)
+        (.ok ({ m with blk := upd m.blk k (some ⟨t, .lock, none⟩), taken := upd m.taken k false }.set x
+          ⟨v.owns, some v⟩)
           (.scopeL k t x s))
   | scopeLIn {m m' : Mem} {k : Nat} {t : Ty} {x : Var} {s s' : Stmt} :
       Step P m s (.ok m' s') → Step P m (.scopeL k t x s) (.ok m' (.scopeL k t x s'))
@@ -1480,10 +1520,17 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
       Release m k t x m' → (∀ sl, m.st x = some sl → GiveCheck m x sl) →
       Step P m (.scopeL k t x .skip) (.ok m' .skip)
   /-- ... and when it fails it (the body kept a copy of a handle the value
-      holds, or stored into it one kept outside), the end panics with the
-      lock held, as `locked_with` / `locked_update` do: the panic is put in
-      the scope, as `TStep.spawnFail` puts one before its call, and its
-      unwinding drops `x` (`Release.drop`), the block left checked out. -/
+      holds, or stored into it one kept outside, or the value holds a read
+      guard), the end panics with the lock held, as `locked_with` /
+      `locked_update` do: the panic is put in the scope, as
+      `TStep.spawnFail` puts one before its call, and its unwinding drops
+      `x` (`Release.drop`), the block left checked out; or (Agora #803), for
+      a destructor payload, hands `x` to a destructor frame
+      (`Step.scopeLPD`), the block left checked out.  Since Agora #837 a
+      typed check-out whose payload holds no cell share (every destructor
+      payload) never fails it (`A3.LockDtorWitness.giveCheck_typed`): a lock's
+      payload holds no read guard (`Ty.ok`); one holding a cell share may
+      fail its cell half, as nurlc's `locked_with` panics (h340). -/
   | scopeLFail {m : Mem} {k : Nat} {t : Ty} {x : Var} {sl : Slot} :
       m.st x = some sl → ¬ GiveCheck m x sl →
       Step P m (.scopeL k t x .skip) (.ok m (.scopeL k t x .panic))
@@ -1492,9 +1539,49 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
       is released, and other threads may take it or read it.  (`Locked`'s
       `locked_with` leaves the lock held on a panic: for it the model
       over-approximates, letting other threads go on where the runtime's
-      wait.) -/
+      wait.)  Agora #803: not a destructor payload that fails the
+      give-back's check while its block is checked out, which `Release`
+      refuses: that one is `scopeLPD`'s. -/
   | scopeLP {m m1 m2 : Mem} {k : Nat} {t : Ty} {x : Var} {s : Stmt} :
       Step P m s (.panic m1) → Release m1 k t x m2 → Step P m (.scopeL k t x s) (.panic m2)
+  /-- **Agora #803: a destructor payload that fails the give-back's check.**
+      A panic unwinding through the check-out of a block whose payload is a
+      destructor value (`Ty.nest n (.dtor f u)`: `Ty.lkPay`'s destructor
+      payload, which may hold `arc` and lock shares), while the block is
+      checked out, with `x`'s value failing the crossing check
+      (`GiveCheck`, as at a failed normal end, `scopeLFail`, whose panic
+      comes here): the value cannot go back, and dropping it would run no
+      destructor (`Release.drop` refuses it).  The check-out's frame becomes
+      a destructor frame of `x` at its end (`scopeD x f`, as the reap's of a
+      `dead` block, `Step.reap`), followed by the panic raised again; the
+      frame's end runs the destructor (or drains the `Vec`), on the
+      panicking thread, and frees `x`.  The block is left checked out with
+      no frame of it left, so no step fills it again (`A3.Step.stay`;
+      `withLock`, `lockTake` and `rwRead` need the payload in).
+
+      **A defensive rule: no typed reachable configuration takes it**
+      (Agora #837, `A3.reach_no_scopeLPD`,
+      `A3.LockDtorWitness.scopeL_typed_no_scopeLPD`), as nurlc never takes
+      this path.  Such a payload holds no cell share (`Ty.lkPay`'s
+      `!hasCell`), so the cell half of `SendCheck` holds of it
+      (`WFv.noCell_hasCell`) and `GiveCheck` fails only through `NoGuard`:
+      the value reaches a read guard.  nurlc refuses a guard only where it
+      crosses (`% NotSend RGuard`, `stdlib/std/rwlock.nu`: a spawn, a
+      channel's send), and its `mem_send_check` counts only handle blocks,
+      so its `locked_with` / `locked_update` / `locked_apply` /
+      `locked_await` never panic there on such a payload, a guard in it or
+      not; since Agora #837 the model's types refuse a guard in every lock's
+      payload (a read guard is of type `Ty.rguard`, which no lock's payload
+      type holds, `Ty.hasGuard`), stricter than nurlc for a guard kept on
+      its thread, where the model's `NoGuard` would otherwise panic and
+      nurlc's check does not.
+      The rule keeps the semantics total on an untyped store; leaving the
+      block checked out mirrors the runtime's held lock word, should the
+      case arise (`A3/DESIGN.md`, Agora #803, #837). -/
+  | scopeLPD {m m1 : Mem} {k : Nat} {t : Ty} {x : Var} {s : Stmt} {sl : Slot} {n f : Nat} {u : Ty} :
+      Step P m s (.panic m1) → CheckedOut m1 k t → t = Ty.nest n (.dtor f u) →
+      m1.st x = some sl → ¬ GiveCheck m1 x sl →
+      Step P m (.scopeL k t x s) (.ok m1 (.seq (.scopeD x f .skip) .panic))
   /-- Agora #610, the sweep as a step: **reaping an orphan.**  A `dead`
       block is a block no share is left of whose payload, a destructor
       value, is still in it.  The payload moves out to a fresh binding of
@@ -1519,7 +1606,7 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
       -- (the payload holds no cell share: a typed program meets it, the type
       -- of a block that is no lock block holds none, `MInv.blocks`, and
       -- (Agora #755) a lock block marked `dead` held a destructor value whose
-      -- type holds no share, `Ty.lkPay`, so none either; A3's
+      -- type holds no cell share, `Ty.lkPay`, so none either; A3's
       -- confinement of the cells, read off the steps alone, counts the
       -- slots' shares and the lock blocks')
       (∀ c, ¬ Sub (.cell c) p) →

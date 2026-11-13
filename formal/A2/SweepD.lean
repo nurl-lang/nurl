@@ -174,7 +174,9 @@ theorem Pinned.kept {k : Nat} (h : Pinned R m.blk k) {bl : Blk} (hk : m.blk k = 
 /-- A marked orphan holds what its block's invariant says. -/
 theorem Blk.DtorOK.mark {bl : Blk} (h : bl.DtorOK) (hd : bl.kind = .arc ∨ bl.kind = .lock ∨ bl.kind = .dead)
     (hfree : bl.kind ≠ .dead → bl.ty.dtorFree = false) : bl.mark.DtorOK := by
-  refine ⟨fun h1 => absurd rfl h1, fun _ => ?_, fun h1 => h.2.2 h1⟩
+  refine ⟨fun h1 => absurd rfl h1, fun _ => ?_, fun h1 _ => h.2.2 h1 ?_⟩
+  rotate_left
+  · rcases hd with hd | hd | hd <;> rw [hd] <;> simp
   rcases hd with hd | hd | hd
   · exact hfree (by rw [hd]; simp)
   · exact hfree (by rw [hd]; simp)
@@ -247,18 +249,19 @@ theorem MInv.sweepDR (hR : ∀ v, m.vals v → R v) {Γ : Ctx} (hi : MInv m Γ) 
   rcases sweepBlkD_some hk with ⟨hk0, hr⟩ | ⟨bl0, hk0, _, hp, rfl⟩
   · obtain ⟨h1, h2, h3, h4⟩ := hi1.blocks k bl (Mem.sweepR_blk.mpr ⟨hk0, hr⟩)
     exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.grow hle⟩, h4⟩
-  · obtain ⟨h1, h2, h3, h4, h5⟩ := hi.blocks k bl0 hk0
+  · obtain ⟨h1, h2, h3, h4, h5, h6⟩ := hi.blocks k bl0 hk0
     have hkd := hp.kind hk0
-    refine ⟨h1, h2, fun p hpay => ⟨(h3 p hpay).1, ?_⟩, ?_, h5.mark hkd (hp.arc_ty hk0)⟩
+    refine ⟨h1, h2, fun p hpay => ⟨(h3 p hpay).1, ?_⟩, ?_, h5.mark hkd (hp.arc_ty hk0), h6⟩
     · exact (((h3 p hpay).2.sweep (hp.kept hk0 hpay))).grow hle
     · rcases h4 with h | h
       · -- Agora #755: a lock block marked holds a destructor value that
-        -- holds no share (`Ty.lkPay`), so no cell share
+        -- holds no cell share (`Ty.lkPay`, Agora #803)
         right
         have hfree := hp.arc_ty hk0 (by rw [h]; simp)
-        rcases h5.1 (by rw [h]; simp) (by rw [h]; simp) with h' | ⟨-, h'⟩
+        rcases h5.1 (by rw [h]; simp) (by rw [h]; simp) with h' | ⟨-, h'⟩ | ⟨h', -⟩
         · rw [hfree] at h'; cases h'
-        · exact Ty.hasCell_of_hasArc (Ty.lkPay_dtor h' hfree).2
+        · exact (Ty.lkPay_dtor h' hfree).2
+        · rw [h] at h'; cases h'
       · exact Or.inr h
 
 /-- **The marking sweep keeps `Covers`**: it frees exactly the payloads of

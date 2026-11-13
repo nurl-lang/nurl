@@ -237,7 +237,7 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
     obtain ⟨v, hv | hv⟩ := sum_slot_undtor hi hy hl (take_undtor ht) <;> rw [hm] at hv
     · exact ⟨_, EvalR.takerP hv⟩
     · exact ⟨_, EvalR.taker hv⟩
-  | arcNew hy hly hty _ _ _ hpa =>
+  | arcNew hy hly hty _ _ _ _ hpa =>
     obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly hpa hty
     -- the key `nid` is fresh: every block's key is below it
     have hfr : m1.blk m1.nid = none := by
@@ -248,7 +248,7 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
       | none => rfl
       | some bl => exact absurd (hi.heap.bkey _ bl h) (Nat.lt_irrefl _)
     exact ⟨_, EvalR.arcNew htk hfr⟩
-  | lockNew hy hly hty _ _ hpa =>
+  | lockNew hy hly hty _ _ _ hpa =>
     obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly hpa hty
     -- the key `nid` is fresh: every block's key is below it
     have hfr : m1.blk m1.nid = none := by
@@ -267,7 +267,7 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
   | lockClone ha hl hty =>
     obtain ⟨o, k, hv⟩ := hi.lk_slot ha hl hty
     exact ⟨_, EvalR.lockClone hv⟩
-  | cellNew hy hly hty _ _ hpa =>
+  | cellNew hy hly hty _ _ _ hpa =>
     obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly hpa hty
     -- the key `nid` is fresh: every block's key is below it
     have hfr : m1.blk m1.nid = none := by
@@ -435,15 +435,20 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
     obtain ⟨ob, hk⟩ := hi.lk_val ha hl hty hv
     cases ob with
     | none =>
-      obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly hpa htyy
-      have hb1 : m1.blk = m.blk := by cases htk <;> rfl
-      by_cases hck : SendCheck m1.blk [v] m1.st
-      · exact ⟨_, EvalR.lockRestore hv htk (by rw [hb1]; exact hk) hck⟩
-      · exact ⟨_, EvalR.lockRestoreFail htk hck⟩
+      -- Agora #810: a block a `withLock` checked out is not restored: a panic
+      cases htk0 : m.taken k with
+      | false => exact ⟨_, EvalR.lockRestoreHeld hv hk htk0⟩
+      | true =>
+        obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly hpa htyy
+        have hb1 : m1.blk = m.blk := by cases htk <;> rfl
+        have ht1 : m1.taken = m.taken := by cases htk <;> rfl
+        by_cases hck : SendCheck m1.blk [v] m1.st
+        · exact ⟨_, EvalR.lockRestore hv htk (by rw [hb1]; exact hk) (by rw [ht1]; exact htk0) hck⟩
+        · exact ⟨_, EvalR.lockRestoreFail htk hck⟩
     | some p => exact ⟨_, EvalR.lockRestoreP hv hk⟩
   | arcGet ha hl hty _ _ =>
-    obtain ⟨o, k, p, hv⟩ := hi.arc_slot ha hl hty
-    obtain ⟨bl, hbl, _⟩ := (hi.arc_val ha hl hty hv).1.rd
+    obtain ⟨o, k, p, hv⟩ := hi.lends_slot ha hl hty
+    obtain ⟨bl, hbl, _⟩ := (hi.lends_val ha hl hty hv).1
     exact ⟨_, EvalR.arcGet hv hbl⟩
 
 /-- A part of a tree whose addresses are distinct has distinct addresses. -/
@@ -613,17 +618,17 @@ theorem progress {P : Prog}
     cases ob with
     | none => exact Or.inr (Or.inl ⟨kk, t, hv, Or.inl hk⟩)
     | some w => exact Or.inr <| Or.inr ⟨_, Step.withLock hv hk hmx hnv⟩
-  | @scopeL Γ Δ1 F kk t x k hxE _ _ _ ih =>
+  | @scopeL Γ Δ1 F kk t x k hxE _ _ _ _ _ _ ih =>
     intro m hcd hi
     obtain ⟨Ex, hx, hnrb, _⟩ := hxE
     have hi0 : Inv m Γ F k := hi.scopeLIn hx hnrb
     rcases ih hcd hi0 with rfl | hbl | ⟨r, hr⟩
     · obtain ⟨sl, a', hsl, hd⟩ := dropSlot_exists hi.toMInv hx
       -- the payload goes back into its block, or `x`'s slot is dropped
-      obtain ⟨m', hrl⟩ := Release.exists (k := kk) (t := t) hsl hd
       -- A3.5's second cut: unless it fails the crossing check, which panics
       by_cases hck : GiveCheck m x sl
-      · exact Or.inr <| Or.inr ⟨_, Step.scopeLSkip hrl fun sl' h => by rw [hsl] at h; cases h; exact hck⟩
+      · obtain ⟨m', hrl⟩ := Release.exists (k := kk) (t := t) hsl hd fun _ _ _ _ _ => hck
+        exact Or.inr <| Or.inr ⟨_, Step.scopeLSkip hrl fun sl' h => by rw [hsl] at h; cases h; exact hck⟩
       · exact Or.inr <| Or.inr ⟨_, Step.scopeLFail hsl hck⟩
     · exact Or.inr (Or.inl hbl)
     · cases r with
@@ -645,8 +650,14 @@ theorem progress {P : Prog}
               obtain ⟨_, hwf, _⟩ := hown (by simp at hso; exact hso)
               obtain ⟨a', ha⟩ := frees_owned hh1 hsl1 (hwf t rfl)
               exact ⟨a', DropSlot.owned ha⟩
+        -- Agora #803: a destructor payload that fails the check goes to a
+        -- destructor frame
+        by_cases hpd : CheckedOut m1 kk t ∧ ∃ n f u, t = Ty.nest n (.dtor f u) ∧ ¬ GiveCheck m1 x sl
+        · obtain ⟨hco, n, f, u, ht, hng⟩ := hpd
+          exact Or.inr <| Or.inr ⟨_, Step.scopeLPD hr hco ht hsl1 hng⟩
         -- A3.3: on the way out too
-        obtain ⟨m2, hrl⟩ := Release.exists (k := kk) (t := t) hsl1 hd
+        obtain ⟨m2, hrl⟩ := Release.exists (k := kk) (t := t) hsl1 hd fun hco n f u ht =>
+          Classical.byContradiction fun hng => hpd ⟨hco, n, f, u, ht, hng⟩
         exact Or.inr <| Or.inr ⟨_, Step.scopeLP hr hrl⟩
   | @letd Γ Γ1 Δ F x f r k E _ _ _ _ hx _ hr _ _ _ _ _ _ _ _ =>
     intro m hcd hi

@@ -159,6 +159,9 @@ theorem withAN {m : Mem} (h : MKeys m) (a : Nat → Bool) {n : Nat} (hn : m.nid 
 
 theorem withNv {m : Mem} (h : MKeys m) (n : Nat) : MKeys { m with nv := n } := ⟨h.st, h.blk, h.gl⟩
 
+/-- Agora #810: which blocks are taken holds no share. -/
+theorem withTaken {m : Mem} (h : MKeys m) (T : Nat → Bool) : MKeys { m with taken := T } := ⟨h.st, h.blk, h.gl⟩
+
 theorem remove {m : Mem} (h : MKeys m) (x : Var) : MKeys (m.remove x) := by
   refine ⟨fun y o' v hy => ?_, h.blk, h.gl⟩
   simp only [Mem.remove, upd] at hy
@@ -321,8 +324,8 @@ theorem EvalR.keys {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.
   | rwTryWriteNone _ _ => exact ⟨hk, .inl .int⟩
   | glob hg _ => exact ⟨hk, hk.gl _ _ hg⟩
   | lockTake _ hb _ =>
-    exact ⟨hk.updBlk _ (fun _ h => by cases h), hk.blk _ _ _ _ hb⟩
-  | lockRestore _ h1 _ _ =>
+    exact ⟨(hk.updBlk _ (fun _ h => by cases h)).withTaken _, hk.blk _ _ _ _ hb⟩
+  | lockRestore _ h1 _ _ _ =>
     obtain ⟨hk1, hv1, hn1, _⟩ := hk.takeVal h1
     exact ⟨hk1.updBlk _ (fun w hw => by cases hw; rw [hn1]; exact hv1), .int⟩
 
@@ -484,10 +487,10 @@ theorem Step.keys {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) (
   | scopeDDrain _ => exact hk.of_eq rfl rfl rfl (Nat.le_refl _)
   | scopeDEmpty _ => exact hk
   | scopeDP _ _ _ ih => exact ih
-  | scopeDPDrain _ _ ih => exact ih
+  | scopeDPDrain _ _ ih | scopeLPD _ _ _ _ _ ih => exact ih
   | scopeDPMoved _ _ ih => exact (ih).remove _
   | withLock _ hb _ _ =>
-    exact (hk.updBlk _ (fun _ h => by cases h)).set _ (fun w hw => by cases hw; exact hk.blk _ _ _ _ hb)
+    exact ((hk.updBlk _ (fun _ h => by cases h)).withTaken _).set _ (fun w hw => by cases hw; exact hk.blk _ _ _ _ hb)
   | scopeLIn _ ih => exact ih
   | scopeLSkip hrl _ => exact Release.keys hrl hk
   | scopeLFail _ _ => exact hk
@@ -514,6 +517,7 @@ theorem KB.of_noArc {n : Nat} {τ : Ty} {T : Val} (hw : WFv τ T) (ha : τ.hasAr
   | inr _ ih => simp only [Ty.hasArc, Bool.or_eq_false_iff] at ha; exact .inr (ih ha.2)
   | pkg _ hq ih => exact .pkg (ih (hq.2.2.1 ha))
   | arc => cases ha
+  | rguard => cases ha
   | lk => cases ha
   | cell => cases ha
   | dtor _ _ ih => exact ih ha
@@ -534,8 +538,11 @@ theorem KB.of_wfv {B : Nat → Option Blk} {n : Nat} (hB : ∀ k bl, B k = some 
     · exact .pkg (KB.of_noArc hv (hq.2.2.1 hqs))
     · exact .pkg (ih fun u k p h => hs u k p (.pkg h hqs))
   | arc =>
-    have h := hs _ _ _ .here
-    rcases h with h | h <;> exact .arc (hB _ _ h)
+    obtain ⟨_, h, _⟩ := ArcBlk.rd (hs _ _ _ .here)
+    exact .arc (hB _ _ h)
+  | rguard =>
+    obtain ⟨_, h, _⟩ := ArcBlk.rd (hs _ _ _ .rguard)
+    exact .arc (hB _ _ h)
   | lk =>
     obtain ⟨o, h⟩ := hs _ _ _ .lk
     exact .lk (hB _ _ h)
@@ -695,7 +702,8 @@ theorem CKeys.start {P : Prog} {G : Globs} (hG : GlobsOK P G) (s : Stmt) (nv : N
   · obtain ⟨_, _, _, hf⟩ := hG.sync g v hg
     rcases hf with ⟨u, k, o, _, rfl, hk⟩ | ⟨u, k, p, _, rfl, hk⟩
     · exact .lk (hB _ _ hk)
-    · rcases hk with hk | hk <;> exact .arc (hB _ _ hk)
+    · obtain ⟨_, hk, _⟩ := hk.rd
+      exact .arc (hB _ _ hk)
 
 /-- **On every configuration a typed start reaches, every share names a key
     below `nid`.** -/

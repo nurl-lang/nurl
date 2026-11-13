@@ -91,8 +91,8 @@ theorem BindParams.grows {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var} 
 /-- A lock scope's end, on either path, gives a payload back or drops a slot. -/
 theorem Release.grows {m m' : Mem} {k : Nat} {t : Ty} {x : Var} (h : Release m k t x m') : Grows m m' := by
   cases h with
-  | put _ _ hk => exact ⟨Nat.le_refl _, fun _ h => .inl h, BlkLe.setLock hk _⟩
-  | drop _ _ hd => exact Grows.shrink (DropSlot.le hd) rfl
+  | put _ _ hk => exact ⟨Nat.le_refl _, fun _ h => .inl h, BlkLe.setLock hk.1 _⟩
+  | drop _ _ _ hd => exact Grows.shrink (DropSlot.le hd) rfl
 
 /-- **A step allocates only fresh addresses**, and `nid` never goes back. -/
 theorem Step.grows {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) : Grows m r.mem := by
@@ -163,6 +163,7 @@ theorem Step.grows {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
   | scopeDMoved _ => exact Grows.of_eq rfl rfl
   | scopeDP _ _ _ ih => exact ih.trans (Grows.of_eq rfl rfl)
   | scopeDPDrain _ _ ih => exact ih
+  | scopeLPD _ _ _ _ _ ih => exact ih
   | scopeDPMoved _ _ ih => exact ih.trans (Grows.of_eq rfl rfl)
   | withLock _ hk _ =>
     exact ⟨Nat.le_refl _, fun _ h => .inl h, (BlkLe.setLock hk none).trans (BlkLe.refl _)⟩
@@ -230,7 +231,7 @@ theorem Step.gl {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) : r
   | catchP _ _ ih => exact ih
   | letd _ he => have h := EvalR.gl he; exact h
   | scopeDIn _ ih => exact ih
-  | scopeDP _ _ _ ih | scopeDPDrain _ _ ih => exact ih
+  | scopeDP _ _ _ ih | scopeDPDrain _ _ ih | scopeLPD _ _ _ _ _ ih => exact ih
   | scopeDPMoved _ _ ih => exact ih
   | scopeLIn _ ih => exact ih
   | scopeLSkip hrl => have h := Release.gl hrl; exact h

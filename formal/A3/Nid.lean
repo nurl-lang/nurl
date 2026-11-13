@@ -67,12 +67,13 @@ theorem payPart_false {B : Nat → Option Blk} {i : Nat} : payPart B i = false �
 structure BlockOK (B : Nat → Option Blk) (n k : Nat) (bl : Blk) : Prop where
   ok    : bl.ty.ok = true ∧ bl.ty.holdsView = false ∧
     (∀ p, bl.pay = some p → WFv bl.ty p ∧ SharesIn B bl.ty p) ∧ (bl.kind = .lock ∨ bl.ty.hasCell = false) ∧
-    -- A2-drop.3d, Agora #610: a view's payload owns no destructor value, a
+    -- A2-drop.3d, Agora #610: a view owns nothing (Agora #804: its payload,
+    -- its lock block's, of a read guard's view type or owning none), a
     -- lock's none or (Agora #755, `Locked D`) one at its top that holds no
     -- share; an `arc` block's may be one at its top (Agora #755:
     -- or a drained `Vec` of them), and a `dead` block's is (`Blk.DtorOK`,
     -- `MInv.blocks`)
-    bl.DtorOK
+    bl.DtorOK ∧ bl.ty.hasGuard = false
   key   : k < n
   nodup : bl.tree.ids.Nodup
   lt    : ∀ i ∈ bl.tree.ids, i < n
@@ -93,14 +94,14 @@ theorem BlocksAt.views {B : Nat → Option Blk} {n : Nat} (h : BlocksAt B n) : V
     owned trees and the blocks' payloads, which hold none of its
     addresses. -/
 theorem inv_move {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s) {A : Nat → Bool}
-    {n : Nat} {B : Nat → Option Blk}
+    {n : Nat} {B : Nat → Option Blk} {TK : Nat → Bool}
     (hown : ∀ x T, OwnedAt m x T → ∀ i ∈ T.ids, A i = true)
     (hA : ∀ i, A i = true → (∃ x T, OwnedAt m x T ∧ i ∈ T.ids) ∨ PayIn B i)
     (hpA : ∀ i, PayIn B i → A i = true)
     (hn : m.nid ≤ n) (hb : BlkLe m.blk B) (hB : BlocksAt B n)
     (hP : ∀ i, PayIn B i → ∀ x T, OwnedAt m x T → i ∉ T.ids) :
-    Inv { m with alloc := A, nid := n, blk := B } Γ F s :=
-  have hh : HeapOK { m with alloc := A, nid := n, blk := B } :=
+    Inv { m with alloc := A, nid := n, blk := B, taken := TK } Γ F s :=
+  have hh : HeapOK { m with alloc := A, nid := n, blk := B, taken := TK } :=
     { nodup := hi.heap.nodup
       disj := hi.heap.disj
       alloc := fun x t h i hi' => ⟨hown x t h i hi', Nat.lt_of_lt_of_le (hi.heap.alloc x t h i hi').2 hn⟩
@@ -112,7 +113,7 @@ theorem inv_move {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F
   { toMInv := hi.toMInv.grow rfl hh (Nat.le_refl _) hb (fun k bl hk => (hB k bl hk).ok)
     nvS := hi.nvS, nvF := hi.nvF
     anch := hi.anch, spineNd := hi.spineNd, spineDom := hi.spineDom
-    catchOK := CatchOK.of_st (m := m) (m' := { m with alloc := A, nid := n, blk := B }) rfl (Nat.le_refl _) hb
+    catchOK := CatchOK.of_st (m := m) (m' := { m with alloc := A, nid := n, blk := B, taken := TK }) rfl (Nat.le_refl _) hb
       hi.catchOK
     cover := fun i h => by
       rcases hA i h with ⟨x, T, hT, hiT⟩ | h
@@ -122,12 +123,12 @@ theorem inv_move {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F
     dtorIn := hi.dtorIn }
 
 theorem ThreadOK.move {P : Prog} {m : Mem} {s : Stmt} (h : ThreadOK P m s) {A : Nat → Bool} {n : Nat}
-    {B : Nat → Option Blk} (hown : ∀ x T, OwnedAt m x T → ∀ i ∈ T.ids, A i = true)
+    {B : Nat → Option Blk} {TK : Nat → Bool} (hown : ∀ x T, OwnedAt m x T → ∀ i ∈ T.ids, A i = true)
     (hA : ∀ i, A i = true → (∃ x T, OwnedAt m x T ∧ i ∈ T.ids) ∨ PayIn B i)
     (hpA : ∀ i, PayIn B i → A i = true)
     (hn : m.nid ≤ n) (hb : BlkLe m.blk B) (hB : BlocksAt B n) (hBc : BlkCodes P B)
     (hP : ∀ i, PayIn B i → ∀ x T, OwnedAt m x T → i ∉ T.ids) :
-    ThreadOK P { m with alloc := A, nid := n, blk := B } s := by
+    ThreadOK P { m with alloc := A, nid := n, blk := B, taken := TK } s := by
   obtain ⟨Γ, F, Δ, ht, hi, hcd, hsc, hc⟩ := h
   exact ⟨Γ, F, Δ, ht, inv_move hi hown hA hpA hn hb hB hP, hcd.withBlk rfl hBc, hsc, hc⟩
 

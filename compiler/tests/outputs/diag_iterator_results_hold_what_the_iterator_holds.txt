@@ -1,0 +1,18 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_iterator_results_hold_what_the_iterator_holds.nu:31:5: error: 'keep' holds a view of 'b' (one stored into it, or captured by it), and 'b' ended at line 30 — it went out of scope at the end of its block. Using 'keep' now would read freed memory. End 'b' only after 'keep' is done, or have 'keep' hold a copy that owns its data (string_from, slice_to_vec).
+    ( nurl_println ( vec_at [s] keep 0 ) )
+    ^
+compiler/tests/diag_iterator_results_hold_what_the_iterator_holds.nu:44:5: error: 'keep' borrows from 'b', which ended at line 43 — it went out of scope at the end of its block. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'keep' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup keep ).
+    ?? keep { T x → { ( nurl_println x ) } F → {} }
+    ^
+compiler/tests/diag_iterator_results_hold_what_the_iterator_holds.nu:56:5: error: 'keep' borrows from 'b', which ended at line 55 — it went out of scope at the end of its block. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'keep' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup keep ).
+    ?? keep { T x → { ( nurl_println x ) } F → {} }
+    ^
+compiler/tests/diag_iterator_results_hold_what_the_iterator_holds.nu:68:5: error: 'keep' holds a view of 'b' (one stored into it, or captured by it), and 'b' ended at line 67 — it went out of scope at the end of its block. Using 'keep' now would read freed memory. End 'b' only after 'keep' is done, or have 'keep' hold a copy that owns its data (string_from, slice_to_vec).
+    ( nurl_println ( vec_at [s] keep 0 ) )
+    ^
+compiler/tests/diag_iterator_results_hold_what_the_iterator_holds.nu:80:5: error: 'keep' holds a view of 'b' (one stored into it, or captured by it), and 'b' ended at line 79 — it went out of scope at the end of its block. Using 'keep' now would read freed memory. End 'b' only after 'keep' is done, or have 'keep' hold a copy that owns its data (string_from, slice_to_vec).
+    ( nurl_println ( vec_at [s] keep 0 ) )
+    ^
+error: compilation aborted — 5 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

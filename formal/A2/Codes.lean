@@ -466,7 +466,7 @@ theorem Release.codes {P : Prog} {m m' : Mem} {k : Nat} {t : Ty} {x : Var} (hrl 
   cases hrl with
   | put hx _ hk =>
     refine MemCodes.remove ?_ _
-    exact hm.withBlk rfl (hm.blk.updSame (blkCodes_lock fun _ e => by cases e; exact hm.slot hx) hk)
+    exact hm.withBlk rfl (hm.blk.updSame (blkCodes_lock fun _ e => by cases e; exact hm.slot hx) hk.1)
   | drop _ _ _ => exact (hm.of_st rfl).remove _
 
 /-- Every step keeps every package naming code of its signature. -/
@@ -684,6 +684,10 @@ theorem codes_step {P : Prog} (hPc : ProgCodes P) {m : Mem} {s : Stmt} {r : Res}
   | scopeDP _ _ _ ih =>
     intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact ⟨((ih hm hB hs).2 _ rfl).of_st rfl, trivial, trivial⟩
+  | scopeLPD _ _ _ _ _ ih =>
+    -- Agora #803: the check-out's frame becomes `x`'s destructor frame
+    intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    exact ⟨(ih hm hB hs).2 _ rfl, trivial, trivial⟩
   | scopeDPMoved _ _ ih =>
     intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact ((ih hm hB hs).2 _ rfl).remove _

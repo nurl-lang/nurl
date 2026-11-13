@@ -581,7 +581,7 @@ theorem pack_env_dtor_free {Γ Γ1 : Ctx} {F : List Var} {fs : List Nat} {te : T
     te.holdsDtor = false ∧ te.dtorFree = true := by
   cases h with
   | pack _ _ _ _ _ hq =>
-    have := hq.2.2.2 (by simpa [Ty.holdsDtor] using hE)
+    have := hq.2.2.2.1 (by simpa [Ty.holdsDtor] using hE)
     refine ⟨this, ?_⟩
     rw [Ty.holdsDtor_eq_not_free] at this
     simpa using this
@@ -625,11 +625,12 @@ theorem _root_.A2.WFv.pkg_env_dtor_free {τ : Ty} {v : Val} (hw : WFv τ v) (hdf
     simp only [Ty.noDropd, Bool.and_eq_true] at hdf
     cases hs with | inr h => exact ih hdf.2 h
   | pkg _ hq ih =>
-    have hte := hq.2.2.2 (by simpa [Ty.noDropd] using hdf)
+    have hte := hq.2.2.2.1 (by simpa [Ty.noDropd] using hdf)
     cases hs with
     | refl => exact hte
     | pkg h => exact ih (Ty.noDropd_of_free hte) h
   | arc _ _ => cases hs
+  | rguard _ _ => cases hs
   | lk => cases hs
   | cell => cases hs
   | dtor _ _ ih => exact ih (by simpa [Ty.noDropd] using hdf) hs
@@ -686,11 +687,13 @@ theorem drop_method_code {P : Prog} (hP : ProgOK P) {f σ : Nat} {te : Ty} {cs :
 
 /-- The payload types of the shares (`Arc`, lock, cell) that occur in a
     type, at any depth: in fields, payloads and elements, under views and
-    destructor types, and inside other payloads. -/
+    destructor types, and inside other payloads (Agora #837: a read guard's
+    lock payload among them, which its view lends). -/
 def payloads : Ty → List Ty
   | .arc t => t :: payloads t
   | .lk t => t :: payloads t
   | .cell t => t :: payloads t
+  | .rguard t => t :: payloads t
   | .vec t => payloads t
   | .slice t => payloads t
   | .dtor _ t => payloads t
@@ -705,6 +708,7 @@ def lockPayloads : Ty → List Ty
   | .arc t => lockPayloads t
   | .lk t => t :: lockPayloads t
   | .cell t => t :: lockPayloads t
+  | .rguard t => t :: lockPayloads t
   | .vec t => lockPayloads t
   | .slice t => lockPayloads t
   | .dtor _ t => lockPayloads t
@@ -714,7 +718,10 @@ def lockPayloads : Ty → List Ty
   | .fn _ _ => []
 
 /-- A2-drop.3d, Agora #610: a well-formed type's share payloads own no
-    destructor value, or (an `Arc`'s) are one at their top, or a drained `Vec` of them (Agora #755). -/
+    destructor value, or (an `Arc`'s) are one at their top, or a drained `Vec` of them (Agora #755).
+    (Agora #804 added a third case, a read guard's view `prod (lk u) u`,
+    `Ty.rview`, while a guard was an `arc` share; since Agora #837 a guard is
+    a type of its own, `Ty.rguard u`, whose payload `u` is a lock's.) -/
 theorem ok_payloads_free {t : Ty} (h : t.ok = true) :
     ∀ u ∈ payloads t, u.dtorFree = true ∨ u.dnest = true := by
   induction t with
@@ -727,6 +734,12 @@ theorem ok_payloads_free {t : Ty} (h : t.ok = true) :
     rintro u (rfl | hu)
     · exact Ty.ok_arc_dtor h
     · exact ih (Ty.ok_arc h).1 u hu
+  | rguard t ih =>
+    have hl := (Ty.ok_rguard h).1
+    simp only [payloads, List.mem_cons]
+    rintro u (rfl | hu)
+    · exact Ty.lkPay_free_or_dnest (Ty.ok_lk_pay hl)
+    · exact ih (Ty.ok_lk hl).1 u hu
   | lk t ih =>
     simp only [payloads, List.mem_cons]
     rintro u (rfl | hu)
@@ -753,7 +766,7 @@ theorem ok_payloads_free {t : Ty} (h : t.ok = true) :
 
 /-- A2-drop.3d: a well-formed type's lock and cell payloads own no
     destructor value, or (Agora #755, `Locked D`) are one at their top that
-    holds no share (`Ty.lkPay`). -/
+    holds no cell share (`Ty.lkPay`; Agora #803: before, no share). -/
 theorem ok_lockPayloads_free {t : Ty} (h : t.ok = true) : ∀ u ∈ lockPayloads t, u.lkPay = true := by
   induction t with
   | int => simp [lockPayloads]
@@ -761,6 +774,12 @@ theorem ok_lockPayloads_free {t : Ty} (h : t.ok = true) : ∀ u ∈ lockPayloads
   | vec t ih => simpa only [lockPayloads] using ih (Ty.ok_vec_elem h)
   | slice t ih => simpa only [lockPayloads] using ih (Ty.ok_slice h).1
   | arc t ih => simpa only [lockPayloads] using ih (Ty.ok_arc h).1
+  | rguard t ih =>
+    have hl := (Ty.ok_rguard h).1
+    simp only [lockPayloads, List.mem_cons]
+    rintro u (rfl | hu)
+    · exact Ty.ok_lk_pay hl
+    · exact ih (Ty.ok_lk hl).1 u hu
   | lk t ih =>
     simp only [lockPayloads, List.mem_cons]
     rintro u (rfl | hu)
@@ -791,7 +810,8 @@ theorem ok_lockPayloads_free {t : Ty} (h : t.ok = true) : ∀ u ∈ lockPayloads
     type does not name) owns no destructor value, or (Agora #610, an
     `Arc`'s) is one at its top or (Agora #755) a drained `Vec` of them; a
     lock's and a cell's owns none or (Agora #755, `Locked D`) is one at its
-    top that holds no share (`Ty.lkPay`), so a check-out binding
+    top that holds no cell share (`Ty.lkPay`; Agora #803: before, no
+    share), so a check-out binding
     (`withLock`, `withCell`: the lock's payload type) is of a type that holds
     none, or is that destructor value, given no other value in the body
     (`StmtT.withLock`'s `hna`).  The fact about the blocks themselves is
@@ -801,9 +821,13 @@ theorem shares_dtor_free {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {E : En
       ∀ u ∈ lockPayloads E.ty, u.lkPay = true :=
   ⟨ok_payloads_free (hi.tyok hx), ok_lockPayloads_free (hi.tyok hx)⟩
 
-/-- **A2-drop.3d, Agora #610: in a running configuration no view's payload
-    owns a destructor value, a lock block's owns none or (Agora #755,
-    `Locked D`) is one at its top that holds no share, and a block whose payload
+/-- **A2-drop.3d, Agora #610: in a running configuration no view owns a
+    destructor value (Agora #804: a view owns nothing, its payload is its
+    lock block's, read in place, of a read guard's view type or owning none,
+    and it is never an orphan to be nor marked `dead`, so no destructor runs
+    from it), a lock block's owns none or (Agora #755,
+    `Locked D`) is one at its top that holds no cell share (Agora #803;
+    before, no share), and a block whose payload
     owns one (an `arc` block, or a `dead` one: an orphan whose payload
     awaits its destructor) is of a destructor type that holds no closure,
     or (Agora #755) of a drained `Vec` of such values at any depth**
@@ -815,9 +839,55 @@ theorem shares_dtor_free {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {E : En
     `Step.reap`). -/
 theorem blocks_dtor_free {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {k : Nat} {bl : Blk}
     (hk : m.blk k = some bl) :
-    (bl.kind ≠ .dead → bl.kind ≠ .arc → bl.ty.dtorFree = true ∨ (bl.kind = .lock ∧ bl.ty.lkPay = true)) ∧
-      (bl.ty.dtorFree = false → ∃ n f u, bl.ty = Ty.nest n (.dtor f u) ∧ u.hasFn = false) :=
-  ⟨(hi.blocks k bl hk).2.2.2.2.1, (hi.blocks k bl hk).2.2.2.2.2.2⟩
+    (bl.kind ≠ .dead → bl.kind ≠ .arc → bl.kind ≠ .view →
+        bl.ty.dtorFree = true ∨ (bl.kind = .lock ∧ bl.ty.lkPay = true)) ∧
+      (bl.ty.dtorFree = false → bl.kind ≠ .view → ∃ n f u, bl.ty = Ty.nest n (.dtor f u) ∧ u.hasFn = false) ∧
+      (bl.kind = .arc → bl.ty.dtorFree = true ∨ bl.ty.dnest = true) ∧
+      -- Agora #804: a view owns nothing, its payload (its lock block's, read
+      -- in place) is of a read guard's view type or owns no destructor
+      -- value, and it is never an orphan to be nor marked `dead`: the
+      -- marking sweep keeps it as it is or removes it, so no destructor ever
+      -- runs from a view
+      (bl.kind = .view → bl.tree = .int 0 ∧ (bl.ty.dtorFree = true ∨ bl.ty.rview = true) ∧
+        ∀ R, ¬ Cand R m.blk k ∧ (sweepBlkD R m.blk k = some bl ∨ sweepBlkD R m.blk k = none)) := by
+  have hb := (hi.blocks k bl hk).2.2.2.2.1
+  have harc := fun ha => Blk.DtorOK.arc hb ha
+  obtain ⟨h1, _, h3⟩ := hb
+  refine ⟨fun a b c => ?_, h3, harc, fun hv => ?_⟩
+  · rcases h1 a b with h | h | ⟨h, _⟩
+    · exact Or.inl h
+    · exact Or.inr h
+    · exact absurd h c
+  · obtain ⟨t, kd, p⟩ := bl
+    simp only at hv; subst hv
+    have hnc : ∀ R, ¬ Cand R m.blk k := fun R ⟨⟨n, f, u, p', kd, hkd, hk'⟩, _⟩ => by
+      rw [hk] at hk'; cases hk'; rcases hkd with h | h <;> cases h
+    refine ⟨rfl, ?_, fun R => ⟨hnc R, ?_⟩⟩
+    · rcases h1 (by simp) (by simp) with h | ⟨h, _⟩ | ⟨_, h⟩
+      · exact Or.inl h
+      · cases h
+      · exact Or.inr h
+    · unfold sweepBlkD
+      by_cases hr : Reached (RootsD R m.blk) m.blk k
+      · left; simp [hr, hk]
+      · right
+        have hnp : ¬ Pinned R m.blk k := by
+          rintro (⟨hc, _⟩ | ⟨n, f, u, p', hk'⟩)
+          · exact hnc R hc
+          · rw [hk] at hk'; cases hk'
+        simp [hr, hnp]
+
+/-- **Agora #804, the block-level fact behind an `Arc`'s type**: in a running
+    configuration every `arc` block (made by `arc_new`, shared by its
+    clones, or a global's) is of a type that owns no destructor value, or is
+    one at its top, or a drained `Vec` of them.  A share's type says less
+    (`Ty.ok_arc_dtor`: a read guard's is a share of a view, `Ty.rview`), but
+    only a view is of a read guard's view type.  (Since Agora #837 a share's
+    type says it too, `Ty.ok_arc_dtor`: a read guard is of a type of its
+    own, `Ty.rguard`.) -/
+theorem arc_blocks_dtor {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {k : Nat} {bl : Blk}
+    (hk : m.blk k = some bl) (ha : bl.kind = .arc) : bl.ty.dtorFree = true ∨ bl.ty.dnest = true :=
+  (hi.blocks k bl hk).2.2.2.2.1.arc ha
 
 /-- A2-drop.3c, in a block: a package in the payload of a block of a type
     that owns no destructor value (a channel of closures, a `Locked`
@@ -832,16 +902,17 @@ theorem blk_pkgs_env_dtor_free {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {k : Nat} {
 
 /-- A2-drop.3d: a lock's and a library handle's constructor take a value
     that owns no destructor value or (Agora #755, `Locked D`) is one at its
-    top that holds no share; (Agora #610) `arc_new` takes one that
+    top that holds no cell share (Agora #803; before, no share); (Agora
+    #610) `arc_new` takes one that
     owns none or is one at its top, or (Agora #755) a drained `Vec` of them. -/
 theorem share_new_dtor_free {Γ Γ1 : Ctx} {F : List Var} {t : Ty} {y : Var} {E : Entry} :
     (RhsT Γ F (.arcNew t y) E Γ1 → t.dtorFree = true ∨ t.dnest = true) ∧
     (RhsT Γ F (.lockNew t y) E Γ1 → t.lkPay = true) ∧
     (RhsT Γ F (.cellNew t y) E Γ1 → t.lkPay = true) := by
   refine ⟨fun h => ?_, fun h => ?_, fun h => ?_⟩
-  · cases h with | arcNew _ _ _ hdf _ _ _ => exact hdf
-  · cases h with | lockNew _ _ _ hdf _ _ => exact hdf
-  · cases h with | cellNew _ _ _ hdf _ _ => exact hdf
+  · cases h with | arcNew _ _ _ hdf _ _ _ _ => exact hdf
+  · cases h with | lockNew _ _ _ hdf _ _ _ => exact hdf
+  · cases h with | cellNew _ _ _ hdf _ _ _ => exact hdf
 
 /-- A2-drop.3b: in a running configuration, a binding whose type is a `Vec`
     has elements that own no destructor value, or are of a destructor type
@@ -861,6 +932,7 @@ def vecElems : Ty → List Ty
   | .vec t => t :: vecElems t
   | .slice t => vecElems t
   | .arc t => vecElems t
+  | .rguard t => vecElems t
   | .lk t => vecElems t
   | .cell t => vecElems t
   | .dtor _ t => vecElems t
@@ -885,11 +957,13 @@ theorem ok_vecElems {t : Ty} (h : t.ok = true) :
   | slice t ih =>
     simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; simpa only [vecElems] using ih h.1
   | arc t ih =>
-    simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; simpa only [vecElems] using ih h.1.1
+    simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; simpa only [vecElems] using ih h.1.1.1
+  | rguard t ih =>
+    simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; simpa only [vecElems] using ih h.1.1.1.1
   | lk t ih =>
-    simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; simpa only [vecElems] using ih h.1.1
+    simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; simpa only [vecElems] using ih h.1.1.1
   | cell t ih =>
-    simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; simpa only [vecElems] using ih h.1.1
+    simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; simpa only [vecElems] using ih h.1.1.1
   | dtor _ t ih =>
     simp only [Ty.ok, Bool.and_eq_true] at h
     simpa only [vecElems] using ih h.2

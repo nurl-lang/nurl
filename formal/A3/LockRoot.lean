@@ -531,7 +531,7 @@ theorem Step.keepSlot {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
     intro hck y o w hy hw hyn hlt
     simp only [Stmt.nm, List.mem_cons, not_or] at hyn
     exact ⟨(ih hck hy hw hyn.2 hlt).1, fun _ _ he => by cases he; nm_close⟩
-  | scopeDPDrain _ _ ih =>
+  | scopeDPDrain _ _ ih | scopeLPD _ _ _ _ _ ih =>
     intro hck y o w hy hw hyn hlt
     simp only [Stmt.nm, List.mem_cons, not_or] at hyn
     exact ⟨(ih hck hy hw hyn.2 hlt).1, fun _ _ he => by cases he; nm_close⟩
@@ -545,7 +545,7 @@ theorem Step.keepSlot {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
     intro _ y o w _ _ hyn _
     simp only [Stmt.nm, List.mem_cons, not_or] at hyn
     refine ⟨?_, fun _ _ he => by cases he; nm_close⟩
-    show (({ m with blk := _ } : Mem).set x _).st y = _
+    show (({ m with blk := _, taken := _ } : Mem).set x _).st y = _
     simp only [Mem.set_st]; rw [upd_ne _ _ hyn.1]
   | scopeLIn _ ih =>
     intro hck y o w hy hw hyn hlt
@@ -1083,7 +1083,7 @@ theorem RootInv.put {P : Prog} (hP : ProgOK P) {C : Cfg} {ps : List (Nat → Boo
       · rw [he, List.mem_append, List.mem_singleton] at hm
         rcases hm with hm | hm
         · exact BlkLe.ne_none hg.blk (h.live i t hi k u hm)
-        · cases hm; rw [h2]; exact fun h => nomatch h
+        · cases hm; rw [h2.1]; exact fun h => nomatch h
     · exact BlkLe.ne_none hg.blk (h.live j tj hj k u hm)
 
 /-- **The marking sweep keeps every frame's block**: the frame's root is a
@@ -1245,85 +1245,142 @@ theorem reach_frame_live (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P sp
     (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x b)) : C.blk k ≠ none :=
   (reach_rootInv hP hPc hSp hG ht hs hsc hv hr).live i th hi k u (hK.lfr_mem rfl)
 
-/-- **A frame's block, in a reached configuration**: for a payload that
-    holds a destructor value, checked out, `⟨u, .lock, none⟩`
+/-- **A frame's block, in a reached configuration**: checked out,
+    `⟨u, .lock, none⟩` and (Agora #810) not taken, for every payload type
     (`reach_frame_out` with the block there, `reach_frame_live`). -/
 theorem reach_frame_checked_out (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn)
     (hG : GlobsOK P G) (ht : StmtT P (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
     (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
     {i : Nat} {th : Thread} {K : Stmt → Stmt} {k : Nat} {u : Ty} {x : Var} {b : Stmt}
-    (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x b)) (hu : u.dtorFree = false) :
-    C.blk k = some ⟨u, .lock, none⟩ := by
-  rcases (reach_frame_out hP hPc hSp hG ht hs hsc hv hr hi hK hu).2 with h0 | h0
+    (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x b)) :
+    C.blk k = some ⟨u, .lock, none⟩ ∧ C.taken k = false := by
+  rcases (reach_frame_out hP hPc hSp hG ht hs hsc hv hr hi hK).2 with h0 | h0
   · exact absurd h0 (reach_frame_live hP hPc hSp hG ht hs hsc hv hr hi hK)
   · exact h0
 
 /-- **The check-out's end gives the value back, in a reached configuration**
     (Agora #808): `scopeL_typed_end_gives_back` with the block's state
-    discharged: the frame's typing names `x` an owner of a `u`, and the block
-    is there (`reach_frame_live`) and checked out (`reach_frame_out`), so
-    every step of the frame's end is the give-back.  (`Step.scopeLFail` and
-    the code-less `Release.drop` are not taken.) -/
+    discharged: the frame's typing names `x` live, holding a `u` (owned, or,
+    for an integer payload, a plain integer binding's: Agora #825), the
+    block is there (`reach_frame_live`) and checked out (`reach_frame_out`),
+    and (Agora #837) the value passes the crossing check
+    (`LockDtorWitness.giveCheck_typed`), for every payload type that holds
+    no cell share (every destructor payload, `arc` and lock shares
+    included; Agora #825 asked no share and no view), so every step of the
+    frame's end is the give-back.  (`Step.scopeLFail` and the code-less
+    `Release.drop` are not taken.) -/
 theorem reach_scopeL_end_gives_back (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn)
     (hG : GlobsOK P G) (ht : StmtT P (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
     (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
     {i : Nat} {th : Thread} {K : Stmt → Stmt} {k : Nat} {u : Ty} {x : Var}
     (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x .skip))
-    (hd : u.holdsDtor = true) (hna : u.hasArc = false) (hvf : u.holdsView = false)
+    (hnc : u.hasCell = false)
     {r : Res} (h : Step P (C.view th) (.scopeL k u x .skip) r) :
-    ∃ v, th.st x = some ⟨true, some v⟩ ∧
+    ∃ o v, th.st x = some ⟨o, some v⟩ ∧
       r = .ok ({ C.view th with blk := upd C.blk k (some ⟨u, .lock, some v⟩) }.remove x) .skip := by
   obtain ⟨ps, hcp, _⟩ := (reach_inv hP hPc hSp hG ht hs hsc hv hr).1
   obtain ⟨a, ha⟩ := part_of hcp.len hi
   obtain ⟨hto, _⟩ := hcp.ok i th a hi ha
   obtain ⟨Γ, F, Δ, hth, hinv, _⟩ := hto
   obtain ⟨Γ', F', Δ', ht', hinv'⟩ := hK.typed Γ F Δ hth hinv
-  obtain ⟨w, hx, hw⟩ := LockDtorWitness.scopeL_end_owns ht' hinv'.toMInv hd
-  have hk : (C.view th).blk k = some ⟨u, .lock, none⟩ :=
-    reach_frame_checked_out hP hPc hSp hG ht hs hsc hv hr hi hK (dtorFree_of_holdsDtor hd)
+  have hk : CheckedOut (C.view th) k u := reach_frame_checked_out hP hPc hSp hG ht hs hsc hv hr hi hK
   have hno : ¬ Orphan (C.view th) := fun ho => Reach.noOrphan hr hG.noOrphan ho
-  exact ⟨w, hx, LockDtorWitness.scopeL_end_gives_back (m := C.view th) hx hw hna hvf hk hno h⟩
+  obtain ⟨E, hx, hl, hrb, hmo, hty⟩ := LockDtorWitness.scopeL_end_entry ht'
+  obtain ⟨o, w, hxs, hw, ho⟩ := LockDtorWitness.frame_slot_live hinv'.toMInv hx hl hrb hmo hty
+  obtain ⟨hg, hgc⟩ := LockDtorWitness.giveCheck_typed hinv'.toMInv hx hty hxs hw ho hk hnc
+  exact ⟨o, w, hxs, LockDtorWitness.scopeL_end_gives_back (m := C.view th) hxs hg hgc hk hno h⟩
 
 /-- **A panic through the check-out gives the value back, in a reached
     configuration** (Agora #808): `scopeL_typed_panic` with the block's state
     discharged: the block is there (`reach_frame_live`) and checked out, and
     the body's unwinding leaves it so (its frame is the block's only one,
-    `Step.stay`): at the panic point `x` owns a `u`, given back into the
-    block, or nothing, the release freeing nothing. -/
+    `Step.stay`): at the panic point either `x` holds a `u` (owned, or an
+    integer payload's plain integer) and it is given back into the block,
+    or `x` holds nothing (an owner moved out, or an integer binding holding
+    no integer) and the release only removes its slot; for every payload
+    type that holds no cell share (Agora #837: every destructor payload,
+    `arc` and lock shares included; Agora #825 asked no share and no view).
+    An integer the binding holds is never dropped: its release is the
+    give-back (`LockDtorWitness.release_cases`). -/
 theorem reach_scopeL_panic (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn)
     (hG : GlobsOK P G) (ht : StmtT P (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
     (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
     {i : Nat} {th : Thread} {K : Stmt → Stmt} {k : Nat} {u : Ty} {x : Var} {b : Stmt}
     (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x b))
-    (hd : u.holdsDtor = true) (hna : u.hasArc = false) (hvf : u.holdsView = false)
+    (hnc : u.hasCell = false)
     {m2 : Mem} (h : Step P (C.view th) (.scopeL k u x b) (.panic m2)) :
     ∃ m1, Step P (C.view th) b (.panic m1) ∧
-      ((∃ v, m1.st x = some ⟨true, some v⟩ ∧ WFv u v ∧
+      ((∃ o v, m1.st x = some ⟨o, some v⟩ ∧ WFv u v ∧ (o = true ∨ u = .int) ∧
           m2 = ({ m1 with blk := upd m1.blk k (some ⟨u, .lock, some v⟩) }.remove x)) ∨
-        (m1.st x = some ⟨true, none⟩ ∧ m2 = m1.remove x)) := by
+        ((m1.st x = some ⟨true, none⟩ ∨
+            (u = .int ∧ ∃ w, m1.st x = some ⟨false, w⟩ ∧ ∀ n, w ≠ some (.int n))) ∧
+          m2 = m1.remove x)) := by
   have hl := reach_lockInv hP hPc hSp hG ht hs hsc hv hr
   obtain ⟨ps, hcp, _⟩ := (reach_inv hP hPc hSp hG ht hs hsc hv hr).1
   obtain ⟨a, ha⟩ := part_of hcp.len hi
   obtain ⟨hto, _⟩ := hcp.ok i th a hi ha
-  have hrf : RF (C.view th) th.s := RF.congr (m := ownView C th a) (m' := C.view th) rfl rfl
-    (TypedAt.of_threadOK hto).rf
   obtain ⟨Γ, F, Δ, hth, hinv, _⟩ := hto
   obtain ⟨Γ', F', Δ', ht', hinv'⟩ := hK.typed Γ F Δ hth hinv
-  have hk : (C.view th).blk k = some ⟨u, .lock, none⟩ :=
-    reach_frame_checked_out hP hPc hSp hG ht hs hsc hv hr hi hK (dtorFree_of_holdsDtor hd)
-  obtain ⟨m1, hb, hres⟩ := scopeL_typed_panic_of (m := C.view th) ht' hinv' rfl hd hna hvf h
+  have hk : CheckedOut (C.view th) k u := reach_frame_checked_out hP hPc hSp hG ht hs hsc hv hr hi hK
+  obtain ⟨m1, hb, hres⟩ := scopeL_typed_panic_of (m := C.view th) ht' hinv' rfl rfl hnc h
   -- the body's unwinding leaves the block checked out: the frame is its only one
-  have hk1 : m1.blk k = some ⟨u, .lock, none⟩ := by
-    have hout : Out (C.view th) k := .inr ⟨u, hk, dtorFree_of_holdsDtor hd⟩
-    rcases Step.stay hb (hK.rf hrf) hout with h1 | ⟨hkb, _, _⟩
-    · exact h1.trans hk
+  have hk1 : CheckedOut m1 k u := by
+    have hout : Out (C.view th) k := .inr ⟨u, hk⟩
+    have htk : m1.taken k = (C.view th).taken k := Step.taken_stay hb hout
+    rcases Step.stay hb hout with h1 | ⟨hkb, _, _⟩
+    · exact ⟨h1.trans hk.1, htk.trans hk.2⟩
     · have h2 := hK.count_two rfl hkb
-      rw [hl.nd i th hi k u (hK.lfr_mem rfl) (dtorFree_of_holdsDtor hd)] at h2
+      rw [hl.nd i th hi k u (hK.lfr_mem rfl)] at h2
       omega
   refine ⟨m1, hb, ?_⟩
-  rcases hres with ⟨v, hx, hw, hput⟩ | hnone
-  · exact .inl ⟨v, hx, hw, hput hk1⟩
+  rcases hres with ⟨o, v, hx, hw, ho, hput⟩ | hnone
+  · exact .inl ⟨o, v, hx, hw, ho, hput hk1⟩
   · exact .inr hnone
+
+/-- **Agora #837, the give-back's crossing check in a reached
+    configuration**: at a frame's end, what `x` holds passes `GiveCheck` for
+    every payload type that holds no cell share, so `Step.scopeLFail` never
+    fires there; and at every panic point of the body, for a destructor
+    payload (which holds no cell share, `Ty.lkPay`), whatever `x`'s slot
+    holds passes it once the block is checked out (`Step.scopeLPD`'s
+    premise).  No lock payload holds a read guard (`Ty.ok`, `% NotSend`),
+    so the value reaches no view (`LockDtorWitness.noGuard_of_free`). -/
+theorem reach_scopeL_giveCheck (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn)
+    (hG : GlobsOK P G) (ht : StmtT P (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
+    (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
+    {i : Nat} {th : Thread} {K : Stmt → Stmt} {k : Nat} {u : Ty} {x : Var} {b : Stmt}
+    (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x b)) :
+    (b = .skip → u.hasCell = false → ∀ sl, th.st x = some sl → GiveCheck (C.view th) x sl) ∧
+      (∀ m1, Step P (C.view th) b (.panic m1) → CheckedOut m1 k u → u.dtorFree = false →
+        ∀ sl, m1.st x = some sl → GiveCheck m1 x sl) := by
+  obtain ⟨ps, hcp, _⟩ := (reach_inv hP hPc hSp hG ht hs hsc hv hr).1
+  obtain ⟨a, ha⟩ := part_of hcp.len hi
+  obtain ⟨hto, _⟩ := hcp.ok i th a hi ha
+  obtain ⟨Γ, F, Δ, hth, hinv, _⟩ := hto
+  obtain ⟨Γ', F', Δ', ht', hinv'⟩ := hK.typed Γ F Δ hth hinv
+  have hk : CheckedOut (C.view th) k u := reach_frame_checked_out hP hPc hSp hG ht hs hsc hv hr hi hK
+  refine ⟨fun hb hnc sl hsl => ?_, fun m1 hb hk1 hd sl hsl =>
+    LockDtorWitness.scopeL_typed_panic_giveCheck (m := C.view th) ht' hinv' rfl rfl hb hk1 hd hsl⟩
+  subst hb
+  exact LockDtorWitness.scopeL_typed_end_giveCheck ht' hinv'.toMInv hnc hk hsl
+
+/-- **Agora #837: `Step.scopeLPD` never fires in a reached configuration**:
+    no step of a frame `scopeL k u x b` a run reaches hands `x` to a
+    destructor frame after a failing give-back (the defensive rule's result
+    `.seq (.scopeD x f .skip) .panic`; `LockDtorWitness.scopeL_typed_no_scopeLPD`). -/
+theorem reach_no_scopeLPD (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn)
+    (hG : GlobsOK P G) (ht : StmtT P (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
+    (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
+    {i : Nat} {th : Thread} {K : Stmt → Stmt} {k : Nat} {u : Ty} {x : Var} {b : Stmt}
+    (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x b))
+    {r : Res} (h : Step P (C.view th) (.scopeL k u x b) r) (m1 : Mem) (f : Nat) :
+    r ≠ .ok m1 (.seq (.scopeD x f .skip) .panic) := by
+  obtain ⟨ps, hcp, _⟩ := (reach_inv hP hPc hSp hG ht hs hsc hv hr).1
+  obtain ⟨a, ha⟩ := part_of hcp.len hi
+  obtain ⟨hto, _⟩ := hcp.ok i th a hi ha
+  obtain ⟨Γ, F, Δ, hth, hinv, _⟩ := hto
+  obtain ⟨Γ', F', Δ', ht', hinv'⟩ := hK.typed Γ F Δ hth hinv
+  exact LockDtorWitness.scopeL_typed_no_scopeLPD (m := C.view th) ht' hinv' rfl rfl h m1 f
 
 theorem _root_.A2.StmtT.rbind_live {P : Prog} {m : Mem} {Γ Δ : Ctx} {F : List Var} {y : Var} {s : Stmt}
     (ht : StmtT P Γ F (.rbind y s) Δ) (hi : MInv m Γ) :

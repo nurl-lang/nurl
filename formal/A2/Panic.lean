@@ -130,14 +130,14 @@ theorem step_release {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch
 theorem Release.heap {m m' : Mem} {k : Nat} {t : Ty} {x : Var} (h : Release m k t x m') (hh : HeapOK m) :
     HeapOK m' := by
   cases h with
-  | put hsl hg hk => exact hh.release_put hsl hg hk
-  | drop _ hsl hd => exact hh.remove hsl hd
+  | put hsl hg hk => exact hh.release_put hsl hg hk.1
+  | drop _ _ hsl hd => exact hh.remove hsl hd
 
 theorem Release.covers {m m' : Mem} {k : Nat} {t : Ty} {x : Var} (h : Release m k t x m') (hc : Covers m) :
     Covers m' := by
   cases h with
-  | put hsl _ hk => exact covers_release_put hc hsl hk
-  | drop _ hsl hd => exact covers_remove hc hsl hd
+  | put hsl _ hk => exact covers_release_put hc hsl hk.1
+  | drop _ _ hsl hd => exact covers_remove hc hsl hd
 
 theorem Release.st {m m' : Mem} {k : Nat} {t : Ty} {x : Var} (h : Release m k t x m') : m'.st = upd m.st x none := by
   cases h <;> rfl
@@ -149,22 +149,26 @@ theorem Release.nid {m m' : Mem} {k : Nat} {t : Ty} {x : Var} (h : Release m k t
   cases h <;> rfl
 
 /-- A lock scope's end, on the normal path or a panic's, always has a step:
-    the payload goes back, or `x`'s slot is dropped. -/
+    the payload goes back, or `x`'s slot is dropped; but (Agora #803) a
+    destructor payload of a checked-out block that fails the crossing check,
+    which goes to a destructor frame (`Step.scopeLPD`). -/
 theorem Release.exists {m : Mem} {k : Nat} {t : Ty} {x : Var} {sl : Slot} {a' : Nat → Bool}
-    (hsl : m.st x = some sl) (hd : DropSlot m.alloc sl a') : ∃ m', Release m k t x m' := by
-  by_cases hput : m.blk k = some ⟨t, .lock, none⟩ ∧ Giveable m.blk t sl ∧ GiveCheck m x sl
+    (hsl : m.st x = some sl) (hd : DropSlot m.alloc sl a')
+    (hgc : CheckedOut m k t → ∀ n f u, t = Ty.nest n (.dtor f u) → GiveCheck m x sl) :
+    ∃ m', Release m k t x m' := by
+  by_cases hput : CheckedOut m k t ∧ Giveable m.blk t sl ∧ GiveCheck m x sl
   · obtain ⟨hkb, hg, hck⟩ := hput
     obtain ⟨o, w⟩ := sl
     cases w with
     | none => cases o <;> simp [Giveable] at hg
     | some v => exact ⟨_, Release.put hsl hg hkb hck⟩
-  · have hc : m.blk k ≠ some ⟨t, .lock, none⟩ ∨ ¬ Giveable m.blk t sl ∨ ¬ GiveCheck m x sl := by
-      by_cases h1 : m.blk k = some ⟨t, .lock, none⟩
+  · have hc : ¬ CheckedOut m k t ∨ ¬ Giveable m.blk t sl ∨ ¬ GiveCheck m x sl := by
+      by_cases h1 : CheckedOut m k t
       · by_cases h2 : Giveable m.blk t sl
         · exact Or.inr (Or.inr fun h3 => hput ⟨h1, h2, h3⟩)
         · exact Or.inr (Or.inl h2)
       · exact Or.inl h1
-    exact ⟨_, Release.drop hc hsl hd⟩
+    exact ⟨_, Release.drop hc hgc hsl hd⟩
 
 /-- A3.3: what a panic's unwinding leaves of the blocks: each as it was, or
     a lock block given back a payload of its type (`Release.put` on the way
@@ -212,10 +216,10 @@ theorem Release.back {m m' : Mem} {k : Nat} {t : Ty} {x : Var} (h : Release m k 
     BlkBack m.blk m'.blk := by
   cases h with
   | put _ hg hk =>
-    refine ⟨BlkLe.setLock hk _, fun k' bl hk' => ?_⟩
+    refine ⟨BlkLe.setLock hk.1 _, fun k' bl hk' => ?_⟩
     by_cases he : k' = k
     · subst he; simp [upd] at hk'; subst hk'
-      exact .inr ⟨t, _, rfl, hk, hg.wfv, hg.shares.grow (BlkLe.setLock hk _)⟩
+      exact .inr ⟨t, _, rfl, hk.1, hg.wfv, hg.shares.grow (BlkLe.setLock hk.1 _)⟩
     · exact .inl (by simpa [upd, he] using hk')
   | drop _ _ _ => exact BlkBack.refl _
 

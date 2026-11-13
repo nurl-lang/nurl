@@ -1,0 +1,3 @@
+### Fixed
+
+- **A binding of a name already bound no longer inherits what the outer one is** (Agora #820). `: ~ String s …` inside `@ f inout String s` was taken for the caller's slot, and `= s …` on it released the old value twice (heap-use-after-free). `: String s …` under a `: ~ String s` could be assigned. The facts keyed by a name that say what a binding is (an `inout` or `sink` parameter, a capture by reference, a global, mutable, a borrow) are reset for a new `:` binding, a `~` loop element and a payload. An assignment to such an immutable inner binding is now refused, as it is for any immutable binding. gen_assign reads what its target is before the right-hand side, whose value block may bind a local of the target's name.

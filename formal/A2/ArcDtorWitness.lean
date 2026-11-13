@@ -61,7 +61,7 @@ theorem main_typed : ∃ Δ, StmtT P (fun _ => none) [] main Δ := by
   have hnew : RhsT K3 [] (.arcNew DT 2) ES K3' := by
     have h := RhsT.arcNew (Γ := K3) (F := []) (t := DT) (y := 2) (Ey := ED) hK3d
       (by simp [ED, Entry.arm, EP]) (by simp [ED, Entry.arm]) (Or.inr rfl)
-      ⟨by simp [DT, T, Ty.holdsView], by simp [DT, T, Ty.hasFn]⟩ (by simp [DT, T, Ty.hasCell])
+      ⟨by simp [DT, T, Ty.holdsView], by simp [DT, T, Ty.hasFn]⟩ (by simp [DT, T, Ty.hasCell]) (by simp [DT, T, Ty.hasGuard])
       (PushArg.move (by simp [DT, T, Ty.owning]) (by simp [ED, Entry.arm, EP]) (by simp)
         (hK3.noPin 2) (DtorSafe.of_none (fun v E h => (hK3 v E h).2.1) _ _ _))
     rw [hkill] at h; exact h
@@ -214,7 +214,7 @@ theorem mainV_typed : ∃ Δ, StmtT P (fun _ => none) [] mainV Δ := by
   have hK63 : K6 3 = some E3 := by simp [K6, A2.setE]
   have hnewA : RhsT K6 [] (.arcNew (.vec DT) 3) ESV K7 :=
     RhsT.arcNew hK63 (by rw [hE3e]) (by rw [hE3e]) (Or.inr rfl)
-      ⟨by simp [DT, T, Ty.holdsView], by simp [DT, T, Ty.hasFn]⟩ (by simp [DT, T, Ty.hasCell]) hmove2
+      ⟨by simp [DT, T, Ty.holdsView], by simp [DT, T, Ty.hasFn]⟩ (by simp [DT, T, Ty.hasCell]) (by simp [DT, T, Ty.hasGuard]) hmove2
   let K8 : Ctx := A2.setE K7 4 ESV
   have hK8 : NoRootb K8 := hK7.setE ESV_flags
   -- `arc_clone s`

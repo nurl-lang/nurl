@@ -38,16 +38,18 @@ structure Cfg where
   blk   : Nat → Option Blk   -- A3.1: the counted blocks, shared by every thread
   gl    : Nat → Option Val     -- A3.6: the module globals set at start, which every thread reads
   ths   : List Thread
+  taken : Nat → Bool           -- Agora #810: which lock blocks `locked_take` emptied (`Mem.taken`)
 
 /-- What A2's step runs on for thread `t`: the shared address space, the
     thread's own bindings. -/
 def Cfg.view (C : Cfg) (t : Thread) : Mem :=
-  { alloc := C.alloc, nid := C.nid, nv := t.nv, st := t.st, blk := C.blk, gl := C.gl }
+  { alloc := C.alloc, nid := C.nid, nv := t.nv, st := t.st, blk := C.blk, gl := C.gl, taken := C.taken }
 
 /-- Thread `i`'s step written back: the address space to the configuration,
     the bindings and the statement to the thread. -/
 def Cfg.put (C : Cfg) (i : Nat) (m : Mem) (s : Stmt) : Cfg :=
-  { alloc := m.alloc, nid := m.nid, blk := m.blk, gl := m.gl, ths := C.ths.set i ⟨m.st, m.nv, s⟩ }
+  { alloc := m.alloc, nid := m.nid, blk := m.blk, gl := m.gl, ths := C.ths.set i ⟨m.st, m.nv, s⟩,
+    taken := m.taken }
 
 /-- A3.1: the values the threads' slots hold. -/
 def Cfg.vals (C : Cfg) (v : Val) : Prop :=
@@ -96,7 +98,7 @@ inductive CSettle (P : Prog) (i : Nat) : Cfg → Cfg → Prop
 /-- A program run from the empty store, on one thread (A2's `emptyMem`). -/
 def Cfg.init (s : Stmt) (nv : Nat) : Cfg :=
   { alloc := fun _ => false, nid := 0, blk := fun _ => none, gl := fun _ => none,
-    ths := [⟨fun _ => none, nv, s⟩] }
+    ths := [⟨fun _ => none, nv, s⟩], taken := fun _ => false }
 
 /-- **A3.6: the module globals set at start**, as `main` finds them: the
     store their `make`s left — the blocks they built, the addresses those
@@ -109,18 +111,20 @@ structure Globs where
   nid   : Nat
   blk   : Nat → Option Blk
   gl    : Nat → Option Val
+  taken : Nat → Bool   -- Agora #810: which lock blocks the `make`s left taken (`Mem.taken`)
 
 /-- No global: A3.0–A3.5's start. -/
-def Globs.empty : Globs := ⟨fun _ => false, 0, fun _ => none, fun _ => none⟩
+def Globs.empty : Globs := ⟨fun _ => false, 0, fun _ => none, fun _ => none, fun _ => false⟩
 
 /-- The store the globals' `make`s left, with no binding. -/
-def Globs.mem (G : Globs) (nv : Nat) : Mem := ⟨G.alloc, G.nid, nv, fun _ => none, G.blk, G.gl⟩
+def Globs.mem (G : Globs) (nv : Nat) : Mem := ⟨G.alloc, G.nid, nv, fun _ => none, G.blk, G.gl, G.taken⟩
 
 /-- A3.6: a program run with its module globals set, on one thread, which
     (as every thread it spawns) reads them through the configuration
     (`Cfg.gl`, `Cfg.view`). -/
 def Cfg.start (G : Globs) (s : Stmt) (nv : Nat) : Cfg :=
-  { alloc := G.alloc, nid := G.nid, blk := G.blk, gl := G.gl, ths := [⟨fun _ => none, nv, s⟩] }
+  { alloc := G.alloc, nid := G.nid, blk := G.blk, gl := G.gl, ths := [⟨fun _ => none, nv, s⟩],
+    taken := G.taken }
 
 /-- With no global, the start is A3.0's. -/
 theorem Cfg.init_start (s : Stmt) (nv : Nat) : Cfg.init s nv = Cfg.start Globs.empty s nv := rfl
@@ -193,22 +197,24 @@ theorem lk_sync {t : Ty} : (Ty.lk t).hasCell = false := rfl
     `RwLocked PNCounter`). -/
 theorem lk_cell_ok {t : Ty} (h : (Ty.cell t).ok = true) : (Ty.lk (.cell t)).ok = true := by
   have hp := Ty.ok_cell_pay h
+  have hg := Ty.ok_cell_guard h
   simp only [Ty.lkPay] at hp
-  simp [Ty.ok, (Ty.ok_cell h).1, (Ty.ok_cell h).2, Ty.lkPay, Ty.dtorFree, Ty.holdsView, hp]
+  simp [Ty.ok, (Ty.ok_cell h).1, (Ty.ok_cell h).2, Ty.lkPay, Ty.dtorFree, Ty.holdsView, Ty.hasGuard, hp, hg]
 
 /-- ... and so may a cell's state, which is a lock's payload (a handle that
     keeps another handle in its state, A3.5's second cut). -/
 theorem cell_cell_ok {t : Ty} (h : (Ty.cell t).ok = true) : (Ty.cell (.cell t)).ok = true := by
   have hp := Ty.ok_cell_pay h
+  have hg := Ty.ok_cell_guard h
   simp only [Ty.lkPay] at hp
-  simp [Ty.ok, (Ty.ok_cell h).1, (Ty.ok_cell h).2, Ty.lkPay, Ty.dtorFree, Ty.holdsView, hp]
+  simp [Ty.ok, (Ty.ok_cell h).1, (Ty.ok_cell h).2, Ty.lkPay, Ty.dtorFree, Ty.holdsView, Ty.hasGuard, hp, hg]
 
 /-- ... which `locked_new` takes (a library handle is Send). -/
 theorem lockNew_cell {Γ Γ1 : Ctx} {F : List Var} {t : Ty} {y : Var} {Ey : Entry} {D : List Dep}
     (hy : Γ y = some Ey) (hl : Ey.live = true) (hty : Ey.ty = .cell t) (hvf : t.holdsView = false)
-    (hfn : t.hasFn = false) (hpa : PushArg Γ F y Ey (.cell t) D Γ1) :
+    (hfn : t.hasFn = false) (hng : t.hasGuard = false) (hpa : PushArg Γ F y Ey (.cell t) D Γ1) :
     RhsT Γ F (.lockNew (.cell t) y) ⟨.lk (.cell t), .own, true, [], [], false, false⟩ Γ1 :=
-  RhsT.lockNew hy hl hty rfl ⟨hvf, hfn⟩ hpa
+  RhsT.lockNew hy hl hty rfl ⟨hvf, hfn⟩ hng hpa
 
 /-- ... but an `RwLocked`'s read guard asks the Sync question of its value
     (h357, `rwlocked_of_a_library_handle_on_two_threads`): readers would hold
@@ -225,7 +231,7 @@ taken out of a `Locked` and restored in a loop, was left in the lock's slot
 by `locked_take`, and the restore dropped what the slot held, which was the
 value handed back.  In the model the take moves the payload out and the
 block holds nothing (`EvalR.lockTake`: the runtime's zero bytes and its
-`taken` flag), so the restore finds nothing to drop: it moves the value in,
+lock word `TAKEN`, `Mem.taken`), so the restore finds nothing to drop: it moves the value in,
 freeing no address (`EvalR.lockRestore`).  The option's `Arc` is kept alive
 by the lock's payload while it is in (`Blk.keeps`) and by the taker's slot
 while it is out. -/
@@ -248,6 +254,31 @@ theorem lockRestore_frees_nothing {m m' : Mem} {a y : Var} {v : Val} {o : Bool}
     have ha := TakeVal.alloc h1
     exact ⟨ha, k, t, w, by rw [← TakeVal.blk h1]; exact hk, by simp [upd]⟩
 
+/-- Agora #810: **a restore fills only a taken block**: on a lock block whose
+    payload a `withLock` has checked out (`CheckedOut`: out, not taken)
+    `locked_restore` panics (`EvalR.lockRestoreHeld`) and has no other
+    result, as `nurl_lk_restore_begin` refuses a lock word that is `HELD`,
+    not `TAKEN` ("the value was not taken"); so a restore never refills a
+    block another frame holds (`A3.reach_lock_excl`). -/
+theorem lockRestore_checked_out {m : Mem} {a y : Var} {o : Bool} {k : Nat} {t : Ty}
+    (ha : m.st a = some ⟨o, some (.lk k)⟩) (hk : CheckedOut m k t) :
+    EvalR m (.lockRestore a y) .panic ∧ ∀ v o' m', ¬ EvalR m (.lockRestore a y) (.ok v o' m') := by
+  refine ⟨EvalR.lockRestoreHeld ha hk.1 hk.2, fun v o' m' h => ?_⟩
+  cases h with
+  | lockRestore ha' h1 _ htk _ =>
+    rw [ha] at ha'; cases ha'
+    rw [TakeVal.taken h1, hk.2] at htk; cases htk
+
+/-- ... and on one whose payload is in it panics too (`EvalR.lockRestoreP`). -/
+theorem lockRestore_present {m : Mem} {a y : Var} {o : Bool} {k : Nat} {t : Ty} {p : Val}
+    (ha : m.st a = some ⟨o, some (.lk k)⟩) (hk : m.blk k = some ⟨t, .lock, some p⟩) :
+    EvalR m (.lockRestore a y) .panic ∧ ∀ v o' m', ¬ EvalR m (.lockRestore a y) (.ok v o' m') := by
+  refine ⟨EvalR.lockRestoreP ha hk, fun v o' m' h => ?_⟩
+  cases h with
+  | lockRestore ha' h1 h0 _ _ =>
+    rw [ha] at ha'; cases ha'
+    rw [TakeVal.blk h1, hk] at h0; cases h0
+
 /-! ### A3.3's rest: `rw_try_read`, `rw_try_write`, `wguard_get`, `rw_get`
 
 `rw_try_read` and `rw_try_write` answer an option where `rw_read` and the
@@ -256,13 +287,14 @@ is the write scope's `x` lent: A2's borrow, through which the payload's
 containers change, as the borrow of an owner does.  `rw_get` is a read scope
 whose body hands the payload to `mem_dup` (`DupFn`) and moves the copy out. -/
 
-/-- A3.3: a read guard's entry, `rw_read`'s: an owned `arc` share of the view
+/-- A3.3: a read guard's entry, `rw_read`'s: an owned read guard (Agora #837:
+    of type `rguard t`; before, `arc (prod (lk t) t)`), a share of the view
     of a lock block of `t`, holding nothing. -/
-def guardE (t : Ty) : Entry := ⟨.arc (.prod (.lk t) t), .own, true, [], [], false, false⟩
+def guardE (t : Ty) : Entry := ⟨.rguard t, .own, true, [], [], false, false⟩
 
 /-- A3.3: `rw_try_read`'s answer: an owned option of a read guard, holding
     nothing. -/
-def tryReadE (t : Ty) : Entry := ⟨.sum .int (.arc (.prod (.lk t) t)), .own, true, [], [], false, false⟩
+def tryReadE (t : Ty) : Entry := ⟨.sum .int (.rguard t), .own, true, [], [], false, false⟩
 
 /-- `rw_try_read`'s `some`, matched by value, is `rw_read`'s guard: what
     `withRead` binds, so its read scope (`rguard_get_path`'s frozen lend,
@@ -271,8 +303,8 @@ theorem tryRead_some {Γ : Ctx} {F : List Var} {o : Var} {t : Ty} (ho : Γ o = s
     (hoF : o ∉ F) (hpin : NoPin Γ o) (hds : DtorSafe Γ .replace false o) :
     RhsT Γ F (.taker o) (guardE t)
       (setE (kill .replace false o Γ) o { tryReadE t with live := false, dtor := false }) := by
-  have h := RhsT.taker (F := F) (a := .int) (b := .arc (.prod (.lk t) t)) ho rfl rfl (Or.inl rfl) hoF hpin hds
-  have he : compE (tryReadE t) (.arc (.prod (.lk t) t)) = guardE t := by
+  have h := RhsT.taker (F := F) (a := .int) (b := .rguard t) ho rfl rfl (Or.inl rfl) hoF hpin hds
+  have he : compE (tryReadE t) (.rguard t) = guardE t := by
     simp [compE, ownHeld, tryReadE, guardE]
   rw [he] at h
   exact h
@@ -282,7 +314,7 @@ theorem tryRead_some {Γ : Ctx} {F : List Var} {o : Var} {t : Ty} (ho : Γ o = s
     (`tryRead_some`); the option's scope ends after both. -/
 theorem _root_.A2.StmtT.withTryRead {P : Prog} {Γ Δs : Ctx} {F : List Var} {a o g y x : Var} {s e : Stmt}
     {Ea : Entry} {t : Ty} (hs : s.src = true) (he : e.src = true) (ho : Γ o = none) (hoF : o ∉ F)
-    (ha : Γ a = some Ea) (hla : Ea.live = true) (hta : Ea.ty = .lk t) (hnc : t.hasCell = false) (hdf : t.dtorFree = true)
+    (ha : Γ a = some Ea) (hla : Ea.live = true) (hta : Ea.ty = .lk t) (hnc : t.hasCell = false)
     (hg : Γ g = none) (hgo : g ≠ o)
     (hgF : g ∉ F) (hpin : NoPin (setE Γ o (tryReadE t)) o)
     (hds : DtorSafe (setE Γ o (tryReadE t)) .replace false o)
@@ -293,7 +325,7 @@ theorem _root_.A2.StmtT.withTryRead {P : Prog} {Γ Δs : Ctx} {F : List Var} {a 
     (hendo : EndOK (exitScope g Δs) o) :
     StmtT P Γ F (Stmt.withTryRead a o g y x s e) (exitScope o (exitScope g Δs)) := by
   have hgo' : (setE Γ o (tryReadE t)) g = none := by simp [setE, upd_ne _ _ hgo, hg]
-  refine StmtT.letv (by simp [Stmt.src, Stmt.readWith, hs, he]) ho hoF (RhsT.rwTryRead ha hla hta hnc hdf) ?_ hendo
+  refine StmtT.letv (by simp [Stmt.src, Stmt.readWith, hs, he]) ho hoF (RhsT.rwTryRead ha hla hta hnc) ?_ hendo
   refine StmtT.ite he (by simp [Stmt.src, Stmt.readWith, hs]) (ExprT.isl (upd_same _ _ _) rfl rfl) hnone ?_
   exact StmtT.letv (by simp [Stmt.readWith, Stmt.src, hs]) hgo' hgF
     (tryRead_some (upd_same _ _ _) hoF hpin hds) hsome hendg
@@ -579,7 +611,7 @@ theorem guardSnd_live (g y : Var) (t : Ty) : (projE y (guardGetE g t) t).live = 
 theorem _root_.A2.StmtT.rwGet {P : Prog} {Γ : Ctx} {F : List Var} {a g y x c z : Var} {f : Nat} {fn : Fn}
     {Ea Ez : Entry} {t : Ty} (hd : DupFn P f t) (hf : P[f]? = some fn)
     (ha : Γ a = some Ea) (hla : Ea.live = true) (hta : Ea.ty = .lk t) (htv : t.holdsView = false)
-    (hnc : t.hasCell = false) (hdf : t.dtorFree = true)
+    (hnc : t.hasCell = false)
     (hg : Γ g = none) (hy : Γ y = none) (hx : Γ x = none) (hc : Γ c = none)
     (hgy : g ≠ y) (hgx : g ≠ x) (hgc : g ≠ c) (hyx : y ≠ x) (hyc : y ≠ c) (hxc : x ≠ c)
     (hgF : g ∉ F) (hyF : y ∉ F) (hxF : x ∉ F) (hcF : c ∉ F)
@@ -643,13 +675,13 @@ theorem _root_.A2.StmtT.rwGet {P : Prog} {Γ : Ctx} {F : List Var} {a g y x c z 
       (A2.setE (A2.kill .replace false z Γ1) z (outE t Ez.mode)) := by
     rw [← exitScope_out h1y hu1y hzy.symm (by simp) .replace false]
     refine StmtT.letv rfl h1y hyF
-      (RhsT.arcGet (show Γ1 g = some (guardE t) from upd_same _ _ _) rfl rfl hfv hff) ?_ (Unnamed.endOK ?_)
+      (RhsT.arcGet (show Γ1 g = some (guardE t) from upd_same _ _ _) rfl (Or.inr ⟨t, rfl, rfl⟩) hfv hff) ?_ (Unnamed.endOK ?_)
     · rw [guardGet_eq]; exact h3
     · exact ((hu1y.setE (fun d hd' => by rw [hgv d hd']; exact hgy)).kill' _ _ _).setE_nil (by simp)
   -- the guard's scope
   show StmtT P Γ F (.letv g (.rwRead a) (Stmt.readWith g y x (Stmt.callOut x c z f))) _
   rw [← exitScope_out hg hug hzg.symm (by simp) .replace false]
-  exact StmtT.letv rfl hg hgF (RhsT.rwRead ha hla hta hnc hdf) h2
+  exact StmtT.letv rfl hg hgF (RhsT.rwRead ha hla hta hnc) h2
     (Unnamed.endOK (((hug.setE_nil hgE).kill' _ _ _).setE_nil (by simp)))
 
 /-- A binding set to what it holds is as it was. -/
@@ -859,7 +891,7 @@ theorem _root_.A2.StmtT.lockedSet {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {a b 
     (ha : Γ a = some Ea) (hla : Ea.live = true) (hta : Ea.lockOf t) (hroot : Ea.mode.isRoot = true)
     (hay : ∀ d ∈ Ea.vdeps, d.root ≠ y)
     (hy : Γ y = some Ey) (hly : Ey.live = true) (hty : Ey.ty = t) (htv : t.holdsView = false ∧ t.hasFn = false)
-    (hvd : t.dtorFree = true)
+    (hvd : t.dtorFree = true) (hng : t.hasGuard = false)
     (hpush : PushArg Γ F y Ey t D Γ1)
     (hb : Γ b = none) (hx : Γ x = none) (hbx : b ≠ x) (hbF : b ∉ F) (hxF : x ∉ F)
     (hub : Unnamed Γ b) (hux : Unnamed Γ x) :
@@ -903,7 +935,7 @@ theorem _root_.A2.StmtT.lockedSet {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {a b 
     (fun hd => absurd hd (by rw [Ty.holdsDtor_eq_not_free, hvd]; simp))
   rw [exitScope_setE hbx' hux'] at hwl
   have hlet := StmtT.letv (P := P) (x := b) (s := .withLock a x (.assign x (.lockTake b))) rfl hb hbF
-    (RhsT.lockNew hy hly hty (Ty.lkPay_of_free hvd) htv hpush) hwl ((hu1b.setE_nil hEb).endOK)
+    (RhsT.lockNew hy hly hty (Ty.lkPay_of_free hvd) htv hng hpush) hwl ((hu1b.setE_nil hEb).endOK)
   rw [exitScope_setE h1b hu1b] at hlet
   exact hlet
 
@@ -983,7 +1015,7 @@ theorem mutex_owns_nothing {o : Option Val} (ho : o = none ∨ ∃ n, o = some (
 theorem _root_.A2.RhsT.mutexNew {Γ : Ctx} {F : List Var} {y : Var} {Ey : Entry}
     (hy : Γ y = some Ey) (hly : Ey.live = true) (hty : Ey.ty = .int) :
     RhsT Γ F (Rhs.mutexNew y) ⟨.lk .int, .own, true, [], [], false, false⟩ Γ :=
-  RhsT.lockNew hy hly hty rfl ⟨rfl, rfl⟩ PushArg.int
+  RhsT.lockNew hy hly hty rfl ⟨rfl, rfl⟩ rfl PushArg.int
 
 /-- **`mutex_lock` is typed**: the integer taken out of the lock (`lockTake`),
     an integer binding for what follows; every other `mutex_lock` waits until
@@ -1003,7 +1035,7 @@ theorem _root_.A2.StmtT.mutexUnlock {P : Prog} {Γ Δ : Ctx} {F : List Var} {r m
     (hu : Γ u = some Eu) (hlu : Eu.live = true) (htu : Eu.ty = .int)
     (hr : Γ r = none) (hrF : r ∉ F) (hb : StmtT P (A2.setE Γ r intE) F s Δ) (hend : EndOK Δ r) :
     StmtT P Γ F (Stmt.mutexUnlock r m u s) (exitScope r Δ) :=
-  StmtT.letv hs hr hrF (RhsT.lockRestore hm hlm htm hu hlu htu PushArg.int rfl) hb hend
+  StmtT.letv hs hr hrF (RhsT.lockRestore hm hlm htm hu hlu htu PushArg.int) hb hend
 
 /-- **`mutex_with` is typed**: A3.2's `withLock` on the integer lock, with its
     faithfulness premises (the mutex outlives the body: the runtime unlocks it
@@ -1378,7 +1410,7 @@ theorem pack_names_any {Γ Γ1 : Ctx} {F : List Var} {fs : List Nat} {te : Ty} {
     thread that reaches it) ... -/
 theorem arcNew_not_any {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {y : Var} {E : Entry} :
     ¬ RhsT Γ F (.arcNew (.fn ms .any) y) E Γ1 := fun h => by
-  cases h with | arcNew _ _ _ _ hp _ _ => exact absurd hp.1 (by simp [Ty.holdsView])
+  cases h with | arcNew _ _ _ _ hp _ _ _ => exact absurd hp.1 (by simp [Ty.holdsView])
 
 /-- ... and no spawn takes: a thread's body may run it only on the thread
     that captured the binding.  (A closure's own code is handed its
@@ -1437,7 +1469,7 @@ theorem arcNew_fn {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {q : Cross} {y :
     panics if an owner of it is left behind (`chanSend_kept`) ... -/
 theorem chan_fn {ms : List Nat} {q : Cross} :
     (Ty.lk (.prod (.vec (.fn ms q)) .int)).ok = true ↔ q = .send ∨ q = .sync ∨ q = .bare := by
-  cases q <;> simp [Ty.ok, Ty.holdsView, Ty.dtorFree, Ty.hasDtor, Ty.lkPay, Ty.hasArc, Ty.dnest]
+  cases q <;> simp [Ty.ok, Ty.holdsView, Ty.dtorFree, Ty.hasDtor, Ty.lkPay, Ty.hasArc, Ty.dnest, Ty.hasGuard]
 
 /-- ... and so is one a lock keeps (A3.2), which one thread at a time runs. -/
 theorem lockNew_fn {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {q : Cross} {y : Var} {E : Entry}
@@ -1451,7 +1483,7 @@ theorem lockNew_send {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {y : Var} {Ey
     (hy : Γ y = some Ey) (hl : Ey.live = true) (hty : Ey.ty = .fn ms .send)
     (hpa : PushArg Γ F y Ey (.fn ms .send) D Γ1) :
     RhsT Γ F (.lockNew (.fn ms .send) y) ⟨.lk (.fn ms .send), .own, true, [], [], false, false⟩ Γ1 :=
-  RhsT.lockNew hy hl hty rfl ⟨rfl, rfl⟩ hpa
+  RhsT.lockNew hy hl hty rfl ⟨rfl, rfl⟩ rfl hpa
 
 /-- ... and a channel's element: `chan_send` sends it. -/
 theorem chanSend_send {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {a y : Var} {Ea Ey : Entry} {D : List Dep}
@@ -1475,14 +1507,14 @@ theorem arcNew_sync {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {y : Var} {Ey 
     (hy : Γ y = some Ey) (hl : Ey.live = true) (hty : Ey.ty = .fn ms .sync)
     (hpa : PushArg Γ F y Ey (.fn ms .sync) D Γ1) :
     RhsT Γ F (.arcNew (.fn ms .sync) y) ⟨.arc (.fn ms .sync), .own, true, [], [], false, false⟩ Γ1 :=
-  RhsT.arcNew hy hl hty (Or.inl rfl) ⟨rfl, rfl⟩ rfl hpa
+  RhsT.arcNew hy hl hty (Or.inl rfl) ⟨rfl, rfl⟩ rfl rfl hpa
 
 /-- ... `arc_get` lends it, through a share of the `Arc` (`getE`): a borrow
     every change through which is refused (`ThruOK.noShare`, `canDo`) ... -/
 theorem arcGet_sync {Γ : Ctx} {F : List Var} {a : Var} {Ea : Entry} {ms : List Nat}
     (ha : Γ a = some Ea) (hl : Ea.live = true) (hty : Ea.ty = .arc (.fn ms .sync)) :
     RhsT Γ F (.arcGet a) (getE a Ea (.fn ms .sync)) Γ :=
-  RhsT.arcGet ha hl hty rfl rfl
+  RhsT.arcGet ha hl (Or.inl hty) rfl rfl
 
 /-- ... and a call through what it lends is a call like any other: the
     receiver is handed to the method lent (`inp`), and its code reads its
@@ -1693,7 +1725,7 @@ holds, which synchronises itself: an `Atomic` (or a `Locked`) moved in. -/
     block), fits `sync`: a lock share is Sync, so an `Arc` keeps the closure
     and several threads call it ... -/
 theorem accum_sync : Cross.sync.Fits (.lk .int) [] :=
-  ⟨fun _ => ⟨rfl, rfl⟩, fun _ => rfl, fun h => absurd h (by decide), fun _ => rfl⟩
+  ⟨fun _ => ⟨rfl, rfl⟩, fun _ => rfl, fun h => absurd h (by decide), fun _ => rfl, fun _ => rfl⟩
 
 /-- ... and its code counts by one atomic step on the environment it is lent
     (any live `lk int`, a borrowed parameter's too): the change synchronises
@@ -1760,19 +1792,23 @@ theorem TraitBound.fits_none (te : Ty) (cs : List (Var × PMode × Ty)) (hd : te
   Cross.fits_any te cs hd
 
 /-- ... with `: Send`, also that the box holds no view (nothing of the thread
-    that made it) and nothing is captured by name ... -/
+    that made it) and nothing is captured by name, and (Agora #837) no read
+    guard (`% NotSend`) ... -/
 theorem TraitBound.fits_send {te : Ty} {cs : List (Var × PMode × Ty)} :
-    TraitBound.send.cross.Fits te cs ↔ (te.holdsView = false ∧ cs = []) ∧ te.holdsDtor = false :=
-  ⟨fun h => ⟨h.1 rfl, h.2.2.2 rfl⟩,
-    fun h => ⟨fun _ => h.1, fun h' => absurd h' (by decide), fun h' => absurd h' (by decide), fun _ => h.2⟩⟩
+    TraitBound.send.cross.Fits te cs ↔
+      (te.holdsView = false ∧ cs = []) ∧ te.holdsDtor = false ∧ te.hasGuard = false :=
+  ⟨fun h => ⟨h.1 rfl, h.2.2.2.1 rfl, h.2.2.2.2 rfl⟩,
+    fun h => ⟨fun _ => h.1, fun h' => absurd h' (by decide), fun h' => absurd h' (by decide), fun _ => h.2.1,
+      fun _ => h.2.2⟩⟩
 
 /-- ... and with `: Send Sync`, also no library handle (a cell share, A3.5,
     is not Sync). -/
 theorem TraitBound.fits_sendSync {te : Ty} {cs : List (Var × PMode × Ty)} :
     TraitBound.sendSync.cross.Fits te cs ↔
-      ((te.holdsView = false ∧ cs = []) ∧ te.hasCell = false) ∧ te.holdsDtor = false :=
-  ⟨fun h => ⟨⟨h.1 rfl, h.2.1 rfl⟩, h.2.2.2 rfl⟩,
-    fun h => ⟨fun _ => h.1.1, fun _ => h.1.2, fun h' => absurd h' (by decide), fun _ => h.2⟩⟩
+      ((te.holdsView = false ∧ cs = []) ∧ te.hasCell = false) ∧ te.holdsDtor = false ∧ te.hasGuard = false :=
+  ⟨fun h => ⟨⟨h.1 rfl, h.2.1 rfl⟩, h.2.2.2.1 rfl, h.2.2.2.2 rfl⟩,
+    fun h => ⟨fun _ => h.1.1, fun _ => h.1.2, fun h' => absurd h' (by decide), fun _ => h.2.1,
+      fun _ => h.2.2⟩⟩
 
 /-- A call through a package asks its receiver to be a package, `fn ms q`
     (or, Agora #651, a destructor type over one: a closure of the dropping
@@ -1945,11 +1981,12 @@ theorem _root_.A2.WFv.noView_fits {τ : Ty} {v : Val} (hw : WFv τ v) (hhv : τ.
     cases hs with | inr h => exact ih hhv.2 hdf.2 h
   | pkg _ hq ih =>
     obtain ⟨hv, _, hcs⟩ := hq.send hhv
-    have hte := hq.2.2.2 (by simpa using hdf)
+    have hte := hq.2.2.2.1 (by simpa using hdf)
     cases hs with
-    | refl => exact TraitBound.fits_send.mpr ⟨⟨hv, hcs⟩, hte⟩
+    | refl => exact TraitBound.fits_send.mpr ⟨⟨hv, hcs⟩, hte, hq.guard hhv⟩
     | pkg h => exact ih hv (by rw [Ty.holdsDtor_eq_not_free] at hte; simpa using hte) h
   | arc _ _ => cases hs
+  | rguard _ _ => cases hs
   | lk => cases hs
   | cell => cases hs
   | dtor _ _ ih => simp [Ty.dtorFree] at hdf
@@ -2433,7 +2470,7 @@ theorem accum_codes : CodeOK accP [1] accEnv [0] [] := by
     method that changes the count is called only at `send` (a `sync` one is
     moved up first, `RhsT.moveUp`, and is then no `Arc`'s payload). -/
 theorem accum_fits (q : Cross) : q.Fits accEnv [] :=
-  ⟨fun _ => ⟨rfl, rfl⟩, fun _ => rfl, fun _ => rfl, fun _ => rfl⟩
+  ⟨fun _ => ⟨rfl, rfl⟩, fun _ => rfl, fun _ => rfl, fun _ => rfl, fun _ => rfl⟩
 
 /-- **The accumulator, typed through `callcE` on the owned closure**: its owner
     calls it, the environment handed over to the code, which adds one to the
@@ -2837,7 +2874,7 @@ theorem lockRestore_kept {m m1 : Mem} {a y : Var} {v : Val} (ht : TakeVal m y v 
     EvalR m (.lockRestore a y) .panic ∧ ∀ r o' m', ¬ EvalR m (.lockRestore a y) (.ok r o' m') := by
   refine ⟨EvalR.lockRestoreFail ht (not_sendCheck hv hz hw), fun r o' m' h => ?_⟩
   cases h with
-  | lockRestore _ ht' _ hck =>
+  | lockRestore _ ht' _ _ hck =>
     obtain ⟨rfl, rfl⟩ := ht.det ht'
     exact not_sendCheck hv hz hw hck
 
@@ -2860,6 +2897,7 @@ theorem scopeL_end {P : Prog} {m : Mem} {k : Nat} {t : Ty} {x : Var} {r : Res}
   | scopeLFail hx hck => exact .inr ⟨rfl, _, hx, hck⟩
   | scopeLIn hs => cases hs with | reap _ hk _ => exact absurd ⟨_, _, _, _, _, hk⟩ hno
   | scopeLP hs _ => cases hs with | waitPanic hw => cases hw
+  | scopeLPD hs _ _ _ _ => cases hs with | waitPanic hw => cases hw
   | waitPanic hw => cases hw
 
 /-- **A `: Send` trait object fits in a lock** (A3.5c's gap, closed): its type,
@@ -2876,7 +2914,8 @@ theorem lockNew_dyn_send {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {y : Var}
     with a bound (`: Send` or `: Send Sync`), none of one with no bound. -/
 theorem chan_dyn {ms : List Nat} {b : TraitBound} :
     (Ty.lk (.prod (.vec (.fn ms b.cross)) .int)).ok = true ↔ b ≠ .none := by
-  cases b <;> simp [TraitBound.cross, Ty.ok, Ty.holdsView, Ty.lkPay, Ty.dtorFree, Ty.hasDtor, Ty.dnest]
+  cases b <;> simp [TraitBound.cross, Ty.ok, Ty.holdsView, Ty.lkPay, Ty.dtorFree, Ty.hasDtor, Ty.dnest,
+    Ty.hasGuard]
 
 /-- ... the same for a lock's: `locked_new` takes no object of a trait with no
     bound (h344's `%Churn`). -/

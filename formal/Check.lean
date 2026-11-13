@@ -72,24 +72,35 @@ import A3
 -- Agora #755, `Locked D`: a lock's payload that is a destructor value holding no share; the
 -- check-out gives it back at its end and on a panic, and the orphaned lock block is reaped
 -- (A3/LockDtorWitness.lean)
+#print axioms A3.LockDtorWitness.giveable_of
 #print axioms A3.LockDtorWitness.release_puts
 #print axioms A3.LockDtorWitness.scopeL_end_gives_back
 #print axioms A3.LockDtorWitness.scopeL_panic_gives_back
 #print axioms A3.LockDtorWitness.sendCheck_noArc
--- Agora #805: a typed check-out frame of a destructor payload ends with `x` owning a `t`, and at every
--- panic point `x` owns a `t` (given back) or nothing (`StmtT.scopeL` asks `x` an owner, live at the end)
+-- Agora #805, #825: a typed check-out frame, of every payload type, ends with `x` holding a `t` (owned,
+-- or an integer payload's plain integer), and at every panic point `x` holds a `t` (given back) or
+-- nothing (`StmtT.scopeL` asks `x` bound as `withLock` binds it, live at the end)
+#print axioms A3.LockDtorWitness.scopeL_entry
 #print axioms A3.LockDtorWitness.scopeL_end_entry
+#print axioms A3.LockDtorWitness.frame_slot
+#print axioms A3.LockDtorWitness.frame_slot_live
 #print axioms A3.LockDtorWitness.scopeL_end_owns
 #print axioms A3.LockDtorWitness.scopeL_typed_end_gives_back
 #print axioms A3.LockDtorWitness.Step.panic_st
-#print axioms A3.LockDtorWitness.scopeL_entry
+#print axioms A3.LockDtorWitness.release_cases
 #print axioms A3.LockDtorWitness.scopeL_typed_panic
+-- Agora #810: a lock block's payload is taken (`locked_take`, `Mem.taken`) or checked out (a
+-- `withLock`); a restore fills only a taken block, and panics on a checked-out one or a full one
+#print axioms A3.lockRestore_checked_out
+#print axioms A3.lockRestore_present
 -- Agora #808: the check-outs' invariant over every reached configuration (A3/LockExcl.lean): each
--- frame's block a lock block of its type, or gone; a frame of a payload that holds a destructor value
--- has its block checked out and is its only frame (A3.2's mutual exclusion)
+-- frame's block checked out (out, not taken), or gone, and the frame its only one (A3.2's mutual
+-- exclusion); Agora #810: for every payload type
 #print axioms A3.Step.lfr
 #print axioms A3.EvalR.stay
 #print axioms A3.Step.stay
+#print axioms A3.EvalR.taken_stay
+#print axioms A3.Step.taken_stay
 #print axioms A3.LockInv.put
 #print axioms A3.LockInv.settle
 #print axioms A3.LockInv.spawn
@@ -122,14 +133,25 @@ import A3
 #print axioms A3.reach_frame_root_cell_owner
 #print axioms A3.reach_scopeL_end_gives_back
 #print axioms A3.reach_scopeL_panic
-#print axioms A3.LockDtorWitness.rwRead_dtor_refused
-#print axioms A3.LockDtorWitness.lockRestore_dtor_refused
+#print axioms A3.LockDtorWitness.lockRestore_dtor_typed
 #print axioms A3.LockDtorWitness.main_typed
 #print axioms A3.LockDtorWitness.main_safe
 #print axioms A3.LockDtorWitness.main_no_leak
 #print axioms A3.LockDtorWitness.main_no_leak_panic
 #print axioms A3.LockDtorWitness.last_drop_reaps
 #print axioms A3.lockDtor_claim
+-- (A3/RwDtorWitness.lean: Agora #804, `RwLocked D` read through a guard that lends its payload)
+#print axioms A3.RwDtorWitness.rwRead_dtor_typed
+#print axioms A3.RwDtorWitness.rwTryRead_dtor_typed
+#print axioms A3.RwDtorWitness.rwRead_view_lends
+#print axioms A3.RwDtorWitness.view_keeps_lock
+#print axioms A3.RwDtorWitness.view_lock_not_cand
+#print axioms A3.RwDtorWitness.view_no_dtor
+#print axioms A3.RwDtorWitness.main_typed
+#print axioms A3.RwDtorWitness.main_safe
+#print axioms A3.RwDtorWitness.main_no_leak
+#print axioms A3.RwDtorWitness.main_no_leak_panic
+#print axioms A3.rwDtor_claim
 #print axioms A3.LockDtorWitness.mainV_typed
 #print axioms A3.LockDtorWitness.mainV_safe
 #print axioms A3.LockDtorWitness.mainV_no_leak
@@ -137,6 +159,61 @@ import A3
 #print axioms A3.LockDtorWitness.last_dropV_reaps
 #print axioms A3.LockDtorWitness.reapV_drains
 #print axioms A3.lockVecDtor_claim
+-- Agora #803 (A3/LockArcDtorWitness.lean): a destructor payload may hold `arc` and lock shares (no
+-- cell share, `Ty.lkPay`); its give-back's failing crossing check turns the check-out's frame into
+-- the value's destructor frame (`Step.scopeLPD`), never the code-less drop (`Release.drop`): a
+-- case nurlc refuses statically (the check fails only through a read guard, Agora #837), and the
+-- lemmas take the failing check as a hypothesis; a witness, a `Locked` of a destructor value
+-- holding an `Arc` share
+#print axioms A2.pres_unwindD
+#print axioms A2.Inv.scopeL_iff
+#print axioms A3.LockArcDtorWitness.release_none
+#print axioms A3.LockArcDtorWitness.scopeL_fail_end
+#print axioms A3.LockArcDtorWitness.scopeL_fail_frame
+#print axioms A3.LockArcDtorWitness.fail_frame_runs_dtor
+#print axioms A3.LockArcDtorWitness.fail_end_runs_dtor
+#print axioms A3.LockArcDtorWitness.lk_ok
+#print axioms A3.LockArcDtorWitness.main_typed
+#print axioms A3.LockArcDtorWitness.main_safe
+#print axioms A3.LockArcDtorWitness.main_no_leak
+#print axioms A3.LockArcDtorWitness.main_no_leak_panic
+#print axioms A3.LockArcDtorWitness.last_drop_reaps
+#print axioms A3.lockArcDtor_claim
+-- Agora #837: a read guard is a type of its own (`Ty.rguard`), `% NotSend`: no lock's, cell's or
+-- `Arc`'s payload, no global and no closure of a class that crosses holds one (`Ty.hasGuard`,
+-- `Ty.ok`, `Cross.Fits`); so a typed check-out's give-back passes its crossing check, for every
+-- payload type holding no cell share (every destructor payload, shares included), and
+-- `Step.scopeLPD` never fires from a typed reachable configuration
+#print axioms A2.Ty.ok_rguard
+#print axioms A2.Ty.ok_lk_guard
+#print axioms A2.Ty.ok_arc_guard
+#print axioms A2.Cross.Fits.guard
+#print axioms A2.ArcBlk.guard
+#print axioms A2.ArcBlk.view
+#print axioms A2.MInv.guard_val
+#print axioms A2.MInv.lends_val
+#print axioms A2.out_guard
+#print axioms A2.ArcIn.guard_hasGuard
+#print axioms A2.WFv.not_href
+#print axioms A2.WFv.refers_noView
+#print axioms A3.LockDtorWitness.noGuard_of_free
+#print axioms A3.LockDtorWitness.sendCheck_free
+#print axioms A3.LockDtorWitness.giveCheck_of
+#print axioms A3.LockDtorWitness.checkedOut_free
+#print axioms A3.LockDtorWitness.giveCheck_typed
+#print axioms A3.LockDtorWitness.giveCheck_typed_dtor
+#print axioms A3.LockDtorWitness.scopeL_typed_end_giveCheck
+#print axioms A3.LockDtorWitness.Step.panic_blkBack
+#print axioms A3.LockDtorWitness.scopeL_typed_panic_give
+#print axioms A3.LockDtorWitness.scopeL_typed_panic_at
+#print axioms A3.LockDtorWitness.scopeL_typed_panic_giveCheck
+#print axioms A3.LockDtorWitness.scopeL_typed_no_scopeLPD
+#print axioms A3.scopeL_typed_panic_of
+#print axioms A3.reach_scopeL_giveCheck
+#print axioms A3.reach_no_scopeLPD
+#print axioms A3.RwDtorWitness.guard_refused
+#print axioms A3.RwDtorWitness.arc_pair_ok
+#print axioms A3.RwDtorWitness.dropd_closure_ok
 -- (A3/ChanDtorWitness.lean)
 #print axioms A3.ChanDtorWitness.main_typed
 #print axioms A3.ChanDtorWitness.main_safe
@@ -307,6 +384,14 @@ import A3
 #print axioms A2.Dtor.ok_lockPayloads_free
 #print axioms A2.Dtor.shares_dtor_free
 #print axioms A2.Dtor.blocks_dtor_free
+-- Agora #804: an `arc` block is never of a read guard's view type (the block-level fact
+-- behind `Ty.ok_arc_dtor`; since Agora #837 a read guard is a type of its own, `Ty.rguard`)
+#print axioms A2.Dtor.arc_blocks_dtor
+#print axioms A2.Blk.DtorOK.arc
+#print axioms A2.Blk.DtorOK.nest
+#print axioms A2.Ty.ok_arc_dtor
+#print axioms A2.Ty.rview_shape
+#print axioms A2.viewDtorOK
 #print axioms A2.Dtor.blk_pkgs_env_dtor_free
 #print axioms A2.Dtor.share_new_dtor_free
 #print axioms A2.Dtor.vec_elems_dtor_free

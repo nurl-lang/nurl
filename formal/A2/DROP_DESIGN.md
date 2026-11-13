@@ -34,9 +34,11 @@ A2-drop.3b; A2-drop.3a's rule looked one level down only).
   runs the destructor at its end and on a panic's unwind. (A check-out
   binding is of no such type, but one: `withLock` and `withCell` check
   out a payload, which owns no destructor value since A2-drop.3d, or
-  since Agora #755 is one that holds no share, `Locked D`, or a drained
-  `Vec` of them, `Locked (Vec D)`, given back at the scope's end and on a
-  panic and reaped with its block, below; and
+  since Agora #755 is one that holds no share (since Agora #803 no cell
+  share), `Locked D`, or a drained `Vec` of them, `Locked (Vec D)`, given
+  back at the scope's end and on a panic and reaped with its block, below,
+  or, if the give-back's check fails, run in a destructor frame
+  (`Step.scopeLPD`); and
   `withElem` asks an element type that owns none, A2-drop.3b.) `letv` refuses
   one (`StmtT.letv`'s `hnd`). A binder that may receive one without running
   `scopeD` itself hands it to its `letd` first thing (`Stmt.movedFirst`):
@@ -179,7 +181,7 @@ stated for elements that hold no views, `hv : t.holdsView = false`: the
 view-holding case is typed by the same rules, with no lemma stated). And, since A2-drop.3c and 3d: a share whose payload owns a destructor
 value (`Ty.ok`; but an `Arc` of one or of a drained `Vec` of them,
 Agora #610 / #755, and a `Locked` or a cell of one or of a drained `Vec` of
-them that holds no share, Agora #755), and a trait object whose box holds one (a closure whose
+them that holds no cell share, Agora #755 / #803), and a trait object whose box holds one (a closure whose
 environment holds one is of the class `dropd`, dropped by its glue, Agora #609). The result moved from its slot into a local
 before a panic (`pair res w`, a destructor value two levels down) is a
 `letd`'s, since `Ty.holdsDtor` is deep: `letv` refuses it, and the
@@ -515,8 +517,10 @@ thread's reaps; *Staging* item 4), for a payload of a destructor type and
 (Agora #755) for a drained `Vec` of them, which the reap's frame drains,
 and (Agora #790) for one a panic's unwinding orphans, reaped inside the
 frame that caught it, and (Agora #755) for a lock's or a cell's payload
-that is a destructor value holding no share (`Locked D`: the check-out
-gives it back, the orphaned lock block is reaped as an `Arc`'s), and
+that is a destructor value holding no cell share (`Locked D`, Agora #755,
+#803: the check-out gives it back, or, when the give-back's check fails,
+hands it to a destructor frame, `Step.scopeLPD`; the orphaned lock block
+is reaped as an `Arc`'s), and
 (Agora #755 item 1) on A3's threads, where the configuration's marking
 sweep and the stepping thread's reaps do the same; and (Agora #755's last
 cut) for a lock's payload that is a drained `Vec` of them (`Locked (Vec
@@ -541,7 +545,8 @@ made it:
 | an enum or option payload | the payload's destructor | the enum's glue moves the payload out to a `letd` frame (Agora #632) |
 | a closure's or a trait object's environment | the captures' destructors | the closure's glue calls its drop method, whose code takes the environment owned and binds it under `letd`s (Agora #609, `ClosureGlueOK`, `Step.callcD`); it is called lent, through its binding or a borrow of the destructor type (Agora #651); a method that changes the environment is refused for the class |
 | a panic's unwind through any of these | the journal runs each, once | `scopeP` frees in one step, except at `scopeD` |
-| an `Arc` / lock block's payload when its last share goes (A3) | on the thread that drops the last share | an `Arc` of a destructor type, or (Agora #755) of a drained `Vec` of them: the marking sweep marks the block `dead`, the same thread reaps it into a destructor frame at the payload's own type, which drains a `Vec` (Agora #610, A2's `Steps`; Agora #755 item 1, A3's `TStep`: the configuration's marking sweep and the same thread's reaps); a lock's or a cell's destructor value, or drained `Vec` of them, that holds no share likewise (Agora #755, `Locked D`, `Locked (Vec D)`); a channel's queue of them likewise, its state under its glue, whose frame drains the queue (Agora #755); any other lock's or cell's, or an `Arc`'s holding one in a field of a type with no destructor of its own: refused (`Ty.ok`) |
+| an `Arc` / lock block's payload when its last share goes (A3) | on the thread that drops the last share | an `Arc` of a destructor type, or (Agora #755) of a drained `Vec` of them: the marking sweep marks the block `dead`, the same thread reaps it into a destructor frame at the payload's own type, which drains a `Vec` (Agora #610, A2's `Steps`; Agora #755 item 1, A3's `TStep`: the configuration's marking sweep and the same thread's reaps); a lock's or a cell's destructor value, or drained `Vec` of them, that holds no cell share likewise (Agora #755, `Locked D`, `Locked (Vec D)`; Agora #803: it may hold `arc` and lock shares); a channel's queue of them likewise, its state under its glue, whose frame drains the queue (Agora #755); a lock's or a cell's whose destructor value holds a cell share, or a lock's, a cell's or an `Arc`'s holding one in a field of a type with no destructor of its own: refused (`Ty.ok`) |
+| a lock's or a cell's destructor payload whose give-back fails its crossing check (A3) | on the thread that checked it out, during the unwinding | Agora #803: the check-out's frame becomes the value's destructor frame at its end (`Step.scopeLPD`), never the code-less `Release.drop`, the block left checked out; the check fails only when the value reaches a read guard: nurlc's check, counting handle blocks only, never fails there, and since Agora #837 no lock's payload type holds a guard, so no typed reachable configuration takes this path (`A3.reach_no_scopeLPD`); the lemmas (`A3.LockArcDtorWitness.release_none`, `fail_end_runs_dtor`) take the failing check as a hypothesis |
 | a value `chan_send` does not queue (closed channel) | dropped in `chan_send`, on the sender | Agora #755: moved into a fresh lock block of the element type (`EvalR.chanSendClosed`), which the marking sweep frees (no destructor value) or marks for the sending thread to reap (Agora #805, proved for a `letv`- or `assign`-bound send: `A3.TStep.closed_send_reaps`, `closed_send_reaps_assign`) |
 
 ### Semantics
@@ -861,7 +866,8 @@ each one shrinks `CLAIM.md`'s exception:
      check-out binding (`withLock`, `withCell`) is of a type that holds
      none (`A2.Dtor.shares_dtor_free`): 3a's check-out gap is closed with
      it. Stricter than nurlc (`CLAIM.md`). (Lifted for a destructor value
-     that holds no share since Agora #755, `Locked D`, below.)
+     that holds no share since Agora #755, `Locked D`, below, and for one
+     that holds no cell share since Agora #803.)
    - **Built: the step** (Agora #610, part 1). A block kind `dead` (`BKind`:
      an orphan whose payload awaits its destructor; no one reads it, it
      owns its payload) and the step `Step.reap`: from any source statement
@@ -883,7 +889,10 @@ each one shrinks `CLAIM.md`'s exception:
         every block of a destructor type, whatever its kind). The
         invariant's clause is `Blk.DtorOK`: (before Agora #755) a lock's
         and a view's payload owns none (since #755, `Locked D` below, a
-        lock's may be a destructor value holding no share); a block of a
+        lock's may be a destructor value holding no share, since #803 no
+        cell share; since #804 a
+        view's payload, its lock block's read in place, may be one too: the
+        view owns nothing, `Ty.rview`, `A3/RwDtorWitness.lean`); a block of a
         type that owns one is of a destructor type holding no closure; a
         `dead` block is of such a type.
      2. *The mark.* `Mem.sweepD`, the sweep that ends every step but an
@@ -999,7 +1008,12 @@ each one shrinks `CLAIM.md`'s exception:
    - **Built: `Locked D`** (Agora #755, on A2's runs; A3/DESIGN.md's
      A3.2 section has the design). `Ty.ok (lk t)` and `Ty.ok (cell t)` ask
      `Ty.lkPay t`: `t` owns no destructor value, or is a destructor type
-     at its top (`Ty.dtor f u`) that holds no share. What was asked:
+     at its top (`Ty.dtor f u`) that holds no share (since Agora #803 no
+     cell share: `arc` and lock shares are typed, and a give-back whose
+     check then fails hands the value to a destructor frame,
+     `Step.scopeLPD`, a case no typed reachable configuration meets since
+     Agora #837, `A3.reach_no_scopeLPD`). What
+     was asked:
      1. *The check-out binding.* nurlc's `locked_update` runs `f` in place
         in the lock's memory, the lock held, and on a panic in `f` the value
         stays there (`stdlib/std/thread.nu`, `stdlib/runtime_locked.c`).
@@ -1020,8 +1034,9 @@ each one shrinks `CLAIM.md`'s exception:
         `scopeL_panic_gives_back`, `release_puts`. Agora #805: that a typed
         body leaves `x` owning the value at its end, and wherever it panics
         owning it or moved out (to an owner that runs its destructor), is
-        proved for a typed frame (`StmtT.scopeL` asks, for a destructor
-        payload, `x` an owner live at the body's end, as `withLock` does:
+        proved for a typed frame (`StmtT.scopeL` asks `x` an owner, for a
+        destructor payload, live at the body's end, as `withLock` does;
+        since Agora #825 the liveness for every payload type:
         `A3.LockDtorWitness.scopeL_end_owns`, `scopeL_typed_end_gives_back`,
         `scopeL_typed_panic`); that the block is then there and checked
         out is proved on every reached configuration (Agora #808:
@@ -1069,7 +1084,8 @@ each one shrinks `CLAIM.md`'s exception:
    - **Built: `Locked (Vec D)` and a channel of `D`** (Agora #755's last
      cut, A2's runs and A3's threads; `A3/DESIGN.md`'s A3.2 and A3.4
      sections have the design).
-     1. *Admission.* `Ty.lkPay t := t.dtorFree || (t.dnest && !t.hasArc)`,
+     1. *Admission.* `Ty.lkPay t := t.dtorFree || (t.dnest && !t.hasArc)`
+        (since Agora #803 `!t.hasCell`),
         which contains the old `hasDtor` case (`dnest` of a destructor type)
         and adds a drained `Vec` of them at any depth; `Ty.ok`'s lock and
         cell cases drop their `!vecD`. A channel is *not* admitted as

@@ -417,6 +417,7 @@ def elemE (y : Var) (E : Entry) : Ty → Entry
   | .lk t => ⟨.lk t, .bor, true, derive y E .inner, E.held, false, false⟩
   | .cell t => ⟨.cell t, .bor, true, derive y E .inner, E.held, false, false⟩
   | .dtor f t => ⟨.dtor f t, .bor, true, derive y E .inner, E.held, false, false⟩
+  | .rguard t => ⟨.rguard t, .bor, true, derive y E .inner, E.held, false, false⟩
 
 /-- An element moved out of `y` by `vec_pop`: an element `Vec` or struct is
     owned. -/
@@ -429,6 +430,7 @@ def popE (y : Var) (E : Entry) : Ty → Entry
   | .lk t => ⟨.lk t, .own, true, [], E.held, false, false⟩
   | .cell t => ⟨.cell t, .own, true, [], E.held, false, false⟩
   | .dtor f t => ⟨.dtor f t, .own, true, [], E.held, false, false⟩
+  | .rguard t => ⟨.rguard t, .own, true, [], E.held, false, false⟩
   | t => elemE y E t
 
 /-- Agora #607: what moves out of a drained `Vec` is owned, at its own type. -/
@@ -462,13 +464,14 @@ def getE (y : Var) (E : Entry) : Ty → Entry
   | t => ⟨t, .bor, true, derive y E .share, E.held, false, false⟩
 
 /-- A3.3: `rguard_get g` of a read guard `g` (`rw_read`'s owned share, of
-    type `arc (prod (lk t) t)`, holding nothing) is `arcGet g` and then its
+    type `rguard t` (Agora #837; before, `arc (prod (lk t) t)`), holding
+    nothing) is `arcGet g` and then its
     second field: what it lends of the payload depends on `g` through a
     share, and on nothing else.  So `ThruOK` and `canDo` refuse every change
     through it (a copy of it is a borrow too, which `paramOK` refuses as an
     `inout` argument), and the guard's scope ends it (`exitScope g`). -/
 theorem rguard_get_path {t : Ty} (ht : t ≠ .int) (g y : Var) :
-    (projE y (getE g ⟨.arc (.prod (.lk t) t), .own, true, [], [], false, false⟩ (.prod (.lk t) t)) t).path =
+    (projE y (getE g ⟨.rguard t, .own, true, [], [], false, false⟩ (.prod (.lk t) t)) t).path =
       [⟨g, .share⟩] := by
   cases t <;> simp_all [projE, getE, derive, projDeps, rootKind, Mode.isRoot, Mode.ownSlot]
 
@@ -697,6 +700,8 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       -- A3.5: an `Arc`'s payload is reached from every thread that holds a
       -- share, so it holds no library handle (a cell share is not Sync)
       t.hasCell = false →
+      -- Agora #837: nor a read guard (`% NotSend`, nurlc's `RGuard`)
+      t.hasGuard = false →
       PushArg Γ F y Ey t D Γ1 →
       RhsT Γ F (.arcNew t y) ⟨.arc t, .own, true, [], [], false, false⟩ Γ1
   /-- A3.1: a new share of the block `a` shares: owned, holding nothing. -/
@@ -708,7 +713,7 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       share (`Landed`), so it is valid while the block lives. The payload
       holds no view and no closure. -/
   | arcGet {a : Var} {E : Entry} {t : Ty} :
-      Γ a = some E → E.live = true → E.ty = .arc t → t.holdsView = false → t.hasFn = false →
+      Γ a = some E → E.live = true → E.ty.Lends t → t.holdsView = false → t.hasFn = false →
       RhsT Γ F (.arcGet a) (getE a E t) Γ
   /-- A3.2: `locked_new`: `y`'s value, of a type that holds no view and no
       closure that holds bindings by name (it is Send) — `arc`, lock and
@@ -719,8 +724,12 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
   | lockNew {t : Ty} {y : Var} {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
       Γ y = some Ey → Ey.live = true → Ey.ty = t →
       -- (A2-drop.3d: the value owns no destructor value, or, Agora #755, is
-      -- one at its top holding no share: `Locked D`, `Ty.lkPay`)
+      -- one at its top holding no cell share: `Locked D`, `Ty.lkPay`;
+      -- Agora #803: `arc` and lock shares allowed)
       t.lkPay = true → t.holdsView = false ∧ t.hasFn = false →
+      -- Agora #837: no read guard goes into a lock (`% NotSend`: the lock
+      -- may hand it to another thread)
+      t.hasGuard = false →
       PushArg Γ F y Ey t D Γ1 →
       RhsT Γ F (.lockNew t y) ⟨.lk t, .own, true, [], [], false, false⟩ Γ1
   /-- A3.2: `Locked_share`: a new share of the lock block `a` shares: owned,
@@ -737,19 +746,20 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       Γ a = some E → E.live = true → E.ty = .lk t →
       -- A3.5's second cut: read guards lend the value to several threads at
       -- once, so it faces the Sync question, as an `Arc`'s payload does (h357)
+      -- (Agora #804: and it may own a destructor value, `RwLocked D`: the
+      -- view reads the lock's payload in place and owns none of it, so no
+      -- sweep and no reap of the view drops it; the lock block's last share
+      -- does, once, `Ty.rview`)
       t.hasCell = false →
-      -- (Agora #755: and owns no destructor value: a view's payload is a copy
-      -- of the lock's, which owns nothing, so `RwLocked D` is refused)
-      t.dtorFree = true →
-      RhsT Γ F (.rwRead a) ⟨.arc (.prod (.lk t) t), .own, true, [], [], false, false⟩ Γ
+      RhsT Γ F (.rwRead a) ⟨.rguard t, .own, true, [], [], false, false⟩ Γ
   /-- A3.3: `rw_try_read a`: `rw_read`'s guard as an owned option
       (`Option` is `sum int _`), holding nothing; matched by value
       (`taker`), its `some` is `rw_read`'s entry.  A read guard lends the
       payload to every reader at once, so the payload holds no library handle
       (a cell share is not Sync, A3.5). -/
   | rwTryRead {a : Var} {E : Entry} {t : Ty} :
-      Γ a = some E → E.live = true → E.ty = .lk t → t.hasCell = false → t.dtorFree = true →
-      RhsT Γ F (.rwTryRead a) ⟨.sum .int (.arc (.prod (.lk t) t)), .own, true, [], [], false, false⟩ Γ
+      Γ a = some E → E.live = true → E.ty = .lk t → t.hasCell = false →
+      RhsT Γ F (.rwTryRead a) ⟨.sum .int (.rguard t), .own, true, [], [], false, false⟩ Γ
   /-- A3.3: `rw_try_write a`'s answer: an owned option of an integer, holding
       nothing; the write itself is `withLock`'s check-out (`Stmt.withTryWrite`). -/
   | rwTryWrite {a : Var} {E : Entry} {t : Ty} :
@@ -788,7 +798,7 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       owned cell share, which holds nothing. -/
   | cellNew {t : Ty} {y : Var} {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
       Γ y = some Ey → Ey.live = true → Ey.ty = t →
-      t.lkPay = true → t.holdsView = false ∧ t.hasFn = false →
+      t.lkPay = true → t.holdsView = false ∧ t.hasFn = false → t.hasGuard = false →
       PushArg Γ F y Ey t D Γ1 →
       RhsT Γ F (.cellNew t y) ⟨.cell t, .own, true, [], [], false, false⟩ Γ1
   /-- A3.5: a copy of a library handle (`PNCounter_share`): a new owned cell
@@ -816,14 +826,14 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
   /-- ... `locked_restore a y`: `y`'s value, a `t`, is handed back as
       `vec_push` takes it (`PushArg`: an owner moves and its entry dies, an
       integer is copied), as `chan_send` hands its value over; the answer is
-      an integer. -/
+      an integer.  Of any payload, as nurlc's (Agora #810: the restore fills
+      only a block `locked_take` emptied, `EvalR.lockRestore`, never one a
+      `withLock` has checked out, so a destructor value restored is never
+      dropped with no code by the check-out's give-back; until then the rule
+      asked `t.dtorFree`, Agora #755). -/
   | lockRestore {a y : Var} {Ea Ey : Entry} {t : Ty} {Γ1 : Ctx} {D : List Dep} :
       Γ a = some Ea → Ea.live = true → Ea.ty = .lk t →
       Γ y = some Ey → Ey.live = true → Ey.ty = t → PushArg Γ F y Ey t D Γ1 →
-      -- (Agora #755: of a payload that owns no destructor value: the model's
-      -- restore also fills a block a `withLock` has checked out, whose
-      -- give-back would then drop its value with no code)
-      t.dtorFree = true →
       RhsT Γ F (.lockRestore a y) intE Γ1
 
 /-! ### Calls -/
@@ -1735,6 +1745,7 @@ theorem hasFn_holdsView {t : Ty} (h : t.hasFn = true) : t.holdsView = true := by
   | lk t ih => exact ih h
   | cell t ih => exact ih h
   | dtor _ t ih => exact ih h
+  | rguard t ih => exact ih h
 
 /-- A3.5b: the environment of a Send closure (its type's `q` is not `any`)
     holds no view, so no closure that holds bindings by name, and the closure

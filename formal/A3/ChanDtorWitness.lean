@@ -76,7 +76,7 @@ theorem chan_of : (Ty.lk GVD).ChanOf DT := ⟨GVD, rfl, rfl⟩
 
 /-- **A channel of destructor values is typed** (Agora #755): its state is a
     struct holding a drained `Vec`, bound by `letd` under its glue (`GVD`),
-    moved into a lock (`Ty.lkPay`: a destructor type holding no share), and
+    moved into a lock (`Ty.lkPay`: a destructor type holding no cell share), and
     `chan_send` sends a destructor value into it (`RhsT.chanSend` over
     `Ty.ChanOf`). -/
 theorem main_typed : ∃ Δ, StmtT P (fun _ => none) [] main Δ := by
@@ -122,7 +122,7 @@ theorem main_typed : ∃ Δ, StmtT P (fun _ => none) [] main Δ := by
       (hK6.noPin _) (DtorSafe.of_none (fun v E h => (hK6 v E h).2.1) _ _ _)
   have hlnew : RhsT K6 [] (.lockNew GVD 4) EC K6' :=
     RhsT.lockNew (by simp [K6, A2.setE]) (by rw [hEGa]) (by rw [hEGa]) (by decide)
-      ⟨by simp [GVD, GV, DT, T, Ty.holdsView], by simp [GVD, GV, DT, T, Ty.hasFn]⟩ hmv4
+      ⟨by simp [GVD, GV, DT, T, Ty.holdsView], by simp [GVD, GV, DT, T, Ty.hasFn]⟩ (by decide) hmv4
   let K7 : Ctx := A2.setE K6' 5 EC
   have hK7 : NoRootb K7 := hK6'.setE (by simp [EC])
   -- `:drop x ( pair a b )`
@@ -363,7 +363,7 @@ theorem mainC_typed : ∃ Δ, StmtT P (fun _ => none) [] mainC Δ := by
       (hK6.noPin _) (DtorSafe.of_none (fun v E h => (hK6 v E h).2.1) _ _ _)
   have hlnew : RhsT K6 [] (.lockNew GVD 4) EC K6' :=
     RhsT.lockNew (by simp [K6, A2.setE]) (by rw [hEGa]) (by rw [hEGa]) (by decide)
-      ⟨by simp [GVD, GV, DT, T, Ty.holdsView], by simp [GVD, GV, DT, T, Ty.hasFn]⟩ hmv4
+      ⟨by simp [GVD, GV, DT, T, Ty.holdsView], by simp [GVD, GV, DT, T, Ty.hasFn]⟩ (by decide) hmv4
   let K7 : Ctx := A2.setE K6' 5 EC
   have hK7 : NoRootb K7 := hK6'.setE (by simp [EC])
   -- `chan_close ch`
@@ -828,7 +828,7 @@ theorem mainR_typed : ∃ Δ, StmtT P (fun _ => none) [] mainR Δ := by
       (hK6.noPin _) (DtorSafe.of_none (fun v E h => (hK6 v E h).2.1) _ _ _)
   have hlnew : RhsT K6 [] (.lockNew GVD 4) EC K6' :=
     RhsT.lockNew (by simp [K6, A2.setE]) (by rw [hEGa]) (by rw [hEGa]) (by decide)
-      ⟨by simp [GVD, GV, DT, T, Ty.holdsView], by simp [GVD, GV, DT, T, Ty.hasFn]⟩ hmv4
+      ⟨by simp [GVD, GV, DT, T, Ty.holdsView], by simp [GVD, GV, DT, T, Ty.hasFn]⟩ (by decide) hmv4
   let K7 : Ctx := A2.setE K6' 5 EC
   have hK7 : NoRootb K7 := hK6'.setE (by simp [EC])
   have hpair : RhsT K7 [] (.pair 0 1) EP K7 :=

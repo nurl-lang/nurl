@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+a literal
+a String that outlives the iterator
+a String that outlives the iterator
+5
+copied out before its String goes

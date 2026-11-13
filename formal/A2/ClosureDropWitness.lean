@@ -131,12 +131,13 @@ theorem pack_codes : CodeOK Pc [1] DT [2] [] := by
 /-- The environment, a destructor value, fits the class `dropd` (and no
     other: `Cross.Fits` of a class that does not drop asks `holdsDtor = false`). -/
 theorem env_fits : Cross.dropd.Fits DT [] :=
-  ⟨fun _ => ⟨rfl, rfl⟩, fun _ => rfl, fun h => absurd h (by decide), fun h => absurd h (by decide)⟩
+  ⟨fun _ => ⟨rfl, rfl⟩, fun _ => rfl, fun h => absurd h (by decide), fun h => absurd h (by decide),
+    fun _ => by simp [DT, T, Ty.hasGuard]⟩
 
 theorem env_fits_only (q : Cross) (h : q.Fits DT []) : q = .dropd := by
   cases q
   case dropd => rfl
-  all_goals exact absurd (h.2.2.2 rfl) (by decide)
+  all_goals exact absurd (h.2.2.2.1 rfl) (by decide)
 
 /-! ### The destructor's own FnOK -/
 
