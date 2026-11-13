@@ -17924,8 +17924,15 @@ unsafe @ __sx_publish i me s sx → v {
 @ __clo_call_sx i syms s name s args → s {
     : s rt ( extract_fn_ptr_return_type ( nurl_sym_get syms name ) )
     ? | < ( bck_walk_class rt ) 2 ( mem_clo_ret_copies rt ) { ^ ( nurl_str_cat `-` `` ) } {}
-    ? == 0 ( nurl_str_len args ) { ^ ( nurl_str_cat `-` `` ) } {}
-    ^ ( nurl_str_cat3 `\\(` args `)` )
+    // (…and what the closure holds: a copy of an element of a Vec it
+    // captured — `iter_from_vec`'s — points into what that Vec held, which
+    // the closure holds too (`\\~v(…)`, agora #472). Not where it hands
+    // back a closure, a middleware's handler: what that one holds is its own
+    // capture set's, built where its literal is.)
+    ? ( __is_closure_ty rt ) { ^ ? == 0 ( nurl_str_len args ) ( nurl_str_cat `-` `` ) ( nurl_str_cat3 `\\(` args `)` ) } {}
+    : s held ( nurl_str_cat3 `\\~v(` name `)` )
+    ? == 0 ( nurl_str_len args ) { ^ held } {}
+    ^ ( __sx_join ( nurl_str_cat3 `\\(` args `)` ) held )
 }
 
 // Either `a` or `b`: nothing on one side is the other; not modelled on
@@ -42997,7 +43004,11 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                                 // (the callee's answer `%k`): what a copy of it
                                 // holds — not its own storage, which the result
                                 // does not point into (agora #377, #368).
-                                ? | == __rva 3 & ( __held_fallback w ) ! ( __bck_param_closure w js ) {
+                                // (A closure argument too, unless the callee keeps it:
+                                // what calling it hands back may be a copy of what it
+                                // holds — `iter_collect` of an `iter_from_vec`, agora
+                                // #472. One it keeps is the escapes arm's.)
+                                ? | == __rva 3 & ( __held_fallback w ) ! & ( __bck_param_closure w js ) ( nurl_sym_has_word g_fn_escapes w js ) {
                                     : b __sv5 g_sxe_vonly
                                     = g_sxe_vonly F
                                     // (A closure in it the result keeps is adopted, as the
@@ -46534,7 +46545,7 @@ unsafe @ bck_sx_is_id s e → b {
         // its own handle crosses too (`~p`, a closure that captured it or
         // a value built of it) — then what it holds goes as an owner's
         // views do, and whether an owner of views may cross is agora #469's.
-        ? & & & ! ( bck_id_is_global r ) != 0 ( nurl_str_len ph ) ! ( nurl_sym_has_word g_fn_escapes g_bck_fn ph ) ! ( str_contains_word raw ( nurl_str_cat `~` ( nurl_str_int ( __bck_pseudo_param r ) ) ) ) {
+        ? & & & & ! ( bck_id_is_global r ) != 0 ( nurl_str_len ph ) ! ( nurl_sym_has_word g_fn_escapes g_bck_fn ph ) ! ( str_contains_word raw ( nurl_str_cat `~` ( nurl_str_int ( __bck_pseudo_param r ) ) ) ) == 0 ( nurl_sym_len g_bck ( bck_bkey `pcl_` ( nurl_str_int r ) ) ) {
             : s nm ( __bck_pseudo_show r )
             ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat4 `what '` ( bck_fn_show cal ) `' runs on another thread holds a copy of the views '` ( nurl_str_cat4 nm `' holds — into its caller's storage, which the caller may release while the other runs. Give it values that own their data — Strings moved in (string_from), a Vec of them — or ones shared through Arc.` `` `` ) ) )
             ^
@@ -53862,6 +53873,12 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
         // a closure literal's, whose parameters stand for what they hold
         // already, `cv_`.)
         ? & ! __pclo ( str_contains_word g_bck_own_params ( nurl_str_cat `%` pn ) ) { ( __bck_seed_held ( bck_intern pn ) pix | ( str_contains_word g_bck_own_params ( nurl_str_cat `&` pn ) ) ( str_contains_word g_bck_own_params ( nurl_str_cat `!` pn ) ) ) } {}
+        // (A closure parameter's pseudo, `pcl_`: what calling it hands back
+        // may be a copy of what it holds, which this function's answers tie
+        // to its argument — but whether the closure may cross to another
+        // thread is its caller's to answer, by the closure's capture set,
+        // where it is built: bck_send_view_check passes it; agora #472.)
+        ? & ! __pclo ( str_contains_word g_bck_own_params ( nurl_str_cat `@` pn ) ) { ( bck_put ( bck_bkey `pcl_` ( nurl_str_int ( bck_intern ( nurl_str_cat `%` pn ) ) ) ) `1` ) } {}
         = pix + pix 1
         = seed ( bck_st_set seed ( bck_intern pn ) BCK_OWNED )
         // (What the caller holds: a view of it may be handed back.)
@@ -75397,8 +75414,14 @@ unsafe @ __alloca_struct_params i syms i cg → v {
         : i __hll ( nurl_str_len __hlt0 )
         : s __hlt ? & & != 0 ( nurl_sym_len2 syms name `__inout` ) > __hll 0 == ( nurl_str_get __hlt0 - __hll 1 ) 42 ( nurl_str_slice __hlt0 0 - __hll 1 ) ( nurl_str_cat __hlt0 `` )
         : i __hcl ( bck_walk_class __hlt )
-        ? & != 0 g_srcx_on | == __hcl 3 & == __hcl 2 ! ( seq __hlt `i8*` ) {
+        // (…and a closure: what calling it hands back may be a copy of what
+        // it holds — an iterator over the caller's Vec yields its elements,
+        // `iter_collect`'s source — so what this function makes of its
+        // results is tied to that argument too, agora #472.)
+        ? & != 0 g_srcx_on | | == __hcl 3 & == __hcl 2 ! ( seq __hlt `i8*` ) ( __is_closure_ty __hlt ) {
             ( nurl_sym_def syms `__fn_ownstr_params__` ( nurl_str_cat4 ( nurl_sym_get syms `__fn_ownstr_params__` ) ` ` `%` name ) )
+            // (…a closure's marked so: `@name`, __bck_seed_held's `pcl_`.)
+            ? ( __is_closure_ty __hlt ) { ( nurl_sym_def syms `__fn_ownstr_params__` ( nurl_str_cat4 ( nurl_sym_get syms `__fn_ownstr_params__` ) ` ` `@` name ) ) } {}
             // (A view of a container — its pseudo stands for what the
             // container's elements view: g_fn_eparams.)
             ? & == __hcl 2 ! ( nurl_sym_has_word g_fn_eparams fname ( nurl_str_int index ) ) { ( nurl_sym_append_word g_fn_eparams fname ( nurl_str_int index ) ) } {}
