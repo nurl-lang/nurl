@@ -7031,9 +7031,33 @@ unsafe @ mem_note_ret_clo_effs i syms s lt i tt s tv → v {
 // parked while the return compiles (g_ret_lq, `pfoq`) and refused at module
 // end where the function takes that parameter over (resolve_pfo_lends,
 // agora #743).)
+// A value block a `^` hands back (`^ { … : s d ( string_data t ) d }`)
+// is no scope: what it binds lives to the function's exit, as `: s d …
+// ^ d`'s binding does. The walk judges the return inside the block's
+// frame, then: its `endblock` row comes after the `ret` row, so the
+// block's names, and what its tail binding views, are still there
+// (agora #663). The `}`'s line, 0 for none: only the block that starts
+// where the value does is one, and its own `^` flushes it (the codegen
+// side of its exit is done at the `}`).
+: ~ i g_ret_blk_exit 0
+
+@ __ret_blk_exit_flush → v {
+    ? == 0 g_ret_blk_exit { ^ v } {}
+    : i ln g_ret_blk_exit
+    = g_ret_blk_exit 0
+    ? & != g_borrowck 0 == g_bck_rec_off 0 {
+        ? > g_bck_depth 0 { = g_bck_depth - g_bck_depth 1 } {}
+        ( bck_record `endblock` `` ln )
+    } {}
+}
+
 unsafe @ gen_ret i lex i syms i cg → s {
     = g_ret_lq + g_ret_lq 1
+    : i __rbx0 g_ret_blk_exit
+    = g_ret_blk_exit 0
     : s r ( __gen_ret lex syms cg )
+    ( __ret_blk_exit_flush )
+    = g_ret_blk_exit __rbx0
     = g_ret_lq - g_ret_lq 1
     ( __pfo_lends_park lex )
     ^ r
@@ -7238,15 +7262,19 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     // (`^ { … : String t ( vec_at [String] u 0 ) t }` gave the caller a
     // String viewing an element of `u`, released on the way out; `^ { … p }`
     // a parameter's own buffer — agora #649).
-    // (The borrow walk still reads the return as it is written, a block:
-    // it ends the block's names at its `}`, and follows what the block's
-    // value views through the block's own rows — ret_src_tt / ret_src_val.)
-    : i ret_src_tt ret_first_tt
-    : s ret_src_val ( nurl_str_cat ret_first_val `` )
+    // (The borrow walk reads the return as it is written, a block, and
+    // follows what the block's value views through the block's own rows —
+    // ret_src_tt / ret_src_val. …but a value block that is the whole value
+    // has its names still open at the `ret` row (g_ret_blk_exit): its tail
+    // binding is judged as `^ t` judges it — what it views of the block's
+    // own bindings is refused as a view of a local; agora #663.)
+    : ~ i ret_src_tt ret_first_tt
+    : ~ s ret_src_val ( nurl_str_cat ret_first_val `` )
     : b __ret_blk_id & == ret_first_tt TT_LBRACE ( is_ident_tok ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) ) )
     ? __ret_blk_id {
         = ret_first_tt ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) )
         = ret_first_val ( nurl_sym_get syms `__tail_first_val__` )
+        ? & != 0 g_ret_blk_exit == 0 ( nurl_sym_len syms `__tail_first_deep__` ) { = ret_src_tt ret_first_tt = ret_src_val ( nurl_str_cat ret_first_val `` ) } {}
     } {}
     // A block whose tail is a field read hands back that field as `^ . x f`
     // does: its own locals are this frame's, dropped on the way out
@@ -28343,6 +28371,8 @@ unsafe @ __blk_leave b val → v {
 
 @ gen_block_expr i lex i syms i cg → s {
     : i bck_line ( nurl_lex_line lex )
+    // (The value a `^` hands back: g_ret_blk_exit.)
+    : b __blk_retv ( __ret_vpos_here lex )
     // A `?`/`??` arm body (mem_arm_body_mark) leaves the exits its tail
     // handed up to the construct; any other block decides below.
     : s __blk_mark ( nurl_sym_get g_fn_escapes `__arm_body__` )
@@ -28533,7 +28563,11 @@ unsafe @ __blk_leave b val → v {
     // a binding its path already moved is a use after move, not a value
     // to hand on. Agora #274.)
     ? & & & blk_val any == 0 g_did_ret ( is_ident_tok __tail_tt ) { ( bck_note_read __tail_tv ) } {}
-    ( bck_block_exit __rb_line )
+    ? & & __blk_retv __vb_mine == 0 g_did_ret {
+        ? > g_cg_blk_depth 0 { = g_cg_blk_depth - g_cg_blk_depth 1 } {}
+        ( lint_free_block_exit )
+        = g_ret_blk_exit __rb_line
+    } { ( bck_block_exit __rb_line ) }
     // Exits the tail statement handed up. An arm body leaves them to its
     // `?`/`??`; a bare block that is itself a block's tail hands them on;
     // a bare block statement discards its value, so they drop; a block
@@ -28554,15 +28588,24 @@ unsafe @ __blk_leave b val → v {
             ( nurl_sym_def syms `__tail_name__` ? ( is_ident_tok __tail_tt ) __tail_tv `` )
             ( nurl_sym_def syms `__tail_root_ptr__` ? & == __tail_tt TT_DOT != 0 ( nurl_str_len g_blk_froot ) ( nurl_sym_get2 syms g_blk_froot `__ptr` ) `` )
         } {} } { ( nurl_sym_def syms `__tail_ptr__` `` ) ( nurl_sym_def syms `__tail_root_ptr__` `` ) }
+    // (…and a tail that is itself a block hands up that block's first
+    // token — `{ { v } }` ends in `v`, as for `__tail_ptr__` — marked
+    // `__tail_first_deep__`: its names ended at the inner `}`; agora #663.)
     ? any
     { ( bck_save_expr_carriers syms `__last_block_params__` __tail_tt __tail_tv )
-        ( nurl_sym_def syms `__tail_first_tt__` ( nurl_str_int __tail_tt ) )
-        ( nurl_sym_def syms `__tail_first_val__` __tail_tv )
+        ? == __tail_tt TT_LBRACE { ( nurl_sym_def syms `__tail_first_deep__` `1` ) } {
+            ( nurl_sym_def syms `__tail_first_tt__` ( nurl_str_int __tail_tt ) )
+            ( nurl_sym_def syms `__tail_first_val__` __tail_tv )
+            ( nurl_sym_def syms `__tail_first_deep__` `` )
+        }
         ( nurl_sym_def syms `__tail_callee__` __tail_callee )
         ( nurl_sym_def syms `__last_clo_members__` __tail_cm )
         ? == __tail_tt TT_DOT { ( nurl_sym_def syms `__tail_root_tt__` ( nurl_str_int __tail_root ) ) } {}
         ( __tail_noreturn_close syms __tail_callee ) }
-    {}
+    {  // (An empty block ends in nothing: no first token to hand up.)
+        ( nurl_sym_def syms `__tail_first_tt__` `0` )
+        ( nurl_sym_def syms `__tail_first_val__` `` )
+        ( nurl_sym_def syms `__tail_first_deep__` `` ) }
     ( __close_dead_block __dead_any )
     // The tail statement was a bare literal: exempt from the
     // dangling-operand error (it is the block's value), but RECORD it —
