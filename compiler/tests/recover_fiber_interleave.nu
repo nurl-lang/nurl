@@ -16,6 +16,14 @@
 // On Windows the panic's longjmp unwinds through the CRT, which checks
 // every frame against the TIB stack bounds — the Win64 switch carries
 // them per fiber (runtime_ctx.c), which is what this part also covers.
+//
+// Part 3 (agora #623): a panic's drain runs destructors that yield. The
+// fiber waits mid-drain while others run on its worker (and, with four
+// workers, comes back on another one). The drain's depth and its record
+// of what it freed were per thread: the fibers that ran next took the
+// parked drain for their own and ended it (UBSan: clz(0) in the journal),
+// and a fiber resumed elsewhere found no drain there (a double free, a
+// null panic frame). A drain is the fiber's now, like its journal.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/std/async.nu`
@@ -81,6 +89,61 @@ $ `stdlib/std/thread.nu`
     ?? r { T _ → {} F _ → { ( mutex_lock m ) = g_caught + g_caught 1 ( mutex_unlock m ) } }
 }
 
+// Part 3's value: its destructor yields around an allocation of its own,
+// and panics (boom 1) or runs a recover of its own that panics (boom 2).
+: Y { String tag i boom i loud }
+
+% Drop Y { @ drop Y y → v {
+        ( yield )
+        : String scratch ( string_from ( nurl_str_cat `drops ` ( string_data . y tag ) ) )
+        ( yield )
+        ? == . y loud 1 { ( nurl_println ( string_data scratch ) ) } {}
+        ? == . y boom 1 { ( panic `panic in a drop` ) } {}
+        ? == . y boom 2 {
+            : !v PanicInfo q ( recover \ → v {
+                : String inner ( string_from `a drop's own extent` )
+                ( yield )
+                ( panic `inner panic` )
+            } )
+        } {}
+        ( yield ) } }
+
+@ mk_y s tag i boom i loud → Y { ^ @ Y { ( string_from tag ) boom loud } }
+
+@ drains_while_other_waits → v {
+    : !v PanicInfo r ( recover \ → v {
+        : Y a ( mk_y `F's first value` 2 1 )
+        : Y b ( mk_y `F's second value` 1 1 )
+        ( nurl_println `F: in extent` ) ( yield )
+        ( nurl_println `F: panics` )
+        ( nurl_panic `F's cause` )
+    } )
+    ?? r { T _ → { ( nurl_println `F: completed?` ) } F e → { ( nurl_println ( nurl_str_cat `F: recovered: ` ( string_data . e msg ) ) ) } }
+}
+
+@ waits_while_other_drains → v {
+    : !v PanicInfo r ( recover \ → v {
+        : String mine ( string_from `G's value, still in use` )
+        ( nurl_println `G: in extent` )
+        : ~ i j 0
+        ~ < j 8 { : String t ( string_from `G's churn, freed while F drains` ) ( yield ) = j + j 1 }
+        ( nurl_println ( nurl_str_cat `G: ` ( string_data mine ) ) )
+    } )
+    ?? r { T _ → { ( nurl_println `G: completed` ) } F _ → { ( nurl_println `G: panicked?` ) } }
+}
+
+: ~ i g_drained 0
+
+@ drain_fiber i k Mutex m → v {
+    : !v PanicInfo r ( recover \ → v {
+        : Y a ( mk_y ( nurl_str_cat `first value of ` ( nurl_str_int k ) ) % k 3 0 )
+        : Y b ( mk_y ( nurl_str_cat `second value of ` ( nurl_str_int k ) ) 0 0 )
+        ( yield )
+        ( nurl_panic `drain under migration` )
+    } )
+    ?? r { T _ → {} F _ → { ( mutex_lock m ) = g_drained + g_drained 1 ( mutex_unlock m ) } }
+}
+
 @ main → i {
     ( runtime_init 1 )
     : Fiber p ( spawn_owned \ → v {
@@ -107,5 +170,26 @@ $ `stdlib/std/thread.nu`
     ( runtime_shutdown )
     ( mutex_free m )
     ( nurl_println ( nurl_str_cat4 `many: caught ` ( nurl_str_int g_caught ) ` kept ` ( nurl_str_int g_kept ) ) )
+
+    ( runtime_init 1 )
+    : Fiber pd ( spawn_owned \ → v {
+        : Fiber fd ( spawn_owned \ → v { ( drains_while_other_waits ) } )
+        : Fiber gd ( spawn_owned \ → v { ( waits_while_other_drains ) } )
+    } )
+    ( runtime_run )
+    ( runtime_shutdown )
+
+    ( runtime_init 4 )
+    : Mutex md ( mutex_new )
+    : ~ i kd 1
+    ~ <= kd 200 {
+        : i kk kd
+        : Fiber f ( spawn_owned \ → v { ( drain_fiber kk md ) } )
+        = kd + kd 1
+    }
+    ( runtime_run )
+    ( runtime_shutdown )
+    ( mutex_free md )
+    ( nurl_println ( nurl_str_cat `drains: caught ` ( nurl_str_int g_drained ) ) )
     ^ 0
 }

@@ -3955,21 +3955,9 @@ typedef struct {
      * every other entry. */
     long long n;
 } NurlJournalEntry;
-/* The running context's reference-count cycle collector (see "cycle
- * collector" below); swapped with the fiber like the journal. */
-static __thread void *nurl__cc = NULL;
-/* > 0 while a container releases its elements (nurl_vec_drop): a block
- * that asks to be collected now waits for the end of that release, so a
- * Vec of handles into one resource graph is collected once, not once per
- * handle (nurl_cc_collect_now). */
-static __thread int nurl__cc_batch = 0;
 static void nurl__cc_batch_end(void);
-static __thread NurlJournalEntry *nurl__jrnl = NULL;
-static __thread size_t *nurl__jrnl_buckets = NULL;
 NURL_TLS_HOT size_t nurl__jrnl_len = 0;
-static __thread size_t nurl__jrnl_cap = 0;
 NURL_TLS_HOT size_t nurl__jrnl_live = 0;
-static __thread uint64_t nurl__jrnl_sequence = 0;
 NURL_TLS_HOT long long nurl__jrnl_active = 0;
 /* Handle-binding slot registrations (see nurl_journal_push_drop2). */
 typedef struct {
@@ -3982,7 +3970,73 @@ typedef struct {
  * stack test reads it through NURL_TLS_LD.) */
 NURL_TLS_HOT NurlSlotEntry *nurl__jslot = NULL;
 NURL_TLS_HOT size_t nurl__jslot_len = 0;
-static __thread size_t nurl__jslot_cap = 0;
+
+/* What a panic's drain has freed (nurl__drain_seen): an open-addressing
+ * set of block addresses, allocated by the first free a drain records and
+ * released with the last drain of its context. */
+typedef struct {
+    size_t n, cap;
+    void  *slot[];
+} NurlDrainSet;
+
+/* ── A context's recovery state, in two blocks ──────────────────────
+ * The state a recover extent, a panic and the collectors keep is the
+ * running context's: the thread's outside fibers, the fiber's inside one
+ * (see NurlRecoverCtx, §20). The scheduler exchanges it with the fiber's
+ * own copy around every switch, so it is laid out as two blocks the
+ * exchange moves sixteen bytes at a time (nurl__rctx_swap), and the
+ * names the rest of the runtime uses are their fields. The few hot ones
+ * the inline wrappers read with one instruction (NURL_TLS_HOT, above)
+ * keep variables of their own.
+ *
+ * NurlCtxAny: what a context carries outside any recover extent too —
+ * the message its last caught panic left, its cycle collector, the
+ * RwLocked locks it holds, a release in progress (a destructor may yield
+ * in one), and a panic's drain in progress. */
+typedef struct {
+    char                 *last_msg;     /* nurl__panic_last_msg */
+    void                 *cc;           /* nurl__cc */
+    struct NurlRwHolder  *rwh;          /* nurl__rw_holder */
+    int                   cc_batch;     /* nurl__cc_batch */
+    int                   drain_depth;  /* nurl__drain_depth */
+} NurlCtxAny;
+/* NurlCtxFrame: what says something only while the context has a frame
+ * on its recover chain — the journal's and the slot stack's storage, the
+ * sequence they are numbered by, the chain, and the record of a drain. */
+typedef struct {
+    NurlJournalEntry      *jrnl;        /* nurl__jrnl */
+    size_t                *buckets;     /* nurl__jrnl_buckets */
+    size_t                 cap;         /* nurl__jrnl_cap */
+    uint64_t               sequence;    /* nurl__jrnl_sequence */
+    size_t                 jslot_cap;   /* nurl__jslot_cap */
+    struct NurlPanicFrame *panic_top;   /* nurl__panic_top */
+    NurlDrainSet          *dset;        /* nurl__dset */
+} NurlCtxFrame;
+static __thread NurlCtxAny   nurl__ctx_any   __attribute__((aligned(16)));
+static __thread NurlCtxFrame nurl__ctx_frame __attribute__((aligned(16)));
+/* The running context's reference-count cycle collector (see "cycle
+ * collector" below). */
+#define nurl__cc             (nurl__ctx_any.cc)
+/* > 0 while a container releases its elements (nurl_vec_drop): a block
+ * that asks to be collected now waits for the end of that release, so a
+ * Vec of handles into one resource graph is collected once, not once per
+ * handle (nurl_cc_collect_now). */
+#define nurl__cc_batch       (nurl__ctx_any.cc_batch)
+/* Captured message from the most-recent panic; ownership transferred
+ * out on nurl_panic_last_msg read, freed by the next recover. */
+#define nurl__panic_last_msg (nurl__ctx_any.last_msg)
+/* The RwLocked locks the context holds (runtime_ffi.c §19b). */
+#define nurl__rw_holder      (nurl__ctx_any.rwh)
+/* Drains running in this context, nested (see nurl__drain_seen). */
+#define nurl__drain_depth    (nurl__ctx_any.drain_depth)
+#define nurl__jrnl           (nurl__ctx_frame.jrnl)
+#define nurl__jrnl_buckets   (nurl__ctx_frame.buckets)
+#define nurl__jrnl_cap       (nurl__ctx_frame.cap)
+#define nurl__jrnl_sequence  (nurl__ctx_frame.sequence)
+#define nurl__jslot_cap      (nurl__ctx_frame.jslot_cap)
+/* The innermost recover frame of the context (§20). */
+#define nurl__panic_top      (nurl__ctx_frame.panic_top)
+#define nurl__dset           (nurl__ctx_frame.dset)
 
 /* Fibonacci hashing: one multiply, then the TOP log2(2*cap) bits, which
  * every input bit reaches (the low bits of an allocator's pointers are
@@ -4156,48 +4210,70 @@ static void nurl__jrnl_pop_nulls(void) {
  * #622). By the address alone the two cannot be told apart: the stale
  * second free of a block the drain released, and the first free of the
  * block that took its place. */
-static __thread int     nurl__draining = 0;
-/* Drains running on this thread, nested (a drop inside one panics again,
- * or enters a recover of its own that panics). A panic raised by a drop
- * whose recover frame is OUTSIDE the drain longjmps past the drain's
- * epilogue; the frame it lands in ends those drains (nurl__drain_unwind). */
-static __thread int     nurl__drain_depth = 0;
-static __thread void  **nurl__dseen = NULL;
-static __thread size_t  nurl__dseen_n = 0, nurl__dseen_cap = 0;
-/* Record `p` as freed by this drain; 1 when it already was. */
+/*
+ * The drain is the panicking FIBER's, not the thread's (agora #623): a
+ * destructor it runs may yield, and the fiber then waits while other
+ * fibers run on its worker, or resumes on another worker. So the depth
+ * and the record below travel with the fiber in its NurlRecoverCtx,
+ * exchanged around every switch with the journal they describe
+ * (nurl__rctx_swap). Kept per thread, a drain parked in a destructor left
+ * the thread `draining` for the fibers that ran next, whose recover
+ * frames then counted the parked drain as their own and ended it — its
+ * fiber came back to a journal whose live count had gone under zero (a
+ * bucket hash of an empty journal: UBSan's clz(0)) — and a fiber resumed
+ * on another worker found no drain there, so the frees its destructors
+ * went on making were neither recorded nor deduplicated (a double free).
+ *
+ * nurl__drain_depth counts the drains running in this context, nested (a
+ * drop inside one panics again, or enters a recover of its own that
+ * panics); 0 when none runs. A panic raised by a drop whose recover frame
+ * is OUTSIDE the drain longjmps past the drain's epilogue; the frame it
+ * lands in ends those drains (nurl__drain_unwind). nurl__dset is the
+ * record of what they freed: NULL until a drain frees something, and again
+ * once the last drain ends. */
+static inline size_t nurl__dset_hash(void *p, size_t cap) {
+    return (size_t)(((uint64_t)(uintptr_t)p * UINT64_C(0x9e3779b97f4a7c15)) >> 32) & (cap - 1);
+}
+/* Record `p` as freed by this context's drain; 1 when it already was. */
 static int nurl__drain_seen(void *p) {
-    if (nurl__dseen_n * 2 >= nurl__dseen_cap) {
-        size_t cap = nurl__dseen_cap ? nurl__dseen_cap * 2 : 64;
-        void **t = (void **)calloc(cap, sizeof *t);
-        for (size_t i = 0; i < nurl__dseen_cap; i++) {
-            void *q = nurl__dseen[i];
-            if (!q) continue;
-            size_t h = (size_t)(((uint64_t)(uintptr_t)q * UINT64_C(0x9e3779b97f4a7c15)) >> 32) & (cap - 1);
-            while (t[h]) h = (h + 1) & (cap - 1);
-            t[h] = q;
+    NurlDrainSet *d = nurl__dset;
+    if (!d || d->n * 2 >= d->cap) {
+        size_t cap = d ? d->cap * 2 : 64;
+        NurlDrainSet *t = (NurlDrainSet *)calloc(1, sizeof *t + cap * sizeof t->slot[0]);
+        if (!t) nurl__oom(sizeof *t + cap * sizeof t->slot[0]);
+        t->cap = cap;
+        if (d) {
+            for (size_t i = 0; i < d->cap; i++) {
+                void *q = d->slot[i];
+                if (!q) continue;
+                size_t h = nurl__dset_hash(q, cap);
+                while (t->slot[h]) h = (h + 1) & (cap - 1);
+                t->slot[h] = q;
+            }
+            t->n = d->n;
+            free(d);
         }
-        free(nurl__dseen);
-        nurl__dseen = t; nurl__dseen_cap = cap;
+        nurl__dset = d = t;
     }
-    size_t h = (size_t)(((uint64_t)(uintptr_t)p * UINT64_C(0x9e3779b97f4a7c15)) >> 32) & (nurl__dseen_cap - 1);
-    while (nurl__dseen[h]) {
-        if (nurl__dseen[h] == p) return 1;
-        h = (h + 1) & (nurl__dseen_cap - 1);
+    size_t h = nurl__dset_hash(p, d->cap);
+    while (d->slot[h]) {
+        if (d->slot[h] == p) return 1;
+        h = (h + 1) & (d->cap - 1);
     }
-    nurl__dseen[h] = p;
-    nurl__dseen_n++;
+    d->slot[h] = p;
+    d->n++;
     return 0;
 }
-/* The last drain on the thread is over: what it freed, each block once
+/* The last drain of the context is over: what it freed, each block once
  * (counted where it was recorded), goes back to the allocator. */
 __attribute__((noinline, cold))
 static void nurl__drain_release(void) {
-    void **t = nurl__dseen;
-    size_t cap = nurl__dseen_cap;
-    nurl__dseen = NULL; nurl__dseen_n = nurl__dseen_cap = 0;
-    for (size_t i = 0; i < cap; i++)
-        if (t[i] && !nurl__sc_push(t[i])) free(t[i]);
-    free(t);
+    NurlDrainSet *d = nurl__dset;
+    nurl__dset = NULL;
+    if (!d) return;
+    for (size_t i = 0; i < d->cap; i++)
+        if (d->slot[i] && !nurl__sc_push(d->slot[i])) free(d->slot[i]);
+    free(d);
 }
 
 /* Remove all aliases; normal frees and explicit ownership transfers share
@@ -4353,66 +4429,101 @@ static void nurl__jrnl_truncate(uint64_t mark) {
 /* Re-read the tail after every drop: destructors may forget other owners,
  * register scratch storage, or enter nested recovery. No index/pointer into
  * the journal survives the call. Raw frees forget aliases in outer extents
- * too, so an outer panic cannot reclaim already-freed storage a second time. */
-static void nurl__jrnl_drain_body(uint64_t mark);
-static void nurl__jrnl_drain(uint64_t mark) {
-    /* A drain inside a drop of an outer drain shares the outer record. */
-    int outer = nurl__draining;
-    nurl__draining = 1;
+ * too, so an outer panic cannot reclaim already-freed storage a second time.
+ *
+ * A destructor may also yield, and its fiber may come back on another
+ * worker thread (agora #623). The compiler takes a function's thread to be
+ * fixed, so a thread-local's address computed before the call would be
+ * reused after it: the drain would go on in the journal of the thread it
+ * left. So the loop itself touches no thread-local. Each step is taken by
+ * nurl__drain_next, out of line, which computes every address on the
+ * thread it runs on, and the loop only makes the call it hands back. */
+typedef struct {
+    void      (*drop)(void *);
+    void       *arg;
+    long long   n;                  /* >= 0: a slice's elements, drop(arg, n) */
+} NurlDrainStep;
+/* The newest registration above `mark`, taken off the journal: 1 with the
+ * drop to run in `*st`; 0 when none is left. A raw buffer is recorded and
+ * counted here (its block goes when the drain ends) and needs no call. */
+__attribute__((noinline))
+static int nurl__drain_next(uint64_t mark, NurlDrainStep *st) {
+    for (;;) {
+        nurl__jrnl_pop_nulls();
+        nurl__jslot_pop_nulls();
+        uint64_t ps = nurl__jrnl_len ? nurl__jrnl[nurl__jrnl_len - 1].sequence : 0;
+        uint64_t ss = nurl__jslot_len ? nurl__jslot[nurl__jslot_len - 1].sequence : 0;
+        if (ps <= mark && ss <= mark) return 0;
+        if (ss > ps) {
+            NurlSlotEntry se = nurl__jslot[--nurl__jslot_len];
+            if (se.flag && !(*(volatile const unsigned char *)se.flag & 1)) continue;
+            st->drop = se.drop; st->arg = se.slot; st->n = -1;
+            return 1;
+        }
+        NurlJournalEntry entry = nurl__jrnl[nurl__jrnl_len - 1];
+        nurl_journal_forget(entry.ptr);
+        /* A slice's buffer: the buffer is recorded as a raw one is, and
+         * its elements are the step. Its block is kept to the drain's end
+         * either way, so the order of the two is not observable. */
+        if (entry.n >= 0 && entry.drop) {
+            if (!nurl__drain_seen(entry.ptr))
+                nurl__actr_bump(&nurl__actr_slot()->freed);
+            if (entry.n == 0) continue;
+            st->drop = entry.drop; st->arg = entry.ptr; st->n = entry.n;
+            return 1;
+        }
+        if (entry.drop) {
+            if (entry.flag && !(*(volatile const unsigned char *)entry.flag & 1)) continue;
+            st->drop = entry.drop; st->arg = entry.ptr; st->n = -1;
+            return 1;
+        }
+        /* A raw buffer nurl_alloc handed out: count its release as
+         * nurl_free would, so nurl_alloc_count − nurl_free_count stays the
+         * live total across a panic. The block itself goes when the drain
+         * ends (nurl__drain_release). */
+        if (!nurl__drain_seen(entry.ptr))
+            nurl__actr_bump(&nurl__actr_slot()->freed);
+    }
+}
+/* A drain begins: the journal is marked live for its duration, so every
+ * nurl_free reaches the record. A drain inside a drop of an outer drain
+ * shares the outer record. */
+__attribute__((noinline))
+static void nurl__drain_begin(void) {
     ++nurl__drain_depth;
     ++nurl__jrnl_live;
-    nurl__jrnl_drain_body(mark);
+}
+/* A drain ran to its end; the last one of the context releases the
+ * record. */
+__attribute__((noinline))
+static void nurl__drain_end(void) {
     --nurl__jrnl_live;
-    --nurl__drain_depth;
-    nurl__draining = outer;
-    if (!outer) nurl__drain_release();
+    if (--nurl__drain_depth == 0) nurl__drain_release();
+}
+static void nurl__jrnl_drain(uint64_t mark) {
+    NurlDrainStep st;
+    nurl__drain_begin();
+    while (nurl__drain_next(mark, &st)) {
+        if (st.n >= 0) ((void (*)(void *, long long))st.drop)(st.arg, st.n);
+        else st.drop(st.arg);
+    }
+    nurl__drain_end();
 }
 /* A recover frame entered with `depth` drains running catches a panic:
  * the drains begun since were left by the longjmp, mid-loop (a drop that
  * panicked — a double panic — or one inside a drop's own recover). End
  * them as their epilogue would have: the journal no longer live for them,
  * and once no drain is left, the record of what they freed released.
- * Without this the thread stayed `draining` for good: every later free was
- * recorded in a set that only grew, and one of an address the drain had
- * freed and malloc had handed out again was skipped (a leak). */
+ * Without this the context stayed `draining` for good: every later free
+ * was recorded in a set that only grew, and one of an address the drain
+ * had freed and malloc had handed out again was skipped (a leak). The
+ * depth and the frame's count are both the context's own, so the frame
+ * ends only drains its own fiber began. */
 static void nurl__drain_unwind(int depth) {
-    while (nurl__drain_depth > depth) { --nurl__drain_depth; --nurl__jrnl_live; }
-    if (nurl__drain_depth == 0 && nurl__draining) {
-        nurl__draining = 0;
-        nurl__drain_release();
-    }
-}
-static void nurl__jrnl_drain_body(uint64_t mark) {
-    for (;;) {
-        nurl__jrnl_pop_nulls();
-        nurl__jslot_pop_nulls();
-        uint64_t ps = nurl__jrnl_len ? nurl__jrnl[nurl__jrnl_len - 1].sequence : 0;
-        uint64_t ss = nurl__jslot_len ? nurl__jslot[nurl__jslot_len - 1].sequence : 0;
-        if (ps <= mark && ss <= mark) break;
-        if (ss > ps) {
-            NurlSlotEntry se = nurl__jslot[--nurl__jslot_len];
-            if (!se.flag || (*(volatile const unsigned char *)se.flag & 1)) se.drop(se.slot);
-            continue;
-        }
-        NurlJournalEntry entry = nurl__jrnl[nurl__jrnl_len - 1];
-        nurl_journal_forget(entry.ptr);
-        /* A slice's buffer: its elements first, then the buffer as a raw
-         * one goes (below). */
-        if (entry.n >= 0 && entry.drop) {
-            if (entry.n > 0) ((void (*)(void*, long long))entry.drop)(entry.ptr, entry.n);
-            entry.drop = NULL;
-        }
-        if (entry.drop) {
-            if (!entry.flag || (*(volatile const unsigned char *)entry.flag & 1)) entry.drop(entry.ptr);
-        } else {
-            /* A raw buffer nurl_alloc handed out: count its release as
-             * nurl_free would, so nurl_alloc_count − nurl_free_count stays
-             * the live total across a panic. The block itself goes when
-             * the drain ends (nurl__drain_release). */
-            if (!nurl__drain_seen(entry.ptr))
-                nurl__actr_bump(&nurl__actr_slot()->freed);
-        }
-    }
+    if (nurl__drain_depth <= depth) return;
+    nurl__jrnl_live -= (size_t)(nurl__drain_depth - depth);
+    nurl__drain_depth = depth;
+    if (depth == 0) nurl__drain_release();
 }
 
 /* Freeing NULL is the common case — a slot released at scope exit after
@@ -4425,7 +4536,7 @@ static void nurl__jrnl_drain_body(uint64_t mark) {
  * counted, so releasing it is the test alone. */
 /* A free during a drain: recorded and counted, once per block; the block
  * is kept until the drain ends, so that its address names it throughout
- * (see nurl__draining). */
+ * (see nurl__drain_depth). */
 __attribute__((noinline, cold))
 static void nurl__free_draining(void *ptr) {
     if (nurl__jrnl_cap) nurl__jrnl_forget_body(ptr);
@@ -4474,7 +4585,7 @@ static inline int nurl__free_fast(void *ptr) { (void)ptr; return 0; }
  * nothing journaled — every free of a program that never recovers — keeps
  * the bucket walk, and the registers it needs, off its path. */
 NURL_TLS_FN static void nurl__free_journaled(void *ptr) {
-    if (__builtin_expect(nurl__draining, 0)) { nurl__free_draining(ptr); return; }
+    if (__builtin_expect(nurl__drain_depth, 0)) { nurl__free_draining(ptr); return; }
     nurl__jrnl_forget_body(ptr);
     if (!nurl__free_fast(ptr)) nurl__free_general(ptr);
 }
@@ -10712,7 +10823,7 @@ typedef struct NurlRwHolder {
     NurlRwHeldEnt *more;                 /* entries past the inline ones */
 } NurlRwHolder;
 static __thread NurlRwHolder nurl__rw_thread_rec;
-static __thread NurlRwHolder *nurl__rw_holder = NULL;
+/* (nurl__rw_holder is a field of the context's state, §9b.) */
 static int nurl__rw_in_fiber(void);      /* runtime_ffi.c, after the scheduler */
 static void nurl__rw_holder_free(void *p) {
     NurlRwHolder *h = (NurlRwHolder *)p;
@@ -10732,10 +10843,8 @@ typedef struct NurlPanicFrame {
     struct NurlPanicFrame   *prev;
 } NurlPanicFrame;
 
-static __thread NurlPanicFrame *nurl__panic_top = NULL;
-/* Captured message from the most-recent panic; ownership transferred
- * out on nurl_panic_last_msg read, freed by the next recover. */
-static __thread char *nurl__panic_last_msg = NULL;
+/* (nurl__panic_top and nurl__panic_last_msg are fields of the context's
+ * state, §9b.) */
 
 /* A thread that ends lets go of the message its last panic left: nothing
  * can read it any more (nurl_panic_last_msg reads this thread's). */
@@ -10761,42 +10870,61 @@ static void nurl__panic_thread_exit(void) {
  * worker loop in runtime_ffi.c), so each fiber carries its chain and its
  * journal. The fast paths keep reading plain thread-locals. */
 typedef struct NurlRecoverCtx {
-    NurlJournalEntry *jrnl;
-    size_t           *buckets;
-    size_t            len, cap, live;
-    uint64_t          sequence;
+    NurlCtxAny        any;         /* nurl__ctx_any's copy */
+    NurlCtxFrame      frame;       /* nurl__ctx_frame's copy */
+    NurlSlotEntry    *jslot;       /* the hot variables (NURL_TLS_HOT) */
+    size_t            len, live, jslot_len;
     int               active;
-    int               cc_batch;    /* nurl__cc_batch: a release in progress */
-    NurlSlotEntry    *jslot;
-    size_t            jslot_len, jslot_cap;
-    NurlPanicFrame   *panic_top;
-    char             *last_msg;
-    void             *cc;          /* the context's cycle collector (nurl__cc) */
-    NurlRwHolder     *rwh;         /* the RwLocked locks it holds (nurl__rw_holder) */
 } NurlRecoverCtx;
 /* runtime_ffi.c reserves NURL_RCTX_WORDS pointers per fiber for it. */
-#define NURL_RCTX_WORDS 14
+#define NURL_RCTX_WORDS 16
 _Static_assert(sizeof(NurlRecoverCtx) <= NURL_RCTX_WORDS * sizeof(void *),
                "NurlRecoverCtx outgrew the per-fiber slot in runtime_ffi.c");
 
+/* Exchange a block of the running context's state (`t`, a thread-local)
+ * with the fiber's copy (`c`, 8-byte aligned in the fiber): sixteen bytes
+ * at a time, every load before the stores, in registers. */
+typedef long long nurl__x16 __attribute__((vector_size(16), aligned(8), __may_alias__));
+typedef long long nurl__x8 __attribute__((aligned(8), __may_alias__));
+static inline __attribute__((always_inline))
+void nurl__xchg_any(NurlCtxAny *restrict t, NurlCtxAny *restrict c) {
+    nurl__x16 *tp = (nurl__x16 *)t, *cp = (nurl__x16 *)c;
+    nurl__x16 a0 = tp[0], a1 = tp[1], b0 = cp[0], b1 = cp[1];
+    tp[0] = b0; tp[1] = b1; cp[0] = a0; cp[1] = a1;
+}
+static inline __attribute__((always_inline))
+void nurl__xchg_frame(NurlCtxFrame *restrict t, NurlCtxFrame *restrict c) {
+    nurl__x16 *tp = (nurl__x16 *)t, *cp = (nurl__x16 *)c;
+    nurl__x8 *tq = (nurl__x8 *)(tp + 3), *cq = (nurl__x8 *)(cp + 3);
+    nurl__x16 a0 = tp[0], a1 = tp[1], a2 = tp[2], b0 = cp[0], b1 = cp[1], b2 = cp[2];
+    nurl__x8 a3 = *tq, b3 = *cq;
+    tp[0] = b0; tp[1] = b1; tp[2] = b2; *tq = b3;
+    cp[0] = a0; cp[1] = a1; cp[2] = a2; *cq = a3;
+}
+_Static_assert(sizeof(NurlCtxAny) == 32 && sizeof(NurlCtxFrame) == 56,
+               "nurl__xchg_any / nurl__xchg_frame move 32 and 56 bytes");
 #define NURL__RCTX_XCHG(field, var) do { __typeof__(var) t_ = (var); (var) = c->field; c->field = t_; } while (0)
 NURL_TLS_FN void nurl__rctx_swap(void *ctx) {
     NurlRecoverCtx *c = (NurlRecoverCtx *)ctx;
-    NURL__RCTX_XCHG(jrnl, nurl__jrnl);
-    NURL__RCTX_XCHG(buckets, nurl__jrnl_buckets);
-    NURL__RCTX_XCHG(len, nurl__jrnl_len);
-    NURL__RCTX_XCHG(cap, nurl__jrnl_cap);
-    NURL__RCTX_XCHG(live, nurl__jrnl_live);
-    NURL__RCTX_XCHG(sequence, nurl__jrnl_sequence);
-    NURL__RCTX_XCHG(active, nurl__jrnl_active);
+    nurl__xchg_any(&nurl__ctx_any, &c->any);
+    /* The rest says something only while the context has a frame on its
+     * chain: a registration needs an open extent (nurl__jrnl_active), the
+     * last extent to close leaves the journal and the slot stack empty,
+     * and a drain runs only under the frame it jumps to, so its record is
+     * NULL without one. With no frame on either side, both hold storage
+     * alone (an idle journal's buffers, the sequence they are numbered
+     * by), and exchanging storage nobody reads changes nothing: it is
+     * skipped. A block moves whole, so the buffers and their sequence stay
+     * together whichever context ends up with them, and whichever frees
+     * them (nurl__rctx_release or the thread's exit). Most fibers never
+     * open an extent; for them a switch is the block above. */
+    if (!(nurl__panic_top || c->frame.panic_top)) return;
+    nurl__xchg_frame(&nurl__ctx_frame, &c->frame);
     NURL__RCTX_XCHG(jslot, nurl__jslot);
+    NURL__RCTX_XCHG(len, nurl__jrnl_len);
+    NURL__RCTX_XCHG(live, nurl__jrnl_live);
     NURL__RCTX_XCHG(jslot_len, nurl__jslot_len);
-    NURL__RCTX_XCHG(jslot_cap, nurl__jslot_cap);
-    NURL__RCTX_XCHG(panic_top, nurl__panic_top);
-    NURL__RCTX_XCHG(last_msg, nurl__panic_last_msg);
-    NURL__RCTX_XCHG(cc, nurl__cc);
-    NURL__RCTX_XCHG(cc_batch, nurl__cc_batch);
-    NURL__RCTX_XCHG(rwh, nurl__rw_holder);
+    NURL__RCTX_XCHG(active, nurl__jrnl_active);
 }
 #undef NURL__RCTX_XCHG
 
@@ -10804,9 +10932,9 @@ NURL_TLS_FN void nurl__rctx_swap(void *ctx) {
  * storage is left. */
 void nurl__rctx_release(void *ctx) {
     NurlRecoverCtx *c = (NurlRecoverCtx *)ctx;
-    free(c->jrnl); free(c->buckets); free(c->jslot);
-    if (c->last_msg) nurl_free(c->last_msg);
-    nurl__rw_holder_free(c->rwh);
+    free(c->frame.jrnl); free(c->frame.buckets); free(c->jslot);
+    if (c->any.last_msg) nurl_free(c->any.last_msg);
+    nurl__rw_holder_free(c->any.rwh);
     memset(c, 0, sizeof *c);
 }
 
@@ -10946,15 +11074,23 @@ NURL_TLS_FN void nurl_panic(const char *msg) {
      * panic) is caught by the same frame: the nested drain below releases
      * what is left, and the first panic — the cause — keeps its message
      * (overwriting it leaked the first). */
-    if (!nurl__panic_top->msg)
-        nurl__panic_top->msg = (msg && *msg) ? strdup(msg)
-                                             : strdup("(no message)");
+    NurlPanicFrame *top = nurl__panic_top;
+    if (!top->msg)
+        top->msg = (msg && *msg) ? strdup(msg) : strdup("(no message)");
     /* Run the scope-exit drops the longjmp is about to skip: free every
      * owned allocation recorded since this recover frame's mark while
      * the owning C frames are still valid. Closes the panic-unwind leak
-     * (docs/MEMORY.md §7). */
-    nurl__jrnl_drain(nurl__panic_top->jmark);
-    longjmp(nurl__panic_top->jb, 1);
+     * (docs/MEMORY.md §7).
+     *
+     * The jump goes to `top`, read before the drain: a destructor the
+     * drain runs may yield, and this fiber may come back on another
+     * worker, where a thread-local address computed before the call names
+     * another thread's chain (agora #623: a null NurlPanicFrame read here
+     * with four workers). The frame itself lies on this fiber's stack, and
+     * the drain leaves the chain as it found it — a drop's own recover
+     * pops what it pushed, and a drop's panic leaves by its own jump. */
+    nurl__jrnl_drain(top->jmark);
+    longjmp(top->jb, 1);
 }
 
 #else  /* __wasi__: setjmp/longjmp unavailable until the wasm

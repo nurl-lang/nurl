@@ -1756,8 +1756,16 @@ is stated here so the claim does not hide it:
   leaves the journal before its drop runs, so nothing is dropped twice),
   and the `recover` reports the first panic's message — the cause;
 - the drain the second panic interrupted is ended by the frame that
-  catches it (`nurl__drain_unwind`): the thread's drain state is reset,
+  catches it (`nurl__drain_unwind`): the context's drain state is reset,
   so later frees are ordinary;
+- a drain is the running context's, as its journal is: the thread's
+  outside fibers, the fiber's inside one (Agora #623). A destructor the
+  drain runs may yield; the fiber's drain depth and its record of what the
+  drain freed are exchanged with its journal around every switch
+  (`nurl__rctx_swap`), so it goes on, on whichever worker it resumes on,
+  with its own drain, and the fibers that ran meanwhile saw none. The
+  drain loop reads no thread-local across a destructor's call
+  (`nurl__drain_next`), and the jump goes to the frame read before it;
 - with no `recover` frame, any panic ends the process (`abort`) before a
   drain starts, so nothing is released twice and the process's memory goes
   with it;

@@ -6908,7 +6908,7 @@ typedef enum {
 
 /* Per-fiber recovery state (runtime_core.c: NurlRecoverCtx, which
  * static-asserts it fits). */
-#define NURL_RCTX_WORDS 14
+#define NURL_RCTX_WORDS 16
 void nurl__rctx_swap(void *ctx);
 void nurl__rctx_release(void *ctx);
 
@@ -8193,6 +8193,10 @@ static void *nurl__worker_loop(void *arg) {
         }
     }
     nurl__tls_worker = NULL;
+    /* A switch between two contexts with no recover frame leaves their
+     * idle journal storage where it is (nurl__rctx_swap), so the worker
+     * may end holding a buffer a fiber grew: it goes with the worker. */
+    nurl__journal_thread_exit();
     return NULL;
 }
 

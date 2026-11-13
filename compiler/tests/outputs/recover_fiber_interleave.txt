@@ -16,3 +16,12 @@ D: inner value
 D: outer value
 D: done
 many: caught 100 kept 200
+F: in extent
+G: in extent
+F: panics
+drops F's second value
+drops F's first value
+F: recovered: F's cause
+G: G's value, still in use
+G: completed
+drains: caught 200
