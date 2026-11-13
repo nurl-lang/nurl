@@ -19084,6 +19084,12 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     // argument was not one) — the returned-handle propagation below
     // maps the callee's ret-alias indices back to caller bindings.
     : ~ s arg_idents ``
+    // (…as codegen's ownership questions read them, `__last_call_args__`:
+    // a value block argument whose tail is a binding of its own stands for
+    // that binding — `( idg [String] { : String t ( mk c ) t } )` hands it,
+    // this frame's, to the call; agora #833. The walk's roster keeps `-`:
+    // the block's names ended at its `}`.)
+    : ~ s arg_onames ``
     // …and the positions of the arguments that are no bare name but may
     // still lend what they read: a field, a join, a call that may lend —
     // not a literal or a fresh value (agora #412).
@@ -20674,6 +20680,8 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         = arg_idents ? == 0 ( nurl_str_len arg_idents )
         ( nurl_str_cat bck_arg_nm `` )
         ( nurl_str_cat3 arg_idents ` ` bck_arg_nm )
+        : s __arg_onm ? & & == bck_arg_tt TT_LBRACE ( is_ident_tok ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) ) ) == 0 ( nurl_sym_len syms `__tail_first_deep__` ) ( nurl_sym_get syms `__tail_first_val__` ) bck_arg_nm
+        = arg_onames ? == 0 ( nurl_str_len arg_onames ) ( nurl_str_cat __arg_onm `` ) ( nurl_str_cat3 arg_onames ` ` __arg_onm )
         ? __want_effr {
             : s __aer ? ( is_ident_tok bck_arg_tt ) ( nurl_str_cat bck_arg_val `` ) ? != 0 ( nurl_str_len arg_froot ) ( nurl_str_cat arg_froot `` ) ? == bck_arg_tt TT_LPAREN ( __effr_lent ( bck_call_lend_srcs syms ) ) ( nurl_str_cat `-` `` )
             = arg_effr ? == 0 ( nurl_str_len arg_effr ) ( nurl_str_cat __aer `` ) ( nurl_str_cat3 arg_effr ` ` __aer )
@@ -22338,7 +22346,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     // …and, for a decision that cannot wait for the callee's summaries (a
     // generic instance compiled after this caller), the arguments by
     // position and the callee to ask at module end (mem_ret_local_lend).
-    ( nurl_sym_def syms `__last_call_args__` arg_idents )
+    ( nurl_sym_def syms `__last_call_args__` arg_onames )
     // …and its source expression: the callee's summaries say which
     // arguments its result points into or lends (a callee without one —
     // a foreign function, a builtin — hands back a value of its own; a
