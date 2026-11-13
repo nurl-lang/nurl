@@ -2133,6 +2133,9 @@ unsafe @ agg_field_count i syms s ot → i {
 // __bck_arm_join): a counter for their ids, and how many noted are not
 // written yet — a statement's flush asks the table only when there are some.
 : ~ i g_bck_ajn 0
+// Whether the last call published a join argument's bindings
+// (`__last_call_join_phi__`, gen_call), so the next one must clear them.
+: ~ i g_call_jphi_set 0
 : ~ i g_bck_ajp 0
 // (nurlc compiles on one thread: nothing races on the list.)
 unsafe @ __fn_io_reset → v { = g_fn_io_names `` }
@@ -22318,7 +22321,11 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     // generic instance compiled after this caller), the arguments by
     // position and the callee to ask at module end (mem_ret_local_lend).
     ( nurl_sym_def syms `__last_call_args__` arg_idents )
-    ( nurl_sym_def syms `__last_call_join_phi__` __call_jphi )
+    // (Written only where it changes: most calls have no join argument.)
+    ? | != 0 ( nurl_str_len __call_jphi ) != 0 g_call_jphi_set {
+        ( nurl_sym_set_deep syms `__last_call_join_phi__` __call_jphi )
+        = g_call_jphi_set ? == 0 ( nurl_str_len __call_jphi ) 0 1
+    } {}
     // …and its source expression: the callee's summaries say which
     // arguments its result points into or lends (a callee without one —
     // a foreign function, a builtin — hands back a value of its own; a
@@ -23041,8 +23048,10 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // temporary's root, `__plroot`, or the binding its payload is lent
         // out of, `__plend`: an outer one, it is none of the arm's own,
         // agora #775.)
-        : s __plr0 ? | ( seq nm1 `-` ) == 0 ( nurl_sym_len syms nm1 ) `` ( nurl_sym_get2 syms nm1 `__plroot` )
-        : s __plr ? | != 0 ( nurl_str_len __plr0 ) | ( seq nm1 `-` ) == 0 ( nurl_sym_len syms nm1 ) ( nurl_str_cat __plr0 `` ) ( nurl_sym_get2 syms nm1 `__plend` )
+        // (Asked only of a binding of the arm itself.)
+        : b __pla & ! ( seq nm1 `-` ) & != 0 ( nurl_sym_len syms nm1 ) >= ( nurl_sym_depth_of syms nm1 ) here
+        : s __plr0 ? __pla ( nurl_sym_get2 syms nm1 `__plroot` ) ``
+        : s __plr ? | != 0 ( nurl_str_len __plr0 ) ! __pla ( nurl_str_cat __plr0 `` ) ( nurl_sym_get2 syms nm1 `__plend` )
         : s nm ? & & != 0 ( nurl_str_len __plr ) == 0 ( nurl_str_len ( str_skip_word __plr ) ) & != 0 ( nurl_sym_len syms __plr ) < ( nurl_sym_depth_of syms __plr ) here ( nurl_str_cat __plr `` ) nm1
         // `how`: `` — a safe lender, nothing to ask; `ask` — ask the callee;
         // else the binding's drop flag — ask the callee where it is down.
@@ -68114,6 +68123,9 @@ unsafe @ str_has_index s list i k → b {
 // function empties where it hands the value on (agora #778), so it is never
 // consumed (bck_record_inferred_sink, agora #776)?
 @ __inout_handle_param i syms s name → b {
+    // (The function's own `inout` parameters are a short list, asked
+    // first: most calls hand on no such name.)
+    ? | == 0 ( nurl_str_len g_fn_io_names ) ! ( str_contains_word g_fn_io_names name ) { ^ F } {}
     ? ! ( seq ( nurl_sym_get2 syms name `__inout` ) `1` ) { ^ F } {}
     // (Its binding's type is the pointer it is passed as.)
     : s t ( nurl_sym_get syms name )
@@ -74380,6 +74392,10 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     ( nurl_sym_def syms `__agg_lends_call__` `` )
     ( nurl_sym_def syms `__agg_lends_part__` `` )
     ( nurl_sym_def syms `__agg_take_own__` `` )
+    // (One slot for the function, written in place by every call: a
+    // scope's own copy would outlive what the next call publishes.)
+    ( nurl_sym_def syms `__last_call_join_phi__` `` )
+    = g_call_jphi_set 0
     ( nurl_sym_def syms `__agg_take_ost__` `` )
     ( nurl_sym_def syms `__ret_agg__` `` )
     ( nurl_sym_def syms `__fn_builds_view__` `` )
