@@ -30968,18 +30968,13 @@ unsafe @ __pfo_bind_lends i syms s name → v {
 
 // The words of `s`, its lines joined (`__pljr`'s rows).
 @ __str_lines_words s txt → s {
-    : ~ s r ( nurl_str_cat txt `` )
-    : ~ i i 0
-    : i n ( nurl_str_len r )
+    : ~ s rest ( nurl_str_cat txt `` )
     : ~ s out ``
-    : ~ i st 0
-    ~ <= i n {
-        ? | == i n == ( nurl_str_get r i ) 10 {
-            : s ln ( nurl_str_slice r st - i st )
-            = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat ln `` ) ( nurl_str_cat3 out ` ` ln )
-            = st + i 1
-        } {}
-        = i + i 1
+    ~ != 0 ( nurl_str_len rest ) {
+        : i nl ( nurl_str_find rest `\n` )
+        : s ln ? < nl 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 nl )
+        = rest ? < nl 0 `` ( nurl_str_slice rest + nl 1 - - ( nurl_str_len rest ) nl 1 )
+        = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat ln `` ) ( nurl_str_cat3 out ` ` ln )
     }
     ^ out
 }
@@ -56247,9 +56242,14 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // was dropped with the old value under the binding: `= o ( first o
         // )`, first handing back `( vec_at [N] . x kids 0 )`, agora #450 A.)
         : ~ s __ud_pcpy ``
-        ? & & & != 0 ( nurl_str_len __ud_kcond ) == bck_rhs_tt TT_LPAREN ! __ud_may_self ( __clone_supported vt syms ) {
+        // (Only a callee whose lends wait on module end — a final summary
+        // answers above — and only where the binding owns its old value
+        // still: a cursor's old value is dropped by no one, and `= cur (
+        // next cur )` walks on through the container as before.)
+        ? & & & & != 0 ( nurl_str_len __ud_kcond ) == bck_rhs_tt TT_LPAREN ! __ud_may_self ( __clone_supported vt syms ) ( __lend_pending ( nurl_sym_get syms `__last_call_name__` ) ) {
             = __ud_pcpy ( mem_ud_part_copy_cond syms cg name )
             ? != 0 ( nurl_str_len __ud_pcpy ) {
+                = __ud_pcpy ( __and_i1 cg __ud_pcpy ( mem_udrop_flag_get syms cg __ud_ptr ) )
                 // (Only a run whose result is lent: one the callee made is
                 // the binding's as it is.)
                 : s __ud_pro ( mem_call_retown syms cg )
