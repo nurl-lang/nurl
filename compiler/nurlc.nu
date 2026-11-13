@@ -50690,6 +50690,52 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
             = g_bck_end_elem 0
         } {}
     } {}
+    // (…and a `??` payload that is a cursor over the value handed (`cu_`,
+    // bck_handle_match), or over such a cursor: its buffer is the option's
+    // payload's, which a callee growing that payload moves — `?? o { T q →
+    // … ( w o ) … }` with w reserving through its own match of the option.
+    // Its views end, and those of its fields' paths; where the callee moves
+    // only the buffer of one of the payload's elements (g_fn_ireallocs),
+    // only what points into those, as for the value handed itself above.
+    // The cursor's handle still reaches the payload. Agora #816.)
+    ? & & != 0 g_bck_has_cursor >= wid 0 | | | == kc 9 == kc 12 == kc 13 == kc 32 {
+        : ~ s cus ( nurl_sym_get g_bck ( bck_bkey `cu_` ( nurl_str_int wid ) ) )
+        : b crea ( nurl_sym_has_word g_fn_reallocs ( bck_field rec 5 ) ( bck_field rec 6 ) )
+        : b cirea & != 0 g_irealloc_any ( nurl_sym_has_word g_fn_ireallocs ( bck_field rec 5 ) ( bck_field rec 6 ) )
+        ? & != 0 ( nurl_str_len cus ) | crea cirea {
+            : s cuw ( nurl_str_cat4 `'` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int wid ) ) ) `', whose payload it is, was passed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) ? crea `', which may move its payload's buffer` `', which may move the buffer of one of its payload's elements` ) )
+            : ~ s cseen ``
+            ~ != 0 ( nurl_str_len cus ) {
+                : s cu ( str_first_word cus ) = cus ( str_skip_word cus )
+                ? ! ( str_contains_word cseen cu ) {
+                    = cseen ( nurl_str_cat3 cseen ` ` cu )
+                    : i cui ( nurl_str_to_int cu )
+                    // (…the views of its field paths' too: sources rooted at it.)
+                    : ~ s cps ( nurl_str_cat cu `` )
+                    ? != 0 g_bck_has_paths {
+                        : ~ s pr ( nurl_sym_get g_bck ( bck_bkey `bsrcs` `` ) )
+                        ~ != 0 ( nurl_str_len pr ) {
+                            : s pw ( str_first_word pr ) = pr ( str_skip_word pr )
+                            : i pwi ( nurl_str_to_int pw )
+                            ? & != pwi cui == ( bck_path_root pwi ) cui { = cps ( nurl_str_cat3 cps ` ` pw ) } {}
+                        }
+                    } {}
+                    ~ != 0 ( nurl_str_len cps ) {
+                        : s cp ( str_first_word cps ) = cps ( str_skip_word cps )
+                        : i cpi ( nurl_str_to_int cp )
+                        ? crea { = out ( bck_view_end out cpi ( bck_field_int rec 3 ) cuw ) } {
+                            = g_bck_end_elem 1
+                            = out ( bck_view_end ( bck_view_end_ind out cpi ( bck_field_int rec 3 ) cuw ) cpi ( bck_field_int rec 3 ) cuw )
+                            = g_bck_end_elem 0
+                        }
+                    }
+                    // (…and a cursor over this cursor: `?? q { T q2 → … }`.)
+                    : s cu2 ( nurl_sym_get g_bck ( bck_bkey `cu_` cu ) )
+                    ? != 0 ( nurl_str_len cu2 ) { = cus ( nurl_str_cat3 cus ` ` cu2 ) } {}
+                } {}
+            }
+        } {}
+    } {}
     // Dropping elements or replacing a field THROUGH a borrow reaches what
     // it borrows from: the other borrows of those owners end (the borrow
     // used for it still reaches a live value).
