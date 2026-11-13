@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+kid name, long enough for a heap buffer
+kid name, long enough for a heap buffer
+kid name, long enough for a heap buffer
+fresh name, long enough for a heap buffer
+kid name, long enough for a heap buffer
+fresh name, long enough for a heap buffer

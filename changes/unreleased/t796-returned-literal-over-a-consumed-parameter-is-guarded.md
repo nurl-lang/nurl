@@ -1,0 +1,3 @@
+### Fixed
+
+- **A returned literal over a parameter the function consumes survives a panicking local's destructor** (Agora #796). `@ f String t → ?Two { : Bomb l … : String s … ^ @ ?Two { T @ Two { s t } } }` lost both strings when `l`'s destructor panicked under `recover`: `t` is no `sink`, so the literal was not taken for the function's own and had no journal entry while the locals were dropped. A parameter taken in whole now counts as the function's own on the runs its drop flag's entry value says it is (the module-end consume answer), and the literal's guard holds on those runs only. A `% Drop` parameter is covered the same way; a field copied per call is left as before.

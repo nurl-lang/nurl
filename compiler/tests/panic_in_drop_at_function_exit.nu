@@ -190,6 +190,29 @@ $ `stdlib/core/vec.nu`
     ( nurl_println `not reached` )
 }
 
+// A literal over a parameter that is no `sink` (Agora #796): the function
+// consumes it — its caller hands its value over, or a copy — so the
+// literal owns it, beside an own binding. A String, and a `% Drop` value.
+: SB { String a Bomb b }
+
+@ lit_param String t → ?Pair {
+    : Bomb loc ( bomb `litparam.local` 1 )
+    : String s ( string_from `an own string beside a parameter taken in` )
+    ^ @ ?Pair { T @ Pair { s t } }
+}
+
+@ lit_param_caller → v {
+    : String t ( string_from `the caller's string, handed over as a copy` )
+    : !v PanicInfo r ( recover \ → v { : ?Pair x ( lit_param t ) } )
+    ( nurl_println ( nurl_str_cat `litparam: caller still has ` ( string_data t ) ) )
+}
+
+@ lit_pdrop Bomb t → ?SB {
+    : Bomb loc ( bomb `litpdrop.local` 1 )
+    : String s ( string_from `an own string beside a destructor parameter` )
+    ^ @ ?SB { T @ SB { s t } }
+}
+
 // A `;` defer that panics after the result is set (Agora #620): a literal,
 // a binding.
 @ defer_lit → Bomb {
@@ -253,6 +276,8 @@ $ `stdlib/core/vec.nu`
     ( run `lit_field` \ → v { : ?String r ( lit_field ) ( nurl_println `not reached` ) } )
     ( run `lit_copy` \ → v { ( lit_copy_caller ) } )
     ( run `lent_lit` \ → v { ( lent_lit_caller ) } )
+    ( lit_param_caller )
+    ( run `lit_pdrop` \ → v { : ?SB r ( lit_pdrop ( bomb `litpdrop.param` 0 ) ) ( nurl_println `not reached` ) } )
     ( run `defer_lit` \ → v { : Bomb r ( defer_lit ) ( nurl_println `not reached` ) } )
     ( run `defer_bind` \ → v { : Bomb r ( defer_bind ) ( nurl_println `not reached` ) } )
     ( run `raw_text` \ → v { : s r ( raw_text ) ( nurl_println `not reached` ) } )
