@@ -650,14 +650,15 @@ class FnCheck:
             loans, alias = set(), set()
             # an owned temporary the callee hands back whole leaves with the
             # result: the result owns it (MEMORY.md §1, Temporaries)
-            whole = [k for (k, path, kind) in sm["lends"] if not path and kind == "handle" and k < len(ops)
+            whole = {k for (k, path, kind) in sm["lends"] if not path and kind == "handle" and k < len(ops)
                      and ops[k][0] == "v" and not ops[k][2] and self.fn.vars[ops[k][1]].kind == "temp"
-                     and avs[k].own == "O"]
-            if len(whole) == 1 and len({k for (k, _, _) in sm["lends"]}) == 1:
-                moved = self.move_out(st, ops[whole[0]][1], line)
-                return AV("O", moved.loans, (), moved.held | frozenset(held))
+                     and avs[k].own == "O"}
+            for k in whole:
+                moved = self.move_out(st, ops[k][1], line)
+                loans |= moved.loans
+                held |= moved.held
             for (k, path, kind) in sm["lends"]:
-                if k >= len(avs) or avs[k].own == "N":
+                if k >= len(avs) or avs[k].own == "N" or (k in whole and not path):
                     continue
                 av = avs[k]
                 loans |= av.loans
@@ -666,22 +667,34 @@ class FnCheck:
                     alias.add(pl)
                     loans.add(self.loan(st, (site, "l", k), pl, kind))
                 held |= hsub(av.held, tuple(path))
+            if whole:
+                # (its own on the calls that handed a temporary back, a lend
+                # of the other arguments on the rest: owned per call)
+                return AV("O", loans, alias, held)
             if not loans and not alias:
                 return AV("N", (), (), held)
             return AV("L", loans, alias, held, call=True)
         return NONE
 
     def handover(self, st, place):
-        """A store replacing a place whose old value a binding reads hands
-        that old value over to the binding (MEMORY.md §7.6, agora #265):
-        it owns it from here on."""
+        """A store replacing a place whose old value a binding reads - the
+        place itself, or a part of it - hands that old value over to the
+        binding (MEMORY.md §7.6, agora #265): it owns it from here on.  A
+        binding that owned its value on other paths already (a join) owns
+        it on every path then."""
         for vid, av in list(st.vals.items()):
-            if av.own == "L" and av.alias == frozenset({place}) and self.fn.vars[vid].kind != "temp":
-                ty = self.fn.vars[vid].ty
-                if ty is None or ty[0] in VIEW_TYPES:
-                    continue
-                keep = {l for l in av.loans if self.loans.get(l, (None,))[0] != place}
-                st.vals[vid] = AV("O", keep, frozenset(), av.held)
+            if av.own not in ("L", "O") or len(av.alias) != 1 or self.fn.vars[vid].kind == "temp":
+                continue
+            (a,) = av.alias
+            if a != place:
+                continue
+            if av.own == "O" and not av.loans:
+                continue
+            ty = self.fn.vars[vid].ty
+            if ty is None or ty[0] in VIEW_TYPES or ty[0] == "closure":
+                continue
+            keep = {l for l in av.loans if self.loans.get(l, (None,))[0] != a}
+            st.vals[vid] = AV("O", keep, frozenset(), av.held)
 
     def take_payload(self, st, av, line):
         """A value read in place out of what owns it - a binding a cursor or
@@ -997,8 +1010,24 @@ class FnCheck:
                 st.vals[vid] = AV("U")
             else:
                 # `: ~ T c x` is a cursor: it borrows the owner x
-                st.vals[vid] = self.rvalue(st, rv, ln, v.depth, v.ty, v.name,
-                                           lend_owner=(lambda x: True) if v.mut else (lambda x: False))
+                new = self.rvalue(st, rv, ln, v.depth, v.ty, v.name,
+                                  lend_owner=(lambda x: True) if v.mut else (lambda x: False))
+                if (not v.mut and v.kind == "local" and rv[0] == "use" and rv[1][0] == "v" and not rv[1][2]
+                        and self.fn.vars[rv[1][1]].kind == "temp" and new.own == "L" and not new.call
+                        and v.ty is not None and v.ty[0] not in VIEW_TYPES and v.ty[0] != "closure"
+                        and not self.T.is_scalar(v.ty)):
+                    # a `?` / `??` (or a value block) that selects among
+                    # owners moves the one it selects into the binding, on
+                    # the paths that select it (MEMORY.md §2.2)
+                    # - owners of this frame that live no longer than the
+                    # binding: a parameter is the caller's, and a binding of
+                    # an inner scope is a second name of an outer owner
+                    roots = [st.vals.get(a[0]) for a in new.alias]
+                    if (all(r is not None and r.own == "O" for r in roots)
+                            and all(self.fn.vars[a[0]].depth >= v.depth for a in new.alias)
+                            and self.take_payload(st, new, ln)):
+                        new = AV("O", (), (), new.held)
+                st.vals[vid] = new
             return st
         if k == "assign":
             _, (vid, path), rv, ln = s
