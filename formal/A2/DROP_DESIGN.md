@@ -883,7 +883,9 @@ each one shrinks `CLAIM.md`'s exception:
         every block of a destructor type, whatever its kind). The
         invariant's clause is `Blk.DtorOK`: (before Agora #755) a lock's
         and a view's payload owns none (since #755, `Locked D` below, a
-        lock's may be a destructor value holding no share); a block of a
+        lock's may be a destructor value holding no share; since #804 a
+        view's payload, its lock block's read in place, may be one too: the
+        view owns nothing, `Ty.rview`, `A3/RwDtorWitness.lean`); a block of a
         type that owns one is of a destructor type holding no closure; a
         `dead` block is of such a type.
      2. *The mark.* `Mem.sweepD`, the sweep that ends every step but an

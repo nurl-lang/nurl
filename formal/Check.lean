@@ -133,7 +133,6 @@ import A3
 #print axioms A3.reach_frame_root_cell_owner
 #print axioms A3.reach_scopeL_end_gives_back
 #print axioms A3.reach_scopeL_panic
-#print axioms A3.LockDtorWitness.rwRead_dtor_refused
 #print axioms A3.LockDtorWitness.lockRestore_dtor_typed
 #print axioms A3.LockDtorWitness.main_typed
 #print axioms A3.LockDtorWitness.main_safe
@@ -141,6 +140,18 @@ import A3
 #print axioms A3.LockDtorWitness.main_no_leak_panic
 #print axioms A3.LockDtorWitness.last_drop_reaps
 #print axioms A3.lockDtor_claim
+-- (A3/RwDtorWitness.lean: Agora #804, `RwLocked D` read through a guard that lends its payload)
+#print axioms A3.RwDtorWitness.rwRead_dtor_typed
+#print axioms A3.RwDtorWitness.rwTryRead_dtor_typed
+#print axioms A3.RwDtorWitness.rwRead_view_lends
+#print axioms A3.RwDtorWitness.view_keeps_lock
+#print axioms A3.RwDtorWitness.view_lock_not_cand
+#print axioms A3.RwDtorWitness.view_no_dtor
+#print axioms A3.RwDtorWitness.main_typed
+#print axioms A3.RwDtorWitness.main_safe
+#print axioms A3.RwDtorWitness.main_no_leak
+#print axioms A3.RwDtorWitness.main_no_leak_panic
+#print axioms A3.rwDtor_claim
 #print axioms A3.LockDtorWitness.mainV_typed
 #print axioms A3.LockDtorWitness.mainV_safe
 #print axioms A3.LockDtorWitness.mainV_no_leak
@@ -318,6 +329,14 @@ import A3
 #print axioms A2.Dtor.ok_lockPayloads_free
 #print axioms A2.Dtor.shares_dtor_free
 #print axioms A2.Dtor.blocks_dtor_free
+-- Agora #804: an `arc` block is never of a read guard's view type (the block-level fact
+-- behind `Ty.ok_arc_dtor`, which a read guard's share type widens by `Ty.rview`)
+#print axioms A2.Dtor.arc_blocks_dtor
+#print axioms A2.Blk.DtorOK.arc
+#print axioms A2.Blk.DtorOK.nest
+#print axioms A2.Ty.ok_arc_dtor
+#print axioms A2.Ty.rview_shape
+#print axioms A2.viewDtorOK
 #print axioms A2.Dtor.blk_pkgs_env_dtor_free
 #print axioms A2.Dtor.share_new_dtor_free
 #print axioms A2.Dtor.vec_elems_dtor_free

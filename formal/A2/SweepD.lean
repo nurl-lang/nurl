@@ -174,7 +174,9 @@ theorem Pinned.kept {k : Nat} (h : Pinned R m.blk k) {bl : Blk} (hk : m.blk k = 
 /-- A marked orphan holds what its block's invariant says. -/
 theorem Blk.DtorOK.mark {bl : Blk} (h : bl.DtorOK) (hd : bl.kind = .arc ∨ bl.kind = .lock ∨ bl.kind = .dead)
     (hfree : bl.kind ≠ .dead → bl.ty.dtorFree = false) : bl.mark.DtorOK := by
-  refine ⟨fun h1 => absurd rfl h1, fun _ => ?_, fun h1 => h.2.2 h1⟩
+  refine ⟨fun h1 => absurd rfl h1, fun _ => ?_, fun h1 _ => h.2.2 h1 ?_⟩
+  rotate_left
+  · rcases hd with hd | hd | hd <;> rw [hd] <;> simp
   rcases hd with hd | hd | hd
   · exact hfree (by rw [hd]; simp)
   · exact hfree (by rw [hd]; simp)
@@ -256,9 +258,10 @@ theorem MInv.sweepDR (hR : ∀ v, m.vals v → R v) {Γ : Ctx} (hi : MInv m Γ) 
         -- holds no share (`Ty.lkPay`), so no cell share
         right
         have hfree := hp.arc_ty hk0 (by rw [h]; simp)
-        rcases h5.1 (by rw [h]; simp) (by rw [h]; simp) with h' | ⟨-, h'⟩
+        rcases h5.1 (by rw [h]; simp) (by rw [h]; simp) with h' | ⟨-, h'⟩ | ⟨h', -⟩
         · rw [hfree] at h'; cases h'
         · exact Ty.hasCell_of_hasArc (Ty.lkPay_dtor h' hfree).2
+        · rw [h] at h'; cases h'
       · exact Or.inr h
 
 /-- **The marking sweep keeps `Covers`**: it frees exactly the payloads of

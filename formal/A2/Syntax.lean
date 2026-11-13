@@ -355,6 +355,36 @@ def Ty.dtorViews (t : Ty) : Bool := t.dnest && t.holdsView
     own type (a `Vec` drained by the reap's frame). -/
 def Ty.lkPay (t : Ty) : Bool := t.dtorFree || (t.dnest && !t.hasArc)
 
+/-- Agora #804 (`RwLocked D`): a read guard's view type, `prod (lk u) u`: a
+    share of the lock block and its payload, which the view reads in place
+    and owns none of (`Blk.tree_view`: a view's tree is empty, so no sweep
+    frees anything of it, and it is never an orphan to be, `Cand`).  Its
+    payload `u` is a lock's (`Ty.lkPay`) that holds no cell share (the Sync
+    question, A3.5).  The read guard, an `arc` share of the view, is of type
+    `arc (prod (lk u) u)`, which `Ty.ok` admits by this disjunct even where
+    `u` is a destructor value; `arc_new` asks its own `dtorFree ∨ dnest` of
+    what moves in, so no `arc` block is ever of this type
+    (`Blk.DtorOK.arc`). -/
+def Ty.rview : Ty → Bool
+  | .prod (.lk u) u' => decide (u = u') && u.lkPay && !u.hasCell
+  | _ => false
+
+/-- A read guard's view type is `prod (lk u) u`, of a lock payload holding no
+    cell share. -/
+theorem Ty.rview_shape {t : Ty} (h : t.rview = true) :
+    ∃ u, t = .prod (.lk u) u ∧ u.lkPay = true ∧ u.hasCell = false := by
+  unfold Ty.rview at h
+  split at h
+  · rename_i u u'
+    simp only [Bool.and_eq_true, decide_eq_true_eq, Bool.not_eq_true'] at h
+    obtain ⟨⟨rfl, h1⟩, h2⟩ := h
+    exact ⟨u, rfl, h1, h2⟩
+  · cases h
+
+theorem Ty.rview_mk {u : Ty} (h1 : u.lkPay = true) (h2 : u.hasCell = false) :
+    (Ty.prod (.lk u) u).rview = true := by
+  simp [Ty.rview, h1, h2]
+
 /-- A2 types: a view's element type holds no views of its own (a view of a
     container of views is left to A2, with the other aggregates that
     carry views).  (A3.1's first cut also asked it to hold no shares; A3.1's
@@ -387,7 +417,9 @@ def Ty.ok : Ty → Bool
   -- `Settle`; Agora #755: or a drained `Vec` of them, at any depth
   -- (`Ty.dnest`), which the reap hands to a destructor frame at its own type
   -- that drains it; a payload holding one in a field is still refused)
-  | .arc t => t.ok && !t.holdsView && (t.dtorFree || t.dnest)   -- A3.1: a payload holds no views
+  -- (Agora #804: or a read guard's view, `prod (lk u) u`, `Ty.rview`, which
+  -- owns nothing: no `arc` block is of that type, `arc_new` asks its own)
+  | .arc t => t.ok && !t.holdsView && (t.dtorFree || t.dnest || t.rview)   -- A3.1: a payload holds no views
   | .lk t => t.ok && !t.holdsView && t.lkPay  -- A3.2: nor does a lock's (it is Send); A3.2's
                                    -- second cut: it may hold `arc` and lock shares; A3.5's second cut:
                                    -- and cell shares, each value going in past the crossing check
@@ -424,9 +456,17 @@ theorem Ty.ok_arc {t : Ty} (h : (Ty.arc t).ok = true) : t.ok = true ∧ t.holdsV
   simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1
 /-- A2-drop.3d, Agora #610: an `Arc`'s payload owns no destructor value, or
     is one at its top, or (Agora #755) a drained `Vec` of them at any depth
-    (`Ty.dnest`). -/
-theorem Ty.ok_arc_dtor {t : Ty} (h : (Ty.arc t).ok = true) : t.dtorFree = true ∨ t.dnest = true := by
-  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true', Bool.or_eq_true] at h; exact h.2
+    (`Ty.dnest`), or (Agora #804) the share is a read guard and its payload
+    a view's, `prod (lk u) u` (`Ty.rview`), which owns nothing.  Of the
+    blocks: an `arc` block's type is of the first two kinds
+    (`Blk.DtorOK.arc`). -/
+theorem Ty.ok_arc_dtor {t : Ty} (h : (Ty.arc t).ok = true) :
+    t.dtorFree = true ∨ t.dnest = true ∨ t.rview = true := by
+  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true', Bool.or_eq_true] at h
+  rcases h.2 with (h | h) | h
+  · exact Or.inl h
+  · exact Or.inr (Or.inl h)
+  · exact Or.inr (Or.inr h)
 theorem Ty.ok_lk {t : Ty} (h : (Ty.lk t).ok = true) : t.ok = true ∧ t.holdsView = false := by
   simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1
 /-- A2-drop.3d: a lock's payload owns no destructor value, or (Agora #755)
@@ -862,8 +902,10 @@ inductive Rhs where
   -- `lockClone`, `rw_update` / `wguard_update` / `rw_set` a `withLock`, which waits
   -- while a reader lives); a reader's guard is an `arc` share of a view of it
   | rwRead (a : Var)           -- `rw_read a`: a read guard of the lock `a` shares, a new view
-                               -- of its payload (frozen while the view lives); `rguard_get g`
-                               -- is `arcGet g` (the payload is the second field it lends)
+                               -- of its payload, which lends it in place and owns none of it
+                               -- (frozen while the view lives; Agora #804: a destructor value
+                               -- too); `rguard_get g` is `arcGet g` (the payload is the second
+                               -- field it lends)
   | rwTryRead (a : Var)        -- `rw_try_read a`: `rw_read`'s guard as an owned `some` (`inr`),
                                -- or `none` (`inl 0`) where `rw_read` would wait, with no wait
   | rwTryWrite (a : Var)       -- `rw_try_write a`'s answer: `some` (`inr 0`) when a write's
@@ -939,9 +981,13 @@ inductive BKind where
   | arc
   | lock
   /-- A3.3: a read view of a lock block (`rw_read`'s guard, `RwLocked`): its
-      payload is a share of the lock block and a copy of that block's payload,
-      which it owns none of; its holders read it, frozen, while the view
-      lives.  A writer waits until no view of the block is left. -/
+      payload is a share of the lock block and that block's payload, read in
+      place (`ViewsAt`: the very value the lock block holds, not a copy the
+      view owns); the view owns nothing (`Blk.tree`), so no sweep frees and
+      no reap drops anything of it (Agora #804: the payload may be a
+      destructor value, which the lock block alone drops).  Its holders read
+      the payload, frozen, while the view lives.  A writer waits until no
+      view of the block is left. -/
   | view
   /-- Agora #610: an orphan whose payload awaits its destructor.  The block
       has no share left; its payload, a destructor value (Agora #755: or a

@@ -352,6 +352,25 @@ the LLVM / C11 memory model rather than redefining it.
       payload that holds a library handle (`RhsT.rwRead`'s `hasCell`,
       h357): readers read it at once, so it faces Sync. An `RwLocked` of
       one is still made and written.
+    - **Agora #804: `RwLocked D`.** A read guard of a payload that is a
+      destructor value (or holds one) is typed (`RhsT.rwRead` /
+      `rwTryRead` ask only `hasCell = false`;
+      `A3.RwDtorWitness.rwRead_dtor_typed`), as nurlc lends the payload in
+      place under the shared lock. The view owns nothing (`Blk.tree_view`)
+      and its payload is its lock block's (`ViewsAt`): no sweep frees and
+      no reap drops anything of a view, which is never an orphan to be nor
+      marked `dead` (`A2.Dtor.blocks_dtor_free`,
+      `A3.RwDtorWitness.view_no_dtor`), and a reached view keeps its lock
+      block reached (`view_keeps_lock`), so the payload is dropped once,
+      with its destructor, by the thread that drops the lock's last share
+      after the last guard (`A3.LockDtorWitness.last_drop_reaps`). The
+      guard's type `arc (prod (lk D) D)` is admitted by `Ty.ok` through
+      `Ty.rview` (exactly `prod (lk u) u` with `u.lkPay` and no cell
+      share); no `arc` block is of that type (`A2.Dtor.arc_blocks_dtor`).
+      Witness: `A3.RwDtorWitness.main` (an `RwLocked` of a destructor
+      value, made, read through a guard, dropped: `main_typed`,
+      `main_safe`, `main_no_leak`, `main_no_leak_panic`;
+      `A3.rwDtor_claim`: `A3.claim` over it).
       A read guard is `% NotSend`: the crossing check refuses a value that
       holds a guard at any depth (`NoGuard`, part of `SendCheck`), so a
       spawn, a value going into a lock and a lock scope's give-back never
@@ -997,7 +1016,10 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   (`A2.Dtor.letv_owned_dtor_free`), and a struct or an enum holding one
   two levels down is bound by `letd` with its glue
   (`A2.DtorWitness.main4_safe`).
-- A2-drop.3d: no view's payload owns a destructor value; a lock block's
+- A2-drop.3d: a view owns nothing; its payload is its lock block's (Agora
+  #804: read in place, of a read guard's view type `prod (lk u) u`,
+  `Ty.rview`, or owning no destructor value; a view is never an orphan to
+  be nor marked `dead`, so no destructor runs from it); a lock block's
   owns none or (Agora #755, `Locked D`) is one at its top, or (`Locked
   (Vec D)`) a drained `Vec` of them, that holds no share (`Ty.lkPay`); an `Arc`'s may be one at its top (Agora #610), or (Agora #755) a
   drained `Vec` of them at any depth (`Ty.nest n (.dtor f u)`, `Ty.dnest`),
@@ -1010,14 +1032,16 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   and a cell's payload type to own none or (Agora #755) be a destructor
   type, or a drained `Vec` of them, holding no share (`Ty.ok_lk_pay`; a
   channel's queue of destructor values is a field of a struct under its
-  glue, a destructor type; `rw_read` asks the payload to own none, so a read
-  guard's view owns none), and an `Arc`'s to own none or be a destructor
-  type or a drained `Vec` of them (`Ty.ok_arc_dtor`); `arc_new`, a lock's
+  glue, a destructor type), and an `Arc`'s to own none or be a destructor
+  type or a drained `Vec` of them, or (Agora #804, a read guard's) a view's
+  type (`Ty.ok_arc_dtor`; of the blocks, an `arc` block is of the first
+  kinds, never of a view's, `A2.Dtor.arc_blocks_dtor`); `arc_new`, a lock's
   and a library handle's constructor ask the same of what moves in
   (`A2.Dtor.share_new_dtor_free`), and each of them of a destructor value or
   of such a `Vec` names a destructor the program checked (`Rhs.codeOK`,
   `DeadCodes`). Of types: the payload type of every share in a binding's
-  type owns none or is a destructor type or such a `Vec`, a lock's and a
+  type owns none or is a destructor type or such a `Vec` (or, a read
+  guard's, a view's type, Agora #804), a lock's and a
   cell's owns none or is a destructor type or such a `Vec` holding no share
   (`A2.Dtor.shares_dtor_free`, over `A2.Dtor.ok_payloads_free` and
   `ok_lockPayloads_free`), so a check-out binding (`withLock`,
@@ -1123,8 +1147,9 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   but the real handles check their state out with `rc_take` /
   `rc_restore` (`compiler/tests/handle_checkout.nu`), whose taken state
   the last handle's drop skips since Agora #795 (github#1832). That a library's handle with such a
-  state behaves as the model's cell is part of the trusted base (phase B). Still refused: `RwLocked D`'s read guard
-  (`rwRead_dtor_refused`: a view copies the payload, which owns nothing);
+  state behaves as the model's cell is part of the trusted base (phase B). `RwLocked D`'s read guard is
+  typed since Agora #804 (A3.3 above, `A3.RwDtorWitness`: the view lends
+  the payload in place). Still refused:
   `locked_set`
   of one is not typed (its body assigns the checked-out binding, `hna`);
   a `% Drop` value's fields cannot be written in place by the update
@@ -1482,9 +1507,7 @@ The rules are stricter than nurlc's in these places:
   it); a channel of one that holds a share (a channel of `D` is typed
   since Agora #755, its state under its glue, above); a `Mutex` guarding one (a `Mutex` guards no
   value in the model). Refused by a rule while `Ty.ok` admits the type:
-  an `RwLocked D`'s read guard (`RhsT.rwRead` / `rwTryRead` ask `dtorFree`:
-  `RwLocked D` itself is typed, and its write side is `withLock`) and
-  `locked_set` of one (its body assigns the checked-out binding,
+  `locked_set` of a `Locked D` or an `RwLocked D` (its body assigns the checked-out binding,
   `StmtT.withLock`'s `hna`; `locked_restore` of one is typed since Agora
   #810, `RhsT.lockRestore`); an `Arc` whose
   payload holds a destructor value in a field of a type of no destructor

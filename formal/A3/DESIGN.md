@@ -1012,9 +1012,10 @@ settled:
    that runs its destructor (A2-drop's binders), the release freeing nothing
    (`scopeL_typed_panic`). Agora #808: that the block is there and checked
    out is proved on every reached configuration (`A3/LockExcl.lean`,
-   `A3/LockRoot.lean`, below). `RwLocked D`'s read guard is refused
-   (`RhsT.rwRead` asks `dtorFree`: a view's payload is a copy, which owns
-   nothing), and so is `locked_set` of one (its body assigns `x`).
+   `A3/LockRoot.lean`, below). `RwLocked D`'s read guard was refused
+   here (`RhsT.rwRead` asked `dtorFree`, reading a view's payload as a copy);
+   it is typed since Agora #804 (*`RwLocked D`*, in A3.3's section).
+   `locked_set` of one is refused (its body assigns `x`).
 2. *The last share.* The marking sweep (`Mem.sweepD`, Agora #610) admits a
    lock block as an orphan to be (`Cand`: kind `arc` or `lock`, its payload
    in), marks it `dead`, and the same thread reaps it (`Settle`,
@@ -1600,6 +1601,72 @@ writer bit are the runtime's rwlock, trusted base).
   `DupFn`.)
 - a typed program over these rules (a probe's encoding, as
   `A2/DynCell.lean` types `pick`);
+
+### Agora #804: `RwLocked D`, the view lends its payload
+
+`RhsT.rwRead` / `rwTryRead` asked the payload to own no destructor value
+(Agora #755), with the reading that "a view's payload is a copy of the
+lock's", so a destructor value in it would be dropped twice, or by a view
+that does not own it. That reading was an artefact of the type-level
+clauses, not of the semantics: a view's tree is empty (`Blk.tree_view`), so
+the sweep frees nothing of it; the marking sweep's orphans to be are `arc`
+and lock blocks only (`Cand`), so a view is never marked `dead` and never
+reaped; and `ViewsAt` says its payload is the lock block's very value, read
+in place, as nurlc lends it under the shared lock. The semantics always
+lent. What refused `RwLocked D` were three type-level facts about views
+and guards, each true only because of the premise:
+
+- `Ty.ok (arc t)` asked `t.dtorFree || t.dnest`, and a guard is of type
+  `arc (prod (lk D) D)`;
+- `Blk.DtorOK`'s first clause asked a block that is neither `arc` nor
+  `dead` to be of a type that owns none, or a lock of `lkPay`; its third
+  that a block of a type that owns one be of shape `Ty.nest n (.dtor f u)`;
+- `A2.Dtor.ok_payloads_free` / `shares_dtor_free` / `blocks_dtor_free`
+  restated these.
+
+The change, and nothing wider:
+
+- `Ty.rview` is exactly `prod (lk u) u` with `u.lkPay = true` and
+  `u.hasCell = false` (a lock payload that holds no cell share: the read
+  guard's Sync premise); `Ty.ok`'s `arc` case admits it as a third
+  disjunct, so the guard type is an A2 type whatever destructor value `u`
+  is. `arc_new` keeps its own `dtorFree ∨ dnest` premise, so no `arc` block
+  is ever of a view's type.
+- `Blk.DtorOK`'s first clause gains `kind = .view ∧ ty.rview`, and its third
+  asks `kind ≠ .view` (a view's type owns a destructor value that the view
+  does not own). The block-level fact behind an `Arc`'s type, which
+  `Ty.ok_arc_dtor` no longer gives alone, is `Blk.DtorOK.arc` /
+  `A2.Dtor.arc_blocks_dtor`: every `arc` block is of a type that owns none,
+  or is a destructor type, or a drained `Vec` of them. `Blk.DtorOK.nest`
+  is the third clause for a block that is no view (`dead`, `arc`, lock:
+  what the sweep marks and the reap hands over).
+- `A2.Dtor.blocks_dtor_free` says, of a view, that it owns nothing, its
+  type owns none or is `Ty.rview`, and under any roots it is no orphan to
+  be and the marking sweep keeps it as it is or removes it (never marks
+  it). `ok_payloads_free` / `shares_dtor_free` admit a read guard's view
+  type as a share payload.
+- `RhsT.rwRead` / `rwTryRead` drop `t.dtorFree = true` and keep
+  `t.hasCell = false`; `rhs_rwRead` reads `t.lkPay` off the lock block's
+  `Blk.DtorOK` and gives the new view `viewDtorOK`; `guardTy_ok` asks
+  `hasCell` instead of `dtorFree`; `StmtT.withTryRead` and `StmtT.rwGet`
+  lose their `dtorFree` hypotheses.
+
+The headline theorems (`A2.memory_safe`, `soundness`, `no_leak_end`,
+`no_leak_panic`, `A3.claim`, `claim_full`, `claim_made`) are unchanged in
+statement and re-proven. Race freedom is A3.3's: readers in parallel, a
+writer waits while a view lives (`HasView`), and a guard is `% NotSend`
+(`NoGuard`). A guard moved into a binding, an `Arc` or a lock keeps its view
+reached, and a reached view keeps its lock block reached
+(`A3.RwDtorWitness.view_keeps_lock`): the lock block is never an orphan to
+be while a guard lives (`view_lock_not_cand`), so a guard cannot outlive the
+payload it lends. The payload is dropped exactly once, with its
+destructor, when the lock block's last share (and last view) is gone: the
+marking sweep marks the lock block (as for `Locked D`,
+`A3.LockDtorWitness.last_drop_reaps`, which is of every lock block of `DT`).
+Witness: `A3/RwDtorWitness.lean` (`main`: an `RwLocked D` made, read through
+a guard, dropped; `main_typed`, `main_safe`, `main_no_leak`,
+`main_no_leak_panic`, `A3.rwDtor_claim`; `rwRead_dtor_typed` and
+`rwTryRead_dtor_typed` replace Agora #755's `rwRead_dtor_refused`).
 
 ## A3.4's mechanization (`Atomic`, channels)
 

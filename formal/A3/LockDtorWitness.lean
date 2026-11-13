@@ -49,9 +49,9 @@ stores and steps, not of this program's run (which no theorem here traces):
   that hands the payload to a destructor frame of `dfn`
   (`last_drop_reaps`, over `Mem.sweepD_marks` at a lock block).
 
-Still refused (stricter than nurlc): `RwLocked D`'s read guard
-(`rwRead_dtor_refused`: a view's payload is a copy of the lock's, which owns
-nothing); a payload that holds a destructor value in a field of a type with
+Since Agora #804 `RwLocked D`'s read guard is typed
+(`A3/RwDtorWitness.lean`: the view lends the payload in place).  Still
+refused (stricter than nurlc): a payload that holds a destructor value in a field of a type with
 no destructor of its own, or a destructor value (or a drained `Vec` of them)
 that holds a share (`Ty.lkPay`).  Since Agora #810 `locked_restore` of a
 destructor value is typed (`lockRestore_dtor_typed`: the restore fills only a
@@ -442,16 +442,9 @@ theorem scopeL_typed_panic {P : Prog} {Γ Δ : Ctx} {F : List Var} {k : Nat} {t 
     · exact .inl ⟨w, hsl, hw⟩
     · exact .inr ⟨hti, w, hsl⟩
 
-/-! ### Still refused -/
+/-! ### `locked_restore` of a destructor value -/
 
-/-- **`RwLocked D`'s read guard is refused**: `rw_read` asks a payload that
-    owns no destructor value. -/
-theorem rwRead_dtor_refused {Γ Γ1 : Ctx} {F : List Var} {a : Var} {E Ea : Entry} {f : Nat} {u : Ty}
-    (ha : Γ a = some Ea) (hty : Ea.ty = .lk (.dtor f u)) : ¬ RhsT Γ F (.rwRead a) E Γ1 := fun h => by
-  cases h with
-  | rwRead ha' _ hty' _ hdf => rw [ha] at ha'; cases ha'; rw [hty] at hty'; cases hty'; cases hdf
-
-/-- **... but `locked_restore` of a destructor value is typed** (Agora #810,
+/-- **`locked_restore` of a destructor value is typed** (Agora #810,
     as nurlc's): the restore fills only a block `locked_take` emptied
     (`EvalR.lockRestore` asks `Mem.taken`), never one a `withLock` has
     checked out, whose give-back would then drop its value with no code;
