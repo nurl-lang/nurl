@@ -11234,7 +11234,16 @@ typedef struct NurlCcOps {
 } NurlCcOps;
 typedef struct NurlCcHdr { int64_t strong, weak; uint64_t cc; } NurlCcHdr;
 enum { NURL_CC_BLACK = 0, NURL_CC_GRAY = 1, NURL_CC_WHITE = 2, NURL_CC_PURPLE = 3,
-       NURL_CC_COLOR = 3, NURL_CC_BUFFERED = 4, NURL_CC_DEAD = 8, NURL_CC_FREED = 16 };
+       NURL_CC_COLOR = 3, NURL_CC_BUFFERED = 4, NURL_CC_DEAD = 8, NURL_CC_FREED = 16,
+       /* std/rc.nu's RC_TAKEN: the value is checked out (rc_take) and is
+        * its taker's — the slot holds zero bytes nobody owns. */
+       NURL_CC_TAKEN = 32 };
+/* Drop a block's value in place — unless it is checked out: zero bytes run
+ * through a `% Drop` type's glue ran its destructor a second time (agora
+ * #795). */
+static void nurl__cc_drop_value(const NurlCcOps *o, NurlCcHdr *h) {
+    if (!(h->cc & NURL_CC_TAKEN)) o->drop_value(h);
+}
 /* A buffered block's position in the roots buffer rides in the upper bits
  * of its cc word: a block whose count reaches zero leaves the buffer at
  * once (swap with the last entry) and is freed there and then. */
@@ -11406,7 +11415,7 @@ static void nurl__cc_run_roots(NurlCcState *s, NurlCcRef *roots, size_t n, int w
     for (size_t i = 0; i < garbage.len; i++) garbage.v[i].ops->trace(garbage.v[i].h, &restore);
     for (size_t i = 0; i < garbage.len; i++) {
         garbage.v[i].h->strong = 0;
-        garbage.v[i].ops->drop_value(garbage.v[i].h);   /* edges into garbage are no-ops (DEAD) */
+        nurl__cc_drop_value(garbage.v[i].ops, garbage.v[i].h);   /* edges into garbage are no-ops (DEAD) */
     }
     for (size_t i = 0; i < garbage.len; i++) nurl__cc_free_block(garbage.v[i].h);
     free(st.v); free(aux.v); free(garbage.v);
@@ -11518,12 +11527,12 @@ NURL_TLS_FN void nurl_rc_drop_value(void *impl, const void *ops) {
         return;
     }
     s->depth++;
-    o->drop_value(h);
+    nurl__cc_drop_value(o, h);
     nurl__rc_finish(s, h);
     if (s->depth == 1) {
         while (s->dlen) {
             NurlCcRef r = s->deferred[--s->dlen];
-            r.ops->drop_value(r.h);
+            nurl__cc_drop_value(r.ops, r.h);
             nurl__rc_finish(s, r.h);
         }
     }

@@ -291,6 +291,16 @@ NURL_TLS_FN void nurl_lk_enter(void *l, const char *op)  { nurl__lk_acquire((Nur
 void nurl_lk_exit(void *l, long long changed)              { nurl__lk_release((NurlLk *)l, changed); }
 NURL_TLS_FN void nurl_lk_take(void *l, const char *op)   { nurl__lk_acquire((NurlLk *)l, NURL_LK_TAKEN, op); }
 
+/* The last share's drop (Locked_drop): 1 when the value is checked out
+ * (locked_take, never restored), so its slot holds zero bytes nobody owns
+ * and only the latch is released — running the value's drop glue there
+ * ran a `% Drop` type's destructor a second time, on zeros (agora #795).
+ * Asked by the last owner only: nobody else can change the word. */
+long long nurl_lk_taken(void *l) {
+    nurl_lk_word cur = __atomic_load_n(&((NurlLk *)l)->state, __ATOMIC_ACQUIRE);
+    return (cur & NURL_LK_KIND) == NURL_LK_TAKEN;
+}
+
 /* locked_restore: 1 when the value was checked out — it is now held in
  * place by the restorer, which puts it back and calls nurl_lk_exit; 0 when
  * it was not taken (the caller panics). Any thread may restore. */
