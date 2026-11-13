@@ -348,12 +348,16 @@ def Ty.dtorViews (t : Ty) : Bool := t.dnest && t.holdsView
     destructor values: none, or it is one at its top (a `% Drop` struct or
     enum, or one with glue: `Ty.dtor f u`), or (`Locked (Vec D)`) a drained
     `Vec` of them at any depth (`Ty.dnest`, which contains the destructor
-    type itself), that holds no share.  The share rule keeps the give-back's
-    crossing check (`GiveCheck`) and the reap's no-cell premise true of
-    every value of the type, so the value always goes back into its block
-    (on a panic too) and an orphaned block of it is always reaped, at its
-    own type (a `Vec` drained by the reap's frame). -/
-def Ty.lkPay (t : Ty) : Bool := t.dtorFree || (t.dnest && !t.hasArc)
+    type itself), that holds no cell share.  The cell rule keeps the reap's
+    no-cell premise true of every value of the type, so an orphaned block of
+    it is always reaped, at its own type (a `Vec` drained by the reap's
+    frame).  Agora #803: it may hold `arc` and lock shares (nurlc's `Locked
+    Conn`, `% Drop Conn` holding an `Arc Pool`), so its give-back's crossing
+    check (`GiveCheck`) can fail (the value reaches a read guard); the value
+    then goes to a destructor frame on the unwinding (`Step.scopeLPD`), never
+    to the code-less drop (`Release.drop`).  Until Agora #803 it asked
+    `!t.hasArc`, which kept that check unfailable. -/
+def Ty.lkPay (t : Ty) : Bool := t.dtorFree || (t.dnest && !t.hasCell)
 
 /-- Agora #804 (`RwLocked D`): a read guard's view type, `prod (lk u) u`: a
     share of the lock block and its payload, which the view reads in place
@@ -409,7 +413,8 @@ def Ty.ok : Ty → Bool
   | .fn _ _ => true
   -- (A2-drop.3d: a lock's or a cell's payload owns no destructor value, or
   -- (Agora #755, `Ty.lkPay`) is one at its top, or a drained `Vec` of them,
-  -- that holds no share (a channel of them: its state under its glue): the
+  -- that holds no cell share (Agora #803; before, no share) (a channel of
+  -- them: its state under its glue): the
   -- check-out binding is given no other value in the body and goes back on a
   -- panic, and the orphaned block is reaped as an `Arc`'s.  Agora #610: an `Arc`'s payload may be a
   -- destructor value itself: the sweep that finds its block unreached marks
@@ -470,7 +475,7 @@ theorem Ty.ok_arc_dtor {t : Ty} (h : (Ty.arc t).ok = true) :
 theorem Ty.ok_lk {t : Ty} (h : (Ty.lk t).ok = true) : t.ok = true ∧ t.holdsView = false := by
   simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.1
 /-- A2-drop.3d: a lock's payload owns no destructor value, or (Agora #755)
-    is one at its top that holds no share. -/
+    is one at its top that holds no cell share (Agora #803). -/
 theorem Ty.ok_lk_pay {t : Ty} (h : (Ty.lk t).ok = true) : t.lkPay = true := by
   simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.2
 theorem Ty.ok_cell {t : Ty} (h : (Ty.cell t).ok = true) : t.ok = true ∧ t.holdsView = false := by
@@ -480,9 +485,9 @@ theorem Ty.ok_cell_pay {t : Ty} (h : (Ty.cell t).ok = true) : t.lkPay = true := 
   simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h.2
 
 /-- Agora #755: a lock's payload that owns a destructor value is one at its
-    top or a drained `Vec` of them, and holds no share. -/
+    top or a drained `Vec` of them, and (Agora #803) holds no cell share. -/
 theorem Ty.lkPay_dtor {t : Ty} (h : t.lkPay = true) (hd : t.dtorFree = false) :
-    t.dnest = true ∧ t.hasArc = false := by
+    t.dnest = true ∧ t.hasCell = false := by
   simp only [Ty.lkPay, hd, Bool.false_or, Bool.and_eq_true, Bool.not_eq_true'] at h; exact h
 
 theorem Ty.lkPay_of_free {t : Ty} (h : t.dtorFree = true) : t.lkPay = true := by

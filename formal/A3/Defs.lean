@@ -2889,6 +2889,7 @@ theorem scopeL_end {P : Prog} {m : Mem} {k : Nat} {t : Ty} {x : Var} {r : Res}
   | scopeLFail hx hck => exact .inr ⟨rfl, _, hx, hck⟩
   | scopeLIn hs => cases hs with | reap _ hk _ => exact absurd ⟨_, _, _, _, _, hk⟩ hno
   | scopeLP hs _ => cases hs with | waitPanic hw => cases hw
+  | scopeLPD hs _ _ _ _ => cases hs with | waitPanic hw => cases hw
   | waitPanic hw => cases hw
 
 /-- **A `: Send` trait object fits in a lock** (A3.5c's gap, closed): its type,

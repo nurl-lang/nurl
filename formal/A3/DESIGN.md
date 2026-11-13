@@ -976,7 +976,8 @@ Before, `Ty.ok (lk t)` (and `cell t`) asked `t.dtorFree`: a check-out
 binding is no `letd`'s, so a payload owning a destructor value was refused.
 Since Agora #755 it asks `Ty.lkPay t`: `t` owns none, or is a destructor
 type at its top (`Ty.dtor f u`, a `% Drop` struct or enum, or one with
-glue) whose type holds no share (`!t.hasArc`). How the three needs were
+glue) whose type holds no share (`!t.hasArc`; since Agora #803 no cell
+share, `!t.hasCell`, below). How the three needs were
 settled:
 
 1. *The check-out.* No new step and no new form. nurlc's `locked_update`
@@ -991,7 +992,9 @@ settled:
    would drop the old value with no code (`StmtT.withLock`'s new premise
    `hna : t.holdsDtor = true → x ∉ s.assigns`, as `letd`'s); a give-back
    crossing check that fails (`Step.scopeLFail`, then `Release.drop`) cannot
-   fail on a type with no share (`A3.LockDtorWitness.sendCheck_noArc`); a
+   fail on a type with no share (`A3.LockDtorWitness.sendCheck_noArc`;
+   since Agora #803 a type may hold `arc` and lock shares, and a failing
+   check hands the value to a destructor frame, `Step.scopeLPD`, below); a
    block filled again while checked out cannot be: `locked_restore` fills
    only a block `locked_take` emptied (Agora #810, `Mem.taken`; on a
    checked-out one it panics, `EvalR.lockRestoreHeld`, as nurlc's does),
@@ -1128,7 +1131,8 @@ the last cut, below.)
 
 ### Agora #755, last cut: `Locked (Vec D)` and a channel of `D`
 
-1. *Admission.* `Ty.lkPay t := t.dtorFree || (t.dnest && !t.hasArc)`: a
+1. *Admission.* `Ty.lkPay t := t.dtorFree || (t.dnest && !t.hasArc)` (since
+   Agora #803 `!t.hasCell`, below): a
    drained `Vec` of destructor values at any depth, holding no share, is a
    lock's or a cell's payload (the old `hasDtor` case is `dnest` at depth
    0); `Ty.ok (lk t)` no longer asks `!t.vecD`. A channel of destructor
@@ -1209,7 +1213,7 @@ out bound by `letd` under its glue `ofnR`, `EnumGlueOK` over `sum int DT`:
 body's half is proved since Agora #805 for a typed frame, `scopeL_end_owns`,
 `scopeL_typed_panic`, since Agora #825 for every payload type that holds no
 share; the block's half since Agora #808 on every reached configuration.) Still refused: a channel of destructor values holding a
-share, and the plain `prod (vec D) int` lock payload (no glue).
+cell share (since Agora #803; before, any share), and the plain `prod (vec D) int` lock payload (no glue).
 
 ### Agora #755 item 1: the destructor on A3's threads
 
@@ -1286,6 +1290,114 @@ every thread's slots and the globals) freed an orphaned `Arc<D>`'s,
   step leaves are reaped in the order `Step.reap` picks; a cycle of orphans
   (through a lock), and every block reached only from that cycle's
   payloads, is freed with no code, as on A2.
+
+### Agora #803: a destructor payload that holds a share
+
+nurlc accepts `Locked Conn` where `% Drop Conn` holds an `Arc Pool`; until
+this cut the model refused it (`Ty.lkPay`'s `!t.hasArc`), stricter than
+nurlc. The share rule kept the give-back's crossing check (`GiveCheck`)
+unfailable on a destructor payload (`sendCheck_noArc`): when the check
+fails, the scope's normal end panics (`Step.scopeLFail`), and the unwinding
+(`Step.scopeLP`) took the code-less `Release.drop`, a `DropSlot` that runs no
+code: a destructor value would have been released without its destructor.
+
+*What nurlc does.* `locked_with`, `locked_update`, `locked_apply` and
+`locked_await` (`stdlib/std/thread.nu`) run `mem_send_check` on the value
+after the closure and before `nurl_lk_exit`; on failure they panic with the
+lock held. The value stays in the lock's memory, the lock is never exited,
+and no other thread gets in; the value's destructor runs when the
+`Locked`'s last share drops (`Locked_drop`).
+
+*The two designs.* (b) On a failed check the value goes to a destructor
+frame on the panicking thread, as the reap's does (`Step.reap`): its
+destructor runs during the unwinding, and the block stays checked out for
+good. (p) A poisoned block: the value goes back into the block, marked held
+forever, and the reap of the lock block runs the destructor later. (p) is
+nurlc's timing, but it puts back into a shared block the very value the
+check refused (one that reaches a read guard, `NoGuard`), which every other
+entry into a lock's payload keeps out (`locked_new`, a cell's constructor,
+`locked_restore`, `chan_send`, the give-back), and it needs a block state
+"held for good" that every lemma casing on a block's state meets, and the
+reap of such a block. (b) keeps the value where it already is, in the
+failing thread's slot, adds one step and no state, and changes no
+invariant. Chosen: (b).
+
+*The rules.*
+
+- `Ty.lkPay t := t.dtorFree || (t.dnest && !t.hasCell)`: a destructor
+  payload (or a drained `Vec` of them) may hold `arc` and lock shares. It
+  still holds no cell share: a lock block marked `dead` is reaped, and the
+  reap asks that its payload holds no cell share (`Step.reap`'s premise,
+  A3's confinement of the cells, read off the steps; `MInv.sweepDR` and
+  `chan_elem_blk` now read it off `lkPay` directly, `Ty.lkPay_dtor`'s
+  second half being `hasCell = false`). That stays stricter than nurlc.
+- `Step.scopeLPD`: a panic unwinding through `scopeL k t x s` whose block is
+  checked out (`CheckedOut`), of a payload type `Ty.nest n (.dtor f u)`,
+  with `x`'s slot failing `GiveCheck`, steps to `.ok m1 (.seq (.scopeD x f
+  .skip) .panic)`: the frame is `x`'s destructor frame, at its end, the panic
+  after it, the store as the body's unwinding left it. The frame's end runs
+  the destructor (`scopeDEnd`) or drains the `Vec` (`scopeDDrain`), as the
+  reap's frame does. A failed normal end is `scopeLFail`'s panic, which
+  comes here.
+- `Release.drop` gains the premise `CheckedOut m k t → ∀ n f u, t = Ty.nest n
+  (.dtor f u) → GiveCheck m x sl`: it no longer drops such a value.
+  `Release.exists` (A2/Panic.lean) takes the same premise; progress
+  (A2/Progress.lean) takes `scopeLPD` where it fails.
+- `StmtT.scopeL` gains `KeepOut Γ Δ s.spine`, `CtxWF Δ` and `NameWF Δ`,
+  `StmtT.scopeD`'s premises of the same name: the new frame's panic is
+  typed to the body's end, as a destructor frame's is. `withLock`'s step
+  gets them from `SrcCase` (its body is source), `scopeLIn` keeps them
+  (`KeepOut.step`), `scopeLFail` and the A3 frame replacements
+  (`StmtT.scopeL_repl`, `Redex.plug`) carry them.
+- Preservation of the new step is the destructor frame's: the `scopeDP`
+  case of `preserve` is now the lemma `A2.pres_unwindD`, which both cases
+  call. For `scopeLPD` its premises come from the block, which the unwind
+  leaves checked out as it was (`BlkBack`): its type is `Ty.ok`, holds no
+  view and no closure (`MInv.blocks`, `Blk.DtorOK`), and names a checked
+  destructor (`DeadCodes`); `x` is no `letd`'s (its type holds no view), and
+  `Inv.scopeL_iff` reads the frame's invariant as a scope's.
+
+*A3.* Lock exclusion with a failed give-back: the frame leaves the thread's
+`lkeys` and its block stays checked out (`Step.stay`'s new case, as
+`scopeLP` with a drop), which `LockInv` and `RootInv` already admit; no
+other thread takes the block again (`withLock` waits on a checked-out
+block), so it is held for good, nurlc's lock held. The destructor's steps
+are the failing thread's on a value it owns: A3.1's crossing rules see
+nothing new (the value's `arc` shares are its slot's, the blocks they name
+as before). Every A3 lemma that cases on a step gained the new case as
+`scopeDPDrain`'s (`Keys`, `Kinds`, `Fresh`, `BorFree`, `Owned`, `Keep`,
+`Cell`, `LockRoot`, `LockExcl`, `Restrict`, `Lift`). `NoLeak`, `no_leak_end`
+and `no_leak_panic`: unchanged and re-proven; the value's addresses are its
+slot's until the frame frees them.
+
+*Cells and channels.* A cell's check-out (`withCell`) is the same frame
+(`scopeL`), so it is covered by the same rule. A channel's send
+(`EvalR.chanSend`), `locked_new`, a cell's constructor and `locked_restore`
+that fail `SendCheck` panic with the store as it was, the value in the
+sender's binding, whose own frame (a `letd`'s) runs its destructor; a
+receive's check (`RecvCheck`) is of cells only, which the payload holds
+none of. So no failing check drops a destructor value with no code, and a
+channel of destructor values that hold `arc` or lock shares is typed too
+(no witness of it).
+
+*Distance from nurlc.* The destructor of a value whose give-back fails runs
+at the failure, during the unwinding, on the failing thread; nurlc runs it
+when the `Locked`'s last share drops, on whichever thread drops it, later.
+Both are memory-safe: the value is the failing thread's, and the block,
+checked out for good, admits no other thread.
+
+*Lemmas and witness* (`A3/LockArcDtorWitness.lean`): `release_none` (a
+failing destructor payload of a checked-out block is no `Release`),
+`scopeL_fail_end` and `scopeL_fail_frame` (at the end, the panic, then the
+destructor frame, each step the only one), `fail_frame_runs_dtor` (the
+frame's end calls the destructor), `fail_end_runs_dtor` (the three steps
+together, the block left checked out). The witness `main` makes an `Arc`
+share, puts it in a destructor value (`DA`, the struct `prod (arc int)
+int` with the destructor `dfnA`), moves that into a `Locked`, updates it
+through `locked_apply` and drops the last share: `main_typed`, `main_safe`,
+`main_no_leak`, `main_no_leak_panic`, `last_drop_reaps`,
+`A3.lockArcDtor_claim`. Its check cannot fail (it holds no read guard); the
+failing case is the lemmas', of any program.
 
 ## A3.3's mechanization (`RwLocked`, `% Frozen`)
 
@@ -3481,6 +3593,8 @@ asked at each entry:
   The panic then unwinds through the scope (`Step.scopeLP`), whose
   `Release` drops `x` (`Release.drop`'s condition gains `¬ GiveCheck`), and
   the block stays checked out: the lock is held, as the runtime's is.
+  (Agora #803: but a destructor payload that fails the check, its block
+  checked out, goes to a destructor frame instead, `Step.scopeLPD`, below.)
 - `Step.scopeLSkip` asks the check, so a scope's normal end gives back or
   panics, never drops silently (`scopeL_end`, of a store with no orphan to
   reap first, which every A3 run's is: `A3.Reach.noOrphan`, Agora #610).

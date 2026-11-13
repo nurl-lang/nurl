@@ -247,7 +247,7 @@ theorem step_new {P : Prog} {m m' : Mem} {s s' : Stmt} (hst : Step P m s (.ok m'
     by_cases hvx : v = y
     · subst hvx; simp at h'
     · rw [upd_ne _ _ hvx] at h'; exact absurd h h'
-  | scopeDP hp _ _ | scopeDPDrain hp _ => cases hr; intro v h h'; exact absurd (panic_none hp v h) h'
+  | scopeDP hp _ _ | scopeDPDrain hp _ | scopeLPD hp _ _ _ _ => cases hr; intro v h h'; exact absurd (panic_none hp v h) h'
   | @letv _ x _ _ _ _ _ he =>
     cases hr; intro v h h'
     by_cases hvx : v = x
@@ -390,7 +390,7 @@ theorem step_gone {P : Prog} {m m' : Mem} {s s' : Stmt} (hst : Step P m s (.ok m
     cases hr; intro v h h'
     simp only [Stmt.spine, List.mem_cons, List.not_mem_nil, or_false] at h h'
     exact absurd h h'
-  | scopeDP hp _ _ | scopeDPDrain hp _ =>
+  | scopeDP hp _ _ | scopeDPDrain hp _ | scopeLPD hp _ _ _ _ =>
     cases hr; intro v h h'
     simp only [Stmt.spine, List.mem_cons, List.not_mem_nil, or_false] at h h'
     exact panic_spine hp v (h.resolve_left h')

@@ -131,13 +131,13 @@ theorem Release.heap {m m' : Mem} {k : Nat} {t : Ty} {x : Var} (h : Release m k 
     HeapOK m' := by
   cases h with
   | put hsl hg hk => exact hh.release_put hsl hg hk.1
-  | drop _ hsl hd => exact hh.remove hsl hd
+  | drop _ _ hsl hd => exact hh.remove hsl hd
 
 theorem Release.covers {m m' : Mem} {k : Nat} {t : Ty} {x : Var} (h : Release m k t x m') (hc : Covers m) :
     Covers m' := by
   cases h with
   | put hsl _ hk => exact covers_release_put hc hsl hk.1
-  | drop _ hsl hd => exact covers_remove hc hsl hd
+  | drop _ _ hsl hd => exact covers_remove hc hsl hd
 
 theorem Release.st {m m' : Mem} {k : Nat} {t : Ty} {x : Var} (h : Release m k t x m') : m'.st = upd m.st x none := by
   cases h <;> rfl
@@ -149,9 +149,13 @@ theorem Release.nid {m m' : Mem} {k : Nat} {t : Ty} {x : Var} (h : Release m k t
   cases h <;> rfl
 
 /-- A lock scope's end, on the normal path or a panic's, always has a step:
-    the payload goes back, or `x`'s slot is dropped. -/
+    the payload goes back, or `x`'s slot is dropped; but (Agora #803) a
+    destructor payload of a checked-out block that fails the crossing check,
+    which goes to a destructor frame (`Step.scopeLPD`). -/
 theorem Release.exists {m : Mem} {k : Nat} {t : Ty} {x : Var} {sl : Slot} {a' : Nat → Bool}
-    (hsl : m.st x = some sl) (hd : DropSlot m.alloc sl a') : ∃ m', Release m k t x m' := by
+    (hsl : m.st x = some sl) (hd : DropSlot m.alloc sl a')
+    (hgc : CheckedOut m k t → ∀ n f u, t = Ty.nest n (.dtor f u) → GiveCheck m x sl) :
+    ∃ m', Release m k t x m' := by
   by_cases hput : CheckedOut m k t ∧ Giveable m.blk t sl ∧ GiveCheck m x sl
   · obtain ⟨hkb, hg, hck⟩ := hput
     obtain ⟨o, w⟩ := sl
@@ -164,7 +168,7 @@ theorem Release.exists {m : Mem} {k : Nat} {t : Ty} {x : Var} {sl : Slot} {a' : 
         · exact Or.inr (Or.inr fun h3 => hput ⟨h1, h2, h3⟩)
         · exact Or.inr (Or.inl h2)
       · exact Or.inl h1
-    exact ⟨_, Release.drop hc hsl hd⟩
+    exact ⟨_, Release.drop hc hgc hsl hd⟩
 
 /-- A3.3: what a panic's unwinding leaves of the blocks: each as it was, or
     a lock block given back a payload of its type (`Release.put` on the way

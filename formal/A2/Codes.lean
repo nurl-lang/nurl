@@ -684,6 +684,10 @@ theorem codes_step {P : Prog} (hPc : ProgCodes P) {m : Mem} {s : Stmt} {r : Res}
   | scopeDP _ _ _ ih =>
     intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact ⟨((ih hm hB hs).2 _ rfl).of_st rfl, trivial, trivial⟩
+  | scopeLPD _ _ _ _ _ ih =>
+    -- Agora #803: the check-out's frame becomes `x`'s destructor frame
+    intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    exact ⟨(ih hm hB hs).2 _ rfl, trivial, trivial⟩
   | scopeDPMoved _ _ ih =>
     intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact ((ih hm hB hs).2 _ rfl).remove _

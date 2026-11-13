@@ -618,17 +618,17 @@ theorem progress {P : Prog}
     cases ob with
     | none => exact Or.inr (Or.inl ⟨kk, t, hv, Or.inl hk⟩)
     | some w => exact Or.inr <| Or.inr ⟨_, Step.withLock hv hk hmx hnv⟩
-  | @scopeL Γ Δ1 F kk t x k hxE _ _ _ ih =>
+  | @scopeL Γ Δ1 F kk t x k hxE _ _ _ _ _ _ ih =>
     intro m hcd hi
     obtain ⟨Ex, hx, hnrb, _⟩ := hxE
     have hi0 : Inv m Γ F k := hi.scopeLIn hx hnrb
     rcases ih hcd hi0 with rfl | hbl | ⟨r, hr⟩
     · obtain ⟨sl, a', hsl, hd⟩ := dropSlot_exists hi.toMInv hx
       -- the payload goes back into its block, or `x`'s slot is dropped
-      obtain ⟨m', hrl⟩ := Release.exists (k := kk) (t := t) hsl hd
       -- A3.5's second cut: unless it fails the crossing check, which panics
       by_cases hck : GiveCheck m x sl
-      · exact Or.inr <| Or.inr ⟨_, Step.scopeLSkip hrl fun sl' h => by rw [hsl] at h; cases h; exact hck⟩
+      · obtain ⟨m', hrl⟩ := Release.exists (k := kk) (t := t) hsl hd fun _ _ _ _ _ => hck
+        exact Or.inr <| Or.inr ⟨_, Step.scopeLSkip hrl fun sl' h => by rw [hsl] at h; cases h; exact hck⟩
       · exact Or.inr <| Or.inr ⟨_, Step.scopeLFail hsl hck⟩
     · exact Or.inr (Or.inl hbl)
     · cases r with
@@ -650,8 +650,14 @@ theorem progress {P : Prog}
               obtain ⟨_, hwf, _⟩ := hown (by simp at hso; exact hso)
               obtain ⟨a', ha⟩ := frees_owned hh1 hsl1 (hwf t rfl)
               exact ⟨a', DropSlot.owned ha⟩
+        -- Agora #803: a destructor payload that fails the check goes to a
+        -- destructor frame
+        by_cases hpd : CheckedOut m1 kk t ∧ ∃ n f u, t = Ty.nest n (.dtor f u) ∧ ¬ GiveCheck m1 x sl
+        · obtain ⟨hco, n, f, u, ht, hng⟩ := hpd
+          exact Or.inr <| Or.inr ⟨_, Step.scopeLPD hr hco ht hsl1 hng⟩
         -- A3.3: on the way out too
-        obtain ⟨m2, hrl⟩ := Release.exists (k := kk) (t := t) hsl1 hd
+        obtain ⟨m2, hrl⟩ := Release.exists (k := kk) (t := t) hsl1 hd fun hco n f u ht =>
+          Classical.byContradiction fun hng => hpd ⟨hco, n, f, u, ht, hng⟩
         exact Or.inr <| Or.inr ⟨_, Step.scopeLP hr hrl⟩
   | @letd Γ Γ1 Δ F x f r k E _ _ _ _ hx _ hr _ _ _ _ _ _ _ _ =>
     intro m hcd hi

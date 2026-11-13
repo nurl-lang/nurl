@@ -55,7 +55,10 @@ Since Agora #804 `RwLocked D`'s read guard is typed
 (`A3/RwDtorWitness.lean`: the view lends the payload in place).  Still
 refused (stricter than nurlc): a payload that holds a destructor value in a field of a type with
 no destructor of its own, or a destructor value (or a drained `Vec` of them)
-that holds a share (`Ty.lkPay`).  Since Agora #810 `locked_restore` of a
+that holds a cell share (`Ty.lkPay`).  Since Agora #803 one that holds `arc`
+or lock shares is typed (`A3/LockArcDtorWitness.lean`): its give-back's
+check can fail, and the value then goes to a destructor frame
+(`Step.scopeLPD`); the lemmas here are of a payload that holds no share.  Since Agora #810 `locked_restore` of a
 destructor value is typed (`lockRestore_dtor_typed`: the restore fills only a
 taken block, never a checked-out one).  Since Agora #755's last cut a `Locked (Vec D)` is typed
 (`mainV`, below: a push through the check-out), and so is a channel of `D`
@@ -171,7 +174,7 @@ theorem release_puts {m m' : Mem} {k : Nat} {t : Ty} {x : Var} {o : Bool} {v : V
     cases hw'; exact sendCheck_noArc hw hna hvf _ _
   cases hr with
   | put hx' _ _ _ => rw [hx] at hx'; cases hx'; rfl
-  | drop hno hx' _ =>
+  | drop hno _ hx' _ =>
     rw [hx] at hx'; cases hx'
     rcases hno with h | h | h
     · exact absurd hk h
@@ -198,6 +201,7 @@ theorem scopeL_end_gives_back {P : Prog} {m : Mem} {k : Nat} {t : Ty} {x : Var} 
     rw [hx] at hx'; cases hx'
     exact absurd (fun w hw' => by cases hw'; exact sendCheck_noArc hw hna hvf _ _) hng
   | scopeLP hs _ => exact (A2.Dtor.skip_no_step hno hs).elim
+  | scopeLPD hs _ _ _ _ => exact (A2.Dtor.skip_no_step hno hs).elim
   | waitPanic hw' => exact hw'.elim
   | reap hrs _ _ => cases hrs
 
@@ -404,7 +408,7 @@ theorem release_cases {m1 m2 : Mem} {k : Nat} {t : Ty} {x : Var}
       refine .inr ⟨.inl hx1, ?_⟩
       cases hrl with
       | put hx' _ _ _ => rw [hx1] at hx'; cases hx'
-      | drop _ hx' hdr => rw [hx1] at hx'; cases hx'; cases hdr; rfl
+      | drop _ _ hx' hdr => rw [hx1] at hx'; cases hx'; cases hdr; rfl
   · by_cases hwi : ∃ n, w = some (.int n)
     · obtain ⟨n, rfl⟩ := hwi
       exact .inl ⟨false, .int n, hx1, .int, .inr rfl,
@@ -415,7 +419,7 @@ theorem release_cases {m1 m2 : Mem} {k : Nat} {t : Ty} {x : Var}
         rw [hx1] at hx'; cases hx'
         obtain ⟨n, rfl⟩ : ∃ n, v = .int n := by cases v <;> simp_all [Giveable]
         exact absurd rfl (hni n)
-      | drop _ hx' hdr =>
+      | drop _ _ hx' hdr =>
         rw [hx1] at hx'; cases hx'
         exact .inr ⟨.inr ⟨rfl, w, hx1, hni⟩, by cases hdr; rfl⟩
 

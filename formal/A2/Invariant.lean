@@ -1483,7 +1483,9 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       value's drop, `DropSlot`, would run no destructor); it is not left
       moved out at the end (above), and on a panic in the body the scope's
       unwinding gives it back (`Step.scopeLP`, `Release.put`), as nurlc's
-      `locked_update` leaves the value in the lock's memory. -/
+      `locked_update` leaves the value in the lock's memory; or (Agora #803),
+      when it fails the give-back's crossing check, the frame becomes its
+      destructor frame (`Step.scopeLPD`). -/
   | withLock {Γ Δ : Ctx} {F : List Var} {a x : Var} {s : Stmt} {Ea : Entry} {t : Ty} :
       s.src = true → Γ x = none → x ∉ F → Γ a = some Ea → Ea.live = true → Ea.lockOf t →
       StmtT P (setE Γ x (lockE t)) F s Δ → EndOK Δ x →
@@ -1495,11 +1497,16 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       a plain integer binding; and (Agora #825, for every payload type) it is
       live where the body ends, as `withLock` asks.  So its check-out's end
       gives a `t` back (`A3.LockDtorWitness.scopeL_end_owns`; Agora #805 had
-      this for a payload that holds a destructor value only). -/
+      this for a payload that holds a destructor value only).  Agora #803:
+      the body keeps the bindings outside it (`KeepOut`) and ends in a
+      well-formed context, as a destructor frame's does (`StmtT.scopeD`): a
+      destructor payload that fails the give-back's check turns the frame
+      into one (`Step.scopeLPD`), whose panic is typed to the body's end. -/
   | scopeL {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x : Var} {s : Stmt} :
       (∃ E, Γ x = some E ∧ E.mode ≠ .rootb ∧ E.ty = t ∧ (t ≠ .int → E.mode = .own) ∧
         ∃ E', Δ x = some E' ∧ E'.live = true) →
       x ∉ F → StmtT P Γ F s Δ → EndOK Δ x →
+      KeepOut Γ Δ s.spine → CtxWF Δ → NameWF Δ →
       StmtT P Γ F (.scopeL k t x s) (exitScope x Δ)
   /-- A2-elem (Agora #391): `y`'s value moves into `x` at index `i`: a push
       whose element then moves to index `i`.  The invariant does not see the

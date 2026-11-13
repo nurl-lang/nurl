@@ -520,13 +520,18 @@ def CheckedOut (m : Mem) (k : Nat) (t : Ty) : Prop :=
     the rule needs no invariant to say so.  A3.5's second cut: or what it
     would give back fails the crossing check (`GiveCheck`).  That is the
     panic's unwinding only: at the scope's normal end a failed check panics
-    first (`Step.scopeLFail`). -/
+    first (`Step.scopeLFail`).  Agora #803: but not a destructor value
+    (`Ty.nest n (.dtor f u)`, `Ty.lkPay`'s destructor payload) that fails
+    the check while its block is checked out: dropping it here would run no
+    destructor.  It goes to a destructor frame on the unwinding instead
+    (`Step.scopeLPD`), the block left checked out. -/
 inductive Release (m : Mem) (k : Nat) (t : Ty) (x : Var) : Mem → Prop
   | put {o : Bool} {v : Val} : m.st x = some ⟨o, some v⟩ → Giveable m.blk t ⟨o, some v⟩ →
       CheckedOut m k t → GiveCheck m x ⟨o, some v⟩ →
       Release m k t x ({ m with blk := upd m.blk k (some ⟨t, .lock, some v⟩) }.remove x)
   | drop {sl : Slot} {a' : Nat → Bool} :
       (¬ CheckedOut m k t ∨ ¬ Giveable m.blk t sl ∨ ¬ GiveCheck m x sl) →
+      (CheckedOut m k t → ∀ n f u, t = Ty.nest n (.dtor f u) → GiveCheck m x sl) →
       m.st x = some sl → DropSlot m.alloc sl a' → Release m k t x ({ m with alloc := a' }.remove x)
 
 /-- The vector `x` names — its own tree, or the one its borrow points at —
@@ -1498,10 +1503,13 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
       Release m k t x m' → (∀ sl, m.st x = some sl → GiveCheck m x sl) →
       Step P m (.scopeL k t x .skip) (.ok m' .skip)
   /-- ... and when it fails it (the body kept a copy of a handle the value
-      holds, or stored into it one kept outside), the end panics with the
-      lock held, as `locked_with` / `locked_update` do: the panic is put in
-      the scope, as `TStep.spawnFail` puts one before its call, and its
-      unwinding drops `x` (`Release.drop`), the block left checked out. -/
+      holds, or stored into it one kept outside, or the value holds a read
+      guard), the end panics with the lock held, as `locked_with` /
+      `locked_update` do: the panic is put in the scope, as
+      `TStep.spawnFail` puts one before its call, and its unwinding drops
+      `x` (`Release.drop`), the block left checked out; or (Agora #803), for
+      a destructor payload, hands `x` to a destructor frame
+      (`Step.scopeLPD`), the block left checked out. -/
   | scopeLFail {m : Mem} {k : Nat} {t : Ty} {x : Var} {sl : Slot} :
       m.st x = some sl → ¬ GiveCheck m x sl →
       Step P m (.scopeL k t x .skip) (.ok m (.scopeL k t x .panic))
@@ -1510,9 +1518,32 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
       is released, and other threads may take it or read it.  (`Locked`'s
       `locked_with` leaves the lock held on a panic: for it the model
       over-approximates, letting other threads go on where the runtime's
-      wait.) -/
+      wait.)  Agora #803: not a destructor payload that fails the
+      give-back's check while its block is checked out, which `Release`
+      refuses: that one is `scopeLPD`'s. -/
   | scopeLP {m m1 m2 : Mem} {k : Nat} {t : Ty} {x : Var} {s : Stmt} :
       Step P m s (.panic m1) → Release m1 k t x m2 → Step P m (.scopeL k t x s) (.panic m2)
+  /-- **Agora #803: a destructor payload that fails the give-back's check.**
+      A panic unwinding through the check-out of a block whose payload is a
+      destructor value (`Ty.nest n (.dtor f u)`: `Ty.lkPay`'s destructor
+      payload, which may hold `arc` and lock shares), while the block is
+      checked out, with `x`'s value failing the crossing check
+      (`GiveCheck`, as at a failed normal end, `scopeLFail`, whose panic
+      comes here): the value cannot go back, and dropping it would run no
+      destructor (`Release.drop` refuses it).  The check-out's frame becomes
+      a destructor frame of `x` at its end (`scopeD x f`, as the reap's of a
+      `dead` block, `Step.reap`), followed by the panic raised again; the
+      frame's end runs the destructor (or drains the `Vec`), on the
+      panicking thread, and frees `x`.  The block stays checked out for good,
+      as nurlc's `locked_with` / `locked_update` panic with the lock held
+      (`stdlib/std/thread.nu`): no thread takes it again.  nurlc leaves the
+      value in the lock's memory and runs its destructor when the `Locked`'s
+      last share drops; the model runs it here, earlier, on this thread
+      (`A3/DESIGN.md`, Agora #803). -/
+  | scopeLPD {m m1 : Mem} {k : Nat} {t : Ty} {x : Var} {s : Stmt} {sl : Slot} {n f : Nat} {u : Ty} :
+      Step P m s (.panic m1) → CheckedOut m1 k t → t = Ty.nest n (.dtor f u) →
+      m1.st x = some sl → ¬ GiveCheck m1 x sl →
+      Step P m (.scopeL k t x s) (.ok m1 (.seq (.scopeD x f .skip) .panic))
   /-- Agora #610, the sweep as a step: **reaping an orphan.**  A `dead`
       block is a block no share is left of whose payload, a destructor
       value, is still in it.  The payload moves out to a fresh binding of
@@ -1537,7 +1568,7 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
       -- (the payload holds no cell share: a typed program meets it, the type
       -- of a block that is no lock block holds none, `MInv.blocks`, and
       -- (Agora #755) a lock block marked `dead` held a destructor value whose
-      -- type holds no share, `Ty.lkPay`, so none either; A3's
+      -- type holds no cell share, `Ty.lkPay`, so none either; A3's
       -- confinement of the cells, read off the steps alone, counts the
       -- slots' shares and the lock blocks')
       (∀ c, ¬ Sub (.cell c) p) →

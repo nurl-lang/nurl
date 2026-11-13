@@ -325,14 +325,16 @@ theorem Redex.plug {s r : Stmt} {K : Stmt → Stmt} (hR : Redex s K r) {P : Prog
         (by rw [hsp']; exact hKO) hWd hNd hΔd hself
     | sub hw _ ho ih0 => exact StmtT.sub hw (ih0 hS (hi.weaker hw)) ho
     | _ => cases hS
-  | @scopeL k t x s r K _ ih =>
+  | @scopeL k t x s r K h ih =>
     intro Γ F Δ ht hi
     generalize hS : Stmt.scopeL k t x s = S at ht hi
     induction ht with
-    | scopeL hxE hxF hs hpx _ =>
+    | scopeL hxE hxF hs hpx hKO hWd hNd _ =>
       cases hS
+      have hsp' : (K r').spine = s.spine := by rw [Redex.spine_eq h hsp, ← Redex.eq h]
       obtain ⟨Ex, hx, hnrb, hty, hdl⟩ := hxE
       exact StmtT.scopeL ⟨Ex, hx, hnrb, hty, hdl⟩ hxF (ih hsp hhole _ _ _ hs (hi.scopeLIn hx hnrb)) hpx
+        (by rw [hsp']; exact hKO) hWd hNd
     | sub hw _ ho ih0 => exact StmtT.sub hw (ih0 hS (hi.weaker hw)) ho
     | _ => cases hS
 

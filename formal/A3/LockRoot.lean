@@ -531,7 +531,7 @@ theorem Step.keepSlot {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
     intro hck y o w hy hw hyn hlt
     simp only [Stmt.nm, List.mem_cons, not_or] at hyn
     exact ⟨(ih hck hy hw hyn.2 hlt).1, fun _ _ he => by cases he; nm_close⟩
-  | scopeDPDrain _ _ ih =>
+  | scopeDPDrain _ _ ih | scopeLPD _ _ _ _ _ ih =>
     intro hck y o w hy hw hyn hlt
     simp only [Stmt.nm, List.mem_cons, not_or] at hyn
     exact ⟨(ih hck hy hw hyn.2 hlt).1, fun _ _ he => by cases he; nm_close⟩

@@ -418,6 +418,10 @@ theorem Step.restrict {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
     obtain ⟨r1, h1, hd⟩ := ih
     obtain rfl := ResDown.panic_inv hd
     exact ⟨_, .scopeDPMoved h1 hx, rfl⟩
+  | scopeLPD _ hck ht hx hng ih =>
+    obtain ⟨r1, h1, hd⟩ := ih
+    obtain rfl := ResDown.panic_inv hd
+    exact ⟨_, .scopeLPD h1 hck ht hx hng, rfl, .refl _⟩
   -- A3.2: taking a lock and giving it back touch no address
   | withLock ha hk hx hnv => exact ⟨_, .withLock ha hk hx hnv, rfl, .refl _⟩
   -- Agora #610: so does reaping an orphan
@@ -429,7 +433,7 @@ theorem Step.restrict {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
   | scopeLSkip hrl hck =>
     cases hrl with
     | put hx hg hk hck' => exact ⟨_, .scopeLSkip (.put hx hg hk hck') hck, rfl, .refl _⟩
-    | drop hc hx hd => exact ⟨_, .scopeLSkip (.drop hc hx (DropSlot.restrict hx hd hav)) hck, rfl, .refl _⟩
+    | drop hc hgc hx hd => exact ⟨_, .scopeLSkip (.drop hc hgc hx (DropSlot.restrict hx hd hav)) hck, rfl, .refl _⟩
   | scopeLFail hx hck => exact ⟨_, .scopeLFail hx hck, rfl, .refl _⟩
   | scopeLP hs hrl ih =>
     obtain ⟨r1, h1, hd'⟩ := ih
@@ -437,6 +441,6 @@ theorem Step.restrict {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
     -- A3.3: the payload goes back on the way out, or the slot is dropped
     cases hrl with
     | put hx hg hk hck => exact ⟨_, .scopeLP h1 (.put hx hg hk hck), rfl⟩
-    | drop hc hx hd => exact ⟨_, .scopeLP h1 (.drop hc hx (DropSlot.restrict hx hd (Step.avoids hs hb hav hf hp))), rfl⟩
+    | drop hc hgc hx hd => exact ⟨_, .scopeLP h1 (.drop hc hgc hx (DropSlot.restrict hx hd (Step.avoids hs hb hav hf hp))), rfl⟩
 
 end A3
