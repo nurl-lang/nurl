@@ -31364,7 +31364,18 @@ unsafe @ __pfo_bind_lends i syms s name → v {
 // enum: its first payload slot may be a number another value holds too.)
 @ __ud_keyable s vt → b {
     : s ll ( nurl_llty vt )
-    : s t ? != 0 ( nurl_str_starts ll `{ i1, ` ) ( __wrap_part ll 0 ) ( nurl_str_cat vt `` )
+    // (An option or a result by its active side, as mem_ud_ident_key keys
+    // it: either side that keys — a result whose error owns a String beside
+    // a number, `!i String`, or an option of an option, `? ?String`, by its
+    // innermost payload. Asked by its first side only, those had no key, and
+    // `= o ( f o k )` released o's value while the new one was it — agora
+    // #475.)
+    ? != 0 ( nurl_str_starts ll `{ i1, ` ) {
+        : s pt ( __wrap_part_key ll 0 )
+        : s et ( __wrap_part_key ll 1 )
+        ^ | & != 0 ( nurl_str_len pt ) ( __ud_keyable pt ) & != 0 ( nurl_str_len et ) ( __ud_keyable et )
+    } {}
+    : s t ( nurl_str_cat vt `` )
     ? == 0 ( nurl_str_len t ) { ^ F } {}
     // (An enum by its active variant's key, mem_enum_variant_key: one with
     // a variant that owns a buffer.)
@@ -31577,16 +31588,18 @@ unsafe @ __pfo_bind_lends i syms s name → v {
 @ mem_ud_ident_key i cg s vt s val → s {
     : s ll ( nurl_llty vt )
     ? == 0 ( nurl_str_starts ll `{ i1, ` ) { ^ ( mem_identity_key cg vt val ) } {}
-    : s pt ( __wrap_part ll 0 )
-    : s et ( __wrap_part ll 1 )
+    : s pt ( __wrap_part_key ll 0 )
+    : s et ( __wrap_part_key ll 1 )
     : s p ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print p ) ( nurl_print ` = extractvalue ` ) ( nurl_print ll ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 1\n` )
-    : s pk ( mem_identity_key cg pt p )
+    // (A side that is an option or a result itself by its own active side:
+    // `? ?String` by its innermost payload — agora #475.)
+    : s pk ( mem_ud_ident_key cg pt p )
     : ~ s ek ``
     ? != 0 ( nurl_str_len et ) {
         : s e ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print e ) ( nurl_print ` = extractvalue ` ) ( nurl_print ll ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 2\n` )
-        = ek ( mem_identity_key cg et e )
+        = ek ( mem_ud_ident_key cg et e )
     } {}
     ? & == 0 ( nurl_str_len pk ) == 0 ( nurl_str_len ek ) { ^ ( nurl_str_cat `` `` ) } {}
     : s tg ( nurl_cg_reg cg )
@@ -32115,9 +32128,13 @@ unsafe @ __pfo_bind_lends i syms s name → v {
         ^ != 0 ( nurl_str_len ( __nc_wrap_payload rlt ) )
     } {}
     ? != 0 ( nurl_str_starts rlt `{ i1, ` ) {
-        : s pt ( __wrap_part rlt 0 )
-        : s et ( __wrap_part rlt 1 )
-        ^ | & != 0 ( nurl_str_len pt ) ( __elem_owns pt g_root_syms ) & != 0 ( nurl_str_len et ) ( __elem_owns et g_root_syms )
+        // (A side that is an option itself — `? ?String` — by what it owns:
+        // __wrap_part_key splits it by nesting. Taken for owning nothing, the
+        // function answered no call, and `= o ( f o 0 )` kept o's old value
+        // back on the run that handed over a fresh one — agora #475.)
+        : s pt ( __wrap_part_key rlt 0 )
+        : s et ( __wrap_part_key rlt 1 )
+        ^ | & != 0 ( nurl_str_len pt ) ? != 0 ( nurl_str_starts pt `{ i1, ` ) ( __is_hown_ty pt ) ( __elem_owns pt g_root_syms ) & != 0 ( nurl_str_len et ) ? != 0 ( nurl_str_starts et `{ i1, ` ) ( __is_hown_ty et ) ( __elem_owns et g_root_syms )
     } {}
     ^ ( __type_needs_drop rlt g_root_syms )
 }
@@ -84797,6 +84814,20 @@ unsafe @ __jpb_note i cg s up → v {
     ? < cm 0 ( nurl_str_cat `` `` ) ( nurl_str_slice body + cm 2 - - ( nurl_str_len body ) cm 2 )
     ? >= ( nurl_str_find part ` ` ) 0 { ^ ( nurl_str_cat `` `` ) } {}
     ^ part
+}
+
+// …or, for a key, a part that is an option or a result itself (`{ i1, {
+// i1, %String } }`'s payload): split by nesting, as an aggregate's fields
+// are (agora #475). `` where neither is.
+@ __wrap_part_key s ty i k → s {
+    : s p ( __wrap_part ty k )
+    ? != 0 ( nurl_str_len p ) { ^ p } {}
+    : i n ( nurl_str_len ty )
+    ? | < n 9 == 0 ( nurl_str_starts ty `{ i1, ` ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s fs ( __seplist_rest ( __agg_fields ty ) )
+    : s q ? == k 0 ( seplist_first fs ) ( seplist_first ( __seplist_rest fs ) )
+    ? != 0 ( nurl_str_starts q `{ i1, ` ) { ^ q } {}
+    ^ ( nurl_str_cat `` `` )
 }
 
 // Copy what an option / result carries when `cond` (an i1 or `1`) holds:
