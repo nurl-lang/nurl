@@ -41,9 +41,20 @@ $ `stdlib/core/string.nu`
 // q given a whole value of its own first: o is given that value.
 @ own → v { : ~ P o @ P { ( mk `o name` ) ( mk `o extra` ) } : ~ P q o = . q name ( mk `q name` ) = q @ P { ( mk `own name` ) ( mk `own extra` ) } = o q ( show `own` o ) }
 
+// A cursor over the cursor: both stand for o's value.
+@ chain → v {
+    : ~ P o @ P { ( mk `o name` ) ( mk `o extra` ) }
+    : ~ P q o
+    : ~ P q2 q
+    = . q2 name ( mk `q2 name` )
+    = o q2
+    ( show `chain` o )
+}
+
 @ main → i {
     ( key ) ( other ) ( pick ) ( ident )
     ( arms 0 ) ( arms 1 ) ( arms 2 )
     ( own )
+    ( chain )
     ^ 0
 }

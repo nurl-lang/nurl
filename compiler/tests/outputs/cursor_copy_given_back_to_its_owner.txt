@@ -10,3 +10,4 @@ arms 0: o name, long enough for a heap buffer / o extra, long enough for a heap 
 arms 1: q name, long enough for a heap buffer / o extra, long enough for a heap buffer
 arms 2: o name, long enough for a heap buffer / q extra, long enough for a heap buffer
 own: own name, long enough for a heap buffer / own extra, long enough for a heap buffer
+chain: q2 name, long enough for a heap buffer / o extra, long enough for a heap buffer
