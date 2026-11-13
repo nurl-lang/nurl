@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_send_closure_in_a_struct_pushed_into_a_vec.nu:35:5: error: 'thread_spawn' runs this closure on another thread or fiber, but the closure built on line 29 captures 'r2', which is not Send: it reaches an 'Rc', whose refcount is NOT atomic — two threads cloning or dropping the same Rc race on its control-block count, which is UB. Use 'Arc' (stdlib/std/arc.nu) for any handle that crosses a thread boundary; it is the same API with a SEQ_CST count. If the type holding it IS safe to send and the compiler cannot see why, assert that with an 'unsafe % Send <Type> { }' marker impl (stdlib/core/marker.nu) — a promise the compiler takes on trust.
+    ?? ( thread_spawn \ → v { ( run_n . ( vec_at [H] hs 0 ) f 20000 ) } ) {
+    ^

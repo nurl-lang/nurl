@@ -117,6 +117,13 @@ $ `stdlib/core/rcbox.nu`
 // last owner releases them.
 : DStore { ( Shared DStoreImpl ) ctl }
 
+// Everything in the store is reached under its own mutex, and a queue's
+// items and flag under the queue's: the handlers a Registry runs on its
+// server's threads share one store and its queues.
+% Sync DStore {}
+
+% Sync DQ {}
+
 @ DStore_share DStore h → DStore { ^ @ DStore { ( shared_clone [DStoreImpl] . h ctl ) } }
 
 @ DStore_drop sink DStore h → v {}

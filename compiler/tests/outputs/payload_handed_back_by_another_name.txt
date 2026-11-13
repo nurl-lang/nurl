@@ -1,0 +1,16 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+a payload bound under another name, long enough
+a payload as a join's value, long enough heap
+a payload through a generic identity, long
+a payload beside a parameter, long enough heap
+the caller's own argument, long enough heap
+a payload under two other names, long enough
+a payload of a literal enum, long enough heap
+a sunk enum's payload, long enough for heap
+the holder's name, long enough for the heap
+a fresh field beside a nested one, long
+the holder's name, long enough for the heap
+the caller's own argument, long enough heap
