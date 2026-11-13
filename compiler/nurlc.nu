@@ -197,6 +197,94 @@
 : ~ i g_bck_quiet 0  // 1 while a walk only makes its answers: no diagnostic (__bck_walk_scc)
 : ~ i g_bck_ans_union 0  // 1 while a walk's answers add to the ones published (a component's fixed point)
 : ~ i g_dfs_n 0  // the parked walks numbered so far (__bck_walk_deferred, Tarjan's algorithm)
+// ── Core IR (docs/dev/PROPOSAL_CORE_IR.md §4.1, AGORA-858) ───────────
+// The statement language of formal/A2, built as a by-product of the fused
+// walk: per function, its variables and a list of statements in evaluation
+// order, in which every producer (a call, a literal, a join, a block) is
+// bound to a variable before anything consumes it, and every value read is
+// a place (a variable and a path of fields, `*` elements and payloads).
+// `--emit-core` prints it; nothing else reads it yet, and with the flag off
+// every hook is one test of g_core_on.
+: ~ i g_core_on 0  // 1: the walk builds the core IR (--emit-core)
+: ~ i g_core_live 0  // 1 while a function's IR is being built
+: ~ i g_core_code 0  // the function's statements, as words (CO_* / RV_*)
+: ~ i g_core_code_n 0
+: ~ i g_core_code_cap 0
+: ~ i g_core_vars 0  // its variables, CORE_VW words each: name, type, kind, depth, flags, line, value block
+: ~ i g_core_var_n 0
+: ~ i g_core_var_cap 0
+: ~ i g_core_pl 0  // its places, 3 words each: variable (-1: a global), parent place (-1: a root), path element
+: ~ i g_core_pl_n 0
+: ~ i g_core_pl_cap 0
+: ~ i g_core_os 0  // the operand stack: every expression leaves one operand (core_expr_exit)
+: ~ i g_core_os_n 0
+: ~ i g_core_os_cap 0
+: ~ i g_core_tmps 0  // temporaries made and not yet released (core_discard)
+: ~ i g_core_tmp_n 0
+: ~ i g_core_tmp_cap 0
+: ~ i g_core_depth 0  // scopes open (SCOPE, an arm, a loop body)
+: ~ i g_core_line 0  // the line of the last LINE word
+: ~ i g_core_saved 0  // the enclosing function's builder, while a closure body or an instance is built inside it
+: ~ i g_core_fname 0  // the function's name, interned
+: ~ i g_core_fret 0  // its return type, interned
+: ~ i g_core_fline 0
+: ~ i g_core_out 0  // the printed IR (bytes), written to stdout when the module is done
+: ~ i g_core_out_n 0
+: ~ i g_core_out_cap 0
+: ~ i g_core_unlowered 0  // constructs the walk compiled without saying what they are (core_expr_exit)
+: ~ i g_core_callee 0  // the callee of the call being compiled, interned (core_call)
+: ~ i g_core_serial 0  // the function being built, numbered: a binding's `__cv` mark is serial * CORE_VS + variable
+: ~ i g_core_serial_next 0
+: ~ i g_core_nparam 0  // its parameters: variables 0 … n-1
+: ~ i g_core_ffile 0  // the file it is in, interned
+: ~ i g_core_mb_elem 0  // the path element of the `. obj x` being compiled (core_member_elem), 0 not known yet
+: ~ i g_core_nl_addr 0  // 1: the object of the field store being compiled was walked by address (gen_nested_lvalue_addr)
+: ~ i g_core_agg_ty 0  // the type of the literal being compiled, interned
+: ~ i g_core_agg_var 0  // …and its variant (an enum's, `T` / `F` of an option or a result), 0 none
+: ~ i g_core_match_op 0  // the scrutinee of the match arm being compiled, and its pattern (core_match_arm)
+: ~ i g_core_match_var 0
+: ~ i g_core_tys 0  // the types the IR mentioned, interned, in the order met (core_note_ty)
+: ~ i g_core_ty_n 0
+: ~ i g_core_ty_cap 0
+: ~ i g_core_ty_seen 0  // …and the table that says which are listed already
+: ~ i g_core_fflags 0  // the function being built: bit 0 its body may use raw memory (bck_unsafe_ctx)
+: ~ i g_core_ftmpl 0  // …and the generic it is an instance of, interned (`` none)
+: ~ i g_core_acks 0  // bumped by the hooks of the constructs only a hook can lower (core_expr_exit)
+: ~ i g_core_vb -1  // the temporary of the innermost value block open, -1 none: what is bound inside is that block's
+: ~ i g_core_kw_h 0  // the call with named arguments just read: where its operands begin, and its arguments' parameter positions in the order written (core_kwargs_reorder)
+: ~ s g_core_kw_slots ``
+: i CORE_VW 7
+: i CORE_VS 1048576
+// Statement words.
+: i CO_LET 1  // vid rvalue
+: i CO_ASSIGN 2  // place rvalue
+: i CO_EVAL 3  // rvalue
+: i CO_IF 4  // operand … CO_ELSE … CO_END
+: i CO_ELSE 5
+: i CO_END 6
+: i CO_MATCH 7  // operand, then CO_ARM variant … per arm, CO_END
+: i CO_ARM 8
+: i CO_LOOP 9  // condition statements, CO_LOOPCOND operand, body, CO_END
+: i CO_LOOPCOND 10
+: i CO_FOREACH 11  // vid operand … CO_END
+: i CO_SCOPE 12  // … CO_END
+: i CO_DROP 13  // vid
+: i CO_RET 14  // operand (-1: none)
+: i CO_BREAK 15
+: i CO_CONTINUE 16
+: i CO_LINE 17  // line
+: i CO_NOP 18
+: i CO_DEFER 19  // … CO_END
+// Rvalue words.
+: i RV_NONE 0
+: i RV_USE 1  // operand
+: i RV_CALL 2  // callee n operand…
+: i RV_AGG 3  // type variant n operand…
+: i RV_SCALAR 4  // n operand…
+: i RV_PAYLOAD 5  // operand variant index
+: i RV_OPAQUE 6  // what n operand…
+: i RV_CLOSURE 7  // function n captured operand…
+: i RV_CALLIND 8  // n operand… (the first is the closure value)
 // A call through a closure value is a call of its summary node (agora #359,
 // #403): `name__cloN`, whose members are the literals (`__closure_N`, each
 // summarised from its own body as a function is) and the nodes bound to the
@@ -7313,6 +7401,7 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     { : s __ret_frt ( nurl_sym_get syms `__fn_ret_ty__` )
         ? ( seq __ret_frt `void` )
         { ( bck_record `ret` `` bck_line )
+            ? != 0 g_core_live { ( core_ret F ) } {}
             ( gen_ret_term lex syms cg `void` `` `` `` `` `` `` `` )
             ( nurl_set_last_type `void` )
             = g_did_ret 1
@@ -7444,6 +7533,7 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     // the return's reaches, g_rpg_vreads.)
     ? & != 0 g_rpg_on == ret_first_tt TT_LBRACE { = g_rpg_want 1 } {}
     : ~ s val ( gen_operand lex syms cg )
+    ? != 0 g_core_live { ( core_ret T ) } {}
     // (A value holding nothing — an option's `None` — hands no storage over,
     // whatever is answered of it: asked before a rule below rewrites `val`.)
     : b __rnone ( __ost_none val )
@@ -9396,6 +9486,1067 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     }
 }
 
+// ── Core IR: the builder (globals and words: g_core_* / CO_* / RV_*) ──
+//
+// How the walk builds it. Every expression leaves exactly one operand on
+// the operand stack (g_core_os): 0 a value with nothing to track (a
+// number, a literal), 1 a value the walk could not name, p + 2 the place
+// p. A construct pops the operands it consumed and pushes its own; a
+// producer (a call, a literal, a join) writes a `let` of a temporary and
+// pushes the temporary. gen_expr checks the count at its exit
+// (core_expr_exit), so a construct with no hook of its own is counted and
+// printed as `opaque`, never guessed: `--emit-core` ends with the count.
+// A statement's temporaries are released where its value is discarded
+// (core_discard); a tail's ride on to the statement around its block.
+
+// A word array `ncap` words long holding the first `n` of `arr`, which is
+// released.
+unsafe @ __core_grown i arr i n i ncap → i {
+    : s nw # s ( nurl_alloc * ncap 8 )
+    ? != n 0 { ( memcpy nw # s arr * n 8 ) } {}
+    ? != arr 0 { ( nurl_free # s arr ) } {}
+    ^ # i nw
+}
+
+unsafe @ __core_in s x → i {
+    ^ # i ( nurl_intern_n x ( nurl_str_len x ) )
+}
+
+// One statement word.
+unsafe @ core_w i w → v {
+    ? >= g_core_code_n g_core_code_cap {
+        : i nc ? == g_core_code_cap 0 512 * g_core_code_cap 2
+        = g_core_code ( __core_grown g_core_code g_core_code_n nc )
+        = g_core_code_cap nc
+    } {}
+    : *i c # *i # s g_core_code
+    = . c g_core_code_n w
+    = g_core_code_n + g_core_code_n 1
+}
+
+unsafe @ core_push i op → v {
+    ? >= g_core_os_n g_core_os_cap {
+        : i nc ? == g_core_os_cap 0 64 * g_core_os_cap 2
+        = g_core_os ( __core_grown g_core_os g_core_os_n nc )
+        = g_core_os_cap nc
+    } {}
+    : *i os # *i # s g_core_os
+    = . os g_core_os_n op
+    = g_core_os_n + g_core_os_n 1
+}
+
+// The operand on top, taken: 1 (a value nothing named) from an empty stack.
+unsafe @ core_pop → i {
+    ? <= g_core_os_n 0 { ^ 1 } {}
+    = g_core_os_n - g_core_os_n 1
+    : *i os # *i # s g_core_os
+    ^ . os g_core_os_n
+}
+
+// A new variable: kind 0 a parameter, 1 a binding, 2 a temporary, 3 a
+// capture; flags bit 0 mutable, 2 `inout`, 4 `sink`.
+unsafe @ core_var_new s name s ty i kind i flags i line → i {
+    : i need * + g_core_var_n 1 CORE_VW
+    ? > need g_core_var_cap {
+        : i nc ? == g_core_var_cap 0 * 64 CORE_VW * g_core_var_cap 2
+        = g_core_vars ( __core_grown g_core_vars * g_core_var_n CORE_VW nc )
+        = g_core_var_cap nc
+    } {}
+    : *i vs # *i # s g_core_vars
+    : i b * g_core_var_n CORE_VW
+    = . vs b ( __core_in name )
+    = . vs + b 1 ( __core_in ty )
+    ( core_note_ty ty )
+    = . vs + b 2 kind
+    = . vs + b 3 g_core_depth
+    = . vs + b 4 flags
+    = . vs + b 5 line
+    = . vs + b 6 g_core_vb
+    = g_core_var_n + g_core_var_n 1
+    ^ - g_core_var_n 1
+}
+
+// A variable's type, set once it is known (a join's temporary: after its arms).
+unsafe @ core_var_set_ty i vid s ty → v {
+    ? | < vid 0 >= vid g_core_var_n { ^ } {}
+    : *i vs # *i # s g_core_vars
+    = . vs + * vid CORE_VW 1 ( __core_in ty )
+    ( core_note_ty ty )
+}
+
+// A place, as an operand: `var` -1 with `parent` -1 is a global named by
+// `elem`; `parent` -1 otherwise the variable itself; else `elem` (a field
+// name, `*`, `#Variant.i`) under the place `parent`.
+unsafe @ core_place i var i parent i elem → i {
+    : i need * + g_core_pl_n 1 3
+    ? > need g_core_pl_cap {
+        : i nc ? == g_core_pl_cap 0 192 * g_core_pl_cap 2
+        = g_core_pl ( __core_grown g_core_pl * g_core_pl_n 3 nc )
+        = g_core_pl_cap nc
+    } {}
+    : *i ps # *i # s g_core_pl
+    : i b * g_core_pl_n 3
+    = . ps b var
+    = . ps + b 1 parent
+    = . ps + b 2 elem
+    = g_core_pl_n + g_core_pl_n 1
+    ^ + g_core_pl_n 1
+}
+
+unsafe @ core_op_var i vid → i {
+    ^ ( core_place vid -1 0 )
+}
+
+// The place `elem` under the operand `op`; a value with nothing to track,
+// or one nothing named, has no parts that are anything else.
+unsafe @ core_op_ext i op s elem → i {
+    ? < op 2 { ^ op } {}
+    : *i ps # *i # s g_core_pl
+    : i p - op 2
+    : i var . ps * p 3
+    ^ ( core_place var p ( __core_in elem ) )
+}
+
+// A temporary of type `ty`: released where its statement's value is
+// discarded (core_discard).
+unsafe @ core_temp s ty → i {
+    : i vid ( core_var_new `` ty 2 0 g_core_line )
+    ? >= g_core_tmp_n g_core_tmp_cap {
+        : i nc ? == g_core_tmp_cap 0 64 * g_core_tmp_cap 2
+        = g_core_tmps ( __core_grown g_core_tmps g_core_tmp_n nc )
+        = g_core_tmp_cap nc
+    } {}
+    : *i tm # *i # s g_core_tmps
+    = . tm g_core_tmp_n vid
+    = g_core_tmp_n + g_core_tmp_n 1
+    ^ vid
+}
+
+// A type whose values hold no address and own nothing, told by its
+// spelling: void, an integer, a float, a vector — anything but a pointer,
+// a named type and a literal aggregate.
+unsafe @ core_ty_scalar s ty → b {
+    : i n ( nurl_str_len ty )
+    ? == n 0 { ^ T } {}
+    : *u p # *u ty
+    : i c0 ( nurl_str_at p n 0 )
+    ? | == c0 37 == c0 123 { ^ F } {}
+    ^ != ( nurl_str_at p n - n 1 ) 42
+}
+
+// The operands above height `h0`, as a count and a list; the stack is
+// back at `h0`.
+unsafe @ __core_w_ops i h0 → v {
+    : i n ? > g_core_os_n h0 - g_core_os_n h0 0
+    ( core_w n )
+    : *i os # *i # s g_core_os
+    : ~ i k 0
+    ~ < k n {
+        ( core_w . os + h0 k )
+        = k + k 1
+    }
+    ? > g_core_os_n h0 { = g_core_os_n h0 } {}
+}
+
+// A construct the walk compiled without a hook, or a name no hook bound:
+// counted, and named on stderr with the function it is in.
+unsafe @ __core_gap s what → v {
+    = g_core_unlowered + g_core_unlowered 1
+    ( nurl_eprintln ( nurl_str_cat ( nurl_str_cat4 `core-gap\t` what `\t` # s g_core_fname ) ( nurl_str_cat4 `\t` # s g_core_ffile `:` ( nurl_str_int g_core_line ) ) ) )
+}
+
+// Where gen_expr returns: the expression that began with token `tt` at
+// stack height `h0` leaves one operand. One that pushed none is a value
+// with nothing to track when its type says so (a literal, a number); one
+// that left several consumed them without saying how — a computation of
+// numbers reads them (`scalar`), anything else is `opaque`.
+unsafe @ core_expr_exit i h0 i tt i acks0 → v {
+    : i n - g_core_os_n h0
+    // (A closure literal, a try and a slice literal are lowered by their
+    // own hooks or not at all: one operand left is not their value.)
+    : b own_hook | == tt TT_BACKSLASH == tt TT_LBRACK
+    ? & == n 1 | ! own_hook != acks0 g_core_acks {
+        ? | | | == tt TT_QUEST == tt TT_QUESTQUEST == tt TT_BACKSLASH == tt TT_LBRACE { ( __core_join_fix ) } {}
+        ^
+    } {}
+    : s ty ( nurl_get_last_type )
+    : b sc & ! own_hook | ( core_ty_scalar ty ) == tt TT_STR
+    ? <= n 0 {
+        = g_core_os_n h0
+        ? sc { ( core_push 0 ) ^ } {}
+    } {}
+    ? sc {
+        ( core_w CO_EVAL ) ( core_w RV_SCALAR ) ( __core_w_ops h0 )
+        ( core_push 0 )
+        ^
+    } {}
+    : i t ( core_temp ty )
+    ( core_w CO_LET ) ( core_w t ) ( core_w RV_OPAQUE ) ( core_w tt ) ( __core_w_ops h0 )
+    ( core_push ( core_op_var t ) )
+    ( __core_gap ( nurl_str_cat `expr ` ( nurl_str_int tt ) ) )
+}
+
+// A statement begins on `line`.
+unsafe @ core_line i line → v {
+    ? == line g_core_line { ^ } {}
+    = g_core_line line
+    ( core_w CO_LINE ) ( core_w line )
+}
+
+// Where gen_stmt returns: the statement that began at height `h0` leaves
+// one operand, its value (nothing to track for a declaration, a loop, an
+// assignment).
+unsafe @ core_stmt_exit i h0 → v {
+    ? == g_core_os_n + h0 1 { ^ } {}
+    ? > g_core_os_n + h0 1 {
+        : *i os # *i # s g_core_os
+        = . os h0 . os - g_core_os_n 1
+        = g_core_os_n + h0 1
+        ^
+    } {}
+    = g_core_os_n h0
+    ( core_push 0 )
+}
+
+// A statement's value is not taken: the stack is back at `h0` and the
+// temporaries made since `t0` are released, newest first.
+unsafe @ core_discard i h0 i t0 → v {
+    ? > g_core_os_n h0 { = g_core_os_n h0 } {}
+    : *i tm # *i # s g_core_tmps
+    ~ > g_core_tmp_n t0 {
+        = g_core_tmp_n - g_core_tmp_n 1
+        ( core_w CO_DROP ) ( core_w . tm g_core_tmp_n )
+    }
+}
+
+// `name` is bound to variable `vid` in the scope `syms` is in.
+@ __core_bind i syms s name i vid → v {
+    ( nurl_sym_def syms ( nurl_str_cat name `__cv` ) ( nurl_str_int + * g_core_serial CORE_VS vid ) )
+}
+
+// A parameter: `mode` 0 by value, 2 `inout`, 4 `sink`.
+unsafe @ core_param i syms s name s ty i mode i line → v {
+    : i vid ( core_var_new name ty 0 mode line )
+    ( __core_bind syms name vid )
+    = g_core_nparam + g_core_nparam 1
+}
+
+// `: [~] T name value`: the value on top of the stack is bound.
+unsafe @ core_let i syms s name s ty b mut i line → v {
+    : i op ( core_pop )
+    : i vid ( core_var_new name ty 1 ? mut 1 0 line )
+    ( __core_bind syms name vid )
+    ( core_w CO_LET ) ( core_w vid ) ( core_w RV_USE ) ( core_w op )
+}
+
+// The operand a name is: its variable, a capture of the enclosing
+// function's, a global, or — a constant, an enum's unit variant — nothing
+// to track.
+unsafe @ core_name_op i syms s name s lt → i {
+    : i cv ( nurl_sym_int2 syms name `__cv` )
+    ? >= cv 0 {
+        ? == / cv CORE_VS g_core_serial { ^ ( core_op_var % cv CORE_VS ) } {}
+        ^ ( core_op_var ( __core_capture name lt ) )
+    } {}
+    : s glb ( nurl_sym_get2 syms name `__global` )
+    ? == 0 ( nurl_str_len glb ) {
+        // (No binding the builder made and no global: a name a hook has
+        // not bound yet.)
+        ? ( core_ty_scalar lt ) { ^ 0 } {}
+        ( __core_gap ( nurl_str_cat `name ` name ) )
+        ^ 1
+    } {}
+    ? == ( nurl_str_get glb 0 ) 61 { ^ 0 } {}
+    ^ ( core_place -1 -1 ( __core_in name ) )
+}
+
+unsafe @ core_push_name i syms s name s lt → v {
+    ( core_push ( core_name_op syms name lt ) )
+}
+
+// The capture variable of `name` in the closure body being built: one per
+// name (a body sees one binding of its maker's under a name).
+unsafe @ __core_capture s name s ty → i {
+    : i nm ( __core_in name )
+    : *i vs # *i # s g_core_vars
+    : ~ i k 0
+    ~ < k g_core_var_n {
+        ? & == . vs + * k CORE_VW 2 3 == . vs * k CORE_VW nm { ^ k } {}
+        = k + k 1
+    }
+    ^ ( core_var_new name ty 3 0 g_core_line )
+}
+
+// A call's arguments are the operands above `h0`; its result, of type
+// `ret_ty`, is a temporary unless it is a number.
+// A call through a closure value (`ind`): the value is the first operand.
+unsafe @ core_call i h0 s ret_ty b ind → v {
+    ? ( core_ty_scalar ret_ty ) {
+        ( core_w CO_EVAL )
+        ? ind { ( core_w RV_CALLIND ) } { ( core_w RV_CALL ) ( core_w g_core_callee ) }
+        ( __core_w_ops h0 )
+        ( core_push 0 )
+        ^
+    } {}
+    : i t ( core_temp ret_ty )
+    ( core_w CO_LET ) ( core_w t )
+    ? ind { ( core_w RV_CALLIND ) } { ( core_w RV_CALL ) ( core_w g_core_callee ) }
+    ( __core_w_ops h0 )
+    ( core_push ( core_op_var t ) )
+}
+
+unsafe @ core_kw_note i h0 s slots → v {
+    = g_core_kw_h h0
+    = g_core_kw_slots ( nurl_str_cat slots `` )
+}
+
+// A call with named arguments read them in the order written, `slots`
+// their parameters' positions, and then its omitted parameters' defaults
+// in parameter order: the operands above `h0` are put in parameter order.
+unsafe @ core_kwargs_reorder i h0 s slots i n → v {
+    ? <= n 0 { ^ } {}
+    : s tmp # s ( nurl_alloc * n 8 )
+    : *i tp # *i tmp
+    : ~ i k 0
+    ~ < k n { = . tp k -1 = k + k 1 }
+    : *i os # *i # s g_core_os
+    : ~ s rest ( nurl_str_cat slots `` )
+    : ~ i at h0
+    ~ & != 0 ( nurl_str_len rest ) < at g_core_os_n {
+        : i slot ( nurl_str_to_int ( str_first_word rest ) )
+        = rest ( str_skip_word rest )
+        ? & >= slot 0 < slot n { = . tp slot . os at } {}
+        = at + at 1
+    }
+    = k 0
+    ~ < k n {
+        ? == . tp k -1 {
+            ? < at g_core_os_n { = . tp k . os at = at + at 1 } { = . tp k 0 }
+        } {}
+        = k + k 1
+    }
+    = g_core_os_n h0
+    = k 0
+    ~ < k n {
+        ( core_push . tp k )
+        = k + k 1
+    }
+    ( nurl_free tmp )
+}
+
+// A call begins: when its callee names a binding (a closure value), that
+// binding is the call's first operand and the call is indirect.
+unsafe @ core_call_begin i syms s callee → b {
+    ? < ( nurl_sym_int2 syms callee `__cv` ) 0 {
+        = g_core_callee ( __core_in callee )
+        ^ F
+    } {}
+    ( core_push ( core_name_op syms callee ( nurl_sym_get syms callee ) ) )
+    ^ T
+}
+
+// `^ value` (the operand on top) or a bare `^` (`has` F). The `^` itself
+// is a value with nothing to track.
+unsafe @ core_ret b has → v {
+    : i op ? has ( core_pop ) -1
+    ( core_w CO_RET ) ( core_w op )
+    ( core_push 0 )
+}
+
+// A scope opens: what is bound in it is released at its end.
+unsafe @ core_scope_begin → v {
+    ( core_w CO_SCOPE )
+    = g_core_depth + g_core_depth 1
+}
+
+unsafe @ core_scope_end → v {
+    ( core_w CO_END )
+    = g_core_depth - g_core_depth 1
+}
+
+// A function's (or a closure body's) IR begins. The builder of the
+// function it is compiled inside, if any, is set aside.
+unsafe @ core_fn_begin s fname s file i line i flags s tmpl → v {
+    ? != 0 g_core_live {
+        : s sv # s ( nurl_alloc * 27 8 )
+        ( nurl_poke sv 0 g_core_saved )
+        ( nurl_poke sv 1 g_core_code ) ( nurl_poke sv 2 g_core_code_n ) ( nurl_poke sv 3 g_core_code_cap )
+        ( nurl_poke sv 4 g_core_vars ) ( nurl_poke sv 5 g_core_var_n ) ( nurl_poke sv 6 g_core_var_cap )
+        ( nurl_poke sv 7 g_core_pl ) ( nurl_poke sv 8 g_core_pl_n ) ( nurl_poke sv 9 g_core_pl_cap )
+        ( nurl_poke sv 10 g_core_os ) ( nurl_poke sv 11 g_core_os_n ) ( nurl_poke sv 12 g_core_os_cap )
+        ( nurl_poke sv 13 g_core_tmps ) ( nurl_poke sv 14 g_core_tmp_n ) ( nurl_poke sv 15 g_core_tmp_cap )
+        ( nurl_poke sv 16 g_core_depth ) ( nurl_poke sv 17 g_core_line )
+        ( nurl_poke sv 18 g_core_fname ) ( nurl_poke sv 19 g_core_fret ) ( nurl_poke sv 20 g_core_fline )
+        ( nurl_poke sv 21 g_core_serial ) ( nurl_poke sv 22 g_core_nparam ) ( nurl_poke sv 23 g_core_ffile )
+        ( nurl_poke sv 24 g_core_fflags ) ( nurl_poke sv 25 g_core_ftmpl ) ( nurl_poke sv 26 g_core_vb )
+        = g_core_saved # i sv
+        = g_core_code 0 = g_core_code_cap 0
+        = g_core_vars 0 = g_core_var_cap 0
+        = g_core_pl 0 = g_core_pl_cap 0
+        = g_core_os 0 = g_core_os_cap 0
+        = g_core_tmps 0 = g_core_tmp_cap 0
+    } {}
+    = g_core_live 1
+    = g_core_code_n 0
+    = g_core_var_n 0
+    = g_core_pl_n 0
+    = g_core_os_n 0
+    = g_core_tmp_n 0
+    = g_core_depth 0
+    = g_core_line 0
+    = g_core_vb -1
+    = g_core_nparam 0
+    = g_core_serial_next + g_core_serial_next 1
+    = g_core_serial g_core_serial_next
+    = g_core_fname ( __core_in fname )
+    = g_core_ffile ( __core_in file )
+    = g_core_fret 0
+    = g_core_fline line
+    = g_core_fflags flags
+    = g_core_ftmpl ( __core_in tmpl )
+}
+
+unsafe @ core_fn_ret s ret_ty → v {
+    = g_core_fret ( __core_in ret_ty )
+}
+
+// The function's IR is complete: printed, and the enclosing function's
+// builder is back.
+unsafe @ core_fn_end → v {
+    ? == 0 g_core_live { ^ } {}
+    ( core_print_fn )
+    ? == 0 g_core_saved { = g_core_live 0 ^ } {}
+    ? != 0 g_core_code { ( nurl_free # s g_core_code ) } {}
+    ? != 0 g_core_vars { ( nurl_free # s g_core_vars ) } {}
+    ? != 0 g_core_pl { ( nurl_free # s g_core_pl ) } {}
+    ? != 0 g_core_os { ( nurl_free # s g_core_os ) } {}
+    ? != 0 g_core_tmps { ( nurl_free # s g_core_tmps ) } {}
+    : s sv # s g_core_saved
+    = g_core_saved ( nurl_peek sv 0 )
+    = g_core_code ( nurl_peek sv 1 ) = g_core_code_n ( nurl_peek sv 2 ) = g_core_code_cap ( nurl_peek sv 3 )
+    = g_core_vars ( nurl_peek sv 4 ) = g_core_var_n ( nurl_peek sv 5 ) = g_core_var_cap ( nurl_peek sv 6 )
+    = g_core_pl ( nurl_peek sv 7 ) = g_core_pl_n ( nurl_peek sv 8 ) = g_core_pl_cap ( nurl_peek sv 9 )
+    = g_core_os ( nurl_peek sv 10 ) = g_core_os_n ( nurl_peek sv 11 ) = g_core_os_cap ( nurl_peek sv 12 )
+    = g_core_tmps ( nurl_peek sv 13 ) = g_core_tmp_n ( nurl_peek sv 14 ) = g_core_tmp_cap ( nurl_peek sv 15 )
+    = g_core_depth ( nurl_peek sv 16 ) = g_core_line ( nurl_peek sv 17 )
+    = g_core_fname ( nurl_peek sv 18 ) = g_core_fret ( nurl_peek sv 19 ) = g_core_fline ( nurl_peek sv 20 )
+    = g_core_serial ( nurl_peek sv 21 ) = g_core_nparam ( nurl_peek sv 22 ) = g_core_ffile ( nurl_peek sv 23 )
+    = g_core_fflags ( nurl_peek sv 24 ) = g_core_ftmpl ( nurl_peek sv 25 ) = g_core_vb ( nurl_peek sv 26 )
+    ( nurl_free sv )
+}
+
+// ── Core IR: places, literals, stores ────────────────────────────────
+
+// The path element a `. obj x` read or `= . obj x v` store names, read
+// off the object's type `ot` and the token after the object: a field's
+// name, `*` an element, `#n` the n-th member of an inline aggregate (an
+// option's or a result's payload), `=` the value itself (`. e 0` of a
+// named type), `>name` a field reached through a pointer.
+unsafe @ core_member_elem i syms s ot i lex → i {
+    : i n ( nurl_str_len ot )
+    ? == n 0 { ^ ( __core_in `*` ) } {}
+    : *u p # *u ot
+    : b ptr == ( nurl_str_at p n - n 1 ) 42
+    : i c0 ( nurl_str_at p n 0 )
+    : i tt ( nurl_lex_type lex )
+    ? == tt TT_INT {
+        ? ptr { ^ ( __core_in `*` ) } {}
+        : i k ( nurl_lex_inum lex )
+        ? & == c0 37 == k 0 { ^ ( __core_in `=` ) } {}
+        ^ ( __core_in ( nurl_str_cat `#` ( nurl_str_int k ) ) )
+    } {}
+    ? ! ( is_ident_tok tt ) { ^ ( __core_in `*` ) } {}
+    : s name ( nurl_lex_val lex )
+    ? == c0 37 {
+        : s sname ? ptr ( nurl_str_slice ot 1 - n 2 ) ( nurl_str_slice ot 1 - n 1 )
+        ? & != 0 ( nurl_sym_len syms ( nurl_str_cat4 sname `__` name `__idx` ) ) ! ( str_contains_word g_mono_tparam_tys sname ) {
+            ^ ( __core_in ? ptr ( nurl_str_cat `>` name ) name )
+        } {}
+        ^ ( __core_in `*` )
+    } {}
+    ? & == c0 123 ! ptr {
+        ? | ( seq name `ptr` ) ( seq name `length` ) { ^ ( __core_in name ) } {}
+    } {}
+    ^ ( __core_in `*` )
+}
+
+// `base` extended by the element `elem` (core_member_elem).
+unsafe @ __core_ext_elem i base i elem → i {
+    : s e # s elem
+    : i c ( nurl_str_get e 0 )
+    ? == c 61 { ^ base } {}
+    ? == c 62 { ^ ( core_op_ext ( core_op_ext base `*` ) ( nurl_str_slice e 1 - ( nurl_str_len e ) 1 ) ) } {}
+    ^ ( core_op_ext base e )
+}
+
+// The element a field store's target names; an object walked by address
+// (gen_nested_lvalue_addr) is the struct's own storage, not a pointer's.
+unsafe @ core_store_elem i syms s pt i lex → v {
+    = g_core_mb_elem ( core_member_elem syms pt lex )
+    // (A slice's `= . xs 0 v` stores an element; read, `. xs 0` is its
+    // first member.)
+    ? & & == ( nurl_str_get pt 0 ) 123 != 0 ( nurl_str_ends pt `*, i64 }` ) == ( nurl_str_get # s g_core_mb_elem 0 ) 35 { = g_core_mb_elem ( __core_in `*` ) } {}
+    ? != 0 g_core_nl_addr {
+        = g_core_nl_addr 0
+        : s e # s g_core_mb_elem
+        ? == ( nurl_str_get e 0 ) 62 { = g_core_mb_elem ( __core_in ( nurl_str_slice e 1 - ( nurl_str_len e ) 1 ) ) } {}
+    } {}
+}
+
+// `. obj x`: the object is the operand at `h0`; operands above it are an
+// index expression's, read.
+unsafe @ core_member i h0 i elem → v {
+    ? | == elem 0 <= g_core_os_n h0 { ^ } {}
+    : *i os # *i # s g_core_os
+    : i base . os h0
+    ? > g_core_os_n + h0 1 {
+        ( core_w CO_EVAL ) ( core_w RV_SCALAR ) ( __core_w_ops + h0 1 )
+    } {}
+    = g_core_os_n h0
+    ( core_push ( __core_ext_elem base elem ) )
+}
+
+// `= . obj x value`: the object at `h0`, the value on top, an index
+// expression's operands between them.
+unsafe @ core_field_store i h0 i elem → v {
+    ? | == elem 0 < g_core_os_n + h0 2 { ( __core_gap `fieldstore` ) ^ } {}
+    : *i os # *i # s g_core_os
+    : i base . os h0
+    : i rhs . os - g_core_os_n 1
+    = g_core_os_n - g_core_os_n 1
+    ? > g_core_os_n + h0 1 {
+        ( core_w CO_EVAL ) ( core_w RV_SCALAR ) ( __core_w_ops + h0 1 )
+    } {}
+    = g_core_os_n h0
+    : i target ( __core_ext_elem base elem )
+    ( core_w CO_ASSIGN ) ( core_w target ) ( core_w RV_USE ) ( core_w rhs )
+    ( core_push target )
+}
+
+// `@ T { … }` / `[T | … ]`: the items are the operands above `h0`. An
+// enum's, an option's or a result's first item names the variant
+// (g_core_agg_var) and is no operand.
+unsafe @ core_agg i h0 → v {
+    : s ty ? != 0 g_core_agg_ty ( nurl_str_cat # s g_core_agg_ty `` ) ( nurl_get_last_type )
+    ? & != 0 g_core_agg_var > g_core_os_n h0 {
+        : *i os # *i # s g_core_os
+        : ~ i k h0
+        ~ < + k 1 g_core_os_n {
+            = . os k . os + k 1
+            = k + k 1
+        }
+        = g_core_os_n - g_core_os_n 1
+    } {}
+    ( core_note_ty ty )
+    : i t ( core_temp ty )
+    ( core_w CO_LET ) ( core_w t ) ( core_w RV_AGG ) ( core_w ( __core_in ty ) ) ( core_w g_core_agg_var ) ( __core_w_ops h0 )
+    ( core_push ( core_op_var t ) )
+    = g_core_acks + g_core_acks 1
+}
+
+// `= name value`: the value on top is stored in `target` (what the name
+// meant before the value was made: a value block in it may bind the same
+// name); the statement's own value is what the binding now holds.
+unsafe @ core_assign i target → v {
+    : i op ( core_pop )
+    ( core_w CO_ASSIGN ) ( core_w target ) ( core_w RV_USE ) ( core_w op )
+    ( core_push target )
+}
+
+// ── Core IR: joins and loops ─────────────────────────────────────────
+
+// `? c a b` after its condition (the operand on top): the join's
+// temporary, which each arm assigns its value.
+unsafe @ core_if_begin → i {
+    : i op ( core_pop )
+    : i j ( core_temp `` )
+    ( core_w CO_LET ) ( core_w j ) ( core_w RV_NONE )
+    ( core_w CO_IF ) ( core_w op )
+    ( core_scope_begin )
+    ^ j
+}
+
+// An arm of the join `j` ends: its value (on top) is the join's, the
+// temporaries it made since `t0` are released, its scope closes.
+unsafe @ core_arm_end i j i t0 → v {
+    : i op ( core_pop )
+    ? != op 0 { ( core_w CO_ASSIGN ) ( core_w ( core_op_var j ) ) ( core_w RV_USE ) ( core_w op ) } {}
+    ( core_discard g_core_os_n t0 )
+    ( core_scope_end )
+}
+
+unsafe @ core_if_else → v {
+    ( core_w CO_ELSE )
+    ( core_scope_begin )
+}
+
+// The join is closed: its value is its temporary.
+unsafe @ core_join_end i j → v {
+    ( core_w CO_END )
+    ( core_push ( core_op_var j ) )
+}
+
+// A `?` / `??` returns to gen_expr with its temporary on top: the
+// temporary takes the join's type, and a join of numbers (or of nothing)
+// is a value with nothing to track.
+unsafe @ __core_join_fix → v {
+    ? <= g_core_os_n 0 { ^ } {}
+    : *i os # *i # s g_core_os
+    : i op . os - g_core_os_n 1
+    ? < op 2 { ^ } {}
+    : *i ps # *i # s g_core_pl
+    : i p - op 2
+    ? >= . ps + * p 3 1 0 { ^ } {}
+    : i vid . ps * p 3
+    ? < vid 0 { ^ } {}
+    : *i vs # *i # s g_core_vars
+    ? != . vs + * vid CORE_VW 2 2 { ^ } {}
+    ? != 0 ( nurl_str_len # s . vs + * vid CORE_VW 1 ) { ^ } {}
+    : s ty ( nurl_get_last_type )
+    = . vs + * vid CORE_VW 1 ( __core_in ? == 0 ( nurl_str_len ty ) `void` ty )
+    ( core_note_ty ty )
+    ? ( core_ty_scalar ty ) { = . os - g_core_os_n 1 0 } {}
+}
+
+// A value block `{ … tail }` begins: its value is a temporary of the
+// enclosing statement, which its tail is assigned; what the block binds
+// is marked as the block's (g_core_vb).
+unsafe @ core_vblock_begin → i {
+    : i t ( core_temp `` )
+    ( core_w CO_LET ) ( core_w t ) ( core_w RV_NONE )
+    = g_core_vb t
+    ^ t
+}
+
+// …and ends: the tail's value, if the block left one above `h0`, is the
+// temporary's.
+unsafe @ core_vblock_end i t i prev i h0 → v {
+    ? > g_core_os_n h0 {
+        : i op ( core_pop )
+        = g_core_os_n h0
+        ? != op 0 { ( core_w CO_ASSIGN ) ( core_w ( core_op_var t ) ) ( core_w RV_USE ) ( core_w op ) } {}
+    } {}
+    ( core_push ( core_op_var t ) )
+    = g_core_vb prev
+}
+
+// `?? s { … }` after its scrutinee `op`.
+unsafe @ core_match_begin i op → i {
+    : i j ( core_temp `` )
+    ( core_w CO_LET ) ( core_w j ) ( core_w RV_NONE )
+    ( core_w CO_MATCH ) ( core_w op )
+    ^ j
+}
+
+// An arm of the match on `op` begins: `variant` is its pattern (a
+// variant, `T` / `F`, a number, `_`; an or-pattern's names).
+unsafe @ core_match_arm s variant i op → v {
+    = g_core_match_op op
+    = g_core_match_var ( __core_in variant )
+    ( core_w CO_ARM ) ( core_w g_core_match_var )
+    ( core_scope_begin )
+}
+
+// The arm binds payload `idx` of the matched value as `name`.
+unsafe @ core_payload i syms s name s ty i idx → v {
+    : i vid ( core_var_new name ty 1 0 g_core_line )
+    ( __core_bind syms name vid )
+    ( core_w CO_LET ) ( core_w vid ) ( core_w RV_PAYLOAD ) ( core_w g_core_match_op ) ( core_w g_core_match_var ) ( core_w idx )
+}
+
+// An arm's guard (the operand on top) is read.
+unsafe @ core_guard → v {
+    : i h0 - g_core_os_n 1
+    ? < h0 0 { ^ } {}
+    ( core_w CO_EVAL ) ( core_w RV_SCALAR ) ( __core_w_ops h0 )
+}
+
+// `~ cond { body }` before its condition; returns where the LOOP word is,
+// for core_loop_cancel.
+unsafe @ core_loop_begin → i {
+    ( core_w CO_LOOP )
+    ^ - g_core_code_n 1
+}
+
+// The condition (the operand on top) is evaluated; the temporaries it
+// made since `t0` are released each round; the body's scope opens.
+unsafe @ core_loop_cond i t0 → v {
+    : i op ( core_pop )
+    ( core_discard g_core_os_n t0 )
+    ( core_w CO_LOOPCOND ) ( core_w op )
+    ( core_scope_begin )
+}
+
+unsafe @ core_loop_end → v {
+    ( core_scope_end )
+    ( core_w CO_END )
+}
+
+// What looked like a loop was `~ value`, a complement.
+unsafe @ core_loop_cancel i at → v {
+    ? | < at 0 >= at g_core_code_n { ^ } {}
+    : *i c # *i # s g_core_code
+    = . c at CO_NOP
+}
+
+// `~ name container { body }` after its container (the operand on top):
+// `name` is an element of it, round by round.
+unsafe @ core_foreach i syms s name s ty → v {
+    : i op ( core_pop )
+    = g_core_depth + g_core_depth 1
+    : i vid ( core_var_new name ty 1 0 g_core_line )
+    ( __core_bind syms name vid )
+    ( core_w CO_FOREACH ) ( core_w vid ) ( core_w op )
+    ( core_w CO_SCOPE )
+}
+
+unsafe @ core_foreach_end → v {
+    ( core_w CO_END )
+    ( core_w CO_END )
+    = g_core_depth - g_core_depth 1
+}
+
+unsafe @ core_jump b is_break → v {
+    ( core_w ? is_break CO_BREAK CO_CONTINUE )
+}
+
+// ── Core IR: the types it mentions ───────────────────────────────────
+
+// A type a variable or a literal has: listed once by core_print_types.
+unsafe @ core_note_ty s ty → v {
+    ? == 0 ( nurl_str_len ty ) { ^ } {}
+    ? == 0 g_core_ty_seen { = g_core_ty_seen ( nurl_sym_new ) } {}
+    ? != 0 ( nurl_sym_len g_core_ty_seen ty ) { ^ } {}
+    ( nurl_sym_def g_core_ty_seen ty `1` )
+    ? >= g_core_ty_n g_core_ty_cap {
+        : i nc ? == g_core_ty_cap 0 256 * g_core_ty_cap 2
+        = g_core_tys ( __core_grown g_core_tys g_core_ty_n nc )
+        = g_core_ty_cap nc
+    } {}
+    : *i ta # *i # s g_core_tys
+    = . ta g_core_ty_n ( __core_in ty )
+    = g_core_ty_n + g_core_ty_n 1
+}
+
+// Every type the module's IR mentioned, and the types those hold, one a
+// line: `ty`, the type, its binding class (bck_bind_class), whether it has
+// something to release, its base name, then `A` and its type arguments,
+// `F` and its fields (name, type), `V` and its variants (name, payload
+// types). The lists a type has none of are empty.
+unsafe @ core_print_types i syms → v {
+    : ~ i k 0
+    ~ < k g_core_ty_n {
+        : *i ta # *i # s g_core_tys
+        : s ty ( nurl_str_cat # s . ta k `` )
+        : i n ( nurl_str_len ty )
+        ( __core_o `ty\t` ) ( __core_o ty )
+        ( __core_o `\t` ) ( __core_oi ( bck_bind_class ty ) )
+        ( __core_o `\t` ) ( __core_o ? ( __type_needs_drop ty syms ) `1` `0` )
+        : i c0 ( nurl_str_get ty 0 )
+        : b ptr == ( nurl_str_get ty - n 1 ) 42
+        ( __core_o `\t` )
+        ? & == c0 37 ! ptr { ( __core_o ( __lty_base_name ty ) ) } {}
+        // type arguments
+        : ~ i ac 0
+        ? & == c0 37 ! ptr {
+            : ~ s arg ( __inst_targ ty 0 )
+            ~ != 0 ( nurl_str_len arg ) { = ac + ac 1 = arg ( __inst_targ ty ac ) }
+        } {}
+        ( __core_o `\tA\t` ) ( __core_oi ac )
+        : ~ i ai 0
+        ~ < ai ac {
+            : s at ( nurl_llty ( __inst_targ ty ai ) )
+            ( __core_o `\t` ) ( __core_o at )
+            ( core_note_ty at )
+            = ai + ai 1
+        }
+        // fields
+        : s ln ? & == c0 37 ! ptr ( __lty_layout_name ty ) ``
+        : i fc ? != 0 ( nurl_str_len ln ) ( nurl_sym_int2 syms ln `__field_count` ) -1
+        : i afc ? & == c0 123 ! ptr ( agg_field_count syms ty ) -1
+        : i nf ? >= fc 0 fc ? >= afc 0 afc ? ptr 1 0
+        ( __core_o `\tF\t` ) ( __core_oi nf )
+        : ~ i fi 0
+        ~ < fi nf {
+            : s fname ? >= fc 0 ( nurl_sym_get syms ( nurl_str_cat3 ln `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__name` ) ) ) ? ptr `*` ``
+            : s ft ? >= fc 0 ( nurl_llty ( nurl_sym_get syms ( nurl_str_cat3 ln `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) ) ) ? >= afc 0 ( compound_field_type ty fi ) ( nurl_str_slice ty 0 - n 1 )
+            ( __core_o `\t` ) ( __core_o fname ) ( __core_o `\t` ) ( __core_o ft )
+            ( core_note_ty ft )
+            = fi + fi 1
+        }
+        // variants
+        : s vl ? != 0 ( nurl_str_len ln ) ( nurl_sym_get2 syms ln `__variants` ) ``
+        ( __core_o `\tV\t` ) ( __core_oi ( count_words vl ) )
+        : ~ s rest ( nurl_str_cat vl `` )
+        ~ != 0 ( nurl_str_len rest ) {
+            : s vname ( str_first_word rest )
+            = rest ( str_skip_word rest )
+            : i pn ( nurl_sym_int2 syms vname `__paycount` )
+            ( __core_o `\t` ) ( __core_o vname ) ( __core_o `\t` ) ( __core_oi ? < pn 0 0 pn )
+            : ~ i pi 0
+            ~ < pi pn {
+                : s pt ( nurl_llty ( nurl_sym_get syms ( nurl_str_cat3 vname `__payload__` ( nurl_str_int pi ) ) ) )
+                ( __core_o `\t` ) ( __core_o pt )
+                ( core_note_ty pt )
+                = pi + pi 1
+            }
+        }
+        ( __core_o `\n` )
+        = k + k 1
+    }
+}
+
+// An `inout` argument's index (`( f . p k )`): the element of the object
+// `op`, the index (on top) read.
+unsafe @ core_inout_index i op → v {
+    : i h0 - g_core_os_n 1
+    ? >= h0 0 { ( core_w CO_EVAL ) ( core_w RV_SCALAR ) ( __core_w_ops h0 ) } {}
+    ( core_push ( core_op_ext op `*` ) )
+}
+
+// ── Core IR: try, closures, defers ───────────────────────────────────
+
+// `\ ( f … )`: the call's result `r` (on top) is matched — its `F` arm
+// returns (the error it carries moved into what the function hands
+// back), its `T` arm's payload is the try's value.
+unsafe @ core_try → v {
+    : i r ( core_pop )
+    : s ty ( nurl_get_last_type )
+    ? < r 2 { ( __core_gap `try` ) ( core_push r ) ^ } {}
+    : i t ( core_temp ty )
+    ( core_w CO_LET ) ( core_w t ) ( core_w RV_NONE )
+    ( core_w CO_MATCH ) ( core_w r )
+    ( core_w CO_ARM ) ( core_w ( __core_in `F` ) )
+    ( core_scope_begin )
+    : s rt ? != 0 g_core_fret ( nurl_str_cat # s g_core_fret `` ) ``
+    : i e ( core_var_new `` `` 1 0 g_core_line )
+    ( core_w CO_LET ) ( core_w e ) ( core_w RV_PAYLOAD ) ( core_w r ) ( core_w ( __core_in `F` ) ) ( core_w 0 )
+    : i x ( core_var_new `` rt 1 0 g_core_line )
+    ( core_w CO_LET ) ( core_w x ) ( core_w RV_AGG ) ( core_w ( __core_in rt ) ) ( core_w ( __core_in `F` ) ) ( core_w 1 ) ( core_w ( core_op_var e ) )
+    ( core_w CO_RET ) ( core_w ( core_op_var x ) )
+    ( core_scope_end )
+    ( core_w CO_ARM ) ( core_w ( __core_in `T` ) )
+    ( core_scope_begin )
+    : i pv ( core_var_new `` ty 1 0 g_core_line )
+    ( core_w CO_LET ) ( core_w pv ) ( core_w RV_PAYLOAD ) ( core_w r ) ( core_w ( __core_in `T` ) ) ( core_w 0 )
+    ( core_w CO_ASSIGN ) ( core_w ( core_op_var t ) ) ( core_w RV_USE ) ( core_w ( core_op_var pv ) )
+    ( core_scope_end )
+    ( core_w CO_END )
+    ( core_push ? ( core_ty_scalar ty ) 0 ( core_op_var t ) )
+    = g_core_acks + g_core_acks 1
+}
+
+// A closure literal before its body: what it captures (`caps`, names of
+// the enclosing function's bindings) is read here, in the enclosing
+// function, and its body's IR begins — the captures its first variables.
+unsafe @ core_closure_begin i syms s caps s fname s file i line s ret_ty → v {
+    : ~ s rest ( nurl_str_cat caps `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s nm ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        ( core_push ( core_name_op syms nm ( nurl_sym_get syms nm ) ) )
+    }
+    ( core_fn_begin fname file line g_core_fflags `` )
+    ( core_fn_ret ret_ty )
+    = rest ( nurl_str_cat caps `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s nm2 ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        ( core_var_new nm2 ( nurl_sym_get syms nm2 ) 3 0 line )
+    }
+    ( core_scope_begin )
+}
+
+// …and after it: a body that falls off with a value (`falls`) returns it;
+// the body's IR is complete; back in the enclosing function the closure
+// is a temporary made of the captures above `h0`.
+unsafe @ core_closure_end i h0 b falls → v {
+    ? falls { ( core_ret T ) } {}
+    ( core_scope_end )
+    : i fname g_core_fname
+    ( core_fn_end )
+    : i t ( core_temp `` )
+    ( core_w CO_LET ) ( core_w t ) ( core_w RV_CLOSURE ) ( core_w fname ) ( __core_w_ops h0 )
+    ( core_push ( core_op_var t ) )
+    = g_core_acks + g_core_acks 1
+}
+
+// `; { … }`: the block runs at every exit of the function from here on.
+unsafe @ core_defer_begin → v {
+    ( core_w CO_DEFER )
+    ( core_scope_begin )
+}
+
+unsafe @ core_defer_end → v {
+    ( core_scope_end )
+    ( core_w CO_END )
+}
+
+// ── Core IR: the printer ──────────────────────────────────────────────
+unsafe @ __core_o s x → v {
+    : i n ( nurl_str_len x )
+    ? > + + g_core_out_n n 1 g_core_out_cap {
+        : ~ i nc ? == g_core_out_cap 0 65536 * g_core_out_cap 2
+        ~ < nc + + g_core_out_n n 1 { = nc * nc 2 }
+        : s nb # s ( nurl_alloc nc )
+        ? != g_core_out_n 0 { ( memcpy nb # s g_core_out g_core_out_n ) } {}
+        ? != g_core_out 0 { ( nurl_free # s g_core_out ) } {}
+        = g_core_out # i nb
+        = g_core_out_cap nc
+    } {}
+    ? != n 0 { ( memcpy # s + g_core_out g_core_out_n x n ) } {}
+    = g_core_out_n + g_core_out_n n
+}
+
+unsafe @ __core_oi i x → v {
+    ( __core_o ( nurl_str_int x ) )
+}
+
+// An operand: `c` nothing to track, `?` not named, else a place — `v3`,
+// `g:name`, with `/field`, `/*`, `/#Variant.i` steps.
+unsafe @ __core_o_op i op → v {
+    ? == op 0 { ( __core_o `c` ) ^ } {}
+    ? == op 1 { ( __core_o `?` ) ^ } {}
+    ? < op 0 { ( __core_o `-` ) ^ } {}
+    : *i ps # *i # s g_core_pl
+    : i p - op 2
+    : i var . ps * p 3
+    : i parent . ps + * p 3 1
+    : i elem . ps + * p 3 2
+    ? < parent 0 {
+        ? < var 0 { ( __core_o `g:` ) ( __core_o # s elem ) ^ } {}
+        ( __core_o `v` ) ( __core_oi var )
+        ^
+    } {}
+    ( __core_o_op + parent 2 )
+    ( __core_o `/` ) ( __core_o # s elem )
+}
+
+// The operand list at word `at`: its count, then the operands. Returns
+// the word after it.
+unsafe @ __core_o_ops i at → i {
+    : *i c # *i # s g_core_code
+    : i n . c at
+    ( __core_oi n )
+    : ~ i k 0
+    ~ < k n {
+        ( __core_o ` ` ) ( __core_o_op . c + + at 1 k )
+        = k + k 1
+    }
+    ^ + + at 1 n
+}
+
+// The rvalue at word `at`; returns the word after it.
+unsafe @ __core_o_rv i at → i {
+    : *i c # *i # s g_core_code
+    : i k . c at
+    ? == k RV_NONE { ( __core_o `none` ) ^ + at 1 } {}
+    ? == k RV_USE { ( __core_o `use ` ) ( __core_o_op . c + at 1 ) ^ + at 2 } {}
+    ? == k RV_CALL {
+        ( __core_o `call ` )
+        ? == 0 . c + at 1 { ( __core_o `?` ) } { ( __core_o # s . c + at 1 ) }
+        ( __core_o ` ` )
+        ^ ( __core_o_ops + at 2 )
+    } {}
+    ? == k RV_AGG {
+        ( __core_o `agg ` )
+        ? == 0 . c + at 2 { ( __core_o `-` ) } { ( __core_o # s . c + at 2 ) }
+        ( __core_o ` ` )
+        : i e ( __core_o_ops + at 3 )
+        ( __core_o `\t` ) ( __core_o # s . c + at 1 )
+        ^ e
+    } {}
+    ? == k RV_SCALAR { ( __core_o `scalar ` ) ^ ( __core_o_ops + at 1 ) } {}
+    ? == k RV_PAYLOAD {
+        ( __core_o `payload ` ) ( __core_o_op . c + at 1 ) ( __core_o ` ` )
+        ( __core_o # s . c + at 2 ) ( __core_o ` ` ) ( __core_oi . c + at 3 )
+        ^ + at 4
+    } {}
+    ? == k RV_CLOSURE {
+        ( __core_o `closure ` ) ( __core_o # s . c + at 1 ) ( __core_o ` ` )
+        ^ ( __core_o_ops + at 2 )
+    } {}
+    ? == k RV_CALLIND { ( __core_o `callind ` ) ^ ( __core_o_ops + at 1 ) } {}
+    ( __core_o `opaque ` ) ( __core_oi . c + at 1 ) ( __core_o ` ` )
+    ^ ( __core_o_ops + at 2 )
+}
+
+// The statement at word `at`; returns the word after it.
+unsafe @ __core_o_stmt i at → i {
+    : *i c # *i # s g_core_code
+    : i op . c at
+    ? == op CO_LET { ( __core_o `let ` ) ( __core_oi . c + at 1 ) ( __core_o ` ` ) ^ ( __core_o_rv + at 2 ) } {}
+    ? == op CO_ASSIGN { ( __core_o `assign ` ) ( __core_o_op . c + at 1 ) ( __core_o ` ` ) ^ ( __core_o_rv + at 2 ) } {}
+    ? == op CO_EVAL { ( __core_o `eval ` ) ^ ( __core_o_rv + at 1 ) } {}
+    ? == op CO_IF { ( __core_o `if ` ) ( __core_o_op . c + at 1 ) ^ + at 2 } {}
+    ? == op CO_ELSE { ( __core_o `else` ) ^ + at 1 } {}
+    ? == op CO_END { ( __core_o `end` ) ^ + at 1 } {}
+    ? == op CO_MATCH { ( __core_o `match ` ) ( __core_o_op . c + at 1 ) ^ + at 2 } {}
+    ? == op CO_ARM { ( __core_o `arm ` ) ( __core_o # s . c + at 1 ) ^ + at 2 } {}
+    ? == op CO_LOOP { ( __core_o `loop` ) ^ + at 1 } {}
+    ? == op CO_LOOPCOND { ( __core_o `loopcond ` ) ( __core_o_op . c + at 1 ) ^ + at 2 } {}
+    ? == op CO_FOREACH { ( __core_o `foreach ` ) ( __core_oi . c + at 1 ) ( __core_o ` ` ) ( __core_o_op . c + at 2 ) ^ + at 3 } {}
+    ? == op CO_SCOPE { ( __core_o `scope` ) ^ + at 1 } {}
+    ? == op CO_DROP { ( __core_o `drop ` ) ( __core_oi . c + at 1 ) ^ + at 2 } {}
+    ? == op CO_RET { ( __core_o `ret ` ) ( __core_o_op . c + at 1 ) ^ + at 2 } {}
+    ? == op CO_BREAK { ( __core_o `break` ) ^ + at 1 } {}
+    ? == op CO_CONTINUE { ( __core_o `continue` ) ^ + at 1 } {}
+    ? == op CO_NOP { ( __core_o `nop` ) ^ + at 1 } {}
+    ? == op CO_DEFER { ( __core_o `defer` ) ^ + at 1 } {}
+    ( __core_o `line ` ) ( __core_oi . c + at 1 )
+    ^ + at 2
+}
+
+// The function just built, as text: `fn`, its variables, its statements
+// one a line, `endfn`.
+unsafe @ core_print_fn → v {
+    ( __core_o `fn\t` ) ( __core_o # s g_core_fname ) ( __core_o `\t` )
+    ? != 0 g_core_fret { ( __core_o # s g_core_fret ) } {}
+    ( __core_o `\t` ) ( __core_oi g_core_nparam )
+    ( __core_o `\t` ) ( __core_oi g_core_fline )
+    ( __core_o `\t` ) ( __core_o # s g_core_ffile )
+    ( __core_o `\t` ) ( __core_oi g_core_fflags )
+    ( __core_o `\t` ) ( __core_o # s g_core_ftmpl ) ( __core_o `\n` )
+    : *i vs # *i # s g_core_vars
+    : ~ i k 0
+    ~ < k g_core_var_n {
+        : i b * k CORE_VW
+        ( __core_o `v\t` ) ( __core_oi k )
+        ( __core_o `\t` ) ( __core_oi . vs + b 2 )
+        ( __core_o `\t` ) ( __core_oi . vs + b 3 )
+        ( __core_o `\t` ) ( __core_oi . vs + b 4 )
+        ( __core_o `\t` ) ( __core_oi . vs + b 5 )
+        ( __core_o `\t` ) ( __core_oi . vs + b 6 )
+        ( __core_o `\t` ) ( __core_o # s . vs b )
+        ( __core_o `\t` ) ( __core_o # s . vs + b 1 )
+        ( __core_o `\n` )
+        = k + k 1
+    }
+    : ~ i at 0
+    ~ < at g_core_code_n {
+        = at ( __core_o_stmt at )
+        ( __core_o `\n` )
+    }
+    ( __core_o `endfn\n` )
+}
+
+// The module's IR to stdout, and what was not lowered to stderr.
+unsafe @ core_flush i syms → v {
+    ( core_print_types syms )
+    ? != 0 g_core_out {
+        : *u ob # *u # s g_core_out
+        = . ob g_core_out_n # u 0
+        ( nurl_print # s g_core_out )
+        ( nurl_free # s g_core_out )
+        = g_core_out 0
+        = g_core_out_n 0
+        = g_core_out_cap 0
+    } {}
+    ? != 0 g_core_unlowered {
+        ( nurl_eprintln ( nurl_str_cat3 `core: ` ( nurl_str_int g_core_unlowered ) ` construct(s) not lowered` ) )
+    } {}
+}
+
 @ __nest_enter i lex → v {
     = g_nest_depth + g_nest_depth 1
     ? & > g_max_nesting 0 > g_nest_depth g_max_nesting { ( __nest_die lex ) } {}
@@ -9404,7 +10555,10 @@ unsafe @ __gen_ret i lex i syms i cg → s {
 @ gen_expr i lex i syms i cg → s {
     ( __nest_enter lex )
     : i tt ( nurl_lex_type lex )
+    : i __ch0 g_core_os_n
+    : i __ca0 g_core_acks
     : s v ( __gen_expr_level lex syms cg )
+    ? != 0 g_core_live { ( core_expr_exit __ch0 tt __ca0 ) } {}
     = g_nest_depth - g_nest_depth 1
     // A fresh slice is a literal, or a join or block of them: one a literal
     // inside a call or an aggregate literal marked (an argument, a field)
@@ -9420,13 +10574,18 @@ unsafe @ __gen_ret i lex i syms i cg → s {
 @ __gen_call_nested i lex i syms i cg → s {
     // (…one call deeper while it is compiled: __arm_is_mem_dup.)
     = g_call_nest + g_call_nest 1
+    : i __ch0 g_core_os_n
+    : i __cc0 g_core_callee
+    : b __cind ? != 0 g_core_live ( core_call_begin syms ( nurl_lex_peek_val lex ) ) F
     ? == g_borrowck 0 {
         : s r0 ( gen_call lex syms cg )
+        ? != 0 g_core_live { ( core_call __ch0 ( nurl_get_last_type ) __cind ) = g_core_callee __cc0 } {}
         = g_call_nest - g_call_nest 1
         ^ r0
     } {}
     : s open ( nurl_str_cat ( nurl_sym_get g_bck `copen` ) `` )
     : s r ( gen_call lex syms cg )
+    ? != 0 g_core_live { ( core_call __ch0 ( nurl_get_last_type ) __cind ) = g_core_callee __cc0 } {}
     ? ! ( seq open ( nurl_sym_get g_bck `copen` ) ) { ( bck_put `copen` open ) } {}
     = g_call_nest - g_call_nest 1
     ^ r
@@ -9889,6 +11048,7 @@ unsafe @ gen_ident i lex i syms i cg → s {
                     ( nurl_str_cat3 __sugg `'? No binding, parameter, constant, enum variant, or ` `function with this name is in scope` ) ) ) }
                 { ( die_pos lex __id_line __id_col ( nurl_str_cat3 `use of undefined identifier '` name `' — no binding, parameter, constant, enum variant, or function with this name is in scope` ) ) } } }
         {}
+        ? != 0 g_core_live { ( core_push_name syms name lt ) } {}
         ^ ? != 0 ( nurl_str_len ptr )
         ( load_var cg lt ptr )
         ? != 0 ( nurl_str_len glb )
@@ -13690,6 +14850,7 @@ unsafe @ origin_guard_retained i root → b {
     ( bck_note_read obj )
     : s objptr ( nurl_sym_get2 syms obj `__ptr` )
     : s objty ( nurl_sym_get syms obj )
+    : i __ifa_op ? != 0 g_core_live ( core_name_op syms obj objty ) 0
     // A pointer parameter is its own value (`%p`): no slot to load it from.
     : b pparam & & == 0 ( nurl_str_len objptr ) != 0 ( nurl_sym_len2 syms obj `__param` ) ( is_ptr_ty objty )
     ? & == 0 ( nurl_str_len objptr ) ! pparam
@@ -13748,6 +14909,7 @@ unsafe @ origin_guard_retained i root → b {
         } {}
         : s gep ( nurl_cg_reg cg )
         ? != ( nurl_str_len field_index ) 0 {
+            ? != 0 g_core_live { ( core_push ( core_op_ext ( core_op_ext __ifa_op `*` ) ( nurl_lex_val lex ) ) ) } {}
             ( nurl_lex_advance lex )
             ( nurl_print `  ` ) ( nurl_print gep )
             ( nurl_print ` = getelementptr ` ) ( nurl_print ( nurl_llty element ) )
@@ -13757,6 +14919,7 @@ unsafe @ origin_guard_retained i root → b {
         } {
             ( __alias_index_tok lex )
             : s index ( gen_expr lex syms cg )
+            ? != 0 g_core_live { ( core_inout_index __ifa_op ) } {}
             : s index_type ( nurl_get_last_type )
             ( die_if_not_index lex index_type `inout element` )
             ( nurl_print `  ` ) ( nurl_print gep )
@@ -13777,6 +14940,7 @@ unsafe @ origin_guard_retained i root → b {
     {}
     : s fld ( nurl_lex_val lex )
     ( nurl_lex_advance lex )
+    ? != 0 g_core_live { ( core_push ( core_op_ext __ifa_op fld ) ) } {}
     : s sname ( nurl_str_slice objty 1 - ( nurl_str_len objty ) 1 )
     : s idx_s ( nurl_sym_get2 syms sname ( nurl_str_cat `__` ( nurl_str_cat fld `__idx` ) ) )
     : s fty ( nurl_sym_get2 syms sname ( nurl_str_cat `__` ( nurl_str_cat fld `__type` ) ) )
@@ -17624,6 +18788,14 @@ unsafe @ __kw_trim s raw → s {
 // Restricted to ordinary @-functions with no inout/sink parameters
 // (guarded by the caller); generics/FFI/variadic never reach here.
 @ gen_call_kwargs i lex i syms i cg s fname → s {
+    : s r ( __gen_call_kwargs_body lex syms cg fname )
+    ? != 0 g_core_live { ( core_kwargs_reorder g_core_kw_h g_core_kw_slots ( nurl_str_to_int ( nurl_sym_get2 syms fname `__kw_n` ) ) ) } {}
+    ^ r
+}
+
+@ __gen_call_kwargs_body i lex i syms i cg s fname → s {
+    : i __ck_h g_core_os_n
+    : ~ s __ck_slots ``
     : i kw_n ( nurl_str_to_int ( nurl_sym_get2 syms fname `__kw_n` ) )
     = g_func_count + g_func_count 1
     : i kwseq g_func_count
@@ -17670,6 +18842,7 @@ unsafe @ __kw_trim s raw → s {
         : i origin_tt ( nurl_lex_type lex )
         : s origin_value ( nurl_lex_val lex )
         : ~ s av ( gen_operand lex syms cg )
+        ? != 0 g_core_live { = __ck_slots ( nurl_str_cat3 __ck_slots ( nurl_str_int slot ) ` ` ) } {}
         : ~ s at ( nurl_get_last_type )
         // (This path assembles the call in another order than it reads the
         // arguments, and keeps none of the positional path's borrow rows:
@@ -17762,6 +18935,7 @@ unsafe @ __kw_trim s raw → s {
 
     }
     ( expect lex TT_RPAREN )
+    ? != 0 g_core_live { ( core_kw_note __ck_h __ck_slots ) } {}
     ( mem_emit_string_arg_transfers cg string_transfers )
     : ~ s argstr ``
     : ~ i k 0
@@ -19901,6 +21075,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
                 // binding holds (a moved value or an ended borrow is no
                 // more usable by address than by value).
                 ( bck_note_read bck_arg_val )
+                ? != 0 g_core_live { ( core_push_name syms bck_arg_val ity ) } {}
                 // A closure binding handed over by address is a place that
                 // owns its env (h297): one the binding only borrows is
                 // copied first, so the callee may release it when it
@@ -22667,6 +23842,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         ( nurl_str_cat3 ( nurl_str_int fixed_count ) ` before the '...' but this call passes ` ( nurl_str_int arg_idx ) )
         ` — the '...' makes the TAIL optional, never the parameters ahead of it, and the callee reads those from ABI registers this call never set.` ) ) }
     {}
+    ? != 0 g_core_live { = g_core_callee ( __core_in call_name ) } {}
     ( expect lex TT_RPAREN )
     // The node of a closure value called answers for these arguments, and
     // its inout ones may change whatever it holds (agora #359).
@@ -24438,10 +25614,13 @@ unsafe @ gen_cond i lex i syms i cg → s {
     // (What the arm stashes from here is the arm's: agora #757.)
     // (Only an arm that is a literal or a join stores values of its own.)
     : b __aj_t & != 0 g_borrowck | | == t_tt0 TT_AT == t_tt0 TT_QUEST == t_tt0 TT_QUESTQUEST
+    : i __cj ? != 0 g_core_live ( core_if_begin ) 0
+    : i __cjt g_core_tmp_n
     : s __aj0 ? __aj_t ( nurl_str_cat ( nurl_sym_get g_bck `ppends` ) `` ) ``
     : s __ajj0 ? __aj_t ( nurl_str_cat ( nurl_sym_get g_bck `pajoins` ) `` ) ``
     = g_vb_arm_pub ? & != 0 g_vb_on | == t_tt0 TT_QUEST == t_tt0 TT_QUESTQUEST 1 0
     : ~ s tv ( gen_expr lex syms cg )
+    ? != 0 g_core_live { ( core_arm_end __cj __cjt ) } {}
     = g_vb_arm_pub 0
     // (…what a bare `?` / `??` arm published of what its own arms lent:
     // agora #836.)
@@ -24733,10 +25912,12 @@ unsafe @ gen_cond i lex i syms i cg → s {
     ? c_retv { = g_ret_vpos ( nurl_lex_cur_start lex ) } {}
     ? & c_rval == e_tt0 TT_LBRACE { = g_rpg_want 1 } {}
     : b __aj_e & != 0 g_borrowck | | == e_tt0 TT_AT == e_tt0 TT_QUEST == e_tt0 TT_QUESTQUEST
+    ? != 0 g_core_live { ( core_if_else ) } {}
     : s __aj1 ? __aj_e ( nurl_str_cat ( nurl_sym_get g_bck `ppends` ) `` ) ``
     : s __ajj1 ? __aj_e ( nurl_str_cat ( nurl_sym_get g_bck `pajoins` ) `` ) ``
     = g_vb_arm_pub ? & != 0 g_vb_on | == e_tt0 TT_QUEST == e_tt0 TT_QUESTQUEST 1 0
     : ~ s ev ( gen_expr lex syms cg )
+    ? != 0 g_core_live { ( core_arm_end __cj __cjt ) ( core_join_end __cj ) } {}
     = g_vb_arm_pub 0
     : s e_vbin ? & != 0 g_vb_on | == e_tt0 TT_QUEST == e_tt0 TT_QUESTQUEST ( nurl_str_cat ( nurl_sym_get syms `__last_join_vbsel__` ) `` ) ``
     ? != 0 ( nurl_str_len e_vbin ) { ( nurl_sym_def syms `__last_join_vbsel__` `` ) } {}
@@ -25691,6 +26872,7 @@ unsafe @ gen_match i lex i syms i cg → s {
     = g_m_heldtys ``
     = g_m_heldcol 1
     : s match_val ( gen_operand lex syms cg )
+    : i __cm_op ? != 0 g_core_live ( core_pop ) 0
     : s __m_heldtys ( nurl_str_cat g_m_heldtys `` )
     = g_m_heldcol __m_hcol0
     = g_m_heldtys ( nurl_str_cat __m_held0 __m_heldtys )
@@ -26062,6 +27244,7 @@ unsafe @ gen_match i lex i syms i cg → s {
     // out of it may be besides a borrow of the arguments, bck_handle_match.)
     : s __m_mcal ? != 0 ( nurl_str_len __m_lkey ) ( nurl_str_cat `&` ( str_first_word __m_lkey ) ) ( nurl_str_cat `` `` )
     ( bck_record `match` __m_mcal bck_mline )
+    : i __cmj ? != 0 g_core_live ( core_match_begin __cm_op ) 0
     // …and what the scrutinee's call does to its arguments happens before
     // the arms see its result: its pending rows go here, not into the
     // first arm statement's, where they ended the borrow of the payload
@@ -26254,6 +27437,8 @@ unsafe @ gen_match i lex i syms i cg → s {
             } {}
 
             ( expect lex TT_ARROW )  // expect '→'
+            ? != 0 g_core_live { ( core_match_arm ? has_or ( nurl_str_cat3 pattern_name ` ` or_names ) pattern_name __cm_op ) } {}
+            : i __cmt g_core_tmp_n
             : i body_pos ( nurl_lex_cur_start lex )
 
             // Generate arm label; wildcard skips comparison and jumps directly
@@ -26694,6 +27879,7 @@ unsafe @ gen_match i lex i syms i cg → s {
                 // payload's signedness in its type and a later `# i <b>`
                 // widen zero-extends a `u`-family payload.
                 ( nurl_sym_def syms pv0 pt0_eff )
+                ? != 0 g_core_live { ( core_payload syms pv0 pt0_eff 0 ) } {}
                 ? != 0 __m_scrut_origin { ( nurl_sym_def syms ( nurl_str_cat pv0 `__origin` ) ( nurl_str_int __m_scrut_origin ) ) } {}
                 ? & != 0 ( nurl_str_len __m_scrut_psrc ) ! ( __ty_holds_no_addr pt0_eff syms ) { ( nurl_sym_def syms ( nurl_str_cat pv0 `__paramsrc` ) __m_scrut_psrc ) } {}
                 ( nurl_sym_def syms ( nurl_str_cat pv0 `__ptr` ) vp0 )
@@ -26959,6 +28145,7 @@ unsafe @ gen_match i lex i syms i cg → s {
                 ( nurl_print `, ` ) ( nurl_print ( nurl_llty pt1 ) )
                 ( nurl_print `* ` ) ( nurl_print vp1 ) ( nurl_print `\n` )
                 ( nurl_sym_def syms pv1 pt1 )
+                ? != 0 g_core_live { ( core_payload syms pv1 pt1 1 ) } {}
                 ? != 0 __m_scrut_origin { ( nurl_sym_def syms ( nurl_str_cat pv1 `__origin` ) ( nurl_str_int __m_scrut_origin ) ) } {}
                 ? & != 0 ( nurl_str_len __m_scrut_psrc ) ! ( __ty_holds_no_addr pt1 syms ) { ( nurl_sym_def syms ( nurl_str_cat pv1 `__paramsrc` ) __m_scrut_psrc ) } {}
                 ( nurl_sym_def syms ( nurl_str_cat pv1 `__ptr` ) vp1 )
@@ -26995,6 +28182,7 @@ unsafe @ gen_match i lex i syms i cg → s {
                 ( nurl_print `, ` ) ( nurl_print ( nurl_llty pt2 ) )
                 ( nurl_print `* ` ) ( nurl_print vp2 ) ( nurl_print `\n` )
                 ( nurl_sym_def syms pv2 pt2 )
+                ? != 0 g_core_live { ( core_payload syms pv2 pt2 2 ) } {}
                 ? != 0 __m_scrut_origin { ( nurl_sym_def syms ( nurl_str_cat pv2 `__origin` ) ( nurl_str_int __m_scrut_origin ) ) } {}
                 ? & != 0 ( nurl_str_len __m_scrut_psrc ) ! ( __ty_holds_no_addr pt2 syms ) { ( nurl_sym_def syms ( nurl_str_cat pv2 `__paramsrc` ) __m_scrut_psrc ) } {}
                 ( nurl_sym_def syms ( nurl_str_cat pv2 `__ptr` ) vp2 )
@@ -27045,6 +28233,7 @@ unsafe @ gen_match i lex i syms i cg → s {
             ? != 0 has_guard {
                 ( nurl_lex_set_pos lex guard_pos )
                 : s gv ( gen_expr lex syms cg )
+                ? != 0 g_core_live { ( core_guard ) } {}
                 : s gvt ( nurl_get_last_type )
                 : ~ s gcond ( nurl_str_cat gv `` )
                 ? ( seq gvt `i1` ) {} {
@@ -27200,6 +28389,7 @@ unsafe @ gen_match i lex i syms i cg → s {
             ? m_rval { = g_rpg_want 1 } {}
             = g_vb_arm_pub ? & != 0 g_vb_on | == arm_tt0 TT_QUEST == arm_tt0 TT_QUESTQUEST 1 0
             : ~ s arm_result ( gen_stmt lex syms cg )
+            ? != 0 g_core_live { ( core_arm_end __cmj __cmt ) } {}
             = g_vb_arm_pub 0
             : s arm_vbin ? & != 0 g_vb_on | == arm_tt0 TT_QUEST == arm_tt0 TT_QUESTQUEST ( nurl_str_cat ( nurl_sym_get syms `__last_join_vbsel__` ) `` ) ``
             ? != 0 ( nurl_str_len arm_vbin ) { ( nurl_sym_def syms `__last_join_vbsel__` `` ) } {}
@@ -27577,6 +28767,7 @@ unsafe @ gen_match i lex i syms i cg → s {
     ? == 1 g_rpg_on { = __m_jr ( __join_reads_arm syms __m_jr __m_pb __m_lroots ) } {}
     ? ! match_exhaustive { ( bck_record `match-fallthrough` `` bck_mline ) } {}
     ( bck_record `endmatch` `` bck_mline )
+    ? != 0 g_core_live { ( core_join_end __cmj ) } {}
     ( nurl_sym_set_deep syms `__last_join_reads__` __m_jr )
     ? == 1 g_rpg_on { ( nurl_sym_set_deep syms `__last_join_vals__` __m_jp ) ( nurl_sym_set_deep syms `__last_join_ovals__` __m_jo ) } {}
 
@@ -28168,6 +29359,7 @@ unsafe @ gen_match i lex i syms i cg → s {
     ( nurl_sym_push syms )
     ( __shadow_reset syms var_name F )
     ( nurl_sym_def syms var_name elem_ty )
+    ? != 0 g_core_live { ( core_foreach syms var_name elem_ty ) } {}
     ( nurl_sym_def syms ( nurl_str_cat var_name `__ptr` ) elem_ptr )
     // (Its slot is a copy of the element: a field store into it lands
     // nowhere the container sees — __fs_borrowed_copy_kind, agora #488.)
@@ -28307,6 +29499,7 @@ unsafe @ gen_match i lex i syms i cg → s {
     : s fe_iter_saved ( bck_iter_enter fe_cont )
     = g_loop_body_open 1
     ( gen_block_stmts lex syms cg )
+    ? != 0 g_core_live { ( core_foreach_end ) } {}
     ( bck_iter_exit fe_iter_saved )
     ( nurl_sym_def syms `__loop_depth__` old_bc_ldepth )
     ( nurl_sym_def syms `__loop_sdepth__` old_bc_sdepth )
@@ -28408,6 +29601,7 @@ unsafe @ gen_match i lex i syms i cg → s {
     // statement after it — the `ret` rule for a loop (bck_loop).
     ( bck_flush_moves )
     ( bck_record ? is_break `brk` `cnt` `` jline )
+    ? != 0 g_core_live { ( core_jump is_break ) } {}
     // The drop emitters do not just emit: each rewrites the owned-list
     // it walks, because at a function's single exit that bookkeeping is
     // finished with. A branch is not that. `break` is ONE path out of
@@ -28606,6 +29800,8 @@ unsafe @ gen_match i lex i syms i cg → s {
     : s __lc_slices ( nurl_sym_get syms `__slice_decls__` )
     : s __lc_cenv ( nurl_sym_get syms `__owned_closure_envs__` )
     : s old_cond_sdepth ( __loop_cond_sdepth_enter syms )
+    : i __cl_t g_core_tmp_n
+    : i __cl_at ? != 0 g_core_live ( core_loop_begin ) -1
     : ~ s cv ( gen_expr lex syms cg )
     ( nurl_sym_def syms `__loop_sdepth__` old_cond_sdepth )
     = g_cond_depth - g_cond_depth 1
@@ -28617,6 +29813,7 @@ unsafe @ gen_match i lex i syms i cg → s {
     ? == ( nurl_lex_type lex ) TT_LBRACE
     {
         // It's a loop.
+        ? != 0 g_core_live { ( core_loop_cond __cl_t ) } {}
         // Narrow non-i1 integer loop conditions (see gen_cond).
         = cv ( coerce_to_i1 lex syms cv cvt cg )
         ( __loop_cond_release syms cg __lc_strs __lc_structs __lc_user __lc_slices __lc_cenv )
@@ -28678,6 +29875,7 @@ unsafe @ gen_match i lex i syms i cg → s {
         ( bck_set_block_kind ? __lp_true `loopt` `loop` )
         = g_loop_body_open 1
         ( gen_block_stmts lex syms cg )
+        ? != 0 g_core_live { ( core_loop_end ) } {}
         ? != 0 ( nurl_str_len __lp_vs ) { ( __vself_record __lp_vs ) } {}
         ( nurl_sym_def syms `__loop_depth__` old_bc_ldepth )
         ( nurl_sym_def syms `__loop_sdepth__` old_bc_sdepth )
@@ -28730,6 +29928,7 @@ unsafe @ gen_match i lex i syms i cg → s {
         // not, and `~ { }` — a `~` whose condition was deleted, so the
         // BODY became the operand — emitted `xor void undef, -1`. Found
         // by deleting the `more` from `~ more {` in fat_fs.nu.
+        ? != 0 g_core_live { ( core_loop_cancel __cl_at ) } {}
         ( die_if_void lex cv `'~' complement` )
         ? ( seq cvt `void` )
         { ( die lex `'~' has no value to complement — its operand is 'v'/void. A '~' is either a LOOP ('~ cond { body }') or a bitwise complement of a value ('~ mask'); with the condition missing, the body block becomes the operand and a block yields no value.` ) }
@@ -28956,7 +30155,9 @@ unsafe @ gen_match i lex i syms i cg → s {
     ( nurl_sym_def syms `__loop_check__` `` )
     ( bck_set_block_kind `defer` )
     = g_defer_body_depth + g_defer_body_depth 1
+    ? != 0 g_core_live { ( core_defer_begin ) } {}
     ( gen_block_stmts lex syms cg )
+    ? != 0 g_core_live { ( core_defer_end ) } {}
     = g_defer_body_depth - g_defer_body_depth 1
     // What the body bound of its own is the chain's too: its child defers
     // read it after the body, an older defer may read a holder the body
@@ -29379,6 +30580,11 @@ unsafe @ __blk_leave b val → v {
         ( __lex_skip_block_rest lex )
     } {}
     ( bck_block_enter bck_line )
+    ? & != 0 g_core_live __blk_scope { ( core_scope_begin ) } {}
+    : i __cvb0 g_core_vb
+    : i __cvb ? & != 0 g_core_live __vb_mine ( core_vblock_begin ) -1
+    : i __cb_h g_core_os_n
+    : i __cb_t g_core_tmp_n
     : ~ s last ( nurl_str_cat `undef` `` )
     : ~ b any F
     : ~ i __tail_sxn0 0
@@ -29419,6 +30625,7 @@ unsafe @ __blk_leave b val → v {
         = g_member_path_on ? & != 0 __sx_bme == __tail_tt TT_DOT 1 g_member_path_on
         // (A value block reads its tail's at its `}`, __vb_tail_takes.)
         ? __vb_mine { ( nurl_sym_def syms `__last_join_vbsel__` `` ) } {}
+        ? != 0 g_core_live { ( core_discard __cb_h __cb_t ) } {}
         = last ( gen_stmt lex syms cg )
         = g_member_path_on __tail_mp0
         = __tail_froot ? & != 0 __sx_bme == __tail_tt TT_DOT ( __sx_froot syms __tail_tt ( nurl_get_last_type ) ) ``
@@ -29441,6 +30648,8 @@ unsafe @ __blk_leave b val → v {
     // (What a tail field read starts at, read before this scope goes — or,
     // for a tail that is itself a block, what that block's tail read.)
     ? & any == __tail_tt TT_DOT { ( __blk_froot_set ( nurl_sym_get syms `__last_member_root__` ) ) } { ? & any == __tail_tt TT_LBRACE {} { = g_blk_froot `` } }
+    ? & != 0 g_core_live __blk_scope { ( core_discard __cb_h __cb_t ) ( core_scope_end ) ( core_push 0 ) } {}
+    ? & != 0 g_core_live >= __cvb 0 { ( core_vblock_end __cvb __cvb0 __cb_h ) } {}
     = g_blk_tail_eff ? == __tail_tt TT_LBRACE g_blk_tail_eff ? & == __tail_tt TT_BACKSLASH == g_blk_tail_eff TT_LPAREN TT_LPAREN __tail_tt
     ? & | blk_val blk_fsx != 0 __sx_bme { ( __sx_publish __sx_bme ( __blk_tail_sx syms any __nstmt __tail_tt __tail_tv __tail_froot __tail_sxn0 ) ) } {}
     ? & & __blk_ret_sx any == 0 g_did_ret { ( __bck_fall_ret_record lex syms __tail_tt __tail_tv __tail_sxn0 __tail_line __tail_col ) } {}
@@ -29619,7 +30828,10 @@ unsafe @ __blk_leave b val → v {
         // DISCARD an owned string — 492 leaked per self-compile. The
         // binding is tracked, so the loop re-entry frees the previous
         // iteration's and scope exit frees the last.
+        : i __cb_h g_core_os_n
+        : i __cb_t g_core_tmp_n
         : s __gs_val ( gen_stmt lex syms cg )
+        ? != 0 g_core_live { ( core_discard __cb_h __cb_t ) } {}
         ( mem_clo_drop_discarded syms cg __gs_val __bs_tt )
         // A tail `?`/`??` handed its exits up: this block discards every
         // value, so they drop (mem_exits_drain).
@@ -29856,6 +31068,9 @@ unsafe @ __bck_fall_ret_record i lex i syms i first_tt s first_val i sxn0 i line
     // read-accumulator holds, i.e. the controlling `?`/`~`/`??`
     // condition that was evaluated just before this arm.
     ( bck_block_enter bck_line )
+    ? != 0 g_core_live { ( core_scope_begin ) } {}
+    : i __cb_h g_core_os_n
+    : i __cb_t g_core_tmp_n
     : ~ s last ( nurl_str_cat `undef` `` )
     : b __blk_ret_val ! ( seq ( nurl_sym_get syms `__fn_ret_ty__` ) `void` )
     : b __blk_ret_sx & & __blk_ret_val != 0 g_borrowck >= ( bck_walk_class ( nurl_llty ( nurl_sym_get syms `__fn_ret_ty__` ) ) ) 2
@@ -29894,6 +31109,7 @@ unsafe @ __bck_fall_ret_record i lex i syms i first_tt s first_val i sxn0 i line
         // (A `^` or the fall-off value at the body's own level: the body's
         // last statement when its `}` follows, emit_ret_value.)
         = g_ret_top | == __tail_tt TT_CARET g_ret_implicit
+        ? != 0 g_core_live { ( core_discard __cb_h __cb_t ) } {}
         = last ( gen_stmt lex syms cg )
         = g_ret_top F
         = g_rpg_want 0
@@ -29923,6 +31139,7 @@ unsafe @ __bck_fall_ret_record i lex i syms i first_tt s first_val i sxn0 i line
     : i __rb_line ( nurl_lex_line lex )
     ( expect lex TT_RBRACE )
     ? & & __blk_ret_sx __tail_any == 0 g_did_ret { ( __bck_fall_ret_record lex syms __tail_tt __tail_tv __tail_sxn0 __tail_line __tail_col ) } {}
+    ? != 0 g_core_live { ( core_discard __cb_h __cb_t ) ( core_scope_end ) ( core_push 0 ) } {}
     ( bck_block_exit __rb_line )
     ( __blk_leave F )
     ? __tail_any
@@ -56283,7 +57500,10 @@ unsafe @ borrowck_fn_end i lex i syms s fname → v {
     ( __nest_enter lex )
     : i __bsl g_bck_stmt_line
     = g_bck_stmt_line ( nurl_lex_line lex )
+    : i __ch0 g_core_os_n
+    ? != 0 g_core_live { ( core_line g_bck_stmt_line ) } {}
     : s v ( __gen_stmt_level lex syms cg )
+    ? != 0 g_core_live { ( core_stmt_exit __ch0 ) } {}
     = g_bck_stmt_line __bsl
     = g_nest_depth - g_nest_depth 1
     ^ v
@@ -57273,6 +58493,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         = g_let_self_src ? & ( is_ident_tok bck_rhs_tt ) ( seq bck_rhs_val name ) ( nurl_sym_get2 syms name `__ptr` ) ``
         ( __shadow_reset syms name T )
         ( nurl_sym_def syms name vt )
+        ? != 0 g_core_live { ( core_let syms name vt is_mutable bck_line ) } {}
         ( rec_decl_loc syms name bck_line lex )
         ( nurl_sym_def syms ( nurl_str_cat name `__ptr` ) ptr )
         // …and back, for the borrow checker (bck_note_payload_taken).
@@ -57713,6 +58934,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             = g_let_self_src ? & ( is_ident_tok bck_rhs_tt ) ( seq bck_rhs_val name ) ( nurl_sym_get2 syms name `__ptr` ) ``
             ( __shadow_reset syms name T )
             ( nurl_sym_def syms name ptype )
+            ? != 0 g_core_live { ( core_let syms name ptype is_mutable bck_line ) } {}
             ( rec_decl_loc syms name bck_line lex )
             ( nurl_sym_def syms ( nurl_str_cat name `__ptr` ) ptr )
             ( nurl_sym_def syms ( nurl_str_cat ptr `__bname` ) name )
@@ -57878,6 +59100,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // misleading immutability error.
         : s mut_check ( nurl_sym_get2 syms name `__mutable` )
         : s vt ( nurl_sym_get syms name )
+        : i __ca_t ? != 0 g_core_live ( core_name_op syms name vt ) 0
         : s ptr ( nurl_sym_get2 syms name `__ptr` )
         : s __ud_ptr0 ( mem_udrop_ptr_of syms name )
         // (What the target is — the caller's slot, a capture by reference —
@@ -57972,6 +59195,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         : i __rp_at ( nurl_lex_cur_start lex )
         = g_dyn_box_reg -1  // (a box this right-hand side makes: mem_udrop_bind_flag)
         : ~ s val ( gen_operand lex syms cg )
+        ? != 0 g_core_live { ( core_assign __ca_t ) } {}
         ? != 0 g_most_n { ( __most_wreset syms __ud_ptr0 ) } {}
         ( __rp_rhs_set & __tg_io ( __rp_literal_only ( nurl_lex_src_slice lex __rp_at - ( nurl_lex_cur_start lex ) __rp_at ) ) )
         : i rhs_eff_tt ( __val_eff_tt bck_rhs_tt )
@@ -59787,6 +61011,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
     // names (the store drops what it replaces there, gen_field_store).
     : ~ s __nl_idx ``
     : ~ s __nl_names ``
+    : ~ i __nl_op ? != 0 g_core_live ( core_name_op syms base cur_ty ) 0
     ( nurl_sym_def syms `__last_nested_root__` `` )
     ~ < hop dots {
         ? ! ( is_ident_tok ( nurl_lex_type lex ) )
@@ -59817,6 +61042,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
             = hop + hop 1
             = __nl_idx ? == 0 ( nurl_str_len __nl_idx ) ( nurl_str_cat hidx `` ) ( nurl_str_cat3 __nl_idx `,` hidx )
             = __nl_names ? == 0 ( nurl_str_len __nl_names ) ( nurl_str_cat hname `` ) ( nurl_str_cat3 __nl_names `.` hname )
+            ? != 0 g_core_live { = __nl_op ( core_op_ext __nl_op hname ) } {}
         }
         {  // This field is the object itself — load it and hand the value
             // to the ordinary dispatch, positioned on whatever follows.
@@ -59826,6 +61052,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
             ( nurl_print `, ` ) ( nurl_print ( nurl_llty hty ) )
             ( nurl_print `* ` ) ( nurl_print gep ) ( nurl_print `\n` )
             ( nurl_set_last_type hty )
+            ? != 0 g_core_live { ( core_push ( core_op_ext __nl_op hname ) ) } {}
             ^ ld
         }
     }
@@ -59834,6 +61061,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
     ( nurl_sym_def syms `__last_nested_idx__` __nl_idx )
     ( nurl_sym_def syms `__last_nested_names__` __nl_names )
     ( nurl_set_last_type ( nurl_str_cat cur_ty `*` ) )
+    ? != 0 g_core_live { ( core_push __nl_op ) = g_core_nl_addr 1 } {}
     ^ cur_ptr
 }
 
@@ -60175,6 +61403,17 @@ unsafe @ __replaces_note_io i syms s name s field → v {
 }
 
 @ gen_field_store i lex i syms i cg → s {
+    ? == 0 g_core_live { ^ ( __gen_field_store_body lex syms cg ) } {}
+    : i h0 g_core_os_n
+    : i e0 g_core_mb_elem
+    = g_core_mb_elem 0
+    : s r ( __gen_field_store_body lex syms cg )
+    ( core_field_store h0 g_core_mb_elem )
+    = g_core_mb_elem e0
+    ^ r
+}
+
+@ __gen_field_store_body i lex i syms i cg → s {
     : i bck_line g_stmt_line
     ( nurl_lex_advance lex )  // consume '.'
     // A second '.' means the object is itself a field path. When that path
@@ -60239,6 +61478,7 @@ unsafe @ __replaces_note_io i syms s name s field → v {
     : s pv ? nested ( gen_nested_lvalue_addr lex syms cg )
     ( gen_expr lex syms cg )  // pointer/aggregate value
     : s pt ( nurl_get_last_type )  // LLVM type, e.g. "%Node*", "i64*", "{ T*, i64 }", or "%Pair"
+    ? != 0 g_core_live { ( core_store_elem syms pt lex ) } {}
     // A write through a pointer into a parameter's storage changes that
     // parameter (the mutation summary; raw provenance).
     ? & & != 0 g_rprov_on ( is_ptr_ty pt ) != 0 ( nurl_str_len obj_name ) {
@@ -61229,6 +62469,7 @@ unsafe @ __agg_shape_clash s vty s dty → b {
     ( nurl_print `* ` ) ( nurl_print vpi ) ( nurl_print `\n` )
     ( __shadow_reset syms pvi F )
     ( nurl_sym_def syms pvi pti )
+    ? != 0 g_core_live { ( core_payload syms pvi pti pidx ) } {}
     ( nurl_sym_def syms ( nurl_str_cat pvi `__ptr` ) vpi )
     // (An enum's payload: lent by the enum, h231.)
     ( nurl_sym_def syms ( nurl_str_cat pvi `__enum_pl` ) `1` )
@@ -61992,6 +63233,17 @@ unsafe @ gen_cast i lex i syms i cg → s {
 }
 
 unsafe @ gen_member i lex i syms i cg → s {
+    ? == 0 g_core_live { ^ ( __gen_member_body lex syms cg ) } {}
+    : i h0 g_core_os_n
+    : i e0 g_core_mb_elem
+    = g_core_mb_elem 0
+    : s r ( __gen_member_body lex syms cg )
+    ( core_member h0 g_core_mb_elem )
+    = g_core_mb_elem e0
+    ^ r
+}
+
+unsafe @ __gen_member_body i lex i syms i cg → s {
     ( nurl_lex_advance lex )
     : i __mb_tt ( nurl_lex_type lex )
     : s __mb_val ( nurl_str_cat ( nurl_lex_val lex ) `` )
@@ -62003,6 +63255,7 @@ unsafe @ gen_member i lex i syms i cg → s {
     = g_msealed 0
     : s ov ( gen_operand lex syms cg )
     : s ot ( nurl_get_last_type )
+    ? != 0 g_core_live { = g_core_mb_elem ( core_member_elem syms ot lex ) } {}
     // A field read out of a sealed representation, at any depth of the
     // chain (`. . k cn m`), or out of a binding that views one: a callee
     // that may change it in place writes that representation (gen_call,
@@ -62529,6 +63782,20 @@ unsafe @ gen_member i lex i syms i cg → s {
 // Example:  @ ? i { 1 42 }  creates Some(42) as { i1, i64 }.
 
 unsafe @ gen_agg_lit i lex i syms i cg → s {
+    ? == 0 g_core_live { ^ ( __gen_agg_lit_body lex syms cg ) } {}
+    : i h0 g_core_os_n
+    : i ty0 g_core_agg_ty
+    : i var0 g_core_agg_var
+    = g_core_agg_ty 0
+    = g_core_agg_var 0
+    : s r ( __gen_agg_lit_body lex syms cg )
+    ( core_agg h0 )
+    = g_core_agg_ty ty0
+    = g_core_agg_var var0
+    ^ r
+}
+
+unsafe @ __gen_agg_lit_body i lex i syms i cg → s {
     // What the literal's fields can capture (thread-shared cycle rules).
     : ~ s agg_cs ``
     ( nurl_sym_def syms `__last_agg_cs__` `` )
@@ -62563,6 +63830,7 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
     : b agg_moves_fields | agg_returned agg_nested
     ( nurl_sym_set_deep syms `__ret_agg__` `` )
     : s agg_ty ( parse_type lex )  // parse the aggregate type
+    ? != 0 g_core_live { = g_core_agg_ty ( __core_in agg_ty ) } {}
     : i agg_ty_n ( nurl_str_len agg_ty )
     : *u agg_ty_p # *u agg_ty
     // A sealed representation is built by its API, not field by field.
@@ -62700,6 +63968,7 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
             : s __ev_pc ( nurl_sym_get2 syms __ev `__paycount` )
             ? != 0 ( nurl_str_len __ev_pc )
             { = enum_vname __ev
+                ? != 0 g_core_live { = g_core_agg_var ( __core_in __ev ) } {}
                 = enum_paycount ( nurl_str_to_int __ev_pc ) }
             {}
         }
@@ -62797,6 +64066,7 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         : s fld_dot_obj ? == fld_first_tt TT_DOT ( nurl_lex_peek_val lex ) ``
         // Result tag (idx 0): `T` ⇒ Ok (payload→field 1), `F` ⇒ Err (→field 2).
         ? & agg_is_res == idx 0 { = res_is_ok ( seq fld_first_val `T` ) } {}
+        ? & & != 0 g_core_live agg_is_wrap == idx 0 { = g_core_agg_var ( __core_in fld_first_val ) } {}
         ? & & agg_is_wrap ! agg_is_res == idx 0 { = opt_is_none ( seq fld_first_val `F` ) } {}
         // A bare identifier as a field value moves the handle INTO the
         // aggregate — `^ @ SseEvent { n_ d_ id_ }` is how a builder
@@ -64677,6 +65947,20 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
 // Example:  [ i | 10 20 30 ]  →  { i64* ptr, i64 3 }
 
 @ gen_slice_literal i lex i syms i cg → s {
+    ? == 0 g_core_live { ^ ( __gen_slice_literal_body lex syms cg ) } {}
+    : i h0 g_core_os_n
+    : i ty0 g_core_agg_ty
+    : i var0 g_core_agg_var
+    = g_core_agg_ty 0
+    = g_core_agg_var 0
+    : s r ( __gen_slice_literal_body lex syms cg )
+    ( core_agg h0 )
+    = g_core_agg_ty ty0
+    = g_core_agg_var var0
+    ^ r
+}
+
+@ __gen_slice_literal_body i lex i syms i cg → s {
     ( nurl_lex_advance lex )  // consume '['
     : s elem_ty ( parse_type lex )  // e.g. "i64"
     ( expect lex TT_PIPE )  // consume '|'
@@ -65094,6 +66378,7 @@ unsafe @ __l2n_list s lst → s {
     }
     {
         : s value ( gen_try_expr lex syms cg backslash_line backslash_col )
+        ? != 0 g_core_live { ( core_try ) } {}
         ( nurl_sym_def syms `__last_backslash_try__` `1` )
         ^ value
     }
@@ -67749,6 +69034,8 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     ( nurl_sym_def body_syms `__fn_ret_slice_mixed__` `` )
     ( nurl_sym_def body_syms `__fn_ret_proof_live__` `` )
 
+    : i __cc_h g_core_os_n
+    ? != 0 g_core_live { ( core_closure_begin syms captured_vars closure_fn_name ( nurl_lex_filename lex ) ( nurl_lex_line lex ) ret_type ) } {}
     // Register closure parameters
     : ~ s bp_types ( nurl_str_cat param_types `` )
     : ~ s bp_names ( nurl_str_cat param_names `` )
@@ -67762,6 +69049,7 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
             // pointer is the binding's storage — no alloca, and reads and
             // `=` writes land on the caller's value.
             ( nurl_sym_def body_syms bpname ( __clo_inout_base bptype ) )
+            ? != 0 g_core_live { ( core_param body_syms bpname ( __clo_inout_base bptype ) 2 0 ) } {}
             ( nurl_sym_def body_syms ( nurl_str_cat bpname `__ptr` ) ( nurl_str_cat `%` bpname ) )
             ( nurl_sym_def body_syms ( nurl_str_cat bpname `__param` ) `1` )
             ( nurl_sym_def body_syms ( nurl_str_cat bpname `__mutable` ) `1` )
@@ -67776,6 +69064,7 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
             ( nurl_print bpname ) ( nurl_print `, ` ) ( nurl_print ( nurl_llty bptype ) )
             ( nurl_print `* ` ) ( nurl_print bpptr ) ( nurl_print `\n` )
             ( nurl_sym_def body_syms bpname bptype )
+            ? != 0 g_core_live { ( core_param body_syms bpname bptype 0 0 ) } {}
             ( nurl_sym_def body_syms ( nurl_str_cat bpname `__ptr` ) bpptr )
             ( nurl_sym_def body_syms ( nurl_str_cat bpname `__param` ) `1` )
             // A closure parameter is BORROWED, always: a call through a closure
@@ -68281,6 +69570,7 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     // (Its final value returns as `^` returns it: gen_block_expr.)
     = g_clo_body_ret & ! ( seq ret_type `void` ) == ( nurl_lex_type lex ) TT_LBRACE
     : ~ s body_val ( gen_stmt lex body_syms cg )
+    ? != 0 g_core_live { ( core_closure_end __cc_h & == 0 g_did_ret ! ( seq ret_type `void` ) ) } {}
     = g_clo_body_ret F
     : s __cl_tail_lt ( nurl_get_last_type )
     // Exits the body's tail `?`/`??` handed up: its value is the
@@ -76297,6 +77587,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     ( nurl_sym_set g_fn_escapes `__in_defer_body__` `` )
     // Borrow checker: start a fresh per-function statement list.
     ( bck_fn_begin )
+    ? != 0 g_core_on { ( core_fn_begin fname ( nurl_lex_filename lex ) ( nurl_lex_line lex ) ? ( bck_unsafe_ctx ) 1 0 g_inst_tmpl ) } {}
     ( nurl_sym_def g_ptrtab `__ptr_src__` `` )
     = g_ptr_own_n 0
     // (A generic instance compiled inside another function keeps its own.)
@@ -76437,6 +77728,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     : s opt_nurl_t ( nurl_sym_get g_res_type_syms `__last_opt_nurl_t__` )
     ( nurl_sym_def syms fname ret_ty )
     ( nurl_sym_def syms `__fn_ret_ty__` ret_ty )
+    ? != 0 g_core_live { ( core_fn_ret ret_ty ) } {}
     // Store NURL return type for try-propagation type checking
     ( nurl_sym_def syms `__fn_nurl_ret__` nurl_ret )
     ( nurl_sym_def syms ( nurl_str_cat fname `__nurl_ret` ) nurl_ret )
@@ -77213,6 +78505,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     // run the analysis pass before the scope is popped. No-op unless
     // --borrowck is set; never emits IR.
     ( borrowck_fn_end lex syms fname )
+    ? != 0 g_core_live { ( core_fn_end ) } {}
     // Lint: warn for this function's `:` bindings that were never read.
     ( lint_fn_end lex )
     // Snapshot owned-return flags BEFORE pop: nurl_sym_get returns a pointer
@@ -77409,6 +78702,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
             ( nurl_lex_advance lex ) ( nurl_lex_advance lex ) }
         {}
         ( nurl_sym_def syms pname lt )
+        ? != 0 g_core_live { ( core_param syms pname lt ? == pconv 1 2 ? == pconv 2 4 0 ( nurl_lex_line lex ) ) } {}
         // Mark parameter as immutable by design
         ( nurl_sym_def syms ( nurl_str_cat pname `__param` ) `1` )
         // A parameter SHADOWS a same-named top-level function for the
@@ -99699,6 +100993,7 @@ unsafe @ main → i {
         } {}
         ? ( seq a `--stdin` ) { = stdin_source T = ai + ai 1 continue } {}
         ? ( seq a `--check` ) { = check_only T = ai + ai 1 continue } {}
+        ? ( seq a `--emit-core` ) { = check_only T = g_core_on 1 = ai + ai 1 continue } {}
         ? != 0 ( nurl_str_starts a `--coverage-link-ir=` ) {
             = g_coverage_link_ir ( nurl_str_slice a 19 - ( nurl_str_len a ) 19 )
             ? == 0 ( nurl_str_len g_coverage_link_ir ) {
@@ -99988,6 +101283,7 @@ unsafe @ main → i {
         // The fused walk has completed every semantic check. Discard its
         // buffered IR without copying, indexing, printing or splitting it.
         ( nurl_print_buf_unwind )
+        ? != 0 g_core_on { ( core_flush syms ) } {}
     } {
         ( flush_simd_deferred )
         : s __mod ( nurl_print_buf_stop )

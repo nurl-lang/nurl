@@ -398,7 +398,14 @@ class FnCheck:
     def summary(self, name):
         if name in self.summ:
             return self.summ[name]
-        return PRIMS[name]
+        if PRIMS.get(name) is not None:
+            return PRIMS[name]
+        # a generic's instance answers as its template does
+        tmpl = getattr(self.prog, "fn_tmpl", {}).get(name)
+        if tmpl and PRIMS.get(tmpl) is not None:
+            return PRIMS[tmpl]
+        from syntax import Unsupported
+        raise Unsupported(f"no summary for {tmpl or name}")
 
     def apply_call(self, st, rv, line):
         _, name, ops, site = rv

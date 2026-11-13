@@ -17,6 +17,7 @@ from syntax import Unsupported, ParseError       # noqa: E402
 from load import load, lib_headers               # noqa: E402
 from lower import build_program                  # noqa: E402
 from check import check_program, CheckError      # noqa: E402
+import fromnurlc                                 # noqa: E402
 
 HOLES = os.path.join(HERE, "..", "fuzz", "holes")
 
@@ -39,9 +40,25 @@ def verdict(path):
     return ("rejected" if errors else "runs-clean"), errors, summ
 
 
+def verdict_nurlc(path):
+    """The verdict on the IR nurlc itself lowers the program to."""
+    rd, gaps, rc, err = fromnurlc.read_program(path)
+    if rc != 0:
+        first = next((l for l in err.splitlines() if "error" in l), "nurlc failed")
+        raise Unsupported("nurlc: " + first.split("error:")[-1].strip()[:40])
+    prog = rd.prog
+    checked = {n: f for n, f in prog.fns.items() if not prog.fn_flags[n] & 1}
+    for fn in checked.values():
+        rd.lower_body(fn)
+    prog.fns = checked
+    errors, summ = check_program(prog)
+    return ("rejected" if errors else "runs-clean"), errors, summ
+
+
 def main(argv):
     files = []
     show = 15
+    use_nurlc = False
     i = 0
     while i < len(argv):
         a = argv[i]
@@ -50,6 +67,10 @@ def main(argv):
                 files += [os.path.join(HOLES, l.strip()) for l in f if l.strip()]
             i += 2
             continue
+        if a == "--nurlc":
+            use_nurlc = True
+            i += 1
+            continue
         if a == "--show":
             show = int(argv[i + 1])
             i += 2
@@ -57,23 +78,28 @@ def main(argv):
         files.append(a if os.path.exists(a) else os.path.join(HOLES, a))
         i += 1
     counts = collections.Counter()
+    results = []
     skips = collections.Counter()
     mism = {"false_accept": [], "false_reject": []}
     for path in files:
         exp = expected(path)
         name = os.path.basename(path)
         try:
-            got, errors, _ = verdict(path)
+            got, errors, _ = (verdict_nurlc if use_nurlc else verdict)(path)
         except Unsupported as e:
             counts["skip"] += 1
             skips[str(e).split(" (")[0][:40]] += 1
+            results.append((name, "skip", str(e)[:80]))
             continue
         except (ParseError, CheckError, KeyError, IndexError, TypeError, AttributeError, ValueError) as e:
             counts["crash"] += 1
             skips["CRASH " + type(e).__name__ + ": " + str(e)[:60]] += 1
+            results.append((name, "crash", type(e).__name__ + ": " + str(e)[:80]))
             if len(argv) <= 3:
                 traceback.print_exc()
             continue
+        results.append((name, "agree" if exp == got else "false-accept" if exp == "rejected" else "false-reject",
+                        str(errors[0]) if errors else ""))
         if exp == got:
             counts["agree:" + got] += 1
         elif exp == "rejected":
@@ -94,7 +120,9 @@ def main(argv):
     print("false rejects (safe, prototype refuses):", len(mism["false_reject"]))
     for n, e in mism["false_reject"][:show]:
         print("   ", n, "--", e)
-    with open(os.path.join(HERE, "last_run.txt"), "w", encoding="utf-8") as f:
+    with open(os.path.join(HERE, "results_nurlc.tsv" if use_nurlc else "results_own.tsv"), "w", encoding="utf-8") as f:
+        f.write("".join(f"{n}\t{st}\t{why}\n" for n, st, why in results))
+    with open(os.path.join(HERE, "last_run_nurlc.txt" if use_nurlc else "last_run.txt"), "w", encoding="utf-8") as f:
         f.write("FALSE_ACCEPT\n" + "\n".join(mism["false_accept"]) + "\nFALSE_REJECT\n")
         f.write("\n".join(f"{n}\t{e}" for n, e in mism["false_reject"]) + "\n")
 
