@@ -29779,10 +29779,15 @@ unsafe @ __bck_fall_ret_record i lex i syms i first_tt s first_val i sxn0 i line
     ( __slice_mut_flag syms cg name ptr vt is_mut )
 }
 
+// (…and a callee compiled after this caller — defined below it, or a
+// generic instance — has no summary yet, so the static answer took its
+// slice for a lend and nobody released it. It answers by its module-end
+// constant then, `@.__nurl_retown.N`, as a String's does; agora #510.)
 @ __slice_call_flag i syms i cg s name s ptr s vt i rhs_tt → v {
     ? | | != rhs_tt TT_LPAREN ! ( mem_is_slice_ty vt ) ( mem_slice_owned syms name ) { ^ v } {}
     ? | == 0 ( nurl_str_len ptr ) != 37 ( nurl_str_get ptr 0 ) { ^ v } {}
-    ? ! ( __hown_dyn syms ( nurl_sym_get syms `__last_call_name__` ) ) { ^ v } {}
+    : s __scn ( nurl_sym_get syms `__last_call_name__` )
+    ? ! | ( __hown_dyn syms __scn ) & != 0 ( nurl_str_len __scn ) == 0 ( nurl_sym_len2 syms __scn `__body_done` ) { ^ v } {}
     : s bit ( mem_call_retown syms cg )
     ? == 0 ( nurl_str_len bit ) { ^ v } {}
     ( mem_own_add syms name )
@@ -29906,6 +29911,38 @@ unsafe @ __bck_fall_ret_record i lex i syms i first_tt s first_val i sxn0 i line
     ( nurl_print `  ` ) ( nurl_print tmp ) ( nurl_print ` = alloca ` ) ( nurl_print lt ) ( nurl_print `\n  store ` ) ( nurl_print lt ) ( nurl_print ` ` ) ( nurl_print s2 )
     ( nurl_print `, ` ) ( nurl_print lt ) ( nurl_print `* ` ) ( nurl_print tmp ) ( nurl_print `\n` )
     ( mem_emit_slice_free_at cg ty tmp )
+}
+
+// A copy of slice value `val` (type `ty`, `{ T*, i64 }`) in a buffer of its
+// own: the elements copied as they are, so only for elements that own
+// nothing (a slice of Strings would need each one copied; refused).
+@ mem_emit_slice_copy i lex i syms i cg s ty s val i line → s {
+    : s lt ( nurl_llty ty )
+    : s et ( nurl_str_slice lt 2 - ( nurl_str_len lt ) 10 )
+    ? | ( __is_handle_ty et ) ( __type_needs_drop et syms ) {
+        ( die_pos lex line 1 ( nurl_str_cat3 `this gives an 'inout' slice parameter a slice it does not own, of '` ( llvm_to_nurl et ) `' elements, which own values of their own: the caller's slot would share them with their owner. Give it a fresh slice ('[T | …]', or a call that makes one), or pass the slice's owner to a 'sink' parameter and store that.` ) )
+    } {}
+    : s dp ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print dp ) ( nurl_print ` = extractvalue ` ) ( nurl_print lt ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
+    : s ln ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print ln ) ( nurl_print ` = extractvalue ` ) ( nurl_print lt ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 1\n` )
+    : s g ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print g ) ( nurl_print ` = getelementptr ` ) ( nurl_print et ) ( nurl_print `, ` ) ( nurl_print et ) ( nurl_print `* null, i64 ` ) ( nurl_print ln ) ( nurl_print `\n` )
+    : s sz ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print sz ) ( nurl_print ` = ptrtoint ` ) ( nurl_print et ) ( nurl_print `* ` ) ( nurl_print g ) ( nurl_print ` to i64\n` )
+    : s raw ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print raw ) ( nurl_print ` = call i8* @nurl_malloc(i64 ` ) ( nurl_print sz ) ( nurl_print `)` ) ( emit_dbg_eol )
+    : s src ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print src ) ( nurl_print ` = bitcast ` ) ( nurl_print et ) ( nurl_print `* ` ) ( nurl_print dp ) ( nurl_print ` to i8*\n` )
+    : s cpr ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print cpr ) ( nurl_print ` = call i8* @memcpy(i8* ` ) ( nurl_print raw ) ( nurl_print `, i8* ` ) ( nurl_print src ) ( nurl_print `, i64 ` ) ( nurl_print sz ) ( nurl_print `)\n` )
+    : s tp ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print tp ) ( nurl_print ` = bitcast i8* ` ) ( nurl_print raw ) ( nurl_print ` to ` ) ( nurl_print et ) ( nurl_print `*\n` )
+    : s n0 ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print n0 ) ( nurl_print ` = insertvalue ` ) ( nurl_print lt ) ( nurl_print ` undef, ` ) ( nurl_print et ) ( nurl_print `* ` ) ( nurl_print tp ) ( nurl_print `, 0\n` )
+    : s n1 ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print n1 ) ( nurl_print ` = insertvalue ` ) ( nurl_print lt ) ( nurl_print ` ` ) ( nurl_print n0 ) ( nurl_print `, i64 ` ) ( nurl_print ln ) ( nurl_print `, 1\n` )
+    ^ n1
 }
 
 // …of the slice of type `ty` stored at `ptr`.
@@ -39807,7 +39844,10 @@ unsafe @ amv_close → v { = g_amv_cur 0 }
     {
         // A `: ~` copy (the cursor idiom) or a copy of a parameter: a
         // borrow of it.
-        ? & & & ( bck_sound ) ( is_ident_tok rhs_tt ) ( bck_is_heap_lty vt ) | is_mut is_param
+        // (…a slice's too: a `: ~` copy of one names the buffer its source
+        // owns, so a callee that replaces what an `inout` slice holds would
+        // release the source's — agora #545.)
+        ? & & & ( bck_sound ) ( is_ident_tok rhs_tt ) | ( bck_is_heap_lty vt ) & is_mut ( mem_is_slice_ty vt ) | is_mut is_param
         {  // (It owns none of the value: handed 'inout' to a callee that
             // replaces what it holds, it would release the owner's —
             // bck_inout_borrow_check. Except that a struct copied from a
@@ -57834,6 +57874,19 @@ unsafe @ gen_assign i lex i syms i cg → s {
         : b __slc_mix & & __slc_fl | == bck_rhs_tt TT_QUEST == bck_rhs_tt TT_QUESTQUEST != 0 ( nurl_sym_len syms `__last_slice_own_bit__` )
         : b __slc_fresh | | | == bck_rhs_tt TT_LBRACK ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `1` ) rhs_slice_owned rhs_other_owner
         : b __slc_lent & & __slc_fl ( is_ident_tok bck_rhs_tt ) ! ( seq bck_rhs_val name )
+        // (An `inout` slice parameter is the caller's slot (§2.4): a fresh
+        // value or an owned local moved in replaces the caller's buffer,
+        // which goes here, as an inout String's old value does. Left alone,
+        // it leaked on every call; agora #545.)
+        // (…and one given a slice it does not own — a borrowed parameter, a
+        // cursor — gets a copy of its buffer, as a String gets a copy of a
+        // lend (#438): stored as is, the caller's slot and the slice's owner
+        // both released one buffer. Copied BEFORE the old value goes: the
+        // right-hand side may be a view of it.)
+        : b __slc_io & & __tg_io ( mem_is_slice_ty vt ) ! lhs_is_owned_slc
+        : b __slc_io_cp & & & __slc_io ( is_ident_tok bck_rhs_tt ) ! __slc_fresh ! ( seq bck_rhs_val name )
+        ? __slc_io_cp { = val ( mem_emit_slice_copy lex syms cg vt val bck_line ) } {}
+        ? & __slc_io | __slc_fresh __slc_io_cp { ( mem_emit_slice_free_at cg ( nurl_llty vt ) ptr ) } {}
         ? __slc_fl {
             ? | | __slc_fresh __slc_mix __slc_lent { ( mem_emit_slice_free_key syms cg ptr ) } {}
         } {
@@ -58062,7 +58115,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // until it is given a buffer again. (Taken off the owned list
         // instead, it was back on it where the enclosing arm or loop body
         // ended: both names freed the buffer, agora #634.)
-        ? ( __slice_asn_moves syms bck_rhs_tt bck_rhs_val name vt )
+        ? | ( __slice_asn_moves syms bck_rhs_tt bck_rhs_val name vt ) & & __slc_io rhs_other_owner != 0 ( nurl_sym_len2 syms bck_rhs_val `__ptr` )
         { ( nurl_print `  store ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print ` zeroinitializer, ` ) ( nurl_print ( nurl_llty vt ) )
             ( nurl_print `* ` ) ( nurl_print ( nurl_sym_get2 syms bck_rhs_val `__ptr` ) ) ( nurl_print `\n` ) }
         { ? & & lhs_is_owned_slc ( is_ident_tok bck_rhs_tt )
@@ -58105,7 +58158,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         : s __ud_ptr ? != 0 ( nurl_str_len __ud_iop ) `` ( nurl_str_cat __ud_ptr0 `` )
         // (An `inout` parameter that owns something given a new value: h295.)
         ? __tg_io {
-            ? | ( __is_handle_ty vt ) ( __type_needs_drop vt syms ) { ( __replaces_note_io syms name `` ) } {}
+            ? | | ( __is_handle_ty vt ) ( __type_needs_drop vt syms ) ( mem_is_slice_ty vt ) { ( __replaces_note_io syms name `` ) } {}
         } {}
         // An `inout` parameter is the caller's binding (§2.4): a fresh value
         // assigned over it replaces the caller's, which is dropped. A call
@@ -62412,6 +62465,22 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
             } {}
         } {}
         : ~ s fval ( gen_expr lex syms cg )
+        // (An owned slice binding moved into a literal that leaves — returned,
+        // or nested in one — hands its buffer to the field: its slot is left
+        // empty once the field has read it, so the scope's release frees
+        // nothing (free(NULL)) on the runs that moved it, as a String's flag
+        // is cleared above. At the `}` where more fields follow: a later
+        // field that panics finds the buffer its binding's still, #741.
+        // Released at the return as well, the caller freed it again; agora
+        // #545.)
+        // (…and the field owns it then: the literal's owned fields name it,
+        // so the caller that gets the value releases it.)
+        : b fld_moved_slice & & agg_moves_fields ( is_ident_tok fld_first_tt ) ( __slice_let_moves syms fld_first_tt fld_first_val `` ( nurl_get_last_type ) F )
+        ? fld_moved_slice {
+            ? __fj_defer { ( nurl_print_buf_start ) } {}
+            ( __slice_slot_empty syms fld_first_val ( nurl_get_last_type ) )
+            ? __fj_defer { = __fj_kept ( nurl_str_cat __fj_kept ( nurl_print_buf_stop ) ) } {}
+        } {}
         ? agg_fsub {
             = g_agg_fpfx_st agg_fpst
             ? & __afw == agg_fpst 2 { ( nurl_sym_def g_root_syms `__agg_fpfx__` agg_fpfx ) } {}
@@ -63075,7 +63144,7 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         ? & & & & != 0 g_auto_drop_strings ! is_str_fresh ( seq ( nurl_llty fty ) `i8*` ) == fld_first_tt TT_LPAREN ! ( bck_unsafe_ctx ) {
             ? != 0 ( nurl_sym_len syms `__last_call_guard__` ) { ( mem_note_owned_string_field lex syms __fld_line ) } {}
         } {}
-        : b is_slice_fresh & ( mem_is_slice_ty fty ) | fld_is_slice_lit ( seq ret_owned `1` )
+        : b is_slice_fresh & ( mem_is_slice_ty fty ) | | fld_is_slice_lit ( seq ret_owned `1` ) fld_moved_slice
         : s idx_str ( nurl_str_int idx )
         ? & != 0 g_auto_drop_strings is_str_fresh
         { : s tag ( nurl_str_cat3 idx_str `:str:` ( nurl_str_cat3 cur_sname `:` idx_str ) )
