@@ -214,8 +214,8 @@ theorem CParts.thread_of {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) (hR : Re
       rw [hm]; exact ⟨hto1, hbo1⟩
     · rw [ite_eq_right hij] at hb htj
       obtain ⟨htoj, hboj⟩ := hc.ok j tj b htj hb
-      have hv : ownView (C.put i m' s') tj b =
-          { ownView C tj b with alloc := union b (payPart m'.blk), nid := m'.nid, blk := m'.blk } := by
+      have hv : ownView (C.put i m' s') tj b = { ownView C tj b with
+          alloc := union b (payPart m'.blk), nid := m'.nid, blk := m'.blk, taken := m'.taken } := by
         have hgl : m'.gl = C.gl := Step.gl hst
         simp only [ownView, Cfg.put, hgl]
       have hB : BlocksAt m'.blk m'.nid := hto1.blocksAt

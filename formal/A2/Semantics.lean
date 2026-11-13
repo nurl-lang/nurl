@@ -503,12 +503,19 @@ def Giveable (B : Nat → Option Blk) (t : Ty) : Slot → Prop
   | ⟨false, some (.int _)⟩ => t = .int
   | _ => False
 
+/-- Agora #810: lock block `k`, of payload type `t`, has its payload checked
+    out by a `withLock` (the runtime's lock word `HELD`): out, and not taken
+    by `locked_take` (`Mem.taken`). -/
+def CheckedOut (m : Mem) (k : Nat) (t : Ty) : Prop :=
+  m.blk k = some ⟨t, .lock, none⟩ ∧ m.taken k = false
+
 /-- A3.2: the end of `x`'s lock scope on lock block `k`, whose payload is a
     `t`: `x`'s value goes back into the block, which has it checked out; or
     else `x`'s slot is dropped as a scope's is.  That is when the block is
     gone (no share reaches it any more), or `x` holds nothing it can give
-    back (it was moved out: the lock stays checked out until a restore, as
-    `locked_take` leaves it, `Rhs.lockTake`); a typed program meets
+    back (it was moved out: the lock stays checked out, and Agora #810 no
+    `locked_restore` fills it, as nurlc's `locked_update` lends its closure
+    the value `inout`, which it cannot move out); a typed program meets
     no other case (the block is the one `x` took its payload from), but
     the rule needs no invariant to say so.  A3.5's second cut: or what it
     would give back fails the crossing check (`GiveCheck`).  That is the
@@ -516,10 +523,10 @@ def Giveable (B : Nat → Option Blk) (t : Ty) : Slot → Prop
     first (`Step.scopeLFail`). -/
 inductive Release (m : Mem) (k : Nat) (t : Ty) (x : Var) : Mem → Prop
   | put {o : Bool} {v : Val} : m.st x = some ⟨o, some v⟩ → Giveable m.blk t ⟨o, some v⟩ →
-      m.blk k = some ⟨t, .lock, none⟩ → GiveCheck m x ⟨o, some v⟩ →
+      CheckedOut m k t → GiveCheck m x ⟨o, some v⟩ →
       Release m k t x ({ m with blk := upd m.blk k (some ⟨t, .lock, some v⟩) }.remove x)
   | drop {sl : Slot} {a' : Nat → Bool} :
-      (m.blk k ≠ some ⟨t, .lock, none⟩ ∨ ¬ Giveable m.blk t sl ∨ ¬ GiveCheck m x sl) →
+      (¬ CheckedOut m k t ∨ ¬ Giveable m.blk t sl ∨ ¬ GiveCheck m x sl) →
       m.st x = some sl → DropSlot m.alloc sl a' → Release m k t x ({ m with alloc := a' }.remove x)
 
 /-- The vector `x` names — its own tree, or the one its borrow points at —
@@ -881,16 +888,20 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
       `withLock` checks one out), and the block holds nothing, as `locked_take`
       leaves zero bytes in the slot and sets `taken`.  With the payload out
       (or a view of it living) it has no step: the thread waits (`RBlocked`),
-      as every operation on a taken `Locked` does. -/
+      as every operation on a taken `Locked` does.  Agora #810: the block is
+      marked taken (`Mem.taken`), as `nurl_lk_take` sets the lock word
+      `TAKEN`, so that only a restore fills it. -/
   | lockTake {a : Var} {o : Bool} {k : Nat} {t : Ty} {v : Val} :
       m.st a = some ⟨o, some (.lk k)⟩ → m.blk k = some ⟨t, .lock, some v⟩ → ¬ HasView m.blk k →
-      EvalR m (.lockTake a) (.ok v v.owns { m with blk := upd m.blk k (some ⟨t, .lock, none⟩) })
+      EvalR m (.lockTake a) (.ok v v.owns
+        { m with blk := upd m.blk k (some ⟨t, .lock, none⟩), taken := upd m.taken k true })
   /-- ... `locked_restore a y`: the value taken from `y` (an owner's tree
-      moves, an integer is copied) goes back into the block, whose payload is
-      out; the answer is 0. -/
+      moves, an integer is copied) goes back into the block, whose payload
+      `locked_take` took out (Agora #810: the block is taken, `Mem.taken`, as
+      `nurl_lk_restore_begin` asks the lock word `TAKEN`); the answer is 0. -/
   | lockRestore {a y : Var} {o : Bool} {k : Nat} {t : Ty} {v : Val} {m1 : Mem} :
       m.st a = some ⟨o, some (.lk k)⟩ → TakeVal m y v m1 → m1.blk k = some ⟨t, .lock, none⟩ →
-      SendCheck m1.blk [v] m1.st →
+      m1.taken k = true → SendCheck m1.blk [v] m1.st →
       EvalR m (.lockRestore a y)
         (.ok (.int 0) false { m1 with blk := upd m1.blk k (some ⟨t, .lock, some v⟩) })
   /-- A3.5's second cut: ... a value that fails the crossing check is not
@@ -902,6 +913,12 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
       the store as it was. -/
   | lockRestoreP {a y : Var} {o : Bool} {k : Nat} {t : Ty} {p : Val} :
       m.st a = some ⟨o, some (.lk k)⟩ → m.blk k = some ⟨t, .lock, some p⟩ →
+      EvalR m (.lockRestore a y) .panic
+  /-- ... and so it does (Agora #810) with the payload checked out by a
+      `withLock` (not taken, `Mem.taken`): the runtime's lock word is `HELD`,
+      not `TAKEN`, and `nurl_lk_restore_begin` refuses it. -/
+  | lockRestoreHeld {a y : Var} {o : Bool} {k : Nat} {t : Ty} :
+      m.st a = some ⟨o, some (.lk k)⟩ → m.blk k = some ⟨t, .lock, none⟩ → m.taken k = false →
       EvalR m (.lockRestore a y) .panic
 
 /-! ### Calls
@@ -1470,7 +1487,8 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
       LockAt m a k → m.blk k = some ⟨t, .lock, some v⟩ → m.st x = none →
       ¬ HasView m.blk k →
       Step P m (.withLock a x s)
-        (.ok ({ m with blk := upd m.blk k (some ⟨t, .lock, none⟩) }.set x ⟨v.owns, some v⟩)
+        (.ok ({ m with blk := upd m.blk k (some ⟨t, .lock, none⟩), taken := upd m.taken k false }.set x
+          ⟨v.owns, some v⟩)
           (.scopeL k t x s))
   | scopeLIn {m m' : Mem} {k : Nat} {t : Ty} {x : Var} {s s' : Stmt} :
       Step P m s (.ok m' s') → Step P m (.scopeL k t x s) (.ok m' (.scopeL k t x s'))

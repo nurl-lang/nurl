@@ -552,7 +552,7 @@ theorem _root_.A2.EvalR.cellKeep {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h 
     · rcases LockHolds.upd hk' with ⟨hne, hk'⟩ | ⟨rfl, _, _, hb, _⟩
       · exact ⟨hk', fun e => absurd e hne⟩
       · cases hb
-  | @lockRestore a y o0 k0 t w m2 _ h1 hk hck =>
+  | @lockRestore a y o0 k0 t w m2 _ h1 hk _ hck =>
     -- the value goes back into the block, past the crossing check
     refine CellKeep.moveIn k0 w hn (fun k hc => ?_) (fun k' k hk' => ?_) (fun k hs => h1.cell.1 hs)
       (fun k hs hc => ?_)

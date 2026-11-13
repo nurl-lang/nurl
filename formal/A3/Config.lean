@@ -19,7 +19,8 @@ open A2
 /-- Thread `t` with its part `a` of the address space, and (A3.1) the shared
     payloads, which every thread reads. -/
 noncomputable def ownView (C : Cfg) (t : Thread) (a : Nat → Bool) : Mem :=
-  { alloc := union a (payPart C.blk), nid := C.nid, nv := t.nv, st := t.st, blk := C.blk, gl := C.gl }
+  { alloc := union a (payPart C.blk), nid := C.nid, nv := t.nv, st := t.st, blk := C.blk, gl := C.gl,
+    taken := C.taken }
 
 /-- The configuration invariant, with the threads' parts `ps`. -/
 structure CParts (P : Prog) (C : Cfg) (ps : List (Nat → Bool)) : Prop where

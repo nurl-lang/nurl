@@ -1531,9 +1531,9 @@ theorem WFv.owns_of {t : Ty} {v : Val} (hw : WFv t v) (ht : t ≠ .int) (hvf : t
     a plain integer), holding nothing (it views nothing), its addresses in
     no owned tree and in no payload any more (`BlkOwn`). -/
 theorem acquire_pres {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {k : Nat} {t : Ty} {v : Val}
-    (hk : m.blk k = some ⟨t, .lock, some v⟩) (hnv : ¬ HasView m.blk k) :
-    RhsPost m { m with blk := upd m.blk k (some ⟨t, .lock, none⟩) } Γ Γ F ∧
-    RhsOut { m with blk := upd m.blk k (some ⟨t, .lock, none⟩) } Γ (lockE t) v v.owns := by
+    (hk : m.blk k = some ⟨t, .lock, some v⟩) (hnv : ¬ HasView m.blk k) (T : Nat → Bool) :
+    RhsPost m { m with blk := upd m.blk k (some ⟨t, .lock, none⟩), taken := T } Γ Γ F ∧
+    RhsOut { m with blk := upd m.blk k (some ⟨t, .lock, none⟩), taken := T } Γ (lockE t) v v.owns := by
   obtain ⟨htok, hvf, hpay, _, hdfk⟩ := hi.blocks k _ hk
   obtain ⟨hwv, hshv⟩ := hpay v rfl
   have hb : BlkLe m.blk (upd m.blk k (some ⟨t, .lock, none⟩)) := BlkLe.setLock hk none
@@ -1544,7 +1544,7 @@ theorem acquire_pres {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {k : N
     by_cases he : k' = k
     · subst he; simp [upd] at h; exact Or.inl ⟨rfl, h.symm⟩
     · exact Or.inr ⟨he, by simpa [upd, he] using h⟩
-  have hbo : BlkOwn { m with blk := upd m.blk k (some ⟨t, .lock, none⟩) } := by
+  have hbo : BlkOwn { m with blk := upd m.blk k (some ⟨t, .lock, none⟩), taken := T } := by
     intro k' bl hk'
     rcases hcases k' bl hk' with ⟨rfl, rfl⟩ | ⟨hne, h⟩
     · exact ⟨hkey, List.nodup_nil, fun i hi => by simp [Blk.tree] at hi⟩
@@ -1555,14 +1555,14 @@ theorem acquire_pres {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {k : N
       rcases hcases k'' bl'' h'' with ⟨rfl, rfl⟩ | ⟨_, h2⟩
       · simp [Blk.tree]
       · exact hoth k'' bl'' hk'' h2
-  have hheap : HeapOK { m with blk := upd m.blk k (some ⟨t, .lock, none⟩) } :=
+  have hheap : HeapOK { m with blk := upd m.blk k (some ⟨t, .lock, none⟩), taken := T } :=
     HeapOK.mono hi.heap rfl (fun _ h => h) (Nat.le_refl _) hbo (hi.heap.views.setLock hk hnv _)
-  have hB : BlocksIn { m with blk := upd m.blk k (some ⟨t, .lock, none⟩) } := fun k' bl hk' => by
+  have hB : BlocksIn { m with blk := upd m.blk k (some ⟨t, .lock, none⟩), taken := T } := fun k' bl hk' => by
     rcases hcases k' bl hk' with ⟨rfl, rfl⟩ | ⟨_, h⟩
     · exact ⟨htok, hvf, fun p hp => (by cases hp), Or.inl rfl, hdfk⟩
     · obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k' bl h
       exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.grow hb⟩, h4⟩
-  have hinv : MInv { m with blk := upd m.blk k (some ⟨t, .lock, none⟩) } Γ := hi.grow rfl hheap (Nat.le_refl _) hb hB
+  have hinv : MInv { m with blk := upd m.blk k (some ⟨t, .lock, none⟩), taken := T } Γ := hi.grow rfl hheap (Nat.le_refl _) hb hB
   refine ⟨⟨hinv, rfl, Nat.le_refl _, fun _ => rfl, fun _ _ => rfl, fun _ _ h _ => h, fun _ => rfl,
     fun _ E1 h => ⟨E1, h, rfl, rfl⟩, DKeep.refl _ _, hb⟩, ?_⟩
   by_cases hti : t = .int
@@ -2004,7 +2004,7 @@ theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry
     | lockTake hv hk hnv =>
       obtain ⟨_, hk'⟩ := hi.lk_val ha hl hty hv
       rw [hk] at hk'; cases hk'
-      exact acquire_pres hi hk hnv
+      exact acquire_pres hi hk hnv _
   | lockRestore ha hl hty hy hly htyy hpa =>
     cases he with
     | @lockRestore _ _ _ _ _ _ mt hv htk hk =>
@@ -3068,7 +3068,7 @@ theorem BindParams.blk {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var} {b
 
 theorem Release.blk {m m' : Mem} {k : Nat} {t : Ty} {x : Var} (h : Release m k t x m') : BlkLe m.blk m'.blk := by
   cases h with
-  | put _ _ hk => exact BlkLe.setLock hk _
+  | put _ _ hk => exact BlkLe.setLock hk.1 _
   | drop _ _ _ => exact BlkLe.refl _
 
 theorem Step.blk {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) : BlkLe m.blk r.mem.blk := by
@@ -3237,7 +3237,7 @@ theorem Release.leafKeep {m m' : Mem} {k0 : Nat} {t : Ty} {x : Var} (h : Release
   cases h with
   | put _ _ hk0 =>
     by_cases he : k = k0
-    · subst he; rw [hk0] at hk; cases hk; exact absurd hs (Sub.leaf_int hw)
+    · subst he; rw [hk0.1] at hk; cases hk; exact absurd hs (Sub.leaf_int hw)
     · exact ⟨bl, by show upd m.blk k0 _ k = some bl; rw [upd_ne _ _ he]; exact hk, hs⟩
   | drop _ _ _ => exact ⟨bl, hk, hs⟩
 

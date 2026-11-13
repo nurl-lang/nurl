@@ -121,7 +121,8 @@ theorem EvalR.lift {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.
   | expr he => exact EvalR.expr (Eval.lift he a2)
   | new =>
     show EvalR _ _ (.ok _ _
-      ⟨union (upd (upd m.alloc m.nid true) (m.nid + 1) true) a2, m.nid + 2, m.nv, m.st, m.blk, m.gl⟩)
+      ⟨union (upd (upd m.alloc m.nid true) (m.nid + 1) true) a2, m.nid + 2, m.nv, m.st, m.blk, m.gl,
+        m.taken⟩)
     rw [union_alloc2]
     exact EvalR.new
   | moveOwn hy => exact EvalR.moveOwn hy
@@ -168,7 +169,8 @@ theorem EvalR.lift {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.
   | rwTryWriteNone hy hw => exact EvalR.rwTryWriteNone hy hw
   | glob hg hf => exact EvalR.glob hg hf
   | lockTake hy hk hnv => exact EvalR.lockTake hy hk hnv
-  | lockRestore hy h1 hk hck => exact EvalR.lockRestore (m := liftMem a2 m) hy (TakeVal.lift h1 a2) hk hck
+  | lockRestore hy h1 hk htk hck =>
+    exact EvalR.lockRestore (m := liftMem a2 m) hy (TakeVal.lift h1 a2) hk htk hck
 
 theorem EvalR.liftP {m : Mem} {r : Rhs} (h : EvalR m r .panic) (a2 : Nat → Bool) :
     EvalR (liftMem a2 m) r .panic := by
@@ -183,6 +185,7 @@ theorem EvalR.liftP {m : Mem} {r : Rhs} (h : EvalR m r .panic) (a2 : Nat → Boo
   | takerP hy => exact EvalR.takerP hy
   | globP hg => exact EvalR.globP hg
   | lockRestoreP hy hk => exact EvalR.lockRestoreP hy hk
+  | lockRestoreHeld hy hk htk => exact EvalR.lockRestoreHeld hy hk htk
   -- A3.5's second cut: the crossing check reads the slots only
   | lockNewFail h1 hck => exact EvalR.lockNewFail (TakeVal.lift h1 a2) hck
   | cellNewFail h1 hck => exact EvalR.cellNewFail (TakeVal.lift h1 a2) hck
@@ -270,7 +273,7 @@ theorem Step.lifts {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
     have had : a2 d = false := hd d (by rw [← TakeVal.alloc ht]; exact hdd)
     refine ⟨_, GhostRel.refl _, ?_⟩
     show Step P _ _ (.ok (Mem.set ⟨union (upd (upd m1.alloc d false) m1.nid true) a2, m1.nid + 1,
-      m1.nv, m1.st, m1.blk, m1.gl⟩ x ⟨true, some (.node t c m1.nid (es ++ [v]))⟩) .skip)
+      m1.nv, m1.st, m1.blk, m1.gl, m1.taken⟩ x ⟨true, some (.node t c m1.nid (es ++ [v]))⟩) .skip)
     rw [union_realloc had]
     exact Step.pushRealloc (m1 := liftMem a2 m1) (TakeVal.lift ht a2) hx (union_true a2 hc)
       (union_true a2 hdd)
@@ -289,7 +292,7 @@ theorem Step.lifts {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
     have had : a2 d = false := hd d (by rw [← TakeVal.alloc ht]; exact hn.2.1)
     refine ⟨_, GhostRel.refl _, ?_⟩
     show Step P _ _ (.ok (Mem.set ⟨union (upd (upd m1.alloc d false) m1.nid true) a2, m1.nid + 1,
-      m1.nv, m1.st, m1.blk, m1.gl⟩ o ⟨true, some T'⟩) .skip)
+      m1.nv, m1.st, m1.blk, m1.gl, m1.taken⟩ o ⟨true, some T'⟩) .skip)
     rw [union_realloc had]
     exact Step.editPushRealloc (m1 := liftMem a2 m1) (TakeVal.lift ht a2) (NodeOf.lift hn a2) hr
   | editTrunc he hn hfr hr =>

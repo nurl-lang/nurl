@@ -978,6 +978,15 @@ structure Mem where
   blk   : Nat → Option Blk    -- A3.1: the counted blocks
   gl    : Nat → Option Val    -- A3.6: the module globals set at start: global `g`'s share, made
                               -- before `main`; no step writes it
+  /-- Agora #810: which lock blocks' payloads `locked_take` took out.  A lock
+      block whose payload is out (`⟨t, .lock, none⟩`) is **taken** when this
+      says so (`EvalR.lockTake` sets it; only `locked_restore` puts a payload
+      back, `EvalR.lockRestore`), and otherwise **checked out** by a
+      `withLock` (`Step.withLock` clears it; only the scope's end gives the
+      payload back, `Release.put`), as the runtime's lock word is `TAKEN` or
+      `HELD` (`stdlib/runtime_locked.c`).  It is read only of a lock block
+      whose payload is out: every step that takes a payload out sets it. -/
+  taken : Nat → Bool
 
 def upd {α : Type} (f : Nat → α) (k : Nat) (v : α) : Nat → α :=
   fun i => if i = k then v else f i

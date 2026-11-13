@@ -159,6 +159,9 @@ theorem withAN {m : Mem} (h : MKeys m) (a : Nat → Bool) {n : Nat} (hn : m.nid 
 
 theorem withNv {m : Mem} (h : MKeys m) (n : Nat) : MKeys { m with nv := n } := ⟨h.st, h.blk, h.gl⟩
 
+/-- Agora #810: which blocks are taken holds no share. -/
+theorem withTaken {m : Mem} (h : MKeys m) (T : Nat → Bool) : MKeys { m with taken := T } := ⟨h.st, h.blk, h.gl⟩
+
 theorem remove {m : Mem} (h : MKeys m) (x : Var) : MKeys (m.remove x) := by
   refine ⟨fun y o' v hy => ?_, h.blk, h.gl⟩
   simp only [Mem.remove, upd] at hy
@@ -321,8 +324,8 @@ theorem EvalR.keys {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.
   | rwTryWriteNone _ _ => exact ⟨hk, .inl .int⟩
   | glob hg _ => exact ⟨hk, hk.gl _ _ hg⟩
   | lockTake _ hb _ =>
-    exact ⟨hk.updBlk _ (fun _ h => by cases h), hk.blk _ _ _ _ hb⟩
-  | lockRestore _ h1 _ _ =>
+    exact ⟨(hk.updBlk _ (fun _ h => by cases h)).withTaken _, hk.blk _ _ _ _ hb⟩
+  | lockRestore _ h1 _ _ _ =>
     obtain ⟨hk1, hv1, hn1, _⟩ := hk.takeVal h1
     exact ⟨hk1.updBlk _ (fun w hw => by cases hw; rw [hn1]; exact hv1), .int⟩
 
@@ -487,7 +490,7 @@ theorem Step.keys {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) (
   | scopeDPDrain _ _ ih => exact ih
   | scopeDPMoved _ _ ih => exact (ih).remove _
   | withLock _ hb _ _ =>
-    exact (hk.updBlk _ (fun _ h => by cases h)).set _ (fun w hw => by cases hw; exact hk.blk _ _ _ _ hb)
+    exact ((hk.updBlk _ (fun _ h => by cases h)).withTaken _).set _ (fun w hw => by cases hw; exact hk.blk _ _ _ _ hb)
   | scopeLIn _ ih => exact ih
   | scopeLSkip hrl _ => exact Release.keys hrl hk
   | scopeLFail _ _ => exact hk

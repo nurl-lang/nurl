@@ -130,13 +130,13 @@ theorem step_release {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch
 theorem Release.heap {m m' : Mem} {k : Nat} {t : Ty} {x : Var} (h : Release m k t x m') (hh : HeapOK m) :
     HeapOK m' := by
   cases h with
-  | put hsl hg hk => exact hh.release_put hsl hg hk
+  | put hsl hg hk => exact hh.release_put hsl hg hk.1
   | drop _ hsl hd => exact hh.remove hsl hd
 
 theorem Release.covers {m m' : Mem} {k : Nat} {t : Ty} {x : Var} (h : Release m k t x m') (hc : Covers m) :
     Covers m' := by
   cases h with
-  | put hsl _ hk => exact covers_release_put hc hsl hk
+  | put hsl _ hk => exact covers_release_put hc hsl hk.1
   | drop _ hsl hd => exact covers_remove hc hsl hd
 
 theorem Release.st {m m' : Mem} {k : Nat} {t : Ty} {x : Var} (h : Release m k t x m') : m'.st = upd m.st x none := by
@@ -152,14 +152,14 @@ theorem Release.nid {m m' : Mem} {k : Nat} {t : Ty} {x : Var} (h : Release m k t
     the payload goes back, or `x`'s slot is dropped. -/
 theorem Release.exists {m : Mem} {k : Nat} {t : Ty} {x : Var} {sl : Slot} {a' : Nat → Bool}
     (hsl : m.st x = some sl) (hd : DropSlot m.alloc sl a') : ∃ m', Release m k t x m' := by
-  by_cases hput : m.blk k = some ⟨t, .lock, none⟩ ∧ Giveable m.blk t sl ∧ GiveCheck m x sl
+  by_cases hput : CheckedOut m k t ∧ Giveable m.blk t sl ∧ GiveCheck m x sl
   · obtain ⟨hkb, hg, hck⟩ := hput
     obtain ⟨o, w⟩ := sl
     cases w with
     | none => cases o <;> simp [Giveable] at hg
     | some v => exact ⟨_, Release.put hsl hg hkb hck⟩
-  · have hc : m.blk k ≠ some ⟨t, .lock, none⟩ ∨ ¬ Giveable m.blk t sl ∨ ¬ GiveCheck m x sl := by
-      by_cases h1 : m.blk k = some ⟨t, .lock, none⟩
+  · have hc : ¬ CheckedOut m k t ∨ ¬ Giveable m.blk t sl ∨ ¬ GiveCheck m x sl := by
+      by_cases h1 : CheckedOut m k t
       · by_cases h2 : Giveable m.blk t sl
         · exact Or.inr (Or.inr fun h3 => hput ⟨h1, h2, h3⟩)
         · exact Or.inr (Or.inl h2)
@@ -212,10 +212,10 @@ theorem Release.back {m m' : Mem} {k : Nat} {t : Ty} {x : Var} (h : Release m k 
     BlkBack m.blk m'.blk := by
   cases h with
   | put _ hg hk =>
-    refine ⟨BlkLe.setLock hk _, fun k' bl hk' => ?_⟩
+    refine ⟨BlkLe.setLock hk.1 _, fun k' bl hk' => ?_⟩
     by_cases he : k' = k
     · subst he; simp [upd] at hk'; subst hk'
-      exact .inr ⟨t, _, rfl, hk, hg.wfv, hg.shares.grow (BlkLe.setLock hk _)⟩
+      exact .inr ⟨t, _, rfl, hk.1, hg.wfv, hg.shares.grow (BlkLe.setLock hk.1 _)⟩
     · exact .inl (by simpa [upd, he] using hk')
   | drop _ _ _ => exact BlkBack.refl _
 

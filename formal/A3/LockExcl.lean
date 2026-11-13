@@ -229,9 +229,10 @@ end down
 /-! ### What a step does to the frames -/
 
 /-- From frames `L` to `L'`: some of the inner ones left, or a check-out's
-    added, its block's payload in before (`some v`) and out after. -/
+    added, its block's payload in before (`some v`) and checked out after
+    (`CheckedOut`: out, not taken). -/
 def FrStep (m m' : Mem) (L L' : List (Nat × Ty)) : Prop :=
-  L' <+: L ∨ ∃ k u v, L' = L ++ [(k, u)] ∧ m.blk k = some ⟨u, .lock, some v⟩ ∧ m'.blk k = some ⟨u, .lock, none⟩
+  L' <+: L ∨ ∃ k u v, L' = L ++ [(k, u)] ∧ m.blk k = some ⟨u, .lock, some v⟩ ∧ CheckedOut m' k u
 
 theorem FrStep.cons {m m' : Mem} {L L' : List (Nat × Ty)} (h : FrStep m m' L L') (p : Nat × Ty) :
     FrStep m m' (p :: L) (p :: L') := by
@@ -283,7 +284,7 @@ theorem Step.lfr {P : Prog} (hP : ProgOK P) {m m' : Mem} {s s' : Stmt} (h : Step
   | @withLock a x s0 k t v _ hk _ _ =>
     cases hr; rintro ⟨_, _, _, ht⟩
     refine .inr ⟨k, t, v, by simp [Stmt.lfr, lfr_src ht.withLock_src], hk, ?_⟩
-    simp [Mem.set, upd]
+    simp [CheckedOut, Mem.set, upd]
   | scopeLFail _ _ => cases hr; intro _; exact .inl List.prefix_rfl
   | _ => first
     | (cases hr; done)
@@ -291,97 +292,11 @@ theorem Step.lfr {P : Prog} (hP : ProgOK P) {m m' : Mem} {s s' : Stmt} (h : Step
 
 /-! ### What a step does to a block whose payload is out -/
 
-/-- Block `k` of `m` is out for a frame whose payload is not `dtorFree`: its
-    payload checked out, or the block gone, at a key below `nid` (which no
-    new block takes). -/
+/-- Block `k` of `m` is out for a frame: its payload checked out (out, and
+    not taken, `CheckedOut`), or the block gone, at a key below `nid` (which
+    no new block takes). -/
 def Out (m : Mem) (k : Nat) : Prop :=
-  (m.blk k = none ∧ k < m.nid) ∨ ∃ u, m.blk k = some ⟨u, .lock, none⟩ ∧ u.dtorFree = false
-
-/-- A right-hand side gives back (`locked_restore`) only payloads that are
-    `dtorFree` (`RhsT.lockRestore`). -/
-def RestoreFree (m : Mem) (r : Rhs) : Prop :=
-  ∀ a y o k t ob, r = .lockRestore a y → m.st a = some ⟨o, some (.lk k)⟩ → m.blk k = some ⟨t, .lock, ob⟩ →
-    t.dtorFree = true
-
-/-- ... and so do the redexes of a statement's spine. -/
-def RF (m : Mem) : Stmt → Prop
-  | .seq a _ => RF m a
-  | .scope _ s => RF m s
-  | .scopeD _ _ s => RF m s
-  | .rbind _ s => RF m s
-  | .frozen _ s => RF m s
-  | .catchR _ _ s => RF m s
-  | .scopeL _ _ _ s => RF m s
-  | .letv _ r _ => RestoreFree m r
-  | .assign _ r => RestoreFree m r
-  | .letd _ _ r _ => RestoreFree m r
-  | _ => True
-
-theorem rhsT_restoreFree {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {F : List Var} {r : Rhs} {E : Entry}
-    {Γ1 : Ctx} (h : RhsT Γ F r E Γ1) : RestoreFree m r := by
-  intro a y o k t ob hr ha hk
-  subst hr
-  cases h with
-  | lockRestore hEa hl hty _ _ _ _ hdf =>
-    obtain ⟨ob', hk'⟩ := hi.lk_val hEa hl hty ha
-    rw [hk] at hk'; cases hk'; exact hdf
-
-theorem RestoreFree.congr {m m' : Mem} {r : Rhs} (h : RestoreFree m r) (hst : m'.st = m.st)
-    (hb : m'.blk = m.blk) : RestoreFree m' r := by
-  intro a y o k t ob hr ha hk
-  exact h a y o k t ob hr (hst ▸ ha) (hb ▸ hk)
-
-theorem RF.congr {m m' : Mem} (hst : m'.st = m.st) (hb : m'.blk = m.blk) : ∀ {s : Stmt}, RF m s → RF m' s := by
-  intro s
-  induction s with
-  | seq _ _ ih _ => exact ih
-  | scope _ _ ih => exact ih
-  | scopeD _ _ _ ih => exact ih
-  | rbind _ _ ih => exact ih
-  | frozen _ _ ih => exact ih
-  | catchR _ _ _ ih => exact ih
-  | scopeL _ _ _ _ ih => exact ih
-  | letv _ _ _ _ => exact fun h => RestoreFree.congr h hst hb
-  | assign _ _ => exact fun h => RestoreFree.congr h hst hb
-  | letd _ _ _ _ _ => exact fun h => RestoreFree.congr h hst hb
-  | _ => exact fun _ => trivial
-
-/-- A typed statement's spine restores only `dtorFree` payloads. -/
-theorem TypedAt.rf {P : Prog} {m : Mem} : ∀ {s : Stmt}, TypedAt P m s → RF m s := by
-  intro s
-  induction s with
-  | seq _ _ ih _ => exact fun h => ih h.seq
-  | scope _ _ ih => exact fun h => ih h.scope
-  | scopeD _ _ _ ih => exact fun h => ih h.scopeD
-  | rbind _ _ ih => exact fun h => ih h.rbind
-  | frozen _ _ ih => exact fun h => ih h.frozen
-  | catchR _ _ _ ih => exact fun h => ih h.catchR
-  | scopeL _ _ _ _ ih => exact fun h => ih h.scopeL
-  | letv x r s _ =>
-    intro h
-    obtain ⟨Γ, F, Δ, ht, hi⟩ := h
-    generalize hs : Stmt.letv x r s = s0 at ht
-    induction ht with
-    | letv _ _ _ hr _ _ _ => cases hs; exact rhsT_restoreFree hi hr
-    | sub hw _ _ ih => exact ih (hi.weaker hw) hs
-    | _ => cases hs
-  | assign x r =>
-    intro h
-    obtain ⟨Γ, F, Δ, ht, hi⟩ := h
-    generalize hs : Stmt.assign x r = s0 at ht
-    induction ht with
-    | assign _ _ _ hr _ _ _ _ => cases hs; exact rhsT_restoreFree hi hr
-    | sub hw _ _ ih => exact ih (hi.weaker hw) hs
-    | _ => cases hs
-  | letd x f r s _ =>
-    intro h
-    obtain ⟨Γ, F, Δ, ht, hi⟩ := h
-    generalize hs : Stmt.letd x f r s = s0 at ht
-    induction ht with
-    | letd _ _ _ hr _ _ _ _ _ _ _ => cases hs; exact rhsT_restoreFree hi hr
-    | sub hw _ _ ih => exact ih (hi.weaker hw) hs
-    | _ => cases hs
-  | _ => exact fun _ => trivial
+  (m.blk k = none ∧ k < m.nid) ∨ ∃ u, CheckedOut m k u
 
 theorem TakeVal.blk_eq {m m1 : Mem} {y : Var} {v : Val} (h : TakeVal m y v m1) : m1.blk = m.blk := by
   cases h <;> rfl
@@ -393,6 +308,21 @@ theorem BindParams.blk_eq {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var}
   | inp _ _ _ ih => exact ih
   | sink _ _ ih => exact ih
   | inout _ ih => exact ih
+
+theorem TakeVal.taken_eq {m m1 : Mem} {y : Var} {v : Val} (h : TakeVal m y v m1) : m1.taken = m.taken := by
+  cases h <;> rfl
+
+theorem BindParams.taken_eq {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var} {base i : Nat}
+    (h : BindParams m ps as base i m') : m'.taken = m.taken := by
+  induction h with
+  | nil => rfl
+  | inp _ _ _ ih => exact ih
+  | sink _ _ ih => exact ih
+  | inout _ ih => exact ih
+
+theorem Release.taken_eq {m m' : Mem} {k0 : Nat} {t : Ty} {x : Var} (h : Release m k0 t x m') :
+    m'.taken = m.taken := by
+  cases h <;> rfl
 
 theorem Out.ne_some {m : Mem} {k : Nat} (h : Out m k) {k0 : Nat} {t : Ty} {p : Val}
     (h0 : m.blk k0 = some ⟨t, .lock, some p⟩) : k ≠ k0 := by
@@ -409,10 +339,10 @@ theorem Out.ne_fresh {m : Mem} {k : Nat} (h : Out m k) (h0 : m.blk m.nid = none)
 
 /-- **A right-hand side leaves a block whose payload is out as it was**:
     every operation that writes a lock block asks its payload in, but
-    `locked_restore`, which is of a `dtorFree` payload; a new block's key is
-    fresh. -/
+    `locked_restore`, which (Agora #810) asks it taken, not checked out; a
+    new block's key is fresh. -/
 theorem EvalR.stay {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.ok v o m1))
-    (hrf : RestoreFree m r) {k : Nat} (hk : Out m k) : m1.blk k = m.blk k := by
+    {k : Nat} (hk : Out m k) : m1.blk k = m.blk k := by
   cases h with
   | arcNew h1 hfr | lockNew h1 hfr _ | cellNew h1 hfr _ | chanSendClosed _ h1 _ _ hfr _ =>
     rw [TakeVal.blk_eq h1, TakeVal.nid_eq h1] at hfr ⊢
@@ -423,17 +353,31 @@ theorem EvalR.stay {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.
   | chanSend _ h1 h0 _ _ _ _ =>
     rw [TakeVal.blk_eq h1] at h0 ⊢
     exact upd_ne _ _ (hk.ne_some h0)
-  | @lockRestore a y o0 k0 t w m2 ha h1 h0 _ =>
+  | @lockRestore a y o0 k0 t w m2 ha h1 h0 htk _ =>
     rw [TakeVal.blk_eq h1] at h0 ⊢
     by_cases he : k = k0
     · subst he
-      have hdf := hrf a y o0 k t none rfl ha h0
-      rcases hk with ⟨hn, _⟩ | ⟨u, hu, hu'⟩
+      rw [TakeVal.taken_eq h1] at htk
+      rcases hk with ⟨hn, _⟩ | ⟨u, _, hu'⟩
       · rw [hn] at h0; cases h0
-      · rw [hu] at h0; cases h0; rw [hdf] at hu'; cases hu'
+      · rw [hu'] at htk; cases htk
     · exact upd_ne _ _ he
   | pair h1 h2 => rw [TakeVal.blk_eq h2, TakeVal.blk_eq h1]
   | inl h1 | inr h1 | pack h1 => rw [TakeVal.blk_eq h1]
+  | _ => rfl
+
+/-- Agora #810: **a right-hand side leaves a block whose payload is out
+    checked out**: only a take marks a block taken, one whose payload is in. -/
+theorem EvalR.taken_stay {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.ok v o m1))
+    {k : Nat} (hk : Out m k) : m1.taken k = m.taken k := by
+  cases h with
+  | arcNew h1 _ | lockNew h1 _ _ | cellNew h1 _ _ | chanSendClosed _ h1 _ _ _ _ =>
+    exact congrFun (TakeVal.taken_eq h1) k
+  | chanSend _ h1 _ _ _ _ _ => exact congrFun (TakeVal.taken_eq h1) k
+  | lockRestore _ h1 _ _ _ => exact congrFun (TakeVal.taken_eq h1) k
+  | lockTake _ h0 _ => exact upd_ne _ _ (hk.ne_some h0)
+  | pair h1 h2 => rw [TakeVal.taken_eq h2, TakeVal.taken_eq h1]
+  | inl h1 | inr h1 | pack h1 => rw [TakeVal.taken_eq h1]
   | _ => rfl
 
 /-- A lock scope's end changes no block but its own. -/
@@ -442,7 +386,7 @@ theorem Release.stay {m m' : Mem} {k0 : Nat} {t : Ty} {x : Var} (h : Release m k
   cases h with
   | put _ _ hk _ =>
     by_cases he : k = k0
-    · subst he; exact .inr ⟨rfl, hk⟩
+    · subst he; exact .inr ⟨rfl, hk.1⟩
     · exact .inl (upd_ne _ _ he)
   | drop => exact .inl rfl
 
@@ -457,36 +401,36 @@ theorem count_le_of_cons {k k0 : Nat} {L : List Nat} (h : (k0 :: L).count k ≤ 
 /-- **A step leaves a block whose payload is out as it was**, unless the
     block is one of its own lock scopes' (whose end gives a payload back):
     then, its scope there once, the step left that scope. -/
-theorem Step.stay {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) (hrf : RF m s) {k : Nat}
+theorem Step.stay {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) {k : Nat}
     (hk : Out m k) :
     r.mem.blk k = m.blk k ∨
       (k ∈ s.lkeys ∧ (∃ u, m.blk k = some ⟨u, .lock, none⟩) ∧
         ∀ m' s', r = .ok m' s' → s.lkeys.count k ≤ 1 → k ∉ s'.lkeys) := by
-  revert hrf hk
+  revert hk
   induction h with
   | seqL _ ih | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | catchIn _ ih | scopeDIn _ ih =>
-    intro hrf hk
-    rcases ih hrf hk with h1 | ⟨h1, hs, h2⟩
+    intro hk
+    rcases ih hk with h1 | ⟨h1, hs, h2⟩
     · exact .inl h1
     · exact .inr ⟨h1, hs, fun m' s' he hc => by cases he; have h3 := h2 _ _ rfl hc; exact h3⟩
   | seqP _ ih | frozenP _ ih =>
-    intro hrf hk
-    rcases ih hrf hk with h1 | ⟨h1, hs, _⟩
+    intro hk
+    rcases ih hk with h1 | ⟨h1, hs, _⟩
     · exact .inl h1
     · exact .inr ⟨h1, hs, fun _ _ he => by cases he⟩
   | scopeP _ _ _ ih | rbindP _ _ ih | scopeDPMoved _ _ ih =>
-    intro hrf hk
-    rcases ih hrf hk with h1 | ⟨h1, hs, _⟩
+    intro hk
+    rcases ih hk with h1 | ⟨h1, hs, _⟩
     · exact .inl h1
     · exact .inr ⟨h1, hs, fun _ _ he => by cases he⟩
   | catchP _ _ ih | scopeDP _ _ _ ih | scopeDPDrain _ _ ih =>
-    intro hrf hk
-    rcases ih hrf hk with h1 | ⟨h1, hs, _⟩
+    intro hk
+    rcases ih hk with h1 | ⟨h1, hs, _⟩
     · exact .inl h1
     · exact .inr ⟨h1, hs, fun _ _ he _ => by cases he; simp [Stmt.lkeys]⟩
   | @scopeLIn m' k0 t0 x b b' _ ih =>
-    intro hrf hk
-    rcases ih hrf hk with h1 | ⟨h1, hs, h2⟩
+    intro hk
+    rcases ih hk with h1 | ⟨h1, hs, h2⟩
     · exact .inl h1
     · refine .inr ⟨List.mem_cons_of_mem _ h1, hs, fun m'' s'' he hc => ?_⟩
       cases he
@@ -495,8 +439,8 @@ theorem Step.stay {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) (
       simp only [Stmt.lkeys, List.mem_cons, not_or]
       exact ⟨hne, this⟩
   | @scopeLP m1 m2 k0 t0 x b _ hrl ih =>
-    intro hrf hk
-    rcases ih hrf hk with h1 | ⟨h1, hs, _⟩
+    intro hk
+    rcases ih hk with h1 | ⟨h1, hs, _⟩
     · rcases Release.stay hrl k with h0 | ⟨rfl, hs⟩
       · exact .inl (h0.trans h1)
       · exact .inr ⟨List.mem_cons_self, ⟨t0, h1 ▸ hs⟩, fun _ _ he => by cases he⟩
@@ -504,103 +448,114 @@ theorem Step.stay {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) (
       · exact .inr ⟨List.mem_cons_of_mem _ h1, hs, fun _ _ he => by cases he⟩
       · exact .inr ⟨List.mem_cons_self, hs, fun _ _ he => by cases he⟩
   | @scopeLSkip m' k0 t0 x hrl _ =>
-    intro _ _
+    intro _
     rcases Release.stay hrl k with h0 | ⟨rfl, hs⟩
     · exact .inl h0
     · exact .inr ⟨List.mem_cons_self, ⟨t0, hs⟩, fun _ _ he _ => by cases he; simp [Stmt.lkeys]⟩
   | letv _ he | letd _ he =>
-    intro hrf hk; exact .inl (EvalR.stay he hrf hk)
+    intro hk; exact .inl (EvalR.stay he hk)
   | assign _ he _ _ =>
-    intro hrf hk; exact .inl (EvalR.stay he hrf hk)
+    intro hk; exact .inl (EvalR.stay he hk)
   | letcall _ _ hb =>
-    intro _ _; exact .inl (congrFun (BindParams.blk_eq hb) k)
+    intro _; exact .inl (congrFun (BindParams.blk_eq hb) k)
   | callc _ _ _ _ hb =>
-    intro _ _; exact .inl (congrFun (BindParams.blk_eq hb) k)
+    intro _; exact .inl (congrFun (BindParams.blk_eq hb) k)
   | push h1 _ _ _ | pushRealloc h1 _ _ _ | insert _ h1 _ _ _ | editPush h1 _ _ | editPushRealloc h1 _ _
   | editSet _ _ h1 _ _ _ | editSetOOB _ h1 _ _ _ =>
-    intro _ _; exact .inl (congrFun (TakeVal.blk_eq h1) k)
+    intro _; exact .inl (congrFun (TakeVal.blk_eq h1) k)
   | withLock _ h0 _ _ =>
-    intro _ hk; exact .inl (upd_ne _ _ (hk.ne_some h0))
+    intro hk; exact .inl (upd_ne _ _ (hk.ne_some h0))
   | reap _ h0 _ =>
-    intro _ hk
+    intro hk
     refine .inl (upd_ne _ _ ?_)
     rintro rfl
     rcases hk with ⟨hn, _⟩ | ⟨u, hu, _⟩
     · rw [hn] at h0; cases h0
     · rw [hu] at h0; cases h0
-  | _ => intro _ _; exact .inl rfl
+  | _ => intro _; exact .inl rfl
+
+/-- Agora #810: **a step leaves a block whose payload is out checked out**:
+    only a take and a check-out mark a block, and both one whose payload is
+    in; a lock scope's end, a sweep and a reap mark none. -/
+theorem Step.taken_stay {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) {k : Nat}
+    (hk : Out m k) : r.mem.taken k = m.taken k := by
+  revert hk
+  induction h with
+  | seqL _ ih | seqP _ ih | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | frozenP _ ih | catchIn _ ih
+    | scopeDIn _ ih | scopeLIn _ ih | scopeP _ _ _ ih | rbindP _ _ ih | scopeDPMoved _ _ ih | catchP _ _ ih
+    | scopeDP _ _ _ ih | scopeDPDrain _ _ ih => exact fun hk => ih hk
+  | scopeLP _ hrl ih => exact fun hk => (congrFun (Release.taken_eq hrl) k).trans (ih hk)
+  | scopeLSkip hrl _ => exact fun _ => congrFun (Release.taken_eq hrl) k
+  | letv _ he | letd _ he => exact fun hk => EvalR.taken_stay he hk
+  | assign _ he _ _ => exact fun hk => EvalR.taken_stay he hk
+  | letcall _ _ hb => exact fun _ => congrFun (BindParams.taken_eq hb) k
+  | callc _ _ _ _ hb => exact fun _ => congrFun (BindParams.taken_eq hb) k
+  | push h1 _ _ _ | pushRealloc h1 _ _ _ | insert _ h1 _ _ _ | editPush h1 _ _ | editPushRealloc h1 _ _
+  | editSet _ _ h1 _ _ _ | editSetOOB _ h1 _ _ _ =>
+    exact fun _ => congrFun (TakeVal.taken_eq h1) k
+  | withLock _ h0 _ _ => exact fun hk => upd_ne _ _ (hk.ne_some h0)
+  | _ => exact fun _ => rfl
 
 /-! ### The invariant -/
 
-/-- The block of a frame of payload type `u`, in the blocks `B` with `n` the
-    next fresh key: below `n` (no new block takes the key), and gone, or a
-    lock block of type `u` whose payload, when `u` is not `dtorFree`, is out. -/
-def LkOut (B : Nat → Option Blk) (n k : Nat) (u : Ty) : Prop :=
-  k < n ∧ (B k = none ∨ ∃ o, B k = some ⟨u, .lock, o⟩ ∧ (u.dtorFree = false → o = none))
+/-- The block of a frame of payload type `u`, in the blocks `B` (`T` the
+    blocks taken) with `n` the next fresh key: below `n` (no new block takes
+    the key), and gone, or a lock block of type `u` whose payload is checked
+    out (Agora #810: out, and not taken, `CheckedOut`). -/
+def LkOut (B : Nat → Option Blk) (T : Nat → Bool) (n k : Nat) (u : Ty) : Prop :=
+  k < n ∧ (B k = none ∨ (B k = some ⟨u, .lock, none⟩ ∧ T k = false))
 
 /-- **Agora #808: the check-outs' invariant.**  Over the threads' statements
     and the shared blocks:
     - `out`: every frame's block is as `LkOut` says;
-    - `one`: a frame whose payload is not `dtorFree` is the only frame of its
-      block on any thread (A3.2's mutual exclusion) ...
-    - `nd`: ... and the only one on its own thread. -/
+    - `one`: a frame is the only frame of its block on any thread (A3.2's
+      mutual exclusion) ...
+    - `nd`: ... and the only one on its own thread.
+    (Agora #810: for every payload type; until the model told a taken
+    block from a checked-out one, `locked_restore` could refill a
+    `dtorFree` payload's checked-out block, and these held only for a
+    payload that holds a destructor value.) -/
 structure LockInv (C : Cfg) : Prop where
   out : ∀ (i : Nat) (t : Thread), C.ths[i]? = some t → ∀ (k : Nat) (u : Ty), (k, u) ∈ t.s.lfr →
-    LkOut C.blk C.nid k u
+    LkOut C.blk C.taken C.nid k u
   one : ∀ (i j : Nat) (ti tj : Thread) (k : Nat) (u u' : Ty), C.ths[i]? = some ti → C.ths[j]? = some tj →
-    (k, u) ∈ ti.s.lfr → (k, u') ∈ tj.s.lfr → u.dtorFree = false → i = j
+    (k, u) ∈ ti.s.lfr → (k, u') ∈ tj.s.lfr → i = j
   nd  : ∀ (i : Nat) (t : Thread), C.ths[i]? = some t → ∀ (k : Nat) (u : Ty), (k, u) ∈ t.s.lfr →
-    u.dtorFree = false → (t.s.lfr.map Prod.fst).count k = 1
-
-theorem nest_dtor_dtorFree (n f : Nat) (w : Ty) : (Ty.nest n (.dtor f w)).dtorFree = false := by
-  induction n with
-  | zero => rfl
-  | succ n ih => simp [Ty.nest, Ty.dtorFree]
+    (t.s.lfr.map Prod.fst).count k = 1
 
 /-- The marking sweep keeps a frame's block as `LkOut` says: it removes it,
-    or keeps it; it marks no lock block whose payload is out, nor one of a
-    `dtorFree` type (an orphan to be holds a destructor value, `Cand`). -/
-theorem LkOut.sweepD {R : Val → Prop} {B : Nat → Option Blk} {n k : Nat} {u : Ty} (h : LkOut B n k u) :
-    LkOut (sweepBlkD R B) n k u := by
+    or keeps it; it marks no lock block whose payload is out (an orphan to be
+    holds its payload, `Cand`). -/
+theorem LkOut.sweepD {R : Val → Prop} {B : Nat → Option Blk} {T : Nat → Bool} {n k : Nat} {u : Ty}
+    (h : LkOut B T n k u) : LkOut (sweepBlkD R B) T n k u := by
   refine ⟨h.1, ?_⟩
   unfold sweepBlkD
   split
   · exact h.2
   · split
     · next hp =>
-      rcases h.2 with hn | ⟨o, ho, hdf⟩
+      rcases h.2 with hn | ⟨ho, _⟩
       · exact .inl (by rw [hn]; rfl)
       · exfalso
         rcases hp with ⟨⟨⟨n', f, w, p, kd, _, hc⟩, _⟩, _⟩ | ⟨n', f, w, p, hd⟩
         · rw [ho] at hc; cases hc
-          cases hdf (nest_dtor_dtorFree n' f w)
         · rw [ho] at hd; cases hd
     · exact .inl rfl
 
 theorem LockInv.sweepD {C : Cfg} (h : LockInv C) : LockInv C.sweepD :=
   ⟨fun i t hi k u hm => (h.out i t hi k u hm).sweepD, h.one, h.nd⟩
 
-/-- A frame's block after a step that keeps it as it was, or (a frame of a
-    `dtorFree` payload, its block there) as a lock block of its type. -/
-theorem LkOut.step_of {m m' : Mem} {k : Nat} {u : Ty} (h : LkOut m.blk m.nid k u) (hg : Grows m m')
-    (hsame : (u.dtorFree = false ∨ m.blk k = none) → m'.blk k = m.blk k) : LkOut m'.blk m'.nid k u := by
+/-- A frame's block after a step that keeps it, and its mark, as they were. -/
+theorem LkOut.step_of {m m' : Mem} {k : Nat} {u : Ty} (h : LkOut m.blk m.taken m.nid k u) (hg : Grows m m')
+    (hsame : m'.blk k = m.blk k) (htk : m'.taken k = m.taken k) : LkOut m'.blk m'.taken m'.nid k u := by
   refine ⟨Nat.lt_of_lt_of_le h.1 hg.nid, ?_⟩
-  rcases h.2 with hn | ⟨o, ho, hdf⟩
-  · exact .inl ((hsame (.inr hn)).trans hn)
-  · cases hu : u.dtorFree with
-    | false => exact .inr ⟨o, (hsame (.inl hu)).trans ho, fun _ => hdf hu⟩
-    | true =>
-      obtain ⟨o', ho'⟩ := BlkLe.lock hg.blk ho
-      exact .inr ⟨o', ho', fun h => by cases h⟩
+  rw [hsame, htk]; exact h.2
 
-/-- ... whose block, if not `dtorFree` or gone, is out. -/
-theorem LkOut.out {m : Mem} {k : Nat} {u : Ty} (h : LkOut m.blk m.nid k u) (hc : u.dtorFree = false ∨ m.blk k = none) :
-    Out m k := by
-  rcases h.2 with hn | ⟨o, ho, hdf⟩
+/-- ... whose block is out. -/
+theorem LkOut.out {m : Mem} {k : Nat} {u : Ty} (h : LkOut m.blk m.taken m.nid k u) : Out m k := by
+  rcases h.2 with hn | ⟨ho, ht⟩
   · exact .inl ⟨hn, h.1⟩
-  · rcases hc with hc | hc
-    · exact .inr ⟨u, by rw [ho, hdf hc], hc⟩
-    · rw [ho] at hc; cases hc
+  · exact .inr ⟨u, ho, ht⟩
 
 theorem mem_lfr_keys {s : Stmt} {k : Nat} {u : Ty} (h : (k, u) ∈ s.lfr) : k ∈ s.lkeys := by
   rw [← lfr_fst]; exact List.mem_map.mpr ⟨_, h, rfl⟩
@@ -620,7 +575,6 @@ theorem LockInv.put {P : Prog} (hP : ProgOK P) {C : Cfg} {ps : List (Nat → Boo
   obtain ⟨a, ha⟩ := part_of hc.len hi
   obtain ⟨hto, _⟩ := hc.ok i t a hi ha
   have hta : TypedAt P (ownView C t a) t.s := TypedAt.of_threadOK hto
-  have hrf : RF (C.view t) t.s := RF.congr (m := ownView C t a) (m' := C.view t) rfl rfl hta.rf
   have htyp : Typed P t.s := by obtain ⟨Γ, F, Δ, ht, _⟩ := hta; exact ⟨Γ, F, Δ, ht⟩
   have hbat : BlocksAt C.blk C.nid := hto.blocksAt
   have hE := Step.lfr hP hst htyp
@@ -636,7 +590,7 @@ theorem LockInv.put {P : Prog} (hP : ProgOK P) {C : Cfg} {ps : List (Nat → Boo
     · rw [ite_eq_right hij] at hj; exact .inr ⟨Ne.symm hij, hj⟩
   -- the frames of the stepping thread after the step: old ones, or the new one
   have hnew : ∀ (k : Nat) (u : Ty), (k, u) ∈ s'.lfr → (k, u) ∈ t.s.lfr ∨
-      ((∃ v, C.blk k = some ⟨u, .lock, some v⟩) ∧ m'.blk k = some ⟨u, .lock, none⟩) := by
+      ((∃ v, C.blk k = some ⟨u, .lock, some v⟩) ∧ CheckedOut m' k u) := by
     intro k u hm
     rcases hE with hpre | ⟨k0, u0, v0, he, h1, h2⟩
     · exact .inl (hpre.subset hm)
@@ -645,64 +599,59 @@ theorem LockInv.put {P : Prog} (hP : ProgOK P) {C : Cfg} {ps : List (Nat → Boo
       · exact .inl hm
       · cases hm; exact .inr ⟨⟨v0, h1⟩, h2⟩
   -- a frame of thread `i` that the step keeps keeps its block
-  have hkeep : ∀ (k : Nat) (u : Ty), (k, u) ∈ t.s.lfr → (k, u) ∈ s'.lfr → LkOut m'.blk m'.nid k u := by
+  have hkeep : ∀ (k : Nat) (u : Ty), (k, u) ∈ t.s.lfr → (k, u) ∈ s'.lfr →
+      LkOut m'.blk m'.taken m'.nid k u := by
     intro k u ho hn
-    refine (h.out i t hi k u ho).step_of hg fun hc => ?_
-    rcases Step.stay hst hrf ((h.out i t hi k u ho).out hc) with h1 | ⟨_, ⟨w, hw⟩, h2⟩
+    have hout : Out (C.view t) k := (h.out i t hi k u ho).out
+    refine (h.out i t hi k u ho).step_of hg ?_ (Step.taken_stay hst hout)
+    rcases Step.stay hst hout with h1 | ⟨_, _, h2⟩
     · exact h1
     · exfalso
       have hc1 : t.s.lkeys.count k ≤ 1 := by
-        rcases hc with hc | hc
-        · rw [← lfr_fst, h.nd i t hi k u ho hc]; exact Nat.le_refl _
-        · change C.blk k = none at hc; change C.blk k = _ at hw; rw [hc] at hw; cases hw
+        rw [← lfr_fst, h.nd i t hi k u ho]; exact Nat.le_refl _
       exact h2 _ _ rfl hc1 (mem_lfr_keys hn)
   -- a frame of another thread keeps its block
-  have hother : ∀ (j : Nat) (tj : Thread) (k : Nat) (u : Ty), j ≠ i → C.ths[j]? = some tj → (k, u) ∈ tj.s.lfr → LkOut m'.blk m'.nid k u := by
+  have hother : ∀ (j : Nat) (tj : Thread) (k : Nat) (u : Ty), j ≠ i → C.ths[j]? = some tj →
+      (k, u) ∈ tj.s.lfr → LkOut m'.blk m'.taken m'.nid k u := by
     intro j tj k u hji hj ho
-    refine (h.out j tj hj k u ho).step_of hg fun hc => ?_
-    rcases Step.stay hst hrf ((h.out j tj hj k u ho).out hc) with h1 | ⟨hk, ⟨w, hw⟩, _⟩
+    have hout : Out (C.view t) k := (h.out j tj hj k u ho).out
+    refine (h.out j tj hj k u ho).step_of hg ?_ (Step.taken_stay hst hout)
+    rcases Step.stay hst hout with h1 | ⟨hk, _, _⟩
     · exact h1
     · exfalso
       obtain ⟨u', hu'⟩ := keys_lfr hk
-      rcases hc with hc | hc
-      · exact hji (h.one j i tj t k u u' hj hi ho hu' hc)
-      · change C.blk k = none at hc; change C.blk k = _ at hw; rw [hc] at hw; cases hw
-  -- a new frame's block was no frame's of payload not `dtorFree`
-  have hfresh : ∀ (j : Nat) (tj : Thread) (k : Nat) (u u' : Ty), C.ths[j]? = some tj → (k, u') ∈ tj.s.lfr → (∃ v, C.blk k = some ⟨u, .lock, some v⟩) →
-      u = u' ∧ u'.dtorFree = true := by
+      exact hji (h.one j i tj t k u u' hj hi ho hu')
+  -- a new frame's block was no frame's: its payload was in
+  have hfresh : ∀ (j : Nat) (tj : Thread) (k : Nat) (u u' : Ty), C.ths[j]? = some tj →
+      (k, u') ∈ tj.s.lfr → (∃ v, C.blk k = some ⟨u, .lock, some v⟩) → False := by
     intro j tj k u u' hj ho ⟨v, hv⟩
-    rcases (h.out j tj hj k u' ho).2 with hn | ⟨o, ho', hdf⟩
+    rcases (h.out j tj hj k u' ho).2 with hn | ⟨ho', _⟩
     · rw [hn] at hv; cases hv
     · rw [ho'] at hv; cases hv
-      cases hd : u.dtorFree with
-      | true => exact ⟨rfl, rfl⟩
-      | false => cases hdf hd
-  refine ⟨fun j tj hj k u hm => ?_, fun j1 j2 t1 t2 k u u' hj1 hj2 hm1 hm2 hdf => ?_,
-    fun j tj hj k u hm hdf => ?_⟩
-  · show LkOut m'.blk m'.nid k u
+  refine ⟨fun j tj hj k u hm => ?_, fun j1 j2 t1 t2 k u u' hj1 hj2 hm1 hm2 => ?_,
+    fun j tj hj k u hm => ?_⟩
+  · show LkOut m'.blk m'.taken m'.nid k u
     rcases hths j tj hj with ⟨-, rfl⟩ | ⟨hji, hj⟩
     · rcases hnew k u hm with ho | ⟨⟨v, hv⟩, h2⟩
       · exact hkeep k u ho hm
-      · exact ⟨Nat.lt_of_lt_of_le (hbat k _ hv).key hg.nid, .inr ⟨none, h2, fun _ => rfl⟩⟩
+      · exact ⟨Nat.lt_of_lt_of_le (hbat k _ hv).key hg.nid, .inr h2⟩
     · exact hother j tj k u hji hj hm
   · rcases hths j1 t1 hj1 with ⟨e1, rfl⟩ | ⟨hne1, hj1⟩ <;> rcases hths j2 t2 hj2 with ⟨e2, rfl⟩ | ⟨hne2, hj2⟩
     · exact e1.trans e2.symm
     · rcases hnew k u hm1 with ho | ⟨hv, _⟩
-      · exact e1.trans (h.one _ _ _ _ k u u' hi hj2 ho hm2 hdf)
-      · have := hfresh _ _ k u u' hj2 hm2 hv
-        rw [this.1] at hdf; rw [this.2] at hdf; cases hdf
+      · exact e1.trans (h.one _ _ _ _ k u u' hi hj2 ho hm2)
+      · exact (hfresh _ _ k u u' hj2 hm2 hv).elim
     · rcases hnew k u' hm2 with ho | ⟨hv, _⟩
-      · exact (h.one _ _ _ _ k u u' hj1 hi hm1 ho hdf).trans e2.symm
-      · have := hfresh _ _ k u' u hj1 hm1 hv
-        rw [this.2] at hdf; cases hdf
-    · exact h.one _ _ _ _ k u u' hj1 hj2 hm1 hm2 hdf
+      · exact (h.one _ _ _ _ k u u' hj1 hi hm1 ho).trans e2.symm
+      · exact (hfresh _ _ k u' u hj1 hm1 hv).elim
+    · exact h.one _ _ _ _ k u u' hj1 hj2 hm1 hm2
   · rcases hths j tj hj with ⟨-, rfl⟩ | ⟨_, hj⟩
     · show (s'.lfr.map Prod.fst).count k = 1
       rcases hE with hpre | ⟨k0, u0, v0, he, h1, _⟩
       · have ho := hpre.subset hm
         have hle : (s'.lfr.map Prod.fst).count k ≤ (t.s.lfr.map Prod.fst).count k :=
           ((hpre.map Prod.fst).sublist).count_le k
-        rw [h.nd i t hi k u ho hdf] at hle
+        rw [h.nd i t hi k u ho] at hle
         have hpos : 0 < (s'.lfr.map Prod.fst).count k := List.count_pos_iff.mpr (List.mem_map.mpr ⟨_, hm, rfl⟩)
         omega
       · rw [he, List.map_append, List.count_append]
@@ -710,23 +659,17 @@ theorem LockInv.put {P : Prog} (hP : ProgOK P) {C : Cfg} {ps : List (Nat → Boo
         by_cases hk : k = k0
         · subst hk
           -- no old frame was on the block the step checked out
-          have hu0 : u0.dtorFree = false := by
-            rcases hm with hm | hm
-            · have := hfresh i t k u0 u hi hm ⟨v0, h1⟩
-              rw [this.2] at hdf; cases hdf
-            · cases hm; exact hdf
           have h0 : (t.s.lfr.map Prod.fst).count k = 0 := by
             rw [List.count_eq_zero]
             intro hk'
             obtain ⟨⟨k', w⟩, hw, he'⟩ := List.mem_map.mp hk'
             have hw' : (k, w) ∈ t.s.lfr := by simp only at he'; rw [← he']; exact hw
-            obtain ⟨e, hd⟩ := hfresh i t k u0 w hi hw' ⟨v0, h1⟩
-            rw [← e, hu0] at hd; cases hd
+            exact hfresh i t k u0 w hi hw' ⟨v0, h1⟩
           rw [h0]; simp
         · rcases hm with hm | hm
-          · rw [h.nd i t hi k u hm hdf]; simp [Ne.symm hk]
+          · rw [h.nd i t hi k u hm]; simp [Ne.symm hk]
           · cases hm; exact absurd rfl hk
-    · exact h.nd j tj hj k u hm hdf
+    · exact h.nd j tj hj k u hm
 
 /-- ... and so do the sweep that ends it, and the reaps after it. -/
 theorem LockInv.settle {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {i : Nat} {C C' : Cfg}
@@ -741,11 +684,12 @@ theorem LockInv.settle {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {i : Nat} 
     threads is inside the frames of the thread at its index, or of none,
     keeps the invariant. -/
 theorem LockInv.of_lfr {C C' : Cfg} (h : LockInv C) (hb : C'.blk = C.blk) (hn : C'.nid = C.nid)
+    (htk : C'.taken = C.taken)
     (hths : ∀ (j : Nat) (tj' : Thread), C'.ths[j]? = some tj' →
       tj'.s.lfr = [] ∨ ∃ tj, C.ths[j]? = some tj ∧ tj'.s.lfr = tj.s.lfr) : LockInv C' := by
-  refine ⟨fun j tj hj k u hm => ?_, fun j1 j2 t1 t2 k u u' hj1 hj2 hm1 hm2 hdf => ?_,
-    fun j tj hj k u hm hdf => ?_⟩
-  · rw [hb, hn]
+  refine ⟨fun j tj hj k u hm => ?_, fun j1 j2 t1 t2 k u u' hj1 hj2 hm1 hm2 => ?_,
+    fun j tj hj k u hm => ?_⟩
+  · rw [hb, hn, htk]
     rcases hths j tj hj with he | ⟨tj0, hj0, he⟩
     · rw [he] at hm; cases hm
     · rw [he] at hm; exact h.out j tj0 hj0 k u hm
@@ -754,10 +698,10 @@ theorem LockInv.of_lfr {C C' : Cfg} (h : LockInv C) (hb : C'.blk = C.blk) (hn : 
     rcases hths j2 t2 hj2 with he2 | ⟨t20, h20, he2⟩
     · rw [he2] at hm2; cases hm2
     rw [he1] at hm1; rw [he2] at hm2
-    exact h.one j1 j2 t10 t20 k u u' h10 h20 hm1 hm2 hdf
+    exact h.one j1 j2 t10 t20 k u u' h10 h20 hm1 hm2
   · rcases hths j tj hj with he | ⟨tj0, hj0, he⟩
     · rw [he] at hm; cases hm
-    · rw [he] at hm ⊢; exact h.nd j tj0 hj0 k u hm hdf
+    · rw [he] at hm ⊢; exact h.nd j tj0 hj0 k u hm
 
 /-- **A spawn keeps the invariant**: the spawner's call becomes its result's
     scope, inside the same frames (its continuation is source), and the new
@@ -776,7 +720,7 @@ theorem LockInv.spawn {P : Prog} (hP : ProgOK P) {C : Cfg} {ps : List (Nat → B
   have hlfr : (K (.scope x k)).lfr = t.s.lfr := by
     rw [hK.eq]; exact hK.lfr_eq (by simp [Stmt.lfr, lfr_src hks])
   have hilen : i < C.ths.length := (List.getElem?_eq_some_iff.mp hi).1
-  refine h.of_lfr rfl rfl fun j tj hj => ?_
+  refine h.of_lfr rfl rfl rfl fun j tj hj => ?_
   simp only at hj
   rw [get_set_append hilen] at hj
   by_cases hjl : j < C.ths.length
@@ -798,7 +742,7 @@ theorem LockInv.spawnFail {C : Cfg} (h : LockInv C) {i : Nat} {t : Thread} {K : 
   have hlfr : (K (.seq .panic (.letcall x f args k))).lfr = t.s.lfr := by
     rw [hK.eq]; exact hK.lfr_eq rfl
   have hilen : i < C.ths.length := (List.getElem?_eq_some_iff.mp hi).1
-  refine h.of_lfr rfl rfl fun j tj hj => ?_
+  refine h.of_lfr rfl rfl rfl fun j tj hj => ?_
   simp only at hj
   rw [list_set_get hilen] at hj
   by_cases hij : i = j
@@ -823,7 +767,7 @@ theorem LockInv.start {G : Globs} {s : Stmt} (hs : s.src = true) (nv : Nat) : Lo
     cases j with
     | zero => simp [Cfg.start] at hj; subst hj; exact lfr_src hs
     | succ j => simp [Cfg.start] at hj
-  refine ⟨fun j t hj k u hm => ?_, fun j _ t _ k u _ hj _ hm _ _ => ?_, fun j t hj k u hm _ => ?_⟩ <;>
+  refine ⟨fun j t hj k u hm => ?_, fun j _ t _ k u _ hj _ hm _ => ?_, fun j t hj k u hm => ?_⟩ <;>
     (rw [hnil _ _ hj] at hm; cases hm)
 
 theorem Reach.snoc {P : Prog} {spawn : Nat → Bool} {C C1 C2 : Cfg} (h : Reach P spawn C C1)
@@ -847,13 +791,6 @@ theorem reach_lockInv {P : Prog} {spawn : Nat → Bool} {G : Globs} {s : Stmt} {
   exact key _ _ hr .refl (LockInv.start hs nv)
 
 /-! ### What a reached configuration's frames say -/
-
-theorem dtorFree_of_holdsDtor {t : Ty} (h : t.holdsDtor = true) : t.dtorFree = false := by
-  have := Ty.holdsDtor_eq_not_free t
-  rw [h] at this
-  cases hd : t.dtorFree
-  · rfl
-  · rw [hd] at this; cases this
 
 /-- A frame on a statement's spine is one of its frames twice if its body is
     inside another of its block. -/
@@ -923,50 +860,34 @@ theorem Redex.frame_unique {s : Stmt} {K1 K2 : Stmt → Stmt} {k : Nat} {u1 u2 :
 section reach
 variable {P : Prog} {spawn : Nat → Bool} {G : Globs} {s0 : Stmt} {Δ0 : Ctx} {nv : Nat}
 
-/-- **A frame's block, in a reached configuration** (Agora #808): for a
-    payload that is not `dtorFree` (one that holds a destructor value,
-    `holdsDtor`), the block is checked out (`⟨u, .lock, none⟩`), or gone, at
-    a key below `nid`. -/
+/-- **A frame's block, in a reached configuration** (Agora #808): the block
+    is checked out (`⟨u, .lock, none⟩`, and Agora #810 not taken), or gone,
+    at a key below `nid`; for every payload type. -/
 theorem reach_frame_out (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn) (hG : GlobsOK P G)
     (ht : StmtT P (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
     (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
     {i : Nat} {th : Thread} {K : Stmt → Stmt} {k : Nat} {u : Ty} {x : Var} {b : Stmt}
-    (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x b)) (hu : u.dtorFree = false) :
-    k < C.nid ∧ (C.blk k = none ∨ C.blk k = some ⟨u, .lock, none⟩) := by
-  obtain ⟨hlt, h | ⟨o, ho, hdf⟩⟩ := (reach_lockInv hP hPc hSp hG ht hs hsc hv hr).out i th hi k u (hK.lfr_mem rfl)
-  · exact ⟨hlt, .inl h⟩
-  · rw [hdf hu] at ho; exact ⟨hlt, .inr ho⟩
+    (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x b)) :
+    k < C.nid ∧ (C.blk k = none ∨ (C.blk k = some ⟨u, .lock, none⟩ ∧ C.taken k = false)) :=
+  (reach_lockInv hP hPc hSp hG ht hs hsc hv hr).out i th hi k u (hK.lfr_mem rfl)
 
 /-- **A3.2's mutual exclusion** (Agora #808): in a reached configuration, two
-    frames of one block whose payload is not `dtorFree` (one that holds a
-    destructor value) are one frame, of one thread: for such a block at
-    most one `scopeL` frame is out at a time.  (A `dtorFree` payload is not
-    covered: the model's `locked_restore` may refill a checked-out block,
-    Agora #810.) -/
+    frames of one block are one frame, of one thread: at most one `scopeL`
+    frame of a lock block is out at a time, whatever its payload's type.
+    (Agora #810: `locked_restore` fills only a block `locked_take` emptied,
+    `Mem.taken`, never one a `withLock` checked out.) -/
 theorem reach_lock_excl (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn) (hG : GlobsOK P G)
     (ht : StmtT P (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
     (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
     {i j : Nat} {ti tj : Thread} {K1 K2 : Stmt → Stmt} {k : Nat} {u1 u2 : Ty} {x1 x2 : Var} {b1 b2 : Stmt}
     (hi : C.ths[i]? = some ti) (hj : C.ths[j]? = some tj)
-    (h1 : Redex ti.s K1 (.scopeL k u1 x1 b1)) (h2 : Redex tj.s K2 (.scopeL k u2 x2 b2))
-    (hu : u1.dtorFree = false) :
+    (h1 : Redex ti.s K1 (.scopeL k u1 x1 b1)) (h2 : Redex tj.s K2 (.scopeL k u2 x2 b2)) :
     i = j ∧ K1 = K2 ∧ u1 = u2 ∧ x1 = x2 ∧ b1 = b2 := by
   have hl := reach_lockInv hP hPc hSp hG ht hs hsc hv hr
-  have hij := hl.one i j ti tj k u1 u2 hi hj (h1.lfr_mem rfl) (h2.lfr_mem rfl) hu
+  have hij := hl.one i j ti tj k u1 u2 hi hj (h1.lfr_mem rfl) (h2.lfr_mem rfl)
   subst hij
   rw [hi] at hj; cases hj
-  exact ⟨rfl, Redex.frame_unique h1 h2 (hl.nd i ti hi k u1 (h1.lfr_mem rfl) hu)⟩
-
-theorem Redex.rf {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {m : Mem} (hrf : RF m s) : RF m r := by
-  induction h with
-  | here => exact hrf
-  | seq _ ih => exact ih hrf
-  | scope _ ih => exact ih hrf
-  | rbind _ ih => exact ih hrf
-  | frozen _ ih => exact ih hrf
-  | catchR _ ih => exact ih hrf
-  | scopeD _ ih => exact ih hrf
-  | scopeL _ ih => exact ih hrf
+  exact ⟨rfl, Redex.frame_unique h1 h2 (hl.nd i ti hi k u1 (h1.lfr_mem rfl))⟩
 
 /-- `LockDtorWitness.scopeL_typed_panic`, with the frame's invariant over a
     store of the same slots as the one the step runs on. -/
@@ -976,7 +897,7 @@ theorem scopeL_typed_panic_of {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x
     (h : Step P m (.scopeL k t x s) (.panic m2)) :
     ∃ m1, Step P m s (.panic m1) ∧
       ((∃ v, m1.st x = some ⟨true, some v⟩ ∧ WFv t v ∧
-          (m1.blk k = some ⟨t, .lock, none⟩ →
+          (CheckedOut m1 k t →
             m2 = ({ m1 with blk := upd m1.blk k (some ⟨t, .lock, some v⟩) }.remove x))) ∨
         (m1.st x = some ⟨true, none⟩ ∧ m2 = m1.remove x)) := by
   cases h with

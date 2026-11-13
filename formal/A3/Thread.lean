@@ -14,8 +14,8 @@ theorem ThreadOK.init {P : Prog} {s : Stmt} {Δ : Ctx} {nv : Nat}
 
 /-- A3.6: the empty store with the module globals `g` set, and none of their
     blocks yet: A2's `inv_empty`, which reads no global. -/
-theorem inv_emptyGl {s : Stmt} {nv : Nat} (g : Nat → Option Val) (hs : s.src = true)
-    (hv : ∀ v ∈ s.vars, v < nv) : Inv { emptyMem nv with gl := g } (fun _ => none) [] s where
+theorem inv_emptyGl {s : Stmt} {nv : Nat} (g : Nat → Option Val) (T : Nat → Bool) (hs : s.src = true)
+    (hv : ∀ v ∈ s.vars, v < nv) : Inv { emptyMem nv with gl := g, taken := T } (fun _ => none) [] s where
   dom _ := rfl
   slot _ _ h := by cases h
   heap := ⟨fun _ _ h => (by cases h), fun _ _ _ _ _ h => (by cases h), fun _ _ h => (by cases h),
@@ -138,9 +138,9 @@ theorem ThreadOK.start {P : Prog} {s : Stmt} {Δ : Ctx} {nv : Nat}
     (ht : StmtT P (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P)
     (hv : ∀ v ∈ s.vars, v < nv) {G : Globs} (hG : GlobsOK P G) :
     ThreadOK P { alloc := union (fun _ => false) (payPart G.blk), nid := G.nid, nv := nv,
-                 st := fun _ => none, blk := G.blk, gl := G.gl } s := by
-  have h0 : ThreadOK P { emptyMem nv with gl := G.gl } s :=
-    ⟨fun _ => none, [], Δ, ht, inv_emptyGl G.gl hs hv,
+                 st := fun _ => none, blk := G.blk, gl := G.gl, taken := G.taken } s := by
+  have h0 : ThreadOK P { emptyMem nv with gl := G.gl, taken := G.taken } s :=
+    ⟨fun _ => none, [], Δ, ht, inv_emptyGl G.gl G.taken hs hv,
       ⟨fun _ _ _ _ _ _ _ _ h => (by cases h), fun _ _ _ _ _ _ _ h => (by cases h),
         fun _ _ h => (by cases h)⟩, hsc, closed_empty s⟩
   exact h0.move (fun _ _ h => by cases h) (fun i hi => .inr (by simpa [union, payPart_iff] using hi))
