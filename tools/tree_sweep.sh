@@ -264,7 +264,10 @@ for f in "${FILES[@]}"; do
     k="${f//\//__}.txt.time"
     [[ -f "$WORK/base/$k" && -f "$WORK/new/$k" ]] || continue
     read -r bs < "$WORK/base/$k"; read -r ns < "$WORK/new/$k"
-    if awk -v b="$bs" -v n="$ns" -v r="$SWEEP_SLOWER" 'BEGIN { exit !(n >= 1 && n > b * r) }'; then
+    # (A locale with a decimal comma writes the times as `2,823`: awk would
+    # read that as a string and compare it as one — `"2,688" > 10` — so the
+    # comma is made a point and both are taken as numbers.)
+    if awk -v b="$bs" -v n="$ns" -v r="$SWEEP_SLOWER" 'BEGIN { gsub(/,/, ".", b); gsub(/,/, ".", n); b += 0; n += 0; exit !(n >= 1 && n > b * r) }'; then
         (( slower == 0 )) && echo
         slower=$((slower + 1))
         # (The first twenty: a change that slows everything down says so in
