@@ -47757,8 +47757,9 @@ unsafe @ __sx_names_any s sx → b {
 // at a field path of the parameter, `Q:` an element's (agora #647).
 @ __irealloc_edge_note_c i syms s pn s callee i aix s c b fe → v {
     : b oc & & != 0 g_bck_closure_depth != 0 ( nurl_str_len g_clo_cur ) ( str_contains_word g_clo_params pn )
-    ? oc { ( __cedge_add g_clo_cur ( nurl_str_cat4 ( nurl_str_cat4 ? fe `R:` `Q:` ( nurl_str_int ( str_word_index g_clo_params pn ) ) `:` callee ) `:` ( nurl_str_int aix ) `:` ) c ) } {}
-    ? & oc ! ( str_contains_word g_cur_params pn ) { ^ v } {}
+    // (One of the literal's own parameters is the literal's only: it
+    // shadows the enclosing function's of that name — agora #801.)
+    ? oc { ( __cedge_add g_clo_cur ( nurl_str_cat4 ( nurl_str_cat4 ? fe `R:` `Q:` ( nurl_str_int ( str_word_index g_clo_params pn ) ) `:` callee ) `:` ( nurl_str_int aix ) `:` ) c ) ^ v } {}
     : i k ( __irealloc_param_index syms pn )
     ? < k 0 { ^ v } {}
     ( __cedge_add g_rpg_me_self ( nurl_str_cat4 ( nurl_str_cat4 ? fe `R:` `Q:` ( nurl_str_int k ) `:` callee ) `:` ( nurl_str_int aix ) `:` ) c )
@@ -48095,10 +48096,11 @@ unsafe @ __pd_ek_note i syms s name → v {
     // drops; agora #797.)
     ? & & != 0 g_bck_closure_depth != 0 ( nurl_str_len g_clo_cur ) ( str_contains_word g_clo_params pn ) {
         ( __irealloc_edge_put g_clo_cur ( str_word_index g_clo_params pn ) callee aix fe )
-        // (…and, where it has the name of one of the enclosing function's,
-        // that one's too, as before: by name, a capture and a parameter of
-        // the literal are not told apart here.)
-        ? ! ( str_contains_word g_cur_params pn ) { ^ v } {}
+        // (…its only: a parameter of the literal shadows the enclosing
+        // function's of that name, which the body cannot reach — that
+        // one's summary took the literal's growth for its own, and its
+        // callers' views of what they passed it ended; agora #801.)
+        ^ v
     } {}
     : i k ( __irealloc_param_index syms pn )
     ? < k 0 { ^ v } {}
