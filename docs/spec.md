@@ -1401,7 +1401,10 @@ is refused there as below its import.
 
 An enum is `:` `|` `Name` `{` variant* `}`; a variant is
 `IDENT type*` — the variant name followed by zero or more payload types.
-Each variant compiles to an `i64` tag global named by the variant. The
+Each variant is an `i64` tag — its place in the declaration, 0 for the
+first — written into the generated code as that number wherever the
+variant is built or matched: the module holds no symbol for it, so a
+variant may be named like anything the C library exports. The
 enum value is `{ i64, i64, i64, ... }` sized to fit the variant with
 the most payloads. Payload slots are uniformly `i64` — bit-complete for
 every payload kind on every target (floats bitcast in and out, narrow

@@ -1471,6 +1471,18 @@ unsafe @ agg_field_count i syms s ot → i {
 : ~ i g_str_idx 0
 : ~ i g_str_syms 0  // sym handle for string-literal metadata (never pushed/popped)
 : ~ i g_did_ret 0  // set to 1 by gen_ret; checked/reset by gen_cond
+// The register the last `tail call` put its result in (gen_call): a
+// return of exactly that value keeps its own `ret` beside the call, where
+// the optimiser turns a recursion into a loop (emit_ret_value).
+: ~ s g_tail_reg ``
+// How the returns of the body being compiled reach its exit
+// (emit_ret_value): how many stored an aggregate into the result slot so
+// far; whether the statement gen_block_ret is about to generate is a
+// return at the body's own level (read once, by __gen_ret); and whether
+// the return being emitted is the body's last statement.
+: ~ i g_agg_ret_n 0
+: ~ b g_ret_top F
+: ~ b g_ret_final F
 // 1 when the last cast cast a binding (gen_cast; gen_agg_lit reads it)
 : ~ i g_last_cast_direct 0
 // Names of the mutable string globals that own their buffer (each has a
@@ -6559,11 +6571,11 @@ unsafe @ __arg_lend_root i syms → s {
         // slot, journaled, from here — Agora #620. fn_cleanup forgets it
         // before the slot is read.)
         ? & __rg_ok ! ( seq lt `void` ) {
-            : s __dg ( mem_ret_guard_into syms cg lt val hbit ( nurl_sym_get syms `__ret_val__` ) )
+            : s __dg ( mem_ret_guard_into syms cg lt val hbit ( __ret_slot syms cg ) )
             ? != 0 ( nurl_str_len __dg ) { ( nurl_sym_set g_fn_escapes `__ret_dguard__` `1` ) } {}
             // (…a fresh raw string by the same slot.)
             ? & __rraw ( seq lt `i8*` ) {
-                ( mem_ret_guard_rawstr val ( nurl_sym_get syms `__ret_val__` ) )
+                ( mem_ret_guard_rawstr val ( __ret_slot syms cg ) )
                 ( nurl_sym_set g_fn_escapes `__ret_dguard__` `1` )
             } {}
         } {}
@@ -6590,7 +6602,7 @@ unsafe @ __arg_lend_root i syms → s {
         ( __dret_xfer cg skip_struct_ptr )
         ( __dret_skip_add ret_ident )
         ? ! ( seq lt `void` )
-        { : s rvp ( nurl_sym_get syms `__ret_val__` )
+        { : s rvp ( __ret_slot syms cg )
             ( nurl_print `  store ` ) ( nurl_print ( nurl_llty lt ) ) ( nurl_print ` ` )
             ( nurl_print val ) ( nurl_print `, ` ) ( nurl_print ( nurl_llty lt ) )
             ( nurl_print `* ` ) ( nurl_print rvp ) ( nurl_print `\n` )
@@ -6628,8 +6640,7 @@ unsafe @ __arg_lend_root i syms → s {
         ? | ( seq lt `void` ) ( seq fn_rt `void` )
         { ( emit_call_term `ret void` ) }
         { ( mem_publish_return_proof syms cg lt )
-            ( nurl_print `  ret ` ) ( nurl_print ( nurl_llty lt ) )
-            ( nurl_print ` ` ) ( nurl_print val ) ( emit_dbg_eol ) }
+            ( emit_ret_value syms cg ( nurl_llty lt ) val ) }
     }
 }
 
@@ -7254,6 +7265,10 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     // A fall-off value has no `^` token to step over (gen_block_ret).
     : b __ret_imp g_ret_implicit
     = g_ret_implicit F
+    // (Read here, before the expression: a `^` inside it is not the
+    // body's own.)
+    : b __ret_top g_ret_top
+    = g_ret_top F
     // Noreturn inference input: this body does return somewhere.
     = g_fn_ret_count + g_fn_ret_count 1
     ( nurl_sym_set_deep syms `__agg_lends__` `` )
@@ -9047,7 +9062,10 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     // (…or a call's: a closure-returning call hands its fresh env over,
     // docs/MEMORY.md §7.4.)
     = g_ret_clo_lit ? | == ret_first_tt TT_BACKSLASH ret_is_direct_call ( __is_closure_llty ( nurl_llty lt ) ) F
+    // (The body's last statement: its `}` is what follows.)
+    = g_ret_final & __ret_top == ( nurl_lex_type lex ) TT_RBRACE
     ( gen_ret_term lex syms cg lt val skip skip_str_ptr skip_user_ptr skip_struct_ptr ret_ident __rg_hbit )
+    = g_ret_final F
     = g_ret_sl_ids ``
     = g_ret_sl_val ``
     // (This return's answer, read by its own hand-over only.)
@@ -9545,8 +9563,13 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     ^ > ( glob_atomic_align ( nurl_llty lt ) ) 0
 }
 
-// The value of global `name` (of type `lt`), loaded.
-@ load_global i syms i cg s lt s name → s {
+// The value of global `name` (of type `lt`), loaded; `mark` is its
+// `__global` mark, which the caller has read to know it is one.
+// (An enum variant is its tag, an immediate — its mark is `=<tag>`,
+// gen_enum_decl: nothing is loaded, and no other global's read pays a
+// lookup to find that out.)
+@ load_global i syms i cg s lt s name s mark → s {
+    ? == 61 ( nurl_str_get mark 0 ) { ^ ( nurl_str_slice mark 1 - ( nurl_str_len mark ) 1 ) } {}
     ? ! ( glob_is_atomic syms name lt ) { ^ ( load_var cg lt ( nurl_str_cat `@` name ) ) } {}
     : s ll ( nurl_llty lt )
     : s res ( nurl_cg_reg cg )
@@ -9869,7 +9892,7 @@ unsafe @ gen_ident i lex i syms i cg → s {
         ^ ? != 0 ( nurl_str_len ptr )
         ( load_var cg lt ptr )
         ? != 0 ( nurl_str_len glb )
-        ( load_global syms cg lt name )
+        ( load_global syms cg lt name glb )
         ( nurl_str_cat `%` name )
     }
     { : i ut ( nurl_lex_type lex )
@@ -23295,6 +23318,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
                 ? has_va_sig { ( nurl_print ` (` ) ( nurl_print va_sig ) ( nurl_print `)` ) } {}
                 ( nurl_print ` @` ) ( nurl_print __emit_fn )
                 ( nurl_print `(` ) ( nurl_print argstr ) ( nurl_print __loc_arg ) ( nurl_print `)` ) ( emit_dbg_eol )
+                ? tail_ok { = g_tail_reg ( nurl_str_cat res `` ) } {}
                 ? ( __is_alloc_call call_name ) {
                     = g_last_alloc_reg ( nurl_str_cat res `` )
                     = g_last_alloc_size ? ( str_contains_word `nurl_alloc nurl_malloc malloc` call_name ) ( str_skip_word argstr ) ``
@@ -24101,6 +24125,127 @@ unsafe @ __ty_no_address s ty0 i depth → b {
     & == ( nurl_lex_line lex ) g_stmt_line == ( nurl_lex_col lex ) g_stmt_col
 }
 
+// ── An aggregate crosses a merge through the frame ──────────────────
+// A struct, an enum, an option or a result that several paths hand to
+// one place — a join's arms, a function's returns — goes through a slot
+// of the frame: each path stores its value, the merge loads it. LLVM
+// takes a slot apart field by field (SROA, then one scalar phi per
+// field); a `phi` of the aggregate it never takes apart — InstCombine
+// folds an `extractvalue` into a phi only when it is the phi's one user,
+// and an aggregate has a user per field. Its tag, or an option's flag,
+// then stays an `extractvalue` of a phi that no jump threading and no
+// value propagation sees through, and a match on what an inlined
+// function just built runs the whole dispatch again (AGORA-853).
+
+// Is the LLVM type `ll` an aggregate of more than one word — a named
+// struct or enum, a literal `{ … }` (an option, a result, a closure pair)
+// or an array — and not a pointer to one? A type of ONE word is a scalar
+// to the optimiser already, whatever it is called: a String, a Vec, a
+// library handle or a struct of one such field is the pointer inside it,
+// an enum of bare tags its tag, and every `extractvalue` of a phi of one
+// is the same instruction, which InstCombine does fold. A slot for those
+// would be IR the optimiser reads and gains nothing from — most of what
+// the standard library returns.
+@ __ll_is_agg s ll → b { ^ ( __ll_is_agg_at ll 0 ) }
+
+// (`depth`: how many one-field structs deep the question is. A struct
+// that holds itself by value — `: A { B b }  : B { A a }`, refused where
+// it is declared — has no bottom to reach.)
+@ __ll_is_agg_at s ll i depth → b {
+    : i n ( nurl_str_len ll )
+    ? < n 2 { ^ F } {}
+    : i c0 ( nurl_str_get ll 0 )
+    ? & & != c0 37 != c0 123 != c0 91 { ^ F } {}
+    ? == ( nurl_str_get ll - n 1 ) 42 { ^ F } {}
+    ? != c0 37 { ^ T } {}
+    ? | ( seq ll `%String` ) != 0 ( nurl_str_starts ll `%Vec__` ) { ^ F } {}
+    ? | == 0 g_root_syms > depth 8 { ^ T } {}
+    : s sname ( nurl_str_slice ll 1 - n 1 )
+    ? != 0 ( nurl_sym_len2 g_root_syms sname `__variants` ) {
+        ^ != 0 ( nurl_str_to_int ( nurl_sym_get2 g_root_syms sname `__max_payloads` ) )
+    } {}
+    ? ( seq ( nurl_sym_get2 g_root_syms sname `__field_count` ) `1` ) {
+        // one field: as wide as that field is
+        ^ ( __ll_is_agg_at ( nurl_llty ( nurl_sym_get g_root_syms ( nurl_str_cat3 sname `__idx_0` `__type` ) ) ) + depth 1 )
+    } {}
+    ^ T
+}
+
+// A fresh slot of type `ll` in the frame. (An alloca wherever it is
+// printed: emit_hoisted lifts it into the entry block, so one in a loop
+// is still one slot.)
+@ __agg_slot_new i cg s ll → s {
+    : s slot ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print slot ) ( nurl_print ` = alloca ` ) ( nurl_print ll ) ( nurl_print `\n` )
+    ^ slot
+}
+
+// This path's value into the slot.
+@ __agg_slot_put s slot s ll s val → v {
+    ( nurl_print `  store ` ) ( nurl_print ll ) ( nurl_print ` ` ) ( nurl_print val )
+    ( nurl_print `, ` ) ( nurl_print ll ) ( nurl_print `* ` ) ( nurl_print slot ) ( nurl_print `\n` )
+}
+
+// The merged value, read into `res` at the merge.
+@ __agg_slot_get s res s slot s ll → v {
+    ( nurl_print `  ` ) ( nurl_print res ) ( nurl_print ` = load ` ) ( nurl_print ll )
+    ( nurl_print `, ` ) ( nurl_print ll ) ( nurl_print `* ` ) ( nurl_print slot ) ( nurl_print `\n` )
+}
+
+// The result slot of the body being compiled (`__ret_val__`): the slot a
+// return under a `;` defer leaves its value in while the defers run, and
+// the one an aggregate's returns merge through. A function opens with
+// one (gen_fn_decl_concrete); a closure body, which has no defers of its
+// own, gets its slot from the first return that needs it.
+@ __ret_slot i syms i cg → s {
+    ? == 0 ( nurl_sym_len syms `__ret_val__` ) {
+        ( nurl_sym_set_deep syms `__ret_val__` ( __agg_slot_new cg ( nurl_llty ( nurl_sym_get syms `__fn_ret_ty__` ) ) ) )
+    } {}
+    ^ ( nurl_str_cat ( nurl_sym_get syms `__ret_val__` ) `` )
+}
+
+// Hand `val`, of LLVM type `ll`, back as the function's result. An
+// aggregate goes through the result slot (__ret_slot) to the body's one
+// exit block (`__agg_ret__`, its label, set where the body opens — a
+// closure's own, never its enclosing function's), so its returns merge as
+// one scalar phi per field.
+// Three returns stay where they are, with a `ret` of their own: anything
+// that is no aggregate; a tail call's result — the callee's value as it
+// stands, which must stay beside its `ret` to be a tail call at all; and
+// the body's last statement when no return before it took the slot — the
+// one exit of a body that has no other, which then compiles to the IR it
+// always did.
+@ emit_ret_value i syms i cg s ll s val → v {
+    : b tail & != 0 ( nurl_str_len g_tail_reg ) ( seq val g_tail_reg )
+    = g_tail_reg ``
+    : b only & g_ret_final == g_agg_ret_n 0
+    = g_ret_final F
+    // (The type is asked first: most returns are of a number or a
+    // handle, and those look nothing up.)
+    ? & & ! tail ! only ( __ll_is_agg ll ) {
+        : s ar ( nurl_sym_get syms `__agg_ret__` )
+        // (Only a value of the declared type: a store would take any
+        // other without a word, where the `ret` below is refused by the
+        // verifier.)
+        ? & != 0 ( nurl_str_len ar ) ( seq ll ( nurl_llty ( nurl_sym_get syms `__fn_ret_ty__` ) ) ) {
+            ( __agg_slot_put ( __ret_slot syms cg ) ll val )
+            = g_agg_ret_n + g_agg_ret_n 1
+            ( nurl_print `  br label %` ) ( nurl_print ar ) ( emit_dbg_eol )
+            ^ v
+        } {}
+    } {}
+    ( nurl_print `  ret ` ) ( nurl_print ll ) ( nurl_print ` ` ) ( nurl_print val ) ( emit_dbg_eol )
+}
+
+// The exit block of a body whose result is an aggregate: every return
+// stored into `slot` and branched here.
+@ emit_agg_exit i cg s label s slot s ll → v {
+    ( emit ( nurl_str_cat label `:` ) )
+    : s rv ( nurl_cg_reg cg )
+    ( __agg_slot_get rv slot ll )
+    ( nurl_print `  ret ` ) ( nurl_print ll ) ( nurl_print ` ` ) ( nurl_print rv ) ( emit_dbg_eol )
+}
+
 unsafe @ gen_cond i lex i syms i cg → s {
     // Scope depth at the `?`: an arm binding deeper than this is local to
     // the arm (mem_arm_hown) — or than the binding the join's value is
@@ -24495,6 +24640,17 @@ unsafe @ gen_cond i lex i syms i cg → s {
             = tv64 __tr
         } {}
     } {}
+    // An aggregate reaches the join through a slot, stored while the
+    // instructions still land in this arm (__ll_is_agg).
+    : ~ s c_jslot ``
+    // (…and the register the join reads it into, until that load is
+    // printed: a block's phis come first, and the join's ownership bits
+    // are phis printed after its value.)
+    : ~ s c_jload ``
+    ? & == tdr 0 ( __ll_is_agg ( nurl_llty tt2 ) ) {
+        = c_jslot ( __agg_slot_new cg ( nurl_llty tt2 ) )
+        ( __agg_slot_put c_jslot ( nurl_llty tt2 ) tv )
+    } {}
     ? == tdr 0
     {  // Phase 2D: arm-local fall-through drop. Safe when the arm's result
         // is void OR a plain scalar (mem_arm_drop_safe) — otherwise tv may
@@ -24712,6 +24868,11 @@ unsafe @ gen_cond i lex i syms i cg → s {
             ( nurl_print ` ` ) ( nurl_print ev ) ( nurl_print ` to i64\n` )
             = ev64 __er
         } {}
+    } {}
+    // …and the else arm's, into the same slot: a join has a value only
+    // where its arms' types agree.
+    ? & & == edr 0 != 0 ( nurl_str_len c_jslot ) ( seq ( nurl_llty tt2 ) ( nurl_llty et2 ) ) {
+        ( __agg_slot_put c_jslot ( nurl_llty et2 ) ev )
     } {}
     ? == edr 0
     { ? & != 0 g_auto_drop_strings ( mem_arm_drop_safe et2 )
@@ -24937,12 +25098,16 @@ unsafe @ gen_cond i lex i syms i cg → s {
                     ( nurl_print ` [ ` ) ( nurl_print tvp )
                     ( nurl_print `, %` ) ( nurl_print tlbl ) ( nurl_print ` ]\n` )
                 }
-                { ( nurl_print `  ` ) ( nurl_print res )
-                    ( nurl_print ` = phi ` ) ( nurl_print ( nurl_llty phi_ty ) )
-                    ( nurl_print ` [ ` ) ( nurl_print tvp )
-                    ( nurl_print `, %` ) ( nurl_print tlbl )
-                    ( nurl_print ` ], [ ` ) ( nurl_print evp )
-                    ( nurl_print `, %` ) ( nurl_print elbl ) ( nurl_print ` ]\n` )
+                { ? != 0 ( nurl_str_len c_jslot )
+                    {  // both arms stored an aggregate: the join reads the
+                        // slot, below the phis this block opens with
+                        = c_jload ( nurl_str_cat res `` ) }
+                    { ( nurl_print `  ` ) ( nurl_print res )
+                        ( nurl_print ` = phi ` ) ( nurl_print ( nurl_llty phi_ty ) )
+                        ( nurl_print ` [ ` ) ( nurl_print tvp )
+                        ( nurl_print `, %` ) ( nurl_print tlbl )
+                        ( nurl_print ` ], [ ` ) ( nurl_print evp )
+                        ( nurl_print `, %` ) ( nurl_print elbl ) ( nurl_print ` ]\n` ) }
                 }
             }
             // The temporaries an arm's value may view, carried past the
@@ -25017,7 +25182,12 @@ unsafe @ gen_cond i lex i syms i cg → s {
                 } {}
             } {}
             // Both arms handed over an owned env: so does the join.
-            ? & c_valu ( __is_closure_ty phi_ty ) { ( mem_retclo_take syms cg res phi_ty ) } {}
+            // (The first instruction of the join that is no phi and reads
+            // its value: a slot's load goes before it.)
+            ? & c_valu ( __is_closure_ty phi_ty ) {
+                ? != 0 ( nurl_str_len c_jload ) { ( __agg_slot_get c_jload c_jslot ( nurl_llty phi_ty ) ) = c_jload `` } {}
+                ( mem_retclo_take syms cg res phi_ty )
+            } {}
             // then-LITERAL beside an OWNED else-arm: the then block was
             // emitted before the else's ownedness was knowable (see
             // t_is_lit above), so uniform ownership is repaired HERE,
@@ -25070,6 +25240,9 @@ unsafe @ gen_cond i lex i syms i cg → s {
         ( nurl_print `, %` ) ( nurl_print elbl ) ( nurl_print ` ]\n` )
         ( nurl_sym_def syms `__last_slice_own_bit__` sb )
     } { ( nurl_sym_def syms `__last_slice_own_bit__` `` ) }
+    // The join's phis are all printed: an aggregate's value is read from
+    // its slot (__ll_is_agg).
+    ? != 0 ( nurl_str_len c_jload ) { ( __agg_slot_get c_jload c_jslot ( nurl_llty phi_ty ) ) = c_jload `` } {}
     // Owned-string provenance of the `?`-result, by the same rule: the
     // result is a fresh owned string only when every LIVE arm produced
     // one. Deterministic on purpose — before this, the marker was the
@@ -25386,10 +25559,14 @@ unsafe @ gen_select i lex i syms i cg i sel_line i sel_col → s {
     ^ ( nurl_str_cat `` `` )
 }
 
+// An enum variant's tag as the IR spells it: the immediate its place in
+// the declaration gives it (gen_enum_decl, read_type_layouts).
+@ __variant_tag s vname → s { ^ ( nurl_sym_get2 g_root_syms vname `__tag` ) }
+
 // emit_or_chain: lower the alternatives of an or-pattern `A | B | C →`.
 // `tag_reg` holds the scrutinee's i64 variant tag. Starting at
-// `first_label`, each alternative loads its variant tag constant,
-// compares, and branches to `tag_ok_label` (the arm body) on a match or
+// `first_label`, each alternative compares it with its variant's tag
+// and branches to `tag_ok_label` (the arm body) on a match or
 // to the next alternative — the last falling through to `next_label`.
 @ emit_or_chain i cg s tag_reg s or_names s tag_ok_label s next_label s first_label → v {
     : ~ s rest ( nurl_str_cat or_names `` )
@@ -25400,13 +25577,10 @@ unsafe @ gen_select i lex i syms i cg i sel_line i sel_col → s {
         : b is_last == 0 ( nurl_str_len rest )
         : s miss_lbl ? is_last next_label ( nurl_cg_lbl cg `oralt` )
         ( nurl_print cur_lbl ) ( nurl_print `:\n` )
-        : s c ( nurl_cg_reg cg )
-        ( nurl_print `  ` ) ( nurl_print c )
-        ( nurl_print ` = load i64, i64* @` ) ( nurl_print vname ) ( nurl_print `\n` )
         : s m ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print m )
         ( nurl_print ` = icmp eq i64 ` ) ( nurl_print tag_reg )
-        ( nurl_print `, ` ) ( nurl_print c ) ( nurl_print `\n` )
+        ( nurl_print `, ` ) ( nurl_print ( __variant_tag vname ) ) ( nurl_print `\n` )
         ( nurl_print `  br i1 ` ) ( nurl_print m )
         ( nurl_print `, label %` ) ( nurl_print tag_ok_label )
         ( nurl_print `, label %` ) ( nurl_print miss_lbl ) ( emit_dbg_eol )
@@ -25796,6 +25970,10 @@ unsafe @ gen_match i lex i syms i cg → s {
     : ~ b phi_ok T
     : ~ i phi_count 0
     : ~ s phi_entries64 ``
+    // The slot an aggregate value reaches the join through, and its type
+    // (__ll_is_agg): made by the first arm that hands one on.
+    : ~ s m_jslot ``
+    : ~ s m_jslot_ll ``
     : ~ b all_int64 T
     : ~ b any_u64 F
     // Fresh-owned-slice provenance across the arms: the match yields a fresh
@@ -26200,13 +26378,9 @@ unsafe @ gen_match i lex i syms i cg → s {
                         ( nurl_print `, ` )
                         ( nurl_print ? ( seq pattern_name `T` ) `1` `0` ) ( nurl_print `\n` )
                     }
-                    { : s enum_const ( nurl_cg_reg cg )
-                        ( nurl_print `  ` ) ( nurl_print enum_const )
-                        ( nurl_print ` = load i64, i64* @` )
-                        ( nurl_print pattern_name ) ( nurl_print `\n` )
-                        ( nurl_print `  ` ) ( nurl_print cmp_reg )
+                    { ( nurl_print `  ` ) ( nurl_print cmp_reg )
                         ( nurl_print ` = icmp eq i64 ` ) ( nurl_print tag_reg )
-                        ( nurl_print `, ` ) ( nurl_print enum_const ) ( nurl_print `\n` )
+                        ( nurl_print `, ` ) ( nurl_print ( __variant_tag pattern_name ) ) ( nurl_print `\n` )
                     }
 
                     // Or-pattern bookkeeping (tag-only; no payload, no
@@ -27327,6 +27501,17 @@ unsafe @ gen_match i lex i syms i cg → s {
                     ( nurl_str_cat entry `` )
                     ( nurl_str_cat phi_entries ( nurl_str_cat `, ` entry ) )
                     = phi_count + phi_count 1
+                    // An aggregate goes to the join through the match's
+                    // slot (arms of another type leave the match without
+                    // a value: phi_ok).
+                    : s __arm_ll ( nurl_llty arm_type )
+                    ? ( __ll_is_agg __arm_ll ) {
+                        ? == 0 ( nurl_str_len m_jslot ) {
+                            = m_jslot ( __agg_slot_new cg __arm_ll )
+                            = m_jslot_ll ( nurl_str_cat __arm_ll `` )
+                        } {}
+                        ? ( seq __arm_ll m_jslot_ll ) { ( __agg_slot_put m_jslot __arm_ll arm_result ) } {}
+                    } {}
                     ? == ( int_width ( nurl_llty arm_type ) ) 0 { = all_int64 F } {}
                     ? ( ty_is_unsigned arm_type ) { = any_u64 T } {}
                     : s entry64 ( nurl_str_cat `[ ` ( nurl_str_cat arm_res64 ( nurl_str_cat `, %` ( nurl_str_cat arm_lbl ` ]` ) ) ) )
@@ -27459,9 +27644,17 @@ unsafe @ gen_match i lex i syms i cg → s {
         ? != 0 ( nurl_str_len fallback_pred ) {
             = phi_full ( nurl_str_cat phi_entries ( nurl_str_cat `, [ undef, %` ( nurl_str_cat fallback_pred ` ]` ) ) )
         } {}
-        ( nurl_print `  ` ) ( nurl_print final_reg )
-        ( nurl_print ` = phi ` ) ( nurl_print ( nurl_llty phi_type ) )
-        ( nurl_print ` ` ) ( nurl_print phi_full ) ( nurl_print `\n` )
+        // (The register an aggregate is read into from its slot, until
+        // that load is printed — below the join's phis, gen_cond's twin.)
+        : ~ b m_jload F
+        ? & != 0 ( nurl_str_len m_jslot ) ( seq m_jslot_ll ( nurl_llty phi_type ) )
+        {  // every arm that arrives stored its aggregate: the join reads
+            // the slot (an arm-less fallback edge reads what a `phi`
+            // would call undef).
+            = m_jload T }
+        { ( nurl_print `  ` ) ( nurl_print final_reg )
+            ( nurl_print ` = phi ` ) ( nurl_print ( nurl_llty phi_type ) )
+            ( nurl_print ` ` ) ( nurl_print phi_full ) ( nurl_print `\n` ) }
         ? & m_allnone == 0 ( nurl_str_len fallback_pred ) { ( __ost_none_add syms final_reg ) } {}
         // (A join of a fresh slice on some arms and one it does not own on
         // the others: the bit that says which, as gen_cond's — agora #664.)
@@ -27473,7 +27666,12 @@ unsafe @ gen_match i lex i syms i cg → s {
             ( nurl_sym_def syms `__last_slice_own_bit__` sbr )
         } { ( nurl_sym_def syms `__last_slice_own_bit__` `` ) }
         // Every arm handed over an owned env: so does the join.
-        ? & m_val ( __is_closure_ty phi_type ) { ( mem_retclo_take syms cg final_reg phi_type ) } {}
+        // (The join's first instruction that is no phi and reads its
+        // value: a slot's load goes before it.)
+        ? & m_val ( __is_closure_ty phi_type ) {
+            ? m_jload { ( __agg_slot_get final_reg m_jslot m_jslot_ll ) = m_jload F } {}
+            ( mem_retclo_take syms cg final_reg phi_type )
+        } {}
         ? ? any_hown ? ( __is_handle_ty ( __udrop_regty phi_type ) ) T ( __nc_held_ty phi_type ) F {
             : ~ s hfull ( nurl_str_cat hown_entries `` )
             ? != 0 ( nurl_str_len fallback_pred ) { = hfull ( nurl_str_cat4 hfull `, [ false, %` fallback_pred ` ]` ) } {}
@@ -27500,6 +27698,9 @@ unsafe @ gen_match i lex i syms i cg → s {
                 ( nurl_sym_def syms `__last_join_vbsel__` ( __match_vb_sels cg m_vbs m_lbls fallback_pred ) )
             } {}
         } {}
+        // The join's phis are all printed: an aggregate's value is read
+        // from its slot.
+        ? m_jload { ( __agg_slot_get final_reg m_jslot m_jslot_ll ) = m_jload F } {}
         ( nurl_sym_set_deep syms `__last_join_lend_key__` ? m_allfresh `` __m_lkey )
         ( nurl_sym_set_deep syms `__last_join_lend_args__` ? m_allfresh `` __m_largs )
         ( nurl_sym_set_deep syms `__last_join_lend_roots__` ? m_allfresh `` __m_lroots )
@@ -29690,7 +29891,11 @@ unsafe @ __bck_fall_ret_record i lex i syms i first_tt s first_val i sxn0 i line
         // after it, so every one at the body's level names them; the
         // function reads the last, gen_fn_decl_concrete.)
         ? & & & != 0 g_rpg_on __blk_ret_val ! g_ret_implicit | == __tail_tt TT_QUEST == __tail_tt TT_QUESTQUEST { = g_rpg_want 1 } {}
+        // (A `^` or the fall-off value at the body's own level: the body's
+        // last statement when its `}` follows, emit_ret_value.)
+        = g_ret_top | == __tail_tt TT_CARET g_ret_implicit
         = last ( gen_stmt lex syms cg )
+        = g_ret_top F
         = g_rpg_want 0
         = g_bck_fall_sx F
         ? != ( nurl_lex_type lex ) TT_RBRACE { ( mem_clo_drop_discarded syms cg last __tail_tt ) } {}
@@ -32686,10 +32891,8 @@ unsafe @ __pfo_bind_lends i syms s name → v {
                 = tag ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print tag ) ( nurl_print ` = extractvalue ` ) ( nurl_print ll ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
             } {}
-            : s c ( nurl_cg_reg cg )
-            ( nurl_print `  ` ) ( nurl_print c ) ( nurl_print ` = load i64, i64* @` ) ( nurl_print vname ) ( nurl_print `\n` )
             : s eq ( nurl_cg_reg cg )
-            ( nurl_print `  ` ) ( nurl_print eq ) ( nurl_print ` = icmp eq i64 ` ) ( nurl_print tag ) ( nurl_print `, ` ) ( nurl_print c ) ( nurl_print `\n` )
+            ( nurl_print `  ` ) ( nurl_print eq ) ( nurl_print ` = icmp eq i64 ` ) ( nurl_print tag ) ( nurl_print `, ` ) ( nurl_print ( __variant_tag vname ) ) ( nurl_print `\n` )
             : s sv ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print sv ) ( nurl_print ` = extractvalue ` ) ( nurl_print ll ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, ` ) ( nurl_print ( nurl_str_int ks ) ) ( nurl_print `\n` )
             : s p ( nurl_cg_reg cg )
@@ -62134,7 +62337,7 @@ unsafe @ gen_member i lex i syms i cg → s {
                             : s idx_val ? != 0 ( nurl_str_len idx_ptr )
                             ( load_var cg idx_lt idx_ptr )
                             ? != 0 ( nurl_str_len idx_glb )
-                            ( load_global syms cg idx_lt fname )
+                            ( load_global syms cg idx_lt fname idx_glb )
                             ( nurl_str_cat `%` fname )
                             // Extract data pointer from slice aggregate
                             : s data_ptr ( nurl_cg_reg cg )
@@ -67526,6 +67729,16 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     // on sym_pop. Without this, `^ msg` in `\ → s { ^ msg }` was checked
     // against the enclosing fn's return type.
     ( nurl_sym_def body_syms `__fn_ret_ty__` ret_type )
+    // (…and an aggregate result its own slot and exit block, never the
+    // enclosing function's: emit_ret_value. A tail call the enclosing
+    // function has just made is not this body's.)
+    : s __cl_agg_exit ? ( __ll_is_agg ( nurl_llty ret_type ) ) ( nurl_cg_lbl cg `clo_ret` ) ( nurl_str_cat `` `` )
+    ( nurl_sym_def body_syms `__agg_ret__` __cl_agg_exit )
+    ( nurl_sym_def body_syms `__ret_val__` `` )
+    : s __cl_tail_saved ( nurl_str_cat g_tail_reg `` )
+    : i __cl_agg_n_saved g_agg_ret_n
+    = g_tail_reg ``
+    = g_agg_ret_n 0
     ( mem_init_return_proof body_syms cg ret_type )
     // A closure answers statically: its callers cannot ask it per call.
     ( nurl_sym_def body_syms `__ret_hown_slot__` `` )
@@ -68342,12 +68555,16 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
         ? ( seq ret_type `void` )
         { ( nurl_print `  ret void` ) ( emit_dbg_eol ) }
         { ( mem_publish_return_proof body_syms cg ret_type )
-            ( nurl_print `  ret ` ) ( nurl_print ( nurl_llty ret_type ) ) ( nurl_print ` ` )
-            ( nurl_print body_val ) ( emit_dbg_eol )
+            // (The body's tail: its last statement.)
+            = g_ret_final T
+            ( emit_ret_value body_syms cg ( nurl_llty ret_type ) body_val )
         }
     }
     {}
+    ? > g_agg_ret_n 0 { ( emit_agg_exit cg __cl_agg_exit ( nurl_sym_get body_syms `__ret_val__` ) ( nurl_llty ret_type ) ) } {}
     ( nurl_print `}\n` )
+    = g_tail_reg __cl_tail_saved
+    = g_agg_ret_n __cl_agg_n_saved
     = g_did_ret outer_did_ret
 
     ( __clo_merge_summaries syms closure_fn_name )
@@ -69908,7 +70125,7 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
     { ( gen_ret_term lex syms cg fn_rt fail_val `` `` ? | __t_bind __t_askip __t_up `` `` ? | __t_bind __t_askip __try_inner_v `` `` ) }
     { ? != 0 ( nurl_str_len dtop )
         { ? ! ( seq fn_rt `void` )
-            { : s rvp ( nurl_sym_get syms `__ret_val__` )
+            { : s rvp ( __ret_slot syms cg )
                 ( nurl_print `  store ` ) ( nurl_print ( nurl_llty fn_rt ) )
                 ( nurl_print ` ` ) ( nurl_print fail_val ) ( nurl_print `, ` )
                 ( nurl_print ( nurl_llty fn_rt ) ) ( nurl_print `* ` ) ( nurl_print rvp ) ( nurl_print `\n` )
@@ -69918,9 +70135,7 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
         }
         { ? ( seq fn_rt `void` )
             { ( emit_call_term `ret void` ) }
-            { ( nurl_print `  ret ` ) ( nurl_print ( nurl_llty fn_rt ) )
-                ( nurl_print ` ` ) ( nurl_print fail_val ) ( emit_dbg_eol )
-            }
+            { ( emit_ret_value syms cg ( nurl_llty fn_rt ) fail_val ) }
         } }
     // Ok path: extract the Ok value from field 1 BY VALUE. With the wide
     // `{ i1, T, E }` layout the payload already sits at its real type T — no
@@ -76350,15 +76565,21 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     ( nurl_sym_set g_fn_escapes `__defer_top_fn__` `` )
     // Pre-allocate return-value slot for defer routing (non-void functions).
     // Unused if no defers are registered; optimiser removes it.
-    : ~ s ret_val_ptr ``
     ? ! ( seq ret_ty `void` )
     { : s p ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print p )
         ( nurl_print ` = alloca ` ) ( nurl_print ( nurl_llty ret_ty ) ) ( nurl_print `\n` )
         ( nurl_sym_def syms `__ret_val__` p )
-        = ret_val_ptr p
     }
-    {}
+    { ( nurl_sym_def syms `__ret_val__` `` ) }
+    // An aggregate result leaves through that slot and one exit block
+    // (emit_ret_value), whether or not a defer is ever registered.
+    : s agg_exit ? ( __ll_is_agg ( nurl_llty ret_ty ) ) ( nurl_cg_lbl cg `fn_ret` ) ( nurl_str_cat `` `` )
+    ( nurl_sym_def syms `__agg_ret__` agg_exit )
+    : i __saved_agg_n g_agg_ret_n
+    : s __saved_tail_reg ( nurl_str_cat g_tail_reg `` )
+    = g_agg_ret_n 0
+    = g_tail_reg ``
     : i base_str g_str_idx
     // Auto-sink inference (critic v0.9.0 §2): reset the side-channel
     // accumulator before the body parses. gen_call's destructor- and
@@ -76898,9 +77119,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
                 ( __dret_xfer cg skip_user_ptr )
                 ( __dret_xfer cg skip_struct_ptr )
                 ( __dret_skip_add ret_ident )
-                ( nurl_print `  store ` ) ( nurl_print ( nurl_llty ret_ty ) ) ( nurl_print ` ` )
-                ( nurl_print last ) ( nurl_print `, ` ) ( nurl_print ( nurl_llty ret_ty ) )
-                ( nurl_print `* ` ) ( nurl_print ret_val_ptr ) ( nurl_print `\n` )
+                ( __agg_slot_put ( __ret_slot syms cg ) ( nurl_llty ret_ty ) last )
                 ( nurl_print `  br label %` ) ( nurl_print dtop ) ( emit_dbg_eol )
             }
             { ( mem_drop_owned syms cg skip )
@@ -76916,8 +77135,9 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
                 ( mem_own_closure_ret_release syms ret_ident )
                 ( mem_drop_closure_envs syms cg )
                 ( mem_publish_return_proof syms cg ret_ty )
-                ( nurl_print `  ret ` ) ( nurl_print ( nurl_llty ret_ty ) )
-                ( nurl_print ` ` ) ( nurl_print last ) ( emit_dbg_eol ) }
+                // (The value the body falls off with: its last statement.)
+                = g_ret_final T
+                ( emit_ret_value syms cg ( nurl_llty ret_ty ) last ) }
         }
         {}
     }
@@ -76941,21 +77161,29 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
         // (The result slot's journal registration, where a return made one,
         // ends: the value is the caller's from the `ret`.)
         ? & ! ( seq ret_ty `void` ) != 0 ( nurl_sym_len g_fn_escapes `__ret_dguard__` ) {
-            ( nurl_print `  call void @nurl_journal_forget_slot(ptr ` ) ( nurl_print ret_val_ptr ) ( nurl_print `)\n` )
+            ( nurl_print `  call void @nurl_journal_forget_slot(ptr ` ) ( nurl_print ( nurl_sym_get syms `__ret_val__` ) ) ( nurl_print `)\n` )
         } {}
         ? ! ( seq ret_ty `void` )
-        { : s rv ( nurl_cg_reg cg )
-            ( nurl_print `  ` ) ( nurl_print rv )
-            ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty ret_ty ) )
-            ( nurl_print `, ` ) ( nurl_print ( nurl_llty ret_ty ) )
-            ( nurl_print `* ` ) ( nurl_print ret_val_ptr ) ( nurl_print `\n` )
-            ( mem_publish_return_proof syms cg ret_ty )
-            ( nurl_print `  ret ` ) ( nurl_print ( nurl_llty ret_ty ) )
-            ( nurl_print ` ` ) ( nurl_print rv ) ( emit_dbg_eol )
+        { ? > g_agg_ret_n 0
+            {  // the result is in its slot already: on to the exit the
+                // returns that never met a defer left through
+                ( mem_publish_return_proof syms cg ret_ty )
+                ( nurl_print `  br label %` ) ( nurl_print agg_exit ) ( emit_dbg_eol ) }
+            { : s rvs ( __ret_slot syms cg )
+                : s rv ( nurl_cg_reg cg )
+                ( __agg_slot_get rv rvs ( nurl_llty ret_ty ) )
+                ( mem_publish_return_proof syms cg ret_ty )
+                ( nurl_print `  ret ` ) ( nurl_print ( nurl_llty ret_ty ) )
+                ( nurl_print ` ` ) ( nurl_print rv ) ( emit_dbg_eol ) }
         }
         { ( emit_call_term `ret void` ) }
     }
     {}
+    // The one exit of an aggregate result, where a return stored into
+    // the slot (emit_ret_value).
+    ? > g_agg_ret_n 0 { ( emit_agg_exit cg agg_exit ( nurl_sym_get syms `__ret_val__` ) ( nurl_llty ret_ty ) ) } {}
+    = g_agg_ret_n __saved_agg_n
+    = g_tail_reg __saved_tail_reg
     ( emit `}` ) ( emit `` )
     // Stop capturing and re-emit with allocas hoisted into the entry block.
     : s __fn_ir ( nurl_print_buf_stop )
@@ -87430,7 +87658,9 @@ unsafe @ __jpb_note i cg s up → v {
 }
 
 // ── Enum declaration: : | Name { Variant (type?)* } ───────────────
-// Each variant becomes a global i64 constant (tag value 0, 1, …).
+// Each variant is its tag (0, 1, … in declaration order), an immediate
+// wherever it is built or tested (`<Variant>__tag`, __variant_tag): the
+// module holds nothing for it.
 
 @ gen_enum_decl i lex i syms → v {
     ( __type_facts_changed )
@@ -87485,12 +87715,11 @@ unsafe @ __jpb_note i cg s up → v {
     // because their inner sub-parsers hit EOF first.)
     ~ & != ( nurl_lex_type lex ) TT_RBRACE != ( nurl_lex_type lex ) TT_EOF {
         : s vname ( nurl_lex_val lex )
-        // Variant names are file-scope constants: each becomes a global
-        // `@X`, and a bare `X` expression must name exactly one enum's
-        // tag. A duplicate — within this enum (`{ X X }`: two tags, one
-        // name) or against ANOTHER enum's variant (two `@X` globals) —
-        // emitted IR only clang rejected, location-free; and had it
-        // linked, every bare `X` would resolve to the wrong enum's tag.
+        // Variant names are file-scope constants: a bare `X` expression
+        // must name exactly one enum's tag. A duplicate — within this
+        // enum (`{ X X }`: two tags, one name) or against ANOTHER enum's
+        // variant — would make every bare `X` resolve to one of the two
+        // tags, whichever enum the value belongs to.
         // Same-position re-registration stays idempotent (import replay).
         ? ( str_contains_word variants_str vname )
         { ( die lex ( nurl_str_cat3
@@ -87504,17 +87733,17 @@ unsafe @ __jpb_note i cg s up → v {
         ? & != 0 ( nurl_str_len __vprev ) ! ( seq __vprev __vpos )
         { ( die lex ( nurl_str_cat ( nurl_str_cat4
             `variant '` vname `' is already declared by enum '` ( nurl_sym_get2 syms vname `__enum_of` ) )
-            ( nurl_str_cat3 `' at ` __vprev `. Variant names are file-scope constants (each becomes a global '@X', and a bare 'X' must name exactly one enum's tag): rename one.` ) ) ) }
+            ( nurl_str_cat3 `' at ` __vprev `. Variant names are file-scope constants (a bare 'X' must name exactly one enum's tag): rename one.` ) ) ) }
         { ( nurl_sym_def g_fn_pos_syms __vkey __vpos ) }
         ( nurl_lex_advance lex )
         = variants_str ? == 0 ( nurl_str_len variants_str )
         ( nurl_str_cat vname `` )
         ( nurl_str_cat variants_str ( nurl_str_cat ` ` vname ) )
-        ( nurl_print `@` ) ( nurl_print vname )
-        ( nurl_print ` = global i64 ` )
-        ( nurl_print ( nurl_str_int tag ) ) ( nurl_print `\n` )
         ( nurl_sym_def syms vname `i64` )
-        ( nurl_sym_def syms ( nurl_str_cat vname `__global` ) `1` )
+        // (A file-scope constant like a `:` global — `__global` — whose
+        // mark carries its value: `=<tag>`.)
+        ( nurl_sym_def syms ( nurl_str_cat vname `__global` ) ( nurl_str_cat `=` ( nurl_str_int tag ) ) )
+        ( nurl_sym_def syms ( nurl_str_cat vname `__tag` ) ( nurl_str_int tag ) )
         // Reverse map variant → owning enum, for the `?`-join variant
         // blessing (gen_cond) and any future "which enum is this tag
         // from" query. First writer wins on a (reported-elsewhere)
@@ -94806,19 +95035,22 @@ unsafe @ priv_resolve i lex i syms s fname → s {
         ? ( seq ( nurl_sym_get2 g_type_layouts name `__kind` ) `enum` ) {
             : ~ s variants ``
             : ~ i widest 0
+            : ~ i vtag 0
             ~ & != ( nurl_lex_type lex ) TT_RBRACE != ( nurl_lex_type lex ) TT_EOF {
                 : s variant ( nurl_lex_val lex )
                 ( nurl_lex_advance lex )
                 = variants ( nurl_str_cat3 variants variant ` ` )
-                // A variant is a file-scope constant, its global `@X` emitted
-                // where gen_enum_decl reaches the enum: known by name from
-                // here, a function above the declaration builds and tests
-                // one as it reads a struct's field (agora #772).
+                // A variant is a file-scope constant, its tag its place in
+                // the declaration: known by name from here, a function
+                // above the declaration builds and tests one as it reads a
+                // struct's field (agora #772).
                 ? == 0 ( nurl_sym_len2 syms variant `__enum_of` ) {
                     ( nurl_sym_def syms variant `i64` )
-                    ( nurl_sym_def syms ( nurl_str_cat variant `__global` ) `1` )
+                    ( nurl_sym_def syms ( nurl_str_cat variant `__global` ) ( nurl_str_cat `=` ( nurl_str_int vtag ) ) )
+                    ( nurl_sym_def syms ( nurl_str_cat variant `__tag` ) ( nurl_str_int vtag ) )
                     ( nurl_sym_def syms ( nurl_str_cat variant `__enum_of` ) name )
                 } {}
+                = vtag + vtag 1
 
                 : ~ i count 0
                 ~ & != ( nurl_lex_type lex ) TT_RBRACE ( could_be_payload_type lex syms ) {
@@ -95442,20 +95674,39 @@ unsafe @ llvm_linkage_init → v {
 // bookkeeping, which the writer folds away (__ir_fold_range): the lines
 // that read a flag or drop by one are left out too, so what is measured is
 // about what is written. Scanned once a function.
+// (…and the plumbing an aggregate's returns leave through, emit_ret_value:
+// a `store` into the result slot with the `br label %fn_ret_N` after it,
+// the exit block's label and its `load`. The optimiser turns them into
+// one phi per field and they are gone; what stays, and is counted, is the
+// exit block's one `ret` — where each return used to have its own. A
+// `vec_get`, two returns of an option, is the size it was.)
 unsafe @ __sp_code_bytes i st i en → i {
     : *u mp # *u # s g_dce_mod
     : ~ i n 0
     : ~ i p st
+    // The bytes the line before this one was counted for, when it was a
+    // `store`; and whether the line after an exit block's label is due.
+    : ~ i store_bytes 0
+    : ~ b exit_load F
     ~ < p en {
         // The line's first byte that is not a blank.
         : ~ i q p
         ~ & < q en == & # i . mp q 255 32 { = q + q 1 }
         : ~ i e q
         ~ & < e en != & # i . mp e 255 10 { = e + e 1 }
+        : s ln # s + # i mp q
+        : b exit_br & > q p | != 0 ( nurl_str_starts ln `br label %fn_ret_` ) != 0 ( nurl_str_starts ln `br label %clo_ret_` )
+        : b exit_lbl & == q p | != 0 ( nurl_str_starts ln `fn_ret_` ) != 0 ( nurl_str_starts ln `clo_ret_` )
+        : b is_load & exit_load >= ( nurl_memmem_range ln - e q ` = load ` 8 ) 0
+        = exit_load exit_lbl
+        ? exit_br { = n - n store_bytes } {}
         // (A comment line, or a line of blanks: a slot, not code. A line
         // that reads a drop flag (`@.__nurl_…`) or drops by one
         // (`@__dropif_…`): bookkeeping the writer folds away.)
-        ? | | >= q e == & # i . mp q 255 59 | >= ( nurl_memmem_range # s + # i mp q - e q `@.__nurl_` 9 ) 0 >= ( nurl_memmem_range # s + # i mp q - e q `@__dropif_` 10 ) 0 {} { = n + n - + e 1 p }
+        ? | | | | | exit_br exit_lbl is_load >= q e == & # i . mp q 255 59 | >= ( nurl_memmem_range ln - e q `@.__nurl_` 9 ) 0 >= ( nurl_memmem_range ln - e q `@__dropif_` 10 ) 0 { = store_bytes 0 } {
+            = n + n - + e 1 p
+            = store_bytes ? != 0 ( nurl_str_starts ln `store ` ) - + e 1 p 0
+        }
         = p + e 1
     }
     ^ n
