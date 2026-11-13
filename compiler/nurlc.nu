@@ -56674,7 +56674,13 @@ unsafe @ gen_assign i lex i syms i cg → s {
                 ? ( mem_clo_in_list syms name )
                 { ( mem_emit_closure_env_drop syms cg name ) }
                 {}
-                ? __asn_move_env { ( mem_clo_release_source syms bck_rhs_val ) } {}
+                ? __asn_move_env {
+                    ( mem_clo_release_source syms bck_rhs_val )
+                    // (f still names the env it gave: lent from the target now,
+                    // no owner to move it out of — `: g f` after it is a second
+                    // name of the target's, and borrows it; agora #835.)
+                    ( mem_clo_mark_lent syms bck_rhs_val T )
+                } {}
                 ? != 0 ( nurl_str_len __asn_slot )
                 { ( nurl_print `  store i8* ` ) ( nurl_print __asn_owner ) ( nurl_print `, i8** ` )
                     ( nurl_print __asn_slot ) ( nurl_print `\n` ) }
