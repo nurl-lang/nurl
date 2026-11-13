@@ -3864,6 +3864,10 @@ unsafe @ note_unsafe_item s pos s what → v {
 // 1 when it is an owner returned by name — its dependencies (field 5 `d`).
 : ~ s g_bck_ret_sx ``
 : ~ i g_bck_ret_dep 0
+// (…and whether the function has any such return by dependencies — what
+// bck_local_source asks of an owner a closed frame declared, `oon_`: kept
+// only then.)
+: ~ i g_bck_dep_ret 0
 // The owned slices a returned join may hand back (their keys) and the value
 // it hands back: mem_drop_owned releases those by identity (__gen_ret).
 : ~ s g_ret_sl_ids ``
@@ -8649,6 +8653,7 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     // over, even where its source expression names one: `n` for a bare
     // `s`, `x` for another view; agora #478.)
     = g_bck_ret_dep ? __ret_dep 1 ? __ret_exp 2 ? __ret_bare ? ( is_ident_tok ret_src_tt ) 3 4 ? & == __ret_cls 2 ! ( is_ident_tok ret_src_tt ) 5 ? __ret_lsx 6 0
+    ? != 0 g_bck_ret_dep { = g_bck_dep_ret 1 } {}
     ( bck_flush_vpass )
     // (A call in it left an argument viewing itself: the statement's
     // effects before the `ret` — the walk stops there — after an `expr` row
@@ -29377,6 +29382,35 @@ unsafe @ __bck_fall_ret_record i lex i syms i first_tt s first_val i sxn0 i line
     ( nurl_print `* ` ) ( nurl_print ( nurl_sym_get2 syms src `__ptr` ) ) ( nurl_print `\n` )
 }
 
+// What a slice binding's `:` decides of its ownership beyond the literal and
+// fresh-call rules (gen_let_or_struct): a join's bit, a move out of an owned
+// slice, a per-call answer, a `: ~` binding's flag — in that order.
+// (`: [i c a` out of an owned slice is a move, as `= dst src` is (#634) and
+// as the walk takes it: c owns the buffer, a's slot is left empty where this
+// runs. Neither listed, c was a second name for a's buffer, which a
+// released under it. A join owning its slice on some paths owns it by the
+// join's bit. A call that answers per call — `@ pick b c [i p → [i { ? c {
+// ^ p } {} … ^ s }` — by that answer: taken for a lend on every call, the
+// owned path leaked. Agora #664, #540.)
+@ __slice_let_post i syms i cg s name s ptr s vt i rhs_tt s rhs_val b is_mut → v {
+    ? ! ( mem_is_slice_ty vt ) { ^ v } {}
+    ? | == rhs_tt TT_QUEST == rhs_tt TT_QUESTQUEST {
+        ? & == 0 ( nurl_str_len ( nurl_sym_get syms `__last_slice_owned__` ) ) != 0 ( nurl_sym_len syms `__last_slice_own_bit__` ) {
+            ( mem_own_add syms name )
+            ( mem_slice_decl_add syms name )
+            ( mem_udrop_flag_set syms cg ptr ( nurl_sym_get syms `__last_slice_own_bit__` ) )
+        } {}
+    } {}
+    ? ( __slice_let_moves syms rhs_tt rhs_val name vt is_mut ) {
+        ( __slice_slot_empty syms rhs_val vt )
+        ( mem_own_add syms name )
+        ( mem_slice_decl_add syms name )
+        ( mem_journal_push_slice cg vt ptr )
+    } {}
+    ( __slice_call_flag syms cg name ptr vt rhs_tt )
+    ( __slice_mut_flag syms cg name ptr vt is_mut )
+}
+
 @ __slice_call_flag i syms i cg s name s ptr s vt i rhs_tt → v {
     ? | | != rhs_tt TT_LPAREN ! ( mem_is_slice_ty vt ) ( mem_slice_owned syms name ) { ^ v } {}
     ? | == 0 ( nurl_str_len ptr ) != 37 ( nurl_str_get ptr 0 ) { ^ v } {}
@@ -36151,6 +36185,7 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
         = g_bck_iter_live 0
         ( bck_put `pmoves` `` )
         ( bck_put `pmaybes` `` )
+        = g_bck_dep_ret 0
         = g_bck_rcty ``
         = g_bck_rcix_ok 0
         = g_bck_depth 0
@@ -53323,7 +53358,7 @@ unsafe @ bck_end_post_defer s st i p i keep i line → s {
         // (…and whether it owned its value when its frame closed: one a
         // return then hands on is this function's to release still,
         // bck_local_source; agora #638.)
-        ? == BCK_OWNED ( bck_st_get out id ) { ( bck_put ( bck_bkey `oon_` ( nurl_str_int id ) ) `1` ) } {}
+        ? & != 0 g_bck_dep_ret == BCK_OWNED ( bck_st_get out id ) { ( bck_put ( bck_bkey `oon_` ( nurl_str_int id ) ) `1` ) } {}
         = out ( bck_st_set out id ( bck_st_raw pre id ) )
         ( bck_partner_unlink id )
     }
@@ -56056,31 +56091,10 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             ( mem_slice_decl_add syms name )
             ( mem_journal_push_slice cg vt ptr ) }
         {}
-        // (A join owning its slice on some paths: the binding owns it by the
-        // join's bit, its drop flag; agora #664.)
-        ? & & == 0 ( nurl_str_len ( nurl_sym_get syms `__last_slice_owned__` ) ) != 0 ( nurl_sym_len syms `__last_slice_own_bit__` ) ( mem_is_slice_ty vt ) {
-            ? | == bck_rhs_tt TT_QUEST == bck_rhs_tt TT_QUESTQUEST {
-                ( mem_own_add syms name )
-                ( mem_slice_decl_add syms name )
-                ( mem_udrop_flag_set syms cg ptr ( nurl_sym_get syms `__last_slice_own_bit__` ) )
-            } {}
-        } {}
-        // (`: [i c a` out of an owned slice: a move, as `= dst src` is (#634)
-        // and as the walk takes it — c owns the buffer, and a's slot is left
-        // empty where this runs. Neither listed, c was a second name for a's
-        // buffer, which a released under it, agora #664.)
-        ? ( __slice_let_moves syms bck_rhs_tt bck_rhs_val name vt is_mutable ) {
-            ( __slice_slot_empty syms bck_rhs_val vt )
-            ( mem_own_add syms name )
-            ( mem_slice_decl_add syms name )
-            ( mem_journal_push_slice cg vt ptr )
-        } {}
-        // (A call that answers per call whether it hands over a slice of its
-        // own — `@ pick b c [i p → [i { ? c { ^ p } {} … ^ s }` — owns its
-        // result by that answer, the binding's drop flag. Taken for a lend
-        // on every call, the owned path leaked, agora #540.)
-        ( __slice_call_flag syms cg name ptr vt bck_rhs_tt )
-        ( __slice_mut_flag syms cg name ptr vt is_mutable )
+        // (A slice binding's ownership where it depends on the path: its drop
+        // flag — __slice_let_post; agora #664, #540. Asked of a slice type
+        // only, by its first byte.)
+        ? == 123 ( nurl_str_get vt 0 ) { ( __slice_let_post syms cg name ptr vt bck_rhs_tt bck_rhs_val is_mutable ) } {}
         // (A value block whose tail is a slice the block bound: the new
         // binding takes the buffer over from it, as `= dst src` does. Both
         // listed, the block's binding released the buffer the new one was
@@ -56507,21 +56521,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
                 ( mem_slice_decl_add syms name )
                 ( mem_journal_push_slice cg ptype ptr ) }
             {}
-            ? & & == 0 ( nurl_str_len ( nurl_sym_get syms `__last_slice_owned__` ) ) != 0 ( nurl_sym_len syms `__last_slice_own_bit__` ) ( mem_is_slice_ty ( nurl_llty ptype ) ) {
-                ? | == bck_rhs_tt TT_QUEST == bck_rhs_tt TT_QUESTQUEST {
-                    ( mem_own_add syms name )
-                    ( mem_slice_decl_add syms name )
-                    ( mem_udrop_flag_set syms cg ptr ( nurl_sym_get syms `__last_slice_own_bit__` ) )
-                } {}
-            } {}
-            ? ( __slice_let_moves syms bck_rhs_tt bck_rhs_val name ( nurl_llty ptype ) is_mutable ) {
-                ( __slice_slot_empty syms bck_rhs_val ( nurl_llty ptype ) )
-                ( mem_own_add syms name )
-                ( mem_slice_decl_add syms name )
-                ( mem_journal_push_slice cg ( nurl_llty ptype ) ptr )
-            } {}
-            ( __slice_call_flag syms cg name ptr ( nurl_llty ptype ) bck_rhs_tt )
-            ( __slice_mut_flag syms cg name ptr ( nurl_llty ptype ) is_mutable )
+            ? | == 91 ( nurl_str_get ptype 0 ) == 123 ( nurl_str_get ptype 0 ) { ( __slice_let_post syms cg name ptr ( nurl_llty ptype ) bck_rhs_tt bck_rhs_val is_mutable ) } {}
             // (…and a value block whose tail is a slice the block bound:
             // the new binding takes the buffer over, as above.)
             ? & & == bck_rhs_tt TT_LBRACE ( mem_is_slice_ty ptype ) != 0 ( nurl_sym_len syms `__tail_name__` ) {
