@@ -2,12 +2,17 @@
 
 ## Status
 
-**A3 is proven** (`A3.claim : A3.Claim` in `A3/Claim.lean`, `A3.claim_made` in `A3/Make.lean`). `A3/Defs.lean`
+**A3 is proven** (`A3.claim_full : A3.ClaimFull` and `A3.claim_made_full` in
+`A3/ClaimFull.lean`, from `A3.claim : A3.Claim` in `A3/Claim.lean` and
+`A3.claim_made` in `A3/Make.lean`). `A3/Defs.lean`
 defines A3.0's configuration (`Thread`, `Cfg`, `Cfg.view`), its steps
 (`TStep`: a thread takes A2's own `Step`; `spawn`), what a step touches
 (`Touch`), a race (`Race`), and the claim (`Claim`: `MemorySafe ∧ RaceFree ∧
-NoLeak` for every program A2 types); `../README.md` lists the modules of
-the proof. A3.1's `Arc` and A3.2's `Locked` are mechanized in the same
+NoLeak` for every program A2 types; the stated claim, `ClaimFull`, Agora
+#818: `MemorySafe ∧ RaceFree ∧ NoLeak ∧ CellAdequate`, where `CellAdequate`
+says every check-out of a cell's block is a `CellOp` of its thread, so
+`RaceFree` sees every cell race, `A3.reach_frame_cellOp`); `../README.md`
+lists the modules of the proof. A3.1's `Arc` and A3.2's `Locked` are mechanized in the same
 claim (A3.1's and A3.2's mechanization, below; A3.2's second cut adds
 shares in lock payloads and `locked_take` / `locked_restore`, and what it
 leaves out is listed there), and so are A3.3's `RwLocked` (A3.3's
@@ -2046,6 +2051,17 @@ where the call places it).
   on which a check-out through the lock share changes the cell's state as
   no `CellOp`: a race the claim would miss. `GlobsOK` refuses it
   (`A3.mix_not_globsOK`).
+- *The claim says so* (Agora #818): `A3.ClaimFull` concludes, beside
+  `MemorySafe`, `RaceFree` and `NoLeak`, `A3.CellAdequate`: in every
+  reached configuration, every `scopeL k` frame on a thread's spine where
+  some value holds a cell share of `k` (`Cfg.Holds (.cell k)`, a cell's
+  block) is a `CellOp` of that thread. `A3.claim_full` proves it from
+  `A3.claim` and `A3.reach_frame_cellOp` on `A3.claim`'s premises, and
+  `A3.claim_made_full` from `A3.claim_made` (on every make's run too,
+  `A3.made_safe_full`). It is stated beside `Claim` (A3/ClaimFull.lean),
+  not in its place: `reach_frame_cellOp`'s invariants (A3/LockExcl.lean,
+  A3/LockRoot.lean) build on A3/Reap.lean, so on `A3.claim`,
+  `A3.claim_made` and the witnesses that use them.
 
 **Probes** (`tools/fuzz/holes/*.nu`). In the model, a thread's closure is
 the spawned function, and its captures are `sink` arguments.
@@ -4511,9 +4527,10 @@ needed. No rule asks for it now; it stays as the bottom of the order.
 - *Phase D*, as above: the runtime's count of a handle's block is the cell
   shares the model's owned slots and lock payloads hold.
 - (Since proven: that a thread inside a check-out of a cell holds an
-  owner's share of it, as a lemma, `CellOp`'s second case:
+  owner's share of it, `CellOp`'s second case:
   `A3.reach_frame_cell_owner`, `A3.reach_frame_cellOp`, Agora #808 /
-  #815.)
+  #815; and, Agora #818, a conjunct of the stated claim, `A3.CellAdequate`
+  in `A3.ClaimFull`.)
 - A store of a borrowed handle into an owner (an implicit copy), and
   `% Sync` / `% NotSend` assertions on a program's own types (A3.5b's and
   A3.5c's rest: a negative marker only removes typings).

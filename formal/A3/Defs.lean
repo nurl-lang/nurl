@@ -3230,6 +3230,29 @@ theorem NoLeak.empty {P : Prog} {spawn : Nat → Bool} {s : Stmt} {nv : Nat}
     | root hv _ => obtain ⟨g, hg⟩ := hv; cases hg
     | pay _ _ _ ih => exact ih
 
+/-- Some value of the configuration holds `w`: a thread's slot (a live
+    binding or a dead one), a block's payload or a module global.  A block
+    `k` some value holds a cell share of (`C.Holds (.cell k)`) is a cell's
+    block (a library handle's state). -/
+def Cfg.Holds (C : Cfg) (w : Val) : Prop :=
+  (∃ (j : Nat) (t : Thread) (x : Var) (o : Bool) (v : Val),
+      C.ths[j]? = some t ∧ t.st x = some ⟨o, some v⟩ ∧ Sub w v) ∨
+  (∃ (k : Nat) (t : Ty) (kd : BKind) (v : Val), C.blk k = some ⟨t, kd, some v⟩ ∧ Sub w v) ∨
+  (∃ (g : Nat) (v : Val), C.gl g = some v ∧ Sub w v)
+
+/-- **A3.5, Agora #818: race freedom is adequate for cells.**  In every
+    configuration reachable from `C0`, a thread inside a check-out of a
+    cell's block (a `scopeL k` frame on its spine, where some value of the
+    configuration holds a cell share of `k`) is on a step on the cell
+    (`CellOp`): it holds an owner's share of the cell.  `CellOp` asks that
+    share of a step inside a check-out, so this is what makes `RaceFree` see
+    every two threads changing one cell's state, which the runtime's
+    `withCell` does with no lock: no check-out of a cell's block is outside
+    `CellOp` (through a lock share of the block, say). -/
+def CellAdequate (P : Prog) (spawn : Nat → Bool) (C0 : Cfg) : Prop :=
+  ∀ C, Reach P spawn C0 C → ∀ (i : Nat) (t : Thread) (K : Stmt → Stmt) (k : Nat) (u : Ty) (x : Var) (b : Stmt),
+    C.ths[i]? = some t → Redex t.s K (.scopeL k u x b) → C.Holds (.cell k) → CellOp t k
+
 /-- A3.5's second cut: lock block `k'` of `B` holds a share of cell `k` in its
     payload, while the payload is in the block (a lock's, a cell's state, a
     channel's queue).  A3's confinement counts it as a place a cell's shares
@@ -3320,13 +3343,27 @@ structure GlobsOK (P : Prog) (G : Globs) : Prop extends GlobsTyped P G where
     spawn runs the crossing check, `SendCheck`, and a race includes two
     threads changing one library handle's state, `CellRace`; A3.6: the start
     holds the module globals, `GlobsOK`, and what they reach is left at the
-    end). -/
+    end).  The stated claim is `ClaimFull`, which adds (Agora #818) that this
+    race freedom is adequate for cells (`CellAdequate`). -/
 def Claim : Prop :=
   ∀ (P : Prog) (spawn : Nat → Bool) (G : Globs) (s : Stmt) (Δ : Ctx) (nv : Nat),
     ProgOK P → ProgCodes P → SpawnOK P spawn → GlobsOK P G →
     StmtT P (fun _ => none) [] s Δ → s.src = true → s.codesOK P → (∀ v ∈ s.vars, v < nv) →
     MemorySafe P spawn (Cfg.start G s nv) ∧ RaceFree P spawn (Cfg.start G s nv) ∧
       NoLeak P spawn (Cfg.start G s nv)
+
+/-- **The A3 claim, in full** (Agora #818): `Claim`'s premises and
+    conclusions, and race freedom's adequacy for cells (`CellAdequate`):
+    every check-out of a cell's block is a step on the cell, so `RaceFree`,
+    which counts such steps through `CellOp`, sees every cell race.
+    `A3.claim_full` proves it (A3/ClaimFull.lean), from `A3.claim` and
+    `A3.reach_frame_cellOp`. -/
+def ClaimFull : Prop :=
+  ∀ (P : Prog) (spawn : Nat → Bool) (G : Globs) (s : Stmt) (Δ : Ctx) (nv : Nat),
+    ProgOK P → ProgCodes P → SpawnOK P spawn → GlobsOK P G →
+    StmtT P (fun _ => none) [] s Δ → s.src = true → s.codesOK P → (∀ v ∈ s.vars, v < nv) →
+    MemorySafe P spawn (Cfg.start G s nv) ∧ RaceFree P spawn (Cfg.start G s nv) ∧
+      NoLeak P spawn (Cfg.start G s nv) ∧ CellAdequate P spawn (Cfg.start G s nv)
 
 /-- The view of the initial configuration is A2's empty store. -/
 theorem init_view (s : Stmt) (nv : Nat) :
