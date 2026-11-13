@@ -1019,8 +1019,10 @@ the last cut, below.)
 2. *The check-out of a `Vec D`.* The `Locked D` cut's three closed paths
    cover it: `hna` (no `assign`), the give-back's check (`sendCheck_noArc`,
    of any type holding no share), `locked_restore`'s `dtorFree`; the
-   in-place drops (`free`, `vec_truncate`, `vec_clear`, `vec_set`,
-   `withElem`) ask elements owning no destructor value; a pop's element is
+   model's in-place drops (`free`, the edits `trunc` and `set`, i.e.
+   `vec_truncate` and `vec_set`, and `withElem`; `vec_clear` is a
+   truncation to 0, or code, `A2/DropCode.lean`) ask elements owning no
+   destructor value; a pop's element is
    an owned destructor value, which only a `letd` binds. A push needs no new
    rule. The orphaned block is reaped at the `Vec`'s type and its frame
    drains it.
@@ -1036,8 +1038,9 @@ the last cut, below.)
 4. *A closed channel's send* used to free the value with no code
    (`Frees`). `EvalR.chanSendClosed` now moves it into a fresh lock block
    of the element type (`t.undtor = prod (vec s) int`, read off the
-   channel's type) that no share names; the marking sweep that ends the
-   step frees it, or marks it `dead` for the sending thread to reap: nurlc's
+   channel's type) that no share names (`closed_send_parks` proves that
+   much); the marking sweep that ends the step is then to free it, or mark
+   it `dead` for the sending thread to reap (read off the steps): nurlc's
    `chan_send` drops its unqueued (inferred-`sink`) parameter before it
    returns, on the sender. The A3 proofs take it as `locked_new`'s block
    (`CellKeep.moveIn`, `EvalR.ownedId`, `Grows`, `lift` / `restrict` /
@@ -1055,7 +1058,8 @@ its state `glueV`'s struct, one value sent and never received, the share
 dropped: `main_typed`, `main_safe`, `main_no_leak`, `main_no_leak_panic`,
 `last_drop_reaps`, `reap_runs_glue`, `closed_send_parks`,
 `A3.chanDtor_claim`). Read off the steps, not proved: that the glue's body
-drains the queue, and that a typed check-out body leaves the binding
+drains the queue, that the parked block of a closed channel's send is
+marked and reaped by the sender (no typed witness closes a channel), and that a typed check-out body leaves the binding
 holding its value; no run is traced, and no receive of a destructor value
 has a witness. Still refused: a channel of destructor values holding a
 share, and the plain `prod (vec D) int` lock payload (no glue).
@@ -1552,7 +1556,9 @@ lock block's payload.
 runtime's `ChImpl` is a mutex, a condition variable, a queue `Vec A`, a
 `closed` flag and the waiters' lists. The model keeps the queue and the
 flag, as the payload of A3.2's lock block: `Channel s` is
-`Ty.lk (.prod (.vec s) .int)`, and its payload is
+`Ty.lk (.prod (.vec s) .int)` (or, Agora #755, a lock of that struct under
+its glue, `Ty.dtor g (.prod (.vec s) .int)`, `Ty.ChanOf`: a channel of
+destructor values, below), and its payload is
 `pair (node s c d es) (int f)`, with `es` the queue from the front and `f`
 the flag (0 is open).
 - The flag is a pair's second field, not a field of `Blk` or a third
@@ -1576,7 +1582,8 @@ the flag (0 is open).
 
 **The rules.**
 - `Rhs.chanSend a y` (`chan_send a y`), typed by `RhsT.chanSend`:
-  - `a` is a live share of type `lk (prod (vec s) int)`, and `y` a live `s`,
+  - `a` is a live share of type `lk (prod (vec s) int)` (Agora #755: or of
+    that struct under its glue, `Ty.ChanOf`), and `y` a live `s`,
     handed over by `PushArg` as `vec_push` takes it (an owner moves and its
     entry dies, an integer is copied). The answer is an integer (`intE`).
   - `s` holds no view, no closure and no share: `Ty.ok (lk _)`'s condition,

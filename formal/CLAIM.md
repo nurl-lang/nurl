@@ -250,12 +250,17 @@ the LLVM / C11 memory model rather than redefining it.
       `chan_send` moves the value to the back of the queue, out of the
       sender's part, or drops it when the channel is closed (answer 0):
       since Agora #755 it moves it into a fresh lock block of the element
-      type that no share names, which the marking sweep that ends the step
-      frees (a value that owns no destructor value) or marks `dead` for the
+      type that no share names (`EvalR.chanSendClosed`;
+      `A3.ChanDtorWitness.closed_send_parks` proves the value lands
+      there). The marking sweep that ends the step is then to free it (a
+      value that owns no destructor value) or mark it `dead` for the
       sending thread to reap (a destructor value: its destructor runs on
-      the sender, as nurlc's `chan_send` drops its unqueued `sink`
-      parameter before it returns; `EvalR.chanSendClosed`,
-      `A3.ChanDtorWitness.closed_send_parks`).
+      the sender, as nurlc's `chan_send` drops its unqueued
+      inferred-`sink` parameter before it returns). That the parked block
+      is marked and reaped by the sender is read off the steps, not
+      proved: no lemma discharges `Mem.sweepD_marks`'s no-reference
+      premises for the fresh block, and no typed witness closes a
+      channel.
       `chan_recv` moves the front out to the receiver, owned (an option:
       none when closed and empty), and waits while the queue is empty and
       open (`RBlocked`). `chan_try_recv` answers none at once, and
@@ -814,10 +819,10 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   any depth (`Ty.nest`, `Ty.dnest`; witness `A2.DtorWitness.main11_safe`),
   and a view's element (a view owns nothing), and (Agora #755) an `Arc`'s
   payload, which the reap of the orphaned block binds at its own type in a
-  destructor frame that drains it (3d below). It is refused as a lock's or
-  a cell's payload (each of these asks `!vecD` of its part; a lock's or a
-  cell's payload owns no destructor value, or (Agora #755) is one at its
-  top, never a `Vec` of them, 3d below); every `Vec` in a binding's type
+  destructor frame that drains it (3d below), and (Agora #755's last cut)
+  a lock's or a cell's payload (`Ty.lkPay`: one that holds no share; the
+  check-out binds it at its own type and gives it back, and the reap of the
+  orphaned block drains it, `Locked (Vec D)` below); every `Vec` in a binding's type
   has elements that own no destructor value or are of a destructor type or
   such `Vec`s in turn (`A2.Dtor.vecs_dtor_free`). Its binder
   is `letd x f r s`,
@@ -983,8 +988,10 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   zero bytes in the slot and nothing marks it taken, so the last
   `Locked_drop` runs the destructor a second time, on the zeros (and
   `rc_take` / `rc_restore` share the design). The runtime must match the
-  model; until it does, the claim does not cover a `Locked D` taken and
-  never restored before its last share goes. Witness: `A3.LockDtorWitness.main` (a
+  model; until it does, the claim does not cover a `Locked D` (or, since
+  the last cut, a `Locked (Vec D)` or a channel of `D`, whose `locked_take`
+  the model treats the same way) taken and never restored before its last
+  share goes. Witness: `A3.LockDtorWitness.main` (a
   `Locked` of a destructor value, updated through `locked_apply` with a
   closure that takes it `inout`, its share dropped: typed, `main_safe`,
   `main_no_leak`, `main_no_leak_panic`; `A3.lockDtor_claim`: `A3.claim`
@@ -1013,9 +1020,11 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   lock and cell cases no longer ask `!vecD`). The check-out binds the `Vec`
   at its own type; the body may push to it and pop from it (a popped
   element is an owned destructor value, which only a `letd` binds), and
-  drops no element in place (`free`, `vec_truncate`, `vec_clear`,
-  `vec_set` and `withElem` ask elements that own no destructor value, as
-  for any `Vec`); `hna` still refuses an `assign` to the binding; the
+  drops no element in place (the model's in-place drops, `free`, the
+  edits `trunc` and `set` (`vec_truncate`, `vec_set`) and `withElem`, ask
+  elements that own no destructor value, as for any `Vec`; `vec_clear` has
+  no form of its own: it is a truncation to 0, or for a `Vec D` code the
+  calculus types, `A2/DropCode.lean`); `hna` still refuses an `assign` to the binding; the
   give-back's crossing check cannot fail (`sendCheck_noArc` is of any type
   that holds no share); `locked_restore` still asks `dtorFree`. So the
   `Locked D` cut's three closed paths cover it unchanged. When the last share
@@ -1053,14 +1062,18 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   option's glue binds (`letv` refuses a type that holds a destructor
   value), so the receiver's binding runs its destructor. A `chan_send` to
   a closed channel parks the value in a fresh lock block of the element
-  type (`EvalR.chanSendClosed`), reaped by the sender (above). Witness:
+  type (`EvalR.chanSendClosed`, `closed_send_parks`), for the marking
+  sweep to mark and the sender to reap (above). Witness:
   `A3.ChanDtorWitness.main` (a channel of `DT`, one value sent and never
   received, the only share dropped: `main_typed`, `main_safe`,
   `main_no_leak`, `main_no_leak_panic`, `last_drop_reaps`,
   `reap_runs_glue`, `closed_send_parks`; `A3.chanDtor_claim`,
   `A3.chanDtor_reaps`). Read off the steps, not proved: that the glue's
   body drains the queue (its typing, `A2.DtorWitness.glueV_body`, binds
-  the queue by `letd` at `vec DT`, whose frame's end is the drain); no
+  the queue by `letd` at `vec DT`, whose frame's end is the drain); that
+  the parked block of a closed channel's send is marked and reaped by the
+  sender (`closed_send_parks` proves only that the value lands in a fresh
+  lock block; no typed witness closes a channel); no
   theorem traces the run, and no receive of a destructor value is given a
   witness. Not typed: a channel of destructor values that hold a share
   (`Ty.lkPay`'s `!hasArc`, stricter than nurlc), or of values holding one

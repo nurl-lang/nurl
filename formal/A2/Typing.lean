@@ -770,7 +770,8 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       Γ y = some Ey → Ey.live = true → Ey.ty = s → PushArg Γ F y Ey s D Γ1 →
       RhsT Γ F (.chanSend a y) intE Γ1
   /-- A3.4: `chan_recv` / `chan_try_recv`, through a live share of a channel
-      (`Channel s` is `lk (prod (vec s) int)`: its queue and its flag): an
+      (`Channel s` is `lk (prod (vec s) int)`: its queue and its flag, or,
+      Agora #755, that struct under its glue, `Ty.ChanOf`): an
       owned `Option s` (`sum int s`), holding nothing (`s` holds no view:
       `Ty.ok`; the shares it holds the queue's block kept alive). -/
   | chanRecv {w : Bool} {a : Var} {E : Entry} {s : Ty} :

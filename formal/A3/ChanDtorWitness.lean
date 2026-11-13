@@ -39,10 +39,12 @@ dropping thread.  As for the other witnesses, no theorem traces the run.
 
 A `chan_send` to a closed channel does not queue the value: it moves it
 into a fresh lock block of the element type that no share names
-(`EvalR.chanSendClosed`), which the marking sweep that ends the step marks
-`dead` and the sending thread reaps (`closed_send_parks`, then
-`Mem.sweepD_marks` at a lock block), as nurlc's `chan_send` drops the value
-before it returns.  The receiver's binding of a `chan_recv` of destructor
+(`EvalR.chanSendClosed`; `closed_send_parks` proves that much), which the
+marking sweep that ends the step is to mark `dead` for the sending thread
+to reap, as nurlc's `chan_send` drops the value before it returns.  That
+it is marked and reaped is read off the steps (`Mem.sweepD_marks` at a
+lock block, whose no-reference premises are not discharged here for the
+fresh block), not proved, and no typed witness closes a channel.  The receiver's binding of a `chan_recv` of destructor
 values is an `Option D`, which only a `letd` with the option's glue binds
 (`letv` refuses a type that holds a destructor value): no witness of a
 receive is given here. -/

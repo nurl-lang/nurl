@@ -443,9 +443,9 @@ to a `letd` frame of its own (`reapV_drains`, as
 `Vec`'s elements in index order.  The check-out's end gives the `Vec` back
 (`scopeL_end_gives_back` at `t = vec DT`: the type holds no share), and the
 body gives the binding no other value (`StmtT.withLock`'s `hna`): a push is
-no assignment, and the rules that would drop elements in place (`free`,
-`truncate`, `clear`, `vec_set`, `withElem`) ask elements that own no
-destructor value. -/
+no assignment, and the model's in-place drops (`free`, the edits `trunc`
+and `set`, `withElem`; `vec_clear` is a truncation to 0, or code,
+`A2/DropCode.lean`) ask elements that own no destructor value. -/
 
 /-- `: a 1  : b 2  :drop v ( vec_new DT )  : l ( locked_new v )
      ( locked_update l @ w { :drop x ( pair a b )  ( vec_push w x ) } )`

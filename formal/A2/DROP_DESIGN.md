@@ -542,7 +542,7 @@ made it:
 | a closure's or a trait object's environment | the captures' destructors | the closure's glue calls its drop method, whose code takes the environment owned and binds it under `letd`s (Agora #609, `ClosureGlueOK`, `Step.callcD`); it is called lent, through its binding or a borrow of the destructor type (Agora #651); a method that changes the environment is refused for the class |
 | a panic's unwind through any of these | the journal runs each, once | `scopeP` frees in one step, except at `scopeD` |
 | an `Arc` / lock block's payload when its last share goes (A3) | on the thread that drops the last share | an `Arc` of a destructor type, or (Agora #755) of a drained `Vec` of them: the marking sweep marks the block `dead`, the same thread reaps it into a destructor frame at the payload's own type, which drains a `Vec` (Agora #610, A2's `Steps`; Agora #755 item 1, A3's `TStep`: the configuration's marking sweep and the same thread's reaps); a lock's or a cell's destructor value, or drained `Vec` of them, that holds no share likewise (Agora #755, `Locked D`, `Locked (Vec D)`); a channel's queue of them likewise, its state under its glue, whose frame drains the queue (Agora #755); any other lock's or cell's, or an `Arc`'s holding one in a field of a type with no destructor of its own: refused (`Ty.ok`) |
-| a value `chan_send` does not queue (closed channel) | dropped in `chan_send`, on the sender | Agora #755: moved into a fresh lock block of the element type, which the marking sweep frees (no destructor value) or marks for the sending thread to reap (`EvalR.chanSendClosed`) |
+| a value `chan_send` does not queue (closed channel) | dropped in `chan_send`, on the sender | Agora #755: moved into a fresh lock block of the element type (`EvalR.chanSendClosed`), which the marking sweep frees (no destructor value) or marks for the sending thread to reap (read off the steps) |
 
 ### Semantics
 
@@ -1070,8 +1070,11 @@ each one shrinks `CLAIM.md`'s exception:
         operations' rules take the plain payload or that one; their
         preservation lemmas read the payload through `Ty.undtor`).
      2. *The check-out of a `Vec D`.* Unchanged rules: `hna` refuses an
-        `assign` to the binding; `free`, `vec_truncate`, `vec_clear`,
-        `vec_set` and `withElem` ask elements that own no destructor value;
+        `assign` to the binding; the model's in-place drops, `free`, the
+        edits `trunc` and `set` (`vec_truncate`, `vec_set`) and `withElem`,
+        ask elements that own no destructor value (`vec_clear` has no form
+        of its own: a truncation to 0, or for a `Vec D` code the calculus
+        types, `A2/DropCode.lean`);
         a popped element is owned and only a `letd` binds it; the
         give-back's crossing check cannot fail on a type that holds no share
         (`sendCheck_noArc`, generic in the type); `locked_restore` asks
@@ -1090,9 +1093,10 @@ each one shrinks `CLAIM.md`'s exception:
         a closed channel would have been released without running. Now the
         value goes into a fresh lock block of the element type (read off the
         channel's type, `t.undtor = prod (vec s) int`) that no share names;
-        the marking sweep that ends the step frees it if it owns no
-        destructor value, else marks it `dead` and the sending thread reaps
-        it (as nurlc's `chan_send`, whose inferred-`sink` parameter is
+        the marking sweep that ends the step is to free it if it owns no
+        destructor value, else mark it `dead` for the sending thread to reap
+        (read off the steps: `A3.ChanDtorWitness.closed_send_parks` proves
+        only that the value lands in the fresh block) (as nurlc's `chan_send`, whose inferred-`sink` parameter is
         dropped on its closed path before it returns). Its preservation is
         `locked_new`'s (`rhs_lockBlk_post`, the element's lock-block facts
         from the channel's, `chan_elem_blk`). `DeadCodes` is now over
@@ -1108,7 +1112,10 @@ each one shrinks `CLAIM.md`'s exception:
      panic), with the mark-and-reap step lemmas, A3's claim
      (`A3.lockVecDtor_claim`, `A3.chanDtor_claim`) and the A3 reap instance
      (`A3.lockVecDtor_reaps`, `A3.chanDtor_reaps`). Read off the steps, not
-     proved: that the glue's body drains the queue; no run is traced.
+     proved: that the glue's body drains the queue; that the parked block of
+     a closed channel's send is marked and reaped by the sender (no lemma
+     discharges `Mem.sweepD_marks`'s no-reference premises for the fresh
+     block, and no typed witness closes a channel); no run is traced.
    - **Agora #755 item 1, A3's threads** (`A3/Mark.lean`, `A3/Reap.lean`).
      `TStep.thread` ends a thread's step with the configuration's marking
      sweep (`Cfg.sweepD`: `sweepBlkD` / `sweepAllocD` from `Cfg.roots`,

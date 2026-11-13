@@ -1184,9 +1184,10 @@ theorem atomic_pres {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {k n n'
 
 /-! ### A3.4: channels
 
-A `Channel s` is a lock block of type `prod (vec s) int`: its payload is the
-queue and the closed flag.  Each operation changes the payload in place, in
-one step. -/
+A `Channel s` is a lock block of type `prod (vec s) int`, or (Agora #755)
+of that struct under its glue (`Ty.dtor g (prod (vec s) int)`, `Ty.ChanOf`;
+a channel of destructor values): its payload is the queue and the closed
+flag.  Each operation changes the payload in place, in one step. -/
 
 /-- A tree of a type that holds no view views nothing, itself least. -/
 theorem WFv.selfFree_noView {t : Ty} {v : Val} (hw : WFv t v) (hvf : t.holdsView = false) : SelfFree v :=

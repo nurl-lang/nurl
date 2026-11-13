@@ -779,7 +779,7 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
       or a drained `Vec` of them, `Ty.lkPay`) marks it `dead` for this
       thread to reap before its next step (`Settle`, A3's `CSettle`): its
       destructor runs on the sending thread, as nurlc's `chan_send` drops
-      the value it did not queue (its parameter, a `sink`) before it
+      the value it did not queue (its parameter, an inferred `sink`) before it
       returns. -/
   | chanSendClosed {a y : Var} {o : Bool} {k : Nat} {t s : Ty} {q : Val} {f : Nat} {v : Val} {m1 : Mem} :
       m.st a = some ⟨o, some (.lk k)⟩ → TakeVal m y v m1 →
