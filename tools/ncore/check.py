@@ -392,6 +392,11 @@ class FnCheck:
         sub = hsub(av.held, path) if path else av.held
         if av.own in ("O", "P"):
             if not path:
+                if (av.own == "P" and ty is not None and ty[0] in VIEW_TYPES
+                        and self.fn.modes[self.pidx[vid]] != "sink"):
+                    # a raw string or slice parameter is a view the caller
+                    # lent: read, it is that view, never an owner to move
+                    return AV("L", {self.loan(st, site, (vid, ()), "view")}, {(vid, ())}, av.held)
                 return AV(av.own, av.loans, {(vid, ())}, av.held)
             if ty is not None and ty[0] in VIEW_TYPES:
                 v = self.view_value(sub)
