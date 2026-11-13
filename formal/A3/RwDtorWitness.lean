@@ -18,13 +18,16 @@ view's share of the lock block, keeps the lock block reached
 (`view_keeps_lock`), so the payload is never an orphan while a reader lives.
 The lock block alone owns the payload.  When the lock's last share goes
 after every guard, its views swept, so that no slot's value and no block's
-payload refers to the lock block (`A3.LockDtorWitness.last_drop_reaps`'
-hypotheses, of a lock block of `DT`), the marking sweep marks it `dead` and
+payload refers to the lock block, the marking sweep marks it `dead` and
 the same thread reaps it, the reap's frame running the payload's
-destructor.  The other order, a guard dropped after the lock's last share
-(its view still refers to the lock block, so `last_drop_reaps` does not
-apply; the sweep that ends the guard's drop marks the lock block), is not
-yet a lemma (Agora #831).
+destructor (`A3.LockDtorWitness.last_drop_reaps`).  Agora #831: in the
+other order, a guard dropped after the lock's last share, the sweep that
+ends the guard's drop finds the guard's view unreached (it removes it: a
+view is never pinned) and the lock block referred to by that view alone:
+the two are cut off from the roots together (`A2.CutOff`, `view_cutOff`),
+so the sweep marks the lock block `dead` all the same and the thread that
+dropped the guard reaps it (`guard_drop_reaps`, over the generalised
+`A3.TStep.last_drop_reaps`; on A2's `Steps`, `guard_drop_reaps_settle`).
 
 Before Agora #804 the read guard asked a payload that owns no destructor
 value (the type-level reading of the view as a copy of the payload;
@@ -55,26 +58,33 @@ refused at run time only (`SpawnOK` admits it, `spawn_guard`).  So a lock's
 payload reaches no view, and its give-back's crossing check passes
 (`A3.LockDtorWitness.giveCheck_typed`).
 
-`main` makes a destructor value (`DT`, `A2/DtorWitness.lean`), moves it into
-an `RwLocked` (`rw_new` is `locked_new`), reads it through a guard
-(`Stmt.withRead`: the guard `g`, the lend `y` of the lock's share and the
-payload, the payload `x` lent), and drops the guard, then the lock's only
-share:
+`main` (Agora #831) makes a `Vec` of destructor values (`vec DT`,
+`A2/DtorWitness.lean`; the `Vec` owns heap, its buffer, and one element is
+pushed), moves it into an `RwLocked` (`rw_new` is `locked_new`), reads it
+through a guard (`Stmt.withRead`: the guard `g`, the lend `y` of the lock's
+share and the payload, the payload `z` lent), and, the guard still bound,
+moves the lock's only share out of `l` into `l2`, whose scope ends first:
+the lock's last share is dropped before the guard.
 
 ```
-: a 1  : b 2  :drop d ( pair a b )  : l ( rw_new d )
-: g ( rw_read l )  : y ( rguard_get g )  : x ( snd y )      -- g's, then l's scope ends
+: a 1  : b 2  :drop x ( pair a b )  :drop v ( vec_new DT )  ( vec_push v x )
+: l ( rw_new v )  : g ( rw_read l )  : y ( rguard_get g )  : z ( snd y )
+: l2 l                                  -- l2's scope ends, then z's, y's and g's
 ```
 
 It is typed (`main_typed`), every run of it is safe (`main_safe`) and,
 finished or panicked, leaks nothing (`main_no_leak`, `main_no_leak_panic`);
-A3's claim covers it, race freedom included (`A3.rwDtor_claim`). -/
+A3's claim covers it, race freedom included (`A3.rwDtor_claim`); and the
+guard's drop, the last reference, reaps the `Vec` on the dropping thread,
+whose frame drains it (`guard_drop_reaps`, `A3.LockDtorWitness.reapV_drains`).
+(Until Agora #831 the witness held a `DT`, a pair of integers that owns no
+heap, and dropped the guard first.) -/
 
 namespace A3.RwDtorWitness
 open A2
 open A2.DynCell (NoRootb noRootb_empty)
 open A2.DtorWitness (NoDeps T DT dfn EP R0)
-open A3.LockDtorWitness (P prog_ok prog_codes drop0_ok EL)
+open A3.LockDtorWitness (P prog_ok prog_codes drop0_ok EL ELV)
 
 /-! ### Agora #837: the guard's own type, refused where it would cross -/
 
@@ -188,131 +198,267 @@ theorem view_no_dtor {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {k : Nat} {bl : Blk}
   obtain ⟨h1, _, h2⟩ := (A2.Dtor.blocks_dtor_free hi hk).2.2.2 hv
   exact ⟨h1, h2⟩
 
-/-! ### The witness -/
+/-! ### The witness: the lock's last share dropped while the guard lives -/
 
-/-- `: a 1  : b 2  :drop d ( pair a b )  : l ( rw_new d )
-     : g ( rw_read l )  : y ( rguard_get g )  : x ( snd y )`. -/
+/-- `: a 1  : b 2  :drop x ( pair a b )  :drop v ( vec_new DT )  ( vec_push v x )
+     : l ( rw_new v )  : g ( rw_read l )  : y ( rguard_get g )  : z ( snd y )  : l2 l`
+    (`l2`'s scope ends first, dropping the lock's only share while `g`
+    lives; then `z`'s, `y`'s and `g`'s). -/
 def main : Stmt :=
-  .letv 0 (.expr (.lit 1)) (.letv 1 (.expr (.lit 2)) (.letd 2 0 (.pair 0 1)
-    (.letv 3 (.lockNew DT 2) (Stmt.withRead 3 4 5 6 .skip))))
+  .letv 0 (.expr (.lit 1)) (.letv 1 (.expr (.lit 2))
+    (.letd 2 0 (.pair 0 1) (.letd 3 0 (.new DT)
+      (.seq (.push 3 2) (.letv 4 (.lockNew (.vec DT) 3) (Stmt.withRead 4 5 6 7 (.letv 8 (.var 4) .skip)))))))
 
-/-- **An `RwLocked` of a destructor value, read through a guard, is typed**
-    (Agora #804): `rw_new` is `locked_new` of the value (Agora #755), the read
-    guard is `rw_read`'s (`rwRead_dtor_typed`), and what it lends is the
-    pair of the lock's share and the payload, then the payload, each a
-    borrow through the guard. -/
+/-- The lock share moved to `l2`: owned, holding nothing (`ELV`'s). -/
+def EL2 : Entry := ⟨.lk (.vec DT), .own, true, [], [], false, false⟩
+
+/-- **An `RwLocked` of a `Vec` of destructor values, read through a guard,
+    its last share moved away while the guard lives, is typed** (Agora #831):
+    `rw_new` of the `Vec` is `locked_new`'s (`Ty.lkPay` admits a drained
+    `Vec` holding no cell share), the read guard is `rw_read`'s
+    (`Ty.rguard (vec DT)`, `Ty.ok`'s case: the payload a lock's, holding no
+    cell share), and the guard borrows nothing of `l` (`RhsT.rwRead` leaves
+    the context as it was: the guard holds a share of its own, through the
+    view), so `l` moves out (`RhsT.moveOwn`) while `g`, `y` and `z` live. -/
 theorem main_typed : ∃ Δ, StmtT P (fun _ => none) [] main Δ := by
   let K1 : Ctx := A2.setE (fun _ => none) 0 intE
   let K2 : Ctx := A2.setE K1 1 intE
   have hK1 : NoRootb K1 := noRootb_empty.setE (by simp [intE])
   have hK2 : NoRootb K2 := hK1.setE (by simp [intE])
-  have hD0 : NoDeps (fun _ => none) := fun _ _ h => by cases h
-  have hD2 : NoDeps K2 := (hD0.setE rfl).setE rfl
   let ED : Entry := Entry.arm { EP with ty := DT, held := [] }
-  have hED : ED.mode ≠ .rootb ∧ ED.dtor = false ∧ ED.dbind = false := by
+  have hEDe : ED = ⟨DT, .own, true, [], [], false, false⟩ := by
     simp [ED, EP, Entry.arm, DT, T, Ty.dtorViews, Ty.holdsView]
   let K3 : Ctx := A2.setE K2 2 ED
-  have hK3 : NoRootb K3 := hK2.setE hED
-  have hD3 : NoDeps K3 := hD2.setE (by simp [ED, EP, Entry.arm, Entry.vdeps])
-  have hK3d : K3 2 = some ED := by simp [K3, A2.setE]
-  -- `rw_new d`: `d` moves into the lock block
-  let ED' : Entry := { ED with live := false, dtor := false }
-  let K3' : Ctx := A2.setE K3 2 ED'
-  have hkill : A2.kill .replace false 2 K3 = K3 := hD3.kill_eq _ _ _
-  have hnew : RhsT K3 [] (.lockNew DT 2) EL K3' := by
-    have h := RhsT.lockNew (Γ := K3) (F := []) (t := DT) (y := 2) (Ey := ED) hK3d
-      (by simp [ED, Entry.arm, EP]) (by simp [ED, Entry.arm]) (by decide)
-      ⟨by simp [DT, T, Ty.holdsView], by simp [DT, T, Ty.hasFn]⟩ (by simp [DT, T, Ty.hasGuard])
-      (PushArg.move (by simp [DT, T, Ty.owning]) (by simp [ED, Entry.arm, EP]) (by simp)
-        (hK3.noPin 2) (DtorSafe.of_none (fun v E h => (hK3 v E h).2.1) _ _ _))
-    rw [hkill] at h; exact h
-  have hK3' : NoRootb K3' := hK3.setE (by simp [ED', ED, EP, Entry.arm, DT, T, Ty.dtorViews, Ty.holdsView])
-  let K4 : Ctx := A2.setE K3' 3 EL
-  have hK4 : NoRootb K4 := hK3'.setE (by simp [EL])
-  have hK4l : K4 3 = some EL := by simp [K4, A2.setE]
-  -- the read guard: an owned share of a view of the lock block
-  let K5 : Ctx := A2.setE K4 4 (guardE DT)
-  have hK5 : NoRootb K5 := hK4.setE (by simp [guardE])
-  have hrd : RhsT K4 [] (.rwRead 3) (guardE DT) K4 :=
-    rwRead_dtor_typed (f := 0) (u := T) hK4l rfl rfl (by simp [T, Ty.hasCell])
-  -- `rguard_get g`: the pair, lent through the guard
-  let K6 : Ctx := A2.setE K5 5 (guardGetE 4 DT)
-  have hK6 : NoRootb K6 := hK5.setE (by simp [guardGetE])
-  have hget : RhsT K5 [] (.arcGet 4) (guardGetE 4 DT) K5 := by
-    have h := RhsT.arcGet (Γ := K5) (F := []) (a := 4) (E := guardE DT) (t := .prod (.lk DT) DT)
-      (by simp [K5, A2.setE]) rfl (Or.inr ⟨_, rfl, rfl⟩) (by simp [DT, T, Ty.holdsView]) (by simp [DT, T, Ty.hasFn])
-    rw [guardGet_eq] at h; exact h
-  -- `snd y`: the payload, lent
-  let EX : Entry := projE 5 (guardGetE 4 DT) DT
-  let K7 : Ctx := A2.setE K6 6 EX
-  have hK7 : NoRootb K7 := hK6.setE (by simp [EX, projE, DT])
-  have hsnd : RhsT K6 [] (.snd 5) EX K6 :=
-    RhsT.snd (a := .lk DT) (by simp [K6, A2.setE]) rfl rfl
-  have hx := StmtT.letv (P := P) (x := 6) (r := .snd 5) (E := EX) (F := []) (Γ := K6) (Γ1 := K6)
-    rfl (by simp [K6, K5, K4, K3', K3, K2, K1, A2.setE, upd]) (by simp) hsnd StmtT.skip (hK7.endOK _)
-    (by simp [EX])
-  have hy := StmtT.letv (P := P) (x := 5) (r := .arcGet 4) (E := guardGetE 4 DT) (F := []) (Γ := K5) (Γ1 := K5)
-    rfl (by simp [K5, K4, K3', K3, K2, K1, A2.setE, upd]) (by simp) hget hx ((hK7.exitScope 6).endOK _)
-    (by simp [guardGetE])
-  have hg := StmtT.letv (P := P) (x := 4) (r := .rwRead 3) (E := guardE DT) (F := []) (Γ := K4) (Γ1 := K4)
-    rfl (by simp [K4, K3', K3, K2, K1, A2.setE, upd]) (by simp) hrd hy (((hK7.exitScope 6).exitScope 5).endOK _)
-    (fun _ => by simp [guardE, Ty.holdsDtor])
-  have hKf := ((hK7.exitScope 6).exitScope 5).exitScope 4
-  have hl := StmtT.letv (P := P) (x := 3) (r := .lockNew DT 2) (E := EL) (F := []) (Γ := K3) (Γ1 := K3')
-    rfl (by simp [K3, K2, K1, A2.setE, upd]) (by simp) hnew hg (hKf.endOK _) (fun _ => rfl)
+  have hK3 : NoRootb K3 := hK2.setE (by rw [hEDe]; simp)
   have hpair : RhsT K2 [] (.pair 0 1) EP K2 :=
-    RhsT.pair (Ey := intE) (Ez := intE) (by simp [K2, K1, A2.setE]) rfl PushArg.int
+    RhsT.pair (Ey := intE) (Ez := intE) (by simp [K2, K1, A2.setE, upd]) rfl PushArg.int
       (by simp [K2, K1, A2.setE]) rfl PushArg.int (by simp [intE, Mode.ownSlot])
+  -- the `Vec`, and the push of `x` into it (`A2.ArcDtorWitness.mainV`'s)
+  let EN : Entry := ⟨.vec DT, .own, true, [], [], false, false⟩
+  have hnew : RhsT K3 [] (.new DT) EN K3 := RhsT.new (by decide)
+  let EV : Entry := Entry.arm { EN with ty := .vec DT, held := [] }
+  have hEVe : EV = ⟨.vec DT, .own, true, [], [], false, false⟩ := by
+    simp [EV, EN, Entry.arm, DT, T, Ty.dtorViews, Ty.holdsView]
+  let K4 : Ctx := A2.setE K3 3 EV
+  have hK4 : NoRootb K4 := hK3.setE (by rw [hEVe]; simp)
+  let K5 : Ctx := A2.setE (kill .replace false 2 K4) 2 { ED with live := false, dtor := false }
+  have hK5 : NoRootb K5 := (hK4.kill _ _ _).setE (by rw [hEDe]; simp)
+  have hmove : PushArg K4 [] 2 ED DT ED.held K5 :=
+    PushArg.move (Γ := K4) (F := []) (y := 2) (E := ED) (t := DT) rfl (by rw [hEDe]) (by simp)
+      (hK4.noPin _) (DtorSafe.of_none (fun v E h => (hK4 v E h).2.1) _ _ _)
+  have hK53 : K5 3 = some EV := by
+    simp [K5, K4, A2.setE, upd, A2.kill, killE, hits, hEVe, Entry.vdeps, Mode.ownSlot]
+  have hpush := StmtT.push (P := P) (Γ := K4) (Γ1 := K5) (F := []) (x := 3) (y := 2) (Ex := EV) (Ey := ED)
+    (Ex1 := EV) (t := DT) (D := ED.held) (by simp [K4, A2.setE]) (by rw [hEVe]) (by rw [hEVe])
+    (Or.inl (by rw [hEVe])) (by simp) (by simp [K4, K3, A2.setE, upd]) (by rw [hEDe]) (by rw [hEDe])
+    (by decide) hmove (by rw [hEDe]; simp [roots]) hK53 (by rw [hEVe])
+    (DtorSafe.of_none (fun v E h => (hK5 v E h).2.1) _ _ _) (by rw [hEVe]; simp)
+  let E3 : Entry := { EV with held := EV.held ++ ownHeld true DT ED.held }
+  have hE3e : E3 = ⟨.vec DT, .own, true, [], [], false, false⟩ := by
+    simp [E3, hEVe, hEDe, ownHeld]
+  let K6 : Ctx := A2.setE (kill .realloc DT.holdsView 3 K5) 3 E3
+  have hK6 : NoRootb K6 := (hK5.kill _ _ _).setE (by rw [hE3e]; simp)
+  -- `rw_new v`: the `Vec` moves into the lock block
+  let K7 : Ctx := A2.setE (kill .replace false 3 K6) 3 { E3 with live := false, dtor := false }
+  have hK7 : NoRootb K7 := (hK6.kill _ _ _).setE (by rw [hE3e]; simp)
+  have hmove2 : PushArg K6 [] 3 E3 (.vec DT) E3.held K7 :=
+    PushArg.move (Γ := K6) (F := []) (y := 3) (E := E3) (t := .vec DT) rfl (by rw [hE3e]) (by simp)
+      (hK6.noPin _) (DtorSafe.of_none (fun v E h => (hK6 v E h).2.1) _ _ _)
+  have hK63 : K6 3 = some E3 := by simp [K6, A2.setE]
+  have hlnew : RhsT K6 [] (.lockNew (.vec DT) 3) ELV K7 :=
+    RhsT.lockNew hK63 (by rw [hE3e]) (by rw [hE3e]) (by decide)
+      ⟨by simp [DT, T, Ty.holdsView], by simp [DT, T, Ty.hasFn]⟩ (by simp [DT, T, Ty.hasGuard]) hmove2
+  let K8 : Ctx := A2.setE K7 4 ELV
+  have hK8 : NoRootb K8 := hK7.setE (by simp [ELV])
+  have hK84 : K8 4 = some ELV := by simp [K8, A2.setE]
+  -- the read guard: an owned share of a view of the lock block
+  let K9 : Ctx := A2.setE K8 5 (guardE (.vec DT))
+  have hK9 : NoRootb K9 := hK8.setE (by simp [guardE])
+  have hrd : RhsT K8 [] (.rwRead 4) (guardE (.vec DT)) K8 :=
+    RhsT.rwRead hK84 rfl rfl (by simp [DT, T, Ty.hasCell])
+  -- `rguard_get g`: the pair, lent through the guard
+  let K10 : Ctx := A2.setE K9 6 (guardGetE 5 (.vec DT))
+  have hK10 : NoRootb K10 := hK9.setE (by simp [guardGetE])
+  have hget : RhsT K9 [] (.arcGet 5) (guardGetE 5 (.vec DT)) K9 := by
+    have h := RhsT.arcGet (Γ := K9) (F := []) (a := 5) (E := guardE (.vec DT))
+      (t := .prod (.lk (.vec DT)) (.vec DT))
+      (by simp [K9, A2.setE]) rfl (Or.inr ⟨_, rfl, rfl⟩) (by simp [DT, T, Ty.holdsView])
+      (by simp [DT, T, Ty.hasFn])
+    rw [guardGet_eq] at h; exact h
+  -- `snd y`: the `Vec`, lent
+  let EX : Entry := projE 6 (guardGetE 5 (.vec DT)) (.vec DT)
+  let K11 : Ctx := A2.setE K10 7 EX
+  have hK11 : NoRootb K11 := hK10.setE (by simp [EX, projE])
+  have hsnd : RhsT K10 [] (.snd 6) EX K10 :=
+    RhsT.snd (a := .lk (.vec DT)) (by simp [K10, A2.setE]) rfl rfl
+  -- `: l2 l`: the lock's only share moves out of `l`, the guard still bound
+  have hK114 : K11 4 = some ELV := by simp [K11, K10, K9, K8, A2.setE, upd]
+  let K12 : Ctx := A2.setE (kill .replace false 4 K11) 4 { ELV with live := false, dtor := false }
+  have hK12 : NoRootb K12 := (hK11.kill _ _ _).setE (by simp [ELV])
+  have hmv : RhsT K11 [] (.var 4) EL2 K12 :=
+    RhsT.moveOwn hK114 rfl rfl (by simp) (hK11.noPin _)
+      (DtorSafe.of_none (fun v E h => (hK11 v E h).2.1) _ _ _)
+  let K13 : Ctx := A2.setE K12 8 EL2
+  have hK13 : NoRootb K13 := hK12.setE (by simp [EL2])
+  have hl2 := StmtT.letv (P := P) (x := 8) (r := .var 4) (E := EL2) (F := []) (Γ := K11) (Γ1 := K12)
+    (s := .skip) rfl (by simp [K11, K10, K9, K8, K7, K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill])
+    (by simp) hmv StmtT.skip (hK13.endOK _) (fun _ => rfl)
+  have hKa := hK13.exitScope 8
+  have hz := StmtT.letv (P := P) (x := 7) (r := .snd 6) (E := EX) (F := []) (Γ := K10) (Γ1 := K10)
+    rfl (by simp [K10, K9, K8, K7, K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill]) (by simp) hsnd hl2
+    (hKa.endOK _) (by simp [EX])
+  have hy := StmtT.letv (P := P) (x := 6) (r := .arcGet 5) (E := guardGetE 5 (.vec DT)) (F := [])
+    (Γ := K9) (Γ1 := K9) rfl (by simp [K9, K8, K7, K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill])
+    (by simp) hget hz ((hKa.exitScope 7).endOK _) (by simp [guardGetE])
+  have hg := StmtT.letv (P := P) (x := 5) (r := .rwRead 4) (E := guardE (.vec DT)) (F := []) (Γ := K8)
+    (Γ1 := K8) rfl (by simp [K8, K7, K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill]) (by simp) hrd hy
+    (((hKa.exitScope 7).exitScope 6).endOK _) (fun _ => by simp [guardE, Ty.holdsDtor])
+  have hKf := ((hKa.exitScope 7).exitScope 6).exitScope 5
+  have hl := StmtT.letv (P := P) (x := 4) (r := .lockNew (.vec DT) 3) (E := ELV) (F := []) (Γ := K6)
+    (Γ1 := K7) rfl (by simp [K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill]) (by simp) hlnew hg
+    (hKf.endOK _) (fun _ => rfl)
+  have hseq := StmtT.seq (P := P) rfl hpush hl
+  have hdv := StmtT.letd (P := P) (Γ := K3) (Γ1 := K3) (F := []) (x := 3) (f := 0) (r := .new DT)
+    (E := EN) (t := T) (H := []) (τ := .vec DT) rfl (by simp [K3, K2, K1, A2.setE, upd])
+    (by simp) hnew rfl (Or.inr ⟨0, rfl, rfl⟩) rfl rfl (letd_fn drop0_ok) (HeldUp.refl _ _) hseq
+    ((hKf.exitScope 4).endOK _)
   have hd := StmtT.letd (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .pair 0 1)
-    (E := EP) (t := T) (H := []) rfl (by simp [K2, K1, A2.setE]) (by simp) hpair rfl
-    (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn drop0_ok) (HeldUp.refl _ _) hl
-    ((hKf.exitScope 3).endOK _) (by simp [Stmt.assigns])
+    (E := EP) (t := T) (H := []) rfl (by simp [K2, K1, A2.setE, upd])
+    (by simp) hpair rfl (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn drop0_ok) (HeldUp.refl _ _) hdv
+    (((hKf.exitScope 4).exitScope 3).endOK _)
   have h1 := StmtT.letv (P := P) (x := 1) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K1) (Γ1 := K1)
     rfl (by simp [K1, A2.setE]) (by simp) (RhsT.expr ExprT.lit) hd
-    (((hKf.exitScope 3).exitScope 2).endOK _)
+    ((((hKf.exitScope 4).exitScope 3).exitScope 2).endOK _)
   exact ⟨_, StmtT.letv (P := P) (x := 0) (r := .expr (.lit 1)) (E := intE) (F := []) (Γ := fun _ => none)
     (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.expr ExprT.lit) h1
-    ((((hKf.exitScope 3).exitScope 2).exitScope 1).endOK _)⟩
+    (((((hKf.exitScope 4).exitScope 3).exitScope 2).exitScope 1).endOK _)⟩
 
-/-- `rw_new` of the destructor value names the destructor the program
+/-- `rw_new` of the `Vec` names the elements' destructor, one the program
     checked (`Rhs.codeOK`). -/
 theorem main_codes : main.codesOK P := by
   simp only [main, Stmt.withRead, Stmt.readWith, Stmt.codesOK, Rhs.codeOK, DT]
-  exact ⟨trivial, trivial, trivial, arcNew_codeOK (n := 0) drop0_ok, trivial, trivial, trivial, trivial⟩
+  exact ⟨trivial, trivial, trivial, trivial, trivial, arcNew_codeOK (n := 1) drop0_ok, trivial, trivial,
+    trivial, trivial, trivial⟩
 
 /-- **Every run of it is safe.** -/
-theorem main_safe {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem 7) main (.ok m' s')) :
+theorem main_safe {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem 9) main (.ok m' s')) :
     ¬ Stuck P m' s' := by
   obtain ⟨Δ, ht⟩ := main_typed
   exact memory_safe prog_ok prog_codes ht rfl main_codes (by decide) hr
 
 /-- **... and leaks nothing**: when it finishes, every address is freed
-    (`no_leak_end`): the payload, owned by the lock block alone, is reaped
-    once its last share and the guard's view are gone. -/
-theorem main_no_leak {m' : Mem} (hr : Steps P (emptyMem 7) main (.ok m' .skip)) : ∀ i, m'.alloc i = false := by
+    (`no_leak_end`): the `Vec`, owned by the lock block alone, is reaped
+    and drained once the lock's last share and the guard's view are gone
+    (`guard_drop_reaps_settle`, `A3.LockDtorWitness.reapV_drains`). -/
+theorem main_no_leak {m' : Mem} (hr : Steps P (emptyMem 9) main (.ok m' .skip)) : ∀ i, m'.alloc i = false := by
   obtain ⟨Δ, ht⟩ := main_typed
   exact no_leak_end prog_ok prog_codes ht rfl main_codes (by decide) hr
 
 /-- **... and leaks nothing on a panic either** (`no_leak_panic`). -/
-theorem main_no_leak_panic {m' : Mem} (hr : Steps P (emptyMem 7) main (.panic m')) :
+theorem main_no_leak_panic {m' : Mem} (hr : Steps P (emptyMem 9) main (.panic m')) :
     ∀ i, m'.alloc i = false := by
   obtain ⟨Δ, ht⟩ := main_typed
   exact no_leak_panic prog_ok prog_codes ht rfl main_codes (by decide) hr
+
+/-! ### Agora #831: the guard dropped after the lock's last share
+
+When `l2`'s scope ends, the lock block's last share goes, but the guard's
+share still reaches the view, whose payload holds a share of the lock block
+(`view_keeps_lock`): the sweep keeps both.  When `g`'s scope ends, no root
+refers to the view nor to the lock block, and the only block whose payload
+refers to the lock block is the view, unreached, of kind `.view` (no orphan
+to be, never `dead`).  The two are cut off together (`A2.CutOff`), so the
+marking sweep that ends the guard's drop removes the view and marks the lock
+block `dead`, its payload in it, and the thread that dropped the guard reaps
+it (`A3.TStep.last_drop_reaps`, generalised by Agora #831 from "no block
+refers to it" to a cut-off set). -/
+
+/-- A lock block of a `Vec` of destructor values and the view of it a read
+    guard made (`ViewsAt`) are cut off from roots that refer to neither,
+    when no other block's payload refers to the lock block and none at all
+    to the view. -/
+theorem view_cutOff {R : Val → Prop} {B : Nat → Option Blk} {k kv : Nat} {t : Ty} {p : Val}
+    (hkv : B kv = some ⟨.prod (.lk t) t, .view, some (.pair (.lk k) p)⟩)
+    (hv : ∀ v, R v → ¬ Refers B v k ∧ ¬ Refers B v kv)
+    (hb : ∀ k' bl', B k' = some bl' → ¬ Refers B bl'.keeps kv ∧ (k' ≠ kv → ¬ Refers B bl'.keeps k)) :
+    CutOff R B (fun j => j = k ∨ j = kv) := by
+  refine ⟨fun v hR j hj hr => ?_, fun k' bl' j hk' hj hr => ?_⟩
+  · rcases hj with rfl | rfl
+    · exact (hv v hR).1 hr
+    · exact (hv v hR).2 hr
+  · rcases hj with rfl | rfl
+    · by_cases he : k' = kv
+      · subst he
+        rw [hkv] at hk'; cases hk'
+        refine ⟨Or.inr rfl, ?_⟩
+        rintro ⟨n, f, u, q, kd, he, hkd⟩
+        simp only [Blk.mk.injEq] at he
+        obtain ⟨-, rfl, -⟩ := he
+        rcases hkd with h | h | h <;> cases h
+      · exact absurd hr ((hb k' bl' hk').2 he)
+    · exact absurd hr (hb k' bl' hk').1
+
+/-- **Agora #831: the guard's drop after the lock's last share runs the
+    destructor, on the thread that drops the guard.**  Thread `i`'s step (to
+    `m'`, `s'`; in `main`, the end of `g`'s scope, `l2`'s having ended
+    before) leaves the lock block `k` of a `Vec` of destructor values, its
+    payload `p` in it, and the guard's view `kv` of it (its payload `pair (lk
+    k) p`, `rwRead_view_lends`), that no thread's slot and no global refers
+    to; no other block's payload refers to the lock block, and none to the
+    view.  Then the configuration's marking sweep that ends the step marks
+    the lock block `dead`, its payload in it, though the view, unreached and
+    not yet swept, still refers to it; and in the result `C'` of this
+    configuration step (whose reaps are all thread `i`'s, before any other
+    thread runs) a fresh slot of thread `i` owns the `Vec` and the block is
+    emptied or gone: a reap of thread `i` bound it in a destructor frame
+    (`Step.reap`) whose end drains it, element 0 first, each to a frame of
+    `dfn` (`A3.LockDtorWitness.reapV_drains`), as in nurlc, where an
+    `RGuard` holds a `Shared` clone of the lock's state
+    (`stdlib/std/rwlock.nu`): the guard's drop releases the last reference,
+    which drops the `Vec`'s elements on the thread that runs it. -/
+theorem guard_drop_reaps {C : Cfg} {i : Nat} {m' : Mem} {s' : Stmt} {C' : Cfg} (hlen : i < C.ths.length)
+    (hse : CSettle P i (C.put i m' s').sweepD C') {k kv : Nat} {p : Val}
+    (hk : m'.blk k = some ⟨.vec DT, .lock, some p⟩)
+    (hkv : m'.blk kv = some ⟨.prod (.lk (.vec DT)) (.vec DT), .view, some (.pair (.lk k) p)⟩)
+    (hv : ∀ v, (C.put i m' s').roots v → ¬ Refers m'.blk v k ∧ ¬ Refers m'.blk v kv)
+    (hb : ∀ k' bl', m'.blk k' = some bl' →
+      ¬ Refers m'.blk bl'.keeps kv ∧ (k' ≠ kv → ¬ Refers m'.blk bl'.keeps k)) :
+    (C.put i m' s').sweepD.blk k = some ⟨.vec DT, .dead, some p⟩ ∧
+      ∃ (t' : Thread) (x : Var), C'.ths[i]? = some t' ∧ t'.st x = some ⟨true, some p⟩ ∧ m'.nv ≤ x ∧
+        Emptied C'.blk k (.vec DT) :=
+  TStep.last_drop_reaps (n := 1) (f := 0) (u := T) hlen hse (Or.inr rfl) hk (view_cutOff hkv hv hb)
+    (Or.inl rfl)
+
+/-- ... and on A2's `Steps` (one thread, `Mem.sweepD` and `Settle`): the
+    marking sweep that ends the guard's drop marks the lock block `dead`,
+    and the thread's next step is a reap (`A3.LockDtorWitness.last_dropV_reaps`). -/
+theorem guard_drop_reaps_settle {m : Mem} {k kv : Nat} {p : Val}
+    (hk : m.blk k = some ⟨.vec DT, .lock, some p⟩)
+    (hkv : m.blk kv = some ⟨.prod (.lk (.vec DT)) (.vec DT), .view, some (.pair (.lk k) p)⟩)
+    (hv : ∀ v, m.vals v → ¬ Refers m.blk v k ∧ ¬ Refers m.blk v kv)
+    (hb : ∀ k' bl', m.blk k' = some bl' →
+      ¬ Refers m.blk bl'.keeps kv ∧ (k' ≠ kv → ¬ Refers m.blk bl'.keeps k))
+    {s s' : Stmt} {m' : Mem} (h : Settle P m.sweepD s m' s') :
+    m.sweepD.blk k = some ⟨.vec DT, .dead, some p⟩ ∧
+      ∃ m1 s1, Step P m.sweepD s (.ok m1 s1) ∧ ReapMem m.sweepD m1 :=
+  A3.LockDtorWitness.last_dropV_reaps hk (view_cutOff hkv hv hb) (Or.inl rfl) h
 
 end A3.RwDtorWitness
 
 namespace A3
 
-/-- Agora #804, the witness (`A3.RwDtorWitness.main`): an `RwLocked` of a
-    destructor value, made, read through a guard that lends its payload, the
-    guard and then the lock's last share dropped, on one thread.  The claim
-    covers it: safe, race-free and leak-free on every interleaving. -/
+/-- Agora #804, #831, the witness (`A3.RwDtorWitness.main`): an `RwLocked` of
+    a `Vec` of destructor values, made, read through a guard that lends its
+    payload, the lock's last share dropped while the guard lives, then the
+    guard, on one thread.  The claim covers it: safe, race-free and
+    leak-free on every interleaving.  (The thread that drops the guard reaps
+    the `Vec` and drains it, `A3.RwDtorWitness.guard_drop_reaps`.) -/
 theorem rwDtor_claim :
-    MemorySafe LockDtorWitness.P (fun _ => false) (Cfg.start Globs.empty RwDtorWitness.main 7) ∧
-      RaceFree LockDtorWitness.P (fun _ => false) (Cfg.start Globs.empty RwDtorWitness.main 7) ∧
-      NoLeak LockDtorWitness.P (fun _ => false) (Cfg.start Globs.empty RwDtorWitness.main 7) := by
+    MemorySafe LockDtorWitness.P (fun _ => false) (Cfg.start Globs.empty RwDtorWitness.main 9) ∧
+      RaceFree LockDtorWitness.P (fun _ => false) (Cfg.start Globs.empty RwDtorWitness.main 9) ∧
+      NoLeak LockDtorWitness.P (fun _ => false) (Cfg.start Globs.empty RwDtorWitness.main 9) := by
   obtain ⟨Δ, ht⟩ := RwDtorWitness.main_typed
-  exact claim _ _ Globs.empty _ Δ 7 LockDtorWitness.prog_ok LockDtorWitness.prog_codes
+  exact claim _ _ Globs.empty _ Δ 9 LockDtorWitness.prog_ok LockDtorWitness.prog_codes
     (fun _ h => by cases h) GlobsOK.empty ht rfl RwDtorWitness.main_codes (by decide)
 
 end A3

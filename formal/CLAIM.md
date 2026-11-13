@@ -422,20 +422,31 @@ the LLVM / C11 memory model rather than redefining it.
       slot's value and no block's payload refers to the lock block, the
       sweep marks the lock block `dead` and the dropping thread's next step
       is the reap, whose frame runs the destructor
-      (`A3.LockDtorWitness.last_drop_reaps`, for a lock block of `DT`; it
-      takes the absence of a view as a hypothesis). The other order, a
-      guard dropped after the lock's last share and the lock block reaped
-      by that guard's thread, follows from the marking sweep but is not yet
-      a lemma (Agora #831). The
+      (`A3.LockDtorWitness.last_drop_reaps`, for a lock block of `DT`).
+      Agora #831: in the other order, a guard dropped after the lock's last
+      share, the sweep that ends the guard's drop finds the lock block
+      referred to only by that guard's view, unreached itself and no
+      orphan to be: the two are cut off from the roots together
+      (`A2.CutOff`), so the sweep marks the lock block `dead` and the
+      thread that dropped the guard reaps it, a fresh slot of that thread
+      owning the payload in a destructor frame
+      (`A3.RwDtorWitness.guard_drop_reaps`, over `A3.TStep.last_drop_reaps`,
+      generalised from "no block's payload refers to the lock block" to a
+      cut-off set; on A2's `Steps`, `guard_drop_reaps_settle`, over the
+      likewise generalised `A3.LockDtorWitness.last_dropV_reaps`; the
+      frame drains the `Vec`, `reapV_drains`). The
       guard's type `rguard D` (Agora #837; before, `arc (prod (lk D) D)`)
       is admitted by `Ty.ok` when `D` is a lock's payload holding no cell
       share, and its view's type `prod (lk D) D` by `Ty.rview` and
       `Blk.DtorOK`; no `arc` block is of a destructor type of that shape
       (`A2.Dtor.arc_blocks_dtor`).
-      Witness: `A3.RwDtorWitness.main` (an `RwLocked` of a destructor
-      value, made, read through a guard, dropped: `main_typed`,
+      Witness: `A3.RwDtorWitness.main` (Agora #831: an `RwLocked` of a
+      `Vec` of destructor values, which owns heap, made, read through a
+      guard, its only share moved to a binding whose scope ends while the
+      guard is still bound, then the guard dropped: `main_typed`,
       `main_safe`, `main_no_leak`, `main_no_leak_panic`;
-      `A3.rwDtor_claim`: `A3.claim` over it).
+      `A3.rwDtor_claim`: `A3.claim` over it; `guard_drop_reaps`: the
+      guard's drop reaps the `Vec` on the dropping thread).
     - **Not proven here (phase D):** a view lives until no slot reaches
       it, which may be after the guard's drop, where the runtime unlocks.
       As for `Arc`'s refcount, phase D must show that no live binding
@@ -1197,7 +1208,7 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   gone the marking sweep marks the lock block `dead`, its payload in it
   (`Cand` admits a lock block whose payload is in it), and the same thread
   reaps it as an `Arc`'s (`A3.LockDtorWitness.last_drop_reaps`, over
-  `A2.Mem.sweepD_marks`), as nurlc's last `Locked_drop` drops the value.
+  `A2.Mem.sweepD_marks_cut`), as nurlc's last `Locked_drop` drops the value.
   The check-out keeps the lock's share alive through the body (`withLock`
   asks a root the body does not name), so the payload is in the block
   whenever its last share goes, unless `locked_take` moved it out to a
@@ -1477,14 +1488,17 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   that one configuration step, before any other thread runs (`A3.CSettle`,
   A2's `Settle` on the configuration).
   When a thread's step leaves an `Arc<D>`'s, an `Arc<Vec<D>>`'s or a
-  `Locked D`'s block that no thread's slot, no global and no payload
-  refers to, the sweep marks it, and in the result of that configuration
+  `Locked D`'s block that no thread's slot and no global refers to, and
+  no payload but one of a block cut off with it (`A2.CutOff`: one no root
+  refers to, no orphan to be and not `dead`, whose referrers are cut off
+  too), the sweep marks it, and in the result of that configuration
   step a fresh slot of that thread owns the payload (a reap of the thread
   bound it, in a destructor frame) and the block is emptied or gone
   (`A3.TStep.last_drop_reaps`; at the three witnesses `A3.arcDtor_reaps`,
-  `A3.arcVecDtor_reaps`, `A3.lockDtor_reaps`; a block only a payload the
-  same sweep removes refers to is outside the lemma, though the semantics
-  marks it too). The reaped payload's
+  `A3.arcVecDtor_reaps`, `A3.lockDtor_reaps`, where no payload refers to
+  the block; Agora #831: a lock block whose only referrer is the view a
+  read guard dropped after the lock's last share left, unreached and not
+  yet swept, is covered, `A3.RwDtorWitness.guard_drop_reaps`). The reaped payload's
   addresses leave the shared part for that thread's part, the other
   threads' facts surviving it as a lock's check-out (`A3.CInv.thread_of`),
   so the destructor's reads and writes, its later steps', are of its own

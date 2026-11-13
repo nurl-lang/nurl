@@ -61,7 +61,7 @@ theorem arcDtor_reaps {C : Cfg} {i : Nat} {m' : Mem} {s' : Stmt} {C' : Cfg} (hle
     (C.put i m' s').sweepD.blk k = some ⟨A2.DtorWitness.DT, .dead, some p⟩ ∧
       ∃ (t' : Thread) (x : Var), C'.ths[i]? = some t' ∧ t'.st x = some ⟨true, some p⟩ ∧ m'.nv ≤ x ∧
         Emptied C'.blk k (A2.DtorWitness.DT) :=
-  TStep.last_drop_reaps (n := 0) (f := 0) (u := A2.DtorWitness.T) hlen hse (Or.inl rfl) hk hv hb
+  TStep.last_drop_reaps (n := 0) (f := 0) (u := A2.DtorWitness.T) hlen hse (Or.inl rfl) hk (CutOff.one hv hb) rfl
 
 /-- ... and (`A3.arcVecDtor_claim`'s witness) an `Arc` of a `Vec` of them:
     thread `i` reaps it in that configuration step, binding the `Vec` at its
@@ -75,7 +75,7 @@ theorem arcVecDtor_reaps {C : Cfg} {i : Nat} {m' : Mem} {s' : Stmt} {C' : Cfg} (
     (C.put i m' s').sweepD.blk k = some ⟨.vec A2.DtorWitness.DT, .dead, some p⟩ ∧
       ∃ (t' : Thread) (x : Var), C'.ths[i]? = some t' ∧ t'.st x = some ⟨true, some p⟩ ∧ m'.nv ≤ x ∧
         Emptied C'.blk k (.vec A2.DtorWitness.DT) :=
-  TStep.last_drop_reaps (n := 1) (f := 0) (u := A2.DtorWitness.T) hlen hse (Or.inl rfl) hk hv hb
+  TStep.last_drop_reaps (n := 1) (f := 0) (u := A2.DtorWitness.T) hlen hse (Or.inl rfl) hk (CutOff.one hv hb) rfl
 
 /-- ... and (`A3.lockDtor_claim`'s witness, `Locked D`) a lock of a destructor
     value whose last share thread `i`'s step drops, its payload in it: thread
@@ -89,7 +89,7 @@ theorem lockDtor_reaps {C : Cfg} {i : Nat} {m' : Mem} {s' : Stmt} {C' : Cfg} (hl
     (C.put i m' s').sweepD.blk k = some ⟨A2.DtorWitness.DT, .dead, some p⟩ ∧
       ∃ (t' : Thread) (x : Var), C'.ths[i]? = some t' ∧ t'.st x = some ⟨true, some p⟩ ∧ m'.nv ≤ x ∧
         Emptied C'.blk k (A2.DtorWitness.DT) :=
-  TStep.last_drop_reaps (n := 0) (f := 0) (u := A2.DtorWitness.T) hlen hse (Or.inr rfl) hk hv hb
+  TStep.last_drop_reaps (n := 0) (f := 0) (u := A2.DtorWitness.T) hlen hse (Or.inr rfl) hk (CutOff.one hv hb) rfl
 
 /-- ... and (`A3.lockVecDtor_claim`'s witness, `Locked (Vec D)`) a lock of a
     drained `Vec` of destructor values whose last share thread `i`'s step
@@ -105,7 +105,7 @@ theorem lockVecDtor_reaps {C : Cfg} {i : Nat} {m' : Mem} {s' : Stmt} {C' : Cfg} 
     (C.put i m' s').sweepD.blk k = some ⟨.vec A2.DtorWitness.DT, .dead, some p⟩ ∧
       ∃ (t' : Thread) (x : Var), C'.ths[i]? = some t' ∧ t'.st x = some ⟨true, some p⟩ ∧ m'.nv ≤ x ∧
         Emptied C'.blk k (.vec A2.DtorWitness.DT) :=
-  TStep.last_drop_reaps (n := 1) (f := 0) (u := A2.DtorWitness.T) hlen hse (Or.inr rfl) hk hv hb
+  TStep.last_drop_reaps (n := 1) (f := 0) (u := A2.DtorWitness.T) hlen hse (Or.inr rfl) hk (CutOff.one hv hb) rfl
 
 /-- **A global `Locked D` is never reaped**: the marking sweep roots the
     module globals, so a block a global's share names is kept as it was, at
