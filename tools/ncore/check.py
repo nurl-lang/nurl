@@ -485,7 +485,11 @@ class FnCheck:
             # copies of their handles (MEMORY.md §2.11, h310)
             av = AV(av.own, av.loans, av.alias, self.closure_owned(av.held), av.call)
         own_block = dest_vid is not None and self.refers_to_block(av, dest_vid)
-        if av.own == "L" and (own_block or self.local_depth(AV("L", av.loans, av.alias)) > dest_depth):
+        # (a value that is its own on some paths and a lend on others - a
+        # join of a fresh value and a borrowed one - is copied on the paths
+        # that lend it, where its new holder outlives what it borrows)
+        mixed = av.own == "O" and av.loans
+        if (av.own == "L" or mixed) and (own_block or self.local_depth(AV("L", av.loans, av.alias)) > dest_depth):
             if copy_ok and dest_ty is not None and self.T.copyable(dest_ty) and not self.T.is_scalar(dest_ty):
                 av = AV("O", (), (), av.held)
             elif own_block:
@@ -494,6 +498,8 @@ class FnCheck:
                 # a join's or block's value that cannot be copied stays a
                 # lend: if what it borrows ends first, its use is the error
                 return av
+            elif mixed:
+                pass
             else:
                 self.err(line, f"{what}: a view of a value released before its holder escapes")
         if av.held and self.local_depth(AV("N", held=av.held)) > dest_depth and copy_ok and dest_ty is not None:

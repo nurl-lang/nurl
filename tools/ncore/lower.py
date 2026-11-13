@@ -150,9 +150,11 @@ class Types:
             return True
         if k in ("vec", "box", "opt"):
             return self.copyable(ty[1], seen)
-        if k == "named" and ty[1] in self.prog.structs and ty[1] not in seen:
+        if k == "named" and ty[1] in seen:
+            return True       # a type that holds itself: as copyable as the rest of it
+        if k == "named" and ty[1] in self.prog.structs:
             return all(self.copyable(t, seen + (ty[1],)) for t, _ in self.prog.structs[ty[1]])
-        if k == "named" and ty[1] in self.prog.enums and ty[1] not in seen:
+        if k == "named" and ty[1] in self.prog.enums:
             return all(all(self.copyable(t, seen + (ty[1],)) for t in tys)
                        for _, tys in self.prog.enums[ty[1]])
         return False
