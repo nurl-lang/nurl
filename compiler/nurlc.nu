@@ -212,6 +212,8 @@
 : ~ s g_clo_node_list ``
 : ~ i g_clo_node_n 0
 : ~ i g_clo_hold_n 0
+: ~ i g_call_hold_set 0  // 1 while `__last_call_hold_ms__` holds the last call's holder members (what its result may hold of what its arguments hold)
+: ~ i g_hrp_n 0  // parked holder routes (`hrp#n`), asked once every function's summary is final
 : ~ i g_loop_body_open 0  // 1 from a loop's header to its body block's `{`: gen_block_stmts runs __loop_clo_replay at that block's close  // holder nodes minted: a value holding closures that were stored into it (__clo_hold_add)
 : ~ s g_clo_pnode_list ``  // `f#p`: the named functions' closure parameters that have a node
 : ~ s g_clo_lpnode_list ``  // `lit#p`: the closure literals' closure parameters that have a node
@@ -18793,6 +18795,9 @@ unsafe @ gen_call i lex i syms i cg → s {
 
 unsafe @ gen_call_body i lex i syms i cg → s {
     = g_rp_calls + g_rp_calls 1
+    // (No call's holder members are this one's until it publishes its own:
+    // a call that returns before then — a builtin — leaves none.)
+    ? != 0 g_call_hold_set { ( nurl_sym_set syms `__last_call_hold_ms__` `` ) = g_call_hold_set 0 } {}
     // (Where this call starts: is it a `:` binding's whole right-hand side,
     // g_clo_rhs_at?)
     : i __gc_at ( nurl_lex_cur_start lex )
@@ -19391,6 +19396,8 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     // is a binding able to hold closures may now hold them (`( vec_push fs
     // g )`; __clo_hold_add, agora #736).
     : ~ s __clo_hand_ms ``
+    // (…and what its holder arguments hold, for its result: __hruns_arg_note.)
+    : ~ s __call_hold_acc ``
     // Per argument, what it can capture and its type (`;`-separated), for
     // the thread-shared cycle rules (__cc_note_call).
     : ~ s cc_arg_cs ``
@@ -20931,16 +20938,33 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             // tool more included. That wants what a callee may run of what a
             // parameter holds, open in tools/fuzz/holes/open/t736.md.)
             : i __hc0 ( nurl_str_get at 0 )
-            ? & & != 0 g_srcx_on | == __hc0 37 == __hc0 123 | | ( is_ident_tok bck_arg_tt ) == bck_arg_tt TT_AT & == bck_arg_tt TT_LPAREN != 0 g_clo_eff_set {
+            ? & & != 0 g_srcx_on | == __hc0 37 == __hc0 123 | | ( is_ident_tok bck_arg_tt ) == bck_arg_tt TT_AT & == bck_arg_tt TT_LPAREN | != 0 g_clo_eff_set != 0 g_call_hold_set {
                 : s __hms ? ( is_ident_tok bck_arg_tt ) ? == 0 g_clo_hold_n `` ( nurl_sym_get2 syms bck_arg_val `__clonode` ) ( __clo_val_members syms bck_arg_tt bck_arg_val )
                 ? != 0 ( nurl_str_len __hms ) {
                     : s __he ( __clo_members_attr __hms `le` )
                     ( bck_closure_effects_run syms __he ( nurl_lex_line lex ) )
                     ? ( is_ident_tok bck_arg_tt ) { ( __loop_clo_note syms bck_arg_val ( nurl_lex_line lex ) ) } {}
+                    // (…and the exclusive-call routes (h274), named by the
+                    // callee: they are asked once every summary is final,
+                    // only of a callee that runs what that parameter holds —
+                    // a server's registration of one more tool runs none of
+                    // its tools; resolve_hold_routes.)
+                    = __clo_routes ( __clo_routes_add_h __clo_routes arg_idx ? __callee_shadowed `*` call_name ( __word_union __he ( __clo_asg_effs syms ( __clo_members_attr __hms `la` ) ) ) )
                     = __clo_hand_ms ( __word_union __clo_hand_ms __hms )
                 } {}
             } {}
         }
+        // (What a parameter holding closures holds, met here: a closure of it
+        // handed to the call may run there — this function runs what that
+        // parameter holds; the parameter, or a value holding what it holds,
+        // handed on is the callee's to answer (`hre##`). Asked in trusted
+        // code as well: a library function that runs what a server holds is
+        // no less one. What the call's result may hold of it is published for
+        // its binding, `__last_call_hold_ms__`; agora #736.)
+        ? != 0 g_clo_hold_n {
+            : s __hn ( __hruns_arg_note syms bck_arg_tt bck_arg_val at ? __callee_shadowed `*` call_name arg_idx )
+            ? != 0 ( nurl_str_len __hn ) { = __call_hold_acc ( __word_union __call_hold_acc __hn ) } {}
+        } {}
         // …and inside a `~` loop, one may change the loop's container when
         // it runs: a closure literal, or a binding handed to any callee —
         // one that only invokes it, or one not compiled yet (agora #151).
@@ -22759,6 +22783,10 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     ? != 0 g_rpg_on { ( nurl_sym_set syms `__last_call_argreads__` __cargreads ) } {}
     ? == 1 g_rpg_on { ( nurl_sym_set syms `__last_call_argovals__` __cargovals ) } {}
     ( __cc_note_call syms call_name fname cc_arg_cs cc_arg_tys arg_idents ( nurl_sym_get syms call_name ) __call_line ( nurl_lex_filename lex ) __callee_shadowed )
+    ? | != 0 ( nurl_str_len __call_hold_acc ) != 0 g_call_hold_set {
+        ( nurl_sym_set syms `__last_call_hold_ms__` __call_hold_acc )
+        = g_call_hold_set ? == 0 ( nurl_str_len __call_hold_acc ) 0 1
+    } {}
     ? != 0 ( nurl_str_len __clo_hand_ms ) {
         : ~ s __hms ``
         : ~ b __hres F
@@ -23079,6 +23107,9 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // only site that sees `( f )` — and it is the shape the whole
         // use-after-free family is written in.
         ( bck_note_closure_caps syms call_name __call_line )
+        // (…and, run here, one a parameter holding closures held: this
+        // function runs what that parameter holds — agora #736.)
+        ? != 0 g_clo_hold_n { ( __hruns_mark ( __clo_hp_of ( nurl_sym_get2 syms call_name `__clonode` ) ) ) } {}
         ( __iter_closure_check syms call_name __call_line ( nurl_lex_filename lex ) )
         // This is a stored closure variable - load and call
         : s loaded_closure ( nurl_cg_reg cg )
@@ -25449,6 +25480,9 @@ unsafe @ gen_match i lex i syms i cg → s {
     // of a field path — `?? . p inner` — whose value a payload is part of,
     // agora #411.)
     : s __m_proot ? ( is_ident_tok match_first_tt ) ( nurl_str_cat match_var_name `` ) ? == match_first_tt TT_DOT ( nurl_sym_get syms `__last_member_root__` ) ``
+    // (…or, a call's: what its holder arguments hold — `?? ( vec_get fs i )`;
+    // agora #736.)
+    : s __m_hms ? & == match_first_tt TT_LPAREN != 0 g_call_hold_set ( nurl_str_cat ( nurl_sym_get syms `__last_call_hold_ms__` ) `` ) ``
     // (The parameters the matched value may be part of: a payload bound out
     // of it is part of them too — handed back, it hands them back, agora
     // #154.)
@@ -26458,7 +26492,7 @@ unsafe @ gen_match i lex i syms i cg → s {
                 ( nurl_sym_def syms ( nurl_str_cat vp0 `__enum_plp` ) ? pt0_is_opt_bool `` `1` )
                 ( mem_note_plend syms pv0 match_first_tt match_var_name __m_ser )
                 ( mem_note_plroot syms pv0 __m_proot )
-                ( __clo_hold_payload syms pv0 __m_proot )
+                ( __clo_hold_payload syms pv0 __m_proot __m_hms )
                 ? & m_tmp_enum __m_udrop_enum { ( nurl_sym_def syms ( nurl_str_cat pv0 `__ekeep_tmp` ) `1` ) } {}
                 // (…and, for a match over a binding, that binding: the slot the
                 // payload is read out of, __payload_owner_flag. A call's match
@@ -27766,8 +27800,13 @@ unsafe @ gen_match i lex i syms i cg → s {
     // its path (`obj.items`): the struct handed on whole, or that field,
     // is refused in the body; another field of it is not.
     : s fe_cont ? ( is_ident_tok ( nurl_lex_type lex ) ) ( nurl_lex_val lex ) ? == ( nurl_lex_type lex ) TT_DOT ( __member_path lex ) ``
+    : i fe_tt0 ( nurl_lex_type lex )
+    : s fe_v0 ( nurl_lex_val lex )
     : i fe_sxn0 g_sx_n
     : s slice_val ( gen_expr lex syms cg )
+    // (What the container holds of closures — an element of a holder is one
+    // of what it holds: __clo_hold_elem; agora #736.)
+    : s fe_hms ? == 0 g_clo_hold_n `` ( __clo_val_members syms fe_tt0 fe_v0 )
     : s slice_ty ( nurl_get_last_type )
     // (What the element is a part of, for the walk: the container by its
     // name or path, or the iterated expression's source expression — a
@@ -27934,6 +27973,7 @@ unsafe @ gen_match i lex i syms i cg → s {
     ( nurl_sym_def syms ( nurl_str_cat var_name `__eslot_dd` ) ( nurl_str_int g_defer_body_depth ) )
     // (…and what it is an element of, by name or path: __fe_moved_drop_note.)
     ( nurl_sym_def syms ( nurl_str_cat var_name `__econt` ) fe_cont )
+    ? & != 0 ( nurl_str_len fe_hms ) ! ( seq fe_hms `*` ) { ( __clo_hold_payload syms var_name `` fe_hms ) } {}
     = g_pl_seen 1
     // (…and, for the drop summaries, the parameters the element was read
     // out of: noted by its slot, as a binding read out of one is
@@ -40990,7 +41030,9 @@ unsafe @ __vk_union_of s fns s seen b dyn → s {
         : s aix ( nurl_str_slice tail + c2 1 - - ( nurl_str_len tail ) c2 1 )
         // (…the closure's own argument is no other: a call whose one real
         // argument is the closure — handed, or called, the last — has none.)
-        : i ri ( nurl_str_to_int r )
+        // (`Nh<callee>`: the closures the value at argument N holds.)
+        : i rh ( nurl_str_find r `h` )
+        : i ri ( nurl_str_to_int ? > rh 0 ( nurl_str_slice r 0 rh ) r )
         : i own ? < ri -1 -9 ? < ri 0 - np 1 ri
         ? & == nreal 1 == lastreal own { continue } {}
         : s ix ( nurl_str_cat4 `c` aix ( nurl_str_cat3 `:` r `:` ) ? recv `1` `0` )
@@ -47610,14 +47652,25 @@ unsafe @ __sx_mut_roots s st s e b named → s {
     : s aix ( nurl_str_slice ix 1 - c1 1 )
     : s tl ( nurl_str_slice ix + c1 1 - - ( nurl_str_len ix ) c1 1 )
     : i c2 ( nurl_str_find tl `:` )
-    : i route ( nurl_str_to_int ( nurl_str_slice tl 0 c2 ) )
+    // (`Nh<callee>`: the closures the value at argument N holds, handed to
+    // `callee` — asked once its summary is final, resolve_hold_routes.)
+    : s rs ( nurl_str_slice tl 0 c2 )
+    : i rh ( nurl_str_find rs `h` )
+    : b hold > rh 0
+    : s hcal ? hold ( nurl_str_slice rs + rh 1 - - ( nurl_str_len rs ) rh 1 ) ``
+    : i route ( nurl_str_to_int ? hold ( nurl_str_slice rs 0 rh ) rs )
     : b recv ( seq ( nurl_str_slice tl + c2 1 - - ( nurl_str_len tl ) c2 1 ) `1` )
     // (`=`: the closure gives the capture a new value, releasing what it
     // held — every view, element and payload of it; agora #445.)
     : b asg ( seq cal `=` )
     : b dj | asg ( bck_callee_drops_elems cal aix )
     ? ! | dj ( nurl_sym_has_word g_fn_reallocs cal aix ) { ^ } {}
-    : s mj ( bck_sx_mut_storage st cap )
+    : ~ s mj ( bck_sx_mut_storage st cap )
+    // (A capture a holder took over — moved into a struct literal with its
+    // closure: it is no binding of its own any more, but the Rc it is is
+    // still the one the closure changes, which another argument may share;
+    // agora #736.)
+    ? & hold == 0 ( nurl_str_len mj ) { = mj ( nurl_str_cat cap `` ) } {}
     ? | == 0 ( nurl_str_len mj ) ( seq mj `*` ) { ^ } {}
     : s args ( bck_sx_split ( bck_field rec 8 ) )
     : i nargs ( bck_list_len_nl args )
@@ -47663,12 +47716,14 @@ unsafe @ __sx_mut_roots s st s e b named → s {
             } {}
             ? != 0 ( nurl_str_len hit ) {
                 : s nm ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int ( bck_path_root ( nurl_str_to_int hit ) ) ) ) )
-                : s r1 ? made `the body of this closure` ? < route 0 `the closure it calls` ( nurl_str_cat3 `the closure at argument ` ( nurl_str_int + route 1 ) `` )
+                : s r1 ? made `the body of this closure` ? < route 0 `the closure it calls` ( nurl_str_cat3 ? hold `a closure the value at argument ` `the closure at argument ` ( nurl_str_int + route 1 ) ? hold ` holds` `` )
                 : s k1 ? made `another of its captures` ? & recv == k - nargs 1 `the closure it calls` ( nurl_str_cat `argument ` ( nurl_str_int + k 1 ) )
                 : s c1 ( nurl_str_cat4 `'` nm ? made `' is reached by this closure through ` `' is reached by this call through ` r1 )
                 : s c2 ? asg ( nurl_str_cat `, which gives it a new value when it runs here, releasing what it held,` `` ) ( nurl_str_cat3 `, which passes it to '` ( bck_fn_show cal ) ? dj `', which may drop or replace what it holds, when it runs here,` `', which may move or free its buffer, when it runs here,` )
                 : s c3 ( nurl_str_cat3 ` and through ` k1 ? made `, which points into it, borrows from it or captured it: inside the body the two are unrelated names, and the change leaves the other dangling. Capture a copy that owns its data (string_from, vec_clone, slice_to_vec) instead, or take the view inside the body after the change.` `, which is it, points into it, borrows from it or captured it: inside the call the two are unrelated names, and the closure's change leaves the other dangling. Hand the call a copy that owns its data (string_from, vec_clone, slice_to_vec) as the other one, or do not hand both to the same call.` )
-                ( bck_emit_error ( nurl_sym_get g_bck `file` ) ( bck_field_int rec 3 ) ( nurl_str_cat3 c1 c2 c3 ) )
+                ? hold { ( __hroute_park hcal route ( nurl_sym_get g_bck `file` ) ( bck_field_int rec 3 ) ( nurl_str_cat3 c1 c2 c3 ) ) } {
+                    ( bck_emit_error ( nurl_sym_get g_bck `file` ) ( bck_field_int rec 3 ) ( nurl_str_cat3 c1 c2 c3 ) )
+                }
                 ^
             } {}
         } {}
@@ -47760,12 +47815,18 @@ unsafe @ bck_sx_is_id s e → b {
 
 // Add the effects `effs` (space-separated `name:callee:aix`) of the closure
 // at argument `idx` (-1: the closure called) to a call's routes.
-@ __clo_routes_add s routes i idx s effs → s {
+@ __clo_routes_add s routes i idx s effs → s { ^ ( __clo_routes_add_m routes ( nurl_str_int idx ) effs ) }
+
+// …of the closures the value at argument `idx` holds, handed to `callee`
+// (`Nh<callee>`, asked once the callee's summary is final; agora #736).
+@ __clo_routes_add_h s routes i idx s callee s effs → s { ^ ( __clo_routes_add_m routes ( nurl_str_cat3 ( nurl_str_int idx ) `h` callee ) effs ) }
+
+@ __clo_routes_add_m s routes s r s effs → s {
     : ~ s out ( nurl_str_cat routes `` )
     : ~ s rest ( nurl_str_cat effs `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s e ( __eff_plain ( str_first_word rest ) ) = rest ( str_skip_word rest )
-        : s w ( nurl_str_cat3 ( nurl_str_int idx ) `=` e )
+        : s w ( nurl_str_cat3 r `=` e )
         = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat w `` ) ( nurl_str_cat3 out ` ` w )
     }
     ^ out
@@ -77113,6 +77174,11 @@ unsafe @ __alloca_struct_params i syms i cg → v {
         : i __hll ( nurl_str_len __hlt0 )
         : s __hlt ? & & != 0 ( nurl_sym_len2 syms name `__inout` ) > __hll 0 == ( nurl_str_get __hlt0 - __hll 1 ) 42 ( nurl_str_slice __hlt0 0 - __hll 1 ) ( nurl_str_cat __hlt0 `` )
         : i __hcl ( bck_walk_class __hlt )
+        // (One that can hold closures — a struct with a closure field, an
+        // option of one, a Vec of them — stands for what its caller's value
+        // holds, `hp#fname#k`: whether this function runs that is its own
+        // summary, __hruns_mark / resolve_hold_routes; agora #736.)
+        ? != 0 g_borrowck { ( __clo_hold_param syms name fname index __hlt ) } {}
         // (…and a closure: what calling it hands back may be a copy of what
         // it holds — an iterator over the caller's Vec yields its elements,
         // `iter_collect`'s source — so what this function makes of its
@@ -81671,7 +81737,14 @@ unsafe @ __clo_val_members i syms i tt s val → s {
     // (A call handing back a closure whose effects it records: what nobody
     // here follows, and those effects as a member of their own; agora
     // #813.)
-    ? & == tt TT_LPAREN != 0 g_clo_eff_set { ^ ( nurl_str_cat `* ` ( nurl_sym_get syms `__last_call_clo_member__` ) ) } {}
+    // (…and what its holder arguments hold: the result may be a part of
+    // it — `( vec_get fs 0 )`, a helper handing back one of them; agora
+    // #736.)
+    ? & == tt TT_LPAREN | != 0 g_clo_eff_set != 0 g_call_hold_set {
+        : s __cm ? == 0 g_clo_eff_set `` ( nurl_sym_get syms `__last_call_clo_member__` )
+        : s __hm ? == 0 g_call_hold_set `` ( nurl_sym_get syms `__last_call_hold_ms__` )
+        ^ ( __words_join ( nurl_str_cat `*` `` ) ( __words_join __cm __hm ) )
+    } {}
     ? ( is_ident_tok tt ) {
         ? ( __is_closure_ty ( nurl_sym_get syms val ) ) { ^ ( __clo_node_of syms val 0 ) } {}
         // (A value that holds closures — a struct with a closure field, an
@@ -81847,7 +81920,7 @@ unsafe @ __clo_hold_bind i syms s name s ty i tt s val b grow → v {
     ? ! grow { ( nurl_sym_def syms ( nurl_str_cat name `__clonode` ) `` ) } {}
     // (A call's result holds closures nobody here built — unless its
     // callee's answer says what they do: a builder's, `retcloeff`.)
-    ? & == tt TT_LPAREN == 0 g_clo_eff_set { ^ v } {}
+    ? & & == tt TT_LPAREN == 0 g_clo_eff_set == 0 g_call_hold_set { ^ v } {}
     ( __clo_hold_add syms name ( __clo_val_members syms tt val ) )
 }
 
@@ -81873,9 +81946,9 @@ unsafe @ __clo_hold_add i syms s name s ms → v {
 // A payload read out of a holder — `?? o { T g → ( g ) }` over an option
 // of a closure, a struct's option field: one of what that holds, and still
 // read by its interface (agora #736).
-unsafe @ __clo_hold_payload i syms s pv s root → v {
-    ? | == 0 g_clo_hold_n == 0 ( nurl_str_len root ) { ^ v } {}
-    : s hn ( nurl_sym_get2 syms root `__clonode` )
+unsafe @ __clo_hold_payload i syms s pv s root s cms → v {
+    ? | == 0 g_clo_hold_n & == 0 ( nurl_str_len root ) == 0 ( nurl_str_len cms ) { ^ v } {}
+    : s hn ? != 0 ( nurl_str_len root ) ( nurl_sym_get2 syms root `__clonode` ) ( nurl_str_cat cms `` )
     ? == 0 ( nurl_str_len hn ) { ^ v } {}
     : s ty ( nurl_sym_get syms pv )
     ? ( __is_closure_ty ty ) {
@@ -81906,6 +81979,143 @@ unsafe @ __clo_hand_resolve i syms s rec → s {
 
 // Spaces as `|` (one word in a word list), and back.
 @ __bar_swap_sp s x → s { ^ ( bck_swap_char x ? < ( nurl_str_find x ` ` ) 0 124 32 ? < ( nurl_str_find x ` ` ) 0 32 124 ) }
+
+// Parameter `name` (the `k`th) of function `fname` can hold closures: a
+// node standing for what its caller's value holds (`hp#fname#k`).
+unsafe @ __clo_hold_param i syms s name s fname i k s ty → v {
+    : i c0 ( nurl_str_get ty 0 )
+    ? & != c0 37 != c0 123 { ^ v } {}
+    ? ( __is_closure_ty ty ) { ^ v } {}
+    ? ! ( __ts_may_hold_closures ty syms ) { ^ v } {}
+    : s nd ( __clo_node_mint name )
+    = g_clo_hold_n + g_clo_hold_n 1
+    ( nurl_sym_def g_clo_nodes ( nurl_str_cat `h#` nd ) `1` )
+    ( nurl_sym_def g_clo_nodes nd ( nurl_str_cat4 `hp#` fname `#` ( nurl_str_int k ) ) )
+    ( nurl_sym_def syms ( nurl_str_cat name `__clonode` ) nd )
+}
+
+// The holder parameters (`hp#fn#k`) the closures `ms` (node members, or a
+// node) may have come out of.
+@ __clo_hp_of s ms → s {
+    ? == 0 ( nurl_str_len ms ) { ^ ( nurl_str_cat `` `` ) } {}
+    : ~ s out ``
+    : ~ s seen ``
+    : ~ s work ( nurl_str_cat ms `` )
+    ~ != 0 ( nurl_str_len work ) {
+        : s m ( str_first_word work ) = work ( str_skip_word work )
+        ? ! ( str_contains_word seen m ) {
+            = seen ( __word_add seen m )
+            ? != 0 ( nurl_str_starts m `hp#` ) { = out ( __word_add out m ) } {
+                ? & ! ( seq m `*` ) != 0 ( nurl_str_find m `__closure_` ) { = work ( __words_join work ( nurl_sym_get g_clo_nodes m ) ) } {}
+            }
+        } {}
+    }
+    ^ out
+}
+
+// The functions those parameters (`hp#fn#k` words) are of run what they
+// hold.
+@ __hruns_mark s hps → v {
+    : ~ s r ( nurl_str_cat hps `` )
+    ~ != 0 ( nurl_str_len r ) {
+        : s w ( str_first_word r ) = r ( str_skip_word r )
+        ( nurl_sym_def g_pending_impl ( nurl_str_cat `hrun##` ( nurl_str_slice w 3 - ( nurl_str_len w ) 3 ) ) `1` )
+    }
+}
+
+// …if `callee` runs what its parameter `j` holds (`*`: a closure value
+// called, which may be any).
+@ __hruns_edge s hps s callee i j → v {
+    ? ( seq callee `*` ) { ( __hruns_mark hps ) ^ v } {}
+    : s e ( nurl_str_cat3 callee `#` ( nurl_str_int j ) )
+    : ~ s r ( nurl_str_cat hps `` )
+    ~ != 0 ( nurl_str_len r ) {
+        : s w ( str_first_word r ) = r ( str_skip_word r )
+        : s src ( nurl_str_slice w 3 - ( nurl_str_len w ) 3 )
+        : s k ( nurl_str_cat `hre##` src )
+        : s cur ( nurl_sym_get g_pending_impl k )
+        // (`hre_srcs`: the parameters handed on so, for resolve_hold_routes.)
+        ? == 0 ( nurl_str_len cur ) { ( nurl_sym_def g_pending_impl `hre_srcs` ( __word_add ( nurl_sym_get g_pending_impl `hre_srcs` ) src ) ) } {}
+        ? ! ( str_contains_word cur e ) { ( nurl_sym_def g_pending_impl k ( __words_join cur e ) ) } {}
+    }
+}
+
+// Argument `tt`/`val` (of type `at`) of a call of `callee` at `j`: a
+// closure out of a holder parameter may run there; a value holding what one
+// holds is handed on (__hruns_edge). What it holds, for the call's result.
+unsafe @ __hruns_arg_note i syms i tt s val s at s callee i j → s {
+    : i c0 ( nurl_str_get at 0 )
+    ? & != c0 37 != c0 123 { ^ ( nurl_str_cat `` `` ) } {}
+    ? ( __is_closure_ty at ) {
+        : s hp ( __clo_hp_of ? ( is_ident_tok tt ) ( nurl_sym_get2 syms val `__clonode` ) ( __clo_val_members syms tt val ) )
+        ? != 0 ( nurl_str_len hp ) { ( __hruns_mark hp ) } {}
+        ^ ( nurl_str_cat `` `` )
+    } {}
+    : s ms ? ( is_ident_tok tt ) ( nurl_sym_get2 syms val `__clonode` ) ? | | | == tt TT_DOT == tt TT_AT == tt TT_LPAREN | == tt TT_QUEST == tt TT_QUESTQUEST ( __clo_val_members syms tt val ) ``
+    : ~ s real ``
+    : ~ s r ( nurl_str_cat ms `` )
+    ~ != 0 ( nurl_str_len r ) {
+        : s m ( str_first_word r ) = r ( str_skip_word r )
+        ? ! ( seq m `*` ) { = real ( __word_add real m ) } {}
+    }
+    ? == 0 ( nurl_str_len real ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s hp ( __clo_hp_of real )
+    ? != 0 ( nurl_str_len hp ) { ( __hruns_edge hp callee j ) } {}
+    ^ real
+}
+
+// A holder route the walk found (bck_clo_route_check), parked: reported
+// once `callee`'s summary says it runs what its parameter `j` holds.
+@ __hroute_park s callee i j s file i line s msg → v {
+    : s key ( nurl_str_cat `hrp#` ( nurl_str_int g_hrp_n ) )
+    = g_hrp_n + g_hrp_n 1
+    ( nurl_sym_def g_pending_impl key ( nurl_str_cat4 ( nurl_str_cat3 callee `#` ( nurl_str_int j ) ) `\t` ( nurl_str_cat3 file `\t` ( nurl_str_int line ) ) ( nurl_str_cat `\t` msg ) ) )
+}
+
+// Does `fk` (`fn#k`) run what parameter k of fn holds?
+@ __hruns_is s fk → b { ^ != 0 ( nurl_sym_len g_pending_impl ( nurl_str_cat `hrun##` fk ) ) }
+
+// Every summary final: what each function hands its holder parameters on
+// to runs, it runs (to a fixed point); then each parked holder route whose
+// callee runs what that parameter holds is reported — a closure value
+// called, which may be any, always is.
+unsafe @ resolve_hold_routes → v {
+    ? == 0 g_hrp_n { ^ v } {}
+    : ~ b grew T
+    ~ grew {
+        = grew F
+        : ~ s r ( nurl_str_cat ( nurl_sym_get g_pending_impl `hre_srcs` ) `` )
+        ~ != 0 ( nurl_str_len r ) {
+            : s src ( str_first_word r ) = r ( str_skip_word r )
+            ? ! ( __hruns_is src ) {
+                : ~ s es ( nurl_sym_get g_pending_impl ( nurl_str_cat `hre##` src ) )
+                : ~ b hit F
+                ~ & ! hit != 0 ( nurl_str_len es ) {
+                    : s e ( str_first_word es ) = es ( str_skip_word es )
+                    ? ( __hruns_is e ) { = hit T } {}
+                }
+                ? hit { ( nurl_sym_def g_pending_impl ( nurl_str_cat `hrun##` src ) `1` ) = grew T } {}
+            } {}
+        }
+    }
+    : ~ i i 0
+    ~ < i g_hrp_n {
+        : s rec ( nurl_sym_get g_pending_impl ( nurl_str_cat `hrp#` ( nurl_str_int i ) ) )
+        : i t1 ( nurl_str_find rec `\t` )
+        : s fk ( nurl_str_slice rec 0 t1 )
+        : s r2 ( nurl_str_slice rec + t1 1 - - ( nurl_str_len rec ) t1 1 )
+        : i t2 ( nurl_str_find r2 `\t` )
+        : s file ( nurl_str_slice r2 0 t2 )
+        : s r3 ( nurl_str_slice r2 + t2 1 - - ( nurl_str_len r2 ) t2 1 )
+        : i t3 ( nurl_str_find r3 `\t` )
+        : s ln ( nurl_str_slice r3 0 t3 )
+        : s msg ( nurl_str_slice r3 + t3 1 - - ( nurl_str_len r3 ) t3 1 )
+        : i hs ( __str_rfind_char fk 35 )
+        : s cal ( nurl_str_slice fk 0 hs )
+        ? | | ( seq cal `*` ) ( __clo_is_node cal ) ( __hruns_is fk ) { ( bck_emit_error file ( nurl_str_to_int ln ) msg ) } {}
+        = i + i 1
+    }
+}
 
 // What running the closures `ms` (node members) may do: `key` (`le` / `la`)
 // of each literal they may be.
@@ -98576,6 +98786,7 @@ unsafe @ __compile_pipeline s src s path i syms i cg → v {
         ( __vk_assumptions_check )
         // (After every walk: the payload views are parked by the walks.)
         ( resolve_arc_mut )
+        ( resolve_hold_routes )
         ( resolve_lit_handoffs )
         ( resolve_sealed_handoffs )
         ( lazy_check_complete )

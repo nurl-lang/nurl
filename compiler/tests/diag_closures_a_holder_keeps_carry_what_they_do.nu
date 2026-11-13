@@ -8,7 +8,8 @@
 // #838), and so is a maker's closure over an rc_clone of its parameter
 // (Agora #845), and a struct's closure field given a changing closure
 // below its run in a loop, which the next round runs (Agora #843). Each
-// function is refused.
+// function is refused, and so is handing the holder to a function that
+// runs what it holds beside another handle on the Rc.
 $ `stdlib/std/rc.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
@@ -22,6 +23,12 @@ $ `stdlib/core/slice.nu`
 @ runall ( Vec ( @ v ) ) fs → v { ?? ( vec_get [( @ v )] fs 0 ) { T g → { ( g ) } F → {} } }
 
 @ run ( @ v ) f → v { ( f ) }
+
+@ viewrun C c ( Rc ( Vec u ) ) other → v {
+    : ( Slice u ) sl ( slice_from_vec [u] ( rc_get [( Vec u )] other ) )
+    ( runc c )
+    ?? ( slice_get [u] sl 0 ) { T x → { ( nurl_println_int # i x ) } F → {} }
+}
 
 @ mk ( Rc ( Vec u ) ) h → ( @ v ) {
     ^ \ → v { ( rc_set [( Vec u )] h ( vec_new [u] ) ) }
@@ -150,6 +157,15 @@ $ `stdlib/core/slice.nu`
         = . c go \ → v { ( rc_set [( Vec u )] r ( vec_new [u] ) ) }
         = k + k 1
     }
+}
+
+// The struct handed beside another handle on the Rc its closure changes,
+// to a function that runs the struct's closure through a helper.
+@ handed_beside_another_handle → v {
+    : ( Rc ( Vec u ) ) r ( one )
+    : ( Rc ( Vec u ) ) r2 ( rc_clone [( Vec u )] r )
+    : C c @ C { \ → v { ( rc_set [( Vec u )] r ( vec_new [u] ) ) } 1 }
+    ( viewrun c r2 )
 }
 
 @ main → i {
