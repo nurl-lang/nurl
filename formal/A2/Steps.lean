@@ -3022,6 +3022,10 @@ theorem step_rbindExit {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
 theorem TakeVal.blk {m m1 : Mem} {y : Var} {v : Val} (h : TakeVal m y v m1) : m1.blk = m.blk := by
   cases h <;> rfl
 
+/-- Agora #810: nor which blocks are taken. -/
+theorem TakeVal.taken {m m1 : Mem} {y : Var} {v : Val} (h : TakeVal m y v m1) : m1.taken = m.taken := by
+  cases h <;> rfl
+
 theorem EvalR.blk {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.ok v o m')) :
     BlkLe m.blk m'.blk := by
   cases h with

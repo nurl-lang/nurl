@@ -309,9 +309,6 @@ theorem BindParams.blk_eq {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var}
   | sink _ _ ih => exact ih
   | inout _ ih => exact ih
 
-theorem TakeVal.taken_eq {m m1 : Mem} {y : Var} {v : Val} (h : TakeVal m y v m1) : m1.taken = m.taken := by
-  cases h <;> rfl
-
 theorem BindParams.taken_eq {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var} {base i : Nat}
     (h : BindParams m ps as base i m') : m'.taken = m.taken := by
   induction h with
@@ -357,7 +354,7 @@ theorem EvalR.stay {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.
     rw [TakeVal.blk_eq h1] at h0 ⊢
     by_cases he : k = k0
     · subst he
-      rw [TakeVal.taken_eq h1] at htk
+      rw [TakeVal.taken h1] at htk
       rcases hk with ⟨hn, _⟩ | ⟨u, _, hu'⟩
       · rw [hn] at h0; cases h0
       · rw [hu'] at htk; cases htk
@@ -372,12 +369,12 @@ theorem EvalR.taken_stay {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR 
     {k : Nat} (hk : Out m k) : m1.taken k = m.taken k := by
   cases h with
   | arcNew h1 _ | lockNew h1 _ _ | cellNew h1 _ _ | chanSendClosed _ h1 _ _ _ _ =>
-    exact congrFun (TakeVal.taken_eq h1) k
-  | chanSend _ h1 _ _ _ _ _ => exact congrFun (TakeVal.taken_eq h1) k
-  | lockRestore _ h1 _ _ _ => exact congrFun (TakeVal.taken_eq h1) k
+    exact congrFun (TakeVal.taken h1) k
+  | chanSend _ h1 _ _ _ _ _ => exact congrFun (TakeVal.taken h1) k
+  | lockRestore _ h1 _ _ _ => exact congrFun (TakeVal.taken h1) k
   | lockTake _ h0 _ => exact upd_ne _ _ (hk.ne_some h0)
-  | pair h1 h2 => rw [TakeVal.taken_eq h2, TakeVal.taken_eq h1]
-  | inl h1 | inr h1 | pack h1 => rw [TakeVal.taken_eq h1]
+  | pair h1 h2 => rw [TakeVal.taken h2, TakeVal.taken h1]
+  | inl h1 | inr h1 | pack h1 => rw [TakeVal.taken h1]
   | _ => rfl
 
 /-- A lock scope's end changes no block but its own. -/
@@ -492,7 +489,7 @@ theorem Step.taken_stay {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m 
   | callc _ _ _ _ hb => exact fun _ => congrFun (BindParams.taken_eq hb) k
   | push h1 _ _ _ | pushRealloc h1 _ _ _ | insert _ h1 _ _ _ | editPush h1 _ _ | editPushRealloc h1 _ _
   | editSet _ _ h1 _ _ _ | editSetOOB _ h1 _ _ _ =>
-    exact fun _ => congrFun (TakeVal.taken_eq h1) k
+    exact fun _ => congrFun (TakeVal.taken h1) k
   | withLock _ h0 _ _ => exact fun hk => upd_ne _ _ (hk.ne_some h0)
   | _ => exact fun _ => rfl
 

@@ -252,6 +252,31 @@ theorem lockRestore_frees_nothing {m m' : Mem} {a y : Var} {v : Val} {o : Bool}
     have ha := TakeVal.alloc h1
     exact ⟨ha, k, t, w, by rw [← TakeVal.blk h1]; exact hk, by simp [upd]⟩
 
+/-- Agora #810: **a restore fills only a taken block**: on a lock block whose
+    payload a `withLock` has checked out (`CheckedOut`: out, not taken)
+    `locked_restore` panics (`EvalR.lockRestoreHeld`) and has no other
+    result, as `nurl_lk_restore_begin` refuses a lock word that is `HELD`,
+    not `TAKEN` ("the value was not taken"); so a restore never refills a
+    block another frame holds (`A3.reach_lock_excl`). -/
+theorem lockRestore_checked_out {m : Mem} {a y : Var} {o : Bool} {k : Nat} {t : Ty}
+    (ha : m.st a = some ⟨o, some (.lk k)⟩) (hk : CheckedOut m k t) :
+    EvalR m (.lockRestore a y) .panic ∧ ∀ v o' m', ¬ EvalR m (.lockRestore a y) (.ok v o' m') := by
+  refine ⟨EvalR.lockRestoreHeld ha hk.1 hk.2, fun v o' m' h => ?_⟩
+  cases h with
+  | lockRestore ha' h1 _ htk _ =>
+    rw [ha] at ha'; cases ha'
+    rw [TakeVal.taken h1, hk.2] at htk; cases htk
+
+/-- ... and on one whose payload is in it panics too (`EvalR.lockRestoreP`). -/
+theorem lockRestore_present {m : Mem} {a y : Var} {o : Bool} {k : Nat} {t : Ty} {p : Val}
+    (ha : m.st a = some ⟨o, some (.lk k)⟩) (hk : m.blk k = some ⟨t, .lock, some p⟩) :
+    EvalR m (.lockRestore a y) .panic ∧ ∀ v o' m', ¬ EvalR m (.lockRestore a y) (.ok v o' m') := by
+  refine ⟨EvalR.lockRestoreP ha hk, fun v o' m' h => ?_⟩
+  cases h with
+  | lockRestore ha' h1 h0 _ _ =>
+    rw [ha] at ha'; cases ha'
+    rw [TakeVal.blk h1, hk] at h0; cases h0
+
 /-! ### A3.3's rest: `rw_try_read`, `rw_try_write`, `wguard_get`, `rw_get`
 
 `rw_try_read` and `rw_try_write` answer an option where `rw_read` and the
@@ -1007,7 +1032,7 @@ theorem _root_.A2.StmtT.mutexUnlock {P : Prog} {Γ Δ : Ctx} {F : List Var} {r m
     (hu : Γ u = some Eu) (hlu : Eu.live = true) (htu : Eu.ty = .int)
     (hr : Γ r = none) (hrF : r ∉ F) (hb : StmtT P (A2.setE Γ r intE) F s Δ) (hend : EndOK Δ r) :
     StmtT P Γ F (Stmt.mutexUnlock r m u s) (exitScope r Δ) :=
-  StmtT.letv hs hr hrF (RhsT.lockRestore hm hlm htm hu hlu htu PushArg.int rfl) hb hend
+  StmtT.letv hs hr hrF (RhsT.lockRestore hm hlm htm hu hlu htu PushArg.int) hb hend
 
 /-- **`mutex_with` is typed**: A3.2's `withLock` on the integer lock, with its
     faithfulness premises (the mutex outlives the body: the runtime unlocks it

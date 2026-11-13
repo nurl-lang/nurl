@@ -49,12 +49,11 @@ stores and steps, not of this program's run (which no theorem here traces):
 
 Still refused (stricter than nurlc): `RwLocked D`'s read guard
 (`rwRead_dtor_refused`: a view's payload is a copy of the lock's, which owns
-nothing) and `locked_restore` of a destructor value (`lockRestore_dtor_refused`:
-the model's restore also fills a block a `withLock` has checked out, whose
-give-back would then drop its value with no code); a payload that holds a
-destructor value in a field of a type with no destructor of its own, or a
-destructor value (or a drained `Vec` of them) that holds a share
-(`Ty.lkPay`).  Since Agora #755's last cut a `Locked (Vec D)` is typed
+nothing); a payload that holds a destructor value in a field of a type with
+no destructor of its own, or a destructor value (or a drained `Vec` of them)
+that holds a share (`Ty.lkPay`).  Since Agora #810 `locked_restore` of a
+destructor value is typed (`lockRestore_dtor_typed`: the restore fills only a
+taken block, never a checked-out one).  Since Agora #755's last cut a `Locked (Vec D)` is typed
 (`mainV`, below: a push through the check-out), and so is a channel of `D`
 (`A3/ChanDtorWitness.lean`: its state under its glue). -/
 
@@ -364,11 +363,16 @@ theorem rwRead_dtor_refused {Γ Γ1 : Ctx} {F : List Var} {a : Var} {E Ea : Entr
   cases h with
   | rwRead ha' _ hty' _ hdf => rw [ha] at ha'; cases ha'; rw [hty] at hty'; cases hty'; cases hdf
 
-/-- **... and so is `locked_restore` of a destructor value.** -/
-theorem lockRestore_dtor_refused {Γ Γ1 : Ctx} {F : List Var} {a y : Var} {E Ea : Entry} {f : Nat} {u : Ty}
-    (ha : Γ a = some Ea) (hty : Ea.ty = .lk (.dtor f u)) : ¬ RhsT Γ F (.lockRestore a y) E Γ1 := fun h => by
-  cases h with
-  | lockRestore ha' _ hty' _ _ _ _ hdf => rw [ha] at ha'; cases ha'; rw [hty] at hty'; cases hty'; cases hdf
+/-- **... but `locked_restore` of a destructor value is typed** (Agora #810,
+    as nurlc's): the restore fills only a block `locked_take` emptied
+    (`EvalR.lockRestore` asks `Mem.taken`), never one a `withLock` has
+    checked out, whose give-back would then drop its value with no code;
+    until the model told the two apart the typing refused it (Agora #755). -/
+theorem lockRestore_dtor_typed {Γ Γ1 : Ctx} {F : List Var} {a y : Var} {Ea Ey : Entry} {f : Nat} {u : Ty}
+    {D : List Dep} (ha : Γ a = some Ea) (hla : Ea.live = true) (hty : Ea.ty = .lk (.dtor f u))
+    (hy : Γ y = some Ey) (hly : Ey.live = true) (htyy : Ey.ty = .dtor f u)
+    (hp : PushArg Γ F y Ey (.dtor f u) D Γ1) : RhsT Γ F (.lockRestore a y) intE Γ1 :=
+  RhsT.lockRestore ha hla hty hy hly htyy hp
 
 /-! ### The program -/
 
