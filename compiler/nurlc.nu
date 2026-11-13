@@ -3679,6 +3679,12 @@ unsafe @ note_unsafe_item s pos s what → v {
 // from (bck_note_borrow), so it ends with that field, not every borrow
 // of `h`.
 : ~ s g_bck_rhs_path ``
+// A field viewer's path a binding bound from it inherits (agora #271).
+: ~ s g_bck_rhs_fview ``
+// The order field readers were bound in, for bck_fview_take (agora #387).
+: ~ i g_bck_fq 0
+// Was a field viewer (`fb_`) bound in this function at all?
+: ~ i g_bck_fv_any 0
 // Source expressions (srcx): where a view's value came from, as an
 // expression the walk evaluates once every summary is final — a binding
 // (`v`), a field path (`b.items`), a call (`callee(a0|a1|…)`: the
@@ -32329,7 +32335,13 @@ unsafe @ __src_has_raw_ptr s text → b {
                 ( mem_udrop_flag_set syms cg ptr f )
                 ( mem_udrop_flag_set syms cg src `0` )
                 ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__fsrc` ) fsrc )
+                // (The borrow checker's view of it too: a viewer of the
+                // field the source views — its path, not the source's name,
+                // so taking a library handle over through it marks the
+                // struct, h348; agora #271.)
+                = g_bck_rhs_fview ( nurl_sym_get2 syms src `__bfpath` )
                 ( __sb syms ptr `local` )
+                = g_bck_rhs_fview ``
                 ^ v } {}
         } {}
         // A String / Vec is a freely aliased handle: `: ~ ( Vec T ) cur
@@ -36794,7 +36806,11 @@ unsafe @ __rpg_rget i r i k → i { ^ ( nurl_peek # s g_rpg_rec + * r 6 k ) }
 // from what its initialiser read. A superset of the true source only ends
 // the borrow early — a rejection, never a hole.
 @ bck_note_borrow i syms s ptr s how → v {
-    : s rpath ( nurl_str_cat g_bck_rhs_path `` )
+    // (Bound from a binding that views a field, `: R b a`: it views the
+    // same field — __mem_udrop_bind_flag hands over that field's path, read
+    // where that binding was noted, not off this line's reads; agora #271.)
+    : b inh != 0 ( nurl_str_len g_bck_rhs_fview )
+    : s rpath ? inh ( nurl_str_cat g_bck_rhs_fview `` ) ( nurl_str_cat g_bck_rhs_path `` )
     = g_bck_rhs_path ``
     ? | | == g_borrowck 0 != g_bck_rec_off 0 ! ( bck_sound ) { ^ v } {}
     : s name ( nurl_sym_get2 syms ptr `__bname` )
@@ -36806,7 +36822,7 @@ unsafe @ __rpg_rget i r i k → i { ^ ( nurl_peek # s g_rpg_rec + * r 6 k ) }
     // buffer, which raw code vouches for — it follows nothing, as before.)
     : s lr ( nurl_sym_get g_bck `lastreads` )
     : b raw ( seq how `elem` )
-    : b fpath & & ! raw != 0 ( nurl_str_len rpath ) ( str_contains_word lr ( __path_root_name rpath ) )
+    : b fpath | & inh ! raw & & ! raw != 0 ( nurl_str_len rpath ) ( str_contains_word lr ( __path_root_name rpath ) )
     : s fp ? raw ( nurl_str_cat `` `` ) ? fpath ( nurl_str_cat rpath `` ) ( nurl_str_cat lr `` )
     // (`sx`: what a join's source expression names alone — the arms' own
     // handles, bck_sx_hpaths; not the line's reads.)
@@ -36853,6 +36869,7 @@ unsafe @ __rpg_rget i r i k → i { ^ ( nurl_peek # s g_rpg_rec + * r 6 k ) }
         = g_bck_brw_on 1
     } {}
     ( bck_record ? taker ? hfield `fborrowh` `fborrow` ? hc ? vb `vcborrow` `cborrow` ? vb `vborrow` `borrow` name ( nurl_str_to_int ( nurl_sym_get g_bck `lastline` ) ) )
+    ? taker { ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__bfpath` ) rpath ) } {}
     = g_bck_brw_on 0
     ( bck_put `reads` saved )
 }
@@ -37909,11 +37926,27 @@ unsafe @ amv_close → v { = g_amv_cur 0 }
 // Does the statement being compiled move `src` (amv_open)?
 @ amv_moves s src → b { ^ & != 0 g_amv_cur ( seq g_amv_src src ) }
 
+// Does `: T q p` move by-value parameter `p`'s drop flag into q
+// (__mem_udrop_bind_flag)? A value with a drop of its own that is no value
+// handle — a String or a Vec is linked as a cursor instead — whose
+// parameter has a drop registration.
+@ __param_flag_moves i syms s p s vt → b {
+    ? ( __is_handle_ty vt ) { ^ F } {}
+    : s sp ( mem_udrop_ptr_of syms p )
+    ^ & != 0 ( nurl_str_len sp ) != 0 ( nurl_sym_len2 syms sp `__pname` )
+}
+
 @ bck_let_alias i syms b is_mut i rhs_tt s rhs_val s vt i line s dest → v {
     ( amv_close )
     // A `sink` parameter is the function's own: copying it hands it on
     // like any owner, it is not a borrow of the caller's value.
-    : b is_param & ( nurl_sym_has_word syms `__fn_param_names__` rhs_val ) == 0 ( nurl_sym_len2 syms rhs_val `__sinkp` )
+    // (…and so is one whose drop flag the generated code moves into the
+    // new name — a by-value parameter with a drop of its own, its flag
+    // "this function consumes it", __mem_udrop_bind_flag: `: R q p` holds
+    // p under another name, and what q is handed to, p is (__pmove, agora
+    // #759). Copied for the walk, q was a borrow, and handing it to a sink
+    // was refused where p itself was accepted — agora #768.)
+    : b is_param && && ( nurl_sym_has_word syms `__fn_param_names__` rhs_val ) == 0 ( nurl_sym_len2 syms rhs_val `__sinkp` ) ! ( __param_flag_moves syms rhs_val vt )
     ? & & & ! is_mut ( is_ident_tok rhs_tt ) ( bck_is_heap_lty vt ) ! is_param
     {  // Under the sound rules the walk decides (`:a`): an owner's value
         // moves to `b`, a borrow is copied (b borrows from its sources).
@@ -42750,6 +42783,9 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 // field it views, before its sources were flattened to owners.)
                 ( bck_put_bf `fb_` bws ? bfvh `h` ? bfv `1` `` )
                 ( bck_put_bf `fp_` bws ? bfv ( nurl_str_cat bsrcs `` ) `` )
+                // (…and when, among the readers of a field: the first one a
+                // store replacing it hands the value to, bck_fview_take.)
+                ? bfv { = g_bck_fq + g_bck_fq 1 ( bck_put ( bck_bkey `fq_` bws ) ( nurl_str_int g_bck_fq ) ) = g_bck_fv_any 1 } {}
                 // (`tborrow`: it holds the drop of the local it copies —
                 // bck_let_alias — which a replacing `inout` call hands it.)
                 ( bck_put ( bck_bkey `tk_` bws ) ? != 0 ( nurl_str_starts rec `tborrow\t` ) ( nurl_str_cat bsrcs `` ) `` )
@@ -42898,7 +42934,22 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 // bck_sx_name — one key per row, not a key per question).
                 ( bck_put ( bck_bkey `vw_` ( bck_field rec 1 ) ) ? ( seq ( bck_field rec 5 ) `o` ) `o` ? | ( seq ( bck_field rec 5 ) `v` ) ( seq ( bck_field rec 5 ) `w` ) `1` `` )
                 ( bck_put ( bck_bkey `wv_` ( bck_field rec 1 ) ) ? ( seq ( bck_field rec 5 ) `w` ) `1` `` )
-                ? != 0 g_bck_has_borrow { ( bck_put_bf `bs_` ( bck_field rec 1 ) `` ) } {}
+                // (…and it views no field any more, as at a `let`: its new
+                // value's own borrow row says if it does. Kept, a reader of
+                // `. o name` re-pointed at a `vec_at` element was still
+                // taken for the field's viewer — a store replacing the field
+                // made it the old value's owner, and handed to a sink it
+                // freed the element under the Vec; agora #387.)
+                ? != 0 g_bck_has_borrow {
+                    ( bck_put_bf `bs_` ( bck_field rec 1 ) `` )
+                    // (Asked only where a field viewer was bound at all.)
+                    ? != 0 g_bck_fv_any {
+                        ? != 0 ( nurl_sym_len g_bck ( bck_bkey `fb_` ( bck_field rec 1 ) ) ) {
+                            ( bck_put_bf `fb_` ( bck_field rec 1 ) `` )
+                            ( bck_put_bf `fp_` ( bck_field rec 1 ) `` )
+                        } {}
+                    } {}
+                } {}
                 ( bck_br_event asid )
                 // (A join or a block with no call of its own: the line's other calls
                 // lend to its arms, not to it — as for a `let`.)
@@ -49270,6 +49321,24 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
                 ( bck_diag_borrow_consumed k ( bck_field_int rec 3 ) )
                 = out ( bck_st_set out k BCK_INVALID )
             } {
+                // The field it took over is gone from where it lives: what
+                // else read it — another viewer of it, `: R b a` beside a,
+                // or `: R a . col res` twice — holds a copy of a handle the
+                // consumer now owns, and ends (agora #271).
+                // (…a field of it or one holding it too: `. . col res v` beside
+                // `. col res`, as for a field replaced.)
+                : ~ s frr ( nurl_sym_get g_bck ( bck_bkey `fp_` ks ) )
+                : s fwhy ? == 0 ( nurl_str_len frr ) `` ( nurl_str_cat3 `the field it reads was taken over by consuming '` ( nurl_sym_get2 g_bck `rv_` ks ) `', a binding read out of it` )
+                ~ != 0 ( nurl_str_len frr ) {
+                    : i fsid ( nurl_str_to_int ( str_first_word frr ) ) = frr ( str_skip_word frr )
+                    ? == 0 g_bck_has_paths { = out ( bck_borrow_end out fsid ( bck_field_int rec 3 ) fwhy 0 ) } {
+                        : ~ s prest ( nurl_sym_get g_bck ( bck_bkey `bsrcs` `` ) )
+                        ~ != 0 ( nurl_str_len prest ) {
+                            : i pid ( nurl_str_to_int ( str_first_word prest ) ) = prest ( str_skip_word prest )
+                            ? ( bck_paths_overlap fsid pid ) { = out ( bck_borrow_end out pid ( bck_field_int rec 3 ) fwhy 0 ) } {}
+                        }
+                    }
+                }
                 // …and the struct whose library handle field the viewer took
                 // over goes with it: the field, emptied, holds no handle
                 // (h348) — and handed to another thread, the handle is that
@@ -49774,27 +49843,47 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
 }
 
 // End every borrow taken from `sid` (and the borrows taken from those).
-// A field replaced: each binding viewing exactly that field (`fborrow`,
+// A field replaced: the first binding viewing exactly that field (`fborrow`,
 // still a borrow) owns the value it held from here on, as codegen hands it
-// over (__fs_viewers_take).
+// over (__fs_viewers_take) — to the first such reader, in the order the
+// readers were bound (`fq_`). Every later one is left a view of that
+// value: a borrow of the reader that owns it now, ended where that one
+// is consumed or given a new value, and never handed over itself (agora
+// #387).
 @ bck_fview_take s st s wids → s {
     : ~ s out st
     : ~ s takers ``
     : i n ( nurl_str_len st )
     : ~ i k 0
+    : ~ i first -1
+    : ~ i fq 0
     ~ < k n {
         ? == BCK_BORROWED_SHARED ( bck_st_get out k ) {
             : s ks ( nurl_str_int k )
             ? & != 0 ( nurl_sym_len g_bck ( bck_bkey `fb_` ks ) ) ( seq ( nurl_sym_get g_bck ( bck_bkey `fp_` ks ) ) wids ) {
-                = out ( bck_st_set out k BCK_OWNED )
-                ( bck_put_bf `bs_` ks `` )
-                ( bck_put_bf `fb_` ks `` )
-                ( bck_put_bf `fp_` ks `` )
+                : i q ( nurl_str_to_int ( nurl_sym_get g_bck ( bck_bkey `fq_` ks ) ) )
+                ? | < first 0 < q fq { = first k = fq q } {}
                 = takers ? == 0 ( nurl_str_len takers ) ( nurl_str_cat ks `` ) ( nurl_str_cat3 takers ` ` ks )
             } {}
         } {}
         = k + k 1
     }
+    ? >= first 0 {
+        : s fs ( nurl_str_int first )
+        = out ( bck_st_set out first BCK_OWNED )
+        ( bck_put_bf `bs_` fs `` )
+        ( bck_put_bf `fb_` fs `` )
+        ( bck_put_bf `fp_` fs `` )
+        : ~ s trest ( nurl_str_cat takers `` )
+        ~ != 0 ( nurl_str_len trest ) {
+            : s ts ( str_first_word trest ) = trest ( str_skip_word trest )
+            ? ! ( seq ts fs ) {
+                ( bck_put_bf `fb_` ts `` )
+                ( bck_put_bf `fp_` ts `` )
+                = out ( bck_borrow_begin out ( nurl_str_to_int ts ) fs )
+            } {}
+        }
+    } {}
     // (…and what held a copy of the field's handle — a closure over a
     // viewer of it — holds one of the value a viewer took over: agora #483.)
     ? != 0 ( nurl_str_len takers ) { ( __bck_take_retie wids takers ) } {}
@@ -52612,6 +52701,7 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     = g_bck_has_deps 0
     = g_bck_has_cursor 0
     = g_bck_hc_any 0
+    = g_bck_fv_any 0
     = g_bck_bvr_any 0
     = g_bck_jgb_any 0
     = g_bck_hr_any 0
@@ -56478,6 +56568,12 @@ unsafe @ gen_assign i lex i syms i cg → s {
     }
     ? == 0 ( nurl_str_len place ) { ^ v } {}
     ( nurl_sym_def syms ( nurl_str_cat ptr `__fview` ) ( nurl_str_cat3 place `@` ( nurl_str_int g_bck_closure_depth ) ) )
+    // (…and, in this binding's own scope, whether a store replacing the
+    // field has handed it the old value since — `__ftk`, set there by
+    // __fs_viewers_take. Defined first in a block that store ran in, the
+    // fact went with that block: the binding, handed on after it, took
+    // the field's NEW value out of the struct, which leaked.)
+    ( nurl_sym_def syms ( nurl_str_cat ptr `__ftk` ) `` )
     : s cur ( nurl_sym_get syms `__fviews__` )
     ? ! ( str_contains_word cur ptr ) { ( nurl_sym_set_deep syms `__fviews__` ? == 0 ( nurl_str_len cur ) ( nurl_str_cat ptr `` ) ( nurl_str_cat3 cur ` ` ptr ) ) } {}
 }
@@ -76163,6 +76259,11 @@ unsafe @ __hmemo_close s key i mark b r → v {
     ~ < i fc {
         : s ft ( nurl_sym_get g_root_syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int i ) `__type` ) ) )
         ? | | ( __has_user_drop ft ) != 0 ( nurl_sym_len2 g_impl_name_syms `synthdrop##` ft ) ( __is_moveonly_libh ft ) { ^ T } {}
+        // …or an enum the compiler drops that cannot be copied as a handle
+        // (a payload it boxes is no value handle: `: | Shade { Mix Pt }`).
+        // The struct is then no handle either, and nothing dropped it — the
+        // enum's box and every other field leaked (agora #787).
+        ? & != 0 ( nurl_sym_len2 g_impl_name_syms `autodrop##` ft ) ! ( __is_handle_enum ft ) { ^ T } {}
         // …or holds one anywhere — its own fields (what a field that needs
         // a synthesised drop holds: __holds_user_drop asks the same three
         // questions at every level, answered once per type; asking this

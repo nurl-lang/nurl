@@ -363,6 +363,12 @@ jobs:
         # clean (Agora #232). No toolchain.
         shell: bash
         run: python3 tools/tests/test_holes_check.py
+      - name: Tree sweep time-limit controls
+        # tools/tree_sweep.sh against stand-in compilers: a compile that
+        # hangs is stopped at NURL_SWEEP_TIMEOUT and named first, one far
+        # slower is reported (Agora #794). No toolchain.
+        shell: bash
+        run: python3 tools/tests/test_tree_sweep.py
       - name: Package files are LF in every checkout
         # nurlpkg publish packs a package's files as the checkout holds
         # them: every text file under packages/ is pinned `eol=lf` or is
