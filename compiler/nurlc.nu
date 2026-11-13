@@ -63826,14 +63826,18 @@ unsafe @ __thr_peel s lty → s {
     // Inline aggregates — `?T` is `{ i1, T }`, `!T E` is `{ i1, T, E }`,
     // a slice is `{ T*, i64 }`. These carry their element types in the
     // spelling itself, so no registry lookup is involved.
-    // (A closure's `{ R (i8*, P…)*, i8* }` is spelled the same way and is
-    // read the same way where it is a field or an aggregate's member, as
-    // it always was: by the types its code hands back, not by what it
-    // captured. That refuses a holder of a closure handing back an Rc
-    // whatever the closure holds — and is all that refuses one whose
-    // closure was stored where the capture sets do not follow, agora
-    // #718; reading a closure by its captures alone waits for that.)
-    ? == ( nurl_str_get lty 0 ) 123  // '{' == 123
+    // A closure's `{ R (i8*, P…)*, i8* }` is spelled the same way, and is
+    // not one: what a closure holds is its env, which its type never
+    // names. Its signature names the types its code takes and hands back,
+    // which it holds none of. Read as members, a closure that captured
+    // nothing but hands back a `?( Rc i )` was refused, and what a closure
+    // over an Rc may do was never in its type at all. A closure is asked
+    // by its captures, wherever it is held:
+    // the capture set carried to every holder it is stored into (a call
+    // argument, a field assignment, a callee's store, a maker's result —
+    // agora #665, #717, #718), or "cannot be followed back" where it is
+    // not known (__send_verdict). Agora #788.
+    ? & == ( nurl_str_get lty 0 ) 123 ! ( __is_closure_ty lty )  // '{' == 123
     { : i afc ( agg_field_count syms lty )
         : ~ i ai 0
         ~ & >= afc 0 < ai afc {
