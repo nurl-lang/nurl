@@ -8928,6 +8928,10 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     // (A return is no value of the block it ends.)
     ? != 0 g_rpg_on { = g_rpg_vreads `` = g_rpg_ovreads `` } {}
     ( mem_ost_note syms ( __ret_ost syms hbit __rost_reg __rost | __rnone ( __ost_none val ) ) )
+    // (A slice: whether this path hands over the function's own — a binding
+    // it owns, a fresh literal or join, a field taken — or another's: the
+    // per-call answer its callers drop by, agora #540.)
+    ? & ( mem_is_slice_ty lt ) == 0 ( nurl_str_len hbit ) { = hbit ? | != 0 ( nurl_str_len skip ) ret_fresh_slice `true` `false` } {}
     ( mem_store_hown syms hbit )
     ( mem_save_return_proof syms cg lt skip_str_ptr | ret_is_direct_call ret_is_det_join )
     // The result's guard (mem_ret_guard_push) is for a value this function
@@ -25342,6 +25346,8 @@ unsafe @ gen_match i lex i syms i cg → s {
     // A single non-fresh live arm (a borrow/alias) clears it — mixed cases
     // stay unregistered (leak-not-UAF), mirroring gen_cond.
     : ~ b all_slice_fresh T
+    : ~ s m_sl_bits ``  // an i1 phi entry per arm: did it make a fresh slice (agora #664)
+    : ~ b m_sl_any F
     : ~ i live_slice_arms 0
     // Owned-string provenance across the arms, by the same all-live-
     // arms rule (mirrors gen_cond's `?`-join): the match result is a
@@ -26829,8 +26835,10 @@ unsafe @ gen_match i lex i syms i cg → s {
                     // phi. Count it, and clear the aggregate if it isn't fresh.
                     ? ( mem_is_slice_ty arm_type )
                     { = live_slice_arms + live_slice_arms 1
-                        ? == 0 ( nurl_str_len arm_slice_flag ) { = all_slice_fresh F } {} }
+                        ? == 0 ( nurl_str_len arm_slice_flag ) { = all_slice_fresh F } { = m_sl_any T } }
                     {}
+                    : s __slb ( nurl_str_cat4 `[ ` ? != 0 ( nurl_str_len arm_slice_flag ) `true` `false` `, %` ( nurl_str_cat arm_lbl ` ]` ) )
+                    = m_sl_bits ? == 0 ( nurl_str_len m_sl_bits ) __slb ( nurl_str_cat3 m_sl_bits `, ` __slb )
                     // Handle provenance: this arm reaches the phi. Note
                     // whether its value is EXACTLY a bare identifier load
                     // (the same token-plus-retid pair gen_cond trusts —
@@ -26876,6 +26884,8 @@ unsafe @ gen_match i lex i syms i cg → s {
                     = phi_entries ? == 0 ( nurl_str_len phi_entries )
                     ( nurl_str_cat entry `` )
                     ( nurl_str_cat phi_entries ( nurl_str_cat `, ` entry ) )
+                    : s __slf ( nurl_str_cat3 `[ false, %` arm_lbl ` ]` )
+                    = m_sl_bits ? == 0 ( nurl_str_len m_sl_bits ) __slf ( nurl_str_cat3 m_sl_bits `, ` __slf )
                 }
                 ( nurl_print `  br label %` )
                 ? arm_via_exit { ( nurl_print arm_lbl ) } { ( nurl_print end_label ) }
@@ -26995,6 +27005,15 @@ unsafe @ gen_match i lex i syms i cg → s {
         ( nurl_print ` = phi ` ) ( nurl_print ( nurl_llty phi_type ) )
         ( nurl_print ` ` ) ( nurl_print phi_full ) ( nurl_print `\n` )
         ? & m_allnone == 0 ( nurl_str_len fallback_pred ) { ( __ost_none_add syms final_reg ) } {}
+        // (A join of a fresh slice on some arms and one it does not own on
+        // the others: the bit that says which, as gen_cond's — agora #664.)
+        ? & & & m_sl_any ! all_slice_fresh ( mem_is_slice_ty phi_type ) != 0 ( nurl_str_len m_sl_bits ) {
+            : ~ s sbf ( nurl_str_cat m_sl_bits `` )
+            ? != 0 ( nurl_str_len fallback_pred ) { = sbf ( nurl_str_cat4 sbf `, [ false, %` fallback_pred ` ]` ) } {}
+            : s sbr ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print sbr ) ( nurl_print ` = phi i1 ` ) ( nurl_print sbf ) ( nurl_print `\n` )
+            ( nurl_sym_def syms `__last_slice_own_bit__` sbr )
+        } { ( nurl_sym_def syms `__last_slice_own_bit__` `` ) }
         // Every arm handed over an owned env: so does the join.
         ? & m_val ( __is_closure_ty phi_type ) { ( mem_retclo_take syms cg final_reg phi_type ) } {}
         ? ? any_hown ? ( __is_handle_ty ( __udrop_regty phi_type ) ) T ( __nc_held_ty phi_type ) F {
@@ -29356,6 +29375,17 @@ unsafe @ __bck_fall_ret_record i lex i syms i first_tt s first_val i sxn0 i line
 @ __slice_slot_empty i syms s src s vt → v {
     ( nurl_print `  store ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print ` zeroinitializer, ` ) ( nurl_print ( nurl_llty vt ) )
     ( nurl_print `* ` ) ( nurl_print ( nurl_sym_get2 syms src `__ptr` ) ) ( nurl_print `\n` )
+}
+
+@ __slice_call_flag i syms i cg s name s ptr s vt i rhs_tt → v {
+    ? | | != rhs_tt TT_LPAREN ! ( mem_is_slice_ty vt ) ( mem_slice_owned syms name ) { ^ v } {}
+    ? | == 0 ( nurl_str_len ptr ) != 37 ( nurl_str_get ptr 0 ) { ^ v } {}
+    ? ! ( __hown_dyn syms ( nurl_sym_get syms `__last_call_name__` ) ) { ^ v } {}
+    : s bit ( mem_call_retown syms cg )
+    ? == 0 ( nurl_str_len bit ) { ^ v } {}
+    ( mem_own_add syms name )
+    ( mem_slice_decl_add syms name )
+    ( mem_udrop_flag_set syms cg ptr bit )
 }
 
 // A `: ~` slice binding may be given a buffer of its own or a borrowed one
@@ -32293,6 +32323,9 @@ unsafe @ __pfo_bind_lends i syms s name → v {
 // results of them.
 @ __is_hown_ty s rlt → b {
     ? == 0 g_auto_drop_strings { ^ F } {}
+    // (A slice too: a function handing back its own slice on one path and a
+    // parameter's on another answers which, per call; agora #540.)
+    ? ( mem_is_slice_ty rlt ) { ^ T } {}
     // A value that cannot be copied answers per call too: saying whether
     // the caller owns it needs no copy (a Database lent out of a store on
     // one path and freshly opened on another).
@@ -56042,6 +56075,11 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             ( mem_slice_decl_add syms name )
             ( mem_journal_push_slice cg vt ptr )
         } {}
+        // (A call that answers per call whether it hands over a slice of its
+        // own — `@ pick b c [i p → [i { ? c { ^ p } {} … ^ s }` — owns its
+        // result by that answer, the binding's drop flag. Taken for a lend
+        // on every call, the owned path leaked, agora #540.)
+        ( __slice_call_flag syms cg name ptr vt bck_rhs_tt )
         ( __slice_mut_flag syms cg name ptr vt is_mutable )
         // (A value block whose tail is a slice the block bound: the new
         // binding takes the buffer over from it, as `= dst src` does. Both
@@ -56482,6 +56520,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
                 ( mem_slice_decl_add syms name )
                 ( mem_journal_push_slice cg ( nurl_llty ptype ) ptr )
             } {}
+            ( __slice_call_flag syms cg name ptr ( nurl_llty ptype ) bck_rhs_tt )
             ( __slice_mut_flag syms cg name ptr ( nurl_llty ptype ) is_mutable )
             // (…and a value block whose tail is a slice the block bound:
             // the new binding takes the buffer over, as above.)
