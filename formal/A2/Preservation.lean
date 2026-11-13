@@ -1926,7 +1926,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           exact ⟨by simp [Stmt.spine], E0, h0⟩
       · have hvx : v ≠ x := fun e => hxF (e ▸ hv)
         simp only [Mem.set_st, upd_ne _ _ hvx]; exact post.frz v hv
-  | @withLock Γ Δ F a x k Ea t hsrc hx hxF ha hla hta hs hpx _ _ _ _ =>
+  | @withLock Γ Δ F a x k Ea t hsrc hx hxF ha hla hta hs hpx _ _ hlive _ =>
     intro m m' s' hcd hi hst
     cases hst with
     | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk
@@ -1942,7 +1942,11 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       have hnrb : (lockE t).mode ≠ .rootb := by rcases out.mode with h | h <;> rw [h] <;> simp
       have hanch1 := post.rel.anch hanch
       have hsp : k.spine = [] := src_spine hsrc
-      refine ⟨setE Γ x (lockE t), StmtT.scopeL ⟨lockE t, by simp [setE], hnrb, lockE_ty t⟩ hxF hs hpx, ?_,
+      have hdl : t.holdsDtor = true → (lockE t).mode = .own ∧ ∃ E', Δ x = some E' ∧ E'.live = true :=
+        fun hd => ⟨by unfold lockE; split
+                      · next h => subst h; cases hd
+                      · rfl, hlive⟩
+      refine ⟨setE Γ x (lockE t), StmtT.scopeL ⟨lockE t, by simp [setE], hnrb, lockE_ty t, hdl⟩ hxF hs hpx, ?_,
         by simp, ?_,
         fun v hv => ?_⟩
       · refine Inv.mk hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
@@ -2527,7 +2531,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         exact ⟨by simp only [Stmt.spine, List.mem_cons, not_or]; exact ⟨hvs.1, hvs'⟩, rest⟩
   | @scopeL Γ Δ1 F kk t x k hxE hxF hs hpx ihs =>
     intro m m' s' hcd hi hst
-    obtain ⟨Ex, hx, hnrb, hty⟩ := hxE
+    obtain ⟨Ex, hx, hnrb, hty, hdl⟩ := hxE
     have hxsp : x ∉ k.spine := by
       have := hi.spineNd; simp only [Stmt.spine, List.nodup_cons] at this; exact this.1
     cases hst with
@@ -2581,7 +2585,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
     | scopeLFail _ _ =>
       -- A3.5's second cut: the give-back fails its crossing check: a panic in
       -- the scope, over the same store and context
-      refine ⟨Γ, StmtT.scopeL ⟨Ex, hx, hnrb, hty⟩ hxF ((StmtT.panic hi.wf hi.names (fun _ => rfl)
+      refine ⟨Γ, StmtT.scopeL ⟨Ex, hx, hnrb, hty, hdl⟩ hxF ((StmtT.panic hi.wf hi.names (fun _ => rfl)
           (fun _ E h => ⟨E, h, rfl, rfl, fun _ => rfl⟩) (DKeep.refl _ _) (DStay.refl _ _)).weakenOut
           hi.wf hi.names (skip_inv hs)) hpx,
         hi.respine rfl (fun v hv => by simpa [Stmt.vars] using hv) hi.catchOK trivial ⟨hi.dtorIn.1, trivial⟩,
@@ -2591,7 +2595,8 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       have hi0 : Inv m Γ F k := hi.scopeLIn hx hnrb
       obtain ⟨Γ', ht', hi', hnv, hk, hfz⟩ := ihs hs hcd hi0 hst'
       obtain ⟨hxsp', Ex', hx', hm', ht'', _⟩ := hk.1 x Ex hx hxsp
-      refine ⟨Γ', StmtT.scopeL ⟨Ex', hx', by rw [hm']; exact hnrb, by rw [ht'']; exact hty⟩ hxF ht' hpx, ?_, hnv,
+      refine ⟨Γ', StmtT.scopeL ⟨Ex', hx', by rw [hm']; exact hnrb, by rw [ht'']; exact hty,
+          fun hd => ⟨by rw [hm']; exact (hdl hd).1, (hdl hd).2⟩⟩ hxF ht' hpx, ?_, hnv,
         ⟨?_, ?_, hk.2.2.mono fun v hv h => hv (List.mem_cons_of_mem _ h)⟩, hfz⟩
       · exact
         { toMInv := hi'.toMInv

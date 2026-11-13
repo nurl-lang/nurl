@@ -76,6 +76,14 @@ import A3
 #print axioms A3.LockDtorWitness.scopeL_end_gives_back
 #print axioms A3.LockDtorWitness.scopeL_panic_gives_back
 #print axioms A3.LockDtorWitness.sendCheck_noArc
+-- Agora #805: a typed check-out frame of a destructor payload ends with `x` owning a `t`, and at every
+-- panic point `x` owns a `t` (given back) or nothing (`StmtT.scopeL` asks `x` an owner, live at the end)
+#print axioms A3.LockDtorWitness.scopeL_end_entry
+#print axioms A3.LockDtorWitness.scopeL_end_owns
+#print axioms A3.LockDtorWitness.scopeL_typed_end_gives_back
+#print axioms A3.LockDtorWitness.Step.panic_st
+#print axioms A3.LockDtorWitness.scopeL_entry
+#print axioms A3.LockDtorWitness.scopeL_typed_panic
 #print axioms A3.LockDtorWitness.rwRead_dtor_refused
 #print axioms A3.LockDtorWitness.lockRestore_dtor_refused
 #print axioms A3.LockDtorWitness.main_typed
@@ -100,6 +108,43 @@ import A3
 #print axioms A3.ChanDtorWitness.reap_runs_glue
 #print axioms A3.ChanDtorWitness.closed_send_parks
 #print axioms A3.chanDtor_claim
+-- Agora #805: every share in a configuration a typed start reaches names a key below `nid`
+-- (A3/Keys.lean), so a closed channel's send parks its value in a block nothing refers to: the
+-- step's marking sweep marks it and the sending thread reaps it; a witness closes a channel, then sends
+#print axioms A3.Step.keys
+#print axioms A3.TStep.keys
+#print axioms A3.CKeys.start
+#print axioms A3.reach_keys
+#print axioms A3.TStep.closed_send_reaps
+#print axioms A3.reach_closed_send_reaps
+#print axioms A3.closed_send_core
+#print axioms A3.TStep.closed_send_reaps_assign
+#print axioms A3.reach_closed_send_reaps_assign
+#print axioms A3.ChanDtorWitness.mainC_typed
+#print axioms A3.ChanDtorWitness.mainC_safe
+#print axioms A3.ChanDtorWitness.mainC_no_leak
+#print axioms A3.ChanDtorWitness.mainC_no_leak_panic
+#print axioms A3.chanClosed_claim
+#print axioms A3.chanClosed_reaps
+-- Agora #805: a channel's glue (`GlueOK` over `prod (vec s) int`) drains the queue in index order,
+-- as its frame's steps: the queue to a `letd` at `vec s`, whose frame ends by the drain
+#print axioms A3.LetdChain.of_movedFirst
+#print axioms A3.LetdChain.typed
+#print axioms A3.unpair_body
+#print axioms A3.RhsT.var_out_ty
+#print axioms A3.letd_vec_nest
+#print axioms A3.chanGlue_drains
+#print axioms A3.ChanDtorWitness.glueV_drains
+-- Agora #805: a receive of a destructor value: the option bound under its glue (`ofnR`, an
+-- `EnumGlueOK` glue of `sum int DT`), whose frame's end calls the glue, which takes the payload out
+#print axioms A2.DtorWitness.ofnR_ok
+#print axioms A3.ChanDtorWitness.mainR_typed
+#print axioms A3.ChanDtorWitness.mainR_safe
+#print axioms A3.ChanDtorWitness.mainR_no_leak
+#print axioms A3.ChanDtorWitness.mainR_no_leak_panic
+#print axioms A3.ChanDtorWitness.recv_runs_glue
+#print axioms A3.ChanDtorWitness.ofnR_takes_payload
+#print axioms A3.chanRecv_claim
 -- Agora #755 item 1: A3's marking sweep and eager reaps (A3/Mark.lean, A3/Reap.lean):
 -- the thread that drops the last share runs the destructor
 #print axioms A3.CParts.sweepD
