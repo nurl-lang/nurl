@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_view_lent_to_an_enclosing_call_cleared_by_a_later_argument.nu:16:5: error: '( string_data … )', argument 1 of 'two', borrows from 'fs': at line 16, in the same statement, it was passed to 'cz', which may drop or replace what it holds. A call's arguments are all evaluated before the call runs, so 'two' would read what it points into after that: freed memory. Bind the argument to a name before this statement and change 'fs' after the call, or take a copy that owns its data where it is lent (string_from, mem_dup).
+    ( nurl_println_int ( two ( string_data s ) ( cz fs ) ) )
+    ^
+error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

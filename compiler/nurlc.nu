@@ -19199,6 +19199,11 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     // __bck_call_open; agora #577.)
     ( __bck_call_open call_name )
     : ~ i arg_idx 0
+    // (The arguments that are a value a call made as them lends —
+    // `( two ( string_data s ) ( cz fs ) )` — each a borrow the walk makes
+    // where it is evaluated and reads where this call runs, after the calls
+    // in the arguments that follow: `%sxrN:k` words, __bck_sxr_note.)
+    : ~ s __sxr_uses ``
     // The arguments' source expressions, `|`-separated (__sx_operand), and
     // the binding the first argument is.
     : ~ s call_sx ``
@@ -19810,6 +19815,8 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // lent out of one the callee may change: arg_xsx below — and
         // whether that expression may lend at all, asked once: __sx_lendy.)
         : ~ s arg_xsx ``
+        // (…or one it only reads: __sxr_uses.)
+        : ~ s arg_rsx ``
         : ~ b arg_sxl F
         : ~ s arg_fread ``
         // (A field of a call's result: `1` when the object was a call, and
@@ -20370,6 +20377,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             // __arg_holds_changeable: agora #692.)
             : s __axp ? != 0 ( nurl_str_starts at `{ i1, ` ) ( __wrap_part at 0 ) at
             = arg_xsx ? & | ( __arg_holds_changeable __axp ) != 0 ( nurl_str_starts __axp `%Slice__` ) ( __arg_may_change syms call_name fname arg_idx __clo_node ) ( nurl_str_cat arg_sx `` ) ``
+            ? == 0 ( nurl_str_len arg_xsx ) { = arg_rsx ( nurl_str_cat arg_sx `` ) } {}
         } {}
         // Closure-env reclamation: if this argument was an inline closure
         // literal that allocated a heap env, and the callee uses this
@@ -21874,6 +21882,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // not compiled yet. An sx not modelled, `*`, keeps them — agora
         // #349.)
         : s __lsx ? __row_callee arg_xsx ``
+        ? & & != 0 ( nurl_str_len arg_rsx ) == 0 ( nurl_str_len __lsx ) ( bck_sound ) { = __sxr_uses ( __bck_sxr_note arg_rsx ( nurl_lex_line lex ) call_name arg_idx at __sxr_uses ) } {}
         ? != 0 ( nurl_str_len __lsx ) {
             ( bck_stash_pending_sx __lsx ( nurl_lex_line lex ) __rc arg_idx ? | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST `pendjoin` `pendlend` )
             ( __clo_effect_note_sx __lsx __rc arg_idx )
@@ -22363,6 +22372,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         = arg_idx + arg_idx 1
     }
     = g_pk_last __pk_acc
+    ? != 0 ( nurl_str_len __sxr_uses ) { ( __bck_sxr_uses __sxr_uses ( nurl_lex_line lex ) call_name ) } {}
     // (A kept argument of a callee of the program, into the locals among
     // its other arguments — the container it is put into, wherever it is:
     // agora #786.)
@@ -24121,6 +24131,9 @@ unsafe @ gen_cond i lex i syms i cg → s {
     // construct's own block, not a stray one (see g_cond_depth).
     = g_cond_depth + g_cond_depth 1
     = g_const_pred 0
+    // (What the calls before the condition left pending, to tell the
+    // condition's own: agora #604, below.)
+    : i c_pp0 ? == g_borrowck 0 0 ( nurl_sym_len g_bck `ppends` )
     : ~ s cv ( gen_operand lex syms cg )
     = g_cond_depth - g_cond_depth 1
     // (The condition as a whole is a type predicate's constant: it left a
@@ -24171,7 +24184,12 @@ unsafe @ gen_cond i lex i syms i cg → s {
     // the condition's effects, before the `?` — after an `expr` row that
     // reads what the condition read, as a statement's row comes before its
     // effects — so that both arms start from them: agora #584.)
-    ? != 0 g_bck_vs_pend {
+    // (…and so does a join whose value is taken, where its condition made
+    // calls: they run before either arm, whose value — `: s w ? == 0 ( cz
+    // fs ) v ```, an arm's read of a view — is read on the arm's edge row.
+    // Left to the statement's end, the calls' rows came after that read:
+    // a view `cz` ended was taken as live; agora #604.)
+    ? | != 0 g_bck_vs_pend & & c_valu != 0 g_borrowck > ( nurl_sym_len g_bck `ppends` ) c_pp0 {
         ( bck_record `expr` `` bck_cline )
         ( bck_flush_moves )
     } {}
@@ -41295,6 +41313,46 @@ unsafe @ bck_stash_rc_value i line s callee i argidx s at → v {
     ^ ( nurl_str_cat3 ( nurl_str_int line ) `/` ( nurl_str_int g_bck_stmt_line ) )
 }
 
+// The lent arguments a call's walk reads where it runs (agora #604): the
+// arguments of `( two ( string_data s ) ( cz fs ) )` are evaluated first,
+// then `two` reads what `string_data` lent it — after `cz` cleared `fs`.
+// The walk reads the calls' rows in the order their arguments were parsed,
+// each call's own read of a binding at its argument; a value a call lends
+// has no binding to be read by. One is made for it, `%sxrN`, as its
+// `:`-bound twin's (`: s t1 ( string_data s )  ( two t1 ( cz fs ) )`): a
+// `pendsxr` row at the argument borrows what its source expression lends
+// (`sx`, by the final summaries), and a `pendsxu` row after the call's last
+// argument reads it — ended by whatever ends a borrow, between the two.
+// Codegen is unchanged. `uses` gains `%sxrN:k`; a scalar argument (class
+// 1) holds nothing to end.
+: ~ i g_sxr_n 0
+
+@ __bck_sxr_note s sx i line s callee i k s at s uses → s {
+    : i cls ( bck_bind_class ( nurl_llty at ) )
+    ? == cls 1 { ^ ( nurl_str_cat uses `` ) } {}
+    = g_sxr_n + g_sxr_n 1
+    : s nm ( nurl_str_cat `%sxr` ( nurl_str_int g_sxr_n ) )
+    // (What the diagnostic names: the call it is handed to, the argument,
+    // the call that lent it — the source expression's head.)
+    : i op ( nurl_str_find sx `(` )
+    : s lender ? > op 0 ( nurl_str_slice sx 0 op ) ``
+    ( bck_put ( nurl_str_cat `sxd_` nm ) ( nurl_str_cat4 callee ` ` ( nurl_str_int k ) ( nurl_str_cat ` ` lender ) ) )
+    ( bck_add_word `ppends` ( nurl_str_cat4 ( nurl_str_cat3 `@` sx ` ` ) ( __bck_pend_line line ) ( nurl_str_cat3 ` ` nm ` ` ) ( nurl_str_cat3 ( nurl_str_int cls ) ` ` `pendsxr` ) ) )
+    ( bck_put `deferred` `1` )
+    : s w ( nurl_str_cat3 nm `:` ( nurl_str_int k ) )
+    ^ ? == 0 ( nurl_str_len uses ) w ( nurl_str_cat3 uses ` ` w )
+}
+
+// …and the reads, behind the rows of the call's arguments.
+@ __bck_sxr_uses s uses i line s callee → v {
+    : ~ s rest ( nurl_str_cat uses `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i c ( nurl_str_find w `:` )
+        ( bck_add_word `ppends` ( nurl_str_cat4 ( nurl_str_cat3 ( nurl_str_slice w 0 c ) ` ` ( __bck_pend_line line ) ) ( nurl_str_cat3 ` ` callee ` ` ) ( nurl_str_slice w + c 1 - - ( nurl_str_len w ) c 1 ) ` pendsxu` ) )
+    }
+}
+
 // …a `pendlend` / `pendjoin` row named by an argument's source expression,
 // `@sx` (gen_call): no binding of that name to name a consume's cause for.
 @ bck_stash_pending_sx s sx i line s callee i argidx s kind → v {
@@ -42247,7 +42305,7 @@ unsafe @ bck_kc i idx → i {
     ? == c 98 { ^ ? ( seq k `borrow` ) 7 ? ( seq k `brk` ) 21 ? ( seq k `block` ) 23 0 } {}
     ? == c 102 { ^ ? ( seq k `fieldset` ) 8 ? ( seq k `fevar` ) 35 ? ( seq k `fborrow` ) 7 ? ( seq k `fborrowh` ) 7 0 } {}
     ? == c 116 { ^ ? ( seq k `take` ) 37 ? ( seq k `tborrow` ) 7 ? ( seq k `tryret` ) 39 0 } {}
-    ? == c 112 { ^ ? ( seq k `pendcall` ) 9 ? ( seq k `pendretain` ) 10 ? ( seq k `pendtake` ) 11 ? ( seq k `pendkeep` ) 12 ? ( seq k `pendfield` ) 13 ? ( seq k `pendstore` ) 15 ? ( seq k `pendeff` ) 32 ? ( seq k `pendlend` ) 32 ? ( seq k `pendjoin` ) 32 ? ( seq k `pendlit` ) 32 ? ( seq k `pendfx` ) 38 ? ( seq k `pendfc` ) 38 ? ( seq k `pendread` ) 40 ? ( seq k `pendvf` ) 41 ? ( seq k `pendsink` ) 42 0 } {}
+    ? == c 112 { ^ ? ( seq k `pendcall` ) 9 ? ( seq k `pendretain` ) 10 ? ( seq k `pendtake` ) 11 ? ( seq k `pendkeep` ) 12 ? ( seq k `pendfield` ) 13 ? ( seq k `pendstore` ) 15 ? ( seq k `pendeff` ) 32 ? ( seq k `pendlend` ) 32 ? ( seq k `pendjoin` ) 32 ? ( seq k `pendlit` ) 32 ? ( seq k `pendfx` ) 38 ? ( seq k `pendfc` ) 38 ? ( seq k `pendread` ) 40 ? ( seq k `pendvf` ) 41 ? ( seq k `pendsink` ) 42 ? ( seq k `pendsxr` ) 43 ? ( seq k `pendsxu` ) 44 0 } {}
     ? == c 115 { ^ ? ( seq k `store` ) 14 0 } {}
     ? == c 120 { ^ ? ( seq k `xfer` ) 16 0 } {}
     ? == c 99 { ^ ? ( seq k `cdep` ) 17 ? ( seq k `cmove` ) 18 ? ( seq k `cnt` ) 22 ? ( seq k `cond` ) 25 ? ( seq k `callx` ) 31 ? ( seq k `clox` ) 34 ? ( seq k `cborrow` ) 7 0 } {}
@@ -44794,7 +44852,11 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
         // Most rows are plain statements: past their reads, nothing to do —
         // and no dozen kind compares to find that out. (A `pendread` row
         // is asked above, and is nothing else.)
-        ? | == kc 1 == kc 40 { = p + p 1 } {
+        // (`pendsxr` / `pendsxu`: a lent argument's borrow begins, and is
+        // read where its call runs — __bck_sxr_note.)
+        ? == kc 43 { = st ( __bck_sxr_begin st rec ) } {}
+        ? == kc 44 { = st ( __bck_sxr_read st rec ) } {}
+        ? | | | == kc 1 == kc 40 == kc 43 == kc 44 { = p + p 1 } {
             ? | == kc 21 == kc 22 {
                 // Into the innermost loop's exit / back-edge accumulator —
                 // leaving every block up to its body, whose bindings go here.
@@ -48704,6 +48766,33 @@ unsafe @ __bck_rv_self_tie i wid s cals → v {
 // a field, a value it hands on)?
 @ bck_callee_keeps s cal s aix → b {
     ^ | | | ( nurl_sym_has_word g_fn_keeps cal aix ) ( nurl_sym_has_word g_fn_stores cal aix ) ( nurl_sym_has_word g_fn_sink cal aix ) ( nurl_sym_has_word g_fn_escapes cal aix )
+}
+
+// A `pendsxr` row (__bck_sxr_note): the lent argument's binding borrows
+// the sources of its source expression (field 1, `@sx`), as a `let` of it
+// would — a view's mark where it is one (class 2). Not where they are not
+// modelled (`*`): the call's own rows judge it as before.
+@ __bck_sxr_begin s st s rec → s {
+    : i wid ( bck_intern ( bck_field rec 5 ) )
+    : s asx ( bck_field rec 1 )
+    : s srcs ( bck_sx_sources st ( nurl_str_slice asx 1 - ( nurl_str_len asx ) 1 ) wid )
+    ? | ( seq srcs `*` ) == 0 ( nurl_str_len srcs ) { ^ st } {}
+    : s plain ( __src_plain srcs )
+    ? == 0 ( nurl_str_len plain ) { ^ st } {}
+    : s ws ( nurl_str_int wid )
+    ( bck_put ( bck_bkey `vw_` ws ) ? ( seq ( bck_field rec 6 ) `2` ) `1` `` )
+    ? != 0 g_bck_has_borrow { ( bck_put_bf `vi_` ws ( __src_indirect srcs ) ) } {}
+    ^ ( bck_borrow_begin ( bck_st_set st wid BCK_OWNED ) wid plain )
+}
+
+// A `pendsxu` row: the call reads the argument (field 1, translated to its
+// binding) where it runs. Ended since its `pendsxr` row, it is refused as
+// a read of the `:`-bound twin is; either way the binding is done.
+@ __bck_sxr_read s st s rec → s {
+    : i wid ( bck_field_int rec 1 )
+    ? == BCK_UNINIT ( bck_st_raw st wid ) { ^ st } {}
+    ? & ( bck_sound ) == BCK_INVALID ( bck_st_get st wid ) { ( bck_diag_invalid wid ( bck_field_int rec 3 ) ) } {}
+    ^ ( bck_st_set st wid BCK_UNINIT )
 }
 
 // A `let` / `assign` row's binding `wid` takes its new value: a view
@@ -52813,11 +52902,27 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
     : s ws ( nurl_sym_get g_bck `warnset` )
     ? ( str_contains_word ws tag ) { ^ v } {}
     ( bck_put `warnset` ? == 0 ( nurl_str_len ws ) ( nurl_str_cat tag `` ) ( nurl_str_cat3 ws ` ` tag ) )
-    : s name ( nurl_sym_get2 g_bck `rv_` ids )
+    : s rvn ( nurl_sym_get2 g_bck `rv_` ids )
+    // (A lent argument's binding, `%sxrN` (__bck_sxr_note), is shown as the
+    // call that lent it.)
+    : s sxd ? != 0 ( nurl_str_starts rvn `%sxr` ) ( nurl_sym_get g_bck ( nurl_str_cat `sxd_` rvn ) ) ``
+    : s sxcal ( str_first_word sxd )
+    : s sxk ( str_first_word ( str_skip_word sxd ) )
+    : s sxl ( str_first_word ( str_skip_word ( str_skip_word sxd ) ) )
+    : s name ? == 0 ( nurl_str_len sxd ) rvn ? == 0 ( nurl_str_len sxl ) `the argument` ( nurl_str_cat3 `( ` sxl ` … )` )
     : ~ s info ( nurl_sym_get g_bck ( bck_bkey `bv_` ids ) )
     : s ln ( str_first_word info ) = info ( str_skip_word info )
     : s srcid ( str_first_word info ) = info ( str_skip_word info )
     : s sname ( bck_name_show ( nurl_sym_get2 g_bck `rv_` srcid ) )
+    // (…its own words, but where it ended by a mark of the cases below.)
+    ? & & != 0 ( nurl_str_len sxd ) != 0 ( nurl_str_len sname ) & & != 0 ( nurl_str_len ln ) ! ( seq ln `0` ) != 33 ( nurl_str_get info 0 ) {
+        : s x1 ( nurl_str_cat4 ( nurl_str_cat3 `'` name `', argument ` ) ( nurl_str_int + ( nurl_str_to_int sxk ) 1 ) ( nurl_str_cat3 ` of '` ( bck_fn_show sxcal ) `', borrows from '` ) `` )
+        : s x2 ( nurl_str_cat4 sname `': at line ` ln ( nurl_str_cat `, in the same statement, ` info ) )
+        : s x3a ( nurl_str_cat3 `. A call's arguments are all evaluated before the call runs, so '` ( bck_fn_show sxcal ) `' would read what it points into after that: freed memory. ` )
+        : s x3 ( nurl_str_cat3 x3a `Bind the argument to a name before this statement and change '` sname )
+        ( bck_emit_error ( nurl_sym_get g_bck `file` ) useline ( nurl_str_cat4 x1 x2 x3 `' after the call, or take a copy that owns its data where it is lent (string_from, mem_dup).` ) )
+        ^ v
+    } {}
     // (A `??` arm's payload read in place out of a program enum's binding
     // that was given a new value: __bck_epy_release.)
     ? ( seq ( str_first_word info ) `!epy` ) {
